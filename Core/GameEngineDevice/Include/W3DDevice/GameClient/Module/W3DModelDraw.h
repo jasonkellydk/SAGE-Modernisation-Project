@@ -515,6 +515,7 @@ private:
 	const ModelConditionInfo*						m_modernAnimationState;
 	Int													m_modernAnimationIndex;
 	Graphics::AnimationPlaybackMode			m_modernAnimationMode;
+	const ModelConditionInfo*						m_modernSecondaryAnimationState;
 	Bool													m_modernHidden;
 
 	bool isModernStaticOpaqueState() const noexcept;

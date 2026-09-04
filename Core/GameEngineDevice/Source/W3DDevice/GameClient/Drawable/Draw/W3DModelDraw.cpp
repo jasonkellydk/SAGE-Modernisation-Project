@@ -1982,6 +1982,7 @@ W3DModelDraw::W3DModelDraw(Thing *thing, const ModuleData* moduleData) : DrawMod
 	m_modernAnimationState = nullptr;
 	m_modernAnimationIndex = -1;
 	m_modernAnimationMode = Graphics::AnimationPlaybackMode::Loop;
+	m_modernSecondaryAnimationState = nullptr;
 	m_modernHidden = FALSE;
 	for (i = 0; i < WEAPONSLOT_COUNT; ++i)
 	{
@@ -2051,8 +2052,9 @@ W3DModelDraw::~W3DModelDraw()
 
 bool W3DModelDraw::isModernStaticOpaqueState() const noexcept
 {
-	if (m_curState == nullptr || m_nextState != nullptr || m_renderObject == nullptr)
+	if (m_curState == nullptr || m_renderObject == nullptr)
 		return false;
+	const bool blending = m_nextState != nullptr;
 
 	const W3DModelDrawModuleData *module_data = getW3DModelDrawModuleData();
 	if (module_data == nullptr || module_data->m_particlesAttachedToAnimatedBones
@@ -2061,16 +2063,27 @@ bool W3DModelDraw::isModernStaticOpaqueState() const noexcept
 
 	const ModelConditionInfo &state = *m_curState;
 	if (state.m_animations.size() > 1 || !state.m_particleSysBones.empty()
-		|| state.m_transitionSig != NO_TRANSITION
+		|| (!blending && state.m_transitionSig != NO_TRANSITION)
 		|| (state.m_validStuff & (ModelConditionInfo::TURRETS_VALID
 			| ModelConditionInfo::HAS_PROJECTILE_BONES
 			| ModelConditionInfo::BARRELS_VALID)) != 0)
+		return false;
+	if (blending && (state.m_transitionSig == NO_TRANSITION
+		|| m_nextState->m_transitionSig != NO_TRANSITION
+		|| m_nextState->m_modelName != state.m_modelName
+		|| state.m_animations.size() != 1
+		|| m_nextState->m_animations.size() != 1
+		|| !m_nextState->m_particleSysBones.empty()
+		|| (m_nextState->m_validStuff & (ModelConditionInfo::TURRETS_VALID
+			| ModelConditionInfo::HAS_PROJECTILE_BONES
+			| ModelConditionInfo::BARRELS_VALID)) != 0))
 		return false;
 
 	if (!state.m_animations.empty() && m_renderObject->Class_ID() != RenderObjClass::CLASSID_HLOD)
 		return false;
 	if (m_renderObject->Class_ID() == RenderObjClass::CLASSID_HLOD
-		&& (!state.m_hideShowVec.empty() || !m_subObjectVec.empty()))
+		&& (!state.m_hideShowVec.empty() || (blending && !m_nextState->m_hideShowVec.empty())
+			|| !m_subObjectVec.empty()))
 		return false;
 
 	Scoped_Render_Object_Reference mesh_reference;
@@ -2280,6 +2293,7 @@ bool W3DModelDraw::submitModernVariant()
 	if (m_curState != nullptr && m_whichAnimInCurState >= 0
 		&& m_whichAnimInCurState < static_cast<Int>(m_curState->m_animations.size()))
 		legacy_animation = m_curState->m_animations[m_whichAnimInCurState].getAnimHandle();
+	const bool has_legacy_animation = legacy_animation != nullptr;
 	Graphics::AnimationClipHandle animation;
 	Graphics::AnimationPlaybackMode animation_mode = Graphics::AnimationPlaybackMode::Loop;
 	float animation_time = 0.0f;
@@ -2292,17 +2306,46 @@ bool W3DModelDraw::submitModernVariant()
 			renderer.Destroy_Skeleton(skeleton);
 		return false;
 	}
+	Graphics::AnimationClipHandle secondary_animation;
+	Graphics::AnimationPlaybackMode secondary_animation_mode = Graphics::AnimationPlaybackMode::Loop;
+	float secondary_animation_time = 0.0f;
+	if (m_nextState != nullptr) {
+		HAnimClass *secondary_legacy_animation = m_nextState->m_animations.front().getAnimHandle();
+		if (!has_legacy_animation || secondary_legacy_animation == nullptr
+			|| !Build_Modern_Animation(*m_renderObject, renderer, skeleton, secondary_legacy_animation,
+				secondary_animation, secondary_animation_mode, secondary_animation_time)) {
+			if (secondary_legacy_animation != nullptr)
+				REF_PTR_RELEASE(secondary_legacy_animation);
+			if (animation.Is_Valid())
+				renderer.Destroy_Animation_Clip(animation);
+			if (skeleton.Is_Valid())
+				renderer.Destroy_Skeleton(skeleton);
+			return false;
+		}
+		REF_PTR_RELEASE(secondary_legacy_animation);
+		secondary_animation_mode = Make_Modern_Animation_Mode(m_nextState->m_mode);
+		secondary_animation_time = 0.0f;
+	}
 	if (!m_modernBinding.Replace(renderer, source, transform, bounds, renderer.Default_Material(), flags,
 		Graphics::All_Submeshes_Visible, skeleton, animation, animation_mode, animation_time)) {
 		if (skeleton.Is_Valid())
 			renderer.Destroy_Skeleton(skeleton);
 		if (animation.Is_Valid())
 			renderer.Destroy_Animation_Clip(animation);
+		if (secondary_animation.Is_Valid())
+			renderer.Destroy_Animation_Clip(secondary_animation);
 		return false;
 	}
-	m_modernAnimationState = legacy_animation != nullptr ? m_curState : nullptr;
-	m_modernAnimationIndex = legacy_animation != nullptr ? m_whichAnimInCurState : -1;
+	if (secondary_animation.Is_Valid()
+		&& !m_modernBinding.Set_Animation_Blend(renderer, animation, animation_mode, animation_time,
+			secondary_animation, secondary_animation_mode, secondary_animation_time, 0.0f)) {
+		renderer.Destroy_Animation_Clip(secondary_animation);
+		return false;
+	}
+	m_modernAnimationState = has_legacy_animation ? m_curState : nullptr;
+	m_modernAnimationIndex = has_legacy_animation ? m_whichAnimInCurState : -1;
 	m_modernAnimationMode = animation_mode;
+	m_modernSecondaryAnimationState = secondary_animation.Is_Valid() ? m_nextState : nullptr;
 	if (!updateModernSubobjectVisibility())
 		return false;
 
@@ -2324,7 +2367,8 @@ void W3DModelDraw::syncModernVariant()
 	}
 
 	const bool animation_changed = m_curState != m_modernAnimationState
-		|| m_whichAnimInCurState != m_modernAnimationIndex;
+		|| m_whichAnimInCurState != m_modernAnimationIndex
+		|| m_nextState != m_modernSecondaryAnimationState;
 	if (animation_changed) {
 		releaseModernVariant();
 		if (!submitModernVariant())
@@ -2365,13 +2409,38 @@ void W3DModelDraw::updateModernAnimation()
 	if (animation == nullptr || frame_count <= 0)
 		return;
 
+	Graphics::StaticMeshRenderer &renderer = Graphics::GetStaticMeshRenderer();
 	const Graphics::AnimationPlaybackMode modern_mode =
 		Make_Modern_Animation_Mode(static_cast<RenderObjClass::AnimMode>(mode));
 	float time = frame / animation->Get_Frame_Rate();
 	if (modern_mode == Graphics::AnimationPlaybackMode::Once_Backwards
 		|| modern_mode == Graphics::AnimationPlaybackMode::Loop_Backwards)
 		time = static_cast<float>(frame_count - 1) / animation->Get_Frame_Rate() - time;
-	Graphics::StaticMeshRenderer &renderer = Graphics::GetStaticMeshRenderer();
+	if (m_modernBinding.Secondary_Animation().Is_Valid() && m_nextState != nullptr) {
+		float blend_weight = frame_count > 1
+			? frame / static_cast<float>(frame_count - 1) : 1.0f;
+		if (modern_mode == Graphics::AnimationPlaybackMode::Once_Backwards
+			|| modern_mode == Graphics::AnimationPlaybackMode::Loop_Backwards)
+			blend_weight = 1.0f - blend_weight;
+		if (blend_weight < 0.0f)
+			blend_weight = 0.0f;
+		else if (blend_weight > 1.0f)
+			blend_weight = 1.0f;
+		HAnimClass *secondary_animation = m_nextState->m_animations.front().getAnimHandle();
+		if (secondary_animation == nullptr || secondary_animation->Get_Num_Frames() <= 0
+			|| !std::isfinite(secondary_animation->Get_Frame_Rate())
+			|| secondary_animation->Get_Frame_Rate() <= 0.0f
+			|| !m_modernBinding.Set_Animation_Blend_State(renderer, time,
+				blend_weight * static_cast<float>(secondary_animation->Get_Num_Frames() - 1)
+					/ secondary_animation->Get_Frame_Rate(), blend_weight)) {
+			if (secondary_animation != nullptr)
+				REF_PTR_RELEASE(secondary_animation);
+			releaseModernVariant();
+			return;
+		}
+		REF_PTR_RELEASE(secondary_animation);
+		return;
+	}
 	if (modern_mode != m_modernAnimationMode
 		&& !m_modernBinding.Set_Animation_Mode(renderer, modern_mode)) {
 		releaseModernVariant();
@@ -2389,6 +2458,7 @@ void W3DModelDraw::releaseModernVariant() noexcept
 	m_modernAnimationState = nullptr;
 	m_modernAnimationIndex = -1;
 	m_modernAnimationMode = Graphics::AnimationPlaybackMode::Loop;
+	m_modernSecondaryAnimationState = nullptr;
 	if (m_renderObject != nullptr) {
 		const Bool drawable_hidden = getDrawable() != nullptr && getDrawable()->isDrawableEffectivelyHidden();
 		m_renderObject->Set_Hidden(m_modernHidden || drawable_hidden);

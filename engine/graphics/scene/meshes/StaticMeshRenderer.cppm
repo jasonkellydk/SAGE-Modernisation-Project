@@ -734,7 +734,7 @@ public:
 		auto cleanup_new_resources = [&]() noexcept {
 			if (new_pose.Is_Valid())
 				renderer.Destroy_Pose(new_pose);
-			if (animation.Is_Valid() && animation != m_animation)
+			if (animation.Is_Valid() && animation != m_animation && animation != m_secondary_animation)
 				renderer.Destroy_Animation_Clip(animation);
 			renderer.Destroy_Mesh(new_mesh);
 			if (skeleton.Is_Valid() && skeleton != m_model_instance.skeleton)
@@ -804,11 +804,16 @@ public:
 		m_model_instance = std::move(prepared_model_instance);
 		m_pose = new_pose;
 		const AnimationClipHandle old_animation = m_animation;
+		const AnimationClipHandle old_secondary_animation = m_secondary_animation;
 		m_animation = animation;
+		m_secondary_animation = {};
 		if (old_skeleton.Is_Valid() && old_skeleton != skeleton)
 			renderer.Destroy_Skeleton(old_skeleton);
 		if (old_animation.Is_Valid() && old_animation != animation)
 			renderer.Destroy_Animation_Clip(old_animation);
+		if (old_secondary_animation.Is_Valid() && old_secondary_animation != animation
+			&& old_secondary_animation != old_animation)
+			renderer.Destroy_Animation_Clip(old_secondary_animation);
 		if (old_pose.Is_Valid() && old_pose != new_pose)
 			renderer.Destroy_Pose(old_pose);
 		m_active = true;
@@ -846,6 +851,45 @@ public:
 		return true;
 	}
 
+	bool Set_Animation_Blend(StaticMeshRenderer &renderer,
+		AnimationClipHandle first_animation, AnimationPlaybackMode first_mode, float first_time,
+		AnimationClipHandle second_animation, AnimationPlaybackMode second_mode, float second_time,
+		float weight)
+	{
+		if (!renderer.Is_Initialized() || !m_active || !m_model_instance.skeleton.Is_Valid()
+			|| !renderer.Is_Animation_Valid_For_Skeleton(first_animation, m_model_instance.skeleton)
+			|| !renderer.Is_Animation_Valid_For_Skeleton(second_animation, m_model_instance.skeleton))
+			return false;
+		if (!m_model_instance.Set_Animation_Blend(renderer.Skeletons(), renderer.Animations(),
+			first_animation, first_mode, first_time, second_animation, second_mode, second_time, weight))
+			return false;
+		if (m_skinned && !Sync_Pose(renderer))
+			return false;
+
+		const AnimationClipHandle old_animation = m_animation;
+		const AnimationClipHandle old_secondary_animation = m_secondary_animation;
+		m_animation = first_animation;
+		m_secondary_animation = second_animation;
+		if (old_animation.Is_Valid() && old_animation != first_animation && old_animation != second_animation)
+			renderer.Destroy_Animation_Clip(old_animation);
+		if (old_secondary_animation.Is_Valid() && old_secondary_animation != first_animation
+			&& old_secondary_animation != second_animation && old_secondary_animation != old_animation)
+			renderer.Destroy_Animation_Clip(old_secondary_animation);
+		return true;
+	}
+
+	bool Set_Animation_Blend_State(StaticMeshRenderer &renderer,
+		float first_time, float second_time, float weight) noexcept
+	{
+		if (!renderer.Is_Initialized() || !m_active || !m_secondary_animation.Is_Valid()
+			|| !m_pose.Is_Valid())
+			return false;
+		if (!m_model_instance.Set_Animation_Blend_State(renderer.Skeletons(), renderer.Animations(),
+			first_time, second_time, weight))
+			return false;
+		return !m_skinned || Sync_Pose(renderer);
+	}
+
 	bool Clear_Animation(StaticMeshRenderer &renderer) noexcept
 	{
 		if (!renderer.Is_Initialized())
@@ -853,10 +897,14 @@ public:
 		if (m_skinned && !renderer.Update_Instance_Pose(m_instance, m_pose))
 			return false;
 		const AnimationClipHandle old_animation = m_animation;
+		const AnimationClipHandle old_secondary_animation = m_secondary_animation;
 		m_animation = {};
+		m_secondary_animation = {};
 		m_model_instance.Clear_Animation();
 		if (old_animation.Is_Valid())
 			renderer.Destroy_Animation_Clip(old_animation);
+		if (old_secondary_animation.Is_Valid() && old_secondary_animation != old_animation)
+			renderer.Destroy_Animation_Clip(old_secondary_animation);
 		return true;
 	}
 
@@ -926,6 +974,8 @@ public:
 				renderer.Destroy_Skeleton(m_model_instance.skeleton);
 			if (m_animation.Is_Valid())
 				renderer.Destroy_Animation_Clip(m_animation);
+			if (m_secondary_animation.Is_Valid() && m_secondary_animation != m_animation)
+				renderer.Destroy_Animation_Clip(m_secondary_animation);
 			if (m_pose.Is_Valid())
 				renderer.Destroy_Pose(m_pose);
 		}
@@ -942,6 +992,7 @@ public:
 		m_visibility_mask = All_Submeshes_Visible;
 		m_model_instance = {};
 		m_animation = {};
+		m_secondary_animation = {};
 		m_pose = {};
 		m_skinned = false;
 		m_active = false;
@@ -992,6 +1043,16 @@ public:
 		return m_animation;
 	}
 
+	AnimationClipHandle Secondary_Animation() const noexcept
+	{
+		return m_secondary_animation;
+	}
+
+	float Blend_Weight() const noexcept
+	{
+		return m_model_instance.blend_weight;
+	}
+
 	PoseHandle Pose() const noexcept
 	{
 		return m_pose;
@@ -1035,6 +1096,7 @@ private:
 	SubmeshVisibilityMask m_visibility_mask = All_Submeshes_Visible;
 	ModelInstance m_model_instance{};
 	AnimationClipHandle m_animation{};
+	AnimationClipHandle m_secondary_animation{};
 	PoseHandle m_pose{};
 	bool m_skinned = false;
 	bool m_active = false;

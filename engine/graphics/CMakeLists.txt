@@ -42,6 +42,7 @@ target_sources(generals_graphics
             scene/models/Skeleton.cppm
             scene/models/ModelInstance.cppm
             scene/models/Animation.cppm
+            scene/models/AnimationBlend.cppm
             scene/models/Skinning.cppm
             scene/transparency/Transparency.cppm
             scene/views/View.cppm
@@ -348,6 +349,11 @@ if(RTS_BUILD_GRAPHICS_TESTS)
     add_graphics_test(
         generals_graphics_animation_test
         scene/models/Animation.test.cppm
+    )
+
+    add_graphics_test(
+        generals_graphics_animation_blend_test
+        scene/models/AnimationBlend.test.cppm
     )
 
     add_graphics_test(

@@ -214,6 +214,11 @@ public:
 		return m_world_transforms;
 	}
 
+	std::span<RenderTransform> World_Transforms() noexcept
+	{
+		return m_world_transforms;
+	}
+
 	bool Is_Valid() const noexcept
 	{
 		return !m_world_transforms.empty() && m_local_transforms.size() == m_world_transforms.size();
