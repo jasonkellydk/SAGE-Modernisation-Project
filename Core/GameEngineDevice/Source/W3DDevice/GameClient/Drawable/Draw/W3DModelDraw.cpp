@@ -168,6 +168,154 @@ MeshClass *Find_Modern_Mesh(RenderObjClass &render_object, Scoped_Render_Object_
 	return static_cast<MeshClass *>(lod);
 }
 
+struct ModernMeshSourceStorage final
+{
+	std::vector<Graphics::StaticMeshVertex> static_vertices;
+	std::vector<Graphics::SkinnedMeshVertex> skinned_vertices;
+	std::vector<std::uint16_t> indices;
+	std::vector<Graphics::MeshPart> parts;
+	Graphics::StaticMeshSource source{};
+};
+
+bool Build_Modern_Mesh_Source(RenderObjClass &render_object, MeshClass &mesh,
+	ModernMeshSourceStorage &storage)
+{
+	MeshModelClass *model = mesh.Peek_Model();
+	if (model == nullptr)
+		return false;
+	const int vertex_count = model->Get_Vertex_Count();
+	const int polygon_count = model->Get_Polygon_Count();
+	if (vertex_count <= 0 || vertex_count > 65535 || polygon_count <= 0
+		|| static_cast<std::uint64_t>(polygon_count) > std::numeric_limits<std::uint32_t>::max() / 3u)
+		return false;
+
+	const Vector3 *positions = model->Get_Vertex_Array();
+	const Vector2 *uvs = model->Get_UV_Array_By_Index(0);
+	const unsigned *vertex_colors = model->Get_DCG_Array(0);
+	VertexMaterialClass *material = model->Peek_Single_Material(0);
+	if (positions == nullptr || material == nullptr)
+		return false;
+
+	Vector3 diffuse;
+	material->Get_Diffuse(&diffuse);
+	const float opacity = material->Get_Opacity();
+	const bool skinned = model->Get_Flag(MeshGeometryClass::SKIN) != 0;
+	if (skinned) {
+		const uint16 *bone_links = model->Get_Vertex_Bone_Links();
+		if (bone_links == nullptr || render_object.Get_Num_Bones() <= 0)
+			return false;
+		storage.skinned_vertices.resize(static_cast<std::size_t>(vertex_count));
+		storage.static_vertices.clear();
+		for (int index = 0; index < vertex_count; ++index) {
+			Graphics::SkinnedMeshVertex &vertex = storage.skinned_vertices[static_cast<std::size_t>(index)];
+			vertex.position[0] = positions[index].X;
+			vertex.position[1] = positions[index].Y;
+			vertex.position[2] = positions[index].Z;
+			vertex.uv[0] = uvs != nullptr ? uvs[index].X : 0.0f;
+			vertex.uv[1] = uvs != nullptr ? uvs[index].Y : 0.0f;
+			if (bone_links[index] >= render_object.Get_Num_Bones())
+				return false;
+			vertex.skinning.bone_indices[0] = bone_links[index];
+			vertex.skinning.bone_weights[0] = 1.0f;
+			if (vertex_colors != nullptr)
+				Set_Modern_Vertex_Color(vertex, vertex_colors[index]);
+			else {
+				vertex.color[0] = diffuse.X;
+				vertex.color[1] = diffuse.Y;
+				vertex.color[2] = diffuse.Z;
+				vertex.color[3] = opacity;
+			}
+		}
+	} else {
+		storage.static_vertices.resize(static_cast<std::size_t>(vertex_count));
+		storage.skinned_vertices.clear();
+		for (int index = 0; index < vertex_count; ++index) {
+			Graphics::StaticMeshVertex &vertex = storage.static_vertices[static_cast<std::size_t>(index)];
+			vertex.position[0] = positions[index].X;
+			vertex.position[1] = positions[index].Y;
+			vertex.position[2] = positions[index].Z;
+			vertex.uv[0] = uvs != nullptr ? uvs[index].X : 0.0f;
+			vertex.uv[1] = uvs != nullptr ? uvs[index].Y : 0.0f;
+			if (vertex_colors != nullptr)
+				Set_Modern_Vertex_Color(vertex, vertex_colors[index]);
+			else {
+				vertex.color[0] = diffuse.X;
+				vertex.color[1] = diffuse.Y;
+				vertex.color[2] = diffuse.Z;
+				vertex.color[3] = opacity;
+			}
+		}
+	}
+
+	const TriIndex *polygons = model->Get_Polygon_Array();
+	if (polygons == nullptr)
+		return false;
+	storage.indices.resize(static_cast<std::size_t>(polygon_count) * 3u);
+	for (int polygon = 0; polygon < polygon_count; ++polygon) {
+		const TriIndex &triangle = polygons[polygon];
+		for (int corner = 0; corner < 3; ++corner) {
+			if (triangle[corner] >= vertex_count)
+				return false;
+			storage.indices[static_cast<std::size_t>(polygon) * 3u + static_cast<std::size_t>(corner)] = triangle[corner];
+		}
+	}
+
+	SphereClass sphere;
+	mesh.Get_Obj_Space_Bounding_Sphere(sphere);
+	storage.source = {
+		static_cast<std::uint32_t>(vertex_count),
+		static_cast<std::uint32_t>(storage.indices.size()),
+		skinned ? static_cast<std::uint32_t>(sizeof(Graphics::SkinnedMeshVertex))
+			: static_cast<std::uint32_t>(sizeof(Graphics::StaticMeshVertex)),
+		Graphics::MeshIndexFormat::UInt16,
+		skinned ? std::as_bytes(std::span<const Graphics::SkinnedMeshVertex>(storage.skinned_vertices))
+			: std::as_bytes(std::span<const Graphics::StaticMeshVertex>(storage.static_vertices)),
+		std::as_bytes(std::span<const std::uint16_t>(storage.indices)),
+		{sphere.Center.X, sphere.Center.Y, sphere.Center.Z},
+		sphere.Radius,
+		{},
+		skinned ? Graphics::MeshVertexFormat::Position3Color4UV2Skinned : Graphics::MeshVertexFormat::Position3Color4UV2,
+		skinned ? static_cast<std::uint32_t>(render_object.Get_Num_Bones()) : 0u
+	};
+	return true;
+}
+
+bool Build_Modern_LOD_Sources(RenderObjClass &render_object,
+	std::array<ModernMeshSourceStorage, Graphics::Mesh::MaxLodCount + 1> &storage,
+	std::array<Graphics::StaticMeshLODSource, Graphics::Mesh::MaxLodCount + 1> &sources,
+	std::size_t &source_count)
+{
+	source_count = 0;
+	if (render_object.Class_ID() != RenderObjClass::CLASSID_HLOD) {
+		Scoped_Render_Object_Reference mesh_reference;
+		MeshClass *mesh = Find_Modern_Mesh(render_object, mesh_reference);
+		if (mesh == nullptr || !Build_Modern_Mesh_Source(render_object, *mesh, storage[0]))
+			return false;
+		sources[0] = {storage[0].source, 0.0f};
+		source_count = 1;
+		return true;
+	}
+
+	HLodClass &hlod = static_cast<HLodClass &>(render_object);
+	const int lod_count = hlod.Get_Lod_Count();
+	if (lod_count <= 0 || lod_count > static_cast<int>(Graphics::Mesh::MaxLodCount + 1u))
+		return false;
+	for (int lod_index = 0; lod_index < lod_count; ++lod_index) {
+		if (hlod.Get_Lod_Model_Count(lod_index) != 1)
+			return false;
+		RenderObjClass *lod_model = hlod.Peek_Lod_Model(lod_index, 0);
+		if (lod_model == nullptr || lod_model->Class_ID() != RenderObjClass::CLASSID_MESH
+			|| !Build_Modern_Mesh_Source(render_object, *static_cast<MeshClass *>(lod_model), storage[lod_index]))
+			return false;
+		const float max_screen_size = lod_index == 0 ? 0.0f : hlod.Get_Max_Screen_Size(lod_index);
+		if (std::isnan(max_screen_size) || max_screen_size < 0.0f)
+			return false;
+		sources[lod_index] = {storage[lod_index].source, max_screen_size};
+	}
+	source_count = static_cast<std::size_t>(lod_count);
+	return true;
+}
+
 Graphics::AnimationPlaybackMode Make_Modern_Animation_Mode(RenderObjClass::AnimMode mode) noexcept
 {
 	switch (mode) {
@@ -2175,109 +2323,14 @@ bool W3DModelDraw::submitModernVariant()
 	if (!renderer.Is_Initialized() || !isModernStaticOpaqueState())
 		return false;
 
-	Scoped_Render_Object_Reference mesh_reference;
-	MeshClass *mesh = Find_Modern_Mesh(*m_renderObject, mesh_reference);
-	if (mesh == nullptr)
+	std::array<ModernMeshSourceStorage, Graphics::Mesh::MaxLodCount + 1> source_storage{};
+	std::array<Graphics::StaticMeshLODSource, Graphics::Mesh::MaxLodCount + 1> lod_sources{};
+	std::size_t lod_source_count = 0;
+	if (!Build_Modern_LOD_Sources(*m_renderObject, source_storage, lod_sources, lod_source_count))
 		return false;
-	MeshModelClass *model = mesh->Peek_Model();
-	if (model == nullptr)
-		return false;
-	const int vertex_count = model->Get_Vertex_Count();
-	const int polygon_count = model->Get_Polygon_Count();
-	if (vertex_count <= 0 || vertex_count > 65535 || polygon_count <= 0
-		|| static_cast<std::uint64_t>(polygon_count) > std::numeric_limits<std::uint32_t>::max() / 3u)
-		return false;
-
-	const Vector3 *positions = model->Get_Vertex_Array();
-	const Vector2 *uvs = model->Get_UV_Array_By_Index(0);
-	const unsigned *vertex_colors = model->Get_DCG_Array(0);
-	VertexMaterialClass *material = model->Peek_Single_Material(0);
-	if (positions == nullptr || material == nullptr)
-		return false;
-
-	Vector3 diffuse;
-	material->Get_Diffuse(&diffuse);
-	const float opacity = material->Get_Opacity();
-	const bool skinned = model->Get_Flag(MeshGeometryClass::SKIN) != 0;
-	std::vector<Graphics::StaticMeshVertex> static_vertices;
-	std::vector<Graphics::SkinnedMeshVertex> skinned_vertices;
-	std::span<const std::byte> vertex_data;
-	if (skinned) {
-		const uint16 *bone_links = model->Get_Vertex_Bone_Links();
-		if (bone_links == nullptr || m_renderObject->Get_Num_Bones() <= 0)
-			return false;
-		skinned_vertices.resize(static_cast<std::size_t>(vertex_count));
-		for (int index = 0; index < vertex_count; ++index) {
-			Graphics::SkinnedMeshVertex &vertex = skinned_vertices[static_cast<std::size_t>(index)];
-			vertex.position[0] = positions[index].X;
-			vertex.position[1] = positions[index].Y;
-			vertex.position[2] = positions[index].Z;
-			vertex.uv[0] = uvs != nullptr ? uvs[index].X : 0.0f;
-			vertex.uv[1] = uvs != nullptr ? uvs[index].Y : 0.0f;
-			if (bone_links[index] >= m_renderObject->Get_Num_Bones())
-				return false;
-			vertex.skinning.bone_indices[0] = bone_links[index];
-			vertex.skinning.bone_weights[0] = 1.0f;
-			if (vertex_colors != nullptr)
-				Set_Modern_Vertex_Color(vertex, vertex_colors[index]);
-			else {
-				vertex.color[0] = diffuse.X;
-				vertex.color[1] = diffuse.Y;
-				vertex.color[2] = diffuse.Z;
-				vertex.color[3] = opacity;
-			}
-		}
-		vertex_data = std::as_bytes(std::span<const Graphics::SkinnedMeshVertex>(skinned_vertices));
-	} else {
-		static_vertices.resize(static_cast<std::size_t>(vertex_count));
-		for (int index = 0; index < vertex_count; ++index) {
-			Graphics::StaticMeshVertex &vertex = static_vertices[static_cast<std::size_t>(index)];
-			vertex.position[0] = positions[index].X;
-			vertex.position[1] = positions[index].Y;
-			vertex.position[2] = positions[index].Z;
-			vertex.uv[0] = uvs != nullptr ? uvs[index].X : 0.0f;
-			vertex.uv[1] = uvs != nullptr ? uvs[index].Y : 0.0f;
-			if (vertex_colors != nullptr)
-				Set_Modern_Vertex_Color(vertex, vertex_colors[index]);
-			else {
-				vertex.color[0] = diffuse.X;
-				vertex.color[1] = diffuse.Y;
-				vertex.color[2] = diffuse.Z;
-				vertex.color[3] = opacity;
-			}
-		}
-		vertex_data = std::as_bytes(std::span<const Graphics::StaticMeshVertex>(static_vertices));
-	}
-
-	const TriIndex *polygons = model->Get_Polygon_Array();
-	if (polygons == nullptr)
-		return false;
-	std::vector<std::uint16_t> indices(static_cast<std::size_t>(polygon_count) * 3u);
-	for (int polygon = 0; polygon < polygon_count; ++polygon) {
-		const TriIndex &triangle = polygons[polygon];
-		for (int corner = 0; corner < 3; ++corner) {
-			if (triangle[corner] >= vertex_count)
-				return false;
-			indices[static_cast<std::size_t>(polygon) * 3u + static_cast<std::size_t>(corner)] = triangle[corner];
-		}
-	}
 
 	SphereClass sphere;
-	mesh->Get_Obj_Space_Bounding_Sphere(sphere);
-	const Graphics::StaticMeshSource source{
-		static_cast<std::uint32_t>(vertex_count),
-		static_cast<std::uint32_t>(indices.size()),
-		skinned ? static_cast<std::uint32_t>(sizeof(Graphics::SkinnedMeshVertex))
-			: static_cast<std::uint32_t>(sizeof(Graphics::StaticMeshVertex)),
-		Graphics::MeshIndexFormat::UInt16,
-		vertex_data,
-		std::as_bytes(std::span<const std::uint16_t>(indices)),
-		{sphere.Center.X, sphere.Center.Y, sphere.Center.Z},
-		sphere.Radius,
-		{},
-		skinned ? Graphics::MeshVertexFormat::Position3Color4UV2Skinned : Graphics::MeshVertexFormat::Position3Color4UV2,
-		skinned ? static_cast<std::uint32_t>(m_renderObject->Get_Num_Bones()) : 0u
-	};
+	m_renderObject->Get_Obj_Space_Bounding_Sphere(sphere);
 	const Matrix3D legacy_transform = m_renderObject->Get_Transform();
 	const Graphics::RenderTransform transform = Make_Modern_Transform(legacy_transform);
 	const Graphics::RenderBounds bounds = {{sphere.Center.X, sphere.Center.Y, sphere.Center.Z}, sphere.Radius};
@@ -2326,7 +2379,7 @@ bool W3DModelDraw::submitModernVariant()
 		secondary_animation_mode = Make_Modern_Animation_Mode(m_nextState->m_mode);
 		secondary_animation_time = 0.0f;
 	}
-	if (!m_modernBinding.Replace(renderer, source, transform, bounds, renderer.Default_Material(), flags,
+	if (!m_modernBinding.Replace_LODs(renderer, {lod_sources.data(), lod_source_count}, transform, bounds, renderer.Default_Material(), flags,
 		Graphics::All_Submeshes_Visible, skeleton, animation, animation_mode, animation_time)) {
 		if (skeleton.Is_Valid())
 			renderer.Destroy_Skeleton(skeleton);

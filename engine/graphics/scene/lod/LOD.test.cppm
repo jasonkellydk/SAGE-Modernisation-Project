@@ -5,6 +5,7 @@ module;
 #include <boost/test/included/unit_test.hpp>
 
 #include <array>
+#include <cstdint>
 #include <type_traits>
 
 export module Graphics.Scene.LOD.Tests;
@@ -165,4 +166,63 @@ BOOST_AUTO_TEST_CASE(lod_rejects_insufficient_output_capacity)
 	LODSet lod_set(lod_storage);
 	BOOST_CHECK(!Build_LOD_Set(scene, meshes, visible_set, Make_View(), lod_set));
 	BOOST_CHECK(lod_set.Size() == 0);
+}
+
+BOOST_AUTO_TEST_CASE(lod_hysteresis_keeps_selection_inside_switch_band)
+{
+	MeshHandle base;
+	MeshHandle first_lod;
+	MeshHandle second_lod;
+	MeshPool meshes = Make_Meshes(base, first_lod, second_lod);
+	RenderScene scene;
+	const InstanceHandle instance = scene.Create(Make_Instance(-7.2f, 0.5f, base));
+
+	std::array<InstanceHandle, 1> visible_storage{};
+	VisibleSet visible_set(visible_storage);
+	BOOST_REQUIRE(Build_Visible_Set(scene, Make_View(), visible_set));
+	std::array<LODSelection, 1> lod_storage{};
+	LODSet lod_set(lod_storage);
+	std::array<LODHistoryEntry, 1> history_storage{};
+	LODHistory history(history_storage);
+	history.Record(instance, 1);
+
+	BOOST_REQUIRE(Build_LOD_Set(scene, meshes, visible_set, Make_View(), lod_set, history, {0.1f}));
+	BOOST_CHECK(lod_set.Selections()[0].lod_index == 1);
+
+	history.Record(instance, 2);
+	BOOST_REQUIRE(Build_LOD_Set(scene, meshes, visible_set, Make_View(), lod_set, history, {0.1f}));
+	BOOST_CHECK(lod_set.Selections()[0].lod_index == 2);
+}
+
+BOOST_AUTO_TEST_CASE(lod_history_is_generation_safe_and_selection_is_deterministic)
+{
+	MeshHandle base;
+	MeshHandle first_lod;
+	MeshHandle second_lod;
+	MeshPool meshes = Make_Meshes(base, first_lod, second_lod);
+	RenderScene scene;
+	const InstanceHandle instance = scene.Create(Make_Instance(-5.0f, 1.0f, base));
+
+	std::array<InstanceHandle, 1> visible_storage{};
+	VisibleSet visible_set(visible_storage);
+	BOOST_REQUIRE(Build_Visible_Set(scene, Make_View(), visible_set));
+	std::array<LODSelection, 1> first_storage{};
+	std::array<LODSelection, 1> second_storage{};
+	LODSet first_set(first_storage);
+	LODSet second_set(second_storage);
+	std::array<LODHistoryEntry, 1> history_storage{};
+	LODHistory history(history_storage);
+
+	BOOST_REQUIRE(Build_LOD_Set(scene, meshes, visible_set, Make_View(), first_set, history, {0.1f}));
+	BOOST_REQUIRE(Build_LOD_Set(scene, meshes, visible_set, Make_View(), second_set, history, {0.1f}));
+	BOOST_REQUIRE(first_set.Size() == second_set.Size());
+	BOOST_CHECK(first_set.Selections()[0].instance == second_set.Selections()[0].instance);
+	BOOST_CHECK(first_set.Selections()[0].mesh == second_set.Selections()[0].mesh);
+	BOOST_CHECK(first_set.Selections()[0].lod_index == second_set.Selections()[0].lod_index);
+
+	BOOST_REQUIRE(scene.Destroy(instance));
+	const InstanceHandle replacement = scene.Create(Make_Instance(-2.0f, 1.0f, base));
+	BOOST_REQUIRE(replacement.Get_Generation() != instance.Get_Generation());
+	std::uint32_t previous_lod = 99;
+	BOOST_CHECK(!history.Previous(replacement, previous_lod));
 }

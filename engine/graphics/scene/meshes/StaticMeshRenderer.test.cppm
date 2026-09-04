@@ -78,6 +78,16 @@ bool Render_Static_Mesh(Device &, CommandList &commands, RHITextureHandle color_
 	StaticMeshRenderer &renderer = *static_cast<StaticMeshRenderer *>(context);
 	return renderer.Render(commands, {{color_target, viewport.width, viewport.height}, {depth_target, viewport.width, viewport.height}});
 }
+
+RenderTransform Make_LOD_Transform(float scale) noexcept
+{
+	RenderTransform transform;
+	transform.matrix = Matrix4x4::Identity().values;
+	transform.matrix[0] = scale;
+	transform.matrix[5] = scale;
+	transform.matrix[10] = scale;
+	return transform;
+}
 }
 
 BOOST_AUTO_TEST_CASE(static_mesh_variant_switch_keeps_instance_handle)
@@ -145,6 +155,76 @@ BOOST_AUTO_TEST_CASE(static_mesh_variant_switch_keeps_instance_handle)
 
 	BOOST_CHECK(renderer.Destroy_Mesh(second_mesh));
 	BOOST_CHECK(renderer.Destroy_Mesh(first_mesh));
+	renderer.Shutdown();
+}
+
+BOOST_AUTO_TEST_CASE(static_mesh_lod_switch_uses_screen_space_selection)
+{
+	DX11Device device({true});
+	BOOST_REQUIRE(device.Is_Valid());
+
+	StaticMeshRenderer renderer;
+	BOOST_REQUIRE(renderer.Initialize(device, std::filesystem::path(GRAPHICS_STATIC_MESH_SHADER_DIRECTORY), 2, 1));
+
+	const std::array<std::uint16_t, 3> indices = {0, 1, 2};
+	const std::array<StaticMeshVertex, 3> high_detail_vertices = {{
+		{{-0.72f, -0.62f, 0.35f}, {1.0f, 0.10f, 0.10f, 1.0f}, {0.0f, 1.0f}},
+		{{0.0f, 0.78f, 0.35f}, {1.0f, 0.10f, 0.10f, 1.0f}, {0.5f, 0.0f}},
+		{{0.72f, -0.62f, 0.35f}, {1.0f, 0.10f, 0.10f, 1.0f}, {1.0f, 1.0f}}
+	}};
+	const std::array<StaticMeshVertex, 3> low_detail_vertices = {{
+		{{-0.42f, -0.36f, 0.35f}, {0.10f, 0.20f, 1.0f, 1.0f}, {0.0f, 1.0f}},
+		{{0.0f, 0.46f, 0.35f}, {0.10f, 0.20f, 1.0f, 1.0f}, {0.5f, 0.0f}},
+		{{0.42f, -0.36f, 0.35f}, {0.10f, 0.20f, 1.0f, 1.0f}, {1.0f, 1.0f}}
+	}};
+	const StaticMeshSource high_detail_source{
+		3,
+		3,
+		static_cast<std::uint32_t>(sizeof(StaticMeshVertex)),
+		MeshIndexFormat::UInt16,
+		std::as_bytes(std::span<const StaticMeshVertex>(high_detail_vertices)),
+		std::as_bytes(std::span<const std::uint16_t>(indices)),
+		{0.0f, 0.0f, 0.35f},
+		1.0f
+	};
+	const StaticMeshSource low_detail_source{
+		3,
+		3,
+		static_cast<std::uint32_t>(sizeof(StaticMeshVertex)),
+		MeshIndexFormat::UInt16,
+		std::as_bytes(std::span<const StaticMeshVertex>(low_detail_vertices)),
+		std::as_bytes(std::span<const std::uint16_t>(indices)),
+		{0.0f, 0.0f, 0.35f},
+		1.0f
+	};
+	const std::array<StaticMeshLODSource, 2> lod_sources = {{
+		{high_detail_source, 0.0f},
+		{low_detail_source, 0.75f}
+	}};
+
+	StaticMeshBinding binding;
+	BOOST_REQUIRE(binding.Replace_LODs(renderer, lod_sources, Make_LOD_Transform(0.5f),
+		{{0.0f, 0.0f, 0.35f}, 1.0f}, renderer.Default_Material(), RenderInstanceFlags::None));
+	BOOST_REQUIRE(binding.Mesh_LODs().size() == 2);
+	renderer.Set_View({Matrix4x4::Identity(), Matrix4x4::Identity(), {}, {0.0f, 0.0f, 128.0f, 72.0f, 0.0f, 1.0f}});
+
+	VisualRegressionHarness harness({
+		128,
+		72,
+		2,
+		std::filesystem::path(GRAPHICS_STATIC_MESH_REFERENCE_DIRECTORY),
+		std::filesystem::path(GRAPHICS_STATIC_MESH_FAILURE_DIRECTORY)
+	});
+	const VisualComparisonResult near_result = harness.Run(device, "StaticMeshRenderer.LOD.Near", Render_Static_Mesh, &renderer);
+	BOOST_CHECK_MESSAGE(near_result.expected_loaded, "missing colocated near LOD reference image");
+	BOOST_CHECK_MESSAGE(near_result.matched, "near LOD visual regression mismatch");
+
+	BOOST_REQUIRE(binding.Update(renderer, Make_LOD_Transform(0.25f), RenderInstanceFlags::None));
+	const VisualComparisonResult far_result = harness.Run(device, "StaticMeshRenderer.LOD.Far", Render_Static_Mesh, &renderer);
+	BOOST_CHECK_MESSAGE(far_result.expected_loaded, "missing colocated far LOD reference image");
+	BOOST_CHECK_MESSAGE(far_result.matched, "far LOD visual regression mismatch");
+
+	binding.Destroy(renderer);
 	renderer.Shutdown();
 }
 

@@ -64,6 +64,12 @@ export struct StaticMeshSource final
 	std::uint32_t skin_bone_count = 0;
 };
 
+export struct StaticMeshLODSource final
+{
+	StaticMeshSource source{};
+	float max_screen_size = 0.0f;
+};
+
 export bool Validate_Static_Mesh_Source(const StaticMeshSource &source) noexcept
 {
 	const std::uint32_t expected_stride = source.vertex_format == MeshVertexFormat::Position3Color4UV2
@@ -118,9 +124,11 @@ public:
 		m_gpu_scene.Reserve(max_instances, max_meshes, 1);
 		m_visible_storage.resize(max_instances);
 		m_lod_storage.resize(max_instances);
+		m_lod_history_storage.resize(max_instances);
 		m_draw_storage.resize(max_instances);
 		m_visible = std::make_unique<VisibleSet>(m_visible_storage);
 		m_lod = std::make_unique<LODSet>(m_lod_storage);
+		m_lod_history = std::make_unique<LODHistory>(m_lod_history_storage);
 		m_draws = std::make_unique<DrawSet>(m_draw_storage);
 		m_mesh_bindings.resize(max_meshes);
 		m_mesh_part_bindings.reserve(max_meshes * Max_Model_Part_Count);
@@ -276,6 +284,7 @@ public:
 		m_bone_matrices.Clear();
 		m_visible_storage.clear();
 		m_lod_storage.clear();
+		m_lod_history_storage.clear();
 		m_draw_storage.clear();
 		m_mesh_bindings.clear();
 		m_mesh_part_bindings.clear();
@@ -284,6 +293,8 @@ public:
 		m_plan = {};
 		m_device = nullptr;
 		m_instance_capacity = 0;
+		m_lod_history.reset();
+		m_lod_hysteresis = 0.1f;
 		m_graph_compiled = false;
 		m_scene_dirty = true;
 		m_view_dirty = false;
@@ -335,6 +346,29 @@ public:
 
 		m_scene_dirty = true;
 		return handle;
+	}
+
+	bool Configure_Mesh_LODs(MeshHandle base_mesh, std::span<const MeshLod> lods) noexcept
+	{
+		if (!Is_Initialized() || !base_mesh.Is_Valid() || lods.size() > Mesh::MaxLodCount)
+			return false;
+
+		Mesh *mesh = m_meshes.Resolve(base_mesh);
+		if (mesh == nullptr)
+			return false;
+		for (const MeshLod &lod : lods) {
+			if (!lod.mesh.Is_Valid() || lod.mesh == base_mesh || m_meshes.Resolve(lod.mesh) == nullptr
+				|| std::isnan(lod.max_screen_size) || lod.max_screen_size < 0.0f)
+				return false;
+		}
+
+		mesh->lods.fill({});
+		for (std::size_t index = 0; index < lods.size(); ++index)
+			mesh->lods[index] = lods[index];
+		mesh->lod_count = static_cast<std::uint8_t>(lods.size());
+		mesh->Mark_Dirty();
+		m_scene_dirty = true;
+		return true;
 	}
 
 	SkeletonHandle Create_Skeleton(std::span<const SkeletonBone> bones, std::span<const SkeletonAttachment> attachments = {})
@@ -494,6 +528,16 @@ public:
 		m_view_dirty = true;
 	}
 
+	void Set_LOD_Hysteresis(float hysteresis) noexcept
+	{
+		if (!std::isfinite(hysteresis) || hysteresis < 0.0f)
+			m_lod_hysteresis = 0.0f;
+		else if (hysteresis > 0.99f)
+			m_lod_hysteresis = 0.99f;
+		else
+			m_lod_hysteresis = hysteresis;
+	}
+
 	bool Render(CommandList &command_list, const FrameTargets &targets, bool clear_targets = true) noexcept
 	{
 		if (!Is_Initialized() || !targets.backbuffer.texture.Is_Valid() || !targets.depth.texture.Is_Valid())
@@ -503,7 +547,7 @@ public:
 
 		if (!Build_Visible_Set(m_scene, m_view, *m_visible))
 			return false;
-		if (!Build_LOD_Set(m_scene, m_meshes, *m_visible, m_view, *m_lod))
+		if (!Build_LOD_Set(m_scene, m_meshes, *m_visible, m_view, *m_lod, *m_lod_history, {m_lod_hysteresis}))
 			return false;
 		if (!Build_Draw_Data(*m_lod, m_gpu_scene, {0, m_pipeline, 0, m_skinned_pipeline}, *m_draws))
 			return false;
@@ -682,11 +726,13 @@ private:
 	std::vector<InstanceHandle> m_dirty_instances;
 	std::vector<InstanceHandle> m_visible_storage;
 	std::vector<LODSelection> m_lod_storage;
+	std::vector<LODHistoryEntry> m_lod_history_storage;
 	std::vector<DrawData> m_draw_storage;
 	std::vector<OpaqueMeshBinding> m_mesh_bindings;
 	std::vector<OpaqueSubmeshBinding> m_mesh_part_bindings;
 	std::unique_ptr<VisibleSet> m_visible;
 	std::unique_ptr<LODSet> m_lod;
+	std::unique_ptr<LODHistory> m_lod_history;
 	std::unique_ptr<DrawSet> m_draws;
 	View m_view{};
 	GPUViewData m_gpu_view{};
@@ -707,6 +753,7 @@ private:
 	GraphPassHandle m_opaque_pass{};
 	bool m_scene_dirty = true;
 	bool m_view_dirty = false;
+	float m_lod_hysteresis = 0.1f;
 	bool m_graph_compiled = false;
 };
 
@@ -719,16 +766,59 @@ public:
 		AnimationClipHandle animation = {}, AnimationPlaybackMode animation_mode = AnimationPlaybackMode::Loop,
 		float animation_time = 0.0f)
 	{
-		if (!renderer.Is_Initialized() || !material.Is_Valid()
+		const StaticMeshLODSource lod_source{source, 0.0f};
+		return Replace_LODs(renderer, std::span<const StaticMeshLODSource>(&lod_source, 1), transform, bounds,
+			material, flags, visibility_mask, skeleton, animation, animation_mode, animation_time);
+	}
+
+	bool Replace_LODs(StaticMeshRenderer &renderer, std::span<const StaticMeshLODSource> lod_sources,
+		const RenderTransform &transform, const RenderBounds &bounds, MaterialHandle material, RenderInstanceFlags flags,
+		SubmeshVisibilityMask visibility_mask = All_Submeshes_Visible, SkeletonHandle skeleton = {},
+		AnimationClipHandle animation = {}, AnimationPlaybackMode animation_mode = AnimationPlaybackMode::Loop,
+		float animation_time = 0.0f)
+	{
+		if (!renderer.Is_Initialized() || lod_sources.empty() || lod_sources.size() > Mesh::MaxLodCount + 1u || !material.Is_Valid()
 			|| (skeleton.Is_Valid() && !renderer.Is_Skeleton_Valid(skeleton))
-			|| (source.vertex_format == MeshVertexFormat::Position3Color4UV2Skinned && !skeleton.Is_Valid())
+			|| (lod_sources[0].source.vertex_format == MeshVertexFormat::Position3Color4UV2Skinned && !skeleton.Is_Valid())
 			|| (animation.Is_Valid() && !std::isfinite(animation_time))
 			|| (animation.Is_Valid() && !renderer.Is_Animation_Valid_For_Skeleton(animation, skeleton)))
 			return false;
 
-		const MeshHandle new_mesh = renderer.Create_Mesh(source);
-		if (!new_mesh.Is_Valid())
+		const MeshVertexFormat vertex_format = lod_sources[0].source.vertex_format;
+		const std::uint32_t skin_bone_count = lod_sources[0].source.skin_bone_count;
+		for (const StaticMeshLODSource &lod_source : lod_sources) {
+			if (!Validate_Static_Mesh_Source(lod_source.source)
+				|| lod_source.source.vertex_format != vertex_format
+				|| lod_source.source.skin_bone_count != skin_bone_count
+				|| std::isnan(lod_source.max_screen_size) || lod_source.max_screen_size < 0.0f)
+				return false;
+		}
+
+		std::array<MeshHandle, Mesh::MaxLodCount + 1> new_lod_meshes{};
+		std::size_t new_lod_count = 0;
+		auto destroy_new_meshes = [&]() noexcept {
+			for (std::size_t index = 0; index < new_lod_count; ++index) {
+				if (new_lod_meshes[index].Is_Valid())
+					renderer.Destroy_Mesh(new_lod_meshes[index]);
+			}
+		};
+		for (; new_lod_count < lod_sources.size(); ++new_lod_count) {
+			new_lod_meshes[new_lod_count] = renderer.Create_Mesh(lod_sources[new_lod_count].source);
+			if (!new_lod_meshes[new_lod_count].Is_Valid()) {
+				destroy_new_meshes();
+				return false;
+			}
+		}
+
+		std::array<MeshLod, Mesh::MaxLodCount> mesh_lods{};
+		for (std::size_t index = 1; index < new_lod_count; ++index)
+			mesh_lods[index - 1] = {new_lod_meshes[index], lod_sources[index].max_screen_size};
+		if (!renderer.Configure_Mesh_LODs(new_lod_meshes[0], {mesh_lods.data(), new_lod_count - 1})) {
+			destroy_new_meshes();
 			return false;
+		}
+
+		const MeshHandle new_mesh = new_lod_meshes[0];
 
 		PoseHandle new_pose;
 		auto cleanup_new_resources = [&]() noexcept {
@@ -736,7 +826,7 @@ public:
 				renderer.Destroy_Pose(new_pose);
 			if (animation.Is_Valid() && animation != m_animation && animation != m_secondary_animation)
 				renderer.Destroy_Animation_Clip(animation);
-			renderer.Destroy_Mesh(new_mesh);
+			destroy_new_meshes();
 			if (skeleton.Is_Valid() && skeleton != m_model_instance.skeleton)
 				renderer.Destroy_Skeleton(skeleton);
 		};
@@ -752,7 +842,7 @@ public:
 		}
 
 		std::vector<RenderTransform> rest_pose;
-		if (source.vertex_format == MeshVertexFormat::Position3Color4UV2Skinned) {
+		if (vertex_format == MeshVertexFormat::Position3Color4UV2Skinned) {
 			const Graphics::Skeleton *skeleton_resource = renderer.Skeletons().Resolve(skeleton);
 			if (skeleton_resource == nullptr) {
 				cleanup_new_resources();
@@ -782,8 +872,10 @@ public:
 				cleanup_new_resources();
 				return false;
 			}
-			if (m_mesh.Is_Valid())
-				renderer.Destroy_Mesh(m_mesh);
+			for (std::size_t index = 0; index < m_lod_count; ++index) {
+				if (m_lod_meshes[index].Is_Valid())
+					renderer.Destroy_Mesh(m_lod_meshes[index]);
+			}
 		} else {
 			const InstanceHandle new_instance = renderer.Create_Instance(instance);
 			if (!new_instance.Is_Valid()) {
@@ -796,11 +888,13 @@ public:
 		const SkeletonHandle old_skeleton = m_model_instance.skeleton;
 		const PoseHandle old_pose = m_pose;
 		m_mesh = new_mesh;
+		m_lod_meshes = new_lod_meshes;
+		m_lod_count = static_cast<std::uint8_t>(new_lod_count);
 		m_material = material;
 		m_bounds = bounds;
 		m_flags = flags;
 		m_visibility_mask = visibility_mask;
-		m_skinned = source.vertex_format == MeshVertexFormat::Position3Color4UV2Skinned;
+		m_skinned = vertex_format == MeshVertexFormat::Position3Color4UV2Skinned;
 		m_model_instance = std::move(prepared_model_instance);
 		m_pose = new_pose;
 		const AnimationClipHandle old_animation = m_animation;
@@ -968,8 +1062,10 @@ public:
 		if (renderer.Is_Initialized()) {
 			if (m_instance.Is_Valid())
 				renderer.Destroy_Instance(m_instance);
-			if (m_mesh.Is_Valid())
-				renderer.Destroy_Mesh(m_mesh);
+			for (std::size_t index = 0; index < m_lod_count; ++index) {
+				if (m_lod_meshes[index].Is_Valid())
+					renderer.Destroy_Mesh(m_lod_meshes[index]);
+			}
 			if (m_model_instance.skeleton.Is_Valid())
 				renderer.Destroy_Skeleton(m_model_instance.skeleton);
 			if (m_animation.Is_Valid())
@@ -985,6 +1081,8 @@ public:
 	void Reset() noexcept
 	{
 		m_mesh = {};
+		m_lod_meshes.fill({});
+		m_lod_count = 0;
 		m_material = {};
 		m_instance = {};
 		m_bounds = {};
@@ -1011,6 +1109,11 @@ public:
 	MeshHandle Mesh() const noexcept
 	{
 		return m_mesh;
+	}
+
+	std::span<const MeshHandle> Mesh_LODs() const noexcept
+	{
+		return {m_lod_meshes.data(), m_lod_count};
 	}
 
 	MaterialHandle Material() const noexcept
@@ -1089,6 +1192,8 @@ private:
 	}
 
 	MeshHandle m_mesh{};
+	std::array<MeshHandle, Mesh::MaxLodCount + 1> m_lod_meshes{};
+	std::uint8_t m_lod_count = 0;
 	MaterialHandle m_material{};
 	InstanceHandle m_instance{};
 	RenderBounds m_bounds{};
