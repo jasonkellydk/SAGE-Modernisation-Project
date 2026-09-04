@@ -51,6 +51,14 @@ struct GPUMaterialData
     uint reserved[3];
 };
 
+struct GPUDrawData
+{
+    uint instance_index;
+    uint material_index;
+    uint mesh_index;
+    uint flags;
+};
+
 StructuredBuffer<GPUInstanceData> Instances : register(t127);
 
 struct GPULightData
@@ -69,23 +77,29 @@ StructuredBuffer<GPULightData> Lights : register(t126);
 struct GPUViewData
 {
     row_major float4x4 view_projection;
+    float4 camera_position;
+    float4 fog_color_density;
+    float4 fog_start_end;
 };
 
 StructuredBuffer<GPUViewData> Views : register(t125);
 
 StructuredBuffer<GPUBoneMatrixData> BoneMatrices : register(t124);
 StructuredBuffer<GPUMaterialData> Materials : register(t123);
-Texture2D<float4> Textures[123] : register(t0);
+StructuredBuffer<GPUDrawData> Draws : register(t122);
+Texture2D<float4> Textures[122] : register(t0);
 SamplerState MaterialSampler : register(s0);
 
 BasicOpaqueVertexOutput basic_opaque_vertex(BasicOpaqueVertexInput input, uint instance_id : SV_InstanceID)
 {
     BasicOpaqueVertexOutput output;
-    const float4 world_position = mul(float4(input.position, 1.0), Instances[instance_id].transform);
+    const GPUDrawData draw = Draws[instance_id];
+    const GPUInstanceData instance = Instances[draw.instance_index];
+    const float4 world_position = mul(float4(input.position, 1.0), instance.transform);
     output.position = mul(world_position, Views[0].view_projection);
     output.color = input.color;
     output.world_position = world_position.xyz;
-    output.material_index = Instances[instance_id].material_index;
+    output.material_index = draw.material_index;
     output.uv = input.uv;
     return output;
 }
@@ -93,7 +107,8 @@ BasicOpaqueVertexOutput basic_opaque_vertex(BasicOpaqueVertexInput input, uint i
 BasicOpaqueVertexOutput basic_opaque_skinned_vertex(SkinnedOpaqueVertexInput input, uint instance_id : SV_InstanceID)
 {
     BasicOpaqueVertexOutput output;
-    const GPUInstanceData instance = Instances[instance_id];
+    const GPUDrawData draw = Draws[instance_id];
+    const GPUInstanceData instance = Instances[draw.instance_index];
     float4 skinned_position = 0.0.xxxx;
     if (instance.bone_matrix_count != 0)
     {
@@ -110,7 +125,7 @@ BasicOpaqueVertexOutput basic_opaque_skinned_vertex(SkinnedOpaqueVertexInput inp
     output.position = mul(world_position, Views[0].view_projection);
     output.color = input.color;
     output.world_position = world_position.xyz;
-    output.material_index = instance.material_index;
+    output.material_index = draw.material_index;
     output.uv = input.uv;
     return output;
 }
@@ -245,7 +260,6 @@ float4 basic_opaque_pixel(BasicOpaqueVertexOutput input) : SV_TARGET
         case 119: albedo = Textures[119].Sample(MaterialSampler, input.uv); break;
         case 120: albedo = Textures[120].Sample(MaterialSampler, input.uv); break;
         case 121: albedo = Textures[121].Sample(MaterialSampler, input.uv); break;
-        case 122: albedo = Textures[122].Sample(MaterialSampler, input.uv); break;
     default: break;
     }
     if (material.parameters[1].x > 0.5)
@@ -256,6 +270,18 @@ float4 basic_opaque_pixel(BasicOpaqueVertexOutput input) : SV_TARGET
         const float enabled = (light.flags & 1) != 0 ? 1.0 : 0.0;
         light_color = light.color_inner_angle.rgb * light.direction_intensity.w * (0.2 + 0.8 * attenuation) * enabled;
     }
-    return float4(input.color.rgb * material.parameters[0].rgb * albedo.rgb * light_color,
+    const float4 color = float4(input.color.rgb * material.parameters[0].rgb * albedo.rgb * light_color,
         input.color.a * material.parameters[0].a * albedo.a);
+    if ((material.flags & (1u << 1)) != 0 && color.a < 0.5)
+        discard;
+
+    float4 output = color;
+    if ((material.flags & (1u << 7)) != 0 && Views[0].fog_start_end.z > 0.5)
+    {
+        const float fog_distance = length(input.world_position - Views[0].camera_position.xyz);
+        const float fog_factor = saturate((fog_distance - Views[0].fog_start_end.x)
+            / max(Views[0].fog_start_end.y - Views[0].fog_start_end.x, 0.0001));
+        output.rgb = lerp(output.rgb, Views[0].fog_color_density.rgb, fog_factor);
+    }
+    return output;
 }

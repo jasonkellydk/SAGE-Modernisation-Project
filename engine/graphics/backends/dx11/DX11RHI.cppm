@@ -174,6 +174,7 @@ public:
 	bool Clear_Depth(float depth) noexcept override;
 	bool Copy_Texture(RHITextureHandle source, RHITextureHandle destination) noexcept override;
 	bool Set_Viewport(RHIViewport viewport) noexcept override;
+	bool Set_Scissor(RHIScissorRect scissor) noexcept override;
 	bool Set_Vertex_Buffer(std::uint32_t slot, RHIBufferHandle buffer, std::uint32_t stride, std::uint32_t offset) noexcept override;
 	bool Set_Index_Buffer(RHIBufferHandle buffer, RHIIndexFormat format, std::uint32_t offset) noexcept override;
 	bool Draw(std::uint32_t vertex_count, std::uint32_t first_vertex, std::uint32_t instance_count, std::uint32_t first_instance) noexcept override;
@@ -287,6 +288,13 @@ static D3D11_CULL_MODE To_DX11_Cull_Mode(RHICullMode mode) noexcept
 	return mode == RHICullMode::None ? D3D11_CULL_NONE : D3D11_CULL_BACK;
 }
 
+static D3D11_BLEND_OP To_DX11_Blend_Operation(RHIBlendOperation operation) noexcept
+{
+	return operation == RHIBlendOperation::ReverseSubtract
+		? D3D11_BLEND_OP_REV_SUBTRACT
+		: D3D11_BLEND_OP_ADD;
+}
+
 static bool Create_DX11_Pipeline(
 	ID3D11Device *device,
 	const RHIPipeline &description,
@@ -360,11 +368,15 @@ static bool Create_DX11_Pipeline(
 		render_target_blend.SrcBlend = D3D11_BLEND_ZERO;
 		render_target_blend.DestBlend = D3D11_BLEND_SRC_COLOR;
 		break;
+	case RHIBlendMode::ColorMultiply:
+		render_target_blend.SrcBlend = D3D11_BLEND_DEST_COLOR;
+		render_target_blend.DestBlend = D3D11_BLEND_SRC_COLOR;
+		break;
 	}
-	render_target_blend.BlendOp = D3D11_BLEND_OP_ADD;
+	render_target_blend.BlendOp = To_DX11_Blend_Operation(description.blend_operation);
 	render_target_blend.SrcBlendAlpha = D3D11_BLEND_ONE;
 	render_target_blend.DestBlendAlpha = description.blend_mode == RHIBlendMode::Alpha ? D3D11_BLEND_INV_SRC_ALPHA : D3D11_BLEND_ZERO;
-	render_target_blend.BlendOpAlpha = D3D11_BLEND_OP_ADD;
+	render_target_blend.BlendOpAlpha = To_DX11_Blend_Operation(description.blend_operation);
 	render_target_blend.RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
 	ID3D11BlendState *blend_state = nullptr;
 	if (FAILED(device->CreateBlendState(&blend_description, &blend_state)))
@@ -376,6 +388,7 @@ static bool Create_DX11_Pipeline(
 	rasterizer_description.CullMode = To_DX11_Cull_Mode(description.cull_mode);
 	rasterizer_description.FrontCounterClockwise = FALSE;
 	rasterizer_description.DepthClipEnable = TRUE;
+	rasterizer_description.ScissorEnable = TRUE;
 	ID3D11RasterizerState *rasterizer_state = nullptr;
 	if (FAILED(device->CreateRasterizerState(&rasterizer_description, &rasterizer_state)))
 		return false;
@@ -1034,6 +1047,26 @@ bool DX11CommandList::Set_Viewport(RHIViewport viewport) noexcept
 	native_viewport.MinDepth = viewport.min_depth;
 	native_viewport.MaxDepth = viewport.max_depth;
 	m_state->context.Get()->RSSetViewports(1, &native_viewport);
+	return true;
+}
+
+bool DX11CommandList::Set_Scissor(RHIScissorRect scissor) noexcept
+{
+	if (!Is_Ready() || scissor.width == 0 || scissor.height == 0
+		|| scissor.x > static_cast<std::uint32_t>(LONG_MAX)
+		|| scissor.y > static_cast<std::uint32_t>(LONG_MAX)
+		|| scissor.width > static_cast<std::uint32_t>(LONG_MAX)
+		|| scissor.height > static_cast<std::uint32_t>(LONG_MAX)
+		|| scissor.x > static_cast<std::uint32_t>(LONG_MAX) - scissor.width
+		|| scissor.y > static_cast<std::uint32_t>(LONG_MAX) - scissor.height)
+		return false;
+
+	D3D11_RECT native_scissor{};
+	native_scissor.left = static_cast<LONG>(scissor.x);
+	native_scissor.top = static_cast<LONG>(scissor.y);
+	native_scissor.right = static_cast<LONG>(scissor.x + scissor.width);
+	native_scissor.bottom = static_cast<LONG>(scissor.y + scissor.height);
+	m_state->context.Get()->RSSetScissorRects(1, &native_scissor);
 	return true;
 }
 

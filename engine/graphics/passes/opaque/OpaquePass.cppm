@@ -49,6 +49,7 @@ export struct OpaquePassInput final
 	bool clear_color_target = true;
 	bool clear_depth_target = true;
 	std::span<const OpaqueSubmeshBinding> submeshes{};
+	bool uses_gpu_draw_table = false;
 };
 
 export class OpaquePass final
@@ -135,7 +136,10 @@ public:
 				has_bound_mesh = true;
 			}
 
-			if (!command_list.Draw_Indexed(index_count, first_index, base_vertex, draw.instance_count, draw.instance_index))
+			const std::uint32_t first_instance = input.uses_gpu_draw_table ? draw.gpu_draw_index : draw.instance_index;
+			if (input.uses_gpu_draw_table && first_instance == Invalid_GPU_Index)
+				return false;
+			if (!command_list.Draw_Indexed(index_count, first_index, base_vertex, draw.instance_count, first_instance))
 				return false;
 		}
 

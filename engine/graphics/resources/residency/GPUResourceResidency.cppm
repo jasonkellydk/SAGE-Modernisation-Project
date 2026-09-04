@@ -55,6 +55,8 @@ export struct GPUResidentMaterial final
 export class GPUResourceResidency final
 {
 public:
+	GPUResourceResidency() noexcept = default;
+
 	explicit GPUResourceResidency(Device &device) noexcept
 		: m_device(&device)
 	{
@@ -67,6 +69,11 @@ public:
 
 	GPUResourceResidency(const GPUResourceResidency &) = delete;
 	GPUResourceResidency &operator=(const GPUResourceResidency &) = delete;
+
+	void Set_Device(Device &device) noexcept
+	{
+		m_device = &device;
+	}
 
 	bool Upload_Mesh(MeshHandle handle, const Mesh &mesh)
 	{

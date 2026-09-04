@@ -513,8 +513,8 @@ private:
 	Int														m_animationMode;
 
 	Graphics::StaticMeshBinding				m_modernBinding;
-	Graphics::MaterialHandle					m_modernMaterial;
-	Graphics::TextureHandle					m_modernTexture;
+	std::vector<Graphics::MaterialHandle>		m_modernMaterials;
+	std::vector<Graphics::TextureHandle>		m_modernTextures;
 	const ModelConditionInfo*						m_modernAnimationState;
 	Int													m_modernAnimationIndex;
 	Graphics::AnimationPlaybackMode			m_modernAnimationMode;

@@ -22,7 +22,13 @@ export enum class MaterialFlags : std::uint32_t
 	Unlit = 1u << 0,
 	AlphaTest = 1u << 1,
 	Transparent = 1u << 2,
-	DoubleSided = 1u << 3
+	DoubleSided = 1u << 3,
+	VertexColor = 1u << 4,
+	PrimaryGradient = 1u << 5,
+	SecondaryGradient = 1u << 6,
+	Fog = 1u << 7,
+	Additive = 1u << 8,
+	Multiply = 1u << 9
 };
 
 export constexpr MaterialFlags operator|(MaterialFlags left, MaterialFlags right) noexcept

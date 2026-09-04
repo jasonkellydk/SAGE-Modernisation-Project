@@ -21,7 +21,9 @@ namespace Graphics
 
 export constexpr bool Is_Transparent_Material(MaterialFlags flags) noexcept
 {
-	return Has_Material_Flag(flags, MaterialFlags::Transparent);
+	return Has_Material_Flag(flags, MaterialFlags::Transparent)
+		|| Has_Material_Flag(flags, MaterialFlags::Additive)
+		|| Has_Material_Flag(flags, MaterialFlags::Multiply);
 }
 
 export constexpr bool Is_Transparent_Material(const Material &material) noexcept
@@ -56,6 +58,11 @@ public:
 	}
 
 	std::span<const DrawData> Records() const noexcept
+	{
+		return {m_storage.data(), m_count};
+	}
+
+	std::span<DrawData> Mutable_Records() noexcept
 	{
 		return {m_storage.data(), m_count};
 	}
@@ -104,6 +111,9 @@ export bool Build_Transparent_Draw_Data(
 	DrawPass pass,
 	TransparentDrawSet &draw_set) noexcept;
 
+PipelineHandle Select_Transparent_Pipeline(const DrawPass &pass, bool skinned, bool double_sided, bool alpha_test,
+	std::uint32_t material_flags) noexcept;
+
 namespace
 {
 std::uint32_t Depth_Sort_Key(const View &view, const RenderWorldBoundsData &bounds, std::size_t dense_index) noexcept
@@ -138,6 +148,7 @@ export bool Build_Transparent_Draw_Data(
 	draw_set.Clear();
 	if (!pass.pipeline.Is_Valid())
 		return false;
+	pass.transparent = true;
 
 	const RenderSceneData scene_data = scene.Data();
 	const std::span<const GPUInstanceData> instances = gpu_scene.Instances();
@@ -147,36 +158,100 @@ export bool Build_Transparent_Draw_Data(
 		if (scene_index == Invalid_Render_Scene_Index || scene_index >= scene_data.Size())
 			continue;
 
-		const MaterialHandle material_handle = scene_data.materials[scene_index];
-		const Material *material = materials.Resolve(material_handle);
-		if (material == nullptr || !Is_Transparent_Material(*material))
-			continue;
-
 		const std::uint32_t mesh_index = gpu_scene.Mesh_Index(selection.mesh);
 		const std::uint32_t instance_index = gpu_scene.Instance_Index(selection.instance);
-		if (mesh_index == Invalid_GPU_Index || instance_index == Invalid_GPU_Index || instance_index >= instances.size())
+		if (mesh_index == Invalid_GPU_Index || mesh_index >= gpu_scene.Meshes().size()
+			|| instance_index == Invalid_GPU_Index || instance_index >= instances.size())
 			continue;
 
-		const std::uint32_t material_index = instances[instance_index].material_index;
-		if (material_index == Invalid_GPU_Index || material_index >= gpu_materials.size())
+		const GPUMeshData &mesh = gpu_scene.Meshes()[mesh_index];
+		if (mesh.part_count == 0 || mesh.part_count > Max_Model_Part_Count
+			|| static_cast<std::uint64_t>(mesh.part_offset) + mesh.part_count > gpu_scene.Mesh_Parts().size())
 			continue;
 
-		const DrawData draw{
-			mesh_index,
-			material_index,
-			instance_index,
-			1,
-			pass.pipeline,
-			Make_Sort_Key(view, scene_data.world_bounds, scene_index, pass.sort_key)
-		};
-		if (!draw_set.Try_Append(draw)) {
-			draw_set.Clear();
-			return false;
+		const bool double_sided = (instances[instance_index].flags
+			& static_cast<std::uint32_t>(RenderInstanceFlags::DoubleSided)) != 0;
+		const bool skinned = mesh.vertex_format == static_cast<std::uint32_t>(MeshVertexFormat::Position3Color4UV2Skinned);
+		for (std::uint32_t submesh_index = 0; submesh_index < mesh.part_count; ++submesh_index) {
+			const GPUMeshPartData &part = gpu_scene.Mesh_Parts()[mesh.part_offset + submesh_index];
+			const std::uint32_t visibility_group = part.visibility_group == Invalid_Mesh_Part_Group
+				? submesh_index : part.visibility_group;
+			if (!Is_Submesh_Visible(instances[instance_index].visibility_mask, visibility_group))
+				continue;
+			const std::uint32_t material_index = part.material_index != Invalid_GPU_Index
+				? part.material_index : instances[instance_index].material_index;
+			if (material_index == Invalid_GPU_Index || material_index >= gpu_materials.size()
+				|| !Is_Transparent_Material(static_cast<MaterialFlags>(gpu_materials[material_index].flags)))
+				continue;
+
+			const std::uint32_t material_flags = gpu_materials[material_index].flags;
+			const bool alpha_test = (material_flags & static_cast<std::uint32_t>(MaterialFlags::AlphaTest)) != 0;
+			const PipelineHandle pipeline = Select_Transparent_Pipeline(pass, skinned, double_sided, alpha_test, material_flags);
+			if (!pipeline.Is_Valid())
+				return false;
+
+			if (!draw_set.Try_Append({
+				mesh_index,
+				material_index,
+				instance_index,
+				1,
+				pipeline,
+				Make_Sort_Key(view, scene_data.world_bounds, scene_index, pass.sort_key),
+				submesh_index,
+				0
+			})) {
+				draw_set.Clear();
+				return false;
+			}
 		}
 	}
 
 	draw_set.Sort();
 	return true;
+}
+
+PipelineHandle Select_Transparent_Pipeline(const DrawPass &pass, bool skinned, bool double_sided, bool alpha_test,
+	std::uint32_t material_flags) noexcept
+{
+	const auto Select = [](PipelineHandle preferred, PipelineHandle fallback) noexcept {
+		return preferred.Is_Valid() ? preferred : fallback;
+	};
+	const bool additive = (material_flags & static_cast<std::uint32_t>(MaterialFlags::Additive)) != 0;
+	const bool multiply = (material_flags & static_cast<std::uint32_t>(MaterialFlags::Multiply)) != 0;
+	if (double_sided) {
+		if (skinned) {
+			if (additive)
+				return Select(pass.skinned_double_sided_additive_pipeline, pass.skinned_double_sided_transparent_pipeline);
+			if (multiply)
+				return Select(pass.skinned_double_sided_multiply_pipeline, pass.skinned_double_sided_transparent_pipeline);
+			if (alpha_test && pass.skinned_double_sided_alpha_test_pipeline.Is_Valid())
+				return pass.skinned_double_sided_alpha_test_pipeline;
+			return Select(pass.skinned_double_sided_transparent_pipeline, pass.skinned_pipeline);
+		}
+		if (additive)
+			return Select(pass.double_sided_additive_pipeline, pass.double_sided_transparent_pipeline);
+		if (multiply)
+			return Select(pass.double_sided_multiply_pipeline, pass.double_sided_transparent_pipeline);
+		if (alpha_test && pass.double_sided_alpha_test_pipeline.Is_Valid())
+			return pass.double_sided_alpha_test_pipeline;
+		return Select(pass.double_sided_transparent_pipeline, pass.double_sided_pipeline);
+	}
+	if (skinned) {
+		if (additive)
+			return Select(pass.skinned_additive_pipeline, pass.skinned_transparent_pipeline);
+		if (multiply)
+			return Select(pass.skinned_multiply_pipeline, pass.skinned_transparent_pipeline);
+		if (alpha_test && pass.skinned_alpha_test_pipeline.Is_Valid())
+			return pass.skinned_alpha_test_pipeline;
+		return Select(pass.skinned_transparent_pipeline, pass.skinned_pipeline);
+	}
+	if (additive)
+		return Select(pass.additive_pipeline, pass.transparent_pipeline);
+	if (multiply)
+		return Select(pass.multiply_pipeline, pass.transparent_pipeline);
+	if (alpha_test && pass.alpha_test_pipeline.Is_Valid())
+		return pass.alpha_test_pipeline;
+	return Select(pass.transparent_pipeline, pass.pipeline);
 }
 
 }

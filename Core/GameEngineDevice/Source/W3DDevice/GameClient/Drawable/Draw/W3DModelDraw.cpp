@@ -181,7 +181,8 @@ struct ModernMeshSourceStorage final
 };
 
 bool Build_Modern_Mesh_Source(RenderObjClass &render_object, MeshClass &mesh,
-	ModernMeshSourceStorage &storage)
+	ModernMeshSourceStorage &storage, std::span<const Graphics::MaterialHandle> materials,
+	std::uint32_t visibility_group = Graphics::Invalid_Mesh_Part_Group)
 {
 	MeshModelClass *model = mesh.Peek_Model();
 	if (model == nullptr)
@@ -252,7 +253,12 @@ bool Build_Modern_Mesh_Source(RenderObjClass &render_object, MeshClass &mesh,
 		}
 	}
 	storage.parts.clear();
-	storage.parts.push_back({0, static_cast<std::uint32_t>(storage.indices.size()), 0});
+	const std::size_t pass_count = materials.empty() ? 1u : materials.size();
+	if (pass_count > Graphics::Max_Model_Part_Count)
+		return false;
+	for (std::size_t pass = 0; pass < pass_count; ++pass)
+		storage.parts.push_back({0, static_cast<std::uint32_t>(storage.indices.size()), 0,
+			materials.empty() ? Graphics::MaterialHandle{} : materials[pass], static_cast<std::uint32_t>(pass), visibility_group});
 
 	SphereClass sphere;
 	mesh.Get_Obj_Space_Bounding_Sphere(sphere);
@@ -277,13 +283,13 @@ bool Build_Modern_Mesh_Source(RenderObjClass &render_object, MeshClass &mesh,
 bool Build_Modern_LOD_Sources(RenderObjClass &render_object,
 	std::array<ModernMeshSourceStorage, Graphics::Mesh::MaxLodCount + 1> &storage,
 	std::array<Graphics::StaticMeshLODSource, Graphics::Mesh::MaxLodCount + 1> &sources,
-	std::size_t &source_count)
+	std::size_t &source_count, std::span<const Graphics::MaterialHandle> materials)
 {
 	source_count = 0;
 	if (render_object.Class_ID() != RenderObjClass::CLASSID_HLOD) {
 		Scoped_Render_Object_Reference mesh_reference;
 		MeshClass *mesh = Find_Modern_Mesh(render_object, mesh_reference);
-		if (mesh == nullptr || !Build_Modern_Mesh_Source(render_object, *mesh, storage[0]))
+		if (mesh == nullptr || !Build_Modern_Mesh_Source(render_object, *mesh, storage[0], materials))
 			return false;
 		sources[0] = {storage[0].source, 0.0f};
 		source_count = 1;
@@ -305,10 +311,17 @@ bool Build_Modern_LOD_Sources(RenderObjClass &render_object,
 			RenderObjClass *lod_model = hlod.Peek_Lod_Model(lod_index, model_index);
 			ModernMeshSourceStorage part_storage;
 			if (lod_model == nullptr || lod_model->Class_ID() != RenderObjClass::CLASSID_MESH
-				|| !Build_Modern_Mesh_Source(render_object, *static_cast<MeshClass *>(lod_model), part_storage))
+				|| !Build_Modern_Mesh_Source(render_object, *static_cast<MeshClass *>(lod_model), part_storage, materials,
+					static_cast<std::uint32_t>(model_index)))
 				return false;
 
-			if (!combined.parts.empty() && combined.source.vertex_format != part_storage.source.vertex_format)
+			if (combined.parts.empty()) {
+				combined.source = part_storage.source;
+				combined.source.vertex_count = 0;
+				combined.source.index_count = 0;
+				combined.source.parts = {};
+			}
+			if (combined.source.vertex_format != part_storage.source.vertex_format)
 				return false;
 			const std::size_t vertex_offset = combined.source.vertex_count;
 			const std::size_t index_offset = combined.indices.size();
@@ -326,13 +339,9 @@ bool Build_Modern_LOD_Sources(RenderObjClass &render_object,
 					return false;
 				combined.indices.push_back(static_cast<std::uint16_t>(adjusted_index));
 			}
-			combined.parts.push_back({static_cast<std::uint32_t>(index_offset), part_storage.source.index_count, 0});
-			if (combined.parts.size() == 1) {
-				combined.source = part_storage.source;
-				combined.source.vertex_count = 0;
-				combined.source.index_count = 0;
-				combined.source.parts = {};
-			}
+			for (const Graphics::MeshPart &part : part_storage.parts)
+				combined.parts.push_back({static_cast<std::uint32_t>(index_offset + part.first_index),
+					part.index_count, 0, part.material, part.pass_key, part.visibility_group});
 			combined.source.vertex_count = static_cast<std::uint32_t>(combined.source.vertex_count + part_storage.source.vertex_count);
 			combined.source.index_count = static_cast<std::uint32_t>(combined.indices.size());
 		}
@@ -398,7 +407,7 @@ bool Build_Modern_Texture(TextureClass &legacy_texture, Graphics::StaticMeshRend
 
 Graphics::MaterialHandle Build_Modern_Material(RenderObjClass &render_object,
 	Graphics::StaticMeshRenderer &renderer, bool receives_dynamic_lights,
-	Graphics::TextureHandle &texture_handle)
+	Graphics::TextureHandle &texture_handle, int pass)
 {
 	texture_handle = {};
 	Scoped_Render_Object_Reference mesh_reference;
@@ -407,8 +416,24 @@ Graphics::MaterialHandle Build_Modern_Material(RenderObjClass &render_object,
 		return {};
 
 	MeshModelClass *model = mesh->Peek_Model();
-	VertexMaterialClass *legacy_material = model != nullptr ? model->Peek_Single_Material(0) : nullptr;
+	if (model == nullptr || pass < 0 || pass >= model->Get_Pass_Count())
+		return {};
+	VertexMaterialClass *legacy_material = model->Peek_Single_Material(pass);
 	if (legacy_material == nullptr)
+		return {};
+	const ShaderClass shader = model->Get_Single_Shader(pass);
+	const auto source_blend = shader.Get_Src_Blend_Func();
+	const auto destination_blend = shader.Get_Dst_Blend_Func();
+	const bool alpha_test = shader.Get_Alpha_Test() != ShaderClass::ALPHATEST_DISABLE;
+	const bool alpha_blend = source_blend == ShaderClass::SRCBLEND_SRC_ALPHA
+		&& destination_blend == ShaderClass::DSTBLEND_ONE_MINUS_SRC_ALPHA;
+	const bool additive = source_blend == ShaderClass::SRCBLEND_ONE
+		&& destination_blend == ShaderClass::DSTBLEND_ONE;
+	const bool multiply = source_blend == ShaderClass::SRCBLEND_ZERO
+		&& destination_blend == ShaderClass::DSTBLEND_SRC_COLOR;
+	const bool opaque = source_blend == ShaderClass::SRCBLEND_ONE
+		&& destination_blend == ShaderClass::DSTBLEND_ZERO;
+	if (!opaque && !alpha_blend && !additive && !multiply)
 		return {};
 
 	Vector3 diffuse;
@@ -420,8 +445,25 @@ Graphics::MaterialHandle Build_Modern_Material(RenderObjClass &render_object,
 	material.parameters.values[2] = diffuse.Z;
 	material.parameters.values[3] = legacy_material->Get_Opacity();
 	material.parameters.values[4] = receives_dynamic_lights ? 1.0f : 0.0f;
+	material.flags = Graphics::MaterialFlags::VertexColor;
+	if (!receives_dynamic_lights)
+		material.flags = material.flags | Graphics::MaterialFlags::Unlit;
+	if (alpha_test)
+		material.flags = material.flags | Graphics::MaterialFlags::AlphaTest;
+	if (alpha_blend || legacy_material->Get_Opacity() < 0.999f)
+		material.flags = material.flags | Graphics::MaterialFlags::Transparent;
+	else if (additive)
+		material.flags = material.flags | Graphics::MaterialFlags::Additive;
+	else if (multiply)
+		material.flags = material.flags | Graphics::MaterialFlags::Multiply;
+	if (shader.Uses_Fog())
+		material.flags = material.flags | Graphics::MaterialFlags::Fog;
+	if (shader.Uses_Primary_Gradient())
+		material.flags = material.flags | Graphics::MaterialFlags::PrimaryGradient;
+	if (shader.Uses_Secondary_Gradient())
+		material.flags = material.flags | Graphics::MaterialFlags::SecondaryGradient;
 
-	TextureClass *legacy_texture = model->Peek_Single_Texture(0, 0);
+	TextureClass *legacy_texture = model->Peek_Single_Texture(pass, 0);
 	if (legacy_texture != nullptr) {
 		if (!Build_Modern_Texture(*legacy_texture, renderer, texture_handle))
 			return {};
@@ -434,6 +476,41 @@ Graphics::MaterialHandle Build_Modern_Material(RenderObjClass &render_object,
 		texture_handle = {};
 	}
 	return material_handle;
+}
+
+bool Build_Modern_Materials(RenderObjClass &render_object, Graphics::StaticMeshRenderer &renderer,
+	bool receives_dynamic_lights, std::vector<Graphics::MaterialHandle> &material_handles,
+	std::vector<Graphics::TextureHandle> &texture_handles)
+{
+	material_handles.clear();
+	texture_handles.clear();
+	Scoped_Render_Object_Reference mesh_reference;
+	MeshClass *mesh = Find_Modern_Mesh(render_object, mesh_reference);
+	MeshModelClass *model = mesh != nullptr ? mesh->Peek_Model() : nullptr;
+	if (model == nullptr || model->Get_Pass_Count() <= 0
+		|| model->Get_Pass_Count() > static_cast<int>(Graphics::Max_Model_Part_Count))
+		return false;
+
+	material_handles.reserve(static_cast<std::size_t>(model->Get_Pass_Count()));
+	texture_handles.reserve(static_cast<std::size_t>(model->Get_Pass_Count()));
+	for (int pass = 0; pass < model->Get_Pass_Count(); ++pass) {
+		Graphics::TextureHandle texture;
+		const Graphics::MaterialHandle material = Build_Modern_Material(render_object, renderer,
+			receives_dynamic_lights, texture, pass);
+		if (!material.Is_Valid()) {
+			for (const Graphics::MaterialHandle handle : material_handles)
+				renderer.Destroy_Material(handle);
+			for (const Graphics::TextureHandle handle : texture_handles)
+				if (handle.Is_Valid())
+					renderer.Destroy_Texture(handle);
+			material_handles.clear();
+			texture_handles.clear();
+			return false;
+		}
+		material_handles.push_back(material);
+		texture_handles.push_back(texture);
+	}
+	return true;
 }
 
 Graphics::AnimationPlaybackMode Make_Modern_Animation_Mode(RenderObjClass::AnimMode mode) noexcept
@@ -2338,23 +2415,32 @@ bool W3DModelDraw::isModernStaticOpaqueState() const noexcept
 	MeshModelClass *model = mesh->Peek_Model();
 	if (!canUseModernSubobjectVisibility())
 		return false;
-	if (model == nullptr
-		|| model->Get_Pass_Count() != 1
-		|| model->Has_Material_Array(0)
-		|| model->Has_Texture_Array(0, 1) || model->Has_Shader_Array(0))
+	if (model == nullptr || model->Get_Pass_Count() <= 0
+		|| model->Get_Pass_Count() > static_cast<int>(Graphics::Max_Model_Part_Count))
 		return false;
 	if (model->Get_Flag(MeshGeometryClass::SKIN) != 0
 		&& (m_renderObject->Get_Num_Bones() <= 0 || model->Get_Vertex_Bone_Links() == nullptr))
 		return false;
 
-	VertexMaterialClass *material = model->Peek_Single_Material(0);
-	const ShaderClass shader = model->Get_Single_Shader(0);
-	return material != nullptr
-		&& material->Get_Opacity() >= 0.999f
-		&& !shader.Uses_Alpha()
-		&& !shader.Uses_Fog()
-		&& !shader.Uses_Primary_Gradient()
-		&& !shader.Uses_Secondary_Gradient();
+	for (int pass = 0; pass < model->Get_Pass_Count(); ++pass) {
+		if (model->Has_Material_Array(pass) || model->Has_Texture_Array(pass, 1) || model->Has_Shader_Array(pass))
+			return false;
+		VertexMaterialClass *material = model->Peek_Single_Material(pass);
+		if (material == nullptr)
+			return false;
+		const ShaderClass shader = model->Get_Single_Shader(pass);
+		const auto source_blend = shader.Get_Src_Blend_Func();
+		const auto destination_blend = shader.Get_Dst_Blend_Func();
+		const bool supported_blend = (source_blend == ShaderClass::SRCBLEND_ONE
+			&& destination_blend == ShaderClass::DSTBLEND_ZERO)
+			|| (source_blend == ShaderClass::SRCBLEND_SRC_ALPHA
+				&& destination_blend == ShaderClass::DSTBLEND_ONE_MINUS_SRC_ALPHA)
+			|| (source_blend == ShaderClass::SRCBLEND_ONE && destination_blend == ShaderClass::DSTBLEND_ONE)
+			|| (source_blend == ShaderClass::SRCBLEND_ZERO && destination_blend == ShaderClass::DSTBLEND_SRC_COLOR);
+		if (!supported_blend)
+			return false;
+	}
+	return true;
 }
 
 bool W3DModelDraw::modernAnimationBlend() const noexcept
@@ -2458,15 +2544,25 @@ bool W3DModelDraw::submitModernVariant()
 	std::array<ModernMeshSourceStorage, Graphics::Mesh::MaxLodCount + 1> source_storage{};
 	std::array<Graphics::StaticMeshLODSource, Graphics::Mesh::MaxLodCount + 1> lod_sources{};
 	std::size_t lod_source_count = 0;
-	if (!Build_Modern_LOD_Sources(*m_renderObject, source_storage, lod_sources, lod_source_count))
-		return false;
-
 	const W3DModelDrawModuleData *module_data = getW3DModelDrawModuleData();
-	Graphics::TextureHandle new_texture;
-	const Graphics::MaterialHandle new_material = Build_Modern_Material(*m_renderObject, renderer,
-		module_data != nullptr && module_data->m_receivesDynamicLights, new_texture);
-	if (!new_material.Is_Valid())
+	std::vector<Graphics::MaterialHandle> new_materials;
+	std::vector<Graphics::TextureHandle> new_textures;
+	if (!Build_Modern_Materials(*m_renderObject, renderer,
+		module_data != nullptr && module_data->m_receivesDynamicLights, new_materials, new_textures))
 		return false;
+	const Graphics::MaterialHandle new_material = new_materials.front();
+	auto destroy_new_materials = [&]() noexcept {
+		for (const Graphics::MaterialHandle handle : new_materials)
+			if (handle.Is_Valid())
+				renderer.Destroy_Material(handle);
+		for (const Graphics::TextureHandle handle : new_textures)
+			if (handle.Is_Valid())
+				renderer.Destroy_Texture(handle);
+	};
+	if (!Build_Modern_LOD_Sources(*m_renderObject, source_storage, lod_sources, lod_source_count, new_materials)) {
+		destroy_new_materials();
+		return false;
+	}
 
 	SphereClass sphere;
 	m_renderObject->Get_Obj_Space_Bounding_Sphere(sphere);
@@ -2485,9 +2581,7 @@ bool W3DModelDraw::submitModernVariant()
 	Graphics::SkeletonHandle skeleton;
 	if (!Build_Modern_Skeleton(*m_renderObject, renderer, skeleton))
 	{
-		renderer.Destroy_Material(new_material);
-		if (new_texture.Is_Valid())
-			renderer.Destroy_Texture(new_texture);
+		destroy_new_materials();
 		return false;
 	}
 
@@ -2506,9 +2600,7 @@ bool W3DModelDraw::submitModernVariant()
 	if (!animation_built) {
 		if (skeleton.Is_Valid())
 			renderer.Destroy_Skeleton(skeleton);
-		renderer.Destroy_Material(new_material);
-		if (new_texture.Is_Valid())
-			renderer.Destroy_Texture(new_texture);
+		destroy_new_materials();
 		return false;
 	}
 	Graphics::AnimationClipHandle secondary_animation;
@@ -2525,9 +2617,7 @@ bool W3DModelDraw::submitModernVariant()
 				renderer.Destroy_Animation_Clip(animation);
 			if (skeleton.Is_Valid())
 				renderer.Destroy_Skeleton(skeleton);
-			renderer.Destroy_Material(new_material);
-			if (new_texture.Is_Valid())
-				renderer.Destroy_Texture(new_texture);
+			destroy_new_materials();
 			return false;
 		}
 		REF_PTR_RELEASE(secondary_legacy_animation);
@@ -2542,19 +2632,19 @@ bool W3DModelDraw::submitModernVariant()
 			renderer.Destroy_Animation_Clip(animation);
 		if (secondary_animation.Is_Valid())
 			renderer.Destroy_Animation_Clip(secondary_animation);
-		renderer.Destroy_Material(new_material);
-		if (new_texture.Is_Valid())
-			renderer.Destroy_Texture(new_texture);
+		destroy_new_materials();
 		return false;
 	}
-	const Graphics::MaterialHandle old_material = m_modernMaterial;
-	const Graphics::TextureHandle old_texture = m_modernTexture;
-	m_modernMaterial = new_material;
-	m_modernTexture = new_texture;
-	if (old_material.Is_Valid())
-		renderer.Destroy_Material(old_material);
-	if (old_texture.Is_Valid())
-		renderer.Destroy_Texture(old_texture);
+	const std::vector<Graphics::MaterialHandle> old_materials = std::move(m_modernMaterials);
+	const std::vector<Graphics::TextureHandle> old_textures = std::move(m_modernTextures);
+	m_modernMaterials = std::move(new_materials);
+	m_modernTextures = std::move(new_textures);
+	for (const Graphics::MaterialHandle handle : old_materials)
+		if (handle.Is_Valid())
+			renderer.Destroy_Material(handle);
+	for (const Graphics::TextureHandle handle : old_textures)
+		if (handle.Is_Valid())
+			renderer.Destroy_Texture(handle);
 	if (secondary_animation.Is_Valid()
 		&& !m_modernBinding.Set_Animation_Blend(renderer, animation, animation_mode, animation_time,
 			secondary_animation, secondary_animation_mode, secondary_animation_time, 0.0f)) {
@@ -2694,12 +2784,14 @@ void W3DModelDraw::releaseModernVariant() noexcept
 {
 	Graphics::StaticMeshRenderer &renderer = Graphics::GetStaticMeshRenderer();
 	m_modernBinding.Destroy(renderer);
-	if (m_modernMaterial.Is_Valid())
-		renderer.Destroy_Material(m_modernMaterial);
-	m_modernMaterial = {};
-	if (m_modernTexture.Is_Valid())
-		renderer.Destroy_Texture(m_modernTexture);
-	m_modernTexture = {};
+	for (const Graphics::MaterialHandle handle : m_modernMaterials)
+		if (handle.Is_Valid())
+			renderer.Destroy_Material(handle);
+	m_modernMaterials.clear();
+	for (const Graphics::TextureHandle handle : m_modernTextures)
+		if (handle.Is_Valid())
+			renderer.Destroy_Texture(handle);
+	m_modernTextures.clear();
 	m_modernAnimationState = nullptr;
 	m_modernAnimationIndex = -1;
 	m_modernAnimationMode = Graphics::AnimationPlaybackMode::Loop;

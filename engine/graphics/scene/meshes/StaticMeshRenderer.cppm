@@ -13,6 +13,7 @@ module;
 export module Graphics.Scene.StaticMeshes;
 
 export import Graphics.Passes.Opaque;
+export import Graphics.Passes.Transparent;
 export import Graphics.Resources.Bindless.BindlessResourceTable;
 export import Graphics.Resources.Materials.Material;
 export import Graphics.Resources.Residency.GPUResourceResidency;
@@ -100,9 +101,12 @@ export bool Validate_Static_Mesh_Source(const StaticMeshSource &source) noexcept
 export struct alignas(16) GPUViewData final
 {
 	std::array<float, 16> view_projection{};
+	std::array<float, 4> camera_position{};
+	std::array<float, 4> fog_color_density{};
+	std::array<float, 4> fog_start_end{};
 };
 
-static_assert(sizeof(GPUViewData) == 64);
+static_assert(sizeof(GPUViewData) == 112);
 
 export class StaticMeshRenderer final
 {
@@ -128,11 +132,18 @@ public:
 		m_visible_storage.resize(max_instances);
 		m_lod_storage.resize(max_instances);
 		m_lod_history_storage.resize(max_instances);
-		m_draw_storage.resize(max_instances);
+		if (max_instances > std::numeric_limits<std::size_t>::max() / Max_Model_Part_Count)
+			return false;
+		m_draw_storage.resize(max_instances * Max_Model_Part_Count);
+		m_transparent_draw_storage.resize(max_instances * Max_Model_Part_Count);
+		if (max_instances > std::numeric_limits<std::size_t>::max() / Max_Model_Part_Count / 2u)
+			return false;
+		m_gpu_draw_storage.resize(max_instances * Max_Model_Part_Count * 2u);
 		m_visible = std::make_unique<VisibleSet>(m_visible_storage);
 		m_lod = std::make_unique<LODSet>(m_lod_storage);
 		m_lod_history = std::make_unique<LODHistory>(m_lod_history_storage);
 		m_draws = std::make_unique<DrawSet>(m_draw_storage);
+		m_transparent_draws = std::make_unique<TransparentDrawSet>(m_transparent_draw_storage);
 		m_mesh_bindings.resize(max_meshes);
 		m_mesh_part_bindings.reserve(max_meshes * Max_Model_Part_Count);
 		m_dirty_instances.reserve(max_instances);
@@ -158,6 +169,32 @@ public:
 			Shutdown();
 			return false;
 		}
+		m_alpha_test_pipeline = m_pipeline;
+		PipelineDesc transparent_description = pipeline_description;
+		transparent_description.depth_write = false;
+		transparent_description.blend_mode = RHIBlendMode::Alpha;
+		m_transparent_pipeline = m_shaders.Create_Pipeline(device, m_shader, transparent_description);
+		PipelineDesc additive_description = transparent_description;
+		additive_description.blend_mode = RHIBlendMode::Additive;
+		m_additive_pipeline = m_shaders.Create_Pipeline(device, m_shader, additive_description);
+		PipelineDesc multiply_description = transparent_description;
+		multiply_description.blend_mode = RHIBlendMode::Multiply;
+		m_multiply_pipeline = m_shaders.Create_Pipeline(device, m_shader, multiply_description);
+		PipelineDesc transparent_double_sided_description = transparent_description;
+		transparent_double_sided_description.cull_mode = RHICullMode::None;
+		m_transparent_double_sided_pipeline = m_shaders.Create_Pipeline(device, m_shader, transparent_double_sided_description);
+		PipelineDesc additive_double_sided_description = additive_description;
+		additive_double_sided_description.cull_mode = RHICullMode::None;
+		m_additive_double_sided_pipeline = m_shaders.Create_Pipeline(device, m_shader, additive_double_sided_description);
+		PipelineDesc multiply_double_sided_description = multiply_description;
+		multiply_double_sided_description.cull_mode = RHICullMode::None;
+		m_multiply_double_sided_pipeline = m_shaders.Create_Pipeline(device, m_shader, multiply_double_sided_description);
+		if (!m_transparent_pipeline.Is_Valid() || !m_additive_pipeline.Is_Valid() || !m_multiply_pipeline.Is_Valid()
+			|| !m_transparent_double_sided_pipeline.Is_Valid() || !m_additive_double_sided_pipeline.Is_Valid()
+			|| !m_multiply_double_sided_pipeline.Is_Valid()) {
+			Shutdown();
+			return false;
+		}
 
 		m_skinned_shader = m_shaders.Load_Skinned_Basic_Opaque(shader_directory);
 		if (m_skinned_shader.Is_Valid()) {
@@ -174,6 +211,32 @@ public:
 				skinned_double_sided_description.cull_mode = RHICullMode::None;
 				m_skinned_double_sided_pipeline = m_shaders.Create_Pipeline(device, m_skinned_shader, skinned_double_sided_description);
 				if (!m_skinned_double_sided_pipeline.Is_Valid()) {
+					Shutdown();
+					return false;
+				}
+				m_skinned_alpha_test_pipeline = m_skinned_pipeline;
+				PipelineDesc skinned_transparent_description = skinned_pipeline_description;
+				skinned_transparent_description.depth_write = false;
+				skinned_transparent_description.blend_mode = RHIBlendMode::Alpha;
+				m_skinned_transparent_pipeline = m_shaders.Create_Pipeline(device, m_skinned_shader, skinned_transparent_description);
+				PipelineDesc skinned_additive_description = skinned_transparent_description;
+				skinned_additive_description.blend_mode = RHIBlendMode::Additive;
+				m_skinned_additive_pipeline = m_shaders.Create_Pipeline(device, m_skinned_shader, skinned_additive_description);
+				PipelineDesc skinned_multiply_description = skinned_transparent_description;
+				skinned_multiply_description.blend_mode = RHIBlendMode::Multiply;
+				m_skinned_multiply_pipeline = m_shaders.Create_Pipeline(device, m_skinned_shader, skinned_multiply_description);
+				PipelineDesc skinned_transparent_double_sided_description = skinned_transparent_description;
+				skinned_transparent_double_sided_description.cull_mode = RHICullMode::None;
+				m_skinned_transparent_double_sided_pipeline = m_shaders.Create_Pipeline(device, m_skinned_shader, skinned_transparent_double_sided_description);
+				PipelineDesc skinned_additive_double_sided_description = skinned_additive_description;
+				skinned_additive_double_sided_description.cull_mode = RHICullMode::None;
+				m_skinned_additive_double_sided_pipeline = m_shaders.Create_Pipeline(device, m_skinned_shader, skinned_additive_double_sided_description);
+				PipelineDesc skinned_multiply_double_sided_description = skinned_multiply_description;
+				skinned_multiply_double_sided_description.cull_mode = RHICullMode::None;
+				m_skinned_multiply_double_sided_pipeline = m_shaders.Create_Pipeline(device, m_skinned_shader, skinned_multiply_double_sided_description);
+				if (!m_skinned_transparent_pipeline.Is_Valid() || !m_skinned_additive_pipeline.Is_Valid()
+					|| !m_skinned_multiply_pipeline.Is_Valid() || !m_skinned_transparent_double_sided_pipeline.Is_Valid()
+					|| !m_skinned_additive_double_sided_pipeline.Is_Valid() || !m_skinned_multiply_double_sided_pipeline.Is_Valid()) {
 					Shutdown();
 					return false;
 				}
@@ -200,7 +263,7 @@ public:
 			return false;
 		}
 
-		m_bindless.Reserve(5, 5, 123, 0, max_materials);
+		m_bindless.Reserve(5, 5, 122, 0, max_materials);
 		if (!m_bindless.Register_Buffer(m_instance_buffer).Is_Valid()) {
 			Shutdown();
 			return false;
@@ -237,6 +300,16 @@ public:
 			return false;
 		}
 
+		m_draw_buffer = device.Create_Buffer({
+			static_cast<std::uint32_t>(m_gpu_draw_storage.size() * sizeof(GPUDrawData)),
+			RHIBufferUsage::Storage,
+			static_cast<std::uint32_t>(sizeof(GPUDrawData))
+		});
+		if (!m_draw_buffer.Is_Valid() || !m_bindless.Register_Buffer(m_draw_buffer).Is_Valid()) {
+			Shutdown();
+			return false;
+		}
+
 		Material material;
 		material.shader = m_shader;
 		material.parameters.values[0] = 1.0f;
@@ -254,11 +327,12 @@ public:
 			return false;
 		}
 
-		m_graph.Reserve(2, 1, 2);
+		m_graph.Reserve(2, 2, 4);
 		m_color_resource = m_graph.Create_Resource({GraphResourceKind::Texture});
 		m_depth_resource = m_graph.Create_Resource({GraphResourceKind::Texture});
 		m_opaque_pass = OpaquePass::Add_To_Graph(m_graph, m_color_resource, m_depth_resource, 10);
-		if (!m_color_resource.Is_Valid() || !m_depth_resource.Is_Valid() || !m_opaque_pass.Is_Valid()) {
+		m_transparent_pass = TransparentPass::Add_To_Graph(m_graph, m_color_resource, m_depth_resource, 20);
+		if (!m_color_resource.Is_Valid() || !m_depth_resource.Is_Valid() || !m_opaque_pass.Is_Valid() || !m_transparent_pass.Is_Valid()) {
 			Shutdown();
 			return false;
 		}
@@ -291,6 +365,8 @@ public:
 				m_device->Destroy_Buffer(m_bone_buffer);
 			if (m_material_buffer.Is_Valid())
 				m_device->Destroy_Buffer(m_material_buffer);
+			if (m_draw_buffer.Is_Valid())
+				m_device->Destroy_Buffer(m_draw_buffer);
 			if (m_pipeline.Is_Valid())
 				m_device->Destroy_Pipeline(m_pipeline);
 			if (m_skinned_pipeline.Is_Valid())
@@ -299,6 +375,30 @@ public:
 				m_device->Destroy_Pipeline(m_double_sided_pipeline);
 			if (m_skinned_double_sided_pipeline.Is_Valid())
 				m_device->Destroy_Pipeline(m_skinned_double_sided_pipeline);
+			if (m_transparent_pipeline.Is_Valid())
+				m_device->Destroy_Pipeline(m_transparent_pipeline);
+			if (m_additive_pipeline.Is_Valid())
+				m_device->Destroy_Pipeline(m_additive_pipeline);
+			if (m_multiply_pipeline.Is_Valid())
+				m_device->Destroy_Pipeline(m_multiply_pipeline);
+			if (m_transparent_double_sided_pipeline.Is_Valid())
+				m_device->Destroy_Pipeline(m_transparent_double_sided_pipeline);
+			if (m_additive_double_sided_pipeline.Is_Valid())
+				m_device->Destroy_Pipeline(m_additive_double_sided_pipeline);
+			if (m_multiply_double_sided_pipeline.Is_Valid())
+				m_device->Destroy_Pipeline(m_multiply_double_sided_pipeline);
+			if (m_skinned_transparent_pipeline.Is_Valid())
+				m_device->Destroy_Pipeline(m_skinned_transparent_pipeline);
+			if (m_skinned_additive_pipeline.Is_Valid())
+				m_device->Destroy_Pipeline(m_skinned_additive_pipeline);
+			if (m_skinned_multiply_pipeline.Is_Valid())
+				m_device->Destroy_Pipeline(m_skinned_multiply_pipeline);
+			if (m_skinned_transparent_double_sided_pipeline.Is_Valid())
+				m_device->Destroy_Pipeline(m_skinned_transparent_double_sided_pipeline);
+			if (m_skinned_additive_double_sided_pipeline.Is_Valid())
+				m_device->Destroy_Pipeline(m_skinned_additive_double_sided_pipeline);
+			if (m_skinned_multiply_double_sided_pipeline.Is_Valid())
+				m_device->Destroy_Pipeline(m_skinned_multiply_double_sided_pipeline);
 		}
 
 		m_bindless.Clear();
@@ -311,6 +411,20 @@ public:
 		m_skinned_pipeline = {};
 		m_double_sided_pipeline = {};
 		m_skinned_double_sided_pipeline = {};
+		m_alpha_test_pipeline = {};
+		m_transparent_pipeline = {};
+		m_additive_pipeline = {};
+		m_multiply_pipeline = {};
+		m_transparent_double_sided_pipeline = {};
+		m_additive_double_sided_pipeline = {};
+		m_multiply_double_sided_pipeline = {};
+		m_skinned_alpha_test_pipeline = {};
+		m_skinned_transparent_pipeline = {};
+		m_skinned_additive_pipeline = {};
+		m_skinned_multiply_pipeline = {};
+		m_skinned_transparent_double_sided_pipeline = {};
+		m_skinned_additive_double_sided_pipeline = {};
+		m_skinned_multiply_double_sided_pipeline = {};
 		m_default_material = {};
 		m_instance_buffer = {};
 		m_light_buffer = {};
@@ -327,6 +441,8 @@ public:
 		m_lod_storage.clear();
 		m_lod_history_storage.clear();
 		m_draw_storage.clear();
+		m_transparent_draw_storage.clear();
+		m_gpu_draw_storage.clear();
 		m_mesh_bindings.clear();
 		m_mesh_part_bindings.clear();
 		m_dirty_instances.clear();
@@ -765,6 +881,20 @@ public:
 	{
 		m_view = view;
 		m_gpu_view.view_projection = Multiply(view.projection_matrix, view.view_matrix);
+		m_gpu_view.camera_position = {view.position.x, view.position.y, view.position.z, 0.0f};
+		m_view_dirty = true;
+	}
+
+	void Set_Fog(Vector3 color, float density, float start_distance, float end_distance, bool enabled) noexcept
+	{
+		if (!std::isfinite(density) || density < 0.0f)
+			density = 0.0f;
+		if (!std::isfinite(start_distance) || start_distance < 0.0f)
+			start_distance = 0.0f;
+		if (!std::isfinite(end_distance) || end_distance < start_distance)
+			end_distance = start_distance;
+		m_gpu_view.fog_color_density = {color.x, color.y, color.z, enabled ? density : 0.0f};
+		m_gpu_view.fog_start_end = {start_distance, end_distance, enabled ? 1.0f : 0.0f, 0.0f};
 		m_view_dirty = true;
 	}
 
@@ -792,7 +922,12 @@ public:
 		if (!Build_LOD_Set(m_scene, m_meshes, *m_visible, m_view, *m_lod, *m_lod_history, {m_lod_hysteresis}))
 			return false;
 		if (!Build_Draw_Data(*m_lod, m_gpu_scene,
-			{0, m_pipeline, 0, m_skinned_pipeline, m_double_sided_pipeline, m_skinned_double_sided_pipeline}, *m_draws))
+			Make_Draw_Pass(false), *m_draws))
+			return false;
+		if (!Build_Transparent_Draw_Data(m_scene, m_materials, *m_lod, m_view, m_gpu_scene,
+			Make_Draw_Pass(true), *m_transparent_draws))
+			return false;
+		if (!Prepare_GPU_Draw_Table())
 			return false;
 
 		m_bindings[0] = GraphResourceBinding::Texture(m_color_resource, targets.backbuffer.texture);
@@ -822,10 +957,25 @@ public:
 			1.0f,
 			clear_targets,
 			clear_targets,
-			{m_mesh_part_bindings.data(), m_mesh_part_bindings.size()}
+			{m_mesh_part_bindings.data(), m_mesh_part_bindings.size()},
+			true
 		};
-		return m_plan.Execute(m_graph, command_list, [&input](GraphPassHandle, CommandList &commands, const PassResources &resources) noexcept {
-			return OpaquePass::Execute(commands, resources, input);
+		const TransparentPassInput transparent_input{
+			m_transparent_draws->Records(),
+			{m_mesh_bindings.data(), m_gpu_scene.Meshes().size()},
+			m_bindless.Resources(),
+			m_color_resource,
+			m_depth_resource,
+			viewport,
+			{m_mesh_part_bindings.data(), m_mesh_part_bindings.size()},
+			true
+		};
+		return m_plan.Execute(m_graph, command_list, [this, &input, &transparent_input](GraphPassHandle pass, CommandList &commands, const PassResources &resources) noexcept {
+			if (pass == m_opaque_pass)
+				return OpaquePass::Execute(commands, resources, input);
+			if (pass == m_transparent_pass)
+				return TransparentPass::Execute(commands, resources, transparent_input);
+			return false;
 		});
 	}
 
@@ -843,6 +993,60 @@ private:
 		TextureHandle handle{};
 		std::vector<std::byte> pixel_data;
 	};
+
+	DrawPass Make_Draw_Pass(bool transparent) const noexcept
+	{
+		DrawPass pass;
+		pass.pipeline = m_pipeline;
+		pass.skinned_pipeline = m_skinned_pipeline;
+		pass.double_sided_pipeline = m_double_sided_pipeline;
+		pass.skinned_double_sided_pipeline = m_skinned_double_sided_pipeline;
+		pass.alpha_test_pipeline = m_alpha_test_pipeline;
+		pass.transparent_pipeline = m_transparent_pipeline;
+		pass.additive_pipeline = m_additive_pipeline;
+		pass.multiply_pipeline = m_multiply_pipeline;
+		pass.skinned_alpha_test_pipeline = m_skinned_alpha_test_pipeline;
+		pass.skinned_transparent_pipeline = m_skinned_transparent_pipeline;
+		pass.skinned_additive_pipeline = m_skinned_additive_pipeline;
+		pass.skinned_multiply_pipeline = m_skinned_multiply_pipeline;
+		pass.double_sided_alpha_test_pipeline = m_alpha_test_pipeline != PipelineHandle{}
+			? m_double_sided_pipeline : PipelineHandle{};
+		pass.double_sided_transparent_pipeline = m_transparent_double_sided_pipeline;
+		pass.double_sided_additive_pipeline = m_additive_double_sided_pipeline;
+		pass.double_sided_multiply_pipeline = m_multiply_double_sided_pipeline;
+		pass.skinned_double_sided_alpha_test_pipeline = m_skinned_alpha_test_pipeline != PipelineHandle{}
+			? m_skinned_double_sided_pipeline : PipelineHandle{};
+		pass.skinned_double_sided_transparent_pipeline = m_skinned_transparent_double_sided_pipeline;
+		pass.skinned_double_sided_additive_pipeline = m_skinned_additive_double_sided_pipeline;
+		pass.skinned_double_sided_multiply_pipeline = m_skinned_multiply_double_sided_pipeline;
+		pass.transparent = transparent;
+		return pass;
+	}
+
+	bool Prepare_GPU_Draw_Table() noexcept
+	{
+		std::size_t draw_index = 0;
+		const auto append = [this, &draw_index](std::span<DrawData> draws) noexcept {
+			for (DrawData &draw : draws) {
+				if (draw_index >= m_gpu_draw_storage.size())
+					return false;
+				draw.gpu_draw_index = static_cast<std::uint32_t>(draw_index);
+				m_gpu_draw_storage[draw_index++] = {
+					draw.instance_index,
+					draw.material_index,
+					draw.mesh_index,
+				0
+				};
+			}
+			return true;
+		};
+		if (!append(m_draws->Mutable_Records()) || !append(m_transparent_draws->Mutable_Records()))
+			return false;
+		if (draw_index == 0)
+			return true;
+		return m_device->Update_Buffer(m_draw_buffer, 0,
+			std::as_bytes(std::span<const GPUDrawData>(m_gpu_draw_storage.data(), draw_index)));
+	}
 
 	static std::array<float, 16> Multiply(const Matrix4x4 &left, const Matrix4x4 &right) noexcept
 	{
@@ -981,12 +1185,15 @@ private:
 	std::vector<LODSelection> m_lod_storage;
 	std::vector<LODHistoryEntry> m_lod_history_storage;
 	std::vector<DrawData> m_draw_storage;
+	std::vector<DrawData> m_transparent_draw_storage;
+	std::vector<GPUDrawData> m_gpu_draw_storage;
 	std::vector<OpaqueMeshBinding> m_mesh_bindings;
 	std::vector<OpaqueSubmeshBinding> m_mesh_part_bindings;
 	std::unique_ptr<VisibleSet> m_visible;
 	std::unique_ptr<LODSet> m_lod;
 	std::unique_ptr<LODHistory> m_lod_history;
 	std::unique_ptr<DrawSet> m_draws;
+	std::unique_ptr<TransparentDrawSet> m_transparent_draws;
 	View m_view{};
 	GPUViewData m_gpu_view{};
 	RHIBufferHandle m_instance_buffer{};
@@ -994,12 +1201,27 @@ private:
 	RHIBufferHandle m_view_buffer{};
 	RHIBufferHandle m_bone_buffer{};
 	RHIBufferHandle m_material_buffer{};
+	RHIBufferHandle m_draw_buffer{};
 	ShaderHandle m_shader{};
 	ShaderHandle m_skinned_shader{};
 	PipelineHandle m_pipeline{};
 	PipelineHandle m_skinned_pipeline{};
 	PipelineHandle m_double_sided_pipeline{};
 	PipelineHandle m_skinned_double_sided_pipeline{};
+	PipelineHandle m_alpha_test_pipeline{};
+	PipelineHandle m_transparent_pipeline{};
+	PipelineHandle m_additive_pipeline{};
+	PipelineHandle m_multiply_pipeline{};
+	PipelineHandle m_transparent_double_sided_pipeline{};
+	PipelineHandle m_additive_double_sided_pipeline{};
+	PipelineHandle m_multiply_double_sided_pipeline{};
+	PipelineHandle m_skinned_alpha_test_pipeline{};
+	PipelineHandle m_skinned_transparent_pipeline{};
+	PipelineHandle m_skinned_additive_pipeline{};
+	PipelineHandle m_skinned_multiply_pipeline{};
+	PipelineHandle m_skinned_transparent_double_sided_pipeline{};
+	PipelineHandle m_skinned_additive_double_sided_pipeline{};
+	PipelineHandle m_skinned_multiply_double_sided_pipeline{};
 	MaterialHandle m_default_material{};
 	RenderGraph m_graph;
 	ExecutionPlan m_plan;
@@ -1007,6 +1229,7 @@ private:
 	GraphResourceHandle m_color_resource{};
 	GraphResourceHandle m_depth_resource{};
 	GraphPassHandle m_opaque_pass{};
+	GraphPassHandle m_transparent_pass{};
 	bool m_scene_dirty = true;
 	bool m_view_dirty = false;
 	float m_lod_hysteresis = 0.1f;

@@ -14,6 +14,8 @@ export import Graphics.Resources.Pools.ResourcePool;
 namespace Graphics
 {
 
+export inline constexpr std::uint32_t Invalid_Mesh_Part_Group = ~std::uint32_t{0};
+
 export enum class MeshIndexFormat : std::uint8_t
 {
 	None,
@@ -40,6 +42,9 @@ export struct MeshPart final
 	std::uint32_t first_index = 0;
 	std::uint32_t index_count = 0;
 	std::int32_t base_vertex = 0;
+	MaterialHandle material{};
+	std::uint32_t pass_key = 0;
+	std::uint32_t visibility_group = Invalid_Mesh_Part_Group;
 };
 
 export struct MeshLod final

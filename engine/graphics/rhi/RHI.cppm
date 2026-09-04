@@ -102,7 +102,14 @@ export enum class RHIBlendMode : std::uint8_t
 	Disabled,
 	Alpha,
 	Additive,
-	Multiply
+	Multiply,
+	ColorMultiply
+};
+
+export enum class RHIBlendOperation : std::uint8_t
+{
+	Add,
+	ReverseSubtract
 };
 
 export enum class RHICullMode : std::uint8_t
@@ -120,6 +127,7 @@ export struct RHIPipeline final
 	RHIVertexFormat vertex_format = RHIVertexFormat::Position3Color4UV2;
 	RHIBlendMode blend_mode = RHIBlendMode::Disabled;
 	RHICullMode cull_mode = RHICullMode::Back;
+	RHIBlendOperation blend_operation = RHIBlendOperation::Add;
 };
 
 export struct RHIShaderBytecode final
@@ -135,6 +143,14 @@ export struct RHIViewport final
 	std::uint32_t height = 0;
 	float min_depth = 0.0f;
 	float max_depth = 1.0f;
+};
+
+export struct RHIScissorRect final
+{
+	std::uint32_t x = 0;
+	std::uint32_t y = 0;
+	std::uint32_t width = 0;
+	std::uint32_t height = 0;
 };
 
 export enum class RHIIndexFormat : std::uint8_t
@@ -213,6 +229,12 @@ public:
 		return false;
 	}
 	virtual bool Set_Viewport(RHIViewport viewport) noexcept = 0;
+	// Backends predating the generic scissor capability may keep the default
+	// no-op while the active backend provides the real implementation.
+	virtual bool Set_Scissor(RHIScissorRect) noexcept
+	{
+		return true;
+	}
 	virtual bool Set_Vertex_Buffer(std::uint32_t slot, RHIBufferHandle buffer, std::uint32_t stride, std::uint32_t offset) noexcept = 0;
 	virtual bool Set_Index_Buffer(RHIBufferHandle buffer, RHIIndexFormat format, std::uint32_t offset) noexcept = 0;
 	virtual bool Draw(std::uint32_t vertex_count, std::uint32_t first_vertex = 0, std::uint32_t instance_count = 1, std::uint32_t first_instance = 0) noexcept = 0;
