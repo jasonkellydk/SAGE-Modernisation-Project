@@ -388,7 +388,7 @@ static bool Create_DX11_Pipeline(
 	rasterizer_description.CullMode = To_DX11_Cull_Mode(description.cull_mode);
 	rasterizer_description.FrontCounterClockwise = FALSE;
 	rasterizer_description.DepthClipEnable = TRUE;
-	rasterizer_description.ScissorEnable = TRUE;
+	rasterizer_description.ScissorEnable = description.scissor_test ? TRUE : FALSE;
 	ID3D11RasterizerState *rasterizer_state = nullptr;
 	if (FAILED(device->CreateRasterizerState(&rasterizer_description, &rasterizer_state)))
 		return false;
@@ -1316,6 +1316,12 @@ bool DX11Device::Update_Buffer(RHIBufferHandle buffer, std::uint32_t offset, std
 	DX11Buffer *resource = m_state->buffers.Resolve(buffer);
 	if (resource == nullptr || resource->object.Get() == nullptr || offset > resource->byte_size || data.size() > resource->byte_size - offset)
 		return false;
+	if (resource->usage == RHIBufferUsage::Constant) {
+		if (offset != 0 || data.size() != resource->byte_size)
+			return false;
+		m_state->context.Get()->UpdateSubresource(resource->object.Get(), 0, nullptr, data.data(), 0, 0);
+		return true;
+	}
 
 	D3D11_BOX destination_box{};
 	destination_box.left = offset;

@@ -25,6 +25,7 @@
 #include "W3DDevice/GameClient/W3DStatusCircle.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
 
+#include <algorithm>
 #include <stdlib.h>
 #include <WW3D2/AssetMgr.h>
 #include <WW3D2/Texture.h>
@@ -40,6 +41,9 @@
 #include "Common/MapObject.h"
 #include "GameLogic/GameLogic.h"
 #include "GameLogic/ScriptEngine.h"
+
+import Graphics.Scene.Ring;
+import Graphics.Scene.Screen.FullscreenOverlay;
 
 #define SC_DETAIL_BLEND ( SHADE_CNST(ShaderClass::PASS_LEQUAL, ShaderClass::DEPTH_WRITE_ENABLE, ShaderClass::COLOR_WRITE_ENABLE, ShaderClass::SRCBLEND_ONE, \
 	ShaderClass::DSTBLEND_ZERO, ShaderClass::FOG_DISABLE, ShaderClass::GRADIENT_MODULATE, ShaderClass::SECONDARY_GRADIENT_DISABLE, ShaderClass::TEXTURING_ENABLE, \
@@ -322,6 +326,64 @@ Int W3DStatusCircle::updateScreenVB(Int diffuse)
 	return -1;
 }
 
+bool W3DStatusCircle::renderModern()
+{
+	Graphics::RingRenderer &ring_renderer = Graphics::GetRingRenderer();
+	Graphics::FullscreenOverlayRenderer &overlay_renderer = Graphics::GetFullscreenOverlayRenderer();
+	if (!ring_renderer.Is_Initialized() || !overlay_renderer.Is_Initialized())
+		return false;
+
+	ring_renderer.Clear();
+	overlay_renderer.Clear();
+	if (TheGlobalData->m_showTeamDot) {
+		const float red = static_cast<float>((m_diffuse >> 16) & 0xff) / 255.0f;
+		const float green = static_cast<float>((m_diffuse >> 8) & 0xff) / 255.0f;
+		const float blue = static_cast<float>(m_diffuse & 0xff) / 255.0f;
+		const Graphics::RingDescription description{
+			0.95f,
+			0.67f,
+			0.0f,
+			0.0f,
+			0.02f,
+			{red, green, blue, 127.0f / 255.0f},
+			20};
+		if (!ring_renderer.Set_Ring(description))
+			return false;
+	}
+
+	const ScriptEngine::TFade fade = TheScriptEngine->getFade();
+	if (fade == ScriptEngine::FADE_NONE)
+		return true;
+
+	const float intensity = std::clamp(static_cast<float>(TheScriptEngine->getFadeValue()), 0.0f, 1.0f);
+	Graphics::FullscreenOverlayDescription overlay;
+	overlay.color = {intensity, intensity, intensity, 1.0f};
+	switch (fade) {
+	default:
+	case ScriptEngine::FADE_ADD:
+		overlay.blend_mode = Graphics::RHIBlendMode::Additive;
+		overlay.blend_operation = Graphics::RHIBlendOperation::Add;
+		overlay.draw_count = 1;
+		break;
+	case ScriptEngine::FADE_SUBTRACT:
+		overlay.blend_mode = Graphics::RHIBlendMode::Additive;
+		overlay.blend_operation = Graphics::RHIBlendOperation::ReverseSubtract;
+		overlay.draw_count = 1;
+		break;
+	case ScriptEngine::FADE_SATURATE:
+		overlay.blend_mode = Graphics::RHIBlendMode::ColorMultiply;
+		overlay.blend_operation = Graphics::RHIBlendOperation::Add;
+		overlay.draw_count = 2;
+		break;
+	case ScriptEngine::FADE_MULTIPLY:
+		overlay.blend_mode = Graphics::RHIBlendMode::Multiply;
+		overlay.blend_operation = Graphics::RHIBlendOperation::Add;
+		overlay.draw_count = 1;
+		break;
+	}
+	return overlay_renderer.Set_Overlay(overlay);
+}
+
 void W3DStatusCircle::Render(RenderInfoClass & rinfo)
 {
 	IRenderBackend *backend = WW3D::Get_Render_Backend();
@@ -330,6 +392,11 @@ void W3DStatusCircle::Render(RenderInfoClass & rinfo)
 	}
 
 	if (!TheGameLogic->isInGame() || TheGameLogic->getGameMode() == GAME_SHELL)
+		return;
+
+	// The legacy path below remains the per-object fallback until the modern
+	// shared frame has been verified on the target backend.
+	if (renderModern())
 		return;
 
 	if (m_indexBuffer == nullptr) {

@@ -128,6 +128,7 @@ export struct RHIPipeline final
 	RHIBlendMode blend_mode = RHIBlendMode::Disabled;
 	RHICullMode cull_mode = RHICullMode::Back;
 	RHIBlendOperation blend_operation = RHIBlendOperation::Add;
+	bool scissor_test = false;
 };
 
 export struct RHIShaderBytecode final
