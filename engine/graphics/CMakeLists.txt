@@ -42,6 +42,7 @@ target_sources(generals_graphics
             scene/models/Skeleton.cppm
             scene/models/ModelInstance.cppm
             scene/models/Animation.cppm
+            scene/models/Skinning.cppm
             scene/transparency/Transparency.cppm
             scene/views/View.cppm
             scene/visibility/Visibility.cppm
@@ -72,6 +73,7 @@ if(WIN32)
 	if(TARGET slang-bootstrap)
 		set(GRAPHICS_SHADER_ASSET_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/shaders/$<CONFIG>")
 		set(GRAPHICS_BASIC_OPAQUE_VERTEX_SHADER "${GRAPHICS_SHADER_ASSET_DIRECTORY}/basic_opaque.vso")
+		set(GRAPHICS_SKINNED_BASIC_OPAQUE_VERTEX_SHADER "${GRAPHICS_SHADER_ASSET_DIRECTORY}/basic_opaque_skinned.vso")
 		set(GRAPHICS_BASIC_OPAQUE_FRAGMENT_SHADER "${GRAPHICS_SHADER_ASSET_DIRECTORY}/basic_opaque.pso")
 		set(GRAPHICS_PARTICLE_VERTEX_SHADER "${GRAPHICS_SHADER_ASSET_DIRECTORY}/particle_billboard.vso")
 		set(GRAPHICS_PARTICLE_FRAGMENT_SHADER "${GRAPHICS_SHADER_ASSET_DIRECTORY}/particle_billboard.pso")
@@ -82,6 +84,7 @@ if(WIN32)
 		add_custom_command(
 			OUTPUT
 				"${GRAPHICS_BASIC_OPAQUE_VERTEX_SHADER}"
+				"${GRAPHICS_SKINNED_BASIC_OPAQUE_VERTEX_SHADER}"
 				"${GRAPHICS_BASIC_OPAQUE_FRAGMENT_SHADER}"
 				"${GRAPHICS_PARTICLE_VERTEX_SHADER}"
 				"${GRAPHICS_PARTICLE_FRAGMENT_SHADER}"
@@ -105,6 +108,14 @@ if(WIN32)
 				-stage pixel
 				-matrix-layout-row-major
 				-o "${GRAPHICS_BASIC_OPAQUE_FRAGMENT_SHADER}"
+				"${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/basic_opaque.slang"
+			COMMAND $<TARGET_FILE:slang-bootstrap>
+				-target dxbc
+				-profile sm_5_0
+				-entry basic_opaque_skinned_vertex
+				-stage vertex
+				-matrix-layout-row-major
+				-o "${GRAPHICS_SKINNED_BASIC_OPAQUE_VERTEX_SHADER}"
 				"${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/basic_opaque.slang"
 			COMMAND $<TARGET_FILE:slang-bootstrap>
 				-target dxbc
@@ -165,6 +176,7 @@ if(WIN32)
 		add_custom_target(generals_graphics_shaders
 			DEPENDS
 				"${GRAPHICS_BASIC_OPAQUE_VERTEX_SHADER}"
+				"${GRAPHICS_SKINNED_BASIC_OPAQUE_VERTEX_SHADER}"
 				"${GRAPHICS_BASIC_OPAQUE_FRAGMENT_SHADER}"
 				"${GRAPHICS_PARTICLE_VERTEX_SHADER}"
 				"${GRAPHICS_PARTICLE_FRAGMENT_SHADER}"
@@ -336,6 +348,11 @@ if(RTS_BUILD_GRAPHICS_TESTS)
     add_graphics_test(
         generals_graphics_animation_test
         scene/models/Animation.test.cppm
+    )
+
+    add_graphics_test(
+        generals_graphics_skinning_test
+        scene/models/Skinning.test.cppm
     )
 
     add_graphics_test(

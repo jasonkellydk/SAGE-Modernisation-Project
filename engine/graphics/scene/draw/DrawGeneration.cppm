@@ -26,6 +26,7 @@ export struct DrawPass final
 	std::uint32_t pass_key = 0;
 	PipelineHandle pipeline{};
 	std::uint64_t sort_key = 0;
+	PipelineHandle skinned_pipeline{};
 };
 
 export struct alignas(16) DrawData final
@@ -131,6 +132,10 @@ export bool Build_Draw_Data(const LODSet &lod_set, const GPUScene &gpu_scene, Dr
 		if (mesh.part_count == 0 || mesh.part_count > Max_Model_Part_Count
 			|| static_cast<std::uint64_t>(mesh.part_offset) + mesh.part_count > gpu_scene.Mesh_Parts().size())
 			continue;
+		const PipelineHandle pipeline = mesh.vertex_format == static_cast<std::uint32_t>(MeshVertexFormat::Position3Color4UV2Skinned)
+			? pass.skinned_pipeline : pass.pipeline;
+		if (!pipeline.Is_Valid())
+			return false;
 
 		for (std::uint32_t submesh_index = 0; submesh_index < mesh.part_count; ++submesh_index) {
 			if (!Is_Submesh_Visible(instances[instance_index].visibility_mask, submesh_index))
@@ -140,7 +145,7 @@ export bool Build_Draw_Data(const LODSet &lod_set, const GPUScene &gpu_scene, Dr
 				material_index,
 				instance_index,
 				1,
-				pass.pipeline,
+				pipeline,
 				pass.sort_key,
 				submesh_index,
 				0

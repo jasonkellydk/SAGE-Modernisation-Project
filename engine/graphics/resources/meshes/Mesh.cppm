@@ -4,6 +4,7 @@ module;
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <type_traits>
 
 export module Graphics.Resources.Meshes.Mesh;
 
@@ -19,6 +20,20 @@ export enum class MeshIndexFormat : std::uint8_t
 	UInt16,
 	UInt32
 };
+
+export enum class MeshVertexFormat : std::uint8_t
+{
+	Position3Color4UV2,
+	Position3Color4UV2Skinned
+};
+
+export struct MeshSkinningData final
+{
+	std::array<std::uint16_t, 4> bone_indices{};
+	std::array<float, 4> bone_weights{};
+};
+
+static_assert(std::is_trivially_copyable_v<MeshSkinningData>);
 
 export struct MeshPart final
 {
@@ -49,6 +64,8 @@ export struct Mesh final
 	std::span<const std::byte> index_data{};
 	std::span<const MeshPart> parts{};
 	std::uint32_t revision = 1;
+	MeshVertexFormat vertex_format = MeshVertexFormat::Position3Color4UV2;
+	std::uint32_t skin_bone_count = 0;
 
 	void Mark_Dirty() noexcept
 	{

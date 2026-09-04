@@ -93,7 +93,8 @@ export enum class RHIPrimitiveTopology : std::uint8_t
 export enum class RHIVertexFormat : std::uint8_t
 {
 	Position3Color4UV2,
-	Position3Color4UV2ResourceIndex
+	Position3Color4UV2ResourceIndex,
+	Position3Color4UV2Skinned
 };
 
 export enum class RHIBlendMode : std::uint8_t

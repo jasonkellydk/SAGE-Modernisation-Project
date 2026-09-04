@@ -103,6 +103,14 @@ void Set_Modern_Vertex_Color(Graphics::StaticMeshVertex &vertex, unsigned packed
 	vertex.color[3] = static_cast<float>((packed_color >> 24) & 0xffu) / 255.0f;
 }
 
+void Set_Modern_Vertex_Color(Graphics::SkinnedMeshVertex &vertex, unsigned packed_color) noexcept
+{
+	vertex.color[0] = static_cast<float>((packed_color >> 16) & 0xffu) / 255.0f;
+	vertex.color[1] = static_cast<float>((packed_color >> 8) & 0xffu) / 255.0f;
+	vertex.color[2] = static_cast<float>(packed_color & 0xffu) / 255.0f;
+	vertex.color[3] = static_cast<float>((packed_color >> 24) & 0xffu) / 255.0f;
+}
+
 Matrix3D Make_Legacy_Transform(const Graphics::RenderTransform &transform)
 {
 	float values[12]{};
@@ -2072,11 +2080,13 @@ bool W3DModelDraw::isModernStaticOpaqueState() const noexcept
 	MeshModelClass *model = mesh->Peek_Model();
 	if (!canUseModernSubobjectVisibility())
 		return false;
-	if (model == nullptr || model->Get_Flag(MeshGeometryClass::SKIN) != 0
-		|| model->Get_Flag(MeshGeometryClass::TWO_SIDED) != 0
+	if (model == nullptr || model->Get_Flag(MeshGeometryClass::TWO_SIDED) != 0
 		|| model->Get_Pass_Count() != 1
 		|| model->Has_Material_Array(0) || model->Has_Texture_Array(0, 0)
 		|| model->Has_Texture_Array(0, 1) || model->Has_Shader_Array(0))
+		return false;
+	if (model->Get_Flag(MeshGeometryClass::SKIN) != 0
+		&& (m_renderObject->Get_Num_Bones() <= 0 || model->Get_Vertex_Bone_Links() == nullptr))
 		return false;
 
 	VertexMaterialClass *material = model->Peek_Single_Material(0);
@@ -2175,22 +2185,55 @@ bool W3DModelDraw::submitModernVariant()
 	Vector3 diffuse;
 	material->Get_Diffuse(&diffuse);
 	const float opacity = material->Get_Opacity();
-	std::vector<Graphics::StaticMeshVertex> vertices(static_cast<std::size_t>(vertex_count));
-	for (int index = 0; index < vertex_count; ++index) {
-		Graphics::StaticMeshVertex &vertex = vertices[static_cast<std::size_t>(index)];
-		vertex.position[0] = positions[index].X;
-		vertex.position[1] = positions[index].Y;
-		vertex.position[2] = positions[index].Z;
-		vertex.uv[0] = uvs != nullptr ? uvs[index].X : 0.0f;
-		vertex.uv[1] = uvs != nullptr ? uvs[index].Y : 0.0f;
-		if (vertex_colors != nullptr)
-			Set_Modern_Vertex_Color(vertex, vertex_colors[index]);
-		else {
-			vertex.color[0] = diffuse.X;
-			vertex.color[1] = diffuse.Y;
-			vertex.color[2] = diffuse.Z;
-			vertex.color[3] = opacity;
+	const bool skinned = model->Get_Flag(MeshGeometryClass::SKIN) != 0;
+	std::vector<Graphics::StaticMeshVertex> static_vertices;
+	std::vector<Graphics::SkinnedMeshVertex> skinned_vertices;
+	std::span<const std::byte> vertex_data;
+	if (skinned) {
+		const uint16 *bone_links = model->Get_Vertex_Bone_Links();
+		if (bone_links == nullptr || m_renderObject->Get_Num_Bones() <= 0)
+			return false;
+		skinned_vertices.resize(static_cast<std::size_t>(vertex_count));
+		for (int index = 0; index < vertex_count; ++index) {
+			Graphics::SkinnedMeshVertex &vertex = skinned_vertices[static_cast<std::size_t>(index)];
+			vertex.position[0] = positions[index].X;
+			vertex.position[1] = positions[index].Y;
+			vertex.position[2] = positions[index].Z;
+			vertex.uv[0] = uvs != nullptr ? uvs[index].X : 0.0f;
+			vertex.uv[1] = uvs != nullptr ? uvs[index].Y : 0.0f;
+			if (bone_links[index] >= m_renderObject->Get_Num_Bones())
+				return false;
+			vertex.skinning.bone_indices[0] = bone_links[index];
+			vertex.skinning.bone_weights[0] = 1.0f;
+			if (vertex_colors != nullptr)
+				Set_Modern_Vertex_Color(vertex, vertex_colors[index]);
+			else {
+				vertex.color[0] = diffuse.X;
+				vertex.color[1] = diffuse.Y;
+				vertex.color[2] = diffuse.Z;
+				vertex.color[3] = opacity;
+			}
 		}
+		vertex_data = std::as_bytes(std::span<const Graphics::SkinnedMeshVertex>(skinned_vertices));
+	} else {
+		static_vertices.resize(static_cast<std::size_t>(vertex_count));
+		for (int index = 0; index < vertex_count; ++index) {
+			Graphics::StaticMeshVertex &vertex = static_vertices[static_cast<std::size_t>(index)];
+			vertex.position[0] = positions[index].X;
+			vertex.position[1] = positions[index].Y;
+			vertex.position[2] = positions[index].Z;
+			vertex.uv[0] = uvs != nullptr ? uvs[index].X : 0.0f;
+			vertex.uv[1] = uvs != nullptr ? uvs[index].Y : 0.0f;
+			if (vertex_colors != nullptr)
+				Set_Modern_Vertex_Color(vertex, vertex_colors[index]);
+			else {
+				vertex.color[0] = diffuse.X;
+				vertex.color[1] = diffuse.Y;
+				vertex.color[2] = diffuse.Z;
+				vertex.color[3] = opacity;
+			}
+		}
+		vertex_data = std::as_bytes(std::span<const Graphics::StaticMeshVertex>(static_vertices));
 	}
 
 	const TriIndex *polygons = model->Get_Polygon_Array();
@@ -2211,12 +2254,16 @@ bool W3DModelDraw::submitModernVariant()
 	const Graphics::StaticMeshSource source{
 		static_cast<std::uint32_t>(vertex_count),
 		static_cast<std::uint32_t>(indices.size()),
-		static_cast<std::uint32_t>(sizeof(Graphics::StaticMeshVertex)),
+		skinned ? static_cast<std::uint32_t>(sizeof(Graphics::SkinnedMeshVertex))
+			: static_cast<std::uint32_t>(sizeof(Graphics::StaticMeshVertex)),
 		Graphics::MeshIndexFormat::UInt16,
-		std::as_bytes(std::span<const Graphics::StaticMeshVertex>(vertices)),
+		vertex_data,
 		std::as_bytes(std::span<const std::uint16_t>(indices)),
 		{sphere.Center.X, sphere.Center.Y, sphere.Center.Z},
-		sphere.Radius
+		sphere.Radius,
+		{},
+		skinned ? Graphics::MeshVertexFormat::Position3Color4UV2Skinned : Graphics::MeshVertexFormat::Position3Color4UV2,
+		skinned ? static_cast<std::uint32_t>(m_renderObject->Get_Num_Bones()) : 0u
 	};
 	const Matrix3D legacy_transform = m_renderObject->Get_Transform();
 	const Graphics::RenderTransform transform = Make_Modern_Transform(legacy_transform);

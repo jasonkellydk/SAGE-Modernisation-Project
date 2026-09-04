@@ -20,6 +20,7 @@ export import Graphics.Scene.DrawGeneration;
 export import Graphics.Scene.GPUScene;
 export import Graphics.Scene.Models.ModelInstance;
 export import Graphics.Scene.Models.ModelVisibility;
+export import Graphics.Scene.Models.Skinning;
 export import Graphics.Scene.Views.View;
 export import Graphics.Scene.Visibility;
 export import Graphics.Shaders.Library;
@@ -37,6 +38,17 @@ export struct StaticMeshVertex final
 
 static_assert(sizeof(StaticMeshVertex) == 36);
 
+export struct SkinnedMeshVertex final
+{
+	float position[3]{};
+	float color[4]{1.0f, 1.0f, 1.0f, 1.0f};
+	float uv[2]{};
+	MeshSkinningData skinning{};
+};
+
+static_assert(sizeof(SkinnedMeshVertex) == 60);
+static_assert(offsetof(SkinnedMeshVertex, skinning) == 36);
+
 export struct StaticMeshSource final
 {
 	std::uint32_t vertex_count = 0;
@@ -48,11 +60,21 @@ export struct StaticMeshSource final
 	std::array<float, 3> bounds_center{};
 	float bounds_radius = 0.0f;
 	std::span<const MeshPart> parts{};
+	MeshVertexFormat vertex_format = MeshVertexFormat::Position3Color4UV2;
+	std::uint32_t skin_bone_count = 0;
 };
 
 export bool Validate_Static_Mesh_Source(const StaticMeshSource &source) noexcept
 {
-	if (source.vertex_count == 0 || source.index_count == 0 || source.vertex_stride != sizeof(StaticMeshVertex) || source.index_format == MeshIndexFormat::None)
+	const std::uint32_t expected_stride = source.vertex_format == MeshVertexFormat::Position3Color4UV2
+		? static_cast<std::uint32_t>(sizeof(StaticMeshVertex))
+		: static_cast<std::uint32_t>(sizeof(SkinnedMeshVertex));
+	if (source.vertex_count == 0 || source.index_count == 0 || source.vertex_stride != expected_stride || source.index_format == MeshIndexFormat::None)
+		return false;
+	if (source.vertex_format == MeshVertexFormat::Position3Color4UV2Skinned
+		&& (source.skin_bone_count == 0 || source.skin_bone_count > std::numeric_limits<std::uint16_t>::max() + 1u))
+		return false;
+	if (source.vertex_format == MeshVertexFormat::Position3Color4UV2 && source.skin_bone_count != 0)
 		return false;
 
 	const std::size_t index_stride = source.index_format == MeshIndexFormat::UInt16 ? sizeof(std::uint16_t) : sizeof(std::uint32_t);
@@ -78,9 +100,11 @@ static_assert(sizeof(GPUViewData) == 64);
 export class StaticMeshRenderer final
 {
 public:
-	bool Initialize(Device &device, const std::filesystem::path &shader_directory, std::size_t max_meshes = 4096, std::size_t max_instances = 16384)
+	bool Initialize(Device &device, const std::filesystem::path &shader_directory, std::size_t max_meshes = 4096, std::size_t max_instances = 16384, std::size_t max_bone_matrices = 262144)
 	{
-		if (m_device != nullptr || !device.Is_Valid() || max_meshes == 0 || max_instances == 0 || max_instances > std::numeric_limits<std::uint32_t>::max() / sizeof(GPUInstanceData))
+		if (m_device != nullptr || !device.Is_Valid() || max_meshes == 0 || max_instances == 0 || max_bone_matrices == 0
+			|| max_instances > std::numeric_limits<std::uint32_t>::max() / sizeof(GPUInstanceData)
+			|| max_bone_matrices > std::numeric_limits<std::uint32_t>::max() / sizeof(GPUBoneMatrixData))
 			return false;
 
 		m_device = &device;
@@ -88,6 +112,7 @@ public:
 		m_scene.Reserve(max_instances);
 		m_skeletons.Reserve(max_meshes);
 		m_animations.Reserve(max_meshes);
+		m_bone_matrices.Reserve(max_instances, max_bone_matrices);
 		m_meshes.Reserve(max_meshes);
 		m_materials.Reserve(1);
 		m_gpu_scene.Reserve(max_instances, max_meshes, 1);
@@ -116,6 +141,17 @@ public:
 			return false;
 		}
 
+		m_skinned_shader = m_shaders.Load_Skinned_Basic_Opaque(shader_directory);
+		if (m_skinned_shader.Is_Valid()) {
+			const PipelineDesc skinned_pipeline_description = m_shaders.Make_Pipeline_Description(
+				m_skinned_shader, Make_Skinned_Basic_Opaque_Pipeline());
+			m_skinned_pipeline = m_shaders.Create_Pipeline(device, m_skinned_shader, skinned_pipeline_description);
+			if (!m_skinned_pipeline.Is_Valid()) {
+				m_shaders.Destroy(m_skinned_shader);
+				m_skinned_shader = {};
+			}
+		}
+
 		m_instance_buffer = device.Create_Buffer({
 			static_cast<std::uint32_t>(max_instances * sizeof(GPUInstanceData)),
 			RHIBufferUsage::Storage,
@@ -126,7 +162,17 @@ public:
 			return false;
 		}
 
-		m_bindless.Reserve(4, 3, 0, 0, 1);
+		m_bone_buffer = device.Create_Buffer({
+			static_cast<std::uint32_t>(max_bone_matrices * sizeof(GPUBoneMatrixData)),
+			RHIBufferUsage::Storage,
+			static_cast<std::uint32_t>(sizeof(GPUBoneMatrixData))
+		});
+		if (!m_bone_buffer.Is_Valid()) {
+			Shutdown();
+			return false;
+		}
+
+		m_bindless.Reserve(5, 4, 0, 0, 1);
 		if (!m_bindless.Register_Buffer(m_instance_buffer).Is_Valid()) {
 			Shutdown();
 			return false;
@@ -145,6 +191,10 @@ public:
 			{static_cast<std::uint32_t>(sizeof(GPUViewData)), RHIBufferUsage::Storage, static_cast<std::uint32_t>(sizeof(GPUViewData))},
 			std::as_bytes(std::span<const GPUViewData>(&m_gpu_view, 1)));
 		if (!m_view_buffer.Is_Valid() || !m_bindless.Register_Buffer(m_view_buffer).Is_Valid()) {
+			Shutdown();
+			return false;
+		}
+		if (!m_bindless.Register_Buffer(m_bone_buffer).Is_Valid()) {
 			Shutdown();
 			return false;
 		}
@@ -199,22 +249,31 @@ public:
 				m_device->Destroy_Buffer(m_light_buffer);
 			if (m_view_buffer.Is_Valid())
 				m_device->Destroy_Buffer(m_view_buffer);
+			if (m_bone_buffer.Is_Valid())
+				m_device->Destroy_Buffer(m_bone_buffer);
 			if (m_pipeline.Is_Valid())
 				m_device->Destroy_Pipeline(m_pipeline);
+			if (m_skinned_pipeline.Is_Valid())
+				m_device->Destroy_Pipeline(m_skinned_pipeline);
 		}
 
 		m_bindless.Clear();
 		m_residency.reset();
 		m_shaders.Destroy(m_shader);
+		m_shaders.Destroy(m_skinned_shader);
 		m_shader = {};
+		m_skinned_shader = {};
 		m_pipeline = {};
+		m_skinned_pipeline = {};
 		m_default_material = {};
 		m_instance_buffer = {};
 		m_light_buffer = {};
 		m_view_buffer = {};
+		m_bone_buffer = {};
 		m_mesh_sources.clear();
 		m_skeletons = {};
 		m_animations = {};
+		m_bone_matrices.Clear();
 		m_visible_storage.clear();
 		m_lod_storage.clear();
 		m_draw_storage.clear();
@@ -258,6 +317,8 @@ public:
 		resource.vertex_data = std::span<const std::byte>(storage->vertex_data);
 		resource.index_data = std::span<const std::byte>(storage->index_data);
 		resource.parts = std::span<const MeshPart>(storage->parts);
+		resource.vertex_format = source.vertex_format;
+		resource.skin_bone_count = source.skin_bone_count;
 		const MeshHandle handle = m_meshes.Create(std::move(resource));
 		if (!handle.Is_Valid())
 			return {};
@@ -327,6 +388,31 @@ public:
 		return m_animations;
 	}
 
+	PoseHandle Create_Pose(std::span<const RenderTransform> matrices)
+	{
+		return Is_Initialized() ? m_bone_matrices.Create(matrices) : PoseHandle{};
+	}
+
+	bool Update_Pose(PoseHandle handle, std::span<const RenderTransform> matrices) noexcept
+	{
+		return Is_Initialized() && m_bone_matrices.Update(handle, matrices);
+	}
+
+	bool Destroy_Pose(PoseHandle handle) noexcept
+	{
+		return Is_Initialized() && m_bone_matrices.Destroy(handle);
+	}
+
+	bool Is_Pose_Valid(PoseHandle handle) const noexcept
+	{
+		return Is_Initialized() && m_bone_matrices.Is_Valid(handle);
+	}
+
+	BoneMatrixRange Pose_Range(PoseHandle handle) const noexcept
+	{
+		return Is_Initialized() ? m_bone_matrices.Range(handle) : BoneMatrixRange{};
+	}
+
 	bool Destroy_Mesh(MeshHandle handle) noexcept
 	{
 		if (!handle.Is_Valid() || m_device == nullptr || m_meshes.Resolve(handle) == nullptr)
@@ -348,7 +434,8 @@ public:
 
 	InstanceHandle Create_Instance(const RenderInstance &instance)
 	{
-		if (!Is_Initialized() || !instance.mesh.Is_Valid() || m_meshes.Resolve(instance.mesh) == nullptr || instance.material != m_default_material)
+		if (!Is_Initialized() || !instance.mesh.Is_Valid() || m_meshes.Resolve(instance.mesh) == nullptr || instance.material != m_default_material
+			|| (instance.pose.Is_Valid() && !m_bone_matrices.Is_Valid(instance.pose)))
 			return {};
 
 		const InstanceHandle handle = m_scene.Create(instance);
@@ -358,12 +445,11 @@ public:
 
 	bool Update_Instance(InstanceHandle handle, const RenderInstance &instance) noexcept
 	{
-		if (!Is_Initialized() || instance.material != m_default_material || !m_meshes.Resolve(instance.mesh) || !m_scene.Update(handle, instance))
+		if (!Is_Initialized() || instance.material != m_default_material || !m_meshes.Resolve(instance.mesh)
+			|| (instance.pose.Is_Valid() && !m_bone_matrices.Is_Valid(instance.pose)) || !m_scene.Update(handle, instance))
 			return false;
 
-		if (!m_scene_dirty && m_dirty_instances.size() < m_dirty_instances.capacity())
-			m_dirty_instances.push_back(handle);
-		return true;
+		return Record_Dirty_Instance(handle);
 	}
 
 	bool Update_Instance_Visibility(InstanceHandle handle, SubmeshVisibilityMask visibility_mask) noexcept
@@ -374,6 +460,15 @@ public:
 		if (!m_scene_dirty && m_dirty_instances.size() < m_dirty_instances.capacity())
 			m_dirty_instances.push_back(handle);
 		return true;
+	}
+
+	bool Update_Instance_Pose(InstanceHandle handle, PoseHandle pose) noexcept
+	{
+		if (!Is_Initialized() || (pose.Is_Valid() && !m_bone_matrices.Is_Valid(pose))
+			|| !m_scene.Update_Pose(handle, pose))
+			return false;
+
+		return Record_Dirty_Instance(handle);
 	}
 
 	std::size_t Mesh_Part_Count(MeshHandle handle) const noexcept
@@ -410,7 +505,7 @@ public:
 			return false;
 		if (!Build_LOD_Set(m_scene, m_meshes, *m_visible, m_view, *m_lod))
 			return false;
-		if (!Build_Draw_Data(*m_lod, m_gpu_scene, {0, m_pipeline, 0}, *m_draws))
+		if (!Build_Draw_Data(*m_lod, m_gpu_scene, {0, m_pipeline, 0, m_skinned_pipeline}, *m_draws))
 			return false;
 
 		m_bindings[0] = GraphResourceBinding::Texture(m_color_resource, targets.backbuffer.texture);
@@ -466,14 +561,30 @@ private:
 		return result;
 	}
 
+	bool Record_Dirty_Instance(InstanceHandle handle) noexcept
+	{
+		if (!m_scene_dirty) {
+			if (m_dirty_instances.size() < m_dirty_instances.capacity())
+				m_dirty_instances.push_back(handle);
+			else {
+				m_scene_dirty = true;
+				m_dirty_instances.clear();
+			}
+		}
+		return true;
+	}
+
 	bool Sync_GPU_Data() noexcept
 	{
+		if (!Sync_Bone_Data())
+			return false;
+
 		if (m_view_dirty && !m_device->Update_Buffer(m_view_buffer, 0, std::as_bytes(std::span<const GPUViewData>(&m_gpu_view, 1))))
 			return false;
 		m_view_dirty = false;
 
 		if (m_scene_dirty) {
-			if (!m_gpu_scene.Build(m_scene, m_meshes, m_textures, m_samplers, m_materials))
+			if (!m_gpu_scene.Build(m_scene, m_meshes, m_textures, m_samplers, m_materials, &m_bone_matrices))
 				return false;
 			if (!m_device->Update_Buffer(m_instance_buffer, 0, std::as_bytes(m_gpu_scene.Instances())))
 				return m_gpu_scene.Instances().empty();
@@ -482,13 +593,16 @@ private:
 			m_scene_dirty = false;
 			m_dirty_instances.clear();
 			m_gpu_scene.Clear_Dirty();
+			m_bone_matrices.Clear_Dirty();
 			return true;
 		}
 
-		if (m_dirty_instances.empty())
+		if (m_dirty_instances.empty()) {
+			m_bone_matrices.Clear_Dirty();
 			return true;
+		}
 		for (const InstanceHandle handle : m_dirty_instances) {
-			if (!m_gpu_scene.Sync_Instance(handle, m_scene))
+			if (!m_gpu_scene.Sync_Instance(handle, m_scene, &m_bone_matrices))
 				return false;
 		}
 		const std::span<const GPUInstanceData> instances = m_gpu_scene.Instances();
@@ -496,6 +610,23 @@ private:
 			return false;
 		m_dirty_instances.clear();
 		m_gpu_scene.Clear_Dirty();
+		m_bone_matrices.Clear_Dirty();
+		return true;
+	}
+
+	bool Sync_Bone_Data() noexcept
+	{
+		const std::span<const GPUBoneMatrixData> matrices = m_bone_matrices.Matrices();
+		for (const BoneMatrixDirtyRange &range : m_bone_matrices.Dirty_Ranges()) {
+			if (range.first_matrix == Invalid_Bone_Matrix_Index || range.count == 0
+				|| static_cast<std::uint64_t>(range.first_matrix) + range.count > matrices.size())
+				return false;
+			const std::span<const GPUBoneMatrixData> update(matrices.data() + range.first_matrix, range.count);
+			if (!m_device->Update_Buffer(m_bone_buffer,
+				range.first_matrix * static_cast<std::uint32_t>(sizeof(GPUBoneMatrixData)),
+				std::as_bytes(update)))
+				return false;
+		}
 		return true;
 	}
 
@@ -523,6 +654,8 @@ private:
 			binding.index_format = resident.index_format == MeshIndexFormat::UInt16 ? RHIIndexFormat::UInt16 : RHIIndexFormat::UInt32;
 			binding.vertex_stride = resident.vertex_stride;
 			binding.index_count = resident.index_count;
+			binding.vertex_format = mesh.vertex_format == MeshVertexFormat::Position3Color4UV2Skinned
+				? RHIVertexFormat::Position3Color4UV2Skinned : RHIVertexFormat::Position3Color4UV2;
 			binding.submesh_offset = static_cast<std::uint32_t>(m_mesh_part_bindings.size());
 			binding.submesh_count = static_cast<std::uint32_t>(mesh.parts.size());
 			for (const MeshPart &part : mesh.parts)
@@ -536,6 +669,7 @@ private:
 	MeshPool m_meshes;
 	SkeletonPool m_skeletons;
 	AnimationClipPool m_animations;
+	BoneMatrixTable m_bone_matrices;
 	TexturePool m_textures;
 	SamplerPool m_samplers;
 	MaterialPool m_materials;
@@ -559,8 +693,11 @@ private:
 	RHIBufferHandle m_instance_buffer{};
 	RHIBufferHandle m_light_buffer{};
 	RHIBufferHandle m_view_buffer{};
+	RHIBufferHandle m_bone_buffer{};
 	ShaderHandle m_shader{};
+	ShaderHandle m_skinned_shader{};
 	PipelineHandle m_pipeline{};
+	PipelineHandle m_skinned_pipeline{};
 	MaterialHandle m_default_material{};
 	RenderGraph m_graph;
 	ExecutionPlan m_plan;
@@ -584,6 +721,7 @@ public:
 	{
 		if (!renderer.Is_Initialized() || !material.Is_Valid()
 			|| (skeleton.Is_Valid() && !renderer.Is_Skeleton_Valid(skeleton))
+			|| (source.vertex_format == MeshVertexFormat::Position3Color4UV2Skinned && !skeleton.Is_Valid())
 			|| (animation.Is_Valid() && !std::isfinite(animation_time))
 			|| (animation.Is_Valid() && !renderer.Is_Animation_Valid_For_Skeleton(animation, skeleton)))
 			return false;
@@ -592,21 +730,56 @@ public:
 		if (!new_mesh.Is_Valid())
 			return false;
 
-		const RenderInstance instance = Make_Instance(new_mesh, material, transform, bounds, flags, visibility_mask);
+		PoseHandle new_pose;
+		auto cleanup_new_resources = [&]() noexcept {
+			if (new_pose.Is_Valid())
+				renderer.Destroy_Pose(new_pose);
+			if (animation.Is_Valid() && animation != m_animation)
+				renderer.Destroy_Animation_Clip(animation);
+			renderer.Destroy_Mesh(new_mesh);
+			if (skeleton.Is_Valid() && skeleton != m_model_instance.skeleton)
+				renderer.Destroy_Skeleton(skeleton);
+		};
+
 		ModelInstance prepared_model_instance;
 		prepared_model_instance.skeleton = skeleton;
 		prepared_model_instance.transform = transform;
 		if (animation.Is_Valid()
 			&& !prepared_model_instance.Set_Animation(renderer.Skeletons(), renderer.Animations(), animation,
 				animation_mode, animation_time)) {
-			if (animation != m_animation)
-				renderer.Destroy_Animation_Clip(animation);
-			renderer.Destroy_Mesh(new_mesh);
+			cleanup_new_resources();
 			return false;
 		}
+
+		std::vector<RenderTransform> rest_pose;
+		if (source.vertex_format == MeshVertexFormat::Position3Color4UV2Skinned) {
+			const Graphics::Skeleton *skeleton_resource = renderer.Skeletons().Resolve(skeleton);
+			if (skeleton_resource == nullptr) {
+				cleanup_new_resources();
+				return false;
+			}
+			if (!animation.Is_Valid()) {
+				rest_pose.resize(skeleton_resource->Bone_Count());
+				for (BoneIndex bone = 0; bone < skeleton_resource->Bone_Count(); ++bone) {
+					if (!skeleton_resource->Rest_Transform(skeleton_resource->Bone(bone), rest_pose[bone])) {
+						cleanup_new_resources();
+						return false;
+					}
+				}
+			}
+			const std::span<const RenderTransform> matrices = animation.Is_Valid()
+				? prepared_model_instance.pose.World_Transforms()
+				: std::span<const RenderTransform>(rest_pose);
+			new_pose = renderer.Create_Pose(matrices);
+			if (!new_pose.Is_Valid()) {
+				cleanup_new_resources();
+				return false;
+			}
+		}
+		const RenderInstance instance = Make_Instance(new_mesh, material, transform, bounds, flags, visibility_mask, new_pose);
 		if (m_instance.Is_Valid()) {
 			if (!renderer.Update_Instance(m_instance, instance)) {
-				renderer.Destroy_Mesh(new_mesh);
+				cleanup_new_resources();
 				return false;
 			}
 			if (m_mesh.Is_Valid())
@@ -614,25 +787,30 @@ public:
 		} else {
 			const InstanceHandle new_instance = renderer.Create_Instance(instance);
 			if (!new_instance.Is_Valid()) {
-				renderer.Destroy_Mesh(new_mesh);
+				cleanup_new_resources();
 				return false;
 			}
 			m_instance = new_instance;
 		}
 
 		const SkeletonHandle old_skeleton = m_model_instance.skeleton;
+		const PoseHandle old_pose = m_pose;
 		m_mesh = new_mesh;
 		m_material = material;
 		m_bounds = bounds;
 		m_flags = flags;
 		m_visibility_mask = visibility_mask;
+		m_skinned = source.vertex_format == MeshVertexFormat::Position3Color4UV2Skinned;
 		m_model_instance = std::move(prepared_model_instance);
+		m_pose = new_pose;
 		const AnimationClipHandle old_animation = m_animation;
 		m_animation = animation;
 		if (old_skeleton.Is_Valid() && old_skeleton != skeleton)
 			renderer.Destroy_Skeleton(old_skeleton);
 		if (old_animation.Is_Valid() && old_animation != animation)
 			renderer.Destroy_Animation_Clip(old_animation);
+		if (old_pose.Is_Valid() && old_pose != new_pose)
+			renderer.Destroy_Pose(old_pose);
 		m_active = true;
 		return true;
 	}
@@ -642,7 +820,7 @@ public:
 		if (!renderer.Is_Initialized() || !m_active || !m_instance.Is_Valid() || !m_mesh.Is_Valid() || !m_material.Is_Valid())
 			return false;
 
-		const RenderInstance instance = Make_Instance(m_mesh, m_material, transform, m_bounds, flags, m_visibility_mask);
+		const RenderInstance instance = Make_Instance(m_mesh, m_material, transform, m_bounds, flags, m_visibility_mask, m_pose);
 		if (!renderer.Update_Instance(m_instance, instance))
 			return false;
 
@@ -659,6 +837,8 @@ public:
 			return false;
 		if (!m_model_instance.Set_Animation(renderer.Skeletons(), renderer.Animations(), animation, mode, time_seconds))
 			return false;
+		if (m_skinned && !Sync_Pose(renderer))
+			return false;
 		const AnimationClipHandle old_animation = m_animation;
 		m_animation = animation;
 		if (old_animation.Is_Valid() && old_animation != animation)
@@ -669,6 +849,8 @@ public:
 	bool Clear_Animation(StaticMeshRenderer &renderer) noexcept
 	{
 		if (!renderer.Is_Initialized())
+			return false;
+		if (m_skinned && !renderer.Update_Instance_Pose(m_instance, m_pose))
 			return false;
 		const AnimationClipHandle old_animation = m_animation;
 		m_animation = {};
@@ -681,19 +863,22 @@ public:
 	bool Update_Animation(StaticMeshRenderer &renderer, float delta_seconds) noexcept
 	{
 		return renderer.Is_Initialized() && m_active && m_animation.Is_Valid()
-			&& m_model_instance.Advance_Animation(renderer.Skeletons(), renderer.Animations(), delta_seconds);
+			&& m_model_instance.Advance_Animation(renderer.Skeletons(), renderer.Animations(), delta_seconds)
+			&& (!m_skinned || Sync_Pose(renderer));
 	}
 
 	bool Set_Animation_Time(StaticMeshRenderer &renderer, float time_seconds) noexcept
 	{
 		return renderer.Is_Initialized() && m_active && m_animation.Is_Valid()
-			&& m_model_instance.Set_Animation_Time(renderer.Skeletons(), renderer.Animations(), time_seconds);
+			&& m_model_instance.Set_Animation_Time(renderer.Skeletons(), renderer.Animations(), time_seconds)
+			&& (!m_skinned || Sync_Pose(renderer));
 	}
 
 	bool Set_Animation_Mode(StaticMeshRenderer &renderer, AnimationPlaybackMode mode) noexcept
 	{
 		return renderer.Is_Initialized() && m_active && m_animation.Is_Valid()
-			&& m_model_instance.Set_Animation_Mode(renderer.Skeletons(), renderer.Animations(), mode);
+			&& m_model_instance.Set_Animation_Mode(renderer.Skeletons(), renderer.Animations(), mode)
+			&& (!m_skinned || Sync_Pose(renderer));
 	}
 
 	bool Set_Submesh_Visibility(StaticMeshRenderer &renderer, SubmeshVisibilityMask visibility_mask) noexcept
@@ -721,7 +906,7 @@ public:
 			return false;
 
 		const RenderInstance instance = Make_Instance(m_mesh, m_material, transform,
-			m_bounds, m_flags | RenderInstanceFlags::Hidden, m_visibility_mask);
+			m_bounds, m_flags | RenderInstanceFlags::Hidden, m_visibility_mask, m_pose);
 		if (!renderer.Update_Instance(m_instance, instance))
 			return false;
 
@@ -741,6 +926,8 @@ public:
 				renderer.Destroy_Skeleton(m_model_instance.skeleton);
 			if (m_animation.Is_Valid())
 				renderer.Destroy_Animation_Clip(m_animation);
+			if (m_pose.Is_Valid())
+				renderer.Destroy_Pose(m_pose);
 		}
 		Reset();
 	}
@@ -755,6 +942,8 @@ public:
 		m_visibility_mask = All_Submeshes_Visible;
 		m_model_instance = {};
 		m_animation = {};
+		m_pose = {};
+		m_skinned = false;
 		m_active = false;
 	}
 
@@ -803,6 +992,11 @@ public:
 		return m_animation;
 	}
 
+	PoseHandle Pose() const noexcept
+	{
+		return m_pose;
+	}
+
 	bool Get_Bone_Transform(const StaticMeshRenderer &renderer, BoneHandle bone, RenderTransform &result) const noexcept
 	{
 		return m_model_instance.Get_Bone_Transform(renderer.Skeletons(), bone, result);
@@ -814,14 +1008,20 @@ public:
 	}
 
 private:
+	bool Sync_Pose(StaticMeshRenderer &renderer) noexcept
+	{
+		return m_pose.Is_Valid() && renderer.Update_Pose(m_pose, m_model_instance.pose.World_Transforms());
+	}
+
 	static RenderInstance Make_Instance(MeshHandle mesh, MaterialHandle material, const RenderTransform &transform,
-		const RenderBounds &bounds, RenderInstanceFlags flags, SubmeshVisibilityMask visibility_mask) noexcept
+		const RenderBounds &bounds, RenderInstanceFlags flags, SubmeshVisibilityMask visibility_mask, PoseHandle pose = {}) noexcept
 	{
 		RenderInstance instance;
 		instance.transform = transform;
 		instance.bounds = bounds;
 		instance.mesh = mesh;
 		instance.material = material;
+		instance.pose = pose;
 		instance.flags = flags;
 		instance.visibility_mask = visibility_mask;
 		return instance;
@@ -835,6 +1035,8 @@ private:
 	SubmeshVisibilityMask m_visibility_mask = All_Submeshes_Visible;
 	ModelInstance m_model_instance{};
 	AnimationClipHandle m_animation{};
+	PoseHandle m_pose{};
+	bool m_skinned = false;
 	bool m_active = false;
 };
 

@@ -25,6 +25,7 @@ export struct OpaqueMeshBinding final
 	std::int32_t base_vertex = 0;
 	std::uint32_t submesh_offset = 0;
 	std::uint32_t submesh_count = 0;
+	RHIVertexFormat vertex_format = RHIVertexFormat::Position3Color4UV2;
 };
 
 export struct OpaqueSubmeshBinding final
@@ -124,7 +125,8 @@ public:
 				|| mesh.vertex_buffer != bound_mesh.vertex_buffer
 				|| mesh.vertex_stride != bound_mesh.vertex_stride
 				|| mesh.index_buffer != bound_mesh.index_buffer
-				|| mesh.index_format != bound_mesh.index_format;
+				|| mesh.index_format != bound_mesh.index_format
+				|| mesh.vertex_format != bound_mesh.vertex_format;
 			if (mesh_state_changed) {
 				if (!command_list.Set_Vertex_Buffer(0, mesh.vertex_buffer, mesh.vertex_stride, 0)
 					|| !command_list.Set_Index_Buffer(mesh.index_buffer, mesh.index_format, 0))

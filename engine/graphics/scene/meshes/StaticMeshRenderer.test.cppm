@@ -328,4 +328,99 @@ BOOST_AUTO_TEST_CASE(static_mesh_renderer_matches_colocated_production_golden_im
 	renderer.Shutdown();
 }
 
+BOOST_AUTO_TEST_CASE(skinned_mesh_renderer_matches_colocated_production_golden_image)
+{
+	DX11Device device({true});
+	BOOST_REQUIRE(device.Is_Valid());
+
+	StaticMeshRenderer renderer;
+	BOOST_REQUIRE(renderer.Initialize(device, std::filesystem::path(GRAPHICS_STATIC_MESH_SHADER_DIRECTORY), 1, 1, 4));
+
+	std::array<SkinnedMeshVertex, 3> vertices{};
+	vertices[0].position[0] = -0.72f;
+	vertices[0].position[1] = -0.62f;
+	vertices[0].position[2] = 0.35f;
+	vertices[0].color[0] = 1.0f;
+	vertices[0].color[1] = 0.20f;
+	vertices[0].color[2] = 0.10f;
+	vertices[0].color[3] = 1.0f;
+	vertices[0].uv[0] = 0.0f;
+	vertices[0].uv[1] = 1.0f;
+	vertices[0].skinning.bone_indices[0] = 0;
+	vertices[0].skinning.bone_weights[0] = 1.0f;
+
+	vertices[1].position[0] = 0.0f;
+	vertices[1].position[1] = 0.78f;
+	vertices[1].position[2] = 0.35f;
+	vertices[1].color[0] = 0.10f;
+	vertices[1].color[1] = 0.85f;
+	vertices[1].color[2] = 0.20f;
+	vertices[1].color[3] = 1.0f;
+	vertices[1].uv[0] = 0.5f;
+	vertices[1].skinning.bone_indices[0] = 1;
+	vertices[1].skinning.bone_weights[0] = 1.0f;
+
+	vertices[2].position[0] = 0.72f;
+	vertices[2].position[1] = -0.62f;
+	vertices[2].position[2] = 0.35f;
+	vertices[2].color[0] = 0.10f;
+	vertices[2].color[1] = 0.20f;
+	vertices[2].color[2] = 0.95f;
+	vertices[2].color[3] = 1.0f;
+	vertices[2].uv[0] = 1.0f;
+	vertices[2].uv[1] = 1.0f;
+	vertices[2].skinning.bone_indices[0] = 0;
+	vertices[2].skinning.bone_weights[0] = 1.0f;
+
+	const std::array<std::uint16_t, 3> indices = {0, 1, 2};
+	RenderTransform child_transform;
+	child_transform.matrix = Matrix4x4::Identity().values;
+	child_transform.matrix[3] = 0.20f;
+	const std::array<SkeletonBone, 2> bones = {{
+		{Invalid_Bone_Index, RenderTransform{Matrix4x4::Identity().values}},
+		{0, child_transform}
+	}};
+	const SkeletonHandle skeleton = renderer.Create_Skeleton(bones);
+	BOOST_REQUIRE(skeleton.Is_Valid());
+
+	StaticMeshSource source;
+	source.vertex_count = static_cast<std::uint32_t>(vertices.size());
+	source.index_count = static_cast<std::uint32_t>(indices.size());
+	source.vertex_stride = sizeof(SkinnedMeshVertex);
+	source.index_format = MeshIndexFormat::UInt16;
+	source.vertex_data = std::as_bytes(std::span<const SkinnedMeshVertex>(vertices));
+	source.index_data = std::as_bytes(std::span<const std::uint16_t>(indices));
+	source.bounds_center = {0.10f, 0.0f, 0.35f};
+	source.bounds_radius = 1.0f;
+	source.vertex_format = MeshVertexFormat::Position3Color4UV2Skinned;
+	source.skin_bone_count = 2;
+
+	RenderTransform transform;
+	transform.matrix = Matrix4x4::Identity().values;
+	StaticMeshBinding binding;
+	BOOST_REQUIRE(binding.Replace(renderer, source, transform, {{0.10f, 0.0f, 0.35f}, 1.0f},
+		renderer.Default_Material(), RenderInstanceFlags::None, All_Submeshes_Visible, skeleton));
+	BOOST_REQUIRE(binding.Pose().Is_Valid());
+
+	renderer.Set_View({
+		Matrix4x4::Identity(),
+		Matrix4x4::Identity(),
+		{},
+		{0.0f, 0.0f, 128.0f, 72.0f, 0.0f, 1.0f}
+	});
+	VisualRegressionHarness harness({
+		128,
+		72,
+		2,
+		std::filesystem::path(GRAPHICS_STATIC_MESH_REFERENCE_DIRECTORY),
+		std::filesystem::path(GRAPHICS_STATIC_MESH_FAILURE_DIRECTORY)
+	});
+	const VisualComparisonResult result = harness.Run(device, "StaticMeshRenderer.Skinned", Render_Static_Mesh, &renderer);
+	BOOST_CHECK_MESSAGE(result.expected_loaded, "missing colocated skinned mesh reference image");
+	BOOST_CHECK_MESSAGE(result.matched, "skinned mesh renderer visual regression mismatch");
+
+	binding.Destroy(renderer);
+	renderer.Shutdown();
+}
+
 #endif

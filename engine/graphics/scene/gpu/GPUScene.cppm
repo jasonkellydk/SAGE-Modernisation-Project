@@ -26,6 +26,7 @@ export import Graphics.Scene.RenderScene;
 export import Graphics.Scene.Lighting;
 export import Graphics.Scene.Shadows;
 export import Graphics.Scene.Decals;
+export import Graphics.Scene.Models.Skinning;
 
 import Graphics.Memory.AlignedAllocator;
 
@@ -42,6 +43,10 @@ export struct alignas(16) GPUInstanceData final
 	std::uint32_t material_index = Invalid_GPU_Index;
 	std::uint32_t flags = 0;
 	std::uint32_t visibility_mask = All_Submeshes_Visible;
+	std::uint32_t bone_matrix_index = Invalid_Bone_Matrix_Index;
+	std::uint32_t bone_matrix_count = 0;
+	std::uint32_t bone_reserved0 = 0;
+	std::uint32_t bone_reserved1 = 0;
 };
 
 export struct alignas(16) GPUMeshData final
@@ -55,7 +60,7 @@ export struct alignas(16) GPUMeshData final
 	std::array<float, Mesh::MaxLodCount> lod_max_screen_sizes{};
 	std::uint32_t part_offset = 0;
 	std::uint32_t part_count = 0;
-	std::uint32_t reserved = 0;
+	std::uint32_t vertex_format = static_cast<std::uint32_t>(MeshVertexFormat::Position3Color4UV2);
 };
 
 export struct alignas(16) GPUMeshPartData final
@@ -75,7 +80,7 @@ export struct alignas(16) GPUMaterialData final
 	std::array<std::uint32_t, 3> reserved{};
 };
 
-static_assert(sizeof(GPUInstanceData) == 96);
+static_assert(sizeof(GPUInstanceData) == 112);
 static_assert(sizeof(GPUMeshData) == 64);
 static_assert(sizeof(GPUMeshPartData) == 16);
 static_assert(sizeof(GPUMaterialData) == 144);
@@ -238,7 +243,7 @@ std::size_t Required_Slot_Capacity(const Pool &pool) noexcept
 	return capacity;
 }
 
-GPUInstanceData Pack_Instance(const RenderTransformData &transforms, std::size_t dense_index, const RenderBoundsData &bounds, RenderInstanceFlags flags, SubmeshVisibilityMask visibility_mask, std::uint32_t mesh_index, std::uint32_t material_index) noexcept
+GPUInstanceData Pack_Instance(const RenderTransformData &transforms, std::size_t dense_index, const RenderBoundsData &bounds, RenderInstanceFlags flags, SubmeshVisibilityMask visibility_mask, std::uint32_t mesh_index, std::uint32_t material_index, BoneMatrixRange bone_range = {}) noexcept
 {
 	GPUInstanceData data;
 	for (std::size_t element = 0; element < data.transform.size(); ++element)
@@ -253,6 +258,10 @@ GPUInstanceData Pack_Instance(const RenderTransformData &transforms, std::size_t
 	data.material_index = material_index;
 	data.flags = static_cast<std::uint32_t>(flags);
 	data.visibility_mask = visibility_mask;
+	if (bone_range.Is_Valid()) {
+		data.bone_matrix_index = bone_range.first_matrix;
+		data.bone_matrix_count = bone_range.count;
+	}
 	return data;
 }
 
@@ -272,6 +281,7 @@ GPUMeshData Pack_Mesh(const Mesh &mesh, const DenseTable<GPUMeshData, MeshHandle
 	}
 	data.part_offset = part_offset;
 	data.part_count = mesh.parts.empty() ? 1u : static_cast<std::uint32_t>(mesh.parts.size());
+	data.vertex_format = static_cast<std::uint32_t>(mesh.vertex_format);
 
 	return data;
 }
@@ -380,7 +390,7 @@ public:
 		m_dirty_ranges.reserve(dirty_range_capacity);
 	}
 
-	bool Build(const RenderScene &scene, const MeshPool &meshes, const TexturePool &textures, const SamplerPool &samplers, const MaterialPool &materials)
+	bool Build(const RenderScene &scene, const MeshPool &meshes, const TexturePool &textures, const SamplerPool &samplers, const MaterialPool &materials, const BoneMatrixTable *bone_matrices = nullptr)
 	{
 		GRAPHICS_PROFILE_SCOPE("Graphics::GPUScene::Build");
 		m_instances.Clear();
@@ -427,7 +437,8 @@ public:
 				scene_data.flags[dense_index],
 				scene_data.visibility_masks[dense_index],
 				m_meshes.Index_Of(scene_data.meshes[dense_index]),
-				m_materials.Index_Of(scene_data.materials[dense_index]));
+				m_materials.Index_Of(scene_data.materials[dense_index]),
+				bone_matrices != nullptr ? bone_matrices->Range(scene_data.poses[dense_index]) : BoneMatrixRange{});
 			complete = m_instances.Upsert(scene_data.handles[dense_index], data) && complete;
 		}
 		if (!complete)
@@ -441,7 +452,7 @@ public:
 		return true;
 	}
 
-	bool Sync_Instance(InstanceHandle handle, const RenderScene &scene) noexcept
+	bool Sync_Instance(InstanceHandle handle, const RenderScene &scene, const BoneMatrixTable *bone_matrices = nullptr) noexcept
 	{
 		const std::uint32_t dense_index = scene.Dense_Index(handle);
 		if (dense_index == Invalid_Render_Scene_Index || !m_instances.Can_Upsert(handle))
@@ -462,7 +473,8 @@ public:
 			scene_data.flags[dense_index],
 			scene_data.visibility_masks[dense_index],
 			m_meshes.Index_Of(scene_data.meshes[dense_index]),
-			m_materials.Index_Of(scene_data.materials[dense_index]));
+			m_materials.Index_Of(scene_data.materials[dense_index]),
+			bone_matrices != nullptr ? bone_matrices->Range(scene_data.poses[dense_index]) : BoneMatrixRange{});
 		if (!m_instances.Upsert(handle, data))
 			return false;
 

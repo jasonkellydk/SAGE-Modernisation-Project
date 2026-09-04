@@ -128,6 +128,17 @@ export ShaderProgramDesc Make_Basic_Opaque_Description() noexcept
 	return description;
 }
 
+export ShaderProgramDesc Make_Skinned_Basic_Opaque_Description() noexcept
+{
+	ShaderProgramDesc description;
+	description.vertex_shader = 5;
+	description.fragment_shader = 1;
+	description.stages = ShaderStageMask::Vertex | ShaderStageMask::Pixel;
+	description.interface_layout = Make_Basic_Opaque_Interface();
+	description.source_key = 0x534b494e4f504151ull;
+	return description;
+}
+
 export ShaderProgramDesc Make_Particle_Billboard_Description() noexcept
 {
 	ShaderProgramDesc description;
@@ -168,6 +179,14 @@ export PipelineDesc Make_Basic_Opaque_Pipeline() noexcept
 	description.vertex_shader = shader.vertex_shader;
 	description.fragment_shader = shader.fragment_shader;
 	description.Set_Parameter_Layout(shader.interface_layout);
+	return description;
+}
+
+export PipelineDesc Make_Skinned_Basic_Opaque_Pipeline() noexcept
+{
+	PipelineDesc description = Make_Basic_Opaque_Pipeline();
+	description.vertex_shader = 5;
+	description.vertex_format = RHIVertexFormat::Position3Color4UV2Skinned;
 	return description;
 }
 
@@ -247,6 +266,19 @@ public:
 		return m_basic_opaque;
 	}
 
+	ShaderHandle Load_Skinned_Basic_Opaque(const std::filesystem::path &directory)
+	{
+		if (m_skinned_basic_opaque.Is_Valid())
+			return m_skinned_basic_opaque;
+
+		ShaderPrecompiledDesc description;
+		description.program = Make_Skinned_Basic_Opaque_Description();
+		description.vertex_path = directory / "basic_opaque_skinned.vso";
+		description.fragment_path = directory / "basic_opaque.pso";
+		m_skinned_basic_opaque = Load_Precompiled(description);
+		return m_skinned_basic_opaque;
+	}
+
 	ShaderHandle Load_Particle_Billboard(const std::filesystem::path &directory)
 	{
 		if (m_particle_billboard.Is_Valid())
@@ -290,6 +322,8 @@ public:
 	{
 		if (handle == m_basic_opaque)
 			m_basic_opaque = {};
+		if (handle == m_skinned_basic_opaque)
+			m_skinned_basic_opaque = {};
 		if (handle == m_particle_billboard)
 			m_particle_billboard = {};
 		if (handle == m_screen_distortion)
@@ -307,6 +341,11 @@ public:
 	ShaderHandle Basic_Opaque() const noexcept
 	{
 		return m_basic_opaque;
+	}
+
+	ShaderHandle Skinned_Basic_Opaque() const noexcept
+	{
+		return m_skinned_basic_opaque;
 	}
 
 	ShaderHandle Screen_Distortion() const noexcept
@@ -422,6 +461,7 @@ private:
 
 	ResourcePool<ShaderProgram, ShaderHandle> m_programs;
 	ShaderHandle m_basic_opaque{};
+	ShaderHandle m_skinned_basic_opaque{};
 	ShaderHandle m_particle_billboard{};
 	ShaderHandle m_screen_distortion{};
 	ShaderHandle m_beam{};

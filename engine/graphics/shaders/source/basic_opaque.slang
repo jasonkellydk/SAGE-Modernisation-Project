@@ -12,6 +12,15 @@ struct BasicOpaqueVertexOutput
     float3 world_position : TEXCOORD1;
 };
 
+struct SkinnedOpaqueVertexInput
+{
+    float3 position : POSITION;
+    float4 color : COLOR0;
+    float2 uv : TEXCOORD0;
+    uint4 bone_indices : BLENDINDICES0;
+    float4 bone_weights : BLENDWEIGHT0;
+};
+
 struct GPUInstanceData
 {
     row_major float4x4 transform;
@@ -20,6 +29,15 @@ struct GPUInstanceData
     uint material_index;
     uint flags;
     uint reserved;
+    uint bone_matrix_index;
+    uint bone_matrix_count;
+    uint bone_reserved0;
+    uint bone_reserved1;
+};
+
+struct GPUBoneMatrixData
+{
+    row_major float4x4 transform;
 };
 
 StructuredBuffer<GPUInstanceData> Instances : register(t127);
@@ -44,6 +62,8 @@ struct GPUViewData
 
 StructuredBuffer<GPUViewData> Views : register(t125);
 
+StructuredBuffer<GPUBoneMatrixData> BoneMatrices : register(t124);
+
 cbuffer MaterialParameters : register(b0)
 {
     float4 Values[4];
@@ -53,6 +73,29 @@ BasicOpaqueVertexOutput basic_opaque_vertex(BasicOpaqueVertexInput input, uint i
 {
     BasicOpaqueVertexOutput output;
     const float4 world_position = mul(float4(input.position, 1.0), Instances[instance_id].transform);
+    output.position = mul(world_position, Views[0].view_projection);
+    output.color = input.color;
+    output.world_position = world_position.xyz;
+    return output;
+}
+
+BasicOpaqueVertexOutput basic_opaque_skinned_vertex(SkinnedOpaqueVertexInput input, uint instance_id : SV_InstanceID)
+{
+    BasicOpaqueVertexOutput output;
+    const GPUInstanceData instance = Instances[instance_id];
+    float4 skinned_position = 0.0.xxxx;
+    if (instance.bone_matrix_count != 0)
+    {
+        skinned_position += mul(float4(input.position, 1.0), BoneMatrices[instance.bone_matrix_index + input.bone_indices.x].transform) * input.bone_weights.x;
+        skinned_position += mul(float4(input.position, 1.0), BoneMatrices[instance.bone_matrix_index + input.bone_indices.y].transform) * input.bone_weights.y;
+        skinned_position += mul(float4(input.position, 1.0), BoneMatrices[instance.bone_matrix_index + input.bone_indices.z].transform) * input.bone_weights.z;
+        skinned_position += mul(float4(input.position, 1.0), BoneMatrices[instance.bone_matrix_index + input.bone_indices.w].transform) * input.bone_weights.w;
+    }
+    else
+    {
+        skinned_position = float4(input.position, 1.0);
+    }
+    const float4 world_position = mul(skinned_position, instance.transform);
     output.position = mul(world_position, Views[0].view_projection);
     output.color = input.color;
     output.world_position = world_position.xyz;

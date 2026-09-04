@@ -297,7 +297,8 @@ static bool Create_DX11_Pipeline(
 	if (device == nullptr || (description.topology != RHIPrimitiveTopology::TriangleList
 		&& description.topology != RHIPrimitiveTopology::PointList)
 		|| (description.vertex_format != RHIVertexFormat::Position3Color4UV2
-			&& description.vertex_format != RHIVertexFormat::Position3Color4UV2ResourceIndex))
+			&& description.vertex_format != RHIVertexFormat::Position3Color4UV2ResourceIndex
+			&& description.vertex_format != RHIVertexFormat::Position3Color4UV2Skinned))
 		return false;
 	if (vertex_bytecode.empty() || pixel_bytecode.empty())
 		return false;
@@ -312,13 +313,22 @@ static bool Create_DX11_Pipeline(
 		return false;
 	pipeline.pixel_shader.Reset(native_pixel_shader);
 
-	const D3D11_INPUT_ELEMENT_DESC input_elements[] = {
+	const D3D11_INPUT_ELEMENT_DESC standard_input_elements[] = {
 		{"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
 		{"COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0},
 		{"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 28, D3D11_INPUT_PER_VERTEX_DATA, 0},
 		{"TEXCOORD", 1, DXGI_FORMAT_R32_UINT, 0, 36, D3D11_INPUT_PER_VERTEX_DATA, 0}
 	};
-	const UINT input_element_count = description.vertex_format == RHIVertexFormat::Position3Color4UV2 ? 3u : 4u;
+	const D3D11_INPUT_ELEMENT_DESC skinned_input_elements[] = {
+		{"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
+		{"COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0},
+		{"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 28, D3D11_INPUT_PER_VERTEX_DATA, 0},
+		{"BLENDINDICES", 0, DXGI_FORMAT_R16G16B16A16_UINT, 0, 36, D3D11_INPUT_PER_VERTEX_DATA, 0},
+		{"BLENDWEIGHT", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 44, D3D11_INPUT_PER_VERTEX_DATA, 0}
+	};
+	const bool is_skinned = description.vertex_format == RHIVertexFormat::Position3Color4UV2Skinned;
+	const D3D11_INPUT_ELEMENT_DESC *input_elements = is_skinned ? skinned_input_elements : standard_input_elements;
+	const UINT input_element_count = is_skinned ? 5u : description.vertex_format == RHIVertexFormat::Position3Color4UV2 ? 3u : 4u;
 	ID3D11InputLayout *input_layout = nullptr;
 	if (FAILED(device->CreateInputLayout(input_elements, input_element_count, vertex_bytecode.data(), vertex_bytecode.size(), &input_layout)))
 		return false;
