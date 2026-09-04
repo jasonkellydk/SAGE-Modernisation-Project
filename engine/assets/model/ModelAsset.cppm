@@ -1,7 +1,6 @@
 module;
 
 #include <array>
-#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -12,39 +11,13 @@ module;
 
 export module Assets.Models;
 
+import Assets.Handles;
 import Assets.Identity;
+import Assets.Materials;
+import Assets.Math;
 
 namespace Assets
 {
-
-export struct Vector2f final
-{
-	float x = 0.0f;
-	float y = 0.0f;
-};
-
-export struct Vector3f final
-{
-	float x = 0.0f;
-	float y = 0.0f;
-	float z = 0.0f;
-};
-
-export struct Color4f final
-{
-	float r = 1.0f;
-	float g = 1.0f;
-	float b = 1.0f;
-	float a = 1.0f;
-};
-
-export struct Bounds3f final
-{
-	Vector3f minimum{};
-	Vector3f maximum{};
-
-	bool Is_Valid() const noexcept;
-};
 
 export struct ModelVertexDesc final
 {
@@ -64,17 +37,7 @@ export struct ModelSubmeshDesc final
 	std::string name;
 };
 
-export struct ModelMaterialDesc final
-{
-	std::string name;
-	std::string primary_texture;
-	std::string secondary_texture;
-	Color4f base_color{};
-	float shininess = 1.0f;
-	float opacity = 1.0f;
-	float translucency = 0.0f;
-	std::uint32_t source_attributes = 0;
-};
+export using ModelMaterialDesc = MaterialAssetDesc;
 
 export struct ModelAssetDesc final
 {
@@ -115,6 +78,7 @@ export struct ModelSubmesh final
 export struct ModelMaterial final
 {
 	std::string name;
+	MaterialAssetHandle asset_handle;
 	AssetIdentity primary_texture{AssetType::Texture, {}};
 	AssetIdentity secondary_texture{AssetType::Texture, {}};
 	Color4f base_color{};
@@ -127,7 +91,10 @@ export struct ModelMaterial final
 export class ModelAsset final
 {
 public:
-	ModelAsset(AssetIdentity identity, ModelAssetDesc description);
+	ModelAsset(
+		AssetIdentity identity,
+		ModelAssetDesc description,
+		std::span<const MaterialAssetHandle> material_handles = {});
 
 	const AssetIdentity &Identity() const noexcept;
 	const std::string &Name() const noexcept;
@@ -166,14 +133,10 @@ private:
 namespace Assets
 {
 
-bool Bounds3f::Is_Valid() const noexcept
-{
-	return std::isfinite(minimum.x) && std::isfinite(minimum.y) && std::isfinite(minimum.z) &&
-		std::isfinite(maximum.x) && std::isfinite(maximum.y) && std::isfinite(maximum.z) &&
-		minimum.x <= maximum.x && minimum.y <= maximum.y && minimum.z <= maximum.z;
-}
-
-ModelAsset::ModelAsset(AssetIdentity identity, ModelAssetDesc description)
+ModelAsset::ModelAsset(
+	AssetIdentity identity,
+	ModelAssetDesc description,
+	std::span<const MaterialAssetHandle> material_handles)
 	: m_identity(std::move(identity)),
 	  m_name(std::move(description.name)),
 	  m_container_name(std::move(description.container_name)),
@@ -207,9 +170,14 @@ ModelAsset::ModelAsset(AssetIdentity identity, ModelAssetDesc description)
 	}
 
 	m_materials.reserve(description.materials.size());
-	for (ModelMaterialDesc &material : description.materials) {
+	for (std::size_t material_index = 0; material_index < description.materials.size(); ++material_index) {
+		ModelMaterialDesc &material = description.materials[material_index];
+		const MaterialAssetHandle material_handle = material_index < material_handles.size()
+			? material_handles[material_index]
+			: MaterialAssetHandle::Invalid();
 		m_materials.push_back({
 			std::move(material.name),
+			material_handle,
 			{AssetType::Texture, Canonicalize_Asset_Name(material.primary_texture)},
 			{AssetType::Texture, Canonicalize_Asset_Name(material.secondary_texture)},
 			material.base_color,

@@ -1,5 +1,6 @@
 module;
 
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <exception>
@@ -7,6 +8,7 @@ module;
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -16,11 +18,15 @@ module;
 export module Assets.Cache;
 
 import Assets.Cache.ModelLoadTask;
+import Assets.Cache.MaterialLoadTask;
+import Assets.Cache.TextureLoadTask;
 import Assets.Handles;
 import Assets.Identity;
 import Assets.Importers.Models;
+import Assets.Materials;
 import Assets.Models;
 import Assets.States;
+import Assets.Textures;
 
 namespace Assets
 {
@@ -35,16 +41,38 @@ public:
 	AssetCache &operator=(const AssetCache &) = delete;
 
 	bool Register_Model_Adapter(std::shared_ptr<const IModelAdapter> adapter);
+
 	ModelAssetHandle Request_Model(std::string_view name);
+	MaterialAssetHandle Request_Material(MaterialAssetDesc description);
+	TextureAssetHandle Request_Texture(std::string_view name);
 
 	AssetState Get_State(ModelAssetHandle handle) const noexcept;
-	// Returns a non-owning view. Callers retain the typed handle and must keep
-	// this cache alive while using the returned asset.
+	AssetState Get_State(MaterialAssetHandle handle) const noexcept;
+	AssetState Get_State(TextureAssetHandle handle) const noexcept;
+
+	// These are non-owning views. Consumers retain the typed handle and must
+	// keep this cache alive while using a returned asset.
 	const ModelAsset *Try_Get_Model(ModelAssetHandle handle) const noexcept;
+	const MaterialAsset *Try_Get_Material(MaterialAssetHandle handle) const noexcept;
+	const TextureAsset *Try_Get_Texture(TextureAssetHandle handle) const noexcept;
+
 	std::string Get_Error(ModelAssetHandle handle) const;
+	std::string Get_Error(MaterialAssetHandle handle) const;
+	std::string Get_Error(TextureAssetHandle handle) const;
+
 	void Wait(ModelAssetHandle handle) const;
+	void Wait(MaterialAssetHandle handle) const;
+	void Wait(TextureAssetHandle handle) const;
+
+	// Dependency views are published before the owning asset becomes Ready.
+	// Callers should query them after observing Ready.
+	std::span<const MaterialAssetHandle> Model_Material_Dependencies(ModelAssetHandle handle) const noexcept;
+	std::span<const TextureAssetHandle> Model_Texture_Dependencies(ModelAssetHandle handle) const noexcept;
+	std::span<const TextureAssetHandle> Material_Texture_Dependencies(MaterialAssetHandle handle) const noexcept;
 
 	std::size_t Model_Count() const noexcept;
+	std::size_t Material_Count() const noexcept;
+	std::size_t Texture_Count() const noexcept;
 
 private:
 	struct ModelEntry final
@@ -53,6 +81,32 @@ private:
 		ModelAssetHandle handle;
 		std::atomic<AssetState> state{AssetState::Unloaded};
 		std::shared_ptr<const ModelAsset> asset;
+		std::vector<MaterialAssetHandle> material_dependencies;
+		std::vector<TextureAssetHandle> texture_dependencies;
+		mutable std::mutex error_mutex;
+		std::string error;
+		std::shared_future<void> completion;
+	};
+
+	struct MaterialEntry final
+	{
+		AssetIdentity identity;
+		MaterialAssetHandle handle;
+		MaterialAssetDesc description;
+		std::atomic<AssetState> state{AssetState::Unloaded};
+		std::shared_ptr<const MaterialAsset> asset;
+		std::vector<TextureAssetHandle> texture_dependencies;
+		mutable std::mutex error_mutex;
+		std::string error;
+		std::shared_future<void> completion;
+	};
+
+	struct TextureEntry final
+	{
+		AssetIdentity identity;
+		TextureAssetHandle handle;
+		std::atomic<AssetState> state{AssetState::Unloaded};
+		std::shared_ptr<const TextureAsset> asset;
 		mutable std::mutex error_mutex;
 		std::string error;
 		std::shared_future<void> completion;
@@ -64,21 +118,50 @@ private:
 		std::unordered_map<std::string, ModelAssetHandle> handles;
 	};
 
-	static std::shared_ptr<ModelEntry> Find_Entry(
+	struct MaterialSnapshot final
+	{
+		std::vector<std::shared_ptr<MaterialEntry>> entries;
+		std::unordered_map<std::string, MaterialAssetHandle> handles;
+	};
+
+	struct TextureSnapshot final
+	{
+		std::vector<std::shared_ptr<TextureEntry>> entries;
+		std::unordered_map<std::string, TextureAssetHandle> handles;
+	};
+
+	static std::shared_ptr<ModelEntry> Find_Model_Entry(
 		const std::shared_ptr<const ModelSnapshot> &snapshot,
 		ModelAssetHandle handle) noexcept;
+	static std::shared_ptr<MaterialEntry> Find_Material_Entry(
+		const std::shared_ptr<const MaterialSnapshot> &snapshot,
+		MaterialAssetHandle handle) noexcept;
+	static std::shared_ptr<TextureEntry> Find_Texture_Entry(
+		const std::shared_ptr<const TextureSnapshot> &snapshot,
+		TextureAssetHandle handle) noexcept;
+
 	static void Set_Failure(const std::shared_ptr<ModelEntry> &entry, std::string error) noexcept;
+	static void Set_Failure(const std::shared_ptr<MaterialEntry> &entry, std::string error) noexcept;
+	static void Set_Failure(const std::shared_ptr<TextureEntry> &entry, std::string error) noexcept;
+	static std::string Dependency_Error(
+		std::string_view owner_type,
+		std::string_view dependency_name,
+		std::string_view dependency_error);
 	void Wait_All() const;
 
 	AssetSource m_source;
 	mutable std::mutex m_request_mutex;
 	std::vector<std::shared_ptr<const IModelAdapter>> m_model_adapters;
 	std::shared_ptr<const ModelSnapshot> m_model_snapshot;
+	std::shared_ptr<const MaterialSnapshot> m_material_snapshot;
+	std::shared_ptr<const TextureSnapshot> m_texture_snapshot;
 };
 
 AssetCache::AssetCache(AssetSource source)
 	: m_source(std::move(source)),
-	  m_model_snapshot(std::make_shared<const ModelSnapshot>())
+	  m_model_snapshot(std::make_shared<const ModelSnapshot>()),
+	  m_material_snapshot(std::make_shared<const MaterialSnapshot>()),
+	  m_texture_snapshot(std::make_shared<const TextureSnapshot>())
 {
 }
 
@@ -126,15 +209,98 @@ ModelAssetHandle AssetCache::Request_Model(std::string_view name)
 	try {
 		entry->completion = std::async(
 			std::launch::async,
-			[entry, source, adapters]() {
-				const ModelLoadResult loaded = Load_Model_Asset(entry->identity, source, adapters);
+			[this, entry, source, adapters]() {
+				try {
+				ModelDescriptionLoadResult loaded =
+					Load_Model_Description(entry->identity, source, adapters);
 				if (!loaded.Succeeded()) {
-					AssetCache::Set_Failure(entry, loaded.error);
+					Set_Failure(entry, loaded.error);
 					return;
 				}
 
-				std::atomic_store_explicit(&entry->asset, loaded.asset, std::memory_order_release);
+				std::unique_ptr<ModelAssetDesc> description = std::move(loaded.description);
+				std::vector<std::string> material_names;
+				std::vector<MaterialAssetHandle> material_handles;
+				material_names.reserve(description->materials.size());
+				material_handles.reserve(description->materials.size());
+				entry->material_dependencies.reserve(description->materials.size());
+				for (const ModelMaterialDesc &material : description->materials) {
+					material_names.push_back(Canonicalize_Asset_Name(material.name));
+					const MaterialAssetHandle material_handle = Request_Material(material);
+					if (!material_handle.Is_Valid()) {
+						Set_Failure(entry, "model contains a material with an empty identity");
+						return;
+					}
+					material_handles.push_back(material_handle);
+					if (std::find(
+							entry->material_dependencies.begin(),
+							entry->material_dependencies.end(),
+							material_handle) == entry->material_dependencies.end())
+						entry->material_dependencies.push_back(material_handle);
+				}
+
+				for (const AssetDependencyDesc &dependency : description->dependencies) {
+					const std::string dependency_name = Canonicalize_Asset_Name(dependency.name);
+					switch (dependency.type) {
+						case AssetType::Material: {
+							const auto material_name = std::find(material_names.begin(), material_names.end(), dependency_name);
+							if (material_name == material_names.end()) {
+								Set_Failure(entry, "model material dependency has no matching material description");
+								return;
+							}
+							break;
+						}
+						case AssetType::Texture: {
+							const TextureAssetHandle texture_handle = Request_Texture(dependency.name);
+							if (!texture_handle.Is_Valid()) {
+								Set_Failure(entry, "model contains a texture dependency with an empty identity");
+								return;
+							}
+							if (std::find(
+									entry->texture_dependencies.begin(),
+									entry->texture_dependencies.end(),
+									texture_handle) == entry->texture_dependencies.end())
+								entry->texture_dependencies.push_back(texture_handle);
+							break;
+						}
+						default:
+							// Skeleton, animation, mesh, and future asset kinds remain
+							// recorded in the generic description. This milestone only
+							// schedules the model/material/texture chain.
+							break;
+					}
+				}
+
+				for (const MaterialAssetHandle material_handle : entry->material_dependencies) {
+					Wait(material_handle);
+					if (Get_State(material_handle) != AssetState::Ready) {
+						Set_Failure(
+							entry,
+							Dependency_Error("model", "material", Get_Error(material_handle)));
+						return;
+					}
+				}
+				for (const TextureAssetHandle texture_handle : entry->texture_dependencies) {
+					Wait(texture_handle);
+					if (Get_State(texture_handle) != AssetState::Ready) {
+						Set_Failure(
+							entry,
+							Dependency_Error("model", "texture", Get_Error(texture_handle)));
+						return;
+					}
+				}
+
+				const auto runtime = std::make_shared<const ModelAsset>(
+					entry->identity,
+					std::move(*description),
+					material_handles);
+				std::atomic_store_explicit(&entry->asset, runtime, std::memory_order_release);
 				entry->state.store(AssetState::Ready, std::memory_order_release);
+				} catch (const std::exception &exception) {
+					Set_Failure(entry, exception.what());
+				} catch (...) {
+					Set_Failure(entry, "unknown exception while finalizing model");
+				}
 			});
 	} catch (const std::exception &exception) {
 		Set_Failure(entry, exception.what());
@@ -152,31 +318,234 @@ ModelAssetHandle AssetCache::Request_Model(std::string_view name)
 	return handle;
 }
 
+MaterialAssetHandle AssetCache::Request_Material(MaterialAssetDesc description)
+{
+	const std::string canonical_name = Canonicalize_Asset_Name(description.name);
+	if (canonical_name.empty())
+		return MaterialAssetHandle::Invalid();
+
+	std::lock_guard lock(m_request_mutex);
+	const std::shared_ptr<const MaterialSnapshot> current =
+		std::atomic_load_explicit(&m_material_snapshot, std::memory_order_acquire);
+	const auto existing = current->handles.find(canonical_name);
+	if (existing != current->handles.end())
+		return existing->second;
+
+	if (current->entries.size() >= std::numeric_limits<MaterialAssetHandle::Index>::max())
+		return MaterialAssetHandle::Invalid();
+
+	const MaterialAssetHandle handle(
+		static_cast<MaterialAssetHandle::Index>(current->entries.size()),
+		MaterialAssetHandle::Generation{1});
+	auto entry = std::make_shared<MaterialEntry>();
+	entry->identity = {AssetType::Material, canonical_name};
+	entry->handle = handle;
+	entry->description = std::move(description);
+	entry->state.store(AssetState::Loading, std::memory_order_release);
+	try {
+		entry->completion = std::async(
+			std::launch::async,
+			[this, entry]() {
+			try {
+				const MaterialAssetDesc description = entry->description;
+				TextureAssetHandle primary_texture = TextureAssetHandle::Invalid();
+				TextureAssetHandle secondary_texture = TextureAssetHandle::Invalid();
+				if (!description.primary_texture.empty())
+					primary_texture = Request_Texture(description.primary_texture);
+				if (!description.secondary_texture.empty())
+					secondary_texture = Request_Texture(description.secondary_texture);
+				if ((!description.primary_texture.empty() && !primary_texture.Is_Valid()) ||
+					(!description.secondary_texture.empty() && !secondary_texture.Is_Valid())) {
+					Set_Failure(entry, "material contains a texture with an empty identity");
+					return;
+				}
+
+				if (primary_texture.Is_Valid())
+					entry->texture_dependencies.push_back(primary_texture);
+				if (secondary_texture.Is_Valid() && secondary_texture != primary_texture)
+					entry->texture_dependencies.push_back(secondary_texture);
+				for (const TextureAssetHandle texture_handle : entry->texture_dependencies) {
+					Wait(texture_handle);
+					if (Get_State(texture_handle) != AssetState::Ready) {
+						Set_Failure(
+							entry,
+							Dependency_Error("material", "texture", Get_Error(texture_handle)));
+						return;
+					}
+				}
+
+				const MaterialLoadResult loaded = Finalize_Material_Asset(
+					entry->identity,
+					description,
+					primary_texture,
+					secondary_texture);
+				if (!loaded.Succeeded()) {
+					Set_Failure(entry, loaded.error);
+					return;
+				}
+				std::atomic_store_explicit(&entry->asset, loaded.asset, std::memory_order_release);
+				entry->state.store(AssetState::Ready, std::memory_order_release);
+			} catch (const std::exception &exception) {
+				Set_Failure(entry, exception.what());
+			} catch (...) {
+				Set_Failure(entry, "unknown exception while finalizing material");
+			}
+			});
+	} catch (const std::exception &exception) {
+		Set_Failure(entry, exception.what());
+	} catch (...) {
+		Set_Failure(entry, "could not start asynchronous material load");
+	}
+
+	auto next = std::make_shared<MaterialSnapshot>(*current);
+	next->entries.push_back(entry);
+	next->handles.emplace(canonical_name, handle);
+	std::atomic_store_explicit(
+		&m_material_snapshot,
+		std::shared_ptr<const MaterialSnapshot>(std::move(next)),
+		std::memory_order_release);
+	return handle;
+}
+
+TextureAssetHandle AssetCache::Request_Texture(std::string_view name)
+{
+	const std::string canonical_name = Canonicalize_Asset_Name(name);
+	if (canonical_name.empty())
+		return TextureAssetHandle::Invalid();
+
+	std::lock_guard lock(m_request_mutex);
+	const std::shared_ptr<const TextureSnapshot> current =
+		std::atomic_load_explicit(&m_texture_snapshot, std::memory_order_acquire);
+	const auto existing = current->handles.find(canonical_name);
+	if (existing != current->handles.end())
+		return existing->second;
+
+	if (current->entries.size() >= std::numeric_limits<TextureAssetHandle::Index>::max())
+		return TextureAssetHandle::Invalid();
+
+	const TextureAssetHandle handle(
+		static_cast<TextureAssetHandle::Index>(current->entries.size()),
+		TextureAssetHandle::Generation{1});
+	auto entry = std::make_shared<TextureEntry>();
+	entry->identity = {AssetType::Texture, canonical_name};
+	entry->handle = handle;
+	entry->state.store(AssetState::Loading, std::memory_order_release);
+	const AssetSource source = m_source;
+	try {
+		entry->completion = std::async(
+			std::launch::async,
+			[entry, source]() {
+				try {
+					if (!source) {
+						Set_Failure(entry, "no asset source is configured");
+						return;
+					}
+					const TextureLoadResult loaded = Load_Texture_Asset(entry->identity, source);
+					if (!loaded.Succeeded()) {
+						Set_Failure(entry, loaded.error);
+						return;
+					}
+					std::atomic_store_explicit(&entry->asset, loaded.asset, std::memory_order_release);
+					entry->state.store(AssetState::Ready, std::memory_order_release);
+				} catch (const std::exception &exception) {
+					Set_Failure(entry, exception.what());
+				} catch (...) {
+					Set_Failure(entry, "unknown exception while loading texture");
+				}
+			});
+	} catch (const std::exception &exception) {
+		Set_Failure(entry, exception.what());
+	} catch (...) {
+		Set_Failure(entry, "could not start asynchronous texture load");
+	}
+
+	auto next = std::make_shared<TextureSnapshot>(*current);
+	next->entries.push_back(entry);
+	next->handles.emplace(canonical_name, handle);
+	std::atomic_store_explicit(
+		&m_texture_snapshot,
+		std::shared_ptr<const TextureSnapshot>(std::move(next)),
+		std::memory_order_release);
+	return handle;
+}
+
 AssetState AssetCache::Get_State(ModelAssetHandle handle) const noexcept
 {
 	const auto snapshot = std::atomic_load_explicit(&m_model_snapshot, std::memory_order_acquire);
-	const auto entry = Find_Entry(snapshot, handle);
+	const auto entry = Find_Model_Entry(snapshot, handle);
+	return entry ? entry->state.load(std::memory_order_acquire) : AssetState::Unloaded;
+}
+
+AssetState AssetCache::Get_State(MaterialAssetHandle handle) const noexcept
+{
+	const auto snapshot = std::atomic_load_explicit(&m_material_snapshot, std::memory_order_acquire);
+	const auto entry = Find_Material_Entry(snapshot, handle);
+	return entry ? entry->state.load(std::memory_order_acquire) : AssetState::Unloaded;
+}
+
+AssetState AssetCache::Get_State(TextureAssetHandle handle) const noexcept
+{
+	const auto snapshot = std::atomic_load_explicit(&m_texture_snapshot, std::memory_order_acquire);
+	const auto entry = Find_Texture_Entry(snapshot, handle);
 	return entry ? entry->state.load(std::memory_order_acquire) : AssetState::Unloaded;
 }
 
 const ModelAsset *AssetCache::Try_Get_Model(ModelAssetHandle handle) const noexcept
 {
 	const auto snapshot = std::atomic_load_explicit(&m_model_snapshot, std::memory_order_acquire);
-	const auto entry = Find_Entry(snapshot, handle);
+	const auto entry = Find_Model_Entry(snapshot, handle);
 	if (!entry || entry->state.load(std::memory_order_acquire) != AssetState::Ready)
 		return nullptr;
-	const std::shared_ptr<const ModelAsset> asset =
-		std::atomic_load_explicit(&entry->asset, std::memory_order_acquire);
+	const auto asset = std::atomic_load_explicit(&entry->asset, std::memory_order_acquire);
+	return asset.get();
+}
+
+const MaterialAsset *AssetCache::Try_Get_Material(MaterialAssetHandle handle) const noexcept
+{
+	const auto snapshot = std::atomic_load_explicit(&m_material_snapshot, std::memory_order_acquire);
+	const auto entry = Find_Material_Entry(snapshot, handle);
+	if (!entry || entry->state.load(std::memory_order_acquire) != AssetState::Ready)
+		return nullptr;
+	const auto asset = std::atomic_load_explicit(&entry->asset, std::memory_order_acquire);
+	return asset.get();
+}
+
+const TextureAsset *AssetCache::Try_Get_Texture(TextureAssetHandle handle) const noexcept
+{
+	const auto snapshot = std::atomic_load_explicit(&m_texture_snapshot, std::memory_order_acquire);
+	const auto entry = Find_Texture_Entry(snapshot, handle);
+	if (!entry || entry->state.load(std::memory_order_acquire) != AssetState::Ready)
+		return nullptr;
+	const auto asset = std::atomic_load_explicit(&entry->asset, std::memory_order_acquire);
 	return asset.get();
 }
 
 std::string AssetCache::Get_Error(ModelAssetHandle handle) const
 {
 	const auto snapshot = std::atomic_load_explicit(&m_model_snapshot, std::memory_order_acquire);
-	const auto entry = Find_Entry(snapshot, handle);
+	const auto entry = Find_Model_Entry(snapshot, handle);
 	if (!entry)
 		return "invalid model asset handle";
+	std::lock_guard lock(entry->error_mutex);
+	return entry->error;
+}
 
+std::string AssetCache::Get_Error(MaterialAssetHandle handle) const
+{
+	const auto snapshot = std::atomic_load_explicit(&m_material_snapshot, std::memory_order_acquire);
+	const auto entry = Find_Material_Entry(snapshot, handle);
+	if (!entry)
+		return "invalid material asset handle";
+	std::lock_guard lock(entry->error_mutex);
+	return entry->error;
+}
+
+std::string AssetCache::Get_Error(TextureAssetHandle handle) const
+{
+	const auto snapshot = std::atomic_load_explicit(&m_texture_snapshot, std::memory_order_acquire);
+	const auto entry = Find_Texture_Entry(snapshot, handle);
+	if (!entry)
+		return "invalid texture asset handle";
 	std::lock_guard lock(entry->error_mutex);
 	return entry->error;
 }
@@ -184,28 +553,97 @@ std::string AssetCache::Get_Error(ModelAssetHandle handle) const
 void AssetCache::Wait(ModelAssetHandle handle) const
 {
 	const auto snapshot = std::atomic_load_explicit(&m_model_snapshot, std::memory_order_acquire);
-	const auto entry = Find_Entry(snapshot, handle);
+	const auto entry = Find_Model_Entry(snapshot, handle);
 	if (entry && entry->completion.valid())
 		entry->completion.wait();
 }
 
-std::size_t AssetCache::Model_Count() const noexcept
+void AssetCache::Wait(MaterialAssetHandle handle) const
 {
-	const auto snapshot = std::atomic_load_explicit(&m_model_snapshot, std::memory_order_acquire);
-	return snapshot->entries.size();
+	const auto snapshot = std::atomic_load_explicit(&m_material_snapshot, std::memory_order_acquire);
+	const auto entry = Find_Material_Entry(snapshot, handle);
+	if (entry && entry->completion.valid())
+		entry->completion.wait();
 }
 
-std::shared_ptr<AssetCache::ModelEntry> AssetCache::Find_Entry(
+void AssetCache::Wait(TextureAssetHandle handle) const
+{
+	const auto snapshot = std::atomic_load_explicit(&m_texture_snapshot, std::memory_order_acquire);
+	const auto entry = Find_Texture_Entry(snapshot, handle);
+	if (entry && entry->completion.valid())
+		entry->completion.wait();
+}
+
+std::span<const MaterialAssetHandle> AssetCache::Model_Material_Dependencies(ModelAssetHandle handle) const noexcept
+{
+	const auto snapshot = std::atomic_load_explicit(&m_model_snapshot, std::memory_order_acquire);
+	const auto entry = Find_Model_Entry(snapshot, handle);
+	if (!entry || entry->state.load(std::memory_order_acquire) != AssetState::Ready)
+		return {};
+	return entry->material_dependencies;
+}
+
+std::span<const TextureAssetHandle> AssetCache::Model_Texture_Dependencies(ModelAssetHandle handle) const noexcept
+{
+	const auto snapshot = std::atomic_load_explicit(&m_model_snapshot, std::memory_order_acquire);
+	const auto entry = Find_Model_Entry(snapshot, handle);
+	if (!entry || entry->state.load(std::memory_order_acquire) != AssetState::Ready)
+		return {};
+	return entry->texture_dependencies;
+}
+
+std::span<const TextureAssetHandle> AssetCache::Material_Texture_Dependencies(MaterialAssetHandle handle) const noexcept
+{
+	const auto snapshot = std::atomic_load_explicit(&m_material_snapshot, std::memory_order_acquire);
+	const auto entry = Find_Material_Entry(snapshot, handle);
+	if (!entry || entry->state.load(std::memory_order_acquire) != AssetState::Ready)
+		return {};
+	return entry->texture_dependencies;
+}
+
+std::size_t AssetCache::Model_Count() const noexcept
+{
+	return std::atomic_load_explicit(&m_model_snapshot, std::memory_order_acquire)->entries.size();
+}
+
+std::size_t AssetCache::Material_Count() const noexcept
+{
+	return std::atomic_load_explicit(&m_material_snapshot, std::memory_order_acquire)->entries.size();
+}
+
+std::size_t AssetCache::Texture_Count() const noexcept
+{
+	return std::atomic_load_explicit(&m_texture_snapshot, std::memory_order_acquire)->entries.size();
+}
+
+std::shared_ptr<AssetCache::ModelEntry> AssetCache::Find_Model_Entry(
 	const std::shared_ptr<const ModelSnapshot> &snapshot,
 	ModelAssetHandle handle) noexcept
 {
 	if (!handle.Is_Valid() || handle.Get_Index() >= snapshot->entries.size())
 		return {};
-
 	const std::shared_ptr<ModelEntry> &entry = snapshot->entries[handle.Get_Index()];
-	if (!entry || entry->handle != handle)
+	return entry && entry->handle == handle ? entry : std::shared_ptr<ModelEntry>{};
+}
+
+std::shared_ptr<AssetCache::MaterialEntry> AssetCache::Find_Material_Entry(
+	const std::shared_ptr<const MaterialSnapshot> &snapshot,
+	MaterialAssetHandle handle) noexcept
+{
+	if (!handle.Is_Valid() || handle.Get_Index() >= snapshot->entries.size())
 		return {};
-	return entry;
+	const std::shared_ptr<MaterialEntry> &entry = snapshot->entries[handle.Get_Index()];
+	return entry && entry->handle == handle ? entry : std::shared_ptr<MaterialEntry>{};
+}
+
+std::shared_ptr<AssetCache::TextureEntry> AssetCache::Find_Texture_Entry(
+	const std::shared_ptr<const TextureSnapshot> &snapshot,
+	TextureAssetHandle handle) noexcept
+{
+	if (!handle.Is_Valid() || handle.Get_Index() >= snapshot->entries.size())
+		return {};
+	const std::shared_ptr<TextureEntry> &entry = snapshot->entries[handle.Get_Index()];
+	return entry && entry->handle == handle ? entry : std::shared_ptr<TextureEntry>{};
 }
 
 void AssetCache::Set_Failure(const std::shared_ptr<ModelEntry> &entry, std::string error) noexcept
@@ -221,10 +659,63 @@ void AssetCache::Set_Failure(const std::shared_ptr<ModelEntry> &entry, std::stri
 	}
 }
 
+void AssetCache::Set_Failure(const std::shared_ptr<MaterialEntry> &entry, std::string error) noexcept
+{
+	try {
+		{
+			std::lock_guard lock(entry->error_mutex);
+			entry->error = std::move(error);
+		}
+		entry->state.store(AssetState::Failed, std::memory_order_release);
+	} catch (...) {
+		entry->state.store(AssetState::Failed, std::memory_order_release);
+	}
+}
+
+void AssetCache::Set_Failure(const std::shared_ptr<TextureEntry> &entry, std::string error) noexcept
+{
+	try {
+		{
+			std::lock_guard lock(entry->error_mutex);
+			entry->error = std::move(error);
+		}
+		entry->state.store(AssetState::Failed, std::memory_order_release);
+	} catch (...) {
+		entry->state.store(AssetState::Failed, std::memory_order_release);
+	}
+}
+
+std::string AssetCache::Dependency_Error(
+	std::string_view owner_type,
+	std::string_view dependency_name,
+	std::string_view dependency_error)
+{
+	std::string result;
+	result.reserve(owner_type.size() + dependency_name.size() + dependency_error.size() + 32);
+	result += owner_type;
+	result += " dependency failed: ";
+	result += dependency_name;
+	result += ": ";
+	result += dependency_error;
+	return result;
+}
+
 void AssetCache::Wait_All() const
 {
-	const auto snapshot = std::atomic_load_explicit(&m_model_snapshot, std::memory_order_acquire);
-	for (const std::shared_ptr<ModelEntry> &entry : snapshot->entries) {
+	const auto model_snapshot = std::atomic_load_explicit(&m_model_snapshot, std::memory_order_acquire);
+	for (const auto &entry : model_snapshot->entries) {
+		if (entry && entry->completion.valid())
+			entry->completion.wait();
+	}
+
+	const auto material_snapshot = std::atomic_load_explicit(&m_material_snapshot, std::memory_order_acquire);
+	for (const auto &entry : material_snapshot->entries) {
+		if (entry && entry->completion.valid())
+			entry->completion.wait();
+	}
+
+	const auto texture_snapshot = std::atomic_load_explicit(&m_texture_snapshot, std::memory_order_acquire);
+	for (const auto &entry : texture_snapshot->entries) {
 		if (entry && entry->completion.valid())
 			entry->completion.wait();
 	}

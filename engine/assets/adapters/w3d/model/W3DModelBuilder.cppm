@@ -10,6 +10,7 @@ module;
 export module Assets.Adapters.W3D.Model;
 
 import Assets.Adapters.W3D.Chunks;
+import Assets.Adapters.W3D.Materials;
 import Assets.Adapters.W3D.Mesh;
 import Assets.Identity;
 import Assets.Models;

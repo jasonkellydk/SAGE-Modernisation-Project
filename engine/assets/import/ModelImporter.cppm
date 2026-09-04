@@ -19,12 +19,15 @@ export struct ModelImportResult final
 {
 	std::unique_ptr<ModelAssetDesc> description;
 	std::string error;
+	~ModelImportResult();
 
 	bool Succeeded() const noexcept
 	{
 		return description != nullptr && error.empty();
 	}
 };
+
+inline ModelImportResult::~ModelImportResult() = default;
 
 export class IModelAdapter
 {

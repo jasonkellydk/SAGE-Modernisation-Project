@@ -12,6 +12,7 @@ export module Assets.Tests.W3DModelBuilder;
 
 import Assets.Adapters.W3D.Mesh;
 import Assets.Adapters.W3D.Model;
+import Assets.Models;
 
 BOOST_AUTO_TEST_CASE(model_builder_creates_generic_submesh_and_dependencies)
 {

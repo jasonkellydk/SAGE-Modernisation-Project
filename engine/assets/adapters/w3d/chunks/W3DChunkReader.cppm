@@ -8,7 +8,7 @@ module;
 
 export module Assets.Adapters.W3D.Chunks;
 
-import Assets.Models;
+import Assets.Math;
 
 namespace Assets::W3D
 {

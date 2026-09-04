@@ -15,9 +15,14 @@ target_sources(generals_assets
             core/AssetHandle.cppm
             core/AssetState.cppm
             core/AssetIdentity.cppm
+            core/AssetMath.cppm
+            material/MaterialAsset.cppm
             model/ModelAsset.cppm
+            texture/TextureAsset.cppm
             import/ModelImporter.cppm
             cache/ModelLoadTask.cppm
+            cache/MaterialLoadTask.cppm
+            cache/TextureLoadTask.cppm
             cache/AssetCache.cppm
             adapters/w3d/chunks/W3DChunkReader.cppm
             adapters/w3d/materials/W3DMaterialParser.cppm
@@ -55,9 +60,14 @@ if(RTS_BUILD_ASSET_TESTS)
     add_assets_test(generals_assets_handle_test core/AssetHandle.test.cppm)
     add_assets_test(generals_assets_state_test core/AssetState.test.cppm)
     add_assets_test(generals_assets_identity_test core/AssetIdentity.test.cppm)
+    add_assets_test(generals_assets_math_test core/AssetMath.test.cppm)
+    add_assets_test(generals_assets_material_test material/MaterialAsset.test.cppm)
     add_assets_test(generals_assets_model_test model/ModelAsset.test.cppm)
+    add_assets_test(generals_assets_texture_test texture/TextureAsset.test.cppm)
     add_assets_test(generals_assets_importer_test import/ModelImporter.test.cppm)
     add_assets_test(generals_assets_load_task_test cache/ModelLoadTask.test.cppm)
+    add_assets_test(generals_assets_material_load_task_test cache/MaterialLoadTask.test.cppm)
+    add_assets_test(generals_assets_texture_load_task_test cache/TextureLoadTask.test.cppm)
     add_assets_test(generals_assets_cache_test cache/AssetCache.test.cppm)
     add_assets_test(generals_assets_w3d_chunks_test adapters/w3d/chunks/W3DChunkReader.test.cppm)
     add_assets_test(generals_assets_w3d_materials_test adapters/w3d/materials/W3DMaterialParser.test.cppm)

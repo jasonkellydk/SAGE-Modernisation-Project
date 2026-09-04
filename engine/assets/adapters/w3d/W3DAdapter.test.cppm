@@ -4,19 +4,27 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
 export module Assets.Tests.W3DAdapter;
 
 import Assets.Adapters.W3D;
+import Assets.Cache;
+import Assets.Handles;
 import Assets.Identity;
+import Assets.Materials;
 import Assets.Models;
+import Assets.States;
+import Assets.Textures;
 
 namespace
 {
@@ -105,4 +113,68 @@ BOOST_AUTO_TEST_CASE(real_generals_w3d_model_loads_and_is_deterministic)
 	for (const auto &material : first.description->materials)
 		BOOST_CHECK(!material.name.empty());
 	Check_Deterministic(*first.description, *second.description);
+}
+
+BOOST_AUTO_TEST_CASE(real_generals_w3d_model_requests_material_and_texture_dependencies)
+{
+	const std::filesystem::path path = Integration_Asset_Path();
+	if (path.empty() || !std::filesystem::exists(path)) {
+		BOOST_TEST_MESSAGE(
+			"Skipping real-file dependency integration check: set GENERALS_W3D_INTEGRATION_ASSET or "
+			"provide the documented staged asset.");
+		return;
+	}
+
+	const std::vector<Byte> source = Read_File(path);
+	BOOST_REQUIRE(!source.empty());
+	std::mutex request_mutex;
+	std::vector<Assets::AssetIdentity> requests;
+	Assets::AssetCache cache([&source, &request_mutex, &requests](const Assets::AssetIdentity &identity) {
+		{
+			std::lock_guard lock(request_mutex);
+			requests.push_back(identity);
+		}
+		if (identity.type == Assets::AssetType::Model)
+			return source;
+		if (identity.type == Assets::AssetType::Texture)
+			return std::vector<Byte>{Byte{1}};
+		return std::vector<Byte>{};
+	});
+	BOOST_REQUIRE(cache.Register_Model_Adapter(std::make_shared<Assets::W3DAdapter>()));
+
+	const Assets::ModelAssetHandle model_handle = cache.Request_Model(path.string());
+	cache.Wait(model_handle);
+	BOOST_REQUIRE(cache.Get_State(model_handle) == Assets::AssetState::Ready);
+	const Assets::ModelAsset *model = cache.Try_Get_Model(model_handle);
+	BOOST_REQUIRE(model != nullptr);
+	BOOST_REQUIRE(!model->Materials().empty());
+	BOOST_REQUIRE(!cache.Model_Material_Dependencies(model_handle).empty());
+
+	bool saw_texture_dependency = false;
+	for (const Assets::ModelMaterial &model_material : model->Materials()) {
+		BOOST_REQUIRE(model_material.asset_handle.Is_Valid());
+		BOOST_CHECK(cache.Get_State(model_material.asset_handle) == Assets::AssetState::Ready);
+		const Assets::MaterialAsset *material = cache.Try_Get_Material(model_material.asset_handle);
+		BOOST_REQUIRE(material != nullptr);
+		if (model_material.primary_texture.canonical_name.empty())
+			continue;
+
+		saw_texture_dependency = true;
+		const Assets::TextureAssetHandle texture_handle = material->Primary_Texture();
+		BOOST_REQUIRE(texture_handle.Is_Valid());
+		BOOST_CHECK(cache.Get_State(texture_handle) == Assets::AssetState::Ready);
+		BOOST_REQUIRE(cache.Try_Get_Texture(texture_handle) != nullptr);
+	}
+	BOOST_REQUIRE(saw_texture_dependency);
+	BOOST_REQUIRE(cache.Texture_Count() != 0);
+
+	std::lock_guard lock(request_mutex);
+	BOOST_CHECK(std::any_of(
+		requests.begin(),
+		requests.end(),
+		[](const Assets::AssetIdentity &identity) { return identity.type == Assets::AssetType::Model; }));
+	BOOST_CHECK(std::any_of(
+		requests.begin(),
+		requests.end(),
+		[](const Assets::AssetIdentity &identity) { return identity.type == Assets::AssetType::Texture; }));
 }

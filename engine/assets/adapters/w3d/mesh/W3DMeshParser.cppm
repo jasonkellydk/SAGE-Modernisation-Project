@@ -14,6 +14,7 @@ export module Assets.Adapters.W3D.Mesh;
 
 import Assets.Adapters.W3D.Chunks;
 import Assets.Adapters.W3D.Materials;
+import Assets.Math;
 import Assets.Models;
 
 namespace Assets::W3D

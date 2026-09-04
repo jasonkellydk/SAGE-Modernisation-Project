@@ -12,7 +12,7 @@ import Assets.Identity;
 BOOST_AUTO_TEST_CASE(model_load_task_reports_missing_sources_without_throwing)
 {
 	const Assets::AssetIdentity identity{Assets::AssetType::Model, "missing.w3d"};
-	const Assets::ModelLoadResult result = Assets::Load_Model_Asset(identity, {}, {});
+	const Assets::ModelDescriptionLoadResult result = Assets::Load_Model_Description(identity, {}, {});
 	BOOST_CHECK(!result.Succeeded());
 	BOOST_CHECK(!result.error.empty());
 }

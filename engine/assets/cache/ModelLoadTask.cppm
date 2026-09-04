@@ -17,23 +17,26 @@ import Assets.Models;
 namespace Assets
 {
 
-export struct ModelLoadResult final
+export struct ModelDescriptionLoadResult final
 {
-	std::shared_ptr<const ModelAsset> asset;
+	std::unique_ptr<ModelAssetDesc> description;
 	std::string error;
+	~ModelDescriptionLoadResult();
 
 	bool Succeeded() const noexcept
 	{
-		return asset != nullptr && error.empty();
+		return description != nullptr && error.empty();
 	}
 };
 
-export ModelLoadResult Load_Model_Asset(
+inline ModelDescriptionLoadResult::~ModelDescriptionLoadResult() = default;
+
+export ModelDescriptionLoadResult Load_Model_Description(
 	const AssetIdentity &identity,
 	const AssetSource &source,
 	std::span<const std::shared_ptr<const IModelAdapter>> adapters);
 
-ModelLoadResult Load_Model_Asset(
+ModelDescriptionLoadResult Load_Model_Description(
 	const AssetIdentity &identity,
 	const AssetSource &source,
 	std::span<const std::shared_ptr<const IModelAdapter>> adapters)
@@ -58,7 +61,7 @@ ModelLoadResult Load_Model_Asset(
 		if (!imported.Succeeded())
 			return {nullptr, imported.error.empty() ? "model import failed" : std::move(imported.error)};
 
-		return {std::make_shared<const ModelAsset>(identity, std::move(*imported.description)), {}};
+		return {std::move(imported.description), {}};
 	} catch (const std::exception &exception) {
 		return {nullptr, exception.what()};
 	} catch (...) {
