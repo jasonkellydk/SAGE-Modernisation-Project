@@ -135,6 +135,29 @@ BOOST_AUTO_TEST_CASE(render_scene_updates_submesh_visibility_without_replacing_i
 	BOOST_CHECK(!scene.Update_Visibility(InstanceHandle(handle.Get_Index(), handle.Get_Generation() + 1), All_Submeshes_Visible));
 }
 
+BOOST_AUTO_TEST_CASE(render_scene_updates_shadow_casting_without_replacing_instance_state)
+{
+	RenderScene scene;
+	RenderInstance instance;
+	instance.mesh = MeshHandle(4, 1);
+	instance.material = MaterialHandle(5, 1);
+	instance.flags = RenderInstanceFlags::CastsShadow | RenderInstanceFlags::ReceivesShadow;
+	instance.visibility_mask = Set_Submesh_Visible(All_Submeshes_Visible, 3, false);
+	const InstanceHandle handle = scene.Create(instance);
+
+	BOOST_REQUIRE(scene.Update_Shadow_Casting(handle, false));
+	const RenderSceneData data = scene.Data();
+	BOOST_REQUIRE(data.Size() == 1);
+	BOOST_CHECK(!Render_Instance_Casts_Shadow(data.flags[0]));
+	BOOST_CHECK(data.meshes[0] == instance.mesh);
+	BOOST_CHECK(data.materials[0] == instance.material);
+	BOOST_CHECK(data.visibility_masks[0] == instance.visibility_mask);
+
+	BOOST_REQUIRE(scene.Update_Shadow_Casting(handle, true));
+	BOOST_CHECK(Render_Instance_Casts_Shadow(scene.Data().flags[0]));
+	BOOST_CHECK(!scene.Update_Shadow_Casting(InstanceHandle(handle.Get_Index(), handle.Get_Generation() + 1), false));
+}
+
 BOOST_AUTO_TEST_CASE(render_scene_keeps_instance_handle_when_static_variant_changes)
 {
 	RenderScene scene;

@@ -24,6 +24,9 @@ export struct ShadowPassInput final
 	GraphResourceHandle depth_target{};
 	RHIViewport viewport{};
 	float clear_depth = 1.0f;
+	std::span<const OpaqueSubmeshBinding> submeshes{};
+	std::span<const RHIBindlessResource> bindless_resources{};
+	PipelineHandle skinned_pipeline{};
 };
 
 export class ShadowPass final
@@ -75,9 +78,11 @@ public:
 		if (!command_list.Set_Depth_Target(depth_target)
 			|| !command_list.Clear_Depth(input.clear_depth)
 			|| !command_list.Set_Viewport(input.viewport)
-			|| !command_list.Bind_Pipeline(input.pipeline))
+			|| (!input.bindless_resources.empty() && !command_list.Set_Bindless_Resources(input.bindless_resources)))
 			return false;
 
+		PipelineHandle bound_pipeline{};
+		bool has_bound_pipeline = false;
 		OpaqueMeshBinding bound_mesh{};
 		bool has_bound_mesh = false;
 		for (const DrawData &draw : input.draws) {
@@ -85,12 +90,41 @@ public:
 				return false;
 
 			const GPUInstanceData &instance = input.instances[draw.instance_index];
-			if ((instance.flags & static_cast<std::uint32_t>(RenderInstanceFlags::CastsShadow)) == 0)
+			if ((instance.flags & static_cast<std::uint32_t>(RenderInstanceFlags::CastsShadow)) == 0
+				|| (instance.flags & static_cast<std::uint32_t>(RenderInstanceFlags::Hidden)) != 0)
 				continue;
 
 			const OpaqueMeshBinding &mesh = input.meshes[draw.mesh_index];
 			if (!mesh.vertex_buffer.Is_Valid() || !mesh.index_buffer.Is_Valid() || mesh.vertex_stride == 0 || mesh.index_count == 0)
 				return false;
+
+			std::uint32_t index_count = mesh.index_count;
+			std::uint32_t first_index = mesh.first_index;
+			std::int32_t base_vertex = mesh.base_vertex;
+			if (mesh.submesh_count != 0) {
+				if (draw.submesh_index >= mesh.submesh_count)
+					return false;
+				const std::uint64_t submesh_index = static_cast<std::uint64_t>(mesh.submesh_offset) + draw.submesh_index;
+				if (submesh_index >= input.submeshes.size())
+					return false;
+				const OpaqueSubmeshBinding &submesh = input.submeshes[static_cast<std::size_t>(submesh_index)];
+				if (submesh.index_count == 0)
+					return false;
+				index_count = submesh.index_count;
+				first_index = submesh.first_index;
+				base_vertex = submesh.base_vertex;
+			}
+
+			const PipelineHandle pipeline = mesh.vertex_format == RHIVertexFormat::Position3Color4UV2Skinned
+				&& input.skinned_pipeline.Is_Valid() ? input.skinned_pipeline : input.pipeline;
+			if (!pipeline.Is_Valid())
+				return false;
+			if (!has_bound_pipeline || pipeline != bound_pipeline) {
+				if (!command_list.Bind_Pipeline(pipeline))
+					return false;
+				bound_pipeline = pipeline;
+				has_bound_pipeline = true;
+			}
 
 			const bool mesh_state_changed = !has_bound_mesh
 				|| mesh.vertex_buffer != bound_mesh.vertex_buffer
@@ -106,7 +140,7 @@ public:
 				has_bound_mesh = true;
 			}
 
-			if (!command_list.Draw_Indexed(mesh.index_count, mesh.first_index, mesh.base_vertex, draw.instance_count, draw.instance_index))
+			if (!command_list.Draw_Indexed(index_count, first_index, base_vertex, draw.instance_count, draw.instance_index))
 				return false;
 		}
 

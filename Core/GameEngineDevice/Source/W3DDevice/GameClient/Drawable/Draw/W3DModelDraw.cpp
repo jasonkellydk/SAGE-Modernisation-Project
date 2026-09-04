@@ -2285,6 +2285,15 @@ bool W3DModelDraw::canUseModernSubobjectVisibility() const
 		&& can_translate(m_subObjectVec);
 }
 
+bool W3DModelDraw::modernShadowEnabled() const noexcept
+{
+	if (!m_shadowEnabled || m_modernHidden || getDrawable() == nullptr || getDrawable()->isDrawableEffectivelyHidden())
+		return false;
+
+	const ThingTemplate *template_data = getDrawable()->getTemplate();
+	return template_data != nullptr && template_data->getShadowType() != SHADOW_NONE;
+}
+
 Graphics::SubmeshVisibilityMask W3DModelDraw::modernSubobjectVisibility() const
 {
 	Graphics::SubmeshVisibilityMask visibility = Graphics::All_Submeshes_Visible;
@@ -2334,8 +2343,11 @@ bool W3DModelDraw::submitModernVariant()
 	const Matrix3D legacy_transform = m_renderObject->Get_Transform();
 	const Graphics::RenderTransform transform = Make_Modern_Transform(legacy_transform);
 	const Graphics::RenderBounds bounds = {{sphere.Center.X, sphere.Center.Y, sphere.Center.Z}, sphere.Radius};
-	Graphics::RenderInstanceFlags flags = Graphics::RenderInstanceFlags::CastsShadow | Graphics::RenderInstanceFlags::ReceivesShadow;
-	if (m_modernHidden || getDrawable()->isDrawableEffectivelyHidden())
+	Graphics::RenderInstanceFlags flags = Graphics::RenderInstanceFlags::ReceivesShadow;
+	const bool drawable_hidden = m_modernHidden || getDrawable()->isDrawableEffectivelyHidden();
+	if (modernShadowEnabled())
+		flags = Graphics::Set_Render_Instance_Casts_Shadow(flags, true);
+	if (drawable_hidden)
 		flags = flags | Graphics::RenderInstanceFlags::Hidden;
 
 	Graphics::SkeletonHandle skeleton;
@@ -2438,8 +2450,11 @@ void W3DModelDraw::updateModernInstance(const Matrix3D *transformMtx)
 	if (!m_modernBinding.Is_Active() || transformMtx == nullptr)
 		return;
 
-	Graphics::RenderInstanceFlags flags = Graphics::RenderInstanceFlags::CastsShadow | Graphics::RenderInstanceFlags::ReceivesShadow;
-	if (m_modernHidden || getDrawable()->isDrawableEffectivelyHidden())
+	Graphics::RenderInstanceFlags flags = Graphics::RenderInstanceFlags::ReceivesShadow;
+	const bool drawable_hidden = m_modernHidden || getDrawable()->isDrawableEffectivelyHidden();
+	if (modernShadowEnabled())
+		flags = Graphics::Set_Render_Instance_Casts_Shadow(flags, true);
+	if (drawable_hidden)
 		flags = flags | Graphics::RenderInstanceFlags::Hidden;
 
 	if (!m_modernBinding.Update(Graphics::GetStaticMeshRenderer(), Make_Modern_Transform(*transformMtx), flags)) {
@@ -2554,8 +2569,6 @@ void W3DModelDraw::setHidden(Bool hidden)
 	if (m_shadow)
 		m_shadow->enableShadowRender(!hidden);
 
-	m_shadowEnabled = hidden;
-
 	if (m_terrainDecal)
 		m_terrainDecal->enableShadowRender(!hidden);
 
@@ -2608,6 +2621,10 @@ void W3DModelDraw::setShadowsEnabled(Bool enable)
 	if (m_shadow)
 		m_shadow->enableShadowRender(enable);
 	m_shadowEnabled = enable;
+	if (m_modernBinding.Is_Active()) {
+		if (!m_modernBinding.Set_Casts_Shadow(Graphics::GetStaticMeshRenderer(), modernShadowEnabled()))
+			releaseModernVariant();
+	}
 }
 
 /**collect some stats about the rendering cost of this draw module */
@@ -3873,7 +3890,6 @@ void W3DModelDraw::setModelState(const ModelConditionInfo* newState)
 				m_renderObject->Set_Hidden(TRUE);
 				if (m_shadow)
 					m_shadow->enableShadowRender(FALSE);
-				m_shadowEnabled = FALSE;
 			}
 
 			//

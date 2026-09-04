@@ -510,6 +510,14 @@ public:
 		return Record_Dirty_Instance(handle);
 	}
 
+	bool Update_Instance_Shadow_Casting(InstanceHandle handle, bool enabled) noexcept
+	{
+		if (!Is_Initialized() || !m_scene.Update_Shadow_Casting(handle, enabled))
+			return false;
+
+		return Record_Dirty_Instance(handle);
+	}
+
 	AttachmentLinkHandle Attach_Instance(InstanceHandle child, InstanceHandle parent,
 		const AttachmentTarget &target, const RenderTransform &child_local_transform = Identity_Render_Transform())
 	{
@@ -1088,6 +1096,21 @@ public:
 			return false;
 
 		return Set_Submesh_Visibility(renderer, Graphics::Set_Submesh_Visible(m_visibility_mask, part, visible));
+	}
+
+	bool Set_Casts_Shadow(StaticMeshRenderer &renderer, bool enabled) noexcept
+	{
+		if (!renderer.Is_Initialized() || !m_instance.Is_Valid()
+			|| !renderer.Update_Instance_Shadow_Casting(m_instance, enabled))
+			return false;
+
+		m_flags = Set_Render_Instance_Casts_Shadow(m_flags, enabled);
+		return true;
+	}
+
+	bool Casts_Shadow() const noexcept
+	{
+		return Render_Instance_Casts_Shadow(m_flags);
 	}
 
 	bool Suspend(StaticMeshRenderer &renderer, const RenderTransform &transform) noexcept

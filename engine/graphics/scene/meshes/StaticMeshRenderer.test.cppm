@@ -353,6 +353,46 @@ BOOST_AUTO_TEST_CASE(static_mesh_submesh_visibility_preserves_instance_state)
 	renderer.Shutdown();
 }
 
+BOOST_AUTO_TEST_CASE(static_mesh_shadow_setting_preserves_instance_handle)
+{
+	DX11Device device({true});
+	BOOST_REQUIRE(device.Is_Valid());
+
+	StaticMeshRenderer renderer;
+	BOOST_REQUIRE(renderer.Initialize(device, std::filesystem::path(GRAPHICS_STATIC_MESH_SHADER_DIRECTORY), 1, 1));
+	const std::array<StaticMeshVertex, 3> vertices = {{
+		{{-0.5f, -0.5f, 0.0f}, {1.0f, 1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}},
+		{{0.0f, 0.5f, 0.0f}, {1.0f, 1.0f, 1.0f, 1.0f}, {0.5f, 0.0f}},
+		{{0.5f, -0.5f, 0.0f}, {1.0f, 1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}}
+	}};
+	const std::array<std::uint16_t, 3> indices = {0, 1, 2};
+	const StaticMeshSource source{
+		3,
+		3,
+		static_cast<std::uint32_t>(sizeof(StaticMeshVertex)),
+		MeshIndexFormat::UInt16,
+		std::as_bytes(std::span<const StaticMeshVertex>(vertices)),
+		std::as_bytes(std::span<const std::uint16_t>(indices)),
+		{0.0f, 0.0f, 0.0f},
+		1.0f
+	};
+
+	StaticMeshBinding binding;
+	BOOST_REQUIRE(binding.Replace(renderer, source, Identity_Render_Transform(), {{}, 1.0f}, renderer.Default_Material(),
+		RenderInstanceFlags::CastsShadow));
+	const InstanceHandle instance = binding.Instance();
+	BOOST_CHECK(binding.Casts_Shadow());
+	BOOST_REQUIRE(binding.Set_Casts_Shadow(renderer, false));
+	BOOST_CHECK(!binding.Casts_Shadow());
+	BOOST_CHECK(binding.Instance() == instance);
+	BOOST_REQUIRE(binding.Set_Casts_Shadow(renderer, true));
+	BOOST_CHECK(binding.Casts_Shadow());
+	BOOST_CHECK(binding.Instance() == instance);
+
+	binding.Destroy(renderer);
+	renderer.Shutdown();
+}
+
 BOOST_AUTO_TEST_CASE(static_mesh_renderer_matches_colocated_production_golden_image)
 {
 	DX11Device device({true});
@@ -383,6 +423,7 @@ BOOST_AUTO_TEST_CASE(static_mesh_renderer_matches_colocated_production_golden_im
 	instance.bounds = {{0.0f, 0.0f, 0.35f}, 1.0f};
 	instance.mesh = mesh;
 	instance.material = renderer.Default_Material();
+	instance.flags = RenderInstanceFlags::CastsShadow;
 	const InstanceHandle instance_handle = renderer.Create_Instance(instance);
 	BOOST_REQUIRE(instance_handle.Is_Valid());
 	renderer.Set_View({

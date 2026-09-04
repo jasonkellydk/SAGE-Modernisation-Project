@@ -147,6 +147,20 @@ export constexpr bool Has_Render_Instance_Flag(RenderInstanceFlags flags, Render
 	return (flags & flag) == flag;
 }
 
+export constexpr bool Render_Instance_Casts_Shadow(RenderInstanceFlags flags) noexcept
+{
+	return Has_Render_Instance_Flag(flags, RenderInstanceFlags::CastsShadow);
+}
+
+export constexpr RenderInstanceFlags Set_Render_Instance_Casts_Shadow(
+	RenderInstanceFlags flags, bool enabled) noexcept
+{
+	return enabled
+		? flags | RenderInstanceFlags::CastsShadow
+		: static_cast<RenderInstanceFlags>(static_cast<std::uint32_t>(flags)
+			& ~static_cast<std::uint32_t>(RenderInstanceFlags::CastsShadow));
+}
+
 export struct RenderInstance final
 {
 	RenderTransform transform{};
@@ -442,6 +456,16 @@ public:
 			return false;
 
 		m_poses[m_slots[handle.Get_Index()].dense_index] = pose;
+		return true;
+	}
+
+	bool Update_Shadow_Casting(InstanceHandle handle, bool enabled) noexcept
+	{
+		if (!Is_Valid_Handle(handle))
+			return false;
+
+		const std::uint32_t dense_index = m_slots[handle.Get_Index()].dense_index;
+		m_flags[dense_index] = Set_Render_Instance_Casts_Shadow(m_flags[dense_index], enabled);
 		return true;
 	}
 

@@ -521,6 +521,7 @@ private:
 	bool isModernStaticOpaqueState() const noexcept;
 	bool canUseModernSubobjectVisibility() const;
 	Graphics::SubmeshVisibilityMask modernSubobjectVisibility() const;
+	bool modernShadowEnabled() const noexcept;
 	bool updateModernSubobjectVisibility();
 	bool submitModernVariant();
 	void syncModernVariant();
