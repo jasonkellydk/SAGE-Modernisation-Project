@@ -400,9 +400,10 @@ public:
 			key.value,
 			description.depth_test,
 			description.depth_write,
-			description.topology,
-			description.vertex_format,
-			description.blend_mode
+			 description.topology,
+			 description.vertex_format,
+			 description.blend_mode,
+			 description.cull_mode
 		};
 		return device.Create_Pipeline(rhi_description, {program->vertex_bytecode}, {program->fragment_bytecode});
 	}

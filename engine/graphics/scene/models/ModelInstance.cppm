@@ -157,6 +157,24 @@ export struct ModelInstance final
 		return false;
 	}
 
+	bool Set_Bone_Local_Transform(const SkeletonPool &skeletons, BoneHandle bone,
+		const RenderTransform &local_transform) noexcept
+	{
+		const Skeleton *skeleton_resource = skeletons.Resolve(skeleton);
+		if (skeleton_resource == nullptr || !skeleton_resource->Is_Valid_Bone(bone))
+			return false;
+
+		if (!pose.Is_Valid()) {
+			if (!pose.Initialize(skeleton_resource->Bone_Count()))
+				return false;
+			for (BoneIndex index = 0; index < skeleton_resource->Bone_Count(); ++index)
+				pose.Local_Transforms()[index] = skeleton_resource->Bones()[index].rest_transform;
+		}
+
+		pose.Local_Transforms()[bone.Get_Index()] = local_transform;
+		return pose.Evaluate(*skeleton_resource, pose.Local_Transforms());
+	}
+
 	bool Get_Bone_Transform(const SkeletonPool &skeletons, BoneHandle bone, RenderTransform &result) const noexcept
 	{
 		const Skeleton *resource = skeletons.Resolve(skeleton);

@@ -502,6 +502,7 @@ private:
 	Bool													m_fullyObscuredByShroud;
 	Bool													m_shadowEnabled;	///< cached state of shadow.  Used to determine if shadows should be enabled via options screen.
 	RenderObjClass*								m_renderObject;										///< W3D Render object for this drawable
+	Bool														m_legacyRenderObjectInScene;
 	Shadow*												m_shadow;													///< Updates/Renders shadows of this object
 	Shadow*												m_terrainDecal;
 	TerrainTracksRenderObjClass*	m_trackRenderObject;							///< This is rendered under object
@@ -512,6 +513,8 @@ private:
 	Int														m_animationMode;
 
 	Graphics::StaticMeshBinding				m_modernBinding;
+	Graphics::MaterialHandle					m_modernMaterial;
+	Graphics::TextureHandle					m_modernTexture;
 	const ModelConditionInfo*						m_modernAnimationState;
 	Int													m_modernAnimationIndex;
 	Graphics::AnimationPlaybackMode			m_modernAnimationMode;
@@ -519,6 +522,8 @@ private:
 	Bool													m_modernHidden;
 
 	bool isModernStaticOpaqueState() const noexcept;
+	bool modernAnimationBlend() const noexcept;
+	bool modernDoubleSided() const noexcept;
 	bool canUseModernSubobjectVisibility() const;
 	Graphics::SubmeshVisibilityMask modernSubobjectVisibility() const;
 	bool modernShadowEnabled() const noexcept;
@@ -527,6 +532,7 @@ private:
 	void syncModernVariant();
 	void updateModernInstance(const Matrix3D *transformMtx);
 	void updateModernAnimation();
+	void updateModernBoneControl(Int boneIndex, const Matrix3D &localTransform);
 	void releaseModernVariant() noexcept;
 
 	void adjustAnimation(const ModelConditionInfo* prevState, Real prevAnimFraction);

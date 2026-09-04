@@ -19,6 +19,7 @@ module;
 export module Graphics.Scene.GPUScene;
 
 export import Graphics.Resources.Materials.Material;
+export import Graphics.Resources.Bindless.BindlessResourceTable;
 export import Graphics.Resources.Meshes.Mesh;
 export import Graphics.Resources.Samplers.Sampler;
 export import Graphics.Resources.Textures.Texture;
@@ -286,7 +287,8 @@ GPUMeshData Pack_Mesh(const Mesh &mesh, const DenseTable<GPUMeshData, MeshHandle
 	return data;
 }
 
-GPUMaterialData Pack_Material(const Material &material, const TexturePool &textures, const SamplerPool &samplers) noexcept
+GPUMaterialData Pack_Material(const Material &material, const TexturePool &textures, const SamplerPool &samplers,
+	const BindlessResourceTable *bindless = nullptr) noexcept
 {
 	GPUMaterialData data;
 	data.parameters = material.parameters.values;
@@ -296,14 +298,20 @@ GPUMaterialData Pack_Material(const Material &material, const TexturePool &textu
 
 	for (std::size_t texture_index = 0; texture_index < material.textures.size(); ++texture_index) {
 		const TextureHandle handle = material.textures[texture_index];
-		if (textures.Resolve(handle) != nullptr)
-			data.texture_indices[texture_index] = handle.Get_Index();
+		if (textures.Resolve(handle) != nullptr) {
+			data.texture_indices[texture_index] = bindless != nullptr
+				? bindless->Texture_Index(handle).Get_Index()
+				: handle.Get_Index();
+		}
 	}
 
 	for (std::size_t sampler_index = 0; sampler_index < material.samplers.size(); ++sampler_index) {
 		const SamplerHandle handle = material.samplers[sampler_index];
-		if (samplers.Resolve(handle) != nullptr)
-			data.sampler_indices[sampler_index] = handle.Get_Index();
+		if (samplers.Resolve(handle) != nullptr) {
+			data.sampler_indices[sampler_index] = bindless != nullptr
+				? bindless->Sampler_Index(handle).Get_Index()
+				: handle.Get_Index();
+		}
 	}
 
 	return data;
@@ -390,7 +398,9 @@ public:
 		m_dirty_ranges.reserve(dirty_range_capacity);
 	}
 
-	bool Build(const RenderScene &scene, const MeshPool &meshes, const TexturePool &textures, const SamplerPool &samplers, const MaterialPool &materials, const BoneMatrixTable *bone_matrices = nullptr)
+	bool Build(const RenderScene &scene, const MeshPool &meshes, const TexturePool &textures, const SamplerPool &samplers,
+		const MaterialPool &materials, const BoneMatrixTable *bone_matrices = nullptr,
+		const BindlessResourceTable *bindless = nullptr)
 	{
 		GRAPHICS_PROFILE_SCOPE("Graphics::GPUScene::Build");
 		m_instances.Clear();
@@ -422,7 +432,7 @@ public:
 			complete = m_meshes.Upsert(handle, Pack_Mesh(mesh, m_meshes, part_offset)) && complete;
 		});
 		materials.For_Each([&](MaterialHandle handle, const Material &material) noexcept {
-			complete = m_materials.Upsert(handle, Pack_Material(material, textures, samplers)) && complete;
+			complete = m_materials.Upsert(handle, Pack_Material(material, textures, samplers, bindless)) && complete;
 		});
 		for (std::size_t dense_index = 0; dense_index < lights.Size(); ++dense_index)
 			complete = m_lights.Upsert(lights.handles[dense_index], Pack_Light(lights, dense_index)) && complete;
@@ -526,7 +536,8 @@ public:
 		return true;
 	}
 
-	bool Sync_Material(MaterialHandle handle, const MaterialPool &materials, const TexturePool &textures, const SamplerPool &samplers) noexcept
+	bool Sync_Material(MaterialHandle handle, const MaterialPool &materials, const TexturePool &textures,
+		const SamplerPool &samplers, const BindlessResourceTable *bindless = nullptr) noexcept
 	{
 		const Material *material = materials.Resolve(handle);
 		if (material == nullptr || !m_materials.Can_Upsert(handle))
@@ -536,7 +547,7 @@ public:
 		if (!Can_Mark(GPUSceneTable::Materials, index))
 			return false;
 
-		if (!m_materials.Upsert(handle, Pack_Material(*material, textures, samplers)))
+		if (!m_materials.Upsert(handle, Pack_Material(*material, textures, samplers, bindless)))
 			return false;
 
 		Mark_Dirty(GPUSceneTable::Materials, index, 1);

@@ -110,6 +110,8 @@ struct VisualScene final
 	RHITextureHandle material_texture{};
 	RHITextureHandle shadow_texture{};
 	RHIBufferHandle material_constants{};
+	RHIBufferHandle bone_buffer{};
+	RHIBufferHandle material_buffer{};
 	BindlessResourceTable bindless;
 	BeamRenderer beam_renderer;
 	LightRenderer light_renderer;
@@ -130,6 +132,12 @@ struct VisualScene final
 		if (view_buffer.Is_Valid())
 			device.Destroy_Buffer(view_buffer);
 		view_buffer = {};
+		if (bone_buffer.Is_Valid())
+			device.Destroy_Buffer(bone_buffer);
+		bone_buffer = {};
+		if (material_buffer.Is_Valid())
+			device.Destroy_Buffer(material_buffer);
+		material_buffer = {};
 		residency.reset();
 		if (shadow_texture.Is_Valid())
 			device.Destroy_Texture(shadow_texture);
@@ -399,6 +407,18 @@ struct VisualScene final
 			|| !view_buffer.Is_Valid() || !bindless.Register_Buffer(view_buffer).Is_Valid())
 			return false;
 
+		const GPUBoneMatrixData empty_bone{};
+		bone_buffer = device.Create_Buffer_Initialized(
+			{static_cast<std::uint32_t>(sizeof(empty_bone)), RHIBufferUsage::Storage, sizeof(empty_bone)},
+			std::as_bytes(std::span<const GPUBoneMatrixData>(&empty_bone, 1)));
+		const std::span<const GPUMaterialData> materials = gpu_scene.Materials();
+		material_buffer = device.Create_Buffer_Initialized(
+			{static_cast<std::uint32_t>(materials.size_bytes()), RHIBufferUsage::Storage, sizeof(GPUMaterialData)},
+			std::as_bytes(materials));
+		if (!bone_buffer.Is_Valid() || !bindless.Register_Buffer(bone_buffer).Is_Valid()
+			|| !material_buffer.Is_Valid() || !bindless.Register_Buffer(material_buffer).Is_Valid())
+			return false;
+
 		const GPUResidentMaterial resident_material = residency->Material_Info(scene_material);
 		if (!resident_material.constants.Is_Valid() || !bindless.Register_Material(scene_material, resident_material.constants).Is_Valid())
 			return false;
@@ -453,6 +473,24 @@ struct VisualScene final
 			{static_cast<std::uint32_t>(sizeof(view_data)), RHIBufferUsage::Storage, sizeof(float) * 16},
 			std::as_bytes(std::span<const float>(view_data)));
 		if (!view_buffer.Is_Valid() || !bindless.Register_Buffer(view_buffer).Is_Valid())
+			return false;
+		const GPUBoneMatrixData empty_bone{};
+		bone_buffer = device.Create_Buffer_Initialized(
+			{static_cast<std::uint32_t>(sizeof(empty_bone)), RHIBufferUsage::Storage, sizeof(empty_bone)},
+			std::as_bytes(std::span<const GPUBoneMatrixData>(&empty_bone, 1)));
+		GPUMaterialData material_gpu{};
+		material_gpu.texture_indices.fill(Invalid_GPU_Index);
+		material_gpu.sampler_indices.fill(Invalid_GPU_Index);
+		material_gpu.parameters[0] = 1.0f;
+		material_gpu.parameters[1] = 1.0f;
+		material_gpu.parameters[2] = 1.0f;
+		material_gpu.parameters[3] = 1.0f;
+		material_gpu.parameters[4] = 1.0f;
+		material_buffer = device.Create_Buffer_Initialized(
+			{static_cast<std::uint32_t>(sizeof(material_gpu)), RHIBufferUsage::Storage, sizeof(material_gpu)},
+			std::as_bytes(std::span<const GPUMaterialData>(&material_gpu, 1)));
+		if (!bone_buffer.Is_Valid() || !bindless.Register_Buffer(bone_buffer).Is_Valid()
+			|| !material_buffer.Is_Valid() || !bindless.Register_Buffer(material_buffer).Is_Valid())
 			return false;
 
 		MaterialParameterBlock material_data;

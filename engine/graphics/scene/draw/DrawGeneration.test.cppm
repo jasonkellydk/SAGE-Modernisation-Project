@@ -13,6 +13,7 @@ import Graphics.Scene.DrawGeneration;
 using namespace Graphics;
 
 static constexpr PipelineHandle Test_Pipeline(8, 1);
+static constexpr PipelineHandle Double_Sided_Pipeline(9, 1);
 
 static Mesh Make_Mesh() noexcept
 {
@@ -193,4 +194,35 @@ BOOST_AUTO_TEST_CASE(draw_generation_filters_hidden_submeshes)
 	BOOST_REQUIRE(draw_set.Size() == 1);
 	BOOST_CHECK(draw_set.Records()[0].instance_index == gpu_scene.Instance_Index(instance_handle));
 	BOOST_CHECK(draw_set.Records()[0].submesh_index == 0);
+}
+
+BOOST_AUTO_TEST_CASE(draw_generation_selects_double_sided_pipeline_from_instance_flags)
+{
+	MeshPool meshes;
+	MaterialPool materials;
+	const MeshHandle mesh = meshes.Create(Make_Mesh());
+	const MaterialHandle material = materials.Create();
+	RenderInstance instance = Make_Instance(mesh, material, 0.0f);
+	instance.flags = RenderInstanceFlags::DoubleSided;
+	RenderScene scene;
+	BOOST_REQUIRE(scene.Create(instance).Is_Valid());
+
+	std::array<InstanceHandle, 1> visible_storage{};
+	std::array<LODSelection, 1> lod_storage{};
+	VisibleSet visible_set(visible_storage);
+	LODSet lod_set(lod_storage);
+	BOOST_REQUIRE(Build_Visible_Set(scene, Make_View(), visible_set));
+	BOOST_REQUIRE(Build_LOD_Set(scene, meshes, visible_set, Make_View(), lod_set));
+
+	TexturePool textures;
+	SamplerPool samplers;
+	GPUScene gpu_scene;
+	BOOST_REQUIRE(gpu_scene.Build(scene, meshes, textures, samplers, materials));
+
+	std::array<DrawData, 1> draw_storage{};
+	DrawSet draw_set(draw_storage);
+	BOOST_REQUIRE(Build_Draw_Data(lod_set, gpu_scene,
+		{0, Test_Pipeline, 0, {}, Double_Sided_Pipeline}, draw_set));
+	BOOST_REQUIRE(draw_set.Size() == 1);
+	BOOST_CHECK(draw_set.Records()[0].pipeline == Double_Sided_Pipeline);
 }

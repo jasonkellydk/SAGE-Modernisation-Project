@@ -107,11 +107,12 @@ static_assert(sizeof(GPUViewData) == 64);
 export class StaticMeshRenderer final
 {
 public:
-	bool Initialize(Device &device, const std::filesystem::path &shader_directory, std::size_t max_meshes = 4096, std::size_t max_instances = 16384, std::size_t max_bone_matrices = 262144)
+	bool Initialize(Device &device, const std::filesystem::path &shader_directory, std::size_t max_meshes = 4096, std::size_t max_instances = 16384, std::size_t max_bone_matrices = 262144, std::size_t max_materials = 4096)
 	{
-		if (m_device != nullptr || !device.Is_Valid() || max_meshes == 0 || max_instances == 0 || max_bone_matrices == 0
+		if (m_device != nullptr || !device.Is_Valid() || max_meshes == 0 || max_instances == 0 || max_bone_matrices == 0 || max_materials == 0
 			|| max_instances > std::numeric_limits<std::uint32_t>::max() / sizeof(GPUInstanceData)
-			|| max_bone_matrices > std::numeric_limits<std::uint32_t>::max() / sizeof(GPUBoneMatrixData))
+			|| max_bone_matrices > std::numeric_limits<std::uint32_t>::max() / sizeof(GPUBoneMatrixData)
+			|| max_materials > std::numeric_limits<std::uint32_t>::max() / sizeof(GPUMaterialData))
 			return false;
 
 		m_device = &device;
@@ -122,8 +123,8 @@ public:
 		m_animations.Reserve(max_meshes);
 		m_bone_matrices.Reserve(max_instances, max_bone_matrices);
 		m_meshes.Reserve(max_meshes);
-		m_materials.Reserve(1);
-		m_gpu_scene.Reserve(max_instances, max_meshes, 1);
+		m_materials.Reserve(max_materials);
+		m_gpu_scene.Reserve(max_instances, max_meshes, max_materials);
 		m_visible_storage.resize(max_instances);
 		m_lod_storage.resize(max_instances);
 		m_lod_history_storage.resize(max_instances);
@@ -150,6 +151,13 @@ public:
 			Shutdown();
 			return false;
 		}
+		PipelineDesc double_sided_description = pipeline_description;
+		double_sided_description.cull_mode = RHICullMode::None;
+		m_double_sided_pipeline = m_shaders.Create_Pipeline(device, m_shader, double_sided_description);
+		if (!m_double_sided_pipeline.Is_Valid()) {
+			Shutdown();
+			return false;
+		}
 
 		m_skinned_shader = m_shaders.Load_Skinned_Basic_Opaque(shader_directory);
 		if (m_skinned_shader.Is_Valid()) {
@@ -159,6 +167,16 @@ public:
 			if (!m_skinned_pipeline.Is_Valid()) {
 				m_shaders.Destroy(m_skinned_shader);
 				m_skinned_shader = {};
+			}
+			else {
+				PipelineDesc skinned_double_sided_description = Make_Skinned_Basic_Opaque_Pipeline();
+				skinned_double_sided_description = m_shaders.Make_Pipeline_Description(m_skinned_shader, skinned_double_sided_description);
+				skinned_double_sided_description.cull_mode = RHICullMode::None;
+				m_skinned_double_sided_pipeline = m_shaders.Create_Pipeline(device, m_skinned_shader, skinned_double_sided_description);
+				if (!m_skinned_double_sided_pipeline.Is_Valid()) {
+					Shutdown();
+					return false;
+				}
 			}
 		}
 
@@ -182,7 +200,7 @@ public:
 			return false;
 		}
 
-		m_bindless.Reserve(5, 4, 0, 0, 1);
+		m_bindless.Reserve(5, 5, 123, 0, max_materials);
 		if (!m_bindless.Register_Buffer(m_instance_buffer).Is_Valid()) {
 			Shutdown();
 			return false;
@@ -205,6 +223,16 @@ public:
 			return false;
 		}
 		if (!m_bindless.Register_Buffer(m_bone_buffer).Is_Valid()) {
+			Shutdown();
+			return false;
+		}
+
+		m_material_buffer = device.Create_Buffer({
+			static_cast<std::uint32_t>(max_materials * sizeof(GPUMaterialData)),
+			RHIBufferUsage::Storage,
+			static_cast<std::uint32_t>(sizeof(GPUMaterialData))
+		});
+		if (!m_material_buffer.Is_Valid() || !m_bindless.Register_Buffer(m_material_buffer).Is_Valid()) {
 			Shutdown();
 			return false;
 		}
@@ -261,10 +289,16 @@ public:
 				m_device->Destroy_Buffer(m_view_buffer);
 			if (m_bone_buffer.Is_Valid())
 				m_device->Destroy_Buffer(m_bone_buffer);
+			if (m_material_buffer.Is_Valid())
+				m_device->Destroy_Buffer(m_material_buffer);
 			if (m_pipeline.Is_Valid())
 				m_device->Destroy_Pipeline(m_pipeline);
 			if (m_skinned_pipeline.Is_Valid())
 				m_device->Destroy_Pipeline(m_skinned_pipeline);
+			if (m_double_sided_pipeline.Is_Valid())
+				m_device->Destroy_Pipeline(m_double_sided_pipeline);
+			if (m_skinned_double_sided_pipeline.Is_Valid())
+				m_device->Destroy_Pipeline(m_skinned_double_sided_pipeline);
 		}
 
 		m_bindless.Clear();
@@ -275,12 +309,16 @@ public:
 		m_skinned_shader = {};
 		m_pipeline = {};
 		m_skinned_pipeline = {};
+		m_double_sided_pipeline = {};
+		m_skinned_double_sided_pipeline = {};
 		m_default_material = {};
 		m_instance_buffer = {};
 		m_light_buffer = {};
 		m_view_buffer = {};
 		m_bone_buffer = {};
+		m_material_buffer = {};
 		m_mesh_sources.clear();
+		m_texture_sources.clear();
 		m_attachments.Clear();
 		m_skeletons = {};
 		m_animations = {};
@@ -464,14 +502,164 @@ public:
 		return true;
 	}
 
+	TextureHandle Create_Texture(const Texture &description)
+	{
+		if (!Is_Initialized() || description.width == 0 || description.height == 0 || description.depth != 1
+			|| description.mip_count == 0 || description.pixel_data.empty()
+			|| !Has_Texture_Usage(description.usage, TextureUsage::Sampled))
+			return {};
+
+		auto storage = std::make_unique<TextureStorage>();
+		storage->pixel_data.assign(description.pixel_data.begin(), description.pixel_data.end());
+		Texture resource = description;
+		resource.pixel_data = std::span<const std::byte>(storage->pixel_data);
+		const TextureHandle handle = m_textures.Create(std::move(resource));
+		if (!handle.Is_Valid())
+			return {};
+
+		if (!m_residency->Upload_Texture(handle, *m_textures.Resolve(handle))) {
+			m_textures.Destroy(handle);
+			return {};
+		}
+
+		const GPUResidentTexture resident = m_residency->Texture_Info(handle);
+		if (!resident.texture.Is_Valid() || !m_bindless.Register_Texture(handle, resident.texture).Is_Valid()) {
+			m_residency->Destroy_Texture(handle);
+			m_textures.Destroy(handle);
+			return {};
+		}
+
+		if (handle.Get_Index() >= m_texture_sources.size())
+			m_texture_sources.resize(static_cast<std::size_t>(handle.Get_Index()) + 1);
+		storage->handle = handle;
+		m_texture_sources[handle.Get_Index()] = std::move(storage);
+		m_scene_dirty = true;
+		return handle;
+	}
+
+	bool Destroy_Texture(TextureHandle handle) noexcept
+	{
+		if (!Is_Initialized() || !handle.Is_Valid() || m_textures.Resolve(handle) == nullptr)
+			return false;
+
+		bool in_use = false;
+		m_materials.For_Each([&](MaterialHandle, const Material &material) noexcept {
+			for (const TextureHandle texture : material.textures)
+				in_use = in_use || texture == handle;
+		});
+		if (in_use)
+			return false;
+
+		if (!m_bindless.Destroy_Texture(handle) || !m_residency->Destroy_Texture(handle)
+			|| !m_textures.Destroy(handle))
+			return false;
+		if (handle.Get_Index() < m_texture_sources.size())
+			m_texture_sources[handle.Get_Index()] = {};
+		m_scene_dirty = true;
+		return true;
+	}
+
+	bool Is_Texture_Valid(TextureHandle handle) const noexcept
+	{
+		return Is_Initialized() && m_textures.Resolve(handle) != nullptr
+			&& m_residency->Texture_Info(handle).texture.Is_Valid();
+	}
+
 	MaterialHandle Default_Material() const noexcept
 	{
 		return m_default_material;
 	}
 
+	ShaderHandle Basic_Opaque_Shader() const noexcept
+	{
+		return m_shader;
+	}
+
+	MaterialHandle Create_Material(const Material &description)
+	{
+		if (!Is_Initialized())
+			return {};
+
+		Material material = description;
+		material.shader = m_shaders.Select_Shader(material, m_shader);
+		if (!material.shader.Is_Valid() || material.shader != m_shader)
+			return {};
+
+		const MaterialHandle handle = m_materials.Create(material);
+		if (!handle.Is_Valid() || !m_residency->Upload_Material(handle, material)) {
+			if (handle.Is_Valid())
+				m_materials.Destroy(handle);
+			return {};
+		}
+
+		const GPUResidentMaterial resident = m_residency->Material_Info(handle);
+		if (!resident.constants.Is_Valid() || !m_bindless.Register_Material(handle, resident.constants).Is_Valid()) {
+			m_residency->Destroy_Material(handle);
+			m_materials.Destroy(handle);
+			return {};
+		}
+
+		m_scene_dirty = true;
+		return handle;
+	}
+
+	bool Update_Material(MaterialHandle handle, const Material &description) noexcept
+	{
+		if (!Is_Initialized() || handle == m_default_material)
+			return false;
+
+		Material *material = m_materials.Resolve(handle);
+		if (material == nullptr)
+			return false;
+
+		Material updated = description;
+		updated.shader = m_shaders.Select_Shader(updated, m_shader);
+		if (!updated.shader.Is_Valid() || updated.shader != m_shader)
+			return false;
+
+		*material = updated;
+		if (!m_residency->Upload_Material(handle, updated))
+			return false;
+
+		const GPUResidentMaterial resident = m_residency->Material_Info(handle);
+		if (!resident.constants.Is_Valid() || !m_bindless.Update_Material(handle, resident.constants))
+			return false;
+
+		m_scene_dirty = true;
+		return true;
+	}
+
+	bool Destroy_Material(MaterialHandle handle) noexcept
+	{
+		if (!Is_Initialized() || !handle.Is_Valid() || handle == m_default_material
+			|| m_materials.Resolve(handle) == nullptr)
+			return false;
+
+		bool in_use = false;
+		m_scene.For_Each([&](InstanceHandle, const RenderInstanceView &instance) noexcept {
+			in_use = in_use || instance.material == handle;
+		});
+		if (in_use)
+			return false;
+
+		if (!m_bindless.Destroy_Material(handle) || !m_residency->Destroy_Material(handle)
+			|| !m_materials.Destroy(handle))
+			return false;
+
+		m_scene_dirty = true;
+		return true;
+	}
+
+	bool Is_Material_Valid(MaterialHandle handle) const noexcept
+	{
+		return Is_Initialized() && m_materials.Resolve(handle) != nullptr
+			&& m_residency->Material_Info(handle).constants.Is_Valid();
+	}
+
 	InstanceHandle Create_Instance(const RenderInstance &instance)
 	{
-		if (!Is_Initialized() || !instance.mesh.Is_Valid() || m_meshes.Resolve(instance.mesh) == nullptr || instance.material != m_default_material
+		if (!Is_Initialized() || !instance.mesh.Is_Valid() || m_meshes.Resolve(instance.mesh) == nullptr
+			|| !Is_Material_Valid(instance.material)
 			|| (instance.skeleton.Is_Valid() && m_skeletons.Resolve(instance.skeleton) == nullptr)
 			|| (instance.pose.Is_Valid() && !m_bone_matrices.Is_Valid(instance.pose)))
 			return {};
@@ -483,7 +671,7 @@ public:
 
 	bool Update_Instance(InstanceHandle handle, const RenderInstance &instance) noexcept
 	{
-		if (!Is_Initialized() || instance.material != m_default_material || !m_meshes.Resolve(instance.mesh)
+		if (!Is_Initialized() || !Is_Material_Valid(instance.material) || !m_meshes.Resolve(instance.mesh)
 			|| (instance.skeleton.Is_Valid() && m_skeletons.Resolve(instance.skeleton) == nullptr)
 			|| (instance.pose.Is_Valid() && !m_bone_matrices.Is_Valid(instance.pose)) || !m_scene.Update(handle, instance))
 			return false;
@@ -603,7 +791,8 @@ public:
 			return false;
 		if (!Build_LOD_Set(m_scene, m_meshes, *m_visible, m_view, *m_lod, *m_lod_history, {m_lod_hysteresis}))
 			return false;
-		if (!Build_Draw_Data(*m_lod, m_gpu_scene, {0, m_pipeline, 0, m_skinned_pipeline}, *m_draws))
+		if (!Build_Draw_Data(*m_lod, m_gpu_scene,
+			{0, m_pipeline, 0, m_skinned_pipeline, m_double_sided_pipeline, m_skinned_double_sided_pipeline}, *m_draws))
 			return false;
 
 		m_bindings[0] = GraphResourceBinding::Texture(m_color_resource, targets.backbuffer.texture);
@@ -649,6 +838,12 @@ private:
 		std::vector<MeshPart> parts;
 	};
 
+	struct TextureStorage final
+	{
+		TextureHandle handle{};
+		std::vector<std::byte> pixel_data;
+	};
+
 	static std::array<float, 16> Multiply(const Matrix4x4 &left, const Matrix4x4 &right) noexcept
 	{
 		std::array<float, 16> result{};
@@ -682,10 +877,12 @@ private:
 		m_view_dirty = false;
 
 		if (m_scene_dirty) {
-			if (!m_gpu_scene.Build(m_scene, m_meshes, m_textures, m_samplers, m_materials, &m_bone_matrices))
+			if (!m_gpu_scene.Build(m_scene, m_meshes, m_textures, m_samplers, m_materials, &m_bone_matrices, &m_bindless))
 				return false;
 			if (!m_device->Update_Buffer(m_instance_buffer, 0, std::as_bytes(m_gpu_scene.Instances())))
 				return m_gpu_scene.Instances().empty();
+			if (!m_device->Update_Buffer(m_material_buffer, 0, std::as_bytes(m_gpu_scene.Materials())))
+				return m_gpu_scene.Materials().empty();
 			if (!Build_Mesh_Bindings())
 				return false;
 			m_scene_dirty = false;
@@ -778,6 +975,7 @@ private:
 	BindlessResourceTable m_bindless;
 	std::unique_ptr<GPUResourceResidency> m_residency;
 	std::vector<std::unique_ptr<MeshStorage>> m_mesh_sources;
+	std::vector<std::unique_ptr<TextureStorage>> m_texture_sources;
 	std::vector<InstanceHandle> m_dirty_instances;
 	std::vector<InstanceHandle> m_visible_storage;
 	std::vector<LODSelection> m_lod_storage;
@@ -795,10 +993,13 @@ private:
 	RHIBufferHandle m_light_buffer{};
 	RHIBufferHandle m_view_buffer{};
 	RHIBufferHandle m_bone_buffer{};
+	RHIBufferHandle m_material_buffer{};
 	ShaderHandle m_shader{};
 	ShaderHandle m_skinned_shader{};
 	PipelineHandle m_pipeline{};
 	PipelineHandle m_skinned_pipeline{};
+	PipelineHandle m_double_sided_pipeline{};
+	PipelineHandle m_skinned_double_sided_pipeline{};
 	MaterialHandle m_default_material{};
 	RenderGraph m_graph;
 	ExecutionPlan m_plan;
@@ -922,14 +1123,12 @@ public:
 			}
 		}
 		const RenderInstance instance = Make_Instance(new_mesh, material, transform, bounds, flags, visibility_mask, new_pose, skeleton);
+		const std::array<MeshHandle, Mesh::MaxLodCount + 1> old_lod_meshes = m_lod_meshes;
+		const InstanceHandle old_instance = m_instance;
 		if (m_instance.Is_Valid()) {
 			if (!renderer.Update_Instance(m_instance, instance)) {
 				cleanup_new_resources();
 				return false;
-			}
-			for (std::size_t index = 0; index < m_lod_count; ++index) {
-				if (m_lod_meshes[index].Is_Valid())
-					renderer.Destroy_Mesh(m_lod_meshes[index]);
 			}
 		} else {
 			const InstanceHandle new_instance = renderer.Create_Instance(instance);
@@ -952,6 +1151,12 @@ public:
 		m_skinned = vertex_format == MeshVertexFormat::Position3Color4UV2Skinned;
 		m_model_instance = std::move(prepared_model_instance);
 		m_pose = new_pose;
+		if (old_instance.Is_Valid() && old_instance != m_instance)
+			renderer.Destroy_Instance(old_instance);
+		for (const MeshHandle old_mesh : old_lod_meshes) {
+			if (old_mesh.Is_Valid())
+				renderer.Destroy_Mesh(old_mesh);
+		}
 		const AnimationClipHandle old_animation = m_animation;
 		const AnimationClipHandle old_secondary_animation = m_secondary_animation;
 		m_animation = animation;
@@ -1077,6 +1282,16 @@ public:
 		return renderer.Is_Initialized() && m_active && m_animation.Is_Valid()
 			&& m_model_instance.Set_Animation_Mode(renderer.Skeletons(), renderer.Animations(), mode)
 			&& (!m_skinned || Sync_Pose(renderer));
+	}
+
+	bool Set_Bone_Local_Transform(StaticMeshRenderer &renderer, BoneHandle bone,
+		const RenderTransform &local_transform) noexcept
+	{
+		if (!renderer.Is_Initialized() || !m_active || !m_model_instance.skeleton.Is_Valid())
+			return false;
+		if (!m_model_instance.Set_Bone_Local_Transform(renderer.Skeletons(), bone, local_transform))
+			return false;
+		return !m_skinned || Sync_Pose(renderer);
 	}
 
 	bool Set_Submesh_Visibility(StaticMeshRenderer &renderer, SubmeshVisibilityMask visibility_mask) noexcept
@@ -1235,6 +1450,15 @@ public:
 	bool Get_Bone_Transform(const StaticMeshRenderer &renderer, BoneHandle bone, RenderTransform &result) const noexcept
 	{
 		return m_model_instance.Get_Bone_Transform(renderer.Skeletons(), bone, result);
+	}
+
+	bool Get_Transform(RenderTransform &result) const noexcept
+	{
+		if (!m_active)
+			return false;
+
+		result = m_model_instance.transform;
+		return true;
 	}
 
 	bool Get_Attachment_Transform(const StaticMeshRenderer &renderer, AttachmentHandle attachment, RenderTransform &result) const noexcept

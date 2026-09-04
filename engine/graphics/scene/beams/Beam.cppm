@@ -568,16 +568,19 @@ public:
 
 		if (!commands.Set_Render_Targets(color_target, depth_target)
 			|| !commands.Set_Viewport(input.viewport)
-			|| !commands.Set_Bindless_Resources(input.bindless_resources)
-			|| !commands.Set_Vertex_Buffer(0, input.vertex_buffer, sizeof(BeamVertex), 0))
+			|| !commands.Set_Bindless_Resources(input.bindless_resources))
 			return false;
 
-		if (input.draw_ranges.empty())
-			return commands.Bind_Pipeline(input.pipeline) && commands.Draw(input.vertex_count);
+		if (input.draw_ranges.empty()) {
+			return commands.Bind_Pipeline(input.pipeline)
+				&& commands.Set_Vertex_Buffer(0, input.vertex_buffer, sizeof(BeamVertex), 0)
+				&& commands.Draw(input.vertex_count);
+		}
 
 		for (const BeamDrawRange &range : input.draw_ranges) {
 			if (!range.pipeline.Is_Valid() || range.vertex_count == 0
 				|| !commands.Bind_Pipeline(range.pipeline)
+				|| !commands.Set_Vertex_Buffer(0, input.vertex_buffer, sizeof(BeamVertex), 0)
 				|| !commands.Draw(range.vertex_count, range.first_vertex))
 				return false;
 		}

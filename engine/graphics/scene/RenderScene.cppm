@@ -129,7 +129,8 @@ export enum class RenderInstanceFlags : std::uint32_t
 	None = 0,
 	CastsShadow = 1u << 0,
 	ReceivesShadow = 1u << 1,
-	Hidden = 1u << 2
+	Hidden = 1u << 2,
+	DoubleSided = 1u << 3
 };
 
 export constexpr RenderInstanceFlags operator|(RenderInstanceFlags left, RenderInstanceFlags right) noexcept
