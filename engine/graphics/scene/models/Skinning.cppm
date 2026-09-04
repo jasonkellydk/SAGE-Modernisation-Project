@@ -126,6 +126,15 @@ public:
 		return Is_Valid(handle) ? m_slots[handle.Get_Index()].range : BoneMatrixRange{};
 	}
 
+	bool Transform(PoseHandle handle, std::uint32_t bone, RenderTransform &transform) const noexcept
+	{
+		const BoneMatrixRange range = Range(handle);
+		if (!range.Is_Valid() || bone >= range.count)
+			return false;
+		transform.matrix = m_matrices[range.first_matrix + bone].matrix;
+		return true;
+	}
+
 	std::span<const GPUBoneMatrixData> Matrices() const noexcept
 	{
 		return m_matrices;

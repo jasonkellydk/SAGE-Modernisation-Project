@@ -153,6 +153,7 @@ export struct RenderInstance final
 	RenderBounds bounds{};
 	MeshHandle mesh{};
 	MaterialHandle material{};
+	SkeletonHandle skeleton{};
 	PoseHandle pose{};
 	RenderInstanceFlags flags = RenderInstanceFlags::None;
 	SubmeshVisibilityMask visibility_mask = All_Submeshes_Visible;
@@ -196,6 +197,7 @@ export struct RenderInstanceView final
 	RenderWorldBounds world_bounds{};
 	const MeshHandle &mesh;
 	const MaterialHandle &material;
+	const SkeletonHandle &skeleton;
 	const PoseHandle &pose;
 	const RenderInstanceFlags &flags;
 	const SubmeshVisibilityMask &visibility_mask;
@@ -210,6 +212,7 @@ export struct RenderSceneData final
 	RenderWorldBoundsData world_bounds{};
 	std::span<const MeshHandle> meshes{};
 	std::span<const MaterialHandle> materials{};
+	std::span<const SkeletonHandle> skeletons{};
 	std::span<const PoseHandle> poses{};
 	std::span<const RenderInstanceFlags> flags{};
 	std::span<const SubmeshVisibilityMask> visibility_masks{};
@@ -234,6 +237,7 @@ public:
 			column.reserve(capacity);
 		m_meshes.reserve(capacity);
 		m_materials.reserve(capacity);
+		m_skeletons.reserve(capacity);
 		m_poses.reserve(capacity);
 		m_flags.reserve(capacity);
 		m_visibility_masks.reserve(capacity);
@@ -295,6 +299,7 @@ public:
 		m_world_bounds_columns[3].push_back(world_bounds.radius);
 		m_meshes.push_back(instance.mesh);
 		m_materials.push_back(instance.material);
+		m_skeletons.push_back(instance.skeleton);
 		m_poses.push_back(instance.pose);
 		m_flags.push_back(instance.flags);
 		m_visibility_masks.push_back(instance.visibility_mask);
@@ -330,6 +335,7 @@ public:
 			}
 			m_meshes[dense_index] = m_meshes[last_dense_index];
 			m_materials[dense_index] = m_materials[last_dense_index];
+			m_skeletons[dense_index] = m_skeletons[last_dense_index];
 			m_poses[dense_index] = m_poses[last_dense_index];
 			m_flags[dense_index] = m_flags[last_dense_index];
 			m_visibility_masks[dense_index] = m_visibility_masks[last_dense_index];
@@ -347,6 +353,7 @@ public:
 			column.pop_back();
 		m_meshes.pop_back();
 		m_materials.pop_back();
+		m_skeletons.pop_back();
 		m_poses.pop_back();
 		m_flags.pop_back();
 		m_visibility_masks.pop_back();
@@ -378,9 +385,45 @@ public:
 		m_world_bounds_columns[3][dense_index] = world_bounds.radius;
 		m_meshes[dense_index] = instance.mesh;
 		m_materials[dense_index] = instance.material;
+		m_skeletons[dense_index] = instance.skeleton;
 		m_poses[dense_index] = instance.pose;
 		m_flags[dense_index] = instance.flags;
 		m_visibility_masks[dense_index] = instance.visibility_mask;
+		return true;
+	}
+
+	bool Update_Transform(InstanceHandle handle, const RenderTransform &transform) noexcept
+	{
+		if (!Is_Valid_Handle(handle))
+			return false;
+
+		const std::uint32_t dense_index = m_slots[handle.Get_Index()].dense_index;
+		for (std::size_t column = 0; column < m_transform_columns.size(); ++column)
+			m_transform_columns[column][dense_index] = transform.matrix[column];
+		const RenderBounds bounds{
+			{
+				m_bounds_columns[0][dense_index],
+				m_bounds_columns[1][dense_index],
+				m_bounds_columns[2][dense_index]
+			},
+			m_bounds_columns[3][dense_index]
+		};
+		const RenderWorldBounds world_bounds = Build_World_Bounds(transform, bounds);
+		m_world_bounds_columns[0][dense_index] = world_bounds.center_x;
+		m_world_bounds_columns[1][dense_index] = world_bounds.center_y;
+		m_world_bounds_columns[2][dense_index] = world_bounds.center_z;
+		m_world_bounds_columns[3][dense_index] = world_bounds.radius;
+		return true;
+	}
+
+	bool Get_Transform(InstanceHandle handle, RenderTransform &transform) const noexcept
+	{
+		if (!Is_Valid_Handle(handle))
+			return false;
+
+		const std::uint32_t dense_index = m_slots[handle.Get_Index()].dense_index;
+		for (std::size_t column = 0; column < m_transform_columns.size(); ++column)
+			transform.matrix[column] = m_transform_columns[column][dense_index];
 		return true;
 	}
 
@@ -715,6 +758,7 @@ public:
 			Make_World_Bounds_Data(),
 			m_meshes,
 			m_materials,
+			m_skeletons,
 			m_poses,
 			m_flags,
 			m_visibility_masks,
@@ -842,6 +886,7 @@ private:
 			Make_World_Bounds(dense_index),
 			m_meshes[dense_index],
 			m_materials[dense_index],
+			m_skeletons[dense_index],
 			m_poses[dense_index],
 			m_flags[dense_index],
 			m_visibility_masks[dense_index]
@@ -955,6 +1000,7 @@ private:
 	std::array<HotFloatVector, 4> m_world_bounds_columns;
 	HotVector<MeshHandle> m_meshes;
 	HotVector<MaterialHandle> m_materials;
+	HotVector<SkeletonHandle> m_skeletons;
 	HotVector<PoseHandle> m_poses;
 	HotVector<RenderInstanceFlags> m_flags;
 	HotVector<SubmeshVisibilityMask> m_visibility_masks;

@@ -18,6 +18,7 @@ export import Graphics.Resources.Materials.Material;
 export import Graphics.Resources.Residency.GPUResourceResidency;
 export import Graphics.Scene.DrawGeneration;
 export import Graphics.Scene.GPUScene;
+export import Graphics.Scene.Attachments;
 export import Graphics.Scene.Models.ModelInstance;
 export import Graphics.Scene.Models.ModelVisibility;
 export import Graphics.Scene.Models.Skinning;
@@ -116,6 +117,7 @@ public:
 		m_device = &device;
 		m_mesh_sources.reserve(max_meshes);
 		m_scene.Reserve(max_instances);
+		m_attachments.Reserve(max_instances);
 		m_skeletons.Reserve(max_meshes);
 		m_animations.Reserve(max_meshes);
 		m_bone_matrices.Reserve(max_instances, max_bone_matrices);
@@ -279,6 +281,7 @@ public:
 		m_view_buffer = {};
 		m_bone_buffer = {};
 		m_mesh_sources.clear();
+		m_attachments.Clear();
 		m_skeletons = {};
 		m_animations = {};
 		m_bone_matrices.Clear();
@@ -469,6 +472,7 @@ public:
 	InstanceHandle Create_Instance(const RenderInstance &instance)
 	{
 		if (!Is_Initialized() || !instance.mesh.Is_Valid() || m_meshes.Resolve(instance.mesh) == nullptr || instance.material != m_default_material
+			|| (instance.skeleton.Is_Valid() && m_skeletons.Resolve(instance.skeleton) == nullptr)
 			|| (instance.pose.Is_Valid() && !m_bone_matrices.Is_Valid(instance.pose)))
 			return {};
 
@@ -480,6 +484,7 @@ public:
 	bool Update_Instance(InstanceHandle handle, const RenderInstance &instance) noexcept
 	{
 		if (!Is_Initialized() || instance.material != m_default_material || !m_meshes.Resolve(instance.mesh)
+			|| (instance.skeleton.Is_Valid() && m_skeletons.Resolve(instance.skeleton) == nullptr)
 			|| (instance.pose.Is_Valid() && !m_bone_matrices.Is_Valid(instance.pose)) || !m_scene.Update(handle, instance))
 			return false;
 
@@ -505,6 +510,44 @@ public:
 		return Record_Dirty_Instance(handle);
 	}
 
+	AttachmentLinkHandle Attach_Instance(InstanceHandle child, InstanceHandle parent,
+		const AttachmentTarget &target, const RenderTransform &child_local_transform = Identity_Render_Transform())
+	{
+		if (!Is_Initialized())
+			return {};
+		return m_attachments.Attach(m_scene, child, parent, target, child_local_transform);
+	}
+
+	bool Detach_Instance(AttachmentLinkHandle handle) noexcept
+	{
+		return Is_Initialized() && m_attachments.Detach(handle);
+	}
+
+	bool Update_Attachment_Target(AttachmentLinkHandle handle, const AttachmentTarget &target) noexcept
+	{
+		return Is_Initialized() && m_attachments.Update_Target(handle, target);
+	}
+
+	bool Update_Attachment_Transform(AttachmentLinkHandle handle, const RenderTransform &transform) noexcept
+	{
+		return Is_Initialized() && m_attachments.Update_Child_Local_Transform(handle, transform);
+	}
+
+	bool Update_Attachments() noexcept
+	{
+		if (!Is_Initialized() || !m_attachments.Update(m_scene, m_skeletons, m_bone_matrices))
+			return false;
+		for (const InstanceHandle child : m_attachments.Changed_Children())
+			Record_Dirty_Instance(child);
+		m_attachments.Clear_Changed();
+		return true;
+	}
+
+	const AttachmentGraph &Attachments() const noexcept
+	{
+		return m_attachments;
+	}
+
 	std::size_t Mesh_Part_Count(MeshHandle handle) const noexcept
 	{
 		const Mesh *mesh = m_meshes.Resolve(handle);
@@ -513,6 +556,7 @@ public:
 
 	bool Destroy_Instance(InstanceHandle handle) noexcept
 	{
+		m_attachments.Remove_Instance(handle);
 		if (!m_scene.Destroy(handle))
 			return false;
 
@@ -541,6 +585,8 @@ public:
 	bool Render(CommandList &command_list, const FrameTargets &targets, bool clear_targets = true) noexcept
 	{
 		if (!Is_Initialized() || !targets.backbuffer.texture.Is_Valid() || !targets.depth.texture.Is_Valid())
+			return false;
+		if (!Update_Attachments())
 			return false;
 		if (!Sync_GPU_Data())
 			return false;
@@ -714,6 +760,7 @@ private:
 	SkeletonPool m_skeletons;
 	AnimationClipPool m_animations;
 	BoneMatrixTable m_bone_matrices;
+	AttachmentGraph m_attachments;
 	TexturePool m_textures;
 	SamplerPool m_samplers;
 	MaterialPool m_materials;
@@ -866,7 +913,7 @@ public:
 				return false;
 			}
 		}
-		const RenderInstance instance = Make_Instance(new_mesh, material, transform, bounds, flags, visibility_mask, new_pose);
+		const RenderInstance instance = Make_Instance(new_mesh, material, transform, bounds, flags, visibility_mask, new_pose, skeleton);
 		if (m_instance.Is_Valid()) {
 			if (!renderer.Update_Instance(m_instance, instance)) {
 				cleanup_new_resources();
@@ -919,7 +966,8 @@ public:
 		if (!renderer.Is_Initialized() || !m_active || !m_instance.Is_Valid() || !m_mesh.Is_Valid() || !m_material.Is_Valid())
 			return false;
 
-		const RenderInstance instance = Make_Instance(m_mesh, m_material, transform, m_bounds, flags, m_visibility_mask, m_pose);
+		const RenderInstance instance = Make_Instance(m_mesh, m_material, transform, m_bounds, flags, m_visibility_mask, m_pose,
+			m_model_instance.skeleton);
 		if (!renderer.Update_Instance(m_instance, instance))
 			return false;
 
@@ -1048,7 +1096,7 @@ public:
 			return false;
 
 		const RenderInstance instance = Make_Instance(m_mesh, m_material, transform,
-			m_bounds, m_flags | RenderInstanceFlags::Hidden, m_visibility_mask, m_pose);
+			m_bounds, m_flags | RenderInstanceFlags::Hidden, m_visibility_mask, m_pose, m_model_instance.skeleton);
 		if (!renderer.Update_Instance(m_instance, instance))
 			return false;
 
@@ -1178,13 +1226,15 @@ private:
 	}
 
 	static RenderInstance Make_Instance(MeshHandle mesh, MaterialHandle material, const RenderTransform &transform,
-		const RenderBounds &bounds, RenderInstanceFlags flags, SubmeshVisibilityMask visibility_mask, PoseHandle pose = {}) noexcept
+		const RenderBounds &bounds, RenderInstanceFlags flags, SubmeshVisibilityMask visibility_mask, PoseHandle pose = {},
+		SkeletonHandle skeleton = {}) noexcept
 	{
 		RenderInstance instance;
 		instance.transform = transform;
 		instance.bounds = bounds;
 		instance.mesh = mesh;
 		instance.material = material;
+		instance.skeleton = skeleton;
 		instance.pose = pose;
 		instance.flags = flags;
 		instance.visibility_mask = visibility_mask;
