@@ -619,6 +619,12 @@ void DX11RenderStateBackend<Host>::Set_Fog_Color(unsigned color)
 }
 
 template <typename Host>
+unsigned DX11RenderStateBackend<Host>::Get_Depth_Bias() const
+{
+    return this->State().depth_bias;
+}
+
+template <typename Host>
 void DX11RenderStateBackend<Host>::Set_Depth_Bias(unsigned bias)
 {
 	this->State().depth_bias = bias;
@@ -767,6 +773,27 @@ template <typename Host>
 void DX11RenderStateBackend<Host>::Set_NPatch_Segments(float segments)
 {
 	this->State().npatch_segments = segments;
+}
+
+template <typename Host>
+RenderBackendFogState DX11RenderStateBackend<Host>::Get_Fog_State() const
+{
+    const auto& state=this->State();
+    RenderBackendFogState result;
+    result.enabled=state.fog_enabled;
+    std::memcpy(result.color,state.fog_color,sizeof(result.color));
+    result.start=state.fog_start;
+    result.end=state.fog_end;
+    return result;
+}
+
+template <typename Host>
+RenderBackendStencilState DX11RenderStateBackend<Host>::Get_Stencil_State() const
+{
+    const auto& state = this->State();
+    return {state.stencil_enabled,state.stencil_reference,state.stencil_read_mask,
+        state.stencil_write_mask,state.stencil_function,state.stencil_fail,
+        state.stencil_z_fail,state.stencil_pass};
 }
 
 template <typename Host>

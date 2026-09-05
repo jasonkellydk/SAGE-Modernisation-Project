@@ -39,7 +39,6 @@
 #include "GameClient/InGameUI.h"
 #include "GameClient/View.h"
 #include "W3DDevice/GameClient/W3DView.h"
-#include "WW3D2/Render2D.h"
 #include "WW3D2/RendObj.h"
 #include "WW3D2/Line3D.h"
 

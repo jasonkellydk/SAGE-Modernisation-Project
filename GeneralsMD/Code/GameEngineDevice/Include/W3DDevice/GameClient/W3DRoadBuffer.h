@@ -43,6 +43,10 @@
 //-----------------------------------------------------------------------------
 
 #pragma once
+#include <array>
+#include <span>
+#include <vector>
+import Graphics.Scene.Surfaces.Renderer;
 
 //-----------------------------------------------------------------------------
 //           Includes
@@ -153,8 +157,9 @@ public:
 	~RoadType();
 protected:
 	TextureClass *m_roadTexture;	///<Roads texture
-	RenderBackendVertexBuffer	*m_vertexRoad;	///<Road vertex buffer owned by the active render backend.
-	RenderBackendIndexBuffer			*m_indexRoad;	///<indices defining triangles for the road drawing.
+	std::vector<VertexFormatXYZDUV1> m_vertices;
+	std::vector<UnsignedShort> m_indices;
+	Graphics::SurfaceMeshHandle m_mesh;
 	Int			m_numRoadVertices; ///<Number of vertices used in m_vertexRoad.
 	Int			m_numRoadIndices;	///<Number of indices used in b_indexRoad;
 	Int					  m_uniqueID;     ///< ID of the road type in INI.
@@ -166,12 +171,14 @@ protected:
 #endif
 public:
 	void loadTexture(AsciiString path, Int id);
-	void applyTexture();
+	bool uploadGeometry();
+	TextureClass *getTexture() const { return m_roadTexture; }
+	Graphics::SurfaceMeshHandle getMesh() const { return m_mesh; }
 	Int getStacking() {return m_stackingOrder;}
 	void setStacking(Int order) {m_stackingOrder = order;}
 	Int getUniqueID() {return m_uniqueID;};
-	RenderBackendVertexBuffer	*getVB() {return m_vertexRoad;};
-	RenderBackendIndexBuffer		*getIB() {return m_indexRoad;}
+	VertexFormatXYZDUV1 *getVB() { return m_vertices.data(); }
+	UnsignedShort *getIB() { return m_indices.data(); }
 	Int getNumVertices() {return m_numRoadVertices;}
 	void setNumIndices(Int num) {m_numRoadIndices=num;}
 	void setNumVertices(Int num) {m_numRoadVertices=num;}
@@ -271,7 +278,6 @@ protected:
 														Real uOffset, Real vOffset, Real uScale, Real vScale);
 	void loadLit4PtSection(RoadSegment *pRoad, UnsignedShort *ib, VertexFormatXYZDUV1 *vb, RefRenderObjListIterator *pDynamicLightsIterator);
 	void loadRoadsInVertexAndIndexBuffers(); ///< Fills the index and vertex buffers for drawing.
-	void loadLitRoadsInVertexAndIndexBuffers(RefRenderObjListIterator *pDynamicLightsIterator); ///< Fills the index and vertex buffers for drawing.
 	void loadRoadSegment(UnsignedShort *ib, VertexFormatXYZDUV1 *vb, RoadSegment *pRoad); ///< Fills the index and vertex buffers for drawing 1 segment.
 	void allocateRoadBuffers();							 ///< Allocates the buffers.
 	void freeRoadBuffers();									 ///< Frees the index and vertex buffers.

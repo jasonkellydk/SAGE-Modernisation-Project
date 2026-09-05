@@ -67,8 +67,8 @@ private:
 
 	struct SegInfo
 	{
-		Graphics::BeamHandle modernLine{};
-		Graphics::BeamHandle modernSoftLine{};
+		Graphics::BeamHandle graphicsLine{};
+		Graphics::BeamHandle graphicsSoftLine{};
 		Real wobbleAxisX = 0.0f;
 		Real wobbleAxisY = 0.0f;
 	};
@@ -86,12 +86,12 @@ private:
 	Real m_wobbleRate;
 	Real m_curWobblePhase;
 	Real m_curZOffset;
-	Bool m_modernEnabled;
-	Bool m_modernAttempted;
+	Bool m_graphicsEnabled;
+	Bool m_graphicsAttempted;
 
 	void tossSegments();
 	void buildSegments();
-	bool createModernSegments() noexcept;
-	void disableModernSegments() noexcept;
+	bool createGraphicsSegments() noexcept;
+	void disableGraphicsSegments() noexcept;
 
 };

@@ -92,6 +92,8 @@
 #include "WW3D2/IndexBuffer.h"
 #include "WW3D2/VertexBuffer.h"
 #include "SortingRenderer.h"
+#include "GraphicsGeometry.h"
+#include <vector>
 #include "WWMath/Vector3i.h"
 #include "VisRasterizer.h"
 
@@ -537,66 +539,29 @@ void RingRenderObjClass::render_ring(RenderInfoClass & rinfo,const Vector3 & cen
 
 	// Enable sorting if the primitive is translucent, alpha testing is not enabled, and sorting is enabled globally.
 	const bool sort = (RingShader.Get_Dst_Blend_Func() != ShaderClass::DSTBLEND_ZERO) && (RingShader.Get_Alpha_Test() == ShaderClass::ALPHATEST_DISABLE) && (WW3D::Is_Sorting_Enabled());
-	const unsigned int buffer_type = sort ? BUFFER_TYPE_DYNAMIC_SORTING : BUFFER_TYPE_DYNAMIC_RENDER;
-
-	DynamicVBAccessClass vb(buffer_type, RenderBackend_Dynamic_Vertex_Format, ring.Vertex_ct);
-	{
-		DynamicVBAccessClass::WriteLockClass Lock(&vb);
-		VertexFormatXYZNDUV2 *vb = Lock.Get_Formatted_Vertex_Array();
-
-		//
-		// set up the vertex color+alpha
-		//
-		unsigned color;
-		if (RingShader.Get_Dst_Blend_Func () == ShaderClass::DSTBLEND_ONE) {
-			color = WW3D::Get_Render_Backend()->Pack_Color(Alpha * Color,1.0f);
-		} else {
-			color = WW3D::Get_Render_Backend()->Pack_Color(Color,Alpha);
-		}
-
-		for (int i=0; i<ring.Vertex_ct; i++)
-		{
-			vb->x = ring.vtx[i].X;
-			vb->y = ring.vtx[i].Y;
-			vb->z = ring.vtx[i].Z;
-
-			vb->nx = ring.vtx_normal[i].X;		// may not need this!
-			vb->ny = ring.vtx_normal[i].Y;
-			vb->nz = ring.vtx_normal[i].Z;
-
-			vb->diffuse = color;
-
-			if (RingTexture) {
-				vb->u1 = ring.vtx_uv[i].X;
-				vb->v1 = ring.vtx_uv[i].Y;
-			}
-			vb++;
-		}
-	}
-
-	DynamicIBAccessClass ib(buffer_type, ring.face_ct * 3);
-	{
-		DynamicIBAccessClass::WriteLockClass Lock(&ib);
-		unsigned short *mem=Lock.Get_Index_Array();
-		for (int i=0; i<ring.face_ct; i++)
-		{
-			mem[3*i]=ring.tri_poly[i].I;
-			mem[3*i+1]=ring.tri_poly[i].J;
-			mem[3*i+2]=ring.tri_poly[i].K;
-		}
-	}
-
-	WW3D::Get_Render_Backend()->Set_Vertex_Buffer(vb);
-	WW3D::Get_Render_Backend()->Set_Index_Buffer(ib,0);
-
-	if (sort) {
-		SortingRendererClass::Insert_Triangles(Get_Bounding_Sphere(), 0, ring.face_ct, 0, ring.Vertex_ct);
-	} else {
-		WW3D::Get_Render_Backend()->Draw_Indexed_Primitives(
-			RenderBackendPrimitiveType::TriangleList, 0, 0,
-			ring.Vertex_ct, 0, ring.face_ct);
-	}
-
+    const unsigned color=RingShader.Get_Dst_Blend_Func()==ShaderClass::DSTBLEND_ONE
+        ? WW3D::Get_Render_Backend()->Pack_Color(Alpha*Color,1.0f)
+        : WW3D::Get_Render_Backend()->Pack_Color(Color,Alpha);
+    std::vector<VertexFormatXYZDUV1> vertices(ring.Vertex_ct);
+    for (int i=0;i<ring.Vertex_ct;++i) {
+        auto& vertex=vertices[i];
+        vertex.x=ring.vtx[i].X; vertex.y=ring.vtx[i].Y; vertex.z=ring.vtx[i].Z;
+        vertex.diffuse=color;
+        if (RingTexture) { vertex.u1=ring.vtx_uv[i].X; vertex.v1=ring.vtx_uv[i].Y; }
+    }
+    std::vector<unsigned> indices(ring.face_ct*3);
+    for (int i=0;i<ring.face_ct;++i) {
+        indices[i*3]=ring.tri_poly[i].I; indices[i*3+1]=ring.tri_poly[i].J;
+        indices[i*3+2]=ring.tri_poly[i].K;
+    }
+    Matrix4x4 world,view,projection;
+    auto* backend=WW3D::Get_Render_Backend();
+    backend->Get_Transform(RenderBackendTransform::World,world);
+    backend->Get_Transform(RenderBackendTransform::View,view);
+    backend->Get_Transform(RenderBackendTransform::Projection,projection);
+    const Matrix4x4 camera_space=view*world;
+    Draw_Graphics_Prelit_Geometry(vertices,indices,projection*camera_space,RingShader,RingTexture,
+        sort ? &camera_space : nullptr);
 }
 
 

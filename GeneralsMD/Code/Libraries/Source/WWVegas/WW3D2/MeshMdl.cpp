@@ -73,8 +73,7 @@ MeshModelClass::MeshModelClass() :
 	AlternateMatDesc(nullptr),
 	CurMatDesc(nullptr),
 	MatInfo(nullptr),
-	GapFiller(nullptr),
-	RenderBackendData(nullptr)
+	GapFiller(nullptr)
 {
 	Set_Flag(DIRTY_BOUNDS,true);
 
@@ -90,9 +89,7 @@ MeshModelClass::MeshModelClass(const MeshModelClass & that) :
 	AlternateMatDesc(nullptr),
 	CurMatDesc(nullptr),
 	MatInfo(nullptr),
-	GapFiller(nullptr),
-	HasBeenInUse(false),
-	RenderBackendData(nullptr)
+	GapFiller(nullptr)
 {
 	DefMatDesc = W3DNEW MeshMatDescClass(*(that.DefMatDesc));
 	if (that.AlternateMatDesc != nullptr) {
@@ -117,9 +114,6 @@ MeshModelClass::~MeshModelClass()
 MeshModelClass & MeshModelClass::operator = (const MeshModelClass & that)
 {
 	if (this != &that) {
-		// Remove all polygon renderers, this will remove the mesh from the rendering system.
-		// The mesh will be initialized to rendering system the next time it is rendered.
-		TheMeshRenderer.Unregister_Mesh_Type(this);
 
 		MeshGeometryClass::operator = (that);
 
@@ -156,7 +150,6 @@ void MeshModelClass::Reset(int polycount,int vertcount,int passcount)
 
 	// Release everything we have and reset to initial state
 
-	TheMeshRenderer.Unregister_Mesh_Type(this);
 
 	MatInfo->Reset();
 	DefMatDesc->Reset(polycount,vertcount,passcount);
@@ -167,31 +160,7 @@ void MeshModelClass::Reset(int polycount,int vertcount,int passcount)
 	CurMatDesc = DefMatDesc;
 }
 
-void MeshModelClass::Register_For_Rendering()
-{
-	HasBeenInUse=true;
-//WW3D::Set_NPatches_Level(1);
-	if (WW3D::Get_NPatches_Level()>1) {
-		if (WW3D::Get_NPatches_Gap_Filling_Mode()!=WW3D::NPATCHES_GAP_FILLING_DISABLED) {
-			Init_For_NPatch_Rendering();
-		}
-		else {
-			delete GapFiller;
-			GapFiller=nullptr;
-		}
-	}
-	else {
-		if (WW3D::Get_NPatches_Gap_Filling_Mode()==WW3D::NPATCHES_GAP_FILLING_FORCE) {
-			Init_For_NPatch_Rendering();
-		}
-		else {
-			delete GapFiller;
-			GapFiller=nullptr;
-		}
-	}
 
-	TheMeshRenderer.Register_Mesh_Type(this);
-}
 
 void MeshModelClass::Delete_Gap_Filler()
 {
@@ -217,9 +186,6 @@ void MeshModelClass::Replace_Texture(TextureClass* texture,TextureClass* new_tex
 					Set_Single_Texture(new_texture,pass,stage);
 				}
 			}
-			// If this mesh model has been initialized for rendering, update the
-			// backend-owned material batches as well.
-			TheMeshRenderer.Update_Mesh_Texture(this, texture, new_texture, pass, stage);
 		}
 	}
 }
@@ -242,16 +208,10 @@ void MeshModelClass::Replace_VertexMaterial(VertexMaterialClass* vmat,VertexMate
 				Set_Single_Material(new_vmat,pass);
 			}
 		}
-		// If this mesh model has been initialized for rendering, update the
-		// backend-owned material batches as well.
-		TheMeshRenderer.Update_Mesh_Material(this, vmat, new_vmat, pass);
 	}
 }
 
-bool MeshModelClass::Has_Polygon_Renderers() const
-{
-	return TheMeshRenderer.Has_Mesh_Renderers(this);
-}
+
 
 void MeshModelClass::Shadow_Render(SpecialRenderInfoClass & rinfo,const Matrix3D & tm,const HTreeClass * htree)
 {
@@ -312,7 +272,6 @@ void MeshModelClass::Enable_Alternate_Material_Description(bool onoff)
 				modify_for_overbright();
 
 			// TODO: Invalidate just this meshes DX9 data!!!
-			TheMeshRenderer.Invalidate();
 		}
 	} else {
 		if (CurMatDesc != DefMatDesc) {
@@ -324,8 +283,6 @@ void MeshModelClass::Enable_Alternate_Material_Description(bool onoff)
 			if (WW3D::Is_Overbright_Modify_On_Load_Enabled())
 				modify_for_overbright();
 
-			// TODO: Invalidate this meshes DX9 data!!!
-			TheMeshRenderer.Invalidate();
 		}
 	}
 }

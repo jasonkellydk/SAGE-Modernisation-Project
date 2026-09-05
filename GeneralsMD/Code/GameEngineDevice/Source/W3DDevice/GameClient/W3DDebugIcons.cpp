@@ -47,6 +47,11 @@
 //-----------------------------------------------------------------------------
 
 #include "W3DDevice/GameClient/W3DDebugIcons.h"
+#include "W3DDevice/GameClient/W3DGraphicsResources.h"
+#include "WW3D2/RInfo.h"
+#include <vector>
+import Graphics.Backends.DX11.Coexistence;
+import Graphics.Scene.Debug.Renderer;
 
 #include "Common/GlobalData.h"
 #include "GameLogic/GameLogic.h"
@@ -101,7 +106,7 @@ Int				 W3DDebugIcons::m_maxDebugIcons = 0;
 
 W3DDebugIcons::~W3DDebugIcons()
 {
-	REF_PTR_RELEASE(m_vertexMaterialClass);
+	Graphics::Get_Surface_Renderer().Destroy_Mesh(m_mesh);
 	delete[] m_debugIcons;
 	m_debugIcons = nullptr;
 	m_numDebugIcons = 0;
@@ -111,7 +116,7 @@ W3DDebugIcons::W3DDebugIcons(Int mapWidth, Int mapHeight)
 {
 	m_maxDebugIcons = mapWidth * mapHeight;
 	//go with a preset material for now.
-	m_vertexMaterialClass=VertexMaterialClass::Get_Preset(VertexMaterialClass::PRELIT_DIFFUSE);
+	
 	allocateIconsArray();
 }
 
@@ -207,137 +212,43 @@ void W3DDebugIcons::addIcon(const Coord3D *pos, Real width, Int numFramesDuratio
 }
 
 /** Render draws into the current 3d context. */
-void W3DDebugIcons::Render(RenderInfoClass & rinfo)
+void W3DDebugIcons::Render(RenderInfoClass& info)
 {
-	//
-	if (WW3D::Are_Static_Sort_Lists_Enabled()) {
-		WW3D::Add_To_Static_Sort_List(this, 1);
-		return;
-	}
-	//
-	Bool anyVanished = false;
-	if (m_numDebugIcons==0) return;
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	if (backend == nullptr) return;
-	backend->Apply_Render_State_Changes();
-
-	backend->Set_Material(m_vertexMaterialClass);
-	backend->Set_Texture(0, nullptr);
-	backend->Apply_Render_State_Changes();
-
-	Matrix3D tm(Transform);
-	backend->Set_Transform(RenderBackendTransform::World,tm);
-
-	Int numRect = m_numDebugIcons;
-	static Real offset = 30;
-	const Int MAX_RECT = 5000;  // cap drawing n rects.
-	if (numRect > MAX_RECT) numRect = MAX_RECT;
-	offset+= 0.5f;
-	Int k;
-	for (k=0; k<m_numDebugIcons;) {
-		Int curIndex = 0;
-		Int	numVertex = 0;
-		RenderBackendVertexBuffer *vertex_buffer = backend->Create_Vertex_Buffer(
-			static_cast<unsigned>(numRect * 4) * sizeof(VertexFormatXYZNDUV2),
-			RenderBackendVertexFormat::PositionNormalDiffuseTexture2, true);
-		RenderBackendIndexBuffer *index_buffer = backend->Create_Index_Buffer(
-			static_cast<unsigned>(numRect * 6) * sizeof(UnsignedShort), true);
-		if (vertex_buffer == nullptr || index_buffer == nullptr) {
-			RenderBackend_Release_Vertex_Buffer(backend, vertex_buffer);
-			RenderBackend_Release_Index_Buffer(backend, index_buffer);
-			break;
-		}
-		bool buffers_locked = false;
-		{
-		RenderBackendVertexBufferLock vertex_lock(backend, vertex_buffer, 0, 0,
-			RenderBackendBufferLockMode::Discard);
-		RenderBackendIndexBufferLock index_lock(backend, index_buffer, 0, 0,
-			RenderBackendBufferLockMode::Discard);
-		VertexFormatXYZNDUV2 *vb = vertex_lock.Is_Locked() ?
-			(VertexFormatXYZNDUV2*)vertex_lock.Get_Data() : nullptr;
-		buffers_locked = vb != nullptr && index_lock.Is_Locked();
-		if (buffers_locked) {
-
-		UnsignedShort *ib=(UnsignedShort*)index_lock.Get_Data();
-		UnsignedShort *curIb = ib;
-
-//		VertexFormatXYZNDUV2 *curVb = vb;
- 		Real shadeR, shadeG, shadeB;
-		shadeR = 0;
-		shadeG = 0;
-		shadeB = 255;
-		for(;  numVertex<numRect*4 && k<m_numDebugIcons; k++) {
-			Int theAlpha = 64;
-			const Int FADE_FRAMES = 100;
-			Int framesLeft = m_debugIcons[k].endFrame - TheGameLogic->getFrame();
-			if (framesLeft < 1) {
-				anyVanished = true;
-				continue;
-			}
-			if (framesLeft<FADE_FRAMES) {
-				theAlpha *= (Real)framesLeft/FADE_FRAMES;
-			}
-			RGBColor clr = m_debugIcons[k].color;
-			Real halfWidth = m_debugIcons[k].width/2;
-			Int diffuse = clr.getAsInt() | ((int)theAlpha << 24);
-			Coord3D pt1 = m_debugIcons[k].position;
-			vb->x=	pt1.x-halfWidth;
-			vb->y=	pt1.y-halfWidth;
-			vb->z=  pt1.z;
-			vb->diffuse=diffuse;	 // b g<<8 r<<16 a<<24.
-			vb->u1=0 ;
-			vb->v1=0 ;
-			vb++;
-			vb->x=	pt1.x+halfWidth;
-			vb->y=	pt1.y-halfWidth;
-			vb->z=  pt1.z;
-			vb->diffuse=diffuse;	 // b g<<8 r<<16 a<<24.
-			vb->u1=0 ;
-			vb->v1=0 ;
-			vb++;
-			vb->x=	pt1.x+halfWidth;
-			vb->y=	pt1.y+halfWidth;
-			vb->z=  pt1.z;
-			vb->diffuse=diffuse;	 // b g<<8 r<<16 a<<24.
-			vb->u1=0 ;
-			vb->v1=0 ;
-			vb++;
-			vb->x=	pt1.x-halfWidth;
-			vb->y=	pt1.y+halfWidth;
-			vb->z=  pt1.z;
-			vb->diffuse=diffuse;	 // b g<<8 r<<16 a<<24.
-			vb->u1=0 ;
-			vb->v1=0 ;
-			vb++;
-			*curIb++ = numVertex;
-			*curIb++ = numVertex+1;
-			*curIb++ = numVertex+2;
-			*curIb++ = numVertex;
-			*curIb++ = numVertex+2;
-			*curIb++ = numVertex+3;
-			curIndex += 6;
-			numVertex += 4;
-		}
-		}
-		}
-		if (!buffers_locked || numVertex == 0) {
-			RenderBackend_Release_Vertex_Buffer(backend, vertex_buffer);
-			RenderBackend_Release_Index_Buffer(backend, index_buffer);
-			break;
-		}
-		backend->Set_Shader(ShaderClass(SC_ALPHA));
-		backend->Set_Index_Buffer(index_buffer);
-		backend->Set_Vertex_Buffer(vertex_buffer, 0, sizeof(VertexFormatXYZNDUV2));
-		backend->Set_Vertex_Format(RenderBackendVertexFormat::PositionNormalDiffuseTexture2);
-		backend->Draw_Indexed_Primitives(RenderBackendPrimitiveType::TriangleList,
-			0, 0, numVertex, 0, curIndex/3);	//draw a quad, 2 triangles, 4 verts
-		RenderBackend_Release_Vertex_Buffer(backend, vertex_buffer);
-		RenderBackend_Release_Index_Buffer(backend, index_buffer);
-	}
-
-	if (anyVanished) {
-		compressIconsArray();
-	}
+    if (WW3D::Are_Static_Sort_Lists_Enabled()) {
+        WW3D::Add_To_Static_Sort_List(this,1); return;
+    }
+    auto* device=Graphics::Shared_Frame_Device();
+    if (!device || !m_numDebugIcons) return;
+    std::vector<Graphics::SurfaceVertex> vertices;
+    std::vector<std::uint32_t> indices;
+    bool vanished=false;
+    for (int k=0;k<m_numDebugIcons;++k) {
+        const auto& icon=m_debugIcons[k];
+        const int frames=icon.endFrame-TheGameLogic->getFrame();
+        if (frames<1) { vanished=true; continue; }
+        const unsigned alpha=frames<100 ? static_cast<unsigned>(64.0f*frames/100) : 64;
+        const unsigned color=icon.color.getAsInt() | (alpha<<24);
+        const float width=icon.width*0.5f;
+        const std::array<Vector3,4> corners{
+            Vector3(icon.position.x-width,icon.position.y-width,icon.position.z),
+            Vector3(icon.position.x+width,icon.position.y-width,icon.position.z),
+            Vector3(icon.position.x+width,icon.position.y+width,icon.position.z),
+            Vector3(icon.position.x-width,icon.position.y+width,icon.position.z)};
+        const auto base=static_cast<std::uint32_t>(vertices.size());
+        for (const auto& corner : corners) {
+            Vector3 point; Matrix3D::Transform_Vector(Transform,corner,&point);
+            Graphics::SurfaceVertex vertex;
+            vertex.position={point.X,point.Y,point.Z};
+            vertex.color={float((color>>16)&255)/255,float((color>>8)&255)/255,float(color&255)/255,float(color>>24)/255};
+            vertices.push_back(vertex);
+        }
+        indices.insert(indices.end(),{base,base+1,base+2,base,base+2,base+3});
+    }
+    if (!indices.empty()) Graphics::Draw_Debug_Geometry(Graphics::Get_Surface_Renderer(),
+        device->Immediate_Command_List(),m_mesh,vertices,indices,Make_Surface_Parameters(info.Camera));
+    WW3D::Get_Render_Backend()->Invalidate_Cached_Render_States();
+    if (vanished) compressIconsArray();
 }
 
 #endif // RTS_DEBUG
+

@@ -46,7 +46,8 @@
 #include "WW3D2/MeshRenderer.h"
 #include "WW3D2/VertexFormat.h"
 #include "Lib/BaseType.h"
-#include "W3DDevice/GameClient/HeightMap.h"
+#include "W3DDevice/GameClient/BaseHeightMap.h"
+#include "W3DDevice/GameClient/WorldHeightMap.h"
 #include "Common/GlobalData.h"
 #include "W3DDevice/GameClient/W3DProjectedShadow.h"
 #include "WW3D2/Statistics.h"
@@ -55,8 +56,14 @@
 #include "GameLogic/PartitionManager.h"
 #include "GameLogic/TerrainLogic.h"
 #include "GameClient/Drawable.h"
-#include "W3DDevice/GameClient/Module/W3DModelDraw.h"
 #include "W3DDevice/GameClient/W3DShadow.h"
+#include "W3DDevice/GameClient/W3DGraphicsResources.h"
+#include "W3DDevice/GameClient/W3DObjectGraphics.h"
+#include "WW3D2/MatrixMapper.h"
+#include <vector>
+#include <cstring>
+import Graphics.Scene.Shadows.Projected;
+import Graphics.Backends.DX11.Coexistence;
 
 
 /** @todo: We're going to have a pool of a couple rendertargets to use
@@ -78,34 +85,30 @@ Maybe project onto a deformed terrain patch that molds to trays/bibs.
 W3DProjectedShadowManager *TheW3DProjectedShadowManager=nullptr;	//global singleton
 ProjectedShadowManager	*TheProjectedShadowManager;				//global singleton with simpler interface.
 extern const FrustumClass *shadowCameraFrustum;	//defined in W3DShadow.
-///@todo: Externs from volumetric shadow renderer - these need to be moved into W3DBufferManager
-extern RenderBackendVertexBuffer *shadowVertexBuffer;		///<shared shadow vertex buffer
-extern RenderBackendIndexBuffer	*shadowIndexBuffer;	///<shared shadow index buffer
-extern int nShadowVertsInBuf;	//model vetices in vertex buffer
-extern int nShadowStartBatchVertex;
-extern int nShadowIndicesInBuf;	//model vetices in vertex buffer
-extern int nShadowStartBatchIndex;
-extern int SHADOW_VERTEX_SIZE;
-extern int SHADOW_INDEX_SIZE;
-
-//Global streaming vertex buffer with x,y,z,u,v type.
-struct SHADOW_DECAL_VERTEX	//vertex structure passed to D3D
+struct SHADOW_DECAL_VERTEX
 {
-		float x,y,z;
-		UnsignedInt diffuse;
-		float u,v;
+    float x,y,z;
+    UnsignedInt diffuse;
+    float u,v;
 };
 
-RenderBackendVertexBuffer *shadowDecalVertexBuffer=nullptr;		///<shadow decal vertex buffer
-RenderBackendIndexBuffer	*shadowDecalIndexBuffer=nullptr;	///<shadow decal index buffer
-int nShadowDecalVertsInBuf=0;	//model vetices in vertex buffer
-int nShadowDecalStartBatchVertex=0;
-int nShadowDecalIndicesInBuf=0;	//model vetices in vertex buffer
-int nShadowDecalStartBatchIndex=0;
-int	nShadowDecalPolysInBatch=0;
-int	nShadowDecalVertsInBatch=0;
-int SHADOW_DECAL_VERTEX_SIZE=32768;
-int SHADOW_DECAL_INDEX_SIZE=65536;
+struct W3DProjectedShadowManager::GraphicsState
+{
+    std::vector<SHADOW_DECAL_VERTEX> vertices;
+    std::vector<std::uint32_t> indices;
+    Graphics::PropMeshHandle decal_mesh;
+    Graphics::PropMeshHandle projection_mesh;
+    CameraClass* camera = nullptr;
+
+    void Release()
+    {
+        auto& renderer = Graphics::Get_Prop_Renderer();
+        renderer.Destroy_Mesh(decal_mesh);
+        renderer.Destroy_Mesh(projection_mesh);
+        decal_mesh = {}; projection_mesh = {};
+        vertices.clear(); indices.clear();
+    }
+};
 
 
 class W3DShadowTexture;	//forward reference
@@ -200,6 +203,9 @@ public:
 /******************** Start of W3DProjectedShadowManager implementation ***********************/
 W3DProjectedShadowManager::W3DProjectedShadowManager()
 {
+    m_graphics = new GraphicsState;
+    m_dynamicRenderTarget = nullptr;
+    m_renderTargetHasAlpha = FALSE;
 	m_shadowList = nullptr;
 	m_decalList = nullptr;
 	m_numDecalShadows = 0;
@@ -217,6 +223,7 @@ W3DProjectedShadowManager::~W3DProjectedShadowManager()
 {
 
 	ReleaseResources();
+    delete m_graphics;
 	m_dynamicRenderTarget = nullptr;
 	m_renderTargetHasAlpha = FALSE;
 	delete m_shadowContext;
@@ -269,46 +276,14 @@ Bool W3DProjectedShadowManager::ReAcquireResources()
 			m_dynamicRenderTarget=WW3D::Get_Render_Backend()->Create_Render_Target (DEFAULT_RENDER_TARGET_WIDTH, DEFAULT_RENDER_TARGET_HEIGHT);
 	}
 
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	DEBUG_ASSERTCRASH(backend, ("Trying to ReAcquireResources on W3DProjectedShadowManager without render backend"));
-	if (backend == nullptr)
-		return FALSE;
-
-	DEBUG_ASSERTCRASH(shadowDecalIndexBuffer == nullptr && shadowDecalVertexBuffer == nullptr,
-		("ReAcquireResources not released in W3DProjectedShadowManager"));
-
-	shadowDecalIndexBuffer = backend->Create_Index_Buffer(
-		SHADOW_DECAL_INDEX_SIZE * sizeof(UnsignedShort), true);
-	if (shadowDecalIndexBuffer == nullptr)
-		return FALSE;
-
-	if (shadowDecalVertexBuffer == nullptr)
-	{	// Create vertex buffer
-		shadowDecalVertexBuffer = backend->Create_Vertex_Buffer(
-			SHADOW_DECAL_VERTEX_SIZE * sizeof(SHADOW_DECAL_VERTEX),
-			RenderBackendVertexFormat::PositionDiffuseTexture,
-			true);
-		if (shadowDecalVertexBuffer == nullptr)
-			return FALSE;
-	}
-
-	return TRUE;
+    return m_dynamicRenderTarget != nullptr && Graphics::Shared_Frame_Device() != nullptr;
 }
 
 void W3DProjectedShadowManager::ReleaseResources()
 {
-	invalidateCachedLightPositions();	//textures need to be updated
-	REF_PTR_RELEASE(m_dynamicRenderTarget);	//need to create a new render target
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	if (backend != nullptr)
-	{
-		if (shadowDecalIndexBuffer != nullptr)
-			backend->Release_Index_Buffer(shadowDecalIndexBuffer);
-		if (shadowDecalVertexBuffer != nullptr)
-			backend->Release_Vertex_Buffer(shadowDecalVertexBuffer);
-	}
-	shadowDecalIndexBuffer=nullptr;
-	shadowDecalVertexBuffer=nullptr;
+    if (m_W3DShadowTextureManager) invalidateCachedLightPositions();
+    REF_PTR_RELEASE(m_dynamicRenderTarget);
+    m_graphics->Release();
 }
 
 void W3DProjectedShadowManager::invalidateCachedLightPositions()
@@ -339,473 +314,90 @@ void W3DProjectedShadowManager::updateRenderTargetTextures()
 ///Renders shadow on part of terrain covered by world-space bounding box.
 Int W3DProjectedShadowManager::renderProjectedTerrainShadow(W3DProjectedShadow *shadow, AABoxClass &box)
 {
-	static	Matrix4x4 mWorld(true);	//initialize to identity matrix
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	if (backend == nullptr)
-		return 0;
-
-	struct SHADOW_VOLUME_VERTEX	//vertex structure passed to D3D
-	{
-		float x,y,z;
-	};
-
-	Int i,j,k;
-	UnsignedByte alpha[4];
-	float UA[4], VA[4];
-	Bool flipForBlend;
-
-
-	if (TheTerrainRenderObject)
-	{
-		WorldHeightMap *hmap=TheTerrainRenderObject->getMap();
-
-		//Find size of heightmap sub-rectangle affected by shadow
-		Real cx=box.Center.X;
-		Real cy=box.Center.Y;
-		Real dx=box.Extent.X;
-		Real dy=box.Extent.Y;
-		Real mapScaleInv=1.0f/MAP_XY_FACTOR;
-		SHADOW_VOLUME_VERTEX* pvVertices;
-		UnsignedShort *pvIndices;
-
-		//Get terrain cell index for area with shadow
-		Int startX=REAL_TO_INT_FLOOR(((cx - dx)*mapScaleInv));
-		Int endX=REAL_TO_INT_CEIL(((cx + dx)*mapScaleInv));
-		Int	startY=REAL_TO_INT_FLOOR(((cy - dy)*mapScaleInv));
-		Int endY=REAL_TO_INT_CEIL(((cy + dy)*mapScaleInv));
-
-		//clip bounds to extents of heightmap
-		startX = __max(startX,0);
-		endX = __min(endX,hmap->getXExtent()-1);
-		startY = __max(startY,0);
-		endY = __min(endY,hmap->getYExtent()-1);
-
-		Int vertsPerRow=endX - startX+1;	//number of cells +1
-		Int vertsPerColumn=endY-startY+1;	//number of cells +1
-
-		if (vertsPerRow == 1 || vertsPerColumn == 1)
-			return 0;	//nothing to render
-
-		Int numVerts = vertsPerRow *vertsPerColumn;	//number of terrain vertices
-
-		if (nShadowVertsInBuf > (SHADOW_VERTEX_SIZE-numVerts))	//check if room for model verts
-		{	//flush the buffer by drawing the contents and re-locking again
-			if (!backend->Lock_Vertex_Buffer(shadowVertexBuffer, 0,
-				numVerts * sizeof(SHADOW_VOLUME_VERTEX), (void **)&pvVertices,
-				RenderBackendBufferLockMode::Discard))
-				return 0;
-			nShadowVertsInBuf=0;
-			nShadowStartBatchVertex=0;
-		}
-		else
-		{	if (!backend->Lock_Vertex_Buffer(shadowVertexBuffer,
-			nShadowVertsInBuf * sizeof(SHADOW_VOLUME_VERTEX),
-			numVerts * sizeof(SHADOW_VOLUME_VERTEX), (void **)&pvVertices,
-			RenderBackendBufferLockMode::NoOverwrite))
-				return 0;
-		}
-
-		if(pvVertices)
-		{
-			//insert each cell's bottom/left edge vertex
-			for (j=startY; j <= endY; j++)
-			{
-				float ycoord = (float)j * MAP_XY_FACTOR;
-
-				for (i=startX; i <= endX; i++)
-				{
-					pvVertices->x=(float)i*MAP_XY_FACTOR;
-					pvVertices->y=ycoord;
-					pvVertices->z=(float)hmap->getHeight(i,j)*MAP_HEIGHT_SCALE;
-					pvVertices++;
-				}
-			}
-		}
-
-		backend->Unlock_Vertex_Buffer(shadowVertexBuffer);
-
-		Int numIndex=(endX - startX) * (endY-startY)*6;	//6 indices per terrain cell (2 triangles).
-
-		if (nShadowIndicesInBuf > (SHADOW_INDEX_SIZE-numIndex))	//check if room for model verts
-		{	//flush the buffer by drawing the contents and re-locking again
-			if (!backend->Lock_Index_Buffer(shadowIndexBuffer, 0,
-				numIndex * sizeof(UnsignedShort), (void **)&pvIndices,
-				RenderBackendBufferLockMode::Discard))
-				return 0;
-			nShadowIndicesInBuf=0;
-			nShadowStartBatchIndex=0;
-		}
-		else
-		{	if (!backend->Lock_Index_Buffer(shadowIndexBuffer,
-			nShadowIndicesInBuf * sizeof(UnsignedShort),
-			numIndex * sizeof(UnsignedShort), (void **)&pvIndices,
-			RenderBackendBufferLockMode::NoOverwrite))
-				return 0;
-		}
-
-		if(pvIndices)
-		{		//fill each cell's vertex indices
-				Int rowStart;
-				for (j=startY,rowStart=0; j<endY; j++,rowStart+=vertsPerRow)
-				{
-					for (i=rowStart,k=startX; k<endX; i++,k++)
-					{	///@todo: Fix this to deal with flipped triangles
-						hmap->getAlphaUVData(k, j, UA, VA, alpha, &flipForBlend);
-/*						if (flipForBlend)
-						{	pvIndices[0]=i;
-							pvIndices[1]=i+1;
-							pvIndices[2]=i+vertsPerRow;
-							pvIndices[3]=i+vertsPerRow;
-							pvIndices[4]=i+1;
-							pvIndices[5]=i+vertsPerRow+1;
-						}
-						else
-						{	pvIndices[0]=i+vertsPerRow;
-							pvIndices[4]=pvIndices[1]=i;
-							pvIndices[3]=pvIndices[2]=i+vertsPerRow+1;
-							pvIndices[5]=i+1;
-						}*/
-						///@todo: fix the winding order in heightmap to be in strip order like above!
-						if (flipForBlend)
-						{	pvIndices[0]=i+1;
-							pvIndices[1]=i+vertsPerRow;
-							pvIndices[2]=i;
-							pvIndices[3]=i+1;
-							pvIndices[4]=i+1+vertsPerRow;
-							pvIndices[5]=i+vertsPerRow;
-						}
-						else
-						{	pvIndices[0]=i;
-							pvIndices[1]=i+1+vertsPerRow;
-							pvIndices[2]=i+vertsPerRow;
-							pvIndices[3]=i;
-							pvIndices[4]=i+1;
-							pvIndices[5]=i+1+vertsPerRow;
-						}
-						pvIndices += 6;
-					}
-				}
-		}
-
-		backend->Unlock_Index_Buffer(shadowIndexBuffer);
-
-		backend->Set_Index_Buffer(shadowIndexBuffer);
-		backend->Set_Transform(RenderBackendTransform::World, mWorld);
-		backend->Apply_Render_State_Changes();
-		backend->Set_Vertex_Buffer(shadowVertexBuffer, 0, sizeof(SHADOW_VOLUME_VERTEX));
-		backend->Set_Vertex_Format(RenderBackendVertexFormat::Position);
-
-		Int numPolys = (endX - startX)*(endY - startY)*2;	//2 triangles per cell
-
-		WW3D::Get_Render_Backend()->Set_Alpha_Test_Enabled(true);	//should reject background pixels
-		WW3D::Get_Render_Backend()->Set_Stencil_Enabled(true);
-		WW3D::Get_Render_Backend()->Set_Stencil_Function(RenderBackendCompareFunction::Always);
-		WW3D::Get_Render_Backend()->Set_Stencil_Reference(0x1);
-		WW3D::Get_Render_Backend()->Set_Stencil_Read_Mask(0xffffffff);
-		WW3D::Get_Render_Backend()->Set_Stencil_Write_Mask(0xffffffff);
-		WW3D::Get_Render_Backend()->Set_Stencil_Z_Fail_Operation(RenderBackendStencilOperation::Keep);
-		WW3D::Get_Render_Backend()->Set_Stencil_Fail_Operation(RenderBackendStencilOperation::Keep);
-		WW3D::Get_Render_Backend()->Set_Stencil_Pass_Operation(RenderBackendStencilOperation::Increment);
-
-		WW3D::Get_Render_Backend()->Set_Lighting_Enabled(false);
-		WW3D::Get_Render_Backend()->Set_Blend_Factors(
-			RenderBackendBlendFactor::DestinationColor,
-			RenderBackendBlendFactor::Zero);
-
-
-		if (WW3D::Get_Render_Backend()->Is_Triangle_Draw_Enabled())
-		{
-			Debug_Statistics::Record_Polys_And_Vertices(numPolys,numVerts,ShaderClass::_PresetOpaqueShader);
-			backend->Draw_Indexed_Primitives(RenderBackendPrimitiveType::TriangleList,
-				nShadowStartBatchVertex, 0, numVerts, nShadowStartBatchIndex, numPolys);
-		}
-
-		WW3D::Get_Render_Backend()->Set_Alpha_Test_Enabled(false);	//should reject background pixels
-		WW3D::Get_Render_Backend()->Set_Stencil_Enabled(false);
-		WW3D::Get_Render_Backend()->Set_Lighting_Enabled(true);
-
-		nShadowVertsInBuf += numVerts;
-		nShadowStartBatchVertex=nShadowVertsInBuf;
-
-		nShadowIndicesInBuf += numIndex;
-		nShadowStartBatchIndex=nShadowIndicesInBuf;
-		return 1;
-	}
-	return 0;
+    auto* device = Graphics::Shared_Frame_Device();
+    if (!device || !TheTerrainRenderObject || !m_graphics->camera) return 0;
+    auto* hmap = TheTerrainRenderObject->getMap();
+    const int startX = __max(0, REAL_TO_INT_FLOOR((box.Center.X-box.Extent.X)/MAP_XY_FACTOR));
+    const int startY = __max(0, REAL_TO_INT_FLOOR((box.Center.Y-box.Extent.Y)/MAP_XY_FACTOR));
+    const int endX = __min(hmap->getXExtent()-1, REAL_TO_INT_CEIL((box.Center.X+box.Extent.X)/MAP_XY_FACTOR));
+    const int endY = __min(hmap->getYExtent()-1, REAL_TO_INT_CEIL((box.Center.Y+box.Extent.Y)/MAP_XY_FACTOR));
+    if (endX <= startX || endY <= startY) return 0;
+    const int width = endX-startX+1;
+    std::vector<Graphics::PropVertex> vertices(width*(endY-startY+1));
+    std::vector<std::uint32_t> indices;
+    indices.reserve((endX-startX)*(endY-startY)*6);
+    auto* pass = shadow->getShadowProjector()->Peek_Material_Pass();
+    Vector3 emissive; pass->Peek_Material()->Get_Emissive(&emissive);
+    for (int y=startY;y<=endY;++y) for (int x=startX;x<=endX;++x) {
+        auto& vertex = vertices[(y-startY)*width+x-startX];
+        vertex.position = {float(x)*MAP_XY_FACTOR,float(y)*MAP_XY_FACTOR,float(hmap->getHeight(x,y))*MAP_HEIGHT_SCALE};
+        vertex.color = {emissive.X,emissive.Y,emissive.Z,1};
+        if (x==endX || y==endY) continue;
+        const std::uint32_t i=(y-startY)*width+x-startX;
+        UnsignedByte alpha[4]; float u[4],v[4]; Bool flip;
+        hmap->getAlphaUVData(x,y,u,v,alpha,&flip);
+        if (flip) indices.insert(indices.end(),{i+1,i+width,i,i+1,i+1+width,i+width});
+        else indices.insert(indices.end(),{i,i+1+width,i+width,i,i+1,i+1+width});
+    }
+    auto& renderer = Graphics::Get_Prop_Renderer();
+    auto& mesh = m_graphics->projection_mesh;
+    if (!mesh.Is_Valid()) mesh=renderer.Create_Mesh(vertices,indices);
+    else if (!renderer.Update_Mesh(mesh,vertices,indices)) return 0;
+    Graphics::PropParameters parameters;
+    parameters.view_projection = Make_Surface_Parameters(*m_graphics->camera).view_projection;
+    Matrix3D view; m_graphics->camera->Get_View_Matrix(&view);
+    const Matrix4x4 view4(view);
+    std::memcpy(parameters.view.data(),&view4,sizeof(view4));
+    parameters.primary_gradient = pass->Peek_Shader().Get_Primary_Gradient();
+    parameters.detail_color = pass->Peek_Shader().Get_Post_Detail_Color_Func();
+    parameters.detail_alpha = pass->Peek_Shader().Get_Post_Detail_Alpha_Func();
+    parameters.alpha_cutoff = 96.0f/255.0f;
+    std::array<Graphics::RHITextureHandle,2> textures;
+    for (unsigned stage=0;stage<2;++stage) {
+        textures[stage] = Resolve_Graphics_Texture(pass->Peek_Texture(stage));
+        auto* mapper = static_cast<MatrixMapperClass*>(pass->Peek_Material()->Peek_Mapper(stage));
+        if (!mapper) continue;
+        Matrix4x4 matrix; mapper->Calculate_Texture_Matrix(matrix);
+        if (mapper->Get_Type()==MatrixMapperClass::DEPTH_GRADIENT) {
+            matrix[1]=matrix[2]; matrix[0].Set(0,0,0,mapper->Get_Gradient_U_Coord());
+        }
+        std::memcpy(parameters.uv_transform[stage].data(),&matrix,sizeof(matrix));
+        parameters.uv_sources[stage*2]=1;
+        parameters.uv_sources[stage*2+1]=mapper->Get_Type()==MatrixMapperClass::PERSPECTIVE_PROJECTION ? 1.0f : 0.0f;
+    }
+    parameters.secondary_texture = textures[1].Is_Valid() ? 1.0f : 0.0f;
+    const bool drawn = Graphics::Draw_Projected_Shadow(renderer,device->Immediate_Command_List(),mesh,parameters,textures);
+    WW3D::Get_Render_Backend()->Invalidate_Cached_Render_States();
+    return drawn ? 1 : 0;
 }
-
-#if 0
-
-TextureClass *snow=nullptr;
-TextureClass *grass=nullptr;
-TextureClass *ground=nullptr;
-
-#define V_COUNT  (4*4)	//4 vertices per cell
-#define I_COUNT  (4*6)	//6 indices per cell
-#define TILE_HEIGHT	10.1f
-#define TILE_DIFFUSE 0x00b4b0a5
-
-enum BlendDirection CPP_11(: Int)
-{	B_A,	//visible on all sides
-	B_R,	//visible on right
-	B_L,	//visible on left
-	B_T,	//visible on top
-	B_B,	//visble on bottom
-	B_TL,	//visible on top/left
-	B_BR,	//visible on bottom/right
-	B_TR,	//visible on top/right
-	B_BL	//visilbe on bottom/left
-};
-
-//Vertex alpha values for each blend direction assuming tile vertices
-//start at top left corner and continue counter-clockwise
-unsigned int BDToVA[9][4]=
-{
-	{0xff000000,0xff000000,0xff000000,0xff000000},
-	{0,0,0xff000000,0xff000000},
-	{0xff000000,0xff000000,0,0},
-	{0xff000000,0,0,0xff000000},
-	{0,0xff000000,0xff000000,0},
-	{0xff000000,0,0,0},
-	{0,0,0xff000000,0},
-	{0,0,0,0xff000000},
-	{0,0xff000000,0,0}
-};
-
-static void RenderVBTile(TextureClass *text, Real ox, Real oy, Real ou, Real ov, BlendDirection bd=B_A)
-{
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	if (backend == nullptr) {
-		return;
-	}
-
-	RenderBackendVertexBuffer *vertex_buffer = backend->Create_Vertex_Buffer(
-		4 * sizeof(VertexFormatXYZNDUV2),
-		RenderBackendVertexFormat::PositionNormalDiffuseTexture2, true);
-	RenderBackendIndexBuffer *index_buffer = backend->Create_Index_Buffer(
-		6 * sizeof(UnsignedShort), true);
-	if (vertex_buffer == nullptr || index_buffer == nullptr) {
-		RenderBackend_Release_Vertex_Buffer(backend, vertex_buffer);
-		RenderBackend_Release_Index_Buffer(backend, index_buffer);
-		return;
-	}
-
-	{
-	RenderBackendVertexBufferLock vertex_lock(backend, vertex_buffer, 0, 0,
-		RenderBackendBufferLockMode::Discard);
-	RenderBackendIndexBufferLock index_lock(backend, index_buffer, 0, 0,
-		RenderBackendBufferLockMode::Discard);
-	VertexFormatXYZNDUV2 *vb = vertex_lock.Is_Locked() ?
-		(VertexFormatXYZNDUV2*)vertex_lock.Get_Data() : nullptr;
-	UnsignedShort *ib = index_lock.Is_Locked() ?
-		(UnsignedShort*)index_lock.Get_Data() : nullptr;
-	if (vb != nullptr && ib != nullptr) {
-
-	vb->x=ox;
-	vb->y=oy;
-	vb->z=TILE_HEIGHT;
-	vb->diffuse=TILE_DIFFUSE|BDToVA[bd][0];
-	vb->u1=ou;
-	vb->v1=ov;
-	vb++;
-
-	vb->x=ox;
-	vb->y=oy-10.0f;
-	vb->z=TILE_HEIGHT;
-	vb->diffuse=TILE_DIFFUSE|BDToVA[bd][1];
-	vb->u1=ou;
-	vb->v1=ov+0.25f;
-	vb++;
-
-	vb->x=ox+10.0f;
-	vb->y=oy-10.0f;
-	vb->z=TILE_HEIGHT;
-	vb->diffuse=TILE_DIFFUSE|BDToVA[bd][2];
-	vb->u1=ou+0.25f;
-	vb->v1=ov+0.25f;
-	vb++;
-
-	vb->x=ox+10.0f;
-	vb->y=oy;
-	vb->z=TILE_HEIGHT;
-	vb->diffuse=TILE_DIFFUSE|BDToVA[bd][3];
-	vb->u1=ou+0.25f;
-	vb->v1=ov;
-	vb++;
-
-	ib[0]=0;
-	ib[1]=1;
-	ib[2]=3;
-	ib[3]=3;
-	ib[4]=1;
-	ib[5]=2;
-
-	if (bd == B_TR || bd == B_BL)
-	{	//need to flip triangles so alpha gradient doesn't follow diagonal edge
-		ib[2]=2;
-		ib[4]=0;
-	}
-
-	backend->Set_Index_Buffer(index_buffer);
-	backend->Set_Vertex_Buffer(vertex_buffer, 0, sizeof(VertexFormatXYZNDUV2));
-	backend->Set_Vertex_Format(RenderBackendVertexFormat::PositionNormalDiffuseTexture2);
-	backend->Set_Texture(0, text);
-	backend->Set_Blend_Factors(
-		RenderBackendBlendFactor::SourceAlpha,
-		RenderBackendBlendFactor::InverseSourceAlpha);
-	backend->Set_Alpha_Blend_Enabled(true);
-	ShaderClass::Invalidate();	//invalidate to force shader to reset since we directly changed states
-	backend->Draw_Indexed_Primitives(RenderBackendPrimitiveType::TriangleList,
-		0, 0, 4, 0, 2);	//draw a quad, 2 triangles, 4 verts
-	}
-	}
-
-	RenderBackend_Release_Vertex_Buffer(backend, vertex_buffer);
-	RenderBackend_Release_Index_Buffer(backend, index_buffer);
-}
-
-//Debug code used to draw some dummy polygons.
-void TestBlendRender(RenderInfoClass & rinfo)
-{
-	static Int doInit=1;
-
-	if (doInit)
-	{	doInit = 0;
-		snow = WW3DAssetManager::Get_Instance()->Get_Texture("TXSnow04a.tga");
-		grass = WW3DAssetManager::Get_Instance()->Get_Texture("TMGras23a.tga");
-		ground = WW3DAssetManager::Get_Instance()->Get_Texture("TXAsph01a.tga");
-	}
-
-	VertexMaterialClass *vmat=VertexMaterialClass::Get_Preset(VertexMaterialClass::PRELIT_DIFFUSE);
-	WW3D::Get_Render_Backend()->Set_Material(vmat);
-	REF_PTR_RELEASE(vmat);
-	WW3D::Get_Render_Backend()->Set_Shader(ShaderClass::_PresetOpaqueShader);
-
-	Matrix3D tm(1);	//identity
-	WW3D::Get_Render_Backend()->Set_Transform(RenderBackendTransform::World,tm);
-
-	//grass
-	RenderVBTile(grass,580.0f,480.0f,0.0f,0.0f);	RenderVBTile(grass,590.0f,480.0f,0.25f,0.0f);
-	RenderVBTile(grass,580.0f,470.0f,0.0f,0.25f);	RenderVBTile(grass,590.0f,470.0f,0.25f,0.25f);
-	RenderVBTile(grass,580.0f,460.0f,0.0f,0.5f);	RenderVBTile(grass,590.0f,460.0f,0.25f,0.5f,B_L);
-	RenderVBTile(grass,580.0f,450.0f,0.0f,0.75f);	RenderVBTile(grass,590.0f,450.0f,0.25f,0.75f,B_L);
-	RenderVBTile(grass,580.0f,440.0f,0.0f,0.0f);	RenderVBTile(grass,590.0f,440.0f,0.25f,0.0f,B_L);
-
-	RenderVBTile(grass,610.0f,460.0f,0.0f,0.5f, B_B);
-	RenderVBTile(grass,610.0f,450.0f,0.0f,0.75f);
-	RenderVBTile(grass,610.0f,440.0f,0.0f,0.0f);
-
-
-	//snow
-	RenderVBTile(snow,590.0f,480.0f,0.0f,0.0f, B_R);	RenderVBTile(snow,600.0f,480.0f,0.25f,0.0f);	RenderVBTile(snow,610.0f,480.0f,0.5f,0.0f);
-	RenderVBTile(snow,590.0f,470.0f,0.0f,0.25f, B_R);	RenderVBTile(snow,600.0f,470.0f,0.25f,0.25f);	RenderVBTile(snow,610.0f,470.0f,0.5f,0.25f);
-	RenderVBTile(snow,590.0f,460.0f,0.0f,0.5f, B_TR);	RenderVBTile(snow,600.0f,460.0f,0.25f,0.5f,B_T); RenderVBTile(snow,610.0f,460.0f,0.5f,0.5f,B_T);
-}
-#endif
 
 void W3DProjectedShadowManager::flushDecals(W3DShadowTexture *texture, ShadowType type)
 {
-	static	Matrix4x4 mWorld(true);	//initialize to identity matrix
-
-	if (nShadowDecalVertsInBatch == 0 && nShadowDecalPolysInBatch == 0)
-	{	//nothing to render
-		return;
-	}
-
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	if (backend == nullptr)
-	{
-		nShadowDecalStartBatchVertex=nShadowDecalVertsInBuf;
-		nShadowDecalStartBatchIndex=nShadowDecalIndicesInBuf;
-		nShadowDecalPolysInBatch=0;
-		nShadowDecalVertsInBatch=0;
-		return;
-	}
-
-	TextureClass *shadow_texture = texture != nullptr ? texture->getTexture() : nullptr;
-	if (shadow_texture == nullptr || !shadow_texture->Ensure_Render_Backend_Texture())
-	{
-		// Do not draw a queued batch with a null resource. With multiplicative shadow
-		// states that would turn the entire queued terrain region into an opaque black quad.
-		nShadowDecalStartBatchVertex=nShadowDecalVertsInBuf;
-		nShadowDecalStartBatchIndex=nShadowDecalIndicesInBuf;
-		nShadowDecalPolysInBatch=0;
-		nShadowDecalVertsInBatch=0;
-		return;
-	}
-
-	VertexMaterialClass *vmat=VertexMaterialClass::Get_Preset(VertexMaterialClass::PRELIT_DIFFUSE);
-	backend->Set_Material(vmat);
-	REF_PTR_RELEASE(vmat);
-	backend->Set_Texture(0,shadow_texture);
-
-	switch (type)
-	{
-		case SHADOW_DECAL:
-			backend->Set_Shader(ShaderClass::_PresetMultiplicativeShader);
-			break;
-		case SHADOW_ALPHA_DECAL:
-			backend->Set_Shader(ShaderClass::_PresetAlphaShader);
-			break;
-		case SHADOW_ADDITIVE_DECAL:
-			backend->Set_Shader(ShaderClass::_PresetAdditiveShader);
-			break;
-	}
-
-	//_PresetAlphaSpriteShader
-
-	backend->Apply_Render_State_Changes();	//force update of view and projection matrices
-
-//Alpha Blended Shadows
-/*	UnsignedInt color=TheW3DShadowManager->getShadowColor();
-	*/
-
-
-
-	backend->Set_Index_Buffer(shadowDecalIndexBuffer);
-	backend->Set_Transform(RenderBackendTransform::World, mWorld);
-	backend->Apply_Render_State_Changes();
-	backend->Set_Vertex_Buffer(shadowDecalVertexBuffer, 0, sizeof(SHADOW_DECAL_VERTEX));
-	backend->Set_Vertex_Format(RenderBackendVertexFormat::PositionDiffuseTexture);
-
-//Hard Shadows using stencil
-
-	if (WW3D::Get_Render_Backend()->Is_Triangle_Draw_Enabled())
-	{
-		Debug_Statistics::Record_Polys_And_Vertices(nShadowDecalPolysInBatch,nShadowDecalVertsInBatch,ShaderClass::_PresetOpaqueShader);
-		backend->Draw_Indexed_Primitives(RenderBackendPrimitiveType::TriangleList,
-			nShadowDecalStartBatchVertex, 0, nShadowDecalVertsInBatch,
-			nShadowDecalStartBatchIndex, nShadowDecalPolysInBatch);
-	}
-
-
-
-	//Restore multiplicative sprite shader
-
-	nShadowDecalStartBatchVertex=nShadowDecalVertsInBuf;
-	nShadowDecalStartBatchIndex=nShadowDecalIndicesInBuf;
-	nShadowDecalPolysInBatch=0;	//reset number of polys in texture batch
-	nShadowDecalVertsInBatch=0;
+    auto& state = *m_graphics;
+    auto* device = Graphics::Shared_Frame_Device();
+    if (state.indices.empty()) return;
+    auto* source = texture ? texture->getTexture() : nullptr;
+    const auto image = Resolve_Graphics_Texture(source);
+    if (device && state.camera && image.Is_Valid()) {
+        std::vector<Graphics::PropVertex> vertices(state.vertices.size());
+        for (std::size_t i=0;i<vertices.size();++i) {
+            const auto& src=state.vertices[i]; auto& dst=vertices[i];
+            dst.position={src.x,src.y,src.z}; dst.uv={src.u,src.v};
+            dst.color={float((src.diffuse>>16)&255)/255,float((src.diffuse>>8)&255)/255,
+                float(src.diffuse&255)/255,float(src.diffuse>>24)/255};
+        }
+        auto& renderer = Graphics::Get_Prop_Renderer();
+        if (!state.decal_mesh.Is_Valid()) state.decal_mesh=renderer.Create_Mesh(vertices,state.indices);
+        else renderer.Update_Mesh(state.decal_mesh,vertices,state.indices);
+        Graphics::PropParameters parameters;
+        parameters.view_projection=Make_Surface_Parameters(*state.camera).view_projection;
+        const auto blend = type==SHADOW_ALPHA_DECAL ? Graphics::DecalBlend::Alpha
+            : type==SHADOW_ADDITIVE_DECAL ? Graphics::DecalBlend::Additive : Graphics::DecalBlend::Multiply;
+        Graphics::Draw_Decal(renderer,device->Immediate_Command_List(),state.decal_mesh,parameters,image,blend);
+        WW3D::Get_Render_Backend()->Invalidate_Cached_Render_States();
+    }
+    state.vertices.clear(); state.indices.clear();
 }
-
-/*
-void testShadowDecal()
-{
-	Shadow::ShadowTypeInfo decalInfo;
-	decalInfo.allowUpdates = FALSE;	//shadow image will never update
-	decalInfo.allowWorldAlign = TRUE;	//shadow image will wrap around world objects
-	decalInfo.m_type = SHADOW_ALPHA_DECAL;
-	strcpy(decalInfo.m_ShadowName,"exwave256");
-	decalInfo.m_sizeX = 1280.0f;
-	decalInfo.m_sizeY = 1280.0f;
-	decalInfo.m_offsetX = 0;
-	decalInfo.m_offsetY = 0;
-	Shadow *shadow=TheProjectedShadowManager->addDecal(&decalInfo);
-	shadow->setPosition(600,600,600);
-	shadow->setAngle(0.0f);
-	shadow->setColor(0xffff0000);
-}
-*/
 
 #define BRIDGE_OFFSET_FACTOR 1.5f
 /**Decals have a low poly count so its better to render large numbers at once.  This system will queue them
@@ -1009,38 +601,14 @@ void W3DProjectedShadowManager::queueDecal(W3DProjectedShadow *shadow)
 		Int numVerts = vertsPerRow *vertsPerColumn;	//number of terrain vertices
 		Int numIndex=(endX - startX) * (endY-startY)*6;	//6 indices per terrain cell (2 triangles).
 
-		SHADOW_DECAL_VERTEX* pvVertices;
-		UnsignedShort *pvIndices;
-
-		// Flush before writing this decal whenever either dynamic buffer would
-		// overflow. The old order wrote the vertices first and discarded the
-		// index buffer afterwards, which reset the index base while the current
-		// vertices were still at a non-zero vertex-buffer offset.
-		const bool discard_vertices = nShadowDecalVertsInBuf > (SHADOW_DECAL_VERTEX_SIZE-numVerts);
-		const bool discard_indices = nShadowDecalIndicesInBuf > (SHADOW_DECAL_INDEX_SIZE-numIndex);
-		if (discard_vertices || discard_indices)
-		{	//flush the buffer by drawing the contents and re-locking again
-			flushDecals(shadow->m_shadowTexture[0], shadow->m_type);
-			if (discard_vertices)
-			{
-				nShadowDecalStartBatchVertex=0;
-				nShadowDecalVertsInBuf=0;
-			}
-			if (discard_indices)
-			{
-				nShadowDecalStartBatchIndex=0;
-				nShadowDecalIndicesInBuf=0;
-			}
-		}
-
-		const RenderBackendBufferLockMode vertex_lock_mode = discard_vertices
-			? RenderBackendBufferLockMode::Discard
-			: RenderBackendBufferLockMode::NoOverwrite;
-		if (!backend->Lock_Vertex_Buffer(shadowDecalVertexBuffer,
-			nShadowDecalVertsInBuf * sizeof(SHADOW_DECAL_VERTEX),
-			numVerts * sizeof(SHADOW_DECAL_VERTEX), (void **)&pvVertices,
-			vertex_lock_mode))
-			return;
+        if (m_graphics->vertices.size()+numVerts > 32768 || m_graphics->indices.size()+numIndex > 65536)
+            flushDecals(shadow->m_shadowTexture[0],shadow->m_type);
+        const auto nShadowDecalVertsInBatch = static_cast<std::uint32_t>(m_graphics->vertices.size());
+        const auto indexStart = m_graphics->indices.size();
+        m_graphics->vertices.resize(m_graphics->vertices.size()+numVerts);
+        m_graphics->indices.resize(indexStart+numIndex);
+        auto* pvVertices = m_graphics->vertices.data()+nShadowDecalVertsInBatch;
+        auto* pvIndices = m_graphics->indices.data()+indexStart;
 
 		//code to deal with rotated shadows based on sun direction, fix this later.  For now shadow rotates with object rotation.
 		//shadow->m_shadowTexture[0]->getDecalUVAxis(&uVector,&vVector);
@@ -1096,17 +664,6 @@ void W3DProjectedShadowManager::queueDecal(W3DProjectedShadow *shadow)
 			}
 		}
 
-		backend->Unlock_Vertex_Buffer(shadowDecalVertexBuffer);
-
-		const RenderBackendBufferLockMode index_lock_mode = discard_indices
-			? RenderBackendBufferLockMode::Discard
-			: RenderBackendBufferLockMode::NoOverwrite;
-		if (!backend->Lock_Index_Buffer(shadowDecalIndexBuffer,
-			nShadowDecalIndicesInBuf * sizeof(UnsignedShort),
-			numIndex * sizeof(UnsignedShort), (void **)&pvIndices,
-			index_lock_mode))
-			return;
-
 		if(pvIndices)
 		{	//fill each cell's vertex indices
 			Int rowStart;
@@ -1136,17 +693,7 @@ void W3DProjectedShadowManager::queueDecal(W3DProjectedShadow *shadow)
 			}
 		}
 
-		backend->Unlock_Index_Buffer(shadowDecalIndexBuffer);
 
-		Int numPolys = (endX - startX)*(endY - startY)*2;	//2 triangles per cell
-		nShadowDecalPolysInBatch += numPolys;
-
-		nShadowDecalVertsInBuf += numVerts;
-		nShadowDecalVertsInBatch += numVerts;
-//		nShadowDecalStartBatchVertex=nShadowDecalVertsInBuf;
-
-		nShadowDecalIndicesInBuf += numIndex;
-//		nShadowDecalStartBatchIndex=nShadowDecalIndicesInBuf;
 		return;
 	}
 
@@ -1157,135 +704,6 @@ to terrain.  Since they are not projected onto terrain, there may be clipping
 artifacts in certain situations.
 TODO: Too much clipping.  Need to check terrain heights at all 4 corners and adjust tilt to match*/
 ///@todo: We should have a pre-made static filled index buffer since we always send down 2 triangles.
-void W3DProjectedShadowManager::queueSimpleDecal(W3DProjectedShadow *shadow)
-{
-	Vector3 objPos;
-	Matrix3D   objXform;
-	Vector3 uVector,vVector;
-	Coord3D normal;
-
-	if (TheTerrainRenderObject)
-	{
-		IRenderBackend *backend = WW3D::Get_Render_Backend();
-		if (backend == nullptr)
-			return;
-
-		objPos=shadow->m_robj->Get_Position();
-		objXform=shadow->m_robj->Get_Transform();
-		Real groundHeight=TheTerrainRenderObject->getHeightMapHeight(objPos.X, objPos.Y, &normal);
-		Vector3 groundNormal(normal.x,normal.y,normal.z);
-
-		//Find new tu vector parallel to terrain by projecting existing x_vector onto
-		//terrain normal and subtracting the result.
-		uVector=objXform.Get_X_Vector();
-		Real uVectorAlongNormal = Vector3::Dot_Product(uVector,groundNormal);
-		uVector -= uVectorAlongNormal * groundNormal;
-		uVector.Normalize();
-		//Find new tv vector parallel to terrain by crossing new tu vector with terrain normal.
-		Vector3::Cross_Product(uVector,groundNormal,&vVector);
-
-		Int numVerts = 4;	//number of decal vertices
-		Int numIndex=6;	//(2 triangles).
-
-		SHADOW_DECAL_VERTEX* pvVertices;
-		UnsignedShort *pvIndices;
-
-		if (nShadowDecalVertsInBuf > (SHADOW_DECAL_VERTEX_SIZE-numVerts))	//check if room for model verts
-		{	//flush the buffer by drawing the contents and re-locking again
-			flushDecals(shadow->m_shadowTexture[0], shadow->m_type);
-			if (!backend->Lock_Vertex_Buffer(shadowDecalVertexBuffer, 0,
-				numVerts * sizeof(SHADOW_DECAL_VERTEX), (void **)&pvVertices,
-				RenderBackendBufferLockMode::Discard))
-				return;
-
-			nShadowDecalStartBatchVertex=0;
-			nShadowDecalPolysInBatch=0;	//reset number of polys in texture batch
-			nShadowDecalVertsInBatch=0;
-			nShadowDecalVertsInBuf=0;
-		}
-		else
-		{	if (!backend->Lock_Vertex_Buffer(shadowDecalVertexBuffer,
-			nShadowDecalVertsInBuf * sizeof(SHADOW_DECAL_VERTEX),
-			numVerts * sizeof(SHADOW_DECAL_VERTEX), (void **)&pvVertices,
-			RenderBackendBufferLockMode::NoOverwrite))
-				return;
-		}
-
-		objPos.Z=groundHeight;	//force decal to ground level
-		objPos += groundNormal * 1.0f;	//offset decal slightly above terrain to reduce z-fighting.
-		Vector3 vertex;
-
-		if(pvVertices)
-		{
-			//Top-left
-			vertex = objPos + vVector * shadow->m_decalSizeY * -0.5f - uVector * shadow->m_decalSizeX * 0.5f;
-			pvVertices->x=vertex.X;
-			pvVertices->y=vertex.Y;
-			pvVertices->z=vertex.Z;
-			pvVertices->u=0.0f;
-			pvVertices->v=0.0f;
-			pvVertices++;
-
-			//Bottom-left
-			vertex += vVector * shadow->m_decalSizeY;
-			pvVertices->x=vertex.X;
-			pvVertices->y=vertex.Y;
-			pvVertices->z=vertex.Z;
-			pvVertices->u=0.0f;
-			pvVertices->v=1.0f;
-			pvVertices++;
-
-			//Bottom-right
-			vertex += uVector * shadow->m_decalSizeX;
-			pvVertices->x=vertex.X;
-			pvVertices->y=vertex.Y;
-			pvVertices->z=vertex.Z;
-			pvVertices->u=1.0f;
-			pvVertices->v=1.0f;
-			pvVertices++;
-
-			//Top-right
-			vertex -= vVector * shadow->m_decalSizeY;
-			pvVertices->x=vertex.X;
-			pvVertices->y=vertex.Y;
-			pvVertices->z=vertex.Z;
-			pvVertices->u=1.0f;
-			pvVertices->v=0.0f;
-			pvVertices++;
-		}
-
-		backend->Unlock_Vertex_Buffer(shadowDecalVertexBuffer);
-
-		if (!backend->Lock_Index_Buffer(shadowDecalIndexBuffer,
-			nShadowDecalIndicesInBuf * sizeof(UnsignedShort),
-			numIndex * sizeof(UnsignedShort), (void **)&pvIndices,
-			RenderBackendBufferLockMode::NoOverwrite))
-			return;
-
-		if(pvIndices)
-		{	pvIndices[0]=nShadowDecalVertsInBatch;
-			pvIndices[1]=nShadowDecalVertsInBatch+1;
-			pvIndices[2]=nShadowDecalVertsInBatch+2;
-			pvIndices[3]=nShadowDecalVertsInBatch;
-			pvIndices[4]=nShadowDecalVertsInBatch+2;
-			pvIndices[5]=nShadowDecalVertsInBatch+3;
-			pvIndices += 6;
-		}
-
-		backend->Unlock_Index_Buffer(shadowDecalIndexBuffer);
-
-		Int numPolys = 2;	//2 triangles per decal
-		nShadowDecalPolysInBatch += numPolys;
-
-		nShadowDecalVertsInBuf += numVerts;
-		nShadowDecalVertsInBatch += numVerts;
-
-		nShadowDecalIndicesInBuf += numIndex;
-		return;
-	}
-
-}
-
 void W3DProjectedShadowManager::prepareShadows()
 {
 	if (!TheTerrainRenderObject)
@@ -1321,15 +739,13 @@ Int W3DProjectedShadowManager::renderShadows(RenderInfoClass & rinfo)
 	static AABoxClass aaBox;
 	static SphereClass sphere;
 
-	//According to Nvidia there's a D3D bug that happens if you don't start with a
-	//new dynamic VB each frame - so we force a DISCARD by overflowing the counter.
-	nShadowDecalVertsInBuf = 0xffff;
-	nShadowDecalIndicesInBuf = 0xffff;
+    m_graphics->camera = &rinfo.Camera;
+    m_graphics->vertices.clear(); m_graphics->indices.clear();
 
 	if (TheGlobalData->m_useShadowDecals)
 	{
 		// Render the object
-		TheMeshRenderer.Set_Camera(&rinfo.Camera);
+
 
 		//keep track of active decal texture so we can render all decals at once.
 		W3DShadowTexture *lastShadowDecalTexture=nullptr;
@@ -1395,59 +811,20 @@ Int W3DProjectedShadowManager::renderShadows(RenderInfoClass & rinfo)
 				{
 					//build inverse camera/view transforms needed for projection
 					shadow->updateProjectionParameters(rinfo.Camera.Get_Transform());
-					TexProjectClass *projector=shadow->getShadowProjector();
 
 					//terrain is always visible and affected by all shadows so must render
-					projector->Peek_Material_Pass()->Install_Materials();
-					WW3D::Get_Render_Backend()->Apply_Render_State_Changes();	//force update of view and projection matrices
+
+
 					if (renderProjectedTerrainShadow(shadow, aaBox))
 						projectionCount++;
-					projector->Peek_Material_Pass()->UnInstall_Materials();
 
-					SimpleObjectIterator *iter;
-					Object *obj;
 
-					iter = ThePartitionManager->iterateObjectsInRange((const Coord3D*)&sphere.Center,sphere.Radius, FROM_CENTER_3D);
-					MemoryPoolObjectHolder hold( iter );
-
-					AABoxIntersectionTestClass boxtest(aaBox,COLL_TYPE_ALL);
-
-					for( obj = iter->first(); obj; obj = iter->next() )
-					{
-							Drawable *draw = obj->getDrawable();
-
-							for (DrawModule ** dm = draw->getDrawModules(); *dm; ++dm)
-							{
-								const ObjectDrawInterface* di = (*dm)->getObjectDrawInterface();
-								if (di)
-								{
-									W3DModelDraw *w3dDraw= (W3DModelDraw *)di;
-									RenderObjClass *robj=nullptr;
-
-									///@todo: don't apply shadows to translcuent objects unless they are MOBILE - hack to get tanks to work.
-									if ((robj=w3dDraw->getRenderObject()) != nullptr && (!robj->Is_Alpha() || !obj->isKindOf(KINDOF_IMMOBILE)) && robj != shadow->m_robj && robj->Is_Really_Visible())
-									{
-											//do a more accurate test against W3D render bounding boxes.
-											if (robj->Intersect_AABox(boxtest))
-											{
-												//Shadow reached a visible object so it needs to be rendered with shadow applied.
-												rinfo.Push_Material_Pass(projector->Peek_Material_Pass());
-												rinfo.Push_Override_Flags(RenderInfoClass::RINFO_OVERRIDE_ADDITIONAL_PASSES_ONLY);
-												robj->Render(rinfo);	//WW3D::Render(*robj,rinfo);
-												rinfo.Pop_Override_Flags();
-												rinfo.Pop_Material_Pass();
-												projectionCount++;	//keep track of number of shadow projections
-											}
-									}
-								}
-							}
-					}
 				}
 			}
 		}
 
 		flushDecals(lastShadowDecalTexture,lastShadowType);	//make sure there are not any unrendered decals left over.
-		TheMeshRenderer.Flush();	//draw all the shadow receiving objects
+
 	}
 	if (m_decalList)
 	{
@@ -2184,7 +1561,12 @@ void W3DProjectedShadow::updateTexture(Vector3 &lightPos)
 
 		context->light_environment->Reset(m_robj->Get_Position(), Vector3(0,0,0));
 
-		m_shadowProjector->Compute_Texture(m_robj,context);
+        if (!m_shadowProjector->Compute_Texture(m_robj,context,
+            [](RenderObjClass& object, RenderInfoClass& info) {
+                W3DObjectGraphics graphics;
+                Graphics::PropLighting lighting{};
+                return graphics.Render(object,info,lighting,nullptr);
+            })) return;
 
 		//Need to copy generated texture into permanent texture.
 		SurfaceClass *oldSurface=shadow_texture->Get_Surface_Level();

@@ -5301,7 +5301,7 @@ GameMessageDisposition CommandTranslator::translateGameMessage(const GameMessage
 		{
 			if (TheGameLogic->isInGame())
 			{
-				if(TheInGameUI->cameoVideoBuffer() == nullptr)
+				if(!TheInGameUI->isCameoMoviePlaying())
 					TheInGameUI->playCameoMovie("CameoMovie");
 				else
 					TheInGameUI->stopCameoMovie();

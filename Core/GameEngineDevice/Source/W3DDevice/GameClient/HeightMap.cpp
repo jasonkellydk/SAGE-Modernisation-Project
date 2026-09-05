@@ -2088,7 +2088,7 @@ void HeightMapRenderObjClass::Render(RenderInfoClass & rinfo)
 	}
 		WW3D::Get_Render_Backend()->Set_Texture(0,nullptr);
 		WW3D::Get_Render_Backend()->Set_Texture(1,nullptr);
-		drawScorches();
+		drawScorches(rinfo.Camera);
 
 		WW3D::Get_Render_Backend()->Set_Texture(0,nullptr);
 		WW3D::Get_Render_Backend()->Set_Texture(1,nullptr);
@@ -2098,7 +2098,7 @@ void HeightMapRenderObjClass::Render(RenderInfoClass & rinfo)
 		m_bridgeBuffer->drawBridges(&rinfo.Camera, m_disableTextures, doCloud?m_stageTwoTexture:nullptr);
 
 		if (TheTerrainTracksRenderObjClassSystem)
-			TheTerrainTracksRenderObjClassSystem->flush();
+			TheTerrainTracksRenderObjClassSystem->flush(rinfo.Camera);
 
 		ShaderClass::Invalidate();
 		WW3D::Get_Render_Backend()->Apply_Render_State_Changes();

@@ -18,6 +18,10 @@
 
 #ifdef PROFILER_ENABLED
 
+#ifdef RTS_ZEROHOUR
+import Graphics.Backends.DX11.Coexistence;
+import Graphics.Scene.Screen.Filters;
+#endif
 #include "W3DDevice/GameClient/W3DProfilerFrameCapture.h"
 #include "W3DDevice/GameClient/W3DShaderManager.h"
 
@@ -65,14 +69,6 @@ void W3DProfilerFrameCapture::Capture(UnsignedInt displayWidth, UnsignedInt disp
 	{
 		PROFILER_FRAME_IMAGE(m_lastCapturePixels.data(), PROFILER_FRAME_IMAGE_SIZE, m_lastCaptureHeight, 0, false);
 		return;
-	}
-
-	// Compile the swizzle shader used to convert BGRA to RGBA.
-	if (!m_swizzleShader)
-	{
-		if (!W3DShaderManager::LoadAndCreateShader(
-			"shaders/profiler_swizzle.pso", false, &m_swizzleShader))
-			return;
 	}
 
 	// allocate render target
@@ -149,6 +145,22 @@ void W3DProfilerFrameCapture::Capture(UnsignedInt displayWidth, UnsignedInt disp
 	RenderBackendViewport backend_viewport{0, 0, PROFILER_FRAME_IMAGE_SIZE, smallRenderDesc.Height, 0.0f, 1.0f};
 	backend->Set_Viewport(backend_viewport);
 
+#ifdef RTS_ZEROHOUR
+    void* resource=nullptr; void* view=nullptr;
+    auto* device=Graphics::Shared_Frame_Device();
+    if (device && backend->Get_Shared_Texture_Resources(intermediateTexture,resource,view)) {
+        const auto texture=Graphics::Import_Shared_Texture(resource,view);
+        std::array<Graphics::ScreenFilterVertex,4> vertices{};
+        vertices[0].position={1,-1,0}; vertices[0].uv={1,1};
+        vertices[1].position={1,1,0}; vertices[1].uv={1,0};
+        vertices[2].position={-1,-1,0}; vertices[2].uv={0,1};
+        vertices[3].position={-1,1,0}; vertices[3].uv={0,0};
+        Graphics::ScreenFilterParameters parameters; parameters.operation=3;
+        Graphics::Get_Screen_Filter_Renderer().Draw(device->Immediate_Command_List(),vertices,parameters,{},texture);
+        device->Destroy_Texture(texture);
+        backend->Invalidate_Cached_Render_States();
+    }
+#else
 	// bind swizzle shader
 	backend->Set_Pixel_Shader(m_swizzleShader);
 	static const Real kMaskR[4] = {1.0f, 0.0f, 0.0f, 0.0f};
@@ -178,6 +190,7 @@ void W3DProfilerFrameCapture::Capture(UnsignedInt displayWidth, UnsignedInt disp
 		sizeof(QuadVertex), RenderBackendVertexFormat::TransformedPositionTexture);
 	backend->Set_Pixel_Shader(0);
 	backend->Set_Texture_Handle(0, 0);
+#endif
 	backend->Set_Viewport(restoreViewport);
 	backend->Set_Render_Target(nullptr);
 

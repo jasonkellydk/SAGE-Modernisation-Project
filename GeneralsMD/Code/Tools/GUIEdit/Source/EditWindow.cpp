@@ -59,6 +59,7 @@
 #include "HierarchyView.h"
 #include "Properties.h"
 #include "WW3D2/WW3D.h"
+#include "WW3D2/GraphicsToolFrame.h"
 #include "WW3D2/Render2D.h"
 
 // DEFINES ////////////////////////////////////////////////////////////////////
@@ -503,6 +504,7 @@ void EditWindow::shutdown()
 	m_assetManager = nullptr;
 
 	// shutdown WW3D
+	Shutdown_Graphics_Tool_Frame();
 	WW3D::Shutdown();
 	WWMath::Shutdown();
 
@@ -1474,10 +1476,14 @@ void EditWindow::draw()
 	WW3D::Update_Logic_Frame_Time(TheFramePacer->getLogicTimeStepMilliseconds());
 	WW3D::Sync(WW3D::Get_Fractional_Sync_Milliseconds() >= WWSyncMilliseconds);
 
+	if (!Begin_Graphics_Tool_Frame()) return;
 	// start render block
-	WW3D::Begin_Render( true, true, Vector3( m_backgroundColor.red,
+	if (WW3D::Begin_Render( true, true, Vector3( m_backgroundColor.red,
 																					 m_backgroundColor.green,
-																					 m_backgroundColor.blue ) );
+																					 m_backgroundColor.blue ) ) != WW3D_ERROR_OK) {
+        Abort_Graphics_Tool_Frame();
+        return;
+    }
 
 	// draw the windows
 	TheWindowManager->winRepaint();
@@ -1487,7 +1493,8 @@ void EditWindow::draw()
 		drawUIFeedback();
 
 	// render is all done!
-	WW3D::End_Render();
+	WW3D::End_Render(false);
+	End_Graphics_Tool_Frame();
 
 	TheFramePacer->update();
 }

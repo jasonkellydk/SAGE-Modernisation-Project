@@ -79,6 +79,14 @@
 
 //#undef STRICT
 #include "WW3D2/WW3D.h"
+#include <filesystem>
+#include <fstream>
+#include <string>
+#include <system_error>
+
+import Graphics.Backends.DX11.Coexistence;
+import Graphics.Capture.FrameCapture;
+import Video.Capture.ImageWriter;
 
 
 #ifdef RTS_DEBUG
@@ -587,7 +595,7 @@ CMainFrame::OnCreateClient
 					gamma=gamma/10.0f;
 					if (gamma<1.0) gamma=1.0;
 					if (gamma>3.0) gamma=3.0;
-					DX8Wrapper::Set_Gamma(gamma,0.0f,1.0f);
+					WW3D::Set_Gamma(gamma,0.0f,1.0f);
 				}
 			}
 		}
@@ -3110,7 +3118,26 @@ CMainFrame::OnSaveScreenshot ()
 	bool cursor_shown = GetCurrentDocument ()->Is_Cursor_Shown ();
 	GetCurrentDocument ()->Show_Cursor (false);
 	Get_Graphic_View ()->RepaintView ();
-	WW3D::Make_Screen_Shot (full_path);
+	if (auto* device = Graphics::Shared_Frame_Device()) {
+		Graphics::FrameCapture capture;
+		const auto target = device->Get_Swap_Chain().Backbuffer();
+		const auto frame = capture.Read(*device, target.texture, target.width, target.height,
+			Graphics::RHITextureFormat::BGRA8_UNorm);
+		if (frame.Is_Valid()) {
+			static unsigned sequence = 1;
+			for (;;) {
+				const unsigned number = sequence++;
+				auto path = std::filesystem::path(static_cast<const char*>(full_path));
+				path += (number < 10 ? "0" : "") + std::to_string(number) + ".tga";
+				std::error_code error;
+				const bool exists = std::filesystem::exists(path, error);
+				if (error) break;
+				if (exists) continue;
+				Engine::Video::Write_Frame_Image(path, frame, {Engine::Video::FrameImageFormat::TGA, 90, 1.3f});
+				break;
+			}
+		}
+	}
 	GetCurrentDocument ()->Show_Cursor (cursor_shown);
 }
 
@@ -4208,9 +4235,9 @@ void CMainFrame::OnEnableGammaCorrection()
 		gamma=gamma/10.0f;
 		if (gamma<1.0) gamma=1.0;
 		if (gamma>3.0) gamma=3.0;
-		DX8Wrapper::Set_Gamma(gamma,0.0f,1.0f);
+		WW3D::Set_Gamma(gamma,0.0f,1.0f);
 	} else {
-		DX8Wrapper::Set_Gamma(1.0,0.0f,1.0f);
+		WW3D::Set_Gamma(1.0,0.0f,1.0f);
 	}
 }
 

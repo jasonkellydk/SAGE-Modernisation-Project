@@ -39,6 +39,7 @@
 class TextureClass;
 class SurfaceClass;
 class TerrainLogic;
+class RadarDrawData;
 
 // PROTOTYPES /////////////////////////////////////////////////////////////////////////////////////
 //-------------------------------------------------------------------------------------------------
@@ -61,7 +62,7 @@ public:
 
 	virtual void newMap( TerrainLogic *terrain ) override;				///< reset radar for new map
 
-	virtual void draw( Int pixelX, Int pixelY, Int width, Int height ) override;		///< draw the radar
+	virtual Bool drawData(Int pixelX, Int pixelY, Int width, Int height, void *drawList) override;		///< draw the radar
 
 	virtual void clearShroud() override;
 	virtual void setShroudLevel(Int x, Int y, CellShroudStatus setting) override; ///< set the shroud level at shroud cell x,y
@@ -75,16 +76,16 @@ public:
 
 protected:
 
-	void drawSingleBeaconEvent( Int pixelX, Int pixelY, Int width, Int height, Int index );
-	void drawSingleGenericEvent( Int pixelX, Int pixelY, Int width, Int height, Int index );
+	void drawSingleBeaconEvent(RadarDrawData &drawing, Int pixelX, Int pixelY, Int width, Int height, Int index );
+	void drawSingleGenericEvent(RadarDrawData &drawing, Int pixelX, Int pixelY, Int width, Int height, Int index );
 
 	void initializeTextureFormats();				///< find format to use for the radar texture
 	void deleteResources();									///< delete resources used
-	void drawEvents( Int pixelX, Int pixelY, Int width, Int height);		///< draw all of the radar events
-	void drawHeroIcon( Int pixelX, Int pixelY, Int width, Int height, const Coord3D *pos );	//< draw a hero icon
-	void drawViewBox( Int pixelX, Int pixelY, Int width, Int height );  ///< draw view box
+	void drawEvents(RadarDrawData &drawing, Int pixelX, Int pixelY, Int width, Int height);		///< draw all of the radar events
+	void drawHeroIcon(RadarDrawData &drawing, Int pixelX, Int pixelY, Int width, Int height, const Coord3D *pos );	//< draw a hero icon
+	void drawViewBox(RadarDrawData &drawing, Int pixelX, Int pixelY, Int width, Int height );  ///< draw view box
 	void buildTerrainTexture( TerrainLogic *terrain );	 ///< create the terrain texture of the radar
-	void drawIcons( Int pixelX, Int pixelY, Int width, Int height );	///< draw all of the radar icons
+	void drawIcons(RadarDrawData &drawing, Int pixelX, Int pixelY, Int width, Int height );	///< draw all of the radar icons
 	void updateObjectTexture(TextureClass *texture);
 	static Bool canRenderObject( const RadarObject *rObj, const Player *localPlayer );
 	void renderObjectList( const RadarObject *listHead, TextureClass *texture );

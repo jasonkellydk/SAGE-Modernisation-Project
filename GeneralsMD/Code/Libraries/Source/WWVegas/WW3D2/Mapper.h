@@ -513,6 +513,7 @@ public:
 	BumpEnvTextureMapperClass(const BumpEnvTextureMapperClass & src);
 
 	virtual int	Mapper_ID() const override { return MAPPER_ID_BUMPENV;}
+	void Calculate_Bump_Matrix(float (&matrix)[4]);
 
 	virtual TextureMapperClass *Clone() const override { return NEW_REF( BumpEnvTextureMapperClass, (*this)); }
 

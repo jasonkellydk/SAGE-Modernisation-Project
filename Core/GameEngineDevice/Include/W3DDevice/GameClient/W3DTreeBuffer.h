@@ -44,6 +44,11 @@
 
 #pragma once
 
+#include <array>
+#include <span>
+#include <vector>
+import Graphics.Scene.Trees.Renderer;
+import Graphics.Scene.Surfaces.Renderer;
 #include <vector>
 
 //-----------------------------------------------------------------------------
@@ -60,7 +65,7 @@
 #include "Common/GameType.h"
 #include "Common/AsciiString.h"
 #include "Common/GlobalData.h"
-#include "W3DDevice/GameClient/TreeMaterial.h"
+#include "WW3D2/VertexFormat.h"
 
 //-----------------------------------------------------------------------------
 //           Forward References
@@ -195,12 +200,8 @@ public:
 	void setBounds(const Region2D &bounds) {m_bounds = bounds;}
 	/// Draws the trees.  Uses camera for culling.
 	void drawTrees(CameraClass * camera, RefRenderObjListIterator *pDynamicLightsIterator);
-	/// Returns true when visible trees have requested real shadow volumes.
-	Bool hasShadowCasters() const;
-	/// Builds the current frame's geometry-driven tree shadow volumes.
-	void prepareShadowVolumes(const Vector3 &lightPosition);
-	/// Renders the prepared tree shadow volumes using the active stencil state.
-	void renderShadowVolumes();
+    void prepareFrame();
+    Bool collectShadowCasters();
 	/// Called when the view changes, and sort key needs to be recalculated.
 	/// Normally sortKey gets calculated when a tree becomes visible.
 	void doFullUpdate() {m_updateAllKeys = true;};
@@ -223,9 +224,12 @@ private:
 				MAX_BUFFERS = 1,
 				SORT_ITERATIONS_PER_FRAME=10};
 	enum {PARTITION_WIDTH_HEIGHT = 100};
-	VertexBufferClass	*m_vertexTree[MAX_BUFFERS];	///<Tree vertex buffer.
-	IndexBufferClass			*m_indexTree[MAX_BUFFERS];	///<indices defining a triangles for the tree drawing.
-	TreeMaterialClass		m_treeMaterial;	///<Explicit programmable tree material.
+    std::vector<VertexFormatXYZNDUV1> m_vertexTree[MAX_BUFFERS];
+    std::vector<UnsignedShort> m_indexTree[MAX_BUFFERS];
+    Graphics::TreeMeshHandle m_graphicsMeshes[MAX_BUFFERS];
+    bool m_graphicsGeometryDirty = true;
+    UnsignedInt m_preparedFrame = ~0u;
+
 
 	Short		m_areaPartition[PARTITION_WIDTH_HEIGHT*PARTITION_WIDTH_HEIGHT];
 	Region2D m_bounds;
@@ -257,7 +261,6 @@ private:
 	Real		m_curSwayStep[MAX_SWAY_TYPES];
 	Real		m_curSwayFactor[MAX_SWAY_TYPES];
 
-	std::vector<Vector3> m_shadowVolumeVertices;
 
 protected:
 	// snapshot methods

@@ -1,3 +1,6 @@
+#ifdef RTS_ZEROHOUR
+#include "W3DDevice/GameClient/W3DScreenFilterGraphics.h"
+#endif
 #include "WW3D2/WW3D.h"
 /*
 **	Command & Conquer Generals Zero Hour(tm)
@@ -61,7 +64,8 @@
 #include "W3DDevice/GameClient/W3DShaderManager.h"
 #include <SDL3/SDL.h>
 #include "W3DDevice/GameClient/W3DShroud.h"
-#include "W3DDevice/GameClient/HeightMap.h"
+#include "W3DDevice/GameClient/BaseHeightMap.h"
+#include "W3DDevice/GameClient/WorldHeightMap.h"
 #include "W3DDevice/GameClient/W3DCustomScene.h"
 #include "W3DDevice/GameClient/W3DSmudge.h"
 #include "GameClient/View.h"
@@ -239,6 +243,7 @@ Bool ScreenDefaultFilter::preRender(Bool &skipRender, CustomScenePassModes &scen
 
 Bool ScreenDefaultFilter::postRender(FilterModes mode, Coord2D &scrollDelta,Bool &doExtraRender)
 {
+
 	TextureClass * tex =	W3DShaderManager::endRenderToTexture();
 	DEBUG_ASSERTCRASH(tex, ("Require rendered texture."));
 	if (!tex) return false;
@@ -280,7 +285,11 @@ Bool ScreenDefaultFilter::postRender(FilterModes mode, Coord2D &scrollDelta,Bool
 	//not worth bothering with index/vertex buffers.
 	WW3D::Get_Render_Backend()->Set_Vertex_Format(RenderBackendVertexFormat::TransformedPositionDiffuseTexture);
 
+#ifdef RTS_ZEROHOUR
+    Draw_Screen_Filter_Quad(v,tex);
+#else
 	WW3D::Get_Render_Backend()->Draw_Primitive_Up(RenderBackendPrimitiveType::TriangleStrip, 2, v, sizeof(_TRANS_LIT_TEX_VERTEX), RenderBackendVertexFormat::TransformedPositionDiffuseTexture);
+#endif
 
 	reset();
 	return true;
@@ -329,6 +338,11 @@ W3DFilterInterface *ScreenBWFilterList[]=
 
 Int ScreenBWFilter::init()
 {
+#ifdef RTS_ZEROHOUR
+    m_dwBWPixelShader=0; m_curFadeFrame=0;
+    W3DFilters[FT_VIEW_BW_FILTER]=&screenBWFilter;
+    return W3DShaderManager::canRenderToTexture();
+#else
 	Int res;
 
 	m_dwBWPixelShader = 0;
@@ -353,6 +367,7 @@ Int ScreenBWFilter::init()
 		}
 	}
 	return FALSE;
+#endif
 }
 
 Bool ScreenBWFilter::preRender(Bool &skipRender, CustomScenePassModes &scenePassMode)
@@ -364,6 +379,7 @@ Bool ScreenBWFilter::preRender(Bool &skipRender, CustomScenePassModes &scenePass
 
 Bool ScreenBWFilter::postRender(FilterModes mode, Coord2D &scrollDelta,Bool &doExtraRender)
 {
+
 	TextureClass * tex =	W3DShaderManager::endRenderToTexture();
 	DEBUG_ASSERTCRASH(tex, ("Require rendered texture."));
 	if (!tex) return false;
@@ -405,7 +421,15 @@ Bool ScreenBWFilter::postRender(FilterModes mode, Coord2D &scrollDelta,Bool &doE
 	//not worth bothering with index/vertex buffers.
 	WW3D::Get_Render_Backend()->Set_Vertex_Format(RenderBackendVertexFormat::TransformedPositionDiffuseTexture);
 
+#ifdef RTS_ZEROHOUR
+    Graphics::ScreenFilterParameters parameters;
+    parameters.operation=1; parameters.fade=m_curFadeValue;
+    if (mode==FM_VIEW_BW_RED_AND_WHITE) parameters.tint={1,0,0,1};
+    if (mode==FM_VIEW_BW_GREEN_AND_WHITE) parameters.tint={0,1,0,1};
+    Draw_Screen_Filter_Quad(v,tex,parameters);
+#else
 	WW3D::Get_Render_Backend()->Draw_Primitive_Up(RenderBackendPrimitiveType::TriangleStrip, 2, v, sizeof(_TRANS_LIT_TEX_VERTEX), RenderBackendVertexFormat::TransformedPositionDiffuseTexture);
+#endif
 
 	reset();
 	return true;
@@ -518,6 +542,9 @@ Int ScreenBWFilter::shutdown()
 /**Alternate version of the above filter which does not require pixel shaders - good for older cards*/
 Int ScreenBWFilterDOT3::init()
 {
+#ifdef RTS_ZEROHOUR
+    return FALSE;
+#else
 	Int res;
 
 	m_curFadeFrame = 0;
@@ -533,6 +560,7 @@ Int ScreenBWFilterDOT3::init()
 			return TRUE;
 	}
 	return FALSE;
+#endif
 }
 
 Bool ScreenBWFilterDOT3::preRender(Bool &skipRender, CustomScenePassModes &scenePassMode)
@@ -544,6 +572,9 @@ Bool ScreenBWFilterDOT3::preRender(Bool &skipRender, CustomScenePassModes &scene
 
 Bool ScreenBWFilterDOT3::postRender(FilterModes mode, Coord2D &scrollDelta,Bool &doExtraRender)
 {
+#ifdef RTS_ZEROHOUR
+    return ScreenBWFilter::postRender(mode,scrollDelta,doExtraRender);
+#else
 	TextureClass * tex =	W3DShaderManager::endRenderToTexture();
 	DEBUG_ASSERTCRASH(tex, ("Require rendered texture."));
 	if (!tex) return false;
@@ -624,6 +655,7 @@ Bool ScreenBWFilterDOT3::postRender(FilterModes mode, Coord2D &scrollDelta,Bool 
 
 	reset();
 	return true;
+#endif
 }
 
 Int ScreenBWFilterDOT3::set(FilterModes mode)
@@ -792,6 +824,7 @@ Bool ScreenCrossFadeFilter::preRender(Bool &skipRender, CustomScenePassModes &sc
 
 Bool ScreenCrossFadeFilter::postRender(FilterModes mode, Coord2D &scrollDelta,Bool &doExtraRender)
 {
+
 	TextureClass * tex;
 
 	if (m_skipRender)
@@ -873,7 +906,14 @@ Bool ScreenCrossFadeFilter::postRender(FilterModes mode, Coord2D &scrollDelta,Bo
 
 // Fixed-function texture filtering is owned by the render backend.
 
+#ifdef RTS_ZEROHOUR
+    Graphics::ScreenFilterParameters parameters;
+    parameters.operation=mode==FM_VIEW_CROSSFADE_CIRCLE ? 2.0f : 0.0f;
+    Graphics::ScreenFilterStyle style; style.blend=true;
+    Draw_Screen_Filter_Quad(v,tex,parameters,style,m_fadePatternTexture);
+#else
 	WW3D::Get_Render_Backend()->Draw_Primitive_Up(RenderBackendPrimitiveType::TriangleStrip, 2, v, sizeof(_TRANS_LIT_TEX_VERTEX), RenderBackendVertexFormat::TransformedPositionDiffuseTexture);
+#endif
 
 	reset();
 	return true;
@@ -972,6 +1012,7 @@ Bool ScreenMotionBlurFilter::preRender(Bool &skipRender, CustomScenePassModes &s
 
 Bool ScreenMotionBlurFilter::postRender(FilterModes mode, Coord2D &scrollDelta,Bool &doExtraRender)
 {
+
 	TextureClass * tex =	W3DShaderManager::endRenderToTexture();
 	DEBUG_ASSERTCRASH(tex, ("Require rendered texture."));
 	if (!tex) return false;
@@ -1089,7 +1130,15 @@ Bool ScreenMotionBlurFilter::postRender(FilterModes mode, Coord2D &scrollDelta,B
 	WW3D::Get_Render_Backend()->Set_Texture_Argument(0, RenderBackendTextureComponent::Alpha, 1, RenderBackendTextureArgument::Current, RenderBackendTextureArgumentModifiers::None);;
 	WW3D::Get_Render_Backend()->Set_Texture_Argument(0, RenderBackendTextureComponent::Alpha, 2, RenderBackendTextureArgument::Texture, RenderBackendTextureArgumentModifiers::None);;
 	WW3D::Get_Render_Backend()->Set_Texture_Operation(0, RenderBackendTextureComponent::Alpha, RenderBackendTextureOperation::SelectArgument1);;
+#ifdef RTS_ZEROHOUR
+    {
+        Graphics::ScreenFilterParameters parameters; parameters.vertex_alpha=1;
+        Graphics::ScreenFilterStyle style;
+        Draw_Screen_Filter_Quad(v,tex,parameters,style);
+    }
+#else
 	WW3D::Get_Render_Backend()->Draw_Primitive_Up(RenderBackendPrimitiveType::TriangleStrip, 2, v, sizeof(_TRANS_LIT_TEX_VERTEX), RenderBackendVertexFormat::TransformedPositionDiffuseTexture);
+#endif
 	WW3D::Get_Render_Backend()->Set_Alpha_Blend_Enabled(true);;
 
 	WW3D::Get_Render_Backend()->Apply_Render_State_Changes();
@@ -1117,7 +1166,17 @@ Bool ScreenMotionBlurFilter::postRender(FilterModes mode, Coord2D &scrollDelta,B
 					v[i].v = ((v[i].v-center.y)*factor) + center.y;
 				}
 			}
+#ifdef RTS_ZEROHOUR
+    {
+        Graphics::ScreenFilterParameters parameters; parameters.vertex_alpha=1;
+        Graphics::ScreenFilterStyle style;
+        style.blend=true;
+        style.destination=m_additive ? Graphics::RHIBlendFactor::One : Graphics::RHIBlendFactor::InverseSourceAlpha;
+        Draw_Screen_Filter_Quad(v,tex,parameters,style);
+    }
+#else
 			WW3D::Get_Render_Backend()->Draw_Primitive_Up(RenderBackendPrimitiveType::TriangleStrip, 2, v, sizeof(_TRANS_LIT_TEX_VERTEX), RenderBackendVertexFormat::TransformedPositionDiffuseTexture);
+#endif
 
 		}
 	}
@@ -1198,1339 +1257,6 @@ Int ScreenMotionBlurFilter::shutdown()
 	return TRUE;
 }
 
-/*===========================================================================================*/
-/*=========      Shroud Shaders	=============================================================*/
-/*===========================================================================================*/
-
-///Shroud layer rendering shader
-class ShroudTextureShader : public W3DShaderInterface
-{
-	virtual Int set(Int pass) override;		///<setup shader for the specified rendering pass.
-	virtual Int init() override;			///<perform any one time initialization and validation
-	virtual void reset() override;		///<do any custom resetting necessary to bring W3D in sync.
-	Int m_stageOfSet;
-} shroudTextureShader;
-
-///List of different shroud shader implementations in order of preference
-W3DShaderInterface *ShroudShaderList[]=
-{
-	&shroudTextureShader,
-	nullptr
-};
-
-//#define SHROUD_STRETCH_FACTOR	(1.0f/MAP_XY_FACTOR)	//1 texel per heightmap cell width
-
-Int ShroudTextureShader::init()
-{
-	W3DShaders[W3DShaderManager::ST_SHROUD_TEXTURE]=&shroudTextureShader;
-	W3DShadersPassCount[W3DShaderManager::ST_SHROUD_TEXTURE]=1;
-
-	return TRUE;
-}
-
-//Setup a texture projection in the given stage that applies our shroud.
-Int ShroudTextureShader::set(Int stage)
-{
-	//force WW3D2 system to set it's states so it won't later overwrite our custom settings.
-	VertexMaterialClass *vmat=VertexMaterialClass::Get_Preset(VertexMaterialClass::PRELIT_DIFFUSE);
-	WW3D::Get_Render_Backend()->Set_Material(vmat);
-	REF_PTR_RELEASE(vmat);	//no need to keep a reference since it's a preset.
-	WW3D::Get_Render_Backend()->Set_Texture(stage, W3DShaderManager::getShaderTexture(0));	//shroud always stored in texture 0
-
-	if (stage == 0)
-	{
-#if defined(RTS_DEBUG)
-	if (TheGlobalData && TheGlobalData->m_fogOfWarOn)
-		WW3D::Get_Render_Backend()->Set_Shader(ShaderClass::_PresetAlphaSpriteShader);
-	else
-		WW3D::Get_Render_Backend()->Set_Shader(ShaderClass::_PresetMultiplicativeSpriteShader);
-#else
-	WW3D::Get_Render_Backend()->Set_Shader(ShaderClass::_PresetMultiplicativeSpriteShader);
-#endif
-	}
-	WW3D::Get_Render_Backend()->Apply_Render_State_Changes();
-
-	WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(stage, RenderBackendTextureCoordinateSource::CameraSpacePosition);;
-	WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(stage, RenderBackendTextureTransformFlags::Count2);;
-	WW3D::Get_Render_Backend()->Set_Depth_Function(RenderBackendCompareFunction::Equal);;
-
-	//We need to scale so shroud texel stretches over one full terrain cell.  Each texel
-	//is 1/128 the size of full texture. (assuming 128x128 vid-mem texture).
-	W3DShroud *shroud;
-	if ((shroud=TheTerrainRenderObject->getShroud()) != nullptr)
-	{	///@todo: All this code really only need to be done once per camera/view.  Find a way to optimize it out.
-		Matrix4x4 curView;
-		WW3D::Get_Render_Backend()->Get_Transform(RenderBackendTransform::View, curView);
-
-		Matrix4x4 inv;
-		inv = curView.Inverse();
-
-		Matrix4x4 scale,offset;
-
-		//We need to make all world coordinates be relative to the heightmap data origin since that
-		//is where the shroud begins.
-
-		float xoffset = 0;
-		float yoffset = 0;
-		Real width=shroud->getCellWidth();
-		Real height=shroud->getCellHeight();
-
-		if (TheTerrainRenderObject->getMap())
-		{	//subtract origin position from all coordinates.  Origin is shifted by 1 cell width/height to allow for unused border texels.
-			xoffset = -(float)shroud->getDrawOriginX() + width;
-			yoffset = -(float)shroud->getDrawOriginY() + height;
-		}
-
-		offset = Make_Translation(xoffset, yoffset, 0);
-
-		width = 1.0f/(width*shroud->getTextureWidth());
-		height = 1.0f/(height*shroud->getTextureHeight());
-		scale = Make_Scaling(width, height, 1);
-		curView = scale * offset * inv;
-		WW3D::Get_Render_Backend()->Set_Transform(RenderBackend_Texture_Transform(stage), curView);
-	}
-	m_stageOfSet=stage;
-	return TRUE;
-}
-
-void ShroudTextureShader::reset()
-{
-	WW3D::Get_Render_Backend()->Set_Texture(m_stageOfSet,nullptr);
-	WW3D::Get_Render_Backend()->Set_Depth_Function(RenderBackendCompareFunction::LessEqual);;
-	WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(m_stageOfSet, RenderBackendTextureCoordinateSource::PassThrough, m_stageOfSet);;
-	WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(m_stageOfSet, RenderBackendTextureTransformFlags::Disabled);;
-}
-
-///Shroud layer rendering shader
-class FlatShroudTextureShader : public W3DShaderInterface
-{
-	virtual Int set(Int pass) override;		///<setup shader for the specified rendering pass.
-	virtual Int init() override;			///<perform any one time initialization and validation
-	virtual void reset() override;		///<do any custom resetting necessary to bring W3D in sync.
-	Int m_stageOfSet;
-} flatShroudTextureShader;
-
-///List of different shroud shader implementations in order of preference
-W3DShaderInterface *FlatShroudShaderList[]=
-{
-	&flatShroudTextureShader,
-	nullptr
-};
-
-//#define SHROUD_STRETCH_FACTOR	(1.0f/MAP_XY_FACTOR)	//1 texel per heightmap cell width
-
-Int FlatShroudTextureShader::init()
-{
-	W3DShaders[W3DShaderManager::ST_FLAT_SHROUD_TEXTURE]=&flatShroudTextureShader;
-	W3DShadersPassCount[W3DShaderManager::ST_FLAT_SHROUD_TEXTURE]=1;
-
-	return TRUE;
-}
-
-//Setup a texture projection in the given stage that applies our shroud.
-Int FlatShroudTextureShader::set(Int stage)
-{
-	//force WW3D2 system to set it's states so it won't later overwrite our custom settings.
-	if (stage < 2)
-		WW3D::Get_Render_Backend()->Set_Texture(stage, W3DShaderManager::getShaderTexture(stage));
-	else	//stages larger than 1 are not supported by W3D so set them directly
-		WW3D::Get_Render_Backend()->Set_Texture_Resource(stage, W3DShaderManager::getShaderTexture(stage));
-
-	WW3D::Get_Render_Backend()->Set_Texture_Argument(stage, RenderBackendTextureComponent::Color, 1, RenderBackendTextureArgument::Texture, RenderBackendTextureArgumentModifiers::None);;
-	WW3D::Get_Render_Backend()->Set_Texture_Argument(stage, RenderBackendTextureComponent::Color, 2, RenderBackendTextureArgument::Current, RenderBackendTextureArgumentModifiers::None);;
-	WW3D::Get_Render_Backend()->Set_Texture_Operation(stage, RenderBackendTextureComponent::Color, RenderBackendTextureOperation::Modulate);;
-	WW3D::Get_Render_Backend()->Set_Texture_Operation(stage, RenderBackendTextureComponent::Alpha, RenderBackendTextureOperation::Disable);;
-	//WW3D::Get_Render_Backend()->Apply_Render_State_Changes();
-
-	WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(stage, RenderBackendTextureCoordinateSource::CameraSpacePosition);;
-	WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(stage, RenderBackendTextureTransformFlags::Count2);;
-
-	//We need to scale so shroud texel stretches over one full terrain cell.  Each texel
-	//is 1/128 the size of full texture. (assuming 128x128 vid-mem texture).
-	W3DShroud *shroud;
-	if ((shroud=TheTerrainRenderObject->getShroud()) != nullptr)
-	{	///@todo: All this code really only need to be done once per camera/view.  Find a way to optimize it out.
-		Matrix4x4 curView;
-		WW3D::Get_Render_Backend()->Get_Transform(RenderBackendTransform::View, curView);
-
-		Matrix4x4 inv;
-		inv = curView.Inverse();
-
-		Matrix4x4 scale,offset;
-
-		//We need to make all world coordinates be relative to the heightmap data origin since that
-		//is where the shroud begins.
-
-		float xoffset = 0;
-		float yoffset = 0;
-		Real width=shroud->getCellWidth();
-		Real height=shroud->getCellHeight();
-
-		if (TheTerrainRenderObject->getMap())
-		{	//subtract origin position from all coordinates.  Origin is shifted by 1 cell width/height to allow for unused border texels.
-			xoffset = -(float)shroud->getDrawOriginX() + width;
-			yoffset = -(float)shroud->getDrawOriginY() + height;
-		}
-
-		offset = Make_Translation(xoffset, yoffset, 0);
-
-		width = 1.0f/(width*shroud->getTextureWidth());
-		height = 1.0f/(height*shroud->getTextureHeight());
-		scale = Make_Scaling(width, height, 1);
-		curView = scale * offset * inv;
-		WW3D::Get_Render_Backend()->Set_Transform(RenderBackend_Texture_Transform(stage), curView);
-	}
-	m_stageOfSet=stage;
-	return TRUE;
-}
-
-void FlatShroudTextureShader::reset()
-{
-	if (m_stageOfSet < MAX_TEXTURE_STAGES)
-		WW3D::Get_Render_Backend()->Set_Texture(m_stageOfSet,nullptr);
-	WW3D::Get_Render_Backend()->Set_Depth_Function(RenderBackendCompareFunction::LessEqual);;
-	WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(m_stageOfSet, RenderBackendTextureCoordinateSource::PassThrough, m_stageOfSet);;
-	WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(m_stageOfSet, RenderBackendTextureTransformFlags::Disabled);;
-}
-
-///Mask layer rendering shader
-class MaskTextureShader : public W3DShaderInterface
-{
-	virtual Int set(Int pass) override;		///<setup shader for the specified rendering pass.
-	virtual Int init() override;			///<perform any one time initialization and validation
-	virtual void reset() override;		///<do any custom resetting necessary to bring W3D in sync.
-} maskTextureShader;
-
-///List of different shroud shader implementations in order of preference
-W3DShaderInterface *MaskShaderList[]=
-{
-	&maskTextureShader,
-	nullptr
-};
-
-Int MaskTextureShader::init()
-{
-	W3DShaders[W3DShaderManager::ST_MASK_TEXTURE]=&maskTextureShader;
-	W3DShadersPassCount[W3DShaderManager::ST_MASK_TEXTURE]=1;
-
-	return TRUE;
-}
-
-Int MaskTextureShader::set(Int pass)
-{
-	Real fadeLevel=ScreenCrossFadeFilter::getCurrentFadeValue();
-
-	//Use the current fade level to scale the mask texture
-	Real radius = (1.0f-fadeLevel)*2.0f;
-	if (radius <= 0)
-		radius = 0.01f;
-	radius = 0.5f/radius;
-
-	//force WW3D2 system to set it's states so it won't later overwrite our custom settings.
-	VertexMaterialClass *vmat=VertexMaterialClass::Get_Preset(VertexMaterialClass::PRELIT_DIFFUSE);
-	WW3D::Get_Render_Backend()->Set_Material(vmat);
-	REF_PTR_RELEASE(vmat);	//no need to keep a reference since it's a preset.
-
-	//For now we're always going to project the texture coming from the crossfade effect
-	WW3D::Get_Render_Backend()->Set_Texture(0, ScreenCrossFadeFilter::getCurrentMaskTexture());
-	ShaderClass shader=ShaderClass::_PresetOpaqueShader;
-	shader.Set_Primary_Gradient(ShaderClass::GRADIENT_DISABLE);
-	WW3D::Get_Render_Backend()->Set_Shader(shader);
-	WW3D::Get_Render_Backend()->Apply_Render_State_Changes();
-
-	Matrix4x4 curView;
-	WW3D::Get_Render_Backend()->Get_Transform(RenderBackendTransform::View, curView);
-
-	WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(0, RenderBackendTextureCoordinateSource::CameraSpacePosition);;
-	WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(0, RenderBackendTextureTransformFlags::Count2);;
-
-	Matrix4x4 inv;
-
-	//Get inverse view matrix so we can transform camera space points back to world space
-	inv = curView.Inverse();
-
-	Matrix4x4 scale,offset,offsetTextureCenter;
-	Coord3D centerPos;
-	centerPos.zero();
-
-	//Find center of projection (this should be returned from some other filter, etc. but
-	//for now assume terrain location at center of screen.
-	if (TheTacticalView)
-	{	Int xpos,ypos;
-
-		TheTacticalView->getOrigin(&xpos,&ypos);
-
-		ICoord2D screenPos;
-		screenPos.x=(Real)TheTacticalView->getWidth()*0.5f;
-		screenPos.y=(Real)TheTacticalView->getHeight()*0.5f;
-		TheTacticalView->screenToTerrain(&screenPos,&centerPos);
-	}
-
-	offset = Make_Translation(-centerPos.x, -centerPos.y, 0);
-
-	offsetTextureCenter = Make_Translation(0.5f, 0.5f, 0);	//shift coordinates so center of projection falls at uv 0.5,0.5
-
-	Real worldTexelWidth=(1.0f-fadeLevel)*25.0f;	//9 worked well for circle but weird shape requires more stretch to cover.
-	Real worldTexelHeight=(1.0f-fadeLevel)*25.0f;
-
-	///@todo: Fix this to work with non 128x128 textures.
-	if (worldTexelWidth != 0 && worldTexelHeight != 0)
-	{
-		Real widthScale = 1.0f/(worldTexelWidth*128.0f);
-		Real heightScale = 1.0f/(worldTexelHeight*128.0f);
-		scale = Make_Scaling(widthScale, heightScale, 1);
-		curView = offsetTextureCenter * scale * offset * inv;
-	}
-	else
-	{
-		scale = Make_Scaling(0, 0, 1);	//scaling by 0 will set uv coordinates to 0,0
-		curView = scale * offset * inv;
-	}
-
-	WW3D::Get_Render_Backend()->Set_Transform(RenderBackendTransform::Texture0, curView);
-
-	return TRUE;
-}
-
-void MaskTextureShader::reset()
-{
-	WW3D::Get_Render_Backend()->Set_Texture(0,nullptr);
-	WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(0, RenderBackendTextureCoordinateSource::PassThrough, 0);;
-	WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(0, RenderBackendTextureTransformFlags::Disabled);;
-}
-
-/*===========================================================================================*/
-/*=========      Terrain Shaders	=========================================================*/
-/*===========================================================================================*/
-
-///regular terrain shader that should work on all multi-texture video cards (slowest version)
-class TerrainShader2Stage : public W3DShaderInterface
-{
-public:
-	float m_xSlidePerSecond ;	 ///< How far the clouds move per second.
-	float m_ySlidePerSecond ;	 ///< How far the clouds move per second.
-	float m_xOffset;
-	float m_yOffset;
-
-	virtual Int set(Int pass) override;		///<setup shader for the specified rendering pass.
-	virtual Int init() override;			///<perform any one time initialization and validation
-	virtual void reset() override;		///<do any custom resetting necessary to bring W3D in sync.
-
-	void updateCloud();
-	void updateNoise1 (Matrix4x4 *destMatrix,Matrix4x4 *curViewInverse, Bool doUpdate=true);	///<generate the uv coordinates for Noise1 (i.e clouds)
-	void updateNoise2 (Matrix4x4 *destMatrix,Matrix4x4 *curViewInverse, Bool doUpdate=true);	///<generate the uv coordinates for Noise2 (i.e lightmap)
-} terrainShader2Stage;
-
-///regular terrain shader that should work on all multi-texture video cards (slowest version)
-class FlatTerrainShader2Stage : public W3DShaderInterface
-{
-public:
-	virtual Int set(Int pass) override;		///<setup shader for the specified rendering pass.
-	virtual Int init() override;			///<perform any one time initialization and validation
-	virtual void reset() override;		///<do any custom resetting necessary to bring W3D in sync.
-} flatTerrainShader2Stage;
-
-///regular terrain shader that should work on all multi-texture video cards (slowest version)
-class FlatTerrainShaderPixelShader : public W3DShaderInterface
-{
-public:
-	uintptr_t m_dwVertexShader;
-	uintptr_t				m_dwBasePixelShader;	///<handle to terrain D3D pixel shader
-	uintptr_t				m_dwBaseNoise1PixelShader;	///<handle to terrain/single noise D3D pixel shader
-	uintptr_t				m_dwBaseNoise2PixelShader;	///<handle to terrain/double noise D3D pixel shader
-	uintptr_t				m_dwBase0PixelShader;	///<handle to terrain only pixel shader
-	virtual Int set(Int pass) override;		///<setup shader for the specified rendering pass.
-	virtual Int init() override;			///<perform any one time initialization and validation
-	virtual void reset() override;		///<do any custom resetting necessary to bring W3D in sync.
-	virtual Int shutdown() override;			///<release resources used by shader
-} flatTerrainShaderPixelShader;
-
-///8 stage terrain shader which only works on certain Nvidia cards.
-class TerrainShader8Stage : public W3DShaderInterface
-{
-	virtual Int set(Int pass) override;		///<setup shader for the specified rendering pass.
-	virtual void reset() override;		///<do any custom resetting necessary to bring W3D in sync.
-	virtual Int init() override;			///<perform any one time initialization and validation
-} terrainShader8Stage;
-
-//Offsets into constant register pool used by vertex shader
-#define CV_WORLDVIEWPROJ_0	0	//4 vectors for transform of world->clip space.
-
-///Pixel shader based terrain shader - fastest method for the newest cards.
-class TerrainShaderPixelShader : public W3DShaderInterface
-{
-	uintptr_t m_dwVertexShader;
-	uintptr_t				m_dwBasePixelShader;	///<handle to terrain D3D pixel shader
-
-	virtual Int set(Int pass) override;		///<setup shader for the specified rendering pass.
-	virtual void reset() override;		///<do any custom resetting necessary to bring W3D in sync.
-	virtual Int init() override;			///<perform any one time initialization and validation
-	virtual Int shutdown() override;			///<release resources used by shader
-} terrainShaderPixelShader;
-
-///List of different terrain shader implementations in order of preference
-W3DShaderInterface *TerrainShaderList[]=
-{
-	&terrainShaderPixelShader,
-	&terrainShader8Stage,
-	&terrainShader2Stage,
-	nullptr
-};
-
-///List of different terrain shader implementations in order of preference
-W3DShaderInterface *FlatTerrainShaderList[]=
-{
-	&flatTerrainShaderPixelShader,
-	&flatTerrainShader2Stage,
-	nullptr
-};
-
-Int TerrainShader2Stage::init()
-{
-	//initialize settings for uv animated clouds
-	m_xSlidePerSecond = -0.02f;
-	m_ySlidePerSecond =  1.50f * m_xSlidePerSecond;
-	m_xOffset = 0;
-	m_yOffset = 0;
-
-	//no special device validation needed - anything in our min spec should handle this.
-
-	W3DShaders[W3DShaderManager::ST_TERRAIN_BASE]=&terrainShader2Stage;
-	W3DShadersPassCount[W3DShaderManager::ST_TERRAIN_BASE]=2;
-	W3DShaders[W3DShaderManager::ST_TERRAIN_BASE_NOISE1]=&terrainShader2Stage;
-	W3DShadersPassCount[W3DShaderManager::ST_TERRAIN_BASE_NOISE1]=3;
-	W3DShaders[W3DShaderManager::ST_TERRAIN_BASE_NOISE2]=&terrainShader2Stage;
-	W3DShadersPassCount[W3DShaderManager::ST_TERRAIN_BASE_NOISE2]=3;
-	W3DShaders[W3DShaderManager::ST_TERRAIN_BASE_NOISE12]=&terrainShader2Stage;
-	W3DShadersPassCount[W3DShaderManager::ST_TERRAIN_BASE_NOISE12]=3;
-
-	return TRUE;
-}
-
-void TerrainShader2Stage::reset()
-{
-	ShaderClass::Invalidate();
-
-	//Free references to textures
-	WW3D::Get_Render_Backend()->Set_Texture_Resource(0, nullptr);
-	WW3D::Get_Render_Backend()->Set_Texture_Resource(1, nullptr);
-
-	WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(0, RenderBackendTextureTransformFlags::Disabled);;
-	WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(0, RenderBackendTextureCoordinateSource::PassThrough, 0);;
-
-	WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(1, RenderBackendTextureTransformFlags::Disabled);;
-	WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(1, RenderBackendTextureCoordinateSource::PassThrough, 1);;
-}
-
-void TerrainShader2Stage::updateCloud()
-{
-	const float frame_time = WW3D::Get_Logic_Frame_Time_Seconds();
-	m_xOffset += m_xSlidePerSecond * frame_time;
-	m_yOffset += m_ySlidePerSecond * frame_time;
-
-	// This moves offsets towards zero when smaller -1.0 or larger 1.0
-	m_xOffset -= (Int)m_xOffset;
-	m_yOffset -= (Int)m_yOffset;
-}
-
-void TerrainShader2Stage::updateNoise1(Matrix4x4 *destMatrix,Matrix4x4 *curViewInverse, Bool doUpdate)
-{
-	#define STRETCH_FACTOR ((float)(1/(63.0*MAP_XY_FACTOR/2))) /* covers 63/2 tiles */
-
-	Matrix4x4 scale;
-
-	scale = Make_Scaling(STRETCH_FACTOR, STRETCH_FACTOR, 1);
-	Matrix4x4 offset;
-	offset = Make_Translation(m_xOffset, m_yOffset, 0);
-	*destMatrix = offset * scale * (*curViewInverse);
-}
-
-void TerrainShader2Stage::updateNoise2(Matrix4x4 *destMatrix,Matrix4x4 *curViewInverse, Bool doUpdate)
-{
-
-	Matrix4x4 scale;
-
-	scale = Make_Scaling(STRETCH_FACTOR, STRETCH_FACTOR, 1);
-	*destMatrix = scale * (*curViewInverse);
-}
-
-Int TerrainShader2Stage::set(Int pass)
-{
-	//force WW3D2 system to set it's states so it won't later overwrite our custom settings.
-	WW3D::Get_Render_Backend()->Apply_Render_State_Changes();
-
-	if (TheGlobalData && (TheGlobalData->m_bilinearTerrainTex || TheGlobalData->m_trilinearTerrainTex)) {
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(0, RenderBackendTextureFilterType::Minification, RenderBackendTextureFilter::Linear);;
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(0, RenderBackendTextureFilterType::Magnification, RenderBackendTextureFilter::Linear);;
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::Minification, RenderBackendTextureFilter::Linear);;
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::Magnification, RenderBackendTextureFilter::Linear);;
-	} else {
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(0, RenderBackendTextureFilterType::Minification, RenderBackendTextureFilter::Point);;
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(0, RenderBackendTextureFilterType::Magnification, RenderBackendTextureFilter::Point);;
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::Minification, RenderBackendTextureFilter::Point);;
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::Magnification, RenderBackendTextureFilter::Point);;
-	}
-	if (TheGlobalData && TheGlobalData->m_trilinearTerrainTex) {
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(0, RenderBackendTextureFilterType::MipMap, RenderBackendTextureFilter::Linear);;
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::MipMap, RenderBackendTextureFilter::Linear);;
-	} else {
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(0, RenderBackendTextureFilterType::MipMap, RenderBackendTextureFilter::Point);;
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::MipMap, RenderBackendTextureFilter::Linear);;
-	}
-
-	switch (pass)
-	{
-		case 0:
-			WW3D::Get_Render_Backend()->Set_Texture_Resource(0, W3DShaderManager::getShaderTexture(0));
-			WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(0, true, RenderBackendTextureAddressMode::Clamp);;
-			WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(0, false, RenderBackendTextureAddressMode::Clamp);;
-
-			// Modulate the diffuse color with the texture as lighting comes from diffuse.
-			WW3D::Get_Render_Backend()->Set_Texture_Argument(0, RenderBackendTextureComponent::Color, 1, RenderBackendTextureArgument::Texture, RenderBackendTextureArgumentModifiers::None);;
-			WW3D::Get_Render_Backend()->Set_Texture_Argument(0, RenderBackendTextureComponent::Color, 2, RenderBackendTextureArgument::Diffuse, RenderBackendTextureArgumentModifiers::None);;
-			WW3D::Get_Render_Backend()->Set_Texture_Operation(0, RenderBackendTextureComponent::Color, RenderBackendTextureOperation::Modulate);;
-			WW3D::Get_Render_Backend()->Set_Texture_Operation(0, RenderBackendTextureComponent::Alpha, RenderBackendTextureOperation::Disable);;
-			WW3D::Get_Render_Backend()->Set_Texture_Operation(1, RenderBackendTextureComponent::Color, RenderBackendTextureOperation::Disable);;
-			WW3D::Get_Render_Backend()->Set_Texture_Operation(1, RenderBackendTextureComponent::Alpha, RenderBackendTextureOperation::Disable);;
-			WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(0, RenderBackendTextureCoordinateSource::PassThrough, 0);;
-			WW3D::Get_Render_Backend()->Set_Alpha_Blend_Enabled(false);;
-			break;
-		case 1:
-			WW3D::Get_Render_Backend()->Set_Texture_Resource(0, W3DShaderManager::getShaderTexture(1));
-			WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(0, true, RenderBackendTextureAddressMode::Clamp);;
-			WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(0, false, RenderBackendTextureAddressMode::Clamp);;
-
-			// Modulate the diffuse color with the texture as lighting comes from diffuse.
-			WW3D::Get_Render_Backend()->Set_Texture_Argument(0, RenderBackendTextureComponent::Color, 1, RenderBackendTextureArgument::Texture, RenderBackendTextureArgumentModifiers::None);;
-			WW3D::Get_Render_Backend()->Set_Texture_Argument(0, RenderBackendTextureComponent::Color, 2, RenderBackendTextureArgument::Diffuse, RenderBackendTextureArgumentModifiers::None);;
-			WW3D::Get_Render_Backend()->Set_Texture_Operation(0, RenderBackendTextureComponent::Color, RenderBackendTextureOperation::Modulate);;
-			WW3D::Get_Render_Backend()->Set_Texture_Operation(0, RenderBackendTextureComponent::Alpha, RenderBackendTextureOperation::Modulate);;
-			WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(0, RenderBackendTextureCoordinateSource::PassThrough, 1);;
-			// Blend the result using the alpha. (came from diffuse mod texture)
-			WW3D::Get_Render_Backend()->Set_Alpha_Blend_Enabled(true);;
-			WW3D::Get_Render_Backend()->Set_Source_Blend_Factor(RenderBackendBlendFactor::SourceAlpha);;
-			WW3D::Get_Render_Backend()->Set_Destination_Blend_Factor(RenderBackendBlendFactor::InverseSourceAlpha);;
-			// Disable stage 2.
-			WW3D::Get_Render_Backend()->Set_Texture_Operation(1, RenderBackendTextureComponent::Color, RenderBackendTextureOperation::Disable);;
-			WW3D::Get_Render_Backend()->Set_Texture_Operation(1, RenderBackendTextureComponent::Alpha, RenderBackendTextureOperation::Disable);;
-			break;
-		case 2:
-			// Noise/cloud pass
-			Matrix4x4 curView;
-			WW3D::Get_Render_Backend()->Get_Transform(RenderBackendTransform::View, curView);
-
-			//these states apply to all noise/cloud combination passes
-			WW3D::Get_Render_Backend()->Set_Texture_Argument(0, RenderBackendTextureComponent::Color, 1, RenderBackendTextureArgument::Texture, RenderBackendTextureArgumentModifiers::None);;
-			WW3D::Get_Render_Backend()->Set_Texture_Argument(0, RenderBackendTextureComponent::Color, 2, RenderBackendTextureArgument::Diffuse, RenderBackendTextureArgumentModifiers::None);;
-			WW3D::Get_Render_Backend()->Set_Texture_Operation(0, RenderBackendTextureComponent::Color, RenderBackendTextureOperation::SelectArgument1);;
-			WW3D::Get_Render_Backend()->Set_Texture_Operation(0, RenderBackendTextureComponent::Alpha, RenderBackendTextureOperation::Disable);;
-
-			WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(0, RenderBackendTextureCoordinateSource::CameraSpacePosition);;
-			// Two output coordinates are used.
-			WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(0, RenderBackendTextureTransformFlags::Count2);;
-			WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(0, true, RenderBackendTextureAddressMode::Wrap);;
-			WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(0, false, RenderBackendTextureAddressMode::Wrap);;
-
-			//blend into frame buffer
-			WW3D::Get_Render_Backend()->Set_Alpha_Blend_Enabled(true);;
-			WW3D::Get_Render_Backend()->Set_Source_Blend_Factor(RenderBackendBlendFactor::DestinationColor);;
-			WW3D::Get_Render_Backend()->Set_Destination_Blend_Factor(RenderBackendBlendFactor::Zero);;
-
-			Matrix4x4 inv;
-			inv = curView.Inverse();
-
-			if (W3DShaderManager::getCurrentShader() == W3DShaderManager::ST_TERRAIN_BASE_NOISE12)
-			{
-				//setup cloud pass
-				WW3D::Get_Render_Backend()->Set_Texture_Resource(0, W3DShaderManager::getShaderTexture(2));
-
-				updateNoise1(&curView,&inv);	//update curView with texture matrix
-				WW3D::Get_Render_Backend()->Set_Transform(RenderBackendTransform::Texture0, curView);
-				//clouds always need bilinear filtering
-				WW3D::Get_Render_Backend()->Set_Texture_Filter(0, RenderBackendTextureFilterType::Minification, RenderBackendTextureFilter::Linear);;
-				WW3D::Get_Render_Backend()->Set_Texture_Filter(0, RenderBackendTextureFilterType::Magnification, RenderBackendTextureFilter::Linear);;
-
-				//setup noise pass
-				WW3D::Get_Render_Backend()->Set_Texture_Resource(1, W3DShaderManager::getShaderTexture(3));
-
-				updateNoise2(&curView,&inv);
-				WW3D::Get_Render_Backend()->Set_Transform(RenderBackendTransform::Texture1, curView);
-				//noise always needs point/linear filtering.  Why point!?
-				WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::Minification, RenderBackendTextureFilter::Point);;
-				WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::Magnification, RenderBackendTextureFilter::Linear);;
-
-				WW3D::Get_Render_Backend()->Set_Texture_Argument(1, RenderBackendTextureComponent::Color, 1, RenderBackendTextureArgument::Texture, RenderBackendTextureArgumentModifiers::None);;
-				WW3D::Get_Render_Backend()->Set_Texture_Argument(1, RenderBackendTextureComponent::Color, 2, RenderBackendTextureArgument::Current, RenderBackendTextureArgumentModifiers::None);;
-				WW3D::Get_Render_Backend()->Set_Texture_Operation(1, RenderBackendTextureComponent::Color, RenderBackendTextureOperation::Modulate);;
-				WW3D::Get_Render_Backend()->Set_Texture_Operation(1, RenderBackendTextureComponent::Alpha, RenderBackendTextureOperation::Disable);;
-				WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(1, RenderBackendTextureCoordinateSource::CameraSpacePosition);;
-				// Two output coordinates are used.
-				WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(1, RenderBackendTextureTransformFlags::Count2);;
-
-				WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(1, true, RenderBackendTextureAddressMode::Wrap);;
-				WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(1, false, RenderBackendTextureAddressMode::Wrap);;
-			}
-			else
-			{	//only 1 noise or cloud texture
-				// Now setup the texture pipeline.
-				if (W3DShaderManager::getCurrentShader() == W3DShaderManager::ST_TERRAIN_BASE_NOISE1)
-				{	//setup cloud pass
-					WW3D::Get_Render_Backend()->Set_Texture_Resource(0, W3DShaderManager::getShaderTexture(2));
-					updateNoise1(&curView,&inv);	//update curView with texture matrix
-					WW3D::Get_Render_Backend()->Set_Texture_Filter(0, RenderBackendTextureFilterType::Minification, RenderBackendTextureFilter::Linear);;
-					WW3D::Get_Render_Backend()->Set_Texture_Filter(0, RenderBackendTextureFilterType::Magnification, RenderBackendTextureFilter::Linear);;
-				}
-				else
-				{
-					//setup noise pass
-					WW3D::Get_Render_Backend()->Set_Texture_Resource(0, W3DShaderManager::getShaderTexture(3));
-					updateNoise2(&curView,&inv);	//update curView with texture matrix
-					WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::Minification, RenderBackendTextureFilter::Point);;
-					WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::Magnification, RenderBackendTextureFilter::Linear);;
-				}
-
-				WW3D::Get_Render_Backend()->Set_Texture_Operation(1, RenderBackendTextureComponent::Color, RenderBackendTextureOperation::Disable);;
-				WW3D::Get_Render_Backend()->Set_Texture_Operation(1, RenderBackendTextureComponent::Alpha, RenderBackendTextureOperation::Disable);;
-				WW3D::Get_Render_Backend()->Set_Transform(RenderBackendTransform::Texture0, curView);
-			}
-			break;
-	}
-
-	return TRUE;
-}
-
-Int TerrainShader8Stage::init()
-{
-	ChipsetType res;
-
-	//this shader will also use the 2Stage shader for some of the passes so initialize it too.
-	if (terrainShader2Stage.init() && (res=W3DShaderManager::getChipset()) >= DC_TNT && res <= DC_GEFORCE2)
-	{
-		W3DShaders[W3DShaderManager::ST_TERRAIN_BASE]=&terrainShader8Stage;
-		W3DShadersPassCount[W3DShaderManager::ST_TERRAIN_BASE]=1;
-		W3DShaders[W3DShaderManager::ST_TERRAIN_BASE_NOISE1]=&terrainShader8Stage;
-		W3DShadersPassCount[W3DShaderManager::ST_TERRAIN_BASE_NOISE1]=2;
-		W3DShaders[W3DShaderManager::ST_TERRAIN_BASE_NOISE2]=&terrainShader8Stage;
-		W3DShadersPassCount[W3DShaderManager::ST_TERRAIN_BASE_NOISE2]=2;
-		W3DShaders[W3DShaderManager::ST_TERRAIN_BASE_NOISE12]=&terrainShader8Stage;
-		W3DShadersPassCount[W3DShaderManager::ST_TERRAIN_BASE_NOISE12]=2;
-		return TRUE;
-	}
-
-	return FALSE;
-}
-
-Int TerrainShader8Stage::set(Int pass)
-{
-	if (pass == 0)
-	{
-		//force WW3D2 system to set it's states so it won't later overwrite our custom settings.
-		WW3D::Get_Render_Backend()->Apply_Render_State_Changes();
-
-		WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(0, true, RenderBackendTextureAddressMode::Clamp);;
-		WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(0, false, RenderBackendTextureAddressMode::Clamp);;
-		WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(1, true, RenderBackendTextureAddressMode::Clamp);;
-		WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(1, false, RenderBackendTextureAddressMode::Clamp);;
-
-		if (TheGlobalData && (TheGlobalData->m_bilinearTerrainTex || TheGlobalData->m_trilinearTerrainTex)) {
-			WW3D::Get_Render_Backend()->Set_Texture_Filter(0, RenderBackendTextureFilterType::Minification, RenderBackendTextureFilter::Linear);;
-			WW3D::Get_Render_Backend()->Set_Texture_Filter(0, RenderBackendTextureFilterType::Magnification, RenderBackendTextureFilter::Linear);;
-			WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::Minification, RenderBackendTextureFilter::Linear);;
-			WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::Magnification, RenderBackendTextureFilter::Linear);;
-		} else {
-			WW3D::Get_Render_Backend()->Set_Texture_Filter(0, RenderBackendTextureFilterType::Minification, RenderBackendTextureFilter::Point);;
-			WW3D::Get_Render_Backend()->Set_Texture_Filter(0, RenderBackendTextureFilterType::Magnification, RenderBackendTextureFilter::Point);;
-			WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::Minification, RenderBackendTextureFilter::Point);;
-			WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::Magnification, RenderBackendTextureFilter::Point);;
-		}
-		if (TheGlobalData && TheGlobalData->m_trilinearTerrainTex) {
-			WW3D::Get_Render_Backend()->Set_Texture_Filter(0, RenderBackendTextureFilterType::MipMap, RenderBackendTextureFilter::Linear);;
-			WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::MipMap, RenderBackendTextureFilter::Linear);
-		} else {
-			WW3D::Get_Render_Backend()->Set_Texture_Filter(0, RenderBackendTextureFilterType::MipMap, RenderBackendTextureFilter::Point);;
-			WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::MipMap, RenderBackendTextureFilter::Linear);;
-		}
-
-		WW3D::Get_Render_Backend()->Set_Texture_Resource(0, W3DShaderManager::getShaderTexture(0));
-		WW3D::Get_Render_Backend()->Set_Texture_Resource(1, W3DShaderManager::getShaderTexture(1));
-
-		WW3D::Get_Render_Backend()->Set_Texture_Operation(0, RenderBackendTextureComponent::Color, RenderBackendTextureOperation::Modulate);;
-		WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(0, RenderBackendTextureCoordinateSource::PassThrough, 0);;
-		WW3D::Get_Render_Backend()->Set_Texture_Argument(0, RenderBackendTextureComponent::Color, 1, RenderBackendTextureArgument::Texture, RenderBackendTextureArgumentModifiers::None);;
-		WW3D::Get_Render_Backend()->Set_Texture_Argument(0, RenderBackendTextureComponent::Color, 2, RenderBackendTextureArgument::Diffuse, RenderBackendTextureArgumentModifiers::None);;
-		WW3D::Get_Render_Backend()->Set_Texture_Operation(0, RenderBackendTextureComponent::Alpha, RenderBackendTextureOperation::Modulate);;
-		WW3D::Get_Render_Backend()->Set_Texture_Argument(0, RenderBackendTextureComponent::Alpha, 1, RenderBackendTextureArgument::Texture, RenderBackendTextureArgumentModifiers::None);;
-		WW3D::Get_Render_Backend()->Set_Texture_Argument(0, RenderBackendTextureComponent::Alpha, 2, RenderBackendTextureArgument::Diffuse, RenderBackendTextureArgumentModifiers::None);;
-
-		WW3D::Get_Render_Backend()->Set_Texture_Operation(1, RenderBackendTextureComponent::Color, RenderBackendTextureOperation::Add);;
-		WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(1, RenderBackendTextureCoordinateSource::PassThrough, 1);;
-		WW3D::Get_Render_Backend()->Set_Texture_Argument(1, RenderBackendTextureComponent::Color, 1, RenderBackendTextureArgument::Diffuse, RenderBackendTextureArgumentModifiers::Complement | RenderBackendTextureArgumentModifiers::AlphaReplicate);;
-		WW3D::Get_Render_Backend()->Set_Texture_Argument(1, RenderBackendTextureComponent::Color, 2, RenderBackendTextureArgument::Diffuse, RenderBackendTextureArgumentModifiers::None);;
-		WW3D::Get_Render_Backend()->Set_Texture_Operation(1, RenderBackendTextureComponent::Alpha, RenderBackendTextureOperation::Add);;
-		WW3D::Get_Render_Backend()->Set_Texture_Argument(1, RenderBackendTextureComponent::Alpha, 1, RenderBackendTextureArgument::TextureFactor, RenderBackendTextureArgumentModifiers::Complement);;
-		WW3D::Get_Render_Backend()->Set_Texture_Argument(1, RenderBackendTextureComponent::Alpha, 2, RenderBackendTextureArgument::TextureFactor, RenderBackendTextureArgumentModifiers::None);;
-
-		WW3D::Get_Render_Backend()->Set_Texture_Resource(2, nullptr);
-		WW3D::Get_Render_Backend()->Set_Texture_Operation(2, RenderBackendTextureComponent::Color, RenderBackendTextureOperation::Modulate);;
-		WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(2, RenderBackendTextureCoordinateSource::PassThrough, 2);;
-		WW3D::Get_Render_Backend()->Set_Texture_Argument(2, RenderBackendTextureComponent::Color, 1, RenderBackendTextureArgument::Texture, RenderBackendTextureArgumentModifiers::None);;
-		WW3D::Get_Render_Backend()->Set_Texture_Argument(2, RenderBackendTextureComponent::Color, 2, RenderBackendTextureArgument::Texture, RenderBackendTextureArgumentModifiers::None);;
-		WW3D::Get_Render_Backend()->Set_Texture_Operation(2, RenderBackendTextureComponent::Alpha, RenderBackendTextureOperation::Modulate);;
-		WW3D::Get_Render_Backend()->Set_Texture_Argument(2, RenderBackendTextureComponent::Alpha, 1, RenderBackendTextureArgument::TextureFactor, RenderBackendTextureArgumentModifiers::None);;
-		WW3D::Get_Render_Backend()->Set_Texture_Argument(2, RenderBackendTextureComponent::Alpha, 2, RenderBackendTextureArgument::TextureFactor, RenderBackendTextureArgumentModifiers::None);;
-
-		WW3D::Get_Render_Backend()->Set_Texture_Resource(3, nullptr);
-		WW3D::Get_Render_Backend()->Set_Texture_Operation(3, RenderBackendTextureComponent::Color, RenderBackendTextureOperation::SelectArgument1);;
-		WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(3, RenderBackendTextureCoordinateSource::PassThrough, 3);;
-		WW3D::Get_Render_Backend()->Set_Texture_Argument(3, RenderBackendTextureComponent::Color, 1, RenderBackendTextureArgument::Diffuse, RenderBackendTextureArgumentModifiers::AlphaReplicate);;
-		WW3D::Get_Render_Backend()->Set_Texture_Argument(3, RenderBackendTextureComponent::Color, 2, RenderBackendTextureArgument::Diffuse, RenderBackendTextureArgumentModifiers::None);;
-		WW3D::Get_Render_Backend()->Set_Texture_Operation(3, RenderBackendTextureComponent::Alpha, RenderBackendTextureOperation::SelectArgument1);;
-		WW3D::Get_Render_Backend()->Set_Texture_Argument(3, RenderBackendTextureComponent::Alpha, 1, RenderBackendTextureArgument::TextureFactor, RenderBackendTextureArgumentModifiers::None);;
-		WW3D::Get_Render_Backend()->Set_Texture_Argument(3, RenderBackendTextureComponent::Alpha, 2, RenderBackendTextureArgument::TextureFactor, RenderBackendTextureArgumentModifiers::None);;
-
-		WW3D::Get_Render_Backend()->Set_Texture_Resource(4, nullptr);
-		WW3D::Get_Render_Backend()->Set_Texture_Operation(4, RenderBackendTextureComponent::Color, RenderBackendTextureOperation::Modulate);;
-		WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(4, RenderBackendTextureCoordinateSource::PassThrough, 4);;
-		WW3D::Get_Render_Backend()->Set_Texture_Argument(4, RenderBackendTextureComponent::Color, 1, RenderBackendTextureArgument::Current, RenderBackendTextureArgumentModifiers::None);;
-		WW3D::Get_Render_Backend()->Set_Texture_Argument(4, RenderBackendTextureComponent::Color, 2, RenderBackendTextureArgument::Diffuse, RenderBackendTextureArgumentModifiers::None);;
-		WW3D::Get_Render_Backend()->Set_Texture_Operation(4, RenderBackendTextureComponent::Alpha, RenderBackendTextureOperation::Modulate);;
-		WW3D::Get_Render_Backend()->Set_Texture_Argument(4, RenderBackendTextureComponent::Alpha, 1, RenderBackendTextureArgument::Current, RenderBackendTextureArgumentModifiers::None);;
-		WW3D::Get_Render_Backend()->Set_Texture_Argument(4, RenderBackendTextureComponent::Alpha, 2, RenderBackendTextureArgument::Diffuse, RenderBackendTextureArgumentModifiers::None);;
-
-		WW3D::Get_Render_Backend()->Set_Texture_Resource(5, nullptr);
-		WW3D::Get_Render_Backend()->Set_Texture_Operation(5, RenderBackendTextureComponent::Color, RenderBackendTextureOperation::Add);;
-		WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(5, RenderBackendTextureCoordinateSource::PassThrough, 5);;
-		WW3D::Get_Render_Backend()->Set_Texture_Argument(5, RenderBackendTextureComponent::Color, 1, RenderBackendTextureArgument::Diffuse, RenderBackendTextureArgumentModifiers::None);;
-		WW3D::Get_Render_Backend()->Set_Texture_Argument(5, RenderBackendTextureComponent::Color, 2, RenderBackendTextureArgument::Diffuse, RenderBackendTextureArgumentModifiers::None);;
-		WW3D::Get_Render_Backend()->Set_Texture_Operation(5, RenderBackendTextureComponent::Alpha, RenderBackendTextureOperation::Add);;
-		WW3D::Get_Render_Backend()->Set_Texture_Argument(5, RenderBackendTextureComponent::Alpha, 1, RenderBackendTextureArgument::TextureFactor, RenderBackendTextureArgumentModifiers::Complement);;
-		WW3D::Get_Render_Backend()->Set_Texture_Argument(5, RenderBackendTextureComponent::Alpha, 2, RenderBackendTextureArgument::TextureFactor, RenderBackendTextureArgumentModifiers::None);;
-
-		WW3D::Get_Render_Backend()->Set_Texture_Resource(6, nullptr);
-		WW3D::Get_Render_Backend()->Set_Texture_Operation(6, RenderBackendTextureComponent::Color, RenderBackendTextureOperation::Modulate);;
-		WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(6, RenderBackendTextureCoordinateSource::PassThrough, 6);;
-		WW3D::Get_Render_Backend()->Set_Texture_Argument(6, RenderBackendTextureComponent::Color, 1, RenderBackendTextureArgument::TextureFactor, RenderBackendTextureArgumentModifiers::None);;
-		WW3D::Get_Render_Backend()->Set_Texture_Argument(6, RenderBackendTextureComponent::Color, 2, RenderBackendTextureArgument::TextureFactor, RenderBackendTextureArgumentModifiers::None);;
-		WW3D::Get_Render_Backend()->Set_Texture_Operation(6, RenderBackendTextureComponent::Alpha, RenderBackendTextureOperation::Modulate);;
-		WW3D::Get_Render_Backend()->Set_Texture_Argument(6, RenderBackendTextureComponent::Alpha, 1, RenderBackendTextureArgument::TextureFactor, RenderBackendTextureArgumentModifiers::None);;
-		WW3D::Get_Render_Backend()->Set_Texture_Argument(6, RenderBackendTextureComponent::Alpha, 2, RenderBackendTextureArgument::TextureFactor, RenderBackendTextureArgumentModifiers::None);;
-
-		WW3D::Get_Render_Backend()->Set_Texture_Resource(7, nullptr);
-		WW3D::Get_Render_Backend()->Set_Texture_Operation(7, RenderBackendTextureComponent::Color, RenderBackendTextureOperation::SelectArgument1);;
-		WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(7, RenderBackendTextureCoordinateSource::PassThrough, 7);;
-		WW3D::Get_Render_Backend()->Set_Texture_Argument(7, RenderBackendTextureComponent::Color, 1, RenderBackendTextureArgument::TextureFactor, RenderBackendTextureArgumentModifiers::None);;
-		WW3D::Get_Render_Backend()->Set_Texture_Argument(7, RenderBackendTextureComponent::Color, 2, RenderBackendTextureArgument::TextureFactor, RenderBackendTextureArgumentModifiers::None);;
-		WW3D::Get_Render_Backend()->Set_Texture_Operation(7, RenderBackendTextureComponent::Alpha, RenderBackendTextureOperation::SelectArgument1);;
-		WW3D::Get_Render_Backend()->Set_Texture_Argument(7, RenderBackendTextureComponent::Alpha, 1, RenderBackendTextureArgument::TextureFactor, RenderBackendTextureArgumentModifiers::None);;
-		WW3D::Get_Render_Backend()->Set_Texture_Argument(7, RenderBackendTextureComponent::Alpha, 2, RenderBackendTextureArgument::TextureFactor, RenderBackendTextureArgumentModifiers::None);;
-	}
-	else
-	{	//setup cloud noise/pass
-		WW3D::Get_Render_Backend()->Set_Texture_Operation(2, RenderBackendTextureComponent::Color, RenderBackendTextureOperation::Disable);;
-		WW3D::Get_Render_Backend()->Set_Texture_Operation(2, RenderBackendTextureComponent::Alpha, RenderBackendTextureOperation::Disable);;
-		WW3D::Get_Render_Backend()->Set_Texture_Operation(3, RenderBackendTextureComponent::Color, RenderBackendTextureOperation::Disable);;
-		WW3D::Get_Render_Backend()->Set_Texture_Operation(3, RenderBackendTextureComponent::Alpha, RenderBackendTextureOperation::Disable);;
-		WW3D::Get_Render_Backend()->Invalidate_Cached_Render_States();
-
-		terrainShader2Stage.set(2);
-	}
-	return TRUE;
-}
-
-void TerrainShader8Stage::reset()
-{
-	WW3D::Get_Render_Backend()->Set_Texture_Operation(2, RenderBackendTextureComponent::Color, RenderBackendTextureOperation::Disable);;
-	WW3D::Get_Render_Backend()->Set_Texture_Operation(2, RenderBackendTextureComponent::Alpha, RenderBackendTextureOperation::Disable);;
-	WW3D::Get_Render_Backend()->Set_Texture_Operation(3, RenderBackendTextureComponent::Color, RenderBackendTextureOperation::Disable);;
-	WW3D::Get_Render_Backend()->Set_Texture_Operation(3, RenderBackendTextureComponent::Alpha, RenderBackendTextureOperation::Disable);;
-	WW3D::Get_Render_Backend()->Set_Texture_Operation(4, RenderBackendTextureComponent::Color, RenderBackendTextureOperation::Disable);;
-	WW3D::Get_Render_Backend()->Set_Texture_Operation(4, RenderBackendTextureComponent::Alpha, RenderBackendTextureOperation::Disable);;
-
-	WW3D::Get_Render_Backend()->Set_Texture_Resource(0, nullptr);
-	WW3D::Get_Render_Backend()->Set_Texture_Resource(1, nullptr);
-	WW3D::Get_Render_Backend()->Invalidate_Cached_Render_States();
-}
-
-Int TerrainShaderPixelShader::shutdown()
-{
-	DeleteVertexShaderHandle(m_dwVertexShader);
-	if (m_dwBasePixelShader)
-		DeletePixelShaderHandle(m_dwBasePixelShader);
-
-	m_dwBasePixelShader=0;
-
-	return TRUE;
-}
-
-Int TerrainShaderPixelShader::init()
-{
-	Int res;
-#ifdef DISABLE_PIXEL_SHADERS
-	return false;
-#endif
-	//this shader will also use the 2Stage shader for some of the passes so initialize it too.
-	if (terrainShader2Stage.init() && (res=W3DShaderManager::getChipset()) >= DC_GENERIC_PIXEL_SHADER_1_1)
-	{
-		if (res >= DC_GENERIC_PIXEL_SHADER_1_1)
-		{
-			const RenderBackendVertexShaderInputLayout terrain_layout =
-				MakeTerrainVertexShaderLayout();
-			if (!W3DShaderManager::LoadAndCreateShader("shaders\\terrain.vso", true,
-				&m_dwVertexShader, &terrain_layout))
-				return FALSE;
-
-			//base version which doesn't apply any noise textures.
-			if (!W3DShaderManager::LoadAndCreateShader("shaders\\terrain.pso", false, &m_dwBasePixelShader))
-				return FALSE;
-
-			W3DShaders[W3DShaderManager::ST_TERRAIN_BASE]=&terrainShaderPixelShader;
-			W3DShaders[W3DShaderManager::ST_TERRAIN_BASE_NOISE1]=&terrainShaderPixelShader;
-			W3DShaders[W3DShaderManager::ST_TERRAIN_BASE_NOISE2]=&terrainShaderPixelShader;
-			W3DShaders[W3DShaderManager::ST_TERRAIN_BASE_NOISE12]=&terrainShaderPixelShader;
-			W3DShadersPassCount[W3DShaderManager::ST_TERRAIN_BASE]=1;
-			W3DShadersPassCount[W3DShaderManager::ST_TERRAIN_BASE_NOISE1]=1;
-			W3DShadersPassCount[W3DShaderManager::ST_TERRAIN_BASE_NOISE2]=1;
-			W3DShadersPassCount[W3DShaderManager::ST_TERRAIN_BASE_NOISE12]=1;
-			return TRUE;
-		}
-	}
-	return FALSE;
-}
-
-Int TerrainShaderPixelShader::set(Int pass)
-{
-	const RenderBackendVertexShaderInputLayout terrain_layout =
-		MakeTerrainVertexShaderLayout();
-	WW3D::Get_Render_Backend()->Set_Vertex_Shader(m_dwVertexShader, &terrain_layout);
-	//force WW3D2 system to set it's states so it won't later overwrite our custom settings.
-	WW3D::Get_Render_Backend()->Apply_Render_State_Changes();
-	// Terrain base output is already resolved by the pixel shader.  The legacy
-	// terrain texture setup enables source-alpha blending for its fixed-function
-	// path, but ordinary terrain vertices use alpha as a tile-blend selector and
-	// may legitimately carry alpha zero.  The DX11 terrain pass is opaque here.
-	WW3D::Get_Render_Backend()->Set_Alpha_Blend_Enabled(false);
-	//setup base pass
-	WW3D::Get_Render_Backend()->Set_Texture_Resource(0, W3DShaderManager::getShaderTexture(0));
-	WW3D::Get_Render_Backend()->Set_Texture_Resource(1, W3DShaderManager::getShaderTexture(1));
-
-	WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(0, true, RenderBackendTextureAddressMode::Clamp);;
-	WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(0, false, RenderBackendTextureAddressMode::Clamp);;
-	WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(1, true, RenderBackendTextureAddressMode::Clamp);;
-	WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(1, false, RenderBackendTextureAddressMode::Clamp);;
-
-	//tell pixel shader which UV set to use for each stage
-	WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(0, RenderBackendTextureCoordinateSource::PassThrough, 0);;
-	WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(1, RenderBackendTextureCoordinateSource::PassThrough, 1);;
-
-	if (TheGlobalData && (TheGlobalData->m_bilinearTerrainTex || TheGlobalData->m_trilinearTerrainTex)) {
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(0, RenderBackendTextureFilterType::Minification, RenderBackendTextureFilter::Linear);;
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(0, RenderBackendTextureFilterType::Magnification, RenderBackendTextureFilter::Linear);;
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::Minification, RenderBackendTextureFilter::Linear);;
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::Magnification, RenderBackendTextureFilter::Linear);;
-	} else {
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(0, RenderBackendTextureFilterType::Minification, RenderBackendTextureFilter::Point);;
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(0, RenderBackendTextureFilterType::Magnification, RenderBackendTextureFilter::Point);;
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::Minification, RenderBackendTextureFilter::Point);;
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::Magnification, RenderBackendTextureFilter::Point);;
-	}
-	if (TheGlobalData && TheGlobalData->m_trilinearTerrainTex) {
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(0, RenderBackendTextureFilterType::MipMap, RenderBackendTextureFilter::Linear);;
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::MipMap, RenderBackendTextureFilter::Linear);;
-	} else {
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(0, RenderBackendTextureFilterType::MipMap, RenderBackendTextureFilter::Point);;
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::MipMap, RenderBackendTextureFilter::Linear);;
-	}
-
-	if (W3DShaderManager::getCurrentShader() >= W3DShaderManager::ST_TERRAIN_BASE_NOISE1)
-	{
-		Matrix4x4 curView;
-		WW3D::Get_Render_Backend()->Get_Transform(RenderBackendTransform::View, curView);
-
-		Matrix4x4 inv;
-		inv = curView.Inverse();
-
-		WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(2, RenderBackendTextureCoordinateSource::CameraSpacePosition);;
-		// Two output coordinates are used.
-		WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(2, RenderBackendTextureTransformFlags::Count2);;
-
-		WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(2, true, RenderBackendTextureAddressMode::Wrap);;
-		WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(2, false, RenderBackendTextureAddressMode::Wrap);;
-
-		if (W3DShaderManager::getCurrentShader() == W3DShaderManager::ST_TERRAIN_BASE_NOISE12)
-		{	//full shader
-			WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(3, true, RenderBackendTextureAddressMode::Wrap);;
-			WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(3, false, RenderBackendTextureAddressMode::Wrap);;
-
-			WW3D::Get_Render_Backend()->Set_Texture_Resource(2, W3DShaderManager::getShaderTexture(2));
-			WW3D::Get_Render_Backend()->Set_Texture_Resource(3, W3DShaderManager::getShaderTexture(3));
-			WW3D::Get_Render_Backend()->Set_Pixel_Shader(m_dwBasePixelShader);
-			terrainShader2Stage.updateNoise1(&curView,&inv);
-			WW3D::Get_Render_Backend()->Set_Transform(RenderBackendTransform::Texture2, curView);
-			terrainShader2Stage.updateNoise2(&curView,&inv);
-			WW3D::Get_Render_Backend()->Set_Transform(RenderBackendTransform::Texture3, curView);
-			WW3D::Get_Render_Backend()->Set_Texture_Filter(2, RenderBackendTextureFilterType::Minification, RenderBackendTextureFilter::Linear);;
-			WW3D::Get_Render_Backend()->Set_Texture_Filter(2, RenderBackendTextureFilterType::Magnification, RenderBackendTextureFilter::Linear);;
-			WW3D::Get_Render_Backend()->Set_Texture_Filter(3, RenderBackendTextureFilterType::Minification, RenderBackendTextureFilter::Point);;
-			WW3D::Get_Render_Backend()->Set_Texture_Filter(3, RenderBackendTextureFilterType::Magnification, RenderBackendTextureFilter::Linear);;
-			WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(3, RenderBackendTextureCoordinateSource::CameraSpacePosition);;
-			WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(3, RenderBackendTextureTransformFlags::Count2);;
-		}
-		else
-		{	//single noise texture shader
-			WW3D::Get_Render_Backend()->Set_Pixel_Shader(m_dwBasePixelShader);
-
-			if (W3DShaderManager::getCurrentShader() == W3DShaderManager::ST_TERRAIN_BASE_NOISE1)
-			{	//cloud map
-				WW3D::Get_Render_Backend()->Set_Texture_Resource(2, W3DShaderManager::getShaderTexture(2));
-				terrainShader2Stage.updateNoise1(&curView,&inv);	//update curView with texture matrix
-				WW3D::Get_Render_Backend()->Set_Texture_Filter(2, RenderBackendTextureFilterType::Minification, RenderBackendTextureFilter::Linear);;
-				WW3D::Get_Render_Backend()->Set_Texture_Filter(2, RenderBackendTextureFilterType::Magnification, RenderBackendTextureFilter::Linear);;
-			}
-			else
-			{	//light map
-				WW3D::Get_Render_Backend()->Set_Texture_Resource(2, W3DShaderManager::getShaderTexture(3));
-				terrainShader2Stage.updateNoise2(&curView,&inv);	//update curView with texture matrix
-				WW3D::Get_Render_Backend()->Set_Texture_Filter(2, RenderBackendTextureFilterType::Minification, RenderBackendTextureFilter::Point);;
-				WW3D::Get_Render_Backend()->Set_Texture_Filter(2, RenderBackendTextureFilterType::Magnification, RenderBackendTextureFilter::Linear);;
-			}
-			WW3D::Get_Render_Backend()->Set_Transform(RenderBackendTransform::Texture2, curView);
-		}
-	}
-	else
-	{	//just base texturing
-		WW3D::Get_Render_Backend()->Set_Pixel_Shader(m_dwBasePixelShader);
-	}
-
-	return TRUE;
-}
-
-void TerrainShaderPixelShader::reset()
-{
-	WW3D::Get_Render_Backend()->Set_Vertex_Shader(0);
-	WW3D::Get_Render_Backend()->Set_Texture_Resource(2, nullptr);	//release reference to any texture
-	WW3D::Get_Render_Backend()->Set_Texture_Resource(3, nullptr);	//release reference to any texture
-
-	WW3D::Get_Render_Backend()->Set_Pixel_Shader(0);	//turn off pixel shader
-
-	WW3D::Get_Render_Backend()->Set_Texture_Resource(0, nullptr);
-	WW3D::Get_Render_Backend()->Set_Texture_Resource(1, nullptr);
-
-	WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(0, RenderBackendTextureTransformFlags::Disabled);;
-	WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(0, RenderBackendTextureCoordinateSource::PassThrough, 0);;
-
-	WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(1, RenderBackendTextureTransformFlags::Disabled);;
-	WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(1, RenderBackendTextureCoordinateSource::PassThrough, 1);;
-
-	WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(2, RenderBackendTextureTransformFlags::Disabled);;
-	WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(2, RenderBackendTextureCoordinateSource::PassThrough, 2);;
-
-	WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(3, RenderBackendTextureTransformFlags::Disabled);;
-	WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(3, RenderBackendTextureCoordinateSource::PassThrough, 3);;
-
-
-	WW3D::Get_Render_Backend()->Invalidate_Cached_Render_States();
-}
-
-///Cloud layer rendering shader - used for objects similar to terrain which only need the cloud layer.
-class CloudTextureShader : public W3DShaderInterface
-{
-	virtual Int set(Int stage) override;		///<setup shader for the specified rendering pass.
-	virtual Int init() override;			///<perform any one time initialization and validation
-	virtual void reset() override;		///<do any custom resetting necessary to bring W3D in sync.
-	Int m_stageOfSet;
-} cloudTextureShader;
-
-///List of different cloud shader implementations in order of preference
-W3DShaderInterface *CloudShaderList[]=
-{
-	&cloudTextureShader,
-	nullptr
-};
-
-Int CloudTextureShader::init()
-{
-	W3DShaders[W3DShaderManager::ST_CLOUD_TEXTURE]=&cloudTextureShader;
-	W3DShadersPassCount[W3DShaderManager::ST_CLOUD_TEXTURE]=1;
-
-	return TRUE;
-}
-
-/**Setup a certain texture stage to project our cloud texture*/
-Int CloudTextureShader::set(Int stage)
-{
-	Matrix4x4 curView;
-	WW3D::Get_Render_Backend()->Get_Transform(RenderBackendTransform::View, curView);
-
-	Matrix4x4 inv;
-
-	inv = curView.Inverse();
-
-	//Get a texture matrix that applies the current cloud position
-	terrainShader2Stage.updateNoise1(&curView,&inv,false);	//update curView with texture matrix
-
-	WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(stage, RenderBackendTextureCoordinateSource::CameraSpacePosition);;
-	WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(stage, RenderBackendTextureTransformFlags::Count2);;
-	WW3D::Get_Render_Backend()->Set_Transform(RenderBackend_Texture_Transform(stage), curView);
-	WW3D::Get_Render_Backend()->Set_Texture_Filter(stage, RenderBackendTextureFilterType::Minification, RenderBackendTextureFilter::Linear);;
-	WW3D::Get_Render_Backend()->Set_Texture_Filter(stage, RenderBackendTextureFilterType::Magnification, RenderBackendTextureFilter::Linear);;
-	WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(stage, true, RenderBackendTextureAddressMode::Wrap);;
-	WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(stage, false, RenderBackendTextureAddressMode::Wrap);;
-
-	WW3D::Get_Render_Backend()->Set_Texture_Argument(stage, RenderBackendTextureComponent::Color, 1, RenderBackendTextureArgument::Texture, RenderBackendTextureArgumentModifiers::None);;
-	WW3D::Get_Render_Backend()->Set_Texture_Argument(stage, RenderBackendTextureComponent::Color, 2, RenderBackendTextureArgument::Current, RenderBackendTextureArgumentModifiers::None);;
-	WW3D::Get_Render_Backend()->Set_Texture_Operation(stage, RenderBackendTextureComponent::Color, RenderBackendTextureOperation::Modulate);;
-	WW3D::Get_Render_Backend()->Set_Texture_Argument(stage, RenderBackendTextureComponent::Alpha, 1, RenderBackendTextureArgument::Texture, RenderBackendTextureArgumentModifiers::None);;
-	WW3D::Get_Render_Backend()->Set_Texture_Argument(stage, RenderBackendTextureComponent::Alpha, 2, RenderBackendTextureArgument::Current, RenderBackendTextureArgumentModifiers::None);;
-	WW3D::Get_Render_Backend()->Set_Texture_Operation(stage, RenderBackendTextureComponent::Alpha, RenderBackendTextureOperation::Modulate);;
-
-	WW3D::Get_Render_Backend()->Set_Texture_Resource(stage, W3DShaderManager::getShaderTexture(stage));
-
-	m_stageOfSet=stage;
-	return TRUE;
-}
-
-void CloudTextureShader::reset()
-{
-	//Free reference to texture
-	WW3D::Get_Render_Backend()->Set_Texture_Resource(m_stageOfSet, nullptr);
-	//Turn off texture projection
-	WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(m_stageOfSet, RenderBackendTextureTransformFlags::Disabled);;
-	WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(m_stageOfSet, RenderBackendTextureCoordinateSource::PassThrough, m_stageOfSet);;
-
-	WW3D::Get_Render_Backend()->Set_Texture_Operation(m_stageOfSet, RenderBackendTextureComponent::Color, RenderBackendTextureOperation::Disable);;
-	WW3D::Get_Render_Backend()->Set_Texture_Operation(m_stageOfSet, RenderBackendTextureComponent::Alpha, RenderBackendTextureOperation::Disable);;
-}
-
-/*===========================================================================================*/
-/*=========      Road Shaders	=========================================================*/
-/*===========================================================================================*/
-class RoadShaderPixelShader : public W3DShaderInterface
-{
-	uintptr_t				m_dwBaseNoise2PixelShader;	///<handle to road/double noise D3D pixel shader
-
-	virtual Int set(Int pass) override;		///<setup shader for the specified rendering pass.
-	virtual void reset() override;		///<do any custom resetting necessary to bring W3D in sync.
-	virtual Int init() override;			///<perform any one time initialization and validation
-	virtual Int shutdown() override;			///<release resources used by shader
-} roadShaderPixelShader;
-
-class RoadShader2Stage : public W3DShaderInterface
-{	friend class RoadShaderPixelShader;	//pixel shader version uses some of the same features.
-
-	virtual Int set(Int pass) override;		///<setup shader for the specified rendering pass.
-	virtual Int init() override;			///<perform any one time initialization and validation
-	virtual void reset() override;
-} roadShader2Stage;
-
-///List of different terrain shader implementations in order of preference
-W3DShaderInterface *RoadShaderList[]=
-{
-	&roadShaderPixelShader,
-	&roadShader2Stage,
-	nullptr
-};
-
-Int RoadShaderPixelShader::shutdown()
-{
-	if (m_dwBaseNoise2PixelShader)
-		DeletePixelShaderHandle(m_dwBaseNoise2PixelShader);
-
-	m_dwBaseNoise2PixelShader=0;
-
-	return TRUE;
-}
-
-Int RoadShaderPixelShader::init()
-{
-	Int res;
-
-	//this shader will also use the 2Stage shader for some of the passes so initialize it too.
-	if (roadShader2Stage.init() && (res=W3DShaderManager::getChipset()) >= DC_GENERIC_PIXEL_SHADER_1_1)
-	{
-		if (res >= DC_GENERIC_PIXEL_SHADER_1_1)
-		{
-			//version which blends 2 noise textures.
-			if (!W3DShaderManager::LoadAndCreateShader("shaders\\roadnoise2.pso", false, &m_dwBaseNoise2PixelShader))
-				return FALSE;
-
-			//Only set this shader for use in dual noise mode.  The 2Stage shader will take care of
-			//all the other modes.
-			W3DShaders[W3DShaderManager::ST_ROAD_BASE_NOISE12]=&roadShaderPixelShader;
-			W3DShadersPassCount[W3DShaderManager::ST_ROAD_BASE_NOISE12]=1;
-			return TRUE;
-		}
-	}
-	return FALSE;
-}
-
-Int RoadShaderPixelShader::set(Int pass)
-{
-	WW3D::Get_Render_Backend()->Set_Texture(0,W3DShaderManager::getShaderTexture(0));
-	//force WW3D2 system to set it's states so it won't later overwrite our custom settings.
-	WW3D::Get_Render_Backend()->Apply_Render_State_Changes();
-
-	//tell pixel shader which UV set to use for each stage
-	WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(0, RenderBackendTextureCoordinateSource::PassThrough, 0);;
-
-	WW3D::Get_Render_Backend()->Set_Depth_Function(RenderBackendCompareFunction::LessEqual);;
-	WW3D::Get_Render_Backend()->Set_Depth_Write_Enabled(false);;
-	WW3D::Get_Render_Backend()->Set_Lighting_Enabled(false);;
-
-	WW3D::Get_Render_Backend()->Set_Alpha_Blend_Enabled(true);;	//blend roads into terrain
-	WW3D::Get_Render_Backend()->Set_Source_Blend_Factor(RenderBackendBlendFactor::SourceAlpha);;
-	WW3D::Get_Render_Backend()->Set_Destination_Blend_Factor(RenderBackendBlendFactor::InverseSourceAlpha);;
-
-	Matrix4x4 curView;
-	WW3D::Get_Render_Backend()->Get_Transform(RenderBackendTransform::View, curView);
-
-	Matrix4x4 inv;
-	inv = curView.Inverse();
-
-	if (TheGlobalData && TheGlobalData->m_trilinearTerrainTex)
-	{	WW3D::Get_Render_Backend()->Set_Texture_Filter(0, RenderBackendTextureFilterType::MipMap, RenderBackendTextureFilter::Linear);
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::MipMap, RenderBackendTextureFilter::Linear);;
-	}
-	else
-	{	WW3D::Get_Render_Backend()->Set_Texture_Filter(0, RenderBackendTextureFilterType::MipMap, RenderBackendTextureFilter::Point);
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::MipMap, RenderBackendTextureFilter::Point);;
-	}
-
-	WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(1, RenderBackendTextureCoordinateSource::CameraSpacePosition);;
-	// Two output coordinates are used.
-	WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(1, RenderBackendTextureTransformFlags::Count2);;
-
-	WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(1, true, RenderBackendTextureAddressMode::Wrap);;
-	WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(1, false, RenderBackendTextureAddressMode::Wrap);;
-
-	WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(2, true, RenderBackendTextureAddressMode::Wrap);;
-	WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(2, false, RenderBackendTextureAddressMode::Wrap);;
-
-	WW3D::Get_Render_Backend()->Set_Texture(1,W3DShaderManager::getShaderTexture(1));
-	WW3D::Get_Render_Backend()->Set_Texture(2,W3DShaderManager::getShaderTexture(2));
-
-	WW3D::Get_Render_Backend()->Set_Pixel_Shader(m_dwBaseNoise2PixelShader);
-
-	WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::Minification, RenderBackendTextureFilter::Linear);;
-	WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::Magnification, RenderBackendTextureFilter::Linear);;
-
-	WW3D::Get_Render_Backend()->Set_Texture_Filter(2, RenderBackendTextureFilterType::Minification, RenderBackendTextureFilter::Point);;
-	WW3D::Get_Render_Backend()->Set_Texture_Filter(2, RenderBackendTextureFilterType::Magnification, RenderBackendTextureFilter::Linear);;
-
-	terrainShader2Stage.updateNoise1(&curView,&inv, false);	//get texture projection matrix
-	WW3D::Get_Render_Backend()->Set_Transform(RenderBackendTransform::Texture1, curView);
-
-	terrainShader2Stage.updateNoise2(&curView,&inv, false);	//get texture projection matrix
-	WW3D::Get_Render_Backend()->Set_Transform(RenderBackendTransform::Texture2, curView);
-
-	WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(2, RenderBackendTextureCoordinateSource::CameraSpacePosition);;
-	// Two output coordinates are used.
-	WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(2, RenderBackendTextureTransformFlags::Count2);;
-
-	return TRUE;
-}
-
-void RoadShaderPixelShader::reset()
-{
-
-	WW3D::Get_Render_Backend()->Set_Pixel_Shader(0);	//turn off pixel shader
-
-	WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(0, RenderBackendTextureTransformFlags::Disabled);;
-	WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(0, RenderBackendTextureCoordinateSource::PassThrough, 0);;
-
-	WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(1, RenderBackendTextureTransformFlags::Disabled);;
-	WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(1, RenderBackendTextureCoordinateSource::PassThrough, 1);;
-
-	WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(2, RenderBackendTextureTransformFlags::Disabled);;
-	WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(2, RenderBackendTextureCoordinateSource::PassThrough, 2);;
-
-	WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(3, RenderBackendTextureTransformFlags::Disabled);;
-	WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(3, RenderBackendTextureCoordinateSource::PassThrough, 3);;
-
-
-	WW3D::Get_Render_Backend()->Invalidate_Cached_Render_States();
-}
-
-Int RoadShader2Stage::init()
-{
-	//no special device validation needed - anything in our min spec should handle this.
-	W3DShaders[W3DShaderManager::ST_ROAD_BASE]=&roadShader2Stage;
-	W3DShadersPassCount[W3DShaderManager::ST_ROAD_BASE]=1;
-	W3DShaders[W3DShaderManager::ST_ROAD_BASE_NOISE1]=&roadShader2Stage;
-	W3DShadersPassCount[W3DShaderManager::ST_ROAD_BASE_NOISE1]=1;
-	W3DShaders[W3DShaderManager::ST_ROAD_BASE_NOISE2]=&roadShader2Stage;
-	W3DShadersPassCount[W3DShaderManager::ST_ROAD_BASE_NOISE2]=1;
-	W3DShaders[W3DShaderManager::ST_ROAD_BASE_NOISE12]=&roadShader2Stage;
-	W3DShadersPassCount[W3DShaderManager::ST_ROAD_BASE_NOISE12]=2;
-
-	return TRUE;
-}
-
-Int RoadShader2Stage::set(Int pass)
-{
-	//First stage always contains base texture.
-	WW3D::Get_Render_Backend()->Set_Texture(0,W3DShaderManager::getShaderTexture(0));
-	//Force system to apply world/view transforms.
-	WW3D::Get_Render_Backend()->Apply_Render_State_Changes();
-
-	WW3D::Get_Render_Backend()->Set_Depth_Function(RenderBackendCompareFunction::LessEqual);;
-	WW3D::Get_Render_Backend()->Set_Depth_Write_Enabled(false);;
-	WW3D::Get_Render_Backend()->Set_Lighting_Enabled(false);;
-
-	// Modulate the diffuse color with the texture as lighting comes from diffuse.
-	WW3D::Get_Render_Backend()->Set_Texture_Argument(0, RenderBackendTextureComponent::Color, 1, RenderBackendTextureArgument::Texture, RenderBackendTextureArgumentModifiers::None);;
-	WW3D::Get_Render_Backend()->Set_Texture_Argument(0, RenderBackendTextureComponent::Color, 2, RenderBackendTextureArgument::Diffuse, RenderBackendTextureArgumentModifiers::None);;
-	WW3D::Get_Render_Backend()->Set_Texture_Operation(0, RenderBackendTextureComponent::Color, RenderBackendTextureOperation::Modulate);;
-	WW3D::Get_Render_Backend()->Set_Texture_Argument(0, RenderBackendTextureComponent::Alpha, 1, RenderBackendTextureArgument::Texture, RenderBackendTextureArgumentModifiers::None);;
-	WW3D::Get_Render_Backend()->Set_Texture_Argument(0, RenderBackendTextureComponent::Alpha, 2, RenderBackendTextureArgument::Diffuse, RenderBackendTextureArgumentModifiers::None);;
-	WW3D::Get_Render_Backend()->Set_Texture_Operation(0, RenderBackendTextureComponent::Alpha, RenderBackendTextureOperation::Modulate);;
-
-	WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(0, RenderBackendTextureCoordinateSource::PassThrough, 0);;
-	WW3D::Get_Render_Backend()->Set_Alpha_Blend_Enabled(true);;	//blend roads into terrain
-
-	if (pass == 0)
-	{
-		WW3D::Get_Render_Backend()->Set_Source_Blend_Factor(RenderBackendBlendFactor::SourceAlpha);;
-		WW3D::Get_Render_Backend()->Set_Destination_Blend_Factor(RenderBackendBlendFactor::InverseSourceAlpha);;
-
-		if (W3DShaderManager::getCurrentShader() >= W3DShaderManager::ST_ROAD_BASE_NOISE1)
-		{	//second texture unit will contain a noise pass
-			Matrix4x4 curView;
-			WW3D::Get_Render_Backend()->Get_Transform(RenderBackendTransform::View, curView);
-
-			Matrix4x4 inv;
-			inv = curView.Inverse();
-
-			if (TheGlobalData && TheGlobalData->m_trilinearTerrainTex)
-				WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::MipMap, RenderBackendTextureFilter::Linear);
-			else
-				WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::MipMap, RenderBackendTextureFilter::Point);
-
-			WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(1, RenderBackendTextureCoordinateSource::CameraSpacePosition);;
-			// Two output coordinates are used.
-			WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(1, RenderBackendTextureTransformFlags::Count2);;
-
-			WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(1, true, RenderBackendTextureAddressMode::Wrap);;
-			WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(1, false, RenderBackendTextureAddressMode::Wrap);;
-
-			WW3D::Get_Render_Backend()->Set_Texture_Argument(1, RenderBackendTextureComponent::Color, 1, RenderBackendTextureArgument::Texture, RenderBackendTextureArgumentModifiers::None);;
-			WW3D::Get_Render_Backend()->Set_Texture_Argument(1, RenderBackendTextureComponent::Color, 2, RenderBackendTextureArgument::Current, RenderBackendTextureArgumentModifiers::None);;
-			WW3D::Get_Render_Backend()->Set_Texture_Operation(1, RenderBackendTextureComponent::Color, RenderBackendTextureOperation::Modulate);;
-			WW3D::Get_Render_Backend()->Set_Texture_Argument(1, RenderBackendTextureComponent::Alpha, 1, RenderBackendTextureArgument::Texture, RenderBackendTextureArgumentModifiers::None);;
-			WW3D::Get_Render_Backend()->Set_Texture_Argument(1, RenderBackendTextureComponent::Alpha, 2, RenderBackendTextureArgument::Current, RenderBackendTextureArgumentModifiers::None);;
-			WW3D::Get_Render_Backend()->Set_Texture_Operation(1, RenderBackendTextureComponent::Alpha, RenderBackendTextureOperation::Modulate);;
-
-			if (W3DShaderManager::getCurrentShader() == W3DShaderManager::ST_ROAD_BASE_NOISE12)
-			{	//full shader, apply noise 1 in pass 0.
-				WW3D::Get_Render_Backend()->Set_Texture(1,W3DShaderManager::getShaderTexture(1));
-				WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::Minification, RenderBackendTextureFilter::Linear);;
-				WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::Magnification, RenderBackendTextureFilter::Linear);;
-
-				terrainShader2Stage.updateNoise1(&curView, &inv, false);	//get texture projection matrix
-				WW3D::Get_Render_Backend()->Set_Transform(RenderBackendTransform::Texture1, curView);
-			}
-			else
-			{	//single noise texture shader
-				if (W3DShaderManager::getCurrentShader() == W3DShaderManager::ST_ROAD_BASE_NOISE1)
-				{	//cloud map
-					WW3D::Get_Render_Backend()->Set_Texture(1,W3DShaderManager::getShaderTexture(1));
-					terrainShader2Stage.updateNoise1(&curView, &inv, false);	//update curView with texture matrix
-					WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::Minification, RenderBackendTextureFilter::Linear);;
-					WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::Magnification, RenderBackendTextureFilter::Linear);;
-				}
-				else
-				{	//light map
-					WW3D::Get_Render_Backend()->Set_Texture(1,W3DShaderManager::getShaderTexture(2));
-					terrainShader2Stage.updateNoise2(&curView,&inv, false);	//update curView with texture matrix
-					WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::Minification, RenderBackendTextureFilter::Point);;
-					WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::Magnification, RenderBackendTextureFilter::Linear);;
-				}
-				WW3D::Get_Render_Backend()->Set_Transform(RenderBackendTransform::Texture1, curView);
-			}
-		}
-		else
-		{	//just base texturing
-			WW3D::Get_Render_Backend()->Set_Texture_Operation(1, RenderBackendTextureComponent::Color, RenderBackendTextureOperation::Disable);;
-			WW3D::Get_Render_Backend()->Set_Texture_Operation(1, RenderBackendTextureComponent::Alpha, RenderBackendTextureOperation::Disable);;
-		}
-	}
-	else
-	{	//pass 1, apply additional noise pass
-		Matrix4x4 curView;
-		WW3D::Get_Render_Backend()->Get_Transform(RenderBackendTransform::View, curView);
-
-		Matrix4x4 inv;
-		inv = curView.Inverse();
-
-		if (TheGlobalData && TheGlobalData->m_trilinearTerrainTex)
-			WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::MipMap, RenderBackendTextureFilter::Linear);
-		else
-				WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::MipMap, RenderBackendTextureFilter::Point);
-
-		WW3D::Get_Render_Backend()->Set_Texture(1,W3DShaderManager::getShaderTexture(2));
-
-		terrainShader2Stage.updateNoise2(&curView, &inv, false);	//update curView with texture matrix
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::Minification, RenderBackendTextureFilter::Point);;
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::Magnification, RenderBackendTextureFilter::Linear);;
-
-		WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(1, RenderBackendTextureCoordinateSource::CameraSpacePosition);;
-		// Two output coordinates are used.
-		WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(1, RenderBackendTextureTransformFlags::Count2);;
-
-		WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(1, true, RenderBackendTextureAddressMode::Wrap);;
-		WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(1, false, RenderBackendTextureAddressMode::Wrap);;
-
-		//Copy alpha channel into stage 1 but mask out color channel by replacing with white.
-		WW3D::Get_Render_Backend()->Set_Texture_Argument(0, RenderBackendTextureComponent::Color, 1, RenderBackendTextureArgument::Texture, RenderBackendTextureArgumentModifiers::None);;
-		//Force color channel to white by copying the alpha into RGB
-		WW3D::Get_Render_Backend()->Set_Texture_Argument(0, RenderBackendTextureComponent::Color, 2, RenderBackendTextureArgument::Diffuse, RenderBackendTextureArgumentModifiers::AlphaReplicate);;
-		WW3D::Get_Render_Backend()->Set_Texture_Operation(0, RenderBackendTextureComponent::Color, RenderBackendTextureOperation::SelectArgument2);;
-		WW3D::Get_Render_Backend()->Set_Texture_Argument(0, RenderBackendTextureComponent::Alpha, 1, RenderBackendTextureArgument::Texture, RenderBackendTextureArgumentModifiers::None);;
-		WW3D::Get_Render_Backend()->Set_Texture_Argument(0, RenderBackendTextureComponent::Alpha, 2, RenderBackendTextureArgument::Diffuse, RenderBackendTextureArgumentModifiers::None);;
-		WW3D::Get_Render_Backend()->Set_Texture_Operation(0, RenderBackendTextureComponent::Alpha, RenderBackendTextureOperation::SelectArgument1);;
-
-		WW3D::Get_Render_Backend()->Set_Texture_Argument(1, RenderBackendTextureComponent::Color, 1, RenderBackendTextureArgument::Texture, RenderBackendTextureArgumentModifiers::None);;
-		WW3D::Get_Render_Backend()->Set_Texture_Argument(1, RenderBackendTextureComponent::Color, 2, RenderBackendTextureArgument::Current, RenderBackendTextureArgumentModifiers::None);;
-		WW3D::Get_Render_Backend()->Set_Texture_Operation(1, RenderBackendTextureComponent::Color, RenderBackendTextureOperation::BlendCurrentAlpha);;
-		WW3D::Get_Render_Backend()->Set_Texture_Argument(1, RenderBackendTextureComponent::Alpha, 1, RenderBackendTextureArgument::Texture, RenderBackendTextureArgumentModifiers::None);;
-		WW3D::Get_Render_Backend()->Set_Texture_Argument(1, RenderBackendTextureComponent::Alpha, 2, RenderBackendTextureArgument::Current, RenderBackendTextureArgumentModifiers::None);;
-		WW3D::Get_Render_Backend()->Set_Texture_Operation(1, RenderBackendTextureComponent::Alpha, RenderBackendTextureOperation::Disable);;
-
-		//Modulate into existing roads with clouds applied. - only apply where roads are transparent by
-		//using road texture as a mask.
-		WW3D::Get_Render_Backend()->Set_Source_Blend_Factor(RenderBackendBlendFactor::Zero);;
-		WW3D::Get_Render_Backend()->Set_Destination_Blend_Factor(RenderBackendBlendFactor::SourceColor);;
-
-		WW3D::Get_Render_Backend()->Set_Transform(RenderBackendTransform::Texture0, curView);
-	}
-
-	return TRUE;
-}
-
-void RoadShader2Stage::reset()
-{
-	ShaderClass::Invalidate();
-
-	WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(0, RenderBackendTextureTransformFlags::Disabled);;
-	WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(0, RenderBackendTextureCoordinateSource::PassThrough, 0);;
-
-	WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(1, RenderBackendTextureTransformFlags::Disabled);;
-	WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(1, RenderBackendTextureCoordinateSource::PassThrough, 1);;
-}
-
-/** List of all custom shader lists - each list in this list contains variations of the same
-	shader to allow it to work on different hardware configurations.
-*/
-W3DShaderInterface **MasterShaderList[]=
-{
-	TerrainShaderList,
-	ShroudShaderList,
-	FlatShroudShaderList,
-	RoadShaderList,
-	MaskShaderList,
-	CloudShaderList,
-	FlatTerrainShaderList,
-	nullptr
-};
 
 /** List of all custom filter lists - each list in this list contains variations of the same
 	filter to allow it to work on different hardware configurations.
@@ -2583,17 +1309,6 @@ void W3DShaderManager::init()
 		m_renderTexture = WW3D::Get_Render_Backend()->Create_Render_Target(desc.Width, desc.Height, desc.Format);
 	}
 
-	W3DShaderInterface **shaders;
-
-	for (i=0; MasterShaderList[i] != nullptr; i++)
-	{
-		shaders=MasterShaderList[i];
-		for (j=0; shaders[j] != nullptr; j++)
-		{
-			if (shaders[j]->init())
-				break;	//found a working shader
-		}
-	}
 	W3DFilterInterface **filters;
 
 	for (i=0; MasterFilterList[i] != nullptr; i++)
@@ -2635,56 +1350,7 @@ void W3DShaderManager::shutdown()
 }
 
 //=============================================================================
-void W3DShaderManager::updateCloud()
-{
-	terrainShader2Stage.updateCloud();
-}
 
-// W3DShaderManager::getShaderPasses =======================================================
-/** Return number of renderig passes required in perform the desired shader on current
-	hardware.  App will need to re-render the polygons this many times to complete the
-	effect.
- */
-//=============================================================================
-Int W3DShaderManager::getShaderPasses(ShaderTypes shader)
-{
-	return W3DShadersPassCount[shader];
-}
-
-// W3DShaderManager::setShader =======================================================
-/** Must call this method before each rendering pass in order to perform proper D3D
-	setup for each shader.
- */
-//=============================================================================
-Int W3DShaderManager::setShader(ShaderTypes shader, Int pass)
-{
-	if (shader == m_currentShader && pass == m_currentShaderPass)
-		return TRUE;	//shader is already set
-	m_currentShader=shader;
-	m_currentShaderPass = pass;
-	if (W3DShaders[shader])
-		return W3DShaders[shader]->set(pass);
-	return FALSE;
-}
-
-// W3DShaderManager::resetShader =======================================================
-/** Must call this method after all polygons and rendering passes have been submitted.
-	This method allows D3D to reset itself to a default state that doesn't conflict
-	with the WW3D2 Shader system.
- */
-//=============================================================================
-void W3DShaderManager::resetShader(ShaderTypes shader)
-{
-	if (m_currentShader == ST_INVALID)
-		return;	//last shader is already reset.
-	if (W3DShaders[shader])
-		W3DShaders[shader]->reset();
-	m_currentShader = ST_INVALID;
-}
-// W3DShaderManager::filterPreRender =======================================================
-/** Call to view filter shaders before rendering starts.
- */
-//=============================================================================
 Bool W3DShaderManager::filterPreRender(FilterTypes filter, Bool &skipRender, CustomScenePassModes &scenePassMode)
 {
 	if (W3DFilters[filter])
@@ -2724,6 +1390,7 @@ Bool W3DShaderManager::filterSetup(FilterTypes filter, FilterModes mode)
 /*Draws 2 triangles covering the viewport given the current render states*/
 void W3DShaderManager::drawViewport(Int color)
 {
+
 	
 	struct _TRANS_LIT_TEX_VERTEX {
 		Vector4 p;
@@ -2759,7 +1426,13 @@ void W3DShaderManager::drawViewport(Int color)
 	//not worth bothering with index/vertex buffers.
 	WW3D::Get_Render_Backend()->Set_Vertex_Format(RenderBackendVertexFormat::TransformedPositionDiffuseTexture);
 
+#ifdef RTS_ZEROHOUR
+    Graphics::ScreenFilterParameters parameters; parameters.textured=0;
+    Graphics::ScreenFilterStyle style; style.color_write_mask=8;
+    Draw_Screen_Filter_Quad(v,nullptr,parameters,style);
+#else
 	WW3D::Get_Render_Backend()->Draw_Primitive_Up(RenderBackendPrimitiveType::TriangleStrip, 2, v, sizeof(_TRANS_LIT_TEX_VERTEX), RenderBackendVertexFormat::TransformedPositionDiffuseTexture);
+#endif
 }
 
 // W3DShaderManager::startRenderToTexture =======================================================
@@ -3108,522 +1781,3 @@ Real W3DShaderManager::GetCPUBenchTime()
 /** Puts the shroud texture into a texture stage.
  */
 //=============================================================================
-Int W3DShaderManager::setShroudTex(Int stage)
-{
-	//We need to scale so shroud texel stretches over one full terrain cell.  Each texel
-	//is 1/128 the size of full texture. (assuming 128x128 vid-mem texture).
-	W3DShroud *shroud;
-	if ((shroud=TheTerrainRenderObject->getShroud()) != nullptr)
-	{
-		WW3D::Get_Render_Backend()->Set_Texture(stage, shroud->getShroudTexture());
-
-		WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(stage, RenderBackendTextureCoordinateSource::CameraSpacePosition);;
-		WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(stage, RenderBackendTextureTransformFlags::Count2);;
-		WW3D::Get_Render_Backend()->Set_Texture_Argument(stage, RenderBackendTextureComponent::Color, 1, RenderBackendTextureArgument::Texture, RenderBackendTextureArgumentModifiers::None);;
-		WW3D::Get_Render_Backend()->Set_Texture_Argument(stage, RenderBackendTextureComponent::Color, 2, RenderBackendTextureArgument::Current, RenderBackendTextureArgumentModifiers::None);;
-		WW3D::Get_Render_Backend()->Set_Texture_Argument(stage, RenderBackendTextureComponent::Alpha, 1, RenderBackendTextureArgument::Texture, RenderBackendTextureArgumentModifiers::None);;
-		WW3D::Get_Render_Backend()->Set_Texture_Argument(stage, RenderBackendTextureComponent::Alpha, 2, RenderBackendTextureArgument::Current, RenderBackendTextureArgumentModifiers::None);;
-		WW3D::Get_Render_Backend()->Set_Texture_Operation(stage, RenderBackendTextureComponent::Color, RenderBackendTextureOperation::Modulate);;
-		WW3D::Get_Render_Backend()->Set_Texture_Operation(stage, RenderBackendTextureComponent::Alpha, RenderBackendTextureOperation::SelectArgument2);;
-
-		Matrix4x4 curView;
-		WW3D::Get_Render_Backend()->Get_Transform(RenderBackendTransform::View, curView);
-
-		Matrix4x4 inv;
-		inv = curView.Inverse();
-
-		Matrix4x4 scale,offset;
-
-		//We need to make all world coordinates be relative to the heightmap data origin since that
-		//is where the shroud begins.
-
-		float xoffset = 0;
-		float yoffset = 0;
-		Real width=shroud->getCellWidth();
-		Real height=shroud->getCellHeight();
-
-		if (TheTerrainRenderObject->getMap())
-		{	//subtract origin position from all coordinates.  Origin is shifted by 1 cell width/height to allow for unused border texels.
-			xoffset = -(float)shroud->getDrawOriginX() + width;
-			yoffset = -(float)shroud->getDrawOriginY() + height;
-		}
-
-		offset = Make_Translation(xoffset, yoffset, 0);
-
-		width = 1.0f/(width*shroud->getTextureWidth());
-		height = 1.0f/(height*shroud->getTextureHeight());
-		scale = Make_Scaling(width, height, 1);
-		curView = scale * offset * inv;
-		WW3D::Get_Render_Backend()->Set_Transform(RenderBackend_Texture_Transform(stage), curView);
-		return TRUE;
-	}
-	return FALSE;
-}
-
-
-
-Int FlatTerrainShader2Stage::init()
-{
-	//no special device validation needed - anything in our min spec should handle this.
-
-	W3DShaders[W3DShaderManager::ST_FLAT_TERRAIN_BASE]=&flatTerrainShader2Stage;
-	W3DShadersPassCount[W3DShaderManager::ST_FLAT_TERRAIN_BASE]=1;
-	W3DShaders[W3DShaderManager::ST_FLAT_TERRAIN_BASE_NOISE1]=&flatTerrainShader2Stage;
-	W3DShadersPassCount[W3DShaderManager::ST_FLAT_TERRAIN_BASE_NOISE1]=2;
-	W3DShaders[W3DShaderManager::ST_FLAT_TERRAIN_BASE_NOISE2]=&flatTerrainShader2Stage;
-	W3DShadersPassCount[W3DShaderManager::ST_FLAT_TERRAIN_BASE_NOISE2]=2;
-	W3DShaders[W3DShaderManager::ST_FLAT_TERRAIN_BASE_NOISE12]=&flatTerrainShader2Stage;
-	W3DShadersPassCount[W3DShaderManager::ST_FLAT_TERRAIN_BASE_NOISE12]=2;
-
-	return TRUE;
-}
-
-void FlatTerrainShader2Stage::reset()
-{
-	ShaderClass::Invalidate();
-
-	//Free references to textures
-	WW3D::Get_Render_Backend()->Set_Texture_Resource(0, nullptr);
-	WW3D::Get_Render_Backend()->Set_Texture_Resource(1, nullptr);
-
-	WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(0, RenderBackendTextureTransformFlags::Disabled);;
-	WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(0, RenderBackendTextureCoordinateSource::PassThrough, 0);;
-
-	WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(1, RenderBackendTextureTransformFlags::Disabled);;
-	WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(1, RenderBackendTextureCoordinateSource::PassThrough, 1);;
-}
-
-
-Int FlatTerrainShader2Stage::set(Int pass)
-{
-	//force WW3D2 system to set it's states so it won't later overwrite our custom settings.
-	WW3D::Get_Render_Backend()->Apply_Render_State_Changes();
-
-	if (TheGlobalData && (TheGlobalData->m_bilinearTerrainTex || TheGlobalData->m_trilinearTerrainTex)) {
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(0, RenderBackendTextureFilterType::Minification, RenderBackendTextureFilter::Linear);;
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(0, RenderBackendTextureFilterType::Magnification, RenderBackendTextureFilter::Linear);;
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::Minification, RenderBackendTextureFilter::Linear);;
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::Magnification, RenderBackendTextureFilter::Linear);;
-	} else {
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(0, RenderBackendTextureFilterType::Minification, RenderBackendTextureFilter::Point);;
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(0, RenderBackendTextureFilterType::Magnification, RenderBackendTextureFilter::Point);;
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::Minification, RenderBackendTextureFilter::Point);;
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::Magnification, RenderBackendTextureFilter::Point);;
-	}
-	if (TheGlobalData && TheGlobalData->m_trilinearTerrainTex) {
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(0, RenderBackendTextureFilterType::MipMap, RenderBackendTextureFilter::Linear);;
-			WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::MipMap, RenderBackendTextureFilter::Linear);
-	} else {
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(0, RenderBackendTextureFilterType::MipMap, RenderBackendTextureFilter::Point);;
-			WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::MipMap, RenderBackendTextureFilter::Point);
-	}
-
-	switch (pass)
-	{
-		case 0:
-
-			WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(0, true, RenderBackendTextureAddressMode::Clamp);;
-			WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(0, false, RenderBackendTextureAddressMode::Clamp);;
-
-			// Modulate the diffuse color with the texture as lighting comes from diffuse.
-			WW3D::Get_Render_Backend()->Set_Texture_Argument(0, RenderBackendTextureComponent::Color, 1, RenderBackendTextureArgument::Texture, RenderBackendTextureArgumentModifiers::None);;
-			WW3D::Get_Render_Backend()->Set_Texture_Argument(0, RenderBackendTextureComponent::Color, 2, RenderBackendTextureArgument::Diffuse, RenderBackendTextureArgumentModifiers::None);;
-			if (W3DShaderManager::getShaderTexture(0)) {
-				WW3D::Get_Render_Backend()->Set_Texture_Resource(0, W3DShaderManager::getShaderTexture(0));
-				WW3D::Get_Render_Backend()->Set_Texture_Argument(0, RenderBackendTextureComponent::Color, 1, RenderBackendTextureArgument::Texture, RenderBackendTextureArgumentModifiers::None);;
-				WW3D::Get_Render_Backend()->Set_Texture_Argument(0, RenderBackendTextureComponent::Color, 2, RenderBackendTextureArgument::Current, RenderBackendTextureArgumentModifiers::None);;
-				WW3D::Get_Render_Backend()->Set_Texture_Operation(0, RenderBackendTextureComponent::Color, RenderBackendTextureOperation::Modulate);;
-				WW3D::Get_Render_Backend()->Set_Texture_Operation(0, RenderBackendTextureComponent::Alpha, RenderBackendTextureOperation::Disable);;
-
-				WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(0, RenderBackendTextureCoordinateSource::CameraSpacePosition);;
-				WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(0, RenderBackendTextureTransformFlags::Count2);;
-
-				//We need to scale so shroud texel stretches over one full terrain cell.  Each texel
-				//is 1/128 the size of full texture. (assuming 128x128 vid-mem texture).
-				W3DShroud *shroud;
-				if ((shroud=TheTerrainRenderObject->getShroud()) != nullptr)
-				{
-					Matrix4x4 curView;
-					WW3D::Get_Render_Backend()->Get_Transform(RenderBackendTransform::View, curView);
-
-					Matrix4x4 inv;
-					inv = curView.Inverse();
-
-					Matrix4x4 scale,offset;
-
-					//We need to make all world coordinates be relative to the heightmap data origin since that
-					//is where the shroud begins.
-
-					float xoffset = 0;
-					float yoffset = 0;
-					Real width=shroud->getCellWidth();
-					Real height=shroud->getCellHeight();
-
-					if (TheTerrainRenderObject->getMap())
-					{	//subtract origin position from all coordinates.  Origin is shifted by 1 cell width/height to allow for unused border texels.
-						xoffset = -(float)shroud->getDrawOriginX() + width;
-						yoffset = -(float)shroud->getDrawOriginY() + height;
-					}
-
-					offset = Make_Translation(xoffset, yoffset, 0);
-
-					width = 1.0f/(width*shroud->getTextureWidth());
-					height = 1.0f/(height*shroud->getTextureHeight());
-					scale = Make_Scaling(width, height, 1);
-					curView = scale * offset * inv;
-					WW3D::Get_Render_Backend()->Set_Transform(RenderBackendTransform::Texture0, curView);
-				}
-			}	else {
-				WW3D::Get_Render_Backend()->Set_Texture_Operation(0, RenderBackendTextureComponent::Color, RenderBackendTextureOperation::SelectArgument2);;
-				WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(0, RenderBackendTextureCoordinateSource::PassThrough, 0);;
-			}
-			WW3D::Get_Render_Backend()->Set_Texture_Operation(0, RenderBackendTextureComponent::Alpha, RenderBackendTextureOperation::Disable);;
-
-			WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(1, true, RenderBackendTextureAddressMode::Clamp);;
-			WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(1, false, RenderBackendTextureAddressMode::Clamp);;
-
-			// Modulate the diffuse color with the texture as lighting comes from diffuse.
-			WW3D::Get_Render_Backend()->Set_Texture_Argument(1, RenderBackendTextureComponent::Color, 1, RenderBackendTextureArgument::Texture, RenderBackendTextureArgumentModifiers::None);;
-			WW3D::Get_Render_Backend()->Set_Texture_Argument(1, RenderBackendTextureComponent::Color, 2, RenderBackendTextureArgument::Current, RenderBackendTextureArgumentModifiers::None);;
-			WW3D::Get_Render_Backend()->Set_Texture_Operation(1, RenderBackendTextureComponent::Color, RenderBackendTextureOperation::Modulate);;
-			WW3D::Get_Render_Backend()->Set_Texture_Operation(1, RenderBackendTextureComponent::Alpha, RenderBackendTextureOperation::Disable);;
-			WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(1, RenderBackendTextureCoordinateSource::PassThrough, 0);;
-			WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(1, RenderBackendTextureTransformFlags::Disabled);;
-			WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(1, RenderBackendTextureCoordinateSource::PassThrough, 0);;
-			WW3D::Get_Render_Backend()->Set_Alpha_Blend_Enabled(false);;
-			break;
-		case 1:
-			// Noise/cloud pass
-			Matrix4x4 curView;
-			WW3D::Get_Render_Backend()->Get_Transform(RenderBackendTransform::View, curView);
-
-			//these states apply to all noise/cloud combination passes
-			WW3D::Get_Render_Backend()->Set_Texture_Argument(0, RenderBackendTextureComponent::Color, 1, RenderBackendTextureArgument::Texture, RenderBackendTextureArgumentModifiers::None);;
-			WW3D::Get_Render_Backend()->Set_Texture_Argument(0, RenderBackendTextureComponent::Color, 2, RenderBackendTextureArgument::Diffuse, RenderBackendTextureArgumentModifiers::None);;
-			WW3D::Get_Render_Backend()->Set_Texture_Operation(0, RenderBackendTextureComponent::Color, RenderBackendTextureOperation::SelectArgument1);;
-			WW3D::Get_Render_Backend()->Set_Texture_Operation(0, RenderBackendTextureComponent::Alpha, RenderBackendTextureOperation::Disable);;
-
-			WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(0, RenderBackendTextureCoordinateSource::CameraSpacePosition);;
-			// Two output coordinates are used.
-			WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(0, RenderBackendTextureTransformFlags::Count2);;
-			WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(0, true, RenderBackendTextureAddressMode::Wrap);;
-			WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(0, false, RenderBackendTextureAddressMode::Wrap);;
-
-			//blend into frame buffer
-			WW3D::Get_Render_Backend()->Set_Alpha_Blend_Enabled(true);;
-			WW3D::Get_Render_Backend()->Set_Source_Blend_Factor(RenderBackendBlendFactor::DestinationColor);;
-			WW3D::Get_Render_Backend()->Set_Destination_Blend_Factor(RenderBackendBlendFactor::Zero);;
-
-			Matrix4x4 inv;
-			inv = curView.Inverse();
-
-			if (W3DShaderManager::getCurrentShader() == W3DShaderManager::ST_FLAT_TERRAIN_BASE_NOISE12)
-			{
-				//setup cloud pass
-
-				terrainShader2Stage.updateNoise1(&curView,&inv);	//update curView with texture matrix
-				WW3D::Get_Render_Backend()->Set_Transform(RenderBackendTransform::Texture0, curView);
-				//clouds always need bilinear filtering
-				WW3D::Get_Render_Backend()->Set_Texture_Filter(0, RenderBackendTextureFilterType::Minification, RenderBackendTextureFilter::Linear);;
-				WW3D::Get_Render_Backend()->Set_Texture_Filter(0, RenderBackendTextureFilterType::Magnification, RenderBackendTextureFilter::Linear);;
-				WW3D::Get_Render_Backend()->Set_Texture_Resource(0, W3DShaderManager::getShaderTexture(2));
-
-				//setup noise pass
-
-				terrainShader2Stage.updateNoise2(&curView,&inv);
-				WW3D::Get_Render_Backend()->Set_Transform(RenderBackendTransform::Texture1, curView);
-				//noise always needs point/linear filtering.  Why point!?
-				WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::Minification, RenderBackendTextureFilter::Point);;
-				WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::Magnification, RenderBackendTextureFilter::Linear);;
-
-				WW3D::Get_Render_Backend()->Set_Texture_Argument(1, RenderBackendTextureComponent::Color, 1, RenderBackendTextureArgument::Texture, RenderBackendTextureArgumentModifiers::None);;
-				WW3D::Get_Render_Backend()->Set_Texture_Argument(1, RenderBackendTextureComponent::Color, 2, RenderBackendTextureArgument::Current, RenderBackendTextureArgumentModifiers::None);;
-				WW3D::Get_Render_Backend()->Set_Texture_Operation(1, RenderBackendTextureComponent::Color, RenderBackendTextureOperation::Modulate);;
-				WW3D::Get_Render_Backend()->Set_Texture_Operation(1, RenderBackendTextureComponent::Alpha, RenderBackendTextureOperation::Disable);;
-				WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(1, RenderBackendTextureCoordinateSource::CameraSpacePosition);;
-				// Two output coordinates are used.
-				WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(1, RenderBackendTextureTransformFlags::Count2);;
-
-				WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(1, true, RenderBackendTextureAddressMode::Wrap);;
-				WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(1, false, RenderBackendTextureAddressMode::Wrap);;
-				WW3D::Get_Render_Backend()->Set_Texture_Resource(1, W3DShaderManager::getShaderTexture(3));
-			}
-			else
-			{	//only 1 noise or cloud texture
-				// Now setup the texture pipeline.
-				if (W3DShaderManager::getCurrentShader() == W3DShaderManager::ST_FLAT_TERRAIN_BASE_NOISE1)
-				{	//setup cloud pass
-					WW3D::Get_Render_Backend()->Set_Texture_Resource(0, W3DShaderManager::getShaderTexture(2));
-					terrainShader2Stage.updateNoise1(&curView,&inv);	//update curView with texture matrix
-					WW3D::Get_Render_Backend()->Set_Texture_Filter(0, RenderBackendTextureFilterType::Minification, RenderBackendTextureFilter::Linear);;
-					WW3D::Get_Render_Backend()->Set_Texture_Filter(0, RenderBackendTextureFilterType::Magnification, RenderBackendTextureFilter::Linear);;
-				}
-				else
-				{
-					//setup noise pass
-					WW3D::Get_Render_Backend()->Set_Texture_Resource(0, W3DShaderManager::getShaderTexture(3));
-					terrainShader2Stage.updateNoise2(&curView,&inv);	//update curView with texture matrix
-					WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::Minification, RenderBackendTextureFilter::Point);;
-					WW3D::Get_Render_Backend()->Set_Texture_Filter(1, RenderBackendTextureFilterType::Magnification, RenderBackendTextureFilter::Linear);;
-				}
-
-				WW3D::Get_Render_Backend()->Set_Texture_Operation(1, RenderBackendTextureComponent::Color, RenderBackendTextureOperation::Disable);;
-				WW3D::Get_Render_Backend()->Set_Texture_Operation(1, RenderBackendTextureComponent::Alpha, RenderBackendTextureOperation::Disable);;
-				WW3D::Get_Render_Backend()->Set_Transform(RenderBackendTransform::Texture0, curView);
-			}
-			break;
-	}
-
-	return TRUE;
-}
-
-
-
-
-
-
-Int FlatTerrainShaderPixelShader::shutdown()
-{
-	if (m_dwBasePixelShader)
-		DeletePixelShaderHandle(m_dwBasePixelShader);
-
-	if (m_dwBase0PixelShader)
-		DeletePixelShaderHandle(m_dwBase0PixelShader);
-
-	if (m_dwBaseNoise1PixelShader)
-		DeletePixelShaderHandle(m_dwBaseNoise1PixelShader);
-
-	if (m_dwBaseNoise2PixelShader)
-		DeletePixelShaderHandle(m_dwBaseNoise2PixelShader);
-
-	m_dwBasePixelShader=0;
-	m_dwBase0PixelShader=0;
-	m_dwBaseNoise1PixelShader=0;
-	m_dwBaseNoise2PixelShader=0;
-
-	return TRUE;
-}
-
-Int FlatTerrainShaderPixelShader::init()
-{
-	Int res;
-
-#ifdef DISABLE_PIXEL_SHADERS
-	return false;
-#endif
-
-	//this shader will also use the 2Stage shader for some of the passes so initialize it too.
-	if ((res=W3DShaderManager::getChipset()) >= DC_GENERIC_PIXEL_SHADER_1_1)
-	{
-		if (res >= DC_GENERIC_PIXEL_SHADER_1_1)
-		{
-			//base version which doesn't apply any noise textures.
-			if (!W3DShaderManager::LoadAndCreateShader("shaders\\fterrain.pso", false, &m_dwBasePixelShader))
-				return FALSE;
-
-			//base version which doesn't apply any shroud textures.
-			if (!W3DShaderManager::LoadAndCreateShader("shaders\\fterrain0.pso", false, &m_dwBase0PixelShader))
-				return FALSE;
-
-			//version which blends 1 noise texture.
-			if (!W3DShaderManager::LoadAndCreateShader("shaders\\fterrainnoise.pso", false, &m_dwBaseNoise1PixelShader))
-				return FALSE;
-
-			//version which blends 2 noise textures.
-			if (!W3DShaderManager::LoadAndCreateShader("shaders\\fterrainnoise2.pso", false, &m_dwBaseNoise2PixelShader))
-				return FALSE;
-
-			W3DShaders[W3DShaderManager::ST_FLAT_TERRAIN_BASE]=&flatTerrainShaderPixelShader;
-			W3DShaders[W3DShaderManager::ST_FLAT_TERRAIN_BASE_NOISE1]=&flatTerrainShaderPixelShader;
-			W3DShaders[W3DShaderManager::ST_FLAT_TERRAIN_BASE_NOISE2]=&flatTerrainShaderPixelShader;
-			W3DShaders[W3DShaderManager::ST_FLAT_TERRAIN_BASE_NOISE12]=&flatTerrainShaderPixelShader;
-			W3DShadersPassCount[W3DShaderManager::ST_FLAT_TERRAIN_BASE]=1;
-			W3DShadersPassCount[W3DShaderManager::ST_FLAT_TERRAIN_BASE_NOISE1]=1;
-			W3DShadersPassCount[W3DShaderManager::ST_FLAT_TERRAIN_BASE_NOISE2]=1;
-			W3DShadersPassCount[W3DShaderManager::ST_FLAT_TERRAIN_BASE_NOISE12]=1;
-			return TRUE;
-		}
-	}
-	return FALSE;
-}
-
-Int FlatTerrainShaderPixelShader::set(Int pass)
-{
-	//setup base pass
-	Int curStage = 1;
-	// setup terrain [3/31/2003]
-
-	WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(0, true, RenderBackendTextureAddressMode::Clamp);;
-	WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(0, false, RenderBackendTextureAddressMode::Clamp);;
-	WW3D::Get_Render_Backend()->Set_Texture(0, W3DShaderManager::getShaderTexture(2));
-	WW3D::Get_Render_Backend()->Set_Texture(1, W3DShaderManager::getShaderTexture(2));
-	//force WW3D2 system to set it's states so it won't later overwrite our custom settings.
-	WW3D::Get_Render_Backend()->Apply_Render_State_Changes();
-
-
-
-
-	WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(curStage, true, RenderBackendTextureAddressMode::Clamp);;
-	WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(curStage, false, RenderBackendTextureAddressMode::Clamp);;
-	//tell pixel shader which UV set to use for each stage
-	WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(curStage, RenderBackendTextureCoordinateSource::PassThrough, 0);;
-	WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(curStage, RenderBackendTextureTransformFlags::Disabled);;
-
-	if (TheGlobalData && (TheGlobalData->m_bilinearTerrainTex || TheGlobalData->m_trilinearTerrainTex)) {
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(curStage, RenderBackendTextureFilterType::Minification, RenderBackendTextureFilter::Linear);;
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(curStage, RenderBackendTextureFilterType::Magnification, RenderBackendTextureFilter::Linear);;
-	} else {
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(curStage, RenderBackendTextureFilterType::Minification, RenderBackendTextureFilter::Point);;
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(curStage, RenderBackendTextureFilterType::Magnification, RenderBackendTextureFilter::Point);;
-	}
-	if (TheGlobalData && TheGlobalData->m_trilinearTerrainTex) {
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(curStage, RenderBackendTextureFilterType::MipMap, RenderBackendTextureFilter::Linear);;
-	} else {
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(curStage, RenderBackendTextureFilterType::MipMap, RenderBackendTextureFilter::Point);;
-	}
-
-	curStage = 0;
-
-	W3DShroud *shroud = TheTerrainRenderObject->getShroud();
-	if (shroud) {
-
-		WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(curStage, RenderBackendTextureCoordinateSource::CameraSpacePosition);;
-		WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(curStage, RenderBackendTextureTransformFlags::Count2);;
-
-		//We need to scale so shroud texel stretches over one full terrain cell.  Each texel
-		//is 1/128 the size of full texture. (assuming 128x128 vid-mem texture).
-		{
-			Matrix4x4 curView;
-			WW3D::Get_Render_Backend()->Get_Transform(RenderBackendTransform::View, curView);
-
-			Matrix4x4 inv;
-			inv = curView.Inverse();
-
-			Matrix4x4 scale,offset;
-
-			//We need to make all world coordinates be relative to the heightmap data origin since that
-			//is where the shroud begins.
-
-			float xoffset = 0;
-			float yoffset = 0;
-			Real width=shroud->getCellWidth();
-			Real height=shroud->getCellHeight();
-
-			if (TheTerrainRenderObject->getMap())
-			{	//subtract origin position from all coordinates.  Origin is shifted by 1 cell width/height to allow for unused border texels.
-				xoffset = -(float)shroud->getDrawOriginX() + width;
-				yoffset = -(float)shroud->getDrawOriginY() + height;
-			}
-
-			offset = Make_Translation(xoffset, yoffset, 0);
-
-			width = 1.0f/(width*shroud->getTextureWidth());
-			height = 1.0f/(height*shroud->getTextureHeight());
-			scale = Make_Scaling(width, height, 1);
-		curView = scale * offset * inv;
-			WW3D::Get_Render_Backend()->Set_Transform(RenderBackend_Texture_Transform(curStage), curView);
-		}
-		WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(curStage, true, RenderBackendTextureAddressMode::Clamp);;
-		WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(curStage, false, RenderBackendTextureAddressMode::Clamp);;
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(curStage, RenderBackendTextureFilterType::Minification, RenderBackendTextureFilter::Linear);;
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(curStage, RenderBackendTextureFilterType::Magnification, RenderBackendTextureFilter::Linear);;
-		WW3D::Get_Render_Backend()->Set_Texture_Resource(curStage, shroud->getShroudTexture());
-		curStage++;
-		if (curStage==1) curStage++;
-	}
-
-	Bool doNoise1 = (W3DShaderManager::getCurrentShader() == W3DShaderManager::ST_FLAT_TERRAIN_BASE_NOISE1 ||
-						W3DShaderManager::getCurrentShader() == W3DShaderManager::ST_FLAT_TERRAIN_BASE_NOISE12);
-	if (doNoise1) {	 // Cloud pass.
-		Matrix4x4 curView;
-		WW3D::Get_Render_Backend()->Get_Transform(RenderBackendTransform::View, curView);
-
-		Matrix4x4 inv;
-		inv = curView.Inverse();
-
-		WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(curStage, RenderBackendTextureCoordinateSource::CameraSpacePosition);;
-		// Two output coordinates are used.
-		WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(curStage, RenderBackendTextureTransformFlags::Count2);;
-
-		WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(curStage, true, RenderBackendTextureAddressMode::Wrap);;
-		WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(curStage, false, RenderBackendTextureAddressMode::Wrap);;
-		WW3D::Get_Render_Backend()->Set_Texture_Resource(curStage, W3DShaderManager::getShaderTexture(2));
-		terrainShader2Stage.updateNoise1(&curView,&inv);	//update curView with texture matrix
-		WW3D::Get_Render_Backend()->Set_Transform(RenderBackend_Texture_Transform(curStage), curView);
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(curStage, RenderBackendTextureFilterType::Minification, RenderBackendTextureFilter::Linear);;
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(curStage, RenderBackendTextureFilterType::Magnification, RenderBackendTextureFilter::Linear);;
-
-		curStage++;
-		if (curStage==1) curStage++;
-	}
-
-	Bool doNoise2 = (W3DShaderManager::getCurrentShader() == W3DShaderManager::ST_FLAT_TERRAIN_BASE_NOISE2 ||
-						W3DShaderManager::getCurrentShader() == W3DShaderManager::ST_FLAT_TERRAIN_BASE_NOISE12);
-	if (doNoise2)
-	{
-		Matrix4x4 curView;
-		WW3D::Get_Render_Backend()->Get_Transform(RenderBackendTransform::View, curView);
-
-		Matrix4x4 inv;
-		inv = curView.Inverse();
-
-		WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(curStage, RenderBackendTextureCoordinateSource::CameraSpacePosition);;
-		// Two output coordinates are used.
-		WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(curStage, RenderBackendTextureTransformFlags::Count2);;
-
-		WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(curStage, true, RenderBackendTextureAddressMode::Wrap);;
-		WW3D::Get_Render_Backend()->Set_Texture_Address_Mode(curStage, false, RenderBackendTextureAddressMode::Wrap);;
-		WW3D::Get_Render_Backend()->Set_Texture_Resource(curStage, W3DShaderManager::getShaderTexture(3));
-		terrainShader2Stage.updateNoise2(&curView,&inv);	//update curView with texture matrix
-		WW3D::Get_Render_Backend()->Set_Transform(RenderBackend_Texture_Transform(curStage), curView);
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(curStage, RenderBackendTextureFilterType::Minification, RenderBackendTextureFilter::Linear);;
-		WW3D::Get_Render_Backend()->Set_Texture_Filter(curStage, RenderBackendTextureFilterType::Magnification, RenderBackendTextureFilter::Linear);;
-
-		curStage++;
-		if (curStage==1) curStage++;
-	}
-	if (curStage<2) {
-		WW3D::Get_Render_Backend()->Set_Pixel_Shader(m_dwBase0PixelShader);
-	}	else if (curStage==2) {
-		WW3D::Get_Render_Backend()->Set_Pixel_Shader(m_dwBasePixelShader);
-	}	else if (curStage==3) {
-		WW3D::Get_Render_Backend()->Set_Pixel_Shader(m_dwBaseNoise1PixelShader);
-	}else if (curStage==4) {
-		WW3D::Get_Render_Backend()->Set_Pixel_Shader(m_dwBaseNoise2PixelShader);
-	}
-	WW3D::Get_Render_Backend()->Set_Alpha_Blend_Enabled(false);;
-	WW3D::Get_Render_Backend()->Apply_Render_State_Changes();
-	WW3D::Get_Render_Backend()->Set_Texture_Resource(curStage, W3DShaderManager::getShaderTexture(3));
-	return TRUE;
-}
-
-void FlatTerrainShaderPixelShader::reset()
-{
-	WW3D::Get_Render_Backend()->Set_Texture_Resource(2, nullptr);	//release reference to any texture
-	WW3D::Get_Render_Backend()->Set_Texture_Resource(3, nullptr);	//release reference to any texture
-
-	WW3D::Get_Render_Backend()->Set_Pixel_Shader(0);	//turn off pixel shader
-
-	WW3D::Get_Render_Backend()->Set_Texture_Resource(0, nullptr);
-	WW3D::Get_Render_Backend()->Set_Texture_Resource(1, nullptr);
-
-	WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(0, RenderBackendTextureTransformFlags::Disabled);;
-	WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(0, RenderBackendTextureCoordinateSource::PassThrough, 0);;
-
-	WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(1, RenderBackendTextureTransformFlags::Disabled);;
-	WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(1, RenderBackendTextureCoordinateSource::PassThrough, 1);;
-
-	WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(2, RenderBackendTextureTransformFlags::Disabled);;
-	WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(2, RenderBackendTextureCoordinateSource::PassThrough, 2);;
-
-	WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(3, RenderBackendTextureTransformFlags::Disabled);;
-	WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(3, RenderBackendTextureCoordinateSource::PassThrough, 3);;
-
-
-	WW3D::Get_Render_Backend()->Invalidate_Cached_Render_States();
-}
-
-
-
-
-

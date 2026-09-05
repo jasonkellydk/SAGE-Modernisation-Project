@@ -1,3 +1,6 @@
+#include <array>
+#include <span>
+#include <vector>
 /*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -73,7 +76,10 @@
 #include "GameLogic/Module/AIUpdate.h"
 
 #include "W3DDevice/GameClient/TerrainTex.h"
-#include "W3DDevice/GameClient/HeightMap.h"
+#include "W3DDevice/GameClient/BaseHeightMap.h"
+#include "W3DDevice/GameClient/W3DGraphicsResources.h"
+import Graphics.Scene.Lines.Drawing;
+import Graphics.Backends.DX11.Coexistence;
 
 #include "WW3D2/Camera.h"
 #include "WW3D2/Mesh.h"
@@ -111,6 +117,7 @@ W3DWaypointBuffer::W3DWaypointBuffer()
 //=============================================================================
 W3DWaypointBuffer::~W3DWaypointBuffer()
 {
+    freeWaypointBuffers();
 	REF_PTR_RELEASE( m_waypointNodeRobj );
 	REF_PTR_RELEASE( m_texture );
 	REF_PTR_RELEASE( m_line );
@@ -123,6 +130,8 @@ W3DWaypointBuffer::~W3DWaypointBuffer()
 //=============================================================================
 void W3DWaypointBuffer::freeWaypointBuffers()
 {
+    Graphics::Get_Surface_Renderer().Destroy_Mesh(m_lineMesh);
+    m_lineMesh = {};
 }
 
 
@@ -199,12 +208,12 @@ void W3DWaypointBuffer::drawWaypoints(RenderInfoClass &rinfo)
 							}
 
 							m_waypointNodeRobj->Set_Position(Vector3(waypoint->x,waypoint->y,waypoint->z));
-							WW3D::Render(*m_waypointNodeRobj,localRinfo);
+							m_nodeGraphics.Render(*m_waypointNodeRobj,localRinfo,Graphics::PropLighting{{1,1,1}},nullptr);
 						}
 					}
 					//Now render the lines in one pass!
 					m_line->Set_Points( numPoints, points );
-					m_line->Render( localRinfo );
+					drawLine(localRinfo);
 				}
 			}
 		}
@@ -283,7 +292,7 @@ void W3DWaypointBuffer::drawWaypoints(RenderInfoClass &rinfo)
 							            }
 
 							            m_waypointNodeRobj->Set_Position(Vector3(waypoint->x,waypoint->y,waypoint->z));
-							            WW3D::Render(*m_waypointNodeRobj,localRinfo);
+							            m_nodeGraphics.Render(*m_waypointNodeRobj,localRinfo,Graphics::PropLighting{{1,1,1}},nullptr);
                           lineExists = TRUE;
 						            }
 					            }
@@ -295,7 +304,7 @@ void W3DWaypointBuffer::drawWaypoints(RenderInfoClass &rinfo)
                       {
 								        points[ numPoints++ ].Set( Vector3( destinationPoint->x, destinationPoint->y, destinationPoint->z ) );
 							          m_waypointNodeRobj->Set_Position(Vector3(destinationPoint->x,destinationPoint->y,destinationPoint->z));
-							          WW3D::Render(*m_waypointNodeRobj,localRinfo);
+							          m_nodeGraphics.Render(*m_waypointNodeRobj,localRinfo,Graphics::PropLighting{{1,1,1}},nullptr);
                         lineExists = TRUE;
                       }
                     }
@@ -308,7 +317,7 @@ void W3DWaypointBuffer::drawWaypoints(RenderInfoClass &rinfo)
                       m_line->Set_Width( 3.0f );
 
 					            m_line->Set_Points( numPoints, points );
-					            m_line->Render( localRinfo );
+					            drawLine(localRinfo);
                     }
                   }
                   //////////////////////////////////////////////////////////////////////
@@ -468,7 +477,7 @@ void W3DWaypointBuffer::drawWaypoints(RenderInfoClass &rinfo)
 									if (pNearElbow)//did we find a nearest corner?
 									{
 										m_waypointNodeRobj->Set_Position(Vector3(pNearElbow->x,pNearElbow->y,ctr->z));
-										WW3D::Render(*m_waypointNodeRobj,localRinfo); //The little hockey puck
+										m_nodeGraphics.Render(*m_waypointNodeRobj,localRinfo,Graphics::PropLighting{{1,1,1}},nullptr); //The little hockey puck
 										points[ numPoints ].Set( Vector3( pNearElbow->x, pNearElbow->y, ctr->z ) );
 										numPoints++;
 
@@ -494,7 +503,7 @@ void W3DWaypointBuffer::drawWaypoints(RenderInfoClass &rinfo)
 											if (dot < 0)// we have a second elbow
 											{
 												m_waypointNodeRobj->Set_Position(Vector3(pFarElbow->x,pFarElbow->y,ctr->z));
-												WW3D::Render(*m_waypointNodeRobj,localRinfo); //The little hockey puck
+												m_nodeGraphics.Render(*m_waypointNodeRobj,localRinfo,Graphics::PropLighting{{1,1,1}},nullptr); //The little hockey puck
 												points[ numPoints ].Set( Vector3( pFarElbow->x, pFarElbow->y, ctr->z ) );
 												numPoints++;
 											}
@@ -516,11 +525,11 @@ void W3DWaypointBuffer::drawWaypoints(RenderInfoClass &rinfo)
 						continue;
 
 					m_waypointNodeRobj->Set_Position(Vector3(naturalRallyPoint.x,naturalRallyPoint.y,naturalRallyPoint.z));
-					WW3D::Render(*m_waypointNodeRobj,localRinfo); //The little hockey puck
+					m_nodeGraphics.Render(*m_waypointNodeRobj,localRinfo,Graphics::PropLighting{{1,1,1}},nullptr); //The little hockey puck
 
 
 					m_line->Set_Points( numPoints, points );
-					m_line->Render( localRinfo );
+					drawLine(localRinfo);
 
 				}
 
@@ -531,3 +540,38 @@ void W3DWaypointBuffer::drawWaypoints(RenderInfoClass &rinfo)
 }
 
 
+
+void W3DWaypointBuffer::drawLine(RenderInfoClass &info)
+{
+    struct Submission {
+        Graphics::SurfaceMeshHandle &mesh;
+        std::array<float,16> projection;
+        Graphics::RHITextureHandle texture;
+    } submission{m_lineMesh,{},Resolve_Graphics_Texture(m_texture)};
+    WW3D::Get_Render_Backend()->Get_Transform(RenderBackendTransform::Projection,submission.projection.data());
+    SegLineGeometrySink sink;
+    sink.context = &submission;
+    sink.submit = [](void* context, const VertexFormatXYZDUV1* source, unsigned vertex_count,
+        const unsigned* indices, unsigned index_count) {
+        auto& submission = *static_cast<Submission*>(context);
+        auto* device = Graphics::Shared_Frame_Device();
+        if (!device) return;
+        std::vector<Graphics::SurfaceVertex> vertices(vertex_count);
+        for (unsigned i=0;i<vertex_count;++i) {
+            const auto& value = source[i];
+            auto& vertex = vertices[i];
+            vertex.position = {value.x,value.y,value.z};
+            vertex.uv = {value.u1,value.v1};
+            vertex.color = {((value.diffuse>>16)&255)/255.0f,((value.diffuse>>8)&255)/255.0f,
+                (value.diffuse&255)/255.0f,((value.diffuse>>24)&255)/255.0f};
+        }
+        auto& renderer = Graphics::Get_Surface_Renderer();
+        const std::span<const unsigned> topology(indices,index_count);
+        if (!submission.mesh.Is_Valid()) submission.mesh = renderer.Create_Mesh(vertices,topology);
+        else if (!renderer.Update_Mesh(submission.mesh,vertices,topology)) return;
+        Graphics::Draw_Navigation_Line(renderer,device->Immediate_Command_List(),submission.mesh,
+            submission.projection,submission.texture);
+    };
+    m_line->Extract_Geometry(info,sink);
+    WW3D::Get_Render_Backend()->Invalidate_Cached_Render_States();
+}

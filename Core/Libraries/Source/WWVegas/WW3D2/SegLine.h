@@ -125,6 +125,7 @@ class SegmentedLineClass : public RenderObjClass
 		// Render Object Interface - Rendering
 		/////////////////////////////////////////////////////////////////////////////
 		virtual void					Render(RenderInfoClass & rinfo) override;
+        void Extract_Geometry(RenderInfoClass &rinfo, const SegLineGeometrySink &sink);
 
 		/////////////////////////////////////////////////////////////////////////////
 		// Render Object Interface - Bounding Volumes
@@ -157,7 +158,7 @@ class SegmentedLineClass : public RenderObjClass
 
 	protected:
 
-		void 								Render_Seg_Line(RenderInfoClass & rinfo);
+		void Render_Seg_Line(RenderInfoClass & rinfo);
 
 	private:
 

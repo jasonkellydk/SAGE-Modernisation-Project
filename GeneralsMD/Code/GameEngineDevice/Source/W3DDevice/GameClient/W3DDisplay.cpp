@@ -34,21 +34,37 @@
 static void drawFramerateBar();
 
 // SYSTEM INCLUDES ////////////////////////////////////////////////////////////
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
+#include <cstddef>
+#include <cstring>
 #include <numeric>
 #include <stdlib.h>
 #include "Platform/SDLPlatformWindow.h"
 #include <SDL3/SDL.h>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <time.h>
+#include <utility>
+#include <vector>
 
 import Graphics.Backends.DX11.Coexistence;
+import Graphics.Renderer2D;
+import Graphics.Frame.SceneRenderers;
+import Engine.UI.WND;
 import Graphics.Scene.Beams;
 import Graphics.Scene.Lighting.Renderer;
-import Graphics.Scene.StaticMeshes;
 import Graphics.Scene.Particles.Renderer;
 import Graphics.Scene.Screen.Distortion;
+import Graphics.Scene.Screen.FullscreenOverlay;
+import Graphics.Scene.Ring;
+import Graphics.Scene.WorldQuads;
+import Graphics.Scene.Trees.Renderer;
+import Graphics.Scene.Water.Renderer;
+import Graphics.Scene.Props.Renderer;
+import Graphics.Scene.Screen.Filters;
 
 // USER INCLUDES //////////////////////////////////////////////////////////////
 #include "Common/FramePacer.h"
@@ -60,6 +76,7 @@ import Graphics.Scene.Screen.Distortion;
 #include "Common/Player.h"
 #include "Common/PlayerList.h"
 #include "Common/ThingTemplate.h"
+#include "Common/NameKeyGenerator.h"
 #include "Common/GameLOD.h"
 #include "Common/DrawModule.h"
 #include "GameLogic/AIPathfind.h"
@@ -67,11 +84,13 @@ import Graphics.Scene.Screen.Distortion;
 
 #include "GameClient/Drawable.h"
 #include "GameClient/GameText.h"
+#include "GameClient/GameWindowManager.h"
 #include "GameClient/GraphDraw.h"
 #include "GameClient/Line2D.h"
 #include "GameClient/Mouse.h"
 #include "GameClient/GlobalLanguage.h"
-#include "GameClient/VideoPlayer.h"
+#include "GameClient/GameWindow.h"
+#include "GameClient/VideoRuntime.h"
 #include "GameClient/Water.h"
 
 #include "GameNetwork/NetworkInterface.h"
@@ -79,17 +98,21 @@ import Graphics.Scene.Screen.Distortion;
 #include "Lib/BaseType.h"
 #include "W3DDevice/Common/W3DConvert.h"
 #include "W3DDevice/GameClient/W3DAssetManager.h"
+#include "W3DDevice/GameClient/W3DAssetRuntime.h"
+#include "W3DDevice/GameClient/W3DBibBuffer.h"
+#include "W3DDevice/GameClient/W3DTerrainGraphics.h"
+#include "W3DDevice/GameClient/W3DGraphicsResources.h"
 #include "W3DDevice/GameClient/W3DGameClient.h"
 #include "W3DDevice/GameClient/W3DFileSystem.h"
 #include "W3DDevice/GameClient/W3DDynamicLight.h"
 #include "W3DDevice/GameClient/W3DParticleSys.h"
 #include "W3DDevice/GameClient/W3DProfilerFrameCapture.h"
-#include "W3DDevice/GameClient/HeightMap.h"
+#include "W3DDevice/GameClient/BaseHeightMap.h"
+#include "W3DDevice/GameClient/WorldHeightMap.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
 #include "W3DDevice/GameClient/W3DScene.h"
 #include "W3DDevice/GameClient/W3DTerrainTracks.h"
 #include "W3DDevice/GameClient/W3DWater.h"
-#include "W3DDevice/GameClient/W3DVideoBuffer.h"
 #include "W3DDevice/GameClient/W3DShaderManager.h"
 #include "W3DDevice/GameClient/W3DDebugDisplay.h"
 #include "W3DDevice/GameClient/W3DProjectedShadow.h"
@@ -97,22 +120,20 @@ import Graphics.Scene.Screen.Distortion;
 #include "W3DDevice/GameClient/W3DShroud.h"
 #include "WWMath/wwmath.h"
 #include "WW3D2/WW3D.h"
+#include "WW3D2/GraphicsGeometry.h"
 #include "WW3D2/PredLod.h"
 #include "WW3D2/PartEmt.h"
 #include "WW3D2/PartLdr.h"
 #include "WW3D2/Backend/RenderBackend.h"
 #include "WW3D2/WW3DFormat.h"
 #include "WW3D2/AggDef.h"
-#include "WW3D2/Render2DSentence.h"
 #include "WW3D2/SortingRenderer.h"
 #include "WW3D2/Statistics.h"
-#include "WW3D2/TextureLoader.h"
 #include "WW3D2/Mesh.h"
 #include "WW3D2/HLOD.h"
 #include "WW3D2/MeshMatDesc.h"
 #include "WW3D2/MeshMdl.h"
 #include "WW3D2/RDDesc.h"
-#include "WWLib/TARGA.h"
 
 extern "C" bool Graphics_DX11_Initialize_Shared_Frame(
 	void *device,
@@ -135,7 +156,7 @@ extern "C" bool Graphics_DX11_Update_Shared_Frame(
 	std::uint32_t width,
 	std::uint32_t height);
 extern "C" bool Graphics_DX11_Begin_Frame() noexcept;
-extern "C" bool Graphics_DX11_Begin_Modern_Phase() noexcept;
+extern "C" bool Graphics_DX11_Begin_Graphics_Phase() noexcept;
 extern "C" bool Graphics_DX11_End_Frame() noexcept;
 extern "C" bool Graphics_DX11_Present() noexcept;
 extern "C" void Graphics_DX11_Abort_Frame() noexcept;
@@ -152,17 +173,21 @@ extern "C" void Graphics_DX11_Shutdown_Shared_Frame() noexcept;
 #endif
 #ifdef DUMP_PERF_STATS
 #include "GameLogic/PartitionManager.h"
+
 #endif
 
 
 
 // DEFINE AND ENUMS ///////////////////////////////////////////////////////////
 
+import Graphics.Capture.MovieCapture;
+static Graphics::MovieCapture displayMovieCapture;
+
 #define no_SAMPLE_DYNAMIC_LIGHT	1
-static bool modernRendererAvailable = false;
-static Graphics::BeamView modernBeamView;
-static Graphics::View modernParticleView;
-static Graphics::View modernMeshView;
+static bool graphicsRendererAvailable = false;
+static bool uiFrameActive = false;
+static Graphics::BeamView graphicsBeamView;
+static Graphics::View graphicsParticleView;
 #ifdef SAMPLE_DYNAMIC_LIGHT
 static W3DDynamicLight * theDynamicLight = nullptr;
 static Real theLightXOffset = 0.1f;
@@ -170,39 +195,48 @@ static Real theLightYOffset = 0.07f;
 static Int theFlashCount = 0;
 #endif
 
-static bool initializeModernBeamRenderer(Graphics::Device &device)
+static Graphics::Color2D To_UI_Color(UnsignedInt color) noexcept
 {
-	Graphics::StaticMeshRenderer &mesh_renderer = Graphics::GetStaticMeshRenderer();
-	if (!mesh_renderer.Is_Initialized()
-		&& !mesh_renderer.Initialize(device, std::filesystem::path("GraphicsShaders"), 4096, 16384))
-		return false;
-
-	Graphics::BeamRenderer &beam_renderer = Graphics::GetBeamRenderer();
-	if (!beam_renderer.Is_Initialized()
-		&& !beam_renderer.Initialize(device, std::filesystem::path("GraphicsShaders"), 4096))
-		return false;
-
-	Graphics::LightRenderer &light_renderer = Graphics::GetLightRenderer();
-	if (!light_renderer.Is_Initialized() && !light_renderer.Initialize(device, 4096))
-		return false;
-
-	Graphics::ParticleRenderer &particle_renderer = Graphics::GetParticleRenderer();
-	if (!particle_renderer.Is_Initialized() && !particle_renderer.Initialize(device, std::filesystem::path("GraphicsShaders"), 1024, 65536))
-		return false;
-
-	Graphics::ScreenDistortionRenderer &screen_renderer = Graphics::GetScreenDistortionRenderer();
-	return screen_renderer.Is_Initialized() || screen_renderer.Initialize(device, std::filesystem::path("GraphicsShaders"), 512);
+	return {
+		static_cast<float>((color >> 16) & 0xff) / 255.0f,
+		static_cast<float>((color >> 8) & 0xff) / 255.0f,
+		static_cast<float>(color & 0xff) / 255.0f,
+		static_cast<float>((color >> 24) & 0xff) / 255.0f};
 }
 
-static bool executeModernBeamRenderer(Graphics::Device &, Graphics::CommandList &commands, const Graphics::FrameTargets &targets) noexcept
+static Graphics::Renderer2DBlendMode To_UI_Blend_Mode(Display::DrawImageMode mode) noexcept
+{
+	switch (mode) {
+	case Display::DRAW_IMAGE_SOLID:
+		return Graphics::Renderer2DBlendMode::Solid;
+	case Display::DRAW_IMAGE_ADDITIVE:
+		return Graphics::Renderer2DBlendMode::Additive;
+	default:
+		return Graphics::Renderer2DBlendMode::Alpha;
+	}
+}
+
+static void Set_UI_Clip(Bool enabled, const IRegion2D &region) noexcept
+{
+	Graphics::Get_Renderer2D().Set_Clip(
+		enabled != FALSE,
+		{static_cast<float>(region.lo.x), static_cast<float>(region.lo.y),
+			static_cast<float>(region.hi.x), static_cast<float>(region.hi.y)});
+}
+
+static bool initializeGraphicsSceneRenderers(Graphics::Device &device)
+{
+    return Graphics::Initialize_Scene_Renderers(device, std::filesystem::path("GraphicsShaders"))
+        && Initialize_Video_Presentation(device, std::filesystem::path("GraphicsShaders"));
+}
+
+static bool executeGraphicsFramePasses(Graphics::Device &device, Graphics::CommandList &commands, const Graphics::FrameTargets &targets) noexcept
 {
 	if (!Graphics::GetLightRenderer().Sync())
 		return false;
 
-	if (!Graphics::GetStaticMeshRenderer().Render(commands, targets, false))
-		return false;
 
-	if (!Graphics::SetBeamView(modernBeamView))
+	if (!Graphics::SetBeamView(graphicsBeamView))
 		return false;
 
 	if (!Graphics::GetBeamRenderer().Render(
@@ -214,14 +248,42 @@ static bool executeModernBeamRenderer(Graphics::Device &, Graphics::CommandList 
 
 	if (TheParticleSystemManager != nullptr) {
 		W3DParticleSystemManager *particle_manager = static_cast<W3DParticleSystemManager *>(TheParticleSystemManager);
-		if (!particle_manager->Render_Modern_Particles(commands, targets))
+		if (!particle_manager->Render_Graphics_Particles(commands, targets))
 			return false;
 	}
-	return true;
+
+
+
+	if (!Render_Videos(commands, targets))
+		return false;
+
+	if (!Graphics::GetRingRenderer().Render(
+		commands,
+		targets.backbuffer.texture,
+		{0, 0, targets.backbuffer.width, targets.backbuffer.height, 0.0f, 1.0f}))
+		return false;
+
+	if (!Graphics::GetFullscreenOverlayRenderer().Render(
+		commands,
+		targets.backbuffer.texture,
+		{0, 0, targets.backbuffer.width, targets.backbuffer.height, 0.0f, 1.0f}))
+		return false;
+
+	return !uiFrameActive || Graphics::Get_Renderer2D().Execute(
+		device,
+		commands,
+		targets.backbuffer.texture,
+		targets.depth.texture,
+		{0, 0, targets.backbuffer.width, targets.backbuffer.height, 0.0f, 1.0f});
 }
 
-static bool initializeModernRenderer()
+static void shutdownGraphicsRenderer() noexcept;
+
+static bool initializeGraphicsRenderer()
 {
+	if (!W3DAssetRuntime::Initialize())
+			return false;
+
 	DX11SharedFrameResources resources{};
 	IRenderBackend *backend = WW3D::Get_Render_Backend();
 	if (backend == nullptr || !backend->Get_Shared_Frame_Resources(resources))
@@ -239,30 +301,30 @@ static bool initializeModernRenderer()
 		resources.height))
 		return false;
 
-	if (Graphics::Register_Modern_Phase_Executor(
-		&initializeModernBeamRenderer,
-		&executeModernBeamRenderer))
+	if (Graphics::Register_Graphics_Phase_Executor(
+		&initializeGraphicsSceneRenderers,
+		&executeGraphicsFramePasses))
 		return true;
 
-	Graphics::GetLightRenderer().Shutdown();
-	Graphics::GetScreenDistortionRenderer().Shutdown();
-	Graphics::GetParticleRenderer().Shutdown();
-	Graphics::GetBeamRenderer().Shutdown();
-	Graphics_DX11_Shutdown_Shared_Frame();
+	shutdownGraphicsRenderer();
 	return false;
 }
 
-static void shutdownModernRenderer() noexcept
+static void shutdownGraphicsRenderer() noexcept
 {
-	Graphics::GetStaticMeshRenderer().Shutdown();
-	Graphics::GetLightRenderer().Shutdown();
-	Graphics::GetScreenDistortionRenderer().Shutdown();
-	Graphics::GetParticleRenderer().Shutdown();
-	Graphics::GetBeamRenderer().Shutdown();
-	Graphics_DX11_Shutdown_Shared_Frame();
+	if (TheParticleSystemManager != nullptr)
+		static_cast<W3DParticleSystemManager *>(TheParticleSystemManager)->Reset_Graphics_Particle_Bindings();
+    uiFrameActive = false;
+    Shutdown_Video_Presentation();
+    W3DBibBuffer::Release_Graphics_Bibs();
+    W3DTerrainGraphics::Release_Graphics();
+    Release_Graphics_Textures();
+    Clear_Graphics_Transparent_Geometry();
+    Graphics::Shutdown_Scene_Renderers();
+    Graphics_DX11_Shutdown_Shared_Frame();
 }
 
-static bool beginSharedFrame()
+static bool beginGraphicsFrame()
 {
 	DX11SharedFrameResources resources{};
 	IRenderBackend *backend = WW3D::Get_Render_Backend();
@@ -281,10 +343,13 @@ static bool beginSharedFrame()
 		Graphics_DX11_Abort_Frame();
 		return false;
 	}
+	Begin_Video_Frame();
+	Graphics::Get_Renderer2D().Begin(resources.width, resources.height);
+	uiFrameActive = Graphics::Get_Renderer2D().Is_Initialized();
 	return true;
 }
 
-static void updateModernView(CameraClass *camera)
+static void updateGraphicsView(CameraClass *camera)
 {
 	if (camera == nullptr || WW3D::Get_Render_Backend() == nullptr)
 		return;
@@ -304,37 +369,37 @@ static void updateModernView(CameraClass *camera)
 	const Vector3 right = camera->Get_Right_Dir();
 	const Vector3 up = camera->Get_Up_Dir();
 	const Vector3 forward = camera->Get_Forward_Dir();
-	for (std::size_t index = 0; index < modernBeamView.view_projection.size(); ++index)
-		modernBeamView.view_projection[index] = viewProjectionElements[index];
-	modernBeamView.camera_right = {right.X, right.Y, right.Z};
-	modernBeamView.camera_up = {up.X, up.Y, up.Z};
-	modernBeamView.camera_forward = {forward.X, forward.Y, forward.Z};
-	Graphics::Matrix4x4 modern_view_matrix;
-	Graphics::Matrix4x4 modern_projection_matrix;
+	for (std::size_t index = 0; index < graphicsBeamView.view_projection.size(); ++index)
+		graphicsBeamView.view_projection[index] = viewProjectionElements[index];
+	graphicsBeamView.camera_right = {right.X, right.Y, right.Z};
+	graphicsBeamView.camera_up = {up.X, up.Y, up.Z};
+	graphicsBeamView.camera_forward = {forward.X, forward.Y, forward.Z};
+	Graphics::Matrix4x4 graphics_view_matrix;
+	Graphics::Matrix4x4 graphics_projection_matrix;
 	for (std::size_t row = 0; row < 4; ++row) {
 		for (std::size_t column = 0; column < 4; ++column) {
-			modern_view_matrix.values[row * 4 + column] = view[row][column];
-			modern_projection_matrix.values[row * 4 + column] = projection[row][column];
+			graphics_view_matrix.values[row * 4 + column] = view[row][column];
+			graphics_projection_matrix.values[row * 4 + column] = projection[row][column];
 		}
 	}
-	modernParticleView = Graphics::View(
-		modern_view_matrix,
-		modern_projection_matrix,
+	graphicsParticleView = Graphics::View(
+		graphics_view_matrix,
+		graphics_projection_matrix,
 		{camera->Get_Position().X, camera->Get_Position().Y, camera->Get_Position().Z},
 		{0.0f, 0.0f, static_cast<float>(TheDisplay->getWidth()), static_cast<float>(TheDisplay->getHeight()), 0.0f, 1.0f});
-	Graphics::GetParticleRenderer().Set_View(modernParticleView);
-	modernMeshView = modernParticleView;
-	Graphics::GetStaticMeshRenderer().Set_View(modernMeshView);
-	Graphics::GetScreenDistortionRenderer().Set_View(modernParticleView);
+	Graphics::GetParticleRenderer().Set_View(graphicsParticleView);
+	Graphics::GetWorldQuadRenderer().Set_View(graphicsParticleView);
+	Graphics::GetScreenDistortionRenderer().Set_View(graphicsParticleView);
 	if (TheParticleSystemManager != nullptr)
-		static_cast<W3DParticleSystemManager *>(TheParticleSystemManager)->Set_Modern_Particle_View(modernParticleView);
+		static_cast<W3DParticleSystemManager *>(TheParticleSystemManager)->Set_Graphics_Particle_View(graphicsParticleView);
 }
 
-static bool renderModernAfterLegacy(CameraClass *camera)
+static bool renderGraphicsScenePasses(CameraClass *camera)
 {
-	GENERALS_GRAPHICS_PROFILE_SCOPE("W3DDisplay::renderModernAfterLegacy");
-	updateModernView(camera);
-	if (!Graphics_DX11_Begin_Modern_Phase()) {
+	GENERALS_GRAPHICS_PROFILE_SCOPE("W3DDisplay::renderGraphicsScenePasses");
+	updateGraphicsView(camera);
+	if (!Graphics_DX11_Begin_Graphics_Phase()) {
+		uiFrameActive = false;
 		if (Graphics_DX11_End_Frame() && Graphics_DX11_Present())
 			return true;
 
@@ -343,15 +408,26 @@ static bool renderModernAfterLegacy(CameraClass *camera)
 	}
 
 	if (!Graphics_DX11_End_Frame()) {
+		uiFrameActive = false;
 		Graphics_DX11_Abort_Frame();
 		return false;
+	}
+
+	if (displayMovieCapture.Is_Active()) {
+		auto* device = Graphics::Shared_Frame_Device();
+		if (device == nullptr || !displayMovieCapture.Capture(*device, device->Get_Swap_Chain().Backbuffer(), Graphics::RHITextureFormat::BGRA8_UNorm)) {
+			displayMovieCapture.Stop();
+			DEBUG_LOG(("Movie capture stopped: frame readback or AVI write failed.\n"));
+		}
 	}
 
 	if (!Graphics_DX11_Present()) {
+		uiFrameActive = false;
 		Graphics_DX11_Abort_Frame();
 		return false;
 	}
 
+	uiFrameActive = false;
 	return true;
 }
 
@@ -625,7 +701,6 @@ W3DDisplay::W3DDisplay()
 #endif
 	for (i=0; i<LightEnvironmentClass::MAX_LIGHTS; i++)
 		m_myLight[i] = nullptr;
-	m_2DRender = nullptr;
 	m_isClippedEnabled = FALSE;
 	m_clipRegion.lo.x = 0;
 	m_clipRegion.lo.y = 0;
@@ -635,10 +710,6 @@ W3DDisplay::W3DDisplay()
 	for (i = 0; i < DisplayStringCount; i++)
 		m_displayStrings[i] = nullptr;
 
-	m_batchTexture = nullptr;
-	m_batchMode = DRAW_IMAGE_ALPHA;
-	m_batchGrayscale = FALSE;
-	m_batchNeedsInit = FALSE;
 
 #ifdef PROFILER_ENABLED
 	m_profilerFrameCapture = NEW W3DProfilerFrameCapture();
@@ -650,6 +721,7 @@ W3DDisplay::W3DDisplay()
 //=============================================================================
 W3DDisplay::~W3DDisplay()
 {
+	displayMovieCapture.Stop();
 #ifdef PROFILER_ENABLED
 	delete m_profilerFrameCapture;
 	m_profilerFrameCapture = nullptr;
@@ -669,17 +741,6 @@ W3DDisplay::~W3DDisplay()
 		TheDisplayStringManager->freeDisplayString(m_benchmarkDisplayString);
 	}
 
-	// delete 2D renderer
-	if( m_2DRender )
-	{
-
-		m_2DRender->Reset();
-		delete m_2DRender;
-		m_2DRender = nullptr;
-
-	}
-
-	//
 	// delete all our views now since they are W3D views and we need to
 	// free them BEFORE we shutdown W3D
 	//
@@ -699,8 +760,9 @@ W3DDisplay::~W3DDisplay()
 		W3DShaderManager::shutdown();
 	m_assetManager->Free_Assets();
 	delete m_assetManager;
-	modernRendererAvailable = false;
-	shutdownModernRenderer();
+	graphicsRendererAvailable = false;
+	shutdownGraphicsRenderer();
+	W3DAssetRuntime::Shutdown();
 	if (!TheGlobalData->m_headless)
 		WW3D::Shutdown();
 	WWMath::Shutdown();
@@ -807,11 +869,11 @@ static void resizeSDLWindow(UnsignedInt xres, UnsignedInt yres, Bool windowed)
 
 	// SDL window coordinates are logical points. The renderer resolution is in
 	// drawable pixels, so convert before asking SDL to resize a high-DPI window.
-	float displayScale = SDL_GetWindowDisplayScale(window);
-	if (displayScale <= 0.0f)
-		displayScale = 1.0f;
-	const int windowWidth = static_cast<int>(static_cast<float>(xres) / displayScale + 0.5f);
-	const int windowHeight = static_cast<int>(static_cast<float>(yres) / displayScale + 0.5f);
+	float pixelDensity = SDL_GetWindowPixelDensity(window);
+	if (pixelDensity <= 0.0f)
+		pixelDensity = 1.0f;
+	const int windowWidth = static_cast<int>(static_cast<float>(xres) / pixelDensity + 0.5f);
+	const int windowHeight = static_cast<int>(static_cast<float>(yres) / pixelDensity + 0.5f);
 	if (windowWidth <= 0 || windowHeight <= 0)
 		return;
 
@@ -835,15 +897,16 @@ Bool W3DDisplay::setDisplayMode( UnsignedInt xres, UnsignedInt yres, UnsignedInt
 	if (!setSDLWindowed(windowed))
 		return FALSE;
 	resizeSDLWindow(xres, yres, windowed);
-	modernRendererAvailable = false;
-	shutdownModernRenderer();
+	graphicsRendererAvailable = false;
+	shutdownGraphicsRenderer();
 	if (WW3D_ERROR_OK == WW3D::Set_Render_Device(
 		WW3D::Get_Render_Device(), xres, yres, bitdepth, windowed, false, true, true))
 	{
-		modernRendererAvailable = initializeModernRenderer();
-		Render2DClass::Set_Screen_Resolution(RectClass(0, 0, xres, yres));
-		Display::setDisplayMode(xres, yres, bitdepth, windowed);
-		return TRUE;
+		graphicsRendererAvailable = initializeGraphicsRenderer();
+		if (graphicsRendererAvailable) {
+			Display::setDisplayMode(xres, yres, bitdepth, windowed);
+			return TRUE;
+		}
 	}
 
 	//set back to the original mode.
@@ -852,140 +915,36 @@ Bool W3DDisplay::setDisplayMode( UnsignedInt xres, UnsignedInt yres, UnsignedInt
 	WW3D::Set_Render_Device(
 		WW3D::Get_Render_Device(), oldWidth, oldHeight, oldBitDepth, oldWindowed,
 		false, true, true);
-	modernRendererAvailable = initializeModernRenderer();
-	Render2DClass::Set_Screen_Resolution(RectClass(0, 0, oldWidth, oldHeight));
+	graphicsRendererAvailable = initializeGraphicsRenderer();
 	Display::setDisplayMode(oldWidth, oldHeight, oldBitDepth, oldWindowed);
 	return FALSE;	//did not change to a new mode.
 }
 
 /** Set width of display */
 //=============================================================================
-void W3DDisplay::setWidth( UnsignedInt width )
+void W3DDisplay::setWidth(UnsignedInt width)
 {
-
-	// extending functionality
-	Display::setWidth( width );
-
-	// our 2D renderer will use mapping coords to make (0,0) the upper left
-	// of the screen with (width,height) at the lower right
-	m_2DRender->Set_Coordinate_Range( RectClass( 0, 0, getWidth(), getHeight() ) );
-
+	Display::setWidth(width);
 }
 
 // W3DDisplay::setHeight ======================================================
 /** Set height of display */
 //=============================================================================
-void W3DDisplay::setHeight( UnsignedInt height )
+void W3DDisplay::setHeight(UnsignedInt height)
 {
-
-	// extending functionality
-	Display::setHeight( height );
-
-	// our 2D renderer will use mapping coords to make (0,0) the upper left
-	// of the screen with (width,height) at the lower right
-	m_2DRender->Set_Coordinate_Range( RectClass( 0, 0, getWidth(), getHeight() ) );
-
+	Display::setHeight(height);
 }
 
 void W3DDisplay::onBeginBatch()
 {
-	m_batchTexture = nullptr;
-	m_batchMode = DRAW_IMAGE_ALPHA;
-	m_batchGrayscale = FALSE;
-	m_batchNeedsInit = TRUE;
-
-	if (m_2DRender)
-	{
-		m_2DRender->Reset();
-	}
 }
 
 void W3DDisplay::onEndBatch()
 {
-	REF_PTR_RELEASE(m_batchTexture);
 }
 
 void W3DDisplay::onFlush()
 {
-	if (m_2DRender && !m_batchNeedsInit)
-	{
-		m_2DRender->Render();
-		m_2DRender->Reset();
-		m_batchNeedsInit = TRUE;
-	}
-}
-
-void W3DDisplay::setup2DRenderState(TextureClass *tex, DrawImageMode mode, Bool grayscale)
-{
-	if (m_isBatching)
-	{
-		if (!m_batchNeedsInit && m_batchTexture == tex && m_batchMode == mode && m_batchGrayscale == grayscale)
-		{
-			return;
-		}
-
-		onFlush();
-
-		if (tex != m_batchTexture)
-		{
-			if (tex)
-			{
-				tex->Add_Ref();
-			}
-			if (m_batchTexture)
-			{
-				m_batchTexture->Release_Ref();
-			}
-
-			m_batchTexture = tex;
-		}
-
-		m_batchMode = mode;
-		m_batchGrayscale = grayscale;
-		m_batchNeedsInit = FALSE;
-	}
-	else if (m_2DRender)
-	{
-		m_2DRender->Reset();
-	}
-
-	if (m_2DRender)
-	{
-		if (tex)
-		{
-			m_2DRender->Enable_Texturing(TRUE);
-			m_2DRender->Set_Texture(tex);
-		}
-		else
-		{
-			m_2DRender->Enable_Texturing(FALSE);
-		}
-
-		switch (mode)
-		{
-			default:
-			case DRAW_IMAGE_ALPHA:
-				m_2DRender->Enable_Additive(FALSE);
-				m_2DRender->Enable_Alpha(TRUE);
-				m_2DRender->Enable_Grayscale(grayscale);
-				break;
-			case DRAW_IMAGE_GRAYSCALE:
-				m_2DRender->Enable_Additive(FALSE);
-				m_2DRender->Enable_Alpha(TRUE);
-				m_2DRender->Enable_Grayscale(TRUE);
-				break;
-			case DRAW_IMAGE_ADDITIVE:
-				m_2DRender->Enable_Additive(TRUE);
-				m_2DRender->Enable_Alpha(FALSE);
-				m_2DRender->Enable_Grayscale(grayscale);
-				break;
-			case DRAW_IMAGE_SOLID:
-				m_2DRender->Enable_Additive(FALSE);
-				m_2DRender->Enable_Alpha(FALSE);
-				m_2DRender->Enable_Grayscale(grayscale);
-				break;
-		}
-	}
 }
 
 // W3DDisplay::initAssets =====================================================
@@ -1100,7 +1059,6 @@ void W3DDisplay::init()
 
 		if (TheGlobalData->m_incrementalAGPBuf)
 		{
-			SortingRendererClass::SetMinVertexBufferSize(1);
 		}
 		if (WW3D::Init( SDLPlatformWindow::nativeHandle() ) != WW3D_ERROR_OK)
 			throw ERROR_INVALID_D3D;	//failed to initialize.  User probably doesn't have DX 8.1
@@ -1119,8 +1077,6 @@ void W3DDisplay::init()
 		setWindowed( TheGlobalData->m_windowed );
 
 		// create a 2D renderer helper
-		m_2DRender = NEW Render2DClass;
-		DEBUG_ASSERTCRASH( m_2DRender, ("Cannot create Render2DClass") );
 
 		WW3DErrorType renderDeviceError;
 		Int attempt = 0;
@@ -1204,7 +1160,12 @@ void W3DDisplay::init()
 			return;
 		}
 		WW3D::Set_Texture_Bitdepth(getBitDepth());
-		modernRendererAvailable = initializeModernRenderer();
+		graphicsRendererAvailable = initializeGraphicsRenderer();
+		if (!graphicsRendererAvailable) {
+			WW3D::Shutdown();
+			WWMath::Shutdown();
+			throw ERROR_INVALID_D3D;
+		}
 
 		//Check if level was never set and default to setting most suitable for system.
 		if (TheGameLODManager->getStaticLODLevel() == STATIC_GAME_LOD_UNKNOWN)
@@ -1297,6 +1258,12 @@ void W3DDisplay::reset()
 
 	if (TheWritableGlobalData)
 		TheWritableGlobalData->m_drawSkyBox =0;
+}
+
+void W3DDisplay::update()
+{
+	// Display::update has no playback responsibilities; video timing is serviced by GameClient.
+	// playback is updated by GameClient before the display update.
 }
 
 const UnsignedInt START_CUMU_FRAME = LOGICFRAMES_PER_SECOND / 2;	// skip first half-sec
@@ -2005,12 +1972,19 @@ void W3DDisplay::calculateTerrainLOD()
 			Int64 startTime64 = getPerformanceCounter();
 			// start render block
 			updateViews();
-			if (WW3D::Begin_Render( true, true, Vector3( 0.0f, 0.0f, 0.0f ) ) == WW3D_ERROR_OK)
-			{	// draw all views of the world
-				drawViews();
-				// render is all done!
-				WW3D::End_Render();
-			}
+            if (!graphicsRendererAvailable || !Graphics_DX11_Begin_Frame()) {
+                Graphics_DX11_Abort_Frame();
+                m_3DScene->drawTerrainOnly(false);
+                return;
+            }
+            if (WW3D::Begin_Render(true, true, Vector3(0.0f, 0.0f, 0.0f)) == WW3D_ERROR_OK) {
+                drawViews();
+                WW3D::End_Render(false);
+                if (!Graphics_DX11_End_Frame() || !Graphics_DX11_Present())
+                    Graphics_DX11_Abort_Frame();
+            } else {
+                Graphics_DX11_Abort_Frame();
+            }
 			Int64 time64 = getPerformanceCounter();
 			timeForFrame = (float)((double)(time64-startTime64) / (double)(freq64));
 			if (i>=NUM_TO_DISCARD) {
@@ -2252,14 +2226,13 @@ AGAIN:
 		{
 			//USE_PERF_TIMER(BigAssRenderLoop)
 			static Bool couldRender = true;
-			bool modernFrame = false;
-			const bool videoOwnsPresentation = TheVideoPlayer != nullptr && TheVideoPlayer->firstStream() != nullptr;
-			if (modernRendererAvailable && !videoOwnsPresentation) {
-				modernFrame = beginSharedFrame();
-				if (!modernFrame)
+			bool graphicsFrame = false;
+			if (graphicsRendererAvailable) {
+				graphicsFrame = beginGraphicsFrame();
+				if (!graphicsFrame)
 					Graphics_DX11_Abort_Frame();
 			}
-			if ((TheGlobalData->m_breakTheMovie == FALSE) && (TheGlobalData->m_disableRender == false) && WW3D::Begin_Render( true, true, Vector3( 0.0f, 0.0f, 0.0f ), TheWaterTransparency->m_minWaterOpacity ) == WW3D_ERROR_OK)
+			if (graphicsFrame && (TheGlobalData->m_breakTheMovie == FALSE) && (TheGlobalData->m_disableRender == false) && WW3D::Begin_Render( true, true, Vector3( 0.0f, 0.0f, 0.0f ), TheWaterTransparency->m_minWaterOpacity ) == WW3D_ERROR_OK)
 			{
 
 				if(TheGlobalData->m_loadScreenRender == TRUE)
@@ -2267,9 +2240,11 @@ AGAIN:
 					TheInGameUI->draw();
 					if( TheMouse )
 						TheMouse->draw();	//keep applying the current cursor style so it remains hidden if needed.
-					WW3D::End_Render(!modernFrame);
-					if (modernFrame)
-						renderModernAfterLegacy(primaryW3DView->get3DCamera());
+					if (graphicsFrame)
+						Submit_Videos(static_cast<std::uint32_t>(getWidth()), static_cast<std::uint32_t>(getHeight()));
+					WW3D::End_Render(false);
+					if (graphicsFrame)
+						renderGraphicsScenePasses(primaryW3DView->get3DCamera());
 					continue;
 				}
 				couldRender = true;
@@ -2289,11 +2264,8 @@ AGAIN:
 				if( TheMouse )
 					TheMouse->DRAW();
 
-				if ( m_videoStream && m_videoBuffer )
-				{
-					// TheSuperHackers @bugfix Mauller 20/07/2025 scale videos based on screen size so they are shown in their original aspect
-					drawScaledVideoBuffer( m_videoBuffer, m_videoStream );
-				}
+				if (graphicsFrame)
+					Submit_Videos(static_cast<std::uint32_t>(getWidth()), static_cast<std::uint32_t>(getHeight()));
 
 				// render letter box before debug display so debug info isn't hidden
 				renderLetterBox(now);
@@ -2360,13 +2332,13 @@ AGAIN:
 				}
 				#endif
 				// render is all done!
-				WW3D::End_Render(!modernFrame);
-				if (modernFrame)
-					renderModernAfterLegacy(primaryW3DView->get3DCamera());
+				WW3D::End_Render(false);
+				if (graphicsFrame)
+					renderGraphicsScenePasses(primaryW3DView->get3DCamera());
 			}
 			else
 			{
-				if (modernFrame)
+				if (graphicsFrame)
 					Graphics_DX11_Abort_Frame();
 				if (couldRender)
 				{
@@ -2568,731 +2540,219 @@ void W3DDisplay::setTimeOfDay( TimeOfDay tod )
 // W3DDisplay::drawLine =======================================================
 /** draw a line on the display in pixel coordinates with the specified color */
 //=============================================================================
-void W3DDisplay::drawLine( Int startX, Int startY,
-													 Int endX, Int endY,
-													 Real lineWidth,
-													 UnsignedInt lineColor )
+void W3DDisplay::drawLine(
+	Int startX, Int startY, Int endX, Int endY, Real lineWidth, UnsignedInt lineColor)
 {
-	setup2DRenderState(nullptr, DRAW_IMAGE_ALPHA, FALSE);
+	if (!uiFrameActive)
+		return;
 
-	m_2DRender->Add_Line( Vector2( startX, startY ), Vector2( endX, endY ),
-												lineWidth, lineColor );
-
-	if (!m_isBatching)
-	{
-		m_2DRender->Render();
+	Set_UI_Clip(m_isClippedEnabled, m_clipRegion);
+	if (!Graphics::Get_Renderer2D().Add_Line(
+			{static_cast<float>(startX), static_cast<float>(startY)},
+			{static_cast<float>(endX), static_cast<float>(endY)},
+			lineWidth,
+			To_UI_Color(lineColor))) {
+		Graphics::Get_Renderer2D().Discard();
+		uiFrameActive = false;
 	}
 }
 
 // W3DDisplay::drawLine =======================================================
 /** draw a line on the display in pixel coordinates with the specified color */
 //=============================================================================
-void W3DDisplay::drawLine( Int startX, Int startY,
-													 Int endX, Int endY,
-													 Real lineWidth,
-													 UnsignedInt lineColor1,UnsignedInt lineColor2 )
+void W3DDisplay::drawLine(
+	Int startX, Int startY, Int endX, Int endY, Real lineWidth,
+	UnsignedInt lineColor1, UnsignedInt lineColor2)
 {
-	setup2DRenderState(nullptr, DRAW_IMAGE_ALPHA, FALSE);
+	if (!uiFrameActive)
+		return;
 
-	m_2DRender->Add_Line( Vector2( startX, startY ), Vector2( endX, endY ),
-												lineWidth, lineColor1, lineColor2 );
-
-	if (!m_isBatching)
-	{
-		m_2DRender->Render();
+	Set_UI_Clip(m_isClippedEnabled, m_clipRegion);
+	if (!Graphics::Get_Renderer2D().Add_Gradient_Line(
+			{static_cast<float>(startX), static_cast<float>(startY)},
+			{static_cast<float>(endX), static_cast<float>(endY)},
+			lineWidth,
+			{{To_UI_Color(lineColor1), To_UI_Color(lineColor1),
+				To_UI_Color(lineColor2), To_UI_Color(lineColor2)}})) {
+		Graphics::Get_Renderer2D().Discard();
+		uiFrameActive = false;
 	}
-
 }
-
 
 // W3DDisplay::drawOpenRect ===================================================
 //=============================================================================
-void W3DDisplay::drawOpenRect( Int startX, Int startY, Int width, Int height,
-															 Real lineWidth, UnsignedInt lineColor )
+void W3DDisplay::drawOpenRect(
+	Int startX, Int startY, Int width, Int height, Real lineWidth, UnsignedInt lineColor)
 {
+	if (!uiFrameActive)
+		return;
 
-	if (m_isClippedEnabled)
-	{
-		ICoord2D start, end, returnStart, returnEnd;
-		start.x = startX;
-		start.y = startY;
-
-		end.x = start.x;
-		end.y = start.y + height;
-		if(ClipLine2D(&start, &end, &returnStart, &returnEnd, &m_clipRegion ))
-			drawLine( returnStart.x, returnStart.y, returnEnd.x, returnEnd.y, lineWidth, lineColor);
-
-		end.x = start.x + width;
-		end.y = start.y;
-		if(ClipLine2D(&start, &end, &returnStart, &returnEnd, &m_clipRegion ))
-			drawLine( returnStart.x, returnStart.y, returnEnd.x, returnEnd.y, lineWidth, lineColor);
-
-		start.x = startX + width;
-		start.y = startY;
-		end.x = start.x;
-		end.y = start.y + height;
-		if(ClipLine2D(&start, &end, &returnStart, &returnEnd, &m_clipRegion ))
-			drawLine( returnStart.x, returnStart.y, returnEnd.x, returnEnd.y, lineWidth, lineColor);
-
-		start.x = startX;
-		start.y = startY + height;
-		end.x = start.x + width;
-		end.y = start.y;
-		if(ClipLine2D(&start, &end, &returnStart, &returnEnd, &m_clipRegion ))
-			drawLine( returnStart.x, returnStart.y, returnEnd.x, returnEnd.y, lineWidth, lineColor);
+	Set_UI_Clip(m_isClippedEnabled, m_clipRegion);
+	if (!Graphics::Get_Renderer2D().Add_Outline(
+			{static_cast<float>(startX), static_cast<float>(startY),
+				static_cast<float>(startX + width), static_cast<float>(startY + height)},
+			lineWidth,
+			To_UI_Color(lineColor))) {
+		Graphics::Get_Renderer2D().Discard();
+		uiFrameActive = false;
 	}
-	else
-	{
-		setup2DRenderState(nullptr, DRAW_IMAGE_ALPHA, FALSE);
-
-		m_2DRender->Add_Outline( RectClass( startX, startY,
-																				startX + width, startY + height ),
-														 lineWidth, lineColor );
-
-		if (!m_isBatching)
-		{
-			m_2DRender->Render();
-		}
-	}
-
 }
 
 // W3DDisplay::drawFillRect ===================================================
 //=============================================================================
-void W3DDisplay::drawFillRect( Int startX, Int startY, Int width, Int height,
-															 UnsignedInt color )
+void W3DDisplay::drawFillRect(
+	Int startX, Int startY, Int width, Int height, UnsignedInt color)
 {
-	setup2DRenderState(nullptr, DRAW_IMAGE_ALPHA, FALSE);
+	if (!uiFrameActive)
+		return;
 
-	m_2DRender->Add_Rect( RectClass( startX, startY,
-																	 startX + width, startY + height ),
-												0, 0, color );
-
-	if (!m_isBatching)
-	{
-		m_2DRender->Render();
+	Set_UI_Clip(m_isClippedEnabled, m_clipRegion);
+	if (!Graphics::Get_Renderer2D().Add_Rect(
+			{static_cast<float>(startX), static_cast<float>(startY),
+				static_cast<float>(startX + width), static_cast<float>(startY + height)},
+			To_UI_Color(color))) {
+		Graphics::Get_Renderer2D().Discard();
+		uiFrameActive = false;
 	}
 }
 
-void W3DDisplay::drawRectClock(Int startX, Int startY, Int width, Int height, Int percent, UnsignedInt color)
+void W3DDisplay::drawRectClock(
+	Int startX, Int startY, Int width, Int height, Int percent, UnsignedInt color)
 {
-	// sanity
-	if(percent < 1 || percent > 100)
+	if (percent < 1 || percent > 100 || !uiFrameActive)
 		return;
 
-	setup2DRenderState(nullptr, DRAW_IMAGE_ALPHA, FALSE);
-
-// The rectangles are numberd as follows
-//(x,y)	|---------|
-//			| 4  | 1  |
-//			|----+----|
-//			| 3  | 2  |
-//			|---------| (x + width, y + width)
-//
-	// we're done, lets just draw one rectangle for it all.
-	if(percent == 100)
-	{
-		m_2DRender->Add_Rect(RectClass( startX, startY,
-																		startX + width, startY + height), 0,0, color);
-	}
-	else if( percent> 75)
-	{
-		//rectangle #1 & 2
-		m_2DRender->Add_Rect(RectClass( startX + width/2, startY,
-																		startX + width, startY + height), 0,0, color);
-		// rectangle #3
-		m_2DRender->Add_Rect(RectClass( startX, startY + height/2,
-																		startX + width/2, startY + height), 0,0, color);
-		// draw the part of rectangle 4
-		Real remain = percent - 75;
-		if(remain > 12)
-		{
-			//draw the full triangle
-			m_2DRender->Add_Tri(Vector2(startX, startY),
-													Vector2(startX, startY + height/2),
-													Vector2(startX + width/2, startY + height/2),
-													Vector2(0,0),Vector2(0,0),Vector2(0,0),color);
-
-			// draw the part of triangle
-			Real percentDraw = (Real)(remain - 12)/ 13;
-			m_2DRender->Add_Tri(Vector2(startX, startY),
-													Vector2(startX + width/2, startY + height/2),
-													Vector2(startX + (width/2 * percentDraw), startY),
-													Vector2(0,0),Vector2(0,0),Vector2(0,0),color);
-		}
-		else
-		{
-			// draw the part of triangle
-			Real percentDraw = (Real)(remain)/ 12;
-			m_2DRender->Add_Tri(Vector2(startX, startY + height/2 - (height/2 * percentDraw)),
-													Vector2(startX, startY + height/2),
-													Vector2(startX + width/2, startY + height/2),
-													Vector2(0,0),Vector2(0,0),Vector2(0,0),color);
-		}
-
-	}
-	else if( percent > 50)
-	{
-		//rectangle #1 & 2
-		m_2DRender->Add_Rect(RectClass( startX + width/2, startY,
-																		startX + width, startY + height), 0,0, color);
-		// draw the part of rectangle 3
-		Real remain = percent - 50;
-		if(remain > 12)
-		{
-			//draw the full triangle
-			m_2DRender->Add_Tri(Vector2(startX + width/2, startY + height/2),
-													Vector2(startX, startY + height),
-													Vector2(startX + width/2, startY + height),
-													Vector2(0,0),Vector2(0,0),Vector2(0,0),color);
-
-			// draw the part of triangle
-			Real percentDraw = (Real)(remain - 12)/ 13;
-			m_2DRender->Add_Tri(Vector2(startX, startY + height - (height/2 * percentDraw)),
-													Vector2(startX, startY + height),
-													Vector2(startX + width/2, startY + height/2),
-													Vector2(0,0),Vector2(0,0),Vector2(0,0),color);
-		}
-		else
-		{
-			// draw the part of triangle
-			Real percentDraw = (Real)(remain)/ 12;
-			m_2DRender->Add_Tri(Vector2(startX + width/2, startY + height),
-													Vector2(startX + width/2, startY + height/2),
-													Vector2(startX + width/2 - ( width/2 * percentDraw), startY + height),
-													Vector2(0,0),Vector2(0,0),Vector2(0,0),color);
-		}
-	}
-	else if(percent > 25)
-	{
-		// rectangle #1
-		m_2DRender->Add_Rect(RectClass( startX + width/2, startY,
-																		startX + width, startY + height/2), 0,0, color);
-		// draw the part of rectangle 2
-		Real remain = percent - 25;
-		if(remain > 12)
-		{
-			//draw the full triangle
-			m_2DRender->Add_Tri(Vector2(startX + width/2, startY + height/2),
-													Vector2(startX + width, startY + height),
-													Vector2(startX + width, startY + height/2),
-													Vector2(0,0),Vector2(0,0),Vector2(0,0),color);
-
-			// draw the part of triangle
-			Real percentDraw = (Real)(remain - 12)/ 13;
-			m_2DRender->Add_Tri(Vector2(startX + width/2, startY + height/2),
-													Vector2(startX + width - (width/2 * percentDraw), startY + height),
-													Vector2(startX + width, startY + height),
-													Vector2(0,0),Vector2(0,0),Vector2(0,0),color);
-		}
-		else
-		{
-			// draw the part of triangle
-			Real percentDraw = (Real)(remain)/ 12;
-			m_2DRender->Add_Tri(Vector2(startX + width, startY + height/2),
-													Vector2(startX + width/2, startY + height/2),
-													Vector2(startX + width, startY + height/2 + ( height/2 * percentDraw)),
-													Vector2(0,0),Vector2(0,0),Vector2(0,0),color);
-		}
-	}
-	else
-	{
-				// draw the part of rectangle 1
-
-		if(percent > 12)
-		{
-			//draw the full triangle
-			m_2DRender->Add_Tri(Vector2(startX + width/2, startY),
-													Vector2(startX + width/2, startY + height/2),
-													Vector2(startX + width, startY),
-													Vector2(0,0),Vector2(0,0),Vector2(0,0),color);
-
-			// draw the part of triangle
-			Real percentDraw = (Real)(percent - 12)/ 13;
-			m_2DRender->Add_Tri(Vector2(startX + width, startY),
-													Vector2(startX + width/2, startY + height/2),
-													Vector2(startX + width, startY + (height/2 * percentDraw)),
-													Vector2(0,0),Vector2(0,0),Vector2(0,0),color);
-		}
-		else
-		{
-			// draw the part of triangle
-			Real percentDraw = (Real)(percent)/ 12;
-			m_2DRender->Add_Tri(Vector2(startX + width/2, startY),
-													Vector2(startX + width/2, startY + height/2),
-													Vector2(startX + width/2 + (width/2 * percentDraw), startY ),
-													Vector2(0,0),Vector2(0,0),Vector2(0,0),color);
-		}
-	}
-
-	if (!m_isBatching)
-	{
-		m_2DRender->Render();
+	Set_UI_Clip(m_isClippedEnabled, m_clipRegion);
+	if (!Graphics::Get_Renderer2D().Add_Rect_Clock(
+			{static_cast<float>(startX), static_cast<float>(startY),
+				static_cast<float>(startX + width), static_cast<float>(startY + height)},
+			percent,
+			To_UI_Color(color),
+			false)) {
+		Graphics::Get_Renderer2D().Discard();
+		uiFrameActive = false;
 	}
 }
 
-
-//--------------------------------------------------------------------------------------------------------------------
-// W3DDisplay::drawRemainingRectClock
-// Variation added by Kris -- October 2002
-// This version will overlay a clock progress from the specified percentage to 100%. Essentially, this function will
-// "reveal" an icon as it progresses towards completion.
-//--------------------------------------------------------------------------------------------------------------------
-void W3DDisplay::drawRemainingRectClock(Int startX, Int startY, Int width, Int height, Int percent, UnsignedInt color)
+void W3DDisplay::drawRemainingRectClock(
+	Int startX, Int startY, Int width, Int height, Int percent, UnsignedInt color)
 {
-	// sanity
-	if( percent < 0 || percent > 99 )
+	if (percent < 0 || percent > 100 || !uiFrameActive)
 		return;
 
-	setup2DRenderState(nullptr, DRAW_IMAGE_ALPHA, FALSE);
-
-// The rectangles are numbered as follows
-//(x,y)	|---------|
-//			| 4  | 1  |
-//			|----+----|
-//			| 3  | 2  |
-//			|---------| (x + width, y + width)
-//
-
-	Int midX = startX + width/2;
-	Int midY = startY + height/2;
-	Int endX = startX + width;
-	Int endY = startY + height;
-	Int halfWidth = width/2;
-	Int halfHeight = height/2;
-
-	if( percent == 0 )
-	{
-		// We just started, so draw the entire remaining rectangle.
-		// #1, #2, #3, and #4
-		m_2DRender->Add_Rect( RectClass( startX, startY, endX, endY ), 0, 0, color );
-	}
-	else if( percent < 25 )
-	{
-		//1-25%
-		//-----
-
-		//Rectangle #3 & 4
-		m_2DRender->Add_Rect( RectClass( startX, startY, midX, endY ), 0, 0, color );
-
-		//Rectangle #2
-		m_2DRender->Add_Rect( RectClass( midX, midY, endX, endY ), 0, 0, color );
-
-		//Handle rectangle #1 than needs partial rendering.
-		if( percent < 13 )
-		{
-			//1-12%
-  		//-----
-
-			//Draw the 2nd half of rectangle #1
-			m_2DRender->Add_Tri( Vector2( midX, midY ), Vector2( endX, midY ), Vector2( endX, startY ),
-													 Vector2( 0, 0 ), Vector2( 0, 0 ), Vector2( 0, 0 ), color );
-
-			//Draw the last part of the 1st portion of rectangle #1
-			Real percentDraw = (Real)( 13 - percent ) / 13;
-			m_2DRender->Add_Tri( Vector2( midX, midY ), Vector2( endX, startY ), Vector2( endX - halfWidth * percentDraw, startY ),
-													 Vector2( 0, 0 ), Vector2( 0, 0 ), Vector2( 0, 0 ), color );
-		}
-		else
-		{
-			//13-24%
-			//------
-
-			//Draw the last part of the 2nd half of rectangle #1
-			Real percentDraw = (Real)( percent - 13 ) / 12;
-			m_2DRender->Add_Tri( Vector2( midX, midY ), Vector2( endX, midY ), Vector2( endX, startY + halfHeight * percentDraw ),
-													 Vector2( 0, 0 ), Vector2( 0, 0 ), Vector2( 0, 0 ), color );
-		}
-	}
-	else if( percent < 50 )
-	{
-		//25-49%
-		//------
-
-		//rectangle #3 & 4
-		m_2DRender->Add_Rect( RectClass( startX, startY, midX, endY ), 0, 0, color );
-
-		//Handle rectangle #2 that needs partial rendering.
-		if( percent < 38 )
-		{
-			//25-37%
-  		//-----
-
-			//Draw the 2nd half of rectangle #2
-			m_2DRender->Add_Tri( Vector2( midX, midY ), Vector2( midX, endY ), Vector2( endX, endY ),
-													 Vector2( 0, 0 ), Vector2( 0, 0 ), Vector2( 0, 0 ), color );
-
-			//Draw the last part of the 1st portion of rectangle #2
-			Real percentDraw = (Real)( percent - 25 ) / 13;
-			m_2DRender->Add_Tri( Vector2( midX, midY ), Vector2( endX, endY ), Vector2( endX, midY + halfHeight * percentDraw ),
-													 Vector2( 0, 0 ), Vector2( 0, 0 ), Vector2( 0, 0 ), color );
-		}
-		else
-		{
-			//38-49%
-			//------
-
-			//Draw the last part of the 2nd half of rectangle #1
-			Real percentDraw = (Real)( percent - 38 ) / 12;
-			m_2DRender->Add_Tri( Vector2( midX, midY ), Vector2( midX, endY ), Vector2( endX - halfWidth * percentDraw, endY ),
-													 Vector2( 0, 0 ), Vector2( 0, 0 ), Vector2( 0, 0 ), color );
-		}
-	}
-	else if( percent < 75 )
-	{
-		//50-74%
-		//------
-
-		//Rectangle #4
-		m_2DRender->Add_Rect( RectClass( startX, startY, midX, midY ), 0, 0, color );
-
-		//Handle rectangle #3 that needs partial rendering.
-		if( percent < 63 )
-		{
-			//50-62%
-  		//-----
-
-			//Draw the 2nd half of rectangle #3
-			m_2DRender->Add_Tri( Vector2( midX, midY ), Vector2( startX, midY ), Vector2( startX, endY ),
-													 Vector2( 0, 0 ), Vector2( 0, 0 ), Vector2( 0, 0 ), color );
-
-			//Draw the last part of the 1st portion of rectangle #3
-			Real percentDraw = (Real)( percent - 50 ) / 13;
-			m_2DRender->Add_Tri( Vector2( midX, midY ), Vector2( startX, endY ), Vector2( midX - halfWidth * percentDraw, endY ),
-													 Vector2( 0, 0 ), Vector2( 0, 0 ), Vector2( 0, 0 ), color );
-		}
-		else
-		{
-			//62-74%
-			//------
-
-			//Draw the last part of the 2nd half of rectangle #3
-			Real percentDraw = (Real)( percent - 62 ) / 12;
-			m_2DRender->Add_Tri( Vector2( midX, midY ), Vector2( startX, midY ), Vector2( startX, endY - halfHeight * percentDraw ),
-													 Vector2( 0, 0 ), Vector2( 0, 0 ), Vector2( 0, 0 ), color );
-		}
-	}
-	else
-	{
-		//75-99%
-		//------
-
-		//Handle rectangle #4 that needs partial rendering.
-		if( percent < 87 )
-		{
-			//75-87%
-  		//-----
-
-			//Draw the 2nd half of rectangle #4
-			m_2DRender->Add_Tri( Vector2( midX, midY ), Vector2( midX, startY ), Vector2( startX, startY ),
-													 Vector2( 0, 0 ), Vector2( 0, 0 ), Vector2( 0, 0 ), color );
-
-			//Draw the last part of the 1st portion of rectangle #4
-			Real percentDraw = (Real)( percent - 75 ) / 13;
-			m_2DRender->Add_Tri( Vector2( midX, midY ), Vector2( startX, startY ), Vector2( startX, midY - halfHeight * percentDraw ),
-													 Vector2( 0, 0 ), Vector2( 0, 0 ), Vector2( 0, 0 ), color );
-		}
-		else
-		{
-			//88-99%
-			//------
-
-			//Draw the last part of the 2nd half of rectangle #4
-			Real percentDraw = (Real)( percent - 88 ) / 12;
-			m_2DRender->Add_Tri( Vector2( midX, midY ), Vector2( midX, startY ), Vector2( startX + halfWidth * percentDraw, startY ),
-													 Vector2( 0, 0 ), Vector2( 0, 0 ), Vector2( 0, 0 ), color );
-		}
-	}
-
-	if (!m_isBatching)
-	{
-		m_2DRender->Render();
+	Set_UI_Clip(m_isClippedEnabled, m_clipRegion);
+	if (!Graphics::Get_Renderer2D().Add_Rect_Clock(
+			{static_cast<float>(startX), static_cast<float>(startY),
+				static_cast<float>(startX + width), static_cast<float>(startY + height)},
+			percent,
+			To_UI_Color(color),
+			true)) {
+		Graphics::Get_Renderer2D().Discard();
+		uiFrameActive = false;
 	}
 }
 
 
 // W3DDisplay::drawImage ======================================================
-/** Draws an images at the screen coordinates and keeps it within the end
-	* screen coords specified */
+/** Draw an image in screen coordinates. */
 //=============================================================================
-void W3DDisplay::drawImage( const Image *image, Int startX, Int startY,
-														Int endX, Int endY, Color color, DrawImageMode mode)
+void W3DDisplay::drawImage(
+	const Image *image, Int startX, Int startY, Int endX, Int endY,
+	Color color, DrawImageMode mode)
 {
-
-	// sanity
-	if( image == nullptr )
+	if (image == nullptr || !uiFrameActive)
 		return;
 
-	if (m_isClippedEnabled)
-	{
-		if (endX <= m_clipRegion.lo.x ||
-			endY <= m_clipRegion.lo.y ||
-			startX >= m_clipRegion.hi.x ||
-			startY >= m_clipRegion.hi.y)
-		{
-			return;	//nothing to render
-		}
+	if (m_isClippedEnabled && (endX <= m_clipRegion.lo.x
+		|| endY <= m_clipRegion.lo.y
+		|| startX >= m_clipRegion.hi.x
+		|| startY >= m_clipRegion.hi.y))
+		return;
+
+	Set_UI_Clip(m_isClippedEnabled, m_clipRegion);
+	Engine::UI::WND::ImageRef image_reference =
+		Engine::UI::WND::Resolve_Image_Reference(image->getFilename().str());
+	image_reference.uv = {
+		image->getUV()->lo.x, image->getUV()->lo.y,
+		image->getUV()->hi.x, image->getUV()->hi.y};
+	const Graphics::Renderer2DTexture binding = Engine::UI::WND::Resolve_Image_Texture(
+		image_reference.texture, Graphics::Get_Renderer2D());
+	if (!binding.index.Is_Valid()) {
+		uiFrameActive = false;
+		return;
 	}
-
-	// !!
-	// Remember to update the GUIEditDisplay::drawImage when you make
-	// changes to this, it technically uses W3D code to render itself,
-	// but it not derived on the W3DDisplay
-	// !!
-
 	const Region2D *uv = image->getUV();
-
-	TextureClass *tex = nullptr;
-	if (BitIsSet(image->getStatus(), IMAGE_STATUS_RAW_TEXTURE))
-		tex = (TextureClass *)(image->getRawTextureData());
-	else
-		tex = WW3DAssetManager::Get_Instance()->Get_Texture(image->getFilename().str(), MIP_LEVELS_1);
-
-	Bool grayscale = (mode == DRAW_IMAGE_GRAYSCALE);
-	setup2DRenderState(tex, mode, grayscale);
-
-	RectClass screen_rect(startX,startY,endX,endY);
-	RectClass uv_rect(uv->lo.x,uv->lo.y,uv->hi.x,uv->hi.y);
-
-	if (m_isClippedEnabled)
-	{	//need to clip this quad to clip rectangle
-		if (screen_rect.Left < m_clipRegion.lo.x || screen_rect.Right > m_clipRegion.hi.x || screen_rect.Top < m_clipRegion.lo.y || screen_rect.Bottom > m_clipRegion.hi.y)
-		{
-			RectClass clipped_rect;
-			RectClass clipped_uv_rect;
-
-			if( BitIsSet( image->getStatus(), IMAGE_STATUS_ROTATED_90_CLOCKWISE ) )
-			{
-
-
-				//
-				//	Clip the polygons to the specified area
-				//
-
-				clipped_rect.Left		= __max (screen_rect.Left, m_clipRegion.lo.x);
-				clipped_rect.Right	= __min (screen_rect.Right, m_clipRegion.hi.x);
-				clipped_rect.Top		= __max (screen_rect.Top, m_clipRegion.lo.y);
-				clipped_rect.Bottom	= __min (screen_rect.Bottom, m_clipRegion.hi.y);
-
-				//
-				//	Clip the texture to the specified area
-				//
-
-				float percent				= ((clipped_rect.Left - screen_rect.Left) / screen_rect.Width ());
-				clipped_uv_rect.Top		= uv_rect.Top + (uv_rect.Height () * percent);
-
-				percent						= ((clipped_rect.Right - screen_rect.Left) / screen_rect.Width ());
-				clipped_uv_rect.Bottom	= uv_rect.Top + (uv_rect.Height () * percent);
-
-				percent						= ((clipped_rect.Top - screen_rect.Top) / screen_rect.Height ());
-				clipped_uv_rect.Right	= uv_rect.Right - (uv_rect.Width () * percent);
-
-				percent						= ((clipped_rect.Bottom - screen_rect.Top) / screen_rect.Height ());
-				clipped_uv_rect.Left		= uv_rect.Right - (uv_rect.Width () * percent);
-			}
-			else
-
-			{
-
-				//
-				//	Clip the polygons to the specified area
-				//
-
-				clipped_rect.Left		= __max (screen_rect.Left, m_clipRegion.lo.x);
-				clipped_rect.Right	= __min (screen_rect.Right, m_clipRegion.hi.x);
-				clipped_rect.Top		= __max (screen_rect.Top, m_clipRegion.lo.y);
-				clipped_rect.Bottom	= __min (screen_rect.Bottom, m_clipRegion.hi.y);
-
-				//
-				//	Clip the texture to the specified area
-				//
-
-				float percent				= ((clipped_rect.Left - screen_rect.Left) / screen_rect.Width ());
-				clipped_uv_rect.Left		= uv_rect.Left + (uv_rect.Width () * percent);
-
-				percent						= ((clipped_rect.Right - screen_rect.Left) / screen_rect.Width ());
-				clipped_uv_rect.Right	= uv_rect.Left + (uv_rect.Width () * percent);
-
-				percent						= ((clipped_rect.Top - screen_rect.Top) / screen_rect.Height ());
-				clipped_uv_rect.Top		= uv_rect.Top + (uv_rect.Height () * percent);
-
-				percent						= ((clipped_rect.Bottom - screen_rect.Top) / screen_rect.Height ());
-				clipped_uv_rect.Bottom	= uv_rect.Top + (uv_rect.Height () * percent);
-			}
-
-			//
-			//	Use the clipped rectangles to render
-			//
-			screen_rect = clipped_rect;
-			uv_rect		= clipped_uv_rect;
-		}
+	const Graphics::Rect2D screen{
+		static_cast<float>(startX), static_cast<float>(startY),
+		static_cast<float>(endX), static_cast<float>(endY)};
+	const Graphics::Rect2D texture_uv{uv->lo.x, uv->lo.y, uv->hi.x, uv->hi.y};
+	const Graphics::Color2D draw_color = To_UI_Color(color);
+	const bool added = BitIsSet(image->getStatus(), IMAGE_STATUS_ROTATED_90_CLOCKWISE)
+		? Graphics::Get_Renderer2D().Add_Quad(
+			{{{screen.left, screen.top}, {screen.left, screen.bottom},
+				{screen.right, screen.top}, {screen.right, screen.bottom}}},
+			{{{texture_uv.right, texture_uv.top}, {texture_uv.left, texture_uv.top},
+				{texture_uv.right, texture_uv.bottom}, {texture_uv.left, texture_uv.bottom}}},
+			binding,
+			draw_color,
+			To_UI_Blend_Mode(mode),
+			mode == DRAW_IMAGE_GRAYSCALE)
+		: Graphics::Get_Renderer2D().Add_Quad(
+			screen,
+			texture_uv,
+			binding,
+			draw_color,
+			To_UI_Blend_Mode(mode),
+			mode == DRAW_IMAGE_GRAYSCALE);
+	if (!added) {
+		Graphics::Get_Renderer2D().Discard();
+		uiFrameActive = false;
 	}
-
-	// if rotated 90 degrees clockwise we have to adjust the uv coords
-	if( BitIsSet( image->getStatus(), IMAGE_STATUS_ROTATED_90_CLOCKWISE ) )
-	{
-
-		m_2DRender->Add_Tri( Vector2( screen_rect.Left, screen_rect.Top ),
-												 Vector2( screen_rect.Left, screen_rect.Bottom ),
-												 Vector2( screen_rect.Right, screen_rect.Top ),
-												 Vector2( uv_rect.Right, uv_rect.Top),
-												 Vector2( uv_rect.Left, uv_rect.Top),
-												 Vector2( uv_rect.Right, uv_rect.Bottom ),
-												 color );
-
-		m_2DRender->Add_Tri( Vector2( screen_rect.Right, screen_rect.Bottom ),
-												 Vector2( screen_rect.Right, screen_rect.Top ),
-												 Vector2( screen_rect.Left, screen_rect.Bottom ),
-												 Vector2( uv_rect.Left, uv_rect.Bottom ),
-												 Vector2( uv_rect.Right, uv_rect.Bottom ),
-												 Vector2( uv_rect.Left, uv_rect.Top ),
-												 color );
-
-	}
-	else
-	{
-
-		// just draw as normal
-		m_2DRender->Add_Quad( screen_rect, uv_rect, color );
-
-	}
-
-	if (!m_isBatching)
-	{
-		m_2DRender->Render();
-		m_2DRender->Enable_Grayscale(false);
-		if (mode == DRAW_IMAGE_ADDITIVE || mode == DRAW_IMAGE_SOLID)
-		{
-			m_2DRender->Enable_Alpha(true);
-		}
-	}
-
-	if (tex != nullptr && !BitIsSet(image->getStatus(), IMAGE_STATUS_RAW_TEXTURE))
-	{
-		tex->Release_Ref();
-	}
-
 }
 
-//============================================================================
-// W3DDisplay::createVideoBuffer
-//============================================================================
-
-VideoBuffer*	W3DDisplay::createVideoBuffer()
+void W3DDisplay::playMovie( AsciiString movieName )
 {
-	VideoBuffer::Type format = VideoBuffer::TYPE_UNKNOWN;
+	if (TheGlobalData->m_headless)
+		return;
 
-	/// @todo query video player for supported formats
-
-	// first try to use the native format
-
-	WW3DFormat displayFormat = WW3D::Get_Render_Backend()->Get_Back_Buffer_Format();
-
-	if ( WW3D::Get_Render_Backend()->Supports_Texture_Format( displayFormat ))
-	{
-		format = W3DVideoBuffer::W3DFormatToType( displayFormat );
-	}
-
-	if ( format == VideoBuffer::TYPE_UNKNOWN )
-	{
-		if ( WW3D::Get_Render_Backend()->Supports_Texture_Format( WW3D_FORMAT_X8R8G8B8 ))
-		{
-			format = VideoBuffer::TYPE_X8R8G8B8;
-		}
-		else if ( WW3D::Get_Render_Backend()->Supports_Texture_Format( WW3D_FORMAT_R8G8B8 ))
-		{
-			format = VideoBuffer::TYPE_R8G8B8;
-		}
-		else if ( WW3D::Get_Render_Backend()->Supports_Texture_Format( WW3D_FORMAT_R5G6B5 ))
-		{
-			format = VideoBuffer::TYPE_R5G6B5;
-		}
-		else if ( WW3D::Get_Render_Backend()->Supports_Texture_Format( WW3D_FORMAT_X1R5G5B5 ))
-		{
-			format = VideoBuffer::TYPE_X1R5G5B5;
-		}
-		else
-		{
-			// card does not support any of the formats we need
-			return nullptr;
-		}
-	}
-	// on low mem machines, render every video in 16bit
-	if (TheGameLODManager && (!TheGameLODManager->didMemPass() || W3DShaderManager::getChipset() == DC_GEFORCE2))
-		format = VideoBuffer::TYPE_R5G6B5;
-
-	W3DVideoBuffer *buffer = NEW W3DVideoBuffer( format );
-
-	return buffer;
+	stopMovie();
+	if (Open_Fullscreen_Video(movieName))
+		m_currentlyPlayingMovie = movieName;
 }
 
-//============================================================================
-// W3DDisplay::drawScaledVideoBuffer
-//============================================================================
-
-void W3DDisplay::drawScaledVideoBuffer( VideoBuffer *buffer, VideoStreamInterface *stream )
+void W3DDisplay::stopMovie()
 {
-	// TheSuperHackers @bugfix Mauller 20/07/2025 scale videos based on screen size so they are shown in their original aspect
-	Real videoAspect = (Real)stream->width() / (Real)stream->height();
-	Real displayAspect = (Real)getWidth() / (Real)getHeight();
-	Bool wideAspect = displayAspect >= videoAspect;
-
-	Int startX = 0;
-	Int endX = 0;
-	Int startY = 0;
-	Int endY = 0;
-
-	if (wideAspect)
-	{
-		// TheSuperHackers @info if we are in a wide aspect, we scale the videos width and fill the height
-		Real heightScale = (Real)getHeight() / (Real)stream->height();
-		startX = (getWidth() / 2.0f) - (stream->width() * heightScale / 2.0f);
-		endX = (getWidth() / 2.0f) + (stream->width() * heightScale / 2.0f);
-
-		endY = getHeight();
-	}
-	else
-	{
-		// TheSuperHackers @info if we are in a narrow aspect, we scale the videos height and fill the width
-		Real widthScale = (Real)getWidth() / (Real)stream->width();
-		startY = (getHeight() / 2.0f) - (stream->height() * widthScale / 2.0f);
-		endY = (getHeight() / 2.0f) + (stream->height() * widthScale / 2.0f);
-
-		endX = getWidth();
-	}
-
-	drawVideoBuffer( buffer, startX, startY, endX, endY );
+	Close_Fullscreen_Video();
+	m_currentlyPlayingMovie = AsciiString::TheEmptyString;
 }
 
-//============================================================================
-// W3DDisplay::drawVideoBuffer
-//============================================================================
-
-void W3DDisplay::drawVideoBuffer( VideoBuffer *buffer, Int startX, Int startY, Int endX, Int endY )
+Bool W3DDisplay::isMoviePlaying()
 {
-	W3DVideoBuffer *vbuffer = (W3DVideoBuffer*) buffer;
-
-	setup2DRenderState(vbuffer->texture(), DRAW_IMAGE_ALPHA, FALSE);
-
-	m_2DRender->Add_Quad( RectClass( startX, startY, endX, endY ),
-												vbuffer->Rect( 0, 0, 1, 1) );
-	
-	if (!m_isBatching)
-	{
-		m_2DRender->Render();
-	}
-
+	return Is_Fullscreen_Video_Playing();
 }
 
 // W3DDisplay::setClipRegion ============================================
-/** Set the clipping region for images.
-  @todo: Make this work for all primitives, not just drawImage. */
+/** Set the clipping region for all queued 2D draw operations. */
 //=============================================================================
 void W3DDisplay::setClipRegion( IRegion2D *region )
 {
-		// assign new region
-		m_clipRegion = *region;
-		m_isClippedEnabled = TRUE;
+	if (region == nullptr) {
+		enableClipping(FALSE);
+		return;
+	}
+
+	m_clipRegion = *region;
+	m_isClippedEnabled = TRUE;
+	if (uiFrameActive)
+		Set_UI_Clip(m_isClippedEnabled, m_clipRegion);
+
+}
+
+void W3DDisplay::enableClipping(Bool onoff)
+{
+	m_isClippedEnabled = onoff;
+	if (uiFrameActive)
+		Set_UI_Clip(m_isClippedEnabled, m_clipRegion);
 
 }
 
@@ -3339,7 +2799,7 @@ void W3DDisplay::setShroudLevel( Int x, Int y, CellShroudStatus setting )
 /** Start/Stop capturing an AVI movie*/
 void W3DDisplay::toggleMovieCapture()
 {
-	WW3D::Toggle_Movie_Capture("Movie",30);
+	displayMovieCapture.Toggle("Movie",30);
 }
 
 void W3DDisplay::takeScreenShot(ScreenshotFormat format, Int jpegQuality)

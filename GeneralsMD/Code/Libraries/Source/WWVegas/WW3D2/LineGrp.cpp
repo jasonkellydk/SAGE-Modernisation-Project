@@ -48,7 +48,8 @@
 #include "Camera.h"
 #include "WW3D2/IndexBuffer.h"
 #include "WW3D2/VertexBuffer.h"
-#include "SortingRenderer.h"
+#include "GraphicsGeometry.h"
+#include <vector>
 
 // Line groups are a rendering primitive similar to point groups
 // They are tetrahedra which are aligned with the view plane with their centers
@@ -320,12 +321,11 @@ void	LineGroupClass::Render(RenderInfoClass &rinfo)
 	// construct the tetrahedra in the index buffers
 	// assume first vertex is the apex, followed by offset[0-3]
 
-	DynamicIBAccessClass iba(sort?BUFFER_TYPE_DYNAMIC_SORTING:BUFFER_TYPE_DYNAMIC_RENDER,num_indices);
+	std::vector<unsigned> indices(num_indices);
 
 	{
-		DynamicIBAccessClass::WriteLockClass lock(&iba);
-		unsigned short *ibptr = lock.Get_Index_Array();
-		unsigned short j, idx;
+		unsigned* ibptr = indices.data();
+		unsigned j, idx;
 		switch (LineMode)	{
 			case TETRAHEDRON:
 				for (j=0; j<LineCount; j++) {
@@ -387,12 +387,10 @@ void	LineGroupClass::Render(RenderInfoClass &rinfo)
 
 	// make the vertex buffers
 
-	DynamicVBAccessClass vba(sort ? BUFFER_TYPE_DYNAMIC_SORTING : BUFFER_TYPE_DYNAMIC_RENDER,RenderBackend_Dynamic_Vertex_Format,num_vertices);
+	std::vector<VertexFormatXYZDUV1> vertices(num_vertices);
 
 	{
-		DynamicVBAccessClass::WriteLockClass lock(&vba);
-
-		VertexFormatXYZNDUV2 *vb = lock.Get_Formatted_Vertex_Array();
+		VertexFormatXYZDUV1* vb = vertices.data();
 
 		Vector3 loc, start, end;
 		int point, j;
@@ -466,15 +464,11 @@ void	LineGroupClass::Render(RenderInfoClass &rinfo)
 		}
 	}
 
-	WW3D::Get_Render_Backend()->Set_Index_Buffer(iba, 0);
-	WW3D::Get_Render_Backend()->Set_Vertex_Buffer(vba);
-
-	if (sort) {
-		SortingRendererClass::Insert_Triangles(0, num_tris, 0, num_vertices);
-	} else {
-		WW3D::Get_Render_Backend()->Draw_Indexed_Primitives(
-			RenderBackendPrimitiveType::TriangleList, 0, 0, num_vertices, 0, num_tris);
-	}
+    Matrix4x4 projection;
+    rinfo.Camera.Get_Backend_Projection_Matrix(&projection);
+    const Matrix4x4 draw_view = Get_Flag(TRANSFORM) ? view : identity;
+    Draw_Graphics_Prelit_Geometry(vertices,indices,projection*draw_view,Shader,Texture,
+        sort ? &draw_view : nullptr);
 
 	// restore the matrices
 	WW3D::Get_Render_Backend()->Set_Transform(RenderBackendTransform::View, view);

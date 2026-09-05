@@ -37,6 +37,8 @@
  * Functions:                                                                                  *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
+#include "WW3D2/GraphicsGeometry.h"
+#include "WW3D2/Camera.h"
 #include "SegLineRenderer.h"
 #include "WW3D.h"
 #include "W3DFile.h"
@@ -217,7 +219,8 @@ void SegLineRendererClass::Render
 	unsigned int num_points,
 	Vector3 * points,
 	const SphereClass & obj_sphere,
-	Vector4 * rgbas
+	Vector4 * rgbas,
+    const SegLineGeometrySink* sink
 )
 {
 	Matrix4x4 view;
@@ -1100,97 +1103,34 @@ void SegLineRendererClass::Render
 		** Set color, opacity, vertex flags:
 		*/
 
-		// If color is not white or opacity not 100%, enable gradient in shader and in renderer - otherwise disable.
-		unsigned int rgba;
-		rgba=WW3D::Get_Render_Backend()->Pack_Color(Color,Opacity);
-		bool rgba_all=(rgba==0xFFFFFFFF);
+        if (sink) {
+            unsigned indices[MAX_SEGLINE_POLY_BUFFER_SIZE * 3];
+            for (unsigned i=0;i<tidx;++i) {
+                indices[i*3]=v_index_array[i].I;
+                indices[i*3+1]=v_index_array[i].J;
+                indices[i*3+2]=v_index_array[i].K;
+            }
+            if (sink->submit) sink->submit(sink->context,vArray,vnum,indices,tidx*3);
+            continue;
+        }
 
-		// Enable sorting if sorting has not been disabled and line is translucent and alpha testing is not enabled.
-		bool sorting = (!Is_Sorting_Disabled()) && (Shader.Get_Dst_Blend_Func() != ShaderClass::DSTBLEND_ZERO && Shader.Get_Alpha_Test() == ShaderClass::ALPHATEST_DISABLE);
-
-		ShaderClass shader = Shader;
-		shader.Set_Cull_Mode(ShaderClass::CULL_MODE_DISABLE);
-
-		VertexMaterialClass *mat;
-
-		// if there's a default color or an rgba array modulate
-		if (!rgba_all || (rgba != 0) ) {
-			shader.Set_Primary_Gradient(ShaderClass::GRADIENT_MODULATE);
-			mat=VertexMaterialClass::Get_Preset(VertexMaterialClass::PRELIT_DIFFUSE);
-		} else {
-			// othewise it's texture only
-			shader.Set_Primary_Gradient(ShaderClass::GRADIENT_DISABLE);
-			mat=VertexMaterialClass::Get_Preset(VertexMaterialClass::PRELIT_NODIFFUSE);
-		}
-
-		// If Texture is non-null enable texturing in shader - otherwise disable.
-		if (Texture) {
-			shader.Set_Texturing(ShaderClass::TEXTURING_ENABLE);
-		} else {
-			shader.Set_Texturing(ShaderClass::TEXTURING_DISABLE);
-		}
-
-
-		/*
-		** Render
-		*/
-
-		DynamicVBAccessClass Verts((sorting?BUFFER_TYPE_DYNAMIC_SORTING:BUFFER_TYPE_DYNAMIC_RENDER),RenderBackend_Dynamic_Vertex_Format,vnum);
-		// Copy in the data to the  VB
-		{
-			DynamicVBAccessClass::WriteLockClass Lock(&Verts);
-			unsigned int i;
-			unsigned char *vb=(unsigned char*)Lock.Get_Formatted_Vertex_Array();
-			const VertexFormatInfoClass& fvfinfo=Verts.Get_Format_Info();
-
-			const unsigned int verticesOffset = fvfinfo.Get_Location_Offset();
-			const unsigned diffuseOffset = fvfinfo.Get_Diffuse_Offset();
-			const unsigned textureOffset = fvfinfo.Get_Tex_Offset(0);
-			const unsigned vbSize = fvfinfo.Get_Vertex_Size();
-
-			for (i=0; i<vnum; i++)
-			{
-				// Copy Locations
-				Vector3 *vertex = reinterpret_cast<Vector3 *>(vb + verticesOffset);
-				vertex->X = vArray[i].x;
-				vertex->Y = vArray[i].y;
-				vertex->Z = vArray[i].z;
-				*reinterpret_cast<unsigned int *>(vb + diffuseOffset) = vArray[i].diffuse;
-				Vector2 *texture = reinterpret_cast<Vector2 *>(vb + textureOffset);
-				texture->U = vArray[i].u1;
-				texture->V = vArray[i].v1;
-				vb += vbSize;
-			}
-		}
-
-		DynamicIBAccessClass ib_access((sorting?BUFFER_TYPE_DYNAMIC_SORTING:BUFFER_TYPE_DYNAMIC_RENDER),tidx*3);
-		{
-			unsigned int i;
-			DynamicIBAccessClass::WriteLockClass lock(&ib_access);
-			unsigned short* inds=lock.Get_Index_Array();
-
-			for (i=0; i<tidx; i++)
-			{
-				*inds++=v_index_array[i].I;
-				*inds++=v_index_array[i].J;
-				*inds++=v_index_array[i].K;
-			}
-		}
-
-		WW3D::Get_Render_Backend()->Set_Index_Buffer(ib_access,0);
-		WW3D::Get_Render_Backend()->Set_Vertex_Buffer(Verts);
-		WW3D::Get_Render_Backend()->Set_Material(mat);
-		WW3D::Get_Render_Backend()->Set_Texture(0,Texture);
-		WW3D::Get_Render_Backend()->Set_Shader(shader);
-
-		if (sorting) {
-			SortingRendererClass::Insert_Triangles(obj_sphere,0,tidx,0,vnum);
-		} else {
-			WW3D::Get_Render_Backend()->Draw_Indexed_Primitives(
-				RenderBackendPrimitiveType::TriangleList, 0, 0, vnum, 0, tidx);
-		}
-
-		REF_PTR_RELEASE(mat);
+        unsigned indices[MAX_SEGLINE_POLY_BUFFER_SIZE * 3];
+        for (unsigned i=0; i<tidx; ++i) {
+            indices[i*3]=v_index_array[i].I;
+            indices[i*3+1]=v_index_array[i].J;
+            indices[i*3+2]=v_index_array[i].K;
+        }
+        Matrix4x4 projection;
+        rinfo.Camera.Get_Backend_Projection_Matrix(&projection);
+        ShaderClass shader = Shader;
+        shader.Set_Cull_Mode(ShaderClass::CULL_MODE_DISABLE);
+        shader.Set_Primary_Gradient(ShaderClass::GRADIENT_MODULATE);
+        const bool sorting = !Is_Sorting_Disabled() && WW3D::Is_Sorting_Enabled()
+            && Shader.Get_Dst_Blend_Func()!=ShaderClass::DSTBLEND_ZERO
+            && Shader.Get_Alpha_Test()==ShaderClass::ALPHATEST_DISABLE;
+        const Matrix4x4 camera_space(true);
+        Draw_Graphics_Prelit_Geometry({vArray,vnum},{indices,tidx*3},projection,shader,Texture,
+            sorting ? &camera_space : nullptr);
 
 	}
 

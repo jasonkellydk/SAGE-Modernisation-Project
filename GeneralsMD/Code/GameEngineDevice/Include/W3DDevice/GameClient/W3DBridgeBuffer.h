@@ -43,6 +43,10 @@
 //-----------------------------------------------------------------------------
 
 #pragma once
+#include <array>
+#include <span>
+#include <vector>
+import Graphics.Scene.Surfaces.Renderer;
 
 //-----------------------------------------------------------------------------
 //           Includes
@@ -111,6 +115,7 @@ protected:
 	AsciiString m_templateName;					///< Name of the bridge type.
 	BodyDamageType m_curDamageState;
 	Bool			m_enabled;
+    Graphics::SurfaceMeshHandle m_graphicsMesh;
 
 protected:
 	Int getModelVerticesFixed(VertexFormatXYZNDUV1 *destination_vb, Int curVertex, const Matrix3D &mtx, MeshClass *pMesh, RefRenderObjListIterator *pLightsIterator);
@@ -137,7 +142,10 @@ public:
 	Bool isVisible() {return m_visible;};
 	Bool isEnabled() {return m_enabled;};
 	void setEnabled(Bool enable) {m_enabled = enable;};
-	void renderBridge(Bool wireframe);
+    bool uploadGeometry(std::span<const VertexFormatXYZNDUV1> vertices, std::span<const UnsignedShort> indices);
+    void releaseGeometry();
+    Graphics::SurfaceMeshHandle getGraphicsMesh() const { return m_graphicsMesh; }
+    TextureClass *getTexture() const { return m_bridgeTexture; }
 	void getBridgeInfo(BridgeInfo *pInfo);
 };
 
@@ -166,9 +174,8 @@ public:
 					MAX_BRIDGE_INDEX=2*MAX_BRIDGE_VERTEX,	//make sure it stays under 65535
 					MAX_BRIDGES=200};
 protected:
-	RenderBackendVertexBuffer	*m_vertexBridge;	///<Bridge vertex buffer owned by the active render backend.
-	RenderBackendIndexBuffer			*m_indexBridge;	///<indices defining triangles for the bridge drawing.
-	VertexMaterialClass *m_vertexMaterial;
+    std::vector<VertexFormatXYZNDUV1> m_vertices;
+    std::vector<UnsignedShort> m_indices;
 	TextureClass *m_bridgeTexture;	///<Bridges texture
 	Int			m_curNumBridgeVertices; ///<Number of vertices used in m_vertexBridge.
 	Int			m_curNumBridgeIndices;	///<Number of indices used in b_indexBridge;

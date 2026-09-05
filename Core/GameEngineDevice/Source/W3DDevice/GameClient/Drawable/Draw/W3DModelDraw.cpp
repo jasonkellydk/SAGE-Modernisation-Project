@@ -56,7 +56,6 @@
 #include "Common/Xfer.h"
 #include "GameClient/Drawable.h"
 #include "GameClient/FXList.h"
-#include "GameClient/Shadow.h"
 #include "GameLogic/GameLogic.h"		// for real-time frame
 #include "GameLogic/Object.h"
 #include "GameLogic/WeaponSet.h"
@@ -68,6 +67,7 @@
 #include "W3DDevice/GameClient/W3DDisplay.h"
 #include "W3DDevice/GameClient/W3DScene.h"
 #include "W3DDevice/GameClient/W3DShadow.h"
+#include "W3DDevice/GameClient/W3DProjectedShadow.h"
 #include "W3DDevice/GameClient/W3DTerrainTracks.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
 #include "WW3D2/HAnim.h"
@@ -82,568 +82,35 @@
 #include "WW3D2/StringUtilities.h"
 #include "WWMath/sphere.h"
 
-namespace
+static const char *TerrainDecalTextureName[TERRAIN_DECAL_MAX]=
 {
-Graphics::RenderTransform Make_Modern_Transform(const Matrix3D &matrix) noexcept
-{
-	Graphics::RenderTransform transform;
-	for (std::size_t row = 0; row < 3; ++row) {
-		for (std::size_t column = 0; column < 4; ++column)
-			transform.matrix[row * 4 + column] = matrix[static_cast<int>(row)][static_cast<int>(column)];
-	}
-	transform.matrix[12] = 0.0f;
-	transform.matrix[13] = 0.0f;
-	transform.matrix[14] = 0.0f;
-	transform.matrix[15] = 1.0f;
-	return transform;
-}
-
-void Set_Modern_Vertex_Color(Graphics::StaticMeshVertex &vertex, unsigned packed_color) noexcept
-{
-	vertex.color[0] = static_cast<float>((packed_color >> 16) & 0xffu) / 255.0f;
-	vertex.color[1] = static_cast<float>((packed_color >> 8) & 0xffu) / 255.0f;
-	vertex.color[2] = static_cast<float>(packed_color & 0xffu) / 255.0f;
-	vertex.color[3] = static_cast<float>((packed_color >> 24) & 0xffu) / 255.0f;
-}
-
-void Set_Modern_Vertex_Color(Graphics::SkinnedMeshVertex &vertex, unsigned packed_color) noexcept
-{
-	vertex.color[0] = static_cast<float>((packed_color >> 16) & 0xffu) / 255.0f;
-	vertex.color[1] = static_cast<float>((packed_color >> 8) & 0xffu) / 255.0f;
-	vertex.color[2] = static_cast<float>(packed_color & 0xffu) / 255.0f;
-	vertex.color[3] = static_cast<float>((packed_color >> 24) & 0xffu) / 255.0f;
-}
-
-Matrix3D Make_Legacy_Transform(const Graphics::RenderTransform &transform)
-{
-	float values[12]{};
-	for (std::size_t row = 0; row < 3; ++row) {
-		for (std::size_t column = 0; column < 4; ++column)
-			values[row * 4 + column] = transform.matrix[row * 4 + column];
-	}
-	return Matrix3D(values);
-}
-
-class Scoped_Render_Object_Reference final
-{
-public:
-	Scoped_Render_Object_Reference() noexcept = default;
-
-	explicit Scoped_Render_Object_Reference(RenderObjClass *object) noexcept : m_object(object)
-	{
-	}
-
-	~Scoped_Render_Object_Reference()
-	{
-		if (m_object != nullptr)
-			m_object->Release_Ref();
-	}
-
-	RenderObjClass *Get() const noexcept
-	{
-		return m_object;
-	}
-
-	void Reset(RenderObjClass *object) noexcept
-	{
-		if (m_object != nullptr)
-			m_object->Release_Ref();
-		m_object = object;
-	}
-
-private:
-	RenderObjClass *m_object = nullptr;
+#ifdef ALLOW_DEMORALIZE
+	"DM_RING",//demoralized
+#else
+	"TERRAIN_DECAL_DEMORALIZED_OBSOLETE",
+#endif
+	"EXHorde",//enthusiastic
+	"EXHorde_UP", //enthusiastic with nationalism
+	"EXHordeB",//enthusiastic vehicle
+	"EXHordeB_UP", //enthusiastic vehicle with nationalism
+	"EXJunkCrate",//Marks a crate as special
+#if RTS_GENERALS && RETAIL_COMPATIBLE_XFER_SAVE
+	"", //dummy entry for TERRAIN_DECAL_NONE
+	"EXHordeC_UP", //enthusiastic with fanaticism
+	"EXChemSuit", //Marks a unit as having chemical suit on
+#else
+	"EXHordeC_UP", //enthusiastic with fanaticism
+	"EXChemSuit", //Marks a unit as having chemical suit on
+	"", //dummy entry for TERRAIN_DECAL_NONE
+#endif
+	"" //dummy entry for TERRAIN_DECAL_SHADOW_TEXTURE
 };
 
-MeshClass *Find_Modern_Mesh(RenderObjClass &render_object, Scoped_Render_Object_Reference &reference) noexcept
-{
-	if (render_object.Class_ID() == RenderObjClass::CLASSID_MESH)
-		return static_cast<MeshClass *>(&render_object);
+import Assets.Models;
+import Assets.Cache;
+import Assets.Runtime;
 
-	if (render_object.Class_ID() != RenderObjClass::CLASSID_HLOD)
-		return nullptr;
 
-	HLodClass *hlod = static_cast<HLodClass *>(&render_object);
-	RenderObjClass *lod = hlod->Get_Current_LOD();
-	reference.Reset(lod);
-	if (lod == nullptr || lod->Class_ID() != RenderObjClass::CLASSID_MESH)
-		return nullptr;
-	return static_cast<MeshClass *>(lod);
-}
-
-struct ModernMeshSourceStorage final
-{
-	std::vector<Graphics::StaticMeshVertex> static_vertices;
-	std::vector<Graphics::SkinnedMeshVertex> skinned_vertices;
-	std::vector<std::uint16_t> indices;
-	std::vector<Graphics::MeshPart> parts;
-	Graphics::StaticMeshSource source{};
-};
-
-bool Build_Modern_Mesh_Source(RenderObjClass &render_object, MeshClass &mesh,
-	ModernMeshSourceStorage &storage, std::span<const Graphics::MaterialHandle> materials,
-	std::uint32_t visibility_group = Graphics::Invalid_Mesh_Part_Group)
-{
-	MeshModelClass *model = mesh.Peek_Model();
-	if (model == nullptr)
-		return false;
-	const int vertex_count = model->Get_Vertex_Count();
-	const int polygon_count = model->Get_Polygon_Count();
-	if (vertex_count <= 0 || vertex_count > 65535 || polygon_count <= 0
-		|| static_cast<std::uint64_t>(polygon_count) > std::numeric_limits<std::uint32_t>::max() / 3u)
-		return false;
-
-	const Vector3 *positions = model->Get_Vertex_Array();
-	const Vector2 *uvs = model->Get_UV_Array_By_Index(0);
-	const unsigned *vertex_colors = model->Get_DCG_Array(0);
-	VertexMaterialClass *material = model->Peek_Single_Material(0);
-	if (positions == nullptr || material == nullptr)
-		return false;
-
-	const bool skinned = model->Get_Flag(MeshGeometryClass::SKIN) != 0;
-	if (skinned) {
-		const uint16 *bone_links = model->Get_Vertex_Bone_Links();
-		if (bone_links == nullptr || render_object.Get_Num_Bones() <= 0)
-			return false;
-		storage.skinned_vertices.resize(static_cast<std::size_t>(vertex_count));
-		storage.static_vertices.clear();
-		for (int index = 0; index < vertex_count; ++index) {
-			Graphics::SkinnedMeshVertex &vertex = storage.skinned_vertices[static_cast<std::size_t>(index)];
-			vertex.position[0] = positions[index].X;
-			vertex.position[1] = positions[index].Y;
-			vertex.position[2] = positions[index].Z;
-			vertex.uv[0] = uvs != nullptr ? uvs[index].X : 0.0f;
-			vertex.uv[1] = uvs != nullptr ? uvs[index].Y : 0.0f;
-			if (bone_links[index] >= render_object.Get_Num_Bones())
-				return false;
-			vertex.skinning.bone_indices[0] = bone_links[index];
-			vertex.skinning.bone_weights[0] = 1.0f;
-			if (vertex_colors != nullptr)
-				Set_Modern_Vertex_Color(vertex, vertex_colors[index]);
-			else
-				vertex.color[3] = 1.0f;
-		}
-	} else {
-		storage.static_vertices.resize(static_cast<std::size_t>(vertex_count));
-		storage.skinned_vertices.clear();
-		for (int index = 0; index < vertex_count; ++index) {
-			Graphics::StaticMeshVertex &vertex = storage.static_vertices[static_cast<std::size_t>(index)];
-			vertex.position[0] = positions[index].X;
-			vertex.position[1] = positions[index].Y;
-			vertex.position[2] = positions[index].Z;
-			vertex.uv[0] = uvs != nullptr ? uvs[index].X : 0.0f;
-			vertex.uv[1] = uvs != nullptr ? uvs[index].Y : 0.0f;
-			if (vertex_colors != nullptr)
-				Set_Modern_Vertex_Color(vertex, vertex_colors[index]);
-			else
-				vertex.color[3] = 1.0f;
-		}
-	}
-
-	const TriIndex *polygons = model->Get_Polygon_Array();
-	if (polygons == nullptr)
-		return false;
-	storage.indices.resize(static_cast<std::size_t>(polygon_count) * 3u);
-	for (int polygon = 0; polygon < polygon_count; ++polygon) {
-		const TriIndex &triangle = polygons[polygon];
-		for (int corner = 0; corner < 3; ++corner) {
-			if (triangle[corner] >= vertex_count)
-				return false;
-			storage.indices[static_cast<std::size_t>(polygon) * 3u + static_cast<std::size_t>(corner)] = triangle[corner];
-		}
-	}
-	storage.parts.clear();
-	const std::size_t pass_count = materials.empty() ? 1u : materials.size();
-	if (pass_count > Graphics::Max_Model_Part_Count)
-		return false;
-	for (std::size_t pass = 0; pass < pass_count; ++pass)
-		storage.parts.push_back({0, static_cast<std::uint32_t>(storage.indices.size()), 0,
-			materials.empty() ? Graphics::MaterialHandle{} : materials[pass], static_cast<std::uint32_t>(pass), visibility_group});
-
-	SphereClass sphere;
-	mesh.Get_Obj_Space_Bounding_Sphere(sphere);
-	storage.source = {
-		static_cast<std::uint32_t>(vertex_count),
-		static_cast<std::uint32_t>(storage.indices.size()),
-		skinned ? static_cast<std::uint32_t>(sizeof(Graphics::SkinnedMeshVertex))
-			: static_cast<std::uint32_t>(sizeof(Graphics::StaticMeshVertex)),
-		Graphics::MeshIndexFormat::UInt16,
-		skinned ? std::as_bytes(std::span<const Graphics::SkinnedMeshVertex>(storage.skinned_vertices))
-			: std::as_bytes(std::span<const Graphics::StaticMeshVertex>(storage.static_vertices)),
-		std::as_bytes(std::span<const std::uint16_t>(storage.indices)),
-		{sphere.Center.X, sphere.Center.Y, sphere.Center.Z},
-		sphere.Radius,
-		std::span<const Graphics::MeshPart>(storage.parts),
-		skinned ? Graphics::MeshVertexFormat::Position3Color4UV2Skinned : Graphics::MeshVertexFormat::Position3Color4UV2,
-		skinned ? static_cast<std::uint32_t>(render_object.Get_Num_Bones()) : 0u
-	};
-	return true;
-}
-
-bool Build_Modern_LOD_Sources(RenderObjClass &render_object,
-	std::array<ModernMeshSourceStorage, Graphics::Mesh::MaxLodCount + 1> &storage,
-	std::array<Graphics::StaticMeshLODSource, Graphics::Mesh::MaxLodCount + 1> &sources,
-	std::size_t &source_count, std::span<const Graphics::MaterialHandle> materials)
-{
-	source_count = 0;
-	if (render_object.Class_ID() != RenderObjClass::CLASSID_HLOD) {
-		Scoped_Render_Object_Reference mesh_reference;
-		MeshClass *mesh = Find_Modern_Mesh(render_object, mesh_reference);
-		if (mesh == nullptr || !Build_Modern_Mesh_Source(render_object, *mesh, storage[0], materials))
-			return false;
-		sources[0] = {storage[0].source, 0.0f};
-		source_count = 1;
-		return true;
-	}
-
-	HLodClass &hlod = static_cast<HLodClass &>(render_object);
-	const int lod_count = hlod.Get_Lod_Count();
-	if (lod_count <= 0 || lod_count > static_cast<int>(Graphics::Mesh::MaxLodCount + 1u))
-		return false;
-	for (int lod_index = 0; lod_index < lod_count; ++lod_index) {
-		const int model_count = hlod.Get_Lod_Model_Count(lod_index);
-		if (model_count <= 0)
-			return false;
-
-		ModernMeshSourceStorage &combined = storage[lod_index];
-		combined = {};
-		for (int model_index = 0; model_index < model_count; ++model_index) {
-			RenderObjClass *lod_model = hlod.Peek_Lod_Model(lod_index, model_index);
-			ModernMeshSourceStorage part_storage;
-			if (lod_model == nullptr || lod_model->Class_ID() != RenderObjClass::CLASSID_MESH
-				|| !Build_Modern_Mesh_Source(render_object, *static_cast<MeshClass *>(lod_model), part_storage, materials,
-					static_cast<std::uint32_t>(model_index)))
-				return false;
-
-			if (combined.parts.empty()) {
-				combined.source = part_storage.source;
-				combined.source.vertex_count = 0;
-				combined.source.index_count = 0;
-				combined.source.parts = {};
-			}
-			if (combined.source.vertex_format != part_storage.source.vertex_format)
-				return false;
-			const std::size_t vertex_offset = combined.source.vertex_count;
-			const std::size_t index_offset = combined.indices.size();
-			if (vertex_offset + part_storage.source.vertex_count > 65535u
-				|| index_offset + part_storage.source.index_count > std::numeric_limits<std::uint32_t>::max())
-				return false;
-
-			if (part_storage.source.vertex_format == Graphics::MeshVertexFormat::Position3Color4UV2Skinned)
-				combined.skinned_vertices.insert(combined.skinned_vertices.end(), part_storage.skinned_vertices.begin(), part_storage.skinned_vertices.end());
-			else
-				combined.static_vertices.insert(combined.static_vertices.end(), part_storage.static_vertices.begin(), part_storage.static_vertices.end());
-			for (const std::uint16_t index : part_storage.indices) {
-				const std::size_t adjusted_index = vertex_offset + index;
-				if (adjusted_index > std::numeric_limits<std::uint16_t>::max())
-					return false;
-				combined.indices.push_back(static_cast<std::uint16_t>(adjusted_index));
-			}
-			for (const Graphics::MeshPart &part : part_storage.parts)
-				combined.parts.push_back({static_cast<std::uint32_t>(index_offset + part.first_index),
-					part.index_count, 0, part.material, part.pass_key, part.visibility_group});
-			combined.source.vertex_count = static_cast<std::uint32_t>(combined.source.vertex_count + part_storage.source.vertex_count);
-			combined.source.index_count = static_cast<std::uint32_t>(combined.indices.size());
-		}
-
-		combined.source.vertex_data = combined.source.vertex_format == Graphics::MeshVertexFormat::Position3Color4UV2Skinned
-			? std::as_bytes(std::span<const Graphics::SkinnedMeshVertex>(combined.skinned_vertices))
-			: std::as_bytes(std::span<const Graphics::StaticMeshVertex>(combined.static_vertices));
-		combined.source.index_data = std::as_bytes(std::span<const std::uint16_t>(combined.indices));
-		combined.source.parts = std::span<const Graphics::MeshPart>(combined.parts);
-		const float max_screen_size = lod_index == 0 ? 0.0f : hlod.Get_Max_Screen_Size(lod_index);
-		if (std::isnan(max_screen_size) || max_screen_size < 0.0f)
-			return false;
-		sources[lod_index] = {storage[lod_index].source, max_screen_size};
-	}
-	source_count = static_cast<std::size_t>(lod_count);
-	return true;
-}
-
-bool Build_Modern_Texture(TextureClass &legacy_texture, Graphics::StaticMeshRenderer &renderer,
-	Graphics::TextureHandle &texture_handle)
-{
-	texture_handle = {};
-	SurfaceClass *surface = legacy_texture.Get_Surface_Level(0);
-	if (surface == nullptr)
-		return false;
-
-	SurfaceClass::SurfaceDescription description;
-	surface->Get_Description(description);
-	if (description.Width == 0 || description.Height == 0
-		|| (description.Format != WW3D_FORMAT_A8R8G8B8 && description.Format != WW3D_FORMAT_X8R8G8B8)) {
-		REF_PTR_RELEASE(surface);
-		return false;
-	}
-
-	int pitch = 0;
-	const auto bits = static_cast<const std::byte *>(surface->Lock(&pitch));
-	const std::size_t row_size = static_cast<std::size_t>(description.Width) * 4u;
-	if (bits == nullptr || pitch < 0 || static_cast<std::size_t>(pitch) < row_size) {
-		if (bits != nullptr)
-			surface->Unlock();
-		REF_PTR_RELEASE(surface);
-		return false;
-	}
-
-	std::vector<std::byte> pixels(row_size * description.Height);
-	for (unsigned int row = 0; row < description.Height; ++row)
-		std::memcpy(pixels.data() + row * row_size, bits + static_cast<std::size_t>(row) * pitch, row_size);
-	surface->Unlock();
-	REF_PTR_RELEASE(surface);
-
-	Graphics::Texture texture;
-	texture.width = description.Width;
-	texture.height = description.Height;
-	texture.depth = 1;
-	texture.mip_count = 1;
-	texture.format = Graphics::TextureFormat::BGRA8_UNorm;
-	texture.usage = Graphics::TextureUsage::Sampled;
-	texture.pixel_data = std::span<const std::byte>(pixels);
-	texture.row_pitch = static_cast<std::uint32_t>(row_size);
-	texture_handle = renderer.Create_Texture(texture);
-	return texture_handle.Is_Valid();
-}
-
-Graphics::MaterialHandle Build_Modern_Material(RenderObjClass &render_object,
-	Graphics::StaticMeshRenderer &renderer, bool receives_dynamic_lights,
-	Graphics::TextureHandle &texture_handle, int pass)
-{
-	texture_handle = {};
-	Scoped_Render_Object_Reference mesh_reference;
-	MeshClass *mesh = Find_Modern_Mesh(render_object, mesh_reference);
-	if (mesh == nullptr)
-		return {};
-
-	MeshModelClass *model = mesh->Peek_Model();
-	if (model == nullptr || pass < 0 || pass >= model->Get_Pass_Count())
-		return {};
-	VertexMaterialClass *legacy_material = model->Peek_Single_Material(pass);
-	if (legacy_material == nullptr)
-		return {};
-	const ShaderClass shader = model->Get_Single_Shader(pass);
-	const auto source_blend = shader.Get_Src_Blend_Func();
-	const auto destination_blend = shader.Get_Dst_Blend_Func();
-	const bool alpha_test = shader.Get_Alpha_Test() != ShaderClass::ALPHATEST_DISABLE;
-	const bool alpha_blend = source_blend == ShaderClass::SRCBLEND_SRC_ALPHA
-		&& destination_blend == ShaderClass::DSTBLEND_ONE_MINUS_SRC_ALPHA;
-	const bool additive = source_blend == ShaderClass::SRCBLEND_ONE
-		&& destination_blend == ShaderClass::DSTBLEND_ONE;
-	const bool multiply = source_blend == ShaderClass::SRCBLEND_ZERO
-		&& destination_blend == ShaderClass::DSTBLEND_SRC_COLOR;
-	const bool opaque = source_blend == ShaderClass::SRCBLEND_ONE
-		&& destination_blend == ShaderClass::DSTBLEND_ZERO;
-	if (!opaque && !alpha_blend && !additive && !multiply)
-		return {};
-
-	Vector3 diffuse;
-	legacy_material->Get_Diffuse(&diffuse);
-	Graphics::Material material;
-	material.shader = renderer.Basic_Opaque_Shader();
-	material.parameters.values[0] = diffuse.X;
-	material.parameters.values[1] = diffuse.Y;
-	material.parameters.values[2] = diffuse.Z;
-	material.parameters.values[3] = legacy_material->Get_Opacity();
-	material.parameters.values[4] = receives_dynamic_lights ? 1.0f : 0.0f;
-	material.flags = Graphics::MaterialFlags::VertexColor;
-	if (!receives_dynamic_lights)
-		material.flags = material.flags | Graphics::MaterialFlags::Unlit;
-	if (alpha_test)
-		material.flags = material.flags | Graphics::MaterialFlags::AlphaTest;
-	if (alpha_blend || legacy_material->Get_Opacity() < 0.999f)
-		material.flags = material.flags | Graphics::MaterialFlags::Transparent;
-	else if (additive)
-		material.flags = material.flags | Graphics::MaterialFlags::Additive;
-	else if (multiply)
-		material.flags = material.flags | Graphics::MaterialFlags::Multiply;
-	if (shader.Uses_Fog())
-		material.flags = material.flags | Graphics::MaterialFlags::Fog;
-	if (shader.Uses_Primary_Gradient())
-		material.flags = material.flags | Graphics::MaterialFlags::PrimaryGradient;
-	if (shader.Uses_Secondary_Gradient())
-		material.flags = material.flags | Graphics::MaterialFlags::SecondaryGradient;
-
-	TextureClass *legacy_texture = model->Peek_Single_Texture(pass, 0);
-	if (legacy_texture != nullptr) {
-		if (!Build_Modern_Texture(*legacy_texture, renderer, texture_handle))
-			return {};
-		material.textures[0] = texture_handle;
-	}
-
-	const Graphics::MaterialHandle material_handle = renderer.Create_Material(material);
-	if (!material_handle.Is_Valid() && texture_handle.Is_Valid()) {
-		renderer.Destroy_Texture(texture_handle);
-		texture_handle = {};
-	}
-	return material_handle;
-}
-
-bool Build_Modern_Materials(RenderObjClass &render_object, Graphics::StaticMeshRenderer &renderer,
-	bool receives_dynamic_lights, std::vector<Graphics::MaterialHandle> &material_handles,
-	std::vector<Graphics::TextureHandle> &texture_handles)
-{
-	material_handles.clear();
-	texture_handles.clear();
-	Scoped_Render_Object_Reference mesh_reference;
-	MeshClass *mesh = Find_Modern_Mesh(render_object, mesh_reference);
-	MeshModelClass *model = mesh != nullptr ? mesh->Peek_Model() : nullptr;
-	if (model == nullptr || model->Get_Pass_Count() <= 0
-		|| model->Get_Pass_Count() > static_cast<int>(Graphics::Max_Model_Part_Count))
-		return false;
-
-	material_handles.reserve(static_cast<std::size_t>(model->Get_Pass_Count()));
-	texture_handles.reserve(static_cast<std::size_t>(model->Get_Pass_Count()));
-	for (int pass = 0; pass < model->Get_Pass_Count(); ++pass) {
-		Graphics::TextureHandle texture;
-		const Graphics::MaterialHandle material = Build_Modern_Material(render_object, renderer,
-			receives_dynamic_lights, texture, pass);
-		if (!material.Is_Valid()) {
-			for (const Graphics::MaterialHandle handle : material_handles)
-				renderer.Destroy_Material(handle);
-			for (const Graphics::TextureHandle handle : texture_handles)
-				if (handle.Is_Valid())
-					renderer.Destroy_Texture(handle);
-			material_handles.clear();
-			texture_handles.clear();
-			return false;
-		}
-		material_handles.push_back(material);
-		texture_handles.push_back(texture);
-	}
-	return true;
-}
-
-Graphics::AnimationPlaybackMode Make_Modern_Animation_Mode(RenderObjClass::AnimMode mode) noexcept
-{
-	switch (mode) {
-		case RenderObjClass::ANIM_MODE_ONCE:
-			return Graphics::AnimationPlaybackMode::Once;
-		case RenderObjClass::ANIM_MODE_ONCE_BACKWARDS:
-			return Graphics::AnimationPlaybackMode::Once_Backwards;
-		case RenderObjClass::ANIM_MODE_LOOP_BACKWARDS:
-			return Graphics::AnimationPlaybackMode::Loop_Backwards;
-		default:
-			return Graphics::AnimationPlaybackMode::Loop;
-	}
-}
-
-bool Build_Modern_Skeleton(RenderObjClass &render_object, Graphics::StaticMeshRenderer &renderer,
-	Graphics::SkeletonHandle &skeleton_handle)
-{
-	skeleton_handle = {};
-	const int bone_count = render_object.Get_Num_Bones();
-	if (bone_count <= 0)
-		return true;
-	if (static_cast<std::uint64_t>(bone_count) > std::numeric_limits<Graphics::BoneIndex>::max())
-		return false;
-
-	const Matrix3D object_transform = render_object.Get_Transform();
-	Matrix3D inverse_object_transform;
-	object_transform.Get_Orthogonal_Inverse(inverse_object_transform);
-
-	const HTreeClass *hierarchy = render_object.Get_HTree();
-	std::vector<Matrix3D> model_transforms(static_cast<std::size_t>(bone_count));
-	std::vector<Graphics::SkeletonBone> bones(static_cast<std::size_t>(bone_count));
-	for (int index = 0; index < bone_count; ++index) {
-		int parent = hierarchy != nullptr ? hierarchy->Get_Parent_Index(index) : -1;
-		if (index == 0 && parent == 0)
-			parent = -1;
-		if (parent < -1 || parent >= index)
-			return false;
-
-		if (hierarchy != nullptr) {
-			if (!hierarchy->Simple_Evaluate_Pivot(index, object_transform,
-				&model_transforms[static_cast<std::size_t>(index)]))
-				return false;
-		} else {
-			model_transforms[static_cast<std::size_t>(index)] = render_object.Get_Bone_Transform(index);
-		}
-		model_transforms[static_cast<std::size_t>(index)].preMul(inverse_object_transform);
-
-		Matrix3D local_transform = model_transforms[static_cast<std::size_t>(index)];
-		if (parent >= 0) {
-			Matrix3D inverse_parent;
-			model_transforms[static_cast<std::size_t>(parent)].Get_Orthogonal_Inverse(inverse_parent);
-			local_transform.preMul(inverse_parent);
-		}
-		bones[static_cast<std::size_t>(index)] = {
-			parent < 0 ? Graphics::Invalid_Bone_Index : static_cast<Graphics::BoneIndex>(parent),
-			Make_Modern_Transform(local_transform)
-		};
-	}
-
-	skeleton_handle = renderer.Create_Skeleton(bones);
-	return skeleton_handle.Is_Valid();
-}
-
-bool Build_Modern_Animation(RenderObjClass &render_object, Graphics::StaticMeshRenderer &renderer,
-	Graphics::SkeletonHandle skeleton_handle, HAnimClass *animation,
-	Graphics::AnimationClipHandle &animation_handle,
-	Graphics::AnimationPlaybackMode &animation_mode, float &animation_time)
-{
-	animation_handle = {};
-	animation_time = 0.0f;
-	animation_mode = Graphics::AnimationPlaybackMode::Loop;
-	if (animation == nullptr)
-		return true;
-
-	const Graphics::Skeleton *skeleton = renderer.Skeletons().Resolve(skeleton_handle);
-	const int frame_count = animation->Get_Num_Frames();
-	const int pivot_count = animation->Get_Num_Pivots();
-	const float frame_rate = animation->Get_Frame_Rate();
-	if (skeleton == nullptr || !skeleton->Is_Valid() || frame_count <= 0 || pivot_count < 0
-		|| !std::isfinite(frame_rate) || frame_rate <= 0.0f
-		|| static_cast<std::uint64_t>(frame_count) > std::numeric_limits<std::size_t>::max() / skeleton->Bone_Count())
-		return false;
-
-	const std::span<const Graphics::SkeletonBone> skeleton_bones = skeleton->Bones();
-	std::vector<Graphics::RenderTransform> samples(
-		static_cast<std::size_t>(frame_count) * skeleton_bones.size());
-	for (int frame = 0; frame < frame_count; ++frame) {
-		for (Graphics::BoneIndex bone = 0; bone < skeleton_bones.size(); ++bone) {
-			Graphics::RenderTransform &sample = samples[static_cast<std::size_t>(frame) * skeleton_bones.size() + bone];
-			sample = skeleton_bones[bone].rest_transform;
-			if (bone == 0 || bone >= static_cast<Graphics::BoneIndex>(pivot_count)
-				|| !animation->Is_Node_Motion_Present(static_cast<int>(bone)))
-				continue;
-
-			Matrix3D animation_transform;
-			animation->Get_Transform(animation_transform, static_cast<int>(bone), static_cast<float>(frame));
-			const Matrix3D base_transform = Make_Legacy_Transform(skeleton_bones[bone].rest_transform);
-			Matrix3D local_transform;
-			Matrix3D::Multiply(base_transform, animation_transform, &local_transform);
-			sample = Make_Modern_Transform(local_transform);
-		}
-	}
-
-	const Graphics::AnimationClipDescription description{
-		static_cast<std::uint32_t>(skeleton_bones.size()),
-		static_cast<std::uint32_t>(frame_count),
-		frame_rate,
-		std::span<const Graphics::RenderTransform>(samples)
-	};
-	animation_handle = renderer.Create_Animation_Clip(description);
-	if (!animation_handle.Is_Valid())
-		return false;
-
-	animation_mode = Graphics::AnimationPlaybackMode::Loop;
-	if (render_object.Class_ID() == RenderObjClass::CLASSID_HLOD) {
-		float frame = 0.0f;
-		int current_frame_count = 0;
-		int mode = RenderObjClass::ANIM_MODE_LOOP;
-		float multiplier = 1.0f;
-		HLodClass *hlod = static_cast<HLodClass *>(&render_object);
-		HAnimClass *current = hlod->Peek_Animation_And_Info(frame, current_frame_count, mode, multiplier);
-		if (current == animation && current_frame_count > 0)
-			animation_time = frame / frame_rate;
-		animation_mode = Make_Modern_Animation_Mode(static_cast<RenderObjClass::AnimMode>(mode));
-		if (animation_mode == Graphics::AnimationPlaybackMode::Once_Backwards
-			|| animation_mode == Graphics::AnimationPlaybackMode::Loop_Backwards)
-			animation_time = static_cast<float>(frame_count - 1) / frame_rate - animation_time;
-	}
-	return true;
-}
-}
 
 
 //-------------------------------------------------------------------------------------------------
@@ -839,30 +306,6 @@ inline Bool isCommonMaintainFrameFlagSet(Int a, Int b)
 // Note: these values are saved in save files, so you MUST NOT REMOVE OR CHANGE
 // existing values!
 //
-static const char *TerrainDecalTextureName[TERRAIN_DECAL_MAX]=
-{
-#ifdef ALLOW_DEMORALIZE
-	"DM_RING",//demoralized
-#else
-	"TERRAIN_DECAL_DEMORALIZED_OBSOLETE",
-#endif
-	"EXHorde",//enthusiastic
-	"EXHorde_UP", //enthusiastic with nationalism
-	"EXHordeB",//enthusiastic vehicle
-	"EXHordeB_UP", //enthusiastic vehicle with nationalism
-	"EXJunkCrate",//Marks a crate as special
-#if RTS_GENERALS && RETAIL_COMPATIBLE_XFER_SAVE
-	"", //dummy entry for TERRAIN_DECAL_NONE
-	"EXHordeC_UP", //enthusiastic with fanaticism
-	"EXChemSuit", //Marks a unit as having chemical suit on
-#else
-	"EXHordeC_UP", //enthusiastic with fanaticism
-	"EXChemSuit", //Marks a unit as having chemical suit on
-	"", //dummy entry for TERRAIN_DECAL_NONE
-#endif
-	"" //dummy entry for TERRAIN_DECAL_SHADOW_TEXTURE
-};
-
 const UnsignedInt NO_NEXT_DURATION = 0xffffffff;
 
 //-------------------------------------------------------------------------------------------------
@@ -1137,6 +580,8 @@ static Bool doSingleBoneName(RenderObjClass* robj, const AsciiString& boneName, 
 
 	return foundAsBone || foundAsSubObj;
 }
+
+
 
 //-------------------------------------------------------------------------------------------------
 void ModelConditionInfo::validateStuff(RenderObjClass* robj, Real scale, const std::vector<AsciiString>& extraPublicBones) const
@@ -1901,19 +1346,7 @@ void W3DModelDraw::showSubObject( const AsciiString& name, Bool show )
 			m_subObjectVec.push_back( info );
 		}
 
-		if (m_modernBinding.Is_Active()) {
-			Int object_index = -1;
-			RenderObjClass *subobject = m_renderObject != nullptr
-				? m_renderObject->Get_Sub_Object_By_Name(name.str(), &object_index)
-				: nullptr;
-			if (subobject == nullptr || object_index < 0
-				|| !m_modernBinding.Set_Submesh_Visible(Graphics::GetStaticMeshRenderer(),
-					static_cast<Graphics::ModelPartId>(object_index), show)) {
-				releaseModernVariant();
-			}
-			if (subobject != nullptr)
-				subobject->Release_Ref();
-		}
+		doHideShowSubObjs(&m_subObjectVec);
 	}
 }
 
@@ -2316,20 +1749,14 @@ W3DModelDraw::W3DModelDraw(Thing *thing, const ModuleData* moduleData) : DrawMod
 	m_curState = nullptr;
 	m_hexColor = 0;
 	m_renderObject = nullptr;
-	m_legacyRenderObjectInScene = false;
-	m_shadow = nullptr;
 	m_shadowEnabled = TRUE;
-	m_terrainDecal = nullptr;
-	m_trackRenderObject = nullptr;
 	m_whichAnimInCurState = -1;
 	m_nextState = nullptr;
 	m_nextStateAnimLoopDuration = NO_NEXT_DURATION;
-	m_modernBinding.Reset();
-	m_modernAnimationState = nullptr;
-	m_modernAnimationIndex = -1;
-	m_modernAnimationMode = Graphics::AnimationPlaybackMode::Loop;
-	m_modernSecondaryAnimationState = nullptr;
-	m_modernHidden = FALSE;
+	m_inGraphicsScene=false;
+	m_shadow=nullptr;
+	m_terrainDecal=nullptr;
+	m_trackRenderObject=nullptr;
 	for (i = 0; i < WEAPONSLOT_COUNT; ++i)
 	{
 		m_weaponRecoilInfoVec[i].clear();
@@ -2396,415 +1823,23 @@ W3DModelDraw::~W3DModelDraw()
 	nukeCurrentRender(nullptr);
 }
 
-bool W3DModelDraw::isModernStaticOpaqueState() const noexcept
-{
-	if (m_curState == nullptr || m_renderObject == nullptr)
-		return false;
 
-	const ModelConditionInfo &state = *m_curState;
 
-	if (!state.m_animations.empty() && m_renderObject->Class_ID() != RenderObjClass::CLASSID_HLOD)
-		return false;
-	if (!state.m_animations.empty()
-		&& (m_whichAnimInCurState < 0 || m_whichAnimInCurState >= static_cast<Int>(state.m_animations.size())))
-		return false;
-	Scoped_Render_Object_Reference mesh_reference;
-	MeshClass *mesh = Find_Modern_Mesh(*m_renderObject, mesh_reference);
-	if (mesh == nullptr)
-		return false;
-	MeshModelClass *model = mesh->Peek_Model();
-	if (!canUseModernSubobjectVisibility())
-		return false;
-	if (model == nullptr || model->Get_Pass_Count() <= 0
-		|| model->Get_Pass_Count() > static_cast<int>(Graphics::Max_Model_Part_Count))
-		return false;
-	if (model->Get_Flag(MeshGeometryClass::SKIN) != 0
-		&& (m_renderObject->Get_Num_Bones() <= 0 || model->Get_Vertex_Bone_Links() == nullptr))
-		return false;
 
-	for (int pass = 0; pass < model->Get_Pass_Count(); ++pass) {
-		if (model->Has_Material_Array(pass) || model->Has_Texture_Array(pass, 1) || model->Has_Shader_Array(pass))
-			return false;
-		VertexMaterialClass *material = model->Peek_Single_Material(pass);
-		if (material == nullptr)
-			return false;
-		const ShaderClass shader = model->Get_Single_Shader(pass);
-		const auto source_blend = shader.Get_Src_Blend_Func();
-		const auto destination_blend = shader.Get_Dst_Blend_Func();
-		const bool supported_blend = (source_blend == ShaderClass::SRCBLEND_ONE
-			&& destination_blend == ShaderClass::DSTBLEND_ZERO)
-			|| (source_blend == ShaderClass::SRCBLEND_SRC_ALPHA
-				&& destination_blend == ShaderClass::DSTBLEND_ONE_MINUS_SRC_ALPHA)
-			|| (source_blend == ShaderClass::SRCBLEND_ONE && destination_blend == ShaderClass::DSTBLEND_ONE)
-			|| (source_blend == ShaderClass::SRCBLEND_ZERO && destination_blend == ShaderClass::DSTBLEND_SRC_COLOR);
-		if (!supported_blend)
-			return false;
-	}
-	return true;
-}
 
-bool W3DModelDraw::modernAnimationBlend() const noexcept
-{
-	return m_curState != nullptr && m_nextState != nullptr
-		&& m_curState->m_transitionSig == NO_TRANSITION
-		&& m_nextState->m_transitionSig == NO_TRANSITION
-		&& m_curState->m_modelName == m_nextState->m_modelName
-		&& m_curState->m_animations.size() == 1
-		&& m_nextState->m_animations.size() == 1
-		&& m_curState->m_particleSysBones.empty()
-		&& m_nextState->m_particleSysBones.empty();
-}
 
-bool W3DModelDraw::modernDoubleSided() const noexcept
-{
-	if (m_renderObject == nullptr)
-		return false;
 
-	Scoped_Render_Object_Reference mesh_reference;
-	MeshClass *mesh = Find_Modern_Mesh(*m_renderObject, mesh_reference);
-	MeshModelClass *model = mesh != nullptr ? mesh->Peek_Model() : nullptr;
-	if (model == nullptr)
-		return false;
 
-	const ShaderClass shader = model->Get_Single_Shader(0);
-	return model->Get_Flag(MeshGeometryClass::TWO_SIDED) != 0
-		|| shader.Get_Cull_Mode() == ShaderClass::CULL_MODE_DISABLE;
-}
 
-bool W3DModelDraw::canUseModernSubobjectVisibility() const
-{
-	if (m_renderObject == nullptr)
-		return false;
 
-	const auto can_translate = [this](const std::vector<ModelConditionInfo::HideShowSubObjInfo> &entries) {
-		for (const ModelConditionInfo::HideShowSubObjInfo &entry : entries) {
-			Int object_index = -1;
-			RenderObjClass *subobject = m_renderObject->Get_Sub_Object_By_Name(entry.subObjName.str(), &object_index);
-			if (subobject == nullptr)
-				return false;
-			subobject->Release_Ref();
-			if (object_index < 0 || object_index >= static_cast<Int>(Graphics::Max_Model_Part_Count))
-				return false;
-		}
-		return true;
-	};
 
-	return m_curState != nullptr
-		&& can_translate(m_curState->m_hideShowVec)
-		&& can_translate(m_subObjectVec);
-}
 
-bool W3DModelDraw::modernShadowEnabled() const noexcept
-{
-	if (!m_shadowEnabled || m_modernHidden || getDrawable() == nullptr || getDrawable()->isDrawableEffectivelyHidden())
-		return false;
 
-	const ThingTemplate *template_data = getDrawable()->getTemplate();
-	return template_data != nullptr && template_data->getShadowType() != SHADOW_NONE;
-}
 
-Graphics::SubmeshVisibilityMask W3DModelDraw::modernSubobjectVisibility() const
-{
-	Graphics::SubmeshVisibilityMask visibility = Graphics::All_Submeshes_Visible;
-	const auto apply = [this, &visibility](const std::vector<ModelConditionInfo::HideShowSubObjInfo> &entries) {
-		for (const ModelConditionInfo::HideShowSubObjInfo &entry : entries) {
-			Int object_index = -1;
-			RenderObjClass *subobject = m_renderObject->Get_Sub_Object_By_Name(entry.subObjName.str(), &object_index);
-			if (subobject == nullptr)
-				continue;
-			subobject->Release_Ref();
-			visibility = Graphics::Set_Submesh_Visible(visibility, static_cast<Graphics::ModelPartId>(object_index), !entry.hide);
-		}
-	};
 
-	if (m_curState != nullptr)
-		apply(m_curState->m_hideShowVec);
-	apply(m_subObjectVec);
-	return visibility;
-}
 
-bool W3DModelDraw::updateModernSubobjectVisibility()
-{
-	if (!m_modernBinding.Is_Active())
-		return false;
 
-	if (!m_modernBinding.Set_Submesh_Visibility(Graphics::GetStaticMeshRenderer(), modernSubobjectVisibility())) {
-		releaseModernVariant();
-		return false;
-	}
-	return true;
-}
 
-bool W3DModelDraw::submitModernVariant()
-{
-	Graphics::StaticMeshRenderer &renderer = Graphics::GetStaticMeshRenderer();
-	if (!renderer.Is_Initialized() || !isModernStaticOpaqueState())
-		return false;
-
-	std::array<ModernMeshSourceStorage, Graphics::Mesh::MaxLodCount + 1> source_storage{};
-	std::array<Graphics::StaticMeshLODSource, Graphics::Mesh::MaxLodCount + 1> lod_sources{};
-	std::size_t lod_source_count = 0;
-	const W3DModelDrawModuleData *module_data = getW3DModelDrawModuleData();
-	std::vector<Graphics::MaterialHandle> new_materials;
-	std::vector<Graphics::TextureHandle> new_textures;
-	if (!Build_Modern_Materials(*m_renderObject, renderer,
-		module_data != nullptr && module_data->m_receivesDynamicLights, new_materials, new_textures))
-		return false;
-	const Graphics::MaterialHandle new_material = new_materials.front();
-	auto destroy_new_materials = [&]() noexcept {
-		for (const Graphics::MaterialHandle handle : new_materials)
-			if (handle.Is_Valid())
-				renderer.Destroy_Material(handle);
-		for (const Graphics::TextureHandle handle : new_textures)
-			if (handle.Is_Valid())
-				renderer.Destroy_Texture(handle);
-	};
-	if (!Build_Modern_LOD_Sources(*m_renderObject, source_storage, lod_sources, lod_source_count, new_materials)) {
-		destroy_new_materials();
-		return false;
-	}
-
-	SphereClass sphere;
-	m_renderObject->Get_Obj_Space_Bounding_Sphere(sphere);
-	const Matrix3D legacy_transform = m_renderObject->Get_Transform();
-	const Graphics::RenderTransform transform = Make_Modern_Transform(legacy_transform);
-	const Graphics::RenderBounds bounds = {{sphere.Center.X, sphere.Center.Y, sphere.Center.Z}, sphere.Radius};
-	Graphics::RenderInstanceFlags flags = Graphics::RenderInstanceFlags::ReceivesShadow;
-	if (modernDoubleSided())
-		flags = flags | Graphics::RenderInstanceFlags::DoubleSided;
-	const bool drawable_hidden = m_modernHidden || getDrawable()->isDrawableEffectivelyHidden();
-	if (modernShadowEnabled())
-		flags = Graphics::Set_Render_Instance_Casts_Shadow(flags, true);
-	if (drawable_hidden)
-		flags = flags | Graphics::RenderInstanceFlags::Hidden;
-
-	Graphics::SkeletonHandle skeleton;
-	if (!Build_Modern_Skeleton(*m_renderObject, renderer, skeleton))
-	{
-		destroy_new_materials();
-		return false;
-	}
-
-	HAnimClass *legacy_animation = nullptr;
-	if (m_curState != nullptr && m_whichAnimInCurState >= 0
-		&& m_whichAnimInCurState < static_cast<Int>(m_curState->m_animations.size()))
-		legacy_animation = m_curState->m_animations[m_whichAnimInCurState].getAnimHandle();
-	const bool has_legacy_animation = legacy_animation != nullptr;
-	Graphics::AnimationClipHandle animation;
-	Graphics::AnimationPlaybackMode animation_mode = Graphics::AnimationPlaybackMode::Loop;
-	float animation_time = 0.0f;
-	const bool animation_built = Build_Modern_Animation(*m_renderObject, renderer, skeleton,
-		legacy_animation, animation, animation_mode, animation_time);
-	if (legacy_animation != nullptr)
-		REF_PTR_RELEASE(legacy_animation);
-	if (!animation_built) {
-		if (skeleton.Is_Valid())
-			renderer.Destroy_Skeleton(skeleton);
-		destroy_new_materials();
-		return false;
-	}
-	Graphics::AnimationClipHandle secondary_animation;
-	Graphics::AnimationPlaybackMode secondary_animation_mode = Graphics::AnimationPlaybackMode::Loop;
-	float secondary_animation_time = 0.0f;
-	if (modernAnimationBlend()) {
-		HAnimClass *secondary_legacy_animation = m_nextState->m_animations.front().getAnimHandle();
-		if (!has_legacy_animation || secondary_legacy_animation == nullptr
-			|| !Build_Modern_Animation(*m_renderObject, renderer, skeleton, secondary_legacy_animation,
-				secondary_animation, secondary_animation_mode, secondary_animation_time)) {
-			if (secondary_legacy_animation != nullptr)
-				REF_PTR_RELEASE(secondary_legacy_animation);
-			if (animation.Is_Valid())
-				renderer.Destroy_Animation_Clip(animation);
-			if (skeleton.Is_Valid())
-				renderer.Destroy_Skeleton(skeleton);
-			destroy_new_materials();
-			return false;
-		}
-		REF_PTR_RELEASE(secondary_legacy_animation);
-		secondary_animation_mode = Make_Modern_Animation_Mode(m_nextState->m_mode);
-		secondary_animation_time = 0.0f;
-	}
-	if (!m_modernBinding.Replace_LODs(renderer, {lod_sources.data(), lod_source_count}, transform, bounds, new_material, flags,
-		Graphics::All_Submeshes_Visible, skeleton, animation, animation_mode, animation_time)) {
-		if (skeleton.Is_Valid())
-			renderer.Destroy_Skeleton(skeleton);
-		if (animation.Is_Valid())
-			renderer.Destroy_Animation_Clip(animation);
-		if (secondary_animation.Is_Valid())
-			renderer.Destroy_Animation_Clip(secondary_animation);
-		destroy_new_materials();
-		return false;
-	}
-	const std::vector<Graphics::MaterialHandle> old_materials = std::move(m_modernMaterials);
-	const std::vector<Graphics::TextureHandle> old_textures = std::move(m_modernTextures);
-	m_modernMaterials = std::move(new_materials);
-	m_modernTextures = std::move(new_textures);
-	for (const Graphics::MaterialHandle handle : old_materials)
-		if (handle.Is_Valid())
-			renderer.Destroy_Material(handle);
-	for (const Graphics::TextureHandle handle : old_textures)
-		if (handle.Is_Valid())
-			renderer.Destroy_Texture(handle);
-	if (secondary_animation.Is_Valid()
-		&& !m_modernBinding.Set_Animation_Blend(renderer, animation, animation_mode, animation_time,
-			secondary_animation, secondary_animation_mode, secondary_animation_time, 0.0f)) {
-		renderer.Destroy_Animation_Clip(secondary_animation);
-		return false;
-	}
-	m_modernAnimationState = has_legacy_animation ? m_curState : nullptr;
-	m_modernAnimationIndex = has_legacy_animation ? m_whichAnimInCurState : -1;
-	m_modernAnimationMode = animation_mode;
-	m_modernSecondaryAnimationState = secondary_animation.Is_Valid() ? m_nextState : nullptr;
-	if (!updateModernSubobjectVisibility())
-		return false;
-
-	if (W3DDisplay::m_3DScene != nullptr && m_legacyRenderObjectInScene) {
-		W3DDisplay::m_3DScene->Remove_Render_Object(m_renderObject);
-		m_legacyRenderObjectInScene = false;
-	}
-	m_renderObject->Set_Hidden(TRUE);
-	return true;
-}
-
-void W3DModelDraw::syncModernVariant()
-{
-	if (!isModernStaticOpaqueState()) {
-		releaseModernVariant();
-		return;
-	}
-
-	if (!m_modernBinding.Is_Active()) {
-		if (!submitModernVariant())
-			releaseModernVariant();
-		return;
-	}
-
-	const ModelConditionInfo *modern_secondary_state = modernAnimationBlend() ? m_nextState : nullptr;
-	const bool animation_changed = m_curState != m_modernAnimationState
-		|| m_whichAnimInCurState != m_modernAnimationIndex
-		|| modern_secondary_state != m_modernSecondaryAnimationState;
-	if (animation_changed) {
-		if (!submitModernVariant())
-			releaseModernVariant();
-		return;
-	}
-
-	if (!updateModernSubobjectVisibility())
-		releaseModernVariant();
-}
-
-void W3DModelDraw::updateModernInstance(const Matrix3D *transformMtx)
-{
-	if (!m_modernBinding.Is_Active() || transformMtx == nullptr)
-		return;
-
-	Graphics::RenderInstanceFlags flags = Graphics::RenderInstanceFlags::ReceivesShadow;
-	if (modernDoubleSided())
-		flags = flags | Graphics::RenderInstanceFlags::DoubleSided;
-	const bool drawable_hidden = m_modernHidden || getDrawable()->isDrawableEffectivelyHidden();
-	if (modernShadowEnabled())
-		flags = Graphics::Set_Render_Instance_Casts_Shadow(flags, true);
-	if (drawable_hidden)
-		flags = flags | Graphics::RenderInstanceFlags::Hidden;
-
-	if (!m_modernBinding.Update(Graphics::GetStaticMeshRenderer(), Make_Modern_Transform(*transformMtx), flags)) {
-		releaseModernVariant();
-	}
-}
-
-void W3DModelDraw::updateModernAnimation()
-{
-	if (m_pauseAnimation || !m_modernBinding.Is_Active() || !m_modernBinding.Animation().Is_Valid()
-		|| m_renderObject == nullptr || m_renderObject->Class_ID() != RenderObjClass::CLASSID_HLOD)
-		return;
-
-	float frame = 0.0f;
-	int frame_count = 0;
-	int mode = RenderObjClass::ANIM_MODE_LOOP;
-	float multiplier = 1.0f;
-	HLodClass *hlod = static_cast<HLodClass *>(m_renderObject);
-	HAnimClass *animation = hlod->Peek_Animation_And_Info(frame, frame_count, mode, multiplier);
-	if (animation == nullptr || frame_count <= 0)
-		return;
-
-	Graphics::StaticMeshRenderer &renderer = Graphics::GetStaticMeshRenderer();
-	const Graphics::AnimationPlaybackMode modern_mode =
-		Make_Modern_Animation_Mode(static_cast<RenderObjClass::AnimMode>(mode));
-	float time = frame / animation->Get_Frame_Rate();
-	if (modern_mode == Graphics::AnimationPlaybackMode::Once_Backwards
-		|| modern_mode == Graphics::AnimationPlaybackMode::Loop_Backwards)
-		time = static_cast<float>(frame_count - 1) / animation->Get_Frame_Rate() - time;
-	if (m_modernBinding.Secondary_Animation().Is_Valid() && m_nextState != nullptr) {
-		float blend_weight = frame_count > 1
-			? frame / static_cast<float>(frame_count - 1) : 1.0f;
-		if (modern_mode == Graphics::AnimationPlaybackMode::Once_Backwards
-			|| modern_mode == Graphics::AnimationPlaybackMode::Loop_Backwards)
-			blend_weight = 1.0f - blend_weight;
-		if (blend_weight < 0.0f)
-			blend_weight = 0.0f;
-		else if (blend_weight > 1.0f)
-			blend_weight = 1.0f;
-		HAnimClass *secondary_animation = m_nextState->m_animations.front().getAnimHandle();
-		if (secondary_animation == nullptr || secondary_animation->Get_Num_Frames() <= 0
-			|| !std::isfinite(secondary_animation->Get_Frame_Rate())
-			|| secondary_animation->Get_Frame_Rate() <= 0.0f
-			|| !m_modernBinding.Set_Animation_Blend_State(renderer, time,
-				blend_weight * static_cast<float>(secondary_animation->Get_Num_Frames() - 1)
-					/ secondary_animation->Get_Frame_Rate(), blend_weight)) {
-			if (secondary_animation != nullptr)
-				REF_PTR_RELEASE(secondary_animation);
-			releaseModernVariant();
-			return;
-		}
-		REF_PTR_RELEASE(secondary_animation);
-		return;
-	}
-	if (modern_mode != m_modernAnimationMode
-		&& !m_modernBinding.Set_Animation_Mode(renderer, modern_mode)) {
-		releaseModernVariant();
-		return;
-	}
-	m_modernAnimationMode = modern_mode;
-	if (!m_modernBinding.Set_Animation_Time(renderer, time))
-		releaseModernVariant();
-}
-
-void W3DModelDraw::updateModernBoneControl(Int boneIndex, const Matrix3D &localTransform)
-{
-	if (!m_modernBinding.Is_Active() || boneIndex <= 0)
-		return;
-
-	if (!m_modernBinding.Set_Bone_Local_Transform(Graphics::GetStaticMeshRenderer(),
-		Graphics::BoneHandle(static_cast<Graphics::BoneIndex>(boneIndex), 1),
-		Make_Modern_Transform(localTransform)))
-		releaseModernVariant();
-}
-
-void W3DModelDraw::releaseModernVariant() noexcept
-{
-	Graphics::StaticMeshRenderer &renderer = Graphics::GetStaticMeshRenderer();
-	m_modernBinding.Destroy(renderer);
-	for (const Graphics::MaterialHandle handle : m_modernMaterials)
-		if (handle.Is_Valid())
-			renderer.Destroy_Material(handle);
-	m_modernMaterials.clear();
-	for (const Graphics::TextureHandle handle : m_modernTextures)
-		if (handle.Is_Valid())
-			renderer.Destroy_Texture(handle);
-	m_modernTextures.clear();
-	m_modernAnimationState = nullptr;
-	m_modernAnimationIndex = -1;
-	m_modernAnimationMode = Graphics::AnimationPlaybackMode::Loop;
-	m_modernSecondaryAnimationState = nullptr;
-	if (m_renderObject != nullptr) {
-		if (W3DDisplay::m_3DScene != nullptr && !m_legacyRenderObjectInScene) {
-			W3DDisplay::m_3DScene->Add_Render_Object(m_renderObject);
-			m_legacyRenderObjectInScene = true;
-		}
-		const Bool drawable_hidden = getDrawable() != nullptr && getDrawable()->isDrawableEffectivelyHidden();
-		m_renderObject->Set_Hidden(m_modernHidden || drawable_hidden);
-	}
-}
 
 //-------------------------------------------------------------------------------------------------
 void W3DModelDraw::doStartOrStopParticleSys()
@@ -2829,28 +1864,14 @@ void W3DModelDraw::doStartOrStopParticleSys()
 //-------------------------------------------------------------------------------------------------
 void W3DModelDraw::setHidden(Bool hidden)
 {
-	m_modernHidden = hidden;
-	if (m_modernBinding.Is_Active()) {
-		Matrix3D transform = *getDrawable()->getTransformMatrix();
-		adjustTransformMtx(transform);
-		updateModernInstance(&transform);
-	}
-
-	if (m_renderObject)
-		m_renderObject->Set_Hidden(m_modernBinding.Is_Active() ? TRUE : hidden);
-
-	if (m_shadow)
-		m_shadow->enableShadowRender(!hidden);
-
-	if (m_terrainDecal)
-		m_terrainDecal->enableShadowRender(!hidden);
-
-	if (m_trackRenderObject && hidden)
-	{	const Coord3D* pos = getDrawable()->getPosition();
-		m_trackRenderObject->addCapEdgeToTrack(pos->x,pos->y);
-	}
-
-	doStartOrStopParticleSys();
+    if (m_renderObject) m_renderObject->Set_Hidden(hidden);
+    if (m_shadow) m_shadow->enableShadowRender(!hidden && m_shadowEnabled);
+    if (m_terrainDecal) m_terrainDecal->enableShadowRender(!hidden && m_shadowEnabled);
+    if (m_trackRenderObject && hidden) {
+        const auto* position=getDrawable()->getPosition();
+        m_trackRenderObject->addCapEdgeToTrack(position->x,position->y);
+    }
+    doStartOrStopParticleSys();
 }
 
 /**Free all data used by this model's shadow.  This is used to dynamically enable/disable shadows by the options screen*/
@@ -2887,17 +1908,10 @@ void W3DModelDraw::allocateShadows()
 		}
 	}
 }
-
-//-------------------------------------------------------------------------------------------------
-void W3DModelDraw::setShadowsEnabled(Bool enable)
+void W3DModelDraw::setShadowsEnabled(Bool enabled)
 {
-	if (m_shadow)
-		m_shadow->enableShadowRender(enable);
-	m_shadowEnabled = enable;
-	if (m_modernBinding.Is_Active()) {
-		if (!m_modernBinding.Set_Casts_Shadow(Graphics::GetStaticMeshRenderer(), modernShadowEnabled()))
-			releaseModernVariant();
-	}
+    m_shadowEnabled=enabled;
+    if (m_shadow) m_shadow->enableShadowRender(enabled && m_renderObject && !m_renderObject->Is_Hidden());
 }
 
 /**collect some stats about the rendering cost of this draw module */
@@ -2905,8 +1919,6 @@ void W3DModelDraw::setShadowsEnabled(Bool enable)
 void W3DModelDraw::getRenderCost(RenderCost & rc) const
 {
 	getRenderCostRecursive(rc,m_renderObject);
-	if (m_shadow)
-		m_shadow->getRenderCost(rc);
 }
 #endif //RTS_DEBUG
 
@@ -3113,10 +2125,6 @@ void W3DModelDraw::doDrawModule(const Matrix3D* transformMtx)
 		Matrix3D mtx = *transformMtx;
 		adjustTransformMtx(mtx);
 		m_renderObject->Set_Transform(mtx);
-		if (!m_modernBinding.Is_Active())
-			syncModernVariant();
-		updateModernInstance(&mtx);
-		updateModernAnimation();
 	}
 
 	handleClientTurretPositioning();
@@ -3466,7 +2474,6 @@ void W3DModelDraw::handleClientTurretPositioning()
 					m_renderObject->Capture_Bone( tur.m_turretAngleBone );
 					m_renderObject->Control_Bone( tur.m_turretAngleBone, turretXfrm );
 				}
-				updateModernBoneControl(tur.m_turretAngleBone, turretXfrm);
 			}
 
 			// do turret pitch, if any
@@ -3481,7 +2488,6 @@ void W3DModelDraw::handleClientTurretPositioning()
 					m_renderObject->Capture_Bone( tur.m_turretPitchBone );
 					m_renderObject->Control_Bone( tur.m_turretPitchBone, turretPitchXfrm );
 				}
-				updateModernBoneControl(tur.m_turretPitchBone, turretPitchXfrm);
 			}
 		}
 	}
@@ -3585,7 +2591,6 @@ void W3DModelDraw::handleClientRecoil()
 					m_renderObject->Capture_Bone( barrels[i].m_recoilBone );
 					m_renderObject->Control_Bone( barrels[i].m_recoilBone, gunXfrm );
 				}
-				updateModernBoneControl(barrels[i].m_recoilBone, gunXfrm);
 			}
 			else
 			{
@@ -3711,12 +2716,6 @@ Bool W3DModelDraw::updateBonesForClientParticleSystems()
 			if ( (sys != nullptr) && (boneIndex != 0)  )
 			{
 			Matrix3D boneTransform;
-			Graphics::RenderTransform modern_transform;
-			if (m_modernBinding.Is_Active()
-				&& m_modernBinding.Get_Bone_Transform(Graphics::GetStaticMeshRenderer(),
-					Graphics::BoneHandle(static_cast<Graphics::BoneIndex>(boneIndex), 1), modern_transform))
-				boneTransform = Make_Legacy_Transform(modern_transform);
-			else
 				boneTransform = m_renderObject->Get_Bone_Transform(boneIndex);// just a little worried about state changes
 
         Vector3 vpos = boneTransform.Get_Translation();
@@ -3783,7 +2782,6 @@ void W3DModelDraw::setTerrainDecal(TerrainDecalType type)
 		m_terrainDecal->enableShadowRender(m_shadowEnabled);
 	}
 }
-
 //-------------------------------------------------------------------------------------------------
 void W3DModelDraw::setTerrainDecalSize(Real x, Real y)
 {
@@ -3800,18 +2798,9 @@ void W3DModelDraw::setTerrainDecalOpacity(Real o)
 		m_terrainDecal->setOpacity((Int)(255.0f * o));
 	}
 }
-
-
 //-------------------------------------------------------------------------------------------------
-void W3DModelDraw::nukeCurrentRender(Matrix3D* xform, Bool preserveModernInstance)
+void W3DModelDraw::nukeCurrentRender(Matrix3D* xform)
 {
-	if (preserveModernInstance && m_modernBinding.Has_Instance() && xform != nullptr) {
-		if (!m_modernBinding.Suspend(Graphics::GetStaticMeshRenderer(), Make_Modern_Transform(*xform)))
-			releaseModernVariant();
-	} else {
-		releaseModernVariant();
-	}
-
 	// this needs to be "dirtied" so that the new pausing of the animation will be triggered.
 	m_pauseAnimation = false;
 
@@ -3830,9 +2819,9 @@ void W3DModelDraw::nukeCurrentRender(Matrix3D* xform, Bool preserveModernInstanc
 		// save the transform for the new model
 		if (xform)
 			*xform = m_renderObject->Get_Transform();
-		if (W3DDisplay::m_3DScene != nullptr && m_legacyRenderObjectInScene) {
+		if (W3DDisplay::m_3DScene != nullptr && m_inGraphicsScene) {
 			W3DDisplay::m_3DScene->Remove_Render_Object(m_renderObject);
-			m_legacyRenderObjectInScene = false;
+			m_inGraphicsScene = false;
 		}
 		REF_PTR_RELEASE(m_renderObject);
 		m_renderObject = nullptr;
@@ -3940,6 +2929,10 @@ static Bool turretNamesDiffer(const ModelConditionInfo* a, const ModelConditionI
 void W3DModelDraw::setModelState(const ModelConditionInfo* newState)
 {
 	DEBUG_ASSERTCRASH(newState, ("invalid state in W3DModelDraw::setModelState"));
+	Assets::AssetCache *asset_cache = Assets::Try_Get_Asset_Cache();
+	m_modelAsset = asset_cache != nullptr && newState != nullptr && !newState->m_modelName.isEmpty()
+		? asset_cache->Request_Model(newState->m_modelName.str())
+		: Assets::ModelAssetHandle{};
 
 #ifdef DEBUG_OBJECT_ID_EXISTS
 	if (getDrawable() && getDrawable()->getObject() && getDrawable()->getObject()->getID() == TheObjectIDToDebug)
@@ -4050,7 +3043,7 @@ void W3DModelDraw::setModelState(const ModelConditionInfo* newState)
 		)
 	{
 		Matrix3D transform;
-		nukeCurrentRender(&transform, m_modernBinding.Has_Instance());
+		nukeCurrentRender(&transform);
 		Drawable* draw = getDrawable();
 
 		// create a new render object and set into drawable
@@ -4114,6 +3107,7 @@ void W3DModelDraw::setModelState(const ModelConditionInfo* newState)
 			}
 		}
 
+
 		if( m_renderObject )
 		{
 			// set collision type for render object.  Used by WW3D2 collision code.
@@ -4161,23 +3155,8 @@ void W3DModelDraw::setModelState(const ModelConditionInfo* newState)
 				}
    		}
 
-			// add render object to our scene
-			if (W3DDisplay::m_3DScene != nullptr) {
-				W3DDisplay::m_3DScene->Add_Render_Object(m_renderObject);
-				m_legacyRenderObjectInScene = true;
-			}
-
 			// tie in our drawable as the user data pointer in the render object
 			m_renderObject->Set_User_Data(draw->getDrawableInfo());
-
-			//We created a new render object so we need to preserve the visibility state
-			//of the previous render object.
-			if (draw->isDrawableEffectivelyHidden())
-			{
-				m_renderObject->Set_Hidden(TRUE);
-				if (m_shadow)
-					m_shadow->enableShadowRender(FALSE);
-			}
 
 			//
 			// set the transform for the new model to that we saved before, we do this so that the
@@ -4185,12 +3164,17 @@ void W3DModelDraw::setModelState(const ModelConditionInfo* newState)
 			// as the previous one
 			//
 			m_renderObject->Set_Transform(transform);
+            m_renderObject->Set_Hidden(draw->isDrawableEffectivelyHidden());
+            if (m_shadow && m_renderObject->Is_Hidden()) m_shadow->enableShadowRender(FALSE);
+            if (W3DDisplay::m_3DScene) {
+                W3DDisplay::m_3DScene->Add_Render_Object(m_renderObject);
+                m_inGraphicsScene=true;
+            }
 			onRenderObjRecreated();
 		}
 	}
 	else
 	{
-
 		//BONEPOS_LOG(("validateStuff() from within W3DModelDraw::setModelState()"));
 		//BONEPOS_DUMPREAL(getDrawable()->getScale());
 
@@ -4209,7 +3193,6 @@ void W3DModelDraw::setModelState(const ModelConditionInfo* newState)
 	m_nextState = nextState;
 	m_nextStateAnimLoopDuration = NO_NEXT_DURATION;
 	adjustAnimation(prevState, prevAnimFraction);
-	syncModernVariant();
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -4267,18 +3250,7 @@ void W3DModelDraw::replaceIndicatorColor(Color color)
 // this method must ONLY be called from the client, NEVER From the logic, not even indirectly.
 Bool W3DModelDraw::clientOnly_getRenderObjInfo(Coord3D* pos, Real* boundingSphereRadius, Matrix3D* transform) const
 {
-	if (m_modernBinding.Is_Active() && pos != nullptr && boundingSphereRadius != nullptr && transform != nullptr) {
-		Graphics::RenderTransform modern_transform;
-		if (m_modernBinding.Get_Transform(modern_transform)) {
-			const Graphics::RenderBounds &bounds = m_modernBinding.Bounds();
-			pos->x = modern_transform.matrix[3];
-			pos->y = modern_transform.matrix[7];
-			pos->z = modern_transform.matrix[11];
-			*boundingSphereRadius = bounds.radius;
-			*transform = Make_Legacy_Transform(modern_transform);
-			return true;
-		}
-	}
+	
 
 	if (!m_renderObject)
 		return false;
@@ -4587,13 +3559,7 @@ Bool W3DModelDraw::clientOnly_getRenderObjBoneTransform(const AsciiString & bone
 	}
 
 	int idx = m_renderObject->Get_Bone_Index(boneName.str());
-	if (m_modernBinding.Is_Active() && idx > 0) {
-		Graphics::RenderTransform transform;
-		if (m_modernBinding.Get_Bone_Transform(Graphics::GetStaticMeshRenderer(), Graphics::BoneHandle(idx, 1), transform)) {
-			*set_tm = Make_Legacy_Transform(transform);
-			return true;
-		}
-	}
+	
 	if (idx == 0) {
 		set_tm->Make_Identity();
 		return false;
@@ -4611,13 +3577,7 @@ Bool W3DModelDraw::getCurrentWorldspaceClientBonePositions(const char* boneName,
 		return false;
 
 	Int boneIndex = m_renderObject->Get_Bone_Index(boneName);
-	if (m_modernBinding.Is_Active() && boneIndex > 0) {
-		Graphics::RenderTransform modern_transform;
-		if (m_modernBinding.Get_Bone_Transform(Graphics::GetStaticMeshRenderer(), Graphics::BoneHandle(boneIndex, 1), modern_transform)) {
-			transform = Make_Legacy_Transform(modern_transform);
-			return true;
-		}
-	}
+	
 	if (boneIndex == 0)
 		return false;
 
@@ -4718,7 +3678,6 @@ void W3DModelDraw::reactToTransformChange( const Matrix3D* oldMtx,
 		Matrix3D mtx = *getDrawable()->getTransformMatrix();
 		adjustTransformMtx(mtx);
 		m_renderObject->Set_Transform(mtx);
-		updateModernInstance(&mtx);
 	}
 
 	if (m_trackRenderObject)
@@ -4726,7 +3685,7 @@ void W3DModelDraw::reactToTransformChange( const Matrix3D* oldMtx,
 		Object *obj = getDrawable()->getObject();
 		const Coord3D* pos = getDrawable()->getPosition();
 
-		if ( m_fullyObscuredByShroud || obj->testStatus( OBJECT_STATUS_STEALTHED ) == TRUE )
+		if ( m_fullyObscuredByShroud || (obj && obj->testStatus( OBJECT_STATUS_STEALTHED ) == TRUE) )
 		{
 				m_trackRenderObject->addCapEdgeToTrack(pos->x, pos->y);
 		}
@@ -4783,16 +3742,10 @@ Bool W3DModelDraw::handleWeaponFireFX(WeaponSlotType wslot, Int specificBarrelTo
 		if (info.m_fxBone && m_renderObject)
 		{
 			const Object *logicObject = getDrawable()->getObject();// This is slow, so store it
-			if (m_modernBinding.Is_Active() || !m_renderObject->Is_Hidden() || logicObject == nullptr)
+			if (!m_renderObject->Is_Hidden() || logicObject == nullptr)
 			{
 				// I can ask the drawable's bone position if I am not hidden (if I have no object I have no choice)
 				Matrix3D mtx;
-				Graphics::RenderTransform modern_transform;
-				if (m_modernBinding.Is_Active()
-					&& m_modernBinding.Get_Bone_Transform(Graphics::GetStaticMeshRenderer(),
-						Graphics::BoneHandle(static_cast<Graphics::BoneIndex>(info.m_fxBone), 1), modern_transform))
-					mtx = Make_Legacy_Transform(modern_transform);
-				else
 					mtx = m_renderObject->Get_Bone_Transform(info.m_fxBone);
 				Coord3D pos;
 				pos.x = mtx.Get_X_Translation();
@@ -4889,19 +3842,6 @@ void W3DModelDraw::setAnimationCompletionTime(UnsignedInt numFrames)
 //-------------------------------------------------------------------------------------------------
 void W3DModelDraw::setAnimationFrame( int frame )
 {
-	if (m_modernBinding.Is_Active() && m_modernBinding.Animation().Is_Valid()
-		&& m_curState != nullptr && m_whichAnimInCurState >= 0
-		&& m_whichAnimInCurState < static_cast<Int>(m_curState->m_animations.size())) {
-		HAnimClass* animHandle = m_curState->m_animations[m_whichAnimInCurState].getAnimHandle();
-		if (animHandle != nullptr && animHandle->Get_Frame_Rate() > 0.0f) {
-			if (!m_modernBinding.Set_Animation_Time(Graphics::GetStaticMeshRenderer(),
-				static_cast<float>(frame) / animHandle->Get_Frame_Rate()))
-				releaseModernVariant();
-		}
-		if (animHandle != nullptr)
-			REF_PTR_RELEASE(animHandle);
-	}
-
 	if( m_renderObject && m_whichAnimInCurState >= 0 )
 	{
 		const W3DAnimationInfo& animInfo = m_curState->m_animations[ m_whichAnimInCurState ];
@@ -4997,10 +3937,7 @@ void W3DModelDraw::preloadAssets( TimeOfDay timeOfDay )
 //-------------------------------------------------------------------------------------------------
 Bool W3DModelDraw::isVisible() const
 {
-	if (m_modernBinding.Is_Active())
-		return !m_modernHidden && getDrawable() != nullptr && !getDrawable()->isDrawableEffectivelyHidden();
-
-	return (m_renderObject && m_renderObject->Is_Really_Visible());
+    return m_renderObject && m_renderObject->Is_Really_Visible();
 }
 
 //-------------------------------------------------------------------------------------------------

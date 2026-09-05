@@ -81,21 +81,9 @@ public:
 	W3DShaderManager();	///<constructor
 	static void init();	///<determine optimal shaders for current device.
 	static void shutdown();	///<release resources used by shaders
-	static void updateCloud();	///<update the cloud position once every render frame.
-
 	static ChipsetType getChipset();	///<return current device chipset.
 	static GraphicsVenderID getCurrentVendor() {return m_currentVendor;}	///<return current card vendor.
 	static std::int64_t getCurrentDriverVersion() {return m_driverVersion; }	///<return current driver version.
-	static Int getShaderPasses(ShaderTypes shader);	///<rendering passes required for shader
-	static Int setShader(ShaderTypes shader, Int pass);	///<enable specific shader pass.
-	static Int setShroudTex(Int stage);	///<Set shroud in a texture stage.
-	static void resetShader(ShaderTypes shader);	///<make sure W3D2 gets restored to normal
-	///Specify all textures (up to 8) which can be accessed by the shaders.
-	static void setTexture(Int stage,TextureClass* texture) {m_Textures[stage]=texture;}
-	///Return current texture available to shaders.
-	static TextureClass *getShaderTexture(Int stage) { return m_Textures[stage];}	///<returns currently selected texture for given stage
-	///Return last activated shader.
-	static ShaderTypes getCurrentShader() {return m_currentShader;}
 	/// Loads a shader binary and creates a backend-owned shader for it.
 	static Bool LoadAndCreateShader(const char* file_path, Bool vertex_shader,
 		uintptr_t* handle,

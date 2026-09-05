@@ -34,6 +34,7 @@ namespace dx11_backend
 		void Set_Fog_Enabled(bool enable);
 		void Set_Fog_Color(unsigned color);
 		void Set_Depth_Bias(unsigned bias);
+		unsigned Get_Depth_Bias() const;
 		void Set_Texture_Factor(unsigned color);
 		void Set_Depth_Test_Enabled(bool enable);
 		void Set_Depth_Write_Enabled(bool enable);
@@ -54,6 +55,8 @@ namespace dx11_backend
 		void Set_Specular_Enabled(bool enable);
 		void Set_Material_Color_Sources(RenderBackendMaterialSource ambient, RenderBackendMaterialSource diffuse, RenderBackendMaterialSource emissive);
 		void Set_NPatch_Segments(float segments);
+		RenderBackendStencilState Get_Stencil_State() const;
+		RenderBackendFogState Get_Fog_State() const;
 		void Set_Stencil_Enabled(bool enable);
 		void Set_Stencil_Function(RenderBackendCompareFunction function);
 		void Set_Stencil_Reference(unsigned reference);

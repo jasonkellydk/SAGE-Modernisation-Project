@@ -29,7 +29,6 @@
 
 #pragma once
 
-import Graphics.Scene.Beams;
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 #include "Common/DrawModule.h"
@@ -92,14 +91,8 @@ public:
 	virtual const LaserDrawInterface* getLaserDrawInterface() const override { return this; }
 
 protected:
-	bool updateModernBeam(UnsignedInt index, const Vector3 &start, const Vector3 &end, Real width, Real red, Real green, Real blue, Real opacity);
-	void disableModernBeams() noexcept;
-	void setLegacyBeamsVisible(Bool visible) noexcept;
 
 	SegmentedLineClass **m_line3D;  ///< line 3D for effect
-	Graphics::BeamHandle *m_modernBeams;
-	UnsignedInt m_modernBeamCount;
-	Bool m_modernEnabled;
 	TextureClass *m_texture;
 	Real m_textureAspectRatio;			///< aspect ratio of texture
 	Bool m_selfDirty;								// not saved

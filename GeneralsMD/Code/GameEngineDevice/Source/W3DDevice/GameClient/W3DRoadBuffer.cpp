@@ -47,6 +47,9 @@
 //-----------------------------------------------------------------------------
 
 #include "W3DDevice/GameClient/W3DRoadBuffer.h"
+#include "W3DDevice/GameClient/W3DGraphicsResources.h"
+import Graphics.Backends.DX11.Coexistence;
+import Graphics.Scene.Roads.Renderer;
 
 #include <WW3D2/AssetMgr.h>
 #include <WW3D2/Texture.h>
@@ -56,11 +59,12 @@
 #include "Common/FileSystem.h" // for LOAD_TEST_ASSETS
 #include "GameClient/TerrainRoads.h"
 #include "W3DDevice/GameClient/TerrainTex.h"
-#include "W3DDevice/GameClient/HeightMap.h"
+#include "W3DDevice/GameClient/BaseHeightMap.h"
+#include "W3DDevice/GameClient/WorldHeightMap.h"
 #include "W3DDevice/GameClient/W3DAssetManager.h"
 #include "W3DDevice/GameClient/W3DDynamicLight.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
-#include "W3DDevice/GameClient/W3DShaderManager.h"
+
 #include "WW3D2/Camera.h"
 #include "WW3D2/VertexFormat.h"
 #include "WW3D2/WW3D.h"
@@ -75,44 +79,11 @@ static const Real TEE_WIDTH_ADJUSTMENT = 1.03f;
 //         Private Data
 //-----------------------------------------------------------------------------
 
-// A W3D shader that does alpha, texturing, tests zbuffer, doesn't update zbuffer.
-#define SC_ALPHA_DETAIL ( SHADE_CNST(ShaderClass::PASS_LEQUAL, ShaderClass::DEPTH_WRITE_DISABLE, ShaderClass::COLOR_WRITE_ENABLE, ShaderClass::SRCBLEND_SRC_ALPHA, \
-	ShaderClass::DSTBLEND_ONE_MINUS_SRC_ALPHA, ShaderClass::FOG_DISABLE, ShaderClass::GRADIENT_MODULATE, ShaderClass::SECONDARY_GRADIENT_DISABLE, ShaderClass::TEXTURING_ENABLE, \
-	ShaderClass::ALPHATEST_DISABLE, ShaderClass::CULL_MODE_ENABLE, \
-	ShaderClass::DETAILCOLOR_SCALE, ShaderClass::DETAILALPHA_DISABLE) )
-
-static ShaderClass detailAlphaShader(SC_ALPHA_DETAIL);
-
-
-#define SC_ALPHA_MIRROR ( SHADE_CNST(ShaderClass::PASS_LEQUAL, ShaderClass::DEPTH_WRITE_DISABLE, ShaderClass::COLOR_WRITE_ENABLE, ShaderClass::SRCBLEND_ONE, \
-	ShaderClass::DSTBLEND_ZERO, ShaderClass::FOG_DISABLE, ShaderClass::GRADIENT_MODULATE, ShaderClass::SECONDARY_GRADIENT_DISABLE, ShaderClass::TEXTURING_ENABLE, \
-	ShaderClass::ALPHATEST_DISABLE, ShaderClass::CULL_MODE_DISABLE, \
-	ShaderClass::DETAILCOLOR_DISABLE, ShaderClass::DETAILALPHA_DISABLE) )
-
-static ShaderClass detailShader(SC_ALPHA_MIRROR);
-
-
-// The radius of the center of the road is 1.5 - outer radius 2.0, inner radius 1.0.
+// Road center radii for ordinary and tight corners.
 static const Real CORNER_RADIUS = 1.5f;
-
-
-// The radius of the center of the road is 0.5 - outer radius 1.0, inner radius 0.0.
 static const Real TIGHT_CORNER_RADIUS = 0.5f;
-/*
 
-// ShaderClass::PASS_ALWAYS,
-
-#define SC_ALPHA_2D ( SHADE_CNST(PASS_ALWAYS, DEPTH_WRITE_DISABLE, COLOR_WRITE_ENABLE, \
-	SRCBLEND_SRC_ALPHA, DSTBLEND_ONE_MINUS_SRC_ALPHA, FOG_DISABLE, GRADIENT_DISABLE, \
-	SECONDARY_GRADIENT_DISABLE, TEXTURING_ENABLE, DETAILCOLOR_DISABLE, DETAILALPHA_DISABLE, \
-	ALPHATEST_DISABLE, CULL_MODE_ENABLE, DETAILCOLOR_DISABLE, DE AILALPHA_DISABLE) )
-ShaderClass ShaderClass::_PresetAlpha2DShader(SC_ALPHA_2D);
-*/
-
-/** Calculate the sign of the cross product.  If the tails of the vectors are both placed
-at 0,0, then the cross product can be interpreted as -1 means v2 is to the right of v1,
-1 means v2 is to the left of v1, and 0 means v2 is parallel to v1. */
-
+/** Sign of the 2D cross product: negative is right, positive is left. */
 static Int xpSign(const Vector2 &v1, const Vector2 &v2) {
 	Real xpdct = v1.X*v2.Y - v1.Y*v2.X;
 	if (xpdct<0) return -1;
@@ -120,7 +91,7 @@ static Int xpSign(const Vector2 &v1, const Vector2 &v2) {
 	return 0;
 }
 
-static Bool s_dynamic = false;
+
 
 //-----------------------------------------------------------------------------
 //         Private Class
@@ -133,8 +104,8 @@ static Bool s_dynamic = false;
 //=============================================================================
 RoadType::RoadType():
 m_roadTexture(nullptr),
-m_vertexRoad(nullptr),
-m_indexRoad(nullptr),
+m_numRoadVertices(0),
+m_numRoadIndices(0),
 m_stackingOrder(0),
 m_uniqueID(-1)
 {
@@ -148,26 +119,31 @@ m_uniqueID(-1)
 RoadType::~RoadType()
 {
 	REF_PTR_RELEASE(m_roadTexture);
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	RenderBackend_Release_Vertex_Buffer(backend, m_vertexRoad);
-	RenderBackend_Release_Index_Buffer(backend, m_indexRoad);
+	Graphics::Get_Surface_Renderer().Destroy_Mesh(m_mesh);
 }
 
 //=============================================================================
-// RoadType applyTexture
+// RoadType uploadGeometry
 //=============================================================================
-/** Sets the W3D texture. */
+/** Translates the existing segment data into a graphics-owned surface mesh. */
 //=============================================================================
-void RoadType::applyTexture()
+bool RoadType::uploadGeometry()
 {
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	if (backend == nullptr) {
-		return;
-	}
- 	W3DShaderManager::setTexture(0,m_roadTexture);
-	backend->Set_Index_Buffer(m_indexRoad);
-	backend->Set_Vertex_Buffer(m_vertexRoad, 0, sizeof(VertexFormatXYZDUV1));
-	backend->Set_Vertex_Format(RenderBackendVertexFormat::PositionDiffuseTexture);
+    std::vector<Graphics::SurfaceVertex> vertices(m_numRoadVertices);
+    std::vector<std::uint32_t> indices(m_indices.begin(), m_indices.begin() + m_numRoadIndices);
+    for (int index = 0; index < m_numRoadVertices; ++index) {
+        const auto &source = m_vertices[index];
+        auto &vertex = vertices[index];
+        vertex.position = {source.x, source.y, source.z};
+        vertex.uv = {source.u1, source.v1};
+        vertex.color = {((source.diffuse >> 16) & 255) / 255.0f,
+            ((source.diffuse >> 8) & 255) / 255.0f, (source.diffuse & 255) / 255.0f,
+            ((source.diffuse >> 24) & 255) / 255.0f};
+    }
+    auto &renderer = Graphics::Get_Surface_Renderer();
+    if (m_mesh.Is_Valid()) return renderer.Update_Mesh(m_mesh, vertices, indices);
+    m_mesh = renderer.Create_Mesh(vertices, indices);
+    return m_mesh.Is_Valid();
 }
 
 
@@ -190,15 +166,10 @@ void RoadType::loadTexture(AsciiString path, Int ID)
 	m_roadTexture->Get_Filter().Set_U_Addr_Mode(TextureFilterClass::TEXTURE_ADDRESS_REPEAT);
 	m_roadTexture->Get_Filter().Set_V_Addr_Mode(TextureFilterClass::TEXTURE_ADDRESS_REPEAT);
 
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	if (backend == nullptr) {
-		return;
-	}
-	m_vertexRoad=backend->Create_Vertex_Buffer(
-		static_cast<unsigned>(TheGlobalData->m_maxRoadVertex + 4) * sizeof(VertexFormatXYZDUV1),
-		RenderBackendVertexFormat::PositionDiffuseTexture, s_dynamic);
-	m_indexRoad=backend->Create_Index_Buffer(
-		static_cast<unsigned>(TheGlobalData->m_maxRoadIndex + 4) * sizeof(UnsignedShort), s_dynamic);
+    m_vertices.resize(TheGlobalData->m_maxRoadVertex + 4);
+    m_indices.resize(TheGlobalData->m_maxRoadIndex + 4);
+    Graphics::Get_Surface_Renderer().Destroy_Mesh(m_mesh);
+    m_mesh = {};
 	m_numRoadVertices=0;
 	m_numRoadIndices=0;
 
@@ -1242,26 +1213,8 @@ void W3DRoadBuffer::loadRoadsInVertexAndIndexBuffers()
 	}
 	m_curNumRoadVertices = 0;
 	m_curNumRoadIndices = 0;
-	VertexFormatXYZDUV1 *vb;
-	UnsignedShort *ib;
-	// Lock the buffers.
-	if (m_roadTypes[m_curRoadType].getIB() == nullptr) {
-		this->m_roadTypes[m_curRoadType].setNumVertices(0);
-		this->m_roadTypes[m_curRoadType].setNumIndices(0);
-		return;
-	}
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	RenderBackendBufferLockMode lockMode = s_dynamic ?
-		RenderBackendBufferLockMode::Discard : RenderBackendBufferLockMode::Normal;
-	RenderBackendIndexBufferLock lockIdxBuffer(backend, m_roadTypes[m_curRoadType].getIB(), 0, 0, lockMode);
-	RenderBackendVertexBufferLock lockVtxBuffer(backend, m_roadTypes[m_curRoadType].getVB(), 0, 0, lockMode);
-	if (!lockIdxBuffer.Is_Locked() || !lockVtxBuffer.Is_Locked()) {
-		return;
-	}
-	vb=(VertexFormatXYZDUV1*)lockVtxBuffer.Get_Data();
-	ib = (UnsignedShort*)lockIdxBuffer.Get_Data();
-	// Add to the index buffer & vertex buffer.
-
+    VertexFormatXYZDUV1 *vb = m_roadTypes[m_curRoadType].getVB();
+    UnsignedShort *ib = m_roadTypes[m_curRoadType].getIB();
 	Int curRoad;
 
 	// Do road segments.
@@ -1275,6 +1228,10 @@ void W3DRoadBuffer::loadRoadsInVertexAndIndexBuffers()
 	}
 	this->m_roadTypes[m_curRoadType].setNumVertices(m_curNumRoadVertices);
 	this->m_roadTypes[m_curRoadType].setNumIndices(m_curNumRoadIndices);
+    if (!m_roadTypes[m_curRoadType].uploadGeometry()) {
+        m_roadTypes[m_curRoadType].setNumIndices(0);
+        DEBUG_LOG(("Road geometry upload failed.\n"));
+    }
 }
 
 //=============================================================================
@@ -1325,43 +1282,7 @@ Bool W3DRoadBuffer::visibilityChanged(const IRegion2D &bounds)
 //=============================================================================
 /** Loads the roads into the vertex buffer for drawing. */
 //=============================================================================
-void W3DRoadBuffer::loadLitRoadsInVertexAndIndexBuffers(RefRenderObjListIterator *pDynamicLightsIterator)
-{
-	if ( !m_initialized) {
-		return;
-	}
-	m_curNumRoadVertices = 0;
-	m_curNumRoadIndices = 0;
-	VertexFormatXYZDUV1 *vb;
-	UnsignedShort *ib;
-	// Lock the buffers.
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	RenderBackendIndexBufferLock lockIdxBuffer(backend, m_roadTypes[m_curRoadType].getIB(), 0, 0,
-		RenderBackendBufferLockMode::Normal);
-	RenderBackendVertexBufferLock lockVtxBuffer(backend, m_roadTypes[m_curRoadType].getVB(), 0, 0,
-		RenderBackendBufferLockMode::Normal);
-	if (!lockIdxBuffer.Is_Locked() || !lockVtxBuffer.Is_Locked()) {
-		return;
-	}
-	vb=(VertexFormatXYZDUV1*)lockVtxBuffer.Get_Data();
-	ib = (UnsignedShort*)lockIdxBuffer.Get_Data();
-	// Add to the index buffer & vertex buffer.
 
-	Int curRoad;
-	if (true) {
-		// Do road segments.
-		TCorner corner;
-		for (corner = SEGMENT; corner < NUM_JOINS; corner = (TCorner)(corner+1)) {
-			for (curRoad=0; curRoad<m_numRoads; curRoad++) {
-				if (m_roads[curRoad].m_type == corner) {
-					loadLit4PtSection(&m_roads[curRoad], ib, vb, pDynamicLightsIterator);
-				}
-			}
-		}
-	}
-	this->m_roadTypes[m_curRoadType].setNumVertices(m_curNumRoadVertices);
-	this->m_roadTypes[m_curRoadType].setNumIndices(m_curNumRoadIndices);
-}
 
 //=============================================================================
 // W3DRoadBuffer::loadRoadSegment
@@ -3288,132 +3209,53 @@ void W3DRoadBuffer::updateCenter()
 //=============================================================================
 /** Draws the roads.   */
 //=============================================================================
-void W3DRoadBuffer::drawRoads(CameraClass * camera, TextureClass *cloudTexture, TextureClass *noiseTexture, Bool wireframe,
-															Int minX, Int maxX, Int minY, Int maxY, RefRenderObjListIterator *pDynamicLightsIterator)
+void W3DRoadBuffer::drawRoads(CameraClass *camera, TextureClass *cloudTexture,
+    TextureClass *noiseTexture, Bool wireframe, Int minX, Int maxX, Int minY, Int maxY,
+    RefRenderObjListIterator *)
 {
-	IRegion2D bounds;
-	bounds.lo.x = minX*MAP_XY_FACTOR;
-	bounds.hi.x = maxX*MAP_XY_FACTOR;
-	bounds.lo.y = minY*MAP_XY_FACTOR;
-	bounds.hi.y = maxY*MAP_XY_FACTOR;
-
-#define NO_TEST_CULL 1
-#ifdef TEST_CULL
-	bounds.lo.x += 32*MAP_XY_FACTOR;
-	bounds.hi.x -= 32*MAP_XY_FACTOR;
-#endif
-#define noLOG_STATS
-#ifdef LOG_STATS
-	Int polys = 0;
-#endif
-
-	Int i;
-
-	Int maxStacking = 0;
-	for (i=0; i<m_maxRoadTypes; i++) {
-		if (m_roadTypes[i].getStacking() > maxStacking) {
-			maxStacking = m_roadTypes[i].getStacking();
-		}
-	}
-	Int stacking;
-	W3DShaderManager::ShaderTypes st=W3DShaderManager::ST_ROAD_BASE; //set default shader
-	if (cloudTexture) {
-		st=W3DShaderManager::ST_ROAD_BASE_NOISE1;
-		if (noiseTexture)
-			st=W3DShaderManager::ST_ROAD_BASE_NOISE12;
-	}
-	else
-	if (noiseTexture)
-		st=W3DShaderManager::ST_ROAD_BASE_NOISE2;
-
-	Int devicePasses = 1;	//assume regular rendering
- 	//Find number of passes required to render current shader
-	devicePasses=W3DShaderManager::getShaderPasses(st);
-
-	W3DShaderManager::setTexture(1,cloudTexture);	//cloud
-	W3DShaderManager::setTexture(2,noiseTexture);	//noise/lightmap
-
-
-	Bool loadBuffers = false;
-	if (m_updateBuffers) {
-		if (visibilityChanged(bounds)) {
-			loadBuffers = true;
-		}
-	}
-	m_updateBuffers = false;
-
-	for (stacking=0; stacking <= maxStacking; stacking++) {
-		for (i=0; i<m_maxRoadTypes; i++) {
-			if (stacking != m_roadTypes[i].getStacking()) {
-				continue;
-			}
-			m_curUniqueID = m_roadTypes[i].getUniqueID();
-			m_curRoadType = i;
-			if (loadBuffers) loadRoadsInVertexAndIndexBuffers();
-			if (m_roadTypes[i].getNumIndices() == 0) continue;
-			if (wireframe) {
-				m_roadTypes[i].applyTexture();
-				WW3D::Get_Render_Backend()->Set_Texture(0,nullptr);
-			} else {
-				m_roadTypes[i].applyTexture();
-			}
-	#ifdef RTS_DEBUG
-			// The backend applies the detail shader through the neutral render interface.
-	#endif
-			for (Int pass=0; pass < devicePasses; pass++)
-			{
-				if (!wireframe)
-		 			W3DShaderManager::setShader(st, pass);
-				//Draw all this road type.
-				IRenderBackend *backend = WW3D::Get_Render_Backend();
-				if (backend != nullptr) {
-					backend->Draw_Indexed_Primitives(RenderBackendPrimitiveType::TriangleList,
-						0, 0, m_roadTypes[i].getNumVertices(), 0,
-						m_roadTypes[i].getNumIndices()/3);
-				}
-#ifdef LOG_STATS
-				polys += m_roadTypes[i].getNumIndices()/3;
-#endif
-			}
-
-			if (!wireframe)	//shader was applied at least once?
- 				W3DShaderManager::resetShader(st);
-		}
-	}
-#ifdef LOG_STATS
-	if (loadBuffers) {
-		DEBUG_LOG(("Road poly count %d", polys));
-	}
-#endif
-
-#if 0
-	// Need to use a separate set of index & vertex buffers for this.  jba.
-	WW3D::Get_Render_Backend()->Set_Index_Buffer(nullptr,0);
-	WW3D::Get_Render_Backend()->Set_Vertex_Buffer(nullptr);
-	if (pDynamicLightsIterator) {
-		for (i=0; i<m_maxRoadTypes; i++) {
-			m_curRoadType = i;
-			m_curUniqueID = m_roadTypes[i].getUniqueID();
-			if (m_curUniqueID < 0 || m_curUniqueID >= m_maxRoadTypes) continue;
-			loadLitRoadsInVertexAndIndexBuffers(pDynamicLightsIterator);
-			if (this->m_curNumRoadIndices == 0) continue;
-			if (wireframe) {
-					WW3D::Get_Render_Backend()->Set_Texture(0,nullptr);
-			} else {
-				m_roadTypes[i].applyTexture();
-				if (cloudTexture) {
-					WW3D::Get_Render_Backend()->Set_Texture(1,cloudTexture);
-				}
-			}
-			WW3D::Get_Render_Backend()->Set_Shader(detailAlphaShader);
-			//Draw all the roads.
-			WW3D::Get_Render_Backend()->Draw_Indexed_Primitives(
-				RenderBackendPrimitiveType::TriangleList, 0, 0,
-				m_curNumRoadVertices, 0, m_curNumRoadIndices / 3);
-		}
-	}
-#endif
-	m_curRoadType = 0;
+    if (camera == nullptr || !m_initialized) return;
+    auto *device = Graphics::Shared_Frame_Device();
+    if (device == nullptr) return;
+    IRegion2D bounds;
+    bounds.lo.x = minX * MAP_XY_FACTOR;
+    bounds.hi.x = maxX * MAP_XY_FACTOR;
+    bounds.lo.y = minY * MAP_XY_FACTOR;
+    bounds.hi.y = maxY * MAP_XY_FACTOR;
+    const bool loadBuffers = m_updateBuffers && visibilityChanged(bounds);
+    m_updateBuffers = false;
+    Int maxStacking = 0;
+    for (Int index = 0; index < m_maxRoadTypes; ++index)
+        maxStacking = std::max(maxStacking, m_roadTypes[index].getStacking());
+    auto parameters = Make_Surface_Parameters(*camera);
+    constexpr float stretch = 1.0f / (63.0f * MAP_XY_FACTOR / 2.0f);
+    parameters.lightmap_projection = {stretch, stretch, 0, 0};
+    if (cloudTexture != nullptr) {
+        const auto *cloud = static_cast<CloudMapTerrainTextureClass *>(cloudTexture);
+        parameters.cloud_projection = {stretch, stretch, cloud->Get_X_Offset(), cloud->Get_Y_Offset()};
+    }
+    parameters.textured = wireframe ? 0 : 1;
+    parameters.cloud = !wireframe && cloudTexture != nullptr ? 1 : 0;
+    parameters.lightmap = !wireframe && noiseTexture != nullptr ? 1 : 0;
+    std::array<Graphics::RHITextureHandle, 3> textures{
+        Graphics::RHITextureHandle{}, Resolve_Graphics_Texture(cloudTexture), Resolve_Graphics_Texture(noiseTexture)};
+    const bool filtered = TheGlobalData->m_bilinearTerrainTex || TheGlobalData->m_trilinearTerrainTex;
+    auto &renderer = Graphics::Get_Surface_Renderer();
+    auto &commands = device->Immediate_Command_List();
+    for (Int stacking = 0; stacking <= maxStacking; ++stacking) {
+        for (Int index = 0; index < m_maxRoadTypes; ++index) {
+            RoadType &road = m_roadTypes[index];
+            if (road.getStacking() != stacking) continue;
+            m_curUniqueID = road.getUniqueID();
+            m_curRoadType = index;
+            if (loadBuffers) loadRoadsInVertexAndIndexBuffers();
+            if (road.getNumIndices() == 0) continue;
+            textures[0] = Resolve_Graphics_Texture(road.getTexture());
+            const bool drawn = Graphics::Draw_Road(renderer, commands, road.getMesh(), parameters, textures, filtered);
+            if (!drawn) DEBUG_LOG(("Road graphics submission failed.\n"));
+        }
+    }
+    m_curRoadType = 0;
+    WW3D::Get_Render_Backend()->Invalidate_Cached_Render_States();
 }
 
 

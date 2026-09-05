@@ -31,7 +31,11 @@
 
 #include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
 
+#include <cstdint>
 #include <vector>
+
+import Engine.UI.WND;
+import Graphics.Renderer2D;
 
 #include "Common/Debug.h"
 #include "Common/Language.h"
@@ -88,6 +92,106 @@ static Int scaleWindowValue(Int value, Real scale)
 {
 	const Real scaled = static_cast<Real>(value) * scale;
 	return scaled >= 0.0f ? static_cast<Int>(scaled + 0.5f) : static_cast<Int>(scaled - 0.5f);
+}
+
+namespace
+{
+
+Engine::UI::WND::RenderList wndRenderList(WIN_MAX_WINDOWS);
+Engine::UI::WND::Renderer wndRenderer;
+
+bool invokeWNDDataBorder(
+	void *,
+	void *windowPointer,
+	void *instanceDataPointer,
+	Engine::UI::WND::DrawList &draw_list) noexcept
+{
+	if (TheWindowManager == nullptr || windowPointer == nullptr)
+		return false;
+	const GameWinDrawDataFunc extract = TheWindowManager->getBorderDrawDataFunc();
+	return extract != nullptr
+		&& extract(
+			static_cast<GameWindow *>(windowPointer),
+			static_cast<WinInstanceData *>(instanceDataPointer),
+			&draw_list) != FALSE;
+}
+
+bool invokeWNDExtract(
+	void *,
+	void *windowPointer,
+	void *instanceDataPointer,
+	Engine::UI::WND::DrawList &draw_list) noexcept
+{
+	if (TheWindowManager == nullptr || windowPointer == nullptr)
+		return false;
+	GameWindow *window = static_cast<GameWindow *>(windowPointer);
+	const GameWinDrawDataFunc extract =
+		window->winGetDrawFunc();
+	return extract != nullptr
+		&& extract(window, static_cast<WinInstanceData *>(instanceDataPointer), &draw_list) != FALSE;
+}
+
+void *nextWNDWindow(void *, void *window) noexcept
+{
+	return window != nullptr ? static_cast<GameWindow *>(window)->winGetNext() : nullptr;
+}
+
+void *childWNDWindow(void *, void *window) noexcept
+{
+	return window != nullptr ? static_cast<GameWindow *>(window)->winGetChild() : nullptr;
+}
+
+bool describeWNDWindow(
+	void *,
+	void *windowPointer,
+	Engine::UI::WND::RenderNode &node) noexcept
+{
+	GameWindow *window = static_cast<GameWindow *>(windowPointer);
+	if (window == nullptr)
+		return false;
+
+	node.instance_data = window->winGetInstanceData();
+	// The device adapter resolves every production callback to WND draw data.
+	node.extract = &invokeWNDExtract;
+	if (TheWindowManager != nullptr && TheWindowManager->getBorderDrawDataFunc() != nullptr)
+		node.extract_border = &invokeWNDDataBorder;
+	node.layer = BitIsSet(window->winGetStatus(), WIN_STATUS_BELOW)
+		? Engine::UI::WND::Layer::Below
+		: BitIsSet(window->winGetStatus(), WIN_STATUS_ABOVE)
+		? Engine::UI::WND::Layer::Above
+			: Engine::UI::WND::Layer::Normal;
+	WinInstanceData *instance_data = window->winGetInstanceData();
+	node.visual_state = Engine::UI::WND::Resolve_Visual_State(
+		BitIsSet(window->winGetStatus(), WIN_STATUS_ENABLED),
+		instance_data != nullptr && BitIsSet(instance_data->getState(), WIN_STATE_HILITED),
+		instance_data != nullptr && BitIsSet(instance_data->getState(), WIN_STATE_SELECTED));
+
+	if (BitIsSet(window->winGetStatus(), WIN_STATUS_HIDDEN))
+		node.flags |= static_cast<std::uint32_t>(Engine::UI::WND::WindowFlag::Hidden);
+	if (BitIsSet(window->winGetStatus(), WIN_STATUS_SEE_THRU))
+		node.flags |= static_cast<std::uint32_t>(Engine::UI::WND::WindowFlag::SeeThrough);
+	if (BitIsSet(window->winGetStatus(), WIN_STATUS_BORDER))
+		node.flags |= static_cast<std::uint32_t>(Engine::UI::WND::WindowFlag::Border);
+	if (BitIsSet(window->winGetStyle(), GWS_SCROLL_LISTBOX)
+		|| (TheWindowManager != nullptr
+			&& (window->winGetDrawFunc() == TheWindowManager->getTabControlDrawFunc()
+				|| window->winGetDrawFunc() == TheWindowManager->getTabControlImageDrawFunc())))
+		node.flags |= static_cast<std::uint32_t>(Engine::UI::WND::WindowFlag::BorderBeforeChildren);
+
+	ICoord2D position;
+	ICoord2D size;
+	window->winGetScreenPosition(&position.x, &position.y);
+	window->winGetSize(&size.x, &size.y);
+	node.screen_region = {position.x, position.y, position.x + size.x, position.y + size.y};
+	return true;
+}
+
+bool buildWNDRenderList(Engine::UI::WND::RenderList &list, GameWindow *window_head) noexcept
+{
+	return Engine::UI::WND::Build_Render_List(list, window_head,
+		{nullptr, &nextWNDWindow, &childWNDWindow, &describeWNDWindow});
+}
+
 }
 
 static void collectWindowSizeSnapshots(GameWindow *window, std::vector<WindowSizeSnapshot> &snapshots)
@@ -226,7 +330,6 @@ GameWindowManager::GameWindowManager()
 
 	m_cursorBitmap = nullptr;
 	m_captureFlags = 0;
-
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -1295,90 +1398,15 @@ GameWindow* GameWindowManager::findWindowUnderMouse(GameWindow*& toolTipWindow, 
 }
 
 //-------------------------------------------------------------------------------------------------
-/** Draw a window and its children, in parent-first order.
-	* Children's coordinates are relative to their parents.
-	* Note that hidden windows automatically will not draw any
-	* of their children ... but see-thru windows only will not
-	* draw themselves, but will give their children an
-	* opportunity to draw */
-//-------------------------------------------------------------------------------------------------
-Int GameWindowManager::drawWindow( GameWindow *window )
-{
-	GameWindow *child;
-
-	if( window == nullptr )
-		return WIN_ERR_INVALID_WINDOW;
-
-	if( BitIsSet( window->m_status, WIN_STATUS_HIDDEN ) == FALSE )
-	{
-
-		if( !BitIsSet( window->m_status, WIN_STATUS_SEE_THRU ) && window->m_draw )
-			window->m_draw( window, &window->m_instData );
-
-		/// @todo visit list boxes and borders, this is stupid!
-		// for list boxes only draw the borders BEFORE the children
-		if( BitIsSet( window->winGetStyle(), GWS_SCROLL_LISTBOX ) )
-			if( BitIsSet( window->m_status, WIN_STATUS_BORDER ) == TRUE &&
-					!BitIsSet( window->m_status, WIN_STATUS_SEE_THRU ) )
-				window->winDrawBorder();
-
-		// draw children in reverse order just like the window list
-		child = window->m_child;
-		while( child && child->m_next )
-			child = child->m_next;
-
-		for( ; child; child = child->m_prev )
-				drawWindow( child );
-
-		//
-		// draw the border for the window AFTER the window contents AND the
-		// children contents have drawn
-		//
-		if( !BitIsSet( window->winGetStyle(), GWS_SCROLL_LISTBOX ) )
-			if( BitIsSet( window->m_status, WIN_STATUS_BORDER ) == TRUE &&
-					!BitIsSet( window->m_status, WIN_STATUS_SEE_THRU ) )
-				window->winDrawBorder();
-
-	}
-
-	return WIN_ERR_OK;
-
-}
-
-//-------------------------------------------------------------------------------------------------
 /** Draw the GUI in reverse order to correlate with clicking priority */
 //-------------------------------------------------------------------------------------------------
 void GameWindowManager::winRepaint()
 {
-	GameWindow *window, *next;
+	if (!buildWNDRenderList(wndRenderList, m_windowList))
+		return;
 
-	// draw below windows
-	for( window = m_windowTail; window; window = next )
-	{
-		next = window->m_prev;
-
-		if( BitIsSet( window->m_status, WIN_STATUS_BELOW ) )
-			drawWindow( window );
-	}
-
-	// draw non-above and non-below windows
-	for( window = m_windowTail; window; window = next )
-	{
-		next = window->m_prev;
-
-		if (BitIsSet( window->m_status, WIN_STATUS_ABOVE |
-																	 WIN_STATUS_BELOW ) == FALSE)
-			drawWindow( window );
-	}
-
-	// draw above windows
-	for( window = m_windowTail; window; window = next )
-	{
-		next = window->m_prev;
-
-		if( BitIsSet( window->m_status, WIN_STATUS_ABOVE ) )
-			drawWindow( window );
-	}
+	if (!wndRenderer.Render(wndRenderList, Graphics::Get_Renderer2D()))
+		return;
 
 	if(TheTransitionHandler)
 		TheTransitionHandler->draw();

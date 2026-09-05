@@ -38,6 +38,7 @@ public:
 	~DX11BackendRuntime();
 
 	static DX11BackendRuntime *Create(void *window, bool lite);
+	bool Get_Shared_Texture_Resources(RenderBackendTextureHandle texture, void *&resource, void *&view) const noexcept;
 	bool Get_Shared_Frame_Resources(DX11SharedFrameResources &resources) const noexcept;
 
 protected:

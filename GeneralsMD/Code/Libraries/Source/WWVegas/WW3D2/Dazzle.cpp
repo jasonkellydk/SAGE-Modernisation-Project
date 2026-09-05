@@ -38,6 +38,8 @@
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 
+#include "GraphicsGeometry.h"
+#include <vector>
 #include "Dazzle.h"
 #include "WWLib/simplevec.h"
 #include "WWMath/vector2.h"
@@ -1070,10 +1072,9 @@ void DazzleRenderObjClass::Render_Dazzle(CameraClass* camera)
 		lens_max_verts=4*lensflare->lic.flare_count;
 	}
 
-	DynamicVBAccessClass vb_access(BUFFER_TYPE_DYNAMIC_RENDER,RenderBackend_Dynamic_Vertex_Format,vertex_count*2+lens_max_verts);
+	std::vector<VertexFormatXYZNDUV2> geometry(vertex_count*2+lens_max_verts);
 	{
-		DynamicVBAccessClass::WriteLockClass lock(&vb_access);
-		VertexFormatXYZNDUV2* verts=lock.Get_Formatted_Vertex_Array();
+		VertexFormatXYZNDUV2* verts=geometry.data();
 
 		float halo_size=1.0f;
 
@@ -1201,51 +1202,24 @@ void DazzleRenderObjClass::Render_Dazzle(CameraClass* camera)
 		return;
 	}
 
-	WW3D::Get_Render_Backend()->Set_Vertex_Buffer(vb_access);
-
-	DynamicIBAccessClass ib_access(BUFFER_TYPE_DYNAMIC_RENDER,poly_count*3);
-	{
-		DynamicIBAccessClass::WriteLockClass lock(&ib_access);
-		unsigned short* inds=lock.Get_Index_Array();
-
-		// Proceed two polygons at a time
-		for (int a=0;a<poly_count/2;a++) {
-			*inds++=short(4*a);
-			*inds++=short(4*a+1);
-			*inds++=short(4*a+2);
-			*inds++=short(4*a);
-			*inds++=short(4*a+2);
-			*inds++=short(4*a+3);
-		}
-	}
-
-	WW3D::Get_Render_Backend()->Set_World_Identity();
-	WW3D::Get_Render_Backend()->Set_View_Identity();
-	WW3D::Get_Render_Backend()->Set_Transform(RenderBackendTransform::Projection,Matrix4x4(true));
-
-	if (halo_poly_count) {
-		WW3D::Get_Render_Backend()->Set_Index_Buffer(ib_access,dazzle_vertex_count);
-		WW3D::Get_Render_Backend()->Set_Shader(default_halo_shader);
-		WW3D::Get_Render_Backend()->Set_Texture(0,types[type]->Get_Halo_Texture());
-		WW3D::Get_Render_Backend()->Draw_Indexed_Primitives(
-			RenderBackendPrimitiveType::TriangleList, 0, 0, vertex_count, 0, halo_poly_count);
-	}
-
-	if (dazzle_poly_count) {
-		WW3D::Get_Render_Backend()->Set_Index_Buffer(ib_access,0);
-		WW3D::Get_Render_Backend()->Set_Shader(default_dazzle_shader);
-		WW3D::Get_Render_Backend()->Set_Texture(0,types[type]->Get_Dazzle_Texture());
-		WW3D::Get_Render_Backend()->Draw_Indexed_Primitives(
-			RenderBackendPrimitiveType::TriangleList, 0, 0, vertex_count, 0, dazzle_poly_count);
-	}
-
-	if (lensflare_poly_count) {
-		WW3D::Get_Render_Backend()->Set_Index_Buffer(ib_access,dazzle_vertex_count+halo_vertex_count);
-		WW3D::Get_Render_Backend()->Set_Shader(default_dazzle_shader);
-		WW3D::Get_Render_Backend()->Set_Texture(0,lensflare->Get_Texture());
-		WW3D::Get_Render_Backend()->Draw_Indexed_Primitives(
-			RenderBackendPrimitiveType::TriangleList, 0, 0, vertex_count, 0, lensflare_poly_count);
-	}
+    const auto draw = [&](unsigned offset,unsigned count,ShaderClass shader,TextureClass* texture) {
+        std::vector<VertexFormatXYZDUV1> vertices(count);
+        for (unsigned i=0; i<count; ++i) {
+            const auto& input=geometry[offset+i];
+            auto& output=vertices[i];
+            output.x=input.x; output.y=input.y; output.z=input.z;
+            output.diffuse=input.diffuse; output.u1=input.u1; output.v1=input.v1;
+        }
+        std::vector<unsigned> indices(count/4*6);
+        for (unsigned i=0; i<count/4; ++i) {
+            indices[i*6]=i*4; indices[i*6+1]=i*4+1; indices[i*6+2]=i*4+2;
+            indices[i*6+3]=i*4; indices[i*6+4]=i*4+2; indices[i*6+5]=i*4+3;
+        }
+        return Draw_Graphics_Prelit_Geometry(vertices,indices,Matrix4x4(true),shader,texture);
+    };
+    if (halo_vertex_count) draw(dazzle_vertex_count,halo_vertex_count,default_halo_shader,types[type]->Get_Halo_Texture());
+    if (dazzle_vertex_count) draw(0,dazzle_vertex_count,default_dazzle_shader,types[type]->Get_Dazzle_Texture());
+    if (lensflare_vertex_count) draw(dazzle_vertex_count+halo_vertex_count,lensflare_vertex_count,default_dazzle_shader,lensflare->Get_Texture());
 
 	WW3D::Get_Render_Backend()->Set_Transform(RenderBackendTransform::Projection,old_projection_transform);
 	WW3D::Get_Render_Backend()->Set_Transform(RenderBackendTransform::View,old_view_transform);

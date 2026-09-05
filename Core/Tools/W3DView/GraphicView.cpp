@@ -23,6 +23,9 @@
 #include "W3DView.h"
 #include "GraphicView.h"
 #include "WW3D2/WW3D.h"
+#ifdef RTS_ZEROHOUR
+#include "WW3D2/GraphicsToolFrame.h"
+#endif
 #include "Globals.h"
 #include "W3DViewDoc.h"
 #include <process.h>
@@ -58,7 +61,7 @@ static char THIS_FILE[] = __FILE__;
 /////////////////////////////////////////////////////////////////////////
 //  Local Prototypes
 /////////////////////////////////////////////////////////////////////////
-void CALLBACK fnTimerCallback (UINT, UINT, DWORD, DWORD, DWORD);
+void CALLBACK fnTimerCallback (UINT, UINT, DWORD_PTR, DWORD_PTR, DWORD_PTR);
 
 
 IMPLEMENT_DYNCREATE(CGraphicView, CView)
@@ -257,7 +260,7 @@ CGraphicView::InitializeGraphicView ()
 		m_TimerID = (UINT)::timeSetEvent (freq,
 													 freq,
 													 fnTimerCallback,
-													 (DWORD)m_hWnd,
+													 (DWORD_PTR)m_hWnd,
 													 TIME_PERIODIC);
     }
 
@@ -500,7 +503,15 @@ CGraphicView::RepaintView
 		//
 		//	Render the background BMP
 		//
+#ifdef RTS_ZEROHOUR
+        if (!Begin_Graphics_Tool_Frame()) return;
+        if (WW3D::Begin_Render(TRUE, TRUE, doc->GetBackgroundColor()) != WW3D_ERROR_OK) {
+            Abort_Graphics_Tool_Frame();
+            return;
+        }
+#else
 		WW3D::Begin_Render (TRUE, TRUE, doc->GetBackgroundColor ());
+#endif
 		WW3D::Render (doc->Get2DScene (), doc->Get2DCamera (), FALSE, FALSE);
 
 		//
@@ -531,8 +542,13 @@ CGraphicView::RepaintView
 		// Render the dazzles
 		doc->Render_Dazzles(m_pCamera.Peek());
 
-		// Finish out the rendering process
-		WW3D::End_Render ();
+        // Finish out the rendering process
+#ifdef RTS_ZEROHOUR
+        WW3D::End_Render(false);
+        if (!End_Graphics_Tool_Frame()) DEBUG_LOG(("Viewer frame submission failed.\n"));
+#else
+        WW3D::End_Render();
+#endif
 
 		//
 		//	Let the audio class think
@@ -670,9 +686,9 @@ fnTimerCallback
 (
 	UINT uID,
 	UINT uMsg,
-	DWORD dwUser,
-	DWORD dw1,
-	DWORD dw2
+	DWORD_PTR dwUser,
+	DWORD_PTR dw1,
+	DWORD_PTR dw2
 )
 {
 	HWND hwnd = (HWND)dwUser;

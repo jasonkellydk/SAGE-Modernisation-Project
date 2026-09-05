@@ -69,6 +69,8 @@
 
 
 #include "SphereObj.h"
+#include <vector>
+#include "WW3D2/GraphicsMaterial.h"
 #include "W3DUtil.h"
 #include "WWDebug/wwdebug.h"
 #include "VertMaterial.h"
@@ -468,66 +470,40 @@ void SphereRenderObjClass::render_sphere()
 	} else {
 		SphereShader.Set_Texturing (ShaderClass::TEXTURING_DISABLE);
 	}
-	WW3D::Get_Render_Backend()->Set_Shader(SphereShader);
-	WW3D::Get_Render_Backend()->Set_Texture(0,SphereTexture);
-	WW3D::Get_Render_Backend()->Set_Material(SphereMaterial);
-
-	// Enable sorting if the primitive is translucent, alpha testing is not enabled, and sorting is enabled globally.
-	const bool sort = (SphereShader.Get_Dst_Blend_Func() != ShaderClass::DSTBLEND_ZERO) && (SphereShader.Get_Alpha_Test() == ShaderClass::ALPHATEST_DISABLE) && (WW3D::Is_Sorting_Enabled());
- 	const unsigned int buffer_type = sort ? BUFFER_TYPE_DYNAMIC_SORTING : BUFFER_TYPE_DYNAMIC_RENDER;
-
-	DynamicVBAccessClass vb(buffer_type, RenderBackend_Dynamic_Vertex_Format, mesh.Vertex_ct);
-	{
-		DynamicVBAccessClass::WriteLockClass Lock(&vb);
-		VertexFormatXYZNDUV2 *vb = Lock.Get_Formatted_Vertex_Array();
-
-		for (int i=0; i<mesh.Vertex_ct; i++)
-		{
-			vb->x = mesh.vtx[i].X;
-			vb->y = mesh.vtx[i].Y;
-			vb->z = mesh.vtx[i].Z;
-
-			vb->nx = mesh.vtx_normal[i].X;		// may not need this!
-			vb->ny = mesh.vtx_normal[i].Y;
-			vb->nz = mesh.vtx_normal[i].Z;
-
-			if (Flags & USE_ALPHA_VECTOR) {
-				vb->diffuse = WW3D::Get_Render_Backend()->Pack_Color(mesh.dcg[i]);
-			} else {
-				vb->diffuse = 0xFFFFFFFF;		// TODO could combine the material color with this and turn off lighting
-			}
-
-			if (SphereTexture) {
-				vb->u1 = mesh.vtx_uv[i].X;
-				vb->v1 = mesh.vtx_uv[i].Y;
-			}
-			vb++;
-		}
-	}
-
-	DynamicIBAccessClass ib(buffer_type, mesh.face_ct*3);
-	{
-		DynamicIBAccessClass::WriteLockClass Lock(&ib);
-		unsigned short *mem=Lock.Get_Index_Array();
-		for (int i=0; i<mesh.face_ct; i++)
-		{
-			mem[3*i]=mesh.tri_poly[i].I;
-			mem[3*i+1]=mesh.tri_poly[i].J;
-			mem[3*i+2]=mesh.tri_poly[i].K;
-		}
-	}
-
-	WW3D::Get_Render_Backend()->Set_Vertex_Buffer(vb);
-	WW3D::Get_Render_Backend()->Set_Index_Buffer(ib,0);
-
-	if (sort) {
-		SortingRendererClass::Insert_Triangles(Get_Bounding_Sphere(), 0, mesh.face_ct, 0, mesh.Vertex_ct);
-	} else {
-		WW3D::Get_Render_Backend()->Draw_Indexed_Primitives(
-			RenderBackendPrimitiveType::TriangleList, 0, 0,
-			mesh.Vertex_ct, 0, mesh.face_ct);
-	}
-
+    // The sphere material is emissive: lighting does not multiply its RGB by
+    // the vertex color. Preserve material opacity separately from color0.
+    const auto vertex_material = Describe_Graphics_Vertex_Material(SphereMaterial);
+    std::vector<Graphics::PropVertex> vertices(mesh.Vertex_ct);
+    for (int i=0;i<mesh.Vertex_ct;++i) {
+        auto& vertex=vertices[i];
+        vertex.position={mesh.vtx[i].X,mesh.vtx[i].Y,mesh.vtx[i].Z};
+        vertex.normal={mesh.vtx_normal[i].X,mesh.vtx_normal[i].Y,mesh.vtx_normal[i].Z};
+        if (Flags & USE_ALPHA_VECTOR)
+            vertex.color={mesh.dcg[i].X,mesh.dcg[i].Y,mesh.dcg[i].Z,mesh.dcg[i].W};
+        if (vertex_material) Graphics::Apply_Prop_Material(vertex,*vertex_material);
+        if (SphereTexture) vertex.uv={mesh.vtx_uv[i].X,mesh.vtx_uv[i].Y};
+    }
+    std::vector<unsigned> indices;
+    indices.reserve(mesh.face_ct*3);
+    for (int i=0;i<mesh.face_ct;++i) {
+        indices.push_back(mesh.tri_poly[i].I);
+        indices.push_back(mesh.tri_poly[i].J);
+        indices.push_back(mesh.tri_poly[i].K);
+    }
+    Matrix4x4 world,view,projection;
+    auto* backend=WW3D::Get_Render_Backend();
+    backend->Get_Transform(RenderBackendTransform::World,world);
+    backend->Get_Transform(RenderBackendTransform::View,view);
+    backend->Get_Transform(RenderBackendTransform::Projection,projection);
+    const Matrix4x4 camera_transform=view*world;
+    const bool sort=SphereShader.Get_Dst_Blend_Func()!=ShaderClass::DSTBLEND_ZERO
+        && SphereShader.Get_Alpha_Test()==ShaderClass::ALPHATEST_DISABLE && WW3D::Is_Sorting_Enabled();
+    Graphics::PropParameters parameters;
+    for (unsigned row=0;row<4;++row)
+        for (unsigned column=0;column<4;++column)
+            parameters.view[row*4+column]=camera_transform[row][column];
+    Draw_Graphics_Material_Geometry(vertices,indices,projection*camera_transform,
+        SphereShader,{SphereTexture,nullptr},parameters,sort ? &camera_transform : nullptr);
 }
 
 

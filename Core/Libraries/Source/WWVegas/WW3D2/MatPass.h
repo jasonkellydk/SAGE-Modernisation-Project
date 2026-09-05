@@ -60,6 +60,8 @@ class OBBoxClass;
 **
 **
 */
+struct GraphicsMaterialPassDescription;
+
 class MaterialPassClass : public RefCountClass
 {
 public:
@@ -67,9 +69,7 @@ public:
 	MaterialPassClass();
 	virtual ~MaterialPassClass() override;
 
-	/// MW: Had to make this virtual so app can perform direct/custom material setup.
-	virtual void	Install_Materials() const;
-	virtual void	UnInstall_Materials() const { };
+    virtual bool Describe_Graphics_Pass(GraphicsMaterialPassDescription& description) const;
 
 	void							Set_Texture(TextureClass * Texture,int stage = 0);
 	void							Set_Shader(ShaderClass shader);

@@ -10,6 +10,9 @@
 
 #pragma once
 
+#include <array>
+#include <span>
+#include <vector>
 #include "WWLib/always.h"
 #include "WW3D2/Backend/RenderBackend.h"
 #include "WW3D2/W3DFile.h"
@@ -28,7 +31,7 @@ class TextureBaseClass;
 class WaterTracksRenderSystem;
 class WaterSkyboxSystem;
 
-// Modern water render system. It is submitted explicitly by RTS3DScene after
+// Water render system. It is submitted explicitly by RTS3DScene after
 // opaque scene rendering; it is not a legacy RenderObjClass scene node.
 class WaterRenderSystem
 {
@@ -83,19 +86,11 @@ protected:
 	Bool m_useCloudLayer;
 	WaterType m_waterType;
 
-	RenderBackendVertexBuffer *m_vertexBuffer;
-	RenderBackendIndexBuffer *m_gridIndexBuffer;
-	Int m_vertexBufferOffset;
-	struct WaterOceanVertex
-	{
-		float x, y, z;
-		unsigned int c;
-		float tu, tv;
-	};
-	RenderBackendVertexBuffer *m_surfaceVertexBuffer;
-	RenderBackendIndexBuffer *m_surfaceIndexBuffer;
-	unsigned m_surfaceVertexCapacity;
-	unsigned m_surfaceIndexCapacity;
+    std::vector<WaterSurfaceVertex> m_gridVertices;
+    std::vector<UnsignedShort> m_gridIndices;
+    Graphics::WaterMeshHandle m_gridMesh;
+    Graphics::WaterMeshHandle m_surfaceMesh;
+    Graphics::WaterMeshHandle m_displacementMesh;
 
 	Int m_numVertices;
 	Int m_numIndices;
@@ -162,7 +157,6 @@ protected:
 	bool generateIndexBuffer(int sizeX, int sizeY);
 	bool generateVertexBuffer(Int sizeX, Int sizeY, Bool doFill);
 	std::uint32_t getSurfaceDiffuse(bool reduce_alpha) const;
-	bool ensureSurfaceGeometryBuffers(unsigned vertex_count, unsigned index_count);
 	bool uploadSurfaceGeometry(const WaterSurfaceVertex *vertices,
 		unsigned vertex_count, const UnsignedShort *indices, unsigned index_count);
 };

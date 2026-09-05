@@ -47,6 +47,7 @@
 
 
 #include "MatPass.h"
+#include "WW3D2/GraphicsMaterialPass.h"
 #include "WW3D.h"
 #include "VertMaterial.h"
 #include "Shader.h"
@@ -116,14 +117,11 @@ MaterialPassClass::~MaterialPassClass()
  *   12/9/99    gth : Created.                                                                 *
  *   2/26/2001  gth : Changed to Install_Materials                                             *
  *=============================================================================================*/
-void MaterialPassClass::Install_Materials() const
+bool MaterialPassClass::Describe_Graphics_Pass(GraphicsMaterialPassDescription& description) const
 {
-	WW3D::Get_Render_Backend()->Set_Material(Peek_Material());
-	WW3D::Get_Render_Backend()->Set_Shader(Peek_Shader());
-	for (int i=0;i<WW3D::Get_Render_Backend()->Get_Max_Textures_Per_Pass();++i)
-	{
-		WW3D::Get_Render_Backend()->Set_Texture(i,Peek_Texture(i));
-	}
+    description.shader=Peek_Shader(); description.material=Peek_Material();
+    description.textures={Peek_Texture(0),Peek_Texture(1)};
+    return true;
 }
 
 

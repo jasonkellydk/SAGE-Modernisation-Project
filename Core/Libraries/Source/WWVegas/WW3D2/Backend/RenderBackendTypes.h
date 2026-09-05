@@ -235,6 +235,27 @@ enum class RenderBackendStencilOperation
 	Decrement
 };
 
+// CPU state snapshot for adapters that submit through another renderer.
+struct RenderBackendFogState
+{
+    bool enabled = false;
+    float color[4] = {0,0,0,1};
+    float start = 0;
+    float end = 1;
+};
+
+struct RenderBackendStencilState
+{
+    bool enabled = false;
+    unsigned reference = 0;
+    unsigned read_mask = 255;
+    unsigned write_mask = 255;
+    RenderBackendCompareFunction comparison = RenderBackendCompareFunction::Always;
+    RenderBackendStencilOperation fail = RenderBackendStencilOperation::Keep;
+    RenderBackendStencilOperation depth_fail = RenderBackendStencilOperation::Keep;
+    RenderBackendStencilOperation pass = RenderBackendStencilOperation::Keep;
+};
+
 enum class RenderBackendTextureOperation
 {
 	Disable,

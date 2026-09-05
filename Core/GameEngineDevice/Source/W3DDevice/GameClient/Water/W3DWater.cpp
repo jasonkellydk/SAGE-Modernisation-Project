@@ -33,7 +33,8 @@
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 
 #include "W3DDevice/GameClient/W3DWater.h"
-#include "W3DDevice/GameClient/HeightMap.h"
+#include "W3DDevice/GameClient/BaseHeightMap.h"
+#include "W3DDevice/GameClient/WorldHeightMap.h"
 #include "W3DDevice/GameClient/W3DShroud.h"
 #include "W3DDevice/GameClient/W3DWaterTracks.h"
 #include "W3DDevice/GameClient/WaterResources.h"
@@ -68,6 +69,7 @@
 #include <cstring>
 #include <vector>
 #include <SDL3/SDL.h>
+import Graphics.Scene.Lighting.Environment;
 
 
 
@@ -219,13 +221,6 @@ WaterRenderSystem::WaterRenderSystem()
 	m_renderingOffscreen=FALSE;
 	m_reflectionRenderer=nullptr;
 	m_skyBox=nullptr;
-	m_vertexBuffer=nullptr;
-	m_gridIndexBuffer=nullptr;
-	m_vertexBufferOffset=0;
-	m_surfaceVertexBuffer=nullptr;
-	m_surfaceIndexBuffer=nullptr;
-	m_surfaceVertexCapacity=0;
-	m_surfaceIndexCapacity=0;
 
 	m_riverVOrigin=0;
 	m_waterTime=0;
@@ -271,31 +266,11 @@ void WaterRenderSystem::Set_World_Position(Real x, Real y, Real z)
 
 void WaterRenderSystem::Rebuild_Grid_Geometry()
 {
-	if (!m_gridRenderData.enabled)
-		return;
-
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	if (backend == nullptr)
-		return;
-
-	if (m_vertexBuffer != nullptr)
-	{
-		backend->Release_Vertex_Buffer(m_vertexBuffer);
-		m_vertexBuffer = nullptr;
-	}
-	if (m_gridIndexBuffer != nullptr)
-	{
-		backend->Release_Index_Buffer(m_gridIndexBuffer);
-		m_gridIndexBuffer = nullptr;
-	}
-	m_numVertices = 0;
-	m_numIndices = 0;
-	m_vertexBufferOffset = 0;
-
-	generateIndexBuffer(m_gridRenderData.cells_x + 1,
-		m_gridRenderData.cells_y + 1);
-	generateVertexBuffer(m_gridRenderData.cells_x + 1,
-		m_gridRenderData.cells_y + 1, false);
+    m_gridVertices.clear();
+    m_gridIndices.clear();
+    m_numVertices = m_numIndices = 0;
+    generateIndexBuffer(m_gridRenderData.cells_x+1,m_gridRenderData.cells_y+1);
+    generateVertexBuffer(m_gridRenderData.cells_x+1,m_gridRenderData.cells_y+1,false);
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -303,62 +278,22 @@ void WaterRenderSystem::Rebuild_Grid_Geometry()
 //-------------------------------------------------------------------------------------------------
 bool WaterRenderSystem::generateVertexBuffer(Int sizeX, Int sizeY, Bool doStatic)
 {
-	m_numVertices = sizeX * sizeY;
-
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	if (backend == nullptr)
-	{
-		return false;
-	}
-
-	const RenderBackendVertexFormat format =
-		doStatic ? RenderBackendVertexFormat::PositionDiffuseTexture : WATER_MESH_FVF;
-	const unsigned vertex_size = doStatic ? sizeof(WaterOceanVertex) :
-		sizeof(WaterSurfaceVertex);
-	const unsigned usage = doStatic ? BUFFER_USAGE_DEFAULT : BUFFER_USAGE_DYNAMIC;
-	if (m_vertexBuffer == nullptr)
-	{
-		m_vertexBuffer = backend->Create_Vertex_Buffer(
-			static_cast<unsigned>(m_numVertices * vertex_size),
-			RenderBackend_Vertex_Layout(format), usage);
-	}
-	if (m_vertexBuffer == nullptr)
-	{
-		return false;
-	}
-
-	m_vertexBufferOffset = 0;
-	if (!doStatic)
-	{
-		return true;
-	}
-
-	void *data = nullptr;
-	if (!backend->Lock_Vertex_Buffer(m_vertexBuffer, 0,
-		static_cast<unsigned>(m_numVertices * vertex_size), &data,
-		RenderBackendBufferLockMode::Normal))
-	{
-		return false;
-	}
-
-	WaterOceanVertex *vertices = static_cast<WaterOceanVertex *>(data);
-	Setting *setting = &m_settings[m_tod];
-	for (Int z = 0; z < sizeY; ++z)
-	{
-		for (Int x = 0; x < sizeX; ++x)
-		{
-			vertices->x = static_cast<float>(x);
-			vertices->y = m_level;
-			vertices->z = static_cast<float>(z);
-			vertices->tu = static_cast<float>(x) * PATCH_UV_SCALE;
-			vertices->tv = static_cast<float>(z) * PATCH_UV_SCALE;
-			vertices->c = setting->transparentWaterDiffuse;
-			++vertices;
-		}
-	}
-
-	backend->Unlock_Vertex_Buffer(m_vertexBuffer);
-	return true;
+    if (sizeX < 2 || sizeY < 2 || sizeX > 65535/sizeY) return false;
+    m_numVertices = sizeX*sizeY;
+    m_gridVertices.resize(m_numVertices);
+    if (!doStatic) return true;
+    for (Int z=0;z<sizeY;++z) for (Int x=0;x<sizeX;++x) {
+        auto& vertex = m_gridVertices[z*sizeX+x];
+        vertex = {};
+        vertex.x = static_cast<float>(x);
+        vertex.y = m_level;
+        vertex.z = static_cast<float>(z);
+        vertex.nz = 1;
+        vertex.u1 = static_cast<float>(x)*PATCH_UV_SCALE;
+        vertex.v1 = static_cast<float>(z)*PATCH_UV_SCALE;
+        vertex.diffuse = m_settings[m_tod].transparentWaterDiffuse;
+    }
+    return Upload_Water_Geometry(m_gridMesh,m_gridVertices,m_gridIndices,true);
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -366,43 +301,10 @@ bool WaterRenderSystem::generateVertexBuffer(Int sizeX, Int sizeY, Bool doStatic
 //-------------------------------------------------------------------------------------------------
 bool WaterRenderSystem::generateIndexBuffer(Int sizeX, Int sizeY)
 {
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	if (backend == nullptr)
-	{
-		return false;
-	}
-
-	// Each row is a triangle strip and two extra indices connect adjacent rows.
-	m_numIndices = (sizeY - 1) * (sizeX * 2 + 2) - 2;
-	if (m_numIndices <= 0)
-	{
-		return false;
-	}
-
-	if (m_gridIndexBuffer != nullptr)
-	{
-		backend->Release_Index_Buffer(m_gridIndexBuffer);
-		m_gridIndexBuffer = nullptr;
-	}
-	m_gridIndexBuffer = backend->Create_Index_Buffer(
-		static_cast<unsigned>((m_numIndices + 2) * sizeof(UnsignedShort)),
-		BUFFER_USAGE_DEFAULT);
-	if (m_gridIndexBuffer == nullptr)
-	{
-		return false;
-	}
-
-	void *data = nullptr;
-	if (!backend->Lock_Index_Buffer(m_gridIndexBuffer, 0,
-		static_cast<unsigned>(m_numIndices * sizeof(UnsignedShort)), &data,
-		RenderBackendBufferLockMode::Normal))
-	{
-		backend->Release_Index_Buffer(m_gridIndexBuffer);
-		m_gridIndexBuffer = nullptr;
-		return false;
-	}
-
-	UnsignedShort *indices = static_cast<UnsignedShort *>(data);
+    if (sizeX < 2 || sizeY < 2 || sizeX > 65535/sizeY) return false;
+    m_numIndices = (sizeY-1)*(sizeX*2+2)-2;
+    m_gridIndices.resize(m_numIndices);
+    UnsignedShort* indices = m_gridIndices.data();
 	Int index = 0;
 	Int next_row_index = 0;
 	for (Int row = 0; index < m_numIndices; ++row)
@@ -421,14 +323,13 @@ bool WaterRenderSystem::generateIndexBuffer(Int sizeX, Int sizeY)
 		}
 	}
 
-	backend->Unlock_Index_Buffer(m_gridIndexBuffer);
-	return true;
+    return true;
 }
 
 std::uint32_t WaterRenderSystem::getSurfaceDiffuse(bool reduce_alpha) const
 {
 	// Surface water starts at the authored transparent-water opacity.  Keep the
-	// normal water RGB so the modern material still uses the time-of-day color,
+	// normal water RGB so the material still uses the time-of-day color,
 	// but do not seed the thickness interpolation with the opaque diffuse alpha.
 	const std::uint32_t diffuse =
 		m_settings[m_tod].waterDiffuse & 0x00ffffffu;
@@ -446,93 +347,14 @@ std::uint32_t WaterRenderSystem::getSurfaceDiffuse(bool reduce_alpha) const
  * river, trapezoid, or sky draw.  The buffers belong to the backend and are
  * deliberately independent from the old WW3D dynamic access classes.
  */
-bool WaterRenderSystem::ensureSurfaceGeometryBuffers(unsigned vertex_count,
-	unsigned index_count)
-{
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	if (backend == nullptr || vertex_count == 0 || index_count == 0 ||
-		vertex_count > 0xffffu)
-	{
-		return false;
-	}
 
-	if (m_surfaceVertexBuffer == nullptr ||
-		m_surfaceVertexCapacity < vertex_count)
-	{
-		if (m_surfaceVertexBuffer != nullptr)
-		{
-			backend->Release_Vertex_Buffer(m_surfaceVertexBuffer);
-			m_surfaceVertexBuffer = nullptr;
-		}
-		m_surfaceVertexCapacity = std::max(vertex_count,
-			m_surfaceVertexCapacity == 0 ? vertex_count :
-			m_surfaceVertexCapacity * 2u);
-		m_surfaceVertexBuffer = backend->Create_Vertex_Buffer(
-			m_surfaceVertexCapacity * sizeof(WaterSurfaceVertex),
-			RenderBackend_Vertex_Layout(WATER_MESH_FVF), BUFFER_USAGE_DYNAMIC);
-		if (m_surfaceVertexBuffer == nullptr)
-		{
-			m_surfaceVertexCapacity = 0;
-			return false;
-		}
-	}
-
-	if (m_surfaceIndexBuffer == nullptr || m_surfaceIndexCapacity < index_count)
-	{
-		if (m_surfaceIndexBuffer != nullptr)
-		{
-			backend->Release_Index_Buffer(m_surfaceIndexBuffer);
-			m_surfaceIndexBuffer = nullptr;
-		}
-		m_surfaceIndexCapacity = std::max(index_count,
-			m_surfaceIndexCapacity == 0 ? index_count :
-			m_surfaceIndexCapacity * 2u);
-		m_surfaceIndexBuffer = backend->Create_Index_Buffer(
-			m_surfaceIndexCapacity * sizeof(UnsignedShort), BUFFER_USAGE_DYNAMIC);
-		if (m_surfaceIndexBuffer == nullptr)
-		{
-			m_surfaceIndexCapacity = 0;
-			return false;
-		}
-	}
-
-	return true;
-}
 
 //-------------------------------------------------------------------------------------------------
-/** Uploads one complete modern water draw packet into the shared buffers. */
-bool WaterRenderSystem::uploadSurfaceGeometry(
-	const WaterSurfaceVertex *vertices, unsigned vertex_count,
-	const UnsignedShort *indices, unsigned index_count)
+/** Uploads one complete water draw packet into the shared buffers. */
+bool WaterRenderSystem::uploadSurfaceGeometry(const WaterSurfaceVertex* vertices, unsigned vertex_count,
+    const UnsignedShort* indices, unsigned index_count)
 {
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	if (vertices == nullptr || indices == nullptr ||
-		!ensureSurfaceGeometryBuffers(vertex_count, index_count))
-	{
-		return false;
-	}
-
-	void *vertex_data = nullptr;
-	if (!backend->Lock_Vertex_Buffer(m_surfaceVertexBuffer, 0,
-		vertex_count * sizeof(WaterSurfaceVertex), &vertex_data,
-		RenderBackendBufferLockMode::Discard))
-	{
-		return false;
-	}
-	std::memcpy(vertex_data, vertices,
-		vertex_count * sizeof(WaterSurfaceVertex));
-	backend->Unlock_Vertex_Buffer(m_surfaceVertexBuffer);
-
-	void *index_data = nullptr;
-	if (!backend->Lock_Index_Buffer(m_surfaceIndexBuffer, 0,
-		index_count * sizeof(UnsignedShort), &index_data,
-		RenderBackendBufferLockMode::Discard))
-	{
-		return false;
-	}
-	std::memcpy(index_data, indices, index_count * sizeof(UnsignedShort));
-	backend->Unlock_Index_Buffer(m_surfaceIndexBuffer);
-	return true;
+    return Upload_Water_Geometry(m_surfaceMesh,{vertices,vertex_count},{indices,index_count});
 }
 
 
@@ -550,32 +372,11 @@ void WaterRenderSystem::ReleaseResources()
 	REF_PTR_RELEASE(m_pDisplacementTexture);
 	m_renderingOffscreen = FALSE;
 
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	if (backend != nullptr)
-	{
-		if (m_vertexBuffer != nullptr)
-		{
-			backend->Release_Vertex_Buffer(m_vertexBuffer);
-			m_vertexBuffer = nullptr;
-		}
-		if (m_gridIndexBuffer != nullptr)
-		{
-			backend->Release_Index_Buffer(m_gridIndexBuffer);
-			m_gridIndexBuffer = nullptr;
-		}
-		if (m_surfaceVertexBuffer != nullptr)
-		{
-			backend->Release_Vertex_Buffer(m_surfaceVertexBuffer);
-			m_surfaceVertexBuffer = nullptr;
-		}
-		if (m_surfaceIndexBuffer != nullptr)
-		{
-			backend->Release_Index_Buffer(m_surfaceIndexBuffer);
-			m_surfaceIndexBuffer = nullptr;
-		}
-	}
-	m_surfaceVertexCapacity = 0;
-	m_surfaceIndexCapacity = 0;
+    auto& renderer = Graphics::Get_Water_Renderer();
+    for (auto mesh : {m_gridMesh,m_surfaceMesh,m_displacementMesh}) renderer.Destroy_Mesh(mesh);
+    m_gridMesh = m_surfaceMesh = m_displacementMesh = {};
+    m_gridVertices.clear();
+    m_gridIndices.clear();
 
 	if (m_waterTrackSystem)
 		m_waterTrackSystem->ReleaseResources();
@@ -615,8 +416,7 @@ void WaterRenderSystem::ReAcquireResources()
 
 	}
 
-	// The water type selects geometry only. Every mode uses the same modern
-	// reflection/refraction material contract.
+	// The water type selects geometry only. Every mode uses the same // reflection/refraction material contract.
 	m_pReflectionTexture = backend->Create_Render_Target(
 		SEA_REFLECTION_SIZE, SEA_REFLECTION_SIZE);
 	m_pDisplacementTexture = backend->Create_Render_Target(
@@ -702,7 +502,7 @@ Int WaterRenderSystem::init(Real waterLevel, Real dx, Real dy,
 	m_waterTime = 0.0f;
 
 	/// Hack for now
-	// WaterType now selects geometry only; the material is always modern.
+	// WaterType now selects geometry only; the material is always .
 
 	//
 	// assign the data from the WaterSettings[] global to the data for this
@@ -731,11 +531,11 @@ Int WaterRenderSystem::init(Real waterLevel, Real dx, Real dy,
 	m_waterNoiseTexture=Load_Water_Texture("Noise0000.dds");
 	m_waterOceanHeightTexture=Load_Water_Texture("wave256_height.dds");
 	m_waterOceanNormalTexture=Load_Water_Texture("wave256_normalmap.dds");
-	m_waterEnvironmentTexture=Load_Water_Texture("tsblueenv.dds");
+	m_waterEnvironmentTexture=Load_Water_Texture("WaterOceanEnvironment.tga");
 	m_waterCausticsTexture=Load_Water_Texture("caust00.tga");
 	m_waterDepthLutTexture = Create_Water_Depth_Lut_Texture();
 	m_riverAlphaEdge=Load_Water_Texture("TWAlphaEdge.dds");
-	m_waterSparklesTexture=Load_Water_Texture("WaterSurfaceBubbles.dds");
+	m_waterSparklesTexture=Load_Water_Texture("WaterOceanFoam.dds");
 #ifdef DRAW_WATER_WAKES
 	m_waterTrackSystem = NEW WaterTracksRenderSystem;
 	m_waterTrackSystem->init();
@@ -890,20 +690,18 @@ bool WaterRenderSystem::updateDisplacementTexture()
 
 	// The producer is a complete fullscreen programmable pass.  Its output
 	// is the RA3 OceanDisplacement field consumed by the ocean vertex shader.
-	struct WaterDisplacementQuadVertex
-	{
-		float x;
-		float y;
-		float z;
-		float w;
-		float u;
-		float v;
-	};
-	const WaterDisplacementQuadVertex quad[] = {
-		{-1.0f, -1.0f, 0.0f, 1.0f, 0.0f, 1.0f},
-		{-1.0f,  1.0f, 0.0f, 1.0f, 0.0f, 0.0f},
-		{ 1.0f, -1.0f, 0.0f, 1.0f, 1.0f, 1.0f},
-		{ 1.0f,  1.0f, 0.0f, 1.0f, 1.0f, 0.0f}};
+    if (!m_displacementMesh.Is_Valid()) {
+        WaterSurfaceVertex quad[4] = {};
+        const float xy[4][2] = {{-1,-1},{-1,1},{1,-1},{1,1}};
+        const float uv[4][2] = {{0,1},{0,0},{1,1},{1,0}};
+        for (unsigned i=0;i<4;++i) {
+            quad[i].x = xy[i][0]; quad[i].y = xy[i][1];
+            quad[i].u1 = uv[i][0]; quad[i].v1 = uv[i][1];
+            quad[i].diffuse = 0xffffffff;
+        }
+        const UnsignedShort indices[6] = {0,1,2,2,1,3};
+        if (!Upload_Water_Geometry(m_displacementMesh,quad,indices)) return false;
+    }
 
 	const WaterMaterialParameters parameters =
 		makeWaterMaterialParameters(false, false, false);
@@ -920,9 +718,7 @@ bool WaterRenderSystem::updateDisplacementTexture()
 		parameters.displacement_domain);
 	if (applied)
 	{
-		backend->Draw_Primitive_Up(RenderBackendPrimitiveType::TriangleStrip, 2,
-			quad, sizeof(WaterDisplacementQuadVertex),
-			RenderBackendVertexFormat::TransformedPositionTexture);
+		m_waterMaterial.Draw(m_displacementMesh);
 	}
 	m_waterMaterial.Reset();
 	return applied;
@@ -970,33 +766,15 @@ void WaterRenderSystem::renderMirror(CameraClass *cam)
 		m_pReflectionTexture == nullptr)
 		return;
 
-	Matrix3D	OldCameraMatrix=cam->Get_Transform();
-	Matrix4x4	FullMatrix4(cam->Get_Transform());	//copy 3x4 matrix into a 4x4
-	Vector3		WaterNormal(0,0,1);	//normal of plane used for reflection
-	Vector4		WaterPlane(WaterNormal.X,WaterNormal.Y,WaterNormal.Z,m_level);
-	Vector3		rRight,rUp,rN,rPos;	//orientation and translation vectors of camera
-
-	Matrix4x4	FullMatrix(FullMatrix4.Transpose());	//swap rows/columns
-
-	//reflect camera right vector
-	Real axis_distance=Vector3::Dot_Product((Vector3&)FullMatrix[0],WaterNormal);
-	rRight = (Vector3&)FullMatrix[0] - (2.0f*axis_distance*WaterNormal);
-
-	//reflect camera up vector
-	axis_distance=Vector3::Dot_Product((Vector3&)FullMatrix[1],WaterNormal);
-	rUp = (Vector3&)FullMatrix[1] - (2.0f*axis_distance*WaterNormal);
-
-	//reflect camera n vector
-	axis_distance=Vector3::Dot_Product((Vector3&)FullMatrix[2],WaterNormal);
-	rN = (Vector3&)FullMatrix[2] - (2.0f*axis_distance*WaterNormal);
-
-	//reflect camera position
-	axis_distance=Vector3::Dot_Product((Vector3&)FullMatrix[3],WaterNormal);	//distance cam to origin
-	axis_distance -= WaterPlane.W;	// subtract mirror plane distance to get distance camera to plane
-	rPos = (Vector3&)FullMatrix[3] - (2.0f*axis_distance*WaterNormal);
-
-	//generate a new camera matrix from reflected vectors
-	Matrix3D reflectedTransform(rRight,rUp,rN,rPos);
+	const Matrix3D OldCameraMatrix = cam->Get_Transform();
+	const Matrix4x4 camera_world(OldCameraMatrix);
+	const Graphics::WaterView water_view(
+		std::span<const float,16>(&camera_world[0][0],16),m_level);
+	const auto& reflected = water_view.reflected_camera;
+	Matrix3D reflectedTransform(
+		reflected[0],reflected[1],reflected[2],reflected[3],
+		reflected[4],reflected[5],reflected[6],reflected[7],
+		reflected[8],reflected[9],reflected[10],reflected[11]);
 
 	const RenderBackendCullMode old_cull_mode = backend->Get_Cull_Mode();
 	const RenderBackendCullMode reflected_cull_mode =
@@ -1017,17 +795,14 @@ void WaterRenderSystem::renderMirror(CameraClass *cam)
 	//Force reflected image to be drawn into full texture size - not a viewport inside texture.
 	Vector2 vMin,vMax,vOldMax,vOldMin;
  	cam->Get_Viewport(vOldMin,vOldMax);
-	const float old_aspect_ratio = cam->Get_Aspect_Ratio();
  	vMax.X=vMax.Y=1.0f;
 	vMin.X=vMin.Y=0.0f;
  	cam->Set_Viewport(vMin,vMax);
 	const RenderBackendViewport &pass_viewport =
 		reflection_pass.Get_Pass_Viewport();
-	if (pass_viewport.height != 0)
-	{
-		cam->Set_Aspect_Ratio(static_cast<float>(pass_viewport.width) /
-			static_cast<float>(pass_viewport.height));
-	}
+	// Projective sampling uses the main camera's normalized coordinates.
+	// Preserve its projection even when the reflection texture is square:
+	// target dimensions change sampling density, not the camera's field of view.
 
 	cam->Apply();	//force an update of all the camera dependent parameters like frustum clip planes
 	RenderBackendViewport reflected_viewport = pass_viewport;
@@ -1039,16 +814,18 @@ void WaterRenderSystem::renderMirror(CameraClass *cam)
 	// off-screen target and winding; scene submission never begins/ends a
 	// frame, presents, or recursively switches render targets.
 	m_renderingOffscreen = TRUE;
+	const auto saved_clip_plane = Graphics::Get_Environment_Lighting().parameters.clip_plane;
+	Graphics::Get_Environment_Lighting().parameters.clip_plane = water_view.reflection_clip_plane;
 	renderSky();
 	if (m_tod == TIME_OF_DAY_NIGHT)
 		renderSkyBody(&reflectedTransform);
 
 	m_reflectionRenderer->Render_Water_Reflection(cam, reflected_viewport);
+	Graphics::Get_Environment_Lighting().parameters.clip_plane = saved_clip_plane;
 	m_renderingOffscreen = FALSE;
 
 	cam->Set_Transform(OldCameraMatrix);	//restore original non-reflected matrix
  	cam->Set_Viewport(vOldMin,vOldMax);
-	cam->Set_Aspect_Ratio(old_aspect_ratio);
 	reflection_pass.End();
 	cam->Apply();	//restore camera-dependent parameters for the main target
 }
@@ -1068,6 +845,7 @@ void WaterRenderSystem::renderMirror(CameraClass *cam)
 //DECLARE_PERF_TIMER(Water)
 void WaterRenderSystem::Render(RenderInfoClass & rinfo)
 {
+    m_waterMaterial.Set_Fog(TheTerrainRenderObject ? TheTerrainRenderObject->Peek_Scene() : nullptr);
 	//USE_PERF_TIMER(Water)
 	if (TheTerrainRenderObject && !TheTerrainRenderObject->getMap())
 		return;	//no map has been loaded yet.
@@ -1179,9 +957,11 @@ WaterMaterialParameters WaterRenderSystem::makeWaterMaterialParameters(
 		Matrix4x4 view;
 		backend->Get_Transform(RenderBackendTransform::View, view);
 		const Matrix4x4 camera_transform = view.Inverse();
-		parameters.camera_position = Vector4(camera_transform[3][0],
-			camera_transform[3][1], camera_transform[3][2], 1.0f);
-		if (camera_transform[3][2] < m_level)
+		const Graphics::WaterView water_view(
+			std::span<const float,16>(&camera_transform[0][0],16),m_level);
+		const auto& position = water_view.camera_position;
+		parameters.camera_position = Vector4(position[0],position[1],position[2],1);
+		if (water_view.underwater)
 			parameters.effects[3] = 1.0f;
 	}
 
@@ -1221,8 +1001,8 @@ void WaterRenderSystem::drawSea(RenderInfoClass & rinfo)
 	}
 
 	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	if (backend == nullptr || m_vertexBuffer == nullptr ||
-		m_gridIndexBuffer == nullptr)
+	if (backend == nullptr || m_gridVertices.empty() ||
+		m_gridIndices.empty())
 	{
 		return;
 	}
@@ -1265,9 +1045,6 @@ void WaterRenderSystem::drawSea(RenderInfoClass & rinfo)
 			backend->Set_Transform(RenderBackendTransform::World,
 		patch_matrix * coordinate_transform * Make_Translation(
 			m_worldPositionX, m_worldPositionY, m_worldPositionZ));
-			backend->Set_Vertex_Buffer(m_vertexBuffer, 0,
-				sizeof(WaterOceanVertex));
-			backend->Set_Index_Buffer(m_gridIndexBuffer);
 			if (m_waterMaterial.Apply_Ocean(m_settings[m_tod].waterTexture,
 				m_pDisplacementTexture,
 				m_waterOceanNormalTexture != nullptr ? m_waterOceanNormalTexture :
@@ -1278,9 +1055,7 @@ void WaterRenderSystem::drawSea(RenderInfoClass & rinfo)
 				TheWaterTransparency != nullptr &&
 					TheWaterTransparency->m_additiveBlend))
 			{
-				backend->Draw_Indexed_Primitives(
-					RenderBackendPrimitiveType::TriangleStrip, 0, 0,
-					m_numVertices, 0, m_numIndices - 2);
+				m_waterMaterial.Draw(m_gridMesh);
 			}
 		}
 	}
@@ -1401,9 +1176,6 @@ void WaterRenderSystem::renderSky()
 	{
 		return;
 	}
-	backend->Set_Index_Buffer(m_surfaceIndexBuffer);
-	backend->Set_Vertex_Buffer(m_surfaceVertexBuffer, 0,
-		sizeof(WaterSurfaceVertex));
 
 	Matrix3D tm(1);
 	tm.Set_Translation(Vector3(0,0,0));
@@ -1411,8 +1183,7 @@ void WaterRenderSystem::renderSky()
 
 	if (m_waterMaterial.Apply_Sky(setting->skyTexture, false, false))
 	{
-		backend->Draw_Indexed_Primitives(
-			RenderBackendPrimitiveType::TriangleList, 0, 0, 4, 0, 2);
+		m_waterMaterial.Draw(m_surfaceMesh);
 	}
 	m_waterMaterial.Reset();
 }
@@ -1495,14 +1266,10 @@ void WaterRenderSystem::renderSkyBody(Matrix3D *mat)
 	{
 		return;
 	}
-	backend->Set_Index_Buffer(m_surfaceIndexBuffer);
-	backend->Set_Vertex_Buffer(m_surfaceVertexBuffer, 0,
-		sizeof(WaterSurfaceVertex));
 
 	if (m_waterMaterial.Apply_Sky(m_skyBodyTexture, true, true))
 	{
-		backend->Draw_Indexed_Primitives(
-			RenderBackendPrimitiveType::TriangleList, 0, 0, 4, 0, 2);
+		m_waterMaterial.Draw(m_surfaceMesh);
 	}
 	m_waterMaterial.Reset();
 }
@@ -1517,13 +1284,12 @@ void WaterRenderSystem::renderWaterMesh()
 		return;	//the water grid is disabled.
 
 	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	if (backend == nullptr || m_vertexBuffer == nullptr ||
-		m_gridIndexBuffer == nullptr)
+	if (backend == nullptr || m_gridVertices.empty() ||
+		m_gridIndices.empty())
 		return;
 
 	// Start each mesh update with a discard so the dynamic buffer does not
 	// overwrite vertices still in use by the previous draw.
-	m_vertexBufferOffset = m_numVertices;
 
 	Setting *setting=&m_settings[m_tod];
 
@@ -1553,21 +1319,7 @@ void WaterRenderSystem::renderWaterMesh()
 		return;
 	pData = samples.data();
 
-	const unsigned vertex_count = static_cast<unsigned>(mx * my);
-	const unsigned vertex_bytes = vertex_count * sizeof(WaterSurfaceVertex);
-	const unsigned vertex_offset = m_vertexBufferOffset < m_numVertices ?
-		static_cast<unsigned>(m_vertexBufferOffset) : 0;
-	const RenderBackendBufferLockMode lock_mode =
-		m_vertexBufferOffset < m_numVertices ?
-		RenderBackendBufferLockMode::NoOverwrite :
-		RenderBackendBufferLockMode::Discard;
-	void *vertex_data = nullptr;
-	if (!backend->Lock_Vertex_Buffer(m_vertexBuffer,
-		vertex_offset * sizeof(WaterSurfaceVertex), vertex_bytes,
-		&vertex_data, lock_mode))
-		return;
-	m_vertexBufferOffset = static_cast<Int>(vertex_offset);
-	WaterSurfaceVertex *vb = static_cast<WaterSurfaceVertex *>(vertex_data);
+    WaterSurfaceVertex* vb = m_gridVertices.data();
 	const std::uint32_t diffuse = getSurfaceDiffuse(true);
 
 	//I pulled some of these constants out of the loops for speed:
@@ -1623,15 +1375,10 @@ void WaterRenderSystem::renderWaterMesh()
 		}
 	}
 
-	backend->Unlock_Vertex_Buffer(m_vertexBuffer);
+	if (!Upload_Water_Geometry(m_gridMesh,m_gridVertices,m_gridIndices,true)) return;
 
 	backend->Set_Transform(RenderBackendTransform::World,
 		m_gridRenderData.transform);
-	backend->Set_Vertex_Buffer(m_vertexBuffer,
-		static_cast<unsigned>(m_vertexBufferOffset) * sizeof(WaterSurfaceVertex),
-		sizeof(WaterSurfaceVertex));
-	backend->Set_Index_Buffer(m_gridIndexBuffer);
-	backend->Set_Vertex_Format(WATER_MESH_FVF);
 	W3DShroud *shroud = TheTerrainRenderObject == nullptr ? nullptr :
 		TheTerrainRenderObject->getShroud();
 	const WaterMaterialParameters parameters =
@@ -1654,14 +1401,11 @@ void WaterRenderSystem::renderWaterMesh()
 		TheWaterTransparency != nullptr &&
 			TheWaterTransparency->m_additiveBlend))
 	{
-		backend->Draw_Indexed_Primitives(RenderBackendPrimitiveType::TriangleStrip,
-			0, 0, static_cast<unsigned>(mx * my), 0,
-			static_cast<unsigned>(m_numIndices - 2));
+		m_waterMaterial.Draw(m_gridMesh);
 	}
 
 	Debug_Statistics::Record_Polys_And_Vertices(m_numIndices-2,mx*my);
 
-	m_vertexBufferOffset += mx*my;	//advance past vertices already in buffer
 	m_waterMaterial.Reset();
 
 }
@@ -1734,7 +1478,7 @@ void WaterRenderSystem::drawRiverWater(const WaterSurfacePolygon &polygon)
 	}
 
 
-	// Lighting is evaluated by the modern water shader. The vertex color is
+	// Lighting is evaluated by the water shader. The vertex color is
 	// limited to the configured water material color and opacity.
 	const std::uint32_t diffuse = getSurfaceDiffuse(false);
 
@@ -1821,9 +1565,6 @@ void WaterRenderSystem::drawRiverWater(const WaterSurfacePolygon &polygon)
 	Matrix3D tm(1);
 
 	backend->Set_Transform(RenderBackendTransform::World,tm);	//position the water surface
-	backend->Set_Index_Buffer(m_surfaceIndexBuffer);
-	backend->Set_Vertex_Buffer(m_surfaceVertexBuffer, 0,
-		sizeof(WaterSurfaceVertex));
 	W3DShroud *shroud = TheTerrainRenderObject == nullptr ? nullptr :
 		TheTerrainRenderObject->getShroud();
 	const WaterMaterialParameters parameters =
@@ -1839,9 +1580,6 @@ void WaterRenderSystem::drawRiverWater(const WaterSurfacePolygon &polygon)
 		m_waterEnvironmentTexture;
 	if (environment_or_depth == nullptr)
 		environment_or_depth = m_settings[m_tod].skyTexture;
-	if (wireframeForDebug) {
-		backend->Set_Fill_Mode(RenderBackendFillMode::Wireframe);
-	}
 	if (m_waterMaterial.Apply_Surface(m_riverTexture, normal_texture,
 		foam_or_caustics, m_riverAlphaEdge, m_pReflectionTexture,
 		m_pRefractionTexture,
@@ -1850,12 +1588,7 @@ void WaterRenderSystem::drawRiverWater(const WaterSurfacePolygon &polygon)
 		parameters, TheWaterTransparency != nullptr &&
 			TheWaterTransparency->m_additiveBlend))
 	{
-		backend->Draw_Indexed_Primitives(
-			RenderBackendPrimitiveType::TriangleList, 0, 0,
-			vertex_count, 0, static_cast<unsigned>(rectangleCount * 2));
-	}
-	if (wireframeForDebug) {
-		backend->Set_Fill_Mode(RenderBackendFillMode::Solid);
+		m_waterMaterial.Draw(m_surfaceMesh,wireframeForDebug);
 	}
 	m_waterMaterial.Reset();
 }
@@ -1952,9 +1685,6 @@ void WaterRenderSystem::drawTrapezoidWater(const WaterGeometryPoint points[4])
 
 	Matrix3D tm(1);
 	backend->Set_Transform(RenderBackendTransform::World,tm);
-	backend->Set_Index_Buffer(m_surfaceIndexBuffer);
-	backend->Set_Vertex_Buffer(m_surfaceVertexBuffer, 0,
-		sizeof(WaterSurfaceVertex));
 
 	W3DShroud *shroud = TheTerrainRenderObject == nullptr ? nullptr :
 		TheTerrainRenderObject->getShroud();
@@ -1983,9 +1713,8 @@ void WaterRenderSystem::drawTrapezoidWater(const WaterGeometryPoint points[4])
 		return;
 	}
 
-	backend->Draw_Indexed_Primitives(
-		RenderBackendPrimitiveType::TriangleList, 0, 0,
-		vertex_count, 0, static_cast<unsigned>(rectangleCount * 2));
+	m_waterMaterial.Draw(m_surfaceMesh);
 	m_waterMaterial.Reset();
 }
+
 

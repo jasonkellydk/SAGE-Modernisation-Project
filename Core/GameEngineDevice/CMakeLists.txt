@@ -3,11 +3,10 @@ set(GAMEENGINEDEVICE_SRC
     Include/XAudio2AudioDevice/XAudio2AudioSystem.h
     Include/XAudio2AudioDevice/XAudio2Decoder.h
     Include/XAudio2AudioDevice/XAudio2Mastering.h
-    Include/XAudio2AudioDevice/XAudio2VideoStream.h
+    Include/XAudio2AudioDevice/XAudio2PcmStream.h
     Include/XAudio2AudioDevice/XAudio2Voice.h
     Include/XAudio2AudioDevice/NullAudioSystem.h
-    Include/VideoDevice/FFmpeg/FFmpegFile.h
-    Include/VideoDevice/FFmpeg/FFmpegVideoPlayer.h
+    Include/XAudio2AudioDevice/core/AudioStream.h
     Include/W3DDevice/Common/W3DConvert.h
     Include/W3DDevice/Common/W3DFunctionLexicon.h
     Include/W3DDevice/Common/W3DModuleFactory.h
@@ -81,7 +80,6 @@ set(GAMEENGINEDEVICE_SRC
     Include/W3DDevice/GameClient/W3DTerrainTracks.h
     Include/W3DDevice/GameClient/W3DTerrainVisual.h
     Include/W3DDevice/GameClient/W3DTreeBuffer.h
-    Include/W3DDevice/GameClient/W3DVideoBuffer.h
     Include/W3DDevice/GameClient/W3DView.h
     Include/W3DDevice/GameClient/W3DScreenshot.h
 #    Include/W3DDevice/GameClient/W3DVolumetricShadow.h
@@ -107,13 +105,11 @@ set(GAMEENGINEDEVICE_SRC
     Source/XAudio2AudioDevice/XAudio2AudioSystem.cpp
     Source/XAudio2AudioDevice/XAudio2Decoder.cpp
     Source/XAudio2AudioDevice/XAudio2Mastering.cpp
-    Source/XAudio2AudioDevice/XAudio2VideoStream.cpp
     Source/XAudio2AudioDevice/XAudio2Voice.cpp
+    Source/XAudio2AudioDevice/XAudio2PcmStream.cpp
     Source/XAudio2AudioDevice/AudioEngine.cpp
     Source/XAudio2AudioDevice/AudioFactory.cpp
     Source/XAudio2AudioDevice/NullAudioSystem.cpp
-    Source/VideoDevice/FFmpeg/FFmpegFile.cpp
-    Source/VideoDevice/FFmpeg/FFmpegVideoPlayer.cpp
     Source/W3DDevice/Common/System/W3DFunctionLexicon.cpp
     Source/W3DDevice/Common/System/W3DRadar.cpp
     Source/W3DDevice/Common/Thing/W3DModuleFactory.cpp
@@ -140,7 +136,7 @@ set(GAMEENGINEDEVICE_SRC
     Source/W3DDevice/GameClient/Drawable/Draw/W3DTracerDraw.cpp
     Source/W3DDevice/GameClient/Drawable/Draw/W3DTreeDraw.cpp
     Source/W3DDevice/GameClient/Drawable/Draw/W3DTruckDraw.cpp
-    Source/W3DDevice/GameClient/FlatHeightMap.cpp
+    "$<$<NOT:$<BOOL:$<TARGET_PROPERTY:GENERALSMD_GRAPHICS>>>:${CMAKE_CURRENT_SOURCE_DIR}/Source/W3DDevice/GameClient/FlatHeightMap.cpp>"
     Source/W3DDevice/GameClient/GUI/Gadget/W3DCheckBox.cpp
     Source/W3DDevice/GameClient/GUI/Gadget/W3DComboBox.cpp
     Source/W3DDevice/GameClient/GUI/Gadget/W3DHorizontalSlider.cpp
@@ -158,14 +154,14 @@ set(GAMEENGINEDEVICE_SRC
     Source/W3DDevice/GameClient/GUI/W3DGameFont.cpp
     Source/W3DDevice/GameClient/GUI/W3DGameWindow.cpp
     Source/W3DDevice/GameClient/GUI/W3DGameWindowManager.cpp
-    Source/W3DDevice/GameClient/HeightMap.cpp
+    "$<$<NOT:$<BOOL:$<TARGET_PROPERTY:GENERALSMD_GRAPHICS>>>:${CMAKE_CURRENT_SOURCE_DIR}/Source/W3DDevice/GameClient/HeightMap.cpp>"
 #    Source/W3DDevice/GameClient/Shadow/W3DBufferManager.cpp
 #    Source/W3DDevice/GameClient/Shadow/W3DProjectedShadow.cpp
 #    Source/W3DDevice/GameClient/Shadow/W3DShadow.cpp
 #    Source/W3DDevice/GameClient/Shadow/W3DVolumetricShadow.cpp
     Source/W3DDevice/GameClient/TerrainTex.cpp
-    Source/W3DDevice/GameClient/TerrainMaterial.cpp
-    Source/W3DDevice/GameClient/TreeMaterial.cpp
+    "$<$<NOT:$<BOOL:$<TARGET_PROPERTY:GENERALSMD_GRAPHICS>>>:${CMAKE_CURRENT_SOURCE_DIR}/Source/W3DDevice/GameClient/TerrainMaterial.cpp>"
+    "$<$<NOT:$<BOOL:$<TARGET_PROPERTY:GENERALSMD_GRAPHICS>>>:${CMAKE_CURRENT_SOURCE_DIR}/Source/W3DDevice/GameClient/TreeMaterial.cpp>"
     Source/W3DDevice/GameClient/TileData.cpp
 #    Source/W3DDevice/GameClient/W3DAssetManager.cpp
 #    Source/W3DDevice/GameClient/W3DAssetManagerExposed.cpp
@@ -197,10 +193,8 @@ set(GAMEENGINEDEVICE_SRC
     Source/W3DDevice/GameClient/W3DTerrainTracks.cpp
     Source/W3DDevice/GameClient/W3DTerrainVisual.cpp
     Source/W3DDevice/GameClient/W3DTreeBuffer.cpp
-    Source/W3DDevice/GameClient/W3DVideoBuffer.cpp
     Source/W3DDevice/GameClient/W3DView.cpp
     Source/W3DDevice/GameClient/W3DScreenshot.cpp
-    Source/W3DDevice/GameClient/stb_image_write_impl.cpp
 #    Source/W3DDevice/GameClient/W3dWaypointBuffer.cpp
 #    Source/W3DDevice/GameClient/W3DWebBrowser.cpp
     Source/W3DDevice/GameClient/Water/W3DWater.cpp

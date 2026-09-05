@@ -48,7 +48,8 @@ bool DX11BackendState::Create_Device()
 	}
 
 	if (!Create_Render_Targets() || !Create_Constant_Buffers() ||
-		!Recreate_Compiled_Shaders() || !process_vertices.Initialize(device))
+		!Recreate_Compiled_Shaders()
+    )
 	{
 		Release_Device();
 		device_status = RenderBackendDeviceStatus::Error;
@@ -278,7 +279,6 @@ void DX11BackendState::Release_Device()
 	Release_Registered_Textures();
 	Release_Render_Targets();
 	Release_Pipeline_States();
-	process_vertices.Release();
 	for (DX11VertexShader *shader : vertex_shaders)
 	{
 		Release_Com(shader->shader);

@@ -48,7 +48,6 @@ class		CameraClass;
 class		ShaderClass;
 
 struct	RenderStatistics;
-class		FrameGrabClass;
 class		VertexMaterialClass;
 class		ExtraMaterialPassClass;
 class		RenderInfoClass;
@@ -99,12 +98,6 @@ public:
 		NPATCHES_GAP_FILLING_ENABLED,
 		NPATCHES_GAP_FILLING_FORCE
 	};
-
-	enum ScreenShotFormatEnum {
-		TGA,
-		BMP
-	};
-
 
 	static WW3DErrorType		Init(void * window, char *defaultpal = nullptr, bool lite = false);
 	static WW3DErrorType		Shutdown();
@@ -227,23 +220,6 @@ public:
 
 	static unsigned int		Get_Last_Frame_Poly_Count();
 	static unsigned int		Get_Last_Frame_Vertex_Count();
-
-	/*
-	** Screen/Movie capturing
-	** These functions allow you to create screenshots and movies.
-	*/
-	static void					Make_Screen_Shot( const char * filename = "ScreenShot", const float gamma = 1.3f, const ScreenShotFormatEnum format = TGA);
-	static void					Start_Movie_Capture( const char * filename_base = "Movie", float frame_rate = 15);
-	static void					Stop_Movie_Capture();
-	static void					Toggle_Movie_Capture( const char * filename_base = "Movie", float frame_rate = 15);
-	static void					Start_Single_Frame_Movie_Capture(const char *filename_base = "Frames");
-	static void					Capture_Next_Movie_Frame();
-	static void					Update_Movie_Capture();
-	static float				Get_Movie_Capture_Frame_Rate();
-	static void					Pause_Movie(bool mode);
-	static bool					Is_Movie_Paused();
-	static bool					Is_Recording_Next_Frame();
-	static bool					Is_Movie_Ready();
 
    /*
 	** Set_Ext_Swap_Interval - how many vertical retraces to wait before flipping frames
@@ -404,7 +380,6 @@ private:
 	static bool					WindowedState;
 	static bool					PreserveFPU;
 	static bool							IsRendering;
-	static bool							IsCapturing;
 	static bool							IsSortingEnabled;
 	static bool							IsScreenUVBiased;
 	static bool							IsBackfaceDebugEnabled;
@@ -417,9 +392,6 @@ private:
 
 	static bool							OverbrightModifyOnLoad;
 
-	static FrameGrabClass *			Movie;
-	static bool							PauseRecord;
-	static bool							RecordNextFrame;
 	static int							FrameCount;
 
 	static VertexMaterialClass *	DefaultDebugMaterial;

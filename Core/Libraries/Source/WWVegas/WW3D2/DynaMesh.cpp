@@ -35,6 +35,8 @@
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 #include "DynaMesh.h"
+#include <vector>
+#include "WW3D2/GraphicsMaterial.h"
 #include "WW3D.h"
 #include "WW3D2/VertexBuffer.h"
 #include "WW3D2/IndexBuffer.h"
@@ -176,223 +178,71 @@ void DynamicMeshModel::Reset()
 
 void DynamicMeshModel::Render(RenderInfoClass & rinfo)
 {
-	// Process texture reductions:
-//	MatInfo->Process_Texture_Reduction();
-
-	unsigned buffer_type=(Get_Flag(MeshGeometryClass::SORT)&& WW3D::Is_Sorting_Enabled()) ? BUFFER_TYPE_DYNAMIC_SORTING : BUFFER_TYPE_DYNAMIC_RENDER;
-
-	/*
-	** Write the vertex data to the vertex buffer. We assume the FVF contains positions, normals,
-	** one texture channel, and the diffuse color channel (color0). If it does not contain all
-	** these components, the code will fail.
-	*/
-	DynamicVBAccessClass dynamic_vb(buffer_type,RenderBackend_Dynamic_Vertex_Format,DynamicMeshVNum);
-	const VertexFormatInfoClass &fvf_info = dynamic_vb.Get_Format_Info();
-
-	{ // scope for lock
-
-		DynamicVBAccessClass::WriteLockClass lock(&dynamic_vb);
-		unsigned char *vertices = (unsigned char*)lock.Get_Formatted_Vertex_Array();
-		const Vector3 *locs = Get_Vertex_Array();
-		const Vector3 *normals = Get_Vertex_Normal_Array();
-		const Vector2 *uvs = MatDesc->Get_UV_Array_By_Index(0, false);
-		const Vector2 *uv1s = MatDesc->Get_UV_Array_By_Index(1, false);
-		const unsigned *colors = MatDesc->Get_Color_Array(0, false);
-		const static Vector3 default_normal(0.0f, 0.0f, 0.0f);
-		const static Vector2 default_uv(0.0f, 0.0f);
-		const unsigned int default_color = 0xFFFFFFFF;
-		for (int i=0; i < DynamicMeshVNum; i++)
-		{
-			*(Vector3 *)(vertices + fvf_info.Get_Location_Offset()) = locs[i];
-			*(Vector3 *)(vertices + fvf_info.Get_Normal_Offset()) = normals[i];
-			if (uvs) {
-				*(Vector2 *)(vertices + fvf_info.Get_Tex_Offset(0)) = uvs[i];
-			} else {
-				*(Vector2 *)(vertices + fvf_info.Get_Tex_Offset(0)) = default_uv;
-			}
-			if (uv1s) {
-				*(Vector2 *)(vertices + fvf_info.Get_Tex_Offset(1)) = uv1s[i];
-			} else {
-				*(Vector2 *)(vertices + fvf_info.Get_Tex_Offset(1)) = default_uv;
-			}
-
-			if (colors) {
-				*(unsigned int *)(vertices + fvf_info.Get_Diffuse_Offset()) = colors[i];
-			} else {
-				*(unsigned int *)(vertices + fvf_info.Get_Diffuse_Offset()) = default_color;
-			}
-			vertices += fvf_info.Get_Vertex_Size();
-		}
-
-	}
-
-	/*
-	** Write index data to index buffers
-	*/
-	DynamicIBAccessClass dynamic_ib(buffer_type,DynamicMeshPNum * 3);
-	const TriIndex *tris = Get_Polygon_Array();
-
-	{ // scope for lock
-
-		DynamicIBAccessClass::WriteLockClass lock(&dynamic_ib);
-		unsigned short * indices = lock.Get_Index_Array();
-		for (int i=0; i < DynamicMeshPNum; i++)
-		{
-			indices[i*3 + 0] = (unsigned short)tris[i][0];
-			indices[i*3 + 1] = (unsigned short)tris[i][1];
-			indices[i*3 + 2] = (unsigned short)tris[i][2];
-		}
-
-	}
-
-	/*
-	** Set vertex and index buffers
-	*/
-	WW3D::Get_Render_Backend()->Set_Vertex_Buffer(dynamic_vb);
-	WW3D::Get_Render_Backend()->Set_Index_Buffer(dynamic_ib,0);
-
-	/*
-	** Draw dynamesh, one pass at a time
-	*/
-	unsigned int pass_count = Get_Pass_Count();
-	for (unsigned int pass = 0; pass < pass_count; pass++) {
-
-		/*
-		** Set current render states (texture, vertex material, shader). Scan triangles until one
-		** of these changes, and then draw.
-		*/
-
-		// The vertex index range used
-		unsigned short min_vert_idx = DynamicMeshVNum - 1;
-		unsigned short max_vert_idx = 0;
-		unsigned short start_tri_idx = 0;
-		unsigned short cur_tri_idx = 0;
-
-		bool done = false;
-		bool texture_changed = false;
-		bool texture1_changed = false;
-		bool material_changed = false;
-		bool shader_changed = false;
-
-		TextureClass **texture_array0 = nullptr;
-		TexBufferClass * tex_buf = MatDesc->Get_Texture_Array(pass, 0, false);
-		if (tex_buf) {
-			texture_array0 = tex_buf->Get_Array();
-		} else {
-			texture_array0 = nullptr;
-		}
-
-		TextureClass **texture_array1 = nullptr;
-		TexBufferClass * tex_buf1 = MatDesc->Get_Texture_Array(pass, 1, false);
-		if (tex_buf1) {
-			texture_array1 = tex_buf1->Get_Array();
-		} else {
-			texture_array1 = nullptr;
-		}
-
-		VertexMaterialClass **material_array = nullptr;
-		MatBufferClass * mat_buf = MatDesc->Get_Material_Array(pass, false);
-		if (mat_buf) {
-			material_array = mat_buf->Get_Array();
-		} else {
-			material_array = nullptr;
-		}
-		ShaderClass *shader_array = MatDesc->Get_Shader_Array(pass, false);
-
-		// Set the DX9 state to the first triangle's state
-		if (texture_array0) {
-			WW3D::Get_Render_Backend()->Set_Texture(0,texture_array0[0]);
-		} else {
-			WW3D::Get_Render_Backend()->Set_Texture(0,MatDesc->Peek_Single_Texture(pass, 0));
-		}
-
-		if (texture_array1) {
-			WW3D::Get_Render_Backend()->Set_Texture(1,texture_array1[0]);
-		} else {
-			WW3D::Get_Render_Backend()->Set_Texture(1,MatDesc->Peek_Single_Texture(pass, 1));
-		}
-
-		if (material_array) {
-			WW3D::Get_Render_Backend()->Set_Material(material_array[tris[0].I]);
-		} else {
-			WW3D::Get_Render_Backend()->Set_Material(MatDesc->Peek_Single_Material(pass));
-		}
-		if (shader_array) {
-			WW3D::Get_Render_Backend()->Set_Shader(shader_array[0]);
-		} else {
-			WW3D::Get_Render_Backend()->Set_Shader(MatDesc->Get_Single_Shader(pass));
-		}
-
-		SphereClass sphere;
-		Get_Bounding_Sphere(&sphere);
-
-		// If no texture, shader or material arrays for this pass just draw and go to next pass
-		if (!texture_array0 && !texture_array1 && !material_array && !shader_array) {
-			if (buffer_type==BUFFER_TYPE_DYNAMIC_SORTING) {
-				SortingRendererClass::Insert_Triangles(sphere,0, DynamicMeshPNum, 0, DynamicMeshVNum);
-			}
-			else {
-				WW3D::Get_Render_Backend()->Draw_Indexed_Primitives(
-					RenderBackendPrimitiveType::TriangleList, 0, 0, DynamicMeshVNum, 0, DynamicMeshPNum);
-			}
-			continue;
-		}
-
-		while (!done) {
-
-			// Add vertex indices of tri[cur_tri_idx] to min_vert_idx, max_vert_idx
-			const TriIndex &tri = tris[cur_tri_idx];
-			unsigned short min_idx = (unsigned short)MIN(MIN(tri.I, tri.J), tri.K);
-			unsigned short max_idx = (unsigned short)MAX(MAX(tri.I, tri.J), tri.K);
-			min_vert_idx = MIN(min_vert_idx, min_idx);
-			max_vert_idx = MAX(max_vert_idx, max_idx);
-
-			// Check the next triangle to see if the current run has ended.
-			unsigned short next_tri_idx = cur_tri_idx + 1;
-			done = next_tri_idx >= DynamicMeshPNum;
-			if (done) {
-				texture_changed = false;
-				texture1_changed = false;
-				material_changed = false;
-				shader_changed = false;
-			} else {
-				texture_changed = texture_array0 && texture_array0[cur_tri_idx] != texture_array0[next_tri_idx];
-				texture1_changed = texture_array1 && texture_array1[cur_tri_idx] != texture_array1[next_tri_idx];
-				material_changed = material_array && material_array[tris[cur_tri_idx].I] != material_array[tris[next_tri_idx].I];
-				shader_changed = shader_array && shader_array[cur_tri_idx] != shader_array[next_tri_idx];
-			}
-
-			// If run ends (mesh ends or state changes) draw, reset indices, set state for next run.
-			if (done || texture_changed || material_changed || shader_changed) {
-				if (buffer_type==BUFFER_TYPE_DYNAMIC_SORTING) {
-					SortingRendererClass::Insert_Triangles(
-						sphere,
-						(start_tri_idx * 3),
-						(1 + cur_tri_idx - start_tri_idx),
-						min_vert_idx,
-						1 + max_vert_idx - min_vert_idx);
-				}
-				else {
-					WW3D::Get_Render_Backend()->Draw_Indexed_Primitives(
-						RenderBackendPrimitiveType::TriangleList, 0,
-						min_vert_idx, 1 + max_vert_idx - min_vert_idx,
-						(start_tri_idx * 3), 1 + cur_tri_idx - start_tri_idx);
-				}
-				start_tri_idx = next_tri_idx;
-				min_vert_idx = DynamicMeshVNum - 1;
-				max_vert_idx = 0;
-				if (texture_changed) WW3D::Get_Render_Backend()->Set_Texture(0,texture_array0[next_tri_idx]);
-				if (texture1_changed) WW3D::Get_Render_Backend()->Set_Texture(1,texture_array1[next_tri_idx]);
-				if (material_changed) WW3D::Get_Render_Backend()->Set_Material(material_array[tris[next_tri_idx].I]);
-				if (shader_changed) WW3D::Get_Render_Backend()->Set_Shader(shader_array[next_tri_idx]);
-			}
-
-			cur_tri_idx = next_tri_idx;
-
-		}
-
-	}
-
+    if (DynamicMeshPNum<=0 || DynamicMeshVNum<=0) return;
+    auto* backend=WW3D::Get_Render_Backend();
+    Matrix4x4 world,view,projection;
+    backend->Get_Transform(RenderBackendTransform::World,world);
+    backend->Get_Transform(RenderBackendTransform::View,view);
+    backend->Get_Transform(RenderBackendTransform::Projection,projection);
+    const Matrix4x4 view_projection=projection*view;
+    Graphics::PropParameters context;
+    backend->Get_Transform(RenderBackendTransform::View,context.view.data());
+    const auto camera=rinfo.Camera.Get_Position();
+    context.camera_position={camera.X,camera.Y,camera.Z,1};
+    Extract_Graphics_Lighting(context,rinfo.light_environment);
+    const auto* positions=Get_Vertex_Array();
+    const auto* normals=Get_Vertex_Normal_Array();
+    const auto* polygons=Get_Polygon_Array();
+    const auto* uv=MatDesc->Get_UV_Array_By_Index(0,false);
+    const auto* secondary_uv=MatDesc->Get_UV_Array_By_Index(1,false);
+    const auto* colors=MatDesc->Get_Color_Array(0,false);
+    std::vector<Graphics::PropVertex> source(DynamicMeshVNum);
+    for (int i=0;i<DynamicMeshVNum;++i) {
+        Vector4 position,normal;
+        Matrix4x4::Transform_Vector(world,Vector4(positions[i].X,positions[i].Y,positions[i].Z,1),&position);
+        const Vector3 n=normals ? normals[i] : Vector3(0,0,0);
+        Matrix4x4::Transform_Vector(world,Vector4(n.X,n.Y,n.Z,0),&normal);
+        auto& vertex=source[i];
+        vertex.position={position.X,position.Y,position.Z};
+        vertex.normal={normal.X,normal.Y,normal.Z};
+        if (uv) vertex.uv={uv[i].X,uv[i].Y};
+        if (secondary_uv) vertex.secondary_uv={secondary_uv[i].X,secondary_uv[i].Y};
+        if (colors) {
+            const unsigned color=colors[i];
+            vertex.color={((color>>16)&255)/255.0f,((color>>8)&255)/255.0f,
+                (color&255)/255.0f,((color>>24)&255)/255.0f};
+        }
+    }
+    const bool sort=Get_Flag(MeshGeometryClass::SORT) && WW3D::Is_Sorting_Enabled();
+    std::vector<Graphics::PropVertex> vertices;
+    std::vector<unsigned> indices;
+    for (int pass=0;pass<Get_Pass_Count();++pass) {
+        for (int first=0;first<DynamicMeshPNum;) {
+            const auto shader=MatDesc->Get_Shader(first,pass);
+            const std::array textures{MatDesc->Peek_Texture(first,pass,0),MatDesc->Peek_Texture(first,pass,1)};
+            auto* material=MatDesc->Peek_Material(polygons[first].I,pass);
+            const auto vertex_material = Describe_Graphics_Vertex_Material(material);
+            int end=first+1;
+            while (end<DynamicMeshPNum && MatDesc->Get_Shader(end,pass)==shader
+                && MatDesc->Peek_Texture(end,pass,0)==textures[0]
+                && MatDesc->Peek_Texture(end,pass,1)==textures[1]
+                && MatDesc->Peek_Material(polygons[end].I,pass)==material) ++end;
+            vertices.clear(); indices.clear();
+            for (int polygon=first;polygon<end;++polygon) {
+                for (unsigned corner=0;corner<3;++corner) {
+                    auto vertex=source[polygons[polygon][corner]];
+                    if (vertex_material) Graphics::Apply_Prop_Material(vertex,*vertex_material);
+                    indices.push_back(static_cast<unsigned>(vertices.size()));
+                    vertices.push_back(vertex);
+                }
+            }
+            auto parameters=context;
+            Extract_Graphics_Texture_Mappers(parameters,material);
+            Draw_Graphics_Material_Geometry(vertices,indices,view_projection,shader,textures,
+                parameters,sort ? &view : nullptr);
+            first=end;
+        }
+    }
 }
 
 void DynamicMeshModel::Initialize_Texture_Array(int pass, int stage, TextureClass *texture)

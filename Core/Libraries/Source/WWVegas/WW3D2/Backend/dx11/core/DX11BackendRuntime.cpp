@@ -41,3 +41,11 @@ bool DX11BackendRuntime::Get_Shared_Frame_Resources(DX11SharedFrameResources &re
 	resources.height = state->height;
 	return true;
 }
+
+bool DX11BackendRuntime::Get_Shared_Texture_Resources(RenderBackendTextureHandle texture, void *&resource, void *&view) const noexcept
+{
+    const dx11_backend::DX11Texture *native = dx11_backend::As_DX11_Texture(texture);
+    resource = native != nullptr ? native->resource : nullptr;
+    view = native != nullptr ? native->shader_resource_view : nullptr;
+    return resource != nullptr && view != nullptr;
+}

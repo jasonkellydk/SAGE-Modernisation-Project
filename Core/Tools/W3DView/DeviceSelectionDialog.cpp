@@ -195,11 +195,11 @@ CDeviceSelectionDialog::OnOK ()
 //
 //  DoModal
 //
-int
+INT_PTR
 CDeviceSelectionDialog::DoModal ()
 {
 	BOOL bFoundDevice = FALSE;
-	int iReturn = IDOK;
+	INT_PTR iReturn = IDOK;
 
 	// Get the name of the last used device driver from the registry
 	m_DriverName = theApp.GetProfileString ("Config", "DeviceName");

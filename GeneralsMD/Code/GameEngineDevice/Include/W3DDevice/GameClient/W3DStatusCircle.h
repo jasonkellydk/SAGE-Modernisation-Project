@@ -77,19 +77,8 @@ public:
 
 	int updateBlock();
 	Int freeMapResources();
-	void static setColor(Int r, Int g, Int b) {m_needUpdate = true; m_diffuse = (b) + (g<<8) + (r<<16);};
+	void static setColor(Int r, Int g, Int b) {m_diffuse = (b) + (g<<8) + (r<<16);};
 protected:
-	Int	m_numTriangles;	//dimensions of list
-	static Int m_diffuse;
-	static Bool			 m_needUpdate;
-
-	RenderBackendIndexBuffer			*m_indexBuffer;	//indices defining a triangle strip that covers full terrain
-	ShaderClass m_shaderClass; //shader or rendering state for heightmap
-	VertexMaterialClass	  	  *m_vertexMaterialClass;
-	RenderBackendVertexBuffer	*m_vertexBufferCircle;	//collection of vertices that make the circle.
-	RenderBackendVertexBuffer	*m_vertexBufferScreen;	//2 triangle quad that covers the screen.
-
-	int initData();
-	Int updateCircleVB();
-	Int updateScreenVB(Int diffuse);
+    static Int m_diffuse;
+    bool queueGraphics();
 };

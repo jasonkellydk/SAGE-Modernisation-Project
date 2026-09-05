@@ -50,7 +50,8 @@
 
 #include "W3DDevice/GameClient/WorldHeightMap.h"
 #include "W3DDevice/GameClient/TileData.h"
-#include "W3DDevice/GameClient/HeightMap.h"
+#include "W3DDevice/GameClient/BaseHeightMap.h"
+#include "W3DDevice/GameClient/WorldHeightMap.h"
 #include "W3DDevice/GameClient/TerrainTex.h"
 #include "W3DDevice/GameClient/W3DShadow.h"
 
@@ -2219,9 +2220,7 @@ void WorldHeightMap::getAlphaUVData(Int xIndex, Int yIndex, float U[4], float V[
 		Int dz2 = abs(p1-p3);
 		needFlip = dz1>dz2;
 	}
-#ifdef FLIP_TRIANGLES
 	*flip = needFlip;
-#endif
 }
 
 void WorldHeightMap::setTextureLOD(Int lod)

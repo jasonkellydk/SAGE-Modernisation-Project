@@ -54,15 +54,14 @@ public:
 #include "Common/SparseMatchFinder.h"
 #include "GameClient/ParticleSys.h"
 #include "Common/STLTypedefs.h"
+class Shadow;
+class TerrainTracksRenderObjClass;
 
-import Graphics.Scene.StaticMeshes;
-import Graphics.Scene.Models.ModelInstance;
+import Assets.Handles;
 
 // FORWARD REFERENCES /////////////////////////////////////////////////////////////////////////////
 class Thing;
 class RenderObjClass;
-class Shadow;
-class TerrainTracksRenderObjClass;
 class HAnimClass;
 enum GameLODLevel CPP_11(: Int);
 //-------------------------------------------------------------------------------------------------
@@ -502,38 +501,18 @@ private:
 	Bool													m_fullyObscuredByShroud;
 	Bool													m_shadowEnabled;	///< cached state of shadow.  Used to determine if shadows should be enabled via options screen.
 	RenderObjClass*								m_renderObject;										///< W3D Render object for this drawable
-	Bool														m_legacyRenderObjectInScene;
-	Shadow*												m_shadow;													///< Updates/Renders shadows of this object
-	Shadow*												m_terrainDecal;
-	TerrainTracksRenderObjClass*	m_trackRenderObject;							///< This is rendered under object
 	ParticleSystemIDVec						m_particleSystemIDs;							///< The ID numbers of the particle systems currently running.
 	std::vector<ModelConditionInfo::HideShowSubObjInfo>		m_subObjectVec;
 	Bool													m_hideHeadlights;
 	Bool													m_pauseAnimation;
 	Int														m_animationMode;
 
-	Graphics::StaticMeshBinding				m_modernBinding;
-	std::vector<Graphics::MaterialHandle>		m_modernMaterials;
-	std::vector<Graphics::TextureHandle>		m_modernTextures;
-	const ModelConditionInfo*						m_modernAnimationState;
-	Int													m_modernAnimationIndex;
-	Graphics::AnimationPlaybackMode			m_modernAnimationMode;
-	const ModelConditionInfo*						m_modernSecondaryAnimationState;
-	Bool													m_modernHidden;
-
-	bool isModernStaticOpaqueState() const noexcept;
-	bool modernAnimationBlend() const noexcept;
-	bool modernDoubleSided() const noexcept;
-	bool canUseModernSubobjectVisibility() const;
-	Graphics::SubmeshVisibilityMask modernSubobjectVisibility() const;
-	bool modernShadowEnabled() const noexcept;
-	bool updateModernSubobjectVisibility();
-	bool submitModernVariant();
-	void syncModernVariant();
-	void updateModernInstance(const Matrix3D *transformMtx);
-	void updateModernAnimation();
-	void updateModernBoneControl(Int boneIndex, const Matrix3D &localTransform);
-	void releaseModernVariant() noexcept;
+    // Gameplay owns the animated hierarchy; graphics owns its drawing.
+    Assets::ModelAssetHandle m_modelAsset;
+    bool m_inGraphicsScene=false;
+    Shadow* m_shadow=nullptr;
+    Shadow* m_terrainDecal=nullptr;
+    TerrainTracksRenderObjClass* m_trackRenderObject=nullptr;
 
 	void adjustAnimation(const ModelConditionInfo* prevState, Real prevAnimFraction);
 	Real getCurrentAnimFraction() const;
@@ -541,7 +520,7 @@ private:
 	const ModelConditionInfo* findTransitionForSig(TransitionSig sig) const;
 	void rebuildWeaponRecoilInfo(const ModelConditionInfo* state);
 	void doHideShowProjectileObjects( UnsignedInt showCount, UnsignedInt maxCount, WeaponSlotType slot );///< Means effectively, show m of n.
-	void nukeCurrentRender(Matrix3D* xform, Bool preserveModernInstance = FALSE);
+	void nukeCurrentRender(Matrix3D* xform);
 	void doStartOrStopParticleSys();
 	void adjustAnimSpeedToMovementSpeed();
 	static void hideAllMuzzleFlashes(const ModelConditionInfo* state, RenderObjClass* renderObject);

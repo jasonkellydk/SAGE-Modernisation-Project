@@ -128,8 +128,6 @@ public:
 
 	void init();
 	void update();
-	void drawForeground( Coord2D multi, ICoord2D offset );	///< draw function to be called within a w3d draw procedure for the foreground
-	void drawBackground( Coord2D multi, ICoord2D offset );	///< draw function to be called within a w3d draw procedure for the background
 	void reset();
 
 	void addAnimation( ControlBarSchemeAnimation *schemeAnim );
@@ -246,13 +244,14 @@ public:
 class ControlBarSchemeManager
 {
 public:
+	ControlBarScheme *getCurrentScheme() const { return m_currentScheme; }
+	Coord2D getMultiplier() const { return m_multiplier; }
+
 	ControlBarSchemeManager();
 	~ControlBarSchemeManager();
 
 	void init();						///< Initialize from the INI files
 	void update();					///< move the animations if we have any
-	void drawForeground( ICoord2D offset );	///< draw function to be called within a w3d draw procedure for the foreground
-	void drawBackground( ICoord2D offset );	///< draw function to be called within a w3d draw procedure for the background
 
 	void setControlBarSchemeByPlayer(Player *p);																				///< Based off the playerTemplate, pick the right scheme for the control bar
 	void setControlBarSchemeByPlayerTemplate( const PlayerTemplate *pt, Bool useSmall = FALSE);

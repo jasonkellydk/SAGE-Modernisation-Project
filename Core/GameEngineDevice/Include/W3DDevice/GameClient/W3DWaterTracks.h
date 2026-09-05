@@ -24,6 +24,9 @@
 
 #pragma once
 
+#include <array>
+#include <span>
+#include <vector>
 #include "WW3D2/Backend/RenderBackend.h"
 #include "W3DDevice/GameClient/WaterMaterial.h"
 #include "WWMath/aabox.h"
@@ -50,8 +53,8 @@ public:
 	void init( Real width, Real length, const Vector2 &start, const Vector2 &end, const Char *texturename, Int waveTimeOffset);	///<allocate W3D resources and set size
 	void init( Real width, const Vector2 &start, const Vector2 &end, const Char *texturename);	///<allocate W3D resources and set size
 	Int	update(Int msElapsed);	///< update animation state
-	Int render(RenderBackendVertexBuffer *vertexBuffer,
-		RenderBackendIndexBuffer *indexBuffer, Int batchStart);	///<draw this object
+	void render(WaterMaterialClass& material, Graphics::WaterMeshHandle& mesh,
+        std::vector<WaterSurfaceVertex>& vertices, std::span<const unsigned short> indices);	///<draw this object
 
 protected:
 	TextureBaseClass *m_stageZeroTexture;	///<primary texture
@@ -124,8 +127,9 @@ public:
 	WaterTracksObj *findTrack(Vector2 &start, Vector2 &end, waveType type);
 
 protected:
-	RenderBackendVertexBuffer *m_vertexBuffer;	///<backend vertex buffer used to draw all tracks
-	RenderBackendIndexBuffer *m_indexBuffer;	///<backend indices defining triangles in maximum length track
+    std::vector<WaterSurfaceVertex> m_vertices;
+    std::vector<UnsignedShort> m_indices;
+    Graphics::WaterMeshHandle m_graphicsMesh;
 	WaterMaterialClass m_material;	///<explicit programmable track material
 
 	WaterTracksObj *m_usedModules;	///<active objects being rendered in the scene
@@ -133,7 +137,6 @@ protected:
 
 	Int		m_stripSizeX;			///< resolution (vertex count) of wave strip
 	Int		m_stripSizeY;			///< resolution (vertex count) of wave strip
-	Int		m_batchStart;			///< start of unused vertices in vertex buffer
 	Real	m_level;				///< water level
 	void releaseTrack( WaterTracksObj *mod );	///<returns track object to free store.
 };

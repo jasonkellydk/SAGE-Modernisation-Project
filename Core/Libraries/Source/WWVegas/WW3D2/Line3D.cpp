@@ -47,6 +47,9 @@
  *   Line3DClass::Render -- render the 3d line                             *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
+#include "WW3D2/GraphicsGeometry.h"
+#include "WW3D2/RInfo.h"
+#include "WW3D2/Camera.h"
 #include "Line3D.h"
 #include "VertMaterial.h"
 #include "Shader.h"
@@ -266,42 +269,21 @@ void Line3DClass::Render(RenderInfoClass & rinfo)
 		return;
 	}
 
-	WW3D::Get_Render_Backend()->Set_Shader(Shader);
-	WW3D::Get_Render_Backend()->Set_Texture(0,nullptr);
-	VertexMaterialClass *vm=VertexMaterialClass::Get_Preset(VertexMaterialClass::PRELIT_DIFFUSE);
-	WW3D::Get_Render_Backend()->Set_Material(vm);
-	REF_PTR_RELEASE(vm);
-
-	WW3D::Get_Render_Backend()->Set_Transform(RenderBackendTransform::World,Transform);
-
-	DynamicVBAccessClass vb(BUFFER_TYPE_DYNAMIC_RENDER,RenderBackend_Dynamic_Vertex_Format,8);
-	{
-		DynamicVBAccessClass::WriteLockClass Lock(&vb);
-		const VertexFormatInfoClass &fi=vb.Get_Format_Info();
-		unsigned char *vb=(unsigned char*)Lock.Get_Formatted_Vertex_Array();
-		int i;
-		unsigned int color=WW3D::Get_Render_Backend()->Pack_Color(Color);
-
-		for (i=0; i<8; i++)
-		{
-			*(Vector3*)(vb+fi.Get_Location_Offset())=vert[i];
-			*(unsigned int*)(vb+fi.Get_Diffuse_Offset())=color;
-			vb+=fi.Get_Vertex_Size();
-		}
-	}
-
-	DynamicIBAccessClass ib(BUFFER_TYPE_DYNAMIC_RENDER,36);
-	{
-		DynamicIBAccessClass::WriteLockClass Lock(&ib);
-		unsigned short *mem=Lock.Get_Index_Array();
-		for (int i=0; i<36; i++)
-			mem[i]=Indices[i];
-	}
-
-	WW3D::Get_Render_Backend()->Set_Vertex_Buffer(vb);
-	WW3D::Get_Render_Backend()->Set_Index_Buffer(ib,0);
-	WW3D::Get_Render_Backend()->Draw_Indexed_Primitives(
-		RenderBackendPrimitiveType::TriangleList, 0, 0, 8, 0, 36 / 3);
+    VertexFormatXYZDUV1 vertices[8]{};
+    const unsigned color = WW3D::Get_Render_Backend()->Pack_Color(Color);
+    for (unsigned i=0; i<8; ++i) {
+        vertices[i].x=vert[i].X;
+        vertices[i].y=vert[i].Y;
+        vertices[i].z=vert[i].Z;
+        vertices[i].diffuse=color;
+    }
+    unsigned indices[36];
+    for (unsigned i=0; i<36; ++i) indices[i]=Indices[i];
+    Matrix3D view;
+    Matrix4x4 projection;
+    rinfo.Camera.Get_View_Matrix(&view);
+    rinfo.Camera.Get_Backend_Projection_Matrix(&projection);
+    Draw_Graphics_Prelit_Geometry(vertices,indices,projection*Matrix4x4(view)*Matrix4x4(Transform),Shader,nullptr);
 }
 
 /**************************************************************************

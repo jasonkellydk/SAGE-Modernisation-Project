@@ -49,6 +49,8 @@
 //-----------------------------------------------------------------------------
 
 #pragma once
+#include "W3DDevice/GameClient/W3DObjectGraphics.h"
+import Graphics.Scene.Surfaces.Renderer;
 
 //-----------------------------------------------------------------------------
 //           Includes
@@ -79,6 +81,9 @@ public:
 
 private:
   void setDefaultLineStyle();
+    void drawLine(RenderInfoClass &info);
+    W3DObjectGraphics m_nodeGraphics;
+    Graphics::SurfaceMeshHandle m_lineMesh;
 
 	RenderObjClass *m_waypointNodeRobj;
 	SegmentedLineClass *m_line;

@@ -38,6 +38,9 @@
 
 #undef STRICT
 #include "WW3D2/WW3D.h"
+#ifdef RTS_ZEROHOUR
+#include "WW3D2/GraphicsToolFrame.h"
+#endif
 #include "WW3D2/AssetMgr.h"
 
 #ifdef RTS_DEBUG
@@ -391,6 +394,9 @@ CW3DViewApp::ExitInstance()
 		//	Shutdown W3D
 		//
 		WW3DAssetManager::Get_Instance()->Free_Assets ();
+#ifdef RTS_ZEROHOUR
+        Shutdown_Graphics_Tool_Frame();
+#endif
 		WW3D::Shutdown ();
 
 		//

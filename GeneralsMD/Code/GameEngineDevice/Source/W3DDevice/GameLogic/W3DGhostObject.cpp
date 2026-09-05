@@ -41,8 +41,8 @@
 #include "GameLogic/GameLogic.h"
 #include "GameLogic/Object.h"
 #include "GameLogic/PartitionManager.h"
-#include "W3DDevice/GameClient/Module/W3DModelDraw.h"
 #include "W3DDevice/GameClient/W3DAssetManager.h"
+#include "W3DDevice/GameClient/Module/W3DModelDraw.h"
 #include "W3DDevice/GameClient/W3DDisplay.h"
 #include "W3DDevice/GameClient/W3DScene.h"
 #include "W3DDevice/GameLogic/W3DGhostObject.h"
@@ -157,19 +157,17 @@ void W3DRenderObjectSnapshot::update(RenderObjClass *robj, DrawableInfo *drawInf
 // ------------------------------------------------------------------------------------------------
 Bool W3DRenderObjectSnapshot::addToScene()
 {
-	if (!m_robj->Is_In_Scene())
-	{
-		W3DDisplay::m_3DScene->Add_Render_Object(m_robj);
-		return true;
-	}
-	return false;
+	if (m_robj == nullptr || m_robj->Is_In_Scene() || W3DDisplay::m_3DScene == nullptr)
+		return false;
+	W3DDisplay::m_3DScene->Add_Render_Object(m_robj);
+	return true;
 }
 
 // ------------------------------------------------------------------------------------------------
 // ------------------------------------------------------------------------------------------------
 Bool W3DRenderObjectSnapshot::removeFromScene()
 {
-	return m_robj->Remove();
+	return m_robj != nullptr && m_robj->Remove();
 }
 
 // ------------------------------------------------------------------------------------------------

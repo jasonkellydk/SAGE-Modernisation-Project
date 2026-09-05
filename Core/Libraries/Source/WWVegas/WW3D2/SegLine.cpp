@@ -519,6 +519,14 @@ void SegmentedLineClass::Set_Texture_Reduction_Factor(float trf)
 
 
 
+void SegmentedLineClass::Extract_Geometry(RenderInfoClass &rinfo, const SegLineGeometrySink &sink)
+{
+    if (!Is_Not_Hidden_At_All() || PointLocations.Count()<2) return;
+    SphereClass sphere;
+    Get_Obj_Space_Bounding_Sphere(sphere);
+    LineRenderer.Render(rinfo,Transform,PointLocations.Count(),&PointLocations[0],sphere,nullptr,&sink);
+}
+
 void SegmentedLineClass::Render_Seg_Line(RenderInfoClass & rinfo)
 {
 	// Line must have at least two points to be valid

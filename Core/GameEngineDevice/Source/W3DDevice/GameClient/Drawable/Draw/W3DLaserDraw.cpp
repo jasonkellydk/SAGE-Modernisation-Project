@@ -31,7 +31,6 @@
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 #include <stdlib.h>
 
-import Graphics.Scene.Beams;
 
 #include "Common/Thing.h"
 #include "Common/ThingTemplate.h"
@@ -111,9 +110,6 @@ void W3DLaserDrawModuleData::buildFieldParse(MultiIniFieldParse& p)
 W3DLaserDraw::W3DLaserDraw( Thing *thing, const ModuleData* moduleData ) :
 	DrawModule( thing, moduleData ),
 	m_line3D(nullptr),
-	m_modernBeams(nullptr),
-	m_modernBeamCount(0),
-	m_modernEnabled(TRUE),
 	m_texture(nullptr),
 	m_textureAspectRatio(1.0f),
 	m_selfDirty(TRUE)
@@ -123,14 +119,6 @@ W3DLaserDraw::W3DLaserDraw( Thing *thing, const ModuleData* moduleData ) :
 	Int i;
 
 	const W3DLaserDrawModuleData *data = getW3DLaserDrawModuleData();
-	m_modernBeamCount = data->m_numBeams * data->m_segments;
-	if (m_modernBeamCount != 0)
-	{
-		m_modernBeams = NEW Graphics::BeamHandle[m_modernBeamCount];
-		for (UnsignedInt index = 0; index < m_modernBeamCount; ++index)
-		m_modernBeams[index] = {};
-	}
-
 	m_texture = WW3DAssetManager::Get_Instance()->Get_Texture( data->m_textureName.str() );
 	if (m_texture)
 	{
@@ -225,67 +213,17 @@ W3DLaserDraw::W3DLaserDraw( Thing *thing, const ModuleData* moduleData ) :
 
 }
 
-bool W3DLaserDraw::updateModernBeam(UnsignedInt index, const Vector3 &start, const Vector3 &end, Real width, Real red, Real green, Real blue, Real opacity)
-{
-	if (!m_modernEnabled || m_modernBeams == nullptr || index >= m_modernBeamCount)
-		return false;
 
-	Graphics::BeamHandle &beam = m_modernBeams[index];
-	Graphics::BeamDesc description;
-	description.start = {start.X, start.Y, start.Z};
-	description.end = {end.X, end.Y, end.Z};
-	description.width = width;
-	description.color = {red, green, blue, 1.0f};
-	description.opacity = opacity;
-	description.flags = width > 0.0f && opacity > 0.0f ? Graphics::BeamFlags::Enabled : Graphics::BeamFlags::None;
-	if (!beam.Is_Valid())
-	{
-		beam = Graphics::CreateBeam(description);
-		if (!beam.Is_Valid())
-			return false;
-	}
 
-	return Graphics::UpdateBeam(beam, description);
-}
 
-void W3DLaserDraw::disableModernBeams() noexcept
-{
-	if (m_modernBeams != nullptr)
-	{
-		for (UnsignedInt index = 0; index < m_modernBeamCount; ++index)
-		{
-			if (m_modernBeams[index].Is_Valid())
-			{
-				Graphics::DestroyBeam(m_modernBeams[index]);
-				m_modernBeams[index] = {};
-			}
-		}
-	}
 
-	m_modernEnabled = FALSE;
-	setLegacyBeamsVisible(TRUE);
-}
 
-void W3DLaserDraw::setLegacyBeamsVisible(Bool visible) noexcept
-{
-	if (m_line3D == nullptr)
-		return;
-
-	for (UnsignedInt index = 0; index < m_modernBeamCount; ++index)
-	{
-		if (m_line3D[index] != nullptr)
-			m_line3D[index]->Set_Visible(visible);
-	}
-}
 
 //-------------------------------------------------------------------------------------------------
 //-------------------------------------------------------------------------------------------------
 W3DLaserDraw::~W3DLaserDraw()
 {
 	const W3DLaserDrawModuleData *data = getW3DLaserDrawModuleData();
-	disableModernBeams();
-	delete [] m_modernBeams;
-	m_modernBeams = nullptr;
 
 	for( UnsignedInt i = 0; i < data->m_numBeams * data->m_segments; i++ )
 	{
@@ -486,8 +424,8 @@ void W3DLaserDraw::doDrawModule(const Matrix3D* transformMtx)
 				m_line3D[ index ]->Set_Width( width );
 				m_line3D[ index ]->Set_Points( 2, &laserPoints[0] );
 
-				if (m_modernEnabled && !updateModernBeam(index, laserPoints[0], laserPoints[1], width, red, green, blue, alpha))
-					disableModernBeams();
+				m_line3D[index]->Set_Color(Vector3(red,green,blue));
+				m_line3D[index]->Set_Visible(width > 0.0f && alpha > 0.0f);
 			}
 		}
 	}

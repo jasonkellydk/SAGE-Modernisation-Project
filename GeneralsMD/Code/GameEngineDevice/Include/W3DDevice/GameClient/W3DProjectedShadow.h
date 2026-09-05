@@ -72,7 +72,6 @@ class W3DProjectedShadowManager	: public ProjectedShadowManager
 		SpecialRenderInfoClass *getRenderContext()	{ return m_shadowContext;}
 		void updateRenderTargetTextures();	///<render into any textures that need updating.
 		void queueDecal(W3DProjectedShadow *shadow);	///<add shadow decal to render list - decal conforms to terrain.
-		void queueSimpleDecal(W3DProjectedShadow *shadow);	///< add shadow decal to render list - decal floats on terrain.
 		void flushDecals(W3DShadowTexture *texture, ShadowType type);	///<empty queue by rendering all decals with given texture
 
 	private:
@@ -80,6 +79,8 @@ class W3DProjectedShadowManager	: public ProjectedShadowManager
 		void updateShadowNumbers(ShadowType shadowType, Int addNum);
 
 	private:
+        struct GraphicsState;
+        GraphicsState* m_graphics;
 		W3DProjectedShadow *m_shadowList;
 		W3DProjectedShadow *m_decalList;
 		TextureClass	*m_dynamicRenderTarget;	///<offscreen video memory texture used to render all shadow textures.

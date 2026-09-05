@@ -1115,13 +1115,15 @@ bool TexProjectClass::Compute_Ortho_Projection
 bool TexProjectClass::Compute_Texture
 (
 	RenderObjClass * model,
-	SpecialRenderInfoClass * context
+	SpecialRenderInfoClass * context,
+    bool (*draw)(RenderObjClass&, RenderInfoClass&)
 )
 {
 	if ((model == nullptr) || (context == nullptr))
 	{
 		return false;
 	}
+    if (draw == nullptr) return false;
 	/*
 	** Render to texture
 	*/
@@ -1158,12 +1160,18 @@ bool TexProjectClass::Compute_Texture
 		bool snapshot=WW3D::Is_Snapshot_Activated();
 		SNAPSHOT_SAY(("TexProjectCLass::Begin_Render()"));
 		WW3D::Begin_Render(true,zclear,color);	// false to zclear as we don't have z-buffer
-		WW3D::Render(*model,*context);
+        bool rendered = true;
+        if (draw) {
+            context->Camera.Apply();
+            rendered = draw(*model,*context);
+        } else {
+        }
 		SNAPSHOT_SAY(("TexProjectCLass::End_Render()"));
 		WW3D::End_Render(false);
 		WW3D::Activate_Snapshot(snapshot);	// End_Render() ends the shapsnot, so restore the state
 
 		WW3D::Get_Render_Backend()->Set_Render_Target(nullptr);
+        if (!rendered) return false;
 
 	}
 

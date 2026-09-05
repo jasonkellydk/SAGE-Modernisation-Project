@@ -1,15 +1,20 @@
 /*
 ** Command & Conquer Generals Zero Hour(tm)
 **
-** Backend-neutral modern water material. The water render object supplies
+** Water material adapter. The water render object supplies
 ** geometry and material inputs; this class owns the explicit shader contract.
 */
 
 #pragma once
 
+#include <array>
+#include <span>
 #include <cstdint>
+import Graphics.Scene.Water.Renderer;
 
-#include "WW3D2/ProgrammableMaterial.h"
+#include "WWMath/Vector4.h"
+class TextureBaseClass;
+class SceneClass;
 
 // The water shaders consume this explicit stream contract.  It is a
 // backend-neutral submission type; it is intentionally not one of the old
@@ -72,18 +77,16 @@ public:
 	bool ReacquireResources();
 	void Reset();
 
-private:
-	bool Initialize();
-	void Set_Common_Constants(const WaterMaterialParameters &parameters);
-	void Set_Surface_State(bool additive_blend, unsigned reflection_stage);
-	void Set_Track_State();
-	void Set_Displacement_State();
-	void Set_Sky_State(bool alpha_blend, bool clamp_texture);
+    bool Draw(Graphics::WaterMeshHandle mesh, bool wireframe = false);
+    void Set_Fog(SceneClass* scene);
 
-	ShaderProgramClass m_ocean_program;
-	ShaderProgramClass m_displacement_program;
-	ShaderProgramClass m_surface_program;
-	ShaderProgramClass m_sky_program;
-	ShaderProgramClass m_track_program;
-	ProgrammableMaterialPass m_pass;
+private:
+    void Set_Common_Constants(const WaterMaterialParameters& parameters);
+    Graphics::WaterParameters m_parameters;
+    Graphics::WaterStyle m_style;
+    std::array<Graphics::RHITextureHandle,9> m_textures{};
 };
+
+bool Upload_Water_Geometry(Graphics::WaterMeshHandle& mesh,
+    std::span<const WaterSurfaceVertex> vertices, std::span<const unsigned short> indices,
+    bool triangle_strip = false);

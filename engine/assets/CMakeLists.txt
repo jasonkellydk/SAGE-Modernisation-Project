@@ -19,13 +19,17 @@ target_sources(generals_assets
             material/MaterialAsset.cppm
             model/ModelAsset.cppm
             texture/TextureAsset.cppm
+            font/FontAsset.cppm
             import/ModelImporter.cppm
             cache/ModelLoadTask.cppm
             cache/MaterialLoadTask.cppm
             cache/TextureLoadTask.cppm
+            cache/FontLoadTask.cppm
             cache/AssetCache.cppm
+            runtime/AssetRuntime.cppm
             adapters/w3d/chunks/W3DChunkReader.cppm
             adapters/w3d/materials/W3DMaterialParser.cppm
+            adapters/w3d/materials/W3DPassBindings.cppm
             adapters/w3d/mesh/W3DMeshParser.cppm
             adapters/w3d/model/W3DModelBuilder.cppm
             adapters/w3d/W3DAdapter.cppm
@@ -33,7 +37,11 @@ target_sources(generals_assets
 
 target_compile_features(generals_assets PUBLIC cxx_std_20)
 
-option(RTS_BUILD_ASSET_TESTS "Build modern asset system unit and integration tests." ${RTS_BUILD_GRAPHICS_TESTS})
+if(TARGET stb)
+    target_link_libraries(generals_assets PUBLIC stb)
+endif()
+
+option(RTS_BUILD_ASSET_TESTS "Build asset system unit and integration tests." ${RTS_BUILD_GRAPHICS_TESTS})
 
 if(RTS_BUILD_ASSET_TESTS)
     include(CTest)
@@ -58,17 +66,20 @@ if(RTS_BUILD_ASSET_TESTS)
     # separate executables prevents a test driver from becoming another god
     # file and makes responsibility failures easy to identify in CTest.
     add_assets_test(generals_assets_handle_test core/AssetHandle.test.cppm)
+    add_assets_test(generals_assets_w3d_pass_bindings_test adapters/w3d/materials/W3DPassBindings.test.cppm)
     add_assets_test(generals_assets_state_test core/AssetState.test.cppm)
     add_assets_test(generals_assets_identity_test core/AssetIdentity.test.cppm)
     add_assets_test(generals_assets_math_test core/AssetMath.test.cppm)
     add_assets_test(generals_assets_material_test material/MaterialAsset.test.cppm)
     add_assets_test(generals_assets_model_test model/ModelAsset.test.cppm)
     add_assets_test(generals_assets_texture_test texture/TextureAsset.test.cppm)
+    add_assets_test(generals_assets_font_test font/FontAsset.test.cppm)
     add_assets_test(generals_assets_importer_test import/ModelImporter.test.cppm)
     add_assets_test(generals_assets_load_task_test cache/ModelLoadTask.test.cppm)
     add_assets_test(generals_assets_material_load_task_test cache/MaterialLoadTask.test.cppm)
     add_assets_test(generals_assets_texture_load_task_test cache/TextureLoadTask.test.cppm)
     add_assets_test(generals_assets_cache_test cache/AssetCache.test.cppm)
+    add_assets_test(generals_assets_runtime_test runtime/AssetRuntime.test.cppm)
     add_assets_test(generals_assets_w3d_chunks_test adapters/w3d/chunks/W3DChunkReader.test.cppm)
     add_assets_test(generals_assets_w3d_materials_test adapters/w3d/materials/W3DMaterialParser.test.cppm)
     add_assets_test(generals_assets_w3d_mesh_test adapters/w3d/mesh/W3DMeshParser.test.cppm)

@@ -22,8 +22,6 @@ set(WW3D2_SRC
 	AssetStatus.h
 	StringUtilities.h
 	MeshRenderLists.h
-	MeshPolygonRenderer.cpp
-	MeshPolygonRenderer.h
 	MeshRenderer.cpp
 	MeshRenderer.h
 	RendererDebugger.cpp
@@ -63,8 +61,6 @@ set(WW3D2_SRC
     DynaMesh.h
     Font3D.cpp
     Font3D.h
-    FramGrab.cpp
-    FramGrab.h
     HAnim.cpp
     HAnim.h
     #HAnimMgr.cpp

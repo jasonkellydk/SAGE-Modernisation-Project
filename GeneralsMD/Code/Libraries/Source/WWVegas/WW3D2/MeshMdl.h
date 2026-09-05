@@ -154,7 +154,6 @@ public:
 
 	MeshModelClass & operator = (const MeshModelClass & that);
 	void							Reset(int polycount,int vertcount,int passcount);
-	void							Register_For_Rendering();
 	void							Delete_Gap_Filler();
 	void							Shadow_Render(SpecialRenderInfoClass & rinfo,const Matrix3D & tm,const HTreeClass * htree);
 
@@ -245,10 +244,7 @@ public:
 	void							Init_For_NPatch_Rendering();
 	const GapFillerClass*	Get_Gap_Filler() const { return GapFiller; }
 
-	bool							Has_Polygon_Renderers() const;
 
-	RenderBackendMeshData *		Get_Render_Backend_Data() const { return RenderBackendData; }
-	void							Set_Render_Backend_Data(RenderBackendMeshData * data) { RenderBackendData = data; }
 
 protected:
 
@@ -324,11 +320,9 @@ protected:
 	MaterialInfoClass	*									MatInfo;
 
 	// Opaque mesh rendering data owned by the active render backend.
-	RenderBackendMeshData *								RenderBackendData;
 
 	// Jani: Adding this here temporarily... must fine better place
 	GapFillerClass *										GapFiller;
-	bool														HasBeenInUse;	// For debugging purposes!
 
 	friend class MeshClass;
 	friend class MeshDeformSetClass;

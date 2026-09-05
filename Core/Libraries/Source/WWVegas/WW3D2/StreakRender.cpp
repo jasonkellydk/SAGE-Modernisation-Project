@@ -33,6 +33,9 @@
 #include "IndexBuffer.h"
 #include "RInfo.h"
 #include "SortingRenderer.h"
+#include "GraphicsGeometry.h"
+#include "Camera.h"
+#include <vector>
 #include "WWMath/vp.h"
 #include "WWMath/Vector3i.h"
 #include "WWLib/RANDOM.h"
@@ -1325,70 +1328,23 @@ void StreakRendererClass::RenderStreak
 		** Render
 		*/
 
-		DynamicVBAccessClass Verts((sorting?BUFFER_TYPE_DYNAMIC_SORTING:BUFFER_TYPE_DYNAMIC_RENDER),RenderBackend_Dynamic_Vertex_Format,vnum);
-		// Copy in the data to the  VB
-		{
-			DynamicVBAccessClass::WriteLockClass Lock(&Verts);
-			unsigned int i;
-			unsigned char *vb=(unsigned char*)Lock.Get_Formatted_Vertex_Array();
-			const VertexFormatInfoClass& fvfinfo=Verts.Get_Format_Info();
-			int segIdx = 0;
-			unsigned int argb = 0x00000000;
-
-			unsigned int oddEven = 0;
-
-			//oddEven = ( personalities[0] & 1 );
-
-			const unsigned verticesOffset = fvfinfo.Get_Location_Offset();
-			const unsigned diffuseOffset = fvfinfo.Get_Diffuse_Offset();
-			const unsigned textureOffset = fvfinfo.Get_Tex_Offset(0);
-			const unsigned vbSize = fvfinfo.Get_Vertex_Size();
-
-			for (i=0; i<vnum; i++)
-			{
-				DEBUG_ASSERTCRASH(vertexArray[i].x != (float)0xdeadbeef && vertexArray[i].y != (float)0xdeadbeef && vertexArray[i].z != (float)0xdeadbeef && vertexArray[i].u1 != (float)0xdeadbeeef && vertexArray[i].v1 != (float)0xdeadbeef, ("Uninitialized vertexArray[%d]", i));
-				DEBUG_ASSERTCRASH((! _isnan(vertexArray[i].x) && _finite(vertexArray[i].x) && ! _isnan(vertexArray[i].y) && _finite(vertexArray[i].y) && ! _isnan(vertexArray[i].z) && _finite(vertexArray[i].z)) , ("Bad vertexArray[%d]", i));
-				Vector3 *vertex = reinterpret_cast<Vector3 *>(vb + verticesOffset);
-				vertex->X = vertexArray[i].x;
-				vertex->Y = vertexArray[i].y;
-				vertex->Z = vertexArray[i].z;
-				*reinterpret_cast<unsigned int *>(vb + diffuseOffset) = WW3D::Get_Render_Backend()->Pack_Color_Clamped(colors[MIN((i/2), point_cnt)]); // TODO: Does not work correctly when subdivision are not 0
-				Vector2 *texture = reinterpret_cast<Vector2 *>(vb + textureOffset);
-				texture->U = vertexArray[i].u1;
-				texture->V = vertexArray[i].v1;
-				vb += vbSize;
-			}
-		}
-
-		DynamicIBAccessClass ib_access((sorting?BUFFER_TYPE_DYNAMIC_SORTING:BUFFER_TYPE_DYNAMIC_RENDER),triangleIndex*3);
-		{
-			unsigned int i;
-			DynamicIBAccessClass::WriteLockClass lock(&ib_access);
-			unsigned short* inds=lock.Get_Index_Array();
-
-			for (i=0; i<triangleIndex; i++)
-			{
-				*inds++=v_index_array[i].I;
-				*inds++=v_index_array[i].J;
-				*inds++=v_index_array[i].K;
-			}
-		}
-
-
-		WW3D::Get_Render_Backend()->Set_Index_Buffer(ib_access,0);
-		WW3D::Get_Render_Backend()->Set_Vertex_Buffer(Verts);
-		WW3D::Get_Render_Backend()->Set_Texture(0,Texture);
-		WW3D::Get_Render_Backend()->Set_Shader(shader);
-
-		if (sorting)
-		{
-			SortingRendererClass::Insert_Triangles(obj_sphere,0,triangleIndex,0,vnum);
-		}
-		else
-		{
-			WW3D::Get_Render_Backend()->Draw_Indexed_Primitives(
-				RenderBackendPrimitiveType::TriangleList, 0, 0, vnum, 0, triangleIndex);
-		}
+        std::vector<VertexFormatXYZDUV1> vertices(vnum);
+        for (unsigned i=0;i<vnum;++i) {
+            auto& vertex=vertices[i];
+            vertex.x=vertexArray[i].x; vertex.y=vertexArray[i].y; vertex.z=vertexArray[i].z;
+            vertex.u1=vertexArray[i].u1; vertex.v1=vertexArray[i].v1;
+            vertex.diffuse=WW3D::Get_Render_Backend()->Pack_Color_Clamped(colors[MIN(i/2,point_cnt-1)]);
+        }
+        std::vector<unsigned> indices(triangleIndex*3);
+        for (unsigned i=0;i<triangleIndex;++i) {
+            indices[i*3]=v_index_array[i].I; indices[i*3+1]=v_index_array[i].J;
+            indices[i*3+2]=v_index_array[i].K;
+        }
+        Matrix4x4 projection;
+        rinfo.Camera.Get_Backend_Projection_Matrix(&projection);
+        const Matrix4x4 camera_space(true);
+        Draw_Graphics_Prelit_Geometry(vertices,indices,projection,shader,Texture,
+            sorting && WW3D::Is_Sorting_Enabled() ? &camera_space : nullptr);
 
 	}
 

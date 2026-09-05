@@ -47,6 +47,9 @@
 //-----------------------------------------------------------------------------
 //           Includes
 //-----------------------------------------------------------------------------
+#include <memory>
+#include <unordered_map>
+#include "W3DDevice/GameClient/W3DObjectGraphics.h"
 #include "WWLib/always.h"
 #include "WW3D2/RendObj.h"
 #include "WW3D2/W3DFile.h"
@@ -140,7 +143,7 @@ protected:
 	Bool		m_doCull;
 	TPropType m_propTypes[MAX_TYPES];	///< Info about a kind of prop.
 	Int			m_numPropTypes;						///< Number of entries in m_propTypes.
-	W3DShroudMaterialPassClass	*m_propShroudMaterialPass;	///< Custom render pass which applies shrouds to objects
+	std::unordered_map<RenderObjClass*,std::unique_ptr<W3DObjectGraphics>> m_graphics;
 
 	LightClass *m_light;
 

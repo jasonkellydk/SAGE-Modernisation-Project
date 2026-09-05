@@ -2,7 +2,11 @@
 ** Command & Conquer Generals Zero Hour(tm)
 */
 
+#include <array>
+#include <span>
+#include <memory>
 #include "W3DDevice/GameClient/WaterSkyboxSystem.h"
+#include "W3DDevice/GameClient/W3DObjectGraphics.h"
 
 #include "W3DDevice/GameClient/W3DAssetManager.h"
 #include "WW3D2/MatInfo.h"
@@ -14,6 +18,7 @@
 struct WaterSkyboxSystem::State
 {
 	RenderObjClass *skybox = nullptr;
+    W3DObjectGraphics graphics;
 };
 
 WaterSkyboxSystem::WaterSkyboxSystem() :
@@ -72,7 +77,7 @@ void WaterSkyboxSystem::Render(RenderInfoClass &rinfo, float x, float y,
 
 	Vector3 position(x, y, z);
 	m_state->skybox->Set_Position(position);
-	m_state->skybox->Render(rinfo);
+	m_state->graphics.Render(*m_state->skybox,rinfo,{},nullptr,true);
 }
 
 void WaterSkyboxSystem::Replace_Texture(const char *old_name,
@@ -85,4 +90,5 @@ void WaterSkyboxSystem::Replace_Texture(const char *old_name,
 		static_cast<W3DAssetManager *>(W3DAssetManager::Get_Instance());
 	asset_manager->replacePrototypeTexture(m_state->skybox, old_name,
 		new_name);
+    m_state->graphics.Invalidate();
 }

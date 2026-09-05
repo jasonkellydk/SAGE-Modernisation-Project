@@ -48,6 +48,11 @@ class RenderInfoClass;
 class SphereClass;
 struct W3dEmitterLinePropertiesStruct;
 struct VertexFormatXYZDUV1;
+struct SegLineGeometrySink
+{
+    void* context = nullptr;
+    void (*submit)(void*, const VertexFormatXYZDUV1*, unsigned, const unsigned*, unsigned) = nullptr;
+};
 
 
 // The maximum allowable level of subdivision. This should be no more than 7 to avoid increasing
@@ -120,7 +125,7 @@ public:
 										unsigned int point_count,
 										Vector3 * points,
 										const SphereClass & obj_sphere,
-										Vector4 * rgbas = 0);
+										Vector4 * rgbas = 0, const SegLineGeometrySink* sink = nullptr);
 
 	void					Reset_Line();
 	void					Scale(float scale);

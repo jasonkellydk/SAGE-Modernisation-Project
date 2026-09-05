@@ -24,6 +24,9 @@
 
 #pragma once
 
+#include <array>
+#include <span>
+import Graphics.Scene.Surfaces.Renderer;
 #include "WWLib/always.h"
 #include "WW3D2/RendObj.h"
 #include "WW3D2/W3DFile.h"
@@ -121,7 +124,7 @@ public:
 
 	void setDetail();
 
-	void flush ();	///<draw all tracks that were requested for rendering.
+	void flush (CameraClass& camera);	///<draw all tracks that were requested for rendering.
 	void update();	///<update the state of all edges (fade alpha, remove old, etc.)
 
 	void init( SceneClass *TerrainTracksScene);	///< pre-allocate track objects
@@ -132,10 +135,7 @@ public:
 	void unbindTrack( TerrainTracksRenderObjClass *mod );	///<releases control of track object
 
 protected:
-	VertexBufferClass		*m_vertexBuffer;	///<vertex buffer used to draw all tracks
-	IndexBufferClass			*m_indexBuffer;	///<indices defining triangles in maximum length track
-	VertexMaterialClass	  	  *m_vertexMaterialClass;	///< vertex lighting material
-	ShaderClass m_shaderClass; ///<shader or rendering state for heightmap
+	Graphics::SurfaceMeshHandle m_graphicsMesh;
 
 	TerrainTracksRenderObjClass *m_usedModules;	///<active objects being rendered in the scene
 	TerrainTracksRenderObjClass *m_freeModules;	//<unused modules that are free to use again

@@ -26,6 +26,8 @@
 #include <WW3D2/WW3D.h>
 
 #include "StdAfx.h"
+#include "WW3D2/LightEnvironment.h"
+#include "WW3D2/GraphicsToolFrame.h"
 #include "resource.h"
 
 #include "Lib/BaseType.h"
@@ -250,7 +252,13 @@ static UnsignedByte * generatePreview( const ThingTemplate *tt )
 				return nullptr;
 			}
 
-			// Set the render target
+			if (!Begin_Graphics_Tool_Frame()) {
+                objectTexture->Release_Ref();
+                model->Release_Ref();
+                return nullptr;
+            }
+
+            // Set the render target
 			backend->Set_Render_Target(objectTexture);
 
 			// create the camera
@@ -268,8 +276,14 @@ static UnsignedByte * generatePreview( const ThingTemplate *tt )
 				camera->Set_Projection_Type( CameraClass::ORTHO );
 
 			// Clear the backbuffer
-			WW3D::Begin_Render(true,true,Vector3(0.5f,0.5f,0.5f));
-			//WW3D::Begin_Render(true,true,Vector3(1.0f,1.0f,1.0f));
+            if (WW3D::Begin_Render(true, true, Vector3(0.5f, 0.5f, 0.5f)) != WW3D_ERROR_OK) {
+                backend->Set_Render_Target(nullptr);
+                Abort_Graphics_Tool_Frame();
+                REF_PTR_RELEASE(objectTexture);
+                REF_PTR_RELEASE(camera);
+                REF_PTR_RELEASE(model);
+                return nullptr;
+            }
 
 			RenderInfoClass rinfo(*camera);
 			LightEnvironmentClass lightEnv;
@@ -282,6 +296,8 @@ static UnsignedByte * generatePreview( const ThingTemplate *tt )
 
 			// Change the rendertarget back to the main backbuffer
 			backend->Set_Render_Target(nullptr);
+            // End the offscreen frame without presenting the editor window.
+            Abort_Graphics_Tool_Frame();
 
 			SurfaceClass *surface = objectTexture->Get_Surface_Level();
 			UnsignedByte *data = saveSurface(surface);
@@ -290,6 +306,7 @@ static UnsignedByte * generatePreview( const ThingTemplate *tt )
 
 			REF_PTR_RELEASE(objectTexture);
 			REF_PTR_RELEASE(camera);
+            REF_PTR_RELEASE(model);
 			return data;
 		}
 	}

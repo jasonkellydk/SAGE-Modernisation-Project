@@ -740,80 +740,6 @@ void ControlBarScheme::update()
 }
 
 //
-// Loop through the proper lists and draw everything for the foreground
-//-----------------------------------------------------------------------------
-void ControlBarScheme::drawForeground( Coord2D multi, ICoord2D offset )
-{
-	for(Int i = CONTROL_BAR_SCHEME_FOREGROUND_IMAGE_LAYERS - 1; i >= 0; i--)
-	{
-		ControlBarSchemeImageList::iterator it = m_layer[i].begin();
-		while (it != m_layer[i].end())
-		{
-			ControlBarSchemeImage *schemeImage = *it;
-			if( !schemeImage )
-			{
-				DEBUG_CRASH(("There is no ControlBarSchemeImage found in the m_layer list"));
-				it++;
-				continue;
-			}
-
-			// if we dont' have an image, don't try to draw it
-			if(!schemeImage->m_image)
-			{
-				it++;
-				continue;
-			}
-
-			// draw the image
-			TheDisplay->drawImage(schemeImage->m_image, schemeImage->m_position.x * multi.x + offset.x,
-														schemeImage->m_position.y * multi.y + offset.y,
-														(schemeImage->m_position.x + schemeImage->m_size.x) * multi.x + offset.x,
-														(schemeImage->m_position.y + schemeImage->m_size.y) * multi.y + offset.y);
-
-			it ++;
-		}
-	}
-}
-
-//
-// Add an image to the proper layer list
-//-----------------------------------------------------------------------------
-void ControlBarScheme::drawBackground( Coord2D multi, ICoord2D offset )
-{
-
-	for(Int i = MAX_CONTROL_BAR_SCHEME_IMAGE_LAYERS - 1; i >= CONTROL_BAR_SCHEME_FOREGROUND_IMAGE_LAYERS; i--)
-	{
-		ControlBarSchemeImageList::iterator it = m_layer[i].begin();
-		while (it != m_layer[i].end())
-		{
-			ControlBarSchemeImage *schemeImage = *it;
-			if( !schemeImage )
-			{
-				DEBUG_CRASH(("There is no ControlBarSchemeImage found in the m_layer list"));
-				it++;
-				continue;
-			}
-
-			// if we don't have an image, don't try to draw it
-			if(!schemeImage->m_image)
-			{
-				it++;
-				continue;
-			}
-
-			// draw it
-			TheDisplay->drawImage(schemeImage->m_image, schemeImage->m_position.x * multi.x + offset.x,
-														schemeImage->m_position.y * multi.y + offset.y,
-														(schemeImage->m_position.x + schemeImage->m_size.x) * multi.x + offset.x,
-														(schemeImage->m_position.y + schemeImage->m_size.y) * multi.y + offset.y);
-
-			it ++;
-		}
-	}
-}
-
-
-//
 // Constructor for the manager
 //-----------------------------------------------------------------------------
 ControlBarSchemeManager::ControlBarSchemeManager()
@@ -1062,20 +988,6 @@ void ControlBarSchemeManager::update()
 		m_currentScheme->update();
 }
 
-//-----------------------------------------------------------------------------
-void ControlBarSchemeManager::drawForeground( ICoord2D offset )
-{
-	if(m_currentScheme)
-		m_currentScheme->drawForeground( m_multiplier, offset);
-}
-//-----------------------------------------------------------------------------
-void ControlBarSchemeManager::drawBackground( ICoord2D offset )
-{
-	if(m_currentScheme)
-		m_currentScheme->drawBackground( m_multiplier, offset );
-}
-
-//-----------------------------------------------------------------------------
 void ControlBarSchemeManager::setControlBarSchemeByPlayerTemplate( const PlayerTemplate *pt, Bool useSmall)
 {
 	if(!pt)

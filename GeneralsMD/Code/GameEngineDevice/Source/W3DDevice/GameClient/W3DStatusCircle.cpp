@@ -51,27 +51,6 @@ import Graphics.Scene.Screen.FullscreenOverlay;
 	ShaderClass::DETAILCOLOR_SCALE, ShaderClass::DETAILALPHA_DISABLE) )
 
 // Texturing, no zbuffer, disabled zbuffer write, primary gradient, alpha blending
-#define SC_ALPHA ( SHADE_CNST(ShaderClass::PASS_ALWAYS, ShaderClass::DEPTH_WRITE_DISABLE, ShaderClass::COLOR_WRITE_ENABLE, ShaderClass::SRCBLEND_SRC_ALPHA, \
-	ShaderClass::DSTBLEND_ONE_MINUS_SRC_ALPHA, ShaderClass::FOG_DISABLE, ShaderClass::GRADIENT_MODULATE, ShaderClass::SECONDARY_GRADIENT_DISABLE, ShaderClass::TEXTURING_ENABLE, \
-	ShaderClass::ALPHATEST_DISABLE, ShaderClass::CULL_MODE_ENABLE, \
-	ShaderClass::DETAILCOLOR_DISABLE, ShaderClass::DETAILALPHA_DISABLE) )
-
-// Texturing, no zbuffer, disabled zbuffer write, primary gradient, alpha blending
-#define SC_ALPHA_Z ( SHADE_CNST(ShaderClass::PASS_LEQUAL, ShaderClass::DEPTH_WRITE_DISABLE, ShaderClass::COLOR_WRITE_ENABLE, ShaderClass::SRCBLEND_SRC_ALPHA, \
-	ShaderClass::DSTBLEND_ONE_MINUS_SRC_ALPHA, ShaderClass::FOG_DISABLE, ShaderClass::GRADIENT_MODULATE, ShaderClass::SECONDARY_GRADIENT_DISABLE, ShaderClass::TEXTURING_ENABLE, \
-	ShaderClass::DETAILCOLOR_DISABLE, ShaderClass::DETAILALPHA_DISABLE, ShaderClass::ALPHATEST_DISABLE, ShaderClass::CULL_MODE_ENABLE, \
-	ShaderClass::DETAILCOLOR_DISABLE, ShaderClass::DETAILALPHA_DISABLE) )
-
-// Texturing, no zbuffer, disabled zbuffer write, no gradient, add src to dest.
-#define SC_ADD ( SHADE_CNST(ShaderClass::PASS_ALWAYS, ShaderClass::DEPTH_WRITE_DISABLE, ShaderClass::COLOR_WRITE_ENABLE, ShaderClass::SRCBLEND_ONE, \
-	ShaderClass::DSTBLEND_ONE, ShaderClass::FOG_DISABLE, ShaderClass::GRADIENT_DISABLE, ShaderClass::SECONDARY_GRADIENT_DISABLE, ShaderClass::TEXTURING_ENABLE, \
-	ShaderClass::ALPHATEST_DISABLE, ShaderClass::CULL_MODE_ENABLE, \
-	ShaderClass::DETAILCOLOR_DISABLE, ShaderClass::DETAILALPHA_DISABLE) )
-
-
-
-static ShaderClass detailOpaqueShader(SC_ALPHA);
-Bool W3DStatusCircle::m_needUpdate;
 Int W3DStatusCircle::m_diffuse=255; // blue.
 
 W3DStatusCircle::~W3DStatusCircle()
@@ -79,14 +58,7 @@ W3DStatusCircle::~W3DStatusCircle()
 	freeMapResources();
 }
 
-W3DStatusCircle::W3DStatusCircle()
-{
-	m_indexBuffer=nullptr;
-	m_vertexMaterialClass=nullptr;
-	m_vertexBufferCircle=nullptr;
-	m_vertexBufferScreen=nullptr;
-}
-
+W3DStatusCircle::W3DStatusCircle() {}
 
 bool W3DStatusCircle::Cast_Ray(RayCollisionTestClass & raytest)
 {
@@ -136,197 +108,12 @@ RenderObjClass * W3DStatusCircle::Clone() const
 
 Int W3DStatusCircle::freeMapResources()
 {
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	RenderBackend_Release_Index_Buffer(backend, m_indexBuffer);
-	RenderBackend_Release_Vertex_Buffer(backend, m_vertexBufferScreen);
-	RenderBackend_Release_Vertex_Buffer(backend, m_vertexBufferCircle);
-	REF_PTR_RELEASE(m_vertexMaterialClass);
-	return 0;
+    Graphics::GetRingRenderer().Clear();
+    Graphics::GetFullscreenOverlayRenderer().Clear();
+    return 0;
 }
 
-#define NUM_TRI 20
-//Allocate a heightmap of x by y vertices.
-//data must be an array matching this size.
-Int W3DStatusCircle::initData()
-{
-	Int i;
-
-	m_needUpdate = true;
-	freeMapResources();	//free old data and ib/vb
-
-	m_numTriangles = NUM_TRI;
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	if (backend == nullptr) {
-		return -1;
-	}
-	m_indexBuffer=backend->Create_Index_Buffer(
-		static_cast<unsigned>(m_numTriangles * 3) * sizeof(UnsignedShort), false);
-
-	// Fill up the IB
-	RenderBackendIndexBufferLock lockIdxBuffer(backend, m_indexBuffer, 0, 0,
-		RenderBackendBufferLockMode::Normal);
-	if (!lockIdxBuffer.Is_Locked()) {
-		return -1;
-	}
-	UnsignedShort *ib=(UnsignedShort*)lockIdxBuffer.Get_Data();
-
-	for (i=0; i<3*m_numTriangles; i+=3)
-	{
-		ib[0]=i;
-		ib[1]=i+1;
-		ib[2]=i+2;
-
-		ib+=3;	//skip the 3 indices we just filled
-	}
-
-	m_vertexBufferCircle=backend->Create_Vertex_Buffer(
-		static_cast<unsigned>(m_numTriangles * 3) * sizeof(VertexFormatXYZDUV1),
-		RenderBackendVertexFormat::PositionDiffuseTexture, false);
-	m_vertexBufferScreen=backend->Create_Vertex_Buffer(
-		static_cast<unsigned>(2 * 3) * sizeof(VertexFormatXYZDUV1),
-		RenderBackendVertexFormat::PositionDiffuseTexture, false);
-
-	//go with a preset material for now.
-	m_vertexMaterialClass=VertexMaterialClass::Get_Preset(VertexMaterialClass::PRELIT_DIFFUSE);
-
-	m_shaderClass = ShaderClass(SC_ALPHA);// _PresetOpaque2DShader;//; //_PresetOpaqueShader;
-
-
-	return 0;
-}
-
-
-/** updateCircleVB puts a circle with a team color vertex buffer. */
-
-Int W3DStatusCircle::updateCircleVB()
-{
-	Int i, k;
-	Real shade;
-	RenderBackendVertexBuffer	*pVB = m_vertexBufferCircle;
-	if (m_vertexBufferCircle )
-	{
-		m_needUpdate = false;
-		IRenderBackend *backend = WW3D::Get_Render_Backend();
-		RenderBackendVertexBufferLock lockVtxBuffer(backend, pVB, 0, 0,
-			RenderBackendBufferLockMode::Normal);
-		if (!lockVtxBuffer.Is_Locked()) {
-			return -1;
-		}
-		VertexFormatXYZDUV1 *vb = (VertexFormatXYZDUV1*)lockVtxBuffer.Get_Data();
-
-		const Real theZ = 0.0f;
-		const Real theRadius = 0.02f;
-		const Int theAlpha = 127;
-	  Int diffuse = m_diffuse + (theAlpha<<24);	 // b g<<8 r<<16 a<<24.
-		Int limit = m_numTriangles;
-		float curAngle = 0;
-		float deltaAngle = 2*PI/limit;
-		for (i=0; i<limit; i++)
-		{
-
-			shade=0.7f*255.0f;
-			for (k=0; k<3; k++) {
-				vb->z=  theZ;
-				if (k==0) {
-					vb->x=	0;
-					vb->y=	0;
-				} else if (k==1) {
-					Vector3 vec(theRadius,0,theZ);
-					vec.Rotate_Z(curAngle);
-					vb->x=	vec.X;
-					vb->y=	vec.Y;
-				} else if (k==2) {
-					Real angle = curAngle+deltaAngle;
-					if (i==limit-1) {
-						angle = 0;
-					}
-					Vector3 vec(theRadius,0,theZ);
-					vec.Rotate_Z(angle);
-					vb->x=	vec.X;
-					vb->y=	vec.Y;
-				}
-				vb->diffuse = diffuse;
-				vb->u1=0;
-				vb->v1=0;
-				vb++;
-			}
-			curAngle += deltaAngle;
-
-		}
-		return 0; //success.
-	}
-	return -1;
-}
-
-/** updateCircleVB puts a circle with a team color vertex buffer. */
-
-Int W3DStatusCircle::updateScreenVB(Int diffuse)
-{
-	RenderBackendVertexBuffer	*pVB = m_vertexBufferScreen;
-	if (m_vertexBufferScreen )
-	{
-		m_needUpdate = false;
-		IRenderBackend *backend = WW3D::Get_Render_Backend();
-		RenderBackendVertexBufferLock lockVtxBuffer(backend, pVB, 0, 0,
-			RenderBackendBufferLockMode::Normal);
-		if (!lockVtxBuffer.Is_Locked()) {
-			return -1;
-		}
-		VertexFormatXYZDUV1 *vb = (VertexFormatXYZDUV1*)lockVtxBuffer.Get_Data();
-
-		vb->x =	-1;
-		vb->y =	-1;
-		vb->z = 0;
-		vb->diffuse = diffuse;
-		vb->u1=0;
-		vb->v1=0;
-		vb++;
-
-		vb->x =	1;
-		vb->y =	1;
-		vb->z = 0;
-		vb->diffuse = diffuse;
-		vb->u1=0;
-		vb->v1=0;
-		vb++;
-
-		vb->x =	-1;
-		vb->y =	1;
-		vb->z = 0;
-		vb->diffuse = diffuse;
-		vb->u1=0;
-		vb->v1=0;
-		vb++;
-
-		vb->x =	-1;
-		vb->y =	-1;
-		vb->z = 0;
-		vb->diffuse = diffuse;
-		vb->u1=0;
-		vb->v1=0;
-		vb++;
-
-		vb->x =	1;
-		vb->y =	-1;
-		vb->z = 0;
-		vb->diffuse = diffuse;
-		vb->u1=0;
-		vb->v1=0;
-		vb++;
-
-		vb->x =	1;
-		vb->y =	1;
-		vb->z = 0;
-		vb->diffuse = diffuse;
-		vb->u1=0;
-		vb->v1=0;
-		vb++;
-		return 0; //success.
-	}
-	return -1;
-}
-
-bool W3DStatusCircle::renderModern()
+bool W3DStatusCircle::queueGraphics()
 {
 	Graphics::RingRenderer &ring_renderer = Graphics::GetRingRenderer();
 	Graphics::FullscreenOverlayRenderer &overlay_renderer = Graphics::GetFullscreenOverlayRenderer();
@@ -384,103 +171,8 @@ bool W3DStatusCircle::renderModern()
 	return overlay_renderer.Set_Overlay(overlay);
 }
 
-void W3DStatusCircle::Render(RenderInfoClass & rinfo)
+void W3DStatusCircle::Render(RenderInfoClass &)
 {
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	if (backend == nullptr) {
-		return;
-	}
-
-	if (!TheGameLogic->isInGame() || TheGameLogic->getGameMode() == GAME_SHELL)
-		return;
-
-	// The legacy path below remains the per-object fallback until the modern
-	// shared frame has been verified on the target backend.
-	if (renderModern())
-		return;
-
-	if (m_indexBuffer == nullptr) {
-		initData();
-	}
-	if (m_indexBuffer == nullptr) {
-		return;
-	}
-	Bool setIndex = false;
-	Matrix3D tm(true);
-	if( TheGlobalData->m_showTeamDot )
-	{
-		if (m_needUpdate) {
-			updateCircleVB();
-		}
-		//Apply the shader and material
-		backend->Set_Material(m_vertexMaterialClass);
-		backend->Set_Shader(m_shaderClass);
-		backend->Set_Texture(0, nullptr);
-		backend->Set_Index_Buffer(m_indexBuffer);
-		backend->Set_Vertex_Buffer(m_vertexBufferCircle, 0, sizeof(VertexFormatXYZDUV1));
-		backend->Set_Vertex_Format(RenderBackendVertexFormat::PositionDiffuseTexture);
-		setIndex = true;
-
-		Vector3 vec(0.95f, 0.67f, 0);
-		Matrix3x3 rot(true);
-
-		tm.Set_Translation(vec);
-
-		backend->Set_Transform(RenderBackendTransform::World,tm);
-		backend->Draw_Indexed_Primitives(RenderBackendPrimitiveType::TriangleList,
-			0, 0, m_numTriangles * 3, 0, NUM_TRI);
-	}
-
-
-	ScriptEngine::TFade fade = TheScriptEngine->getFade();
-	if (fade == ScriptEngine::FADE_NONE) {
-		return;
-	}
-
-	if (!setIndex) {
-		backend->Set_Material(m_vertexMaterialClass);
-		backend->Set_Index_Buffer(m_indexBuffer);
-		backend->Set_Texture(0, nullptr);
-	}
-
-	tm.Make_Identity();
-	Real intensity = TheScriptEngine->getFadeValue();
-	Int clr = 255*intensity;
-	Int diffuse = (0xff<<24)|(clr<<16)|(clr<<8)|clr;	 // b g<<8 r<<16 a<<24.
-	updateScreenVB(diffuse);
-	backend->Set_Transform(RenderBackendTransform::World,tm);
-	backend->Set_Shader(ShaderClass(SC_ADD));
-	backend->Set_Vertex_Buffer(m_vertexBufferScreen, 0, sizeof(VertexFormatXYZDUV1));
-	backend->Set_Vertex_Format(RenderBackendVertexFormat::PositionDiffuseTexture);
-	backend->Apply_Render_State_Changes();
-	switch (fade) {
-		default:
-		case ScriptEngine::FADE_ADD:
-			backend->Draw_Indexed_Primitives(RenderBackendPrimitiveType::TriangleList,
-				0, 0, 2 * 3, 0, 2);
-			break;
-		case ScriptEngine::FADE_SUBTRACT:
-			WW3D::Get_Render_Backend()->Set_Blend_Operation(RenderBackendBlendOperation::ReverseSubtract);
-			backend->Draw_Indexed_Primitives(RenderBackendPrimitiveType::TriangleList,
-				0, 0, 2 * 3, 0, 2);
-			WW3D::Get_Render_Backend()->Set_Blend_Operation(RenderBackendBlendOperation::Add);
-			break;
-		case ScriptEngine::FADE_SATURATE:
-			// 4x multiply
-			WW3D::Get_Render_Backend()->Set_Blend_Factors(RenderBackendBlendFactor::DestinationColor,
-				RenderBackendBlendFactor::SourceColor);
-			backend->Draw_Indexed_Primitives(RenderBackendPrimitiveType::TriangleList,
-				0, 0, 2 * 3, 0, 2);
-			backend->Draw_Indexed_Primitives(RenderBackendPrimitiveType::TriangleList,
-				0, 0, 2 * 3, 0, 2);
-			break;
-		case ScriptEngine::FADE_MULTIPLY:
-			// Straight multiply
-			WW3D::Get_Render_Backend()->Set_Blend_Factors(RenderBackendBlendFactor::Zero,
-				RenderBackendBlendFactor::SourceColor);
-			backend->Draw_Indexed_Primitives(RenderBackendPrimitiveType::TriangleList,
-				0, 0, 2 * 3, 0, 2);
-			break;
-	}
-	ShaderClass::Invalidate();
+    if (!TheGameLogic->isInGame() || TheGameLogic->getGameMode() == GAME_SHELL) return;
+    queueGraphics();
 }

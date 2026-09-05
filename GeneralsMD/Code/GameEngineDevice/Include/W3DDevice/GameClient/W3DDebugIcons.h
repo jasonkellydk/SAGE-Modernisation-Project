@@ -30,6 +30,7 @@
 #include "Lib/BaseType.h"
 
 #if defined(RTS_DEBUG)
+import Graphics.Scene.Surfaces.Renderer;
 struct DebugIcon;
 //
 /// W3DDebugIcons: Draws huge numbers of debug icons for pathfinding quickly.
@@ -58,7 +59,7 @@ public:
   virtual void					Get_Obj_Space_Bounding_Box(AABoxClass & aabox) const;
 
 protected:
-	VertexMaterialClass	  	*m_vertexMaterialClass;
+	Graphics::SurfaceMeshHandle m_mesh;
 
 protected:
 	static DebugIcon        *m_debugIcons;

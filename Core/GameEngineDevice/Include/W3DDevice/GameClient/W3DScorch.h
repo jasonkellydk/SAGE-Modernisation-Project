@@ -18,7 +18,10 @@
 
 #pragma once
 
+#include <array>
+#include <span>
 #include <deque>
+import Graphics.Scene.Surfaces.Renderer;
 
 #include "WWMath/vector3.h"
 #include "Common/GameType.h"
@@ -29,6 +32,7 @@ class TextureClass;
 class IndexBufferClass;
 class VertexBufferClass;
 class WorldHeightMap;
+class CameraClass;
 
 class W3DScorchInterface
 {
@@ -41,7 +45,7 @@ public:
 	virtual void invalidateBuffers() = 0;
 	virtual void invalidateTexture() = 0;
 	virtual void addScorch(Vector3 location, Real radius, Scorches type) = 0;
-	virtual void drawScorches(WorldHeightMap& map) = 0;
+	virtual void drawScorches(WorldHeightMap& map, CameraClass& camera) = 0;
 };
 
 class W3DScorch : public W3DScorchInterface
@@ -56,7 +60,7 @@ public:
 	virtual void invalidateBuffers() override;
 	virtual void invalidateTexture() override;
 	virtual void addScorch(Vector3 location, Real radius, Scorches type) override;
-	virtual void drawScorches(WorldHeightMap& map) override;    ///< Draws the scorch mark polygons in m_vertexScorch.
+	virtual void drawScorches(WorldHeightMap& map, CameraClass& camera) override;    ///< Draws the scorch mark polygons in m_vertexScorch.
 
 private:
 	typedef struct
@@ -77,11 +81,7 @@ private:
 
 	Bool isDuplicate(const TScorch& scorch) const;
 	void updateScorches(WorldHeightMap& map);    ///< Update m_vertexScorch and m_indexScorch so all scorches will be drawn.
-	Bool writeScorchToBuffer(const TScorch& scorch, WorldHeightMap& map, UnsignedInt diffuse,
-	                         VertexFormatXYZDUV1* curVb, UnsignedShort* curIb);
-
-	VertexBufferClass* m_vertexScorch;    ///< Scorch vertex buffer.
-	IndexBufferClass* m_indexScorch;    ///< indices defining a triangles for the scorch drawing.
+	Graphics::SurfaceMeshHandle m_graphicsMesh;
 	TextureClass* m_scorchTexture;    ///< Scorch mark texture
 	Int m_curNumScorchVertices;    ///< number of vertices used in m_vertexScorch.
 	Int m_curNumScorchIndices;    ///< number of indices used in m_indexScorch.
@@ -99,5 +99,5 @@ public:
 	virtual void invalidateBuffers() override {}
 	virtual void invalidateTexture() override {}
 	virtual void addScorch(Vector3, Real, Scorches) override {}
-	virtual void drawScorches(WorldHeightMap&) override {}
+	virtual void drawScorches(WorldHeightMap&, CameraClass&) override {}
 };

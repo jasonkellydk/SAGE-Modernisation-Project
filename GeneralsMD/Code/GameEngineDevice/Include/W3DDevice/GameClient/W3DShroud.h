@@ -44,8 +44,7 @@ class W3DShroudMaterialPassClass : public MaterialPassClass
 {
 public:
 	W3DShroudMaterialPassClass() : m_isTransparentObjectPass(FALSE) {}
-	virtual void	Install_Materials() const override;
-	virtual void	UnInstall_Materials() const override;
+    bool Describe_Graphics_Pass(GraphicsMaterialPassDescription& description) const override;
 	void enableTransparentObjectPass(Bool enable) {m_isTransparentObjectPass = enable;}
 protected:
 	//customized version to deal with transparent (alpha-tested) polys.
@@ -60,15 +59,12 @@ protected:
 class W3DMaskMaterialPassClass : public MaterialPassClass
 {
 public:
-	W3DMaskMaterialPassClass() : m_texture(nullptr), m_allowUninstall(TRUE) {}
-	virtual void	Install_Materials() const override;
-	virtual void	UnInstall_Materials() const override;
+	W3DMaskMaterialPassClass() : m_texture(nullptr) {}
+    bool Describe_Graphics_Pass(GraphicsMaterialPassDescription& description) const override;
 	void	setTexture(TextureClass *texture)	{m_texture=texture;}
-	void	setAllowUninstall(Bool state)	{ m_allowUninstall = state;}
 
 protected:
 	TextureClass *m_texture;	///<texture to be projected.
-	Bool m_allowUninstall;		///<flag which allows uninstalling this material.
 };
 
 /** Terrain shroud rendering class */

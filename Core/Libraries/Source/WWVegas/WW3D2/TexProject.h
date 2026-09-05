@@ -161,7 +161,8 @@ public:
 	void						Set_Render_Target(TextureClass* render_target, ZTextureClass* ztarget=nullptr);
 	TextureClass*			Peek_Render_Target(TextureClass** rtarget=nullptr, ZTextureClass** ztarget=nullptr);
 
-	bool						Compute_Texture(RenderObjClass * model,SpecialRenderInfoClass * context);
+	bool Compute_Texture(RenderObjClass *model, SpecialRenderInfoClass *context,
+        bool (*draw)(RenderObjClass&, RenderInfoClass&) = nullptr);
 
 	/*
 	** Prep for rendering, called by the scene prior to usage.

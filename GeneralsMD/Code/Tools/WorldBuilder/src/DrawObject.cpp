@@ -19,6 +19,7 @@
 #include "StdAfx.h"
 
 #include "DrawObject.h"
+#include "WW3D2/GraphicsGeometry.h"
 
 #include <stdlib.h>
 #include <WW3D2/AssetMgr.h>
@@ -143,14 +144,6 @@ DrawObject::~DrawObject()
 DrawObject::DrawObject() :
 	m_drawObjects(true),
 	m_drawPolygonAreas(true),
-	m_indexBuffer(nullptr),
-	m_vertexMaterialClass(nullptr),
-	m_vertexBufferTile1(nullptr),
-	m_vertexBufferTile2(nullptr),
-	m_vertexBufferWater(nullptr),
-	m_vertexFeedback(nullptr),
-	m_indexFeedback(nullptr),
-	m_indexWater(nullptr),
 	m_moldMesh(nullptr),
 	m_lineRenderer(nullptr),
   m_drawSoundRanges(false)
@@ -221,14 +214,14 @@ RenderObjClass * DrawObject::Clone() const
 Int DrawObject::freeMapResources()
 {
 
-	REF_PTR_RELEASE(m_indexBuffer);
-	REF_PTR_RELEASE(m_vertexBufferTile1);
-	REF_PTR_RELEASE(m_vertexBufferTile2);
-	REF_PTR_RELEASE(m_vertexBufferWater);
-	REF_PTR_RELEASE(m_vertexMaterialClass);
-	REF_PTR_RELEASE(m_vertexFeedback);
-	REF_PTR_RELEASE(m_indexFeedback);
-	REF_PTR_RELEASE(m_indexWater);
+	m_indexBuffer.clear();
+	m_vertexBufferTile1.clear();
+	m_vertexBufferTile2.clear();
+
+
+	m_vertexFeedback.clear();
+	m_indexFeedback.clear();
+
 	REF_PTR_RELEASE(m_moldMesh);
 
 	delete m_lineRenderer;
@@ -254,12 +247,10 @@ Int DrawObject::initData()
 	freeMapResources();	//free old data and ib/vb
 
 	m_numTriangles = 2*NUM_TRI;
-	m_indexBuffer=NEW_REF(IndexBufferClass,(m_numTriangles*3, IndexBufferClass::USAGE_DYNAMIC));
+	m_indexBuffer.resize(m_numTriangles*3);
 
 	// Fill up the IB
-	IndexBufferClass::WriteLockClass lockIdxBuffer(m_indexBuffer,
-		RenderBackendBufferLockMode::Discard);
-	UnsignedShort *ib=lockIdxBuffer.Get_Index_Array();
+	unsigned *ib=m_indexBuffer.data();
 
 	for (i=0; i<3*m_numTriangles; i+=3)
 	{
@@ -270,14 +261,13 @@ Int DrawObject::initData()
 		ib+=3;	//skip the 3 indices we just filled
 	}
 
-	m_vertexBufferTile1=NEW_REF(VertexBufferClass,(RenderBackendVertexFormat::PositionDiffuseTexture,m_numTriangles*3,VertexBufferClass::USAGE_DYNAMIC));
-	m_vertexBufferTile2=NEW_REF(VertexBufferClass,(RenderBackendVertexFormat::PositionDiffuseTexture,m_numTriangles*3,VertexBufferClass::USAGE_DYNAMIC));
+	m_vertexBufferTile1.resize(m_numTriangles*3);
+	m_vertexBufferTile2.resize(m_numTriangles*3);
 
-	m_vertexFeedback=NEW_REF(VertexBufferClass,(RenderBackendVertexFormat::PositionDiffuseTexture,NUM_FEEDBACK_VERTEX,VertexBufferClass::USAGE_DYNAMIC));
-	m_indexFeedback=NEW_REF(IndexBufferClass,(NUM_FEEDBACK_INDEX,IndexBufferClass::USAGE_DYNAMIC));
+	m_vertexFeedback.resize(NUM_FEEDBACK_VERTEX);
+	m_indexFeedback.resize(NUM_FEEDBACK_INDEX);
 
 	//go with a preset material for now.
-	m_vertexMaterialClass=VertexMaterialClass::Get_Preset(VertexMaterialClass::PRELIT_DIFFUSE);
 
 	//use a multi-texture shader: (text1*diffuse)*text2.
 	m_shaderClass = ShaderClass(SC_OPAQUE);//_PresetOpaque2DShader;//ShaderClass(SC_OPAQUE); //_PresetOpaqueShader;
@@ -324,14 +314,10 @@ void DrawObject::updateMeshVB()
 
 	m_feedbackVertexCount = 0;
 	m_feedbackIndexCount = 0;
-	IndexBufferClass::WriteLockClass lockIdxBuffer(m_indexFeedback,
-		RenderBackendBufferLockMode::Discard);
-	UnsignedShort *ib=lockIdxBuffer.Get_Index_Array();
-	UnsignedShort *curIb = ib;
+	unsigned *ib=m_indexFeedback.data();
+	unsigned *curIb = ib;
 
-	VertexBufferClass::WriteLockClass lockVtxBuffer(m_vertexFeedback,
-		RenderBackendBufferLockMode::Discard);
-	VertexFormatXYZDUV1 *vb = (VertexFormatXYZDUV1*)lockVtxBuffer.Get_Vertex_Array();
+	VertexFormatXYZDUV1 *vb = m_vertexFeedback.data();
 	VertexFormatXYZDUV1 *curVb = vb;
 
 	if (m_moldMesh == nullptr) {
@@ -454,14 +440,10 @@ void DrawObject::updateRampVB()
 
 	m_feedbackVertexCount = 0;
 	m_feedbackIndexCount = 0;
-	IndexBufferClass::WriteLockClass lockIdxBuffer(m_indexFeedback,
-		RenderBackendBufferLockMode::Discard);
-	UnsignedShort *ib=lockIdxBuffer.Get_Index_Array();
-	UnsignedShort *curIb = ib;
+	unsigned *ib=m_indexFeedback.data();
+	unsigned *curIb = ib;
 
-	VertexBufferClass::WriteLockClass lockVtxBuffer(m_vertexFeedback,
-		RenderBackendBufferLockMode::Discard);
-	VertexFormatXYZDUV1 *vb = (VertexFormatXYZDUV1*)lockVtxBuffer.Get_Vertex_Array();
+	VertexFormatXYZDUV1 *vb = m_vertexFeedback.data();
 	VertexFormatXYZDUV1 *curVb = vb;
 
 	Int i, j;
@@ -572,14 +554,10 @@ void DrawObject::updateBoundaryVB()
 
 	m_feedbackVertexCount = 0;
 	m_feedbackIndexCount = 0;
-	IndexBufferClass::WriteLockClass lockIdxBuffer(m_indexFeedback,
-		RenderBackendBufferLockMode::Discard);
-	UnsignedShort *ib=lockIdxBuffer.Get_Index_Array();
-	UnsignedShort *curIb = ib;
+	unsigned *ib=m_indexFeedback.data();
+	unsigned *curIb = ib;
 
-	VertexBufferClass::WriteLockClass lockVtxBuffer(m_vertexFeedback,
-		RenderBackendBufferLockMode::Discard);
-	VertexFormatXYZDUV1 *vb = (VertexFormatXYZDUV1*)lockVtxBuffer.Get_Vertex_Array();
+	VertexFormatXYZDUV1 *vb = m_vertexFeedback.data();
 	VertexFormatXYZDUV1 *curVb = vb;
 
  	CWorldBuilderDoc *pDoc = CWorldBuilderDoc::GetActiveDoc();
@@ -750,14 +728,10 @@ void DrawObject::updateAmbientSoundVB()
 {
 	m_feedbackVertexCount = 0;
 	m_feedbackIndexCount = 0;
-	IndexBufferClass::WriteLockClass lockIdxBuffer(m_indexFeedback,
-		RenderBackendBufferLockMode::Discard);
-	UnsignedShort *ib=lockIdxBuffer.Get_Index_Array();
-	UnsignedShort *curIb = ib;
+	unsigned *ib=m_indexFeedback.data();
+	unsigned *curIb = ib;
 
-	VertexBufferClass::WriteLockClass lockVtxBuffer(m_vertexFeedback,
-		RenderBackendBufferLockMode::Discard);
-	VertexFormatXYZDUV1 *vb = (VertexFormatXYZDUV1*)lockVtxBuffer.Get_Vertex_Array();
+	VertexFormatXYZDUV1 *vb = m_vertexFeedback.data();
 	VertexFormatXYZDUV1 *curVb = vb;
 
 	MapObject* mo = MapObject::getFirstMapObject();
@@ -862,14 +836,10 @@ void DrawObject::updateWaypointVB()
 
 	m_feedbackVertexCount = 0;
 	m_feedbackIndexCount = 0;
-	IndexBufferClass::WriteLockClass lockIdxBuffer(m_indexFeedback,
-		RenderBackendBufferLockMode::Discard);
-	UnsignedShort *ib=lockIdxBuffer.Get_Index_Array();
-	UnsignedShort *curIb = ib;
+	unsigned *ib=m_indexFeedback.data();
+	unsigned *curIb = ib;
 
-	VertexBufferClass::WriteLockClass lockVtxBuffer(m_vertexFeedback,
-		RenderBackendBufferLockMode::Discard);
-	VertexFormatXYZDUV1 *vb = (VertexFormatXYZDUV1*)lockVtxBuffer.Get_Vertex_Array();
+	VertexFormatXYZDUV1 *vb = m_vertexFeedback.data();
 	VertexFormatXYZDUV1 *curVb = vb;
 
  	CWorldBuilderDoc *pDoc = CWorldBuilderDoc::GetActiveDoc();
@@ -1102,14 +1072,10 @@ void DrawObject::updatePolygonVB(PolygonTrigger *pTrig, Bool selected, Bool isOp
 	green = green<<8;
 	m_feedbackVertexCount = 0;
 	m_feedbackIndexCount = 0;
-	IndexBufferClass::WriteLockClass lockIdxBuffer(m_indexFeedback,
-		RenderBackendBufferLockMode::Discard);
-	UnsignedShort *ib=lockIdxBuffer.Get_Index_Array();
-	UnsignedShort *curIb = ib;
+	unsigned *ib=m_indexFeedback.data();
+	unsigned *curIb = ib;
 
-	VertexBufferClass::WriteLockClass lockVtxBuffer(m_vertexFeedback,
-		RenderBackendBufferLockMode::Discard);
-	VertexFormatXYZDUV1 *vb = (VertexFormatXYZDUV1*)lockVtxBuffer.Get_Vertex_Array();
+	VertexFormatXYZDUV1 *vb = m_vertexFeedback.data();
 	VertexFormatXYZDUV1 *curVb = vb;
 
 	Int i;
@@ -1198,14 +1164,10 @@ void DrawObject::updateFeedbackVB()
 	const Int theAlpha = 64;
 	m_feedbackVertexCount = 0;
 	m_feedbackIndexCount = 0;
-	IndexBufferClass::WriteLockClass lockIdxBuffer(m_indexFeedback,
-		RenderBackendBufferLockMode::Discard);
-	UnsignedShort *ib=lockIdxBuffer.Get_Index_Array();
-	UnsignedShort *curIb = ib;
+	unsigned *ib=m_indexFeedback.data();
+	unsigned *curIb = ib;
 
-	VertexBufferClass::WriteLockClass lockVtxBuffer(m_vertexFeedback,
-		RenderBackendBufferLockMode::Discard);
-	VertexFormatXYZDUV1 *vb = (VertexFormatXYZDUV1*)lockVtxBuffer.Get_Vertex_Array();
+	VertexFormatXYZDUV1 *vb = m_vertexFeedback.data();
 	VertexFormatXYZDUV1 *curVb = vb;
 
 	Bool doubleResolution = 0;
@@ -1387,7 +1349,7 @@ but doesn't, really.
 
 /** updateVB puts a circle with an arrow into the vertex buffer. */
 
-Int DrawObject::updateVB(VertexBufferClass	*pVB, Int color, Bool doArrow, Bool doDiamond)
+Int DrawObject::updateVB(std::vector<VertexFormatXYZDUV1>& pVB, Int color, Bool doArrow, Bool doDiamond)
 {
 	Int i, k;
 
@@ -1406,12 +1368,10 @@ Int DrawObject::updateVB(VertexBufferClass	*pVB, Int color, Bool doArrow, Bool d
 	static const Int highlightColors[NUM_HIGHLIGHT] = { ((255<<8) + (255<<16)) ,
 				((255<<16)), (255<<8) };
 	Int diffuse =  b + (g<<8) + (r<<16) + (theAlpha<<24);	 // b g<<8 r<<16 a<<24.
-	if (pVB )
+	if (!pVB.empty())
 	{
 
-	VertexBufferClass::WriteLockClass lockVtxBuffer(pVB,
-		RenderBackendBufferLockMode::Discard);
-		VertexFormatXYZDUV1 *vb = (VertexFormatXYZDUV1*)lockVtxBuffer.Get_Vertex_Array();
+	VertexFormatXYZDUV1 *vb = pVB.data();
 
 		const Real theZ = 0.0f;
 		Real theRadius = THE_RADIUS;
@@ -2100,13 +2060,28 @@ if (_skip_drawobject_render) {
 		m_lineRenderer->Enable_Texturing(FALSE);
 	}
 
-	backend->Apply_Render_State_Changes();
 
-	backend->Set_Material(m_vertexMaterialClass);
-	backend->Set_Shader(m_shaderClass);
+
+	std::span<const VertexFormatXYZDUV1> vertices;
+    std::span<const unsigned> indices;
+    ShaderClass shader = m_shaderClass;
+    Matrix4x4 world(Transform), view, projection;
+    backend->Get_Transform(RenderBackendTransform::View, view);
+    backend->Get_Transform(RenderBackendTransform::Projection, projection);
+    const auto draw = [&](unsigned vertex_count, unsigned first_index, unsigned triangle_count) {
+        if (vertex_count > vertices.size() || first_index > indices.size()
+            || triangle_count > (indices.size() - first_index) / 3) {
+            DEBUG_CRASH(("Editor overlay geometry exceeds its CPU batch."));
+            return;
+        }
+        if (!Draw_Graphics_Prelit_Geometry(vertices.first(vertex_count),
+            indices.subspan(first_index, triangle_count * 3), projection * view * world, shader, nullptr))
+            DEBUG_LOG(("Editor overlay graphics submission failed.\n"));
+    };
+	shader = ShaderClass(m_shaderClass);
 	backend->Set_Texture(0, nullptr);
-	backend->Set_Index_Buffer(m_indexBuffer,0);
-	backend->Apply_Render_State_Changes();
+	indices = m_indexBuffer;
+
 	Int count=0;
 	Int i;
 	bool linesToRender = false;
@@ -2116,7 +2091,7 @@ if (_skip_drawobject_render) {
 		curHighlight = 0;
 	}
 	m_waterDrawObject->update();
-	backend->Set_Vertex_Buffer(m_vertexBufferTile1);
+	vertices = m_vertexBufferTile1;
   if (m_drawObjects || m_drawWaypoints || m_drawBoundingBoxes || m_drawSightRanges || m_drawWeaponRanges || m_drawSoundRanges || m_drawTestArtHighlight) {
 		//Apply the shader and material
 
@@ -2204,7 +2179,7 @@ if (pMapObj->isSelected()) {
 					rememberLastSettingVB1 = setting;
 					updateVB(m_vertexBufferTile1,pMapObj->getColor(), doArrow, doDiamond);
 				}
-				backend->Set_Vertex_Buffer(m_vertexBufferTile1);
+				vertices = m_vertexBufferTile1;
 
 			} else {
 				int setting = pMapObj->getColor();
@@ -2220,7 +2195,7 @@ if (pMapObj->isSelected()) {
 					rememberLastSettingVB2 = setting;
 					updateVB(m_vertexBufferTile2, pMapObj->getColor(), doArrow, doDiamond);
 				}
-				backend->Set_Vertex_Buffer(m_vertexBufferTile2);
+				vertices = m_vertexBufferTile2;
 			}
 
 			///@todo - remove the istree stuff, or get the info from the thing template.  jba.
@@ -2238,26 +2213,22 @@ if (pMapObj->isSelected()) {
 				polyCount -= NUM_ARROW_TRI+NUM_SELECT_TRI;
 			}
 
-			backend->Set_Transform(RenderBackendTransform::World,tm);
+			world = Matrix4x4(tm);
 			if (isTree) {
-				backend->Draw_Indexed_Primitives(
-					RenderBackendPrimitiveType::TriangleList, 0, 0,
-					m_numTriangles * 3, NUM_TRI * 3, polyCount);
+				draw(m_numTriangles * 3, NUM_TRI * 3, polyCount);
 			} else {
-				backend->Draw_Indexed_Primitives(
-					RenderBackendPrimitiveType::TriangleList, 0, 0,
-					m_numTriangles * 3, 0, polyCount);
+				draw(m_numTriangles * 3, 0, polyCount);
 			}
 
 			count++;
 		}
 	}
 	if (m_drawPolygonAreas) {
-	 	backend->Set_Vertex_Buffer(m_vertexBufferWater);
+		vertices = {};
 		Int selected;
 		for (selected = 0; selected < 2; selected++) {
 			for (PolygonTrigger *pTrig=PolygonTrigger::getFirstPolygonTrigger(); pTrig; pTrig = pTrig->getNext()) {
-				backend->Set_Index_Buffer(m_indexBuffer,0);
+				indices = m_indexBuffer;
 				if (!pTrig->getShouldRender()) continue;
 				Bool polySelected = PolygonTool::isSelected(pTrig);
 				if (polySelected && !selected) continue;
@@ -2283,10 +2254,10 @@ if (pMapObj->isSelected()) {
 					}
 					if (count&1) {
 						updateVB(m_vertexBufferTile1, color, ARROW, DIAMOND);
-						backend->Set_Vertex_Buffer(m_vertexBufferTile1);
+						vertices = m_vertexBufferTile1;
 					} else {
 						updateVB(m_vertexBufferTile2, color, ARROW, DIAMOND);
-						backend->Set_Vertex_Buffer(m_vertexBufferTile2);
+						vertices = m_vertexBufferTile2;
 					}
 					count++;
 
@@ -2299,25 +2270,21 @@ if (pMapObj->isSelected()) {
 						polyCount -= NUM_ARROW_TRI+NUM_SELECT_TRI;
 					}
 
-					backend->Set_Index_Buffer(m_indexBuffer,0);
-					backend->Set_Transform(RenderBackendTransform::World,tm);
-					backend->Draw_Indexed_Primitives(
-						RenderBackendPrimitiveType::TriangleList, 0, 0,
-						m_numTriangles * 3, 0, polyCount);
+					indices = m_indexBuffer;
+					world = Matrix4x4(tm);
+					draw(m_numTriangles * 3, 0, polyCount);
 				}
 				Matrix3D tmReset(Transform);
-				backend->Set_Transform(RenderBackendTransform::World,tmReset);
-				backend->Set_Vertex_Buffer(m_vertexBufferTile1);
+				world = Matrix4x4(tmReset);
+				vertices = m_vertexBufferTile1;
 				updatePolygonVB(pTrig, polySelected, polySelected && PolygonTool::isSelectedOpen());
-	 			backend->Set_Vertex_Buffer(m_vertexFeedback);
+				vertices = m_vertexFeedback;
 				if (m_feedbackIndexCount>0) {
-					backend->Set_Index_Buffer(m_indexFeedback,0);
-					backend->Draw_Indexed_Primitives(
-						RenderBackendPrimitiveType::TriangleList, 0, 0,
-						m_feedbackVertexCount, 0, m_feedbackIndexCount / 3);
+					indices = m_indexFeedback;
+					draw(m_feedbackVertexCount, 0, m_feedbackIndexCount / 3);
 				}
 			}
-			backend->Set_Index_Buffer(m_indexBuffer,0);
+			indices = m_indexBuffer;
 		}
 	}
 
@@ -2340,10 +2307,10 @@ if (pMapObj->isSelected()) {
 			const Int GREEN = 0x00FF00; // GREEN in BGR.
 			if (count&1) {
 				updateVB(m_vertexBufferTile1, GREEN, true, false);
-				backend->Set_Vertex_Buffer(m_vertexBufferTile1);
+				vertices = m_vertexBufferTile1;
 			} else {
 				updateVB(m_vertexBufferTile2, GREEN, true, false);
-				backend->Set_Vertex_Buffer(m_vertexBufferTile2);
+				vertices = m_vertexBufferTile2;
 			}
 			count++;
 // ok to here.
@@ -2360,31 +2327,27 @@ if (pMapObj->isSelected()) {
 			}
 
 #if 1
-			backend->Set_Transform(RenderBackendTransform::World,tmXX);
-			backend->Draw_Indexed_Primitives(
-				RenderBackendPrimitiveType::TriangleList, 0, 0,
-				m_numTriangles * 3, 0, polyCountA);
+			world = Matrix4x4(tmXX);
+			draw(m_numTriangles * 3, 0, polyCountA);
 #endif
 
 		}
 	}
 
-	backend->Set_Index_Buffer(m_indexBuffer,0);
-	backend->Set_Vertex_Buffer(m_vertexBufferWater);
+	indices = m_indexBuffer;
+	vertices = {};
 	Matrix3D tmReset(Transform);
-	backend->Set_Transform(RenderBackendTransform::World,tmReset);
+	world = Matrix4x4(tmReset);
 
 	if (m_drawWaypoints) {
 		updateWaypointVB();
 		if (m_feedbackIndexCount>0) {
-	 			backend->Set_Vertex_Buffer(m_vertexFeedback);
-			backend->Set_Index_Buffer(m_indexFeedback,0);
-			backend->Set_Shader(m_shaderClass);
-			backend->Draw_Indexed_Primitives(
-				RenderBackendPrimitiveType::TriangleList, 0, 0,
-				m_feedbackVertexCount, 0, m_feedbackIndexCount / 3);
-			backend->Set_Index_Buffer(m_indexBuffer,0);
-		 	backend->Set_Vertex_Buffer(m_vertexBufferWater);
+				vertices = m_vertexFeedback;
+			indices = m_indexFeedback;
+			shader = ShaderClass(m_shaderClass);
+			draw(m_feedbackVertexCount, 0, m_feedbackIndexCount / 3);
+			indices = m_indexBuffer;
+			vertices = {};
 		}
 	}
 
@@ -2394,23 +2357,19 @@ if (pMapObj->isSelected()) {
 	if (m_meshFeedback) {
 		updateMeshVB();
 		if (m_feedbackIndexCount>0) {
-	 			backend->Set_Vertex_Buffer(m_vertexFeedback);
-			backend->Set_Index_Buffer(m_indexFeedback,0);
-			backend->Set_Shader(SC_OPAQUE_Z);
+				vertices = m_vertexFeedback;
+			indices = m_indexFeedback;
+			shader = ShaderClass(SC_OPAQUE_Z);
 			backend->Set_Fill_Mode(RenderBackendFillMode::Wireframe);
-			backend->Draw_Indexed_Primitives(
-				RenderBackendPrimitiveType::TriangleList, 0, 0,
-				m_feedbackVertexCount, 0, m_feedbackIndexCount / 3);
+			draw(m_feedbackVertexCount, 0, m_feedbackIndexCount / 3);
 		}
 	} else if (m_toolWantsFeedback && !m_disableFeedback) {
 		updateFeedbackVB();
 		if (m_feedbackIndexCount>0) {
-	 			backend->Set_Vertex_Buffer(m_vertexFeedback);
-			backend->Set_Index_Buffer(m_indexFeedback,0);
-			backend->Set_Shader(ShaderClass::_PresetAlpha2DShader);
-			backend->Draw_Indexed_Primitives(
-				RenderBackendPrimitiveType::TriangleList, 0, 0,
-				m_feedbackVertexCount, 0, m_feedbackIndexCount / 3);
+				vertices = m_vertexFeedback;
+			indices = m_indexFeedback;
+			shader = ShaderClass(ShaderClass::_PresetAlpha2DShader);
+			draw(m_feedbackVertexCount, 0, m_feedbackIndexCount / 3);
 		}
 	}
 #endif
@@ -2419,14 +2378,12 @@ if (pMapObj->isSelected()) {
 	if (m_rampFeedback) {
 		updateRampVB();
 		if (m_feedbackIndexCount>0) {
-	 			backend->Set_Vertex_Buffer(m_vertexFeedback);
-			backend->Set_Index_Buffer(m_indexFeedback,0);
-			backend->Set_Shader(SC_OPAQUE_Z);
+				vertices = m_vertexFeedback;
+			indices = m_indexFeedback;
+			shader = ShaderClass(SC_OPAQUE_Z);
 			backend->Set_Fill_Mode(RenderBackendFillMode::Wireframe);	// we want a solid ramp
 			backend->Set_Lighting_Enabled(false);				// disable lighting
-			backend->Draw_Indexed_Primitives(
-				RenderBackendPrimitiveType::TriangleList, 0, 0,
-				m_feedbackVertexCount, 0, m_feedbackIndexCount / 3);
+			draw(m_feedbackVertexCount, 0, m_feedbackIndexCount / 3);
 		}
 	}
 #endif
@@ -2435,40 +2392,36 @@ if (pMapObj->isSelected()) {
 	if (m_boundaryFeedback) {
 		updateBoundaryVB();
 		if (m_feedbackIndexCount>0) {
-	 			backend->Set_Vertex_Buffer(m_vertexFeedback);
-			backend->Set_Index_Buffer(m_indexFeedback,0);
-			backend->Set_Shader(m_shaderClass);
+				vertices = m_vertexFeedback;
+			indices = m_indexFeedback;
+			shader = ShaderClass(m_shaderClass);
 			backend->Set_Cull_Mode(RenderBackendCullMode::None);
 			backend->Set_Fill_Mode(RenderBackendFillMode::Solid);	// we want a solid ramp
 			backend->Set_Lighting_Enabled(false);				// disable lighting
-			backend->Draw_Indexed_Primitives(
-				RenderBackendPrimitiveType::TriangleList, 0, 0,
-				m_feedbackVertexCount, 0, m_feedbackIndexCount / 3);
+			draw(m_feedbackVertexCount, 0, m_feedbackIndexCount / 3);
 		}
 	}
 #endif
 
-	backend->Set_Vertex_Buffer(nullptr);	//release reference to vertex buffer
-	backend->Set_Index_Buffer(nullptr,0);	//release reference to vertex buffer
+	vertices = {};	//release reference to vertex buffer
+	indices = {};	//release reference to vertex buffer
 
 
 	if (m_ambientSoundFeedback) {
 		updateAmbientSoundVB();
 		if (m_feedbackIndexCount>0) {
-	 			backend->Set_Vertex_Buffer(m_vertexFeedback);
-			backend->Set_Index_Buffer(m_indexFeedback,0);
-			backend->Set_Shader(m_shaderClass);
+				vertices = m_vertexFeedback;
+			indices = m_indexFeedback;
+			shader = ShaderClass(m_shaderClass);
 			backend->Set_Cull_Mode(RenderBackendCullMode::None);
 			backend->Set_Fill_Mode(RenderBackendFillMode::Solid);	// we want a solid ramp
 			backend->Set_Lighting_Enabled(false);				// disable lighting
-			backend->Draw_Indexed_Primitives(
-				RenderBackendPrimitiveType::TriangleList, 0, 0,
-				m_feedbackVertexCount, 0, m_feedbackIndexCount / 3);
+			draw(m_feedbackVertexCount, 0, m_feedbackIndexCount / 3);
 		}
 	}
 
-	  backend->Set_Index_Buffer(m_indexBuffer,0);
-	 	backend->Set_Vertex_Buffer(m_vertexBufferWater);
+	  indices = m_indexBuffer;
+		vertices = {};
 
 	if (m_waterDrawObject) {
 		m_waterDrawObject->renderWater();

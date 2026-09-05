@@ -1,4 +1,6 @@
 #include "WW3D2/WW3D.h"
+#include "W3DDevice/GameClient/W3DGraphicsResources.h"
+import Engine.UI.WND;
 /*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -51,12 +53,66 @@
 #include "GameClient/TerrainVisual.h"
 #include "GameClient/Water.h"
 #include "W3DDevice/Common/W3DRadar.h"
-#include "W3DDevice/GameClient/HeightMap.h"
+#include "W3DDevice/GameClient/BaseHeightMap.h"
+#include "W3DDevice/GameClient/WorldHeightMap.h"
 #include "W3DDevice/GameClient/W3DShroud.h"
 #include "WW3D2/Texture.h"
 #include "WWMath/vector2i.h"
 
 
+
+// Translates radar coordinates and images into the current WND command list.
+// GPU submission and blending belong to the graphics UI renderer.
+class RadarDrawData final
+{
+public:
+	explicit RadarDrawData(Engine::UI::WND::DrawList &list) : m_list(list) {}
+	Bool succeeded = TRUE;
+
+	void drawImage(const Image *image, Int left, Int top, Int right, Int bottom)
+	{
+		if (image == nullptr) return;
+		Engine::UI::WND::ImageRef reference;
+		if (BitIsSet(image->getStatus(), IMAGE_STATUS_RAW_TEXTURE)) {
+			auto *texture = static_cast<TextureClass *>(const_cast<void *>(image->getRawTextureData()));
+			const auto handle = Resolve_Graphics_Texture(texture);
+			if (!handle.Is_Valid()) { succeeded = FALSE; return; }
+			reference.generated = Graphics::Get_Renderer2D().Register_Texture(
+				Graphics::TextureHandle(0x60000000u | handle.Get_Index(), handle.Get_Generation()), handle);
+			if (!reference.generated.index.Is_Valid()) { succeeded = FALSE; return; }
+		} else {
+			reference = Engine::UI::WND::Resolve_Image_Reference(image->getFilename().str());
+		}
+		const auto &uv = *image->getUV();
+		reference.uv = {uv.lo.x, uv.lo.y, uv.hi.x, uv.hi.y};
+		succeeded &= m_list.Add_Image(reference, {float(left), float(top), float(right), float(bottom)});
+	}
+
+	void drawFillRect(Int x, Int y, Int width, Int height, Color color)
+	{
+		if (width <= 0 || height <= 0) return;
+		succeeded &= m_list.Add_Rect({float(x), float(y), float(x + width), float(y + height)}, convertColor(color));
+	}
+
+	void drawLine(Int x1, Int y1, Int x2, Int y2, Real width, Color color)
+	{
+		drawLine(x1, y1, x2, y2, width, color, color);
+	}
+
+	void drawLine(Int x1, Int y1, Int x2, Int y2, Real width, Color start, Color end)
+	{
+		succeeded &= m_list.Add_Gradient_Line({float(x1), float(y1)}, {float(x2), float(y2)},
+			width, convertColor(start), convertColor(end));
+	}
+
+private:
+	static Graphics::Color2D convertColor(Color color)
+	{
+		return {float((color >> 16) & 255) / 255, float((color >> 8) & 255) / 255,
+			float(color & 255) / 255, float((color >> 24) & 255) / 255};
+	}
+	Engine::UI::WND::DrawList &m_list;
+};
 
 // PRIVATE DATA ///////////////////////////////////////////////////////////////////////////////////
 enum { OVERLAY_REFRESH_RATE = 6 };  ///< over updates once this many frames
@@ -245,7 +301,7 @@ void W3DRadar::radarToPixel( const ICoord2D *radar, ICoord2D *pixel,
 //-------------------------------------------------------------------------------------------------
 /** Draw a hero icon at a position, given radar box upper left location and dimensions.  */
 //-------------------------------------------------------------------------------------------------
-void W3DRadar::drawHeroIcon( Int pixelX, Int pixelY, Int width, Int height, const Coord3D *pos )
+void W3DRadar::drawHeroIcon(RadarDrawData &drawing, Int pixelX, Int pixelY, Int width, Int height, const Coord3D *pos )
 {
 	// get the hero icon image
 	static const Image *image = (Image *)TheMappedImageCollection->findImageByName("HeroReticle");
@@ -267,7 +323,7 @@ void W3DRadar::drawHeroIcon( Int pixelX, Int pixelY, Int width, Int height, cons
 		offsetScreen.y -= iconHeight / 2;
 
 		// draw the icon
-		TheDisplay->drawImage( image, offsetScreen.x , offsetScreen.y, offsetScreen.x + iconWidth, offsetScreen.y + iconHeight );
+		drawing.drawImage( image, offsetScreen.x , offsetScreen.y, offsetScreen.x + iconWidth, offsetScreen.y + iconHeight );
 	}
 }
 
@@ -275,7 +331,7 @@ void W3DRadar::drawHeroIcon( Int pixelX, Int pixelY, Int width, Int height, cons
 /** Draw a "box" into the texture passed in that represents the viewable area for
 	* the tactical display into the game world */
 //-------------------------------------------------------------------------------------------------
-void W3DRadar::drawViewBox( Int pixelX, Int pixelY, Int width, Int height )
+void W3DRadar::drawViewBox(RadarDrawData &drawing, Int pixelX, Int pixelY, Int width, Int height )
 {
 	ICoord2D ulScreen;
 	ICoord2D ulRadar;
@@ -331,7 +387,7 @@ void W3DRadar::drawViewBox( Int pixelX, Int pixelY, Int width, Int height )
 	radar.y = ulRadar.y + m_viewBox[ 1 ].y;
 	radarToPixel( &radar, &pixelEnd, pixelX, pixelY, width, height );
 	if( ClipLine2D( &pixelStart, &pixelEnd, &clipStart, &clipEnd, &clipRegion ) )
-		TheDisplay->drawLine( clipStart.x, clipStart.y, clipEnd.x, clipEnd.y,
+		drawing.drawLine( clipStart.x, clipStart.y, clipEnd.x, clipEnd.y,
 													lineWidth, topColor );
 
   // right line
@@ -340,7 +396,7 @@ void W3DRadar::drawViewBox( Int pixelX, Int pixelY, Int width, Int height )
 	radar.y += m_viewBox[ 2 ].y;
 	radarToPixel( &radar, &pixelEnd, pixelX, pixelY, width, height );
 	if( ClipLine2D( &pixelStart, &pixelEnd, &clipStart, &clipEnd, &clipRegion ) )
-		TheDisplay->drawLine( clipStart.x, clipStart.y, clipEnd.x, clipEnd.y,
+		drawing.drawLine( clipStart.x, clipStart.y, clipEnd.x, clipEnd.y,
 													lineWidth, topColor, bottomColor );
 
   // bottom line
@@ -349,21 +405,21 @@ void W3DRadar::drawViewBox( Int pixelX, Int pixelY, Int width, Int height )
 	radar.y += m_viewBox[ 3 ].y;
 	radarToPixel( &radar, &pixelEnd, pixelX, pixelY, width, height );
 	if( ClipLine2D( &pixelStart, &pixelEnd, &clipStart, &clipEnd, &clipRegion ) )
-		TheDisplay->drawLine( clipStart.x, clipStart.y, clipEnd.x, clipEnd.y,
+		drawing.drawLine( clipStart.x, clipStart.y, clipEnd.x, clipEnd.y,
 													lineWidth, bottomColor );
 
   // left line
 	pixelStart = pixelEnd;
 	pixelEnd = ulPixel;
 	if( ClipLine2D( &pixelStart, &pixelEnd, &clipStart, &clipEnd, &clipRegion ) )
-		TheDisplay->drawLine( clipStart.x, clipStart.y, clipEnd.x, clipEnd.y,
+		drawing.drawLine( clipStart.x, clipStart.y, clipEnd.x, clipEnd.y,
 													lineWidth, bottomColor, topColor );
 
 }
 
 // ------------------------------------------------------------------------------------------------
 // ------------------------------------------------------------------------------------------------
-void W3DRadar::drawSingleBeaconEvent( Int pixelX, Int pixelY, Int width, Int height, Int index )
+void W3DRadar::drawSingleBeaconEvent(RadarDrawData &drawing, Int pixelX, Int pixelY, Int width, Int height, Int index )
 {
 	RadarEvent *event = &(m_event[index]);
 	ICoord2D tri[ 3 ];
@@ -453,16 +509,16 @@ void W3DRadar::drawSingleBeaconEvent( Int pixelX, Int pixelY, Int width, Int hei
 
 	// draw the lines
 	if( ClipLine2D( &tri[ 0 ], &tri[ 1 ], &start, &end, &clipRegion ) )
-		TheDisplay->drawLine( start.x, start.y, end.x, end.y, lineWidth, startColor, endColor );
+		drawing.drawLine( start.x, start.y, end.x, end.y, lineWidth, startColor, endColor );
 	if( ClipLine2D( &tri[ 1 ], &tri[ 2 ], &start, &end, &clipRegion ) )
-		TheDisplay->drawLine( start.x, start.y, end.x, end.y, lineWidth, startColor, endColor );
+		drawing.drawLine( start.x, start.y, end.x, end.y, lineWidth, startColor, endColor );
 	if( ClipLine2D( &tri[ 2 ], &tri[ 0 ], &start, &end, &clipRegion ) )
-		TheDisplay->drawLine( start.x, start.y, end.x, end.y, lineWidth, startColor, endColor );
+		drawing.drawLine( start.x, start.y, end.x, end.y, lineWidth, startColor, endColor );
 }
 
 // ------------------------------------------------------------------------------------------------
 // ------------------------------------------------------------------------------------------------
-void W3DRadar::drawSingleGenericEvent( Int pixelX, Int pixelY, Int width, Int height, Int index )
+void W3DRadar::drawSingleGenericEvent(RadarDrawData &drawing, Int pixelX, Int pixelY, Int width, Int height, Int index )
 {
 	RadarEvent *event = &(m_event[index]);
 	ICoord2D tri[ 3 ];
@@ -552,17 +608,17 @@ void W3DRadar::drawSingleGenericEvent( Int pixelX, Int pixelY, Int width, Int he
 
 	// draw the lines
 	if( ClipLine2D( &tri[ 0 ], &tri[ 1 ], &start, &end, &clipRegion ) )
-		TheDisplay->drawLine( start.x, start.y, end.x, end.y, lineWidth, startColor, endColor );
+		drawing.drawLine( start.x, start.y, end.x, end.y, lineWidth, startColor, endColor );
 	if( ClipLine2D( &tri[ 1 ], &tri[ 2 ], &start, &end, &clipRegion ) )
-		TheDisplay->drawLine( start.x, start.y, end.x, end.y, lineWidth, startColor, endColor );
+		drawing.drawLine( start.x, start.y, end.x, end.y, lineWidth, startColor, endColor );
 	if( ClipLine2D( &tri[ 2 ], &tri[ 0 ], &start, &end, &clipRegion ) )
-		TheDisplay->drawLine( start.x, start.y, end.x, end.y, lineWidth, startColor, endColor );
+		drawing.drawLine( start.x, start.y, end.x, end.y, lineWidth, startColor, endColor );
 }
 
 //-------------------------------------------------------------------------------------------------
 /** Draw all the radar events */
 //-------------------------------------------------------------------------------------------------
-void W3DRadar::drawEvents( Int pixelX, Int pixelY, Int width, Int height )
+void W3DRadar::drawEvents(RadarDrawData &drawing, Int pixelX, Int pixelY, Int width, Int height )
 {
 	Int i;
 
@@ -584,9 +640,9 @@ void W3DRadar::drawEvents( Int pixelX, Int pixelY, Int width, Int height )
 			m_event[ i ].soundPlayed = TRUE;
 
 			if ( m_event[ i ].type == RADAR_EVENT_BEACON_PULSE )
-				drawSingleBeaconEvent( pixelX, pixelY, width, height, i );
+				drawSingleBeaconEvent(drawing, pixelX, pixelY, width, height, i );
 			else
-				drawSingleGenericEvent( pixelX, pixelY, width, height, i );
+				drawSingleGenericEvent(drawing, pixelX, pixelY, width, height, i );
 
 		}
 
@@ -598,7 +654,7 @@ void W3DRadar::drawEvents( Int pixelX, Int pixelY, Int width, Int height )
 //-------------------------------------------------------------------------------------------------
 /** Draw all the radar icons */
 //-------------------------------------------------------------------------------------------------
-void W3DRadar::drawIcons( Int pixelX, Int pixelY, Int width, Int height )
+void W3DRadar::drawIcons(RadarDrawData &drawing, Int pixelX, Int pixelY, Int width, Int height )
 {
 	Player *player = rts::getObservedOrLocalPlayer();
 	for (RadarObject *heroObj = m_localObjectList; heroObj; heroObj = heroObj->friend_getNext())
@@ -611,7 +667,7 @@ void W3DRadar::drawIcons( Int pixelX, Int pixelY, Int width, Int height )
 		if (!canRenderObject(heroObj, player))
 			continue;
 
-		drawHeroIcon(pixelX, pixelY, width, height, obj->getPosition());
+		drawHeroIcon(drawing,pixelX, pixelY, width, height, obj->getPosition());
 	}
 }
 
@@ -1438,11 +1494,15 @@ void W3DRadar::endSetShroudLevel()
 	* around the radar images to keep the whole radar area covered when the map displayed
 	* is "long" or "tall" */
 //-------------------------------------------------------------------------------------------------
-void W3DRadar::draw( Int pixelX, Int pixelY, Int width, Int height )
+Bool W3DRadar::drawData(Int pixelX, Int pixelY, Int width, Int height, void *drawList)
 {
 	// if the local player does not have a radar then we can't draw anything
 	if( !rts::localPlayerHasRadar() )
-		return;
+		return TRUE;
+
+	if (drawList == nullptr || width <= 0 || height <= 0)
+		return FALSE;
+	RadarDrawData drawing(*static_cast<Engine::UI::WND::DrawList *>(drawList));
 
 	//
 	// given a upper left corner at pixelX|Y and a width and height to draw into, figure out
@@ -1462,25 +1522,25 @@ void W3DRadar::draw( Int pixelX, Int pixelY, Int width, Int height )
 	{
 
 		// draw horizontal bars at top and bottom
-		TheDisplay->drawFillRect( pixelX, pixelY, width, ul.y - pixelY - 1, fillColor );
-		TheDisplay->drawFillRect( pixelX, lr.y + 1, width, pixelY + height - lr.y - 1, fillColor);
-		TheDisplay->drawLine(pixelX, ul.y, pixelX + width, ul.y, 1, lineColor);
-		TheDisplay->drawLine(pixelX, lr.y + 1, pixelX + width, lr.y + 1, 1, lineColor);
+		drawing.drawFillRect( pixelX, pixelY, width, ul.y - pixelY - 1, fillColor );
+		drawing.drawFillRect( pixelX, lr.y + 1, width, pixelY + height - lr.y - 1, fillColor);
+		drawing.drawLine(pixelX, ul.y, pixelX + width, ul.y, 1, lineColor);
+		drawing.drawLine(pixelX, lr.y + 1, pixelX + width, lr.y + 1, 1, lineColor);
 
 	}
 	else
 	{
 
 		// draw vertical bars to the left and right
-		TheDisplay->drawFillRect( pixelX, pixelY, ul.x - pixelX - 1, height, fillColor );
-		TheDisplay->drawFillRect( lr.x + 1, pixelY, width - (lr.x - pixelX) - 1, height, fillColor );
-		TheDisplay->drawLine(ul.x, pixelY, ul.x, pixelY + height, 1, lineColor);
-		TheDisplay->drawLine(lr.x + 1, pixelY, lr.x + 1, pixelY + height, 1, lineColor);
+		drawing.drawFillRect( pixelX, pixelY, ul.x - pixelX - 1, height, fillColor );
+		drawing.drawFillRect( lr.x + 1, pixelY, width - (lr.x - pixelX) - 1, height, fillColor );
+		drawing.drawLine(ul.x, pixelY, ul.x, pixelY + height, 1, lineColor);
+		drawing.drawLine(lr.x + 1, pixelY, lr.x + 1, pixelY + height, 1, lineColor);
 
 	}
 
 	// draw the terrain texture
-	TheDisplay->drawImage( m_terrainImage, ul.x, ul.y, lr.x, lr.y );
+	drawing.drawImage( m_terrainImage, ul.x, ul.y, lr.x, lr.y );
 
 	// refresh the overlay texture once every so many frames
 	if( TheGameClient->getFrame() % OVERLAY_REFRESH_RATE == 0 )
@@ -1489,7 +1549,7 @@ void W3DRadar::draw( Int pixelX, Int pixelY, Int width, Int height )
 	}
 
 	// draw the overlay image
- 	TheDisplay->drawImage( m_overlayImage, ul.x, ul.y, lr.x, lr.y );
+	drawing.drawImage( m_overlayImage, ul.x, ul.y, lr.x, lr.y );
 
 	// draw the shroud image
 #if ENABLE_CONFIGURABLE_SHROUD
@@ -1498,14 +1558,14 @@ void W3DRadar::draw( Int pixelX, Int pixelY, Int width, Int height )
 	if (true)
 #endif
 	{
-		TheDisplay->drawImage( m_shroudImage, ul.x, ul.y, lr.x, lr.y );
+		drawing.drawImage( m_shroudImage, ul.x, ul.y, lr.x, lr.y );
 	}
 
 	// draw any icons
-	drawIcons( ul.x, ul.y, scaledWidth, scaledHeight );
+	drawIcons(drawing, ul.x, ul.y, scaledWidth, scaledHeight );
 
 	// draw any radar events
-	drawEvents( ul.x, ul.y, scaledWidth, scaledHeight );
+	drawEvents(drawing, ul.x, ul.y, scaledWidth, scaledHeight );
 
 	if( m_reconstructViewBox )
 	{
@@ -1513,7 +1573,8 @@ void W3DRadar::draw( Int pixelX, Int pixelY, Int width, Int height )
 	}
 
 	// draw the view region on top of the radar reconstructing if necessary
-	drawViewBox( ul.x, ul.y, scaledWidth, scaledHeight );
+	drawViewBox(drawing, ul.x, ul.y, scaledWidth, scaledHeight );
+	return drawing.succeeded;
 
 }
 

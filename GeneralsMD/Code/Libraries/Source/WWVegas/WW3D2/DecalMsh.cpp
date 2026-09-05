@@ -52,6 +52,8 @@
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 #include "DecalMsh.h"
+#include <vector>
+#include "GraphicsMaterial.h"
 #include "DecalSys.h"
 #include "RInfo.h"
 #include "WW3D.h"
@@ -289,80 +291,65 @@ RigidDecalMeshClass::~RigidDecalMeshClass()
  * HISTORY:                                                                                    *
  *   1/26/00    gth : Created.                                                                 *
  *=============================================================================================*/
+namespace {
+void Draw_Graphics_Decals(std::span<const Graphics::PropVertex> source,
+    const SimpleDynVecClass<TriIndex>& polygons,
+    const SimpleDynVecClass<ShaderClass>& shaders,
+    const SimpleDynVecClass<TextureClass*>& textures,
+    const SimpleDynVecClass<VertexMaterialClass*>& materials,
+    const LightEnvironmentClass* lights)
+{
+    if (polygons.Count()==0) return;
+    auto* backend=WW3D::Get_Render_Backend();
+    Matrix4x4 view,projection;
+    backend->Get_Transform(RenderBackendTransform::View,view);
+    backend->Get_Transform(RenderBackendTransform::Projection,projection);
+    Graphics::PropParameters context;
+    backend->Get_Transform(RenderBackendTransform::View,context.view.data());
+    const Matrix4x4 camera=view.Inverse();
+    context.camera_position={camera[0][3],camera[1][3],camera[2][3],1};
+    Extract_Graphics_Lighting(context,lights);
+    std::vector<Graphics::PropVertex> vertices;
+    std::vector<unsigned> indices;
+    for (int first=0;first<polygons.Count();) {
+        auto* material=materials[polygons[first].I];
+        const auto vertex_material = Describe_Graphics_Vertex_Material(material);
+        int end=first+1;
+        while (end<polygons.Count() && textures[end]==textures[first]
+            && shaders[end].Get_Bits()==shaders[first].Get_Bits() && materials[polygons[end].I]==material) ++end;
+        vertices.clear(); indices.clear();
+        for (int polygon=first;polygon<end;++polygon) {
+            for (unsigned corner=0;corner<3;++corner) {
+                auto vertex=source[polygons[polygon][corner]];
+                if (vertex_material) Graphics::Apply_Prop_Material(vertex,*vertex_material);
+                indices.push_back(static_cast<unsigned>(vertices.size()));
+                vertices.push_back(vertex);
+            }
+        }
+        auto parameters=context;
+        Extract_Graphics_Texture_Mappers(parameters,material);
+        Draw_Graphics_Material_Geometry(vertices,indices,projection*view,shaders[first],
+            {textures[first],nullptr},parameters);
+        first=end;
+    }
+}
+}
+
 void RigidDecalMeshClass::Render()
 {
-	if ((Decals.Count() == 0) || (WW3D::Are_Decals_Enabled() == false)) return;
-
-	/*
-	** Install the mesh'es transform.  NOTE, this could go wrong if someone changes the
-	** transform between the time that the mesh is rendered and the time that the decal
-	** mesh is rendered...  It shouldn't happen though.
-	*/
-	WW3D::Get_Render_Backend()->Set_Transform(RenderBackendTransform::World,Parent->Get_Transform());
-
-	/*
-	** Copy the vertices into the dynamic vb
-	*/
-	DynamicVBAccessClass dynamic_vb(BUFFER_TYPE_DYNAMIC_RENDER,RenderBackend_Dynamic_Vertex_Format,Verts.Count());
-	{
-		DynamicVBAccessClass::WriteLockClass lock(&dynamic_vb);
-		VertexFormatXYZNDUV2 * vertex = lock.Get_Formatted_Vertex_Array();
-
-		for (int i=0; i<Verts.Count(); i++) {
-
-			vertex->x = Verts[i].X;
-			vertex->y = Verts[i].Y;
-			vertex->z = Verts[i].Z;
-
-			vertex->nx = VertNorms[i].X;
-			vertex->ny = VertNorms[i].Y;
-			vertex->nz = VertNorms[i].Z;
-
-			vertex->diffuse = 0xFFFFFFFF;
-
-			vertex->u1 = TexCoords[i].X;
-			vertex->v1 = TexCoords[i].Y;
-
-			vertex->u2 = 0.0f;
-			vertex->v2 = 0.0f;
-
-			vertex++;
-		}
-	}
-
-	/*
-	** Copy the indices into the dynamic ib
-	*/
-	DynamicIBAccessClass dynamic_ib(BUFFER_TYPE_DYNAMIC_RENDER,Polys.Count() * 3);
-	{
-		DynamicIBAccessClass::WriteLockClass lock(&dynamic_ib);
-		unsigned short * indices = lock.Get_Index_Array();
-		for (int i=0; i < Polys.Count(); i++)
-		{
-			indices[i*3 + 0] = (unsigned short)Polys[i].I;
-			indices[i*3 + 1] = (unsigned short)Polys[i].J;
-			indices[i*3 + 2] = (unsigned short)Polys[i].K;
-		}
-	}
-
-	/*
-	** Render in runs of constant material settings
-	*/
-	int cur_poly_index = 0;
-	int next_poly_index = 0;
-
-	while (next_poly_index < Polys.Count()) {
-		next_poly_index = Process_Material_Run(cur_poly_index);
-
-		WW3D::Get_Render_Backend()->Set_Index_Buffer(dynamic_ib,0);
-		WW3D::Get_Render_Backend()->Set_Vertex_Buffer(dynamic_vb);
-		WW3D::Get_Render_Backend()->Draw_Indexed_Primitives(
-			RenderBackendPrimitiveType::TriangleList, 0,
-			Polys[cur_poly_index].I,
-			1 + Polys[next_poly_index-1].K - Polys[cur_poly_index].I,
-			3*cur_poly_index, next_poly_index - cur_poly_index);
-		cur_poly_index = next_poly_index;
-	}
+    if (Decals.Count()==0 || !WW3D::Are_Decals_Enabled()) return;
+    std::vector<Graphics::PropVertex> vertices(Verts.Count());
+    const auto& world=Parent->Get_Transform();
+    for (int i=0;i<Verts.Count();++i) {
+        Vector3 position,normal;
+        Matrix3D::Transform_Vector(world,Verts[i],&position);
+        Matrix3D::Rotate_Vector(world,VertNorms[i],&normal);
+        auto& vertex=vertices[i];
+        vertex.position={position.X,position.Y,position.Z};
+        vertex.normal={normal.X,normal.Y,normal.Z};
+        vertex.uv={TexCoords[i].X,TexCoords[i].Y};
+    }
+    Draw_Graphics_Decals(vertices,Polys,Shaders,Textures,VertexMaterials,Parent->Get_Lighting_Environment());
 
 }
 
@@ -382,22 +369,6 @@ void RigidDecalMeshClass::Render()
  * HISTORY:                                                                                    *
  *   2/22/2001  gth : Created.                                                                 *
  *=============================================================================================*/
-int RigidDecalMeshClass::Process_Material_Run(int start_index)
-{
-	WW3D::Get_Render_Backend()->Set_Texture(0,Textures[start_index]);
-	WW3D::Get_Render_Backend()->Set_Material(VertexMaterials[Polys[start_index].I]);
-	WW3D::Get_Render_Backend()->Set_Shader(Shaders[start_index]);
-
-	int next_index = start_index;
-	while (	(next_index < Polys.Count()) &&
-				(Textures[next_index] == Textures[start_index]) &&
-				(Shaders[next_index] == Shaders[start_index]) &&
-				(VertexMaterials[next_index] == VertexMaterials[start_index]))
-	{
-		next_index++;
-	}
-	return next_index;
-}
 
 /***********************************************************************************************
  * RigidDecalMeshClass::Create_Decal -- Generate a new decal                                   *
@@ -775,94 +746,27 @@ SkinDecalMeshClass::~SkinDecalMeshClass()
  *=============================================================================================*/
 void SkinDecalMeshClass::Render()
 {
-	if ((Decals.Count() == 0) || (WW3D::Are_Decals_Enabled() == false)) return;
+    if (Decals.Count()==0 || !WW3D::Are_Decals_Enabled()) return;
+    auto* model=Parent->Peek_Model();
+    if (model->Get_Flag(MeshModelClass::SORT)) {
+        WWDEBUG_SAY(("ERROR: decals applied to a sorted mesh!"));
+        return;
+    }
+    _TempVertexBuffer.Uninitialised_Grow(model->Get_Vertex_Count());
+    _TempNormalBuffer.Uninitialised_Grow(model->Get_Vertex_Count());
+    Parent->Get_Deformed_Vertices(&_TempVertexBuffer[0],&_TempNormalBuffer[0]);
+    std::vector<Graphics::PropVertex> vertices(ParentVertexIndices.Count());
+    for (int i=0;i<ParentVertexIndices.Count();++i) {
+        const int index=ParentVertexIndices[i];
+        const auto& position=_TempVertexBuffer[index];
+        const auto& normal=_TempNormalBuffer[index];
+        auto& vertex=vertices[i];
+        vertex.position={position.X,position.Y,position.Z};
+        vertex.normal={normal.X,normal.Y,normal.Z};
+        vertex.uv={TexCoords[i].X,TexCoords[i].Y};
+    }
+    Draw_Graphics_Decals(vertices,Polys,Shaders,Textures,VertexMaterials,Parent->Get_Lighting_Environment());
 
-	/*
-	** Don't allow decals on sorted meshes
-	*/
-	MeshModelClass * model = Parent->Peek_Model();
-	if (model->Get_Flag(MeshModelClass::SORT)) {
-		WWDEBUG_SAY(("ERROR: decals applied to a sorted mesh!"));
-		return;
-	}
-
-	/*
-	** Skin decals coordinates are in world space
-	*/
-	WW3D::Get_Render_Backend()->Set_Transform(RenderBackendTransform::World,Matrix3D::Identity);
-
-	/*
-	** Skin decals have to get the deformed vertices of their parent meshes.  For this
-	** reason, decals on skins is not a very good idea...
-	*/
-	_TempVertexBuffer.Uninitialised_Grow(model->Get_Vertex_Count());
-	_TempNormalBuffer.Uninitialised_Grow(model->Get_Vertex_Count());
-	Parent->Get_Deformed_Vertices(&(_TempVertexBuffer[0]),&(_TempNormalBuffer[0]));
-
-	/*
-	** Copy the vertices into the dynamic vb
-	*/
-	DynamicVBAccessClass dynamic_vb(BUFFER_TYPE_DYNAMIC_RENDER,RenderBackend_Dynamic_Vertex_Format,ParentVertexIndices.Count());
-	{
-		DynamicVBAccessClass::WriteLockClass lock(&dynamic_vb);
-		VertexFormatXYZNDUV2 * vertex = lock.Get_Formatted_Vertex_Array();
-
-		for (int i=0; i<ParentVertexIndices.Count(); i++) {
-			int src_i = ParentVertexIndices[i];
-			vertex->x = _TempVertexBuffer[src_i].X;
-			vertex->y = _TempVertexBuffer[src_i].Y;
-			vertex->z = _TempVertexBuffer[src_i].Z;
-
-			vertex->nx = _TempNormalBuffer[src_i].X;
-			vertex->ny = _TempNormalBuffer[src_i].Y;
-			vertex->nz = _TempNormalBuffer[src_i].Z;
-
-			vertex->diffuse = 0xFFFFFFFF;
-
-			vertex->u1 = TexCoords[i].X;
-			vertex->v1 = TexCoords[i].Y;
-
-			vertex->u2 = 0.0f;
-			vertex->v2 = 0.0f;
-
-			vertex++;
-		}
-	}
-
-	/*
-	** Copy the indices into the dynamic ib
-	*/
-	DynamicIBAccessClass dynamic_ib(BUFFER_TYPE_DYNAMIC_RENDER,Polys.Count() * 3);
-	{
-		DynamicIBAccessClass::WriteLockClass lock(&dynamic_ib);
-		unsigned short * indices = lock.Get_Index_Array();
-		for (int i=0; i < Polys.Count(); i++)
-		{
-			indices[i*3 + 0] = (unsigned short)Polys[i].I;
-			indices[i*3 + 1] = (unsigned short)Polys[i].J;
-			indices[i*3 + 2] = (unsigned short)Polys[i].K;
-		}
-	}
-
-	/*
-	** Render in runs of constant material settings
-	*/
-	int cur_poly_index = 0;
-	int next_poly_index = 0;
-
-	while (next_poly_index < Polys.Count()) {
-		next_poly_index = Process_Material_Run(cur_poly_index);
-
-		WW3D::Get_Render_Backend()->Set_Index_Buffer(dynamic_ib,0);
-		WW3D::Get_Render_Backend()->Set_Vertex_Buffer(dynamic_vb);
-		WW3D::Get_Render_Backend()->Draw_Indexed_Primitives(
-			RenderBackendPrimitiveType::TriangleList, 0,
-			Polys[cur_poly_index].I,
-			1 + Polys[next_poly_index-1].K - Polys[cur_poly_index].I,
-			3*cur_poly_index, next_poly_index - cur_poly_index);
-
-		cur_poly_index = next_poly_index;
-	}
 }
 
 
@@ -881,22 +785,6 @@ void SkinDecalMeshClass::Render()
  * HISTORY:                                                                                    *
  *   2/22/2001  gth : Created.                                                                 *
  *=============================================================================================*/
-int SkinDecalMeshClass::Process_Material_Run(int start_index)
-{
-	WW3D::Get_Render_Backend()->Set_Texture(0,Textures[start_index]);
-	WW3D::Get_Render_Backend()->Set_Material(VertexMaterials[Polys[start_index].I]);
-	WW3D::Get_Render_Backend()->Set_Shader(Shaders[start_index]);
-
-	int next_index = start_index;
-	while (	(next_index < Polys.Count()) &&
-				(Textures[next_index] == Textures[start_index]) &&
-				(Shaders[next_index] == Shaders[start_index]) &&
-				(VertexMaterials[next_index] == VertexMaterials[start_index]))
-	{
-		next_index++;
-	}
-	return next_index;
-}
 
 
 /***********************************************************************************************

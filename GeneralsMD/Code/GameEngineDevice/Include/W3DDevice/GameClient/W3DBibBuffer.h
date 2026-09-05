@@ -44,6 +44,8 @@
 
 #pragma once
 
+#include <cstddef>
+
 //-----------------------------------------------------------------------------
 //           Includes
 //-----------------------------------------------------------------------------
@@ -56,6 +58,9 @@
 #include "Lib/BaseType.h"
 #include "Common/GameType.h"
 #include "Common/AsciiString.h"
+
+import Graphics.RHI;
+import Graphics.Scene.Surfaces.Renderer;
 
 //-----------------------------------------------------------------------------
 //           Forward References
@@ -98,32 +103,24 @@ public:
 	/// Removes highlighting.
 	void removeHighlighting();
 	/// Draws the bibs.
-	void renderBibs();
+	void renderBibs(CameraClass& camera);
+	static void Release_Graphics_Bibs() noexcept;
 	/// Called when the view changes, and sort key needs to be recalculated.
 	/// Normally sortKey gets calculated when a bib becomes visible.
 protected:
 	enum { INITIAL_BIB_VERTEX=256,
 					INITIAL_BIB_INDEX=384,
 					MAX_BIBS=1000};
-	RenderBackendVertexBuffer	*m_vertexBib;	///<Bib vertex buffer owned by the active render backend.
-	Int										m_vertexBibSize; ///< Num vertices in bib buffer.
-	RenderBackendIndexBuffer		*m_indexBib;	///<indices defining triangles for the bib drawing.
-	Int							  		m_indexBibSize;	///<indices available in m_indexBib.
-	TextureClass *m_bibTexture;	///<Bibs texture
-	TextureClass *m_highlightBibTexture;	///<Bibs texture
-	Int			m_curNumBibVertices; ///<Number of vertices used in m_vertexBib.
-	Int			m_curNumBibIndices;	///<Number of indices used in b_indexBib;
-	Int			m_curNumNormalBibIndices; ///< Number of non-highlighted bib index.
-	Int			m_curNumNormalBibVertex; ///< Number of non-highlighted bib vertex.
 
 	TBib	m_bibs[MAX_BIBS];			///< The bib buffer.  All bibs are stored here.
 	Int			m_numBibs;						///< Number of bibs in m_bibs.
 	Bool		m_anythingChanged;	///< Set to true if visibility or sorting changed.
 	Bool		m_updateAllKeys;  ///< Set to true when the view changes.
-	Bool		m_initialized;		///< True if the subsystem initialized.
-	Bool		m_isTerrainPass;  ///< True if the terrain was drawn in this W3D scene render pass.
+    Graphics::SurfaceMeshHandle m_graphicsMeshes[2];
+    TextureClass* m_bibTexture=nullptr;
+    TextureClass* m_highlightBibTexture=nullptr;
+	static W3DBibBuffer *s_current;
 
-	void loadBibsInVertexAndIndexBuffers(); ///< Fills the index and vertex buffers for drawing.
 	void allocateBibBuffers();							 ///< Allocates the buffers.
 	void freeBibBuffers();									 ///< Frees the index and vertex buffers.
 };

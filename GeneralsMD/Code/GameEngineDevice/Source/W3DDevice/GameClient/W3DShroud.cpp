@@ -28,6 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 #include "Lib/BaseType.h"
+#include "WW3D2/GraphicsMaterialPass.h"
+#include "GameClient/View.h"
 #include <SDL3/SDL.h>
 #include "WW3D2/Camera.h"
 #include "WWLib/simplevec.h"
@@ -36,7 +38,8 @@
 #include "WW3D2/SurfaceClass.h"
 #include "Common/MapObject.h"
 #include "Common/PerfTimer.h"
-#include "W3DDevice/GameClient/HeightMap.h"
+#include "W3DDevice/GameClient/BaseHeightMap.h"
+#include "W3DDevice/GameClient/WorldHeightMap.h"
 #include "W3DDevice/GameClient/W3DPoly.h"
 #include "W3DDevice/GameClient/W3DShaderManager.h"
 #include "WW3D2/AssetMgr.h"
@@ -791,33 +794,50 @@ void W3DShroud::setShroudFilter(Bool enable)
 
 //-----------------------------------------------------------------------------
 ///Set render states required to draw shroud pass.
-void W3DShroudMaterialPassClass::Install_Materials() const
+bool W3DShroudMaterialPassClass::Describe_Graphics_Pass(GraphicsMaterialPassDescription& description) const
 {
-	if (TheTerrainRenderObject->getShroud())
-	{
- 		W3DShaderManager::setTexture(0,TheTerrainRenderObject->getShroud()->getShroudTexture());
-		W3DShaderManager::setShader(W3DShaderManager::ST_SHROUD_TEXTURE, 0);
-	}
+    auto* shroud=TheTerrainRenderObject ? TheTerrainRenderObject->getShroud() : nullptr;
+    if (!shroud) return false;
+    description.shader=ShaderClass::_PresetMultiplicativeSpriteShader;
+#if defined(RTS_DEBUG)
+    if (TheGlobalData && TheGlobalData->m_fogOfWarOn) description.shader=ShaderClass::_PresetAlphaSpriteShader;
+#endif
+    description.shader.Set_Depth_Compare(ShaderClass::PASS_EQUAL);
+    description.shader.Set_Primary_Gradient(ShaderClass::GRADIENT_DISABLE);
+    description.textures[0]=shroud->getShroudTexture();
+    description.world_coordinates=true;
+    const float width=shroud->getCellWidth();
+    const float height=shroud->getCellHeight();
+    const float xscale=1/(width*shroud->getTextureWidth());
+    const float yscale=1/(height*shroud->getTextureHeight());
+    const bool has_map=TheTerrainRenderObject->getMap()!=nullptr;
+    description.world_texture_transform[0][0]=xscale;
+    description.world_texture_transform[1][1]=yscale;
+    description.world_texture_transform[0][3]=has_map ? (-shroud->getDrawOriginX()+width)*xscale : 0;
+    description.world_texture_transform[1][3]=has_map ? (-shroud->getDrawOriginY()+height)*yscale : 0;
+    return description.textures[0]!=nullptr;
 }
 
-//-----------------------------------------------------------------------------
-///Restore render states that W3D doesn't know about.
-void W3DShroudMaterialPassClass::UnInstall_Materials() const
+bool W3DMaskMaterialPassClass::Describe_Graphics_Pass(GraphicsMaterialPassDescription& description) const
 {
-	W3DShaderManager::resetShader(W3DShaderManager::ST_SHROUD_TEXTURE);
-}
-
-//-----------------------------------------------------------------------------
-///Set render states required to draw shroud pass.
-void W3DMaskMaterialPassClass::Install_Materials() const
-{
-	W3DShaderManager::setShader(W3DShaderManager::ST_MASK_TEXTURE, 0);
-}
-
-//-----------------------------------------------------------------------------
-///Restore render states that W3D doesn't know about.
-void W3DMaskMaterialPassClass::UnInstall_Materials() const
-{
-	if (m_allowUninstall)
-		W3DShaderManager::resetShader(W3DShaderManager::ST_MASK_TEXTURE);
+    description.shader=ShaderClass::_PresetOpaqueShader;
+    description.shader.Set_Primary_Gradient(ShaderClass::GRADIENT_DISABLE);
+    description.textures[0]=ScreenCrossFadeFilter::getCurrentMaskTexture();
+    description.color_write_mask=8;
+    description.world_coordinates=true;
+    Coord3D center;
+    center.zero();
+    if (TheTacticalView) {
+        ICoord2D screen;
+        screen.x=TheTacticalView->getWidth()/2;
+        screen.y=TheTacticalView->getHeight()/2;
+        TheTacticalView->screenToTerrain(&screen,&center);
+    }
+    const float extent=(1-ScreenCrossFadeFilter::getCurrentFadeValue())*25*128;
+    const float scale=extent!=0 ? 1/extent : 0;
+    description.world_texture_transform[0][0]=scale;
+    description.world_texture_transform[1][1]=scale;
+    description.world_texture_transform[0][3]=extent!=0 ? 0.5f-center.x*scale : 0;
+    description.world_texture_transform[1][3]=extent!=0 ? 0.5f-center.y*scale : 0;
+    return description.textures[0]!=nullptr;
 }

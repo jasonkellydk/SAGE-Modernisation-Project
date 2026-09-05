@@ -21,8 +21,9 @@
 #include "WWLib/always.h"
 #include "WW3D2/RendObj.h"
 #include "WW3D2/W3DFile.h"
-#include "WW3D2/VertexBuffer.h"
-#include "WW3D2/IndexBuffer.h"
+#include <vector>
+#include "WW3D2/VertexFormat.h"
+
 #include "WW3D2/Shader.h"
 #include "WW3D2/VertMaterial.h"
 #include "Lib/BaseType.h"
@@ -111,14 +112,11 @@ protected:
 	enum {MAX_RADIUS = 50, NUM_FEEDBACK_VERTEX = 201*201, NUM_FEEDBACK_INDEX = 101*101*6};
 	Int	m_numTriangles;	//dimensions of list
 
-	IndexBufferClass				*m_indexBuffer;	///< indices defining a object icon
+	std::vector<unsigned> m_indexBuffer;	///< indices defining a object icon
 	ShaderClass								m_shaderClass; ///< shader or rendering state for heightmap
-	VertexMaterialClass	  	  *m_vertexMaterialClass;
-	VertexBufferClass			*m_vertexBufferTile1;	///< First vertex buffer.
-	VertexBufferClass			*m_vertexBufferTile2;	///< Second vertex buffer.
+	std::vector<VertexFormatXYZDUV1> m_vertexBufferTile1;	///< First vertex buffer.
+	std::vector<VertexFormatXYZDUV1> m_vertexBufferTile2;	///< Second vertex buffer.
 
-	VertexBufferClass			*m_vertexBufferWater;	///< Vertex buffer for the water plane.
-	IndexBufferClass				*m_indexWater;	///< indices defining a triangle strip for the water on terrain
 	Int												m_waterVertexCount;
 
 	WaterRenderSystem				*m_waterDrawObject;
@@ -133,8 +131,8 @@ protected:
 	Bool											m_drawTestArtHighlight;
 	Bool											m_drawLetterbox;
 
-	VertexBufferClass			*m_vertexFeedback;	///< Vertex buffer for brush feedback.
-	IndexBufferClass				*m_indexFeedback;	///< indices defining a triangle strip for the feedback on terrain
+	std::vector<VertexFormatXYZDUV1> m_vertexFeedback;	///< Vertex buffer for brush feedback.
+	std::vector<unsigned> m_indexFeedback;	///< indices defining a triangle strip for the feedback on terrain
 	Int												m_feedbackIndexCount;
 	Int												m_feedbackVertexCount;
 
@@ -168,7 +166,7 @@ protected: // static state vars.
 
 protected:
   void addCircleToLineRenderer( const Coord3D & center, Real radius, Real width, unsigned long color, CameraClass* camera );
-	Int updateVB(VertexBufferClass	*vertexBufferTile, Int color, Bool doArrow, Bool doDiamond);
+	Int updateVB(std::vector<VertexFormatXYZDUV1>& vertexBufferTile, Int color, Bool doArrow, Bool doDiamond);
 	void updatePolygonVB(PolygonTrigger *pTrig, Bool selected, Bool isOpen);
 	void updateFeedbackVB();
 	void updateMeshVB();

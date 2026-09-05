@@ -54,8 +54,13 @@
 
 
 
+#include "W3DDevice/GameClient/W3DGraphicsResources.h"
+import Graphics.Backends.DX11.Coexistence;
+import Graphics.Scene.Debug.Renderer;
+
 #ifdef RTS_DEBUG
-#include "W3DDevice/GameClient/HeightMap.h"
+#include "W3DDevice/GameClient/BaseHeightMap.h"
+#include "W3DDevice/GameClient/WorldHeightMap.h"
 #include "WW3D2/VertexFormat.h"
 #include "WW3D2/VertMaterial.h"
 class DebugHintObject : public RenderObjClass
@@ -86,35 +91,15 @@ protected:
 	Int m_myColor;	// argb
 	Int m_mySize;
 
-	RenderBackendIndexBuffer				*m_indexBuffer;
-	ShaderClass								m_shaderClass; //shader or rendering state for heightmap
-	VertexMaterialClass	  	  *m_vertexMaterialClass;
-	RenderBackendVertexBuffer			*m_vertexBufferTile;	//First vertex buffer.
-
-	void initData();
+    Graphics::SurfaceMeshHandle m_mesh;
 };
-
-// Texturing, no zbuffer, disabled zbuffer write, primary gradient, alpha blending
-#define SC_ALPHA ( SHADE_CNST(ShaderClass::PASS_ALWAYS, ShaderClass::DEPTH_WRITE_DISABLE, ShaderClass::COLOR_WRITE_ENABLE, ShaderClass::SRCBLEND_SRC_ALPHA, \
-	ShaderClass::DSTBLEND_ONE_MINUS_SRC_ALPHA, ShaderClass::FOG_DISABLE, ShaderClass::GRADIENT_MODULATE, ShaderClass::SECONDARY_GRADIENT_DISABLE, ShaderClass::TEXTURING_ENABLE, \
-	ShaderClass::ALPHATEST_DISABLE, ShaderClass::CULL_MODE_ENABLE, \
-	ShaderClass::DETAILCOLOR_DISABLE, ShaderClass::DETAILALPHA_DISABLE) )
-
 
 DebugHintObject::~DebugHintObject()
 {
 	freeMapResources();
 }
 
-DebugHintObject::DebugHintObject() :
-	m_indexBuffer(nullptr),
-	m_vertexMaterialClass(nullptr),
-	m_vertexBufferTile(nullptr),
-	m_myColor(0),
-	m_mySize(0)
-{
-	initData();
-}
+DebugHintObject::DebugHintObject() : m_myColor(0), m_mySize(0) {}
 
 Bool DebugHintObject::Cast_Ray(RayCollisionTestClass & raytest)
 {
@@ -160,120 +145,36 @@ RenderObjClass * DebugHintObject::Clone() const
 
 void DebugHintObject::freeMapResources()
 {
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	RenderBackend_Release_Index_Buffer(backend, m_indexBuffer);
-	RenderBackend_Release_Vertex_Buffer(backend, m_vertexBufferTile);
-	REF_PTR_RELEASE(m_vertexMaterialClass);
-}
-
-//Allocate a heightmap of x by y vertices.
-//data must be an array matching this size.
-void DebugHintObject::initData()
-{
-	freeMapResources();	//free old data and ib/vb
-
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	if (backend == nullptr) {
-		return;
-	}
-	m_indexBuffer = backend->Create_Index_Buffer(3 * sizeof(UnsignedShort), false);
-
-	// Fill up the IB
-	{
-		RenderBackendIndexBufferLock lockIdxBuffer(backend, m_indexBuffer, 0, 0,
-			RenderBackendBufferLockMode::Normal);
-		if (!lockIdxBuffer.Is_Locked()) {
-			return;
-		}
-		UnsignedShort *ib=(UnsignedShort*)lockIdxBuffer.Get_Data();
-		ib[0]=0;
-		ib[1]=1;
-		ib[2]=2;
-	}
-
-	m_vertexBufferTile = backend->Create_Vertex_Buffer(
-		3 * sizeof(VertexFormatXYZDUV1),
-		RenderBackendVertexFormat::PositionDiffuseTexture, false);
-
-	//go with a preset material for now.
-	m_vertexMaterialClass = VertexMaterialClass::Get_Preset(VertexMaterialClass::PRELIT_DIFFUSE);
-
-	//use a multi-texture shader: (text1*diffuse)*text2.
-	m_shaderClass = ShaderClass(SC_ALPHA);
+    Graphics::Get_Surface_Renderer().Destroy_Mesh(m_mesh);
+    m_mesh={};
 }
 
 void DebugHintObject::setLocAndColorAndSize(const Coord3D *loc, Int argb, Int size)
 {
-	m_myLoc = *loc;
-	m_myColor = argb;
-	m_mySize = size;
-
-	if (m_myLoc.z < 0 && TheTerrainRenderObject)
-	{
-		m_myLoc.z = TheTerrainRenderObject->getHeightMapHeight(m_myLoc.x, m_myLoc.y, nullptr);
-	}
-
-	if (m_vertexBufferTile)
-	{
-		IRenderBackend *backend = WW3D::Get_Render_Backend();
-		RenderBackendVertexBufferLock lockVtxBuffer(backend, m_vertexBufferTile, 0, 0,
-			RenderBackendBufferLockMode::Normal);
-		if (!lockVtxBuffer.Is_Locked()) {
-			return;
-		}
-		VertexFormatXYZDUV1 *vb = (VertexFormatXYZDUV1*)lockVtxBuffer.Get_Data();
-
-		Real x1 = m_mySize * 0.866;	// cos(30)
-		Real y1 = m_mySize * 0.5;		// sin(30)
-
-		// note, pts must go in a counterclockwise order!
-		vb[0].x = 0;
-		vb[0].y = m_mySize;
-		vb[0].z = 0;
-		vb[0].diffuse = m_myColor;
-		vb[0].u1 = 0;
-		vb[0].v1 = 0;
-
-		vb[1].x = -x1;
-		vb[1].y = -y1;
-		vb[1].z = 0;
-		vb[1].diffuse = m_myColor;
-		vb[1].u1 = 0;
-		vb[1].v1 = 0;
-
-		vb[2].x = x1;
-		vb[2].y = -y1;
-		vb[2].z = 0;
-		vb[2].diffuse = m_myColor;
-		vb[2].u1 = 0;
-		vb[2].v1 = 0;
-	}
+    m_myLoc=*loc; m_myColor=argb; m_mySize=size;
+    if (m_myLoc.z < 0 && TheTerrainRenderObject)
+        m_myLoc.z=TheTerrainRenderObject->getHeightMapHeight(m_myLoc.x,m_myLoc.y,nullptr);
 }
 
-void DebugHintObject::Render(RenderInfoClass & rinfo)
+void DebugHintObject::Render(RenderInfoClass& info)
 {
-	SphereClass bounds(Vector3(m_myLoc.x, m_myLoc.y, m_myLoc.z), m_mySize);
-	if (!rinfo.Camera.Cull_Sphere(bounds))
-	{
-		IRenderBackend *backend = WW3D::Get_Render_Backend();
-		if (backend == nullptr) {
-			return;
-		}
-		backend->Set_Material(m_vertexMaterialClass);
-		backend->Set_Shader(m_shaderClass);
-		backend->Set_Texture(0, nullptr);
-		backend->Set_Index_Buffer(m_indexBuffer);
-		backend->Set_Vertex_Buffer(m_vertexBufferTile, 0, sizeof(VertexFormatXYZDUV1));
-		backend->Set_Vertex_Format(RenderBackendVertexFormat::PositionDiffuseTexture);
-
-		Matrix3D tm(Transform);
-		Vector3 vec(m_myLoc.x, m_myLoc.y, m_myLoc.z);
-		tm.Set_Translation(vec);
-		backend->Set_Transform(RenderBackendTransform::World, tm);
-
-		backend->Draw_Indexed_Primitives(RenderBackendPrimitiveType::TriangleList,
-			0, 0, 3, 0, 1);
-	}
+    const SphereClass bounds(Vector3(m_myLoc.x,m_myLoc.y,m_myLoc.z),m_mySize);
+    auto* device=Graphics::Shared_Frame_Device();
+    if (!device || info.Camera.Cull_Sphere(bounds)) return;
+    const float x=m_mySize*0.866f, y=m_mySize*0.5f;
+    const std::array<Vector3,3> positions{Vector3(0,float(m_mySize),0),Vector3(-x,-y,0),Vector3(x,-y,0)};
+    Matrix3D transform(Transform); transform.Set_Translation(Vector3(m_myLoc.x,m_myLoc.y,m_myLoc.z));
+    std::array<Graphics::SurfaceVertex,3> vertices{};
+    for (unsigned i=0;i<3;++i) {
+        Vector3 point; Matrix3D::Transform_Vector(transform,positions[i],&point);
+        vertices[i].position={point.X,point.Y,point.Z};
+        const unsigned color=static_cast<unsigned>(m_myColor);
+        vertices[i].color={float((color>>16)&255)/255,float((color>>8)&255)/255,float(color&255)/255,float(color>>24)/255};
+    }
+    const std::array<std::uint32_t,3> indices{0,1,2};
+    Graphics::Draw_Debug_Geometry(Graphics::Get_Surface_Renderer(),device->Immediate_Command_List(),
+        m_mesh,vertices,indices,Make_Surface_Parameters(info.Camera));
+    WW3D::Get_Render_Backend()->Invalidate_Cached_Render_States();
 }
 #endif // RTS_DEBUG
 
@@ -498,8 +399,6 @@ void W3DInGameUI::drawMoveHints( View *view )
 
 		if( elapsed <= 40 )
 		{
-			RectClass rect;
-
 			// if this hint is not in this view ignore it
 			/// @todo write this to check if point is visible in view
 //			if( view->pointInView( &m_moveHint[ i ].pos == FALSE )
@@ -754,4 +653,5 @@ void W3DInGameUI::drawPlaceAngle( View *view )
 	//TheDisplay->drawLine( start.x, start.y, end.x, end.y, width, color );
 
 }
+
 

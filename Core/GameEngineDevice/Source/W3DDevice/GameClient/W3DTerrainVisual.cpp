@@ -55,7 +55,11 @@
 #include "W3DDevice/GameClient/W3DDebugIcons.h"
 #include "W3DDevice/GameClient/W3DTerrainTracks.h"
 #include "W3DDevice/GameClient/W3DShadow.h"
+#if defined(RTS_ZEROHOUR)
+#include "W3DDevice/GameClient/W3DTerrainGraphics.h"
+#else
 #include "W3DDevice/GameClient/HeightMap.h"
+#endif
 #include "W3DDevice/GameClient/FlatHeightMap.h"
 #include "W3DDevice/GameClient/W3DSmudge.h"
 #include "W3DDevice/GameClient/Module/W3DModelDraw.h"
@@ -210,7 +214,11 @@ void W3DTerrainVisual::init()
 	// extend
 	TerrainVisual::init();
 	// create a new render object for W3D
-	m_terrainRenderObject = NEW_REF( HeightMapRenderObjClass, () );
+	#if defined(RTS_ZEROHOUR)
+	m_terrainRenderObject = NEW_REF(W3DTerrainGraphics, ());
+	#else
+	m_terrainRenderObject = NEW_REF(HeightMapRenderObjClass, ());
+	#endif
 	m_terrainRenderObject->Set_Collision_Type( PICK_TYPE_TERRAIN );
 	TheTerrainRenderObject = m_terrainRenderObject;
 
@@ -656,15 +664,19 @@ Bool W3DTerrainVisual::load( AsciiString filename )
 
 
 	RefRenderObjListIterator *it = W3DDisplay::m_3DScene ? W3DDisplay::m_3DScene->createLightsIterator() : nullptr;
+	// Preparation evaluates the map's static lights through the owning scene.
+	if (W3DDisplay::m_3DScene != nullptr)
+		W3DDisplay::m_3DScene->Add_Render_Object(m_terrainRenderObject);
 	// apply the heightmap to the terrain render object
+	Int terrainResult;
 
 #ifdef DO_SEISMIC_SIMULATIONS
-	m_terrainRenderObject->initHeightData( m_clientHeightMap->getDrawWidth(),
+	terrainResult = m_terrainRenderObject->initHeightData( m_clientHeightMap->getDrawWidth(),
 																				 m_clientHeightMap->getDrawHeight(),
 																				 m_clientHeightMap,
 																				 it);
 #else
-	m_terrainRenderObject->initHeightData( m_logicHeightMap->getDrawWidth(),
+	terrainResult = m_terrainRenderObject->initHeightData( m_logicHeightMap->getDrawWidth(),
 																				 m_logicHeightMap->getDrawHeight(),
 																				 m_logicHeightMap,
 																				 it);
@@ -675,9 +687,11 @@ Bool W3DTerrainVisual::load( AsciiString filename )
 	 W3DDisplay::m_3DScene->destroyLightsIterator(it);
 	 it = nullptr;
 	}
-	// add our terrain render object to the scene
-	if (W3DDisplay::m_3DScene != nullptr)
-		W3DDisplay::m_3DScene->Add_Render_Object( m_terrainRenderObject );
+	if (terrainResult != 0) {
+		if (W3DDisplay::m_3DScene != nullptr)
+			W3DDisplay::m_3DScene->Remove_Render_Object(m_terrainRenderObject);
+		return FALSE;
+	}
 
 #if defined(RTS_DEBUG)
 	// Icon drawing utility object for pathfinding.

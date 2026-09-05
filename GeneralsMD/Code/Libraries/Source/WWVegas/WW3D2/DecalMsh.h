@@ -139,7 +139,6 @@ public:
 
 protected:
 
-	int														Process_Material_Run(int start_index);
 
 	/*
 	** Connectivity
@@ -204,7 +203,6 @@ public:
 
 protected:
 
-	int														Process_Material_Run(int start_index);
 
 	/*
 	** Connectivity

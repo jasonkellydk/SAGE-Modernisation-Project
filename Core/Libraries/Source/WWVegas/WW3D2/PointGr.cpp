@@ -87,6 +87,36 @@
 #include "Camera.h"
 #include "WW3D2/VertexFormat.h"
 #include "SortingRenderer.h"
+#include "GraphicsGeometry.h"
+#include <vector>
+
+namespace {
+void Draw_Point_Geometry(const Vector3* positions,const Vector4* colors,const Vector2* uv,
+    unsigned count,bool quads,const Vector4& color,ShaderClass shader,TextureClass* texture,
+    RenderInfoClass& info,bool sorted)
+{
+    std::vector<VertexFormatXYZDUV1> vertices(count);
+    for (unsigned i=0;i<count;++i) {
+        auto& vertex=vertices[i];
+        vertex.x=positions[i].X; vertex.y=positions[i].Y; vertex.z=positions[i].Z;
+        vertex.diffuse=WW3D::Get_Render_Backend()->Pack_Color_Clamped(colors ? colors[i] : color);
+        vertex.u1=uv[i].X; vertex.v1=uv[i].Y;
+    }
+    std::vector<unsigned> indices;
+    if (quads) {
+        indices.reserve(count/4*6);
+        for (unsigned i=0;i+3<count;i+=4) indices.insert(indices.end(),{i,i+1,i+2,i+2,i+3,i});
+    } else {
+        indices.resize(count);
+        for (unsigned i=0;i<count;++i) indices[i]=i;
+    }
+    Matrix4x4 projection;
+    info.Camera.Get_Backend_Projection_Matrix(&projection);
+    const Matrix4x4 camera_space(true);
+    Draw_Graphics_Prelit_Geometry(vertices,indices,projection,shader,texture,
+        sorted ? &camera_space : nullptr);
+}
+}
 
 // Upgraded to DX9 2/2/01 HY
 
@@ -933,68 +963,10 @@ void PointGroupClass::Render(RenderInfoClass &rinfo)
 	                  Shader.Get_Alpha_Test() == ShaderClass::ALPHATEST_DISABLE &&
 	                  WW3D::Is_Sorting_Enabled();
 
-	IndexBufferClass *indexbuffer;
-	int	verticesperprimitive;/// lorenzen fixed
-	int current;
-	int delta;
-
-	/// @todo lorenzen sez: if tri-based particles are not supported, elim this test
-	if (PointMode == QUADS) {
-		verticesperprimitive = 2;
-		indexbuffer = sort ? static_cast <IndexBufferClass*> (SortingQuads) : static_cast <IndexBufferClass*> (Quads);
-	} else {
-		verticesperprimitive = 3;
-		indexbuffer = sort ? static_cast <IndexBufferClass*> (SortingTris) : static_cast <IndexBufferClass*> (Tris);
-	}
-
-	current = 0;
-	while (current<vnum)
-	{
-		delta=MIN(vnum-current,MAX_VB_SIZE);
-		DynamicVBAccessClass PointVerts (sort ? BUFFER_TYPE_DYNAMIC_SORTING : BUFFER_TYPE_DYNAMIC_RENDER, RenderBackend_Dynamic_Vertex_Format, delta);
-
-		// Copy in the data to the VB
-		{
-			DynamicVBAccessClass::WriteLockClass Lock(&PointVerts);
-			int i;
-			unsigned char *vb=(unsigned char*)Lock.Get_Formatted_Vertex_Array();
-			const VertexFormatInfoClass& fvfinfo=PointVerts.Get_Format_Info();
-
-			for (i = current; i < current + delta; i++)
-			{
-				/// @todo lorenzen sez: use pointer arithmetic throughout this block
-				/// @todo lorenzen sez: delare thes locals outside this loop
-				/// @todo lorenzen sez: use a fast while loop
-				// Copy Locations
-				*(Vector3*)(vb+fvfinfo.Get_Location_Offset())=VertexLoc[i];
-				if (current_diffuse) {
-					unsigned color=WW3D::Get_Render_Backend()->Pack_Color_Clamped(VertexDiffuse[i]);
-					*(unsigned int*)(vb+fvfinfo.Get_Diffuse_Offset())=color;
-				}
-				else
-					*(unsigned int*)(vb+fvfinfo.Get_Diffuse_Offset())=
-						WW3D::Get_Render_Backend()->Pack_Color_Clamped(Vector4(DefaultPointColor[0],DefaultPointColor[1],DefaultPointColor[2],DefaultPointAlpha));
-				*(Vector2*)(vb+fvfinfo.Get_Tex_Offset(0))=VertexUV[i];
-				vb+=fvfinfo.Get_Vertex_Size();
-			}
-		}
-
-		WW3D::Get_Render_Backend()->Set_Index_Buffer(indexbuffer, 0);
-		WW3D::Get_Render_Backend()->Set_Vertex_Buffer(PointVerts);
-
-		if ( sort )
-		{
-				SortingRendererClass::Insert_Triangles (0, delta / verticesperprimitive, 0, delta);
-		}
-		else
-		{
-			WW3D::Get_Render_Backend()->Draw_Indexed_Primitives(
-				RenderBackendPrimitiveType::TriangleList, 0, 0, delta, 0,
-				delta / verticesperprimitive);
-		}
-
-		current+=delta;
-	}
+        Draw_Point_Geometry(&VertexLoc[0],current_diffuse ? &VertexDiffuse[0] : nullptr,
+            &VertexUV[0],vnum,PointMode==QUADS,
+            Vector4(DefaultPointColor.X,DefaultPointColor.Y,DefaultPointColor.Z,DefaultPointAlpha),
+            Shader,Texture,rinfo,sort);
 
 	// restore the matrices
 	WW3D::Get_Render_Backend()->Set_Transform(RenderBackendTransform::View,view);
@@ -1538,63 +1510,6 @@ void PointGroupClass::_Init()
 		}
 	}
 
-	// Create the IBs
-	Tris=NEW_REF(IndexBufferClass,(MAX_TRI_IB_SIZE));
-	Quads=NEW_REF(IndexBufferClass,(MAX_QUAD_IB_SIZE));
-	SortingTris=NEW_REF(SortingIndexBufferClass,(MAX_TRI_IB_SIZE));
-	SortingQuads=NEW_REF(SortingIndexBufferClass,(MAX_QUAD_IB_SIZE));
-
-	// Fill up the IBs
-	{
-		IndexBufferClass::WriteLockClass locktris(Tris);
-		unsigned short *ib=locktris.Get_Index_Array();
-		for (i=0; i<MAX_TRI_IB_SIZE; i++) ib[i]=(unsigned short) i;
-	}
-
-	{
-		unsigned short vert=0;
-		IndexBufferClass::WriteLockClass lockquads(Quads);
-		unsigned short *ib=lockquads.Get_Index_Array();
-		vert=0;
-		for (i=0; i<MAX_QUAD_IB_SIZE; i+=6)
-		{
-/// @todo lorenzen sez: pointer arithmetic like "++ib=vert+1"
-
-			ib[i]=vert;
-			ib[i+1]=vert+1;
-			ib[i+2]=vert+2;
-
-			ib[i+3]=vert+2;
-			ib[i+4]=vert+3;
-			ib[i+5]=vert;
-			vert+=4;
-		}
-	}
-
-	{
-		SortingIndexBufferClass::WriteLockClass locktris(SortingTris);
-		unsigned short *ib=locktris.Get_Index_Array();
-		for (i=0; i<MAX_TRI_IB_SIZE; i++) ib[i]=(unsigned short) i;
-	}
-
-	{
-		unsigned short vert=0;
-		SortingIndexBufferClass::WriteLockClass lockquads(SortingQuads);
-		unsigned short *ib=lockquads.Get_Index_Array();
-		vert=0;
-		for (i=0; i<MAX_QUAD_IB_SIZE; i+=6)
-		{
-			/// @todo lorenzen sez: pointers!
-			ib[i]=vert;
-			ib[i+1]=vert+1;
-			ib[i+2]=vert+2;
-
-			ib[i+3]=vert+2;
-			ib[i+4]=vert+3;
-			ib[i+5]=vert;
-			vert+=4;
-		}
-	}
 
 	PointMaterial=VertexMaterialClass::Get_Preset(VertexMaterialClass::PRELIT_DIFFUSE);
 }
@@ -1854,73 +1769,10 @@ void PointGroupClass::RenderVolumeParticle(RenderInfoClass &rinfo, unsigned int 
 		// ensure accurate alpha-blending because these particles have stacked layers that don't face the camera straight on.
 		const bool sort = (Shader.Get_Dst_Blend_Func() != ShaderClass::DSTBLEND_ZERO) && (Shader.Get_Alpha_Test() == ShaderClass::ALPHATEST_DISABLE) && (WW3D::Is_Sorting_Enabled());
 
-		IndexBufferClass *indexbuffer;
-		int	verticesperprimitive;/// lorenzen fixed
-		int current;
-		int delta;
-
-		/// @todo lorenzen sez: if tri-based particles are not supported, elim this test
-		if (PointMode == QUADS) {
-			verticesperprimitive = 2;
-			indexbuffer = sort ? static_cast <IndexBufferClass*> (SortingQuads) : static_cast <IndexBufferClass*> (Quads);
-		} else {
-			verticesperprimitive = 3;
-			indexbuffer = sort ? static_cast <IndexBufferClass*> (SortingTris) : static_cast <IndexBufferClass*> (Tris);
-		}
-
-
-		float nudge = 0;
-
-		current = 0;
-		while (current<vnum)
-		{
-			delta=MIN(vnum-current,MAX_VB_SIZE);
-			DynamicVBAccessClass PointVerts (sort ? BUFFER_TYPE_DYNAMIC_SORTING : BUFFER_TYPE_DYNAMIC_RENDER, RenderBackend_Dynamic_Vertex_Format, delta);
-
-			// Copy in the data to the VB
-			{
-				DynamicVBAccessClass::WriteLockClass Lock(&PointVerts);
-				int i;
-				unsigned char *vb=(unsigned char*)Lock.Get_Formatted_Vertex_Array();
-				const VertexFormatInfoClass& fvfinfo = PointVerts.Get_Format_Info();
-
-
-				for (i = current; i < current + delta; i++)
-				{
-					/// @todo lorenzen sez: use pointer arithmetic throughout this block
-					/// @todo lorenzen sez: delare thes locals outside this loop
-					/// @todo lorenzen sez: use a fast while loop
-					// Copy Locations
-					*(Vector3*)(vb+fvfinfo.Get_Location_Offset()) = VertexLoc[i];
-
-					if (current_diffuse) {
-						unsigned color=WW3D::Get_Render_Backend()->Pack_Color_Clamped(VertexDiffuse[i]);
-						*(unsigned int*)(vb+fvfinfo.Get_Diffuse_Offset())=color;
-					}
-					else
-						*(unsigned int*)(vb+fvfinfo.Get_Diffuse_Offset())=
-							WW3D::Get_Render_Backend()->Pack_Color_Clamped(Vector4(DefaultPointColor[0],DefaultPointColor[1],DefaultPointColor[2],DefaultPointAlpha));
-					*(Vector2*)(vb+fvfinfo.Get_Tex_Offset(0))=VertexUV[i];
-					vb+=fvfinfo.Get_Vertex_Size();
-				}
-			}
-
-			WW3D::Get_Render_Backend()->Set_Index_Buffer(indexbuffer, 0);
-			WW3D::Get_Render_Backend()->Set_Vertex_Buffer(PointVerts);
-
-			/// @todo lorenzen sez: precompute these params, above
-
-
-			if ( sort )
-					SortingRendererClass::Insert_Triangles (0, delta / verticesperprimitive, 0, delta);
-			else
-				WW3D::Get_Render_Backend()->Draw_Indexed_Primitives(
-					RenderBackendPrimitiveType::TriangleList, 0, 0, delta, 0,
-					delta / verticesperprimitive);
-
-
-			current+=delta;
-		}
+        Draw_Point_Geometry(&VertexLoc[0],current_diffuse ? &VertexDiffuse[0] : nullptr,
+            &VertexUV[0],vnum,PointMode==QUADS,
+            Vector4(DefaultPointColor.X,DefaultPointColor.Y,DefaultPointColor.Z,DefaultPointAlpha),
+            Shader,Texture,rinfo,sort);
 
 
 

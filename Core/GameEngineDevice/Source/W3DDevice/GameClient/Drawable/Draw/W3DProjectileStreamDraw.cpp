@@ -73,7 +73,6 @@ void W3DProjectileStreamDrawModuleData::buildFieldParse(MultiIniFieldParse& p)
 //-------------------------------------------------------------------------------------------------
 W3DProjectileStreamDraw::~W3DProjectileStreamDraw()
 {
-	disableModernLines();
 
 	for( Int lineIndex = 0; lineIndex < m_linesValid; lineIndex++ )
 	{
@@ -97,21 +96,14 @@ W3DProjectileStreamDraw::W3DProjectileStreamDraw( Thing *thing, const ModuleData
 	for( Int index = 0; index < MAX_PROJECTILE_STREAM; index++ )
 	{
 		m_allLines[index] = nullptr;
-		m_modernLines[index] = {};
 	}
 	m_linesValid = 0;
-	m_modernLineCount = 0;
-	m_modernEnabled = FALSE;
-	m_modernAttempted = FALSE;
-	m_modernObscured = FALSE;
-	m_modernUVOffset = 0.0f;
+	m_obscured = FALSE;
 }
 
 void W3DProjectileStreamDraw::setFullyObscuredByShroud(Bool fullyObscured)
 {
-	m_modernObscured = fullyObscured;
-	if (m_modernEnabled)
-		return;
+	m_obscured = fullyObscured;
 
 	if (fullyObscured)
 	{	//we need to remove all our lines from the scene because they are hidden
@@ -156,24 +148,6 @@ void W3DProjectileStreamDraw::doDrawModule(const Matrix3D* )
 	Vector3 stagingPoints[MAX_PROJECTILE_STREAM];
 	Vector3 zeroVector(0, 0, 0);
 
-	if (!m_modernAttempted)
-	{
-		m_modernAttempted = TRUE;
-		m_modernEnabled = Graphics::GetBeamRenderer().Is_Initialized() ? TRUE : FALSE;
-	}
-
-	if (m_modernEnabled && !buildModernLines(allPoints, pointsUsed))
-	{
-		disableModernLines();
-		m_modernEnabled = FALSE;
-	}
-
-	if (m_modernEnabled)
-	{
-		m_modernUVOffset += data->m_scrollRate;
-		return;
-	}
-
 	Int linesMade = 0;
 	Int currentMasterPoint = 0;
 	UnsignedInt currentStagingPoint = 0;
@@ -202,84 +176,21 @@ void W3DProjectileStreamDraw::doDrawModule(const Matrix3D* )
 		if( currentStagingPoint > 1 )
 		{
 			// Don't waste a line on a double hole (0) or a one point line (1)
-			makeOrUpdateLegacyLine( stagingPoints, currentStagingPoint, linesMade );
+			makeOrUpdateLine( stagingPoints, currentStagingPoint, linesMade );
 			linesMade++;// keep track of how many are real this frame
 		}
 		currentMasterPoint++;//I am either pointed off the edge anyway, or I am pointed at a zero I want to skip
 		currentStagingPoint = 0;//start over in the staging area
 	}
 
-	removeLegacyLines(linesMade);
+	removeLines(linesMade);
 }
 
-bool W3DProjectileStreamDraw::buildModernLines(const Vector3 *points, Int pointCount) noexcept
-{
-	if (!Graphics::GetBeamRenderer().Is_Initialized() || points == nullptr || pointCount < 0)
-		return false;
 
-	const W3DProjectileStreamDrawModuleData *data = getW3DProjectileStreamDrawModuleData();
-	const Graphics::MaterialHandle material = Graphics::GetBeamRenderer().Default_Material();
-	const Vector3 zeroVector(0, 0, 0);
-	Int beamIndex = 0;
-	Int pointIndex = 0;
 
-	while (pointIndex < pointCount)
-	{
-		const Int runStart = pointIndex;
-		while (pointIndex < pointCount && points[pointIndex] != zeroVector)
-			++pointIndex;
 
-		for (Int segment = runStart; segment + 1 < pointIndex; ++segment)
-		{
-			if (beamIndex >= MAX_PROJECTILE_STREAM)
-				return false;
 
-			Graphics::BeamDescription description;
-			description.start = {points[segment].X, points[segment].Y, points[segment].Z};
-			description.end = {points[segment + 1].X, points[segment + 1].Y, points[segment + 1].Z};
-			description.width = data->m_width;
-			description.color = {1.0f, 1.0f, 1.0f, 1.0f};
-			description.opacity = m_modernObscured ? 0.0f : 1.0f;
-			description.uv_scale = data->m_tileFactor;
-			description.uv_offset = m_modernUVOffset;
-			description.material = material;
-			description.flags = !m_modernObscured && data->m_width > 0.0f
-				? Graphics::BeamFlags::Enabled
-				: Graphics::BeamFlags::None;
-
-			Graphics::BeamHandle &beam = m_modernLines[beamIndex];
-			if (!beam.Is_Valid())
-				beam = Graphics::CreateBeam(description);
-			if (!beam.Is_Valid() || !Graphics::UpdateBeam(beam, description))
-				return false;
-			++beamIndex;
-		}
-
-		++pointIndex;
-	}
-
-	for (Int index = beamIndex; index < m_modernLineCount; ++index)
-	{
-		if (m_modernLines[index].Is_Valid())
-			Graphics::DestroyBeam(m_modernLines[index]);
-		m_modernLines[index] = {};
-	}
-	m_modernLineCount = beamIndex;
-	return true;
-}
-
-void W3DProjectileStreamDraw::disableModernLines() noexcept
-{
-	for (Int index = 0; index < MAX_PROJECTILE_STREAM; ++index)
-	{
-		if (m_modernLines[index].Is_Valid())
-			Graphics::DestroyBeam(m_modernLines[index]);
-		m_modernLines[index] = {};
-	}
-	m_modernLineCount = 0;
-}
-
-void W3DProjectileStreamDraw::makeOrUpdateLegacyLine( Vector3 *points, UnsignedInt pointCount, Int lineIndex )
+void W3DProjectileStreamDraw::makeOrUpdateLine( Vector3 *points, UnsignedInt pointCount, Int lineIndex )
 {
 	Bool newLine = FALSE;
 
@@ -305,12 +216,12 @@ void W3DProjectileStreamDraw::makeOrUpdateLegacyLine( Vector3 *points, UnsignedI
 		line->Set_Texture_Mapping_Mode(SegLineRendererClass::TILED_TEXTURE_MAP);	//this tiles the texture across the line
 		line->Set_Texture_Tile_Factor(data->m_tileFactor);	//number of times to tile texture across each segment
 		line->Set_UV_Offset_Rate(Vector2(0.0f,data->m_scrollRate));	//amount to scroll texture on each draw
-		if (!m_modernObscured)
+		if (!m_obscured)
 			W3DDisplay::m_3DScene->Add_Render_Object( line);	//add it to our scene so it gets rendered with other objects.
 	}
 }
 
-void W3DProjectileStreamDraw::removeLegacyLines(Int firstUnusedLine)
+void W3DProjectileStreamDraw::removeLines(Int firstUnusedLine)
 {
 	for (Int lineIndex = firstUnusedLine; lineIndex < m_linesValid; ++lineIndex)
 	{

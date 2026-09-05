@@ -159,9 +159,7 @@ public:
 	void removeTree(DrawableID id);
 	Bool updateTreePosition(DrawableID id, Coord3D location, Real angle);
 	void renderTrees(CameraClass * camera); ///< renders the tree buffer.
-	Bool hasTreeShadowCasters() const;
-	void prepareTreeShadowVolumes(const Vector3 &lightPosition);
-	void renderTreeShadowVolumes();
+    virtual Bool collectShadowCasters();
 
 	void addProp(Int id, Coord3D location, Real angle, Real scale, const AsciiString &modelName);
 	void removeProp(Int id);
@@ -192,7 +190,7 @@ public:
 	void updateShorelineTile(Int X, Int Y, Int Border, WorldHeightMap *pMap);	///<figure out which tiles on this map cross water plane
 	void recordShoreLineSortInfos();
 	void updateViewImpassableAreas(Bool partial = FALSE, Int minX = 0, Int maxX = 0, Int minY = 0, Int maxY = 0);
-	void drawScorches();
+	void drawScorches(CameraClass& camera);
 	void clearAllScorches();
 	void setTimeOfDay( TimeOfDay tod );
 	void loadRoadsAndBridges(W3DTerrainLogic *pTerrainLogic, Bool saveGame); ///< Load the roads from the map objects.
@@ -301,8 +299,6 @@ protected:
 	Int m_shoreLineTileSortMaxCoordinate;	///<keep track of coordinate range along axis used for m_shoreLineSortInfos
 	Int m_shoreLineTileSortMinCoordinate;
 	void initDestAlphaLUT();	///<initialize water depth LUT stored in m_destAlphaTexture
-	void renderShoreLines(CameraClass *pCamera);	///<re-render parts of terrain that need custom blending into water edge
-	void renderShoreLinesSorted(CameraClass *pCamera);	///<optimized version for game usage.
 
 	static Bool useCloud();
 };

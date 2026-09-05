@@ -88,6 +88,7 @@
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 
+#include "GraphicsGeometry.h"
 #include "BoxRObj.h"
 #include "W3DUtil.h"
 #include "WWDebug/wwdebug.h"
@@ -455,65 +456,21 @@ void BoxRenderObjClass::render_box(RenderInfoClass & rinfo,const Vector3 & cente
 			verts[ivert].Z = center.Z + _BoxVerts[ivert][2] * extent.Z;
 		}
 
-		/*
-		** Dump the box vertices into the sorting dynamic vertex buffer.
-		*/
-	unsigned int color = WW3D::Get_Render_Backend()->Pack_Color(Color,Opacity);
-
-		int buffer_type = BUFFER_TYPE_DYNAMIC_RENDER;
-
-		DynamicVBAccessClass vbaccess(buffer_type,RenderBackend_Dynamic_Vertex_Format,NUM_BOX_VERTS);
-		{
-			DynamicVBAccessClass::WriteLockClass lock(&vbaccess);
-			//unsigned char *vb=(unsigned char *) lock.Get_Vertex_Array();
-			VertexFormatXYZNDUV2* vb=lock.Get_Formatted_Vertex_Array();
-
-			for (int i=0; i<NUM_BOX_VERTS; i++) {
-
-				// Locations
-				vb->x=verts[i][0];
-				vb->y=verts[i][1];
-				vb->z=verts[i][2];
-
-				// Normals
-				vb->nx=_BoxVertexNormals[i][0];
-				vb->ny=_BoxVertexNormals[i][1];
-				vb->nz=_BoxVertexNormals[i][2];
-
-				// Colors
-				vb->diffuse=color;
-
-				vb++;
-			}
-		}
-
-		/*
-		** Dump the faces into the sorting dynamic index buffer.
-		*/
-		DynamicIBAccessClass ibaccess(buffer_type,NUM_BOX_FACES*3);
-		{
-			DynamicIBAccessClass::WriteLockClass lock(&ibaccess);
-			unsigned short * indices = lock.Get_Index_Array();
-			for (int i=0; i<NUM_BOX_FACES; i++) {
-				indices[3*i] = _BoxFaces[i][0];
-				indices[3*i+1] = _BoxFaces[i][1];
-				indices[3*i+2] = _BoxFaces[i][2];
-			}
-		}
-
-		/*
-		** Apply the shader and material
-		*/
-		WW3D::Get_Render_Backend()->Set_Material(_BoxMaterial);
-		WW3D::Get_Render_Backend()->Set_Shader(_BoxShader);
-		WW3D::Get_Render_Backend()->Set_Texture(0,nullptr);
-
-		WW3D::Get_Render_Backend()->Set_Index_Buffer(ibaccess,0);
-		WW3D::Get_Render_Backend()->Set_Vertex_Buffer(vbaccess);
-
-		WW3D::Get_Render_Backend()->Draw_Indexed_Primitives(
-			RenderBackendPrimitiveType::TriangleList, 0, 0, NUM_BOX_VERTS,
-			0, NUM_BOX_FACES);
+        VertexFormatXYZDUV1 vertices[NUM_BOX_VERTS]{};
+        const unsigned color = WW3D::Get_Render_Backend()->Pack_Color(Color,Opacity);
+        for (unsigned i=0; i<NUM_BOX_VERTS; ++i) {
+            vertices[i].x=verts[i].X; vertices[i].y=verts[i].Y; vertices[i].z=verts[i].Z;
+            vertices[i].diffuse=color;
+        }
+        unsigned indices[NUM_BOX_FACES*3];
+        for (unsigned i=0; i<NUM_BOX_FACES; ++i)
+            for (unsigned corner=0; corner<3; ++corner) indices[i*3+corner]=_BoxFaces[i][corner];
+        Matrix4x4 world,view,projection;
+        auto* backend=WW3D::Get_Render_Backend();
+        backend->Get_Transform(RenderBackendTransform::World,world);
+        backend->Get_Transform(RenderBackendTransform::View,view);
+        backend->Get_Transform(RenderBackendTransform::Projection,projection);
+        Draw_Graphics_Prelit_Geometry(vertices,indices,projection*view*world,_BoxShader,nullptr);
 	}
 }
 

@@ -34,7 +34,6 @@
 #include "Common/DrawModule.h"
 #include "Common/FileSystem.h"	// this is only here to pull in LOAD_TEST_ASSETS
 
-import Graphics.Scene.StaticMeshes;
 
 // FORWARD REFERENCES /////////////////////////////////////////////////////////////////////////////
 class Thing;
@@ -70,17 +69,7 @@ public:
 private:
 
 #ifdef LOAD_TEST_ASSETS
-	Graphics::MeshHandle m_modernMesh;
-	Graphics::MaterialHandle m_modernMaterial;
-	Graphics::InstanceHandle m_modernInstance;
-	Graphics::RenderBounds m_modernBounds;
-	bool m_modernActive = false;
-	bool m_modernShadowsEnabled = true;
-	bool m_modernShadowObscured = false;
 
-	bool createModernMesh();
-	void updateModernInstance(const Matrix3D *transformMtx);
-	void releaseModernMesh() noexcept;
 	RenderObjClass*		m_renderObject;										///< W3D Render object for this drawable
 	Shadow*				m_shadow;													///< Updates/Renders shadows of this object
 #endif

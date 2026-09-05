@@ -532,14 +532,14 @@ void FlatHeightMapRenderObjClass::Render(RenderInfoClass & rinfo)
 	}
 #endif
 
-	drawScorches();
+	drawScorches(rinfo.Camera);
 	ShaderClass::Invalidate();
 	WW3D::Get_Render_Backend()->Apply_Render_State_Changes();
 
 	m_bridgeBuffer->drawBridges(&rinfo.Camera, m_disableTextures, m_stageTwoTexture);
 
 	if (TheTerrainTracksRenderObjClassSystem)
-		TheTerrainTracksRenderObjClassSystem->flush();
+		TheTerrainTracksRenderObjClassSystem->flush(rinfo.Camera);
 
 	ShaderClass::Invalidate();
 	WW3D::Get_Render_Backend()->Apply_Render_State_Changes();

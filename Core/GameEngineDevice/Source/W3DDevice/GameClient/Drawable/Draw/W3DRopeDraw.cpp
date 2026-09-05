@@ -41,7 +41,7 @@
 
 namespace
 {
-Graphics::BeamDescription Make_Modern_Rope_Beam(const Vector3 &start, const Vector3 &end, Real width, Real opacity, const RGBColor &color) noexcept
+Graphics::BeamDescription Make_Graphics_Rope_Beam(const Vector3 &start, const Vector3 &end, Real width, Real opacity, const RGBColor &color) noexcept
 {
 	Graphics::BeamDescription description;
 	description.start = {start.X, start.Y, start.Z};
@@ -77,8 +77,8 @@ W3DRopeDraw::W3DRopeDraw( Thing *thing, const ModuleData* moduleData ) : DrawMod
 	m_segments.clear();
 	m_curWobblePhase = 0.0f;
 	m_curZOffset = 0.0f;
-	m_modernEnabled = FALSE;
-	m_modernAttempted = FALSE;
+	m_graphicsEnabled = FALSE;
+	m_graphicsAttempted = FALSE;
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -101,10 +101,10 @@ void W3DRopeDraw::buildSegments()
 
 	if (Graphics::GetBeamRenderer().Is_Initialized())
 	{
-		m_modernAttempted = TRUE;
-		m_modernEnabled = createModernSegments() ? TRUE : FALSE;
-		if (!m_modernEnabled)
-			disableModernSegments();
+		m_graphicsAttempted = TRUE;
+		m_graphicsEnabled = createGraphicsSegments() ? TRUE : FALSE;
+		if (!m_graphicsEnabled)
+			disableGraphicsSegments();
 	}
 }
 
@@ -112,13 +112,13 @@ void W3DRopeDraw::buildSegments()
 //-------------------------------------------------------------------------------------------------
 void W3DRopeDraw::tossSegments()
 {
-	disableModernSegments();
+	disableGraphicsSegments();
 	m_segments.clear();
-	m_modernEnabled = FALSE;
-	m_modernAttempted = FALSE;
+	m_graphicsEnabled = FALSE;
+	m_graphicsAttempted = FALSE;
 }
 
-bool W3DRopeDraw::createModernSegments() noexcept
+bool W3DRopeDraw::createGraphicsSegments() noexcept
 {
 	if (!Graphics::GetBeamRenderer().Is_Initialized())
 		return false;
@@ -130,9 +130,9 @@ bool W3DRopeDraw::createModernSegments() noexcept
 	{
 		const Vector3 start(pos.x, pos.y, pos.z);
 		const Vector3 end(pos.x, pos.y, pos.z + eachLen);
-		segment.modernLine = Graphics::CreateBeam(Make_Modern_Rope_Beam(start, end, m_width * 0.5f, 1.0f, m_color));
-		segment.modernSoftLine = Graphics::CreateBeam(Make_Modern_Rope_Beam(start, end, m_width, 0.5f, m_color));
-		if (!segment.modernLine.Is_Valid() || !segment.modernSoftLine.Is_Valid())
+		segment.graphicsLine = Graphics::CreateBeam(Make_Graphics_Rope_Beam(start, end, m_width * 0.5f, 1.0f, m_color));
+		segment.graphicsSoftLine = Graphics::CreateBeam(Make_Graphics_Rope_Beam(start, end, m_width, 0.5f, m_color));
+		if (!segment.graphicsLine.Is_Valid() || !segment.graphicsSoftLine.Is_Valid())
 			return false;
 		pos.z += eachLen;
 	}
@@ -140,18 +140,18 @@ bool W3DRopeDraw::createModernSegments() noexcept
 	return true;
 }
 
-void W3DRopeDraw::disableModernSegments() noexcept
+void W3DRopeDraw::disableGraphicsSegments() noexcept
 {
 	for (SegInfo &segment : m_segments)
 	{
-		if (segment.modernLine.Is_Valid())
-			Graphics::DestroyBeam(segment.modernLine);
-		if (segment.modernSoftLine.Is_Valid())
-			Graphics::DestroyBeam(segment.modernSoftLine);
-		segment.modernLine = {};
-		segment.modernSoftLine = {};
+		if (segment.graphicsLine.Is_Valid())
+			Graphics::DestroyBeam(segment.graphicsLine);
+		if (segment.graphicsSoftLine.Is_Valid())
+			Graphics::DestroyBeam(segment.graphicsSoftLine);
+		segment.graphicsLine = {};
+		segment.graphicsSoftLine = {};
 	}
-	m_modernEnabled = FALSE;
+	m_graphicsEnabled = FALSE;
 }
 
 
@@ -203,13 +203,13 @@ void W3DRopeDraw::doDrawModule(const Matrix3D* transformMtx)
 	{
 		buildSegments();
 	}
-	else if (!m_modernAttempted && Graphics::GetBeamRenderer().Is_Initialized())
+	else if (!m_graphicsAttempted && Graphics::GetBeamRenderer().Is_Initialized())
 	{
-		m_modernAttempted = TRUE;
-		if (createModernSegments())
-			m_modernEnabled = TRUE;
+		m_graphicsAttempted = TRUE;
+		if (createGraphicsSegments())
+			m_graphicsEnabled = TRUE;
 		else
-			disableModernSegments();
+			disableGraphicsSegments();
 	}
 
 	if (!m_segments.empty())
@@ -221,11 +221,11 @@ void W3DRopeDraw::doDrawModule(const Matrix3D* transformMtx)
 		for (std::vector<SegInfo>::iterator it = m_segments.begin(); it != m_segments.end(); ++it)
 		{
 			Vector3 end(pos->x + deflection*it->wobbleAxisX, pos->y + deflection*it->wobbleAxisY, start.Z - eachLen);
-			if (m_modernEnabled)
+			if (m_graphicsEnabled)
 			{
-				if (!Graphics::UpdateBeam(it->modernLine, Make_Modern_Rope_Beam(start, end, m_width * 0.5f, 1.0f, m_color))
-					|| !Graphics::UpdateBeam(it->modernSoftLine, Make_Modern_Rope_Beam(start, end, m_width, 0.5f, m_color)))
-					disableModernSegments();
+				if (!Graphics::UpdateBeam(it->graphicsLine, Make_Graphics_Rope_Beam(start, end, m_width * 0.5f, 1.0f, m_color))
+					|| !Graphics::UpdateBeam(it->graphicsSoftLine, Make_Graphics_Rope_Beam(start, end, m_width, 0.5f, m_color)))
+					disableGraphicsSegments();
 			}
 			start = end;
 		}

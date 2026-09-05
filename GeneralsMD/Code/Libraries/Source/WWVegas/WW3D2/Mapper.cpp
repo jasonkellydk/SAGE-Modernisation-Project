@@ -1057,7 +1057,13 @@ BumpEnvTextureMapperClass::BumpEnvTextureMapperClass(const BumpEnvTextureMapperC
 void BumpEnvTextureMapperClass::Apply(int uv_array_index)
 {
 	LinearOffsetTextureMapperClass::Apply(uv_array_index);
+	float matrix[4];
+	Calculate_Bump_Matrix(matrix);
+	WW3D::Get_Render_Backend()->Set_Texture_Bump_Environment_Matrix(Stage,matrix[0],matrix[1],matrix[2],matrix[3]);
+}
 
+void BumpEnvTextureMapperClass::Calculate_Bump_Matrix(float (&matrix)[4])
+{
 	unsigned int now = WW3D::Get_Sync_Time();
 	unsigned int delta =  now - LastUsedSyncTime;
 	LastUsedSyncTime=now;
@@ -1070,8 +1076,7 @@ void BumpEnvTextureMapperClass::Apply(int uv_array_index)
 	c=ScaleFactor * WWMath::Fast_Cos(CurrentAngle);
 	s=ScaleFactor * WWMath::Fast_Sin(CurrentAngle);
 
-	// Set the Bump Environment Matrix
-	WW3D::Get_Render_Backend()->Set_Texture_Bump_Environment_Matrix(Stage,c,-s,s,c);
+	matrix[0]=c; matrix[1]=-s; matrix[2]=s; matrix[3]=c;
 }
 
 /*

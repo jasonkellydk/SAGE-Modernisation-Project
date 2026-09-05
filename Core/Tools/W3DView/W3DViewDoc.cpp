@@ -61,6 +61,10 @@
 #include "WW3D2/SoundRObj.h"
 #include "WW3D2/Dazzle.h"
 
+#include <fstream>
+import Graphics.Capture.MovieCapture;
+import Graphics.Backends.DX11.Coexistence;
+
 
 #ifdef RTS_DEBUG
 #define new DEBUG_NEW
@@ -2353,9 +2357,9 @@ CW3DViewDoc::Make_Movie ()
 		graphic_view->RepaintView (FALSE);
 
 		// Begin our movie
-		WW3D::Pause_Movie (true);
-		WW3D::Start_Movie_Capture ("Grab", 30);
-		WW3D::Pause_Movie (true);
+		Graphics::MovieCapture movieCapture;
+		movieCapture.Start("Grab", 30);
+		movieCapture.Pause(true);
 
 		float frames = m_pCAnimation->Get_Num_Frames ();
 		float frame_inc = m_pCAnimation->Get_Frame_Rate () / 30.0F;
@@ -2396,7 +2400,9 @@ CW3DViewDoc::Make_Movie ()
 
 			graphic_view->RepaintView (FALSE, ticks);
 			graphic_view->RepaintView (FALSE, 1);
-			WW3D::Update_Movie_Capture ();
+			auto* captureDevice = Graphics::Shared_Frame_Device();
+			if (captureDevice == nullptr || !movieCapture.Capture(*captureDevice, captureDevice->Get_Swap_Chain().Backbuffer(), Graphics::RHITextureFormat::BGRA8_UNorm, true))
+				break;
 
 			if (::GetAsyncKeyState (VK_ESCAPE) < 0) {
 				break;
@@ -2404,7 +2410,7 @@ CW3DViewDoc::Make_Movie ()
 		}
 
 		// Stop capturing the movie data
-		WW3D::Stop_Movie_Capture ();
+		movieCapture.Stop();
 	}
 
 	// Restore the mouse cursor to its previous visibility state.

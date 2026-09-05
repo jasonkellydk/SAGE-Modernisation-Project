@@ -123,10 +123,10 @@ char const * WBGameFileClass::Set_Name( char const *filename )
 	}
 
 	if (TheFileSystem->doesFileExist(filename)) {
-		strlcpy(m_filePath, filename, ARRAY_SIZE(m_filePath));
+		m_filePath = filename;
 		m_fileExists = true;
 	}
-	return m_filename;
+	return m_filename.c_str();
 }
 
 

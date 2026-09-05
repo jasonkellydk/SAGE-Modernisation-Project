@@ -44,6 +44,10 @@
 #include "WW3D2/VertexBuffer.h"
 #include "WW3D2/IndexBuffer.h"
 #include "WW3D2/SortingRenderer.h"
+#ifdef RTS_ZEROHOUR
+#include <array>
+#include "WW3D2/GraphicsGeometry.h"
+#endif
 
 
 ///////////////////////////////////////////////////////////////////
@@ -241,6 +245,26 @@ ScreenCursorClass::On_Frame_Update ()
 void
 ScreenCursorClass::Render (RenderInfoClass &rinfo)
 {
+#ifdef RTS_ZEROHOUR
+    std::array<VertexFormatXYZDUV1, 4> vertices{};
+    std::array<unsigned, 6> indices{};
+    for (unsigned i = 0; i < vertices.size(); ++i) {
+        auto& vertex = vertices[i];
+        vertex.x = m_Verticies[i].X;
+        vertex.y = m_Verticies[i].Y;
+        vertex.z = m_Verticies[i].Z;
+        vertex.diffuse = 0xffffffff;
+        vertex.u1 = m_UVs[i].X;
+        vertex.v1 = m_UVs[i].Y;
+    }
+    for (unsigned i = 0; i < 2; ++i)
+        for (unsigned corner = 0; corner < 3; ++corner)
+            indices[i * 3 + corner] = m_Triangles[i][corner];
+    if (!Draw_Graphics_Prelit_Geometry(vertices, indices, Matrix4x4(true),
+        ShaderClass::_PresetATestBlend2DShader, m_pTexture.Peek()))
+        DEBUG_LOG(("Viewer cursor graphics submission failed.\n"));
+#else
+
 	const int VERTEX_COUNT = 4;
 	const int FACE_COUNT = 2;
 	/*
@@ -304,6 +328,7 @@ ScreenCursorClass::Render (RenderInfoClass &rinfo)
 		FACE_COUNT*3,
 		0,
 		VERTEX_COUNT*2);
+#endif
 }
 
 

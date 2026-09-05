@@ -81,12 +81,12 @@
  *   MeshClass::Get_Obj_Space_Bounding_Box -- returns the obj-space bounding box               *
  *   MeshClass::Get_Deformed_Vertices -- Gets the deformed vertices for a skin                 *
  *   MeshClass::Get_Deformed_Vertices -- Gets the deformed vertices for a skin                 *
- *   MeshClass::Render_Material_Pass -- Render a procedural material pass for this mesh        *
  *   MeshClass::Replace_VertexMaterial -- Replaces existing vertex material with a new one. Wi *
  *   MeshClass::Make_Unique -- Makes mesh unique in the renderer, but still shares system ram  *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 #include "Mesh.h"
+#include "GraphicsMesh.h"
 #include <assert.h>
 #include "W3DFile.h"
 #include "AssetMgr.h"
@@ -656,331 +656,42 @@ int MeshClass::Get_Num_Polys() const
  *=============================================================================================*/
 void MeshClass::Render(RenderInfoClass & rinfo)
 {
-	WWPROFILE("Mesh::Render");
-	if (Is_Not_Hidden_At_All() == false) {
-		return;
-	}
+    WWPROFILE("Mesh::Render");
+    if (!Is_Not_Hidden_At_All()) return;
+    const unsigned sort_level=static_cast<unsigned>(Model->Get_Sort_Level());
+    if (WW3D::Are_Static_Sort_Lists_Enabled() && sort_level!=SORT_LEVEL_NONE) {
+        Set_Lighting_Environment(rinfo.light_environment);
+        m_alphaOverride=rinfo.alphaOverride;
+        m_materialPassAlphaOverride=rinfo.materialPassAlphaOverride;
+        m_materialPassEmissiveOverride=rinfo.materialPassEmissiveOverride;
+        WW3D::Add_To_Static_Sort_List(this,sort_level);
+        return;
+    }
+    if (!Model->Get_Flag(MeshGeometryClass::SKIN)
+        && CollisionMath::Overlap_Test(rinfo.Camera.Get_Frustum(),Get_Bounding_Box())==CollisionMath::OUTSIDE) return;
+    if (sort_level==SORT_LEVEL_NONE) {
+        Set_Lighting_Environment(rinfo.light_environment);
+        m_alphaOverride=rinfo.alphaOverride;
+        m_materialPassAlphaOverride=rinfo.materialPassAlphaOverride;
+        m_materialPassEmissiveOverride=rinfo.materialPassEmissiveOverride;
+    }
+    const bool drawn=Draw_Graphics_Mesh(*this,rinfo,
+        {m_alphaOverride,m_materialPassAlphaOverride,m_materialPassEmissiveOverride});
+    WWASSERT(drawn);
+    if (DecalMesh && (rinfo.Current_Override_Flags() & RenderInfoClass::RINFO_OVERRIDE_ADDITIONAL_PASSES_ONLY)==0) {
+        const auto& sphere=Get_Bounding_Sphere();
+        Vector3 center;
+        rinfo.Camera.Transform_To_View_Space(center,sphere.Center);
+        if (-center.Z-sphere.Radius<WW3D::Get_Decal_Rejection_Distance())
+            TheMeshRenderer.Add_To_Render_List(DecalMesh);
+    }
+    RendererDebuggerClass::Add_Mesh(this);
 
-	// If static sort lists are enabled and this mesh has a sort level, put it on the list instead
-	// of rendering it.
-	unsigned int sort_level = (unsigned int)Model->Get_Sort_Level();
-
-	if (WW3D::Are_Static_Sort_Lists_Enabled() && sort_level != SORT_LEVEL_NONE) {
-
-		Set_Lighting_Environment(rinfo.light_environment);
-		//Add custom alpha
-		m_alphaOverride = rinfo.alphaOverride;
-		m_materialPassAlphaOverride = rinfo.materialPassAlphaOverride;
-		m_materialPassEmissiveOverride = rinfo.materialPassEmissiveOverride;
-
-		WW3D::Add_To_Static_Sort_List(this, sort_level);
-
-	} else {
-
-		/* Commented out since we set lighting environment only on visible meshes below. -MW
-		** Plug in the lighting environment unless we arrived here as part of the static
-		** sorting system being flushed
-		*/
-//		if (WW3D::Are_Static_Sort_Lists_Enabled()) {
-//			Set_Lighting_Environment(rinfo.light_environment);
-//		}
-
-		const FrustumClass & frustum=rinfo.Camera.Get_Frustum();
-
-		if (	Model->Get_Flag(MeshGeometryClass::SKIN) ||
-				CollisionMath::Overlap_Test(frustum,Get_Bounding_Box())!=CollisionMath::OUTSIDE )
-		{
-			bool rendered_something = false;
-
-			/*
-			** If this mesh model has never been rendered, we need to generate its backend data.
-			*/
-			if (!Model->Has_Polygon_Renderers()) {
-				Model->Register_For_Rendering();
-				WWASSERT(Model->Has_Polygon_Renderers());
-			}
-
-			/*
-			** Plug in lighting
-			*/
-			if (sort_level == SORT_LEVEL_NONE)	//sorting ones get their environment set above.
-			{	Set_Lighting_Environment(rinfo.light_environment);
-
-				//Add custom alpha
-				m_alphaOverride = rinfo.alphaOverride;
-				m_materialPassAlphaOverride = rinfo.materialPassAlphaOverride;
-				m_materialPassEmissiveOverride = rinfo.materialPassEmissiveOverride;
-			}
-
-			/*
-			** Process texture reductions:
-			*/
-//			Model->Process_Texture_Reduction();
-
-			/*
-			** Look up the FVF container that this mesh is in
-			*/
-			/*
-			** Check if we should render the base passes.  One special case here: if
-			** the mesh is translucent (alpha) and the base passes are disabled but we
-			** are rendering a shadow, we go ahead and render the base pass.  This is an ugly way
-			** to get our tree shadows and other alpha textured shadows to work.
-			*/
-			bool render_base_passes = ((rinfo.Current_Override_Flags() & RenderInfoClass::RINFO_OVERRIDE_ADDITIONAL_PASSES_ONLY) == 0);
-			bool is_alpha =	(Model->Get_Single_Shader().Get_Alpha_Test() == ShaderClass::ALPHATEST_ENABLE) ||
-									(Model->Get_Single_Shader().Get_Src_Blend_Func() == ShaderClass::SRCBLEND_SRC_ALPHA);
-
-			if (	(rinfo.Current_Override_Flags() & RenderInfoClass::RINFO_OVERRIDE_SHADOW_RENDERING) &&
-					(is_alpha == true))
-			{
-				render_base_passes = true;
-			}
-
-			if (render_base_passes) {
-
-				/*
-				** Link each polygon renderer for this mesh into the visible list
-				*/
-				TheMeshRenderer.Add_Mesh_Render_Tasks(Model, this);
-
-				rendered_something = true;
-
-			}
-
-			/*
-			** If the rendering context specifies procedural material passes, register them
-			** for rendering
-			*/
-			for (int i=0; i<rinfo.Additional_Pass_Count(); i++) {
-
-				MaterialPassClass * matpass = rinfo.Peek_Additional_Pass(i);
-
-				if ((!Is_Translucent()) || (matpass->Is_Enabled_On_Translucent_Meshes())) {
-
-					/*
-					** If the base pass for this mesh has been disabled, we have to make sure
-					** the procedural material pass is rendered after everything else has rendered
-					*/
-					TheMeshRenderer.Add_Mesh_Material_Pass(Model, matpass, this,
-						(rinfo.Current_Override_Flags() & RenderInfoClass::RINFO_OVERRIDE_ADDITIONAL_PASSES_ONLY) != 0);
-					rendered_something = true;
-				}
-			}
-
-			/*
-			** If we rendered any base or procedural passes and this is a skin, we need
-			** to tell the mesh rendering system to process this skin
-			*/
-			if (rendered_something && Model->Get_Flag(MeshGeometryClass::SKIN)) {
-				TheMeshRenderer.Add_Mesh_Skin(Model, this);
-			}
-
-			/*
-			** If we have a decal mesh, link it into the mesh rendering system
-			*/
-			if (	(DecalMesh != nullptr) &&
-					((rinfo.Current_Override_Flags() & RenderInfoClass::RINFO_OVERRIDE_ADDITIONAL_PASSES_ONLY) == 0))
-			{
-				const SphereClass & ws_sphere = Get_Bounding_Sphere();
-				Vector3 cam_space_sphere_center;
-				rinfo.Camera.Transform_To_View_Space(cam_space_sphere_center,ws_sphere.Center);
-				if (-cam_space_sphere_center.Z - ws_sphere.Radius < WW3D::Get_Decal_Rejection_Distance()) {
-					TheMeshRenderer.Add_To_Render_List(DecalMesh);
-				}
-			}
-
-			RendererDebuggerClass::Add_Mesh(this);
-		}
-	}
 }
 
 
-/***********************************************************************************************
- * MeshClass::Render_Material_Pass -- Render a procedural material pass for this mesh          *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   3/4/2001   gth : Created.                                                                 *
- *=============================================================================================*/
-void MeshClass::Render_Material_Pass(MaterialPassClass * pass,IndexBufferClass * ib)
-{
-	//Added to allow dynamic opacity on additional render passed
-	//without having to create a new material pass per object instance. -MW
-	float oldOpacity=-1.0f;
-	Vector3 oldEmissive(-1,-1,-1);
 
-	if (LightEnvironment != nullptr) {
-		WW3D::Get_Render_Backend()->Set_Light_Environment(LightEnvironment);
-	}
 
-	if (Model->Get_Flag(MeshModelClass::SKIN)) {
-
-		/*
-		** In the case of skin meshes, we need to render our polys with the identity transform
-		*/
-		if (m_materialPassAlphaOverride != 1.0f)
-		{	VertexMaterialClass *mat=pass->Peek_Material();
-			if (mat)
-			{
-				oldOpacity=mat->Get_Opacity();
-				mat->Set_Opacity(m_materialPassAlphaOverride);
-			}
-		}
-		if (m_materialPassEmissiveOverride != 1.0f)
-		{	VertexMaterialClass *mat=pass->Peek_Material();
-			if (mat)
-			{
-				mat->Get_Emissive(&oldEmissive);
-				mat->Set_Emissive(m_materialPassEmissiveOverride*oldEmissive);
-			}
-		}
-		pass->Install_Materials();
-		WW3D::Get_Render_Backend()->Set_Index_Buffer(ib,0);
-
-		SNAPSHOT_SAY(("Set_World_Identity"));
-		WW3D::Get_Render_Backend()->Set_World_Identity();
-
-		TheMeshRenderer.Render_Mesh_Pass(Model, BaseVertexOffset);
-
-		if (oldOpacity >= 0)
-		{	//opacity was modified for this mesh instance, so need to restore the material setting which may be shared
-			//among other instances.
-			pass->Peek_Material()->Set_Opacity(oldOpacity);
-		}
-		if (oldEmissive.X >= 0)
-		{	//emissive was modified for this mesh instance, so need to restore the material setting which may be shared
-			//among other instances.
-			pass->Peek_Material()->Set_Emissive(oldEmissive);
-		}
-		//MW: Need uninstall custom materials in case they leave D3D in unknown state
-		pass->UnInstall_Materials();
-
-	} else if ((pass->Get_Cull_Volume() != nullptr) && (MaterialPassClass::Is_Per_Polygon_Culling_Enabled())) {
-
-		/*
-		** Generate the APT
-		*/
-		temp_apt.Delete_All(false);
-
-		Matrix3D modeltminv;
-		Get_Transform().Get_Orthogonal_Inverse(modeltminv);
-
-		OBBoxClass localbox;
-		OBBoxClass::Transform(modeltminv,*(pass->Get_Cull_Volume()),&localbox);
-
-		Vector3 view_dir;
-		localbox.Basis.Get_Z_Vector(&view_dir);
-		view_dir = -view_dir;
-
-		if (Model->Has_Cull_Tree()) {
-			Model->Generate_Rigid_APT(localbox,view_dir,temp_apt);
-		} else {
-			Model->Generate_Rigid_APT(view_dir,temp_apt);
-		}
-
-		if (temp_apt.Count() > 0) {
-
-			int buftype = BUFFER_TYPE_DYNAMIC_RENDER;
-			if (Model->Get_Flag(MeshGeometryClass::SORT) && WW3D::Is_Sorting_Enabled()) {
-				buftype = BUFFER_TYPE_DYNAMIC_SORTING;
-			}
-
-			/*
-			** Spew triangles in the APT into the dynamic index buffer
-			*/
-			int min_v = Model->Get_Vertex_Count();
-			int max_v = 0;
-
-			DynamicIBAccessClass dynamic_ib(buftype,temp_apt.Count() * 3);
-			{
-				DynamicIBAccessClass::WriteLockClass lock(&dynamic_ib);
-				unsigned short * indices = lock.Get_Index_Array();
-				const TriIndex * polys = Model->Get_Polygon_Array();
-
-				for (int i=0; i < temp_apt.Count(); i++)
-				{
-					unsigned v0 = polys[temp_apt[i]].I;
-					unsigned v1 = polys[temp_apt[i]].J;
-					unsigned v2 = polys[temp_apt[i]].K;
-
-					indices[i*3 + 0] = (unsigned short)v0;
-					indices[i*3 + 1] = (unsigned short)v1;
-					indices[i*3 + 2] = (unsigned short)v2;
-
-					min_v = WWMath::Min(v0,min_v);
-					min_v = WWMath::Min(v1,min_v);
-					min_v = WWMath::Min(v2,min_v);
-
-					max_v = WWMath::Max(v0,max_v);
-					max_v = WWMath::Max(v1,max_v);
-					max_v = WWMath::Max(v2,max_v);
-				}
-			}
-
-			/*
-			** Render
-			*/
-			int vertex_offset = static_cast<int>(
-				TheMeshRenderer.Get_Mesh_Renderer_Vertex_Offset(Model));
-			pass->Install_Materials();
-
-			WW3D::Get_Render_Backend()->Set_Transform(RenderBackendTransform::World,Get_Transform());
-			WW3D::Get_Render_Backend()->Set_Index_Buffer(dynamic_ib,vertex_offset);
-
-			WW3D::Get_Render_Backend()->Draw_Indexed_Primitives(
-				RenderBackendPrimitiveType::TriangleList, 0, min_v,
-				max_v - min_v + 1, 0, temp_apt.Count());
-			//MW: Need uninstall custom materials in case they leave D3D in unknown state
-			pass->UnInstall_Materials();
-		}
-	} else {
-
-		/*
-		** Normal mesh case, render polys with this mesh's transform
-		*/
-		if (m_materialPassAlphaOverride != 1.0f)
-		{	VertexMaterialClass *mat=pass->Peek_Material();
-			if (mat)
-			{
-				oldOpacity=mat->Get_Opacity();
-				mat->Set_Opacity(m_materialPassAlphaOverride);
-			}
-		}
-		if (m_materialPassEmissiveOverride != 1.0f)
-		{	VertexMaterialClass *mat=pass->Peek_Material();
-			if (mat)
-			{
-				mat->Get_Emissive(&oldEmissive);
-				mat->Set_Emissive(m_materialPassEmissiveOverride*oldEmissive);
-			}
-		}
-		pass->Install_Materials();
-		WW3D::Get_Render_Backend()->Set_Index_Buffer(ib,0);
-
-		SNAPSHOT_SAY(("Set_World_Transform"));
-		WW3D::Get_Render_Backend()->Set_Transform(RenderBackendTransform::World,Transform);
-
-		TheMeshRenderer.Render_Mesh_Pass(Model, BaseVertexOffset);
-
-		if (oldOpacity >= 0)
-		{	//opacity was modified for this mesh instance, so need to restore the material setting which may be shared
-			//among other instances.
-			pass->Peek_Material()->Set_Opacity(oldOpacity);
-		}
-		if (oldEmissive.X >= 0)
-		{	//emissive was modified for this mesh instance, so need to restore the material setting which may be shared
-			//among other instances.
-			pass->Peek_Material()->Set_Emissive(oldEmissive);
-		}
-		//MW: Need uninstall custom materials in case they leave D3D in unknown state
-		pass->UnInstall_Materials();
-	}
-}
 
 
 /***********************************************************************************************
@@ -1550,14 +1261,7 @@ void MeshClass::Set_Sort_Level(int level)
 int MeshClass::Get_Draw_Call_Count() const
 {
 	if (Model != nullptr) {
-		// Prefer to return the number of polygon renderers
-		int prcount = static_cast<int>(
-			TheMeshRenderer.Get_Mesh_Renderer_Count(Model));
-		if (prcount > 0) {
-			return prcount;
-		}
-
-		// Otherwise if we have textures, return the number of textures (e.g. dont have prs when sorting)
+		// Report the material texture count for the model.
 		if ((Model->MatInfo != nullptr) && (Model->MatInfo->Texture_Count() > 0)) {
 			return Model->MatInfo->Texture_Count();
 		}

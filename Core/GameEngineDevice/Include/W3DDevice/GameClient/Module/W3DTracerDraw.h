@@ -29,7 +29,6 @@
 
 #pragma once
 
-import Graphics.Scene.Beams;
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 #include "Common/DrawModule.h"
@@ -63,13 +62,9 @@ public:
 	virtual const TracerDrawInterface* getTracerDrawInterface() const override { return this; }
 
 protected:
-	void createLegacyTracer(const Matrix3D& transform);
-	bool updateModernTracer() noexcept;
+	void createTracer(const Matrix3D& transform);
 
 	Line3DClass *m_theTracer;			///< the tracer render object in the W3D scene
-	Graphics::BeamHandle m_modernBeam;
-	Matrix3D m_modernTransform;
-	Bool m_modernTransformValid;
 	Real m_length;								///< length of tracer
 	Real m_width;									///< width of tracer
 	RGBColor m_color;							///< color of tracer

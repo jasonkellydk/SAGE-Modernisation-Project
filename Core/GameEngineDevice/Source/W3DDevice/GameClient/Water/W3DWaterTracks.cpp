@@ -1,3 +1,6 @@
+#include <array>
+#include <span>
+#include <vector>
 #include <SDL3/SDL.h>
 
 #include "WW3D2/WW3D.h"
@@ -268,8 +271,8 @@ Int WaterTracksObj::update(Int msElapsed)
  */
 //=============================================================================
 
-Int WaterTracksObj::render(RenderBackendVertexBuffer *vertexBuffer,
-	RenderBackendIndexBuffer *indexBuffer, Int batchStart)
+void WaterTracksObj::render(WaterMaterialClass& material, Graphics::WaterMeshHandle& mesh,
+    std::vector<WaterSurfaceVertex>& vertices, std::span<const unsigned short> indices)
 {
 	// TheSuperHackers @tweak The wave movement time step is now decoupled from the render update.
 	m_elapsedMs += TheFramePacer->getLogicTimeStepMilliseconds();
@@ -282,31 +285,8 @@ Int WaterTracksObj::render(RenderBackendVertexBuffer *vertexBuffer,
 	Real	widthFrac;
 	Real	heightFrac;
 
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	if (backend == nullptr || vertexBuffer == nullptr || indexBuffer == nullptr)
-		return batchStart;
-
-	const unsigned vertex_size = sizeof(WaterSurfaceVertex);
-	if (batchStart < (WATER_VB_PAGES*WATER_STRIP_X*WATER_STRIP_Y-m_x*m_y))
-	{	//we have room in current VB, append new verts
-		void *vertex_data = nullptr;
-		if(!backend->Lock_Vertex_Buffer(vertexBuffer,
-			static_cast<unsigned>(batchStart) * vertex_size,
-			static_cast<unsigned>(m_x * m_y) * vertex_size,
-			&vertex_data, RenderBackendBufferLockMode::NoOverwrite))
-			return batchStart;
-		vb = static_cast<WaterSurfaceVertex *>(vertex_data);
-	}
-	else
-	{	//ran out of room in last VB, request a substitute VB.
-		void *vertex_data = nullptr;
-		if(!backend->Lock_Vertex_Buffer(vertexBuffer, 0,
-			static_cast<unsigned>(m_x * m_y) * vertex_size,
-			&vertex_data, RenderBackendBufferLockMode::Discard))
-			return batchStart;
-		vb = static_cast<WaterSurfaceVertex *>(vertex_data);
-		batchStart=0;	//reset start of page to first vertex
-	}
+    vertices.resize(m_x*m_y);
+    vb = vertices.data();
 	for (Int vertex = 0; vertex < m_x * m_y; ++vertex)
 	{
 		vb[vertex].nx = 0.0f;
@@ -467,17 +447,10 @@ Int WaterTracksObj::render(RenderBackendVertexBuffer *vertexBuffer,
 	vb->v1=1.0f;
 	vb++;
 
-	backend->Unlock_Vertex_Buffer(vertexBuffer);
+    const unsigned count = static_cast<unsigned>((m_y-1)*(m_x*2+2)-2);
+    if (indices.size() >= count && Upload_Water_Geometry(mesh,vertices,indices.first(count),true))
+        material.Draw(mesh);
 
-	Int idxCount=(m_y-1)*(m_x*2+2) - 2;	//index count
-
-	backend->Set_Vertex_Buffer(vertexBuffer,
-		static_cast<unsigned>(batchStart) * vertex_size, vertex_size);
-	backend->Set_Index_Buffer(indexBuffer);
-	backend->Draw_Indexed_Primitives(
-		RenderBackendPrimitiveType::TriangleStrip, 0, 0, m_x*m_y, 0, idxCount-2);	//there are always n-2 primitives for n index strip.
-
-	return batchStart+m_x*m_y;	//return new offset into unused area of vertex buffer
 }
 
 //=============================================================================
@@ -602,11 +575,8 @@ WaterTracksRenderSystem::WaterTracksRenderSystem()
 {
 	m_usedModules = nullptr;
 	m_freeModules = nullptr;
-	m_indexBuffer = nullptr;
-	m_vertexBuffer = nullptr;
 	m_stripSizeX=WATER_STRIP_X;
 	m_stripSizeY=WATER_STRIP_Y;
-	m_batchStart=0;
 	TheWaterTracksRenderSystem = this;	//only allow one instance of this object.
 }
 
@@ -630,47 +600,11 @@ WaterTracksRenderSystem::~WaterTracksRenderSystem()
 //=============================================================================
 void WaterTracksRenderSystem::ReAcquireResources()
 {
-	Int i,j,k;
-//	const Int numModules=16;	///@todo: Get a value out of gdf
-
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	if (backend == nullptr)
-		return;
-
-	// Recreate backend-owned resources after a device reset.
-	if (m_indexBuffer != nullptr)
-	{
-		backend->Release_Index_Buffer(m_indexBuffer);
-		m_indexBuffer = nullptr;
-	}
-	if (m_vertexBuffer != nullptr)
-	{
-		backend->Release_Vertex_Buffer(m_vertexBuffer);
-		m_vertexBuffer = nullptr;
-	}
-	m_material.ReacquireResources();
-
-	//Will need m_y-1 strips, each of length m_x*2.
-	//Will also need 2 extra indices to connect each strip to next one (except last strip)
-	//Total index buffer size = (m_y-1)*(m_x*2+2) - 2 (drop the extra 2 indices from last strip)
-
-	Int idxCount=(m_stripSizeY-1)*(m_stripSizeX*2+2) - 2;
-
-	m_indexBuffer=backend->Create_Index_Buffer(
-		static_cast<unsigned>(idxCount * sizeof(UnsignedShort)),
-		BUFFER_USAGE_DEFAULT);
-	if (m_indexBuffer == nullptr)
-		return;
-
-	// Fill up the index buffer.
-	{
-		void *index_data = nullptr;
-		if (!backend->Lock_Index_Buffer(m_indexBuffer, 0,
-			static_cast<unsigned>(idxCount * sizeof(UnsignedShort)),
-			&index_data, RenderBackendBufferLockMode::Normal))
-			return;
-		UnsignedShort *ib = static_cast<UnsignedShort *>(index_data);
-
+    const Int idxCount = (m_stripSizeY-1)*(m_stripSizeX*2+2)-2;
+    if (idxCount <= 0) return;
+    m_indices.resize(idxCount);
+    UnsignedShort* ib = m_indices.data();
+    Int i,j,k;
 		for (i=0,j=0,k=0; i<idxCount; j++)
 		{
 			for (;k<(m_stripSizeX*(j+1)); k++,i+=2)
@@ -688,16 +622,6 @@ void WaterTracksRenderSystem::ReAcquireResources()
 				i+=2;
 			}
 		}
-		backend->Unlock_Index_Buffer(m_indexBuffer);
-	}
-
-	m_vertexBuffer=backend->Create_Vertex_Buffer(
-		static_cast<unsigned>(m_stripSizeX * m_stripSizeY *
-			WATER_VB_PAGES * sizeof(WaterSurfaceVertex)),
-		RenderBackend_Vertex_Layout(
-			RenderBackendVertexFormat::PositionNormalDiffuseTexture2),
-		BUFFER_USAGE_DYNAMIC);
-	m_batchStart=0;
 }
 
 //=============================================================================
@@ -707,21 +631,11 @@ void WaterTracksRenderSystem::ReAcquireResources()
 //=============================================================================
 void WaterTracksRenderSystem::ReleaseResources()
 {
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	if (backend != nullptr)
-	{
-		if (m_indexBuffer != nullptr)
-		{
-			backend->Release_Index_Buffer(m_indexBuffer);
-			m_indexBuffer = nullptr;
-		}
-		if (m_vertexBuffer != nullptr)
-		{
-			backend->Release_Vertex_Buffer(m_vertexBuffer);
-			m_vertexBuffer = nullptr;
-		}
-	}
-	m_material.Shutdown();
+    Graphics::Get_Water_Renderer().Destroy_Mesh(m_graphicsMesh);
+    m_graphicsMesh = {};
+    m_vertices.clear();
+    m_indices.clear();
+    m_material.Shutdown();
 }
 
 //=============================================================================
@@ -898,14 +812,9 @@ Try improving the fit to vertical surfaces like cliffs.
 		return;	//don't render track marks in reflections.
 
 	// Start each frame from a discarded dynamic-buffer region.
-	m_batchStart = 0xffff;
 
 	Matrix3D tm(1);
 	backend->Set_Transform(RenderBackendTransform::World, tm);
-	backend->Set_Vertex_Format(
-		RenderBackendVertexFormat::PositionNormalDiffuseTexture2);
-	backend->Set_Depth_Bias(8);
-	backend->Set_Vertex_Buffer(m_vertexBuffer, 0, sizeof(WaterSurfaceVertex));
 
 	WaterMaterialParameters parameters = {};
 	parameters.animation = Vector4(0.0f, 0.0f, 0.0f, m_level);
@@ -921,16 +830,12 @@ Try improving the fit to vertical surfaces like cliffs.
 	{
 		if (m_material.Apply_Track(mod->m_stageZeroTexture))
 		{
-			Int vertsRendered=mod->render(m_vertexBuffer, m_indexBuffer,
-				m_batchStart);
+			mod->render(m_material,m_graphicsMesh,m_vertices,m_indices);
 
-			m_batchStart = vertsRendered;	//advance past vertices already in buffer
 		}
 
 		mod = mod->m_nextSystem;
 	}
-
-	backend->Set_Depth_Bias(0);
 	m_material.Reset();
 }
 

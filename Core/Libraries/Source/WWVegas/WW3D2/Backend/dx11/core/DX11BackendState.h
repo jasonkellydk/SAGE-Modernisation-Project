@@ -23,7 +23,6 @@
 #include <vector>
 
 #include "Backend/dx11/resources/DX11Resources.h"
-#include "Backend/dx11/draw/processvertices/DX11ProcessVertices.h"
 #include "BitmapHandler.h"
 #include "IndexBuffer.h"
 #include "Light.h"
@@ -915,7 +914,6 @@ struct DX11BackendState
 	std::vector<DX11PixelShader *> pixel_shaders;
 	std::array<DX11VertexShader *, 22> default_vertex_shaders{};
 	std::array<DX11PixelShader *, kDefaultPixelShaderVariantCount> default_pixel_shaders{};
-	DX11ProcessVertices process_vertices;
 
 	void Mark_Native_State_Dirty()
 	{
@@ -941,13 +939,10 @@ struct DX11BackendState
 	void Release_Pipeline_States();
 	void Release_Registered_Textures();
 	void Recreate_Registered_Textures();
-	bool Ensure_Default_Pipeline();
 	bool Create_Input_Layout(DX11VertexShader * shader,
 		const std::vector<DX11VertexInput> & inputs,
 		ID3D11InputLayout **result);
 	bool Recreate_Compiled_Shaders();
-	DX11VertexShader * Find_Default_Vertex_Shader();
-	DX11PixelShader * Find_Default_Pixel_Shader();
 	void Invalidate_Default_Pixel_Shader_Selection()
 	{
 		if (active_pixel_shader != nullptr && active_pixel_shader->precompiled_default)
@@ -1015,7 +1010,6 @@ struct DX11BackendState
 
 	~DX11BackendState()
 	{
-		process_vertices.Release();
 		if (cursor != nullptr)
 		{
 			DestroyCursor(cursor);

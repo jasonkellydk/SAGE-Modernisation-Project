@@ -57,6 +57,8 @@
 #include "WWDebug/wwmemlog.h"
 #include "AssetMgr.h"
 #include <cstring>
+#include <vector>
+#include "GraphicsGeometry.h"
 
 RectClass							Render2DClass::ScreenResolution( 0,0,0,0 );
 
@@ -597,106 +599,24 @@ void	Render2DClass::Add_Outline( const RectClass & rect, float width, const Rect
 
 void Render2DClass::Render()
 {
-	if ( !Indices.Count() || IsHidden) {
-		return;
-	}
-
-	// save the view and projection matrices since we're nuking them
-	Matrix4x4 view,proj;
-	Matrix4x4 identity(true);
-
-	WW3D::Get_Render_Backend()->Get_Transform(RenderBackendTransform::View,view);
-	WW3D::Get_Render_Backend()->Get_Transform(RenderBackendTransform::Projection,proj);
-
-	//
-	//	Configure the viewport for entire screen
-	//
-	int width, height, bits;
-	bool windowed;
-	WW3D::Get_Device_Resolution( width, height, bits, windowed );
-	RenderBackendViewport viewport = { 0 };
-	viewport.width = width;
-	viewport.height = height;
-	viewport.max_z = 1.0f;
-	WW3D::Get_Render_Backend()->Set_Viewport(viewport);
-	WW3D::Get_Render_Backend()->Set_Texture(0,Texture);
-
-	VertexMaterialClass *vm=VertexMaterialClass::Get_Preset(VertexMaterialClass::PRELIT_DIFFUSE);
-	WW3D::Get_Render_Backend()->Set_Material(vm);
-	REF_PTR_RELEASE(vm);
-
-	WW3D::Get_Render_Backend()->Set_World_Identity();
-	WW3D::Get_Render_Backend()->Set_View_Identity();
-	WW3D::Get_Render_Backend()->Set_Transform(RenderBackendTransform::Projection,identity);
-
-	DynamicVBAccessClass vb(BUFFER_TYPE_DYNAMIC_RENDER,RenderBackend_Dynamic_Vertex_Format,Vertices.Count());
-	{
-		DynamicVBAccessClass::WriteLockClass Lock(&vb);
-		const VertexFormatInfoClass &fi=vb.Get_Format_Info();
-		unsigned char *va=(unsigned char*)Lock.Get_Formatted_Vertex_Array();
-		int i;
-
-		for (i=0; i<Vertices.Count(); i++)
-		{
-			std::memset(va, 0, fi.Get_Vertex_Size());
-			Vector3 temp(Vertices[i].X,Vertices[i].Y,ZValue);
-			*(Vector3*)(va+fi.Get_Location_Offset())=temp;
-			*(Vector3*)(va+fi.Get_Normal_Offset())=Vector3(0.0f,0.0f,1.0f);
-			*(unsigned int*)(va+fi.Get_Diffuse_Offset())=Colors[i];
-			*(Vector2*)(va+fi.Get_Tex_Offset(0))=UVCoordinates[i];
-			va+=fi.Get_Vertex_Size();
-		}
-	}
-
-	DynamicIBAccessClass ib(BUFFER_TYPE_DYNAMIC_RENDER,Indices.Count());
-	{
-		DynamicIBAccessClass::WriteLockClass Lock(&ib);
-		unsigned short *mem=Lock.Get_Index_Array();
-		for (int i=0; i<Indices.Count(); i++)
-			mem[i]=Indices[i];
-	}
-
-	WW3D::Get_Render_Backend()->Set_Vertex_Buffer(vb);
-	WW3D::Get_Render_Backend()->Set_Index_Buffer(ib,0);
-
-	if (IsGrayScale)
-	{	//special case added to draw grayscale non-alpha blended images.
-		WW3D::Get_Render_Backend()->Set_Shader(ShaderClass::_PresetOpaqueShader);
-		WW3D::Get_Render_Backend()->Apply_Render_State_Changes();	//force update of all regular W3D states.
-		if (WW3D::Get_Render_Backend()->Supports_Dot3())
-		{	//Override W3D states with customizations for grayscale
-		WW3D::Get_Render_Backend()->Set_Texture_Factor(0x80A5CA8E);
-			WW3D::Get_Render_Backend()->Set_Texture_Argument(0,RenderBackendTextureComponent::Color,0,RenderBackendTextureArgument::TextureFactorAlpha);
-			WW3D::Get_Render_Backend()->Set_Texture_Argument(0,RenderBackendTextureComponent::Color,1,RenderBackendTextureArgument::Texture);
-			WW3D::Get_Render_Backend()->Set_Texture_Argument(0,RenderBackendTextureComponent::Color,2,RenderBackendTextureArgument::TextureFactorAlpha);
-			WW3D::Get_Render_Backend()->Set_Texture_Operation(0,RenderBackendTextureComponent::Color,RenderBackendTextureOperation::MultiplyAdd);
-
-			WW3D::Get_Render_Backend()->Set_Texture_Argument(1,RenderBackendTextureComponent::Color,1,RenderBackendTextureArgument::Current);
-			WW3D::Get_Render_Backend()->Set_Texture_Argument(1,RenderBackendTextureComponent::Color,2,RenderBackendTextureArgument::TextureFactor);
-			WW3D::Get_Render_Backend()->Set_Texture_Operation(1,RenderBackendTextureComponent::Color,RenderBackendTextureOperation::DotProduct3);
-		}
-		else
-		{	//doesn't have DOT3 blend mode so fake it another way.
-			WW3D::Get_Render_Backend()->Set_Texture_Factor(0x60606060);
-			WW3D::Get_Render_Backend()->Set_Texture_Argument(0,RenderBackendTextureComponent::Color,1,RenderBackendTextureArgument::Texture);
-			WW3D::Get_Render_Backend()->Set_Texture_Argument(0,RenderBackendTextureComponent::Color,2,RenderBackendTextureArgument::TextureFactor);
-			WW3D::Get_Render_Backend()->Set_Texture_Operation(0,RenderBackendTextureComponent::Color,RenderBackendTextureOperation::Modulate);
-
-			// TheSuperHackers @bugfix Stubbjax 08/01/2026 Fix possible greyscale rendering issues on hardware without DOT3 support.
-			WW3D::Get_Render_Backend()->Set_Texture_Operation(1,RenderBackendTextureComponent::Color,RenderBackendTextureOperation::Disable);
-		}
-	}
-	else
-		WW3D::Get_Render_Backend()->Set_Shader(Shader);
-	WW3D::Get_Render_Backend()->Draw_Indexed_Primitives(
-		RenderBackendPrimitiveType::TriangleList, 0, 0, Vertices.Count(),
-		0, Indices.Count() / 3);
-
-	WW3D::Get_Render_Backend()->Set_Transform(RenderBackendTransform::View,view);
-	WW3D::Get_Render_Backend()->Set_Transform(RenderBackendTransform::Projection,proj);
-	if (IsGrayScale)
-		ShaderClass::Invalidate();	//force both stages to be reset.
-
+    if (!Indices.Count() || IsHidden) return;
+    int width,height,bits;
+    bool windowed;
+    WW3D::Get_Device_Resolution(width,height,bits,windowed);
+    RenderBackendViewport viewport{};
+    viewport.width=width; viewport.height=height; viewport.max_z=1;
+    WW3D::Get_Render_Backend()->Set_Viewport(viewport);
+    std::vector<VertexFormatXYZDUV1> vertices(Vertices.Count());
+    for (int i=0;i<Vertices.Count();++i) {
+        auto& vertex=vertices[i];
+        vertex.x=Vertices[i].X; vertex.y=Vertices[i].Y; vertex.z=ZValue;
+        vertex.diffuse=Colors[i];
+        vertex.u1=UVCoordinates[i].X; vertex.v1=UVCoordinates[i].Y;
+    }
+    std::vector<unsigned> indices(Indices.Count());
+    for (int i=0;i<Indices.Count();++i) indices[i]=Indices[i];
+    const ShaderClass shader=IsGrayScale ? ShaderClass::_PresetOpaqueShader : Shader;
+    Draw_Graphics_Prelit_Geometry(vertices,indices,Matrix4x4(true),shader,Texture,nullptr,IsGrayScale);
 }
 
 

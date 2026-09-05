@@ -24,6 +24,8 @@
 #include "resource.h"
 #include "WWMath/wwmath.h"
 #include "WW3D2/WW3D.h"
+#include "WW3D2/GraphicsToolFrame.h"
+#include "W3DDevice/GameClient/W3DGraphicsResources.h"
 #include "WW3D2/Scene.h"
 #include "WW3D2/RendObj.h"
 #include "WW3D2/Camera.h"
@@ -493,6 +495,8 @@ void WbView3d::shutdownWW3D()
 #ifdef SAMPLE_DYNAMIC_LIGHT
 		REF_PTR_RELEASE(theDynamicLight);
 #endif
+		Release_Graphics_Textures();
+        Shutdown_Graphics_Tool_Frame();
 		WW3D::Shutdown();
 
 		WWMath::Shutdown();
@@ -2052,6 +2056,10 @@ void WbView3d::redraw()
 void WbView3d::render()
 {
 	++m_updateCount;
+    if (!Begin_Graphics_Tool_Frame()) {
+        --m_updateCount;
+        return;
+    }
 
 	if (WW3D::Begin_Render(true,true,Vector3(0.5f,0.5f,0.5f), TheWaterTransparency->m_minWaterOpacity) == WW3D_ERROR_OK)
 	{
@@ -2090,13 +2098,13 @@ void WbView3d::render()
 		}
 		if (m_showObjToolTrackingObj && m_objectToolTrackingObj) {
 			m_transparentObjectsScene->Add_Render_Object(m_objectToolTrackingObj);
-			MeshTextureCategoryClass::SetForceMultiply(true);
+			TheMeshRenderer.Set_Force_Multiply(true);
 			TheMeshRenderer.Enable_Lighting(false);
 			Real lightLevel = 1.0f;
 			m_transparentObjectsScene->Set_Ambient_Light(Vector3(lightLevel,lightLevel,lightLevel));
 			WW3D::Render(m_transparentObjectsScene, m_camera);
 			TheMeshRenderer.Enable_Lighting(true);
-			MeshTextureCategoryClass::SetForceMultiply(false);
+			TheMeshRenderer.Set_Force_Multiply(false);
 			m_transparentObjectsScene->Remove_Render_Object(m_objectToolTrackingObj);
 		}
 
@@ -2108,8 +2116,11 @@ void WbView3d::render()
 		}
 
 
-		WW3D::End_Render();
-	}
+		WW3D::End_Render(false);
+        if (!End_Graphics_Tool_Frame()) DEBUG_LOG(("Editor frame submission failed.\n"));
+	} else {
+        Abort_Graphics_Tool_Frame();
+    }
 	--m_updateCount;
 }
 
@@ -2756,7 +2767,7 @@ Real WbView3d::getCurrentZoom()
 }
 
 // ----------------------------------------------------------------------------
-void WbView3d::OnTimer(UINT nIDEvent)
+void WbView3d::OnTimer(UINT_PTR nIDEvent)
 {
 	if (getLastDrawTime()+UPDATE_TIME<SDL_GetTicks())
 	{

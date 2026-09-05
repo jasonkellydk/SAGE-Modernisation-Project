@@ -14,10 +14,6 @@ namespace dx11_backend
 		void Set_Vertex_Buffer(RenderBackendVertexBuffer *buffer, unsigned offset_bytes, unsigned stride_bytes, unsigned stream = 0);
 		void Set_Index_Buffer(RenderBackendIndexBuffer *buffer);
 		void Set_Vertex_Format(RenderBackendVertexFormat format);
-		bool Process_Vertices(VertexBufferClass *destination, unsigned vertex_count);
-		void Draw_Indexed_Primitives(RenderBackendPrimitiveType primitive_type, unsigned base_vertex_index, unsigned min_vertex_index, unsigned vertex_count, unsigned start_index, unsigned primitive_count);
-		void Draw_Primitive_Up(RenderBackendPrimitiveType primitive_type, unsigned primitive_count, const void *vertices, unsigned stride_bytes, RenderBackendVertexFormat format);
-		void Draw_Primitive(RenderBackendPrimitiveType primitive_type, unsigned start_vertex, unsigned primitive_count);
 		void Set_Vertex_Buffer(const VertexBufferClass *vb, unsigned stream = 0);
 		void Set_Vertex_Buffer(const DynamicVBAccessClass &vba);
 		void Set_Index_Buffer(const IndexBufferClass *ib, unsigned short index_base_offset);
