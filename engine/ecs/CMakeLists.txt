@@ -6,6 +6,8 @@ set(ENGINE_ECS_MODULES
 	query/access.cppm
 	query/query.cppm
 	query/query_cache.cppm
+	system/system.cppm
+	scheduler/scheduler.cppm
 	storage/archetype.cppm
 	storage/chunk.cppm
 	storage/chunk_layout.cppm
@@ -18,6 +20,8 @@ set(ENGINE_ECS_TESTS
 	core/entity.test
 	core/world.test
 	commands/command_buffer.test
+	system/system.test
+	scheduler/scheduler.test
 	query/access.test
 	query/query.test
 	query/query_cache.test
@@ -27,6 +31,11 @@ set(ENGINE_ECS_TESTS
 	storage/signature.test
 	ecs.test
 )
+
+if(NOT TARGET engine_jobs)
+	set(ENGINE_JOBS_BUILD_TESTS ${ENGINE_ECS_BUILD_TESTS})
+	add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../jobs" "${CMAKE_CURRENT_BINARY_DIR}/../engine_jobs")
+endif()
 
 add_library(engine_ecs STATIC)
 
@@ -47,7 +56,12 @@ set_property(TARGET engine_ecs PROPERTY CXX_SCAN_FOR_MODULES ON)
 # ECS has no dependency on legacy game headers or legacy gameplay types.
 if(TARGET core_config)
 	target_link_libraries(engine_ecs PUBLIC
+		engine_jobs
 		core_config
+	)
+else()
+	target_link_libraries(engine_ecs PUBLIC
+		engine_jobs
 	)
 endif()
 

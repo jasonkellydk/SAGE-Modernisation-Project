@@ -28,7 +28,9 @@ target_link_libraries(zi_always_no_pch INTERFACE
 # The modern ECS requires C++20 and is intentionally excluded from the legacy
 # VC6 build so that the existing Zero Hour path remains buildable.
 if(NOT IS_VS6_BUILD AND CMAKE_VERSION VERSION_GREATER_EQUAL 3.28)
-    set(ENGINE_ECS_BUILD_TESTS ${RTS_BUILD_ZEROHOUR_EXTRAS})
+	set(ENGINE_JOBS_BUILD_TESTS ${RTS_BUILD_ZEROHOUR_EXTRAS})
+	add_subdirectory("${CMAKE_SOURCE_DIR}/engine/jobs" "${CMAKE_CURRENT_BINARY_DIR}/engine_jobs")
+	set(ENGINE_ECS_BUILD_TESTS ${RTS_BUILD_ZEROHOUR_EXTRAS})
     add_subdirectory("${CMAKE_SOURCE_DIR}/engine/ecs" "${CMAKE_CURRENT_BINARY_DIR}/engine_ecs")
 elseif(NOT IS_VS6_BUILD)
     message(WARNING "engine_ecs requires CMake 3.28 or newer for CXX_MODULES; ECS target is skipped")

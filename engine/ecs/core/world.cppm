@@ -19,6 +19,7 @@ export namespace ecs
 {
 
 class CommandBuffer;
+class Scheduler;
 
 struct WorldConfig
 {
@@ -38,6 +39,7 @@ public:
 	Entity Create()
 	{
 		RequireComponentsFinalized();
+		RequireStructuralMutationAllowed();
 
 		Signature signature;
 		signature.reserve(sizeof...(Components));
@@ -95,6 +97,7 @@ public:
 	bool Add(Entity entity)
 	{
 		RequireComponentsFinalized();
+		RequireStructuralMutationAllowed();
 		if (!IsAlive(entity))
 			return false;
 		return AddComponent(entity, GetRegisteredComponent<T>(), nullptr);
@@ -104,6 +107,7 @@ public:
 	bool Remove(Entity entity)
 	{
 		RequireComponentsFinalized();
+		RequireStructuralMutationAllowed();
 		if (!IsAlive(entity))
 			return false;
 		return RemoveComponent(entity, GetRegisteredComponent<T>());
@@ -166,6 +170,11 @@ private:
 	void ReleaseUnconstructedEntity(Entity entity) noexcept;
 	void SetLocation(Entity entity, EntityLocation location) noexcept;
 	void RequireComponentsFinalized() const;
+	void RequireStructuralMutationAllowed() const;
+	void BeginScheduledExecution() noexcept;
+	void EndScheduledExecution() noexcept;
+	void BeginCommandPlayback() noexcept;
+	void EndCommandPlayback() noexcept;
 
 	template<typename T>
 	ComponentId GetRegisteredComponent() const
@@ -195,6 +204,7 @@ private:
 		void *initializedValue = nullptr);
 
 	friend class CommandBuffer;
+	friend class Scheduler;
 	// Test seam for exercising generation exhaustion without billions of cycles.
 	friend struct WorldTestAccess;
 
@@ -204,6 +214,8 @@ private:
 	std::vector<EntityRecord> m_records;
 	std::vector<EntityIndex> m_freeIndices;
 	std::size_t m_entityCount{0};
+	bool m_scheduledExecutionActive{false};
+	bool m_commandPlaybackActive{false};
 };
 
 } // namespace ecs
@@ -266,6 +278,38 @@ void World::RequireComponentsFinalized() const
 		throw std::logic_error("ECS component registry must be finalized before ECS state operations");
 }
 
+void World::RequireStructuralMutationAllowed() const
+{
+	if (m_scheduledExecutionActive && !m_commandPlaybackActive)
+		throw std::logic_error("Direct ECS structural mutation is forbidden during scheduled execution; use a command buffer");
+}
+
+void World::BeginScheduledExecution() noexcept
+{
+	assert(!m_scheduledExecutionActive);
+	assert(!m_commandPlaybackActive);
+	m_scheduledExecutionActive = true;
+}
+
+void World::EndScheduledExecution() noexcept
+{
+	assert(m_scheduledExecutionActive);
+	assert(!m_commandPlaybackActive);
+	m_scheduledExecutionActive = false;
+}
+
+void World::BeginCommandPlayback() noexcept
+{
+	assert(!m_commandPlaybackActive);
+	m_commandPlaybackActive = true;
+}
+
+void World::EndCommandPlayback() noexcept
+{
+	assert(m_commandPlaybackActive);
+	m_commandPlaybackActive = false;
+}
+
 Archetype &World::GetOrCreateArchetype(const Signature &signature)
 {
 	RequireComponentsFinalized();
@@ -280,6 +324,7 @@ bool World::IsAlive(Entity entity) const noexcept
 
 bool World::Destroy(Entity entity)
 {
+	RequireStructuralMutationAllowed();
 	if (!IsAlive(entity))
 		return false;
 

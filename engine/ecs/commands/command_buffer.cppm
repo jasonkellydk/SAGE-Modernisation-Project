@@ -675,9 +675,12 @@ void CommandBuffer::Playback(World &world)
 {
 	EnsureRecording();
 	m_state = CommandBufferState::Playing;
+	bool commandPlaybackActive = false;
 	try
 	{
 		Validate(world);
+		world.BeginCommandPlayback();
+		commandPlaybackActive = true;
 		std::vector<Entity> resolved(m_nextTemporaryIndex);
 		for (const StructuralCommand &command : m_commands)
 		{
@@ -706,6 +709,8 @@ void CommandBuffer::Playback(World &world)
 			}
 		}
 
+		world.EndCommandPlayback();
+		commandPlaybackActive = false;
 		ClearPendingCommands();
 		m_lastResolved = std::move(resolved);
 		m_lastEpoch = m_epoch;
@@ -716,6 +721,8 @@ void CommandBuffer::Playback(World &world)
 	}
 	catch (...)
 	{
+		if (commandPlaybackActive)
+			world.EndCommandPlayback();
 		FailPlayback();
 		throw;
 	}
@@ -724,12 +731,14 @@ void CommandBuffer::Playback(World &world)
 void World::Commit(CommandBuffer &commands)
 {
 	RequireComponentsFinalized();
+	RequireStructuralMutationAllowed();
 	commands.Playback(*this);
 }
 
 void World::Commit(std::span<CommandBuffer *> commandBuffers)
 {
 	RequireComponentsFinalized();
+	RequireStructuralMutationAllowed();
 
 	std::vector<CommandBuffer *> ordered(commandBuffers.begin(), commandBuffers.end());
 	for (CommandBuffer *buffer : ordered)

@@ -178,10 +178,12 @@ public:
 	Query(const Query &) = delete;
 	Query &operator=(const Query &) = delete;
 
-	template<typename Function>
-	void ForEachChunk(Function &&function)
+	// Prepares a deterministic snapshot of the currently matching non-empty
+	// chunks. The snapshot is rebuilt on the calling thread before a scheduler
+	// wave dispatches jobs; ExecutePreparedChunk() is read-only with respect to
+	// the Query and is therefore safe for concurrent chunk jobs.
+	std::size_t PrepareChunks()
 	{
-		ResolveComponents();
 		if (m_cache.Refresh(*m_world, [this](const Archetype &archetype) {
 			return Matches(archetype);
 		}))
@@ -192,6 +194,7 @@ public:
 				m_columnIndices.push_back(MakeColumnIndices(*archetype, std::index_sequence_for<Terms...>{}));
 		}
 
+		m_preparedChunks.clear();
 		for (std::size_t archetypeIndex = 0; archetypeIndex < m_cache.Matches().size(); ++archetypeIndex)
 		{
 			Archetype *archetype = m_cache.Matches()[archetypeIndex];
@@ -199,9 +202,35 @@ public:
 			for (const std::unique_ptr<ecs::Chunk> &chunk : archetype->Chunks())
 			{
 				if (chunk->Size() != 0)
-					std::forward<Function>(function)(Chunk(*chunk, columns));
+					m_preparedChunks.push_back(PreparedChunk{chunk.get(), columns});
 			}
 		}
+		return m_preparedChunks.size();
+	}
+
+	std::size_t PreparedChunkCount() const noexcept { return m_preparedChunks.size(); }
+
+	template<typename Function>
+	void ForEachPreparedChunk(Function &&function) const
+	{
+		for (const PreparedChunk &prepared : m_preparedChunks)
+			std::forward<Function>(function)(Chunk(*prepared.chunk, prepared.columns));
+	}
+
+	template<typename Function>
+	void ExecutePreparedChunk(const std::size_t chunkIndex, Function &&function) const
+	{
+		if (chunkIndex >= m_preparedChunks.size())
+			throw std::out_of_range("Invalid prepared ECS query chunk index");
+		const PreparedChunk &prepared = m_preparedChunks[chunkIndex];
+		std::forward<Function>(function)(Chunk(*prepared.chunk, prepared.columns));
+	}
+
+	template<typename Function>
+	void ForEachChunk(Function &&function)
+	{
+		PrepareChunks();
+		ForEachPreparedChunk(std::forward<Function>(function));
 	}
 
 	std::array<AccessDescriptor, sizeof...(Terms)> Accesses() const noexcept
@@ -209,10 +238,21 @@ public:
 		return MakeAccesses(std::index_sequence_for<Terms...>{});
 	}
 
+	static std::array<AccessDescriptor, sizeof...(Terms)> ResolveAccesses(const ComponentRegistry &components)
+	{
+		return ResolveAccessesImpl(components, std::index_sequence_for<Terms...>{});
+	}
+
 	std::size_t CachedArchetypeCount() const noexcept { return m_cache.Matches().size(); }
 	std::uint64_t CachedRevision() const noexcept { return m_cache.Revision(); }
 
 private:
+	struct PreparedChunk
+	{
+		ecs::Chunk *chunk{nullptr};
+		std::array<std::size_t, sizeof...(Terms)> columns{};
+	};
+
 	void ResolveComponents()
 	{
 		if (!m_world->ComponentsFinalized())
@@ -248,6 +288,23 @@ private:
 		return MatchesImpl(archetype, std::index_sequence_for<Terms...>{});
 	}
 
+	template<typename Term>
+	static AccessDescriptor ResolveAccess(const ComponentRegistry &components)
+	{
+		const ComponentId component = components.TryGet<typename Term::ComponentType>();
+		if (component == InvalidComponentId)
+			throw std::logic_error("ECS query component was not registered before finalization");
+		return AccessDescriptor{component, Term::Mode, Term::IsOptional, Term::IsExcluded};
+	}
+
+	template<std::size_t... Indices>
+	static std::array<AccessDescriptor, sizeof...(Terms)> ResolveAccessesImpl(
+		const ComponentRegistry &components,
+		std::index_sequence<Indices...>)
+	{
+		return {ResolveAccess<Terms>(components)...};
+	}
+
 	template<std::size_t... Indices>
 	std::array<std::size_t, sizeof...(Terms)> MakeColumnIndices(const Archetype &archetype,
 		std::index_sequence<Indices...>) const noexcept
@@ -265,6 +322,7 @@ private:
 	std::array<ComponentId, sizeof...(Terms)> m_components;
 	QueryCache m_cache;
 	std::vector<std::array<std::size_t, sizeof...(Terms)>> m_columnIndices;
+	std::vector<PreparedChunk> m_preparedChunks;
 };
 
 } // namespace ecs
