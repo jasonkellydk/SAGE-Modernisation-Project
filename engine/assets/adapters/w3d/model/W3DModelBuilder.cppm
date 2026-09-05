@@ -14,12 +14,37 @@ import Assets.Adapters.W3D.Materials;
 import Assets.Adapters.W3D.Mesh;
 import Assets.Identity;
 import Assets.Models;
+import Assets.Materials;
 
 namespace Assets::W3D
 {
 
 namespace ModelBuilderDetail
 {
+
+void Apply_Shader_Settings(ModelMaterialDesc &material, const W3DShaderSettings &shader) noexcept
+{
+	material.depth_write = shader.depth_mask != 0;
+	material.texturing = shader.texturing != 0;
+	if (shader.alpha_test != 0) {
+		material.render_mode = MaterialRenderMode::AlphaTest;
+		return;
+	}
+	if (shader.source_blend == 1 && shader.destination_blend == 1) {
+		material.render_mode = MaterialRenderMode::Additive;
+		return;
+	}
+	if (shader.source_blend == 1 && shader.destination_blend == 2) {
+		material.render_mode = MaterialRenderMode::Multiply;
+		return;
+	}
+	if (shader.source_blend == 2 && shader.destination_blend == 5) {
+		material.render_mode = MaterialRenderMode::AlphaBlend;
+		return;
+	}
+	if (!material.depth_write)
+		material.render_mode = MaterialRenderMode::AlphaBlend;
+}
 
 void Add_Dependency(ModelAssetDesc &description, AssetType type, std::string_view name)
 {
@@ -56,7 +81,15 @@ export void W3DAppend_Mesh(ModelAssetDesc &description, W3DParsedMesh &mesh)
 			vertex.bone_indices[0] = mesh.bone_indices[index];
 			vertex.bone_weights = {1.0f, 0.0f, 0.0f, 0.0f};
 		}
-		description.vertices.push_back(vertex);
+		 description.vertices.push_back(vertex);
+	}
+	if (!mesh.bone_indices.empty()) {
+		std::uint16_t maximum_bone = 0;
+		for (const std::uint16_t bone_index : mesh.bone_indices)
+			maximum_bone = std::max(maximum_bone, bone_index);
+		description.skin_bone_count = std::max(
+			description.skin_bone_count,
+			static_cast<std::uint32_t>(maximum_bone) + 1u);
 	}
 
 	description.indices.reserve(description.indices.size() + mesh.triangles.size() * 3);
@@ -77,6 +110,8 @@ export void W3DAppend_Mesh(ModelAssetDesc &description, W3DParsedMesh &mesh)
 			ModelMaterialDesc material = mesh.materials.vertex_materials[pass.vertex_material_index];
 			if (pass.texture_index < mesh.materials.textures.size())
 				material.primary_texture = mesh.materials.textures[pass.texture_index];
+			if (pass.shader_index < mesh.materials.shaders.size())
+				ModelBuilderDetail::Apply_Shader_Settings(material, mesh.materials.shaders[pass.shader_index]);
 			description.materials.push_back(std::move(material));
 			++submesh_material_count;
 		}
@@ -95,7 +130,8 @@ export void W3DAppend_Mesh(ModelAssetDesc &description, W3DParsedMesh &mesh)
 	}
 
 	for (std::size_t material_index = material_base; material_index < description.materials.size(); ++material_index) {
-		const ModelMaterialDesc &material = description.materials[material_index];
+		ModelMaterialDesc &material = description.materials[material_index];
+		material.scope = MaterialScope::Model;
 		ModelBuilderDetail::Add_Dependency(description, AssetType::Material, material.name);
 		ModelBuilderDetail::Add_Dependency(description, AssetType::Texture, material.primary_texture);
 		ModelBuilderDetail::Add_Dependency(description, AssetType::Texture, material.secondary_texture);

@@ -139,6 +139,9 @@ public:
 			const std::uint32_t first_instance = input.uses_gpu_draw_table ? draw.gpu_draw_index : draw.instance_index;
 			if (input.uses_gpu_draw_table && first_instance == Invalid_GPU_Index)
 				return false;
+			const std::array<std::uint32_t, 4> draw_constants = {first_instance, 0, 0, 0};
+			if (!command_list.Set_Draw_Constants(std::as_bytes(std::span<const std::uint32_t>(draw_constants))))
+				return false;
 			if (!command_list.Draw_Indexed(index_count, first_index, base_vertex, draw.instance_count, first_instance))
 				return false;
 		}

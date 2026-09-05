@@ -32,6 +32,10 @@ export struct SkeletonAssetHandleTag
 {
 };
 
+export struct FontAssetHandleTag
+{
+};
+
 export template <typename Tag>
 class AssetHandle final
 {
@@ -118,5 +122,6 @@ export using AnimationAssetHandle = AssetHandle<AnimationAssetHandleTag>;
 export using MeshAssetHandle = AssetHandle<MeshAssetHandleTag>;
 export using MaterialAssetHandle = AssetHandle<MaterialAssetHandleTag>;
 export using SkeletonAssetHandle = AssetHandle<SkeletonAssetHandleTag>;
+export using FontAssetHandle = AssetHandle<FontAssetHandleTag>;
 
 }

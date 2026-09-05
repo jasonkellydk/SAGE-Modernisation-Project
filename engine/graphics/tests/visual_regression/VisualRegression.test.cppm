@@ -29,6 +29,7 @@ import Graphics.Scene.Lighting.Renderer;
 import Graphics.Shaders.Library;
 import Graphics.Testing.VisualRegression;
 import Graphics.Backends.DX11;
+import Graphics.Renderer2D;
 
 using namespace Graphics;
 
@@ -78,7 +79,8 @@ enum class SceneKind : std::uint8_t
 	Beam,
 	LaserAdapter,
 	RopeAdapter,
-	ProjectileStreamAdapter
+	ProjectileStreamAdapter,
+	UI2DHudAndMenu
 };
 
 struct VisualScene final
@@ -109,23 +111,35 @@ struct VisualScene final
 	InstanceHandle scene_instance{};
 	RHITextureHandle material_texture{};
 	RHITextureHandle shadow_texture{};
+	RHIBufferHandle draw_buffer{};
 	RHIBufferHandle material_constants{};
 	RHIBufferHandle bone_buffer{};
 	RHIBufferHandle material_buffer{};
 	BindlessResourceTable bindless;
 	BeamRenderer beam_renderer;
 	LightRenderer light_renderer;
+	Renderer2D ui_renderer;
+	RHITextureHandle ui_texture{};
+	Renderer2DTexture ui_binding{};
 	RHIBufferHandle auxiliary_light_buffer{};
 	RHIBufferHandle view_buffer{};
 
 	void Release(Device &device) noexcept
 	{
+		ui_renderer.Shutdown();
+		if (ui_texture.Is_Valid())
+			device.Destroy_Texture(ui_texture);
+		ui_texture = {};
+		ui_binding = {};
 		light_renderer.Shutdown();
 		beam_renderer.Shutdown();
 		bindless.Clear();
 		if (instance_buffer.Is_Valid())
 			device.Destroy_Buffer(instance_buffer);
 		instance_buffer = {};
+		if (draw_buffer.Is_Valid())
+			device.Destroy_Buffer(draw_buffer);
+		draw_buffer = {};
 		if (auxiliary_light_buffer.Is_Valid())
 			device.Destroy_Buffer(auxiliary_light_buffer);
 		auxiliary_light_buffer = {};
@@ -161,6 +175,8 @@ struct VisualScene final
 
 	bool Initialize(Device &device)
 	{
+		if (kind == SceneKind::UI2DHudAndMenu)
+			return Initialize_UI2D(device);
 		if (kind == SceneKind::Beam || kind == SceneKind::LaserAdapter || kind == SceneKind::RopeAdapter || kind == SceneKind::ProjectileStreamAdapter)
 			return Initialize_Beam(device);
 		if (kind == SceneKind::BasicTriangle)
@@ -244,6 +260,45 @@ struct VisualScene final
 		shadow_draws[0] = {1, 0, 0, 1, shadow_pipeline, 0};
 		shadow_instances[0].flags = static_cast<std::uint32_t>(RenderInstanceFlags::CastsShadow);
 		return true;
+	}
+
+	bool Initialize_UI2D(Device &device)
+	{
+		if (!ui_renderer.Initialize(device, std::filesystem::path(GRAPHICS_RENDERER_SHADER_DIRECTORY), 4096, 6144, 128))
+			return false;
+
+		constexpr std::uint32_t texture_width = 64;
+		constexpr std::uint32_t texture_height = 32;
+		std::array<std::uint8_t, texture_width * texture_height * 4> texture_data{};
+		const auto set_pixel = [&](std::uint32_t x, std::uint32_t y, std::array<std::uint8_t, 4> color) {
+			const std::size_t offset = (static_cast<std::size_t>(y) * texture_width + x) * 4;
+			for (std::size_t channel = 0; channel < color.size(); ++channel)
+				texture_data[offset + channel] = color[channel];
+		};
+		for (std::uint32_t y = 0; y < 24; ++y) {
+			for (std::uint32_t x = 0; x < 24; ++x)
+				set_pixel(x, y, ((x / 4 + y / 4) & 1) != 0 ? std::array<std::uint8_t, 4>{36, 145, 205, 255} : std::array<std::uint8_t, 4>{220, 185, 55, 255});
+		}
+		constexpr std::array<std::array<std::uint8_t, 8>, 4> glyph_patterns = {
+			std::array<std::uint8_t, 8>{0x7e, 0x42, 0x42, 0x7e, 0x42, 0x42, 0x42, 0x00},
+			std::array<std::uint8_t, 8>{0x7c, 0x42, 0x42, 0x7c, 0x42, 0x42, 0x7c, 0x00},
+			std::array<std::uint8_t, 8>{0x3c, 0x42, 0x40, 0x40, 0x40, 0x42, 0x3c, 0x00},
+			std::array<std::uint8_t, 8>{0x7c, 0x42, 0x42, 0x42, 0x42, 0x42, 0x7c, 0x00}};
+		for (std::size_t glyph = 0; glyph < glyph_patterns.size(); ++glyph) {
+			for (std::uint32_t y = 0; y < 8; ++y) {
+				for (std::uint32_t x = 0; x < 8; ++x) {
+					if ((glyph_patterns[glyph][y] & (1u << (7 - x))) != 0)
+						set_pixel(32 + static_cast<std::uint32_t>(glyph) * 8 + x, y, {245, 245, 245, 255});
+				}
+			}
+		}
+		ui_texture = device.Create_Texture_Initialized(
+			{texture_width, texture_height, 1, RHITextureFormat::RGBA8_UNorm, static_cast<std::uint32_t>(RHITextureUsage::ShaderResource), 1},
+			{std::as_bytes(std::span<const std::uint8_t>(texture_data)), texture_width * 4});
+		if (!ui_texture.Is_Valid())
+			return false;
+		ui_binding = ui_renderer.Register_Texture(TextureHandle(1, 1), ui_texture);
+		return ui_binding.index.Is_Valid();
 	}
 
 	bool Initialize_Beam(Device &device)
@@ -418,6 +473,12 @@ struct VisualScene final
 		if (!bone_buffer.Is_Valid() || !bindless.Register_Buffer(bone_buffer).Is_Valid()
 			|| !material_buffer.Is_Valid() || !bindless.Register_Buffer(material_buffer).Is_Valid())
 			return false;
+		const GPUDrawData draw_data{0, 0, 0, 0};
+		draw_buffer = device.Create_Buffer_Initialized(
+			{static_cast<std::uint32_t>(sizeof(draw_data)), RHIBufferUsage::Storage, sizeof(draw_data)},
+			std::as_bytes(std::span<const GPUDrawData>(&draw_data, 1)));
+		if (!draw_buffer.Is_Valid() || !bindless.Register_Buffer(draw_buffer).Is_Valid())
+			return false;
 
 		const GPUResidentMaterial resident_material = residency->Material_Info(scene_material);
 		if (!resident_material.constants.Is_Valid() || !bindless.Register_Material(scene_material, resident_material.constants).Is_Valid())
@@ -492,6 +553,12 @@ struct VisualScene final
 		if (!bone_buffer.Is_Valid() || !bindless.Register_Buffer(bone_buffer).Is_Valid()
 			|| !material_buffer.Is_Valid() || !bindless.Register_Buffer(material_buffer).Is_Valid())
 			return false;
+		const GPUDrawData draw_data{0, 0, 0, 0};
+		draw_buffer = device.Create_Buffer_Initialized(
+			{static_cast<std::uint32_t>(sizeof(draw_data)), RHIBufferUsage::Storage, sizeof(draw_data)},
+			std::as_bytes(std::span<const GPUDrawData>(&draw_data, 1)));
+		if (!draw_buffer.Is_Valid() || !bindless.Register_Buffer(draw_buffer).Is_Valid())
+			return false;
 
 		MaterialParameterBlock material_data;
 		material_data.values[0] = 1.0f;
@@ -553,9 +620,59 @@ private:
 	}
 };
 
-static bool Render_Scene(Device &, CommandList &commands, RHITextureHandle color_target, RHITextureHandle depth_target, RHIViewport viewport, void *context) noexcept
+static bool Render_Scene(Device &device, CommandList &commands, RHITextureHandle color_target, RHITextureHandle depth_target, RHIViewport viewport, void *context) noexcept
 {
 	VisualScene &scene = *static_cast<VisualScene *>(context);
+	if (scene.kind == SceneKind::UI2DHudAndMenu) {
+		if (!commands.Set_Render_Targets(color_target, depth_target)
+			|| !commands.Clear({0.015f, 0.025f, 0.045f, 1.0f}, 1.0f))
+			return false;
+
+		scene.ui_renderer.Begin(viewport.width, viewport.height);
+		const Color2D panel_color{0.035f, 0.075f, 0.13f, 0.97f};
+		const Color2D border_color{0.20f, 0.70f, 0.92f, 0.95f};
+		if (!scene.ui_renderer.Add_Rect({8, 7, 120, 39}, panel_color)
+			|| !scene.ui_renderer.Add_Outline({8, 7, 120, 39}, 1, border_color)
+			|| !scene.ui_renderer.Add_Quad(Rect2D{14, 13, 38, 37}, Rect2D{0, 0, 24.0f / 64.0f, 24.0f / 32.0f}, scene.ui_binding, Color2D{1, 1, 1, 1}, Renderer2DBlendMode::Alpha)
+			|| !scene.ui_renderer.Add_Rect({43, 12, 114, 21}, {0.08f, 0.14f, 0.22f, 0.95f})
+			|| !scene.ui_renderer.Add_Rect({43, 24, 106, 31}, {0.05f, 0.10f, 0.17f, 0.95f})
+			|| !scene.ui_renderer.Add_Outline({43, 12, 114, 21}, 1, {0.18f, 0.42f, 0.58f, 0.9f}))
+			return false;
+
+		std::array<Renderer2DGlyph, 12> label{};
+		for (std::size_t index = 0; index < label.size(); ++index) {
+			const float left = 48.0f + static_cast<float>(index) * 5.0f;
+			const float atlas_left = static_cast<float>(32 + (index % 4) * 8) / 64.0f;
+			label[index] = {{left, 15, left + 4, 22}, {atlas_left, 0, atlas_left + 8.0f / 64.0f, 8.0f / 32.0f}, {0.88f, 0.92f, 0.96f, 1.0f}};
+		}
+		std::array<Renderer2DGlyph, 12> label_shadow = label;
+		for (Renderer2DGlyph &glyph : label_shadow) {
+			glyph.screen.left += 1;
+			glyph.screen.right += 1;
+			glyph.screen.top += 1;
+			glyph.screen.bottom += 1;
+			glyph.color = {0, 0, 0, 0.8f};
+		}
+		if (!scene.ui_renderer.Add_Text_Glyphs(label_shadow, scene.ui_binding)
+			|| !scene.ui_renderer.Add_Text_Glyphs(label, scene.ui_binding))
+			return false;
+		label[4].color = {1.0f, 0.80f, 0.22f, 1.0f};
+		if (!scene.ui_renderer.Add_Text_Glyphs(std::span<const Renderer2DGlyph>(label.data() + 4, 1), scene.ui_binding))
+			return false;
+
+		scene.ui_renderer.Set_Clip(true, {64, 48, 124, 68});
+		const std::array<Color2D, 4> health_gradient = {{{0.10f, 0.85f, 0.35f, 1.0f}, {0.10f, 0.85f, 0.35f, 1.0f}, {0.90f, 0.72f, 0.16f, 1.0f}, {0.90f, 0.72f, 0.16f, 1.0f}}};
+		if (!scene.ui_renderer.Add_Rect({61, 49, 124, 68}, {0.04f, 0.08f, 0.12f, 0.96f})
+			|| !scene.ui_renderer.Add_Line({61, 58}, {123, 58}, 5, health_gradient)
+			|| !scene.ui_renderer.Add_Quad(Rect2D{52, 47, 75, 66}, Rect2D{0, 0, 24.0f / 64.0f, 24.0f / 32.0f}, scene.ui_binding, Color2D{1, 1, 1, 1}, Renderer2DBlendMode::Alpha, true))
+			return false;
+		scene.ui_renderer.Set_Clip(false, {});
+
+		if (!scene.ui_renderer.Add_Triangle({97, 56}, {108, 56}, {108, 65}, {0.12f, 0.52f, 0.88f, 0.9f})
+			|| !scene.ui_renderer.Add_Outline({64, 48, 124, 68}, 1, border_color))
+			return false;
+		return scene.ui_renderer.Execute(device, commands, color_target, depth_target, viewport);
+	}
 	if (scene.kind == SceneKind::Beam || scene.kind == SceneKind::LaserAdapter || scene.kind == SceneKind::RopeAdapter || scene.kind == SceneKind::ProjectileStreamAdapter) {
 		return commands.Set_Render_Targets(color_target, depth_target)
 			&& commands.Clear({0.02f, 0.02f, 0.03f, 1.0f}, 1.0f)
@@ -693,4 +810,9 @@ BOOST_AUTO_TEST_CASE(rope_adapter_matches_golden_image)
 BOOST_AUTO_TEST_CASE(projectile_stream_adapter_matches_golden_image)
 {
 	Run_Scene(SceneKind::ProjectileStreamAdapter, "projectile_stream_adapter");
+}
+
+BOOST_AUTO_TEST_CASE(ui_2d_hud_and_menu_matches_golden_image)
+{
+	Run_Scene(SceneKind::UI2DHudAndMenu, "ui_2d_hud_and_menu");
 }

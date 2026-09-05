@@ -117,6 +117,38 @@ export ShaderInterfaceLayout Make_Beam_Interface() noexcept
 	return {};
 }
 
+export ShaderInterfaceLayout Make_Video_Interface() noexcept
+{
+	ShaderInterfaceLayout layout;
+	for (std::size_t index = 0; index < 4; ++index)
+		layout.material.Add_Constant(ShaderValueType::Float4);
+	return layout;
+}
+
+export ShaderInterfaceLayout Make_Ring_Interface() noexcept
+{
+	ShaderInterfaceLayout layout;
+	for (std::size_t index = 0; index < 4; ++index)
+		layout.material.Add_Constant(ShaderValueType::Float4);
+	return layout;
+}
+
+export ShaderInterfaceLayout Make_Fullscreen_Overlay_Interface() noexcept
+{
+	ShaderInterfaceLayout layout;
+	for (std::size_t index = 0; index < 4; ++index)
+		layout.material.Add_Constant(ShaderValueType::Float4);
+	return layout;
+}
+
+export ShaderInterfaceLayout Make_World_Quad_Interface() noexcept
+{
+	ShaderInterfaceLayout layout;
+	for (std::size_t index = 0; index < 4; ++index)
+		layout.material.Add_Constant(ShaderValueType::Float4);
+	return layout;
+}
+
 export ShaderProgramDesc Make_Basic_Opaque_Description() noexcept
 {
 	ShaderProgramDesc description;
@@ -172,6 +204,50 @@ export ShaderProgramDesc Make_Beam_Description() noexcept
 	return description;
 }
 
+export ShaderProgramDesc Make_Video_Description() noexcept
+{
+	ShaderProgramDesc description;
+	description.vertex_shader = 6;
+	description.fragment_shader = 6;
+	description.stages = ShaderStageMask::Vertex | ShaderStageMask::Pixel;
+	description.interface_layout = Make_Video_Interface();
+	description.source_key = 0x564944454f505249ull;
+	return description;
+}
+
+export ShaderProgramDesc Make_Ring_Description() noexcept
+{
+	ShaderProgramDesc description;
+	description.vertex_shader = 8;
+	description.fragment_shader = 8;
+	description.stages = ShaderStageMask::Vertex | ShaderStageMask::Pixel;
+	description.interface_layout = Make_Ring_Interface();
+	description.source_key = 0x52494e475052494dull;
+	return description;
+}
+
+export ShaderProgramDesc Make_Fullscreen_Overlay_Description() noexcept
+{
+	ShaderProgramDesc description;
+	description.vertex_shader = 9;
+	description.fragment_shader = 9;
+	description.stages = ShaderStageMask::Vertex | ShaderStageMask::Pixel;
+	description.interface_layout = Make_Fullscreen_Overlay_Interface();
+	description.source_key = 0x46534f5645524c59ull;
+	return description;
+}
+
+export ShaderProgramDesc Make_World_Quad_Description() noexcept
+{
+	ShaderProgramDesc description;
+	description.vertex_shader = 10;
+	description.fragment_shader = 10;
+	description.stages = ShaderStageMask::Vertex | ShaderStageMask::Pixel;
+	description.interface_layout = Make_World_Quad_Interface();
+	description.source_key = 0x574f524c44515544ull;
+	return description;
+}
+
 export PipelineDesc Make_Basic_Opaque_Pipeline() noexcept
 {
 	const ShaderProgramDesc shader = Make_Basic_Opaque_Description();
@@ -210,7 +286,7 @@ export PipelineDesc Make_Screen_Distortion_Pipeline() noexcept
 	PipelineDesc description;
 	description.vertex_shader = shader.vertex_shader;
 	description.fragment_shader = shader.fragment_shader;
-	description.depth_test = false;
+	description.depth_test = true;
 	description.depth_write = false;
 	description.blend_mode = RHIBlendMode::Alpha;
 	description.cull_mode = RHICullMode::None;
@@ -225,6 +301,64 @@ export PipelineDesc Make_Beam_Pipeline() noexcept
 	description.vertex_shader = shader.vertex_shader;
 	description.fragment_shader = shader.fragment_shader;
 	description.vertex_format = RHIVertexFormat::Position3Color4UV2ResourceIndex;
+	description.depth_test = true;
+	description.depth_write = false;
+	description.blend_mode = RHIBlendMode::Alpha;
+	description.cull_mode = RHICullMode::None;
+	description.Set_Parameter_Layout(shader.interface_layout);
+	return description;
+}
+
+export PipelineDesc Make_Video_Pipeline() noexcept
+{
+	const ShaderProgramDesc shader = Make_Video_Description();
+	PipelineDesc description;
+	description.vertex_shader = shader.vertex_shader;
+	description.fragment_shader = shader.fragment_shader;
+	description.depth_test = false;
+	description.depth_write = false;
+	description.blend_mode = RHIBlendMode::Alpha;
+	description.cull_mode = RHICullMode::None;
+	description.Set_Parameter_Layout(shader.interface_layout);
+	return description;
+}
+
+export PipelineDesc Make_Ring_Pipeline() noexcept
+{
+	const ShaderProgramDesc shader = Make_Ring_Description();
+	PipelineDesc description;
+	description.vertex_shader = shader.vertex_shader;
+	description.fragment_shader = shader.fragment_shader;
+	description.depth_test = false;
+	description.depth_write = false;
+	description.blend_mode = RHIBlendMode::Alpha;
+	description.cull_mode = RHICullMode::None;
+	description.Set_Parameter_Layout(shader.interface_layout);
+	return description;
+}
+
+export PipelineDesc Make_Fullscreen_Overlay_Pipeline() noexcept
+{
+	const ShaderProgramDesc shader = Make_Fullscreen_Overlay_Description();
+	PipelineDesc description;
+	description.vertex_shader = shader.vertex_shader;
+	description.fragment_shader = shader.fragment_shader;
+	description.vertex_format = RHIVertexFormat::Position3Color4UV2;
+	description.depth_test = false;
+	description.depth_write = false;
+	description.blend_mode = RHIBlendMode::Additive;
+	description.cull_mode = RHICullMode::None;
+	description.Set_Parameter_Layout(shader.interface_layout);
+	return description;
+}
+
+export PipelineDesc Make_World_Quad_Pipeline() noexcept
+{
+	const ShaderProgramDesc shader = Make_World_Quad_Description();
+	PipelineDesc description;
+	description.vertex_shader = shader.vertex_shader;
+	description.fragment_shader = shader.fragment_shader;
+	description.vertex_format = RHIVertexFormat::Position3Color4UV2;
 	description.depth_test = true;
 	description.depth_write = false;
 	description.blend_mode = RHIBlendMode::Alpha;
@@ -318,6 +452,58 @@ public:
 		return m_beam;
 	}
 
+	ShaderHandle Load_Video(const std::filesystem::path &directory)
+	{
+		if (m_video.Is_Valid())
+			return m_video;
+
+		ShaderPrecompiledDesc description;
+		description.program = Make_Video_Description();
+		description.vertex_path = directory / "video.vso";
+		description.fragment_path = directory / "video.pso";
+		m_video = Load_Precompiled(description);
+		return m_video;
+	}
+
+	ShaderHandle Load_Ring(const std::filesystem::path &directory)
+	{
+		if (m_ring.Is_Valid())
+			return m_ring;
+
+		ShaderPrecompiledDesc description;
+		description.program = Make_Ring_Description();
+		description.vertex_path = directory / "ring.vso";
+		description.fragment_path = directory / "ring.pso";
+		m_ring = Load_Precompiled(description);
+		return m_ring;
+	}
+
+	ShaderHandle Load_Fullscreen_Overlay(const std::filesystem::path &directory)
+	{
+		if (m_fullscreen_overlay.Is_Valid())
+			return m_fullscreen_overlay;
+
+		ShaderPrecompiledDesc description;
+		description.program = Make_Fullscreen_Overlay_Description();
+		description.vertex_path = directory / "fullscreen_overlay.vso";
+		description.fragment_path = directory / "fullscreen_overlay.pso";
+		m_fullscreen_overlay = Load_Precompiled(description);
+		return m_fullscreen_overlay;
+	}
+
+	ShaderHandle Load_World_Quad(const std::filesystem::path &directory)
+	{
+		if (m_world_quad.Is_Valid())
+			return m_world_quad;
+
+		ShaderPrecompiledDesc description;
+		description.program = Make_World_Quad_Description();
+		description.vertex_path = directory / "world_quad.vso";
+		description.fragment_path = directory / "world_quad.pso";
+		m_world_quad = Load_Precompiled(description);
+		return m_world_quad;
+	}
+
 	bool Destroy(ShaderHandle handle) noexcept
 	{
 		if (handle == m_basic_opaque)
@@ -330,6 +516,14 @@ public:
 			m_screen_distortion = {};
 		if (handle == m_beam)
 			m_beam = {};
+		if (handle == m_video)
+			m_video = {};
+		if (handle == m_ring)
+			m_ring = {};
+		if (handle == m_fullscreen_overlay)
+			m_fullscreen_overlay = {};
+		if (handle == m_world_quad)
+			m_world_quad = {};
 		return m_programs.Destroy(handle);
 	}
 
@@ -358,6 +552,26 @@ public:
 		return m_beam;
 	}
 
+	ShaderHandle Video() const noexcept
+	{
+		return m_video;
+	}
+
+	ShaderHandle Ring() const noexcept
+	{
+		return m_ring;
+	}
+
+	ShaderHandle Fullscreen_Overlay() const noexcept
+	{
+		return m_fullscreen_overlay;
+	}
+
+	ShaderHandle World_Quad() const noexcept
+	{
+		return m_world_quad;
+	}
+
 	ShaderHandle Select_Shader(const Material &material, ShaderHandle default_shader) const noexcept
 	{
 		if (Is_Loaded(material.shader))
@@ -365,6 +579,18 @@ public:
 
 		return Is_Loaded(default_shader) ? default_shader : ShaderHandle{};
 	}
+
+    std::span<const std::byte> Bytecode(ShaderHandle handle, ShaderStage stage) const noexcept
+    {
+        const ShaderProgram *program = m_programs.Resolve(handle);
+        if (program == nullptr) return {};
+        switch (stage) {
+        case ShaderStage::Vertex: return program->vertex_bytecode;
+        case ShaderStage::Pixel: return program->fragment_bytecode;
+        case ShaderStage::Compute: return program->compute_bytecode;
+        }
+        return {};
+    }
 
 	ShaderProgramDesc Description(ShaderHandle handle) const noexcept
 	{
@@ -401,9 +627,10 @@ public:
 			description.depth_test,
 			description.depth_write,
 			 description.topology,
-			 description.vertex_format,
-			 description.blend_mode,
-			 description.cull_mode
+				description.vertex_format,
+				description.blend_mode,
+				description.cull_mode,
+				description.blend_operation
 		};
 		return device.Create_Pipeline(rhi_description, {program->vertex_bytecode}, {program->fragment_bytecode});
 	}
@@ -466,6 +693,10 @@ private:
 	ShaderHandle m_particle_billboard{};
 	ShaderHandle m_screen_distortion{};
 	ShaderHandle m_beam{};
+	ShaderHandle m_video{};
+	ShaderHandle m_ring{};
+	ShaderHandle m_fullscreen_overlay{};
+	ShaderHandle m_world_quad{};
 };
 
 }

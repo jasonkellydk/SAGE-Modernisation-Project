@@ -95,7 +95,8 @@ export bool Build_Visible_Particles(const ParticleSystem &particles, const View 
 			continue;
 
 		const float size = data.sizes[particle_index];
-		const float radius = size > 0.0f ? size : 0.0f;
+		// A rotated quad reaches beyond its half-width at the corners.
+		const float radius = size > 0.0f ? size * 1.41421356237f : 0.0f;
 		if (!Is_Visible(
 			view.frustum,
 			data.position_x[particle_index],

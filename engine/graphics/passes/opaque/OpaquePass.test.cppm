@@ -6,6 +6,7 @@ module;
 
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <span>
 
 export module Graphics.Passes.Opaque.Tests;
@@ -67,6 +68,15 @@ public:
 		return viewport_set;
 	}
 
+	bool Set_Draw_Constants(std::span<const std::byte> data) noexcept override
+	{
+		if (data.size() < sizeof(std::uint32_t) || draw_constants_set_count >= draw_indices.size())
+			return false;
+		std::memcpy(&draw_indices[draw_constants_set_count], data.data(), sizeof(std::uint32_t));
+		++draw_constants_set_count;
+		return true;
+	}
+
 	bool Set_Vertex_Buffer(std::uint32_t, RHIBufferHandle buffer, std::uint32_t stride, std::uint32_t) noexcept override
 	{
 		vertex_buffer_set = buffer.Is_Valid() && stride != 0;
@@ -100,6 +110,8 @@ public:
 	std::uint32_t bindless_set_count = 0;
 	std::uint32_t pipeline_bind_count = 0;
 	std::uint32_t draw_count = 0;
+	std::uint32_t draw_constants_set_count = 0;
+	std::array<std::uint32_t, 4> draw_indices{};
 };
 
 BOOST_AUTO_TEST_CASE(opaque_pass_records_the_complete_draw_path)
@@ -118,8 +130,8 @@ BOOST_AUTO_TEST_CASE(opaque_pass_records_the_complete_draw_path)
 	BOOST_REQUIRE(plan.Compile(graph, resources));
 
 	const std::array<DrawData, 2> draws = {
-		DrawData{0, 2, 4, 1, PipelineHandle(8, 1), 0},
-		DrawData{0, 2, 5, 1, PipelineHandle(8, 1), 0}
+		DrawData{0, 2, 4, 1, PipelineHandle(8, 1), 0, 0, 17},
+		DrawData{0, 2, 5, 1, PipelineHandle(8, 1), 0, 0, 23}
 	};
 	const std::array<OpaqueMeshBinding, 1> meshes = {
 		OpaqueMeshBinding{RHIBufferHandle(3, 1), RHIBufferHandle(4, 1), RHIIndexFormat::UInt16, 36, 3, 0, 0}
@@ -129,7 +141,7 @@ BOOST_AUTO_TEST_CASE(opaque_pass_records_the_complete_draw_path)
 		RHIBindlessResource{ResourceIndex(1, 1), RHIResourceType::Texture, {}, RHITextureHandle(6, 1)},
 		RHIBindlessResource{ResourceIndex(2, 1), RHIResourceType::Material, RHIBufferHandle(5, 1), {}}
 	};
-	const OpaquePassInput input{
+	OpaquePassInput input{
 		draws,
 		meshes,
 		bindless_resources,
@@ -139,6 +151,7 @@ BOOST_AUTO_TEST_CASE(opaque_pass_records_the_complete_draw_path)
 		{0.1f, 0.2f, 0.3f, 1.0f},
 		1.0f
 	};
+	input.uses_gpu_draw_table = true;
 
 	RecordingOpaqueCommandList command_list;
 	BOOST_REQUIRE(plan.Execute(graph, command_list, [&](GraphPassHandle current_pass, CommandList &commands, const PassResources &pass_resources) noexcept {
@@ -154,6 +167,9 @@ BOOST_AUTO_TEST_CASE(opaque_pass_records_the_complete_draw_path)
 	BOOST_CHECK(command_list.bindless_set_count == 1);
 	BOOST_CHECK(command_list.pipeline_bind_count == 1);
 	BOOST_CHECK(command_list.draw_count == 2);
+	BOOST_CHECK(command_list.draw_constants_set_count == 2);
+	BOOST_CHECK(command_list.draw_indices[0] == 17);
+	BOOST_CHECK(command_list.draw_indices[1] == 23);
 }
 
 BOOST_AUTO_TEST_CASE(opaque_pass_rejects_undeclared_targets_and_invalid_draw_records)

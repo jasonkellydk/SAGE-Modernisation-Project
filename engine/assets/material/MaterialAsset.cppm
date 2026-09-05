@@ -13,6 +13,21 @@ import Assets.Math;
 namespace Assets
 {
 
+export enum class MaterialRenderMode : std::uint8_t
+{
+	Opaque,
+	AlphaTest,
+	AlphaBlend,
+	Additive,
+	Multiply
+};
+
+export enum class MaterialScope : std::uint8_t
+{
+	Shared,
+	Model
+};
+
 export struct MaterialAssetDesc final
 {
 	std::string name;
@@ -23,6 +38,13 @@ export struct MaterialAssetDesc final
 	float opacity = 1.0f;
 	float translucency = 0.0f;
 	std::uint32_t source_attributes = 0;
+	MaterialRenderMode render_mode = MaterialRenderMode::Opaque;
+	bool depth_write = true;
+	bool texturing = true;
+	Color4f ambient_color{};
+	Color4f specular_color{0, 0, 0, 1};
+	Color4f emissive_color{0, 0, 0, 1};
+	MaterialScope scope = MaterialScope::Shared;
 };
 
 export class MaterialAsset final
@@ -39,10 +61,16 @@ public:
 	const TextureAssetHandle &Primary_Texture() const noexcept;
 	const TextureAssetHandle &Secondary_Texture() const noexcept;
 	const Color4f &Base_Color() const noexcept;
+	const Color4f &Ambient_Color() const noexcept;
+	const Color4f &Specular_Color() const noexcept;
+	const Color4f &Emissive_Color() const noexcept;
 	float Shininess() const noexcept;
 	float Opacity() const noexcept;
 	float Translucency() const noexcept;
 	std::uint32_t Source_Attributes() const noexcept;
+	MaterialRenderMode Render_Mode() const noexcept;
+	bool Depth_Write() const noexcept;
+	bool Texturing() const noexcept;
 
 private:
 	AssetIdentity m_identity;
@@ -50,10 +78,16 @@ private:
 	TextureAssetHandle m_primary_texture;
 	TextureAssetHandle m_secondary_texture;
 	Color4f m_base_color{};
+	Color4f m_ambient_color{};
+	Color4f m_specular_color{0, 0, 0, 1};
+	Color4f m_emissive_color{0, 0, 0, 1};
 	float m_shininess = 1.0f;
 	float m_opacity = 1.0f;
 	float m_translucency = 0.0f;
 	std::uint32_t m_source_attributes = 0;
+	MaterialRenderMode m_render_mode = MaterialRenderMode::Opaque;
+	bool m_depth_write = true;
+	bool m_texturing = true;
 };
 
 }
@@ -71,10 +105,16 @@ MaterialAsset::MaterialAsset(
 	  m_primary_texture(primary_texture),
 	  m_secondary_texture(secondary_texture),
 	  m_base_color(description.base_color),
+	  m_ambient_color(description.ambient_color),
+	  m_specular_color(description.specular_color),
+	  m_emissive_color(description.emissive_color),
 	  m_shininess(description.shininess),
-	  m_opacity(description.opacity),
+	m_opacity(description.opacity),
 	  m_translucency(description.translucency),
-	  m_source_attributes(description.source_attributes)
+	  m_source_attributes(description.source_attributes),
+	  m_render_mode(description.render_mode),
+	  m_depth_write(description.depth_write),
+	  m_texturing(description.texturing)
 {
 }
 
@@ -103,6 +143,21 @@ const Color4f &MaterialAsset::Base_Color() const noexcept
 	return m_base_color;
 }
 
+const Color4f &MaterialAsset::Ambient_Color() const noexcept
+{
+	return m_ambient_color;
+}
+
+const Color4f &MaterialAsset::Specular_Color() const noexcept
+{
+	return m_specular_color;
+}
+
+const Color4f &MaterialAsset::Emissive_Color() const noexcept
+{
+	return m_emissive_color;
+}
+
 float MaterialAsset::Shininess() const noexcept
 {
 	return m_shininess;
@@ -121,6 +176,21 @@ float MaterialAsset::Translucency() const noexcept
 std::uint32_t MaterialAsset::Source_Attributes() const noexcept
 {
 	return m_source_attributes;
+}
+
+MaterialRenderMode MaterialAsset::Render_Mode() const noexcept
+{
+	return m_render_mode;
+}
+
+bool MaterialAsset::Depth_Write() const noexcept
+{
+	return m_depth_write;
+}
+
+bool MaterialAsset::Texturing() const noexcept
+{
+	return m_texturing;
 }
 
 }

@@ -21,6 +21,9 @@ BOOST_AUTO_TEST_CASE(model_runtime_is_immutable_and_copies_generic_description)
 	description.indices = {0, 0, 0};
 	description.submeshes.push_back({0, 3, 0, "body"});
 	description.materials.push_back({"paint", "Textures\\Paint.TGA"});
+	description.materials[0].ambient_color = {0.2f, 0.3f, 0.4f, 1};
+	description.materials[0].specular_color = {0.3f, 0.4f, 0.5f, 1};
+	description.materials[0].emissive_color = {0.4f, 0.5f, 0.6f, 1};
 	description.dependencies.push_back({Assets::AssetType::Texture, "Textures\\Paint.TGA"});
 
 	const Assets::ModelAsset runtime(
@@ -33,6 +36,9 @@ BOOST_AUTO_TEST_CASE(model_runtime_is_immutable_and_copies_generic_description)
 	BOOST_CHECK(runtime.Indices().size() == 3);
 	BOOST_CHECK(runtime.Submeshes()[0].material_index == 0);
 	BOOST_CHECK(runtime.Materials()[0].primary_texture.canonical_name == "textures/paint.tga");
+	BOOST_CHECK_EQUAL(runtime.Materials()[0].ambient_color.g, 0.3f);
+	BOOST_CHECK_EQUAL(runtime.Materials()[0].specular_color.b, 0.5f);
+	BOOST_CHECK_EQUAL(runtime.Materials()[0].emissive_color.r, 0.4f);
 	BOOST_CHECK(runtime.Dependencies()[0].identity.canonical_name == "textures/paint.tga");
 	BOOST_CHECK(runtime.Bounds().Is_Valid());
 }

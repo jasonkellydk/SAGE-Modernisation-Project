@@ -26,6 +26,8 @@ import Assets.Handles;
 import Assets.Identity;
 import Assets.Importers.Models;
 import Assets.Models;
+import Assets.Materials;
+import Assets.Math;
 import Assets.States;
 
 namespace
@@ -149,6 +151,67 @@ public:
 		return {std::move(description), {}};
 	}
 };
+
+class ScopedMaterialAdapter final : public Assets::IModelAdapter
+{
+public:
+	bool Can_Import(const Assets::AssetIdentity&, std::span<const std::byte>) const noexcept override
+	{
+		return true;
+	}
+	Assets::ModelImportResult Import(const Assets::AssetIdentity& identity, std::span<const std::byte>) const override
+	{
+		auto description = std::make_unique<Assets::ModelAssetDesc>();
+		description->name = identity.canonical_name;
+		description->bounds = {{0, 0, 0}, {1, 1, 0}};
+		description->vertices = {{{0, 0, 0}}, {{1, 0, 0}}, {{0, 1, 0}}};
+		description->indices = {0, 1, 2};
+		for (unsigned pass = 0; pass != 2; ++pass) {
+			Assets::MaterialAssetDesc material;
+			material.name = "paint";
+			material.scope = Assets::MaterialScope::Model;
+			material.base_color = identity.canonical_name == "red.model"
+				? Assets::Color4f{1, 0, 0, 1} : Assets::Color4f{0, 0, 1, 1};
+			material.emissive_color = {float(pass), 0, 0, 1};
+			description->materials.push_back(material);
+			description->submeshes.push_back({0, 3, pass, "body"});
+		}
+		description->dependencies.push_back({Assets::AssetType::Material, "paint"});
+		return {std::move(description), {}};
+	}
+};
+
+BOOST_AUTO_TEST_CASE(model_material_identity_retains_model_and_pass_scope)
+{
+	Assets::AssetCache cache([](const Assets::AssetIdentity&) { return std::vector<Byte>{Byte{1}}; });
+	BOOST_REQUIRE(cache.Register_Model_Adapter(std::make_shared<ScopedMaterialAdapter>()));
+	const auto red = cache.Request_Model("red.model");
+	const auto blue = cache.Request_Model("blue.model");
+	cache.Wait(red);
+	cache.Wait(blue);
+	const auto* red_model = cache.Try_Get_Model(red);
+	const auto* blue_model = cache.Try_Get_Model(blue);
+	BOOST_REQUIRE(red_model != nullptr);
+	BOOST_REQUIRE(blue_model != nullptr);
+	BOOST_REQUIRE_EQUAL(red_model->Materials().size(), 2);
+	BOOST_REQUIRE_EQUAL(blue_model->Materials().size(), 2);
+	BOOST_CHECK(red_model->Materials()[0].asset_handle != red_model->Materials()[1].asset_handle);
+	BOOST_CHECK(red_model->Materials()[0].asset_handle != blue_model->Materials()[0].asset_handle);
+	BOOST_CHECK(cache.Request_Model("RED.MODEL") == red);
+	BOOST_CHECK_EQUAL(cache.Material_Count(), 4);
+	for (const auto* model : {red_model, blue_model}) {
+		BOOST_REQUIRE_EQUAL(model->Dependencies().size(), 2);
+		for (unsigned pass = 0; pass != 2; ++pass) {
+			const auto* material = cache.Try_Get_Material(model->Materials()[pass].asset_handle);
+			BOOST_REQUIRE(material != nullptr);
+			BOOST_CHECK_EQUAL(material->Name(), "paint");
+			BOOST_CHECK_EQUAL(material->Base_Color().r, model == red_model ? 1.0f : 0.0f);
+			BOOST_CHECK_EQUAL(material->Base_Color().b, model == blue_model ? 1.0f : 0.0f);
+			BOOST_CHECK_EQUAL(material->Emissive_Color().r, float(pass));
+			BOOST_CHECK_EQUAL(model->Dependencies()[pass].identity.canonical_name, material->Identity().canonical_name);
+		}
+	}
+}
 
 BOOST_AUTO_TEST_CASE(asset_cache_publishes_loading_then_ready)
 {

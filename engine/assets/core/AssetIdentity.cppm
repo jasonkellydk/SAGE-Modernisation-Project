@@ -18,7 +18,8 @@ export enum class AssetType : std::uint8_t
 	Material,
 	Mesh,
 	Skeleton,
-	Animation
+	Animation,
+	Font
 };
 
 export struct AssetIdentity final

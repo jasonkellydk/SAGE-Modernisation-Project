@@ -29,6 +29,7 @@ export struct ScreenDistortionData final
 	std::span<const float> offset_y{};
 	std::span<const float> sizes{};
 	std::span<const float> opacities{};
+    std::array<float,3> tint{1,1,1};
 
 	std::size_t Size() const noexcept
 	{
@@ -179,7 +180,8 @@ public:
 	}
 
 	bool Render(CommandList &commands, RHITextureHandle color_target, RHITextureHandle depth_target,
-		RHIViewport viewport, const ScreenDistortionData &data) noexcept
+		RHIViewport viewport, const ScreenDistortionData &data,
+        RHITextureFormat color_format=RHITextureFormat::BGRA8_UNorm) noexcept
 	{
 		if (!Is_Initialized() || !color_target.Is_Valid() || !depth_target.Is_Valid() || viewport.width == 0 || viewport.height == 0)
 			return false;
@@ -190,7 +192,7 @@ public:
 			|| data.opacities.size() != data.Size())
 			return false;
 
-		if (!Ensure_Background(viewport.width, viewport.height))
+		if (!Ensure_Background(viewport.width, viewport.height,color_format))
 			return false;
 		const std::size_t vertex_count = data.Size() * 5;
 		for (std::size_t index = 0; index < data.Size(); ++index)
@@ -232,27 +234,33 @@ private:
 		};
 	}
 
-	bool Ensure_Background(std::uint32_t width, std::uint32_t height) noexcept
+	bool Ensure_Background(std::uint32_t width, std::uint32_t height,RHITextureFormat format) noexcept
 	{
-		if (m_background_texture.Is_Valid() && m_background_width == width && m_background_height == height)
+		if (m_background_texture.Is_Valid() && m_background_width == width && m_background_height == height
+            && m_background_format==format)
 			return true;
-		if (m_background_texture.Is_Valid()) {
-			m_bindless.Destroy_Texture(m_background_handle);
-			m_device->Destroy_Texture(m_background_texture);
-			m_background_texture = {};
-		}
-		m_background_texture = m_device->Create_Texture({
+		const auto replacement=m_device->Create_Texture({
 			width,
 			height,
 			1,
-			RHITextureFormat::BGRA8_UNorm,
+			format,
 			static_cast<std::uint32_t>(RHITextureUsage::ShaderResource)
 		});
-		if (!m_background_texture.Is_Valid())
+		if (!replacement.Is_Valid())
 			return false;
+        const bool bound=m_background_texture.Is_Valid()
+            ? m_bindless.Update_Texture(m_background_handle,replacement)
+            : m_bindless.Register_Texture(m_background_handle,replacement).Is_Valid();
+        if (!bound) {
+            m_device->Destroy_Texture(replacement);
+            return false;
+        }
+        if (m_background_texture.Is_Valid()) m_device->Destroy_Texture(m_background_texture);
+        m_background_texture=replacement;
+		m_background_format=format;
 		m_background_width = width;
 		m_background_height = height;
-		return m_bindless.Register_Texture(m_background_handle, m_background_texture).Is_Valid();
+		return true;
 	}
 
 	void Pack_Distortion(const ScreenDistortionData &data, std::size_t index, ScreenDistortionVertex *vertices) const noexcept
@@ -275,9 +283,9 @@ private:
 			vertices[corner].position[0] = ndc_x;
 			vertices[corner].position[1] = ndc_y;
 			vertices[corner].position[2] = clip[2] * inverse_w;
-			vertices[corner].color[0] = 1.0f;
-			vertices[corner].color[1] = 1.0f;
-			vertices[corner].color[2] = 1.0f;
+			vertices[corner].color[0] = data.tint[0];
+			vertices[corner].color[1] = data.tint[1];
+			vertices[corner].color[2] = data.tint[2];
 			vertices[corner].color[3] = 0.0f;
 			uvs[corner] = {(ndc_x + 1.0f) * 0.5f, (1.0f - ndc_y) * 0.5f};
 			vertices[corner].uv[0] = uvs[corner][0];
@@ -295,9 +303,9 @@ private:
 		const float uv_span_y = uvs[1][1] - uvs[0][1];
 		vertices[4].uv[0] = uvs[0][0] + uv_span_x * (0.5f + offset_x);
 		vertices[4].uv[1] = uvs[0][1] + uv_span_y * (0.5f + offset_y);
-		vertices[4].color[0] = 1.0f;
-		vertices[4].color[1] = 1.0f;
-		vertices[4].color[2] = 1.0f;
+		vertices[4].color[0] = data.tint[0];
+		vertices[4].color[1] = data.tint[1];
+		vertices[4].color[2] = data.tint[2];
 		vertices[4].color[3] = data.opacities[index];
 		const std::array<float, 4> center_clip = Transform(m_view.projection_matrix, view_center[0], view_center[1], view_center[2], view_center[3]);
 		const float center_inverse_w = std::fabs(center_clip[3]) > 1.0e-6f ? 1.0f / center_clip[3] : 0.0f;
@@ -315,6 +323,7 @@ private:
 	ShaderHandle m_shader{};
 	PipelineHandle m_pipeline{};
 	RHITextureHandle m_background_texture{};
+    RHITextureFormat m_background_format=RHITextureFormat::BGRA8_UNorm;
 	TextureHandle m_background_handle{};
 	RHIBufferHandle m_vertex_buffer{};
 	RHIBufferHandle m_index_buffer{};

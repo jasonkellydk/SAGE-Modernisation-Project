@@ -43,6 +43,7 @@ export inline constexpr std::uint32_t W3DChunkStageTextureCoords = 0x0000004A;
 export inline constexpr std::uint32_t W3DChunkPerFaceTextureCoordIds = 0x0000004B;
 export inline constexpr std::uint32_t W3DChunkHierarchy = 0x00000100;
 export inline constexpr std::uint32_t W3DChunkHierarchyHeader = 0x00000101;
+export inline constexpr std::uint32_t W3DChunkPivots = 0x00000102;
 export inline constexpr std::uint32_t W3DChunkAnimation = 0x00000200;
 export inline constexpr std::uint32_t W3DChunkAnimationHeader = 0x00000201;
 export inline constexpr std::uint32_t W3DChunkSizeMask = 0x7FFFFFFF;

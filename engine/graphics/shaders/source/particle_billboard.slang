@@ -12,7 +12,6 @@ struct ParticleVertexOutput
     float2 uv : TEXCOORD0;
     uint emitter_flags : TEXCOORD1;
     uint texture_index : TEXCOORD2;
-    float point_size : PSIZE;
     float point_size_value : TEXCOORD3;
     float2 point_center : TEXCOORD4;
 };
@@ -48,28 +47,45 @@ cbuffer MaterialParameters : register(b0)
     float4 Values[4];
 };
 
+cbuffer ParticleFrame : register(b1)
+{
+    row_major float4x4 ParticleView;
+    row_major float4x4 ParticleProjection;
+    uint4 ParticleOffset;
+};
+
 ParticleVertexOutput particle_billboard_vertex(ParticleVertexInput input, uint instance_id : SV_InstanceID)
 {
-    const GPUParticleData particle = Particles[instance_id];
+    const GPUParticleData particle = Particles[ParticleOffset.x + instance_id];
     const float cosine = cos(particle.angle);
     const float sine = sin(particle.angle);
     const bool billboard = (particle.emitter_flags & 2u) != 0;
     const bool point_sprite = (particle.emitter_flags & 32u) != 0;
-    const float2 basis_x = billboard ? float2(particle.velocity_size.x, 0.0) : particle.velocity_size.xy;
-    const float2 basis_y = billboard ? float2(0.0, particle.velocity_size.w) : particle.velocity_size.zw;
-    const float2 rotated_x = basis_x * cosine + basis_y * sine;
-    const float2 rotated_y = basis_x * -sine + basis_y * cosine;
-    const float2 corner = input.position.x * rotated_x + input.position.y * rotated_y;
-
+    const float size = particle.velocity_size.w;
+    const float4 world_center = float4(particle.position_lifetime.xyz,1);
+    const float4 view_center = mul(ParticleView,world_center);
+    const float4 clip_center = mul(ParticleProjection,view_center);
     ParticleVertexOutput output;
-    output.position = point_sprite
-        ? float4(particle.position_lifetime.xyz, 1.0)
-        : float4(particle.position_lifetime.xy + corner, particle.position_lifetime.z, 1.0);
-    output.point_size = point_sprite ? particle.velocity_size.x : 1.0;
-    output.point_size_value = point_sprite ? particle.velocity_size.x : 1.0;
-    output.point_center = particle.position_lifetime.xy;
+    if (point_sprite) {
+        output.position = clip_center;
+        output.position.xy += input.position.xy * max(size,1.0) / Values[1].xy * clip_center.w;
+    } else if (billboard) {
+        const float2 corner = float2(cosine*input.position.x-sine*input.position.y,
+            sine*input.position.x+cosine*input.position.y)*size;
+        output.position = mul(ParticleProjection,view_center+float4(corner,0,0));
+    } else {
+        // Ground quads rotate in world XY. Project each corner to retain
+        // perspective interpolation and its depth against scene geometry.
+        const float2 corner = float2(cosine*input.position.x+sine*input.position.y,
+            -sine*input.position.x+cosine*input.position.y)*size;
+        output.position = mul(ParticleProjection,mul(ParticleView,world_center+float4(corner,0,0)));
+    }
+    output.point_size_value = point_sprite ? max(size,1.0) : 1.0;
+    output.point_center = clip_center.xy / max(abs(clip_center.w),0.000001);
     output.color = particle.color * Values[0];
-    output.uv = input.uv;
+    // Ground effects assign UV(0,0) to the rotated world (+X,+Y)
+    // corner; billboards assign it to the upper-left view-space corner.
+    output.uv = !billboard && !point_sprite ? float2(1.0-input.uv.x,input.uv.y) : input.uv;
     output.emitter_flags = particle.emitter_flags;
     output.texture_index = particle.texture_index;
     return output;
@@ -79,8 +95,8 @@ float4 particle_billboard_pixel(ParticlePixelInput input) : SV_TARGET
 {
     const bool point_sprite = (input.emitter_flags & 32u) != 0;
     const float2 point_center_pixels = float2(
-        (input.point_center.x + 1.0) * 0.5 * Values[1].x,
-        (1.0 - input.point_center.y) * 0.5 * Values[1].y);
+        Values[1].z + (input.point_center.x + 1.0) * 0.5 * Values[1].x,
+        Values[1].w + (1.0 - input.point_center.y) * 0.5 * Values[1].y);
     const float2 point_sample_uv = point_sprite
         ? (input.position.xy - point_center_pixels) / max(input.point_size_value, 1.0) + 0.5
         : input.uv;
@@ -220,7 +236,7 @@ float4 particle_billboard_pixel(ParticlePixelInput input) : SV_TARGET
     }
 
     const float4 color = input.color * texture_color;
-    if ((input.emitter_flags & 4u) != 0 && color.a < 0.5)
+    if ((input.emitter_flags & 4u) != 0 && color.a < (96.0 / 255.0))
         discard;
     return color;
 }

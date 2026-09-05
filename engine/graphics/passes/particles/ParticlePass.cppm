@@ -21,6 +21,14 @@ export struct ParticleBillboardBinding final
 	std::uint32_t vertex_count = 0;
 };
 
+export struct ParticleFrameParameters final
+{
+	std::array<float, 16> view{};
+	std::array<float, 16> projection{};
+	std::array<std::uint32_t, 4> particle_offset{};
+};
+static_assert(sizeof(ParticleFrameParameters) == 144);
+
 export struct ParticlePassInput final
 {
 	std::span<const ParticleDrawData> draws{};
@@ -29,6 +37,7 @@ export struct ParticlePassInput final
 	GraphResourceHandle color_target{};
 	GraphResourceHandle depth_target{};
 	RHIViewport viewport{};
+	ParticleFrameParameters frame{};
 };
 
 export class ParticlePass final
@@ -43,7 +52,7 @@ public:
 
 		const std::array<GraphResourceUse, 2> uses = {
 			GraphResourceUse::Write(color_target),
-			GraphResourceUse::Read(depth_target)
+			GraphResourceUse::Write(depth_target)
 		};
 		return graph.Add_Pass({pass_key}, uses);
 	}
@@ -64,7 +73,8 @@ public:
 
 		PipelineHandle bound_pipeline{};
 		bool has_bound_pipeline = false;
-		for (const ParticleDrawData &draw : input.draws) {
+		for (std::size_t draw_index = 0; draw_index < input.draws.size();) {
+			const ParticleDrawData &draw = input.draws[draw_index];
 			if (draw.particle_index == Invalid_Particle_Index || draw.material_index == Invalid_Particle_Material_Index || !draw.pipeline.Is_Valid())
 				return false;
 
@@ -75,9 +85,22 @@ public:
 				has_bound_pipeline = true;
 			}
 
-			const std::uint32_t vertex_count = draw.point_sprite ? 1u : input.billboard.vertex_count;
-			if (!command_list.Draw(vertex_count, 0, 1, draw.particle_index))
+			const std::uint32_t vertex_count = input.billboard.vertex_count;
+			std::size_t batch_count = 1;
+			while (draw_index + batch_count < input.draws.size()) {
+				const ParticleDrawData &next = input.draws[draw_index + batch_count];
+				if (next.pipeline != draw.pipeline || next.point_sprite != draw.point_sprite)
+					break;
+				++batch_count;
+			}
+			// The shader's instance ID is local to this draw. Address the packed
+			// particle records explicitly when a blend change starts a new batch.
+			ParticleFrameParameters frame = input.frame;
+			frame.particle_offset[0] = static_cast<std::uint32_t>(draw_index);
+			if (!command_list.Set_Draw_Constants(std::as_bytes(std::span(&frame, 1)))
+				|| !command_list.Draw(vertex_count, 0, static_cast<std::uint32_t>(batch_count), 0))
 				return false;
+			draw_index += batch_count;
 		}
 
 		return true;

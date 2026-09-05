@@ -256,6 +256,13 @@ public:
 		return true;
 	}
 
+	void Clear() noexcept
+	{
+		Clear_Particles();
+		while (!m_emitter_dense_handles.empty())
+			Destroy_Emitter(m_emitter_dense_handles.back());
+	}
+
 	void Clear_Particles() noexcept
 	{
 		m_position_x.clear();

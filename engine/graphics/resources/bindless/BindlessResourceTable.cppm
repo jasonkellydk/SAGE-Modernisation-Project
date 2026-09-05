@@ -5,6 +5,7 @@ module;
 #include <limits>
 #include <span>
 #include <vector>
+#include <unordered_map>
 
 export module Graphics.Resources.Bindless.BindlessResourceTable;
 
@@ -289,7 +290,7 @@ private:
 	}
 
 	template <typename Handle>
-	ResourceIndex Register_Handle(std::vector<MappingSlot> &mappings, Handle handle, RHIBindlessResource resource)
+	ResourceIndex Register_Handle(std::unordered_map<std::uint32_t, MappingSlot> &mappings, Handle handle, RHIBindlessResource resource)
 	{
 		MappingSlot &mapping = Mapping(mappings, handle);
 		if (mapping.generation != 0) {
@@ -312,22 +313,24 @@ private:
 	}
 
 	template <typename Handle>
-	bool Update_Handle(const std::vector<MappingSlot> &mappings, Handle handle, RHIBindlessResource resource) noexcept
+	bool Update_Handle(const std::unordered_map<std::uint32_t, MappingSlot> &mappings, Handle handle, RHIBindlessResource resource) noexcept
 	{
-		if (!handle.Is_Valid() || handle.Get_Index() >= mappings.size())
+		const auto entry = mappings.find(handle.Get_Index());
+		if (!handle.Is_Valid() || entry == mappings.end())
 			return false;
 
-		const MappingSlot &mapping = mappings[handle.Get_Index()];
+		const MappingSlot &mapping = entry->second;
 		return mapping.generation == handle.Get_Generation() && Set_Resource(mapping.index, resource);
 	}
 
 	template <typename Handle>
-	bool Destroy_Handle(std::vector<MappingSlot> &mappings, Handle handle) noexcept
+	bool Destroy_Handle(std::unordered_map<std::uint32_t, MappingSlot> &mappings, Handle handle) noexcept
 	{
-		if (!handle.Is_Valid() || handle.Get_Index() >= mappings.size())
+		const auto entry = mappings.find(handle.Get_Index());
+		if (!handle.Is_Valid() || entry == mappings.end())
 			return false;
 
-		MappingSlot &mapping = mappings[handle.Get_Index()];
+		MappingSlot &mapping = entry->second;
 		if (mapping.generation != handle.Get_Generation() || !mapping.index.Is_Valid())
 			return false;
 
@@ -339,20 +342,19 @@ private:
 	}
 
 	template <typename Handle>
-	static MappingSlot &Mapping(std::vector<MappingSlot> &mappings, Handle handle)
+	static MappingSlot &Mapping(std::unordered_map<std::uint32_t, MappingSlot> &mappings, Handle handle)
 	{
-		if (mappings.size() <= handle.Get_Index())
-			mappings.resize(static_cast<std::size_t>(handle.Get_Index()) + 1);
 		return mappings[handle.Get_Index()];
 	}
 
 	template <typename Handle>
-	static ResourceIndex Find_Index(const std::vector<MappingSlot> &mappings, Handle handle) noexcept
+	static ResourceIndex Find_Index(const std::unordered_map<std::uint32_t, MappingSlot> &mappings, Handle handle) noexcept
 	{
-		if (!handle.Is_Valid() || handle.Get_Index() >= mappings.size())
+		const auto entry = mappings.find(handle.Get_Index());
+		if (!handle.Is_Valid() || entry == mappings.end())
 			return {};
 
-		const MappingSlot &mapping = mappings[handle.Get_Index()];
+		const MappingSlot &mapping = entry->second;
 		return mapping.generation == handle.Get_Generation() ? mapping.index : ResourceIndex{};
 	}
 
@@ -375,18 +377,17 @@ private:
 		}
 	}
 
-	static void Clear_Mappings(std::vector<MappingSlot> &mappings) noexcept
+	static void Clear_Mappings(std::unordered_map<std::uint32_t, MappingSlot> &mappings) noexcept
 	{
-		for (MappingSlot &mapping : mappings)
-			mapping = {};
+		mappings.clear();
 	}
 
 	std::vector<RHIBindlessResource> m_resources;
 	std::vector<std::uint32_t> m_free_next;
-	std::vector<MappingSlot> m_buffers;
-	std::vector<MappingSlot> m_textures;
-	std::vector<MappingSlot> m_samplers;
-	std::vector<MappingSlot> m_materials;
+	std::unordered_map<std::uint32_t, MappingSlot> m_buffers;
+	std::unordered_map<std::uint32_t, MappingSlot> m_textures;
+	std::unordered_map<std::uint32_t, MappingSlot> m_samplers;
+	std::unordered_map<std::uint32_t, MappingSlot> m_materials;
 	std::uint32_t m_free_head = Invalid_Index;
 	std::uint32_t m_texture_free_head = Invalid_Index;
 	std::size_t m_texture_capacity = 0;

@@ -107,9 +107,12 @@ bool Read_UV_Array(W3DByteSpan bytes, std::uint32_t count, std::vector<Vector2f>
 	values.resize(count);
 	for (std::uint32_t index = 0; index < count; ++index) {
 		const std::size_t offset = static_cast<std::size_t>(index) * 8;
-		if (!W3DRead_F32(bytes, offset, values[index].x) || !W3DRead_F32(bytes, offset + 4, values[index].y) ||
-			!std::isfinite(values[index].x) || !std::isfinite(values[index].y))
+		if (!W3DRead_F32(bytes, offset, values[index].x) || !W3DRead_F32(bytes, offset + 4, values[index].y))
 			return false;
+		if (!std::isfinite(values[index].x))
+			values[index].x = 0.0f;
+		if (!std::isfinite(values[index].y))
+			values[index].y = 0.0f;
 		values[index].y = 1.0f - values[index].y;
 	}
 	return true;
@@ -231,6 +234,10 @@ export bool W3DParse_Mesh(W3DByteSpan bytes, W3DParsedMesh &mesh, std::string &e
 	for (const W3DMaterialPass &pass : mesh.materials.passes) {
 		if (pass.vertex_material_index >= mesh.materials.vertex_materials.size()) {
 			error = "material pass references a vertex material outside the material table";
+			return false;
+		}
+		if (pass.shader_index != W3DInvalidIndex && pass.shader_index >= mesh.materials.shaders.size()) {
+			error = "material pass references a shader outside the shader table";
 			return false;
 		}
 		if (pass.texture_index != W3DInvalidIndex && pass.texture_index >= mesh.materials.textures.size()) {

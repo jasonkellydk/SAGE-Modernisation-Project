@@ -87,8 +87,6 @@ public:
 			multiply_description,
 			alpha_test_description
 		};
-		for (PipelineDesc &description : point_sprite_descriptions)
-			description.topology = RHIPrimitiveTopology::PointList;
 		m_pipelines[0] = m_shaders.Create_Pipeline(device, m_shader, pipeline_description);
 		m_pipelines[1] = m_shaders.Create_Pipeline(device, m_shader, additive_description);
 		m_pipelines[2] = m_shaders.Create_Pipeline(device, m_shader, multiply_description);
@@ -163,9 +161,9 @@ public:
 		m_bindless.Clear();
 		if (m_material.Is_Valid())
 			m_materials.Destroy(m_material);
-		m_textures = {};
-		m_materials = {};
-		m_samplers = {};
+		m_textures.Clear();
+		m_materials.Clear();
+		m_samplers.Clear();
 		m_shaders.Destroy(m_shader);
 		m_shader = {};
 		m_material = {};
@@ -177,7 +175,7 @@ public:
 		m_gpu_particles.clear();
 		m_visible_storage.clear();
 		m_draw_storage.clear();
-		m_particles.Clear_Particles();
+		m_particles.Clear();
 		m_gpu_scene = {};
 		m_plan = {};
 		m_graph.reset();
@@ -286,7 +284,7 @@ public:
 		}
 
 		const GPUResidentTexture resident = m_residency->Texture_Info(handle);
-		if (!resident.texture.Is_Valid() || !m_bindless.Register_Texture(handle, resident.texture).Is_Valid()) {
+		if (!resident.texture.Is_Valid()) {
 			m_residency->Destroy_Texture(handle);
 			m_textures.Destroy(handle);
 			return {};
@@ -306,8 +304,7 @@ public:
 		}
 
 		const GPUResidentMaterial resident = m_residency->Material_Info(handle);
-		if (!resident.constants.Is_Valid() || !m_bindless.Register_Material(handle, resident.constants).Is_Valid() || !Rebuild_GPU_Scene()) {
-			m_bindless.Destroy_Material(handle);
+		if (!resident.constants.Is_Valid() || !Rebuild_GPU_Scene()) {
 			m_residency->Destroy_Material(handle);
 			m_materials.Destroy(handle);
 			return {};
@@ -319,7 +316,6 @@ public:
 	{
 		if (m_textures.Resolve(handle) == nullptr || m_residency == nullptr)
 			return false;
-		m_bindless.Destroy_Texture(handle);
 		m_residency->Destroy_Texture(handle);
 		return m_textures.Destroy(handle);
 	}
@@ -328,7 +324,6 @@ public:
 	{
 		if (handle == m_material || m_materials.Resolve(handle) == nullptr || m_residency == nullptr)
 			return false;
-		m_bindless.Destroy_Material(handle);
 		m_residency->Destroy_Material(handle);
 		return m_materials.Destroy(handle) && Rebuild_GPU_Scene();
 	}
@@ -356,12 +351,10 @@ public:
 		if (!Build_Particle_Draw_Data(m_visible_set, m_particles, m_view, m_gpu_scene, {40, m_pipeline, 0}, m_draw_set))
 			return false;
 
-		if (particles.Size() > m_max_particles)
+		if (m_draw_set.Size() > m_max_particles)
 			return false;
-		for (std::size_t index = 0; index < particles.Size(); ++index)
-			m_gpu_particles[index] = Pack_Clip_Particle(particles, index, m_gpu_scene.Material_Index(particles.materials[index]));
-		if (particles.Size() != 0 && !m_device->Update_Buffer(m_particle_buffer, 0, std::as_bytes(std::span<const GPUParticleData>(m_gpu_particles.data(), particles.Size()))))
-			return false;
+		const std::span<const ParticleDrawData> draws = m_draw_set.Records();
+        const ParticleFrameParameters frame_constants{m_view.view_matrix.values,m_view.projection_matrix.values};
 		std::array<float, MaterialParameterBlock::ValueCount> material_values{};
 		material_values[0] = 1.0f;
 		material_values[1] = 1.0f;
@@ -369,6 +362,8 @@ public:
 		material_values[3] = 1.0f;
 		material_values[4] = static_cast<float>(viewport.width);
 		material_values[5] = static_cast<float>(viewport.height);
+        material_values[6] = static_cast<float>(viewport.x);
+        material_values[7] = static_cast<float>(viewport.y);
 		if (!m_device->Update_Buffer(m_material_constants, 0,
 			std::as_bytes(std::span<const float>(material_values))))
 			return false;
@@ -378,17 +373,44 @@ public:
 		if (!m_plan.Is_Valid() && !m_plan.Compile(*m_graph, m_bindings))
 			return false;
 
-		const ParticlePassInput input{
-			m_draw_set.Records(),
-			{m_billboard_buffer, sizeof(ParticleVertex), 6},
-			m_bindless.Resources(),
-			m_color_resource,
-			m_depth_resource,
-			viewport
-		};
-		return m_plan.Execute(*m_graph, commands, [&](GraphPassHandle pass, CommandList &command_list, const PassResources &resources) noexcept {
-			return pass == m_pass && ParticlePass::Execute(command_list, resources, input);
-		});
+		// Texture residency is independent of the number of slots in a draw.
+        // Split only at page boundaries, retaining the sorted particle order.
+        for (std::size_t first = 0; first < draws.size();) {
+            m_bindless.Clear();
+            if (!m_bindless.Register_Buffer(m_particle_buffer).Is_Valid()
+                || !m_bindless.Register_Material(m_material, m_material_constants).Is_Valid()) return false;
+            std::size_t count = 0;
+            std::size_t texture_count = 0;
+            while (first + count < draws.size()) {
+                const auto& draw = draws[first + count];
+                const Material* material = m_materials.Resolve(particles.materials[draw.particle_index]);
+                if (material == nullptr) return false;
+                const TextureHandle texture = material->textures[0];
+                if (texture.Is_Valid() && !m_bindless.Texture_Index(texture).Is_Valid()) {
+                    if (texture_count == 126) break;
+                    const auto resident = m_residency->Texture_Info(texture);
+                    if (!resident.texture.Is_Valid()
+                        || !m_bindless.Register_Texture(texture, resident.texture).Is_Valid()) return false;
+                    ++texture_count;
+                }
+                m_gpu_particles[count] = Pack_Draw_Particle(particles, draw.particle_index, draw.material_index);
+                ++count;
+            }
+            if (!m_device->Update_Buffer(m_particle_buffer, 0,
+                std::as_bytes(std::span<const GPUParticleData>(m_gpu_particles.data(), count)))) return false;
+            const ParticlePassInput input{
+                draws.subspan(first, count),
+                {m_billboard_buffer, sizeof(ParticleVertex), 6},
+                m_bindless.Resources(), m_color_resource, m_depth_resource, viewport, frame_constants
+            };
+            if (!m_plan.Execute(*m_graph, commands,
+                [&](GraphPassHandle pass, CommandList& command_list, const PassResources& resources) noexcept {
+                    return pass == m_pass
+                        && ParticlePass::Execute(command_list, resources, input);
+                })) return false;
+            first += count;
+        }
+        return true;
 	}
 
 	bool Render(RHITextureHandle color_target, RHITextureHandle depth_target, RHIViewport viewport) noexcept
@@ -397,59 +419,17 @@ public:
 	}
 
 private:
-	static std::array<float, 4> Transform(const Matrix4x4 &matrix, float x, float y, float z, float w) noexcept
-	{
-		return {
-			matrix(0, 0) * x + matrix(0, 1) * y + matrix(0, 2) * z + matrix(0, 3) * w,
-			matrix(1, 0) * x + matrix(1, 1) * y + matrix(1, 2) * z + matrix(1, 3) * w,
-			matrix(2, 0) * x + matrix(2, 1) * y + matrix(2, 2) * z + matrix(2, 3) * w,
-			matrix(3, 0) * x + matrix(3, 1) * y + matrix(3, 2) * z + matrix(3, 3) * w
-		};
-	}
-
-	GPUParticleData Pack_Clip_Particle(const ParticleData &particles, std::size_t index, std::uint32_t material_index) const noexcept
-	{
-		GPUParticleData data = Pack_GPU_Particle(particles, index, material_index);
-		if (const Material *material = m_materials.Resolve(particles.materials[index]); material != nullptr && material->textures[0].Is_Valid()) {
-			const ResourceIndex texture_index = m_bindless.Texture_Index(material->textures[0]);
-			if (texture_index.Is_Valid())
-				data.texture_index = texture_index.Get_Index();
-		}
-		const std::array<float, 4> view_position = Transform(m_view.view_matrix, particles.position_x[index], particles.position_y[index], particles.position_z[index], 1.0f);
-		const std::array<float, 4> clip_position = Transform(m_view.projection_matrix, view_position[0], view_position[1], view_position[2], view_position[3]);
-		if (std::isfinite(clip_position[3]) && std::fabs(clip_position[3]) > 1.0e-6f) {
-			const float inverse_w = 1.0f / clip_position[3];
-			const bool billboard = Has_Particle_Emitter_Flag(particles.emitter_flags[index], ParticleEmitterFlags::Billboard);
-			const bool point_sprite = Has_Particle_Emitter_Flag(particles.emitter_flags[index], ParticleEmitterFlags::PointSprite);
-			const float center_x = particles.position_x[index];
-			const float center_y = particles.position_y[index];
-			const float center_z = particles.position_z[index];
-			const auto Project_World = [this](float x, float y, float z) noexcept {
-				const std::array<float, 4> view_position = Transform(m_view.view_matrix, x, y, z, 1.0f);
-				return Transform(m_view.projection_matrix, view_position[0], view_position[1], view_position[2], view_position[3]);
-			};
-			const std::array<float, 4> right_clip = billboard
-				? Transform(m_view.projection_matrix, view_position[0] + particles.sizes[index], view_position[1], view_position[2], view_position[3])
-				: Project_World(center_x + particles.sizes[index], center_y, center_z);
-			const std::array<float, 4> up_clip = billboard
-				? Transform(m_view.projection_matrix, view_position[0], view_position[1] + particles.sizes[index], view_position[2], view_position[3])
-				: Project_World(center_x, center_y + particles.sizes[index], center_z);
-			if (!point_sprite && (!std::isfinite(right_clip[3]) || !std::isfinite(up_clip[3]) || std::fabs(right_clip[3]) <= 1.0e-6f || std::fabs(up_clip[3]) <= 1.0e-6f))
-				return data;
-			data.position_lifetime = {clip_position[0] * inverse_w, clip_position[1] * inverse_w, clip_position[2] * inverse_w, particles.lifetimes[index]};
-			if (point_sprite) {
-				data.velocity_size = {std::max(1.0f, particles.sizes[index]), 0.0f, 0.0f, 0.0f};
-			} else {
-				data.velocity_size = {
-					right_clip[0] / right_clip[3] - data.position_lifetime[0],
-					right_clip[1] / right_clip[3] - data.position_lifetime[1],
-					up_clip[0] / up_clip[3] - data.position_lifetime[0],
-					up_clip[1] / up_clip[3] - data.position_lifetime[1]
-				};
-			}
-		}
-		return data;
-	}
+    GPUParticleData Pack_Draw_Particle(const ParticleData& particles, std::size_t index,
+        std::uint32_t material_index) const noexcept
+    {
+        GPUParticleData data = Pack_GPU_Particle(particles,index,material_index);
+        if (const Material* material = m_materials.Resolve(particles.materials[index]);
+            material != nullptr && material->textures[0].Is_Valid()) {
+            const ResourceIndex texture_index = m_bindless.Texture_Index(material->textures[0]);
+            if (texture_index.Is_Valid()) data.texture_index = texture_index.Get_Index();
+        }
+        return data;
+    }
 
 	bool Rebuild_GPU_Scene() noexcept
 	{

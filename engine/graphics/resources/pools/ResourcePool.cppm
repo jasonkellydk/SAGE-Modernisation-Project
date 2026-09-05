@@ -86,6 +86,12 @@ public:
 		return true;
 	}
 
+	void Clear() noexcept
+	{
+		while (!m_dense_handles.empty())
+			Destroy(m_dense_handles.back());
+	}
+
 	Resource *Resolve(Handle handle) noexcept
 	{
 		if (!Is_Valid_Handle(handle))

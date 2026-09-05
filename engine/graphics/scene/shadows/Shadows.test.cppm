@@ -32,6 +32,62 @@ View Make_View() noexcept
 }
 }
 
+BOOST_AUTO_TEST_CASE(cascade_receivers_and_upstream_casters_fit_gpu_depth_range)
+{
+    const View view = Make_View();
+    RenderLight light;
+    light.type = RenderLightType::Directional;
+    light.flags = RenderLightFlags::Enabled;
+    light.direction = {0,0,-1};
+    const ShadowSettings settings{4,1,100,0.5f,10,1024};
+    ShadowCascades cascades;
+    BOOST_REQUIRE(Build_Shadow_Cascades(view,LightHandle(0,1),light,settings,cascades));
+    for (std::uint32_t cascade=0;cascade<cascades.count;++cascade) {
+        const auto& shadow = cascades.views[cascade];
+        for (const float depth : {shadow.split_near,shadow.split_far}) {
+            for (const float x : {-depth,depth}) {
+                for (const float y : {-depth,depth}) {
+                    const std::array<float,4> world{x,y,-depth,1};
+                    std::array<float,4> clip{};
+                    for (std::size_t row=0;row<4;++row)
+                        for (std::size_t column=0;column<4;++column)
+                            clip[row] += shadow.view_projection(row,column)*world[column];
+                    BOOST_REQUIRE(clip[3] > 0);
+                    BOOST_CHECK_LE(std::abs(clip[0]/clip[3]),1.0001f);
+                    BOOST_CHECK_LE(std::abs(clip[1]/clip[3]),1.0001f);
+                    BOOST_CHECK_GE(clip[2]/clip[3],-0.0001f);
+                    BOOST_CHECK_LE(clip[2]/clip[3],1.0001f);
+                }
+            }
+        }
+        // A caster outside the camera slice can cast into the slice. Padding
+        // must enlarge the depth interval, not just move the light camera.
+        const float caster_z = -shadow.split_near + settings.depth_padding*0.5f;
+        const float caster_depth = shadow.view_projection(2,2)*caster_z + shadow.view_projection(2,3);
+        BOOST_CHECK_GE(caster_depth,0);
+        BOOST_CHECK_LE(caster_depth,1);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(sub_texel_camera_translation_keeps_shadow_xy_projection_stable)
+{
+    View view = Make_View();
+    RenderLight light;
+    light.type = RenderLightType::Directional;
+    light.flags = RenderLightFlags::Enabled;
+    light.direction = {0,0,-1};
+    const ShadowSettings settings{4,1,100,0.5f,10,1024};
+    ShadowCascades before, after;
+    BOOST_REQUIRE(Build_Shadow_Cascades(view,LightHandle(0,1),light,settings,before));
+    view.view_matrix.values[3] = -0.001f;
+    BOOST_REQUIRE(Build_Shadow_Cascades(view,LightHandle(0,1),light,settings,after));
+    for (unsigned cascade=0;cascade<before.count;++cascade) {
+        for (unsigned element : {0u,1u,2u,3u,4u,5u,6u,7u})
+            BOOST_CHECK_SMALL(before.views[cascade].view_projection.values[element]
+                - after.views[cascade].view_projection.values[element],0.000001f);
+    }
+}
+
 BOOST_AUTO_TEST_CASE(cascade_splits_are_deterministic_and_monotonic)
 {
 	std::array<float, 4> splits{};

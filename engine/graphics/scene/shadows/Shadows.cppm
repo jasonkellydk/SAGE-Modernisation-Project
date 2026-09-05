@@ -319,8 +319,9 @@ Matrix4x4 Make_Orthographic(float left, float right, float bottom, float top, fl
 	result.values[3] = -(right + left) / (right - left);
 	result.values[5] = 2.0f / (top - bottom);
 	result.values[7] = -(top + bottom) / (top - bottom);
-	result.values[10] = -2.0f / (far_clip - near_clip);
-	result.values[11] = -(far_clip + near_clip) / (far_clip - near_clip);
+	// Graphics depth textures use the [0,1] clip-depth interval.
+	result.values[10] = -1.0f / (far_clip - near_clip);
+	result.values[11] = -near_clip / (far_clip - near_clip);
 	return result;
 }
 
@@ -350,43 +351,43 @@ bool Build_Cascade_View(
 	if (!Normalize(Cross(right, forward), up))
 		return false;
 
-	float minimum_x = std::numeric_limits<float>::max();
-	float maximum_x = std::numeric_limits<float>::lowest();
-	float minimum_y = std::numeric_limits<float>::max();
-	float maximum_y = std::numeric_limits<float>::lowest();
+	float radius_squared = 0;
 	float minimum_z = std::numeric_limits<float>::max();
 	float maximum_z = std::numeric_limits<float>::lowest();
 	for (const Vector3 corner : corners) {
 		const Vector3 relative = Subtract(corner, center);
-		const float x = Dot(right, relative);
-		const float y = Dot(up, relative);
 		const float z = -Dot(forward, relative);
-		minimum_x = x < minimum_x ? x : minimum_x;
-		maximum_x = x > maximum_x ? x : maximum_x;
-		minimum_y = y < minimum_y ? y : minimum_y;
-		maximum_y = y > maximum_y ? y : maximum_y;
+		const float distance_squared = Dot(relative,relative);
+		radius_squared = distance_squared > radius_squared ? distance_squared : radius_squared;
 		minimum_z = z < minimum_z ? z : minimum_z;
 		maximum_z = z > maximum_z ? z : maximum_z;
 	}
 
 	const float padding = depth_padding > 0.0f ? depth_padding : 0.0f;
-	const float horizontal_extent = maximum_x - minimum_x;
-	const float vertical_extent = maximum_y - minimum_y;
-	if (!std::isfinite(horizontal_extent) || !std::isfinite(vertical_extent) || horizontal_extent <= 0.0f || vertical_extent <= 0.0f)
+	if (!std::isfinite(radius_squared) || radius_squared <= 0)
 		return false;
 
-	const Vector3 origin = Add(center, Multiply(forward, -maximum_z - padding));
-	const float left = minimum_x - padding;
-	const float right_edge = maximum_x + padding;
-	const float bottom = minimum_y - padding;
-	const float top = maximum_y + padding;
-	const float near_plane = padding > Shadow_Epsilon ? padding : Shadow_Epsilon;
-	const float far_plane = near_plane + (maximum_z - minimum_z);
+	// A sphere keeps XY scale invariant under camera rotation. Quantize its
+	// radius to suppress roundoff and reserve a texel for center snapping.
+	const float radius = std::ceil(std::sqrt(radius_squared)*16.0f)/16.0f;
+	const float extent = radius * (1.0f + 2.0f/static_cast<float>(map_size));
+	const float texel_size = 2.0f*extent/static_cast<float>(map_size);
+	const float center_x = Dot(right,center);
+	const float center_y = Dot(up,center);
+	const float snapped_x = std::round(center_x/texel_size)*texel_size;
+	const float snapped_y = std::round(center_y/texel_size)*texel_size;
+	Vector3 origin = Add(center, Multiply(forward, -maximum_z - padding));
+	origin = Add(origin,Multiply(right,snapped_x-center_x));
+	origin = Add(origin,Multiply(up,snapped_y-center_y));
+	// Keep upstream casters in the padded interval. Starting at `padding`
+	// would discard precisely the geometry for which the camera was moved.
+	const float near_plane = 0.0f;
+	const float far_plane = maximum_z - minimum_z + 2.0f * padding;
 	if (!std::isfinite(far_plane) || far_plane <= near_plane)
 		return false;
 
 	shadow_view.view_matrix = Make_Light_View(right, up, forward, origin);
-	shadow_view.projection_matrix = Make_Orthographic(left, right_edge, bottom, top, near_plane, far_plane);
+	shadow_view.projection_matrix = Make_Orthographic(-extent, extent, -extent, extent, near_plane, far_plane);
 	shadow_view.view_projection = Multiply_Matrices(shadow_view.projection_matrix, shadow_view.view_matrix);
 	shadow_view.viewport = {0.0f, 0.0f, static_cast<float>(map_size), static_cast<float>(map_size), 0.0f, 1.0f};
 	shadow_view.split_near = split_near;

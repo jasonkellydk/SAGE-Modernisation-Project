@@ -66,6 +66,9 @@ std::vector<Byte> Make_Material_Data()
 	Append_U32(material_info, 1);
 
 	std::vector<Byte> vertex_material_info(32, Byte{0});
+	vertex_material_info[4] = Byte{20};
+	vertex_material_info[13] = Byte{80};
+	vertex_material_info[18] = Byte{160};
 	vertex_material_info[8] = static_cast<Byte>(200);
 	vertex_material_info[9] = static_cast<Byte>(100);
 	vertex_material_info[10] = static_cast<Byte>(50);
@@ -121,6 +124,9 @@ BOOST_AUTO_TEST_CASE(material_parser_preserves_material_texture_and_pass_relatio
 	BOOST_REQUIRE_EQUAL(data.textures.size(), 1);
 	BOOST_REQUIRE_EQUAL(data.passes.size(), 1);
 	BOOST_CHECK(data.vertex_materials[0].name == "paint");
+	BOOST_CHECK_CLOSE(data.vertex_materials[0].ambient_color.r, 20.0f / 255, 0.001f);
+	BOOST_CHECK_CLOSE(data.vertex_materials[0].specular_color.g, 80.0f / 255, 0.001f);
+	BOOST_CHECK_CLOSE(data.vertex_materials[0].emissive_color.b, 160.0f / 255, 0.001f);
 	BOOST_CHECK(data.textures[0] == "paint.tga");
 	BOOST_CHECK(data.passes[0].vertex_material_index == 0);
 	BOOST_CHECK(data.passes[0].texture_index == 0);

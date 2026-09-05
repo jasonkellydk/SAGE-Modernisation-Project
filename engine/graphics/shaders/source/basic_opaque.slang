@@ -90,13 +90,19 @@ StructuredBuffer<GPUDrawData> Draws : register(t122);
 Texture2D<float4> Textures[122] : register(t0);
 SamplerState MaterialSampler : register(s0);
 
-BasicOpaqueVertexOutput basic_opaque_vertex(BasicOpaqueVertexInput input, uint instance_id : SV_InstanceID)
+cbuffer DrawConstants : register(b1)
+{
+    uint draw_index;
+    uint3 draw_reserved;
+};
+
+BasicOpaqueVertexOutput basic_opaque_vertex(BasicOpaqueVertexInput input)
 {
     BasicOpaqueVertexOutput output;
-    const GPUDrawData draw = Draws[instance_id];
+    const GPUDrawData draw = Draws[draw_index];
     const GPUInstanceData instance = Instances[draw.instance_index];
-    const float4 world_position = mul(float4(input.position, 1.0), instance.transform);
-    output.position = mul(world_position, Views[0].view_projection);
+    const float4 world_position = mul(instance.transform, float4(input.position, 1.0));
+    output.position = mul(Views[0].view_projection, world_position);
     output.color = input.color;
     output.world_position = world_position.xyz;
     output.material_index = draw.material_index;
@@ -104,25 +110,25 @@ BasicOpaqueVertexOutput basic_opaque_vertex(BasicOpaqueVertexInput input, uint i
     return output;
 }
 
-BasicOpaqueVertexOutput basic_opaque_skinned_vertex(SkinnedOpaqueVertexInput input, uint instance_id : SV_InstanceID)
+BasicOpaqueVertexOutput basic_opaque_skinned_vertex(SkinnedOpaqueVertexInput input)
 {
     BasicOpaqueVertexOutput output;
-    const GPUDrawData draw = Draws[instance_id];
+    const GPUDrawData draw = Draws[draw_index];
     const GPUInstanceData instance = Instances[draw.instance_index];
     float4 skinned_position = 0.0.xxxx;
     if (instance.bone_matrix_count != 0)
     {
-        skinned_position += mul(float4(input.position, 1.0), BoneMatrices[instance.bone_matrix_index + input.bone_indices.x].transform) * input.bone_weights.x;
-        skinned_position += mul(float4(input.position, 1.0), BoneMatrices[instance.bone_matrix_index + input.bone_indices.y].transform) * input.bone_weights.y;
-        skinned_position += mul(float4(input.position, 1.0), BoneMatrices[instance.bone_matrix_index + input.bone_indices.z].transform) * input.bone_weights.z;
-        skinned_position += mul(float4(input.position, 1.0), BoneMatrices[instance.bone_matrix_index + input.bone_indices.w].transform) * input.bone_weights.w;
+        skinned_position += mul(BoneMatrices[instance.bone_matrix_index + input.bone_indices.x].transform, float4(input.position, 1.0)) * input.bone_weights.x;
+        skinned_position += mul(BoneMatrices[instance.bone_matrix_index + input.bone_indices.y].transform, float4(input.position, 1.0)) * input.bone_weights.y;
+        skinned_position += mul(BoneMatrices[instance.bone_matrix_index + input.bone_indices.z].transform, float4(input.position, 1.0)) * input.bone_weights.z;
+        skinned_position += mul(BoneMatrices[instance.bone_matrix_index + input.bone_indices.w].transform, float4(input.position, 1.0)) * input.bone_weights.w;
     }
     else
     {
         skinned_position = float4(input.position, 1.0);
     }
-    const float4 world_position = mul(skinned_position, instance.transform);
-    output.position = mul(world_position, Views[0].view_projection);
+    const float4 world_position = mul(instance.transform, skinned_position);
+    output.position = mul(Views[0].view_projection, world_position);
     output.color = input.color;
     output.world_position = world_position.xyz;
     output.material_index = draw.material_index;

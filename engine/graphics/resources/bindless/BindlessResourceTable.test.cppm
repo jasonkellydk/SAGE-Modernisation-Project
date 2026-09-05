@@ -104,3 +104,25 @@ BOOST_AUTO_TEST_CASE(texture_indices_use_the_reserved_texture_range)
 		BOOST_CHECK(table.Is_Valid(material_index));
 	}
 }
+
+BOOST_AUTO_TEST_CASE(sparse_owner_handles_use_compact_resource_slots)
+{
+    BindlessResourceTable table;
+    table.Reserve(4, 0, 4);
+    const TextureHandle dense(1, 1);
+    const TextureHandle sparse(0x40000001u, 1);
+    const auto dense_index = table.Register_Texture(dense, RHITextureHandle(1, 1));
+    const auto sparse_index = table.Register_Texture(sparse, RHITextureHandle(2, 1));
+    BOOST_REQUIRE(dense_index.Is_Valid());
+    BOOST_REQUIRE(sparse_index.Is_Valid());
+    BOOST_CHECK(dense_index != sparse_index);
+    BOOST_CHECK(sparse_index.Get_Index() < 4);
+    BOOST_CHECK(table.Texture_Index(sparse) == sparse_index);
+    BOOST_REQUIRE(table.Update_Texture(sparse, RHITextureHandle(3, 1)));
+    BOOST_CHECK(table.Resolve(sparse_index).texture == RHITextureHandle(3, 1));
+    BOOST_REQUIRE(table.Destroy_Texture(sparse));
+    BOOST_CHECK(!table.Texture_Index(sparse).Is_Valid());
+    BOOST_CHECK(table.Texture_Index(dense) == dense_index);
+    BOOST_CHECK(!table.Register_Texture(sparse, RHITextureHandle(4, 1)).Is_Valid());
+    BOOST_CHECK(table.Register_Texture(TextureHandle(0x40000001u, 2), RHITextureHandle(4, 1)).Is_Valid());
+}

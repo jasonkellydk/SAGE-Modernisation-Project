@@ -24,7 +24,6 @@ export module Graphics.Backends.DX11;
 export import Graphics.RHI;
 
 import Graphics.Resources.Pools.ResourcePool;
-import Graphics.RHI.Frame;
 
 namespace Graphics
 {
@@ -104,7 +103,9 @@ struct DX11Pipeline final
 	DX11NativeObject<ID3D11DepthStencilState> depth_stencil_state;
 	DX11NativeObject<ID3D11BlendState> blend_state;
 	DX11NativeObject<ID3D11RasterizerState> rasterizer_state;
-	DX11NativeObject<ID3D11SamplerState> sampler_state;
+	std::array<DX11NativeObject<ID3D11SamplerState>, 16> sampler_states;
+	std::uint8_t sampler_count = 1;
+    std::uint8_t stencil_reference = 0;
 	RHIPrimitiveTopology topology = RHIPrimitiveTopology::TriangleList;
 };
 
@@ -175,6 +176,7 @@ public:
 	bool Copy_Texture(RHITextureHandle source, RHITextureHandle destination) noexcept override;
 	bool Set_Viewport(RHIViewport viewport) noexcept override;
 	bool Set_Scissor(RHIScissorRect scissor) noexcept override;
+	bool Set_Draw_Constants(std::span<const std::byte> data) noexcept override;
 	bool Set_Vertex_Buffer(std::uint32_t slot, RHIBufferHandle buffer, std::uint32_t stride, std::uint32_t offset) noexcept override;
 	bool Set_Index_Buffer(RHIBufferHandle buffer, RHIIndexFormat format, std::uint32_t offset) noexcept override;
 	bool Draw(std::uint32_t vertex_count, std::uint32_t first_vertex, std::uint32_t instance_count, std::uint32_t first_instance) noexcept override;
@@ -193,6 +195,8 @@ private:
 	RHITextureHandle m_color_target{};
 	RHITextureHandle m_depth_target{};
 	std::span<const RHIBindlessResource> m_bindless_resources{};
+	DX11NativeObject<ID3D11Buffer> m_draw_constants;
+	std::uint32_t m_draw_constants_size = 0;
 };
 
 struct DX11DeviceState final
@@ -271,6 +275,53 @@ static std::uint32_t To_DX11_Bind_Flags(RHIBufferUsage usage) noexcept
 	return 0;
 }
 
+static D3D11_BLEND To_DX11_Blend_Factor(RHIBlendFactor factor)
+{
+    switch(factor) {
+    case RHIBlendFactor::Zero: return D3D11_BLEND_ZERO;
+    case RHIBlendFactor::One: return D3D11_BLEND_ONE;
+    case RHIBlendFactor::SourceColor: return D3D11_BLEND_SRC_COLOR;
+    case RHIBlendFactor::InverseSourceColor: return D3D11_BLEND_INV_SRC_COLOR;
+    case RHIBlendFactor::SourceAlpha: return D3D11_BLEND_SRC_ALPHA;
+    case RHIBlendFactor::InverseSourceAlpha: return D3D11_BLEND_INV_SRC_ALPHA;
+    case RHIBlendFactor::DestinationColor: return D3D11_BLEND_DEST_COLOR;
+    case RHIBlendFactor::InverseDestinationColor: return D3D11_BLEND_INV_DEST_COLOR;
+    case RHIBlendFactor::DestinationAlpha: return D3D11_BLEND_DEST_ALPHA;
+    case RHIBlendFactor::InverseDestinationAlpha: return D3D11_BLEND_INV_DEST_ALPHA;
+    }
+    return static_cast<D3D11_BLEND>(0);
+}
+
+D3D11_STENCIL_OP To_DX11_Stencil(RHIStencilOperation operation)
+{
+    switch(operation) {
+    case RHIStencilOperation::Keep: return D3D11_STENCIL_OP_KEEP;
+    case RHIStencilOperation::Zero: return D3D11_STENCIL_OP_ZERO;
+    case RHIStencilOperation::Replace: return D3D11_STENCIL_OP_REPLACE;
+    case RHIStencilOperation::IncrementSaturate: return D3D11_STENCIL_OP_INCR_SAT;
+    case RHIStencilOperation::DecrementSaturate: return D3D11_STENCIL_OP_DECR_SAT;
+    case RHIStencilOperation::Invert: return D3D11_STENCIL_OP_INVERT;
+    case RHIStencilOperation::Increment: return D3D11_STENCIL_OP_INCR;
+    case RHIStencilOperation::Decrement: return D3D11_STENCIL_OP_DECR;
+    }
+    return static_cast<D3D11_STENCIL_OP>(0);
+}
+
+D3D11_COMPARISON_FUNC To_DX11_Comparison(RHIComparison comparison) noexcept
+{
+    switch (comparison) {
+    case RHIComparison::Never: return D3D11_COMPARISON_NEVER;
+    case RHIComparison::Less: return D3D11_COMPARISON_LESS;
+    case RHIComparison::Equal: return D3D11_COMPARISON_EQUAL;
+    case RHIComparison::LessEqual: return D3D11_COMPARISON_LESS_EQUAL;
+    case RHIComparison::Greater: return D3D11_COMPARISON_GREATER;
+    case RHIComparison::NotEqual: return D3D11_COMPARISON_NOT_EQUAL;
+    case RHIComparison::GreaterEqual: return D3D11_COMPARISON_GREATER_EQUAL;
+    case RHIComparison::Always: return D3D11_COMPARISON_ALWAYS;
+    }
+    return static_cast<D3D11_COMPARISON_FUNC>(0);
+}
+
 static D3D11_PRIMITIVE_TOPOLOGY To_DX11_Topology(RHIPrimitiveTopology topology) noexcept
 {
 	switch (topology) {
@@ -306,7 +357,10 @@ static bool Create_DX11_Pipeline(
 		&& description.topology != RHIPrimitiveTopology::PointList)
 		|| (description.vertex_format != RHIVertexFormat::Position3Color4UV2
 			&& description.vertex_format != RHIVertexFormat::Position3Color4UV2ResourceIndex
-			&& description.vertex_format != RHIVertexFormat::Position3Color4UV2Skinned))
+			&& description.vertex_format != RHIVertexFormat::Position3Color4UV2Skinned
+			&& description.vertex_format != RHIVertexFormat::Position3Color4UV2UV2Normal3))
+		return false;
+	if (description.sampler_count == 0 || description.sampler_count > description.samplers.size())
 		return false;
 	if (vertex_bytecode.empty() || pixel_bytecode.empty())
 		return false;
@@ -321,11 +375,12 @@ static bool Create_DX11_Pipeline(
 		return false;
 	pipeline.pixel_shader.Reset(native_pixel_shader);
 
-	const D3D11_INPUT_ELEMENT_DESC standard_input_elements[] = {
+	D3D11_INPUT_ELEMENT_DESC standard_input_elements[] = {
 		{"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
 		{"COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0},
 		{"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 28, D3D11_INPUT_PER_VERTEX_DATA, 0},
-		{"TEXCOORD", 1, DXGI_FORMAT_R32_UINT, 0, 36, D3D11_INPUT_PER_VERTEX_DATA, 0}
+		{"TEXCOORD", 1, DXGI_FORMAT_R32_UINT, 0, 36, D3D11_INPUT_PER_VERTEX_DATA, 0},
+		{"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 44, D3D11_INPUT_PER_VERTEX_DATA, 0}
 	};
 	const D3D11_INPUT_ELEMENT_DESC skinned_input_elements[] = {
 		{"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
@@ -334,9 +389,26 @@ static bool Create_DX11_Pipeline(
 		{"BLENDINDICES", 0, DXGI_FORMAT_R16G16B16A16_UINT, 0, 36, D3D11_INPUT_PER_VERTEX_DATA, 0},
 		{"BLENDWEIGHT", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 44, D3D11_INPUT_PER_VERTEX_DATA, 0}
 	};
+	if (description.vertex_format == RHIVertexFormat::Position3Color4UV2UV2Normal3)
+		standard_input_elements[3].Format = DXGI_FORMAT_R32G32_FLOAT;
 	const bool is_skinned = description.vertex_format == RHIVertexFormat::Position3Color4UV2Skinned;
 	const D3D11_INPUT_ELEMENT_DESC *input_elements = is_skinned ? skinned_input_elements : standard_input_elements;
-	const UINT input_element_count = is_skinned ? 5u : description.vertex_format == RHIVertexFormat::Position3Color4UV2 ? 3u : 4u;
+	UINT input_element_count = (is_skinned || description.vertex_format == RHIVertexFormat::Position3Color4UV2UV2Normal3) ? 5u : description.vertex_format == RHIVertexFormat::Position3Color4UV2 ? 3u : 4u;
+    std::array<D3D11_INPUT_ELEMENT_DESC,16> custom_elements{};
+    if (description.vertex_element_count > 0) {
+        if (description.vertex_element_count > custom_elements.size()) return false;
+        constexpr const char* semantics[] = {"POSITION","COLOR","NORMAL","TEXCOORD"};
+        constexpr DXGI_FORMAT formats[] = {DXGI_FORMAT_R32G32_FLOAT,DXGI_FORMAT_R32G32B32_FLOAT,DXGI_FORMAT_R32G32B32A32_FLOAT};
+        for (unsigned i=0;i<description.vertex_element_count;++i) {
+            const auto& source = description.vertex_elements[i];
+            const auto semantic = static_cast<unsigned>(source.semantic);
+            const auto format = static_cast<unsigned>(source.format);
+            if (semantic >= std::size(semantics) || format >= std::size(formats)) return false;
+            custom_elements[i] = {semantics[semantic],source.semantic_index,formats[format],0,source.offset,D3D11_INPUT_PER_VERTEX_DATA,0};
+        }
+        input_elements = custom_elements.data();
+        input_element_count = description.vertex_element_count;
+    }
 	ID3D11InputLayout *input_layout = nullptr;
 	if (FAILED(device->CreateInputLayout(input_elements, input_element_count, vertex_bytecode.data(), vertex_bytecode.size(), &input_layout)))
 		return false;
@@ -345,7 +417,21 @@ static bool Create_DX11_Pipeline(
 	D3D11_DEPTH_STENCIL_DESC depth_description{};
 	depth_description.DepthEnable = description.depth_test ? TRUE : FALSE;
 	depth_description.DepthWriteMask = description.depth_write ? D3D11_DEPTH_WRITE_MASK_ALL : D3D11_DEPTH_WRITE_MASK_ZERO;
-	depth_description.DepthFunc = D3D11_COMPARISON_LESS_EQUAL;
+	depth_description.DepthFunc = To_DX11_Comparison(description.depth_comparison);
+    depth_description.StencilEnable = description.stencil.enabled;
+    depth_description.StencilReadMask = description.stencil.read_mask;
+    depth_description.StencilWriteMask = description.stencil.write_mask;
+    const auto stencil_face = [](const RHIStencilFace &face) {
+        D3D11_DEPTH_STENCILOP_DESC result{};
+        result.StencilFunc = To_DX11_Comparison(face.comparison);
+        result.StencilFailOp = To_DX11_Stencil(face.fail);
+        result.StencilDepthFailOp = To_DX11_Stencil(face.depth_fail);
+        result.StencilPassOp = To_DX11_Stencil(face.pass);
+        return result;
+    };
+    depth_description.FrontFace = stencil_face(description.stencil.front);
+    depth_description.BackFace = stencil_face(description.stencil.back);
+
 	ID3D11DepthStencilState *depth_state = nullptr;
 	if (FAILED(device->CreateDepthStencilState(&depth_description, &depth_state)))
 		return false;
@@ -374,39 +460,60 @@ static bool Create_DX11_Pipeline(
 		break;
 	}
 	render_target_blend.BlendOp = To_DX11_Blend_Operation(description.blend_operation);
+    if (description.custom_blend_factors) {
+        render_target_blend.SrcBlend = To_DX11_Blend_Factor(description.source_blend);
+        render_target_blend.DestBlend = To_DX11_Blend_Factor(description.destination_blend);
+    }
 	render_target_blend.SrcBlendAlpha = D3D11_BLEND_ONE;
 	render_target_blend.DestBlendAlpha = description.blend_mode == RHIBlendMode::Alpha ? D3D11_BLEND_INV_SRC_ALPHA : D3D11_BLEND_ZERO;
+    if (description.blend_alpha_like_color) {
+        const auto alpha_factor = [](D3D11_BLEND factor) {
+            if (factor == D3D11_BLEND_DEST_COLOR) return D3D11_BLEND_DEST_ALPHA;
+            if (factor == D3D11_BLEND_SRC_COLOR) return D3D11_BLEND_SRC_ALPHA;
+            if (factor == D3D11_BLEND_INV_SRC_COLOR) return D3D11_BLEND_INV_SRC_ALPHA;
+            if (factor == D3D11_BLEND_INV_DEST_COLOR) return D3D11_BLEND_INV_DEST_ALPHA;
+            return factor;
+        };
+        render_target_blend.SrcBlendAlpha = alpha_factor(render_target_blend.SrcBlend);
+        render_target_blend.DestBlendAlpha = alpha_factor(render_target_blend.DestBlend);
+    }
+
 	render_target_blend.BlendOpAlpha = To_DX11_Blend_Operation(description.blend_operation);
-	render_target_blend.RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+	render_target_blend.RenderTargetWriteMask = description.color_write_mask & D3D11_COLOR_WRITE_ENABLE_ALL;
 	ID3D11BlendState *blend_state = nullptr;
 	if (FAILED(device->CreateBlendState(&blend_description, &blend_state)))
 		return false;
 	pipeline.blend_state.Reset(blend_state);
 
 	D3D11_RASTERIZER_DESC rasterizer_description{};
-	rasterizer_description.FillMode = D3D11_FILL_SOLID;
+	rasterizer_description.FillMode = description.wireframe ? D3D11_FILL_WIREFRAME : D3D11_FILL_SOLID;
 	rasterizer_description.CullMode = To_DX11_Cull_Mode(description.cull_mode);
-	rasterizer_description.FrontCounterClockwise = FALSE;
+	rasterizer_description.FrontCounterClockwise = description.front_counter_clockwise ? TRUE : FALSE;
 	rasterizer_description.DepthClipEnable = TRUE;
+    rasterizer_description.DepthBias = description.depth_bias;
 	rasterizer_description.ScissorEnable = description.scissor_test ? TRUE : FALSE;
 	ID3D11RasterizerState *rasterizer_state = nullptr;
 	if (FAILED(device->CreateRasterizerState(&rasterizer_description, &rasterizer_state)))
 		return false;
 	pipeline.rasterizer_state.Reset(rasterizer_state);
 
-	D3D11_SAMPLER_DESC sampler_description{};
-	sampler_description.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
-	sampler_description.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
-	sampler_description.AddressV = D3D11_TEXTURE_ADDRESS_WRAP;
-	sampler_description.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
-	sampler_description.ComparisonFunc = D3D11_COMPARISON_NEVER;
-	sampler_description.MinLOD = 0.0f;
-	sampler_description.MaxLOD = D3D11_FLOAT32_MAX;
-	ID3D11SamplerState *sampler_state = nullptr;
-	if (FAILED(device->CreateSamplerState(&sampler_description, &sampler_state)))
-		return false;
-	pipeline.sampler_state.Reset(sampler_state);
+	for (std::size_t slot = 0; slot < description.sampler_count; ++slot) {
+        const RHISamplerDescription &sampler = description.samplers[slot];
+        D3D11_SAMPLER_DESC sampler_description{};
+        sampler_description.Filter = sampler.linear_filter ? D3D11_FILTER_MIN_MAG_MIP_LINEAR : D3D11_FILTER_MIN_MAG_MIP_POINT;
+        sampler_description.AddressU = sampler.address[0] == RHISamplerAddress::Clamp ? D3D11_TEXTURE_ADDRESS_CLAMP : D3D11_TEXTURE_ADDRESS_WRAP;
+        sampler_description.AddressV = sampler.address[1] == RHISamplerAddress::Clamp ? D3D11_TEXTURE_ADDRESS_CLAMP : D3D11_TEXTURE_ADDRESS_WRAP;
+        sampler_description.AddressW = sampler.address[2] == RHISamplerAddress::Clamp ? D3D11_TEXTURE_ADDRESS_CLAMP : D3D11_TEXTURE_ADDRESS_WRAP;
+        sampler_description.ComparisonFunc = D3D11_COMPARISON_NEVER;
+        sampler_description.MaxLOD = D3D11_FLOAT32_MAX;
+        ID3D11SamplerState *sampler_state = nullptr;
+        if (FAILED(device->CreateSamplerState(&sampler_description, &sampler_state)))
+            return false;
+        pipeline.sampler_states[slot].Reset(sampler_state);
+    }
 
+	pipeline.sampler_count = description.sampler_count;
+    pipeline.stencil_reference = description.stencil.reference;
 	pipeline.key = description.key;
 	pipeline.topology = description.topology;
 	return true;
@@ -636,6 +743,7 @@ public:
 	CommandList &Immediate_Command_List() noexcept override;
 	SwapChain &Get_Swap_Chain() noexcept override;
 	bool Adopt_Shared_Frame(const DX11SharedFrameResources &resources);
+	RHITextureHandle Import_Texture(void *texture, void *shader_resource_view);
 	bool Begin_Frame() noexcept override;
 	bool End_Frame() noexcept override;
 
@@ -842,16 +950,19 @@ bool DX11CommandList::Bind_Pipeline(RHIPipelineHandle pipeline) noexcept
 		return false;
 
 	DX11Pipeline *resource = m_state->pipelines.Resolve(pipeline);
-	if (resource == nullptr || resource->vertex_shader.Get() == nullptr || resource->pixel_shader.Get() == nullptr || resource->input_layout.Get() == nullptr || resource->depth_stencil_state.Get() == nullptr || resource->blend_state.Get() == nullptr || resource->rasterizer_state.Get() == nullptr || resource->sampler_state.Get() == nullptr)
+	if (resource == nullptr || resource->vertex_shader.Get() == nullptr || resource->pixel_shader.Get() == nullptr || resource->input_layout.Get() == nullptr || resource->depth_stencil_state.Get() == nullptr || resource->blend_state.Get() == nullptr || resource->rasterizer_state.Get() == nullptr || resource->sampler_states[0].Get() == nullptr)
 		return false;
 
 	ID3D11DeviceContext *context = m_state->context.Get();
 	context->IASetInputLayout(resource->input_layout.Get());
 	context->VSSetShader(resource->vertex_shader.Get(), nullptr, 0);
 	context->PSSetShader(resource->pixel_shader.Get(), nullptr, 0);
-	ID3D11SamplerState *sampler_state = resource->sampler_state.Get();
-	context->PSSetSamplers(0, 1, &sampler_state);
-	context->OMSetDepthStencilState(resource->depth_stencil_state.Get(), 0);
+	std::array<ID3D11SamplerState *, 16> samplers{};
+	for (std::size_t slot = 0; slot < resource->sampler_count; ++slot)
+		samplers[slot] = resource->sampler_states[slot].Get();
+	context->PSSetSamplers(0, resource->sampler_count, samplers.data());
+    context->VSSetSamplers(0, resource->sampler_count, samplers.data());
+	context->OMSetDepthStencilState(resource->depth_stencil_state.Get(), resource->stencil_reference);
 	context->OMSetBlendState(resource->blend_state.Get(), nullptr, 0xffffffffu);
 	context->RSSetState(resource->rasterizer_state.Get());
 	context->IASetPrimitiveTopology(To_DX11_Topology(resource->topology));
@@ -925,14 +1036,18 @@ bool DX11CommandList::Set_Bindless_Resources(std::span<const RHIBindlessResource
 			--storage_buffer_slot;
 			break;
 		case RHIResourceType::Texture:
-			if (resource.index.Get_Index() >= 128 || !Bind_Texture_At_Slot(RHIShaderStage::Fragment, resource.index.Get_Index(), resource.texture))
+			if (resource.index.Get_Index() >= 128 || !Bind_Texture_At_Slot(resource.stage, resource.index.Get_Index(), resource.texture))
 				return false;
 			break;
 		case RHIResourceType::Material:
-			if (!Bind_Buffer_At_Slot(RHIShaderStage::Vertex, 0, resource.buffer)
-				|| !Bind_Buffer_At_Slot(RHIShaderStage::Fragment, 0, resource.buffer))
+		{
+			const auto slot = resource.constant_buffer_slot;
+			if (slot >= D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT
+				|| !Bind_Buffer_At_Slot(RHIShaderStage::Vertex, slot, resource.buffer)
+				|| !Bind_Buffer_At_Slot(RHIShaderStage::Fragment, slot, resource.buffer))
 				return false;
 			break;
+		}
 		case RHIResourceType::Sampler:
 		case RHIResourceType::Invalid:
 			break;
@@ -1067,6 +1182,33 @@ bool DX11CommandList::Set_Scissor(RHIScissorRect scissor) noexcept
 	native_scissor.right = static_cast<LONG>(scissor.x + scissor.width);
 	native_scissor.bottom = static_cast<LONG>(scissor.y + scissor.height);
 	m_state->context.Get()->RSSetScissorRects(1, &native_scissor);
+	return true;
+}
+
+bool DX11CommandList::Set_Draw_Constants(std::span<const std::byte> data) noexcept
+{
+	if (!Is_Ready() || data.empty() || data.size() > 256)
+		return false;
+
+	const std::uint32_t byte_size = static_cast<std::uint32_t>((data.size() + 15u) & ~std::size_t(15u));
+	if (m_draw_constants.Get() == nullptr || m_draw_constants_size != byte_size) {
+		D3D11_BUFFER_DESC description{};
+		description.ByteWidth = byte_size;
+		description.Usage = D3D11_USAGE_DEFAULT;
+		description.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+		ID3D11Buffer *native_buffer = nullptr;
+		if (FAILED(m_state->device.Get()->CreateBuffer(&description, nullptr, &native_buffer)))
+			return false;
+		m_draw_constants.Reset(native_buffer);
+		m_draw_constants_size = byte_size;
+	}
+
+	std::array<std::byte, 256> aligned_data{};
+	std::memcpy(aligned_data.data(), data.data(), data.size());
+	m_state->context.Get()->UpdateSubresource(m_draw_constants.Get(), 0, nullptr, aligned_data.data(), 0, 0);
+	ID3D11Buffer *native_buffer = m_draw_constants.Get();
+	m_state->context.Get()->VSSetConstantBuffers(1, 1, &native_buffer);
+	m_state->context.Get()->PSSetConstantBuffers(1, 1, &native_buffer);
 	return true;
 }
 
@@ -1359,7 +1501,8 @@ bool DX11Device::Readback_Texture(RHITextureHandle texture, std::span<std::byte>
 		return false;
 
 	DX11Texture *resource = m_state->textures.Resolve(texture);
-	if (resource == nullptr || resource->object.Get() == nullptr || resource->format != RHITextureFormat::RGBA8_UNorm)
+	if (resource == nullptr || resource->object.Get() == nullptr
+		|| (resource->format != RHITextureFormat::RGBA8_UNorm && resource->format != RHITextureFormat::BGRA8_UNorm))
 		return false;
 
 	D3D11_TEXTURE2D_DESC source_description{};
@@ -1444,6 +1587,41 @@ SwapChain &DX11Device::Get_Swap_Chain() noexcept
 	return m_state->swap_chain;
 }
 
+RHITextureHandle DX11Device::Import_Texture(void *texture, void *shader_resource_view)
+{
+    if (!Is_Valid() || texture == nullptr || shader_resource_view == nullptr)
+        return {};
+    auto *native_texture = static_cast<ID3D11Texture2D *>(texture);
+    auto *native_view = static_cast<ID3D11ShaderResourceView *>(shader_resource_view);
+    ID3D11Device *owner = nullptr;
+    native_texture->GetDevice(&owner);
+    const bool same_device = owner == m_state->device.Get();
+    if (owner != nullptr) owner->Release();
+    if (!same_device) return {};
+    ID3D11Resource *view_resource = nullptr;
+    native_view->GetResource(&view_resource);
+    const bool same_resource = view_resource == native_texture;
+    if (view_resource != nullptr) view_resource->Release();
+    if (!same_resource) return {};
+    D3D11_TEXTURE2D_DESC description{};
+    native_texture->GetDesc(&description);
+    DX11Texture resource;
+    resource.object.Reset(Retain(native_texture));
+    resource.shader_resource_view.Reset(Retain(native_view));
+    resource.width = description.Width;
+    resource.height = description.Height;
+    resource.format = RHITextureFormat::Unknown;
+    for (RHITextureFormat format : {RHITextureFormat::R8_UNorm, RHITextureFormat::RG8_UNorm,
+        RHITextureFormat::RGBA8_UNorm, RHITextureFormat::BGRA8_UNorm, RHITextureFormat::RGBA16_Float,
+        RHITextureFormat::RGBA32_Float, RHITextureFormat::R32_Float}) {
+        if (To_DX11_Format(format) == description.Format) {
+            resource.format = format;
+            break;
+        }
+    }
+    return m_state->textures.Create(std::move(resource));
+}
+
 bool DX11Device::Adopt_Shared_Frame(const DX11SharedFrameResources &resources)
 {
 	if (!Is_Valid() || !m_state->shared_frame || resources.device != m_state->device.Get() || resources.context != m_state->context.Get() || resources.swap_chain != m_state->native_swap_chain.Get() || m_state->frame_active)
@@ -1479,124 +1657,6 @@ bool DX11Device::End_Frame() noexcept
 	m_state->ready_to_present = true;
 	m_state->presented = false;
 	return true;
-}
-
-namespace
-{
-	std::unique_ptr<DX11Device> g_shared_frame_device;
-	FrameOwner g_frame_owner;
-
-	DX11SharedFrameResources Make_Shared_Frame_Resources(
-		void *device,
-		void *context,
-		void *swap_chain,
-		void *back_buffer,
-		void *back_buffer_view,
-		void *depth_buffer,
-		void *depth_buffer_view,
-		std::uint32_t width,
-		std::uint32_t height) noexcept
-	{
-		return {device, context, swap_chain, back_buffer, back_buffer_view, depth_buffer, depth_buffer_view, width, height};
-	}
-}
-
-export extern "C" bool Graphics_DX11_Initialize_Shared_Frame(
-	void *device,
-	void *context,
-	void *swap_chain,
-	void *back_buffer,
-	void *back_buffer_view,
-	void *depth_buffer,
-	void *depth_buffer_view,
-	std::uint32_t width,
-	std::uint32_t height)
-{
-	if (device == nullptr || context == nullptr || swap_chain == nullptr || back_buffer == nullptr || back_buffer_view == nullptr
-		|| depth_buffer == nullptr || depth_buffer_view == nullptr || width == 0 || height == 0 || g_frame_owner.Phase() != FrameOwnerPhase::Idle)
-		return false;
-
-	const DX11SharedFrameResources resources = Make_Shared_Frame_Resources(device, context, swap_chain, back_buffer, back_buffer_view, depth_buffer, depth_buffer_view, width, height);
-	if (g_shared_frame_device != nullptr)
-		return g_shared_frame_device->Adopt_Shared_Frame(resources);
-
-	DX11DeviceOptions options;
-	options.shared_frame = &resources;
-	std::unique_ptr<DX11Device> device_instance = std::make_unique<DX11Device>(options);
-	if (!device_instance->Is_Valid() || !device_instance->Get_Swap_Chain().Is_Valid())
-		return false;
-
-	g_shared_frame_device = std::move(device_instance);
-	const RHIBackbuffer backbuffer = g_shared_frame_device->Get_Swap_Chain().Backbuffer();
-	const RHIDepthTarget depth = g_shared_frame_device->Get_Swap_Chain().Depth_Target();
-	return backbuffer.texture.Is_Valid() && depth.texture.Is_Valid();
-}
-
-export extern "C" bool Graphics_DX11_Update_Shared_Frame(
-	void *device,
-	void *context,
-	void *swap_chain,
-	void *back_buffer,
-	void *back_buffer_view,
-	void *depth_buffer,
-	void *depth_buffer_view,
-	std::uint32_t width,
-	std::uint32_t height)
-{
-	if (g_shared_frame_device == nullptr || g_frame_owner.Phase() != FrameOwnerPhase::Idle)
-		return false;
-
-	return g_shared_frame_device->Adopt_Shared_Frame(Make_Shared_Frame_Resources(device, context, swap_chain, back_buffer, back_buffer_view, depth_buffer, depth_buffer_view, width, height));
-}
-
-export extern "C" bool Graphics_DX11_Begin_Frame() noexcept
-{
-	return g_shared_frame_device != nullptr && g_frame_owner.Begin_Frame(*g_shared_frame_device);
-}
-
-export extern "C" bool Graphics_DX11_Begin_Modern_Phase() noexcept
-{
-	return g_shared_frame_device != nullptr && g_frame_owner.Begin_Modern_Phase(*g_shared_frame_device);
-}
-
-export bool Register_Modern_Phase_Executor(ModernPhaseInitializer initializer, ModernPhaseExecutor executor)
-{
-	if (g_shared_frame_device == nullptr || g_frame_owner.Phase() != FrameOwnerPhase::Idle)
-		return false;
-	if (initializer != nullptr && !initializer(*g_shared_frame_device))
-		return false;
-
-	return g_frame_owner.Set_Modern_Phase_Executor(executor);
-}
-
-export extern "C" bool Graphics_DX11_End_Frame() noexcept
-{
-	return g_shared_frame_device != nullptr && g_frame_owner.End_Frame(*g_shared_frame_device);
-}
-
-export extern "C" bool Graphics_DX11_Present() noexcept
-{
-	return g_shared_frame_device != nullptr && g_frame_owner.Present(*g_shared_frame_device);
-}
-
-export extern "C" void Graphics_DX11_Abort_Frame() noexcept
-{
-	if (g_shared_frame_device != nullptr)
-		g_frame_owner.Abort(*g_shared_frame_device);
-}
-
-export extern "C" std::uint32_t Graphics_DX11_Frame_Invalid_Operation_Count() noexcept
-{
-	return g_frame_owner.Invalid_Operation_Count();
-}
-
-export extern "C" void Graphics_DX11_Shutdown_Shared_Frame() noexcept
-{
-	if (g_shared_frame_device != nullptr)
-		g_frame_owner.Abort(*g_shared_frame_device);
-
-	g_frame_owner.Set_Modern_Phase_Executor(nullptr);
-	g_shared_frame_device.reset();
 }
 
 }

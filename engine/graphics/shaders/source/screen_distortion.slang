@@ -26,5 +26,5 @@ ScreenDistortionVertexOutput screen_distortion_vertex(ScreenDistortionVertexInpu
 
 float4 screen_distortion_pixel(ScreenDistortionVertexOutput input) : SV_TARGET
 {
-    return Background.Sample(LinearSampler, input.uv) * input.color;
+    return float4(Background.Sample(LinearSampler, input.uv).rgb * input.color.rgb, input.color.a);
 }

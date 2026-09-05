@@ -80,3 +80,26 @@ BOOST_AUTO_TEST_CASE(particle_visibility_rejects_insufficient_output_storage)
 	BOOST_CHECK(!Build_Visible_Particles(particles, Make_View(), visible_particles));
 	BOOST_CHECK(visible_particles.Size() == 0);
 }
+
+BOOST_AUTO_TEST_CASE(rotated_particle_corners_remain_visible_at_the_camera_edge)
+{
+    ParticleSystem particles;
+    particles.Reserve(1,1);
+    ParticleEmitter emitter;
+    emitter.position = {1.6f,0,0.5f};
+    emitter.particle_size = 0.5f;
+    emitter.flags = ParticleEmitterFlags::Enabled | ParticleEmitterFlags::Billboard;
+    const auto handle = particles.Create_Emitter(emitter);
+    BOOST_REQUIRE(particles.Spawn(handle,1));
+    std::array<std::uint32_t,1> storage{};
+    VisibleParticleSet visible(storage);
+    const View view{Matrix4x4::Identity(),Matrix4x4::Identity(),{}, {0,0,64,64,0,1}};
+    BOOST_REQUIRE(Build_Visible_Particles(particles,view,visible));
+    BOOST_CHECK_EQUAL(visible.Size(),1);
+    emitter.position.x = 1.8f;
+    particles.Clear_Particles();
+    BOOST_REQUIRE(particles.Update_Emitter(handle,emitter));
+    BOOST_REQUIRE(particles.Spawn(handle,1));
+    BOOST_REQUIRE(Build_Visible_Particles(particles,view,visible));
+    BOOST_CHECK_EQUAL(visible.Size(),0);
+}

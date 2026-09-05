@@ -26,7 +26,7 @@ export import Graphics.Scene.Models.Skinning;
 export import Graphics.Scene.Views.View;
 export import Graphics.Scene.Visibility;
 export import Graphics.Shaders.Library;
-export import Graphics.RHI.Frame;
+export import Graphics.FrameTargets;
 
 namespace Graphics
 {

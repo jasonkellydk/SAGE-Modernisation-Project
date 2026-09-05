@@ -15,12 +15,25 @@ export module Graphics.Backends.DX11.Tests;
 #endif
 
 import Graphics.Backends.DX11;
-import Graphics.RHI.Frame;
+import Graphics.Backends.DX11.Coexistence;
+import Graphics.RenderGraph.Frame;
 import Graphics.Passes.Opaque;
 import Graphics.Resources.Bindless.BindlessResourceTable;
 import Graphics.Resources.Residency.GPUResourceResidency;
 
 using namespace Graphics;
+
+BOOST_AUTO_TEST_CASE(dx11_coexistence_requires_a_shared_device)
+{
+	Graphics_DX11_Shutdown_Shared_Frame();
+	BOOST_CHECK(!Register_Graphics_Phase_Executor(nullptr, nullptr));
+	BOOST_CHECK(!Graphics_DX11_Begin_Frame());
+	BOOST_CHECK(!Graphics_DX11_Begin_Graphics_Phase());
+	BOOST_CHECK(!Graphics_DX11_End_Frame());
+	BOOST_CHECK(!Graphics_DX11_Present());
+	Graphics_DX11_Abort_Frame();
+	Graphics_DX11_Shutdown_Shared_Frame();
+}
 
 static LRESULT CALLBACK Frame_Test_Window_Proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
 {

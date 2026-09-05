@@ -50,6 +50,7 @@ export struct ModelAssetDesc final
 	float lod_min = 0.0f;
 	float lod_max = 0.0f;
 	Bounds3f bounds{};
+	std::uint32_t skin_bone_count = 0;
 	std::vector<ModelVertexDesc> vertices;
 	std::vector<std::uint32_t> indices;
 	std::vector<ModelSubmeshDesc> submeshes;
@@ -86,6 +87,12 @@ export struct ModelMaterial final
 	float opacity = 1.0f;
 	float translucency = 0.0f;
 	std::uint32_t source_attributes = 0;
+	MaterialRenderMode render_mode = MaterialRenderMode::Opaque;
+	bool depth_write = true;
+	bool texturing = true;
+	Color4f ambient_color{};
+	Color4f specular_color{0, 0, 0, 1};
+	Color4f emissive_color{0, 0, 0, 1};
 };
 
 export class ModelAsset final
@@ -105,6 +112,7 @@ public:
 	float LOD_Min() const noexcept;
 	float LOD_Max() const noexcept;
 	const Bounds3f &Bounds() const noexcept;
+	std::uint32_t Skin_Bone_Count() const noexcept;
 	std::span<const ModelVertex> Vertices() const noexcept;
 	std::span<const std::uint32_t> Indices() const noexcept;
 	std::span<const ModelSubmesh> Submeshes() const noexcept;
@@ -121,6 +129,7 @@ private:
 	float m_lod_min = 0.0f;
 	float m_lod_max = 0.0f;
 	Bounds3f m_bounds{};
+	std::uint32_t m_skin_bone_count = 0;
 	std::vector<ModelVertex> m_vertices;
 	std::vector<std::uint32_t> m_indices;
 	std::vector<ModelSubmesh> m_submeshes;
@@ -145,7 +154,8 @@ ModelAsset::ModelAsset(
 	  m_sort_level(description.sort_level),
 	  m_lod_min(description.lod_min),
 	  m_lod_max(description.lod_max),
-	  m_bounds(description.bounds)
+	  m_bounds(description.bounds),
+	  m_skin_bone_count(description.skin_bone_count)
 {
 	m_vertices.reserve(description.vertices.size());
 	for (const ModelVertexDesc &vertex : description.vertices) {
@@ -184,7 +194,13 @@ ModelAsset::ModelAsset(
 			material.shininess,
 			material.opacity,
 			material.translucency,
-			material.source_attributes});
+			material.source_attributes,
+			material.render_mode,
+			material.depth_write,
+			material.texturing,
+			material.ambient_color,
+			material.specular_color,
+			material.emissive_color});
 	}
 
 	m_dependencies.reserve(description.dependencies.size());
@@ -238,6 +254,11 @@ float ModelAsset::LOD_Max() const noexcept
 const Bounds3f &ModelAsset::Bounds() const noexcept
 {
 	return m_bounds;
+}
+
+std::uint32_t ModelAsset::Skin_Bone_Count() const noexcept
+{
+	return m_skin_bone_count;
 }
 
 std::span<const ModelVertex> ModelAsset::Vertices() const noexcept

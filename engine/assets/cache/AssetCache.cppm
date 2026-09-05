@@ -20,9 +20,11 @@ export module Assets.Cache;
 import Assets.Cache.ModelLoadTask;
 import Assets.Cache.MaterialLoadTask;
 import Assets.Cache.TextureLoadTask;
+import Assets.Cache.FontLoadTask;
 import Assets.Handles;
 import Assets.Identity;
 import Assets.Importers.Models;
+import Assets.Fonts;
 import Assets.Materials;
 import Assets.Models;
 import Assets.States;
@@ -45,24 +47,29 @@ public:
 	ModelAssetHandle Request_Model(std::string_view name);
 	MaterialAssetHandle Request_Material(MaterialAssetDesc description);
 	TextureAssetHandle Request_Texture(std::string_view name);
+	FontAssetHandle Request_Font(std::string_view family, std::uint32_t point_size, bool bold);
 
 	AssetState Get_State(ModelAssetHandle handle) const noexcept;
 	AssetState Get_State(MaterialAssetHandle handle) const noexcept;
 	AssetState Get_State(TextureAssetHandle handle) const noexcept;
+	AssetState Get_State(FontAssetHandle handle) const noexcept;
 
 	// These are non-owning views. Consumers retain the typed handle and must
 	// keep this cache alive while using a returned asset.
 	const ModelAsset *Try_Get_Model(ModelAssetHandle handle) const noexcept;
 	const MaterialAsset *Try_Get_Material(MaterialAssetHandle handle) const noexcept;
 	const TextureAsset *Try_Get_Texture(TextureAssetHandle handle) const noexcept;
+	const FontAsset *Try_Get_Font(FontAssetHandle handle) const noexcept;
 
 	std::string Get_Error(ModelAssetHandle handle) const;
 	std::string Get_Error(MaterialAssetHandle handle) const;
 	std::string Get_Error(TextureAssetHandle handle) const;
+	std::string Get_Error(FontAssetHandle handle) const;
 
 	void Wait(ModelAssetHandle handle) const;
 	void Wait(MaterialAssetHandle handle) const;
 	void Wait(TextureAssetHandle handle) const;
+	void Wait(FontAssetHandle handle) const;
 
 	// Dependency views are published before the owning asset becomes Ready.
 	// Callers should query them after observing Ready.
@@ -73,8 +80,11 @@ public:
 	std::size_t Model_Count() const noexcept;
 	std::size_t Material_Count() const noexcept;
 	std::size_t Texture_Count() const noexcept;
+	std::size_t Font_Count() const noexcept;
 
 private:
+	MaterialAssetHandle Request_Material(AssetIdentity identity, MaterialAssetDesc description);
+
 	struct ModelEntry final
 	{
 		AssetIdentity identity;
@@ -112,6 +122,17 @@ private:
 		std::shared_future<void> completion;
 	};
 
+	struct FontEntry final
+	{
+		AssetIdentity identity;
+		FontAssetHandle handle;
+		std::atomic<AssetState> state{AssetState::Unloaded};
+		std::shared_ptr<const FontAsset> asset;
+		mutable std::mutex error_mutex;
+		std::string error;
+		std::shared_future<void> completion;
+	};
+
 	struct ModelSnapshot final
 	{
 		std::vector<std::shared_ptr<ModelEntry>> entries;
@@ -130,6 +151,12 @@ private:
 		std::unordered_map<std::string, TextureAssetHandle> handles;
 	};
 
+	struct FontSnapshot final
+	{
+		std::vector<std::shared_ptr<FontEntry>> entries;
+		std::unordered_map<std::string, FontAssetHandle> handles;
+	};
+
 	static std::shared_ptr<ModelEntry> Find_Model_Entry(
 		const std::shared_ptr<const ModelSnapshot> &snapshot,
 		ModelAssetHandle handle) noexcept;
@@ -139,10 +166,14 @@ private:
 	static std::shared_ptr<TextureEntry> Find_Texture_Entry(
 		const std::shared_ptr<const TextureSnapshot> &snapshot,
 		TextureAssetHandle handle) noexcept;
+	static std::shared_ptr<FontEntry> Find_Font_Entry(
+		const std::shared_ptr<const FontSnapshot> &snapshot,
+		FontAssetHandle handle) noexcept;
 
 	static void Set_Failure(const std::shared_ptr<ModelEntry> &entry, std::string error) noexcept;
 	static void Set_Failure(const std::shared_ptr<MaterialEntry> &entry, std::string error) noexcept;
 	static void Set_Failure(const std::shared_ptr<TextureEntry> &entry, std::string error) noexcept;
+	static void Set_Failure(const std::shared_ptr<FontEntry> &entry, std::string error) noexcept;
 	static std::string Dependency_Error(
 		std::string_view owner_type,
 		std::string_view dependency_name,
@@ -155,13 +186,15 @@ private:
 	std::shared_ptr<const ModelSnapshot> m_model_snapshot;
 	std::shared_ptr<const MaterialSnapshot> m_material_snapshot;
 	std::shared_ptr<const TextureSnapshot> m_texture_snapshot;
+	std::shared_ptr<const FontSnapshot> m_font_snapshot;
 };
 
 AssetCache::AssetCache(AssetSource source)
 	: m_source(std::move(source)),
 	  m_model_snapshot(std::make_shared<const ModelSnapshot>()),
 	  m_material_snapshot(std::make_shared<const MaterialSnapshot>()),
-	  m_texture_snapshot(std::make_shared<const TextureSnapshot>())
+	  m_texture_snapshot(std::make_shared<const TextureSnapshot>()),
+	  m_font_snapshot(std::make_shared<const FontSnapshot>())
 {
 }
 
@@ -226,7 +259,10 @@ ModelAssetHandle AssetCache::Request_Model(std::string_view name)
 				entry->material_dependencies.reserve(description->materials.size());
 				for (const ModelMaterialDesc &material : description->materials) {
 					material_names.push_back(Canonicalize_Asset_Name(material.name));
-					const MaterialAssetHandle material_handle = Request_Material(material);
+					const MaterialAssetHandle material_handle = material.scope == MaterialScope::Model
+						? Request_Material({AssetType::Material, entry->identity.canonical_name
+							+ "#material/" + std::to_string(material_handles.size())}, material)
+						: Request_Material(material);
 					if (!material_handle.Is_Valid()) {
 						Set_Failure(entry, "model contains a material with an empty identity");
 						return;
@@ -290,6 +326,29 @@ ModelAssetHandle AssetCache::Request_Model(std::string_view name)
 					}
 				}
 
+				// Publish resolved identities for embedded material dependencies.
+				// One authored name can refer to several distinct pass variants.
+				std::vector<AssetDependencyDesc> resolved_dependencies;
+				for (const AssetDependencyDesc &dependency : description->dependencies) {
+					if (dependency.type != AssetType::Material) {
+						resolved_dependencies.push_back(dependency);
+						continue;
+					}
+					const std::string name = Canonicalize_Asset_Name(dependency.name);
+					for (std::size_t index = 0; index != material_names.size(); ++index) {
+						if (material_names[index] != name)
+							continue;
+						const auto &identity = Try_Get_Material(material_handles[index])->Identity();
+						const bool duplicate = std::any_of(resolved_dependencies.begin(), resolved_dependencies.end(),
+							[&identity](const AssetDependencyDesc &existing) {
+								return existing.type == identity.type && existing.name == identity.canonical_name;
+							});
+						if (!duplicate)
+							resolved_dependencies.push_back({identity.type, identity.canonical_name});
+					}
+				}
+				description->dependencies = std::move(resolved_dependencies);
+
 				const auto runtime = std::make_shared<const ModelAsset>(
 					entry->identity,
 					std::move(*description),
@@ -320,8 +379,14 @@ ModelAssetHandle AssetCache::Request_Model(std::string_view name)
 
 MaterialAssetHandle AssetCache::Request_Material(MaterialAssetDesc description)
 {
-	const std::string canonical_name = Canonicalize_Asset_Name(description.name);
-	if (canonical_name.empty())
+	AssetIdentity identity{AssetType::Material, Canonicalize_Asset_Name(description.name)};
+	return Request_Material(std::move(identity), std::move(description));
+}
+
+MaterialAssetHandle AssetCache::Request_Material(AssetIdentity identity, MaterialAssetDesc description)
+{
+	const std::string &canonical_name = identity.canonical_name;
+	if (canonical_name.empty() || Canonicalize_Asset_Name(description.name).empty())
 		return MaterialAssetHandle::Invalid();
 
 	std::lock_guard lock(m_request_mutex);
@@ -469,6 +534,66 @@ TextureAssetHandle AssetCache::Request_Texture(std::string_view name)
 	return handle;
 }
 
+FontAssetHandle AssetCache::Request_Font(std::string_view family, std::uint32_t point_size, bool bold)
+{
+	const std::string canonical_family = Canonicalize_Asset_Name(family);
+	if (canonical_family.empty() || point_size == 0)
+		return FontAssetHandle::Invalid();
+
+	const std::string canonical_name = "font/" + canonical_family + "/"
+		+ std::to_string(point_size) + "/" + (bold ? "1" : "0");
+	std::lock_guard lock(m_request_mutex);
+	const std::shared_ptr<const FontSnapshot> current =
+		std::atomic_load_explicit(&m_font_snapshot, std::memory_order_acquire);
+	const auto existing = current->handles.find(canonical_name);
+	if (existing != current->handles.end())
+		return existing->second;
+
+	if (current->entries.size() >= std::numeric_limits<FontAssetHandle::Index>::max())
+		return FontAssetHandle::Invalid();
+
+	const FontAssetHandle handle(
+		static_cast<FontAssetHandle::Index>(current->entries.size()),
+		FontAssetHandle::Generation{1});
+	auto entry = std::make_shared<FontEntry>();
+	entry->identity = {AssetType::Font, canonical_name};
+	entry->handle = handle;
+	entry->state.store(AssetState::Loading, std::memory_order_release);
+	const AssetSource source = m_source;
+	try {
+		entry->completion = std::async(
+			std::launch::async,
+			[entry, source]() {
+				try {
+					const FontLoadResult loaded = Load_Font_Asset(entry->identity, source);
+					if (!loaded.Succeeded()) {
+						Set_Failure(entry, loaded.error);
+						return;
+					}
+					std::atomic_store_explicit(&entry->asset, loaded.asset, std::memory_order_release);
+					entry->state.store(AssetState::Ready, std::memory_order_release);
+				} catch (const std::exception &exception) {
+					Set_Failure(entry, exception.what());
+				} catch (...) {
+					Set_Failure(entry, "unknown exception while loading font");
+				}
+			});
+	} catch (const std::exception &exception) {
+		Set_Failure(entry, exception.what());
+	} catch (...) {
+		Set_Failure(entry, "could not start asynchronous font load");
+	}
+
+	auto next = std::make_shared<FontSnapshot>(*current);
+	next->entries.push_back(entry);
+	next->handles.emplace(canonical_name, handle);
+	std::atomic_store_explicit(
+		&m_font_snapshot,
+		std::shared_ptr<const FontSnapshot>(std::move(next)),
+		std::memory_order_release);
+	return handle;
+}
+
 AssetState AssetCache::Get_State(ModelAssetHandle handle) const noexcept
 {
 	const auto snapshot = std::atomic_load_explicit(&m_model_snapshot, std::memory_order_acquire);
@@ -487,6 +612,13 @@ AssetState AssetCache::Get_State(TextureAssetHandle handle) const noexcept
 {
 	const auto snapshot = std::atomic_load_explicit(&m_texture_snapshot, std::memory_order_acquire);
 	const auto entry = Find_Texture_Entry(snapshot, handle);
+	return entry ? entry->state.load(std::memory_order_acquire) : AssetState::Unloaded;
+}
+
+AssetState AssetCache::Get_State(FontAssetHandle handle) const noexcept
+{
+	const auto snapshot = std::atomic_load_explicit(&m_font_snapshot, std::memory_order_acquire);
+	const auto entry = Find_Font_Entry(snapshot, handle);
 	return entry ? entry->state.load(std::memory_order_acquire) : AssetState::Unloaded;
 }
 
@@ -514,6 +646,16 @@ const TextureAsset *AssetCache::Try_Get_Texture(TextureAssetHandle handle) const
 {
 	const auto snapshot = std::atomic_load_explicit(&m_texture_snapshot, std::memory_order_acquire);
 	const auto entry = Find_Texture_Entry(snapshot, handle);
+	if (!entry || entry->state.load(std::memory_order_acquire) != AssetState::Ready)
+		return nullptr;
+	const auto asset = std::atomic_load_explicit(&entry->asset, std::memory_order_acquire);
+	return asset.get();
+}
+
+const FontAsset *AssetCache::Try_Get_Font(FontAssetHandle handle) const noexcept
+{
+	const auto snapshot = std::atomic_load_explicit(&m_font_snapshot, std::memory_order_acquire);
+	const auto entry = Find_Font_Entry(snapshot, handle);
 	if (!entry || entry->state.load(std::memory_order_acquire) != AssetState::Ready)
 		return nullptr;
 	const auto asset = std::atomic_load_explicit(&entry->asset, std::memory_order_acquire);
@@ -550,6 +692,16 @@ std::string AssetCache::Get_Error(TextureAssetHandle handle) const
 	return entry->error;
 }
 
+std::string AssetCache::Get_Error(FontAssetHandle handle) const
+{
+	const auto snapshot = std::atomic_load_explicit(&m_font_snapshot, std::memory_order_acquire);
+	const auto entry = Find_Font_Entry(snapshot, handle);
+	if (!entry)
+		return "invalid font asset handle";
+	std::lock_guard lock(entry->error_mutex);
+	return entry->error;
+}
+
 void AssetCache::Wait(ModelAssetHandle handle) const
 {
 	const auto snapshot = std::atomic_load_explicit(&m_model_snapshot, std::memory_order_acquire);
@@ -570,6 +722,14 @@ void AssetCache::Wait(TextureAssetHandle handle) const
 {
 	const auto snapshot = std::atomic_load_explicit(&m_texture_snapshot, std::memory_order_acquire);
 	const auto entry = Find_Texture_Entry(snapshot, handle);
+	if (entry && entry->completion.valid())
+		entry->completion.wait();
+}
+
+void AssetCache::Wait(FontAssetHandle handle) const
+{
+	const auto snapshot = std::atomic_load_explicit(&m_font_snapshot, std::memory_order_acquire);
+	const auto entry = Find_Font_Entry(snapshot, handle);
 	if (entry && entry->completion.valid())
 		entry->completion.wait();
 }
@@ -616,6 +776,11 @@ std::size_t AssetCache::Texture_Count() const noexcept
 	return std::atomic_load_explicit(&m_texture_snapshot, std::memory_order_acquire)->entries.size();
 }
 
+std::size_t AssetCache::Font_Count() const noexcept
+{
+	return std::atomic_load_explicit(&m_font_snapshot, std::memory_order_acquire)->entries.size();
+}
+
 std::shared_ptr<AssetCache::ModelEntry> AssetCache::Find_Model_Entry(
 	const std::shared_ptr<const ModelSnapshot> &snapshot,
 	ModelAssetHandle handle) noexcept
@@ -646,6 +811,16 @@ std::shared_ptr<AssetCache::TextureEntry> AssetCache::Find_Texture_Entry(
 	return entry && entry->handle == handle ? entry : std::shared_ptr<TextureEntry>{};
 }
 
+std::shared_ptr<AssetCache::FontEntry> AssetCache::Find_Font_Entry(
+	const std::shared_ptr<const FontSnapshot> &snapshot,
+	FontAssetHandle handle) noexcept
+{
+	if (!handle.Is_Valid() || handle.Get_Index() >= snapshot->entries.size())
+		return {};
+	const std::shared_ptr<FontEntry> &entry = snapshot->entries[handle.Get_Index()];
+	return entry && entry->handle == handle ? entry : std::shared_ptr<FontEntry>{};
+}
+
 void AssetCache::Set_Failure(const std::shared_ptr<ModelEntry> &entry, std::string error) noexcept
 {
 	try {
@@ -673,6 +848,19 @@ void AssetCache::Set_Failure(const std::shared_ptr<MaterialEntry> &entry, std::s
 }
 
 void AssetCache::Set_Failure(const std::shared_ptr<TextureEntry> &entry, std::string error) noexcept
+{
+	try {
+		{
+			std::lock_guard lock(entry->error_mutex);
+			entry->error = std::move(error);
+		}
+		entry->state.store(AssetState::Failed, std::memory_order_release);
+	} catch (...) {
+		entry->state.store(AssetState::Failed, std::memory_order_release);
+	}
+}
+
+void AssetCache::Set_Failure(const std::shared_ptr<FontEntry> &entry, std::string error) noexcept
 {
 	try {
 		{
@@ -716,6 +904,12 @@ void AssetCache::Wait_All() const
 
 	const auto texture_snapshot = std::atomic_load_explicit(&m_texture_snapshot, std::memory_order_acquire);
 	for (const auto &entry : texture_snapshot->entries) {
+		if (entry && entry->completion.valid())
+			entry->completion.wait();
+	}
+
+	const auto font_snapshot = std::atomic_load_explicit(&m_font_snapshot, std::memory_order_acquire);
+	for (const auto &entry : font_snapshot->entries) {
 		if (entry && entry->completion.valid())
 			entry->completion.wait();
 	}

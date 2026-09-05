@@ -57,7 +57,8 @@ export enum class RHITextureFormat : std::uint8_t
 	RGBA32_Float,
 	R32_Float,
 	D24_UNorm_S8,
-	D32_Float
+	D32_Float,
+	Unknown
 };
 
 export enum class RHITextureUsage : std::uint32_t
@@ -94,7 +95,8 @@ export enum class RHIVertexFormat : std::uint8_t
 {
 	Position3Color4UV2,
 	Position3Color4UV2ResourceIndex,
-	Position3Color4UV2Skinned
+	Position3Color4UV2Skinned,
+	Position3Color4UV2UV2Normal3
 };
 
 export enum class RHIBlendMode : std::uint8_t
@@ -118,6 +120,63 @@ export enum class RHICullMode : std::uint8_t
 	None
 };
 
+export enum class RHISamplerAddress : std::uint8_t
+{
+	Wrap,
+	Clamp
+};
+
+export struct RHISamplerDescription final
+{
+	std::array<RHISamplerAddress,3> address{RHISamplerAddress::Wrap,RHISamplerAddress::Wrap,RHISamplerAddress::Wrap};
+	bool linear_filter = true;
+    bool operator==(const RHISamplerDescription&) const = default;
+};
+
+export enum class RHIComparison : std::uint8_t
+{
+    Never, Less, Equal, LessEqual, Greater, NotEqual, GreaterEqual, Always
+};
+
+export enum class RHIStencilOperation : std::uint8_t
+{
+    Keep, Zero, Replace, IncrementSaturate, DecrementSaturate, Invert, Increment, Decrement
+};
+export struct RHIStencilFace final
+{
+    RHIComparison comparison = RHIComparison::Always;
+    RHIStencilOperation fail = RHIStencilOperation::Keep;
+    RHIStencilOperation depth_fail = RHIStencilOperation::Keep;
+    RHIStencilOperation pass = RHIStencilOperation::Keep;
+    bool operator==(const RHIStencilFace &) const = default;
+};
+export struct RHIStencilDescription final
+{
+    bool enabled = false;
+    std::uint8_t read_mask = 255;
+    std::uint8_t write_mask = 255;
+    std::uint8_t reference = 0;
+    RHIStencilFace front{};
+    RHIStencilFace back{};
+    bool operator==(const RHIStencilDescription &) const = default;
+};
+
+export enum class RHIBlendFactor : std::uint8_t
+{
+    Zero, One, SourceColor, InverseSourceColor, SourceAlpha, InverseSourceAlpha,
+    DestinationColor, InverseDestinationColor, DestinationAlpha, InverseDestinationAlpha
+};
+
+export enum class RHIVertexSemantic : std::uint8_t { Position, Color, Normal, TexCoord };
+export enum class RHIVertexElementFormat : std::uint8_t { Float2, Float3, Float4 };
+export struct RHIVertexElement final
+{
+    RHIVertexSemantic semantic = RHIVertexSemantic::Position;
+    std::uint32_t semantic_index = 0;
+    RHIVertexElementFormat format = RHIVertexElementFormat::Float3;
+    std::uint32_t offset = 0;
+};
+
 export struct RHIPipeline final
 {
 	std::uint64_t key = 0;
@@ -129,6 +188,20 @@ export struct RHIPipeline final
 	RHICullMode cull_mode = RHICullMode::Back;
 	RHIBlendOperation blend_operation = RHIBlendOperation::Add;
 	bool scissor_test = false;
+	std::uint8_t color_write_mask = 0x0f;
+	std::array<RHISamplerDescription, 16> samplers{};
+	std::uint8_t sampler_count = 1;
+    RHIComparison depth_comparison = RHIComparison::LessEqual;
+    bool front_counter_clockwise = false;
+    RHIStencilDescription stencil{};
+    std::int32_t depth_bias = 0;
+    bool wireframe = false;
+    bool blend_alpha_like_color = false;
+    bool custom_blend_factors = false;
+    RHIBlendFactor source_blend = RHIBlendFactor::One;
+    RHIBlendFactor destination_blend = RHIBlendFactor::Zero;
+    std::array<RHIVertexElement,16> vertex_elements{};
+    std::uint8_t vertex_element_count = 0;
 };
 
 export struct RHIShaderBytecode final
@@ -175,6 +248,9 @@ export struct RHIBindlessResource final
 	RHIResourceType type = RHIResourceType::Invalid;
 	RHIBufferHandle buffer{};
 	RHITextureHandle texture{};
+    RHIShaderStage stage = RHIShaderStage::Fragment;
+    // Constant-buffer register, independent of the resource table index.
+    std::uint32_t constant_buffer_slot = 0;
 };
 
 export struct RHIBackbuffer final
@@ -233,6 +309,10 @@ public:
 	// Backends predating the generic scissor capability may keep the default
 	// no-op while the active backend provides the real implementation.
 	virtual bool Set_Scissor(RHIScissorRect) noexcept
+	{
+		return true;
+	}
+	virtual bool Set_Draw_Constants(std::span<const std::byte>) noexcept
 	{
 		return true;
 	}

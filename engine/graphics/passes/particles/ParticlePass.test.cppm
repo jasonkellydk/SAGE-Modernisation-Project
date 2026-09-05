@@ -68,6 +68,11 @@ public:
 		return false;
 	}
 
+	bool Set_Draw_Constants(std::span<const std::byte> data) noexcept override
+	{
+		return data.size() == sizeof(ParticleFrameParameters);
+	}
+
 	bool Draw(std::uint32_t vertex_count, std::uint32_t, std::uint32_t instance_count, std::uint32_t first_instance) noexcept override
 	{
 		++draw_count;
@@ -91,7 +96,7 @@ public:
 	std::uint32_t last_first_instance = 0;
 };
 
-BOOST_AUTO_TEST_CASE(particle_pass_reads_opaque_depth_and_draws_billboards_after_opaque)
+BOOST_AUTO_TEST_CASE(particle_pass_tracks_depth_writes_and_draws_billboards_after_opaque)
 {
 	RenderGraph graph;
 	const GraphResourceHandle color_target = graph.Create_Resource({GraphResourceKind::Texture});
@@ -105,7 +110,7 @@ BOOST_AUTO_TEST_CASE(particle_pass_reads_opaque_depth_and_draws_billboards_after
 	BOOST_REQUIRE(declarations.size() == 2);
 	BOOST_CHECK(declarations[0].access == GraphResourceAccess::Write);
 	BOOST_CHECK(declarations[1].resource == depth_target);
-	BOOST_CHECK(declarations[1].access == GraphResourceAccess::Read);
+	BOOST_CHECK(declarations[1].access == GraphResourceAccess::Write);
 
 	ExecutionPlan plan;
 	const std::array<GraphResourceBinding, 2> bindings = {
@@ -145,10 +150,11 @@ BOOST_AUTO_TEST_CASE(particle_pass_reads_opaque_depth_and_draws_billboards_after
 	BOOST_CHECK(command_list.vertex_buffer_set_count == 1);
 	BOOST_CHECK(command_list.draw_count == 1);
 	BOOST_CHECK(command_list.last_vertex_count == 6);
-	BOOST_CHECK(command_list.last_first_instance == 4);
+	// GPU records are packed in draw order, independently of CPU particle slots.
+	BOOST_CHECK(command_list.last_first_instance == 0);
 }
 
-BOOST_AUTO_TEST_CASE(particle_pass_uses_point_topology_for_point_sprites)
+BOOST_AUTO_TEST_CASE(particle_pass_expands_point_sprites_to_pixel_sized_quads)
 {
 	RenderGraph graph;
 	const GraphResourceHandle color_target = graph.Create_Resource({GraphResourceKind::Texture});
@@ -182,7 +188,7 @@ BOOST_AUTO_TEST_CASE(particle_pass_uses_point_topology_for_point_sprites)
 	BOOST_REQUIRE(plan.Execute(graph, command_list, [&](GraphPassHandle current_pass, CommandList &commands, const PassResources &resources) noexcept {
 		return current_pass == particle_pass && ParticlePass::Execute(commands, resources, input);
 	}));
-	BOOST_CHECK(command_list.last_vertex_count == 1);
+	BOOST_CHECK(command_list.last_vertex_count == 6);
 }
 
 BOOST_AUTO_TEST_CASE(particle_pass_rejects_invalid_graph_resources)
