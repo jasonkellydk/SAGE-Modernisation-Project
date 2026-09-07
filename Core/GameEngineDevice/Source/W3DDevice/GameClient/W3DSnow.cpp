@@ -25,11 +25,9 @@
 #include "W3DDevice/GameClient/BaseHeightMap.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
 #include "GameClient/View.h"
-#include "WW3D2/Backend/RenderBackend.h"
 #include "WW3D2/RInfo.h"
 #include "WW3D2/Camera.h"
 #include "WW3D2/AssetMgr.h"
-#include "WW3D2/Statistics.h"
 #include "WW3D2/StringUtilities.h"
 
 #include <cmath>
@@ -39,18 +37,10 @@
 
 
 
-#define SNOW_BUFFER_SIZE 4096	//size of vertex buffer holding particles.
-#define SNOW_BATCH_SIZE	2048	//we render at most this many particles per drawprimitive call.  This number * 6 must be less than 65536 to fit into index buffer.
-
 namespace
 {
 constexpr std::size_t WEATHER_PARTICLE_CAPACITY = 65536;
 }
-
-struct POINTVERTEX
-{
-    Vector3 v;	//center of particle.
-};
 
 W3DSnowManager::W3DSnowManager()
 {
@@ -71,81 +61,13 @@ void W3DSnowManager::init()
 /** Releases all renderer resources before a reset. */
 void W3DSnowManager::ReleaseResources()
 {
-#ifdef RTS_ZEROHOUR
     m_weatherParticles.Reset();
-#else
-	REF_PTR_RELEASE(m_snowTexture);
-
-	if (m_vertexBuffer)
-		RenderBackend_Release_Vertex_Buffer(WW3D::Get_Render_Backend(), m_vertexBuffer);
-
-	m_vertexBuffer=nullptr;
-
-	REF_PTR_RELEASE(m_indexBuffer);
-#endif
 }
 
 /** (Re)allocates all renderer resources after a reset. */
 Bool W3DSnowManager::ReAcquireResources()
 {
-#ifdef RTS_ZEROHOUR
     return TRUE;
-#else
-	ReleaseResources();
-
-	if (!TheWeatherSetting->m_snowEnabled)
-		return TRUE;	//no need for resources if snow is disabled.
-
-	if (TheWeatherSetting->m_usePointSprites && WW3D::Get_Render_Backend()->Supports_Point_Sprites())
-	{
-		if (m_vertexBuffer == nullptr)
-		{	// Create vertex buffer
-			m_vertexBuffer = WW3D::Get_Render_Backend()->Create_Vertex_Buffer(
-				SNOW_BUFFER_SIZE*sizeof(POINTVERTEX), RenderBackendVertexFormat::Position, true);
-			if (m_vertexBuffer == nullptr)
-				return FALSE;
-		}
-	}
-	else
-	{
-		m_indexBuffer=NEW_REF(IndexBufferClass,(SNOW_BATCH_SIZE *6));	//allocate 2 triangles per flake, each with 3 indices.
-
-		// Fill up the IB with static vertex indices that will be used for all smudges.
-		{
-			IndexBufferClass::WriteLockClass lockIdxBuffer(m_indexBuffer);
-			UnsignedShort *ib=lockIdxBuffer.Get_Index_Array();
-			//quad of 4 triangles:
-			//	0-----3
-			//  |\   /|
-			//  |  X  |
-			//	|/   \|
-			//  1-----2
-			Int vbCount=0;
-			for (Int i=0; i<SNOW_BATCH_SIZE; i++)
-			{
-				//Top
-				ib[0]=vbCount+3;
-				ib[1]=vbCount;
-				ib[2]=vbCount+2;
-				//Bottom
-				ib[3]=vbCount+2;
-				ib[4]=vbCount;
-				ib[5]=vbCount+1;
-
-				vbCount += 4;
-				ib+=6;
-			}
-		}
-	}
-
-	m_snowTexture = WW3DAssetManager::Get_Instance()->Get_Texture(TheWeatherSetting->m_snowTexture.str());
-
-	m_dwBase = SNOW_BUFFER_SIZE;
-	m_dwDiscard = SNOW_BUFFER_SIZE;
-	m_dwFlush = SNOW_BATCH_SIZE;
-
-	return TRUE;
-#endif
 }
 
 void W3DSnowManager::updateIniSettings()
@@ -226,4 +148,3 @@ std::size_t W3DSnowManager::Weather_Particle_Count() const noexcept
 {
 	return m_weatherParticles.Particle_Count();
 }
-

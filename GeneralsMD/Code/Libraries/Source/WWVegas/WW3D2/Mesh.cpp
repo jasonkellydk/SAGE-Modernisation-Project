@@ -1,3 +1,4 @@
+#include "W3DErr.h"
 /*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -46,7 +47,6 @@
  *   MeshClass::Get_User_Text -- access to the text buffer                                     *
  *   MeshClass::Scale -- Scales the mesh                                                       *
  *   MeshClass::Scale -- Scales the mesh                                                       *
- *   MeshClass::Init -- Init the mesh from a MeshBuilder object                                *
  *   MeshClass::Load -- creates a mesh out of a mesh chunk in a .w3d file                      *
  *   MeshClass::Cast_Ray -- compute a ray intersection with this mesh                          *
  *   MeshClass::Cast_AABox -- cast an AABox against this mesh                                  *
@@ -68,11 +68,8 @@
  *   MeshClass::read_vertex_colors -- read in the vertex colors chunk                          *
  *   MeshClass::read_vertex_influences -- read in the vertex influences chunk                  *
  *   MeshClass::Get_Material_Info -- returns a pointer to the material info                    *
- *   MeshClass::Create_Decal -- creates a decal on this mesh                                   *
- *   MeshClass::Delete_Decal -- removes a decal from this mesh                                 *
  *   MeshClass::Get_Num_Polys -- returns the number of polys (tris) in this mesh               *
  *   MeshClass::Render -- renders this mesh                                                    *
- *   MeshClass::Special_Render -- special render function for meshes                           *
  *   MeshClass::update_skin -- deforms the mesh                                                *
  *   MeshClass::clone_materials -- clone the materials for this mesh                           *
  *   MeshClass::install_materials -- transfers the materials into the mesh                     *
@@ -95,34 +92,21 @@
 #include "VertMaterial.h"
 #include "Shader.h"
 #include "MatInfo.h"
-#include "HTree.h"
-#include "MeshBuild.h"
+import Graphics.Scene.Models.Hierarchy;
 #include "WWMath/tri.h"
 #include "WWMath/aaplane.h"
-#include "AABTree.h"
 #include "WWLib/chunkio.h"
-#include "W3DUtil.h"
 #include "MeshMdl.h"
-#include "MeshRenderer.h"
-#include "RendererDebugger.h"
 #include "MeshGeometry.h"
-#include "WW3D.h"
 #include "Camera.h"
 #include "Texture.h"
 #include "RInfo.h"
 #include "ColTest.h"
 #include "IntTest.h"
-#include "DecalMsh.h"
-#include "DecalSys.h"
-#include "WW3D2/IndexBuffer.h"
-#include "VisRasterizer.h"
-#include "WWDebug/wwmemlog.h"
 #include <WWDebug/wwprofile.h>
 
-static unsigned MeshDebugIdCount;
 
 bool MeshClass::Legacy_Meshes_Fogged = true;
-static SimpleDynVecClass<uint32> temp_apt;
 
 /*
 ** This #define causes the collision code to always recompute the triangle normals rather
@@ -133,12 +117,6 @@ static SimpleDynVecClass<uint32> temp_apt;
 #if (OPTIMIZE_PLANEEQ_RAM)
 #define COMPUTE_NORMALS
 #endif
-
-
-/*
-** Temporary storage used during decal creation
-*/
-static DynamicVectorClass<Vector3>	_TempVertexBuffer;
 
 
 /***********************************************************************************************
@@ -157,12 +135,9 @@ static DynamicVectorClass<Vector3>	_TempVertexBuffer;
  *=============================================================================================*/
 MeshClass::MeshClass() :
 	Model(nullptr),
-	DecalMesh(nullptr),
 	LightEnvironment(nullptr),
 	BaseVertexOffset(0),
 	NextVisibleSkin(nullptr),
-	IsDisabledByDebugger(false),
-	MeshDebugId(MeshDebugIdCount++),
 	m_alphaOverride(1.0f),
 	m_materialPassAlphaOverride(1.0f),
 	m_materialPassEmissiveOverride(1.0f)
@@ -186,12 +161,9 @@ MeshClass::MeshClass() :
 MeshClass::MeshClass(const MeshClass & that) :
 	RenderObjClass(that),
 	Model(nullptr),
-	DecalMesh(nullptr),
 	LightEnvironment(nullptr),
 	BaseVertexOffset(that.BaseVertexOffset),
 	NextVisibleSkin(nullptr),
-	IsDisabledByDebugger(false),
-	MeshDebugId(MeshDebugIdCount++),
 	m_alphaOverride(1.0f),
 	m_materialPassAlphaOverride(1.0f),
 	m_materialPassEmissiveOverride(1.0f)
@@ -221,8 +193,7 @@ MeshClass & MeshClass::operator = (const MeshClass & that)
 		REF_PTR_SET(Model,that.Model);				// mesh instances share models by default
 		BaseVertexOffset = that.BaseVertexOffset;
 
-		// just dont copy the decals or light environment
-		REF_PTR_RELEASE(DecalMesh);
+		// just dont copy the light environment
 		LightEnvironment = nullptr;
 	}
 	return * this;
@@ -284,7 +255,6 @@ bool MeshClass::Contains(const Vector3 &point)
 void MeshClass::Free()
 {
 	REF_PTR_RELEASE(Model);
-	REF_PTR_RELEASE(DecalMesh);
 }
 
 
@@ -497,7 +467,7 @@ void MeshClass::Scale(float scalex, float scaley, float scalez)
 void	MeshClass::Get_Deformed_Vertices(Vector3 *dst_vert, Vector3 *dst_norm)
 {
 	WWASSERT(Model->Get_Flag(MeshGeometryClass::SKIN));
-	Model->get_deformed_vertices(dst_vert,dst_norm,Container->Get_HTree());
+	Model->get_deformed_vertices(dst_vert,dst_norm,Container->Get_Model_Hierarchy());
 }
 
 
@@ -517,105 +487,10 @@ void MeshClass::Get_Deformed_Vertices(Vector3 *dst_vert)
 {
 	WWASSERT(Model->Get_Flag(MeshGeometryClass::SKIN));
 	WWASSERT(Container != nullptr);
-	WWASSERT(Container->Get_HTree() != nullptr);
+	WWASSERT(Container->Get_Model_Hierarchy() != nullptr);
 
-	Model->get_deformed_vertices(dst_vert,Container->Get_HTree());
+	Model->get_deformed_vertices(dst_vert,Container->Get_Model_Hierarchy());
 }
-
-/***********************************************************************************************
- * MeshClass::Create_Decal -- creates a decal on this mesh                                     *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   1/26/00    gth : Created.                                                                 *
- *=============================================================================================*/
-void MeshClass::Create_Decal(DecalGeneratorClass * generator)
-{
-	WWMEMLOG(MEM_GEOMETRY);
-
-	if (WW3D::Are_Decals_Enabled() == false) {
-		return;
-	}
-
-	if (Is_Translucent() && (generator->Is_Applied_To_Translucent_Meshes() == false)) {
-		return;
-	}
-
-	if (!Model->Get_Flag(MeshGeometryClass::SKIN)) {
-
-		// Rigid mesh
-		Matrix3D modeltm_inv;
-		OBBoxClass localbox;
-
-		Get_Transform().Get_Orthogonal_Inverse(modeltm_inv);
-		OBBoxClass::Transform(modeltm_inv, generator->Get_Bounding_Volume(), &localbox);
-
-		// generate apt, if it is not empty, add a decal.
-		temp_apt.Delete_All(false);	// reset contents
-		Model->Generate_Rigid_APT(localbox, temp_apt);
-
-		if (temp_apt.Count() > 0) {
-			if (DecalMesh == nullptr) {
-				DecalMesh =		NEW_REF(RigidDecalMeshClass, (this, generator->Peek_Decal_System()));
-			}
-			DecalMesh->Create_Decal(generator, localbox, temp_apt);
-		}
-
-	} else {
-
-		WWDEBUG_SAY(("PERFORMANCE WARNING: Decal being applied to a SKIN mesh!"));
-
-		// Skin
-		// The deformed worldspace vertices are used both for the APT and in Create_Decal() to
-		// generate the texture coordinates.
-		int vertex_count = Model->Get_Vertex_Count();
-		if (_TempVertexBuffer.Count() < vertex_count) _TempVertexBuffer.Resize(vertex_count);
-		Vector3 *dst_vert = &(_TempVertexBuffer[0]);
-		Get_Deformed_Vertices(dst_vert);
-
-		// generate apt, if it is not empty, add a decal.
-		temp_apt.Delete_All(false);
-
-		OBBoxClass worldbox = generator->Get_Bounding_Volume();
-
-		// We compare the worldspace box vs. the worldspace vertices
-		Model->Generate_Skin_APT(worldbox, temp_apt, dst_vert);
-
-		// if it is not empty, add a decal
-		if (temp_apt.Count() > 0) {
-			if (DecalMesh == nullptr) {
-				DecalMesh = NEW_REF(SkinDecalMeshClass, (this, generator->Peek_Decal_System()));
-			}
-			DecalMesh->Create_Decal(generator, worldbox, temp_apt, &_TempVertexBuffer);
-		}
-	}
-}
-
-
-/***********************************************************************************************
- * MeshClass::Delete_Decal -- removes a decal from this mesh                                   *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   1/26/00    gth : Created.                                                                 *
- *=============================================================================================*/
-void MeshClass::Delete_Decal(uint32 decal_id)
-{
-	if (DecalMesh != nullptr) {
-		DecalMesh->Delete_Decal(decal_id);
-	}
-}
-
 
 /***********************************************************************************************
  * MeshClass::Get_Num_Polys -- returns the number of polys (tris) in this mesh                 *
@@ -659,12 +534,12 @@ void MeshClass::Render(RenderInfoClass & rinfo)
     WWPROFILE("Mesh::Render");
     if (!Is_Not_Hidden_At_All()) return;
     const unsigned sort_level=static_cast<unsigned>(Model->Get_Sort_Level());
-    if (WW3D::Are_Static_Sort_Lists_Enabled() && sort_level!=SORT_LEVEL_NONE) {
+    if (Graphics::Get_Scene_Draw_Queue().Is_Enabled() && sort_level!=SORT_LEVEL_NONE) {
         Set_Lighting_Environment(rinfo.light_environment);
         m_alphaOverride=rinfo.alphaOverride;
         m_materialPassAlphaOverride=rinfo.materialPassAlphaOverride;
         m_materialPassEmissiveOverride=rinfo.materialPassEmissiveOverride;
-        WW3D::Add_To_Static_Sort_List(this,sort_level);
+        Graphics::Get_Scene_Draw_Queue().Enqueue<Extract_Ordered_Draw>(sort_level, *this);
         return;
     }
     if (!Model->Get_Flag(MeshGeometryClass::SKIN)
@@ -678,78 +553,9 @@ void MeshClass::Render(RenderInfoClass & rinfo)
     const bool drawn=Draw_Graphics_Mesh(*this,rinfo,
         {m_alphaOverride,m_materialPassAlphaOverride,m_materialPassEmissiveOverride});
     WWASSERT(drawn);
-    if (DecalMesh && (rinfo.Current_Override_Flags() & RenderInfoClass::RINFO_OVERRIDE_ADDITIONAL_PASSES_ONLY)==0) {
-        const auto& sphere=Get_Bounding_Sphere();
-        Vector3 center;
-        rinfo.Camera.Transform_To_View_Space(center,sphere.Center);
-        if (-center.Z-sphere.Radius<WW3D::Get_Decal_Rejection_Distance())
-            TheMeshRenderer.Add_To_Render_List(DecalMesh);
-    }
-    RendererDebuggerClass::Add_Mesh(this);
 
 }
 
-
-
-
-
-
-/***********************************************************************************************
- * MeshClass::Special_Render -- special render function for meshes                             *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   12/10/98   GTH : Created.                                                                 *
- *=============================================================================================*/
-void MeshClass::Special_Render(SpecialRenderInfoClass & rinfo)
-{
-	if ((Is_Not_Hidden_At_All() == false) && (rinfo.RenderType != SpecialRenderInfoClass::RENDER_SHADOW)) {
-		return;
-	}
-
-	if (rinfo.RenderType == SpecialRenderInfoClass::RENDER_VIS) {
-
-		WWASSERT(rinfo.VisRasterizer != nullptr);
-		rinfo.VisRasterizer->Enable_Two_Sided_Rendering(!!Model->Get_Flag(MeshGeometryClass::TWO_SIDED));
-
-		if (Model->Get_Flag(MeshModelClass::SKIN) == 0) {
-
-			rinfo.VisRasterizer->Set_Model_Transform(Transform);
-			rinfo.VisRasterizer->Render_Triangles(	Model->Get_Vertex_Array(),
-																Model->Get_Vertex_Count(),
-																Model->Get_Polygon_Array(),
-																Model->Get_Polygon_Count(),
-																Get_Bounding_Box() );
-		} else {
-
-			int vertex_count = Model->Get_Vertex_Count();
-			if (_TempVertexBuffer.Count() < vertex_count) _TempVertexBuffer.Resize(vertex_count);
-			Vector3 *dst_vert = &(_TempVertexBuffer[0]);
-			Get_Deformed_Vertices(dst_vert);
-
-			rinfo.VisRasterizer->Set_Model_Transform(Matrix3D::Identity);
-			rinfo.VisRasterizer->Render_Triangles(	dst_vert,
-																Model->Get_Vertex_Count(),
-																Model->Get_Polygon_Array(),
-																Model->Get_Polygon_Count(),
-																Get_Bounding_Box() );
-		}
-		rinfo.VisRasterizer->Enable_Two_Sided_Rendering(false);
-	}
-
-	if (rinfo.RenderType == SpecialRenderInfoClass::RENDER_SHADOW) {
-		const HTreeClass * htree = nullptr;
-		if (Container!=nullptr) {
-			htree = Container->Get_HTree();
-		}
-		Model->Shadow_Render(rinfo,Transform,htree);
-	}
-}
 
 void MeshClass::Replace_Texture(TextureClass* texture,TextureClass* new_texture)
 {
@@ -1274,7 +1080,13 @@ int MeshClass::Get_Draw_Call_Count() const
 	}
 }
 
-
-
-
-
+Graphics::ModelFactory<RenderObjClass>* Load_Mesh_Factory(ChunkLoadClass& cload)
+{
+    MeshClass* mesh=NEW_REF(MeshClass,());
+    if(!mesh)return nullptr;
+    const std::shared_ptr<RenderObjClass> source(mesh,[](RenderObjClass* object) { object->Release_Ref(); });
+    if(mesh->Load_W3D(cload)!=WW3D_ERROR_OK)return nullptr;
+    return new Graphics::ModelFactory<RenderObjClass>(mesh->Get_Name(),mesh->Class_ID(),[source] {
+        return static_cast<RenderObjClass*>(SET_REF_OWNER(source->Clone()));
+    });
+}

@@ -1,5 +1,7 @@
 module;
 
+#include "../profiling/Tracy.h"
+
 #include <array>
 #include <algorithm>
 #include <cmath>
@@ -43,6 +45,13 @@ export struct Color2D final
 	float green = 1.0f;
 	float blue = 1.0f;
 	float alpha = 1.0f;
+
+	static constexpr Color2D From_ARGB(std::uint32_t color) noexcept
+	{
+		return {float((color >> 16) & 255) / 255.0f,
+			float((color >> 8) & 255) / 255.0f, float(color & 255) / 255.0f,
+			float((color >> 24) & 255) / 255.0f};
+	}
 };
 
 export enum class Renderer2DBlendMode : std::uint8_t
@@ -138,7 +147,7 @@ public:
 			return false;
 		}
 
-		m_textures.Reserve(2048, 0, 2048);
+		m_textures.Reserve(2048);
 		m_owned_textures.reserve(2048);
 		m_white_binding = Register_Texture(TextureHandle(0, 1), m_white_texture);
 		if (!m_white_binding.index.Is_Valid()) {
@@ -206,6 +215,9 @@ public:
 				m_device->Destroy_Buffer(m_index_buffer);
 		}
 
+		m_texture_pages.clear();
+		m_texture_slots.clear();
+		m_page_epoch = 0;
 		m_textures.Clear();
 		m_owned_textures.clear();
 		m_white_texture = {};
@@ -306,6 +318,8 @@ public:
 		m_vertices.clear();
 		m_indices.clear();
 		m_batches.clear();
+		m_texture_pages.clear();
+		Begin_Texture_Page();
 		m_clip_enabled = false;
 		m_clip = {};
 		m_recording = m_initialized && width != 0 && height != 0;
@@ -439,10 +453,12 @@ public:
 	{
 		if (!Can_Add(3, 3))
 			return false;
+		const ResourceIndex texture_index = Page_Texture(m_white_binding.index);
+		if (!texture_index.Is_Valid()) return false;
 		const std::uint32_t first_vertex = static_cast<std::uint32_t>(m_vertices.size());
-		Append_Vertex(first, {0.0f, 0.0f}, m_white_binding.index, color);
-		Append_Vertex(second, {0.0f, 0.0f}, m_white_binding.index, color);
-		Append_Vertex(third, {0.0f, 0.0f}, m_white_binding.index, color);
+		Append_Vertex(first, {0.0f, 0.0f}, texture_index, color);
+		Append_Vertex(second, {0.0f, 0.0f}, texture_index, color);
+		Append_Vertex(third, {0.0f, 0.0f}, texture_index, color);
 		Append_Indices(first_vertex, {0, 1, 2}, blend);
 		return true;
 	}
@@ -563,6 +579,7 @@ public:
 
 	bool Execute(Device &device, CommandList &command_list, RHITextureHandle color_target, RHITextureHandle depth_target, RHIViewport viewport) noexcept
 	{
+		GRAPHICS_PROFILE_SCOPE("Graphics.Renderer2D.Execute");
 		if (!m_initialized || m_device != &device || !color_target.Is_Valid() || !depth_target.Is_Valid() || viewport.width == 0 || viewport.height == 0)
 			return false;
 
@@ -607,7 +624,49 @@ private:
 		std::uint32_t index_count = 0;
 		Renderer2DBlendMode blend = Renderer2DBlendMode::Alpha;
 		RHIScissorRect scissor{};
+		std::size_t texture_page = 0;
 	};
+
+    static constexpr std::uint32_t Texture_Page_Size = 128;
+    struct TexturePage final
+    {
+        std::array<RHIBindlessResource, Texture_Page_Size> resources{};
+        std::array<ResourceIndex, Texture_Page_Size> logical_indices{};
+        std::uint32_t count = 0;
+    };
+    struct TextureSlot final
+    {
+        std::uint64_t epoch = 0;
+        RHITextureHandle texture{};
+        ResourceIndex index{};
+    };
+
+    void Begin_Texture_Page()
+    {
+        m_texture_pages.emplace_back();
+        if (++m_page_epoch == 0) {
+            for (auto& slot : m_texture_slots) slot.epoch = 0;
+            m_page_epoch = 1;
+        }
+    }
+
+    ResourceIndex Page_Texture(ResourceIndex logical_index)
+    {
+        const auto resource = m_textures.Resolve(logical_index);
+        if (resource.type != RHIResourceType::Texture || !resource.texture.Is_Valid()) return {};
+        const auto slot_index = logical_index.Get_Index();
+        if (slot_index >= m_texture_slots.size()) m_texture_slots.resize(std::size_t(slot_index) + 1);
+        auto& slot = m_texture_slots[slot_index];
+        if (slot.epoch == m_page_epoch && slot.texture == resource.texture) return slot.index;
+        if (m_texture_pages.back().count == Texture_Page_Size) Begin_Texture_Page();
+        auto& page = m_texture_pages.back();
+        const ResourceIndex index(page.count,1);
+        page.logical_indices[page.count] = logical_index;
+        page.resources[page.count] = resource;
+        page.resources[page.count++].index = index;
+        slot = {m_page_epoch,resource.texture,index};
+        return index;
+    }
 
 	struct TextureEntry final
 	{
@@ -678,7 +737,9 @@ private:
 			return false;
 
 		const std::uint32_t first_vertex = static_cast<std::uint32_t>(m_vertices.size());
-		const std::uint32_t texture_index = texture.index.Get_Index() | (grayscale ? 0x80000000u : 0u);
+		const ResourceIndex page_index = Page_Texture(texture.index);
+		if (!page_index.Is_Valid()) return false;
+		const std::uint32_t texture_index = page_index.Get_Index() | (grayscale ? 0x80000000u : 0u);
 		for (std::size_t index = 0; index < positions.size(); ++index) {
 			Renderer2DVertex &vertex = m_vertices.emplace_back();
 			vertex.position[0] = To_Clip_X(positions[index].x, m_width);
@@ -703,7 +764,8 @@ private:
 			m_indices.push_back(first_vertex + index);
 
 		const RHIScissorRect scissor = Make_Scissor();
-		if (!m_batches.empty() && m_batches.back().blend == blend
+		if (!m_batches.empty() && m_batches.back().texture_page == m_texture_pages.size() - 1
+			&& m_batches.back().blend == blend
 			&& m_batches.back().scissor.x == scissor.x
 			&& m_batches.back().scissor.y == scissor.y
 			&& m_batches.back().scissor.width == scissor.width
@@ -713,7 +775,7 @@ private:
 			return;
 		}
 
-		m_batches.push_back({first_index, static_cast<std::uint32_t>(indices.size()), blend, scissor});
+		m_batches.push_back({first_index, static_cast<std::uint32_t>(indices.size()), blend, scissor, m_texture_pages.size() - 1});
 	}
 
 	RHIScissorRect Make_Scissor() const noexcept
@@ -739,8 +801,7 @@ private:
 		const RHITextureHandle depth_target = resources.Texture(m_depth_resource);
 		if (!color_target.Is_Valid() || !depth_target.Is_Valid()
 			|| !commands.Set_Render_Targets(color_target, depth_target)
-			|| !commands.Set_Viewport(viewport)
-			|| !commands.Set_Bindless_Resources(m_textures.Resources()))
+			|| !commands.Set_Viewport(viewport))
 			return false;
 		if (m_indices.empty())
 			return true;
@@ -751,9 +812,21 @@ private:
 			|| !commands.Set_Index_Buffer(m_index_buffer, RHIIndexFormat::UInt32, 0))
 			return false;
 
+		std::size_t bound_page = m_texture_pages.size();
 		for (const Batch &batch : m_batches) {
 			if (batch.scissor.width == 0 || batch.scissor.height == 0)
 				continue;
+            if (bound_page != batch.texture_page) {
+                auto& page = m_texture_pages[batch.texture_page];
+                for (std::uint32_t slot = 0; slot < page.count; ++slot) {
+                    auto resource = m_textures.Resolve(page.logical_indices[slot]);
+                    if (resource.type != RHIResourceType::Texture || !resource.texture.Is_Valid()) return false;
+                    resource.index = ResourceIndex(slot,1);
+                    page.resources[slot] = resource;
+                }
+                if (!commands.Set_Bindless_Resources({page.resources.data(),page.count})) return false;
+                bound_page = batch.texture_page;
+            }
 			const std::size_t pipeline_index = static_cast<std::size_t>(batch.blend);
 			if (pipeline_index >= m_pipelines.size() || !commands.Bind_Pipeline(m_pipelines[pipeline_index])
 				|| !commands.Set_Scissor(batch.scissor)
@@ -782,6 +855,9 @@ private:
 	RHIBufferHandle m_index_buffer{};
 	std::array<RHIPipelineHandle, 3> m_pipelines{};
 	BindlessResourceTable m_textures;
+    std::vector<TexturePage> m_texture_pages;
+    std::vector<TextureSlot> m_texture_slots;
+    std::uint64_t m_page_epoch = 0;
 	std::vector<TextureEntry> m_owned_textures;
 	RenderGraph m_graph;
 	ExecutionPlan m_execution_plan;

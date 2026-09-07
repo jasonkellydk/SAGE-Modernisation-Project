@@ -1,3 +1,5 @@
+import Graphics.Backends.DX11.FrameRuntime;
+import Assets.Images.PixelEncoding;
 #include "WW3D2/WW3D.h"
 /*
 **	Command & Conquer Generals Zero Hour(tm)
@@ -82,7 +84,6 @@
 #include "W3DDevice/GameClient/W3DShadow.h"
 #include "W3DDevice/GameClient/W3DWater.h"
 #include "W3DDevice/GameClient/W3DShroud.h"
-#include "WW3D2/Backend/RenderBackend.h"
 #include "WW3D2/Light.h"
 #include "WW3D2/Scene.h"
 #include "W3DDevice/GameClient/W3DPoly.h"
@@ -95,6 +96,7 @@
 #include "W3DDevice/GameClient/WorldHeightMap.h"
 #include "W3DDevice/GameClient/W3DSmudge.h"
 #include "W3DDevice/GameClient/W3DSnow.h"
+import Graphics.Diagnostics.Render;
 
 
 //-----------------------------------------------------------------------------
@@ -158,7 +160,6 @@ Int BaseHeightMapRenderObjClass::freeMapResources()
 //=============================================================================
 void BaseHeightMapRenderObjClass::drawScorches(CameraClass& camera)
 {
-	ShaderClass::Invalidate();
 	if (m_map && Is_Hidden() == 0 && !WW3D::Is_Reflection_Render_Pass()) {
 		m_staticScorches->drawScorches(*m_map, camera);
 		m_scorches->drawScorches(*m_map, camera);
@@ -176,6 +177,7 @@ void BaseHeightMapRenderObjClass::drawScorches(CameraClass& camera)
 //=============================================================================
 BaseHeightMapRenderObjClass::~BaseHeightMapRenderObjClass()
 {
+    m_resourceRegistration.Reset();
 	freeMapResources();
 
 	delete m_treeBuffer;
@@ -294,7 +296,8 @@ BaseHeightMapRenderObjClass::BaseHeightMapRenderObjClass()
 #else
 	m_shroud = NEW W3DShroud;
 #endif
-	WW3D::Get_Render_Backend()->Set_Cleanup_Hook(this);
+    m_resourceRegistration = Graphics::Get_Frame_Resource_Lifecycle().Register(
+        [this] { ReleaseResources(); },[this] { ReAcquireResources(); });
 }
 
 void BaseHeightMapRenderObjClass::scheduleFullUpdate()
@@ -307,10 +310,6 @@ void BaseHeightMapRenderObjClass::scheduleFullUpdate()
 
 void BaseHeightMapRenderObjClass::setTextureLOD(Int lod)
 {
-	if (m_treeBuffer)
-		m_treeBuffer->setTextureLOD(lod);
-	if (m_map)
-		m_map->setTextureLOD(lod);
 	m_scorches->invalidateTexture();
 	m_staticScorches->invalidateTexture();
 }
@@ -477,7 +476,7 @@ static lights into account as well.  It is possible to just use the normal in th
 vertex and let the render backend do the lighting, but it is slower to render, and can only
 handle 4 lights at this point. */
 //=============================================================================
-void BaseHeightMapRenderObjClass::doTheLight(VERTEX_FORMAT *vb, const Vector3*light, Vector3*normal, RefRenderObjListIterator *pLightsIterator, UnsignedByte alpha)
+void BaseHeightMapRenderObjClass::doTheLight(VERTEX_FORMAT *vb, const Vector3*light, Vector3*normal, Graphics::SceneObjectList<RenderObjClass>::Cursor *pLightsIterator, UnsignedByte alpha)
 {
 #ifdef USE_NORMALS
 	vb->nx = normal->X;
@@ -1419,7 +1418,7 @@ RenderObjClass *	 BaseHeightMapRenderObjClass::Clone() const
 //=============================================================================
 void BaseHeightMapRenderObjClass::loadRoadsAndBridges(W3DTerrainLogic *pTerrainLogic, Bool saveGame)
 {
-	if (!WW3D::Get_Render_Backend()->Is_Device_Ready())
+	if (!Graphics::Frame_Device_Ready())
 		return;	//device not ready to render anything
 
 #ifdef DO_ROADS
@@ -1712,12 +1711,12 @@ void BaseHeightMapRenderObjClass::initDestAlphaLUT()
 	if (!m_destAlphaTexture)
 		return;
 
-	SurfaceClass *surf=m_destAlphaTexture->Get_Surface_Level();
+	Graphics::TextureEdit *surf=m_destAlphaTexture->Get_Surface_Level();
 
 	if (surf)
 	{
-		Int pitch;
-		UnsignedInt *pData=(UnsignedInt*)surf->Lock(&pitch);
+		const auto mapping=surf->Map();
+        UnsignedInt *pData=reinterpret_cast<UnsignedInt*>(mapping.bytes.data());
 
 		Int maxOpacity=(Int)(TheWaterTransparency->m_minWaterOpacity * 255.0f);
 		Int alpha;
@@ -1733,12 +1732,12 @@ void BaseHeightMapRenderObjClass::initDestAlphaLUT()
 				*pData=(alpha<<24)|0x00ffffff;
 				pData++;
 			}
-			surf->Unlock();
+			surf->Unmap();
 		}
 
-		m_destAlphaTexture->Get_Filter().Set_U_Addr_Mode(TextureFilterClass::TEXTURE_ADDRESS_CLAMP);
-		m_destAlphaTexture->Get_Filter().Set_V_Addr_Mode(TextureFilterClass::TEXTURE_ADDRESS_CLAMP);
-		REF_PTR_RELEASE(surf);
+		m_destAlphaTexture->Get_Sampling().address[0] = Graphics::RHISamplerAddress::Clamp;
+		m_destAlphaTexture->Get_Sampling().address[1] = Graphics::RHISamplerAddress::Clamp;
+		delete surf; surf = nullptr;
 		m_currentMinWaterOpacity = TheWaterTransparency->m_minWaterOpacity;
 	}
 }
@@ -1750,7 +1749,7 @@ void BaseHeightMapRenderObjClass::initDestAlphaLUT()
 Also allocates all rendering resources such as vertex buffers, index buffers,
 shaders, and materials.*/
 //=============================================================================
-Int BaseHeightMapRenderObjClass::initHeightData(Int x, Int y, WorldHeightMap *pMap, RefRenderObjListIterator *pLightsIteratork, Bool updateExtraPassTiles)
+Int BaseHeightMapRenderObjClass::initHeightData(Int x, Int y, WorldHeightMap *pMap, Graphics::SceneObjectList<RenderObjClass>::Cursor *pLightsIteratork, Bool updateExtraPassTiles)
 {
 
 	REF_PTR_SET(m_map, pMap);	//update our heightmap pointer in case it changed since last call.
@@ -1824,7 +1823,7 @@ Int BaseHeightMapRenderObjClass::initHeightData(Int x, Int y, WorldHeightMap *pM
 		REF_PTR_SET(m_map,pMap);	//update our heightmap pointer in case it changed since last call.
 		m_stageTwoTexture=NEW CloudMapTerrainTextureClass;
 		m_stageThreeTexture=NEW LightMapTerrainTextureClass(m_macroTextureName);
-		m_destAlphaTexture=MSGNEW("TextureClass") TextureClass(256,1,WW3D_FORMAT_A8R8G8B8,MIP_LEVELS_1);
+		m_destAlphaTexture=MSGNEW("TextureClass") TextureClass(256,1,Assets::PixelEncoding::BGRA8,MIP_LEVELS_1);
 		initDestAlphaLUT();
 		m_scorches->allocateBuffers();
 		m_staticScorches->allocateBuffers();
@@ -1929,7 +1928,7 @@ Int BaseHeightMapRenderObjClass::getStaticDiffuse(Int x, Int y)
 
 	RTS3DScene *pMyScene = (RTS3DScene *)Scene;
 	if (pMyScene) {
-		RefRenderObjListIterator *it = pMyScene->createLightsIterator();
+		Graphics::SceneObjectList<RenderObjClass>::Cursor *it = pMyScene->createLightsIterator();
 		doTheLight(&vertex, lightRay, &normalAtTexel, it, 1.0f);
 		if (it) {
 		 pMyScene->destroyLightsIterator(it);
@@ -2196,7 +2195,7 @@ rendered portion of the terrain.  Only a 96x96 section is rendered at any time,
 even though maps can be up to 1024x1024.  This function determines which subset
 is rendered. */
 //=============================================================================
-void BaseHeightMapRenderObjClass::updateCenter(CameraClass *camera, const Vector3 *cameraPivot, RefRenderObjListIterator *pLightsIterator)
+void BaseHeightMapRenderObjClass::updateCenter(CameraClass *camera, const Vector3 *cameraPivot, Graphics::SceneObjectList<RenderObjClass>::Cursor *pLightsIterator)
 {
 	if (m_map==nullptr) {
 		return;
@@ -2249,16 +2248,15 @@ called after flush. */
 void BaseHeightMapRenderObjClass::renderTrees(CameraClass * camera)
 {
 #ifdef EXTENDED_STATS
-	if (WW3D::Get_Render_Backend()->Get_Debug_Settings().m_disableObjects) {
+	if (Graphics::Get_Render_Diagnostics().disable_objects) {
 		return;
 	}
 #endif
 	if (m_map==nullptr) return;
 	if (Scene==nullptr) return;
 	if (m_treeBuffer) {
-		WW3D::Get_Render_Backend()->Set_Transform(RenderBackendTransform::World,Transform);
 		RTS3DScene *pMyScene = (RTS3DScene *)Scene;
-		RefRenderObjListIterator pDynamicLightsIterator(pMyScene->getDynamicLights());
+		Graphics::SceneObjectList<RenderObjClass>::Cursor pDynamicLightsIterator(pMyScene->getDynamicLights());
 		m_treeBuffer->drawTrees(camera, &pDynamicLightsIterator);
 	}
 }

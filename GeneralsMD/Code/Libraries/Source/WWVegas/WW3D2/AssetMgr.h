@@ -37,37 +37,54 @@
 
 #pragma once
 
+#include <algorithm>
+#include <map>
+#include <memory>
+#include <span>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <vector>
+import Graphics.Scene.Models.Factory;
+
+#include <memory>
+#include <span>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
+import Assets.Cache.Animations;
+import Graphics.Scene.Models.FactoryStore;
+import Assets.Cache.AssetReport;
+
+
+#include <memory>
+#include <string>
+#include <unordered_map>
+#include <vector>
+import Assets.Images.PixelEncoding;
 #include "WWLib/always.h"
 #include "WWLib/Vector.h"
-#include "HTreeMgr.h"
-#include "HAnimMgr.h"
+import Assets.Cache.Skeletons;
 #include "WWLib/SLIST.h"
 #include "WW3D2/Texture.h"
 #include "WWLib/hashtemplate.h"
 #include "WWLib/simplevec.h"
 
-class	HAnimClass;
-class	HTreeClass;
 class	ChunkLoadClass;
 
 class FileClass;
 class FileFactoryClass;
-class PrototypeLoaderClass;
-class	Font3DDataClass;
-class	Font3DInstanceClass;
-class	FontCharsClass;
+
 class RenderObjClass;
 class HModelClass;
-class PrototypeClass;
-class HTreeManagerClass;
-class HAnimManagerClass;
-class HAnimIterator;
+
 class TextureIterator;
 class TextureFileCache;
 class StreamingTextureClass;
 struct StreamingTextureConfig;
 class TextureClass;
-class MetalMapManagerClass;
 
 
 /*
@@ -157,8 +174,8 @@ public:
 	-------------------------------------------------------------------------------------
 	July 28, 1998
 
-	- Exposed the prototype system and added prototype loaders (PrototypeClass and
-	PrototypeLoaderClass in Proto.h).  This now allows the user to install his own
+	- Exposed the prototype system and added prototype loaders (Graphics::ModelFactory<RenderObjClass> and
+	decoder functions). This allows the user to install custom
 	loaders for new render object types.
 
 	- Simplified the interface by removing the special purpose creation functions,
@@ -247,9 +264,7 @@ public:
 	** Access to HAnims, Used by Animatable3DObj's
 	** TODO: make HAnims accessible from the HMODELS (or Animatable3DObj...)
 	*/
-	virtual AssetIterator *			Create_HAnim_Iterator();
-	virtual HAnimClass *				Get_HAnim(const char * name);
-	virtual bool						Add_Anim (HAnimClass *new_anim) { return HAnimManager.Add_Anim (new_anim); }
+	virtual Assets::AnimationAssetHandle Acquire_Animation(const char * name);
 
 	/*
 	** Access to textures
@@ -264,7 +279,7 @@ public:
 	(
 		const char * filename,
 		MipCountType mip_level_count=MIP_LEVELS_ALL,
-		WW3DFormat texture_format=WW3D_FORMAT_UNKNOWN,
+		Assets::PixelEncoding texture_format=Assets::PixelEncoding::Unknown,
 		bool allow_compression=true,
 		TextureBaseClass::TexAssetType type=TextureBaseClass::TEX_REGULAR,
 		bool allow_reduction=true
@@ -273,41 +288,34 @@ public:
 	virtual void						Release_All_Textures();
 	virtual void						Release_Unused_Textures();
 	virtual void						Release_Texture(TextureClass *);
-	virtual void						Load_Procedural_Textures();
-	virtual MetalMapManagerClass* Peek_Metal_Map_Manager() { return MetalManager; }
 
 	/*
-	** Access to Font3DInstances. (These are not saved, we just use the
-	** asset manager as a convenient way to create them.)
+	** Prepared skeleton assets used to initialize model poses
 	*/
-	virtual Font3DInstanceClass * Get_Font3DInstance( const char * name);
+	Assets::SkeletonAssetHandle Get_Skeleton(const char * name);
+	const Assets::ModelRigDesc * Resolve_Skeleton(Assets::SkeletonAssetHandle handle) const { return Skeletons.Resolve(handle); }
 
 	/*
-	** Access to FontChars. Used by Render2DSentenceClass. Can return null.
+	** Chunk decoder functions remain registered for this manager lifetime.
+	** The first registration for each chunk ID takes precedence.
 	*/
-	virtual FontCharsClass *		Get_FontChars( const char * name, int point_size, bool is_bold = false );
+	using ModelDecoder = Graphics::ModelFactory<RenderObjClass>* (*)(ChunkLoadClass&);
+    void Register_Model_Decoder(int chunk_id,ModelDecoder decode);
 
-	/*
-	** Access to HTrees, Used by Animatable3DObj's
-	*/
-	virtual AssetIterator *			Create_HTree_Iterator();
-	virtual HTreeClass *				Get_HTree(const char * name);
-
-	/*
-	** Prototype Loaders, The user can register new loaders here.  Note that
-	** a the pointer to your loader will be stored inside the asset manager.
-	** For this reason, your loader should be a static or global object.
-	*/
-	virtual void						Register_Prototype_Loader(PrototypeLoaderClass * loader);
+	// The game installs the always-available NULL factory after constructing
+	// the manager. Ownership remains with this manager and the reserved factory
+	// is kept across Free_Assets calls. A second installation is rejected.
+	bool Install_Reserved_Model_Factory(
+		std::unique_ptr<Graphics::ModelFactory<RenderObjClass>> factory);
 
 	/*
 	**	The Add_Prototype is public so that we can add prototypes for procedurally
 	** generated objects to the asset manager.
 	*/
-	void									Add_Prototype(PrototypeClass * newproto);
-	void									Remove_Prototype(PrototypeClass *proto);
+	void									Add_Prototype(Graphics::ModelFactory<RenderObjClass> * newproto);
+	void									Remove_Prototype(Graphics::ModelFactory<RenderObjClass> *proto);
 	void									Remove_Prototype(const char *name);
-	PrototypeClass *					Find_Prototype(const char * name);
+	Graphics::ModelFactory<RenderObjClass> *					Find_Prototype(const char * name);
 
 	/*
 	** Load on Demand
@@ -326,77 +334,28 @@ public:
 
 protected:
 
-	/*
-	** Access to Font3DData. (These are privately managed/accessed)
-	*/
-	virtual AssetIterator *			Create_Font3DData_Iterator();
-	virtual void						Add_Font3DData(Font3DDataClass * font);
-	virtual void						Remove_Font3DData(Font3DDataClass * font);
-	virtual Font3DDataClass *		Get_Font3DData(const char * name);
-	virtual void						Release_All_Font3DDatas();
-	virtual void						Release_Unused_Font3DDatas();
-
-	virtual void						Release_All_FontChars();
-
 	void									Free();
 
-	PrototypeLoaderClass *			Find_Prototype_Loader(int chunk_id);
 	bool									Load_Prototype(ChunkLoadClass & cload);
 
-	/*
-	** Compile time control over the dynamic arrays:
-	*/
-	enum
-	{
-		PROTOLOADERS_VECTOR_SIZE =	32,
-		PROTOLOADERS_GROWTH_RATE =	16,
-
-		PROTOTYPES_VECTOR_SIZE =	256,
-		PROTOTYPES_GROWTH_RATE =	32,
-	};
 
 	/*
 	** Prototype Loaders
 	** These objects are responsible for importing certain W3D chunk types and turning
 	** them into prototypes.
 	*/
-	DynamicVectorClass < PrototypeLoaderClass * >			PrototypeLoaders;
+	std::unordered_map<int,ModelDecoder> ModelDecoders;
 
-	/*
-	** Prototypes
-	** These objects are abstract factories for named render objects.  Prototypes is
-	** a dynamic array of pointers to the currently loaded prototypes.
-	*/
-	DynamicVectorClass < PrototypeClass * >					Prototypes;
-
-	/*
-	** Prototype Hash Table
-	** This structure is simply used to speed up the name lookup for prototypes
-	*/
-	enum
-	{
-		PROTOTYPE_HASH_TABLE_SIZE =	4096,
-		PROTOTYPE_HASH_BITS =			12,
-		PROTOTYPE_HASH_MASK =			0x00000FFF
-	};
-
-	PrototypeClass * *												PrototypeHashTable;
+    Graphics::ModelFactoryStore<Graphics::ModelFactory<RenderObjClass>> ModelFactories;
+	std::unique_ptr<Graphics::ModelFactory<RenderObjClass>> ReservedModelFactory;
 
 	/*
 	** managers of HTrees, HAnims, Textures....
 	*/
-	HTreeManagerClass					HTreeManager;
-	HAnimManagerClass					HAnimManager;
-
-	/*
-	** list of Font3DDatas
-	*/
-	SList<Font3DDataClass>			Font3DDatas;
-
-	/*
-	** list of FontChars
-	*/
-	SimpleDynVecClass<FontCharsClass*>		FontCharsList;
+	Assets::SkeletonCache Skeletons;
+	Assets::AssetReport Report;
+	void Load_Animation_Chunk(ChunkLoadClass& cload);
+	bool Load_Skeleton(ChunkLoadClass & cload);
 
 	/*
 	** Should .W3D be loaded if not in memory
@@ -407,9 +366,6 @@ protected:
 	** Should we activate fog on objects while loading them
 	*/
 	bool									Activate_Fog_On_Load;
-
-	// Metal Map Manager
-	MetalMapManagerClass * MetalManager;
 
 	/*
 	** Texture hash table for quick texture lookups
@@ -426,11 +382,6 @@ protected:
 	** the iterator classes are friends
 	*/
 	friend class RObjIterator;
-	friend class HAnimIterator;
-	friend class HTreeIterator;
-	friend class Font3DDataIterator;
 	friend class TextureIterator;
 
-	// Font3DInstance need access to the Font3DData
-	friend class Font3DInstanceClass;
 };

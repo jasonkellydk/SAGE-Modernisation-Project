@@ -11,6 +11,7 @@ module;
 export module Graphics.Scene.Ring.Snapshot.Tests;
 
 import Graphics.Backends.DX11;
+import Graphics.RHI;
 import Graphics.Scene.Ring;
 import Graphics.Scene.Screen.FullscreenOverlay;
 import Graphics.Testing.VisualRegression;

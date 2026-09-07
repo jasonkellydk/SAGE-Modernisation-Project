@@ -33,11 +33,12 @@
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 #include "Common/Radar.h"
-#include "WW3D2/WW3DFormat.h"
+import Assets.Images.PixelEncoding;
+import Graphics.RHI;
 
 // FORWARD REFERENCES /////////////////////////////////////////////////////////////////////////////
 class TextureClass;
-class SurfaceClass;
+import Graphics.Resources.Textures.Edit;
 class TerrainLogic;
 class RadarDrawData;
 
@@ -99,22 +100,18 @@ protected:
 										 Int radarUpperLeftX, Int radarUpperLeftY,
 										 Int radarWidth, Int radarHeight );  ///< convert radar coord to pixel location
 
-	WW3DFormat m_terrainTextureFormat;						///< format to use for terrain texture
+	Assets::PixelEncoding m_terrainTextureFormat;						///< format to use for terrain texture
 	Image *m_terrainImage;												///< terrain image abstraction for drawing
 	TextureClass *m_terrainTexture;								///< terrain background texture
 
-	WW3DFormat m_overlayTextureFormat;						///< format to use for overlay texture
+	Assets::PixelEncoding m_overlayTextureFormat;						///< format to use for overlay texture
 	Image *m_overlayImage;												///< overlay image abstraction for drawing
 	TextureClass *m_overlayTexture;								///< overlay texture
 
-	WW3DFormat m_shroudTextureFormat;							///< format to use for shroud texture
+	Assets::PixelEncoding m_shroudTextureFormat;							///< format to use for shroud texture
 	Image *m_shroudImage;													///< shroud image abstraction for drawing
 	TextureClass *m_shroudTexture;								///< shroud texture
-	SurfaceClass *m_shroudSurface;								///< surface to shroud texture
-	void *m_shroudSurfaceBits;										///< shroud surface bits
-	int m_shroudSurfacePitch;											///< shroud surface pitch
-	WW3DFormat m_shroudSurfaceFormat;							///< shroud surface format
-	UnsignedInt m_shroudSurfacePixelSize;					///< shroud surface pixel size
+	Graphics::TextureEdit *m_shroudSurface;								///< surface to shroud texture
 
 	Int m_textureWidth;														///< width for all radar textures
 	Int m_textureHeight;													///< height for all radar textures

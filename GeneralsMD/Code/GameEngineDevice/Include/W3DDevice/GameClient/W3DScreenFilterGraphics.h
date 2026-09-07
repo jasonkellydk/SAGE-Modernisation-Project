@@ -2,8 +2,8 @@
 #include "W3DDevice/GameClient/W3DGraphicsResources.h"
 #include "WW3D2/WW3D.h"
 #include "WW3D2/Texture.h"
-#include "WW3D2/Backend/RenderBackend.h"
-import Graphics.Backends.DX11.Coexistence;
+import Graphics.Frame.AttachmentBindings;
+import Graphics.Backends.DX11.FrameRuntime;
 import Graphics.Scene.Screen.Filters;
 
 // Translate the existing viewport quad and texture ownership into graphics data.
@@ -13,9 +13,9 @@ bool Draw_Screen_Filter_Quad(const QuadVertex* source, TextureClass* texture,
     const Graphics::ScreenFilterStyle& style={}, TextureClass* mask=nullptr)
 {
     auto* device=Graphics::Shared_Frame_Device();
-    RenderBackendViewport viewport{};
-    auto* backend=WW3D::Get_Render_Backend();
-    if (!device || !backend || !backend->Get_Viewport(viewport) || !viewport.width || !viewport.height) return false;
+    Graphics::RHIViewport viewport{};
+    viewport = Graphics::Get_Attachment_Bindings().Current().viewport;
+    if (!device || !viewport.width || !viewport.height) return false;
     std::array<Graphics::ScreenFilterVertex,4> vertices{};
     for (unsigned i=0;i<4;++i) {
         const auto& src=source[i]; auto& dst=vertices[i];
@@ -28,7 +28,6 @@ bool Draw_Screen_Filter_Quad(const QuadVertex* source, TextureClass* texture,
     }
     const bool drawn=Graphics::Get_Screen_Filter_Renderer().Draw(device->Immediate_Command_List(),
         vertices,parameters,style,Resolve_Graphics_Texture(texture),Resolve_Graphics_Texture(mask));
-    backend->Invalidate_Cached_Render_States();
     return drawn;
 }
 

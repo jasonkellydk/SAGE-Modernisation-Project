@@ -39,14 +39,31 @@
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 #pragma once
+#include <memory>
+#include <span>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
+import Assets.Cache.Animations;
+
+
+#include <memory>
+#include <span>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+import Graphics.Scene.Models.Hierarchy;
 
 #include "WWLib/always.h"
 #include "WWMath/sphere.h"
 #include "ColType.h"
 #include "WWMath/aabox.h"
 #include "WWSaveLoad/persist.h"
-#include "WWLib/multilist.h"
-#include "RObjList.h"
+import Graphics.Scene.ObjectList;
+import Graphics.Scene.OrderedDraws;
+class RenderObjClass;
 #include <float.h>
 
 class	Vector3;
@@ -54,9 +71,6 @@ class Matrix3D;
 class MaterialInfoClass;
 class TextureClass;
 class SceneClass;
-class HTreeClass;
-class HAnimClass;
-class HAnimComboClass;
 class HCompressedAnimClass;
 class RayCollisionTestClass;
 class AABoxCollisionTestClass;
@@ -67,10 +81,6 @@ class CameraClass;
 class SphereClass;
 class AABoxClass;
 class RenderInfoClass;
-class SpecialRenderInfoClass;
-class	IntersectionClass;
-class	IntersectionResultClass;
-class DecalGeneratorClass;
 class RenderObjProxyClass;
 class StringClass;
 template<class T> class DynamicVectorClass;
@@ -95,14 +105,7 @@ template<class T> class DynamicVectorClass;
 // Rendering: If the render object is in a scene that is rendered and is determined
 //		to be visible by that scene, it will receive a Render call.  The argument
 //		to the call will contain both the camera being used and the low level rendering
-//		interface.  In addition, the Special_Render function is for all "non-normal"
-//		types of rendering.  Some examples of this are: G-Buffer rendering (rendering
-//		object ID's), shadow rendering (just use black, etc) and whatever else we
-//		come up with.  Basically it will be a function with a big switch statement
-//		to handle all of these extra operations.  This means the main render code
-//		path is not cluttered with these checks while not forcing every object to
-//		implement millions of separate special render functions.  (Many objects just
-//		pass the render calls onto their sub-objects).
+//		interface.
 //
 //	VertexProcessors: Vertex processors are classes that are not actually 'rendered'
 //		They insert into the system an object that performs operations on all of
@@ -148,7 +151,7 @@ private:
 };
 
 // RenderObjClass definition
-class RenderObjClass : public RefCountClass , public PersistClass, public MultiListObjectClass
+class RenderObjClass : public RefCountClass , public PersistClass, public Graphics::SceneListMember
 {
 public:
 
@@ -237,7 +240,6 @@ public:
 	// Render Object Interface - Rendering
 	//
 	// Render - this object should render its polygons.  Typically called from a SceneClass
-	// Special_Render - all special-case rendering goes here to avoid polluting the main render pipe (e.g. VIS)
 	// On_Frame_Update - render objects can register for an On_Frame_Update call; the scene will call this once
 	//                   per frame if they do so.
 	// Restart - This interface is used to facilitate model recycling.  If a render object is "Restarted" it should
@@ -245,7 +247,6 @@ public:
 	//           should reset their "emitted particle counts" so they can be re-used.)
 	///////////////////////////////////////////////////////////////////////////////////////////////////////////////
 	virtual void					Render(RenderInfoClass & rinfo)											= 0;
-	virtual void					Special_Render(SpecialRenderInfoClass & rinfo)						{ }
 	virtual void					On_Frame_Update() 														{ }
 	virtual void					Restart()																	{ }
 
@@ -320,28 +321,27 @@ public:
 	};
 
 	virtual void					Set_Animation()														{ }
-	virtual void					Set_Animation( HAnimClass * motion,
+	virtual void					Set_Animation( Assets::AnimationAssetHandle motion,
 															float frame, int anim_mode = ANIM_MODE_MANUAL)	{ }
-	virtual void					Set_Animation( HAnimClass * motion0,
+	virtual void					Set_Animation( Assets::AnimationAssetHandle motion0,
 															float frame0,
-															HAnimClass * motion1,
+															Assets::AnimationAssetHandle motion1,
 															float frame1,
 															float percentage)											{ }
-	virtual void					Set_Animation( HAnimComboClass * anim_combo)							{ }
 
-	virtual HAnimClass *			Peek_Animation()														{ return nullptr; }
+	virtual Assets::AnimationAssetHandle Peek_Animation()														{ return nullptr; }
 	virtual int						Get_Num_Bones()															{ return 0; }
 	virtual const char *			Get_Bone_Name(int bone_index)												{ return nullptr; }
 	virtual int						Get_Bone_Index(const char * bonename)									{ return 0; }
-	virtual const Matrix3D &	Get_Bone_Transform(const char * bonename)    						{ return Get_Transform(); }
-	virtual const Matrix3D &	Get_Bone_Transform(int boneindex)      								{ return Get_Transform(); }
+	virtual Matrix3D 	Get_Bone_Transform(const char * bonename)    						{ return Get_Transform(); }
+	virtual Matrix3D 	Get_Bone_Transform(int boneindex)      								{ return Get_Transform(); }
 	virtual void					Capture_Bone(int bindex)													{ }
 
 
 	virtual void					Release_Bone(int bindex)													{ }
 	virtual bool					Is_Bone_Captured(int bindex) const										{ return false; }
 	virtual void					Control_Bone(int bindex,const Matrix3D & objtm,bool world_space_translation = false)						{ }
-	virtual const HTreeClass *	Get_HTree() const														{ return nullptr; }
+	virtual const Graphics::ModelHierarchy *	Get_Model_Hierarchy() const														{ return nullptr; }
 
 	///////////////////////////////////////////////////////////////////////////////////////////////////////////////
 	// Render Object Interface - Collision Detection
@@ -350,9 +350,6 @@ public:
 	// Cast_OBBox - intersects a swept OBBox with the render object
 	// Intersect_AABox - boolean test for intersection between an AABox and the renderobj
 	// Intersect_OBBox - boolean test for intersection between an OBBox and the renderobj
-	// Intersect - tests a ray for intersection with the render object
-	// Intersect_Sphere - tests a ray for intersection with the bounding spheres
-	// Intersect_Sphere_Quick - tests a ray for intersection with bounding spheres
 	///////////////////////////////////////////////////////////////////////////////////////////////////////////////
 	virtual bool					Cast_Ray(RayCollisionTestClass & raytest)								{ return false; }
 	virtual bool					Cast_AABox(AABoxCollisionTestClass & boxtest)						{ return false; }
@@ -360,10 +357,6 @@ public:
 
 	virtual bool					Intersect_AABox(AABoxIntersectionTestClass & boxtest)				{ return false; }
 	virtual bool					Intersect_OBBox(OBBoxIntersectionTestClass & boxtest)				{ return false; }
-
-	virtual bool					Intersect(IntersectionClass *Intersection, IntersectionResultClass *Final_Result);
-	virtual bool					Intersect_Sphere(IntersectionClass *Intersection, IntersectionResultClass *Final_Result);
-	virtual bool					Intersect_Sphere_Quick(IntersectionClass *Intersection, IntersectionResultClass *Final_Result);
 
 	///////////////////////////////////////////////////////////////////////////////////////////////////////////////
 	// Render Object Interface - Bounding Volumes
@@ -412,12 +405,6 @@ public:
 	//
 	virtual bool					Build_Dependency_List (DynamicVectorClass<StringClass> &file_list, bool recursive=true);
 	virtual bool					Build_Texture_List (DynamicVectorClass<StringClass> &texture_file_list, bool recursive=true);
-
-	///////////////////////////////////////////////////////////////////////////////////////////////////////////////
-	// Render Object Interface - Decals
-	///////////////////////////////////////////////////////////////////////////////////////////////////////////////
-	virtual void					Create_Decal(DecalGeneratorClass * generator)						{ }
-	virtual void					Delete_Decal(uint32 decal_id)												{ }
 
 	///////////////////////////////////////////////////////////////////////////////////////////////////////////////
 	// Render Object Interface - Attributes, Options, Properties, etc
@@ -647,3 +634,6 @@ static const char* const TheAnimModeNames[] =
 };
 static_assert(ARRAY_SIZE(TheAnimModeNames) == RenderObjClass::ANIM_MODE_COUNT + 1, "Incorrect array size");
 #endif
+
+// Converts a retained scene source into draw submissions using the active view.
+bool Extract_Ordered_Draw(RenderObjClass& object, void* context);

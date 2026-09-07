@@ -6,6 +6,7 @@ module;
 #include <cstdint>
 #include <filesystem>
 #include <span>
+#include <vector>
 export module Graphics.Scene.Shadows.DirectionalDrawing.Tests;
 import Graphics.Backends.DX11;
 import Graphics.Scene.Shadows.DirectionalRenderer;
@@ -169,6 +170,108 @@ BOOST_AUTO_TEST_CASE(retained_caster_handles_survive_frames_and_expire_on_shutdo
     BOOST_CHECK(!shadows.Destroy_Caster(first));
     BOOST_CHECK(shadows.Is_Caster_Valid(second));
     BOOST_CHECK(shadows.Destroy_Caster(second));
+}
+
+BOOST_AUTO_TEST_CASE(shared_caster_buffers_match_independent_meshes_with_mixed_cutouts_and_culling)
+{
+    struct ResetEnvironment { ~ResetEnvironment() { Get_Environment_Lighting() = {}; } } reset;
+    Get_Environment_Lighting() = {};
+    DX11Device device({true});
+    DirectionalShadowRenderer shadows;
+    PropRenderer receiver;
+    const auto shaders = std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
+    BOOST_REQUIRE(shadows.Initialize(device,shaders));
+    BOOST_REQUIRE(receiver.Initialize(device,shaders));
+    constexpr unsigned extent = 64;
+    const auto target = device.Create_Texture({extent,extent,1,RHITextureFormat::RGBA8_UNorm,
+        static_cast<unsigned>(RHITextureUsage::RenderTarget)});
+    const auto depth = device.Create_Texture({extent,extent,1,RHITextureFormat::D32_Float,
+        static_cast<unsigned>(RHITextureUsage::DepthStencil)});
+    const std::array<std::uint8_t,8> cutout_pixels{255,255,255,255,255,255,255,0};
+    const auto cutout = device.Create_Texture_Initialized({2,1},{std::as_bytes(std::span(cutout_pixels)),8});
+    std::array<PropVertex,4> vertices{};
+    vertices[0].position = {-1,-1,-5}; vertices[1].position = {1,-1,-5};
+    vertices[2].position = {1,1,-5}; vertices[3].position = {-1,1,-5};
+    vertices[0].uv = {0,1}; vertices[1].uv = {1,1};
+    vertices[2].uv = {1,0}; vertices[3].uv = {0,0};
+    for (auto& vertex : vertices) vertex.material_ambient = {1,1,1,1};
+    const std::array<std::uint32_t,6> indices{0,1,2,0,2,3};
+    const auto receiver_mesh = receiver.Create_Mesh(vertices,indices);
+    PropParameters parameters;
+    parameters.textured = 0;
+    parameters.scene_ambient = {0.2f,0.2f,0.2f,0};
+    parameters.light_direction[0] = {0,0,1,1};
+    parameters.light_diffuse[0] = {0.6f,0.6f,0.6f,0};
+    auto projection = Matrix4x4::Identity();
+    projection.values[10] = projection.values[11] = -1.0f/9.0f;
+    parameters.view_projection = projection.values;
+    const View view{Matrix4x4::Identity(),projection,{}, {0,0,extent,extent,0,1}};
+    RenderLight light;
+    light.type = RenderLightType::Directional;
+    light.flags = RenderLightFlags::Enabled;
+    light.direction = {0,0,-1};
+    ShadowSettings settings{2,1,10,0.5f,2,256};
+    PropStyle style;
+    style.blend = RHIBlendMode::Disabled;
+    style.samplers[0].Set_Filter(Graphics::RHISamplerFilter::Point);
+    auto& commands = device.Immediate_Command_List();
+    // Shrink and regrow the shared storage, with rejected and culled batches
+    // between visible ranges. Compare every channel against separate meshes.
+    for (unsigned count : {16u,4u,32u}) {
+        std::array<std::byte,extent*extent*4> reference{},actual{};
+        for (bool shared : {false,true}) {
+            shadows.Clear_Casters();
+            std::vector<ShadowCasterHandle> retained;
+            for (unsigned index=0;index<count;++index) {
+                const float left = index%4 == 3 ? 1000 : -1.0f+2.0f*index/count;
+                const float right = left+2.0f/count;
+                vertices[0].position = {left,-1,-4}; vertices[1].position = {right,-1,-4};
+                vertices[2].position = {right,1,-4}; vertices[3].position = {left,1,-4};
+                auto material = parameters;
+                if (shared) {
+                    // Both retained and transient casters carry local geometry.
+                    // Their local bounds are outside the light volume, while
+                    // the instance transform places visible strips back inside.
+                    for (auto& vertex : vertices) vertex.position[0] += 32;
+                    material.world[3] = -32;
+                }
+                material.textured = index%2 ? 1.0f : 0.0f;
+                material.alpha_cutoff = index%2 ? 0.5f : 0.0f;
+                material.uv_transform[0][3] = index%4 == 1 ? 0.5f : 0.0f;
+                const std::array textures{cutout};
+                if (!shared || index == 0) {
+                    const auto mesh = shadows.Create_Caster(vertices,indices);
+                    retained.push_back(mesh);
+                    BOOST_REQUIRE(shadows.Add_Caster(mesh,material,textures,style));
+                } else if (index%3 == 1) {
+                    const auto mesh = receiver.Create_Mesh(vertices,indices);
+                    BOOST_REQUIRE(shadows.Add_Caster(receiver,mesh,material,textures,style));
+                    // The shadow queue retains this exact version independently
+                    // of the source owner and shares its GPU buffers.
+                    BOOST_REQUIRE(receiver.Destroy_Mesh(mesh));
+                } else {
+                    const std::array<std::uint32_t,3> invalid{0,1,4};
+                    BOOST_CHECK(!shadows.Add_Caster(vertices,invalid,material,textures,style));
+                    BOOST_REQUIRE(shadows.Add_Caster(vertices,indices,material,textures,style));
+                }
+            }
+            BOOST_REQUIRE(shadows.Render(commands,view,light,settings,target,depth,{0,0,extent,extent}));
+            BOOST_REQUIRE(commands.Clear({0,0,0,0},1));
+            BOOST_REQUIRE(receiver.Draw(commands,receiver_mesh,style,parameters,{}));
+            BOOST_REQUIRE(device.Readback_Texture(target,shared ? actual : reference,extent*4));
+            shadows.Clear_Casters();
+            for (const auto mesh : retained) BOOST_REQUIRE(shadows.Destroy_Caster(mesh));
+        }
+        BOOST_CHECK(actual == reference);
+        const auto shadowed = std::to_integer<int>(actual[(extent/2*extent+1)*4]);
+        const auto lit = std::to_integer<int>(actual[(extent/2*extent+extent-1)*4]);
+        // Small strips include filtered edges; still require a substantial
+        // shadow in addition to the exact comparison against retained meshes.
+        BOOST_CHECK_GT(lit - shadowed,64);
+        BOOST_CHECK_GT(lit,190);
+    }
+    shadows.Shutdown(); receiver.Shutdown();
+    device.Destroy_Texture(target); device.Destroy_Texture(depth); device.Destroy_Texture(cutout);
 }
 
 BOOST_AUTO_TEST_CASE(dense_caster_growth_preserves_every_shadow_across_frames)

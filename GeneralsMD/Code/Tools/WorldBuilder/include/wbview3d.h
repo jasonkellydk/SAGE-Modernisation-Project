@@ -28,18 +28,18 @@
 
 #include "Lib/BaseType.h"
 #include "WW3D2/RendObj.h"
-#include "WW3D2/RObjList.h"
+import Graphics.Scene.ObjectList;
+class RenderObjClass;
 #include "wbview.h"
+#include "ViewportLabels.h"
 #include "Common/GameType.h"
 #include "Common/GlobalData.h"
 #include "Common/ModelState.h"
-#include "WW3D2/Backend/RenderBackend.h"
 
 //#include "GameLogic/Module/BodyModule.h" -- Yikes... not necessary to include this! (KM)
 enum BodyDamageType CPP_11(: Int); //Ahhhh much better!
 
 class WorldHeightMap;
-class LayerClass;
 class IntersectionClass;
 class W3DAssetManager;
 class SkeletonSceneClass;
@@ -55,8 +55,11 @@ class TransRenderObj;
 /////////////////////////////////////////////////////////////////////////////
 // WbView3d view
 
-class WbView3d : public WbView, public RenderBackendCleanupHook
+import Graphics.Frame.ResourceLifecycle;
+
+class WbView3d : public WbView
 {
+    Graphics::FrameResourceRegistration m_resourceRegistration;
 protected:
 	WbView3d();           // protected constructor used by dynamic creation
 	DECLARE_DYNCREATE(WbView3d)
@@ -64,9 +67,8 @@ protected:
 // Attributes
 public:
 
-	// RenderBackendCleanupHook methods
-	virtual void ReleaseResources() override;	///< Release all render resources so the device can be reset.
-	virtual void ReAcquireResources() override;  ///< Reacquire all resources after device reset.
+	virtual void ReleaseResources(); ///< Release render resources before device reset.
+	virtual void ReAcquireResources(); ///< Reacquire resources after device reset.
 
 // Operations
 public:
@@ -181,9 +183,7 @@ private:
 	Int											m_updateCount;
 	UINT										m_timer;
 	DrawObject							*m_drawObject;
-	RefRenderObjListClass		m_lightList;
-	LayerClass							*m_layer;
-	LayerClass							*m_buildLayer;
+	Graphics::SceneObjectList<RenderObjClass>		m_lightList;
 	IntersectionClass				*m_intersector;
 	Bool										m_showWireframe;
 	Bool										m_ww3dInited;
@@ -211,7 +211,7 @@ private:
 	Bool										m_showLetterbox;
 
 
-	RenderBackendFont*						m3DFont;
+	ViewportLabels m_labels;
 	Int											m_pickPixels;
 	Int											m_partialMapSize;
 

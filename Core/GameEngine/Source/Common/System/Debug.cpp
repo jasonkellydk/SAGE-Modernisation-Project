@@ -155,7 +155,7 @@ inline Bool ignoringAsserts()
 		return true;
 	if (TheGlobalData && TheGlobalData->m_headless)
 		return true;
-	if (!WW3D::Is_Windowed())
+	if (SDLPlatformWindow::isFullscreen())
 		return true;
 #ifdef DEBUG_CRASHING
 	if (TheGlobalData && TheGlobalData->m_debugIgnoreAsserts)
@@ -752,7 +752,7 @@ void ReleaseCrash(const char *reason)
 {
 	/// do additional reporting on the crash, if possible
 
-	if (!WW3D::Is_Windowed()) {
+	if (SDLPlatformWindow::isFullscreen()) {
 		SDLPlatformWindow::hide();
 	}
 
@@ -800,7 +800,7 @@ void ReleaseCrash(const char *reason)
 		theReleaseCrashLogFile = nullptr;
 	}
 
-	if (!WW3D::Is_Windowed()) {
+	if (SDLPlatformWindow::isFullscreen()) {
 		SDLPlatformWindow::hide();
 	}
 
@@ -846,7 +846,7 @@ void ReleaseCrashLocalized(const AsciiString& p, const AsciiString& m)
 
 	/// do additional reporting on the crash, if possible
 
-	if (!WW3D::Is_Windowed()) {
+	if (SDLPlatformWindow::isFullscreen()) {
 		SDLPlatformWindow::hide();
 	}
 

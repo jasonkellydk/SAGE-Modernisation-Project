@@ -20,7 +20,8 @@
 #include <span>
 #include <vector>
 import Graphics.Scene.Scorches.Geometry;
-import Graphics.Backends.DX11.Coexistence;
+import Graphics.Backends.DX11.FrameRuntime;
+import Assets.Math;
 #include "W3DDevice/GameClient/W3DScorch.h"
 #include "W3DDevice/GameClient/W3DGraphicsResources.h"
 
@@ -30,7 +31,6 @@ import Graphics.Backends.DX11.Coexistence;
 #include "Common/MapObject.h"
 #include "W3DDevice/GameClient/TerrainTex.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
-#include "WW3D2/Backend/RenderBackend.h"
 #include "WW3D2/Shader.h"
 #include "WW3D2/WW3D.h"
 
@@ -129,7 +129,6 @@ void W3DScorch::drawScorches(WorldHeightMap& map, CameraClass& camera)
     const auto texture = Resolve_Graphics_Texture(m_scorchTexture);
     Graphics::Get_Surface_Renderer().Draw(device->Immediate_Command_List(), m_graphicsMesh,
         style, Make_Surface_Parameters(camera), std::array<Graphics::RHITextureHandle, 4>{texture, {}, {}, {}});
-    WW3D::Get_Render_Backend()->Invalidate_Cached_Render_States();
 }
 
 void W3DScorch::updateScorches(WorldHeightMap& map)
@@ -140,9 +139,9 @@ void W3DScorch::updateScorches(WorldHeightMap& map)
         MAP_XY_FACTOR, MAP_HEIGHT_SCALE / 10};
     const auto& ambient = TheGlobalData->m_terrainAmbient[0];
     const auto& diffuse = TheGlobalData->m_terrainDiffuse[0];
-    const auto packed = WW3D::Get_Render_Backend()->Pack_Color_Clamped(Vector4(
+    const auto packed = Assets::Color_To_ARGB({
         (ambient.red + diffuse.red) / 2, (ambient.green + diffuse.green) / 2,
-        (ambient.blue + diffuse.blue) / 2, 1));
+        (ambient.blue + diffuse.blue) / 2, 1});
     const std::array<float, 4> color{((packed >> 16) & 255) / 255.0f,
         ((packed >> 8) & 255) / 255.0f, (packed & 255) / 255.0f, 1};
     for (auto it = m_scorches.rbegin(); it != m_scorches.rend(); ++it) {

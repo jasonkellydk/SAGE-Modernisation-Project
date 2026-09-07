@@ -1,3 +1,7 @@
+#include <algorithm>
+import Graphics.Scene.Views.CameraMatrices;
+import Graphics.Frame.AttachmentBindings;
+import Assets.Math;
 /*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -59,14 +63,9 @@
 #include "WWLib/inisup.h"
 #include "WWSaveLoad/persistfactory.h"
 #include "WW3DIds.h"
-#include "WW3D2/Backend/RenderBackend.h"
-#include "WW3D2/VertexBuffer.h"
-#include "WW3D2/IndexBuffer.h"
-#include "SortingRenderer.h"
 #include "Texture.h"
 #include "Scene.h"
 #include "WWDebug/wwprofile.h"
-#include "VisRasterizer.h"
 #include <limits.h>
 #include <WWDebug/wwprofile.h>
 
@@ -226,7 +225,6 @@ LensflareName=DEFAULT_LENSFLARE
 */
 
 // Global instance of a dazzle loader
-DazzleLoaderClass		_DazzleLoader;
 
 static SimpleVecClass<DazzleRenderObjClass*> temp_ptrs;
 
@@ -391,7 +389,7 @@ void LensflareTypeClass::Generate_Vertex_Buffers(
 		if (col[0]>1.0f) col[0]=1.0f;
 		if (col[1]>1.0f) col[1]=1.0f;
 		if (col[2]>1.0f) col[2]=1.0f;
-		unsigned color=WW3D::Get_Render_Backend()->Pack_Color(col,1.0f);
+		unsigned color=Assets::Color_To_ARGB({col.X,col.Y,col.Z,1.0f});
 
 		vertex->x=x+ix;
 		vertex->y=y-iy;
@@ -921,7 +919,7 @@ void DazzleRenderObjClass::Render(RenderInfoClass & rinfo)
 
 	if (	Is_Not_Hidden_At_All() &&
 			_dazzle_rendering_enabled &&
-			!WW3D::Get_Render_Backend()->Is_Render_To_Texture()	)
+			!Graphics::Get_Attachment_Bindings().Offscreen()	)
 	{
 		// First check if the dazzle is blinking and is "off"
 		bool is_on = true;
@@ -946,8 +944,8 @@ void DazzleRenderObjClass::Render(RenderInfoClass & rinfo)
 //			visibility = _VisibilityHandler->Compute_Dazzle_Visibility(rinfo,this,position);
 
 			Matrix4x4 view_transform,projection_transform;
-			WW3D::Get_Render_Backend()->Get_Transform(RenderBackendTransform::View,view_transform);
-			WW3D::Get_Render_Backend()->Get_Transform(RenderBackendTransform::Projection,projection_transform);
+			std::copy_n(Graphics::Get_Camera_Matrices().view.values.data(), 16, &view_transform[0][0]);
+			std::copy_n(Graphics::Get_Camera_Matrices().projection.values.data(), 16, &projection_transform[0][0]);
 			Vector3 camera_loc(rinfo.Camera.Get_Position());
 			Vector3 camera_dir(-view_transform[2][0],-view_transform[2][1],-view_transform[2][2]);
 //			Matrix3D cam(rinfo.Camera.Get_Transform());
@@ -1017,26 +1015,14 @@ void DazzleRenderObjClass::Render(RenderInfoClass & rinfo)
 void DazzleRenderObjClass::Render_Dazzle(CameraClass* camera)
 {
 	WWPROFILE("Dazzle::Render");
-	Matrix4x4 old_view_transform;
-	Matrix4x4 old_world_transform;
-	Matrix4x4 old_projection_transform;
 	Matrix4x4 view_transform;
-	Matrix4x4 world_transform;
-	Matrix4x4 projection_transform;
-	WW3D::Get_Render_Backend()->Get_Transform(RenderBackendTransform::View,view_transform);
-	WW3D::Get_Render_Backend()->Get_Transform(RenderBackendTransform::World,world_transform);
-	WW3D::Get_Render_Backend()->Get_Transform(RenderBackendTransform::Projection,projection_transform);
-	old_view_transform=view_transform;
-	old_world_transform=world_transform;
-	old_projection_transform=projection_transform;
+	std::copy_n(Graphics::Get_Camera_Matrices().view.values.data(), 16, &view_transform[0][0]);
 	Vector3 camera_loc(camera->Get_Position());
 	Vector3 camera_dir(-view_transform[2][0],-view_transform[2][1],-view_transform[2][2]);
 
-	int display_width,display_height,display_bits;
-	bool windowed;
-	WW3D::Get_Device_Resolution(display_width,display_height,display_bits,windowed);
-	float w=float(display_width);
-	float h=float(display_height);
+	const auto& screen = Graphics::Get_Attachment_Bindings().Default().viewport;
+	const float w = float(screen.width);
+	const float h = float(screen.height);
 	float screen_x_scale=1.0f;
 	float screen_y_scale=1.0f;
 	if (w>h) {
@@ -1100,7 +1086,7 @@ void DazzleRenderObjClass::Render_Dazzle(CameraClass* camera)
 			if (col[1]>1.0f) col[1]=1.0f;
 			if (col[2]>1.0f) col[2]=1.0f;
 
-			unsigned color=WW3D::Get_Render_Backend()->Pack_Color(col,1.0f);
+			unsigned color=Assets::Color_To_ARGB({col.X,col.Y,col.Z,1.0f});
 
 			dl=current_vloc+(dazzle_dxt-dazzle_dyt)*current_dazzle_size;
 			reinterpret_cast<Vector3&>(vertex->x)=dl;
@@ -1143,7 +1129,7 @@ void DazzleRenderObjClass::Render_Dazzle(CameraClass* camera)
 			if (col[1]>1.0f) col[1]=1.0f;
 			if (col[2]>1.0f) col[2]=1.0f;
 
-			unsigned color=WW3D::Get_Render_Backend()->Pack_Color(col,1.0f);
+			unsigned color=Assets::Color_To_ARGB({col.X,col.Y,col.Z,1.0f});
 
 			Vector3 offset;
 
@@ -1221,9 +1207,6 @@ void DazzleRenderObjClass::Render_Dazzle(CameraClass* camera)
     if (dazzle_vertex_count) draw(0,dazzle_vertex_count,default_dazzle_shader,types[type]->Get_Dazzle_Texture());
     if (lensflare_vertex_count) draw(dazzle_vertex_count+halo_vertex_count,lensflare_vertex_count,default_dazzle_shader,lensflare->Get_Texture());
 
-	WW3D::Get_Render_Backend()->Set_Transform(RenderBackendTransform::Projection,old_projection_transform);
-	WW3D::Get_Render_Backend()->Set_Transform(RenderBackendTransform::View,old_view_transform);
-	WW3D::Get_Render_Backend()->Set_Transform(RenderBackendTransform::World,old_world_transform);
 }
 
 // ----------------------------------------------------------------------------
@@ -1311,82 +1294,6 @@ LensflareTypeClass* DazzleRenderObjClass::Get_Lensflare_Class(unsigned id) // Re
 	if (id>=lensflare_count) return nullptr;
 	return lensflares[id];
 }
-
-// ----------------------------------------------------------------------------
-//
-// Should static dazzles require vis information, here's a function that renders
-// a quad at the location of the dazzle
-//
-// ----------------------------------------------------------------------------
-
-void DazzleRenderObjClass::vis_render_dazzle(SpecialRenderInfoClass & rinfo)
-{
-
-	WWASSERT(rinfo.VisRasterizer != nullptr);
-	rinfo.VisRasterizer->Enable_Two_Sided_Rendering(true);
-
-	/*
-	** Create a transform which is facing the camera
-	*/
-	Vector3 cam_point = rinfo.VisRasterizer->Peek_Camera()->Get_Transform().Get_Translation();
-	Vector3 daz_point = Get_Transform().Get_Translation();
-
-	Matrix3D tm;
-	tm.Look_At(daz_point,cam_point,0.0f);
-	rinfo.VisRasterizer->Set_Model_Transform(tm);
-
-	/*
-	** Now, generate a single triangle on the X-Y plane
-	*/
-	Vector3 verts[4];
-	TriIndex polys[2];
-
-	polys[0] = TriIndex(0,1,2);
-	polys[1] = TriIndex(0,2,3);
-
-	Vector2 view_min,view_max;
-	rinfo.VisRasterizer->Peek_Camera()->Get_View_Plane(view_min,view_max);
-
-	float scale_x=types[type]->ic.halo_scale_x;
-	if ((scale_x < 0.001f) && (types[type]->ic.dazzle_scale_x > scale_x)) {
-		scale_x = types[type]->ic.dazzle_scale_x;
-	}
-
-	float scale_y=types[type]->ic.halo_scale_y;
-	if ((scale_y < 0.001f) && (types[type]->ic.dazzle_scale_y > scale_y)) {
-		scale_y = types[type]->ic.dazzle_scale_y;
-	}
-
-	float dist = (daz_point - cam_point).Length();
-	Vector3 dxt(dist * scale_x / (view_max.X - view_min.X),0.0f,0.0f);
-	Vector3 dyt(0.0f,dist * scale_y / (view_max.Y - view_min.Y),0.0f);
-
-	verts[0].Set(dxt+dyt);
-	verts[1].Set(dxt-dyt);
-	verts[2].Set(-dxt-dyt);
-	verts[3].Set(-dxt+dyt);
-
-	AABoxClass bounds;
-	float extent = 1.1f * (dxt+dyt).Length();
-	bounds.Center = daz_point;  //making up a conservative bounding box
-	bounds.Extent.Set(extent,extent,extent);
-
-	/*
-	** Render
-	*/
-	rinfo.VisRasterizer->Enable_Two_Sided_Rendering(true);
-	rinfo.VisRasterizer->Render_Triangles(verts,4,polys,2,bounds);
-	rinfo.VisRasterizer->Enable_Two_Sided_Rendering(false);
-}
-
-void DazzleRenderObjClass::Special_Render(SpecialRenderInfoClass & rinfo)
-{
-	if (rinfo.RenderType == SpecialRenderInfoClass::RENDER_VIS) {
-		vis_render_dazzle(rinfo);
-	}
-}
-
-
 
 /****************************************************************************************
 
@@ -1512,7 +1419,6 @@ const PersistFactoryClass & DazzleRenderObjClass::Get_Factory () const
 }
 
 
-
 /**********************************************************************************************
 **
 ** DazzleLayerClass Implementation
@@ -1553,7 +1459,6 @@ void DazzleLayerClass::Render(CameraClass* camera)
 
 	camera->Apply();
 
-	WW3D::Get_Render_Backend()->Set_Material(nullptr);
 
 	for (unsigned type=0;type<type_count;++type) {
 		if (!types[type]) continue;
@@ -1649,21 +1554,10 @@ float DazzleVisibilityClass::Compute_Dazzle_Visibility
 }
 
 
-/**********************************************************************************************
-**
-** DazzlePrototypeClass Implementation
-**
-**********************************************************************************************/
-
-RenderObjClass * DazzlePrototypeClass::Create()
+Graphics::ModelFactory<RenderObjClass>* Load_Dazzle_Factory(ChunkLoadClass& cload)
 {
-	return NEW_REF(DazzleRenderObjClass,(DazzleType));
-}
-
-
-WW3DErrorType DazzlePrototypeClass::Load_W3D(ChunkLoadClass & cload)
-{
-	StringClass dazzle_type;
+	StringClass Name,dazzle_type;
+    unsigned int DazzleType=0;
 
 	while (cload.Open_Chunk()) {
 		switch (cload.Cur_Chunk_ID())
@@ -1681,19 +1575,5 @@ WW3DErrorType DazzlePrototypeClass::Load_W3D(ChunkLoadClass & cload)
 		DazzleType = 0;
 	}
 
-	return WW3D_ERROR_OK;
-}
-
-
-/**********************************************************************************************
-**
-** DazzleLoaderClass Implementation
-**
-**********************************************************************************************/
-
-PrototypeClass * DazzleLoaderClass::Load_W3D(ChunkLoadClass & cload)
-{
-	DazzlePrototypeClass * new_proto = W3DNEW DazzlePrototypeClass;
-	new_proto->Load_W3D(cload);
-	return new_proto;
+	return new Graphics::ModelFactory<RenderObjClass>(static_cast<const char*>(Name),RenderObjClass::CLASSID_DAZZLE,[DazzleType] { return NEW_REF(DazzleRenderObjClass,(DazzleType)); });
 }

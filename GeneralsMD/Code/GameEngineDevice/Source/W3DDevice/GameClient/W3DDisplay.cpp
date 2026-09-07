@@ -1,3 +1,8 @@
+#include <climits>
+import Graphics.Presentation.DisplayModes;
+import Graphics.Resources.Textures.Quality;
+import Graphics.Diagnostics.Render;
+import Graphics.Frame.SubmissionStatistics;
 /*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -34,6 +39,8 @@
 static void drawFramerateBar();
 
 // SYSTEM INCLUDES ////////////////////////////////////////////////////////////
+import Graphics.Scene.Props.Submission;
+import Graphics.Scene.Debug.CollisionBox;
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -45,12 +52,13 @@ static void drawFramerateBar();
 #include <SDL3/SDL.h>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <string>
 #include <time.h>
 #include <utility>
 #include <vector>
 
-import Graphics.Backends.DX11.Coexistence;
+import Graphics.Backends.DX11.FrameRuntime;
 import Graphics.Renderer2D;
 import Graphics.Frame.SceneRenderers;
 import Engine.UI.WND;
@@ -98,6 +106,10 @@ import Graphics.Scene.Screen.Filters;
 #include "Lib/BaseType.h"
 #include "W3DDevice/Common/W3DConvert.h"
 #include "W3DDevice/GameClient/W3DAssetManager.h"
+#include "W3DDevice/GameClient/CollisionBoxRenderObject.h"
+#include "W3DDevice/GameClient/NullRenderObject.h"
+#include "W3DDevice/GameClient/W3DRingLoader.h"
+#include "W3DDevice/GameClient/W3DSphereLoader.h"
 #include "W3DDevice/GameClient/W3DAssetRuntime.h"
 #include "W3DDevice/GameClient/W3DBibBuffer.h"
 #include "W3DDevice/GameClient/W3DTerrainGraphics.h"
@@ -106,7 +118,6 @@ import Graphics.Scene.Screen.Filters;
 #include "W3DDevice/GameClient/W3DFileSystem.h"
 #include "W3DDevice/GameClient/W3DDynamicLight.h"
 #include "W3DDevice/GameClient/W3DParticleSys.h"
-#include "W3DDevice/GameClient/W3DProfilerFrameCapture.h"
 #include "W3DDevice/GameClient/BaseHeightMap.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
@@ -120,47 +131,22 @@ import Graphics.Scene.Screen.Filters;
 #include "W3DDevice/GameClient/W3DShroud.h"
 #include "WWMath/wwmath.h"
 #include "WW3D2/WW3D.h"
+#include "WW3D2/W3DFile.h"
 #include "WW3D2/GraphicsGeometry.h"
-#include "WW3D2/PredLod.h"
 #include "WW3D2/PartEmt.h"
-#include "WW3D2/PartLdr.h"
-#include "WW3D2/Backend/RenderBackend.h"
-#include "WW3D2/WW3DFormat.h"
-#include "WW3D2/AggDef.h"
-#include "WW3D2/SortingRenderer.h"
-#include "WW3D2/Statistics.h"
+#include "W3DDevice/GameClient/W3DEmitterLoader.h"
+import Assets.Images.PixelEncoding;
+import Graphics.RHI;
 #include "WW3D2/Mesh.h"
 #include "WW3D2/HLOD.h"
 #include "WW3D2/MeshMatDesc.h"
 #include "WW3D2/MeshMdl.h"
-#include "WW3D2/RDDesc.h"
 
-extern "C" bool Graphics_DX11_Initialize_Shared_Frame(
-	void *device,
-	void *context,
-	void *swap_chain,
-	void *back_buffer,
-	void *back_buffer_view,
-	void *depth_buffer,
-	void *depth_buffer_view,
-	std::uint32_t width,
-	std::uint32_t height);
-extern "C" bool Graphics_DX11_Update_Shared_Frame(
-	void *device,
-	void *context,
-	void *swap_chain,
-	void *back_buffer,
-	void *back_buffer_view,
-	void *depth_buffer,
-	void *depth_buffer_view,
-	std::uint32_t width,
-	std::uint32_t height);
 extern "C" bool Graphics_DX11_Begin_Frame() noexcept;
-extern "C" bool Graphics_DX11_Begin_Graphics_Phase() noexcept;
+extern "C" bool Graphics_DX11_Execute_Queued_Draws() noexcept;
 extern "C" bool Graphics_DX11_End_Frame() noexcept;
 extern "C" bool Graphics_DX11_Present() noexcept;
 extern "C" void Graphics_DX11_Abort_Frame() noexcept;
-extern "C" void Graphics_DX11_Shutdown_Shared_Frame() noexcept;
 
 #include "GameLogic/ScriptEngine.h"		// For TheScriptEngine - jkmcd
 #include "GameLogic/GameLogic.h"
@@ -181,6 +167,7 @@ extern "C" void Graphics_DX11_Shutdown_Shared_Frame() noexcept;
 // DEFINE AND ENUMS ///////////////////////////////////////////////////////////
 
 import Graphics.Capture.MovieCapture;
+import Graphics.Capture.FramePreview;
 static Graphics::MovieCapture displayMovieCapture;
 
 #define no_SAMPLE_DYNAMIC_LIGHT	1
@@ -269,6 +256,9 @@ static bool executeGraphicsFramePasses(Graphics::Device &device, Graphics::Comma
 		{0, 0, targets.backbuffer.width, targets.backbuffer.height, 0.0f, 1.0f}))
 		return false;
 
+	PROFILER_PLOT("Graphics.UI.Active", static_cast<int64_t>(uiFrameActive));
+	PROFILER_PLOT("Graphics.UI.Vertices", static_cast<int64_t>(Graphics::Get_Renderer2D().Vertex_Count()));
+	PROFILER_PLOT("Graphics.UI.Batches", static_cast<int64_t>(Graphics::Get_Renderer2D().Batch_Count()));
 	return !uiFrameActive || Graphics::Get_Renderer2D().Execute(
 		device,
 		commands,
@@ -284,24 +274,9 @@ static bool initializeGraphicsRenderer()
 	if (!W3DAssetRuntime::Initialize())
 			return false;
 
-	DX11SharedFrameResources resources{};
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	if (backend == nullptr || !backend->Get_Shared_Frame_Resources(resources))
-		return false;
+    if (Graphics::Shared_Frame_Device() == nullptr) return false;
 
-	if (!Graphics_DX11_Initialize_Shared_Frame(
-		resources.device,
-		resources.context,
-		resources.swap_chain,
-		resources.back_buffer,
-		resources.back_buffer_view,
-		resources.depth_buffer,
-		resources.depth_buffer_view,
-		resources.width,
-		resources.height))
-		return false;
-
-	if (Graphics::Register_Graphics_Phase_Executor(
+	if (Graphics::Register_Frame_Draw_Executor(
 		&initializeGraphicsSceneRenderers,
 		&executeGraphicsFramePasses))
 		return true;
@@ -319,30 +294,20 @@ static void shutdownGraphicsRenderer() noexcept
     W3DBibBuffer::Release_Graphics_Bibs();
     W3DTerrainGraphics::Release_Graphics();
     Release_Graphics_Textures();
-    Clear_Graphics_Transparent_Geometry();
+    Graphics::Get_Prop_Submission().Clear();
     Graphics::Shutdown_Scene_Renderers();
-    Graphics_DX11_Shutdown_Shared_Frame();
+    Graphics::Detach_Frame_Draw_Executor();
 }
 
 static bool beginGraphicsFrame()
 {
-	DX11SharedFrameResources resources{};
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	if (backend == nullptr || !backend->Get_Shared_Frame_Resources(resources)
-		|| !Graphics_DX11_Update_Shared_Frame(
-			resources.device,
-			resources.context,
-			resources.swap_chain,
-			resources.back_buffer,
-			resources.back_buffer_view,
-			resources.depth_buffer,
-			resources.depth_buffer_view,
-			resources.width,
-			resources.height)
-		|| !Graphics_DX11_Begin_Frame()) {
-		Graphics_DX11_Abort_Frame();
-		return false;
-	}
+	GENERALS_GRAPHICS_PROFILE_SCOPE("Graphics.Frame.Begin");
+    if (!Graphics_DX11_Begin_Frame()) {
+        Graphics_DX11_Abort_Frame();
+        return false;
+    }
+    auto* device = Graphics::Shared_Frame_Device();
+    const auto resources = device->Get_Swap_Chain().Backbuffer();
 	Begin_Video_Frame();
 	Graphics::Get_Renderer2D().Begin(resources.width, resources.height);
 	uiFrameActive = Graphics::Get_Renderer2D().Is_Initialized();
@@ -351,7 +316,7 @@ static bool beginGraphicsFrame()
 
 static void updateGraphicsView(CameraClass *camera)
 {
-	if (camera == nullptr || WW3D::Get_Render_Backend() == nullptr)
+	if (camera == nullptr || Graphics::Shared_Frame_Device() == nullptr)
 		return;
 
 	Matrix3D camera_view;
@@ -398,18 +363,17 @@ static bool renderGraphicsScenePasses(CameraClass *camera)
 {
 	GENERALS_GRAPHICS_PROFILE_SCOPE("W3DDisplay::renderGraphicsScenePasses");
 	updateGraphicsView(camera);
-	if (!Graphics_DX11_Begin_Graphics_Phase()) {
+	if (!Graphics_DX11_Execute_Queued_Draws()) {
 		uiFrameActive = false;
-		if (Graphics_DX11_End_Frame() && Graphics_DX11_Present())
-			return true;
-
 		Graphics_DX11_Abort_Frame();
+		Graphics::Get_Frame_Submission_Statistics().Cancel();
 		return false;
 	}
 
 	if (!Graphics_DX11_End_Frame()) {
 		uiFrameActive = false;
 		Graphics_DX11_Abort_Frame();
+		Graphics::Get_Frame_Submission_Statistics().Cancel();
 		return false;
 	}
 
@@ -424,9 +388,14 @@ static bool renderGraphicsScenePasses(CameraClass *camera)
 	if (!Graphics_DX11_Present()) {
 		uiFrameActive = false;
 		Graphics_DX11_Abort_Frame();
+		Graphics::Get_Frame_Submission_Statistics().Cancel();
 		return false;
 	}
 
+	if (auto* device = Graphics::Shared_Frame_Device()) {
+		auto& commands = device->Immediate_Command_List();
+		Graphics::Get_Frame_Submission_Statistics().Complete(&commands, commands.Submission_Counts());
+	}
 	uiFrameActive = false;
 	return true;
 }
@@ -519,20 +488,14 @@ void StatDumpClass::dumpStats( Bool brief, Bool flagSpikes )
 
 
 	//Rendering stats
-	fprintf( m_fp, "Draws: %d \nSkins: %d \nSortedPolys: %d \nSkinPolys: %d\n",(Int)Debug_Statistics::Get_Draw_Calls(),
-		(Int)Debug_Statistics::Get_Skin_Renders(),
-		(Int)Debug_Statistics::Get_Sorting_Polygons(), (Int)Debug_Statistics::Get_Skin_Polygons());
+	fprintf( m_fp, "Draws: %llu\n", static_cast<unsigned long long>(Graphics::Get_Frame_Submission_Statistics().Last_Frame().draw_calls));
 
 	Int onScreenParticleCount = TheParticleSystemManager->getOnScreenParticleCount();
 
   if ( flagSpikes )
   {
-    if ( Debug_Statistics::Get_Draw_Calls()>2000 )
+    if ( Graphics::Get_Frame_Submission_Statistics().Last_Frame().draw_calls>2000 )
   	  fprintf( m_fp, "                                                                      DRAWS OUT OF TOLERANCE(2000)\n" );
-    if ( Debug_Statistics::Get_Sorting_Polygons() > (onScreenParticleCount*2) + 300 )
-  	  fprintf( m_fp, "                                                                      NON-PARTICLE-SORTS OUT OF TOLERANCE(300)\n" );
-    if ( Debug_Statistics::Get_Skin_Renders()>100 )
-  	  fprintf( m_fp, "                                                                      SKINS OUT OF TOLERANCE(100)\n" );
   }
 
 
@@ -580,7 +543,6 @@ void StatDumpClass::dumpStats( Bool brief, Bool flagSpikes )
 	fprintf( m_fp, "\n" );
 
 	// setup texture stats
-	Debug_Statistics::Record_Texture_Mode(Debug_Statistics::RECORD_TEXTURE_SIMPLE/*RECORD_TEXTURE_NONE*/);
 
 	fprintf( m_fp, "Video Statistics:\n" );
 	//Particle system stats
@@ -595,18 +557,13 @@ void StatDumpClass::dumpStats( Bool brief, Bool flagSpikes )
 
 
 	// polygons this frame
-	Int polyPerFrame = Debug_Statistics::Get_Polygons();
+	Int polyPerFrame = static_cast<Int>((std::min)(Graphics::Get_Frame_Submission_Statistics().Last_Frame().triangles, std::uint64_t{INT_MAX}));
 	Int polyPerSecond = (Int)(polyPerFrame * fps);
 	fprintf( m_fp, "  Polygons: %d per frame (%d per second)\n", polyPerFrame, polyPerSecond );
 
 	// vertices this frame
-	fprintf( m_fp, "  Vertices: %d\n", Debug_Statistics::Get_Vertices() );
+	fprintf( m_fp, "  Submitted vertices/indices: %llu\n", static_cast<unsigned long long>(Graphics::Get_Frame_Submission_Statistics().Last_Frame().vertex_invocations) );
 
-	//
-	// I'm adjusting the texture memory usage counter by subtracting
-	// out the terrain alpha texture (since it's really == terrain texture).
-	//
-	fprintf( m_fp, "  Video RAM: %d\n", Debug_Statistics::Get_Record_Texture_Size() - 1376256 );
 
 	// terrain stats
 	fprintf( m_fp, "  3-Way Blends: %d/%d, \n Shoreline Blends: %d/%d\n", TheTerrainRenderObject->getNumExtraBlendTiles(TRUE),TheTerrainRenderObject->getNumExtraBlendTiles(FALSE), TheTerrainRenderObject->getNumShoreLineTiles(TRUE),TheTerrainRenderObject->getNumShoreLineTiles(FALSE));
@@ -699,7 +656,7 @@ W3DDisplay::W3DDisplay()
 #if defined(RTS_DEBUG)
 	m_timerAtCumuFPSStart = 0;
 #endif
-	for (i=0; i<LightEnvironmentClass::MAX_LIGHTS; i++)
+	for (i=0; i<Graphics::Material_Light_Count; i++)
 		m_myLight[i] = nullptr;
 	m_isClippedEnabled = FALSE;
 	m_clipRegion.lo.x = 0;
@@ -711,9 +668,6 @@ W3DDisplay::W3DDisplay()
 		m_displayStrings[i] = nullptr;
 
 
-#ifdef PROFILER_ENABLED
-	m_profilerFrameCapture = NEW W3DProfilerFrameCapture();
-#endif
 }
 
 // W3DDisplay::~W3DDisplay ====================================================
@@ -722,10 +676,6 @@ W3DDisplay::W3DDisplay()
 W3DDisplay::~W3DDisplay()
 {
 	displayMovieCapture.Stop();
-#ifdef PROFILER_ENABLED
-	delete m_profilerFrameCapture;
-	m_profilerFrameCapture = nullptr;
-#endif
 
 	// get rid of the debug display
 	delete m_debugDisplay;
@@ -749,13 +699,12 @@ W3DDisplay::~W3DDisplay()
 	REF_PTR_RELEASE( m_3DScene );
 	REF_PTR_RELEASE( m_2DScene );
 	REF_PTR_RELEASE( m_3DInterfaceScene );
-	for (Int j=0; j<LightEnvironmentClass::MAX_LIGHTS; j++)
+	for (Int j=0; j<Graphics::Material_Light_Count; j++)
 		REF_PTR_RELEASE( m_myLight[j] );
 
-	PredictiveLODOptimizerClass::Free();
 
 	// shutdown
-	Debug_Statistics::Shutdown_Statistics();
+	Graphics::Get_Frame_Submission_Statistics().Reset();
 	if (!TheGlobalData->m_headless)
 		W3DShaderManager::shutdown();
 	m_assetManager->Free_Assets();
@@ -765,83 +714,38 @@ W3DDisplay::~W3DDisplay()
 	W3DAssetRuntime::Shutdown();
 	if (!TheGlobalData->m_headless)
 		WW3D::Shutdown();
+		Graphics::Graphics_DX11_Shutdown_Shared_Frame();
 	WWMath::Shutdown();
 	if (!TheGlobalData->m_headless)
-		WW3D::Get_Render_Backend()->Shutdown_Browser();
 	delete TheW3DFileSystem;
 	TheW3DFileSystem = nullptr;
 
 }
 
 // TheSuperHackers @tweak valeronm 20/03/2025 No longer filters resolutions by a 4:3 aspect ratio.
-inline Bool isResolutionSupported(const ResolutionDescClass &res)
-{
-	static const Int minBitDepth = 24;
-
-	return res.Width >= DEFAULT_DISPLAY_WIDTH && res.BitDepth >= minBitDepth;
-}
-
-/*Return number of screen modes supported by the current device*/
 Int W3DDisplay::getDisplayModeCount()
 {
-	const RenderDeviceDescClass &devDesc=WW3D::Get_Render_Device_Desc(0);
-	const DynamicVectorClass <ResolutionDescClass> &resolutions=devDesc.Enumerate_Resolutions();
-
-	Int numResolutions=0;
-/*	Bool needStencil=false;
-	Bool needDestinationAlpha=false;
-	Int minBitDepth=16;
-
-	//Walk through all resolutions and determine which ones are compatible with other settings
-	//chosen by user.  For example, 32-bit may be required for shadows, occlusion, soft water edge, etc.
-	if (TheGlobalData->m_useShadowVolumes || (TheGlobalData->m_enableBehindBuildingMarkers && TheGameLogic->getShowBehindBuildingMarkers()))
-		needStencil=true;
-
-	if (TheGlobalData->m_showSoftWaterEdge)
-	{	minBitDepth=32;
-	}
-*/
-	for (int res = 0; res < resolutions.Count ();  res ++)
-	{
-		// Is this the resolution we are looking for?
-		if (isResolutionSupported(resolutions[res]))
-		{
-			numResolutions++;
-		}
-	}
-
-	return numResolutions;
+    m_displayResolutions = Graphics::Enumerate_Display_Resolutions(SDLPlatformWindow::window());
+    std::erase_if(m_displayResolutions,[](const auto& resolution) {
+        return resolution.width < DEFAULT_DISPLAY_WIDTH;
+    });
+    return static_cast<Int>(m_displayResolutions.size());
 }
 
 void W3DDisplay::getDisplayModeDescription(Int modeIndex, Int *xres, Int *yres, Int *bitDepth)
 {
-	Int numResolutions=0;
-	const RenderDeviceDescClass &devDesc=WW3D::Get_Render_Device_Desc(0);
-	const DynamicVectorClass <ResolutionDescClass> &resolutions=devDesc.Enumerate_Resolutions();
-
-	for (int res = 0; res < resolutions.Count ();  res ++)
-	{
-		// Is this the resolution we are looking for?
-		if (isResolutionSupported(resolutions[res]))
-		{
-			if (numResolutions == modeIndex)
-			{	//found the mode
-				*xres=resolutions[res].Width;
-				*yres=resolutions[res].Height;
-				*bitDepth=resolutions[res].BitDepth;
-				return;
-			}
-			numResolutions++;
-		}
-	}
+    if (m_displayResolutions.empty()) getDisplayModeCount();
+    if (modeIndex < 0 || static_cast<std::size_t>(modeIndex) >= m_displayResolutions.size()) return;
+    const auto& resolution = m_displayResolutions[modeIndex];
+    *xres = resolution.width;
+    *yres = resolution.height;
+    *bitDepth = 32;
 }
 
 void W3DDisplay::setGamma(Real gamma, Real bright, Real contrast, Bool calibrate)
 {
-	if (m_windowed)
-		return;	//we don't allow gamma to change in window because it would affect desktop.
-
-	WW3D::Get_Render_Backend()->Set_Gamma(gamma,bright,contrast,calibrate, false);
+    // The frame pipeline currently has no display color-transform pass.
+    // The removed backend hook was empty; keep the existing display contract.
 }
 
 static Bool setSDLWindowed(Bool windowed)
@@ -890,17 +794,13 @@ Bool W3DDisplay::setDisplayMode( UnsignedInt xres, UnsignedInt yres, UnsignedInt
 	const UnsignedInt oldBitDepth = getBitDepth();
 	const Bool oldWindowed = getWindowed();
 
-	// SDL owns the native window size. Resize it in logical coordinates first,
-	// then reset only the D3D back buffer. Passing resize_window=true here would
-	// invoke the legacy renderer's native SetWindowPos path and could undo SDL's
-	// fullscreen/windowed style transition.
+	// SDL owns window styles and logical size; graphics owns the swap chain.
 	if (!setSDLWindowed(windowed))
 		return FALSE;
 	resizeSDLWindow(xres, yres, windowed);
 	graphicsRendererAvailable = false;
 	shutdownGraphicsRenderer();
-	if (WW3D_ERROR_OK == WW3D::Set_Render_Device(
-		WW3D::Get_Render_Device(), xres, yres, bitdepth, windowed, false, true, true))
+	if (Graphics::Resize_Frame_Device(xres, yres, false))
 	{
 		graphicsRendererAvailable = initializeGraphicsRenderer();
 		if (graphicsRendererAvailable) {
@@ -912,9 +812,7 @@ Bool W3DDisplay::setDisplayMode( UnsignedInt xres, UnsignedInt yres, UnsignedInt
 	//set back to the original mode.
 	setSDLWindowed(oldWindowed);
 	resizeSDLWindow(oldWidth, oldHeight, oldWindowed);
-	WW3D::Set_Render_Device(
-		WW3D::Get_Render_Device(), oldWidth, oldHeight, oldBitDepth, oldWindowed,
-		false, true, true);
+	Graphics::Resize_Frame_Device(oldWidth, oldHeight, false);
 	graphicsRendererAvailable = initializeGraphicsRenderer();
 	Display::setDisplayMode(oldWidth, oldHeight, oldBitDepth, oldWindowed);
 	return FALSE;	//did not change to a new mode.
@@ -1050,8 +948,15 @@ void W3DDisplay::init()
 
 	// create a new asset manager
 	m_assetManager = NEW W3DAssetManager;
-	m_assetManager->Register_Prototype_Loader(&_ParticleEmitterLoader );
-	m_assetManager->Register_Prototype_Loader(&_AggregateLoader);
+	m_assetManager->Install_Reserved_Model_Factory(
+		std::unique_ptr<Graphics::ModelFactory<RenderObjClass>>(
+			Create_Null_Render_Object_Factory()));
+	m_assetManager->Register_Model_Decoder(W3D_CHUNK_NULL_OBJECT, Load_Null_Factory);
+	m_assetManager->Register_Model_Decoder(W3D_CHUNK_EMITTER,Load_ParticleEmitter_Factory);
+	m_assetManager->Register_Model_Decoder(W3D_CHUNK_AGGREGATE,Load_Aggregate_Factory);
+	m_assetManager->Register_Model_Decoder(W3D_CHUNK_BOX,Load_Collision_Box_Factory);
+	m_assetManager->Register_Model_Decoder(W3D_CHUNK_RING,Load_Ring_Factory);
+	m_assetManager->Register_Model_Decoder(W3D_CHUNK_SPHERE,Load_Sphere_Factory);
 	m_assetManager->Set_WW3D_Load_On_Demand( true );
 
 	if (!TheGlobalData->m_headless)
@@ -1060,109 +965,61 @@ void W3DDisplay::init()
 		if (TheGlobalData->m_incrementalAGPBuf)
 		{
 		}
-		if (WW3D::Init( SDLPlatformWindow::nativeHandle() ) != WW3D_ERROR_OK)
+		Graphics::Get_Render_Diagnostics() = {};
+		Graphics::Get_Texture_Quality_Settings().prefer_16_bits = true;
+		if (WW3D::Init() != WW3D_ERROR_OK)
 			throw ERROR_INVALID_D3D;	//failed to initialize.  User probably doesn't have DX 8.1
 
-		// SDL owns the fullscreen window and uses borderless desktop mode.
-		// Tell the backend to keep its swap chain windowed while the logical
-		// display mode remains fullscreen, so only SDL changes desktop mode.
-		WW3D::Set_Fullscreen_Mode(RenderBackendFullscreenMode::Borderless);
-
 		WW3D::Set_Prelit_Mode( WW3D::PRELIT_MODE_LIGHTMAP_MULTI_PASS );
-		WW3D::Set_Collision_Box_Display_Mask(0x00);	///<set to 0xff to make collision boxes visible
-		WW3D::Enable_Static_Sort_Lists(true);
-		WW3D::Set_Thumbnail_Enabled(false);
-		WW3D::Set_Screen_UV_Bias( TRUE );  ///< this makes text look good :)
+		Graphics::Set_Collision_Box_Display_Mask(0x00);	///<set to 0xff to make collision boxes visible
+		Graphics::Get_Scene_Draw_Queue().Set_Enabled(true);
 
 		setWindowed( TheGlobalData->m_windowed );
 
 		// create a 2D renderer helper
 
-		WW3DErrorType renderDeviceError;
-		Int attempt = 0;
-		do
-		{
-			switch (attempt)
-			{
-			case 0:
-			{
-				// set our default width and height and bit depth
-				setWidth( TheGlobalData->m_xResolution );
-				setHeight( TheGlobalData->m_yResolution );
-				setBitDepth( DEFAULT_DISPLAY_BIT_DEPTH );
-				break;
-			}
-			case 1:
-			{
-				// Getting the device at the default bit depth (32) didn't work, so try
-				// getting a 16 bit display.  (Voodoo 1-3 only supported 16 bit.) jba.
-				setBitDepth( MIN_DISPLAY_BIT_DEPTH );
-				break;
-			}
-			case 2:
-			{
-				// TheSuperHackers @bugfix xezon 11/06/2025 Now tries a safe default resolution
-				// if the custom resolution did not succeed. This is unlikely to happen but is possible
-				// if the user writes an unsupported resolution in the Option Preferences or if the
-				// graphics adapter does not support the minimum display resolution to begin with.
-				Int xres = DEFAULT_DISPLAY_WIDTH;
-				Int yres = DEFAULT_DISPLAY_HEIGHT;
-				Int bitDepth = DEFAULT_DISPLAY_BIT_DEPTH;
-				Int displayModeCount = getDisplayModeCount();
-				Int displayModeIndex = 0;
-				for (; displayModeIndex < displayModeCount; ++displayModeIndex)
-				{
-					getDisplayModeDescription(displayModeIndex, &xres, &yres, &bitDepth);
-					if (xres * yres >= DEFAULT_DISPLAY_WIDTH * DEFAULT_DISPLAY_HEIGHT)
-						break; // Is good enough. Use it.
-				}
-				TheWritableGlobalData->m_xResolution = xres;
-				TheWritableGlobalData->m_yResolution = yres;
-				setWidth( xres );
-				setHeight( yres );
-				setBitDepth( bitDepth );
-				break;
-			}
-			}
-
-			// TheSuperHackers @feature Mauller 13/03/2026 Add native MSAA support, must be set before creating render device
-			WW3D::Set_MSAA_Mode((WW3D::MultiSampleModeEnum)TheWritableGlobalData->m_antiAliasLevel);
-
-			resizeSDLWindow(getWidth(), getHeight(), getWindowed());
-			renderDeviceError = WW3D::Set_Render_Device(
-				0,
-				getWidth(),
-				getHeight(),
-				getBitDepth(),
-				getWindowed(),
-				false );
-
-			// TheSuperHackers @info Update the MSAA mode that was set as some GPU's may not support certain levels
-			// Texture filtering must also be updated after render device initialization
-			if (renderDeviceError == WW3D_ERROR_OK) {
-				TheWritableGlobalData->m_antiAliasLevel = (UnsignedInt)WW3D::Get_MSAA_Mode();
-				WW3D::Set_Texture_Filter(TheWritableGlobalData->m_textureFilteringMode);
-				TheWritableGlobalData->m_textureFilteringMode = WW3D::Get_Texture_Filter();
-				WW3D::Set_Anisotropy_Level(TheWritableGlobalData->m_textureAnisotropyLevel);
-				TheWritableGlobalData->m_textureAnisotropyLevel = WW3D::Get_Anisotropy_Level();
-			}
-
-			++attempt;
-		}
-		while (attempt < 3 && renderDeviceError != WW3D_ERROR_OK);
-
-		if (renderDeviceError != WW3D_ERROR_OK)
-		{
-			WW3D::Shutdown();
-			WWMath::Shutdown();
-			throw ERROR_INVALID_D3D;	//failed to initialize.  User probably doesn't have DX 8.1
-			DEBUG_CRASH( ("Unable to set render device") );
-			return;
-		}
-		WW3D::Set_Texture_Bitdepth(getBitDepth());
+        setWidth(TheGlobalData->m_xResolution);
+        setHeight(TheGlobalData->m_yResolution);
+        setBitDepth(DEFAULT_DISPLAY_BIT_DEPTH);
+        bool device_ready = false;
+        for (unsigned attempt = 0; attempt < 2 && !device_ready; ++attempt) {
+            if (attempt) {
+                Int width = DEFAULT_DISPLAY_WIDTH, height = DEFAULT_DISPLAY_HEIGHT;
+                Int bits = DEFAULT_DISPLAY_BIT_DEPTH;
+                const Int count = getDisplayModeCount();
+                for (Int mode = 0; mode < count; ++mode) {
+                    getDisplayModeDescription(mode,&width,&height,&bits);
+                    if (width * height >= DEFAULT_DISPLAY_WIDTH * DEFAULT_DISPLAY_HEIGHT) break;
+                }
+                setWidth(width); setHeight(height);
+                TheWritableGlobalData->m_xResolution = width;
+                TheWritableGlobalData->m_yResolution = height;
+            }
+            resizeSDLWindow(getWidth(),getHeight(),getWindowed());
+            Graphics::DX11DeviceOptions options;
+            options.window = SDLPlatformWindow::nativeHandle();
+            options.width = getWidth(); options.height = getHeight();
+            options.backbuffer_format = Graphics::RHITextureFormat::BGRA8_UNorm;
+            device_ready = Graphics::Initialize_Frame_Device(options);
+        }
+        if (!device_ready) {
+            WW3D::Shutdown();
+            Graphics::Graphics_DX11_Shutdown_Shared_Frame();
+            WWMath::Shutdown();
+            throw ERROR_INVALID_D3D;
+        }
+        // Preserve the serialized preference; the frame targets currently use one sample.
+        const auto samples = TheWritableGlobalData->m_antiAliasLevel;
+        if (samples != 2 && samples != 4 && samples != 8) TheWritableGlobalData->m_antiAliasLevel = 0;
+        Graphics::Set_Texture_Sampling_Mode(TheWritableGlobalData->m_textureFilteringMode);
+        TheWritableGlobalData->m_textureFilteringMode = static_cast<unsigned>(Graphics::Get_Texture_Sampling_Settings().mode);
+        Graphics::Set_Texture_Anisotropy(TheWritableGlobalData->m_textureAnisotropyLevel);
+        TheWritableGlobalData->m_textureAnisotropyLevel = Graphics::Get_Texture_Sampling_Settings().anisotropy;
+		Graphics::Get_Texture_Quality_Settings().prefer_16_bits = getBitDepth() == 16;
 		graphicsRendererAvailable = initializeGraphicsRenderer();
 		if (!graphicsRendererAvailable) {
 			WW3D::Shutdown();
+			Graphics::Graphics_DX11_Shutdown_Shared_Frame();
 			WWMath::Shutdown();
 			throw ERROR_INVALID_D3D;
 		}
@@ -1214,7 +1071,6 @@ void W3DDisplay::init()
 			m_nativeDebugDisplay->setFontWidth( 9 );
 		}
 
-		WW3D::Get_Render_Backend()->Initialize_Browser();
 	}
 
 	// we're now online
@@ -1317,8 +1173,6 @@ void W3DDisplay::gatherDebugStats()
 	static UnsignedInt s_framesRenderedSinceLastUpdate = 0;
 	static Int64 s_lastUpdateTime64 = 0;
 	static double s_timeSinceLastUpdateInSecs = 0.0;
-	static Int s_drawCallsSinceLastUpdate = 0;
-	static Int s_sortedPolysSinceLastUpdate = 0;
 
 	// allocate the display strings if needed
 	if( m_displayStrings[0] == nullptr )
@@ -1355,8 +1209,6 @@ void W3DDisplay::gatherDebugStats()
 	}
 
 	++s_framesRenderedSinceLastUpdate;
-  s_drawCallsSinceLastUpdate += Debug_Statistics::Get_Draw_Calls();
-	s_sortedPolysSinceLastUpdate += Debug_Statistics::Get_Sorting_Polygons();
 
 	Int64 freq64 = getPerformanceCounterFrequency();
 	Int64 time64 = getPerformanceCounter();
@@ -1386,13 +1238,10 @@ void W3DDisplay::gatherDebugStats()
 		UnicodeString fpsString;
 
 		// setup texture stats
-		Debug_Statistics::Record_Texture_Mode(Debug_Statistics::RECORD_TEXTURE_SIMPLE/*RECORD_TEXTURE_NONE*/);
 
 		// frames per second
 		double fps = (Real)s_framesRenderedSinceLastUpdate / s_timeSinceLastUpdateInSecs;
-		double drawsPerFrame = Debug_Statistics::Get_Draw_Calls(); //(Real)s_drawCallsSinceLastUpdate / (Real)s_framesRenderedSinceLastUpdate;
-		double sortPolysPerFrame = Debug_Statistics::Get_Sorting_Polygons();  //(Real)s_sortedPolysSinceLastUpdate / (Real)s_framesRenderedSinceLastUpdate;
-		double skinDrawsPerFrame = Debug_Statistics::Get_Skin_Renders();
+		const double drawsPerFrame = static_cast<double>(Graphics::Get_Frame_Submission_Statistics().Last_Frame().draw_calls);
 
 		if (fps<0.1) fps = 0.1;
 
@@ -1404,21 +1253,18 @@ void W3DDisplay::gatherDebugStats()
 		if (cumuTime < 0.0) cumuTime = 0.0;
 		Int numFrames = (Int)TheGameLogic->getFrame() - (Int)START_CUMU_FRAME;
 		double cumuFPS = (numFrames > 0 && cumuTime > 0.0) ? (numFrames / cumuTime) : 0.0;
-		double skinPolysPerFrame = Debug_Statistics::Get_Skin_Polygons();
 
 		Int LOD = TheGlobalData->m_terrainLOD;
-		//unibuffer.format( L"FPS: %.2f, %.2fms mapLOD=%d [cumu FPS=%.2f] draws: %.2f sort: %.2f", fps, ms, LOD, cumuFPS, drawsPerFrame,sortPolysPerFrame);
 		if (TheGlobalData->m_useFpsLimit)
 				unibuffer.format( L"%.2f/%d FPS, ", fps, TheFramePacer->getFramesPerSecondLimit());
 		else
 				unibuffer.format( L"%.2f FPS, ", fps);
 
-		unibuffer2.format( L"%.2fms [cumuFPS=%.2f] draws: %d skins: %d sortP: %d skinP: %d LOD %d", ms, cumuFPS, (Int)drawsPerFrame,(Int)skinDrawsPerFrame,(Int)sortPolysPerFrame, (Int)skinPolysPerFrame, LOD);
+		unibuffer2.format( L"%.2fms [cumuFPS=%.2f] draws: %.0f LOD %d", ms, cumuFPS, drawsPerFrame, LOD);
 		unibuffer.concat(unibuffer2);
 #else
 		//Int LOD = TheGlobalData->m_terrainLOD;
-		//unibuffer.format( L"FPS: %.2f, %.2fms mapLOD=%d draws: %.2f sort %.2f", fps, ms, LOD, drawsPerFrame,sortPolysPerFrame);
-		unibuffer.format( L"FPS: %.2f, %.2fms draws: %.2f skins: %.2f sort %.2f", fps, ms, drawsPerFrame,skinDrawsPerFrame,sortPolysPerFrame);
+		unibuffer.format( L"FPS: %.2f, %.2fms draws: %.0f", fps, ms, drawsPerFrame);
 		if (TheGlobalData->m_useFpsLimit)
 		{
 			unibuffer2.format(L", FPSLock %d",TheGlobalData->m_framesPerSecondLimit);
@@ -1429,7 +1275,7 @@ void W3DDisplay::gatherDebugStats()
 		fpsString.format( L"FPS: %.2f", fps);
 		m_benchmarkDisplayString->setText( fpsString );
 
-		Int polyPerFrame = Debug_Statistics::Get_Polygons();
+		Int polyPerFrame = static_cast<Int>((std::min)(Graphics::Get_Frame_Submission_Statistics().Last_Frame().triangles, std::uint64_t{INT_MAX}));
 
 #ifdef EXTENDED_STATS
 		static float gameOverheadMS = 0.0f;
@@ -1448,76 +1294,67 @@ void W3DDisplay::gatherDebugStats()
 		} else if (statMode == gameOverhead) {
 			gameOverheadMS = ms;
 			statMode = console;
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_disableTerrain = true;
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_disableOverhead = true;
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_disableWater = true;
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_disableObjects = true;
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_disableConsole = false;
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_debugLinesToShow = 1;
+			Graphics::Get_Render_Diagnostics().disable_overhead = true;
+			Graphics::Get_Render_Diagnostics().disable_water = true;
+			Graphics::Get_Render_Diagnostics().disable_objects = true;
+			Graphics::Get_Render_Diagnostics().disable_console = false;
+			Graphics::Get_Render_Diagnostics().console_line_limit = 1;
 		} else if (statMode == console) {
 			consoleMS = ms;
 			statMode = threeDOverhead;
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_disableTerrain = true;
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_disableOverhead = true;
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_disableWater = true;
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_disableObjects = true;
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_disableConsole = true;
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_debugLinesToShow = 1;
+			Graphics::Get_Render_Diagnostics().disable_overhead = true;
+			Graphics::Get_Render_Diagnostics().disable_water = true;
+			Graphics::Get_Render_Diagnostics().disable_objects = true;
+			Graphics::Get_Render_Diagnostics().disable_console = true;
+			Graphics::Get_Render_Diagnostics().console_line_limit = 1;
 		} else if (statMode == threeDOverhead) {
 			threeDOverheadMS = ms;
 			statMode = terrain;
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_disableTerrain = false;
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_disableOverhead = true;
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_disableWater = true;
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_disableObjects = true;
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_disableConsole = true;
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_debugLinesToShow = 1;
+			Graphics::Get_Render_Diagnostics().disable_overhead = true;
+			Graphics::Get_Render_Diagnostics().disable_water = true;
+			Graphics::Get_Render_Diagnostics().disable_objects = true;
+			Graphics::Get_Render_Diagnostics().disable_console = true;
+			Graphics::Get_Render_Diagnostics().console_line_limit = 1;
 		} else if (statMode == terrain) {
 			terrainMS = ms;
 			statMode = objects;
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_disableOverhead = true;
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_disableTerrain = true;
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_disableWater = true;
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_disableObjects = false;
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_disableConsole = true;
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_debugLinesToShow = 1;
+			Graphics::Get_Render_Diagnostics().disable_overhead = true;
+			Graphics::Get_Render_Diagnostics().disable_water = true;
+			Graphics::Get_Render_Diagnostics().disable_objects = false;
+			Graphics::Get_Render_Diagnostics().disable_console = true;
+			Graphics::Get_Render_Diagnostics().console_line_limit = 1;
 		} else if (statMode == objects) {
 			objectMS = ms;
 			statMode = overlap;
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_disableOverhead = false;
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_disableTerrain = false;
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_disableWater = false;
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_disableObjects = false;
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_disableConsole = true;
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_sleepTime = (int)(terrainMS);
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_debugLinesToShow = 1;
+			Graphics::Get_Render_Diagnostics().disable_overhead = false;
+			Graphics::Get_Render_Diagnostics().disable_water = false;
+			Graphics::Get_Render_Diagnostics().disable_objects = false;
+			Graphics::Get_Render_Diagnostics().disable_console = true;
+			Graphics::Get_Render_Diagnostics().console_line_limit = 1;
 		} else if (statMode == overlap) {
 			overlapMS = ms;
 			statMode = normal;
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_disableOverhead = false;
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_disableTerrain = false;
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_disableWater = false;
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_disableObjects = false;
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_disableConsole = true;
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_sleepTime = 0;
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_debugLinesToShow = 1;
+			Graphics::Get_Render_Diagnostics().disable_overhead = false;
+			Graphics::Get_Render_Diagnostics().disable_water = false;
+			Graphics::Get_Render_Diagnostics().disable_objects = false;
+			Graphics::Get_Render_Diagnostics().disable_console = true;
+			Graphics::Get_Render_Diagnostics().console_line_limit = 1;
 		} else if (statMode == normal) {
 			overlapMS = (ms + ((int)terrainMS) - overlapMS );
 			statMode = disabled;
 			extendedStats = SHOW_STATS_TIME;
 
 			// Done collecting stats. Re-enable stuff
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_disableConsole = false;
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_debugLinesToShow = -1;
-		} else if (!WW3D::Get_Render_Backend()->Get_Debug_Settings().m_showingStats) {
+			Graphics::Get_Render_Diagnostics().disable_console = false;
+			Graphics::Get_Render_Diagnostics().console_line_limit = -1;
+		} else if (!Graphics::Get_Render_Diagnostics().collecting_statistics) {
 			// start collecting extended info.
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_showingStats = true;
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_disableOverhead = false;
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_disableTerrain = true;
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_disableWater = true;
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_disableObjects = true;
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_disableConsole = true;
-			WW3D::Get_Render_Backend()->Get_Debug_Settings().m_debugLinesToShow = 1;
+			Graphics::Get_Render_Diagnostics().collecting_statistics = true;
+			Graphics::Get_Render_Diagnostics().disable_overhead = false;
+			Graphics::Get_Render_Diagnostics().disable_water = true;
+			Graphics::Get_Render_Diagnostics().disable_objects = true;
+			Graphics::Get_Render_Diagnostics().disable_console = true;
+			Graphics::Get_Render_Diagnostics().console_line_limit = 1;
 			statMode = sync;
 			gameOverheadMS = 0.0f;
 			threeDOverheadMS = 0.0f;
@@ -1575,21 +1412,14 @@ void W3DDisplay::gatherDebugStats()
 		m_displayStrings[Polygons]->setText( unibuffer );
 
 		// vertices this frame
-		unibuffer.format( L"Vertices: %d", Debug_Statistics::Get_Vertices() );
+		unibuffer.format( L"Submitted vertices/indices: %llu", static_cast<unsigned long long>(Graphics::Get_Frame_Submission_Statistics().Last_Frame().vertex_invocations) );
 		m_displayStrings[Vertices]->setText( unibuffer );
 
-		//
-		// I'm adjusting the texture memory usage counter by subtracting
-		// out the terrain alpha texture (since it's really == terrain texture).
-		//
-		unibuffer.format( L"Video RAM: %d", Debug_Statistics::Get_Record_Texture_Size() - 1376256 );
-		m_displayStrings[VideoRam]->setText( unibuffer );
+		m_displayStrings[VideoRam]->setText( UnicodeString::TheEmptyString );
 
 		s_lastUpdateTime64 = time64;
 		s_timeSinceLastUpdateInSecs = 0.0f;
 		s_framesRenderedSinceLastUpdate = 0;
-		s_drawCallsSinceLastUpdate = 0;
-		s_sortedPolysSinceLastUpdate = 0;
 
 		// terrain stats
 		unibuffer.format( L"3-Way Blends: %d/%d, Shoreline Blends: %d/%d", TheTerrainRenderObject->getNumExtraBlendTiles(TRUE),
@@ -1868,9 +1698,9 @@ void W3DDisplay::drawDebugStats()
 
 	int linesOfStrings = DisplayStringCount;
 #ifdef EXTENDED_STATS
-	if (WW3D::Get_Render_Backend()->Get_Debug_Settings().m_debugLinesToShow > -1)
+	if (Graphics::Get_Render_Diagnostics().console_line_limit > -1)
 	{
-		linesOfStrings = WW3D::Get_Render_Backend()->Get_Debug_Settings().m_debugLinesToShow;
+		linesOfStrings = Graphics::Get_Render_Diagnostics().console_line_limit;
 	}
 
 #endif
@@ -1979,7 +1809,7 @@ void W3DDisplay::calculateTerrainLOD()
             }
             if (WW3D::Begin_Render(true, true, Vector3(0.0f, 0.0f, 0.0f)) == WW3D_ERROR_OK) {
                 drawViews();
-                WW3D::End_Render(false);
+                WW3D::End_Render();
                 if (!Graphics_DX11_End_Frame() || !Graphics_DX11_Present())
                     Graphics_DX11_Abort_Frame();
             } else {
@@ -2026,7 +1856,7 @@ Real W3DDisplay::getCurrentFPS()
 
 Int W3DDisplay::getLastFrameDrawCalls()
 {
-	return Debug_Statistics::Get_Draw_Calls();
+	return static_cast<Int>((std::min)(Graphics::Get_Frame_Submission_Statistics().Last_Frame().draw_calls, std::uint64_t{INT_MAX}));
 }
 
 //=============================================================================
@@ -2043,6 +1873,10 @@ void W3DDisplay::step()
 //DECLARE_PERF_TIMER(W3DDisplay_draw)
 void W3DDisplay::draw()
 {
+    PROFILER_SECTION_NAME("Graphics.Display.Draw");
+    PROFILER_PLOT("Graphics.LogicRate", static_cast<int64_t>(TheFramePacer->getActualLogicTimeScaleFps()));
+    PROFILER_PLOT("Graphics.RenderLimit", static_cast<int64_t>(TheFramePacer->getActualFramesPerSecondLimit()));
+    PROFILER_PLOT("Graphics.LogicFrame", static_cast<int64_t>(TheGameLogic->getFrame()));
 	//USE_PERF_TIMER(W3DDisplay_draw)
 
 	if (SDLPlatformWindow::isMinimized()) {
@@ -2104,7 +1938,7 @@ AGAIN:
 #ifdef EXTENDED_STATS
 	else
 	{
-		WW3D::Get_Render_Backend()->Get_Debug_Settings().m_showingStats = false;
+		Graphics::Get_Render_Diagnostics().collecting_statistics = false;
 	}
 #endif
 
@@ -2128,7 +1962,6 @@ AGAIN:
   	// Predictive LOD optimizer optimizes the mesh LOD levels to match
   	// the given polygon budget
   	//
-	//PredictiveLODOptimizerClass::Optimize_LODs( 5000 );
 
 	Bool freezeTime = TheFramePacer->isTimeFrozen() || TheFramePacer->isGameHalted();
 
@@ -2141,7 +1974,6 @@ AGAIN:
 		return;
 	}
 
-	Debug_Statistics::Begin_Statistics();	//reset all counters (polygons, vertices, etc) before drawing
 
 	//update state of all the terrain tracks (fade, remove, etc.)
 	/// @todo: Is there a better place to put per-frame updates like this?
@@ -2160,6 +1992,7 @@ AGAIN:
 			{
 				if (TheTerrainRenderObject->getShroud())
 				{
+					GENERALS_GRAPHICS_PROFILE_SCOPE("Graphics.Shroud.Update");
 					TheTerrainRenderObject->getShroud()->render(primaryW3DView->get3DCamera());
 				}
 			}
@@ -2169,7 +2002,10 @@ AGAIN:
 	WW3D::Update_Logic_Frame_Time(TheFramePacer->getLogicTimeStepMilliseconds());
 
 	// TheSuperHackers @info This binds the WW3D update to the logic update.
-	WW3D::Sync(TheGameLogic->hasUpdated());
+	{
+		GENERALS_GRAPHICS_PROFILE_SCOPE("Graphics.Scene.Sync");
+		WW3D::Sync(TheGameLogic->hasUpdated());
+	}
 
 	static Int now;
 	now=SDL_GetTicks();
@@ -2185,13 +2021,24 @@ AGAIN:
 	}
 
 	do {
+		auto& submissionStatistics = Graphics::Get_Frame_Submission_Statistics();
+		submissionStatistics.Cancel();
+		if (auto* device = Graphics::Shared_Frame_Device()) {
+			auto& commands = device->Immediate_Command_List();
+			submissionStatistics.Begin(&commands, commands.Submission_Counts());
+		}
 
 		// update all views of the world - recomputes data which will affect drawing
-		if (WW3D::Get_Render_Backend()->Is_Device_Ready())
+		if (Graphics::Frame_Device_Ready())
 		{	//Checking if we have the device before updating views because the heightmap crashes otherwise while
 			//trying to refresh the visible terrain geometry.
 //			if(TheGlobalData->m_loadScreenRender != TRUE)
+			{
+				GENERALS_GRAPHICS_PROFILE_SCOPE("Graphics.Views.Update");
 				updateViews();
+			}
+			{
+				GENERALS_GRAPHICS_PROFILE_SCOPE("Graphics.Particles.Update");
      		TheParticleSystemManager->update();//LORENZEN AND WILCZYNSKI MOVED THIS FROM ITS NATIVE POSITION, ABOVE
                                            //FOR THE PURPOSE OF LETTING THE PARTICLE SYSTEM LOOK UP THE RENDER OBJECT"S
                                            //TRANSFORM MATRIX, WHILE IT IS STILL VALID (HAVING DONE ITS CLIENT TRANSFORMS
@@ -2200,6 +2047,7 @@ AGAIN:
                                            //MOVE WITH THE CLIENT TRANSFORMS, NOW.
                                            //REVOLUTIONARY!
                                            //-LORENZEN
+			}
 
 
 			if (TheWaterRenderSystem)
@@ -2208,14 +2056,13 @@ AGAIN:
 			//Can't render into textures while rendering to screen so these textures need to be updated
 			//before we enter main rendering loop.
 			if (TheW3DProjectedShadowManager)
+			{
+				GENERALS_GRAPHICS_PROFILE_SCOPE("Graphics.ProjectedShadows.Update");
 				TheW3DProjectedShadowManager->updateRenderTargetTextures();
+			}
 		}
 
-		Debug_Statistics::End_Statistics();	//record number of polygons rendered in RenderTargetTextures.
 
-		//Store number of polygons rendered in renderTargetTextures.
-		Int numRenderTargetPolygons=Debug_Statistics::Get_Polygons();
-		Int numRenderTargetVertices=Debug_Statistics::Get_Vertices();
 
 		// start render block
 		#if defined(_ALLOW_DEBUG_CHEATS_IN_RELEASE)
@@ -2242,20 +2089,22 @@ AGAIN:
 						TheMouse->draw();	//keep applying the current cursor style so it remains hidden if needed.
 					if (graphicsFrame)
 						Submit_Videos(static_cast<std::uint32_t>(getWidth()), static_cast<std::uint32_t>(getHeight()));
-					WW3D::End_Render(false);
+					WW3D::End_Render();
 					if (graphicsFrame)
 						renderGraphicsScenePasses(primaryW3DView->get3DCamera());
 					continue;
 				}
 				couldRender = true;
-				// add the number of verts/polygons drawn before the main scene
-				if (numRenderTargetPolygons || numRenderTargetVertices)
-					Debug_Statistics::Record_Polys_And_Vertices(numRenderTargetPolygons,numRenderTargetVertices,ShaderClass::_PresetOpaqueShader);
 
 				// draw all views of the world
-				drawViews();
+				{
+					GENERALS_GRAPHICS_PROFILE_SCOPE("Graphics.Views.Draw");
+					drawViews();
+				}
 
 				// draw the user interface
+				{
+				GENERALS_GRAPHICS_PROFILE_SCOPE("Graphics.UI.Draw");
 				TheInGameUI->DRAW();
 
 				TheGameClient->DRAW();
@@ -2263,6 +2112,7 @@ AGAIN:
 				// draw the mouse
 				if( TheMouse )
 					TheMouse->DRAW();
+				}
 
 				if (graphicsFrame)
 					Submit_Videos(static_cast<std::uint32_t>(getWidth()), static_cast<std::uint32_t>(getHeight()));
@@ -2326,13 +2176,21 @@ AGAIN:
 #endif
 
 #ifdef PROFILER_ENABLED
-				if (m_profilerFrameCapture && !TheGlobalData->m_headless)
-				{
-					m_profilerFrameCapture->Capture(getWidth(), getHeight());
-				}
-				#endif
-				// render is all done!
-				WW3D::End_Render(false);
+                if (PROFILER_IS_CONNECTED && !TheGlobalData->m_headless) {
+                    GENERALS_GRAPHICS_PROFILE_SCOPE("Graphics.Profiler.FrameCapture");
+                    auto* device = Graphics::Shared_Frame_Device();
+                    if (device) {
+                        const auto frame = Graphics::Get_Frame_Preview().Read(
+                            {device->Get_Swap_Chain().Backbuffer(), device->Get_Swap_Chain().Depth_Target()},
+                            Graphics::RHITextureFormat::BGRA8_UNorm, PROFILER_FRAME_IMAGE_SIZE,
+                            WW3D::Get_Logic_Time_Milliseconds(), PROFILER_FRAME_IMAGE_INTERVAL_MS);
+                        if (frame.Is_Valid())
+                            PROFILER_FRAME_IMAGE(frame.pixels.data(), frame.width, frame.height, 0, false);
+                    }
+                }
+#endif
+                // render is all done!
+				WW3D::End_Render();
 				if (graphicsFrame)
 					renderGraphicsScenePasses(primaryW3DView->get3DCamera());
 			}
@@ -2348,6 +2206,7 @@ AGAIN:
 			}
 		}
 
+		submissionStatistics.Cancel();
 		if (TheScriptEngine->isTimeFrozenDebug() || TheScriptEngine->isTimeFrozenScript() || TheGameLogic->isGamePaused())
 		{
 			freezeTime = false; // We're frozen for debug or for pause, and need to continue out of the loop.
@@ -2356,7 +2215,7 @@ AGAIN:
 	} while (freezeTime && !TheTacticalView->isCameraMovementFinished());
 
 #ifdef EXTENDED_STATS
-	if (WW3D::Get_Render_Backend()->Get_Debug_Settings().m_disableOverhead) {
+	if (Graphics::Get_Render_Diagnostics().disable_overhead) {
 		goto AGAIN;
 	}
 #endif
@@ -2517,7 +2376,7 @@ void W3DDisplay::setTimeOfDay( TimeOfDay tod )
 		m_3DScene->Set_Ambient_Light( Vector3(ol->ambient.red, ol->ambient.green, ol->ambient.blue) );
 	}
 
-	for (Int i=0; i<LightEnvironmentClass::MAX_LIGHTS; i++)
+	for (Int i=0; i<Graphics::Material_Light_Count; i++)
 	{
 		if( m_myLight[i] )
 		{

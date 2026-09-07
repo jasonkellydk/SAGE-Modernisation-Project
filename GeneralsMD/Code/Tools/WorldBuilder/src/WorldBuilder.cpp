@@ -24,7 +24,6 @@
 #include "MainFrm.h"
 #include "OpenMap.h"
 #include "SplashScreen.h"
-#include "WW3D2/TextureLoader.h"
 #include "WorldBuilderDoc.h"
 #include "WorldBuilderView.h"
 #include "WBFrameWnd.h"
@@ -32,6 +31,7 @@
 
 //#include <wsys/StdFileSystem.h>
 #include "W3DDevice/GameClient/W3DFileSystem.h"
+#include "W3DDevice/GameClient/W3DAssetRuntime.h"
 #include "Common/FramePacer.h"
 #include "Common/GlobalData.h"
 #include "WHeightMapEdit.h"
@@ -78,8 +78,8 @@
 
 #include <io.h>
 #include "Win32Device/GameClient/Win32Mouse.h"
-#include "Win32Device/Common/Win32LocalFileSystem.h"
-#include "Win32Device/Common/Win32BIGFileSystem.h"
+#include "SDL3Device/Common/SDL3LocalFileSystem.h"
+#include "SDL3Device/Common/SDL3BIGFileSystem.h"
 
 
 static SubsystemInterfaceList TheSubsystemListRecord;
@@ -325,8 +325,8 @@ BOOL CWorldBuilderApp::InitInstance()
 
 	TheFileSystem = new FileSystem;
 
-	initSubsystem(TheLocalFileSystem, (LocalFileSystem*)new Win32LocalFileSystem);
-	initSubsystem(TheArchiveFileSystem, (ArchiveFileSystem*)new Win32BIGFileSystem);
+	initSubsystem(TheLocalFileSystem, (LocalFileSystem*)new SDL3LocalFileSystem);
+	initSubsystem(TheArchiveFileSystem, (ArchiveFileSystem*)new SDL3BIGFileSystem);
 
 	// Just for kicks, get the HINSTANCE that WOL would need
 	// if we were going to use it, which we aren't.
@@ -406,6 +406,10 @@ BOOL CWorldBuilderApp::InitInstance()
 	TheSubsystemListRecord.postProcessLoadAll();
 
 	TheW3DFileSystem = new WB_W3DFileSystem;
+	if (!W3DAssetRuntime::Initialize()) {
+		AfxMessageBox("Unable to initialize editor assets.");
+		return FALSE;
+	}
 
 	// Just to be sure - wb doesn't do well with half res terrain.
 	DEBUG_ASSERTCRASH(!TheGlobalData->m_useHalfHeightMap, ("TheGlobalData->m_useHalfHeightMap : Don't use this setting in WB."));
@@ -633,6 +637,7 @@ int CWorldBuilderApp::ExitInstance()
 
 	ScriptList::reset();
 
+	W3DAssetRuntime::Shutdown();
 	TheSubsystemListRecord.shutdownAll();
 
 	WorldHeightMapEdit::shutdown();

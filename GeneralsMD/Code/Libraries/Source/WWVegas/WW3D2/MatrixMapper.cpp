@@ -39,19 +39,31 @@
  *   MatrixMapperClass::Set_Texture_Transform -- Sets the viewspace-to-texturespace transform  *
  *   MatrixMapperClass::Update_View_To_Pixel_Transform -- recomputes ViewToPixel               *
  *   MatrixMapperClass::Compute_Texture_Coordinate -- compute a single texture coord           *
- *   MatrixMapperClass::Apply -- Apply texture mapper to render states and texture stage states*
  *   MatrixMapperClass::Calculate_Texture_Matrix -- Calculate texture matrix                   *
  *   CompositeMatrixMapperClass::CompositeMatrixMapperClass -- Constructor                     *
  *   CompositeMatrixMapperClass::CompositeMatrixMapperClass -- Copy Constructor                *
  *   CompositeMatrixMapperClass::~CompositeMatrixMapperClass -- Destructor                     *
  *   CompositeMatrixMapperClass::~CompositeMatrixMapperClass -- Destructor                     *
- *   CompositeMatrixMapperClass::Apply -- Apply texture mapper to render states and ts states  *
  *   CompositeMatrixMapperClass::Calculate_Texture_Matrix -- Calculate texture matrix          *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 
 #include "matrixMapper.h"
-#include "WW3D.h"
+#include <cstring>
+
+namespace {
+std::array<float,16> Texture_Matrix_Values(const Matrix4x4& matrix)
+{
+    std::array<float,16> values;
+    std::memcpy(values.data(),&matrix,sizeof(matrix));
+    return values;
+}
+static_assert(static_cast<unsigned>(MatrixMapperClass::ORTHO_PROJECTION) == static_cast<unsigned>(Graphics::TextureProjection::Orthographic));
+static_assert(static_cast<unsigned>(MatrixMapperClass::PERSPECTIVE_PROJECTION) == static_cast<unsigned>(Graphics::TextureProjection::Perspective));
+static_assert(static_cast<unsigned>(MatrixMapperClass::DEPTH_GRADIENT) == static_cast<unsigned>(Graphics::TextureProjection::DepthGradient));
+static_assert(static_cast<unsigned>(MatrixMapperClass::NORMAL_GRADIENT) == static_cast<unsigned>(Graphics::TextureProjection::NormalGradient));
+}
+
 
 
 /***********************************************************************************************
@@ -211,73 +223,6 @@ void MatrixMapperClass::Compute_Texture_Coordinate(const Vector3 & point,Vector3
 	set_stq->Z = ViewToPixel[3][0]*point.X + ViewToPixel[3][1]*point.Y + ViewToPixel[3][2]*point.Z + ViewToPixel[3][3];
 }
 
-/***********************************************************************************************
- * MatrixMapperClass::Apply -- Apply texture mapper to render states and texture stage states  *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   11/05/01     NH : Created comment block.                                                  *
- *=============================================================================================*/
-void MatrixMapperClass::Apply(int uv_array_index)
-{
-	Matrix4x4 m;
-
-	switch (Type)
-	{
-	case ORTHO_PROJECTION:
-		/*
-		** Orthographic projection
-		*/
-		WW3D::Get_Render_Backend()->Set_Transform(RenderBackend_Texture_Transform(Stage),ViewToPixel);
-		WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(Stage,RenderBackendTextureCoordinateSource::CameraSpacePosition);
-		WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(Stage,RenderBackendTextureTransformFlags::Count2);
-		break;
-	case PERSPECTIVE_PROJECTION:
-		/*
-		** Perspective projection
-		*/
-		m[0]=ViewToPixel[0];
-		m[1]=ViewToPixel[1];
-		m[2]=ViewToPixel[3];
-		WW3D::Get_Render_Backend()->Set_Transform(RenderBackend_Texture_Transform(Stage),m);
-		WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(Stage,RenderBackendTextureCoordinateSource::CameraSpacePosition);
-		WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(Stage,RenderBackendTextureTransformFlags::ProjectedCount3);
-		break;
-	case DEPTH_GRADIENT:
-		/*
-		** Depth gradient, Set up second stage texture coordinates to
-		** apply a depth gradient to the projection.  Note that the
-		** depth values have been set up to vary from 0 to 1 in the
-		** Update_View_To_Pixel_Transform function.
-		*/
-		m[0].Set(0,0,0,GradientUCoord);
-		m[1]=ViewToPixel[2];
-		WW3D::Get_Render_Backend()->Set_Transform(RenderBackend_Texture_Transform(Stage),m);
-		WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(Stage,RenderBackendTextureCoordinateSource::CameraSpacePosition);
-		WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(Stage,RenderBackendTextureTransformFlags::Count2);
-		break;
-	case NORMAL_GRADIENT:
-		/*
-		** Normal Gradient, Set up the second stage texture coordinates to
-		** apply a gradient based on the dot product of the vertex normal
-		** and the projection direction.  (NOTE: this is basically texture-
-		** based diffuse lighting!)
-		*/
-		m[0].Set(0,0,0,GradientUCoord);
-		m[1].Set(ViewSpaceProjectionNormal.X,ViewSpaceProjectionNormal.Y,ViewSpaceProjectionNormal.Z, 0);
-		WW3D::Get_Render_Backend()->Set_Transform(RenderBackend_Texture_Transform(Stage),m);
-		WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(Stage,RenderBackendTextureCoordinateSource::CameraSpaceNormal);
-		WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(Stage,RenderBackendTextureTransformFlags::Count2);
-		break;
-	}
-
-
-}
 
 /***********************************************************************************************
  * MatrixMapperClass::Calculate_Texture_Matrix -- Calculate texture matrix                     *
@@ -293,10 +238,10 @@ void MatrixMapperClass::Apply(int uv_array_index)
  *=============================================================================================*/
 void MatrixMapperClass::Calculate_Texture_Matrix(Matrix4x4 &tex_matrix)
 {
-	// We return ViewToPixel. This is not, strictly speaking, always correct, but it is close
-	// and it is OK not to be 100% correct since this function is not called by the Apply()
-	// function.
-	tex_matrix = ViewToPixel;
+    const auto matrix = Graphics::Make_Projection_Texture_Transform(Texture_Matrix_Values(ViewToPixel),
+        static_cast<Graphics::TextureProjection>(Type),GradientUCoord,
+        {ViewSpaceProjectionNormal.X,ViewSpaceProjectionNormal.Y,ViewSpaceProjectionNormal.Z});
+    std::memcpy(&tex_matrix,matrix.data(),sizeof(tex_matrix));
 }
 
 /***********************************************************************************************
@@ -361,52 +306,6 @@ CompositeMatrixMapperClass::~CompositeMatrixMapperClass()
 	}
 }
 
-/***********************************************************************************************
- * CompositeMatrixMapperClass::Apply -- Apply texture mapper to render states and ts states    *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   11/05/01     NH : Created.                                                                *
- *=============================================================================================*/
-void CompositeMatrixMapperClass::Apply(int uv_array_index)
-{
-	if (InternalMapper) {
-		// Get the texture matrix from the internal mapper, composite it into ViewToPixel (save off
-		// the previous value of ViewToPixel first), call the base class Apply() function (which will
-		// use the modifiedViewToPixel) and then restore ViewToPixel to its previous state.
-		Matrix4x4 int_mat;
-		InternalMapper->Calculate_Texture_Matrix(int_mat);
-		Matrix4x4 view_to_pixel_copy(ViewToPixel);
-
-		// We need to modify the view-to-pixel matrix to produce q (third texture coordinate values)
-		// equal to one. This is the input which the internal mappers' matrix was designed for (it
-		// is what you get when you use 2D vertex coordinates from the vertex buffer).
-		// For this we need to multiply the matrix by the following matrix:
-		// [1 0 0 0]
-		// [0 1 0 0]  This is equivalent to overwriting the third row with the fourth one.
-		// [0 0 0 1]
-		// [0 0 0 1]
-		Matrix4x4 tmp;
-		tmp[0] = ViewToPixel[0];
-		tmp[1] = ViewToPixel[1];
-		tmp[2] = ViewToPixel[3];
-		tmp[3] = ViewToPixel[3];
-
-		// We multiply the matrices in this order so the camera position, transformed by ViewToPixel
-		// is used as the 'input texture coordinates' to be affected by the internal mapper matrix.
-		Matrix4x4::Multiply(int_mat, tmp, &ViewToPixel);
-
-		MatrixMapperClass::Apply(uv_array_index);
-		ViewToPixel = view_to_pixel_copy;
-	} else {
-		MatrixMapperClass::Apply(uv_array_index);
-	}
-}
 
 /***********************************************************************************************
  * MatrixMapperClass::Calculate_Texture_Matrix -- Calculate texture matrix                     *
@@ -422,33 +321,21 @@ void CompositeMatrixMapperClass::Apply(int uv_array_index)
  *=============================================================================================*/
 void CompositeMatrixMapperClass::Calculate_Texture_Matrix(Matrix4x4 &tex_matrix)
 {
-	if (InternalMapper) {
-		// We return the internal mapper's matrix times ViewToPixel, adjusted to produce the correct
-		// z-value of 1. This is only correct if the mapper is in ORTHO_PROJECTION or
-		// PERSPECTIVE_PROJECTION mode, which should be the case for most uses of this mapper. It is
-		// OK for this function not be be 100% correct in all cases, since it is not used in the
-		// Apply() function.
-		Matrix4x4 int_mat;
-		InternalMapper->Calculate_Texture_Matrix(int_mat);
-
-			// We need to modify the view-to-pixel matrix to produce q (third texture coordinate values)
-			// equal to one. This is the input which the internal mappers' matrix was designed for (it
-			// is what you get when you use 2D vertex coordinates from the vertex buffer).
-			// For this we need to multiply the matrix by the following matrix:
-			// [1 0 0 0]
-			// [0 1 0 0]  This is equivalent to overwriting the third row with the fourth one.
-			// [0 0 0 1]
-			// [0 0 0 1]
-			Matrix4x4 tmp;
-			tmp[0] = ViewToPixel[0];
-			tmp[1] = ViewToPixel[1];
-			tmp[2] = ViewToPixel[3];
-			tmp[3] = ViewToPixel[3];
-
-		// We multiply the matrices in this order so the camera position, transformed by ViewToPixel
-		// is used as the 'input texture coordinates' to be affected by the internal mapper matrix.
-		Matrix4x4::Multiply(int_mat, tmp, &tex_matrix);
-	} else {
-		MatrixMapperClass::Calculate_Texture_Matrix(tex_matrix);
-	}
+    auto projection = Texture_Matrix_Values(ViewToPixel);
+    if (InternalMapper) {
+        Matrix4x4 input;
+        InternalMapper->Calculate_Texture_Matrix(input);
+        auto local = Texture_Matrix_Values(input);
+        // Authored 2D mapper matrices place translation in column three.
+        // Expand that homogeneous coordinate before composing the projection.
+        for (unsigned row=0;row<4;++row) {
+            local[row*4+3] += local[row*4+2];
+            local[row*4+2] = 0;
+        }
+        projection = Graphics::Compose_Texture_Projection(projection,local);
+    }
+    const auto matrix = Graphics::Make_Projection_Texture_Transform(projection,
+        static_cast<Graphics::TextureProjection>(Type),GradientUCoord,
+        {ViewSpaceProjectionNormal.X,ViewSpaceProjectionNormal.Y,ViewSpaceProjectionNormal.Z});
+    std::memcpy(&tex_matrix,matrix.data(),sizeof(tex_matrix));
 }

@@ -38,6 +38,15 @@
 
 #pragma once
 
+#include <memory>
+#include <span>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+import Graphics.Scene.Models.Hierarchy;
+import Graphics.Scene.Models.BoundsTree;
+
 #include "WWLib/always.h"
 #include "WWLib/bittype.h"
 #include "WWLib/simplevec.h"
@@ -47,7 +56,6 @@
 #include "WWMath/Vector3i.h"
 #include "WWMath/vector4.h"
 #include "WWDebug/wwdebug.h"
-#include "WWLib/multilist.h"
 #include "WW3D2/ColTest.h"
 #include "WW3D2/IntTest.h"
 
@@ -56,8 +64,7 @@ class AABoxClass;
 class OBBoxClass;
 class SphereClass;
 class ChunkLoadClass;
-class AABTreeClass;
-class HTreeClass;
+
 class RenderInfoClass;
 
 // Define which kind of index vector to use (16- or 32 bit)
@@ -83,7 +90,7 @@ typedef Vector3i16 TriIndex;
 ** This class encapsulates the geometry data for a triangle mesh.
 */
 
-class MeshGeometryClass : public RefCountClass, public MultiListObjectClass
+class MeshGeometryClass : public RefCountClass
 {
 public:
 
@@ -219,9 +226,8 @@ protected:
 
 	// functions to compute the deformed vertices of skins.
 	// Destination pointers MUST point to arrays large enough to hold all vertices
-	void get_deformed_vertices(Vector3 *dst_vert, Vector3 *dst_norm, const HTreeClass * htree);
-	void get_deformed_vertices(Vector3 *dst_vert, const HTreeClass * htree);
-	void get_deformed_screenspace_vertices(Vector4 *dst_vert,const RenderInfoClass & rinfo,const Matrix3D & mesh_tm,const HTreeClass * htree);
+	void get_deformed_vertices(Vector3 *dst_vert, Vector3 *dst_norm, const Graphics::ModelHierarchy * htree);
+	void get_deformed_vertices(Vector3 *dst_vert, const Graphics::ModelHierarchy * htree);
 
 	// General info
 	ShareBufferClass<char> *							MeshName;
@@ -246,7 +252,7 @@ protected:
 	Vector3													BoundBoxMax;
 	Vector3													BoundSphereCenter;
 	float														BoundSphereRadius;
-	AABTreeClass *											CullTree;
+	std::unique_ptr<Graphics::ModelBoundsTree> CullTree;
 
 };
 

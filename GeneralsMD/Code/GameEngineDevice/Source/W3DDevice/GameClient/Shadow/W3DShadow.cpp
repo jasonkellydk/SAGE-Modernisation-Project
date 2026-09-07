@@ -46,7 +46,6 @@
 #include "W3DDevice/GameClient/W3DProjectedShadow.h"
 #include "W3DDevice/GameClient/W3DShadow.h"
 #include "W3DDevice/GameClient/W3DDirectionalShadows.h"
-#include "WW3D2/Statistics.h"
 #include "Common/Debug.h"
 #include "Common/PerfTimer.h"
 

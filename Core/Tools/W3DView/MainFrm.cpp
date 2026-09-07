@@ -1,3 +1,5 @@
+import Graphics.Resources.Textures.Quality;
+import Graphics.Diagnostics.Render;
 /*
 **	Command & Conquer Renegade(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -71,7 +73,6 @@
 #include "SoundEditDialog.h"
 #include "WWAudio/WWAudio.h"
 #include "WW3D2/SoundRObj.h"
-#include "WW3D2/RDDesc.h"
 #include "ScaleDialog.h"
 #include "GammaDialog.h"
 #include "AnimatedSoundOptionsDialog.h"
@@ -84,7 +85,7 @@
 #include <string>
 #include <system_error>
 
-import Graphics.Backends.DX11.Coexistence;
+import Graphics.Backends.DX11.FrameRuntime;
 import Graphics.Capture.FrameCapture;
 import Video.Capture.ImageWriter;
 
@@ -551,7 +552,7 @@ CMainFrame::OnCreateClient
 				// the graphic viewer class.
 				bReturn = (WW3D::Init ((HWND)*pCGraphicView) == WW3D_ERROR_OK);
 				ASSERT (bReturn);
-				WW3D::Enable_Static_Sort_Lists(true);
+				Graphics::Get_Scene_Draw_Queue().Set_Enabled(true);
 
 				//
 				//	Initialize the device
@@ -588,15 +589,6 @@ CMainFrame::OnCreateClient
 				int sort=::AfxGetApp()->GetProfileInt("Config", "EnableSorting",1);
 				WW3D::Enable_Sorting(sort==1?true:false);
 
-				// restore gamma settings
-				int setting=::AfxGetApp()->GetProfileInt("Config","EnableGamma",0);
-				if (setting) {
-					float gamma=::AfxGetApp()->GetProfileInt("Config","Gamma",10);
-					gamma=gamma/10.0f;
-					if (gamma<1.0) gamma=1.0;
-					if (gamma>3.0) gamma=3.0;
-					WW3D::Set_Gamma(gamma,0.0f,1.0f);
-				}
 			}
 		}
 	}
@@ -2105,39 +2097,7 @@ CMainFrame::Select_Device (bool show_dlg)
             BOOL bReturn = pCGraphicView->InitializeGraphicView ();
             ASSERT (bReturn);
 
-				if (bReturn) {
 
-					//
-					//	Get information about the current device
-					//
-					const RenderDeviceDescClass &device_desc = WW3D::Get_Render_Device_Desc ();
-					CString driver_name = deviceSelDialog.GetDriverName ();
-					CString chipset = device_desc.Get_Hardware_Chipset ();
-					CString string_version = device_desc.Get_Driver_Version ();
-					chipset.MakeUpper ();
-					driver_name.MakeLower ();
-
-					//
-					//	Check to ensure the drivers are valid if the user choose glide
-					//
-					if (::strstr (driver_name, "glide2") != nullptr) {
-
-						// Is this glide driver an acceptable version?
-						float driver_version = ::atof (string_version);
-						bool is_voodoo2 = (::strstr (chipset , "VOODOO2") != nullptr);
-						if ((is_voodoo2 && (driver_version < 2.54F)) ||
-							 ((is_voodoo2 == false) && (driver_version < 2.46F))) {
-
-							// Let the user know we can't use these drivers
-							CString message;
-							message.LoadString (IDS_UNACCEPTABLE_GLIDE_MSG);
-							::MessageBox (nullptr, message, "Invalid Device", MB_OK | MB_ICONEXCLAMATION | MB_SETFOREGROUND);
-
-							// Force the user to choose a new device
-							Select_Device (true);
-						}
-					}
-				}
         }
     }
 }
@@ -4230,15 +4190,6 @@ void CMainFrame::OnEnableGammaCorrection()
 	bool enable_gamma=(setting?true:false);
 	enable_gamma=!enable_gamma;
 	::AfxGetApp()->WriteProfileInt("Config", "EnableGamma", enable_gamma?1:0);
-	if (enable_gamma) {
-		float gamma=::AfxGetApp()->GetProfileInt("Config","Gamma",10);
-		gamma=gamma/10.0f;
-		if (gamma<1.0) gamma=1.0;
-		if (gamma>3.0) gamma=3.0;
-		WW3D::Set_Gamma(gamma,0.0f,1.0f);
-	} else {
-		WW3D::Set_Gamma(1.0,0.0f,1.0f);
-	}
 }
 
 void CMainFrame::OnUpdateEnableGammaCorrection(CCmdUI* pCmdUI)

@@ -37,16 +37,19 @@
  *   Get_Preset -- retrieve presets                                                            *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
+#include <cstddef>
+#include <string>
+#include <vector>
 #include "VertMaterial.h"
 #include "WWLib/realcrc.h"
 #include "WWDebug/wwdebug.h"
-#include "W3DUtil.h"
 #include "WWLib/chunkio.h"
 #include "W3DErr.h"
 #include "WWLib/INI.h"
 #include "WWLib/XSTRAW.h"
-#include "WW3D2/Backend/RenderBackend.h"
 #include "WW3D.h"
+
+import Assets.Adapters.W3D.Materials;
 
 
 static unsigned int unique=1;
@@ -59,16 +62,12 @@ VertexMaterialClass* VertexMaterialClass::Presets[VertexMaterialClass::PRESET_CO
 VertexMaterialClass::VertexMaterialClass():
 	Material{},
 	Flags(0),
-	AmbientColorSource(MATERIAL),
-	EmissiveColorSource(MATERIAL),
-	DiffuseColorSource(MATERIAL),
-	UseLighting(false),
 	UniqueID(0),
 	CRCDirty(true)
 {
 	int i;
 
-	for (i=0; i<MeshBuilderClass::MAX_STAGES; i++)
+	for (i=0; i<Graphics::Material::TextureSlotCount; i++)
 	{
 		Mapper[i]=nullptr;
 		UVSource[i] = i;
@@ -77,21 +76,18 @@ VertexMaterialClass::VertexMaterialClass():
 	Set_Diffuse(1.0f,1.0f,1.0f);
 
 	Set_Opacity(1.0f);
+	Set_Shininess(0.0f);
 }
 
 VertexMaterialClass::VertexMaterialClass(const VertexMaterialClass & src) :
 	Material(src.Material),
 	Flags(src.Flags),
-	AmbientColorSource(src.AmbientColorSource),
-	EmissiveColorSource(src.EmissiveColorSource),
-	DiffuseColorSource(src.DiffuseColorSource),
-	UseLighting(src.UseLighting),
 	Name(src.Name),
 	UniqueID(src.UniqueID),
 	CRCDirty(true)
 {
 	int i;
-	for (i=0; i<MeshBuilderClass::MAX_STAGES; i++)
+	for (i=0; i<Graphics::Material::TextureSlotCount; i++)
 	{
 		Mapper[i]=nullptr;
 		if (src.Mapper[i])
@@ -116,7 +112,7 @@ VertexMaterialClass::~VertexMaterialClass()
 {
 	int i;
 
-	for (i=0; i<MeshBuilderClass::MAX_STAGES; i++)
+	for (i=0; i<Graphics::Material::TextureSlotCount; i++)
 	{
 		if (Mapper[i])
 		{
@@ -132,20 +128,16 @@ VertexMaterialClass & VertexMaterialClass::operator = (const VertexMaterialClass
 	if (this != &src) {
 		Name=src.Name;
 		Flags = src.Flags;
-		AmbientColorSource = src.AmbientColorSource;
-		EmissiveColorSource = src.EmissiveColorSource;
-		DiffuseColorSource = src.DiffuseColorSource;
-		UseLighting=src.UseLighting;
 		UniqueID=src.UniqueID;
 		CRCDirty=src.CRCDirty;
 		int stage;
-		for (stage=0;stage<MeshBuilderClass::MAX_STAGES;++stage) {
+		for (stage=0;stage<Graphics::Material::TextureSlotCount;++stage) {
 			if (Mapper[stage] != nullptr) {
 				Mapper[stage]->Release_Ref();
 				Mapper[stage] = nullptr;
 			}
 		}
-		for (stage=0;stage<MeshBuilderClass::MAX_STAGES;++stage) {
+		for (stage=0;stage<Graphics::Material::TextureSlotCount;++stage) {
 			if (src.Mapper[stage]) {
 				TextureMapperClass *mapper = src.Mapper[stage]->Clone();
 				Set_Mapper(mapper,stage);
@@ -166,17 +158,28 @@ unsigned long VertexMaterialClass::Compute_CRC() const
 // don't include the name when determining whether two vertex materials match
 //	crc = CRC_Memory(reinterpret_cast<const unsigned char *>(Name.Peek_Buffer()),sizeof(char)*strlen(Name),crc);
 
-	crc = CRC_Memory(reinterpret_cast<const unsigned char *>(&Material),sizeof(Material),crc);
+	// Keep the authored material key independent of struct padding and graphics
+	// storage layout. Unused color alpha channels have always been zero.
+	const float values[]{
+		Material.diffuse[0],Material.diffuse[1],Material.diffuse[2],Material.opacity,
+		Material.ambient[0],Material.ambient[1],Material.ambient[2],0,
+		Material.specular[0],Material.specular[1],Material.specular[2],0,
+		Material.emissive[0],Material.emissive[1],Material.emissive[2],0,
+		Material.shininess};
+	const auto diffuse_source=static_cast<ColorSourceType>(Material.diffuse_source);
+	const auto ambient_source=static_cast<ColorSourceType>(Material.ambient_source);
+	const auto emissive_source=static_cast<ColorSourceType>(Material.emissive_source);
+	crc = CRC_Memory(reinterpret_cast<const unsigned char *>(values),sizeof(values),crc);
 	crc = CRC_Memory(reinterpret_cast<const unsigned char *>(&Flags),sizeof(Flags),crc);
-	crc = CRC_Memory(reinterpret_cast<const unsigned char *>(&DiffuseColorSource),sizeof(DiffuseColorSource),crc);
-	crc = CRC_Memory(reinterpret_cast<const unsigned char *>(&AmbientColorSource),sizeof(AmbientColorSource),crc);
-	crc = CRC_Memory(reinterpret_cast<const unsigned char *>(&EmissiveColorSource),sizeof(EmissiveColorSource),crc);
+	crc = CRC_Memory(reinterpret_cast<const unsigned char *>(&diffuse_source),sizeof(diffuse_source),crc);
+	crc = CRC_Memory(reinterpret_cast<const unsigned char *>(&ambient_source),sizeof(ambient_source),crc);
+	crc = CRC_Memory(reinterpret_cast<const unsigned char *>(&emissive_source),sizeof(emissive_source),crc);
 	crc = CRC_Memory(reinterpret_cast<const unsigned char *>(&UVSource),sizeof(UVSource),crc);
-	crc = CRC_Memory(reinterpret_cast<const unsigned char *>(&UseLighting),sizeof(UseLighting),crc);
+	crc = CRC_Memory(reinterpret_cast<const unsigned char *>(&Material.lighting),sizeof(Material.lighting),crc);
 	crc = CRC_Memory(reinterpret_cast<const unsigned char *>(&UniqueID),sizeof(UniqueID),crc);
 
 	int i;
-	for (i=0; i<MeshBuilderClass::MAX_STAGES; i++)
+	for (i=0; i<Graphics::Material::TextureSlotCount; i++)
 	{
 		if (Mapper[i]) crc = CRC_Memory(reinterpret_cast<const unsigned char *>(&(Mapper[i])),sizeof(TextureMapperClass*),crc);
 	}
@@ -283,66 +286,66 @@ void VertexMaterialClass::Set_Emissive(float r,float g,float b)
 
 float	VertexMaterialClass::Get_Shininess() const
 {
-	return Material.power;
+	return Material.shininess;
 }
 
 void	VertexMaterialClass::Set_Shininess(float shin)
 {
 	CRCDirty=true;
-	Material.power=shin;
+	Material.shininess=shin;
 }
 
 float	VertexMaterialClass::Get_Opacity() const
 {
-	return Material.diffuse[3];
+	return Material.opacity;
 }
 
 void	VertexMaterialClass::Set_Opacity(float o)
 {
 	CRCDirty=true;
-	Material.diffuse[3]=o;
+	Material.opacity=o;
 }
 
 void	VertexMaterialClass::Set_Ambient_Color_Source(ColorSourceType src)
 {
 	CRCDirty=true;
-	AmbientColorSource = src;
+	Material.ambient_source = static_cast<Graphics::PropColorSource>(src);
 }
 
 void	VertexMaterialClass::Set_Emissive_Color_Source(ColorSourceType src)
 {
 	CRCDirty=true;
-	EmissiveColorSource = src;
+	Material.emissive_source = static_cast<Graphics::PropColorSource>(src);
 }
 
 void	VertexMaterialClass::Set_Diffuse_Color_Source(ColorSourceType src)
 {
 	CRCDirty=true;
-	DiffuseColorSource = src;
+	Material.diffuse_source = static_cast<Graphics::PropColorSource>(src);
 }
 
 VertexMaterialClass::ColorSourceType
 VertexMaterialClass::Get_Ambient_Color_Source()
 {
-	return AmbientColorSource;
+	return static_cast<ColorSourceType>(Material.ambient_source);
 }
 
 VertexMaterialClass::ColorSourceType
 VertexMaterialClass::Get_Emissive_Color_Source()
 {
-	return EmissiveColorSource;
+	return static_cast<ColorSourceType>(Material.emissive_source);
 }
 
 VertexMaterialClass::ColorSourceType
 VertexMaterialClass::Get_Diffuse_Color_Source()
 {
-	return DiffuseColorSource;
+	return static_cast<ColorSourceType>(Material.diffuse_source);
 }
 
 void VertexMaterialClass::Set_UV_Source(int stage,int array_index)
 {
 	WWASSERT(stage >= 0);
-	WWASSERT(stage < MeshBuilderClass::MAX_STAGES);
+	WWASSERT(stage < Graphics::Material::TextureSlotCount);
 	WWASSERT(array_index >= 0);
 	WWASSERT(array_index < 8);
 	CRCDirty=true;
@@ -352,7 +355,7 @@ void VertexMaterialClass::Set_UV_Source(int stage,int array_index)
 int VertexMaterialClass::Get_UV_Source(int stage)
 {
 	WWASSERT(stage >= 0);
-	WWASSERT(stage < MeshBuilderClass::MAX_STAGES);
+	WWASSERT(stage < Graphics::Material::TextureSlotCount);
 	return UVSource[stage];
 }
 
@@ -361,158 +364,80 @@ void VertexMaterialClass::Init_From_Material3(const W3dMaterial3Struct & mat3)
 {
 	Vector3 tmp0,tmp1,tmp2;
 
-	W3dUtilityClass::Convert_Color(mat3.DiffuseColor,&tmp0);
-	W3dUtilityClass::Convert_Color(mat3.DiffuseCoefficients,&tmp1);
+	tmp0.X = static_cast<float>(mat3.DiffuseColor.R) / 255.0f;
+	tmp0.Y = static_cast<float>(mat3.DiffuseColor.G) / 255.0f;
+	tmp0.Z = static_cast<float>(mat3.DiffuseColor.B) / 255.0f;
+	tmp1.X = static_cast<float>(mat3.DiffuseCoefficients.R) / 255.0f;
+	tmp1.Y = static_cast<float>(mat3.DiffuseCoefficients.G) / 255.0f;
+	tmp1.Z = static_cast<float>(mat3.DiffuseCoefficients.B) / 255.0f;
 	tmp2.X = tmp0.X * tmp1.X;
 	tmp2.Y = tmp0.Y * tmp1.Y;
 	tmp2.Z = tmp0.Z * tmp1.Z;
 	Set_Diffuse(tmp2);
 
-	W3dUtilityClass::Convert_Color(mat3.SpecularColor,&tmp0);
-	W3dUtilityClass::Convert_Color(mat3.SpecularCoefficients,&tmp1);
+	tmp0.X = static_cast<float>(mat3.SpecularColor.R) / 255.0f;
+	tmp0.Y = static_cast<float>(mat3.SpecularColor.G) / 255.0f;
+	tmp0.Z = static_cast<float>(mat3.SpecularColor.B) / 255.0f;
+	tmp1.X = static_cast<float>(mat3.SpecularCoefficients.R) / 255.0f;
+	tmp1.Y = static_cast<float>(mat3.SpecularCoefficients.G) / 255.0f;
+	tmp1.Z = static_cast<float>(mat3.SpecularCoefficients.B) / 255.0f;
 	tmp2.X = tmp0.X * tmp1.X;
 	tmp2.Y = tmp0.Y * tmp1.Y;
 	tmp2.Z = tmp0.Z * tmp1.Z;
 	Set_Specular(tmp2);
 
-	W3dUtilityClass::Convert_Color(mat3.EmissiveCoefficients,&tmp0);
+	tmp0.X = static_cast<float>(mat3.EmissiveCoefficients.R) / 255.0f;
+	tmp0.Y = static_cast<float>(mat3.EmissiveCoefficients.G) / 255.0f;
+	tmp0.Z = static_cast<float>(mat3.EmissiveCoefficients.B) / 255.0f;
 	Set_Emissive(tmp0);
 
-	W3dUtilityClass::Convert_Color(mat3.AmbientCoefficients,&tmp0);
+	tmp0.X = static_cast<float>(mat3.AmbientCoefficients.R) / 255.0f;
+	tmp0.Y = static_cast<float>(mat3.AmbientCoefficients.G) / 255.0f;
+	tmp0.Z = static_cast<float>(mat3.AmbientCoefficients.B) / 255.0f;
 	Set_Ambient(tmp0);
 
 	Set_Shininess(mat3.Shininess);
 	Set_Opacity(mat3.Opacity);
 }
 
-WW3DErrorType VertexMaterialClass::Load_W3D(ChunkLoadClass & cload)
+WW3DErrorType VertexMaterialClass::Load_W3D(ChunkLoadClass &cload)
 {
-	char name[256];
-
-	W3dVertexMaterialStruct vmat;
-	bool hasname = false;
-
-	char *mapping0_arg_buffer = nullptr;
-	char *mapping1_arg_buffer = nullptr;
-	unsigned int mapping0_arg_len = 0U;
-	unsigned int mapping1_arg_len = 0U;
-
-	while (cload.Open_Chunk()) {
-		switch (cload.Cur_Chunk_ID()) {
-			case W3D_CHUNK_VERTEX_MATERIAL_NAME:
-				cload.Read(&name,cload.Cur_Chunk_Length());
-				hasname = true;
-				break;
-
-			case W3D_CHUNK_VERTEX_MATERIAL_INFO:
-				if (cload.Read(&vmat,sizeof(vmat)) != sizeof(vmat)) {
-					return WW3D_ERROR_LOAD_FAILED;
-				}
-				break;
-
-			case W3D_CHUNK_VERTEX_MAPPER_ARGS0:
-				mapping0_arg_len = cload.Cur_Chunk_Length();
-				mapping0_arg_buffer = MSGW3DNEWARRAY("VertexMaterialClassTemp") char[mapping0_arg_len];
-				if (cload.Read(mapping0_arg_buffer, mapping0_arg_len) != mapping0_arg_len) {
-					return WW3D_ERROR_LOAD_FAILED;
-				}
-				break;
-
-			case W3D_CHUNK_VERTEX_MAPPER_ARGS1:
-				mapping1_arg_len = cload.Cur_Chunk_Length();
-				mapping1_arg_buffer = MSGW3DNEWARRAY("VertexMaterialClassTemp") char[mapping1_arg_len];
-				if (cload.Read(mapping1_arg_buffer, mapping1_arg_len) != mapping1_arg_len) {
-					return WW3D_ERROR_LOAD_FAILED;
-				}
-				break;
-		};
-		cload.Close_Chunk();
-	}
-
-	if (hasname) {
-		Set_Name(name);
-	}
-
-	Parse_W3dVertexMaterialStruct(vmat);
-	Parse_Mapping_Args(vmat,mapping0_arg_buffer,mapping1_arg_buffer);
-
-	delete [] mapping0_arg_buffer;
-	mapping0_arg_buffer = nullptr;
-
-	delete [] mapping1_arg_buffer;
-	mapping1_arg_buffer = nullptr;
-
-	return WW3D_ERROR_OK;
+    std::vector<std::byte> bytes(cload.Cur_Chunk_Length());
+    if (cload.Read(bytes.data(), static_cast<unsigned>(bytes.size())) != bytes.size())
+        return WW3D_ERROR_LOAD_FAILED;
+    Assets::W3D::W3DVertexMaterialData decoded;
+    if (!Assets::W3D::W3DRead_Vertex_Material(bytes, decoded))
+        return WW3D_ERROR_LOAD_FAILED;
+    const auto &material = decoded.material;
+    if (decoded.has_name) Set_Name(material.name.c_str());
+    Set_Ambient(Vector3(material.ambient_color.r, material.ambient_color.g, material.ambient_color.b));
+    Set_Diffuse(Vector3(material.base_color.r, material.base_color.g, material.base_color.b));
+    Set_Specular(Vector3(material.specular_color.r, material.specular_color.g, material.specular_color.b));
+    Set_Emissive(Vector3(material.emissive_color.r, material.emissive_color.g, material.emissive_color.b));
+    Set_Shininess(material.shininess);
+    Set_Opacity(material.opacity);
+    if (material.source_attributes & W3DVERTMAT_USE_DEPTH_CUE) Set_Flag(DEPTH_CUE,true);
+    if (material.source_attributes & W3DVERTMAT_COPY_SPECULAR_TO_DIFFUSE) Set_Flag(COPY_SPECULAR_TO_DIFFUSE,true);
+    Apply_Mappers(material.source_attributes, decoded.mapper_arguments[0].c_str(), decoded.mapper_arguments[1].c_str());
+    return WW3D_ERROR_OK;
 }
 
-void VertexMaterialClass::Parse_W3dVertexMaterialStruct(const W3dVertexMaterialStruct & vmat)
+void VertexMaterialClass::Apply_Mappers(unsigned attributes, const char *arguments0, const char *arguments1)
 {
-	Vector3 tmp;
-	W3dUtilityClass::Convert_Color(vmat.Ambient,&tmp);
-	Set_Ambient(tmp);
-
-	W3dUtilityClass::Convert_Color(vmat.Diffuse,&tmp);
-	Set_Diffuse(tmp);
-
-	W3dUtilityClass::Convert_Color(vmat.Specular,&tmp);
-	Set_Specular(tmp);
-
-	W3dUtilityClass::Convert_Color(vmat.Emissive,&tmp);
-	Set_Emissive(tmp);
-
-	Set_Shininess(vmat.Shininess);
-	Set_Opacity(vmat.Opacity);
-
-	if (vmat.Attributes & W3DVERTMAT_USE_DEPTH_CUE) {
-		Set_Flag(VertexMaterialClass::DEPTH_CUE,true);
-	}
-
-	if (vmat.Attributes & W3DVERTMAT_COPY_SPECULAR_TO_DIFFUSE) {
-		Set_Flag(VertexMaterialClass::COPY_SPECULAR_TO_DIFFUSE,true);
-	}
-}
-
-void VertexMaterialClass::Parse_Mapping_Args(const W3dVertexMaterialStruct & vmat,char * mapping0_arg_buffer,char * mapping1_arg_buffer)
-{
-
-	// Read an INIClass from the mapping argument buffer - this will be used
-	// to initialize any special mappers used.
-	INIClass mapping0_arg_ini;
-	if (mapping0_arg_buffer) {
-
-		int mapping0_arg_len = strlen(mapping0_arg_buffer);
-
-		char *extended_arg_buffer = MSGW3DNEWARRAY("VertexMaterialClassTemp") char[mapping0_arg_len + 10];
-		snprintf(extended_arg_buffer, mapping0_arg_len + 10, "[Args]\n%s", mapping0_arg_buffer);
-		mapping0_arg_len = strlen(extended_arg_buffer) + 1;
-
-		BufferStraw map_arg_buf_straw((void *)extended_arg_buffer, mapping0_arg_len);
-
-		mapping0_arg_ini.Load(map_arg_buf_straw);
-
-		delete [] extended_arg_buffer;
-		extended_arg_buffer = nullptr;
-	}
-	INIClass mapping1_arg_ini;
-	if (mapping1_arg_buffer) {
-
-		int mapping1_arg_len = strlen(mapping1_arg_buffer);
-
-		char *extended_arg_buffer = MSGW3DNEWARRAY("VertexMaterialClassTemp") char[mapping1_arg_len + 20];
-		snprintf(extended_arg_buffer, mapping1_arg_len + 20, "[Args]\n%s", mapping1_arg_buffer);
-		mapping1_arg_len = strlen(extended_arg_buffer) + 1;
-
-		BufferStraw map_arg_buf_straw((void *)extended_arg_buffer, mapping1_arg_len);
-
-		mapping1_arg_ini.Load(map_arg_buf_straw);
-
-		delete [] extended_arg_buffer;
-		extended_arg_buffer = nullptr;
-	}
+    const auto load_arguments = [](const char *arguments, INIClass &ini) {
+        if (!arguments || !*arguments) return;
+        std::string section = "[Args]\n";
+        section += arguments;
+        BufferStraw source(section.data(), static_cast<int>(section.size()+1));
+        ini.Load(source);
+    };
+    INIClass mapping0_arg_ini, mapping1_arg_ini;
+    load_arguments(arguments0, mapping0_arg_ini);
+    load_arguments(arguments1, mapping1_arg_ini);
 
 	// Set up the vertex mapper.  If it is one of the simple
 	// ones, set the pointer to one of the global instances.
-	int mapping = vmat.Attributes & W3DVERTMAT_STAGE0_MAPPING_MASK;
+	int mapping = attributes & W3DVERTMAT_STAGE0_MAPPING_MASK;
 
 	switch(mapping) {
 
@@ -689,7 +614,7 @@ void VertexMaterialClass::Parse_Mapping_Args(const W3dVertexMaterialStruct & vma
 	}
 
 	// Same setup for stage 1's mapper.
-	mapping = vmat.Attributes & W3DVERTMAT_STAGE1_MAPPING_MASK;
+	mapping = attributes & W3DVERTMAT_STAGE1_MAPPING_MASK;
 	switch(mapping) {
 
 		case W3DVERTMAT_STAGE1_MAPPING_UV:
@@ -873,66 +798,7 @@ WW3DErrorType VertexMaterialClass::Save_W3D(ChunkSaveClass & csave)
 	return WW3D_ERROR_OK;
 }
 
-void VertexMaterialClass::Apply() const
-{
-	int i;
-	const auto to_backend_source = [](ColorSourceType source) {
-		switch (source)
-		{
-			case COLOR1: return RenderBackendMaterialSource::Color1;
-			case COLOR2: return RenderBackendMaterialSource::Color2;
-			default: return RenderBackendMaterialSource::MaterialValue;
-		}
-	};
 
-	WW3D::Get_Render_Backend()->Set_Material_Values(Material);
-
-	if (WW3D::Is_Coloring_Enabled())
-		WW3D::Get_Render_Backend()->Set_Lighting_Enabled(false);
-	else
-		WW3D::Get_Render_Backend()->Set_Lighting_Enabled(UseLighting);
-	WW3D::Get_Render_Backend()->Set_Material_Color_Sources(
-		to_backend_source(AmbientColorSource),
-		to_backend_source(DiffuseColorSource),
-		to_backend_source(EmissiveColorSource));
-
-	// set to default values if no mappers
-	for (i=0; i<MeshBuilderClass::MAX_STAGES; i++) {
-		if (Mapper[i]) {
-			Mapper[i]->Apply(UVSource[i]);
-		} else {
-			WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(i,RenderBackendTextureCoordinateSource::PassThrough,UVSource[i]);
-			WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(i,RenderBackendTextureTransformFlags::Disabled);
-		}
-	}
-}
-
-void VertexMaterialClass::Apply_Null()
-{
-	int i;
-	static const RenderBackendMaterial default_settings =
-	{
-		{ 1.0f, 1.0f, 1.0f, 1.0f },	// diffuse
-		{ 1.0f, 1.0f, 1.0f, 1.0f },	// ambient
-		{ 0.0f, 0.0f, 0.0f, 0.0f },	// specular
-		{ 0.0f, 0.0f, 0.0f, 0.0f },	// emissive
-		1.0f									// power
-	};
-
-	WW3D::Get_Render_Backend()->Set_Lighting_Enabled(false);
-	WW3D::Get_Render_Backend()->Set_Material_Values(default_settings);
-
-	WW3D::Get_Render_Backend()->Set_Material_Color_Sources(
-		RenderBackendMaterialSource::MaterialValue,
-		RenderBackendMaterialSource::MaterialValue,
-		RenderBackendMaterialSource::MaterialValue);
-
-	// set to default values if no mappers
-	for (i=0; i<MeshBuilderClass::MAX_STAGES; i++) {
-		WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(i,RenderBackendTextureCoordinateSource::PassThrough,i);
-		WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(i,RenderBackendTextureTransformFlags::Disabled);
-	}
-}
 
 
 /***********************************************************************************************

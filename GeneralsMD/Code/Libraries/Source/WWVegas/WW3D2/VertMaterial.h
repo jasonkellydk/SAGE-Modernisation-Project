@@ -36,15 +36,21 @@
 
 #pragma once
 
+#include <memory>
+#include <span>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
 #include "WWLib/always.h"
 
 #include "WWMath/vector3.h"
 #include "W3DFile.h"
-#include "MeshBuild.h"
 #include "WW3D2/W3DErr.h"
 #include "Mapper.h"
 #include "WWLib/wwstring.h"
-#include "WW3D2/Backend/RenderBackend.h"
+import Graphics.Scene.Props.Material;
+import Graphics.Resources.Materials.Material;
 
 class ChunkLoadClass;
 class ChunkSaveClass;
@@ -128,6 +134,8 @@ public:
 	/*
 	** Basic material properties
 	*/
+	const Graphics::PropMaterial& Get_Material_Parameters() const { return Material; }
+
 	float			Get_Shininess() const;
 	void			Set_Shininess(float shin);
 
@@ -150,8 +158,8 @@ public:
 	void			Set_Emissive(const Vector3 & color);
 	void			Set_Emissive(float r,float g,float b);
 
-	void			Set_Lighting(bool lighting) { CRCDirty=true; UseLighting=lighting; };
-	bool			Get_Lighting() const { return UseLighting; };
+	void			Set_Lighting(bool lighting) { CRCDirty=true; Material.lighting=lighting; };
+	bool			Get_Lighting() const { return Material.lighting; };
 
 	/*
 	** Color source control.  Note that if you set one of the sources to be one of
@@ -190,8 +198,7 @@ public:
 	WW3DErrorType		Load_W3D(ChunkLoadClass & cload);
 	WW3DErrorType		Save_W3D(ChunkSaveClass & csave);
 
-	void					Parse_W3dVertexMaterialStruct(const W3dVertexMaterialStruct & vmat);
-	void					Parse_Mapping_Args(const W3dVertexMaterialStruct & vmat,char * mapping0_arg_buffer,char * mapping1_arg_buffer);
+	void Apply_Mappers(unsigned attributes, const char *arguments0, const char *arguments1);
 	void					Init_From_Material3(const W3dMaterial3Struct & mat3);
 
 	/*
@@ -226,29 +233,14 @@ public:
 	void Make_Unique();
 
 private:
-	RenderBackendMaterial			Material;
+	Graphics::PropMaterial Material;
 	unsigned int					Flags;
-	ColorSourceType				AmbientColorSource;
-	ColorSourceType				EmissiveColorSource;
-	ColorSourceType				DiffuseColorSource;
 	StringClass						Name;
-	TextureMapperClass *	Mapper[MeshBuilderClass::MAX_STAGES];
-	unsigned int					UVSource[MeshBuilderClass::MAX_STAGES];
+	TextureMapperClass *	Mapper[Graphics::Material::TextureSlotCount];
+	unsigned int					UVSource[Graphics::Material::TextureSlotCount];
 	unsigned int					UniqueID;
 	mutable unsigned long CRC;
 	mutable bool					CRCDirty;
-	bool									UseLighting;
-
-private:
-	/*
-	** Apply the render states to the active render backend.
-	*/
-	public:
-	void					Apply() const;
-	/*
-	** Apply the render states corresponding to a nullptr vertex material.
-	*/
-	static void			Apply_Null();
 
 private:
 	unsigned long		Compute_CRC() const;
@@ -277,7 +269,7 @@ inline TextureMapperClass * VertexMaterialClass::Peek_Mapper(int stage)
 
 inline void VertexMaterialClass::Reset_Mappers()
 {
-	for (int stage = 0; stage < MeshBuilderClass::MAX_STAGES; stage++) {
+	for (int stage = 0; stage < Graphics::Material::TextureSlotCount; stage++) {
 		if (Mapper[stage]) {
 			Mapper[stage]->Reset();
 		}
@@ -286,7 +278,7 @@ inline void VertexMaterialClass::Reset_Mappers()
 
 inline bool VertexMaterialClass::Do_Mappers_Need_Normals() const
 {
-	for (int stage = 0; stage < MeshBuilderClass::MAX_STAGES; stage++) {
+	for (int stage = 0; stage < Graphics::Material::TextureSlotCount; stage++) {
 		if (Mapper[stage] && (Mapper[stage]->Needs_Normals())) return true;
 	}
 	return false;
@@ -294,7 +286,7 @@ inline bool VertexMaterialClass::Do_Mappers_Need_Normals() const
 
 inline bool VertexMaterialClass::Are_Mappers_Time_Variant() const
 {
-	for (int stage = 0; stage < MeshBuilderClass::MAX_STAGES; stage++) {
+	for (int stage = 0; stage < Graphics::Material::TextureSlotCount; stage++) {
 		if (Mapper[stage] && (Mapper[stage]->Is_Time_Variant())) return true;
 	}
 	return false;

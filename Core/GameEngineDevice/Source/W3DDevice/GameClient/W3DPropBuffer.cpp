@@ -61,7 +61,7 @@
 #include "WW3D2/Camera.h"
 #include "WW3D2/RInfo.h"
 #include "WW3D2/Light.h"
-#include "WW3D2/LightEnvironment.h"
+import Graphics.Scene.Lighting.Local;
 #include "W3DDevice/GameClient/Module/W3DPropDraw.h"
 #include "W3DDevice/GameClient/W3DShroud.h"
 #include "W3DDevice/GameClient/BaseHeightMap.h"
@@ -334,10 +334,10 @@ void W3DPropBuffer::drawProps(RenderInfoClass &rinfo)
 	}
 	const GlobalData::TerrainLighting *objectLighting = TheGlobalData->m_terrainObjectsLighting[TheGlobalData->m_timeOfDay];
 
-	LightEnvironmentClass lightEnv;
+	Graphics::LocalLighting lightEnv;
 	Vector3 center(0,0,0); // arbitrary center point. [6/6/2003]
 	Vector3 ambient(objectLighting[0].ambient.red, objectLighting[0].ambient.green, objectLighting[0].ambient.blue);
-	lightEnv.Reset(center, ambient);
+	lightEnv.Reset({(center).X,(center).Y,(center).Z}, {(ambient).X,(ambient).Y,(ambient).Z});
 
 	Matrix3D mtx;
 	const Vector3 zeroVector(0.0f, 0.0f, 0.0f);
@@ -353,18 +353,18 @@ void W3DPropBuffer::drawProps(RenderInfoClass &rinfo)
 			m_light->Set_Specular(zeroVector);
 			mtx.Set(xVector, yVector, Vector3(objectLighting[i].lightPos.x, objectLighting[i].lightPos.y, objectLighting[i].lightPos.z), zeroVector);
 			m_light->Set_Transform(mtx);
-			lightEnv.Add_Light(*m_light);
+			lightEnv.Add(Describe_Material_Light(*m_light));
 	}
 
-    lightEnv.Pre_Render_Update(rinfo.Camera.Get_Transform());
+    lightEnv.Finalize();
     Graphics::PropLighting lighting;
-    const auto& equivalent = lightEnv.Get_Equivalent_Ambient();
-    lighting.ambient = {equivalent.X,equivalent.Y,equivalent.Z};
-    for (int light=0;light<lightEnv.Get_Light_Count() && light<4;++light) {
-        const auto& direction = lightEnv.Get_Light_Direction(light);
-        const auto& diffuse = lightEnv.Get_Light_Diffuse(light);
-        lighting.lights[light].direction = {direction.X,direction.Y,direction.Z};
-        lighting.lights[light].diffuse = {diffuse.X,diffuse.Y,diffuse.Z};
+    const auto& equivalent = lightEnv.ambient;
+    lighting.ambient = equivalent;
+    for (int light=0;light<lightEnv.count && light<4;++light) {
+        const auto& direction = lightEnv.lights[light].direction;
+        const auto& diffuse = lightEnv.lights[light].diffuse;
+        lighting.lights[light].direction = direction;
+        lighting.lights[light].diffuse = diffuse;
         if (light==0) lighting.lights[light].specular = {1,1,1};
     }
 

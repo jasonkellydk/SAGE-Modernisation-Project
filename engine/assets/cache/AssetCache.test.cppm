@@ -152,6 +152,78 @@ public:
 	}
 };
 
+class SurfaceModelAdapter final : public Assets::IModelAdapter
+{
+public:
+	bool Can_Import(const Assets::AssetIdentity &identity, std::span<const std::byte> bytes) const noexcept override
+	{
+		return DependencyModelAdapter{}.Can_Import(identity, bytes);
+	}
+	Assets::ModelImportResult Import(const Assets::AssetIdentity &identity, std::span<const std::byte> bytes) const override
+	{
+		auto result = DependencyModelAdapter{}.Import(identity, bytes);
+		auto &material = result.description->materials[0];
+		material.surface.shading_model = Assets::MaterialShadingModel::SpecularGlossiness;
+		material.surface_textures[static_cast<std::size_t>(Assets::MaterialTextureRole::Normal)] = "normal.dds";
+		material.surface_textures[static_cast<std::size_t>(Assets::MaterialTextureRole::Specular)] = "NORMAL.DDS";
+		return {std::move(result.description), std::move(result.error)};
+	}
+};
+
+BOOST_AUTO_TEST_CASE(surface_dependencies_gate_model_publication_and_deduplicate_by_identity)
+{
+	using namespace Assets;
+	auto gate = std::make_shared<std::promise<std::vector<Byte>>>();
+	auto result = gate->get_future().share();
+	auto started = std::make_shared<std::promise<void>>();
+	auto started_result = started->get_future();
+	std::atomic_int map_reads = 0;
+	AssetCache cache([&map_reads, started, result](const AssetIdentity &identity) {
+		if (identity.type == AssetType::Texture && identity.canonical_name == "normal.dds") {
+			++map_reads; started->set_value(); return result.get();
+		}
+		return std::vector<Byte>{Byte{7}};
+	});
+	BOOST_REQUIRE(cache.Register_Model_Adapter(std::make_shared<SurfaceModelAdapter>()));
+	const auto model = cache.Request_Model("chain.model");
+	const bool loading_started = started_result.wait_for(std::chrono::seconds(5)) == std::future_status::ready;
+	const bool remained_loading = cache.Get_State(model) == AssetState::Loading && cache.Try_Get_Model(model) == nullptr;
+	gate->set_value({Byte{7}});
+	cache.Wait(model);
+	BOOST_REQUIRE(loading_started);
+	BOOST_TEST(remained_loading);
+	BOOST_REQUIRE(cache.Get_State(model) == AssetState::Ready);
+	const auto *loaded = cache.Try_Get_Model(model);
+	BOOST_REQUIRE(loaded != nullptr);
+	const auto *material = cache.Try_Get_Material(loaded->Materials()[0].asset_handle);
+	BOOST_REQUIRE(material != nullptr);
+	const auto normal = material->Surface_Texture(MaterialTextureRole::Normal);
+	BOOST_REQUIRE(normal.Is_Valid());
+	BOOST_CHECK(normal == material->Surface_Texture(MaterialTextureRole::Specular));
+	BOOST_TEST(map_reads.load() == 1);
+	BOOST_TEST(cache.Material_Texture_Dependencies(loaded->Materials()[0].asset_handle).size() == 2u);
+	BOOST_TEST(cache.Model_Texture_Dependencies(model).size() == 2u);
+	std::size_t normal_dependencies = 0;
+	for (const auto &dependency : loaded->Dependencies())
+		if (dependency.type == AssetType::Texture && dependency.identity.canonical_name == "normal.dds")
+			++normal_dependencies;
+	BOOST_TEST(normal_dependencies == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(missing_surface_map_fails_owning_model_instead_of_publishing_plain_material)
+{
+	using namespace Assets;
+	AssetCache cache([](const AssetIdentity &identity) {
+		if (identity.canonical_name == "normal.dds") return std::vector<Byte>{};
+		return std::vector<Byte>{Byte{7}};
+	});
+	BOOST_REQUIRE(cache.Register_Model_Adapter(std::make_shared<SurfaceModelAdapter>()));
+	const auto model = cache.Request_Model("chain.model"); cache.Wait(model);
+	BOOST_CHECK(cache.Get_State(model) == AssetState::Failed);
+	BOOST_TEST(cache.Try_Get_Model(model) == nullptr);
+	BOOST_TEST(cache.Get_Error(model).find("material") != std::string::npos);
+}
+
 class ScopedMaterialAdapter final : public Assets::IModelAdapter
 {
 public:

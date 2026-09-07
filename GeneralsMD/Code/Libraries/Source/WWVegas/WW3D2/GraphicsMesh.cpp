@@ -1,4 +1,5 @@
 #include <array>
+#include "rts/profile.h"
 #include <vector>
 #include <cstring>
 #include "GraphicsMesh.h"
@@ -6,13 +7,29 @@
 #include "GraphicsMaterialPass.h"
 #include "Mesh.h"
 #include "MeshMdl.h"
-#include "MeshRenderer.h"
 #include "MatPass.h"
 #include "VertMaterial.h"
 #include "Mapper.h"
 #include "Camera.h"
 #include "RInfo.h"
 #include "WW3D.h"
+#include <algorithm>
+import Graphics.Scene.Views.CameraMatrices;
+import Graphics.Scene.Props.Extraction;
+import Graphics.Scene.Props.MeshSet;
+import Graphics.Scene.Props.Submission;
+
+class GraphicsMeshState final {
+public:
+    Graphics::PropMeshSet base;
+    Graphics::PropMeshSet additional;
+};
+
+void Release_Graphics_Mesh_State(GraphicsMeshState*& state)
+{
+    delete state;
+    state = nullptr;
+}
 
 namespace {
 std::array<float,4> Unpack_Mesh_Color(unsigned color)
@@ -45,6 +62,7 @@ void Extract_Mesh_Mappers(Graphics::PropParameters& parameters,VertexMaterialCla
 
 bool Draw_Graphics_Mesh(MeshClass& mesh,RenderInfoClass& info,const GraphicsMeshOverrides& overrides)
 {
+    PROFILER_SECTION_NAME("Graphics.Mesh.ExtractDraw");
     auto* model=mesh.Peek_Model();
     if (!model || model->Get_Vertex_Count()==0 || model->Get_Polygon_Count()==0) return true;
     mesh.Validate_Transform();
@@ -69,30 +87,42 @@ bool Draw_Graphics_Mesh(MeshClass& mesh,RenderInfoClass& info,const GraphicsMesh
         positions=deformed_positions.data(); normals=deformed_normals.data();
         world.Make_Identity();
     }
-    std::vector<Graphics::PropVertex> source(model->Get_Vertex_Count());
-    for (int i=0;i<model->Get_Vertex_Count();++i) {
-        Vector3 position,normal(0,0,1);
-        Matrix3D::Transform_Vector(world,positions[i],&position);
-        if (normals) Matrix3D::Rotate_Vector(world,normals[i],&normal);
-        source[i].position={position.X,position.Y,position.Z};
-        source[i].normal={normal.X,normal.Y,normal.Z};
+    auto workspace = Graphics::Get_Prop_Extraction_Cache().Acquire();
+    std::span<Graphics::PropSourceVertex> source;
+    {
+        PROFILER_SECTION_NAME("Graphics.Mesh.TransformVertices");
+        source = workspace.Workspace().Prepare_Source(model->Get_Vertex_Count());
+        for (int i=0;i<model->Get_Vertex_Count();++i) {
+            source[i].position={positions[i].X,positions[i].Y,positions[i].Z};
+            if (normals) source[i].normal={normals[i].X,normals[i].Y,normals[i].Z};
+        }
     }
-    auto* backend=WW3D::Get_Render_Backend();
-    Matrix4x4 view,projection;
-    backend->Get_Transform(RenderBackendTransform::View,view);
-    backend->Get_Transform(RenderBackendTransform::Projection,projection);
+    Matrix4x4 view,view_projection;
+    const auto& camera_matrices = Graphics::Get_Camera_Matrices();
+    std::copy_n(camera_matrices.view.values.data(), 16, &view[0][0]);
+    const auto composed = Graphics::Compose_Matrices(camera_matrices.projection,camera_matrices.view);
+    std::copy_n(composed.values.data(), 16, &view_projection[0][0]);
     Graphics::PropParameters context;
-    backend->Get_Transform(RenderBackendTransform::View,context.view.data());
+    context.normal_in_world_space = normals ? 0.0f : 1.0f;
+    for (unsigned row=0;row<3;++row)
+        for (unsigned column=0;column<4;++column)
+            context.world[row*4+column]=world[row][column];
+    context.view = camera_matrices.view.values;
     const auto camera=info.Camera.Get_Position();
     context.camera_position={camera.X,camera.Y,camera.Z,1};
-    Extract_Graphics_Lighting(context,mesh.Get_Lighting_Environment());
+    Graphics::Set_Prop_Lighting(context,mesh.Get_Lighting_Environment());
     const bool sorted=model->Get_Flag(MeshGeometryClass::SORT) && WW3D::Is_Sorting_Enabled();
     const bool additional_only=(info.Current_Override_Flags() & RenderInfoClass::RINFO_OVERRIDE_ADDITIONAL_PASSES_ONLY)!=0;
     const bool shadow=(info.Current_Override_Flags() & RenderInfoClass::RINFO_OVERRIDE_SHADOW_RENDERING)!=0;
     const bool render_base=!additional_only || (shadow && (model->Get_Single_Shader().Get_Alpha_Test()==ShaderClass::ALPHATEST_ENABLE
         || model->Get_Single_Shader().Get_Src_Blend_Func()==ShaderClass::SRCBLEND_SRC_ALPHA));
     const bool two_sided=(info.Current_Override_Flags() & RenderInfoClass::RINFO_OVERRIDE_FORCE_TWO_SIDED)!=0;
-    Graphics::PropBatchBuilder batch;
+    auto& batch = workspace.Workspace().Batch();
+    auto*& mesh_state = model->Graphics_Mesh_State();
+    if (mesh_state == nullptr) mesh_state = new GraphicsMeshState;
+    auto& meshes = mesh_state->base;
+    auto& renderer = Graphics::Get_Prop_Renderer();
+    std::size_t batch_index = 0;
     bool success=true;
     for (int pass=0;render_base && pass<model->Get_Pass_Count()
         && (!overrides.shadow_capture || pass==0);++pass) {
@@ -101,6 +131,7 @@ bool Draw_Graphics_Mesh(MeshClass& mesh,RenderInfoClass& info,const GraphicsMesh
         const auto* uv=model->Get_UV_Array(pass,0);
         const auto* secondary_uv=model->Get_UV_Array(pass,1);
         for (int first=0;first<model->Get_Polygon_Count();) {
+            const auto mesh_slot = batch_index++;
             auto shader=model->Get_Shader(first,pass);
             auto* material=model->Peek_Material(polygons[first].I,pass);
             const std::array textures{model->Peek_Texture(first,pass,0),model->Peek_Texture(first,pass,1)};
@@ -109,7 +140,7 @@ bool Draw_Graphics_Mesh(MeshClass& mesh,RenderInfoClass& info,const GraphicsMesh
                 && model->Peek_Material(polygons[end].I,pass)==material
                 && model->Peek_Texture(end,pass,0)==textures[0] && model->Peek_Texture(end,pass,1)==textures[1]) ++end;
             GraphicsMaterialDrawOverrides draw_overrides;
-            draw_overrides.force_multiply=TheMeshRenderer.Is_Force_Multiply_Enabled()
+            draw_overrides.force_multiply=Graphics::Get_Prop_Draw_Settings().force_multiply
                 && shader.Get_Dst_Blend_Func()==ShaderClass::DSTBLEND_ZERO && overrides.opacity==1;
             if (!sorted && overrides.opacity!=1) {
                 if (!mesh.Is_Additive()) {
@@ -119,16 +150,16 @@ bool Draw_Graphics_Mesh(MeshClass& mesh,RenderInfoClass& info,const GraphicsMesh
                 draw_overrides.alpha_cutoff=static_cast<unsigned>(96*overrides.opacity)/255.0f;
             }
             if (two_sided) shader.Set_Cull_Mode(ShaderClass::CULL_MODE_DISABLE);
-            if (!batch.Begin(source.size())) return false;
-            const auto vertex_material = Describe_Graphics_Vertex_Material(material);
+            if (!batch.Begin(source.size(),static_cast<std::size_t>(end-first)*3)) return false;
+            const auto* vertex_material = material ? &material->Get_Material_Parameters() : nullptr;
             const auto extract = [&](unsigned index) {
-                auto vertex=source[index];
+                auto vertex=source[index].Make_Vertex();
                 if (primary) vertex.color=Unpack_Mesh_Color(primary[index]);
                 if (secondary) vertex.secondary_color=Unpack_Mesh_Color(secondary[index]);
                 if (uv) vertex.uv={uv[index].X,uv[index].Y};
                 if (secondary_uv) vertex.secondary_uv={secondary_uv[index].X,secondary_uv[index].Y};
                 if (vertex_material) Graphics::Apply_Prop_Material(vertex,*vertex_material);
-                if (!TheMeshRenderer.Is_Lighting_Enabled()) vertex.material_ambient[3]=0;
+                if (!Graphics::Get_Prop_Draw_Settings().lighting) vertex.material_ambient[3]=0;
                 if (!sorted && overrides.opacity!=1 && material
                     && (!material->Get_Lighting() || material->Get_Diffuse_Color_Source()==VertexMaterialClass::MATERIAL)) {
                     vertex.material_diffuse[3]=overrides.opacity;
@@ -137,9 +168,12 @@ bool Draw_Graphics_Mesh(MeshClass& mesh,RenderInfoClass& info,const GraphicsMesh
                 }
                 return vertex;
             };
-            for (int polygon=first;polygon<end;++polygon)
-                for (unsigned corner=0;corner<3;++corner)
-                    if (!batch.Append(polygons[polygon][corner],extract)) return false;
+            {
+                PROFILER_SECTION_NAME("Graphics.Mesh.BuildMaterialBatch");
+                for (int polygon=first;polygon<end;++polygon)
+                    for (unsigned corner=0;corner<3;++corner)
+                        if (!batch.Append(polygons[polygon][corner],extract)) return false;
+            }
             auto parameters=context;
             Extract_Mesh_Mappers(parameters,material,mesh,sorted);
             draw_overrides.shadow_capture = overrides.shadow_capture;
@@ -156,7 +190,9 @@ bool Draw_Graphics_Mesh(MeshClass& mesh,RenderInfoClass& info,const GraphicsMesh
                     draw_overrides.alpha_cutoff = 96.0f/255.0f;
                 }
             }
-            if (!Draw_Graphics_Material_Geometry(batch.Vertices(),batch.Indices(),projection*view,shader,textures,
+            draw_overrides.mesh = meshes.Synchronize(renderer,mesh_slot,batch.Vertices(),batch.Indices());
+            if (!draw_overrides.mesh.Is_Valid()) return false;
+            if (!Draw_Graphics_Material_Geometry(batch.Vertices(),batch.Indices(),view_projection,shader,textures,
                 parameters,sorted ? &view : nullptr,draw_overrides)) success=false;
             first=end;
         }
@@ -180,10 +216,10 @@ bool Draw_Graphics_Mesh(MeshClass& mesh,RenderInfoClass& info,const GraphicsMesh
         } else {
             for (int i=0;i<model->Get_Polygon_Count();++i) selected.Add(i);
         }
-        if (!batch.Begin(source.size())) return false;
-        const auto vertex_material = Describe_Graphics_Vertex_Material(description.material);
+        if (!batch.Begin(source.size(),static_cast<std::size_t>(selected.Count())*3)) return false;
+        const auto* vertex_material = description.material ? &description.material->Get_Material_Parameters() : nullptr;
         const auto extract = [&](unsigned index) {
-            auto vertex=source[index];
+            auto vertex=source[index].Make_Vertex();
             if (const auto* primary=model->Get_DCG_Array(0)) vertex.color=Unpack_Mesh_Color(primary[index]);
             if (const auto* secondary=model->Get_DIG_Array(0)) vertex.secondary_color=Unpack_Mesh_Color(secondary[index]);
             if (const auto* uv=model->Get_UV_Array(0,0)) vertex.uv={uv[index].X,uv[index].Y};
@@ -196,12 +232,6 @@ bool Draw_Graphics_Mesh(MeshClass& mesh,RenderInfoClass& info,const GraphicsMesh
                 if (description.material->Get_Emissive_Color_Source()==VertexMaterialClass::MATERIAL)
                     for (unsigned c=0;c<3;++c) vertex.material_emissive[c]*=overrides.pass_emissive;
             }
-            if (description.world_coordinates) {
-                Vector4 coordinate;
-                Matrix4x4::Transform_Vector(description.world_texture_transform,
-                    Vector4(vertex.position[0],vertex.position[1],vertex.position[2],1),&coordinate);
-                vertex.uv={coordinate.X,coordinate.Y};
-            }
             return vertex;
         };
         for (int i=0;i<selected.Count();++i)
@@ -209,12 +239,19 @@ bool Draw_Graphics_Mesh(MeshClass& mesh,RenderInfoClass& info,const GraphicsMesh
                 if (!batch.Append(polygons[selected[i]][corner],extract)) return false;
         if (batch.Indices().empty()) continue;
         auto parameters=context;
-        if (!description.world_coordinates) Extract_Graphics_Texture_Mappers(parameters,description.material);
+        if (description.world_coordinates) {
+            parameters.uv_sources[0]=4;
+            std::memcpy(parameters.uv_transform[0].data(),&description.world_texture_transform,
+                sizeof(description.world_texture_transform));
+        } else Extract_Graphics_Texture_Mappers(parameters,description.material);
         if (two_sided) description.shader.Set_Cull_Mode(ShaderClass::CULL_MODE_DISABLE);
         GraphicsMaterialDrawOverrides draw_overrides;
         draw_overrides.color_write_mask=description.color_write_mask;
         draw_overrides.deferred_pass=additional_only;
-        if (!Draw_Graphics_Material_Geometry(batch.Vertices(),batch.Indices(),projection*view,description.shader,
+        draw_overrides.mesh = mesh_state->additional.Synchronize(
+            renderer,pass_index,batch.Vertices(),batch.Indices());
+        if (!draw_overrides.mesh.Is_Valid()) return false;
+        if (!Draw_Graphics_Material_Geometry(batch.Vertices(),batch.Indices(),view_projection,description.shader,
             description.textures,parameters,sorted ? &view : nullptr,draw_overrides)) success=false;
     }
     return success;

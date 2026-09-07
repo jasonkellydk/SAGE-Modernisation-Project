@@ -70,13 +70,12 @@
 #include "W3DDevice/GameClient/W3DProjectedShadow.h"
 #include "W3DDevice/GameClient/W3DTerrainTracks.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
-#include "WW3D2/HAnim.h"
 #include "WW3D2/HLOD.h"
-#include "WW3D2/HTree.h"
+import Graphics.Scene.Models.Hierarchy;
 #include "WW3D2/RendObj.h"
 #include "WW3D2/Mesh.h"
 #include "WW3D2/MeshMdl.h"
-#include "WW3D2/SurfaceClass.h"
+import Graphics.Resources.Textures.Edit;
 #include "WW3D2/Texture.h"
 #include "Common/BitFlagsIO.h"
 #include "WW3D2/StringUtilities.h"
@@ -126,6 +125,7 @@ static inline Bool isValidTimeToCalcLogicStuff()
 
 #if defined(DEBUG_CRC) && defined(RTS_DEBUG)
 #include <cstdarg>
+import Assets.Cache.Animations;
 class LogClass
 {
 public:
@@ -334,7 +334,7 @@ W3DAnimationInfo::W3DAnimationInfo( const W3DAnimationInfo &r ) :
 {
 #ifdef RETAIN_ANIM_HANDLES
 	if (m_handle)
-		m_handle->Add_Ref();
+		Assets::Get_Animation_Cache().Retain(m_handle);
 #endif
 }
 
@@ -347,10 +347,10 @@ W3DAnimationInfo& W3DAnimationInfo::operator=(const W3DAnimationInfo &r)
 	m_isIdleAnim = r.m_isIdleAnim;
 
 #ifdef RETAIN_ANIM_HANDLES
-	REF_PTR_RELEASE(m_handle);
+	Assets::Release_Animation(m_handle);
 	m_handle = r.m_handle;
 	if (m_handle)
-		m_handle->Add_Ref();
+		Assets::Get_Animation_Cache().Retain(m_handle);
 #endif
 
 	return (*this);
@@ -359,33 +359,33 @@ W3DAnimationInfo& W3DAnimationInfo::operator=(const W3DAnimationInfo &r)
 
 //-------------------------------------------------------------------------------------------------
 // note that this now returns an ADDREFED handle, which must be released by the caller!
-HAnimClass* W3DAnimationInfo::getAnimHandle() const
+Assets::AnimationAssetHandle W3DAnimationInfo::getAnimHandle() const
 {
 #ifdef RETAIN_ANIM_HANDLES
 	if (m_handle == nullptr)
 	{
-		// Get_HAnim addrefs it, so we'll have to release it in our dtor.
-		m_handle = W3DDisplay::m_assetManager->Get_HAnim(m_name.str());
+		// Acquire_Animation addrefs it, so we'll have to release it in our dtor.
+		m_handle = W3DDisplay::m_assetManager->Acquire_Animation(m_name.str());
 		DEBUG_ASSERTCRASH(m_handle, ("*** ASSET ERROR: animation %s not found",m_name.str()));
 		if (m_handle)
 		{
-			m_naturalDurationInMsec = m_handle->Get_Num_Frames() * 1000.0f / m_handle->Get_Frame_Rate();
+			m_naturalDurationInMsec = static_cast<int>(Assets::Get_Animation_Cache().Resolve(m_handle)->frame_count) * 1000.0f / Assets::Get_Animation_Cache().Resolve(m_handle)->frame_rate;
 		}
 	}
 	// since we have it locally, must addref.
 	if (m_handle)
-		m_handle->Add_Ref();
+		Assets::Get_Animation_Cache().Retain(m_handle);
 	return m_handle;
 #else
-	HAnimClass* handle = W3DDisplay::m_assetManager->Get_HAnim(m_name.str());
+	Assets::AnimationAssetHandle handle = W3DDisplay::m_assetManager->Acquire_Animation(m_name.str());
 	DEBUG_ASSERTCRASH(handle, ("*** ASSET ERROR: animation %s not found",m_name.str()));
 	if (handle != nullptr && m_naturalDurationInMsec < 0)
 	{
-		m_naturalDurationInMsec = handle->Get_Num_Frames() * 1000.0f / handle->Get_Frame_Rate();
+		m_naturalDurationInMsec = static_cast<int>(Assets::Get_Animation_Cache().Resolve(handle)->frame_count) * 1000.0f / Assets::Get_Animation_Cache().Resolve(handle)->frame_rate;
 	}
-	// since Get_HAnim() returns an addrefed handle, we must NOT addref here.
+	// since Acquire_Animation() returns an addrefed handle, we must NOT addref here.
 	//if (handle)
-	//	handle->Add_Ref();
+	//	Assets::Get_Animation_Cache().Retain(handle);
 	return handle;
 #endif
 }
@@ -394,7 +394,7 @@ HAnimClass* W3DAnimationInfo::getAnimHandle() const
 W3DAnimationInfo::~W3DAnimationInfo()
 {
 #ifdef RETAIN_ANIM_HANDLES
-	REF_PTR_RELEASE(m_handle);
+	Assets::Release_Animation(m_handle);
 	m_handle = nullptr;
 #endif
 }
@@ -650,7 +650,7 @@ void ModelConditionInfo::validateCachedBones(RenderObjClass* robj, Real scale) c
 
 	Matrix3D			originalTransform = robj->Get_Transform();	// save the transform
 	HLodClass*		hlod = nullptr;
-	HAnimClass*		curAnim = nullptr;
+	Assets::AnimationAssetHandle curAnim = nullptr;
 	int						numFrames = 0;
 	float					frame = 0.0f;
 	int						mode = 0;
@@ -664,7 +664,7 @@ void ModelConditionInfo::validateCachedBones(RenderObjClass* robj, Real scale) c
 
 	// if we have any animations in this state, always choose the first, since the animations
 	// vary on a per-client basis.
-	HAnimClass* animToUse;
+	Assets::AnimationAssetHandle animToUse;
 	if (!m_animations.empty())
 	{
 		animToUse = m_animations.front().getAnimHandle();	// return an AddRef'ed handle
@@ -673,15 +673,15 @@ void ModelConditionInfo::validateCachedBones(RenderObjClass* robj, Real scale) c
 	{
 		animToUse = curAnim;	// Peek_Animation_And_Info does not addref, so we must do so here
 		if (animToUse)
-			animToUse->Add_Ref();
+			Assets::Get_Animation_Cache().Retain(animToUse);
 	}
 	if (animToUse != nullptr)
 	{
 		// make sure we're in frame zero.
-		Int whichFrame = testFlagBit(m_flags, PRISTINE_BONE_POS_IN_FINAL_FRAME) ? animToUse->Get_Num_Frames()-1 : 0;
+		Int whichFrame = testFlagBit(m_flags, PRISTINE_BONE_POS_IN_FINAL_FRAME) ? static_cast<int>(Assets::Get_Animation_Cache().Resolve(animToUse)->frame_count)-1 : 0;
 		robj->Set_Animation(animToUse, whichFrame, RenderObjClass::ANIM_MODE_MANUAL);
 		// must balance the addref, above
-		REF_PTR_RELEASE(animToUse);
+		Assets::Release_Animation(animToUse);
 		animToUse = nullptr;
 	}
 
@@ -986,8 +986,8 @@ void ModelConditionInfo::loadAnimations() const
 #ifdef RETAIN_ANIM_HANDLES
 	for (W3DAnimationVector::const_iterator it2 = m_animations.begin(); it2 != m_animations.end(); ++it2)
 	{
-		HAnimClass* h = it2->getAnimHandle();	// just force it to get loaded
-		REF_PTR_RELEASE(h);
+		Assets::AnimationAssetHandle h = it2->getAnimHandle();	// just force it to get loaded
+		Assets::Release_Animation(h);
 		h = nullptr;
 	}
 #else
@@ -1955,9 +1955,9 @@ void W3DModelDraw::getRenderCostRecursive(RenderCost & rc,RenderObjClass * robj)
 		}
 
 		// collect bone stats.
-		const HTreeClass * htree = robj->Get_HTree();
+		const Graphics::ModelHierarchy * htree = robj->Get_Model_Hierarchy();
 		if (htree != nullptr) {
-			rc.addBones(htree->Num_Pivots());
+			rc.addBones(htree->Bone_Count());
 		}
 	}
 }
@@ -2163,7 +2163,7 @@ Real W3DModelDraw::getCurrentAnimFraction() const
 		int mode, numFrames;
 
 		HLodClass* hlod = (HLodClass*)m_renderObject;
-		/*HAnimClass* anim =*/ hlod->Peek_Animation_And_Info(framenum, numFrames, mode, dummy);
+		/*Assets::AnimationAssetHandle anim =*/ hlod->Peek_Animation_And_Info(framenum, numFrames, mode, dummy);
 		if (framenum < 0.0)
 			return 0.0;
 		else if (framenum >= numFrames)
@@ -2207,19 +2207,19 @@ void W3DModelDraw::adjustAnimation(const ModelConditionInfo* prevState, Real pre
 
 		if (m_renderObject)
 		{
-			HAnimClass* animHandle = animInfo.getAnimHandle();	// note that this now returns an ADDREFED handle, which must be released by the caller!
+			Assets::AnimationAssetHandle animHandle = animInfo.getAnimHandle();	// note that this now returns an ADDREFED handle, which must be released by the caller!
 			if (animHandle)
 			{
 				Int startFrame = 0;
 				if (m_curState->m_mode == RenderObjClass::ANIM_MODE_ONCE_BACKWARDS ||
 						m_curState->m_mode == RenderObjClass::ANIM_MODE_LOOP_BACKWARDS)
 				{
-					startFrame = animHandle->Get_Num_Frames()-1;
+					startFrame = static_cast<int>(Assets::Get_Animation_Cache().Resolve(animHandle)->frame_count)-1;
 				}
 
 				if (testFlagBit(m_curState->m_flags, RANDOMIZE_START_FRAME))
 				{
-					startFrame = GameClientRandomValue(0, animHandle->Get_Num_Frames()-1);
+					startFrame = GameClientRandomValue(0, static_cast<int>(Assets::Get_Animation_Cache().Resolve(animHandle)->frame_count)-1);
 				}
 				else if (testFlagBit(m_curState->m_flags, START_FRAME_FIRST))
 				{
@@ -2227,7 +2227,7 @@ void W3DModelDraw::adjustAnimation(const ModelConditionInfo* prevState, Real pre
 				}
 				else if (testFlagBit(m_curState->m_flags, START_FRAME_LAST))
 				{
-					startFrame = animHandle->Get_Num_Frames()-1;
+					startFrame = static_cast<int>(Assets::Get_Animation_Cache().Resolve(animHandle)->frame_count)-1;
 				}
 				// order is important here: MAINTAIN_FRAME_ACROSS_STATES is overridden by the other bits, above.
 				else if (isAnyMaintainFrameFlagSet(m_curState->m_flags) &&
@@ -2237,11 +2237,11 @@ void W3DModelDraw::adjustAnimation(const ModelConditionInfo* prevState, Real pre
 						isCommonMaintainFrameFlagSet(m_curState->m_flags, prevState->m_flags) &&
 						prevAnimFraction >= 0.0)
 				{
-					startFrame = REAL_TO_INT(prevAnimFraction * animHandle->Get_Num_Frames()-1);
+					startFrame = REAL_TO_INT(prevAnimFraction * static_cast<int>(Assets::Get_Animation_Cache().Resolve(animHandle)->frame_count)-1);
 				}
 
 				m_renderObject->Set_Animation(animHandle, startFrame, m_curState->m_mode);
-				REF_PTR_RELEASE(animHandle);
+				Assets::Release_Animation(animHandle);
 				animHandle = nullptr;
 
 				if (m_renderObject->Class_ID() == RenderObjClass::CLASSID_HLOD)
@@ -2266,10 +2266,10 @@ Bool W3DModelDraw::setCurAnimDurationInMsec(Real desiredDurationInMsec)
 	if (m_renderObject && m_renderObject->Class_ID() == RenderObjClass::CLASSID_HLOD)
 	{
 		HLodClass* hlod = (HLodClass*)m_renderObject;
-		HAnimClass* anim = hlod->Peek_Animation();
+		Assets::AnimationAssetHandle anim = hlod->Peek_Animation();
 		if (anim)
 		{
-			Real naturalDurationInMsec = anim->Get_Num_Frames() * 1000.0f / anim->Get_Frame_Rate();
+			Real naturalDurationInMsec = static_cast<int>(Assets::Get_Animation_Cache().Resolve(anim)->frame_count) * 1000.0f / Assets::Get_Animation_Cache().Resolve(anim)->frame_rate;
 			if (naturalDurationInMsec > 0.0f && desiredDurationInMsec > 0.0f)
 			{
 				Real multiplier = naturalDurationInMsec / desiredDurationInMsec;
@@ -2302,7 +2302,7 @@ Real W3DModelDraw::getCurAnimDistanceCovered() const
 	Utility function to make it easier to recursively hide all objects connected to a certain bone.
 	We will hide all objects connected to bones which are children of boneIdx
 */
-static void doHideShowBoneSubObjs(Bool state, Int numSubObjects, Int boneIdx, RenderObjClass *fullObject, const HTreeClass *htree)
+static void doHideShowBoneSubObjs(Bool state, Int numSubObjects, Int boneIdx, RenderObjClass *fullObject, const Graphics::ModelHierarchy *htree)
 {
 #if 1	//(gth) fixed and tested this version
 	for (Int i=0; i < numSubObjects; i++)
@@ -2312,7 +2312,7 @@ static void doHideShowBoneSubObjs(Bool state, Int numSubObjects, Int boneIdx, Re
 
 		while (parentBoneIndex != 0)
 		{
-			parentBoneIndex = htree->Get_Parent_Index(parentBoneIndex);
+			parentBoneIndex = htree->Parent_Index(parentBoneIndex);
 
 			if (parentBoneIndex == boneIdx)
 			{
@@ -2334,7 +2334,7 @@ static void doHideShowBoneSubObjs(Bool state, Int numSubObjects, Int boneIdx, Re
   for (Int i=0; i < numSubObjects; i++)
   {
   	Int childBoneIndex = fullObject->Get_Sub_Object_Bone_Index(0, i);
-  	Int parentIndex = htree->Get_Parent_Index(childBoneIndex);
+	Int parentIndex = htree->Parent_Index(childBoneIndex);
   	if (childBoneIndex == parentIndex)
   		continue;
 
@@ -2385,7 +2385,7 @@ void W3DModelDraw::doHideShowSubObjs(const std::vector<ModelConditionInfo::HideS
 			{
 				subObj->Set_Hidden(it->hide);
 
-				const HTreeClass *htree = m_renderObject->Get_HTree();
+				const Graphics::ModelHierarchy *htree = m_renderObject->Get_Model_Hierarchy();
 				if (htree)
 				{
 					//get the bone of this subobject so we can hide all other child objects that use this bone
@@ -2849,7 +2849,7 @@ void W3DModelDraw::hideGarrisonFlags(Bool hide)
 	{
 		subObj->Set_Hidden(hide);
 
-		const HTreeClass *htree = m_renderObject->Get_HTree();
+		const Graphics::ModelHierarchy *htree = m_renderObject->Get_Model_Hierarchy();
 		if (htree)
 		{
 			//get the bone of this subobject so we can hide all other child objects that use this bone
@@ -3845,9 +3845,9 @@ void W3DModelDraw::setAnimationFrame( int frame )
 	if( m_renderObject && m_whichAnimInCurState >= 0 )
 	{
 		const W3DAnimationInfo& animInfo = m_curState->m_animations[ m_whichAnimInCurState ];
-		HAnimClass* animHandle = animInfo.getAnimHandle();	// note that this now returns an ADDREFED handle, which must be released by the caller!
+		Assets::AnimationAssetHandle animHandle = animInfo.getAnimHandle();	// note that this now returns an ADDREFED handle, which must be released by the caller!
 		m_renderObject->Set_Animation( animHandle, frame );
-		REF_PTR_RELEASE(animHandle);
+		Assets::Release_Animation(animHandle);
 	}
 }
 
@@ -3867,7 +3867,7 @@ void W3DModelDraw::setPauseAnimation(Bool pauseAnim)
 		int mode, numFrames;
 
 		HLodClass* hlod = (HLodClass*)m_renderObject;
-		HAnimClass* anim = hlod->Peek_Animation_And_Info(framenum, numFrames, mode, dummy);
+		Assets::AnimationAssetHandle anim = hlod->Peek_Animation_And_Info(framenum, numFrames, mode, dummy);
 		if (anim)
 		{
 			if (m_pauseAnimation)
@@ -4013,7 +4013,7 @@ void W3DModelDraw::updateSubObjects()
 			{
 				subObj->Set_Hidden(it->hide);
 
-				const HTreeClass *htree = m_renderObject->Get_HTree();
+				const Graphics::ModelHierarchy *htree = m_renderObject->Get_Model_Hierarchy();
 				if (htree)
 				{
 					//get the bone of this subobject so we can hide all other child objects that use this bone
@@ -4184,7 +4184,7 @@ void W3DModelDraw::xfer( Xfer *xfer )
 				// get animation info
 				Int mode, numFrames;
 				Real frame, dummy;
-				HAnimClass *anim = hlod->Peek_Animation_And_Info( frame, numFrames, mode, dummy );
+				Assets::AnimationAssetHandle anim = hlod->Peek_Animation_And_Info( frame, numFrames, mode, dummy );
 
 				// animation data is present
 				Bool present = anim ? TRUE : FALSE;
@@ -4201,7 +4201,7 @@ void W3DModelDraw::xfer( Xfer *xfer )
 					// xfer frame as a fraction (this will allow the animations to change
 					// in future patches but will still be mostly correct)
 					//
-					Real percent = frame / INT_TO_REAL( anim->Get_Num_Frames()-1 );
+					Real percent = frame / INT_TO_REAL( static_cast<int>(Assets::Get_Animation_Cache().Resolve(anim)->frame_count)-1 );
 					xfer->xferReal( &percent );
 
 				}
@@ -4246,14 +4246,14 @@ void W3DModelDraw::xfer( Xfer *xfer )
 					HLodClass *hlod = (HLodClass *)m_renderObject;
 
 					// get anim
-					HAnimClass *anim = hlod->Peek_Animation();
+					Assets::AnimationAssetHandle anim = hlod->Peek_Animation();
 
 					// set animation data
 					if( anim )
 					{
 
 						// figure out frame number given percent written in file and total frames on anim
-						Real frame = percent * INT_TO_REAL( anim->Get_Num_Frames()-1 );
+						Real frame = percent * INT_TO_REAL( static_cast<int>(Assets::Get_Animation_Cache().Resolve(anim)->frame_count)-1 );
 
 						float dummy1, dummy2;
 						int curMode, dummy3;
@@ -4346,4 +4346,3 @@ void W3DModelDrawModuleData::xfer( Xfer *x )
 void W3DModelDrawModuleData::loadPostProcess()
 {
 }
-

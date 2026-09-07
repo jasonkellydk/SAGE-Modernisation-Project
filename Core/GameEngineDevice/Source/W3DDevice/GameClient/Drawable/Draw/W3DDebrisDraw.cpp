@@ -39,7 +39,6 @@
 #include "GameClient/FXList.h"
 #include "GameLogic/TerrainLogic.h"
 
-#include "WW3D2/HAnim.h"
 #include "WW3D2/HLOD.h"
 #include "WW3D2/RendObj.h"
 #include "W3DDevice/GameClient/Module/W3DDebrisDraw.h"
@@ -48,6 +47,7 @@
 #include "W3DDevice/GameClient/W3DScene.h"
 #include "W3DDevice/GameClient/W3DShadow.h"
 #include "WW3D2/StringUtilities.h"
+import Assets.Cache.Animations;
 
 //-------------------------------------------------------------------------------------------------
 //-------------------------------------------------------------------------------------------------
@@ -81,7 +81,7 @@ W3DDebrisDraw::~W3DDebrisDraw()
 	}
 	for (int i = 0; i < STATECOUNT; ++i)
 	{
-		REF_PTR_RELEASE(m_anims[i]);
+		Assets::Release_Animation(m_anims[i]);
 		m_anims[i] = nullptr;
 	}
 }
@@ -154,12 +154,12 @@ void W3DDebrisDraw::setAnimNames(AsciiString initial, AsciiString flying, AsciiS
 	int i;
 	for (i = 0; i < STATECOUNT; ++i)
 	{
-		REF_PTR_RELEASE(m_anims[i]);
+		Assets::Release_Animation(m_anims[i]);
 		m_anims[i] = nullptr;
 	}
 
-	m_anims[INITIAL] = initial.isEmpty() ? nullptr : W3DDisplay::m_assetManager->Get_HAnim(initial.str());
-	m_anims[FLYING] = flying.isEmpty() ? nullptr : W3DDisplay::m_assetManager->Get_HAnim(flying.str());
+	m_anims[INITIAL] = initial.isEmpty() ? nullptr : W3DDisplay::m_assetManager->Acquire_Animation(initial.str());
+	m_anims[FLYING] = flying.isEmpty() ? nullptr : W3DDisplay::m_assetManager->Acquire_Animation(flying.str());
 	if (WW3DString::Compare_No_Case(finalAnim.str(), "STOP") == 0)
 	{
 		m_finalStop = true;
@@ -169,7 +169,7 @@ void W3DDebrisDraw::setAnimNames(AsciiString initial, AsciiString flying, AsciiS
 	{
 		m_finalStop = false;
 	}
-	m_anims[FINAL] = finalAnim.isEmpty() ? nullptr : W3DDisplay::m_assetManager->Get_HAnim(finalAnim.str());
+	m_anims[FINAL] = finalAnim.isEmpty() ? nullptr : W3DDisplay::m_assetManager->Acquire_Animation(finalAnim.str());
 	m_state = 0;
 	m_frames = 0;
 	m_fxFinal = finalFX;
@@ -244,7 +244,7 @@ void W3DDebrisDraw::doDrawModule(const Matrix3D* transformMtx)
 		{
 			++m_state;
 		}
-		HAnimClass* hanim = m_anims[m_state];
+		Assets::AnimationAssetHandle hanim = m_anims[m_state];
 		if (hanim != nullptr && (hanim != m_renderObject->Peek_Animation() || oldState != m_state))
 		{
 			RenderObjClass::AnimMode m = TheAnimModes[m_state];

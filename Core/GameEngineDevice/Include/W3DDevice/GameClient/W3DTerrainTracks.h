@@ -30,8 +30,6 @@ import Graphics.Scene.Surfaces.Renderer;
 #include "WWLib/always.h"
 #include "WW3D2/RendObj.h"
 #include "WW3D2/W3DFile.h"
-#include "WW3D2/VertexBuffer.h"
-#include "WW3D2/IndexBuffer.h"
 #include "WW3D2/Shader.h"
 #include "WW3D2/VertMaterial.h"
 #include "Lib/BaseType.h"

@@ -1,4 +1,5 @@
 module;
+#include "../../profiling/Tracy.h"
 #include <array>
 #include <algorithm>
 #include <cstddef>
@@ -138,6 +139,7 @@ public:
     bool Draw(CommandList &commands, TreeMeshHandle handle,
         const TreeParameters &parameters, std::span<const RHITextureHandle> textures)
     {
+        GRAPHICS_PROFILE_SCOPE("Graphics.Trees.Draw");
         TreeMesh *mesh = m_meshes.Resolve(handle);
         if (m_device == nullptr || mesh == nullptr || textures.size() != 2) return false;
         if (mesh->geometry.Indices().empty()) return true;

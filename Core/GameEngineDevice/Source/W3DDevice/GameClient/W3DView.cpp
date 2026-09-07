@@ -34,6 +34,7 @@
 
 // SYSTEM INCLUDES ////////////////////////////////////////////////////////////////////////////////
 #include <stdlib.h>
+import Graphics.Frame.AttachmentBindings;
 #include <SDL3/SDL.h>
 
 // USER INCLUDES //////////////////////////////////////////////////////////////////////////////////
@@ -90,10 +91,8 @@
 #include "W3DDevice/GameClient/Module/W3DModelDraw.h"
 #include "W3DDevice/GameClient/W3DCustomScene.h"
 
-#include "WW3D2/Backend/RenderBackend.h"
-#include "WW3D2/MeshRenderer.h"
+#include "WW3D2/GraphicsGeometry.h"
 #include "WW3D2/Light.h"
-#include "WW3D2/PredLod.h"
 #include "WW3D2/WW3D.h"
 
 #include "W3DDevice/GameClient/CameraShakeSystem.h"
@@ -1893,7 +1892,6 @@ void W3DView::draw()
 				RenderInfoClass rinfo(*m_3DCamera);
 				// Apply the camera and viewport (including depth range)
 				m_3DCamera->Apply();
-				TheMeshRenderer.Set_Camera(&rinfo.Camera);
 				W3DDisplay::m_3DScene->renderSpecificDrawables(rinfo, 1, &drawable);
 				WW3D::Flush(rinfo);
 			}
@@ -1915,7 +1913,7 @@ void W3DView::draw()
 		//The pass that rendered into a texture may have left the z-buffer in a weird state
 		//so clear it before rendering normal scene.
 		///@todo: Don't clear z-buffer unless shader uses z-bias or anything else that would cause <= z to fail on normal render.
-		WW3D::Get_Render_Backend()->Clear(false, true, Vector3(0.0f,0.0f,0.0f), TheWaterTransparency->m_minWaterOpacity);	// Clear z but not color
+		Graphics::Get_Attachment_Bindings().Clear(false, true, {0,0,0,TheWaterTransparency->m_minWaterOpacity});	// Clear z but not color
 		W3DDisplay::m_3DScene->setCustomPassMode(SCENE_PASS_DEFAULT);
 		W3DDisplay::m_3DScene->doRender( m_3DCamera );
 		Coord2D deltaScroll;
@@ -3750,7 +3748,7 @@ void W3DView::updateTerrain()
 		TheTerrainRenderObject->setTerrainDrawSize(drawSize.x, drawSize.y);
 	}
 
-	RefRenderObjListIterator *it = W3DDisplay::m_3DScene->createLightsIterator();
+	Graphics::SceneObjectList<RenderObjClass>::Cursor *it = W3DDisplay::m_3DScene->createLightsIterator();
 
 	const Vector3 cameraPivot(m_pos.x, m_pos.y, m_pos.z);
 	TheTerrainRenderObject->updateCenter(m_3DCamera, &cameraPivot, it);

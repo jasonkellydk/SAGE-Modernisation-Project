@@ -50,6 +50,7 @@
 #include "WW3D2/HLOD.h"
 #include "WW3D2/Scene.h"
 #include "WW3D2/MatInfo.h"
+import Assets.Cache.Animations;
 
 
 
@@ -140,7 +141,7 @@ void W3DRenderObjectSnapshot::update(RenderObjClass *robj, DrawableInfo *drawInf
 			float frame,mult;
 			int mode,numFrames;
 
-			HAnimClass *hanim = ((HLodClass *)robj)->Peek_Animation_And_Info(frame,numFrames,mode,mult);
+			Assets::AnimationAssetHandle hanim = ((HLodClass *)robj)->Peek_Animation_And_Info(frame,numFrames,mode,mult);
 			m_robj->Set_Animation(hanim,frame);
 			disableUVAnimations(m_robj);
 		}

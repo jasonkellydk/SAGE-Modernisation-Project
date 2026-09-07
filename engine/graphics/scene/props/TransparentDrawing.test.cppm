@@ -35,7 +35,7 @@ BOOST_AUTO_TEST_CASE(sorts_triangles_across_batches_and_releases_the_queue)
     const std::array<float,4> depth{0,0,1,0};
     std::array<PropVertex,6> vertices{};
     for (int triangle=0; triangle<2; ++triangle) {
-        vertices[triangle*3].position={-1,-1,triangle ? -9.0f : -1.0f};
+        vertices[triangle*3].position={-1,-1,triangle ? 11.0f : 19.0f};
         vertices[triangle*3+1].position={3,-1,vertices[triangle*3].position[2]};
         vertices[triangle*3+2].position={-1,3,vertices[triangle*3].position[2]};
         for (int corner=0;corner<3;++corner)
@@ -43,13 +43,18 @@ BOOST_AUTO_TEST_CASE(sorts_triangles_across_batches_and_releases_the_queue)
                 ? std::array<float,4>{1,0,0,0.5f} : std::array<float,4>{0,0,1,0.5f};
     }
     const std::array<std::uint32_t,6> indices{0,1,2,3,4,5};
-    BOOST_REQUIRE(queue.Submit(renderer,vertices,indices,style,parameters,{},depth));
+    parameters.world[11]=-20;
+    const auto retained = renderer.Create_Mesh(vertices,indices);
+    BOOST_REQUIRE(queue.Submit(renderer,retained,style,parameters,{},depth));
+    BOOST_REQUIRE(renderer.Destroy_Mesh(retained));
+    parameters.world[11]=0;
     for (int i=0;i<3;++i) { vertices[i].position[2]=-5; vertices[i].color={0,1,0,0.5f}; }
     BOOST_REQUIRE(queue.Submit(renderer,std::span(vertices).first(3),std::span(indices).first(3),
         style,parameters,{},depth));
     BOOST_REQUIRE(commands.Clear({0,0,0,0},1));
     BOOST_REQUIRE(queue.Flush(renderer,commands));
     BOOST_CHECK(queue.Empty());
+    BOOST_CHECK(renderer.Mesh_Geometry(retained) == nullptr);
     std::array<std::byte,16*16*4> pixels{};
     BOOST_REQUIRE(device.Readback_Texture(target,pixels,64));
     // Red far, green middle, blue near: sorting whole batches cannot produce this.

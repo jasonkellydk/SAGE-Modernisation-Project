@@ -26,10 +26,8 @@
 
 import Graphics.Scene.WeatherParticles;
 
-class IndexBufferClass;
 class RenderInfoClass;
 class TextureClass;
-class RenderBackendVertexBuffer;
 
 class W3DSnowManager : public SnowManager
 {

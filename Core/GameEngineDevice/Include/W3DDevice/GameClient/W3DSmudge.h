@@ -30,7 +30,6 @@ class Vector3;
 class Vector4;
 class TextureClass;
 class RenderInfoClass;
-class IndexBufferClass;
 
 //#define USE_COPY_RECTS	1	//this was the old method that didn't render to texture. Just copied backbuffer into texture. Slow on Nvidia.
 

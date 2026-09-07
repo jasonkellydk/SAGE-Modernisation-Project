@@ -166,58 +166,6 @@ private:
 	TextureClass *					LastDestTex;
 };
 
-/***********************************************************************************************
-** MaterialCollectorClass
-**
-** This class can be used to collect all of the unique instances of materials from a mesh.
-** Its original motivation is to solve a problem encountered in trying to save a mesh
-** to disk.  There are arrays of pointers to vertex materials in the mesh but no record of
-** the set of unique vertex materials (all pointers could point to the same one...)  Similar
-** to the remapper, it tries to take advantage of the fact that the materials and textures
-** should be in sorted order to optimize the lookups...
-**
-** NOTE: pointer comparisons are used to determine if the objects are unique.  I don't
-** check whether the contents of the objects are identical.  (Exporter does this, I assume
-** that if there are two separate objects, they are that way for a reason here.)
-***********************************************************************************************/
-class MaterialCollectorClass
-{
-public:
-
-	MaterialCollectorClass();
-	~MaterialCollectorClass();
-
-	void							Reset();
-	void							Collect_Materials(MeshModelClass * mesh);
-	void							Add_Texture(TextureClass * tex);
-	void							Add_Shader(ShaderClass shader);
-	void							Add_Vertex_Material(VertexMaterialClass * vmat);
-
-	int							Get_Shader_Count();
-	int							Get_Vertex_Material_Count();
-	int							Get_Texture_Count();
-
-	ShaderClass					Peek_Shader(int i);
-	TextureClass *				Peek_Texture(int i);
-	VertexMaterialClass *	Peek_Vertex_Material(int i);
-
-	int							Find_Shader(const ShaderClass & shader);
-	int							Find_Texture(TextureClass * tex);
-	int							Find_Vertex_Material(VertexMaterialClass * mat);
-
-protected:
-
-	DynamicVectorClass<ShaderClass> 					Shaders;
-	DynamicVectorClass<VertexMaterialClass *> 	VertexMaterials;
-	DynamicVectorClass<TextureClass *> 				Textures;
-
-	ShaderClass												LastShader;
-	VertexMaterialClass *								LastMaterial;
-	TextureClass *											LastTexture;
-};
-
-
-
 inline int MaterialInfoClass::Add_Vertex_Material(VertexMaterialClass * vmat)
 {
 	if (vmat != nullptr) {

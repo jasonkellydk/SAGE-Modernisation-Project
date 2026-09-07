@@ -32,7 +32,6 @@
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 #include "Common/DrawModule.h"
-//#include "WW3D2/Line3D.h"
 #include "GameClient/Color.h"
 
 class SegmentedLineClass;

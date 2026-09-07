@@ -59,10 +59,7 @@ bool WaterSkyboxSystem::Initialize(float scale)
 	{
 		if (material->Peek_Texture(i) != nullptr)
 		{
-			material->Peek_Texture(i)->Get_Filter().Set_U_Addr_Mode(
-				TextureFilterClass::TEXTURE_ADDRESS_CLAMP);
-			material->Peek_Texture(i)->Get_Filter().Set_V_Addr_Mode(
-				TextureFilterClass::TEXTURE_ADDRESS_CLAMP);
+			material->Peek_Texture(i)->Get_Sampling().address.fill(Graphics::RHISamplerAddress::Clamp);
 		}
 	}
 	REF_PTR_RELEASE(material);

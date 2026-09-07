@@ -1,3 +1,4 @@
+import Graphics.Frame.AttachmentBindings;
 /*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -82,7 +83,6 @@
 #include "RInfo.h"
 #include "Camera.h"
 #include "MatPass.h"
-#include "BWRender.h"
 #include "AssetMgr.h"
 #include "WW3D.h"
 
@@ -576,8 +576,8 @@ void TexProjectClass::Init_Multiplicative()
 		*/
 		TextureClass * grad_tex = WW3DAssetManager::Get_Instance()->Get_Texture("MultProjectorGradient.tga");
 		if (grad_tex) {
-			grad_tex->Get_Filter().Set_U_Addr_Mode(TextureFilterClass::TEXTURE_ADDRESS_CLAMP);
-			grad_tex->Get_Filter().Set_V_Addr_Mode(TextureFilterClass::TEXTURE_ADDRESS_CLAMP);
+			grad_tex->Get_Sampling().address[0] = Graphics::RHISamplerAddress::Clamp;
+			grad_tex->Get_Sampling().address[1] = Graphics::RHISamplerAddress::Clamp;
 			MaterialPass->Set_Texture(grad_tex,1);
 			grad_tex->Release_Ref();
 		} else {
@@ -678,8 +678,8 @@ void TexProjectClass::Init_Additive()
 	*/
 	TextureClass * grad_tex = WW3DAssetManager::Get_Instance()->Get_Texture("AddProjectorGradient.tga");
 	if (grad_tex) {
-		grad_tex->Get_Filter().Set_U_Addr_Mode(TextureFilterClass::TEXTURE_ADDRESS_CLAMP);
-		grad_tex->Get_Filter().Set_V_Addr_Mode(TextureFilterClass::TEXTURE_ADDRESS_CLAMP);
+		grad_tex->Get_Sampling().address[0] = Graphics::RHISamplerAddress::Clamp;
+		grad_tex->Get_Sampling().address[1] = Graphics::RHISamplerAddress::Clamp;
 		MaterialPass->Set_Texture(grad_tex,1);
 		grad_tex->Release_Ref();
 	} else {
@@ -733,8 +733,8 @@ void TexProjectClass::Set_Texture(TextureClass * texture)
 {
 	if (texture != nullptr)
 	{
-		texture->Get_Filter().Set_U_Addr_Mode(TextureFilterClass::TEXTURE_ADDRESS_CLAMP);
-		texture->Get_Filter().Set_V_Addr_Mode(TextureFilterClass::TEXTURE_ADDRESS_CLAMP);
+		texture->Get_Sampling().address[0] = Graphics::RHISamplerAddress::Clamp;
+		texture->Get_Sampling().address[1] = Graphics::RHISamplerAddress::Clamp;
 		MaterialPass->Set_Texture(texture);
 	}
 }
@@ -1115,7 +1115,7 @@ bool TexProjectClass::Compute_Ortho_Projection
 bool TexProjectClass::Compute_Texture
 (
 	RenderObjClass * model,
-	SpecialRenderInfoClass * context,
+	RenderInfoClass * context,
     bool (*draw)(RenderObjClass&, RenderInfoClass&)
 )
 {
@@ -1140,7 +1140,9 @@ bool TexProjectClass::Compute_Texture
 		/*
 		** Set the render target
 		*/
-		WW3D::Get_Render_Backend()->Set_Render_Target(rtarget,ztarget);
+		if (!rtarget->Ensure_Render_Backend_Texture() || (ztarget && !ztarget->Ensure_Render_Backend_Texture())) return false;
+        if (!Graphics::Get_Attachment_Bindings().Bind(rtarget->Peek_Render_Backend_Texture(),
+            ztarget ? ztarget->Peek_Render_Backend_Texture() : nullptr)) return false;
 
 		/*
 		** Set up the camera
@@ -1160,32 +1162,17 @@ bool TexProjectClass::Compute_Texture
 		bool snapshot=WW3D::Is_Snapshot_Activated();
 		SNAPSHOT_SAY(("TexProjectCLass::Begin_Render()"));
 		WW3D::Begin_Render(true,zclear,color);	// false to zclear as we don't have z-buffer
-        bool rendered = true;
-        if (draw) {
-            context->Camera.Apply();
-            rendered = draw(*model,*context);
-        } else {
-        }
+        context->Camera.Apply();
+        const bool rendered = draw(*model,*context);
 		SNAPSHOT_SAY(("TexProjectCLass::End_Render()"));
-		WW3D::End_Render(false);
+		WW3D::End_Render();
 		WW3D::Activate_Snapshot(snapshot);	// End_Render() ends the shapsnot, so restore the state
 
-		WW3D::Get_Render_Backend()->Set_Render_Target(nullptr);
+		Graphics::Get_Attachment_Bindings().Restore_Default();
         if (!rendered) return false;
 
 	}
 
-#if 0
-
-	/*
-	** Render the object with the BW Renderer into our color surface
-	*/
-	BWRenderClass bwr((unsigned char*)shadow_surface->getDataPtr(),tex_size);
-	bwr.Fill(0xff);
-	context->BWRenderer = &bwr;
-	model->Special_Render(*context);
-	context->BWRenderer = nullptr;
-#endif
 	return true;
 }
 
@@ -1358,7 +1345,7 @@ void TexProjectClass::Pre_Render_Update(const Matrix3D & camera)
 	}
 
 	if (Get_Texture_Size() == 0) {
-//		SurfaceClass::SurfaceDescription surface_desc;
+//		Assets::ImageDescription surface_desc;
 //		MaterialPass->Peek_Texture()->Get_Level_Description(surface_desc);
 		Set_Texture_Size(MaterialPass->Peek_Texture()->Get_Width());
 		WWASSERT(Get_Texture_Size() != 0);

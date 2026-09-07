@@ -36,7 +36,6 @@ class MeshClass;
 class PolygonTrigger;
 class WaterRenderSystem;
 class MapObject;
-class Render2DClass;
 //
 // DrawObject: Draws 3d feedback for tools & objects.
 //
@@ -57,7 +56,6 @@ public:
 	virtual RenderObjClass *	Clone() const override;
 	virtual int						Class_ID() const override;
 	virtual void					Render(RenderInfoClass & rinfo) override;
-//	virtual void					Special_Render(SpecialRenderInfoClass & rinfo);
 //	virtual void 					Set_Transform(const Matrix3D &m);
 //	virtual void 					Set_Position(const Vector3 &v);
 //TODO: MW: do these later - only needed for collision detection
@@ -140,7 +138,6 @@ protected:
 
 	MeshClass									*m_moldMesh;		///< W3D mesh model for the mold.
 	SphereClass								m_moldMeshBounds;				///< Bounding sphere for mold mesh.
-	Render2DClass							*m_lineRenderer;		//< Used to render 2D lines for bounding boxes.
 	CPoint										m_winSize;				//< Holds the size of the window.
 
 protected: // static state vars.

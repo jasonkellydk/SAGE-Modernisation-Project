@@ -37,16 +37,13 @@
 #include "SegLine.h"
 #include "WW3D.h"
 #include "RInfo.h"
-#include "PredLod.h"
 #include "WWMath/v3_rnd.h"
 #include "Texture.h"
 #include "ColTest.h"
 #include "W3DFile.h"
 #include "Texture.h"
-#include "Backend/RenderBackend.h"
 #include "WWMath/vp.h"
 #include "WWMath/Vector3i.h"
-#include "SortingRenderer.h"
 
 static SegLineRendererClass _LineRenderer;
 
@@ -340,9 +337,9 @@ void SegmentedLineClass::Render(RenderInfoClass & rinfo)
 	if (!WW3D::Is_Sorting_Enabled())
 		sort_level=Get_Shader().Guess_Sort_Level();
 
-	if (WW3D::Are_Static_Sort_Lists_Enabled() && sort_level!=SORT_LEVEL_NONE) {
+	if (Graphics::Get_Scene_Draw_Queue().Is_Enabled() && sort_level!=SORT_LEVEL_NONE) {
 
-		WW3D::Add_To_Static_Sort_List(this, sort_level);
+		Graphics::Get_Scene_Draw_Queue().Enqueue<Extract_Ordered_Draw>(sort_level, *this);
 
 	} else
 		Render_Seg_Line(rinfo);
@@ -437,14 +434,6 @@ void SegmentedLineClass::Prepare_LOD(CameraClass &camera)
 	lvl = MIN(lvl, MaxSubdivisionLevels);
 	LineRenderer.Set_Current_Subdivision_Level(lvl);
 
-	// Prepare LOD processing if the line has subdivision enabled:
-	if (MaxSubdivisionLevels > 0) {
-		// Add myself to the LOD optimizer:
-		PredictiveLODOptimizerClass::Add_Object(this);
-	} else {
-		// Not added to optimizer, need to add cost
-		PredictiveLODOptimizerClass::Add_Cost(Get_Cost());
-	}
 }
 
 void SegmentedLineClass::Increment_LOD()
@@ -595,5 +584,4 @@ bool SegmentedLineClass::Cast_Ray(RayCollisionTestClass & raytest)
 
 	return retval;
 }
-
 

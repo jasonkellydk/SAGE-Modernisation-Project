@@ -11,11 +11,31 @@ target_sources(generals_graphics
         FILE_SET CXX_MODULES
         BASE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}"
         FILES
+            diagnostics/RenderDiagnostics.cppm
+            cursors/CursorLoad.cppm
+            cursors/Cursor.cppm
+            presentation/DisplayModes.cppm
             resources/handles/ResourceHandle.cppm
             memory/AlignedAllocator.cppm
             resources/pools/ResourcePool.cppm
             resources/meshes/Mesh.cppm
             resources/textures/Texture.cppm
+            resources/loading/ResourceLoadQueue.cppm
+            resources/textures/TextureUpload.cppm
+            resources/textures/TextureLoad.cppm
+            resources/textures/TextureAtlas.cppm
+            resources/ResourceRecreation.cppm
+            resources/textures/TextureResource.cppm
+            resources/textures/TextureEdit.cppm
+            resources/textures/TextureSnapshot.cppm
+            resources/textures/TextureReferences.cppm
+            resources/textures/TextureSampling.cppm
+            resources/textures/TextureStorage.cppm
+            resources/textures/TextureQuality.cppm
+            materials/TextureCoordinates.cppm
+            scene/views/CameraMatrices.cppm
+            scene/SceneDrawParameters.cppm
+            materials/Fog.cppm
             resources/samplers/Sampler.cppm
             resources/materials/Material.cppm
             resources/residency/GPUResourceResidency.cppm
@@ -27,18 +47,28 @@ target_sources(generals_graphics
             scene/terrain/TerrainGeometry.cppm
             scene/terrain/TerrainRenderer.cppm
             scene/surfaces/SurfaceGeometry.cppm
+            scene/primitives/PrimitiveGeometry.cppm
             scene/surfaces/SurfaceRenderer.cppm
             scene/lines/LineDrawing.cppm
+            scene/lines/Tracer.cppm
             scene/bibs/BibRenderer.cppm
             scene/roads/RoadRenderer.cppm
             scene/shadows/StencilVolumeRenderer.cppm
             scene/screen/ScreenFilterRenderer.cppm
             scene/debug/DebugRenderer.cppm
+            scene/debug/CollisionBox.cppm
             scene/shadows/ProjectedShadowRenderer.cppm
             scene/props/PropLighting.cppm
             scene/props/PropGeometry.cppm
+            scene/props/PropExtraction.cppm
             scene/props/PropMaterial.cppm
+            scene/props/PropSurface.cppm
+            scene/props/PropAssetGeometry.cppm
+            scene/props/PropSkinning.cppm
+            scene/props/PropAssetBinding.cppm
             scene/props/PropRenderer.cppm
+            scene/props/PropMeshSet.cppm
+            scene/props/PropSubmission.cppm
             scene/props/TransparentGeometry.cppm
             scene/props/MaterialPassQueue.cppm
             scene/water/WaterGeometry.cppm
@@ -52,17 +82,30 @@ target_sources(generals_graphics
             scene/RenderScene.cppm
             scene/attachments/Attachments.cppm
             scene/meshes/StaticMeshRenderer.cppm
+            scene/lighting/LocalLighting.cppm
+            scene/props/PropLightingParameters.cppm
             scene/lighting/Lighting.cppm
             scene/lighting/EnvironmentLighting.cppm
             scene/lighting/LightRenderer.cppm
             scene/environment/Environment.cppm
             scene/shadows/Shadows.cppm
+            scene/shroud/ShroudImage.cppm
             scene/shadows/DirectionalShadowRenderer.cppm
             scene/decals/Decals.cppm
             scene/decals/DecalVisibility.cppm
             scene/decals/DecalDraw.cppm
             scene/world/WorldQuads.cppm
             scene/particles/Particles.cppm
+            scene/particles/SpriteGeometry.cppm
+            scene/particles/EmitterTracks.cppm
+            scene/particles/LineGroupGeometry.cppm
+            scene/beams/RibbonSubdivision.cppm
+            scene/beams/RibbonMath.cppm
+            scene/beams/RibbonIntersections.cppm
+            scene/beams/RibbonGeometry.cppm
+            scene/beams/RibbonEdges.cppm
+            scene/beams/RibbonTextureCoordinates.cppm
+            scene/beams/RibbonPipeline.cppm
             scene/particles/ParticleVisibility.cppm
             scene/particles/ParticleDraw.cppm
             scene/particles/ParticleRenderer.cppm
@@ -70,12 +113,21 @@ target_sources(generals_graphics
             scene/screen/ScreenDistortion.cppm
             scene/screen/FullscreenOverlay.cppm
             scene/ring/Ring.cppm
+            scene/ring/RingRuntime.cppm
+            scene/ring/AuthoredRingRenderer.cppm
+            scene/sphere/Sphere.cppm
             scene/beams/Beam.cppm
             scene/models/ModelVisibility.cppm
             scene/models/Skeleton.cppm
             scene/models/ModelInstance.cppm
             scene/models/Animation.cppm
             scene/models/AnimationBlend.cppm
+            scene/models/ModelAssetPose.cppm
+            scene/models/AnimationChannels.cppm
+            scene/models/ClipSampling.cppm
+            scene/models/ModelHierarchy.cppm
+            scene/AffineTransform.cppm
+            scene/models/AnimationRotation.cppm
             scene/models/Skinning.cppm
             scene/models/ModelAssetGeometry.cppm
             scene/models/ModelAssetBinding.cppm
@@ -83,6 +135,11 @@ target_sources(generals_graphics
             scene/views/View.cppm
             scene/visibility/Visibility.cppm
             scene/lod/LOD.cppm
+            scene/models/ModelFactoryStore.cppm
+            scene/models/VertexChannels.cppm
+            scene/models/MaterialSlots.cppm
+            scene/models/ModelBoundsTree.cppm
+            scene/models/ModelFactory.cppm
             scene/gpu/GPUScene.cppm
             scene/draw/DrawGeneration.cppm
             render-graph/RenderGraph.cppm
@@ -92,8 +149,15 @@ target_sources(generals_graphics
             rhi/RHI.cppm
             frame/FrameTargets.cppm
             capture/FrameCapture.cppm
+            capture/FramePreview.cppm
             capture/MovieCapture.cppm
             frame/FrameOwner.cppm
+            frame/SubmissionStatistics.cppm
+            frame/FrameResourceLifecycle.cppm
+            frame/AttachmentBindings.cppm
+            scene/SceneObjectList.cppm
+            scene/OrderedDraws.cppm
+            frame/ToolFrame.cppm
             frame/SceneRenderers.cppm
             render-graph/Frame.cppm
             passes/opaque/OpaquePass.cppm
@@ -108,6 +172,11 @@ target_sources(generals_graphics
 )
 
 target_compile_features(generals_graphics PUBLIC cxx_std_20)
+
+if(NOT TARGET SDL3::SDL3)
+    find_package(SDL3 CONFIG REQUIRED)
+endif()
+target_link_libraries(generals_graphics PRIVATE SDL3::SDL3)
 
 if(TARGET generals_assets)
     target_link_libraries(generals_graphics PUBLIC generals_assets)
@@ -403,7 +472,7 @@ if(WIN32)
             BASE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}"
             FILES
                 backends/dx11/DX11RHI.cppm
-                backends/dx11/DX11Coexistence.cppm
+                backends/dx11/DX11FrameRuntime.cppm
     )
 
     target_link_libraries(generals_graphics PRIVATE d3d11)
@@ -434,6 +503,19 @@ if(RTS_BUILD_GRAPHICS_TESTS)
         add_test(NAME ${test_name} COMMAND ${test_name})
     endfunction()
 
+    add_graphics_test(generals_graphics_cursor_test cursors/Cursor.test.cppm)
+    add_graphics_test(generals_graphics_display_modes_test presentation/DisplayModes.test.cppm)
+    target_link_libraries(generals_graphics_display_modes_test PRIVATE SDL3::SDL3)
+    target_link_libraries(generals_graphics_cursor_test PRIVATE SDL3::SDL3)
+    add_graphics_test(generals_graphics_cursor_load_test cursors/CursorLoad.test.cppm)
+    target_link_libraries(generals_graphics_cursor_load_test PRIVATE SDL3::SDL3)
+    if(WIN32)
+        foreach(cursor_test generals_graphics_cursor_test generals_graphics_cursor_load_test generals_graphics_display_modes_test)
+            add_custom_command(TARGET ${cursor_test} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    $<TARGET_FILE:SDL3::SDL3> $<TARGET_FILE_DIR:${cursor_test}>)
+        endforeach()
+    endif()
     add_graphics_test(generals_graphics_terrain_visibility_test scene/terrain/TerrainVisibility.test.cppm)
     add_graphics_test(generals_graphics_terrain_geometry_test scene/terrain/TerrainGeometry.test.cppm)
     if(WIN32)
@@ -481,6 +563,12 @@ if(RTS_BUILD_GRAPHICS_TESTS)
         if(TARGET generals_graphics_shaders)
             add_dependencies(generals_graphics_line_drawing_test generals_graphics_shaders)
         endif()
+        add_graphics_test(generals_graphics_tracer_drawing_test scene/lines/Tracer.test.cppm)
+        target_compile_definitions(generals_graphics_tracer_drawing_test PRIVATE
+            GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
+        if(TARGET generals_graphics_shaders)
+            add_dependencies(generals_graphics_tracer_drawing_test generals_graphics_shaders)
+        endif()
         add_graphics_test(generals_graphics_screen_filter_drawing_test scene/screen/ScreenFilterDrawing.test.cppm)
         target_compile_definitions(generals_graphics_screen_filter_drawing_test PRIVATE
             GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
@@ -492,6 +580,12 @@ if(RTS_BUILD_GRAPHICS_TESTS)
             GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
         if(TARGET generals_graphics_shaders)
             add_dependencies(generals_graphics_debug_drawing_test generals_graphics_shaders)
+        endif()
+        add_graphics_test(generals_graphics_collision_box_test scene/debug/CollisionBox.test.cppm)
+        target_compile_definitions(generals_graphics_collision_box_test PRIVATE
+            GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
+        if(TARGET generals_graphics_shaders)
+            add_dependencies(generals_graphics_collision_box_test generals_graphics_shaders)
         endif()
         add_graphics_test(generals_graphics_track_drawing_test scene/tracks/TrackDrawing.test.cppm)
         target_compile_definitions(generals_graphics_track_drawing_test PRIVATE
@@ -505,7 +599,158 @@ if(RTS_BUILD_GRAPHICS_TESTS)
         if(TARGET generals_graphics_shaders)
             add_dependencies(generals_graphics_tree_drawing_test generals_graphics_shaders)
         endif()
+        add_graphics_test(generals_graphics_texture_snapshot_test resources/textures/TextureSnapshot.test.cppm)
+        add_graphics_test(generals_graphics_texture_upload_test resources/textures/TextureUpload.test.cppm)
+        add_graphics_test(generals_graphics_texture_load_test resources/textures/TextureLoad.test.cppm)
+        add_graphics_test(generals_graphics_texture_atlas_test resources/textures/TextureAtlas.test.cppm)
+        target_compile_definitions(generals_graphics_texture_atlas_test PRIVATE
+            GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
+        if(TARGET generals_graphics_shaders)
+            add_dependencies(generals_graphics_texture_atlas_test generals_graphics_shaders)
+        endif()
+        add_graphics_test(generals_graphics_frame_resource_lifecycle_test frame/FrameResourceLifecycle.test.cppm)
+        add_graphics_test(generals_graphics_frame_drawing_test frame/FrameDrawing.test.cppm)
+        add_graphics_test(generals_graphics_frame_device_test frame/FrameDevice.test.cppm)
+        add_graphics_test(generals_graphics_tool_frame_test frame/ToolFrame.test.cppm)
+        target_compile_definitions(generals_graphics_tool_frame_test PRIVATE
+            GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
+        if(TARGET generals_graphics_shaders)
+            add_dependencies(generals_graphics_tool_frame_test generals_graphics_shaders)
+        endif()
+        target_compile_definitions(generals_graphics_frame_device_test PRIVATE
+            GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
+        if(TARGET generals_graphics_shaders)
+            add_dependencies(generals_graphics_frame_device_test generals_graphics_shaders)
+        endif()
+        target_compile_definitions(generals_graphics_frame_drawing_test PRIVATE
+            GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
+        if(TARGET generals_graphics_shaders)
+            add_dependencies(generals_graphics_frame_drawing_test generals_graphics_shaders)
+        endif()
+        add_graphics_test(generals_graphics_scene_draw_parameters_test scene/SceneDrawParameters.test.cppm)
+        add_graphics_test(generals_graphics_camera_matrices_test scene/views/CameraMatrices.test.cppm)
+        target_compile_definitions(generals_graphics_camera_matrices_test PRIVATE
+            GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
+        if(TARGET generals_graphics_shaders)
+            add_dependencies(generals_graphics_camera_matrices_test generals_graphics_shaders)
+        endif()
+        target_compile_definitions(generals_graphics_scene_draw_parameters_test PRIVATE
+            GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
+        if(TARGET generals_graphics_shaders)
+            add_dependencies(generals_graphics_scene_draw_parameters_test generals_graphics_shaders)
+        endif()
+        add_graphics_test(generals_graphics_attachment_bindings_test frame/AttachmentBindings.test.cppm)
+        target_compile_definitions(generals_graphics_attachment_bindings_test PRIVATE
+            GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
+        if(TARGET generals_graphics_shaders)
+            add_dependencies(generals_graphics_attachment_bindings_test generals_graphics_shaders)
+        endif()
+        add_graphics_test(generals_graphics_resource_recreation_test resources/ResourceRecreation.test.cppm)
+        add_graphics_test(generals_graphics_scene_object_list_test scene/SceneObjectList.test.cppm)
+        add_graphics_test(generals_graphics_ordered_draws_test scene/OrderedDraws.test.cppm)
+        target_compile_definitions(generals_graphics_ordered_draws_test PRIVATE GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
+        if(TARGET generals_graphics_shaders)
+            add_dependencies(generals_graphics_ordered_draws_test generals_graphics_shaders)
+        endif()
+        target_compile_definitions(generals_graphics_scene_object_list_test PRIVATE
+            GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
+        if(TARGET generals_graphics_shaders)
+            add_dependencies(generals_graphics_scene_object_list_test generals_graphics_shaders)
+        endif()
+        target_compile_definitions(generals_graphics_texture_load_test PRIVATE
+            GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
+        if(TARGET generals_graphics_shaders)
+            add_dependencies(generals_graphics_texture_load_test generals_graphics_shaders)
+        endif()
+        add_graphics_test(generals_graphics_texture_resource_test resources/textures/TextureResource.test.cppm)
+        add_graphics_test(generals_graphics_texture_edit_test resources/textures/TextureEdit.test.cppm)
+        target_compile_definitions(generals_graphics_texture_edit_test PRIVATE
+            GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
+        if(TARGET generals_graphics_shaders)
+            add_dependencies(generals_graphics_texture_edit_test generals_graphics_shaders)
+        endif()
+        target_compile_definitions(generals_graphics_texture_resource_test PRIVATE
+            GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
+        if(TARGET generals_graphics_shaders)
+            add_dependencies(generals_graphics_texture_resource_test generals_graphics_shaders)
+        endif()
+        add_graphics_test(generals_graphics_resource_load_queue_test resources/loading/ResourceLoadQueue.test.cppm)
+        target_compile_definitions(generals_graphics_resource_load_queue_test PRIVATE
+            GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
+        if(TARGET generals_graphics_shaders)
+            add_dependencies(generals_graphics_resource_load_queue_test generals_graphics_shaders)
+        endif()
+        target_compile_definitions(generals_graphics_texture_upload_test PRIVATE
+            GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
+        if(TARGET generals_graphics_shaders)
+            add_dependencies(generals_graphics_texture_upload_test generals_graphics_shaders)
+        endif()
+        add_graphics_test(generals_graphics_texture_references_test resources/textures/TextureReferences.test.cppm)
+        add_graphics_test(generals_graphics_texture_sampling_test resources/textures/TextureSampling.test.cppm)
+        add_graphics_test(generals_graphics_texture_storage_test resources/textures/TextureStorage.test.cppm)
+        add_graphics_test(generals_graphics_material_fog_test materials/Fog.test.cppm)
+        add_graphics_test(generals_graphics_local_lighting_test scene/lighting/LocalLighting.test.cppm)
+        target_compile_definitions(generals_graphics_local_lighting_test PRIVATE
+            GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
+        if(TARGET generals_graphics_shaders)
+            add_dependencies(generals_graphics_local_lighting_test generals_graphics_shaders)
+        endif()
+        target_compile_definitions(generals_graphics_material_fog_test PRIVATE
+            GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
+        if(TARGET generals_graphics_shaders)
+            add_dependencies(generals_graphics_material_fog_test generals_graphics_shaders)
+        endif()
+        target_compile_definitions(generals_graphics_texture_sampling_test PRIVATE
+            GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
+        if(TARGET generals_graphics_shaders)
+            add_dependencies(generals_graphics_texture_sampling_test generals_graphics_shaders)
+        endif()
+        target_compile_definitions(generals_graphics_texture_references_test PRIVATE
+            GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
+        if(TARGET generals_graphics_shaders)
+            add_dependencies(generals_graphics_texture_references_test generals_graphics_shaders)
+        endif()
+        target_compile_definitions(generals_graphics_texture_snapshot_test PRIVATE
+            GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
+        if(TARGET generals_graphics_shaders)
+            add_dependencies(generals_graphics_texture_snapshot_test generals_graphics_shaders)
+        endif()
+        add_graphics_test(generals_graphics_renderer2d_drawing_test renderer2d/Renderer2DDrawing.test.cppm)
+        target_compile_definitions(generals_graphics_renderer2d_drawing_test PRIVATE
+            GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
+        if(TARGET generals_graphics_shaders)
+            add_dependencies(generals_graphics_renderer2d_drawing_test generals_graphics_shaders)
+        endif()
+        add_graphics_test(generals_graphics_frame_preview_test capture/FramePreview.test.cppm)
+        target_compile_definitions(generals_graphics_frame_preview_test PRIVATE
+            GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
+        if(TARGET generals_graphics_shaders)
+            add_dependencies(generals_graphics_frame_preview_test generals_graphics_shaders)
+        endif()
         add_graphics_test(generals_graphics_prop_drawing_test scene/props/PropDrawing.test.cppm)
+        add_graphics_test(generals_graphics_prop_surface_test scene/props/PropSurface.test.cppm)
+        add_graphics_test(generals_graphics_prop_asset_geometry_test scene/props/PropAssetGeometry.test.cppm)
+        add_graphics_test(generals_graphics_prop_skinning_test scene/props/PropSkinning.test.cppm)
+        add_graphics_test(generals_graphics_prop_asset_binding_test scene/props/PropAssetBinding.test.cppm)
+        target_compile_definitions(generals_graphics_prop_asset_binding_test PRIVATE
+            GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
+        target_compile_definitions(generals_graphics_prop_surface_test PRIVATE
+            GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
+        if(TARGET generals_graphics_shaders)
+            add_dependencies(generals_graphics_prop_surface_test generals_graphics_shaders)
+        endif()
+        add_graphics_test(generals_graphics_prop_submission_test scene/props/PropSubmission.test.cppm)
+        target_compile_definitions(generals_graphics_prop_submission_test PRIVATE
+            GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
+        if(TARGET generals_graphics_shaders)
+            add_dependencies(generals_graphics_prop_submission_test generals_graphics_shaders)
+        endif()
+        add_graphics_test(generals_graphics_shroud_drawing_test scene/shroud/ShroudDrawing.test.cppm)
+        target_compile_definitions(generals_graphics_shroud_drawing_test PRIVATE
+            GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
+        if(TARGET generals_graphics_shaders)
+            add_dependencies(generals_graphics_shroud_drawing_test generals_graphics_shaders)
+        endif()
         target_compile_definitions(generals_graphics_prop_drawing_test PRIVATE
             GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
         if(TARGET generals_graphics_shaders)
@@ -541,6 +786,12 @@ if(RTS_BUILD_GRAPHICS_TESTS)
             add_dependencies(generals_graphics_transparent_drawing_test generals_graphics_shaders)
         endif()
         add_graphics_test(generals_graphics_material_pass_drawing_test scene/props/MaterialPassDrawing.test.cppm)
+        add_graphics_test(generals_graphics_primitive_geometry_test scene/primitives/PrimitiveGeometry.test.cppm)
+        target_compile_definitions(generals_graphics_primitive_geometry_test PRIVATE
+            GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
+        if(TARGET generals_graphics_shaders)
+            add_dependencies(generals_graphics_primitive_geometry_test generals_graphics_shaders)
+        endif()
         add_graphics_test(generals_graphics_screen_distortion_drawing_test scene/screen/ScreenDistortionDrawing.test.cppm)
         target_compile_definitions(generals_graphics_screen_distortion_drawing_test PRIVATE
             GRAPHICS_SCREEN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
@@ -559,6 +810,18 @@ if(RTS_BUILD_GRAPHICS_TESTS)
             add_dependencies(generals_graphics_model_texture_drawing_test generals_graphics_shaders)
         endif()
         add_graphics_test(generals_graphics_particle_texture_drawing_test scene/particles/ParticleTextureDrawing.test.cppm)
+        add_graphics_test(generals_graphics_sprite_geometry_drawing_test scene/particles/SpriteGeometryDrawing.test.cppm)
+        add_graphics_test(generals_graphics_line_group_drawing_test scene/particles/LineGroupDrawing.test.cppm)
+        target_compile_definitions(generals_graphics_line_group_drawing_test PRIVATE
+            GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
+        if(TARGET generals_graphics_shaders)
+            add_dependencies(generals_graphics_line_group_drawing_test generals_graphics_shaders)
+        endif()
+        target_compile_definitions(generals_graphics_sprite_geometry_drawing_test PRIVATE
+            GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
+        if(TARGET generals_graphics_shaders)
+            add_dependencies(generals_graphics_sprite_geometry_drawing_test generals_graphics_shaders)
+        endif()
         target_compile_definitions(generals_graphics_particle_texture_drawing_test PRIVATE
             GRAPHICS_PARTICLE_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
         if(TARGET generals_graphics_shaders)
@@ -737,6 +1000,68 @@ if(RTS_BUILD_GRAPHICS_TESTS)
         generals_graphics_animation_blend_test
         scene/models/AnimationBlend.test.cppm
     )
+    add_graphics_test(generals_graphics_animation_channels_test scene/models/AnimationChannels.test.cppm)
+    add_graphics_test(generals_graphics_clip_sampling_test scene/models/ClipSampling.test.cppm)
+    target_compile_definitions(generals_graphics_clip_sampling_test PRIVATE GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
+    if(TARGET generals_graphics_shaders)
+        add_dependencies(generals_graphics_clip_sampling_test generals_graphics_shaders)
+    endif()
+    add_graphics_test(generals_graphics_affine_transform_test scene/AffineTransform.test.cppm)
+    add_graphics_test(generals_graphics_animation_rotation_test scene/models/AnimationRotation.test.cppm)
+    target_compile_definitions(generals_graphics_animation_rotation_test PRIVATE GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
+    if(TARGET generals_graphics_shaders)
+        add_dependencies(generals_graphics_animation_rotation_test generals_graphics_shaders)
+    endif()
+    if(TARGET corei_always_no_pch)
+        target_sources(generals_graphics_animation_rotation_test PRIVATE scene/models/AnimationRotation.test-reference.cpp)
+        target_link_libraries(generals_graphics_animation_rotation_test PRIVATE corei_always_no_pch corei_libraries_source_wwvegas)
+        target_compile_definitions(generals_graphics_animation_rotation_test PRIVATE GRAPHICS_COMPARE_GAME_MATH=1)
+        target_link_libraries(generals_graphics_affine_transform_test PRIVATE corei_always_no_pch corei_libraries_source_wwvegas)
+        target_compile_definitions(generals_graphics_affine_transform_test PRIVATE GRAPHICS_COMPARE_GAME_MATH=1)
+    endif()
+    add_graphics_test(generals_graphics_model_hierarchy_test scene/models/ModelHierarchy.test.cppm)
+    add_graphics_test(generals_graphics_model_assembly_drawing_test scene/models/ModelAssemblyDrawing.test.cppm)
+    add_graphics_test(generals_graphics_material_slots_test scene/models/MaterialSlots.test.cppm)
+    add_graphics_test(generals_graphics_submission_statistics_test frame/SubmissionStatistics.test.cppm)
+    add_graphics_test(generals_graphics_sprite_geometry_test scene/particles/SpriteGeometry.test.cppm)
+    add_graphics_test(generals_graphics_emitter_tracks_test scene/particles/EmitterTracks.test.cppm)
+    add_graphics_test(generals_graphics_line_group_geometry_test scene/particles/LineGroupGeometry.test.cppm)
+    add_graphics_test(generals_graphics_ribbon_subdivision_test scene/beams/RibbonSubdivision.test.cppm)
+    add_graphics_test(generals_graphics_ribbon_edges_test scene/beams/RibbonEdges.test.cppm)
+    add_graphics_test(generals_graphics_ribbon_intersections_test scene/beams/RibbonIntersections.test.cppm)
+    add_graphics_test(generals_graphics_ribbon_geometry_test scene/beams/RibbonGeometry.test.cppm)
+    add_graphics_test(generals_graphics_ribbon_texture_coordinates_test scene/beams/RibbonTextureCoordinates.test.cppm)
+    target_compile_definitions(generals_graphics_ribbon_texture_coordinates_test PRIVATE GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
+    if(TARGET generals_graphics_shaders)
+        add_dependencies(generals_graphics_ribbon_texture_coordinates_test generals_graphics_shaders)
+    endif()
+    add_graphics_test(generals_graphics_ribbon_pipeline_test scene/beams/RibbonPipeline.test.cppm)
+    target_compile_definitions(generals_graphics_ribbon_pipeline_test PRIVATE GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
+    if(TARGET generals_graphics_shaders)
+        add_dependencies(generals_graphics_ribbon_pipeline_test generals_graphics_shaders)
+    endif()
+    if(TARGET corei_always_no_pch)
+        add_graphics_test(generals_graphics_vertex_channels_test scene/models/VertexChannels.test.cppm)
+        target_link_libraries(generals_graphics_vertex_channels_test PRIVATE corei_always_no_pch corei_libraries_source_wwvegas)
+    endif()
+    add_graphics_test(generals_graphics_model_factory_store_test scene/models/ModelFactoryStore.test.cppm)
+    add_graphics_test(generals_graphics_model_factory_test scene/models/ModelFactory.test.cppm)
+    target_compile_definitions(generals_graphics_model_assembly_drawing_test PRIVATE GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
+    if(TARGET generals_graphics_shaders)
+        add_dependencies(generals_graphics_model_assembly_drawing_test generals_graphics_shaders)
+    endif()
+    target_compile_definitions(generals_graphics_model_hierarchy_test PRIVATE GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
+    if(TARGET generals_graphics_shaders)
+        add_dependencies(generals_graphics_model_hierarchy_test generals_graphics_shaders)
+    endif()
+    target_compile_definitions(generals_graphics_animation_channels_test PRIVATE GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
+    if(TARGET generals_graphics_shaders)
+        add_dependencies(generals_graphics_animation_channels_test generals_graphics_shaders)
+    endif()
+    add_graphics_test(
+        generals_graphics_model_asset_pose_test
+        scene/models/ModelAssetPose.test.cppm
+    )
 
     add_graphics_test(
         generals_graphics_skinning_test
@@ -902,6 +1227,36 @@ if(RTS_BUILD_GRAPHICS_TESTS)
         generals_graphics_ring_test
         scene/ring/Ring.test.cppm
     )
+
+    add_graphics_test(
+        generals_graphics_ring_runtime_test
+        scene/ring/RingRuntime.test.cppm
+    )
+
+    add_graphics_test(
+        generals_graphics_ring_renderer_test
+        scene/ring/AuthoredRingRenderer.test.cppm
+    )
+
+    if(WIN32)
+        target_compile_definitions(generals_graphics_ring_renderer_test PRIVATE
+            GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
+        if(TARGET generals_graphics_shaders)
+            add_dependencies(generals_graphics_ring_renderer_test generals_graphics_shaders)
+        endif()
+    endif()
+
+    if(WIN32)
+        add_graphics_test(
+            generals_graphics_sphere_test
+            scene/sphere/Sphere.test.cppm
+        )
+        target_compile_definitions(generals_graphics_sphere_test PRIVATE
+            GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
+        if(TARGET generals_graphics_shaders)
+            add_dependencies(generals_graphics_sphere_test generals_graphics_shaders)
+        endif()
+    endif()
 
     add_graphics_test(
         generals_graphics_fullscreen_overlay_test
@@ -1128,7 +1483,7 @@ if(WIN32 AND TARGET slang-bootstrap)
     add_custom_command(OUTPUT "${GRAPHICS_SHADER_ASSET_DIRECTORY}/prop.vso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/prop.pso"
         COMMAND $<TARGET_FILE:slang-bootstrap> -target dxbc -profile sm_5_0 -entry prop_vertex -stage vertex -matrix-layout-row-major -o "${GRAPHICS_SHADER_ASSET_DIRECTORY}/prop.vso" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/prop.slang"
         COMMAND $<TARGET_FILE:slang-bootstrap> -target dxbc -profile sm_5_0 -entry prop_pixel -stage pixel -matrix-layout-row-major -o "${GRAPHICS_SHADER_ASSET_DIRECTORY}/prop.pso" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/prop.slang"
-        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/environment_lighting.slangh" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/prop.slang" slang-bootstrap VERBATIM)
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/environment_lighting.slangh" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/prop_surface.slangh" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/prop.slang" slang-bootstrap VERBATIM)
     add_custom_target(generals_graphics_prop_shaders DEPENDS "${GRAPHICS_SHADER_ASSET_DIRECTORY}/prop.vso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/prop.pso")
     add_dependencies(generals_graphics generals_graphics_prop_shaders)
 endif()

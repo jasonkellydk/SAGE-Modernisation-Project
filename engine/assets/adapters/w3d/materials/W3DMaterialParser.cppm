@@ -1,5 +1,6 @@
 module;
 
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -10,6 +11,7 @@ module;
 export module Assets.Adapters.W3D.Materials;
 
 import Assets.Adapters.W3D.Chunks;
+export import Assets.Adapters.W3D.ShaderMaterials;
 import Assets.Math;
 import Assets.Models;
 
@@ -22,7 +24,17 @@ export struct W3DMaterialPass final
 	std::uint32_t shader_index = W3DInvalidIndex;
 	std::uint32_t texture_index = W3DInvalidIndex;
 	std::vector<Vector2f> texcoords;
+	bool uses_shader_material = false;
 };
+
+export struct W3DVertexMaterialData final
+{
+	ModelMaterialDesc material;
+	std::array<std::string, 2> mapper_arguments;
+	bool has_name = false;
+};
+
+export bool W3DRead_Vertex_Material(W3DByteSpan bytes, W3DVertexMaterialData &result);
 
 export struct W3DShaderSettings final
 {
@@ -35,7 +47,27 @@ export struct W3DShaderSettings final
 	std::uint8_t texturing = 0;
 	std::uint8_t detail_alpha = 0;
 	std::uint8_t alpha_test = 0;
+	std::uint8_t detail_color = 0;
+	std::uint8_t color_mask = 1;
+	std::uint8_t fog_function = 0;
+	std::uint8_t shader_preset = 0;
+	std::uint8_t post_detail_color = 0;
+	std::uint8_t post_detail_alpha = 0;
 };
+
+export struct W3DTextureData final
+{
+	std::string name;
+	std::uint16_t attributes = 0;
+	std::uint16_t animation_type = 0;
+	std::uint32_t frame_count = 0;
+	float frame_rate = 0;
+	bool has_info = false;
+};
+
+export bool W3DRead_Texture(W3DByteSpan bytes, W3DTextureData &result);
+export bool W3DRead_Shader(W3DByteSpan bytes, W3DShaderSettings &result);
+export bool W3DRead_Shaders(W3DByteSpan bytes, std::vector<W3DShaderSettings> &result);
 
 export struct W3DMaterialInfo final
 {
@@ -47,9 +79,10 @@ export struct W3DMaterialInfo final
 
 export struct W3DMaterialData final
 {
-	std::vector<ModelMaterialDesc> vertex_materials;
-	std::vector<std::string> textures;
+	std::vector<W3DVertexMaterialData> vertex_materials;
+	std::vector<W3DTextureData> textures;
 	std::vector<W3DShaderSettings> shaders;
+	std::vector<W3DShaderMaterial> shader_materials;
 	std::vector<W3DMaterialPass> passes;
 	W3DMaterialInfo info;
 	bool has_info = false;
@@ -85,18 +118,28 @@ Color4f Read_Material_Color(W3DByteSpan bytes, std::size_t offset) noexcept
 		std::to_integer<unsigned>(bytes[offset + 2]) / 255.0f, 1.0f};
 }
 
-bool Parse_Vertex_Material(W3DByteSpan bytes, ModelMaterialDesc &material)
+bool Parse_Vertex_Material(W3DByteSpan bytes, W3DVertexMaterialData &result)
 {
 	bool has_info = false;
-	bool has_name = false;
-	const bool valid = W3DVisit_Chunks(bytes, [&material, &has_info, &has_name](const W3DChunkView &chunk) {
+	std::array<bool, 2> has_arguments{};
+	auto &material = result.material;
+	const bool valid = W3DVisit_Chunks(bytes, [&](const W3DChunkView &chunk) {
 		switch (chunk.id) {
 			case W3DChunkVertexMaterialName:
+				if (result.has_name) return false;
 				material.name = W3DRead_String(chunk.payload);
-				has_name = true;
+				result.has_name = true;
 				return true;
+			case 0x2E:
+			case 0x2F: {
+				const auto stage = chunk.id - 0x2E;
+				if (has_arguments[stage]) return false;
+				has_arguments[stage] = true;
+				result.mapper_arguments[stage] = W3DRead_String(chunk.payload);
+				return true;
+			}
 			case W3DChunkVertexMaterialInfo: {
-				if (chunk.payload.size() < 32)
+				if (has_info || chunk.payload.size() < 32)
 					return false;
 				std::uint32_t attributes = 0;
 				if (!W3DRead_U32(chunk.payload, 0, attributes))
@@ -116,57 +159,45 @@ bool Parse_Vertex_Material(W3DByteSpan bytes, ModelMaterialDesc &material)
 				return true;
 		}
 	});
-	return valid && has_info && has_name;
+	return valid && has_info;
 }
 
-bool Parse_Vertex_Materials(W3DByteSpan bytes, std::vector<ModelMaterialDesc> &materials)
+bool Parse_Vertex_Materials(W3DByteSpan bytes, std::vector<W3DVertexMaterialData> &materials)
 {
 	return W3DVisit_Chunks(bytes, [&materials](const W3DChunkView &chunk) {
 		if (chunk.id != W3DChunkVertexMaterial)
 			return false;
-		ModelMaterialDesc material;
-		if (!chunk.contains_children || !Parse_Vertex_Material(chunk.payload, material))
+		W3DVertexMaterialData material;
+		if (!chunk.contains_children || !W3DRead_Vertex_Material(chunk.payload, material) || !material.has_name)
 			return false;
 		materials.push_back(std::move(material));
 		return true;
 	});
 }
 
-bool Parse_Textures(W3DByteSpan bytes, std::vector<std::string> &textures)
+bool Parse_Textures(W3DByteSpan bytes, std::vector<W3DTextureData> &textures)
 {
 	return W3DVisit_Chunks(bytes, [&textures](const W3DChunkView &chunk) {
 		if (chunk.id != W3DChunkTexture || !chunk.contains_children)
 			return false;
-		std::string name;
-		if (!W3DVisit_Chunks(chunk.payload, [&name](const W3DChunkView &child) {
-			if (child.id == W3DChunkTextureName)
-				name = W3DRead_String(child.payload);
-			return true;
-		}) || name.empty())
+		W3DTextureData texture;
+		if (!W3DRead_Texture(chunk.payload, texture))
 			return false;
-		textures.push_back(std::move(name));
+		textures.push_back(std::move(texture));
 		return true;
 	});
 }
 
 bool Parse_Shaders(W3DByteSpan bytes, std::vector<W3DShaderSettings> &shaders)
 {
-	if (bytes.empty() || bytes.size() % 16 != 0)
+	if (bytes.size() % 16 != 0)
 		return false;
 
 	shaders.reserve(shaders.size() + bytes.size() / 16);
 	for (std::size_t offset = 0; offset < bytes.size(); offset += 16) {
-		const auto *data = reinterpret_cast<const std::uint8_t *>(bytes.data() + offset);
-		shaders.push_back({
-			data[0],
-			data[1],
-			data[3],
-			data[5],
-			data[6],
-			data[7],
-			data[8],
-			data[10],
-			data[12]});
+		W3DShaderSettings shader;
+		W3DRead_Shader(bytes.subspan(offset, 16), shader);
+		shaders.push_back(shader);
 	}
 	return true;
 }
@@ -191,6 +222,14 @@ bool Parse_Texture_Stage(W3DByteSpan bytes, std::uint32_t vertex_count, W3DMater
 
 bool Parse_Material_Pass(W3DByteSpan bytes, std::uint32_t vertex_count, W3DMaterialPass &pass)
 {
+	if (!W3DVisit_Chunks(bytes, [&pass](const W3DChunkView &chunk) {
+		if (chunk.id == W3DChunkShaderMaterialIds) {
+			if (pass.uses_shader_material || chunk.payload.empty() || chunk.payload.size() % 4 != 0)
+				return false;
+			pass.uses_shader_material = true;
+		}
+		return true;
+	})) return false;
 	return W3DVisit_Chunks(bytes, [&pass, vertex_count](const W3DChunkView &chunk) {
 		switch (chunk.id) {
 			case W3DChunkVertexMaterialIds:
@@ -202,6 +241,9 @@ bool Parse_Material_Pass(W3DByteSpan bytes, std::uint32_t vertex_count, W3DMater
 					return false;
 				return W3DRead_U32(chunk.payload, 0, pass.shader_index);
 			case W3DChunkTextureStage:
+				// Full indexed UVs for shader passes are decoded by PassBindings
+				// once the mesh's face count is known.
+				if (pass.uses_shader_material) return chunk.contains_children;
 				return chunk.contains_children && Parse_Texture_Stage(chunk.payload, vertex_count, pass);
 			default:
 				return true;
@@ -211,13 +253,69 @@ bool Parse_Material_Pass(W3DByteSpan bytes, std::uint32_t vertex_count, W3DMater
 
 }
 
+export bool W3DRead_Vertex_Material(W3DByteSpan bytes, W3DVertexMaterialData &result)
+{
+	result = {};
+	W3DVertexMaterialData parsed;
+	if (!W3DValidate_Chunk_Tree(bytes) || !MaterialDetail::Parse_Vertex_Material(bytes, parsed))
+		return false;
+	result = std::move(parsed);
+	return true;
+}
+
+export bool W3DRead_Texture(W3DByteSpan bytes, W3DTextureData &result)
+{
+	result = {};
+	W3DTextureData parsed;
+	bool has_name = false;
+	if (!W3DValidate_Chunk_Tree(bytes)) return false;
+	const bool valid = W3DVisit_Chunks(bytes, [&](const W3DChunkView &chunk) {
+		if (chunk.id == W3DChunkTextureName) {
+			if (has_name) return false;
+			has_name = true;
+			parsed.name = W3DRead_String(chunk.payload);
+		} else if (chunk.id == 0x33) {
+			std::uint32_t flags;
+			if (parsed.has_info || chunk.payload.size() < 12
+				|| !W3DRead_U32(chunk.payload,0,flags)
+				|| !W3DRead_U32(chunk.payload,4,parsed.frame_count)
+				|| !W3DRead_F32(chunk.payload,8,parsed.frame_rate)
+				|| !std::isfinite(parsed.frame_rate)) return false;
+			parsed.attributes = static_cast<std::uint16_t>(flags);
+			parsed.animation_type = static_cast<std::uint16_t>(flags >> 16);
+			parsed.has_info = true;
+		}
+		return true;
+	});
+	if (!valid || parsed.name.empty()) return false;
+	result = std::move(parsed);
+	return true;
+}
+
+export bool W3DRead_Shader(W3DByteSpan bytes, W3DShaderSettings &result)
+{
+	result = {};
+	if (bytes.size() != 16) return false;
+	const auto *data = reinterpret_cast<const std::uint8_t *>(bytes.data());
+	result = {data[0], data[1], data[3], data[5], data[6], data[7], data[8],
+		data[10], data[12], data[9], data[2], data[4], data[11], data[13], data[14]};
+	return true;
+}
+
+export bool W3DRead_Shaders(W3DByteSpan bytes, std::vector<W3DShaderSettings> &result)
+{
+	result.clear();
+	return MaterialDetail::Parse_Shaders(bytes, result);
+}
+
 export bool W3DParse_Materials(W3DByteSpan bytes, std::uint32_t vertex_count, W3DMaterialData &materials)
 {
 	materials = {};
 	if (!W3DValidate_Chunk_Tree(bytes))
 		return false;
 
-	if (!W3DVisit_Chunks(bytes, [&materials, vertex_count](const W3DChunkView &chunk) {
+	bool has_shader_materials = false;
+	if (!W3DVisit_Chunks(bytes, [&materials, vertex_count, &has_shader_materials](const W3DChunkView &chunk) {
 		switch (chunk.id) {
 			case W3DChunkMaterialInfo:
 				if (chunk.payload.size() < 16 ||
@@ -234,6 +332,11 @@ export bool W3DParse_Materials(W3DByteSpan bytes, std::uint32_t vertex_count, W3
 					materials.vertex_materials);
 			case W3DChunkShaders:
 				return MaterialDetail::Parse_Shaders(chunk.payload, materials.shaders);
+			case W3DChunkShaderMaterials:
+				if (has_shader_materials || !chunk.contains_children)
+					return false;
+				has_shader_materials = true;
+				return W3DRead_Shader_Materials(chunk.payload, materials.shader_materials);
 			case W3DChunkTextures:
 				return chunk.contains_children && MaterialDetail::Parse_Textures(chunk.payload, materials.textures);
 			case W3DChunkMaterialPass: {

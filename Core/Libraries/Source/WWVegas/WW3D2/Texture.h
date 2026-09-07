@@ -41,32 +41,51 @@
 
 #pragma once
 
+#include <memory>
+#include <span>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
 #include "WWLib/always.h"
 #include "WWLib/chunkio.h"
-#include "SurfaceClass.h"
-#include "WW3DFormat.h"
+import Graphics.Resources.Textures.Edit;
+import Assets.Images.PixelEncoding;
+import Graphics.RHI;
 #include "WWLib/wwstring.h"
 #include "WWMath/vector3.h"
-#include "TextureFilter.h"
-#include "Backend/RenderBackend.h"
+import Graphics.Resources.Textures.Sampling;
+import Graphics.Resources.Loading.Queue;
+import Graphics.Resources.Recreation;
 
-class TextureLoader;
-class LoaderThreadClass;
-class TextureLoadTaskClass;
+enum MipCountType
+{
+	MIP_LEVELS_ALL=0,		// generate all mipmap levels down to 1x1 size
+	MIP_LEVELS_1,			// no mipmapping at all (just one mip level)
+	MIP_LEVELS_2,
+	MIP_LEVELS_3,
+	MIP_LEVELS_4,
+	MIP_LEVELS_5,
+	MIP_LEVELS_6,
+	MIP_LEVELS_7,
+	MIP_LEVELS_8,
+	MIP_LEVELS_10,
+	MIP_LEVELS_11,
+	MIP_LEVELS_12,
+	MIP_LEVELS_MAX			// This isn't to be used (use MIP_LEVELS_ALL instead), it is just an enum for creating static tables etc.
+};
+
 class TextureClass;
 class CubeTextureClass;
 class VolumeTextureClass;
-class TextureLoadTaskClass;
-class CubeTextureLoadTaskClass;
-class VolumeTextureLoadTaskClass;
 
 class TextureBaseClass : public RefCountClass
 {
-	friend class TextureLoader;
-	friend class LoaderThreadClass;
-	friend class TextureLoadTaskClass;
-	friend class CubeTextureLoadTaskClass;
-	friend class VolumeTextureLoadTaskClass;
+
+
+
+
+
 
 public:
 
@@ -129,8 +148,6 @@ public:
 	int Get_Inactivation_Time() const { return InactivationTime; }
 
 	// Texture priority affects texture management and caching.
-	unsigned int Get_Priority();
-	unsigned int Set_Priority(unsigned int priority);	// Returns previous priority
 
 	// Debug utility functions for returning the texture memory usage
 	virtual unsigned Get_Texture_Memory_Usage() const=0;
@@ -150,16 +167,19 @@ public:
 	static int _Get_Total_Procedural_Texture_Count();
 
 	virtual void Init()=0;
+	const std::shared_ptr<const Graphics::ResourceLoadSource>& Loading_Source() const { return LoadSource; }
 
 	// This utility function processes the texture reduction (used during rendering)
 	void Invalidate();
 
 	// The active renderer owns the resource represented by this opaque handle.
-	RenderBackendTextureHandle Peek_Render_Backend_Texture() const;
+	Graphics::TextureResource* Peek_Render_Backend_Texture() const;
+    // Borrowed graphics identity published by the current loaded resource.
+    Graphics::RHITextureHandle Peek_Graphics_Texture() const;
 	// Takes ownership of the supplied handle and releases the previous resource.
-	void Set_Render_Backend_Texture(RenderBackendTextureHandle texture);
+	void Set_Render_Backend_Texture(Graphics::TextureResource* texture);
 	// Ensure that a resource used by a custom render path has been initialized.
-	// This is needed by shader paths that bind the resource without calling Apply().
+	// Call before submitting a resource that may have been evicted or recreated.
 	bool Ensure_Render_Backend_Texture();
 
 	PoolType Get_Pool() const { return Pool; }
@@ -176,10 +196,9 @@ public:
 
 	bool Is_Compression_Allowed() const { return IsCompressionAllowed; }
 
-	unsigned Get_Reduction() const;
 
 	// Background texture loader will call this when texture has been loaded
-	virtual void Apply_New_Surface(RenderBackendTextureHandle texture, bool initialized,
+	virtual void Apply_New_Surface(Graphics::TextureResource* texture, bool initialized,
 		bool disable_auto_invalidation = false)=0;	// If the parameter is true, the texture will be flagged as initialised
 
 	MipCountType MipLevelCount;
@@ -190,25 +209,19 @@ public:
 	// but the currently used textures.
 	static void Invalidate_Old_Unused_Textures(unsigned inactive_time_override);
 
-	// Apply this texture's settings to the active renderer.
-	virtual void Apply(unsigned int stage)=0;
-
-	// Apply a null texture's settings to the active renderer.
-	static void Apply_Null(unsigned int stage);
-
 	virtual TextureClass* As_TextureClass() { return nullptr; }
 	virtual CubeTextureClass* As_CubeTextureClass() { return nullptr; }
 	virtual VolumeTextureClass* As_VolumeTextureClass() { return nullptr; }
 
 protected:
 
+	void Register_For_Recreation();
 	virtual bool Recreate_Procedural_Texture();
 	void Set_Procedural_Texture_Recreation_Enabled(bool enabled)
 	{
 		ProceduralTextureRecreationEnabled = enabled;
 	}
 
-	void Load_Locked_Surface();
 
 	bool Initialized;
 
@@ -237,7 +250,8 @@ protected:
 private:
 
 	// Opaque texture resource owned by the active render backend.
-	RenderBackendTextureHandle BackendTexture;
+	Graphics::TextureResource* BackendTexture;
+    Graphics::RHITextureHandle GraphicsTexture{};
 
 	// Name
 	StringClass Name;
@@ -251,8 +265,8 @@ private:
 	PoolType Pool;
 	bool Dirty;
 
-	TextureLoadTaskClass* TextureLoadTask;
-	TextureLoadTaskClass* ThumbnailLoadTask;
+	std::shared_ptr<const Graphics::ResourceLoadSource> LoadSource;
+	Graphics::ResourceRecreationRegistration RecreationRegistration;
 
 };
 
@@ -276,7 +290,7 @@ public:
 	(
 		unsigned width,
 		unsigned height,
-		WW3DFormat format,
+		Assets::PixelEncoding format,
 		MipCountType mip_level_count=MIP_LEVELS_ALL,
 		PoolType pool=POOL_MANAGED,
 		bool rendertarget=false,
@@ -291,7 +305,7 @@ public:
 		const char *name,
 		const char *full_path=nullptr,
 		MipCountType mip_level_count=MIP_LEVELS_ALL,
-		WW3DFormat texture_format=WW3D_FORMAT_UNKNOWN,
+		Assets::PixelEncoding texture_format=Assets::PixelEncoding::Unknown,
 		bool allow_compression=true,
 		bool allow_reduction=true
 	);
@@ -299,11 +313,11 @@ public:
 	// Create texture from a surface.
 	TextureClass
 	(
-		SurfaceClass *surface,
+		Graphics::TextureEdit *surface,
 		MipCountType mip_level_count=MIP_LEVELS_ALL
 	);
 
-	TextureClass(RenderBackendTextureHandle texture);
+	TextureClass(Graphics::TextureResource* texture);
 
 	// default constructors for derived classes (cube & vol)
 	TextureClass
@@ -313,28 +327,29 @@ public:
 		MipCountType mip_level_count=MIP_LEVELS_ALL,
 		PoolType pool=POOL_MANAGED,
 		bool rendertarget=false,
-		WW3DFormat format=WW3D_FORMAT_UNKNOWN,
+		Assets::PixelEncoding format=Assets::PixelEncoding::Unknown,
 		bool allow_reduction=true
 	)
-	: TextureBaseClass(width,height,mip_level_count,pool,rendertarget,allow_reduction), TextureFormat(format), Filter(mip_level_count) { }
+	: TextureBaseClass(width,height,mip_level_count,pool,rendertarget,allow_reduction), TextureFormat(format),
+	  Sampling(Graphics::Make_Texture_Sampling(mip_level_count != MIP_LEVELS_1)) { }
 
 	virtual TexAssetType Get_Asset_Type() const override { return TEX_REGULAR; }
 
 	virtual void Init() override;
 
 	// Background texture loader will call this when texture has been loaded
-	virtual void Apply_New_Surface(RenderBackendTextureHandle texture, bool initialized,
+	virtual void Apply_New_Surface(Graphics::TextureResource* texture, bool initialized,
 		bool disable_auto_invalidation = false);	// If the parameter is true, the texture will be flagged as initialised
 
 	// Get the surface of one of the mipmap levels (defaults to highest-resolution one)
-	SurfaceClass *Get_Surface_Level(unsigned int level = 0);
-	void Get_Level_Description( SurfaceClass::SurfaceDescription & desc, unsigned int level = 0 );
+	Graphics::TextureEdit *Get_Surface_Level(unsigned int level = 0);
+	void Get_Level_Description( Assets::ImageDescription & desc, unsigned int level = 0 );
 
-	TextureFilterClass& Get_Filter() { return Filter; }
+	Graphics::TextureSampling& Get_Sampling() { return Sampling; }
+	const Graphics::TextureSampling& Get_Sampling() const { return Sampling; }
 
-	WW3DFormat Get_Texture_Format() const { return TextureFormat; }
+	Assets::PixelEncoding Get_Texture_Format() const { return TextureFormat; }
 
-	virtual void Apply(unsigned int stage) override;
 
 	virtual unsigned Get_Texture_Memory_Usage() const override;
 
@@ -344,10 +359,10 @@ protected:
 
 	virtual bool Recreate_Procedural_Texture();
 
-	WW3DFormat				TextureFormat;
+	Assets::PixelEncoding				TextureFormat;
 
 	// legacy
-	TextureFilterClass	Filter;
+	Graphics::TextureSampling Sampling;
 };
 
 class ZTextureClass : public TextureBaseClass
@@ -358,24 +373,23 @@ public:
 	(
 		unsigned width,
 		unsigned height,
-		WW3DZFormat zformat,
+		Graphics::RHITextureFormat zformat,
 		MipCountType mip_level_count=MIP_LEVELS_ALL,
 		PoolType pool=POOL_MANAGED
 	);
 
-	WW3DZFormat Get_Texture_Format() const { return DepthStencilTextureFormat; }
+	Graphics::RHITextureFormat Get_Texture_Format() const { return DepthStencilTextureFormat; }
 
 	virtual TexAssetType Get_Asset_Type() const override { return TEX_REGULAR; }
 
 	virtual void Init() override {}
 
 	// Background texture loader will call this when texture has been loaded
-	virtual void Apply_New_Surface(RenderBackendTextureHandle texture, bool initialized,
+	virtual void Apply_New_Surface(Graphics::TextureResource* texture, bool initialized,
 		bool disable_auto_invalidation = false);	// If the parameter is true, the texture will be flagged as initialised
 
-	virtual void Apply(unsigned int stage) override;
 
-	SurfaceClass *Get_Surface_Level(unsigned int level = 0);
+	Graphics::TextureEdit *Get_Surface_Level(unsigned int level = 0);
 	virtual unsigned Get_Texture_Memory_Usage() const;
 
 protected:
@@ -383,7 +397,7 @@ protected:
 
 private:
 
-	WW3DZFormat DepthStencilTextureFormat;
+	Graphics::RHITextureFormat DepthStencilTextureFormat;
 };
 
 class CubeTextureClass : public TextureClass
@@ -394,7 +408,7 @@ public:
 	(
 		unsigned width,
 		unsigned height,
-		WW3DFormat format,
+		Assets::PixelEncoding format,
 		MipCountType mip_level_count=MIP_LEVELS_ALL,
 		PoolType pool=POOL_MANAGED,
 		bool rendertarget=false,
@@ -409,7 +423,7 @@ public:
 		const char *name,
 		const char *full_path=nullptr,
 		MipCountType mip_level_count=MIP_LEVELS_ALL,
-		WW3DFormat texture_format=WW3D_FORMAT_UNKNOWN,
+		Assets::PixelEncoding texture_format=Assets::PixelEncoding::Unknown,
 		bool allow_compression=true,
 		bool allow_reduction=true
 	);
@@ -417,13 +431,13 @@ public:
 	// Create texture from a surface.
 	CubeTextureClass
 	(
-		SurfaceClass *surface,
+		Graphics::TextureEdit *surface,
 		MipCountType mip_level_count=MIP_LEVELS_ALL
 	);
 
-	CubeTextureClass(RenderBackendTextureHandle texture);
+	CubeTextureClass(Graphics::TextureResource* texture);
 
-	virtual void Apply_New_Surface(RenderBackendTextureHandle texture, bool initialized,
+	virtual void Apply_New_Surface(Graphics::TextureResource* texture, bool initialized,
 		bool disable_auto_invalidation = false);	// If the parameter is true, the texture will be flagged as initialised
 
 	virtual TexAssetType Get_Asset_Type() const override { return TEX_CUBEMAP; }
@@ -444,7 +458,7 @@ public:
 		unsigned width,
 		unsigned height,
 		unsigned depth,
-		WW3DFormat format,
+		Assets::PixelEncoding format,
 		MipCountType mip_level_count=MIP_LEVELS_ALL,
 		PoolType pool=POOL_MANAGED,
 		bool rendertarget=false,
@@ -459,7 +473,7 @@ public:
 		const char *name,
 		const char *full_path=nullptr,
 		MipCountType mip_level_count=MIP_LEVELS_ALL,
-		WW3DFormat texture_format=WW3D_FORMAT_UNKNOWN,
+		Assets::PixelEncoding texture_format=Assets::PixelEncoding::Unknown,
 		bool allow_compression=true,
 		bool allow_reduction=true
 	);
@@ -467,13 +481,13 @@ public:
 	// Create texture from a surface.
 	VolumeTextureClass
 	(
-		SurfaceClass *surface,
+		Graphics::TextureEdit *surface,
 		MipCountType mip_level_count=MIP_LEVELS_ALL
 	);
 
-	VolumeTextureClass(RenderBackendTextureHandle texture);
+	VolumeTextureClass(Graphics::TextureResource* texture);
 
-	virtual void Apply_New_Surface(RenderBackendTextureHandle texture, bool initialized,
+	virtual void Apply_New_Surface(Graphics::TextureResource* texture, bool initialized,
 		bool disable_auto_invalidation = false);	// If the parameter is true, the texture will be flagged as initialised
 
 	virtual TexAssetType Get_Asset_Type() const override { return TEX_VOLUME; }

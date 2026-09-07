@@ -46,9 +46,10 @@
 //         Includes
 //-----------------------------------------------------------------------------
 
+import Assets.Images.PixelEncoding;
 #include "W3DDevice/GameClient/W3DRoadBuffer.h"
 #include "W3DDevice/GameClient/W3DGraphicsResources.h"
-import Graphics.Backends.DX11.Coexistence;
+import Graphics.Backends.DX11.FrameRuntime;
 import Graphics.Scene.Roads.Renderer;
 
 #include <WW3D2/AssetMgr.h>
@@ -68,7 +69,6 @@ import Graphics.Scene.Roads.Renderer;
 #include "WW3D2/Camera.h"
 #include "WW3D2/VertexFormat.h"
 #include "WW3D2/WW3D.h"
-#include "WW3D2/Backend/RenderBackend.h"
 #include "WW3D2/Mesh.h"
 #include "WW3D2/MeshMdl.h"
 
@@ -159,12 +159,12 @@ void RoadType::loadTexture(AsciiString path, Int ID)
 
 	m_roadTexture = pMgr->Get_Texture(path.str(), MIP_LEVELS_3);
 	//Hack to disable texture reduction
-	//m_roadTexture = pMgr->Get_Texture(path.str(), MIP_LEVELS_3, WW3D_FORMAT_UNKNOWN,true,TextureBaseClass::TEX_REGULAR, false);
+	//m_roadTexture = pMgr->Get_Texture(path.str(), MIP_LEVELS_3, Assets::PixelEncoding::Unknown,true,TextureBaseClass::TEX_REGULAR, false);
 
-	m_roadTexture->Get_Filter().Set_Mip_Mapping( TextureFilterClass::FILTER_TYPE_BEST );
+	m_roadTexture->Get_Sampling().mipmap =  Graphics::SamplingFilter::Best ;
 
-	m_roadTexture->Get_Filter().Set_U_Addr_Mode(TextureFilterClass::TEXTURE_ADDRESS_REPEAT);
-	m_roadTexture->Get_Filter().Set_V_Addr_Mode(TextureFilterClass::TEXTURE_ADDRESS_REPEAT);
+	m_roadTexture->Get_Sampling().address[0] = Graphics::RHISamplerAddress::Wrap;
+	m_roadTexture->Get_Sampling().address[1] = Graphics::RHISamplerAddress::Wrap;
 
     m_vertices.resize(TheGlobalData->m_maxRoadVertex + 4);
     m_indices.resize(TheGlobalData->m_maxRoadIndex + 4);
@@ -190,10 +190,10 @@ void RoadType::loadTestTexture()
 	if (m_isAutoLoaded && m_uniqueID>0 && !m_texturePath.isEmpty()) {
 		/// @todo - delay loading textures and only load textures referenced by map.
 		m_roadTexture = NEW_REF(TextureClass, (m_texturePath.str(), m_texturePath.str(), MIP_LEVELS_3));
-		m_roadTexture->Get_Filter().Set_Mip_Mapping( TextureFilterClass::FILTER_TYPE_BEST );
+		m_roadTexture->Get_Sampling().mipmap =  Graphics::SamplingFilter::Best ;
 
-		m_roadTexture->Get_Filter().Set_U_Addr_Mode(TextureFilterClass::TEXTURE_ADDRESS_REPEAT);
-		m_roadTexture->Get_Filter().Set_V_Addr_Mode(TextureFilterClass::TEXTURE_ADDRESS_REPEAT);
+		m_roadTexture->Get_Sampling().address[0] = Graphics::RHISamplerAddress::Wrap;
+		m_roadTexture->Get_Sampling().address[1] = Graphics::RHISamplerAddress::Wrap;
 	}
 }
 #endif
@@ -768,7 +768,7 @@ terrain.  The road is loaded into the quadrilateral defined by the
 the road vector gives the direction of the road, and the road normal is perpendicular
 to the road normal.  */
 //=============================================================================
-void W3DRoadBuffer::loadLit4PtSection(RoadSegment *pRoad, UnsignedShort *ib, VertexFormatXYZDUV1 *vb, RefRenderObjListIterator *pDynamicLightsIterator)
+void W3DRoadBuffer::loadLit4PtSection(RoadSegment *pRoad, UnsignedShort *ib, VertexFormatXYZDUV1 *vb, Graphics::SceneObjectList<RenderObjClass>::Cursor *pDynamicLightsIterator)
 {
 
 	const Real FLOAT_AMOUNT = MAP_HEIGHT_SCALE/8;
@@ -3211,7 +3211,7 @@ void W3DRoadBuffer::updateCenter()
 //=============================================================================
 void W3DRoadBuffer::drawRoads(CameraClass *camera, TextureClass *cloudTexture,
     TextureClass *noiseTexture, Bool wireframe, Int minX, Int maxX, Int minY, Int maxY,
-    RefRenderObjListIterator *)
+    Graphics::SceneObjectList<RenderObjClass>::Cursor *)
 {
     if (camera == nullptr || !m_initialized) return;
     auto *device = Graphics::Shared_Frame_Device();
@@ -3255,7 +3255,4 @@ void W3DRoadBuffer::drawRoads(CameraClass *camera, TextureClass *cloudTexture,
         }
     }
     m_curRoadType = 0;
-    WW3D::Get_Render_Backend()->Invalidate_Cached_Render_States();
 }
-
-

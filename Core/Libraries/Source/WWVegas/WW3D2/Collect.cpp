@@ -42,7 +42,6 @@
  *   CollectionClass::Class_ID -- returns class id for collection render objects               *
  *   CollectionClass::Get_Num_Polys -- returns the number of polygons in this collection       *
  *   CollectionClass::Render -- render this collection                                         *
- *   CollectionClass::Special_Render -- passes the special render call to all sub-objects      *
  *   CollectionClass::Set_Transform -- set the transform for this collection                   *
  *   CollectionClass::Set_Position -- set the position for this collection                     *
  *   CollectionClass::Get_Num_Sub_Objects -- returns the number of sub objects                 *
@@ -63,76 +62,23 @@
  *   CollectionClass::Update_Obj_Space_Bounding_Volumes -- recomputes the object space boundin *
  *   CollectionClass::Update_Sub_Object_Transforms -- recomputes all sub object transforms     *
  *   CollectionLoaderClass::Load -- reads a collection from a w3d file                         *
- *   CollectionDefClass::CollectionDefClass -- constructor                                     *
- *   CollectionDefClass::~CollectionDefClass -- destructor for collection definition           *
- *   CollectionDefClass::Free -- releases assets in use by a collection definition             *
- *   CollectionDefClass::Get_Name -- returns name of the collection                            *
- *   CollectionDefClass::Load -- loads a collection definition from a w3d file                 *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 
 #include "Collect.h"
+import Assets.Adapters.W3D.Collection;
 #include "WWLib/chunkio.h"
 #include "Camera.h"
 #include "WWDebug/wwdebug.h"
-#include "snapPts.h"
 #include "AssetMgr.h"
 #include "WW3D.h"
 #include "W3DErr.h"
 //#include "sr.hpp"
 
 
-CollectionLoaderClass _CollectionLoader;
-
-/*
-** CollectionDefClass.  This is the "blueprint" for a collection object
-** The asset manager will store these until someone actually asks it to
-** create an instance of the collection object
-*/
-class CollectionDefClass
-{
-public:
-
-	CollectionDefClass();
-	~CollectionDefClass();
-
-	const char *	Get_Name() const;
-	WW3DErrorType	Load(ChunkLoadClass & cload);
-
-protected:
-
-	void				Free();
-
-	char								Name[W3D_NAME_LEN];
-	DynamicVectorClass<char *> ObjectNames;
-	SnapPointsClass *				SnapPoints;
-
-	DynamicVectorClass <ProxyClass>	ProxyList;
-
-	friend class CollectionClass;
-};
 
 
-/*
-** CollectionPrototypeClass this is the render object prototype for
-** Collections.
-*/
-class CollectionPrototypeClass : public PrototypeClass
-{
-	W3DMPO_CODE(CollectionPrototypeClass)
-public:
-	CollectionPrototypeClass(CollectionDefClass * def)		{ ColDef = def; WWASSERT(ColDef); }
 
-	virtual const char *			Get_Name() const override { return ColDef->Get_Name(); }
-	virtual int								Get_Class_ID() const override { return RenderObjClass::CLASSID_COLLECTION; }
-	virtual RenderObjClass *	Create() override							{ return NEW_REF( CollectionClass, (*ColDef)); }
-	virtual void							DeleteSelf() override { delete this; }
-
-	CollectionDefClass *			ColDef;
-
-protected:
-	virtual ~CollectionPrototypeClass() override { delete ColDef; }
-};
 
 
 /***********************************************************************************************
@@ -148,7 +94,7 @@ protected:
  *   23/8/00    GTH : Created.                                                                 *
  *=============================================================================================*/
 CollectionClass::CollectionClass() :
-	SnapPoints(nullptr)
+	SnapPoints()
 {
 	Update_Obj_Space_Bounding_Volumes();
 }
@@ -166,27 +112,27 @@ CollectionClass::CollectionClass() :
  * HISTORY:                                                                                    *
  *   12/8/98    GTH : Created.                                                                 *
  *=============================================================================================*/
-CollectionClass::CollectionClass(const CollectionDefClass & def) :
-	SubObjects(def.ObjectNames.Count()),
-	SnapPoints(nullptr)
+CollectionClass::CollectionClass(const Assets::ModelCollectionDesc & def) :
+	SubObjects(static_cast<int>(def.children.size())),
+	SnapPoints()
 {
 	// Set our name
-	Set_Name (def.Get_Name ());
+	Set_Name (def.name.c_str());
 
 	// create the sub objects
-	SubObjects.Resize(def.ObjectNames.Count());
-	for (int i=0; i<def.ObjectNames.Count(); i++) {
+	SubObjects.Resize(static_cast<int>(def.children.size()));
+	for (int i=0; i<static_cast<int>(def.children.size()); i++) {
 		WWASSERT(SubObjects.Count() == i);
-		SubObjects.Add(WW3DAssetManager::Get_Instance()->Create_Render_Obj(def.ObjectNames[i]));
+		SubObjects.Add(WW3DAssetManager::Get_Instance()->Create_Render_Obj(def.children[i].c_str()));
 		SubObjects[i]->Set_Container(this);
 	}
 
 	// Copy the list of placeholder objects from the definition
-	ProxyList = def.ProxyList;
+	ProxyList = def.proxies;
 
 	// grab ahold of the snap points.
-	SnapPoints = def.SnapPoints;
-	if (SnapPoints) SnapPoints->Add_Ref();
+	SnapPoints = def.snap_points;
+
 
 	// set up our collision typeas the union of all of our sub-objects
 	Update_Sub_Object_Bits();
@@ -211,7 +157,7 @@ CollectionClass::CollectionClass(const CollectionDefClass & def) :
 CollectionClass::CollectionClass(const CollectionClass & src) :
 	CompositeRenderObjClass(src),
 	SubObjects(src.SubObjects.Count()),
-	SnapPoints(nullptr)
+	SnapPoints()
 {
 	*this = src;
 }
@@ -246,7 +192,7 @@ CollectionClass & CollectionClass::operator = (const CollectionClass & that)
 		ProxyList = that.ProxyList;
 
 		SnapPoints = that.SnapPoints;
-		if (SnapPoints) SnapPoints->Add_Ref();
+
 
 		Update_Sub_Object_Bits();
 		Update_Obj_Space_Bounding_Volumes();
@@ -311,9 +257,9 @@ void CollectionClass::Free()
 		SubObjects[i] = nullptr;
 	}
 	SubObjects.Delete_All();
-	ProxyList.Delete_All ();
+	ProxyList.clear();
 
-	REF_PTR_RELEASE(SnapPoints);
+	SnapPoints.clear();
 }
 
 
@@ -384,33 +330,6 @@ void CollectionClass::Render(RenderInfoClass & rinfo)
 	}
 }
 
-
-/***********************************************************************************************
- * CollectionClass::Special_Render -- passes the special render call to all sub-objects        *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   3/2/99     GTH : Created.                                                                 *
- *=============================================================================================*/
-void CollectionClass::Special_Render(SpecialRenderInfoClass & rinfo)
-{
-	if (Is_Not_Hidden_At_All() == false) {
-		return;
-	}
-
-	if (Are_Sub_Object_Transforms_Dirty()) {
-		Update_Sub_Object_Transforms();
-	}
-
-	for (int i=0; i<SubObjects.Count(); i++) {
-		SubObjects[i]->Special_Render(rinfo);
-	}
-}
 
 /***********************************************************************************************
  * CollectionClass::Set_Transform -- set the transform for this collection                     *
@@ -719,8 +638,8 @@ void CollectionClass::Get_Obj_Space_Bounding_Box(AABoxClass & box) const
  *=============================================================================================*/
 int CollectionClass::Snap_Point_Count()
 {
-	if (SnapPoints) {
-		return SnapPoints->Count();
+	if (!SnapPoints.empty()) {
+		return static_cast<int>(SnapPoints.size());
 	} else {
 		return 0;
 	}
@@ -745,8 +664,9 @@ int CollectionClass::Snap_Point_Count()
 void CollectionClass::Get_Snap_Point(int index,Vector3 * set)
 {
 	WWASSERT(set != nullptr);
-	if (SnapPoints) {
-		*set = (*SnapPoints)[index];
+	if (index >= 0 && static_cast<std::size_t>(index) < SnapPoints.size()) {
+		const auto& point = SnapPoints[index];
+		set->Set(point.x, point.y, point.z);
 	} else {
 		set->X = set->Y = set->Z = 0;
 	}
@@ -884,12 +804,15 @@ bool CollectionClass::Get_Proxy (int index, ProxyClass &proxy) const
 {
 	bool retval = false;
 
-	if (index >= 0 && index < ProxyList.Count ()) {
+	if (index >= 0 && index < static_cast<int>(ProxyList.size())) {
 
 		//
 		// Return the proxy information to the caller
 		//
-		proxy		= ProxyList[index];
+		const auto& source = ProxyList[index];
+        const auto& m = source.transform;
+        proxy = ProxyClass(source.name.c_str(), Matrix3D(
+            m[0],m[1],m[2],m[3], m[4],m[5],m[6],m[7], m[8],m[9],m[10],m[11]));
 		retval	= true;
 	}
 
@@ -911,166 +834,9 @@ bool CollectionClass::Get_Proxy (int index, ProxyClass &proxy) const
  *=============================================================================================*/
 int CollectionClass::Get_Proxy_Count () const
 {
-	return ProxyList.Count ();
+	return static_cast<int>(ProxyList.size());
 }
 
-
-/***********************************************************************************************
- * CollectionDefClass::CollectionDefClass -- constructor                                       *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   12/8/98    GTH : Created.                                                                 *
- *=============================================================================================*/
-CollectionDefClass::CollectionDefClass()
-{
-	SnapPoints = nullptr;
-}
-
-
-/***********************************************************************************************
- * CollectionDefClass::~CollectionDefClass -- destructor for collection definition             *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   12/8/98    GTH : Created.                                                                 *
- *=============================================================================================*/
-CollectionDefClass::~CollectionDefClass()
-{
-	Free();
-}
-
-
-/***********************************************************************************************
- * CollectionDefClass::Free -- releases assets in use by a collection definition               *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   12/8/98    GTH : Created.                                                                 *
- *=============================================================================================*/
-void CollectionDefClass::Free()
-{
-	for (int i=0; i<ObjectNames.Count(); i++) {
-		delete[] ObjectNames[i];
-	}
-	ObjectNames.Delete_All ();
-
-	ProxyList.Delete_All ();
-}
-
-
-/***********************************************************************************************
- * CollectionDefClass::Get_Name -- returns name of the collection                              *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   12/8/98    GTH : Created.                                                                 *
- *=============================================================================================*/
-const char * CollectionDefClass::Get_Name() const
-{
-	return Name;
-}
-
-
-/***********************************************************************************************
- * CollectionDefClass::Load -- loads a collection definition from a w3d file                   *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   12/8/98    GTH : Created.                                                                 *
- *=============================================================================================*/
-WW3DErrorType CollectionDefClass::Load(ChunkLoadClass & cload)
-{
-	Free();
-
-	// open the header chunk and read it in
-	W3dCollectionHeaderStruct header;
-	if (!cload.Open_Chunk()) goto Error;
-	if (cload.Cur_Chunk_ID() != W3D_CHUNK_COLLECTION_HEADER) goto Error;
-	if (cload.Read(&header,sizeof(header)) != sizeof(header)) goto Error;
-	if (!cload.Close_Chunk()) goto Error;
-
-	static_assert(ARRAY_SIZE(Name) >= ARRAY_SIZE(header.Name), "Incorrect array size");
-	strcpy(Name,header.Name);
-	ObjectNames.Resize(header.RenderObjectCount);
-
-	while (cload.Open_Chunk()) {
-		switch (cload.Cur_Chunk_ID())
-		{
-		case W3D_CHUNK_COLLECTION_OBJ_NAME:
-			{
-				WWASSERT(cload.Cur_Chunk_Length() > 0);
-				char * name = W3DNEWARRAY char [cload.Cur_Chunk_Length()];
-				cload.Read(name,cload.Cur_Chunk_Length());
-				ObjectNames.Add(name);
-				break;
-			}
-
-		case W3D_CHUNK_PLACEHOLDER:
-			{
-				// Read the placeholder information from the chunk
-				WWASSERT(cload.Cur_Chunk_Length() > 0);
-				W3dPlaceholderStruct info;
-				cload.Read(&info, sizeof (info));
-
-				// Read the placeholder name from the chunk
-				char *name = W3DNEWARRAY char[info.name_len + 1];
-				cload.Read(name, info.name_len);
-				name[info.name_len] = 0;
-
-				// Create a matrix from the data in the chunk
-				Matrix3D transform (info.transform[0][0], info.transform[1][0], info.transform[2][0], info.transform[3][0],
-										  info.transform[0][1], info.transform[1][1], info.transform[2][1], info.transform[3][1],
-										  info.transform[0][2], info.transform[1][2], info.transform[2][2], info.transform[3][2]);
-
-				// Add this placeholder to our list
-				ProxyList.Add (ProxyClass (name, transform));
-
-				// Free the name array
-				delete [] name;
-				break;
-			}
-
-		case W3D_CHUNK_POINTS:
-			SnapPoints = NEW_REF(SnapPointsClass, ());
-			SnapPoints->Load_W3D(cload);
-			break;
-		}
-
-		cload.Close_Chunk();
-	}
-
-	return WW3D_ERROR_OK;
-
-Error:
-
-	return WW3D_ERROR_LOAD_FAILED;
-}
 
 /***********************************************************************************************
  * CollectionLoaderClass::Load -- reads a collection from a w3d file                           *
@@ -1084,28 +850,13 @@ Error:
  * HISTORY:                                                                                    *
  *   12/8/98    GTH : Created.                                                                 *
  *=============================================================================================*/
-PrototypeClass * CollectionLoaderClass::Load_W3D(ChunkLoadClass & cload)
+Graphics::ModelFactory<RenderObjClass> * Load_Collection_Factory(ChunkLoadClass & cload)
 {
-	CollectionDefClass * def = W3DNEW CollectionDefClass;
-
-	if (def == nullptr) {
-		return nullptr;
-	}
-
-	if (def->Load(cload) != WW3D_ERROR_OK) {
-
-		// load failed, delete the model and return an error
-		delete def;
-		return nullptr;
-
-	} else {
-
-		// ok, accept this model!
-		CollectionPrototypeClass * proto = W3DNEW CollectionPrototypeClass(def);
-		return proto;
-
-	}
+    std::vector<std::byte> bytes(cload.Cur_Chunk_Length());
+    if(cload.Read(bytes.data(),static_cast<unsigned>(bytes.size()))!=bytes.size())return nullptr;
+    Assets::ModelCollectionDesc description;
+    std::string error;
+    if(!Assets::W3D::W3DRead_Model_Collection(bytes,description,error))return nullptr;
+    auto data=std::make_shared<const Assets::ModelCollectionDesc>(std::move(description));
+    return new Graphics::ModelFactory<RenderObjClass>(data->name,RenderObjClass::CLASSID_COLLECTION,[data] { return NEW_REF(CollectionClass,(*data)); });
 }
-
-
-

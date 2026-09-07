@@ -38,18 +38,25 @@
 
 #pragma once
 
+#include <cstddef>
+#include <memory>
+#include <span>
+#include <string>
+#include <unordered_map>
+#include <vector>
+import Graphics.Scene.Models.VertexChannels;
+import Graphics.Scene.Models.MaterialSlots;
+
 #include "WWLib/always.h"
 #include "WWMath/vector2.h"
 #include "WWMath/vector3.h"
 #include "WWMath/Vector3i.h"
 #include "WWMath/vector4.h"
+#include "WWLib/ref_ptr.h"
 #include "WWLib/sharebuf.h"
 #include "Shader.h"
 #include "VertMaterial.h"
 
-class MatBufferClass;
-class TexBufferClass;
-class UVBufferClass;
 class TextureClass;
 class MeshModelClass;
 
@@ -61,13 +68,14 @@ class MeshMatDescClass
 {
 	W3DMPO_CODE(MeshMatDescClass)
 public:
+	using TextureSlots = Graphics::MaterialSlots<RefCountPtr<TextureClass>>;
+	using MaterialSlots = Graphics::MaterialSlots<RefCountPtr<VertexMaterialClass>>;
 
 	enum
 	{
 		MAX_PASSES = 4,
 		MAX_TEX_STAGES = 2,
-		MAX_COLOR_ARRAYS = 2,
-		MAX_UV_ARRAYS = MAX_PASSES * MAX_TEX_STAGES
+		MAX_COLOR_ARRAYS = 2
 	};
 
 	MeshMatDescClass();
@@ -147,9 +155,9 @@ public:
 	bool							Has_UV(int pass,int stage)					{ return UVSource[pass][stage] != -1; }
 	bool							Has_Color_Array(int array)					{ return ColorArray[array] != nullptr; }
 
-	bool							Has_Texture_Data(int pass,int stage)	{ return (Texture[pass][stage] != nullptr) || (TextureArray[pass][stage] != nullptr); }
+	bool							Has_Texture_Data(int pass,int stage)	{ return (Texture[pass][stage] != nullptr) || TextureArray[pass][stage].Is_Allocated(); }
 	bool							Has_Shader_Data(int pass)					{ return (Shader[pass] != NullShader) || (ShaderArray[pass] != nullptr); }
-	bool							Has_Material_Data(int pass)				{ return (Material[pass] != nullptr) || (MaterialArray[pass] != nullptr); }
+	bool							Has_Material_Data(int pass)				{ return (Material[pass] != nullptr) || MaterialArray[pass].Is_Allocated(); }
 
 	/*
 	** "Get" functions for Materials, Textures, and Shaders when there are more than one (per-polygon or per-vertex)
@@ -167,8 +175,8 @@ public:
 	/*
 	** Access to the arrays
 	*/
-	TexBufferClass *			Get_Texture_Array(int pass,int stage,bool create = true);
-	MatBufferClass *			Get_Material_Array(int pass,bool create = true);
+	TextureSlots *			Get_Texture_Array(int pass,int stage,bool create = true);
+	MaterialSlots *			Get_Material_Array(int pass,bool create = true);
 	ShaderClass *				Get_Shader_Array(int pass,bool create = true);
 
 	void							Make_UV_Array_Unique(int pass,int stage);
@@ -199,7 +207,7 @@ protected:
 	int													PolyCount;
 
 	// u-v coordinates
-	UVBufferClass *									UV[MAX_UV_ARRAYS];
+	Graphics::VertexChannels<Vector2> UV;
 	int													UVSource[MAX_PASSES][MAX_TEX_STAGES];
 
 	// vertex color arrays, we support two arrays: each can only be used on the
@@ -214,82 +222,11 @@ protected:
 	VertexMaterialClass *							Material[MAX_PASSES];
 
 	// array textures, shaders, vmats
-	TexBufferClass *									TextureArray[MAX_PASSES][MAX_TEX_STAGES];
-	MatBufferClass *									MaterialArray[MAX_PASSES];
+	TextureSlots									TextureArray[MAX_PASSES][MAX_TEX_STAGES];
+	MaterialSlots									MaterialArray[MAX_PASSES];
 	ShareBufferClass<ShaderClass> *				ShaderArray[MAX_PASSES];
 
 	friend class MeshModelClass;
-};
-
-
-/**
-** MatBufferClass
-** This is a ShareBufferClass of pointers to vertex materials.  Should be written as a template...
-** Get and Peek work like normal, and all non-null pointers will be released when the buffer
-** is destroyed.
-*/
-class MatBufferClass : public ShareBufferClass < VertexMaterialClass * >
-{
-	W3DMPO_CODE(MatBufferClass)
-public:
-	MatBufferClass(int count, const char* msg) : ShareBufferClass<VertexMaterialClass *>(count, msg) { Clear(); }
-	MatBufferClass(const MatBufferClass & that);
-	virtual ~MatBufferClass() override;
-
-	void							Set_Element(int index,VertexMaterialClass * mat);
-	VertexMaterialClass *	Get_Element(int index);
-	VertexMaterialClass *	Peek_Element(int index);
-
-private:
-	// not implemented
-	MatBufferClass & operator = (const MatBufferClass & that);
-};
-
-/**
-** TexBufferClass
-** This is a ShareBufferClass of pointers to textures.  Works just like MatBufferClass but with
-** TextureClass's...
-*/
-class TexBufferClass : public ShareBufferClass < TextureClass * >
-{
-	W3DMPO_CODE(TexBufferClass)
-public:
-	TexBufferClass(int count, const char* msg) : ShareBufferClass<TextureClass *>(count, msg) { Clear(); }
-	TexBufferClass(const TexBufferClass & that);
-	virtual ~TexBufferClass() override;
-
-	void				Set_Element(int index,TextureClass * mat);
-	TextureClass *	Get_Element(int index);
-	TextureClass *	Peek_Element(int index);
-
-private:
-	// not implemented
-	TexBufferClass & operator = (const TexBufferClass & that);
-};
-
-/**
-** UVBufferClass
-** This is a ShareBufferClass of uv coordinates.  At load time, we are detecting redundant UV arrays
-** so this class stores a CRC for quick checking.
-*/
-class UVBufferClass : public ShareBufferClass < Vector2 >
-{
-	W3DMPO_CODE(UVBufferClass)
-public:
-	UVBufferClass(int count, const char* msg) : ShareBufferClass<Vector2>(count, msg), CRC(0xFFFFFFFF) { }
-	UVBufferClass(const UVBufferClass & that);
-
-	bool				operator == (const UVBufferClass & that);
-	bool				Is_Equal_To(const UVBufferClass & that);
-
-	void				Update_CRC();
-	unsigned int	Get_CRC() { return CRC; }
-
-private:
-	unsigned int	CRC;
-
-	// not implemented
-	UVBufferClass & operator = (const UVBufferClass & that);
 };
 
 /*********************************************************************************************************
@@ -302,13 +239,7 @@ private:
 
 inline Vector2 * MeshMatDescClass::Get_UV_Array(int pass,int stage)
 {
-	if (UVSource[pass][stage] == -1) {
-		return nullptr;
-	}
-	if (UV[UVSource[pass][stage]] != nullptr) {
-		return UV[UVSource[pass][stage]]->Get_Array();
-	}
-	return nullptr;
+ return UVSource[pass][stage] < 0 ? nullptr : UV.Get(UVSource[pass][stage]);
 }
 
 inline void MeshMatDescClass::Set_UV_Source(int pass,int stage,int sourceindex)
@@ -331,24 +262,13 @@ inline int MeshMatDescClass::Get_UV_Source(int pass,int stage)
 
 inline int MeshMatDescClass::Get_UV_Array_Count()
 {
-	int count = 0;
-	while ((UV[count] != nullptr) && (count < MAX_UV_ARRAYS)) {
-		count++;
-	}
-	return count;
+ return static_cast<int>(UV.Count());
 }
 
-inline Vector2 * MeshMatDescClass::Get_UV_Array_By_Index(int index, bool create)
+inline Vector2 * MeshMatDescClass::Get_UV_Array_By_Index(int index,bool create)
 {
-	WWASSERT((index >= 0)&&(index < MAX_UV_ARRAYS));
-
-	if (create && !UV[index]) {
-		UV[index] = NEW_REF(UVBufferClass,(VertexCount, "MeshMatDescClass::UV"));
-	}
-	if (UV[index] != nullptr) {
-		return UV[index]->Get_Array();
-	}
-	return nullptr;
+ WWASSERT(index>=0);
+ return create ? UV.Create(index,VertexCount) : UV.Get(index);
 }
 
 inline unsigned* MeshMatDescClass::Get_DCG_Array(int pass)
@@ -465,7 +385,7 @@ inline ShaderClass MeshMatDescClass::Get_Single_Shader(int pass) const
 
 inline bool MeshMatDescClass::Has_Material_Array(int pass) const
 {
-	return (MaterialArray[pass] != nullptr);
+	return MaterialArray[pass].Is_Allocated();
 }
 
 inline bool MeshMatDescClass::Has_Shader_Array(int pass) const
@@ -475,7 +395,7 @@ inline bool MeshMatDescClass::Has_Shader_Array(int pass) const
 
 inline bool MeshMatDescClass::Has_Texture_Array(int pass,int stage) const
 {
-	return (TextureArray[pass][stage] != nullptr);
+	return TextureArray[pass][stage].Is_Allocated();
 }
 
 inline void MeshMatDescClass::Disable_Backface_Culling()

@@ -71,7 +71,7 @@ BOOST_AUTO_TEST_CASE(deferred_pass_observes_opaque_depth_and_keeps_submission_or
     for (auto& vertex : vertices) vertex.uv={vertex.position[0]+1,0.5f};
     parameters.textured=1; parameters.primary_gradient=0;
     style=PropStyle{}; style.color_write_mask=8;
-    style.samplers[0].linear_filter=false;
+    style.samplers[0].Set_Filter(Graphics::RHISamplerFilter::Point);
     const std::array mask_textures{mask};
     BOOST_REQUIRE(queue.Submit(renderer,vertices,indices,style,parameters,mask_textures));
     BOOST_REQUIRE(queue.Flush(commands));

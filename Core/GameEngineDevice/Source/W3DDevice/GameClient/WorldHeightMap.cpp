@@ -1,3 +1,4 @@
+import Graphics.Resources.Textures.Quality;
 /*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -2223,11 +2224,7 @@ void WorldHeightMap::getAlphaUVData(Int xIndex, Int yIndex, float U[4], float V[
 	*flip = needFlip;
 }
 
-void WorldHeightMap::setTextureLOD(Int lod)
-{
-	if (m_terrainTex)
-		m_terrainTex->setLOD(lod);
-}
+
 
 TextureClass *WorldHeightMap::getTerrainTexture()
 {
@@ -2316,8 +2313,8 @@ TextureClass *WorldHeightMap::getEdgeTerrainTexture()
 
 TerrainTextureClass *WorldHeightMap::getFlatTexture(Int xCell, Int yCell, Int cellWidth, Int pixelsPerCell)
 {
-	if (WW3D::Get_Texture_Reduction()) {
-		if (WW3D::Get_Texture_Reduction()>1) {
+	if (Graphics::Get_Texture_Quality_Settings().mip_reduction) {
+		if (Graphics::Get_Texture_Quality_Settings().mip_reduction>1) {
 			pixelsPerCell /= 4;
 		} else {
 			pixelsPerCell /= 2;

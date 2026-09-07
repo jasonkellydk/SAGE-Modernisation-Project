@@ -36,15 +36,10 @@
 #include "GameClient/View.h"
 #include "GameClient/Display.h"
 #include "WW3D2/Texture.h"
-#include "WW3D2/IndexBuffer.h"
-#include "WW3D2/VertexBuffer.h"
 #include "WW3D2/VertMaterial.h"
 #include "WW3D2/VertexFormat.h"
-#include "WW3D2/IndexBuffer.h"
-#include "WW3D2/Backend/RenderBackend.h"
 #include "WW3D2/RInfo.h"
 #include "WW3D2/Camera.h"
-#include "WW3D2/SortingRenderer.h"
 
 #include <cstddef>
 #include <span>

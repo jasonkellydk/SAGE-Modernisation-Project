@@ -37,6 +37,8 @@
 #pragma once
 
 #include "WWLib/always.h"
+#include <cstddef>
+#include <span>
 
 struct W3dMaterial3Struct;
 class StringClass;
@@ -76,7 +78,7 @@ enum ShaderShiftConstants
 class ShaderClass
 {
 public:
-	void	Apply();
+	bool Load_W3D_Record(std::span<const std::byte> bytes);
 
 	enum AlphaTestType
 	{
@@ -318,19 +320,6 @@ public:
 	StaticSortCategoryType	Get_SS_Category() const;
 	int							Guess_Sort_Level() const;
 
-	// DX 8 state management routines
-	static void	Invalidate() { ShaderDirty=true; }
-	static bool	Is_Dirty() { return ShaderDirty; }
-
-	// Global backface culling invert.  This interface can be used to globally invert all backface
-	// culling.  This is a global setting and will affect everything being rendered.  Typically it
-	// should be left alone at the default setting.  Renegade uses this feature to render the entire
-	// scene's backfacing polygons only; this is used in a VIS-debugging process.  In order for this
-	// to work, you will have to ww3d::Flush all rendering before changing the setting back.
-	// NORMAL USERS SHOULD NEVER CALL THESE FUNCTIONS!
-	static void				Invert_Backface_Culling(bool onoff);
-	static bool				Is_Backface_Culling_Inverted();
-
 	const StringClass& Get_Description(StringClass& str) const;
 
 	// These are a bunch of predefined shaders for common cases. None of them
@@ -437,8 +426,6 @@ protected:
 
 	unsigned int ShaderBits;
 
-	static bool ShaderDirty;
-	static unsigned long CurrentShader;
 };
 
 inline void ShaderClass::Reset()

@@ -1334,7 +1334,7 @@ struct W3dMeshAABTreeHeader
 // AABTree Node.  This is a node in the AABTree.
 // If the MSB of FrontOrPoly0 is 1, then the node is a leaf and contains Poly0 and PolyCount
 // else, the node is not a leaf and contains indices to its front and back children.  This matches
-// the format used by AABTreeClass in WW3D.
+// the stored tree node encoding.
 //
 struct W3dMeshAABTreeNode
 {
@@ -2063,7 +2063,7 @@ struct W3dAggregateMiscInfo
 		W3D_CHUNK_HLOD_PROXY_ARRAY,										// array of proxies, used for application-defined purposes
 
 	An HLOD is the basic hierarchical model format used by W3D.  It references
-	an HTree for its hierarchical structure and animation data and several arrays
+	an Hierarchy for its hierarchical structure and animation data and several arrays
 	of sub-objects; one for each LOD in the model.  In addition, it can contain
 	an array of "aggregates" which are references to external W3D objects to
 	be automatically attached into it.  And it can have a list of "proxy" objects

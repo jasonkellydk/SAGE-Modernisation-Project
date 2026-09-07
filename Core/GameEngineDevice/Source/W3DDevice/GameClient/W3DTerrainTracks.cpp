@@ -47,7 +47,7 @@
 #include <span>
 #include <vector>
 import Graphics.Scene.Tracks.Geometry;
-import Graphics.Backends.DX11.Coexistence;
+import Graphics.Backends.DX11.FrameRuntime;
 #include "W3DDevice/GameClient/W3DGraphicsResources.h"
 #include "W3DDevice/GameClient/W3DTerrainTracks.h"
 #include "W3DDevice/GameClient/BaseHeightMap.h"
@@ -61,7 +61,6 @@ import Graphics.Backends.DX11.Coexistence;
 #include "WW3D2/RInfo.h"
 #include "WW3D2/Camera.h"
 #include "WW3D2/AssetMgr.h"
-#include "WW3D2/Backend/RenderBackend.h"
 #include "WW3D2/WW3D.h"
 #include "WW3D2/Scene.h"
 #include "GameLogic/TerrainLogic.h"
@@ -801,7 +800,6 @@ void TerrainTracksRenderObjClassSystem::flush(CameraClass& camera)
         const std::array<Graphics::RHITextureHandle,4> textures{Resolve_Graphics_Texture(mod->m_stageZeroTexture),{},{},{}};
         renderer.Draw(device->Immediate_Command_List(),m_graphicsMesh,style,parameters,textures);
     }
-    WW3D::Get_Render_Backend()->Invalidate_Cached_Render_States();
     m_edgesToFlush = 0;
 }
 

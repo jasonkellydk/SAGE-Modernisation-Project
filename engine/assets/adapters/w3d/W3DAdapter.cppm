@@ -13,6 +13,7 @@ export module Assets.Adapters.W3D;
 import Assets.Adapters.W3D.Chunks;
 import Assets.Adapters.W3D.Mesh;
 import Assets.Adapters.W3D.Model;
+import Assets.Adapters.W3D.Rig;
 import Assets.Identity;
 import Assets.Importers.Models;
 import Assets.Models;
@@ -104,6 +105,8 @@ public:
 		description->source_format = "W3D";
 		bool found_mesh = false;
 		std::string error;
+		if (!W3D::W3DRead_Model_Rig(source, description->rig, error))
+			return {nullptr, std::move(error)};
 		if (!W3D::W3DVisit_Chunks(source, [&description, &found_mesh, &error](const W3D::W3DChunkView &chunk) {
 			if (chunk.id == W3D::W3DChunkMesh) {
 				W3D::W3DParsedMesh mesh;

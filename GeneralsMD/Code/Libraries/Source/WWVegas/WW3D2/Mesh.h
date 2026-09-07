@@ -36,14 +36,28 @@
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 #pragma once
+#include <memory>
+#include <span>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <vector>
+import Graphics.Scene.Models.Factory;
+
+
+#include <memory>
+#include <span>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 #include "WWLib/always.h"
 #include "WW3D2/RendObj.h"
 #include "WWLib/bittype.h"
 #include "WW3D2/W3DErr.h"
-#include "LightEnvironment.h"	//added for 'Generals'
+import Graphics.Scene.Lighting.Local;
 
-class MeshBuilderClass;
 class HModelClass;
 class AuxMeshDataClass;
 class MeshLoadInfoClass;
@@ -53,9 +67,7 @@ class ChunkLoadClass;
 class ChunkSaveClass;
 class RenderInfoClass;
 class MeshModelClass;
-class DecalMeshClass;
 class MaterialPassClass;
-class IndexBufferClass;
 struct W3dMeshHeaderStruct;
 struct W3dTexCoordStruct;
 class TextureClass;
@@ -84,7 +96,6 @@ public:
 	virtual void					Set_Name(const char * name) override;
 	virtual int						Get_Num_Polys() const override;
 	virtual void					Render(RenderInfoClass & rinfo) override;
-	virtual void					Special_Render(SpecialRenderInfoClass & rinfo) override;
 
 	/////////////////////////////////////////////////////////////////////////////
 	// Render Object Interface - Collision Detection
@@ -113,15 +124,8 @@ public:
 
 
 	/////////////////////////////////////////////////////////////////////////////
-	// Render Object Interface - Decals
-	/////////////////////////////////////////////////////////////////////////////
-	virtual void					Create_Decal(DecalGeneratorClass * generator) override;
-	virtual void					Delete_Decal(uint32 decal_id) override;
-
-	/////////////////////////////////////////////////////////////////////////////
 	// MeshClass Interface
 	/////////////////////////////////////////////////////////////////////////////
-	WW3DErrorType					Init(const MeshBuilderClass & builder,MaterialInfoClass * matinfo,const char * name,const char * hmodelname);
 	WW3DErrorType					Load_W3D(ChunkLoadClass & cload);
 	void								Generate_Culling_Tree();
 	MeshModelClass *				Get_Model();
@@ -135,8 +139,8 @@ public:
 	void								Get_Deformed_Vertices(Vector3 *dst_vert, Vector3 *dst_norm);
 	void								Get_Deformed_Vertices(Vector3 *dst_vert);
 
-	void								Set_Lighting_Environment(LightEnvironmentClass * light_env) { if (light_env) {m_localLightEnv=*light_env;LightEnvironment = &m_localLightEnv;} else {LightEnvironment = nullptr;} }
-	LightEnvironmentClass *		Get_Lighting_Environment() { return LightEnvironment; }
+	void								Set_Lighting_Environment(Graphics::LocalLighting * light_env) { if (light_env) {m_localLightEnv=*light_env;LightEnvironment = &m_localLightEnv;} else {LightEnvironment = nullptr;} }
+	Graphics::LocalLighting *		Get_Lighting_Environment() { return LightEnvironment; }
 	float	Get_Alpha_Override() { return m_alphaOverride;}
 
 	void								Set_Next_Visible_Skin(MeshClass * next_visible) { NextVisibleSkin = next_visible; }
@@ -152,10 +156,7 @@ public:
 	void								Replace_VertexMaterial(VertexMaterialClass* vmat,VertexMaterialClass* new_vmat);
 
 	void								Make_Unique(bool force_meshmdl_clone = false);
-	unsigned							Get_Debug_Id() const { return  MeshDebugId; }
 
-	void								Set_Debugger_Disable(bool b) { IsDisabledByDebugger=b; }
-	bool								Is_Disabled_By_Debugger() const { return IsDisabledByDebugger; }
 
 protected:
 
@@ -169,20 +170,16 @@ protected:
 	void								clone_materials(const MeshClass & srcmesh);
 
 	MeshModelClass *				Model;
-	DecalMeshClass *				DecalMesh;
 
-	LightEnvironmentClass *		LightEnvironment;		// cached pointer to the light environment for this mesh
-	LightEnvironmentClass     m_localLightEnv;	//added for 'Generals'
+	Graphics::LocalLighting *		LightEnvironment;		// cached pointer to the light environment for this mesh
+	Graphics::LocalLighting     m_localLightEnv;	//added for 'Generals'
 	float					m_alphaOverride;	//added for 'Generals' to allow variable alpha on meshes.
 	float					m_materialPassEmissiveOverride;	//added for 'Generals' to allow variable emissive on additional passes.
 	float					m_materialPassAlphaOverride;	//added for 'Generals' to allow variable alpha on additional render passes.
 	int								BaseVertexOffset;		// offset to our first vertex in whatever vb this mesh is in.
 	MeshClass *						NextVisibleSkin;		// linked list of visible skins
 
-	unsigned							MeshDebugId;
-	bool								IsDisabledByDebugger;
 
-	friend class MeshBuilderClass;
 };
 
 inline MeshModelClass * MeshClass::Peek_Model()
@@ -196,3 +193,5 @@ inline MeshModelClass * MeshClass::Peek_Model()
 // model. This is useful for stuff like making a RenderObjects' polys sort.
 //void Set_MeshModel_Flag(RenderObjClass *robj, MeshModelClass::FlagsType flag, int onoff);
 void Set_MeshModel_Flag(RenderObjClass *robj, int flag, int onoff);
+
+Graphics::ModelFactory<RenderObjClass>* Load_Mesh_Factory(ChunkLoadClass& cload);

@@ -36,12 +36,18 @@
 
 #pragma once
 
+#include <memory>
+#include <span>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
 #include "WWLib/always.h"
-#include "Backend/RenderBackend.h"
 #include "WWMath/vector3.h"
-#include "WW3D2/Layer.h"
 #include "WW3D2/W3DErr.h"
-#include "WW3D2/RObjList.h"
+import Graphics.RHI;
+import Graphics.Scene.ObjectList;
+class RenderObjClass;
 
 class		SceneClass;
 class		CameraClass;
@@ -51,11 +57,8 @@ struct	RenderStatistics;
 class		VertexMaterialClass;
 class		ExtraMaterialPassClass;
 class		RenderInfoClass;
-class		RenderDeviceDescClass;
 class		StringClass;
-class		LightEnvironmentClass;
 class		MaterialPassClass;
-class 	StaticSortListClass;
 
 #define MESH_RENDER_SNAPSHOT_ENABLED
 #define SNAPSHOT_SAY(x) if (WW3D::Is_Snapshot_Activated()) { WWDEBUG_SAY(x); }
@@ -71,12 +74,6 @@ class WW3D
 {
 public:
 
-	enum MultiSampleModeEnum {
-		MULTISAMPLE_MODE_NONE = 0,
-		MULTISAMPLE_MODE_2X = 2,
-		MULTISAMPLE_MODE_4X = 4,
-		MULTISAMPLE_MODE_8X = 8
-	};
 
 	enum PrelitModeEnum {
 		PRELIT_MODE_VERTEX,
@@ -99,50 +96,22 @@ public:
 		NPATCHES_GAP_FILLING_FORCE
 	};
 
-	static WW3DErrorType		Init(void * window, char *defaultpal = nullptr, bool lite = false);
+	static WW3DErrorType		Init(bool lite = false);
 	static WW3DErrorType		Shutdown();
 	static bool					Is_Initted()								{ return IsInitted; }
 
-	// The active rendering backend. It is created by Init and destroyed by Shutdown.
-	static IRenderBackend *	Get_Render_Backend()							{ return RenderBackend; }
 
-	static int					Get_Render_Device_Count();
-	static const char *		Get_Render_Device_Name(int device_index);
-	static const RenderDeviceDescClass &								Get_Render_Device_Desc(int device = -1);
 
-	static int					Get_Render_Device();
-	static WW3DErrorType		Set_Render_Device( int dev=-1, int resx=-1, int resy=-1, int bits=-1, int windowed=-1, bool resize_window = false, bool reset_device=false, bool restore_assets=true);
-	static WW3DErrorType		Set_Render_Device( const char *dev_name, int resx=-1, int resy=-1, int bits=-1, int windowed=-1, bool resize_window = false  );
-	static void					Set_Fullscreen_Mode(RenderBackendFullscreenMode mode);
-	static WW3DErrorType		Set_Next_Render_Device();
-	static WW3DErrorType		Set_Any_Render_Device();
 
 	static void					Get_Pixel_Center(float &x, float &y);
-	static void					Get_Render_Target_Resolution(int & set_w,int & set_h,int & get_bits,bool & get_windowed);
-	static void					Get_Device_Resolution(int & set_w,int & set_h,int & get_bits,bool & get_windowed);
-	static WW3DErrorType		Set_Device_Resolution(int w=-1,int h=-1,int bits=-1,int windowed=-1, bool resize_window=false );
 
-	static bool					Is_Windowed();
 	static void					Set_Preserve_FPU(bool preserve) { PreserveFPU = preserve; }
 	static bool					Get_Preserve_FPU() { return PreserveFPU; }
-	static WW3DErrorType		Toggle_Windowed ();
-	static void					Set_Window( void *window );
-	static void *				Get_Window();
 
-	static WW3DErrorType		On_Activate_App();
-	static WW3DErrorType		On_Deactivate_App();
 
-	static WW3DErrorType		Registry_Save_Render_Device( const char * sub_key );
-	static WW3DErrorType		Registry_Save_Render_Device( const char * sub_key, int device, int width, int height, int depth, bool windowed, int texture_depth );
-	static WW3DErrorType		Registry_Load_Render_Device( const char * sub_key, bool resize_window = false );
-	static bool					Registry_Load_Render_Device( const char * sub_key, char *device, int device_len, int &width, int &height, int &depth, int &windowed, int& texture_depth);
 
 	// 0 = bilinear, 1 = trilinear, 2 = anisotropic
-	static void					Set_Texture_Filter(int filter);
-	static int					Get_Texture_Filter() { return TextureFilter; }
 
-	static void					Set_Anisotropy_Level(int level);
-	static int					Get_Anisotropy_Level() { return AnisotropyLevel; }
 
 	/*
 	** Rendering functions
@@ -152,18 +121,16 @@ public:
 	** entire scene rendering overhead.
 	*/
 	static WW3DErrorType		Begin_Render(bool clear = false,bool clearz = true,const Vector3 & color = Vector3(0,0,0), float dest_alpha=0.0f, void(*network_callback)() = nullptr);
-	static WW3DErrorType		Render(const LayerListClass & layerlist);
-	static WW3DErrorType		Render(const LayerClass & layer);
 	static WW3DErrorType		Render(SceneClass * scene,CameraClass * cam,bool clear = false,bool clearz = false,const Vector3 & color = Vector3(0,0,0));
 	// Submit one scene to the already-active backend frame. This is used by
 	// off-screen passes and deliberately does not begin/end a frame, present,
 	// or change render attachments.
 	static WW3DErrorType		Render_Scene_Pass(SceneClass * scene,CameraClass * cam,
-		const RenderBackendViewport *viewport_override = nullptr);
+		const Graphics::RHIViewport *viewport_override = nullptr);
 	static WW3DErrorType		Render(RenderObjClass & obj,RenderInfoClass & rinfo);
 	static void					Flush(RenderInfoClass & rinfo);	// NOTE: "normal" usage should *NEVER* require the user to call this function
 
-	static WW3DErrorType		End_Render(bool flip_frame = true);
+	static WW3DErrorType		End_Render();
 
 	static bool					Is_Rendering() { return( IsRendering ); }
 	static unsigned &			Reflection_Pass_Depth()
@@ -185,7 +152,6 @@ public:
 		ReflectionRenderPassScope &operator=(const ReflectionRenderPassScope &) = delete;
 	};
 
-	static void Flip_To_Primary();
 
 	// TheSuperHackers @info Add amount of milliseconds that the simulation has advanced in this render frame.
 	// This can be a fraction of a logic step.
@@ -218,46 +184,18 @@ public:
 	// Returns the render frame count.
 	static unsigned int		Get_Frame_Count() { return FrameCount; }
 
-	static unsigned int		Get_Last_Frame_Poly_Count();
-	static unsigned int		Get_Last_Frame_Vertex_Count();
 
-   /*
-	** Set_Ext_Swap_Interval - how many vertical retraces to wait before flipping frames
-	** Get_Ext_Swap_Interval - what is our current setting for the swap interval?
-	*/
-	static void             Set_Ext_Swap_Interval(long swap);
-   static long             Get_Ext_Swap_Interval();
-
-	/*
-	** Texture Reduction - all currently loaded textures can be de-resed on the fly
-	** by passing in a non-unit value to Set_Texture_Reduction.  Passing in 2 causes
-	** all textures to be half their normal resolution.  Passing in 3 causes them to
-	** be cut in half twice, etc
-	*/
-	static void					Set_Texture_Reduction( int value, int min_dim=1 );
-	static int					Get_Texture_Reduction();
-	static int					Get_Texture_Min_Dimension();
-	static void					Enable_Large_Texture_Extra_Reduction(bool onoff);
-	static bool					Is_Large_Texture_Extra_Reduction_Enabled();
 	static void					_Invalidate_Mesh_Cache();
 	static void					_Invalidate_Textures();
 
-	static void					Set_Thumbnail_Enabled(bool b) { ThumbnailEnabled=b; }
-	static bool					Get_Thumbnail_Enabled() { return ThumbnailEnabled; }
 
 	static void					Enable_Sorting(bool onoff);
 	static bool					Is_Sorting_Enabled()					{ return IsSortingEnabled; }
 
-	static void					Set_Screen_UV_Bias( bool onoff )			{ IsScreenUVBiased = onoff; }
-	static bool					Is_Screen_UV_Biased()				{ return IsScreenUVBiased; }
-
-	static void					Set_Collision_Box_Display_Mask(int mask);
-	static int					Get_Collision_Box_Display_Mask();
 
 	static void					Set_Default_Native_Screen_Size(float dnss)	{ DefaultNativeScreenSize = dnss; }
 	static float				Get_Default_Native_Screen_Size()			{ return DefaultNativeScreenSize; }
 
-	static void					Normalize_Coordinates(int x, int y, float &fx, float &fy); // convert pixel coordinates to 0..1 screen coordinates
 
 	static VertexMaterialClass *	Peek_Default_Debug_Material();
 	static ShaderClass		Peek_Default_Debug_Shader();
@@ -270,11 +208,7 @@ public:
 	static void					Expose_Prelit (bool onoff)							{ ExposePrelit = onoff; }
 	static bool					Expose_Prelit ()										{ return (ExposePrelit); }
 
-	static void					Set_Texture_Bitdepth(int bitdepth);
-	static int					Get_Texture_Bitdepth();
 
-	static void					Set_MSAA_Mode(MultiSampleModeEnum mode);
-	static MultiSampleModeEnum Get_MSAA_Mode();
 
 	static void					Set_Mesh_Draw_Mode (MeshDrawModeEnum mode)	{ MeshDrawMode = mode; }
 	static MeshDrawModeEnum Get_Mesh_Draw_Mode ()								{ return (MeshDrawMode); }
@@ -293,31 +227,9 @@ public:
 	static int					Get_Last_Frame_Memory_Allocation_Count() { return LastFrameMemoryAllocations; }
 	static int					Get_Last_Frame_Memory_Free_Count() { return LastFrameMemoryFrees; }
 
-	/*
-	** Decal control
-	** These global settings can control whether decals are rendered at all and
-	** at what distance to stop rendering/creating decals
-	*/
-	static void					Enable_Decals(bool onoff)					{ AreDecalsEnabled = onoff; }
-	static bool					Are_Decals_Enabled()					{ return AreDecalsEnabled; }
-	static void					Set_Decal_Rejection_Distance(float d)	{ DecalRejectionDistance = d; }
-	static float				Get_Decal_Rejection_Distance()		{ return DecalRejectionDistance; }
-
-	/*
-	** Static sort lists. The ability to temporarily set a different static
-	** sort list from the default one and a min/max sort list range is for
-	** specialised uses (such as pipctuire-in-picture windows which need to
-	** sort at a certain sort level). After this override is called, the
-	** default sort list must be restored.
-	*/
-	static void					Enable_Static_Sort_Lists(bool onoff)	{ AreStaticSortListsEnabled = onoff; }
-	static bool					Are_Static_Sort_Lists_Enabled()		{ return AreStaticSortListsEnabled; }
+	// Preserve authored sort levels while importing materials.
 	static void					Enable_Munge_Sort_On_Load(bool onoff)	{ MungeSortOnLoad=onoff; }
 	static bool					Is_Munge_Sort_On_Load_Enabled()		{ return MungeSortOnLoad; }
-	static void					Add_To_Static_Sort_List(RenderObjClass *robj, unsigned int sort_level);
-	static void					Render_And_Clear_Static_Sort_Lists(RenderInfoClass & rinfo);
-	static void					Override_Current_Static_Sort_Lists(StaticSortListClass * sort_list);
-	static void					Reset_Current_Static_Sort_Lists_To_Default();
 
 	/*
 	** Overbright modify on load - when this mode is set meshes will be
@@ -337,7 +249,6 @@ public:
    static long             UserStat2;
 
 	// Gamma control
-	static void					Set_Gamma(float gamma,float bright,float contrast,bool calibrate=true);
 
 private:
 
@@ -348,7 +259,6 @@ private:
 		DEFAULT_BIT_DEPTH =					16
 	};
 
-	static void					Read_Gerd_Render_Device_Description(RenderDeviceDescClass &desc);
 	static void					Update_Pixel_Center();
 	static void					Allocate_Debug_Resources();
 	static void					Release_Debug_Resources();
@@ -374,20 +284,13 @@ private:
 	static float						PixelCenterX;
 	static float						PixelCenterY;
 
-	static IRenderBackend *		RenderBackend;
 
 	static bool							IsInitted;
-	static bool					WindowedState;
 	static bool					PreserveFPU;
 	static bool							IsRendering;
 	static bool							IsSortingEnabled;
-	static bool							IsScreenUVBiased;
 	static bool							IsBackfaceDebugEnabled;
 
-	static bool							AreDecalsEnabled;
-	static float						DecalRejectionDistance;
-
-	static bool							AreStaticSortListsEnabled;
 	static bool							MungeSortOnLoad;
 
 	static bool							OverbrightModifyOnLoad;
@@ -402,11 +305,8 @@ private:
 	static PrelitModeEnum			PrelitMode;
 	static bool							ExposePrelit;
 
-	static int							TextureFilter;
-	static int							AnisotropyLevel;
 
 	static bool							SnapshotActivated;
-	static bool							ThumbnailEnabled;
 
 	static MeshDrawModeEnum			MeshDrawMode;
 	static NPatchesGapFillingModeEnum NPatchesGapFillingMode;
@@ -428,8 +328,6 @@ private:
 	// after opaque meshes and before normally sorted meshes. The 'current'
 	// pointer is so the application can temporarily set a different set of
 	// static sort lists to be used temporarily. This is for specialised uses.
-	static StaticSortListClass * DefaultStaticSortLists;
-	static StaticSortListClass * CurrentStaticSortLists;
 
 	// Memory allocation statistics
 	static int							LastFrameMemoryAllocations;

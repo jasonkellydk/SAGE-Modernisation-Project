@@ -58,8 +58,6 @@ import Graphics.Scene.Surfaces.Renderer;
 #include "WW3D2/RendObj.h"
 #include "WW3D2/W3DFile.h"
 #include "WW3D2/Texture.h"
-#include "WW3D2/VertexBuffer.h"
-#include "WW3D2/IndexBuffer.h"
 #include "WW3D2/VertMaterial.h"
 #include "Lib/BaseType.h"
 #include "Common/GameType.h"
@@ -166,7 +164,6 @@ class W3DTreeBuffer : public Snapshot
 			// just use default destructor. ~TerrainTextureClass();
 	public:
 		int update(W3DTreeBuffer *buffer); ///< Sets the pixels, and returns the actual height of the texture.
-		void setLOD(Int LOD) const;
 	};
 
 public:
@@ -193,13 +190,12 @@ public:
 		Real angle
 	);
 
-	void setTextureLOD(Int lod);	///<used to adjust maximum mip level sent to hardware.
 	/// Empties the tree buffer.
 	void clearAllTrees();
 	/// Empties the tree buffer.
 	void setBounds(const Region2D &bounds) {m_bounds = bounds;}
 	/// Draws the trees.  Uses camera for culling.
-	void drawTrees(CameraClass * camera, RefRenderObjListIterator *pDynamicLightsIterator);
+	void drawTrees(CameraClass * camera, Graphics::SceneObjectList<RenderObjClass>::Cursor *pDynamicLightsIterator);
     void prepareFrame();
     Bool collectShadowCasters();
 	/// Called when the view changes, and sort key needs to be recalculated.
@@ -271,7 +267,7 @@ protected:
 protected:
 	/// Updates the sway offsets.
 	void updateSway(const BreezeInfo& info);
-	void loadTreesInVertexAndIndexBuffers(RefRenderObjListIterator *pDynamicLightsIterator); ///< Fills the index and vertex buffers for drawing.
+	void loadTreesInVertexAndIndexBuffers(Graphics::SceneObjectList<RenderObjClass>::Cursor *pDynamicLightsIterator); ///< Fills the index and vertex buffers for drawing.
 	void updateVertexBuffer(); ///< Fills the index and vertex buffers for drawing.
 	void cull(const CameraClass * camera);						 ///< Culls the trees.
 	UnsignedInt  doLighting(const Vector3 *normal,

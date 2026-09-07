@@ -29,6 +29,8 @@
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 #include <stdlib.h>
+#include <array>
+#include <cmath>
 
 
 #include "Common/Thing.h"
@@ -39,10 +41,134 @@
 #include "GameLogic/GameLogic.h"
 #include "W3DDevice/GameClient/W3DDisplay.h"
 #include "W3DDevice/GameClient/Module/W3DTracerDraw.h"
-#include "WW3D2/Line3D.h"
 #include "W3DDevice/GameClient/W3DScene.h"
+#include "WW3D2/Camera.h"
+#include "WW3D2/RInfo.h"
+#include "WW3D2/RendObj.h"
+#include "WW3D2/WW3D.h"
+
+import Graphics.Scene.Lines.Tracer;
+import Graphics.Scene.OrderedDraws;
 
 
+class W3DTracerRenderObject final : public RenderObjClass
+{
+public:
+	W3DTracerRenderObject(float length, float width, const RGBColor &color, float opacity)
+	{
+		m_description = {length, width, {color.red, color.green, color.blue, 1.0f}};
+		m_opacity = opacity;
+	}
+
+	W3DTracerRenderObject(const W3DTracerRenderObject &source)
+		: RenderObjClass(source), m_description(source.m_description), m_opacity(source.m_opacity)
+	{
+	}
+
+	~W3DTracerRenderObject() override
+	{
+		m_graphics.Release(Graphics::Get_Prop_Renderer());
+	}
+
+	RenderObjClass *Clone() const override
+	{
+		return NEW W3DTracerRenderObject(*this);
+	}
+
+	int Class_ID() const override
+	{
+		return CLASSID_UNKNOWN;
+	}
+
+	int Get_Num_Polys() const override
+	{
+		return static_cast<int>(Graphics::TracerIndexCount / 3);
+	}
+
+	void Render(RenderInfoClass &rinfo) override
+	{
+		if (!Is_Not_Hidden_At_All())
+			return;
+
+		// Alpha tracers retain the authored layer used by the old static-sort
+		// path. The generic extractor preserves RenderObj hooks and performs the
+		// immediate graphics submission while the scene queue is draining.
+		if (m_opacity < 1.0f && Graphics::Get_Scene_Draw_Queue().Is_Enabled()) {
+			if (Graphics::Get_Scene_Draw_Queue().Enqueue<Extract_Ordered_Draw>(
+				Graphics::TracerAuthoredLayer, *this))
+				return;
+		}
+
+		Submit(rinfo);
+	}
+
+	bool Submit(RenderInfoClass &rinfo)
+	{
+		if (!m_graphics.Set_Description(Graphics::Get_Prop_Renderer(), m_description))
+			return false;
+		Matrix3D view;
+		Matrix4x4 projection;
+		rinfo.Camera.Get_View_Matrix(&view);
+		rinfo.Camera.Get_Backend_Projection_Matrix(&projection);
+		const Matrix4x4 view_matrix(view);
+		const Matrix4x4 view_projection = projection * view_matrix;
+		const Matrix4x4 world_matrix(Get_Transform());
+
+		Graphics::TracerDrawData data;
+		Copy_Matrix(data.view_projection, view_projection);
+		Copy_Matrix(data.view, view_matrix);
+		Copy_Matrix(data.world, world_matrix);
+		const Vector3 camera = rinfo.Camera.Get_Position();
+		data.camera_position = {camera.X, camera.Y, camera.Z, 1.0f};
+		data.camera_depth = {view_matrix[2][0], view_matrix[2][1], view_matrix[2][2], view_matrix[2][3]};
+		data.opacity = m_opacity;
+		data.front_counter_clockwise = !WW3D::Is_Reflection_Render_Pass();
+		return m_graphics.Submit(Graphics::Get_Prop_Renderer(), Graphics::Get_Prop_Submission(), data);
+	}
+
+	void Get_Obj_Space_Bounding_Sphere(SphereClass &sphere) const override
+	{
+		const float half_length = m_description.length * 0.5f;
+		const float half_width = m_description.width * 0.5f;
+		sphere.Center.Set(half_length, 0.0f, 0.0f);
+		sphere.Radius = std::sqrt(half_length * half_length + 2.0f * half_width * half_width);
+	}
+
+	void Get_Obj_Space_Bounding_Box(AABoxClass &box) const override
+	{
+		box.Center.Set(m_description.length * 0.5f, 0.0f, 0.0f);
+		box.Extent.Set(m_description.length * 0.5f, m_description.width * 0.5f,
+			m_description.width * 0.5f);
+	}
+
+	bool Set_Description(float length, float width, const RGBColor &color)
+	{
+		const Graphics::TracerDescription description{
+			length, width, {color.red, color.green, color.blue, 1.0f}};
+		if (!m_graphics.Set_Description(Graphics::Get_Prop_Renderer(), description))
+			return false;
+		m_description = description;
+		Invalidate_Cached_Bounding_Volumes();
+		return true;
+	}
+
+	void Set_Opacity(float opacity)
+	{
+		m_opacity = opacity;
+	}
+
+private:
+	static void Copy_Matrix(std::array<float, 16> &destination, const Matrix4x4 &source)
+	{
+		for (unsigned row = 0; row < 4; ++row)
+			for (unsigned column = 0; column < 4; ++column)
+				destination[row * 4 + column] = source[row][column];
+	}
+
+	Graphics::TracerRenderer m_graphics;
+	Graphics::TracerDescription m_description{};
+	float m_opacity = 1.0f;
+};
 
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -71,16 +197,7 @@ void W3DTracerDraw::createTracer(const Matrix3D& transform)
 	if (m_theTracer != nullptr)
 		return;
 
-	const Vector3 start(0.0f, 0.0f, 0.0f);
-	const Vector3 stop(m_length, 0.0f, 0.0f);
-	m_theTracer = NEW Line3DClass(
-		start,
-		stop,
-		m_width,
-		m_color.red,
-		m_color.green,
-		m_color.blue,
-		m_opacity);
+	m_theTracer = NEW W3DTracerRenderObject(m_length, m_width, m_color, m_opacity);
 	W3DDisplay::m_3DScene->Add_Render_Object(m_theTracer);
 	m_theTracer->Set_Transform(transform);
 }
@@ -98,12 +215,8 @@ void W3DTracerDraw::setTracerParms(Real speed, Real length, Real width, const RG
 	m_opacity = initialOpacity;
 	if (m_theTracer)
 	{
-		Vector3 start( 0.0f, 0.0f, 0.0f );
-		Vector3 stop( m_length, 0.0f, 0.0f );
-		m_theTracer->Reset(start, stop, m_width);
-		m_theTracer->Re_Color(m_color.red, m_color.green, m_color.blue);
+		m_theTracer->Set_Description(m_length, m_width, m_color);
 		m_theTracer->Set_Opacity( m_opacity );
-		// these calls nuke the internal transform, so re-set it here
 		m_theTracer->Set_Transform( *getDrawable()->getTransformMatrix() );
 	}
 }

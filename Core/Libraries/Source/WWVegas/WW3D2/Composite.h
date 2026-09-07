@@ -71,9 +71,6 @@ public:
 	virtual bool					Intersect_AABox(AABoxIntersectionTestClass & boxtest) override;
 	virtual bool					Intersect_OBBox(OBBoxIntersectionTestClass & boxtest) override;
 
-	virtual void					Create_Decal(DecalGeneratorClass * generator) override;
-	virtual void					Delete_Decal(uint32 decal_id) override;
-
 	virtual void					Get_Obj_Space_Bounding_Sphere(SphereClass	& sphere) const override { sphere = ObjSphere; }
    virtual void					Get_Obj_Space_Bounding_Box(AABoxClass & box) const override { box = ObjBox; }
 	virtual void					Update_Obj_Space_Bounding_Volumes() override;

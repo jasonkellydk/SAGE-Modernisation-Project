@@ -1,3 +1,4 @@
+import Graphics.Resources.Textures.Quality;
 /*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -39,19 +40,78 @@
  *   FileListTextureClass::Load_Frame_Surface -- Load source texture                           *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
+import Assets.Images.PixelEncoding;
+import Graphics.RHI;
+import Graphics.Backends.DX11.FrameRuntime;
+#include <cstddef>
+#include <vector>
+#include <string>
 #include "Texture.h"
 #include "WW3D.h"
-#include "Backend/RenderBackend.h"
-#include "WWLib/TARGA.h"
 #include <WWLib/nstrdup.h>
 #include "W3DFile.h"
 #include "AssetMgr.h"
-#include "TextureLoader.h"
-#include "MissingTexture.h"
+import Graphics.Resources.Textures.Load;
 #include "WWLib/ffactory.h"
 #include "MeshMatDesc.h"
-#include "TextureThumbnail.h"
 #include "WWDebug/wwprofile.h"
+import Graphics.Resources.Textures.Storage;
+
+import Assets.Adapters.W3D.Materials;
+
+static Graphics::TextureImageReader Texture_Archive_Reader(std::string path)
+{
+    return [path=std::move(path)](std::size_t prefix, std::vector<std::byte>& bytes,
+        std::size_t& source_size) {
+        if (!_TheFileFactory || path.empty()) return false;
+        file_auto_ptr file(_TheFileFactory,path.c_str());
+        if (!file.get() || !file->Is_Available() || !file->Open()) return false;
+        const int size = file->Size();
+        if (size <= 0 || prefix > static_cast<std::size_t>(size)) return false;
+        std::vector<std::byte> source(prefix ? prefix : static_cast<std::size_t>(size));
+        if (file->Read(source.data(),static_cast<int>(source.size())) != static_cast<int>(source.size())) return false;
+        source_size = static_cast<std::size_t>(size);
+        bytes = std::move(source);
+        return true;
+    };
+}
+
+static std::shared_ptr<const Graphics::ResourceLoadSource> Make_Texture_Load_Source(TextureBaseClass& texture)
+{
+    return std::make_shared<const Graphics::ResourceLoadSource>([&texture]() -> std::unique_ptr<Graphics::ResourceLoadJob> {
+        if (texture.Is_Initialized()) return {};
+        Graphics::TextureLoadRequest request;
+        request.device = Graphics::Shared_Frame_Device();
+        if (const auto* image = texture.As_TextureClass()) request.encoding = image->Get_Texture_Format();
+        else if (const auto* cube = texture.As_CubeTextureClass()) {
+            request.dimension = Graphics::RHITextureDimension::Cube;
+            request.encoding = cube->Get_Texture_Format();
+        } else if (const auto* volume = texture.As_VolumeTextureClass()) {
+            request.dimension = Graphics::RHITextureDimension::Volume;
+            request.encoding = volume->Get_Texture_Format();
+        } else return {};
+        request.mips = {static_cast<unsigned>(texture.MipLevelCount),
+            static_cast<unsigned>(Graphics::Get_Texture_Quality_Settings().mip_reduction),
+            static_cast<unsigned>(Graphics::Get_Texture_Quality_Settings().minimum_dimension),texture.Is_Reducible()};
+        request.prefer_16_bits = Graphics::Get_Texture_Quality_Settings().prefer_16_bits;
+        request.allow_compression = texture.Is_Compression_Allowed();
+        const auto& shift = texture.Get_HSV_Shift();
+        request.hsv_shift = {shift.X,shift.Y,shift.Z};
+        std::string path(texture.Get_Full_Path().str());
+        request.read_tga = Texture_Archive_Reader(path);
+        if (path.size() >= 4) {
+            path.replace(path.size()-3,3,"dds");
+            request.read_dds = Texture_Archive_Reader(std::move(path));
+        }
+        texture.Add_Ref();
+        auto owner = std::shared_ptr<TextureBaseClass>(&texture,[](TextureBaseClass* value) { value->Release_Ref(); });
+        return std::make_unique<Graphics::TextureLoadJob>(std::move(request),
+            [owner=std::move(owner)](Graphics::TextureResource* resource) noexcept {
+                if (resource) owner->Apply_New_Surface(resource,true);
+                else owner->Set_Render_Backend_Texture(nullptr);
+            });
+    });
+}
 
 const unsigned DEFAULT_INACTIVATION_TIME=20000;
 
@@ -65,35 +125,35 @@ static unsigned unused_texture_id;
 static unsigned TexturesAppliedPerFrame;
 const unsigned MAX_TEXTURES_APPLIED_PER_FRAME=2;
 
-static unsigned Compute_Surface_Size_Bytes(const RenderBackendTextureDescription &desc)
+static unsigned Compute_Texture_Level_Size_Bytes(const Graphics::TextureResource& texture,unsigned level)
 {
-	const unsigned width = desc.width;
-	const unsigned height = desc.height;
+    const auto& description=texture.Description();
+    const unsigned width=std::max(1u,description.width>>level);
+    const unsigned height=std::max(1u,description.height>>level);
 
-	switch (desc.format)
+	switch (texture.Encoding())
 	{
-	case WW3D_FORMAT_DXT1:
+	case Assets::PixelEncoding::BC1:
 	{
 		const unsigned blocks_x = ((width + 3U) / 4U) ? ((width + 3U) / 4U) : 1U;
 		const unsigned blocks_y = ((height + 3U) / 4U) ? ((height + 3U) / 4U) : 1U;
 		return blocks_x * blocks_y * 8U;
 	}
-	case WW3D_FORMAT_DXT2:
-	case WW3D_FORMAT_DXT3:
-	case WW3D_FORMAT_DXT4:
-	case WW3D_FORMAT_DXT5:
+	case Assets::PixelEncoding::BC2Premultiplied:
+	case Assets::PixelEncoding::BC2:
+	case Assets::PixelEncoding::BC3Premultiplied:
+	case Assets::PixelEncoding::BC3:
 	{
 		const unsigned blocks_x = ((width + 3U) / 4U) ? ((width + 3U) / 4U) : 1U;
 		const unsigned blocks_y = ((height + 3U) / 4U) ? ((height + 3U) / 4U) : 1U;
 		return blocks_x * blocks_y * 16U;
 	}
-	case WW3D_FORMAT_UNKNOWN:
-		if (desc.depth_format == WW3D_ZFORMAT_D16 || desc.depth_format == WW3D_ZFORMAT_D15S1 ||
-			desc.depth_format == WW3D_ZFORMAT_D16_LOCKABLE)
+	case Assets::PixelEncoding::Unknown:
+		if (description.format == Graphics::RHITextureFormat::D16_UNorm)
 		{
 			return width * height * 2U;
 		}
-		if (desc.depth_format != WW3D_ZFORMAT_UNKNOWN)
+		if (description.format != Graphics::RHITextureFormat::Unknown)
 		{
 			return width * height * 4U;
 		}
@@ -102,7 +162,7 @@ static unsigned Compute_Surface_Size_Bytes(const RenderBackendTextureDescription
 		break;
 	}
 
-	return width * height * Get_Bytes_Per_Pixel(desc.format);
+	return width * height * Assets::Pixel_Size(texture.Encoding());
 }
 
 
@@ -138,8 +198,7 @@ TextureBaseClass::TextureBaseClass
 	Height(height),
 	Pool(pool),
 	Dirty(false),
-	TextureLoadTask(nullptr),
-	ThumbnailLoadTask(nullptr),
+	LoadSource(Make_Texture_Load_Source(*this)),
 	HSVShift(0.0f,0.0f,0.0f)
 {
 }
@@ -151,51 +210,65 @@ TextureBaseClass::TextureBaseClass
 */
 TextureBaseClass::~TextureBaseClass()
 {
-	delete TextureLoadTask;
-	TextureLoadTask=nullptr;
-	delete ThumbnailLoadTask;
-	ThumbnailLoadTask=nullptr;
+	RecreationRegistration.Reset();
+	LoadSource.reset();
 
 	if (BackendTexture != 0)
 	{
-		WW3D::Get_Render_Backend()->Release_Texture_Handle(BackendTexture);
+		Graphics::Release_Texture_Resource(BackendTexture);
 		BackendTexture = 0;
+        GraphicsTexture = {};
 	}
 
-	WW3D::Get_Render_Backend()->Unregister_Texture(this);
+
 }
 
-static RenderBackendTextureHandle Create_Texture(unsigned width, unsigned height, WW3DFormat format,
+void TextureBaseClass::Register_For_Recreation()
+{
+    RecreationRegistration=Graphics::Get_Resource_Recreation_Registry().Register(
+        [this] { Set_Render_Backend_Texture(nullptr); },
+        [this] { if (!Peek_Render_Backend_Texture()) Ensure_Render_Backend_Texture(); });
+}
+
+static Graphics::TextureResource* Create_Texture(unsigned width, unsigned height, Assets::PixelEncoding format,
 	MipCountType mip_levels, TextureBaseClass::PoolType pool, bool render_target)
 {
-	return WW3D::Get_Render_Backend()->Create_Texture_Handle_Pooled(
-		width, height, format, mip_levels, static_cast<RenderBackendTexturePool>(pool), render_target);
+	Graphics::RHITexture description{width, height, static_cast<unsigned>(mip_levels)};
+    if (render_target) description.usage |= static_cast<unsigned>(Graphics::RHITextureUsage::RenderTarget);
+    return Graphics::TextureResource::Create(Graphics::Shared_Frame_Device(), description, format,
+        render_target ? Graphics::RHITextureFormat::D24_UNorm_S8 : Graphics::RHITextureFormat::Unknown);
 }
 
-static RenderBackendTextureHandle Create_Texture(RenderBackendSurface *surface, MipCountType mip_levels)
+static Graphics::TextureResource* Create_Texture(Graphics::TextureEdit *surface, MipCountType mip_levels)
 {
-	return WW3D::Get_Render_Backend()->Create_Texture_From_Surface(surface, mip_levels);
+	return surface ? surface->Create_Texture(Graphics::Shared_Frame_Device(), mip_levels) : nullptr;
 }
 
-static RenderBackendTextureHandle Create_ZTexture(unsigned width, unsigned height, WW3DZFormat format,
+static Graphics::TextureResource* Create_ZTexture(unsigned width, unsigned height, Graphics::RHITextureFormat format,
 	MipCountType mip_levels, TextureBaseClass::PoolType pool)
 {
-	return WW3D::Get_Render_Backend()->Create_ZTexture_Handle_Pooled(
-		width, height, format, mip_levels, static_cast<RenderBackendTexturePool>(pool));
+	return Graphics::TextureResource::Create(Graphics::Shared_Frame_Device(),
+        {width, height, 1, format, static_cast<unsigned>(Graphics::RHITextureUsage::DepthStencil)}, Assets::PixelEncoding::Unknown);
 }
 
-static RenderBackendTextureHandle Create_Cube_Texture(unsigned width, unsigned height, WW3DFormat format,
+static Graphics::TextureResource* Create_Cube_Texture(unsigned width, unsigned height, Assets::PixelEncoding format,
 	MipCountType mip_levels, TextureBaseClass::PoolType pool, bool render_target)
 {
-	return WW3D::Get_Render_Backend()->Create_Cube_Texture_Handle(
-		width, height, format, mip_levels, static_cast<RenderBackendTexturePool>(pool), render_target);
+	Graphics::RHITexture description{width, height, static_cast<unsigned>(mip_levels)};
+    description.dimension = Graphics::RHITextureDimension::Cube;
+    description.array_size = 6;
+    if (render_target) description.usage |= static_cast<unsigned>(Graphics::RHITextureUsage::RenderTarget);
+    return Graphics::TextureResource::Create(Graphics::Shared_Frame_Device(), description, format,
+        render_target ? Graphics::RHITextureFormat::D24_UNorm_S8 : Graphics::RHITextureFormat::Unknown);
 }
 
-static RenderBackendTextureHandle Create_Volume_Texture(unsigned width, unsigned height, unsigned depth,
-	WW3DFormat format, MipCountType mip_levels, TextureBaseClass::PoolType pool)
+static Graphics::TextureResource* Create_Volume_Texture(unsigned width, unsigned height, unsigned depth,
+	Assets::PixelEncoding format, MipCountType mip_levels, TextureBaseClass::PoolType pool)
 {
-	return WW3D::Get_Render_Backend()->Create_Volume_Texture_Handle(
-		width, height, depth, format, mip_levels, static_cast<RenderBackendTexturePool>(pool));
+	Graphics::RHITexture description{width, height, static_cast<unsigned>(mip_levels)};
+    description.dimension = Graphics::RHITextureDimension::Volume;
+    description.depth = depth;
+    return Graphics::TextureResource::Create(Graphics::Shared_Frame_Device(), description, format);
 }
 
 
@@ -257,10 +330,7 @@ void TextureBaseClass::Invalidate_Old_Unused_Textures(unsigned invalidation_time
 */
 void TextureBaseClass::Invalidate()
 {
-	if (TextureLoadTask) {
-		return;
-	}
-	if (ThumbnailLoadTask) {
+	if (Graphics::Get_Resource_Load_Queue().Pending(LoadSource)) {
 		return;
 	}
 
@@ -271,59 +341,38 @@ void TextureBaseClass::Invalidate()
 
 	if (BackendTexture != 0)
 	{
-		WW3D::Get_Render_Backend()->Release_Texture_Handle(BackendTexture);
+		Graphics::Release_Texture_Resource(BackendTexture);
 		BackendTexture = 0;
+        GraphicsTexture = {};
 	}
 
 	Initialized=false;
 
 	LastAccessed=WW3D::Get_Sync_Time();
-/*	was battlefield version// If the texture has already been initialised we should exit now
-	if (Initialized) return;
 
-	WWPROFILE(("TextureClass::Init()"));
-
-	// If the texture has recently been inactivated, increase the inactivation time (this texture obviously
-	// should not have been inactivated yet).
-
-	if (InactivationTime && LastInactivationSyncTime) {
-		if ((WW3D::Get_Sync_Time()-LastInactivationSyncTime)<InactivationTime) {
-			ExtendedInactivationTime=3*InactivationTime;
-		}
-		LastInactivationSyncTime=0;
-	}
-
-	if (ThumbnailLoadTask)
-	{
-		return;
-	}
-
-	// Don't invalidate procedural textures
-	if (IsProcedural)
-	{
-		return;
-	}
-
-	Initialized=false;
-
-	LastAccessed=WW3D::Get_Sync_Time();*/
 }
 
 //**********************************************************************************************
 //! Returns the opaque texture resource owned by the backend
 /*!
 */
-RenderBackendTextureHandle TextureBaseClass::Peek_Render_Backend_Texture() const
+Graphics::TextureResource* TextureBaseClass::Peek_Render_Backend_Texture() const
 {
 	LastAccessed=WW3D::Get_Sync_Time();
 	return BackendTexture;
+}
+
+Graphics::RHITextureHandle TextureBaseClass::Peek_Graphics_Texture() const
+{
+    LastAccessed = WW3D::Get_Sync_Time();
+    return GraphicsTexture;
 }
 
 //**********************************************************************************************
 //! Replace the backend texture resource, taking ownership of the handle.
 /*!
 */
-void TextureBaseClass::Set_Render_Backend_Texture(RenderBackendTextureHandle texture)
+void TextureBaseClass::Set_Render_Backend_Texture(Graphics::TextureResource* texture)
 {
 	LastAccessed=WW3D::Get_Sync_Time();
 	if (BackendTexture == texture)
@@ -339,9 +388,10 @@ void TextureBaseClass::Set_Render_Backend_Texture(RenderBackendTextureHandle tex
 	}
 	if (BackendTexture != 0)
 	{
-		WW3D::Get_Render_Backend()->Release_Texture_Handle(BackendTexture);
+		Graphics::Release_Texture_Resource(BackendTexture);
 	}
 	BackendTexture = texture;
+    GraphicsTexture=texture ? texture->Handle() : Graphics::RHITextureHandle{};
 	// A zero handle means that the native resource was released.  Keep the
 	// engine-side initialization bit in sync with the opaque backend handle so
 	// Ensure_Render_Backend_Texture() can recreate file-backed resources after a
@@ -353,15 +403,15 @@ void TextureBaseClass::Set_Render_Backend_Texture(RenderBackendTextureHandle tex
 }
 
 //**********************************************************************************************
-//! Ensure the resource used by a custom render path is available.
-/*
- * Most texture users call Apply(), which initializes a file-backed texture before binding it.
- * Terrain and shader code also has a legacy immediate-resource path, though, and that path can
- * bind a texture after the texture manager has evicted it. Keep the recovery decision here so
- * callers never need to know which renderer owns the resource.
- */
+// Resource users request residency explicitly before submission.
 bool TextureBaseClass::Ensure_Render_Backend_Texture()
 {
+	LastAccessed = WW3D::Get_Sync_Time();
+	// A resident resource does not complete a pending full-image load.
+	if (!IsProcedural && !Initialized && !Graphics::Get_Resource_Load_Queue().Pending(LoadSource))
+	{
+		Init();
+	}
 	if (BackendTexture != 0)
 	{
 		return true;
@@ -369,7 +419,7 @@ bool TextureBaseClass::Ensure_Render_Backend_Texture()
 
 	// A load task owns initialization while it is in flight. Starting another load here would
 	// race the loader's state machine and can replace a valid pending resource.
-	if (TextureLoadTask != nullptr || ThumbnailLoadTask != nullptr)
+	if (Graphics::Get_Resource_Load_Queue().Pending(LoadSource))
 	{
 		return false;
 	}
@@ -381,11 +431,6 @@ bool TextureBaseClass::Ensure_Render_Backend_Texture()
 			Initialized = true;
 		}
 		return BackendTexture != 0;
-	}
-
-	if (!Initialized)
-	{
-		Init();
 	}
 
 	return BackendTexture != 0;
@@ -401,13 +446,7 @@ bool TextureBaseClass::Recreate_Procedural_Texture()
 //! Load locked surface
 /*!
 */
-void TextureBaseClass::Load_Locked_Surface()
-{
-	WWPROFILE(("TextureClass::Load_Locked_Surface()"));
-	Set_Render_Backend_Texture(0);
-	TextureLoader::Request_Thumbnail(this);
-	Initialized=false;
-}
+
 
 
 //**********************************************************************************************
@@ -416,7 +455,7 @@ void TextureBaseClass::Load_Locked_Surface()
 */
 bool TextureBaseClass::Is_Missing_Texture()
 {
-	return WW3D::Get_Render_Backend()->Is_Missing_Texture_Handle(BackendTexture);
+	return BackendTexture != nullptr && BackendTexture->Is_Placeholder();
 }
 
 
@@ -433,72 +472,9 @@ void TextureBaseClass::Set_Texture_Name(const char * name)
 
 
 //**********************************************************************************************
-//! Get priority
-/*!
-*/
-unsigned int TextureBaseClass::Get_Priority()
-{
-	if (BackendTexture == 0)
-	{
-		WWASSERT_PRINT(0, "Get_Priority: texture resource is null!");
-		return 0;
-	}
-
-	return WW3D::Get_Render_Backend()->Get_Texture_Priority(BackendTexture);
-}
-
-
-//**********************************************************************************************
-//! Set priority
-/*!
-*/
-unsigned int TextureBaseClass::Set_Priority(unsigned int priority)
-{
-	if (BackendTexture == 0)
-	{
-		WWASSERT_PRINT(0, "Set_Priority: texture resource is null!");
-		return 0;
-	}
-
-	return WW3D::Get_Render_Backend()->Set_Texture_Priority(BackendTexture, priority);
-}
-
-
-//**********************************************************************************************
 //! Get reduction mip levels
 /*!
 */
-unsigned TextureBaseClass::Get_Reduction() const
-{
-	// don't reduce if the texture is too small already or
-	// has no mip map levels
-	if (MipLevelCount==MIP_LEVELS_1) return 0;
-	if (Width <= 32 || Height <= 32) return 0;
-
-	int reduction=WW3D::Get_Texture_Reduction();
-
-	// 'large texture extra reduction' causes textures above 256x256 to be reduced one more step.
-	if (WW3D::Is_Large_Texture_Extra_Reduction_Enabled() && (Width > 256 || Height > 256)) {
-		reduction++;
-	}
-	if (MipLevelCount && reduction>MipLevelCount) {
-		reduction=MipLevelCount;
-	}
-	return reduction;
-}
-
-
-
-//**********************************************************************************************
-//! Apply null texture state
-/*!
-*/
-void TextureBaseClass::Apply_Null(unsigned int stage)
-{
-	// This function sets the render states for a "null" texture
-	WW3D::Get_Render_Backend()->Set_Texture_Resource(stage, nullptr);
-}
-
 // ----------------------------------------------------------------------------
 // Setting HSV_Shift value is always relative to the original texture. This function invalidates the
 // texture surface and causes the texture to be reloaded. For thumbnailable textures, the hue shifting
@@ -693,14 +669,14 @@ TextureClass::TextureClass
 (
 	unsigned width,
 	unsigned height,
-	WW3DFormat format,
+	Assets::PixelEncoding format,
 	MipCountType mip_level_count,
 	PoolType pool,
 	bool rendertarget,
 	bool allow_reduction
 )
 :	TextureBaseClass(width, height, mip_level_count, pool, rendertarget,allow_reduction),
-	Filter(mip_level_count),
+	Sampling(Graphics::Make_Texture_Sampling(mip_level_count != MIP_LEVELS_1)),
 	TextureFormat(format)
 {
 	Initialized=false;
@@ -710,11 +686,11 @@ TextureClass::TextureClass
 
 	switch (format)
 	{
-	case WW3D_FORMAT_DXT1:
-	case WW3D_FORMAT_DXT2:
-	case WW3D_FORMAT_DXT3:
-	case WW3D_FORMAT_DXT4:
-	case WW3D_FORMAT_DXT5:
+	case Assets::PixelEncoding::BC1:
+	case Assets::PixelEncoding::BC2Premultiplied:
+	case Assets::PixelEncoding::BC2:
+	case Assets::PixelEncoding::BC3Premultiplied:
+	case Assets::PixelEncoding::BC3:
 		IsCompressionAllowed=true;
 		break;
 	default : break;
@@ -732,8 +708,7 @@ TextureClass::TextureClass
 	// reset, including procedural textures whose legacy pool was managed.
 	if (IsProcedural)
 	{
-		WW3D::Get_Render_Backend()->Register_Texture(this, RenderBackendTextureKind::Texture2D,
-			width, height, 1, format, WW3D_ZFORMAT_UNKNOWN, mip_level_count, rendertarget);
+		Register_For_Recreation();
 	}
 	LastAccessed=WW3D::Get_Sync_Time();
 }
@@ -746,12 +721,12 @@ TextureClass::TextureClass
 	const char *name,
 	const char *full_path,
 	MipCountType mip_level_count,
-	WW3DFormat texture_format,
+	Assets::PixelEncoding texture_format,
 	bool allow_compression,
 	bool allow_reduction
 )
 :	TextureBaseClass(0, 0, mip_level_count),
-	Filter(mip_level_count),
+	Sampling(Graphics::Make_Texture_Sampling(mip_level_count != MIP_LEVELS_1)),
 	TextureFormat(texture_format)
 {
 	IsCompressionAllowed=allow_compression;
@@ -760,22 +735,22 @@ TextureClass::TextureClass
 
 	switch (TextureFormat)
 	{
-	case WW3D_FORMAT_DXT1:
-	case WW3D_FORMAT_DXT2:
-	case WW3D_FORMAT_DXT3:
-	case WW3D_FORMAT_DXT4:
-	case WW3D_FORMAT_DXT5:
+	case Assets::PixelEncoding::BC1:
+	case Assets::PixelEncoding::BC2Premultiplied:
+	case Assets::PixelEncoding::BC2:
+	case Assets::PixelEncoding::BC3Premultiplied:
+	case Assets::PixelEncoding::BC3:
 		IsCompressionAllowed=true;
 		break;
-	case WW3D_FORMAT_U8V8:		// Bumpmap
-	case WW3D_FORMAT_L6V5U5:	// Bumpmap
-	case WW3D_FORMAT_X8L8V8U8:	// Bumpmap
+	case Assets::PixelEncoding::RG8_SNorm:		// Bumpmap
+	case Assets::PixelEncoding::RG5_SNorm_L6:	// Bumpmap
+	case Assets::PixelEncoding::RG8_SNorm_L8X8:	// Bumpmap
 		// If requesting bumpmap format that isn't available we'll just return the surface in whatever color
 		// format the texture file is in. (This is illegal case, the format support should always be queried
 		// before creating a bump texture!)
-		if (!WW3D::Is_Initted() || !WW3D::Get_Render_Backend()->Supports_Texture_Format(TextureFormat))
+		if (!WW3D::Is_Initted() || !(Graphics::Texture_Storage_Format(TextureFormat) != Graphics::RHITextureFormat::Unknown))
 		{
-			TextureFormat=WW3D_FORMAT_UNKNOWN;
+			TextureFormat=Assets::PixelEncoding::Unknown;
 		}
 		// If bump format is valid, make sure compression is not allowed so that we don't even attempt to load
 		// from a compressed file (quality isn't good enough for bump map). Also disable mipmapping.
@@ -783,7 +758,7 @@ TextureClass::TextureClass
 		{
 			IsCompressionAllowed=false;
 			MipLevelCount=MIP_LEVELS_1;
-			Filter.Set_Mip_Mapping(TextureFilterClass::FILTER_TYPE_NONE);
+			Sampling.mipmap = Graphics::SamplingFilter::Disabled;
 		}
 		break;
 	default:	break;
@@ -799,9 +774,9 @@ TextureClass::TextureClass
 
 			// Set bilinear filtering for lightmaps (they are very stretched and
 			// low detail so we don't care for anisotropic or trilinear filtering...)
-			Filter.Set_Min_Filter(TextureFilterClass::FILTER_TYPE_FAST);
-			Filter.Set_Mag_Filter(TextureFilterClass::FILTER_TYPE_FAST);
-			if (mip_level_count!=MIP_LEVELS_1) Filter.Set_Mip_Mapping(TextureFilterClass::FILTER_TYPE_FAST);
+			Sampling.minification = Graphics::SamplingFilter::Fast;
+			Sampling.magnification = Graphics::SamplingFilter::Fast;
+			if (mip_level_count!=MIP_LEVELS_1) Sampling.mipmap = Graphics::SamplingFilter::Fast;
 			break;
 		}
 	}
@@ -814,97 +789,81 @@ TextureClass::TextureClass
 		Set_Render_Backend_Texture(0);
 	}
 
-	// Find original size from the thumbnail (but don't create thumbnail texture yet!)
-	ThumbnailClass* thumb=ThumbnailManagerClass::Peek_Thumbnail_Instance_From_Any_Manager(Get_Full_Path());
-	if (thumb)
-	{
-		Width=thumb->Get_Original_Texture_Width();
-		Height=thumb->Get_Original_Texture_Height();
- 		if (MipLevelCount!=MIP_LEVELS_1) {
- 			MipLevelCount=(MipCountType)thumb->Get_Original_Texture_Mip_Level_Count();
- 		}
-	}
-
 	LastAccessed=WW3D::Get_Sync_Time();
 
-	// If the thumbnails are not enabled, init the texture at this point to avoid stalling when the
-	// mesh is rendered.
-	if (!WW3D::Get_Thumbnail_Enabled())
+	// Prepare the full image before its first draw on the render thread.
+	if (Graphics::Get_Resource_Load_Queue().Is_Owner_Thread())
 	{
-		if (TextureLoader::Is_Render_Thread())
-		{
-			Init();
-		}
+		Init();
 	}
 }
 
 // ----------------------------------------------------------------------------
 TextureClass::TextureClass
 (
-	SurfaceClass *surface,
+	Graphics::TextureEdit *surface,
 	MipCountType mip_level_count
 )
 :  TextureBaseClass(0,0,mip_level_count),
-	Filter(mip_level_count),
-	TextureFormat(surface->Get_Surface_Format())
+	Sampling(Graphics::Make_Texture_Sampling(mip_level_count != MIP_LEVELS_1)),
+	TextureFormat(surface->Image().Encoding())
 {
 	IsProcedural=true;
 	Initialized=false;
 	IsReducible=false;
 
-	SurfaceClass::SurfaceDescription sd;
-	surface->Get_Description(sd);
-	Width=sd.Width;
-	Height=sd.Height;
-	switch (sd.Format)
+	Assets::ImageDescription sd;
+	sd=surface->Image().Description();
+	Width=sd.width;
+	Height=sd.height;
+	switch (sd.encoding)
 	{
-	case WW3D_FORMAT_DXT1:
-	case WW3D_FORMAT_DXT2:
-	case WW3D_FORMAT_DXT3:
-	case WW3D_FORMAT_DXT4:
-	case WW3D_FORMAT_DXT5:
+	case Assets::PixelEncoding::BC1:
+	case Assets::PixelEncoding::BC2Premultiplied:
+	case Assets::PixelEncoding::BC2:
+	case Assets::PixelEncoding::BC3Premultiplied:
+	case Assets::PixelEncoding::BC3:
 		IsCompressionAllowed=true;
 		break;
 	default: break;
 	}
 
-	Set_Render_Backend_Texture(Create_Texture(surface->Get_Render_Backend_Surface(), mip_level_count));
+	Set_Render_Backend_Texture(Create_Texture(surface, mip_level_count));
 	Initialized = Peek_Render_Backend_Texture() != 0;
 	LastAccessed=WW3D::Get_Sync_Time();
 }
 
 // ----------------------------------------------------------------------------
-TextureClass::TextureClass(RenderBackendTextureHandle texture)
+TextureClass::TextureClass(Graphics::TextureResource* texture)
 :	TextureBaseClass
 	(
 		0,
 		0,
-		static_cast<MipCountType>(WW3D::Get_Render_Backend()->Get_Texture_Level_Count(texture))
+		static_cast<MipCountType>((texture ? texture->Description().mip_count : 0))
 	),
-	Filter(static_cast<MipCountType>(WW3D::Get_Render_Backend()->Get_Texture_Level_Count(texture))),
-	TextureFormat(WW3D_FORMAT_UNKNOWN)
+	Sampling(Graphics::Make_Texture_Sampling((texture ? texture->Description().mip_count : 0) != 1)),
+	TextureFormat(Assets::PixelEncoding::Unknown)
 {
 	Initialized=false;
 	IsProcedural=true;
 	IsReducible=false;
 
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	Set_Render_Backend_Texture(texture != 0 ? backend->Add_Texture_Reference(texture) : 0);
+	Set_Render_Backend_Texture(texture != 0 ? Graphics::Retain_Texture_Resource(texture) : 0);
 	Initialized = Peek_Render_Backend_Texture() != 0;
-	RenderBackendTextureDescription description;
-	if (Peek_Render_Backend_Texture() != 0 && backend->Get_Texture_Description(Peek_Render_Backend_Texture(), 0, description))
+	if (texture)
 	{
+        const auto& description=texture->Description();
 		Width=static_cast<int>(description.width);
 		Height=static_cast<int>(description.height);
-		TextureFormat=description.format;
+		TextureFormat=texture->Encoding();
 	}
 	switch (TextureFormat)
 	{
-	case WW3D_FORMAT_DXT1:
-	case WW3D_FORMAT_DXT2:
-	case WW3D_FORMAT_DXT3:
-	case WW3D_FORMAT_DXT4:
-	case WW3D_FORMAT_DXT5:
+	case Assets::PixelEncoding::BC1:
+	case Assets::PixelEncoding::BC2Premultiplied:
+	case Assets::PixelEncoding::BC2:
+	case Assets::PixelEncoding::BC3Premultiplied:
+	case Assets::PixelEncoding::BC3:
 		IsCompressionAllowed=true;
 		break;
 	default: break;
@@ -920,7 +879,7 @@ TextureClass::TextureClass(RenderBackendTextureHandle texture)
 bool TextureClass::Recreate_Procedural_Texture()
 {
 	if (!ProceduralTextureRecreationEnabled || Width <= 0 || Height <= 0 ||
-		TextureFormat == WW3D_FORMAT_UNKNOWN)
+		TextureFormat == Assets::PixelEncoding::Unknown)
 	{
 		return false;
 	}
@@ -972,22 +931,12 @@ void TextureClass::Init()
 
 	if (!Peek_Render_Backend_Texture())
 	{
-		if (!WW3D::Get_Thumbnail_Enabled() || MipLevelCount==MIP_LEVELS_1)
-		{
-//		if (MipLevelCount==MIP_LEVELS_1) {
-			TextureLoader::Request_Foreground_Loading(this);
-		}
-		else
-		{
-			WW3DFormat format=TextureFormat;
-			Load_Locked_Surface();
-			TextureFormat=format;
-		}
+		Graphics::Get_Resource_Load_Queue().Request(this->Loading_Source(), Graphics::ResourceLoadPriority::Immediate);
 	}
 
 	if (!Initialized)
 	{
-		TextureLoader::Request_Background_Loading(this);
+		Graphics::Get_Resource_Load_Queue().Request(this->Loading_Source(), Graphics::ResourceLoadPriority::Background);
 	}
 
 	LastAccessed=WW3D::Get_Sync_Time();
@@ -999,7 +948,7 @@ void TextureClass::Init()
 */
 void TextureClass::Apply_New_Surface
 (
-	RenderBackendTextureHandle texture,
+	Graphics::TextureResource* texture,
 	bool initialized,
 	bool disable_auto_invalidation
 )
@@ -1010,100 +959,50 @@ void TextureClass::Apply_New_Surface
 	if (disable_auto_invalidation) InactivationTime = 0;
 
 	WWASSERT(Peek_Render_Backend_Texture() != 0);
-	RenderBackendTextureDescription description;
-	if (initialized && WW3D::Get_Render_Backend()->Get_Texture_Description(
-		Peek_Render_Backend_Texture(), 0, description))
+	if (initialized && texture)
 	{
-		TextureFormat=description.format;
+        const auto& description=texture->Description();
+		TextureFormat=texture->Encoding();
 		Width=static_cast<int>(description.width);
 		Height=static_cast<int>(description.height);
 	}
 }
 
 
-//**********************************************************************************************
-//! Apply texture states
-/*!
-*/
-void TextureClass::Apply(unsigned int stage)
-{
-	// Initialization needs to be done when texture is used if it hasn't been done before.
-	// XBOX always initializes textures at creation time.
-	if (!Initialized)
-	{
-		Init();
-
-		/* was in battlefield// Non-thumbnailed textures are always initialized when used
-		if (MipLevelCount==MIP_LEVELS_1)
-		{
-		}
-		// Thumbnailed textures have delayed initialization and a background loading system
-		else
-		{
-			// Limit the number of texture initializations per frame to reduce stuttering
-			if (TexturesAppliedPerFrame<MAX_TEXTURES_APPLIED_PER_FRAME)
-			{
-				TexturesAppliedPerFrame++;
-				Init();
-			}
-			else
-			{
-				// If texture can't be initialized in this frame, at least make sure we have the thumbnail.
-				if (!Peek_Texture())
-				{
-					WW3DFormat format=TextureFormat;
-					Load_Locked_Surface();
-					TextureFormat=format;
-				}
-			}
-		}*/
-	}
-	LastAccessed=WW3D::Get_Sync_Time();
-
-	// Set texture itself
-	if (WW3D::Is_Texturing_Enabled())
-	{
-		WW3D::Get_Render_Backend()->Set_Texture_Resource(stage, this);
-	}
-	else
-	{
-		WW3D::Get_Render_Backend()->Set_Texture_Resource(stage, nullptr);
-	}
-
-	Filter.Apply(stage);
-}
 
 //**********************************************************************************************
 //! Get surface from mip level
 /*!
 */
-SurfaceClass *TextureClass::Get_Surface_Level(unsigned int level)
+Graphics::TextureEdit *TextureClass::Get_Surface_Level(unsigned int level)
 {
 	if (!Ensure_Render_Backend_Texture())
 	{
 		return nullptr;
 	}
 
-	const RenderBackendTextureHandle texture = Peek_Render_Backend_Texture();
+	Graphics::TextureResource* const texture = Peek_Render_Backend_Texture();
 	if (texture == 0)
 	{
 		return nullptr;
 	}
 
-	return WW3D::Get_Render_Backend()->Get_Texture_Surface_Level(texture, level);
+	auto* edit = Graphics::TextureEdit::Readback(*texture, level);
+    return edit;
 }
 
 //**********************************************************************************************
 //! Get surface description for a mip level
 /*!
 */
-void TextureClass::Get_Level_Description( SurfaceClass::SurfaceDescription & desc, unsigned int level )
+void TextureClass::Get_Level_Description(Assets::ImageDescription& desc, unsigned int level)
 {
-	SurfaceClass * surf = Get_Surface_Level(level);
-	if (surf != nullptr) {
-		surf->Get_Description(desc);
-	}
-	REF_PTR_RELEASE(surf);
+    desc = {};
+    if (!Ensure_Render_Backend_Texture()) return;
+    const auto* texture = Peek_Render_Backend_Texture();
+    if (!texture || level >= texture->Description().mip_count) return;
+    desc = {texture->Encoding(), std::max(1u, texture->Description().width >> level),
+        std::max(1u, texture->Description().height >> level)};
 }
 
 //**********************************************************************************************
@@ -1112,142 +1011,111 @@ void TextureClass::Get_Level_Description( SurfaceClass::SurfaceDescription & des
 */
 unsigned TextureClass::Get_Texture_Memory_Usage() const
 {
-	unsigned size=0;
-	if (Peek_Render_Backend_Texture() == 0) return 0;
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	for (unsigned i=0;i<backend->Get_Texture_Level_Count(Peek_Render_Backend_Texture());++i)
-	{
-		RenderBackendTextureDescription description;
-		if (backend->Get_Texture_Description(Peek_Render_Backend_Texture(), i, description))
-		{
-			size += Compute_Surface_Size_Bytes(description);
-		}
-	}
-	return size;
+    const auto* texture=Peek_Render_Backend_Texture();
+    if (!texture) return 0;
+    unsigned size=0;
+    for (unsigned level=0;level<texture->Description().mip_count;++level)
+        size+=Compute_Texture_Level_Size_Bytes(*texture,level);
+    return size;
 }
 
 
 // Utility functions
-TextureClass* Load_Texture(ChunkLoadClass & cload)
+TextureClass* Load_Texture(ChunkLoadClass &cload)
 {
-	// Assume failure
-	TextureClass *newtex = nullptr;
+    if (!cload.Open_Chunk()) return nullptr;
+    if (cload.Cur_Chunk_ID() != W3D_CHUNK_TEXTURE) {
+        cload.Close_Chunk();
+        return nullptr;
+    }
+    std::vector<std::byte> bytes(cload.Cur_Chunk_Length());
+    const bool read = cload.Read(bytes.data(), static_cast<unsigned>(bytes.size())) == bytes.size();
+    cload.Close_Chunk();
+    Assets::W3D::W3DTextureData decoded;
+    if (!read || !Assets::W3D::W3DRead_Texture(bytes,decoded)) return nullptr;
+    TextureClass *newtex = nullptr;
+    if (decoded.has_info)
+    {
 
-	char name[256];
-	if (cload.Open_Chunk () && (cload.Cur_Chunk_ID () == W3D_CHUNK_TEXTURE))
-	{
+        MipCountType mipcount;
 
-		W3dTextureInfoStruct texinfo;
-		bool hastexinfo = false;
+        bool no_lod = ((decoded.attributes & W3DTEXTURE_NO_LOD) == W3DTEXTURE_NO_LOD);
 
-		/*
-		** Read in the texture filename, and a possible texture info structure.
-		*/
-		while (cload.Open_Chunk()) {
-			switch (cload.Cur_Chunk_ID()) {
-				case W3D_CHUNK_TEXTURE_NAME:
-					cload.Read(&name,cload.Cur_Chunk_Length());
-					break;
+        if (no_lod)
+        {
+            mipcount = MIP_LEVELS_1;
+        }
+        else
+        {
+            switch (decoded.attributes & W3DTEXTURE_MIP_LEVELS_MASK) {
 
-				case W3D_CHUNK_TEXTURE_INFO:
-					cload.Read(&texinfo,sizeof(W3dTextureInfoStruct));
-					hastexinfo = true;
-					break;
-			};
-			cload.Close_Chunk();
-		}
-		cload.Close_Chunk();
+                case W3DTEXTURE_MIP_LEVELS_ALL:
+                    mipcount = MIP_LEVELS_ALL;
+                    break;
 
-		/*
-		** Get the texture from the asset manager
-		*/
-		if (hastexinfo)
-		{
+                case W3DTEXTURE_MIP_LEVELS_2:
+                    mipcount = MIP_LEVELS_2;
+                    break;
 
-			MipCountType mipcount;
+                case W3DTEXTURE_MIP_LEVELS_3:
+                    mipcount = MIP_LEVELS_3;
+                    break;
 
-			bool no_lod = ((texinfo.Attributes & W3DTEXTURE_NO_LOD) == W3DTEXTURE_NO_LOD);
+                case W3DTEXTURE_MIP_LEVELS_4:
+                    mipcount = MIP_LEVELS_4;
+                    break;
 
-			if (no_lod)
-			{
-				mipcount = MIP_LEVELS_1;
-			}
-			else
-			{
-				switch (texinfo.Attributes & W3DTEXTURE_MIP_LEVELS_MASK) {
+                default:
+                    WWASSERT (false);
+                    mipcount = MIP_LEVELS_ALL;
+                    break;
+            }
+        }
 
-					case W3DTEXTURE_MIP_LEVELS_ALL:
-						mipcount = MIP_LEVELS_ALL;
-						break;
+        Assets::PixelEncoding format=Assets::PixelEncoding::Unknown;
 
-					case W3DTEXTURE_MIP_LEVELS_2:
-						mipcount = MIP_LEVELS_2;
-						break;
+        switch (decoded.attributes & W3DTEXTURE_TYPE_MASK)
+        {
 
-					case W3DTEXTURE_MIP_LEVELS_3:
-						mipcount = MIP_LEVELS_3;
-						break;
+            case W3DTEXTURE_TYPE_COLORMAP:
+                // Do nothing.
+                break;
 
-					case W3DTEXTURE_MIP_LEVELS_4:
-						mipcount = MIP_LEVELS_4;
-						break;
+            case W3DTEXTURE_TYPE_BUMPMAP:
+            {
+                if (WW3D::Is_Initted())
+                {
+                    // No mipmaps to bumpmap for now
+                    mipcount=MIP_LEVELS_1;
 
-					default:
-						WWASSERT (false);
-						mipcount = MIP_LEVELS_ALL;
-						break;
-				}
-			}
+                    format=Assets::PixelEncoding::RG8_SNorm;
+                }
+                break;
+            }
 
-			WW3DFormat format=WW3D_FORMAT_UNKNOWN;
+            default:
+                WWASSERT (false);
+                break;
+        }
 
-			switch (texinfo.Attributes & W3DTEXTURE_TYPE_MASK)
-			{
+        newtex = WW3DAssetManager::Get_Instance()->Get_Texture (decoded.name.c_str(), mipcount, format);
 
-				case W3DTEXTURE_TYPE_COLORMAP:
-					// Do nothing.
-					break;
+        if (no_lod)
+        {
+            newtex->Get_Sampling().mipmap = Graphics::SamplingFilter::Disabled;
+        }
+        bool u_clamp = ((decoded.attributes & W3DTEXTURE_CLAMP_U) != 0);
+        newtex->Get_Sampling().address[0] = u_clamp ? Graphics::RHISamplerAddress::Clamp : Graphics::RHISamplerAddress::Wrap;
+        bool v_clamp = ((decoded.attributes & W3DTEXTURE_CLAMP_V) != 0);
+        newtex->Get_Sampling().address[1] = v_clamp ? Graphics::RHISamplerAddress::Clamp : Graphics::RHISamplerAddress::Wrap;
 
-				case W3DTEXTURE_TYPE_BUMPMAP:
-				{
-					if (WW3D::Is_Initted() && WW3D::Get_Render_Backend()->Supports_Bump_Envmap())
-					{
-						// No mipmaps to bumpmap for now
-						mipcount=MIP_LEVELS_1;
+    } else
+    {
+        newtex = WW3DAssetManager::Get_Instance()->Get_Texture(decoded.name.c_str());
+    }
 
-						if (WW3D::Get_Render_Backend()->Supports_Texture_Format(WW3D_FORMAT_U8V8)) format=WW3D_FORMAT_U8V8;
-						else if (WW3D::Get_Render_Backend()->Supports_Texture_Format(WW3D_FORMAT_X8L8V8U8)) format=WW3D_FORMAT_X8L8V8U8;
-						else if (WW3D::Get_Render_Backend()->Supports_Texture_Format(WW3D_FORMAT_L6V5U5)) format=WW3D_FORMAT_L6V5U5;
-					}
-					break;
-				}
-
-				default:
-					WWASSERT (false);
-					break;
-			}
-
-			newtex = WW3DAssetManager::Get_Instance()->Get_Texture (name, mipcount, format);
-
-			if (no_lod)
-			{
-				newtex->Get_Filter().Set_Mip_Mapping(TextureFilterClass::FILTER_TYPE_NONE);
-			}
-			bool u_clamp = ((texinfo.Attributes & W3DTEXTURE_CLAMP_U) != 0);
-			newtex->Get_Filter().Set_U_Addr_Mode(u_clamp ? TextureFilterClass::TEXTURE_ADDRESS_CLAMP : TextureFilterClass::TEXTURE_ADDRESS_REPEAT);
-			bool v_clamp = ((texinfo.Attributes & W3DTEXTURE_CLAMP_V) != 0);
-			newtex->Get_Filter().Set_V_Addr_Mode(v_clamp ? TextureFilterClass::TEXTURE_ADDRESS_CLAMP : TextureFilterClass::TEXTURE_ADDRESS_REPEAT);
-
-		} else
-		{
-			newtex = WW3DAssetManager::Get_Instance()->Get_Texture(name);
-		}
-
-		WWASSERT(newtex);
-	}
-
-	// Return a pointer to the new texture
-	return newtex;
+    WWASSERT(newtex);
+    return newtex;
 }
 
 // Utility function used by Save_Texture
@@ -1255,9 +1123,9 @@ void setup_texture_attributes(TextureClass * tex, W3dTextureInfoStruct * texinfo
 {
 	texinfo->Attributes = 0;
 
-	if (tex->Get_Filter().Get_Mip_Mapping() == TextureFilterClass::FILTER_TYPE_NONE) texinfo->Attributes |= W3DTEXTURE_NO_LOD;
-	if (tex->Get_Filter().Get_U_Addr_Mode() == TextureFilterClass::TEXTURE_ADDRESS_CLAMP) texinfo->Attributes |= W3DTEXTURE_CLAMP_U;
-	if (tex->Get_Filter().Get_V_Addr_Mode() == TextureFilterClass::TEXTURE_ADDRESS_CLAMP) texinfo->Attributes |= W3DTEXTURE_CLAMP_V;
+	if (tex->Get_Sampling().mipmap == Graphics::SamplingFilter::Disabled) texinfo->Attributes |= W3DTEXTURE_NO_LOD;
+	if (tex->Get_Sampling().address[0] == Graphics::RHISamplerAddress::Clamp) texinfo->Attributes |= W3DTEXTURE_CLAMP_U;
+	if (tex->Get_Sampling().address[1] == Graphics::RHISamplerAddress::Clamp) texinfo->Attributes |= W3DTEXTURE_CLAMP_V;
 }
 
 
@@ -1290,7 +1158,7 @@ ZTextureClass::ZTextureClass
 (
 	unsigned width,
 	unsigned height,
-	WW3DZFormat zformat,
+	Graphics::RHITextureFormat zformat,
 	MipCountType mip_level_count,
 	PoolType pool
 )
@@ -1303,8 +1171,7 @@ ZTextureClass::ZTextureClass
 	if (pool==POOL_DEFAULT)
 	{
 		Set_Dirty();
-		WW3D::Get_Render_Backend()->Register_Texture(this, RenderBackendTextureKind::DepthStencil,
-			width, height, 1, WW3D_FORMAT_UNKNOWN, zformat, mip_level_count, false);
+		Register_For_Recreation();
 	}
 	Initialized = Peek_Render_Backend_Texture() != 0;
 	IsProcedural=true;
@@ -1317,7 +1184,7 @@ ZTextureClass::ZTextureClass
 bool ZTextureClass::Recreate_Procedural_Texture()
 {
 	if (!ProceduralTextureRecreationEnabled || Width <= 0 || Height <= 0 ||
-		DepthStencilTextureFormat == WW3D_ZFORMAT_UNKNOWN)
+		DepthStencilTextureFormat == Graphics::RHITextureFormat::Unknown)
 	{
 		return false;
 	}
@@ -1333,14 +1200,6 @@ bool ZTextureClass::Recreate_Procedural_Texture()
 }
 
 
-//**********************************************************************************************
-//! Apply depth stencil texture
-/*! KM
-*/
-void ZTextureClass::Apply(unsigned int stage)
-{
-	WW3D::Get_Render_Backend()->Set_Texture_Resource(stage, this);
-}
 
 //**********************************************************************************************
 //! Apply new surface to texture
@@ -1348,7 +1207,7 @@ void ZTextureClass::Apply(unsigned int stage)
 */
 void ZTextureClass::Apply_New_Surface
 (
-	RenderBackendTextureHandle texture,
+	Graphics::TextureResource* texture,
 	bool initialized,
 	bool disable_auto_invalidation
 )
@@ -1359,11 +1218,10 @@ void ZTextureClass::Apply_New_Surface
 	if (disable_auto_invalidation) InactivationTime = 0;
 
 	WWASSERT(Peek_Render_Backend_Texture() != 0);
-	RenderBackendTextureDescription description;
-	if (initialized && WW3D::Get_Render_Backend()->Get_Texture_Description(
-		Peek_Render_Backend_Texture(), 0, description))
+	if (initialized && texture)
 	{
-		DepthStencilTextureFormat=description.depth_format;
+        const auto& description=texture->Description();
+		DepthStencilTextureFormat=description.format;
 		Width=static_cast<int>(description.width);
 		Height=static_cast<int>(description.height);
 	}
@@ -1373,20 +1231,21 @@ void ZTextureClass::Apply_New_Surface
 //! Get surface from mip level
 /*!
 */
-SurfaceClass *ZTextureClass::Get_Surface_Level(unsigned int level)
+Graphics::TextureEdit *ZTextureClass::Get_Surface_Level(unsigned int level)
 {
 	if (!Ensure_Render_Backend_Texture())
 	{
 		return nullptr;
 	}
 
-	const RenderBackendTextureHandle texture = Peek_Render_Backend_Texture();
+	Graphics::TextureResource* const texture = Peek_Render_Backend_Texture();
 	if (texture == 0)
 	{
 		return nullptr;
 	}
 
-	return WW3D::Get_Render_Backend()->Get_Texture_Surface_Level(texture, level);
+	auto* edit = Graphics::TextureEdit::Readback(*texture, level);
+    return edit;
 }
 
 //**********************************************************************************************
@@ -1395,18 +1254,12 @@ SurfaceClass *ZTextureClass::Get_Surface_Level(unsigned int level)
 */
 unsigned ZTextureClass::Get_Texture_Memory_Usage() const
 {
-	unsigned size=0;
-	if (Peek_Render_Backend_Texture() == 0) return 0;
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	for (unsigned i=0;i<backend->Get_Texture_Level_Count(Peek_Render_Backend_Texture());++i)
-	{
-		RenderBackendTextureDescription description;
-		if (backend->Get_Texture_Description(Peek_Render_Backend_Texture(), i, description))
-		{
-			size += Compute_Surface_Size_Bytes(description);
-		}
-	}
-	return size;
+    const auto* texture=Peek_Render_Backend_Texture();
+    if (!texture) return 0;
+    unsigned size=0;
+    for (unsigned level=0;level<texture->Description().mip_count;++level)
+        size+=Compute_Texture_Level_Size_Bytes(*texture,level);
+    return size;
 }
 
 
@@ -1418,7 +1271,7 @@ CubeTextureClass::CubeTextureClass
 (
 	unsigned width,
 	unsigned height,
-	WW3DFormat format,
+	Assets::PixelEncoding format,
 	MipCountType mip_level_count,
 	PoolType pool,
 	bool rendertarget,
@@ -1432,11 +1285,11 @@ CubeTextureClass::CubeTextureClass
 
 	switch (format)
 	{
-	case WW3D_FORMAT_DXT1:
-	case WW3D_FORMAT_DXT2:
-	case WW3D_FORMAT_DXT3:
-	case WW3D_FORMAT_DXT4:
-	case WW3D_FORMAT_DXT5:
+	case Assets::PixelEncoding::BC1:
+	case Assets::PixelEncoding::BC2Premultiplied:
+	case Assets::PixelEncoding::BC2:
+	case Assets::PixelEncoding::BC3Premultiplied:
+	case Assets::PixelEncoding::BC3:
 		IsCompressionAllowed=true;
 		break;
 	default : break;
@@ -1449,8 +1302,7 @@ CubeTextureClass::CubeTextureClass
 	if (pool==POOL_DEFAULT)
 	{
 		Set_Dirty();
-		WW3D::Get_Render_Backend()->Register_Texture(this, RenderBackendTextureKind::Cube,
-			width, height, 1, format, WW3D_ZFORMAT_UNKNOWN, mip_level_count, rendertarget);
+		Register_For_Recreation();
 	}
 	LastAccessed=WW3D::Get_Sync_Time();
 }
@@ -1459,7 +1311,7 @@ CubeTextureClass::CubeTextureClass
 bool CubeTextureClass::Recreate_Procedural_Texture()
 {
 	if (!ProceduralTextureRecreationEnabled || Width <= 0 || Height <= 0 ||
-		TextureFormat == WW3D_FORMAT_UNKNOWN)
+		TextureFormat == Assets::PixelEncoding::Unknown)
 	{
 		return false;
 	}
@@ -1483,7 +1335,7 @@ CubeTextureClass::CubeTextureClass
 	const char *name,
 	const char *full_path,
 	MipCountType mip_level_count,
-	WW3DFormat texture_format,
+	Assets::PixelEncoding texture_format,
 	bool allow_compression,
 	bool allow_reduction
 )
@@ -1494,22 +1346,22 @@ CubeTextureClass::CubeTextureClass
 
 	switch (TextureFormat)
 	{
-	case WW3D_FORMAT_DXT1:
-	case WW3D_FORMAT_DXT2:
-	case WW3D_FORMAT_DXT3:
-	case WW3D_FORMAT_DXT4:
-	case WW3D_FORMAT_DXT5:
+	case Assets::PixelEncoding::BC1:
+	case Assets::PixelEncoding::BC2Premultiplied:
+	case Assets::PixelEncoding::BC2:
+	case Assets::PixelEncoding::BC3Premultiplied:
+	case Assets::PixelEncoding::BC3:
 		IsCompressionAllowed=true;
 		break;
-	case WW3D_FORMAT_U8V8:		// Bumpmap
-	case WW3D_FORMAT_L6V5U5:	// Bumpmap
-	case WW3D_FORMAT_X8L8V8U8:	// Bumpmap
+	case Assets::PixelEncoding::RG8_SNorm:		// Bumpmap
+	case Assets::PixelEncoding::RG5_SNorm_L6:	// Bumpmap
+	case Assets::PixelEncoding::RG8_SNorm_L8X8:	// Bumpmap
 		// If requesting bumpmap format that isn't available we'll just return the surface in whatever color
 		// format the texture file is in. (This is illegal case, the format support should always be queried
 		// before creating a bump texture!)
-		if (!WW3D::Is_Initted() || !WW3D::Get_Render_Backend()->Supports_Texture_Format(TextureFormat))
+		if (!WW3D::Is_Initted() || !(Graphics::Texture_Storage_Format(TextureFormat) != Graphics::RHITextureFormat::Unknown))
 		{
-			TextureFormat=WW3D_FORMAT_UNKNOWN;
+			TextureFormat=Assets::PixelEncoding::Unknown;
 		}
 		// If bump format is valid, make sure compression is not allowed so that we don't even attempt to load
 		// from a compressed file (quality isn't good enough for bump map). Also disable mipmapping.
@@ -1517,7 +1369,7 @@ CubeTextureClass::CubeTextureClass
 		{
 			IsCompressionAllowed=false;
 			MipLevelCount=MIP_LEVELS_1;
-			Filter.Set_Mip_Mapping(TextureFilterClass::FILTER_TYPE_NONE);
+			Sampling.mipmap = Graphics::SamplingFilter::Disabled;
 		}
 		break;
 	default:	break;
@@ -1533,9 +1385,9 @@ CubeTextureClass::CubeTextureClass
 
 			// Set bilinear filtering for lightmaps (they are very stretched and
 			// low detail so we don't care for anisotropic or trilinear filtering...)
-			Filter.Set_Min_Filter(TextureFilterClass::FILTER_TYPE_FAST);
-			Filter.Set_Mag_Filter(TextureFilterClass::FILTER_TYPE_FAST);
-			if (mip_level_count!=MIP_LEVELS_1) Filter.Set_Mip_Mapping(TextureFilterClass::FILTER_TYPE_FAST);
+			Sampling.minification = Graphics::SamplingFilter::Fast;
+			Sampling.magnification = Graphics::SamplingFilter::Fast;
+			if (mip_level_count!=MIP_LEVELS_1) Sampling.mipmap = Graphics::SamplingFilter::Fast;
 			break;
 		}
 	}
@@ -1548,27 +1400,12 @@ CubeTextureClass::CubeTextureClass
 		Set_Render_Backend_Texture(0);
 	}
 
-	// Find original size from the thumbnail (but don't create thumbnail texture yet!)
-	ThumbnailClass* thumb=ThumbnailManagerClass::Peek_Thumbnail_Instance_From_Any_Manager(Get_Full_Path());
-	if (thumb)
-	{
-		Width=thumb->Get_Original_Texture_Width();
-		Height=thumb->Get_Original_Texture_Height();
- 		if (MipLevelCount!=MIP_LEVELS_1) {
- 			MipLevelCount=(MipCountType)thumb->Get_Original_Texture_Mip_Level_Count();
- 		}
-	}
-
 	LastAccessed=WW3D::Get_Sync_Time();
 
-	// If the thumbnails are not enabled, init the texture at this point to avoid stalling when the
-	// mesh is rendered.
-	if (!WW3D::Get_Thumbnail_Enabled())
+	// Prepare the full image before its first draw on the render thread.
+	if (Graphics::Get_Resource_Load_Queue().Is_Owner_Thread())
 	{
-		if (TextureLoader::Is_Render_Thread())
-		{
-			Init();
-		}
+		Init();
 	}
 }
 
@@ -1578,7 +1415,7 @@ CubeTextureClass::CubeTextureClass
 */
 void CubeTextureClass::Apply_New_Surface
 (
-	RenderBackendTextureHandle texture,
+	Graphics::TextureResource* texture,
 	bool initialized,
 	bool disable_auto_invalidation
 )
@@ -1589,11 +1426,10 @@ void CubeTextureClass::Apply_New_Surface
 	if (disable_auto_invalidation) InactivationTime = 0;
 
 	WWASSERT(Peek_Render_Backend_Texture() != 0);
-	RenderBackendTextureDescription description;
-	if (initialized && WW3D::Get_Render_Backend()->Get_Texture_Description(
-		Peek_Render_Backend_Texture(), 0, description))
+	if (initialized && texture)
 	{
-		TextureFormat=description.format;
+        const auto& description=texture->Description();
+		TextureFormat=texture->Encoding();
 		Width=static_cast<int>(description.width);
 		Height=static_cast<int>(description.height);
 	}
@@ -1608,7 +1444,7 @@ VolumeTextureClass::VolumeTextureClass
 	unsigned width,
 	unsigned height,
 	unsigned depth,
-	WW3DFormat format,
+	Assets::PixelEncoding format,
 	MipCountType mip_level_count,
 	PoolType pool,
 	bool rendertarget,
@@ -1623,11 +1459,11 @@ VolumeTextureClass::VolumeTextureClass
 
 	switch (format)
 	{
-	case WW3D_FORMAT_DXT1:
-	case WW3D_FORMAT_DXT2:
-	case WW3D_FORMAT_DXT3:
-	case WW3D_FORMAT_DXT4:
-	case WW3D_FORMAT_DXT5:
+	case Assets::PixelEncoding::BC1:
+	case Assets::PixelEncoding::BC2Premultiplied:
+	case Assets::PixelEncoding::BC2:
+	case Assets::PixelEncoding::BC3Premultiplied:
+	case Assets::PixelEncoding::BC3:
 		IsCompressionAllowed=true;
 		break;
 	default : break;
@@ -1640,8 +1476,7 @@ VolumeTextureClass::VolumeTextureClass
 	if (pool==POOL_DEFAULT)
 	{
 		Set_Dirty();
-		WW3D::Get_Render_Backend()->Register_Texture(this, RenderBackendTextureKind::Volume,
-			width, height, depth, format, WW3D_ZFORMAT_UNKNOWN, mip_level_count, rendertarget);
+		Register_For_Recreation();
 	}
 	LastAccessed=WW3D::Get_Sync_Time();
 }
@@ -1650,7 +1485,7 @@ VolumeTextureClass::VolumeTextureClass
 bool VolumeTextureClass::Recreate_Procedural_Texture()
 {
 	if (!ProceduralTextureRecreationEnabled || Width <= 0 || Height <= 0 ||
-		Depth <= 0 || TextureFormat == WW3D_FORMAT_UNKNOWN)
+		Depth <= 0 || TextureFormat == Assets::PixelEncoding::Unknown)
 	{
 		return false;
 	}
@@ -1674,7 +1509,7 @@ VolumeTextureClass::VolumeTextureClass
 	const char *name,
 	const char *full_path,
 	MipCountType mip_level_count,
-	WW3DFormat texture_format,
+	Assets::PixelEncoding texture_format,
 	bool allow_compression,
 	bool allow_reduction
 )
@@ -1686,22 +1521,22 @@ VolumeTextureClass::VolumeTextureClass
 
 	switch (TextureFormat)
 	{
-	case WW3D_FORMAT_DXT1:
-	case WW3D_FORMAT_DXT2:
-	case WW3D_FORMAT_DXT3:
-	case WW3D_FORMAT_DXT4:
-	case WW3D_FORMAT_DXT5:
+	case Assets::PixelEncoding::BC1:
+	case Assets::PixelEncoding::BC2Premultiplied:
+	case Assets::PixelEncoding::BC2:
+	case Assets::PixelEncoding::BC3Premultiplied:
+	case Assets::PixelEncoding::BC3:
 		IsCompressionAllowed=true;
 		break;
-	case WW3D_FORMAT_U8V8:		// Bumpmap
-	case WW3D_FORMAT_L6V5U5:	// Bumpmap
-	case WW3D_FORMAT_X8L8V8U8:	// Bumpmap
+	case Assets::PixelEncoding::RG8_SNorm:		// Bumpmap
+	case Assets::PixelEncoding::RG5_SNorm_L6:	// Bumpmap
+	case Assets::PixelEncoding::RG8_SNorm_L8X8:	// Bumpmap
 		// If requesting bumpmap format that isn't available we'll just return the surface in whatever color
 		// format the texture file is in. (This is illegal case, the format support should always be queried
 		// before creating a bump texture!)
-		if (!WW3D::Is_Initted() || !WW3D::Get_Render_Backend()->Supports_Texture_Format(TextureFormat))
+		if (!WW3D::Is_Initted() || !(Graphics::Texture_Storage_Format(TextureFormat) != Graphics::RHITextureFormat::Unknown))
 		{
-			TextureFormat=WW3D_FORMAT_UNKNOWN;
+			TextureFormat=Assets::PixelEncoding::Unknown;
 		}
 		// If bump format is valid, make sure compression is not allowed so that we don't even attempt to load
 		// from a compressed file (quality isn't good enough for bump map). Also disable mipmapping.
@@ -1709,7 +1544,7 @@ VolumeTextureClass::VolumeTextureClass
 		{
 			IsCompressionAllowed=false;
 			MipLevelCount=MIP_LEVELS_1;
-			Filter.Set_Mip_Mapping(TextureFilterClass::FILTER_TYPE_NONE);
+			Sampling.mipmap = Graphics::SamplingFilter::Disabled;
 		}
 		break;
 	default:	break;
@@ -1725,9 +1560,9 @@ VolumeTextureClass::VolumeTextureClass
 
 			// Set bilinear filtering for lightmaps (they are very stretched and
 			// low detail so we don't care for anisotropic or trilinear filtering...)
-			Filter.Set_Min_Filter(TextureFilterClass::FILTER_TYPE_FAST);
-			Filter.Set_Mag_Filter(TextureFilterClass::FILTER_TYPE_FAST);
-			if (mip_level_count!=MIP_LEVELS_1) Filter.Set_Mip_Mapping(TextureFilterClass::FILTER_TYPE_FAST);
+			Sampling.minification = Graphics::SamplingFilter::Fast;
+			Sampling.magnification = Graphics::SamplingFilter::Fast;
+			if (mip_level_count!=MIP_LEVELS_1) Sampling.mipmap = Graphics::SamplingFilter::Fast;
 			break;
 		}
 	}
@@ -1740,27 +1575,12 @@ VolumeTextureClass::VolumeTextureClass
 		Set_Render_Backend_Texture(0);
 	}
 
-	// Find original size from the thumbnail (but don't create thumbnail texture yet!)
-	ThumbnailClass* thumb=ThumbnailManagerClass::Peek_Thumbnail_Instance_From_Any_Manager(Get_Full_Path());
-	if (thumb)
-	{
-		Width=thumb->Get_Original_Texture_Width();
-		Height=thumb->Get_Original_Texture_Height();
- 		if (MipLevelCount!=MIP_LEVELS_1) {
- 			MipLevelCount=(MipCountType)thumb->Get_Original_Texture_Mip_Level_Count();
- 		}
-	}
-
 	LastAccessed=WW3D::Get_Sync_Time();
 
-	// If the thumbnails are not enabled, init the texture at this point to avoid stalling when the
-	// mesh is rendered.
-	if (!WW3D::Get_Thumbnail_Enabled())
+	// Prepare the full image before its first draw on the render thread.
+	if (Graphics::Get_Resource_Load_Queue().Is_Owner_Thread())
 	{
-		if (TextureLoader::Is_Render_Thread())
-		{
-			Init();
-		}
+		Init();
 	}
 }
 
@@ -1770,7 +1590,7 @@ VolumeTextureClass::VolumeTextureClass
 */
 void VolumeTextureClass::Apply_New_Surface
 (
-	RenderBackendTextureHandle texture,
+	Graphics::TextureResource* texture,
 	bool initialized,
 	bool disable_auto_invalidation
 )
@@ -1781,11 +1601,10 @@ void VolumeTextureClass::Apply_New_Surface
 	if (disable_auto_invalidation) InactivationTime = 0;
 
 	WWASSERT(Peek_Render_Backend_Texture() != 0);
-	RenderBackendTextureDescription description;
-	if (initialized && WW3D::Get_Render_Backend()->Get_Texture_Description(
-		Peek_Render_Backend_Texture(), 0, description))
+	if (initialized && texture)
 	{
-		TextureFormat=description.format;
+        const auto& description=texture->Description();
+		TextureFormat=texture->Encoding();
 		Width=static_cast<int>(description.width);
 		Height=static_cast<int>(description.height);
 		Depth=static_cast<int>(description.depth);

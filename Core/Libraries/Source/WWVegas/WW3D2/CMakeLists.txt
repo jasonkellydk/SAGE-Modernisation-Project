@@ -1,46 +1,15 @@
 set(WW3D2_SRC
-	Buffer.h
-	IndexBuffer.cpp
-	IndexBuffer.h
-	VertexFormat.cpp
 	VertexFormat.h
-	VertexBuffer.cpp
-	VertexBuffer.h
-    AABTree.cpp
-    AABTree.h
-    #AABTreeBuilder.cpp
-    #AABTreeBuilder.h
-    AggDef.cpp
-    AggDef.h
-    AnimatedSoundMgr.cpp
-    AnimatedSoundMgr.h
     #AnimObj.cpp
     #AnimObj.h
     #AssetMgr.cpp
     #AssetMgr.h
-	AssetStatus.cpp
-	AssetStatus.h
 	StringUtilities.h
-	MeshRenderLists.h
-	MeshRenderer.cpp
-	MeshRenderer.h
-	RendererDebugger.cpp
-	RendererDebugger.h
-    Backend/RenderBackend.h
-    BitmapHandler.cpp
-    BitmapHandler.h
-    Bmp2D.cpp
-    Bmp2D.h
-    #BoxRObj.cpp
-    #BoxRObj.h
-    BWRender.cpp
-    BWRender.h
     #Camera.cpp
     #Camera.h
     #ClassId.h # unused
     Collect.cpp
     Collect.h
-    ColorSpace.h
     ColTest.cpp
     ColTest.h
     ColType.h
@@ -48,53 +17,14 @@ set(WW3D2_SRC
     Composite.h
     #Dazzle.cpp
     #Dazzle.h
-    #DDSFile.cpp
-    #DDSFile.h
-    #DecalMsh.cpp
-    #DecalMsh.h
-    DecalSys.cpp
-    DecalSys.h
-    DistLod.cpp
-    DistLod.h
     DList.h
-    DynaMesh.cpp
-    DynaMesh.h
-    Font3D.cpp
-    Font3D.h
-    HAnim.cpp
-    HAnim.h
-    #HAnimMgr.cpp
-    #HAnimMgr.h
-    HCAnim.cpp
-    HCAnim.h
     #HLOD.cpp
     #HLOD.h
-    HModelDef.cpp
-    HModelDef.h
-    #HMorphAnim.cpp
-    #HMorphAnim.h
-    #HRawAnim.cpp
-    #HRawAnim.h
-    HTree.cpp
-    HTree.h
-    #HTreeMgr.cpp
-    #HTreeMgr.h
-        Backend/IRenderBackend.h
-        Backend/RenderBackendTypes.h
-    Intersec.cpp
-    Intersec.h
-    Intersec.inl
     IntTest.h
-    Layer.cpp
-    Layer.h
     #Light.cpp
     #Light.h
-    #LightEnvironment.cpp
-    #LightEnvironment.h
-    Line3D.cpp
-    Line3D.h
-    #LineGrp.cpp
-    #LineGrp.h
+
+
     #Mapper.cpp
     #Mapper.h
     MatInfo.cpp
@@ -105,10 +35,6 @@ set(WW3D2_SRC
     #MatrixMapper.h
     #Mesh.cpp
     #Mesh.h
-    #MeshBuild.cpp
-    #MeshBuild.h
-    MeshDam.cpp
-    MeshDam.h
     #MeshGeometry.cpp
     #MeshGeometry.h
     #MeshMatDesc.cpp
@@ -116,51 +42,18 @@ set(WW3D2_SRC
     #MeshMdl.cpp
     #MeshMdl.h
     #MeshMdlIO.cpp
-    MetalMap.cpp
-    MetalMap.h
-    MissingTexture.cpp
-    MissingTexture.h
-    #MotChan.cpp
-    #MotChan.h
-    #NullRObj.cpp
-    #NullRObj.h
     #PartBuf.cpp
     #PartBuf.h
     #PartEmt.cpp
     #PartEmt.h
-    #PartLdr.cpp
-    #PartLdr.h
-    Pivot.cpp
-    Pivot.h
-    PointGr.cpp
-    PointGr.h
-    PolyInfo.cpp
-    PolyInfo.h
-    PredLod.cpp
-    PredLod.h
-    PrimAnim.cpp
     PrimAnim.h
     Projector.cpp
     Projector.h
-    Proto.cpp
-    Proto.h
     Proxy.h
-    RDDesc.h
-    #Render2D.cpp
-    #Render2D.h
-    Render2DSentence.cpp
-    Render2DSentence.h
-    RenderObjectRecycler.cpp
-    RenderObjectRecycler.h
     RendObj.cpp
     RendObj.h
-    RenderState.cpp
-    RenderState.h
     #RInfo.cpp
     #RInfo.h
-    RingObj.cpp
-    RingObj.h
-    RObjList.h
     #Scene.cpp
     #Scene.h
     SegLine.cpp
@@ -169,59 +62,18 @@ set(WW3D2_SRC
     SegLineRenderer.h
     #Shader.cpp
     #Shader.h
-    ShatterSystem.cpp
-    ShatterSystem.h
     ShdLib.h
-    SnapPts.cpp
-    SnapPts.h
-    SortingRenderer.cpp
-    SortingRenderer.h
-    SoundLibraryBridge.h
-    SoundRObj.cpp
-    SoundRObj.h
-    SphereObj.cpp
-    SphereObj.h
-    StaticSortList.cpp
-    StaticSortList.h
-    Statistics.cpp
-    Statistics.h
-    Streak.cpp
-    Streak.h
-    StreakRender.cpp
-    StreakRender.h
-    StripOptimizer.cpp
-    StripOptimizer.h
-    SurfaceClass.cpp
-    SurfaceClass.h
     TexProject.cpp
     TexProject.h
-    #TextDraw.cpp # unused
-    TextDraw.h
     Texture.cpp
     Texture.h
-    TextureFilter.cpp
-    TextureFilter.h
-    TextureLoader.cpp
-    TextureLoader.h
-    TextureThumbnail.cpp
-    TextureThumbnail.h
     #VertMaterial.cpp
     #VertMaterial.h
-    VisRasterizer.cpp
-    VisRasterizer.h
-    W3DDep.cpp
-    W3DDep.h
     #W3DFile.h
     W3DObsolete.h
-    W3DUtil.cpp
-    W3DUtil.h
     W3DErr.h
-    W3DExclusionList.cpp
-    W3DExclusionList.h
     WW3D.cpp
     WW3D.h
-    WW3DFormat.cpp
-    WW3DFormat.h
     WW3DIds.h
     WW3DTrig.h
 )

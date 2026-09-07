@@ -1,8 +1,11 @@
 module;
+#include "../../profiling/Tracy.h"
 
 #define NOMINMAX
 
+#include <algorithm>
 #include <array>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -80,11 +83,79 @@ struct DX11Buffer final
 	DX11NativeObject<ID3D11ShaderResourceView> shader_resource_view;
 	RHIBufferUsage usage = RHIBufferUsage::Vertex;
 	std::uint32_t byte_size = 0;
+	std::uint32_t capacity = 0;
+};
+
+// Recycle native vertex/index storage independently of public handle lifetime.
+// Size classes avoid searching live resources. The budget limits idle memory;
+// exhausting it never limits allocation or drops a draw.
+class DX11BufferCache final
+{
+public:
+    static constexpr std::uint32_t MaxIdleBytes = 64u * 1024u * 1024u;
+
+    static bool Eligible(RHIBufferUsage usage, std::uint32_t size) noexcept
+    {
+        return (usage == RHIBufferUsage::Vertex || usage == RHIBufferUsage::Index)
+            && size > 0 && size <= MaxIdleBytes;
+    }
+
+    static unsigned Size_Class(std::uint32_t size) noexcept
+    {
+        return std::bit_width(size > 256 ? size - 1 : 255u);
+    }
+
+    DX11NativeObject<ID3D11Buffer> Take(RHIBufferUsage usage, std::uint32_t size)
+    {
+        if (!Eligible(usage, size)) return {};
+        const auto index = Size_Class(size);
+        auto& bucket = m_free[usage == RHIBufferUsage::Index][index];
+        if (bucket.empty()) return {};
+        auto buffer = std::move(bucket.back());
+        bucket.pop_back();
+        m_idle_bytes -= 1u << index;
+        return buffer;
+    }
+
+    void Recycle(DX11Buffer& buffer) noexcept
+    {
+        if (!Eligible(buffer.usage, buffer.capacity)
+            || buffer.capacity > MaxIdleBytes - m_idle_bytes) return;
+        auto& bucket = m_free[buffer.usage == RHIBufferUsage::Index][Size_Class(buffer.capacity)];
+        try {
+            bucket.push_back(std::move(buffer.object));
+            m_idle_bytes += buffer.capacity;
+        } catch (...) {
+            // Destruction still releases the resource if cache growth fails.
+        }
+    }
+
+private:
+    std::array<std::array<std::vector<DX11NativeObject<ID3D11Buffer>>, 27>, 2> m_free;
+    std::uint32_t m_idle_bytes = 0;
+};
+
+struct DX11TextureMapping final
+{
+    DX11NativeObject<ID3D11Resource> staging;
+    DX11NativeObject<ID3D11DeviceContext> context;
+    std::uint32_t subresource = 0;
+    std::uint32_t staging_subresource = 0;
+    bool read_only = false;
+    bool mapped = false;
+    ~DX11TextureMapping() {
+        if (mapped) context.Get()->Unmap(staging.Get(), staging_subresource);
+    }
 };
 
 struct DX11Texture final
 {
 	DX11NativeObject<ID3D11Texture2D> object;
+    DX11NativeObject<ID3D11Texture3D> volume;
+    RHITexture description{};
+    std::uint32_t references = 1;
+    std::vector<std::unique_ptr<DX11TextureMapping>> mappings;
+    ID3D11Resource* Resource() const noexcept { return object.Get() != nullptr ? static_cast<ID3D11Resource*>(object.Get()) : volume.Get(); }
 	DX11NativeObject<ID3D11ShaderResourceView> shader_resource_view;
 	DX11NativeObject<ID3D11RenderTargetView> render_target_view;
 	DX11NativeObject<ID3D11DepthStencilView> depth_stencil_view;
@@ -118,19 +189,6 @@ static_assert(std::is_nothrow_move_assignable_v<DX11Pipeline>);
 
 struct DX11DeviceState;
 
-export struct DX11SharedFrameResources final
-{
-	void *device = nullptr;
-	void *context = nullptr;
-	void *swap_chain = nullptr;
-	void *back_buffer = nullptr;
-	void *back_buffer_view = nullptr;
-	void *depth_buffer = nullptr;
-	void *depth_buffer_view = nullptr;
-	std::uint32_t width = 0;
-	std::uint32_t height = 0;
-};
-
 class DX11SwapChain final : public SwapChain
 {
 public:
@@ -148,7 +206,6 @@ public:
 	bool Present() noexcept override;
 
 	bool Create_Targets(std::uint32_t width, std::uint32_t height);
-	bool Adopt_Targets(const DX11SharedFrameResources &resources);
 
 private:
 	DX11DeviceState *m_state = nullptr;
@@ -173,6 +230,8 @@ public:
 	bool Set_Depth_Target(RHITextureHandle depth_target) noexcept override;
 	bool Clear(const std::array<float, 4> &color, float depth) noexcept override;
 	bool Clear_Depth(float depth) noexcept override;
+    bool Clear_Color_Target(RHITextureHandle texture, const std::array<float, 4>& color) noexcept override;
+    bool Clear_Depth_Stencil_Target(RHITextureHandle texture, float depth, std::uint8_t stencil) noexcept override;
 	bool Copy_Texture(RHITextureHandle source, RHITextureHandle destination) noexcept override;
 	bool Set_Viewport(RHIViewport viewport) noexcept override;
 	bool Set_Scissor(RHIScissorRect scissor) noexcept override;
@@ -192,6 +251,7 @@ private:
 
 	DX11DeviceState *m_state = nullptr;
 	RHIPipelineHandle m_pipeline{};
+	RHIPrimitiveTopology m_topology = RHIPrimitiveTopology::TriangleList;
 	RHITextureHandle m_color_target{};
 	RHITextureHandle m_depth_target{};
 	std::span<const RHIBindlessResource> m_bindless_resources{};
@@ -204,6 +264,7 @@ struct DX11DeviceState final
 	DX11NativeObject<ID3D11Device> device;
 	DX11NativeObject<ID3D11DeviceContext> context;
 	DX11NativeObject<IDXGISwapChain> native_swap_chain;
+	DX11BufferCache buffer_cache;
 	ResourcePool<DX11Buffer, RHIBufferHandle> buffers;
 	ResourcePool<DX11Texture, RHITextureHandle> textures;
 	ResourcePool<DX11Pipeline, RHIPipelineHandle> pipelines;
@@ -213,7 +274,6 @@ struct DX11DeviceState final
 	std::string vertex_shader_name;
 	std::string fragment_shader_name;
 	bool frame_active = false;
-	bool shared_frame = false;
 	bool ready_to_present = false;
 	bool presented = false;
 
@@ -236,6 +296,14 @@ static Interface *Retain(Interface *object) noexcept
 static DXGI_FORMAT To_DX11_Format(RHITextureFormat format) noexcept
 {
 	switch (format) {
+    case RHITextureFormat::BGRX8_UNorm: return DXGI_FORMAT_B8G8R8X8_UNORM;
+    case RHITextureFormat::BGRA5551_UNorm: return DXGI_FORMAT_B5G5R5A1_UNORM;
+    case RHITextureFormat::A8_UNorm: return DXGI_FORMAT_A8_UNORM;
+    case RHITextureFormat::RG8_SNorm: return DXGI_FORMAT_R8G8_SNORM;
+    case RHITextureFormat::BC1_UNorm: return DXGI_FORMAT_BC1_UNORM;
+    case RHITextureFormat::BC2_UNorm: return DXGI_FORMAT_BC2_UNORM;
+    case RHITextureFormat::BC3_UNorm: return DXGI_FORMAT_BC3_UNORM;
+    case RHITextureFormat::D16_UNorm: return DXGI_FORMAT_D16_UNORM;
 	case RHITextureFormat::R8_UNorm:
 		return DXGI_FORMAT_R8_UNORM;
 	case RHITextureFormat::RG8_UNorm:
@@ -244,6 +312,10 @@ static DXGI_FORMAT To_DX11_Format(RHITextureFormat format) noexcept
 		return DXGI_FORMAT_R8G8B8A8_UNORM;
 	case RHITextureFormat::BGRA8_UNorm:
 		return DXGI_FORMAT_B8G8R8A8_UNORM;
+	case RHITextureFormat::BGR565_UNorm:
+		return DXGI_FORMAT_B5G6R5_UNORM;
+	case RHITextureFormat::BGRA4444_UNorm:
+		return DXGI_FORMAT_B4G4R4A4_UNORM;
 	case RHITextureFormat::RGBA16_Float:
 		return DXGI_FORMAT_R16G16B16A16_FLOAT;
 	case RHITextureFormat::RGBA32_Float:
@@ -327,6 +399,8 @@ static D3D11_PRIMITIVE_TOPOLOGY To_DX11_Topology(RHIPrimitiveTopology topology) 
 	switch (topology) {
 	case RHIPrimitiveTopology::TriangleList:
 		return D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+	case RHIPrimitiveTopology::TriangleStrip:
+		return D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP;
 	case RHIPrimitiveTopology::PointList:
 		return D3D11_PRIMITIVE_TOPOLOGY_POINTLIST;
 	}
@@ -354,6 +428,7 @@ static bool Create_DX11_Pipeline(
 	DX11Pipeline &pipeline) noexcept
 {
 	if (device == nullptr || (description.topology != RHIPrimitiveTopology::TriangleList
+		&& description.topology != RHIPrimitiveTopology::TriangleStrip
 		&& description.topology != RHIPrimitiveTopology::PointList)
 		|| (description.vertex_format != RHIVertexFormat::Position3Color4UV2
 			&& description.vertex_format != RHIVertexFormat::Position3Color4UV2ResourceIndex
@@ -500,12 +575,18 @@ static bool Create_DX11_Pipeline(
 	for (std::size_t slot = 0; slot < description.sampler_count; ++slot) {
         const RHISamplerDescription &sampler = description.samplers[slot];
         D3D11_SAMPLER_DESC sampler_description{};
-        sampler_description.Filter = sampler.linear_filter ? D3D11_FILTER_MIN_MAG_MIP_LINEAR : D3D11_FILTER_MIN_MAG_MIP_POINT;
+        sampler_description.Filter = sampler.anisotropy > 1 ? D3D11_FILTER_ANISOTROPIC :
+            D3D11_ENCODE_BASIC_FILTER(sampler.minification == RHISamplerFilter::Linear ? D3D11_FILTER_TYPE_LINEAR : D3D11_FILTER_TYPE_POINT,
+                sampler.magnification == RHISamplerFilter::Linear ? D3D11_FILTER_TYPE_LINEAR : D3D11_FILTER_TYPE_POINT,
+                sampler.mipmap == RHISamplerFilter::Linear ? D3D11_FILTER_TYPE_LINEAR : D3D11_FILTER_TYPE_POINT,
+                D3D11_FILTER_REDUCTION_TYPE_STANDARD);
         sampler_description.AddressU = sampler.address[0] == RHISamplerAddress::Clamp ? D3D11_TEXTURE_ADDRESS_CLAMP : D3D11_TEXTURE_ADDRESS_WRAP;
         sampler_description.AddressV = sampler.address[1] == RHISamplerAddress::Clamp ? D3D11_TEXTURE_ADDRESS_CLAMP : D3D11_TEXTURE_ADDRESS_WRAP;
         sampler_description.AddressW = sampler.address[2] == RHISamplerAddress::Clamp ? D3D11_TEXTURE_ADDRESS_CLAMP : D3D11_TEXTURE_ADDRESS_WRAP;
         sampler_description.ComparisonFunc = D3D11_COMPARISON_NEVER;
-        sampler_description.MaxLOD = D3D11_FLOAT32_MAX;
+        sampler_description.MaxAnisotropy = std::clamp<unsigned>(sampler.anisotropy, 1, D3D11_REQ_MAXANISOTROPY);
+        sampler_description.MinLOD = sampler.min_lod;
+        sampler_description.MaxLOD = sampler.max_lod;
         ID3D11SamplerState *sampler_state = nullptr;
         if (FAILED(device->CreateSamplerState(&sampler_description, &sampler_state)))
             return false;
@@ -541,9 +622,16 @@ static std::uint32_t To_DX11_Texture_Bind_Flags(const RHITexture &description) n
 static std::uint32_t To_DX11_Bytes_Per_Pixel(RHITextureFormat format) noexcept
 {
 	switch (format) {
+    case RHITextureFormat::A8_UNorm: return 1;
+    case RHITextureFormat::BGRA5551_UNorm:
+    case RHITextureFormat::RG8_SNorm:
+    case RHITextureFormat::D16_UNorm: return 2;
+    case RHITextureFormat::BGRX8_UNorm: return 4;
 	case RHITextureFormat::R8_UNorm:
 		return 1;
 	case RHITextureFormat::RG8_UNorm:
+	case RHITextureFormat::BGR565_UNorm:
+	case RHITextureFormat::BGRA4444_UNorm:
 		return 2;
 	case RHITextureFormat::RGBA8_UNorm:
 	case RHITextureFormat::BGRA8_UNorm:
@@ -560,6 +648,43 @@ static std::uint32_t To_DX11_Bytes_Per_Pixel(RHITextureFormat format) noexcept
 	return 0;
 }
 
+static bool Is_Block_Compressed(RHITextureFormat format) noexcept
+{
+    return format == RHITextureFormat::BC1_UNorm || format == RHITextureFormat::BC2_UNorm
+        || format == RHITextureFormat::BC3_UNorm;
+}
+
+struct TextureTransferLayout final
+{
+    std::uint32_t width, height, depth, rows, row_bytes, row_pitch, slice_pitch, subresource;
+};
+
+static bool Texture_Transfer_Layout(const RHITexture& description, std::uint32_t mip,
+    std::uint32_t layer, std::uint32_t row_pitch, std::uint32_t slice_pitch,
+    std::size_t capacity, TextureTransferLayout& output) noexcept
+{
+    if (mip >= description.mip_count || mip >= 32 || layer >= description.array_size) return false;
+    const auto width = std::max(1u, description.width >> mip);
+    const auto height = std::max(1u, description.height >> mip);
+    const auto depth = std::max(1u, description.depth >> mip);
+    const bool compressed = Is_Block_Compressed(description.format);
+    const auto rows = compressed ? (height + 3u) / 4u : height;
+    const std::uint64_t row_bytes = compressed
+        ? static_cast<std::uint64_t>((width + 3u) / 4u) * (description.format == RHITextureFormat::BC1_UNorm ? 8u : 16u)
+        : static_cast<std::uint64_t>(width) * To_DX11_Bytes_Per_Pixel(description.format);
+    if (row_bytes == 0 || row_bytes > UINT32_MAX) return false;
+    if (row_pitch == 0) row_pitch = static_cast<std::uint32_t>(row_bytes);
+    const std::uint64_t minimum_slice = static_cast<std::uint64_t>(row_pitch) * rows;
+    if (row_pitch < row_bytes || minimum_slice > UINT32_MAX) return false;
+    if (slice_pitch == 0) slice_pitch = static_cast<std::uint32_t>(minimum_slice);
+    const auto required = static_cast<std::uint64_t>(slice_pitch) * (depth - 1u)
+        + static_cast<std::uint64_t>(row_pitch) * (rows - 1u) + row_bytes;
+    if (slice_pitch < minimum_slice || capacity < required) return false;
+    output = {width, height, depth, rows, static_cast<std::uint32_t>(row_bytes), row_pitch,
+        slice_pitch, mip + layer * description.mip_count};
+    return true;
+}
+
 export struct DX11DeviceOptions final
 {
 	bool use_warp = false;
@@ -569,29 +694,17 @@ export struct DX11DeviceOptions final
 	const char *shader_directory = nullptr;
 	const char *vertex_shader_name = "visual_basic.vso";
 	const char *fragment_shader_name = "visual_basic.pso";
-	const DX11SharedFrameResources *shared_frame = nullptr;
+    RHITextureFormat backbuffer_format = RHITextureFormat::RGBA8_UNorm;
 };
 
 static bool Create_DX11_Device(DX11DeviceState &state, const DX11DeviceOptions &options) noexcept
 {
-	if (options.shared_frame != nullptr) {
-		const DX11SharedFrameResources &resources = *options.shared_frame;
-		if (resources.device == nullptr || resources.context == nullptr || resources.swap_chain == nullptr)
-			return false;
+    if (options.backbuffer_format != RHITextureFormat::RGBA8_UNorm
+        && options.backbuffer_format != RHITextureFormat::BGRA8_UNorm) return false;
 
-		state.device.Reset(Retain(static_cast<ID3D11Device *>(resources.device)));
-		state.context.Reset(Retain(static_cast<ID3D11DeviceContext *>(resources.context)));
-		state.native_swap_chain.Reset(Retain(static_cast<IDXGISwapChain *>(resources.swap_chain)));
-		return state.device.Get() != nullptr && state.context.Get() != nullptr && state.native_swap_chain.Get() != nullptr;
-	}
-
-	const D3D_FEATURE_LEVEL feature_levels[] = {
-		D3D_FEATURE_LEVEL_11_0,
-		D3D_FEATURE_LEVEL_10_1,
-		D3D_FEATURE_LEVEL_10_0
-	};
+    const D3D_FEATURE_LEVEL feature_levels[] = {D3D_FEATURE_LEVEL_11_0};
 	const D3D_DRIVER_TYPE requested_driver = options.use_warp ? D3D_DRIVER_TYPE_WARP : D3D_DRIVER_TYPE_HARDWARE;
-	D3D_FEATURE_LEVEL selected_feature_level = D3D_FEATURE_LEVEL_10_0;
+    D3D_FEATURE_LEVEL selected_feature_level = D3D_FEATURE_LEVEL_11_0;
 	ID3D11Device *native_device = nullptr;
 	ID3D11DeviceContext *native_context = nullptr;
 	IDXGISwapChain *native_swap_chain = nullptr;
@@ -600,7 +713,8 @@ static bool Create_DX11_Device(DX11DeviceState &state, const DX11DeviceOptions &
 		DXGI_SWAP_CHAIN_DESC swap_chain_description{};
 		swap_chain_description.BufferDesc.Width = options.width;
 		swap_chain_description.BufferDesc.Height = options.height;
-		swap_chain_description.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        swap_chain_description.BufferDesc.Format = options.backbuffer_format == RHITextureFormat::BGRA8_UNorm
+            ? DXGI_FORMAT_B8G8R8A8_UNORM : DXGI_FORMAT_R8G8B8A8_UNORM;
 		swap_chain_description.BufferDesc.RefreshRate.Numerator = 60;
 		swap_chain_description.BufferDesc.RefreshRate.Denominator = 1;
 		swap_chain_description.SampleDesc.Count = 1;
@@ -634,56 +748,6 @@ static bool Create_DX11_Device(DX11DeviceState &state, const DX11DeviceOptions &
 			&native_device,
 			&selected_feature_level,
 			&native_context);
-	}
-	if (FAILED(result) && !options.use_warp) {
-		if (native_device != nullptr)
-			native_device->Release();
-		if (native_context != nullptr)
-			native_context->Release();
-		if (native_swap_chain != nullptr)
-			native_swap_chain->Release();
-		native_device = nullptr;
-		native_context = nullptr;
-		native_swap_chain = nullptr;
-		if (options.window != nullptr && options.width != 0 && options.height != 0) {
-			DXGI_SWAP_CHAIN_DESC swap_chain_description{};
-			swap_chain_description.BufferDesc.Width = options.width;
-			swap_chain_description.BufferDesc.Height = options.height;
-			swap_chain_description.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-			swap_chain_description.BufferDesc.RefreshRate.Numerator = 60;
-			swap_chain_description.BufferDesc.RefreshRate.Denominator = 1;
-			swap_chain_description.SampleDesc.Count = 1;
-			swap_chain_description.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-			swap_chain_description.BufferCount = 2;
-			swap_chain_description.OutputWindow = static_cast<HWND>(options.window);
-			swap_chain_description.Windowed = TRUE;
-			swap_chain_description.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
-			result = D3D11CreateDeviceAndSwapChain(
-				nullptr,
-				D3D_DRIVER_TYPE_WARP,
-				nullptr,
-				0,
-				feature_levels,
-				static_cast<UINT>(std::size(feature_levels)),
-				D3D11_SDK_VERSION,
-				&swap_chain_description,
-				&native_swap_chain,
-				&native_device,
-				&selected_feature_level,
-				&native_context);
-		} else {
-			result = D3D11CreateDevice(
-				nullptr,
-				D3D_DRIVER_TYPE_WARP,
-				nullptr,
-				0,
-				feature_levels,
-				static_cast<UINT>(std::size(feature_levels)),
-				D3D11_SDK_VERSION,
-				&native_device,
-				&selected_feature_level,
-				&native_context);
-		}
 	}
 
 	if (SUCCEEDED(result)) {
@@ -728,6 +792,9 @@ public:
 	DX11Device &operator=(const DX11Device &) = delete;
 
 	bool Is_Valid() const noexcept override;
+	RHIDeviceStatus Get_Status() const noexcept override;
+	bool Get_Adapter_Info(RHIAdapterInfo& info) const noexcept override;
+	RHITextureLimits Texture_Limits() const noexcept override;
 	RHIBufferHandle Create_Buffer(const RHIBuffer &description) override;
 	RHITextureHandle Create_Texture(const RHITexture &description) override;
 	RHIPipelineHandle Create_Pipeline(const RHIPipeline &description) override;
@@ -737,13 +804,17 @@ public:
 	bool Update_Buffer(RHIBufferHandle buffer, std::uint32_t offset, std::span<const std::byte> data) noexcept override;
 	bool Update_Texture(RHITextureHandle texture, const RHITextureUpload &data) noexcept override;
 	bool Readback_Texture(RHITextureHandle texture, std::span<std::byte> data, std::uint32_t row_pitch) noexcept override;
-	bool Destroy_Buffer(RHIBufferHandle buffer) noexcept override;
+	bool Readback_Texture_Subresource(RHITextureHandle texture, const RHITextureReadback& data) noexcept override;
+    bool Generate_Texture_Mips(RHITextureHandle texture) noexcept override;
+    bool Map_Texture(RHITextureHandle texture, std::uint32_t mip, std::uint32_t layer, bool read_only, RHITextureMapping& mapping) override;
+    bool Unmap_Texture(RHITextureHandle texture, std::uint32_t mip, std::uint32_t layer) noexcept override;
+    bool Retain_Texture(RHITextureHandle texture) noexcept override;
+    bool Destroy_Buffer(RHIBufferHandle buffer) noexcept override;
 	bool Destroy_Texture(RHITextureHandle texture) noexcept override;
 	bool Destroy_Pipeline(RHIPipelineHandle pipeline) noexcept override;
 	CommandList &Immediate_Command_List() noexcept override;
 	SwapChain &Get_Swap_Chain() noexcept override;
-	bool Adopt_Shared_Frame(const DX11SharedFrameResources &resources);
-	RHITextureHandle Import_Texture(void *texture, void *shader_resource_view);
+    bool Set_Exclusive_Fullscreen(bool fullscreen) noexcept;
 	bool Begin_Frame() noexcept override;
 	bool End_Frame() noexcept override;
 
@@ -800,7 +871,11 @@ bool DX11SwapChain::Create_Targets(std::uint32_t width, std::uint32_t height)
 	backbuffer.object.Reset(native_backbuffer);
 	backbuffer.width = width;
 	backbuffer.height = height;
-	backbuffer.format = RHITextureFormat::RGBA8_UNorm;
+	D3D11_TEXTURE2D_DESC backbuffer_description{};
+	native_backbuffer->GetDesc(&backbuffer_description);
+	backbuffer.format = backbuffer_description.Format == DXGI_FORMAT_B8G8R8A8_UNORM
+		? RHITextureFormat::BGRA8_UNorm : RHITextureFormat::RGBA8_UNorm;
+    backbuffer.description = {width, height, 1, backbuffer.format};
 	ID3D11RenderTargetView *native_render_target = nullptr;
 	if (FAILED(m_state->device.Get()->CreateRenderTargetView(native_backbuffer, nullptr, &native_render_target)))
 		return false;
@@ -814,7 +889,7 @@ bool DX11SwapChain::Create_Targets(std::uint32_t width, std::uint32_t height)
 	depth_description.Height = height;
 	depth_description.MipLevels = 1;
 	depth_description.ArraySize = 1;
-	depth_description.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
+	depth_description.Format = DXGI_FORMAT_R24G8_TYPELESS;
 	depth_description.SampleDesc.Count = 1;
 	depth_description.Usage = D3D11_USAGE_DEFAULT;
 	depth_description.BindFlags = D3D11_BIND_DEPTH_STENCIL;
@@ -829,8 +904,12 @@ bool DX11SwapChain::Create_Targets(std::uint32_t width, std::uint32_t height)
 	depth.width = width;
 	depth.height = height;
 	depth.format = RHITextureFormat::D24_UNorm_S8;
+    depth.description = {width, height, 1, depth.format, static_cast<std::uint32_t>(RHITextureUsage::DepthStencil)};
 	ID3D11DepthStencilView *native_depth_view = nullptr;
-	if (FAILED(m_state->device.Get()->CreateDepthStencilView(native_depth, nullptr, &native_depth_view))) {
+	D3D11_DEPTH_STENCIL_VIEW_DESC depth_view_description{};
+	depth_view_description.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
+	depth_view_description.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
+	if (FAILED(m_state->device.Get()->CreateDepthStencilView(native_depth, &depth_view_description, &native_depth_view))) {
 		m_state->textures.Destroy(backbuffer_handle);
 		return false;
 	}
@@ -848,67 +927,20 @@ bool DX11SwapChain::Create_Targets(std::uint32_t width, std::uint32_t height)
 	return true;
 }
 
-bool DX11SwapChain::Adopt_Targets(const DX11SharedFrameResources &resources)
-{
-	if (m_state == nullptr || m_state->device.Get() == nullptr || m_state->context.Get() == nullptr || m_state->native_swap_chain.Get() == nullptr
-		|| resources.back_buffer == nullptr || resources.back_buffer_view == nullptr || resources.depth_buffer == nullptr || resources.depth_buffer_view == nullptr
-		|| resources.width == 0 || resources.height == 0)
-		return false;
-
-	DX11Texture *current_backbuffer = m_state->textures.Resolve(m_backbuffer);
-	DX11Texture *current_depth = m_state->textures.Resolve(m_depth_target);
-	if (current_backbuffer != nullptr && current_depth != nullptr
-		&& current_backbuffer->object.Get() == static_cast<ID3D11Texture2D *>(resources.back_buffer)
-		&& current_backbuffer->render_target_view.Get() == static_cast<ID3D11RenderTargetView *>(resources.back_buffer_view)
-		&& current_depth->object.Get() == static_cast<ID3D11Texture2D *>(resources.depth_buffer)
-		&& current_depth->depth_stencil_view.Get() == static_cast<ID3D11DepthStencilView *>(resources.depth_buffer_view)) {
-		m_width = resources.width;
-		m_height = resources.height;
-		return true;
-	}
-
-	DX11Texture backbuffer;
-	backbuffer.object.Reset(Retain(static_cast<ID3D11Texture2D *>(resources.back_buffer)));
-	backbuffer.render_target_view.Reset(Retain(static_cast<ID3D11RenderTargetView *>(resources.back_buffer_view)));
-	backbuffer.width = resources.width;
-	backbuffer.height = resources.height;
-	backbuffer.format = RHITextureFormat::BGRA8_UNorm;
-
-	DX11Texture depth;
-	depth.object.Reset(Retain(static_cast<ID3D11Texture2D *>(resources.depth_buffer)));
-	depth.depth_stencil_view.Reset(Retain(static_cast<ID3D11DepthStencilView *>(resources.depth_buffer_view)));
-	depth.width = resources.width;
-	depth.height = resources.height;
-	depth.format = RHITextureFormat::D24_UNorm_S8;
-
-	if (m_backbuffer.Is_Valid() && m_depth_target.Is_Valid() && current_backbuffer != nullptr && current_depth != nullptr) {
-		*current_backbuffer = std::move(backbuffer);
-		*current_depth = std::move(depth);
-	} else {
-		m_state->textures.Destroy(m_backbuffer);
-		m_state->textures.Destroy(m_depth_target);
-		m_backbuffer = m_state->textures.Create(std::move(backbuffer));
-		if (!m_backbuffer.Is_Valid())
-			return false;
-		m_depth_target = m_state->textures.Create(std::move(depth));
-		if (!m_depth_target.Is_Valid()) {
-			m_state->textures.Destroy(m_backbuffer);
-			m_backbuffer = {};
-			return false;
-		}
-	}
-
-	m_width = resources.width;
-	m_height = resources.height;
-	return true;
-}
-
 bool DX11SwapChain::Resize(std::uint32_t width, std::uint32_t height)
 {
-	if (!Is_Valid() || m_state->frame_active || m_state->shared_frame || width == 0 || height == 0)
+	if (m_state == nullptr || m_state->device.Get() == nullptr || m_state->native_swap_chain.Get() == nullptr
+		|| m_state->frame_active || width == 0 || height == 0)
 		return false;
 
-	m_state->context.Get()->OMSetRenderTargets(0, nullptr, nullptr);
+	const auto* color = m_state->textures.Resolve(m_backbuffer);
+	const auto* depth = m_state->textures.Resolve(m_depth_target);
+	// A retained frame attachment must remain valid until its consumer releases it.
+	if ((color != nullptr && color->references > 1) || (depth != nullptr && depth->references > 1))
+		return false;
+
+	m_state->context.Get()->ClearState();
+	m_state->command_list.Reset_Frame_State();
 	m_state->textures.Destroy(m_backbuffer);
 	m_state->textures.Destroy(m_depth_target);
 	m_backbuffer = {};
@@ -923,6 +955,7 @@ bool DX11SwapChain::Resize(std::uint32_t width, std::uint32_t height)
 
 bool DX11SwapChain::Present() noexcept
 {
+    GRAPHICS_PROFILE_SCOPE("Graphics.DX11.Present");
 	if (!Is_Valid() || m_state->frame_active || !m_state->ready_to_present || m_state->presented)
 		return false;
 
@@ -967,6 +1000,7 @@ bool DX11CommandList::Bind_Pipeline(RHIPipelineHandle pipeline) noexcept
 	context->RSSetState(resource->rasterizer_state.Get());
 	context->IASetPrimitiveTopology(To_DX11_Topology(resource->topology));
 	m_pipeline = pipeline;
+	m_topology = resource->topology;
 	return true;
 }
 
@@ -1132,6 +1166,25 @@ bool DX11CommandList::Clear_Depth(float depth) noexcept
 	return true;
 }
 
+bool DX11CommandList::Clear_Color_Target(RHITextureHandle texture, const std::array<float, 4>& color) noexcept
+{
+    if (!Is_Ready()) return false;
+    auto* resource = m_state->textures.Resolve(texture);
+    if (resource == nullptr || resource->render_target_view.Get() == nullptr) return false;
+    m_state->context.Get()->ClearRenderTargetView(resource->render_target_view.Get(), color.data());
+    return true;
+}
+
+bool DX11CommandList::Clear_Depth_Stencil_Target(RHITextureHandle texture, float depth, std::uint8_t stencil) noexcept
+{
+    if (!Is_Ready()) return false;
+    auto* resource = m_state->textures.Resolve(texture);
+    if (resource == nullptr || resource->depth_stencil_view.Get() == nullptr) return false;
+    const auto flags = D3D11_CLEAR_DEPTH | (resource->format == RHITextureFormat::D24_UNorm_S8 ? D3D11_CLEAR_STENCIL : 0);
+    m_state->context.Get()->ClearDepthStencilView(resource->depth_stencil_view.Get(), flags, depth, stencil);
+    return true;
+}
+
 bool DX11CommandList::Copy_Texture(RHITextureHandle source, RHITextureHandle destination) noexcept
 {
 	if (!Is_Ready() || !source.Is_Valid() || !destination.Is_Valid())
@@ -1140,12 +1193,16 @@ bool DX11CommandList::Copy_Texture(RHITextureHandle source, RHITextureHandle des
 	DX11Texture *source_texture = m_state->textures.Resolve(source);
 	DX11Texture *destination_texture = m_state->textures.Resolve(destination);
 	if (source_texture == nullptr || destination_texture == nullptr
-		|| source_texture->object.Get() == nullptr || destination_texture->object.Get() == nullptr
+		|| source_texture->Resource() == nullptr || destination_texture->Resource() == nullptr
 		|| source_texture->width != destination_texture->width || source_texture->height != destination_texture->height
-		|| source_texture->format != destination_texture->format)
+		|| source_texture->format != destination_texture->format
+        || source_texture->description.depth != destination_texture->description.depth
+        || source_texture->description.mip_count != destination_texture->description.mip_count
+        || source_texture->description.array_size != destination_texture->description.array_size
+        || source_texture->description.dimension != destination_texture->description.dimension)
 		return false;
 
-	m_state->context.Get()->CopyResource(destination_texture->object.Get(), source_texture->object.Get());
+	m_state->context.Get()->CopyResource(destination_texture->Resource(), source_texture->Resource());
 	return true;
 }
 
@@ -1251,6 +1308,7 @@ bool DX11CommandList::Draw(std::uint32_t vertex_count, std::uint32_t first_verte
 		m_state->context.Get()->Draw(vertex_count, first_vertex);
 	else
 		m_state->context.Get()->DrawInstanced(vertex_count, instance_count, first_vertex, first_instance);
+	Record_Draw(m_topology, vertex_count, instance_count);
 	return true;
 }
 
@@ -1263,12 +1321,14 @@ bool DX11CommandList::Draw_Indexed(std::uint32_t index_count, std::uint32_t firs
 		m_state->context.Get()->DrawIndexed(index_count, first_index, base_vertex);
 	else
 		m_state->context.Get()->DrawIndexedInstanced(index_count, instance_count, first_index, base_vertex, first_instance);
+	Record_Draw(m_topology, index_count, instance_count);
 	return true;
 }
 
 void DX11CommandList::Reset_Frame_State() noexcept
 {
 	m_pipeline = {};
+	m_topology = RHIPrimitiveTopology::TriangleList;
 	m_color_target = {};
 	m_depth_target = {};
 	m_bindless_resources = {};
@@ -1292,17 +1352,47 @@ DX11Device::DX11Device(DX11DeviceOptions options)
 	if (!Create_DX11_Device(*m_state, options))
 		return;
 
-	if (options.shared_frame != nullptr) {
-		m_state->shared_frame = true;
-		if (!m_state->swap_chain.Adopt_Targets(*options.shared_frame))
-			m_state->native_swap_chain.Reset();
-	} else if (m_state->native_swap_chain.Get() != nullptr && !m_state->swap_chain.Create_Targets(options.width, options.height))
+	if (m_state->native_swap_chain.Get() != nullptr && !m_state->swap_chain.Create_Targets(options.width, options.height))
 		m_state->native_swap_chain.Reset();
 }
 
 bool DX11Device::Is_Valid() const noexcept
 {
 	return m_state != nullptr && m_state->device.Get() != nullptr && m_state->context.Get() != nullptr;
+}
+
+RHIDeviceStatus DX11Device::Get_Status() const noexcept
+{
+	if (!Is_Valid()) return RHIDeviceStatus::Unavailable;
+	return FAILED(m_state->device.Get()->GetDeviceRemovedReason())
+		? RHIDeviceStatus::Removed : RHIDeviceStatus::Ready;
+}
+
+bool DX11Device::Get_Adapter_Info(RHIAdapterInfo& info) const noexcept
+{
+	info = {};
+	if (!Is_Valid()) return false;
+	DX11NativeObject<IDXGIDevice> dxgi_device;
+	DX11NativeObject<IDXGIAdapter> adapter;
+	IDXGIDevice* queried_device = nullptr;
+	const HRESULT device_result = m_state->device.Get()->QueryInterface(__uuidof(IDXGIDevice),
+		reinterpret_cast<void**>(&queried_device));
+	dxgi_device.Reset(queried_device);
+	if (FAILED(device_result)) return false;
+	IDXGIAdapter* queried_adapter = nullptr;
+	const HRESULT adapter_result = dxgi_device.Get()->GetAdapter(&queried_adapter);
+	adapter.Reset(queried_adapter);
+	if (FAILED(adapter_result)) return false;
+	DXGI_ADAPTER_DESC description{};
+	if (FAILED(adapter.Get()->GetDesc(&description))) return false;
+	info = {description.VendorId, description.DeviceId};
+	return true;
+}
+
+RHITextureLimits DX11Device::Texture_Limits() const noexcept
+{
+	return Is_Valid() ? RHITextureLimits{D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION,
+		D3D11_REQ_TEXTURE3D_U_V_OR_W_DIMENSION} : RHITextureLimits{};
 }
 
 RHIBufferHandle DX11Device::Create_Buffer(const RHIBuffer &description)
@@ -1312,6 +1402,7 @@ RHIBufferHandle DX11Device::Create_Buffer(const RHIBuffer &description)
 
 RHIBufferHandle DX11Device::Create_Buffer_Initialized(const RHIBuffer &description, std::span<const std::byte> initial_data)
 {
+    GRAPHICS_PROFILE_SCOPE("Graphics.DX11.CreateBuffer");
 	if (!Is_Valid() || description.byte_size == 0)
 		return {};
 	if (!initial_data.empty() && (initial_data.size() != description.byte_size || initial_data.size() > std::numeric_limits<std::uint32_t>::max()))
@@ -1329,6 +1420,10 @@ RHIBufferHandle DX11Device::Create_Buffer_Initialized(const RHIBuffer &descripti
 	native_description.ByteWidth = description.usage == RHIBufferUsage::Constant
 		? (description.byte_size + 15u) & ~15u
 		: description.byte_size;
+	const auto logical_size = native_description.ByteWidth;
+	const bool pooled = DX11BufferCache::Eligible(description.usage, description.byte_size);
+	if (pooled)
+		native_description.ByteWidth = 1u << DX11BufferCache::Size_Class(description.byte_size);
 	native_description.Usage = D3D11_USAGE_DEFAULT;
 	native_description.BindFlags = bind_flags;
 	if (description.usage == RHIBufferUsage::Storage) {
@@ -1337,13 +1432,24 @@ RHIBufferHandle DX11Device::Create_Buffer_Initialized(const RHIBuffer &descripti
 	}
 	DX11Buffer resource;
 	resource.usage = description.usage;
-	resource.byte_size = native_description.ByteWidth;
+	resource.byte_size = logical_size;
+	resource.capacity = native_description.ByteWidth;
+	resource.object = m_state->buffer_cache.Take(description.usage, description.byte_size);
 	ID3D11Buffer *native_buffer = nullptr;
 	D3D11_SUBRESOURCE_DATA native_data{};
 	native_data.pSysMem = initial_data.data();
-	if (FAILED(m_state->device.Get()->CreateBuffer(&native_description, initial_data.empty() ? nullptr : &native_data, &native_buffer)))
-		return {};
-	resource.object.Reset(native_buffer);
+	if (resource.object.Get() == nullptr) {
+        GRAPHICS_PROFILE_SCOPE("Graphics.DX11.NativeCreateBuffer");
+		if (FAILED(m_state->device.Get()->CreateBuffer(&native_description,
+            initial_data.empty() || pooled ? nullptr : &native_data, &native_buffer))) return {};
+		resource.object.Reset(native_buffer);
+	}
+	if (pooled && !initial_data.empty()) {
+        // UpdateSubresource preserves command ordering when earlier draws still
+        // reference recycled storage. Only upload the caller's logical range.
+		const D3D11_BOX box{0, 0, 0, description.byte_size, 1, 1};
+		m_state->context.Get()->UpdateSubresource(resource.object.Get(), 0, &box, initial_data.data(), 0, 0);
+	}
 	if (description.usage == RHIBufferUsage::Storage) {
 		D3D11_SHADER_RESOURCE_VIEW_DESC view_description{};
 		view_description.Format = DXGI_FORMAT_UNKNOWN;
@@ -1365,93 +1471,134 @@ RHITextureHandle DX11Device::Create_Texture(const RHITexture &description)
 
 RHITextureHandle DX11Device::Create_Texture_Initialized(const RHITexture &description, const RHITextureUpload &initial_data)
 {
-	if (!Is_Valid() || description.width == 0 || description.height == 0 || description.depth != 1 || description.mip_count == 0)
-		return {};
-
-	const DXGI_FORMAT native_format = To_DX11_Format(description.format);
-	const std::uint32_t bind_flags = To_DX11_Texture_Bind_Flags(description);
-	const std::uint32_t bytes_per_pixel = To_DX11_Bytes_Per_Pixel(description.format);
-	if (native_format == DXGI_FORMAT_UNKNOWN || bind_flags == 0 || bytes_per_pixel == 0)
-		return {};
-	if (!initial_data.data.empty() && description.mip_count != 1)
-		return {};
-	const std::uint64_t minimum_row_pitch = static_cast<std::uint64_t>(description.width) * bytes_per_pixel;
-	const std::uint32_t row_pitch = initial_data.row_pitch == 0 ? static_cast<std::uint32_t>(minimum_row_pitch) : initial_data.row_pitch;
-	if (!initial_data.data.empty() && (minimum_row_pitch > std::numeric_limits<std::uint32_t>::max() || row_pitch < minimum_row_pitch || initial_data.data.size() < static_cast<std::uint64_t>(row_pitch) * description.height))
-		return {};
-	const bool sampled_depth = description.format == RHITextureFormat::D32_Float
-		&& Has_Texture_Usage(description, RHITextureUsage::ShaderResource)
-		&& Has_Texture_Usage(description, RHITextureUsage::DepthStencil);
-
-	D3D11_TEXTURE2D_DESC native_description{};
-	native_description.Width = description.width;
-	native_description.Height = description.height;
-	native_description.MipLevels = description.mip_count;
-	native_description.ArraySize = 1;
-	native_description.Format = sampled_depth ? DXGI_FORMAT_R32_TYPELESS : native_format;
-	native_description.SampleDesc.Count = 1;
-	native_description.Usage = D3D11_USAGE_DEFAULT;
-	native_description.BindFlags = bind_flags;
-
-	DX11Texture resource;
-	resource.width = description.width;
-	resource.height = description.height;
-	resource.format = description.format;
-	ID3D11Texture2D *native_texture = nullptr;
-	D3D11_SUBRESOURCE_DATA native_data{};
-	native_data.pSysMem = initial_data.data.data();
-	native_data.SysMemPitch = row_pitch;
-	if (FAILED(m_state->device.Get()->CreateTexture2D(&native_description, initial_data.data.empty() ? nullptr : &native_data, &native_texture)))
-		return {};
-	resource.object.Reset(native_texture);
-
-	if (Has_Texture_Usage(description, RHITextureUsage::ShaderResource)) {
-		D3D11_SHADER_RESOURCE_VIEW_DESC view_description{};
-		const D3D11_SHADER_RESOURCE_VIEW_DESC *view_description_pointer = nullptr;
-		if (sampled_depth) {
-			view_description.Format = DXGI_FORMAT_R32_FLOAT;
-			view_description.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-			view_description.Texture2D.MostDetailedMip = 0;
-			view_description.Texture2D.MipLevels = description.mip_count;
-			view_description_pointer = &view_description;
-		}
-		ID3D11ShaderResourceView *native_view = nullptr;
-		if (FAILED(m_state->device.Get()->CreateShaderResourceView(native_texture, view_description_pointer, &native_view)))
-			return {};
-		resource.shader_resource_view.Reset(native_view);
-	}
-	if (Has_Texture_Usage(description, RHITextureUsage::RenderTarget)) {
-		ID3D11RenderTargetView *native_view = nullptr;
-		if (FAILED(m_state->device.Get()->CreateRenderTargetView(native_texture, nullptr, &native_view)))
-			return {};
-		resource.render_target_view.Reset(native_view);
-	}
-	if (Has_Texture_Usage(description, RHITextureUsage::DepthStencil)) {
-		D3D11_DEPTH_STENCIL_VIEW_DESC view_description{};
-		const D3D11_DEPTH_STENCIL_VIEW_DESC *view_description_pointer = nullptr;
-		if (sampled_depth) {
-			view_description.Format = DXGI_FORMAT_D32_FLOAT;
-			view_description.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
-			view_description.Texture2D.MipSlice = 0;
-			view_description_pointer = &view_description;
-		}
-		ID3D11DepthStencilView *native_view = nullptr;
-		if (FAILED(m_state->device.Get()->CreateDepthStencilView(native_texture, view_description_pointer, &native_view)))
-			return {};
-		resource.depth_stencil_view.Reset(native_view);
-	}
-	if (Has_Texture_Usage(description, RHITextureUsage::UnorderedAccess)) {
-		ID3D11UnorderedAccessView *native_view = nullptr;
-		if (FAILED(m_state->device.Get()->CreateUnorderedAccessView(native_texture, nullptr, &native_view)))
-			return {};
-		resource.unordered_access_view.Reset(native_view);
-	}
-
-	return m_state->textures.Create(std::move(resource));
+    if (!Is_Valid() || description.width == 0 || description.height == 0 || description.depth == 0
+        || description.array_size == 0 || description.mip_count == 0 || description.mip_count > 15
+        || description.output_layer >= description.array_size) return {};
+    const bool volume = description.dimension == RHITextureDimension::Volume;
+    const bool cube = description.dimension == RHITextureDimension::Cube;
+    if (volume ? description.array_size != 1 : description.depth != 1) return {};
+    if (cube && (description.width != description.height || description.array_size != 6)) return {};
+    const bool compressed = Is_Block_Compressed(description.format);
+    if (compressed && (volume || description.generate_mips
+        || Has_Texture_Usage(description, RHITextureUsage::RenderTarget)
+        || Has_Texture_Usage(description, RHITextureUsage::UnorderedAccess))) return {};
+    const auto native_format = To_DX11_Format(description.format);
+    auto bind_flags = To_DX11_Texture_Bind_Flags(description);
+    if (native_format == DXGI_FORMAT_UNKNOWN || bind_flags == 0) return {};
+    if (description.generate_mips) {
+        if (!Has_Texture_Usage(description, RHITextureUsage::ShaderResource)
+            || Has_Texture_Usage(description, RHITextureUsage::DepthStencil)) return {};
+        bind_flags |= D3D11_BIND_RENDER_TARGET;
+    }
+    const bool depth = description.format == RHITextureFormat::D32_Float
+        || description.format == RHITextureFormat::D24_UNorm_S8 || description.format == RHITextureFormat::D16_UNorm;
+    if (depth && (volume || description.generate_mips || !initial_data.data.empty())) return {};
+    const bool sampled_depth = depth && Has_Texture_Usage(description, RHITextureUsage::ShaderResource);
+    const auto storage_format = sampled_depth ? (description.format == RHITextureFormat::D32_Float
+        ? DXGI_FORMAT_R32_TYPELESS : description.format == RHITextureFormat::D16_UNorm
+        ? DXGI_FORMAT_R16_TYPELESS : DXGI_FORMAT_R24G8_TYPELESS) : native_format;
+    const UINT misc = (cube ? D3D11_RESOURCE_MISC_TEXTURECUBE : 0)
+        | (description.generate_mips ? D3D11_RESOURCE_MISC_GENERATE_MIPS : 0);
+    DX11Texture resource;
+    resource.width = description.width;
+    resource.height = description.height;
+    resource.format = description.format;
+    resource.description = description;
+    if (volume) {
+        D3D11_TEXTURE3D_DESC native{};
+        native.Width = description.width;
+        native.Height = description.height;
+        native.Depth = description.depth;
+        native.MipLevels = description.mip_count;
+        native.Format = storage_format;
+        native.Usage = D3D11_USAGE_DEFAULT;
+        native.BindFlags = bind_flags;
+        native.MiscFlags = misc;
+        ID3D11Texture3D* texture = nullptr;
+        if (FAILED(m_state->device.Get()->CreateTexture3D(&native, nullptr, &texture))) return {};
+        resource.volume.Reset(texture);
+    } else {
+        D3D11_TEXTURE2D_DESC native{};
+        native.Width = description.width;
+        native.Height = description.height;
+        native.MipLevels = description.mip_count;
+        native.ArraySize = description.array_size;
+        native.Format = storage_format;
+        native.SampleDesc.Count = 1;
+        native.Usage = D3D11_USAGE_DEFAULT;
+        native.BindFlags = bind_flags;
+        native.MiscFlags = misc;
+        ID3D11Texture2D* texture = nullptr;
+        if (FAILED(m_state->device.Get()->CreateTexture2D(&native, nullptr, &texture))) return {};
+        resource.object.Reset(texture);
+    }
+    auto* native_texture = resource.Resource();
+    if (Has_Texture_Usage(description, RHITextureUsage::ShaderResource)) {
+        D3D11_SHADER_RESOURCE_VIEW_DESC view{};
+        view.Format = sampled_depth ? (description.format == RHITextureFormat::D32_Float
+            ? DXGI_FORMAT_R32_FLOAT : description.format == RHITextureFormat::D16_UNorm
+            ? DXGI_FORMAT_R16_UNORM : DXGI_FORMAT_R24_UNORM_X8_TYPELESS) : native_format;
+        if (volume) {
+            view.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE3D;
+            view.Texture3D.MipLevels = description.mip_count;
+        } else if (cube) {
+            view.ViewDimension = D3D11_SRV_DIMENSION_TEXTURECUBE;
+            view.TextureCube.MipLevels = description.mip_count;
+        } else if (description.array_size > 1) {
+            view.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
+            view.Texture2DArray.MipLevels = description.mip_count;
+            view.Texture2DArray.ArraySize = description.array_size;
+        } else {
+            view.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+            view.Texture2D.MipLevels = description.mip_count;
+        }
+        ID3D11ShaderResourceView* native_view = nullptr;
+        if (FAILED(m_state->device.Get()->CreateShaderResourceView(native_texture, &view, &native_view))) return {};
+        resource.shader_resource_view.Reset(native_view);
+    }
+    if (Has_Texture_Usage(description, RHITextureUsage::RenderTarget)) {
+        D3D11_RENDER_TARGET_VIEW_DESC view{};
+        view.Format = native_format;
+        if (volume) {
+            view.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE3D;
+            view.Texture3D.WSize = description.depth;
+        } else if (description.array_size > 1) {
+            view.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2DARRAY;
+            view.Texture2DArray.FirstArraySlice = description.output_layer;
+            view.Texture2DArray.ArraySize = 1;
+        } else view.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+        ID3D11RenderTargetView* native_view = nullptr;
+        if (FAILED(m_state->device.Get()->CreateRenderTargetView(native_texture, &view, &native_view))) return {};
+        resource.render_target_view.Reset(native_view);
+    }
+    if (Has_Texture_Usage(description, RHITextureUsage::DepthStencil)) {
+        D3D11_DEPTH_STENCIL_VIEW_DESC view{};
+        view.Format = native_format;
+        if (description.array_size > 1) {
+            view.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2DARRAY;
+            view.Texture2DArray.FirstArraySlice = description.output_layer;
+            view.Texture2DArray.ArraySize = 1;
+        } else view.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
+        ID3D11DepthStencilView* native_view = nullptr;
+        if (FAILED(m_state->device.Get()->CreateDepthStencilView(native_texture, &view, &native_view))) return {};
+        resource.depth_stencil_view.Reset(native_view);
+    }
+    if (Has_Texture_Usage(description, RHITextureUsage::UnorderedAccess)) {
+        ID3D11UnorderedAccessView* native_view = nullptr;
+        if (FAILED(m_state->device.Get()->CreateUnorderedAccessView(native_texture, nullptr, &native_view))) return {};
+        resource.unordered_access_view.Reset(native_view);
+    }
+    const auto handle = m_state->textures.Create(std::move(resource));
+    if (!initial_data.data.empty() && !Update_Texture(handle, initial_data)) {
+        m_state->textures.Destroy(handle);
+        return {};
+    }
+    return handle;
 }
 
 bool DX11Device::Update_Buffer(RHIBufferHandle buffer, std::uint32_t offset, std::span<const std::byte> data) noexcept
 {
+    GRAPHICS_PROFILE_SCOPE("Graphics.DX11.UpdateBuffer");
 	if (!Is_Valid() || data.empty() || data.size() > std::numeric_limits<std::uint32_t>::max())
 		return false;
 
@@ -1478,63 +1625,140 @@ bool DX11Device::Update_Buffer(RHIBufferHandle buffer, std::uint32_t offset, std
 
 bool DX11Device::Update_Texture(RHITextureHandle texture, const RHITextureUpload &data) noexcept
 {
-	if (!Is_Valid() || data.data.empty())
-		return false;
-
-	DX11Texture *resource = m_state->textures.Resolve(texture);
-	if (resource == nullptr || resource->object.Get() == nullptr)
-		return false;
-
-	const std::uint32_t bytes_per_pixel = To_DX11_Bytes_Per_Pixel(resource->format);
-	const std::uint64_t minimum_row_pitch = static_cast<std::uint64_t>(resource->width) * bytes_per_pixel;
-	const std::uint32_t row_pitch = data.row_pitch == 0 ? static_cast<std::uint32_t>(minimum_row_pitch) : data.row_pitch;
-	if (bytes_per_pixel == 0 || minimum_row_pitch > std::numeric_limits<std::uint32_t>::max() || row_pitch < minimum_row_pitch || data.data.size() < static_cast<std::uint64_t>(row_pitch) * resource->height)
-		return false;
-
-	m_state->context.Get()->UpdateSubresource(resource->object.Get(), 0, nullptr, data.data.data(), row_pitch, 0);
-	return true;
+    if (!Is_Valid()) return false;
+    auto* resource = m_state->textures.Resolve(texture);
+    TextureTransferLayout layout{};
+    if (resource == nullptr || resource->Resource() == nullptr
+        || Has_Texture_Usage(resource->description, RHITextureUsage::DepthStencil)
+        || !Texture_Transfer_Layout(resource->description, data.mip_level, data.array_layer,
+            data.row_pitch, data.slice_pitch, data.data.size(), layout)) return false;
+    m_state->context.Get()->UpdateSubresource(resource->Resource(), layout.subresource, nullptr,
+        data.data.data(), layout.row_pitch, layout.slice_pitch);
+    return true;
 }
 
 bool DX11Device::Readback_Texture(RHITextureHandle texture, std::span<std::byte> data, std::uint32_t row_pitch) noexcept
 {
-	if (!Is_Valid() || data.empty() || row_pitch == 0)
-		return false;
-
-	DX11Texture *resource = m_state->textures.Resolve(texture);
-	if (resource == nullptr || resource->object.Get() == nullptr
-		|| (resource->format != RHITextureFormat::RGBA8_UNorm && resource->format != RHITextureFormat::BGRA8_UNorm))
-		return false;
-
-	D3D11_TEXTURE2D_DESC source_description{};
-	resource->object.Get()->GetDesc(&source_description);
-	D3D11_TEXTURE2D_DESC staging_description = source_description;
-	staging_description.Usage = D3D11_USAGE_STAGING;
-	staging_description.BindFlags = 0;
-	staging_description.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-	staging_description.MiscFlags = 0;
-
-	ID3D11Texture2D *native_staging = nullptr;
-	if (FAILED(m_state->device.Get()->CreateTexture2D(&staging_description, nullptr, &native_staging)))
-		return false;
-
-	DX11NativeObject<ID3D11Texture2D> staging;
-	staging.Reset(native_staging);
-	m_state->context.Get()->CopyResource(staging.Get(), resource->object.Get());
-
-	D3D11_MAPPED_SUBRESOURCE mapped{};
-	if (FAILED(m_state->context.Get()->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped)))
-		return false;
-
-	const std::uint64_t required_size = static_cast<std::uint64_t>(row_pitch) * resource->height;
-	const bool valid = row_pitch >= resource->width * 4u && required_size <= data.size();
-	if (valid) {
-		for (std::uint32_t row = 0; row < resource->height; ++row)
-			std::memcpy(data.data() + static_cast<std::size_t>(row) * row_pitch, static_cast<const std::byte *>(mapped.pData) + static_cast<std::size_t>(row) * mapped.RowPitch, static_cast<std::size_t>(resource->width) * 4u);
-	}
-
-	m_state->context.Get()->Unmap(staging.Get(), 0);
-	return valid;
+    return Readback_Texture_Subresource(texture, {data, row_pitch});
 }
+
+bool DX11Device::Map_Texture(RHITextureHandle texture, std::uint32_t mip, std::uint32_t layer,
+    bool read_only, RHITextureMapping& output)
+{
+    output = {};
+    if (!Is_Valid()) return false;
+    auto* resource = m_state->textures.Resolve(texture);
+    TextureTransferLayout layout{};
+    if (resource == nullptr || resource->Resource() == nullptr
+        || (!read_only && Has_Texture_Usage(resource->description, RHITextureUsage::DepthStencil))
+        || !Texture_Transfer_Layout(resource->description, mip, layer, 0, 0, SIZE_MAX, layout)) return false;
+    for (const auto& mapping : resource->mappings)
+        if (mapping->subresource == layout.subresource) return false;
+    DX11NativeObject<ID3D11Resource> staging;
+    std::uint32_t staging_mip = 0;
+    if (resource->volume.Get() != nullptr) {
+        D3D11_TEXTURE3D_DESC native{};
+        resource->volume.Get()->GetDesc(&native);
+        native.Width = layout.width;
+        native.Height = layout.height;
+        native.Depth = layout.depth;
+        native.MipLevels = 1;
+        native.Usage = D3D11_USAGE_STAGING;
+        native.BindFlags = native.MiscFlags = 0;
+        native.CPUAccessFlags = D3D11_CPU_ACCESS_READ | (read_only ? 0 : D3D11_CPU_ACCESS_WRITE);
+        ID3D11Texture3D* object = nullptr;
+        if (FAILED(m_state->device.Get()->CreateTexture3D(&native, nullptr, &object))) return false;
+        staging.Reset(object);
+    } else {
+        D3D11_TEXTURE2D_DESC native{};
+        resource->object.Get()->GetDesc(&native);
+        native.Width = layout.width;
+        native.Height = layout.height;
+        // Keep the mapped mip's logical dimensions exact for copies in both directions.
+        // A BC staging resource needs a block-aligned base level even for a 1x1 mip.
+        if (Is_Block_Compressed(resource->format)) {
+            while (native.Width < 4 || native.Height < 4) {
+                native.Width *= 2; native.Height *= 2; ++staging_mip;
+            }
+        }
+        native.MipLevels = staging_mip + 1;
+        native.ArraySize = 1;
+        native.Usage = D3D11_USAGE_STAGING;
+        native.BindFlags = native.MiscFlags = 0;
+        native.CPUAccessFlags = D3D11_CPU_ACCESS_READ | (read_only ? 0 : D3D11_CPU_ACCESS_WRITE);
+        ID3D11Texture2D* object = nullptr;
+        if (FAILED(m_state->device.Get()->CreateTexture2D(&native, nullptr, &object))) return false;
+        staging.Reset(object);
+    }
+    auto mapping = std::make_unique<DX11TextureMapping>();
+    mapping->staging = std::move(staging);
+    mapping->context.Reset(Retain(m_state->context.Get()));
+    mapping->subresource = layout.subresource;
+    mapping->staging_subresource = staging_mip;
+    mapping->read_only = read_only;
+    m_state->context.Get()->CopySubresourceRegion(mapping->staging.Get(), staging_mip, 0, 0, 0,
+        resource->Resource(), layout.subresource, nullptr);
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    if (FAILED(m_state->context.Get()->Map(mapping->staging.Get(), staging_mip,
+        read_only ? D3D11_MAP_READ : D3D11_MAP_READ_WRITE, 0, &mapped))) return false;
+    mapping->mapped = true;
+    const auto slice_pitch = layout.depth > 1 ? mapped.DepthPitch : mapped.RowPitch * layout.rows;
+    const auto size = static_cast<std::size_t>(slice_pitch) * (layout.depth - 1u)
+        + static_cast<std::size_t>(mapped.RowPitch) * (layout.rows - 1u) + layout.row_bytes;
+    resource->mappings.push_back(std::move(mapping));
+    output = {{static_cast<std::byte*>(mapped.pData), size}, mapped.RowPitch, slice_pitch};
+    return true;
+}
+
+bool DX11Device::Unmap_Texture(RHITextureHandle texture, std::uint32_t mip, std::uint32_t layer) noexcept
+{
+    if (!Is_Valid()) return false;
+    auto* resource = m_state->textures.Resolve(texture);
+    if (resource == nullptr || mip >= resource->description.mip_count || layer >= resource->description.array_size) return false;
+    const auto subresource = mip + layer * resource->description.mip_count;
+    const auto found = std::find_if(resource->mappings.begin(), resource->mappings.end(),
+        [subresource](const auto& mapping) { return mapping->subresource == subresource; });
+    if (found == resource->mappings.end()) return false;
+    auto& mapping = **found;
+    m_state->context.Get()->Unmap(mapping.staging.Get(), mapping.staging_subresource);
+    mapping.mapped = false;
+    if (!mapping.read_only)
+        m_state->context.Get()->CopySubresourceRegion(resource->Resource(), subresource, 0, 0, 0,
+            mapping.staging.Get(), mapping.staging_subresource, nullptr);
+    resource->mappings.erase(found);
+    return true;
+}
+
+bool DX11Device::Readback_Texture_Subresource(RHITextureHandle texture, const RHITextureReadback& data) noexcept
+{
+    if (!Is_Valid()) return false;
+    const auto* resource = m_state->textures.Resolve(texture);
+    TextureTransferLayout layout{};
+    if (resource == nullptr || !Texture_Transfer_Layout(resource->description, data.mip_level,
+        data.array_layer, data.row_pitch, data.slice_pitch, data.data.size(), layout)) return false;
+    RHITextureMapping mapped;
+    try {
+        if (!Map_Texture(texture, data.mip_level, data.array_layer, true, mapped)) return false;
+    } catch (...) { return false; }
+    for (std::uint32_t slice = 0; slice < layout.depth; ++slice)
+        for (std::uint32_t row = 0; row < layout.rows; ++row)
+            std::memcpy(data.data.data() + static_cast<std::size_t>(slice) * layout.slice_pitch
+                + static_cast<std::size_t>(row) * layout.row_pitch,
+                mapped.bytes.data() + static_cast<std::size_t>(slice) * mapped.slice_pitch
+                + static_cast<std::size_t>(row) * mapped.row_pitch, layout.row_bytes);
+    return Unmap_Texture(texture, data.mip_level, data.array_layer);
+}
+
+bool DX11Device::Generate_Texture_Mips(RHITextureHandle texture) noexcept
+{
+    if (!Is_Valid()) return false;
+    auto* resource = m_state->textures.Resolve(texture);
+    if (resource == nullptr || !resource->description.generate_mips
+        || resource->shader_resource_view.Get() == nullptr) return false;
+    m_state->context.Get()->GenerateMips(resource->shader_resource_view.Get());
+    return true;
+}
+
 
 RHIPipelineHandle DX11Device::Create_Pipeline(const RHIPipeline &description)
 {
@@ -1564,12 +1788,29 @@ RHIPipelineHandle DX11Device::Create_Pipeline(const RHIPipeline &description, RH
 
 bool DX11Device::Destroy_Buffer(RHIBufferHandle buffer) noexcept
 {
-	return m_state != nullptr && m_state->buffers.Destroy(buffer);
+	if (m_state == nullptr) return false;
+	auto* resource = m_state->buffers.Resolve(buffer);
+	if (resource == nullptr) return false;
+	m_state->buffer_cache.Recycle(*resource);
+	return m_state->buffers.Destroy(buffer);
+}
+
+bool DX11Device::Retain_Texture(RHITextureHandle texture) noexcept
+{
+    if (!Is_Valid()) return false;
+    auto* resource = m_state->textures.Resolve(texture);
+    if (resource == nullptr || resource->references == UINT32_MAX) return false;
+    ++resource->references;
+    return true;
 }
 
 bool DX11Device::Destroy_Texture(RHITextureHandle texture) noexcept
 {
-	return m_state != nullptr && m_state->textures.Destroy(texture);
+    if (m_state == nullptr) return false;
+    auto* resource = m_state->textures.Resolve(texture);
+    if (resource == nullptr) return false;
+    if (resource->references > 1) { --resource->references; return true; }
+    return m_state->textures.Destroy(texture);
 }
 
 bool DX11Device::Destroy_Pipeline(RHIPipelineHandle pipeline) noexcept
@@ -1587,47 +1828,10 @@ SwapChain &DX11Device::Get_Swap_Chain() noexcept
 	return m_state->swap_chain;
 }
 
-RHITextureHandle DX11Device::Import_Texture(void *texture, void *shader_resource_view)
+bool DX11Device::Set_Exclusive_Fullscreen(bool fullscreen) noexcept
 {
-    if (!Is_Valid() || texture == nullptr || shader_resource_view == nullptr)
-        return {};
-    auto *native_texture = static_cast<ID3D11Texture2D *>(texture);
-    auto *native_view = static_cast<ID3D11ShaderResourceView *>(shader_resource_view);
-    ID3D11Device *owner = nullptr;
-    native_texture->GetDevice(&owner);
-    const bool same_device = owner == m_state->device.Get();
-    if (owner != nullptr) owner->Release();
-    if (!same_device) return {};
-    ID3D11Resource *view_resource = nullptr;
-    native_view->GetResource(&view_resource);
-    const bool same_resource = view_resource == native_texture;
-    if (view_resource != nullptr) view_resource->Release();
-    if (!same_resource) return {};
-    D3D11_TEXTURE2D_DESC description{};
-    native_texture->GetDesc(&description);
-    DX11Texture resource;
-    resource.object.Reset(Retain(native_texture));
-    resource.shader_resource_view.Reset(Retain(native_view));
-    resource.width = description.Width;
-    resource.height = description.Height;
-    resource.format = RHITextureFormat::Unknown;
-    for (RHITextureFormat format : {RHITextureFormat::R8_UNorm, RHITextureFormat::RG8_UNorm,
-        RHITextureFormat::RGBA8_UNorm, RHITextureFormat::BGRA8_UNorm, RHITextureFormat::RGBA16_Float,
-        RHITextureFormat::RGBA32_Float, RHITextureFormat::R32_Float}) {
-        if (To_DX11_Format(format) == description.Format) {
-            resource.format = format;
-            break;
-        }
-    }
-    return m_state->textures.Create(std::move(resource));
-}
-
-bool DX11Device::Adopt_Shared_Frame(const DX11SharedFrameResources &resources)
-{
-	if (!Is_Valid() || !m_state->shared_frame || resources.device != m_state->device.Get() || resources.context != m_state->context.Get() || resources.swap_chain != m_state->native_swap_chain.Get() || m_state->frame_active)
-		return false;
-
-	return m_state->swap_chain.Adopt_Targets(resources);
+    return Is_Valid() && m_state->native_swap_chain.Get() != nullptr && !m_state->frame_active
+        && SUCCEEDED(m_state->native_swap_chain.Get()->SetFullscreenState(fullscreen ? TRUE : FALSE, nullptr));
 }
 
 bool DX11Device::Begin_Frame() noexcept

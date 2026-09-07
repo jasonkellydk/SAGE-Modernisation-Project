@@ -48,21 +48,22 @@
 #include "W3DDevice/GameClient/W3DScene.h"
 #include "W3DDevice/Common/W3DConvert.h"
 #include "WW3D2/WW3D.h"
-#include "WW3D2/HAnim.h"
 
 #include "Common/UnitTimings.h" //Contains the DO_UNIT_TIMINGS define jba.
 
 
 
 #include "W3DDevice/GameClient/W3DGraphicsResources.h"
-import Graphics.Backends.DX11.Coexistence;
+import Graphics.Backends.DX11.FrameRuntime;
 import Graphics.Scene.Debug.Renderer;
+import Graphics.Diagnostics.Render;
 
 #ifdef RTS_DEBUG
 #include "W3DDevice/GameClient/BaseHeightMap.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
 #include "WW3D2/VertexFormat.h"
 #include "WW3D2/VertMaterial.h"
+import Assets.Cache.Animations;
 class DebugHintObject : public RenderObjClass
 {
 
@@ -174,7 +175,6 @@ void DebugHintObject::Render(RenderInfoClass& info)
     const std::array<std::uint32_t,3> indices{0,1,2};
     Graphics::Draw_Debug_Geometry(Graphics::Get_Surface_Renderer(),device->Immediate_Command_List(),
         m_mesh,vertices,indices,Make_Surface_Parameters(info.Camera));
-    WW3D::Get_Render_Backend()->Invalidate_Cached_Render_States();
 }
 #endif // RTS_DEBUG
 
@@ -213,7 +213,7 @@ W3DInGameUI::~W3DInGameUI()
 	{
 
 		REF_PTR_RELEASE( m_moveHintRenderObj[ i ] );
-		REF_PTR_RELEASE( m_moveHintAnim[ i ] );
+		Assets::Release_Animation(m_moveHintAnim[ i ]);
 
 	}
 
@@ -343,7 +343,7 @@ void W3DInGameUI::draw()
 	// repaint all our windows
 
 #ifdef EXTENDED_STATS
-	if (!WW3D::Get_Render_Backend()->Get_Debug_Settings().m_disableConsole) {
+	if (!Graphics::Get_Render_Diagnostics().disable_console) {
 #endif
 
 #ifdef DO_UNIT_TIMINGS
@@ -408,14 +408,14 @@ void W3DInGameUI::drawMoveHints( View *view )
 			if( m_moveHintRenderObj[ i ] == nullptr )
 			{
 				RenderObjClass *hint;
-				HAnimClass *anim;
+				Assets::AnimationAssetHandle anim;
 
 				// create hint object
 				hint = W3DDisplay::m_assetManager->Create_Render_Obj(TheGlobalData->m_moveHintName.str());
 
 				AsciiString animName;
 				animName.format("%s.%s", TheGlobalData->m_moveHintName.str(), TheGlobalData->m_moveHintName.str());
-				anim = W3DDisplay::m_assetManager->Get_HAnim(animName.str());
+				anim = W3DDisplay::m_assetManager->Acquire_Animation(animName.str());
 
 				// sanity
 				if( hint == nullptr )
@@ -429,9 +429,9 @@ void W3DInGameUI::drawMoveHints( View *view )
 				// assign render objects to GUI data
 				m_moveHintRenderObj[ i ] = hint;
 
-				// note that 'anim' is returned from Get_HAnim with an AddRef, so we don't need to addref it again.
+				// note that 'anim' is returned from Acquire_Animation with an AddRef, so we don't need to addref it again.
 				// however, we do need to release the contents of moveHintAnim (if any)
-				REF_PTR_RELEASE(m_moveHintAnim[i]);
+				Assets::Release_Animation(m_moveHintAnim[i]);
 				m_moveHintAnim[i] = anim;
 
 			}

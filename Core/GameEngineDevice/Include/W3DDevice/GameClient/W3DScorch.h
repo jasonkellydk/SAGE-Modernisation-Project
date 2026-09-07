@@ -29,8 +29,6 @@ import Graphics.Scene.Surfaces.Renderer;
 
 struct VertexFormatXYZDUV1;
 class TextureClass;
-class IndexBufferClass;
-class VertexBufferClass;
 class WorldHeightMap;
 class CameraClass;
 

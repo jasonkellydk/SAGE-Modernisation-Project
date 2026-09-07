@@ -1,4 +1,7 @@
+import Graphics.Frame.AttachmentBindings;
+import Graphics.Scene.Props.Submission;
 #include "W3DDevice/GameClient/W3DDirectionalShadows.h"
+#include "rts/profile.h"
 #include "Common/GlobalData.h"
 #include "Common/DrawModule.h"
 #include "GameClient/Shadow.h"
@@ -11,7 +14,7 @@
 #include "WW3D2/WW3D.h"
 #include <algorithm>
 
-import Graphics.Backends.DX11.Coexistence;
+import Graphics.Backends.DX11.FrameRuntime;
 import Graphics.Scene.Shadows.DirectionalRenderer;
 import Graphics.Scene.Lighting.Environment;
 
@@ -95,7 +98,7 @@ Shadow* Create_Directional_Shadow(RenderObjClass* object)
 
 void Reset_Directional_Shadows()
 {
-    Clear_Graphics_Shadow_Geometry();
+    Graphics::Get_Prop_Submission().Clear_Shadows();
     while (first_shadow != nullptr) first_shadow->release();
     auto& environment = Graphics::Get_Environment_Lighting();
     environment.parameters.shadow_options[0] = 0;
@@ -104,7 +107,8 @@ void Reset_Directional_Shadows()
 
 bool Collect_Directional_Shadow_Casters(RenderInfoClass& info)
 {
-    Clear_Graphics_Shadow_Geometry();
+    PROFILER_SECTION_NAME("Graphics.Shadows.Collect");
+    Graphics::Get_Prop_Submission().Clear_Shadows();
     Graphics::Get_Environment_Lighting().parameters.shadow_options[0] = 0;
     for (auto* shadow=first_shadow;shadow!=nullptr;shadow=shadow->next) {
         shadow->draw_count = 0;
@@ -118,8 +122,8 @@ bool Collect_Directional_Shadow_Casters(RenderInfoClass& info)
 bool Render_Directional_Shadow_Maps(RenderInfoClass& info)
 {
     auto* device = Graphics::Shared_Frame_Device();
-    auto* backend = WW3D::Get_Render_Backend();
-    if (device == nullptr || backend == nullptr || TheGlobalData == nullptr) return false;
+
+    if (device == nullptr || TheGlobalData == nullptr) return false;
     Matrix3D view_matrix;
     Matrix4x4 projection;
     info.Camera.Get_View_Matrix(&view_matrix);
@@ -140,18 +144,15 @@ bool Render_Directional_Shadow_Maps(RenderInfoClass& info)
     light.type = Graphics::RenderLightType::Directional;
     light.flags = Graphics::RenderLightFlags::Enabled;
     light.direction = {direction.x,direction.y,direction.z};
-    RenderBackendViewport viewport;
-    backend->Get_Viewport(viewport);
-    RenderBackendRenderTargetState saved_target;
-    backend->Get_Render_Target(saved_target);
+    Graphics::RHIViewport viewport;
+    viewport = Graphics::Get_Attachment_Bindings().Current().viewport;
+    const auto saved_target=Graphics::Get_Attachment_Bindings().Capture();
     const auto color = device->Get_Swap_Chain().Backbuffer();
     const auto depth = device->Get_Swap_Chain().Depth_Target();
     const bool rendered = Graphics::Get_Directional_Shadow_Renderer().Render(
         device->Immediate_Command_List(),view,light,settings,color.texture,depth.texture,
-        {viewport.x,viewport.y,viewport.width,viewport.height,viewport.min_z,viewport.max_z});
-    backend->Set_Render_Target(saved_target.color,saved_target.depth);
-    backend->Set_Viewport(viewport);
-    backend->Invalidate_Cached_Render_States();
-    Clear_Graphics_Shadow_Geometry();
+        viewport);
+    Graphics::Get_Attachment_Bindings().Restore(saved_target);
+    Graphics::Get_Prop_Submission().Clear_Shadows();
     return rendered;
 }

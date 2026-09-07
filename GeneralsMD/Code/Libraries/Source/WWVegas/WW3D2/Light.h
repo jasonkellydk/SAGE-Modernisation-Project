@@ -36,6 +36,12 @@
 
 #pragma once
 
+#include <memory>
+#include <span>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
 #include "WWLib/always.h"
 #include "WW3D2/RendObj.h"
 #include "WW3D2/W3DErr.h"
@@ -174,3 +180,6 @@ protected:
 	Vector3					SpotDirection;
 	//bool						Donut; ///does this light only apply at edges
 };
+
+import Graphics.Scene.Lighting.Local;
+Graphics::MaterialLightSource Describe_Material_Light(const LightClass& light);

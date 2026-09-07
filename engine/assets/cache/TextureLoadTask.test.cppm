@@ -104,3 +104,27 @@ BOOST_AUTO_TEST_CASE(texture_load_task_reads_color_after_compressed_alpha)
         }
     }
 }
+
+BOOST_AUTO_TEST_CASE(texture_load_task_uses_indexed_tga_adapter_and_rejects_partial_pixels)
+{
+    std::vector<std::byte> source(23);
+    source[1]=std::byte{1}; source[2]=std::byte{1}; source[5]=std::byte{1}; source[7]=std::byte{32};
+    source[12]=std::byte{1}; source[14]=std::byte{1}; source[16]=std::byte{8}; source[17]=std::byte{32};
+    source[18]=std::byte{30}; source[19]=std::byte{20}; source[20]=std::byte{10}; source[21]=std::byte{80};
+    const Assets::AssetIdentity identity{Assets::AssetType::Texture,"indexed.tga"};
+    const auto load=[&] { return Assets::Load_Texture_Asset(identity,[&](const auto&) { return source; }); };
+    const auto decoded=load();
+    BOOST_REQUIRE(decoded.Succeeded()); BOOST_REQUIRE(decoded.asset->Has_Pixels());
+    const auto pixels=decoded.asset->Pixels();
+    BOOST_REQUIRE_EQUAL(pixels.size(),4u);
+    BOOST_CHECK_EQUAL(std::to_integer<unsigned>(pixels[0]),10u);
+    BOOST_CHECK_EQUAL(std::to_integer<unsigned>(pixels[1]),20u);
+    BOOST_CHECK_EQUAL(std::to_integer<unsigned>(pixels[2]),30u);
+    BOOST_CHECK_EQUAL(std::to_integer<unsigned>(pixels[3]),80u);
+    source.pop_back();
+    const auto malformed=load();
+    BOOST_REQUIRE(malformed.Succeeded()); // Undecoded sources retain metadata only.
+    BOOST_CHECK(!malformed.asset->Has_Pixels());
+    BOOST_CHECK_EQUAL(malformed.asset->Width(),0u);
+    BOOST_CHECK_EQUAL(malformed.asset->Height(),0u);
+}

@@ -103,6 +103,6 @@ class ViewerSceneClass : public SimpleSceneClass
 		//	Private member data
 		//
 		bool							m_AllowLODSwitching;
-		RefRenderObjListClass	LineUpList;
-		RefRenderObjListClass	LightList;
+		Graphics::SceneObjectList<RenderObjClass>	LineUpList;
+		Graphics::SceneObjectList<RenderObjClass>	LightList;
 };

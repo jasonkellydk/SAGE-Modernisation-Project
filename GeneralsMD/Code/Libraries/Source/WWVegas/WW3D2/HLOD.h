@@ -35,20 +35,34 @@
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 #pragma once
+#include <memory>
+#include <span>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <vector>
+import Graphics.Scene.Models.Factory;
+
+#include <memory>
+#include <span>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <vector>
+import Assets.ModelAssembly;
+import Assets.Cache.Animations;
+
 
 #include "AnimObj.h"
 #include "WWLib/Vector.h"
-#include "WW3D2/SnapPts.h"
-#include "WW3D2/Proto.h"
+#include "WW3D2/W3DFile.h"
 #include "WW3D2/W3DErr.h"
 #include "WW3D2/Proxy.h"
 
 
-class DistLODClass;
 class HModelClass;
-class HLodDefClass;
-class HModelDefClass;
-class ProxyArrayClass;
 
 
 
@@ -66,8 +80,7 @@ public:
 
 	HLodClass(const HLodClass & src);
 	HLodClass(const char * name,RenderObjClass ** lods,int count);
-	HLodClass(const HLodDefClass & def);
-	HLodClass(const HModelDefClass & def);
+	HLodClass(const Assets::ModelAssemblyDesc & def);
 
 	HLodClass & operator = (const HLodClass &);
 	virtual ~HLodClass() override;
@@ -109,7 +122,6 @@ public:
 	// Render Object Interface - Rendering
 	/////////////////////////////////////////////////////////////////////////////
 	virtual void					Render(RenderInfoClass & rinfo) override;
-	virtual void					Special_Render(SpecialRenderInfoClass & rinfo) override;
 
 	/////////////////////////////////////////////////////////////////////////////
 	// Render Object Interface - "Scene Graph"
@@ -135,14 +147,13 @@ public:
 	// Render Object Interface - Hierarchical Animation
 	/////////////////////////////////////////////////////////////////////////////
 	virtual void					Set_Animation() override;
-	virtual void					Set_Animation( HAnimClass * motion,
+	virtual void					Set_Animation( Assets::AnimationAssetHandle motion,
 															float frame, int anim_mode = ANIM_MODE_MANUAL) override;
-	virtual void					Set_Animation( HAnimClass * motion0,
+	virtual void					Set_Animation( Assets::AnimationAssetHandle motion0,
 															float frame0,
-															HAnimClass * motion1,
+															Assets::AnimationAssetHandle motion1,
 															float frame1,
 															float percentage) override;
-	virtual void					Set_Animation( HAnimComboClass * anim_combo) override;
 
 	/////////////////////////////////////////////////////////////////////////////
 	// Render Object Interface - Collision Detection, Ray Tracing
@@ -178,12 +189,6 @@ public:
 	virtual void						Get_Obj_Space_Bounding_Sphere(SphereClass & sphere) const override;
 	virtual void						Get_Obj_Space_Bounding_Box(AABoxClass & box) const override;
 
-	///////////////////////////////////////////////////////////////////////////////////////////////////////////////
-	// Render Object Interface - Decals
-	///////////////////////////////////////////////////////////////////////////////////////////////////////////////
-	virtual void					Create_Decal(DecalGeneratorClass * generator) override;
-	virtual void					Delete_Decal(uint32 decal_id) override;
-
 	/////////////////////////////////////////////////////////////////////////////
 	// Render Object Interface - Attributes, Options, Properties, etc
 	/////////////////////////////////////////////////////////////////////////////
@@ -195,7 +200,6 @@ public:
 	virtual void					Set_Hidden(int onoff) override;
 
 	// (gth) TESTING DYNAMICALLY SWAPPING SKELETONS!
-	virtual void					Set_HTree(HTreeClass * htree) override;
 
 protected:
 
@@ -251,10 +255,10 @@ protected:
 	ModelArrayClass				AdditionalModels;
 
 	// possible array of snap points.
-	SnapPointsClass *				SnapPoints;
+	std::vector<Assets::Vector3f> SnapPoints;
 
 	// possible array of proxy objects (names and bone indexes for application defined usage)
-	ProxyArrayClass *				ProxyArray;
+	std::vector<Assets::ModelAttachmentDesc> Proxies;
 
 	// Current LOD Bias (affects recalculation of the Value array)
 	float								LODBias;
@@ -264,106 +268,18 @@ protected:
 /*
 ** Loaders for HLodClass
 */
-class HLodLoaderClass : public PrototypeLoaderClass
-{
-public:
-	virtual int						Chunk_Type () override { return W3D_CHUNK_HLOD; }
-	virtual PrototypeClass *	Load_W3D(ChunkLoadClass & cload) override;
-};
-
-
-/**
-** HLodDefClass
-** This description object is generated when reading a W3D_CHUNK_HLOD.  It
-** directly describes the contents of an HLod model.
-*/
-class HLodDefClass
-{
-	W3DMPO_CODE(HLodDefClass)
-public:
-
-	HLodDefClass();
-	HLodDefClass(HLodClass &src_lod);
-	~HLodDefClass();
-
-	WW3DErrorType				Load_W3D(ChunkLoadClass & cload);
-	WW3DErrorType				Save(ChunkSaveClass & csave);
-	const char *				Get_Name() const { return Name; }
-	void							Initialize(HLodClass &src_lod);
-
-protected:
-
-	/*
-	** Serializtion methods
-	*/
-	WW3DErrorType				Save_Header (ChunkSaveClass &csave);
-	WW3DErrorType				Save_Lod_Array (ChunkSaveClass &csave);
-	WW3DErrorType				Save_Aggregate_Array(ChunkSaveClass & csave);
-
-private:
-
-	/*
-	** SubObjectArrayClass
-	** Describes a level-of-detail in an HLod object.  Note that this is
-	** a render object which will be exploded when the HLod is constructed (its
-	** sub-objects, if any, will be placed into the HLod).
-	*/
-	class SubObjectArrayClass
-	{
-	public:
-		SubObjectArrayClass();
-		~SubObjectArrayClass();
-		void		Reset();
-		void		operator = (const SubObjectArrayClass & that);
-
-		bool		Load_W3D(ChunkLoadClass & cload);
-		bool		Save_W3D(ChunkSaveClass & csave);
-
-		float		MaxScreenSize;
-		int		ModelCount;
-		char **	ModelName;				// array of model names
-		int *		BoneIndex;				// array of bone indices
-	};
-
-	char * 						Name;
-	char *						HierarchyTreeName;
-	int							LodCount;
-	SubObjectArrayClass *	Lod;
-	SubObjectArrayClass		Aggregates;
-	ProxyArrayClass *			ProxyArray;
-
-	void							Free();
-	bool							read_header(ChunkLoadClass & cload);
-	bool							read_proxy_array(ChunkLoadClass & cload);
-
-	friend class HLodClass;
-};
+Graphics::ModelFactory<RenderObjClass>* Load_HLod_Factory(ChunkLoadClass& cload);
 
 
 /*
 ** Prototype for HLod objects
 */
-class HLodPrototypeClass : public PrototypeClass
-{
-	W3DMPO_CODE(HLodPrototypeClass)
-public:
-	HLodPrototypeClass( HLodDefClass *def )					{ Definition = def; }
 
-	virtual const char *			Get_Name() const override { return Definition->Get_Name(); }
-	virtual int								Get_Class_ID() const override { return RenderObjClass::CLASSID_HLOD; }
-	virtual RenderObjClass *	Create() override;
-	virtual void							DeleteSelf() override { delete this; }
-
-	HLodDefClass *					Get_Definition() const	{ return Definition; }
-
-protected:
-	virtual ~HLodPrototypeClass() override { delete Definition; }
-
-private:
-	HLodDefClass *					Definition;
-};
 
 /*
 ** Instance of the loaders which the asset manager install
 */
-extern HLodLoaderClass			_HLodLoader;
+
+Graphics::ModelFactory<RenderObjClass>* Load_HModel_Factory(ChunkLoadClass& cload);
+Graphics::ModelFactory<RenderObjClass>* Load_ModelLevels_Factory(ChunkLoadClass& cload);
+Graphics::ModelFactory<RenderObjClass>* Load_Aggregate_Factory(ChunkLoadClass& cload);

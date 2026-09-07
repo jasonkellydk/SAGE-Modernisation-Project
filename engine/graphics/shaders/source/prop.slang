@@ -17,7 +17,7 @@ cbuffer PropConstants : register(b0)
     float ShroudOnly;
     float Opacity;
     float TextureLuminance;
-    float Reserved;
+    float NormalInWorldSpace;
     float4 SceneAmbient;
     float4 LightDirection[4];
     float4 LightDiffuse[4];
@@ -30,6 +30,20 @@ cbuffer PropConstants : register(b0)
     float4 LightAttenuation[4];
     float4 LightAmbient[4];
     float4 LightSpot[4];
+    row_major float4x4 World;
+    float SurfaceModel;
+    uint SurfaceMaps;
+    float SurfaceNormalScale;
+    float SurfaceNormalFlipGreen;
+    float SurfaceSpecularScale;
+    float SurfaceEmissiveScale;
+    float SurfaceRoughness;
+    float SurfaceMetallic;
+    float SurfaceOcclusionStrength;
+    uint SurfaceSpecularChannel;
+    uint SurfaceTeamChannel;
+    float SurfaceTeamMultiplier;
+    float4 SurfaceTeamColor;
 };
 Texture2D BaseTexture : register(t0);
 Texture2D DetailTexture : register(t1);
@@ -49,6 +63,7 @@ struct PropInput
     float4 material_emissive : COLOR3;
     float4 material_specular : COLOR4;
     float4 secondary_color : COLOR5;
+    float4 tangent : TEXCOORD2;
 };
 struct PropOutput
 {
@@ -68,26 +83,42 @@ struct PropOutput
     float2 secondary_uv : TEXCOORD1;
     float2 shroud_uv : TEXCOORD2;
     float distance : TEXCOORD3;
+    float4 tangent : TEXCOORD9;
 };
 [shader("vertex")] PropOutput prop_vertex(PropInput input)
 {
     PropOutput output;
-    output.position = mul(ViewProjection,float4(input.position,1));
+    float3 world_position = mul(World,float4(input.position,1)).xyz;
+    float3 world_normal = NormalInWorldSpace > 0.5 ? input.normal : mul(World,float4(input.normal,0)).xyz;
+    output.position = mul(ViewProjection,float4(world_position,1));
     output.color = input.color;
     output.secondary_color = input.secondary_color;
-    output.normal = normalize(input.normal);
-    output.camera_position = mul(View,float4(input.position,1)).xyz;
-    output.camera_normal = normalize(mul(View,float4(input.normal,0)).xyz);
+    output.normal = normalize(world_normal);
+    output.tangent = float4(mul(World,float4(input.tangent.xyz,0)).xyz,input.tangent.w);
+    if (SurfaceModel > .5 && NormalInWorldSpace < .5) {
+        const float3 r0=World[0].xyz, r1=World[1].xyz, r2=World[2].xyz;
+        const float determinant=dot(r0,cross(r1,r2));
+        const float orientation=determinant < 0 ? -1 : 1;
+        const float3x3 cofactor=float3x3(cross(r1,r2),cross(r2,r0),cross(r0,r1));
+        output.normal=normalize(mul(cofactor,input.normal)*orientation);
+        output.tangent.w*=orientation;
+    }
+    output.camera_position = mul(View,float4(world_position,1)).xyz;
+    output.camera_normal = normalize(mul(View,float4(world_normal,0)).xyz);
     output.reflection = reflect(normalize(output.camera_position),output.camera_normal);
-    output.world_position = input.position;
+    output.world_position = world_position;
     output.material_ambient = input.material_ambient;
     output.material_diffuse = input.material_diffuse;
     output.material_emissive = input.material_emissive;
     output.material_specular = input.material_specular;
     output.uv = input.uv;
+    if ((SurfaceMaps & 128u) != 0) {
+        output.uv.x += input.color.a;
+        output.color.a = 1.0;
+    }
     output.secondary_uv = input.secondary_uv;
-    output.shroud_uv = input.position.xy*ShroudProjection.xy+ShroudProjection.zw;
-    output.distance = length(CameraPosition.xyz-input.position);
+    output.shroud_uv = world_position.xy*ShroudProjection.xy+ShroudProjection.zw;
+    output.distance = length(CameraPosition.xyz-world_position);
     return output;
 }
 float2 Prop_Coordinate(uint stage,PropOutput input)
@@ -96,16 +127,29 @@ float2 Prop_Coordinate(uint stage,PropOutput input)
     float projected = stage==0 ? UVSources.y : UVSources.w;
     float4 coordinate = float4(stage==0 ? input.uv : input.secondary_uv,0,1);
     if (mode==1) coordinate = float4(input.camera_position,1);
-    else if (mode==2) coordinate = float4(input.camera_normal,0);
-    else if (mode==3) coordinate = float4(input.reflection,0);
+    else if (mode==2) coordinate = float4(input.camera_normal,1);
+    else if (mode==3) coordinate = float4(input.reflection,1);
+    else if (mode==4) coordinate = float4(input.world_position,1);
     coordinate = mul(UVTransform[stage],coordinate);
     if (projected > 0.5) coordinate.xyz /= max(abs(coordinate.w),0.000001);
     return coordinate.xy;
 }
+#include "prop_surface.slangh"
 [shader("pixel")] float4 prop_pixel(PropOutput input) : SV_TARGET
 {
     ClipEnvironment(input.world_position);
     if (ShroudOnly > 0.5) return float4(ShroudTexture.Sample(ShroudSampler,input.shroud_uv).rgb,1);
+    if (SurfaceModel > .5) {
+        float4 surface=Shade_Prop_Surface(input);
+        surface.a*=Opacity;
+        clip(surface.a-AlphaCutoff);
+        if (Shroud > .5) surface.rgb*=ShroudTexture.Sample(ShroudSampler,input.shroud_uv).rgb;
+        if (FogState.z > .5) {
+            const float fog=saturate((abs(input.camera_position.z)-FogState.x)/max(FogState.y-FogState.x,.0001));
+            surface.rgb=lerp(surface.rgb,FogColor.rgb,fog);
+        }
+        return saturate(surface);
+    }
     float4 diffuse = input.color*input.material_diffuse;
     if (input.material_ambient.w > 0.5) {
         float3 normal = normalize(input.normal);

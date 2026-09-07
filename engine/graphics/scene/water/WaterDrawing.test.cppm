@@ -269,6 +269,30 @@ BOOST_AUTO_TEST_CASE(refraction_rejects_displacement_across_object_edges)
             BOOST_CHECK_EQUAL(std::to_integer<int>(pixels[pixel+(foreground ? 0 : 2)]),0);
         }
     }
+    // Exercise the actual depth attachment capture used by the water adapter,
+    // including source writes after capture. It must sample the saved depth.
+    for (const auto format : {RHITextureFormat::D24_UNorm_S8, RHITextureFormat::D32_Float}) {
+        const auto attachment = device.Create_Texture({64,32,1,format,
+            static_cast<std::uint32_t>(RHITextureUsage::DepthStencil)});
+        BOOST_REQUIRE(attachment.Is_Valid());
+        BOOST_REQUIRE(commands.Set_Depth_Target(attachment));
+        BOOST_REQUIRE(commands.Clear_Depth(0.8f));
+        const auto captured = renderer.Capture_Depth(commands, {attachment,64,32}, format);
+        BOOST_REQUIRE(captured.Is_Valid());
+        BOOST_REQUIRE(commands.Clear_Depth(0.2f));
+        BOOST_REQUIRE(commands.Set_Render_Targets(target,depth));
+        for (const auto pass : {WaterPass::Surface,WaterPass::Ocean}) {
+            style.pass = pass;
+            auto captured_textures = pass == WaterPass::Surface ? textures : ocean_textures;
+            captured_textures[8] = captured;
+            BOOST_REQUIRE(commands.Clear({0,0,0,0},1));
+            BOOST_REQUIRE(renderer.Draw(commands,mesh,style,parameters,captured_textures));
+            BOOST_REQUIRE(device.Readback_Texture(target,pixels,64*4));
+            BOOST_CHECK_GT(std::to_integer<int>(pixels[(16*64+31)*4]),30);
+            BOOST_CHECK_EQUAL(std::to_integer<int>(pixels[(16*64+31)*4+2]),0);
+        }
+        device.Destroy_Texture(attachment);
+    }
     device.Destroy_Texture(scene_depth);
     renderer.Destroy_Mesh(mesh);
     renderer.Shutdown();
@@ -299,8 +323,6 @@ BOOST_AUTO_TEST_CASE(refraction_samples_the_scene_pixel_when_the_viewport_has_an
         capture[(y*64+x)*4+(x<32 ? 2 : 0)] = 255;
         capture[(y*64+x)*4+3] = 255;
     }
-    const auto scene = device.Create_Texture_Initialized({64,32},
-        {std::as_bytes(std::span(capture)),64*4});
     const auto target = device.Create_Texture({64,32,1,RHITextureFormat::RGBA8_UNorm,
         static_cast<std::uint32_t>(RHITextureUsage::RenderTarget)});
     const auto depth = device.Create_Texture({64,32,1,RHITextureFormat::D32_Float,
@@ -316,27 +338,45 @@ BOOST_AUTO_TEST_CASE(refraction_samples_the_scene_pixel_when_the_viewport_has_an
     parameters.camera_position = {0,0,1000000,1};
     parameters.effects = {0,0,1,0};
     auto& commands = device.Immediate_Command_List();
-    BOOST_REQUIRE(commands.Set_Render_Targets(target,depth));
-    BOOST_REQUIRE(commands.Set_Viewport({32,0,32,32}));
-    for (const auto pass : {WaterPass::Surface,WaterPass::Ocean}) {
-        WaterStyle style;
-        style.pass = pass;
-        style.blend = RHIBlendMode::Disabled;
-        const std::array<RHITextureHandle,9> textures = pass == WaterPass::Surface
-            ? std::array<RHITextureHandle,9>{black,normal,black,white,black,scene,black,white,white}
-            : std::array<RHITextureHandle,9>{black,black,normal,black,black,scene,black,white,white};
-        BOOST_REQUIRE(commands.Clear({0,0,0,0},1));
-        BOOST_REQUIRE(renderer.Draw(commands,mesh,style,parameters,textures));
-        std::array<std::byte,64*32*4> pixels{};
-        BOOST_REQUIRE(device.Readback_Texture(target,pixels,64*4));
-        // This pixel belongs to the red half of the captured scene. Mapping
-        // the full camera image onto this viewport incorrectly samples blue.
-        BOOST_CHECK_GT(std::to_integer<int>(pixels[(16*64+36)*4]),80);
-        BOOST_CHECK_EQUAL(std::to_integer<int>(pixels[(16*64+36)*4+2]),0);
+    for (const auto format : {RHITextureFormat::RGBA8_UNorm,RHITextureFormat::BGRA8_UNorm}) {
+        auto source_pixels = capture;
+        if (format == RHITextureFormat::BGRA8_UNorm) {
+            for (unsigned i=0;i<source_pixels.size();i+=4)
+                std::swap(source_pixels[i],source_pixels[i+2]);
+        }
+        const auto scene = device.Create_Texture_Initialized({64,32,1,format,
+            static_cast<std::uint32_t>(RHITextureUsage::RenderTarget)},
+            {std::as_bytes(std::span(source_pixels)),64*4});
+        BOOST_REQUIRE(scene.Is_Valid());
+        const auto snapshot = renderer.Capture_Color(commands,{scene,64,32},format);
+        BOOST_REQUIRE(snapshot.Is_Valid());
+        BOOST_CHECK(renderer.Capture_Color(commands,{scene,64,32},format) == snapshot);
+        // Subsequent scene writes must not change the water's saved image.
+        BOOST_REQUIRE(commands.Set_Render_Targets(scene,depth));
+        BOOST_REQUIRE(commands.Clear({0,0,1,1},1));
+        BOOST_REQUIRE(commands.Set_Render_Targets(target,depth));
+        BOOST_REQUIRE(commands.Set_Viewport({32,0,32,32}));
+        for (const auto pass : {WaterPass::Surface,WaterPass::Ocean}) {
+            WaterStyle style;
+            style.pass = pass;
+            style.blend = RHIBlendMode::Disabled;
+            const std::array<RHITextureHandle,9> textures = pass == WaterPass::Surface
+                ? std::array<RHITextureHandle,9>{black,normal,black,white,black,snapshot,black,white,white}
+                : std::array<RHITextureHandle,9>{black,black,normal,black,black,snapshot,black,white,white};
+            BOOST_REQUIRE(commands.Clear({0,0,0,0},1));
+            BOOST_REQUIRE(renderer.Draw(commands,mesh,style,parameters,textures));
+            std::array<std::byte,64*32*4> pixels{};
+            BOOST_REQUIRE(device.Readback_Texture(target,pixels,64*4));
+            // This pixel belongs to the red half of the captured scene. Mapping
+            // the full camera image onto this viewport incorrectly samples blue.
+            BOOST_CHECK_GT(std::to_integer<int>(pixels[(16*64+36)*4]),80);
+            BOOST_CHECK_EQUAL(std::to_integer<int>(pixels[(16*64+36)*4+2]),0);
+        }
+        device.Destroy_Texture(scene);
     }
     renderer.Destroy_Mesh(mesh);
     renderer.Shutdown();
-    for (auto texture : {black,white,normal,scene,target,depth}) device.Destroy_Texture(texture);
+    for (auto texture : {black,white,normal,target,depth}) device.Destroy_Texture(texture);
 }
 
 BOOST_AUTO_TEST_CASE(surface_normal_octaves_repeat_beyond_the_first_texture_tile)

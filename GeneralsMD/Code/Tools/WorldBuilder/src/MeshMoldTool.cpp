@@ -35,7 +35,7 @@
 #include "wbview3d.h"
 #include "WW3D2/Mesh.h"
 #include "WW3D2/MeshMdl.h"
-#include "W3DDevice/GameClient/HeightMap.h"
+#include "W3DDevice/GameClient/BaseHeightMap.h"
 //
 // MeshMoldTool class.
 //

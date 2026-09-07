@@ -1,4 +1,5 @@
 module;
+#include "../../profiling/Tracy.h"
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -13,6 +14,7 @@ export import Graphics.Scene.Water.Geometry;
 export import Graphics.Scene.Water.View;
 export import Graphics.RHI;
 import Graphics.Resources.Pools.ResourcePool;
+import Graphics.Resources.Textures.Snapshot;
 import Graphics.Shaders.Library;
 import Graphics.Scene.Lighting.Environment;
 
@@ -93,6 +95,8 @@ public:
 
     void Shutdown() noexcept
     {
+        m_color_snapshot.Shutdown();
+        m_depth_snapshot.Shutdown();
         if (m_device != nullptr) {
             m_environment.Shutdown(*m_device);
             m_meshes.For_Each([&](WaterMeshHandle handle, const WaterMesh &) {
@@ -116,6 +120,22 @@ public:
         return m_meshes.Create(std::move(mesh));
     }
 
+    RHITextureHandle Capture_Color(CommandList& commands, const RHIBackbuffer& source,
+        RHITextureFormat format)
+    {
+        if (m_device == nullptr || !m_color_snapshot.Capture(*m_device, commands,
+            source.texture, source.width, source.height, format)) return {};
+        return m_color_snapshot.Texture();
+    }
+
+    RHITextureHandle Capture_Depth(CommandList& commands, const RHIDepthTarget& source,
+        RHITextureFormat format)
+    {
+        if (m_device == nullptr || !m_depth_snapshot.Capture(*m_device, commands,
+            source.texture, source.width, source.height, format)) return {};
+        return m_depth_snapshot.Texture();
+    }
+
     bool Update_Mesh(WaterMeshHandle handle, std::span<const WaterVertex> vertices,
         std::span<const std::uint32_t> indices)
     {
@@ -136,6 +156,7 @@ public:
     bool Draw(CommandList &commands, WaterMeshHandle handle, const WaterStyle& style,
         const WaterParameters &parameters, std::span<const RHITextureHandle> textures)
     {
+        GRAPHICS_PROFILE_SCOPE("Graphics.Water.Draw");
         WaterMesh *mesh = m_meshes.Resolve(handle);
         if (m_device == nullptr || mesh == nullptr || textures.size() != 9) return false;
         if (mesh->geometry.Indices().empty()) return true;
@@ -225,6 +246,8 @@ private:
     }
 
     EnvironmentLightingBinding m_environment;
+    TextureSnapshot m_color_snapshot;
+    TextureSnapshot m_depth_snapshot;
     Device *m_device = nullptr;
     ShaderLibrary m_shaders;
     std::array<ShaderHandle,5> m_shader{};

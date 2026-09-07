@@ -43,7 +43,16 @@
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 #pragma once
+#include <memory>
+#include <span>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
+import Assets.Cache.Animations;
 
+
+import Assets.Images.PixelEncoding;
 #include "WW3D2/AssetMgr.h"
 #include "Lib/BaseType.h"
 
@@ -58,14 +67,14 @@ public:
 
 	virtual RenderObjClass * Create_Render_Obj(const char * name) override;
 	// unique to W3DAssetManager
-	virtual HAnimClass *	Get_HAnim(const char * name) override;
+	virtual Assets::AnimationAssetHandle Acquire_Animation(const char * name) override;
 	virtual bool Load_3D_Assets( const char * filename ) override; // This CANNOT be Bool, as it will not inherit properly if you make Bool == Int
 
 	virtual TextureClass *	Get_Texture
 	(
 		const char * filename,
 		MipCountType mip_level_count=MIP_LEVELS_ALL,
-		WW3DFormat texture_format=WW3D_FORMAT_UNKNOWN,
+		Assets::PixelEncoding texture_format=Assets::PixelEncoding::Unknown,
 		bool allow_compression=true,
 		TextureBaseClass::TexAssetType type=TextureBaseClass::TEX_REGULAR,
 		bool allow_reduction=true
@@ -75,8 +84,6 @@ public:
 	void Report_Used_Assets();
 	void Report_Used_Prototypes ();
 	void Report_Used_Textures();
-	void Report_Used_Font3DDatas();
-	void Report_Used_FontChars ();
 
 	virtual RenderObjClass * Create_Render_Obj(const char * name,float scale, const int color, const char *oldTexture=nullptr, const char *newTexture=nullptr);
 	///Swaps the specified textures in the render object prototype.
@@ -97,7 +104,7 @@ private:
 	TextureClass * Find_Texture(const char * name, const int color);
 	TextureClass * Recolor_Texture(TextureClass *texture, const int color);
 	TextureClass * Recolor_Texture_One_Time(TextureClass *texture, const int color);
-	void Remap_Palette(SurfaceClass *surface, const int color, Bool doPaletteOnly, Bool useAlpha);
+	void Remap_Palette(Graphics::TextureEdit *surface, const int color, Bool doPaletteOnly, Bool useAlpha);
 	int replaceAssetTexture(RenderObjClass *robj, TextureClass *oldTex, TextureClass *newTex);
 	int replaceHLODTexture(RenderObjClass *robj, TextureClass *oldTex, TextureClass *newTex);
 	int replaceMeshTexture(RenderObjClass *robj, TextureClass *oldTex, TextureClass *newTex);

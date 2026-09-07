@@ -34,7 +34,7 @@
 #pragma once
 
 #include "GameClient/Shadow.h"
-#include "WW3D2/LightEnvironment.h"
+import Graphics.Scene.Lighting.Local;
 
 class W3DShadowTexture;	//forward reference
 class W3DShadowTextureManager;	//forward reference
@@ -69,7 +69,7 @@ class W3DProjectedShadowManager	: public ProjectedShadowManager
 		void removeShadow (W3DProjectedShadow *shadow);
 		void removeAllShadows(); ///< Remove all shadows.
 		TextureClass *getRenderTarget()	{ return m_dynamicRenderTarget;}
-		SpecialRenderInfoClass *getRenderContext()	{ return m_shadowContext;}
+		RenderInfoClass *getRenderContext()	{ return m_shadowContext;}
 		void updateRenderTargetTextures();	///<render into any textures that need updating.
 		void queueDecal(W3DProjectedShadow *shadow);	///<add shadow decal to render list - decal conforms to terrain.
 		void flushDecals(W3DShadowTexture *texture, ShadowType type);	///<empty queue by rendering all decals with given texture
@@ -86,8 +86,8 @@ class W3DProjectedShadowManager	: public ProjectedShadowManager
 		TextureClass	*m_dynamicRenderTarget;	///<offscreen video memory texture used to render all shadow textures.
 		Bool m_renderTargetHasAlpha;					///<does render target have destination alpha support?
 		CameraClass		*m_shadowCamera;					///<camera used to render all shadow textures - configured by projector
-		LightEnvironmentClass m_shadowLightEnv;
-		SpecialRenderInfoClass *m_shadowContext;
+		Graphics::LocalLighting m_shadowLightEnv;
+		RenderInfoClass *m_shadowContext;
 		W3DShadowTextureManager *m_W3DShadowTextureManager;
 		Int m_numDecalShadows;							///< number of decal shadows in the system.
 		Int m_numProjectionShadows;						///< number of projected shadows in the system.

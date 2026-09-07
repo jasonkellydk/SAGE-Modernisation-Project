@@ -38,8 +38,8 @@
 #include "W3DDevice/GameClient/Module/W3DPoliceCarDraw.h"
 #include "W3DDevice/GameClient/W3DDisplay.h"
 #include "Common/RandomValue.h"
-#include "WW3D2/HAnim.h"
 #include "W3DDevice/GameClient/W3DScene.h"
+import Assets.Cache.Animations;
 
 // PRIVATE FUNCTIONS //////////////////////////////////////////////////////////////////////////////
 
@@ -112,10 +112,10 @@ void W3DPoliceCarDraw::doDrawModule(const Matrix3D* transformMtx)
 	if( policeCarRenderObj == nullptr )
 		return;
 
-	HAnimClass *anim = policeCarRenderObj->Peek_Animation();
+	Assets::AnimationAssetHandle anim = policeCarRenderObj->Peek_Animation();
 	if (anim)
 	{
-		Real frames = anim->Get_Num_Frames();
+		Real frames = static_cast<int>(Assets::Get_Animation_Cache().Resolve(anim)->frame_count);
 		m_curFrame += animAmt;
 		if (m_curFrame > frames-1) {
 			m_curFrame = 0;

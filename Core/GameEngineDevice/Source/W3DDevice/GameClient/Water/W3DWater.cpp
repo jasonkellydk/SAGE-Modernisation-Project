@@ -1,3 +1,6 @@
+#include <algorithm>
+import Graphics.Scene.Views.CameraMatrices;
+import Graphics.Frame.AttachmentBindings;
 /*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -32,6 +35,8 @@
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 
+import Assets.Images.PixelEncoding;
+import Graphics.RHI;
 #include "W3DDevice/GameClient/W3DWater.h"
 #include "W3DDevice/GameClient/BaseHeightMap.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
@@ -43,12 +48,10 @@
 #include "WW3D2/RInfo.h"
 #include "WW3D2/Camera.h"
 #include "WW3D2/Scene.h"
-#include "WW3D2/Backend/RenderBackend.h"
 #include "WW3D2/WW3D.h"
 #include "WW3D2/Light.h"
 #include "WWMath/matrix4.h"
 #include "WWLib/simplevec.h"
-#include "WW3D2/Statistics.h"
 
 #include "Common/FramePacer.h"
 #include "Common/GameState.h"
@@ -69,7 +72,9 @@
 #include <cstring>
 #include <vector>
 #include <SDL3/SDL.h>
+import Graphics.Diagnostics.Render;
 import Graphics.Scene.Lighting.Environment;
+import Graphics.Backends.DX11.FrameRuntime;
 
 
 
@@ -215,8 +220,7 @@ WaterRenderSystem::WaterRenderSystem()
 	m_waterType = WATER_TYPE_SURFACE;
 	m_tod=TIME_OF_DAY_AFTERNOON;
 	m_pReflectionTexture=nullptr;
-	m_pRefractionTexture=nullptr;
-	m_pSceneDepthTexture=nullptr;
+	m_sceneColorTexture = {};
 	m_pDisplacementTexture=nullptr;
 	m_renderingOffscreen=FALSE;
 	m_reflectionRenderer=nullptr;
@@ -367,8 +371,8 @@ void WaterRenderSystem::ReleaseResources()
 	m_waterMaterial.Shutdown();
 
 	REF_PTR_RELEASE(m_pReflectionTexture);
-	REF_PTR_RELEASE(m_pRefractionTexture);
-	REF_PTR_RELEASE(m_pSceneDepthTexture);
+	m_sceneColorTexture = {};
+	m_sceneDepthTexture = {};
 	REF_PTR_RELEASE(m_pDisplacementTexture);
 	m_renderingOffscreen = FALSE;
 
@@ -388,8 +392,8 @@ void WaterRenderSystem::ReleaseResources()
 //-------------------------------------------------------------------------------------------------
 void WaterRenderSystem::ReAcquireResources()
 {
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	if (backend == nullptr)
+
+	if (Graphics::Shared_Frame_Device() == nullptr)
 	{
 		return;
 	}
@@ -417,26 +421,11 @@ void WaterRenderSystem::ReAcquireResources()
 	}
 
 	// The water type selects geometry only. Every mode uses the same // reflection/refraction material contract.
-	m_pReflectionTexture = backend->Create_Render_Target(
-		SEA_REFLECTION_SIZE, SEA_REFLECTION_SIZE);
-	m_pDisplacementTexture = backend->Create_Render_Target(
-		SEA_REFLECTION_SIZE, SEA_REFLECTION_SIZE, WW3D_FORMAT_A8R8G8B8);
+	m_pReflectionTexture = new TextureClass(SEA_REFLECTION_SIZE,SEA_REFLECTION_SIZE,Assets::PixelEncoding::BGRA8,
+        MIP_LEVELS_1,TextureBaseClass::POOL_DEFAULT,true,false);
+	m_pDisplacementTexture = new TextureClass(SEA_REFLECTION_SIZE,SEA_REFLECTION_SIZE,Assets::PixelEncoding::BGRA8,
+        MIP_LEVELS_1,TextureBaseClass::POOL_DEFAULT,true,false);
 
-	int target_width = 0;
-	int target_height = 0;
-	int target_bits = 0;
-	bool target_windowed = false;
-	backend->Get_Render_Target_Resolution(target_width, target_height,
-		target_bits, target_windowed);
-	if (target_width > 0 && target_height > 0)
-	{
-		m_pRefractionTexture = backend->Create_Render_Target(
-			target_width, target_height);
-	}
-	if (m_pSceneDepthTexture == nullptr)
-	{
-		m_pSceneDepthTexture = backend->Create_Scene_Depth_Texture();
-	}
 
 	if (m_waterTrackSystem != nullptr)
 	{
@@ -681,8 +670,7 @@ bool WaterRenderSystem::updateDisplacementTexture()
 		return true;
 	}
 
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	if (backend == nullptr || m_pDisplacementTexture == nullptr ||
+	if (Graphics::Shared_Frame_Device() == nullptr || m_pDisplacementTexture == nullptr ||
 		m_waterOceanHeightTexture == nullptr || m_dx <= 0.0f || m_dy <= 0.0f)
 	{
 		return false;
@@ -705,50 +693,41 @@ bool WaterRenderSystem::updateDisplacementTexture()
 
 	const WaterMaterialParameters parameters =
 		makeWaterMaterialParameters(false, false, false);
-	RenderBackendPassScope displacement_pass(backend,
-		m_pDisplacementTexture, nullptr, RenderBackendCullMode::None, true,
-		false, Vector3(0.0f, 0.0f, 0.0f));
-	if (!displacement_pass.Is_Active())
+    if (!m_pDisplacementTexture->Ensure_Render_Backend_Texture()) return false;
+    auto& attachments=Graphics::Get_Attachment_Bindings();
+    Graphics::AttachmentScope displacement_pass(attachments,m_pDisplacementTexture->Peek_Render_Backend_Texture());
+	if (!displacement_pass.Active())
 	{
 		return false;
 	}
+
+    attachments.Clear(true,false,{0,0,0,0});
 
 	const bool applied = m_waterMaterial.Apply_Displacement(
 		m_waterOceanHeightTexture, parameters.animation,
 		parameters.displacement_domain);
 	if (applied)
 	{
-		m_waterMaterial.Draw(m_displacementMesh);
+		m_waterMaterial.Draw(m_displacementMesh,Matrix4x4(true));
 	}
-	m_waterMaterial.Reset();
 	return applied;
 }
 
 void WaterRenderSystem::Capture_Refraction_Texture()
 {
-	if ((m_pRefractionTexture == nullptr && m_pSceneDepthTexture == nullptr) ||
-		m_renderingOffscreen)
-	{
-		return;
-	}
-
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	if (backend != nullptr)
-	{
-		// This is called after the opaque scene and before the water sort list.
-		// The backend copies the active swap-chain color into a same-sized
-		// shader resource, so the water shader can refract the actual scene below
-		// the surface without rendering the scene a second time.
-		if (m_pRefractionTexture != nullptr)
-		{
-			backend->Copy_Back_Buffer_To_Texture(
-				m_pRefractionTexture->Peek_Render_Backend_Texture());
-		}
-		if (m_pSceneDepthTexture != nullptr)
-		{
-			backend->Capture_Scene_Depth();
-		}
-	}
+    if (m_renderingOffscreen) return;
+    m_sceneColorTexture = {};
+    m_sceneDepthTexture = {};
+    if (auto* device = Graphics::Shared_Frame_Device()) {
+        // Save the opaque scene before the water sort list starts drawing.
+        auto& renderer = Graphics::Get_Water_Renderer();
+        auto& commands = device->Immediate_Command_List();
+        const auto& swap_chain = device->Get_Swap_Chain();
+        m_sceneColorTexture = renderer.Capture_Color(commands, swap_chain.Backbuffer(),
+            Graphics::RHITextureFormat::BGRA8_UNorm);
+        m_sceneDepthTexture = renderer.Capture_Depth(commands, swap_chain.Depth_Target(),
+            Graphics::RHITextureFormat::D24_UNorm_S8);
+    }
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -756,13 +735,14 @@ void WaterRenderSystem::Capture_Refraction_Texture()
 //-------------------------------------------------------------------------------------------------
 void WaterRenderSystem::renderMirror(CameraClass *cam)
 {
+    PROFILER_SECTION_NAME("Graphics.Water.Reflection");
 #ifdef EXTENDED_STATS
-	if (WW3D::Get_Render_Backend()->Get_Debug_Settings().m_disableWater) {
+	if (Graphics::Get_Render_Diagnostics().disable_water) {
 		return;
 	}
 #endif
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	if (backend == nullptr || cam == nullptr || m_reflectionRenderer == nullptr ||
+
+	if (Graphics::Shared_Frame_Device() == nullptr || cam == nullptr || m_reflectionRenderer == nullptr ||
 		m_pReflectionTexture == nullptr)
 		return;
 
@@ -776,19 +756,15 @@ void WaterRenderSystem::renderMirror(CameraClass *cam)
 		reflected[4],reflected[5],reflected[6],reflected[7],
 		reflected[8],reflected[9],reflected[10],reflected[11]);
 
-	const RenderBackendCullMode old_cull_mode = backend->Get_Cull_Mode();
-	const RenderBackendCullMode reflected_cull_mode =
-		old_cull_mode == RenderBackendCullMode::Clockwise ?
-		RenderBackendCullMode::CounterClockwise :
-		old_cull_mode == RenderBackendCullMode::CounterClockwise ?
-		RenderBackendCullMode::Clockwise : RenderBackendCullMode::None;
-	RenderBackendPassScope reflection_pass(backend,
-		m_pReflectionTexture, nullptr, reflected_cull_mode, false, true,
-		Vector3(0.0f, 0.0f, 0.0f));
-	if (!reflection_pass.Is_Active())
+    if (!m_pReflectionTexture->Ensure_Render_Backend_Texture()) return;
+    auto& attachments=Graphics::Get_Attachment_Bindings();
+    Graphics::AttachmentScope reflection_pass(attachments,m_pReflectionTexture->Peek_Render_Backend_Texture());
+	if (!reflection_pass.Active())
 	{
 		return;
 	}
+
+    attachments.Clear(false,true,{0,0,0,0});
 
 	cam->Set_Transform( reflectedTransform );
 
@@ -798,17 +774,16 @@ void WaterRenderSystem::renderMirror(CameraClass *cam)
  	vMax.X=vMax.Y=1.0f;
 	vMin.X=vMin.Y=0.0f;
  	cam->Set_Viewport(vMin,vMax);
-	const RenderBackendViewport &pass_viewport =
-		reflection_pass.Get_Pass_Viewport();
+    const auto pass_viewport=attachments.Current().viewport;
 	// Projective sampling uses the main camera's normalized coordinates.
 	// Preserve its projection even when the reflection texture is square:
 	// target dimensions change sampling density, not the camera's field of view.
 
 	cam->Apply();	//force an update of all the camera dependent parameters like frustum clip planes
-	RenderBackendViewport reflected_viewport = pass_viewport;
-	cam->Get_Depth_Range(&reflected_viewport.min_z,
-		&reflected_viewport.max_z);
-	backend->Set_Viewport(reflected_viewport);
+	Graphics::RHIViewport reflected_viewport = pass_viewport;
+	cam->Get_Depth_Range(&reflected_viewport.min_depth,
+		&reflected_viewport.max_depth);
+	Graphics::Get_Attachment_Bindings().Set_Viewport(reflected_viewport);
 
 	// Submit the reflected scene inside the existing frame. The pass owns the
 	// off-screen target and winding; scene submission never begins/ends a
@@ -851,7 +826,7 @@ void WaterRenderSystem::Render(RenderInfoClass & rinfo)
 		return;	//no map has been loaded yet.
 
 #ifdef EXTENDED_STATS
-	if (WW3D::Get_Render_Backend()->Get_Debug_Settings().m_disableWater) {
+	if (Graphics::Get_Render_Diagnostics().disable_water) {
 		return;
 	}
 #endif
@@ -881,8 +856,6 @@ void WaterRenderSystem::Render(RenderInfoClass & rinfo)
 
 	//Clean up after any pixel shaders.
 	//Force render state application so the null texture releases the shroud reference.
-	WW3D::Get_Render_Backend()->Apply_Render_State_Changes();
-	WW3D::Get_Render_Backend()->Invalidate_Cached_Render_States();
 
 	if (m_waterTrackSystem)
 		m_waterTrackSystem->flush(rinfo);
@@ -942,20 +915,19 @@ WaterMaterialParameters WaterRenderSystem::makeWaterMaterialParameters(
 		Vector4(m_worldPositionX, m_worldPositionY, m_dx, m_dy),
 		Vector4(1.0f, 1.0f, 1.0f, 1.0f),
 		Vector4(reflection ? REFLECTION_FACTOR : 0.0f,
-			0.0f, m_pRefractionTexture != nullptr ? 1.0f : 0.0f,
+			0.0f, m_sceneColorTexture.Is_Valid() ? 1.0f : 0.0f,
 			underwater ? 1.0f : 0.0f),
 		Vector4(river ? 1.0f : 0.0f,
 			TheWaterTransparency != nullptr ?
 				TheWaterTransparency->m_transparentWaterDepth : 0.0f,
 			TheWaterTransparency != nullptr ?
 				TheWaterTransparency->m_minWaterOpacity : 1.0f,
-			m_pSceneDepthTexture != nullptr ? 1.0f : 0.0f)};
+			m_sceneDepthTexture.Is_Valid() ? 1.0f : 0.0f)};
 
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	if (backend != nullptr)
+	if (Graphics::Shared_Frame_Device() != nullptr)
 	{
 		Matrix4x4 view;
-		backend->Get_Transform(RenderBackendTransform::View, view);
+		std::copy_n(Graphics::Get_Camera_Matrices().view.values.data(), 16, &view[0][0]);
 		const Matrix4x4 camera_transform = view.Inverse();
 		const Graphics::WaterView water_view(
 			std::span<const float,16>(&camera_transform[0][0],16),m_level);
@@ -1000,8 +972,7 @@ void WaterRenderSystem::drawSea(RenderInfoClass & rinfo)
 		return;
 	}
 
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	if (backend == nullptr || m_gridVertices.empty() ||
+	if (Graphics::Shared_Frame_Device() == nullptr || m_gridVertices.empty() ||
 		m_gridIndices.empty())
 	{
 		return;
@@ -1042,24 +1013,22 @@ void WaterRenderSystem::drawSea(RenderInfoClass & rinfo)
 				static_cast<float>(patch_x * PATCH_WIDTH * PATCH_SCALE);
 			patch_matrix[3][2] =
 				static_cast<float>(patch_y * PATCH_WIDTH * PATCH_SCALE);
-			backend->Set_Transform(RenderBackendTransform::World,
-		patch_matrix * coordinate_transform * Make_Translation(
-			m_worldPositionX, m_worldPositionY, m_worldPositionZ));
+			const Matrix4x4 world = patch_matrix * coordinate_transform * Make_Translation(
+			m_worldPositionX, m_worldPositionY, m_worldPositionZ);
 			if (m_waterMaterial.Apply_Ocean(m_settings[m_tod].waterTexture,
 				m_pDisplacementTexture,
 				m_waterOceanNormalTexture != nullptr ? m_waterOceanNormalTexture :
 					m_waterNoiseTexture,
-				foam_or_caustics, m_pReflectionTexture, m_pRefractionTexture,
+				foam_or_caustics, m_pReflectionTexture, m_sceneColorTexture,
 				environment_or_depth, shroud == nullptr ? nullptr :
-					shroud->getShroudTexture(), m_pSceneDepthTexture, parameters,
+					shroud->getShroudTexture(), m_sceneDepthTexture, parameters,
 				TheWaterTransparency != nullptr &&
 					TheWaterTransparency->m_additiveBlend))
 			{
-				m_waterMaterial.Draw(m_gridMesh);
+				m_waterMaterial.Draw(m_gridMesh,world);
 			}
 		}
 	}
-	m_waterMaterial.Reset();
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -1122,9 +1091,7 @@ void WaterRenderSystem::renderSky()
 	fu= m_uOffset + (SKYPLANE_SIZE * 2) * setting->skyTexelsPerUnit;
 	fv= m_vOffset + (SKYPLANE_SIZE * 2) * setting->skyTexelsPerUnit;
 
-
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	if (backend == nullptr)
+	if (Graphics::Shared_Frame_Device() == nullptr)
 		return;
 
 	// Draw the reflection sky through the same explicit programmable material
@@ -1179,13 +1146,11 @@ void WaterRenderSystem::renderSky()
 
 	Matrix3D tm(1);
 	tm.Set_Translation(Vector3(0,0,0));
-	backend->Set_Transform(RenderBackendTransform::World,tm);
 
 	if (m_waterMaterial.Apply_Sky(setting->skyTexture, false, false))
 	{
-		m_waterMaterial.Draw(m_surfaceMesh);
+		m_waterMaterial.Draw(m_surfaceMesh,Matrix4x4(tm));
 	}
-	m_waterMaterial.Reset();
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -1224,12 +1189,9 @@ void WaterRenderSystem::renderSkyBody(Matrix3D *mat)
 	tm.Set(rotAxis,angle);
 	tm.Adjust_Translation(Vector3(SKYBODY_X,SKYBODY_Y,SKYBODY_HEIGHT));
 
-
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	if (backend == nullptr)
+	if (Graphics::Shared_Frame_Device() == nullptr)
 		return;
 
-	backend->Set_Transform(RenderBackendTransform::World,tm);
 
 	// The body uses the same explicit sky material, with alpha blending for
 	// the moon/sun texture.
@@ -1269,9 +1231,8 @@ void WaterRenderSystem::renderSkyBody(Matrix3D *mat)
 
 	if (m_waterMaterial.Apply_Sky(m_skyBodyTexture, true, true))
 	{
-		m_waterMaterial.Draw(m_surfaceMesh);
+		m_waterMaterial.Draw(m_surfaceMesh,Matrix4x4(tm));
 	}
-	m_waterMaterial.Reset();
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -1283,8 +1244,7 @@ void WaterRenderSystem::renderWaterMesh()
 	if (!m_gridRenderData.enabled)
 		return;	//the water grid is disabled.
 
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	if (backend == nullptr || m_gridVertices.empty() ||
+	if (Graphics::Shared_Frame_Device() == nullptr || m_gridVertices.empty() ||
 		m_gridIndices.empty())
 		return;
 
@@ -1377,8 +1337,7 @@ void WaterRenderSystem::renderWaterMesh()
 
 	if (!Upload_Water_Geometry(m_gridMesh,m_gridVertices,m_gridIndices,true)) return;
 
-	backend->Set_Transform(RenderBackendTransform::World,
-		m_gridRenderData.transform);
+	const Matrix4x4 world(m_gridRenderData.transform);
 	W3DShroud *shroud = TheTerrainRenderObject == nullptr ? nullptr :
 		TheTerrainRenderObject->getShroud();
 	const WaterMaterialParameters parameters =
@@ -1395,18 +1354,14 @@ void WaterRenderSystem::renderWaterMesh()
 		environment_or_depth = m_settings[m_tod].skyTexture;
 	if (m_waterMaterial.Apply_Surface(m_riverTexture, normal_texture,
 		foam_or_caustics, m_riverAlphaEdge, m_pReflectionTexture,
-		m_pRefractionTexture, environment_or_depth,
+		m_sceneColorTexture, environment_or_depth,
 		shroud == nullptr ? nullptr : shroud->getShroudTexture(),
-		m_pSceneDepthTexture, parameters,
+		m_sceneDepthTexture, parameters,
 		TheWaterTransparency != nullptr &&
 			TheWaterTransparency->m_additiveBlend))
 	{
-		m_waterMaterial.Draw(m_gridMesh);
+		m_waterMaterial.Draw(m_gridMesh,world);
 	}
-
-	Debug_Statistics::Record_Polys_And_Vertices(m_numIndices-2,mx*my);
-
-	m_waterMaterial.Reset();
 
 }
 
@@ -1452,8 +1407,8 @@ Real WaterRenderSystem::getWaterHeight(Real x, Real y)
 //-------------------------------------------------------------------------------------------------
 void WaterRenderSystem::drawRiverWater(const WaterSurfacePolygon &polygon)
 {
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	if (backend == nullptr)
+
+	if (Graphics::Shared_Frame_Device() == nullptr)
 		return;
 
 	const Int pointCount = static_cast<Int>(polygon.points.size());
@@ -1564,7 +1519,6 @@ void WaterRenderSystem::drawRiverWater(const WaterSurfacePolygon &polygon)
 
 	Matrix3D tm(1);
 
-	backend->Set_Transform(RenderBackendTransform::World,tm);	//position the water surface
 	W3DShroud *shroud = TheTerrainRenderObject == nullptr ? nullptr :
 		TheTerrainRenderObject->getShroud();
 	const WaterMaterialParameters parameters =
@@ -1582,15 +1536,14 @@ void WaterRenderSystem::drawRiverWater(const WaterSurfacePolygon &polygon)
 		environment_or_depth = m_settings[m_tod].skyTexture;
 	if (m_waterMaterial.Apply_Surface(m_riverTexture, normal_texture,
 		foam_or_caustics, m_riverAlphaEdge, m_pReflectionTexture,
-		m_pRefractionTexture,
+		m_sceneColorTexture,
 		environment_or_depth, shroud == nullptr ? nullptr :
-			shroud->getShroudTexture(), m_pSceneDepthTexture,
+			shroud->getShroudTexture(), m_sceneDepthTexture,
 		parameters, TheWaterTransparency != nullptr &&
 			TheWaterTransparency->m_additiveBlend))
 	{
-		m_waterMaterial.Draw(m_surfaceMesh,wireframeForDebug);
+		m_waterMaterial.Draw(m_surfaceMesh,Matrix4x4(tm),wireframeForDebug);
 	}
-	m_waterMaterial.Reset();
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -1598,8 +1551,8 @@ void WaterRenderSystem::drawRiverWater(const WaterSurfacePolygon &polygon)
 //-------------------------------------------------------------------------------------------------
 void WaterRenderSystem::drawTrapezoidWater(const WaterGeometryPoint points[4])
 {
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	if (backend == nullptr)
+
+	if (Graphics::Shared_Frame_Device() == nullptr)
 		return;
 
 	Vector3 origin(points[0].x, points[0].y, points[0].z);
@@ -1684,7 +1637,6 @@ void WaterRenderSystem::drawTrapezoidWater(const WaterGeometryPoint points[4])
 
 
 	Matrix3D tm(1);
-	backend->Set_Transform(RenderBackendTransform::World,tm);
 
 	W3DShroud *shroud = TheTerrainRenderObject == nullptr ? nullptr :
 		TheTerrainRenderObject->getShroud();
@@ -1703,18 +1655,14 @@ void WaterRenderSystem::drawTrapezoidWater(const WaterGeometryPoint points[4])
 		environment_or_depth = m_settings[m_tod].skyTexture;
 	if (!m_waterMaterial.Apply_Surface(m_riverTexture, normal_texture,
 		foam_or_caustics, m_whiteTexture, m_pReflectionTexture,
-		m_pRefractionTexture,
+		m_sceneColorTexture,
 		environment_or_depth, shroud == nullptr ? nullptr :
-			shroud->getShroudTexture(), m_pSceneDepthTexture,
+			shroud->getShroudTexture(), m_sceneDepthTexture,
 		parameters, TheWaterTransparency != nullptr &&
 			TheWaterTransparency->m_additiveBlend))
 	{
-		m_waterMaterial.Reset();
 		return;
 	}
 
-	m_waterMaterial.Draw(m_surfaceMesh);
-	m_waterMaterial.Reset();
+	m_waterMaterial.Draw(m_surfaceMesh,Matrix4x4(tm));
 }
-
-

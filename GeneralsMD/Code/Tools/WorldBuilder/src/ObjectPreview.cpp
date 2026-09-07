@@ -1,3 +1,5 @@
+import Graphics.Backends.DX11.FrameRuntime;
+import Graphics.Frame.AttachmentBindings;
 /*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -22,12 +24,11 @@
 #include <WW3D2/RInfo.h>
 #include <WW3D2/Camera.h>
 #include <WW3D2/Light.h>
-#include "WW3D2/Backend/RenderBackend.h"
 #include <WW3D2/WW3D.h>
 
 #include "StdAfx.h"
-#include "WW3D2/LightEnvironment.h"
-#include "WW3D2/GraphicsToolFrame.h"
+import Graphics.Scene.Lighting.Local;
+import Graphics.Frame.ToolFrame;
 #include "resource.h"
 
 #include "Lib/BaseType.h"
@@ -39,7 +40,7 @@
 #include "addplayerdialog.h"
 #include "CUndoable.h"
 #include "wbview3d.h"
-#include "W3DDevice/GameClient/HeightMap.h"
+#include "W3DDevice/GameClient/BaseHeightMap.h"
 #include "Common/WellKnownKeys.h"
 #include "Common/ThingTemplate.h"
 #include "Common/ThingFactory.h"
@@ -81,54 +82,52 @@ END_MESSAGE_MAP()
 #define PREVIEW_WIDTH 128
 #define PREVIEW_HEIGHT 128
 
-static UnsignedByte * saveSurface(SurfaceClass *surface)
+static UnsignedByte * saveSurface(Graphics::TextureEdit *surface)
 {
 	if (surface == nullptr)
 	{
 		return nullptr;
 	}
 
-	SurfaceClass::SurfaceDescription desc = {};
-	surface->Get_Description(desc);
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	if (backend == nullptr)
+	Assets::ImageDescription desc = {};
+	desc=surface->Image().Description();
+
+	if (Graphics::Shared_Frame_Device() == nullptr)
 	{
 		return nullptr;
 	}
 
-	RenderBackendSurface *tempSurface = backend->Create_System_Memory_Surface(
-		desc.Width, desc.Height, desc.Format);
+	Graphics::TextureEdit *tempSurface = Graphics::TextureEdit::Create(
+		desc.width, desc.height, desc.encoding);
 	if (tempSurface == nullptr)
 	{
 		return nullptr;
 	}
 
-	const RenderBackendRect sourceRect =
+	const Assets::ImageRegion sourceRect =
 	{
 		0,
 		0,
-		static_cast<int>(desc.Width),
-		static_cast<int>(desc.Height)
+		static_cast<int>(desc.width),
+		static_cast<int>(desc.height)
 	};
-	const RenderBackendPoint destinationPoint = {0, 0};
-	if (!backend->Copy_Surface_Rect(surface, sourceRect, tempSurface,
-		destinationPoint))
+	if (!tempSurface->Copy_From(*surface, sourceRect, sourceRect))
 	{
-		backend->Release_Surface(tempSurface);
+		delete tempSurface;
 		return nullptr;
 	}
 
-	RenderBackendLockedSurface lrect = {};
-	if (!backend->Lock_Surface(tempSurface, lrect))
+	const auto lrect = tempSurface->Map();
+	if (lrect.bytes.empty())
 	{
-		backend->Release_Surface(tempSurface);
+		delete tempSurface;
 		return nullptr;
 	}
 
 	unsigned int x,y,index,index2,width,height;
 
-	width=desc.Width;
-	height=desc.Height;
+	width=desc.width;
+	height=desc.height;
 
 #ifdef CAPTURE_TO_TARGA
 	char image[3*PREVIEW_WIDTH*PREVIEW_HEIGHT];
@@ -140,11 +139,11 @@ static UnsignedByte * saveSurface(SurfaceClass *surface)
 			// index for image
 			index=3*(x+y*width);
 			// index for fb
-			index2=y*lrect.pitch+4*x;
+			index2=y*lrect.row_pitch+4*x;
 
-			image[index]=*((char *) lrect.bits + index2+2);
-			image[index+1]=*((char *) lrect.bits + index2+1);
-			image[index+2]=*((char *) lrect.bits + index2+0);
+			image[index]=*((char *) lrect.bytes.data() + index2+2);
+			image[index+1]=*((char *) lrect.bytes.data() + index2+1);
+			image[index+2]=*((char *) lrect.bytes.data() + index2+0);
 		}
 	}
 
@@ -159,8 +158,8 @@ static UnsignedByte * saveSurface(SurfaceClass *surface)
 
 	targ.Save("ObjectPreview.tga",TGAF_IMAGE,false);
 
-	backend->Unlock_Surface(tempSurface);
-	backend->Release_Surface(tempSurface);
+	tempSurface->Unmap();
+	delete tempSurface;
 	return nullptr;
 
 #else
@@ -174,11 +173,11 @@ static UnsignedByte * saveSurface(SurfaceClass *surface)
 			// index for image
 			index=3*(x+y*width);
 			// index for fb
-			index2=y*lrect.pitch+4*x;
+			index2=y*lrect.row_pitch+4*x;
 
-			bgraImage[index]=*((UnsignedByte *) lrect.bits + index2+0);
-			bgraImage[index+1]=*((UnsignedByte *) lrect.bits + index2+1);
-			bgraImage[index+2]=*((UnsignedByte *) lrect.bits + index2+2);
+			bgraImage[index]=*((UnsignedByte *) lrect.bytes.data() + index2+0);
+			bgraImage[index+1]=*((UnsignedByte *) lrect.bytes.data() + index2+1);
+			bgraImage[index+2]=*((UnsignedByte *) lrect.bytes.data() + index2+2);
 			//bgraImage[index+3]=0;
 		}
 	}
@@ -206,8 +205,8 @@ static UnsignedByte * saveSurface(SurfaceClass *surface)
 			}
 	}
 
-	backend->Unlock_Surface(tempSurface);
-	backend->Release_Surface(tempSurface);
+	tempSurface->Unmap();
+	delete tempSurface;
 
 	return bgraImage;
 #endif
@@ -243,23 +242,29 @@ static UnsignedByte * generatePreview( const ThingTemplate *tt )
 			model->Set_Position(Vector3(-sphere.Center.X, -sphere.Center.Y, -sphere.Center.Z));
 
 			// Create reflection texture
-			IRenderBackend *backend = WW3D::Get_Render_Backend();
-			TextureClass *objectTexture = backend != nullptr ?
-				backend->Create_Render_Target(PREVIEW_WIDTH, PREVIEW_HEIGHT) : nullptr;
+
+			TextureClass *objectTexture = Graphics::Shared_Frame_Device() != nullptr ?
+				new TextureClass(PREVIEW_WIDTH,PREVIEW_HEIGHT,Assets::PixelEncoding::BGRA8,
+                    MIP_LEVELS_1,TextureBaseClass::POOL_DEFAULT,true,false) : nullptr;
 			if (!objectTexture)
 			{
 				model->Release_Ref();
 				return nullptr;
 			}
 
-			if (!Begin_Graphics_Tool_Frame()) {
+			if (!Graphics::Begin_Tool_Frame()) {
                 objectTexture->Release_Ref();
                 model->Release_Ref();
                 return nullptr;
             }
 
             // Set the render target
-			backend->Set_Render_Target(objectTexture);
+            if (!Graphics::Get_Attachment_Bindings().Bind(objectTexture->Peek_Render_Backend_Texture())) {
+                Graphics::Abort_Tool_Frame();
+                REF_PTR_RELEASE(objectTexture);
+                REF_PTR_RELEASE(model);
+                return nullptr;
+            }
 
 			// create the camera
 			Bool orthoCamera = false;
@@ -277,8 +282,8 @@ static UnsignedByte * generatePreview( const ThingTemplate *tt )
 
 			// Clear the backbuffer
             if (WW3D::Begin_Render(true, true, Vector3(0.5f, 0.5f, 0.5f)) != WW3D_ERROR_OK) {
-                backend->Set_Render_Target(nullptr);
-                Abort_Graphics_Tool_Frame();
+                Graphics::Get_Attachment_Bindings().Restore_Default();
+                Graphics::Abort_Tool_Frame();
                 REF_PTR_RELEASE(objectTexture);
                 REF_PTR_RELEASE(camera);
                 REF_PTR_RELEASE(model);
@@ -286,23 +291,23 @@ static UnsignedByte * generatePreview( const ThingTemplate *tt )
             }
 
 			RenderInfoClass rinfo(*camera);
-			LightEnvironmentClass lightEnv;
+			Graphics::LocalLighting lightEnv;
 			rinfo.light_environment = &lightEnv;
-			lightEnv.Reset(Vector3(0.0f, 0.0f, 0.0f), Vector3(1.0f, 1.0f, 1.0f));
+			lightEnv.Reset({0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f});
 
 			WW3D::Render(*model, rinfo);
 
-			WW3D::End_Render(false);
+			WW3D::End_Render();
 
 			// Change the rendertarget back to the main backbuffer
-			backend->Set_Render_Target(nullptr);
+			Graphics::Get_Attachment_Bindings().Restore_Default();
             // End the offscreen frame without presenting the editor window.
-            Abort_Graphics_Tool_Frame();
+            Graphics::Abort_Tool_Frame();
 
-			SurfaceClass *surface = objectTexture->Get_Surface_Level();
+			Graphics::TextureEdit *surface = objectTexture->Get_Surface_Level();
 			UnsignedByte *data = saveSurface(surface);
 
-			REF_PTR_RELEASE(surface);
+			delete surface; surface = nullptr;
 
 			REF_PTR_RELEASE(objectTexture);
 			REF_PTR_RELEASE(camera);

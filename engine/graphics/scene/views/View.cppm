@@ -62,6 +62,18 @@ export struct Frustum final
 	FrustumPlane far_plane{};
 };
 
+export Matrix4x4 Compose_Matrices(const Matrix4x4 &left, const Matrix4x4 &right) noexcept
+{
+	Matrix4x4 result{};
+	for (std::size_t row = 0; row < 4; ++row) {
+		for (std::size_t column = 0; column < 4; ++column) {
+			for (std::size_t element = 0; element < 4; ++element)
+				result.values[row * 4 + column] += left(row, element) * right(element, column);
+		}
+	}
+	return result;
+}
+
 export struct View final
 {
 	Matrix4x4 view_matrix{};
@@ -83,7 +95,7 @@ export struct View final
 
 	void Derive_Frustum() noexcept
 	{
-		const Matrix4x4 view_projection = Multiply(projection_matrix, view_matrix);
+		const Matrix4x4 view_projection = Compose_Matrices(projection_matrix, view_matrix);
 
 		frustum.left = Make_Plane(
 			view_projection(3, 0) + view_projection(0, 0),
@@ -118,18 +130,6 @@ export struct View final
 	}
 
 private:
-	static Matrix4x4 Multiply(const Matrix4x4 &left, const Matrix4x4 &right) noexcept
-	{
-		Matrix4x4 result{};
-		for (std::size_t row = 0; row < 4; ++row) {
-			for (std::size_t column = 0; column < 4; ++column) {
-				for (std::size_t element = 0; element < 4; ++element)
-					result.values[row * 4 + column] += left(row, element) * right(element, column);
-			}
-		}
-		return result;
-	}
-
 	static FrustumPlane Make_Plane(float x, float y, float z, float distance) noexcept
 	{
 		const float length_squared = x * x + y * y + z * z;

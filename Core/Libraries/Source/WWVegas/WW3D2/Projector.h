@@ -52,7 +52,7 @@ class MatrixMapperClass;
 /**
 ** ProjectorClass
 ** This is a class which encapsulates the data needed to describe a projection.  It isn't
-** really useful by itself but it is a common base class between TexProjectClass and DecalGeneratorClass.
+** really useful by itself but it is shared by texture projection classes.
 */
 class ProjectorClass
 {

@@ -45,8 +45,6 @@
 #include "WWMath/v3_rnd.h"
 
 // Forward declarations
-class ParticleEmitterDefClass;
-class ChunkSaveClass;
 struct NewParticleStruct;
 
 /*
@@ -123,9 +121,6 @@ class ParticleEmitterClass : public RenderObjClass
 
 		// Creation/serialization methods
 		virtual RenderObjClass *		Clone() const override;
-		static ParticleEmitterClass * Create_From_Definition (const ParticleEmitterDefClass &definition);
-		ParticleEmitterDefClass *		Build_Definition () const;
-		WW3DErrorType						Save (ChunkSaveClass &chunk_save) const;
 
 		// Identification methods
 		virtual int				Class_ID () const override { return CLASSID_PARTICLEEMITTER; }

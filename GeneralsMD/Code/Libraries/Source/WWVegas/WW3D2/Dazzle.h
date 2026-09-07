@@ -17,13 +17,22 @@
 */
 
 #pragma once
+#include <memory>
+#include <span>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <vector>
+import Graphics.Scene.Models.Factory;
+
 
 #include "WWLib/always.h"
 #include "WWMath/vector3.h"
 #include "WWMath/matrix3d.h"
 #include "WW3D2/RendObj.h"
 #include "WWLib/wwstring.h"
-#include "WW3D2/Proto.h"
+#include "WW3D2/W3DFile.h"
 #include "WW3D2/W3DErr.h"
 #include "Shader.h"
 #include "WWMath/matrix4.h"
@@ -254,7 +263,6 @@ class DazzleRenderObjClass : public RenderObjClass
 	static bool	_dazzle_rendering_enabled;
 
 //	static void Draw_Debug_Dazzle(int idx);
-	void vis_render_dazzle(SpecialRenderInfoClass & rinfo);
 
 	void Render_Dazzle(CameraClass* camera);
 
@@ -275,7 +283,6 @@ public:
 	virtual int						Class_ID()	const override { return CLASSID_DAZZLE; }
 
 	virtual void					Render(RenderInfoClass & rinfo) override;
-	virtual void Special_Render(SpecialRenderInfoClass & rinfo) override;
 	virtual void 					Set_Transform(const Matrix3D &m) override;
    virtual void					Get_Obj_Space_Bounding_Sphere(SphereClass & sphere) const override;
    virtual void					Get_Obj_Space_Bounding_Box(AABoxClass & box) const override;
@@ -347,30 +354,8 @@ public:
 };
 
 
-/**
-** DazzlePrototypeClass
-** This description object is generated when reading a W3D_CHUNK_DAZZLE.  It stores the
-** information needed to construct a particular instance of a dazzle.  Prototypes are
-** stored in the asset manager and used to construct render objects when needed.
-*/
-class DazzlePrototypeClass : public PrototypeClass
-{
-	W3DMPO_CODE(DazzlePrototypeClass)
-public:
-	DazzlePrototypeClass() : DazzleType(0)				{ }
 
-	virtual const char *			Get_Name() const override { return Name; }
-	virtual int								Get_Class_ID() const override { return RenderObjClass::CLASSID_DAZZLE; }
-	virtual RenderObjClass *	Create() override;
-	virtual void							DeleteSelf() override { delete this; }
 
-	WW3DErrorType					Load_W3D(ChunkLoadClass & cload);
-
-private:
-
-	StringClass				Name;
-	int								DazzleType;
-};
 
 
 /**
@@ -378,14 +363,4 @@ private:
 ** An instance of this class is registered with the asset manager and handles loading W3D_CHUNK_DAZZLE.
 ** It creates DazzlePrototypes from the data in the chunk.
 */
-class DazzleLoaderClass : public PrototypeLoaderClass
-{
-public:
-	DazzleLoaderClass()														{ }
-	~DazzleLoaderClass()													{ }
-
-	virtual int						Chunk_Type() override { return W3D_CHUNK_DAZZLE; }
-	virtual PrototypeClass *	Load_W3D(ChunkLoadClass & cload) override;
-};
-
-extern DazzleLoaderClass		_DazzleLoader;
+Graphics::ModelFactory<RenderObjClass>* Load_Dazzle_Factory(ChunkLoadClass& cload);

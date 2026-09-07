@@ -28,6 +28,14 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 #pragma once
+#include <memory>
+#include <span>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
+import Assets.Cache.Animations;
+
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 #include "Common/ModelState.h"
@@ -62,7 +70,6 @@ import Assets.Handles;
 // FORWARD REFERENCES /////////////////////////////////////////////////////////////////////////////
 class Thing;
 class RenderObjClass;
-class HAnimClass;
 enum GameLODLevel CPP_11(: Int);
 //-------------------------------------------------------------------------------------------------
 /** The default client update module */
@@ -99,7 +106,7 @@ class W3DAnimationInfo
 private:
 	AsciiString						m_name;
 #ifdef RETAIN_ANIM_HANDLES
-	mutable HAnimClass*		m_handle;
+	mutable Assets::AnimationAssetHandle m_handle;
 #endif
 	Real									m_distanceCovered;		// if nonzero, the distance covered by a single loop of the anim
 	mutable Real					m_naturalDurationInMsec;
@@ -112,7 +119,7 @@ public:
 
 	~W3DAnimationInfo();
 
-	HAnimClass* getAnimHandle() const;
+	Assets::AnimationAssetHandle getAnimHandle() const;
 	const AsciiString& getName() const { return m_name; }
 	Bool isIdleAnim() const { return m_isIdleAnim; }
 	Real getDistanceCovered() const { return m_distanceCovered; }

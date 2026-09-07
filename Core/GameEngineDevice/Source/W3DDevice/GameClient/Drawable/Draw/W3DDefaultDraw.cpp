@@ -46,7 +46,6 @@
 #include "GameClient/FXList.h"
 #include "GameLogic/TerrainLogic.h"
 
-#include "WW3D2/HAnim.h"
 #include "WW3D2/HLOD.h"
 #include "WW3D2/Mesh.h"
 #include "WW3D2/MeshMdl.h"

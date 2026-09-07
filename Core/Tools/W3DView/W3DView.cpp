@@ -1,3 +1,4 @@
+import Graphics.Backends.DX11.FrameRuntime;
 /*
 **	Command & Conquer Renegade(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -39,7 +40,7 @@
 #undef STRICT
 #include "WW3D2/WW3D.h"
 #ifdef RTS_ZEROHOUR
-#include "WW3D2/GraphicsToolFrame.h"
+import Graphics.Frame.ToolFrame;
 #endif
 #include "WW3D2/AssetMgr.h"
 
@@ -395,9 +396,10 @@ CW3DViewApp::ExitInstance()
 		//
 		WW3DAssetManager::Get_Instance()->Free_Assets ();
 #ifdef RTS_ZEROHOUR
-        Shutdown_Graphics_Tool_Frame();
+        Graphics::Shutdown_Tool_Frame();
 #endif
-		WW3D::Shutdown ();
+		WW3D::Shutdown();
+		Graphics::Graphics_DX11_Shutdown_Shared_Frame();
 
 		//
 		//	Shutdown the libraries

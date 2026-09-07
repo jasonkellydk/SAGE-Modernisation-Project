@@ -211,7 +211,7 @@ private:
         description.stencil = style.stencil;
         description.sampler_count = 16;
         description.samplers[0].address.fill(style.clamp_texture ? RHISamplerAddress::Clamp : RHISamplerAddress::Wrap);
-        description.samplers[0].linear_filter = style.linear_filter;
+        description.samplers[0].Set_Filter((style.linear_filter ? Graphics::RHISamplerFilter::Linear : Graphics::RHISamplerFilter::Point));
         const RHIPipelineHandle handle = m_device->Create_Pipeline(description,
             {m_shaders.Bytecode(m_shader, ShaderStage::Vertex)}, {m_shaders.Bytecode(m_shader, ShaderStage::Pixel)});
         if (handle.Is_Valid()) m_pipelines.push_back({style, handle});

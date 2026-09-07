@@ -645,10 +645,10 @@ TextureMgrDialogClass::Insert_Texture_Details
 								  0, 0, 0);
 
 		// Insert the texture dimensions in the second column
-		SurfaceClass::SurfaceDescription surface_desc;
+		Assets::ImageDescription surface_desc;
 		ptexture->Get_Level_Description(surface_desc);
 		CString dimension_string;
-		dimension_string.Format ("(%dx%d)", surface_desc.Width, surface_desc.Height);
+		dimension_string.Format ("(%dx%d)", surface_desc.width, surface_desc.height);
 		m_ListCtrl.SetItemText (index, COL_DIMENSIONS, dimension_string);
 
 		// Determine what type the texture is

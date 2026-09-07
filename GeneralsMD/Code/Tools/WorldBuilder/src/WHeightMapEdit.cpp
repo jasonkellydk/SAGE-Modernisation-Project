@@ -36,7 +36,7 @@
 #include "GameLogic/SidesList.h"
 #include "WW3D2/RendObj.h"
 #include "W3DDevice/GameClient/W3DShadow.h"
-#include "W3DDevice/GameClient/HeightMap.h"
+#include "W3DDevice/GameClient/BaseHeightMap.h"
 #include "Common/WellKnownKeys.h"
 #include "mapobjectprops.h"
 #include "LayersList.h"

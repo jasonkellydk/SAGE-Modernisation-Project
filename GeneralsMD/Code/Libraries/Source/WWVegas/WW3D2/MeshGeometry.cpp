@@ -85,8 +85,11 @@
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 
+#include <array>
+#include <cstdlib>
+#include <vector>
 #include "MeshGeometry.h"
-#include "AABTree.h"
+#include "GraphicsMeshQueries.h"
 #include "WWLib/chunkio.h"
 #include "WWMath/aabox.h"
 #include "WWMath/obbox.h"
@@ -96,10 +99,10 @@
 #include "WWDebug/wwmemlog.h"
 #include "W3DFile.h"
 #include "WWMath/vp.h"
-#include "HTree.h"
-#include "WWMath/matrix4.h"
-#include "RInfo.h"
-#include "Camera.h"
+import Graphics.Scene.Models.Hierarchy;
+import Assets.Adapters.W3D.Geometry;
+import Assets.Math;
+import Assets.MeshBoundsTree;
 
 
 #if (OPTIMIZE_PLANEEQ_RAM)
@@ -222,12 +225,10 @@ MeshGeometryClass & MeshGeometryClass::operator = (const MeshGeometryClass & tha
 		REF_PTR_SET(VertexBoneLink,that.VertexBoneLink);
 
 		// Clone the cull tree..
-		REF_PTR_RELEASE(CullTree);
+		CullTree.reset();
 
 		if (that.CullTree) {
-			CullTree = NEW_REF(AABTreeClass, ());
-			*CullTree = *that.CullTree;
-			CullTree->Set_Mesh(this);
+			CullTree = std::make_unique<Graphics::ModelBoundsTree>(*that.CullTree);
 		}
 	}
 	return * this;
@@ -281,7 +282,7 @@ void MeshGeometryClass::Reset_Geometry(int polycount,int vertcount)
 	REF_PTR_RELEASE(PlaneEq);
 	REF_PTR_RELEASE(VertexShadeIdx);
 	REF_PTR_RELEASE(VertexBoneLink);
-	REF_PTR_RELEASE(CullTree);
+	CullTree.reset();
 
 	PolyCount = polycount;
 	VertexCount = vertcount;
@@ -484,7 +485,7 @@ void MeshGeometryClass::Generate_Rigid_APT(const Vector3 & view_dir, SimpleDynVe
 void MeshGeometryClass::Generate_Rigid_APT(const OBBoxClass & local_box, SimpleDynVecClass<uint32> & apt)
 {
 	if (CullTree != nullptr) {
-		CullTree->Generate_APT(local_box, apt);
+		MeshQueryAdapter::Collect(*CullTree,*this,local_box,apt);
 	} else {
 
 		// Beware, this is gonna be expensive!
@@ -523,7 +524,7 @@ void MeshGeometryClass::Generate_Rigid_APT(const OBBoxClass & local_box, SimpleD
 void MeshGeometryClass::Generate_Rigid_APT(const OBBoxClass & local_box,const Vector3 & viewdir,SimpleDynVecClass<uint32> & apt)
 {
 	if (CullTree != nullptr) {
-		CullTree->Generate_APT(local_box, viewdir,apt);
+		MeshQueryAdapter::Collect(*CullTree,*this,local_box,apt,&viewdir);
 	} else {
 
 		// Beware, this is gonna be expensive!
@@ -650,7 +651,7 @@ bool MeshGeometryClass::Cast_Ray(RayCollisionTestClass & raytest)
 	bool hit = false;
 
 	if (CullTree) {
-		hit = CullTree->Cast_Ray(raytest);
+		hit = MeshQueryAdapter::Cast(*CullTree,*this,raytest);
 	} else {
 		hit = cast_ray_brute_force(raytest);
 	}
@@ -676,7 +677,7 @@ bool MeshGeometryClass::Cast_AABox(AABoxCollisionTestClass & boxtest)
 	bool hit = false;
 
 	if (CullTree) {
-		hit = CullTree->Cast_AABox(boxtest);
+		hit = MeshQueryAdapter::Cast(*CullTree,*this,boxtest);
 	} else {
 		hit = cast_aabox_brute_force(boxtest);
 	}
@@ -702,7 +703,7 @@ bool MeshGeometryClass::Cast_OBBox(OBBoxCollisionTestClass & boxtest)
 	bool hit = false;
 
 	if (CullTree) {
-		hit = CullTree->Cast_OBBox(boxtest);
+		hit = MeshQueryAdapter::Cast(*CullTree,*this,boxtest);
 	} else {
 		hit = cast_obbox_brute_force(boxtest);
 	}
@@ -728,7 +729,7 @@ bool MeshGeometryClass::Intersect_OBBox(OBBoxIntersectionTestClass & boxtest)
 	bool hit = false;
 
 	if (CullTree) {
-		hit = CullTree->Intersect_OBBox(boxtest);
+		hit = MeshQueryAdapter::Intersects(*CullTree,*this,boxtest);
 	} else {
 		hit = intersect_obbox_brute_force(boxtest);
 	}
@@ -793,7 +794,7 @@ bool MeshGeometryClass::Cast_World_Space_AABox(AABoxCollisionTestClass & boxtest
 		OBBoxCollisionTestClass obbox(boxtest, world_to_obj);
 
 		if (CullTree) {
-			hit = CullTree->Cast_OBBox(obbox);
+			hit = MeshQueryAdapter::Cast(*CullTree,*this,obbox);
 		} else {
 			hit = cast_obbox_brute_force(obbox);
 		}
@@ -833,7 +834,7 @@ int MeshGeometryClass::cast_semi_infinite_axis_aligned_ray(const Vector3 & start
 {
 	int count = 0;
 	if (CullTree) {
-		count = CullTree->Cast_Semi_Infinite_Axis_Aligned_Ray(start_point, axis_dir, flags);
+		count = MeshQueryAdapter::Count_Axis_Ray(*CullTree,*this,start_point,axis_dir,flags);
 	} else {
 
 		const Vector3 * loc = Get_Vertex_Array();
@@ -899,7 +900,7 @@ bool MeshGeometryClass::cast_aabox_identity(AABoxCollisionTestClass & boxtest, c
 
 	// cast the box against the mesh
 	if (CullTree) {
-		return CullTree->Cast_AABox(newbox);
+		return MeshQueryAdapter::Cast(*CullTree,*this,newbox);
 	} else {
 		return cast_aabox_brute_force(newbox);
 	}
@@ -928,7 +929,7 @@ bool MeshGeometryClass::cast_aabox_z90(AABoxCollisionTestClass & boxtest, const 
 	// cast the box against the mesh, using culling if possible
 	bool hit;
 	if (CullTree) {
-		hit = CullTree->Cast_AABox(newbox);
+		hit = MeshQueryAdapter::Cast(*CullTree,*this,newbox);
 	} else {
 		hit = cast_aabox_brute_force(newbox);
 	}
@@ -967,7 +968,7 @@ bool MeshGeometryClass::cast_aabox_z180(AABoxCollisionTestClass & boxtest, const
 	// cast the box against the mesh, using culling if possible
 	bool hit;
 	if (CullTree) {
-		hit = CullTree->Cast_AABox(newbox);
+		hit = MeshQueryAdapter::Cast(*CullTree,*this,newbox);
 	} else {
 		hit = cast_aabox_brute_force(newbox);
 	}
@@ -1005,7 +1006,7 @@ bool MeshGeometryClass::cast_aabox_z270(AABoxCollisionTestClass & boxtest, const
 	// cast the box against the mesh, using culling if possible
 	bool hit;
 	if (CullTree) {
-		hit = CullTree->Cast_AABox(newbox);
+		hit = MeshQueryAdapter::Cast(*CullTree,*this,newbox);
 	} else {
 		hit = cast_aabox_brute_force(newbox);
 	}
@@ -1399,7 +1400,6 @@ void MeshGeometryClass::Compute_Bounds(Vector3 * verts)
 }
 
 
-
 /***********************************************************************************************
  * MeshGeometryClass::get_vert_normals -- get the vertex normal array                          *
  *                                                                                             *
@@ -1448,7 +1448,6 @@ const Vector3 * MeshGeometryClass::Get_Vertex_Normal_Array()
 	return get_vert_normals();
 #endif
 }
-
 
 
 /***********************************************************************************************
@@ -1545,15 +1544,24 @@ void MeshGeometryClass::Compute_Plane(int pidx,PlaneClass * set_plane) const
  *=============================================================================================*/
 void MeshGeometryClass::Generate_Culling_Tree()
 {
-	WWMEMLOG(MEM_CULLINGDATA);
-	{
-		AABTreeBuilderClass builder;
-		builder.Build_AABTree(PolyCount,Poly->Get_Array(),VertexCount,Vertex->Get_Array());
-
-		DEBUG_ASSERTCRASH(CullTree == nullptr, ("MeshGeometryClass::Generate_Culling_Tree: Leaking CullTree"));
-		CullTree = NEW_REF(AABTreeClass,(&builder));
-		CullTree->Set_Mesh(this);
-	}
+ WWMEMLOG(MEM_CULLINGDATA);
+ std::vector<Assets::Vector3f> vertices(VertexCount);
+ for (int i = 0; i < VertexCount; ++i) {
+  const auto& source = Vertex->Get_Array()[i];
+  vertices[i] = {source.X, source.Y, source.Z};
+ }
+ std::vector<std::array<std::uint32_t,3>> triangles(PolyCount);
+ for (int i = 0; i < PolyCount; ++i) {
+  const auto& source = Poly->Get_Array()[i];
+  triangles[i] = {source[0], source[1], source[2]};
+ }
+ Assets::MeshBoundsTree tree;
+ const bool built = Assets::Build_Mesh_Bounds_Tree(vertices, triangles,
+  [] { return static_cast<unsigned>(rand()); }, tree);
+ WWASSERT(built);
+ if (!built) return;
+ DEBUG_ASSERTCRASH(CullTree == nullptr, ("MeshGeometryClass::Generate_Culling_Tree: Leaking CullTree"));
+ CullTree = std::make_unique<Graphics::ModelBoundsTree>(std::move(tree));
 }
 
 
@@ -1574,69 +1582,38 @@ void MeshGeometryClass::Generate_Culling_Tree()
  *=============================================================================================*/
 WW3DErrorType MeshGeometryClass::Load_W3D(ChunkLoadClass & cload)
 {
-	/*
-	** This function will initialize this MeshGeometryClass from the contents of a W3D file.
-	** Note that derived classes need to completely replace this function; only re-using the individual
-	** chunk handling functions.
-	*/
-
-	/*
-	**	Open the first chunk, it should be the mesh header
-	*/
-	cload.Open_Chunk();
-
-	if (cload.Cur_Chunk_ID() != W3D_CHUNK_MESH_HEADER3) {
-		WWDEBUG_SAY(("Old format mesh mesh, no longer supported."));
-		goto Error;
-	}
-
-	W3dMeshHeader3Struct header;
-	if (cload.Read(&header,sizeof(W3dMeshHeader3Struct)) != sizeof(W3dMeshHeader3Struct)) {
-		goto Error;
-	}
-	cload.Close_Chunk();
-
+    if(!cload.Open_Chunk())return WW3D_ERROR_LOAD_FAILED;
+    if(cload.Cur_Chunk_ID()!=W3D_CHUNK_MESH_HEADER3) {
+        cload.Close_Chunk();return WW3D_ERROR_LOAD_FAILED;
+    }
+    std::vector<std::byte> header_bytes(cload.Cur_Chunk_Length());
+    const bool complete=cload.Read(header_bytes.data(),static_cast<unsigned>(header_bytes.size()))==header_bytes.size();
+    cload.Close_Chunk();
+    Assets::W3D::W3DMeshHeader header;
+    if(!complete || !Assets::W3D::W3DRead_Mesh_Header(header_bytes,header))return WW3D_ERROR_LOAD_FAILED;
 	/*
 	** Process the header
 	*/
-	char *	tmpname;
-	int		namelen;
-
-	Reset_Geometry(header.NumTris,header.NumVertices);
-
-	namelen = strlen(header.ContainerName);
-	namelen += strlen(header.MeshName);
-	namelen += 2;
-	W3dAttributes = header.Attributes;
-	SortLevel = header.SortLevel;
-	tmpname = W3DNEWARRAY char[namelen];
-	memset(tmpname,0,namelen);
-
-	if (strlen(header.ContainerName) > 0) {
-		strcpy(tmpname,header.ContainerName);
-		strcat(tmpname, ".");
-	}
-	strcat(tmpname, header.MeshName);
-
-	Set_Name(tmpname);
-
-	delete[] tmpname;
-	tmpname = nullptr;
+    Reset_Geometry(header.triangle_count,header.vertex_count);
+    W3dAttributes=header.attributes;
+    SortLevel=header.sort_level;
+    const std::string model_name=header.container_name.empty()?header.name:header.container_name+"."+header.name;
+    Set_Name(model_name.c_str());
 
 	/*
 	** Set Bounding Info
 	*/
-	BoundBoxMin.Set(header.Min.X,header.Min.Y,header.Min.Z);
-	BoundBoxMax.Set(header.Max.X,header.Max.Y,header.Max.Z);
+	BoundBoxMin.Set(header.bounds.minimum.x,header.bounds.minimum.y,header.bounds.minimum.z);
+	BoundBoxMax.Set(header.bounds.maximum.x,header.bounds.maximum.y,header.bounds.maximum.z);
 
-	BoundSphereCenter.Set(header.SphCenter.X,header.SphCenter.Y,header.SphCenter.Z);
-	BoundSphereRadius = header.SphRadius;
+	BoundSphereCenter.Set(header.sphere_center.x,header.sphere_center.y,header.sphere_center.z);
+	BoundSphereRadius = header.sphere_radius;
 
 	/*
 	** Flags
 	*/
-	if (header.Version >= W3D_MAKE_VERSION(4,1)) {
-		int geometry_type = header.Attributes & W3D_MESH_FLAG_GEOMETRY_TYPE_MASK;
+	if (header.version >= W3D_MAKE_VERSION(4,1)) {
+		int geometry_type = header.attributes & W3D_MESH_FLAG_GEOMETRY_TYPE_MASK;
 		switch (geometry_type)
 		{
 			case W3D_MESH_FLAG_GEOMETRY_TYPE_NORMAL:
@@ -1653,11 +1630,11 @@ WW3DErrorType MeshGeometryClass::Load_W3D(ChunkLoadClass & cload)
 		}
 	}
 
-	if (header.Attributes & W3D_MESH_FLAG_TWO_SIDED) {
+	if (header.attributes & W3D_MESH_FLAG_TWO_SIDED) {
 		Set_Flag(TWO_SIDED,true);
 	}
 
-	if (header.Attributes & W3D_MESH_FLAG_CAST_SHADOW) {
+	if (header.attributes & W3D_MESH_FLAG_CAST_SHADOW) {
 		Set_Flag(CAST_SHADOW,true);
 	}
 
@@ -1667,7 +1644,7 @@ WW3DErrorType MeshGeometryClass::Load_W3D(ChunkLoadClass & cload)
 	** If this is a pre-3.0 mesh and it has vertex influences,
 	** fixup the bone indices to account for the new root node
 	*/
-	if ((header.Version < W3D_MAKE_VERSION(3,0)) && (Get_Flag(SKIN))) {
+	if ((header.version < W3D_MAKE_VERSION(3,0)) && (Get_Flag(SKIN))) {
 
 		uint16 * links = get_bone_links();
 		WWASSERT(links);
@@ -1688,9 +1665,6 @@ WW3DErrorType MeshGeometryClass::Load_W3D(ChunkLoadClass & cload)
 
 	return WW3D_ERROR_OK;
 
-Error:
-
-	return WW3D_ERROR_LOAD_FAILED;
 }
 
 
@@ -1784,22 +1758,13 @@ WW3DErrorType MeshGeometryClass::read_chunks(ChunkLoadClass & cload)
  *=============================================================================================*/
 WW3DErrorType MeshGeometryClass::read_vertices(ChunkLoadClass & cload)
 {
-	W3dVectorStruct vert;
-	Vector3 * loc = Vertex->Get_Array();
-	assert(loc);
-
-	for (int i=0; i<Get_Vertex_Count(); i++) {
-
-		if (cload.Read(&vert,sizeof(W3dVectorStruct)) != sizeof(W3dVectorStruct)) {
-			return WW3D_ERROR_LOAD_FAILED;
-		}
-
-		loc[i].X = vert.X;
-		loc[i].Y = vert.Y;
-		loc[i].Z = vert.Z;
-	}
-
-	return WW3D_ERROR_OK;
+    std::vector<std::byte> bytes(cload.Cur_Chunk_Length());
+    if(cload.Read(bytes.data(),static_cast<unsigned>(bytes.size()))!=bytes.size())return WW3D_ERROR_LOAD_FAILED;
+    std::vector<Assets::Vector3f> values;
+    if(!Assets::W3D::W3DRead_Geometry_Vectors(bytes,VertexCount,values))return WW3D_ERROR_LOAD_FAILED;
+    auto* destination=Vertex->Get_Array();
+    for(int i=0;i<VertexCount;++i)destination[i].Set(values[i].x,values[i].y,values[i].z);
+    return WW3D_ERROR_OK;
 }
 
 
@@ -1817,19 +1782,13 @@ WW3DErrorType MeshGeometryClass::read_vertices(ChunkLoadClass & cload)
  *=============================================================================================*/
 WW3DErrorType MeshGeometryClass::read_vertex_normals(ChunkLoadClass & cload)
 {
-	W3dVectorStruct norm;
-	Vector3 * mdlnorms = get_vert_normals();
-	WWASSERT(mdlnorms);
-
-	for (int i=0; i<VertexCount; i++) {
-		if (cload.Read(&norm,sizeof(W3dVectorStruct)) != sizeof(W3dVectorStruct)) {
-			return WW3D_ERROR_LOAD_FAILED;
-		}
-
-		mdlnorms[i].Set(norm.X,norm.Y,norm.Z);
-	}
-
-	return WW3D_ERROR_OK;
+    std::vector<std::byte> bytes(cload.Cur_Chunk_Length());
+    if(cload.Read(bytes.data(),static_cast<unsigned>(bytes.size()))!=bytes.size())return WW3D_ERROR_LOAD_FAILED;
+    std::vector<Assets::Vector3f> values;
+    if(!Assets::W3D::W3DRead_Geometry_Vectors(bytes,VertexCount,values))return WW3D_ERROR_LOAD_FAILED;
+    auto* destination=get_vert_normals();
+    for(int i=0;i<VertexCount;++i)destination[i].Set(values[i].x,values[i].y,values[i].z);
+    return WW3D_ERROR_OK;
 }
 
 
@@ -1847,38 +1806,22 @@ WW3DErrorType MeshGeometryClass::read_vertex_normals(ChunkLoadClass & cload)
  *=============================================================================================*/
 WW3DErrorType MeshGeometryClass::read_triangles(ChunkLoadClass & cload)
 {
-	W3dTriStruct tri;
-
-	// cache pointers to various arrays in the surrender mesh
-	TriIndex * vi = get_polys();
-	Set_Flag(DIRTY_PLANES,false);
-	Vector4 * peq = get_planes();
-	uint8 * surface_types = Get_Poly_Surface_Type_Array();
-
-	// read in each polygon one by one
-	for (int i=0; i<Get_Polygon_Count(); i++) {
-
-		if (cload.Read(&tri,sizeof(W3dTriStruct)) != sizeof(W3dTriStruct)) {
-			return WW3D_ERROR_LOAD_FAILED;
-		}
-
-		// set the vertex indices
-		vi[i].I = tri.Vindex[0];
-		vi[i].J = tri.Vindex[1];
-		vi[i].K = tri.Vindex[2];
-
-		// set the normal
-		peq[i].X = tri.Normal.X;
-		peq[i].Y = tri.Normal.Y;
-		peq[i].Z = tri.Normal.Z;
-		peq[i].W = -tri.Dist;
-
-		// set the surface type
-		WWASSERT(tri.Attributes < 256);
-		surface_types[i] = (uint8)(tri.Attributes);
-	}
-
-	return WW3D_ERROR_OK;
+    std::vector<std::byte> bytes(cload.Cur_Chunk_Length());
+    if(cload.Read(bytes.data(),static_cast<unsigned>(bytes.size()))!=bytes.size())return WW3D_ERROR_LOAD_FAILED;
+    std::vector<Assets::W3D::W3DTriangleRecord> values;
+    if(!Assets::W3D::W3DRead_Geometry_Triangles(bytes,PolyCount,values))return WW3D_ERROR_LOAD_FAILED;
+    auto* indices=get_polys();
+    Set_Flag(DIRTY_PLANES,false);
+    auto* planes=get_planes();
+    auto* surfaces=Get_Poly_Surface_Type_Array();
+    for(int i=0;i<PolyCount;++i) {
+        const auto& value=values[i];
+        indices[i].I=value.indices[0];indices[i].J=value.indices[1];indices[i].K=value.indices[2];
+        planes[i].Set(value.normal.x,value.normal.y,value.normal.z,-value.distance);
+        WWASSERT(value.surface_type<256);
+        surfaces[i]=static_cast<uint8>(value.surface_type);
+    }
+    return WW3D_ERROR_OK;
 }
 
 
@@ -1935,20 +1878,14 @@ WW3DErrorType MeshGeometryClass::read_user_text(ChunkLoadClass & cload)
  *=============================================================================================*/
 WW3DErrorType MeshGeometryClass::read_vertex_influences(ChunkLoadClass & cload)
 {
-	W3dVertInfStruct vinf;
-	uint16 * links = get_bone_links(true);
-	WWASSERT(links);
-
-	for (int i=0; i<Get_Vertex_Count(); i++) {
-
-		if (cload.Read(&vinf,sizeof(W3dVertInfStruct)) != sizeof(W3dVertInfStruct)) {
-			return WW3D_ERROR_LOAD_FAILED;
-		}
-		links[i] = vinf.BoneIdx;
-	}
-	Set_Flag(SKIN,true);
-
-	return WW3D_ERROR_OK;
+    std::vector<std::byte> bytes(cload.Cur_Chunk_Length());
+    if(cload.Read(bytes.data(),static_cast<unsigned>(bytes.size()))!=bytes.size())return WW3D_ERROR_LOAD_FAILED;
+    std::vector<std::uint16_t> values;
+    if(!Assets::W3D::W3DRead_Geometry_Bone_Links(bytes,VertexCount,values))return WW3D_ERROR_LOAD_FAILED;
+    auto* destination=get_bone_links(true);
+    for(int i=0;i<VertexCount;++i)destination[i]=values[i];
+    Set_Flag(SKIN,true);
+    return WW3D_ERROR_OK;
 }
 
 
@@ -1966,16 +1903,13 @@ WW3DErrorType MeshGeometryClass::read_vertex_influences(ChunkLoadClass & cload)
  *=============================================================================================*/
 WW3DErrorType MeshGeometryClass::read_vertex_shade_indices(ChunkLoadClass & cload)
 {
-	uint32 * shade_index = get_shade_indices(true);
-	uint32 si;
-
-	for (int i=0; i<Get_Vertex_Count(); i++) {
-		if (cload.Read(&si,sizeof(uint32)) != sizeof(uint32)) {
-			return WW3D_ERROR_LOAD_FAILED;
-		}
-		shade_index[i] = si;
-	}
-	return WW3D_ERROR_OK;
+    std::vector<std::byte> bytes(cload.Cur_Chunk_Length());
+    if(cload.Read(bytes.data(),static_cast<unsigned>(bytes.size()))!=bytes.size())return WW3D_ERROR_LOAD_FAILED;
+    std::vector<std::uint32_t> values;
+    if(!Assets::W3D::W3DRead_Geometry_Shade_Indices(bytes,VertexCount,values))return WW3D_ERROR_LOAD_FAILED;
+    auto* destination=get_shade_indices(true);
+    for(int i=0;i<VertexCount;++i)destination[i]=values[i];
+    return WW3D_ERROR_OK;
 }
 
 
@@ -1993,11 +1927,12 @@ WW3DErrorType MeshGeometryClass::read_vertex_shade_indices(ChunkLoadClass & cloa
  *=============================================================================================*/
 WW3DErrorType MeshGeometryClass::read_aabtree(ChunkLoadClass &cload)
 {
-	REF_PTR_RELEASE(CullTree);
-	CullTree = NEW_REF(AABTreeClass,());
-	CullTree->Load_W3D(cload);
-	CullTree->Set_Mesh(this);
-	return (WW3D_ERROR_OK);
+	std::vector<std::byte> bytes(cload.Cur_Chunk_Length());
+	if (cload.Read(bytes.data(),static_cast<unsigned>(bytes.size())) != bytes.size()) return WW3D_ERROR_LOAD_FAILED;
+	Assets::MeshBoundsTree tree;
+	if (!Assets::W3D::W3DRead_Mesh_Bounds_Tree(bytes,PolyCount,tree)) return WW3D_ERROR_LOAD_FAILED;
+	CullTree = std::make_unique<Graphics::ModelBoundsTree>(std::move(tree));
+	return WW3D_ERROR_OK;
 }
 
 void MeshGeometryClass::Scale(const Vector3 &sc)
@@ -2032,15 +1967,11 @@ void MeshGeometryClass::Scale(const Vector3 &sc)
 		// If the scale is uniform, we can scale the cull tree, which is a lot faster than creating a new one
 		if (fabs(sc[0]-sc[1])<WWMATH_EPSILON && fabs(sc[0]-sc[2])<WWMATH_EPSILON) {
 			// create a copy of the old culltree
-			AABTreeClass *temp = NEW_REF(AABTreeClass, ());
-			*temp = *CullTree;
-			temp->Set_Mesh(this);
-			REF_PTR_SET(CullTree, temp);
-			REF_PTR_RELEASE(temp);
+			CullTree = std::make_unique<Graphics::ModelBoundsTree>(*CullTree);
 			CullTree->Scale(sc[0]);
 		}
 		else {
-			REF_PTR_RELEASE(CullTree);
+			CullTree.reset();
 			Generate_Culling_Tree();
 		}
 	}
@@ -2048,19 +1979,19 @@ void MeshGeometryClass::Scale(const Vector3 &sc)
 
 
 // Destination pointers MUST point to arrays large enough to hold all vertices
-void MeshGeometryClass::get_deformed_vertices(Vector3 *dst_vert,const HTreeClass * htree)
+void MeshGeometryClass::get_deformed_vertices(Vector3 *dst_vert,const Graphics::ModelHierarchy * htree)
 {
 	Vector3 * src_vert = Vertex->Get_Array();
 	uint16 * bonelink = VertexBoneLink->Get_Array();
 	for (int vi = 0; vi < Get_Vertex_Count(); vi++) {
-		const Matrix3D & tm = htree->Get_Transform(bonelink[vi]);
+		const Matrix3D & tm = Graphics::Export_Affine_Transform<Matrix3D>(htree->World_Transform(bonelink[vi]));
 		Matrix3D::Transform_Vector(tm, src_vert[vi], &(dst_vert[vi]));
 	}
 }
 
 
 // Destination pointers MUST point to arrays large enough to hold all vertices
-void MeshGeometryClass::get_deformed_vertices(Vector3 *dst_vert, Vector3 *dst_norm,const HTreeClass * htree)
+void MeshGeometryClass::get_deformed_vertices(Vector3 *dst_vert, Vector3 *dst_norm,const Graphics::ModelHierarchy * htree)
 {
 	int vi;
 	int vertex_count=Get_Vertex_Count();
@@ -2073,7 +2004,7 @@ void MeshGeometryClass::get_deformed_vertices(Vector3 *dst_vert, Vector3 *dst_no
 	uint16 * bonelink = VertexBoneLink->Get_Array();
 
 	for (vi = 0; vi < vertex_count;) {
-		const Matrix3D & tm = htree->Get_Transform(bonelink[vi]);
+		const Matrix3D & tm = Graphics::Export_Affine_Transform<Matrix3D>(htree->World_Transform(bonelink[vi]));
 
 		// Make a copy so we can set the translation to zero
 		Matrix3D mytm=tm;
@@ -2090,42 +2021,5 @@ void MeshGeometryClass::get_deformed_vertices(Vector3 *dst_vert, Vector3 *dst_no
 		mytm.Set_Translation(Vector3(0.0f,0.0f,0.0f));
 		VectorProcessorClass::Transform(dst_norm+vi,src_norm+vi,mytm,cnt-vi);
 		vi=cnt;
-	}
-}
-
-// Destination pointers MUST point to arrays large enough to hold all vertices
-void MeshGeometryClass::get_deformed_screenspace_vertices(Vector4 *dst_vert,const RenderInfoClass & rinfo,const Matrix3D & mesh_transform,const HTreeClass * htree)
-{
-	Matrix4x4 prj = rinfo.Camera.Get_Projection_Matrix() * rinfo.Camera.Get_View_Matrix() * mesh_transform;
-
-	Vector3 * src_vert = Vertex->Get_Array();
-	int vertex_count=Get_Vertex_Count();
-
-	if (Get_Flag(SKIN) && VertexBoneLink && htree) {
-		uint16 * bonelink = VertexBoneLink->Get_Array();
-		for (int vi = 0; vi < vertex_count;) {
-			int idx=bonelink[vi];
-
-			Matrix4x4 tm = prj * htree->Get_Transform(idx);
-
-			// Count equal matrices (the vertices should be pre-sorted by matrices they use)
-			int cnt = vi;
-			for (; cnt < vertex_count; cnt++) if (idx!=bonelink[cnt]) break;
-
-			// Transform to screenspace (x,y,z,w)
-			VectorProcessorClass::Transform(
-				dst_vert+vi,
-				src_vert+vi,
-				tm,
-				cnt-vi);
-
-			vi=cnt;
-		}
-	} else {
-		VectorProcessorClass::Transform(
-			dst_vert,
-			src_vert,
-			prj,
-			vertex_count);
 	}
 }

@@ -1,3 +1,4 @@
+import Graphics.Backends.DX11.FrameRuntime;
 #include <array>
 #include <span>
 #include <vector>
@@ -65,7 +66,6 @@
 #include "WW3D2/ColTest.h"
 #include "WW3D2/RInfo.h"
 #include "WW3D2/Camera.h"
-#include "WW3D2/Backend/RenderBackend.h"
 
 //number of vertex pages allocated - allows double buffering of vertex updates.
 //while one is being rendered, another is being updated.  Improves HW parallelism.
@@ -449,7 +449,7 @@ void WaterTracksObj::render(WaterMaterialClass& material, Graphics::WaterMeshHan
 
     const unsigned count = static_cast<unsigned>((m_y-1)*(m_x*2+2)-2);
     if (indices.size() >= count && Upload_Water_Geometry(mesh,vertices,indices.first(count),true))
-        material.Draw(mesh);
+        material.Draw(mesh,Matrix4x4(true));
 
 }
 
@@ -797,8 +797,7 @@ Try improving the fit to vertical surfaces like cliffs.
 	if (!TheGlobalData->m_showSoftWaterEdge || TheWaterTransparency->m_transparentWaterDepth ==0 )
 		return;
 
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	if (backend == nullptr)
+	if (Graphics::Shared_Frame_Device() == nullptr)
 		return;
 
 	if (TheGlobalData->m_usingWaterTrackEditor)
@@ -813,8 +812,6 @@ Try improving the fit to vertical surfaces like cliffs.
 
 	// Start each frame from a discarded dynamic-buffer region.
 
-	Matrix3D tm(1);
-	backend->Set_Transform(RenderBackendTransform::World, tm);
 
 	WaterMaterialParameters parameters = {};
 	parameters.animation = Vector4(0.0f, 0.0f, 0.0f, m_level);
@@ -836,7 +833,6 @@ Try improving the fit to vertical surfaces like cliffs.
 
 		mod = mod->m_nextSystem;
 	}
-	m_material.Reset();
 }
 
 WaterTracksObj *WaterTracksRenderSystem::findTrack(Vector2 &start, Vector2 &end, waveType type)
@@ -1198,7 +1194,6 @@ void TestWaterUpdate()
 				Real ydiff=terrainPointEnd.y - terrainPointStart.y;
 				if (sqrt (xdiff * xdiff + ydiff * ydiff) <= waveTypeInfo[currentWaveType].m_finalWidth)
 				{	TheDisplay->drawLine(mouseAnchor.x, mouseAnchor.y, screenPoint.x, screenPoint.y,1,0xffccccff);
-					WW3D::Get_Render_Backend()->Invalidate_Cached_Render_States();
 				}
 			}
 

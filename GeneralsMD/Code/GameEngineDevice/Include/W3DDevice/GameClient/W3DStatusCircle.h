@@ -27,7 +27,6 @@
 #include "WWLib/always.h"
 #include "WW3D2/RendObj.h"
 #include "WW3D2/W3DFile.h"
-#include "WW3D2/Backend/RenderBackend.h"
 #include "WW3D2/Shader.h"
 #include "WW3D2/VertMaterial.h"
 #include "Lib/BaseType.h"
@@ -53,7 +52,6 @@ public:
 	virtual RenderObjClass *	Clone() const override;
 	virtual int						Class_ID() const override;
 	virtual void					Render(RenderInfoClass & rinfo) override;
-//	virtual void					Special_Render(SpecialRenderInfoClass & rinfo);
 //	virtual void 					Set_Transform(const Matrix3D &m);
 //	virtual void 					Set_Position(const Vector3 &v);
 //TODO: MW: do these later - only needed for collision detection

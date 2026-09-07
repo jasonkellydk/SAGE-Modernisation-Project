@@ -15,6 +15,7 @@ import Assets.Handles;
 import Assets.Identity;
 import Assets.Materials;
 import Assets.Math;
+export import Assets.ModelRig;
 
 namespace Assets
 {
@@ -27,6 +28,8 @@ export struct ModelVertexDesc final
 	Color4f color{};
 	std::array<std::uint16_t, 4> bone_indices{};
 	std::array<float, 4> bone_weights{1.0f, 0.0f, 0.0f, 0.0f};
+	Vector3f tangent{};
+	float tangent_sign = 1.0f;
 };
 
 export struct ModelSubmeshDesc final
@@ -35,6 +38,7 @@ export struct ModelSubmeshDesc final
 	std::uint32_t index_count = 0;
 	std::uint32_t material_index = 0;
 	std::string name;
+	bool skinned = false;
 };
 
 export using ModelMaterialDesc = MaterialAssetDesc;
@@ -56,6 +60,7 @@ export struct ModelAssetDesc final
 	std::vector<ModelSubmeshDesc> submeshes;
 	std::vector<ModelMaterialDesc> materials;
 	std::vector<AssetDependencyDesc> dependencies;
+	ModelRigDesc rig;
 };
 
 export struct ModelVertex final
@@ -66,6 +71,8 @@ export struct ModelVertex final
 	Color4f color{};
 	std::array<std::uint16_t, 4> bone_indices{};
 	std::array<float, 4> bone_weights{1.0f, 0.0f, 0.0f, 0.0f};
+	Vector3f tangent{};
+	float tangent_sign = 1.0f;
 };
 
 export struct ModelSubmesh final
@@ -74,6 +81,7 @@ export struct ModelSubmesh final
 	std::uint32_t index_count = 0;
 	std::uint32_t material_index = 0;
 	std::string name;
+	bool skinned = false;
 };
 
 export struct ModelMaterial final
@@ -93,6 +101,8 @@ export struct ModelMaterial final
 	Color4f ambient_color{};
 	Color4f specular_color{0, 0, 0, 1};
 	Color4f emissive_color{0, 0, 0, 1};
+	MaterialSurfaceParameters surface{};
+	std::array<AssetIdentity, MaterialSurfaceTextureCount> surface_textures{};
 };
 
 export class ModelAsset final
@@ -118,6 +128,7 @@ public:
 	std::span<const ModelSubmesh> Submeshes() const noexcept;
 	std::span<const ModelMaterial> Materials() const noexcept;
 	std::span<const AssetDependency> Dependencies() const noexcept;
+	const ModelRigDesc &Rig() const noexcept { return m_rig; }
 
 private:
 	AssetIdentity m_identity;
@@ -135,6 +146,7 @@ private:
 	std::vector<ModelSubmesh> m_submeshes;
 	std::vector<ModelMaterial> m_materials;
 	std::vector<AssetDependency> m_dependencies;
+	ModelRigDesc m_rig;
 };
 
 }
@@ -155,7 +167,8 @@ ModelAsset::ModelAsset(
 	  m_lod_min(description.lod_min),
 	  m_lod_max(description.lod_max),
 	  m_bounds(description.bounds),
-	  m_skin_bone_count(description.skin_bone_count)
+	  m_skin_bone_count(description.skin_bone_count),
+	  m_rig(std::move(description.rig))
 {
 	m_vertices.reserve(description.vertices.size());
 	for (const ModelVertexDesc &vertex : description.vertices) {
@@ -165,7 +178,9 @@ ModelAsset::ModelAsset(
 			vertex.texcoord,
 			vertex.color,
 			vertex.bone_indices,
-			vertex.bone_weights});
+			vertex.bone_weights,
+			vertex.tangent,
+			vertex.tangent_sign});
 	}
 
 	m_indices = std::move(description.indices);
@@ -176,7 +191,7 @@ ModelAsset::ModelAsset(
 			submesh.first_index,
 			submesh.index_count,
 			submesh.material_index,
-			std::move(submesh.name)});
+			std::move(submesh.name), submesh.skinned});
 	}
 
 	m_materials.reserve(description.materials.size());
@@ -200,7 +215,11 @@ ModelAsset::ModelAsset(
 			material.texturing,
 			material.ambient_color,
 			material.specular_color,
-			material.emissive_color});
+			material.emissive_color,
+			material.surface});
+		for (std::size_t index = 0; index < material.surface_textures.size(); ++index)
+			m_materials.back().surface_textures[index] =
+				{AssetType::Texture, Canonicalize_Asset_Name(material.surface_textures[index])};
 	}
 
 	m_dependencies.reserve(description.dependencies.size());

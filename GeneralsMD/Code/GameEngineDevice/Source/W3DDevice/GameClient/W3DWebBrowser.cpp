@@ -26,55 +26,17 @@
 // July 2002 Bryan Cleveland
 
 #include "W3DDevice/GameClient/W3DWebBrowser.h"
-#include "WW3D2/Texture.h"
-#include "WW3D2/TextureLoader.h"
-#include "WW3D2/SurfaceClass.h"
-#include "GameClient/Image.h"
-#include "GameClient/GameWindow.h"
-#include "WWMath/vector2i.h"
-#include "WW3D2/WW3D.h"
 
 W3DWebBrowser::W3DWebBrowser() : WebBrowser() {
 }
 
 Bool W3DWebBrowser::createBrowserWindow(const char *tag, GameWindow *win)
 {
-
-	WinInstanceData *winData = win->winGetInstanceData();
-	AsciiString windowName = winData->m_decoratedNameString;
-
-	Int x, y, w, h;
-
-	win->winGetSize(&w, &h);
-	win->winGetScreenPosition(&x, &y);
-
-	WebBrowserURL *url = findURL( AsciiString(tag) );
-
-	if (url == nullptr) {
-		DEBUG_LOG(("W3DWebBrowser::createBrowserWindow - couldn't find URL for page %s", tag));
-		return FALSE;
-	}
-
-#ifdef __GNUC__
-	CComQIIDPtr<I_ID(IDispatch)> idisp(m_dispatch);
-#else
-	CComQIPtr<IDispatch> idisp(m_dispatch);
-#endif
-	if (m_dispatch == nullptr)
-	{
-		return FALSE;
-	}
-
-	WW3D::Get_Render_Backend()->Create_Browser(windowName.str(), url->m_url.str(),
-		x, y, w, h, 0,
-		RenderBackendBrowserOptionScrollbars | RenderBackendBrowserOption3DBorder,
-		this);
-
-	return TRUE;
+    // No embedded browser renderer is registered. The previous backend did
+    // not create a window either; report that unavailable capability explicitly.
+    return FALSE;
 }
 
 void W3DWebBrowser::closeBrowserWindow(GameWindow *win)
 {
-	WW3D::Get_Render_Backend()->Destroy_Browser(
-		win->winGetInstanceData()->m_decoratedNameString.str());
 }

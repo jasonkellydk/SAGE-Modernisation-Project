@@ -15,13 +15,13 @@ public:
     ~W3DTerrainGraphics() override;
     void Render(RenderInfoClass &info) override;
     Bool collectShadowCasters() override;
-    int initHeightData(Int width, Int height, WorldHeightMap *map, RefRenderObjListIterator *lights, Bool extra = TRUE) override;
+    int initHeightData(Int width, Int height, WorldHeightMap *map, Graphics::SceneObjectList<RenderObjClass>::Cursor *lights, Bool extra = TRUE) override;
     Int freeMapResources() override;
     void ReleaseResources() override;
     void ReAcquireResources() override;
-    void updateCenter(CameraClass *camera, const Vector3 *pivot, RefRenderObjListIterator *lights) override;
-    void doPartialUpdate(const IRegion2D &range, WorldHeightMap *map, RefRenderObjListIterator *lights) override;
-    int updateBlock(Int x0, Int y0, Int x1, Int y1, WorldHeightMap *map, RefRenderObjListIterator *lights) override;
+    void updateCenter(CameraClass *camera, const Vector3 *pivot, Graphics::SceneObjectList<RenderObjClass>::Cursor *lights) override;
+    void doPartialUpdate(const IRegion2D &range, WorldHeightMap *map, Graphics::SceneObjectList<RenderObjClass>::Cursor *lights) override;
+    int updateBlock(Int x0, Int y0, Int x1, Int y1, WorldHeightMap *map, Graphics::SceneObjectList<RenderObjClass>::Cursor *lights) override;
     void oversizeTerrain(Int tiles) override;
     void setTerrainDrawSize(Int width, Int height) override;
     Int getNumExtraBlendTiles(Bool visible) override;
@@ -34,9 +34,8 @@ private:
     bool Update_Surface();
     bool Update_Textures();
     bool Draw_Surface(RenderInfoClass &info);
-    void Release_Imported_Textures() noexcept;
+    void Release_Texture_References() noexcept;
     std::array<Graphics::RHITextureHandle, 6> m_textures{};
-    std::array<void *, 6> m_sourceResources{};
     Graphics::Device *m_graphicsDevice = nullptr;
     Int m_extraCells = 0;
     Int m_requestedWidth = WorldHeightMap::NORMAL_DRAW_WIDTH;

@@ -6,7 +6,11 @@
 #include "WW3D2/WW3D.h"
 #include "WW3D2/RendObj.h"
 #include "WW3D2/Scene.h"
-import Graphics.Backends.DX11.Coexistence;
+#include "WWMath/matrix4.h"
+#include <algorithm>
+import Graphics.Scene.Views.CameraMatrices;
+import Graphics.Scene.DrawParameters;
+import Graphics.Backends.DX11.FrameRuntime;
 
 namespace {
 std::array<float,4> Copy_Vector(const Vector4& value) { return {value.X,value.Y,value.Z,value.W}; }
@@ -28,16 +32,16 @@ void WaterMaterialClass::Set_Fog(SceneClass* scene)
     m_parameters.fog_state = {};
     if (!scene) return;
     scene->Get_Fog_Range(&m_parameters.fog_state[0],&m_parameters.fog_state[1]);
-    m_parameters.fog_state[2] = WW3D::Get_Render_Backend()->Is_Fog_Enabled() ? 1.0f : 0.0f;
+    m_parameters.fog_state[2] = Graphics::Get_Scene_Draw_Parameters().fog.enabled ? 1.0f : 0.0f;
     const auto& color = scene->Get_Fog_Color();
     m_parameters.fog_color = {color.X,color.Y,color.Z,1};
 }
 bool WaterMaterialClass::Apply_Ocean(TextureBaseClass *surface_texture,
 	TextureBaseClass *displacement_texture,
 	TextureBaseClass *normal_texture, TextureBaseClass *foam_texture,
-	TextureBaseClass *reflection_texture, TextureBaseClass *refraction_texture,
+	TextureBaseClass *reflection_texture, Graphics::RHITextureHandle refraction_texture,
 	TextureBaseClass *environment_texture, TextureBaseClass *shroud_texture,
-	TextureBaseClass *scene_depth_texture,
+	Graphics::RHITextureHandle scene_depth_texture,
 	const WaterMaterialParameters &parameters, bool additive_blend)
 {
 	if (!Graphics::Shared_Frame_Device())
@@ -51,10 +55,10 @@ bool WaterMaterialClass::Apply_Ocean(TextureBaseClass *surface_texture,
 	m_textures[2] = Resolve_Graphics_Texture(normal_texture);
 	m_textures[3] = Resolve_Graphics_Texture(foam_texture);
 	m_textures[4] = Resolve_Graphics_Texture(reflection_texture);
-	m_textures[5] = Resolve_Graphics_Texture(refraction_texture);
+	m_textures[5] = refraction_texture;
 	m_textures[6] = Resolve_Graphics_Texture(environment_texture);
 	m_textures[7] = Resolve_Graphics_Texture(shroud_texture);
-	m_textures[8] = Resolve_Graphics_Texture(scene_depth_texture);
+	m_textures[8] = scene_depth_texture;
 	Set_Common_Constants(parameters);
 	m_style.blend = additive_blend ? Graphics::RHIBlendMode::Additive : Graphics::RHIBlendMode::Alpha;
     m_style.clamp_texture = false;
@@ -85,8 +89,8 @@ bool WaterMaterialClass::Apply_Displacement(
 bool WaterMaterialClass::Apply_Surface(TextureBaseClass *surface_texture,
 	TextureBaseClass *normal_texture, TextureBaseClass *foam_texture,
 	TextureBaseClass *edge_texture, TextureBaseClass *reflection_texture,
-	TextureBaseClass *refraction_texture, TextureBaseClass *environment_texture,
-	TextureBaseClass *shroud_texture, TextureBaseClass *scene_depth_texture,
+	Graphics::RHITextureHandle refraction_texture, TextureBaseClass *environment_texture,
+	TextureBaseClass *shroud_texture, Graphics::RHITextureHandle scene_depth_texture,
 	const WaterMaterialParameters &parameters, bool additive_blend)
 {
 	if (!Graphics::Shared_Frame_Device())
@@ -100,10 +104,10 @@ bool WaterMaterialClass::Apply_Surface(TextureBaseClass *surface_texture,
 	m_textures[2] = Resolve_Graphics_Texture(foam_texture);
 	m_textures[3] = Resolve_Graphics_Texture(edge_texture);
 	m_textures[4] = Resolve_Graphics_Texture(reflection_texture);
-	m_textures[5] = Resolve_Graphics_Texture(refraction_texture);
+	m_textures[5] = refraction_texture;
 	m_textures[6] = Resolve_Graphics_Texture(environment_texture);
 	m_textures[7] = Resolve_Graphics_Texture(shroud_texture);
-	m_textures[8] = Resolve_Graphics_Texture(scene_depth_texture);
+	m_textures[8] = scene_depth_texture;
 	Set_Common_Constants(parameters);
 	m_style.blend = additive_blend ? Graphics::RHIBlendMode::Additive : Graphics::RHIBlendMode::Alpha;
     m_style.clamp_texture = false;
@@ -148,15 +152,14 @@ bool WaterMaterialClass::Apply_Sky(TextureBaseClass *texture, bool alpha_blend,
 
 void WaterMaterialClass::Shutdown() { m_textures = {}; }
 bool WaterMaterialClass::ReacquireResources() { return Graphics::Shared_Frame_Device() != nullptr; }
-void WaterMaterialClass::Reset() { WW3D::Get_Render_Backend()->Invalidate_Cached_Render_States(); }
-bool WaterMaterialClass::Draw(Graphics::WaterMeshHandle mesh, bool wireframe)
+
+bool WaterMaterialClass::Draw(Graphics::WaterMeshHandle mesh, const Matrix4x4& world, bool wireframe)
 {
     auto* device = Graphics::Shared_Frame_Device();
-    auto* backend = WW3D::Get_Render_Backend();
-    if (!device || !backend) return false;
-    backend->Get_Transform(RenderBackendTransform::World,m_parameters.world.data());
-    backend->Get_Transform(RenderBackendTransform::View,m_parameters.view.data());
-    backend->Get_Transform(RenderBackendTransform::Projection,m_parameters.projection.data());
+    if (!device) return false;
+    std::copy_n(&world[0][0], 16, m_parameters.world.data());
+    m_parameters.view = Graphics::Get_Camera_Matrices().view.values;
+    m_parameters.projection = Graphics::Get_Camera_Matrices().projection.values;
     auto style = m_style;
     style.wireframe = wireframe;
     return Graphics::Get_Water_Renderer().Draw(device->Immediate_Command_List(),mesh,style,m_parameters,m_textures);

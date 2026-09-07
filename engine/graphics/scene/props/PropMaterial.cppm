@@ -19,7 +19,7 @@ export struct PropMaterial final
     PropColorSource emissive_source = PropColorSource::Material;
 };
 
-std::array<float,3> Select_Prop_Color(const PropVertex& vertex,
+inline std::array<float,3> Select_Prop_Color(const PropVertex& vertex,
     PropColorSource source,const std::array<float,3>& material) noexcept
 {
     if (source == PropColorSource::PrimaryColor)
@@ -29,7 +29,7 @@ std::array<float,3> Select_Prop_Color(const PropVertex& vertex,
     return material;
 }
 
-export void Apply_Prop_Material(PropVertex& vertex,const PropMaterial& material) noexcept
+export inline void Apply_Prop_Material(PropVertex& vertex,const PropMaterial& material) noexcept
 {
     // Prelit geometry modulates its vertex color in the shader. Material color
     // source selection applies to lit diffuse, so do not apply that color twice.

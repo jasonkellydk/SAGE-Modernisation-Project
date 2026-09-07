@@ -1,6 +1,7 @@
 module;
 
 #include <array>
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -8,9 +9,16 @@ module;
 #include <limits>
 #include <memory>
 #include <span>
+#include <string>
+#include <utility>
 
 export module Graphics.Scene.Ring;
 
+import Assets.Math;
+import Assets.Rings;
+import Graphics.RHI;
+import Graphics.Scene.Primitives.Geometry;
+import Graphics.Scene.Props.Renderer;
 export import Graphics.Resources.Bindless.BindlessResourceTable;
 export import Graphics.Resources.Materials.Material;
 export import Graphics.RenderGraph.Execution;
@@ -41,6 +49,45 @@ export struct RingVertex final
 };
 
 static_assert(sizeof(RingVertex) == 36);
+
+export inline constexpr std::uint32_t RingLODCount = 20;
+export inline constexpr std::uint32_t RingLowestLOD = 10;
+export inline constexpr std::uint32_t RingHighestLOD = 50;
+
+export struct RingRuntimeState final
+{
+	Assets::Color4f color{0.75f, 0.75f, 0.75f, 1.0f};
+	float alpha = 1.0f;
+	Assets::Vector2f inner_scale{1.0f, 1.0f};
+	Assets::Vector2f outer_scale{1.0f, 1.0f};
+	float animation_time = 0.0f;
+	bool visible = true;
+	bool animating = false;
+};
+
+export struct RingGeometryDescription final
+{
+	Assets::Vector3f center{};
+	Assets::Vector2f inner_extent{0.5f, 0.5f};
+	Assets::Vector2f outer_extent{1.0f, 1.0f};
+	std::array<float, 4> vertex_color{0.75f, 0.75f, 0.75f, 1.0f};
+	float texture_tiles = 5.0f;
+	std::uint32_t segments = RingHighestLOD - 2;
+	bool textured = false;
+};
+
+export struct RingBounds final
+{
+	Assets::Vector3f center{};
+	Assets::Vector3f extent{};
+};
+
+export struct RingDrawState final
+{
+	RingGeometryDescription geometry{};
+	Assets::RingMaterialDesc material{};
+	bool sort_required = false;
+};
 
 export bool Is_Valid_Ring(const RingDescription &description) noexcept
 {

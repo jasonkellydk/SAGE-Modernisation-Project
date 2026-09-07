@@ -32,9 +32,13 @@
 ///////////////////////////////////////////////////////////////////////////////
 
 // SYSTEM INCLUDES ////////////////////////////////////////////////////////////
+import Graphics.Frame.AttachmentBindings;
+import Graphics.Scene.DrawParameters;
+import Graphics.Scene.Props.Submission;
 #include <stdlib.h>
 #include "W3DDevice/GameClient/W3DObjectGraphics.h"
-import Graphics.Backends.DX11.Coexistence;
+import Assets.Math;
+import Graphics.Backends.DX11.FrameRuntime;
 import Graphics.Scene.Shadows.StencilVolumes;
 
 // USER INCLUDES //////////////////////////////////////////////////////////////
@@ -61,16 +65,14 @@ import Graphics.Scene.Shadows.StencilVolumes;
 #include "W3DDevice/GameClient/W3DShroud.h"
 #include "W3DDevice/GameClient/W3DWater.h"
 #include "WW3D2/Camera.h"
-#include "WW3D2/SortingRenderer.h"
-#include "WW3D2/MeshRenderer.h"
-#include "WW3D2/Backend/RenderBackend.h"
+#include "WW3D2/GraphicsGeometry.h"
 #include "WW3D2/WW3D.h"
 #include "WW3D2/Light.h"
 #include "WW3D2/MatPass.h"
 #include "WW3D2/Shader.h"
-#include "WW3D2/ColorSpace.h"
 
 #include "WW3D2/ShdLib.h"
+import Graphics.Diagnostics.Render;
 
 ///////////////////////////////////////////////////////////////////////////////
 // DEFINITIONS ////////////////////////////////////////////////////////////////
@@ -100,7 +102,7 @@ RTS3DScene::RTS3DScene()
 	m_drawTerrainOnly = false;
 	m_numGlobalLights=0;
 	Int i=0;
-	for (; i<LightEnvironmentClass::MAX_LIGHTS; i++)
+	for (; i<Graphics::Material_Light_Count; i++)
 	{
 		m_globalLight[i]=nullptr;
 		m_infantryLight[i]=NEW_REF( LightClass, (LightClass::DIRECTIONAL) );
@@ -213,7 +215,7 @@ RTS3DScene::RTS3DScene()
 RTS3DScene::~RTS3DScene()
 {
 	Int i=0;
-	for (; i<LightEnvironmentClass::MAX_LIGHTS; i++)
+	for (; i<Graphics::Material_Light_Count; i++)
 	{
 		REF_PTR_RELEASE(m_globalLight[i]);
 		REF_PTR_RELEASE(m_infantryLight[i]);
@@ -344,7 +346,7 @@ Bool RTS3DScene::castRay(RayCollisionTestClass & raytest, Bool testAll, Int coll
 	//check if a mesh is translucent before colliding with it. Skips headlights, etc.
 	tempRayTest.CheckTranslucent = true;
 
-	RefRenderObjListIterator it(&RenderList);
+	Graphics::SceneObjectList<RenderObjClass>::Cursor it(&RenderList);
 
 	// select the first object
 	it.First();
@@ -405,7 +407,7 @@ void RTS3DScene::Visibility_Check(CameraClass * camera)
 	StDrawableDirtyStuffLocker lockDirtyStuff;
 #endif
 
-	RefRenderObjListIterator it(&RenderList);
+	Graphics::SceneObjectList<RenderObjClass>::Cursor it(&RenderList);
 	DrawableInfo *drawInfo = nullptr;
 	Drawable	*draw = nullptr;
 	RenderObjClass * robj;
@@ -553,7 +555,7 @@ void RTS3DScene::renderSpecificDrawables(RenderInfoClass &rinfo, Int numDrawable
 	StDrawableDirtyStuffLocker lockDirtyStuff;
 #endif
 	const Int localPlayerIndex = rts::getObservedOrLocalPlayerIndex_Safe();
-	RefRenderObjListIterator it(&UpdateList);
+	Graphics::SceneObjectList<RenderObjClass>::Cursor it(&UpdateList);
 	// loop through all render objects in the list:
 	for (it.First(&RenderList); !it.Is_Done();)
 	{
@@ -603,7 +605,7 @@ void RTS3DScene::renderOneObject(RenderInfoClass &rinfo, RenderObjClass *robj, I
 		return;	//decals are not lit by this system yet so skip rest of lighting
 	}
 
-	LightEnvironmentClass lightEnv;
+	Graphics::LocalLighting lightEnv;
 	SphereClass sph = robj->Get_Bounding_Sphere();
 	drawInfo = (DrawableInfo *)robj->Get_User_Data();
 	if (drawInfo)
@@ -668,7 +670,7 @@ void RTS3DScene::renderOneObject(RenderInfoClass &rinfo, RenderObjClass *robj, I
 			sceneLights = m_infantryLight;
 		}
 
-		lightEnv.Reset(sph.Center, ambient);
+		lightEnv.Reset({(sph.Center).X,(sph.Center).Y,(sph.Center).Z}, {(ambient).X,(ambient).Y,(ambient).Z});
 
 
 		// HANDLE THE SPECIAL DRAWABLE-LEVEL COLORING SETTINGS FIRST
@@ -698,22 +700,22 @@ void RTS3DScene::renderOneObject(RenderInfoClass &rinfo, RenderObjClass *robj, I
 				Vector3::Add(temp, sumTint, &temp);
 
 				sceneLights[globalLightIndex]->Set_Diffuse( temp );
-				lightEnv.Add_Light(*sceneLights[globalLightIndex]);
+				lightEnv.Add(Describe_Material_Light(*sceneLights[globalLightIndex]));
 				sceneLights[globalLightIndex]->Set_Diffuse( restore );
 
 			}
 
-			temp = lightEnv.Get_Equivalent_Ambient();
+			temp.Set(lightEnv.ambient[0],lightEnv.ambient[1],lightEnv.ambient[2]);
 			Vector3::Add(sumTint, temp, &temp );
 
-			lightEnv.Set_Output_Ambient( temp );
+			lightEnv.ambient = {temp.X,temp.Y,temp.Z};
 
 		}
 		else // no funny coloring going on, so just add the lights normally
 		{
 			for (Int globalLightIndex = 0; globalLightIndex < m_numGlobalLights; globalLightIndex++)
 			{
-				lightEnv.Add_Light(*sceneLights[globalLightIndex]);
+				lightEnv.Add(Describe_Material_Light(*sceneLights[globalLightIndex]));
 			}
 		}
 
@@ -763,30 +765,30 @@ void RTS3DScene::renderOneObject(RenderInfoClass &rinfo, RenderObjClass *robj, I
 		}
 		else
 		{
-			lightEnv.Reset(sph.Center, ambient);
+			lightEnv.Reset({(sph.Center).X,(sph.Center).Y,(sph.Center).Z}, {(ambient).X,(ambient).Y,(ambient).Z});
 			for (Int globalLightIndex = 0; globalLightIndex < m_numGlobalLights; globalLightIndex++)
-				lightEnv.Add_Light(*m_globalLight[globalLightIndex]);
+				lightEnv.Add(Describe_Material_Light(*m_globalLight[globalLightIndex]));
 		}
 	}
 
 	if (!drawableHidden)
 	{
 		//standard scene lights
-		RefRenderObjListIterator it2(&LightList);
+		Graphics::SceneObjectList<RenderObjClass>::Cursor it2(&LightList);
 		for (it2.First(); !it2.Is_Done(); it2.Next())
 		{
 			LightClass *pLight = (LightClass*)it2.Peek_Obj();
 			SphereClass lSph = pLight->Get_Bounding_Sphere();
 			Bool cull = (pLight->Get_Type() == LightClass::POINT && !Spheres_Intersect(sph, lSph));
 			if (!cull) {
-				lightEnv.Add_Light(*pLight);
+				lightEnv.Add(Describe_Material_Light(*pLight));
 			}
 		}
 
     if( draw && draw->getReceivesDynamicLights() )
     {
 		  // dynamic lights
-		  RefRenderObjListIterator dynaLightIt(&m_dynamicLightList);
+		  Graphics::SceneObjectList<RenderObjClass>::Cursor dynaLightIt(&m_dynamicLightList);
 		  for (dynaLightIt.First(); !dynaLightIt.Is_Done(); dynaLightIt.Next())
 		  {
 			  W3DDynamicLight* pDyna = (W3DDynamicLight*)dynaLightIt.Peek_Obj();
@@ -797,11 +799,11 @@ void RTS3DScene::renderOneObject(RenderInfoClass &rinfo, RenderObjClass *robj, I
 			  if (pDyna->Get_Type() == LightClass::POINT && !Spheres_Intersect(sph, lSph)) {
 				  continue;
 			  }
-			  lightEnv.Add_Light(*(LightClass*)dynaLightIt.Peek_Obj());
+			  lightEnv.Add(Describe_Material_Light(*(LightClass*)dynaLightIt.Peek_Obj()));
 		  }
     }
 
-		lightEnv.Pre_Render_Update(rinfo.Camera.Get_Transform());
+		lightEnv.Finalize();
 		rinfo.light_environment = &lightEnv;
 
 		if (drawInfo)
@@ -849,12 +851,12 @@ void RTS3DScene::renderOneObject(RenderInfoClass &rinfo, RenderObjClass *robj, I
 //DECLARE_PERF_TIMER(translucentRender)
 
 void RTS3DScene::Render_Water_Reflection(CameraClass *camera,
-	const RenderBackendViewport &viewport)
+	const Graphics::RHIViewport &viewport)
 {
 	if (camera == nullptr)
 		return;
 
-	RenderBackendViewport pass_viewport = viewport;
+	Graphics::RHIViewport pass_viewport = viewport;
 	WW3D::Render_Scene_Pass(this, camera, &pass_viewport);
 }
 
@@ -869,13 +871,14 @@ void RTS3DScene::Flush(RenderInfoClass & rinfo)
 	if (m_customPassMode == SCENE_PASS_DEFAULT && Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE)
 		DoShadows(rinfo, false);	//draw all non-stencil shadows (decals) since they fall under other objects.
 
-	TheMeshRenderer.Flush();	//draw all non-translucent objects.
+	Graphics::Get_Prop_Submission().Flush_Materials();	//draw all non-translucent objects.
+
 
 	//draw all non-translucent objects which were separated because they are hidden and need custom rendering.
 #ifdef USE_NON_STENCIL_OCCLUSION
 	flushOccludedObjects(rinfo);
 #else
-	if (WW3D::Get_Render_Backend()->Has_Stencil())
+	if (Graphics::Get_Attachment_Bindings().Default().depth.Is_Valid())
 		flushOccludedObjectsIntoStencil(rinfo);
 #endif
 
@@ -897,7 +900,7 @@ void RTS3DScene::Flush(RenderInfoClass & rinfo)
 		TheWaterRenderSystem->Render(rinfo);
 	}
 
-	WW3D::Render_And_Clear_Static_Sort_Lists(rinfo);	//draw remaining static-sort submissions
+	Graphics::Get_Scene_Draw_Queue().Drain(&rinfo, [] { Graphics::Get_Prop_Submission().Flush_Materials(); });	//draw remaining static-sort submissions
 
 	if (m_customPassMode == SCENE_PASS_DEFAULT && Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE)
 		flushTranslucentObjects(rinfo);	//draw all translucent meshes which don't need per-polygon sorting.
@@ -909,7 +912,8 @@ void RTS3DScene::Flush(RenderInfoClass & rinfo)
 		if (m_customPassMode == SCENE_PASS_DEFAULT && Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE)
 			DoParticles(rinfo);	//queue up particles for rendering.
 
-		SortingRendererClass::Flush();	//draw sorted translucent polygons like particles.
+		Graphics::Get_Prop_Submission().Flush_Transparent();	//draw sorted translucent polygons like particles.
+
 	}
 }
 
@@ -926,13 +930,13 @@ void RTS3DScene::updateFixedLightEnvironments(RenderInfoClass & rinfo)
 		infantryLightScale = TheGlobalData->m_infantryLightScale[TheGlobalData->m_timeOfDay];
 
 	//Generate the default light environment
-	m_defaultLightEnv.Reset(Vector3(0,0,0), Get_Ambient_Light());
-	m_foggedLightEnv.Reset(Vector3(0,0,0), Get_Ambient_Light()*foggedLightFrac);
+	m_defaultLightEnv.Reset({0,0,0}, {(Get_Ambient_Light()).X,(Get_Ambient_Light()).Y,(Get_Ambient_Light()).Z});
+	m_foggedLightEnv.Reset({0,0,0}, {(Get_Ambient_Light()*foggedLightFrac).X,(Get_Ambient_Light()*foggedLightFrac).Y,(Get_Ambient_Light()*foggedLightFrac).Z});
 
 	Vector3 oldDiffuse, oldAmbient;
 	for (Int globalLightIndex = 0; globalLightIndex < m_numGlobalLights; globalLightIndex++)
 	{
-		m_defaultLightEnv.Add_Light(*m_globalLight[globalLightIndex]);
+		m_defaultLightEnv.Add(Describe_Material_Light(*m_globalLight[globalLightIndex]));
 		//copy default lighting for infantry so we can tweak it.
 		*m_infantryLight[globalLightIndex]=*m_globalLight[globalLightIndex];
 		m_infantryLight[globalLightIndex]->Set_Transform(m_globalLight[globalLightIndex]->Get_Transform());
@@ -954,11 +958,11 @@ void RTS3DScene::updateFixedLightEnvironments(RenderInfoClass & rinfo)
 		m_scratchLight->Set_Diffuse(oldDiffuse*foggedLightFrac);
 		m_globalLight[globalLightIndex]->Get_Ambient(&oldAmbient);
 		m_scratchLight->Set_Ambient(oldAmbient*foggedLightFrac);
-		m_foggedLightEnv.Add_Light(*m_scratchLight);
+		m_foggedLightEnv.Add(Describe_Material_Light(*m_scratchLight));
 	}
 
-	m_defaultLightEnv.Pre_Render_Update(rinfo.Camera.Get_Transform());
-	m_foggedLightEnv.Pre_Render_Update(rinfo.Camera.Get_Transform());
+	m_defaultLightEnv.Finalize();
+	m_foggedLightEnv.Finalize();
 
 	m_infantryAmbient = Get_Ambient_Light();// * infantryLightScale;	//for now don't adjust ambient so that we don't lose directional lighting.
 }
@@ -979,9 +983,11 @@ void RTS3DScene::updatePlayerColorPasses()
 			Int playerIndex=player->getPlayerIndex();
 			Real red,green,blue,alpha;
 			GameGetColorComponentsReal(player->getPlayerColor(),&red,&green,&blue,&alpha);
-			RGB_To_HSV(hsv,Vector3(red,green,blue));
+			const auto source_hsv = Assets::RGB_To_HSV({red, green, blue});
+            hsv.Set(source_hsv.x, source_hsv.y, source_hsv.z);
 			hsv.Z*=TheGlobalData->m_occludedLuminanceScale;
-			HSV_To_RGB(rgb,hsv);
+			const auto converted = Assets::HSV_To_RGB({hsv.X, hsv.Y, hsv.Z});
+                    rgb.Set(converted.x, converted.y, converted.z);
 			VertexMaterialClass *vmat=m_occludedMaterialPass[playerIndex]->Peek_Material();
 			vmat->Set_Emissive(rgb);
 		}
@@ -994,12 +1000,13 @@ void RTS3DScene::updatePlayerColorPasses()
 //DECLARE_PERF_TIMER(NonTerrainRender)
 void RTS3DScene::Render(RenderInfoClass & rinfo)
 {
+    auto& draw_parameters = Graphics::Get_Scene_Draw_Parameters();
 	//USE_PERF_TIMER(NonTerrainRender)
-	WW3D::Get_Render_Backend()->Set_Fog(FogEnabled, FogColor, FogStart, FogEnd);
+	draw_parameters.fog = {FogEnabled, FogStart, FogEnd, {FogColor.X, FogColor.Y, FogColor.Z, 1}};
 
 	//Override the behind building selection if it's not available on current hardware (needs stencil).
 	TheWritableGlobalData->m_enableBehindBuildingMarkers = TheWritableGlobalData->m_enableBehindBuildingMarkers &&
-		WW3D::Get_Render_Backend()->Has_Stencil();
+		Graphics::Get_Attachment_Bindings().Default().depth.Is_Valid();
 
 	if (Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE)
 	{
@@ -1016,15 +1023,14 @@ void RTS3DScene::Render(RenderInfoClass & rinfo)
 			//a projected alpha texture which will later be used to determine where
 			//wireframe should be visible.
 			///@todo: Clearing to black may not be needed if the scene already did the clear.
-			WW3D::Get_Render_Backend()->Set_Color_Write_Mask(RenderBackendColorWriteMask::Alpha);
-			WW3D::Get_Render_Backend()->Set_Depth_Bias(0);
+			draw_parameters.color_write_mask = 0x08;
+			draw_parameters.depth_bias = 0;
 
 			Customized_Render(rinfo);	//render mask into alpha channel and fill z-buffer with depth values.
 			Flush(rinfo);
 
-			WW3D::Get_Render_Backend()->Set_Color_Write_Mask(RenderBackendColorWriteMask::RGB);
+			draw_parameters.color_write_mask = 0x07;
 
-			ShaderClass::Invalidate();
 		}
 	}
 	else
@@ -1036,9 +1042,9 @@ void RTS3DScene::Render(RenderInfoClass & rinfo)
 			//a projected alpha texture which will later be used to determine where
 			//wireframe should be visible.
 			///@todo: Clearing to black may not be needed if the scene already did the clear.
-			WW3D::Get_Render_Backend()->Clear(true, false, Vector3(0.0f,0.0f,0.0f),1.0f);	// Clear color but not z
-			WW3D::Get_Render_Backend()->Set_Color_Write_Mask(RenderBackendColorWriteMask::Alpha);
-			WW3D::Get_Render_Backend()->Set_Depth_Bias(0);
+			Graphics::Get_Attachment_Bindings().Clear(true, false, {0,0,0,1.0f});	// Clear color but not z
+			draw_parameters.color_write_mask = 0x08;
+			draw_parameters.depth_bias = 0;
 
 			//We're only filling the z-buffer so ignore normal textures and state changes to speed things up.
 			m_customPassMode = SCENE_PASS_ALPHA_MASK;
@@ -1047,10 +1053,10 @@ void RTS3DScene::Render(RenderInfoClass & rinfo)
 			Flush(rinfo);
 
 
-			WW3D::Get_Render_Backend()->Set_Color_Write_Mask(RenderBackendColorWriteMask::RGB);
+			draw_parameters.color_write_mask = 0x07;
 			WW3D::Enable_Coloring(0xff008000);
 			WW3D::Enable_Texturing(false);
-			WW3D::Get_Render_Backend()->Set_Fill_Mode(RenderBackendFillMode::Wireframe);
+			draw_parameters.wireframe = true;
 
 			//Move maximum z-buffer value in a little to shift all z-values closer
 			//and thus forcing line to appear on top of previous pass.
@@ -1059,54 +1065,52 @@ void RTS3DScene::Render(RenderInfoClass & rinfo)
 			rinfo.Camera.Set_Zbuffer_Range(nearZ, farZ-ZBias);
 			rinfo.Camera.Apply();
 
-			// Optional depth bias is handled by the render backend.
+			// Material submission captures the pass depth bias.
 			Customized_Render(rinfo);	//render wireframe where z-test passes
 			Flush(rinfo);
-			WW3D::Get_Render_Backend()->Set_Fill_Mode(RenderBackendFillMode::Solid);
+			draw_parameters.wireframe = false;
 
 			rinfo.Camera.Set_Zbuffer_Range(nearZ, farZ);
 			rinfo.Camera.Apply();
 
-			// Restore depth bias through the render backend when enabled.
+			// Restore camera depth before the following pass.
 			WW3D::Enable_Texturing(old_enable);
 			WW3D::Enable_Coloring(0);
 
-			ShaderClass::Invalidate();
 		}
 		else
 		{
 			//old W3D custom rendering code.
 
 			//Disable writes to color buffer to save memory bandwidth - we only need Z.
-			WW3D::Get_Render_Backend()->Set_Color_Write_Mask(RenderBackendColorWriteMask::None);
-			WW3D::Get_Render_Backend()->Set_Depth_Bias(0);
+			draw_parameters.color_write_mask = 0;
+			draw_parameters.depth_bias = 0;
 			Customized_Render(rinfo);
 			Flush(rinfo);
 			//Re-enable writes to color buffer.
-			WW3D::Get_Render_Backend()->Set_Color_Write_Mask(RenderBackendColorWriteMask::RGB);
+			draw_parameters.color_write_mask = 0x07;
 
 			switch (Get_Extra_Pass_Polygon_Mode()) {
 			case EXTRA_PASS_LINE:
 				WW3D::Enable_Texturing(false);
-				WW3D::Get_Render_Backend()->Set_Fill_Mode(RenderBackendFillMode::Wireframe);
-				WW3D::Get_Render_Backend()->Set_Depth_Bias(7);
+				draw_parameters.wireframe = true;
+				draw_parameters.depth_bias = 7;
 				Customized_Render(rinfo);
 				break;
 			case EXTRA_PASS_CLEAR_LINE:
-				WW3D::Get_Render_Backend()->Clear(true, false, Vector3(0.0f,0.0f,0.0f), 0.0f);	// Clear color but not z
+				Graphics::Get_Attachment_Bindings().Clear(true, false, {0,0,0,0.0f});	// Clear color but not z
 				WW3D::Enable_Texturing(false);
 				WW3D::Enable_Coloring(0xff008000);
-				WW3D::Get_Render_Backend()->Set_Fill_Mode(RenderBackendFillMode::Wireframe);
-				WW3D::Get_Render_Backend()->Set_Depth_Bias(7);
+				draw_parameters.wireframe = true;
+				draw_parameters.depth_bias = 7;
 				Customized_Render(rinfo);
 				break;
 			}
 			Flush(rinfo);
-			WW3D::Get_Render_Backend()->Set_Fill_Mode(RenderBackendFillMode::Solid);
-			WW3D::Get_Render_Backend()->Set_Depth_Bias(0);
+			draw_parameters.wireframe = false;
+			draw_parameters.depth_bias = 0;
 			WW3D::Enable_Texturing(old_enable);
 			WW3D::Enable_Coloring(0);
-			ShaderClass::Invalidate();
 		}
 	}
 }
@@ -1141,7 +1145,7 @@ void RTS3DScene::Customized_Render( RenderInfoClass &rinfo )
    Visibility_Checked = false;
 
 
-	RefRenderObjListIterator it(&UpdateList);
+	Graphics::SceneObjectList<RenderObjClass>::Cursor it(&UpdateList);
 	// allow all objects in the update list to do their "every frame" processing
 	for (it.First(); !it.Is_Done(); it.Next()) {
 		RenderObjClass * robj = it.Peek_Obj();
@@ -1162,7 +1166,7 @@ void RTS3DScene::Customized_Render( RenderInfoClass &rinfo )
 	// registration mode.
 	if (terrainObject == nullptr)
 	{
-		RefRenderObjListIterator renderIt(&RenderList);
+		Graphics::SceneObjectList<RenderObjClass>::Cursor renderIt(&RenderList);
 		for (renderIt.First(); !renderIt.Is_Done(); renderIt.Next())
 		{
 			RenderObjClass *renderObj = renderIt.Peek_Obj();
@@ -1206,7 +1210,7 @@ void RTS3DScene::Customized_Render( RenderInfoClass &rinfo )
 		return;
 	}
 #ifdef EXTENDED_STATS
-	if (WW3D::Get_Render_Backend()->Get_Debug_Settings().m_disableObjects) {
+	if (Graphics::Get_Render_Diagnostics().disable_objects) {
 		return;
 	}
 #endif
@@ -1287,8 +1291,8 @@ void renderStenciledPlayerColor(UnsignedInt color, UnsignedInt stencilRef, Bool 
 {
     auto* device=Graphics::Shared_Frame_Device();
     if (!device) return;
-    RenderBackendViewport viewport{};
-    WW3D::Get_Render_Backend()->Get_Viewport(viewport);
+    Graphics::RHIViewport viewport{};
+    viewport = Graphics::Get_Attachment_Bindings().Current().viewport;
     if (!viewport.width || !viewport.height) return;
     Int x,y; TheTacticalView->getOrigin(&x,&y);
     const float left=2.0f*(float(x)-viewport.x)/viewport.width-1;
@@ -1299,12 +1303,12 @@ void renderStenciledPlayerColor(UnsignedInt color, UnsignedInt stencilRef, Bool 
         {left,top,right,bottom},{float((color>>16)&255)/255,float((color>>8)&255)/255,
         float(color&255)/255,float(color>>24)/255},static_cast<std::uint8_t>(stencilRef),clear,
         static_cast<std::uint8_t>(TheW3DShadowManager->getStencilShadowMask()));
-    WW3D::Get_Render_Backend()->Invalidate_Cached_Render_States();
 }
 
 #define MAX_VISIBLE_OCCLUDED_PLAYER_OBJECTS	512 //maximum number of occluded objects permitted per player
 void RTS3DScene::flushOccludedObjectsIntoStencil(RenderInfoClass & rinfo)
 {
+    auto& draw_parameters = Graphics::Get_Scene_Draw_Parameters();
 	RenderObjClass *robj;
 	Drawable *draw;
 	RenderObjClass *playerObjects[MAX_PLAYER_COUNT][MAX_VISIBLE_OCCLUDED_PLAYER_OBJECTS];
@@ -1354,16 +1358,15 @@ void RTS3DScene::flushOccludedObjectsIntoStencil(RenderInfoClass & rinfo)
 			lastPlayerObject[index]++;	//increment to next object
 		}
 
-		WW3D::Get_Render_Backend()->Set_Stencil_Enabled(true);
-		WW3D::Get_Render_Backend()->Set_Depth_Test_Enabled(true);
-		WW3D::Get_Render_Backend()->Set_Stencil_Read_Mask(0xffffffff);
-		WW3D::Get_Render_Backend()->Set_Stencil_Write_Mask(0xffffffff);
+		draw_parameters.stencil.enabled = true;
+		draw_parameters.stencil.read_mask = 0xff;
+		draw_parameters.stencil.write_mask = 0xff;
 		//Always store player index into stencil unless it is occluded by another
 		//player's potentially occluded objects.
-		WW3D::Get_Render_Backend()->Set_Stencil_Function(RenderBackendCompareFunction::Always);
-		WW3D::Get_Render_Backend()->Set_Stencil_Z_Fail_Operation(RenderBackendStencilOperation::Keep);
-		WW3D::Get_Render_Backend()->Set_Stencil_Fail_Operation(RenderBackendStencilOperation::Keep);
-		WW3D::Get_Render_Backend()->Set_Stencil_Pass_Operation(RenderBackendStencilOperation::Replace);
+		draw_parameters.stencil.front.comparison = draw_parameters.stencil.back.comparison = Graphics::RHIComparison::Always;
+		draw_parameters.stencil.front.depth_fail = draw_parameters.stencil.back.depth_fail = Graphics::RHIStencilOperation::Keep;
+		draw_parameters.stencil.front.fail = draw_parameters.stencil.back.fail = Graphics::RHIStencilOperation::Keep;
+		draw_parameters.stencil.front.pass = draw_parameters.stencil.back.pass = Graphics::RHIStencilOperation::Replace;
 
 		//Find out which player indices are actually used and remap them to
 		//a color index.  Render all objects using the same color index at once.
@@ -1384,16 +1387,19 @@ void RTS3DScene::flushOccludedObjectsIntoStencil(RenderInfoClass & rinfo)
 					Object *object=draw->getObject();
 
 					Int color=object->getControllingPlayer()->getPlayerColor();
-					RGB_To_HSV(hsv,Vector3(((color>>16)&0xff)/255.0f,((color>>8)&0xff)/255.0f,(color &0xff)/255.0f));
+					const auto source_hsv = Assets::RGB_To_HSV({((color >> 16) & 255) / 255.0f,
+                        ((color >> 8) & 255) / 255.0f, (color & 255) / 255.0f});
+                    hsv.Set(source_hsv.x, source_hsv.y, source_hsv.z);
 					hsv.Z*=TheGlobalData->m_occludedLuminanceScale;
-					HSV_To_RGB(rgb,hsv);
-					visiblePlayerColors[numVisiblePlayerColors++]=WW3D::Get_Render_Backend()->Pack_Color(rgb,0.5f);
+					const auto converted = Assets::HSV_To_RGB({hsv.X, hsv.Y, hsv.Z});
+                    rgb.Set(converted.x, converted.y, converted.z);
+					visiblePlayerColors[numVisiblePlayerColors++]=Assets::Color_To_ARGB({rgb.X,rgb.Y,rgb.Z,0.5f});
 				}
 
 				Int thisPlayerColorIndex=playerColorIndex[k];
 
 				//Store this object's color index into bits 3-6 of stencil buffer
-				WW3D::Get_Render_Backend()->Set_Stencil_Reference(thisPlayerColorIndex<<3);
+				draw_parameters.stencil.reference = static_cast<std::uint8_t>(thisPlayerColorIndex<<3);
 
 				//Render all of this player's objects for which we care when they are occluded.
 				RenderObjClass **renderList=&playerObjects[k][0];
@@ -1403,16 +1409,16 @@ void RTS3DScene::flushOccludedObjectsIntoStencil(RenderInfoClass & rinfo)
 					if (drawInfo->m_flags & DrawableInfo::ERF_IS_TRANSLUCENT)
 					{
 						// TheSuperHackers @info This only draws the occlusion of translucent objects.
-						TheMeshRenderer.Flush();	//render all the submitted meshes using current stencil function
+						Graphics::Get_Prop_Submission().Flush_Materials();	//render all the submitted meshes using current stencil function
 						SHD_FLUSH;
 						//Disable writing to color buffer since translucent objects are rendered at end of frame.
-						WW3D::Get_Render_Backend()->Set_Stencil_Function(RenderBackendCompareFunction::Never);	//never allow frame buffer writes.
-						WW3D::Get_Render_Backend()->Set_Stencil_Fail_Operation(RenderBackendStencilOperation::Replace);	//always replace existing stencil value
+						draw_parameters.stencil.front.comparison = draw_parameters.stencil.back.comparison = Graphics::RHIComparison::Never;	//never allow frame buffer writes.
+						draw_parameters.stencil.front.fail = draw_parameters.stencil.back.fail = Graphics::RHIStencilOperation::Replace;	//always replace existing stencil value
 						renderOneObject(rinfo, (*renderList), localPlayerIndex);
-						TheMeshRenderer.Flush();	//render all the submitted meshes using current stencil function
+						Graphics::Get_Prop_Submission().Flush_Materials();	//render all the submitted meshes using current stencil function
 						SHD_FLUSH;
-						WW3D::Get_Render_Backend()->Set_Stencil_Fail_Operation(RenderBackendStencilOperation::Keep);
-						WW3D::Get_Render_Backend()->Set_Stencil_Function(RenderBackendCompareFunction::Always);
+						draw_parameters.stencil.front.fail = draw_parameters.stencil.back.fail = Graphics::RHIStencilOperation::Keep;
+						draw_parameters.stencil.front.comparison = draw_parameters.stencil.back.comparison = Graphics::RHIComparison::Always;
 					}
 					else
 					{
@@ -1421,32 +1427,32 @@ void RTS3DScene::flushOccludedObjectsIntoStencil(RenderInfoClass & rinfo)
 					renderList++;	//advance to next object
 				}
 
-					TheMeshRenderer.Flush();	//render all the submitted meshes using current stencil function
+					Graphics::Get_Prop_Submission().Flush_Materials();	//render all the submitted meshes using current stencil function
+
 			}
 		}
 		//Stencil buffer is now filled with color indices of potentially occluded objects.  We now draw
 		//non-occluder or occludee objects such as small rocks, shrubs, etc. which we don't care about
 		//but need to render here so that they don't interfere with building occlusion.
-		WW3D::Get_Render_Backend()->Set_Stencil_Enabled(false);	//these objects are not stored in stencil
+		draw_parameters.stencil.enabled = false;	//these objects are not stored in stencil
 		RenderObjClass **nonOccluderOrOccludeeList=m_nonOccludersOrOccludees;
 		for (k=0; k<m_numNonOccluderOrOccludee; k++)
 		{
 			renderOneObject(rinfo, (*nonOccluderOrOccludeeList), localPlayerIndex);
 			nonOccluderOrOccludeeList++;	//advance to next one
 		}
-					TheMeshRenderer.Flush();	//render all the submitted meshes using current stencil function
+					Graphics::Get_Prop_Submission().Flush_Materials();	//render all the submitted meshes using current stencil function
 
 		//Stencil buffer is now filled with color indices of potentially occluded objects.  We now draw
 		//occluder objects so they cover up and modify stencil MSB wherever they are in front of other objects.
-		WW3D::Get_Render_Backend()->Set_Stencil_Enabled(true);
-		WW3D::Get_Render_Backend()->Set_Depth_Test_Enabled(true);
-		WW3D::Get_Render_Backend()->Set_Stencil_Reference(0xffffffff);
-		WW3D::Get_Render_Backend()->Set_Stencil_Read_Mask(0xffffffff);	//isolate lowest player color
-		WW3D::Get_Render_Backend()->Set_Stencil_Write_Mask(0x80);	//only write to MSB
-		WW3D::Get_Render_Backend()->Set_Stencil_Function(RenderBackendCompareFunction::Always);	//check if player colors stored in pixel
-		WW3D::Get_Render_Backend()->Set_Stencil_Z_Fail_Operation(RenderBackendStencilOperation::Keep);
-		WW3D::Get_Render_Backend()->Set_Stencil_Fail_Operation(RenderBackendStencilOperation::Keep);
-		WW3D::Get_Render_Backend()->Set_Stencil_Pass_Operation(RenderBackendStencilOperation::Replace);
+		draw_parameters.stencil.enabled = true;
+		draw_parameters.stencil.reference = 0xff;
+		draw_parameters.stencil.read_mask = 0xff;	//isolate lowest player color
+		draw_parameters.stencil.write_mask = static_cast<std::uint8_t>(0x80);	//only write to MSB
+		draw_parameters.stencil.front.comparison = draw_parameters.stencil.back.comparison = Graphics::RHIComparison::Always;	//check if player colors stored in pixel
+		draw_parameters.stencil.front.depth_fail = draw_parameters.stencil.back.depth_fail = Graphics::RHIStencilOperation::Keep;
+		draw_parameters.stencil.front.fail = draw_parameters.stencil.back.fail = Graphics::RHIStencilOperation::Keep;
+		draw_parameters.stencil.front.pass = draw_parameters.stencil.back.pass = Graphics::RHIStencilOperation::Replace;
 
 		//Render all potential occluders on top of already rendered potential occludees.
 		RenderObjClass **occluderList=m_potentialOccluders;
@@ -1456,7 +1462,8 @@ void RTS3DScene::flushOccludedObjectsIntoStencil(RenderInfoClass & rinfo)
 			occluderList++;	//advance to next one
 		}
 
-					TheMeshRenderer.Flush();	//render all the submitted meshes using current stencil function
+					Graphics::Get_Prop_Submission().Flush_Materials();	//render all the submitted meshes using current stencil function
+
 
 		//We now have a stencil buffer where pixels that are occluded have a bit pattern of 1INDX000.
 		//INDX contains the occluded player's color index.  We walk through all the player colors and
@@ -1481,7 +1488,7 @@ void RTS3DScene::flushOccludedObjectsIntoStencil(RenderInfoClass & rinfo)
 			TheW3DShadowManager->setStencilShadowMask(0x80808080);	//msb indicates occluded player pixels so ignore it when filling screen with shadow
 		}
 
-		WW3D::Get_Render_Backend()->Set_Stencil_Enabled(false);
+		draw_parameters.stencil.enabled = false;
 	}
 	else
 	if (m_numNonOccluderOrOccludee || m_numPotentialOccluders || m_numPotentialOccludees)
@@ -1516,18 +1523,18 @@ void RTS3DScene::flushOccludedObjectsIntoStencil(RenderInfoClass & rinfo)
 			renderOneObject(rinfo, (*nonOccluderOrOccludeeList), localPlayerIndex);
 			nonOccluderOrOccludeeList++;	//advance to next one
 		}
-					TheMeshRenderer.Flush();	//render all the submitted meshes using current stencil function
+					Graphics::Get_Prop_Submission().Flush_Materials();	//render all the submitted meshes using current stencil function
 	}
 
 	//Reset scene ambient because we sometimes mess around with it to make objects
 	//glow, etc. when processing drawables.  This is a good place to do it because this
 	//function gets called right after we flush regular render objects.
-	WW3D::Get_Render_Backend()->Set_Ambient(this->Get_Ambient_Light());
 }
 
 /*Version which does not require stencil buffer*/
 void RTS3DScene::flushOccludedObjects(RenderInfoClass & rinfo)
 {
+    auto& draw_parameters = Graphics::Get_Scene_Draw_Parameters();
 	RenderObjClass *robj;
 	Drawable *draw;
 
@@ -1537,18 +1544,17 @@ void RTS3DScene::flushOccludedObjects(RenderInfoClass & rinfo)
 	{
 		const Int localPlayerIndex = rts::getObservedOrLocalPlayerIndex_Safe();
 
-		if (WW3D::Get_Render_Backend()->Has_Stencil())	//just in case we have shadows, disable them over occluded pixels.
+		if (Graphics::Get_Attachment_Bindings().Default().depth.Is_Valid())	//just in case we have shadows, disable them over occluded pixels.
 		{
 			//Set all stencil pixels of potentially occluded objects to 128.
-			WW3D::Get_Render_Backend()->Set_Stencil_Enabled(true);
-			WW3D::Get_Render_Backend()->Set_Depth_Test_Enabled(true);
-			WW3D::Get_Render_Backend()->Set_Stencil_Reference(128);
-			WW3D::Get_Render_Backend()->Set_Stencil_Read_Mask(0xffffffff);
-			WW3D::Get_Render_Backend()->Set_Stencil_Write_Mask(0xffffffff);
-			WW3D::Get_Render_Backend()->Set_Stencil_Z_Fail_Operation(RenderBackendStencilOperation::Keep);
-			WW3D::Get_Render_Backend()->Set_Stencil_Fail_Operation(RenderBackendStencilOperation::Keep);
-			WW3D::Get_Render_Backend()->Set_Stencil_Pass_Operation(RenderBackendStencilOperation::Replace);
-			WW3D::Get_Render_Backend()->Set_Stencil_Function(RenderBackendCompareFunction::Always);
+			draw_parameters.stencil.enabled = true;
+			draw_parameters.stencil.reference = 128;
+			draw_parameters.stencil.read_mask = 0xff;
+			draw_parameters.stencil.write_mask = 0xff;
+			draw_parameters.stencil.front.depth_fail = draw_parameters.stencil.back.depth_fail = Graphics::RHIStencilOperation::Keep;
+			draw_parameters.stencil.front.fail = draw_parameters.stencil.back.fail = Graphics::RHIStencilOperation::Keep;
+			draw_parameters.stencil.front.pass = draw_parameters.stencil.back.pass = Graphics::RHIStencilOperation::Replace;
+			draw_parameters.stencil.front.comparison = draw_parameters.stencil.back.comparison = Graphics::RHIComparison::Always;
 		}
 
 		//First draw all the solid colored models
@@ -1569,15 +1575,15 @@ void RTS3DScene::flushOccludedObjects(RenderInfoClass & rinfo)
 			rinfo.Pop_Material_Pass();
 		}
 		rinfo.Pop_Override_Flags();
-				TheMeshRenderer.Flush();
+				Graphics::Get_Prop_Submission().Flush_Materials();
 
 		//Now draw the normal models so they cover up the colored models on any pixels that
 
 		//Now draw the normal models so they cover up the colored models on any pixels that
 		//Normal models will clear stencil value from 128 back to 0 where the object pixels are
 		//not occluded but will leave  128 in stencil where still occluded.
-		if (WW3D::Get_Render_Backend()->Has_Stencil())
-			WW3D::Get_Render_Backend()->Set_Stencil_Reference(0);
+		if (Graphics::Get_Attachment_Bindings().Default().depth.Is_Valid())
+			draw_parameters.stencil.reference = 0;
 
 		for (i=0; i<m_occludedObjectsCount; i++)
 		{
@@ -1586,16 +1592,15 @@ void RTS3DScene::flushOccludedObjects(RenderInfoClass & rinfo)
 		}
 
 		//Flush all the submitted translucent objects.
-				TheMeshRenderer.Flush();
+				Graphics::Get_Prop_Submission().Flush_Materials();
 		m_occludedObjectsCount = 0;
-		WW3D::Get_Render_Backend()->Set_Stencil_Enabled(false);
+		draw_parameters.stencil.enabled = false;
 		TheW3DShadowManager->setStencilShadowMask(0x80808080);	//upper MSB always contains flag indicating occluded player color.
 	}
 
 	//Reset scene ambient because we sometimes mess around with it to make objects
 	//glow, etc. when processing drawables.  This is a good place to do it because this
 	//function gets called right after we flush regular render objects.
-	WW3D::Get_Render_Backend()->Set_Ambient(this->Get_Ambient_Light());
 }
 
 void RTS3DScene::flushTranslucentObjects(RenderInfoClass & rinfo)
@@ -1618,8 +1623,8 @@ void RTS3DScene::flushTranslucentObjects(RenderInfoClass & rinfo)
 		}
 
 		//Flush all the submitted translucent objects.
-				TheMeshRenderer.Flush();
-		WW3D::Render_And_Clear_Static_Sort_Lists(rinfo);	//draws things like water
+				Graphics::Get_Prop_Submission().Flush_Materials();
+		Graphics::Get_Scene_Draw_Queue().Drain(&rinfo, [] { Graphics::Get_Prop_Submission().Flush_Materials(); });	//draws things like water
 		rinfo.alphaOverride = 1.0f;	//disable forced alpha
 		m_translucentObjectsCount = 0;
 	}
@@ -1627,7 +1632,6 @@ void RTS3DScene::flushTranslucentObjects(RenderInfoClass & rinfo)
 	//Reset scene ambient because we sometimes mess around with it to make objects
 	//glow, etc. when processing drawables.  This is a good place to do it because this
 	//function gets called right after we flush regular render objects.
-	WW3D::Get_Render_Backend()->Set_Ambient(this->Get_Ambient_Light());
 }
 
 //=============================================================================
@@ -1635,9 +1639,9 @@ void RTS3DScene::flushTranslucentObjects(RenderInfoClass & rinfo)
 //=============================================================================
 /** Returns an iterator of the lights in the scene. */
 //=============================================================================
-RefRenderObjListIterator * RTS3DScene::createLightsIterator()
+Graphics::SceneObjectList<RenderObjClass>::Cursor * RTS3DScene::createLightsIterator()
 {
-	RefRenderObjListIterator * it = NEW RefRenderObjListIterator(&LightList);	// poolify
+	Graphics::SceneObjectList<RenderObjClass>::Cursor * it = NEW Graphics::SceneObjectList<RenderObjClass>::Cursor(&LightList);	// poolify
 	return it;
 }
 
@@ -1647,7 +1651,7 @@ RefRenderObjListIterator * RTS3DScene::createLightsIterator()
 //=============================================================================
 /** Destroys the iterator returned by createLightsIterator. */
 //=============================================================================
-void RTS3DScene::destroyLightsIterator(RefRenderObjListIterator * it)
+void RTS3DScene::destroyLightsIterator(Graphics::SceneObjectList<RenderObjClass>::Cursor * it)
 {
 	delete it;
 }
@@ -1671,7 +1675,7 @@ void RTS3DScene::addDynamicLight(W3DDynamicLight * obj)
 //=============================================================================
 W3DDynamicLight * RTS3DScene::getADynamicLight()
 {
-	RefRenderObjListIterator dynaLightIt(&m_dynamicLightList);
+	Graphics::SceneObjectList<RenderObjClass>::Cursor dynaLightIt(&m_dynamicLightList);
 	W3DDynamicLight *pLight;
 	for (dynaLightIt.First(); !dynaLightIt.Is_Done(); dynaLightIt.Next())
 	{
@@ -1823,21 +1827,21 @@ void RTS3DInterfaceScene::Customized_Render( RenderInfoClass &rinfo )
 {
     if (!Visibility_Checked) Visibility_Check(&rinfo.Camera);
     Visibility_Checked=false;
-    RefRenderObjListIterator it(&UpdateList);
+    Graphics::SceneObjectList<RenderObjClass>::Cursor it(&UpdateList);
     for (it.First(); !it.Is_Done(); it.Next()) it.Peek_Obj()->On_Frame_Update();
-    LightEnvironmentClass environment;
-    environment.Reset(Vector3(0,0,0),AmbientLight);
+    Graphics::LocalLighting environment;
+    environment.Reset({0,0,0}, {(AmbientLight).X,(AmbientLight).Y,(AmbientLight).Z});
     for (it.First(&LightList); !it.Is_Done(); it.Next())
-        environment.Add_Light(*static_cast<LightClass*>(it.Peek_Obj()));
-    environment.Pre_Render_Update(rinfo.Camera.Get_Transform());
+        environment.Add(Describe_Material_Light(*static_cast<LightClass*>(it.Peek_Obj())));
+    environment.Finalize();
     Graphics::PropLighting lighting;
-    const auto& ambient=environment.Get_Equivalent_Ambient();
-    lighting.ambient={ambient.X,ambient.Y,ambient.Z};
-    for (int i=0;i<environment.Get_Light_Count() && i<4;++i) {
-        const auto& direction=environment.Get_Light_Direction(i);
-        const auto& diffuse=environment.Get_Light_Diffuse(i);
-        lighting.lights[i].direction={direction.X,direction.Y,direction.Z};
-        lighting.lights[i].diffuse={diffuse.X,diffuse.Y,diffuse.Z};
+    const auto& ambient=environment.ambient;
+    lighting.ambient=ambient;
+    for (int i=0;i<environment.count && i<4;++i) {
+        const auto& direction=environment.lights[i].direction;
+        const auto& diffuse=environment.lights[i].diffuse;
+        lighting.lights[i].direction=direction;
+        lighting.lights[i].diffuse=diffuse;
     }
     for (it.First(&RenderList); !it.Is_Done(); it.Next()) {
         RenderObjClass* object=it.Peek_Obj();
@@ -1863,7 +1867,7 @@ void RTS3DScene::Visibility_Check(CameraClass * camera)
 	StDrawableDirtyStuffLocker lockDirtyStuff;
 #endif
 
-	RefRenderObjListIterator it(&RenderList);
+	Graphics::SceneObjectList<RenderObjClass>::Cursor it(&RenderList);
 	DrawableInfo *drawInfo = nullptr;
 	Drawable	*draw = nullptr;
 	RenderObjClass * robj;

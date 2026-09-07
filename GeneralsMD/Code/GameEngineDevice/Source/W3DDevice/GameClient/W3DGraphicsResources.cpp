@@ -1,41 +1,26 @@
-#include <unordered_map>
 #include "W3DDevice/GameClient/W3DGraphicsResources.h"
 #include "WW3D2/Texture.h"
 #include "WW3D2/Camera.h"
-#include "WW3D2/WW3D.h"
 #include "W3DDevice/GameClient/W3DShroud.h"
-import Graphics.Backends.DX11.Coexistence;
+import Graphics.Backends.DX11.FrameRuntime;
+import Graphics.Resources.Textures.References;
 
 namespace
 {
-Graphics::Device *texture_device = nullptr;
-std::unordered_map<void *, Graphics::RHITextureHandle> imported_textures;
+Graphics::TextureReferences texture_references;
 }
 
 Graphics::RHITextureHandle Resolve_Graphics_Texture(TextureBaseClass *texture)
 {
-    auto *device = Graphics::Shared_Frame_Device();
-    auto *backend = WW3D::Get_Render_Backend();
-    if (device == nullptr || backend == nullptr || texture == nullptr
-        || !texture->Ensure_Render_Backend_Texture() || texture->Is_Missing_Texture()) return {};
-    if (texture_device != nullptr && texture_device != device) return {};
-    texture_device = device;
-    void *resource = nullptr;
-    void *view = nullptr;
-    if (!backend->Get_Shared_Texture_Resources(texture->Peek_Render_Backend_Texture(), resource, view)) return {};
-    const auto found = imported_textures.find(resource);
-    if (found != imported_textures.end()) return found->second;
-    const auto handle = Graphics::Import_Shared_Texture(resource, view);
-    if (handle.Is_Valid()) imported_textures.emplace(resource, handle);
-    return handle;
+    auto* device = Graphics::Shared_Frame_Device();
+    if (device == nullptr || texture == nullptr || !texture->Ensure_Render_Backend_Texture()
+        || texture->Is_Missing_Texture()) return {};
+    return texture_references.Retain(*device, texture->Peek_Graphics_Texture());
 }
 
 void Release_Graphics_Textures() noexcept
 {
-    if (texture_device != nullptr)
-        for (const auto &entry : imported_textures) texture_device->Destroy_Texture(entry.second);
-    imported_textures.clear();
-    texture_device = nullptr;
+    texture_references.Clear();
 }
 
 Graphics::SurfaceParameters Make_Surface_Parameters(CameraClass &camera)

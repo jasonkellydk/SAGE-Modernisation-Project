@@ -52,8 +52,6 @@
 #include "VertMaterial.h"
 #include "Shader.h"
 #include "Texture.h"
-#include "Statistics.h"
-#include "Backend/RenderBackend.h"
 
 
 bool MaterialPassClass::EnablePerPolygonCulling = true;

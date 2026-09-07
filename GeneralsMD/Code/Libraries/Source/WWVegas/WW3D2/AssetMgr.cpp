@@ -48,25 +48,17 @@
  *   WW3DAssetManager::Render_Obj_Exists -- Check whether a render object with the given name  *
  *   WW3DAssetManager::Create_Render_Obj_Iterator -- Create an iterator which can enumerate al *
  *   WW3DAssetManager::Release_Render_Obj_Iterator -- release a render object iterator         *
- *   WW3DAssetManager::Create_HAnim_Iterator -- Creates an HAnim Iterator                      *
- *   WW3DAssetManager::Create_HTree_Iterator -- creates an htree iterator                      *
  *   WW3DAssetManager::Create_Material_Iterator -- Create a material iterator                  *
- *   WW3DAssetManager::Create_Font3DData_Iterator -- Create a Font3DData iterator              *
- *   WW3DAssetManager::Get_HAnim -- Returns a pointer to a names HAnim                         *
- *   WW3DAssetManager::Get_HTree -- Returns a pointer to the named HTree                       *
+ *   WW3DAssetManager::Acquire_Animation -- Returns a pointer to a names HAnim                         *
  *   WW3DAssetManager::Get_Material -- Gets a pointer to a loaded material or creates it       *
  *   WW3DAssetManager::Get_Material -- Gets a pointer to a loaded material or creates the mate *
  *   WW3DAssetManager::Get_Material -- Gets a pointer to a loaded material or creates it       *
- *   WW3DAssetManager::Get_Font3DInstance -- Creates a pointer to a Font3DInstance             *
- *   WW3DAssetManager::Get_Font3DData -- Gets a pointer to a loaded Font3DData or creates it   *
  *   WW3DAssetManager::Release_Material -- Release a material                                  *
- *   WW3DAssetManager::Release_Font3DData -- Release a Font3DData	                             *
  *   WW3DAssetManager::Add_Material -- Add a material to the list                              *
- *   WW3DAssetManager::Add_Font3DData -- Add a Font3DData to the list                          *
  *   WW3DAssetManager::Get_Texture -- get a TextureClass for the specified targa               *
  *   WW3DAssetManager::Release_All_Textures -- release all textures in the system              *
- *   WW3DAssetManager::Register_Prototype_Loader -- add a new loader to the system             *
- *   WW3DAssetManager::Find_Prototype_Loader -- find the loader that handles this chunk type   *
+ *   WW3DAssetManager::Register_Model_Decoder -- add a new loader to the system             *
+ *   WW3DAssetManager::Model decoder lookup -- find the loader that handles this chunk type   *
  *   WW3DAssetManager::Add_Prototype -- adds the prototype to the hash table                   *
  *   WW3DAssetManager::Find_Prototype -- searches the hash table for the prototype             *
  *   WW3DAssetManager::Open_Texture_File_Cache -- Turn on the texture cache system.            *
@@ -77,6 +69,8 @@
  *   WW3DAssetManager::Get_Streaming_Texture -- Gets a streaming texture.                      *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
+#include <map>
+import Assets.Images.PixelEncoding;
 #include "AssetMgr.h"
 #include <assert.h>
 
@@ -86,50 +80,33 @@
 
 #include "WWDebug/wwdebug.h"
 
-#include "HTreeMgr.h"
-#include "HAnimMgr.h"
+#include <cstddef>
+#include <utility>
+#include <vector>
 #include "Texture.h"
-#include "Font3D.h"
-#include "Render2DSentence.h"		// for FontCharsClass
-#include "Proto.h"
-#include "HAnim.h"
-#include "HCAnim.h"
-#include "HTree.h"
+import Assets.Adapters.W3D.Rig;
 #include "Collect.h"
 #include "WW3D.h"
 #include "WWLib/ffactory.h"
-#include "BoxRObj.h"
-#include "NullRObj.h"
-#include "DistLod.h"
 #include "HLOD.h"
-#include "AggDef.h"
+#include "Mesh.h"
 #include "WWLib/wwstring.h"
+#include "WWLib/RAWFILE.h"
 #include "WWDebug/wwmemlog.h"
 #include "Dazzle.h"
-#include "WW3D2/Backend/RenderBackend.h"
-#include "MetalMap.h"
-#include "W3DExclusionList.h"
-#include <WWLib/INI.h>
+import Assets.Adapters.W3D.Retention;
 #include "WWDebug/wwprofile.h"
-#include "AssetStatus.h"
-#include "RingObj.h"
-#include "SphereObj.h"
 #include "WW3D2/StringUtilities.h"
 
 #include <string>
 
 #include "ShdLib.h"
+import Assets.Cache.Animations;
 
 /*
 ** Static member variable which keeps track of the single instanced asset manager
 */
 WW3DAssetManager *		WW3DAssetManager::TheInstance = nullptr;
-
-/*
-** Static instance of the Null prototype.  This render object is special cased
-** to always be available...
-*/
-static NullPrototypeClass _NullPrototype;
 
 /*
 ** Iterator for the Render Objects in the asset manager
@@ -145,50 +122,6 @@ protected:
 };
 
 
-/*
-** Iterators for the other types of 3D assets:
-** HAnims, HTrees, Textures, Fonts
-*/
-class HAnimIterator : public AssetIterator
-{
-public:
-	HAnimIterator() : Iterator( WW3DAssetManager::Get_Instance()->HAnimManager ) { };
-
-	virtual void			First() override { Iterator.First(); }
-	virtual void			Next() override	{ Iterator.Next(); }
-	virtual bool			Is_Done() override { return Iterator.Is_Done(); }
-	virtual const char *	Current_Item_Name() override { return Iterator.Get_Current_Anim()->Get_Name(); }
-
-protected:
-	HAnimManagerIterator	Iterator;
-	friend class WW3DAssetManager;
-};
-
-class HTreeIterator : public AssetIterator
-{
-public:
-	virtual bool					Is_Done() override;
-	virtual const char *			Current_Item_Name() override;
-protected:
-	friend class WW3DAssetManager;
-};
-
-class Font3DDataIterator : public AssetIterator
-{
-public:
-
-	virtual void					First() override { Node = WW3DAssetManager::Get_Instance()->Font3DDatas.Head(); }
-	virtual void					Next() override	{ Node = Node->Next(); }
-	virtual bool					Is_Done() override { return Node==nullptr; }
-	virtual const char *			Current_Item_Name() override { return Node->Data()->Name; }
-
-protected:
-
-	Font3DDataIterator()	{ Node = WW3DAssetManager::Get_Instance()->Font3DDatas.Head(); }
-	SLNode<Font3DDataClass> *		Node;
-	friend class WW3DAssetManager;
-};
-
 /***********************************************************************************************
  * WW3DAssetManager::WW3DAssetManager -- Constructor                                           *
  *                                                                                             *
@@ -203,41 +136,28 @@ protected:
  *   05/10/1999 SKB : Add TextureCache                                                         *
  *=============================================================================================*/
 WW3DAssetManager::WW3DAssetManager() :
-	PrototypeLoaders		(PROTOLOADERS_VECTOR_SIZE),
-	Prototypes				(PROTOTYPES_VECTOR_SIZE),
+
 
 	WW3D_Load_On_Demand		(false),
-	Activate_Fog_On_Load		(false),
-	MetalManager(nullptr)
+	Activate_Fog_On_Load		(false)
 {
 	assert(TheInstance == nullptr);
 	TheInstance = this;
 
-	// set the growth rates
-	PrototypeLoaders.Set_Growth_Step(PROTOLOADERS_GROWTH_RATE);
-	Prototypes.Set_Growth_Step(PROTOTYPES_GROWTH_RATE);
-
 	// install the default loaders
 #ifndef USE_WWSHADE
-	Register_Prototype_Loader(&_MeshLoader);
+	Register_Model_Decoder(W3D_CHUNK_MESH,Load_Mesh_Factory);
 #endif
 
-	Register_Prototype_Loader(&_HModelLoader);
-	Register_Prototype_Loader(&_CollectionLoader);
-	Register_Prototype_Loader(&_BoxLoader);
-	Register_Prototype_Loader(&_HLodLoader);
-	Register_Prototype_Loader(&_DistLODLoader);
-	Register_Prototype_Loader(&_AggregateLoader);
-	Register_Prototype_Loader(&_NullLoader);
-	Register_Prototype_Loader(&_DazzleLoader);
-	Register_Prototype_Loader (&_RingLoader);
-	Register_Prototype_Loader (&_SphereLoader);
+	Register_Model_Decoder(W3D_CHUNK_HMODEL,Load_HModel_Factory);
+	Register_Model_Decoder(W3D_CHUNK_COLLECTION,Load_Collection_Factory);
+	Register_Model_Decoder(W3D_CHUNK_HLOD,Load_HLod_Factory);
+	Register_Model_Decoder(W3D_CHUNK_LODMODEL,Load_ModelLevels_Factory);
+	Register_Model_Decoder(W3D_CHUNK_AGGREGATE,Load_Aggregate_Factory);
+	Register_Model_Decoder(W3D_CHUNK_DAZZLE,Load_Dazzle_Factory);
 
 	SHD_REG_LOADER;
 
-	// allocate the hash table and clear it.
-	PrototypeHashTable = W3DNEWARRAY PrototypeClass * [PROTOTYPE_HASH_TABLE_SIZE];
-	memset(PrototypeHashTable,0,sizeof(PrototypeClass *) * PROTOTYPE_HASH_TABLE_SIZE);
 }
 
 
@@ -255,13 +175,22 @@ WW3DAssetManager::WW3DAssetManager() :
  *=============================================================================================*/
 WW3DAssetManager::~WW3DAssetManager()
 {
-	delete MetalManager;
-
 	Free();
+	Assets::Get_Animation_Cache().Reset_Missing();
+
+#ifdef WWDEBUG
+	if (Report.Reporting_Enabled()) {
+		const std::string report = Report.Format_Report();
+		RawFileClass raw_log_file("asset_report.txt");
+		raw_log_file.Create();
+		raw_log_file.Open(RawFileClass::WRITE);
+		raw_log_file.Write(report.data(), static_cast<int>(report.size()));
+		raw_log_file.Close();
+	}
+#endif
+
 	TheInstance = nullptr;
 
-	delete [] PrototypeHashTable;
-	PrototypeHashTable = nullptr;
 }
 
 static void Create_Number_String(StringClass& number, unsigned value)
@@ -280,24 +209,6 @@ static void Create_Number_String(StringClass& number, unsigned value)
 	}
 }
 
-void	WW3DAssetManager::Load_Procedural_Textures()
-{
-	int i,count;
-	if (!MetalManager)
-	{
-		INIClass ini;
-		ini.Load("metals.ini");
-		MetalManager=W3DNEW MetalMapManagerClass(ini);
-	}
-
-	count=MetalManager->Metal_Map_Count();
-	for (i=0; i<count; i++)
-	{
-		TextureClass *tex=MetalManager->Get_Metal_Map(i);
-		TextureHash.Insert(tex->Get_Texture_Name(),tex);
-	}
-}
-
 static void Log_Textures(bool inited,unsigned& total_count, unsigned& total_mem)
 {
 	HashTemplateIterator<StringClass,TextureClass*> ite(WW3DAssetManager::Get_Instance()->Texture_Hash());
@@ -305,12 +216,12 @@ static void Log_Textures(bool inited,unsigned& total_count, unsigned& total_mem)
 		TextureClass * tex=ite.Peek_Value();
 		if (tex->Is_Initialized()!=inited) continue;
 
-		SurfaceClass::SurfaceDescription desc;
+		Assets::ImageDescription desc;
 		tex->Get_Level_Description(desc);
-		if (desc.Width == 0 || desc.Height == 0) continue;
+		if (desc.width == 0 || desc.height == 0) continue;
 
 		StringClass tex_format;
-		tex_format.Format("WW3D_FORMAT_%d", static_cast<int>(desc.Format));
+		tex_format.Format("Pixel encoding %d", static_cast<int>(desc.encoding));
 
 		unsigned texmem=tex->Get_Texture_Memory_Usage();
 		total_mem+=texmem;
@@ -320,8 +231,8 @@ static void Log_Textures(bool inited,unsigned& total_count, unsigned& total_mem)
 
 		WWDEBUG_SAY(("%32s	%4d * %4d (%15s), init %d, size: %14s bytes, refs: %d",
 			tex->Get_Texture_Name().str(),
-			desc.Width,
-			desc.Height,
+			desc.width,
+			desc.height,
 			tex_format.str(),
 			tex->Is_Initialized(),
 			number.str(),
@@ -407,29 +318,14 @@ void WW3DAssetManager::Free_Assets()
 {
 	WWPROFILE( "WW3DAssetManager::Free_Assets" );
 
-	// delete all of the prototypes
-	int count = Prototypes.Count();
-	while (count-- > 0) {
-
-		PrototypeClass * proto = Prototypes[count];
-		Prototypes.Delete(count);
-
-		if (proto != nullptr) {
-			proto->DeleteSelf();
-		}
-	}
-
-	// clear the prototype hash table
-	memset(PrototypeHashTable,0,sizeof(PrototypeClass *) * PROTOTYPE_HASH_TABLE_SIZE);
+	ModelFactories.Clear();
 
 	// delete all of the anims and trees
-	HAnimManager.Free_All_Anims();
-	HTreeManager.Free_All_Trees();
+	Assets::Get_Animation_Cache().Clear_Named();
+	Skeletons.Clear();
 
 	// release all my references to the materials
 	Release_All_Textures();
-	Release_All_Font3DDatas();
-	Release_All_FontChars();
 
 	// Close down cache if it is open.
 	// NONONONOO.... Don't close it as we might want to free the assets and still be able to load textures.
@@ -454,7 +350,6 @@ void WW3DAssetManager::Release_Unused_Assets()
 	// release all references to objects that have only one reference on them
 	// and remove them from our lists.
 	Release_Unused_Textures();
-	Release_Unused_Font3DDatas();
 }
 
 /***********************************************************************************************
@@ -476,50 +371,25 @@ void WW3DAssetManager::Release_Unused_Assets()
  *=============================================================================================*/
 void WW3DAssetManager::Free_Assets_With_Exclusion_List(const DynamicVectorClass<StringClass> & exclusion_names)
 {
-	WW3D::Get_Render_Backend()->Invalidate_Renderer_Caches();
 
-	// Build an exclusion list object that will do the real filtering work for us
-	W3DExclusionListClass exclusion_list(exclusion_names);
+	// Retention names intentionally preserve spelling and case.
+    std::unordered_set<std::string> retained;
+    retained.reserve(exclusion_names.Count());
+    for(int i=0;i<exclusion_names.Count();++i)retained.emplace(exclusion_names[i].str());
 
-	// temporary vector to hold the prototypes that get excluded from being deleted.
-	// grow by the initial size so we don't waste lots of time re-allocating!
-	const int DEFAULT_EXCLUDE_ARRAY_SIZE = 8000;
-	DynamicVectorClass<PrototypeClass *> exclude_array(DEFAULT_EXCLUDE_ARRAY_SIZE);
-	exclude_array.Set_Growth_Step(DEFAULT_EXCLUDE_ARRAY_SIZE);
-
-	// iterate the array of prototypes saving each one that should be excluded from deletion
-	int i=0;
-	for (; i<Prototypes.Count(); i++) {
-
-		PrototypeClass * proto = Prototypes[i];
-		if (proto != nullptr) {
-
-			// If this prototype is excluded, copy the pointer, otherwise delete it.
-			if (exclusion_list.Is_Excluded(proto)) {
-				//WWDEBUG_SAY(("excluding %s",proto->Get_Name()));
-				exclude_array.Add(proto);
-			} else {
-				//WWDEBUG_SAY(("deleting %s",proto->Get_Name()));
-				proto->DeleteSelf();
-			}
-			Prototypes[i] = nullptr;
-		}
-	}
-
-	// reset the array now that we've gotten rid of everything.
-	Prototypes.Reset_Active();
-
-	// clear the prototype hash table
-	memset(PrototypeHashTable,0,sizeof(PrototypeClass *) * PROTOTYPE_HASH_TABLE_SIZE);
-
-	// re-add the prototypes that we saved
-	for (i=0; i<exclude_array.Count(); i++) {
-		Add_Prototype(exclude_array[i]);
-	}
+    ModelFactories.Erase_If([&](Graphics::ModelFactory<RenderObjClass>& factory) {
+        const auto key=Assets::W3D::W3D_Model_Retention_Key(factory.name.c_str());
+        return !key || !retained.contains(std::string(*key));
+    });
 
 	// delete all of the anims and trees
-	HAnimManager.Free_All_Anims_With_Exclusion_List(exclusion_list);
-	HTreeManager.Free_All_Trees_With_Exclusion_List(exclusion_list);
+	Assets::Get_Animation_Cache().Remove_Unused_If([&](const Assets::AnimationClip& clip) {
+        const auto key=Assets::W3D::W3D_Animation_Retention_Key(clip.name.c_str());
+        return !key || !retained.contains(std::string(*key));
+    });
+	Skeletons.Remove_If([&](const Assets::ModelRigDesc& skeleton) {
+		return !retained.contains(skeleton.skeleton_name);
+	});
 
 	// release references to textures that are not used
 	Release_Unused_Textures();
@@ -546,13 +416,13 @@ void WW3DAssetManager::Free_Assets_With_Exclusion_List(const DynamicVectorClass<
  *=============================================================================================*/
 void WW3DAssetManager::Create_Asset_List(DynamicVectorClass<StringClass> & model_list)
 {
-	for (int i=0; i<Prototypes.Count(); i++) 	{
+	for (int i=0; i<static_cast<int>(ModelFactories.Size()); i++) 	{
 		// ok, we ignore all of the following:
 		// - sub objects, these will have a '.' in their name
 		// - munged objects, these will have # characters in their name
-		PrototypeClass * proto = Prototypes[i];
+		Graphics::ModelFactory<RenderObjClass> * proto = ModelFactories.At(i);
 		if (proto) {
-			const char * name = proto->Get_Name();
+			const char * name = proto->name.c_str();
 
 			if ((strchr(name,'#') == nullptr) && (strchr(name,'.') == nullptr)) {
 				model_list.Add(StringClass(name));
@@ -561,7 +431,10 @@ void WW3DAssetManager::Create_Asset_List(DynamicVectorClass<StringClass> & model
 	}
 
 	// Add in the w3d files for all of the animations
-	HAnimManager.Create_Asset_List(model_list);
+	Assets::Get_Animation_Cache().Visit_Named([&](const Assets::AnimationClip& clip) {
+        const auto separator=clip.name.find('.');
+        if(separator!=std::string::npos)model_list.Add(StringClass(clip.name.c_str()+separator+1));
+    });
 }
 
 
@@ -621,13 +494,13 @@ bool WW3DAssetManager::Load_3D_Assets(FileClass & w3dfile)
 		switch (cload.Cur_Chunk_ID()) {
 
 			case W3D_CHUNK_HIERARCHY:
-				HTreeManager.Load_Tree(cload);
+				Load_Skeleton(cload);
 				break;
 
 			case W3D_CHUNK_ANIMATION:
 			case W3D_CHUNK_COMPRESSED_ANIMATION:
 			case W3D_CHUNK_MORPH_ANIMATION:
-				HAnimManager.Load_Anim(cload);
+				Load_Animation_Chunk(cload);
 				break;
 
 			default:
@@ -671,16 +544,16 @@ bool WW3DAssetManager::Load_Prototype(ChunkLoadClass & cload)
 	/*
 	** Find a loader that handles that type of chunk
 	*/
-	PrototypeLoaderClass * loader = Find_Prototype_Loader(chunk_id);
-	PrototypeClass * newproto = nullptr;
+	const auto loader = ModelDecoders.find(chunk_id);
+	Graphics::ModelFactory<RenderObjClass> * newproto = nullptr;
 
-	if (loader != nullptr) {
+	if (loader != ModelDecoders.end()) {
 
 		/*
 		** Ask it to create a prototype from the contents of the
 		** chunk.
 		*/
-		newproto = loader->Load_W3D(cload);
+		newproto = loader->second(cload);
 
 	} else {
 
@@ -697,7 +570,7 @@ bool WW3DAssetManager::Load_Prototype(ChunkLoadClass & cload)
 	*/
 	if (newproto != nullptr) {
 
-		if (!Render_Obj_Exists(newproto->Get_Name())) {
+		if (!Render_Obj_Exists(newproto->name.c_str())) {
 
 			/*
 			** Add the new, unique prototype to our list
@@ -710,8 +583,8 @@ bool WW3DAssetManager::Load_Prototype(ChunkLoadClass & cload)
 			** Warn the user about a name collision with this prototype
 			** and dump it
 			*/
-			WWDEBUG_SAY(("Render Object Name Collision: %s",newproto->Get_Name()));
-			newproto->DeleteSelf();
+			WWDEBUG_SAY(("Render Object Name Collision: %s",newproto->name.c_str()));
+			delete newproto;
 			newproto = nullptr;
 			return false;
 		}
@@ -751,10 +624,10 @@ RenderObjClass * WW3DAssetManager::Create_Render_Obj(const char * name)
 	WWMEMLOG(MEM_GEOMETRY);
 
 	// Try to find a prototype
-	PrototypeClass * proto = Find_Prototype(name);
+	Graphics::ModelFactory<RenderObjClass> * proto = Find_Prototype(name);
 
 	if (WW3D_Load_On_Demand && proto == nullptr) {	// If we didn't find one, try to load on demand
-		AssetStatusClass::Peek_Instance()->Report_Load_On_Demand_RObj(name);
+		Report.Record_Load_On_Demand(Assets::AssetReportCategory::Model, name);
 
 		std::string filename;
 		const char *mesh_name = ::strchr (name, '.');
@@ -783,12 +656,12 @@ RenderObjClass * WW3DAssetManager::Create_Render_Obj(const char * name)
 			if (++warning_count <= 20) {
 				WWDEBUG_SAY(("WARNING: Failed to create Render Object: %s",name));
 			}
-			AssetStatusClass::Peek_Instance()->Report_Missing_RObj(name);
+			Report.Record_Missing(Assets::AssetReportCategory::Model, name);
 		}
 		return nullptr;		// Failed to find a prototype
 	}
 
-	return proto->Create();
+	return proto->Instantiate();
 }
 
 
@@ -852,67 +725,7 @@ void WW3DAssetManager::Release_Render_Obj_Iterator(RenderObjIterator * it)
 }
 
 /***********************************************************************************************
- * WW3DAssetManager::Create_HAnim_Iterator -- Creates an HAnim Iterator                        *
- *                                                                                             *
- *    Creates an iterator which can enumerate each of the named hierarchical animations        *
- *    which are currently loaded.                                                              *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *    User must delete the iterator!                                                           *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   12/21/97   GTH : Created.                                                                 *
- *=============================================================================================*/
-AssetIterator * WW3DAssetManager::Create_HAnim_Iterator()
-{
-	return W3DNEW HAnimIterator();
-}
-
-
-/***********************************************************************************************
- * WW3DAssetManager::Create_HTree_Iterator -- creates an htree iterator                        *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   3/11/98    GTH : Created.                                                                 *
- *=============================================================================================*/
-AssetIterator * WW3DAssetManager::Create_HTree_Iterator()
-{
-	return W3DNEW HTreeIterator();
-}
-
-
-/***********************************************************************************************
- * WW3DAssetManager::Create_Font3DData_Iterator -- Create a Font3DData iterator                *
- *                                                                                             *
- *   Creates an iterator which can enumerate each of the Font3DDatas currently loaded          *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *    User must delete the iterator!                                                           *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   1/6/98     GTH : Created.                                                                 *
- *=============================================================================================*/
-AssetIterator * WW3DAssetManager::Create_Font3DData_Iterator()
-{
-	return W3DNEW Font3DDataIterator();
-}
-
-/***********************************************************************************************
- * WW3DAssetManager::Get_HAnim -- Returns a pointer to a names HAnim                           *
+ * WW3DAssetManager::Acquire_Animation -- Returns a pointer to a names HAnim                           *
  *                                                                                             *
  * INPUT:                                                                                      *
  *                                                                                             *
@@ -925,18 +738,18 @@ AssetIterator * WW3DAssetManager::Create_Font3DData_Iterator()
  * HISTORY:                                                                                    *
  *   12/21/97   GTH : Created.                                                                 *
  *=============================================================================================*/
-HAnimClass *	WW3DAssetManager::Get_HAnim(const char * name)
+Assets::AnimationAssetHandle WW3DAssetManager::Acquire_Animation(const char * name)
 {
-	WWPROFILE( "WW3DAssetManager::Get_HAnim" );
+	WWPROFILE( "WW3DAssetManager::Acquire_Animation" );
 
 	// Try to find the hanim
-	HAnimClass * anim = HAnimManager.Get_Anim(name);
+	Assets::AnimationAssetHandle anim = Assets::Get_Animation_Cache().Acquire(name);
 
 	if (WW3D_Load_On_Demand && anim == nullptr) {	// If we didn't find it, try to load on demand
 
-		if ( !HAnimManager.Is_Missing( name ) ) {	// if this is NOT a known missing anim
+		if ( !Assets::Get_Animation_Cache().Is_Missing( name ) ) {	// if this is NOT a known missing anim
 
-			AssetStatusClass::Peek_Instance()->Report_Load_On_Demand_HAnim(name);
+			Report.Record_Load_On_Demand(Assets::AssetReportCategory::Animation, name);
 
 			std::string filename;
 			const char *animname = strchr( name, '.');
@@ -955,10 +768,10 @@ HAnimClass *	WW3DAssetManager::Get_HAnim(const char * name)
 				Load_3D_Assets( new_filename );
 			}
 
-			anim = HAnimManager.Get_Anim(name);		// Try again
+			anim = Assets::Get_Animation_Cache().Acquire(name);		// Try again
 			if (anim == nullptr) {
-				HAnimManager.Register_Missing( name );		// This is now a KNOWN missing anim
-				AssetStatusClass::Peek_Instance()->Report_Missing_HAnim(name);
+				Assets::Get_Animation_Cache().Register_Missing( name );		// This is now a KNOWN missing anim
+				Report.Record_Missing(Assets::AssetReportCategory::Animation, name);
 			}
 		}
 	}
@@ -968,28 +781,39 @@ HAnimClass *	WW3DAssetManager::Get_HAnim(const char * name)
 
 
 /***********************************************************************************************
- * WW3DAssetManager::Get_HTree -- Returns a pointer to the named HTree                         *
  *                                                                                             *
  * INPUT:                                                                                      *
  *                                                                                             *
  * OUTPUT:                                                                                     *
  *                                                                                             *
  * WARNINGS:                                                                                   *
- *    DO NOT DELETE the HTree you get from this function, it is "owned" by the asset manager.  *
  *                                                                                             *
  * HISTORY:                                                                                    *
  *   12/21/97   GTH : Created.                                                                 *
  *=============================================================================================*/
-HTreeClass *	WW3DAssetManager::Get_HTree(const char * name)
+bool WW3DAssetManager::Load_Skeleton(ChunkLoadClass & cload)
 {
-	WWPROFILE( "WW3DAssetManager::Get_HTree" );
+	const auto length = cload.Cur_Chunk_Length();
+	std::vector<std::byte> bytes(length);
+	Assets::ModelRigDesc skeleton;
+	std::string error;
+	if (cload.Read(bytes.data(), length) != length ||
+		!Assets::W3D::W3DRead_Hierarchy(bytes, skeleton, error)) {
+		return false;
+	}
+	return Skeletons.Publish(std::move(skeleton), error).Is_Valid();
+}
 
-	// Try to find the htree
-	HTreeClass * htree = HTreeManager.Get_Tree(name);
+Assets::SkeletonAssetHandle WW3DAssetManager::Get_Skeleton(const char * name)
+{
+	WWPROFILE( "WW3DAssetManager::Get_Skeleton" );
 
-	if (WW3D_Load_On_Demand && htree == nullptr) {	// If we didn't find it, try to load on demand
+	// Resolve a prepared skeleton, loading its source when requested.
+	auto skeleton = Skeletons.Find(name);
 
-		AssetStatusClass::Peek_Instance()->Report_Load_On_Demand_HTree(name);
+	if (WW3D_Load_On_Demand && !skeleton.Is_Valid()) {	// If we didn't find it, try to load on demand
+
+		Report.Record_Load_On_Demand(Assets::AssetReportCategory::Skeleton, name);
 
 		std::string filename = name;
 		filename += ".w3d";
@@ -1001,14 +825,14 @@ HTreeClass *	WW3DAssetManager::Get_HTree(const char * name)
 			Load_3D_Assets( new_filename );
 		}
 
-		htree = HTreeManager.Get_Tree(name);	// Try again
+		skeleton = Skeletons.Find(name);	// Try again
 
-		if (htree == nullptr) {
-			AssetStatusClass::Peek_Instance()->Report_Missing_HTree(name);
+		if (!skeleton.Is_Valid()) {
+			Report.Record_Missing(Assets::AssetReportCategory::Skeleton, name);
 		}
 	}
 
-	return htree;
+	return skeleton;
 }
 
 /***********************************************************************************************
@@ -1027,7 +851,7 @@ TextureClass * WW3DAssetManager::Get_Texture
 (
 	const char * filename,
 	MipCountType mip_level_count,
-	WW3DFormat texture_format,
+	Assets::PixelEncoding texture_format,
 	bool allow_compression,
 	TextureBaseClass::TexAssetType type,
 	bool allow_reduction
@@ -1038,7 +862,7 @@ TextureClass * WW3DAssetManager::Get_Texture
 	/*
 	** We cannot currently mip-map bumpmaps
 	*/
-	if (texture_format==WW3D_FORMAT_U8V8)
+	if (texture_format==Assets::PixelEncoding::RG8_SNorm)
 	{
 		mip_level_count=MIP_LEVELS_1;
 	}
@@ -1058,7 +882,7 @@ TextureClass * WW3DAssetManager::Get_Texture
 	** See if the texture has already been loaded.
 	*/
 	TextureClass* tex = TextureHash.Get(lower_case_name);
-	if (tex && (tex->Is_Initialized() == true) && (texture_format!=WW3D_FORMAT_UNKNOWN))
+	if (tex && (tex->Is_Initialized() == true) && (texture_format!=Assets::PixelEncoding::Unknown))
 	{
 		WWASSERT_PRINT(tex->Get_Texture_Format()==texture_format,("Texture %s has already been loaded with different format",filename));
 	}
@@ -1273,193 +1097,7 @@ void WW3DAssetManager::Log_All_Textures()
 
 
 /***********************************************************************************************
- * WW3DAssetManager::Get_Font3DInstance -- Creates a pointer to a Font3DInstance					  *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   1/6/98     GTH : Created.                                                                 *
- *=============================================================================================*/
-Font3DInstanceClass * WW3DAssetManager::Get_Font3DInstance( const char *name )
-{
-	WWPROFILE( "WW3DAssetManager::Get_Font3DInstance" );
-	return NEW_REF( Font3DInstanceClass, ( name ));
-}
-
-
-/***********************************************************************************************
- * WW3DAssetManager::Get_Font3DData -- Gets a pointer to a loaded Font3DData or creates it     *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   1/6/98     GTH : Created.                                                                 *
- *=============================================================================================*/
-Font3DDataClass * WW3DAssetManager::Get_Font3DData( const char *name )
-{
-	WWPROFILE( "WW3DAssetManager::Get_Font3DData" );
-	// loop through and see if the Font3D we are looking for has already been
-	// allocated and thus we can just return it.
-	for (	SLNode<Font3DDataClass> *node = Font3DDatas.Head(); node; node = node->Next()) {
-		if (WW3DString::Compare_No_Case(name, node->Data()->Name) == 0) {
-			node->Data()->Add_Ref();
-			return node->Data();
-		}
-	}
-
-	// if one hasn't been found and a font name has been specified then create it
-	Font3DDataClass * font = NEW_REF( Font3DDataClass, ( name ));
-
-	// add it to the asset manager
-	Add_Font3DData( font);
-
-	// return it
-	return font;
-}
-
-/***********************************************************************************************
- * WW3DAssetManager::Add_Font3DData -- Add a Font3DData to the list                            *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   1/6/98     GTH : Created.                                                                 *
- *=============================================================================================*/
-void WW3DAssetManager::Add_Font3DData(Font3DDataClass * font)
-{
-	font->Add_Ref();
-	Font3DDatas.Add_Head(font);
-}
-
-void WW3DAssetManager::Remove_Font3DData(Font3DDataClass * font)
-{
-	font->Release_Ref();
-	Font3DDatas.Remove(font);
-}
-
-/***********************************************************************************************
- * WW3DAssetManager::Release_All_Font3DDatas -- Release all Font3DDatas from the asset manager *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   1/6/98     GTH : Created.                                                                 *
- *=============================================================================================*/
-void	WW3DAssetManager::Release_All_Font3DDatas()
-{
-	// for each mat in the list, get it and release ref it
-	Font3DDataClass *head;
-	while ((head = Font3DDatas.Remove_Head()) != nullptr )	{
-		head->Release_Ref();
-	}
-}
-
-/***********************************************************************************************
- * WW3DAssetManager::Release_Unused_Font3DDatas -- Release all Font3DDatas with refcount == 1  *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   1/6/98     GTH : Created.                                                                 *
- *=============================================================================================*/
-void	WW3DAssetManager::Release_Unused_Font3DDatas()
-{
-	/*
-	** for each font data in the list, get it, check it's refcount, and and release ref it if the
-	** refcount is one.
-	*/
-	SLNode<Font3DDataClass> *node, * next;
-	for (	node = Font3DDatas.Head(); node; node = next) {
-		next = node->Next();
-		Font3DDataClass *font = node->Data();
-		if (font->Num_Refs() == 1) {
-			Font3DDatas.Remove(font);
-			font->Release_Ref();
-		}
-	}
-}
-
-/***********************************************************************************************
- * WW3DAssetManager::Get_FontChars -- Gets a pointer to a loaded FontChars or creates it       *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   6/1/01     BMG : Created.                                                                 *
- *=============================================================================================*/
-FontCharsClass *	WW3DAssetManager::Get_FontChars( const char * name, int point_size, bool is_bold )
-{
-	WWPROFILE( "WW3DAssetManager::Get_FontChars" );
-
-	// loop through and see if we already have the font chars and we can just return it.
-	for ( int i = 0; i < FontCharsList.Count(); i++ ) {
-		if ( FontCharsList[i]->Is_Font( name, point_size, is_bold ) ) {
-			FontCharsList[i]->Add_Ref();
-			return FontCharsList[i];
-		}
-	}
-
-	// If one hasn't been found, try create it
-	FontCharsClass * font = NEW_REF( FontCharsClass, () );
-	if (font->Initialize_Font( name, point_size, is_bold ))
-	{
-		font->Add_Ref();
-		FontCharsList.Add( font );
-		return font;
-	}
-
-	font->Release_Ref();
-	return nullptr;
-}
-
-
-/***********************************************************************************************
- * WW3DAssetManager::Release_All_FontChars -- Release all FontChars from the asset manager     *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   6/1/01     BMG : Created.                                                                 *
- *=============================================================================================*/
-void	WW3DAssetManager::Release_All_FontChars()
-{
-	// for each fontchars in the list, get it and release ref it
-	while ( FontCharsList.Count() ) {
-		FontCharsList[0]->Release_Ref();
-		FontCharsList.Delete( 0 );
-	}
-}
-
-/***********************************************************************************************
- * WW3DAssetManager::Register_Prototype_Loader -- add a new loader to the system               *
+ * WW3DAssetManager::Register_Model_Decoder -- add a new loader to the system               *
  *                                                                                             *
  *    The library will automatically install loaders for the "built-in" render object          *
  *    types.  This function exists so that the user can design App-specific render objects,    *
@@ -1476,15 +1114,24 @@ void	WW3DAssetManager::Release_All_FontChars()
  * HISTORY:                                                                                    *
  *   7/28/98    GTH : Created.                                                                 *
  *=============================================================================================*/
-void WW3DAssetManager::Register_Prototype_Loader(PrototypeLoaderClass * loader)
+void WW3DAssetManager::Register_Model_Decoder(int chunk_id,ModelDecoder decode)
 {
-	WWASSERT(loader != nullptr);
-	PrototypeLoaders.Add(loader);
+    WWASSERT(decode);
+    if(decode)ModelDecoders.try_emplace(chunk_id,decode);
+}
+
+bool WW3DAssetManager::Install_Reserved_Model_Factory(
+	std::unique_ptr<Graphics::ModelFactory<RenderObjClass>> factory)
+{
+	if (!factory || ReservedModelFactory)
+		return false;
+	ReservedModelFactory = std::move(factory);
+	return true;
 }
 
 
 /***********************************************************************************************
- * WW3DAssetManager::Find_Prototype_Loader -- find the loader that handles this chunk type     *
+ * WW3DAssetManager::Model decoder lookup -- find the loader that handles this chunk type     *
  *                                                                                             *
  * INPUT:                                                                                      *
  * chunk_id - chunk type that the loader needs to handle                                       *
@@ -1497,16 +1144,7 @@ void WW3DAssetManager::Register_Prototype_Loader(PrototypeLoaderClass * loader)
  * HISTORY:                                                                                    *
  *   7/28/98    GTH : Created.                                                                 *
  *=============================================================================================*/
-PrototypeLoaderClass * WW3DAssetManager::Find_Prototype_Loader(int chunk_id)
-{
-	for (int i=0; i<PrototypeLoaders.Count(); i++) {
-		PrototypeLoaderClass * loader = PrototypeLoaders[i];
-		if (loader && loader->Chunk_Type() == chunk_id) {
-			return loader;
-		}
-	}
-	return nullptr;
-}
+
 
 
 /***********************************************************************************************
@@ -1523,13 +1161,10 @@ PrototypeLoaderClass * WW3DAssetManager::Find_Prototype_Loader(int chunk_id)
  *   12/8/98    GTH : Renamed to simply Add_Prototype                                          *
  *   2/19/99    EHC : Now adds the prototype to the prototype list                             *
  *=============================================================================================*/
-void WW3DAssetManager::Add_Prototype(PrototypeClass * newproto)
+void WW3DAssetManager::Add_Prototype(Graphics::ModelFactory<RenderObjClass> * newproto)
 {
-	WWASSERT(newproto != nullptr);
-	int hash = CRC_Stringi(newproto->Get_Name()) & PROTOTYPE_HASH_MASK;
-	newproto->friend_setNextHash(PrototypeHashTable[hash]);
-	PrototypeHashTable[hash] = newproto;
-	Prototypes.Add(newproto);
+    WWASSERT(newproto != nullptr);
+    if(newproto)ModelFactories.Insert(newproto->name.c_str(),decltype(ModelFactories)::Owner(newproto));
 }
 
 
@@ -1545,43 +1180,12 @@ void WW3DAssetManager::Add_Prototype(PrototypeClass * newproto)
  * HISTORY:                                                                                    *
  *   02/4/99	 PDS : Created.                                                                 *
  *=============================================================================================*/
-void WW3DAssetManager::Remove_Prototype(PrototypeClass *proto)
+void WW3DAssetManager::Remove_Prototype(Graphics::ModelFactory<RenderObjClass> *proto)
 {
-	WWASSERT(proto != nullptr);
-	if (proto != nullptr) {
-
-		//
-		// Find the prototype in the hash table.
-		//
-		const char *pname = proto->Get_Name ();
-		bool bfound = false;
-		PrototypeClass *prev = nullptr;
-		int hash = CRC_Stringi(pname) & PROTOTYPE_HASH_MASK;
-		for (PrototypeClass *test = PrototypeHashTable[hash];
-			  (test != nullptr) && (bfound == false);
-			  test = test->friend_getNextHash()) {
-
-			// Is this the prototype?
-			if (WW3DString::Compare_No_Case (test->Get_Name(), pname) == 0) {
-
-				// Remove this prototype from the linked list for this hash index.
-				if (prev == nullptr) {
-					PrototypeHashTable[hash] = test->friend_getNextHash();
-				} else {
-					prev->friend_setNextHash(test->friend_getNextHash());
-				}
-
-				// Success!
-				bfound = true;
-			}
-
-			// Remember who our previous entry is
-			prev = test;
-		}
-
-		// Now remove this from our vector-array of prototypes
-		Prototypes.Delete (proto);
-	}
+	if (proto == nullptr || proto == ReservedModelFactory.get())
+		return;
+    // This overload transfers ownership back to its caller.
+    ModelFactories.Release(proto).release();
 }
 
 
@@ -1601,14 +1205,17 @@ void WW3DAssetManager::Remove_Prototype(const char *name)
 {
 	WWASSERT(name != nullptr);
 	if (name != nullptr) {
+		if (ReservedModelFactory != nullptr &&
+			WW3DString::Compare_No_Case(name, ReservedModelFactory->name.c_str()) == 0)
+			return;
 
 		// Lookup the prototype by name
-		PrototypeClass *proto = Find_Prototype (name);
+		Graphics::ModelFactory<RenderObjClass> *proto = Find_Prototype (name);
 		if (proto != nullptr) {
 
 			// Remove the prototype from our lists, and free its memory
 			Remove_Prototype (proto);
-			proto->DeleteSelf();
+			delete proto;
 		}
 	}
 }
@@ -1627,24 +1234,12 @@ void WW3DAssetManager::Remove_Prototype(const char *name)
  *   7/29/98    GTH : Created.                                                                 *
  *   12/8/98    GTH : Renamed to simply Find_Prototype                                         *
  *=============================================================================================*/
-PrototypeClass * WW3DAssetManager::Find_Prototype(const char * name)
+Graphics::ModelFactory<RenderObjClass> * WW3DAssetManager::Find_Prototype(const char * name)
 {
-	// Special case Null render object.  So we always have it...
-	if (WW3DString::Compare_No_Case(name,"NULL") == 0) {
-		return &(_NullPrototype);
-	}
-
-	// Find the prototype
-	int hash = CRC_Stringi(name) & PROTOTYPE_HASH_MASK;
-	PrototypeClass * test = PrototypeHashTable[hash];
-
-	while (test != nullptr) {
-		if (WW3DString::Compare_No_Case(test->Get_Name(),name) == 0) {
-			return test;
-		}
-		test = test->friend_getNextHash();
-	}
-	return nullptr;
+    if(name && ReservedModelFactory != nullptr &&
+		WW3DString::Compare_No_Case(name, ReservedModelFactory->name.c_str()) == 0)
+		return ReservedModelFactory.get();
+    return name?ModelFactories.Find(name):nullptr;
 }
 
 /*
@@ -1656,13 +1251,13 @@ PrototypeClass * WW3DAssetManager::Find_Prototype(const char * name)
 
 bool RObjIterator::Is_Done()
 {
-	return !(Index < WW3DAssetManager::Get_Instance()->Prototypes.Count());
+	return !(Index < static_cast<int>(WW3DAssetManager::Get_Instance()->ModelFactories.Size()));
 }
 
 const char * RObjIterator::Current_Item_Name()
 {
-	if (Index < WW3DAssetManager::Get_Instance()->Prototypes.Count()) {
-		return WW3DAssetManager::Get_Instance()->Prototypes[Index]->Get_Name();
+	if (Index < static_cast<int>(WW3DAssetManager::Get_Instance()->ModelFactories.Size())) {
+		return WW3DAssetManager::Get_Instance()->ModelFactories.At(Index)->name.c_str();
 	} else {
 		return nullptr;
 	}
@@ -1670,21 +1265,45 @@ const char * RObjIterator::Current_Item_Name()
 
 int RObjIterator::Current_Item_Class_ID()
 {
-	if (Index < WW3DAssetManager::Get_Instance()->Prototypes.Count()) {
-		return WW3DAssetManager::Get_Instance()->Prototypes[Index]->Get_Class_ID();
+	if (Index < static_cast<int>(WW3DAssetManager::Get_Instance()->ModelFactories.Size())) {
+		return WW3DAssetManager::Get_Instance()->ModelFactories.At(Index)->class_id;
 	} else {
 		return -1;
 	}
 }
 
-bool HTreeIterator::Is_Done()
+void WW3DAssetManager::Load_Animation_Chunk(ChunkLoadClass& cload)
 {
-	return !(Index < WW3DAssetManager::Get_Instance()->HTreeManager.Num_Trees());
-}
-
-const char * HTreeIterator::Current_Item_Name()
-{
-	return WW3DAssetManager::Get_Instance()->HTreeManager.Get_Tree(Index)->Get_Name();
+    std::vector<std::byte> bytes(cload.Cur_Chunk_Length());
+    if(cload.Read(bytes.data(),static_cast<unsigned>(bytes.size()))!=bytes.size())return;
+    std::string error;
+    auto& cache=Assets::Get_Animation_Cache();
+    if(cload.Cur_Chunk_ID()!=W3D_CHUNK_MORPH_ANIMATION) {
+        Assets::ModelAnimationDesc description;
+        const bool keyed=cload.Cur_Chunk_ID()==W3D_CHUNK_COMPRESSED_ANIMATION;
+        if(!Assets::W3D::W3DRead_Animation(bytes,keyed,description,error))return;
+        const auto* skeleton=Resolve_Skeleton(Get_Skeleton(description.skeleton_name.c_str()));
+        if(!skeleton)return;
+        cache.Publish(std::move(description),static_cast<unsigned>(skeleton->bones.size()),
+            keyed?Assets::AnimationSampling::Keyed:Assets::AnimationSampling::Consecutive,error);
+        return;
+    }
+    Assets::ModelPoseAnimationDesc description;
+    if(!Assets::W3D::W3DRead_Pose_Animation(bytes,description,error))return;
+    const auto* skeleton=Resolve_Skeleton(Get_Skeleton(description.skeleton_name.c_str()));
+    if(!skeleton)return;
+    const auto bones=static_cast<unsigned>(skeleton->bones.size());
+    struct Sources {
+        std::vector<Assets::AnimationAssetHandle> handles;
+        ~Sources() { for(auto handle:handles)Assets::Get_Animation_Cache().Release(handle); }
+    } sources;
+    sources.handles.reserve(description.channels.size());
+    for(const auto& channel:description.channels) {
+        const auto handle=Acquire_Animation(channel.animation_name.c_str());
+        if(!handle)return;
+        sources.handles.push_back(handle);
+    }
+    cache.Publish_Pose(std::move(description),bones,sources.handles,error);
 }
 
 

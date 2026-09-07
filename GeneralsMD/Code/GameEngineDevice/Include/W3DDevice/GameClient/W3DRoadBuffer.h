@@ -54,7 +54,6 @@ import Graphics.Scene.Surfaces.Renderer;
 #include "WWLib/always.h"
 #include "WW3D2/RendObj.h"
 #include "WW3D2/W3DFile.h"
-#include "WW3D2/Backend/RenderBackend.h"
 #include "WW3D2/VertexFormat.h"
 #include "WW3D2/Shader.h"
 #include "WW3D2/VertMaterial.h"
@@ -209,7 +208,7 @@ public:
 	void clearAllRoads();
 	/// Draws the roads.  Uses terrain bounds for culling.
 	void drawRoads(CameraClass * camera, TextureClass *cloudTexture, TextureClass *noiseTexture, Bool wireframe,
-																	Int minX, Int maxX, Int minY, Int maxY, RefRenderObjListIterator *pDynamicLightsIterator);
+																	Int minX, Int maxX, Int minY, Int maxY, Graphics::SceneObjectList<RenderObjClass>::Cursor *pDynamicLightsIterator);
 	/// Sets the map pointer.
 	void setMap(WorldHeightMap *pMap);
 	/// Updates the diffuse lighting in the buffers.
@@ -223,7 +222,7 @@ protected:
 	Int			m_numRoads;						///< Number of roads used in m_roads.
 	Bool		m_initialized;		///< True if the subsystem initialized.
 	WorldHeightMap *m_map;		///< Pointer to the height map data.
-	RefRenderObjListIterator *m_lightsIterator;	///< Lighting iterator.
+	Graphics::SceneObjectList<RenderObjClass>::Cursor *m_lightsIterator;	///< Lighting iterator.
 	Int m_curUniqueID;				///< Road type we are rendering at this pass.
 	Int m_curRoadType;
 #ifdef LOAD_TEST_ASSETS
@@ -276,7 +275,7 @@ protected:
 														Vector2 roadNormal, Vector2 roadVector,
 														Vector2 *cornersP,
 														Real uOffset, Real vOffset, Real uScale, Real vScale);
-	void loadLit4PtSection(RoadSegment *pRoad, UnsignedShort *ib, VertexFormatXYZDUV1 *vb, RefRenderObjListIterator *pDynamicLightsIterator);
+	void loadLit4PtSection(RoadSegment *pRoad, UnsignedShort *ib, VertexFormatXYZDUV1 *vb, Graphics::SceneObjectList<RenderObjClass>::Cursor *pDynamicLightsIterator);
 	void loadRoadsInVertexAndIndexBuffers(); ///< Fills the index and vertex buffers for drawing.
 	void loadRoadSegment(UnsignedShort *ib, VertexFormatXYZDUV1 *vb, RoadSegment *pRoad); ///< Fills the index and vertex buffers for drawing 1 segment.
 	void allocateRoadBuffers();							 ///< Allocates the buffers.

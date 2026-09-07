@@ -1,3 +1,4 @@
+#include <filesystem>
 /*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -32,25 +33,7 @@
  *                                                                                             *
  *---------------------------------------------------------------------------------------------*
  * Functions:                                                                                  *
- *   HLodLoaderClass::Load_W3D -- Loads an HlodDef from a W3D file                             *
- *   HLodPrototypeClass::Create -- Creates an HLod from an HLodDef                             *
- *   HLodDefClass::HLodDefClass -- Constructor                                                 *
- *   HLodDefClass::HLodDefClass -- Copy Constructor                                            *
- *   HLodDefClass::~HLodDefClass -- Destructor                                                 *
- *   HLodDefClass::Free -- releases all resources being used                                   *
- *   HLodDefClass::Initialize -- init this def from an HLod                                    *
- *   HLodDefClass::Save -- save this HLodDef                                                   *
- *   HLodDefClass::Save_Header -- writes the HLodDef header                                    *
- *   HLodDefClass::Save_Lod_Array -- Saves the lod array                                       *
- *   HLodDefClass::Save_Aggregate_Array -- Save the array of aggregate models                  *
- *   HLodDefClass::Load_W3D -- Loads this HLodDef from a W3d File                              *
- *   HLodDefClass::read_header -- loads the HLodDef header from a W3d file                     *
- *   HLodDefClass::read_proxy_array -- load the proxy names                                    *
- *   HLodDefClass::SubObjectArrayClass::SubObjectArrayClass -- LodArray constructor            *
- *   HLodDefClass::SubObjectArrayClass::~SubObjectArrayClass -- LodArray destructor            *
- *   HLodDefClass::SubObjectArrayClass::Save_W3D -- saves a w3d file for this HLodDef          *
- *   HLodDefClass::SubObjectArrayClass::Load_W3D -- LodArray load function                     *
- *   HLodDefClass::SubObjectArrayClass::Reset -- release the contents of this array            *
+ *   Load_HLod_Factory -- Loads an HlodDef from a W3D file                             *
  *   HLodClass::HLodClass -- Constructor                                                       *
  *   HLodClass::HLodClass -- copy constructor                                                  *
  *   HLodClass::HLodClass -- Constructor                                                       *
@@ -75,7 +58,6 @@
  *   HLodClass::Include_NULL_Lod -- Add nullptr as the lowest LOD                                 *
  *   HLodClass::Get_Num_Polys -- returns polycount of the current LOD                          *
  *   HLodClass::Render -- render this HLod                                                     *
- *   HLodClass::Special_Render -- Special_Render for HLod                                      *
  *   HLodClass::Set_Transform -- Sets the transform                                            *
  *   HLodClass::Set_Position -- Sets the position                                              *
  *   HLodClass::Notify_Added -- callback notifies subobjs that they were added                 *
@@ -116,58 +98,28 @@
  *   HLodClass::Update_Sub_Object_Transforms -- updates transforms of all sub-objects          *
  *   HLodClass::Update_Obj_Space_Bounding_Volumes -- update object-space bounding volumes      *
  *   HLodClass::Add_Lod_Model -- adds a model to one of the lods                               *
- *   HLodClass::Create_Decal -- create a decal on this HLod                                    *
- *   HLodClass::Delete_Decal -- remove a decal from this HLod                                  *
- *   HLodClass::Set_HTree -- replace the hierarchy tree                                        *
  *   HLodClass::Get_Proxy_Count -- Returns the number of proxy objects                         *
  *   HLodClass::Get_Proxy -- returns the information for the i'th proxy                        *
  * HLodClass::Set_Hidden -- Propagates the hidden bit to particle emitters.                    *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 
-
 #include "HLOD.h"
 #include "AssetMgr.h"
-#include "HModelDef.h"
 #include "W3DErr.h"
 #include "WWLib/chunkio.h"
-#include "PredLod.h"
 #include "RInfo.h"
 #include "WWMath/sphere.h"
-#include "BoxRObj.h"
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
+import Assets.Adapters.W3D.Assembly;
+import Assets.Adapters.W3D.LevelSet;
+import Assets.Adapters.W3D.Aggregate;
+import Assets.Cache.Animations;
 
 namespace
 {
-	template <size_t Size>
-	void copy_c_string(char (&destination)[Size], const char *source)
-	{
-		if (source == nullptr)
-		{
-			destination[0] = '\0';
-			return;
-		}
-
-		const size_t length = std::strlen(source);
-		const size_t copied = length < Size - 1 ? length : Size - 1;
-		std::memcpy(destination, source, copied);
-		destination[copied] = '\0';
-	}
-
-	char *duplicate_c_string(const char *source)
-	{
-		if (source == nullptr)
-			return nullptr;
-
-		const size_t length = std::strlen(source) + 1;
-		char *copy = static_cast<char *>(std::malloc(length));
-		if (copy != nullptr)
-			std::memcpy(copy, source, length);
-		return copy;
-	}
-
 	bool equal_case_insensitive(const char *left, const char *right)
 	{
 		if (left == nullptr || right == nullptr)
@@ -191,56 +143,6 @@ namespace
 /*
 ** Loader Instance
 */
-HLodLoaderClass			_HLodLoader;
-
-
-/**
-** ProxyRecordClass
-** This is a structure that contains the data describing a single "proxy" object.  These
-** are used for application purposes and simply provide a way for the assets to associate
-** a string with a bone index.
-*/
-class ProxyRecordClass
-{
-public:
-	ProxyRecordClass() : BoneIndex(0)
-	{
-		memset(Name,0,sizeof(Name));
-	}
-
-	bool					operator == (const ProxyRecordClass & that) { return false; }
-	bool					operator != (const ProxyRecordClass & that) { return !(*this == that); }
-
-	void					Init(const W3dHLodSubObjectStruct & w3d_data)
-	{
-		BoneIndex = w3d_data.BoneIndex;
-		strlcpy(Name,w3d_data.Name,sizeof(Name));
-	}
-
-	int					Get_Bone_Index()		{ return BoneIndex; }
-	const char *		Get_Name()				{ return Name; }
-
-protected:
-
-	int		BoneIndex;
-	char		Name[2*W3D_NAME_LEN];
-
-};
-
-/**
-** ProxyArrayClass
-** This is a ref-counted list of proxy objects.  It is generated whenever an HLODdef contains
-** proxies.  Each instantiated HLOD simply add-refs a pointer to the single list.
-*/
-class ProxyArrayClass : public VectorClass<ProxyRecordClass>, public RefCountClass
-{
-	W3DMPO_CODE(ProxyArrayClass)
-public:
-	ProxyArrayClass(int size) : VectorClass<ProxyRecordClass>(size)
-	{
-	}
-};
-
 
 
 /*
@@ -248,7 +150,7 @@ public:
 */
 
 /***********************************************************************************************
- * HLodLoaderClass::Load_W3D -- Loads an HlodDef from a W3D file                               *
+ * Load_HLod_Factory -- Loads an HlodDef from a W3D file                               *
  *                                                                                             *
  * INPUT:                                                                                      *
  *                                                                                             *
@@ -259,688 +161,16 @@ public:
  * HISTORY:                                                                                    *
  *   1/26/00    gth : Created.                                                                 *
  *=============================================================================================*/
-PrototypeClass *HLodLoaderClass::Load_W3D( ChunkLoadClass &cload )
+Graphics::ModelFactory<RenderObjClass> *Load_HLod_Factory(ChunkLoadClass& cload)
 {
-	HLodDefClass * def = W3DNEW HLodDefClass;
-
-	if (def == nullptr)
-	{
-		return nullptr;
-	}
-
-	if (def->Load_W3D(cload) != WW3D_ERROR_OK) {
-		// load failed, delete the model and return an error
-		delete def;
-		return nullptr;
-	} else {
-		// ok, accept this model!
-		HLodPrototypeClass *proto = W3DNEW HLodPrototypeClass(def);
-		return proto;
-	}
-	return nullptr;
+    std::vector<std::byte> bytes(cload.Cur_Chunk_Length());
+    if(cload.Read(bytes.data(),static_cast<unsigned>(bytes.size()))!=bytes.size())return nullptr;
+    Assets::ModelAssemblyDesc description;std::string error;
+    if(!Assets::W3D::W3DRead_Model_Assembly(bytes,true,description,error))return nullptr;
+    auto data=std::make_shared<const Assets::ModelAssemblyDesc>(std::move(description));
+    return new Graphics::ModelFactory<RenderObjClass>(data->name,RenderObjClass::CLASSID_HLOD,[data] { return NEW_REF(HLodClass,(*data)); });
 }
 
-
-/*
-** HLod Prototype Implementation
-*/
-
-/***********************************************************************************************
- * HLodPrototypeClass::Create -- Creates an HLod from an HLodDef                               *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   1/26/00    gth : Created.                                                                 *
- *=============================================================================================*/
-RenderObjClass * HLodPrototypeClass::Create()
-{
-	HLodClass * hlod = NEW_REF( HLodClass , ( *Definition ) );
-	return hlod;
-}
-
-
-/*
-** HLodDef Implementation
-*/
-
-/***********************************************************************************************
- * HLodDefClass::HLodDefClass -- Constructor                                                   *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *=============================================================================================*/
-HLodDefClass::HLodDefClass() :
-	Name(nullptr),
-	HierarchyTreeName(nullptr),
-	LodCount(0),
-	Lod(nullptr),
-	ProxyArray(nullptr)
-{
-}
-
-
-/***********************************************************************************************
- * HLodDefClass::HLodDefClass -- Copy Constructor                                              *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   1/26/00    gth : Created.                                                                 *
- *=============================================================================================*/
-HLodDefClass::HLodDefClass(HLodClass &src_lod) :
-	Name(nullptr),
-	HierarchyTreeName(nullptr),
-	LodCount(0),
-	Lod(nullptr),
-	ProxyArray(nullptr)
-{
-	Initialize (src_lod);
-}
-
-
-/***********************************************************************************************
- * HLodDefClass::~HLodDefClass -- Destructor                                                   *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   1/26/00    gth : Created.                                                                 *
- *=============================================================================================*/
-HLodDefClass::~HLodDefClass()
-{
-	Free ();
-}
-
-
-/***********************************************************************************************
- * HLodDefClass::Free -- releases all resources being used                                     *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   1/26/00    gth : Created.                                                                 *
- *=============================================================================================*/
-void HLodDefClass::Free()
-{
-	::free(Name);
-	Name = nullptr;
-
-	::free(HierarchyTreeName);
-	HierarchyTreeName = nullptr;
-
-	delete[] Lod;
-	Lod = nullptr;
-	LodCount = 0;
-
-	REF_PTR_RELEASE(ProxyArray);
-}
-
-
-/***********************************************************************************************
- * HLodDefClass::Initialize -- init this def from an HLod                                      *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   1/26/00    gth : Created.                                                                 *
- *=============================================================================================*/
-void HLodDefClass::Initialize(HLodClass &src_lod)
-{
-	// Start with a fresh set of data
-	Free ();
-
-	// Copy the name and hierarchy name from the source object
-	Name = duplicate_c_string (src_lod.Get_Name ());
-	const HTreeClass *phtree = src_lod.Get_HTree ();
-	if (phtree != nullptr) {
-		HierarchyTreeName = duplicate_c_string (phtree->Get_Name ());
-	}
-
-	// Determine the number of LODs in the src object
-	LodCount = src_lod.Get_LOD_Count ();
-	WWASSERT (LodCount > 0);
-	if (LodCount > 0) {
-
-		// Allocate an array large enough to hold all the LODs and
-		// loop through each LOD.
-		Lod = W3DNEWARRAY SubObjectArrayClass[LodCount];
-		for (int index = 0; index < LodCount; index ++) {
-
-			// Fill in the maximum screen size for this LOD
-			Lod[index].MaxScreenSize = src_lod.Get_Max_Screen_Size (index);
-			Lod[index].ModelCount = src_lod.Get_Lod_Model_Count (index);
-
-			// Loop through all the models that compose this LOD and generate a
-			// list of model's and the bones they live on
-			char **model_names = W3DNEWARRAY char *[Lod[index].ModelCount];
-			int *bone_indicies = W3DNEWARRAY int[Lod[index].ModelCount];
-			for (int model_index = 0; model_index < Lod[index].ModelCount; model_index ++) {
-
-				// Record information about this model (if possible)
-				RenderObjClass *prender_obj = src_lod.Peek_Lod_Model (index, model_index);
-				if (prender_obj != nullptr) {
-					model_names[model_index] = duplicate_c_string (prender_obj->Get_Name ());
-					bone_indicies[model_index] = src_lod.Get_Lod_Model_Bone (index, model_index);
-				} else {
-					model_names[model_index] = nullptr;
-					bone_indicies[model_index] = 0;
-				}
-			}
-
-			// Pass these arrays of information onto our internal data
-			Lod[index].ModelName = model_names;
-			Lod[index].BoneIndex = bone_indicies;
-		}
-	}
-}
-
-
-/***********************************************************************************************
- * HLodDefClass::Save -- save this HLodDef                                                     *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   1/26/00    gth : Created.                                                                 *
- *=============================================================================================*/
-WW3DErrorType HLodDefClass::Save(ChunkSaveClass & csave)
-{
-	// Assume error
-	WW3DErrorType ret_val = WW3D_ERROR_SAVE_FAILED;
-
-	// Begin a chunk that identifies an aggregate
-	if (csave.Begin_Chunk (W3D_CHUNK_HLOD) == true) {
-
-		// Attempt to save the different sections of the aggregate definition
-		if ((Save_Header (csave) == WW3D_ERROR_OK) &&
-			 (Save_Lod_Array (csave) == WW3D_ERROR_OK)) {
-
-			// Success!
-			ret_val = WW3D_ERROR_OK;
-		}
-
-		// Close the aggregate chunk
-		csave.End_Chunk ();
-	}
-
-	// Return the WW3DErrorType return code
-	return ret_val;
-}
-
-
-/***********************************************************************************************
- * HLodDefClass::Save_Header -- writes the HLodDef header                                      *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   1/26/00    gth : Created.                                                                 *
- *=============================================================================================*/
-WW3DErrorType HLodDefClass::Save_Header(ChunkSaveClass &csave)
-{
-	// Assume error
-	WW3DErrorType ret_val = WW3D_ERROR_SAVE_FAILED;
-
-	// Begin a chunk that identifies the aggregate
-	if (csave.Begin_Chunk (W3D_CHUNK_HLOD_HEADER) == true) {
-
-		// Fill the header structure
-		W3dHLodHeaderStruct header = { 0 };
-		header.Version = W3D_CURRENT_HLOD_VERSION;
-		header.LodCount = LodCount;
-
-		// Copy the name to the header
-		copy_c_string (header.Name, Name);
-		header.Name[sizeof (header.Name) - 1] = 0;
-
-		// Copy the hierarchy tree name to the header
-		copy_c_string (header.HierarchyName, HierarchyTreeName);
-		header.HierarchyName[sizeof (header.HierarchyName) - 1] = 0;
-
-		// Write the header out to the chunk
-		if (csave.Write (&header, sizeof (header)) == sizeof (header)) {
-
-			// Success!
-			ret_val = WW3D_ERROR_OK;
-		}
-
-		// End the header chunk
-		csave.End_Chunk ();
-	}
-
-	// Return the WW3DErrorType return code
-	return ret_val;
-}
-
-
-/***********************************************************************************************
- * HLodDefClass::Save_Lod_Array -- Saves the lod array                                         *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   1/26/00    gth : Created.                                                                 *
- *=============================================================================================*/
-WW3DErrorType HLodDefClass::Save_Lod_Array(ChunkSaveClass &csave)
-{
-	// Loop through all the LODs and save their model array to the chunk
-	bool success = true;
-	for (int lod_index = 0;
-		  (lod_index < LodCount) && success;
-		  lod_index ++) {
-		success = Lod[lod_index].Save_W3D (csave);
-	}
-
-	// Return the WW3DErrorType return code
-	return success ? WW3D_ERROR_OK : WW3D_ERROR_SAVE_FAILED;
-}
-
-
-/***********************************************************************************************
- * HLodDefClass::Save_Aggregate_Array -- Save the array of aggregate models                    *
- *                                                                                             *
- * aggregate models are ones that are attached as "additional" models.                         *
- *                                                                                             *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   10/25/2000 gth : Created.                                                                 *
- *=============================================================================================*/
-WW3DErrorType HLodDefClass::Save_Aggregate_Array(ChunkSaveClass & csave)
-{
-	if (Aggregates.ModelCount > 0) {
-		csave.Begin_Chunk(W3D_CHUNK_HLOD_AGGREGATE_ARRAY);
-		Aggregates.Save_W3D(csave);
-		csave.End_Chunk();
-	}
-	return WW3D_ERROR_OK;
-}
-
-
-/***********************************************************************************************
- * HLodDefClass::Load_W3D -- Loads this HLodDef from a W3d File                                *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   1/26/00    gth : Created.                                                                 *
- *=============================================================================================*/
-WW3DErrorType HLodDefClass::Load_W3D(ChunkLoadClass & cload)
-{
-	/*
-	** First make sure we release any memory in use
-	*/
-	Free();
-
-	if (read_header(cload) == false) {
-	  return WW3D_ERROR_LOAD_FAILED;
-	}
-
-	/*
-	**	Loop through all the LODs and read the info from its chunk
-	*/
-	for (int iLOD = 0; iLOD < LodCount; iLOD ++) {
-
-		/*
-		**	Open the next chunk, it should be a LOD struct
-		*/
-		if (!cload.Open_Chunk()) return WW3D_ERROR_LOAD_FAILED;
-
-		if (cload.Cur_Chunk_ID() != W3D_CHUNK_HLOD_LOD_ARRAY) {
-			// ERROR: Expected LOD struct!
-			return WW3D_ERROR_LOAD_FAILED;
-		}
-
-		Lod[iLOD].Load_W3D(cload);
-
-		// Close-out the chunk
-		cload.Close_Chunk();
-	}
-
-	/*
-	** Parse the rest of the chunks
-	*/
-	while (cload.Open_Chunk()) {
-		switch(cload.Cur_Chunk_ID())
-		{
-			case W3D_CHUNK_HLOD_AGGREGATE_ARRAY:
-				Aggregates.Load_W3D(cload);
-				break;
-			case W3D_CHUNK_HLOD_PROXY_ARRAY:
-				read_proxy_array(cload);
-				break;
-		}
-		cload.Close_Chunk();
-	}
-
-	return WW3D_ERROR_OK;
-}
-
-
-/***********************************************************************************************
- * HLodDefClass::read_header -- loads the HLodDef header from a W3d file                       *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   1/26/00    gth : Created.                                                                 *
- *=============================================================================================*/
-bool HLodDefClass::read_header(ChunkLoadClass & cload)
-{
-	/*
-	**	Open the first chunk, it should be the LOD header
-	*/
-	if (!cload.Open_Chunk()) return false;
-
-	if (cload.Cur_Chunk_ID() != W3D_CHUNK_HLOD_HEADER) {
-		// ERROR: Expected HLOD Header!
-		return false;
-	}
-
-	W3dHLodHeaderStruct header;
-	if (cload.Read(&header,sizeof(header)) != sizeof(header)) {
-		return false;
-	}
-	cload.Close_Chunk();
-
-	// Copy the name into our internal variable
-	Name = duplicate_c_string(header.Name);
-	HierarchyTreeName = duplicate_c_string(header.HierarchyName);
-	LodCount = header.LodCount;
-	Lod = W3DNEWARRAY SubObjectArrayClass[LodCount];
-	return true;
-}
-
-
-/***********************************************************************************************
- * HLodDefClass::read_proxy_array -- load the proxy names                                      *
- *                                                                                             *
- *    This function is coded separately from SubObjectArrayClass::Load because we are going    *
- *    to store the proxies in a shared data structure.  Because all of the proxy data is       *
- *    constant, each instanced HLOD can just add-ref a pointer to its proxy array.             *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   10/27/2000 gth : Created.                                                                 *
- *=============================================================================================*/
-bool HLodDefClass::read_proxy_array(ChunkLoadClass & cload)
-{
-	REF_PTR_RELEASE(ProxyArray);
-
-	/*
-	** Open the first chunk, it should be a Lod Array Header
-	*/
-	if (!cload.Open_Chunk()) return false;
-	if (cload.Cur_Chunk_ID() != W3D_CHUNK_HLOD_SUB_OBJECT_ARRAY_HEADER) return false;
-
-	W3dHLodArrayHeaderStruct header;
-	if (cload.Read(&header,sizeof(header)) != sizeof(header)) return false;
-
-	if (!cload.Close_Chunk()) return false;
-
-	ProxyArray = NEW_REF(ProxyArrayClass,(header.ModelCount));
-
-	/*
-	** Read each sub object definition
-	*/
-	for (int imodel=0; imodel<ProxyArray->Length(); ++imodel) {
-		if (!cload.Open_Chunk()) return false;
-		if (cload.Cur_Chunk_ID() != W3D_CHUNK_HLOD_SUB_OBJECT) return false;
-
-		W3dHLodSubObjectStruct subobjdef;
-		if (cload.Read(&subobjdef,sizeof(subobjdef)) != sizeof(subobjdef)) return false;
-		if (!cload.Close_Chunk()) return false;
-
-		(*ProxyArray)[imodel].Init(subobjdef);
-	}
-	return true;
-}
-
-
-/***********************************************************************************************
- * HLodDefClass::SubObjectArrayClass::SubObjectArrayClass -- LodArray constructor              *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *=============================================================================================*/
-HLodDefClass::SubObjectArrayClass::SubObjectArrayClass() :
-	MaxScreenSize(NO_MAX_SCREEN_SIZE),
-	ModelCount(0),
-	ModelName(nullptr),
-	BoneIndex(nullptr)
-{
-}
-
-
-/***********************************************************************************************
- * HLodDefClass::SubObjectArrayClass::~SubObjectArrayClass -- LodArray destructor              *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   1/26/00    gth : Created.                                                                 *
- *=============================================================================================*/
-HLodDefClass::SubObjectArrayClass::~SubObjectArrayClass()
-{
-	Reset();
-}
-
-
-/***********************************************************************************************
- * HLodDefClass::SubObjectArrayClass::Reset -- release the contents of this array              *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   10/25/2000 gth : Created.                                                                 *
- *=============================================================================================*/
-void HLodDefClass::SubObjectArrayClass::Reset()
-{
-	MaxScreenSize = NO_MAX_SCREEN_SIZE;
-
-	if (ModelName != nullptr) {
-		for (int imodel=0; imodel<ModelCount;imodel++) {
-			free(ModelName[imodel]);
-		}
-		delete[] ModelName;
-		ModelName = nullptr;
-	}
-
-	delete[] BoneIndex;
-	BoneIndex = nullptr;
-
-	ModelCount = 0;
-}
-
-
-/***********************************************************************************************
- * HLodDefClass::SubObjectArrayClass::Load_W3D -- LodArray load function                       *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   1/26/00    gth : Created.                                                                 *
- *=============================================================================================*/
-bool HLodDefClass::SubObjectArrayClass::Load_W3D(ChunkLoadClass & cload)
-{
-	/*
-	** Open the first chunk, it should be a Lod Array Header
-	*/
-	if (!cload.Open_Chunk()) return false;
-	if (cload.Cur_Chunk_ID() != W3D_CHUNK_HLOD_SUB_OBJECT_ARRAY_HEADER) return false;
-
-	W3dHLodArrayHeaderStruct header;
-	if (cload.Read(&header,sizeof(header)) != sizeof(header)) return false;
-
-	if (!cload.Close_Chunk()) return false;
-
-	ModelCount = header.ModelCount;
-	MaxScreenSize = header.MaxScreenSize;
-
-	DEBUG_ASSERTCRASH(ModelName == nullptr, ("HLodDefClass::SubObjectArrayClass::Load_W3D: Leaking ModelName"));
-	DEBUG_ASSERTCRASH(BoneIndex == nullptr, ("HLodDefClass::SubObjectArrayClass::Load_W3D: Leaking BoneIndex"));
-	ModelName = W3DNEWARRAY char * [ModelCount];
-	BoneIndex = W3DNEWARRAY int [ModelCount];
-
-	/*
-	** Read each sub object definition
-	*/
-	for (int imodel=0; imodel<ModelCount; ++imodel) {
-		if (!cload.Open_Chunk()) return false;
-		if (cload.Cur_Chunk_ID() != W3D_CHUNK_HLOD_SUB_OBJECT) return false;
-
-		W3dHLodSubObjectStruct subobjdef;
-		if (cload.Read(&subobjdef,sizeof(subobjdef)) != sizeof(subobjdef)) return false;
-
-		if (!cload.Close_Chunk()) return false;
-
-		ModelName[imodel] = duplicate_c_string(subobjdef.Name);
-		BoneIndex[imodel] = subobjdef.BoneIndex;
-	}
-	return true;
-}
-
-/***********************************************************************************************
- * HLodDefClass::SubObjectArrayClass::Save_W3D -- saves a w3d file for this HLodDef            *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   1/26/00    gth : Created.                                                                 *
- *=============================================================================================*/
-bool HLodDefClass::SubObjectArrayClass::Save_W3D(ChunkSaveClass &csave)
-{
-	// Assume error
-	bool ret_val = false;
-
-	// Begin a chunk that identifies the LOD array
-	if (csave.Begin_Chunk (W3D_CHUNK_HLOD_LOD_ARRAY) == true) {
-
-		// Begin a chunk that identifies the LOD header
-		if (csave.Begin_Chunk (W3D_CHUNK_HLOD_SUB_OBJECT_ARRAY_HEADER) == true) {
-
-			W3dHLodArrayHeaderStruct header = { 0 };
-			header.ModelCount = ModelCount;
-			header.MaxScreenSize = MaxScreenSize;
-
-			// Write the LOD header structure out to the chunk
-			ret_val = (csave.Write (&header, sizeof (header)) == sizeof (header));
-
-			// End the header chunk
-			csave.End_Chunk ();
-		}
-
-		if (ret_val) {
-
-			// Write all of this LOD's models to the file
-			for (int index = 0;
-				  (index < ModelCount) && ret_val;
-				  index ++) {
-
-				// Save this LOD sub-obj to the chunk
-				ret_val &= (csave.Begin_Chunk (W3D_CHUNK_HLOD_SUB_OBJECT) == true);
-				if (ret_val) {
-
-					W3dHLodSubObjectStruct info = { 0 };
-					info.BoneIndex = BoneIndex[index];
-
-					// Copy this model name into the structure
-					copy_c_string (info.Name, ModelName[index]);
-					info.Name[sizeof (info.Name) - 1] = 0;
-
-					// Write the LOD sub-obj structure out to the chunk
-					ret_val &= (csave.Write (&info, sizeof (info)) == sizeof (info));
-
-					// End the sub-obj chunk
-					csave.End_Chunk ();
-				}
-			}
-		}
-
-		// End the HLOD-Array chunk
-		csave.End_Chunk ();
-	}
-
-	// Return the true/false result code
-	return ret_val;
-}
 
 
 
@@ -965,8 +195,8 @@ HLodClass::HLodClass() :
 	Cost(nullptr),
 	Value(nullptr),
 	AdditionalModels(),
-	SnapPoints(nullptr),
-	ProxyArray(nullptr),
+	SnapPoints(),
+	Proxies(),
 	LODBias(1.0f)
 {
 }
@@ -993,8 +223,8 @@ HLodClass::HLodClass(const HLodClass & src) :
 	Cost(nullptr),
 	Value(nullptr),
 	AdditionalModels(),
-	SnapPoints(nullptr),
-	ProxyArray(nullptr),
+	SnapPoints(),
+	Proxies(),
 	LODBias(1.0f)
 {
 	*this = src;
@@ -1025,14 +255,14 @@ HLodClass::HLodClass(const char * name,RenderObjClass ** lods,int count) :
 	Cost(nullptr),
 	Value(nullptr),
 	AdditionalModels(),
-	SnapPoints(nullptr),
-	ProxyArray(nullptr),
+	SnapPoints(),
+	Proxies(),
 	LODBias(1.0f)
 {
 	// enforce parameters
 	WWASSERT(name != nullptr);
 	WWASSERT(lods != nullptr);
-	WWASSERT((count > 0) && (count < 256));
+	WWASSERT(count > 0);
 
 	// Set the name
 	Set_Name(name);
@@ -1048,14 +278,14 @@ HLodClass::HLodClass(const char * name,RenderObjClass ** lods,int count) :
 	Value = W3DNEWARRAY float[LodCount + 1];
 	WWASSERT(Value);
 
-	// Create our HTree from the highest LOD if it is an HModel
+	// Create our Hierarchy from the highest LOD if it is an HModel
 	// Otherwise, create a single node tree
-	const HTreeClass * tree = lods[count-1]->Get_HTree();
+	const Graphics::ModelHierarchy * tree = lods[count-1]->Get_Model_Hierarchy();
 	if (tree != nullptr) {
-		HTree = W3DNEW HTreeClass(*tree);
+		Hierarchy = W3DNEW Graphics::ModelHierarchy(*tree);
 	} else {
-		HTree = W3DNEW HTreeClass();
-		HTree->Init_Default();
+		Hierarchy = W3DNEW Graphics::ModelHierarchy();
+		Hierarchy->Initialize_Default();
 	}
 
 	// Ok, now suck the sub-objects out of each LOD model and place them into this HLOD.
@@ -1118,8 +348,8 @@ HLodClass::HLodClass(const char * name,RenderObjClass ** lods,int count) :
  * HISTORY:                                                                                    *
  *   1/26/00    gth : Created.                                                                 *
  *=============================================================================================*/
-HLodClass::HLodClass(const HLodDefClass & def) :
-	Animatable3DObjClass(def.HierarchyTreeName),
+HLodClass::HLodClass(const Assets::ModelAssemblyDesc & def) :
+	Animatable3DObjClass(def.skeleton_name.c_str()),
 	LodCount(0),
 	CurLod(0),
 	Lod(nullptr),
@@ -1127,16 +357,16 @@ HLodClass::HLodClass(const HLodDefClass & def) :
 	Cost(nullptr),
 	Value(nullptr),
 	AdditionalModels(),
-	SnapPoints(nullptr),
-	ProxyArray(nullptr),
+	SnapPoints(),
+	Proxies(),
 	LODBias(1.0f)
 {
 	// Set the name
-	Set_Name(def.Get_Name());
+	Set_Name(def.name.c_str());
 
 
 	// Number of LODs comes from the distlod
-	LodCount = def.LodCount;
+	LodCount = static_cast<int>(def.levels.size());
 	WWASSERT(LodCount >= 1);
 	Lod = W3DNEWARRAY ModelArrayClass[LodCount];
 	WWASSERT(Lod);
@@ -1148,14 +378,14 @@ HLodClass::HLodClass(const HLodDefClass & def) :
 	WWASSERT(Value);
 
 	// Add Models to the ModelArrays
-	for (int ilod=0; ilod < def.LodCount; ilod++) {
+	for (int ilod=0; ilod < static_cast<int>(def.levels.size()); ilod++) {
 
-		Lod[ilod].MaxScreenSize = def.Lod[ilod].MaxScreenSize;
+		Lod[ilod].MaxScreenSize = def.levels[ilod].maximum_screen_size;
 
-		for (int imodel=0; imodel < def.Lod[ilod].ModelCount; imodel++) {
+		for (int imodel=0; imodel < static_cast<int>(def.levels[ilod].children.size()); imodel++) {
 
-			RenderObjClass * robj = WW3DAssetManager::Get_Instance()->Create_Render_Obj(def.Lod[ilod].ModelName[imodel]);
-			int boneindex = def.Lod[ilod].BoneIndex[imodel];
+			RenderObjClass * robj = WW3DAssetManager::Get_Instance()->Create_Render_Obj(def.levels[ilod].children[imodel].object_name.c_str());
+			int boneindex = def.levels[ilod].children[imodel].bone;
 			if (robj != nullptr) {
 				Add_Lod_Model(ilod,robj,boneindex);
 				robj->Release_Ref();
@@ -1166,88 +396,18 @@ HLodClass::HLodClass(const HLodDefClass & def) :
 	Recalculate_Static_LOD_Factors();
 
 	// Add aggregates to this model
-	for (int iagg=0; iagg<def.Aggregates.ModelCount; iagg++) {
-		RenderObjClass * robj = WW3DAssetManager::Get_Instance()->Create_Render_Obj(def.Aggregates.ModelName[iagg]);
-		int boneindex = def.Aggregates.BoneIndex[iagg];
+	for (int iagg=0; iagg<static_cast<int>(def.aggregates.size()); iagg++) {
+		RenderObjClass * robj = WW3DAssetManager::Get_Instance()->Create_Render_Obj(def.aggregates[iagg].object_name.c_str());
+		int boneindex = def.aggregates[iagg].bone;
 		if (robj != nullptr) {
 			Add_Sub_Object_To_Bone(robj,boneindex);
 			robj->Release_Ref();
 		}
 	}
 
-	// Add a reference to the proxy array
-	REF_PTR_SET(ProxyArray,def.ProxyArray);
-
-	// So that the object is ready for use after construction, we will
-	// complete its initialization by initializing its cost and value arrays
-	// according to a screen area of 1 pixel.
-	int minlod = Calculate_Cost_Value_Arrays(1.0f, Value, Cost);
-
-	// Ensure lod is no less than minimum allowed
-	if (CurLod < minlod) Set_LOD_Level(minlod);
-
-	// Flag our sub-objects as having dirty transforms
-	Set_Sub_Object_Transforms_Dirty(true);
-
-	Update_Sub_Object_Bits();
-	Update_Obj_Space_Bounding_Volumes();
-}
-
-
-/***********************************************************************************************
- * HLodClass::HLodClass -- Constructs an HLod from an HModelDef                                *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   1/26/00    gth : Created.                                                                 *
- *=============================================================================================*/
-HLodClass::HLodClass(const HModelDefClass & def) :
-	Animatable3DObjClass(def.BasePoseName),
-	LodCount(0),
-	CurLod(0),
-	Lod(nullptr),
-	BoundingBoxIndex(-1),
-	Cost(nullptr),
-	Value(nullptr),
-	AdditionalModels(),
-	SnapPoints(nullptr),
-	ProxyArray(nullptr),
-	LODBias(1.0f)
-{
-	// Set the name
-	Set_Name(def.Get_Name());
-
-	// This is a "simple" HLod, only one LOD
-	LodCount = 1;
-	Lod = W3DNEWARRAY ModelArrayClass[1];
-	WWASSERT(Lod);
-	Cost = W3DNEWARRAY float[1];
-	WWASSERT(Cost);
-	// Value has LodCount + 1 entries so PostIncrementValue can always use
-	// Value[CurLod + 1] (the last entry wil be AT_MAX_LOD).
-	Value = W3DNEWARRAY float[2];
-	WWASSERT(Value);
-
-	// no lod size clamping
-	Lod[0].MaxScreenSize = NO_MAX_SCREEN_SIZE;
-
-	// create the sub-objects
-	int imodel;
-	for (imodel=0; imodel < def.SubObjectCount; ++imodel) {
-		RenderObjClass * robj = WW3DAssetManager::Get_Instance()->Create_Render_Obj(def.SubObjects[imodel].RenderObjName);
-		if (robj) {
-			int boneindex = def.SubObjects[imodel].PivotID;
-			Add_Lod_Model(0,robj,boneindex);
-			robj->Release_Ref();
-		}
-	}
-
-	Recalculate_Static_LOD_Factors();
+	// Retain instance data independently of the prototype description.
+	Proxies=def.proxies;
+	SnapPoints=def.snap_points;
 
 	// So that the object is ready for use after construction, we will
 	// complete its initialization by initializing its cost and value arrays
@@ -1331,6 +491,8 @@ HLodClass & HLodClass::operator = (const HLodClass & that)
 		}
 
 		LODBias = that.LODBias;
+		Proxies=that.Proxies;
+		SnapPoints=that.SnapPoints;
 	}
 
 	Recalculate_Static_LOD_Factors();
@@ -1422,8 +584,8 @@ void HLodClass::Free()
 	}
 	AdditionalModels.Delete_All();
 
-	REF_PTR_RELEASE(SnapPoints);
-	REF_PTR_RELEASE(ProxyArray);
+	SnapPoints.clear();
+	Proxies.clear();
 }
 
 
@@ -1466,9 +628,9 @@ void HLodClass::Get_Obj_Space_Bounding_Box(AABoxClass & box) const
 	if (BoundingBoxIndex >= 0 && BoundingBoxIndex < count) {
 
 		RenderObjClass *mesh = Lod[LodCount - 1][BoundingBoxIndex].Model;
-		if (mesh != nullptr && mesh->Class_ID () == RenderObjClass::CLASSID_OBBOX) {
-
-			OBBoxRenderObjClass *obbox_mesh = (OBBoxRenderObjClass *)mesh;
+		AABoxClass box_query;
+		if (mesh != nullptr && mesh->Class_ID() == RenderObjClass::CLASSID_OBBOX) {
+			mesh->Get_Obj_Space_Bounding_Box(box_query);
 
 			//
 			//	Determine what the box's transform 'should' be this frame.
@@ -1488,9 +650,9 @@ void HLodClass::Get_Obj_Space_Bounding_Box(AABoxClass & box) const
 			Get_Transform ().Get_Orthogonal_Inverse (world_to_hlod_tm);
 			Matrix3D::Multiply(world_to_hlod_tm,box_tm,&box_to_hlod_tm);
 
-			box_to_hlod_tm.Transform_Center_Extent_AABox(	obbox_mesh->Get_Local_Center(),
-																			obbox_mesh->Get_Local_Extent(),
-																			&box.Center,&box.Extent);
+			box_to_hlod_tm.Transform_Center_Extent_AABox(	box_query.Center,
+																																																		box_query.Extent,
+																																																		&box.Center,&box.Extent);
 		}
 
 	} else {
@@ -2077,8 +1239,8 @@ void HLodClass::Include_NULL_Lod(bool include)
  *=============================================================================================*/
 int HLodClass::Get_Proxy_Count() const
 {
-	if (ProxyArray != nullptr) {
-		return ProxyArray->Length();
+	if (!Proxies.empty()) {
+		return static_cast<int>(Proxies.size());
 	} else {
 		return 0;
 	}
@@ -2101,20 +1263,20 @@ bool HLodClass::Get_Proxy (int index, ProxyClass &proxy) const
 {
 	bool retval = false;
 
-	if (ProxyArray != nullptr) {
+	if (index>=0 && static_cast<std::size_t>(index)<Proxies.size()) {
 
 		//
 		//	Lookup the proxy's transform
 		//
-		HTree->Base_Update(Get_Transform());
-		Matrix3D transform = HTree->Get_Transform((*ProxyArray)[index].Get_Bone_Index());
+		Hierarchy->Evaluate_Rest(Graphics::Import_Affine_Transform(Get_Transform()));
+		Matrix3D transform = Graphics::Export_Affine_Transform<Matrix3D>(Hierarchy->World_Transform(Proxies[index].bone));
 		Set_Hierarchy_Valid(false);
 
 		//
 		//	Pass the data onto the proxy object
 		//
 		proxy.Set_Transform(transform);
-		proxy.Set_Name((*ProxyArray)[index].Get_Name());
+		proxy.Set_Name(Proxies[index].object_name.c_str());
 		retval = true;
 
 	} else {
@@ -2183,7 +1345,7 @@ void HLodClass::Render(RenderInfoClass & rinfo)
 	Animatable3DObjClass::Render(rinfo);
 
 	for (i = 0; i < Lod[CurLod].Count(); i++) {
-		if (Lod[CurLod][i].Model->Class_ID() != CLASSID_OBBOX)	///We have no use for these - MW
+		if (Lod[CurLod][i].Model->Class_ID() != RenderObjClass::CLASSID_OBBOX)	///We have no use for these - MW
 			Lod[CurLod][i].Model->Render(rinfo);
 	}
 
@@ -2196,42 +1358,6 @@ void HLodClass::Render(RenderInfoClass & rinfo)
 		for (i = 0; i < AdditionalModels.Count(); i++) {
 			AdditionalModels[i].Model->Render(rinfo);
 		}
-	}
-}
-
-
-/***********************************************************************************************
- * HLodClass::Special_Render -- Special_Render for HLod                                        *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   1/26/00    gth : Created.                                                                 *
- *=============================================================================================*/
-void HLodClass::Special_Render(SpecialRenderInfoClass & rinfo)
-{
-	int i;
-	if (Is_Not_Hidden_At_All() == false) {
-		return;
-	}
-
-	Animatable3DObjClass::Special_Render(rinfo);
-
-	int lod_index = CurLod;
-	if (rinfo.RenderType == SpecialRenderInfoClass::RENDER_SHADOW) {			// (gth) HACK HACK! yikes
-		lod_index = LodCount-1;
-	}
-
-	for (i = 0; i < Lod[lod_index].Count(); i++) {
-		Lod[lod_index][i].Model->Special_Render(rinfo);
-	}
-
-	for (i = 0; i < AdditionalModels.Count(); i++) {
-		AdditionalModels[i].Model->Special_Render(rinfo);
 	}
 }
 
@@ -2591,7 +1717,7 @@ int HLodClass::Get_Sub_Object_Bone_Index(int LodIndex, int ModelIndex)	const
 int HLodClass::Add_Sub_Object_To_Bone(RenderObjClass * subobj,int boneindex)
 {
 	WWASSERT(subobj);
-	if ((boneindex < 0) || (boneindex >= HTree->Num_Pivots())) return 0;
+	if ((boneindex < 0) || (boneindex >= Hierarchy->Bone_Count())) return 0;
 
 	subobj->Set_LOD_Bias(LODBias);
 
@@ -2599,7 +1725,7 @@ int HLodClass::Add_Sub_Object_To_Bone(RenderObjClass * subobj,int boneindex)
 	newnode.Model = subobj;
 	newnode.Model->Add_Ref();
 	newnode.Model->Set_Container(this);
-	newnode.Model->Set_Animation_Hidden(HTree->Get_Visibility (boneindex) == false);
+	newnode.Model->Set_Animation_Hidden(Hierarchy->Visible (boneindex) == false);
 	newnode.BoneIndex = boneindex;
 
 	int result = AdditionalModels.Add(newnode);
@@ -2648,7 +1774,7 @@ void HLodClass::Set_Animation()
  * HISTORY:                                                                                    *
  *   1/26/00    gth : Created.                                                                 *
  *=============================================================================================*/
-void HLodClass::Set_Animation(HAnimClass * motion,float frame,int mode)
+void HLodClass::Set_Animation(Assets::AnimationAssetHandle motion,float frame,int mode)
 {
 	Animatable3DObjClass::Set_Animation(motion,frame,mode);
 	Set_Sub_Object_Transforms_Dirty(true);
@@ -2669,33 +1795,14 @@ void HLodClass::Set_Animation(HAnimClass * motion,float frame,int mode)
  *=============================================================================================*/
 void HLodClass::Set_Animation
 (
-	HAnimClass * motion0,
+	Assets::AnimationAssetHandle motion0,
 	float frame0,
-	HAnimClass * motion1,
+	Assets::AnimationAssetHandle motion1,
 	float frame1,
 	float percentage
 )
 {
 	Animatable3DObjClass::Set_Animation(motion0,frame0,motion1,frame1,percentage);
-	Set_Sub_Object_Transforms_Dirty(true);
-}
-
-
-/***********************************************************************************************
- * HLodClass::Set_Animation -- set animation state to a combination of anims                   *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   1/26/00    gth : Created.                                                                 *
- *=============================================================================================*/
-void HLodClass::Set_Animation(HAnimComboClass * anim_combo)
-{
-	Animatable3DObjClass::Set_Animation(anim_combo);
 	Set_Sub_Object_Transforms_Dirty(true);
 }
 
@@ -2909,18 +2016,6 @@ void HLodClass::Prepare_LOD(CameraClass &camera)
 		*/
 		int minlod = Calculate_Cost_Value_Arrays(norm_area, Value, Cost);
 		if (CurLod < minlod) Set_LOD_Level(minlod);
-
-
-		/*
-		** Add myself to the LOD optimizer:
-		*/
-		PredictiveLODOptimizerClass::Add_Object(this);
-
-	} else {
-
-		// Not added to optimizer, need to add cost
-		PredictiveLODOptimizerClass::Add_Cost(Get_Cost());
-
 	}
 
 	/*
@@ -3308,8 +2403,8 @@ void HLodClass::Scale(float scale)
 		AdditionalModels[model].Model->Scale(scale);
 	}
 
-	// Scale HTree:
-	HTree->Scale(scale);
+	// Scale Hierarchy:
+	Hierarchy->Scale(scale);
 
 	// Invalidate hierarchy
 	Set_Hierarchy_Valid(false);
@@ -3334,8 +2429,8 @@ void HLodClass::Scale(float scale)
  *=============================================================================================*/
 int HLodClass::Get_Num_Snap_Points()
 {
-	if (SnapPoints) {
-		return SnapPoints->Count();
+	if (!SnapPoints.empty()) {
+		return static_cast<int>(SnapPoints.size());
 	} else {
 		return 0;
 	}
@@ -3357,8 +2452,9 @@ int HLodClass::Get_Num_Snap_Points()
 void HLodClass::Get_Snap_Point(int index,Vector3 * set)
 {
 	WWASSERT(set != nullptr);
-	if (SnapPoints) {
-		*set = (*SnapPoints)[index];
+	if (index>=0 && static_cast<std::size_t>(index)<SnapPoints.size()) {
+		const auto& point=SnapPoints[index];
+		set->Set(point.x,point.y,point.z);
 	} else {
 		set->X = set->Y = set->Z = 0;
 	}
@@ -3396,8 +2492,8 @@ void HLodClass::Update_Sub_Object_Transforms()
 			RenderObjClass * robj = Lod[lod][model].Model;
 			int bone = Lod[lod][model].BoneIndex;
 
-			robj->Set_Transform(HTree->Get_Transform(bone));
-			robj->Set_Animation_Hidden(!HTree->Get_Visibility(bone));
+			robj->Set_Transform(Graphics::Export_Affine_Transform<Matrix3D>(Hierarchy->World_Transform(bone)));
+			robj->Set_Animation_Hidden(!Hierarchy->Visible(bone));
 			robj->Update_Sub_Object_Transforms();
 		}
 	}
@@ -3407,8 +2503,8 @@ void HLodClass::Update_Sub_Object_Transforms()
 		RenderObjClass * robj = AdditionalModels[model].Model;
 		int bone = AdditionalModels[model].BoneIndex;
 
-		robj->Set_Transform(HTree->Get_Transform(bone));
-		robj->Set_Animation_Hidden(!HTree->Get_Visibility(bone));
+		robj->Set_Transform(Graphics::Export_Affine_Transform<Matrix3D>(Hierarchy->World_Transform(bone)));
+		robj->Set_Animation_Hidden(!Hierarchy->Visible(bone));
 		robj->Update_Sub_Object_Transforms();
 	}
 
@@ -3437,7 +2533,7 @@ void HLodClass::Update_Obj_Space_Bounding_Volumes()
 	int count = high_lod.Count ();
 	if (	BoundingBoxIndex < 0 ||
 			BoundingBoxIndex >= count ||
-			high_lod[BoundingBoxIndex].Model->Class_ID () != RenderObjClass::CLASSID_OBBOX)
+			high_lod[BoundingBoxIndex].Model->Class_ID() != RenderObjClass::CLASSID_OBBOX)
 	{
 		BoundingBoxIndex = -1;
 	}
@@ -3452,7 +2548,7 @@ void HLodClass::Update_Obj_Space_Bounding_Volumes()
 		//
 		//	Is this an OBBox mesh?
 		//
-		if (model->Class_ID () == RenderObjClass::CLASSID_OBBOX)
+		if (model->Class_ID() == RenderObjClass::CLASSID_OBBOX)
 		{
 			const char *name = model->Get_Name ();
 			const char *name_seg = ::strchr (name, '.');
@@ -3482,17 +2578,17 @@ void HLodClass::Update_Obj_Space_Bounding_Volumes()
 	}
 
 	// loop through all sub-objects, combining their object-space bounding spheres and boxes.
-	// Put our HTree in its base pose at the origin.
+	// Put our Hierarchy in its base pose at the origin.
 	SphereClass sphere;
 	AABoxClass obj_aabox;
 	MinMaxAABoxClass box;
 
-	HTree->Base_Update(Matrix3D(true));
+	Hierarchy->Evaluate_Rest(Graphics::Import_Affine_Transform(Matrix3D(true)));
 
 	robj = Get_Sub_Object(0);
 	WWASSERT(robj);
 
-	const Matrix3D & bonetm = HTree->Get_Transform(Get_Sub_Object_Bone_Index(robj));
+	const Matrix3D & bonetm = Graphics::Export_Affine_Transform<Matrix3D>(Hierarchy->World_Transform(Get_Sub_Object_Bone_Index(robj)));
 	robj->Get_Obj_Space_Bounding_Sphere(sphere);
 	sphere.Transform(bonetm);
 	robj->Get_Obj_Space_Bounding_Box(obj_aabox);
@@ -3506,7 +2602,7 @@ void HLodClass::Update_Obj_Space_Bounding_Volumes()
 		robj = Get_Sub_Object(i);
 		WWASSERT(robj);
 
-		const Matrix3D & bonetm = HTree->Get_Transform(Get_Sub_Object_Bone_Index(robj));
+		const Matrix3D & bonetm = Graphics::Export_Affine_Transform<Matrix3D>(Hierarchy->World_Transform(Get_Sub_Object_Bone_Index(robj)));
 
 		SphereClass tmpsphere;
 		robj->Get_Obj_Space_Bounding_Sphere(tmpsphere);
@@ -3552,8 +2648,8 @@ void HLodClass::Add_Lod_Model(int lod, RenderObjClass * robj, int boneindex)
 	// (gth) survive the case where the skeleton for this object no longer has
 	// the bone that we're trying to use.  This happens when a skeleton is re-exported
 	// but the models that depend on it aren't re-exported...
-	if (boneindex >= HTree->Num_Pivots()) {
-		WWDEBUG_SAY(("ERROR: Model %s tried to use bone %d in skeleton %s.  Please re-export!",Get_Name(),boneindex,HTree->Get_Name()));
+	if (boneindex >= Hierarchy->Bone_Count()) {
+		WWDEBUG_SAY(("ERROR: Model %s tried to use bone %d in skeleton %s.  Please re-export!",Get_Name(),boneindex,Hierarchy->Name()));
 		boneindex = 0;
 	}
 
@@ -3562,85 +2658,12 @@ void HLodClass::Add_Lod_Model(int lod, RenderObjClass * robj, int boneindex)
 	newnode.Model->Add_Ref();
 	newnode.BoneIndex = boneindex;
 	newnode.Model->Set_Container(this);
-	newnode.Model->Set_Transform(HTree->Get_Transform(boneindex));
+	newnode.Model->Set_Transform(Graphics::Export_Affine_Transform<Matrix3D>(Hierarchy->World_Transform(boneindex)));
 
 	if (Is_In_Scene() && lod == CurLod) {
 		newnode.Model->Notify_Added(Scene);
 	}
 	Lod[lod].Add(newnode);
-}
-
-
-/***********************************************************************************************
- * HLodClass::Create_Decal -- create a decal on this HLod                                      *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   1/26/00    gth : Created.                                                                 *
- *=============================================================================================*/
-void HLodClass::Create_Decal(DecalGeneratorClass * generator)
-{
-	for (int lod=0; lod<LodCount; lod++) {
-		for (int model=0; model<Lod[lod].Count(); model++) {
-			Lod[lod][model].Model->Create_Decal(generator);
-		}
-	}
-
-	for (int model=0; model<AdditionalModels.Count(); model++) {
-		AdditionalModels[model].Model->Create_Decal(generator);
-	}
-}
-
-
-/***********************************************************************************************
- * HLodClass::Delete_Decal -- remove a decal from this HLod                                    *
- *                                                                                             *
- *    The decal_id is the ID which was assigned to the DecalGeneratorClass when you created    *
- *    the decal.                                                                               *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   1/26/00    gth : Created.                                                                 *
- *=============================================================================================*/
-void HLodClass::Delete_Decal(uint32 decal_id)
-{
-	for (int lod=0; lod<LodCount; lod++) {
-		for (int model=0; model<Lod[lod].Count(); model++) {
-			Lod[lod][model].Model->Delete_Decal(decal_id);
-		}
-	}
-
-	for (int model=0; model<AdditionalModels.Count(); model++) {
-		AdditionalModels[model].Model->Delete_Decal(decal_id);
-	}
-}
-
-
-/***********************************************************************************************
- * HLodClass::Set_HTree -- replace the hierarchy tree                                          *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   1/26/00    gth : Created.                                                                 *
- *=============================================================================================*/
-void HLodClass::Set_HTree(HTreeClass * htree)
-{
-	Animatable3DObjClass::Set_HTree(htree);
 }
 
 
@@ -3680,3 +2703,90 @@ void HLodClass::Set_Hidden(int onoff)
 	Animatable3DObjClass::Set_Hidden(onoff);
 }
 
+namespace {
+RenderObjClass* Acquire_Aggregate_Model(const std::string& name)
+{
+    auto* manager=WW3DAssetManager::Get_Instance();
+    auto* object=manager->Create_Render_Obj(name.c_str());
+    if(object)return object;
+    // Preserve aggregate dependency loading from a standalone working-directory
+    // file when the asset manager has not already published that model.
+    std::error_code error;
+    auto path=std::filesystem::current_path(error);
+    if(error)return nullptr;
+    path/=name+".w3d";
+    if(!std::filesystem::exists(path,error) || error)return nullptr;
+    if(!manager->Load_3D_Assets(path.string().c_str()))return nullptr;
+    return manager->Create_Render_Obj(name.c_str());
+}
+
+RenderObjClass* Create_Aggregate(const Assets::ModelAggregateDesc& description)
+{
+        const auto release=[](RenderObjClass* object) { object->Release_Ref(); };
+        using ModelOwner=std::unique_ptr<RenderObjClass,decltype(release)>;
+        ModelOwner model(Acquire_Aggregate_Model(description.base_model),release);
+        if(!model)return nullptr;
+        for(const auto& attachment:description.attachments) {
+            ModelOwner child(Acquire_Aggregate_Model(attachment.model_name),release);
+            if(!child)continue;
+            model->Add_Sub_Object_To_Bone(child.get(),attachment.bone_name.c_str());
+        }
+        model->Set_Name(description.name.c_str());
+        model->Set_Base_Model_Name(description.base_model.c_str());
+        model->Set_Sub_Objects_Match_LOD(description.match_detail_levels);
+        return model.release();
+    }
+
+
+RenderObjClass* Create_Level_Set(const Assets::ModelLevelSetDesc& description)
+{
+        // Acquire dependencies in authored order. HLOD consumes lowest detail
+        // first, so reverse only their placement, not the loading sequence.
+        struct Models {
+            std::vector<RenderObjClass*> objects;
+            ~Models() { for(auto* object:objects)if(object)object->Release_Ref(); }
+        } models;
+        models.objects.resize(description.levels.size());
+        for(std::size_t i=0;i<description.levels.size();++i) {
+            auto* object=WW3DAssetManager::Get_Instance()->Create_Render_Obj(description.levels[i].name.c_str());
+            if(!object)return nullptr;
+            models.objects[models.objects.size()-1-i]=object;
+        }
+        return NEW_REF(HLodClass,(description.name.c_str(),models.objects.data(),static_cast<int>(models.objects.size())));
+    }
+
+}
+
+Graphics::ModelFactory<RenderObjClass>* Load_ModelLevels_Factory(ChunkLoadClass& cload)
+{
+    std::vector<std::byte> bytes(cload.Cur_Chunk_Length());
+    if(cload.Read(bytes.data(),static_cast<unsigned>(bytes.size()))!=bytes.size())return nullptr;
+    Assets::ModelLevelSetDesc description;
+    std::string error;
+    if(!Assets::W3D::W3DRead_Model_Level_Set(bytes,description,error))return nullptr;
+    auto data=std::make_shared<const Assets::ModelLevelSetDesc>(std::move(description));
+    return new Graphics::ModelFactory<RenderObjClass>(data->name,RenderObjClass::CLASSID_DISTLOD,[data] { return Create_Level_Set(*data); });
+}
+
+Graphics::ModelFactory<RenderObjClass>* Load_Aggregate_Factory(ChunkLoadClass& cload)
+{
+    std::vector<std::byte> bytes(cload.Cur_Chunk_Length());
+    if(cload.Read(bytes.data(),static_cast<unsigned>(bytes.size()))!=bytes.size())return nullptr;
+    Assets::W3D::W3DAggregateDescription description;
+    std::string error;
+    if(!Assets::W3D::W3DRead_Model_Aggregate(bytes,description,error))return nullptr;
+    const auto classification=static_cast<int>(description.original_class_id);
+    auto data=std::make_shared<const Assets::ModelAggregateDesc>(std::move(description.model));
+    return new Graphics::ModelFactory<RenderObjClass>(data->name,classification,[data] { return Create_Aggregate(*data); });
+}
+
+
+Graphics::ModelFactory<RenderObjClass> * Load_HModel_Factory(ChunkLoadClass& cload)
+{
+    std::vector<std::byte> bytes(cload.Cur_Chunk_Length());
+    if(cload.Read(bytes.data(),static_cast<unsigned>(bytes.size()))!=bytes.size())return nullptr;
+    Assets::ModelAssemblyDesc description;std::string error;
+    if(!Assets::W3D::W3DRead_Model_Assembly(bytes,false,description,error))return nullptr;
+    auto data=std::make_shared<const Assets::ModelAssemblyDesc>(std::move(description));
+    return new Graphics::ModelFactory<RenderObjClass>(data->name,RenderObjClass::CLASSID_HLOD,[data] { return NEW_REF(HLodClass,(*data)); });
+}

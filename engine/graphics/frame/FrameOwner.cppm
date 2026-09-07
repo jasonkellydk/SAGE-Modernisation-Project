@@ -9,26 +9,27 @@ export import Graphics.FrameTargets;
 namespace Graphics
 {
 
-export using GraphicsPhaseInitializer = bool (*)(Device &);
-export using GraphicsPhaseExecutor = bool (*)(Device &, CommandList &, const FrameTargets &) noexcept;
+export using FrameRendererInitializer = bool (*)(Device &);
+export using FrameDrawExecutor = bool (*)(Device &, CommandList &, const FrameTargets &) noexcept;
 
 export enum class FrameOwnerPhase : std::uint8_t
 {
 	Idle,
-	Legacy,
-	Graphics,
+	Drawing,
+	Submitted,
+	Failed,
 	ReadyToPresent
 };
 
 export class FrameOwner final
 {
 public:
-	bool Set_Graphics_Phase_Executor(GraphicsPhaseExecutor executor) noexcept
+	bool Set_Draw_Executor(FrameDrawExecutor executor) noexcept
 	{
 		if (m_phase != FrameOwnerPhase::Idle)
 			return Reject();
 
-		m_graphics_phase_executor = executor;
+		m_draw_executor = executor;
 		return true;
 	}
 
@@ -51,40 +52,29 @@ public:
 
 		m_device = &device;
 		m_targets = {backbuffer, depth};
-		m_phase = FrameOwnerPhase::Legacy;
+		m_phase = FrameOwnerPhase::Drawing;
 		return true;
 	}
 
-	bool Begin_Graphics_Phase(Device &device) noexcept
+	bool Execute_Queued_Draws(Device &device) noexcept
 	{
-		if (m_phase != FrameOwnerPhase::Legacy || m_device != &device)
+		if (m_phase != FrameOwnerPhase::Drawing || m_device != &device)
 			return Reject();
 
 		CommandList &command_list = device.Immediate_Command_List();
 		if (!command_list.Reset_State() || !command_list.Set_Render_Targets(m_targets.backbuffer.texture, m_targets.depth.texture))
-			return Reject();
+			return Fail_Draws();
 
-		if (m_graphics_phase_executor != nullptr && !m_graphics_phase_executor(device, command_list, m_targets))
-			return Reject();
+		if (m_draw_executor != nullptr && !m_draw_executor(device, command_list, m_targets))
+			return Fail_Draws();
 
-		m_phase = FrameOwnerPhase::Graphics;
+		m_phase = FrameOwnerPhase::Submitted;
 		return true;
-	}
-
-	CommandList *Graphics_Commands(Device &device) noexcept
-	{
-		if (m_phase != FrameOwnerPhase::Graphics || m_device != &device)
-		{
-			Reject();
-			return nullptr;
-		}
-
-		return &device.Immediate_Command_List();
 	}
 
 	bool End_Frame(Device &device) noexcept
 	{
-		if ((m_phase != FrameOwnerPhase::Legacy && m_phase != FrameOwnerPhase::Graphics) || m_device != &device || !device.End_Frame())
+		if ((m_phase != FrameOwnerPhase::Drawing && m_phase != FrameOwnerPhase::Submitted) || m_device != &device || !device.End_Frame())
 			return Reject();
 
 		m_phase = FrameOwnerPhase::ReadyToPresent;
@@ -110,7 +100,8 @@ public:
 			return;
 		}
 
-		if (m_phase == FrameOwnerPhase::Legacy || m_phase == FrameOwnerPhase::Graphics)
+		if (m_phase == FrameOwnerPhase::Drawing || m_phase == FrameOwnerPhase::Submitted
+			|| m_phase == FrameOwnerPhase::Failed)
 			device.End_Frame();
 
 		m_phase = FrameOwnerPhase::Idle;
@@ -134,6 +125,12 @@ public:
 	}
 
 private:
+	bool Fail_Draws() noexcept
+	{
+		m_phase = FrameOwnerPhase::Failed;
+		return Reject();
+	}
+
 	bool Reject() noexcept
 	{
 		++m_invalid_operation_count;
@@ -143,11 +140,9 @@ private:
 	FrameOwnerPhase m_phase = FrameOwnerPhase::Idle;
 	Device *m_device = nullptr;
 	FrameTargets m_targets{};
-	GraphicsPhaseExecutor m_graphics_phase_executor = nullptr;
+	FrameDrawExecutor m_draw_executor = nullptr;
 	std::uint32_t m_invalid_operation_count = 0;
 };
 
-export using FrameHandoffPhase = FrameOwnerPhase;
-export using FrameHandoff = FrameOwner;
 
 }

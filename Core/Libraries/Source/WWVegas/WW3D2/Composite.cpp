@@ -48,8 +48,6 @@
  *   CompositeRenderObjClass::Cast_OBBox -- cast a swept OBBox against this object             *
  *   CompositeRenderObjClass::Intersect_AABox -- intersect this object with an AABox           *
  *   CompositeRenderObjClass::Intersect_OBBox -- intersect this object with an OBBox           *
- *   CompositeRenderObjClass::Create_Decal -- create a decal on this object                    *
- *   CompositeRenderObjClass::Delete_Decal -- remove a logical decal from this object          *
  *   CompositeRenderObjClass::Update_Obj_Space_Bounding_Volumes -- updates the object-space BV *
  *   CompositeRenderObjClass::Set_User_Data -- set the userdata pointer                        *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
@@ -412,55 +410,6 @@ bool CompositeRenderObjClass::Intersect_OBBox(OBBoxIntersectionTestClass & boxte
 		robj->Release_Ref();
 	}
 	return res;
-}
-
-
-/***********************************************************************************************
- * CompositeRenderObjClass::Create_Decal -- create a decal on this object                      *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   1/26/00    gth : Created.                                                                 *
- *=============================================================================================*/
-void CompositeRenderObjClass::Create_Decal(DecalGeneratorClass * generator)
-{
-	for (int i=0; i<Get_Num_Sub_Objects(); i++) {
-		RenderObjClass * robj = Get_Sub_Object(i);
-		WWASSERT(robj);
-		robj->Create_Decal(generator);
-		robj->Release_Ref();
-	}
-}
-
-
-/***********************************************************************************************
- * CompositeRenderObjClass::Delete_Decal -- remove a logical decal from this object            *
- *                                                                                             *
- * This internally removes all decals with the given ID.  The ID comes from the generator      *
- * which was used to create the decals.                                                        *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   1/26/00    gth : Created.                                                                 *
- *=============================================================================================*/
-void CompositeRenderObjClass::Delete_Decal(uint32 decal_id)
-{
-	for (int i=0; i<Get_Num_Sub_Objects(); i++) {
-		RenderObjClass * robj = Get_Sub_Object(i);
-		WWASSERT(robj);
-		robj->Delete_Decal(decal_id);
-		robj->Release_Ref();
-	}
 }
 
 

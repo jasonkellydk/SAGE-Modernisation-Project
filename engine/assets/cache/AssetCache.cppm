@@ -315,6 +315,11 @@ ModelAssetHandle AssetCache::Request_Model(std::string_view name)
 							Dependency_Error("model", "material", Get_Error(material_handle)));
 						return;
 					}
+					for (const TextureAssetHandle texture_handle : Material_Texture_Dependencies(material_handle)) {
+						if (std::find(entry->texture_dependencies.begin(), entry->texture_dependencies.end(),
+								texture_handle) == entry->texture_dependencies.end())
+							entry->texture_dependencies.push_back(texture_handle);
+					}
 				}
 				for (const TextureAssetHandle texture_handle : entry->texture_dependencies) {
 					Wait(texture_handle);
@@ -346,6 +351,16 @@ ModelAssetHandle AssetCache::Request_Model(std::string_view name)
 						if (!duplicate)
 							resolved_dependencies.push_back({identity.type, identity.canonical_name});
 					}
+				}
+				for (const TextureAssetHandle texture_handle : entry->texture_dependencies) {
+					const auto &identity = Try_Get_Texture(texture_handle)->Identity();
+					const bool duplicate = std::any_of(resolved_dependencies.begin(), resolved_dependencies.end(),
+						[&identity](const AssetDependencyDesc &existing) {
+							return existing.type == identity.type
+								&& Canonicalize_Asset_Name(existing.name) == identity.canonical_name;
+						});
+					if (!duplicate)
+						resolved_dependencies.push_back({identity.type, identity.canonical_name});
 				}
 				description->dependencies = std::move(resolved_dependencies);
 
@@ -415,6 +430,7 @@ MaterialAssetHandle AssetCache::Request_Material(AssetIdentity identity, Materia
 				const MaterialAssetDesc description = entry->description;
 				TextureAssetHandle primary_texture = TextureAssetHandle::Invalid();
 				TextureAssetHandle secondary_texture = TextureAssetHandle::Invalid();
+				MaterialSurfaceTextureHandles surface_textures{};
 				if (!description.primary_texture.empty())
 					primary_texture = Request_Texture(description.primary_texture);
 				if (!description.secondary_texture.empty())
@@ -429,6 +445,19 @@ MaterialAssetHandle AssetCache::Request_Material(AssetIdentity identity, Materia
 					entry->texture_dependencies.push_back(primary_texture);
 				if (secondary_texture.Is_Valid() && secondary_texture != primary_texture)
 					entry->texture_dependencies.push_back(secondary_texture);
+				for (std::size_t index = 0; index < surface_textures.size(); ++index) {
+					if (description.surface_textures[index].empty())
+						continue;
+					const auto texture = Request_Texture(description.surface_textures[index]);
+					if (!texture.Is_Valid()) {
+						Set_Failure(entry, "material surface contains a texture with an empty identity");
+						return;
+					}
+					surface_textures[index] = texture;
+					if (std::find(entry->texture_dependencies.begin(), entry->texture_dependencies.end(), texture)
+						== entry->texture_dependencies.end())
+						entry->texture_dependencies.push_back(texture);
+				}
 				for (const TextureAssetHandle texture_handle : entry->texture_dependencies) {
 					Wait(texture_handle);
 					if (Get_State(texture_handle) != AssetState::Ready) {
@@ -443,7 +472,8 @@ MaterialAssetHandle AssetCache::Request_Material(AssetIdentity identity, Materia
 					entry->identity,
 					description,
 					primary_texture,
-					secondary_texture);
+					secondary_texture,
+					surface_textures);
 				if (!loaded.Succeeded()) {
 					Set_Failure(entry, loaded.error);
 					return;

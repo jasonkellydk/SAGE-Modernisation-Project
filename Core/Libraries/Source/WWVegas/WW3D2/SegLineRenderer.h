@@ -38,6 +38,13 @@
 
 #pragma once
 
+#include <array>
+#include <cstdint>
+#include <vector>
+#include <span>
+import Graphics.Scene.Beams.RibbonTextureCoordinates;
+import Graphics.Scene.Props.Geometry;
+
 #include "WWLib/always.h"
 #include "WW3D2/Shader.h"
 #include "Texture.h"
@@ -47,11 +54,10 @@
 class RenderInfoClass;
 class SphereClass;
 struct W3dEmitterLinePropertiesStruct;
-struct VertexFormatXYZDUV1;
 struct SegLineGeometrySink
 {
     void* context = nullptr;
-    void (*submit)(void*, const VertexFormatXYZDUV1*, unsigned, const unsigned*, unsigned) = nullptr;
+    void (*submit)(void*, const Graphics::PropVertex*, unsigned, const unsigned*, unsigned) = nullptr;
 };
 
 
@@ -132,12 +138,6 @@ public:
 
 private:
 
-	// Utility functions
-	void								subdivision_util(unsigned int point_cnt, const Vector3 *xformed_pts,
-											const float *base_tex_v, unsigned int *p_sub_point_cnt,
-											Vector3 *xformed_subdiv_pts, float *subdiv_tex_v,
-											Vector4 *base_diffuse, Vector4 *subdiv_diffuse);
-
 	// Global properties
 	TextureClass *					Texture;
 	ShaderClass						Shader;
@@ -159,10 +159,7 @@ private:
 	// the entire line, or both.
 	float								TextureTileFactor;
 
-	// Used for texture coordinate animation
-	unsigned int					LastUsedSyncTime;		// Last sync time used
-	Vector2							CurrentUVOffset;		// Current UV offset
-	Vector2							UVOffsetDeltaPerMS;	// Amount to increase offset each millisec
+	Graphics::RibbonTextureCoordinates TextureCoordinates;
 
 	// Various flags
 	enum BitShiftOffsets {
@@ -183,9 +180,6 @@ private:
 
 	friend class SegmentedLineClass;
 
-	VertexFormatXYZDUV1 *getVertexBuffer(unsigned int number);
-	unsigned int m_vertexBufferSize;
-	VertexFormatXYZDUV1 *m_vertexBuffer;
 };
 
 
@@ -203,10 +197,11 @@ inline void SegLineRendererClass::Set_Texture_Mapping_Mode(SegLineRendererClass:
 
 inline Vector2 SegLineRendererClass::Get_UV_Offset_Rate() const
 {
-	return UVOffsetDeltaPerMS * 1000.0f;
+	const auto rate = TextureCoordinates.Rate();
+	return Vector2(rate[0], rate[1]);
 }
 
 inline void SegLineRendererClass::Set_UV_Offset_Rate(const Vector2 &rate)
 {
-	UVOffsetDeltaPerMS = rate * 0.001f;
+	TextureCoordinates.SetRate({rate.X, rate.Y});
 }

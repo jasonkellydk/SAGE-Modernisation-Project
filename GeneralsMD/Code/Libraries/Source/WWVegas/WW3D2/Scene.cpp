@@ -64,12 +64,13 @@
 #include "Scene.h"
 #include "WWMath/plane.h"
 #include "Camera.h"
-#include "LightEnvironment.h"
+import Graphics.Frame.AttachmentBindings;
+import Graphics.Scene.DrawParameters;
+import Graphics.Scene.Lighting.Local;
+#include "Light.h"
 #include "WW3D.h"
 #include "RInfo.h"
 #include "WWLib/chunkio.h"
-#include "WW3D2/Backend/RenderBackend.h"
-#include "SortingRenderer.h"
 #include "ColTest.h"
 
 
@@ -103,9 +104,9 @@ public:
 
 protected:
 
-	SimpleSceneIterator(RefRenderObjListClass * renderlist,bool onlyvis);
+	SimpleSceneIterator(Graphics::SceneObjectList<RenderObjClass> * renderlist,bool onlyvis);
 
-	RefRenderObjListIterator	RobjIterator;
+	Graphics::SceneObjectList<RenderObjClass>::Cursor	RobjIterator;
 	SimpleSceneClass *			Scene;
 	bool								OnlyVis;
 
@@ -215,7 +216,7 @@ void SceneClass::Render(RenderInfoClass & rinfo)
 	// Any stuff that needs to get done before anything else
 	Pre_Render_Processing(rinfo);
 
-	WW3D::Get_Render_Backend()->Set_Fog(FogEnabled, FogColor, FogStart, FogEnd);
+	Graphics::Get_Scene_Draw_Parameters().fog = {FogEnabled, FogStart, FogEnd, {FogColor.X, FogColor.Y, FogColor.Z, 1}};
 
 	if (Get_Extra_Pass_Polygon_Mode()==EXTRA_PASS_DISABLE) {
 		Customized_Render(rinfo);
@@ -223,20 +224,20 @@ void SceneClass::Render(RenderInfoClass & rinfo)
 	else {
 		bool old_enable=WW3D::Is_Texturing_Enabled();
 
-		WW3D::Get_Render_Backend()->Set_Depth_Bias(0);
+		Graphics::Get_Scene_Draw_Parameters().depth_bias = 0;
 		Customized_Render(rinfo);
 		switch (Get_Extra_Pass_Polygon_Mode()) {
 		case EXTRA_PASS_LINE:
 			WW3D::Enable_Texturing(false);
-			WW3D::Get_Render_Backend()->Set_Fill_Mode(RenderBackendFillMode::Wireframe);
-			WW3D::Get_Render_Backend()->Set_Depth_Bias(7);
+			Graphics::Get_Scene_Draw_Parameters().wireframe = true;
+			Graphics::Get_Scene_Draw_Parameters().depth_bias = 7;
 			Customized_Render(rinfo);
 			break;
 		case EXTRA_PASS_CLEAR_LINE:
-			WW3D::Get_Render_Backend()->Clear(true, false, Vector3(0.0f,0.0f,0.0f));	// Clear color but not z
+			Graphics::Get_Attachment_Bindings().Clear(true, false, {0,0,0,0});	// Clear color but not z
 			WW3D::Enable_Texturing(false);
-			WW3D::Get_Render_Backend()->Set_Fill_Mode(RenderBackendFillMode::Wireframe);
-			WW3D::Get_Render_Backend()->Set_Depth_Bias(7);
+			Graphics::Get_Scene_Draw_Parameters().wireframe = true;
+			Graphics::Get_Scene_Draw_Parameters().depth_bias = 7;
 			Customized_Render(rinfo);
 			break;
 		}
@@ -454,7 +455,7 @@ void SimpleSceneClass::Unregister(RenderObjClass * obj,RegType for_what)
  *=============================================================================================*/
 void SimpleSceneClass::Visibility_Check(CameraClass * camera)
 {
-	RefRenderObjListIterator it(&RenderList);
+	Graphics::SceneObjectList<RenderObjClass>::Cursor it(&RenderList);
 
 	// Loop over all top-level RenderObjects in this scene. If the bounding sphere is not in front
 	// of all the frustum planes, it is invisible.
@@ -503,7 +504,7 @@ float SimpleSceneClass::Compute_Point_Visibility
 	LineSegClass ray(rinfo.Camera.Get_Position(),point);
 	RayCollisionTestClass raytest(ray,&res,COLL_TYPE_PROJECTILE);
 
-	RefRenderObjListIterator it(&RenderList);
+	Graphics::SceneObjectList<RenderObjClass>::Cursor it(&RenderList);
 	for (it.First(); !it.Is_Done(); it.Next()) {
 		RenderObjClass * robj = it.Peek_Obj();
 		robj->Cast_Ray(raytest);
@@ -545,53 +546,24 @@ void SimpleSceneClass::Customized_Render(RenderInfoClass & rinfo)
    }
    Visibility_Checked = false;
 
-	RefRenderObjListIterator it(&UpdateList);
+	Graphics::SceneObjectList<RenderObjClass>::Cursor it(&UpdateList);
 
 	// allow all objects in the update list to do their "every frame" processing
 	for (it.First(); !it.Is_Done(); it.Next()) {
 		it.Peek_Obj()->On_Frame_Update();
 	}
 
-	// apply only the first four lights in the scene
-	// derived classes should use light environment
-	WWASSERT(rinfo.light_environment==nullptr);
-	int count=0;
-	// Turn off lights in case we have none
-	WW3D::Get_Render_Backend()->Disable_Light(0);
-	WW3D::Get_Render_Backend()->Disable_Light(1);
-	WW3D::Get_Render_Backend()->Disable_Light(2);
-	WW3D::Get_Render_Backend()->Disable_Light(3);
-
-// (gth) WWShade only works with light environments.  We need to upgrade LightEnvironment to
-// support real point lights, etc.  It will likely just evolve into "the n most important" lights
-// rather than optimizing lights into directional lights...
-#if 0
-	for (it.First(&LightList); !it.Is_Done(); it.Next())
-	{
-		if (count<4)
-		{
-			WW3D::Get_Render_Backend()->Set_Light(count,*(LightClass*)it.Peek_Obj());
-		} else
-		{
-			// Simple scene only supports 4 global lights
-			WWDEBUG_SAY(("Light %d ignored",count));
-		}
-		count++;
-	}
-#endif
-
-	// adding light environment for new shader system
 	if (!rinfo.light_environment)
 	{
-		static LightEnvironmentClass lenv;
+		static Graphics::LocalLighting lenv;
 
-		lenv.Reset(Vector3(0,0,0),AmbientLight);
+		lenv.Reset({0,0,0}, {(AmbientLight).X,(AmbientLight).Y,(AmbientLight).Z});
 
 		for (it.First(&LightList); !it.Is_Done(); it.Next())
 		{
-			lenv.Add_Light(*(LightClass*)it.Peek_Obj());
+			lenv.Add(Describe_Material_Light(*(LightClass*)it.Peek_Obj()));
 		}
-		lenv.Pre_Render_Update(rinfo.Camera.Get_Transform());
+		lenv.Finalize();
 
 		rinfo.light_environment=&lenv;
 	}
@@ -622,7 +594,7 @@ void SimpleSceneClass::Post_Render_Processing(RenderInfoClass& rinfo)
 	// want to be released.  We have to walk this list twice, first un-linking the
 	// object from the scene or its container.  And then removing them all from
 	// the list.  (this last removal will destroy any auto-created objects)
-	RefRenderObjListIterator it(&ReleaseList);
+	Graphics::SceneObjectList<RenderObjClass>::Cursor it(&ReleaseList);
 	for (it.First(&ReleaseList); !it.Is_Done(); it.Next()) {
 		RenderObjClass * robj = it.Peek_Obj();
 		if (robj->Get_Container()) {
@@ -674,7 +646,7 @@ void SimpleSceneClass::Destroy_Iterator(SceneIterator * it)
 }
 
 
-SimpleSceneIterator::SimpleSceneIterator(RefRenderObjListClass * list,bool onlyvis) :
+SimpleSceneIterator::SimpleSceneIterator(Graphics::SceneObjectList<RenderObjClass> * list,bool onlyvis) :
 	RobjIterator(list)
 {
 	// TODO: make SimpleSceneIterator able to iterate through only the visible nodes.

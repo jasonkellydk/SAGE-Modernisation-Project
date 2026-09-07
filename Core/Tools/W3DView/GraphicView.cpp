@@ -1,3 +1,4 @@
+import Graphics.Backends.DX11.FrameRuntime;
 /*
 **	Command & Conquer Renegade(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -24,7 +25,7 @@
 #include "GraphicView.h"
 #include "WW3D2/WW3D.h"
 #ifdef RTS_ZEROHOUR
-#include "WW3D2/GraphicsToolFrame.h"
+import Graphics.Frame.ToolFrame;
 #endif
 #include "Globals.h"
 #include "W3DViewDoc.h"
@@ -48,7 +49,6 @@
 #include "WWAudio/SoundScene.h"
 #include "WWAudio/WWAudio.h"
 #include "WW3D2/MetalMap.h"
-#include "WW3D2/Backend/RenderBackend.h"
 #include "WWMath/matrix3.h"
 
 #ifdef RTS_DEBUG
@@ -203,11 +203,14 @@ CGraphicView::InitializeGraphicView ()
 		((CW3DViewDoc *)GetDocument())->Show_Cursor (false);
 	}
 
-	bReturn = (WW3D::Set_Render_Device (g_iDeviceIndex,
-													cx,
-													cy,
-													g_iBitsPerPixel,
-													m_iWindowed) == WW3D_ERROR_OK);
+    if (Graphics::Shared_Frame_Device()) {
+        bReturn = Graphics::Resize_Frame_Device(cx,cy,false);
+    } else {
+        Graphics::DX11DeviceOptions options;
+        options.window = m_hWnd; options.width = cx; options.height = cy;
+        options.backbuffer_format = Graphics::RHITextureFormat::BGRA8_UNorm;
+        bReturn = Graphics::Initialize_Frame_Device(options);
+    }
 
     ASSERT (bReturn);
     if (bReturn && (m_pCamera == nullptr))
@@ -295,7 +298,7 @@ CGraphicView::OnSize
 		// Change the resolution of the rendering device to
 		// match that of the view's current dimensions
 		if (m_iWindowed == 1) {
-			WW3D::Set_Device_Resolution (cx, cy, g_iBitsPerPixel, m_iWindowed);
+			Graphics::Resize_Frame_Device(cx, cy, false);
 		}
 
 		// Force a repaint of the screen
@@ -503,15 +506,12 @@ CGraphicView::RepaintView
 		//
 		//	Render the background BMP
 		//
-#ifdef RTS_ZEROHOUR
-        if (!Begin_Graphics_Tool_Frame()) return;
+        if (!Graphics::Begin_Tool_Frame()) return;
         if (WW3D::Begin_Render(TRUE, TRUE, doc->GetBackgroundColor()) != WW3D_ERROR_OK) {
-            Abort_Graphics_Tool_Frame();
+            Graphics::Abort_Tool_Frame();
             return;
         }
-#else
-		WW3D::Begin_Render (TRUE, TRUE, doc->GetBackgroundColor ());
-#endif
+
 		WW3D::Render (doc->Get2DScene (), doc->Get2DCamera (), FALSE, FALSE);
 
 		//
@@ -543,12 +543,9 @@ CGraphicView::RepaintView
 		doc->Render_Dazzles(m_pCamera.Peek());
 
         // Finish out the rendering process
-#ifdef RTS_ZEROHOUR
-        WW3D::End_Render(false);
-        if (!End_Graphics_Tool_Frame()) DEBUG_LOG(("Viewer frame submission failed.\n"));
-#else
         WW3D::End_Render();
-#endif
+        if (!Graphics::End_Tool_Frame()) DEBUG_LOG(("Viewer frame submission failed.\n"));
+
 
 		//
 		//	Let the audio class think

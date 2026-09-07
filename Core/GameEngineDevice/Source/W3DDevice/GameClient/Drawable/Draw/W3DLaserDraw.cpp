@@ -125,9 +125,9 @@ W3DLaserDraw::W3DLaserDraw( Thing *thing, const ModuleData* moduleData ) :
 		if (!m_texture->Is_Initialized())
 			m_texture->Init();	//make sure texture is actually loaded before accessing surface.
 
-		SurfaceClass::SurfaceDescription surfaceDesc;
+		Assets::ImageDescription surfaceDesc;
 		m_texture->Get_Level_Description(surfaceDesc);
-		m_textureAspectRatio = (Real)surfaceDesc.Width/(Real)surfaceDesc.Height;
+		m_textureAspectRatio = (Real)surfaceDesc.width/(Real)surfaceDesc.height;
 	}
 
 	//Get the color components for calculation purposes.

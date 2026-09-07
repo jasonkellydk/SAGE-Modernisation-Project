@@ -13,6 +13,59 @@ import Graphics.Backends.DX11;
 using namespace Graphics;
 using namespace Engine::UI::WND;
 
+BOOST_AUTO_TEST_CASE(viewport_labels_preserve_placement_coverage_and_font_after_renderer_restart)
+{
+    FontFace font;
+    Assets::FontGlyphAsset letter;
+    letter.character = 'A';
+    letter.width = 4;
+    letter.spacing = 6;
+    letter.alpha = {0,255,128,0, 0,255,128,0, 0,255,128,0, 0,255,128,0};
+    Assets::FontGlyphAsset space;
+    space.character = ' ';
+    space.spacing = 3;
+    BOOST_REQUIRE(font.Build(Assets::FontAsset("Label", 15, false, 4, 0, {letter, space})));
+    DX11Device device({true});
+    BOOST_REQUIRE(device.Is_Valid());
+    Renderer2D renderer;
+    for (const unsigned size : {32u, 48u}) {
+        BOOST_REQUIRE(renderer.Initialize(device, std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+        const auto target = device.Create_Texture({size,size,1,RHITextureFormat::RGBA8_UNorm,
+            static_cast<std::uint32_t>(RHITextureUsage::RenderTarget)});
+        const auto depth = device.Create_Texture({size,size,1,RHITextureFormat::D32_Float,
+            static_cast<std::uint32_t>(RHITextureUsage::DepthStencil)});
+        auto& commands = device.Immediate_Command_List();
+        BOOST_REQUIRE(commands.Set_Render_Targets(target, depth));
+        BOOST_REQUIRE(commands.Clear({0,0,1,1},1));
+        renderer.Begin(size,size);
+        const std::uint16_t label[] = {'A',' ','A',0};
+        TextStyle style;
+        style.color = {0,1,0,175.0f/255};
+        style.drop_color = {0,0,0,0};
+        TextRenderer text;
+        BOOST_REQUIRE(text.Draw(renderer,font,nullptr,label,4,4,{},style));
+        style.color = {1,0,0,175.0f/255};
+        BOOST_REQUIRE(text.Draw(renderer,font,nullptr,label,4,19,{},style));
+        BOOST_REQUIRE(renderer.Execute(device,commands,target,depth,{0,0,size,size}));
+        std::vector<std::byte> pixels(size*size*4);
+        BOOST_REQUIRE(device.Readback_Texture(target,pixels,size*4));
+        const auto check = [&](unsigned x, unsigned y, std::array<int,3> expected) {
+            for (unsigned channel=0;channel<3;++channel)
+                BOOST_CHECK_SMALL(std::to_integer<int>(pixels[(y*size+x)*4+channel])-expected[channel],2);
+        };
+        check(5,5,{0,175,80});
+        check(6,5,{0,88,167});
+        check(4,5,{0,0,255});
+        check(10,5,{0,0,255});
+        check(14,5,{0,175,80});
+        check(5,9,{0,0,255});
+        check(5,20,{175,0,80});
+        renderer.Shutdown();
+        BOOST_REQUIRE(device.Destroy_Texture(target));
+        BOOST_REQUIRE(device.Destroy_Texture(depth));
+    }
+}
+
 namespace {
 struct Layers {
     ImageRef terrain, overlay, shroud;

@@ -49,7 +49,7 @@
 #include "W3DDevice/GameClient/W3DBridgeBuffer.h"
 #include "W3DDevice/GameClient/W3DGraphicsResources.h"
 import Graphics.Scene.Bridges.Renderer;
-import Graphics.Backends.DX11.Coexistence;
+import Graphics.Backends.DX11.FrameRuntime;
 
 #include "W3DDevice/GameClient/W3DAssetManager.h"
 #include <WW3D2/Texture.h>
@@ -71,7 +71,6 @@ import Graphics.Backends.DX11.Coexistence;
 #include "WW3D2/Camera.h"
 #include "WW3D2/VertexFormat.h"
 #include "WW3D2/WW3D.h"
-#include "WW3D2/Backend/RenderBackend.h"
 #include "WW3D2/Mesh.h"
 #include "WW3D2/MeshMdl.h"
 #include "WW3D2/Scene.h"
@@ -409,7 +408,7 @@ void W3DBridge::getBridgeInfo(BridgeInfo *pInfo)
 Int W3DBridge::getModelVertices(VertexFormatXYZNDUV1 *destination_vb, Int curVertex, Real xOffset,
 																Vector3 &vec, Vector3 &vecNormal, Vector3 &vecZ, Vector3 &offset,
 																const Matrix3D &mtx,
-																MeshClass *pMesh, RefRenderObjListIterator *pLightsIterator)
+																MeshClass *pMesh, Graphics::SceneObjectList<RenderObjClass>::Cursor *pLightsIterator)
 {
 	if (pMesh == nullptr)
 		return(0);
@@ -487,7 +486,7 @@ Int W3DBridge::getModelVertices(VertexFormatXYZNDUV1 *destination_vb, Int curVer
 /** Gets the vertex values for a section of a fixed bridge.  */
 //=============================================================================
 Int W3DBridge::getModelVerticesFixed(VertexFormatXYZNDUV1 *destination_vb, Int curVertex,
-																const Matrix3D &mtx, MeshClass *pMesh, RefRenderObjListIterator *pLightsIterator)
+																const Matrix3D &mtx, MeshClass *pMesh, Graphics::SceneObjectList<RenderObjClass>::Cursor *pLightsIterator)
 {
 	if (pMesh == nullptr)
 		return(0);
@@ -515,7 +514,7 @@ Int W3DBridge::getModelVerticesFixed(VertexFormatXYZNDUV1 *destination_vb, Int c
 /** Gets the index values and vertex values for a bridge.  */
 //=============================================================================
 void W3DBridge::getIndicesNVertices(UnsignedShort *destination_ib, VertexFormatXYZNDUV1 *destination_vb,
-																		Int *curIndexP, Int *curVertexP, RefRenderObjListIterator *pLightsIterator)
+																		Int *curIndexP, Int *curVertexP, Graphics::SceneObjectList<RenderObjClass>::Cursor *pLightsIterator)
 {
 	Int numI;
 	Int numV;
@@ -688,7 +687,7 @@ void W3DBridgeBuffer::cull(CameraClass * camera)
 //=============================================================================
 /** Loads the bridges into the vertex buffer for drawing. */
 //=============================================================================
-void W3DBridgeBuffer::loadBridgesInVertexAndIndexBuffers(RefRenderObjListIterator *pLightsIterator)
+void W3DBridgeBuffer::loadBridgesInVertexAndIndexBuffers(Graphics::SceneObjectList<RenderObjClass>::Cursor *pLightsIterator)
 {
     if (!m_initialized || m_vertices.empty() || m_indices.empty()) return;
     m_curNumBridgeVertices = 0;
@@ -1076,7 +1075,7 @@ void W3DBridgeBuffer::addBridge(Vector3 fromLoc, Vector3 toLoc, AsciiString name
 //=============================================================================
 /** Updates the drawing buffer, based on the camera position. */
 //=============================================================================
-void W3DBridgeBuffer::updateCenter(CameraClass *camera, RefRenderObjListIterator *pLightsIterator)
+void W3DBridgeBuffer::updateCenter(CameraClass *camera, Graphics::SceneObjectList<RenderObjClass>::Cursor *pLightsIterator)
 {
 	cull(camera);
 	if (m_anythingChanged || m_curNumBridgeIndices == 0) {
@@ -1158,5 +1157,4 @@ void W3DBridgeBuffer::drawBridges(CameraClass * camera, Bool wireframe, TextureC
     if (!Graphics::Draw_Bridges(Graphics::Get_Surface_Renderer(), device->Immediate_Command_List(),
         draws, parameters, cloud, shroud))
         DEBUG_LOG(("Bridge graphics submission failed.\n"));
-    if (auto *backend = WW3D::Get_Render_Backend()) backend->Invalidate_Cached_Render_States();
 }

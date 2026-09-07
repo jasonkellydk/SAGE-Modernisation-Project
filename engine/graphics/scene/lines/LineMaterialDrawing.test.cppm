@@ -36,7 +36,7 @@ BOOST_AUTO_TEST_CASE(textured_lines_retain_tiling_scrolling_blend_and_scene_dept
     style.depth_write=false;
     style.source_blend=RHIBlendFactor::One;
     style.destination_blend=RHIBlendFactor::One;
-    style.samplers[0].linear_filter=false;
+    style.samplers[0].Set_Filter(Graphics::RHISamplerFilter::Point);
     const std::array textures{texture};
     const auto check=[&](std::array<int,4> expected) {
         std::array<std::byte,16*16*4> pixels{};

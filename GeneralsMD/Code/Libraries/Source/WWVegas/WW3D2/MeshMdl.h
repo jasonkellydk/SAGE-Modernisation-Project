@@ -36,6 +36,8 @@
 
 #pragma once
 
+class GraphicsMeshState;
+
 #include "WWMath/vector2.h"
 #include "WWMath/vector3.h"
 #include "WWMath/vector4.h"
@@ -51,29 +53,19 @@
 #include "RInfo.h"
 #include "MeshGeometry.h"
 #include "MeshMatDesc.h"
-#include "WW3D2/Backend/RenderBackend.h"
 
 class TextureClass;
 class RenderInfoClass;
-class SpecialRenderInfoClass;
-class MatBufferClass;
-class TexBufferClass;
 class AABoxClass;
 class OBBoxClass;
 class FrustumClass;
 class SphereClass;
-class AABTreeClass;
 class MaterialInfoClass;
 class MeshLoadContextClass;
-class MeshSaveContextClass;
 class ChunkLoadClass;
 class ChunkSaveClass;
 class MeshClass;
-class HTreeClass;
-class DecalGeneratorClass;
-class LightEnvironmentClass;
 
-class GapFillerClass;
 
 struct VertexFormatXYZNDUV2;
 
@@ -82,11 +74,9 @@ struct VertexFormatXYZNDUV2;
 ** This class is a repository for all of the geometry information that defines the mesh.
 ** Its purpose is to allow separate instances of a mesh to share as much data as possible.
 **
-** There are some tricky aspects to this class that may not be immediately obvious.  The
-** arrays of pointers to textures and vertex materials must be handled in a special way
-** due to the fact that they are also ref-counted objects which should only be released
-** when the last reference to the array is released (i.e. when no one is using the array
-** any more...)
+** Material slot collections retain their resource owners independently of the mesh
+** description.  Alternate descriptions share those collections, while a copied mesh
+** description receives an independent collection with retained resource owners.
 **
 ** Copy/Add_Ref Rules:
 ** The purpose of this model was to share data between models whenever possible.  To this
@@ -103,44 +93,12 @@ struct VertexFormatXYZNDUV2;
 ** PlaneEq - plane equations cannot be shared if a vertex is moved
 ** CullTree - culling tree becomes instance specific if a vertex moves (shouldn't even use this with skins...)
 **
-** ALWAYS UNIQUE, BUT SHARE ARRAYS BETWEEN ALTERNATE MATERIAL REPRESENTATIONS (should we share some of these?)
+** ALWAYS UNIQUE, BUT SHARE ARRAYS BETWEEN ALTERNATE MATERIAL REPRESENTATIONS
 ** UV, DIG, DCG, SCG
 ** Texture, Shader, Material,
 ** TextureArray, MaterialArray, ShaderArray
 */
 
-
-/**
-** GapFillerClass
-** This class is used to generate gap-filling polygons for "N-Patched" meshes
-*/
-class GapFillerClass
-{
-	W3DMPO_CODE(GapFillerClass)
-
-	TriIndex* PolygonArray;
-	unsigned PolygonCount;
-	unsigned ArraySize;
-	TextureClass** TextureArray[MeshMatDescClass::MAX_PASSES][MeshMatDescClass::MAX_TEX_STAGES];
-	VertexMaterialClass** MaterialArray[MeshMatDescClass::MAX_PASSES];
-	ShaderClass* ShaderArray[MeshMatDescClass::MAX_PASSES];
-	MeshModelClass* mmc;
-
-	GapFillerClass& operator = (const GapFillerClass&) FUNCTION_DELETE;
-public:
-	GapFillerClass(MeshModelClass* mmc);
-	GapFillerClass(const GapFillerClass& that);
-	~GapFillerClass();
-
-	WWINLINE const TriIndex* Get_Polygon_Array() const { return PolygonArray; }
-	WWINLINE unsigned Get_Polygon_Count() const { return PolygonCount; }
-	WWINLINE TextureClass** Get_Texture_Array(int pass, int stage) const { return TextureArray[pass][stage]; }
-	WWINLINE VertexMaterialClass** Get_Material_Array(int pass) const { return MaterialArray[pass]; }
-	WWINLINE ShaderClass* Get_Shader_Array(int pass) const { return ShaderArray[pass]; }
-
-	void Add_Polygon(unsigned polygon_index,unsigned vidx1,unsigned vidx2, unsigned vidx3);
-	void Shrink_Buffers();
-};
 
 class MeshModelClass : public MeshGeometryClass
 {
@@ -152,10 +110,10 @@ public:
 	MeshModelClass(const MeshModelClass & that);
 	virtual ~MeshModelClass() override;
 
+    GraphicsMeshState*& Graphics_Mesh_State() noexcept { return GraphicsMeshes; }
+
 	MeshModelClass & operator = (const MeshModelClass & that);
 	void							Reset(int polycount,int vertcount,int passcount);
-	void							Delete_Gap_Filler();
-	void							Shadow_Render(SpecialRenderInfoClass & rinfo,const Matrix3D & tm,const HTreeClass * htree);
 
 	/////////////////////////////////////////////////////////////////////////////////////
 	// Material interface, All of these functions call through to the current
@@ -223,12 +181,6 @@ public:
 	virtual WW3DErrorType				Load_W3D(ChunkLoadClass & cload) override;
 
 	/////////////////////////////////////////////////////////////////////////////////////
-	//	Decal interface
-	/////////////////////////////////////////////////////////////////////////////////////
-	void							Create_Decal(DecalGeneratorClass * generator, MeshClass * parent);
-	void							Delete_Decal(uint32 decal_id);
-
-	/////////////////////////////////////////////////////////////////////////////////////
 	//	Alternate Material Description Interface
 	// Some models will allow you to alternate between multiple material descriptions
 	/////////////////////////////////////////////////////////////////////////////////////
@@ -241,23 +193,20 @@ public:
 	// Determine whether any rendering feature used by this mesh requires vertex normals
 	bool							Needs_Vertex_Normals();
 
-	void							Init_For_NPatch_Rendering();
-	const GapFillerClass*	Get_Gap_Filler() const { return GapFiller; }
 
 
 
 protected:
 
 	// MeshClass will set this for skins so that they can get the bone transforms
-	void							Set_HTree(const HTreeClass * htree);
 
 public: // Jani: I need to have an access to these for now...
 
-	TexBufferClass *			Get_Texture_Array(int pass,int stage,bool create = true)
+	MeshMatDescClass::TextureSlots *	Get_Texture_Array(int pass,int stage,bool create = true)
 	{
 		return CurMatDesc->Get_Texture_Array(pass,stage,create);
 	}
-	MatBufferClass *			Get_Material_Array(int pass,bool create = true)
+	MeshMatDescClass::MaterialSlots *	Get_Material_Array(int pass,bool create = true)
 	{
 		return CurMatDesc->Get_Material_Array(pass,create);
 	}
@@ -283,15 +232,6 @@ protected:
 	WW3DErrorType read_vertex_materials(ChunkLoadClass & cload,MeshLoadContextClass * context);
 	WW3DErrorType read_textures(ChunkLoadClass & cload,MeshLoadContextClass * context);
 	WW3DErrorType read_material_pass(ChunkLoadClass & cload,MeshLoadContextClass * context);
-	WW3DErrorType read_vertex_material_ids(ChunkLoadClass & cload,MeshLoadContextClass * context);
-	WW3DErrorType read_shader_ids(ChunkLoadClass & cload,MeshLoadContextClass * context);
-	WW3DErrorType read_scg(ChunkLoadClass & cload,MeshLoadContextClass * context);
-	WW3DErrorType read_dig(ChunkLoadClass & cload,MeshLoadContextClass * context);
-	WW3DErrorType read_dcg(ChunkLoadClass & cload,MeshLoadContextClass * context);
-	WW3DErrorType read_texture_stage(ChunkLoadClass & cload,MeshLoadContextClass * context);
-	WW3DErrorType read_texture_ids(ChunkLoadClass & cload,MeshLoadContextClass * context);
-	WW3DErrorType read_stage_texcoords(ChunkLoadClass & cload,MeshLoadContextClass * context);
-	WW3DErrorType read_per_face_texcoord_ids (ChunkLoadClass &cload, MeshLoadContextClass *context);
 	WW3DErrorType read_prelit_material (ChunkLoadClass &cload, MeshLoadContextClass *context);
 
 	// post-processing
@@ -319,10 +259,8 @@ protected:
 	// Collection of the unique materials in the mesh
 	MaterialInfoClass	*									MatInfo;
 
-	// Opaque mesh rendering data owned by the active render backend.
+    GraphicsMeshState* GraphicsMeshes = nullptr;
 
-	// Jani: Adding this here temporarily... must fine better place
-	GapFillerClass *										GapFiller;
 
 	friend class MeshClass;
 	friend class MeshDeformSetClass;

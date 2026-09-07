@@ -39,6 +39,12 @@
 
 #pragma once
 
+#include <memory>
+#include <span>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
 #include "WWLib/always.h"
 #include "WWMath/matrix3d.h"
 #include "WWMath/matrix4.h"
@@ -46,14 +52,13 @@
 #include "MatPass.h"
 #include "WW3D2/MatrixMapper.h"
 #include "WWMath/cullsys.h"
-#include "WWLib/multilist.h"
 #include "Projector.h"
 
 
-class SpecialRenderInfoClass;
+class RenderInfoClass;
 class RenderObjClass;
 class MaterialPassClass;
-class SurfaceClass;
+import Graphics.Resources.Textures.Edit;
 
 class TextureClass;
 class ZTextureClass;
@@ -80,7 +85,6 @@ class ZTextureClass;
 ** - Texture projectors need to be quickly pulled in and out of many lists during
 **   the rendering process.
 **   solution: list system similar to PhysListClass?  I really need to templatize this.
-**   - done:  MultiListClass!
 **
 ** - Dynamic Texture projectors need to be updated in stages.  Update/recompute only the
 **   bounding volume first, then defer computing the actual texture until it is
@@ -96,7 +100,7 @@ class ZTextureClass;
 **   or generated off-line.
 **
 */
-class TexProjectClass : public ProjectorClass, public CullableClass, public MultiListObjectClass
+class TexProjectClass : public ProjectorClass, public CullableClass
 {
 public:
 
@@ -161,7 +165,7 @@ public:
 	void						Set_Render_Target(TextureClass* render_target, ZTextureClass* ztarget=nullptr);
 	TextureClass*			Peek_Render_Target(TextureClass** rtarget=nullptr, ZTextureClass** ztarget=nullptr);
 
-	bool Compute_Texture(RenderObjClass *model, SpecialRenderInfoClass *context,
+	bool Compute_Texture(RenderObjClass *model, RenderInfoClass *context,
         bool (*draw)(RenderObjClass&, RenderInfoClass&) = nullptr);
 
 	/*
@@ -236,5 +240,3 @@ protected:
 /*
 ** Texture Projector Lists
 */
-typedef RefMultiListClass<TexProjectClass>		TexProjListClass;
-typedef RefMultiListIterator<TexProjectClass>	TexProjListIterator;

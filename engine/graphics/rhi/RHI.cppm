@@ -58,6 +58,16 @@ export enum class RHITextureFormat : std::uint8_t
 	R32_Float,
 	D24_UNorm_S8,
 	D32_Float,
+	BGR565_UNorm,
+	BGRA4444_UNorm,
+	BGRX8_UNorm,
+	BGRA5551_UNorm,
+	A8_UNorm,
+	RG8_SNorm,
+	BC1_UNorm,
+	BC2_UNorm,
+	BC3_UNorm,
+	D16_UNorm,
 	Unknown
 };
 
@@ -69,6 +79,8 @@ export enum class RHITextureUsage : std::uint32_t
 	UnorderedAccess = 1u << 3
 };
 
+export enum class RHITextureDimension : std::uint8_t { Texture2D, Cube, Volume };
+
 export struct RHITexture final
 {
 	std::uint32_t width = 0;
@@ -77,18 +89,43 @@ export struct RHITexture final
 	RHITextureFormat format = RHITextureFormat::RGBA8_UNorm;
 	std::uint32_t usage = static_cast<std::uint32_t>(RHITextureUsage::ShaderResource);
 	std::uint32_t depth = 1;
+	std::uint32_t array_size = 1;
+	RHITextureDimension dimension = RHITextureDimension::Texture2D;
+	bool generate_mips = false;
+	// Output views address one array layer; the sampled view covers all layers.
+	std::uint32_t output_layer = 0;
 };
 
 export struct RHITextureUpload final
 {
 	std::span<const std::byte> data{};
 	std::uint32_t row_pitch = 0;
+	std::uint32_t slice_pitch = 0;
+	std::uint32_t mip_level = 0;
+	std::uint32_t array_layer = 0;
+};
+
+export struct RHITextureReadback final
+{
+	std::span<std::byte> data{};
+	std::uint32_t row_pitch = 0;
+	std::uint32_t slice_pitch = 0;
+	std::uint32_t mip_level = 0;
+	std::uint32_t array_layer = 0;
+};
+
+export struct RHITextureMapping final
+{
+	std::span<std::byte> bytes{};
+	std::uint32_t row_pitch = 0;
+	std::uint32_t slice_pitch = 0;
 };
 
 export enum class RHIPrimitiveTopology : std::uint8_t
 {
 	TriangleList,
-	PointList
+	PointList,
+	TriangleStrip
 };
 
 export enum class RHIVertexFormat : std::uint8_t
@@ -126,10 +163,18 @@ export enum class RHISamplerAddress : std::uint8_t
 	Clamp
 };
 
+export enum class RHISamplerFilter : std::uint8_t { Point, Linear };
+
 export struct RHISamplerDescription final
 {
 	std::array<RHISamplerAddress,3> address{RHISamplerAddress::Wrap,RHISamplerAddress::Wrap,RHISamplerAddress::Wrap};
-	bool linear_filter = true;
+    RHISamplerFilter minification = RHISamplerFilter::Linear;
+    RHISamplerFilter magnification = RHISamplerFilter::Linear;
+    RHISamplerFilter mipmap = RHISamplerFilter::Linear;
+    std::uint8_t anisotropy = 1;
+    float min_lod = 0;
+    float max_lod = 3.402823466e+38f;
+    void Set_Filter(RHISamplerFilter filter) noexcept { minification = magnification = mipmap = filter; }
     bool operator==(const RHISamplerDescription&) const = default;
 };
 
@@ -279,10 +324,25 @@ public:
 	virtual bool Present() noexcept = 0;
 };
 
+export struct RHISubmissionCounts final
+{
+	std::uint64_t draw_calls = 0;
+	// Topology-derived submitted primitives; includes degenerate triangles.
+	std::uint64_t triangles = 0;
+	// Submitted vertices or indices multiplied by instances, not unique vertices
+	// or a hardware measurement of vertex shader executions.
+	std::uint64_t vertex_invocations = 0;
+};
+
 export class CommandList
 {
 public:
 	virtual ~CommandList() noexcept = default;
+
+	RHISubmissionCounts Submission_Counts() const noexcept
+	{
+		return m_submission_counts;
+	}
 
 	virtual bool Reset_State() noexcept
 	{
@@ -299,6 +359,9 @@ public:
 	virtual bool Set_Depth_Target(RHITextureHandle depth_target) noexcept = 0;
 	virtual bool Clear(const std::array<float, 4> &color, float depth) noexcept = 0;
 	virtual bool Clear_Depth(float depth) noexcept = 0;
+	// Clear an explicit attachment without changing the currently bound targets.
+	virtual bool Clear_Color_Target(RHITextureHandle, const std::array<float, 4>&) noexcept { return false; }
+	virtual bool Clear_Depth_Stencil_Target(RHITextureHandle, float, std::uint8_t) noexcept { return false; }
 	virtual bool Copy_Texture(RHITextureHandle source, RHITextureHandle destination) noexcept
 	{
 		(void)source;
@@ -320,6 +383,48 @@ public:
 	virtual bool Set_Index_Buffer(RHIBufferHandle buffer, RHIIndexFormat format, std::uint32_t offset) noexcept = 0;
 	virtual bool Draw(std::uint32_t vertex_count, std::uint32_t first_vertex = 0, std::uint32_t instance_count = 1, std::uint32_t first_instance = 0) noexcept = 0;
 	virtual bool Draw_Indexed(std::uint32_t index_count, std::uint32_t first_index = 0, std::int32_t base_vertex = 0, std::uint32_t instance_count = 1, std::uint32_t first_instance = 0) noexcept = 0;
+
+protected:
+	void Record_Draw(RHIPrimitiveTopology topology, std::uint32_t element_count, std::uint32_t instance_count) noexcept
+	{
+		const std::uint64_t elements = element_count;
+		const std::uint64_t instances = instance_count;
+		++m_submission_counts.draw_calls;
+		m_submission_counts.vertex_invocations += elements * instances;
+		switch (topology) {
+		case RHIPrimitiveTopology::TriangleList:
+			m_submission_counts.triangles += (elements / 3u) * instances;
+			break;
+		case RHIPrimitiveTopology::TriangleStrip:
+			if (elements >= 3u)
+				m_submission_counts.triangles += (elements - 2u) * instances;
+			break;
+		case RHIPrimitiveTopology::PointList:
+			break;
+		}
+	}
+
+private:
+	RHISubmissionCounts m_submission_counts{};
+};
+
+export enum class RHIDeviceStatus : std::uint8_t
+{
+	Unavailable,
+	Ready,
+	Removed
+};
+
+export struct RHIAdapterInfo final
+{
+	std::uint32_t vendor_id = 0;
+	std::uint32_t device_id = 0;
+};
+
+export struct RHITextureLimits final
+{
+	std::uint32_t max_2d_extent = 0;
+	std::uint32_t max_3d_extent = 0;
 };
 
 export class Device
@@ -328,6 +433,16 @@ public:
 	virtual ~Device() noexcept = default;
 
 	virtual bool Is_Valid() const noexcept = 0;
+	virtual RHIDeviceStatus Get_Status() const noexcept
+	{
+		return Is_Valid() ? RHIDeviceStatus::Ready : RHIDeviceStatus::Unavailable;
+	}
+	virtual bool Get_Adapter_Info(RHIAdapterInfo& info) const noexcept
+	{
+		info = {};
+		return false;
+	}
+	virtual RHITextureLimits Texture_Limits() const noexcept { return {}; }
 	virtual RHIBufferHandle Create_Buffer(const RHIBuffer &description) = 0;
 	virtual RHITextureHandle Create_Texture(const RHITexture &description) = 0;
 	virtual RHIPipelineHandle Create_Pipeline(const RHIPipeline &description) = 0;
@@ -355,6 +470,17 @@ public:
 	{
 		return false;
 	}
+	virtual bool Readback_Texture_Subresource(RHITextureHandle, const RHITextureReadback &) noexcept
+	{
+		return false;
+	}
+	virtual bool Generate_Texture_Mips(RHITextureHandle) noexcept { return false; }
+	// Mappings preserve existing contents. Read-only mappings discard CPU writes.
+	// Only one mapping per subresource may be active; destroying its last owner cancels it.
+	virtual bool Map_Texture(RHITextureHandle, std::uint32_t, std::uint32_t, bool, RHITextureMapping &) { return false; }
+	virtual bool Unmap_Texture(RHITextureHandle, std::uint32_t, std::uint32_t) noexcept { return false; }
+	// Each retained reference requires Destroy_Texture; the device must outlive them.
+	virtual bool Retain_Texture(RHITextureHandle) noexcept { return false; }
 	virtual bool Destroy_Buffer(RHIBufferHandle buffer) noexcept = 0;
 	virtual bool Destroy_Texture(RHITextureHandle texture) noexcept = 0;
 	virtual bool Destroy_Pipeline(RHIPipelineHandle pipeline) noexcept = 0;

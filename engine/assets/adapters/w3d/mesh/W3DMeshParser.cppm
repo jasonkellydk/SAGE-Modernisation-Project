@@ -13,91 +13,46 @@ module;
 export module Assets.Adapters.W3D.Mesh;
 
 import Assets.Adapters.W3D.Chunks;
+export import Assets.Adapters.W3D.Geometry;
 import Assets.Adapters.W3D.Materials;
+import Assets.Adapters.W3D.PassBindings;
+import Assets.Adapters.W3D.SurfaceMaterial;
 import Assets.Math;
 import Assets.Models;
 
 namespace Assets::W3D
 {
 
-export struct W3DMeshHeader final
-{
-	std::uint32_t version = 0;
-	std::uint32_t attributes = 0;
-	std::string name;
-	std::string container_name;
-	std::uint32_t triangle_count = 0;
-	std::uint32_t vertex_count = 0;
-	std::uint32_t material_count = 0;
-	std::int32_t sort_level = 0;
-	std::uint32_t vertex_channels = 0;
-	std::uint32_t face_channels = 0;
-	Bounds3f bounds{};
-	float sphere_radius = 0.0f;
-};
+// Optional versioned extension. Legacy influence padding is never reinterpreted.
+export inline constexpr std::uint32_t W3DChunkSkinBindings = 0x00FE0001;
+
+
 
 export struct W3DParsedMesh final
 {
 	W3DMeshHeader header;
 	std::vector<Vector3f> positions;
 	std::vector<Vector3f> normals;
+	std::vector<Vector3f> tangents;
+	std::vector<Vector3f> bitangents;
 	std::vector<Vector2f> legacy_texcoords;
 	std::vector<Vector2f> stage_texcoords;
 	std::vector<Color4f> colors;
 	std::vector<std::uint16_t> bone_indices;
+	std::vector<std::array<std::uint16_t, 4>> skin_indices;
+	std::vector<std::array<float, 4>> skin_weights;
 	std::vector<std::array<std::uint32_t, 3>> triangles;
 	W3DMaterialData materials;
+	std::vector<W3DPassBindings> shader_pass_bindings;
+	std::vector<ModelMaterialDesc> surface_materials;
 };
 
 namespace MeshDetail
 {
 
-bool Parse_Mesh_Header(W3DByteSpan bytes, W3DMeshHeader &header)
-{
-	// GeneralsMD writes the 116-byte W3dMeshHeader3Struct. Reading by offset
-	// avoids compiler packing and keeps WW3D2 types outside this boundary.
-	if (bytes.size() < 116)
-		return false;
 
-	std::uint32_t sort_level_bits = 0;
-	Vector3f sphere_center;
-	if (!W3DRead_U32(bytes, 0, header.version) ||
-		!W3DRead_U32(bytes, 4, header.attributes) ||
-		!W3DRead_U32(bytes, 40, header.triangle_count) ||
-		!W3DRead_U32(bytes, 44, header.vertex_count) ||
-		!W3DRead_U32(bytes, 48, header.material_count) ||
-		!W3DRead_U32(bytes, 56, sort_level_bits) ||
-		!W3DRead_U32(bytes, 68, header.vertex_channels) ||
-		!W3DRead_U32(bytes, 72, header.face_channels) ||
-		!W3DRead_Vector3(bytes, 76, header.bounds.minimum) ||
-		!W3DRead_Vector3(bytes, 88, header.bounds.maximum) ||
-		!W3DRead_Vector3(bytes, 100, sphere_center) ||
-		!W3DRead_F32(bytes, 112, header.sphere_radius))
-		return false;
 
-	header.sort_level = std::bit_cast<std::int32_t>(sort_level_bits);
-	if (!std::isfinite(sphere_center.x) || !std::isfinite(sphere_center.y) || !std::isfinite(sphere_center.z) ||
-		!std::isfinite(header.sphere_radius) || header.sphere_radius < 0.0f)
-		return false;
 
-	header.name = W3DRead_Fixed_String(bytes, 8, 16);
-	header.container_name = W3DRead_Fixed_String(bytes, 24, 16);
-	return header.bounds.Is_Valid();
-}
-
-bool Read_Vector_Array(W3DByteSpan bytes, std::uint32_t count, std::vector<Vector3f> &values)
-{
-	if (count > bytes.size() / 12 || bytes.size() != static_cast<std::size_t>(count) * 12)
-		return false;
-
-	values.resize(count);
-	for (std::uint32_t index = 0; index < count; ++index) {
-		if (!W3DRead_Vector3(bytes, static_cast<std::size_t>(index) * 12, values[index]) ||
-			!std::isfinite(values[index].x) || !std::isfinite(values[index].y) || !std::isfinite(values[index].z))
-			return false;
-	}
-	return true;
-}
 
 bool Read_UV_Array(W3DByteSpan bytes, std::uint32_t count, std::vector<Vector2f> &values)
 {
@@ -118,24 +73,7 @@ bool Read_UV_Array(W3DByteSpan bytes, std::uint32_t count, std::vector<Vector2f>
 	return true;
 }
 
-bool Read_Triangle_Array(
-	W3DByteSpan bytes,
-	std::uint32_t count,
-	std::vector<std::array<std::uint32_t, 3>> &triangles)
-{
-	if (count > bytes.size() / 32 || bytes.size() != static_cast<std::size_t>(count) * 32)
-		return false;
 
-	triangles.resize(count);
-	for (std::uint32_t index = 0; index < count; ++index) {
-		const std::size_t offset = static_cast<std::size_t>(index) * 32;
-		for (std::size_t vertex = 0; vertex < 3; ++vertex) {
-			if (!W3DRead_U32(bytes, offset + vertex * 4, triangles[index][vertex]))
-				return false;
-		}
-	}
-	return true;
-}
 
 }
 
@@ -152,7 +90,7 @@ export bool W3DParse_Mesh(W3DByteSpan bytes, W3DParsedMesh &mesh, std::string &e
 			return true;
 		if (has_header)
 			return false;
-		has_header = MeshDetail::Parse_Mesh_Header(chunk.payload, mesh.header);
+		has_header = W3DRead_Mesh_Header(chunk.payload, mesh.header);
 		return has_header;
 	})) {
 		error = "invalid mesh header chunk";
@@ -166,13 +104,23 @@ export bool W3DParse_Mesh(W3DByteSpan bytes, W3DParsedMesh &mesh, std::string &e
 	if (!W3DVisit_Chunks(bytes, [&mesh](const W3DChunkView &chunk) {
 		switch (chunk.id) {
 			case W3DChunkVertices:
-				return MeshDetail::Read_Vector_Array(chunk.payload, mesh.header.vertex_count, mesh.positions);
+				return W3DRead_Geometry_Vectors(chunk.payload, mesh.header.vertex_count, mesh.positions);
 			case W3DChunkVertexNormals:
-				return MeshDetail::Read_Vector_Array(chunk.payload, mesh.header.vertex_count, mesh.normals);
+				return W3DRead_Geometry_Vectors(chunk.payload, mesh.header.vertex_count, mesh.normals);
+			case W3DChunkTangents:
+				return mesh.tangents.empty() && W3DRead_Geometry_Vectors(chunk.payload, mesh.header.vertex_count, mesh.tangents);
+			case W3DChunkBitangents:
+				return mesh.bitangents.empty() && W3DRead_Geometry_Vectors(chunk.payload, mesh.header.vertex_count, mesh.bitangents);
 			case W3DChunkTextureCoords:
 				return MeshDetail::Read_UV_Array(chunk.payload, mesh.header.vertex_count, mesh.legacy_texcoords);
 			case W3DChunkTriangles:
-				return MeshDetail::Read_Triangle_Array(chunk.payload, mesh.header.triangle_count, mesh.triangles);
+				{
+                std::vector<W3DTriangleRecord> records;
+                if(!W3DRead_Geometry_Triangles(chunk.payload,mesh.header.triangle_count,records))return false;
+                mesh.triangles.resize(records.size());
+                for(std::size_t i=0;i<records.size();++i)mesh.triangles[i]=records[i].indices;
+                return true;
+            }
 			case W3DChunkVertexColors:
 				if (chunk.payload.size() != static_cast<std::size_t>(mesh.header.vertex_count) * 4)
 					return false;
@@ -186,19 +134,32 @@ export bool W3DParse_Mesh(W3DByteSpan bytes, W3DParsedMesh &mesh, std::string &e
 						1.0f};
 				}
 				return true;
-			case W3DChunkVertexInfluences:
-				if (chunk.payload.size() != static_cast<std::size_t>(mesh.header.vertex_count) * 8)
-					return false;
-				mesh.bone_indices.resize(mesh.header.vertex_count);
-				for (std::uint32_t index = 0; index < mesh.header.vertex_count; ++index) {
-					const auto *data = reinterpret_cast<const std::uint8_t *>(chunk.payload.data() + index * 8);
-					const std::uint32_t bone_index = static_cast<std::uint32_t>(data[0]) |
-						(static_cast<std::uint32_t>(data[1]) << 8);
-					if (bone_index > std::numeric_limits<std::uint16_t>::max())
-						return false;
-					mesh.bone_indices[index] = static_cast<std::uint16_t>(bone_index);
+            case W3DChunkVertexInfluences:
+                return W3DRead_Geometry_Bone_Links(chunk.payload,mesh.header.vertex_count,mesh.bone_indices);
+			case W3DChunkSkinBindings: {
+				std::uint32_t version = 0, count = 0;
+				if (!mesh.skin_indices.empty() || (mesh.header.attributes & 0x00FF0000) != 0x00020000
+					|| !W3DRead_U32(chunk.payload, 0, version) || version != 1
+					|| !W3DRead_U32(chunk.payload, 4, count) || !count || count != mesh.header.vertex_count
+					|| chunk.payload.size() < 8 || (chunk.payload.size() - 8) / 24 != count
+					|| (chunk.payload.size() - 8) % 24 != 0) return false;
+				mesh.skin_indices.resize(count); mesh.skin_weights.resize(count);
+				for (std::uint32_t index = 0; index < count; ++index) {
+					const std::size_t offset = 8 + static_cast<std::size_t>(index) * 24;
+					float total = 0;
+					for (std::size_t influence = 0; influence < 4; ++influence) {
+						const auto at = offset + influence * 2;
+						mesh.skin_indices[index][influence] = static_cast<std::uint16_t>(
+							std::to_integer<unsigned>(chunk.payload[at]) | (std::to_integer<unsigned>(chunk.payload[at + 1]) << 8));
+						float weight = 0;
+						if (!W3DRead_F32(chunk.payload, offset + 8 + influence * 4, weight)
+							|| !std::isfinite(weight) || weight < 0 || weight > 1) return false;
+						mesh.skin_weights[index][influence] = weight; total += weight;
+					}
+					if (std::abs(total - 1.0f) > 0.00001f) return false;
 				}
 				return true;
+			}
 			case W3DChunkVertexShadeIndices:
 				return chunk.payload.size() == static_cast<std::size_t>(mesh.header.vertex_count) * 4;
 			case W3DChunkMeshUserText:
@@ -232,6 +193,8 @@ export bool W3DParse_Mesh(W3DByteSpan bytes, W3DParsedMesh &mesh, std::string &e
 		return false;
 	}
 	for (const W3DMaterialPass &pass : mesh.materials.passes) {
+		if (pass.uses_shader_material)
+			continue;
 		if (pass.vertex_material_index >= mesh.materials.vertex_materials.size()) {
 			error = "material pass references a vertex material outside the material table";
 			return false;
@@ -245,6 +208,46 @@ export bool W3DParse_Mesh(W3DByteSpan bytes, W3DParsedMesh &mesh, std::string &e
 			return false;
 		}
 	}
+	mesh.shader_pass_bindings.resize(mesh.materials.passes.size());
+	mesh.surface_materials.resize(mesh.materials.shader_materials.size());
+	std::vector<bool> resolved(mesh.materials.shader_materials.size());
+	std::size_t pass_index = 0;
+	if (!W3DVisit_Chunks(bytes, [&](const W3DChunkView &chunk) {
+		if (chunk.id != W3DChunkMaterialPass) return true;
+		const auto index = pass_index++;
+		if (!mesh.materials.passes[index].uses_shader_material) return true;
+		auto &bindings = mesh.shader_pass_bindings[index];
+		if (!W3DRead_Pass_Bindings(chunk.payload, mesh.header.vertex_count, mesh.header.triangle_count, bindings)
+			|| bindings.shader_material_ids.empty()) {
+			error = "invalid shader material pass bindings";
+			return false;
+		}
+		if (!bindings.diffuse_illumination.empty() || !bindings.specular_colors.empty()) {
+			error = "unsupported lighting color array in surface material pass";
+			return false;
+		}
+		// The supported Objects.fxh programs do not enable damage/lightmap
+		// sampling and consume UV0 only. Keep validated auxiliary UV bindings in
+		// the decoded source, but do not reinterpret them as texture stages.
+		for (std::size_t stage = 1; stage < bindings.stages.size(); ++stage) {
+			if (!bindings.stages[stage].texture_ids.empty()) {
+				error = "unsupported auxiliary texture binding in surface material pass";
+				return false;
+			}
+		}
+		for (const auto material_id : bindings.shader_material_ids) {
+			if (material_id >= mesh.materials.shader_materials.size()) {
+				error = "shader material pass references a material outside the shader material table";
+				return false;
+			}
+			if (!resolved[material_id]) {
+				if (!W3DResolve_Surface_Material(mesh.materials.shader_materials[material_id], mesh.surface_materials[material_id], error))
+					return false;
+				resolved[material_id] = true;
+			}
+		}
+		return true;
+	})) return false;
 	for (const auto &triangle : mesh.triangles) {
 		for (const std::uint32_t index : triangle) {
 			if (index >= mesh.positions.size()) {
@@ -266,7 +269,7 @@ export bool W3DParse_Mesh(W3DByteSpan bytes, W3DParsedMesh &mesh, std::string &e
 		mesh.stage_texcoords = mesh.legacy_texcoords;
 
 	if (mesh.materials.vertex_materials.empty())
-		mesh.materials.vertex_materials.push_back({"default", {}, {}, {}, 1.0f, 1.0f, 0.0f, 0});
+		mesh.materials.vertex_materials.push_back({{"default", {}, {}, {}, 1.0f, 1.0f, 0.0f, 0}});
 
 	return true;
 }

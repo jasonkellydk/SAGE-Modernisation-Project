@@ -24,9 +24,12 @@
 
 #pragma once
 
+#include <memory>
+
 #include "WW3D2/MatPass.h"
-#include "WW3D2/TextureFilter.h"
-#include "WW3D2/Backend/RenderBackend.h"
+import Graphics.Resources.Textures.Sampling;
+import Graphics.Resources.Textures.Edit;
+import Assets.Images.Buffer;
 
 class AABoxClass;
 class WorldHeightMap;
@@ -103,13 +106,13 @@ protected:
 	Real m_cellWidth;						///<spacing between adjacent cells
 	Real m_cellHeight;						///<spacing between adjacent cells
 	Byte *m_shroudData;						///<holds amount of shroud per cell.
-	RenderBackendSurface *m_pSrcTexture;		///<stores sysmem copy of visible shroud.
+	Graphics::TextureEdit *m_pSrcTexture;		///<stores sysmem copy of visible shroud.
 	void *m_srcTextureData;					///<pointer to shroud data
 	UnsignedInt m_srcTexturePitch;			///<width (in bytes) of shroud data buffer.
 	TextureClass *m_pDstTexture;			///<stores vidmem copy of visible shroud.
 	Int m_dstTextureWidth;					///<dimensions of m_pDstTexture
 	Int m_dstTextureHeight;					///<dimensions of m_pDstTexture
-	TextureFilterClass::FilterType m_shroudFilter;
+	Graphics::SamplingFilter m_shroudFilter;
 	Real m_drawOriginX;
 	Real m_drawOriginY;
 	Bool m_drawFogOfWar;					///<switch to draw alternate fog style instead of solid black
@@ -117,6 +120,8 @@ protected:
 	W3DShroudLevel m_boderShroudLevel;			///<color used to clear the shroud border
 	W3DShroudLevel *m_finalFogData;			///<copy of logical shroud in an easier to access array.
 	W3DShroudLevel *m_currentFogData;		///<copy of intermediate logical shroud while it's interpolated.
-	void interpolateFogLevels(RenderBackendRect *rect);		///<fade current fog levels to actual logic side levels.
-	void fillBorderShroudData(W3DShroudLevel level, SurfaceClass* pDestSurface);	///<fill the destination texture with a known value
+	void interpolateFogLevels(const Assets::ImageRegion *rect);		///<fade current fog levels to actual logic side levels.
+	void fillBorderShroudData(W3DShroudLevel level);
+	struct GraphicsState;
+	std::unique_ptr<GraphicsState> m_graphics;
 };

@@ -1,3 +1,5 @@
+import Graphics.Resources.Textures.Quality;
+import Graphics.Diagnostics.Render;
 /*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -20,11 +22,12 @@
 //
 
 #include "StdAfx.h"
+import Graphics.Backends.DX11.FrameRuntime;
 #include <SDL3/SDL.h>
 #include "resource.h"
 #include "WWMath/wwmath.h"
 #include "WW3D2/WW3D.h"
-#include "WW3D2/GraphicsToolFrame.h"
+import Graphics.Frame.ToolFrame;
 #include "W3DDevice/GameClient/W3DGraphicsResources.h"
 #include "WW3D2/Scene.h"
 #include "WW3D2/RendObj.h"
@@ -36,23 +39,17 @@
 #include "WW3D2/AggDef.h"
 #include "WW3D2/PartLdr.h"
 #include "WW3D2/HAnim.h"
-#include "WW3D2/IndexBuffer.h"
-#include "WW3D2/VertexBuffer.h"
 #include "WW3D2/VertexFormat.h"
 #include "WW3D2/VertMaterial.h"
-#include "WW3D2/Font3D.h"
-#include "WW3D2/Render2D.h"
-#include "WW3D2/RDDesc.h"
-#include "WW3D2/TextDraw.h"
 #include "WWMath/rect.h"
 #include "WW3D2/Mesh.h"
 #include "WW3D2/MeshMdl.h"
-#include "WW3D2/MeshRenderer.h"
+#include "WW3D2/GraphicsGeometry.h"
 #include "WW3D2/Line3D.h"
 #include "WW3D2/DynaMesh.h"
 #include "WW3D2/SphereObj.h"
 #include "WW3D2/RingObj.h"
-#include "WW3D2/SurfaceClass.h"
+import Graphics.Resources.Textures.Edit;
 #include "WWMath/vector2i.h"
 #include "WW3D2/Bmp2D.h"
 #include "WW3D2/DecalSys.h"
@@ -94,6 +91,7 @@
 #include "GlobalLightOptions.h"
 #include "LayersList.h"
 #include "ImpassableOptions.h"
+import Graphics.Scene.Props.Submission;
 
 
 // ----------------------------------------------------------------------------
@@ -386,8 +384,6 @@ WbView3d::WbView3d() :
 	m_needToLoadRoads(0),
 	m_timer(0),
 	m_drawObject(nullptr),
-	m_layer(nullptr),
-	m_buildLayer(nullptr),
 	m_intersector(nullptr),
 	m_showEntireMap(false),
 	m_partialMapSize(129),
@@ -438,6 +434,7 @@ WbView3d::WbView3d() :
 // ----------------------------------------------------------------------------
 WbView3d::~WbView3d()
 {
+    m_resourceRegistration.Reset();
 	for (Int i=0; i<MAX_GLOBAL_LIGHTS; i++)
 	{
 		if (m_lightFeedbackMesh[i] != nullptr)
@@ -456,16 +453,8 @@ void WbView3d::shutdownWW3D()
 	delete m_intersector;
 	m_intersector = nullptr;
 
-	delete m_layer;
-	m_layer = nullptr;
 
-	delete m_buildLayer;
-	m_buildLayer = nullptr;
 
-	if (m3DFont) {
-		WW3D::Get_Render_Backend()->Release_Font(m3DFont);
-		m3DFont = nullptr;
-	}
 	if (m_ww3dInited) {
 		m_lightList.Reset_List();
 
@@ -496,8 +485,9 @@ void WbView3d::shutdownWW3D()
 		REF_PTR_RELEASE(theDynamicLight);
 #endif
 		Release_Graphics_Textures();
-        Shutdown_Graphics_Tool_Frame();
+        Graphics::Shutdown_Tool_Frame();
 		WW3D::Shutdown();
+		Graphics::Graphics_DX11_Shutdown_Shared_Frame();
 
 		WWMath::Shutdown();
 	}
@@ -514,10 +504,6 @@ void WbView3d::ReleaseResources()
 	if (TheTerrainRenderObject) {
 		TheTerrainRenderObject->ReleaseResources();
 	}
-	if (m3DFont) {
-		WW3D::Get_Render_Backend()->Release_Font(m3DFont);
-	}
-	m3DFont = nullptr;
 	if (m_drawObject) {
 		m_drawObject->freeMapResources();
 	}
@@ -536,7 +522,6 @@ void WbView3d::ReAcquireResources()
 		TheTerrainRenderObject->worldBuilderUpdateBridgeTowers( m_assetManager, m_scene );
 	}
 	m_drawObject->initData();
-	m3DFont = WW3D::Get_Render_Backend()->Create_Font(20, "Arial");
 
 }
 
@@ -562,7 +547,7 @@ void WbView3d::reset3dEngineDisplaySize(Int width, Int height)
 	m_actualWinSize.x = width;
 	m_actualWinSize.y = height;
 	if (m_ww3dInited) {
-		WW3D::Set_Device_Resolution(m_actualWinSize.x, m_actualWinSize.y, true);
+		Graphics::Resize_Frame_Device(m_actualWinSize.x, m_actualWinSize.y, false);
 	}
 }
 
@@ -1554,7 +1539,7 @@ void WbView3d::updateHeightMapInView(WorldHeightMap *htMap, Bool partial, const 
 
 		Int curTicks = SDL_GetTicks();
 
-		RefRenderObjListIterator lightListIt(&m_lightList);
+		Graphics::SceneObjectList<RenderObjClass>::Cursor lightListIt(&m_lightList);
 		if (partial) {
 			m_heightMapRenderObj->doPartialUpdate(partialRange, htMap, &lightListIt);
 		} else {
@@ -1601,14 +1586,14 @@ void WbView3d::setCenterInView(Real x, Real y)
 MapObject *WbView3d::picked3dObjectInView(CPoint viewPt)
 {
 	// This code picks on all 3d objects.
-	if (m_intersector && m_layer) {
+	if (m_intersector && m_scene && m_camera) {
 		CRect client;
 		this->GetClientRect(&client);
 		float logX = (Real)viewPt.x / (Real)client.Width();
 		float logY = (Real)viewPt.y / (Real)client.Height();
 		//m_intersector->Result.CollisionType = COLLISION_TYPE_0|COLLISION_TYPE_1;
 		// do the intersection using W3D intersector class
-		Bool hit = m_intersector->Intersect_Screen_Point_Layer( logX, logY, *m_layer );
+		Bool hit = m_intersector->Intersect_Screen_Point_Scene( logX, logY, *m_scene, *m_camera );
 		if( hit )
 		{
 			MapObject *pObj;
@@ -1648,14 +1633,14 @@ BuildListInfo *WbView3d::pickedBuildObjectInView(CPoint viewPt)
 		}
 	}
 	// This code picks on all 3d build objects.
-	if (m_intersector && m_buildLayer) {
+	if (m_intersector && m_baseBuildScene && m_camera) {
 		CRect client;
 		this->GetClientRect(&client);
 		float logX = (Real)viewPt.x / (Real)client.Width();
 		float logY = (Real)viewPt.y / (Real)client.Height();
 
 		// do the intersection using W3D intersector class
-		Bool hit = m_intersector->Intersect_Screen_Point_Layer( logX, logY, *m_buildLayer );
+		Bool hit = m_intersector->Intersect_Screen_Point_Scene( logX, logY, *m_baseBuildScene, *m_camera );
 		if( hit ) {
  			for (i=0; i<TheSidesList->getNumSides(); i++) {
 				SidesInfo *pSide = TheSidesList->getSideInfo(i);
@@ -2020,7 +2005,7 @@ void WbView3d::redraw()
 		}
 		++m_updateCount;
 		Int curTicks = SDL_GetTicks();
-		RefRenderObjListIterator lightListIt(&m_lightList);
+		Graphics::SceneObjectList<RenderObjClass>::Cursor lightListIt(&m_lightList);
 		m_heightMapRenderObj->updateCenter(m_camera, &m_cameraTarget, &lightListIt);
 		m_heightMapRenderObj->On_Frame_Update();
 		--m_updateCount;
@@ -2056,7 +2041,7 @@ void WbView3d::redraw()
 void WbView3d::render()
 {
 	++m_updateCount;
-    if (!Begin_Graphics_Tool_Frame()) {
+    if (!Graphics::Begin_Tool_Frame()) {
         --m_updateCount;
         return;
     }
@@ -2098,28 +2083,26 @@ void WbView3d::render()
 		}
 		if (m_showObjToolTrackingObj && m_objectToolTrackingObj) {
 			m_transparentObjectsScene->Add_Render_Object(m_objectToolTrackingObj);
-			TheMeshRenderer.Set_Force_Multiply(true);
-			TheMeshRenderer.Enable_Lighting(false);
+			Graphics::Get_Prop_Draw_Settings().force_multiply = true;
+			Graphics::Get_Prop_Draw_Settings().lighting = false;
 			Real lightLevel = 1.0f;
 			m_transparentObjectsScene->Set_Ambient_Light(Vector3(lightLevel,lightLevel,lightLevel));
 			WW3D::Render(m_transparentObjectsScene, m_camera);
-			TheMeshRenderer.Enable_Lighting(true);
-			TheMeshRenderer.Set_Force_Multiply(false);
+			Graphics::Get_Prop_Draw_Settings().lighting = true;
+			Graphics::Get_Prop_Draw_Settings().force_multiply = false;
 			m_transparentObjectsScene->Remove_Render_Object(m_objectToolTrackingObj);
 		}
 
 		// Draw the 3d obj icons on top of the rest of the data.
 		WW3D::Render(m_overlayScene,m_camera);
 		//if (mytext) mytext->Render();
-		if (m3DFont) {
-			drawLabels(nullptr);
-		}
+		drawLabels(nullptr);
 
 
-		WW3D::End_Render(false);
-        if (!End_Graphics_Tool_Frame()) DEBUG_LOG(("Editor frame submission failed.\n"));
+		WW3D::End_Render();
+        if (!Graphics::End_Tool_Frame()) DEBUG_LOG(("Editor frame submission failed.\n"));
 	} else {
-        Abort_Graphics_Tool_Frame();
+        Graphics::Abort_Tool_Frame();
     }
 	--m_updateCount;
 }
@@ -2230,33 +2213,30 @@ void WbView3d::initWW3D()
 		WW3D::Set_Prelit_Mode(WW3D::PRELIT_MODE_VERTEX);
 
 		initAssets();
-		WW3D::Init(m_hWnd);
+		Graphics::Get_Render_Diagnostics() = {};
+		Graphics::Get_Texture_Quality_Settings().prefer_16_bits = true;
+		WW3D::Init();
 		WW3D::Set_Prelit_Mode( WW3D::PRELIT_MODE_LIGHTMAP_MULTI_PASS );
 		WW3D::Set_Collision_Box_Display_Mask(0x00);	///<set to 0xff to make collision boxes visible
 
 		bogusTacticalView.setWidth(m_actualWinSize.x);
 		bogusTacticalView.setHeight(m_actualWinSize.y);
 		bogusTacticalView.setOrigin(0,0);
-		if (WW3D::Set_Render_Device(0, m_actualWinSize.x, m_actualWinSize.y, 32, true, true) != WW3D_ERROR_OK)
-		{
-			// Getting the device at the default bit depth (32) didn't work, so try
-			// getting a 16 bit display.  (Voodoo 1-3 only supported 16 bit.) jba.
-			if (WW3D::Set_Render_Device(0, m_actualWinSize.x, m_actualWinSize.y, 16, true, true) != WW3D_ERROR_OK)
-			{
-				DEBUG_CRASH(("Couldn't set render device."));
-			}
-		}
+        Graphics::DX11DeviceOptions options;
+        options.window = m_hWnd;
+        options.width = m_actualWinSize.x; options.height = m_actualWinSize.y;
+        options.backbuffer_format = Graphics::RHITextureFormat::BGRA8_UNorm;
+        if (!Graphics::Initialize_Frame_Device(options)) {
+            DEBUG_CRASH(("Unable to create the graphics device."));
+            return;
+        }
 
-		m3DFont = WW3D::Get_Render_Backend()->Create_Font(20, "Arial");
+		if (!m_labels.Initialize()) DEBUG_CRASH(("Unable to initialize viewport label font."));
 
-		WW3D::Enable_Static_Sort_Lists(true);
-		WW3D::Set_Thumbnail_Enabled(false);
-		WW3D::Set_Screen_UV_Bias( TRUE );  ///< this makes text look good :)
+		Graphics::Get_Scene_Draw_Queue().Set_Enabled(true);
 
 		W3DShaderManager::init();
 		init3dScene();
-		m_layer = new LayerClass( m_scene, m_camera );
-		m_buildLayer = new LayerClass( m_baseBuildScene, m_camera );
 		m_intersector = new IntersectionClass();
 		m_drawObject = new DrawObject();
 		m_overlayScene->Add_Render_Object(m_drawObject);
@@ -2320,7 +2300,8 @@ void WbView3d::OnPaint()
 		CMainFrame::GetMainFrame()->adjustWindowSize();
 		m_firstPaint = false;
 	}
-	WW3D::Get_Render_Backend()->Set_Cleanup_Hook(this);
+    m_resourceRegistration = Graphics::Get_Frame_Resource_Lifecycle().Register(
+        [this] { ReleaseResources(); },[this] { ReAcquireResources(); });
 
 }
 
@@ -2466,21 +2447,11 @@ void WbView3d::drawLabels(HDC hdc)
 							red = 255, green = 0;
 						}
 
-						if (m3DFont && !hdc) {
-							RenderBackendRect rct;
-							pt.y -= 5;
-							pt.x += 1;
-							rct.top = rct.bottom = pt.y;
-							rct.left = rct.right = pt.x;
-							WW3D::Get_Render_Backend()->Draw_Font(m3DFont, name.str(),
-								name.getLength(), rct,
-								RenderBackendFontDrawFlagLeft |
-								RenderBackendFontDrawFlagNoClip |
-								RenderBackendFontDrawFlagTop |
-								RenderBackendFontDrawFlagSingleLine,
-								0xAF000000 + (red<<16) + (green<<8));
-
-						} else if (!m3DFont) {
+						if (!hdc) {
+                            if (!m_labels.Draw(name.str(), pt.x + 1, pt.y - 5,
+                                0xAF000000u | (unsigned(red) << 16) | (unsigned(green) << 8)))
+                                DEBUG_CRASH(("Viewport label submission failed."));
+						} else {
 							//docToViewCoords(pos, &pt);
 							::SetBkMode(hdc, TRANSPARENT);
 							pt.y -= 5;
@@ -2886,17 +2857,8 @@ void WbView3d::OnViewShowshadows()
 {
 	m_showShadows = !m_showShadows;
 	if (m_showShadows) {
-		int w,h,bits;
-		Bool windowed;
-		WW3D::Get_Device_Resolution(w,h,bits,windowed);
-
-		if (bits != 32) {
-			::AfxMessageBox("Shadows require a 32 bit color desktop.", IDOK);
-			m_showShadows = false;
-		} else {
-			resetRenderObjects();
-			invalObjectInView(nullptr);
-		}
+		resetRenderObjects();
+		invalObjectInView(nullptr);
 	} else {
 		TheW3DShadowManager->removeAllShadows();
 	}

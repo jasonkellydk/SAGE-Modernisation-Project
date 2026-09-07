@@ -281,7 +281,6 @@ public:  // height map info.
 	TXTextureClass getTextureFromIndex( Int textureIndex );
 
 public:  // tile and texture info.
-	void setTextureLOD(Int lod);	///< set maximum lod level sent to the hardware.
 	TextureClass *getTerrainTexture();  //< generates if needed and returns the terrain texture
 	TextureClass *getAlphaTerrainTexture(); //< generates if needed and returns alpha terrain texture
 	TextureClass *getEdgeTerrainTexture(); //< generates if needed and returns blend edge texture

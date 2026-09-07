@@ -1,4 +1,5 @@
 #include <array>
+#include "rts/profile.h"
 #include <span>
 #include <vector>
 #include <cstring>
@@ -9,14 +10,18 @@
 #include "WW3D2/Mesh.h"
 #include "WW3D2/MeshMdl.h"
 #include "WW3D2/HLOD.h"
-#include "WW3D2/Mapper.h"
+#include "WW3D2/GraphicsMaterial.h"
 #include "WW3D2/VertMaterial.h"
 #include "WW3D2/Texture.h"
 #include "WW3D2/Camera.h"
 #include "WW3D2/RInfo.h"
 #include "WW3D2/Scene.h"
 #include "WW3D2/WW3D.h"
-import Graphics.Backends.DX11.Coexistence;
+#include <algorithm>
+import Graphics.Scene.Views.CameraMatrices;
+import Graphics.Scene.DrawParameters;
+import Graphics.Backends.DX11.FrameRuntime;
+import Graphics.Materials.Fog;
 
 namespace {
 std::array<float,4> Unpack_Color(unsigned packed)
@@ -50,9 +55,8 @@ struct Batch
     Graphics::PropStyle style;
     Graphics::PropParameters parameters;
     TextureClass* texture[2]{};
-    TextureMapperClass* mapper[2]{};
     VertexMaterialClass* material = nullptr;
-    bool fog = false;
+    Graphics::MaterialFogMode fog = Graphics::MaterialFogMode::Disabled;
 };
 }
 
@@ -76,6 +80,7 @@ struct W3DObjectGraphics::State
 
     bool Extract(RenderObjClass& object, RenderInfoClass& info)
     {
+        PROFILER_SECTION_NAME("Graphics.Objects.Extract");
         if (object.Is_Hidden()) return true;
         object.Validate_Transform();
         if (object.Class_ID() == RenderObjClass::CLASSID_HLOD) {
@@ -153,8 +158,9 @@ struct W3DObjectGraphics::State
                     pending = true;
                     batch.texture[0] = first; batch.texture[1] = second;
                     batch.material = polygon_material;
-                    batch.fog = shader.Get_Fog_Func()!=ShaderClass::FOG_DISABLE;
-                    for (unsigned stage=0;stage<2;++stage) batch.mapper[stage] = polygon_material ? polygon_material->Peek_Mapper(stage) : nullptr;
+                    constexpr std::array fog_modes{Graphics::MaterialFogMode::Disabled,Graphics::MaterialFogMode::Scene,
+                        Graphics::MaterialFogMode::Black,Graphics::MaterialFogMode::White};
+                    batch.fog = fog_modes[shader.Get_Fog_Func()];
                     batch.style.depth_write = !background && shader.Get_Depth_Mask() == ShaderClass::DEPTH_WRITE_ENABLE;
                     batch.style.depth_test = !background;
                     batch.style.color_write_mask = shader.Get_Color_Mask()==ShaderClass::COLOR_WRITE_ENABLE ? 15 : 0;
@@ -162,16 +168,6 @@ struct W3DObjectGraphics::State
                     batch.style.cull = background || shader.Get_Cull_Mode()==ShaderClass::CULL_MODE_DISABLE
                         ? Graphics::RHICullMode::None : Graphics::RHICullMode::Back;
                     batch.style.front_counter_clockwise = true;
-                    for (unsigned stage=0;stage<2;++stage) {
-                        if (!batch.texture[stage]) continue;
-                        auto& sampler = batch.style.samplers[stage];
-                        const auto& filter = batch.texture[stage]->Get_Filter();
-                        sampler.address[0] = background || filter.Get_U_Addr_Mode()==TextureFilterClass::TEXTURE_ADDRESS_CLAMP
-                            ? Graphics::RHISamplerAddress::Clamp : Graphics::RHISamplerAddress::Wrap;
-                        sampler.address[1] = background || filter.Get_V_Addr_Mode()==TextureFilterClass::TEXTURE_ADDRESS_CLAMP
-                            ? Graphics::RHISamplerAddress::Clamp : Graphics::RHISamplerAddress::Wrap;
-                        sampler.linear_filter = filter.Get_Min_Filter()!=TextureFilterClass::FILTER_TYPE_NONE;
-                    }
                     batch.style.source_blend = Source_Blend(shader.Get_Src_Blend_Func());
                     batch.style.destination_blend = Destination_Blend(shader.Get_Dst_Blend_Func());
                     batch.parameters.textured = first && shader.Get_Texturing()!=ShaderClass::TEXTURING_DISABLE ? 1.0f : 0.0f;
@@ -260,45 +256,24 @@ bool W3DObjectGraphics::Render(RenderObjClass& object, RenderInfoClass& info,
         parameters.view_projection = surface.view_projection;
         parameters.shroud_projection = surface.shroud_projection;
         parameters.camera_position = {camera.X,camera.Y,camera.Z,1};
-        WW3D::Get_Render_Backend()->Get_Transform(RenderBackendTransform::View,parameters.view.data());
-        if (batch.fog && !background && WW3D::Get_Render_Backend()->Is_Fog_Enabled()) {
+        parameters.view = Graphics::Get_Camera_Matrices().view.values;
+        Graphics::SceneFog scene_fog;
+        if (batch.fog!=Graphics::MaterialFogMode::Disabled && !background
+            && Graphics::Get_Scene_Draw_Parameters().fog.enabled) {
             SceneClass* scene = object.Peek_Scene();
             if (!scene && info.Camera.Peek_Scene()) scene = info.Camera.Peek_Scene();
             if (!scene && TheTerrainRenderObject) scene = TheTerrainRenderObject->Peek_Scene();
             if (scene) {
-                scene->Get_Fog_Range(&parameters.fog_state[0],&parameters.fog_state[1]);
-                parameters.fog_state[2] = 1;
+                scene->Get_Fog_Range(&scene_fog.start,&scene_fog.end);
+                scene_fog.enabled = true;
                 const auto& fog = scene->Get_Fog_Color();
-                parameters.fog_color = {fog.X,fog.Y,fog.Z,1};
+                scene_fog.color = {fog.X,fog.Y,fog.Z,1};
             }
         }
-        for (unsigned stage=0;stage<2;++stage) {
-            auto* mapper = batch.mapper[stage];
-            if (!mapper) continue;
-            Matrix4x4 matrix;
-            mapper->Calculate_Texture_Matrix(matrix);
-            std::memcpy(parameters.uv_transform[stage].data(),&matrix,sizeof(matrix));
-            const int id = mapper->Mapper_ID();
-            if (id == TextureMapperClass::MAPPER_ID_BUMPENV) {
-                float bump[4];
-                static_cast<BumpEnvTextureMapperClass*>(mapper)->Calculate_Bump_Matrix(bump);
-                std::copy(std::begin(bump),std::end(bump),parameters.bump_matrix.begin());
-            }
-            unsigned source = 0;
-            switch (id) {
-            case TextureMapperClass::MAPPER_ID_CLASSIC_ENVIRONMENT:
-            case TextureMapperClass::MAPPER_ID_WS_CLASSIC_ENVIRONMENT:
-            case TextureMapperClass::MAPPER_ID_GRID_CLASSIC_ENVIRONMENT:
-            case TextureMapperClass::MAPPER_ID_GRID_WS_CLASSIC_ENVIRONMENT:
-            case TextureMapperClass::MAPPER_ID_EDGE: source=2; break;
-            case TextureMapperClass::MAPPER_ID_ENVIRONMENT:
-            case TextureMapperClass::MAPPER_ID_WS_ENVIRONMENT:
-            case TextureMapperClass::MAPPER_ID_GRID_ENVIRONMENT:
-            case TextureMapperClass::MAPPER_ID_GRID_WS_ENVIRONMENT: source=3; break;
-            case TextureMapperClass::MAPPER_ID_SCREEN: source=1; parameters.uv_sources[stage*2+1]=1; break;
-            }
-            parameters.uv_sources[stage*2] = float(source);
-        }
+        const auto fog = Graphics::Resolve_Material_Fog(scene_fog,batch.fog);
+        parameters.fog_state=fog.state;
+        parameters.fog_color=fog.color;
+        Extract_Graphics_Texture_Mappers(parameters,batch.material);
 
         parameters.scene_ambient = {lighting.ambient[0],lighting.ambient[1],lighting.ambient[2],0};
         for (unsigned i=0;i<4;++i) {
@@ -312,11 +287,19 @@ bool W3DObjectGraphics::Render(RenderObjClass& object, RenderInfoClass& info,
         const std::array<Graphics::RHITextureHandle,4> textures{
             Resolve_Graphics_Texture(batch.texture[0]),Resolve_Graphics_Texture(batch.texture[1]),{},shroud_texture};
         auto style=batch.style;
+        for (unsigned stage = 0; stage < std::size(batch.texture); ++stage) {
+            if (batch.texture[stage] == nullptr) continue;
+            style.samplers[stage] = Graphics::Resolve_Texture_Sampling(batch.texture[stage]->Get_Sampling(),
+                Graphics::Get_Texture_Sampling_Settings(), stage == 0);
+            if (background) {
+                style.samplers[stage].address[0] = Graphics::RHISamplerAddress::Clamp;
+                style.samplers[stage].address[1] = Graphics::RHISamplerAddress::Clamp;
+            }
+        }
         if (style.cull!=Graphics::RHICullMode::None)
             style.front_counter_clockwise=!WW3D::Is_Reflection_Render_Pass();
         if (!Graphics::Draw_Prop(renderer,device->Immediate_Command_List(),batch.mesh,style,
             parameters,textures,shroud_texture.Is_Valid() && !background)) return false;
     }
-    WW3D::Get_Render_Backend()->Invalidate_Cached_Render_States();
     return true;
 }

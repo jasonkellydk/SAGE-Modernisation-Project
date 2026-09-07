@@ -39,7 +39,8 @@
 #include "WW3D2/Scene.h"
 #include "WW3D2/RInfo.h"
 #include "WW3D2/ColTest.h"
-#include "WW3D2/LightEnvironment.h"
+import Graphics.RHI;
+import Graphics.Scene.Lighting.Local;
 #include "W3DDevice/GameClient/WaterReflectionRenderer.h"
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -79,7 +80,7 @@ public:
 
 	void Flush(RenderInfoClass & rinfo);	//draw queued up models.
 	void Render_Water_Reflection(CameraClass *camera,
-		const RenderBackendViewport &viewport) override;
+		const Graphics::RHIViewport &viewport) override;
 	/// Drawing control method
 	void drawTerrainOnly(Bool draw) {m_drawTerrainOnly = draw;};
 
@@ -89,12 +90,12 @@ public:
 	/// Lighting methods
 	void addDynamicLight(W3DDynamicLight * obj);
 	void removeDynamicLight(W3DDynamicLight * obj);
-	RefRenderObjListIterator *createLightsIterator();
-	void destroyLightsIterator(RefRenderObjListIterator * it);
-	RefRenderObjListClass *getDynamicLights() {return &m_dynamicLightList;};
+	Graphics::SceneObjectList<RenderObjClass>::Cursor *createLightsIterator();
+	void destroyLightsIterator(Graphics::SceneObjectList<RenderObjClass>::Cursor * it);
+	Graphics::SceneObjectList<RenderObjClass> *getDynamicLights() {return &m_dynamicLightList;};
 	W3DDynamicLight *getADynamicLight();
 	void setGlobalLight(LightClass *pLight,Int lightIndex=0);
-	LightEnvironmentClass &getDefaultLightEnv() {return m_defaultLightEnv;}
+	Graphics::LocalLighting &getDefaultLightEnv() {return m_defaultLightEnv;}
 
 	virtual void init() override {}
 	virtual void update() override {}
@@ -112,15 +113,15 @@ protected:
 	void updatePlayerColorPasses();
 
 protected:
-	RefRenderObjListClass	m_dynamicLightList;
+	Graphics::SceneObjectList<RenderObjClass>	m_dynamicLightList;
 	Bool									m_drawTerrainOnly;
-	LightClass						*m_globalLight[LightEnvironmentClass::MAX_LIGHTS];				///< The global directional light (sun, moon) Applies to objects.
+	LightClass						*m_globalLight[Graphics::Material_Light_Count];				///< The global directional light (sun, moon) Applies to objects.
 	LightClass						*m_scratchLight; ///< a workspace for copying global lights and modifying // MLorenzen
 	Vector3 m_infantryAmbient;	///<scene ambient modified to make infantry easier to see
-	LightClass						*m_infantryLight[LightEnvironmentClass::MAX_LIGHTS];	///< The global direction light modified to make infantry easier to see.
+	LightClass						*m_infantryLight[Graphics::Material_Light_Count];	///< The global direction light modified to make infantry easier to see.
 	Int m_numGlobalLights;			///<number of global lights
-	LightEnvironmentClass	m_defaultLightEnv;		///<default light environment applied to objects without custom/dynamic lighting.
-	LightEnvironmentClass	m_foggedLightEnv;		///<default light environment applied to objects without custom/dynamic lighting.
+	Graphics::LocalLighting	m_defaultLightEnv;		///<default light environment applied to objects without custom/dynamic lighting.
+	Graphics::LocalLighting	m_foggedLightEnv;		///<default light environment applied to objects without custom/dynamic lighting.
 
 	W3DShroudMaterialPassClass	*m_shroudMaterialPass;	///< Custom render pass which applies shrouds to objects
 	W3DMaskMaterialPassClass *m_maskMaterialPass;			///< Custom render pass applied to entire scene used to mask out pixels.

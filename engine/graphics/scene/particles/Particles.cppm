@@ -70,6 +70,9 @@ export struct ParticleEmitter final
 	PipelineHandle pipeline{};
 };
 
+// Normalized texture rectangle: minimum U/V followed by maximum U/V.
+export using ParticleTextureRegion = std::array<float, 4>;
+
 export struct ParticleData final
 {
 	std::span<const float> position_x{};
@@ -89,6 +92,7 @@ export struct ParticleData final
 	std::span<const ParticleEmitterFlags> emitter_flags{};
 	std::span<const ParticleEmitterHandle> emitters{};
 	std::span<const PipelineHandle> pipelines{};
+	std::span<const ParticleTextureRegion> texture_regions{};
 
 	std::size_t Size() const noexcept
 	{
@@ -105,9 +109,10 @@ export struct alignas(16) GPUParticleData final
 	std::uint32_t emitter_flags = 0;
 	float angle = 0.0f;
 	std::uint32_t texture_index = Invalid_Particle_Material_Index;
+	ParticleTextureRegion texture_region{0, 0, 1, 1};
 };
 
-static_assert(sizeof(GPUParticleData) == 64);
+static_assert(sizeof(GPUParticleData) == 80);
 
 export struct ParticleVertex final
 {
@@ -140,6 +145,8 @@ export GPUParticleData Pack_GPU_Particle(const ParticleData &particles, std::siz
 		particles.color_a[particle_index]
 	};
 	data.angle = particles.angles.empty() ? 0.0f : particles.angles[particle_index];
+	if (!particles.texture_regions.empty())
+		data.texture_region = particles.texture_regions[particle_index];
 	data.material_index = material_index;
 	data.emitter_flags = static_cast<std::uint32_t>(particles.emitter_flags[particle_index]);
 	return data;
@@ -179,6 +186,7 @@ public:
 		m_particle_emitter_flags.reserve(particle_capacity);
 		m_particle_emitters.reserve(particle_capacity);
 		m_particle_pipelines.reserve(particle_capacity);
+		m_texture_regions.reserve(particle_capacity);
 	}
 
 	ParticleEmitterHandle Create_Emitter(const ParticleEmitter &emitter = {})
@@ -282,6 +290,7 @@ public:
 		m_particle_emitter_flags.clear();
 		m_particle_emitters.clear();
 		m_particle_pipelines.clear();
+		m_texture_regions.clear();
 		for (std::uint32_t &count : m_emitter_particle_counts)
 			count = 0;
 	}
@@ -315,6 +324,7 @@ public:
 		m_particle_emitter_flags.resize(new_size);
 		m_particle_emitters.resize(new_size);
 		m_particle_pipelines.resize(new_size);
+		m_texture_regions.resize(new_size);
 
 		for (std::size_t index = 0; index < count; ++index) {
 			const std::size_t particle_index = first_particle + index;
@@ -335,6 +345,7 @@ public:
 			m_particle_emitter_flags[particle_index] = source.emitter_flags[index];
 			m_particle_emitters[particle_index] = handle;
 			m_particle_pipelines[particle_index] = source.pipelines.empty() ? m_emitters[dense_emitter_index].pipeline : source.pipelines[index];
+			m_texture_regions[particle_index] = source.texture_regions.empty() ? ParticleTextureRegion{0, 0, 1, 1} : source.texture_regions[index];
 		}
 		m_emitter_particle_counts[dense_emitter_index] += static_cast<std::uint32_t>(count);
 		return true;
@@ -372,7 +383,8 @@ public:
 			|| count > m_materials.capacity() - m_materials.size()
 			|| count > m_particle_emitter_flags.capacity() - m_particle_emitter_flags.size()
 			|| count > m_particle_emitters.capacity() - m_particle_emitters.size()
-			|| count > m_particle_pipelines.capacity() - m_particle_pipelines.size())
+			|| count > m_particle_pipelines.capacity() - m_particle_pipelines.size()
+			|| count > m_texture_regions.capacity() - m_texture_regions.size())
 			return false;
 
 		const std::size_t first_particle = m_position_x.size();
@@ -394,6 +406,7 @@ public:
 		m_particle_emitter_flags.resize(new_size);
 		m_particle_emitters.resize(new_size);
 		m_particle_pipelines.resize(new_size);
+		m_texture_regions.resize(new_size);
 
 		for (std::uint32_t index = 0; index < count; ++index) {
 			const std::size_t particle_index = first_particle + index;
@@ -410,6 +423,7 @@ public:
 			m_color_b[particle_index] = emitter.color[2];
 			m_color_a[particle_index] = emitter.color[3];
 			m_angles[particle_index] = 0.0f;
+			m_texture_regions[particle_index] = {0, 0, 1, 1};
 			m_materials[particle_index] = emitter.material;
 			m_particle_emitter_flags[particle_index] = emitter.flags;
 			m_particle_emitters[particle_index] = handle;
@@ -476,7 +490,8 @@ public:
 			m_materials,
 			m_particle_emitter_flags,
 			m_particle_emitters,
-			m_particle_pipelines
+			m_particle_pipelines,
+			m_texture_regions
 		};
 	}
 
@@ -537,7 +552,8 @@ private:
 			&& (source.angles.empty() || source.angles.size() == count)
 			&& source.materials.size() == count
 			&& source.emitter_flags.size() == count
-			&& (source.pipelines.empty() || source.pipelines.size() == count);
+			&& (source.pipelines.empty() || source.pipelines.size() == count)
+			&& (source.texture_regions.empty() || source.texture_regions.size() == count);
 	}
 
 	bool Can_Append(std::size_t count) const noexcept
@@ -558,7 +574,8 @@ private:
 			&& count <= m_materials.capacity() - m_materials.size()
 			&& count <= m_particle_emitter_flags.capacity() - m_particle_emitter_flags.size()
 			&& count <= m_particle_emitters.capacity() - m_particle_emitters.size()
-			&& count <= m_particle_pipelines.capacity() - m_particle_pipelines.size();
+			&& count <= m_particle_pipelines.capacity() - m_particle_pipelines.size()
+			&& count <= m_texture_regions.capacity() - m_texture_regions.size();
 	}
 
 	void Decrement_Emitter_Count(ParticleEmitterHandle handle) noexcept
@@ -594,6 +611,7 @@ private:
 			m_particle_emitter_flags[particle_index] = m_particle_emitter_flags[last_particle_index];
 			m_particle_emitters[particle_index] = m_particle_emitters[last_particle_index];
 			m_particle_pipelines[particle_index] = m_particle_pipelines[last_particle_index];
+			m_texture_regions[particle_index] = m_texture_regions[last_particle_index];
 		}
 
 		m_position_x.pop_back();
@@ -613,6 +631,7 @@ private:
 		m_particle_emitter_flags.pop_back();
 		m_particle_emitters.pop_back();
 		m_particle_pipelines.pop_back();
+		m_texture_regions.pop_back();
 	}
 
 	std::vector<ParticleEmitter> m_emitters;
@@ -638,6 +657,7 @@ private:
 	AlignedVector<ParticleEmitterFlags> m_particle_emitter_flags;
 	AlignedVector<ParticleEmitterHandle> m_particle_emitters;
 	AlignedVector<PipelineHandle> m_particle_pipelines;
+	AlignedVector<ParticleTextureRegion> m_texture_regions;
 };
 
 }

@@ -27,11 +27,9 @@
 #include "WWLib/always.h"
 #include "WW3D2/RendObj.h"
 #include "WW3D2/W3DFile.h"
-#include "WW3D2/VertexBuffer.h"
-#include "WW3D2/IndexBuffer.h"
 #include "WW3D2/Shader.h"
 #include "WW3D2/VertMaterial.h"
-#include "WW3D2/Backend/RenderBackend.h"
+#include "WW3D2/VertexFormat.h"
 #include "Lib/BaseType.h"
 #include "Common/GameType.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
@@ -80,17 +78,18 @@ Custom W3D render object that's used to process the terrain.  It handles
 virtually everything to do with the terrain, including: drawing, lighting,
 scorchmarks and intersection tests.
 */
-class BaseHeightMapRenderObjClass : public RenderObjClass, public RenderBackendCleanupHook, public Snapshot
-{
+import Graphics.Frame.ResourceLifecycle;
 
+class BaseHeightMapRenderObjClass : public RenderObjClass, public Snapshot
+{
+    Graphics::FrameResourceRegistration m_resourceRegistration;
 public:
 
 	BaseHeightMapRenderObjClass();
 	virtual ~BaseHeightMapRenderObjClass() override;
 
-	// RenderBackendCleanupHook methods
-	virtual void ReleaseResources() override;	///< Release all dx9 resources so the device can be reset.
-	virtual void ReAcquireResources() override;  ///< Reacquire all resources after device reset.
+	virtual void ReleaseResources(); ///< Release render resources before device reset.
+	virtual void ReAcquireResources(); ///< Reacquire resources after device reset.
 
 
 	/////////////////////////////////////////////////////////////////////////////
@@ -110,11 +109,11 @@ public:
   // Other VIRTUAL methods. [3/20/2003]
 
 	///allocate resources needed to render heightmap
-	virtual int initHeightData(Int width, Int height, WorldHeightMap *pMap, RefRenderObjListIterator *pLightsIterator, Bool updateExtraPassTiles=TRUE);
+	virtual int initHeightData(Int width, Int height, WorldHeightMap *pMap, Graphics::SceneObjectList<RenderObjClass>::Cursor *pLightsIterator, Bool updateExtraPassTiles=TRUE);
 	virtual Int freeMapResources();	///< free resources used to render heightmap
-	virtual void updateCenter(CameraClass *camera, const Vector3 *cameraPivot, RefRenderObjListIterator *pLightsIterator);
+	virtual void updateCenter(CameraClass *camera, const Vector3 *cameraPivot, Graphics::SceneObjectList<RenderObjClass>::Cursor *pLightsIterator);
  	virtual void adjustTerrainLOD(Int adj);
-	virtual void doPartialUpdate(const IRegion2D &partialRange, WorldHeightMap *htMap, RefRenderObjListIterator *pLightsIterator) = 0;
+	virtual void doPartialUpdate(const IRegion2D &partialRange, WorldHeightMap *htMap, Graphics::SceneObjectList<RenderObjClass>::Cursor *pLightsIterator) = 0;
 	virtual void staticLightingChanged();
 	virtual void oversizeTerrain(Int tilesToOversize) = 0; ///< Oversize the visible terrain area.
 	virtual void setTerrainDrawSize(Int width, Int height) = 0; ///< Resize the visible terrain area. Always defaults to oversize dimensions when oversize is set.
@@ -150,7 +149,7 @@ public:
 	void updateMacroTexture(AsciiString textureName);
 	void doTextures(Bool flag) {m_disableTextures = !flag;};
 	/// Update the diffuse value from static light info for one vertex.
-	void doTheLight(VERTEX_FORMAT *vb, const Vector3*light, Vector3*normal, RefRenderObjListIterator *pLightsIterator, UnsignedByte alpha);
+	void doTheLight(VERTEX_FORMAT *vb, const Vector3*light, Vector3*normal, Graphics::SceneObjectList<RenderObjClass>::Cursor *pLightsIterator, UnsignedByte alpha);
 	void addScorch(Vector3 location, Real radius, Scorches type);
 	void addStaticScorch(Vector3 location, Real radius, Scorches type);
 	void addTree(DrawableID id, Coord3D location, Real scale, Real angle,
@@ -222,7 +221,7 @@ public:
 	Bool doesNeedFullUpdate() {return m_needFullUpdate;}
 
 
-	virtual int updateBlock(Int x0, Int y0, Int x1, Int y1, WorldHeightMap *pMap, RefRenderObjListIterator *pLightsIterator) = 0;
+	virtual int updateBlock(Int x0, Int y0, Int x1, Int y1, WorldHeightMap *pMap, Graphics::SceneObjectList<RenderObjClass>::Cursor *pLightsIterator) = 0;
 
 protected:
 	void scheduleFullUpdate();

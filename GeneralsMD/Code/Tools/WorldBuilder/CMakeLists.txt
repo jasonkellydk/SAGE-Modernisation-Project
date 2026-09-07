@@ -205,7 +205,8 @@ add_custom_command(TARGET z_worldbuilder POST_BUILD
         "${CMAKE_BINARY_DIR}/engine/graphics/shaders/$<CONFIG>"
         "$<TARGET_FILE_DIR:z_worldbuilder>/GraphicsShaders")
 
-target_sources(z_worldbuilder PRIVATE ${WORLDBUILDER_SRC})
+target_sources(z_worldbuilder PRIVATE ${WORLDBUILDER_SRC}
+    src/ViewportLabels.cpp include/ViewportLabels.h)
 
 target_include_directories(z_worldbuilder PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -223,6 +224,7 @@ target_precompile_headers(z_worldbuilder PRIVATE
 
 target_link_libraries(z_worldbuilder PRIVATE
     generals_graphics
+    generals_ui_wnd
     SDL3::SDL3
     core_debug
     d3d9lib

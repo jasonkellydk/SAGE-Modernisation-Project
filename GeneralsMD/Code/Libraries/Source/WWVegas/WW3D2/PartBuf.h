@@ -37,11 +37,12 @@
 #pragma once
 
 #include "WW3D2/RendObj.h"
-#include "WW3D2/PointGr.h"
 #include "WW3D2/SegLineRenderer.h"
-#include "LineGrp.h"
 
 class ParticleEmitterClass;
+struct ParticleSpriteState;
+struct ParticleLineState;
+template<class T> class ShareBufferClass;
 template<class T> struct ParticlePropertyStruct;
 
 /**
@@ -380,21 +381,21 @@ class ParticleBufferClass : public RenderObjClass
 		float				InitialOrientationRandom;
 
 		// This object implements particle rendering
-		PointGroupClass *	PointGroup;
+		ParticleSpriteState * Sprite;
 
 		// This object implements line rendering
 		SegLineRendererClass	* LineRenderer;
 
 		// This object implements line group rendering
-		LineGroupClass * LineGroup;
+		ParticleLineState * LineGroup;
 
-		// These are shared with the point group. The position, color and alpha
+		// These are shared with the sprite submission. The position, color and alpha
 		// arrays serve double duty: they are used to store and update particle
-		// state and also to pass point information to the point group. The
-		// active point table is used to communicate to the point group which
+		// state and also to pass point information to the sprite submission. The
+		// active point table is used to communicate to the sprite submission which
 		// points are active (it is only used if all are not active)..
 		ShareBufferClass<Vector3> *	Position[2];	// Only [0] used unless pingpong enabled
-		ShareBufferClass<Vector4> *	Diffuse;			// passed into point group
+		ShareBufferClass<Vector4> *	Diffuse;			// passed into sprite submission
 		ShareBufferClass<Vector3> *	Color;
 		ShareBufferClass<float> *		Alpha;
 		ShareBufferClass<float> *		Size;

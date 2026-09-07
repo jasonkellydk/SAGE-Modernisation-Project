@@ -39,6 +39,12 @@
 
 #pragma once
 
+#include <memory>
+#include <span>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
 #include "WWLib/always.h"
 #include "WWLib/bittype.h"
 #include "WW3D2/WW3D.h"
@@ -50,9 +56,7 @@
 
 
 class MaterialPassClass;
-class LightEnvironmentClass;
-class VisRasterizerClass;
-class BWRenderClass;
+import Graphics.Scene.Lighting.Local;
 class TexProjectClass;
 
 const unsigned MAX_ADDITIONAL_MATERIAL_PASSES=32;
@@ -99,7 +103,7 @@ public:
 	float								materialPassAlphaOverride;	////added for 'Generals' to allow variable alpha on additional render passes.-MW
 	float								materialPassEmissiveOverride;	////added for 'Generals' to allow variable emissive on additional render passes.-MW
 
-	LightEnvironmentClass*		light_environment;
+	Graphics::LocalLighting*		light_environment;
 
 	TexProjectClass*				Texture_Projector;
 
@@ -109,50 +113,5 @@ protected:
 	unsigned							RejectedMaterialPasses;
 	RINFO_OVERRIDE_FLAGS			OverrideFlag[MAX_OVERRIDE_FLAG_LEVEL];
 	unsigned							OverrideFlagLevel;
-
-};
-
-
-/**
-** SpecialRenderInfoClass
-** This structure also contains a "grab-bag" of junk for use by the Special_Render
-** function.  The first use that I have for Special_Render is to implement the
-** visibility detection algorithm where each object is rendered in such a way
-** that I can get the 'id' of the object which generated each pixel on the screen.
-** Another use I have planned for Special_Render is a shadow rendering mode that
-** just draws an object in solid black from the point of view of a light source.
-** This would just need another enum for the RenderType...
-**
-** The reason for a Special_Render function is that I didn't want to pollute
-** the main rendering pipeline with checks for these alternate rendering operations.
-*/
-class SpecialRenderInfoClass : public RenderInfoClass
-{
-
-public:
-	SpecialRenderInfoClass(CameraClass & cam,int render_type);
-	~SpecialRenderInfoClass();
-
-	// The following fields are only used by the Special_Render function.
-	// this is basically just a place to stick whatever information you need.
-	enum
-	{
-		RENDER_VIS,
-		RENDER_SHADOW
-	};
-	int								RenderType;
-
-	// RENDER_VIS variables and methods:
-	VisRasterizerClass *			VisRasterizer;
-
-	// RENDER_SHADOW variables and methods:
-	// NOTE: this is somewhat obsolete now that we have hardware render-to-texture.
-	BWRenderClass *				BWRenderer;					// Black & white non-textured renderer
-
-private:
-
-	// Not implemented...
-	SpecialRenderInfoClass(const RenderInfoClass &);
-	SpecialRenderInfoClass & operator = (const RenderInfoClass &);
 
 };

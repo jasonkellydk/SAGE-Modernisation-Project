@@ -17,13 +17,22 @@ export struct W3DTextureStageBindings final
     std::vector<std::array<std::uint32_t, 3>> face_texcoord_ids;
 };
 
+export enum class W3DPassColorSource : std::uint8_t
+{
+    Diffuse,
+    Illumination,
+    Specular
+};
+
 export struct W3DPassBindings final
 {
     std::vector<std::uint32_t> vertex_material_ids;
     std::vector<std::uint32_t> shader_ids;
+    std::vector<std::uint32_t> shader_material_ids;
     std::vector<Color4f> diffuse_colors;
     std::vector<Color4f> diffuse_illumination;
     std::vector<Color4f> specular_colors;
+    std::vector<W3DPassColorSource> color_order;
     std::vector<W3DTextureStageBindings> stages;
 };
 
@@ -66,6 +75,7 @@ bool Read_Stage(W3DByteSpan bytes, std::uint32_t vertex_count,
         case W3DChunkTextureIds:
             return stage.texture_ids.empty() && Read_Ids(chunk.payload, triangle_count, stage.texture_ids);
         case W3DChunkStageTextureCoords:
+        case W3DChunkTextureCoords:
             if (!stage.texcoords.empty() || chunk.payload.size() % 8 != 0)
                 return false;
             stage.texcoords.resize(chunk.payload.size() / 8);
@@ -122,13 +132,19 @@ export bool W3DRead_Pass_Bindings(W3DByteSpan bytes, std::uint32_t vertex_count,
         case W3DChunkShaderIds:
             return parsed.shader_ids.empty()
                 && PassDetail::Read_Ids(chunk.payload, triangle_count, parsed.shader_ids);
+        case W3DChunkShaderMaterialIds:
+            return parsed.shader_material_ids.empty()
+                && PassDetail::Read_Ids(chunk.payload, triangle_count, parsed.shader_material_ids);
         case 0x3B:
+            parsed.color_order.push_back(W3DPassColorSource::Diffuse);
             return parsed.diffuse_colors.empty()
                 && PassDetail::Read_Colors(chunk.payload, vertex_count, true, parsed.diffuse_colors);
         case 0x3C:
+            parsed.color_order.push_back(W3DPassColorSource::Illumination);
             return parsed.diffuse_illumination.empty()
                 && PassDetail::Read_Colors(chunk.payload, vertex_count, false, parsed.diffuse_illumination);
         case 0x3E:
+            parsed.color_order.push_back(W3DPassColorSource::Specular);
             return parsed.specular_colors.empty()
                 && PassDetail::Read_Colors(chunk.payload, vertex_count, false, parsed.specular_colors);
         case W3DChunkTextureStage:

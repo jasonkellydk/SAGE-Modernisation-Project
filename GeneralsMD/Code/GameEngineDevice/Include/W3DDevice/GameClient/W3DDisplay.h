@@ -34,8 +34,9 @@
 #pragma once
 
 #include "GameClient/Display.h"
-#include "WW3D2/LightEnvironment.h"
-#include "W3DDevice/GameClient/W3DProfilerFrameCapture.h"
+#include <vector>
+import Graphics.Presentation.DisplayModes;
+import Graphics.Scene.Lighting.Local;
 
 class W3DDebugDisplay;
 class DisplayString;
@@ -162,8 +163,9 @@ protected:
 	virtual void onEndBatch() override;
 	virtual void onFlush() override;
 
+	std::vector<Graphics::DisplayResolution> m_displayResolutions;
 	Byte m_initialized;												///< TRUE when system is initialized
-	LightClass *m_myLight[LightEnvironmentClass::MAX_LIGHTS];										///< light hack for now
+	LightClass *m_myLight[Graphics::Material_Light_Count];										///< light hack for now
 	IRegion2D m_clipRegion;									///< the clipping region for images
 	Bool m_isClippedEnabled;	///<used by 2D drawing operations to define clip re
 	Real m_averageFPS;		///<average fps over the last 30 frames.
@@ -174,9 +176,6 @@ protected:
 	Int64 m_timerAtCumuFPSStart;
 #endif
 
-#ifdef PROFILER_ENABLED
-	W3DProfilerFrameCapture *m_profilerFrameCapture;
-#endif
 
 	enum
 	{

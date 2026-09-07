@@ -15,6 +15,7 @@ export module Graphics.Scene.Models.Animation;
 export import Graphics.Resources.Handles.ResourceHandle;
 export import Graphics.Resources.Pools.ResourcePool;
 export import Graphics.Scene.Models.Skeleton;
+import Graphics.Memory.AlignedAllocator;
 
 namespace Graphics
 {
@@ -225,8 +226,8 @@ public:
 	}
 
 private:
-	std::vector<RenderTransform> m_local_transforms;
-	std::vector<RenderTransform> m_world_transforms;
+	AlignedVector<RenderTransform> m_local_transforms;
+	AlignedVector<RenderTransform> m_world_transforms;
 };
 
 static_assert(std::is_nothrow_move_constructible_v<Pose>);

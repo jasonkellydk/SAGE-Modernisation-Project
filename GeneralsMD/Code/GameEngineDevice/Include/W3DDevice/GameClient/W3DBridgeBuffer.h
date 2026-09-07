@@ -54,7 +54,6 @@ import Graphics.Scene.Surfaces.Renderer;
 #include "WWLib/always.h"
 #include "WW3D2/RendObj.h"
 #include "WW3D2/W3DFile.h"
-#include "WW3D2/Backend/RenderBackend.h"
 #include "WW3D2/VertexFormat.h"
 #include "WW3D2/Shader.h"
 #include "WW3D2/VertMaterial.h"
@@ -118,12 +117,12 @@ protected:
     Graphics::SurfaceMeshHandle m_graphicsMesh;
 
 protected:
-	Int getModelVerticesFixed(VertexFormatXYZNDUV1 *destination_vb, Int curVertex, const Matrix3D &mtx, MeshClass *pMesh, RefRenderObjListIterator *pLightsIterator);
+	Int getModelVerticesFixed(VertexFormatXYZNDUV1 *destination_vb, Int curVertex, const Matrix3D &mtx, MeshClass *pMesh, Graphics::SceneObjectList<RenderObjClass>::Cursor *pLightsIterator);
 	Int getModelIndices(UnsignedShort *destination_ib, Int curIndex, Int vertexOffset, MeshClass *pMesh);
 	Int getModelVertices(VertexFormatXYZNDUV1 *destination_vb, Int curVertex,  Real xOffset,
 																Vector3 &vec, Vector3 &vecNormal, Vector3 &vecZ, Vector3 &offset,
 																const Matrix3D &mtx,
-																MeshClass *pMesh, RefRenderObjListIterator *pLightsIterator);
+																MeshClass *pMesh, Graphics::SceneObjectList<RenderObjClass>::Cursor *pLightsIterator);
 
 public:
 	W3DBridge();
@@ -136,7 +135,7 @@ public:
 	Bool load(BodyDamageType curDamageState);
 	BodyDamageType getDamageState() {return m_curDamageState;};
 	void setDamageState(BodyDamageType state) { m_curDamageState = state;};
-	void getIndicesNVertices(UnsignedShort *destination_ib, VertexFormatXYZNDUV1 *destination_vb, Int *curIndexP, Int *curVertexP, RefRenderObjListIterator *pLightsIterator);
+	void getIndicesNVertices(UnsignedShort *destination_ib, VertexFormatXYZNDUV1 *destination_vb, Int *curIndexP, Int *curVertexP, Graphics::SceneObjectList<RenderObjClass>::Cursor *pLightsIterator);
 	Bool cullBridge(CameraClass * camera);						 ///< Culls the bridges.  Returns true if visibility changed.
 	void clearBridge();		///< Frees all objects associated with a bridge.
 	Bool isVisible() {return m_visible;};
@@ -169,7 +168,7 @@ public:
 	void doFullUpdate() {m_updateVis = true;};
 	void loadBridges(W3DTerrainLogic *pTerrainLogic, Bool saveGame); ///< Loads the bridges from the map objects list.
 	void worldBuilderUpdateBridgeTowers( W3DAssetManager *assetManager, SimpleSceneClass *scene );			///< for the editor and showing visual bridge towers
-	void updateCenter(CameraClass *camera, RefRenderObjListIterator *pLightsIterator);
+	void updateCenter(CameraClass *camera, Graphics::SceneObjectList<RenderObjClass>::Cursor *pLightsIterator);
 	enum { MAX_BRIDGE_VERTEX=12000, //make sure it stays under 65535
 					MAX_BRIDGE_INDEX=2*MAX_BRIDGE_VERTEX,	//make sure it stays under 65535
 					MAX_BRIDGES=200};
@@ -186,7 +185,7 @@ protected:
 	Bool		m_anythingChanged;	///< Set to true if visibility changed.
 	/// Add a bridge at location.  Name is the gdf item name.
 	void addBridge(Vector3 fromLoc, Vector3 toLoc, AsciiString name, W3DTerrainLogic *pTerrainLogic, Dict *props);
-	void loadBridgesInVertexAndIndexBuffers(RefRenderObjListIterator *pLightsIterator); ///< Fills the index and vertex buffers for drawing.
+	void loadBridgesInVertexAndIndexBuffers(Graphics::SceneObjectList<RenderObjClass>::Cursor *pLightsIterator); ///< Fills the index and vertex buffers for drawing.
 	void allocateBridgeBuffers();							 ///< Allocates the buffers.
 	void cull(CameraClass * camera);						 ///< Culls the bridges.
 	void freeBridgeBuffers();									 ///< Frees the index and vertex buffers.

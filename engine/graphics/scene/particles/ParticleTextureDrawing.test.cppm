@@ -8,11 +8,219 @@ module;
 #include <vector>
 export module Graphics.Scene.Particles.TextureDrawing.Tests;
 import Assets.Cache.TextureLoadTask;
+import Assets.Adapters.DDS;
+import Assets.Math;
+import Assets.Images.Preparation;
 import Assets.Identity;
 import Assets.Textures;
 import Graphics.Scene.Particles.Renderer;
 import Graphics.Backends.DX11;
 using namespace Graphics;
+
+BOOST_AUTO_TEST_CASE(texture_regions_select_distinct_atlas_cells_after_source_release_and_resize)
+{
+    const std::array<std::array<unsigned, 4>, 4> colors{{
+        {255, 0, 0, 255}, {0, 255, 0, 128}, {255, 255, 255, 0}, {255, 255, 0, 192}}};
+    for (bool warp : {true, false}) {
+        DX11Device device({warp});
+        if (!warp && !device.Is_Valid()) continue;
+        BOOST_REQUIRE(device.Is_Valid());
+        for (auto mode : {ParticleEmitterFlags::Billboard, ParticleEmitterFlags::PointSprite, ParticleEmitterFlags::None}) {
+            ParticleRenderer renderer;
+            BOOST_REQUIRE(renderer.Initialize(device, std::filesystem::path(GRAPHICS_PARTICLE_SHADER_DIRECTORY), 1, 4));
+            Texture description;
+            description.width = description.height = 8;
+            description.mip_count = 1;
+            description.format = TextureFormat::RGBA8_UNorm;
+            description.usage = TextureUsage::Sampled;
+            description.row_pitch = 32;
+            std::array<std::byte, 8 * 8 * 4> pixels{};
+            for (unsigned y = 0; y < 8; ++y)
+                for (unsigned x = 0; x < 8; ++x)
+                    for (unsigned c = 0; c < 4; ++c)
+                        pixels[(y * 8 + x) * 4 + c] = std::byte(colors[(y / 4) * 2 + x / 4][c]);
+            const auto texture = renderer.Create_Texture(description, pixels);
+            BOOST_REQUIRE(texture.Is_Valid());
+            Material material;
+            material.shader = renderer.Particle_Shader();
+            material.textures[0] = texture;
+            const auto material_handle = renderer.Create_Material(material);
+            BOOST_REQUIRE(material_handle.Is_Valid());
+            ParticleEmitter emitter;
+            emitter.position = {0, 0, .5f};
+            emitter.flags = ParticleEmitterFlags::Enabled | mode;
+            emitter.material = material_handle;
+            emitter.pipeline = renderer.Pipeline_For_Flags(emitter.flags);
+            emitter.particle_size = mode == ParticleEmitterFlags::PointSprite ? 8.0f : .16f;
+            emitter.max_particles = 4;
+            const auto handle = renderer.Create_Emitter(emitter);
+            BOOST_REQUIRE(handle.Is_Valid());
+            {
+                ParticleSystem source;
+                source.Reserve(1, 4);
+                const auto source_handle = source.Create_Emitter(emitter);
+                BOOST_REQUIRE(source.Spawn(source_handle, 4));
+                auto data = source.Particles();
+                const std::array<float, 4> positions{-.75f, -.25f, .25f, .75f};
+                const std::array<ParticleTextureRegion, 4> regions{{
+                    {0, 0, .5f, .5f}, {.5f, 0, 1, .5f}, {0, .5f, .5f, 1}, {.5f, .5f, 1, 1}}};
+                data.position_x = positions;
+                data.texture_regions = regions;
+                BOOST_REQUIRE(renderer.Append_Particles(handle, data));
+            }
+            for (unsigned width : {64u, 96u, 64u}) {
+                constexpr unsigned height = 32;
+                BOOST_REQUIRE(renderer.Set_View({Matrix4x4::Identity(), Matrix4x4::Identity(), {},
+                    {0, 0, float(width), float(height), 0, 1}}));
+                const auto target = device.Create_Texture({width, height, 1, RHITextureFormat::RGBA8_UNorm,
+                    static_cast<unsigned>(RHITextureUsage::RenderTarget)});
+                const auto depth = device.Create_Texture({width, height, 1, RHITextureFormat::D32_Float,
+                    static_cast<unsigned>(RHITextureUsage::DepthStencil)});
+                auto& commands = device.Immediate_Command_List();
+                BOOST_REQUIRE(commands.Set_Render_Targets(target, depth));
+                BOOST_REQUIRE(commands.Clear({0, 0, 1, 1}, 1));
+                BOOST_REQUIRE(renderer.Render(commands, target, depth, {0, 0, width, height}));
+                std::vector<std::byte> result(width * height * 4);
+                BOOST_REQUIRE(device.Readback_Texture(target, result, width * 4));
+                for (unsigned i = 0; i < 4; ++i) {
+                    const unsigned center = ((height / 2) * width + (2 * i + 1) * width / 8) * 4;
+                    const unsigned alpha = colors[i][3];
+                    for (unsigned c = 0; c < 3; ++c) {
+                        const int expected = static_cast<int>(colors[i][c] * alpha / 255 + (c == 2 ? 255 - alpha : 0));
+                        BOOST_CHECK_SMALL(std::to_integer<int>(result[center + c]) - expected, 2);
+                    }
+                    BOOST_CHECK_EQUAL(std::to_integer<unsigned>(result[center + 3]), 255);
+                }
+                device.Destroy_Texture(target);
+                device.Destroy_Texture(depth);
+            }
+            renderer.Shutdown();
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(prepared_mip_chain_retains_recolor_and_alpha_in_gpu_drawing)
+{
+    std::array<std::byte, 8 * 4 * 4> source{};
+    for (unsigned y = 0; y < 4; ++y) for (unsigned x = 0; x < 8; ++x)
+        BOOST_REQUIRE(Assets::Write_Image_Pixel(std::span(source).subspan((y * 8 + x) * 4, 4),
+            Assets::PixelEncoding::BGRA8, x < 4 ? 0xffff0000 : 0xff0000ff));
+    std::vector<Assets::PreparedImage> levels;
+    BOOST_REQUIRE(Assets::Prepare_Image_Levels({source, 8, 4, 32, Assets::PixelEncoding::BGRA8, {}},
+        Assets::PixelEncoding::BGRA8, 8, 4, 4, {120, 0, 0}, levels));
+    const auto& last = levels.back();
+    BOOST_REQUIRE_EQUAL(last.width, 1u); BOOST_REQUIRE_EQUAL(last.height, 1u);
+    std::array<std::byte, 4> rgba{};
+    BOOST_REQUIRE(Assets::Convert_Image_Pixel(rgba, Assets::PixelEncoding::RGBA8, last.bytes, last.encoding));
+    DX11Device device({true});
+    BOOST_REQUIRE(device.Is_Valid());
+    ParticleRenderer renderer;
+    for (unsigned cycle = 0; cycle < 2; ++cycle) {
+        BOOST_REQUIRE(renderer.Initialize(device, std::filesystem::path(GRAPHICS_PARTICLE_SHADER_DIRECTORY), 1, 1));
+        Texture texture;
+        texture.width = texture.height = texture.mip_count = 1; texture.row_pitch = 4;
+        texture.format = TextureFormat::RGBA8_UNorm; texture.usage = TextureUsage::Sampled;
+        const auto image = renderer.Create_Texture(texture, rgba);
+        BOOST_REQUIRE(image.Is_Valid());
+        Material material;
+        material.shader = renderer.Particle_Shader(); material.textures[0] = image;
+        const auto material_handle = renderer.Create_Material(material);
+        BOOST_REQUIRE(material_handle.Is_Valid());
+        ParticleEmitter emitter;
+        emitter.material = material_handle; emitter.color = {1, 1, 1, 1}; emitter.position = {0, 0, 0.5f};
+        emitter.flags = ParticleEmitterFlags::Enabled | ParticleEmitterFlags::PointSprite;
+        emitter.particle_size = 16; emitter.max_particles = 1;
+        emitter.pipeline = renderer.Pipeline_For_Flags(emitter.flags);
+        const auto handle = renderer.Create_Emitter(emitter);
+        BOOST_REQUIRE(renderer.Spawn(handle, 1));
+        const unsigned width = cycle == 0 ? 64 : 96, height = cycle == 0 ? 48 : 72;
+        BOOST_REQUIRE(renderer.Set_View({Matrix4x4::Identity(), Matrix4x4::Identity(), {},
+            {0, 0, float(width), float(height), 0, 1}}));
+        const auto target = device.Create_Texture({width, height, 1, RHITextureFormat::RGBA8_UNorm,
+            static_cast<unsigned>(RHITextureUsage::RenderTarget)});
+        const auto depth = device.Create_Texture({width, height, 1, RHITextureFormat::D32_Float,
+            static_cast<unsigned>(RHITextureUsage::DepthStencil)});
+        auto& commands = device.Immediate_Command_List();
+        BOOST_REQUIRE(commands.Set_Render_Targets(target, depth));
+        BOOST_REQUIRE(commands.Clear({0, 0, 1, 1}, 1));
+        BOOST_REQUIRE(renderer.Render(commands, target, depth, {0, 0, width, height}));
+        std::vector<std::byte> pixels(width * height * 4);
+        BOOST_REQUIRE(device.Readback_Texture(target, pixels, width * 4));
+        const unsigned center = ((height / 2) * width + width / 2) * 4;
+        BOOST_CHECK_SMALL(std::to_integer<int>(pixels[center]) - 125, 2);
+        BOOST_CHECK_SMALL(std::to_integer<int>(pixels[center + 1]) - 125, 2);
+        BOOST_CHECK_SMALL(std::to_integer<int>(pixels[center + 2]) - 3, 2);
+        BOOST_CHECK_SMALL(std::to_integer<int>(pixels[center + 3]) - 255, 2);
+        renderer.Shutdown(); device.Destroy_Texture(target); device.Destroy_Texture(depth);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(reduced_cube_texture_recolor_retains_alpha_through_drawing_and_restart)
+{
+    std::vector<std::byte> source(128 + 112 * 6);
+    const auto put = [&](unsigned offset, unsigned value) {
+        for (unsigned i = 0; i < 4; ++i) source[offset + i] = std::byte(value >> (i * 8));
+    };
+    put(0, 0x20534444); put(4, 124); put(12, 8); put(16, 8); put(28, 4);
+    put(76, 32); put(80, 4); put(84, 0x35545844); put(112, 0xfe00);
+    // Last cube face, second authored mip. All other subresources stay black.
+    const unsigned offset = 128 + 112 * 5 + 64;
+    put(offset, 0x00008080); put(offset + 8, 0xf800f800);
+    Assets::DDSLayout layout;
+    BOOST_REQUIRE(Assets::Read_DDS_Layout(source, source.size(), layout));
+    const auto* surface = layout.Surface(1, 5);
+    BOOST_REQUIRE(surface);
+    std::vector<std::byte> recolored(surface->size);
+    BOOST_REQUIRE(Assets::Copy_DDS_Blocks(source, *surface, recolored, surface->row_pitch,
+        surface->slice_pitch, layout.compression, {120, 0, 0}));
+    Assets::DDSLayout selected;
+    selected.compression = layout.compression; selected.mip_count = 1;
+    selected.surfaces.push_back(*surface); selected.surfaces[0].offset = 0;
+    std::vector<std::byte> rgba;
+    BOOST_REQUIRE(Assets::Decode_DDS_Surface(recolored, selected, 0, 0, 0, rgba));
+    DX11Device device({true});
+    BOOST_REQUIRE(device.Is_Valid());
+    ParticleRenderer renderer;
+    for (unsigned cycle = 0; cycle < 2; ++cycle) {
+        BOOST_REQUIRE(renderer.Initialize(device, std::filesystem::path(GRAPHICS_PARTICLE_SHADER_DIRECTORY), 1, 1));
+        Texture texture;
+        texture.width = texture.height = 4; texture.mip_count = 1;
+        texture.row_pitch = 16; texture.format = TextureFormat::RGBA8_UNorm; texture.usage = TextureUsage::Sampled;
+        const auto image = renderer.Create_Texture(texture, rgba);
+        BOOST_REQUIRE(image.Is_Valid());
+        Material material;
+        material.shader = renderer.Particle_Shader(); material.textures[0] = image;
+        const auto material_handle = renderer.Create_Material(material);
+        BOOST_REQUIRE(material_handle.Is_Valid());
+        ParticleEmitter emitter;
+        emitter.material = material_handle;
+        emitter.flags = ParticleEmitterFlags::Enabled | ParticleEmitterFlags::PointSprite;
+        emitter.position = {0, 0, 0.5f}; emitter.color = {1, 1, 1, 1};
+        emitter.particle_size = 16; emitter.max_particles = 1;
+        emitter.pipeline = renderer.Pipeline_For_Flags(emitter.flags);
+        const auto handle = renderer.Create_Emitter(emitter);
+        BOOST_REQUIRE(renderer.Spawn(handle, 1));
+        const unsigned width = cycle == 0 ? 64 : 96, height = cycle == 0 ? 48 : 72;
+        BOOST_REQUIRE(renderer.Set_View({Matrix4x4::Identity(), Matrix4x4::Identity(), {},
+            {0, 0, float(width), float(height), 0, 1}}));
+        const auto target = device.Create_Texture({width, height, 1, RHITextureFormat::RGBA8_UNorm,
+            static_cast<unsigned>(RHITextureUsage::RenderTarget)});
+        const auto depth = device.Create_Texture({width, height, 1, RHITextureFormat::D32_Float,
+            static_cast<unsigned>(RHITextureUsage::DepthStencil)});
+        auto& commands = device.Immediate_Command_List();
+        BOOST_REQUIRE(commands.Set_Render_Targets(target, depth));
+        BOOST_REQUIRE(commands.Clear({0, 0, 1, 1}, 1));
+        BOOST_REQUIRE(renderer.Render(commands, target, depth, {0, 0, width, height}));
+        std::vector<std::byte> pixels(width * height * 4);
+        BOOST_REQUIRE(device.Readback_Texture(target, pixels, width * 4));
+        const unsigned center = ((height / 2) * width + width / 2) * 4;
+        BOOST_CHECK_SMALL(std::to_integer<int>(pixels[center]), 2);
+        BOOST_CHECK_SMALL(std::to_integer<int>(pixels[center + 1]) - 125, 2);
+        BOOST_CHECK_SMALL(std::to_integer<int>(pixels[center + 2]) - 127, 2);
+        BOOST_CHECK_SMALL(std::to_integer<int>(pixels[center + 3]) - 255, 2);
+        renderer.Shutdown(); device.Destroy_Texture(target); device.Destroy_Texture(depth);
+    }
+}
 
 BOOST_AUTO_TEST_CASE(restart_invalidates_particle_resources_and_preserves_alpha_after_target_resize)
 {
@@ -29,7 +237,9 @@ BOOST_AUTO_TEST_CASE(restart_invalidates_particle_resources_and_preserves_alpha_
         description.format = TextureFormat::RGBA8_UNorm;
         description.usage = TextureUsage::Sampled;
         description.row_pitch = 4;
-        const std::array<std::byte, 4> pixel{std::byte{0}, std::byte{255}, std::byte{0}, std::byte{64}};
+        const unsigned recolored = Assets::Shift_Color_ARGB(0x40ff0000, {120, 0, 0});
+        const std::array<std::byte, 4> pixel{std::byte(recolored >> 16), std::byte(recolored >> 8),
+            std::byte(recolored), std::byte(recolored >> 24)};
         const auto texture = renderer.Create_Texture(description, pixel);
         BOOST_REQUIRE(texture.Is_Valid());
         Material material;

@@ -1,7 +1,11 @@
 #pragma once
-#include <array>
-#include <optional>
+
+#include <memory>
 #include <span>
+#include <string>
+#include <unordered_map>
+#include <vector>
+#include <array>
 #include "WW3D2/Shader.h"
 #include "WWMath/matrix4.h"
 import Graphics.Scene.Props.Renderer;
@@ -15,10 +19,10 @@ struct GraphicsMaterialDrawOverrides
     bool deferred_pass=false;
     bool force_multiply=false;
     bool shadow_capture=false;
+    bool decal_pass=false;
+    Graphics::PropMeshHandle mesh{};
 };
 
-void Flush_Graphics_Material_Passes();
-void Clear_Graphics_Shadow_Geometry();
 
 // Material vertices are extracted by the asset adapter. Graphics owns their
 // upload and submission, including resources retained for transparent sorting.
@@ -29,11 +33,7 @@ bool Draw_Graphics_Material_Geometry(std::span<const Graphics::PropVertex> verti
     GraphicsMaterialDrawOverrides overrides = {});
 
 class VertexMaterialClass;
-// Translate authored values; graphics owns color-source and opacity evaluation.
-std::optional<Graphics::PropMaterial> Describe_Graphics_Vertex_Material(VertexMaterialClass* material);
 void Extract_Graphics_Texture_Mappers(Graphics::PropParameters& parameters,
     VertexMaterialClass* material);
 
-class LightEnvironmentClass;
-void Extract_Graphics_Lighting(Graphics::PropParameters& parameters,
-    const LightEnvironmentClass* environment);
+import Graphics.Scene.Props.LightingParameters;

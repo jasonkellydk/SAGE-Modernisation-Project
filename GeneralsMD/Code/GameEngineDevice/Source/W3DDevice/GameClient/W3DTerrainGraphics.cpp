@@ -26,7 +26,8 @@
 #include "W3DDevice/GameClient/W3DWaypointBuffer.h"
 #include "W3DDevice/GameClient/W3DBibBuffer.h"
 
-import Graphics.Backends.DX11.Coexistence;
+import Graphics.Scene.DrawParameters;
+import Graphics.Backends.DX11.FrameRuntime;
 import Graphics.Scene.Lighting.Environment;
 import Graphics.Scene.Shadows.DirectionalRenderer;
 
@@ -42,12 +43,12 @@ W3DTerrainGraphics::~W3DTerrainGraphics()
 void W3DTerrainGraphics::Release_Graphics() noexcept
 {
     if (s_active != nullptr) {
-        s_active->Release_Imported_Textures();
+        s_active->Release_Texture_References();
         s_active->scheduleFullUpdate();
     }
 }
 
-void W3DTerrainGraphics::Release_Imported_Textures() noexcept
+void W3DTerrainGraphics::Release_Texture_References() noexcept
 {
     auto& environment = Graphics::Get_Environment_Lighting();
     environment.cloud_texture = {};
@@ -56,13 +57,12 @@ void W3DTerrainGraphics::Release_Imported_Textures() noexcept
         for (Graphics::RHITextureHandle texture : m_textures)
             if (texture.Is_Valid()) m_graphicsDevice->Destroy_Texture(texture);
     m_textures = {};
-    m_sourceResources = {};
     m_graphicsDevice = nullptr;
 }
 
 void W3DTerrainGraphics::ReleaseResources()
 {
-    Release_Imported_Textures();
+    Release_Texture_References();
     BaseHeightMapRenderObjClass::ReleaseResources();
     scheduleFullUpdate();
 }
@@ -76,7 +76,7 @@ void W3DTerrainGraphics::ReAcquireResources()
 Int W3DTerrainGraphics::freeMapResources()
 {
     Release_Graphics_Textures();
-    Release_Imported_Textures();
+    Release_Texture_References();
     Graphics::Get_Terrain_Renderer().Release_Surface();
     Graphics::Get_Terrain_Overlay_Renderer().Release_Surface();
     Graphics::Get_Terrain_Shoreline_Renderer().Release_Surface();
@@ -85,7 +85,7 @@ Int W3DTerrainGraphics::freeMapResources()
 }
 
 int W3DTerrainGraphics::initHeightData(Int width, Int height, WorldHeightMap *map,
-    RefRenderObjListIterator *lights, Bool extra)
+    Graphics::SceneObjectList<RenderObjClass>::Cursor *lights, Bool extra)
 {
     const int result = BaseHeightMapRenderObjClass::initHeightData(width, height, map, lights, extra);
     m_x = width;
@@ -97,12 +97,12 @@ int W3DTerrainGraphics::initHeightData(Int width, Int height, WorldHeightMap *ma
     return Update_Textures() && Update_Surface() ? 0 : -1;
 }
 
-void W3DTerrainGraphics::doPartialUpdate(const IRegion2D &range, WorldHeightMap *map, RefRenderObjListIterator *lights)
+void W3DTerrainGraphics::doPartialUpdate(const IRegion2D &range, WorldHeightMap *map, Graphics::SceneObjectList<RenderObjClass>::Cursor *lights)
 {
     updateBlock(range.lo.x, range.lo.y, range.hi.x, range.hi.y, map, lights);
 }
 
-int W3DTerrainGraphics::updateBlock(Int, Int, Int, Int, WorldHeightMap *map, RefRenderObjListIterator *)
+int W3DTerrainGraphics::updateBlock(Int, Int, Int, Int, WorldHeightMap *map, Graphics::SceneObjectList<RenderObjClass>::Cursor *)
 {
     REF_PTR_SET(m_map, map);
     Invalidate_Cached_Bounding_Volumes();
@@ -111,7 +111,7 @@ int W3DTerrainGraphics::updateBlock(Int, Int, Int, Int, WorldHeightMap *map, Ref
     return 0;
 }
 
-void W3DTerrainGraphics::updateCenter(CameraClass *camera, const Vector3 *pivot, RefRenderObjListIterator *lights)
+void W3DTerrainGraphics::updateCenter(CameraClass *camera, const Vector3 *pivot, Graphics::SceneObjectList<RenderObjClass>::Cursor *lights)
 {
     if (m_map == nullptr || m_updating) return;
     // This window belongs to the remaining scene consumers (roads and
@@ -146,10 +146,9 @@ Int W3DTerrainGraphics::getNumExtraBlendTiles(Bool) { return m_extraCells; }
 bool W3DTerrainGraphics::Update_Textures()
 {
     Graphics::Device *device = Graphics::Shared_Frame_Device();
-    IRenderBackend *backend = WW3D::Get_Render_Backend();
-    if (device == nullptr || backend == nullptr || m_map == nullptr) return false;
+    if (device == nullptr || m_map == nullptr) return false;
     if (m_graphicsDevice != device) {
-        Release_Imported_Textures();
+        Release_Texture_References();
         m_graphicsDevice = device;
         scheduleFullUpdate();
     }
@@ -159,18 +158,13 @@ bool W3DTerrainGraphics::Update_Textures()
         m_stageZeroTexture, m_stageOneTexture, m_stageTwoTexture, m_stageThreeTexture,
         m_shroud != nullptr ? m_shroud->getShroudTexture() : nullptr, m_destAlphaTexture};
     for (std::size_t slot = 0; slot < sources.size(); ++slot) {
-        void *resource = nullptr;
-        void *view = nullptr;
-        TextureBaseClass *texture = sources[slot];
-        if (texture != nullptr && texture->Ensure_Render_Backend_Texture() && !texture->Is_Missing_Texture())
-            backend->Get_Shared_Texture_Resources(texture->Peek_Render_Backend_Texture(), resource, view);
-        if (resource == m_sourceResources[slot]) continue;
-        const Graphics::RHITextureHandle imported = resource != nullptr
-            ? Graphics::Import_Shared_Texture(resource, view) : Graphics::RHITextureHandle{};
-        if (resource != nullptr && !imported.Is_Valid()) return false;
+        TextureBaseClass* texture = sources[slot];
+        const auto handle = texture != nullptr && texture->Ensure_Render_Backend_Texture() && !texture->Is_Missing_Texture()
+            ? texture->Peek_Graphics_Texture() : Graphics::RHITextureHandle{};
+        if (handle == m_textures[slot]) continue;
+        if (handle.Is_Valid() && !device->Retain_Texture(handle)) return false;
         if (m_textures[slot].Is_Valid()) device->Destroy_Texture(m_textures[slot]);
-        m_textures[slot] = imported;
-        m_sourceResources[slot] = resource;
+        m_textures[slot] = handle;
     }
     return m_disableTextures || (m_textures[0].Is_Valid() && m_textures[1].Is_Valid());
 }
@@ -317,7 +311,7 @@ bool W3DTerrainGraphics::Draw_Surface(RenderInfoClass &info)
     }
     if (Scene != nullptr) {
         RTS3DScene *scene = static_cast<RTS3DScene *>(Scene);
-        RefRenderObjListIterator lights(scene->getDynamicLights());
+        Graphics::SceneObjectList<RenderObjClass>::Cursor lights(scene->getDynamicLights());
         std::size_t count = 0;
         for (lights.First(); !lights.Is_Done() && count < parameters.lights.size(); lights.Next()) {
             W3DDynamicLight *light = static_cast<W3DDynamicLight *>(lights.Peek_Obj());
@@ -344,7 +338,7 @@ bool W3DTerrainGraphics::Draw_Surface(RenderInfoClass &info)
     }
     Graphics::CommandList &commands = m_graphicsDevice->Immediate_Command_List();
     const bool filtered = TheGlobalData->m_bilinearTerrainTex || TheGlobalData->m_trilinearTerrainTex;
-    const bool wireframe = WW3D::Get_Render_Backend()->Get_Fill_Mode() == RenderBackendFillMode::Wireframe;
+    const bool wireframe = Graphics::Get_Scene_Draw_Parameters().wireframe;
     RTS3DScene *render_scene = static_cast<RTS3DScene *>(info.Camera.Get_User_Data());
     if (render_scene != nullptr && render_scene->getCustomPassMode() == SCENE_PASS_ALPHA_MASK) {
         if (info.Additional_Pass_Count() == 0) return false;
@@ -353,13 +347,9 @@ bool W3DTerrainGraphics::Draw_Surface(RenderInfoClass &info)
         if (pass == nullptr || !pass->Describe_Graphics_Pass(description)
             || description.textures[0] == nullptr) return false;
         TextureClass *texture = description.textures[0];
-        void *resource = nullptr;
-        void *view = nullptr;
-        IRenderBackend *backend = WW3D::Get_Render_Backend();
-        if (!texture->Ensure_Render_Backend_Texture()
-            || !backend->Get_Shared_Texture_Resources(texture->Peek_Render_Backend_Texture(), resource, view)) return false;
-        const Graphics::RHITextureHandle mask = Graphics::Import_Shared_Texture(resource, view);
-        if (!mask.Is_Valid()) return false;
+        if (!texture->Ensure_Render_Backend_Texture()) return false;
+        const auto mask = texture->Peek_Graphics_Texture();
+        if (!m_graphicsDevice->Retain_Texture(mask)) return false;
         const Matrix4x4 &projection = description.world_texture_transform;
         parameters.shroud_projection = {projection[0][0], projection[1][1], projection[0][3], projection[1][3]};
         parameters.features = {0, 0, 0, 5};
@@ -408,26 +398,20 @@ void W3DTerrainGraphics::Render(RenderInfoClass &info)
     if (useCloud() && m_stageTwoTexture != nullptr && !WW3D::Is_Reflection_Render_Pass())
         m_stageTwoTexture->Update_Animation(WW3D::Get_Logic_Frame_Time_Seconds());
     if (m_treeBuffer != nullptr) m_treeBuffer->setIsTerrain();
-    IRenderBackend *backend = WW3D::Get_Render_Backend();
-    if (backend == nullptr) return;
-    backend->Set_Light_Environment(info.light_environment);
+
+    if (Graphics::Shared_Frame_Device() == nullptr) return;
     const bool rendered = Draw_Surface(info);
-    backend->Invalidate_Cached_Render_States();
     if (!rendered) {
         DEBUG_LOG(("Terrain graphics submission failed.\n"));
         return;
     }
     RTS3DScene *render_scene = static_cast<RTS3DScene *>(info.Camera.Get_User_Data());
     if (render_scene != nullptr && render_scene->getCustomPassMode() == SCENE_PASS_ALPHA_MASK) return;
-    backend->Set_Color_Write_Mask(RenderBackendColorWriteMask::RGB);
-    backend->Set_Transform(RenderBackendTransform::World, Transform);
-    backend->Set_Material(m_vertexMaterialClass);
-    backend->Set_Texture(0, nullptr);
-    backend->Set_Texture(1, nullptr);
+    Graphics::Get_Scene_Draw_Parameters().color_write_mask = 0x07;
     const Bool cloud = useCloud();
     if (!WW3D::Is_Reflection_Render_Pass() && Scene != nullptr && m_roadBuffer != nullptr) {
         RTS3DScene *scene = static_cast<RTS3DScene *>(Scene);
-        RefRenderObjListIterator lights(scene->getDynamicLights());
+        Graphics::SceneObjectList<RenderObjClass>::Cursor lights(scene->getDynamicLights());
         const int border = m_map->getBorderSizeInline();
         m_roadBuffer->drawRoads(&info.Camera, cloud ? m_stageTwoTexture : nullptr,
             TheGlobalData->m_useLightMap ? m_stageThreeTexture : nullptr, m_disableTextures,
@@ -435,14 +419,9 @@ void W3DTerrainGraphics::Render(RenderInfoClass &info)
             m_map->getDrawOrgY() - border, m_map->getDrawOrgY() + m_y - 1 - border, &lights);
     }
     if (m_propBuffer != nullptr) m_propBuffer->drawProps(info);
-    backend->Set_Texture(0, nullptr);
-    backend->Set_Texture(1, nullptr);
     drawScorches(info.Camera);
-    backend->Set_Texture(0, nullptr);
-    backend->Set_Texture(1, nullptr);
     if (m_bridgeBuffer != nullptr) m_bridgeBuffer->drawBridges(&info.Camera, m_disableTextures, cloud ? m_stageTwoTexture : nullptr);
     if (TheTerrainTracksRenderObjClassSystem != nullptr) TheTerrainTracksRenderObjClassSystem->flush(info.Camera);
     if (m_waypointBuffer != nullptr) m_waypointBuffer->drawWaypoints(info);
     if (m_bibBuffer != nullptr) m_bibBuffer->renderBibs(info.Camera);
-    backend->Invalidate_Cached_Render_States();
 }

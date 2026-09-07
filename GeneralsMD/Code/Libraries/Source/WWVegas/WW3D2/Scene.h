@@ -36,9 +36,16 @@
 
 #pragma once
 
+#include <memory>
+#include <span>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
 #include "WWLib/always.h"
 #include "WWMath/vector3.h"
-#include "WW3D2/RObjList.h"
+import Graphics.Scene.ObjectList;
+class RenderObjClass;
 #include "WWDebug/wwdebug.h"
 
 class	RenderObjClass;
@@ -248,10 +255,10 @@ protected:
    // Has a visibility check been performed since scene was last rendered?
    bool Visibility_Checked;
 
-	RefRenderObjListClass	RenderList;
-	RefRenderObjListClass	UpdateList;
-	RefRenderObjListClass	LightList;
-	RefRenderObjListClass	ReleaseList;
+	Graphics::SceneObjectList<RenderObjClass>	RenderList;
+	Graphics::SceneObjectList<RenderObjClass>	UpdateList;
+	Graphics::SceneObjectList<RenderObjClass>	LightList;
+	Graphics::SceneObjectList<RenderObjClass>	ReleaseList;
 
 	friend class SimpleSceneIterator;
 

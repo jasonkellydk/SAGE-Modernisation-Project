@@ -45,7 +45,6 @@ enum CpuType CPP_11(: Int);
 enum GraphicsVenderID CPP_11(: Int);
 
 class TextureClass;	///forward reference
-struct RenderBackendVertexShaderInputLayout;
 /** System for managing complex rendering settings which are either not handled by
 	WW3D2 or need custom paths depending on the video card.  This system will determine
 	the proper shader given video card limitations and also allow the app to query the
@@ -84,10 +83,6 @@ public:
 	static ChipsetType getChipset();	///<return current device chipset.
 	static GraphicsVenderID getCurrentVendor() {return m_currentVendor;}	///<return current card vendor.
 	static std::int64_t getCurrentDriverVersion() {return m_driverVersion; }	///<return current driver version.
-	/// Loads a shader binary and creates a backend-owned shader for it.
-	static Bool LoadAndCreateShader(const char* file_path, Bool vertex_shader,
-		uintptr_t* handle,
-		const RenderBackendVertexShaderInputLayout * input_layout = nullptr);
 
 	static Bool testMinimumRequirements(ChipsetType *videoChipType, CpuType *cpuType, Int *cpuFreq, MemValueType *numRAM, Real *intBenchIndex, Real *floatBenchIndex, Real *memBenchIndex);
 	static StaticGameLODLevel getGPUPerformanceIndex();
@@ -108,12 +103,9 @@ public:
 
 
 protected:
-	static TextureClass *m_Textures[8];	///textures assigned to each of the possible stages
 	static ChipsetType m_currentChipset;	///<last video card chipset that was detected.
 	static GraphicsVenderID m_currentVendor;	///<last video card vendor
 	static std::int64_t m_driverVersion;			///<driver version of last chipset.
-	static ShaderTypes m_currentShader;	///<last shader that was set.
-	static Int m_currentShaderPass;		///<pass of last shader that was set.
 
 	static FilterTypes m_currentFilter; ///< Last filter that was set.
 	// Info for a render to texture surface for special effects.
@@ -177,7 +169,6 @@ protected:
 ///converts viewport to black & white.
 class ScreenBWFilter : public W3DFilterInterface
 {
-	uintptr_t	m_dwBWPixelShader;		///<D3D handle to pixel shader which tints texture to black & white.
 public:
 	virtual Int init() override;			///<perform any one time initialization and validation
 	virtual Int shutdown() override;		///<release resources used by shader
@@ -199,18 +190,7 @@ protected:
 	static Real m_curFadeValue;
 };
 
-class ScreenBWFilterDOT3 : public ScreenBWFilter
-{
-public:
-	virtual Int init() override;			///<perform any one time initialization and validation
-	virtual Int shutdown() override;		///<release resources used by shader
-	virtual Bool preRender(Bool &skipRender, CustomScenePassModes &scenePassMode) override; ///< Set up at start of render.  Only applies to screen filter shaders.
-	virtual Bool postRender(FilterModes mode, Coord2D &scrollDelta,Bool &doExtraRender) override; ///< Called after render.  Only applies to screen filter shaders.
-	virtual Bool setup(FilterModes mode) override {return true;} ///< Called when the filter is started, one time before the first prerender.
-protected:
-	virtual Int set(FilterModes mode) override;		///<setup shader for the specified rendering pass.
-	virtual void reset() override;		///<do any custom resetting necessary to bring W3D in sync.
-};
+
 
 /*=========  ScreenCrossFadeFilter	=============================================================*/
 ///Fades between 2 different rendered frames.

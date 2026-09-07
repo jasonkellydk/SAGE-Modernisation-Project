@@ -63,9 +63,6 @@
  *   RenderObjClass::Update_Cached_Bounding_Volumes -- default collision sphere.               *
  *   RenderObjClass::Get_Obj_Space_Bounding_Sphere -- default collision sphere.                *
  *   RenderObjClass::Get_Obj_Space_Bounding_Box -- default collision box.                      *
- *   RenderObjClass::Intersect - Returns true if specified intersection object                 *
- *   RenderObjClass::Intersect_Sphere -- tests for intersection with the bounding sphere       *
- *   RenderObjClass::Intersect_Sphere_Quick -- tests for intersection with the bounding sphere *
  *   RenderObjClass::Build_Dependency_List -- Generates a list of files this obj depends on.   *
  *   RenderObjClass::Build_Texture_List -- Builds a list of texture files this obj depends on. *
  *   RenderObjClass::Add_Dependencies_To_List -- Add dependent files to the list.              *
@@ -82,16 +79,13 @@
 #include "IntTest.h"
 #include "WWDebug/wwdebug.h"
 #include "MatInfo.h"
-#include "HTree.h"
-#include "PredLod.h"
+import Graphics.Scene.Models.Hierarchy;
 #include "Camera.h"
 #include "WW3D.h"
 #include "WWLib/chunkio.h"
 #include "WWSaveLoad/persistfactory.h"
 #include "WWSaveLoad/saveload.h"
 #include "WW3DIds.h"
-#include "Intersec.h"
-
 #include <cstring>
 
 
@@ -640,21 +634,7 @@ int RenderObjClass::Remove_Sub_Objects_From_Bone(const char * bname)
  *=============================================================================================*/
 void RenderObjClass::Prepare_LOD(CameraClass &camera)
 {
-	// Since most RenderObjClass derivatives are not LOD-capable, the default
-	// implementation just sets the texture reduction factor and doesn't do any
-	// predictive LOD preparation (except for adding the objects' cost to the
-	// total static (nonoptimizeable) cost).
-
-	// Find the maximum screen dimension of the object in pixels
-//	float norm_area = Get_Screen_Size(camera);
-
-	// Find and set texture reduction factor
-	// Jani: Don't set tex reduction, it's broken!
-//   Set_Texture_Reduction_Factor(Calculate_Texture_Reduction_Factor(norm_area));
-
-	// Since we are not adding this object to the predictive LOD optimizer,
-	// at least add its cost in.
-	PredictiveLODOptimizerClass::Add_Cost(Get_Cost());
+	// Objects without detail levels require no preparation.
 }
 
 
@@ -955,88 +935,6 @@ void RenderObjClass::Get_Obj_Space_Bounding_Box(AABoxClass & box) const
 }
 
 /***********************************************************************************************
- *  RenderObjClass::Intersect - Returns true if specified intersection object                  *
- *                                intersects this renderobject                                 *
- *                                                                                             *
- *                                                                                             *
- *                                                                                             *
- *                                                                                             *
- * INPUT: A properly configured Intersection object specifying ray direction & vector          *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   2/25/99    GTH : Moved into RenderObjClass                                                *
- *=============================================================================================*/
-bool RenderObjClass::Intersect(IntersectionClass *Intersection, IntersectionResultClass *Final_Result)
-{
-
-	// do the quick sphere test just to make sure it is worth the more expensive intersection test
-	if (Intersect_Sphere_Quick(Intersection, Final_Result)) {
-
-		CastResultStruct castresult;
-		LineSegClass lineseg;
-
-		Vector3 end = *Intersection->RayLocation + *Intersection->RayDirection * Intersection->MaxDistance;
-		lineseg.Set(* Intersection->RayLocation, end);
-
-		RayCollisionTestClass ray(lineseg, &castresult);
-		ray.CollisionType = COLL_TYPE_ALL;
-
-		if (Cast_Ray(ray)) {
-			lineseg.Compute_Point(ray.Result->Fraction,&(Final_Result->Intersection));
-			Final_Result->Intersects = true;
-			Final_Result->IntersectionType = IntersectionResultClass::GENERIC;
-			if (Intersection->IntersectionNormal)
-				* Intersection->IntersectionNormal = castresult.Normal;
-			Final_Result->IntersectedRenderObject = this;
-			Final_Result->ModelMatrix = Transform;
-			return true;
-		}
-	}
-	Final_Result->Intersects = false;
-	return false;
-}
-
-
-/***********************************************************************************************
- * RenderObjClass::Intersect_Sphere -- tests for intersection with the bounding sphere         *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   2/25/99    GTH : Created.                                                                 *
- *=============================================================================================*/
-bool RenderObjClass::Intersect_Sphere(IntersectionClass *Intersection, IntersectionResultClass *Final_Result)
-{
-	SphereClass sphere = Get_Bounding_Sphere();
-	return Intersection->Intersect_Sphere(sphere, Final_Result);
-}
-
-
-/***********************************************************************************************
- * RenderObjClass::Intersect_Sphere_Quick -- tests for intersection with the bounding sphere   *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   2/25/99    GTH : Created.                                                                 *
- *=============================================================================================*/
-bool RenderObjClass::Intersect_Sphere_Quick(IntersectionClass *Intersection, IntersectionResultClass *Final_Result)
-{
-	SphereClass sphere = Get_Bounding_Sphere();
-	return Intersection->Intersect_Sphere_Quick(sphere, Final_Result);
-}
-
-/***********************************************************************************************
  * RenderObjClass::Build_Dependency_List -- Generates a list of files this obj depends on.     *
  *                                                                                             *
  * INPUT:                                                                                      *
@@ -1151,9 +1049,9 @@ void RenderObjClass::Add_Dependencies_To_List
 		//
 		// External hierarchy file
 		//
-		const HTreeClass *phtree = Get_HTree ();
+		const Graphics::ModelHierarchy *phtree = Get_Model_Hierarchy ();
 		if (phtree != nullptr) {
-			const char *htree_name = phtree->Get_Name ();
+			const char *htree_name = phtree->Name ();
 			if (WW3DString::Compare_No_Case (htree_name, model_name) != 0) {
 
 				//
@@ -1315,3 +1213,21 @@ bool RenderObjClass::Load (ChunkLoadClass &cload)
 }
 
 
+
+
+bool Extract_Ordered_Draw(RenderObjClass& object, void* context)
+{
+    auto& rinfo = *static_cast<RenderInfoClass*>(context);
+    bool submitted = false;
+    if (object.Get_Render_Hook()) {
+        if (object.Get_Render_Hook()->Pre_Render(&object, rinfo)) {
+            object.Render(rinfo);
+            submitted = true;
+        }
+        object.Get_Render_Hook()->Post_Render(&object, rinfo);
+    } else {
+        object.Render(rinfo);
+        submitted = true;
+    }
+    return submitted;
+}

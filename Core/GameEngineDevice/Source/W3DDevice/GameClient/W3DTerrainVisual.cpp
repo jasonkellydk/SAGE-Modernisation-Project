@@ -55,12 +55,7 @@
 #include "W3DDevice/GameClient/W3DDebugIcons.h"
 #include "W3DDevice/GameClient/W3DTerrainTracks.h"
 #include "W3DDevice/GameClient/W3DShadow.h"
-#if defined(RTS_ZEROHOUR)
 #include "W3DDevice/GameClient/W3DTerrainGraphics.h"
-#else
-#include "W3DDevice/GameClient/HeightMap.h"
-#endif
-#include "W3DDevice/GameClient/FlatHeightMap.h"
 #include "W3DDevice/GameClient/W3DSmudge.h"
 #include "W3DDevice/GameClient/Module/W3DModelDraw.h"
 #include "WW3D2/Light.h"
@@ -214,11 +209,7 @@ void W3DTerrainVisual::init()
 	// extend
 	TerrainVisual::init();
 	// create a new render object for W3D
-	#if defined(RTS_ZEROHOUR)
 	m_terrainRenderObject = NEW_REF(W3DTerrainGraphics, ());
-	#else
-	m_terrainRenderObject = NEW_REF(HeightMapRenderObjClass, ());
-	#endif
 	m_terrainRenderObject->Set_Collision_Type( PICK_TYPE_TERRAIN );
 	TheTerrainRenderObject = m_terrainRenderObject;
 
@@ -663,7 +654,7 @@ Bool W3DTerrainVisual::load( AsciiString filename )
 	}
 
 
-	RefRenderObjListIterator *it = W3DDisplay::m_3DScene ? W3DDisplay::m_3DScene->createLightsIterator() : nullptr;
+	Graphics::SceneObjectList<RenderObjClass>::Cursor *it = W3DDisplay::m_3DScene ? W3DDisplay::m_3DScene->createLightsIterator() : nullptr;
 	// Preparation evaluates the map's static lights through the owning scene.
 	if (W3DDisplay::m_3DScene != nullptr)
 		W3DDisplay::m_3DScene->Add_Render_Object(m_terrainRenderObject);

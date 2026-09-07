@@ -78,8 +78,10 @@
 #include "W3DDevice/GameClient/TerrainTex.h"
 #include "W3DDevice/GameClient/BaseHeightMap.h"
 #include "W3DDevice/GameClient/W3DGraphicsResources.h"
+#include <algorithm>
+import Graphics.Scene.Views.CameraMatrices;
 import Graphics.Scene.Lines.Drawing;
-import Graphics.Backends.DX11.Coexistence;
+import Graphics.Backends.DX11.FrameRuntime;
 
 #include "WW3D2/Camera.h"
 #include "WW3D2/Mesh.h"
@@ -170,9 +172,9 @@ void W3DWaypointBuffer::drawWaypoints(RenderInfoClass &rinfo)
 	{
 		//Create a default light environment with no lights and only full ambient.
 		//@todo: Fix later by copying default scene light environment from W3DScene.cpp.
-		LightEnvironmentClass lightEnv;
-		lightEnv.Reset(Vector3(0,0,0), Vector3(1.0f,1.0f,1.0f));
-		lightEnv.Pre_Render_Update(rinfo.Camera.Get_Transform());
+		Graphics::LocalLighting lightEnv;
+		lightEnv.Reset({0,0,0}, {1.0f,1.0f,1.0f});
+		lightEnv.Finalize();
 		RenderInfoClass localRinfo(rinfo.Camera);
 		localRinfo.light_environment=&lightEnv;
 		Vector3 points[ MAX_DISPLAY_NODES + 1 ]; //Lines have nodes + 1 points.
@@ -222,9 +224,9 @@ void W3DWaypointBuffer::drawWaypoints(RenderInfoClass &rinfo)
 	{
 		//Create a default light environment with no lights and only full ambient.
 		//@todo: Fix later by copying default scene light environment from W3DScene.cpp.
-		LightEnvironmentClass lightEnv;
-		lightEnv.Reset(Vector3(0,0,0), Vector3(1.0f,1.0f,1.0f));
-		lightEnv.Pre_Render_Update(rinfo.Camera.Get_Transform());
+		Graphics::LocalLighting lightEnv;
+		lightEnv.Reset({0,0,0}, {1.0f,1.0f,1.0f});
+		lightEnv.Finalize();
 		RenderInfoClass localRinfo(rinfo.Camera);
 		localRinfo.light_environment=&lightEnv;
 		Vector3 points[ MAX_DISPLAY_NODES + 1 ]; //Lines have nodes + 1 points.
@@ -548,30 +550,19 @@ void W3DWaypointBuffer::drawLine(RenderInfoClass &info)
         std::array<float,16> projection;
         Graphics::RHITextureHandle texture;
     } submission{m_lineMesh,{},Resolve_Graphics_Texture(m_texture)};
-    WW3D::Get_Render_Backend()->Get_Transform(RenderBackendTransform::Projection,submission.projection.data());
+    submission.projection = Graphics::Get_Camera_Matrices().projection.values;
     SegLineGeometrySink sink;
     sink.context = &submission;
-    sink.submit = [](void* context, const VertexFormatXYZDUV1* source, unsigned vertex_count,
+    sink.submit = [](void* context, const Graphics::PropVertex* source, unsigned vertex_count,
         const unsigned* indices, unsigned index_count) {
         auto& submission = *static_cast<Submission*>(context);
         auto* device = Graphics::Shared_Frame_Device();
         if (!device) return;
-        std::vector<Graphics::SurfaceVertex> vertices(vertex_count);
-        for (unsigned i=0;i<vertex_count;++i) {
-            const auto& value = source[i];
-            auto& vertex = vertices[i];
-            vertex.position = {value.x,value.y,value.z};
-            vertex.uv = {value.u1,value.v1};
-            vertex.color = {((value.diffuse>>16)&255)/255.0f,((value.diffuse>>8)&255)/255.0f,
-                (value.diffuse&255)/255.0f,((value.diffuse>>24)&255)/255.0f};
-        }
         auto& renderer = Graphics::Get_Surface_Renderer();
-        const std::span<const unsigned> topology(indices,index_count);
-        if (!submission.mesh.Is_Valid()) submission.mesh = renderer.Create_Mesh(vertices,topology);
-        else if (!renderer.Update_Mesh(submission.mesh,vertices,topology)) return;
+        if (!Graphics::Update_Navigation_Line(renderer,submission.mesh,{source,vertex_count},
+            {indices,index_count})) return;
         Graphics::Draw_Navigation_Line(renderer,device->Immediate_Command_List(),submission.mesh,
             submission.projection,submission.texture);
     };
     m_line->Extract_Geometry(info,sink);
-    WW3D::Get_Render_Backend()->Invalidate_Cached_Render_States();
 }

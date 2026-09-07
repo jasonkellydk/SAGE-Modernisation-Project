@@ -1,4 +1,5 @@
 module;
+#include "../../profiling/Tracy.h"
 
 #include <array>
 #include <cstddef>
@@ -116,8 +117,8 @@ public:
             pipeline.sampler_count = 16;
             pipeline.samplers[0].address.fill(RHISamplerAddress::Clamp);
             pipeline.samplers[1].address.fill(RHISamplerAddress::Clamp);
-            pipeline.samplers[0].linear_filter = index % 10 < 5;
-            pipeline.samplers[1].linear_filter = index % 10 < 5;
+            pipeline.samplers[0].Set_Filter((index % 10 < 5 ? Graphics::RHISamplerFilter::Linear : Graphics::RHISamplerFilter::Point));
+            pipeline.samplers[1].Set_Filter((index % 10 < 5 ? Graphics::RHISamplerFilter::Linear : Graphics::RHISamplerFilter::Point));
             m_pipelines[index] = device.Create_Pipeline(pipeline,
                 {library.Bytecode(handle, ShaderStage::Vertex)}, {library.Bytecode(handle, ShaderStage::Pixel)});
             if (!m_pipelines[index].Is_Valid()) {
@@ -224,6 +225,7 @@ public:
         const TerrainDrawParameters &parameters, std::span<const RHITextureHandle> textures,
         bool linear_filter = true, bool wireframe = false) noexcept
     {
+        GRAPHICS_PROFILE_SCOPE("Graphics.Terrain.Render");
         const std::size_t pass_index = static_cast<std::size_t>(pass);
         if (m_device == nullptr || pass_index >= 5 || textures.size() > 5)
             return false;

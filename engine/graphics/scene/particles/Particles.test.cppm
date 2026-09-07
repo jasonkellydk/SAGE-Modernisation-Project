@@ -5,6 +5,8 @@ module;
 #include <boost/test/included/unit_test.hpp>
 
 #include <type_traits>
+#include <array>
+#include <span>
 
 export module Graphics.Scene.Particles.Tests;
 
@@ -16,6 +18,45 @@ static_assert(!std::is_convertible_v<ParticleEmitterHandle, MaterialHandle>);
 static_assert(std::is_nothrow_move_constructible_v<ParticleEmitter>);
 static_assert(std::is_nothrow_move_assignable_v<ParticleEmitter>);
 static_assert(std::is_nothrow_move_constructible_v<GPUParticleData>);
+
+BOOST_AUTO_TEST_CASE(texture_regions_survive_source_release_compaction_and_default_spawning)
+{
+	ParticleSystem source, particles;
+	source.Reserve(1, 2);
+	particles.Reserve(1, 2);
+	const auto source_handle = source.Create_Emitter();
+	const auto handle = particles.Create_Emitter();
+	BOOST_REQUIRE(source.Spawn(source_handle, 2));
+	auto data = source.Particles();
+	std::array<ParticleTextureRegion, 2> regions{{{0, 0, .5f, .5f}, {.5f, .5f, 1, 1}}};
+	const std::array<float, 2> lifetimes{.25f, 2};
+	data.lifetimes = lifetimes;
+	data.texture_regions = std::span(regions).first(1);
+	BOOST_CHECK(!particles.Append_Particles(handle, data));
+	BOOST_CHECK_EQUAL(particles.Particle_Count(), 0);
+	data.texture_regions = regions;
+	BOOST_REQUIRE(particles.Append_Particles(handle, data));
+	regions = {};
+	source.Clear();
+	const ParticleTextureRegion second{.5f, .5f, 1, 1};
+	BOOST_CHECK(particles.Particles().texture_regions[1] == second);
+	BOOST_REQUIRE(particles.Update(.5f));
+	BOOST_CHECK_EQUAL(particles.Particle_Count(), 1);
+	BOOST_CHECK(particles.Particles().texture_regions[0] == second);
+	BOOST_CHECK(Pack_GPU_Particle(particles.Particles(), 0, 0).texture_region == second);
+	particles.Clear_Particles();
+	BOOST_REQUIRE(particles.Spawn(handle, 1));
+	const ParticleTextureRegion full{0, 0, 1, 1};
+	BOOST_CHECK(particles.Particles().texture_regions[0] == full);
+	auto default_data = particles.Particles();
+	default_data.texture_regions = {};
+	BOOST_CHECK(Pack_GPU_Particle(default_data, 0, 0).texture_region == full);
+	ParticleSystem copied;
+	copied.Reserve(1, 1);
+	const auto copied_handle = copied.Create_Emitter();
+	BOOST_REQUIRE(copied.Append_Particles(copied_handle, default_data));
+	BOOST_CHECK(copied.Particles().texture_regions[0] == full);
+}
 
 BOOST_AUTO_TEST_CASE(particles_spawn_into_soa_storage_and_simulate)
 {

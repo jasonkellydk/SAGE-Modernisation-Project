@@ -1,9 +1,23 @@
 module;
 #include <array>
+#include <span>
+#include <vector>
+#include <cstdint>
 export module Graphics.Scene.Lines.Drawing;
 export import Graphics.Scene.Surfaces.Renderer;
+import Graphics.Scene.Props.Geometry;
 
 namespace Graphics {
+export bool Update_Navigation_Line(SurfaceRenderer& renderer, SurfaceMeshHandle& mesh,
+    std::span<const PropVertex> source, std::span<const std::uint32_t> indices)
+{
+    std::vector<SurfaceVertex> vertices(source.size());
+    for(std::size_t i=0;i<source.size();++i)
+        vertices[i]={source[i].position,source[i].color,source[i].uv};
+    if(mesh.Is_Valid()) return renderer.Update_Mesh(mesh,vertices,indices);
+    mesh=renderer.Create_Mesh(vertices,indices);
+    return mesh.Is_Valid();
+}
 // Navigation overlays use camera-space joined geometry and additive color.
 // They remain visible across terrain while leaving the scene depth untouched.
 export bool Draw_Navigation_Line(SurfaceRenderer& renderer, CommandList& commands,

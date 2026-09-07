@@ -39,6 +39,12 @@
 
 #pragma once
 
+#include <memory>
+#include <span>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
 #include "WWLib/always.h"
 #include "W3DFile.h"
 #include "WW3D2/W3DErr.h"
@@ -46,6 +52,7 @@
 #include "WWMath/vector3.h"
 #include "WW3D2/WW3D.h"
 #include "WWMath/matrix4.h"
+import Graphics.Materials.TextureCoordinates;
 
 class INIClass;
 
@@ -91,16 +98,15 @@ class TextureMapperClass : public RefCountClass
 		virtual int								Mapper_ID() const { return MAPPER_ID_UNKNOWN;}
 
 		virtual TextureMapperClass *		Clone() const = 0;
+		virtual Graphics::TextureCoordinateMode Get_Coordinate_Mode() const;
 
 		virtual bool							Is_Time_Variant() { return false; }
-		virtual void							Apply(int uv_array_index) = 0;
 		virtual void							Reset() { }
 		virtual bool							Needs_Normals() { return false; }
 		void										Set_Stage(int stage) { Stage = stage; }
 		int										Get_Stage() const { return Stage; }
 
-		// This is called by Apply(). It should not be called externally except
-		// in unusual circumstances.
+		// Evaluate the authored animation when extracting a graphics submission.
 		virtual void							Calculate_Texture_Matrix(Matrix4x4 &tex_matrix) = 0;
 
 	protected:
@@ -123,7 +129,6 @@ public:
 
 	virtual TextureMapperClass *Clone() const override { return NEW_REF( ScaleTextureMapperClass, (*this)); }
 
-	virtual void Apply(int uv_array_index) override;
 	virtual void Calculate_Texture_Matrix(Matrix4x4 &tex_matrix) override;
 
 protected:
@@ -190,7 +195,6 @@ public:
 	virtual TextureMapperClass *Clone() const override { return NEW_REF( GridTextureMapperClass, (*this)); }
 
 	virtual bool Is_Time_Variant() override { return true; }
-	virtual void Apply(int uv_array_index) override;
 	virtual void Reset() override;
 	virtual void Calculate_Texture_Matrix(Matrix4x4 &tex_matrix) override;
 
@@ -344,7 +348,6 @@ public:
 	ClassicEnvironmentMapperClass(const ClassicEnvironmentMapperClass & src) : TextureMapperClass(src) { }
 	virtual int	Mapper_ID() const override { return MAPPER_ID_CLASSIC_ENVIRONMENT;}
 	virtual TextureMapperClass* Clone() const override { return NEW_REF( ClassicEnvironmentMapperClass, (*this)); }
-	virtual void Apply(int uv_array_index) override;
 	virtual bool Needs_Normals() override { return true; }
 	virtual void Calculate_Texture_Matrix(Matrix4x4 &tex_matrix) override;
 };
@@ -357,7 +360,6 @@ public:
 	EnvironmentMapperClass(const EnvironmentMapperClass & src) : TextureMapperClass(src) { }
 	virtual int	Mapper_ID() const override { return MAPPER_ID_ENVIRONMENT;}
 	virtual TextureMapperClass* Clone() const override { return NEW_REF( EnvironmentMapperClass, (*this)); }
-	virtual void Apply(int uv_array_index) override;
 	virtual bool Needs_Normals() override { return true; }
 	virtual void Calculate_Texture_Matrix(Matrix4x4 &tex_matrix) override;
 };
@@ -369,9 +371,12 @@ public:
 	EdgeMapperClass(unsigned int stage);
 	EdgeMapperClass(const INIClass &ini, const char *section, unsigned int stage);
 	EdgeMapperClass(const EdgeMapperClass & src);
+	Graphics::TextureCoordinateMode Get_Coordinate_Mode() const override {
+		return {UseReflect ? Graphics::TextureCoordinateSource::CameraReflection
+			: Graphics::TextureCoordinateSource::CameraNormal, false};
+	}
 	virtual int	Mapper_ID() const override { return MAPPER_ID_EDGE;}
 	virtual TextureMapperClass* Clone() const override { return NEW_REF( EdgeMapperClass, (*this)); }
-	virtual void Apply(int uv_array_index) override;
 	virtual void Reset() override;
 	virtual bool Is_Time_Variant() override { return true; }
 	virtual bool Needs_Normals() override { return true; }
@@ -405,7 +410,6 @@ public:
 	WSClassicEnvironmentMapperClass(const INIClass &ini, const char *section, unsigned int stage) : WSEnvMapperClass(ini, section, stage) { }
 	virtual int	Mapper_ID() const override { return MAPPER_ID_WS_CLASSIC_ENVIRONMENT;}
 	virtual TextureMapperClass* Clone() const override { return NEW_REF( WSClassicEnvironmentMapperClass, (*this)); }
-	virtual void Apply(int uv_array_index) override;
 };
 
 class WSEnvironmentMapperClass : public WSEnvMapperClass
@@ -417,7 +421,6 @@ public:
 	WSEnvironmentMapperClass(const INIClass &ini, const char *section, unsigned int stage) : WSEnvMapperClass(ini, section, stage) { }
 	virtual int	Mapper_ID() const override { return MAPPER_ID_WS_ENVIRONMENT;}
 	virtual TextureMapperClass* Clone() const override { return NEW_REF( WSEnvironmentMapperClass, (*this)); }
-	virtual void Apply(int uv_array_index) override;
 };
 
 class GridClassicEnvironmentMapperClass : public GridTextureMapperClass
@@ -429,7 +432,6 @@ public:
 	GridClassicEnvironmentMapperClass(const GridTextureMapperClass & src) : GridTextureMapperClass(src) { }
 	virtual int	Mapper_ID() const override { return MAPPER_ID_GRID_CLASSIC_ENVIRONMENT;}
 	virtual TextureMapperClass* Clone() const override { return NEW_REF( GridClassicEnvironmentMapperClass, (*this)); }
-	virtual void Apply(int uv_array_index) override;
 	virtual bool Needs_Normals() override { return true; }
 	virtual void Calculate_Texture_Matrix(Matrix4x4 &tex_matrix) override;
 };
@@ -443,7 +445,6 @@ public:
 	GridEnvironmentMapperClass(const GridTextureMapperClass & src) : GridTextureMapperClass(src) { }
 	virtual int	Mapper_ID() const override { return MAPPER_ID_GRID_ENVIRONMENT;}
 	virtual TextureMapperClass* Clone() const override { return NEW_REF( GridEnvironmentMapperClass, (*this)); }
-	virtual void Apply(int uv_array_index) override;
 	virtual bool Needs_Normals() override { return true; }
 	virtual void Calculate_Texture_Matrix(Matrix4x4 &tex_matrix) override;
 };
@@ -464,7 +465,6 @@ public:
 	ScreenMapperClass(const ScreenMapperClass & src) : LinearOffsetTextureMapperClass(src) { }
 	virtual int	Mapper_ID() const override { return MAPPER_ID_SCREEN;}
 	virtual TextureMapperClass* Clone() const override { return NEW_REF( ScreenMapperClass, (*this)); }
-	virtual void Apply(int uv_array_index) override;
 	virtual void Calculate_Texture_Matrix(Matrix4x4 &tex_matrix) override;
 };
 
@@ -517,7 +517,6 @@ public:
 
 	virtual TextureMapperClass *Clone() const override { return NEW_REF( BumpEnvTextureMapperClass, (*this)); }
 
-	virtual void Apply(int uv_array_index) override;
 
 protected:
 
@@ -548,7 +547,6 @@ public:
 	GridWSClassicEnvironmentMapperClass(const GridWSEnvMapperClass & src);
 	virtual int	Mapper_ID() const override { return MAPPER_ID_GRID_WS_CLASSIC_ENVIRONMENT;}
 	virtual TextureMapperClass* Clone() const override { return NEW_REF( GridWSClassicEnvironmentMapperClass, (*this)); }
-	virtual void Apply(int uv_array_index) override;
 };
 
 class GridWSEnvironmentMapperClass : public GridWSEnvMapperClass
@@ -559,7 +557,6 @@ public:
 	GridWSEnvironmentMapperClass(const GridWSEnvMapperClass & src);
 	virtual int	Mapper_ID() const override { return MAPPER_ID_GRID_WS_ENVIRONMENT;}
 	virtual TextureMapperClass* Clone() const override { return NEW_REF( GridWSEnvironmentMapperClass, (*this)); }
-	virtual void Apply(int uv_array_index) override;
 };
 
 

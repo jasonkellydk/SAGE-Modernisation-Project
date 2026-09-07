@@ -14,7 +14,6 @@
 #include <span>
 #include <vector>
 #include "WWLib/always.h"
-#include "WW3D2/Backend/RenderBackend.h"
 #include "WW3D2/W3DFile.h"
 #include "Lib/BaseType.h"
 #include "Common/GameType.h"
@@ -95,8 +94,8 @@ protected:
 	Int m_numVertices;
 	Int m_numIndices;
 	TextureBaseClass *m_pReflectionTexture;
-	TextureBaseClass *m_pRefractionTexture;
-	TextureBaseClass *m_pSceneDepthTexture;
+	Graphics::RHITextureHandle m_sceneColorTexture;
+	Graphics::RHITextureHandle m_sceneDepthTexture{};
 	TextureBaseClass *m_pDisplacementTexture;
 	WaterSkyboxSystem *m_skyBox;
 	WaterTracksRenderSystem *m_waterTrackSystem;

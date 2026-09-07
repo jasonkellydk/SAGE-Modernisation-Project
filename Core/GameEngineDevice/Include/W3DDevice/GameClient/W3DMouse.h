@@ -52,7 +52,7 @@
 
 // FORWARD REFERENCES /////////////////////////////////////////////////////////
 class CameraClass;
-class SurfaceClass;
+import Graphics.Cursors.Cursor;
 
 // TYPE DEFINES ///////////////////////////////////////////////////////////////
 
@@ -75,21 +75,12 @@ public:
 	virtual void setRedrawMode(RedrawMode mode) override;	///<set cursor drawing method.
 
 private:
-	MouseCursor m_currentHardwareCursor;	///< keep track of last cursor image sent to the backend.
-	SurfaceClass *m_currentBackendSurface[MAX_2D_CURSOR_ANIM_FRAMES];
+	MouseCursor m_currentHardwareCursor;
+	Graphics::Cursor m_hardwareCursor;
 	ICoord2D m_currentHotSpot;
-	Int	m_currentFrames;	///< total number of frames in current 2D cursor animation.
-	Real m_currentAnimFrame;///< current frame of 2D cursor animation.
-	Int m_currentBackendFrame;	///< current frame actually sent to the hardware.
-	Int m_directionFrame;	///< selected frame for oriented cursors.
-	Int m_lastAnimTime;		///< ms at last animation update.
-	Real m_currentFMS;		///< frames per ms.
-	Bool m_drawing;			///< flag to indicate mouse cursor is currently in the act of drawing.
-///@todo: remove the textures if we only need surfaces
-	void initBackendAssets();		///< load textures for mouse cursors, etc.
-	void freeBackendAssets();		///< unload textures used by mouse cursors.
-	Bool loadBackendCursorTextures(MouseCursor cursor);	///<load the textures/animation for given cursor.
-	Bool releaseBackendCursorTextures(MouseCursor cursor);	///<release loaded textures for cursor.
+	Int m_directionFrame;
+	Bool loadHardwareCursor(MouseCursor cursor);
+	void applyCursor() override;
 
 	// W3D animated model cursor
 	CameraClass *m_camera;								///< our camera

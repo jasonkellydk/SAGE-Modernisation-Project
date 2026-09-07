@@ -187,15 +187,15 @@ BOOST_AUTO_TEST_CASE(records_contiguous_ordered_batches_with_scissors)
 	renderer.Set_Clip(true, {10, 20, 110, 80});
 	BOOST_REQUIRE(renderer.Add_Outline({10, 20, 100, 60}, 1, {0, 0, 1, 1}));
 	renderer.Set_Clip(false, {});
-	BOOST_REQUIRE(renderer.Add_Line({0, 100}, {80, 100}, 2, {1, 1, 1, 1}));
-	BOOST_REQUIRE(renderer.Add_Quad({80, 100, 120, 140}, {0, 0, 1, 1}, renderer.White_Texture(), {1, 1, 1, 1}));
+	BOOST_REQUIRE(renderer.Add_Line({0, 100}, {80, 100}, 2, Color2D{1, 1, 1, 1}));
+	BOOST_REQUIRE(renderer.Add_Quad(Rect2D{80, 100, 120, 140}, {0, 0, 1, 1}, renderer.White_Texture(), Color2D{1, 1, 1, 1}));
 
 	BOOST_CHECK_EQUAL(renderer.Vertex_Count(), 32);
 	BOOST_CHECK_EQUAL(renderer.Index_Count(), 48);
 	BOOST_CHECK_EQUAL(renderer.Batch_Count(), 3);
 
 	BOOST_REQUIRE(renderer.Execute(device, device.command_list, RHITextureHandle(900, 1), RHITextureHandle(901, 1), {0, 0, 320, 200, 0.0f, 1.0f}));
-	BOOST_CHECK_EQUAL(device.command_list.bindless_count, 2048);
+	BOOST_CHECK_EQUAL(device.command_list.bindless_count, 1);
 	BOOST_REQUIRE_EQUAL(device.command_list.draws.size(), 3);
 	BOOST_CHECK(device.command_list.draws[0].index_count == 12 && device.command_list.draws[0].first_index == 0);
 	BOOST_CHECK(device.command_list.draws[1].index_count == 24 && device.command_list.draws[1].first_index == 12);

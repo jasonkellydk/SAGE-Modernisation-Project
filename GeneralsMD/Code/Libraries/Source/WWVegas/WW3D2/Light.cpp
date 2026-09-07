@@ -60,13 +60,11 @@
 #include "WW3D.h"
 #include "WW3DIds.h"
 #include "W3DFile.h"
-#include "W3DUtil.h"
 #include "W3DErr.h"
 #include "WWLib/chunkio.h"
 #include "RInfo.h"
 #include "Scene.h"
 #include "WWSaveLoad/persistfactory.h"
-#include "Statistics.h"
 
 
 
@@ -346,11 +344,17 @@ WW3DErrorType LightClass::Load_W3D(ChunkLoadClass & cload)
 	Set_Intensity(lightinfo.Intensity);
 
 	Vector3 color;
-	W3dUtilityClass::Convert_Color(lightinfo.Ambient,&color);
+	color.X = static_cast<float>(lightinfo.Ambient.R) / 255.0f;
+	color.Y = static_cast<float>(lightinfo.Ambient.G) / 255.0f;
+	color.Z = static_cast<float>(lightinfo.Ambient.B) / 255.0f;
 	Set_Ambient(color);
-	W3dUtilityClass::Convert_Color(lightinfo.Diffuse,&color);
+	color.X = static_cast<float>(lightinfo.Diffuse.R) / 255.0f;
+	color.Y = static_cast<float>(lightinfo.Diffuse.G) / 255.0f;
+	color.Z = static_cast<float>(lightinfo.Diffuse.B) / 255.0f;
 	Set_Diffuse(color);
-	W3dUtilityClass::Convert_Color(lightinfo.Specular,&color);
+	color.X = static_cast<float>(lightinfo.Specular.R) / 255.0f;
+	color.Y = static_cast<float>(lightinfo.Specular.G) / 255.0f;
+	color.Z = static_cast<float>(lightinfo.Specular.B) / 255.0f;
 	Set_Specular(color);
 
 	W3dSpotLightStruct				spotinfo;
@@ -364,7 +368,9 @@ WW3DErrorType LightClass::Load_W3D(ChunkLoadClass & cload)
 			cload.Read(&spotinfo,sizeof(spotinfo));
 			Set_Spot_Angle(spotinfo.SpotAngle);
 			Set_Spot_Exponent(spotinfo.SpotExponent);
-			W3dUtilityClass::Convert_Vector(spotinfo.SpotDirection,&vec);
+			vec.X = spotinfo.SpotDirection.X;
+			vec.Y = spotinfo.SpotDirection.Y;
+			vec.Z = spotinfo.SpotDirection.Z;
 			Set_Spot_Direction(vec);
 			break;
 
@@ -427,11 +433,20 @@ WW3DErrorType LightClass::Save_W3D(ChunkSaveClass & csave)
 
 	Vector3 color;
 	Get_Ambient(&color);
-	W3dUtilityClass::Convert_Color(color,(&lightinfo.Ambient));
+	lightinfo.Ambient.R = static_cast<uint8>(255.0f * color.X);
+	lightinfo.Ambient.G = static_cast<uint8>(255.0f * color.Y);
+	lightinfo.Ambient.B = static_cast<uint8>(255.0f * color.Z);
+	lightinfo.Ambient.pad = 0;
 	Get_Diffuse(&color);
-	W3dUtilityClass::Convert_Color(color,(&lightinfo.Diffuse));
+	lightinfo.Diffuse.R = static_cast<uint8>(255.0f * color.X);
+	lightinfo.Diffuse.G = static_cast<uint8>(255.0f * color.Y);
+	lightinfo.Diffuse.B = static_cast<uint8>(255.0f * color.Z);
+	lightinfo.Diffuse.pad = 0;
 	Get_Specular(&color);
-	W3dUtilityClass::Convert_Color(color,(&lightinfo.Specular));
+	lightinfo.Specular.R = static_cast<uint8>(255.0f * color.X);
+	lightinfo.Specular.G = static_cast<uint8>(255.0f * color.Y);
+	lightinfo.Specular.B = static_cast<uint8>(255.0f * color.Z);
+	lightinfo.Specular.pad = 0;
 
 	lightinfo.Intensity = Get_Intensity();
 
@@ -579,3 +594,30 @@ bool LightClass::Load (ChunkLoadClass &cload)
 	return true;
 }
 
+
+import Graphics.Scene.Lighting;
+
+Graphics::MaterialLightSource Describe_Material_Light(const LightClass& light)
+{
+    Graphics::MaterialLightSource result;
+    result.type = light.Get_Type()==LightClass::POINT ? Graphics::RenderLightType::Point :
+        light.Get_Type()==LightClass::SPOT ? Graphics::RenderLightType::Spot : Graphics::RenderLightType::Directional;
+    const Vector3 position = light.Get_Position();
+    Vector3 direction = -light.Get_Transform().Get_Z_Vector();
+    if (light.Get_Type()==LightClass::SPOT) {
+        light.Get_Spot_Direction(direction);
+        Matrix3D::Rotate_Vector(light.Get_Transform(),direction,&direction);
+    }
+    Vector3 ambient, diffuse;
+    light.Get_Ambient(&ambient);
+    light.Get_Diffuse(&diffuse);
+    result.position = {position.X,position.Y,position.Z};
+    result.direction = {direction.X,direction.Y,direction.Z};
+    result.ambient = {ambient.X,ambient.Y,ambient.Z};
+    result.diffuse = {diffuse.X,diffuse.Y,diffuse.Z};
+    result.intensity = light.Get_Intensity();
+    light.Get_Far_Attenuation_Range(result.attenuation_start,result.attenuation_end);
+    result.attenuate = light.Get_Flag(LightClass::FAR_ATTENUATION);
+    result.cone_cosine = light.Get_Spot_Angle_Cos();
+    return result;
+}

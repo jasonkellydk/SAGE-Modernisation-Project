@@ -36,6 +36,8 @@
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 #include "Mapper.h"
+#include <algorithm>
+import Graphics.Scene.Views.CameraMatrices;
 #include "WW3D.h"
 #include "WWLib/INI.h"
 #include "WWLib/chunkio.h"
@@ -60,6 +62,23 @@ TextureMapperClass::TextureMapperClass(unsigned int stage)
 }
 
 
+Graphics::TextureCoordinateMode TextureMapperClass::Get_Coordinate_Mode() const
+{
+    using Source = Graphics::TextureCoordinateSource;
+    switch (Mapper_ID()) {
+    case MAPPER_ID_CLASSIC_ENVIRONMENT:
+    case MAPPER_ID_WS_CLASSIC_ENVIRONMENT:
+    case MAPPER_ID_GRID_CLASSIC_ENVIRONMENT:
+    case MAPPER_ID_GRID_WS_CLASSIC_ENVIRONMENT: return {Source::CameraNormal,false};
+    case MAPPER_ID_ENVIRONMENT:
+    case MAPPER_ID_WS_ENVIRONMENT:
+    case MAPPER_ID_GRID_ENVIRONMENT:
+    case MAPPER_ID_GRID_WS_ENVIRONMENT: return {Source::CameraReflection,false};
+    case MAPPER_ID_SCREEN: return {Source::CameraPosition,true};
+    default: return {};
+    }
+}
+
 // Scale mapper
 // HY 5/16/01
 ScaleTextureMapperClass::ScaleTextureMapperClass(const Vector2 &scale, unsigned int stage) :
@@ -79,20 +98,6 @@ ScaleTextureMapperClass::ScaleTextureMapperClass(const ScaleTextureMapperClass &
 	TextureMapperClass(src),
 	Scale(src.Scale)
 {
-}
-
-void ScaleTextureMapperClass::Apply(int uv_array_index)
-{
-	// Set up the texture matrix
-	Matrix4x4 m;
-	Calculate_Texture_Matrix(m);
-	WW3D::Get_Render_Backend()->Set_Transform(RenderBackend_Texture_Transform(Stage),m);
-
-	// Disable Texgen
-	WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(Stage,RenderBackendTextureCoordinateSource::PassThrough,uv_array_index);
-
-	// Tell rasterizer to expect 2D texture coordinates
-	WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(Stage,RenderBackendTextureTransformFlags::Count2);
 }
 
 void ScaleTextureMapperClass::Calculate_Texture_Matrix(Matrix4x4 &tex_matrix)
@@ -217,20 +222,6 @@ GridTextureMapperClass::GridTextureMapperClass(const GridTextureMapperClass & sr
 	Offset(src.Offset)
 {
 	Reset();
-}
-
-void GridTextureMapperClass::Apply(int uv_array_index)
-{
-	// Set up the texture matrix
-	Matrix4x4 m;
-	Calculate_Texture_Matrix(m);
-	WW3D::Get_Render_Backend()->Set_Transform(RenderBackend_Texture_Transform(Stage), m);
-
-	// Disable Texgen
-	WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(Stage, RenderBackendTextureCoordinateSource::PassThrough, uv_array_index);
-
-	// Tell rasterizer to expect 2D texture coordinates
-	WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(Stage, RenderBackendTextureTransformFlags::Count2);
 }
 
 void GridTextureMapperClass::Reset()
@@ -614,21 +605,6 @@ void ZigZagLinearOffsetTextureMapperClass::Calculate_Texture_Matrix(Matrix4x4 &t
 //
 // ----------------------------------------------------------------------------
 
-void ClassicEnvironmentMapperClass::Apply(int uv_array_index)
-{
-	// Set up the texture matrix
-	Matrix4x4 m;
-	Calculate_Texture_Matrix(m);
-	WW3D::Get_Render_Backend()->Set_Transform(RenderBackend_Texture_Transform(Stage),m);
-
-	// Get camera normals
-	WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(Stage,RenderBackendTextureCoordinateSource::CameraSpaceNormal);
-
-	// Tell rasterizer to expect 2D matrices
-	WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(Stage,RenderBackendTextureTransformFlags::Count2);
-
-}
-
 void ClassicEnvironmentMapperClass::Calculate_Texture_Matrix(Matrix4x4 &tex_matrix)
 {
 	// The canonical environment map
@@ -638,21 +614,6 @@ void ClassicEnvironmentMapperClass::Calculate_Texture_Matrix(Matrix4x4 &tex_matr
 							0.0f, 0.5f, 0.0f, 0.5f,
 							0.0f, 0.0f, 1.0f, 0.0f,
 							0.0f, 0.0f, 0.0f, 1.0f);
-}
-
-void EnvironmentMapperClass::Apply(int uv_array_index)
-{
-	// Set up the texture matrix
-	Matrix4x4 m;
-	Calculate_Texture_Matrix(m);
-	WW3D::Get_Render_Backend()->Set_Transform(RenderBackend_Texture_Transform(Stage),m);
-
-	// Get camera reflection vector
-	WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(Stage,RenderBackendTextureCoordinateSource::CameraSpaceReflectionVector);
-
-	// Tell rasterizer to expect 2D matrices
-	WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(Stage,RenderBackendTextureTransformFlags::Count2);
-
 }
 
 void EnvironmentMapperClass::Calculate_Texture_Matrix(Matrix4x4 &tex_matrix)
@@ -694,24 +655,6 @@ EdgeMapperClass::EdgeMapperClass(const EdgeMapperClass & src):
 	VOffset(src.VOffset),
 	LastUsedSyncTime(WW3D::Get_Sync_Time())
 {
-}
-
-void EdgeMapperClass::Apply(int uv_array_index)
-{
-	// Set up the texture matrix
-	Matrix4x4 m;
-	Calculate_Texture_Matrix(m);
-	WW3D::Get_Render_Backend()->Set_Transform(RenderBackend_Texture_Transform(Stage),m);
-
-	// Get camera reflection vector
-	if (UseReflect)
-		WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(Stage,RenderBackendTextureCoordinateSource::CameraSpaceReflectionVector);
-	else
-		WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(Stage,RenderBackendTextureCoordinateSource::CameraSpaceNormal);
-
-	// Tell rasterizer to expect 2D matrices
-	WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(Stage,RenderBackendTextureTransformFlags::Count2);
-
 }
 
 void EdgeMapperClass::Reset()
@@ -790,56 +733,12 @@ void WSEnvMapperClass::Calculate_Texture_Matrix(Matrix4x4 &tex_matrix)
 	}
 	// multiply by inverse of view transform
 	Matrix4x4 mat;
-	WW3D::Get_Render_Backend()->Get_Transform(RenderBackendTransform::View,mat);
+	std::copy_n(Graphics::Get_Camera_Matrices().view.values.data(), 16, &mat[0][0]);
 	Matrix4x4 mat2(	mat[0].X, mat[1].X, mat[2].X, 0.0f,
 						mat[0].Y, mat[1].Y, mat[2].Y, 0.0f,
 						mat[0].Z, mat[1].Z, mat[2].Z, 0.0f,
 						0.0f, 0.0f, 0.0f, 1.0f );
 	tex_matrix = tex_matrix * mat2;
-}
-
-void WSClassicEnvironmentMapperClass::Apply(int uv_array_index)
-{
-	// Set up the texture matrix
-	Matrix4x4 m;
-	Calculate_Texture_Matrix(m);
-	WW3D::Get_Render_Backend()->Set_Transform(RenderBackend_Texture_Transform(Stage),m);
-
-	// Get camera normals
-	WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(Stage,RenderBackendTextureCoordinateSource::CameraSpaceNormal);
-
-	// Tell rasterizer to expect 2D matrices
-	WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(Stage,RenderBackendTextureTransformFlags::Count2);
-
-}
-
-void WSEnvironmentMapperClass::Apply(int uv_array_index)
-{
-	// Set up the texture matrix
-	Matrix4x4 m;
-	Calculate_Texture_Matrix(m);
-	WW3D::Get_Render_Backend()->Set_Transform(RenderBackend_Texture_Transform(Stage),m);
-
-	// Get camera reflection
-	WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(Stage,RenderBackendTextureCoordinateSource::CameraSpaceReflectionVector);
-
-	// Tell rasterizer to expect 2D matrices
-	WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(Stage,RenderBackendTextureTransformFlags::Count2);
-
-}
-
-void GridClassicEnvironmentMapperClass::Apply(int uv_array_index)
-{
-	// Set up the texture matrix
-	Matrix4x4 m;
-	Calculate_Texture_Matrix(m);
-	WW3D::Get_Render_Backend()->Set_Transform(RenderBackend_Texture_Transform(Stage),m);
-
-	// Get camera normals
-	WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(Stage,RenderBackendTextureCoordinateSource::CameraSpaceNormal);
-
-	// Tell rasterizer to expect 2D matrices
-	WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(Stage,RenderBackendTextureTransformFlags::Count2);
 }
 
 void GridClassicEnvironmentMapperClass::Calculate_Texture_Matrix(Matrix4x4 &tex_matrix)
@@ -857,20 +756,6 @@ void GridClassicEnvironmentMapperClass::Calculate_Texture_Matrix(Matrix4x4 &tex_
 							0.0f, 0.0f, 0.0f, 1.0f );
 }
 
-void GridEnvironmentMapperClass::Apply(int uv_array_index)
-{
-	// Set up the texture matrix
-	Matrix4x4 m;
-	Calculate_Texture_Matrix(m);
-	WW3D::Get_Render_Backend()->Set_Transform(RenderBackend_Texture_Transform(Stage),m);
-
-	// Get camera space reflection
-	WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(Stage,RenderBackendTextureCoordinateSource::CameraSpaceReflectionVector);
-
-	// Tell rasterizer to expect 2D matrices
-	WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(Stage,RenderBackendTextureTransformFlags::Count2);
-}
-
 void GridEnvironmentMapperClass::Calculate_Texture_Matrix(Matrix4x4 &tex_matrix)
 {
 	update_temporal_state();
@@ -884,20 +769,6 @@ void GridEnvironmentMapperClass::Calculate_Texture_Matrix(Matrix4x4 &tex_matrix)
 							0.0f,	del,	0.0f,	v_offset + del,
 							0.0f,	0.0f,	1.0f,	0.0f,
 							0.0f, 0.0f, 0.0f, 1.0f );
-}
-
-void ScreenMapperClass::Apply(int uv_array_index)
-{
-	// Set up the texture matrix
-	Matrix4x4 m;
-	Calculate_Texture_Matrix(m);
-	WW3D::Get_Render_Backend()->Set_Transform(RenderBackend_Texture_Transform(Stage),m);
-
-	// Get camera space position
-	WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(Stage,RenderBackendTextureCoordinateSource::CameraSpacePosition);
-
-	// Tell rasterizer what to expect
-	WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(Stage,RenderBackendTextureTransformFlags::ProjectedCount3);
 }
 
 void ScreenMapperClass::Calculate_Texture_Matrix(Matrix4x4 &tex_matrix)
@@ -923,7 +794,7 @@ void ScreenMapperClass::Calculate_Texture_Matrix(Matrix4x4 &tex_matrix)
 
 	// multiply by projection matrix
 	// followed by scale and translation
-	WW3D::Get_Render_Backend()->Get_Transform(RenderBackendTransform::Projection, tex_matrix);
+	std::copy_n(Graphics::Get_Camera_Matrices().projection.values.data(), 16, &tex_matrix[0][0]);
 	tex_matrix[0] *= Scale.X; // entire row since we're pre-multiplying
 	tex_matrix[1] *= Scale.Y;
 	Vector4 last(tex_matrix[3]); // this gets the w
@@ -1054,14 +925,6 @@ BumpEnvTextureMapperClass::BumpEnvTextureMapperClass(const BumpEnvTextureMapperC
 {
 }
 
-void BumpEnvTextureMapperClass::Apply(int uv_array_index)
-{
-	LinearOffsetTextureMapperClass::Apply(uv_array_index);
-	float matrix[4];
-	Calculate_Bump_Matrix(matrix);
-	WW3D::Get_Render_Backend()->Set_Texture_Bump_Environment_Matrix(Stage,matrix[0],matrix[1],matrix[2],matrix[3]);
-}
-
 void BumpEnvTextureMapperClass::Calculate_Bump_Matrix(float (&matrix)[4])
 {
 	unsigned int now = WW3D::Get_Sync_Time();
@@ -1152,7 +1015,7 @@ void GridWSEnvMapperClass::Calculate_Texture_Matrix(Matrix4x4 &tex_matrix)
 {
 	// multiply by inverse of view transform
 	Matrix4x4 mat;
-	WW3D::Get_Render_Backend()->Get_Transform(RenderBackendTransform::View,mat);
+	std::copy_n(Graphics::Get_Camera_Matrices().view.values.data(), 16, &mat[0][0]);
 	Matrix4x4 mv (	mat[0].X, mat[1].X, mat[2].X, 0.0f,
 						mat[0].Y, mat[1].Y, mat[2].Y, 0.0f,
 						mat[0].Z, mat[1].Z, mat[2].Z, 0.0f,
@@ -1224,20 +1087,6 @@ GridWSClassicEnvironmentMapperClass::GridWSClassicEnvironmentMapperClass(const G
 {
 }
 
-void GridWSClassicEnvironmentMapperClass::Apply(int uv_array_index)
-{
-	// Set up the texture matrix
-	Matrix4x4 m;
-	Calculate_Texture_Matrix(m);
-	WW3D::Get_Render_Backend()->Set_Transform(RenderBackend_Texture_Transform(Stage),m);
-
-	// Get camera normals
-	WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(Stage,RenderBackendTextureCoordinateSource::CameraSpaceNormal);
-
-	// Tell rasterizer to expect 2D matrices
-	WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(Stage,RenderBackendTextureTransformFlags::Count2);
-}
-
 /***********************************************************************************************
  * GridWSEnvironmentMapperClass::GridWSEnvironmentMapperClass -- grid ws env                   *
  *                                                                                             *
@@ -1266,18 +1115,4 @@ GridWSEnvironmentMapperClass::GridWSEnvironmentMapperClass(const INIClass &ini, 
 GridWSEnvironmentMapperClass::GridWSEnvironmentMapperClass(const GridWSEnvMapperClass & src):
 	GridWSEnvMapperClass(src)
 {
-}
-
-void GridWSEnvironmentMapperClass::Apply(int uv_array_index)
-{
-	// Set up the texture matrix
-	Matrix4x4 m;
-	Calculate_Texture_Matrix(m);
-	WW3D::Get_Render_Backend()->Set_Transform(RenderBackend_Texture_Transform(Stage),m);
-
-	// Get camera space reflection
-	WW3D::Get_Render_Backend()->Set_Texture_Coordinate_Source(Stage,RenderBackendTextureCoordinateSource::CameraSpaceReflectionVector);
-
-	// Tell rasterizer to expect 2D matrices
-	WW3D::Get_Render_Backend()->Set_Texture_Transform_Flags(Stage,RenderBackendTextureTransformFlags::Count2);
 }

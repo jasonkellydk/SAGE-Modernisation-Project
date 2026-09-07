@@ -59,7 +59,6 @@
 #include "WW3D2/Camera.h"
 #include "WW3D2/VertexFormat.h"
 #include "WW3D2/WW3D.h"
-#include "WW3D2/Backend/RenderBackend.h"
 #include "WW3D2/Mesh.h"
 #include "WW3D2/MeshMdl.h"
 
@@ -69,7 +68,7 @@
 #include <vector>
 
 import Graphics.Scene.Bibs.Renderer;
-import Graphics.Backends.DX11.Coexistence;
+import Graphics.Backends.DX11.FrameRuntime;
 #include "W3DDevice/GameClient/W3DGraphicsResources.h"
 
 //-----------------------------------------------------------------------------
@@ -302,5 +301,4 @@ void W3DBibBuffer::renderBibs(CameraClass& camera)
             m_graphicsMeshes[highlight],quads,color,parameters,
             Resolve_Graphics_Texture(highlight ? m_highlightBibTexture : m_bibTexture));
     }
-    WW3D::Get_Render_Backend()->Invalidate_Cached_Render_States();
 }

@@ -1,3 +1,6 @@
+import Graphics.Renderer2D;
+import Graphics.Frame.AttachmentBindings;
+import Graphics.Backends.DX11.FrameRuntime;
 /*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -17,6 +20,9 @@
 */
 
 #include "StdAfx.h"
+#include <algorithm>
+import Graphics.Scene.Views.CameraMatrices;
+import Graphics.Scene.DrawParameters;
 
 #include "DrawObject.h"
 #include "WW3D2/GraphicsGeometry.h"
@@ -32,10 +38,9 @@
 #include "Common/GlobalData.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
 #include "W3DDevice/GameClient/TerrainTex.h"
-#include "W3DDevice/GameClient/HeightMap.h"
+#include "W3DDevice/GameClient/BaseHeightMap.h"
 #include "W3DDevice/GameClient/W3DAssetManager.h"
 #include "W3DDevice/GameClient/W3DWater.h"
-#include "WW3D2/Backend/RenderBackend.h"
 #include "WW3D2/Mesh.h"
 #include "WW3D2/MeshMdl.h"
 #include "WW3D2/Shader.h"
@@ -55,7 +60,6 @@
 #include "Common/BorderColors.h"
 #include "Common/ThingTemplate.h"
 #include "W3DDevice/Common/W3DConvert.h"
-#include "WW3D2/Render2D.h"
 #include "GameLogic/Weapon.h"
 #include "Common/AudioEventInfo.h"
 
@@ -145,7 +149,6 @@ DrawObject::DrawObject() :
 	m_drawObjects(true),
 	m_drawPolygonAreas(true),
 	m_moldMesh(nullptr),
-	m_lineRenderer(nullptr),
   m_drawSoundRanges(false)
 {
 	m_feedbackPoint.x = 20;
@@ -224,8 +227,6 @@ Int DrawObject::freeMapResources()
 
 	REF_PTR_RELEASE(m_moldMesh);
 
-	delete m_lineRenderer;
-	m_lineRenderer = nullptr;
 
 	return 0;
 }
@@ -1588,7 +1589,7 @@ Int DrawObject::updateVB(std::vector<VertexFormatXYZDUV1>& pVB, Int color, Bool 
 // MLL C&C3
 void DrawObject::updateVBWithBoundingBox(MapObject *pMapObj, CameraClass* camera)
 {
-	if (!pMapObj || !m_lineRenderer || !pMapObj->getThingTemplate()) {
+	if (!pMapObj || !pMapObj->getThingTemplate()) {
 		return;
 	}
 
@@ -1636,7 +1637,8 @@ void DrawObject::updateVBWithBoundingBox(MapObject *pMapObj, CameraClass* camera
 					bool shouldStart = worldToScreen(&pts[corner], &start, camera);
 					bool shouldEnd = worldToScreen(&pts[(corner+1)&3], &end, camera);
 					if (shouldStart && shouldEnd) {
-						m_lineRenderer->Add_Line(Vector2(start.x, start.y), Vector2(end.x, end.y), BOUNDING_BOX_LINE_WIDTH, color);
+						Graphics::Get_Renderer2D().Add_Line({start.x - 0.5f, start.y - 0.5f},
+                        {end.x - 0.5f, end.y - 0.5f}, BOUNDING_BOX_LINE_WIDTH, Graphics::Color2D::From_ARGB(color));
 					}
 				}
 
@@ -1670,7 +1672,8 @@ void DrawObject::updateVBWithBoundingBox(MapObject *pMapObj, CameraClass* camera
 					pnt.z = z;
 					shouldStart = worldToScreen(&pnt, &start, camera);
 					if (shouldStart && shouldEnd) {
-						m_lineRenderer->Add_Line(Vector2(start.x, start.y), Vector2(end.x, end.y), BOUNDING_BOX_LINE_WIDTH, color);
+						Graphics::Get_Renderer2D().Add_Line({start.x - 0.5f, start.y - 0.5f},
+                        {end.x - 0.5f, end.y - 0.5f}, BOUNDING_BOX_LINE_WIDTH, Graphics::Color2D::From_ARGB(color));
 					}
 					lastPnt = pnt;
 					end = start;
@@ -1689,14 +1692,15 @@ void DrawObject::updateVBWithBoundingBox(MapObject *pMapObj, CameraClass* camera
 			pnt.z = pos.z + ginfo.getMaxHeightAbovePosition();
 			shouldEnd = worldToScreen( &pnt, &end, camera);
 			if (shouldStart && shouldEnd) {
-				m_lineRenderer->Add_Line(Vector2(start.x, start.y), Vector2(end.x, end.y), BOUNDING_BOX_LINE_WIDTH, color);
+				Graphics::Get_Renderer2D().Add_Line({start.x - 0.5f, start.y - 0.5f},
+                        {end.x - 0.5f, end.y - 0.5f}, BOUNDING_BOX_LINE_WIDTH, Graphics::Color2D::From_ARGB(color));
 			}
 			break;
 		}
 	}
 }
 
-/** Draw a "circle" into the m_lineRenderer, e.g. to visualize weapon range, sight range, sound range **/
+/** Draw a "circle" into the graphics overlay batch, e.g. to visualize weapon range, sight range, sound range **/
 void DrawObject::addCircleToLineRenderer( const Coord3D & center, Real radius, Real width, unsigned long color, CameraClass* camera )
 {
   Real angle, inc = PI/4.0f;
@@ -1718,7 +1722,8 @@ void DrawObject::addCircleToLineRenderer( const Coord3D & center, Real radius, R
 
     bool shouldStart = worldToScreen(&pnt, &start, camera);
     if (shouldStart && shouldEnd) {
-      m_lineRenderer->Add_Line(Vector2(start.x, start.y), Vector2(end.x, end.y), width, color);
+      Graphics::Get_Renderer2D().Add_Line({start.x - 0.5f, start.y - 0.5f},
+                        {end.x - 0.5f, end.y - 0.5f}, width, Graphics::Color2D::From_ARGB(color));
     }
 
     lastPnt = pnt;
@@ -1733,7 +1738,7 @@ void DrawObject::addCircleToLineRenderer( const Coord3D & center, Real radius, R
 // MLL C&C3
 void DrawObject::updateVBWithSightRange(MapObject *pMapObj, CameraClass* camera)
 {
-	if (!pMapObj || !m_lineRenderer || !pMapObj->getThingTemplate()) {
+	if (!pMapObj || !pMapObj->getThingTemplate()) {
 		return;
 	}
 
@@ -1755,7 +1760,7 @@ void DrawObject::updateVBWithSightRange(MapObject *pMapObj, CameraClass* camera)
 // MLL C&C3
 void DrawObject::updateVBWithWeaponRange(MapObject *pMapObj, CameraClass* camera)
 {
-	if (!pMapObj || !m_lineRenderer || !pMapObj->getThingTemplate()) {
+	if (!pMapObj || !pMapObj->getThingTemplate()) {
 		return;
 	}
 
@@ -1794,7 +1799,7 @@ void DrawObject::updateVBWithWeaponRange(MapObject *pMapObj, CameraClass* camera
 // MLL C&C3
 void DrawObject::updateVBWithSoundRanges(MapObject *pMapObj, CameraClass* camera)
 {
-  if (!pMapObj || !m_lineRenderer) {
+  if (!pMapObj) {
     return;
   }
 
@@ -1918,7 +1923,7 @@ void DrawObject::updateVBWithSoundRanges(MapObject *pMapObj, CameraClass* camera
 // MLL C&C3
 void DrawObject::updateVBWithTestArtHighlight(MapObject *pMapObj, CameraClass* camera)
 {
-	if (!pMapObj || !m_lineRenderer || pMapObj->getThingTemplate() || pMapObj->isScorch()) {
+	if (!pMapObj || pMapObj->getThingTemplate() || pMapObj->isScorch()) {
 		// It is test art if it doesn't have a ThingTemplate.
 		return;
 	}
@@ -1952,7 +1957,8 @@ void DrawObject::updateVBWithTestArtHighlight(MapObject *pMapObj, CameraClass* c
 
 		bool shouldStart = worldToScreen(&pnt, &start, camera);
 		if (shouldStart && shouldEnd) {
-			m_lineRenderer->Add_Line(Vector2(start.x, start.y), Vector2(end.x, end.y), TEST_ART_HIGHLIGHT_LINE_WIDTH, color);
+			Graphics::Get_Renderer2D().Add_Line({start.x - 0.5f, start.y - 0.5f},
+                        {end.x - 0.5f, end.y - 0.5f}, TEST_ART_HIGHLIGHT_LINE_WIDTH, Graphics::Color2D::From_ARGB(color));
 		}
 
 		lastPnt = pnt;
@@ -2042,32 +2048,19 @@ if (_skip_drawobject_render) {
 	return;
 }
 
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	if (backend == nullptr)
+	if (Graphics::Shared_Frame_Device() == nullptr)
 		return;
 
-	if (m_lineRenderer == nullptr) {
-		// This can't be created in init because the doc hasn't been created yet.
-		m_lineRenderer = new Render2DClass();
-		ASSERT(m_lineRenderer);
-		CWorldBuilderDoc *pDoc = CWorldBuilderDoc::GetActiveDoc();
-		ASSERT(pDoc);
-		WbView3d *pView = pDoc->Get3DView();
-		ASSERT(pView);
-		m_winSize = pView->getActualWinSize();
-		m_lineRenderer->Set_Coordinate_Range(RectClass(0, 0, m_winSize.x, m_winSize.y));
-		m_lineRenderer->Reset();
-		m_lineRenderer->Enable_Texturing(FALSE);
-	}
-
+	const auto viewport = Graphics::Get_Attachment_Bindings().Default().viewport;
+	m_winSize = CPoint(static_cast<int>(viewport.width), static_cast<int>(viewport.height));
 
 
 	std::span<const VertexFormatXYZDUV1> vertices;
     std::span<const unsigned> indices;
     ShaderClass shader = m_shaderClass;
     Matrix4x4 world(Transform), view, projection;
-    backend->Get_Transform(RenderBackendTransform::View, view);
-    backend->Get_Transform(RenderBackendTransform::Projection, projection);
+    std::copy_n(Graphics::Get_Camera_Matrices().view.values.data(), 16, &view[0][0]);
+    std::copy_n(Graphics::Get_Camera_Matrices().projection.values.data(), 16, &projection[0][0]);
     const auto draw = [&](unsigned vertex_count, unsigned first_index, unsigned triangle_count) {
         if (vertex_count > vertices.size() || first_index > indices.size()
             || triangle_count > (indices.size() - first_index) / 3) {
@@ -2079,12 +2072,10 @@ if (_skip_drawobject_render) {
             DEBUG_LOG(("Editor overlay graphics submission failed.\n"));
     };
 	shader = ShaderClass(m_shaderClass);
-	backend->Set_Texture(0, nullptr);
 	indices = m_indexBuffer;
 
 	Int count=0;
 	Int i;
-	bool linesToRender = false;
 
 	curHighlight++;
 	if (curHighlight >= NUM_HIGHLIGHT) {
@@ -2135,25 +2126,20 @@ if (pMapObj->isSelected()) {
 				// MLL C&C3
 				if (pMapObj->isSelected()) {
 					if (doArrow && m_drawBoundingBoxes) {
-						linesToRender = true;
 						updateVBWithBoundingBox(pMapObj, &rinfo.Camera);
 					}
 					if (doArrow && m_drawSightRanges) {
-						linesToRender = true;
 						updateVBWithSightRange(pMapObj, &rinfo.Camera);
 					}
 					if (doArrow && m_drawWeaponRanges) {
-						linesToRender = true;
 						updateVBWithWeaponRange(pMapObj, &rinfo.Camera);
 					}
           if (doArrow && m_drawSoundRanges) {
-            linesToRender = true;
             updateVBWithSoundRanges(pMapObj, &rinfo.Camera);
           }
 				}
 
 				if (doArrow && m_drawTestArtHighlight) {
-					linesToRender = true;
 					updateVBWithTestArtHighlight(pMapObj, &rinfo.Camera);
 				}
 
@@ -2360,7 +2346,7 @@ if (pMapObj->isSelected()) {
 				vertices = m_vertexFeedback;
 			indices = m_indexFeedback;
 			shader = ShaderClass(SC_OPAQUE_Z);
-			backend->Set_Fill_Mode(RenderBackendFillMode::Wireframe);
+			Graphics::Get_Scene_Draw_Parameters().wireframe = true;
 			draw(m_feedbackVertexCount, 0, m_feedbackIndexCount / 3);
 		}
 	} else if (m_toolWantsFeedback && !m_disableFeedback) {
@@ -2381,8 +2367,7 @@ if (pMapObj->isSelected()) {
 				vertices = m_vertexFeedback;
 			indices = m_indexFeedback;
 			shader = ShaderClass(SC_OPAQUE_Z);
-			backend->Set_Fill_Mode(RenderBackendFillMode::Wireframe);	// we want a solid ramp
-			backend->Set_Lighting_Enabled(false);				// disable lighting
+			Graphics::Get_Scene_Draw_Parameters().wireframe = true;	// we want a solid ramp
 			draw(m_feedbackVertexCount, 0, m_feedbackIndexCount / 3);
 		}
 	}
@@ -2395,9 +2380,8 @@ if (pMapObj->isSelected()) {
 				vertices = m_vertexFeedback;
 			indices = m_indexFeedback;
 			shader = ShaderClass(m_shaderClass);
-			backend->Set_Cull_Mode(RenderBackendCullMode::None);
-			backend->Set_Fill_Mode(RenderBackendFillMode::Solid);	// we want a solid ramp
-			backend->Set_Lighting_Enabled(false);				// disable lighting
+			shader.Set_Cull_Mode(ShaderClass::CULL_MODE_DISABLE);
+			Graphics::Get_Scene_Draw_Parameters().wireframe = false;	// we want a solid ramp
 			draw(m_feedbackVertexCount, 0, m_feedbackIndexCount / 3);
 		}
 	}
@@ -2413,9 +2397,8 @@ if (pMapObj->isSelected()) {
 				vertices = m_vertexFeedback;
 			indices = m_indexFeedback;
 			shader = ShaderClass(m_shaderClass);
-			backend->Set_Cull_Mode(RenderBackendCullMode::None);
-			backend->Set_Fill_Mode(RenderBackendFillMode::Solid);	// we want a solid ramp
-			backend->Set_Lighting_Enabled(false);				// disable lighting
+			shader.Set_Cull_Mode(ShaderClass::CULL_MODE_DISABLE);
+			Graphics::Get_Scene_Draw_Parameters().wireframe = false;	// we want a solid ramp
 			draw(m_feedbackVertexCount, 0, m_feedbackIndexCount / 3);
 		}
 	}
@@ -2431,20 +2414,12 @@ if (pMapObj->isSelected()) {
 		int w = m_winSize.x;
 		int h = m_winSize.y;
 		int size = (int)((h - (9.0f / 16.0f * w)) * 0.5f);
-		RectClass rect(0, 0, w, size);
-		m_lineRenderer->Add_Quad(rect, 0xFF000000);
-		rect.Set(0, h - size, w, h);
-		m_lineRenderer->Add_Quad(rect, 0xFF000000);
-		linesToRender = true;
+		if (size > 0) {
+			Graphics::Get_Renderer2D().Add_Rect({-0.5f, -0.5f, w - 0.5f, size - 0.5f}, {0, 0, 0, 1});
+			Graphics::Get_Renderer2D().Add_Rect({-0.5f, h - size - 0.5f, w - 0.5f, h - 0.5f}, {0, 0, 0, 1});
+		}
 	}
 
-	// Render any lines that have been added, like bounding boxes.
-	// MLL C&C3
-	if (linesToRender && m_lineRenderer) {
-		m_lineRenderer->Render();
-		// Clear the old lines.
-		m_lineRenderer->Reset();
-	}
 }
 
 

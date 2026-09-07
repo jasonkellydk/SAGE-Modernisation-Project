@@ -1,4 +1,5 @@
 module;
+#include "../../profiling/Tracy.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -40,8 +41,10 @@ public:
     void Clear_Casters() noexcept
     {
         for (const auto& caster : m_casters)
-            if (caster.transient) Destroy_Caster(caster.mesh);
+            if (caster.source != nullptr) caster.source->Destroy_Mesh(caster.source_mesh);
         m_casters.clear();
+        if (m_transient_mesh.Is_Valid()) m_renderer.Update_Mesh(m_transient_mesh,{},{});
+        m_transient_index_count = 0;
     }
 
     ShadowCasterHandle Create_Caster(std::span<const PropVertex> vertices,
@@ -78,6 +81,8 @@ public:
     void Shutdown() noexcept
     {
         Clear_Casters();
+        if (m_transient_mesh.Is_Valid()) m_renderer.Destroy_Mesh(m_transient_mesh);
+        m_transient_mesh = {};
         m_meshes.For_Each([&](ShadowCasterHandle,const Mesh& mesh) {
             m_renderer.Destroy_Mesh(mesh.handle);
         });
@@ -98,13 +103,22 @@ public:
         std::span<const std::uint32_t> indices, PropParameters parameters,
         std::span<const RHITextureHandle> textures, const PropStyle& material_style = {})
     {
-        const auto mesh = Create_Caster(vertices,indices);
-        if (!mesh.Is_Valid()) return false;
-        if (!Add_Caster(mesh,parameters,textures,material_style)) {
-            Destroy_Caster(mesh);
-            return false;
+        if (m_device == nullptr || textures.size() > PropTextureCount) return false;
+        if (!m_transient_mesh.Is_Valid()) m_transient_mesh = m_renderer.Create_Mesh({},{});
+        if (!m_transient_mesh.Is_Valid() || !m_renderer.Append_Mesh(m_transient_mesh,vertices,indices)) return false;
+        auto caster = Make_Caster(parameters,textures,material_style);
+        caster.first_index = m_transient_index_count;
+        caster.index_count = static_cast<std::uint32_t>(indices.size());
+        m_transient_index_count += caster.index_count;
+        if (!vertices.empty()) {
+            caster.bounds.minimum = caster.bounds.maximum = vertices.front().position;
+            for (const auto& vertex : vertices) for (std::size_t axis=0;axis<3;++axis) {
+                caster.bounds.minimum[axis] = std::min(caster.bounds.minimum[axis],vertex.position[axis]);
+                caster.bounds.maximum[axis] = std::max(caster.bounds.maximum[axis],vertex.position[axis]);
+            }
         }
-        m_casters.back().transient = true;
+        caster.bounds = Transform_Bounds(caster.bounds,parameters.world);
+        m_casters.push_back(caster);
         return true;
     }
 
@@ -113,25 +127,34 @@ public:
     bool Add_Caster(ShadowCasterHandle mesh,PropParameters parameters,
         std::span<const RHITextureHandle> textures,const PropStyle& material_style = {})
     {
-        if (!Is_Caster_Valid(mesh) || textures.size() > 4) return false;
-        Caster caster;
+        if (!Is_Caster_Valid(mesh) || textures.size() > PropTextureCount) return false;
+        auto caster = Make_Caster(parameters,textures,material_style);
         caster.mesh = mesh;
-        caster.parameters = parameters;
-        caster.parameters.shroud = caster.parameters.shroud_only = 0;
-        caster.parameters.fog_state = {};
-        caster.style = material_style;
-        caster.style.blend = RHIBlendMode::Disabled;
-        caster.style.source_blend = RHIBlendFactor::One;
-        caster.style.destination_blend = RHIBlendFactor::Zero;
-        caster.style.depth_test = caster.style.depth_write = true;
-        caster.style.depth_comparison = RHIComparison::LessEqual;
-        caster.style.color_write_mask = 0;
-        caster.style.stencil = {};
-        caster.style.wireframe = false;
-        caster.style.cull = RHICullMode::None;
-        caster.style.depth_bias = 0;
-        caster.texture_count = static_cast<std::uint32_t>(textures.size());
-        for (std::size_t index=0;index<textures.size();++index) caster.textures[index] = textures[index];
+        caster.bounds = Transform_Bounds(*m_meshes.Resolve(mesh),parameters.world);
+        m_casters.push_back(caster);
+        return true;
+    }
+
+    // Share the exact mesh version used by color/reflection passes. Retain it
+    // through all cascades even if its source publishes new geometry meanwhile.
+    bool Add_Caster(PropRenderer& source,PropMeshHandle mesh,PropParameters parameters,
+        std::span<const RHITextureHandle> textures,const PropStyle& material_style = {})
+    {
+        if (m_device == nullptr || textures.size() > PropTextureCount) return false;
+        const auto* geometry = source.Mesh_Geometry(mesh);
+        if (geometry == nullptr || !source.Retain_Mesh(mesh)) return false;
+        auto caster = Make_Caster(parameters,textures,material_style);
+        caster.source = &source;
+        caster.source_mesh = mesh;
+        const auto vertices = geometry->Vertices();
+        if (!vertices.empty()) {
+            caster.bounds.minimum = caster.bounds.maximum = vertices.front().position;
+            for (const auto& vertex : vertices) for (unsigned axis=0;axis<3;++axis) {
+                caster.bounds.minimum[axis] = std::min(caster.bounds.minimum[axis],vertex.position[axis]);
+                caster.bounds.maximum[axis] = std::max(caster.bounds.maximum[axis],vertex.position[axis]);
+            }
+        }
+        caster.bounds = Transform_Bounds(caster.bounds,parameters.world);
         m_casters.push_back(caster);
         return true;
     }
@@ -140,6 +163,7 @@ public:
         const ShadowSettings& settings,RHITextureHandle color_target,
         RHITextureHandle depth_target,RHIViewport viewport)
     {
+        GRAPHICS_PROFILE_SCOPE("Graphics.Shadows.Render");
         if (m_device == nullptr || !color_target.Is_Valid() || !depth_target.Is_Valid()) return false;
         ShadowCascades cascades;
         if (!Build_Shadow_Cascades(view,LightHandle(0,1),light,settings,cascades)) return false;
@@ -161,11 +185,16 @@ public:
                 for (const auto& caster : m_casters) {
                     auto parameters = caster.parameters;
                     parameters.view_projection = cascades.views[cascade].view_projection.values;
-                    const auto* mesh = m_meshes.Resolve(caster.mesh);
+                    const auto* mesh = caster.mesh.Is_Valid() ? m_meshes.Resolve(caster.mesh) : &caster.bounds;
                     if (mesh == nullptr) return false;
-                    if (!Intersects_Cascade(*mesh,planes)) continue;
-                    if (!m_renderer.Draw(list,mesh->handle,caster.style,parameters,
-                        std::span(caster.textures.data(),caster.texture_count))) return false;
+                    if (!Intersects_Cascade(caster.bounds,planes)) continue;
+                    const auto textures = std::span(caster.textures.data(),caster.texture_count);
+                    if (caster.source != nullptr) {
+                        if (!caster.source->Draw(list,caster.source_mesh,caster.style,parameters,textures)) return false;
+                    } else if (caster.mesh.Is_Valid()) {
+                        if (!m_renderer.Draw(list,mesh->handle,caster.style,parameters,textures)) return false;
+                    } else if (!m_renderer.Draw_Range(list,m_transient_mesh,caster.style,parameters,textures,
+                        caster.first_index,caster.index_count)) return false;
                 }
                 return true;
             });
@@ -193,6 +222,29 @@ private:
         std::array<float,3> minimum{};
         std::array<float,3> maximum{};
     };
+
+    static Mesh Transform_Bounds(const Mesh& local,const std::array<float,16>& world) noexcept
+    {
+        Mesh result;
+        result.handle = local.handle;
+        for (unsigned corner=0;corner<8;++corner) {
+            const std::array<float,3> point{
+                corner&1 ? local.maximum[0] : local.minimum[0],
+                corner&2 ? local.maximum[1] : local.minimum[1],
+                corner&4 ? local.maximum[2] : local.minimum[2]};
+            for (unsigned axis=0;axis<3;++axis) {
+                const auto offset=axis*4;
+                const auto value=world[offset]*point[0]+world[offset+1]*point[1]
+                    +world[offset+2]*point[2]+world[offset+3];
+                if (corner==0) result.minimum[axis]=result.maximum[axis]=value;
+                else {
+                    result.minimum[axis]=std::min(result.minimum[axis],value);
+                    result.maximum[axis]=std::max(result.maximum[axis],value);
+                }
+            }
+        }
+        return result;
+    }
 
     static std::array<std::array<float,4>,6> Cascade_Planes(const Matrix4x4& matrix) noexcept
     {
@@ -231,13 +283,40 @@ private:
 
     struct Caster final
     {
+        PropRenderer* source = nullptr;
+        PropMeshHandle source_mesh{};
         ShadowCasterHandle mesh{};
-        bool transient = false;
+        Mesh bounds;
+        std::uint32_t first_index = 0;
+        std::uint32_t index_count = 0;
         PropParameters parameters;
         PropStyle style;
-        std::array<RHITextureHandle,4> textures{};
+        std::array<RHITextureHandle,PropTextureCount> textures{};
         std::uint32_t texture_count = 0;
     };
+
+    static Caster Make_Caster(PropParameters parameters,std::span<const RHITextureHandle> textures,
+        const PropStyle& material_style)
+    {
+        Caster caster;
+        caster.parameters = parameters;
+        caster.parameters.shroud = caster.parameters.shroud_only = 0;
+        caster.parameters.fog_state = {};
+        caster.style = material_style;
+        caster.style.blend = RHIBlendMode::Disabled;
+        caster.style.source_blend = RHIBlendFactor::One;
+        caster.style.destination_blend = RHIBlendFactor::Zero;
+        caster.style.depth_test = caster.style.depth_write = true;
+        caster.style.depth_comparison = RHIComparison::LessEqual;
+        caster.style.color_write_mask = 0;
+        caster.style.stencil = {};
+        caster.style.wireframe = false;
+        caster.style.cull = RHICullMode::None;
+        caster.style.depth_bias = 0;
+        caster.texture_count = static_cast<std::uint32_t>(textures.size());
+        for (std::size_t index=0;index<textures.size();++index) caster.textures[index] = textures[index];
+        return caster;
+    }
 
     bool Prepare_Maps(const ShadowSettings& settings)
     {
@@ -257,6 +336,8 @@ private:
     Device* m_device = nullptr;
     PropRenderer m_renderer;
     ResourcePool<Mesh,ShadowCasterHandle> m_meshes;
+    PropMeshHandle m_transient_mesh{};
+    std::uint32_t m_transient_index_count = 0;
     ShadowMapResources m_maps;
     RenderGraph m_graph;
     ExecutionPlan m_plan;

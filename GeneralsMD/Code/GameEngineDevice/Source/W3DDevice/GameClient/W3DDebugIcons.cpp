@@ -50,7 +50,7 @@
 #include "W3DDevice/GameClient/W3DGraphicsResources.h"
 #include "WW3D2/RInfo.h"
 #include <vector>
-import Graphics.Backends.DX11.Coexistence;
+import Graphics.Backends.DX11.FrameRuntime;
 import Graphics.Scene.Debug.Renderer;
 
 #include "Common/GlobalData.h"
@@ -214,8 +214,8 @@ void W3DDebugIcons::addIcon(const Coord3D *pos, Real width, Int numFramesDuratio
 /** Render draws into the current 3d context. */
 void W3DDebugIcons::Render(RenderInfoClass& info)
 {
-    if (WW3D::Are_Static_Sort_Lists_Enabled()) {
-        WW3D::Add_To_Static_Sort_List(this,1); return;
+    if (Graphics::Get_Scene_Draw_Queue().Is_Enabled()) {
+        Graphics::Get_Scene_Draw_Queue().Enqueue<Extract_Ordered_Draw>(1, *this); return;
     }
     auto* device=Graphics::Shared_Frame_Device();
     if (!device || !m_numDebugIcons) return;
@@ -246,7 +246,6 @@ void W3DDebugIcons::Render(RenderInfoClass& info)
     }
     if (!indices.empty()) Graphics::Draw_Debug_Geometry(Graphics::Get_Surface_Renderer(),
         device->Immediate_Command_List(),m_mesh,vertices,indices,Make_Surface_Parameters(info.Camera));
-    WW3D::Get_Render_Backend()->Invalidate_Cached_Render_States();
     if (vanished) compressIconsArray();
 }
 

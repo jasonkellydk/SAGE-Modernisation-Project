@@ -12,5 +12,3 @@ class TextureClass;
 bool Draw_Graphics_Prelit_Geometry(std::span<const VertexFormatXYZDUV1> vertices,
     std::span<const unsigned> indices, const Matrix4x4& transform,
     ShaderClass shader, TextureClass* texture, const Matrix4x4* sorting_view = nullptr, bool texture_luminance = false);
-void Flush_Graphics_Transparent_Geometry();
-void Clear_Graphics_Transparent_Geometry();

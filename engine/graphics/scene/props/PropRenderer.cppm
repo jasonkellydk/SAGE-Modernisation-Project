@@ -1,15 +1,19 @@
 module;
+#include "../../profiling/Tracy.h"
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <span>
 #include <utility>
 #include <vector>
 
 export module Graphics.Scene.Props.Renderer;
 export import Graphics.Scene.Props.Geometry;
+export import Graphics.Scene.Props.Surface;
 export import Graphics.RHI;
+import Graphics.Scene.DrawParameters;
 import Graphics.Resources.Pools.ResourcePool;
 import Graphics.Shaders.Library;
 import Graphics.Scene.Lighting.Environment;
@@ -37,7 +41,7 @@ export struct PropParameters final
     float shroud_only = 0;
     float opacity = 1;
     float texture_luminance = 0;
-    float reserved1 = 0;
+    float normal_in_world_space = 0;
     std::array<float,4> scene_ambient{};
     std::array<std::array<float,4>,4> light_direction{};
     std::array<std::array<float,4>,4> light_diffuse{};
@@ -53,8 +57,11 @@ export struct PropParameters final
     std::array<std::array<float,4>,4> light_attenuation{};
     std::array<std::array<float,4>,4> light_ambient{};
     std::array<std::array<float,4>,4> light_spot{};
+    // Affine instance transform. Geometry stays in its owner's local space.
+    std::array<float,16> world{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
+    PropSurfaceParameters surface{};
 };
-static_assert(sizeof(PropParameters) == 864);
+static_assert(sizeof(PropParameters) == 992);
 
 export struct PropStyle final
 {
@@ -74,11 +81,21 @@ export struct PropStyle final
     bool operator==(const PropStyle &) const = default;
 };
 
+export PropStyle Resolve_Prop_Style(PropStyle authored, const SceneDrawParameters& scene) noexcept
+{
+    authored.color_write_mask &= scene.color_write_mask;
+    authored.depth_bias = scene.depth_bias;
+    authored.wireframe = scene.wireframe;
+    authored.stencil = scene.stencil;
+    return authored;
+}
+
 struct PropMesh final
 {
     PropGeometry geometry;
     RHIBufferHandle vertices{};
     RHIBufferHandle indices{};
+    std::size_t references = 1;
 };
 
 struct PropPipeline final
@@ -144,7 +161,7 @@ public:
         std::span<const std::uint32_t> indices)
     {
         PropMesh *mesh = m_meshes.Resolve(handle);
-        if (mesh == nullptr || !mesh->geometry.Assign(vertices, indices)) return false;
+        if (mesh == nullptr || mesh->references != 1 || !mesh->geometry.Assign(vertices, indices)) return false;
         Release_GPU(*mesh);
         return true;
     }
@@ -153,8 +170,34 @@ public:
     {
         PropMesh *mesh = m_meshes.Resolve(handle);
         if (mesh == nullptr) return false;
+        if (mesh->references > 1) { --mesh->references; return true; }
         Release_GPU(*mesh);
         return m_meshes.Destroy(handle);
+    }
+
+    bool Append_Mesh(PropMeshHandle handle, std::span<const PropVertex> vertices,
+        std::span<const std::uint32_t> indices)
+    {
+        PropMesh *mesh = m_meshes.Resolve(handle);
+        if (mesh == nullptr || mesh->references != 1 || !mesh->geometry.Append(vertices, indices)) return false;
+        Release_GPU(*mesh);
+        return true;
+    }
+
+    // Deferred consumers own a reference until they draw or cancel. Shared
+    // geometry cannot be mutated; publish a replacement version instead.
+    bool Retain_Mesh(PropMeshHandle handle) noexcept
+    {
+        auto* mesh = m_meshes.Resolve(handle);
+        if (mesh == nullptr || mesh->references == std::numeric_limits<std::size_t>::max()) return false;
+        ++mesh->references;
+        return true;
+    }
+
+    const PropGeometry* Mesh_Geometry(PropMeshHandle handle) const noexcept
+    {
+        const auto* mesh = m_meshes.Resolve(handle);
+        return mesh == nullptr ? nullptr : &mesh->geometry;
     }
 
     bool Draw(CommandList &commands, PropMeshHandle handle, const PropStyle &style,
@@ -170,8 +213,9 @@ public:
         const PropParameters &parameters, std::span<const RHITextureHandle> textures,
         std::uint32_t first_index, std::uint32_t index_count)
     {
+        GRAPHICS_PROFILE_SCOPE("Graphics.Props.Draw");
         PropMesh *mesh = m_meshes.Resolve(handle);
-        if (m_device == nullptr || mesh == nullptr || textures.size() > 4) return false;
+        if (m_device == nullptr || mesh == nullptr || textures.size() > PropTextureCount) return false;
         const auto size = mesh->geometry.Indices().size();
         if (first_index > size || index_count > size - first_index || index_count % 3 != 0) return false;
         if (index_count == 0) return true;
@@ -181,11 +225,14 @@ public:
         if ((parameters.textured > 0.5f && !has_texture(0))
             || (parameters.secondary_texture > 0.5f && !has_texture(1))
             || ((parameters.shroud > 0.5f || parameters.shroud_only > 0.5f) && !has_texture(3))) return false;
+        if (parameters.surface.shading_model > .5f)
+            for (std::size_t role=0; role<PropSurfaceTextureCount; ++role)
+                if ((parameters.surface.maps & (1u << role)) != 0 && !has_texture(PropSurfaceTextureFirst+role)) return false;
         if (!Upload(*mesh)) return false;
         const RHIPipelineHandle pipeline = Pipeline(style);
         if (!pipeline.Is_Valid() || !m_device->Update_Buffer(m_constants, 0,
             std::as_bytes(std::span(&parameters, 1)))) return false;
-        std::array<RHIBindlessResource, 5> bindings{};
+        std::array<RHIBindlessResource, PropTextureCount+1> bindings{};
         bindings[0].type = RHIResourceType::Material;
         bindings[0].buffer = m_constants;
         std::size_t count = 1;
@@ -216,6 +263,7 @@ private:
 
     bool Upload(PropMesh &mesh)
     {
+        GRAPHICS_PROFILE_SCOPE("Graphics.Props.Upload");
         if (mesh.vertices.Is_Valid() && mesh.indices.Is_Valid()) return true;
         const auto vertices = std::as_bytes(mesh.geometry.Vertices());
         const auto indices = std::as_bytes(mesh.geometry.Indices());
@@ -235,7 +283,7 @@ private:
         for (const auto &entry : m_pipelines) if (entry.style == style) return entry.handle;
         RHIPipeline description;
         description.vertex_format = RHIVertexFormat::Position3Color4UV2UV2Normal3;
-        description.vertex_element_count = 10;
+        description.vertex_element_count = 11;
         description.vertex_elements[0] = {RHIVertexSemantic::Position,0,RHIVertexElementFormat::Float3,offsetof(PropVertex,position)};
         description.vertex_elements[1] = {RHIVertexSemantic::Color,0,RHIVertexElementFormat::Float4,offsetof(PropVertex,color)};
         description.vertex_elements[2] = {RHIVertexSemantic::TexCoord,0,RHIVertexElementFormat::Float2,offsetof(PropVertex,uv)};
@@ -246,6 +294,7 @@ private:
         description.vertex_elements[7] = {RHIVertexSemantic::Color,3,RHIVertexElementFormat::Float4,offsetof(PropVertex,material_emissive)};
         description.vertex_elements[8] = {RHIVertexSemantic::Color,4,RHIVertexElementFormat::Float4,offsetof(PropVertex,material_specular)};
         description.vertex_elements[9] = {RHIVertexSemantic::Color,5,RHIVertexElementFormat::Float4,offsetof(PropVertex,secondary_color)};
+        description.vertex_elements[10] = {RHIVertexSemantic::TexCoord,2,RHIVertexElementFormat::Float4,offsetof(PropVertex,tangent)};
 
         description.blend_mode = style.blend;
         description.depth_write = style.depth_write;
@@ -264,6 +313,8 @@ private:
         description.sampler_count = 16;
         description.samplers[0] = style.samplers[0];
         description.samplers[1] = style.samplers[1];
+        for (std::size_t slot=PropSurfaceTextureFirst; slot<PropTextureCount; ++slot)
+            description.samplers[slot] = style.samplers[0];
         description.samplers[3].address.fill(RHISamplerAddress::Clamp);
         const RHIPipelineHandle handle = m_device->Create_Pipeline(description,
             {m_shaders.Bytecode(m_shader, ShaderStage::Vertex)}, {m_shaders.Bytecode(m_shader, ShaderStage::Pixel)});

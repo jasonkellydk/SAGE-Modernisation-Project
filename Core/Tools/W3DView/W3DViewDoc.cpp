@@ -63,7 +63,7 @@
 
 #include <fstream>
 import Graphics.Capture.MovieCapture;
-import Graphics.Backends.DX11.Coexistence;
+import Graphics.Backends.DX11.FrameRuntime;
 
 
 #ifdef RTS_DEBUG

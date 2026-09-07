@@ -20,6 +20,8 @@ static_assert(!std::is_convertible_v<RHITextureHandle, RHIPipelineHandle>);
 class TestCommandList final : public CommandList
 {
 public:
+	using CommandList::Record_Draw;
+
 	bool Bind_Pipeline(RHIPipelineHandle pipeline) noexcept override
 	{
 		return pipeline.Is_Valid();
@@ -121,4 +123,23 @@ BOOST_AUTO_TEST_CASE(command_list_contract_is_small_and_usable)
 	BOOST_CHECK(command_list.Set_Index_Buffer(buffer, RHIIndexFormat::UInt32, 0));
 	BOOST_CHECK(command_list.Draw(3, 0, 1, 0));
 	BOOST_CHECK(command_list.Draw_Indexed(3, 0, 0, 1, 0));
+}
+
+BOOST_AUTO_TEST_CASE(submission_arithmetic_widens_before_instance_multiplication)
+{
+	TestCommandList commands;
+	commands.Record_Draw(RHIPrimitiveTopology::TriangleList, 3000000000u, 3u);
+	BOOST_CHECK_EQUAL(commands.Submission_Counts().draw_calls, 1u);
+	BOOST_CHECK_EQUAL(commands.Submission_Counts().triangles, 3000000000ull);
+	BOOST_CHECK_EQUAL(commands.Submission_Counts().vertex_invocations, 9000000000ull);
+	commands.Record_Draw(RHIPrimitiveTopology::TriangleStrip, 3000000002u, 3u);
+	BOOST_CHECK_EQUAL(commands.Submission_Counts().triangles, 12000000000ull);
+	BOOST_CHECK_EQUAL(commands.Submission_Counts().vertex_invocations, 18000000006ull);
+	commands.Record_Draw(RHIPrimitiveTopology::TriangleStrip, 2u, 3u);
+	BOOST_CHECK_EQUAL(commands.Submission_Counts().triangles, 12000000000ull);
+	BOOST_CHECK_EQUAL(commands.Submission_Counts().vertex_invocations, 18000000012ull);
+	commands.Record_Draw(RHIPrimitiveTopology::PointList, 3000000000u, 3u);
+	BOOST_CHECK_EQUAL(commands.Submission_Counts().draw_calls, 4u);
+	BOOST_CHECK_EQUAL(commands.Submission_Counts().triangles, 12000000000ull);
+	BOOST_CHECK_EQUAL(commands.Submission_Counts().vertex_invocations, 27000000012ull);
 }

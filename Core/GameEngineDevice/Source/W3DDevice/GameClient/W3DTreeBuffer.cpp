@@ -1,7 +1,9 @@
+import Assets.Images.PixelEncoding;
+import Graphics.Resources.Textures.Atlas;
 #include <array>
 #include <span>
 #include <vector>
-import Graphics.Backends.DX11.Coexistence;
+import Graphics.Backends.DX11.FrameRuntime;
 import Graphics.Scene.Shadows.DirectionalRenderer;
 #include <algorithm>
 #include "W3DDevice/GameClient/W3DGraphicsResources.h"
@@ -88,7 +90,6 @@ enum
 #include "W3DDevice/GameClient/Module/W3DTreeDraw.h"
 #include "W3DDevice/GameClient/W3DShroud.h"
 #include "WW3D2/Camera.h"
-#include "WW3D2/Backend/RenderBackend.h"
 #include "WW3D2/MatInfo.h"
 #include "WW3D2/Mesh.h"
 #include "WW3D2/MeshMdl.h"
@@ -158,7 +159,7 @@ texture of the desired height and mip level. */
 //=============================================================================
 W3DTreeBuffer::W3DTreeTextureClass::W3DTreeTextureClass(unsigned width, unsigned height) :
 	TextureClass(width, height,
-		WW3D_FORMAT_A8R8G8B8, MIP_LEVELS_ALL )
+		Assets::PixelEncoding::BGRA8, MIP_LEVELS_ALL )
 {
 }
 
@@ -171,92 +172,26 @@ W3DTreeBuffer::W3DTreeTextureClass::W3DTreeTextureClass(unsigned width, unsigned
 //=============================================================================
 int W3DTreeBuffer::W3DTreeTextureClass::update(W3DTreeBuffer *buffer)
 {
-
-	//Set to clamp.
-	Get_Filter().Set_U_Addr_Mode(TextureFilterClass::TEXTURE_ADDRESS_CLAMP);
-	Get_Filter().Set_V_Addr_Mode(TextureFilterClass::TEXTURE_ADDRESS_CLAMP);
-
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	const RenderBackendTextureHandle texture = Peek_Render_Backend_Texture();
-	RenderBackendTextureDescription texture_description;
-	RenderBackendTextureLock locked_texture;
-	if (backend == nullptr || texture == 0 ||
-		!backend->Get_Texture_Description(texture, 0, texture_description) ||
-		texture_description.width < TILE_PIXEL_EXTENT ||
-		!backend->Lock_Texture(texture, 0, locked_texture))
-	{
-		return 0;
-	}
-
-	Int tilePixelExtent = TILE_PIXEL_EXTENT;
-//	Int numRows = surface_desc.Height/(tilePixelExtent+TILE_OFFSET);
-#ifdef RTS_DEBUG
-	//DASSERT_MSG(tilesPerRow*numRows >= htMap->m_numBitmapTiles,Debug::Format ("Too many tiles."));
-	//DEBUG_ASSERTCRASH((Int)surface_desc.Width >= tilePixelExtent*tilesPerRow, ("Bitmap too small."));
-#endif
-	if (texture_description.format == WW3D_FORMAT_A8R8G8B8) {
-		Int tileNdx;
-		Int pixelBytes = 4;
-#if 0 // Fill unused texture for debug display.
-		UnsignedInt cellX, cellY;
-		for (cellX = 0; cellX < surface_desc.Width; cellX++) {
-			for (cellY = 0; cellY < surface_desc.Height; cellY++) {
-				UnsignedByte *pBGR = ((UnsignedByte *)locked_rect.pBits)+(cellY*surface_desc.Width+cellX)*pixelBytes;
-				//*((Short*)pBGR) =  0x8000 + (((255-2*cellY)>>3)<<10) + ((4*cellX)>>4);
-				*((Int*)pBGR) =  0xFF000000 | ( (((255-cellY))<<16) + ((cellX)) );
-
-			}
-		}
-#endif
-		for (tileNdx=0; tileNdx < buffer->getNumTiles(); tileNdx++) {
-			TileData *pTile = buffer->getSourceTile(tileNdx);
-			if (!pTile) continue;
-			ICoord2D position = pTile->m_tileLocationInTexture;
-			if (position.x<0) {
-				continue;
-			}
-			Int i,j;
-			for (j=0; j<tilePixelExtent; j++) {
-				UnsignedByte *pBGR = pTile->getRGBDataForWidth(tilePixelExtent);
-				pBGR += (tilePixelExtent-(1+j))*TILE_BYTES_PER_PIXEL*tilePixelExtent; // invert to match.
-				Int row = position.y+j;
-				UnsignedByte *pBGRA = static_cast<UnsignedByte *>(locked_texture.bits) +
-							(row)*locked_texture.row_pitch;
-
-				Int column = position.x;
-				pBGRA += column*pixelBytes;
-				for (i=0; i<tilePixelExtent; i++) {
-					// 15 bit color *((Short*)pBGRA) = 0x8000 + ((pBGR[2]>>3)<<10) + ((pBGR[1]>>3)<<5) + (pBGR[0]>>3);
-					*((Int *)pBGRA) = (pBGR[3]<<24) + (pBGR[2]<<16) + (pBGR[1]<<8) + (pBGR[0]);
-					pBGRA +=pixelBytes;
-					pBGR +=TILE_BYTES_PER_PIXEL;
-				}
-			}
-		}
-
-	}
-	backend->Unlock_Texture(texture, 0);
-	backend->Generate_Texture_Mipmaps(texture);
-	if (WW3D::Get_Texture_Reduction()) {
-		backend->Set_Texture_LOD(texture, static_cast<unsigned>(WW3D::Get_Texture_Reduction()));
-	}
-	return(static_cast<int>(texture_description.height));
+    Get_Sampling().address[0]=Graphics::RHISamplerAddress::Clamp;
+    Get_Sampling().address[1]=Graphics::RHISamplerAddress::Clamp;
+    auto* texture=Peek_Render_Backend_Texture();
+    if (!buffer || !texture || texture->Description().width<TILE_PIXEL_EXTENT) return 0;
+    std::vector<Graphics::AtlasTile> tiles;
+    for (Int i=0;i<buffer->getNumTiles();++i) {
+        auto* tile=buffer->getSourceTile(i);
+        if (!tile || tile->m_tileLocationInTexture.x<0) continue;
+        const auto position=tile->m_tileLocationInTexture;
+        const auto* pixels=tile->getRGBDataForWidth(TILE_PIXEL_EXTENT);
+        tiles.push_back({{{reinterpret_cast<const std::byte*>(pixels),std::size_t(TILE_PIXEL_EXTENT)*TILE_PIXEL_EXTENT*4},
+            TILE_PIXEL_EXTENT,TILE_PIXEL_EXTENT,std::size_t(TILE_PIXEL_EXTENT)*4,Assets::PixelEncoding::BGRA8},
+            static_cast<unsigned>(position.x),static_cast<unsigned>(position.y),true});
+    }
+    return Graphics::Upload_Texture_Atlas(*texture,tiles,{},Graphics::AtlasAlpha::Source,
+        Graphics::AtlasBackground::Transparent,true) ? static_cast<int>(texture->Description().height) : 0;
 }
 
 
-//=============================================================================
-// W3DTreeBuffer::W3DTreeTextureClass::setLOD
-//=============================================================================
-/** Sets the lod of the texture to be loaded into the video card.  */
-//=============================================================================
-void W3DTreeBuffer::W3DTreeTextureClass::setLOD(Int LOD) const
-{
-	IRenderBackend *backend = WW3D::Get_Render_Backend();
-	const RenderBackendTextureHandle texture = Peek_Render_Backend_Texture();
-	if (backend != nullptr && texture != 0) {
-		backend->Set_Texture_LOD(texture, static_cast<unsigned>(LOD));
-	}
-}
+
 //-----------------------------------------------------------------------------
 //         Private Data
 //-----------------------------------------------------------------------------
@@ -590,15 +525,7 @@ void W3DTreeBuffer::updateTexture()
 
 }
 
-/**Adjust the resolution of tree texture uploaded to the video card.  The system memory
-version always remains at full resolution.  Someone should probably optimize this at
-some point since it wastes a lot of system memory on low-end systems. -MW
-*/
-void W3DTreeBuffer::setTextureLOD(Int lod)
-{
-	if (m_treeTexture)
-		((W3DTreeTextureClass*)m_treeTexture)->setLOD(lod);
-}
+
 
 //=============================================================================
 // W3DTreeBuffer::doLighting
@@ -663,7 +590,7 @@ UnsignedInt W3DTreeBuffer::doLighting(const Vector3 *normal,
 //=============================================================================
 /** Loads the trees into the vertex buffer for drawing. */
 //=============================================================================
-void W3DTreeBuffer::loadTreesInVertexAndIndexBuffers(RefRenderObjListIterator *pDynamicLightsIterator)
+void W3DTreeBuffer::loadTreesInVertexAndIndexBuffers(Graphics::SceneObjectList<RenderObjClass>::Cursor *pDynamicLightsIterator)
 {
     m_graphicsGeometryDirty = true;
 	if (m_indexTree[0].empty() || m_vertexTree[0].empty() || !m_initialized) {
@@ -1452,7 +1379,7 @@ void W3DTreeBuffer::prepareFrame()
 
 }
 
-void W3DTreeBuffer::drawTrees(CameraClass * camera, RefRenderObjListIterator *pDynamicLightsIterator)
+void W3DTreeBuffer::drawTrees(CameraClass * camera, Graphics::SceneObjectList<RenderObjClass>::Cursor *pDynamicLightsIterator)
 {
 	USE_PERF_TIMER(Tree_Render)
 	if (!m_isTerrainPass) {
@@ -1519,7 +1446,6 @@ void W3DTreeBuffer::drawTrees(CameraClass * camera, RefRenderObjListIterator *pD
     const std::array<Graphics::RHITextureHandle,2> textures{Resolve_Graphics_Texture(m_treeTexture),shroud};
     for (Int batch=0;batch<MAX_BUFFERS && m_curNumTreeIndices[batch]!=0;++batch)
         renderer.Draw(device->Immediate_Command_List(),m_graphicsMeshes[batch],parameters,textures);
-    WW3D::Get_Render_Backend()->Invalidate_Cached_Render_States();
 }
 
 Bool W3DTreeBuffer::collectShadowCasters()
@@ -1816,7 +1742,3 @@ void W3DTreeBuffer::loadPostProcess()
 {
 	// empty. jba [8/11/2003]
 }
-
-
-
-

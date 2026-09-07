@@ -1,12 +1,12 @@
 /*
 ** Command & Conquer Generals Zero Hour(tm)
 **
-** Neutral scene-submission contract used by the modern water renderer.
+** Scene-submission contract used by the water renderer.
 */
 
 #pragma once
 
-#include "WW3D2/Backend/RenderBackendTypes.h"
+import Graphics.RHI;
 
 class CameraClass;
 
@@ -16,5 +16,5 @@ public:
 	virtual ~WaterReflectionRenderer() = default;
 
 	virtual void Render_Water_Reflection(CameraClass *camera,
-		const RenderBackendViewport &viewport) = 0;
+		const Graphics::RHIViewport &viewport) = 0;
 };

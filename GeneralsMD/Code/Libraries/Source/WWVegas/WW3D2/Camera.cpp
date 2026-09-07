@@ -72,6 +72,9 @@
 
 
 #include "Camera.h"
+#include <algorithm>
+import Graphics.Frame.AttachmentBindings;
+import Graphics.Scene.Views.CameraMatrices;
 #include "WW3D.h"
 #include "WWMath/matrix4.h"
 
@@ -673,12 +676,9 @@ void CameraClass::Update_Frustum() const
  *=============================================================================================*/
 void CameraClass::Device_To_View_Space(const Vector2 & device_coord,Vector3 * set_view)
 {
-	int res_width;
-	int res_height;
-	int res_bits;
-	bool windowed;
-
-	WW3D::Get_Render_Target_Resolution(res_width,res_height,res_bits,windowed);
+	const auto& screen = Graphics::Get_Attachment_Bindings().Default().viewport;
+	const unsigned res_width = screen.width;
+	const unsigned res_height = screen.height;
 
 	// convert the device coordinates into normalized device coordinates:
 	Vector2 ndev;
@@ -733,23 +733,25 @@ void CameraClass::Apply()
 {
 	Update_Frustum();
 
-	int width,height,bits;
-	bool windowed;
-	WW3D::Get_Render_Target_Resolution(width,height,bits,windowed);
+	const auto& screen = Graphics::Get_Attachment_Bindings().Default().viewport;
+	const unsigned width = screen.width;
+	const unsigned height = screen.height;
 
-	RenderBackendViewport viewport;
+	Graphics::RHIViewport viewport;
 	viewport.x = (unsigned int)(Viewport.Min.X * (float)width);
 	viewport.y = (unsigned int)(Viewport.Min.Y * (float)height);
 	viewport.width = (unsigned int)((Viewport.Max.X - Viewport.Min.X) * (float)width);
 	viewport.height = (unsigned int)((Viewport.Max.Y - Viewport.Min.Y) * (float)height);
-	viewport.min_z = ZBufferMin;
-	viewport.max_z = ZBufferMax;
-	WW3D::Get_Render_Backend()->Set_Viewport(viewport);
+	viewport.min_depth = ZBufferMin;
+	viewport.max_depth = ZBufferMax;
+	Graphics::Get_Attachment_Bindings().Set_Viewport(viewport);
 
 	Matrix4x4 projection;
 	Get_Backend_Projection_Matrix(&projection);
-	WW3D::Get_Render_Backend()->Set_Projection_Transform_With_Z_Bias(projection,ZNear,ZFar);
-	WW3D::Get_Render_Backend()->Set_Transform(RenderBackendTransform::View,CameraInvTransform);
+	auto& camera = Graphics::Get_Camera_Matrices();
+	std::copy_n(&projection[0][0], 16, camera.projection.values.data());
+	const Matrix4x4 view(CameraInvTransform);
+	std::copy_n(&view[0][0], 16, camera.view.values.data());
 }
 
 void CameraClass::Set_Clip_Planes(float znear,float zfar)

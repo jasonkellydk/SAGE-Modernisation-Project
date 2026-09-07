@@ -2,6 +2,7 @@
 ** Command & Conquer Generals Zero Hour(tm)
 */
 
+import Assets.Images.PixelEncoding;
 #include "W3DDevice/GameClient/WaterResources.h"
 
 #include "WW3D2/AssetMgr.h"
@@ -12,26 +13,20 @@ static void Initialize_Water_Depth_Lut(TextureClass *texture)
 	if (texture == nullptr)
 		return;
 
-	SurfaceClass *surface = texture->Get_Surface_Level();
+	Graphics::TextureEdit *surface = texture->Get_Surface_Level();
 	if (surface == nullptr)
 		return;
 
-	int pitch = 0;
-	void *bits = surface->Lock(&pitch);
-	const unsigned int bytes_per_pixel = surface->Get_Bytes_Per_Pixel();
-	if (bits != nullptr && bytes_per_pixel != 0)
-	{
-		for (unsigned int x = 0; x < 256; ++x)
-		{
-			const unsigned int value = x;
-			const unsigned int color = 0xff000000u |
-				(value << 16) | (value << 8) | value;
-			surface->Draw_Pixel(static_cast<int>(x), 0, color,
-				bytes_per_pixel, bits, pitch);
-		}
-	}
-	surface->Unlock();
-	REF_PTR_RELEASE(surface);
+    const auto mapping=surface->Map();
+    const auto encoding=surface->Image().Encoding();
+    const unsigned stride=Assets::Pixel_Size(encoding);
+    if (!mapping.bytes.empty() && stride) {
+        for (unsigned x=0;x<256;++x)
+            Assets::Write_Image_Pixel(mapping.bytes.subspan(x*stride,stride),encoding,
+                0xff000000u | (x<<16) | (x<<8) | x);
+    }
+	surface->Unmap();
+	delete surface; surface = nullptr;
 }
 
 static void Initialize_Water_White_Texture(TextureClass *texture)
@@ -39,17 +34,14 @@ static void Initialize_Water_White_Texture(TextureClass *texture)
 	if (texture == nullptr)
 		return;
 
-	SurfaceClass *surface = texture->Get_Surface_Level();
+	Graphics::TextureEdit *surface = texture->Get_Surface_Level();
 	if (surface == nullptr)
 		return;
 
-	int pitch = 0;
-	void *bits = surface->Lock(&pitch);
-	const unsigned int bytes_per_pixel = surface->Get_Bytes_Per_Pixel();
-	if (bits != nullptr && bytes_per_pixel != 0)
-		surface->Draw_Pixel(0, 0, 0xffffffff, bytes_per_pixel, bits, pitch);
-	surface->Unlock();
-	REF_PTR_RELEASE(surface);
+    const auto mapping=surface->Map();
+    if (!mapping.bytes.empty()) Assets::Write_Image_Pixel(mapping.bytes,surface->Image().Encoding(),0xffffffff);
+	surface->Unmap();
+	delete surface; surface = nullptr;
 }
 
 TextureBaseClass *Load_Water_Texture(const char *name)
@@ -60,7 +52,7 @@ TextureBaseClass *Load_Water_Texture(const char *name)
 TextureBaseClass *Create_Water_White_Texture()
 {
 	TextureClass *texture = MSGNEW("TextureClass") TextureClass(
-		1, 1, WW3D_FORMAT_A4R4G4B4, MIP_LEVELS_1);
+		1, 1, Assets::PixelEncoding::BGRA4444, MIP_LEVELS_1);
 	Initialize_Water_White_Texture(texture);
 	return texture;
 }
@@ -68,7 +60,7 @@ TextureBaseClass *Create_Water_White_Texture()
 TextureBaseClass *Create_Water_Depth_Lut_Texture()
 {
 	TextureClass *texture = MSGNEW("TextureClass") TextureClass(
-		256, 1, WW3D_FORMAT_A8R8G8B8, MIP_LEVELS_1);
+		256, 1, Assets::PixelEncoding::BGRA8, MIP_LEVELS_1);
 	Initialize_Water_Depth_Lut(texture);
 	return texture;
 }

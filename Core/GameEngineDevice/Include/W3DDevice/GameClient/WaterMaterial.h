@@ -15,6 +15,7 @@ import Graphics.Scene.Water.Renderer;
 #include "WWMath/Vector4.h"
 class TextureBaseClass;
 class SceneClass;
+class Matrix4x4;
 
 // The water shaders consume this explicit stream contract.  It is a
 // backend-neutral submission type; it is intentionally not one of the old
@@ -57,17 +58,17 @@ public:
 	bool Apply_Ocean(TextureBaseClass *surface_texture,
 		TextureBaseClass *displacement_texture,
 		TextureBaseClass *normal_texture, TextureBaseClass *foam_texture,
-		TextureBaseClass *reflection_texture, TextureBaseClass *refraction_texture,
+		TextureBaseClass *reflection_texture, Graphics::RHITextureHandle refraction_texture,
 		TextureBaseClass *environment_texture, TextureBaseClass *shroud_texture,
-		TextureBaseClass *scene_depth_texture,
+		Graphics::RHITextureHandle scene_depth_texture,
 		const WaterMaterialParameters &parameters, bool additive_blend);
 	bool Apply_Displacement(TextureBaseClass *static_displacement_texture,
 		const Vector4 &animation, const Vector4 &displacement_domain);
 	bool Apply_Surface(TextureBaseClass *surface_texture,
 		TextureBaseClass *normal_texture, TextureBaseClass *foam_texture,
 		TextureBaseClass *edge_texture, TextureBaseClass *reflection_texture,
-		TextureBaseClass *refraction_texture, TextureBaseClass *environment_texture,
-		TextureBaseClass *shroud_texture, TextureBaseClass *scene_depth_texture,
+		Graphics::RHITextureHandle refraction_texture, TextureBaseClass *environment_texture,
+		TextureBaseClass *shroud_texture, Graphics::RHITextureHandle scene_depth_texture,
 		const WaterMaterialParameters &parameters, bool additive_blend);
 	bool Apply_Track(TextureBaseClass *wave_texture);
 	bool Apply_Sky(TextureBaseClass *texture, bool alpha_blend,
@@ -75,9 +76,8 @@ public:
 
 	void Shutdown();
 	bool ReacquireResources();
-	void Reset();
 
-    bool Draw(Graphics::WaterMeshHandle mesh, bool wireframe = false);
+    bool Draw(Graphics::WaterMeshHandle mesh, const Matrix4x4& world, bool wireframe = false);
     void Set_Fog(SceneClass* scene);
 
 private:

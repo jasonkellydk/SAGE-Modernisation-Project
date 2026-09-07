@@ -1,3 +1,4 @@
+import Graphics.Resources.Textures.Quality;
 /*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -56,8 +57,6 @@
 #include "W3DDevice/GameClient/BaseHeightMap.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
 #include "WW3D2/PartEmt.h"
-#include "WW3D2/HAnim.h"
-#include "WW3D2/HTree.h"
 #include "WW3D2/AnimObj.h"  ///< @todo superhack for demo, remove!
 
 //-------------------------------------------------------------------------------------------------
@@ -200,9 +199,11 @@ void W3DGameClient::setTeamColor(Int red, Int green, Int blue)
 //-------------------------------------------------------------------------------------------------
 void W3DGameClient::setTextureLOD( Int level )
 {
-	if (WW3D::Get_Texture_Reduction() != level)
+	if (Graphics::Get_Texture_Quality_Settings().mip_reduction != level)
 	{
-		WW3D::Set_Texture_Reduction(level, 32);
+		Graphics::Get_Texture_Quality_Settings().mip_reduction = level;
+		Graphics::Get_Texture_Quality_Settings().minimum_dimension = 32;
+		WW3D::_Invalidate_Textures();
 
 		if( TheTerrainRenderObject )
 			TheTerrainRenderObject->setTextureLOD(level);

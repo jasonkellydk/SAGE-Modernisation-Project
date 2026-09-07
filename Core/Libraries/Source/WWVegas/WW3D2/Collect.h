@@ -35,17 +35,32 @@
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 #pragma once
+#include <memory>
+#include <span>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <vector>
+import Graphics.Scene.Models.Factory;
+
+#include <memory>
+#include <span>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <vector>
+import Assets.ModelAssembly;
 
 #include "RendObj.h"
 #include "Composite.h"
 #include "WWLib/Vector.h"
-#include "Proto.h"
+#include "WW3D2/W3DFile.h"
 #include "WW3D2/W3DFile.h"
 #include "WWLib/wwstring.h"
 #include "Proxy.h"
 
-class CollectionDefClass;
-class SnapPointsClass;
 
 
 /*
@@ -57,7 +72,7 @@ class CollectionClass : public CompositeRenderObjClass
 public:
 
 	CollectionClass();
-	CollectionClass(const CollectionDefClass & def);
+	CollectionClass(const Assets::ModelCollectionDesc & def);
 	CollectionClass(const CollectionClass & src);
 	CollectionClass & operator = (const CollectionClass &);
 	virtual ~CollectionClass() override;
@@ -76,7 +91,6 @@ public:
 	// Render Object Interface - Rendering
 	/////////////////////////////////////////////////////////////////////////////
 	virtual void					Render(RenderInfoClass & rinfo) override;
-	virtual void					Special_Render(SpecialRenderInfoClass & rinfo) override;
 
 	/////////////////////////////////////////////////////////////////////////////
 	// Render Object Interface - "Scene Graph"
@@ -118,9 +132,9 @@ protected:
 	void								Free();
 	virtual void								Update_Sub_Object_Transforms() override;
 
-	DynamicVectorClass <ProxyClass>			ProxyList;
+	std::vector<Assets::ModelProxyDesc> ProxyList;
 	DynamicVectorClass <RenderObjClass *>	SubObjects;
-	SnapPointsClass *								SnapPoints;
+	std::vector<Assets::Vector3f> SnapPoints;
 
 	SphereClass										BoundSphere;
 	AABoxClass										BoundBox;
@@ -131,12 +145,4 @@ protected:
 ** CollectionLoaderClass
 ** Loader for collection objects
 */
-class CollectionLoaderClass : public PrototypeLoaderClass
-{
-public:
-
-	virtual int						Chunk_Type() override { return W3D_CHUNK_COLLECTION; }
-	virtual PrototypeClass *	Load_W3D(ChunkLoadClass & cload) override;
-};
-
-extern CollectionLoaderClass _CollectionLoader;
+Graphics::ModelFactory<RenderObjClass>* Load_Collection_Factory(ChunkLoadClass& cload);

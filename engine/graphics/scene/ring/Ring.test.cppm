@@ -11,6 +11,8 @@ module;
 
 export module Graphics.Scene.Ring.Tests;
 
+import Graphics.RHI;
+import Graphics.RenderGraph.Execution;
 import Graphics.Scene.Ring;
 
 using namespace Graphics;

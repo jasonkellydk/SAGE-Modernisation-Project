@@ -14,6 +14,7 @@ struct ParticleVertexOutput
     uint texture_index : TEXCOORD2;
     float point_size_value : TEXCOORD3;
     float2 point_center : TEXCOORD4;
+    nointerpolation float4 texture_region : TEXCOORD5;
 };
 
 struct ParticlePixelInput
@@ -25,6 +26,7 @@ struct ParticlePixelInput
     uint texture_index : TEXCOORD2;
     float point_size_value : TEXCOORD3;
     float2 point_center : TEXCOORD4;
+    nointerpolation float4 texture_region : TEXCOORD5;
 };
 
 struct GPUParticleData
@@ -36,6 +38,7 @@ struct GPUParticleData
     uint emitter_flags;
     float angle;
     uint texture_index;
+    float4 texture_region;
 };
 
 StructuredBuffer<GPUParticleData> Particles : register(t127);
@@ -88,6 +91,7 @@ ParticleVertexOutput particle_billboard_vertex(ParticleVertexInput input, uint i
     output.uv = !billboard && !point_sprite ? float2(1.0-input.uv.x,input.uv.y) : input.uv;
     output.emitter_flags = particle.emitter_flags;
     output.texture_index = particle.texture_index;
+    output.texture_region = particle.texture_region;
     return output;
 }
 
@@ -97,9 +101,10 @@ float4 particle_billboard_pixel(ParticlePixelInput input) : SV_TARGET
     const float2 point_center_pixels = float2(
         Values[1].z + (input.point_center.x + 1.0) * 0.5 * Values[1].x,
         Values[1].w + (1.0 - input.point_center.y) * 0.5 * Values[1].y);
-    const float2 point_sample_uv = point_sprite
+    const float2 sprite_uv = point_sprite
         ? (input.position.xy - point_center_pixels) / max(input.point_size_value, 1.0) + 0.5
         : input.uv;
+    const float2 point_sample_uv = lerp(input.texture_region.xy, input.texture_region.zw, sprite_uv);
     float4 texture_color = float4(1.0, 1.0, 1.0, 1.0);
     if (input.texture_index != 0xffffffffu)
     {
