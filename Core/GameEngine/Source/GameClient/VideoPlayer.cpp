@@ -30,7 +30,8 @@ void VideoPlayer::init()
 
 void VideoPlayer::reset()
 {
-	mVideosAvailableForPlay.clear();
+	// Movie definitions are loaded once by init and remain valid across game
+	// resets. Playback sessions are closed separately by GameClient::reset.
 }
 
 void VideoPlayer::update()
