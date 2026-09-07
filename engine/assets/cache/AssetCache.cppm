@@ -47,7 +47,8 @@ public:
 	ModelAssetHandle Request_Model(std::string_view name);
 	MaterialAssetHandle Request_Material(MaterialAssetDesc description);
 	TextureAssetHandle Request_Texture(std::string_view name);
-	FontAssetHandle Request_Font(std::string_view family, std::uint32_t point_size, bool bold);
+	FontAssetHandle Request_Font(std::string_view family, std::uint32_t point_size, bool bold,
+		std::uint32_t average_width = 0);
 
 	AssetState Get_State(ModelAssetHandle handle) const noexcept;
 	AssetState Get_State(MaterialAssetHandle handle) const noexcept;
@@ -564,14 +565,17 @@ TextureAssetHandle AssetCache::Request_Texture(std::string_view name)
 	return handle;
 }
 
-FontAssetHandle AssetCache::Request_Font(std::string_view family, std::uint32_t point_size, bool bold)
+FontAssetHandle AssetCache::Request_Font(std::string_view family, std::uint32_t point_size, bool bold,
+	std::uint32_t average_width)
 {
 	const std::string canonical_family = Canonicalize_Asset_Name(family);
 	if (canonical_family.empty() || point_size == 0)
 		return FontAssetHandle::Invalid();
 
-	const std::string canonical_name = "font/" + canonical_family + "/"
+	std::string canonical_name = "font/" + canonical_family + "/"
 		+ std::to_string(point_size) + "/" + (bold ? "1" : "0");
+	if (average_width != 0)
+		canonical_name += "/" + std::to_string(average_width);
 	std::lock_guard lock(m_request_mutex);
 	const std::shared_ptr<const FontSnapshot> current =
 		std::atomic_load_explicit(&m_font_snapshot, std::memory_order_acquire);

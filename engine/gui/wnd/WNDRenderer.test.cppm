@@ -20,12 +20,226 @@ module;
 export module Engine.UI.WND.Tests;
 
 import Engine.UI.WND;
+import Engine.UI.WND.Layout;
 
 #if defined(ENGINE_UI_WND_VISUAL_REGRESSION)
 import Graphics.Testing.VisualRegression;
 #endif
 
 using namespace Engine::UI::WND;
+
+namespace
+{
+struct LayoutWindow
+{
+	LayoutBounds bounds;
+	bool preserve = false;
+	LayoutWindow *next = nullptr;
+	LayoutWindow *child = nullptr;
+	int applications = 0;
+};
+
+const LayoutSource layout_source{
+	nullptr,
+	[](void *, void *p) noexcept -> void * { return static_cast<LayoutWindow *>(p)->next; },
+	[](void *, void *p) noexcept -> void * { return static_cast<LayoutWindow *>(p)->child; },
+	[](void *, void *p) noexcept { return static_cast<LayoutWindow *>(p)->bounds; },
+	[](void *, void *p) noexcept { return static_cast<LayoutWindow *>(p)->preserve; },
+	[](void *, void *p, LayoutBounds bounds) noexcept {
+		auto &window = *static_cast<LayoutWindow *>(p);
+		window.bounds = bounds;
+		++window.applications;
+	}};
+}
+
+BOOST_AUTO_TEST_CASE(wnd_layout_preserves_cards_and_stretches_decoration)
+{
+	LayoutWindow second{{70, 10, 40, 40}, true};
+	LayoutWindow first{{10, 10, 40, 40}, true, &second};
+	LayoutWindow decoration{{0, 0, 800, 600}, false, nullptr, &first};
+	Layout layout;
+	layout.Register(&first, 800, 600);
+	layout.Register(&second, 800, 600);
+	layout.Apply(&decoration, true, 800, 600, 1600, 900, layout_source);
+	BOOST_TEST(decoration.bounds.width == 1600);
+	BOOST_TEST(decoration.bounds.height == 900);
+	BOOST_TEST(first.bounds.width == 60);
+	BOOST_TEST(first.bounds.height == 60);
+	BOOST_TEST(first.bounds.x == 45);
+	BOOST_TEST(second.bounds.x == 135);
+	BOOST_TEST(first.bounds.y == 15);
+	BOOST_TEST(first.applications == 1);
+	BOOST_TEST(second.applications == 1);
+	BOOST_TEST(decoration.applications == 1);
+}
+
+BOOST_AUTO_TEST_CASE(wnd_layout_round_trips_without_resize_drift)
+{
+	LayoutWindow child{{3, 7, 11, 19}, true};
+	LayoutWindow root{{0, 0, 800, 600}, false, nullptr, &child};
+	Layout layout;
+	layout.Register(&child, 800, 600);
+	layout.Apply(&root, false, 800, 600, 800, 600, layout_source);
+	for (int width = 801; width <= 1920; ++width)
+		layout.Apply(&root, false, width - 1, 600, width, 600, layout_source);
+	layout.Apply(&root, false, 1920, 600, 3840, 2160, layout_source);
+	BOOST_TEST(child.bounds.width == 40);
+	BOOST_TEST(child.bounds.height == 68);
+	layout.Apply(&root, false, 3840, 2160, 800, 600, layout_source);
+	BOOST_TEST(child.bounds.x == 3);
+	BOOST_TEST(child.bounds.y == 7);
+	BOOST_TEST(child.bounds.width == 11);
+	BOOST_TEST(child.bounds.height == 19);
+}
+
+BOOST_AUTO_TEST_CASE(wnd_layout_handles_nested_controls_and_authored_widescreen)
+{
+	LayoutWindow inside{{5, 5, 10, 10}, true};
+	LayoutWindow card{{40, 20, 40, 40}, true, nullptr, &inside};
+	LayoutWindow root{{0, 0, 800, 600}, false, nullptr, &card};
+	Layout layout;
+	layout.Register(&card, 800, 600);
+	layout.Register(&inside, 800, 600);
+	layout.Apply(&root, false, 800, 600, 1600, 900, layout_source);
+	BOOST_TEST(inside.bounds.width == 15);
+	BOOST_TEST(inside.bounds.height == 15);
+	BOOST_TEST(inside.bounds.x == 8);
+	layout.Forget(&card);
+	layout.Forget(&inside);
+	layout.Forget(&root);
+	card.bounds = {40, 20, 40, 40};
+	card.child = nullptr;
+	root.bounds = {0, 0, 1600, 900};
+	layout.Register(&card, 1600, 900);
+	layout.Apply(&root, false, 1600, 900, 3200, 1800, layout_source);
+	BOOST_TEST(card.bounds.width == 80);
+	BOOST_TEST(card.bounds.height == 80);
+}
+
+BOOST_AUTO_TEST_CASE(wnd_layout_captures_siblings_once_and_retains_game_moves)
+{
+	LayoutWindow second{{400, 0, 400, 600}};
+	LayoutWindow first{{0, 0, 400, 600}, false, &second};
+	Layout layout;
+	layout.Apply(&first, true, 800, 600, 800, 600, layout_source);
+	first.bounds.x = 20;
+	layout.Apply(&first, true, 800, 600, 1600, 1200, layout_source);
+	BOOST_TEST(first.bounds.x == 40);
+	BOOST_TEST(first.applications == 2);
+	BOOST_TEST(second.applications == 2);
+}
+
+BOOST_AUTO_TEST_CASE(wnd_panels_and_generated_controls_share_the_authored_scale)
+{
+	LayoutWindow button{{10, 10, 80, 30}, true};
+	LayoutWindow panel{{100, 100, 600, 400}, true, nullptr, &button};
+	LayoutWindow root{{0, 0, 800, 600}, true, nullptr, &panel};
+	Layout layout;
+	layout.Register(&root, 800, 600);
+	layout.Register(&panel, 800, 600);
+	layout.Apply(&root, false, 800, 600, 1600, 900, layout_source);
+	BOOST_TEST(root.bounds.width == 1600);
+	BOOST_TEST(panel.bounds.width == 900);
+	BOOST_TEST(panel.bounds.height == 600);
+	BOOST_TEST(button.bounds.width == 120);
+	BOOST_TEST(button.bounds.height == 45);
+	BOOST_TEST(layout.Scale(&panel, 1600, 900) == 1.5);
+	layout.Apply(&root, false, 1600, 900, 800, 600, layout_source);
+	BOOST_TEST(panel.bounds.x == 100);
+	BOOST_TEST(button.bounds.x == 10);
+}
+
+BOOST_AUTO_TEST_CASE(wnd_widescreen_hud_keeps_its_bottom_anchor_and_artwork_transform)
+{
+	LayoutWindow hud{{0, 488, 1280, 232}, true};
+	Layout layout;
+	layout.Register(&hud, 3840, 2160);
+	layout.Apply(&hud, false, 1280, 720, 800, 600, layout_source);
+	BOOST_TEST(hud.bounds.y == 455);
+	BOOST_TEST(hud.bounds.height == 145);
+	const auto artwork = Fit_Viewport(3840, 2160, 800, 600, LayoutAnchor::Center, LayoutAnchor::End);
+	BOOST_TEST(artwork.x == 0.0);
+	BOOST_TEST(artwork.y == 150.0);
+	BOOST_TEST(1464 * artwork.scale + artwork.y == 455.0);
+	int x = 0, y = 0;
+	BOOST_REQUIRE(layout.Default_Position(&hud, 800, 600, x, y));
+	BOOST_TEST(y == 455);
+}
+
+BOOST_AUTO_TEST_CASE(wnd_explicit_anchor_keeps_menu_margin_through_resize)
+{
+	LayoutWindow button{{540, 108, 208, 30}, true};
+	LayoutWindow root{{0, 0, 800, 600}, false, nullptr, &button};
+	Layout layout;
+	BOOST_REQUIRE(layout.Register(&root, 800, 600, " RIGHT TOP "));
+	BOOST_REQUIRE(layout.Register(&button, 800, 600));
+	layout.Apply(&root, false, 800, 600, 800, 600, layout_source);
+	BOOST_TEST(root.bounds.x == 0);
+	BOOST_TEST(button.bounds.x == 540);
+	layout.Apply(&root, false, 800, 600, 1920, 1080, layout_source);
+	BOOST_TEST(root.bounds.x == 480);
+	BOOST_TEST(root.bounds.width == 1440);
+	BOOST_TEST(button.bounds.x == 972);
+	BOOST_TEST(button.bounds.width == 374);
+	BOOST_TEST(1920 - root.bounds.x - button.bounds.x - button.bounds.width == 94);
+	int x = -1, y = -1;
+	BOOST_REQUIRE(layout.Default_Position(&root, 1920, 1080, x, y));
+	BOOST_TEST(x == 480);
+	BOOST_TEST(y == 0);
+	layout.Apply(&root, false, 1920, 1080, 3440, 1440, layout_source);
+	BOOST_TEST(root.bounds.x == 1520);
+	BOOST_TEST(3440 - root.bounds.x - button.bounds.x - button.bounds.width == 125);
+	layout.Apply(&root, false, 3440, 1440, 800, 600, layout_source);
+	BOOST_TEST(root.bounds.x == 0);
+	BOOST_TEST(root.bounds.width == 800);
+	BOOST_TEST(button.bounds.x == 540);
+	BOOST_TEST(button.bounds.width == 208);
+	BOOST_TEST(!layout.Register(&root, 800, 600, "RIGHT"));
+	BOOST_TEST(!layout.Register(&root, 800, 600, "RIGHT SIDE"));
+	BOOST_TEST(!layout.Register(&root, 800, 600, "RIGHT TOP EXTRA"));
+}
+
+BOOST_AUTO_TEST_CASE(wnd_slider_cells_and_thumb_follow_the_panel_scale)
+{
+	HorizontalSliderImageVisual visual;
+	Layout_Horizontal_Slider_Images(visual, {0, 0, 240, 24}, 10, 1.5f, 0, 100, 50);
+	BOOST_TEST(visual.box_width == 15);
+	BOOST_TEST(visual.box_padding == 3);
+	BOOST_TEST(visual.box_count == 13);
+	const auto thumb = Layout_Slider_Thumb(240, 24, 1.5f, 13, 10, 0, 100, 50);
+	BOOST_TEST(thumb.bounds.width == 20);
+	BOOST_TEST(thumb.bounds.height == 24);
+	BOOST_TEST(thumb.bounds.x == 110);
+	BOOST_TEST(thumb.bounds.y == 15);
+	const auto combo = Layout_Combo_Box_Children(216, 36, 1.5f);
+	BOOST_TEST(combo.button.width == 32);
+	BOOST_TEST(combo.entry.width == 184);
+	BOOST_TEST(combo.entry.height == 36);
+}
+
+BOOST_AUTO_TEST_CASE(wnd_resize_keeps_the_child_geometry_computed_by_its_gadget)
+{
+	LayoutWindow entry{{0, 0, 123, 24}};
+	LayoutWindow combo{{100, 100, 144, 24}, true, nullptr, &entry};
+	LayoutWindow root{{0, 0, 800, 600}, true, nullptr, &combo};
+	LayoutSource source = layout_source;
+	source.context = &entry;
+	source.managed_by_parent = [](void *context, void *window) noexcept { return context == window; };
+	source.apply = [](void *, void *pointer, LayoutBounds bounds) noexcept {
+		auto &window = *static_cast<LayoutWindow *>(pointer);
+		window.bounds = bounds;
+		++window.applications;
+		if (window.preserve && window.child)
+			window.child->bounds = {0, 0, bounds.width - 32, bounds.height};
+	};
+	Layout layout;
+	layout.Register(&root, 800, 600);
+	layout.Register(&combo, 800, 600);
+	layout.Apply(&root, false, 800, 600, 1600, 900, source);
+	BOOST_TEST(entry.bounds.width == 184);
+	BOOST_TEST(entry.bounds.height == 36);
+	BOOST_TEST(entry.applications == 0);
+}
 
 namespace
 {

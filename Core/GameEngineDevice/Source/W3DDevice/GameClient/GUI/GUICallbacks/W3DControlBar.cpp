@@ -139,9 +139,10 @@ Bool Add_Control_Bar_Scheme_Layer(
 		TheControlBar->getForegroundMarkerPos(&base_position.x, &base_position.y);
 	else
 		TheControlBar->getBackgroundMarkerPos(&base_position.x, &base_position.y);
-	const ICoord2D offset{
-		marker_position.x - base_position.x,
-		marker_position.y - base_position.y};
+	const Coord2D screen_offset = manager->getScreenOffset();
+	const Coord2D offset{
+		marker_position.x - base_position.x + screen_offset.x,
+		marker_position.y - base_position.y + screen_offset.y};
 	const Coord2D multiplier = manager->getMultiplier();
 	const Int first_layer = foreground ? CONTROL_BAR_SCHEME_FOREGROUND_IMAGE_LAYERS - 1
 		: MAX_CONTROL_BAR_SCHEME_IMAGE_LAYERS - 1;

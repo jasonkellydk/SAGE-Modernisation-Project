@@ -77,10 +77,15 @@ Bool W3DFontLibrary::loadFontData( GameFont *font )
 	if (cache == nullptr)
 		return FALSE;
 
+	// The authored menu face uses Arial with a constrained average character
+	// width, matching the original font request at 96 DPI.
+	const bool condensed = font->nameString == "Generals";
+	const std::uint32_t pixelHeight = static_cast<std::uint32_t>(font->pointSize) * 96u / 72u;
 	const Assets::FontAssetHandle handle = cache->Request_Font(
-		font->nameString.str(),
+		condensed ? "Arial" : font->nameString.str(),
 		static_cast<std::uint32_t>(font->pointSize),
-		font->bold != FALSE);
+		font->bold != FALSE,
+		condensed ? pixelHeight * 2u / 5u : 0u);
 	if (!handle.Is_Valid())
 		return FALSE;
 	cache->Wait(handle);

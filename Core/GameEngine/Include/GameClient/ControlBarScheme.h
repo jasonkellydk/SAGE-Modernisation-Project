@@ -245,7 +245,8 @@ class ControlBarSchemeManager
 {
 public:
 	ControlBarScheme *getCurrentScheme() const { return m_currentScheme; }
-	Coord2D getMultiplier() const { return m_multiplier; }
+	Coord2D getMultiplier() const;
+	Coord2D getScreenOffset() const;
 
 	ControlBarSchemeManager();
 	~ControlBarSchemeManager();
@@ -271,7 +272,6 @@ public:
 
 private:
 	ControlBarScheme *m_currentScheme;													///< the current scheme that everythign uses
-	Coord2D m_multiplier;
 
 	typedef std::list< ControlBarScheme* > ControlBarSchemeList;			///< list of control bar schemes
 	ControlBarSchemeList m_schemeList;

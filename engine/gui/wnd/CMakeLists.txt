@@ -9,6 +9,7 @@ target_sources(generals_ui_wnd
         BASE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}"
         FILES
             WNDRenderer.cppm
+            WNDLayout.cppm
 )
 
 target_compile_features(generals_ui_wnd PUBLIC cxx_std_20)

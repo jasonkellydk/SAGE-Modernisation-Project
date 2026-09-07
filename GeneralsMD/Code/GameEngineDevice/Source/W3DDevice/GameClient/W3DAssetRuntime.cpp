@@ -80,7 +80,8 @@ std::vector<std::byte> Read_Font_Source(const Assets::AssetIdentity &identity)
 
 	const std::string family = identity.canonical_name.substr(
 		prefix.size(), family_end - prefix.size());
-	const bool bold = identity.canonical_name.substr(size_end + 1) == "1";
+	const std::size_t width_start = identity.canonical_name.find('/', size_end + 1);
+	const bool bold = identity.canonical_name.substr(size_end + 1, width_start - size_end - 1) == "1";
 	const std::string weight_suffix = bold ? " Bold" : "";
 	const std::string language_directory = std::string("Data/") + GetRegistryLanguage().str() + "/Language/";
 	const std::array<std::string, 8> candidates = {

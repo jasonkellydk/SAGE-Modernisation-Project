@@ -1302,6 +1302,29 @@ export struct HorizontalSliderImageVisual final
 	bool highlighted = false;
 };
 
+export void Layout_Horizontal_Slider_Images(HorizontalSliderImageVisual &visual,
+	Graphics::Rect2D rectangle, float image_width, float scale,
+	int minimum, int maximum, int position) noexcept
+{
+	visual.box_width = (std::max)(1.0f, image_width * scale);
+	visual.box_padding = (std::max)(1.0f, 2.0f * scale);
+	visual.box_count = 0;
+	visual.selected_box_count = 0;
+	const float selected = maximum != minimum ? float(position - minimum) / (maximum - minimum) : 0;
+	const float selected_end = rectangle.left + selected * (rectangle.right - rectangle.left);
+	float start = rectangle.left;
+	float end = start + visual.box_width;
+	while (end < rectangle.right) {
+		if (start <= selected_end && position != minimum)
+			++visual.selected_box_count;
+		++visual.box_count;
+		start = end + visual.box_padding;
+		end = start + visual.box_width;
+	}
+	const float covered = end - visual.box_width - rectangle.left;
+	visual.origin = {rectangle.left + (rectangle.right - rectangle.left - covered) * 0.5f, rectangle.top};
+}
+
 export bool Add_Horizontal_Slider_Image_Visual(
 	DrawList &draw_list,
 	const HorizontalSliderImageVisual &visual) noexcept

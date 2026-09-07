@@ -44,6 +44,7 @@ struct FontRequest final
 	std::string family;
 	std::uint32_t point_size = 0;
 	bool bold = false;
+	std::uint32_t average_width = 0;
 };
 
 bool Parse_Request(std::string_view name, FontRequest &request)
@@ -60,7 +61,11 @@ bool Parse_Request(std::string_view name, FontRequest &request)
 	try {
 		request.point_size = static_cast<std::uint32_t>(std::stoul(
 			std::string(name.substr(family_end + 1, size_end - family_end - 1))));
-		request.bold = name.substr(size_end + 1) == "1";
+		const std::size_t width_start = name.find('/', size_end + 1);
+		request.bold = name.substr(size_end + 1, width_start - size_end - 1) == "1";
+		if (width_start != std::string_view::npos)
+			request.average_width = static_cast<std::uint32_t>(std::stoul(
+				std::string(name.substr(width_start + 1))));
 	}
 	catch (...) {
 		return false;
@@ -87,14 +92,26 @@ std::shared_ptr<const FontAsset> Decode(
 		return {};
 
 	const std::int32_t pixel_height = std::max<std::int32_t>(
-		1, Round_Int(static_cast<float>(request.point_size) * 96.0f / 72.0f));
-	const float scale = stbtt_ScaleForPixelHeight(&font, static_cast<float>(pixel_height));
+		1, static_cast<std::int32_t>(request.point_size * 96ull / 72ull));
+	// Point sizes specify the em square, not the ascent/descent bounding box.
+	const float scale = stbtt_ScaleForMappingEmToPixels(&font, static_cast<float>(pixel_height));
+	float horizontal_scale = scale;
+	if (request.average_width != 0) {
+		// stb's table reader is local to this decoder's implementation unit.
+		const auto metrics_table = stbtt__find_table(font.data, font.fontstart, "OS/2");
+		if (metrics_table == 0 || metrics_table + 4 > source.size())
+			return {};
+		const int average_width = ttSHORT(font.data + metrics_table + 2);
+		if (average_width <= 0)
+			return {};
+		horizontal_scale = static_cast<float>(request.average_width) / average_width;
+	}
 	int ascent = 0;
 	int descent = 0;
 	int line_gap = 0;
 	stbtt_GetFontVMetrics(&font, &ascent, &descent, &line_gap);
 	const std::uint32_t height = static_cast<std::uint32_t>(std::max<std::int32_t>(
-		1, Round_Int((ascent - descent + line_gap) * scale)));
+		1, Round_Int(ascent * scale) - Round_Int(descent * scale)));
 	const std::int32_t overlap = std::clamp(pixel_height / 8, 0, 4);
 
 	std::vector<FontGlyphAsset> glyphs;
@@ -112,12 +129,12 @@ std::shared_ptr<const FontAsset> Decode(
 		int x_offset = 0;
 		int y_offset = 0;
 		unsigned char *bitmap = stbtt_GetCodepointBitmap(
-			&font, scale, scale, character, &width, &bitmap_height, &x_offset, &y_offset);
+			&font, horizontal_scale, scale, character, &width, &bitmap_height, &x_offset, &y_offset);
 		FontGlyphAsset glyph;
 		glyph.character = static_cast<std::uint16_t>(value);
 		glyph.width = static_cast<std::uint16_t>(std::clamp(width, 0, 0xffff));
 		glyph.spacing = static_cast<std::int16_t>(std::clamp(
-			Round_Int(advance * scale), -32768, 32767));
+			Round_Int(advance * horizontal_scale), -32768, 32767));
 		if (width > 0 && bitmap != nullptr) {
 			glyph.alpha.assign(static_cast<std::size_t>(width) * height, 0);
 			const int baseline = Round_Int(ascent * scale);

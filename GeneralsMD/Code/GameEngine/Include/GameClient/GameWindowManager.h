@@ -224,6 +224,10 @@ public:
 	/// This keeps window state and callbacks alive while updating layout geometry.
 	virtual void winScaleToResolution( UnsignedInt oldWidth, UnsignedInt oldHeight,
 		UnsignedInt newWidth, UnsignedInt newHeight );
+	Bool winRegisterScriptGeometry(GameWindow *window, Int authoredWidth, Int authoredHeight, const char *anchors);
+	void winArrangeScript(GameWindow *window);
+	Bool winGetAuthoredPosition(GameWindow *window, Int *x, Int *y);
+	Real winGetLayoutScale(GameWindow *window) const;
 
 	/// hide all windows in a certain range of id's (inclusive );
 	virtual void hideWindowsInRange( GameWindow *baseWindow, Int first, Int last,

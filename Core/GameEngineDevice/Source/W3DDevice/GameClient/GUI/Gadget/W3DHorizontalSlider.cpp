@@ -6,6 +6,7 @@
 #include "Precompiled/PreRTS.h"
 
 #include "GameClient/GadgetSlider.h"
+#include "GameClient/GameWindowManager.h"
 #include "GameClient/GameWindowGlobal.h"
 #include "W3DDevice/GameClient/W3DGadget.h"
 #include "W3DDevice/GameClient/W3DDisplay.h"
@@ -92,40 +93,14 @@ Engine::UI::WND::HorizontalSliderImageVisual Build_Image_Visual(
 	SliderData *slider = static_cast<SliderData *>(window->winGetUserData());
 	if (slider == nullptr)
 		return visual;
-	const Real scale = INT_TO_REAL(TheDisplay->getWidth()) / DEFAULT_DISPLAY_WIDTH;
-	const Int box_width = static_cast<Int>(fill->getImageWidth() * scale);
-	if (box_width <= 0)
-		return visual;
-
-	Int box_count = 0;
-	Int selected_box_count = 0;
-	Int start = origin.x;
-	Int end = start + box_width;
-	const Int range = slider->maxVal - slider->minVal;
-	const Real selected_percent = range != 0
-		? (slider->position - slider->minVal) / INT_TO_REAL(range)
-		: 0.0f;
-	const Int selected_end = origin.x + REAL_TO_INT(selected_percent * size.x);
-	while (end < origin.x + size.x) {
-		if (start <= selected_end && end < origin.x + size.x
-			&& slider->position != slider->minVal)
-			++selected_box_count;
-		start = end + 2;
-		end = start + box_width;
-		++box_count;
-	}
-
-	const Int distance_covered = end - box_width - origin.x;
-	const Int blankness = size.x - distance_covered;
 	visual.highlighted_image = To_WND_Image(highlight);
 	visual.selected_image = To_WND_Image(fill);
 	visual.unselected_image = To_WND_Image(blank);
-	visual.origin = {
-		static_cast<float>(origin.x + blankness / 2),
-		static_cast<float>(origin.y)};
-	visual.box_width = static_cast<float>(box_width);
-	visual.box_count = box_count;
-	visual.selected_box_count = selected_box_count;
+	Engine::UI::WND::Layout_Horizontal_Slider_Images(visual,
+		{static_cast<float>(origin.x), static_cast<float>(origin.y),
+			static_cast<float>(origin.x + size.x), static_cast<float>(origin.y + size.y)},
+		static_cast<float>(fill->getImageWidth()), TheWindowManager->winGetLayoutScale(window),
+		slider->minVal, slider->maxVal, slider->position);
 	visual.highlighted = BitIsSet(instance_data->getState(), WIN_STATE_HILITED);
 	return visual;
 }
