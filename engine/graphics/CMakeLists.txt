@@ -33,8 +33,17 @@ target_sources(generals_graphics
             resources/textures/TextureStorage.cppm
             resources/textures/TextureQuality.cppm
             materials/TextureCoordinates.cppm
+            materials/TextureProjection.cppm
+            materials/TextureMapping.cppm
+            materials/MeshMaterial.cppm
+            materials/W3DMeshMaterial.cppm
             scene/views/CameraMatrices.cppm
             scene/SceneDrawParameters.cppm
+            materials/MaterialState.cppm
+            materials/MaterialOrdering.cppm
+            materials/W3DMaterialState.cppm
+            materials/ProceduralPass.cppm
+            scene/props/PropDrawState.cppm
             materials/Fog.cppm
             resources/samplers/Sampler.cppm
             resources/materials/Material.cppm
@@ -61,6 +70,7 @@ target_sources(generals_graphics
             scene/props/PropLighting.cppm
             scene/props/PropGeometry.cppm
             scene/props/PropExtraction.cppm
+            scene/muzzle_flash/MuzzleFlash.cppm
             scene/props/PropMaterial.cppm
             scene/props/PropSurface.cppm
             scene/props/PropAssetGeometry.cppm
@@ -117,6 +127,7 @@ target_sources(generals_graphics
             scene/ring/AuthoredRingRenderer.cppm
             scene/sphere/Sphere.cppm
             scene/beams/Beam.cppm
+            scene/beams/Laser.cppm
             scene/models/ModelVisibility.cppm
             scene/models/Skeleton.cppm
             scene/models/ModelInstance.cppm
@@ -137,7 +148,11 @@ target_sources(generals_graphics
             scene/lod/LOD.cppm
             scene/models/ModelFactoryStore.cppm
             scene/models/VertexChannels.cppm
+            scene/models/SourceRevision.cppm
             scene/models/MaterialSlots.cppm
+            scene/models/ModelMaterials.cppm
+            scene/models/MeshMaterialBindings.cppm
+            scene/models/MeshMaterialPreparation.cppm
             scene/models/ModelBoundsTree.cppm
             scene/models/ModelFactory.cppm
             scene/gpu/GPUScene.cppm
@@ -166,6 +181,9 @@ target_sources(generals_graphics
             passes/decal/DecalPass.cppm
             passes/particles/ParticlePass.cppm
             passes/post-process/PostProcess.cppm
+            passes/post-process/Bloom.cppm
+            passes/post-process/SSAO.cppm
+            passes/post-process/LightRays.cppm
             passes/sky/SkyPass.cppm
             passes/video/VideoPass.cppm
             video/VideoRenderer.cppm
@@ -203,6 +221,10 @@ if(WIN32)
 		set(GRAPHICS_SCREEN_DISTORTION_FRAGMENT_SHADER "${GRAPHICS_SHADER_ASSET_DIRECTORY}/screen_distortion.pso")
 		set(GRAPHICS_BEAM_VERTEX_SHADER "${GRAPHICS_SHADER_ASSET_DIRECTORY}/beam.vso")
 		set(GRAPHICS_BEAM_FRAGMENT_SHADER "${GRAPHICS_SHADER_ASSET_DIRECTORY}/beam.pso")
+		set(GRAPHICS_LASER_CORE_VERTEX_SHADER "${GRAPHICS_SHADER_ASSET_DIRECTORY}/laser_core.vso")
+		set(GRAPHICS_LASER_CORE_FRAGMENT_SHADER "${GRAPHICS_SHADER_ASSET_DIRECTORY}/laser_core.pso")
+		set(GRAPHICS_LASER_DISTORTION_VERTEX_SHADER "${GRAPHICS_SHADER_ASSET_DIRECTORY}/laser_distortion.vso")
+		set(GRAPHICS_LASER_DISTORTION_FRAGMENT_SHADER "${GRAPHICS_SHADER_ASSET_DIRECTORY}/laser_distortion.pso")
 		set(GRAPHICS_VIDEO_VERTEX_SHADER "${GRAPHICS_SHADER_ASSET_DIRECTORY}/video.vso")
 		set(GRAPHICS_VIDEO_FRAGMENT_SHADER "${GRAPHICS_SHADER_ASSET_DIRECTORY}/video.pso")
 		set(GRAPHICS_RING_VERTEX_SHADER "${GRAPHICS_SHADER_ASSET_DIRECTORY}/ring.vso")
@@ -230,6 +252,10 @@ if(WIN32)
 				"${GRAPHICS_SCREEN_DISTORTION_FRAGMENT_SHADER}"
 				"${GRAPHICS_BEAM_VERTEX_SHADER}"
 				"${GRAPHICS_BEAM_FRAGMENT_SHADER}"
+				"${GRAPHICS_LASER_CORE_VERTEX_SHADER}"
+				"${GRAPHICS_LASER_CORE_FRAGMENT_SHADER}"
+				"${GRAPHICS_LASER_DISTORTION_VERTEX_SHADER}"
+				"${GRAPHICS_LASER_DISTORTION_FRAGMENT_SHADER}"
 				"${GRAPHICS_VIDEO_VERTEX_SHADER}"
 				"${GRAPHICS_VIDEO_FRAGMENT_SHADER}"
 				"${GRAPHICS_RING_VERTEX_SHADER}"
@@ -319,6 +345,38 @@ if(WIN32)
 				-matrix-layout-row-major
 				-o "${GRAPHICS_BEAM_FRAGMENT_SHADER}"
 				"${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/beam.slang"
+			COMMAND $<TARGET_FILE:slang-bootstrap>
+				-target dxbc
+				-profile sm_5_0
+				-entry laser_core_vertex
+				-stage vertex
+				-matrix-layout-row-major
+				-o "${GRAPHICS_LASER_CORE_VERTEX_SHADER}"
+				"${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/laser.slang"
+			COMMAND $<TARGET_FILE:slang-bootstrap>
+				-target dxbc
+				-profile sm_5_0
+				-entry laser_core_pixel
+				-stage pixel
+				-matrix-layout-row-major
+				-o "${GRAPHICS_LASER_CORE_FRAGMENT_SHADER}"
+				"${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/laser.slang"
+			COMMAND $<TARGET_FILE:slang-bootstrap>
+				-target dxbc
+				-profile sm_5_0
+				-entry laser_distortion_vertex
+				-stage vertex
+				-matrix-layout-row-major
+				-o "${GRAPHICS_LASER_DISTORTION_VERTEX_SHADER}"
+				"${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/laser.slang"
+			COMMAND $<TARGET_FILE:slang-bootstrap>
+				-target dxbc
+				-profile sm_5_0
+				-entry laser_distortion_pixel
+				-stage pixel
+				-matrix-layout-row-major
+				-o "${GRAPHICS_LASER_DISTORTION_FRAGMENT_SHADER}"
+				"${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/laser.slang"
 			COMMAND $<TARGET_FILE:slang-bootstrap>
 				-target dxbc
 				-profile sm_5_0
@@ -424,6 +482,7 @@ if(WIN32)
 				"${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/particle_billboard.slang"
 				"${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/screen_distortion.slang"
 				"${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/beam.slang"
+				"${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/laser.slang"
 				"${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/video.slang"
 				"${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/ring.slang"
 				"${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/fullscreen_overlay.slang"
@@ -446,6 +505,10 @@ if(WIN32)
 				"${GRAPHICS_SCREEN_DISTORTION_FRAGMENT_SHADER}"
 				"${GRAPHICS_BEAM_VERTEX_SHADER}"
 				"${GRAPHICS_BEAM_FRAGMENT_SHADER}"
+				"${GRAPHICS_LASER_CORE_VERTEX_SHADER}"
+				"${GRAPHICS_LASER_CORE_FRAGMENT_SHADER}"
+				"${GRAPHICS_LASER_DISTORTION_VERTEX_SHADER}"
+				"${GRAPHICS_LASER_DISTORTION_FRAGMENT_SHADER}"
 				"${GRAPHICS_VIDEO_VERTEX_SHADER}"
 				"${GRAPHICS_VIDEO_FRAGMENT_SHADER}"
 				"${GRAPHICS_RING_VERTEX_SHADER}"
@@ -475,6 +538,7 @@ if(WIN32)
                 backends/dx11/DX11FrameRuntime.cppm
     )
 
+    target_sources(generals_graphics PRIVATE backends/dx11/DX11GPUProfiling.cpp)
     target_link_libraries(generals_graphics PRIVATE d3d11)
     set_property(TARGET generals_graphics PROPERTY GRAPHICS_SHADER_ASSET_DIRECTORY "${GRAPHICS_SHADER_ASSET_DIRECTORY}")
 endif()
@@ -503,6 +567,15 @@ if(RTS_BUILD_GRAPHICS_TESTS)
         add_test(NAME ${test_name} COMMAND ${test_name})
     endfunction()
 
+    add_graphics_test(generals_graphics_procedural_pass_test materials/ProceduralPass.test.cppm)
+    if(WIN32)
+        add_graphics_test(generals_graphics_texture_mapping_test materials/TextureMapping.test.cppm)
+        target_compile_definitions(generals_graphics_texture_mapping_test PRIVATE
+            GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
+        add_graphics_test(generals_graphics_material_state_test materials/MaterialState.test.cppm)
+        target_compile_definitions(generals_graphics_material_state_test PRIVATE
+            GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
+    endif()
     add_graphics_test(generals_graphics_cursor_test cursors/Cursor.test.cppm)
     add_graphics_test(generals_graphics_display_modes_test presentation/DisplayModes.test.cppm)
     target_link_libraries(generals_graphics_display_modes_test PRIVATE SDL3::SDL3)
@@ -722,12 +795,37 @@ if(RTS_BUILD_GRAPHICS_TESTS)
             add_dependencies(generals_graphics_renderer2d_drawing_test generals_graphics_shaders)
         endif()
         add_graphics_test(generals_graphics_frame_preview_test capture/FramePreview.test.cppm)
+        add_graphics_test(generals_graphics_bloom_test passes/post-process/Bloom.test.cppm)
+        add_graphics_test(generals_graphics_ssao_test passes/post-process/SSAO.test.cppm)
+        target_compile_definitions(generals_graphics_ssao_test PRIVATE
+            GRAPHICS_SSAO_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
+        if(TARGET generals_graphics_shaders)
+            add_dependencies(generals_graphics_ssao_test generals_graphics_shaders)
+        endif()
+        target_compile_definitions(generals_graphics_bloom_test PRIVATE
+            GRAPHICS_BLOOM_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
+        add_graphics_test(generals_graphics_light_rays_test passes/post-process/LightRays.test.cppm)
+        target_compile_definitions(generals_graphics_light_rays_test PRIVATE
+            GRAPHICS_LIGHT_RAYS_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
         target_compile_definitions(generals_graphics_frame_preview_test PRIVATE
             GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
         if(TARGET generals_graphics_shaders)
             add_dependencies(generals_graphics_frame_preview_test generals_graphics_shaders)
         endif()
         add_graphics_test(generals_graphics_prop_drawing_test scene/props/PropDrawing.test.cppm)
+        add_graphics_test(generals_graphics_model_materials_test scene/models/ModelMaterials.test.cppm)
+        add_graphics_test(generals_graphics_mesh_material_bindings_test scene/models/MeshMaterialBindings.test.cppm)
+        target_compile_definitions(generals_graphics_model_materials_test PRIVATE
+            GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
+        if(TARGET generals_graphics_shaders)
+            add_dependencies(generals_graphics_model_materials_test generals_graphics_shaders)
+        endif()
+        add_graphics_test(generals_graphics_muzzle_flash_test scene/muzzle_flash/MuzzleFlash.test.cppm)
+        target_compile_definitions(generals_graphics_muzzle_flash_test PRIVATE
+            GRAPHICS_MUZZLE_FLASH_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
+        if(TARGET generals_graphics_shaders)
+            add_dependencies(generals_graphics_muzzle_flash_test generals_graphics_shaders)
+        endif()
         add_graphics_test(generals_graphics_prop_surface_test scene/props/PropSurface.test.cppm)
         add_graphics_test(generals_graphics_prop_asset_geometry_test scene/props/PropAssetGeometry.test.cppm)
         add_graphics_test(generals_graphics_prop_skinning_test scene/props/PropSkinning.test.cppm)
@@ -1417,6 +1515,42 @@ if(RTS_BUILD_GRAPHICS_TESTS)
         target_compile_definitions(generals_graphics_dx11_rhi_test PRIVATE
             GRAPHICS_DX11_TEST_SHADER_DIRECTORY="${CMAKE_CURRENT_SOURCE_DIR}/tests/visual_regression/shaders/precompiled/dx11"
         )
+    endif()
+endif()
+
+if(WIN32 AND TARGET slang-bootstrap)
+    add_custom_command(OUTPUT "${GRAPHICS_SHADER_ASSET_DIRECTORY}/ssao.vso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/ssao.pso"
+        COMMAND $<TARGET_FILE:slang-bootstrap> -target dxbc -profile sm_5_0 -entry ssao_vertex -stage vertex -matrix-layout-row-major -o "${GRAPHICS_SHADER_ASSET_DIRECTORY}/ssao.vso" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/ssao.slang"
+        COMMAND $<TARGET_FILE:slang-bootstrap> -target dxbc -profile sm_5_0 -entry ssao_pixel -stage pixel -matrix-layout-row-major -o "${GRAPHICS_SHADER_ASSET_DIRECTORY}/ssao.pso" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/ssao.slang"
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/ssao.slang" slang-bootstrap VERBATIM)
+    add_custom_target(generals_graphics_ssao_shaders DEPENDS "${GRAPHICS_SHADER_ASSET_DIRECTORY}/ssao.vso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/ssao.pso")
+    add_dependencies(generals_graphics generals_graphics_ssao_shaders)
+    if(TARGET generals_graphics_ssao_test)
+        add_dependencies(generals_graphics_ssao_test generals_graphics_ssao_shaders)
+    endif()
+endif()
+
+if(WIN32 AND TARGET slang-bootstrap)
+    add_custom_command(OUTPUT "${GRAPHICS_SHADER_ASSET_DIRECTORY}/light_rays.vso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/light_rays.pso"
+        COMMAND $<TARGET_FILE:slang-bootstrap> -target dxbc -profile sm_5_0 -entry light_rays_vertex -stage vertex -matrix-layout-row-major -o "${GRAPHICS_SHADER_ASSET_DIRECTORY}/light_rays.vso" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/light_rays.slang"
+        COMMAND $<TARGET_FILE:slang-bootstrap> -target dxbc -profile sm_5_0 -entry light_rays_pixel -stage pixel -matrix-layout-row-major -o "${GRAPHICS_SHADER_ASSET_DIRECTORY}/light_rays.pso" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/light_rays.slang"
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/light_rays.slang" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/environment_lighting.slangh" slang-bootstrap VERBATIM)
+    add_custom_target(generals_graphics_light_rays_shaders DEPENDS "${GRAPHICS_SHADER_ASSET_DIRECTORY}/light_rays.vso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/light_rays.pso")
+    add_dependencies(generals_graphics generals_graphics_light_rays_shaders)
+    if(TARGET generals_graphics_light_rays_test)
+        add_dependencies(generals_graphics_light_rays_test generals_graphics_light_rays_shaders)
+    endif()
+endif()
+
+if(WIN32 AND TARGET slang-bootstrap)
+    add_custom_command(OUTPUT "${GRAPHICS_SHADER_ASSET_DIRECTORY}/bloom.vso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/bloom.pso"
+        COMMAND $<TARGET_FILE:slang-bootstrap> -target dxbc -profile sm_5_0 -entry bloom_vertex -stage vertex -matrix-layout-row-major -o "${GRAPHICS_SHADER_ASSET_DIRECTORY}/bloom.vso" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/bloom.slang"
+        COMMAND $<TARGET_FILE:slang-bootstrap> -target dxbc -profile sm_5_0 -entry bloom_pixel -stage pixel -matrix-layout-row-major -o "${GRAPHICS_SHADER_ASSET_DIRECTORY}/bloom.pso" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/bloom.slang"
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/bloom.slang" slang-bootstrap VERBATIM)
+    add_custom_target(generals_graphics_bloom_shaders DEPENDS "${GRAPHICS_SHADER_ASSET_DIRECTORY}/bloom.vso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/bloom.pso")
+    add_dependencies(generals_graphics generals_graphics_bloom_shaders)
+    if(TARGET generals_graphics_bloom_test)
+        add_dependencies(generals_graphics_bloom_test generals_graphics_bloom_shaders)
     endif()
 endif()
 
