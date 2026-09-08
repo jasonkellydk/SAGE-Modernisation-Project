@@ -57,6 +57,8 @@ import Assets.Cache.Animations;
 import Graphics.Scene.Models.Hierarchy;
 
 #include "WWLib/always.h"
+#include "WWLib/ref_ptr.h"
+import Graphics.Scene.Models.Materials;
 #include "WWMath/sphere.h"
 #include "ColType.h"
 #include "WWMath/aabox.h"
@@ -68,7 +70,6 @@ class RenderObjClass;
 
 class	Vector3;
 class Matrix3D;
-class MaterialInfoClass;
 class TextureClass;
 class SceneClass;
 class HCompressedAnimClass;
@@ -81,7 +82,6 @@ class CameraClass;
 class SphereClass;
 class AABoxClass;
 class RenderInfoClass;
-class RenderObjProxyClass;
 class StringClass;
 template<class T> class DynamicVectorClass;
 
@@ -409,7 +409,7 @@ public:
 	///////////////////////////////////////////////////////////////////////////////////////////////////////////////
 	// Render Object Interface - Attributes, Options, Properties, etc
 	///////////////////////////////////////////////////////////////////////////////////////////////////////////////
-	virtual MaterialInfoClass * Get_Material_Info() 													{ return nullptr; }
+	virtual std::shared_ptr<Graphics::ModelMaterials<RefCountPtr<TextureClass>>> Get_Material_Info() 													{ return nullptr; }
 	virtual void					Set_User_Data(void *value, bool recursive = false)					{ User_Data = value; };
 	virtual void *					Get_User_Data()																{ return User_Data; };
 	virtual int						Get_Num_Snap_Points()													{ return 0; }
@@ -529,7 +529,6 @@ protected:
 	RenderHookClass *				RenderHook;
 
 	friend class SceneClass;
-	friend class RenderObjProxyClass;
 };
 
 WWINLINE const SphereClass & RenderObjClass::Get_Bounding_Sphere() const

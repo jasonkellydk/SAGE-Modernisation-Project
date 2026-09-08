@@ -70,7 +70,6 @@
 
 
 #include "RendObj.h"
-#include "StringUtilities.h"
 #include "AssetMgr.h"
 #include "WWMath/pot.h"
 #include "Scene.h"
@@ -78,8 +77,8 @@
 #include "ColTest.h"
 #include "IntTest.h"
 #include "WWDebug/wwdebug.h"
-#include "MatInfo.h"
 import Graphics.Scene.Models.Hierarchy;
+import Assets.Identity;
 #include "Camera.h"
 #include "WW3D.h"
 #include "WWLib/chunkio.h"
@@ -261,41 +260,6 @@ float RenderObjClass::Calculate_Texture_Reduction_Factor(float norm_screensize)
 	// logarithm (which does exist in the stadard libraries).
 	// We precalculare 1/log(2) as 1.442695f.
 	return  log(reduction) * 1.442695f;
-}
-*/
-
-/***********************************************************************************************
- * RenderObjClass::Set_Texture_Reduction_Factor -- set texture reduction factor.               *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *  04/08/99    NH : Created.                                                                  *
- *=============================================================================================*/
-/*
-void RenderObjClass::Set_Texture_Reduction_Factor(float trf)
-{
-	WWASSERT(0);	// Texture reduction system is broken! Don't call!
-	MaterialInfoClass *minfo = Get_Material_Info();
-	if (minfo) {
-		minfo->Set_Texture_Reduction_Factor(trf);
-		minfo->Release_Ref();
-	} else {
-		int num_obj = Get_Num_Sub_Objects();
-		RenderObjClass *sub_obj;
-
-		for (int i = 0; i < num_obj; i++) {
-			sub_obj = Get_Sub_Object(i);
-			if (sub_obj) {
-				sub_obj->Set_Texture_Reduction_Factor(trf);
-				sub_obj->Release_Ref();
-			}
-		}
-	}
 }
 */
 
@@ -522,7 +486,7 @@ RenderObjClass * RenderObjClass::Get_Sub_Object_By_Name(const char * name, int *
 	for (i=0; i<Get_Num_Sub_Objects(); i++) {
 		RenderObjClass * robj = Get_Sub_Object(i);
 		if (robj) {
-			if (WW3DString::Compare_No_Case(robj->Get_Name(),name) == 0) {
+			if (Assets::Asset_Name_Equals_No_Case(robj->Get_Name(),name)) {
 				if (index) *index=i;
 				return robj;
 			} else {
@@ -543,7 +507,7 @@ RenderObjClass * RenderObjClass::Get_Sub_Object_By_Name(const char * name, int *
 				subobjname = subobjname+1;
 			}
 
-			if (WW3DString::Compare_No_Case(subobjname,name) == 0) {
+			if (Assets::Asset_Name_Equals_No_Case(subobjname,name)) {
 				if (index) *index=i;
 				return robj;
 			} else {
@@ -1052,7 +1016,7 @@ void RenderObjClass::Add_Dependencies_To_List
 		const Graphics::ModelHierarchy *phtree = Get_Model_Hierarchy ();
 		if (phtree != nullptr) {
 			const char *htree_name = phtree->Name ();
-			if (WW3DString::Compare_No_Case (htree_name, model_name) != 0) {
+			if (!Assets::Asset_Name_Equals_No_Case (htree_name, model_name)) {
 
 				//
 				// Add this file to the list

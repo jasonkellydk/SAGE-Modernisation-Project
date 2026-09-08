@@ -58,12 +58,11 @@ import Graphics.Scene.Surfaces.Renderer;
 #include "WW3D2/RendObj.h"
 #include "WW3D2/W3DFile.h"
 #include "WW3D2/Texture.h"
-#include "WW3D2/VertMaterial.h"
 #include "Lib/BaseType.h"
 #include "Common/GameType.h"
 #include "Common/AsciiString.h"
 #include "Common/GlobalData.h"
-#include "WW3D2/VertexFormat.h"
+import Graphics.Scene.Trees.Geometry;
 
 //-----------------------------------------------------------------------------
 //           Forward References
@@ -220,7 +219,7 @@ private:
 				MAX_BUFFERS = 1,
 				SORT_ITERATIONS_PER_FRAME=10};
 	enum {PARTITION_WIDTH_HEIGHT = 100};
-    std::vector<VertexFormatXYZNDUV1> m_vertexTree[MAX_BUFFERS];
+    std::vector<Graphics::TreeVertex> m_vertexTree[MAX_BUFFERS];
     std::vector<UnsignedShort> m_indexTree[MAX_BUFFERS];
     Graphics::TreeMeshHandle m_graphicsMeshes[MAX_BUFFERS];
     bool m_graphicsGeometryDirty = true;

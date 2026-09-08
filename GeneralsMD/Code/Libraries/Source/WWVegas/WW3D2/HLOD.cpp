@@ -98,8 +98,6 @@
  *   HLodClass::Update_Sub_Object_Transforms -- updates transforms of all sub-objects          *
  *   HLodClass::Update_Obj_Space_Bounding_Volumes -- update object-space bounding volumes      *
  *   HLodClass::Add_Lod_Model -- adds a model to one of the lods                               *
- *   HLodClass::Get_Proxy_Count -- Returns the number of proxy objects                         *
- *   HLodClass::Get_Proxy -- returns the information for the i'th proxy                        *
  * HLodClass::Set_Hidden -- Propagates the hidden bit to particle emitters.                    *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
@@ -1222,69 +1220,6 @@ void HLodClass::Include_NULL_Lod(bool include)
 
 	// Ensure lod is no less than minimum allowed
 	if (CurLod < minlod) Set_LOD_Level(minlod);
-}
-
-
-/***********************************************************************************************
- * HLodClass::Get_Proxy_Count -- Returns the number of proxy records                           *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   10/27/2000 gth : Created.                                                                 *
- *=============================================================================================*/
-int HLodClass::Get_Proxy_Count() const
-{
-	if (!Proxies.empty()) {
-		return static_cast<int>(Proxies.size());
-	} else {
-		return 0;
-	}
-}
-
-
-/***********************************************************************************************
- * HLodClass::Get_Proxy -- returns the information for the i'th proxy                          *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   10/27/2000 gth : Created.                                                                 *
- *=============================================================================================*/
-bool HLodClass::Get_Proxy (int index, ProxyClass &proxy) const
-{
-	bool retval = false;
-
-	if (index>=0 && static_cast<std::size_t>(index)<Proxies.size()) {
-
-		//
-		//	Lookup the proxy's transform
-		//
-		Hierarchy->Evaluate_Rest(Graphics::Import_Affine_Transform(Get_Transform()));
-		Matrix3D transform = Graphics::Export_Affine_Transform<Matrix3D>(Hierarchy->World_Transform(Proxies[index].bone));
-		Set_Hierarchy_Valid(false);
-
-		//
-		//	Pass the data onto the proxy object
-		//
-		proxy.Set_Transform(transform);
-		proxy.Set_Name(Proxies[index].object_name.c_str());
-		retval = true;
-
-	} else {
-		proxy.Set_Name ("");
-		proxy.Set_Transform (Matrix3D (1));
-	}
-
-	return retval;
 }
 
 

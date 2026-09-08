@@ -1,4 +1,5 @@
 module;
+#include "../../profiling/Tracy.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -56,6 +57,7 @@ public:
 
     void Add(const MaterialLightSource& source)
     {
+        GRAPHICS_PROFILE_SCOPE("Graphics.Lighting.Add");
         // Preserve the authored near-black rejection before intensity scaling.
         if (source.diffuse[0]<0.05f && source.diffuse[1]<0.05f && source.diffuse[2]<0.05f)
             return;

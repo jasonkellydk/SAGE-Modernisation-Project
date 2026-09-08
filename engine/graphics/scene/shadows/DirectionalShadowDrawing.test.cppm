@@ -244,7 +244,17 @@ BOOST_AUTO_TEST_CASE(shared_caster_buffers_match_independent_meshes_with_mixed_c
                     retained.push_back(mesh);
                     BOOST_REQUIRE(shadows.Add_Caster(mesh,material,textures,style));
                 } else if (index%3 == 1) {
-                    const auto mesh = receiver.Create_Mesh(vertices,indices);
+                    // Exercise bounds after both appending to an empty mesh and
+                    // replacing geometry that was outside the cascade volume.
+                    auto initial = vertices;
+                    for (auto& vertex : initial) vertex.position[0] += 2048;
+                    const auto mesh = receiver.Create_Mesh(initial,indices);
+                    if (index%6 == 1) {
+                        BOOST_REQUIRE(receiver.Update_Mesh(mesh,{},{}));
+                        BOOST_REQUIRE(receiver.Append_Mesh(mesh,vertices,indices));
+                    } else {
+                        BOOST_REQUIRE(receiver.Update_Mesh(mesh,vertices,indices));
+                    }
                     BOOST_REQUIRE(shadows.Add_Caster(receiver,mesh,material,textures,style));
                     // The shadow queue retains this exact version independently
                     // of the source owner and shares its GPU buffers.

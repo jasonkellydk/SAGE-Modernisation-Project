@@ -36,6 +36,8 @@ import Graphics.Frame.AttachmentBindings;
 import Graphics.Scene.DrawParameters;
 import Graphics.Scene.Props.Submission;
 #include <stdlib.h>
+#include "rts/profile.h"
+#include "../../../../../../engine/graphics/profiling/Tracy.h"
 #include "W3DDevice/GameClient/W3DObjectGraphics.h"
 import Assets.Math;
 import Graphics.Backends.DX11.FrameRuntime;
@@ -65,13 +67,14 @@ import Graphics.Scene.Shadows.StencilVolumes;
 #include "W3DDevice/GameClient/W3DShroud.h"
 #include "W3DDevice/GameClient/W3DWater.h"
 #include "WW3D2/Camera.h"
+#include "WW3D2/Texture.h"
 #include "WW3D2/GraphicsGeometry.h"
 #include "WW3D2/WW3D.h"
 #include "WW3D2/Light.h"
-#include "WW3D2/MatPass.h"
-#include "WW3D2/Shader.h"
+import Graphics.Materials.MeshMaterial;
+import Graphics.Materials.ProceduralPass;
+import Graphics.Materials.State;
 
-#include "WW3D2/ShdLib.h"
 import Graphics.Diagnostics.Render;
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -85,11 +88,11 @@ extern void DoParticles(RenderInfoClass & rinfo);
 
 // No texturing, no zbuffer reading/writing, primary gradient, no
 // blending, no fogging - mostly for use in solid-colored opaque objects.
-#define SC_PLAYER_COLOR ( SHADE_CNST(ShaderClass::PASS_ALWAYS, ShaderClass::DEPTH_WRITE_DISABLE, ShaderClass::COLOR_WRITE_ENABLE, \
-	ShaderClass::SRCBLEND_ONE, ShaderClass::DSTBLEND_ZERO, ShaderClass::FOG_DISABLE, ShaderClass::GRADIENT_MODULATE, ShaderClass::SECONDARY_GRADIENT_DISABLE, \
-	ShaderClass::TEXTURING_DISABLE, ShaderClass::ALPHATEST_DISABLE, ShaderClass::CULL_MODE_ENABLE, \
-	ShaderClass::DETAILCOLOR_DISABLE, ShaderClass::DETAILALPHA_DISABLE) )
-static ShaderClass PlayerColorShader(SC_PLAYER_COLOR);
+#define SC_PLAYER_COLOR ( Graphics::MaterialState::Make_Bits(Graphics::MaterialState::PASS_ALWAYS, Graphics::MaterialState::DEPTH_WRITE_DISABLE, Graphics::MaterialState::COLOR_WRITE_ENABLE, \
+	Graphics::MaterialState::SRCBLEND_ONE, Graphics::MaterialState::DSTBLEND_ZERO, Graphics::MaterialState::FOG_DISABLE, Graphics::MaterialState::GRADIENT_MODULATE, Graphics::MaterialState::SECONDARY_GRADIENT_DISABLE, \
+	Graphics::MaterialState::TEXTURING_DISABLE, Graphics::MaterialState::ALPHATEST_DISABLE, Graphics::MaterialState::CULL_MODE_ENABLE, \
+	Graphics::MaterialState::DETAILCOLOR_DISABLE, Graphics::MaterialState::DETAILALPHA_DISABLE) )
+static Graphics::MaterialState PlayerColorShader(SC_PLAYER_COLOR);
 
 //=============================================================================
 // RTS3DScene::RTS3DScene
@@ -113,46 +116,35 @@ RTS3DScene::RTS3DScene()
 
 #if ENABLE_CONFIGURABLE_SHROUD
 	if (TheGlobalData->m_shroudOn)
-		m_shroudMaterialPass = NEW_REF(W3DShroudMaterialPassClass,());
+		m_shroudMaterialPass = Create_W3D_Shroud_Material_Pass();
 	else
 		m_shroudMaterialPass = nullptr;
 #else
-	m_shroudMaterialPass = NEW_REF(W3DShroudMaterialPassClass,());
+	m_shroudMaterialPass = Create_W3D_Shroud_Material_Pass();
 #endif
 
-	m_maskMaterialPass = NEW_REF(W3DMaskMaterialPassClass,());
+	m_maskMaterialPass = Create_W3D_Mask_Material_Pass();
 	m_customPassMode = SCENE_PASS_DEFAULT;
 
-	m_heatVisionMaterialPass = NEW_REF(MaterialPassClass,());
-	m_heatVisionOnlyPass = NEW_REF(MaterialPassClass,());
-	VertexMaterialClass *heatVisionMtl = NEW_REF(VertexMaterialClass,());
-	heatVisionMtl->Set_Lighting(true);
-	heatVisionMtl->Set_Ambient(0,0,0);
-	heatVisionMtl->Set_Diffuse(0.02f,0.01f,0.00f);
-	heatVisionMtl->Set_Emissive(0.5f,0.2f,0.0f);
-	m_heatVisionMaterialPass->Set_Material(heatVisionMtl);
-	ShaderClass heatVisionShader=ShaderClass::_PresetAdditiveSolidShader;
-	heatVisionShader.Set_Depth_Compare(ShaderClass::PASS_EQUAL);
-	m_heatVisionMaterialPass->Set_Shader(heatVisionShader);
-	heatVisionMtl->Release_Ref();
-	heatVisionShader.Set_Depth_Compare(ShaderClass::PASS_LEQUAL);
-	heatVisionShader.Set_Depth_Mask(ShaderClass::DEPTH_WRITE_DISABLE);
-	m_heatVisionOnlyPass->Set_Material(heatVisionMtl);
-	m_heatVisionOnlyPass->Set_Shader(heatVisionShader);
+	m_heatVisionMaterialPass = std::make_shared<NativeMaterialPass>();
+	m_heatVisionOnlyPass = std::make_shared<NativeMaterialPass>();
+	auto heatVisionMtl = std::make_shared<Graphics::MeshMaterial>();
+	heatVisionMtl->parameters.lighting = true;
+	heatVisionMtl->parameters.ambient = {0,0,0};
+	heatVisionMtl->parameters.diffuse = {0.02f,0.01f,0.00f};
+	heatVisionMtl->parameters.emissive = {0.5f,0.2f,0.0f};
+	m_heatVisionMaterialPass->material = heatVisionMtl;
+	Graphics::MaterialState heatVisionShader=Graphics::MaterialState::AdditiveSolid();
+	heatVisionShader.Set_Depth_Compare(Graphics::MaterialState::PASS_EQUAL);
+	heatVisionShader.Enable_Fog_For_Blend();
+	m_heatVisionMaterialPass->shader = heatVisionShader;
+	heatVisionShader.Set_Depth_Compare(Graphics::MaterialState::PASS_LEQUAL);
+	heatVisionShader.Set_Depth_Mask(Graphics::MaterialState::DEPTH_WRITE_DISABLE);
+	heatVisionShader.Enable_Fog_For_Blend();
+	m_heatVisionOnlyPass->material = heatVisionMtl;
+	m_heatVisionOnlyPass->shader = heatVisionShader;
 
 
-//	VertexMaterialClass *frenzyMtl = NEW_REF(VertexMaterialClass,());
-//	frenzyMtl->Set_Lighting(TRUE);
-//	frenzyMtl->Set_Ambient(  0, 0, 0 );
-//	frenzyMtl->Set_Diffuse(  1.0f, 0.0f, 0.0f );
-//	frenzyMtl->Set_Emissive( 1.0f, 0.0f, 0.0f );
-//	m_frenzyMaterialPass = NEW_REF(MaterialPassClass,());
-//	m_frenzyMaterialPass->Set_Material(frenzyMtl);
-//	frenzyMtl->Release_Ref();
-//	ShaderClass frenzyShader=ShaderClass::_PresetMultiplicativeShader;
-//	frenzyShader.Set_Depth_Compare(ShaderClass::PASS_EQUAL);
-//	frenzyShader.Set_Depth_Mask(ShaderClass::DEPTH_WRITE_DISABLE);
-//	m_frenzyMaterialPass->Set_Shader(frenzyShader);
 
 
 	//Allocate memory to hold queue of visible render objects that need to be drawn last
@@ -184,21 +176,21 @@ RTS3DScene::RTS3DScene()
 		m_nonOccludersOrOccludees = nullptr;
 
 	//Modify the shader to make occlusion transparent
-	ShaderClass shader = PlayerColorShader;
-	shader.Set_Src_Blend_Func(ShaderClass::SRCBLEND_SRC_ALPHA);
-	shader.Set_Dst_Blend_Func(ShaderClass::DSTBLEND_ONE_MINUS_SRC_ALPHA);
+	Graphics::MaterialState shader = PlayerColorShader;
+	shader.Set_Src_Blend_Func(Graphics::MaterialState::SRCBLEND_SRC_ALPHA);
+	shader.Set_Dst_Blend_Func(Graphics::MaterialState::DSTBLEND_ONE_MINUS_SRC_ALPHA);
 
 #ifdef USE_NON_STENCIL_OCCLUSION
 	for (i=0; i<MAX_PLAYER_COUNT; i++)
 	{
-		m_occludedMaterialPass[i]=NEW_REF(MaterialPassClass,());
-		VertexMaterialClass * vmtl = NEW_REF(VertexMaterialClass,());
-		vmtl->Set_Lighting(true);
-		vmtl->Set_Ambient(0,0,0);	//we're only using emissive so kill all other lights.
-		vmtl->Set_Diffuse(0,0,0);
-		m_occludedMaterialPass[i]->Set_Material(vmtl);
-		m_occludedMaterialPass[i]->Set_Shader(shader);
-		vmtl->Release_Ref();	//material pass is holding the pointer so release ref.
+		m_occludedMaterialPass[i]=std::make_shared<NativeMaterialPass>();
+		auto vmtl = std::make_shared<Graphics::MeshMaterial>();
+		vmtl->parameters.lighting = true;
+		vmtl->parameters.ambient = {0,0,0};	//we're only using emissive so kill all other lights.
+		vmtl->parameters.diffuse = {0,0,0};
+		m_occludedMaterialPass[i]->material = vmtl;
+		shader.Enable_Fog_For_Blend();
+		m_occludedMaterialPass[i]->shader = shader;
 	}
 #else
 	for (i=0; i<MAX_PLAYER_COUNT; i++)
@@ -223,13 +215,13 @@ RTS3DScene::~RTS3DScene()
 
 	REF_PTR_RELEASE(m_scratchLight);
 
-	REF_PTR_RELEASE(m_shroudMaterialPass);
+	m_shroudMaterialPass.reset();
 
-	REF_PTR_RELEASE(m_maskMaterialPass);
+	m_maskMaterialPass.reset();
 
-	REF_PTR_RELEASE(m_heatVisionMaterialPass);
+	m_heatVisionMaterialPass.reset();
 
-	REF_PTR_RELEASE(m_heatVisionOnlyPass);
+	m_heatVisionOnlyPass.reset();
 
 	delete [] m_translucentObjectsBuffer;
 	delete [] m_nonOccludersOrOccludees;
@@ -238,7 +230,7 @@ RTS3DScene::~RTS3DScene()
 
 	for (i=0; i<MAX_PLAYER_COUNT; i++)
 	{
-		REF_PTR_RELEASE(m_occludedMaterialPass[i]);
+		m_occludedMaterialPass[i].reset();
 	}
 }
 
@@ -403,6 +395,7 @@ Bool RTS3DScene::castRay(RayCollisionTestClass & raytest, Bool testAll, Int coll
 //=============================================================================
 void RTS3DScene::Visibility_Check(CameraClass * camera)
 {
+    GRAPHICS_PROFILE_FOCUS_SCOPE("Graphics.Scene.Visibility");
 #ifdef DIRTY_CONDITION_FLAGS
 	StDrawableDirtyStuffLocker lockDirtyStuff;
 #endif
@@ -590,6 +583,7 @@ void RTS3DScene::renderSpecificDrawables(RenderInfoClass &rinfo, Int numDrawable
 //=============================================================================
 void RTS3DScene::renderOneObject(RenderInfoClass &rinfo, RenderObjClass *robj, Int localPlayerIndex)
 {
+    GRAPHICS_PROFILE_FOCUS_SCOPE("Graphics.Scene.RenderObject");
 	Drawable *draw = nullptr;
 	DrawableInfo *drawInfo = nullptr;
 	Bool drawableHidden=FALSE;
@@ -863,15 +857,22 @@ void RTS3DScene::Render_Water_Reflection(CameraClass *camera,
 /**Draw everything that was submitted from this scene*/
 void RTS3DScene::Flush(RenderInfoClass & rinfo)
 {
+    PROFILER_SECTION_NAME("Graphics.Scene.Flush");
 	// TheSuperHackers @bugfix Now always prepares shadows to guarantee correct state before doing any
 	// shadow draw calls. Originally just drawing shadows for trees would not properly prepare shadows.
 	PrepareShadows();
 
 	//don't draw shadows in this mode because they interfere with destination alpha or are invisible (wireframe)
 	if (m_customPassMode == SCENE_PASS_DEFAULT && Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE)
+	{
+		PROFILER_SECTION_NAME("Graphics.Scene.DecalShadows");
 		DoShadows(rinfo, false);	//draw all non-stencil shadows (decals) since they fall under other objects.
+	}
 
-	Graphics::Get_Prop_Submission().Flush_Materials();	//draw all non-translucent objects.
+	{
+		PROFILER_SECTION_NAME("Graphics.Scene.MaterialQueue");
+		Graphics::Get_Prop_Submission().Flush_Materials();	//draw all non-translucent objects.
+	}
 
 
 	//draw all non-translucent objects which were separated because they are hidden and need custom rendering.
@@ -883,27 +884,36 @@ void RTS3DScene::Flush(RenderInfoClass & rinfo)
 #endif
 
 	// (gth) CNC3 Flush the shader meshes
-	SHD_FLUSH;
 
 	// Draw the trees last so they alpha blend onto everything correctly.
 	DoTrees(rinfo);
 
 	//don't draw shadows in this mode because they interfere with destination alpha
 	if (m_customPassMode == SCENE_PASS_DEFAULT && Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE)
+	{
+		PROFILER_SECTION_NAME("Graphics.Scene.StencilShadows");
 		DoShadows(rinfo, true);	//draw all stencil shadows
+	}
 
 	if (TheWaterRenderSystem != nullptr &&
 		m_customPassMode != SCENE_PASS_ALPHA_MASK &&
 		Get_Extra_Pass_Polygon_Mode() != EXTRA_PASS_CLEAR_LINE)
 	{
+		PROFILER_SECTION_NAME("Graphics.Scene.WaterDraw");
 		TheWaterRenderSystem->Capture_Refraction_Texture();
 		TheWaterRenderSystem->Render(rinfo);
 	}
 
-	Graphics::Get_Scene_Draw_Queue().Drain(&rinfo, [] { Graphics::Get_Prop_Submission().Flush_Materials(); });	//draw remaining static-sort submissions
+	{
+		PROFILER_SECTION_NAME("Graphics.Scene.StaticQueue");
+		Graphics::Get_Scene_Draw_Queue().Drain(&rinfo, [] { Graphics::Get_Prop_Submission().Flush_Materials(); });	//draw remaining static-sort submissions
+	}
 
 	if (m_customPassMode == SCENE_PASS_DEFAULT && Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE)
+	{
+		PROFILER_SECTION_NAME("Graphics.Scene.TransparentObjects");
 		flushTranslucentObjects(rinfo);	//draw all translucent meshes which don't need per-polygon sorting.
+	}
 
 	{
 		//USE_PERF_TIMER(translucentRender)
@@ -988,8 +998,8 @@ void RTS3DScene::updatePlayerColorPasses()
 			hsv.Z*=TheGlobalData->m_occludedLuminanceScale;
 			const auto converted = Assets::HSV_To_RGB({hsv.X, hsv.Y, hsv.Z});
                     rgb.Set(converted.x, converted.y, converted.z);
-			VertexMaterialClass *vmat=m_occludedMaterialPass[playerIndex]->Peek_Material();
-			vmat->Set_Emissive(rgb);
+			Graphics::MeshMaterial *vmat=m_occludedMaterialPass[playerIndex]->material.get();
+			vmat->parameters.emissive = {rgb.X,rgb.Y,rgb.Z};
 		}
 	}
 #endif
@@ -1123,6 +1133,7 @@ void RTS3DScene::Render(RenderInfoClass & rinfo)
 //=============================================================================
 void RTS3DScene::Customized_Render( RenderInfoClass &rinfo )
 {
+    PROFILER_SECTION_NAME("Graphics.Scene.Traverse");
 #ifdef DIRTY_CONDITION_FLAGS
 	StDrawableDirtyStuffLocker lockDirtyStuff;
 #endif
@@ -1147,15 +1158,18 @@ void RTS3DScene::Customized_Render( RenderInfoClass &rinfo )
 
 	Graphics::SceneObjectList<RenderObjClass>::Cursor it(&UpdateList);
 	// allow all objects in the update list to do their "every frame" processing
-	for (it.First(); !it.Is_Done(); it.Next()) {
-		RenderObjClass * robj = it.Peek_Obj();
-		if (robj->Class_ID() == RenderObjClass::CLASSID_TILEMAP)
-			terrainObject=robj;	//found terrain object, store for later.
-		if (!WW3D::Is_Reflection_Render_Pass()) {
-			// If we are doing water mirror, we draw with backface culling inverted.  In this case,
-			// we only want to call On_Frame_Update if we aren't drawing water, as otherwise
-			// we get 2 frame updates per frame, and it screws up the particle emitters.
-			it.Peek_Obj()->On_Frame_Update();
+	{
+		PROFILER_SECTION_NAME("Graphics.Scene.FrameUpdates");
+		for (it.First(); !it.Is_Done(); it.Next()) {
+			RenderObjClass * robj = it.Peek_Obj();
+			if (robj->Class_ID() == RenderObjClass::CLASSID_TILEMAP)
+				terrainObject=robj;	//found terrain object, store for later.
+			if (!WW3D::Is_Reflection_Render_Pass()) {
+				// If we are doing water mirror, we draw with backface culling inverted.  In this case,
+				// we only want to call On_Frame_Update if we aren't drawing water, as otherwise
+				// we get 2 frame updates per frame, and it screws up the particle emitters.
+				it.Peek_Obj()->On_Frame_Update();
+			}
 		}
 	}
 
@@ -1190,6 +1204,7 @@ void RTS3DScene::Customized_Render( RenderInfoClass &rinfo )
 	//terrain needs to be rendered first
 	if (terrainObject)	// Don't check visibility - terrain is always visible. jba.
 	{
+		PROFILER_SECTION_NAME("Graphics.Scene.TerrainDraw");
 		robj=terrainObject;
 		rinfo.light_environment = nullptr;		// Terrain is self lit.
 		rinfo.Camera.Set_User_Data(this);	//pass the scene to terrain via user data.
@@ -1410,13 +1425,11 @@ void RTS3DScene::flushOccludedObjectsIntoStencil(RenderInfoClass & rinfo)
 					{
 						// TheSuperHackers @info This only draws the occlusion of translucent objects.
 						Graphics::Get_Prop_Submission().Flush_Materials();	//render all the submitted meshes using current stencil function
-						SHD_FLUSH;
 						//Disable writing to color buffer since translucent objects are rendered at end of frame.
 						draw_parameters.stencil.front.comparison = draw_parameters.stencil.back.comparison = Graphics::RHIComparison::Never;	//never allow frame buffer writes.
 						draw_parameters.stencil.front.fail = draw_parameters.stencil.back.fail = Graphics::RHIStencilOperation::Replace;	//always replace existing stencil value
 						renderOneObject(rinfo, (*renderList), localPlayerIndex);
 						Graphics::Get_Prop_Submission().Flush_Materials();	//render all the submitted meshes using current stencil function
-						SHD_FLUSH;
 						draw_parameters.stencil.front.fail = draw_parameters.stencil.back.fail = Graphics::RHIStencilOperation::Keep;
 						draw_parameters.stencil.front.comparison = draw_parameters.stencil.back.comparison = Graphics::RHIComparison::Always;
 					}
@@ -1863,6 +1876,7 @@ void RTS3DInterfaceScene::Customized_Render( RenderInfoClass &rinfo )
 
 void RTS3DScene::Visibility_Check(CameraClass * camera)
 {
+    GRAPHICS_PROFILE_FOCUS_SCOPE("Graphics.Scene.Visibility");
 #ifdef DIRTY_CONDITION_FLAGS
 	StDrawableDirtyStuffLocker lockDirtyStuff;
 #endif

@@ -1,3 +1,4 @@
+#include <array>
 import Graphics.Frame.AttachmentBindings;
 /*
 **	Command & Conquer Generals Zero Hour(tm)
@@ -76,13 +77,12 @@ import Graphics.Frame.AttachmentBindings;
 
 
 #include "TexProject.h"
-#include "VertMaterial.h"
-#include "Shader.h"
+import Graphics.Materials.MeshMaterial;
+import Graphics.Materials.State;
 #include "Texture.h"
 #include "RendObj.h"
 #include "RInfo.h"
 #include "Camera.h"
-#include "MatPass.h"
 #include "AssetMgr.h"
 #include "WW3D.h"
 
@@ -199,20 +199,19 @@ TexProjectClass::TexProjectClass() :
 	ZNear(1.0f),
 	ZFar(1000.0f)
 {
-	// create a material pass class
-	MaterialPass = NEW_REF(MaterialPassClass,());
-	MaterialPass->Set_Cull_Volume(&WorldBoundingVolume);
+	// create a native material pass record
+	MaterialPass = std::make_shared<TexProjectMaterialPass>();
+	MaterialPass->cull_bounds = &WorldBoundingVolume;
 
 	// create a vertex material
-	VertexMaterialClass * vmtl = NEW_REF(VertexMaterialClass,());
+	auto vmtl = std::make_shared<Graphics::MeshMaterial>();
 	WWASSERT(vmtl != nullptr);
 
 	// Plug our parent's mapper into our vertex material
 	// the mapper for stage1 will be allocated as needed
-	vmtl->Set_Mapper(Mapper);
+	vmtl->mappings[0] = Mapper;
 
-	MaterialPass->Set_Material(vmtl);
-	vmtl->Release_Ref();
+	MaterialPass->material = vmtl;
 	vmtl = nullptr;
 
 	// by default init our material pass to be multiplicative (shadow)
@@ -234,8 +233,8 @@ TexProjectClass::TexProjectClass() :
  *=============================================================================================*/
 TexProjectClass::~TexProjectClass()
 {
-	REF_PTR_RELEASE(Mapper1);
-	REF_PTR_RELEASE(MaterialPass);
+	Mapper1.reset();
+	MaterialPass.reset();
 	REF_PTR_RELEASE(RenderTarget);
 	REF_PTR_RELEASE(DepthStencilTarget);
 }
@@ -545,31 +544,21 @@ void TexProjectClass::Init_Multiplicative()
 	/*
 	** Set up the shader
 	*/
-	static ShaderClass mult_shader(		SHADE_CNST(	ShaderClass::PASS_LEQUAL,						//depth_compare,
-																	ShaderClass::DEPTH_WRITE_DISABLE,			//depth_mask,
-																	ShaderClass::COLOR_WRITE_ENABLE,				//color_mask,
-																	ShaderClass::SRCBLEND_ZERO,					//src_blend,
-																	ShaderClass::DSTBLEND_SRC_COLOR,				//dst_blend,
-																	ShaderClass::FOG_DISABLE,						//fog,
-																	ShaderClass::GRADIENT_ADD,						//pri_grad,
-																	ShaderClass::SECONDARY_GRADIENT_DISABLE,	//sec_grad,
-																	ShaderClass::TEXTURING_ENABLE,				//texture,
-
-																	ShaderClass::ALPHATEST_DISABLE,				//alpha_test,
-																	ShaderClass::CULL_MODE_ENABLE,				//cull mode
-																	0,														//post_det_color,
-																	0) );													//post_det_alpha
-
-	if (WW3DAssetManager::Get_Instance()->Get_Activate_Fog_On_Load()) {
-		mult_shader.Enable_Fog ("TexProjectClass");
-	}
+    static Graphics::MaterialState mult_shader(Graphics::MaterialState::Make_Bits(
+        Graphics::MaterialState::PASS_LEQUAL, Graphics::MaterialState::DEPTH_WRITE_DISABLE,
+        Graphics::MaterialState::COLOR_WRITE_ENABLE, Graphics::MaterialState::SRCBLEND_ZERO,
+        Graphics::MaterialState::DSTBLEND_SRC_COLOR, Graphics::MaterialState::FOG_DISABLE,
+        Graphics::MaterialState::GRADIENT_ADD, Graphics::MaterialState::SECONDARY_GRADIENT_DISABLE,
+        Graphics::MaterialState::TEXTURING_ENABLE, Graphics::MaterialState::ALPHATEST_DISABLE,
+        Graphics::MaterialState::CULL_MODE_ENABLE, Graphics::MaterialState::DETAILCOLOR_DISABLE,
+        Graphics::MaterialState::DETAILALPHA_DISABLE));
 
 	if (Get_Flag(USE_DEPTH_GRADIENT)) {
 
 		/*
 		** enable multi-texturing
 		*/
-		mult_shader.Set_Post_Detail_Color_Func(ShaderClass::DETAILCOLOR_ADD);
+		mult_shader.Set_Post_Detail_Color_Func(Graphics::MaterialState::DETAILCOLOR_ADD);
 
 		/*
 		** plug the gradient texture into the second stage
@@ -578,8 +567,7 @@ void TexProjectClass::Init_Multiplicative()
 		if (grad_tex) {
 			grad_tex->Get_Sampling().address[0] = Graphics::RHISamplerAddress::Clamp;
 			grad_tex->Get_Sampling().address[1] = Graphics::RHISamplerAddress::Clamp;
-			MaterialPass->Set_Texture(grad_tex,1);
-			grad_tex->Release_Ref();
+			MaterialPass->textures[1].Assign_No_Add_Ref(grad_tex);
 		} else {
 			WWDEBUG_SAY(("Could not find texture: MultProjectorGradient.tga!"));
 		}
@@ -589,44 +577,45 @@ void TexProjectClass::Init_Multiplicative()
 		/*
 		** disable multi-texturing
 		*/
-		mult_shader.Set_Post_Detail_Color_Func(ShaderClass::DETAILCOLOR_DISABLE);
+		mult_shader.Set_Post_Detail_Color_Func(Graphics::MaterialState::DETAILCOLOR_DISABLE);
 
 		/*
 		** remove the texture from the second stage
 		*/
-		MaterialPass->Set_Texture(nullptr,1);
+		MaterialPass->textures[1].Clear();
 	}
 
 #if (DEBUG_SHADOW_RENDERING)
 	// invert the shader so we can see what polygons it is hitting
-	mult_shader.Set_Dst_Blend_Func(ShaderClass::DSTBLEND_ONE);
-	mult_shader.Set_Src_Blend_Func(ShaderClass::SRCBLEND_ONE);
+	mult_shader.Set_Dst_Blend_Func(Graphics::MaterialState::DSTBLEND_ONE);
+	mult_shader.Set_Src_Blend_Func(Graphics::MaterialState::SRCBLEND_ONE);
 #endif
+	mult_shader.Enable_Fog_For_Blend();
 
-	MaterialPass->Set_Shader(mult_shader);
+	MaterialPass->shader = mult_shader;
 
 	/*
 	** Set up the Vertex Material parameters
 	*/
-	VertexMaterialClass * vmtl = MaterialPass->Peek_Material();
-	vmtl->Set_Ambient(0,0,0);
-	vmtl->Set_Diffuse(0,0,0);
-	vmtl->Set_Specular(0,0,0);
-	vmtl->Set_Emissive(0.0f,0.0f,0.0f);
-	vmtl->Set_Opacity(1.0f);
-	vmtl->Set_Lighting(true); // I need the emissive value to scale the intensity of the shadow
+	Graphics::MeshMaterial * vmtl = MaterialPass->material.get();
+	vmtl->parameters.ambient = {0,0,0};
+	vmtl->parameters.diffuse = {0,0,0};
+	vmtl->parameters.specular = {0,0,0};
+	vmtl->parameters.emissive = {0.0f,0.0f,0.0f};
+	vmtl->parameters.opacity = 1.0f;
+	vmtl->parameters.lighting = true; // I need the emissive value to scale the intensity of the shadow
 
 	/*
 	** Set up some mapper settings related to depth gradient
 	*/
 	if (Get_Flag(USE_DEPTH_GRADIENT)) {
 		if (Mapper1 == nullptr) {
-			Mapper1 = NEW_REF(MatrixMapperClass,(1));
+			Mapper1 = Graphics::TextureMapping::Create_Projection();
 		}
-		Mapper1->Set_Type(MatrixMapperClass::DEPTH_GRADIENT);
-		vmtl->Set_Mapper(Mapper1,1);
+		Mapper1->Projection()->type=Graphics::TextureProjection::DepthGradient;
+		vmtl->mappings[1] = Mapper1;
 	} else {
-		vmtl->Set_Mapper(nullptr,1);
+		vmtl->mappings[1].reset();
 	}
 }
 
@@ -650,28 +639,24 @@ void TexProjectClass::Init_Additive()
 	/*
 	** Set up the shader
 	*/
-	static ShaderClass add_shader(		SHADE_CNST(	ShaderClass::PASS_LEQUAL,						//depth_compare,
-																	ShaderClass::DEPTH_WRITE_DISABLE,			//depth_mask,
-																	ShaderClass::COLOR_WRITE_ENABLE,				//color_mask,
-																	ShaderClass::SRCBLEND_ONE,						//src_blend,
-																	ShaderClass::DSTBLEND_ONE,						//dst_blend,
-																	ShaderClass::FOG_DISABLE,						//fog,
-																	ShaderClass::GRADIENT_MODULATE,				//pri_grad,
-																	ShaderClass::SECONDARY_GRADIENT_DISABLE,	//sec_grad,
-																	ShaderClass::TEXTURING_ENABLE,				//texture,
-																	ShaderClass::ALPHATEST_DISABLE,				//alpha_test,
-																	ShaderClass::CULL_MODE_ENABLE,				//cullmode,
-																	ShaderClass::DETAILCOLOR_DISABLE,			//post_det_color,
-																	ShaderClass::DETAILALPHA_DISABLE) );		//post_det_alpha
-
-	if (WW3DAssetManager::Get_Instance()->Get_Activate_Fog_On_Load()) {
-		add_shader.Enable_Fog ("TexProjectClass");
-	}
+	static Graphics::MaterialState add_shader(		Graphics::MaterialState::Make_Bits(	Graphics::MaterialState::PASS_LEQUAL,						//depth_compare,
+																	Graphics::MaterialState::DEPTH_WRITE_DISABLE,			//depth_mask,
+																	Graphics::MaterialState::COLOR_WRITE_ENABLE,				//color_mask,
+																	Graphics::MaterialState::SRCBLEND_ONE,						//src_blend,
+																	Graphics::MaterialState::DSTBLEND_ONE,						//dst_blend,
+																	Graphics::MaterialState::FOG_DISABLE,						//fog,
+																	Graphics::MaterialState::GRADIENT_MODULATE,				//pri_grad,
+																	Graphics::MaterialState::SECONDARY_GRADIENT_DISABLE,	//sec_grad,
+																	Graphics::MaterialState::TEXTURING_ENABLE,				//texture,
+																	Graphics::MaterialState::ALPHATEST_DISABLE,				//alpha_test,
+																	Graphics::MaterialState::CULL_MODE_ENABLE,				//cullmode,
+																	Graphics::MaterialState::DETAILCOLOR_DISABLE,			//post_det_color,
+																	Graphics::MaterialState::DETAILALPHA_DISABLE) );		//post_det_alpha
 
 	/*
 	** Additive projectors always use the normal gradient so they need multi-texturing
 	*/
-	add_shader.Set_Post_Detail_Color_Func(ShaderClass::DETAILCOLOR_SCALE);
+	add_shader.Set_Post_Detail_Color_Func(Graphics::MaterialState::DETAILCOLOR_SCALE);
 
 	/*
 	** plug in the gradient texture
@@ -680,40 +665,40 @@ void TexProjectClass::Init_Additive()
 	if (grad_tex) {
 		grad_tex->Get_Sampling().address[0] = Graphics::RHISamplerAddress::Clamp;
 		grad_tex->Get_Sampling().address[1] = Graphics::RHISamplerAddress::Clamp;
-		MaterialPass->Set_Texture(grad_tex,1);
-		grad_tex->Release_Ref();
+		MaterialPass->textures[1].Assign_No_Add_Ref(grad_tex);
 	} else {
 		WWDEBUG_SAY(("Could not find texture: AddProjectorGradient.tga!"));
 	}
 
 #if (DEBUG_SHADOW_RENDERING)
 	// invert the shader so we can see what polygons it is hitting
-	add_shader.Set_Dst_Blend_Func(ShaderClass::DSTBLEND_SRC_COLOR);
-	add_shader.Set_Src_Blend_Func(ShaderClass::SRCBLEND_ZERO);
+	add_shader.Set_Dst_Blend_Func(Graphics::MaterialState::DSTBLEND_SRC_COLOR);
+	add_shader.Set_Src_Blend_Func(Graphics::MaterialState::SRCBLEND_ZERO);
 #endif
+	add_shader.Enable_Fog_For_Blend();
 
-	MaterialPass->Set_Shader(add_shader);
+	MaterialPass->shader = add_shader;
 
 	/*
 	** Set up the Vertex Material parameters
 	*/
-	VertexMaterialClass * vmtl = MaterialPass->Peek_Material();
-	vmtl->Set_Ambient(0,0,0);
-	vmtl->Set_Diffuse(0,0,0);
-	vmtl->Set_Specular(0,0,0);
-	vmtl->Set_Emissive(1,1,1);
-	vmtl->Set_Opacity(1.0f);
-	vmtl->Set_Lighting(true); //need emissive to scale the intensity of the projector
+	Graphics::MeshMaterial * vmtl = MaterialPass->material.get();
+	vmtl->parameters.ambient = {0,0,0};
+	vmtl->parameters.diffuse = {0,0,0};
+	vmtl->parameters.specular = {0,0,0};
+	vmtl->parameters.emissive = {1,1,1};
+	vmtl->parameters.opacity = 1.0f;
+	vmtl->parameters.lighting = true; //need emissive to scale the intensity of the projector
 
 	/*
 	** Set up some mapper settings related to depth gradient
 	** Additive texture projections always use the normal gradient
 	*/
 	if (Mapper1 == nullptr) {
-		Mapper1 = NEW_REF(MatrixMapperClass,(1));
+		Mapper1 = Graphics::TextureMapping::Create_Projection();
 	}
-	Mapper1->Set_Type(MatrixMapperClass::NORMAL_GRADIENT);
-	vmtl->Set_Mapper(Mapper1,1);
+	Mapper1->Projection()->type=Graphics::TextureProjection::NormalGradient;
+	vmtl->mappings[1] = Mapper1;
 }
 
 
@@ -735,7 +720,7 @@ void TexProjectClass::Set_Texture(TextureClass * texture)
 	{
 		texture->Get_Sampling().address[0] = Graphics::RHISamplerAddress::Clamp;
 		texture->Get_Sampling().address[1] = Graphics::RHISamplerAddress::Clamp;
-		MaterialPass->Set_Texture(texture);
+		MaterialPass->textures[0].Assign_Add_Ref(texture);
 	}
 }
 
@@ -755,7 +740,9 @@ void TexProjectClass::Set_Texture(TextureClass * texture)
  *=============================================================================================*/
 TextureClass * TexProjectClass::Get_Texture() const
 {
-	return MaterialPass->Get_Texture();
+	TextureClass* texture = MaterialPass->textures[0].Peek();
+	if (texture != nullptr) texture->Add_Ref();
+	return texture;
 }
 
 
@@ -773,7 +760,7 @@ TextureClass * TexProjectClass::Get_Texture() const
  *=============================================================================================*/
 TextureClass * TexProjectClass::Peek_Texture() const
 {
-	return MaterialPass->Peek_Texture();
+	return MaterialPass->textures[0].Peek();
 }
 
 
@@ -789,7 +776,7 @@ TextureClass * TexProjectClass::Peek_Texture() const
  * HISTORY:                                                                                    *
  *   1/11/00    gth : Created.                                                                 *
  *=============================================================================================*/
-MaterialPassClass * TexProjectClass::Peek_Material_Pass()
+const std::shared_ptr<TexProjectMaterialPass>& TexProjectClass::Peek_Material_Pass() const
 {
 	return MaterialPass;
 }
@@ -1328,32 +1315,35 @@ void TexProjectClass::Pre_Render_Update(const Matrix3D & camera)
 	/*
 	** install the current intensity
 	*/
-	VertexMaterialClass * vmat = MaterialPass->Peek_Material();
+	Graphics::MeshMaterial * vmat = MaterialPass->material.get();
 	if (Get_Flag(ADDITIVE)) {
-		vmat->Set_Emissive(actual_intensity,actual_intensity,actual_intensity);
+		vmat->parameters.emissive = {actual_intensity,actual_intensity,actual_intensity};
 	} else {
-		vmat->Set_Emissive(1.0f - actual_intensity,1.0f - actual_intensity,1.0f - actual_intensity);
+		vmat->parameters.emissive = {1.0f - actual_intensity,1.0f - actual_intensity,1.0f - actual_intensity};
 	}
 
 	/*
 	** update the mappers
 	*/
 	if (Get_Flag(PERSPECTIVE)) {
-		Mapper->Set_Type(MatrixMapperClass::PERSPECTIVE_PROJECTION);
+		Mapper->Projection()->type=Graphics::TextureProjection::Perspective;
 	} else {
-		Mapper->Set_Type(MatrixMapperClass::ORTHO_PROJECTION);
+		Mapper->Projection()->type=Graphics::TextureProjection::Orthographic;
 	}
 
 	if (Get_Texture_Size() == 0) {
 //		Assets::ImageDescription surface_desc;
 //		MaterialPass->Peek_Texture()->Get_Level_Description(surface_desc);
-		Set_Texture_Size(MaterialPass->Peek_Texture()->Get_Width());
+		Set_Texture_Size(MaterialPass->textures[0].Peek()->Get_Width());
 		WWASSERT(Get_Texture_Size() != 0);
 	}
 
-	Mapper->Set_Texture_Transform(view_to_texture,Get_Texture_Size());
+	std::array<float,16> texture_transform;
+    for (unsigned row=0;row<4;++row)
+        for (unsigned column=0;column<4;++column) texture_transform[row*4+column]=view_to_texture[row][column];
+    Mapper->Projection()->Set_Texture_Transform(texture_transform,Get_Texture_Size());
 	if (Mapper1) {
-		Mapper1->Set_Texture_Transform(view_to_texture,Get_Texture_Size());
+		Mapper1->Projection()->Set_Texture_Transform(texture_transform,Get_Texture_Size());
 	}
 }
 

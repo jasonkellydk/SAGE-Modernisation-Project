@@ -59,7 +59,6 @@ import Assets.ModelAssembly;
 #include "WW3D2/W3DFile.h"
 #include "WW3D2/W3DFile.h"
 #include "WWLib/wwstring.h"
-#include "Proxy.h"
 
 
 
@@ -80,12 +79,6 @@ public:
 
 	virtual int						Class_ID()	const override;
 	virtual int						Get_Num_Polys() const override;
-
-	/////////////////////////////////////////////////////////////////////////////
-	// Proxy interface
-	/////////////////////////////////////////////////////////////////////////////
-	virtual int						Get_Proxy_Count () const;
-	virtual bool					Get_Proxy (int index, ProxyClass &proxy) const;
 
 	/////////////////////////////////////////////////////////////////////////////
 	// Render Object Interface - Rendering

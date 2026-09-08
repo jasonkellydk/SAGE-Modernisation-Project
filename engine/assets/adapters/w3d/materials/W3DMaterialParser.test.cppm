@@ -30,6 +30,12 @@ void Append_U32(std::vector<Byte> &bytes, std::uint32_t value)
 	bytes.push_back(static_cast<Byte>((value >> 24) & 0xFF));
 }
 
+void Append_U16(std::vector<Byte> &bytes, std::uint16_t value)
+{
+	bytes.push_back(static_cast<Byte>(value & 0xFF));
+	bytes.push_back(static_cast<Byte>((value >> 8) & 0xFF));
+}
+
 void Append_F32(std::vector<Byte> &bytes, float value)
 {
 	Append_U32(bytes, std::bit_cast<std::uint32_t>(value));
@@ -56,6 +62,71 @@ void Write_F32(std::vector<Byte> &bytes, std::size_t offset, float value)
 	bytes[offset + 1] = static_cast<Byte>((bits >> 8) & 0xFF);
 	bytes[offset + 2] = static_cast<Byte>((bits >> 16) & 0xFF);
 	bytes[offset + 3] = static_cast<Byte>((bits >> 24) & 0xFF);
+}
+
+void Write_U32(std::vector<Byte> &bytes, std::size_t offset, std::uint32_t value)
+{
+	bytes[offset + 0] = static_cast<Byte>(value & 0xFF);
+	bytes[offset + 1] = static_cast<Byte>((value >> 8) & 0xFF);
+	bytes[offset + 2] = static_cast<Byte>((value >> 16) & 0xFF);
+	bytes[offset + 3] = static_cast<Byte>((value >> 24) & 0xFF);
+}
+
+std::vector<Byte> Make_Material3_Info()
+{
+	std::vector<Byte> bytes(44, Byte{0});
+	Write_U32(bytes, 0, 0x000000A5u);
+	bytes[4] = Byte{128}; bytes[5] = Byte{64}; bytes[6] = Byte{32};
+	bytes[8] = Byte{255}; bytes[9] = Byte{100}; bytes[10] = Byte{50};
+	bytes[12] = Byte{10}; bytes[13] = Byte{20}; bytes[14] = Byte{30};
+	bytes[16] = Byte{40}; bytes[17] = Byte{50}; bytes[18] = Byte{60};
+	bytes[20] = Byte{128}; bytes[21] = Byte{255}; bytes[22] = Byte{0};
+	bytes[24] = Byte{1}; bytes[25] = Byte{128}; bytes[26] = Byte{255};
+	Write_F32(bytes, 28, 16.0f);
+	Write_F32(bytes, 32, 0.625f);
+	Write_F32(bytes, 36, 0.25f);
+	Write_F32(bytes, 40, 0.75f);
+	return bytes;
+}
+
+void Append_Material3_Map(std::vector<Byte> &material, std::uint32_t map_id,
+	std::string_view filename, std::uint16_t mapping, std::uint16_t frame_count, float frame_rate)
+{
+	std::vector<Byte> map_name;
+	Append_String(map_name, filename);
+	std::vector<Byte> map_info;
+	Append_U16(map_info, mapping);
+	Append_U16(map_info, frame_count);
+	Append_F32(map_info, frame_rate);
+	map_info.push_back(Byte{0xCC}); // Exporters may leave padding after Map3.
+	std::vector<Byte> map;
+	Append_Chunk(map, 0x1A, map_name, false);
+	Append_Chunk(map, 0x1B, map_info, false);
+	Append_Chunk(material, map_id, map, true);
+}
+
+std::vector<Byte> Make_Material3_Record(std::string_view name)
+{
+	std::vector<Byte> record, material_name;
+	Append_String(material_name, name);
+	Append_Chunk(record, 0x17, material_name, false);
+	auto info = Make_Material3_Info();
+	info.push_back(Byte{0xDD}); // Material3 readers consume the authored prefix.
+	Append_Chunk(record, 0x18, info, false);
+	Append_Material3_Map(record, 0x19, "first_dc.tga", 0, 1, 0.0f);
+	Append_Material3_Map(record, 0x1C, "di.tga", 1, 2, 5.0f);
+	Append_Material3_Map(record, 0x1D, "sc.tga", 0, 1, 0.0f);
+	Append_Material3_Map(record, 0x1E, "si.tga", 0, 3, 8.0f);
+	Append_Material3_Map(record, 0x19, "last_dc.tga", 0, 4, 12.0f);
+	return record;
+}
+
+std::vector<Byte> Make_Material3_Container(std::string_view name = "legacy_material")
+{
+	std::vector<Byte> bytes;
+	const auto record = Make_Material3_Record(name);
+	Append_Chunk(bytes, 0x16, record, true);
+	return bytes;
 }
 
 std::vector<Byte> Make_Material_Data()
@@ -139,6 +210,87 @@ BOOST_AUTO_TEST_CASE(material_parser_preserves_material_texture_and_pass_relatio
 	BOOST_CHECK(data.textures[0].name == "paint.tga");
 	BOOST_CHECK(data.passes[0].vertex_material_index == 0);
 	BOOST_CHECK(data.passes[0].texture_index == 0);
+}
+
+BOOST_AUTO_TEST_CASE(material3_container_decoder_preserves_info_and_authored_map_order)
+{
+	using namespace Assets::W3D;
+	std::vector<W3DMaterial3Data> decoded;
+	BOOST_REQUIRE(W3DRead_Material3_Container(Make_Material3_Container(), decoded));
+	BOOST_REQUIRE_EQUAL(decoded.size(), 1u);
+	const auto &material = decoded.front();
+	BOOST_CHECK(material.material.name == "legacy_material");
+	BOOST_CHECK_EQUAL(material.attributes, 0xA5u);
+	BOOST_CHECK_EQUAL(material.material.source_attributes, 0xA5u);
+	BOOST_CHECK_CLOSE(material.material.base_color.r, (128.0f / 255.0f) * (128.0f / 255.0f), 0.001f);
+	BOOST_CHECK_CLOSE(material.material.base_color.g, 64.0f / 255.0f, 0.001f);
+	BOOST_CHECK_SMALL(material.material.base_color.b, 0.001f);
+	BOOST_CHECK_CLOSE(material.material.specular_color.g, (100.0f / 255.0f) * (128.0f / 255.0f), 0.001f);
+	BOOST_CHECK_CLOSE(material.material.emissive_color.b, 30.0f / 255.0f, 0.001f);
+	BOOST_CHECK_CLOSE(material.material.ambient_color.r, 40.0f / 255.0f, 0.001f);
+	BOOST_CHECK_CLOSE(material.material.shininess, 16.0f, 0.001f);
+	BOOST_CHECK_CLOSE(material.material.opacity, 0.625f, 0.001f);
+	BOOST_CHECK_CLOSE(material.material.translucency, 0.25f, 0.001f);
+	BOOST_CHECK_CLOSE(material.fog_coefficient, 0.75f, 0.001f);
+	BOOST_REQUIRE_EQUAL(material.maps.size(), 5u);
+	BOOST_CHECK(material.maps[0].kind == W3DMaterial3MapKind::DiffuseColor);
+	BOOST_CHECK(material.maps[1].kind == W3DMaterial3MapKind::DiffuseIllumination);
+	BOOST_CHECK(material.maps[2].kind == W3DMaterial3MapKind::SpecularColor);
+	BOOST_CHECK(material.maps[3].kind == W3DMaterial3MapKind::SpecularIllumination);
+	BOOST_CHECK(material.maps[4].kind == W3DMaterial3MapKind::DiffuseColor);
+	BOOST_CHECK(material.maps[0].filename == "first_dc.tga");
+	BOOST_CHECK(material.maps[4].filename == "last_dc.tga");
+	BOOST_CHECK_EQUAL(material.maps[1].mapping_type, 1u);
+	BOOST_CHECK_EQUAL(material.maps[3].frame_count, 3u);
+	BOOST_CHECK_CLOSE(material.maps[4].frame_rate, 12.0f, 0.001f);
+	std::vector<W3DMaterial3Data> empty_name;
+	BOOST_REQUIRE(W3DRead_Material3_Container(Make_Material3_Container(""), empty_name));
+	BOOST_REQUIRE_EQUAL(empty_name.size(), 1u);
+	BOOST_CHECK(empty_name.front().material.name.empty());
+}
+
+BOOST_AUTO_TEST_CASE(material3_container_decoder_rejects_malformed_records_atomically)
+{
+	using namespace Assets::W3D;
+	std::vector<W3DMaterial3Data> decoded;
+	decoded.push_back({});
+
+	// A valid first record must not become visible when a later record fails.
+	std::vector<Byte> malformed = Make_Material3_Container();
+	std::vector<Byte> bad_record, bad_name{Byte{'b'}, Byte{'a'}, Byte{'d'}};
+	Append_Chunk(bad_record, 0x17, bad_name, false); // missing NUL terminator
+	Append_Chunk(bad_record, 0x18, Make_Material3_Info(), false);
+	Append_Chunk(malformed, 0x16, bad_record, true);
+	BOOST_CHECK(!W3DRead_Material3_Container(malformed, decoded));
+	BOOST_CHECK(decoded.empty());
+
+	// The map metadata is a fixed eight-byte record and its float must be finite.
+	std::vector<Byte> bad_rate_record, name;
+	Append_String(name, "bad_rate");
+	Append_Chunk(bad_rate_record, 0x17, name, false);
+	Append_Chunk(bad_rate_record, 0x18, Make_Material3_Info(), false);
+	Append_Material3_Map(bad_rate_record, 0x19, "map.tga", 0, 1, std::bit_cast<float>(0x7FC00000u));
+	std::vector<Byte> bad_rate;
+	Append_Chunk(bad_rate, 0x16, bad_rate_record, true);
+	BOOST_CHECK(!W3DRead_Material3_Container(bad_rate, decoded));
+	BOOST_CHECK(decoded.empty());
+
+	// Material3 info must contain the complete 44-byte wire record.
+	std::vector<Byte> short_info, short_name;
+	Append_String(short_name, "short_info");
+	Append_Chunk(short_info, 0x17, short_name, false);
+	const auto info = Make_Material3_Info();
+	W3DMaterial3Data raw_decoded;
+	auto padded_info = info;
+	padded_info.push_back(Byte{0xDD});
+	BOOST_CHECK(!W3DRead_Material3(padded_info, raw_decoded));
+	// The container reader accepts that exporter padding after passing the
+	// authored 44-byte prefix to the raw decoder.
+	Append_Chunk(short_info, 0x18, std::vector<Byte>(info.begin(), info.end() - 1), false);
+	std::vector<Byte> short_container;
+	Append_Chunk(short_container, 0x16, short_info, true);
+	BOOST_CHECK(!W3DRead_Material3_Container(short_container, decoded));
+	BOOST_CHECK(decoded.empty());
 }
 
 BOOST_AUTO_TEST_CASE(shader_material_extension_preserves_legacy_material_values)

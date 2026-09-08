@@ -37,6 +37,7 @@
  * Functions:                                                                                  *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
+import Graphics.Materials.State;
 #include <array>
 #include "WW3D2/GraphicsMaterial.h"
 #include <algorithm>
@@ -51,7 +52,6 @@ import Graphics.Scene.Beams.RibbonGeometry;
 #include "WW3D.h"
 #include "W3DFile.h"
 #include "RInfo.h"
-#include "VertMaterial.h"
 #include "WWMath/vp.h"
 #include "WWMath/Vector3i.h"
 #include "WWLib/RANDOM.h"
@@ -80,7 +80,7 @@ import Graphics.Scene.Beams.RibbonGeometry;
 
 SegLineRendererClass::SegLineRendererClass() :
 		Texture(nullptr),
-		Shader(ShaderClass::_PresetAdditiveSpriteShader),
+		Shader(Graphics::MaterialState::AdditiveSprite()),
 		Width(0.0f),
 		Color(Vector3(1,1,1)),
 		Opacity(1.0f),
@@ -96,7 +96,7 @@ SegLineRendererClass::SegLineRendererClass() :
 
 SegLineRendererClass::SegLineRendererClass(const SegLineRendererClass & that) :
 		Texture(nullptr),
-		Shader(ShaderClass::_PresetAdditiveSpriteShader),
+		Shader(Graphics::MaterialState::AdditiveSprite()),
 		Width(0.0f),
 		Color(Vector3(1,1,1)),
 		Opacity(1.0f),
@@ -311,12 +311,12 @@ void SegLineRendererClass::Render
         }
         Matrix4x4 projection;
         rinfo.Camera.Get_Backend_Projection_Matrix(&projection);
-        ShaderClass shader = Shader;
-        shader.Set_Cull_Mode(ShaderClass::CULL_MODE_DISABLE);
-        shader.Set_Primary_Gradient(ShaderClass::GRADIENT_MODULATE);
+        Graphics::MaterialState shader = Shader;
+        shader.Set_Cull_Mode(Graphics::MaterialState::CULL_MODE_DISABLE);
+        shader.Set_Primary_Gradient(Graphics::MaterialState::GRADIENT_MODULATE);
         const bool sorting = !Is_Sorting_Disabled() && WW3D::Is_Sorting_Enabled()
-            && Shader.Get_Dst_Blend_Func()!=ShaderClass::DSTBLEND_ZERO
-            && Shader.Get_Alpha_Test()==ShaderClass::ALPHATEST_DISABLE;
+            && Shader.Get_Dst_Blend_Func()!=Graphics::MaterialState::DSTBLEND_ZERO
+            && Shader.Get_Alpha_Test()==Graphics::MaterialState::ALPHATEST_DISABLE;
         const Matrix4x4 camera_space(true);
         Draw_Graphics_Material_Geometry(geometry.Vertices(),geometry.Indices(),projection,shader,
             {Texture,nullptr},{},sorting ? &camera_space : nullptr);

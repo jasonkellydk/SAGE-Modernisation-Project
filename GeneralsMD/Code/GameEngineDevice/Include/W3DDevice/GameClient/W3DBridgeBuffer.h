@@ -54,9 +54,8 @@ import Graphics.Scene.Surfaces.Renderer;
 #include "WWLib/always.h"
 #include "WW3D2/RendObj.h"
 #include "WW3D2/W3DFile.h"
-#include "WW3D2/VertexFormat.h"
-#include "WW3D2/Shader.h"
-#include "WW3D2/VertMaterial.h"
+import Graphics.Scene.Surfaces.Geometry;
+import Graphics.Materials.State;
 #include "Lib/BaseType.h"
 #include "Common/GameType.h"
 #include "Common/Dict.h"
@@ -117,9 +116,9 @@ protected:
     Graphics::SurfaceMeshHandle m_graphicsMesh;
 
 protected:
-	Int getModelVerticesFixed(VertexFormatXYZNDUV1 *destination_vb, Int curVertex, const Matrix3D &mtx, MeshClass *pMesh, Graphics::SceneObjectList<RenderObjClass>::Cursor *pLightsIterator);
+	Int getModelVerticesFixed(Graphics::SurfaceVertex *destination_vb, Int curVertex, const Matrix3D &mtx, MeshClass *pMesh, Graphics::SceneObjectList<RenderObjClass>::Cursor *pLightsIterator);
 	Int getModelIndices(UnsignedShort *destination_ib, Int curIndex, Int vertexOffset, MeshClass *pMesh);
-	Int getModelVertices(VertexFormatXYZNDUV1 *destination_vb, Int curVertex,  Real xOffset,
+	Int getModelVertices(Graphics::SurfaceVertex *destination_vb, Int curVertex,  Real xOffset,
 																Vector3 &vec, Vector3 &vecNormal, Vector3 &vecZ, Vector3 &offset,
 																const Matrix3D &mtx,
 																MeshClass *pMesh, Graphics::SceneObjectList<RenderObjClass>::Cursor *pLightsIterator);
@@ -135,13 +134,13 @@ public:
 	Bool load(BodyDamageType curDamageState);
 	BodyDamageType getDamageState() {return m_curDamageState;};
 	void setDamageState(BodyDamageType state) { m_curDamageState = state;};
-	void getIndicesNVertices(UnsignedShort *destination_ib, VertexFormatXYZNDUV1 *destination_vb, Int *curIndexP, Int *curVertexP, Graphics::SceneObjectList<RenderObjClass>::Cursor *pLightsIterator);
+	void getIndicesNVertices(UnsignedShort *destination_ib, Graphics::SurfaceVertex *destination_vb, Int *curIndexP, Int *curVertexP, Graphics::SceneObjectList<RenderObjClass>::Cursor *pLightsIterator);
 	Bool cullBridge(CameraClass * camera);						 ///< Culls the bridges.  Returns true if visibility changed.
 	void clearBridge();		///< Frees all objects associated with a bridge.
 	Bool isVisible() {return m_visible;};
 	Bool isEnabled() {return m_enabled;};
 	void setEnabled(Bool enable) {m_enabled = enable;};
-    bool uploadGeometry(std::span<const VertexFormatXYZNDUV1> vertices, std::span<const UnsignedShort> indices);
+    bool uploadGeometry(std::span<const Graphics::SurfaceVertex> vertices, std::span<const UnsignedShort> indices);
     void releaseGeometry();
     Graphics::SurfaceMeshHandle getGraphicsMesh() const { return m_graphicsMesh; }
     TextureClass *getTexture() const { return m_bridgeTexture; }
@@ -173,7 +172,7 @@ public:
 					MAX_BRIDGE_INDEX=2*MAX_BRIDGE_VERTEX,	//make sure it stays under 65535
 					MAX_BRIDGES=200};
 protected:
-    std::vector<VertexFormatXYZNDUV1> m_vertices;
+    std::vector<Graphics::SurfaceVertex> m_vertices;
     std::vector<UnsignedShort> m_indices;
 	TextureClass *m_bridgeTexture;	///<Bridges texture
 	Int			m_curNumBridgeVertices; ///<Number of vertices used in m_vertexBridge.

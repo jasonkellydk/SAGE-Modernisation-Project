@@ -99,6 +99,7 @@
 #include "WWDebug/wwmemlog.h"
 #include "W3DFile.h"
 #include "WWMath/vp.h"
+import Assets.Adapters.W3D.Chunks;
 import Graphics.Scene.Models.Hierarchy;
 import Assets.Adapters.W3D.Geometry;
 import Assets.Math;
@@ -203,6 +204,7 @@ MeshGeometryClass::MeshGeometryClass(const MeshGeometryClass & that) :
 MeshGeometryClass & MeshGeometryClass::operator = (const MeshGeometryClass & that)
 {
 	if (this != &that) {
+        GeometryRevision = that.GeometryRevision;
 		Flags = that.Flags;
 		SortLevel = that.SortLevel;
 		W3dAttributes = that.W3dAttributes;
@@ -267,6 +269,8 @@ MeshGeometryClass::~MeshGeometryClass()
  *=============================================================================================*/
 void MeshGeometryClass::Reset_Geometry(int polycount,int vertcount)
 {
+    if (polycount != 0 && vertcount != 0) GeometryRevision.Reset();
+    else GeometryRevision.Invalidate();
 	// Release everything we have and reset to initial state
 	Flags = 0;
 	PolyCount = 0;
@@ -449,7 +453,7 @@ void MeshGeometryClass::Get_Bounding_Sphere(SphereClass * set_sphere)
  *=============================================================================================*/
 void MeshGeometryClass::Generate_Rigid_APT(const Vector3 & view_dir, SimpleDynVecClass<uint32> & apt)
 {
-	const Vector3 * loc = Get_Vertex_Array();
+	const Vector3 * loc = Peek_Vertex_Array();
 	const Vector4 * norms = Get_Plane_Array();
 	const TriIndex * polys = Get_Polygon_Array();
 	TriClass tri;
@@ -489,7 +493,7 @@ void MeshGeometryClass::Generate_Rigid_APT(const OBBoxClass & local_box, SimpleD
 	} else {
 
 		// Beware, this is gonna be expensive!
-		const Vector3 * loc = Get_Vertex_Array();
+		const Vector3 * loc = Peek_Vertex_Array();
 		const Vector4 * norms = Get_Plane_Array();
 		const TriIndex * polys = Get_Polygon_Array();
 		TriClass tri;
@@ -528,7 +532,7 @@ void MeshGeometryClass::Generate_Rigid_APT(const OBBoxClass & local_box,const Ve
 	} else {
 
 		// Beware, this is gonna be expensive!
-		const Vector3 * loc = Get_Vertex_Array();
+		const Vector3 * loc = Peek_Vertex_Array();
 		const Vector4 * norms = Get_Plane_Array();
 		const TriIndex * polys = Get_Polygon_Array();
 		TriClass tri;
@@ -837,7 +841,7 @@ int MeshGeometryClass::cast_semi_infinite_axis_aligned_ray(const Vector3 & start
 		count = MeshQueryAdapter::Count_Axis_Ray(*CullTree,*this,start_point,axis_dir,flags);
 	} else {
 
-		const Vector3 * loc = Get_Vertex_Array();
+		const Vector3 * loc = Peek_Vertex_Array();
 		const Vector4 * plane = Get_Plane_Array();
 		const TriIndex * polyverts = Get_Polygon_Array();
 
@@ -1040,7 +1044,7 @@ bool MeshGeometryClass::cast_aabox_z270(AABoxCollisionTestClass & boxtest, const
 bool MeshGeometryClass::intersect_obbox_brute_force(OBBoxIntersectionTestClass & localtest)
 {
 	TriClass tri;
-	const Vector3 * loc = Get_Vertex_Array();
+	const Vector3 * loc = Peek_Vertex_Array();
 	const TriIndex * polyverts = Get_Polygon_Array();
 #ifndef COMPUTE_NORMALS
 	const Vector4 * norms = Get_Plane_Array();
@@ -1089,7 +1093,7 @@ bool MeshGeometryClass::cast_ray_brute_force(RayCollisionTestClass & raytest)
 {
 	int srtri;
 	TriClass tri;
-	const Vector3 * loc = Get_Vertex_Array();
+	const Vector3 * loc = Peek_Vertex_Array();
 	const TriIndex * polyverts = Get_Polygon_Array();
 #ifndef COMPUTE_NORMALS
 	const Vector4 * norms = Get_Plane_Array();
@@ -1148,7 +1152,7 @@ bool MeshGeometryClass::cast_aabox_brute_force(AABoxCollisionTestClass & boxtest
 	TriClass tri;
 	int polyhit = -1;
 
-	const Vector3 * loc = Get_Vertex_Array();
+	const Vector3 * loc = Peek_Vertex_Array();
 	const TriIndex * polyverts = Get_Polygon_Array();
 #ifndef COMPUTE_NORMALS
 	const Vector4 * norms = Get_Plane_Array();
@@ -1206,7 +1210,7 @@ bool MeshGeometryClass::cast_obbox_brute_force(OBBoxCollisionTestClass & boxtest
 	TriClass tri;
 	int polyhit = -1;
 
-	const Vector3 * loc = Get_Vertex_Array();
+	const Vector3 * loc = Peek_Vertex_Array();
 	const TriIndex * polyverts = Get_Polygon_Array();
 #ifndef COMPUTE_NORMALS
 	const Vector4 * norms = Get_Plane_Array();
@@ -1295,6 +1299,7 @@ void MeshGeometryClass::Compute_Plane_Equations(Vector4 * peq)
  *=============================================================================================*/
 void MeshGeometryClass::Compute_Vertex_Normals(Vector3 * vnorm)
 {
+    GeometryRevision.Invalidate();
 	WWASSERT(vnorm != nullptr);
 	if ((PolyCount == 0)|| (VertexCount == 0)) {
 		return;
@@ -1703,7 +1708,7 @@ WW3DErrorType MeshGeometryClass::read_chunks(ChunkLoadClass & cload)
 					error = read_vertices(cload);
 					break;
 
-			case W3D_CHUNK_SURRENDER_NORMALS:
+			case Assets::W3D::W3DChunkSurrenderNormals:
 			case W3D_CHUNK_VERTEX_NORMALS:
 					error = read_vertex_normals(cload);
 					break;
@@ -1758,6 +1763,7 @@ WW3DErrorType MeshGeometryClass::read_chunks(ChunkLoadClass & cload)
  *=============================================================================================*/
 WW3DErrorType MeshGeometryClass::read_vertices(ChunkLoadClass & cload)
 {
+    GeometryRevision.Invalidate();
     std::vector<std::byte> bytes(cload.Cur_Chunk_Length());
     if(cload.Read(bytes.data(),static_cast<unsigned>(bytes.size()))!=bytes.size())return WW3D_ERROR_LOAD_FAILED;
     std::vector<Assets::Vector3f> values;
@@ -1782,6 +1788,7 @@ WW3DErrorType MeshGeometryClass::read_vertices(ChunkLoadClass & cload)
  *=============================================================================================*/
 WW3DErrorType MeshGeometryClass::read_vertex_normals(ChunkLoadClass & cload)
 {
+    GeometryRevision.Invalidate();
     std::vector<std::byte> bytes(cload.Cur_Chunk_Length());
     if(cload.Read(bytes.data(),static_cast<unsigned>(bytes.size()))!=bytes.size())return WW3D_ERROR_LOAD_FAILED;
     std::vector<Assets::Vector3f> values;
@@ -1806,6 +1813,7 @@ WW3DErrorType MeshGeometryClass::read_vertex_normals(ChunkLoadClass & cload)
  *=============================================================================================*/
 WW3DErrorType MeshGeometryClass::read_triangles(ChunkLoadClass & cload)
 {
+    GeometryRevision.Invalidate();
     std::vector<std::byte> bytes(cload.Cur_Chunk_Length());
     if(cload.Read(bytes.data(),static_cast<unsigned>(bytes.size()))!=bytes.size())return WW3D_ERROR_LOAD_FAILED;
     std::vector<Assets::W3D::W3DTriangleRecord> values;
@@ -1937,6 +1945,7 @@ WW3DErrorType MeshGeometryClass::read_aabtree(ChunkLoadClass &cload)
 
 void MeshGeometryClass::Scale(const Vector3 &sc)
 {
+    GeometryRevision.Invalidate();
 	WWASSERT(Vertex);
 	Vector3 * vert = Vertex->Get_Array();
 

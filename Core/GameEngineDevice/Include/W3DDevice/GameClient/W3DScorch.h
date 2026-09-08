@@ -27,7 +27,6 @@ import Graphics.Scene.Surfaces.Renderer;
 #include "Common/GameType.h"
 #include "Lib/BaseTypeCore.h"
 
-struct VertexFormatXYZDUV1;
 class TextureClass;
 class WorldHeightMap;
 class CameraClass;

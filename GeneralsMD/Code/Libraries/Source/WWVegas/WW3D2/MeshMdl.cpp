@@ -39,7 +39,7 @@
 
 #include "MeshMdl.h"
 #include "GraphicsMesh.h"
-#include "MatInfo.h"
+#include "Texture.h"
 #include "WWMath/vp.h"
 #include "Camera.h"
 #include "WW3D.h"
@@ -53,31 +53,23 @@
 
 
 MeshModelClass::MeshModelClass() :
-	DefMatDesc(nullptr),
-	AlternateMatDesc(nullptr),
-	CurMatDesc(nullptr),
+	CurMatDesc(&DefMatDesc),
 	MatInfo(nullptr)
 {
 	Set_Flag(DIRTY_BOUNDS,true);
 
-	DefMatDesc = W3DNEW MeshMatDescClass;
-	CurMatDesc = DefMatDesc;
-
-	MatInfo = NEW_REF( MaterialInfoClass, () );
+	MatInfo = std::make_shared<Graphics::ModelMaterials<RefCountPtr<TextureClass>>>();
 }
 
 MeshModelClass::MeshModelClass(const MeshModelClass & that) :
 	MeshGeometryClass(that),
-	DefMatDesc(nullptr),
-	AlternateMatDesc(nullptr),
-	CurMatDesc(nullptr),
+	DefMatDesc(that.DefMatDesc),
+	CurMatDesc(&DefMatDesc),
 	MatInfo(nullptr)
 {
-	DefMatDesc = W3DNEW MeshMatDescClass(*(that.DefMatDesc));
-	if (that.AlternateMatDesc != nullptr) {
-		AlternateMatDesc = W3DNEW MeshMatDescClass(*(that.AlternateMatDesc));
+	if (that.AlternateMatDesc) {
+		AlternateMatDesc = std::make_unique<MaterialDescription>(*that.AlternateMatDesc);
 	}
-	CurMatDesc = DefMatDesc;
 
 	clone_materials(that);
 }
@@ -86,10 +78,7 @@ MeshModelClass::~MeshModelClass()
 {
 
 	Reset(0,0,0);
-	REF_PTR_RELEASE(MatInfo);
-
-	delete DefMatDesc;
-	delete AlternateMatDesc;
+	MatInfo.reset();
 
 }
 
@@ -100,14 +89,12 @@ MeshModelClass & MeshModelClass::operator = (const MeshModelClass & that)
 
 		MeshGeometryClass::operator = (that);
 
-		*DefMatDesc = *(that.DefMatDesc);
-		CurMatDesc = DefMatDesc;
+		DefMatDesc = that.DefMatDesc;
+		CurMatDesc = &DefMatDesc;
 
-		delete AlternateMatDesc;
-		AlternateMatDesc = nullptr;
-
-		if (that.AlternateMatDesc != nullptr) {
-			AlternateMatDesc = W3DNEW MeshMatDescClass(*(that.AlternateMatDesc));
+		AlternateMatDesc.reset();
+		if (that.AlternateMatDesc) {
+			AlternateMatDesc = std::make_unique<MaterialDescription>(*that.AlternateMatDesc);
 		}
 
 		clone_materials(that);
@@ -124,12 +111,11 @@ void MeshModelClass::Reset(int polycount,int vertcount,int passcount)
 
 
 	MatInfo->Reset();
-	DefMatDesc->Reset(polycount,vertcount,passcount);
+	DefMatDesc.Reset(polycount,vertcount,passcount);
 
-	delete AlternateMatDesc;
-	AlternateMatDesc = nullptr;
+	AlternateMatDesc.reset();
 
-	CurMatDesc = DefMatDesc;
+	CurMatDesc = &DefMatDesc;
 }
 
 
@@ -137,7 +123,7 @@ void MeshModelClass::Replace_Texture(TextureClass* texture,TextureClass* new_tex
 {
 	WWASSERT(texture);
 	WWASSERT(new_texture);
-	for (int stage=0;stage<MeshMatDescClass::MAX_TEX_STAGES;++stage) {
+	for (int stage=0;stage<MaterialDescription::MAX_TEX_STAGES;++stage) {
 		for (int pass=0;pass<Get_Pass_Count();++pass) {
 			if (Has_Texture_Array(pass,stage)) {
 				for (int i=0;i<Get_Polygon_Count();++i) {
@@ -155,7 +141,7 @@ void MeshModelClass::Replace_Texture(TextureClass* texture,TextureClass* new_tex
 	}
 }
 
-void MeshModelClass::Replace_VertexMaterial(VertexMaterialClass* vmat,VertexMaterialClass* new_vmat)
+void MeshModelClass::Replace_VertexMaterial(Graphics::MeshMaterial* vmat,const std::shared_ptr<Graphics::MeshMaterial>& new_vmat)
 {
 	WWASSERT(vmat);
 	WWASSERT(new_vmat);
@@ -179,6 +165,7 @@ void MeshModelClass::Replace_VertexMaterial(VertexMaterialClass* vmat,VertexMate
 
 void MeshModelClass::Make_Geometry_Unique()
 {
+    GeometryRevision.Invalidate();
 	WWASSERT(Vertex);
 
 	ShareBufferClass<Vector3> * unique_verts = NEW_REF(ShareBufferClass<Vector3>,(*Vertex));
@@ -208,9 +195,9 @@ void MeshModelClass::Make_Color_Array_Unique(int array_index)
 
 void MeshModelClass::Enable_Alternate_Material_Description(bool onoff)
 {
-	if ((onoff == true) && (AlternateMatDesc != nullptr)) {
-		if (CurMatDesc != AlternateMatDesc) {
-			CurMatDesc = AlternateMatDesc;
+	if ((onoff == true) && AlternateMatDesc) {
+		if (CurMatDesc != AlternateMatDesc.get()) {
+			CurMatDesc = AlternateMatDesc.get();
 
 			if (Get_Flag(SORT) && WW3D::Is_Munge_Sort_On_Load_Enabled())
 				compute_static_sort_levels();
@@ -221,8 +208,8 @@ void MeshModelClass::Enable_Alternate_Material_Description(bool onoff)
 			// TODO: Invalidate just this meshes DX9 data!!!
 		}
 	} else {
-		if (CurMatDesc != DefMatDesc) {
-			CurMatDesc = DefMatDesc;
+		if (CurMatDesc != &DefMatDesc) {
+			CurMatDesc = &DefMatDesc;
 
 			if (Get_Flag(SORT) && WW3D::Is_Munge_Sort_On_Load_Enabled())
 				compute_static_sort_levels();
@@ -236,14 +223,8 @@ void MeshModelClass::Enable_Alternate_Material_Description(bool onoff)
 
 bool MeshModelClass::Is_Alternate_Material_Description_Enabled()
 {
-	return CurMatDesc == AlternateMatDesc;
+	return AlternateMatDesc && CurMatDesc == AlternateMatDesc.get();
 }
-/*
-void MeshModelClass::Process_Texture_Reduction()
-{
-	MatInfo->Process_Texture_Reduction();
-}
-*/
 bool MeshModelClass::Needs_Vertex_Normals()
 {
 	if (Get_Flag(MeshModelClass::PRELIT_MASK) == 0) {

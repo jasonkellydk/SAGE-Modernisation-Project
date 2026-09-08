@@ -36,6 +36,7 @@
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 
+#include <cstring>
 
 // for now we maintain old legacy files
 // #define MAINTAIN_LEGACY_FILES
@@ -49,7 +50,7 @@
 #include "Common/Registry.h"
 #include "W3DDevice/GameClient/W3DFileSystem.h"
 
-#include "WW3D2/StringUtilities.h"
+import Assets.Identity;
 
 // DEFINES ////////////////////////////////////////////////////////////////////////////////////////
 
@@ -124,11 +125,11 @@ static GameFileType getFileType( char const *filename )
 	if (char const *extension = strrchr( filename, '.' ))
 	{
 		// test the extension to recognize a few key file types
-		if( WW3DString::Compare_No_Case( extension, ".w3d" ) == 0 )
+		if( Assets::Asset_Name_Equals_No_Case( extension, ".w3d" ) )
 			return FILE_TYPE_W3D;
-		else if( WW3DString::Compare_No_Case( extension, ".tga" ) == 0 )
+		else if( Assets::Asset_Name_Equals_No_Case( extension, ".tga" ) )
 			return FILE_TYPE_TGA;
-		else if( WW3DString::Compare_No_Case( extension, ".dds" ) == 0 )
+		else if( Assets::Asset_Name_Equals_No_Case( extension, ".dds" ) )
 			return FILE_TYPE_DDS;
 	}
 

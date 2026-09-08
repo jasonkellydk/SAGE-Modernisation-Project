@@ -2,6 +2,7 @@ module;
 
 #include <cstdint>
 #include <cstddef>
+#include <cctype>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -35,6 +36,13 @@ export struct AssetIdentity final
 
 export std::string Canonicalize_Asset_Name(std::string_view name);
 
+// These comparisons preserve the byte-oriented, current C character locale
+// matching used by the legacy asset consumers without applying path
+// canonicalization.
+export bool Asset_Name_Equals_No_Case(const char *left, const char *right) noexcept;
+export bool Asset_Name_Prefix_Equals_No_Case(
+	const char *left, const char *right, std::size_t count) noexcept;
+
 export struct AssetDependencyDesc final
 {
 	AssetType type = AssetType::Model;
@@ -51,6 +59,51 @@ export struct AssetDependency final
 
 namespace Assets
 {
+
+bool Asset_Name_Equals_No_Case(const char *left, const char *right) noexcept
+{
+	if (left == right)
+		return true;
+
+	if (left == nullptr || right == nullptr)
+		return false;
+
+	while (*left != '\0' && *right != '\0') {
+		const int left_character = std::tolower(static_cast<unsigned char>(*left));
+		const int right_character = std::tolower(static_cast<unsigned char>(*right));
+		if (left_character != right_character)
+			return false;
+
+		++left;
+		++right;
+	}
+
+	return *left == *right;
+}
+
+bool Asset_Name_Prefix_Equals_No_Case(
+	const char *left, const char *right, std::size_t count) noexcept
+{
+	if (count == 0 || left == right)
+		return true;
+
+	if (left == nullptr || right == nullptr)
+		return false;
+
+	for (std::size_t index = 0; index < count; ++index) {
+		const unsigned char left_value = static_cast<unsigned char>(left[index]);
+		const unsigned char right_value = static_cast<unsigned char>(right[index]);
+		const int left_character = std::tolower(left_value);
+		const int right_character = std::tolower(right_value);
+		if (left_character != right_character)
+			return false;
+
+		if (left_value == '\0' || right_value == '\0')
+			return left_value == right_value;
+	}
+
+	return true;
+}
 
 std::string Canonicalize_Asset_Name(std::string_view name)
 {

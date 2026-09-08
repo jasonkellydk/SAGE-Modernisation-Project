@@ -1,3 +1,4 @@
+import Assets.Math;
 import Assets.Images.PixelEncoding;
 import Graphics.Resources.Textures.Atlas;
 #include <array>
@@ -90,10 +91,9 @@ enum
 #include "W3DDevice/GameClient/Module/W3DTreeDraw.h"
 #include "W3DDevice/GameClient/W3DShroud.h"
 #include "WW3D2/Camera.h"
-#include "WW3D2/MatInfo.h"
 #include "WW3D2/Mesh.h"
 #include "WW3D2/MeshMdl.h"
-#include "WW3D2/VertexFormat.h"
+import Graphics.Scene.Trees.Geometry;
 #include "WW3D2/WW3D.h"
 #include <string>
 #include <vector>
@@ -614,7 +614,7 @@ void W3DTreeBuffer::loadTreesInVertexAndIndexBuffers(Graphics::SceneObjectList<R
 		if (curTree >= m_numTrees) {
 			break;
 		}
-		VertexFormatXYZNDUV1 *vb;
+		Graphics::TreeVertex *vb;
 		UnsignedShort *ib;
         vb = m_vertexTree[bNdx].data();
         ib = m_indexTree[bNdx].data();
@@ -625,7 +625,7 @@ void W3DTreeBuffer::loadTreesInVertexAndIndexBuffers(Graphics::SceneObjectList<R
 		// from back to front.
 		UnsignedShort *curIb = ib;
 
-		VertexFormatXYZNDUV1 *curVb = vb;
+		Graphics::TreeVertex *curVb = vb;
 
 
 
@@ -657,14 +657,14 @@ void W3DTreeBuffer::loadTreesInVertexAndIndexBuffers(Graphics::SceneObjectList<R
 			}
 	#endif
 			Vector3 emissive(0.0f,0.0f,0.0f);
-			MaterialInfoClass * matInfo = m_treeTypes[type].m_mesh->Get_Material_Info();
+			auto matInfo = m_treeTypes[type].m_mesh->Get_Material_Info();
 			if (matInfo) {
-				VertexMaterialClass *vertMat = matInfo->Peek_Vertex_Material(0);
+				Graphics::MeshMaterial *vertMat = matInfo->materials[0].get();
 				if (vertMat) {
-					vertMat->Get_Emissive(&emissive);
+					emissive.Set(vertMat->parameters.emissive[0],vertMat->parameters.emissive[1],vertMat->parameters.emissive[2]);
 				}
 			}
-			REF_PTR_RELEASE(matInfo);
+			matInfo.reset();
 
 
 			Int startVertex = m_curNumTreeVertices[bNdx];
@@ -723,8 +723,8 @@ void W3DTreeBuffer::loadTreesInVertexAndIndexBuffers(Graphics::SceneObjectList<R
 				if (V>1.0f) V=1.0f;
 				if (V<0.0f) V=0.0f;
 
-				curVb->u1 = U*Uscale + UOffset;
-				curVb->v1 = V*Vscale + VOffset;
+				curVb->uv[0] = U*Uscale + UOffset;
+				curVb->uv[1] = V*Vscale + VOffset;
 				Real x = pVert[i].X;
 				Real y = pVert[i].Y;
 
@@ -750,12 +750,12 @@ void W3DTreeBuffer::loadTreesInVertexAndIndexBuffers(Graphics::SceneObjectList<R
 				}
 
 
-				curVb->x = vLoc.X;
-				curVb->y = vLoc.Y;
-				curVb->z = vLoc.Z;
-				curVb->nx = m_trees[curTree].swayType;
-				curVb->ny = 1.0f - m_treeTypes[type].m_data->m_darkening*m_trees[curTree].pushAside;
-				curVb->nz = loc.Z;
+				curVb->position[0] = vLoc.X;
+				curVb->position[1] = vLoc.Y;
+				curVb->position[2] = vLoc.Z;
+				curVb->sway[0] = m_trees[curTree].swayType;
+				curVb->sway[1] = 1.0f - m_treeTypes[type].m_data->m_darkening*m_trees[curTree].pushAside;
+				curVb->sway[2] = loc.Z;
 				if (doVertexLighting) {
 					Vector3 normal(0.0f, 0.0f, 1.0f);
 					if (normals) {
@@ -769,10 +769,10 @@ void W3DTreeBuffer::loadTreesInVertexAndIndexBuffers(Graphics::SceneObjectList<R
 					} else {
 						vertexDiffuse = 0xffffffff;
 					}
-					curVb->diffuse = doLighting(&normal, objectLighting, &emissive,
-														vertexDiffuse, 1.0f);
+					curVb->color = Assets::Color_From_ARGB(doLighting(&normal, objectLighting, &emissive,
+														vertexDiffuse, 1.0f)).To_Array();
 				} else {
-					curVb->diffuse = diffuse;
+					curVb->color = Assets::Color_From_ARGB(diffuse).To_Array();
 				}
 				curVb++;
 				m_curNumTreeVertices[bNdx]++;
@@ -806,13 +806,13 @@ void W3DTreeBuffer::updateVertexBuffer()
 		if (m_curNumTreeIndices[bNdx]==0) {
 			break;
 		}
-		VertexFormatXYZNDUV1 *vb;
+		Graphics::TreeVertex *vb;
         vb = m_vertexTree[bNdx].data();
 		if (!vb) {
 			continue;
 		}
 
-		VertexFormatXYZNDUV1 *curVb;
+		Graphics::TreeVertex *curVb;
 
 		Int curTree;
 		for (curTree=0; curTree<m_numTrees; curTree++) {
@@ -862,10 +862,10 @@ void W3DTreeBuffer::updateVertexBuffer()
 					vLoc.Z += loc.Z;
 				}
 
-				curVb->x = vLoc.X;
-				curVb->y = vLoc.Y;
-				curVb->z = vLoc.Z;
-				curVb->ny = 1.0f - m_treeTypes[type].m_data->m_darkening*m_trees[curTree].pushAside;
+				curVb->position[0] = vLoc.X;
+				curVb->position[1] = vLoc.Y;
+				curVb->position[2] = vLoc.Z;
+				curVb->sway[1] = 1.0f - m_treeTypes[type].m_data->m_darkening*m_trees[curTree].pushAside;
 				curVb++;
 			}
 		}
@@ -1411,18 +1411,7 @@ void W3DTreeBuffer::drawTrees(CameraClass * camera, Graphics::SceneObjectList<Re
     if (m_graphicsGeometryDirty) {
         for (Int batch=0; batch<MAX_BUFFERS; ++batch) {
             if (m_curNumTreeIndices[batch] == 0) break;
-            std::vector<Graphics::TreeVertex> vertices;
-            vertices.reserve(m_curNumTreeVertices[batch]);
-            for (Int v=0; v<m_curNumTreeVertices[batch]; ++v) {
-                const auto& source = m_vertexTree[batch][v];
-                Graphics::TreeVertex vertex;
-                vertex.position = {source.x,source.y,source.z};
-                vertex.color = {((source.diffuse>>16)&255)/255.0f,((source.diffuse>>8)&255)/255.0f,
-                    (source.diffuse&255)/255.0f,((source.diffuse>>24)&255)/255.0f};
-                vertex.uv = {source.u1,source.v1};
-                vertex.sway = {source.nx,source.ny,source.nz};
-                vertices.push_back(vertex);
-            }
+            const auto vertices = std::span<const Graphics::TreeVertex>(m_vertexTree[batch]).first(m_curNumTreeVertices[batch]);
             const std::vector<std::uint32_t> indices(m_indexTree[batch].begin(),
                 m_indexTree[batch].begin()+m_curNumTreeIndices[batch]);
             if (m_graphicsMeshes[batch].Is_Valid()) {

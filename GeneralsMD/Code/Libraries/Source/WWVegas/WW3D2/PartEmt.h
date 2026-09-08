@@ -36,6 +36,11 @@
 
 #pragma once
 
+#include <optional>
+#include <cstring>
+#include <string>
+
+import Graphics.Materials.State;
 #include "WW3D2/RendObj.h"
 #include "WWLib/RANDOM.h"
 #include "PartBuf.h"
@@ -109,7 +114,7 @@ class ParticleEmitterClass : public RenderObjClass
 			ParticlePropertyStruct<float> &frames,
 			ParticlePropertyStruct<float> &blur_times,
 			Vector3 accel, float max_age, float future_start, TextureClass *tex,
-			ShaderClass shader = ShaderClass::_PresetAdditiveSpriteShader,
+			Graphics::MaterialState shader = Graphics::MaterialState::AdditiveSprite(),
 			int max_particles = 0, int max_buffer_size = -1, bool pingpong = false,
 			int render_mode = W3D_EMITTER_RENDER_MODE_TRI_PARTICLES,
 			int frame_mode = W3D_EMITTER_FRAME_MODE_1x1,
@@ -124,7 +129,7 @@ class ParticleEmitterClass : public RenderObjClass
 
 		// Identification methods
 		virtual int				Class_ID () const override { return CLASSID_PARTICLEEMITTER; }
-		virtual const char *	Get_Name () const override { return NameString; }
+		virtual const char *	Get_Name () const override { return NameString ? NameString->c_str() : nullptr; }
 		virtual void			Set_Name (const char *pname) override;
 
 		virtual void			Notify_Added(SceneClass * scene) override;
@@ -242,7 +247,7 @@ class ParticleEmitterClass : public RenderObjClass
 		Vector3Randomizer *	Get_Velocity_Random () const;
 		float						Get_Outwards_Vel () const		{ return OutwardVel * 1000.0F; }
 		float						Get_Velocity_Inherit () const{ return VelInheritFactor; }
-		ShaderClass				Get_Shader () const				{ return Buffer->Get_Shader (); }
+		Graphics::MaterialState				Get_Shader () const				{ return Buffer->Get_Shader (); }
 
 		// Note: Caller IS RESPONSIBLE for freeing any memory allocated by these calls
 		void						Get_Color_Key_Frames (ParticlePropertyStruct<Vector3>	&colors) const			{ Buffer->Get_Color_Key_Frames (colors); }
@@ -317,8 +322,7 @@ class ParticleEmitterClass : public RenderObjClass
 		int							ParticlesLeft;		// Particles left to emit
 		int							MaxParticles;		// Total particles to emit
 		bool							IsComplete;			// Completed Emissions
-		char *						NameString;
-		char *						UserString;
+		std::optional<std::string>		NameString;
 		bool							RemoveOnComplete;	// Should this emitter destroy itself when it completes?
 		bool							IsInScene;
 		unsigned char				GroupID;				// The group ID of a particle. A start causes the group ID to increment.

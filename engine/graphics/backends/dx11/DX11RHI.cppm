@@ -21,6 +21,7 @@ module;
 #include <utility>
 #include <vector>
 #include <windows.h>
+#include "DX11GPUProfiling.h"
 
 export module Graphics.Backends.DX11;
 
@@ -84,6 +85,7 @@ struct DX11Buffer final
 	RHIBufferUsage usage = RHIBufferUsage::Vertex;
 	std::uint32_t byte_size = 0;
 	std::uint32_t capacity = 0;
+    RHIBufferUpdateMode update_mode = RHIBufferUpdateMode::Preserve;
 };
 
 // Recycle native vertex/index storage independently of public handle lifetime.
@@ -105,11 +107,11 @@ public:
         return std::bit_width(size > 256 ? size - 1 : 255u);
     }
 
-    DX11NativeObject<ID3D11Buffer> Take(RHIBufferUsage usage, std::uint32_t size)
+    DX11NativeObject<ID3D11Buffer> Take(RHIBufferUsage usage, std::uint32_t size, RHIBufferUpdateMode mode)
     {
         if (!Eligible(usage, size)) return {};
         const auto index = Size_Class(size);
-        auto& bucket = m_free[usage == RHIBufferUsage::Index][index];
+        auto& bucket = m_free[mode == RHIBufferUpdateMode::Discard][usage == RHIBufferUsage::Index][index];
         if (bucket.empty()) return {};
         auto buffer = std::move(bucket.back());
         bucket.pop_back();
@@ -121,7 +123,8 @@ public:
     {
         if (!Eligible(buffer.usage, buffer.capacity)
             || buffer.capacity > MaxIdleBytes - m_idle_bytes) return;
-        auto& bucket = m_free[buffer.usage == RHIBufferUsage::Index][Size_Class(buffer.capacity)];
+        auto& bucket = m_free[buffer.update_mode == RHIBufferUpdateMode::Discard]
+            [buffer.usage == RHIBufferUsage::Index][Size_Class(buffer.capacity)];
         try {
             bucket.push_back(std::move(buffer.object));
             m_idle_bytes += buffer.capacity;
@@ -131,7 +134,7 @@ public:
     }
 
 private:
-    std::array<std::array<std::vector<DX11NativeObject<ID3D11Buffer>>, 27>, 2> m_free;
+    std::array<std::array<std::array<std::vector<DX11NativeObject<ID3D11Buffer>>, 27>, 2>, 2> m_free;
     std::uint32_t m_idle_bytes = 0;
 };
 
@@ -251,6 +254,7 @@ private:
 
 	DX11DeviceState *m_state = nullptr;
 	RHIPipelineHandle m_pipeline{};
+	std::array<std::array<RHIBufferHandle, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT>, 2> m_constant_buffers{};
 	RHIPrimitiveTopology m_topology = RHIPrimitiveTopology::TriangleList;
 	RHITextureHandle m_color_target{};
 	RHITextureHandle m_depth_target{};
@@ -276,6 +280,7 @@ struct DX11DeviceState final
 	bool frame_active = false;
 	bool ready_to_present = false;
 	bool presented = false;
+	DX11Detail::GPUProfiler gpu_profiler;
 
 	DX11DeviceState() noexcept
 		: swap_chain(this),
@@ -979,12 +984,15 @@ bool DX11CommandList::Is_Pipeline_Valid() const noexcept
 
 bool DX11CommandList::Bind_Pipeline(RHIPipelineHandle pipeline) noexcept
 {
+    GRAPHICS_PROFILE_SCOPE("Graphics.DX11.BindPipeline");
 	if (!Is_Ready())
 		return false;
 
 	DX11Pipeline *resource = m_state->pipelines.Resolve(pipeline);
 	if (resource == nullptr || resource->vertex_shader.Get() == nullptr || resource->pixel_shader.Get() == nullptr || resource->input_layout.Get() == nullptr || resource->depth_stencil_state.Get() == nullptr || resource->blend_state.Get() == nullptr || resource->rasterizer_state.Get() == nullptr || resource->sampler_states[0].Get() == nullptr)
 		return false;
+	if (m_pipeline == pipeline)
+		return true;
 
 	ID3D11DeviceContext *context = m_state->context.Get();
 	context->IASetInputLayout(resource->input_layout.Get());
@@ -1044,11 +1052,15 @@ bool DX11CommandList::Bind_Buffer_At_Slot(RHIShaderStage stage, std::uint32_t sl
 
 	if (resource->usage != RHIBufferUsage::Constant)
 		return false;
+	auto& bindings = m_constant_buffers[stage == RHIShaderStage::Vertex ? 0 : 1];
+	if (slot < bindings.size() && bindings[slot] == buffer)
+		return true;
 	ID3D11Buffer *native_buffer = resource->object.Get();
 	if (stage == RHIShaderStage::Vertex)
 		context->VSSetConstantBuffers(slot, 1, &native_buffer);
 	else
 		context->PSSetConstantBuffers(slot, 1, &native_buffer);
+	if (slot < bindings.size()) bindings[slot] = buffer;
 	return true;
 }
 
@@ -1266,11 +1278,14 @@ bool DX11CommandList::Set_Draw_Constants(std::span<const std::byte> data) noexce
 	ID3D11Buffer *native_buffer = m_draw_constants.Get();
 	m_state->context.Get()->VSSetConstantBuffers(1, 1, &native_buffer);
 	m_state->context.Get()->PSSetConstantBuffers(1, 1, &native_buffer);
+	m_constant_buffers[0][1] = {};
+	m_constant_buffers[1][1] = {};
 	return true;
 }
 
 bool DX11CommandList::Set_Vertex_Buffer(std::uint32_t slot, RHIBufferHandle buffer, std::uint32_t stride, std::uint32_t offset) noexcept
 {
+    GRAPHICS_PROFILE_FOCUS_SCOPE("Graphics.DX11.SetVertexBuffer");
 	if (!Is_Ready())
 		return false;
 
@@ -1287,6 +1302,7 @@ bool DX11CommandList::Set_Vertex_Buffer(std::uint32_t slot, RHIBufferHandle buff
 
 bool DX11CommandList::Set_Index_Buffer(RHIBufferHandle buffer, RHIIndexFormat format, std::uint32_t offset) noexcept
 {
+    GRAPHICS_PROFILE_FOCUS_SCOPE("Graphics.DX11.SetIndexBuffer");
 	if (!Is_Ready())
 		return false;
 
@@ -1301,6 +1317,7 @@ bool DX11CommandList::Set_Index_Buffer(RHIBufferHandle buffer, RHIIndexFormat fo
 
 bool DX11CommandList::Draw(std::uint32_t vertex_count, std::uint32_t first_vertex, std::uint32_t instance_count, std::uint32_t first_instance) noexcept
 {
+    GRAPHICS_PROFILE_FOCUS_SCOPE("Graphics.DX11.Draw");
 	if (!Is_Pipeline_Valid() || vertex_count == 0 || instance_count == 0)
 		return false;
 
@@ -1314,6 +1331,7 @@ bool DX11CommandList::Draw(std::uint32_t vertex_count, std::uint32_t first_verte
 
 bool DX11CommandList::Draw_Indexed(std::uint32_t index_count, std::uint32_t first_index, std::int32_t base_vertex, std::uint32_t instance_count, std::uint32_t first_instance) noexcept
 {
+    GRAPHICS_PROFILE_FOCUS_SCOPE("Graphics.DX11.DrawIndexed");
 	if (!Is_Pipeline_Valid() || index_count == 0 || instance_count == 0)
 		return false;
 
@@ -1328,6 +1346,7 @@ bool DX11CommandList::Draw_Indexed(std::uint32_t index_count, std::uint32_t firs
 void DX11CommandList::Reset_Frame_State() noexcept
 {
 	m_pipeline = {};
+	m_constant_buffers = {};
 	m_topology = RHIPrimitiveTopology::TriangleList;
 	m_color_target = {};
 	m_depth_target = {};
@@ -1354,6 +1373,8 @@ DX11Device::DX11Device(DX11DeviceOptions options)
 
 	if (m_state->native_swap_chain.Get() != nullptr && !m_state->swap_chain.Create_Targets(options.width, options.height))
 		m_state->native_swap_chain.Reset();
+	if (m_state->native_swap_chain.Get() != nullptr)
+		m_state->gpu_profiler.Initialize(m_state->device.Get(),m_state->context.Get());
 }
 
 bool DX11Device::Is_Valid() const noexcept
@@ -1405,6 +1426,10 @@ RHIBufferHandle DX11Device::Create_Buffer_Initialized(const RHIBuffer &descripti
     GRAPHICS_PROFILE_SCOPE("Graphics.DX11.CreateBuffer");
 	if (!Is_Valid() || description.byte_size == 0)
 		return {};
+    if (description.update_mode != RHIBufferUpdateMode::Preserve
+        && description.update_mode != RHIBufferUpdateMode::Discard) return {};
+    const bool discard = description.update_mode == RHIBufferUpdateMode::Discard;
+    if (discard && description.usage != RHIBufferUsage::Vertex && description.usage != RHIBufferUsage::Index) return {};
 	if (!initial_data.empty() && (initial_data.size() != description.byte_size || initial_data.size() > std::numeric_limits<std::uint32_t>::max()))
 		return {};
 
@@ -1424,7 +1449,8 @@ RHIBufferHandle DX11Device::Create_Buffer_Initialized(const RHIBuffer &descripti
 	const bool pooled = DX11BufferCache::Eligible(description.usage, description.byte_size);
 	if (pooled)
 		native_description.ByteWidth = 1u << DX11BufferCache::Size_Class(description.byte_size);
-	native_description.Usage = D3D11_USAGE_DEFAULT;
+	native_description.Usage = discard ? D3D11_USAGE_DYNAMIC : D3D11_USAGE_DEFAULT;
+    native_description.CPUAccessFlags = discard ? D3D11_CPU_ACCESS_WRITE : 0;
 	native_description.BindFlags = bind_flags;
 	if (description.usage == RHIBufferUsage::Storage) {
 		native_description.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
@@ -1434,21 +1460,30 @@ RHIBufferHandle DX11Device::Create_Buffer_Initialized(const RHIBuffer &descripti
 	resource.usage = description.usage;
 	resource.byte_size = logical_size;
 	resource.capacity = native_description.ByteWidth;
-	resource.object = m_state->buffer_cache.Take(description.usage, description.byte_size);
+    resource.update_mode = description.update_mode;
+	resource.object = m_state->buffer_cache.Take(description.usage, description.byte_size,description.update_mode);
 	ID3D11Buffer *native_buffer = nullptr;
 	D3D11_SUBRESOURCE_DATA native_data{};
 	native_data.pSysMem = initial_data.data();
 	if (resource.object.Get() == nullptr) {
         GRAPHICS_PROFILE_SCOPE("Graphics.DX11.NativeCreateBuffer");
 		if (FAILED(m_state->device.Get()->CreateBuffer(&native_description,
-            initial_data.empty() || pooled ? nullptr : &native_data, &native_buffer))) return {};
+            initial_data.empty() || pooled || discard ? nullptr : &native_data, &native_buffer))) return {};
 		resource.object.Reset(native_buffer);
 	}
-	if (pooled && !initial_data.empty()) {
-        // UpdateSubresource preserves command ordering when earlier draws still
-        // reference recycled storage. Only upload the caller's logical range.
-		const D3D11_BOX box{0, 0, 0, description.byte_size, 1, 1};
-		m_state->context.Get()->UpdateSubresource(resource.object.Get(), 0, &box, initial_data.data(), 0, 0);
+	if ((pooled || discard) && !initial_data.empty()) {
+        GRAPHICS_PROFILE_SCOPE("Graphics.DX11.InitialBufferUpload");
+        // Discard mapping gives pending draws their previous storage while the
+        // new handle receives independent contents, even when recycling buffers.
+        if (discard) {
+            D3D11_MAPPED_SUBRESOURCE mapped{};
+            if (FAILED(m_state->context.Get()->Map(resource.object.Get(),0,D3D11_MAP_WRITE_DISCARD,0,&mapped))) return {};
+            std::memcpy(mapped.pData,initial_data.data(),initial_data.size());
+            m_state->context.Get()->Unmap(resource.object.Get(),0);
+        } else {
+            const D3D11_BOX box{0,0,0,description.byte_size,1,1};
+            m_state->context.Get()->UpdateSubresource(resource.object.Get(),0,&box,initial_data.data(),0,0);
+        }
 	}
 	if (description.usage == RHIBufferUsage::Storage) {
 		D3D11_SHADER_RESOURCE_VIEW_DESC view_description{};
@@ -1605,6 +1640,14 @@ bool DX11Device::Update_Buffer(RHIBufferHandle buffer, std::uint32_t offset, std
 	DX11Buffer *resource = m_state->buffers.Resolve(buffer);
 	if (resource == nullptr || resource->object.Get() == nullptr || offset > resource->byte_size || data.size() > resource->byte_size - offset)
 		return false;
+    if (resource->update_mode == RHIBufferUpdateMode::Discard) {
+        if (offset != 0) return false;
+        D3D11_MAPPED_SUBRESOURCE mapped{};
+        if (FAILED(m_state->context.Get()->Map(resource->object.Get(),0,D3D11_MAP_WRITE_DISCARD,0,&mapped))) return false;
+        std::memcpy(mapped.pData,data.data(),data.size());
+        m_state->context.Get()->Unmap(resource->object.Get(),0);
+        return true;
+    }
 	if (resource->usage == RHIBufferUsage::Constant) {
 		if (offset != 0 || data.size() != resource->byte_size)
 			return false;
@@ -1846,6 +1889,7 @@ bool DX11Device::Begin_Frame() noexcept
 		return false;
 
 	m_state->frame_active = true;
+	m_state->gpu_profiler.Begin_Frame();
 	m_state->ready_to_present = false;
 	m_state->presented = false;
 	return true;
@@ -1857,6 +1901,7 @@ bool DX11Device::End_Frame() noexcept
 		return false;
 
 	m_state->context.Get()->OMSetRenderTargets(0, nullptr, nullptr);
+	m_state->gpu_profiler.End_Frame();
 	m_state->frame_active = false;
 	m_state->ready_to_present = true;
 	m_state->presented = false;

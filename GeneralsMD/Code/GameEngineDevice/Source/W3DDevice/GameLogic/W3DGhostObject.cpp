@@ -49,7 +49,6 @@
 #include "WW3D2/RendObj.h"
 #include "WW3D2/HLOD.h"
 #include "WW3D2/Scene.h"
-#include "WW3D2/MatInfo.h"
 import Assets.Cache.Animations;
 
 
@@ -97,19 +96,19 @@ void disableUVAnimations(RenderObjClass *robj)
 			if (subObj && subObj->Class_ID() == RenderObjClass::CLASSID_MESH)
 			{
 				//check if sub-object has the correct material to do texture scrolling.
-				MaterialInfoClass *mat = subObj->Get_Material_Info();
+				auto mat = subObj->Get_Material_Info();
 				if (mat)
 				{
-					for (Int j=0; j<mat->Vertex_Material_Count(); j++)
+					for (Int j=0; j<static_cast<int>(mat->materials.size()); j++)
 					{
-						VertexMaterialClass *vmaterial = mat->Peek_Vertex_Material(j);
-						LinearOffsetTextureMapperClass *mapper = (LinearOffsetTextureMapperClass *)vmaterial->Peek_Mapper();
-						if (mapper && mapper->Mapper_ID() == TextureMapperClass::MAPPER_ID_LINEAR_OFFSET)
+						Graphics::MeshMaterial *vmaterial = mat->materials[j].get();
+						auto* mapper=vmaterial->mappings[0].get();
+						if (mapper && mapper->Linear_Scroll())
 						{
 							subObj->Set_User_Data(&animationDisableOverride);	//tell W3D about custom material settings
 						}
 					}
-					REF_PTR_RELEASE(mat);
+					mat.reset();
 				}
 				//We don't want muzzle flashes visible inside fog, so turn them off.
 				if (subObj->Get_Name() && strstr(subObj->Get_Name(),"MUZZLEFX"))

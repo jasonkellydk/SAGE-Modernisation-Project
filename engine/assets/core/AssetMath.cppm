@@ -29,6 +29,8 @@ export struct Color4f final
 	float g = 1.0f;
 	float b = 1.0f;
 	float a = 1.0f;
+
+	constexpr std::array<float,4> To_Array() const noexcept { return {r,g,b,a}; }
 };
 
 // Hue is expressed in degrees; a negative hue marks a monochrome color.

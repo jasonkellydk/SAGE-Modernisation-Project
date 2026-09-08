@@ -4,6 +4,7 @@ module;
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -14,6 +15,8 @@ import Assets.Adapters.W3D.Chunks;
 export import Assets.Adapters.W3D.ShaderMaterials;
 import Assets.Math;
 import Assets.Models;
+import Assets.Materials.TextureMapping;
+import Assets.Adapters.W3D.TextureMapping;
 
 namespace Assets::W3D
 {
@@ -31,10 +34,39 @@ export struct W3DVertexMaterialData final
 {
 	ModelMaterialDesc material;
 	std::array<std::string, 2> mapper_arguments;
+	std::array<std::optional<TextureMappingDescription>,2> mappings;
 	bool has_name = false;
 };
 
 export bool W3DRead_Vertex_Material(W3DByteSpan bytes, W3DVertexMaterialData &result);
+
+export enum class W3DMaterial3MapKind : std::uint8_t
+{
+	DiffuseColor,
+	DiffuseIllumination,
+	SpecularColor,
+	SpecularIllumination
+};
+
+export struct W3DMaterial3MapData final
+{
+	W3DMaterial3MapKind kind = W3DMaterial3MapKind::DiffuseColor;
+	std::string filename;
+	std::uint16_t mapping_type = 0;
+	std::uint16_t frame_count = 0;
+	float frame_rate = 0.0f;
+};
+
+export struct W3DMaterial3Data final
+{
+	ModelMaterialDesc material;
+	std::uint32_t attributes = 0;
+	float fog_coefficient = 1.0f;
+	std::vector<W3DMaterial3MapData> maps;
+};
+
+export bool W3DRead_Material3(W3DByteSpan bytes,W3DMaterial3Data& result);
+export bool W3DRead_Material3_Container(W3DByteSpan bytes,std::vector<W3DMaterial3Data>& result);
 
 export struct W3DShaderSettings final
 {
@@ -162,6 +194,134 @@ bool Parse_Vertex_Material(W3DByteSpan bytes, W3DVertexMaterialData &result)
 	return valid && has_info;
 }
 
+bool Read_U16(W3DByteSpan bytes, std::size_t offset, std::uint16_t &value) noexcept
+{
+	if (offset > bytes.size() || bytes.size() - offset < sizeof(std::uint16_t))
+		return false;
+	const auto *data = reinterpret_cast<const std::uint8_t *>(bytes.data() + offset);
+	value = static_cast<std::uint16_t>(data[0]) |
+		(static_cast<std::uint16_t>(data[1]) << 8);
+	return true;
+}
+
+bool Read_Null_Terminated_String(W3DByteSpan bytes, std::string &value, bool allow_empty)
+{
+	if (bytes.empty())
+		return false;
+	const auto *data = reinterpret_cast<const char *>(bytes.data());
+	std::size_t length = 0;
+	while (length < bytes.size() && data[length] != '\0')
+		++length;
+	if (length == bytes.size() || (!allow_empty && length == 0))
+		return false;
+	value.assign(data, length);
+	return true;
+}
+
+bool Read_Material3_Map(W3DByteSpan bytes, W3DMaterial3MapData &result)
+{
+	W3DMaterial3MapData parsed;
+	bool has_filename = false;
+	bool has_info = false;
+	unsigned required_chunk = 0;
+	if (!W3DVisit_Chunks(bytes, [&](const W3DChunkView &chunk) {
+		switch (chunk.id) {
+			case W3DChunkMap3Filename:
+				if (required_chunk != 0 || chunk.contains_children ||
+					!Read_Null_Terminated_String(chunk.payload, parsed.filename, false))
+					return false;
+				has_filename = true;
+				required_chunk = 1;
+				return true;
+			case W3DChunkMap3Info:
+				if (required_chunk != 1 || has_info || chunk.contains_children || chunk.payload.size() < 8 ||
+					!Read_U16(chunk.payload, 0, parsed.mapping_type) ||
+					!Read_U16(chunk.payload, 2, parsed.frame_count) ||
+					!W3DRead_F32(chunk.payload, 4, parsed.frame_rate) ||
+					!std::isfinite(parsed.frame_rate))
+					return false;
+				has_info = true;
+				required_chunk = 2;
+				return true;
+			default:
+				return required_chunk == 2;
+		}
+	}))
+		return false;
+	if (!has_filename || !has_info)
+		return false;
+	result = std::move(parsed);
+	return true;
+}
+
+bool Read_Material3_Record(W3DByteSpan bytes, W3DMaterial3Data &result)
+{
+	W3DMaterial3Data parsed;
+	bool has_name = false;
+	bool has_info = false;
+	unsigned required_chunk = 0;
+	if (!W3DVisit_Chunks(bytes, [&](const W3DChunkView &chunk) {
+		switch (chunk.id) {
+			case W3DChunkMaterial3Name:
+				if (required_chunk != 0 || chunk.contains_children ||
+					!Read_Null_Terminated_String(chunk.payload, parsed.material.name, true))
+					return false;
+				has_name = true;
+				required_chunk = 1;
+				return true;
+			case W3DChunkMaterial3Info:
+				if (required_chunk != 1 || has_info || chunk.contains_children)
+					return false;
+				{
+					W3DMaterial3Data info;
+					// The wire record is 44 bytes; some exporters pad the chunk.
+					if (chunk.payload.size() < 44 ||
+						!W3DRead_Material3(chunk.payload.first(44), info))
+						return false;
+					std::string name = std::move(parsed.material.name);
+					parsed = std::move(info);
+					parsed.material.name = std::move(name);
+				}
+				has_info = true;
+				required_chunk = 2;
+				return true;
+			case W3DChunkMaterial3DiffuseColorMap:
+			case W3DChunkMaterial3DiffuseIlluminationMap:
+			case W3DChunkMaterial3SpecularColorMap:
+			case W3DChunkMaterial3SpecularIlluminationMap: {
+				if (!has_info || !chunk.contains_children)
+					return false;
+				W3DMaterial3MapData map;
+				if (!Read_Material3_Map(chunk.payload, map))
+					return false;
+				switch (chunk.id) {
+					case W3DChunkMaterial3DiffuseColorMap:
+						map.kind = W3DMaterial3MapKind::DiffuseColor;
+						break;
+					case W3DChunkMaterial3DiffuseIlluminationMap:
+						map.kind = W3DMaterial3MapKind::DiffuseIllumination;
+						break;
+					case W3DChunkMaterial3SpecularColorMap:
+						map.kind = W3DMaterial3MapKind::SpecularColor;
+						break;
+					default:
+						map.kind = W3DMaterial3MapKind::SpecularIllumination;
+						break;
+				}
+				parsed.maps.push_back(std::move(map));
+				return true;
+			}
+			default:
+				return required_chunk == 2;
+		}
+	}))
+		return false;
+	if (!has_name || !has_info)
+		return false;
+	result = std::move(parsed);
+	return true;
+}
+
 bool Parse_Vertex_Materials(W3DByteSpan bytes, std::vector<W3DVertexMaterialData> &materials)
 {
 	return W3DVisit_Chunks(bytes, [&materials](const W3DChunkView &chunk) {
@@ -258,6 +418,56 @@ export bool W3DRead_Vertex_Material(W3DByteSpan bytes, W3DVertexMaterialData &re
 	result = {};
 	W3DVertexMaterialData parsed;
 	if (!W3DValidate_Chunk_Tree(bytes) || !MaterialDetail::Parse_Vertex_Material(bytes, parsed))
+		return false;
+	for (unsigned stage=0;stage<parsed.mappings.size();++stage)
+		parsed.mappings[stage]=W3DRead_Texture_Mapping(parsed.material.source_attributes,stage,parsed.mapper_arguments[stage]);
+	result = std::move(parsed);
+	return true;
+}
+
+export bool W3DRead_Material3(W3DByteSpan bytes,W3DMaterial3Data& result)
+{
+	result = {};
+	if (bytes.size() != 44)
+		return false;
+	W3DMaterial3Data parsed;
+	auto &material = parsed.material;
+	if (!W3DRead_U32(bytes, 0, parsed.attributes) ||
+		!W3DRead_F32(bytes, 28, material.shininess) ||
+		!W3DRead_F32(bytes, 32, material.opacity) ||
+		!W3DRead_F32(bytes, 36, material.translucency) ||
+		!W3DRead_F32(bytes, 40, parsed.fog_coefficient) ||
+		!std::isfinite(material.shininess) || !std::isfinite(material.opacity) ||
+		!std::isfinite(material.translucency) || !std::isfinite(parsed.fog_coefficient))
+		return false;
+	material.source_attributes = parsed.attributes;
+	const auto diffuse = MaterialDetail::Read_Material_Color(bytes, 4);
+	const auto specular = MaterialDetail::Read_Material_Color(bytes, 8);
+	const auto diffuse_coefficient = MaterialDetail::Read_Material_Color(bytes, 20);
+	const auto specular_coefficient = MaterialDetail::Read_Material_Color(bytes, 24);
+	material.base_color = {diffuse.r * diffuse_coefficient.r,
+		diffuse.g * diffuse_coefficient.g, diffuse.b * diffuse_coefficient.b, 1.0f};
+	material.specular_color = {specular.r * specular_coefficient.r,
+		specular.g * specular_coefficient.g, specular.b * specular_coefficient.b, 1.0f};
+	material.emissive_color = MaterialDetail::Read_Material_Color(bytes, 12);
+	material.ambient_color = MaterialDetail::Read_Material_Color(bytes, 16);
+	result = std::move(parsed);
+	return true;
+}
+
+export bool W3DRead_Material3_Container(W3DByteSpan bytes, std::vector<W3DMaterial3Data> &result)
+{
+	result = {};
+	std::vector<W3DMaterial3Data> parsed;
+	if (!W3DValidate_Chunk_Tree(bytes) || !W3DVisit_Chunks(bytes, [&parsed](const W3DChunkView &chunk) {
+		if (chunk.id != W3DChunkMaterial3 || !chunk.contains_children)
+			return false;
+		W3DMaterial3Data material;
+		if (!MaterialDetail::Read_Material3_Record(chunk.payload, material))
+			return false;
+		parsed.push_back(std::move(material));
+		return true;
+	}))
 		return false;
 	result = std::move(parsed);
 	return true;

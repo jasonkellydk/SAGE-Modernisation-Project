@@ -54,9 +54,8 @@ import Graphics.Scene.Surfaces.Renderer;
 #include "WWLib/always.h"
 #include "WW3D2/RendObj.h"
 #include "WW3D2/W3DFile.h"
-#include "WW3D2/VertexFormat.h"
-#include "WW3D2/Shader.h"
-#include "WW3D2/VertMaterial.h"
+import Graphics.Scene.Surfaces.Geometry;
+import Graphics.Materials.State;
 //#include "common/GameFileSystem.h"
 #include "Common/FileSystem.h" // for LOAD_TEST_ASSETS
 #include "Lib/BaseType.h"
@@ -129,7 +128,7 @@ public:
 	Bool			m_visible;
 protected:
 	Int										m_numVertex;
-	VertexFormatXYZDUV1*	m_vb;
+	Graphics::SurfaceVertex*	m_vb;
 	Int										m_numIndex;
 	UnsignedShort*				m_ib;
 	TRoadSegInfo					m_info;
@@ -138,14 +137,14 @@ public:
 	RoadSegment();
 	~RoadSegment();
 public:
-	void SetVertexBuffer(VertexFormatXYZDUV1 *vb, Int numVertex);
+	void SetVertexBuffer(Graphics::SurfaceVertex *vb, Int numVertex);
 	void SetIndexBuffer(UnsignedShort *ib, Int numIndex);
 	void SetRoadSegInfo(TRoadSegInfo *pInfo) {m_info = *pInfo;};
 	void GetRoadSegInfo(TRoadSegInfo *pInfo) {*pInfo = m_info;};
 	const SphereClass &getBounds() {return m_bounds;};
 	Int GetNumVertex() {return m_numVertex;};
 	Int GetNumIndex() {return m_numIndex;};
-	Int GetVertices(VertexFormatXYZDUV1 *destination_vb, Int numToCopy);
+	Int GetVertices(Graphics::SurfaceVertex *destination_vb, Int numToCopy);
 	Int GetIndices(UnsignedShort *destination_ib, Int numToCopy, Int offset);
 	void updateSegLighting();
 } ;
@@ -156,7 +155,7 @@ public:
 	~RoadType();
 protected:
 	TextureClass *m_roadTexture;	///<Roads texture
-	std::vector<VertexFormatXYZDUV1> m_vertices;
+	std::vector<Graphics::SurfaceVertex> m_vertices;
 	std::vector<UnsignedShort> m_indices;
 	Graphics::SurfaceMeshHandle m_mesh;
 	Int			m_numRoadVertices; ///<Number of vertices used in m_vertexRoad.
@@ -176,7 +175,7 @@ public:
 	Int getStacking() {return m_stackingOrder;}
 	void setStacking(Int order) {m_stackingOrder = order;}
 	Int getUniqueID() {return m_uniqueID;};
-	VertexFormatXYZDUV1 *getVB() { return m_vertices.data(); }
+	Graphics::SurfaceVertex *getVB() { return m_vertices.data(); }
 	UnsignedShort *getIB() { return m_indices.data(); }
 	Int getNumVertices() {return m_numRoadVertices;}
 	void setNumIndices(Int num) {m_numRoadIndices=num;}
@@ -275,9 +274,9 @@ protected:
 														Vector2 roadNormal, Vector2 roadVector,
 														Vector2 *cornersP,
 														Real uOffset, Real vOffset, Real uScale, Real vScale);
-	void loadLit4PtSection(RoadSegment *pRoad, UnsignedShort *ib, VertexFormatXYZDUV1 *vb, Graphics::SceneObjectList<RenderObjClass>::Cursor *pDynamicLightsIterator);
+	void loadLit4PtSection(RoadSegment *pRoad, UnsignedShort *ib, Graphics::SurfaceVertex *vb, Graphics::SceneObjectList<RenderObjClass>::Cursor *pDynamicLightsIterator);
 	void loadRoadsInVertexAndIndexBuffers(); ///< Fills the index and vertex buffers for drawing.
-	void loadRoadSegment(UnsignedShort *ib, VertexFormatXYZDUV1 *vb, RoadSegment *pRoad); ///< Fills the index and vertex buffers for drawing 1 segment.
+	void loadRoadSegment(UnsignedShort *ib, Graphics::SurfaceVertex *vb, RoadSegment *pRoad); ///< Fills the index and vertex buffers for drawing 1 segment.
 	void allocateRoadBuffers();							 ///< Allocates the buffers.
 	void freeRoadBuffers();									 ///< Frees the index and vertex buffers.
 	Bool visibilityChanged(const IRegion2D &bounds);								///< Returns true if some roads are now visible that weren't, or vice versa.

@@ -5,8 +5,10 @@ module;
 #include <boost/test/included/unit_test.hpp>
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <span>
+#include <vector>
 #include <windows.h>
 
 export module Graphics.Backends.DX11.Tests;
@@ -148,17 +150,20 @@ BOOST_AUTO_TEST_CASE(recycled_native_storage_preserves_logical_bounds_and_handle
 {
     DX11Device device(Make_DX11_Test_Options());
     const std::array<std::byte,12> contents{};
-    for (auto usage : {RHIBufferUsage::Vertex,RHIBufferUsage::Index}) {
-        const auto old = device.Create_Buffer_Initialized({12,usage,4},contents);
+    for (auto usage : {RHIBufferUsage::Vertex,RHIBufferUsage::Index})
+    for (auto mode : {RHIBufferUpdateMode::Preserve,RHIBufferUpdateMode::Discard}) {
+        const auto old = device.Create_Buffer_Initialized({12,usage,4,mode},contents);
         BOOST_REQUIRE(old.Is_Valid());
         BOOST_REQUIRE(device.Destroy_Buffer(old));
-        const auto replacement = device.Create_Buffer_Initialized({12,usage,4},contents);
+        const auto replacement = device.Create_Buffer_Initialized({12,usage,4,mode},contents);
         BOOST_REQUIRE(replacement.Is_Valid());
         BOOST_CHECK(old != replacement);
         BOOST_CHECK(!device.Destroy_Buffer(old));
         BOOST_CHECK(!device.Update_Buffer(old,0,contents));
         BOOST_CHECK(!device.Update_Buffer(replacement,12,std::span(contents).first(1)));
         BOOST_CHECK(device.Update_Buffer(replacement,0,contents));
+        if (mode == RHIBufferUpdateMode::Discard)
+            BOOST_CHECK(!device.Update_Buffer(replacement,1,std::span(contents).first(1)));
         BOOST_REQUIRE(device.Destroy_Buffer(replacement));
     }
 }
@@ -220,118 +225,470 @@ BOOST_AUTO_TEST_CASE(dx11_backend_exercises_the_public_rhi)
 
 BOOST_AUTO_TEST_CASE(dx11_draw_submission_counts_follow_successful_topologies_and_pixels)
 {
-	struct SubmissionTestVertex final
-	{
-		float position[3];
-		float color[4];
-		float uv[2];
-	};
-	const std::array<SubmissionTestVertex, 3> vertices{{
-		{{-0.8f, -0.8f, 0.5f}, {1.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
-		{{0.0f, 0.8f, 0.5f}, {1.0f, 0.0f, 0.0f, 1.0f}, {0.5f, 0.0f}},
-		{{0.8f, -0.8f, 0.5f}, {1.0f, 0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}}
-	}};
-	const std::array<std::uint16_t, 6> indices{{0, 1, 2, 0, 1, 2}};
-	const std::array<float, 8> material_data{{1, 1, 1, 1, 0, 0, 0, 0}};
-	DX11Device device(Make_DX11_Test_Options());
-	BOOST_REQUIRE(device.Is_Valid());
-	const RHIBufferHandle material_buffer = device.Create_Buffer_Initialized(
-		{static_cast<std::uint32_t>(sizeof(material_data)), RHIBufferUsage::Constant, 16},
-		std::as_bytes(std::span<const float>(material_data)));
-	BOOST_REQUIRE(material_buffer.Is_Valid());
-	BindlessResourceTable material_resources;
-	BOOST_REQUIRE(material_resources.Register_Material(MaterialHandle(0, 1), material_buffer).Is_Valid());
-	const RHIBufferHandle vertex_buffer = device.Create_Buffer_Initialized(
-		{static_cast<std::uint32_t>(sizeof(vertices)), RHIBufferUsage::Vertex, static_cast<std::uint32_t>(sizeof(SubmissionTestVertex))},
-		std::as_bytes(std::span<const SubmissionTestVertex>(vertices)));
-	const RHIBufferHandle index_buffer = device.Create_Buffer_Initialized(
-		{static_cast<std::uint32_t>(sizeof(indices)), RHIBufferUsage::Index, 0},
-		std::as_bytes(std::span<const std::uint16_t>(indices)));
-	const RHITextureHandle color_target = device.Create_Texture({16, 16, 1, RHITextureFormat::RGBA8_UNorm,
-		static_cast<std::uint32_t>(RHITextureUsage::RenderTarget)});
-	const RHITextureHandle depth_target = device.Create_Texture({16, 16, 1, RHITextureFormat::D24_UNorm_S8,
-		static_cast<std::uint32_t>(RHITextureUsage::DepthStencil)});
-	RHIPipeline strip_description{8};
-	strip_description.topology = RHIPrimitiveTopology::TriangleStrip;
-	RHIPipeline point_description{9};
-	point_description.topology = RHIPrimitiveTopology::PointList;
-	const RHIPipelineHandle list_pipeline = device.Create_Pipeline({7});
-	const RHIPipelineHandle strip_pipeline = device.Create_Pipeline(strip_description);
-	const RHIPipelineHandle point_pipeline = device.Create_Pipeline(point_description);
-	BOOST_REQUIRE(vertex_buffer.Is_Valid());
-	BOOST_REQUIRE(index_buffer.Is_Valid());
-	BOOST_REQUIRE(color_target.Is_Valid());
-	BOOST_REQUIRE(depth_target.Is_Valid());
-	BOOST_REQUIRE(list_pipeline.Is_Valid());
-	BOOST_REQUIRE(strip_pipeline.Is_Valid());
-	BOOST_REQUIRE(point_pipeline.Is_Valid());
+    for (auto mode : {RHIBufferUpdateMode::Preserve,RHIBufferUpdateMode::Discard}) {
+        struct SubmissionTestVertex final
+        {
+            float position[3];
+            float color[4];
+            float uv[2];
+        };
+        const std::array<SubmissionTestVertex, 3> vertices{{
+            {{-0.8f, -0.8f, 0.5f}, {1.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
+            {{0.0f, 0.8f, 0.5f}, {1.0f, 0.0f, 0.0f, 1.0f}, {0.5f, 0.0f}},
+            {{0.8f, -0.8f, 0.5f}, {1.0f, 0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}}
+        }};
+        const std::array<std::uint16_t, 6> indices{{0, 1, 2, 0, 1, 2}};
+        const std::array<float, 8> material_data{{1, 1, 1, 1, 0, 0, 0, 0}};
+        DX11Device device(Make_DX11_Test_Options());
+        BOOST_REQUIRE(device.Is_Valid());
+        const RHIBufferHandle material_buffer = device.Create_Buffer_Initialized(
+            {static_cast<std::uint32_t>(sizeof(material_data)), RHIBufferUsage::Constant, 16},
+            std::as_bytes(std::span<const float>(material_data)));
+        BOOST_REQUIRE(material_buffer.Is_Valid());
+        BindlessResourceTable material_resources;
+        BOOST_REQUIRE(material_resources.Register_Material(MaterialHandle(0, 1), material_buffer).Is_Valid());
+        const RHIBufferHandle vertex_buffer = device.Create_Buffer_Initialized(
+            {static_cast<std::uint32_t>(sizeof(vertices)), RHIBufferUsage::Vertex, static_cast<std::uint32_t>(sizeof(SubmissionTestVertex)),mode},
+            std::as_bytes(std::span<const SubmissionTestVertex>(vertices)));
+        const RHIBufferHandle index_buffer = device.Create_Buffer_Initialized(
+            {static_cast<std::uint32_t>(sizeof(indices)), RHIBufferUsage::Index, 0,mode},
+            std::as_bytes(std::span<const std::uint16_t>(indices)));
+        const RHITextureHandle color_target = device.Create_Texture({16, 16, 1, RHITextureFormat::RGBA8_UNorm,
+            static_cast<std::uint32_t>(RHITextureUsage::RenderTarget)});
+        const RHITextureHandle depth_target = device.Create_Texture({16, 16, 1, RHITextureFormat::D24_UNorm_S8,
+            static_cast<std::uint32_t>(RHITextureUsage::DepthStencil)});
+        RHIPipeline strip_description{8};
+        strip_description.topology = RHIPrimitiveTopology::TriangleStrip;
+        RHIPipeline point_description{9};
+        point_description.topology = RHIPrimitiveTopology::PointList;
+        const RHIPipelineHandle list_pipeline = device.Create_Pipeline({7});
+        const RHIPipelineHandle strip_pipeline = device.Create_Pipeline(strip_description);
+        const RHIPipelineHandle point_pipeline = device.Create_Pipeline(point_description);
+        BOOST_REQUIRE(vertex_buffer.Is_Valid());
+        BOOST_REQUIRE(index_buffer.Is_Valid());
+        BOOST_REQUIRE(color_target.Is_Valid());
+        BOOST_REQUIRE(depth_target.Is_Valid());
+        BOOST_REQUIRE(list_pipeline.Is_Valid());
+        BOOST_REQUIRE(strip_pipeline.Is_Valid());
+        BOOST_REQUIRE(point_pipeline.Is_Valid());
 
-	CommandList &commands = device.Immediate_Command_List();
-	BOOST_REQUIRE(commands.Set_Render_Targets(color_target, depth_target));
-	BOOST_REQUIRE(commands.Set_Viewport({0, 0, 16, 16, 0.0f, 1.0f}));
-	BOOST_REQUIRE(commands.Clear({0.0f, 0.0f, 1.0f, 1.0f}, 1.0f));
-	BOOST_REQUIRE(commands.Set_Vertex_Buffer(0, vertex_buffer, static_cast<std::uint32_t>(sizeof(SubmissionTestVertex)), 0));
-	BOOST_REQUIRE(commands.Set_Index_Buffer(index_buffer, RHIIndexFormat::UInt16, 0));
-	BOOST_REQUIRE(commands.Bind_Pipeline(list_pipeline));
-	BOOST_REQUIRE(commands.Set_Bindless_Resources(material_resources.Resources()));
-	BOOST_REQUIRE(commands.Draw(3));
-	BOOST_CHECK_EQUAL(commands.Submission_Counts().draw_calls, 1u);
-	BOOST_CHECK_EQUAL(commands.Submission_Counts().triangles, 1u);
-	BOOST_CHECK_EQUAL(commands.Submission_Counts().vertex_invocations, 3u);
+        CommandList &commands = device.Immediate_Command_List();
+        BOOST_REQUIRE(commands.Set_Render_Targets(color_target, depth_target));
+        BOOST_REQUIRE(commands.Set_Viewport({0, 0, 16, 16, 0.0f, 1.0f}));
+        BOOST_REQUIRE(commands.Clear({0.0f, 0.0f, 1.0f, 1.0f}, 1.0f));
+        BOOST_REQUIRE(commands.Set_Vertex_Buffer(0, vertex_buffer, static_cast<std::uint32_t>(sizeof(SubmissionTestVertex)), 0));
+        BOOST_REQUIRE(commands.Set_Index_Buffer(index_buffer, RHIIndexFormat::UInt16, 0));
+        BOOST_REQUIRE(commands.Bind_Pipeline(list_pipeline));
+        BOOST_REQUIRE(commands.Set_Bindless_Resources(material_resources.Resources()));
+        BOOST_REQUIRE(commands.Draw(3));
+        BOOST_CHECK_EQUAL(commands.Submission_Counts().draw_calls, 1u);
+        BOOST_CHECK_EQUAL(commands.Submission_Counts().triangles, 1u);
+        BOOST_CHECK_EQUAL(commands.Submission_Counts().vertex_invocations, 3u);
 
-	BOOST_REQUIRE(commands.Draw_Indexed(3, 0, 0, 2));
-	const RHISubmissionCounts indexed_counts = commands.Submission_Counts();
-	BOOST_CHECK_EQUAL(indexed_counts.draw_calls, 2u);
-	BOOST_CHECK_EQUAL(indexed_counts.triangles, 3u);
-	BOOST_CHECK_EQUAL(indexed_counts.vertex_invocations, 9u);
-	BOOST_CHECK(!commands.Draw(0));
-	BOOST_CHECK(!commands.Draw_Indexed(0));
-	BOOST_CHECK(!commands.Draw(3, 0, 0));
-	BOOST_CHECK(!commands.Draw_Indexed(3, 0, 0, 0));
-	BOOST_CHECK(commands.Submission_Counts().draw_calls == indexed_counts.draw_calls);
-	BOOST_CHECK(commands.Submission_Counts().triangles == indexed_counts.triangles);
-	BOOST_CHECK(commands.Submission_Counts().vertex_invocations == indexed_counts.vertex_invocations);
-	BOOST_REQUIRE(commands.Reset_State());
-	BOOST_CHECK(commands.Submission_Counts().draw_calls == indexed_counts.draw_calls);
-	BOOST_CHECK(commands.Submission_Counts().triangles == indexed_counts.triangles);
-	BOOST_CHECK(commands.Submission_Counts().vertex_invocations == indexed_counts.vertex_invocations);
-	BOOST_CHECK(!commands.Draw(3));
-	BOOST_CHECK(commands.Submission_Counts().draw_calls == indexed_counts.draw_calls);
+        BOOST_REQUIRE(commands.Draw_Indexed(3, 0, 0, 2));
+        const RHISubmissionCounts indexed_counts = commands.Submission_Counts();
+        BOOST_CHECK_EQUAL(indexed_counts.draw_calls, 2u);
+        BOOST_CHECK_EQUAL(indexed_counts.triangles, 3u);
+        BOOST_CHECK_EQUAL(indexed_counts.vertex_invocations, 9u);
+        BOOST_CHECK(!commands.Draw(0));
+        BOOST_CHECK(!commands.Draw_Indexed(0));
+        BOOST_CHECK(!commands.Draw(3, 0, 0));
+        BOOST_CHECK(!commands.Draw_Indexed(3, 0, 0, 0));
+        BOOST_CHECK(commands.Submission_Counts().draw_calls == indexed_counts.draw_calls);
+        BOOST_CHECK(commands.Submission_Counts().triangles == indexed_counts.triangles);
+        BOOST_CHECK(commands.Submission_Counts().vertex_invocations == indexed_counts.vertex_invocations);
+        BOOST_REQUIRE(commands.Reset_State());
+        BOOST_CHECK(commands.Submission_Counts().draw_calls == indexed_counts.draw_calls);
+        BOOST_CHECK(commands.Submission_Counts().triangles == indexed_counts.triangles);
+        BOOST_CHECK(commands.Submission_Counts().vertex_invocations == indexed_counts.vertex_invocations);
+        BOOST_CHECK(!commands.Draw(3));
+        BOOST_CHECK(commands.Submission_Counts().draw_calls == indexed_counts.draw_calls);
 
-	BOOST_REQUIRE(commands.Set_Render_Targets(color_target, depth_target));
-	BOOST_REQUIRE(commands.Set_Viewport({0, 0, 16, 16, 0.0f, 1.0f}));
-	BOOST_REQUIRE(commands.Clear({0.0f, 0.0f, 1.0f, 1.0f}, 1.0f));
-	BOOST_REQUIRE(commands.Set_Vertex_Buffer(0, vertex_buffer, static_cast<std::uint32_t>(sizeof(SubmissionTestVertex)), 0));
-	BOOST_REQUIRE(commands.Bind_Pipeline(strip_pipeline));
-	BOOST_REQUIRE(commands.Set_Bindless_Resources(material_resources.Resources()));
-	BOOST_REQUIRE(commands.Draw(3, 0, 2));
-	const RHISubmissionCounts strip_counts = commands.Submission_Counts();
-	BOOST_CHECK_EQUAL(strip_counts.draw_calls, 3u);
-	BOOST_CHECK_EQUAL(strip_counts.triangles, 5u);
-	BOOST_CHECK_EQUAL(strip_counts.vertex_invocations, 15u);
-	std::array<std::byte, 16 * 16 * 4> pixels{};
-	BOOST_REQUIRE(device.Readback_Texture(color_target, pixels, 16 * 4));
-	const std::size_t center = (8u * 16u + 8u) * 4u;
-	BOOST_CHECK_GT(std::to_integer<unsigned>(pixels[center]), 200u);
-	BOOST_CHECK_LT(std::to_integer<unsigned>(pixels[center + 1]), 32u);
-	BOOST_CHECK_LT(std::to_integer<unsigned>(pixels[center + 2]), 32u);
-	BOOST_CHECK_EQUAL(std::to_integer<unsigned>(pixels[center + 3]), 255u);
+        BOOST_REQUIRE(commands.Set_Render_Targets(color_target, depth_target));
+        BOOST_REQUIRE(commands.Set_Viewport({0, 0, 16, 16, 0.0f, 1.0f}));
+        BOOST_REQUIRE(commands.Clear({0.0f, 0.0f, 1.0f, 1.0f}, 1.0f));
+        BOOST_REQUIRE(commands.Set_Vertex_Buffer(0, vertex_buffer, static_cast<std::uint32_t>(sizeof(SubmissionTestVertex)), 0));
+        BOOST_REQUIRE(commands.Bind_Pipeline(strip_pipeline));
+        BOOST_REQUIRE(commands.Set_Bindless_Resources(material_resources.Resources()));
+        BOOST_REQUIRE(commands.Draw(3, 0, 2));
+        const RHISubmissionCounts strip_counts = commands.Submission_Counts();
+        BOOST_CHECK_EQUAL(strip_counts.draw_calls, 3u);
+        BOOST_CHECK_EQUAL(strip_counts.triangles, 5u);
+        BOOST_CHECK_EQUAL(strip_counts.vertex_invocations, 15u);
+        std::array<std::byte, 16 * 16 * 4> pixels{};
+        BOOST_REQUIRE(device.Readback_Texture(color_target, pixels, 16 * 4));
+        const std::size_t center = (8u * 16u + 8u) * 4u;
+        BOOST_CHECK_GT(std::to_integer<unsigned>(pixels[center]), 200u);
+        BOOST_CHECK_LT(std::to_integer<unsigned>(pixels[center + 1]), 32u);
+        BOOST_CHECK_LT(std::to_integer<unsigned>(pixels[center + 2]), 32u);
+        BOOST_CHECK_EQUAL(std::to_integer<unsigned>(pixels[center + 3]), 255u);
 
-	BOOST_REQUIRE(commands.Bind_Pipeline(point_pipeline));
-	BOOST_REQUIRE(commands.Draw(3, 0, 2));
-	const RHISubmissionCounts point_counts = commands.Submission_Counts();
-	BOOST_CHECK_EQUAL(point_counts.draw_calls, 4u);
-	BOOST_CHECK_EQUAL(point_counts.triangles, 5u);
-	BOOST_CHECK_EQUAL(point_counts.vertex_invocations, 21u);
+        BOOST_REQUIRE(commands.Bind_Pipeline(point_pipeline));
+        BOOST_REQUIRE(commands.Draw(3, 0, 2));
+        const RHISubmissionCounts point_counts = commands.Submission_Counts();
+        BOOST_CHECK_EQUAL(point_counts.draw_calls, 4u);
+        BOOST_CHECK_EQUAL(point_counts.triangles, 5u);
+        BOOST_CHECK_EQUAL(point_counts.vertex_invocations, 21u);
 
-	BOOST_CHECK(device.Destroy_Pipeline(point_pipeline));
-	BOOST_CHECK(device.Destroy_Buffer(material_buffer));
-	BOOST_CHECK(device.Destroy_Pipeline(strip_pipeline));
-	BOOST_CHECK(device.Destroy_Pipeline(list_pipeline));
-	BOOST_CHECK(device.Destroy_Texture(depth_target));
-	BOOST_CHECK(device.Destroy_Texture(color_target));
-	BOOST_CHECK(device.Destroy_Buffer(index_buffer));
-	BOOST_CHECK(device.Destroy_Buffer(vertex_buffer));
+        // Queue an old draw, partially update both bound buffers, then draw again
+        // without rebinding. Earlier draws and untouched index/vertex bytes survive.
+        BOOST_REQUIRE(commands.Bind_Pipeline(list_pipeline));
+        BOOST_REQUIRE(commands.Set_Vertex_Buffer(0,vertex_buffer,sizeof(SubmissionTestVertex),0));
+        BOOST_REQUIRE(commands.Set_Index_Buffer(index_buffer,RHIIndexFormat::UInt16,0));
+        BOOST_REQUIRE(commands.Clear({0,0,1,1},1));
+        BOOST_REQUIRE(commands.Set_Viewport({0,0,5,16}));
+        BOOST_REQUIRE(commands.Draw_Indexed(3));
+        const std::array<float,4> green{0,1,0,1};
+        const std::array<std::uint16_t,3> degenerate{0,0,0};
+        if (mode == RHIBufferUpdateMode::Preserve) {
+            for (unsigned vertex=0; vertex<vertices.size(); ++vertex)
+                BOOST_REQUIRE(device.Update_Buffer(vertex_buffer,
+                    vertex*sizeof(SubmissionTestVertex)+offsetof(SubmissionTestVertex,color),std::as_bytes(std::span(green))));
+            BOOST_REQUIRE(device.Update_Buffer(index_buffer,0,std::as_bytes(std::span(degenerate))));
+        } else {
+            auto updated = vertices;
+            for (auto& vertex : updated) {
+                vertex.color[0]=0; vertex.color[1]=1; vertex.color[2]=0; vertex.color[3]=1;
+            }
+            const std::array<std::uint16_t,6> updated_indices{0,0,0,0,1,2};
+            BOOST_REQUIRE(device.Update_Buffer(vertex_buffer,0,std::as_bytes(std::span(updated))));
+            BOOST_REQUIRE(device.Update_Buffer(index_buffer,0,std::as_bytes(std::span(updated_indices))));
+        }
+        BOOST_REQUIRE(commands.Set_Viewport({5,0,5,16}));
+        BOOST_REQUIRE(commands.Draw_Indexed(3,3));
+        BOOST_REQUIRE(commands.Set_Viewport({10,0,6,16}));
+        BOOST_REQUIRE(commands.Draw_Indexed(3));
+        BOOST_REQUIRE(device.Readback_Texture(color_target,pixels,16*4));
+        const std::array<unsigned,3> probes{2,7,13};
+        for (unsigned region=0; region<probes.size(); ++region)
+            for (unsigned channel=0; channel<4; ++channel)
+                BOOST_CHECK_SMALL(std::to_integer<int>(pixels[(8*16+probes[region])*4+channel])
+                    - (channel == region || channel == 3 ? 255 : 0),1);
+
+        BOOST_CHECK(device.Destroy_Pipeline(point_pipeline));
+        BOOST_CHECK(device.Destroy_Buffer(material_buffer));
+        BOOST_CHECK(device.Destroy_Pipeline(strip_pipeline));
+        BOOST_CHECK(device.Destroy_Pipeline(list_pipeline));
+        BOOST_CHECK(device.Destroy_Texture(depth_target));
+        BOOST_CHECK(device.Destroy_Texture(color_target));
+        BOOST_CHECK(device.Destroy_Buffer(index_buffer));
+        BOOST_CHECK(device.Destroy_Buffer(vertex_buffer));
+    }
+}
+
+BOOST_AUTO_TEST_CASE(repeated_pipeline_binding_preserves_pixels_across_changes_reset_and_resize)
+{
+    struct WindowScope final {
+        HWND window = Create_Frame_Test_Window();
+        ~WindowScope() { DestroyWindow(window); }
+    } scope;
+    BOOST_REQUIRE(scope.window != nullptr);
+    auto options = Make_DX11_Test_Options();
+    options.window = scope.window;
+    options.width = options.height = 16;
+    DX11Device device(options);
+    BOOST_REQUIRE(device.Is_Valid());
+    struct Vertex final { float position[3], color[4], uv[2]; };
+    const std::array<Vertex,3> vertices{{
+        {{-0.8f,-0.8f,0.5f},{1,0,0,1},{0,1}},
+        {{0,0.8f,0.5f},{1,0,0,1},{0.5f,0}},
+        {{0.8f,-0.8f,0.5f},{1,0,0,1},{1,1}}}};
+    const std::array<float,8> material{1,1,1,1,0,0,0,0};
+    const auto vertex_buffer = device.Create_Buffer_Initialized(
+        {sizeof(vertices),RHIBufferUsage::Vertex,sizeof(Vertex)},std::as_bytes(std::span(vertices)));
+    const auto material_buffer = device.Create_Buffer_Initialized(
+        {sizeof(material),RHIBufferUsage::Constant,16},std::as_bytes(std::span(material)));
+    BOOST_REQUIRE(vertex_buffer.Is_Valid());
+    BOOST_REQUIRE(material_buffer.Is_Valid());
+    RHIPipeline description{17};
+    description.depth_test = description.depth_write = false;
+    auto full_pipeline = device.Create_Pipeline(description);
+    description.key = 18;
+    description.color_write_mask = 2;
+    const auto green_pipeline = device.Create_Pipeline(description);
+    BOOST_REQUIRE(full_pipeline.Is_Valid());
+    BOOST_REQUIRE(green_pipeline.Is_Valid());
+    BindlessResourceTable resources;
+    BOOST_REQUIRE(resources.Register_Material(MaterialHandle(0,1),material_buffer).Is_Valid());
+    auto& commands = device.Immediate_Command_List();
+    const auto draw_and_check = [&](RHIPipelineHandle pipeline, bool red) {
+        const auto target = device.Get_Swap_Chain().Backbuffer();
+        BOOST_REQUIRE(commands.Set_Render_Targets(target.texture,device.Get_Swap_Chain().Depth_Target().texture));
+        BOOST_REQUIRE(commands.Set_Viewport({0,0,target.width,target.height,0,1}));
+        BOOST_REQUIRE(commands.Clear({0,0,1,1},1));
+        BOOST_REQUIRE(commands.Set_Vertex_Buffer(0,vertex_buffer,sizeof(Vertex),0));
+        BOOST_REQUIRE(commands.Set_Bindless_Resources(resources.Resources()));
+        BOOST_REQUIRE(commands.Bind_Pipeline(pipeline));
+        BOOST_REQUIRE(commands.Bind_Pipeline(pipeline));
+        BOOST_REQUIRE(commands.Draw(3));
+        std::vector<std::byte> pixels(target.width*target.height*4);
+        BOOST_REQUIRE(device.Readback_Texture(target.texture,pixels,target.width*4));
+        const auto center = (target.height/2*target.width+target.width/2)*4;
+        BOOST_CHECK_EQUAL(std::to_integer<unsigned>(pixels[center]),red ? 255u : 0u);
+        BOOST_CHECK_EQUAL(std::to_integer<unsigned>(pixels[center+1]),0u);
+        BOOST_CHECK_EQUAL(std::to_integer<unsigned>(pixels[center+2]),red ? 0u : 255u);
+        BOOST_CHECK_EQUAL(std::to_integer<unsigned>(pixels[center+3]),255u);
+        BOOST_CHECK_EQUAL(std::to_integer<unsigned>(pixels[0]),0u);
+        BOOST_CHECK_EQUAL(std::to_integer<unsigned>(pixels[2]),255u);
+    };
+    draw_and_check(full_pipeline,true);
+    draw_and_check(green_pipeline,false);
+    draw_and_check(full_pipeline,true);
+    BOOST_REQUIRE(commands.Reset_State());
+    BOOST_CHECK(!commands.Draw(3));
+    draw_and_check(full_pipeline,true);
+    BOOST_REQUIRE(device.Get_Swap_Chain().Resize(24,24));
+    draw_and_check(full_pipeline,true);
+    const auto stale_pipeline = full_pipeline;
+    BOOST_REQUIRE(device.Destroy_Pipeline(full_pipeline));
+    BOOST_CHECK(!commands.Bind_Pipeline(stale_pipeline));
+    BOOST_CHECK(!commands.Draw(3));
+    full_pipeline = device.Create_Pipeline(description);
+    BOOST_REQUIRE(full_pipeline.Is_Valid());
+    BOOST_CHECK(full_pipeline != stale_pipeline);
+    draw_and_check(full_pipeline,false);
+    BOOST_REQUIRE(device.Destroy_Pipeline(full_pipeline));
+    BOOST_REQUIRE(device.Destroy_Pipeline(green_pipeline));
+    BOOST_REQUIRE(device.Destroy_Buffer(vertex_buffer));
+    BOOST_REQUIRE(device.Destroy_Buffer(material_buffer));
+}
+
+BOOST_AUTO_TEST_CASE(repeated_constant_binding_preserves_updated_and_replaced_colors)
+{
+    struct WindowScope final {
+        HWND window = Create_Frame_Test_Window();
+        ~WindowScope() { DestroyWindow(window); }
+    } scope;
+    BOOST_REQUIRE(scope.window != nullptr);
+    auto options = Make_DX11_Test_Options();
+    options.window = scope.window;
+    options.width = options.height = 16;
+    DX11Device device(options);
+    BOOST_REQUIRE(device.Is_Valid());
+    struct Vertex final { float position[3], color[4], uv[2]; };
+    const std::array<Vertex,3> vertices{{
+        {{-0.8f,-0.8f,0.5f},{1,1,1,1},{0,1}},
+        {{0,0.8f,0.5f},{1,1,1,1},{0.5f,0}},
+        {{0.8f,-0.8f,0.5f},{1,1,1,1},{1,1}}}};
+    const std::array<float,8> red{1,0,0,1,0,0,0,0};
+    const std::array<float,8> green{0,1,0,1,0,0,0,0};
+    const auto vertex_buffer = device.Create_Buffer_Initialized(
+        {sizeof(vertices),RHIBufferUsage::Vertex,sizeof(Vertex)},std::as_bytes(std::span(vertices)));
+    auto material_buffer = device.Create_Buffer_Initialized(
+        {sizeof(red),RHIBufferUsage::Constant,16},std::as_bytes(std::span(red)));
+    const auto other_buffer = device.Create_Buffer_Initialized(
+        {sizeof(green),RHIBufferUsage::Constant,16},std::as_bytes(std::span(green)));
+    BOOST_REQUIRE(vertex_buffer.Is_Valid());
+    BOOST_REQUIRE(material_buffer.Is_Valid());
+    BOOST_REQUIRE(other_buffer.Is_Valid());
+    RHIPipeline description{19};
+    description.depth_test = description.depth_write = false;
+    const auto pipeline = device.Create_Pipeline(description);
+    BOOST_REQUIRE(pipeline.Is_Valid());
+    auto& commands = device.Immediate_Command_List();
+    RHIBindlessResource resource{};
+    resource.type = RHIResourceType::Material;
+    resource.constant_buffer_slot = 0;
+    const auto draw_and_check = [&](RHIBufferHandle buffer, bool expect_red) {
+        const auto target = device.Get_Swap_Chain().Backbuffer();
+        BOOST_REQUIRE(commands.Set_Render_Targets(target.texture,device.Get_Swap_Chain().Depth_Target().texture));
+        BOOST_REQUIRE(commands.Set_Viewport({0,0,target.width,target.height,0,1}));
+        BOOST_REQUIRE(commands.Clear({0,0,1,1},1));
+        BOOST_REQUIRE(commands.Set_Vertex_Buffer(0,vertex_buffer,sizeof(Vertex),0));
+        resource.buffer = buffer;
+        BOOST_REQUIRE(commands.Set_Bindless_Resources(std::span(&resource,1)));
+        BOOST_REQUIRE(commands.Set_Bindless_Resources(std::span(&resource,1)));
+        BOOST_REQUIRE(commands.Bind_Pipeline(pipeline));
+        BOOST_REQUIRE(commands.Draw(3));
+        std::vector<std::byte> pixels(target.width*target.height*4);
+        BOOST_REQUIRE(device.Readback_Texture(target.texture,pixels,target.width*4));
+        const auto center = (target.height/2*target.width+target.width/2)*4;
+        BOOST_CHECK_EQUAL(std::to_integer<unsigned>(pixels[center]),expect_red ? 255u : 0u);
+        BOOST_CHECK_EQUAL(std::to_integer<unsigned>(pixels[center+1]),expect_red ? 0u : 255u);
+        BOOST_CHECK_EQUAL(std::to_integer<unsigned>(pixels[center+2]),0u);
+        BOOST_CHECK_EQUAL(std::to_integer<unsigned>(pixels[center+3]),255u);
+        BOOST_CHECK_EQUAL(std::to_integer<unsigned>(pixels[0]),0u);
+        BOOST_CHECK_EQUAL(std::to_integer<unsigned>(pixels[1]),0u);
+        BOOST_CHECK_EQUAL(std::to_integer<unsigned>(pixels[2]),255u);
+    };
+    draw_and_check(material_buffer,true);
+    draw_and_check(other_buffer,false);
+    draw_and_check(material_buffer,true);
+    BOOST_REQUIRE(device.Update_Buffer(material_buffer,0,std::as_bytes(std::span(green))));
+    draw_and_check(material_buffer,false);
+    BOOST_REQUIRE(commands.Reset_State());
+    draw_and_check(material_buffer,false);
+    BOOST_REQUIRE(device.Get_Swap_Chain().Resize(24,24));
+    draw_and_check(material_buffer,false);
+    BOOST_REQUIRE(device.Begin_Frame());
+    draw_and_check(material_buffer,false);
+    BOOST_REQUIRE(device.End_Frame());
+    BOOST_REQUIRE(device.Get_Swap_Chain().Present());
+    const auto stale_buffer = material_buffer;
+    BOOST_REQUIRE(device.Destroy_Buffer(material_buffer));
+    resource.buffer = stale_buffer;
+    BOOST_CHECK(!commands.Set_Bindless_Resources(std::span(&resource,1)));
+    material_buffer = device.Create_Buffer_Initialized(
+        {sizeof(red),RHIBufferUsage::Constant,16},std::as_bytes(std::span(red)));
+    BOOST_REQUIRE(material_buffer.Is_Valid());
+    BOOST_CHECK(material_buffer != stale_buffer);
+    draw_and_check(material_buffer,true);
+    BOOST_REQUIRE(device.Destroy_Buffer(material_buffer));
+    BOOST_REQUIRE(device.Destroy_Buffer(other_buffer));
+    BOOST_REQUIRE(device.Destroy_Buffer(vertex_buffer));
+    BOOST_REQUIRE(device.Destroy_Pipeline(pipeline));
+}
+
+BOOST_AUTO_TEST_CASE(repeated_shader_resources_preserve_output_transitions_and_generations)
+{
+    struct WindowScope final {
+        HWND window = Create_Frame_Test_Window();
+        ~WindowScope() { DestroyWindow(window); }
+    } scope;
+    BOOST_REQUIRE(scope.window != nullptr);
+    auto options = Make_DX11_Test_Options();
+    options.window = scope.window;
+    options.width = options.height = 16;
+    options.fragment_shader_name = "visual_textured.pso";
+    DX11Device device(options);
+    BOOST_REQUIRE(device.Is_Valid());
+    struct Vertex final { float position[3], color[4], uv[2]; };
+    const std::array<Vertex,3> vertices{{
+        {{-0.8f,-0.8f,0.5f},{1,1,1,1},{0,1}},
+        {{0,0.8f,0.5f},{1,1,1,1},{0.5f,0}},
+        {{0.8f,-0.8f,0.5f},{1,1,1,1},{1,1}}}};
+    const std::array<float,8> material{1,1,1,1,0,0,0,0};
+    const std::array<std::uint32_t,4> storage_data{};
+    const auto vertex_buffer = device.Create_Buffer_Initialized(
+        {sizeof(vertices),RHIBufferUsage::Vertex,sizeof(Vertex)},std::as_bytes(std::span(vertices)));
+    const auto material_buffer = device.Create_Buffer_Initialized(
+        {sizeof(material),RHIBufferUsage::Constant,16},std::as_bytes(std::span(material)));
+    const auto storage_buffer = device.Create_Buffer_Initialized(
+        {sizeof(storage_data),RHIBufferUsage::Storage,16},std::as_bytes(std::span(storage_data)));
+    BOOST_REQUIRE(vertex_buffer.Is_Valid());
+    BOOST_REQUIRE(material_buffer.Is_Valid());
+    BOOST_REQUIRE(storage_buffer.Is_Valid());
+    const RHITexture source_description{16,16,1,RHITextureFormat::RGBA8_UNorm,
+        static_cast<std::uint32_t>(RHITextureUsage::ShaderResource)
+        | static_cast<std::uint32_t>(RHITextureUsage::RenderTarget)};
+    auto source = device.Create_Texture(source_description);
+    const std::array<std::uint8_t,4> green{0,255,0,255};
+    const auto other = device.Create_Texture_Initialized({1,1},{std::as_bytes(std::span(green)),4});
+    const auto sampled_depth = device.Create_Texture({16,16,1,RHITextureFormat::D32_Float,
+        static_cast<std::uint32_t>(RHITextureUsage::ShaderResource)
+        | static_cast<std::uint32_t>(RHITextureUsage::DepthStencil)});
+    BOOST_REQUIRE(source.Is_Valid());
+    BOOST_REQUIRE(other.Is_Valid());
+    BOOST_REQUIRE(sampled_depth.Is_Valid());
+    RHIPipeline description{20};
+    description.depth_test = description.depth_write = false;
+    const auto pipeline = device.Create_Pipeline(description);
+    BOOST_REQUIRE(pipeline.Is_Valid());
+    auto& commands = device.Immediate_Command_List();
+    std::array<RHIBindlessResource,2> resources{};
+    resources[0].type = RHIResourceType::Material;
+    resources[0].buffer = material_buffer;
+    resources[1].type = RHIResourceType::Texture;
+    resources[1].index = ResourceIndex{0,1};
+    const auto set_output = [&] {
+        BOOST_REQUIRE(commands.Set_Render_Targets(device.Get_Swap_Chain().Backbuffer().texture,
+            device.Get_Swap_Chain().Depth_Target().texture));
+    };
+    const auto draw_and_check = [&](RHITextureHandle texture, std::array<unsigned,4> expected, unsigned tolerance=0) {
+        const auto target = device.Get_Swap_Chain().Backbuffer();
+        BOOST_REQUIRE(commands.Clear_Color_Target(target.texture,{0,0,1,1}));
+        BOOST_REQUIRE(commands.Set_Viewport({0,0,target.width,target.height,0,1}));
+        BOOST_REQUIRE(commands.Set_Vertex_Buffer(0,vertex_buffer,sizeof(Vertex),0));
+        resources[1].texture = texture;
+        BOOST_REQUIRE(commands.Set_Bindless_Resources(resources));
+        BOOST_REQUIRE(commands.Set_Bindless_Resources(resources));
+        BOOST_REQUIRE(commands.Bind_Pipeline(pipeline));
+        BOOST_REQUIRE(commands.Draw(3));
+        std::vector<std::byte> pixels(target.width*target.height*4);
+        BOOST_REQUIRE(device.Readback_Texture(target.texture,pixels,target.width*4));
+        const auto center = (target.height/2*target.width+target.width/2)*4;
+        for (unsigned channel=0;channel<4;++channel) {
+            const unsigned actual = std::to_integer<unsigned>(pixels[center+channel]);
+            BOOST_CHECK_LE(actual,expected[channel]+tolerance);
+            BOOST_CHECK_GE(actual+tolerance,expected[channel]);
+        }
+        BOOST_CHECK_EQUAL(std::to_integer<unsigned>(pixels[0]),0u);
+        BOOST_CHECK_EQUAL(std::to_integer<unsigned>(pixels[1]),0u);
+        BOOST_CHECK_EQUAL(std::to_integer<unsigned>(pixels[2]),255u);
+    };
+    set_output();
+    BOOST_REQUIRE(commands.Clear_Color_Target(source,{1,0,0,1}));
+    draw_and_check(source,{255,0,0,255});
+    draw_and_check(source,{255,0,0,255});
+    draw_and_check(other,{0,255,0,255});
+    auto vertex_resource = resources[1];
+    vertex_resource.stage = RHIShaderStage::Vertex;
+    vertex_resource.texture = source;
+    BOOST_REQUIRE(commands.Set_Bindless_Resources(std::span(&vertex_resource,1)));
+    draw_and_check(source,{255,0,0,255}); // Vertex and pixel requests are independent.
+
+    BOOST_REQUIRE(commands.Set_Color_Target(source));
+    BOOST_REQUIRE(commands.Clear_Color_Target(source,{0,1,0,1}));
+    // DX11 nulls both repeated requests while this texture is an output.
+    BOOST_REQUIRE(commands.Set_Bindless_Resources(resources));
+    BOOST_REQUIRE(commands.Set_Bindless_Resources(resources));
+    BOOST_REQUIRE(commands.Set_Color_Target(device.Get_Swap_Chain().Backbuffer().texture));
+    draw_and_check(source,{0,255,0,255});
+    BOOST_REQUIRE(commands.Set_Render_Targets(source,device.Get_Swap_Chain().Depth_Target().texture));
+    BOOST_REQUIRE(commands.Clear_Color_Target(source,{1,0,0,1}));
+    set_output();
+    draw_and_check(source,{255,0,0,255});
+    BOOST_REQUIRE(commands.Clear_Depth_Stencil_Target(sampled_depth,0.25f,0));
+    draw_and_check(sampled_depth,{64,0,0,255},1);
+    BOOST_REQUIRE(commands.Set_Depth_Target(sampled_depth));
+    BOOST_REQUIRE(commands.Clear_Depth(0.75f));
+    BOOST_REQUIRE(commands.Set_Bindless_Resources(resources));
+    BOOST_REQUIRE(commands.Set_Color_Target(device.Get_Swap_Chain().Backbuffer().texture));
+    draw_and_check(sampled_depth,{191,0,0,255},1);
+    draw_and_check(source,{255,0,0,255});
+
+    // The existing table API writes slot zero before rejecting a full set of
+    // 128 storage entries. Restore a texture after that partial failed bind.
+    std::array<RHIBindlessResource,128> storage_resources{};
+    for (auto& resource : storage_resources) {
+        resource.type = RHIResourceType::Buffer;
+        resource.buffer = storage_buffer;
+    }
+    BOOST_CHECK(!commands.Set_Bindless_Resources(storage_resources));
+    std::array<RHIBindlessResource,16> texture_resources{};
+    for (unsigned slot=0;slot<texture_resources.size();++slot) {
+        texture_resources[slot] = resources[1];
+        texture_resources[slot].index = ResourceIndex{slot,1};
+    }
+    BOOST_REQUIRE(commands.Set_Bindless_Resources(texture_resources));
+    draw_and_check(source,{255,0,0,255});
+    BOOST_REQUIRE(commands.Clear_Color_Target(source,{0,0,1,1}));
+    draw_and_check(source,{0,0,255,255});
+    const auto stale = source;
+    BOOST_REQUIRE(device.Destroy_Texture(source));
+    BOOST_CHECK(!commands.Set_Bindless_Resources(resources));
+    source = device.Create_Texture(source_description);
+    BOOST_REQUIRE(source.Is_Valid());
+    BOOST_CHECK(source != stale);
+    BOOST_REQUIRE(commands.Clear_Color_Target(source,{1,1,0,1}));
+    draw_and_check(source,{255,255,0,255});
+    BOOST_REQUIRE(commands.Reset_State());
+    set_output();
+    draw_and_check(source,{255,255,0,255});
+    BOOST_REQUIRE(device.Get_Swap_Chain().Resize(24,24));
+    set_output();
+    draw_and_check(source,{255,255,0,255});
+    BOOST_REQUIRE(device.Begin_Frame());
+    draw_and_check(source,{255,255,0,255});
+    BOOST_REQUIRE(device.End_Frame());
+    BOOST_REQUIRE(device.Get_Swap_Chain().Present());
+    BOOST_REQUIRE(device.Destroy_Texture(source));
+    BOOST_REQUIRE(device.Destroy_Texture(other));
+    BOOST_REQUIRE(device.Destroy_Texture(sampled_depth));
+    BOOST_REQUIRE(device.Destroy_Buffer(storage_buffer));
+    BOOST_REQUIRE(device.Destroy_Buffer(vertex_buffer));
+    BOOST_REQUIRE(device.Destroy_Buffer(material_buffer));
+    BOOST_REQUIRE(device.Destroy_Pipeline(pipeline));
 }
 
 BOOST_AUTO_TEST_CASE(dx11_frame_lifecycle_and_resize)

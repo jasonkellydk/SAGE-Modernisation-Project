@@ -37,7 +37,7 @@
 #pragma once
 
 #include "RendObj.h"
-#include "WW3D2/Shader.h"
+import Graphics.Materials.State;
 #include "WWLib/simplevec.h"
 #include "SegLineRenderer.h"
 
@@ -80,7 +80,7 @@ class SegmentedLineClass : public RenderObjClass
 
 		// Get/set global properties (which affect all line segments)
 		TextureClass *		Get_Texture();
-		ShaderClass			Get_Shader();
+		Graphics::MaterialState			Get_Shader();
 
 		float					Get_Width();
 		void					Get_Color(Vector3 &color);
@@ -97,7 +97,7 @@ class SegmentedLineClass : public RenderObjClass
 		int					Are_End_Caps_Enabled();
 
 		void					Set_Texture(TextureClass *texture);
-		void					Set_Shader(ShaderClass shader);
+		void					Set_Shader(Graphics::MaterialState shader);
 		void					Set_Width(float width);
 		void					Set_Color(const Vector3 &color);
 		void					Set_Opacity(float opacity);

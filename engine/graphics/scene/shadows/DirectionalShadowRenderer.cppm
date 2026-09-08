@@ -146,13 +146,10 @@ public:
         auto caster = Make_Caster(parameters,textures,material_style);
         caster.source = &source;
         caster.source_mesh = mesh;
-        const auto vertices = geometry->Vertices();
-        if (!vertices.empty()) {
-            caster.bounds.minimum = caster.bounds.maximum = vertices.front().position;
-            for (const auto& vertex : vertices) for (unsigned axis=0;axis<3;++axis) {
-                caster.bounds.minimum[axis] = std::min(caster.bounds.minimum[axis],vertex.position[axis]);
-                caster.bounds.maximum[axis] = std::max(caster.bounds.maximum[axis],vertex.position[axis]);
-            }
+        {
+            GRAPHICS_PROFILE_SCOPE("Graphics.Shadows.MeshBounds");
+            caster.bounds.minimum = geometry->Minimum_Position();
+            caster.bounds.maximum = geometry->Maximum_Position();
         }
         caster.bounds = Transform_Bounds(caster.bounds,parameters.world);
         m_casters.push_back(caster);

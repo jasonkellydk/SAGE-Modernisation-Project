@@ -17,9 +17,7 @@ class TextureBaseClass;
 class SceneClass;
 class Matrix4x4;
 
-// The water shaders consume this explicit stream contract.  It is a
-// backend-neutral submission type; it is intentionally not one of the old
-// WW3D fixed-function VertexFormat structures.
+// Water draw input retains packed color until graphics extraction.
 struct WaterSurfaceVertex
 {
 	float x;

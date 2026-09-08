@@ -1,3 +1,4 @@
+import Graphics.Materials.State;
 #include <array>
 #include <bit>
 #include <cstddef>
@@ -48,28 +49,28 @@ std::unique_ptr<Vector3Randomizer> Create_Randomizer(const Assets::EmitterRandom
     }
 }
 
-ShaderClass Create_Shader(const Assets::EmitterShaderDesc& data)
+Graphics::MaterialState Create_Shader(const Assets::EmitterShaderDesc& data)
 {
-    ShaderClass shader;
-    shader.Set_Depth_Compare(static_cast<ShaderClass::DepthCompareType>(data.depth_compare));
-    shader.Set_Depth_Mask(data.depth_write ? ShaderClass::DEPTH_WRITE_ENABLE : ShaderClass::DEPTH_WRITE_DISABLE);
-    shader.Set_Color_Mask(ShaderClass::COLOR_WRITE_ENABLE);
-    shader.Set_Fog_Func(ShaderClass::FOG_DISABLE);
-    shader.Set_Dst_Blend_Func(static_cast<ShaderClass::DstBlendFuncType>(data.destination_blend));
+    Graphics::MaterialState shader;
+    shader.Set_Depth_Compare(static_cast<Graphics::MaterialState::DepthCompareType>(data.depth_compare));
+    shader.Set_Depth_Mask(data.depth_write ? Graphics::MaterialState::DEPTH_WRITE_ENABLE : Graphics::MaterialState::DEPTH_WRITE_DISABLE);
+    shader.Set_Color_Mask(Graphics::MaterialState::COLOR_WRITE_ENABLE);
+    shader.Set_Fog_Func(Graphics::MaterialState::FOG_DISABLE);
+    shader.Set_Dst_Blend_Func(static_cast<Graphics::MaterialState::DstBlendFuncType>(data.destination_blend));
     switch (data.source_blend) {
-    case Assets::EmitterBlendFactor::Zero: shader.Set_Src_Blend_Func(ShaderClass::SRCBLEND_ZERO); break;
-    case Assets::EmitterBlendFactor::One: shader.Set_Src_Blend_Func(ShaderClass::SRCBLEND_ONE); break;
-    case Assets::EmitterBlendFactor::SourceAlpha: shader.Set_Src_Blend_Func(ShaderClass::SRCBLEND_SRC_ALPHA); break;
-    case Assets::EmitterBlendFactor::OneMinusSourceAlpha: shader.Set_Src_Blend_Func(ShaderClass::SRCBLEND_ONE_MINUS_SRC_ALPHA); break;
+    case Assets::EmitterBlendFactor::Zero: shader.Set_Src_Blend_Func(Graphics::MaterialState::SRCBLEND_ZERO); break;
+    case Assets::EmitterBlendFactor::One: shader.Set_Src_Blend_Func(Graphics::MaterialState::SRCBLEND_ONE); break;
+    case Assets::EmitterBlendFactor::SourceAlpha: shader.Set_Src_Blend_Func(Graphics::MaterialState::SRCBLEND_SRC_ALPHA); break;
+    case Assets::EmitterBlendFactor::OneMinusSourceAlpha: shader.Set_Src_Blend_Func(Graphics::MaterialState::SRCBLEND_ONE_MINUS_SRC_ALPHA); break;
     default: WWASSERT(false); break;
     }
-    shader.Set_Primary_Gradient(static_cast<ShaderClass::PriGradientType>(data.primary_gradient));
-    shader.Set_Secondary_Gradient(static_cast<ShaderClass::SecGradientType>(data.secondary_gradient));
-    shader.Set_Texturing(data.texturing ? ShaderClass::TEXTURING_ENABLE : ShaderClass::TEXTURING_DISABLE);
-    shader.Set_Alpha_Test(data.alpha_test ? ShaderClass::ALPHATEST_ENABLE : ShaderClass::ALPHATEST_DISABLE);
+    shader.Set_Primary_Gradient(static_cast<Graphics::MaterialState::PriGradientType>(data.primary_gradient));
+    shader.Set_Secondary_Gradient(static_cast<Graphics::MaterialState::SecGradientType>(data.secondary_gradient));
+    shader.Set_Texturing(data.texturing ? Graphics::MaterialState::TEXTURING_ENABLE : Graphics::MaterialState::TEXTURING_DISABLE);
+    shader.Set_Alpha_Test(data.alpha_test ? Graphics::MaterialState::ALPHATEST_ENABLE : Graphics::MaterialState::ALPHATEST_DISABLE);
     // The material pass consumes authored detail functions through these slots.
-    shader.Set_Post_Detail_Color_Func(static_cast<ShaderClass::DetailColorFuncType>(data.detail_color_function));
-    shader.Set_Post_Detail_Alpha_Func(static_cast<ShaderClass::DetailAlphaFuncType>(data.detail_alpha_function));
+    shader.Set_Post_Detail_Color_Func(static_cast<Graphics::MaterialState::DetailColorFuncType>(data.detail_color_function));
+    shader.Set_Post_Detail_Alpha_Func(static_cast<Graphics::MaterialState::DetailAlphaFuncType>(data.detail_alpha_function));
     return shader;
 }
 
@@ -82,14 +83,14 @@ ParticleEmitterClass* Create_Emitter(const Assets::EmitterAssetDesc& data)
     RefCountPtr<TextureClass> texture;
     if (!data.texture_name.empty())
         texture.Assign_No_Add_Ref(manager->Get_Texture(data.texture_name.c_str(),MIP_LEVELS_ALL,Assets::PixelEncoding::Unknown));
-    ShaderClass shader = Create_Shader(data.shader);
+    Graphics::MaterialState shader = Create_Shader(data.shader);
     if (data.texture_blend_policy != Assets::EmitterTextureBlendPolicy::Authored) {
-        shader = ShaderClass::_PresetAdditiveSpriteShader;
+        shader = Graphics::MaterialState::AdditiveSprite();
         if (data.texture_blend_policy == Assets::EmitterTextureBlendPolicy::AlphaSpriteWhenTextureHasAlpha
             && texture.Peek() && Assets::Has_Explicit_Pixel_Alpha(texture->Get_Texture_Format()))
-            shader = ShaderClass::_PresetAlphaSpriteShader;
+            shader = Graphics::MaterialState::AlphaSprite();
     }
-    if (manager->Get_Activate_Fog_On_Load()) shader.Enable_Fog("ParticleEmitterClass");
+    if (manager->Get_Activate_Fog_On_Load()) shader.Enable_Fog_For_Blend();
     EmitterTrackView<Vector3> color(data.color,[](const auto& v) { return Vector3(v.r,v.g,v.b); });
     const auto scalar = [](float v) { return v; };
     EmitterTrackView<float> opacity(data.opacity,scalar), size(data.size,scalar), rotation(data.rotation,scalar),

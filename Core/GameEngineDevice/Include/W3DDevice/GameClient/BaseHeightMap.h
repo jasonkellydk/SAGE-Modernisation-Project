@@ -27,9 +27,7 @@
 #include "WWLib/always.h"
 #include "WW3D2/RendObj.h"
 #include "WW3D2/W3DFile.h"
-#include "WW3D2/Shader.h"
-#include "WW3D2/VertMaterial.h"
-#include "WW3D2/VertexFormat.h"
+import Graphics.Materials.State;
 #include "Lib/BaseType.h"
 #include "Common/GameType.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
@@ -69,8 +67,6 @@ class W3DDynamicLight;
 
 #define DO_ROADS 1
 
-#define VERTEX_FORMAT VertexFormatXYZDUV2
-#define BASE_HEIGHT_MAP_VERTEX_FORMAT RenderBackendVertexFormat::PositionDiffuseTexture2
 
 /// Custom render object that draws the heightmap and handles intersection tests.
 /**
@@ -149,7 +145,7 @@ public:
 	void updateMacroTexture(AsciiString textureName);
 	void doTextures(Bool flag) {m_disableTextures = !flag;};
 	/// Update the diffuse value from static light info for one vertex.
-	void doTheLight(VERTEX_FORMAT *vb, const Vector3*light, Vector3*normal, Graphics::SceneObjectList<RenderObjClass>::Cursor *pLightsIterator, UnsignedByte alpha);
+	UnsignedInt computeVertexLighting(const Vector3& position, const Vector3*light, const Vector3*normal, Graphics::SceneObjectList<RenderObjClass>::Cursor *pLightsIterator, UnsignedByte alpha);
 	void addScorch(Vector3 location, Real radius, Scorches type);
 	void addStaticScorch(Vector3 location, Real radius, Scorches type);
 	void addTree(DrawableID id, Coord3D location, Real scale, Real angle,
@@ -251,7 +247,6 @@ protected:
 	std::vector<bool> m_showAsVisibleCliff;
 
 
-	VertexMaterialClass	  	  *m_vertexMaterialClass;	///< vertex shader (lighting) for terrain
 	TextureClass *m_stageZeroTexture;	///<primary texture
 	TextureClass *m_stageOneTexture;	///<transparent edging texture
 	CloudMapTerrainTextureClass *m_stageTwoTexture;	///<Cloud map texture

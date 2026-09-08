@@ -53,7 +53,6 @@ import Graphics.Backends.DX11.FrameRuntime;
 #include "AssetMgr.h"
 import Graphics.Resources.Textures.Load;
 #include "WWLib/ffactory.h"
-#include "MeshMatDesc.h"
 #include "WWDebug/wwprofile.h"
 import Graphics.Resources.Textures.Storage;
 

@@ -36,6 +36,7 @@
 
 #pragma once
 
+import Graphics.Materials.State;
 #include "WW3D2/RendObj.h"
 #include "WW3D2/SegLineRenderer.h"
 
@@ -90,7 +91,7 @@ class ParticleBufferClass : public RenderObjClass
 			ParticlePropertyStruct<float> &size, ParticlePropertyStruct<float> &rotation,
 			float orient_rnd, ParticlePropertyStruct<float> &frame,
 			ParticlePropertyStruct<float> &blurtime, Vector3 accel,
-			float max_age, float future_start, TextureClass *tex, ShaderClass shader, bool pingpong,
+			float max_age, float future_start, TextureClass *tex, Graphics::MaterialState shader, bool pingpong,
 			int render_mode, int frame_mode, const W3dEmitterLinePropertiesStruct * line_props);
 
 		ParticleBufferClass(const ParticleBufferClass & src);
@@ -192,7 +193,7 @@ class ParticleBufferClass : public RenderObjClass
 		TextureClass *			Get_Texture () const;
 		void						Set_Texture (TextureClass *tex);
 		float						Get_Fade_Time () const			{ return (NumColorKeyFrames > 1) ? (((float)ColorKeyFrameTimes[1]) / 1000.0f) : 0.0f; }
-		ShaderClass				Get_Shader () const;
+		Graphics::MaterialState				Get_Shader () const;
 
 		//
 		// Line rendering properties.  These functions will always return

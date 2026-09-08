@@ -36,8 +36,6 @@
 #include "GameClient/View.h"
 #include "GameClient/Display.h"
 #include "WW3D2/Texture.h"
-#include "WW3D2/VertMaterial.h"
-#include "WW3D2/VertexFormat.h"
 #include "WW3D2/RInfo.h"
 #include "WW3D2/Camera.h"
 

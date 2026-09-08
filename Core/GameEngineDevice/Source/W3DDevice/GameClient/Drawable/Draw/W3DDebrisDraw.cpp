@@ -46,7 +46,7 @@
 #include "W3DDevice/GameClient/W3DDisplay.h"
 #include "W3DDevice/GameClient/W3DScene.h"
 #include "W3DDevice/GameClient/W3DShadow.h"
-#include "WW3D2/StringUtilities.h"
+import Assets.Identity;
 import Assets.Cache.Animations;
 
 //-------------------------------------------------------------------------------------------------
@@ -160,7 +160,7 @@ void W3DDebrisDraw::setAnimNames(AsciiString initial, AsciiString flying, AsciiS
 
 	m_anims[INITIAL] = initial.isEmpty() ? nullptr : W3DDisplay::m_assetManager->Acquire_Animation(initial.str());
 	m_anims[FLYING] = flying.isEmpty() ? nullptr : W3DDisplay::m_assetManager->Acquire_Animation(flying.str());
-	if (WW3DString::Compare_No_Case(finalAnim.str(), "STOP") == 0)
+	if (Assets::Asset_Name_Equals_No_Case(finalAnim.str(), "STOP"))
 	{
 		m_finalStop = true;
 		finalAnim = flying;

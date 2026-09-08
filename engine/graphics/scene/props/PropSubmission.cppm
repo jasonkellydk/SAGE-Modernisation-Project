@@ -1,4 +1,5 @@
 module;
+#include "../../profiling/Tracy.h"
 #include <array>
 #include <span>
 #include <vector>
@@ -55,6 +56,7 @@ public:
         std::span<const RHITextureHandle> textures,PropDrawPhase phase,
         const std::array<float,4>& camera_depth = {})
     {
+        GRAPHICS_PROFILE_SCOPE("Graphics.Props.Submit");
         if (m_device == nullptr || m_renderer == nullptr || textures.size() > PropTextureCount) return false;
         bool submitted = false;
         switch (phase) {

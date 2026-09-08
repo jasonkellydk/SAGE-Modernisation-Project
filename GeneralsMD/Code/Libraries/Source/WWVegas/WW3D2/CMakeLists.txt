@@ -3,7 +3,6 @@ set(WW3D2_SRC
     GraphicsMesh.h
     GraphicsMeshQueries.h
     GraphicsMaterial.h
-    GraphicsMaterialPass.h
     GraphicsGeometry.cpp
     GraphicsGeometry.h
     AnimObj.cpp
@@ -12,7 +11,6 @@ set(WW3D2_SRC
     AssetMgr.h
     Camera.cpp
     Camera.h
-    #ClassId.h
     #Collect.cpp
     #Collect.h
     #ColTest.cpp
@@ -24,7 +22,6 @@ set(WW3D2_SRC
     Dazzle.h
     #DecalSys.cpp
     #DecalSys.h
-    #DList.h
     #FormConv.cpp
     #FormConv.h
     HLOD.cpp
@@ -36,20 +33,10 @@ set(WW3D2_SRC
 
     #Line3D.cpp
     #Line3D.h
-    Mapper.cpp
-    Mapper.h
-    #MatInfo.cpp
-    #MatInfo.h
-    #MatPass.cpp
-    #MatPass.h
-    MatrixMapper.cpp
-    MatrixMapper.h
     Mesh.cpp
     Mesh.h
     MeshGeometry.cpp
     MeshGeometry.h
-    MeshMatDesc.cpp
-    MeshMatDesc.h
     MeshMdl.cpp
     MeshMdl.h
     MeshMdlIO.cpp
@@ -57,7 +44,6 @@ set(WW3D2_SRC
     PartBuf.h
     PartEmt.cpp
     PartEmt.h
-    #PrimAnim.h
     #Projector.cpp
     #Projector.h
     #Proxy.h
@@ -71,22 +57,15 @@ set(WW3D2_SRC
     #SegLine.h
     #SegLineRenderer.cpp
     #SegLineRenderer.h
-    Shader.cpp
-    Shader.h
-#    ShdLib.h
     #TexProject.cpp
     #TexProject.h
     #Texture.cpp
     #Texture.h
-    VertMaterial.cpp
-    VertMaterial.h
     W3DFile.h
-    #W3DObsolete.h
     #W3DErr.h
 #    WW3D.cpp
 #    WW3D.h
     #WW3DIds.h
-    #WW3DTrig.h
 )
 
 add_library(z_ww3d2 STATIC)

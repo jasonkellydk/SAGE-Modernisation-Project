@@ -47,15 +47,19 @@
 
 #include "WWLib/always.h"
 #include "WWLib/bittype.h"
+#include "WWLib/ref_ptr.h"
 #include "WW3D2/WW3D.h"
 #include "WWDebug/wwdebug.h"
-#include "Shader.h"
+import Graphics.Materials.ProceduralPass;
+import Graphics.Materials.State;
 #include "WWLib/Vector.h"
 #include "WWMath/matrix3d.h"
 #include "WWMath/matrix4.h"
 
 
-class MaterialPassClass;
+class TextureClass;
+class OBBoxClass;
+using NativeMaterialPass = Graphics::ProceduralMaterialPass<RefCountPtr<TextureClass>, OBBoxClass>;
 import Graphics.Scene.Lighting.Local;
 class TexProjectClass;
 
@@ -84,11 +88,11 @@ public:
 		RINFO_OVERRIDE_SHADOW_RENDERING			= 0x0008		// Hint: we are rendering a shadow
 	};
 
-	void								Push_Material_Pass(MaterialPassClass * matpass);
+	void								Push_Material_Pass(const std::shared_ptr<NativeMaterialPass>& matpass);
 	void								Pop_Material_Pass();
 
 	int								Additional_Pass_Count();
-	MaterialPassClass *			Peek_Additional_Pass(int i);
+	NativeMaterialPass *				Peek_Additional_Pass(int i);
 
 	void								Push_Override_Flags(RINFO_OVERRIDE_FLAGS flg);	// Saves current override flags on stack and installs a new one
 	void								Pop_Override_Flags();								// Restores previous override flags from stack
@@ -108,7 +112,7 @@ public:
 	TexProjectClass*				Texture_Projector;
 
 protected:
-	MaterialPassClass*			AdditionalMaterialPassArray[MAX_ADDITIONAL_MATERIAL_PASSES];
+	std::shared_ptr<NativeMaterialPass>	AdditionalMaterialPassArray[MAX_ADDITIONAL_MATERIAL_PASSES];
 	unsigned							AdditionalMaterialPassCount;
 	unsigned							RejectedMaterialPasses;
 	RINFO_OVERRIDE_FLAGS			OverrideFlag[MAX_OVERRIDE_FLAG_LEVEL];

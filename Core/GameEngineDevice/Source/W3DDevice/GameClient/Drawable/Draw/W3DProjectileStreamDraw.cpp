@@ -27,6 +27,7 @@
 // Graham Smallwood, May 2002
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
+import Graphics.Materials.State;
 #include "Common/Xfer.h"
 #include "GameClient/Drawable.h"
 #include "GameLogic/Object.h"
@@ -211,7 +212,7 @@ void W3DProjectileStreamDraw::makeOrUpdateLine( Vector3 *points, UnsignedInt poi
 		// This is one time stuff we only need to do if this is a new and not a change
 		const W3DProjectileStreamDrawModuleData *data = getW3DProjectileStreamDrawModuleData();
 		line->Set_Texture(m_texture);	//set the texture
-		line->Set_Shader(ShaderClass::_PresetAdditiveSpriteShader);	//pick the alpha blending mode you want - see shader.h for others.
+		line->Set_Shader(Graphics::MaterialState::AdditiveSprite());	//pick the alpha blending mode you want - see shader.h for others.
 		line->Set_Width(data->m_width);	//set line width in world units
 		line->Set_Texture_Mapping_Mode(SegLineRendererClass::TILED_TEXTURE_MAP);	//this tiles the texture across the line
 		line->Set_Texture_Tile_Factor(data->m_tileFactor);	//number of times to tile texture across each segment

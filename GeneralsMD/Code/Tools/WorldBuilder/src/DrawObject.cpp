@@ -1,3 +1,4 @@
+import Assets.Math;
 import Graphics.Renderer2D;
 import Graphics.Frame.AttachmentBindings;
 import Graphics.Backends.DX11.FrameRuntime;
@@ -43,7 +44,7 @@ import Graphics.Scene.DrawParameters;
 #include "W3DDevice/GameClient/W3DWater.h"
 #include "WW3D2/Mesh.h"
 #include "WW3D2/MeshMdl.h"
-#include "WW3D2/Shader.h"
+import Graphics.Materials.State;
 #include "WW3D2/WW3D.h"
 #include "Common/MapObject.h"
 #include "GameLogic/PolygonTrigger.h"
@@ -72,28 +73,28 @@ const Real HANDLE_SIZE = (2.0f) * LINE_THICKNESS;
 
 
 // Texturing, no zbuffer, disabled zbuffer write, primary gradient, alpha blending
-#define SC_OPAQUE ( SHADE_CNST(ShaderClass::PASS_ALWAYS, ShaderClass::DEPTH_WRITE_DISABLE, ShaderClass::COLOR_WRITE_ENABLE, ShaderClass::SRCBLEND_ONE, \
-	ShaderClass::DSTBLEND_ZERO, ShaderClass::FOG_DISABLE, ShaderClass::GRADIENT_DISABLE, ShaderClass::SECONDARY_GRADIENT_DISABLE, ShaderClass::TEXTURING_ENABLE, \
-	ShaderClass::ALPHATEST_DISABLE, ShaderClass::CULL_MODE_DISABLE, \
-	ShaderClass::DETAILCOLOR_DISABLE, ShaderClass::DETAILALPHA_DISABLE) )
+#define SC_OPAQUE ( Graphics::MaterialState::Make_Bits(Graphics::MaterialState::PASS_ALWAYS, Graphics::MaterialState::DEPTH_WRITE_DISABLE, Graphics::MaterialState::COLOR_WRITE_ENABLE, Graphics::MaterialState::SRCBLEND_ONE, \
+	Graphics::MaterialState::DSTBLEND_ZERO, Graphics::MaterialState::FOG_DISABLE, Graphics::MaterialState::GRADIENT_DISABLE, Graphics::MaterialState::SECONDARY_GRADIENT_DISABLE, Graphics::MaterialState::TEXTURING_ENABLE, \
+	Graphics::MaterialState::ALPHATEST_DISABLE, Graphics::MaterialState::CULL_MODE_DISABLE, \
+	Graphics::MaterialState::DETAILCOLOR_DISABLE, Graphics::MaterialState::DETAILALPHA_DISABLE) )
 
 // Texturing, no zbuffer, disabled zbuffer write, primary gradient, alpha blending
-#define SC_ALPHA ( SHADE_CNST(ShaderClass::PASS_ALWAYS, ShaderClass::DEPTH_WRITE_DISABLE, ShaderClass::COLOR_WRITE_ENABLE, ShaderClass::SRCBLEND_SRC_ALPHA, \
-	ShaderClass::DSTBLEND_ONE_MINUS_SRC_ALPHA, ShaderClass::FOG_DISABLE, ShaderClass::GRADIENT_MODULATE, ShaderClass::SECONDARY_GRADIENT_DISABLE, ShaderClass::TEXTURING_ENABLE, \
-	ShaderClass::ALPHATEST_DISABLE, ShaderClass::CULL_MODE_ENABLE, \
-	ShaderClass::DETAILCOLOR_DISABLE, ShaderClass::DETAILALPHA_DISABLE) )
+#define SC_ALPHA ( Graphics::MaterialState::Make_Bits(Graphics::MaterialState::PASS_ALWAYS, Graphics::MaterialState::DEPTH_WRITE_DISABLE, Graphics::MaterialState::COLOR_WRITE_ENABLE, Graphics::MaterialState::SRCBLEND_SRC_ALPHA, \
+	Graphics::MaterialState::DSTBLEND_ONE_MINUS_SRC_ALPHA, Graphics::MaterialState::FOG_DISABLE, Graphics::MaterialState::GRADIENT_MODULATE, Graphics::MaterialState::SECONDARY_GRADIENT_DISABLE, Graphics::MaterialState::TEXTURING_ENABLE, \
+	Graphics::MaterialState::ALPHATEST_DISABLE, Graphics::MaterialState::CULL_MODE_ENABLE, \
+	Graphics::MaterialState::DETAILCOLOR_DISABLE, Graphics::MaterialState::DETAILALPHA_DISABLE) )
 
 // Texturing, no zbuffer, disabled zbuffer write, primary gradient, alpha blending
-#define SC_ALPHA_Z ( SHADE_CNST(ShaderClass::PASS_LEQUAL, ShaderClass::DEPTH_WRITE_DISABLE, ShaderClass::COLOR_WRITE_ENABLE, ShaderClass::SRCBLEND_SRC_ALPHA, \
-	ShaderClass::DSTBLEND_ONE_MINUS_SRC_ALPHA, ShaderClass::FOG_DISABLE, ShaderClass::GRADIENT_MODULATE, ShaderClass::SECONDARY_GRADIENT_DISABLE, ShaderClass::TEXTURING_ENABLE, \
-	ShaderClass::ALPHATEST_DISABLE, ShaderClass::CULL_MODE_DISABLE, \
-	ShaderClass::DETAILCOLOR_DISABLE, ShaderClass::DETAILALPHA_DISABLE) )
+#define SC_ALPHA_Z ( Graphics::MaterialState::Make_Bits(Graphics::MaterialState::PASS_LEQUAL, Graphics::MaterialState::DEPTH_WRITE_DISABLE, Graphics::MaterialState::COLOR_WRITE_ENABLE, Graphics::MaterialState::SRCBLEND_SRC_ALPHA, \
+	Graphics::MaterialState::DSTBLEND_ONE_MINUS_SRC_ALPHA, Graphics::MaterialState::FOG_DISABLE, Graphics::MaterialState::GRADIENT_MODULATE, Graphics::MaterialState::SECONDARY_GRADIENT_DISABLE, Graphics::MaterialState::TEXTURING_ENABLE, \
+	Graphics::MaterialState::ALPHATEST_DISABLE, Graphics::MaterialState::CULL_MODE_DISABLE, \
+	Graphics::MaterialState::DETAILCOLOR_DISABLE, Graphics::MaterialState::DETAILALPHA_DISABLE) )
 
 // Texturing, no zbuffer, disabled zbuffer write, primary gradient, alpha blending
-#define SC_OPAQUE_Z ( SHADE_CNST(ShaderClass::PASS_LEQUAL, ShaderClass::DEPTH_WRITE_DISABLE, ShaderClass::COLOR_WRITE_ENABLE, ShaderClass::SRCBLEND_ONE, \
-	ShaderClass::DSTBLEND_ZERO, ShaderClass::FOG_DISABLE, ShaderClass::GRADIENT_DISABLE, ShaderClass::SECONDARY_GRADIENT_DISABLE, ShaderClass::TEXTURING_ENABLE, \
-	ShaderClass::ALPHATEST_DISABLE, ShaderClass::CULL_MODE_DISABLE, \
-	ShaderClass::DETAILCOLOR_DISABLE, ShaderClass::DETAILALPHA_DISABLE) )
+#define SC_OPAQUE_Z ( Graphics::MaterialState::Make_Bits(Graphics::MaterialState::PASS_LEQUAL, Graphics::MaterialState::DEPTH_WRITE_DISABLE, Graphics::MaterialState::COLOR_WRITE_ENABLE, Graphics::MaterialState::SRCBLEND_ONE, \
+	Graphics::MaterialState::DSTBLEND_ZERO, Graphics::MaterialState::FOG_DISABLE, Graphics::MaterialState::GRADIENT_DISABLE, Graphics::MaterialState::SECONDARY_GRADIENT_DISABLE, Graphics::MaterialState::TEXTURING_ENABLE, \
+	Graphics::MaterialState::ALPHATEST_DISABLE, Graphics::MaterialState::CULL_MODE_DISABLE, \
+	Graphics::MaterialState::DETAILCOLOR_DISABLE, Graphics::MaterialState::DETAILALPHA_DISABLE) )
 
 
 Bool DrawObject::m_squareFeedback = false;
@@ -271,9 +272,9 @@ Int DrawObject::initData()
 	//go with a preset material for now.
 
 	//use a multi-texture shader: (text1*diffuse)*text2.
-	m_shaderClass = ShaderClass(SC_OPAQUE);//_PresetOpaque2DShader;//ShaderClass(SC_OPAQUE); //_PresetOpaqueShader;
+	m_shaderClass = Graphics::MaterialState(SC_OPAQUE);//_PresetOpaque2DShader;//Graphics::MaterialState(SC_OPAQUE); //_PresetOpaqueShader;
 
-	m_shaderClass = ShaderClass::_PresetOpaque2DShader;
+	m_shaderClass = Graphics::MaterialState::Opaque2D();
 	updateForWater();
 	updateVB(m_vertexBufferTile1, 255<<8, true, false);
 
@@ -318,8 +319,8 @@ void DrawObject::updateMeshVB()
 	unsigned *ib=m_indexFeedback.data();
 	unsigned *curIb = ib;
 
-	VertexFormatXYZDUV1 *vb = m_vertexFeedback.data();
-	VertexFormatXYZDUV1 *curVb = vb;
+	Graphics::SurfaceVertex *vb = m_vertexFeedback.data();
+	Graphics::SurfaceVertex *curVb = vb;
 
 	if (m_moldMesh == nullptr) {
 		return;
@@ -341,65 +342,55 @@ void DrawObject::updateMeshVB()
 #endif
 
 	for (i=0; i<numVertex; i++) {
-		curVb->u1 = 0;
-		curVb->v1 = 0;
+		curVb->uv[0] = 0;
+		curVb->uv[1] = 0;
 		Vector3 vLoc(pVert[i]);
 		vLoc *= MeshMoldOptions::getScale();
 		vLoc.Rotate_Z(MeshMoldOptions::getAngle()*PI/180.0f);
 		vLoc.X += m_feedbackPoint.x;
 		vLoc.Y += m_feedbackPoint.y;
 		vLoc.Z += m_feedbackPoint.z;
-		curVb->x = vLoc.X;
-		curVb->y = vLoc.Y;
-		curVb->z = vLoc.Z;
+		curVb->position[0] = vLoc.X;
+		curVb->position[1] = vLoc.Y;
+		curVb->position[2] = vLoc.Z;
 
-		VertexFormatXYZDUV2 vb;
-		vb.x = vLoc.X;
-		vb.y = vLoc.Y;
-		vb.z = vLoc.Z;
+		curVb->color = Assets::Color_From_ARGB(0x0000ffff | (theAlpha << 24)).To_Array(); // bright cyan.
 
-#if 1
-		curVb->diffuse = 0x0000ffff | (theAlpha << 24);		// bright cyan.
-#else
-		TheTerrainRenderObject->doTheLight(&vb, &lightRay, (Vector3 *)(&pNormal[i]), nullptr, 1.0f);
-		vb.diffuse &= 0x0000ffff;
-		curVb->diffuse = vb.diffuse | (theAlpha << 24);
-#endif
 		curVb++;
 		m_feedbackVertexCount++;
 	}
 	// Put in the "center anchor"
 
-	curVb->u1 = 0;
-	curVb->v1 = 0;
-	curVb->x = m_feedbackPoint.x;
-	curVb->y = m_feedbackPoint.y;
-	curVb->z = 0;
-	curVb->diffuse = 0xFFFF0000;  // red.
+	curVb->uv[0] = 0;
+	curVb->uv[1] = 0;
+	curVb->position[0] = m_feedbackPoint.x;
+	curVb->position[1] = m_feedbackPoint.y;
+	curVb->position[2] = 0;
+	curVb->color = Assets::Color_From_ARGB(0xFFFF0000).To_Array();  // red.
 	curVb++;
 	m_feedbackVertexCount++;
-	curVb->u1 = 0;
-	curVb->v1 = 0;
-	curVb->x = m_feedbackPoint.x+1;
-	curVb->y = m_feedbackPoint.y+1;
-	curVb->z = m_feedbackPoint.z;
-	curVb->diffuse = 0xFFFF0000;  // red.
+	curVb->uv[0] = 0;
+	curVb->uv[1] = 0;
+	curVb->position[0] = m_feedbackPoint.x+1;
+	curVb->position[1] = m_feedbackPoint.y+1;
+	curVb->position[2] = m_feedbackPoint.z;
+	curVb->color = Assets::Color_From_ARGB(0xFFFF0000).To_Array();  // red.
 	curVb++;
 	m_feedbackVertexCount++;
-	curVb->u1 = 0;
-	curVb->v1 = 0;
-	curVb->x = m_feedbackPoint.x;
-	curVb->y = m_feedbackPoint.y;
-	curVb->z = m_feedbackPoint.z-500;
-	curVb->diffuse = 0xFFFF0000;  // red.
+	curVb->uv[0] = 0;
+	curVb->uv[1] = 0;
+	curVb->position[0] = m_feedbackPoint.x;
+	curVb->position[1] = m_feedbackPoint.y;
+	curVb->position[2] = m_feedbackPoint.z-500;
+	curVb->color = Assets::Color_From_ARGB(0xFFFF0000).To_Array();  // red.
 	curVb++;
 	m_feedbackVertexCount++;
-	curVb->u1 = 0;
-	curVb->v1 = 0;
-	curVb->x = m_feedbackPoint.x+1;
-	curVb->y = m_feedbackPoint.y+1;
-	curVb->z = m_feedbackPoint.z-500;
-	curVb->diffuse = 0xFFFF0000;  // red.
+	curVb->uv[0] = 0;
+	curVb->uv[1] = 0;
+	curVb->position[0] = m_feedbackPoint.x+1;
+	curVb->position[1] = m_feedbackPoint.y+1;
+	curVb->position[2] = m_feedbackPoint.z-500;
+	curVb->color = Assets::Color_From_ARGB(0xFFFF0000).To_Array();  // red.
 	curVb++;
 	m_feedbackVertexCount++;
 
@@ -444,8 +435,8 @@ void DrawObject::updateRampVB()
 	unsigned *ib=m_indexFeedback.data();
 	unsigned *curIb = ib;
 
-	VertexFormatXYZDUV1 *vb = m_vertexFeedback.data();
-	VertexFormatXYZDUV1 *curVb = vb;
+	Graphics::SurfaceVertex *vb = m_vertexFeedback.data();
+	Graphics::SurfaceVertex *curVb = vb;
 
 	Int i, j;
 	Int widthVerts = 8;
@@ -473,10 +464,10 @@ void DrawObject::updateRampVB()
 	Vector3 tr(coordTR.x, coordTR.y, coordTR.z);
 
 	for (i = 0; i < numVertex; i++) {
-		curVb->u1 = INT_TO_REAL(i % widthVerts) / widthVerts;
-		curVb->v1 = INT_TO_REAL(i / lengthVerts) / lengthVerts;
+		curVb->uv[0] = INT_TO_REAL(i % widthVerts) / widthVerts;
+		curVb->uv[1] = INT_TO_REAL(i / lengthVerts) / lengthVerts;
 
-		curVb->diffuse = curVb->diffuse = 0x0000ffff | (theAlpha << 24);		// bright cyan.
+		curVb->color = Assets::Color_From_ARGB(curVb->diffuse = 0x0000ffff | (theAlpha << 24)).To_Array();		// bright cyan.
 
 		Vector3 vLoc;
 		vLoc.X = (br.X - bl.X) * INT_TO_REAL(i % widthVerts) / (widthVerts  - 1) +
@@ -488,9 +479,9 @@ void DrawObject::updateRampVB()
 		vLoc.Z = (br.Z - bl.Z) * INT_TO_REAL(i % widthVerts) / (widthVerts - 1) +
 						 (tl.Z - bl.Z) * INT_TO_REAL(i / lengthVerts) / (lengthVerts - 1) + bl.Z;
 
-		curVb->x = vLoc.X;
-		curVb->y = vLoc.Y;
-		curVb->z = vLoc.Z;
+		curVb->position[0] = vLoc.X;
+		curVb->position[1] = vLoc.Y;
+		curVb->position[2] = vLoc.Z;
 
 		curVb++;
 		m_feedbackVertexCount++;
@@ -513,36 +504,36 @@ void DrawObject::updateRampVB()
 #if 0
 	// Put in the "center anchor"
 
-	curVb->u1 = 0;
-	curVb->v1 = 0;
-	curVb->x = m_feedbackPoint.x;
-	curVb->y = m_feedbackPoint.y;
-	curVb->z = 0;
-	curVb->diffuse = 0xFFFF0000;  // red.
+	curVb->uv[0] = 0;
+	curVb->uv[1] = 0;
+	curVb->position[0] = m_feedbackPoint.x;
+	curVb->position[1] = m_feedbackPoint.y;
+	curVb->position[2] = 0;
+	curVb->color = Assets::Color_From_ARGB(0xFFFF0000).To_Array();  // red.
 	curVb++;
 	m_feedbackVertexCount++;
-	curVb->u1 = 0;
-	curVb->v1 = 0;
-	curVb->x = m_feedbackPoint.x+1;
-	curVb->y = m_feedbackPoint.y+1;
-	curVb->z = m_feedbackPoint.z;
-	curVb->diffuse = 0xFFFF0000;  // red.
+	curVb->uv[0] = 0;
+	curVb->uv[1] = 0;
+	curVb->position[0] = m_feedbackPoint.x+1;
+	curVb->position[1] = m_feedbackPoint.y+1;
+	curVb->position[2] = m_feedbackPoint.z;
+	curVb->color = Assets::Color_From_ARGB(0xFFFF0000).To_Array();  // red.
 	curVb++;
 	m_feedbackVertexCount++;
-	curVb->u1 = 0;
-	curVb->v1 = 0;
-	curVb->x = m_feedbackPoint.x;
-	curVb->y = m_feedbackPoint.y;
-	curVb->z = m_feedbackPoint.z-500;
-	curVb->diffuse = 0xFFFF0000;  // red.
+	curVb->uv[0] = 0;
+	curVb->uv[1] = 0;
+	curVb->position[0] = m_feedbackPoint.x;
+	curVb->position[1] = m_feedbackPoint.y;
+	curVb->position[2] = m_feedbackPoint.z-500;
+	curVb->color = Assets::Color_From_ARGB(0xFFFF0000).To_Array();  // red.
 	curVb++;
 	m_feedbackVertexCount++;
-	curVb->u1 = 0;
-	curVb->v1 = 0;
-	curVb->x = m_feedbackPoint.x+1;
-	curVb->y = m_feedbackPoint.y+1;
-	curVb->z = m_feedbackPoint.z-500;
-	curVb->diffuse = 0xFFFF0000;  // red.
+	curVb->uv[0] = 0;
+	curVb->uv[1] = 0;
+	curVb->position[0] = m_feedbackPoint.x+1;
+	curVb->position[1] = m_feedbackPoint.y+1;
+	curVb->position[2] = m_feedbackPoint.z-500;
+	curVb->color = Assets::Color_From_ARGB(0xFFFF0000).To_Array();  // red.
 	curVb++;
 	m_feedbackVertexCount++;
 #endif
@@ -558,8 +549,8 @@ void DrawObject::updateBoundaryVB()
 	unsigned *ib=m_indexFeedback.data();
 	unsigned *curIb = ib;
 
-	VertexFormatXYZDUV1 *vb = m_vertexFeedback.data();
-	VertexFormatXYZDUV1 *curVb = vb;
+	Graphics::SurfaceVertex *vb = m_vertexFeedback.data();
+	Graphics::SurfaceVertex *curVb = vb;
 
  	CWorldBuilderDoc *pDoc = CWorldBuilderDoc::GetActiveDoc();
 	Int numBoundaries = pDoc->getNumBoundaries();
@@ -622,36 +613,36 @@ void DrawObject::updateBoundaryVB()
 			normal *= LINE_THICKNESS;
 			normal.Rotate_Z(PI/2);
 
-			curVb->u1 = 0;
-			curVb->v1 = 0;
-			curVb->x = startPt.x+normal.X;
-			curVb->y = startPt.y+normal.Y;
-			curVb->z = startPt.z;
-			curVb->diffuse = BORDER_COLORS[i % BORDER_COLORS_SIZE ].m_borderColor;
+			curVb->uv[0] = 0;
+			curVb->uv[1] = 0;
+			curVb->position[0] = startPt.x+normal.X;
+			curVb->position[1] = startPt.y+normal.Y;
+			curVb->position[2] = startPt.z;
+			curVb->color = Assets::Color_From_ARGB(BORDER_COLORS[i % BORDER_COLORS_SIZE ].m_borderColor).To_Array();
 			curVb++;
 			m_feedbackVertexCount++;
-			curVb->u1 = 0;
-			curVb->v1 = 0;
-			curVb->x = startPt.x-normal.X;
-			curVb->y = startPt.y-normal.Y;
-			curVb->z = startPt.z;
-			curVb->diffuse = BORDER_COLORS[i % BORDER_COLORS_SIZE ].m_borderColor;
+			curVb->uv[0] = 0;
+			curVb->uv[1] = 0;
+			curVb->position[0] = startPt.x-normal.X;
+			curVb->position[1] = startPt.y-normal.Y;
+			curVb->position[2] = startPt.z;
+			curVb->color = Assets::Color_From_ARGB(BORDER_COLORS[i % BORDER_COLORS_SIZE ].m_borderColor).To_Array();
 			curVb++;
 			m_feedbackVertexCount++;
-			curVb->u1 = 0;
-			curVb->v1 = 0;
-			curVb->x = endPt.x+normal.X;
-			curVb->y = endPt.y+normal.Y;
-			curVb->z = endPt.z;
-			curVb->diffuse = BORDER_COLORS[i % BORDER_COLORS_SIZE ].m_borderColor;
+			curVb->uv[0] = 0;
+			curVb->uv[1] = 0;
+			curVb->position[0] = endPt.x+normal.X;
+			curVb->position[1] = endPt.y+normal.Y;
+			curVb->position[2] = endPt.z;
+			curVb->color = Assets::Color_From_ARGB(BORDER_COLORS[i % BORDER_COLORS_SIZE ].m_borderColor).To_Array();
 			curVb++;
 			m_feedbackVertexCount++;
-			curVb->u1 = 0;
-			curVb->v1 = 0;
-			curVb->x = endPt.x-normal.X;
-			curVb->y = endPt.y-normal.Y;
-			curVb->z = endPt.z;
-			curVb->diffuse = BORDER_COLORS[i % BORDER_COLORS_SIZE ].m_borderColor;
+			curVb->uv[0] = 0;
+			curVb->uv[1] = 0;
+			curVb->position[0] = endPt.x-normal.X;
+			curVb->position[1] = endPt.y-normal.Y;
+			curVb->position[2] = endPt.z;
+			curVb->color = Assets::Color_From_ARGB(BORDER_COLORS[i % BORDER_COLORS_SIZE ].m_borderColor).To_Array();
 			curVb++;
 			m_feedbackVertexCount++;
 
@@ -664,39 +655,39 @@ void DrawObject::updateBoundaryVB()
 			m_feedbackIndexCount+=6;
 
 			// draw a little nugget
-			curVb->u1 = 0;
-			curVb->v1 = 0;
-			curVb->x = startPt.x;
-			curVb->y = startPt.y - HANDLE_SIZE;
-			curVb->z = startPt.z;
-			curVb->diffuse = BORDER_COLORS[i % BORDER_COLORS_SIZE ].m_borderColor;
+			curVb->uv[0] = 0;
+			curVb->uv[1] = 0;
+			curVb->position[0] = startPt.x;
+			curVb->position[1] = startPt.y - HANDLE_SIZE;
+			curVb->position[2] = startPt.z;
+			curVb->color = Assets::Color_From_ARGB(BORDER_COLORS[i % BORDER_COLORS_SIZE ].m_borderColor).To_Array();
 			curVb++;
 			m_feedbackVertexCount++;
 
-			curVb->u1 = 0;
-			curVb->v1 = 0;
-			curVb->x = startPt.x - HANDLE_SIZE;
-			curVb->y = startPt.y;
-			curVb->z = startPt.z;
-			curVb->diffuse = BORDER_COLORS[i % BORDER_COLORS_SIZE ].m_borderColor;
+			curVb->uv[0] = 0;
+			curVb->uv[1] = 0;
+			curVb->position[0] = startPt.x - HANDLE_SIZE;
+			curVb->position[1] = startPt.y;
+			curVb->position[2] = startPt.z;
+			curVb->color = Assets::Color_From_ARGB(BORDER_COLORS[i % BORDER_COLORS_SIZE ].m_borderColor).To_Array();
 			curVb++;
 			m_feedbackVertexCount++;
 
-			curVb->u1 = 0;
-			curVb->v1 = 0;
-			curVb->x = startPt.x;
-			curVb->y = startPt.y + HANDLE_SIZE;
-			curVb->z = startPt.z;
-			curVb->diffuse = BORDER_COLORS[i % BORDER_COLORS_SIZE ].m_borderColor;
+			curVb->uv[0] = 0;
+			curVb->uv[1] = 0;
+			curVb->position[0] = startPt.x;
+			curVb->position[1] = startPt.y + HANDLE_SIZE;
+			curVb->position[2] = startPt.z;
+			curVb->color = Assets::Color_From_ARGB(BORDER_COLORS[i % BORDER_COLORS_SIZE ].m_borderColor).To_Array();
 			curVb++;
 			m_feedbackVertexCount++;
 
-			curVb->u1 = 0;
-			curVb->v1 = 0;
-			curVb->x = startPt.x + HANDLE_SIZE;
-			curVb->y = startPt.y;
-			curVb->z = startPt.z;
-			curVb->diffuse = BORDER_COLORS[i % BORDER_COLORS_SIZE ].m_borderColor;
+			curVb->uv[0] = 0;
+			curVb->uv[1] = 0;
+			curVb->position[0] = startPt.x + HANDLE_SIZE;
+			curVb->position[1] = startPt.y;
+			curVb->position[2] = startPt.z;
+			curVb->color = Assets::Color_From_ARGB(BORDER_COLORS[i % BORDER_COLORS_SIZE ].m_borderColor).To_Array();
 			curVb++;
 			m_feedbackVertexCount++;
 
@@ -732,8 +723,8 @@ void DrawObject::updateAmbientSoundVB()
 	unsigned *ib=m_indexFeedback.data();
 	unsigned *curIb = ib;
 
-	VertexFormatXYZDUV1 *vb = m_vertexFeedback.data();
-	VertexFormatXYZDUV1 *curVb = vb;
+	Graphics::SurfaceVertex *vb = m_vertexFeedback.data();
+	Graphics::SurfaceVertex *curVb = vb;
 
 	MapObject* mo = MapObject::getFirstMapObject();
 
@@ -754,57 +745,57 @@ void DrawObject::updateAmbientSoundVB()
 			return;
 		}
 
-		curVb->u1 = 0;
-		curVb->v1 = 0;
-		curVb->x = startPt.x;
-		curVb->y = startPt.y;
-		curVb->z = startPt.z;
-		curVb->diffuse = 0xFF2525EF;
+		curVb->uv[0] = 0;
+		curVb->uv[1] = 0;
+		curVb->position[0] = startPt.x;
+		curVb->position[1] = startPt.y;
+		curVb->position[2] = startPt.z;
+		curVb->color = Assets::Color_From_ARGB(0xFF2525EF).To_Array();
 		++curVb;
 		++m_feedbackVertexCount;
 
-		curVb->u1 = 0;
-		curVb->v1 = 0;
-		curVb->x = startPt.x;
-		curVb->y = startPt.y;
-		curVb->z = startPt.z + poleHeight;
-		curVb->diffuse = 0xFF2525EF;
+		curVb->uv[0] = 0;
+		curVb->uv[1] = 0;
+		curVb->position[0] = startPt.x;
+		curVb->position[1] = startPt.y;
+		curVb->position[2] = startPt.z + poleHeight;
+		curVb->color = Assets::Color_From_ARGB(0xFF2525EF).To_Array();
 		++curVb;
 		++m_feedbackVertexCount;
 
-		curVb->u1 = 0;
-		curVb->v1 = 0;
-		curVb->x = startPt.x + poleWidth;
-		curVb->y = startPt.y;
-		curVb->z = startPt.z + poleHeight;
-		curVb->diffuse = 0xFF2525EF;
+		curVb->uv[0] = 0;
+		curVb->uv[1] = 0;
+		curVb->position[0] = startPt.x + poleWidth;
+		curVb->position[1] = startPt.y;
+		curVb->position[2] = startPt.z + poleHeight;
+		curVb->color = Assets::Color_From_ARGB(0xFF2525EF).To_Array();
 		++curVb;
 		++m_feedbackVertexCount;
 
-		curVb->u1 = 0;
-		curVb->v1 = 0;
-		curVb->x = startPt.x + poleWidth;
-		curVb->y = startPt.y;
-		curVb->z = startPt.z;
-		curVb->diffuse = 0xFF2525EF;
+		curVb->uv[0] = 0;
+		curVb->uv[1] = 0;
+		curVb->position[0] = startPt.x + poleWidth;
+		curVb->position[1] = startPt.y;
+		curVb->position[2] = startPt.z;
+		curVb->color = Assets::Color_From_ARGB(0xFF2525EF).To_Array();
 		++curVb;
 		++m_feedbackVertexCount;
 
-		curVb->u1 = 0;
-		curVb->v1 = 0;
-		curVb->x = startPt.x;
-		curVb->y = startPt.y;
-		curVb->z = startPt.z + poleHeight + flagHeight;
-		curVb->diffuse = 0xFF2525EF;
+		curVb->uv[0] = 0;
+		curVb->uv[1] = 0;
+		curVb->position[0] = startPt.x;
+		curVb->position[1] = startPt.y;
+		curVb->position[2] = startPt.z + poleHeight + flagHeight;
+		curVb->color = Assets::Color_From_ARGB(0xFF2525EF).To_Array();
 		++curVb;
 		++m_feedbackVertexCount;
 
-		curVb->u1 = 0;
-		curVb->v1 = 0;
-		curVb->x = startPt.x + flagWidth;
-		curVb->y = startPt.y;
-		curVb->z = startPt.z + poleHeight + (flagHeight / 2);
-		curVb->diffuse = 0xFF2525EF;
+		curVb->uv[0] = 0;
+		curVb->uv[1] = 0;
+		curVb->position[0] = startPt.x + flagWidth;
+		curVb->position[1] = startPt.y;
+		curVb->position[2] = startPt.z + poleHeight + (flagHeight / 2);
+		curVb->color = Assets::Color_From_ARGB(0xFF2525EF).To_Array();
 		++curVb;
 		++m_feedbackVertexCount;
 
@@ -840,8 +831,8 @@ void DrawObject::updateWaypointVB()
 	unsigned *ib=m_indexFeedback.data();
 	unsigned *curIb = ib;
 
-	VertexFormatXYZDUV1 *vb = m_vertexFeedback.data();
-	VertexFormatXYZDUV1 *curVb = vb;
+	Graphics::SurfaceVertex *vb = m_vertexFeedback.data();
+	Graphics::SurfaceVertex *curVb = vb;
 
  	CWorldBuilderDoc *pDoc = CWorldBuilderDoc::GetActiveDoc();
 	Int i;
@@ -908,36 +899,36 @@ void DrawObject::updateWaypointVB()
 				if (m_feedbackVertexCount+9>= NUM_FEEDBACK_VERTEX) {
 					return;
 				}
-				curVb->u1 = 0;
-				curVb->v1 = 0;
-				curVb->x = loc1.x+normal.X;
-				curVb->y = loc1.y+normal.Y;
-				curVb->z = loc1.z;
-				curVb->diffuse = 0xFF000000;  // black.
+				curVb->uv[0] = 0;
+				curVb->uv[1] = 0;
+				curVb->position[0] = loc1.x+normal.X;
+				curVb->position[1] = loc1.y+normal.Y;
+				curVb->position[2] = loc1.z;
+				curVb->color = Assets::Color_From_ARGB(0xFF000000).To_Array();  // black.
 				curVb++;
 				m_feedbackVertexCount++;
-				curVb->u1 = 0;
-				curVb->v1 = 0;
-				curVb->x = loc1.x-normal.X;
-				curVb->y = loc1.y-normal.Y;
-				curVb->z = loc1.z;
-				curVb->diffuse = 0xFF000000;  // black.
+				curVb->uv[0] = 0;
+				curVb->uv[1] = 0;
+				curVb->position[0] = loc1.x-normal.X;
+				curVb->position[1] = loc1.y-normal.Y;
+				curVb->position[2] = loc1.z;
+				curVb->color = Assets::Color_From_ARGB(0xFF000000).To_Array();  // black.
 				curVb++;
 				m_feedbackVertexCount++;
-				curVb->u1 = 0;
-				curVb->v1 = 0;
-				curVb->x = loc2.x+normal.X;
-				curVb->y = loc2.y+normal.Y;
-				curVb->z = loc2.z;
-				curVb->diffuse = 0xFFFF0000;  // red.
+				curVb->uv[0] = 0;
+				curVb->uv[1] = 0;
+				curVb->position[0] = loc2.x+normal.X;
+				curVb->position[1] = loc2.y+normal.Y;
+				curVb->position[2] = loc2.z;
+				curVb->color = Assets::Color_From_ARGB(0xFFFF0000).To_Array();  // red.
 				curVb++;
 				m_feedbackVertexCount++;
-				curVb->u1 = 0;
-				curVb->v1 = 0;
-				curVb->x = loc2.x-normal.X;
-				curVb->y = loc2.y-normal.Y;
-				curVb->z = loc2.z;
-				curVb->diffuse = 0xFFFF0000;  // red.
+				curVb->uv[0] = 0;
+				curVb->uv[1] = 0;
+				curVb->position[0] = loc2.x-normal.X;
+				curVb->position[1] = loc2.y-normal.Y;
+				curVb->position[2] = loc2.z;
+				curVb->color = Assets::Color_From_ARGB(0xFFFF0000).To_Array();  // red.
 				curVb++;
 				m_feedbackVertexCount++;
 
@@ -965,36 +956,36 @@ void DrawObject::updateWaypointVB()
 				if (m_feedbackVertexCount+9>= NUM_FEEDBACK_VERTEX) {
 					return;
 				}
-				curVb->u1 = 0;
-				curVb->v1 = 0;
-				curVb->x = loc1.x+NORMAL_SHIFT*normal.X+normal.X;
-				curVb->y = loc1.y+NORMAL_SHIFT*normal.Y+normal.Y;
-				curVb->z = loc1.z;
-				curVb->diffuse = 0xFFFF0000;  // red.
+				curVb->uv[0] = 0;
+				curVb->uv[1] = 0;
+				curVb->position[0] = loc1.x+NORMAL_SHIFT*normal.X+normal.X;
+				curVb->position[1] = loc1.y+NORMAL_SHIFT*normal.Y+normal.Y;
+				curVb->position[2] = loc1.z;
+				curVb->color = Assets::Color_From_ARGB(0xFFFF0000).To_Array();  // red.
 				curVb++;
 				m_feedbackVertexCount++;
-				curVb->u1 = 0;
-				curVb->v1 = 0;
-				curVb->x = loc1.x+NORMAL_SHIFT*normal.X;
-				curVb->y = loc1.y+NORMAL_SHIFT*normal.Y;
-				curVb->z = loc1.z;
-				curVb->diffuse = 0xFFFF0000;  // red.
+				curVb->uv[0] = 0;
+				curVb->uv[1] = 0;
+				curVb->position[0] = loc1.x+NORMAL_SHIFT*normal.X;
+				curVb->position[1] = loc1.y+NORMAL_SHIFT*normal.Y;
+				curVb->position[2] = loc1.z;
+				curVb->color = Assets::Color_From_ARGB(0xFFFF0000).To_Array();  // red.
 				curVb++;
 				m_feedbackVertexCount++;
-				curVb->u1 = 0;
-				curVb->v1 = 0;
-				curVb->x = loc2.x+normal.X;
-				curVb->y = loc2.y+normal.Y;
-				curVb->z = loc2.z;
-				curVb->diffuse = 0xFFFF0000;  // red.
+				curVb->uv[0] = 0;
+				curVb->uv[1] = 0;
+				curVb->position[0] = loc2.x+normal.X;
+				curVb->position[1] = loc2.y+normal.Y;
+				curVb->position[2] = loc2.z;
+				curVb->color = Assets::Color_From_ARGB(0xFFFF0000).To_Array();  // red.
 				curVb++;
 				m_feedbackVertexCount++;
-				curVb->u1 = 0;
-				curVb->v1 = 0;
-				curVb->x = loc2.x-normal.X;
-				curVb->y = loc2.y-normal.Y;
-				curVb->z = loc2.z;
-				curVb->diffuse = 0xFFFF0000;  // red.
+				curVb->uv[0] = 0;
+				curVb->uv[1] = 0;
+				curVb->position[0] = loc2.x-normal.X;
+				curVb->position[1] = loc2.y-normal.Y;
+				curVb->position[2] = loc2.z;
+				curVb->color = Assets::Color_From_ARGB(0xFFFF0000).To_Array();  // red.
 				curVb++;
 				m_feedbackVertexCount++;
 
@@ -1012,36 +1003,36 @@ void DrawObject::updateWaypointVB()
 				if (m_feedbackVertexCount+9>= NUM_FEEDBACK_VERTEX) {
 					return;
 				}
-				curVb->u1 = 0;
-				curVb->v1 = 0;
-				curVb->x = loc1.x-NORMAL_SHIFT*normal.X;
-				curVb->y = loc1.y-NORMAL_SHIFT*normal.Y;
-				curVb->z = loc1.z;
-				curVb->diffuse = 0xFFFF0000;  // red.
+				curVb->uv[0] = 0;
+				curVb->uv[1] = 0;
+				curVb->position[0] = loc1.x-NORMAL_SHIFT*normal.X;
+				curVb->position[1] = loc1.y-NORMAL_SHIFT*normal.Y;
+				curVb->position[2] = loc1.z;
+				curVb->color = Assets::Color_From_ARGB(0xFFFF0000).To_Array();  // red.
 				curVb++;
 				m_feedbackVertexCount++;
-				curVb->u1 = 0;
-				curVb->v1 = 0;
-				curVb->x = loc1.x-NORMAL_SHIFT*normal.X-normal.X;
-				curVb->y = loc1.y-NORMAL_SHIFT*normal.Y-normal.Y;
-				curVb->z = loc1.z;
-				curVb->diffuse = 0xFFFF0000;  // red.
+				curVb->uv[0] = 0;
+				curVb->uv[1] = 0;
+				curVb->position[0] = loc1.x-NORMAL_SHIFT*normal.X-normal.X;
+				curVb->position[1] = loc1.y-NORMAL_SHIFT*normal.Y-normal.Y;
+				curVb->position[2] = loc1.z;
+				curVb->color = Assets::Color_From_ARGB(0xFFFF0000).To_Array();  // red.
 				curVb++;
 				m_feedbackVertexCount++;
-				curVb->u1 = 0;
-				curVb->v1 = 0;
-				curVb->x = loc2.x+normal.X;
-				curVb->y = loc2.y+normal.Y;
-				curVb->z = loc2.z;
-				curVb->diffuse = 0xFFFF0000;  // red.
+				curVb->uv[0] = 0;
+				curVb->uv[1] = 0;
+				curVb->position[0] = loc2.x+normal.X;
+				curVb->position[1] = loc2.y+normal.Y;
+				curVb->position[2] = loc2.z;
+				curVb->color = Assets::Color_From_ARGB(0xFFFF0000).To_Array();  // red.
 				curVb++;
 				m_feedbackVertexCount++;
-				curVb->u1 = 0;
-				curVb->v1 = 0;
-				curVb->x = loc2.x-normal.X;
-				curVb->y = loc2.y-normal.Y;
-				curVb->z = loc2.z;
-				curVb->diffuse = 0xFFFF0000;  // red.
+				curVb->uv[0] = 0;
+				curVb->uv[1] = 0;
+				curVb->position[0] = loc2.x-normal.X;
+				curVb->position[1] = loc2.y-normal.Y;
+				curVb->position[2] = loc2.z;
+				curVb->color = Assets::Color_From_ARGB(0xFFFF0000).To_Array();  // red.
 				curVb++;
 				m_feedbackVertexCount++;
 
@@ -1076,8 +1067,8 @@ void DrawObject::updatePolygonVB(PolygonTrigger *pTrig, Bool selected, Bool isOp
 	unsigned *ib=m_indexFeedback.data();
 	unsigned *curIb = ib;
 
-	VertexFormatXYZDUV1 *vb = m_vertexFeedback.data();
-	VertexFormatXYZDUV1 *curVb = vb;
+	Graphics::SurfaceVertex *vb = m_vertexFeedback.data();
+	Graphics::SurfaceVertex *curVb = vb;
 
 	Int i;
 	for (i=0; i<pTrig->getNumPoints(); i++) {
@@ -1110,36 +1101,36 @@ void DrawObject::updatePolygonVB(PolygonTrigger *pTrig, Bool selected, Bool isOp
 		if (pTrig->isWaterArea()) {
 			diffuse = 0xFF0000FF+green;
 		}
-		curVb->u1 = 0;
-		curVb->v1 = 0;
-		curVb->x = loc1.x+normal.X;
-		curVb->y = loc1.y+normal.Y;
-		curVb->z = loc1.z;
-		curVb->diffuse = diffuse;
+		curVb->uv[0] = 0;
+		curVb->uv[1] = 0;
+		curVb->position[0] = loc1.x+normal.X;
+		curVb->position[1] = loc1.y+normal.Y;
+		curVb->position[2] = loc1.z;
+		curVb->color = Assets::Color_From_ARGB(diffuse).To_Array();
 		curVb++;
 		m_feedbackVertexCount++;
-		curVb->u1 = 0;
-		curVb->v1 = 0;
-		curVb->x = loc1.x-normal.X;
-		curVb->y = loc1.y-normal.Y;
-		curVb->z = loc1.z;
-		curVb->diffuse = diffuse;
+		curVb->uv[0] = 0;
+		curVb->uv[1] = 0;
+		curVb->position[0] = loc1.x-normal.X;
+		curVb->position[1] = loc1.y-normal.Y;
+		curVb->position[2] = loc1.z;
+		curVb->color = Assets::Color_From_ARGB(diffuse).To_Array();
 		curVb++;
 		m_feedbackVertexCount++;
-		curVb->u1 = 0;
-		curVb->v1 = 0;
-		curVb->x = loc2.x+normal.X;
-		curVb->y = loc2.y+normal.Y;
-		curVb->z = loc2.z;
-		curVb->diffuse = diffuse;
+		curVb->uv[0] = 0;
+		curVb->uv[1] = 0;
+		curVb->position[0] = loc2.x+normal.X;
+		curVb->position[1] = loc2.y+normal.Y;
+		curVb->position[2] = loc2.z;
+		curVb->color = Assets::Color_From_ARGB(diffuse).To_Array();
 		curVb++;
 		m_feedbackVertexCount++;
-		curVb->u1 = 0;
-		curVb->v1 = 0;
-		curVb->x = loc2.x-normal.X;
-		curVb->y = loc2.y-normal.Y;
-		curVb->z = loc2.z;
-		curVb->diffuse = diffuse;
+		curVb->uv[0] = 0;
+		curVb->uv[1] = 0;
+		curVb->position[0] = loc2.x-normal.X;
+		curVb->position[1] = loc2.y-normal.Y;
+		curVb->position[2] = loc2.z;
+		curVb->color = Assets::Color_From_ARGB(diffuse).To_Array();
 		curVb++;
 		m_feedbackVertexCount++;
 
@@ -1168,8 +1159,8 @@ void DrawObject::updateFeedbackVB()
 	unsigned *ib=m_indexFeedback.data();
 	unsigned *curIb = ib;
 
-	VertexFormatXYZDUV1 *vb = m_vertexFeedback.data();
-	VertexFormatXYZDUV1 *curVb = vb;
+	Graphics::SurfaceVertex *vb = m_vertexFeedback.data();
+	Graphics::SurfaceVertex *curVb = vb;
 
 	Bool doubleResolution = 0;
 	Int brushWidth = m_brushWidth;
@@ -1212,15 +1203,15 @@ void DrawObject::updateFeedbackVB()
 		for (i=minX; i<maxX; i++) {
 			if (m_feedbackVertexCount >= NUM_FEEDBACK_VERTEX) return;
 			if (m_squareFeedback) {
-				curVb->diffuse = diffuse;
+				curVb->color = Assets::Color_From_ARGB(diffuse).To_Array();
 			} else {
 				Real blendFactor = Tool::calcRoundBlendFactor(m_cellCenter, i, j, brushWidth, featherWidth);
 				if (blendFactor > 0.99) {
-					curVb->diffuse = diffuse;
+					curVb->color = Assets::Color_From_ARGB(diffuse).To_Array();
 				} else if (blendFactor > 0.05) {
-					curVb->diffuse = featherDiffuse | (theAlpha<<24);
+					curVb->color = Assets::Color_From_ARGB(featherDiffuse | (theAlpha<<24)).To_Array();
 				}	else {
-					curVb->diffuse = 0;
+					curVb->color = Assets::Color_From_ARGB(0).To_Array();
 				}
 			}
 			Real X, Y, theZ;
@@ -1233,11 +1224,11 @@ void DrawObject::updateFeedbackVB()
 				Y = ADJUST_FROM_INDEX_TO_REAL(j);
 				theZ = TheTerrainRenderObject->getHeightMapHeight(X, Y, nullptr);
 			}
-			curVb->u1 = 0;
-			curVb->v1 = 0;
-			curVb->x = X;
-			curVb->y = Y;
-			curVb->z = theZ;
+			curVb->uv[0] = 0;
+			curVb->uv[1] = 0;
+			curVb->position[0] = X;
+			curVb->position[1] = Y;
+			curVb->position[2] = theZ;
 			curVb++;
 			m_feedbackVertexCount++;
 		}
@@ -1350,7 +1341,7 @@ but doesn't, really.
 
 /** updateVB puts a circle with an arrow into the vertex buffer. */
 
-Int DrawObject::updateVB(std::vector<VertexFormatXYZDUV1>& pVB, Int color, Bool doArrow, Bool doDiamond)
+Int DrawObject::updateVB(std::vector<Graphics::SurfaceVertex>& pVB, Int color, Bool doArrow, Bool doDiamond)
 {
 	Int i, k;
 
@@ -1372,7 +1363,7 @@ Int DrawObject::updateVB(std::vector<VertexFormatXYZDUV1>& pVB, Int color, Bool 
 	if (!pVB.empty())
 	{
 
-	VertexFormatXYZDUV1 *vb = pVB.data();
+	Graphics::SurfaceVertex *vb = pVB.data();
 
 		const Real theZ = 0.0f;
 		Real theRadius = THE_RADIUS;
@@ -1394,20 +1385,20 @@ Int DrawObject::updateVB(std::vector<VertexFormatXYZDUV1>& pVB, Int color, Bool 
 		for (i=0; i<limit; i++)
 		{
 			for (k=0; k<3; k++) {
-				vb->z=  theZ;
+				vb->position[2]=  theZ;
 				if (k==0) {
-					vb->x=	0;
-					vb->y=	0;
+					vb->position[0]=	0;
+					vb->position[1]=	0;
 
 					Vector3 vec(0,0,theZ);
 					vec.Rotate_Z(curAngle+(deltaAngle/2));
-					vb->x=	vec.X;
-					vb->y=	vec.Y;
+					vb->position[0]=	vec.X;
+					vb->position[1]=	vec.Y;
 				} else if (k==1) {
 					Vector3 vec(theRadius/10,0,theZ);
 					vec.Rotate_Z(curAngle);
-					vb->x=	vec.X;
-					vb->y=	vec.Y;
+					vb->position[0]=	vec.X;
+					vb->position[1]=	vec.Y;
 				} else if (k==2) {
 					Real angle = curAngle+deltaAngle;
 					if (i==limit-1) {
@@ -1415,16 +1406,16 @@ Int DrawObject::updateVB(std::vector<VertexFormatXYZDUV1>& pVB, Int color, Bool 
 					}
 					Vector3 vec(theRadius/10,0,theZ);
 					vec.Rotate_Z(angle);
-					vb->x=	vec.X;
-					vb->y=	vec.Y;
+					vb->position[0]=	vec.X;
+					vb->position[1]=	vec.Y;
 				}
-				vb->diffuse=diffuse;
-				vb->u1=0;
-				vb->v1=0;
+				vb->color = Assets::Color_From_ARGB(diffuse).To_Array();
+				vb->uv[0]=0;
+				vb->uv[1]=0;
 				vb[3*NUM_TRI] = *vb;
 				if (k==0) {
-					vb[3*NUM_TRI].z += 3.0;
-					vb[3*NUM_TRI].diffuse = diffuse;
+					vb[3*NUM_TRI].position[2] += 3.0;
+					vb[3*NUM_TRI].color = Assets::Color_From_ARGB(diffuse).To_Array();
 				}
 				vb++;
 			}
@@ -1441,43 +1432,43 @@ Int DrawObject::updateVB(std::vector<VertexFormatXYZDUV1>& pVB, Int color, Bool 
 		}
 		/* Now do the arrow. */
 		for (k=0; k<3; k++) {
-			vb->x=	(k&1)?2*theRadius:0.0f;
-			vb->y=	-halfLineWidth + ((k&2)?2*halfLineWidth:0);
-			vb->z=  theZ;
-			vb->diffuse=highlightColors[curHighlight] + (theAlpha<<24);
-			vb->u1=0;
-			vb->v1=0;
+			vb->position[0]=	(k&1)?2*theRadius:0.0f;
+			vb->position[1]=	-halfLineWidth + ((k&2)?2*halfLineWidth:0);
+			vb->position[2]=  theZ;
+			vb->color = Assets::Color_From_ARGB(highlightColors[curHighlight] + (theAlpha<<24)).To_Array();
+			vb->uv[0]=0;
+			vb->uv[1]=0;
 			vb[3*NUM_TRI] = *vb;
 			vb++;
 		}
 		for (k=0; k<3; k++) {
-			vb->x=	(k&1)?0.0f:2*theRadius;
-			vb->y=	halfLineWidth - ((k&2)?2*halfLineWidth:0);
-			vb->z=  theZ;
-			vb->diffuse=highlightColors[curHighlight] + (theAlpha<<24);
-			vb->u1=0;
-			vb->v1=0;
+			vb->position[0]=	(k&1)?0.0f:2*theRadius;
+			vb->position[1]=	halfLineWidth - ((k&2)?2*halfLineWidth:0);
+			vb->position[2]=  theZ;
+			vb->color = Assets::Color_From_ARGB(highlightColors[curHighlight] + (theAlpha<<24)).To_Array();
+			vb->uv[0]=0;
+			vb->uv[1]=0;
 			vb++;
 		}
 		for (k=0; k<3; k++) {
-			if (k==0) { vb->x=theRadius; vb->y = 0;}
-			else if (k==1) { vb->x=2*theRadius + 2*halfLineWidth; vb->y = 0;}
-			else { vb->x=theRadius; vb->y = 2*halfLineWidth;}
-			vb->z=  theZ;
-			vb->diffuse=highlightColors[curHighlight] + (theAlpha<<24);
-			vb->u1=0;
-			vb->v1=0;
+			if (k==0) { vb->position[0]=theRadius; vb->position[1] = 0;}
+			else if (k==1) { vb->position[0]=2*theRadius + 2*halfLineWidth; vb->position[1] = 0;}
+			else { vb->position[0]=theRadius; vb->position[1] = 2*halfLineWidth;}
+			vb->position[2]=  theZ;
+			vb->color = Assets::Color_From_ARGB(highlightColors[curHighlight] + (theAlpha<<24)).To_Array();
+			vb->uv[0]=0;
+			vb->uv[1]=0;
 			vb[3*NUM_TRI] = *vb;
 			vb++;
 		}
 		for (k=0; k<3; k++) {
-			if (k==0) { vb->x=theRadius; vb->y = 0;}
-			else if (k==1) { vb->x=theRadius; vb->y = -2*halfLineWidth;}
-			else { vb->x=2*theRadius + 2*halfLineWidth; vb->y = 0;}
-			vb->z=  theZ;
-			vb->diffuse=highlightColors[curHighlight] + (theAlpha<<24);
-			vb->u1=0;
-			vb->v1=0;
+			if (k==0) { vb->position[0]=theRadius; vb->position[1] = 0;}
+			else if (k==1) { vb->position[0]=theRadius; vb->position[1] = -2*halfLineWidth;}
+			else { vb->position[0]=2*theRadius + 2*halfLineWidth; vb->position[1] = 0;}
+			vb->position[2]=  theZ;
+			vb->color = Assets::Color_From_ARGB(highlightColors[curHighlight] + (theAlpha<<24)).To_Array();
+			vb->uv[0]=0;
+			vb->uv[1]=0;
 			vb[3*NUM_TRI] = *vb;
 			vb++;
 		}
@@ -1497,20 +1488,20 @@ Int DrawObject::updateVB(std::vector<VertexFormatXYZDUV1>& pVB, Int color, Bool 
 		for (i=0; i<limit; i++)
 		{
 			for (k=0; k<3; k++) {
-				vb->z=  theZ;
+				vb->position[2]=  theZ;
 				if (k==0) {
-					vb->x=	0;
-					vb->y=	0;
+					vb->position[0]=	0;
+					vb->position[1]=	0;
 
 					Vector3 vec(theRadius*4/5,0,theZ);
 					vec.Rotate_Z(curAngle+(deltaAngle/2));
-					vb->x=	vec.X;
-					vb->y=	vec.Y;
+					vb->position[0]=	vec.X;
+					vb->position[1]=	vec.Y;
 				} else if (k==1) {
 					Vector3 vec(theRadius,0,theZ);
 					vec.Rotate_Z(curAngle);
-					vb->x=	vec.X;
-					vb->y=	vec.Y;
+					vb->position[0]=	vec.X;
+					vb->position[1]=	vec.Y;
 				} else if (k==2) {
 					Real angle = curAngle+deltaAngle;
 					if (i==limit-1) {
@@ -1518,16 +1509,16 @@ Int DrawObject::updateVB(std::vector<VertexFormatXYZDUV1>& pVB, Int color, Bool 
 					}
 					Vector3 vec(theRadius,0,theZ);
 					vec.Rotate_Z(angle);
-					vb->x=	vec.X;
-					vb->y=	vec.Y;
+					vb->position[0]=	vec.X;
+					vb->position[1]=	vec.Y;
 				}
-				vb->diffuse = highlightColors[curHighlight] + (theAlpha<<24);
-				vb->u1=0;
-				vb->v1=0;
+				vb->color = Assets::Color_From_ARGB(highlightColors[curHighlight] + (theAlpha<<24)).To_Array();
+				vb->uv[0]=0;
+				vb->uv[1]=0;
 				vb[3*NUM_TRI] = *vb;
 				if (k==0) {
-					vb[3*NUM_TRI].z += 3.0;
-					vb[3*NUM_TRI].diffuse = highlightColors[curHighlight] + (theAlpha<<24);	 // b g<<8 r<<16 a<<24.
+					vb[3*NUM_TRI].position[2] += 3.0;
+					vb[3*NUM_TRI].color = Assets::Color_From_ARGB(highlightColors[curHighlight] + (theAlpha<<24)).To_Array();	 // b g<<8 r<<16 a<<24.
 				}
 				vb++;
 			}
@@ -1538,43 +1529,43 @@ Int DrawObject::updateVB(std::vector<VertexFormatXYZDUV1>& pVB, Int color, Bool 
 #if 0
 		// Now do the highlight triangle.  This is in yellow.
 		for (k=0; k<3; k++) {
-			vb->x = k==0?theRadius:0;
-			vb->y = k==1?theRadius:0;
-			vb->z=  k==2?theZ+SELECT_PYRAMID_HEIGHT:theZ;
-			vb->diffuse= highlightColors[curHighlight] + (theAlpha<<24);	 // b g<<8 r<<16 a<<24.
-			vb->u1=0;
-			vb->v1=0;
+			vb->position[0] = k==0?theRadius:0;
+			vb->position[1] = k==1?theRadius:0;
+			vb->position[2]=  k==2?theZ+SELECT_PYRAMID_HEIGHT:theZ;
+			vb->color = Assets::Color_From_ARGB(highlightColors[curHighlight] + (theAlpha<<24)).To_Array();	 // b g<<8 r<<16 a<<24.
+			vb->uv[0]=0;
+			vb->uv[1]=0;
 			vb[3*NUM_TRI] = *vb;
 			vb++;
 		}
 		for (k=0; k<3; k++) {
-			vb->x = k==1?-theRadius:0;
-			vb->y = k==0?theRadius:0;
-			vb->z=  k==2?theZ+SELECT_PYRAMID_HEIGHT:theZ;
-			vb->diffuse= highlightColors[curHighlight] + (theAlpha<<24);	 // b g<<8 r<<16 a<<24.
-			vb->u1=0;
-			vb->v1=0;
+			vb->position[0] = k==1?-theRadius:0;
+			vb->position[1] = k==0?theRadius:0;
+			vb->position[2]=  k==2?theZ+SELECT_PYRAMID_HEIGHT:theZ;
+			vb->color = Assets::Color_From_ARGB(highlightColors[curHighlight] + (theAlpha<<24)).To_Array();	 // b g<<8 r<<16 a<<24.
+			vb->uv[0]=0;
+			vb->uv[1]=0;
 			vb[3*NUM_TRI] = *vb;
 			vb++;
 		}
 
 		for (k=0; k<3; k++) {
-			vb->x = k==1?theRadius:0;
-			vb->y = k==0?-theRadius:0;
-			vb->z=  k==2?theZ+SELECT_PYRAMID_HEIGHT:theZ;
-			vb->diffuse= highlightColors[curHighlight] + (theAlpha<<24);	 // b g<<8 r<<16 a<<24.
-			vb->u1=0;
-			vb->v1=0;
+			vb->position[0] = k==1?theRadius:0;
+			vb->position[1] = k==0?-theRadius:0;
+			vb->position[2]=  k==2?theZ+SELECT_PYRAMID_HEIGHT:theZ;
+			vb->color = Assets::Color_From_ARGB(highlightColors[curHighlight] + (theAlpha<<24)).To_Array();	 // b g<<8 r<<16 a<<24.
+			vb->uv[0]=0;
+			vb->uv[1]=0;
 			vb[3*NUM_TRI] = *vb;
 			vb++;
 		}
 		for (k=0; k<3; k++) {
-			vb->x = k==0?-theRadius:0;
-			vb->y = k==1?-theRadius:0;
-			vb->z=  k==2?theZ+SELECT_PYRAMID_HEIGHT:theZ;
-			vb->diffuse= highlightColors[curHighlight] + (theAlpha<<24);	 // b g<<8 r<<16 a<<24.
-			vb->u1=0;
-			vb->v1=0;
+			vb->position[0] = k==0?-theRadius:0;
+			vb->position[1] = k==1?-theRadius:0;
+			vb->position[2]=  k==2?theZ+SELECT_PYRAMID_HEIGHT:theZ;
+			vb->color = Assets::Color_From_ARGB(highlightColors[curHighlight] + (theAlpha<<24)).To_Array();	 // b g<<8 r<<16 a<<24.
+			vb->uv[0]=0;
+			vb->uv[1]=0;
 			vb[3*NUM_TRI] = *vb;
 			vb++;
 		}
@@ -2055,9 +2046,9 @@ if (_skip_drawobject_render) {
 	m_winSize = CPoint(static_cast<int>(viewport.width), static_cast<int>(viewport.height));
 
 
-	std::span<const VertexFormatXYZDUV1> vertices;
+	std::span<const Graphics::SurfaceVertex> vertices;
     std::span<const unsigned> indices;
-    ShaderClass shader = m_shaderClass;
+    Graphics::MaterialState shader = m_shaderClass;
     Matrix4x4 world(Transform), view, projection;
     std::copy_n(Graphics::Get_Camera_Matrices().view.values.data(), 16, &view[0][0]);
     std::copy_n(Graphics::Get_Camera_Matrices().projection.values.data(), 16, &projection[0][0]);
@@ -2071,7 +2062,7 @@ if (_skip_drawobject_render) {
             indices.subspan(first_index, triangle_count * 3), projection * view * world, shader, nullptr))
             DEBUG_LOG(("Editor overlay graphics submission failed.\n"));
     };
-	shader = ShaderClass(m_shaderClass);
+	shader = Graphics::MaterialState(m_shaderClass);
 	indices = m_indexBuffer;
 
 	Int count=0;
@@ -2330,7 +2321,7 @@ if (pMapObj->isSelected()) {
 		if (m_feedbackIndexCount>0) {
 				vertices = m_vertexFeedback;
 			indices = m_indexFeedback;
-			shader = ShaderClass(m_shaderClass);
+			shader = Graphics::MaterialState(m_shaderClass);
 			draw(m_feedbackVertexCount, 0, m_feedbackIndexCount / 3);
 			indices = m_indexBuffer;
 			vertices = {};
@@ -2345,7 +2336,7 @@ if (pMapObj->isSelected()) {
 		if (m_feedbackIndexCount>0) {
 				vertices = m_vertexFeedback;
 			indices = m_indexFeedback;
-			shader = ShaderClass(SC_OPAQUE_Z);
+			shader = Graphics::MaterialState(SC_OPAQUE_Z);
 			Graphics::Get_Scene_Draw_Parameters().wireframe = true;
 			draw(m_feedbackVertexCount, 0, m_feedbackIndexCount / 3);
 		}
@@ -2354,7 +2345,7 @@ if (pMapObj->isSelected()) {
 		if (m_feedbackIndexCount>0) {
 				vertices = m_vertexFeedback;
 			indices = m_indexFeedback;
-			shader = ShaderClass(ShaderClass::_PresetAlpha2DShader);
+			shader = Graphics::MaterialState(Graphics::MaterialState::Alpha2D());
 			draw(m_feedbackVertexCount, 0, m_feedbackIndexCount / 3);
 		}
 	}
@@ -2366,7 +2357,7 @@ if (pMapObj->isSelected()) {
 		if (m_feedbackIndexCount>0) {
 				vertices = m_vertexFeedback;
 			indices = m_indexFeedback;
-			shader = ShaderClass(SC_OPAQUE_Z);
+			shader = Graphics::MaterialState(SC_OPAQUE_Z);
 			Graphics::Get_Scene_Draw_Parameters().wireframe = true;	// we want a solid ramp
 			draw(m_feedbackVertexCount, 0, m_feedbackIndexCount / 3);
 		}
@@ -2379,8 +2370,8 @@ if (pMapObj->isSelected()) {
 		if (m_feedbackIndexCount>0) {
 				vertices = m_vertexFeedback;
 			indices = m_indexFeedback;
-			shader = ShaderClass(m_shaderClass);
-			shader.Set_Cull_Mode(ShaderClass::CULL_MODE_DISABLE);
+			shader = Graphics::MaterialState(m_shaderClass);
+			shader.Set_Cull_Mode(Graphics::MaterialState::CULL_MODE_DISABLE);
 			Graphics::Get_Scene_Draw_Parameters().wireframe = false;	// we want a solid ramp
 			draw(m_feedbackVertexCount, 0, m_feedbackIndexCount / 3);
 		}
@@ -2396,8 +2387,8 @@ if (pMapObj->isSelected()) {
 		if (m_feedbackIndexCount>0) {
 				vertices = m_vertexFeedback;
 			indices = m_indexFeedback;
-			shader = ShaderClass(m_shaderClass);
-			shader.Set_Cull_Mode(ShaderClass::CULL_MODE_DISABLE);
+			shader = Graphics::MaterialState(m_shaderClass);
+			shader.Set_Cull_Mode(Graphics::MaterialState::CULL_MODE_DISABLE);
 			Graphics::Get_Scene_Draw_Parameters().wireframe = false;	// we want a solid ramp
 			draw(m_feedbackVertexCount, 0, m_feedbackIndexCount / 3);
 		}

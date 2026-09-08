@@ -61,8 +61,7 @@ import Graphics.Scene.Props.Submission;
 #include "Camera.h"
 #include "Scene.h"
 #include "SegLine.h"
-#include "Shader.h"
-#include "VertMaterial.h"
+import Graphics.Materials.State;
 #include "WWDebug/wwdebug.h"
 #include "WWDebug/wwprofile.h"
 #include "WWDebug/wwmemlog.h"
@@ -77,7 +76,6 @@ import Graphics.Resources.Textures.Sampling;
 #include "WWLib/thread.h"
 #include "WWLib/cpudetect.h"
 import Graphics.Scene.OrderedDraws;
-#include "ShdLib.h"
 #include "Lib/BaseType.h"
 #include <cstdint>
 import Graphics.Backends.DX11.FrameRuntime;
@@ -85,35 +83,35 @@ import Graphics.Backends.DX11.FrameRuntime;
 
 const char* DAZZLE_INI_FILENAME="DAZZLE.INI";
 
-#define DEFAULT_DEBUG_SHADER_BITS	(		SHADE_CNST(\
-												ShaderClass::PASS_LEQUAL,\
-												ShaderClass::DEPTH_WRITE_ENABLE,\
-												ShaderClass::COLOR_WRITE_ENABLE,\
-												ShaderClass::SRCBLEND_ONE,\
-												ShaderClass::DSTBLEND_ZERO,\
-												ShaderClass::FOG_DISABLE,\
-												ShaderClass::GRADIENT_MODULATE,\
-												ShaderClass::SECONDARY_GRADIENT_DISABLE,\
-												ShaderClass::TEXTURING_DISABLE,\
-												ShaderClass::ALPHATEST_DISABLE,\
-												ShaderClass::CULL_MODE_ENABLE, \
-												ShaderClass::DETAILCOLOR_DISABLE,\
-												ShaderClass::DETAILALPHA_DISABLE) )
+#define DEFAULT_DEBUG_SHADER_BITS	(		Graphics::MaterialState::Make_Bits(\
+												Graphics::MaterialState::PASS_LEQUAL,\
+												Graphics::MaterialState::DEPTH_WRITE_ENABLE,\
+												Graphics::MaterialState::COLOR_WRITE_ENABLE,\
+												Graphics::MaterialState::SRCBLEND_ONE,\
+												Graphics::MaterialState::DSTBLEND_ZERO,\
+												Graphics::MaterialState::FOG_DISABLE,\
+												Graphics::MaterialState::GRADIENT_MODULATE,\
+												Graphics::MaterialState::SECONDARY_GRADIENT_DISABLE,\
+												Graphics::MaterialState::TEXTURING_DISABLE,\
+												Graphics::MaterialState::ALPHATEST_DISABLE,\
+												Graphics::MaterialState::CULL_MODE_ENABLE, \
+												Graphics::MaterialState::DETAILCOLOR_DISABLE,\
+												Graphics::MaterialState::DETAILALPHA_DISABLE) )
 
-#define LIGHTMAP_DEBUG_SHADER_BITS	(		SHADE_CNST(\
-												ShaderClass::PASS_LEQUAL,\
-												ShaderClass::DEPTH_WRITE_ENABLE,\
-												ShaderClass::COLOR_WRITE_ENABLE,\
-												ShaderClass::SRCBLEND_ONE,\
-												ShaderClass::DSTBLEND_ZERO,\
-												ShaderClass::FOG_DISABLE,\
-												ShaderClass::GRADIENT_DISABLE,\
-												ShaderClass::SECONDARY_GRADIENT_DISABLE,\
-												ShaderClass::TEXTURING_ENABLE,\
-												ShaderClass::ALPHATEST_DISABLE,\
-												ShaderClass::CULL_MODE_ENABLE, \
-												ShaderClass::DETAILCOLOR_DISABLE,\
-												ShaderClass::DETAILALPHA_DISABLE) )
+#define LIGHTMAP_DEBUG_SHADER_BITS	(		Graphics::MaterialState::Make_Bits(\
+												Graphics::MaterialState::PASS_LEQUAL,\
+												Graphics::MaterialState::DEPTH_WRITE_ENABLE,\
+												Graphics::MaterialState::COLOR_WRITE_ENABLE,\
+												Graphics::MaterialState::SRCBLEND_ONE,\
+												Graphics::MaterialState::DSTBLEND_ZERO,\
+												Graphics::MaterialState::FOG_DISABLE,\
+												Graphics::MaterialState::GRADIENT_DISABLE,\
+												Graphics::MaterialState::SECONDARY_GRADIENT_DISABLE,\
+												Graphics::MaterialState::TEXTURING_ENABLE,\
+												Graphics::MaterialState::ALPHATEST_DISABLE,\
+												Graphics::MaterialState::CULL_MODE_ENABLE, \
+												Graphics::MaterialState::DETAILCOLOR_DISABLE,\
+												Graphics::MaterialState::DETAILALPHA_DISABLE) )
 
 
 
@@ -152,9 +150,8 @@ float														WW3D::DefaultNativeScreenSize = 1.0f;
 
 
 
-VertexMaterialClass *								WW3D::DefaultDebugMaterial  = nullptr;
-ShaderClass												WW3D::DefaultDebugShader(DEFAULT_DEBUG_SHADER_BITS);
-ShaderClass												WW3D::LightmapDebugShader(LIGHTMAP_DEBUG_SHADER_BITS);
+Graphics::MaterialState												WW3D::DefaultDebugShader(DEFAULT_DEBUG_SHADER_BITS);
+Graphics::MaterialState												WW3D::LightmapDebugShader(LIGHTMAP_DEBUG_SHADER_BITS);
 
 WW3D::PrelitModeEnum									WW3D::PrelitMode = PRELIT_MODE_LIGHTMAP_MULTI_PASS;
 bool														WW3D::ExposePrelit = false;
@@ -185,8 +182,6 @@ namespace
 		}
 
 		Graphics::Get_Prop_Submission().Clear();
-		SHD_INIT;
-		VertexMaterialClass::Init();
 		Graphics::Get_Resource_Load_Queue().Start();
 		RenderServicesInitialized = true;
 	}
@@ -200,8 +195,6 @@ namespace
 
 		Graphics::Get_Resource_Load_Queue().Shutdown();
 		Graphics::Get_Prop_Submission().Clear();
-		VertexMaterialClass::Shutdown();
-		SHD_SHUTDOWN;
 		Graphics::Get_Prop_Submission().Clear();
 		RenderServicesInitialized = false;
 	}
@@ -249,7 +242,6 @@ WW3DErrorType WW3D::Init(bool lite)
 	assert(IsInitted == false);
 	Lite = lite;
 	WWDEBUG_SAY(("Allocate Debug Resources"));
-	Allocate_Debug_Resources();
 
 	/*
 	** Initialize the dazzle system
@@ -305,7 +297,6 @@ WW3DErrorType WW3D::Shutdown()
 	/*
 	** Release all of our assets
 	*/
-	Release_Debug_Resources();
 	if (WW3DAssetManager::Get_Instance()) {
 		WW3DAssetManager::Get_Instance()->Free_Assets();
 	}
@@ -618,7 +609,6 @@ WW3DErrorType WW3D::Render(
 void WW3D::Flush(RenderInfoClass & rinfo)
 {
 	Graphics::Get_Prop_Submission().Flush_Materials();
-	SHD_FLUSH;
 	Graphics::Get_Scene_Draw_Queue().Drain(&rinfo, [] { Graphics::Get_Prop_Submission().Flush_Materials(); });	//draws things like water
 
 	Graphics::Get_Prop_Submission().Flush_Transparent();
@@ -721,27 +711,7 @@ void WW3D::Enable_Coloring(unsigned int color)
 	IsColoringEnabled = (color == 0) ? false : true;
 }
 
-/***********************************************************************************************
- * WW3D::Peek_Default_Debug_Material -- returns a pointer to the default debug mtl				  *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   7/21/99    GTH : Created.                                                                 *
- *=============================================================================================*/
-VertexMaterialClass * WW3D::Peek_Default_Debug_Material()
-{
-#ifdef WWDEBUG
-	WWASSERT(DefaultDebugMaterial);
-	return DefaultDebugMaterial;
-#else
-	return nullptr;
-#endif
-}
+
 
 /***********************************************************************************************
  * WW3D::Peek_Default_Debug_Shader -- returns the default shader for debugging.	              *
@@ -755,7 +725,7 @@ VertexMaterialClass * WW3D::Peek_Default_Debug_Material()
  * HISTORY:                                                                                    *
  *   7/21/99    GTH : Created.                                                                 *
  *=============================================================================================*/
-ShaderClass	WW3D::Peek_Default_Debug_Shader()
+Graphics::MaterialState	WW3D::Peek_Default_Debug_Shader()
 {
 	return DefaultDebugShader;
 }
@@ -772,56 +742,14 @@ ShaderClass	WW3D::Peek_Default_Debug_Shader()
  * HISTORY:                                                                                    *
  *   7/21/99    GTH : Created.                                                                 *
  *=============================================================================================*/
-ShaderClass	WW3D::Peek_Lightmap_Debug_Shader()
+Graphics::MaterialState	WW3D::Peek_Lightmap_Debug_Shader()
 {
 	return LightmapDebugShader;
 }
 
-/***********************************************************************************************
- * WW3D::Allocate_Debug_Resources -- allocates the debug resources									  *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   7/21/99    GTH : Created.                                                                 *
- *=============================================================================================*/
-void WW3D::Allocate_Debug_Resources()
-{
-#ifdef WWDEBUG
-	WWASSERT(DefaultDebugMaterial == nullptr);
-	DefaultDebugMaterial = W3DNEW VertexMaterialClass;
-	DefaultDebugMaterial->Set_Shininess(0.0f);
-	DefaultDebugMaterial->Set_Opacity(1.0f);
-	DefaultDebugMaterial->Set_Ambient(0,0,0);
-	DefaultDebugMaterial->Set_Diffuse(0,0,0);
-	DefaultDebugMaterial->Set_Specular(0,0,0);
-	DefaultDebugMaterial->Set_Emissive(0,0,0);
-#endif
-}
 
-/***********************************************************************************************
- * WW3D::Release_Debug_Resources -- releases the debug resources										  *
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   7/21/99    GTH : Created.                                                                 *
- *=============================================================================================*/
-void WW3D::Release_Debug_Resources()
-{
-#ifdef WWDEBUG
-	WWASSERT(DefaultDebugMaterial);
-	REF_PTR_RELEASE(DefaultDebugMaterial);
-#endif
-}
+
+
 
 
 

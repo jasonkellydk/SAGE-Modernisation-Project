@@ -142,7 +142,6 @@ Int BaseHeightMapRenderObjClass::freeMapResources()
 	m_scorches->freeBuffers();
 	m_staticScorches->freeBuffers();
 
-	REF_PTR_RELEASE(m_vertexMaterialClass);
 	REF_PTR_RELEASE(m_stageZeroTexture);
 	REF_PTR_RELEASE(m_stageOneTexture);
 	REF_PTR_RELEASE(m_stageTwoTexture);
@@ -243,7 +242,6 @@ BaseHeightMapRenderObjClass::BaseHeightMapRenderObjClass()
 	m_shoreLineTilePositionsSize=0;
 	m_currentMinWaterOpacity = -1.0f;
 
-	m_vertexMaterialClass=nullptr;
 	m_stageZeroTexture=nullptr;
 	m_stageOneTexture=nullptr;
 	m_stageTwoTexture=nullptr;
@@ -469,20 +467,13 @@ void BaseHeightMapRenderObjClass::ReAcquireResources()
 }
 
 //=============================================================================
-// BaseHeightMapRenderObjClass::doTheLight
+// BaseHeightMapRenderObjClass::computeVertexLighting
 //=============================================================================
 /** Calculates the diffuse lighting for a vertex in the terrain, taking all of the
-static lights into account as well.  It is possible to just use the normal in the
-vertex and let the render backend do the lighting, but it is slower to render, and can only
-handle 4 lights at this point. */
+static lights into account as well. Returns the retained packed color value. */
 //=============================================================================
-void BaseHeightMapRenderObjClass::doTheLight(VERTEX_FORMAT *vb, const Vector3*light, Vector3*normal, Graphics::SceneObjectList<RenderObjClass>::Cursor *pLightsIterator, UnsignedByte alpha)
+UnsignedInt BaseHeightMapRenderObjClass::computeVertexLighting(const Vector3& position, const Vector3*light, const Vector3*normal, Graphics::SceneObjectList<RenderObjClass>::Cursor *pLightsIterator, UnsignedByte alpha)
 {
-#ifdef USE_NORMALS
-	vb->nx = normal->X;
-	vb->ny = normal->Y;
-	vb->nz = normal->Z;
-#else
 	Real shadeR, shadeG, shadeB;
 	Real shade;
 	shadeR = TheGlobalData->m_terrainAmbient[0].red;	//only the first terrain light contributes to ambient
@@ -493,7 +484,7 @@ void BaseHeightMapRenderObjClass::doTheLight(VERTEX_FORMAT *vb, const Vector3*li
 		for (pLightsIterator->First(); !pLightsIterator->Is_Done(); pLightsIterator->Next())
 		{
 			LightClass *pLight = (LightClass*)pLightsIterator->Peek_Obj();
-			Vector3 lightDirection(vb->x, vb->y, vb->z);
+			Vector3 lightDirection(position.X, position.Y, position.Z);
 			Real factor = 1.0f;
 			switch(pLight->Get_Type()) {
 			case LightClass::POINT:
@@ -502,24 +493,15 @@ void BaseHeightMapRenderObjClass::doTheLight(VERTEX_FORMAT *vb, const Vector3*li
 					lightDirection -= lightLoc;
 					double range, midRange;
 					pLight->Get_Far_Attenuation_Range(midRange, range);
-					if (vb->x < lightLoc.X-range) continue;
-					if (vb->x > lightLoc.X+range) continue;
-					if (vb->y < lightLoc.Y-range) continue;
-					if (vb->y > lightLoc.Y+range) continue;
+					if (position.X < lightLoc.X-range) continue;
+					if (position.X > lightLoc.X+range) continue;
+					if (position.Y < lightLoc.Y-range) continue;
+					if (position.Y > lightLoc.Y+range) continue;
 					Real dist = lightDirection.Length();
 					if (dist >= range) continue;
 					if (midRange < 0.1) continue;
-#if 1
 					factor = 1.0f - (dist - midRange) / (range - midRange);
-#else
-					// f = 1.0 / (atten0 + d*atten1 + d*d/atten2);
-					if (fabs(range-midRange)<1e-5)	{
-						// if the attenuation range is too small assume uniform with cutoff
-						factor = 1.0;
-					}	else  {
-						factor = 1.0f/(0.1+dist/midRange + 5.0f*dist*dist/(range*range));
-					}
-#endif
+
 					factor = WWMath::Clamp(factor,0.0f,1.0f);
 				}
 				break;
@@ -567,10 +549,10 @@ void BaseHeightMapRenderObjClass::doTheLight(VERTEX_FORMAT *vb, const Vector3*li
 	if (shadeB > 1.0) shadeB = 1.0;
 	if(shadeB < 0.0f) shadeB = 0.0f;
 
-	if (m_useDepthFade && vb->z <= TheGlobalData->m_waterPositionZ)
+	if (m_useDepthFade && position.Z <= TheGlobalData->m_waterPositionZ)
 	{	//height is below water level
 		//reduce lighting values based on light fall off as it travels through water.
-		float depthScale = (1.4f - vb->z)/TheGlobalData->m_waterPositionZ;
+		float depthScale = (1.4f - position.Z)/TheGlobalData->m_waterPositionZ;
 		shadeR *= 1.0f - depthScale * (1.0f-m_depthFade.X);
 		shadeG *= 1.0f - depthScale * (1.0f-m_depthFade.Y);
 		shadeB *= 1.0f - depthScale * (1.0f-m_depthFade.Z);
@@ -579,8 +561,7 @@ void BaseHeightMapRenderObjClass::doTheLight(VERTEX_FORMAT *vb, const Vector3*li
 	shadeR*=255.0f;
 	shadeG*=255.0f;
 	shadeB*=255.0f;
-	vb->diffuse = REAL_TO_INT(shadeB) | (REAL_TO_INT(shadeG) << 8) | (REAL_TO_INT(shadeR) << 16) | ((Int)alpha << 24);
-#endif
+	return REAL_TO_INT(shadeB) | (REAL_TO_INT(shadeG) << 8) | (REAL_TO_INT(shadeR) << 16) | ((Int)alpha << 24);
 }
 
 //=============================================================================
@@ -1828,7 +1809,6 @@ Int BaseHeightMapRenderObjClass::initHeightData(Int x, Int y, WorldHeightMap *pM
 		m_scorches->allocateBuffers();
 		m_staticScorches->allocateBuffers();
 
-		m_vertexMaterialClass=VertexMaterialClass::Get_Preset(VertexMaterialClass::PRELIT_DIFFUSE);
 	}
 
 	return 0;
@@ -1916,28 +1896,22 @@ Int BaseHeightMapRenderObjClass::getStaticDiffuse(Int x, Int y)
 
 	Vector3::Normalized_Cross_Product(l2r,n2f, &normalAtTexel);
 
-	VERTEX_FORMAT vertex;
-	vertex.x=ADJUST_FROM_INDEX_TO_REAL(x);
-	vertex.y=ADJUST_FROM_INDEX_TO_REAL(y);
-
-	vertex.z=  ((float)m_map->getHeight(x,y))*MAP_HEIGHT_SCALE;
-	vertex.u1=0;
-	vertex.v1=0;
-	vertex.u2=1;
-	vertex.v2=1;
+    const Vector3 position(ADJUST_FROM_INDEX_TO_REAL(x),ADJUST_FROM_INDEX_TO_REAL(y),
+        static_cast<float>(m_map->getHeight(x,y))*MAP_HEIGHT_SCALE);
+    UnsignedInt diffuse;
 
 	RTS3DScene *pMyScene = (RTS3DScene *)Scene;
 	if (pMyScene) {
 		Graphics::SceneObjectList<RenderObjClass>::Cursor *it = pMyScene->createLightsIterator();
-		doTheLight(&vertex, lightRay, &normalAtTexel, it, 1.0f);
+		diffuse = computeVertexLighting(position, lightRay, &normalAtTexel, it, 1);
 		if (it) {
 		 pMyScene->destroyLightsIterator(it);
 		 it = nullptr;
 		}
 	} else {
-		doTheLight(&vertex, lightRay, &normalAtTexel, nullptr, 1.0f);
+		diffuse = computeVertexLighting(position, lightRay, &normalAtTexel, nullptr, 1);
 	}
-	return vertex.diffuse;
+	return diffuse;
 }
 
 //=============================================================================

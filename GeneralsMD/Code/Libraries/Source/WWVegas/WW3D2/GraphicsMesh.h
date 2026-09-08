@@ -2,7 +2,6 @@
 
 class MeshClass;
 class RenderInfoClass;
-class MaterialPassClass;
 class GraphicsMeshState;
 void Release_Graphics_Mesh_State(GraphicsMeshState*& state);
 

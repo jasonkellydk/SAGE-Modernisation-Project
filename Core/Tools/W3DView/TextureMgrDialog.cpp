@@ -39,7 +39,6 @@
 #include "W3DView.h"
 #include "TextureMgrDialog.h"
 #include "WW3D2/Mesh.h"
-#include "WW3D2/MatInfo.h"
 #include "TextureSettingsDialog.h"
 #include "WW3D2/AssetMgr.h"
 #include "WW3D2/Texture.h"
@@ -307,12 +306,12 @@ TextureMgrDialogClass::Add_Textures_To_Node
 	TextureListNodeClass *pmesh_node
 )
 {
-	MaterialInfoClass *pmat_info = pmesh->Get_Material_Info ();
+	auto pmat_info = pmesh->Get_Material_Info ();
 	if (pmat_info != nullptr) {
 
 		// Loop through all the textures and add them as subobjs
-		for (int index = 0; index < pmat_info->Texture_Count (); index ++) {
-			TextureClass *ptexture = pmat_info->Get_Texture (index);
+		for (int index = 0; index < static_cast<int>(pmat_info->textures.size()); index ++) {
+			TextureClass *ptexture = RefCountPtr<TextureClass>(pmat_info->textures[index]).Release();
 			if (ptexture != nullptr) {
 
 				// Create a node from this texture and add it to the mesh
@@ -330,7 +329,7 @@ TextureMgrDialogClass::Add_Textures_To_Node
 		}
 
 		// Release our hold on this pointer
-		REF_PTR_RELEASE (pmat_info);
+		pmat_info.reset();
 	}
 }
 
@@ -419,16 +418,16 @@ TextureMgrDialogClass::OnDblclkMeshTextureListCtrl
 					if (prender_obj != nullptr) {
 
 						// Get the material information for this render object
-						MaterialInfoClass *pmat_info = prender_obj->Get_Material_Info ();
+						auto pmat_info = prender_obj->Get_Material_Info ();
 						if (pmat_info != nullptr) {
 
 							// Attempt to find the original texture
-							poriginal_texture = pmat_info->Get_Texture (pnode->Get_Texture_Index ());
+							poriginal_texture = RefCountPtr<TextureClass>(pmat_info->textures[pnode->Get_Texture_Index ()]).Release();
 							if (poriginal_texture->getClassID () != ID_INDIRECT_TEXTURE_CLASS) {
 								SR_RELEASE (poriginal_texture);
 							}
 
-							REF_PTR_RELEASE (pmat_info);
+							pmat_info.reset();
 						}
 					}
 

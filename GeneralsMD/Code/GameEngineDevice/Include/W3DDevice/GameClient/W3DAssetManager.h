@@ -57,7 +57,7 @@ import Assets.Images.PixelEncoding;
 #include "Lib/BaseType.h"
 
 class Vector3;
-class VertexMaterialClass;
+import Graphics.Materials.MeshMaterial;
 
 class W3DAssetManager: public WW3DAssetManager
 {
@@ -98,7 +98,7 @@ private:
 	int Recolor_Asset(RenderObjClass *robj, const int color);
 	int Recolor_Mesh(RenderObjClass *robj, const int color);
 	int Recolor_HLOD(RenderObjClass *robj, const int color);
-	void Recolor_Vertex_Material(VertexMaterialClass *vmat, const int color);
+	void Recolor_Vertex_Material(Graphics::MeshMaterial *vmat, const int color);
 	void Make_Mesh_Unique(RenderObjClass *robj, Bool colors);
 	void Make_HLOD_Unique(RenderObjClass *robj, Bool colors);
 	TextureClass * Find_Texture(const char * name, const int color);
@@ -112,7 +112,7 @@ private:
 	//'E&B' customizations
 /*	virtual RenderObjClass * Create_Render_Obj(const char * name, float scale, const Vector3 &hsv_shift);
 	TextureClass * Get_Texture_With_HSV_Shift(const char * filename, const Vector3 &hsv_shift, TextureClass::MipCountType mip_level_count = TextureClass::MIP_LEVELS_ALL);
-	void Recolor_Vertex_Material(VertexMaterialClass *vmat, const Vector3 &hsv_shift);
+	void Recolor_Vertex_Material(Graphics::MeshMaterial *vmat, const Vector3 &hsv_shift);
 	void Recolor_Vertices(unsigned int *color, int count, const Vector3 &hsv_shift);
 	void Recolor_Mesh(RenderObjClass *robj, const Vector3 &hsv_shift);
 	TextureClass * Recolor_Texture(TextureClass *texture, const Vector3 &hsv_shift);

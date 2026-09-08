@@ -22,10 +22,9 @@
 #include "WW3D2/RendObj.h"
 #include "WW3D2/W3DFile.h"
 #include <vector>
-#include "WW3D2/VertexFormat.h"
+import Graphics.Scene.Surfaces.Geometry;
 
-#include "WW3D2/Shader.h"
-#include "WW3D2/VertMaterial.h"
+import Graphics.Materials.State;
 #include "Lib/BaseType.h"
 #include "Common/AsciiString.h"
 
@@ -111,9 +110,9 @@ protected:
 	Int	m_numTriangles;	//dimensions of list
 
 	std::vector<unsigned> m_indexBuffer;	///< indices defining a object icon
-	ShaderClass								m_shaderClass; ///< shader or rendering state for heightmap
-	std::vector<VertexFormatXYZDUV1> m_vertexBufferTile1;	///< First vertex buffer.
-	std::vector<VertexFormatXYZDUV1> m_vertexBufferTile2;	///< Second vertex buffer.
+	Graphics::MaterialState								m_shaderClass; ///< shader or rendering state for heightmap
+	std::vector<Graphics::SurfaceVertex> m_vertexBufferTile1;	///< First vertex buffer.
+	std::vector<Graphics::SurfaceVertex> m_vertexBufferTile2;	///< Second vertex buffer.
 
 	Int												m_waterVertexCount;
 
@@ -129,7 +128,7 @@ protected:
 	Bool											m_drawTestArtHighlight;
 	Bool											m_drawLetterbox;
 
-	std::vector<VertexFormatXYZDUV1> m_vertexFeedback;	///< Vertex buffer for brush feedback.
+	std::vector<Graphics::SurfaceVertex> m_vertexFeedback;	///< Vertex buffer for brush feedback.
 	std::vector<unsigned> m_indexFeedback;	///< indices defining a triangle strip for the feedback on terrain
 	Int												m_feedbackIndexCount;
 	Int												m_feedbackVertexCount;
@@ -163,7 +162,7 @@ protected: // static state vars.
 
 protected:
   void addCircleToLineRenderer( const Coord3D & center, Real radius, Real width, unsigned long color, CameraClass* camera );
-	Int updateVB(std::vector<VertexFormatXYZDUV1>& vertexBufferTile, Int color, Bool doArrow, Bool doDiamond);
+	Int updateVB(std::vector<Graphics::SurfaceVertex>& vertexBufferTile, Int color, Bool doArrow, Bool doDiamond);
 	void updatePolygonVB(PolygonTrigger *pTrig, Bool selected, Bool isOpen);
 	void updateFeedbackVB();
 	void updateMeshVB();

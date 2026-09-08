@@ -18,12 +18,28 @@ export using W3DByteSpan = std::span<const std::byte>;
 export inline constexpr std::uint32_t W3DChunkMesh = 0x00000000;
 export inline constexpr std::uint32_t W3DChunkVertices = 0x00000002;
 export inline constexpr std::uint32_t W3DChunkVertexNormals = 0x00000003;
+export inline constexpr std::uint32_t W3DChunkSurrenderNormals = 0x00000004;
 export inline constexpr std::uint32_t W3DChunkTextureCoords = 0x00000005;
+export inline constexpr std::uint32_t W3DChunkLegacyMaterials = 0x00000006;
+export inline constexpr std::uint32_t W3DChunkSurrenderTriangles = 0x00000009;
 export inline constexpr std::uint32_t W3DChunkMeshUserText = 0x0000000C;
 export inline constexpr std::uint32_t W3DChunkVertexColors = 0x0000000D;
 export inline constexpr std::uint32_t W3DChunkVertexInfluences = 0x0000000E;
+export inline constexpr std::uint32_t W3DChunkDamage = 0x0000000F;
+export inline constexpr std::uint32_t W3DChunkLegacyMaterials2 = 0x00000014;
+export inline constexpr std::uint32_t W3DChunkMaterials3 = 0x00000015;
+export inline constexpr std::uint32_t W3DChunkMaterial3 = 0x00000016;
+export inline constexpr std::uint32_t W3DChunkMaterial3Name = 0x00000017;
+export inline constexpr std::uint32_t W3DChunkMaterial3Info = 0x00000018;
+export inline constexpr std::uint32_t W3DChunkMaterial3DiffuseColorMap = 0x00000019;
+export inline constexpr std::uint32_t W3DChunkMap3Filename = 0x0000001A;
+export inline constexpr std::uint32_t W3DChunkMap3Info = 0x0000001B;
+export inline constexpr std::uint32_t W3DChunkMaterial3DiffuseIlluminationMap = 0x0000001C;
+export inline constexpr std::uint32_t W3DChunkMaterial3SpecularColorMap = 0x0000001D;
+export inline constexpr std::uint32_t W3DChunkMaterial3SpecularIlluminationMap = 0x0000001E;
 export inline constexpr std::uint32_t W3DChunkMeshHeader3 = 0x0000001F;
 export inline constexpr std::uint32_t W3DChunkTriangles = 0x00000020;
+export inline constexpr std::uint32_t W3DChunkPerTriMaterials = 0x00000021;
 export inline constexpr std::uint32_t W3DChunkVertexShadeIndices = 0x00000022;
 export inline constexpr std::uint32_t W3DChunkMaterialInfo = 0x00000028;
 export inline constexpr std::uint32_t W3DChunkShaders = 0x00000029;
@@ -56,6 +72,8 @@ export inline constexpr std::uint32_t W3DChunkAnimationHeader = 0x00000201;
 export inline constexpr std::uint32_t W3DChunkSizeMask = 0x7FFFFFFF;
 export inline constexpr std::uint32_t W3DChunkContainsChildren = 0x80000000;
 export inline constexpr std::uint32_t W3DInvalidIndex = 0xFFFFFFFF;
+export inline constexpr std::uint32_t W3DMaterialUseAlpha = 0x00000001;
+export inline constexpr std::uint32_t W3DMaterialUseSorting = 0x00000002;
 
 export struct W3DChunkView final
 {

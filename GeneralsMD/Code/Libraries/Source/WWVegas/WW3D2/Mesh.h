@@ -44,6 +44,7 @@
 #include <utility>
 #include <vector>
 import Graphics.Scene.Models.Factory;
+import Graphics.Scene.MuzzleFlash;
 
 
 #include <memory>
@@ -57,22 +58,20 @@ import Graphics.Scene.Models.Factory;
 #include "WWLib/bittype.h"
 #include "WW3D2/W3DErr.h"
 import Graphics.Scene.Lighting.Local;
+import Graphics.Scene.Models.Materials;
 
 class HModelClass;
 class AuxMeshDataClass;
 class MeshLoadInfoClass;
 class W3DMeshClass;
-class MaterialInfoClass;
 class ChunkLoadClass;
 class ChunkSaveClass;
 class RenderInfoClass;
 class MeshModelClass;
-class MaterialPassClass;
-struct W3dMeshHeaderStruct;
+class GraphicsMeshState;
 struct W3dTexCoordStruct;
 class TextureClass;
-class VertexMaterialClass;
-struct VertexFormatXYZNDUV2;
+import Graphics.Materials.MeshMaterial;
 
 /**
 ** MeshClass -- Render3DObject for rendering meshes.
@@ -117,7 +116,7 @@ public:
 	/////////////////////////////////////////////////////////////////////////////
 	virtual void					Scale(float scale) override;
 	virtual void					Scale(float scalex, float scaley, float scalez) override;
-	virtual MaterialInfoClass * Get_Material_Info() override;
+	virtual std::shared_ptr<Graphics::ModelMaterials<RefCountPtr<TextureClass>>> Get_Material_Info() override;
 
    virtual int						Get_Sort_Level() const override;
    virtual void					Set_Sort_Level(int level) override;
@@ -141,7 +140,10 @@ public:
 
 	void								Set_Lighting_Environment(Graphics::LocalLighting * light_env) { if (light_env) {m_localLightEnv=*light_env;LightEnvironment = &m_localLightEnv;} else {LightEnvironment = nullptr;} }
 	Graphics::LocalLighting *		Get_Lighting_Environment() { return LightEnvironment; }
+	void Set_Muzzle_Flash_Designation(Graphics::MuzzleFlashDesignation designation) { m_muzzleFlashDesignation=designation; }
+	Graphics::MuzzleFlashDesignation Get_Muzzle_Flash_Designation() const { return m_muzzleFlashDesignation; }
 	float	Get_Alpha_Override() { return m_alphaOverride;}
+	GraphicsMeshState*& Graphics_Mesh_State() noexcept { return GraphicsMeshes; }
 
 	void								Set_Next_Visible_Skin(MeshClass * next_visible) { NextVisibleSkin = next_visible; }
 	MeshClass *						Peek_Next_Visible_Skin() { return NextVisibleSkin; }
@@ -153,7 +155,7 @@ public:
 	static bool						Legacy_Meshes_Fogged;
 
 	void								Replace_Texture(TextureClass* texture,TextureClass* new_texture);
-	void								Replace_VertexMaterial(VertexMaterialClass* vmat,VertexMaterialClass* new_vmat);
+	void								Replace_VertexMaterial(Graphics::MeshMaterial* vmat,const std::shared_ptr<Graphics::MeshMaterial>& new_vmat);
 
 	void								Make_Unique(bool force_meshmdl_clone = false);
 
@@ -170,12 +172,14 @@ protected:
 	void								clone_materials(const MeshClass & srcmesh);
 
 	MeshModelClass *				Model;
+	GraphicsMeshState* GraphicsMeshes = nullptr;
 
 	Graphics::LocalLighting *		LightEnvironment;		// cached pointer to the light environment for this mesh
 	Graphics::LocalLighting     m_localLightEnv;	//added for 'Generals'
 	float					m_alphaOverride;	//added for 'Generals' to allow variable alpha on meshes.
 	float					m_materialPassEmissiveOverride;	//added for 'Generals' to allow variable emissive on additional passes.
 	float					m_materialPassAlphaOverride;	//added for 'Generals' to allow variable alpha on additional render passes.
+	Graphics::MuzzleFlashDesignation m_muzzleFlashDesignation;
 	int								BaseVertexOffset;		// offset to our first vertex in whatever vb this mesh is in.
 	MeshClass *						NextVisibleSkin;		// linked list of visible skins
 

@@ -60,8 +60,12 @@ export struct PropParameters final
     // Affine instance transform. Geometry stays in its owner's local space.
     std::array<float,16> world{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
     PropSurfaceParameters surface{};
+    // The first component explicitly selects the muzzle-flash material path;
+    // the remaining values are its angle and authored UV pivot. Ordinary props
+    // leave this state at zero.
+    std::array<float,4> muzzle_flash_state{};
 };
-static_assert(sizeof(PropParameters) == 992);
+static_assert(sizeof(PropParameters) == 1008);
 
 export struct PropStyle final
 {
@@ -131,6 +135,10 @@ public:
         m_device = &device;
         m_constants = device.Create_Buffer({sizeof(PropParameters), RHIBufferUsage::Constant});
         if (!m_constants.Is_Valid() || !m_environment.Initialize(device)) { Shutdown(); return false; }
+        m_bindings[0].type = RHIResourceType::Material;
+        m_bindings[0].buffer = m_constants;
+        for (std::size_t index=1; index<m_bindings.size(); ++index)
+            m_bindings[index].type = RHIResourceType::Texture;
         return true;
     }
 
@@ -145,6 +153,7 @@ public:
             if (m_constants.Is_Valid()) m_device->Destroy_Buffer(m_constants);
         }
         m_pipelines.clear();
+        m_bindings = {};
         m_constants = {};
         m_device = nullptr;
     }
@@ -232,22 +241,21 @@ public:
         const RHIPipelineHandle pipeline = Pipeline(style);
         if (!pipeline.Is_Valid() || !m_device->Update_Buffer(m_constants, 0,
             std::as_bytes(std::span(&parameters, 1)))) return false;
-        std::array<RHIBindlessResource, PropTextureCount+1> bindings{};
-        bindings[0].type = RHIResourceType::Material;
-        bindings[0].buffer = m_constants;
-        std::size_t count = 1;
-        for (std::size_t slot = 0; slot < textures.size(); ++slot) {
-            if (!textures[slot].Is_Valid()) continue;
-            bindings[count].type = RHIResourceType::Texture;
-            bindings[count].index = ResourceIndex{static_cast<std::uint32_t>(slot), 1};
-            bindings[count++].texture = textures[slot];
+        {
+            GRAPHICS_PROFILE_SCOPE("Graphics.Props.BindResources");
+            std::size_t count = 1;
+            for (std::size_t slot = 0; slot < textures.size(); ++slot) {
+                if (!textures[slot].Is_Valid()) continue;
+                m_bindings[count].index = ResourceIndex{static_cast<std::uint32_t>(slot), 1};
+                m_bindings[count++].texture = textures[slot];
+            }
+            return commands.Bind_Pipeline(pipeline)
+                && commands.Set_Bindless_Resources(std::span(m_bindings.data(), count))
+                && m_environment.Bind(*m_device, commands)
+                && commands.Set_Vertex_Buffer(0, mesh->vertices, sizeof(PropVertex), 0)
+                && commands.Set_Index_Buffer(mesh->indices, RHIIndexFormat::UInt32, 0)
+                && commands.Draw_Indexed(index_count, first_index);
         }
-        return commands.Bind_Pipeline(pipeline)
-            && commands.Set_Bindless_Resources(std::span(bindings.data(), count))
-            && m_environment.Bind(*m_device, commands)
-            && commands.Set_Vertex_Buffer(0, mesh->vertices, sizeof(PropVertex), 0)
-            && commands.Set_Index_Buffer(mesh->indices, RHIIndexFormat::UInt32, 0)
-            && commands.Draw_Indexed(index_count, first_index);
     }
 
 private:
@@ -268,9 +276,9 @@ private:
         const auto vertices = std::as_bytes(mesh.geometry.Vertices());
         const auto indices = std::as_bytes(mesh.geometry.Indices());
         mesh.vertices = m_device->Create_Buffer_Initialized(
-            {static_cast<std::uint32_t>(vertices.size()), RHIBufferUsage::Vertex, sizeof(PropVertex)}, vertices);
+            {static_cast<std::uint32_t>(vertices.size()), RHIBufferUsage::Vertex, sizeof(PropVertex),RHIBufferUpdateMode::Discard}, vertices);
         mesh.indices = m_device->Create_Buffer_Initialized(
-            {static_cast<std::uint32_t>(indices.size()), RHIBufferUsage::Index, sizeof(std::uint32_t)}, indices);
+            {static_cast<std::uint32_t>(indices.size()), RHIBufferUsage::Index, sizeof(std::uint32_t),RHIBufferUpdateMode::Discard}, indices);
         if (!mesh.vertices.Is_Valid() || !mesh.indices.Is_Valid()) {
             Release_GPU(mesh);
             return false;
@@ -280,6 +288,7 @@ private:
 
     RHIPipelineHandle Pipeline(const PropStyle &style)
     {
+        GRAPHICS_PROFILE_SCOPE("Graphics.Props.Pipeline");
         for (const auto &entry : m_pipelines) if (entry.style == style) return entry.handle;
         RHIPipeline description;
         description.vertex_format = RHIVertexFormat::Position3Color4UV2UV2Normal3;
@@ -329,6 +338,9 @@ private:
     RHIBufferHandle m_constants{};
     ResourcePool<PropMesh, PropMeshHandle> m_meshes;
     std::vector<PropPipeline> m_pipelines;
+    // Borrowed submission scratch. Every used texture entry is overwritten
+    // before submission; the command list consumes the supplied span at once.
+    std::array<RHIBindlessResource, PropTextureCount+1> m_bindings{};
 };
 
 export bool Draw_Prop(PropRenderer& renderer, CommandList& commands, PropMeshHandle mesh,

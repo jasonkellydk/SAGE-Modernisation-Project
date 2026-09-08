@@ -1,33 +1,36 @@
+import Graphics.Materials.State;
 #include <array>
 #include "rts/profile.h"
+#include "../../../../../../engine/graphics/profiling/Tracy.h"
 #include <vector>
 #include <cstring>
 #include <cmath>
 #include <algorithm>
-#include "VertMaterial.h"
-#include "Mapper.h"
+import Graphics.Materials.MeshMaterial;
+import Graphics.Scene.Props.Material;
 #include "GraphicsGeometry.h"
 #include "GraphicsMaterial.h"
 #include "Texture.h"
 #include "WW3D.h"
 import Graphics.Scene.DrawParameters;
+import Graphics.Scene.Views.CameraMatrices;
+import Graphics.Materials.TextureCoordinates;
 import Graphics.Scene.Props.Submission;
-import Graphics.Materials.Fog;
+import Graphics.Scene.Props.MaterialDrawState;
 import Graphics.Backends.DX11.FrameRuntime;
 import Graphics.Scene.Shadows.DirectionalRenderer;
 
-bool Draw_Graphics_Prelit_Geometry(std::span<const VertexFormatXYZDUV1> source,
+bool Draw_Graphics_Prelit_Geometry(std::span<const Graphics::SurfaceVertex> source,
     std::span<const unsigned> indices, const Matrix4x4& transform,
-    ShaderClass shader, TextureClass* texture, const Matrix4x4* sorting_view, bool texture_luminance)
+    Graphics::MaterialState shader, TextureClass* texture, const Matrix4x4* sorting_view, bool texture_luminance)
 {
     std::vector<Graphics::PropVertex> vertices(source.size());
     for (std::size_t i=0; i<source.size(); ++i) {
         const auto& input = source[i];
         auto& output = vertices[i];
-        output.position = {input.x,input.y,input.z};
-        output.uv = {input.u1,input.v1};
-        output.color = {((input.diffuse>>16)&255)/255.0f,((input.diffuse>>8)&255)/255.0f,
-            (input.diffuse&255)/255.0f,((input.diffuse>>24)&255)/255.0f};
+        output.position = input.position;
+        output.uv = input.uv;
+        output.color = input.color;
     }
     Graphics::PropParameters parameters;
     parameters.texture_luminance = texture_luminance ? 1.0f : 0.0f;
@@ -37,13 +40,17 @@ bool Draw_Graphics_Prelit_Geometry(std::span<const VertexFormatXYZDUV1> source,
 
 bool Draw_Graphics_Material_Geometry(std::span<const Graphics::PropVertex> vertices,
     std::span<const unsigned> indices, const Matrix4x4& transform,
-    ShaderClass shader, std::array<TextureClass*,2> source_textures,
+    Graphics::MaterialState shader, std::array<TextureClass*,2> source_textures,
     Graphics::PropParameters parameters, const Matrix4x4* sorting_view,
     GraphicsMaterialDrawOverrides overrides)
 {
     PROFILER_SECTION_NAME("Graphics.Mesh.SubmitMaterial");
     auto* device = Graphics::Shared_Frame_Device();
     if (!device || vertices.empty() || indices.empty()) return false;
+    const bool use_muzzle_flash = overrides.muzzle_flash != Graphics::MuzzleFlashDesignation::None
+        && source_textures[0] != nullptr && shader.Get_Texturing()!=Graphics::MaterialState::TEXTURING_DISABLE;
+    if (use_muzzle_flash)
+        source_textures[1] = source_textures[0];
     std::array<Graphics::RHITextureHandle,2> textures{};
     const auto release_textures = [&]() {
         for (auto texture : textures)
@@ -51,7 +58,7 @@ bool Draw_Graphics_Material_Geometry(std::span<const Graphics::PropVertex> verti
     };
     for (unsigned stage=0;stage<2;++stage) {
         auto* texture=source_textures[stage];
-        if (!texture || shader.Get_Texturing()==ShaderClass::TEXTURING_DISABLE) continue;
+        if (!texture || shader.Get_Texturing()==Graphics::MaterialState::TEXTURING_DISABLE) continue;
         if (!texture->Ensure_Render_Backend_Texture()) { release_textures(); return false; }
         const auto handle = texture->Peek_Graphics_Texture();
         if (!device->Retain_Texture(handle)) { release_textures(); return false; }
@@ -62,43 +69,14 @@ bool Draw_Graphics_Material_Geometry(std::span<const Graphics::PropVertex> verti
             parameters.view_projection[row*4+column]=transform[row][column];
     parameters.textured=textures[0].Is_Valid() ? 1.0f : 0.0f;
     parameters.secondary_texture=textures[1].Is_Valid() ? 1.0f : 0.0f;
-    parameters.primary_gradient=static_cast<float>(shader.Get_Primary_Gradient());
-    parameters.secondary_gradient=static_cast<float>(shader.Get_Secondary_Gradient());
-    parameters.detail_color=static_cast<float>(shader.Get_Post_Detail_Color_Func());
-    parameters.detail_alpha=static_cast<float>(shader.Get_Post_Detail_Alpha_Func());
-    parameters.alpha_cutoff=shader.Get_Alpha_Test()==ShaderClass::ALPHATEST_ENABLE ? 96.0f/255.0f : 0;
     const auto scene = Graphics::Get_Scene_Draw_Parameters();
-    constexpr std::array fog_modes{Graphics::MaterialFogMode::Disabled,Graphics::MaterialFogMode::Scene,
-        Graphics::MaterialFogMode::Black,Graphics::MaterialFogMode::White};
-    const auto fog=Graphics::Resolve_Material_Fog(scene.fog,
-        fog_modes[shader.Get_Fog_Func()]);
-    parameters.fog_state=fog.state;
-    parameters.fog_color=fog.color;
-    if (overrides.alpha_cutoff>=0 && shader.Get_Alpha_Test()==ShaderClass::ALPHATEST_ENABLE)
-        parameters.alpha_cutoff=overrides.alpha_cutoff;
-    Graphics::PropStyle style;
-    style.depth_write = shader.Get_Depth_Mask() == ShaderClass::DEPTH_WRITE_ENABLE;
-    constexpr std::array comparisons{Graphics::RHIComparison::Never,Graphics::RHIComparison::Less,
-        Graphics::RHIComparison::Equal,Graphics::RHIComparison::LessEqual,Graphics::RHIComparison::Greater,
-        Graphics::RHIComparison::NotEqual,Graphics::RHIComparison::GreaterEqual,Graphics::RHIComparison::Always};
-    style.depth_comparison = comparisons[shader.Get_Depth_Compare()];
-    constexpr std::array sources{Graphics::RHIBlendFactor::Zero,Graphics::RHIBlendFactor::One,
-        Graphics::RHIBlendFactor::SourceAlpha,Graphics::RHIBlendFactor::InverseSourceAlpha};
-    constexpr std::array destinations{Graphics::RHIBlendFactor::Zero,Graphics::RHIBlendFactor::One,
-        Graphics::RHIBlendFactor::SourceColor,Graphics::RHIBlendFactor::InverseSourceColor,
-        Graphics::RHIBlendFactor::SourceAlpha,Graphics::RHIBlendFactor::InverseSourceAlpha};
-    style.source_blend = sources[shader.Get_Src_Blend_Func()];
-    style.destination_blend = destinations[shader.Get_Dst_Blend_Func()];
+    auto style = Graphics::Resolve_Prop_Material_State(shader,scene,WW3D::Is_Reflection_Render_Pass(),parameters);
+    if (overrides.alpha_cutoff >= 0 && shader.Get_Alpha_Test() == Graphics::MaterialState::ALPHATEST_ENABLE)
+        parameters.alpha_cutoff = overrides.alpha_cutoff;
     if (overrides.force_multiply) {
-        style.source_blend=Graphics::RHIBlendFactor::DestinationColor;
-        style.destination_blend=Graphics::RHIBlendFactor::SourceColor;
+        style.source_blend = Graphics::RHIBlendFactor::DestinationColor;
+        style.destination_blend = Graphics::RHIBlendFactor::SourceColor;
     }
-    style.cull = shader.Get_Cull_Mode() == ShaderClass::CULL_MODE_ENABLE
-        ? Graphics::RHICullMode::Back : Graphics::RHICullMode::None;
-    style.front_counter_clockwise = !WW3D::Is_Reflection_Render_Pass();
-    style.color_write_mask = shader.Get_Color_Mask() == ShaderClass::COLOR_WRITE_ENABLE
-        ? 15 : 0;
-    style = Graphics::Resolve_Prop_Style(style, scene);
     if (overrides.color_write_mask>=0) style.color_write_mask=static_cast<std::uint8_t>(overrides.color_write_mask);
     for (unsigned stage=0;stage<2;++stage) {
         auto* texture=source_textures[stage];
@@ -106,6 +84,8 @@ bool Draw_Graphics_Material_Geometry(std::span<const Graphics::PropVertex> verti
         style.samplers[stage] = Graphics::Resolve_Texture_Sampling(texture->Get_Sampling(),
             Graphics::Get_Texture_Sampling_Settings(), stage == 0);
     }
+    if (use_muzzle_flash && textures[0].Is_Valid())
+        Graphics::Prepare_Muzzle_Flash(parameters,style,overrides.muzzle_flash,WW3D::Get_Sync_Time());
     auto& renderer = Graphics::Get_Prop_Renderer();
     auto phase = Graphics::PropDrawPhase::Immediate;
     std::array<float,4> depth{};
@@ -125,29 +105,19 @@ bool Draw_Graphics_Material_Geometry(std::span<const Graphics::PropVertex> verti
 }
 
 void Extract_Graphics_Texture_Mappers(Graphics::PropParameters& parameters,
-    VertexMaterialClass* material)
+    const Graphics::MeshMaterial* material)
 {
+    GRAPHICS_PROFILE_FOCUS_SCOPE("Graphics.Mesh.TextureMappers");
     if (!material) return;
     for (unsigned stage=0;stage<parameters.uv_transform.size();++stage) {
-        auto* mapper=material->Peek_Mapper(stage);
+        auto* mapper=material->mappings[stage].get();
         if (!mapper) continue;
-        Matrix4x4 matrix;
-        mapper->Calculate_Texture_Matrix(matrix);
-        const auto mode=mapper->Get_Coordinate_Mode();
-        if (mode.source == Graphics::TextureCoordinateSource::UV) {
-            parameters.uv_transform[stage]=Graphics::Make_Affine_Texture_Transform({
-                matrix[0][0],matrix[0][1],matrix[0][2],
-                matrix[1][0],matrix[1][1],matrix[1][2]});
-        } else {
-            std::memcpy(parameters.uv_transform[stage].data(),&matrix,sizeof(matrix));
-        }
-        parameters.uv_sources[stage*2]=static_cast<float>(mode.source);
-        parameters.uv_sources[stage*2+1]=mode.projected ? 1.0f : 0.0f;
-        if (mapper->Mapper_ID()==TextureMapperClass::MAPPER_ID_BUMPENV) {
-            float bump[4];
-            static_cast<BumpEnvTextureMapperClass*>(mapper)->Calculate_Bump_Matrix(bump);
-            std::memcpy(parameters.bump_matrix.data(),bump,sizeof(bump));
-        }
+        const auto& camera=Graphics::Get_Camera_Matrices();
+        const auto mapping=mapper->Evaluate(WW3D::Get_Sync_Time(),camera.view.values,camera.projection.values);
+        parameters.uv_transform[stage]=mapping.transform;
+        parameters.uv_sources[stage*2]=static_cast<float>(mapping.coordinates.source);
+        parameters.uv_sources[stage*2+1]=mapping.coordinates.projected ? 1.0f : 0.0f;
+        if (mapping.bump) parameters.bump_matrix=*mapping.bump;
     }
 }
 

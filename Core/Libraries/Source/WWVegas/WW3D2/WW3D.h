@@ -51,14 +51,11 @@ class RenderObjClass;
 
 class		SceneClass;
 class		CameraClass;
-class		ShaderClass;
+import Graphics.Materials.State;
 
 struct	RenderStatistics;
-class		VertexMaterialClass;
-class		ExtraMaterialPassClass;
 class		RenderInfoClass;
 class		StringClass;
-class		MaterialPassClass;
 
 #define MESH_RENDER_SNAPSHOT_ENABLED
 #define SNAPSHOT_SAY(x) if (WW3D::Is_Snapshot_Activated()) { WWDEBUG_SAY(x); }
@@ -141,7 +138,7 @@ public:
 	static bool					Is_Reflection_Render_Pass() { return Reflection_Pass_Depth() != 0; }
 
 	// Scoped render context used by off-screen reflection submission. This is
-	// intentionally separate from ShaderClass state so scene policy and
+	// intentionally separate from Graphics::MaterialState state so scene policy and
 	// raster winding cannot leak across frames or materials.
 	class ReflectionRenderPassScope final
 	{
@@ -197,10 +194,9 @@ public:
 	static float				Get_Default_Native_Screen_Size()			{ return DefaultNativeScreenSize; }
 
 
-	static VertexMaterialClass *	Peek_Default_Debug_Material();
-	static ShaderClass		Peek_Default_Debug_Shader();
-	static ShaderClass		Peek_Backface_Debug_Shader();
-	static ShaderClass		Peek_Lightmap_Debug_Shader();
+	static Graphics::MaterialState		Peek_Default_Debug_Shader();
+	static Graphics::MaterialState		Peek_Backface_Debug_Shader();
+	static Graphics::MaterialState		Peek_Lightmap_Debug_Shader();
 
 	static void					Set_Prelit_Mode (PrelitModeEnum mode)			{ PrelitMode = mode; }
 	static PrelitModeEnum 	Get_Prelit_Mode ()									{ return (PrelitMode); }
@@ -260,8 +256,6 @@ private:
 	};
 
 	static void					Update_Pixel_Center();
-	static void					Allocate_Debug_Resources();
-	static void					Release_Debug_Resources();
 
 	// Logic frame time, in milliseconds
 	static float LogicFrameTimeMs;
@@ -297,10 +291,8 @@ private:
 
 	static int							FrameCount;
 
-	static VertexMaterialClass *	DefaultDebugMaterial;
-	static VertexMaterialClass *	BackfaceDebugMaterial;
-	static ShaderClass				DefaultDebugShader;
-	static ShaderClass				LightmapDebugShader;
+	static Graphics::MaterialState				DefaultDebugShader;
+	static Graphics::MaterialState				LightmapDebugShader;
 
 	static PrelitModeEnum			PrelitMode;
 	static bool							ExposePrelit;

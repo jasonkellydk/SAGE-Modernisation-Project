@@ -204,9 +204,9 @@ private:
         const auto vertices = std::as_bytes(mesh.geometry.Vertices());
         const auto indices = std::as_bytes(mesh.geometry.Indices());
         mesh.vertices = m_device->Create_Buffer_Initialized(
-            {static_cast<std::uint32_t>(vertices.size()), RHIBufferUsage::Vertex, sizeof(WaterVertex)}, vertices);
+            {static_cast<std::uint32_t>(vertices.size()), RHIBufferUsage::Vertex, sizeof(WaterVertex),RHIBufferUpdateMode::Discard}, vertices);
         mesh.indices = m_device->Create_Buffer_Initialized(
-            {static_cast<std::uint32_t>(indices.size()), RHIBufferUsage::Index, sizeof(std::uint32_t)}, indices);
+            {static_cast<std::uint32_t>(indices.size()), RHIBufferUsage::Index, sizeof(std::uint32_t),RHIBufferUpdateMode::Discard}, indices);
         if (!mesh.vertices.Is_Valid() || !mesh.indices.Is_Valid()) {
             Release_GPU(mesh);
             return false;

@@ -71,6 +71,7 @@
 
 #include <map>
 import Assets.Images.PixelEncoding;
+import Assets.Identity;
 #include "AssetMgr.h"
 #include <assert.h>
 
@@ -96,11 +97,11 @@ import Assets.Adapters.W3D.Rig;
 #include "Dazzle.h"
 import Assets.Adapters.W3D.Retention;
 #include "WWDebug/wwprofile.h"
-#include "WW3D2/StringUtilities.h"
 
+#include <cctype>
+#include <cstring>
 #include <string>
 
-#include "ShdLib.h"
 import Assets.Cache.Animations;
 
 /*
@@ -145,9 +146,7 @@ WW3DAssetManager::WW3DAssetManager() :
 	TheInstance = this;
 
 	// install the default loaders
-#ifndef USE_WWSHADE
 	Register_Model_Decoder(W3D_CHUNK_MESH,Load_Mesh_Factory);
-#endif
 
 	Register_Model_Decoder(W3D_CHUNK_HMODEL,Load_HModel_Factory);
 	Register_Model_Decoder(W3D_CHUNK_COLLECTION,Load_Collection_Factory);
@@ -156,7 +155,6 @@ WW3DAssetManager::WW3DAssetManager() :
 	Register_Model_Decoder(W3D_CHUNK_AGGREGATE,Load_Aggregate_Factory);
 	Register_Model_Decoder(W3D_CHUNK_DAZZLE,Load_Dazzle_Factory);
 
-	SHD_REG_LOADER;
 
 }
 
@@ -876,7 +874,8 @@ TextureClass * WW3DAssetManager::Get_Texture
 	}
 
 	StringClass lower_case_name(filename,true);
-	WW3DString::To_Lower(lower_case_name.Peek_Buffer());
+	for (char *character = lower_case_name.Peek_Buffer(); character != nullptr && *character != '\0'; ++character)
+		*character = static_cast<char>(std::tolower(static_cast<unsigned char>(*character)));
 
 	/*
 	** See if the texture has already been loaded.
@@ -1206,7 +1205,7 @@ void WW3DAssetManager::Remove_Prototype(const char *name)
 	WWASSERT(name != nullptr);
 	if (name != nullptr) {
 		if (ReservedModelFactory != nullptr &&
-			WW3DString::Compare_No_Case(name, ReservedModelFactory->name.c_str()) == 0)
+			Assets::Asset_Name_Equals_No_Case(name, ReservedModelFactory->name.c_str()))
 			return;
 
 		// Lookup the prototype by name
@@ -1237,7 +1236,7 @@ void WW3DAssetManager::Remove_Prototype(const char *name)
 Graphics::ModelFactory<RenderObjClass> * WW3DAssetManager::Find_Prototype(const char * name)
 {
     if(name && ReservedModelFactory != nullptr &&
-		WW3DString::Compare_No_Case(name, ReservedModelFactory->name.c_str()) == 0)
+		Assets::Asset_Name_Equals_No_Case(name, ReservedModelFactory->name.c_str()))
 		return ReservedModelFactory.get();
     return name?ModelFactories.Find(name):nullptr;
 }

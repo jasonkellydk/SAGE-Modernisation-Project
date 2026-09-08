@@ -89,9 +89,9 @@
 #include "AssetMgr.h"
 #include "W3DErr.h"
 #include "WWDebug/wwdebug.h"
-#include "VertMaterial.h"
-#include "Shader.h"
-#include "MatInfo.h"
+import Graphics.Materials.MeshMaterial;
+import Graphics.Scene.Props.Material;
+import Graphics.Materials.State;
 import Graphics.Scene.Models.Hierarchy;
 #include "WWMath/tri.h"
 #include "WWMath/aaplane.h"
@@ -140,7 +140,8 @@ MeshClass::MeshClass() :
 	NextVisibleSkin(nullptr),
 	m_alphaOverride(1.0f),
 	m_materialPassAlphaOverride(1.0f),
-	m_materialPassEmissiveOverride(1.0f)
+	m_materialPassEmissiveOverride(1.0f),
+	m_muzzleFlashDesignation(Graphics::MuzzleFlashDesignation::None)
 {
 }
 
@@ -166,7 +167,8 @@ MeshClass::MeshClass(const MeshClass & that) :
 	NextVisibleSkin(nullptr),
 	m_alphaOverride(1.0f),
 	m_materialPassAlphaOverride(1.0f),
-	m_materialPassEmissiveOverride(1.0f)
+	m_materialPassEmissiveOverride(1.0f),
+	m_muzzleFlashDesignation(that.m_muzzleFlashDesignation)
 {
 	REF_PTR_SET(Model,that.Model);					// mesh instances share models by default
 }
@@ -187,11 +189,13 @@ MeshClass::MeshClass(const MeshClass & that) :
 MeshClass & MeshClass::operator = (const MeshClass & that)
 {
 	if (this != &that) {
+		Release_Graphics_Mesh_State(GraphicsMeshes);
 
 		RenderObjClass::operator = (that);
 
 		REF_PTR_SET(Model,that.Model);				// mesh instances share models by default
 		BaseVertexOffset = that.BaseVertexOffset;
+		m_muzzleFlashDesignation = that.m_muzzleFlashDesignation;
 
 		// just dont copy the light environment
 		LightEnvironment = nullptr;
@@ -254,6 +258,7 @@ bool MeshClass::Contains(const Vector3 &point)
  *=============================================================================================*/
 void MeshClass::Free()
 {
+	Release_Graphics_Mesh_State(GraphicsMeshes);
 	REF_PTR_RELEASE(Model);
 }
 
@@ -359,11 +364,10 @@ const char * MeshClass::Get_User_Text() const
  * HISTORY:                                                                                    *
  *   5/20/98    GTH : Created.                                                                 *
  *=============================================================================================*/
-MaterialInfoClass * MeshClass::Get_Material_Info()
+std::shared_ptr<Graphics::ModelMaterials<RefCountPtr<TextureClass>>> MeshClass::Get_Material_Info()
 {
 	if (Model) {
 		if (Model->MatInfo) {
-			Model->MatInfo->Add_Ref();
 			return Model->MatInfo;
 		}
 	}
@@ -578,7 +582,7 @@ void MeshClass::Replace_Texture(TextureClass* texture,TextureClass* new_texture)
  * HISTORY:                                                                                    *
  *   4/2/2001   hy : Created.                                                                  *
  *=============================================================================================*/
-void MeshClass::Replace_VertexMaterial(VertexMaterialClass* vmat,VertexMaterialClass* new_vmat)
+void MeshClass::Replace_VertexMaterial(Graphics::MeshMaterial* vmat,const std::shared_ptr<Graphics::MeshMaterial>& new_vmat)
 {
 	Model->Replace_VertexMaterial(vmat,new_vmat);
 }
@@ -668,20 +672,20 @@ WW3DErrorType MeshClass::Load_W3D(ChunkLoadClass & cload)
 
 	if (Model->Has_Shader_Array(0)) {
 		for (int i=0; i<Model->Get_Polygon_Count(); i++) {
-			ShaderClass shader = Model->Get_Shader(i,0);
-			is_translucent |= (shader.Get_Alpha_Test() == ShaderClass::ALPHATEST_ENABLE);
-			is_alpha |= (shader.Get_Dst_Blend_Func() != ShaderClass::DSTBLEND_ZERO ||
-									shader.Get_Src_Blend_Func() != ShaderClass::SRCBLEND_ONE) && (shader.Get_Alpha_Test() != ShaderClass::ALPHATEST_ENABLE);
-			is_additive |= (shader.Get_Dst_Blend_Func() == ShaderClass::DSTBLEND_ONE &&
-									shader.Get_Src_Blend_Func() == ShaderClass::SRCBLEND_ONE);
+			Graphics::MaterialState shader = Model->Get_Shader(i,0);
+			is_translucent |= (shader.Get_Alpha_Test() == Graphics::MaterialState::ALPHATEST_ENABLE);
+			is_alpha |= (shader.Get_Dst_Blend_Func() != Graphics::MaterialState::DSTBLEND_ZERO ||
+									shader.Get_Src_Blend_Func() != Graphics::MaterialState::SRCBLEND_ONE) && (shader.Get_Alpha_Test() != Graphics::MaterialState::ALPHATEST_ENABLE);
+			is_additive |= (shader.Get_Dst_Blend_Func() == Graphics::MaterialState::DSTBLEND_ONE &&
+									shader.Get_Src_Blend_Func() == Graphics::MaterialState::SRCBLEND_ONE);
 		}
 	} else {
-		ShaderClass shader = Model->Get_Single_Shader(0);
-		is_translucent |= (shader.Get_Alpha_Test() == ShaderClass::ALPHATEST_ENABLE);
-		is_alpha |= (shader.Get_Dst_Blend_Func() != ShaderClass::DSTBLEND_ZERO ||
-									shader.Get_Src_Blend_Func() != ShaderClass::SRCBLEND_ONE) && (shader.Get_Alpha_Test() != ShaderClass::ALPHATEST_ENABLE);
-		is_additive |= (shader.Get_Dst_Blend_Func() == ShaderClass::DSTBLEND_ONE &&
-									shader.Get_Src_Blend_Func() == ShaderClass::SRCBLEND_ONE);
+		Graphics::MaterialState shader = Model->Get_Single_Shader(0);
+		is_translucent |= (shader.Get_Alpha_Test() == Graphics::MaterialState::ALPHATEST_ENABLE);
+		is_alpha |= (shader.Get_Dst_Blend_Func() != Graphics::MaterialState::DSTBLEND_ZERO ||
+									shader.Get_Src_Blend_Func() != Graphics::MaterialState::SRCBLEND_ONE) && (shader.Get_Alpha_Test() != Graphics::MaterialState::ALPHATEST_ENABLE);
+		is_additive |= (shader.Get_Dst_Blend_Func() == Graphics::MaterialState::DSTBLEND_ONE &&
+									shader.Get_Src_Blend_Func() == Graphics::MaterialState::SRCBLEND_ONE);
 	}
 	Set_Translucent(is_translucent);
 	Set_Alpha(is_alpha);
@@ -961,18 +965,18 @@ void MeshClass::Add_Dependencies_To_List
 	//
 	// Get a pointer to this mesh's material information object
 	//
-	MaterialInfoClass *material = Get_Material_Info ();
+	auto material = Get_Material_Info ();
 	if (material != nullptr) {
 
 		//
 		// Loop through all the textures and add their filenames to our list
 		//
-		for (int index = 0; index < material->Texture_Count (); index ++) {
+		for (int index = 0; index < static_cast<int>(material->textures.size()); index ++) {
 
 			//
 			//	Add this texture's filename to the list
 			//
-			TextureClass *texture = material->Peek_Texture (index);
+			TextureClass *texture = material->textures[index].Peek();
 			if (texture != nullptr) {
 				file_list.Add (texture->Get_Full_Path ());
 			}
@@ -981,7 +985,7 @@ void MeshClass::Add_Dependencies_To_List
 		//
 		// Release our hold on the material information object
 		//
-		material->Release_Ref ();
+		material.reset();
 	}
 
 	RenderObjClass::Add_Dependencies_To_List (file_list, textures_only);
@@ -1068,8 +1072,8 @@ int MeshClass::Get_Draw_Call_Count() const
 {
 	if (Model != nullptr) {
 		// Report the material texture count for the model.
-		if ((Model->MatInfo != nullptr) && (Model->MatInfo->Texture_Count() > 0)) {
-			return Model->MatInfo->Texture_Count();
+		if (Model->MatInfo && !Model->MatInfo->textures.empty()) {
+			return static_cast<int>(Model->MatInfo->textures.size());
 		}
 
 		// Otherwise, return 1

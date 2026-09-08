@@ -113,7 +113,6 @@ import Graphics.Backends.DX11.FrameRuntime;
 #define WATER_MESH_Y_VERTICES	128
 #define WATER_MESH_SPACING	MAP_XY_FACTOR	//same as terrain
 
-#define WATER_MESH_FVF	RenderBackendVertexFormat::PositionNormalDiffuseTexture2
 
 #define DRAW_WATER_WAKES
 /// @todo: Fix clipping of objects that intersect the mirror surface

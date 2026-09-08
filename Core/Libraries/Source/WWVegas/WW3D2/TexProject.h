@@ -46,22 +46,23 @@
 #include <vector>
 
 #include "WWLib/always.h"
+#include "WWLib/ref_ptr.h"
 #include "WWMath/matrix3d.h"
 #include "WWMath/matrix4.h"
 #include "WWMath/obbox.h"
-#include "MatPass.h"
-#include "WW3D2/MatrixMapper.h"
 #include "WWMath/cullsys.h"
 #include "Projector.h"
+import Graphics.Materials.ProceduralPass;
 
 
 class RenderInfoClass;
+class CameraClass;
 class RenderObjClass;
-class MaterialPassClass;
 import Graphics.Resources.Textures.Edit;
 
 class TextureClass;
 class ZTextureClass;
+using TexProjectMaterialPass = Graphics::ProceduralMaterialPass<RefCountPtr<TextureClass>, OBBoxClass>;
 
 
 /**
@@ -121,7 +122,7 @@ public:
 	float						Get_Attenuation();
 	void						Enable_Attenuation(bool onoff);
 	bool						Is_Attenuation_Enabled();
-	MaterialPassClass *	Peek_Material_Pass();
+	const std::shared_ptr<TexProjectMaterialPass>&	Peek_Material_Pass() const;
 
 	/*
 	** Options
@@ -218,8 +219,8 @@ protected:
 	/*
 	** Material pass to be added to any object that intersects the volume
 	*/
-	MaterialPassClass *		MaterialPass;
-	MatrixMapperClass *		Mapper1;
+	std::shared_ptr<TexProjectMaterialPass>	MaterialPass;
+	std::shared_ptr<Graphics::TextureMapping> Mapper1;
 	TextureClass *				RenderTarget;
 	ZTextureClass*				DepthStencilTarget;
 

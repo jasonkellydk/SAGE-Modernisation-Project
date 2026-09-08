@@ -21,6 +21,8 @@ target_sources(generals_assets
             image/ImageColor.cppm
             image/ImagePreparation.cppm
             material/MaterialAsset.cppm
+            material/TextureMapping.cppm
+            adapters/w3d/materials/W3DTextureMapping.cppm
             model/ModelAsset.cppm
             model/ModelRig.cppm
             model/MeshBoundsTree.cppm

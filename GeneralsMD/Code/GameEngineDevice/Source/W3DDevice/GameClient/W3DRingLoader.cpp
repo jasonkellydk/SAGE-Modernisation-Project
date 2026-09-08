@@ -1,3 +1,4 @@
+import Graphics.Materials.State;
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -31,7 +32,7 @@ Assets::RingAssetDesc Make_Effective_Description(const Assets::RingAssetDesc &so
 	Assets::RingAssetDesc description = source;
 	if (auto *manager = WW3DAssetManager::Get_Instance(); manager != nullptr &&
 		manager->Get_Activate_Fog_On_Load()) {
-		// RingPrototypeClass delegated fog selection to ShaderClass::Enable_Fog.
+		// RingPrototypeClass delegated fog selection to Graphics::MaterialState::Enable_Fog.
 		// Preserve its blend-pair table; unsupported pairs leave the authored fog
 		// mode unchanged while fog activation still disables culling.
 		switch (description.material.source_blend) {

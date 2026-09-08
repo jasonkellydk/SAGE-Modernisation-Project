@@ -185,7 +185,7 @@ bool Parse_Shader(W3DByteSpan bytes, SphereMaterialDesc &material, std::string &
 		return Fail(error, "sphere shader record contains an unsupported setting");
 
 	material.depth_write = depth_mask != 0;
-	// ShaderClass::Load_W3D_Record intentionally forces color writes on and
+	// Material record translation forces color writes on and
 	// disables fog. These obsolete wire fields are therefore not decoded.
 	material.color_write = true;
 	material.fog = SphereFogMode::Disabled;

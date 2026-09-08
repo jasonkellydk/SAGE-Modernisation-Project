@@ -46,7 +46,6 @@
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 #include "Projector.h"
-#include "MatrixMapper.h"
 
 
 /***********************************************************************************************
@@ -66,7 +65,7 @@ ProjectorClass::ProjectorClass() :
 	LocalBoundingVolume(Vector3(0,0,0),Vector3(1,1,1)),
 	WorldBoundingVolume(Vector3(0,0,0),Vector3(1,1,1),Matrix3x3(1))
 {
-	Mapper=NEW_REF(MatrixMapperClass,(0));
+	Mapper=Graphics::TextureMapping::Create_Projection();
 }
 
 
@@ -83,7 +82,7 @@ ProjectorClass::ProjectorClass() :
  *=============================================================================================*/
 ProjectorClass::~ProjectorClass()
 {
-	REF_PTR_RELEASE(Mapper);
+	Mapper.reset();
 }
 
 /***********************************************************************************************
@@ -147,7 +146,7 @@ const Matrix3D & ProjectorClass::Get_Transform() const
  *=============================================================================================*/
 void ProjectorClass::Set_Perspective_Projection(float hfov,float vfov,float znear,float zfar)
 {
-	Mapper->Set_Type(MatrixMapperClass::PERSPECTIVE_PROJECTION);
+	Mapper->Projection()->type=Graphics::TextureProjection::Perspective;
 	Projection.Init_Perspective(hfov,vfov,0.1f,zfar);					// don't use znear for the projection matrix
 
 	float tan_hfov2 = tan(hfov) * 0.5f;
@@ -184,7 +183,7 @@ void ProjectorClass::Set_Perspective_Projection(float hfov,float vfov,float znea
  *=============================================================================================*/
 void ProjectorClass::Set_Ortho_Projection(float xmin,float xmax,float ymin,float ymax,float znear,float zfar)
 {
-	Mapper->Set_Type(MatrixMapperClass::ORTHO_PROJECTION);
+	Mapper->Projection()->type=Graphics::TextureProjection::Orthographic;
 	Projection.Init_Ortho(xmin,xmax,ymin,ymax,0.1f,zfar);			// don't use znear for the projection matrix
 
 	LocalBoundingVolume.Center.Set((xmax+xmin)*0.5f, (ymax+ymin)*0.5f, -(zfar+znear)*0.5f);
@@ -208,7 +207,8 @@ void ProjectorClass::Set_Ortho_Projection(float xmin,float xmax,float ymin,float
  *=============================================================================================*/
 void ProjectorClass::Compute_Texture_Coordinate(const Vector3 & point,Vector3 * set_stq)
 {
-	Mapper->Compute_Texture_Coordinate(point,set_stq);
+	const auto coordinate=Mapper->Projection()->Compute_Texture_Coordinate({point.X,point.Y,point.Z});
+    set_stq->Set(coordinate[0],coordinate[1],coordinate[2]);
 }
 
 

@@ -1,5 +1,7 @@
 module;
+#include "../../profiling/Tracy.h"
 #include <array>
+#include <cstring>
 #include <span>
 
 export module Graphics.Scene.Lighting.Environment;
@@ -43,6 +45,7 @@ export class EnvironmentLightingBinding final
 public:
     bool Initialize(Device& device)
     {
+        m_parameters_uploaded = false;
         m_constants = device.Create_Buffer({sizeof(EnvironmentLightingParameters), RHIBufferUsage::Constant});
         return m_constants.Is_Valid();
     }
@@ -51,10 +54,12 @@ public:
     {
         if (m_constants.Is_Valid()) device.Destroy_Buffer(m_constants);
         m_constants = {};
+        m_parameters_uploaded = false;
     }
 
-    bool Bind(Device& device, CommandList& commands) const
+    bool Bind(Device& device, CommandList& commands)
     {
+        GRAPHICS_PROFILE_SCOPE("Graphics.Environment.Bind");
         const auto& state = Get_Environment_Lighting();
         auto parameters = state.parameters;
         if (!state.cloud_texture.Is_Valid()) parameters.cloud_offset_strength[3] = 0;
@@ -62,7 +67,13 @@ public:
         if (cascade_count > state.shadow_textures.size()) return false;
         for (unsigned cascade=0;cascade<cascade_count;++cascade)
             if (!state.shadow_textures[cascade].Is_Valid()) return false;
-        if (!device.Update_Buffer(m_constants, 0, std::as_bytes(std::span(&parameters,1)))) return false;
+        // This binding exclusively owns its buffer. Keep the uploaded bytes
+        // across draws, but still resolve and bind current texture generations.
+        if (!m_parameters_uploaded || std::memcmp(&m_parameters,&parameters,sizeof(parameters)) != 0) {
+            if (!device.Update_Buffer(m_constants, 0, std::as_bytes(std::span(&parameters,1)))) return false;
+            m_parameters = parameters;
+            m_parameters_uploaded = true;
+        }
         std::array<RHIBindlessResource,6> resources{};
         resources[0].type = RHIResourceType::Material;
         resources[0].constant_buffer_slot = 7;
@@ -83,5 +94,7 @@ public:
 
 private:
     RHIBufferHandle m_constants{};
+    EnvironmentLightingParameters m_parameters{};
+    bool m_parameters_uploaded = false;
 };
 }

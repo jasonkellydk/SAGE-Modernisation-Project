@@ -61,8 +61,6 @@ import Graphics.Diagnostics.Render;
 #ifdef RTS_DEBUG
 #include "W3DDevice/GameClient/BaseHeightMap.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
-#include "WW3D2/VertexFormat.h"
-#include "WW3D2/VertMaterial.h"
 import Assets.Cache.Animations;
 class DebugHintObject : public RenderObjClass
 {

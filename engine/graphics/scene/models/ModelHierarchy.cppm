@@ -1,4 +1,5 @@
 module;
+#include "../../profiling/Tracy.h"
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -99,6 +100,7 @@ public:
     }
 
     void Evaluate_Rest(const RenderTransform& root) {
+        GRAPHICS_PROFILE_SCOPE("Graphics.Models.EvaluateRestHierarchy");
         Evaluate(root,[](int) { BoneMotion motion;motion.set_visibility=true;return motion; });
     }
 

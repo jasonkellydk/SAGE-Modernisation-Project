@@ -50,14 +50,15 @@ import Assets.Images.Color;
 #include <WWMath/vector3.h>
 #include "WW3D2/Mesh.h"
 #include "WW3D2/HLOD.h"
-#include "WW3D2/MatInfo.h"
 #include "WW3D2/MeshMdl.h"
 #include "WW3D2/PartEmt.h"
-#include "WW3D2/VertMaterial.h"
+import Graphics.Materials.MeshMaterial;
+import Graphics.Scene.Props.Material;
 #include "WW3D2/Texture.h"
 #include "WW3D2/WW3D.h"
 import Graphics.Resources.Textures.Edit;
 import Assets.Images.PixelEncoding;
+import Assets.Identity;
 import Graphics.RHI;
 import Assets.Math;
 #include <WWDebug/wwprofile.h>
@@ -67,8 +68,8 @@ import Assets.Math;
 #include "Common/GlobalData.h"
 #include "Common/GameCommon.h"
 #include <cctype>
+#include <cstring>
 #include <string>
-#include "WW3D2/StringUtilities.h"
 import Assets.Cache.Animations;
 
 
@@ -133,7 +134,7 @@ TextureClass *	W3DAssetManager::Get_Texture
 	//Just call the base implementation after adjusting reduction to deal
 	//with our special types.
 
-	if (filename && *filename && WW3DString::Compare_No_Case_N(filename,"ZHC",3) == 0)
+	if (filename && *filename && Assets::Asset_Name_Prefix_Equals_No_Case(filename,"ZHC",3))
 		allow_reduction = false;	//don't allow reduction on our infantry textures.
 
 	return WW3DAssetManager::Get_Texture(	filename,
@@ -289,19 +290,19 @@ Int W3DAssetManager::replaceMeshTexture(RenderObjClass *robj, TextureClass *oldT
 
 	MeshClass *mesh=(MeshClass*) robj;
 	MeshModelClass * model = mesh->Get_Model();
-	MaterialInfoClass	*material = mesh->Get_Material_Info();
+	auto material = mesh->Get_Material_Info();
 
-	for (i=0; i<material->Texture_Count(); i++)
+	for (i=0; i<static_cast<int>(material->textures.size()); i++)
 	{
-		if (material->Peek_Texture(i) == oldTex)
+		if (material->textures[i].Peek() == oldTex)
 		{
 			model->Replace_Texture(oldTex,newTex);
-			material->Replace_Texture(i,newTex);
+			material->textures[i] = RefCountPtr<TextureClass>::Create_Add_Ref(newTex);
 			didReplace=1;
 		}
 	}
 
-	REF_PTR_RELEASE(material);
+	material.reset();
 	REF_PTR_RELEASE(model);
 	return didReplace;
 }
@@ -854,35 +855,35 @@ int W3DAssetManager::Recolor_Mesh(RenderObjClass *robj, const int color)
 
 	MeshClass *mesh=(MeshClass*) robj;
 	MeshModelClass * model = mesh->Get_Model();
-	MaterialInfoClass	*material = mesh->Get_Material_Info();
+	auto material = mesh->Get_Material_Info();
 
 	// recolor vertex material (assuming mesh is housecolor)
 	if ( (( (meshName=strchr(mesh->Get_Name(),'.') ) != nullptr && *(meshName++)) || ( (meshName=mesh->Get_Name()) != nullptr)) &&
-		WW3DString::Compare_No_Case_N(meshName,"HOUSECOLOR", 10) == 0)
-	{	for (i=0; i<material->Vertex_Material_Count(); i++)
-			Recolor_Vertex_Material(material->Peek_Vertex_Material(i),color);
+		Assets::Asset_Name_Prefix_Equals_No_Case(meshName,"HOUSECOLOR", 10))
+	{	for (i=0; i<static_cast<int>(material->materials.size()); i++)
+			Recolor_Vertex_Material(material->materials[i].get(),color);
 		didRecolor=1;
 	}
 
 	// recolor textures
 	TextureClass *newtex,*oldtex;
-	for (i=0; i<material->Texture_Count(); i++)
+	for (i=0; i<static_cast<int>(material->textures.size()); i++)
 	{
-		oldtex=material->Peek_Texture(i);
-		if (WW3DString::Compare_No_Case_N(oldtex->Get_Texture_Name(),"ZHC", 3) == 0)
+		oldtex=material->textures[i].Peek();
+		if (Assets::Asset_Name_Prefix_Equals_No_Case(oldtex->Get_Texture_Name(),"ZHC", 3))
 		{	//This texture needs to be adjusted for housecolor
 			newtex=Recolor_Texture(oldtex,color);
 			if (newtex)
 			{
 				model->Replace_Texture(oldtex,newtex);
-				material->Replace_Texture(i,newtex);
+				material->textures[i] = RefCountPtr<TextureClass>::Create_Add_Ref(newtex);
 				REF_PTR_RELEASE(newtex);
 				didRecolor=1;
 			}
 		}
 	}
 
-	REF_PTR_RELEASE(material);
+	material.reset();
 	REF_PTR_RELEASE(model);
 	return didRecolor;
 }
@@ -910,7 +911,7 @@ int W3DAssetManager::Recolor_HLOD(RenderObjClass *robj, const int color)
 //---------------------------------------------------------------------
 /** Generals specific code to generate customized render objects for each team color
 */
-void W3DAssetManager::Recolor_Vertex_Material(VertexMaterialClass *vmat, const int color)
+void W3DAssetManager::Recolor_Vertex_Material(Graphics::MeshMaterial *vmat, const int color)
 {
 	Vector3 rgb,rgb2;
 
@@ -925,13 +926,13 @@ void W3DAssetManager::Recolor_Vertex_Material(VertexMaterialClass *vmat, const i
 	rgb2.X = rgb.X;	//scale colors
 	rgb2.Y = rgb.Y;	//scale colors
 	rgb2.Z = rgb.Z;	//scale colors
-	vmat->Set_Ambient(rgb2);
+	vmat->parameters.ambient = {rgb2.X,rgb2.Y,rgb2.Z};
 
 //	vmat->Get_Diffuse(&rgb2);
 	rgb2.X = rgb.X;	//scale colors
 	rgb2.Y = rgb.Y;	//scale colors
 	rgb2.Z = rgb.Z;	//scale colors
-	vmat->Set_Diffuse(rgb2);
+	vmat->parameters.diffuse = {rgb2.X,rgb2.Y,rgb2.Z};
 }
 
 #ifdef DUMP_PERF_STATS
@@ -1062,14 +1063,14 @@ static Bool getMeshColorMethods(MeshClass *mesh, Bool &vertexColor, Bool &textur
 	textureColor = false;
 
 	//Check if mesh is using custom texture containing house color
-	MaterialInfoClass *material = mesh->Get_Material_Info();
+	auto material = mesh->Get_Material_Info();
 	if (material)
-	{	for (int j=0; j<material->Texture_Count(); j++)
-			if (WW3DString::Compare_No_Case_N(material->Peek_Texture(j)->Get_Texture_Name(),"ZHC",3) == 0)
+	{	for (int j=0; j<static_cast<int>(material->textures.size()); j++)
+			if (Assets::Asset_Name_Prefix_Equals_No_Case(material->textures[j].Peek()->Get_Texture_Name(),"ZHC",3))
 			{	textureColor = true;
 				break;
 			}
-		REF_PTR_RELEASE(material);
+		material.reset();
 	}
 
 	//Check if mesh is using a custom mesh which contains house color in material.
@@ -1078,7 +1079,7 @@ static Bool getMeshColorMethods(MeshClass *mesh, Bool &vertexColor, Bool &textur
 	const char *meshName;
 	if ( ( (meshName=strchr(mesh->Get_Name(),'.') ) != nullptr && *(meshName++)) || ( (meshName=mesh->Get_Name()) != nullptr) )
 	{	//Check if this object has housecolors on mesh
-		if ( WW3DString::Compare_No_Case_N(meshName,"HOUSECOLOR", 10) == 0)
+		if ( Assets::Asset_Name_Prefix_Equals_No_Case(meshName,"HOUSECOLOR", 10))
 			vertexColor = true;
 	}
 
@@ -1106,10 +1107,10 @@ void W3DAssetManager::Make_Mesh_Unique(RenderObjClass *robj, Bool geometry, Bool
 
 		if (colors && isVertexColor)
 		{
-			MaterialInfoClass	*material=mesh->Get_Material_Info();
-			for (i=0; i<material->Vertex_Material_Count(); i++)
-				material->Peek_Vertex_Material(i)->Make_Unique();
-			REF_PTR_RELEASE(material);
+			auto material = mesh->Get_Material_Info();
+			for (i=0; i<static_cast<int>(material->materials.size()); i++)
+				material->materials[i].get()->Make_Unique();
+			material.reset();
 		}
 
 		REF_PTR_RELEASE(model);

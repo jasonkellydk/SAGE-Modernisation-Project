@@ -1,6 +1,7 @@
 import Graphics.Scene.DrawParameters;
 import Graphics.Frame.AttachmentBindings;
 import Assets.Images.PixelEncoding;
+import Graphics.Materials.State;
 #include "W3DDevice/GameClient/W3DScreenFilterGraphics.h"
 #include "WW3D2/WW3D.h"
 /*
@@ -64,8 +65,6 @@ import Assets.Images.PixelEncoding;
 #include "GameLogic/GameLogic.h"
 #include "Common/GlobalData.h"
 #include "Common/GameLOD.h"
-#include "WW3D2/VertMaterial.h"
-#include "WW3D2/VertexFormat.h"
 #include "WWLib/cpudetect.h"
 #include "WWMath/matrix4.h"
 #include <cstdint>
@@ -994,9 +993,9 @@ void W3DShaderManager::startRenderToTexture()
 		{	//these filters rely on the previous frame being visible so we must be careful about clearing
 			//frame buffer.  Only clear the alpha channel
 			Graphics::Get_Scene_Draw_Parameters().color_write_mask = 0x08;;	//only clear alpha
-			ShaderClass shader=ShaderClass::_PresetOpaqueSolidShader;
-			shader.Set_Depth_Compare(ShaderClass::PASS_ALWAYS);
-			shader.Set_Depth_Mask(ShaderClass::DEPTH_WRITE_DISABLE);
+			Graphics::MaterialState shader=Graphics::MaterialState::OpaqueSolid();
+			shader.Set_Depth_Compare(Graphics::MaterialState::PASS_ALWAYS);
+			shader.Set_Depth_Mask(Graphics::MaterialState::DEPTH_WRITE_DISABLE);
 
 
 			drawViewport(0x00ffffff | (((Int)(TheWaterTransparency->m_minWaterOpacity*255.0f)) <<24));

@@ -9,8 +9,6 @@
 #include "GameClient/Water.h"
 #include "WW3D2/Camera.h"
 #include "WW3D2/RInfo.h"
-#include "WW3D2/MatPass.h"
-#include "WW3D2/GraphicsMaterialPass.h"
 #include "WW3D2/Texture.h"
 #include "WW3D2/WW3D.h"
 #include "W3DDevice/GameClient/TerrainTex.h"
@@ -30,6 +28,7 @@ import Graphics.Scene.DrawParameters;
 import Graphics.Backends.DX11.FrameRuntime;
 import Graphics.Scene.Lighting.Environment;
 import Graphics.Scene.Shadows.DirectionalRenderer;
+import Graphics.Materials.ProceduralPass;
 
 W3DTerrainGraphics *W3DTerrainGraphics::s_active = nullptr;
 
@@ -342,16 +341,16 @@ bool W3DTerrainGraphics::Draw_Surface(RenderInfoClass &info)
     RTS3DScene *render_scene = static_cast<RTS3DScene *>(info.Camera.Get_User_Data());
     if (render_scene != nullptr && render_scene->getCustomPassMode() == SCENE_PASS_ALPHA_MASK) {
         if (info.Additional_Pass_Count() == 0) return false;
-        GraphicsMaterialPassDescription description;
-        MaterialPassClass *pass = info.Peek_Additional_Pass(info.Additional_Pass_Count() - 1);
-        if (pass == nullptr || !pass->Describe_Graphics_Pass(description)
+        NativeMaterialPass::Description description;
+        NativeMaterialPass *pass = info.Peek_Additional_Pass(info.Additional_Pass_Count() - 1);
+        if (pass == nullptr || !pass->Describe(description)
             || description.textures[0] == nullptr) return false;
         TextureClass *texture = description.textures[0];
         if (!texture->Ensure_Render_Backend_Texture()) return false;
         const auto mask = texture->Peek_Graphics_Texture();
         if (!m_graphicsDevice->Retain_Texture(mask)) return false;
-        const Matrix4x4 &projection = description.world_texture_transform;
-        parameters.shroud_projection = {projection[0][0], projection[1][1], projection[0][3], projection[1][3]};
+        parameters.shroud_projection = {description.world_texture_transform[0], description.world_texture_transform[5],
+            description.world_texture_transform[3], description.world_texture_transform[7]};
         parameters.features = {0, 0, 0, 5};
         parameters.light_options[0] = 0;
         std::array<Graphics::RHITextureHandle, 5> textures{};

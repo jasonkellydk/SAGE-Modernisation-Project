@@ -1,3 +1,4 @@
+import Graphics.Materials.State;
 #include <algorithm>
 import Graphics.Scene.Views.CameraMatrices;
 import Graphics.Frame.AttachmentBindings;
@@ -57,7 +58,6 @@ import Assets.Math;
 #include "WWLib/INI.h"
 #include "WWLib/Point.h"
 #include "RInfo.h"
-#include "VertMaterial.h"
 #include "WWLib/chunkio.h"
 #include "WWLib/WWFILE.h"
 #include "WWLib/inisup.h"
@@ -237,10 +237,10 @@ static DazzleLayerClass * current_dazzle_layer = nullptr;
 static LensflareTypeClass** lensflares;
 static unsigned lensflare_count;
 
-static ShaderClass default_dazzle_shader;
-static ShaderClass default_halo_shader;
-static ShaderClass vis_shader;
-static ShaderClass debug_shader;
+static Graphics::MaterialState default_dazzle_shader;
+static Graphics::MaterialState default_halo_shader;
+static Graphics::MaterialState vis_shader;
+static Graphics::MaterialState debug_shader;
 
 // static instance of a default dazzle visibility handler
 static DazzleVisibilityClass		_DefaultVisibilityHandler;
@@ -251,39 +251,39 @@ bool	DazzleRenderObjClass::_dazzle_rendering_enabled = true;
 
 static void Init_Shaders()
 {
-	default_dazzle_shader.Set_Cull_Mode( ShaderClass::CULL_MODE_DISABLE );
-	default_dazzle_shader.Set_Depth_Mask( ShaderClass::DEPTH_WRITE_DISABLE );
-	default_dazzle_shader.Set_Depth_Compare( ShaderClass::PASS_ALWAYS );
-	default_dazzle_shader.Set_Dst_Blend_Func( ShaderClass::DSTBLEND_ONE );
-	default_dazzle_shader.Set_Src_Blend_Func( ShaderClass::SRCBLEND_ONE );
-	default_dazzle_shader.Set_Fog_Func( ShaderClass::FOG_DISABLE );
-	default_dazzle_shader.Set_Primary_Gradient( ShaderClass::GRADIENT_MODULATE );
-	default_dazzle_shader.Set_Texturing( ShaderClass::TEXTURING_ENABLE );
+	default_dazzle_shader.Set_Cull_Mode( Graphics::MaterialState::CULL_MODE_DISABLE );
+	default_dazzle_shader.Set_Depth_Mask( Graphics::MaterialState::DEPTH_WRITE_DISABLE );
+	default_dazzle_shader.Set_Depth_Compare( Graphics::MaterialState::PASS_ALWAYS );
+	default_dazzle_shader.Set_Dst_Blend_Func( Graphics::MaterialState::DSTBLEND_ONE );
+	default_dazzle_shader.Set_Src_Blend_Func( Graphics::MaterialState::SRCBLEND_ONE );
+	default_dazzle_shader.Set_Fog_Func( Graphics::MaterialState::FOG_DISABLE );
+	default_dazzle_shader.Set_Primary_Gradient( Graphics::MaterialState::GRADIENT_MODULATE );
+	default_dazzle_shader.Set_Texturing( Graphics::MaterialState::TEXTURING_ENABLE );
 
-	default_halo_shader.Set_Cull_Mode( ShaderClass::CULL_MODE_DISABLE );
-	default_halo_shader.Set_Depth_Mask( ShaderClass::DEPTH_WRITE_DISABLE );
-	default_halo_shader.Set_Depth_Compare( ShaderClass::PASS_LEQUAL );
-	default_halo_shader.Set_Dst_Blend_Func( ShaderClass::DSTBLEND_ONE );
-	default_halo_shader.Set_Src_Blend_Func( ShaderClass::SRCBLEND_ONE );
-	default_halo_shader.Set_Fog_Func( ShaderClass::FOG_DISABLE );
-	default_halo_shader.Set_Primary_Gradient( ShaderClass::GRADIENT_MODULATE );
-	default_halo_shader.Set_Texturing( ShaderClass::TEXTURING_ENABLE );
+	default_halo_shader.Set_Cull_Mode( Graphics::MaterialState::CULL_MODE_DISABLE );
+	default_halo_shader.Set_Depth_Mask( Graphics::MaterialState::DEPTH_WRITE_DISABLE );
+	default_halo_shader.Set_Depth_Compare( Graphics::MaterialState::PASS_LEQUAL );
+	default_halo_shader.Set_Dst_Blend_Func( Graphics::MaterialState::DSTBLEND_ONE );
+	default_halo_shader.Set_Src_Blend_Func( Graphics::MaterialState::SRCBLEND_ONE );
+	default_halo_shader.Set_Fog_Func( Graphics::MaterialState::FOG_DISABLE );
+	default_halo_shader.Set_Primary_Gradient( Graphics::MaterialState::GRADIENT_MODULATE );
+	default_halo_shader.Set_Texturing( Graphics::MaterialState::TEXTURING_ENABLE );
 
-	vis_shader.Set_Cull_Mode( ShaderClass::CULL_MODE_DISABLE );
-	vis_shader.Set_Depth_Mask( ShaderClass::DEPTH_WRITE_DISABLE );
-	vis_shader.Set_Dst_Blend_Func( ShaderClass::DSTBLEND_ZERO );
-	vis_shader.Set_Src_Blend_Func( ShaderClass::SRCBLEND_ONE );
-	vis_shader.Set_Fog_Func( ShaderClass::FOG_DISABLE );
-	vis_shader.Set_Primary_Gradient( ShaderClass::GRADIENT_MODULATE );
-	vis_shader.Set_Texturing( ShaderClass::TEXTURING_DISABLE );
+	vis_shader.Set_Cull_Mode( Graphics::MaterialState::CULL_MODE_DISABLE );
+	vis_shader.Set_Depth_Mask( Graphics::MaterialState::DEPTH_WRITE_DISABLE );
+	vis_shader.Set_Dst_Blend_Func( Graphics::MaterialState::DSTBLEND_ZERO );
+	vis_shader.Set_Src_Blend_Func( Graphics::MaterialState::SRCBLEND_ONE );
+	vis_shader.Set_Fog_Func( Graphics::MaterialState::FOG_DISABLE );
+	vis_shader.Set_Primary_Gradient( Graphics::MaterialState::GRADIENT_MODULATE );
+	vis_shader.Set_Texturing( Graphics::MaterialState::TEXTURING_DISABLE );
 
-	debug_shader.Set_Cull_Mode( ShaderClass::CULL_MODE_DISABLE );
-	debug_shader.Set_Depth_Mask( ShaderClass::DEPTH_WRITE_DISABLE );
-	debug_shader.Set_Dst_Blend_Func( ShaderClass::DSTBLEND_SRC_ALPHA );
-	debug_shader.Set_Src_Blend_Func( ShaderClass::SRCBLEND_ONE );
-	debug_shader.Set_Fog_Func( ShaderClass::FOG_DISABLE );
-	debug_shader.Set_Primary_Gradient( ShaderClass::GRADIENT_MODULATE );
-	debug_shader.Set_Texturing( ShaderClass::TEXTURING_DISABLE );
+	debug_shader.Set_Cull_Mode( Graphics::MaterialState::CULL_MODE_DISABLE );
+	debug_shader.Set_Depth_Mask( Graphics::MaterialState::DEPTH_WRITE_DISABLE );
+	debug_shader.Set_Dst_Blend_Func( Graphics::MaterialState::DSTBLEND_SRC_ALPHA );
+	debug_shader.Set_Src_Blend_Func( Graphics::MaterialState::SRCBLEND_ONE );
+	debug_shader.Set_Fog_Func( Graphics::MaterialState::FOG_DISABLE );
+	debug_shader.Set_Primary_Gradient( Graphics::MaterialState::GRADIENT_MODULATE );
+	debug_shader.Set_Texturing( Graphics::MaterialState::TEXTURING_DISABLE );
 
 }
 
@@ -364,7 +364,7 @@ TextureClass* LensflareTypeClass::Get_Texture()
 }
 
 void LensflareTypeClass::Generate_Vertex_Buffers(
-	VertexFormatXYZNDUV2* vertex,
+	Graphics::SurfaceVertex* vertex,
 	int& vertex_count,
 	float screen_x_scale,
 	float screen_y_scale,
@@ -391,36 +391,36 @@ void LensflareTypeClass::Generate_Vertex_Buffers(
 		if (col[2]>1.0f) col[2]=1.0f;
 		unsigned color=Assets::Color_To_ARGB({col.X,col.Y,col.Z,1.0f});
 
-		vertex->x=x+ix;
-		vertex->y=y-iy;
-		vertex->z=z;
-		vertex->u1=lic.flare_uv[a][0];
-		vertex->v1=lic.flare_uv[a][1];
-		vertex->diffuse=color;
+		vertex->position[0]=x+ix;
+		vertex->position[1]=y-iy;
+		vertex->position[2]=z;
+		vertex->uv[0]=lic.flare_uv[a][0];
+		vertex->uv[1]=lic.flare_uv[a][1];
+		vertex->color = Assets::Color_From_ARGB(color).To_Array();
 		vertex++;
 
-		vertex->x=x+ix;
-		vertex->y=y+iy;
-		vertex->z=z;
-		vertex->u1=lic.flare_uv[a][2];
-		vertex->v1=lic.flare_uv[a][1];
-		vertex->diffuse=color;
+		vertex->position[0]=x+ix;
+		vertex->position[1]=y+iy;
+		vertex->position[2]=z;
+		vertex->uv[0]=lic.flare_uv[a][2];
+		vertex->uv[1]=lic.flare_uv[a][1];
+		vertex->color = Assets::Color_From_ARGB(color).To_Array();
 		vertex++;
 
-		vertex->x=x-ix;
-		vertex->y=y+iy;
-		vertex->z=z;
-		vertex->u1=lic.flare_uv[a][2];
-		vertex->v1=lic.flare_uv[a][3];
-		vertex->diffuse=color;
+		vertex->position[0]=x-ix;
+		vertex->position[1]=y+iy;
+		vertex->position[2]=z;
+		vertex->uv[0]=lic.flare_uv[a][2];
+		vertex->uv[1]=lic.flare_uv[a][3];
+		vertex->color = Assets::Color_From_ARGB(color).To_Array();
 		vertex++;
 
-		vertex->x=x-ix;
-		vertex->y=y-iy;
-		vertex->z=z;
-		vertex->u1=lic.flare_uv[a][0];
-		vertex->v1=lic.flare_uv[a][3];
-		vertex->diffuse=color;
+		vertex->position[0]=x-ix;
+		vertex->position[1]=y-iy;
+		vertex->position[2]=z;
+		vertex->uv[0]=lic.flare_uv[a][0];
+		vertex->uv[1]=lic.flare_uv[a][3];
+		vertex->color = Assets::Color_From_ARGB(color).To_Array();
 		vertex++;
 
 		vertex_count+=4;
@@ -457,14 +457,14 @@ DazzleTypeClass::~DazzleTypeClass()
 
 // ----------------------------------------------------------------------------
 
-void DazzleTypeClass::Set_Dazzle_Shader(const ShaderClass& s)	// Set shader for the dazzle type
+void DazzleTypeClass::Set_Dazzle_Shader(const Graphics::MaterialState& s)	// Set shader for the dazzle type
 {
 	dazzle_shader=s;
 }
 
 // ----------------------------------------------------------------------------
 
-void DazzleTypeClass::Set_Halo_Shader(const ShaderClass& s)	// Set shader for the dazzle type
+void DazzleTypeClass::Set_Halo_Shader(const Graphics::MaterialState& s)	// Set shader for the dazzle type
 {
 	halo_shader=s;
 }
@@ -1058,9 +1058,9 @@ void DazzleRenderObjClass::Render_Dazzle(CameraClass* camera)
 		lens_max_verts=4*lensflare->lic.flare_count;
 	}
 
-	std::vector<VertexFormatXYZNDUV2> geometry(vertex_count*2+lens_max_verts);
+	std::vector<Graphics::SurfaceVertex> geometry(vertex_count*2+lens_max_verts);
 	{
-		VertexFormatXYZNDUV2* verts=geometry.data();
+		Graphics::SurfaceVertex* verts=geometry.data();
 
 		float halo_size=1.0f;
 
@@ -1073,7 +1073,7 @@ void DazzleRenderObjClass::Render_Dazzle(CameraClass* camera)
 		dazzle_dyt*=dazzle_scale_y;
 
 		if (current_dazzle_intensity>0.0f) {
-			VertexFormatXYZNDUV2* vertex=verts;
+			Graphics::SurfaceVertex* vertex=verts;
 			dazzle_vertex_count+=4;
 
 			Vector3 col(
@@ -1089,35 +1089,35 @@ void DazzleRenderObjClass::Render_Dazzle(CameraClass* camera)
 			unsigned color=Assets::Color_To_ARGB({col.X,col.Y,col.Z,1.0f});
 
 			dl=current_vloc+(dazzle_dxt-dazzle_dyt)*current_dazzle_size;
-			reinterpret_cast<Vector3&>(vertex->x)=dl;
-			vertex->u1=0.0f;
-			vertex->v1=0.0f;
-			vertex->diffuse=color;
+			vertex->position = {dl.X,dl.Y,dl.Z};
+			vertex->uv[0]=0.0f;
+			vertex->uv[1]=0.0f;
+			vertex->color = Assets::Color_From_ARGB(color).To_Array();
 			vertex++;
 
 			dl=current_vloc+(dazzle_dxt+dazzle_dyt)*current_dazzle_size;
-			reinterpret_cast<Vector3&>(vertex->x)=dl;
-			vertex->u1=1.0f;
-			vertex->v1=0.0f;
-			vertex->diffuse=color;
+			vertex->position = {dl.X,dl.Y,dl.Z};
+			vertex->uv[0]=1.0f;
+			vertex->uv[1]=0.0f;
+			vertex->color = Assets::Color_From_ARGB(color).To_Array();
 			vertex++;
 
 			dl=current_vloc-(dazzle_dxt-dazzle_dyt)*current_dazzle_size;
-			reinterpret_cast<Vector3&>(vertex->x)=dl;
-			vertex->u1=1.0f;
-			vertex->v1=1.0f;
-			vertex->diffuse=color;
+			vertex->position = {dl.X,dl.Y,dl.Z};
+			vertex->uv[0]=1.0f;
+			vertex->uv[1]=1.0f;
+			vertex->color = Assets::Color_From_ARGB(color).To_Array();
 			vertex++;
 
 			dl=current_vloc-(dazzle_dxt+dazzle_dyt)*current_dazzle_size;
-			reinterpret_cast<Vector3&>(vertex->x)=dl;
-			vertex->u1=0.0f;
-			vertex->v1=1.0f;
-			vertex->diffuse=color;
+			vertex->position = {dl.X,dl.Y,dl.Z};
+			vertex->uv[0]=0.0f;
+			vertex->uv[1]=1.0f;
+			vertex->color = Assets::Color_From_ARGB(color).To_Array();
 		}
 
 		if (current_halo_intensity) {
-			VertexFormatXYZNDUV2* vertex=verts+dazzle_vertex_count;
+			Graphics::SurfaceVertex* vertex=verts+dazzle_vertex_count;
 			halo_vertex_count+=4;
 
 			Vector3 col(
@@ -1135,38 +1135,38 @@ void DazzleRenderObjClass::Render_Dazzle(CameraClass* camera)
 
 			offset = (halo_dxt - halo_dyt) * halo_size;
 			dl = current_vloc + offset;
-			reinterpret_cast<Vector3&>(vertex->x)=dl;
-			vertex->u1=0.0f;
-			vertex->v1=0.0f;
-			vertex->diffuse=color;
+			vertex->position = {dl.X,dl.Y,dl.Z};
+			vertex->uv[0]=0.0f;
+			vertex->uv[1]=0.0f;
+			vertex->color = Assets::Color_From_ARGB(color).To_Array();
 			vertex++;
 
 			offset = (halo_dxt + halo_dyt) * halo_size;
 			dl =current_vloc + offset;
-			reinterpret_cast<Vector3&>(vertex->x)=dl;
-			vertex->u1=1.0f;
-			vertex->v1=0.0f;
-			vertex->diffuse=color;
+			vertex->position = {dl.X,dl.Y,dl.Z};
+			vertex->uv[0]=1.0f;
+			vertex->uv[1]=0.0f;
+			vertex->color = Assets::Color_From_ARGB(color).To_Array();
 			vertex++;
 
 			offset = -(halo_dxt - halo_dyt) * halo_size;
 			dl = current_vloc + offset;
-			reinterpret_cast<Vector3&>(vertex->x)=dl;
-			vertex->u1=1.0f;
-			vertex->v1=1.0f;
-			vertex->diffuse=color;
+			vertex->position = {dl.X,dl.Y,dl.Z};
+			vertex->uv[0]=1.0f;
+			vertex->uv[1]=1.0f;
+			vertex->color = Assets::Color_From_ARGB(color).To_Array();
 			vertex++;
 
 			offset = -(halo_dxt + halo_dyt) * halo_size;
 			dl=current_vloc + offset;
-			reinterpret_cast<Vector3&>(vertex->x)=dl;
-			vertex->u1=0.0f;
-			vertex->v1=1.0f;
-			vertex->diffuse=color;
+			vertex->position = {dl.X,dl.Y,dl.Z};
+			vertex->uv[0]=0.0f;
+			vertex->uv[1]=1.0f;
+			vertex->color = Assets::Color_From_ARGB(color).To_Array();
 		}
 
 		if (lensflare && current_dazzle_intensity>0.0f) {
-			VertexFormatXYZNDUV2* vertex=verts+halo_vertex_count+dazzle_vertex_count;
+			Graphics::SurfaceVertex* vertex=verts+halo_vertex_count+dazzle_vertex_count;
 
 			lensflare->Generate_Vertex_Buffers(
 				vertex,
@@ -1188,14 +1188,8 @@ void DazzleRenderObjClass::Render_Dazzle(CameraClass* camera)
 		return;
 	}
 
-    const auto draw = [&](unsigned offset,unsigned count,ShaderClass shader,TextureClass* texture) {
-        std::vector<VertexFormatXYZDUV1> vertices(count);
-        for (unsigned i=0; i<count; ++i) {
-            const auto& input=geometry[offset+i];
-            auto& output=vertices[i];
-            output.x=input.x; output.y=input.y; output.z=input.z;
-            output.diffuse=input.diffuse; output.u1=input.u1; output.v1=input.v1;
-        }
+    const auto draw = [&](unsigned offset,unsigned count,Graphics::MaterialState shader,TextureClass* texture) {
+        const auto vertices = std::span<const Graphics::SurfaceVertex>(geometry).subspan(offset,count);
         std::vector<unsigned> indices(count/4*6);
         for (unsigned i=0; i<count/4; ++i) {
             indices[i*6]=i*4; indices[i*6+1]=i*4+1; indices[i*6+2]=i*4+2;

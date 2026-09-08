@@ -1,6 +1,9 @@
 module;
 #include <array>
 #include <cstddef>
+#if defined(_M_X64) || defined(__SSE2__)
+#include <xmmintrin.h>
+#endif
 export module Graphics.Scene.AffineTransform;
 export import Graphics.Scene.RenderScene;
 
@@ -32,12 +35,28 @@ Matrix Export_Affine_Transform(const RenderTransform& source) noexcept {
 export RenderTransform Multiply_Affine(const RenderTransform& left,const RenderTransform& right) noexcept {
     auto result=Affine_Identity();
     const auto& a=left.matrix;const auto& b=right.matrix;
+#if defined(_M_X64) || defined(__SSE2__)
+    const auto first=_mm_loadu_ps(b.data());
+    const auto second=_mm_loadu_ps(b.data()+4);
+    const auto third=_mm_loadu_ps(b.data()+8);
+    for(unsigned row=0;row<3;++row) {
+        const auto base=row*4;
+        const auto x=_mm_mul_ps(_mm_set1_ps(a[base]),first);
+        const auto y=_mm_mul_ps(_mm_set1_ps(a[base+1]),second);
+        const auto z=_mm_mul_ps(_mm_set1_ps(a[base+2]),third);
+        _mm_storeu_ps(result.matrix.data()+base,_mm_add_ps(_mm_add_ps(x,y),z));
+        // Preserve the scalar evaluation order. Only translation has a fourth
+        // term; adding zero to the other lanes could change their signed zeros.
+        result.matrix[base+3]+=a[base+3];
+    }
+#else
     for(unsigned row=0;row<3;++row) {
         const auto base=row*4;
         for(unsigned column=0;column<3;++column)
             result.matrix[base+column]=a[base]*b[column]+a[base+1]*b[4+column]+a[base+2]*b[8+column];
         result.matrix[base+3]=a[base]*b[3]+a[base+1]*b[7]+a[base+2]*b[11]+a[base+3];
     }
+#endif
     return result;
 }
 

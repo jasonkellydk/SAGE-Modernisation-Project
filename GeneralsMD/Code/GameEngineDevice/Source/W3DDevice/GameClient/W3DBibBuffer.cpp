@@ -57,7 +57,6 @@
 #include "W3DDevice/GameClient/WorldHeightMap.h"
 #include "W3DDevice/GameClient/W3DDynamicLight.h"
 #include "WW3D2/Camera.h"
-#include "WW3D2/VertexFormat.h"
 #include "WW3D2/WW3D.h"
 #include "WW3D2/Mesh.h"
 #include "WW3D2/MeshMdl.h"

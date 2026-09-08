@@ -34,6 +34,8 @@
  * Functions:                                                                                  *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
+import Graphics.Materials.State;
+import Graphics.Materials.Ordering;
 #include "SegLine.h"
 #include "WW3D.h"
 #include "RInfo.h"
@@ -154,7 +156,7 @@ TextureClass * SegmentedLineClass::Get_Texture()
 	return LineRenderer.Get_Texture();
 }
 
-ShaderClass SegmentedLineClass::Get_Shader()
+Graphics::MaterialState SegmentedLineClass::Get_Shader()
 {
 	return LineRenderer.Get_Shader();
 }
@@ -224,7 +226,7 @@ void SegmentedLineClass::Set_Texture(TextureClass *texture)
 	LineRenderer.Set_Texture(texture);
 }
 
-void SegmentedLineClass::Set_Shader(ShaderClass shader)
+void SegmentedLineClass::Set_Shader(Graphics::MaterialState shader)
 {
 	LineRenderer.Set_Shader(shader);
 }
@@ -335,7 +337,7 @@ void SegmentedLineClass::Render(RenderInfoClass & rinfo)
 	unsigned int sort_level = SORT_LEVEL_NONE;
 
 	if (!WW3D::Is_Sorting_Enabled())
-		sort_level=Get_Shader().Guess_Sort_Level();
+		sort_level=Graphics::Material_Ordered_Layer(Get_Shader());
 
 	if (Graphics::Get_Scene_Draw_Queue().Is_Enabled() && sort_level!=SORT_LEVEL_NONE) {
 

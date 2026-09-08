@@ -40,7 +40,7 @@
 
 #include "RInfo.h"
 #include "Camera.h"
-#include "MatPass.h"
+#include "Texture.h"
 
 
 /***********************************************************************************************
@@ -70,14 +70,11 @@ RenderInfoClass::~RenderInfoClass()
 {
 }
 
-void RenderInfoClass::Push_Material_Pass(MaterialPassClass * matpass)
+void RenderInfoClass::Push_Material_Pass(const std::shared_ptr<NativeMaterialPass>& matpass)
 {
 	// add to the end of the array
 	if (AdditionalMaterialPassCount<MAX_ADDITIONAL_MATERIAL_PASSES-1) {
 
-		if (matpass) {
-			matpass->Add_Ref();
-		}
 		AdditionalMaterialPassArray[AdditionalMaterialPassCount++]=matpass;
 	} else {
 		RejectedMaterialPasses++;
@@ -90,10 +87,7 @@ void RenderInfoClass::Pop_Material_Pass()
 		// remove from the end of the array
 		WWASSERT(AdditionalMaterialPassCount>0);
 		AdditionalMaterialPassCount--;
-		MaterialPassClass * mpass = AdditionalMaterialPassArray[AdditionalMaterialPassCount];
-		if (mpass != nullptr) {
-			mpass->Release_Ref();
-		}
+		AdditionalMaterialPassArray[AdditionalMaterialPassCount].reset();
 	} else {
 		RejectedMaterialPasses--;
 	}
@@ -104,9 +98,9 @@ int RenderInfoClass::Additional_Pass_Count()
 	return AdditionalMaterialPassCount;
 }
 
-MaterialPassClass * RenderInfoClass::Peek_Additional_Pass(int i)
+NativeMaterialPass * RenderInfoClass::Peek_Additional_Pass(int i)
 {
-	return AdditionalMaterialPassArray[i];
+	return AdditionalMaterialPassArray[i].get();
 }
 
 void RenderInfoClass::Push_Override_Flags(RINFO_OVERRIDE_FLAGS flg)

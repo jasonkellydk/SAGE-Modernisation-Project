@@ -136,6 +136,7 @@ public:
         if (!Valid(vertices, indices)) return false;
         m_vertices.assign(vertices.begin(), vertices.end());
         m_indices.assign(indices.begin(), indices.end());
+        m_bounds_valid = false;
         return true;
     }
 
@@ -155,13 +156,28 @@ public:
         m_indices.resize(first_index + indices.size());
         for (std::size_t index = 0; index < indices.size(); ++index)
             m_indices[first_index + index] = base_vertex + indices[index];
+        if (!vertices.empty()) m_bounds_valid = false;
         return true;
     }
 
     std::span<const PropVertex> Vertices() const noexcept { return m_vertices; }
     std::span<const std::uint32_t> Indices() const noexcept { return m_indices; }
 
+    const std::array<float,3>& Minimum_Position() const noexcept { Update_Bounds(); return m_minimum; }
+    const std::array<float,3>& Maximum_Position() const noexcept { Update_Bounds(); return m_maximum; }
+
 private:
+    void Update_Bounds() const noexcept
+    {
+        if (m_bounds_valid) return;
+        m_minimum = m_maximum = m_vertices.empty() ? std::array<float,3>{} : m_vertices.front().position;
+        for (const auto& vertex : m_vertices) for (unsigned axis=0;axis<3;++axis) {
+            m_minimum[axis] = std::min(m_minimum[axis],vertex.position[axis]);
+            m_maximum[axis] = std::max(m_maximum[axis],vertex.position[axis]);
+        }
+        m_bounds_valid = true;
+    }
+
     static bool Valid(std::span<const PropVertex> vertices, std::span<const std::uint32_t> indices)
     {
         constexpr auto maximum_bytes = std::numeric_limits<std::uint32_t>::max();
@@ -174,5 +190,7 @@ private:
     }
     std::vector<PropVertex> m_vertices;
     std::vector<std::uint32_t> m_indices;
+    mutable std::array<float,3> m_minimum{}, m_maximum{};
+    mutable bool m_bounds_valid = false;
 };
 }

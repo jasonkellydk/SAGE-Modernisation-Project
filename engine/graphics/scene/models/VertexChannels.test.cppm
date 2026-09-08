@@ -116,3 +116,40 @@ BOOST_AUTO_TEST_CASE(import_reuses_equal_content_but_preserves_unpublished_ident
     BOOST_CHECK(writable_destination.Get(0) != writable_source.Get(0));
     BOOST_CHECK(writable_destination.Get(imported_index) == writable_source.Get(0));
 }
+
+
+BOOST_AUTO_TEST_CASE(channel_revisions_follow_shared_origins_and_writable_escapes)
+{
+    using Channels=Graphics::VertexChannels<Vector2>;
+    Channels first,second,combined;
+    const std::array<Vector2,1> first_values{{Vector2(0.25f,0.5f)}};
+    const std::array<Vector2,1> second_values{{Vector2(0.75f,1)}};
+    const auto a=first.Install(first_values);
+    const auto b=second.Install(second_values);
+    combined.Share(0,first,a);
+    const auto imported=combined.Import(second,b);
+    const auto a_revision=first.Revision(a);
+    const auto b_revision=second.Revision(b);
+    BOOST_REQUIRE_NE(a_revision,0u);
+    BOOST_REQUIRE_NE(b_revision,0u);
+    BOOST_CHECK_NE(a_revision,b_revision);
+    BOOST_CHECK_EQUAL(combined.Revision(0),a_revision);
+    BOOST_CHECK_EQUAL(combined.Revision(imported),b_revision);
+    BOOST_CHECK_EQUAL(combined.Peek(0)[0].X,0.25f);
+    BOOST_CHECK_EQUAL(first.Revision(a),a_revision);
+    auto* retained=first.Get(a);
+    BOOST_CHECK_EQUAL(combined.Revision(0),0u);
+    BOOST_CHECK_EQUAL(combined.Revision(imported),b_revision);
+    retained[0].X=0.125f;
+    BOOST_CHECK_EQUAL(combined.Peek(0)[0].X,0.125f);
+    combined.Make_Unique(0);
+    combined.Get(0)[0].X=0.625f;
+    BOOST_CHECK_EQUAL(first.Peek(a)[0].X,0.125f);
+    first.Clear(); second.Clear();
+    BOOST_CHECK_EQUAL(combined.Peek(imported)[0].X,0.75f);
+    BOOST_CHECK_EQUAL(combined.Revision(imported),b_revision);
+    combined.Clear();
+    combined.Install(first_values);
+    BOOST_CHECK_NE(combined.Revision(0),a_revision);
+    BOOST_CHECK_NE(combined.Revision(0),0u);
+}

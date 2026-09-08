@@ -1,3 +1,4 @@
+import Assets.Math;
 /*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -67,7 +68,7 @@ import Graphics.Scene.Roads.Renderer;
 #include "W3DDevice/GameClient/WorldHeightMap.h"
 
 #include "WW3D2/Camera.h"
-#include "WW3D2/VertexFormat.h"
+import Graphics.Scene.Surfaces.Geometry;
 #include "WW3D2/WW3D.h"
 #include "WW3D2/Mesh.h"
 #include "WW3D2/MeshMdl.h"
@@ -129,17 +130,8 @@ RoadType::~RoadType()
 //=============================================================================
 bool RoadType::uploadGeometry()
 {
-    std::vector<Graphics::SurfaceVertex> vertices(m_numRoadVertices);
+    const auto vertices = std::span<const Graphics::SurfaceVertex>(m_vertices).first(m_numRoadVertices);
     std::vector<std::uint32_t> indices(m_indices.begin(), m_indices.begin() + m_numRoadIndices);
-    for (int index = 0; index < m_numRoadVertices; ++index) {
-        const auto &source = m_vertices[index];
-        auto &vertex = vertices[index];
-        vertex.position = {source.x, source.y, source.z};
-        vertex.uv = {source.u1, source.v1};
-        vertex.color = {((source.diffuse >> 16) & 255) / 255.0f,
-            ((source.diffuse >> 8) & 255) / 255.0f, (source.diffuse & 255) / 255.0f,
-            ((source.diffuse >> 24) & 255) / 255.0f};
-    }
     auto &renderer = Graphics::Get_Surface_Renderer();
     if (m_mesh.Is_Valid()) return renderer.Update_Mesh(m_mesh, vertices, indices);
     m_mesh = renderer.Create_Mesh(vertices, indices);
@@ -241,7 +233,7 @@ RoadSegment::~RoadSegment()
 //=============================================================================
 /** Allocates & sets the vertex entries. */
 //=============================================================================
-void RoadSegment::SetVertexBuffer(VertexFormatXYZDUV1 *vb, Int numVertex)
+void RoadSegment::SetVertexBuffer(Graphics::SurfaceVertex *vb, Int numVertex)
 {
 	delete[] m_vb;
 	m_vb = nullptr;
@@ -251,17 +243,17 @@ void RoadSegment::SetVertexBuffer(VertexFormatXYZDUV1 *vb, Int numVertex)
 	if (numVertex<1 || numVertex > MAX_SEG_VERTEX)
 		return;
 
-	m_vb = NEW VertexFormatXYZDUV1[numVertex];	// pool[]ify
+	m_vb = NEW Graphics::SurfaceVertex[numVertex];	// pool[]ify
 	if (!m_vb)
 		return;
 
 	m_numVertex = numVertex;
-	memcpy(m_vb, vb, numVertex*sizeof(VertexFormatXYZDUV1));
+	memcpy(m_vb, vb, numVertex*sizeof(Graphics::SurfaceVertex));
 	Int i;
 	for (i=0; i<numVertex; i++) {
-		verts[i].X = m_vb[i].x;
-		verts[i].Y = m_vb[i].y;
-		verts[i].Z = m_vb[i].z;
+		verts[i].X = m_vb[i].position[0];
+		verts[i].Y = m_vb[i].position[1];
+		verts[i].Z = m_vb[i].position[2];
 	}
 	SphereClass bounds(verts, numVertex);
 	m_bounds = bounds;
@@ -294,11 +286,11 @@ void RoadSegment::SetIndexBuffer(UnsignedShort *ib, Int numIndex)
 //=============================================================================
 /** Copies vertex entries into destination_vb. */
 //=============================================================================
-Int RoadSegment::GetVertices(VertexFormatXYZDUV1 *destination_vb, Int numToCopy)
+Int RoadSegment::GetVertices(Graphics::SurfaceVertex *destination_vb, Int numToCopy)
 {
 	if (m_vb == nullptr || numToCopy<1) return	(0);
 	if (numToCopy > m_numVertex) return(0);
-	memcpy(destination_vb, m_vb, numToCopy*sizeof(VertexFormatXYZDUV1));
+	memcpy(destination_vb, m_vb, numToCopy*sizeof(Graphics::SurfaceVertex));
 	return(numToCopy);
 }
 
@@ -328,11 +320,11 @@ void RoadSegment::updateSegLighting()
 	Int i;
 	Int borderSizeInLine=TheTerrainRenderObject->getMap()->getBorderSizeInline();
 	for (i=0; i<m_numVertex; i++) {
-		Int x = m_vb[i].x/MAP_XY_FACTOR+0.5;
-		Int y = m_vb[i].y/MAP_XY_FACTOR+0.5;
+		Int x = m_vb[i].position[0]/MAP_XY_FACTOR+0.5;
+		Int y = m_vb[i].position[1]/MAP_XY_FACTOR+0.5;
 		x += borderSizeInLine;
 		y += borderSizeInLine;
-		m_vb[i].diffuse = (255<<24)|TheTerrainRenderObject->getStaticDiffuse(x, y);
+		m_vb[i].color = Assets::Color_From_ARGB((255<<24)|TheTerrainRenderObject->getStaticDiffuse(x, y)).To_Array();
 	}
 }
 
@@ -555,7 +547,7 @@ void W3DRoadBuffer::loadFloat4PtSection(RoadSegment *pRoad, Vector2 loc,
 	const Real FLOAT_AMOUNT = MAP_HEIGHT_SCALE/8;
 	const Real MAX_ERROR = MAP_HEIGHT_SCALE*1.1f;
 	UnsignedShort ib[MAX_SEG_INDEX];
-	VertexFormatXYZDUV1 vb[MAX_SEG_VERTEX];
+	Graphics::SurfaceVertex vb[MAX_SEG_VERTEX];
 	Int numRoadVertices = 0;
 	Int numRoadIndices = 0;
 
@@ -695,12 +687,12 @@ void W3DRoadBuffer::loadFloat4PtSection(RoadSegment *pRoad, Vector2 loc,
 			#ifdef RTS_DEBUG
 				//diffuse &= 0xFFFF00FF; // strip out green.
 			#endif
-				vb[numRoadVertices].u1 = uOffset+U/(uScale*4);
-				vb[numRoadVertices].v1 = vOffset-V/(vScale*4);	// Road is 1/16 texture height.
-				vb[numRoadVertices].x = curColumn.vtx[j].X;
-				vb[numRoadVertices].y = curColumn.vtx[j].Y;
-				vb[numRoadVertices].z = curColumn.vtx[j].Z+FLOAT_AMOUNT;
-				vb[numRoadVertices].diffuse = diffuse;
+				vb[numRoadVertices].uv[0] = uOffset+U/(uScale*4);
+				vb[numRoadVertices].uv[1] = vOffset-V/(vScale*4);	// Road is 1/16 texture height.
+				vb[numRoadVertices].position[0] = curColumn.vtx[j].X;
+				vb[numRoadVertices].position[1] = curColumn.vtx[j].Y;
+				vb[numRoadVertices].position[2] = curColumn.vtx[j].Z+FLOAT_AMOUNT;
+				vb[numRoadVertices].color = Assets::Color_From_ARGB(diffuse).To_Array();
 				curColumn.vertexIndex[j] = numRoadVertices;
 				numRoadVertices++;
 				if (j==1 && curColumn.collapsed) {
@@ -768,7 +760,7 @@ terrain.  The road is loaded into the quadrilateral defined by the
 the road vector gives the direction of the road, and the road normal is perpendicular
 to the road normal.  */
 //=============================================================================
-void W3DRoadBuffer::loadLit4PtSection(RoadSegment *pRoad, UnsignedShort *ib, VertexFormatXYZDUV1 *vb, Graphics::SceneObjectList<RenderObjClass>::Cursor *pDynamicLightsIterator)
+void W3DRoadBuffer::loadLit4PtSection(RoadSegment *pRoad, UnsignedShort *ib, Graphics::SurfaceVertex *vb, Graphics::SceneObjectList<RenderObjClass>::Cursor *pDynamicLightsIterator)
 {
 
 	const Real FLOAT_AMOUNT = MAP_HEIGHT_SCALE/8;
@@ -977,12 +969,12 @@ void W3DRoadBuffer::loadLit4PtSection(RoadSegment *pRoad, UnsignedShort *ib, Ver
 			#ifdef RTS_DEBUG
 				//diffuse &= 0xFFFF00FF; // strip out green.
 			#endif
-				vb[m_curNumRoadVertices].u1 = info.uOffset+U/(info.scale*4);
-				vb[m_curNumRoadVertices].v1 = info.vOffset-V/(info.scale*4);	// Road is 1/16 texture height.
-				vb[m_curNumRoadVertices].x = curColumn.vtx[j].X;
-				vb[m_curNumRoadVertices].y = curColumn.vtx[j].Y;
-				vb[m_curNumRoadVertices].z = curColumn.vtx[j].Z+FLOAT_AMOUNT;
-				vb[m_curNumRoadVertices].diffuse = diffuse;
+				vb[m_curNumRoadVertices].uv[0] = info.uOffset+U/(info.scale*4);
+				vb[m_curNumRoadVertices].uv[1] = info.vOffset-V/(info.scale*4);	// Road is 1/16 texture height.
+				vb[m_curNumRoadVertices].position[0] = curColumn.vtx[j].X;
+				vb[m_curNumRoadVertices].position[1] = curColumn.vtx[j].Y;
+				vb[m_curNumRoadVertices].position[2] = curColumn.vtx[j].Z+FLOAT_AMOUNT;
+				vb[m_curNumRoadVertices].color = Assets::Color_From_ARGB(diffuse).To_Array();
 				curColumn.vertexIndex[j] = m_curNumRoadVertices;
 				m_curNumRoadVertices++;
 				if (j==1 && curColumn.collapsed) {
@@ -1213,7 +1205,7 @@ void W3DRoadBuffer::loadRoadsInVertexAndIndexBuffers()
 	}
 	m_curNumRoadVertices = 0;
 	m_curNumRoadIndices = 0;
-    VertexFormatXYZDUV1 *vb = m_roadTypes[m_curRoadType].getVB();
+    Graphics::SurfaceVertex *vb = m_roadTypes[m_curRoadType].getVB();
     UnsignedShort *ib = m_roadTypes[m_curRoadType].getIB();
 	Int curRoad;
 
@@ -1289,7 +1281,7 @@ Bool W3DRoadBuffer::visibilityChanged(const IRegion2D &bounds)
 //=============================================================================
 /** Loads a road segment into the vertex buffer for drawing. */
 //=============================================================================
-void W3DRoadBuffer::loadRoadSegment(UnsignedShort *ib, VertexFormatXYZDUV1 *vb, RoadSegment *pRoad)
+void W3DRoadBuffer::loadRoadSegment(UnsignedShort *ib, Graphics::SurfaceVertex *vb, RoadSegment *pRoad)
 {
 	if (pRoad->m_uniqueID != m_curUniqueID) {
 		return;

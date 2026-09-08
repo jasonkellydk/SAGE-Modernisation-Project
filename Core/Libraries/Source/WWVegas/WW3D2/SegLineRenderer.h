@@ -46,7 +46,7 @@ import Graphics.Scene.Beams.RibbonTextureCoordinates;
 import Graphics.Scene.Props.Geometry;
 
 #include "WWLib/always.h"
-#include "WW3D2/Shader.h"
+import Graphics.Materials.State;
 #include "Texture.h"
 #include "WWMath/matrix3d.h"
 #include "WWMath/vector2.h"
@@ -92,7 +92,7 @@ public:
 	// Get properties used to render this line segment
 	TextureClass *		Get_Texture() const;
 	TextureClass *		Peek_Texture() const								{ return Texture; }
-	ShaderClass			Get_Shader() const									{ return Shader; }
+	Graphics::MaterialState			Get_Shader() const									{ return Shader; }
 	float					Get_Width() const									{ return Width; }
 	const Vector3 &	Get_Color() const 									{ return Color; }
 	float					Get_Opacity() const									{ return Opacity; }
@@ -109,7 +109,7 @@ public:
 
 	// Set properties used to render this line segment
 	void					Set_Texture(TextureClass *texture);
-	void					Set_Shader(ShaderClass shader)						{ Shader = shader; }
+	void					Set_Shader(Graphics::MaterialState shader)						{ Shader = shader; }
 	void					Set_Width(float width)									{ Width = width; }
 	void					Set_Color(const Vector3 &color)						{ Color = color; }
 	void					Set_Opacity(float opacity)								{ Opacity = opacity; }
@@ -140,7 +140,7 @@ private:
 
 	// Global properties
 	TextureClass *					Texture;
-	ShaderClass						Shader;
+	Graphics::MaterialState						Shader;
 	float								Width;
 	Vector3							Color;
 	float								Opacity;

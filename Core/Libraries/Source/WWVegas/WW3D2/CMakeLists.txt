@@ -1,13 +1,10 @@
 set(WW3D2_SRC
-	VertexFormat.h
     #AnimObj.cpp
     #AnimObj.h
     #AssetMgr.cpp
     #AssetMgr.h
-	StringUtilities.h
     #Camera.cpp
     #Camera.h
-    #ClassId.h # unused
     Collect.cpp
     Collect.h
     ColTest.cpp
@@ -17,28 +14,15 @@ set(WW3D2_SRC
     Composite.h
     #Dazzle.cpp
     #Dazzle.h
-    DList.h
     #HLOD.cpp
     #HLOD.h
     IntTest.h
     #Light.cpp
     #Light.h
-
-
-    #Mapper.cpp
-    #Mapper.h
-    MatInfo.cpp
-    MatInfo.h
-    MatPass.cpp
-    MatPass.h
-    #MatrixMapper.cpp
-    #MatrixMapper.h
     #Mesh.cpp
     #Mesh.h
     #MeshGeometry.cpp
     #MeshGeometry.h
-    #MeshMatDesc.cpp
-    #MeshMatDesc.h
     #MeshMdl.cpp
     #MeshMdl.h
     #MeshMdlIO.cpp
@@ -46,10 +30,8 @@ set(WW3D2_SRC
     #PartBuf.h
     #PartEmt.cpp
     #PartEmt.h
-    PrimAnim.h
     Projector.cpp
     Projector.h
-    Proxy.h
     RendObj.cpp
     RendObj.h
     #RInfo.cpp
@@ -60,22 +42,15 @@ set(WW3D2_SRC
     SegLine.h
     SegLineRenderer.cpp
     SegLineRenderer.h
-    #Shader.cpp
-    #Shader.h
-    ShdLib.h
     TexProject.cpp
     TexProject.h
     Texture.cpp
     Texture.h
-    #VertMaterial.cpp
-    #VertMaterial.h
     #W3DFile.h
-    W3DObsolete.h
     W3DErr.h
     WW3D.cpp
     WW3D.h
     WW3DIds.h
-    WW3DTrig.h
 )
 
 add_library(corei_ww3d2 INTERFACE)

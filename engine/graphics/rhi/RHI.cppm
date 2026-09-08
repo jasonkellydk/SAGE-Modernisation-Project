@@ -40,11 +40,17 @@ export enum class RHIBufferUsage : std::uint8_t
 	Storage
 };
 
+// Discard updates replace a vertex/index buffer's contents starting at offset
+// zero. Bytes beyond the supplied range become unspecified; earlier queued draws
+// retain the contents they were submitted with. Preserve keeps untouched bytes.
+export enum class RHIBufferUpdateMode : std::uint8_t { Preserve, Discard };
+
 export struct RHIBuffer final
 {
 	std::uint32_t byte_size = 0;
 	RHIBufferUsage usage = RHIBufferUsage::Vertex;
 	std::uint32_t stride = 0;
+	RHIBufferUpdateMode update_mode = RHIBufferUpdateMode::Preserve;
 };
 
 export enum class RHITextureFormat : std::uint8_t

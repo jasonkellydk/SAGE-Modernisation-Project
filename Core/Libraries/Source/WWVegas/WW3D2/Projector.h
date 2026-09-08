@@ -46,7 +46,10 @@
 #include "WWMath/obbox.h"
 
 
-class MatrixMapperClass;
+#include <memory>
+import Graphics.Materials.TextureMapping;
+import Graphics.Materials.TextureProjection;
+import Graphics.Materials.TextureCoordinates;
 
 
 /**
@@ -70,7 +73,7 @@ public:
 	const OBBoxClass &			Get_Bounding_Volume() const { return WorldBoundingVolume; }
 	void								Compute_Texture_Coordinate(const Vector3 & point,Vector3 * set_stq);
 
-	MatrixMapperClass*			Peek_Mapper() const { return Mapper; }
+	Graphics::TextureMapping* Peek_Mapper() const { return Mapper.get(); }
 
 protected:
 
@@ -82,5 +85,5 @@ protected:
 	AABoxClass						LocalBoundingVolume;
 	OBBoxClass						WorldBoundingVolume;
 
-	MatrixMapperClass *			Mapper;
+	std::shared_ptr<Graphics::TextureMapping> Mapper;
 };

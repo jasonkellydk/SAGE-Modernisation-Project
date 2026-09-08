@@ -789,56 +789,6 @@ void CollectionClass::Update_Sub_Object_Transforms()
 
 
 /***********************************************************************************************
- * CollectionClass::Get_Placeholder -- Returns information about a placeholder object.
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   4/28/99    PDS : Created.                                                                 *
- *=============================================================================================*/
-bool CollectionClass::Get_Proxy (int index, ProxyClass &proxy) const
-{
-	bool retval = false;
-
-	if (index >= 0 && index < static_cast<int>(ProxyList.size())) {
-
-		//
-		// Return the proxy information to the caller
-		//
-		const auto& source = ProxyList[index];
-        const auto& m = source.transform;
-        proxy = ProxyClass(source.name.c_str(), Matrix3D(
-            m[0],m[1],m[2],m[3], m[4],m[5],m[6],m[7], m[8],m[9],m[10],m[11]));
-		retval	= true;
-	}
-
-	return retval;
-}
-
-
-/***********************************************************************************************
- * CollectionClass::Get_Proxy_Count -- Returns the count of proxy objects in the collection.
- *                                                                                             *
- * INPUT:                                                                                      *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   4/28/99    PDS : Created.                                                                 *
- *=============================================================================================*/
-int CollectionClass::Get_Proxy_Count () const
-{
-	return static_cast<int>(ProxyList.size());
-}
-
-
-/***********************************************************************************************
  * CollectionLoaderClass::Load -- reads a collection from a w3d file                           *
  *                                                                                             *
  * INPUT:                                                                                      *

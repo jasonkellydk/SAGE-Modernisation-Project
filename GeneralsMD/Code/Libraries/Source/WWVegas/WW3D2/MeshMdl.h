@@ -36,6 +36,10 @@
 
 #pragma once
 
+#include <cstdint>
+#include <memory>
+import Graphics.Scene.Models.Materials;
+
 class GraphicsMeshState;
 
 #include "WWMath/vector2.h"
@@ -43,16 +47,18 @@ class GraphicsMeshState;
 #include "WWMath/vector4.h"
 #include "WWMath/Vector3i.h"
 #include "WWLib/sharebuf.h"
-#include "Shader.h"
+import Graphics.Materials.State;
 #include "WWDebug/wwdebug.h"
-#include "VertMaterial.h"
+import Graphics.Materials.MeshMaterial;
+import Graphics.Scene.Props.Material;
+#include "WWLib/ref_ptr.h"
 #include "WWLib/bittype.h"
 #include "WWMath/colmath.h"
 #include "WWLib/simplevec.h"
 #include "WWLib/wwstring.h"
 #include "RInfo.h"
 #include "MeshGeometry.h"
-#include "MeshMatDesc.h"
+import Graphics.Scene.Models.MeshMaterialBindings;
 
 class TextureClass;
 class RenderInfoClass;
@@ -60,14 +66,12 @@ class AABoxClass;
 class OBBoxClass;
 class FrustumClass;
 class SphereClass;
-class MaterialInfoClass;
 class MeshLoadContextClass;
 class ChunkLoadClass;
 class ChunkSaveClass;
 class MeshClass;
 
 
-struct VertexFormatXYZNDUV2;
 
 /**
 ** MeshModelClass
@@ -105,12 +109,16 @@ class MeshModelClass : public MeshGeometryClass
 	W3DMPO_CODE(MeshModelClass)
 
 public:
+	using MaterialDescription = Graphics::MeshMaterialBindings<RefCountPtr<TextureClass>, Vector2>;
+	using TextureSlots = Graphics::MaterialSlots<RefCountPtr<TextureClass>>;
+	using MaterialSlots = Graphics::MaterialSlots<std::shared_ptr<Graphics::MeshMaterial>>;
 
 	MeshModelClass();
 	MeshModelClass(const MeshModelClass & that);
 	virtual ~MeshModelClass() override;
 
     GraphicsMeshState*& Graphics_Mesh_State() noexcept { return GraphicsMeshes; }
+    std::uint64_t UV_Revision(int pass,int stage) const noexcept { return CurMatDesc->UV_Revision(pass,stage); }
 
 	MeshModelClass & operator = (const MeshModelClass & that);
 	void							Reset(int polycount,int vertcount,int passcount);
@@ -122,34 +130,45 @@ public:
 	void							Set_Pass_Count(int passes)														{ CurMatDesc->Set_Pass_Count(passes); }
 	int							Get_Pass_Count() const														{ return CurMatDesc->Get_Pass_Count(); }
 
-	const Vector2 *			Get_UV_Array(int pass = 0, int stage = 0)									{ return CurMatDesc->Get_UV_Array(pass,stage); }
+	const Vector2 *			Get_UV_Array(int pass = 0, int stage = 0)									{ return CurMatDesc->Peek_UV_Array(pass,stage); }
 	int							Get_UV_Array_Count()														{ return CurMatDesc->Get_UV_Array_Count(); }
-	const Vector2 *			Get_UV_Array_By_Index(int index)												{ return CurMatDesc->Get_UV_Array_By_Index(index, false); }
+	const Vector2 *			Get_UV_Array_By_Index(int index)												{ return CurMatDesc->Peek_UV_Array_By_Index(index); }
 
 	unsigned *					Get_DCG_Array(int pass)															{ return CurMatDesc->Get_DCG_Array(pass); }
 	unsigned *					Get_DIG_Array(int pass)															{ return CurMatDesc->Get_DIG_Array(pass); }
-	VertexMaterialClass::ColorSourceType Get_DCG_Source(int pass)										{ return CurMatDesc->Get_DCG_Source(pass); }
-	VertexMaterialClass::ColorSourceType Get_DIG_Source(int pass)										{ return CurMatDesc->Get_DIG_Source(pass); }
+	Graphics::PropColorSource Get_DCG_Source(int pass)										{ return CurMatDesc->Get_DCG_Source(pass); }
+	Graphics::PropColorSource Get_DIG_Source(int pass)										{ return CurMatDesc->Get_DIG_Source(pass); }
 
 	unsigned *					Get_Color_Array(int array_index,bool create = true)					{ return CurMatDesc->Get_Color_Array(array_index,create); }
 
-	void							Set_Single_Material(VertexMaterialClass * vmat,int pass=0)			{ CurMatDesc->Set_Single_Material(vmat,pass); }
-	void							Set_Single_Texture(TextureClass * tex,int pass=0,int stage=0)		{ CurMatDesc->Set_Single_Texture(tex,pass,stage); }
-	void							Set_Single_Shader(ShaderClass shader,int pass=0)						{ CurMatDesc->Set_Single_Shader(shader,pass); }
+	void							Set_Single_Material(const std::shared_ptr<Graphics::MeshMaterial>& vmat,int pass=0)			{ CurMatDesc->Set_Single_Material(vmat,pass); }
+	void							Set_Single_Texture(TextureClass * tex,int pass=0,int stage=0)
+	{
+		CurMatDesc->Set_Single_Texture(RefCountPtr<TextureClass>::Create_Add_Ref(tex),pass,stage);
+	}
+	void							Set_Single_Shader(Graphics::MaterialState shader,int pass=0)						{ CurMatDesc->Set_Single_Shader(shader,pass); }
 
 	// the "Get" functions add a reference before returning the pointer (if appropriate)
-	VertexMaterialClass *	Get_Single_Material(int pass=0) const										{ return CurMatDesc->Get_Single_Material(pass); }
-	TextureClass *				Get_Single_Texture(int pass=0,int stage=0) const						{ return CurMatDesc->Get_Single_Texture(pass,stage); }
-	ShaderClass					Get_Single_Shader(int pass=0) const											{ return CurMatDesc->Get_Single_Shader(pass); }
+	std::shared_ptr<Graphics::MeshMaterial>	Get_Single_Material(int pass=0) const										{ return CurMatDesc->Get_Single_Material(pass); }
+	TextureClass *				Get_Single_Texture(int pass=0,int stage=0) const
+	{
+		auto texture = CurMatDesc->Get_Single_Texture(pass,stage);
+		return texture.Release();
+	}
+	Graphics::MaterialState					Get_Single_Shader(int pass=0) const											{ return CurMatDesc->Get_Single_Shader(pass); }
 
 	// the "Peek" functions just return the pointer and it's the caller's responsibility to
 	// maintain a reference to an object with a reference to the data
-	VertexMaterialClass *	Peek_Single_Material(int pass=0) const										{ return CurMatDesc->Peek_Single_Material(pass); }
+	Graphics::MeshMaterial *	Peek_Single_Material(int pass=0) const										{ return CurMatDesc->Peek_Single_Material(pass); }
 	TextureClass *				Peek_Single_Texture(int pass=0,int stage=0) const						{ return CurMatDesc->Peek_Single_Texture(pass,stage); }
 
-	void							Set_Material(int vidx,VertexMaterialClass * vmat,int pass=0)		{ CurMatDesc->Set_Material(vidx,vmat,pass); }
-	void							Set_Shader(int pidx,ShaderClass shader,int pass=0)						{ CurMatDesc->Set_Shader(pidx,shader,pass); }
-	void							Set_Texture(int pidx,TextureClass * tex,int pass=0,int stage=0)	{ CurMatDesc->Set_Texture(pidx,tex,pass,stage); }
+	void							Set_Material(int vidx,const std::shared_ptr<Graphics::MeshMaterial>& vmat,int pass=0)		{ CurMatDesc->Set_Material(vidx,vmat,pass); }
+	void							Set_Shader(int pidx,Graphics::MaterialState shader,int pass=0)						{ CurMatDesc->Set_Shader(pidx,shader,pass); }
+	void							Set_Texture(int pidx,TextureClass * tex,int pass=0,int stage=0)
+	{
+		CurMatDesc->Set_Texture(static_cast<std::size_t>(pidx),
+			RefCountPtr<TextureClass>::Create_Add_Ref(tex),pass,stage);
+	}
 
 	// Queries for determining whether this model has per-polygon arrays of Materials, Shaders, or Textures
 	bool							Has_Material_Array(int pass) const											{ return CurMatDesc->Has_Material_Array(pass); }
@@ -157,16 +176,20 @@ public:
 	bool							Has_Texture_Array(int pass,int stage) const								{ return CurMatDesc->Has_Texture_Array(pass,stage); }
 
 	// "Get" functions for Materials, Textures, and Shaders when there are more than one (per-polygon/per-vertex)
-	VertexMaterialClass *	Get_Material(int vidx,int pass=0) const									{ return CurMatDesc->Get_Material(vidx,pass); }
-	TextureClass *				Get_Texture(int pidx,int pass=0,int stage=0) const						{ return CurMatDesc->Get_Texture(pidx,pass,stage); }
-	ShaderClass					Get_Shader(int pidx,int pass=0) const										{ return CurMatDesc->Get_Shader(pidx,pass); }
+	std::shared_ptr<Graphics::MeshMaterial>	Get_Material(int vidx,int pass=0) const									{ return CurMatDesc->Get_Material(vidx,pass); }
+	TextureClass *				Get_Texture(int pidx,int pass=0,int stage=0) const
+	{
+		auto texture = CurMatDesc->Get_Texture(static_cast<std::size_t>(pidx),pass,stage);
+		return texture.Release();
+	}
+	Graphics::MaterialState					Get_Shader(int pidx,int pass=0) const										{ return CurMatDesc->Get_Shader(pidx,pass); }
 
 	// "Peek" functions for Materials and Textures when there are more than one (per-polygon/per-vertex)
-	VertexMaterialClass *	Peek_Material(int vidx,int pass=0) const									{ return CurMatDesc->Peek_Material(vidx,pass); }
+	Graphics::MeshMaterial *	Peek_Material(int vidx,int pass=0) const									{ return CurMatDesc->Peek_Material(vidx,pass); }
 	TextureClass *				Peek_Texture(int pidx,int pass=0,int stage=0) const					{ return CurMatDesc->Peek_Texture(pidx,pass,stage); }
 
 	void							Replace_Texture(TextureClass* texture,TextureClass* new_texture);
-	void							Replace_VertexMaterial(VertexMaterialClass* vmat,VertexMaterialClass* new_vmat);
+	void							Replace_VertexMaterial(Graphics::MeshMaterial* vmat,const std::shared_ptr<Graphics::MeshMaterial>& new_vmat);
 
 	/////////////////////////////////////////////////////////////////////////////////////
 	// Modification interface.  Call these functions to cause the model to ensure
@@ -202,15 +225,15 @@ protected:
 
 public: // Jani: I need to have an access to these for now...
 
-	MeshMatDescClass::TextureSlots *	Get_Texture_Array(int pass,int stage,bool create = true)
+	TextureSlots *	Get_Texture_Array(int pass,int stage,bool create = true)
 	{
 		return CurMatDesc->Get_Texture_Array(pass,stage,create);
 	}
-	MeshMatDescClass::MaterialSlots *	Get_Material_Array(int pass,bool create = true)
+	MaterialSlots *	Get_Material_Array(int pass,bool create = true)
 	{
 		return CurMatDesc->Get_Material_Array(pass,create);
 	}
-	ShaderClass *				Get_Shader_Array(int pass,bool create = true)
+	Graphics::MaterialState *				Get_Shader_Array(int pass,bool create = true)
 	{
 		return CurMatDesc->Get_Shader_Array(pass,create);
 	}
@@ -251,13 +274,12 @@ protected:
 	// Material Descriptions
 	// DefMatDesc - the default material description, allocated in constructor, always present.
 	// AlternateMatDes - an optional alternate material description, allocated at load time if needed
-	// CurMatDesc - pointer to the currently active material description.
-	MeshMatDescClass *									DefMatDesc;
-	MeshMatDescClass *									AlternateMatDesc;
-	MeshMatDescClass *									CurMatDesc;
+	MaterialDescription DefMatDesc;
+	std::unique_ptr<MaterialDescription> AlternateMatDesc;
+	MaterialDescription * CurMatDesc;
 
 	// Collection of the unique materials in the mesh
-	MaterialInfoClass	*									MatInfo;
+	std::shared_ptr<Graphics::ModelMaterials<RefCountPtr<TextureClass>>> MatInfo;
 
     GraphicsMeshState* GraphicsMeshes = nullptr;
 

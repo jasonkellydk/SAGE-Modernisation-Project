@@ -28,6 +28,8 @@
 
 #include <stdlib.h>
 #include <math.h>
+#include <cstring>
+import Assets.Identity;
 
 #include "Common/Thing.h"
 #include "Common/ThingFactory.h"
@@ -45,8 +47,6 @@
 #include "GameClient/ParticleSys.h"
 #include "W3DDevice/GameClient/W3DGameClient.h"
 #include "W3DDevice/GameClient/Module/W3DTankTruckDraw.h"
-#include "WW3D2/MatInfo.h"
-#include "WW3D2/StringUtilities.h"
 
 // TheSuperHackers @info Is disabled by default and therefore compatible with the Retail INI setups.
 #define SHOW_DEFAULT_TANK_DEBRIS (0)
@@ -430,16 +430,16 @@ void W3DTankTruckDraw::updateTreadObjects()
 			//Check if subobject name starts with "TREADS".
 			if (subObj && subObj->Class_ID() == RenderObjClass::CLASSID_MESH && subObj->Get_Name()
 				&& ( (meshName=strchr(subObj->Get_Name(),'.') ) != nullptr && *(meshName++))
-				&&WW3DString::Compare_No_Case_N(meshName,"TREADS", 6) == 0)
+				&&Assets::Asset_Name_Prefix_Equals_No_Case(meshName,"TREADS", 6))
 			{	//check if sub-object has the correct material to do texture scrolling.
-				MaterialInfoClass *mat=subObj->Get_Material_Info();
+				auto mat = subObj->Get_Material_Info();
 				if (mat)
-				{	for (Int j=0; j<mat->Vertex_Material_Count(); j++)
+				{	for (Int j=0; j<static_cast<int>(mat->materials.size()); j++)
 					{
-						VertexMaterialClass *vmaterial=mat->Peek_Vertex_Material(j);
-						LinearOffsetTextureMapperClass *mapper=(LinearOffsetTextureMapperClass *)vmaterial->Peek_Mapper();
-						if (mapper && mapper->Mapper_ID() == TextureMapperClass::MAPPER_ID_LINEAR_OFFSET)
-						{	mapper->Set_UV_Offset_Delta(Vector2(0,0));	//disable automatic scrolling
+						Graphics::MeshMaterial *vmaterial=mat->materials[j].get();
+						auto* mapper=vmaterial->mappings[0].get();
+						if (mapper && mapper->Linear_Scroll())
+						{	mapper->Linear_Scroll()->rate_per_millisecond={};	//disable automatic scrolling
 							subObj->Add_Ref();	//increase reference since we're storing the pointer
 							m_treads[m_treadCount].m_robj=subObj;
 							m_treads[m_treadCount].m_type = TREAD_MIDDLE;	//default type
@@ -458,7 +458,7 @@ void W3DTankTruckDraw::updateTreadObjects()
 							m_treadCount++;
 						}
 					}
-					REF_PTR_RELEASE(mat);
+					mat.reset();
 				}
 			}
 			REF_PTR_RELEASE(subObj);

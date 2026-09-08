@@ -72,16 +72,31 @@ BOOST_AUTO_TEST_CASE(prepared_hierarchy_and_controlled_queries_retain_game_matri
 }
 
 BOOST_AUTO_TEST_CASE(game_matrix_queries_retain_bit_exact_affine_results) {
-    for(unsigned sample=0;sample<128;++sample) {
+    constexpr std::array<float,8> rounding_values{0.0f,std::bit_cast<float>(0x80000000u),
+        std::bit_cast<float>(1u),std::bit_cast<float>(0x80000001u),1.0e-20f,-1.0e-20f,.125f,-.23456f};
+    for(unsigned sample=0;sample<256;++sample) {
         Matrix3D left,right;
         for(unsigned row=0;row<3;++row)for(unsigned column=0;column<4;++column) {
             left[row][column]=float(int((sample*7+row*11+column*3)%37)-18)*.12345f;
             right[row][column]=float(int((sample*13+row*7+column*5)%41)-20)*.23456f;
+            if(sample>=128) {
+                left[row][column]=rounding_values[(sample*7+row*11+column*3)%rounding_values.size()];
+                right[row][column]=rounding_values[(sample*13+row*7+column*5)%rounding_values.size()];
+            }
         }
         Matrix3D expected;expected.mul(left,right);
         const auto actual=Multiply_Affine(Import_Affine_Transform(left),Import_Affine_Transform(right));
-        for(unsigned row=0;row<3;++row)for(unsigned column=0;column<4;++column)
+        auto assigned_left=Import_Affine_Transform(left);
+        assigned_left=Multiply_Affine(assigned_left,Import_Affine_Transform(right));
+        auto assigned_right=Import_Affine_Transform(right);
+        assigned_right=Multiply_Affine(Import_Affine_Transform(left),assigned_right);
+        for(unsigned row=0;row<3;++row)for(unsigned column=0;column<4;++column) {
             BOOST_TEST(std::bit_cast<std::uint32_t>(actual.matrix[row*4+column])==std::bit_cast<std::uint32_t>(expected[row][column]));
+            BOOST_TEST(std::bit_cast<std::uint32_t>(assigned_left.matrix[row*4+column])==std::bit_cast<std::uint32_t>(expected[row][column]));
+            BOOST_TEST(std::bit_cast<std::uint32_t>(assigned_right.matrix[row*4+column])==std::bit_cast<std::uint32_t>(expected[row][column]));
+        }
+        for(unsigned column=0;column<4;++column)
+            BOOST_TEST(std::bit_cast<std::uint32_t>(actual.matrix[12+column])==(column==3 ? 0x3f800000u : 0u));
         const std::array<float,4> q{float(sample)*.003f,-.123f,.321f,.876f};
         Matrix3D rotation;Build_Matrix3D(Quaternion(q[0],q[1],q[2],q[3]),rotation);
         const auto converted=Quaternion_Affine(q);

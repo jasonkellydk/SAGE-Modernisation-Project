@@ -541,7 +541,7 @@ export bool Build_Sphere_Draw_State(const Assets::SphereAssetDesc &asset,
 
 // Static scene ordering is used while the legacy renderer has sorting
 // disabled. Keep the authored categories at the graphics boundary so callers
-// do not need to reconstruct ShaderClass state just to enqueue a sphere.
+// do not need to reconstruct material state just to enqueue a sphere.
 export std::uint32_t Sphere_Ordered_Layer(
 	const Assets::SphereMaterialDesc &material) noexcept
 {

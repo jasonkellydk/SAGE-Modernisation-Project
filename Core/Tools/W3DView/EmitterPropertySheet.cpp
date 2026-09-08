@@ -30,6 +30,7 @@
  * Functions:                                                                                  *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
+import Graphics.Materials.State;
 #include "StdAfx.h"
 #include "W3DView.h"
 #include "EmitterPropertySheet.h"
@@ -353,7 +354,7 @@ EmitterPropertySheetClass::Create_Emitter ()
 	CString name			= m_GeneralPage.Get_Name ();
 	CString texture_name	= m_GeneralPage.Get_Texture_Filename ();
 	float lifetime			= m_GeneralPage.Get_Lifetime ();
-	ShaderClass shader	= m_GeneralPage.Get_Shader ();
+	Graphics::MaterialState shader	= m_GeneralPage.Get_Shader ();
 
 	//
 	//	Read the keyframe settings
@@ -480,7 +481,7 @@ EmitterPropertySheetClass::Create_New_Emitter ()
 													1.0F,
 													0.0F,
 													nullptr,
-													ShaderClass::_PresetAdditiveSpriteShader,
+													Graphics::MaterialState::AdditiveSprite(),
 													0);
 
 	//

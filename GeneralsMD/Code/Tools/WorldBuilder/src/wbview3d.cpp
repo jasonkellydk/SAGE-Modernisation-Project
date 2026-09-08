@@ -39,8 +39,6 @@ import Graphics.Frame.ToolFrame;
 #include "WW3D2/AggDef.h"
 #include "WW3D2/PartLdr.h"
 #include "WW3D2/HAnim.h"
-#include "WW3D2/VertexFormat.h"
-#include "WW3D2/VertMaterial.h"
 #include "WWMath/rect.h"
 #include "WW3D2/Mesh.h"
 #include "WW3D2/MeshMdl.h"
@@ -291,16 +289,10 @@ PlaceholderView bogusTacticalView;
 class SkeletonSceneClass : public RTS3DScene
 {
 public:
-	SkeletonSceneClass() : m_testPass(nullptr) { }
-	virtual ~SkeletonSceneClass() override { REF_PTR_RELEASE(m_testPass); }
-
-	void					Set_Material_Pass(MaterialPassClass * pass)	{ REF_PTR_SET(m_testPass, pass); }
 	virtual void Remove_Render_Object(RenderObjClass * obj) override;
 
 	Bool safeContains(RenderObjClass *obj);
 
-protected:
-	MaterialPassClass *m_testPass;
 };
 
 

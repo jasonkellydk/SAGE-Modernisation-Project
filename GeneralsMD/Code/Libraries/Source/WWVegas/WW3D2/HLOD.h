@@ -59,7 +59,6 @@ import Assets.Cache.Animations;
 #include "WWLib/Vector.h"
 #include "WW3D2/W3DFile.h"
 #include "WW3D2/W3DErr.h"
-#include "WW3D2/Proxy.h"
 
 
 class HModelClass;
@@ -111,12 +110,6 @@ public:
 
 	virtual bool					Is_NULL_Lod_Included () const;
 	virtual void					Include_NULL_Lod (bool include = true);
-
-	/////////////////////////////////////////////////////////////////////////////
-	// Proxy interface
-	/////////////////////////////////////////////////////////////////////////////
-	virtual int						Get_Proxy_Count () const;
-	virtual bool					Get_Proxy (int index, ProxyClass &proxy) const;
 
 	/////////////////////////////////////////////////////////////////////////////
 	// Render Object Interface - Rendering

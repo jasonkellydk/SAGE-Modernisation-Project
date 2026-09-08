@@ -1,3 +1,4 @@
+import Assets.Math;
 /*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -69,19 +70,18 @@ import Graphics.Backends.DX11.FrameRuntime;
 
 #include "W3DDevice/GameClient/W3DShroud.h"
 #include "WW3D2/Camera.h"
-#include "WW3D2/VertexFormat.h"
+import Graphics.Scene.Surfaces.Geometry;
 #include "WW3D2/WW3D.h"
 #include "WW3D2/Mesh.h"
 #include "WW3D2/MeshMdl.h"
 #include "WW3D2/Scene.h"
-#include "WW3D2/StringUtilities.h"
+import Assets.Identity;
 #include <string>
 
 
 //-----------------------------------------------------------------------------
 //         Private Data
 //-----------------------------------------------------------------------------
-#define NO_USE_BRIDGE_NORMALS
 
 //-----------------------------------------------------------------------------
 //         Private Classes
@@ -124,23 +124,14 @@ void W3DBridge::releaseGeometry()
     m_graphicsMesh = {};
 }
 
-bool W3DBridge::uploadGeometry(std::span<const VertexFormatXYZNDUV1> vertices,
+bool W3DBridge::uploadGeometry(std::span<const Graphics::SurfaceVertex> vertices,
     std::span<const UnsignedShort> indices)
 {
     if (m_firstVertex < 0 || m_numVertex < 0 || m_firstIndex < 0 || m_numPolygons < 0
         || static_cast<std::size_t>(m_firstVertex + m_numVertex) > vertices.size()
         || static_cast<std::size_t>(m_firstIndex + m_numPolygons * 3) > indices.size()) return false;
-    std::vector<Graphics::SurfaceVertex> output(m_numVertex);
+    const auto output = vertices.subspan(m_firstVertex,m_numVertex);
     std::vector<std::uint32_t> triangles(m_numPolygons * 3);
-    for (int index = 0; index < m_numVertex; ++index) {
-        const auto &source = vertices[m_firstVertex + index];
-        auto &vertex = output[index];
-        vertex.position = {source.x, source.y, source.z};
-        vertex.uv = {source.u1, source.v1};
-        vertex.color = {((source.diffuse >> 16) & 255) / 255.0f,
-            ((source.diffuse >> 8) & 255) / 255.0f, (source.diffuse & 255) / 255.0f,
-            ((source.diffuse >> 24) & 255) / 255.0f};
-    }
     for (std::size_t index = 0; index < triangles.size(); ++index)
         triangles[index] = indices[m_firstIndex + index] - m_firstVertex;
     auto &renderer = Graphics::Get_Surface_Renderer();
@@ -260,15 +251,15 @@ Bool W3DBridge::load(BodyDamageType curDamageState)
 	for (i=0; i<pObj->Get_Num_Sub_Objects(); i++) {
 		RenderObjClass *pSub = pObj->Get_Sub_Object(i);
 		Matrix3D mtx = pSub->Get_Transform();
-		if (0==WW3DString::Compare_No_Case_N(left.c_str(), pSub->Get_Name(), left.size())) {
+		if (Assets::Asset_Name_Prefix_Equals_No_Case(left.c_str(), pSub->Get_Name(), left.size())) {
 			m_leftMtx = mtx;
 			left = pSub->Get_Name();
 		}
-		if (0==WW3DString::Compare_No_Case_N(section.c_str(), pSub->Get_Name(), section.size())) {
+		if (Assets::Asset_Name_Prefix_Equals_No_Case(section.c_str(), pSub->Get_Name(), section.size())) {
 			m_sectionMtx = mtx;
 			section = pSub->Get_Name();
 		}
-		if (0==WW3DString::Compare_No_Case_N(right.c_str(), pSub->Get_Name(), right.size())) {
+		if (Assets::Asset_Name_Prefix_Equals_No_Case(right.c_str(), pSub->Get_Name(), right.size())) {
 			m_rightMtx = mtx;
 			right = pSub->Get_Name();
 		}
@@ -405,7 +396,7 @@ void W3DBridge::getBridgeInfo(BridgeInfo *pInfo)
 //=============================================================================
 /** Gets the vertex values for a section of a bridge.  */
 //=============================================================================
-Int W3DBridge::getModelVertices(VertexFormatXYZNDUV1 *destination_vb, Int curVertex, Real xOffset,
+Int W3DBridge::getModelVertices(Graphics::SurfaceVertex *destination_vb, Int curVertex, Real xOffset,
 																Vector3 &vec, Vector3 &vecNormal, Vector3 &vecZ, Vector3 &offset,
 																const Matrix3D &mtx,
 																MeshClass *pMesh, Graphics::SceneObjectList<RenderObjClass>::Cursor *pLightsIterator)
@@ -436,7 +427,7 @@ Int W3DBridge::getModelVertices(VertexFormatXYZNDUV1 *destination_vb, Int curVer
 	}
 
 	const Vector2*uvs=pMesh->Peek_Model()->Get_UV_Array_By_Index(0);
-	VertexFormatXYZNDUV1 *curVb = destination_vb+curVertex;
+	Graphics::SurfaceVertex *curVb = destination_vb+curVertex;
 
 	for (i=0; i<numVertex; i++) {
 		Vector3 vLoc;
@@ -448,33 +439,20 @@ Int W3DBridge::getModelVertices(VertexFormatXYZNDUV1 *destination_vb, Int curVer
 		vLoc.Y += m_start.Y;
 		vLoc.Z += m_start.Z;
 
-		curVb->x = vLoc.X;
-		curVb->y = vLoc.Y;
-		curVb->z = vLoc.Z;
+		curVb->position[0] = vLoc.X;
+		curVb->position[1] = vLoc.Y;
+		curVb->position[2] = vLoc.Z;
 
-		VERTEX_FORMAT vb;
-		vb.x = vLoc.X;
-		vb.y = vLoc.Y;
-		vb.z = vLoc.Z;
 
 		Vector3 normal;
 		Matrix3D::Rotate_Vector(mtx, pNormal[i], &normal);
-#ifdef USE_BRIDGE_NORMALS
-		curVb->nx = normal.X;
-		curVb->ny = normal.Y;
-		curVb->nz = normal.Z;
-		curVb->diffuse = 0xFF000000;
-#else
 		normal = (normal.X) * vec + normal.Y*vecNormal + normal.Z*vecZ;
 		normal.Normalize();
-		TheTerrainRenderObject->doTheLight(&vb, lightRay, &normal, nullptr, 1.0f);
-		curVb->nx = 0;	//will these to keep AGP write buffer happy.
-		curVb->ny = 0;
-		curVb->nz = 1;
-		curVb->diffuse = vb.diffuse | 0xFF000000;
-#endif
-		curVb->u1 = uvs[i].U;
-		curVb->v1 = uvs[i].V;
+		const auto diffuse = TheTerrainRenderObject->computeVertexLighting(vLoc, lightRay, &normal, nullptr, 1);
+		curVb->color = Assets::Color_From_ARGB(diffuse | 0xFF000000).To_Array();
+
+		curVb->uv[0] = uvs[i].U;
+		curVb->uv[1] = uvs[i].V;
 		curVb++;
 	}
 	return(numVertex);
@@ -485,7 +463,7 @@ Int W3DBridge::getModelVertices(VertexFormatXYZNDUV1 *destination_vb, Int curVer
 //=============================================================================
 /** Gets the vertex values for a section of a fixed bridge.  */
 //=============================================================================
-Int W3DBridge::getModelVerticesFixed(VertexFormatXYZNDUV1 *destination_vb, Int curVertex,
+Int W3DBridge::getModelVerticesFixed(Graphics::SurfaceVertex *destination_vb, Int curVertex,
 																const Matrix3D &mtx, MeshClass *pMesh, Graphics::SceneObjectList<RenderObjClass>::Cursor *pLightsIterator)
 {
 	if (pMesh == nullptr)
@@ -513,7 +491,7 @@ Int W3DBridge::getModelVerticesFixed(VertexFormatXYZNDUV1 *destination_vb, Int c
 //=============================================================================
 /** Gets the index values and vertex values for a bridge.  */
 //=============================================================================
-void W3DBridge::getIndicesNVertices(UnsignedShort *destination_ib, VertexFormatXYZNDUV1 *destination_vb,
+void W3DBridge::getIndicesNVertices(UnsignedShort *destination_ib, Graphics::SurfaceVertex *destination_vb,
 																		Int *curIndexP, Int *curVertexP, Graphics::SceneObjectList<RenderObjClass>::Cursor *pLightsIterator)
 {
 	Int numI;

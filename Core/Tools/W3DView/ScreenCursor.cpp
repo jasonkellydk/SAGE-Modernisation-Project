@@ -36,8 +36,7 @@ import Graphics.Frame.AttachmentBindings;
 #include "ScreenCursor.h"
 #include "Utils.h"
 #include "WW3D2/WW3D.h"
-#include "WW3D2/VertMaterial.h"
-#include "WW3D2/Shader.h"
+import Graphics.Materials.State;
 #include "WW3D2/Scene.h"
 #include "WW3D2/RInfo.h"
 #include "WW3D2/Texture.h"
@@ -95,11 +94,6 @@ void
 ScreenCursorClass::Initialize ()
 {
 	// Create default vertex material
-	m_pVertMaterial.Assign_No_Add_Ref (NEW_REF( VertexMaterialClass, ()));
-	m_pVertMaterial->Set_Diffuse (1.0F, 1.0F, 1.0F);
-	m_pVertMaterial->Set_Emissive (0.0F, 0.0F, 0.0F);
-	m_pVertMaterial->Set_Specular (1.0F, 1.0F, 1.0F);
-	m_pVertMaterial->Set_Ambient (1.0F, 1.0F, 1.0F);
 
 	m_Triangles[0].I = 0;
 	m_Triangles[0].J = 1;
@@ -238,22 +232,22 @@ ScreenCursorClass::On_Frame_Update ()
 void
 ScreenCursorClass::Render (RenderInfoClass &rinfo)
 {
-    std::array<VertexFormatXYZDUV1, 4> vertices{};
+    std::array<Graphics::SurfaceVertex, 4> vertices{};
     std::array<unsigned, 6> indices{};
     for (unsigned i = 0; i < vertices.size(); ++i) {
         auto& vertex = vertices[i];
-        vertex.x = m_Verticies[i].X;
-        vertex.y = m_Verticies[i].Y;
-        vertex.z = m_Verticies[i].Z;
-        vertex.diffuse = 0xffffffff;
-        vertex.u1 = m_UVs[i].X;
-        vertex.v1 = m_UVs[i].Y;
+        vertex.position[0] = m_Verticies[i].X;
+        vertex.position[1] = m_Verticies[i].Y;
+        vertex.position[2] = m_Verticies[i].Z;
+        vertex.color = {1,1,1,1};
+        vertex.uv[0] = m_UVs[i].X;
+        vertex.uv[1] = m_UVs[i].Y;
     }
     for (unsigned i = 0; i < 2; ++i)
         for (unsigned corner = 0; corner < 3; ++corner)
             indices[i * 3 + corner] = m_Triangles[i][corner];
     if (!Draw_Graphics_Prelit_Geometry(vertices, indices, Matrix4x4(true),
-        ShaderClass::_PresetATestBlend2DShader, m_pTexture.Peek()))
+        Graphics::MaterialState::ATestBlend2D(), m_pTexture.Peek()))
         DEBUG_LOG(("Viewer cursor graphics submission failed.\n"));
 
 }

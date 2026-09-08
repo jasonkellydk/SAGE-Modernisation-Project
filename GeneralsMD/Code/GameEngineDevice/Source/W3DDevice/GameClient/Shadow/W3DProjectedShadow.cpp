@@ -46,7 +46,6 @@ import Assets.Images.PixelEncoding;
 #include "WW3D2/AssetMgr.h"
 #include "WW3D2/TexProject.h"
 #include "WW3D2/GraphicsGeometry.h"
-#include "WW3D2/VertexFormat.h"
 #include "Lib/BaseType.h"
 #include "W3DDevice/GameClient/BaseHeightMap.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
@@ -60,10 +59,10 @@ import Assets.Images.PixelEncoding;
 #include "W3DDevice/GameClient/W3DShadow.h"
 #include "W3DDevice/GameClient/W3DGraphicsResources.h"
 #include "W3DDevice/GameClient/W3DObjectGraphics.h"
-#include "WW3D2/MatrixMapper.h"
 #include <vector>
 #include <cstring>
 import Graphics.Scene.Shadows.Projected;
+import Graphics.Materials.ProceduralPass;
 import Graphics.Backends.DX11.FrameRuntime;
 
 
@@ -322,12 +321,15 @@ Int W3DProjectedShadowManager::renderProjectedTerrainShadow(W3DProjectedShadow *
     std::vector<Graphics::PropVertex> vertices(width*(endY-startY+1));
     std::vector<std::uint32_t> indices;
     indices.reserve((endX-startX)*(endY-startY)*6);
-    auto* pass = shadow->getShadowProjector()->Peek_Material_Pass();
-    Vector3 emissive; pass->Peek_Material()->Get_Emissive(&emissive);
+    const auto& pass = shadow->getShadowProjector()->Peek_Material_Pass();
+    if (!pass) return 0;
+    TexProjectMaterialPass::Description description;
+    if (!pass->Describe(description) || description.material == nullptr) return 0;
+    const auto& emissive = description.material->parameters.emissive;
     for (int y=startY;y<=endY;++y) for (int x=startX;x<=endX;++x) {
         auto& vertex = vertices[(y-startY)*width+x-startX];
         vertex.position = {float(x)*MAP_XY_FACTOR,float(y)*MAP_XY_FACTOR,float(hmap->getHeight(x,y))*MAP_HEIGHT_SCALE};
-        vertex.color = {emissive.X,emissive.Y,emissive.Z,1};
+        vertex.color = {emissive[0],emissive[1],emissive[2],1};
         if (x==endX || y==endY) continue;
         const std::uint32_t i=(y-startY)*width+x-startX;
         UnsignedByte alpha[4]; float u[4],v[4]; Bool flip;
@@ -344,15 +346,15 @@ Int W3DProjectedShadowManager::renderProjectedTerrainShadow(W3DProjectedShadow *
     Matrix3D view; m_graphics->camera->Get_View_Matrix(&view);
     const Matrix4x4 view4(view);
     std::memcpy(parameters.view.data(),&view4,sizeof(view4));
-    parameters.primary_gradient = pass->Peek_Shader().Get_Primary_Gradient();
-    parameters.detail_color = pass->Peek_Shader().Get_Post_Detail_Color_Func();
-    parameters.detail_alpha = pass->Peek_Shader().Get_Post_Detail_Alpha_Func();
+    parameters.primary_gradient = description.shader.Get_Primary_Gradient();
+    parameters.detail_color = description.shader.Get_Post_Detail_Color_Func();
+    parameters.detail_alpha = description.shader.Get_Post_Detail_Alpha_Func();
     parameters.alpha_cutoff = 96.0f/255.0f;
     std::array<Graphics::RHITextureHandle,2> textures;
     for (unsigned stage=0;stage<2;++stage) {
-        textures[stage] = Resolve_Graphics_Texture(pass->Peek_Texture(stage));
+        textures[stage] = Resolve_Graphics_Texture(description.textures[stage]);
     }
-    Extract_Graphics_Texture_Mappers(parameters,pass->Peek_Material());
+    Extract_Graphics_Texture_Mappers(parameters,description.material);
     parameters.secondary_texture = textures[1].Is_Valid() ? 1.0f : 0.0f;
     const bool drawn = Graphics::Draw_Projected_Shadow(renderer,device->Immediate_Command_List(),mesh,parameters,textures);
     return drawn ? 1 : 0;

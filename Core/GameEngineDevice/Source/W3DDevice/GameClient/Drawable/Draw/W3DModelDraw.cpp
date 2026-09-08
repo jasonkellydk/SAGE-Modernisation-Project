@@ -37,6 +37,7 @@
 #include <SDL3/SDL.h>
 
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -76,10 +77,13 @@ import Graphics.Scene.Models.Hierarchy;
 #include "WW3D2/Mesh.h"
 #include "WW3D2/MeshMdl.h"
 import Graphics.Resources.Textures.Edit;
+import Assets.Identity;
 #include "WW3D2/Texture.h"
 #include "Common/BitFlagsIO.h"
-#include "WW3D2/StringUtilities.h"
 #include "WWMath/sphere.h"
+#ifdef RTS_ZEROHOUR
+#include "W3DDevice/GameClient/W3DObjectGraphics.h"
+#endif
 
 static const char *TerrainDecalTextureName[TERRAIN_DECAL_MAX]=
 {
@@ -1304,7 +1308,7 @@ static void parseShowHideSubObject(INI* ini, void *instance, void *store, const 
 		Bool found = false;
 		for (std::vector<ModelConditionInfo::HideShowSubObjInfo>::iterator it = vec->begin(); it != vec->end(); ++it)
 		{
-			if (WW3DString::Compare_No_Case(it->subObjName.str(), subObjName.str()) == 0)
+			if (Assets::Asset_Name_Equals_No_Case(it->subObjName.str(), subObjName.str()))
 			{
 				it->hide = (userData != nullptr);
 				found = true;
@@ -1331,7 +1335,7 @@ void W3DModelDraw::showSubObject( const AsciiString& name, Bool show )
 		Bool found = false;
 		for( std::vector<ModelConditionInfo::HideShowSubObjInfo>::iterator it = m_subObjectVec.begin(); it != m_subObjectVec.end(); ++it )
 		{
-			if( WW3DString::Compare_No_Case( it->subObjName.str(), name.str() ) == 0 )
+			if( Assets::Asset_Name_Equals_No_Case( it->subObjName.str(), name.str() ) )
 			{
 				it->hide = !show;
 				found = true;
@@ -2359,6 +2363,9 @@ void ModelConditionInfo::WeaponBarrelInfo::setMuzzleFlashHidden(RenderObjClass *
 		if (childObject)
 		{
 			childObject->Set_Hidden(hide);
+#ifdef RTS_ZEROHOUR
+			W3DObjectGraphics::Mark_Muzzle_Flash(*childObject);
+#endif
 			childObject->Release_Ref();
 		}
 		else

@@ -38,6 +38,16 @@ public:
         return m_source;
     }
 
+    // Populate an owned snapshot once, in source order. The callback writes
+    // both position and normal, including defaults for absent source channels.
+    template<class Populate>
+    std::span<PropSourceVertex> Prepare_Source(std::size_t count, Populate&& populate)
+    {
+        if (m_source.size() < count) m_source.resize(count);
+        for (std::size_t index=0;index<count;++index) populate(m_source[index],index);
+        return std::span(m_source).first(count);
+    }
+
     PropBatchBuilder& Batch() noexcept { return m_batch; }
 
     std::size_t Allocated_Bytes() const noexcept

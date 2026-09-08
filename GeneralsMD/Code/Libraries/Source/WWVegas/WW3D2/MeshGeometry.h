@@ -38,6 +38,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <span>
 #include <string>
@@ -46,6 +47,7 @@
 
 import Graphics.Scene.Models.Hierarchy;
 import Graphics.Scene.Models.BoundsTree;
+import Graphics.Scene.Models.SourceRevision;
 
 #include "WWLib/always.h"
 #include "WWLib/bittype.h"
@@ -143,7 +145,9 @@ public:
 	int							Get_Vertex_Count() const								{ return VertexCount; }
 
 	const TriIndex*			Get_Polygon_Array()										{ return get_polys(); }
-	Vector3 *					Get_Vertex_Array()										{ WWASSERT(Vertex); return Vertex->Get_Array(); }
+	Vector3 *					Get_Vertex_Array()										{ WWASSERT(Vertex); GeometryRevision.Expose_Writable(); return Vertex->Get_Array(); }
+    const Vector3* Peek_Vertex_Array() const { WWASSERT(Vertex); return Vertex->Get_Array(); }
+    std::uint64_t Geometry_Revision() const noexcept { return GeometryRevision.Token(); }
 	const Vector3 *			Get_Vertex_Normal_Array();
 	const Vector4 *			Get_Plane_Array(bool create = true);
 	void							Compute_Plane(int pidx,PlaneClass * set_plane) const;
@@ -237,6 +241,9 @@ protected:
 	uint32													W3dAttributes;
 
 	// Geometry
+    // Copies share all source arrays. Keep their mutation domain shared even
+    // when Make_Geometry_Unique detaches only vertices and normals.
+    Graphics::SourceRevision GeometryRevision;
 	int														PolyCount;
 	int														VertexCount;
 

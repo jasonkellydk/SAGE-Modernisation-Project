@@ -28,13 +28,15 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 import Assets.Images.PixelEncoding;
+import Graphics.Materials.State;
+import Graphics.Materials.ProceduralPass;
 #include "Lib/BaseType.h"
-#include "WW3D2/GraphicsMaterialPass.h"
 #include "GameClient/View.h"
 #include <SDL3/SDL.h>
 #include <cstdint>
 #include <span>
 #include "WW3D2/Camera.h"
+#include "WW3D2/Texture.h"
 #include "WWLib/simplevec.h"
 #include "WW3D2/WW3D.h"
 import Graphics.Resources.Textures.Edit;
@@ -692,17 +694,17 @@ void W3DShroud::setShroudFilter(Bool enable)
 }
 
 //-----------------------------------------------------------------------------
-///Set render states required to draw shroud pass.
-bool W3DShroudMaterialPassClass::Describe_Graphics_Pass(GraphicsMaterialPassDescription& description) const
+///Prepare the draw data required to render the shroud pass.
+bool Describe_W3D_Shroud_Material_Pass(const NativeMaterialPass&, NativeMaterialPass::Description& description)
 {
     auto* shroud=TheTerrainRenderObject ? TheTerrainRenderObject->getShroud() : nullptr;
     if (!shroud) return false;
-    description.shader=ShaderClass::_PresetMultiplicativeSpriteShader;
+    description.shader=Graphics::MaterialState::MultiplicativeSprite();
 #if defined(RTS_DEBUG)
-    if (TheGlobalData && TheGlobalData->m_fogOfWarOn) description.shader=ShaderClass::_PresetAlphaSpriteShader;
+    if (TheGlobalData && TheGlobalData->m_fogOfWarOn) description.shader=Graphics::MaterialState::AlphaSprite();
 #endif
-    description.shader.Set_Depth_Compare(ShaderClass::PASS_EQUAL);
-    description.shader.Set_Primary_Gradient(ShaderClass::GRADIENT_DISABLE);
+    description.shader.Set_Depth_Compare(Graphics::MaterialState::PASS_EQUAL);
+    description.shader.Set_Primary_Gradient(Graphics::MaterialState::GRADIENT_DISABLE);
     description.textures[0]=shroud->getShroudTexture();
     description.world_coordinates=true;
     const float width=shroud->getCellWidth();
@@ -710,17 +712,17 @@ bool W3DShroudMaterialPassClass::Describe_Graphics_Pass(GraphicsMaterialPassDesc
     const float xscale=1/(width*shroud->getTextureWidth());
     const float yscale=1/(height*shroud->getTextureHeight());
     const bool has_map=TheTerrainRenderObject->getMap()!=nullptr;
-    description.world_texture_transform[0][0]=xscale;
-    description.world_texture_transform[1][1]=yscale;
-    description.world_texture_transform[0][3]=has_map ? (-shroud->getDrawOriginX()+width)*xscale : 0;
-    description.world_texture_transform[1][3]=has_map ? (-shroud->getDrawOriginY()+height)*yscale : 0;
+    description.world_texture_transform[0]=xscale;
+    description.world_texture_transform[5]=yscale;
+    description.world_texture_transform[3]=has_map ? (-shroud->getDrawOriginX()+width)*xscale : 0;
+    description.world_texture_transform[7]=has_map ? (-shroud->getDrawOriginY()+height)*yscale : 0;
     return description.textures[0]!=nullptr;
 }
 
-bool W3DMaskMaterialPassClass::Describe_Graphics_Pass(GraphicsMaterialPassDescription& description) const
+bool Describe_W3D_Mask_Material_Pass(const NativeMaterialPass&, NativeMaterialPass::Description& description)
 {
-    description.shader=ShaderClass::_PresetOpaqueShader;
-    description.shader.Set_Primary_Gradient(ShaderClass::GRADIENT_DISABLE);
+    description.shader=Graphics::MaterialState::Opaque();
+    description.shader.Set_Primary_Gradient(Graphics::MaterialState::GRADIENT_DISABLE);
     description.textures[0]=ScreenCrossFadeFilter::getCurrentMaskTexture();
     description.color_write_mask=8;
     description.world_coordinates=true;
@@ -734,9 +736,23 @@ bool W3DMaskMaterialPassClass::Describe_Graphics_Pass(GraphicsMaterialPassDescri
     }
     const float extent=(1-ScreenCrossFadeFilter::getCurrentFadeValue())*25*128;
     const float scale=extent!=0 ? 1/extent : 0;
-    description.world_texture_transform[0][0]=scale;
-    description.world_texture_transform[1][1]=scale;
-    description.world_texture_transform[0][3]=extent!=0 ? 0.5f-center.x*scale : 0;
-    description.world_texture_transform[1][3]=extent!=0 ? 0.5f-center.y*scale : 0;
+    description.world_texture_transform[0]=scale;
+    description.world_texture_transform[5]=scale;
+    description.world_texture_transform[3]=extent!=0 ? 0.5f-center.x*scale : 0;
+    description.world_texture_transform[7]=extent!=0 ? 0.5f-center.y*scale : 0;
     return description.textures[0]!=nullptr;
+}
+
+std::shared_ptr<NativeMaterialPass> Create_W3D_Shroud_Material_Pass()
+{
+    auto pass=std::make_shared<NativeMaterialPass>();
+    pass->prepare=&Describe_W3D_Shroud_Material_Pass;
+    return pass;
+}
+
+std::shared_ptr<NativeMaterialPass> Create_W3D_Mask_Material_Pass()
+{
+    auto pass=std::make_shared<NativeMaterialPass>();
+    pass->prepare=&Describe_W3D_Mask_Material_Pass;
+    return pass;
 }

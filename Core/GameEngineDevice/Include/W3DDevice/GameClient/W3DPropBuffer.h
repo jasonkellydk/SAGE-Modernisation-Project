@@ -64,7 +64,6 @@
 class RenderInfoClass;
 class LightClass;
 class W3DPropDrawModuleData;
-class W3DShroudMaterialPassClass;
 class GeometryInfo;
 
 //-----------------------------------------------------------------------------

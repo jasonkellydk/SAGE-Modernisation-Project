@@ -58,8 +58,7 @@ import Graphics.Scene.Surfaces.Renderer;
 #include "WWLib/always.h"
 #include "WW3D2/RendObj.h"
 #include "WW3D2/W3DFile.h"
-#include "WW3D2/Shader.h"
-#include "WW3D2/VertMaterial.h"
+import Graphics.Materials.State;
 #include "Lib/BaseType.h"
 #include "Common/GameType.h"
 

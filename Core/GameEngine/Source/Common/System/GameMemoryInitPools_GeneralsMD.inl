@@ -568,7 +568,6 @@ static PoolSizeRec PoolSizes[] =
 	{ "WeatherSetting", 4, 4 },
 
 	// W3D pools!
-	{ "VertexMaterialClass", 6000, 2048 },
 	{ "TextureClass", 1200, 256 },
 	{ "CloudMapTerrainTextureClass", 4, 4 },
 	{ "ScorchTextureClass", 4, 4 },
@@ -599,8 +598,6 @@ static PoolSizeRec PoolSizes[] =
 	{ "RandomTextureMapperClass", 32, 32 },
 	{ "BumpEnvTextureMapperClass", 32, 32 },
 	{ "MeshLoadContextClass", 4, 4 },
-	{ "MaterialInfoClass", 8192, 32 },
-	{ "MeshMatDescClass", 8192, 32 },
 	{ "TextureLoadTaskClass", 256, 32 },
 	{ "SortingNodeStruct", 288, 32 },
 	{ "FontCharsClassCharDataStruct", 1024, 32 },

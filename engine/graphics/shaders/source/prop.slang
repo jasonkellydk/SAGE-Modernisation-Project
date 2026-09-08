@@ -44,6 +44,7 @@ cbuffer PropConstants : register(b0)
     uint SurfaceTeamChannel;
     float SurfaceTeamMultiplier;
     float4 SurfaceTeamColor;
+    float4 MuzzleFlashState;
 };
 Texture2D BaseTexture : register(t0);
 Texture2D DetailTexture : register(t1);
@@ -85,6 +86,25 @@ struct PropOutput
     float distance : TEXCOORD3;
     float4 tangent : TEXCOORD9;
 };
+
+float2 Rotate_Muzzle_Flash_UV(float2 uv, float2 pivot, float angle)
+{
+    float sine, cosine;
+    sincos(angle, sine, cosine);
+    const float2 centered = uv - pivot;
+    // Match the row-vector rotation used by the RA3 source shader.
+    return float2(centered.x * cosine + centered.y * sine,
+        -centered.x * sine + centered.y * cosine) + pivot;
+}
+
+void Prepare_Muzzle_Flash_UV(float2 source_uv,
+    out float2 primary_uv, out float2 secondary_uv)
+{
+    const float2 pivot = MuzzleFlashState.zw;
+    primary_uv = Rotate_Muzzle_Flash_UV(source_uv, pivot, MuzzleFlashState.y);
+    // The second sample counter-rotates around the same authored pivot.
+    secondary_uv = Rotate_Muzzle_Flash_UV(source_uv, pivot, -MuzzleFlashState.y);
+}
 [shader("vertex")] PropOutput prop_vertex(PropInput input)
 {
     PropOutput output;
@@ -111,12 +131,16 @@ struct PropOutput
     output.material_diffuse = input.material_diffuse;
     output.material_emissive = input.material_emissive;
     output.material_specular = input.material_specular;
-    output.uv = input.uv;
+    if (MuzzleFlashState.x > 0.5)
+        Prepare_Muzzle_Flash_UV(input.uv, output.uv, output.secondary_uv);
+    else {
+        output.uv = input.uv;
+        output.secondary_uv = input.secondary_uv;
+    }
     if ((SurfaceMaps & 128u) != 0) {
         output.uv.x += input.color.a;
         output.color.a = 1.0;
     }
-    output.secondary_uv = input.secondary_uv;
     output.shroud_uv = world_position.xy*ShroudProjection.xy+ShroudProjection.zw;
     output.distance = length(CameraPosition.xyz-world_position);
     return output;
@@ -139,6 +163,22 @@ float2 Prop_Coordinate(uint stage,PropOutput input)
 {
     ClipEnvironment(input.world_position);
     if (ShroudOnly > 0.5) return float4(ShroudTexture.Sample(ShroudSampler,input.shroud_uv).rgb,1);
+    if (MuzzleFlashState.x > 0.5 && Textured > 0.5 && SecondaryTexture > 0.5) {
+        float4 color = BaseTexture.Sample(BaseSampler,Prop_Coordinate(0,input));
+        color *= DetailTexture.Sample(DetailSampler,Prop_Coordinate(1,input));
+        const float vertex_alpha = input.color.a;
+        const float material_alpha = input.material_diffuse.a;
+        const float3 authored_rgb = input.color.rgb*input.material_diffuse.rgb
+            + input.material_emissive.rgb;
+        color.rgb *= authored_rgb*Opacity;
+        color.a *= vertex_alpha*material_alpha*Opacity;
+        if (Shroud > 0.5) color.rgb *= ShroudTexture.Sample(ShroudSampler,input.shroud_uv).rgb;
+        if (FogState.z > 0.5) {
+            const float fog = saturate((abs(input.camera_position.z)-FogState.x)/max(FogState.y-FogState.x,0.0001));
+            color.rgb = lerp(color.rgb,FogColor.rgb,fog);
+        }
+        return saturate(color);
+    }
     if (SurfaceModel > .5) {
         float4 surface=Shade_Prop_Surface(input);
         surface.a*=Opacity;

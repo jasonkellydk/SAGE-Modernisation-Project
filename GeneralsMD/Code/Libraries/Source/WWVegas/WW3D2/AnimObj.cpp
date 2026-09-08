@@ -1,3 +1,4 @@
+#include "../../../../../../engine/graphics/profiling/Tracy.h"
 /*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -927,6 +928,7 @@ void Animatable3DObjClass::Set_Animation_Frame_Rate_Multiplier(float multiplier)
 void Animatable3DObjClass::Anim_Update(const Matrix3D & root,Assets::AnimationAssetHandle motion,float frame)
 {
     if (!motion || !Hierarchy) return;
+    GRAPHICS_PROFILE_SCOPE("Graphics.Models.SampleHierarchy");
 #if !WW3D_ENABLE_RAW_ANIM_INTERPOLATION
     if (Assets::Get_Animation_Cache().Resolve(motion)->sampling == Assets::AnimationSampling::Consecutive) {
         if (WW3D::Get_Sync_Frame_Time() == 0 && (int)Assets::Get_Animation_Cache().Resolve(motion)->frame_rate == WWSyncPerSecond) {
@@ -972,6 +974,7 @@ void Animatable3DObjClass::Blend_Update(const Matrix3D & root,Assets::AnimationA
     Assets::AnimationAssetHandle motion1,float frame1,float percentage)
 {
     if (!Hierarchy) return;
+    GRAPHICS_PROFILE_SCOPE("Graphics.Models.BlendHierarchy");
     const int count = std::min(static_cast<int>(Assets::Get_Animation_Cache().Resolve(motion0)->bone_count),static_cast<int>(Assets::Get_Animation_Cache().Resolve(motion1)->bone_count));
     Hierarchy->Evaluate(Graphics::Import_Affine_Transform(root),[&](int bone) {
         Graphics::BoneMotion sample;
@@ -994,6 +997,7 @@ void Animatable3DObjClass::Blend_Update(const Matrix3D & root,Assets::AnimationA
 
 bool Animatable3DObjClass::Simple_Evaluate_Bone(int boneindex,float frame,Matrix3D * tm) const
 {
+    GRAPHICS_PROFILE_SCOPE("Graphics.Models.EvaluateBone");
     if (!tm) return false;
     if (!Hierarchy || (CurMotionMode != SINGLE_ANIM && CurMotionMode != NONE && CurMotionMode != BASE_POSE)) {
         *tm = Transform;

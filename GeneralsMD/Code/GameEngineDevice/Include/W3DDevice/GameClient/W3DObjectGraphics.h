@@ -17,6 +17,7 @@ public:
     ~W3DObjectGraphics();
     W3DObjectGraphics(const W3DObjectGraphics&) = delete;
     W3DObjectGraphics& operator=(const W3DObjectGraphics&) = delete;
+    static void Mark_Muzzle_Flash(RenderObjClass& object);
     void Invalidate();
     bool Render(RenderObjClass& object, RenderInfoClass& info,
         const Graphics::PropLighting& lighting, W3DShroud* shroud, bool background = false);

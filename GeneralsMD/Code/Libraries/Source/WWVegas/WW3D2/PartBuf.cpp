@@ -1,3 +1,5 @@
+import Graphics.Materials.State;
+import Graphics.Materials.Ordering;
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -68,14 +70,14 @@ import Graphics.Scene.Views.CameraMatrices;
 
 struct ParticleSpriteState {
     RefCountPtr<TextureClass> texture;
-    ShaderClass shader;
+    Graphics::MaterialState shader;
     unsigned frame_mode = 0;
     Graphics::SpriteGeometry geometry;
 };
 
 struct ParticleLineState {
     RefCountPtr<TextureClass> texture;
-    ShaderClass shader;
+    Graphics::MaterialState shader;
     Graphics::LineGroupGeometry geometry;
 };
 
@@ -124,7 +126,7 @@ ParticleBufferClass::ParticleBufferClass
 	float max_age,
 	float future_start,
 	TextureClass *tex,
-	ShaderClass shader,
+	Graphics::MaterialState shader,
 	bool pingpong,
 	int render_mode,
 	int frame_mode,
@@ -251,7 +253,7 @@ ParticleBufferClass::ParticleBufferClass
 	Accel = accel;
 	HasAccel = (accel.X != 0.0f) || (accel.Y != 0.0f) || (accel.Z != 0.0f);
 
-	shader.Enable_Fog ("ParticleBufferClass");
+	shader.Enable_Fog_For_Blend();
 	switch (RenderMode)
 	{
 	case W3D_EMITTER_RENDER_MODE_TRI_PARTICLES:
@@ -809,7 +811,7 @@ void ParticleBufferClass::Render(RenderInfoClass & rinfo)
 	unsigned int sort_level = SORT_LEVEL_NONE;
 
 	if (!WW3D::Is_Sorting_Enabled())
-		sort_level=Get_Shader().Guess_Sort_Level();
+		sort_level=Graphics::Material_Ordered_Layer(Get_Shader());
 
 	if (Graphics::Get_Scene_Draw_Queue().Is_Enabled() && sort_level!=SORT_LEVEL_NONE) {
 
@@ -960,10 +962,10 @@ void ParticleBufferClass::Render_Particles(RenderInfoClass & rinfo)
     const bool white = default_color.X > .9961f && default_color.Y > .9961f
         && default_color.Z > .9961f && default_color.W > .9961f;
     shader.Set_Primary_Gradient(Diffuse || !white || !texture
-        ? ShaderClass::GRADIENT_MODULATE : ShaderClass::GRADIENT_DISABLE);
-    shader.Set_Texturing(texture ? ShaderClass::TEXTURING_ENABLE : ShaderClass::TEXTURING_DISABLE);
-    const bool sorted = shader.Get_Dst_Blend_Func() != ShaderClass::DSTBLEND_ZERO
-        && shader.Get_Alpha_Test() == ShaderClass::ALPHATEST_DISABLE && WW3D::Is_Sorting_Enabled();
+        ? Graphics::MaterialState::GRADIENT_MODULATE : Graphics::MaterialState::GRADIENT_DISABLE);
+    shader.Set_Texturing(texture ? Graphics::MaterialState::TEXTURING_ENABLE : Graphics::MaterialState::TEXTURING_DISABLE);
+    const bool sorted = shader.Get_Dst_Blend_Func() != Graphics::MaterialState::DSTBLEND_ZERO
+        && shader.Get_Alpha_Test() == Graphics::MaterialState::ALPHATEST_DISABLE && WW3D::Is_Sorting_Enabled();
     Matrix4x4 projection;
     rinfo.Camera.Get_Backend_Projection_Matrix(&projection);
     const Matrix4x4 view_space(true);
@@ -1169,11 +1171,11 @@ void ParticleBufferClass::Render_Line_Group(RenderInfoClass & rinfo)
     auto* texture=LineGroup->texture.Peek();
     const bool white=default_color.X>.9961f && default_color.Y>.9961f
         && default_color.Z>.9961f && default_color.W>.9961f;
-    shader.Set_Cull_Mode(ShaderClass::CULL_MODE_ENABLE);
-    shader.Set_Primary_Gradient(Diffuse||!white||!texture?ShaderClass::GRADIENT_MODULATE:ShaderClass::GRADIENT_DISABLE);
-    shader.Set_Texturing(texture?ShaderClass::TEXTURING_ENABLE:ShaderClass::TEXTURING_DISABLE);
-    const bool sorted=shader.Get_Dst_Blend_Func()!=ShaderClass::DSTBLEND_ZERO
-        && shader.Get_Alpha_Test()==ShaderClass::ALPHATEST_DISABLE && WW3D::Is_Sorting_Enabled();
+    shader.Set_Cull_Mode(Graphics::MaterialState::CULL_MODE_ENABLE);
+    shader.Set_Primary_Gradient(Diffuse||!white||!texture?Graphics::MaterialState::GRADIENT_MODULATE:Graphics::MaterialState::GRADIENT_DISABLE);
+    shader.Set_Texturing(texture?Graphics::MaterialState::TEXTURING_ENABLE:Graphics::MaterialState::TEXTURING_DISABLE);
+    const bool sorted=shader.Get_Dst_Blend_Func()!=Graphics::MaterialState::DSTBLEND_ZERO
+        && shader.Get_Alpha_Test()==Graphics::MaterialState::ALPHATEST_DISABLE && WW3D::Is_Sorting_Enabled();
     Matrix4x4 projection,view;
     rinfo.Camera.Get_Backend_Projection_Matrix(&projection);
     std::copy_n(Graphics::Get_Camera_Matrices().view.values.data(),16,&view[0][0]);
@@ -3412,7 +3414,7 @@ ParticleBufferClass::TailDiffuseTypeEnum ParticleBufferClass::Determine_Tail_Dif
 		return SAME_AS_HEAD;
 	}
 
-	ShaderClass shader=Get_Shader();
+	Graphics::MaterialState shader=Get_Shader();
 
 
 	//Multiplicative		RGB is white (A is don't care)
@@ -3424,15 +3426,15 @@ ParticleBufferClass::TailDiffuseTypeEnum ParticleBufferClass::Determine_Tail_Dif
 	//Opaque					Same ARGB as head
 
 	// Multiplicative
-	if (shader.Get_Dst_Blend_Func()==ShaderClass::DSTBLEND_SRC_COLOR) return WHITE;
+	if (shader.Get_Dst_Blend_Func()==Graphics::MaterialState::DSTBLEND_SRC_COLOR) return WHITE;
 	// Additive
-	else if ((shader.Get_Src_Blend_Func()==ShaderClass::SRCBLEND_ONE) && (shader.Get_Dst_Blend_Func()==ShaderClass::DSTBLEND_ONE)) return BLACK;
+	else if ((shader.Get_Src_Blend_Func()==Graphics::MaterialState::SRCBLEND_ONE) && (shader.Get_Dst_Blend_Func()==Graphics::MaterialState::DSTBLEND_ONE)) return BLACK;
 	// Screen
-	else if ((shader.Get_Src_Blend_Func()==ShaderClass::SRCBLEND_ONE) && (shader.Get_Dst_Blend_Func()==ShaderClass::DSTBLEND_ONE_MINUS_SRC_COLOR)) return BLACK;
+	else if ((shader.Get_Src_Blend_Func()==Graphics::MaterialState::SRCBLEND_ONE) && (shader.Get_Dst_Blend_Func()==Graphics::MaterialState::DSTBLEND_ONE_MINUS_SRC_COLOR)) return BLACK;
 	// Alpha
-	else if ((shader.Get_Src_Blend_Func()==ShaderClass::SRCBLEND_SRC_ALPHA) && (shader.Get_Dst_Blend_Func()==ShaderClass::DSTBLEND_ONE_MINUS_SRC_ALPHA)) return SAME_AS_HEAD_ALPHA_ZERO;
+	else if ((shader.Get_Src_Blend_Func()==Graphics::MaterialState::SRCBLEND_SRC_ALPHA) && (shader.Get_Dst_Blend_Func()==Graphics::MaterialState::DSTBLEND_ONE_MINUS_SRC_ALPHA)) return SAME_AS_HEAD_ALPHA_ZERO;
 	// Alpha test
-	else if (shader.Get_Alpha_Test()==ShaderClass::ALPHATEST_ENABLE) return SAME_AS_HEAD_ALPHA_ZERO;
+	else if (shader.Get_Alpha_Test()==Graphics::MaterialState::ALPHATEST_ENABLE) return SAME_AS_HEAD_ALPHA_ZERO;
 
 	return SAME_AS_HEAD;
 }
@@ -3452,12 +3454,12 @@ void ParticleBufferClass::Set_Texture (TextureClass *tex)
 	else if (LineRenderer) LineRenderer->Set_Texture(tex);
 }
 
-ShaderClass ParticleBufferClass::Get_Shader () const
+Graphics::MaterialState ParticleBufferClass::Get_Shader () const
 {
 	if (Sprite) return Sprite->shader;
 	else if (LineGroup) return LineGroup->shader;
 	else if (LineRenderer) return LineRenderer->Get_Shader();
 
 	WWASSERT(0);
-	return ShaderClass::_PresetOpaqueShader;
+	return Graphics::MaterialState::Opaque();
 }

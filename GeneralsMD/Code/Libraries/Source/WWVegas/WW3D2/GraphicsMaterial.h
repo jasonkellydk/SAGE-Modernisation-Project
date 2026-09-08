@@ -6,10 +6,11 @@
 #include <unordered_map>
 #include <vector>
 #include <array>
-#include "WW3D2/Shader.h"
+import Graphics.Materials.State;
 #include "WWMath/matrix4.h"
 import Graphics.Scene.Props.Renderer;
 import Graphics.Scene.Props.Material;
+import Graphics.Scene.MuzzleFlash;
 class TextureClass;
 
 struct GraphicsMaterialDrawOverrides
@@ -20,6 +21,7 @@ struct GraphicsMaterialDrawOverrides
     bool force_multiply=false;
     bool shadow_capture=false;
     bool decal_pass=false;
+    Graphics::MuzzleFlashDesignation muzzle_flash=Graphics::MuzzleFlashDesignation::None;
     Graphics::PropMeshHandle mesh{};
 };
 
@@ -28,12 +30,12 @@ struct GraphicsMaterialDrawOverrides
 // upload and submission, including resources retained for transparent sorting.
 bool Draw_Graphics_Material_Geometry(std::span<const Graphics::PropVertex> vertices,
     std::span<const unsigned> indices, const Matrix4x4& transform,
-    ShaderClass shader, std::array<TextureClass*,2> textures,
+    Graphics::MaterialState shader, std::array<TextureClass*,2> textures,
     Graphics::PropParameters parameters, const Matrix4x4* sorting_view = nullptr,
     GraphicsMaterialDrawOverrides overrides = {});
 
-class VertexMaterialClass;
+import Graphics.Materials.MeshMaterial;
 void Extract_Graphics_Texture_Mappers(Graphics::PropParameters& parameters,
-    VertexMaterialClass* material);
+    const Graphics::MeshMaterial* material);
 
 import Graphics.Scene.Props.LightingParameters;

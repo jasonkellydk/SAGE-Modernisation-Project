@@ -61,6 +61,9 @@ import Graphics.Scene.Debug.CollisionBox;
 import Graphics.Backends.DX11.FrameRuntime;
 import Graphics.Renderer2D;
 import Graphics.Frame.SceneRenderers;
+import Graphics.Passes.Bloom;
+import Graphics.Passes.LightRays;
+import Graphics.Passes.SSAO;
 import Engine.UI.WND;
 import Graphics.Scene.Beams;
 import Graphics.Scene.Lighting.Renderer;
@@ -139,7 +142,6 @@ import Assets.Images.PixelEncoding;
 import Graphics.RHI;
 #include "WW3D2/Mesh.h"
 #include "WW3D2/HLOD.h"
-#include "WW3D2/MeshMatDesc.h"
 #include "WW3D2/MeshMdl.h"
 
 extern "C" bool Graphics_DX11_Begin_Frame() noexcept;
@@ -175,6 +177,8 @@ static bool graphicsRendererAvailable = false;
 static bool uiFrameActive = false;
 static Graphics::BeamView graphicsBeamView;
 static Graphics::View graphicsParticleView;
+static Graphics::LightRaysInput graphicsLightRaysInput;
+static Graphics::SSAOInput graphicsSSAOInput;
 #ifdef SAMPLE_DYNAMIC_LIGHT
 static W3DDynamicLight * theDynamicLight = nullptr;
 static Real theLightXOffset = 0.1f;
@@ -214,11 +218,21 @@ static void Set_UI_Clip(Bool enabled, const IRegion2D &region) noexcept
 static bool initializeGraphicsSceneRenderers(Graphics::Device &device)
 {
     return Graphics::Initialize_Scene_Renderers(device, std::filesystem::path("GraphicsShaders"))
+        && Graphics::Get_Bloom_Renderer().Initialize(device, std::filesystem::path("GraphicsShaders"))
+        && Graphics::Get_Light_Rays_Renderer().Initialize(device, std::filesystem::path("GraphicsShaders"))
+        && Graphics::Get_SSAO_Renderer().Initialize(device, std::filesystem::path("GraphicsShaders"))
         && Initialize_Video_Presentation(device, std::filesystem::path("GraphicsShaders"));
 }
 
 static bool executeGraphicsFramePasses(Graphics::Device &device, Graphics::CommandList &commands, const Graphics::FrameTargets &targets) noexcept
 {
+    const auto detail = TheGameLODManager != nullptr
+        ? TheGameLODManager->getStaticLODLevel() : STATIC_GAME_LOD_UNKNOWN;
+    if (!Graphics::Get_SSAO_Renderer().Render(commands, targets,
+        Graphics::RHITextureFormat::BGRA8_UNorm, Graphics::RHITextureFormat::D24_UNorm_S8, graphicsSSAOInput,
+        TheTerrainRenderObject != nullptr && (detail == STATIC_GAME_LOD_HIGH || detail == STATIC_GAME_LOD_VERY_HIGH)))
+        return false;
+
 	if (!Graphics::GetLightRenderer().Sync())
 		return false;
 
@@ -241,6 +255,24 @@ static bool executeGraphicsFramePasses(Graphics::Device &device, Graphics::Comma
 
 
 
+	if (!Graphics::Get_Bloom_Renderer().Render(commands, targets, Graphics::RHITextureFormat::BGRA8_UNorm,
+		detail == STATIC_GAME_LOD_HIGH || detail == STATIC_GAME_LOD_VERY_HIGH))
+		return false;
+	// Composite after bloom to keep added ray light inside the shroud mask.
+	if (TheTerrainRenderObject != nullptr
+		&& (detail == STATIC_GAME_LOD_HIGH || detail == STATIC_GAME_LOD_VERY_HIGH)) {
+		Graphics::SurfaceParameters surface;
+		auto rays = graphicsLightRaysInput;
+		const auto& sunlight = TheGlobalData->m_terrainDiffuse[0];
+		rays.brightness[0] *= std::clamp(sunlight.red, 0.0f, 1.0f);
+		rays.brightness[1] *= std::clamp(sunlight.green, 0.0f, 1.0f);
+		rays.brightness[2] *= std::clamp(sunlight.blue, 0.0f, 1.0f);
+		rays.shroud_texture = Set_Surface_Shroud(surface, TheTerrainRenderObject->getShroud());
+		rays.shroud_projection = surface.shroud_projection;
+		if (!Graphics::Get_Light_Rays_Renderer().Render(commands, targets,
+			Graphics::RHITextureFormat::BGRA8_UNorm, Graphics::RHITextureFormat::D24_UNorm_S8, rays, true))
+			return false;
+	}
 	if (!Render_Videos(commands, targets))
 		return false;
 
@@ -325,10 +357,16 @@ static void updateGraphicsView(CameraClass *camera)
 	camera->Get_Backend_Projection_Matrix(&projection);
 	const Matrix4x4 view(camera_view);
 	const Matrix4x4 viewProjection = projection * view;
+	const Matrix4x4 inverseViewProjection = viewProjection.Inverse();
+    const Matrix4x4 inverseProjection = projection.Inverse();
 	float viewProjectionElements[16] = {};
 	for (int row = 0; row < 4; ++row) {
-		for (int column = 0; column < 4; ++column)
+		for (int column = 0; column < 4; ++column) {
 			viewProjectionElements[row * 4 + column] = viewProjection[row][column];
+			graphicsLightRaysInput.inverse_view_projection[row * 4 + column] = inverseViewProjection[row][column];
+            graphicsSSAOInput.projection[row * 4 + column] = projection[row][column];
+            graphicsSSAOInput.inverse_projection[row * 4 + column] = inverseProjection[row][column];
+		}
 	}
 
 	const Vector3 right = camera->Get_Right_Dir();
@@ -1873,7 +1911,7 @@ void W3DDisplay::step()
 //DECLARE_PERF_TIMER(W3DDisplay_draw)
 void W3DDisplay::draw()
 {
-    PROFILER_SECTION_NAME("Graphics.Display.Draw");
+    GENERALS_GRAPHICS_PROFILE_SCOPE("Graphics.Display.Draw");
     PROFILER_PLOT("Graphics.LogicRate", static_cast<int64_t>(TheFramePacer->getActualLogicTimeScaleFps()));
     PROFILER_PLOT("Graphics.RenderLimit", static_cast<int64_t>(TheFramePacer->getActualFramesPerSecondLimit()));
     PROFILER_PLOT("Graphics.LogicFrame", static_cast<int64_t>(TheGameLogic->getFrame()));
@@ -2676,9 +2714,8 @@ void dumpMeshAssets(MeshClass *mesh)
 	if (mesh)
 	{
 		TextureClass *texture;
-		//MaterialInfoClass	*material = mesh->Get_Material_Info();
 		MeshModelClass *model=mesh->Get_Model();
-		for (int stage=0;stage<MeshMatDescClass::MAX_TEX_STAGES;++stage)
+		for (int stage=0;stage<MeshModelClass::MaterialDescription::MAX_TEX_STAGES;++stage)
 		{
 			for (int pass=0;pass<model->Get_Pass_Count();++pass)
 			{

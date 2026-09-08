@@ -9,7 +9,6 @@
 #include "W3DDevice/GameClient/W3DObjectGraphics.h"
 
 #include "W3DDevice/GameClient/W3DAssetManager.h"
-#include "WW3D2/MatInfo.h"
 #include "WW3D2/Mesh.h"
 #include "WW3D2/RInfo.h"
 #include "WW3D2/RendObj.h"
@@ -51,18 +50,18 @@ bool WaterSkyboxSystem::Initialize(float scale)
 	}
 
 	MeshClass *mesh = static_cast<MeshClass *>(m_state->skybox);
-	MaterialInfoClass *material = mesh->Get_Material_Info();
+	auto material = mesh->Get_Material_Info();
 	if (material == nullptr)
 		return true;
 
-	for (Int i = 0; i < material->Texture_Count(); ++i)
+	for (Int i = 0; i < static_cast<int>(material->textures.size()); ++i)
 	{
-		if (material->Peek_Texture(i) != nullptr)
+		if (material->textures[i].Peek() != nullptr)
 		{
-			material->Peek_Texture(i)->Get_Sampling().address.fill(Graphics::RHISamplerAddress::Clamp);
+			material->textures[i].Peek()->Get_Sampling().address.fill(Graphics::RHISamplerAddress::Clamp);
 		}
 	}
-	REF_PTR_RELEASE(material);
+	material.reset();
 	return true;
 }
 

@@ -26,7 +26,7 @@
 
 #include <memory>
 
-#include "WW3D2/MatPass.h"
+#include "WW3D2/RInfo.h"
 import Graphics.Resources.Textures.Sampling;
 import Graphics.Resources.Textures.Edit;
 import Assets.Images.Buffer;
@@ -40,35 +40,8 @@ typedef UnsignedByte W3DShroudLevel;
 //const W3DShroudLevel	FOG_SHROUD_LEVEL=127;
 //const W3DShroudLevel	NO_SHROUD_LEVEL=255;
 
-/** Custom W3D material pass which has been modified to apply
-	a shroud texture projection.
-*/
-class W3DShroudMaterialPassClass : public MaterialPassClass
-{
-public:
-	W3DShroudMaterialPassClass() : m_isTransparentObjectPass(FALSE) {}
-    bool Describe_Graphics_Pass(GraphicsMaterialPassDescription& description) const override;
-	void enableTransparentObjectPass(Bool enable) {m_isTransparentObjectPass = enable;}
-protected:
-	//customized version to deal with transparent (alpha-tested) polys.
-	Bool m_isTransparentObjectPass;
-};
-
-/** Custom W3D material pass which has been modified to apply
-	a texture projection.  Similar to the above code except
-	that it's more generic so could be used for non-shroud
-	projection of various masks.
-*/
-class W3DMaskMaterialPassClass : public MaterialPassClass
-{
-public:
-	W3DMaskMaterialPassClass() : m_texture(nullptr) {}
-    bool Describe_Graphics_Pass(GraphicsMaterialPassDescription& description) const override;
-	void	setTexture(TextureClass *texture)	{m_texture=texture;}
-
-protected:
-	TextureClass *m_texture;	///<texture to be projected.
-};
+std::shared_ptr<NativeMaterialPass> Create_W3D_Shroud_Material_Pass();
+std::shared_ptr<NativeMaterialPass> Create_W3D_Mask_Material_Pass();
 
 /** Terrain shroud rendering class */
 class W3DShroud

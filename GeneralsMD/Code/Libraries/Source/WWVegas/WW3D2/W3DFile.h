@@ -172,9 +172,8 @@ June 22, 1998
 
 October 19, 1998
 
-	Created the W3DObsolete.h header file and moved everything that I could into
-	it.  This header was getting so messy that even I couldn't understand it so
-	hopefully this helps a little...
+	Retired chunk definitions were removed from this runtime header as the
+	format readers moved to typed asset adapters.
 
 	Updating the mesh format as part of the conversion to Surrender1.40.  Some
 	of the new features in this mesh format are:
@@ -336,8 +335,8 @@ April 21, 2025
 	W3d to prevent naming conflicts with in-game structures which
 	may be slightly different than the on-disk structures.
 
-	Oct 19,1998: Moved obsolete chunk id's to W3DObsolete.h, added many
-	new chunk types.
+	Oct 19,1998: Retired chunk ids were separated from the active format
+	definitions and are now handled by typed asset adapters where required.
 
 ********************************************************************************/
 
@@ -528,7 +527,6 @@ enum {
 			W3D_CHUNK_SHDSUBMESH_VERTEX_COLOR,							// per-vertex color
 			W3D_CHUNK_SHDSUBMESH_VERTEX_INFLUENCES,					// byte-per-vertex, WWSkin support
 };
-
 
 
 struct W3dChunkHeader
@@ -1222,7 +1220,7 @@ const char * const SURFACE_TYPE_STRINGS[SURFACE_TYPE_MAX] =
 
 #define W3D_FACE_CHANNEL_FACE				0x00000001	// basic face info, W3dTriStruct...
 
-// boundary values for W3dMeshHeaderStruct::SortLevel
+// Boundary values for legacy mesh sort levels.
 #define SORT_LEVEL_NONE						0
 #define MAX_SORT_LEVEL						32
 #define SORT_LEVEL_BIN1						20
@@ -1595,7 +1593,7 @@ struct W3dMorphAnimKeyStruct
 	in the tree.  Or there may be no objects attached to a particular bone.
 
 	(gth) 09/22/2000 - Simplified the HModel file format.  The W3DHModelAuxDataStruct
-	was un-needed and moved to W3DObsolete.h.  The safe way to parse previous
+	was un-needed and removed from the runtime format header.  The safe way to parse previous
 	and current HModel formats is this:
 	- Read in the header from W3D_CHUNK_HMODEL_HEADER
 	- Allocate space for 'NumConnections' nodes that will follow
@@ -2266,8 +2264,3 @@ struct W3dShdSubMeshHeaderStruct
 	W3dVectorStruct		SphCenter;			// Center of bounding sphere
 	float32					SphRadius;			// Bounding sphere radius
 };
-
-/*
-** Include the obsolete structures and chunk ID's
-*/
-#include "WW3D2/W3DObsolete.h"

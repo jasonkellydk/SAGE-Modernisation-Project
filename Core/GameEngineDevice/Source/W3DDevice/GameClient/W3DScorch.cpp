@@ -31,7 +31,7 @@ import Assets.Math;
 #include "Common/MapObject.h"
 #include "W3DDevice/GameClient/TerrainTex.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
-#include "WW3D2/Shader.h"
+import Graphics.Materials.State;
 #include "WW3D2/WW3D.h"
 
 W3DScorch::W3DScorch(bool deduplicateScorches)

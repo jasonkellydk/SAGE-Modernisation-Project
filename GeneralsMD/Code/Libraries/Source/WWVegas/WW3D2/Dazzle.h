@@ -34,12 +34,12 @@ import Graphics.Scene.Models.Factory;
 #include "WWLib/wwstring.h"
 #include "WW3D2/W3DFile.h"
 #include "WW3D2/W3DErr.h"
-#include "Shader.h"
+import Graphics.Materials.State;
 #include "WWMath/matrix4.h"
 
 class CameraClass;
 class DazzleVisibilityClass;
-struct VertexFormatXYZNDUV2;
+import Graphics.Scene.Surfaces.Geometry;
 
 class DazzleInitClass
 {
@@ -142,8 +142,8 @@ class DazzleTypeClass
 	unsigned dazzle_test_mask_integer;
 	unsigned lensflare_id;
 
-	ShaderClass dazzle_shader;
-	ShaderClass halo_shader;
+	Graphics::MaterialState dazzle_shader;
+	Graphics::MaterialState halo_shader;
 
 	float radius;
 
@@ -160,8 +160,8 @@ public:
 		const Vector3& dir_to_dazzle,
 		float distance) const;
 
-	void Set_Dazzle_Shader(const ShaderClass& s);	// Set shader for the dazzle type
-	void Set_Halo_Shader(const ShaderClass& s);	// Set shader for the dazzle type
+	void Set_Dazzle_Shader(const Graphics::MaterialState& s);	// Set shader for the dazzle type
+	void Set_Halo_Shader(const Graphics::MaterialState& s);	// Set shader for the dazzle type
 
 	TextureClass* Get_Dazzle_Texture();
 	TextureClass* Get_Halo_Texture();
@@ -219,7 +219,7 @@ public:
 	TextureClass* Get_Texture();
 
 	void Generate_Vertex_Buffers(
-		VertexFormatXYZNDUV2* vertex,
+		Graphics::SurfaceVertex* vertex,
 		int& vertex_count,
 		float screen_x_scale,
 		float screen_y_scale,

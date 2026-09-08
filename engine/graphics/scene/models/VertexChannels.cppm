@@ -1,10 +1,12 @@
 module;
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <memory>
 #include <span>
 #include <vector>
 export module Graphics.Scene.Models.VertexChannels;
+import Graphics.Scene.Models.SourceRevision;
 
 namespace Graphics {
 // Value represents a fully initialized vertex attribute without padding when
@@ -15,6 +17,7 @@ class VertexChannels final
     struct Channel {
         std::vector<Value> values;
         bool installed=false;
+        SourceRevision revision;
     };
 public:
     std::size_t Count() const noexcept
@@ -28,10 +31,23 @@ public:
         for(const auto& channel:channels)if(channel)return false;
         return true;
     }
+    bool Is_Allocated(std::size_t index) const noexcept
+    {
+        return index < channels.size() && static_cast<bool>(channels[index]);
+    }
     void Clear() { channels.clear(); }
     Value* Get(std::size_t index) const
     {
+        if(index<channels.size() && channels[index]) channels[index]->revision.Expose_Writable();
         return index<channels.size() && channels[index] ? channels[index]->values.data() : nullptr;
+    }
+    const Value* Peek(std::size_t index) const noexcept
+    {
+        return index<channels.size() && channels[index] ? channels[index]->values.data() : nullptr;
+    }
+    std::uint64_t Revision(std::size_t index) const noexcept
+    {
+        return index<channels.size() && channels[index] ? channels[index]->revision.Token() : 0;
     }
     Value* Create(std::size_t index,std::size_t count)
     {
@@ -40,6 +56,7 @@ public:
             auto channel=std::make_shared<Channel>();channel->values.resize(count);
             channels[index]=std::move(channel);
         }
+        channels[index]->revision.Expose_Writable();
         return channels[index]->values.data();
     }
     void Make_Unique(std::size_t index)

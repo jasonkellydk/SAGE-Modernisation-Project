@@ -28,7 +28,6 @@
 #include "WW3D2/RInfo.h"
 #include "WW3D2/Camera.h"
 #include "WW3D2/AssetMgr.h"
-#include "WW3D2/StringUtilities.h"
 
 #include <cmath>
 #include <cstddef>

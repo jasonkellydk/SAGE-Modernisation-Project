@@ -1,5 +1,6 @@
 module;
 #define NOMINMAX
+#include "../../profiling/Tracy.h"
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -51,6 +52,7 @@ public:
 
     bool Prepare() override
     {
+        GRAPHICS_PROFILE_SCOPE("Graphics.Texture.Prepare");
         if (m_started || !m_request.device) return false;
         m_started = true;
         if (!(m_request.allow_compression && Allocate_DDS()) && !Allocate_TGA()) return false;
@@ -62,6 +64,7 @@ public:
 
     bool Decode() override
     {
+        GRAPHICS_PROFILE_SCOPE("Graphics.Texture.Decode");
         if (!m_prepared || m_completed) return false;
         m_decoded = (m_request.allow_compression && Decode_DDS()) || Decode_TGA();
         return m_decoded;
@@ -69,6 +72,7 @@ public:
 
     void Complete(bool decoded) noexcept override
     {
+        GRAPHICS_PROFILE_SCOPE("Graphics.Texture.Complete");
         if (m_completed) return;
         m_completed = true;
         const bool uploaded = m_upload.Finish();
@@ -137,6 +141,7 @@ private:
 
     bool Decode_DDS()
     {
+        GRAPHICS_PROFILE_SCOPE("Graphics.Texture.DecodeDDS");
         if (!m_request.read_dds) return false;
         std::vector<std::byte> bytes;
         std::size_t source_size = 0;
@@ -163,6 +168,7 @@ private:
 
     bool Decode_TGA()
     {
+        GRAPHICS_PROFILE_SCOPE("Graphics.Texture.DecodeTGA");
         if (!m_request.read_tga) return false;
         std::vector<std::byte> bytes;
         std::size_t source_size = 0;

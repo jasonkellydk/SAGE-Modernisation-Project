@@ -38,6 +38,7 @@
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 import Assets.Images.PixelEncoding;
+import Graphics.Materials.State;
 #include "PartEmt.h"
 #include "WWDebug/wwdebug.h"
 #include "WW3D.h"
@@ -46,7 +47,6 @@ import Assets.Images.PixelEncoding;
 #include "Scene.h"
 #include "Texture.h"
 #include "WWDebug/wwprofile.h"
-#include "WW3D2/StringUtilities.h"
 #include <limits.h>
 #include <WWLib/gcd_lcm.h>
 
@@ -76,7 +76,7 @@ ParticleEmitterClass::ParticleEmitterClass(float emit_rate, unsigned int burst_s
 			ParticlePropertyStruct<float> &rotation, float orient_rnd,
 			ParticlePropertyStruct<float> &frames,
 			ParticlePropertyStruct<float> &blur_times,
-			Vector3 accel, float max_age, float future_start, TextureClass *tex, ShaderClass shader, int max_particles,
+			Vector3 accel, float max_age, float future_start, TextureClass *tex, Graphics::MaterialState shader, int max_particles,
 			int max_buffer_size, bool pingpong,int render_mode,int frame_mode,
 			const W3dEmitterLinePropertiesStruct * line_props
 ) :
@@ -99,8 +99,7 @@ ParticleEmitterClass::ParticleEmitterClass(float emit_rate, unsigned int burst_s
 	ParticlesLeft(max_particles),
 	MaxParticles(max_particles),
 	IsComplete(false),
-	NameString(WW3DString::Duplicate ("ParticleEmitter")),
-	UserString(nullptr),
+	NameString(std::in_place, "ParticleEmitter"),
 	RemoveOnComplete(DefaultRemoveOnComplete),
 	IsInScene(false),
 	GroupID(0),
@@ -145,8 +144,7 @@ ParticleEmitterClass::ParticleEmitterClass(const ParticleEmitterClass & src) :
 	ParticlesLeft(src.ParticlesLeft),
 	MaxParticles(src.MaxParticles),
 	IsComplete(false),
-	NameString(WW3DString::Duplicate (src.NameString)),
-	UserString(WW3DString::Duplicate (src.UserString)),
+	NameString(src.NameString),
 	RemoveOnComplete(src.RemoveOnComplete),
 	IsInScene(false),
 	GroupID(0),
@@ -182,15 +180,6 @@ ParticleEmitterClass::~ParticleEmitterClass()
 	delete VelRand;
 	VelRand = nullptr;
 
-	if (NameString != nullptr) {
-		::free (NameString);
-		NameString = nullptr;
-	}
-
-	if (UserString != nullptr) {
-		::free (UserString);
-		UserString = nullptr;
-	}
 }
 
 
@@ -592,14 +581,11 @@ void ParticleEmitterClass::Initialize_Particle(NewParticleStruct * newpart,
 void
 ParticleEmitterClass::Set_Name (const char *pname)
 {
-	// Free the old name if necessary
-	if (NameString != nullptr) {
-		::free (NameString);
-		NameString = nullptr;
+	if (pname == nullptr) {
+		NameString.reset();
+	} else {
+		NameString = pname;
 	}
-
-	// Copy the provided name
-	NameString = WW3DString::Duplicate (pname);
 }
 
 

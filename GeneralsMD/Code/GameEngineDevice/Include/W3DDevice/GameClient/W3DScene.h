@@ -35,6 +35,8 @@
 
 // SYSTEM INCLUDES ////////////////////////////////////////////////////////////
 
+#include <memory>
+
 // USER INCLUDES //////////////////////////////////////////////////////////////
 #include "WW3D2/Scene.h"
 #include "WW3D2/RInfo.h"
@@ -50,9 +52,6 @@ class W3DDynamicLight;
 class LightClass;
 class Drawable;
 enum CustomScenePassModes CPP_11(: Int);
-class MaterialPassClass;
-class W3DShroudMaterialPassClass;
-class W3DMaskMaterialPassClass;
 //-----------------------------------------------------------------------------
 // RTS3DScene
 //-----------------------------------------------------------------------------
@@ -123,13 +122,13 @@ protected:
 	Graphics::LocalLighting	m_defaultLightEnv;		///<default light environment applied to objects without custom/dynamic lighting.
 	Graphics::LocalLighting	m_foggedLightEnv;		///<default light environment applied to objects without custom/dynamic lighting.
 
-	W3DShroudMaterialPassClass	*m_shroudMaterialPass;	///< Custom render pass which applies shrouds to objects
-	W3DMaskMaterialPassClass *m_maskMaterialPass;			///< Custom render pass applied to entire scene used to mask out pixels.
-	MaterialPassClass *m_heatVisionMaterialPass;			///< Custom render passed applied on top of objects with heatvision effect.
-	MaterialPassClass *m_heatVisionOnlyPass;					///< Custom render pass applied in place of regular pass on objects with heat vision effect.
-	MaterialPassClass *m_frenzyMaterialPass;					///< Custom render pass applied in place of regular pass on objects with FRENZY effect.
+	std::shared_ptr<NativeMaterialPass>	m_shroudMaterialPass;	///< Custom render pass which applies shrouds to objects
+	std::shared_ptr<NativeMaterialPass> m_maskMaterialPass;			///< Custom render pass applied to entire scene used to mask out pixels.
+	std::shared_ptr<NativeMaterialPass> m_heatVisionMaterialPass;			///< Custom render passed applied on top of objects with heatvision effect.
+	std::shared_ptr<NativeMaterialPass> m_heatVisionOnlyPass;					///< Custom render pass applied in place of regular pass on objects with heat vision effect.
+	std::shared_ptr<NativeMaterialPass> m_frenzyMaterialPass;					///< Custom render pass applied in place of regular pass on objects with FRENZY effect.
 	///Custom rendering passes for each possible player color on the map
-	MaterialPassClass *m_occludedMaterialPass[MAX_PLAYER_COUNT];
+	std::shared_ptr<NativeMaterialPass> m_occludedMaterialPass[MAX_PLAYER_COUNT];
 	CustomScenePassModes m_customPassMode;					///< flag used to force a non-standard rendering of scene.
 	Int m_translucentObjectsCount;	///< number of translucent objects to render this frame.
 	RenderObjClass **m_translucentObjectsBuffer;	///< queue of current frame's translucent objects.

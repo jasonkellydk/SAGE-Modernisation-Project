@@ -1,3 +1,4 @@
+import Graphics.Materials.State;
 #include <array>
 #include <span>
 #include <vector>
@@ -143,8 +144,8 @@ void W3DWaypointBuffer::setDefaultLineStyle()
 	{
 		m_line->Set_Texture( m_texture );
 	}
-	ShaderClass lineShader=ShaderClass::_PresetAdditiveShader;
-	lineShader.Set_Depth_Compare(ShaderClass::PASS_ALWAYS);
+	Graphics::MaterialState lineShader=Graphics::MaterialState::Additive();
+	lineShader.Set_Depth_Compare(Graphics::MaterialState::PASS_ALWAYS);
 	m_line->Set_Shader( lineShader );	//pick the alpha blending mode you want - see shader.h for others.
 	m_line->Set_Width( 1.5f );
 	m_line->Set_Color( Vector3( 0.25f, 0.5f, 1.0f ) );

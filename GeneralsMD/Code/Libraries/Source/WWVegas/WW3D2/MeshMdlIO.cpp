@@ -64,11 +64,14 @@
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 #include <cstddef>
+#include <cstring>
+#include <span>
 #include <vector>
 #include "MeshMdl.h"
-#include "MatInfo.h"
-#include "VertMaterial.h"
-#include "Shader.h"
+import Graphics.Materials.State;
+import Graphics.Materials.Ordering;
+import Graphics.Materials.W3DState;
+import Graphics.Scene.Models.MeshMaterialPreparation;
 #include "Texture.h"
 #include "WW3D.h"
 #include "WWLib/chunkio.h"
@@ -77,12 +80,25 @@
 #include "AssetMgr.h"
 #include "WWLib/simplevec.h"
 #include "WWLib/realcrc.h"
-#include "WW3D2/StringUtilities.h"
 
 import Assets.Adapters.W3D.PassBindings;
+import Assets.Adapters.W3D.Chunks;
 import Assets.Adapters.W3D.Materials;
 import Assets.Math;
 import Assets.Adapters.W3D.Geometry;
+import Graphics.Materials.MeshMaterial;
+import Graphics.Materials.W3DMeshMaterial;
+import Graphics.Scene.Props.Material;
+#include <array>
+#include <memory>
+#include "WWLib/RANDOM.h"
+namespace {
+Random4Class texture_mapping_random;
+float Sample_Texture_Mapping() { return texture_mapping_random.Get_Float(); }
+float Texture_Bump_Sine(float angle) { return WWMath::Fast_Sin(angle); }
+float Texture_Bump_Cosine(float angle) { return WWMath::Fast_Cos(angle); }
+}
+
 
 #ifdef _UNIX
 #include "osdep/osdep.h"
@@ -101,6 +117,7 @@ import Assets.Adapters.W3D.Geometry;
 ** will own the refs for the mesh.  The load context object is destroyed once
 ** loading is complete...
 */
+
 class MeshLoadContextClass
 {
 	W3DMPO_CODE(MeshLoadContextClass)
@@ -110,24 +127,24 @@ private:
 
 	W3dTexCoordStruct *		Get_Texcoord_Array();
 
-	int							Add_Shader(ShaderClass shader);
-	int							Add_Vertex_Material(VertexMaterialClass * vmat);
+	int							Add_Shader(Graphics::MaterialState shader);
+	int							Add_Vertex_Material(const std::shared_ptr<Graphics::MeshMaterial>& vmat);
 	int							Add_Texture(TextureClass* tex);
 
-	ShaderClass					Peek_Shader(int index)											{ return Shaders[index]; }
-	VertexMaterialClass *	Peek_Vertex_Material(int index)								{ return VertexMaterials[index]; }
+	Graphics::MaterialState					Peek_Shader(int index)											{ return Shaders[index]; }
+	std::shared_ptr<Graphics::MeshMaterial>	Get_Vertex_Material(int index)								{ return VertexMaterials[index]; }
 	TextureClass *				Peek_Texture(int index)											{ return Textures[index]; }
 
 	int							Shader_Count()												{ return Shaders.Count(); }
-	int							Vertex_Material_Count()									{ return VertexMaterials.Count(); }
+	int							Vertex_Material_Count()									{ return static_cast<int>(VertexMaterials.size()); }
 	int							Texture_Count()												{ return Textures.Count(); }
 
 	/*
 	** Legacy material support.
 	*/
-	void							Add_Legacy_Material(ShaderClass shader,VertexMaterialClass * vmat,TextureClass * tex);
-	ShaderClass					Peek_Legacy_Shader(int legacy_material_index);
-	VertexMaterialClass *	Peek_Legacy_Vertex_Material(int legacy_material_index);
+	void							Add_Legacy_Material(Graphics::MaterialState shader,const std::shared_ptr<Graphics::MeshMaterial>& vmat,TextureClass * tex);
+	Graphics::MaterialState					Peek_Legacy_Shader(int legacy_material_index);
+	std::shared_ptr<Graphics::MeshMaterial>	Get_Legacy_Vertex_Material(int legacy_material_index);
 	TextureClass *				Peek_Legacy_Texture(int legacy_material_index);
 
 	/*
@@ -172,19 +189,18 @@ private:
 	int							CurTexStage;
 
 	DynamicVectorClass < LegacyMaterialClass * >		LegacyMaterials;
-	DynamicVectorClass < ShaderClass >					Shaders;
-	DynamicVectorClass < VertexMaterialClass * >		VertexMaterials;
-	DynamicVectorClass < unsigned long >				VertexMaterialCrcs;
+	DynamicVectorClass < Graphics::MaterialState >					Shaders;
+	std::vector<std::shared_ptr<Graphics::MeshMaterial>>		VertexMaterials;
+	std::vector<Graphics::MeshMaterialKey> VertexMaterialKeys;
 	DynamicVectorClass < TextureClass * >				Textures;
 
 	/*
 	** Alternate material data.  Any alternate material data will be loaded into
-	** this MeshMatDescClass object.  When loading is finished, an alternate MeshMatDescClass
-	** will be allocated in the mesh model.  This MeshMatDescClass will be initialized to be
-	** identical to the default MeshMatDescClass and then any data contained in this
-	** MeshMatDescClass will replace the relevant arrays.
+	** this material binding object.  When loading is finished, an alternate binding
+	** will be allocated in the mesh model.  It is initialized to be identical to the
+	** default binding and then any data contained in this object replaces its arrays.
 	*/
-	MeshMatDescClass											AlternateMatDesc;
+	MeshModelClass::MaterialDescription AlternateMatDesc;
 
 	SimpleVecClass<Vector2>									TempUVArray;
 
@@ -408,37 +424,27 @@ WW3DErrorType MeshModelClass::read_chunks(ChunkLoadClass & cload,MeshLoadContext
 					error = read_vertices(cload);
 					break;
 
-			case W3D_CHUNK_SURRENDER_NORMALS:
+			case Assets::W3D::W3DChunkSurrenderNormals:
 			case W3D_CHUNK_VERTEX_NORMALS:
 					// call up to MeshGeometryClass
 					error = read_vertex_normals(cload);
 					break;
 
-			case W3D_CHUNK_TEXCOORDS:
-					error = read_texcoords(cload,context);
-					break;
+			case Assets::W3D::W3DChunkTextureCoords:
+				error = read_texcoords(cload,context);
+				break;
 
-			case O_W3D_CHUNK_MATERIALS:
-			case O_W3D_CHUNK_MATERIALS2:
-					WWDEBUG_SAY(( "Obsolete material chunk encountered in mesh: %s.%s", context->Header.container_name.c_str(),context->Header.name.c_str()));
-					WWASSERT(0);
-					break;
-
-			case W3D_CHUNK_MATERIALS3:
-					WWDEBUG_SAY(( "Obsolete material chunk encountered in mesh: %s.%s", context->Header.container_name.c_str(),context->Header.name.c_str()));
-					error = read_v3_materials(cload,context);
-					break;
-
-			case O_W3D_CHUNK_SURRENDER_TRIANGLES:
-					WWASSERT_PRINT( 0, "Obsolete Triangle Chunk Encountered!" );
-					break;
+			case Assets::W3D::W3DChunkMaterials3:
+				WWDEBUG_SAY(( "Material3 chunk encountered in mesh: %s.%s", context->Header.container_name.c_str(),context->Header.name.c_str()));
+				error = read_v3_materials(cload,context);
+				break;
 
 			case W3D_CHUNK_TRIANGLES:
 					// call up to MeshGeometryClass
 					error = read_triangles(cload);
 					break;
 
-			case W3D_CHUNK_PER_TRI_MATERIALS:
+			case Assets::W3D::W3DChunkPerTriMaterials:
 					error = read_per_tri_materials(cload,context);
 					break;
 
@@ -447,7 +453,7 @@ WW3DErrorType MeshModelClass::read_chunks(ChunkLoadClass & cload,MeshLoadContext
 					error = read_user_text(cload);
 					break;
 
-			case W3D_CHUNK_VERTEX_COLORS:
+			case Assets::W3D::W3DChunkVertexColors:
 					error = read_vertex_colors(cload,context);
 					break;
 
@@ -485,7 +491,7 @@ WW3DErrorType MeshModelClass::read_chunks(ChunkLoadClass & cload,MeshLoadContext
 					WWDEBUG_SAY(("Obsolete deform chunk encountered in mesh: %s.%s", context->Header.container_name.c_str(),context->Header.name.c_str()));
 					break;
 
-			case W3D_CHUNK_DAMAGE:
+			case Assets::W3D::W3DChunkDamage:
 					WWDEBUG_SAY(("Obsolete damage chunk encountered in mesh: %s.%s", context->Header.container_name.c_str(),context->Header.name.c_str()));
 					break;
 
@@ -551,7 +557,8 @@ WW3DErrorType MeshModelClass::read_texcoords(ChunkLoadClass & cload,MeshLoadCont
 			uvarray[i].Set(texcoord.U,1.0f - texcoord.V);
 		}
 
-		DefMatDesc->Install_UV_Array(context->CurPass,context->CurTexStage,uvarray,elementcount);
+		DefMatDesc.Install_UV_Array(context->CurPass,context->CurTexStage,
+			std::span<const Vector2>(uvarray,static_cast<std::size_t>(elementcount)));
 	}
 
 	return WW3D_ERROR_OK;
@@ -572,162 +579,40 @@ WW3DErrorType MeshModelClass::read_texcoords(ChunkLoadClass & cload,MeshLoadCont
  *=============================================================================================*/
 WW3DErrorType MeshModelClass::read_v3_materials(ChunkLoadClass & cload,MeshLoadContextClass * context)
 {
-	for (unsigned int mi=0; mi<context->Header.material_count; mi++) {
+	const auto length = cload.Cur_Chunk_Length();
+	std::vector<std::byte> bytes(static_cast<std::size_t>(length));
+	if (cload.Read(bytes.data(), static_cast<unsigned>(bytes.size())) != bytes.size())
+		return WW3D_ERROR_LOAD_FAILED;
 
-		/*
-		** First, we expect a W3D_CHUNK_MATERIAL3 to wrap the entire material
-		*/
-		if (!cload.Open_Chunk()) goto Error;
-		if (cload.Cur_Chunk_ID() != W3D_CHUNK_MATERIAL3) goto Error;
+	std::vector<Assets::W3D::W3DMaterial3Data> decoded;
+	if (!Assets::W3D::W3DRead_Material3_Container(bytes, decoded) ||
+		decoded.size() != context->Header.material_count)
+		return WW3D_ERROR_LOAD_FAILED;
 
-		/*
-		** Inside the MATERIAL3 will be the following:
-		**
-		** W3D_MATERIAL3_NAME - name of the material
-		** W3D_MATERIAL3_INFO - equivalent to 1.40 vertex material parameters
-		** W3D_MATERIAL3_DC_MAP - diffuse color mapping
-		**   W3D_MAP3_FILENAME - filename of the texture map
-		**   W3D_MAP3_INFO - animation, etc information
-		** W3D_MATERIAL3_DI_MAP - diffuse illumination map
-		** W3D_MATERIAL3_SC_MAP - specular color map
-		** W3D_MATERIAL3_SI_MAP - specular illumination map
-		*/
-		VertexMaterialClass *		vmat = nullptr;
-		ShaderClass						shader;
-		TextureClass *					tex = nullptr;
-		char								name[256];
+	for (const auto &material : decoded) {
+		auto vmat = std::make_shared<Graphics::MeshMaterial>();
+		const auto runtime = Graphics::Apply_W3D_Material3(*vmat, material);
+		if (runtime.requires_sort)
+			Set_Flag(MeshModelClass::SORT, true);
+		if (runtime.has_animated_texture)
+			WWDEBUG_SAY(("ERROR: Animated Material3 texture detected in model: %s",
+				context->Header.name.c_str()));
 
-		/*
-		** Read the material name
-		*/
-		if (!cload.Open_Chunk()) goto Error;
-		if (cload.Cur_Chunk_ID() != W3D_CHUNK_MATERIAL3_NAME) goto Error;
-		cload.Read(name,cload.Cur_Chunk_Length());
-		if (!cload.Close_Chunk()) goto Error;
-
-		/*
-		** Read the vertex material parameters
-		*/
-		if (!cload.Open_Chunk()) goto Error;
-
-			W3dMaterial3Struct mat;
-			if (cload.Cur_Chunk_ID() != W3D_CHUNK_MATERIAL3_INFO) goto Error;
-			if (cload.Read(&mat,sizeof(W3dMaterial3Struct)) != sizeof(W3dMaterial3Struct)) goto Error;
-			vmat = W3DNEW VertexMaterialClass;
-			vmat->Init_From_Material3(mat);
-			vmat->Set_Name(name);
-			shader.Init_From_Material3(mat);
-
-			/*
-			** If this shader does alpha blending, the mesh must be sorted.
-			*/
-			if (shader.Get_Dst_Blend_Func() != ShaderClass::DSTBLEND_ZERO) {
-				Set_Flag(MeshModelClass::SORT,true);
-			}
-
-		if (!cload.Close_Chunk()) goto Error;
-
-		/*
-		** Look for the DC map and read it in
-		*/
-		while (cload.Open_Chunk()) {
-			if (cload.Cur_Chunk_ID() == W3D_CHUNK_MATERIAL3_DC_MAP) {
-
-				/*
-				** Read in the texture filename
-				*/
-				char filename[512];
-				if (!cload.Open_Chunk()) goto Error;
-					if (cload.Cur_Chunk_ID() != W3D_CHUNK_MAP3_FILENAME) goto Error;
-					if (cload.Cur_Chunk_Length() >= sizeof(filename)) goto Error;
-					cload.Read(filename,cload.Cur_Chunk_Length());
-				if (!cload.Close_Chunk()) goto Error;
-
-				/*
-				** Read in the auxiliary map info
-				*/
-				W3dMap3Struct mapinfo;
-				if (!cload.Open_Chunk()) goto Error;
-					if (cload.Cur_Chunk_ID() != W3D_CHUNK_MAP3_INFO) goto Error;
-					if (cload.Read(&mapinfo,sizeof(W3dMap3Struct)) != sizeof(W3dMap3Struct)) goto Error;
-				if (!cload.Close_Chunk()) goto Error;
-
-				if ( mapinfo.FrameCount > 1 ) {
-					WWDEBUG_SAY(("ERROR: Obsolete Animated Texture detected in model: %s",context->Header.name.c_str()));
-				}
-
-				tex = WW3DAssetManager::Get_Instance()->Get_Texture(filename);
-
-				shader.Set_Texturing(ShaderClass::TEXTURING_ENABLE);
-
-			} else if (cload.Cur_Chunk_ID() == W3D_CHUNK_MATERIAL3_SI_MAP) {
-				Vector3	diffuse_color;
-				vmat->Get_Diffuse( &diffuse_color);
-				if ( diffuse_color == Vector3( 0,0,0 ) ) {
-
-					/*
-					** Read in the texture filename
-					*/
-					char filename[512];
-					if (!cload.Open_Chunk()) goto Error;
-						if (cload.Cur_Chunk_ID() != W3D_CHUNK_MAP3_FILENAME) goto Error;
-						if (cload.Cur_Chunk_Length() >= sizeof(filename)) goto Error;
-						cload.Read(filename,cload.Cur_Chunk_Length());
-					if (!cload.Close_Chunk()) goto Error;
-
-					if (tex) tex->Release_Ref();
-
-					/*
-					** Read in the auxiliary map info
-					*/
-					W3dMap3Struct mapinfo;
-					if (!cload.Open_Chunk()) goto Error;
-						if (cload.Cur_Chunk_ID() != W3D_CHUNK_MAP3_INFO) goto Error;
-						if (cload.Read(&mapinfo,sizeof(W3dMap3Struct)) != sizeof(W3dMap3Struct)) goto Error;
-					if (!cload.Close_Chunk()) goto Error;
-
-					if ( mapinfo.FrameCount > 1 ) {
-						WWDEBUG_SAY(("ERROR: Obsolete Animated Texture detected in model: %s",context->Header.name.c_str()));
-					}
-
-					tex = WW3DAssetManager::Get_Instance()->Get_Texture(filename);
-
-					shader.Set_Texturing(ShaderClass::TEXTURING_ENABLE);
-					shader.Set_Dst_Blend_Func(ShaderClass::DSTBLEND_ONE);
-					shader.Set_Src_Blend_Func(ShaderClass::SRCBLEND_ONE);
-					shader.Set_Primary_Gradient(ShaderClass::GRADIENT_DISABLE);
-				}
-			}
-
-			cload.Close_Chunk();
+		TextureClass *tex = nullptr;
+		if (const auto *map = runtime.texture_map) {
+			tex = WW3DAssetManager::Get_Instance()->Get_Texture(map->filename.c_str());
 		}
 
-		// If not texturing, move the diffuse color to ambient (simulating old behavior)
-		if ( shader.Get_Texturing() == ShaderClass::TEXTURING_DISABLE ) {
-			Vector3 color;
-			vmat->Get_Diffuse( &color );
-			vmat->Set_Ambient( color );
-			vmat->Set_Diffuse( Vector3( 0, 0, 0 ) );
-		}
-
-		context->Add_Legacy_Material(shader,vmat,tex);
-
-		vmat->Release_Ref();
-		if (tex) tex->Release_Ref();
-		vmat = nullptr;
-		tex = nullptr;
-
-		/*
-		** Close the W3D_CHUNK_MATERIAL3
-		*/
-		cload.Close_Chunk();
+		context->Add_Legacy_Material(runtime.shader, vmat, tex);
+		if (tex)
+			tex->Release_Ref();
 	}
 
 	/*
 	** Install the default materials to use in the absence of an array
 	*/
 	if (context->Vertex_Material_Count() >= 1) {
-		Set_Single_Material(context->Peek_Vertex_Material(0),0);
+		Set_Single_Material(context->Get_Vertex_Material(0),0);
 	}
 
 	if (context->Texture_Count() >= 1) {
@@ -739,11 +624,6 @@ WW3DErrorType MeshModelClass::read_v3_materials(ChunkLoadClass & cload,MeshLoadC
 	}
 
 	return WW3D_ERROR_OK;
-
-Error:
-
-	return WW3D_ERROR_LOAD_FAILED;
-
 }
 
 
@@ -770,7 +650,7 @@ WW3DErrorType MeshModelClass::read_per_tri_materials(ChunkLoadClass & cload,Mesh
 	bool multi_shad = (context->Shader_Count() > 1);
 
 	if (!multi_mtl) {
-		Set_Single_Material(context->Peek_Legacy_Vertex_Material(0));
+		Set_Single_Material(context->Get_Legacy_Vertex_Material(0));
 	}
 	if (!multi_tex) {
 		Set_Single_Texture(context->Peek_Legacy_Texture(0));
@@ -799,9 +679,9 @@ WW3DErrorType MeshModelClass::read_per_tri_materials(ChunkLoadClass & cload,Mesh
 			Set_Texture(i,context->Peek_Legacy_Texture(matid));
 		}
 		if (multi_mtl) {
-			Set_Material(polys[i].I,context->Peek_Legacy_Vertex_Material(matid));
-			Set_Material(polys[i].J,context->Peek_Legacy_Vertex_Material(matid));
-			Set_Material(polys[i].K,context->Peek_Legacy_Vertex_Material(matid));
+			Set_Material(polys[i].I,context->Get_Legacy_Vertex_Material(matid));
+			Set_Material(polys[i].J,context->Get_Legacy_Vertex_Material(matid));
+			Set_Material(polys[i].K,context->Get_Legacy_Vertex_Material(matid));
 		}
 	}
 
@@ -850,7 +730,7 @@ WW3DErrorType MeshModelClass::read_vertex_colors(ChunkLoadClass & cload,MeshLoad
 			dcg[i]=Assets::Color_To_ARGB({col.X,col.Y,col.Z,col.W});
 		}
 	}
-	CurMatDesc->Set_DCG_Source(context->CurPass,VertexMaterialClass::COLOR1);
+	CurMatDesc->Set_DCG_Source(context->CurPass,Graphics::PropColorSource::PrimaryColor);
 
 	return WW3D_ERROR_OK;
 }
@@ -898,9 +778,11 @@ WW3DErrorType MeshModelClass::read_shaders(ChunkLoadClass &cload, MeshLoadContex
     if (bytes.size() % 16 != 0 || bytes.size() / 16 != context->MatInfo.ShaderCount)
         return WW3D_ERROR_LOAD_FAILED;
     for (std::size_t offset = 0; offset < bytes.size(); offset += 16) {
-        ShaderClass shader;
-        if (!shader.Load_W3D_Record(std::span<const std::byte>(bytes).subspan(offset, 16)))
+        Graphics::MaterialState shader;
+        Assets::W3D::W3DShaderSettings record;
+        if (!Assets::W3D::W3DRead_Shader(std::span<const std::byte>(bytes).subspan(offset, 16), record))
             return WW3D_ERROR_LOAD_FAILED;
+        Graphics::Apply_W3D_Material_State(shader, record);
         context->Add_Shader(shader);
     }
     return WW3D_ERROR_OK;
@@ -923,13 +805,16 @@ WW3DErrorType MeshModelClass::read_vertex_materials(ChunkLoadClass & cload,MeshL
 {
 	while (cload.Open_Chunk()) {
 		WWASSERT(cload.Cur_Chunk_ID() == W3D_CHUNK_VERTEX_MATERIAL);
-		VertexMaterialClass * vmat = NEW_REF(VertexMaterialClass,());
-		WW3DErrorType error = vmat->Load_W3D(cload);
-		if (error != WW3D_ERROR_OK) {
-			return error;
-		}
+		std::vector<std::byte> bytes(cload.Cur_Chunk_Length());
+        if (cload.Read(bytes.data(),static_cast<unsigned>(bytes.size())) != bytes.size())
+            return WW3D_ERROR_LOAD_FAILED;
+        Assets::W3D::W3DVertexMaterialData decoded;
+        if (!Assets::W3D::W3DRead_Vertex_Material(bytes,decoded))
+            return WW3D_ERROR_LOAD_FAILED;
+        auto vmat = std::make_shared<Graphics::MeshMaterial>();
+        Graphics::Apply_W3D_Mesh_Material(*vmat,decoded,WW3D::Get_Sync_Time(),
+            Sample_Texture_Mapping,Texture_Bump_Sine,Texture_Bump_Cosine);
 		context->Add_Vertex_Material(vmat);
-		vmat->Release_Ref();
 
 		cload.Close_Chunk();
 	}
@@ -988,8 +873,8 @@ WW3DErrorType MeshModelClass::read_material_pass(ChunkLoadClass &cload, MeshLoad
         return WW3D_ERROR_LOAD_FAILED;
 
     const int pass = context->CurPass;
-    if (pass < 0 || pass >= MeshMatDescClass::MAX_PASSES
-        || bindings.stages.size() > MeshMatDescClass::MAX_TEX_STAGES)
+	if (pass < 0 || pass >= MaterialDescription::MAX_PASSES
+		|| bindings.stages.size() > MaterialDescription::MAX_TEX_STAGES)
         return WW3D_ERROR_LOAD_FAILED;
     // Validate references before changing either material set.
     for (const auto id : bindings.vertex_material_ids)
@@ -1002,21 +887,23 @@ WW3DErrorType MeshModelClass::read_material_pass(ChunkLoadClass &cload, MeshLoad
                 return WW3D_ERROR_LOAD_FAILED;
 
     if (!bindings.vertex_material_ids.empty()) {
-        auto *materials = DefMatDesc->Has_Material_Data(pass) ? &context->AlternateMatDesc : DefMatDesc;
+        auto *materials = DefMatDesc.Has_Material_Data(pass)
+            ? &context->AlternateMatDesc : &DefMatDesc;
         const auto &ids = bindings.vertex_material_ids;
-        if (ids.size() == 1) materials->Set_Single_Material(context->Peek_Vertex_Material(ids[0]), pass);
+        if (ids.size() == 1) materials->Set_Single_Material(context->Get_Vertex_Material(ids[0]), pass);
         else for (std::size_t vertex = 0; vertex < ids.size(); ++vertex)
-            materials->Set_Material(static_cast<int>(vertex), context->Peek_Vertex_Material(ids[vertex]), pass);
+            materials->Set_Material(vertex, context->Get_Vertex_Material(ids[vertex]), pass);
     }
     if (!bindings.shader_ids.empty()) {
-        auto *materials = DefMatDesc->Has_Shader_Data(pass) ? &context->AlternateMatDesc : DefMatDesc;
+        auto *materials = DefMatDesc.Has_Shader_Data(pass)
+            ? &context->AlternateMatDesc : &DefMatDesc;
         const auto &ids = bindings.shader_ids;
         for (std::size_t face = 0; face < ids.size(); ++face) {
             const auto shader = context->Peek_Shader(ids[face]);
             if (ids.size() == 1) materials->Set_Single_Shader(shader, pass);
-            else materials->Set_Shader(static_cast<int>(face), shader, pass);
-            if (pass == 0 && shader.Get_Dst_Blend_Func() != ShaderClass::DSTBLEND_ZERO
-                && shader.Get_Alpha_Test() == ShaderClass::ALPHATEST_DISABLE && SortLevel == SORT_LEVEL_NONE)
+            else materials->Set_Shader(face, shader, pass);
+            if (pass == 0 && shader.Get_Dst_Blend_Func() != Graphics::MaterialState::DSTBLEND_ZERO
+                && shader.Get_Alpha_Test() == Graphics::MaterialState::ALPHATEST_DISABLE && SortLevel == SORT_LEVEL_NONE)
                 Set_Flag(SORT, true);
         }
     }
@@ -1027,8 +914,8 @@ WW3DErrorType MeshModelClass::read_material_pass(ChunkLoadClass &cload, MeshLoad
     for (const auto source : bindings.color_order) {
         using Assets::W3D::W3DPassColorSource;
         if (source == W3DPassColorSource::Diffuse) {
-            auto *materials = DefMatDesc->Get_DCG_Source(pass) != VertexMaterialClass::MATERIAL
-                ? &context->AlternateMatDesc : DefMatDesc;
+            auto *materials = DefMatDesc.Get_DCG_Source(pass) != Graphics::PropColorSource::Material
+                ? &context->AlternateMatDesc : &DefMatDesc;
             const bool replace_rgb = !materials->Has_Color_Array(0);
             if (replace_rgb || context->PrelitChunkID == W3D_CHUNK_PRELIT_VERTEX) {
                 auto *colors = materials->Get_Color_Array(0);
@@ -1040,9 +927,10 @@ WW3DErrorType MeshModelClass::read_material_pass(ChunkLoadClass &cload, MeshLoad
                     colors[vertex] = Assets::Color_To_ARGB(value);
                 }
             }
-            materials->Set_DCG_Source(pass, VertexMaterialClass::COLOR1);
+            materials->Set_DCG_Source(pass, Graphics::PropColorSource::PrimaryColor);
         } else if (source == W3DPassColorSource::Illumination) {
-            auto *materials = context->Already_Loaded_DIG() ? &context->AlternateMatDesc : DefMatDesc;
+            auto *materials = context->Already_Loaded_DIG()
+                ? &context->AlternateMatDesc : &DefMatDesc;
             context->Notify_Loaded_DIG_Chunk(true);
             const bool multiply = materials->Has_Color_Array(0);
             auto *colors = materials->Get_Color_Array(0);
@@ -1054,7 +942,7 @@ WW3DErrorType MeshModelClass::read_material_pass(ChunkLoadClass &cload, MeshLoad
                 value.b *= input.b;
                 colors[vertex] = Assets::Color_To_ARGB(value);
             }
-            materials->Set_DCG_Source(pass, VertexMaterialClass::COLOR1);
+            materials->Set_DCG_Source(pass, Graphics::PropColorSource::PrimaryColor);
         }
         // Specular arrays remain in the decoded asset. The existing material
         // description has no per-pass specular array binding.
@@ -1064,23 +952,31 @@ WW3DErrorType MeshModelClass::read_material_pass(ChunkLoadClass &cload, MeshLoad
         const int stage = static_cast<int>(stage_index);
         const auto &input = bindings.stages[stage_index];
         if (!input.texture_ids.empty()) {
-            auto *materials = DefMatDesc->Has_Texture_Data(pass,stage) ? &context->AlternateMatDesc : DefMatDesc;
+            auto *materials = DefMatDesc.Has_Texture_Data(pass,stage)
+                ? &context->AlternateMatDesc : &DefMatDesc;
             if (input.texture_ids.size() == 1) {
                 const auto id = input.texture_ids[0];
-                materials->Set_Single_Texture(id == 0xffffffffu ? nullptr : context->Peek_Texture(id), pass, stage);
+                auto texture = RefCountPtr<TextureClass>::Create_Add_Ref(
+                    id == 0xffffffffu ? nullptr : context->Peek_Texture(id));
+                materials->Set_Single_Texture(texture, pass, stage);
             } else for (std::size_t face = 0; face < input.texture_ids.size(); ++face) {
                 const auto id = input.texture_ids[face];
-                if (id != 0xffffffffu)
-                    materials->Set_Texture(static_cast<int>(face), context->Peek_Texture(id), pass, stage);
+                if (id != 0xffffffffu) {
+                    auto texture = RefCountPtr<TextureClass>::Create_Add_Ref(
+                        context->Peek_Texture(id));
+                    materials->Set_Texture(face, texture, pass, stage);
+                }
             }
         }
         if (!input.texcoords.empty()) {
-            auto *materials = DefMatDesc->Has_UV(pass,stage) ? &context->AlternateMatDesc : DefMatDesc;
+            auto *materials = DefMatDesc.Has_UV(pass,stage)
+                ? &context->AlternateMatDesc : &DefMatDesc;
             const int count = static_cast<int>(input.texcoords.size());
             auto *uvs = context->Get_Temporary_UV_Array(count);
             for (int vertex = 0; vertex < count; ++vertex)
                 uvs[vertex].Set(input.texcoords[vertex].x, 1.0f-input.texcoords[vertex].y);
-            materials->Install_UV_Array(pass, stage, uvs, count);
+            materials->Install_UV_Array(pass,stage,
+                std::span<const Vector2>(uvs,static_cast<std::size_t>(count)));
         }
         // Indexed corner UVs are retained and validated by the decoder. The
         // current mesh description consumes vertex-indexed UV arrays only.
@@ -1167,7 +1063,7 @@ void MeshModelClass::post_process()
 #if 0
 	// we want to allow this now due to usage of the static sort
 	// Ensure no sorting, multipass meshes (for they are abomination...)
-	if (DefMatDesc->Get_Pass_Count() > 1 && Get_Flag(SORT)) {
+	if (DefMatDesc.Get_Pass_Count() > 1 && Get_Flag(SORT)) {
 		WWDEBUG_SAY(( "Turning SORT off for multipass mesh %s",Get_Name() ));
 		Set_Flag(SORT, false);
 	}
@@ -1183,9 +1079,9 @@ void MeshModelClass::post_process()
 	// turn off backface culling if the mesh is supposed to be two-sided
 	if (Get_Flag(MeshGeometryClass::TWO_SIDED)) {
 
-		DefMatDesc->Disable_Backface_Culling();
-		if (AlternateMatDesc != nullptr) {
-			AlternateMatDesc->Disable_Backface_Culling();
+		DefMatDesc.Set_Two_Sided();
+		if (AlternateMatDesc) {
+			AlternateMatDesc->Set_Two_Sided();
 		}
 
 	}
@@ -1210,104 +1106,20 @@ void MeshModelClass::post_process()
 
 void MeshModelClass::post_process_fog()
 {
-	// If two pass...
-	if (DefMatDesc->Get_Pass_Count() == 2) {
-
-		// If single shader on both passes...
-		if (!DefMatDesc->ShaderArray[0] && !DefMatDesc->ShaderArray[1]) {
-
-			ShaderClass &shader0 = DefMatDesc->Shader [0];
-			ShaderClass &shader1 = DefMatDesc->Shader [1];
-
-			// Analyze the mesh to determine if it is the emissive map effect and if it is, fix it up appropriately.
-			bool emissive_map_effect = DefMatDesc->PassCount == 2 &&
-												shader0.Get_Texturing() == ShaderClass::TEXTURING_DISABLE &&
-												shader0.Get_Src_Blend_Func() == ShaderClass::SRCBLEND_ONE &&
-												shader0.Get_Dst_Blend_Func() == ShaderClass::DSTBLEND_ZERO &&
-												shader0.Get_Primary_Gradient() == ShaderClass::GRADIENT_MODULATE &&
-												shader0.Get_Secondary_Gradient() == ShaderClass::SECONDARY_GRADIENT_DISABLE &&
-												shader1.Get_Texturing() == ShaderClass::TEXTURING_ENABLE &&
-												shader1.Get_Src_Blend_Func() == ShaderClass::SRCBLEND_SRC_ALPHA &&
-												shader1.Get_Dst_Blend_Func() == ShaderClass::DSTBLEND_SRC_COLOR;
-
-			if (emissive_map_effect) {
-
-				// Change the shader/texture setting into an equivalent one which will enable setting fog
-				// correctly: Note that we are setting up pass 0 to have a texture now.
-				shader0.Set_Texturing(ShaderClass::TEXTURING_ENABLE);
-				shader1.Set_Dst_Blend_Func(ShaderClass::DSTBLEND_ONE);
-				shader0.Set_Fog_Func(ShaderClass::FOG_ENABLE);
-				shader1.Set_Fog_Func(ShaderClass::FOG_SCALE_FRAGMENT);
-
-				// Copy pass 1 texture/texture array to pass 0.
-				REF_PTR_SET (DefMatDesc->Texture[0][0], DefMatDesc->Texture [1][0]);
-				if (DefMatDesc->TextureArray [1][0].Is_Allocated()) {
-					if (!DefMatDesc->TextureArray [0][0].Is_Allocated()) {
-						DefMatDesc->TextureArray [0][0] = DefMatDesc->TextureArray [1][0].Clone();
-					}
-				}
-
-				// Make pass 0 point to the same UV array as pass 1. If pass 1 has a vertex material
-				// array, we only take the first one for determining UV source. The UV source is
-				// used to set the UV source of all the vertex materials in pass 0.
-				int uv_source = 0;
-				if (DefMatDesc->MaterialArray[1].Is_Allocated()) {
-					if (const auto *owner = DefMatDesc->MaterialArray[1].Peek(0); owner && owner->Peek()) {
-						uv_source = owner->Peek()->Get_UV_Source(0);
-					}
-				} else {
-					DefMatDesc->Material[1]->Get_UV_Source(0);
-				}
-				if (DefMatDesc->MaterialArray[0].Is_Allocated()) {
-					for (int i = 0; i < VertexCount; i++) {
-						if (const auto *owner = DefMatDesc->MaterialArray[0].Peek(i); owner && owner->Peek()) {
-							owner->Peek()->Set_UV_Source(0, uv_source);
-						}
-					}
-				} else {
-					DefMatDesc->Material[0]->Set_UV_Source(0, uv_source);
-				}
-
-				return;
-			}
-
-			// Analyze the mesh to determine if it is the shiny mask effect and if it is, fix it up appropriately.
-			bool shiny_mask_effect = shader0.Get_Src_Blend_Func() == ShaderClass::SRCBLEND_ONE &&
-											 shader0.Get_Dst_Blend_Func() == ShaderClass::DSTBLEND_ZERO &&
-											 shader1.Get_Src_Blend_Func() == ShaderClass::SRCBLEND_ONE &&
-											(shader1.Get_Dst_Blend_Func() == ShaderClass::DSTBLEND_SRC_ALPHA ||
-											 shader1.Get_Dst_Blend_Func() == ShaderClass::DSTBLEND_ONE_MINUS_SRC_ALPHA);
-
-			if (shiny_mask_effect) {
-				shader0.Set_Fog_Func(ShaderClass::FOG_SCALE_FRAGMENT);
-				shader1.Set_Fog_Func(ShaderClass::FOG_ENABLE);
-				return;
-			}
-		}
-	}
-
-	// Mesh is not one of the special two-pass combinations. Apply a per-pass generic fix-up.
-	for (int pass = 0; pass < DefMatDesc->PassCount; pass++) {
-		DefMatDesc->Shader [pass].Enable_Fog (Get_Name());
-		if (DefMatDesc->ShaderArray [pass]) {
-			for (int tri = 0; tri < DefMatDesc->ShaderArray [pass]->Get_Count(); tri++) {
-				DefMatDesc->ShaderArray [pass]->Get_Element (tri).Enable_Fog (Get_Name());
-			}
-		}
-	}
+	Graphics::Apply_Mesh_Material_Fog(DefMatDesc);
 }
 
 unsigned int MeshModelClass::get_sort_flags(int pass) const
 {
 	unsigned int flags = 0;
-	ShaderClass::StaticSortCategoryType scat;
+	Graphics::MaterialState::StaticSortCategoryType scat;
 	if (Has_Shader_Array(pass)) {
-		for (int tri = 0; tri < CurMatDesc->ShaderArray[pass]->Get_Count(); tri++) {
-			scat = CurMatDesc->ShaderArray[pass]->Get_Element(tri).Get_SS_Category();
+		for (std::size_t polygon = 0; polygon < CurMatDesc->Shader_Count(pass); ++polygon) {
+			scat = Graphics::Classify_Material_Order(CurMatDesc->Get_Shader(polygon,pass));
 			flags |= (1 << scat);
 		}
 	} else {
-		scat = Get_Single_Shader(pass).Get_SS_Category();
+		scat = Graphics::Classify_Material_Order(Get_Single_Shader(pass));
 		flags |= (1 << scat);
 	}
 	return flags;
@@ -1326,11 +1138,11 @@ void MeshModelClass::compute_static_sort_levels()
 {
 	enum StaticSortCategoryBitFieldType
 	{
-		SSCAT_OPAQUE_BF		= (1 << ShaderClass::SSCAT_OPAQUE),
-		SSCAT_ALPHA_TEST_BF	= (1 << ShaderClass::SSCAT_ALPHA_TEST),
-		SSCAT_ADDITIVE_BF		= (1 << ShaderClass::SSCAT_ADDITIVE),
-		SSCAT_SCREEN_BF		= (1 << ShaderClass::SSCAT_SCREEN),
-		SSCAT_OTHER_BF			= (1 << ShaderClass::SSCAT_OTHER)
+		SSCAT_OPAQUE_BF		= (1 << Graphics::MaterialState::SSCAT_OPAQUE),
+		SSCAT_ALPHA_TEST_BF	= (1 << Graphics::MaterialState::SSCAT_ALPHA_TEST),
+		SSCAT_ADDITIVE_BF		= (1 << Graphics::MaterialState::SSCAT_ADDITIVE),
+		SSCAT_SCREEN_BF		= (1 << Graphics::MaterialState::SSCAT_SCREEN),
+		SSCAT_OTHER_BF			= (1 << Graphics::MaterialState::SSCAT_OTHER)
 	};
 
 	if (get_sort_flags(0) == SSCAT_OPAQUE_BF) {
@@ -1365,9 +1177,9 @@ void MeshModelClass::modify_for_overbright()
 	for (int pass_idx = 0; pass_idx < pass_cnt; pass_idx++) {
 
 		// First do single shader
-		ShaderClass shader = Get_Single_Shader(pass_idx);
-		if (shader.Get_Primary_Gradient() == ShaderClass::GRADIENT_MODULATE) {
-			shader.Set_Primary_Gradient(ShaderClass::GRADIENT_MODULATE2X);
+		Graphics::MaterialState shader = Get_Single_Shader(pass_idx);
+		if (shader.Get_Primary_Gradient() == Graphics::MaterialState::GRADIENT_MODULATE) {
+			shader.Set_Primary_Gradient(Graphics::MaterialState::GRADIENT_MODULATE2X);
 			Set_Single_Shader(shader, pass_idx);
 		}
 
@@ -1376,8 +1188,8 @@ void MeshModelClass::modify_for_overbright()
 			int p_cnt = Get_Polygon_Count();
 			for (int p_idx = 0; p_idx < p_cnt; p_idx++) {
 				shader = Get_Shader(p_idx, pass_idx);
-				if (shader.Get_Primary_Gradient() == ShaderClass::GRADIENT_MODULATE) {
-					shader.Set_Primary_Gradient(ShaderClass::GRADIENT_MODULATE2X);
+				if (shader.Get_Primary_Gradient() == Graphics::MaterialState::GRADIENT_MODULATE) {
+					shader.Set_Primary_Gradient(Graphics::MaterialState::GRADIENT_MODULATE2X);
 					Set_Shader(p_idx, shader, pass_idx);
 				}
 			}
@@ -1403,23 +1215,23 @@ void MeshModelClass::install_materials(MeshLoadContextClass * context)
 	if (Get_Flag(MeshGeometryClass::PRELIT_VERTEX)) {
 		lighting_enabled=false;
 	}
-	DefMatDesc->Post_Load_Process (lighting_enabled,this);
-	if (AlternateMatDesc != nullptr) {
-		AlternateMatDesc->Post_Load_Process (lighting_enabled,this);
+	Graphics::Prepare_Mesh_Materials(DefMatDesc,lighting_enabled);
+	if (AlternateMatDesc) {
+		Graphics::Prepare_Mesh_Materials(*AlternateMatDesc,lighting_enabled);
 	}
 
 	/*
 	** transfer the refs to our textures into the MatInfo
 	*/
 	for (i=0; i<context->Texture_Count(); i++) {
-		MatInfo->Add_Texture(context->Peek_Texture(i));
+		MatInfo->textures.push_back(RefCountPtr<TextureClass>::Create_Add_Ref(context->Peek_Texture(i)));
 	}
 
 	/*
 	** transfer the refs to our vertex materials into the MatInfo
 	*/
 	for (i=0; i<context->Vertex_Material_Count(); i++) {
-		MatInfo->Add_Vertex_Material(context->Peek_Vertex_Material(i));
+		MatInfo->materials.push_back(context->Get_Vertex_Material(i));
 	}
 }
 
@@ -1429,23 +1241,23 @@ void MeshModelClass::clone_materials(const MeshModelClass & srcmesh)
 	/*
 	** Copy the material info and the materials within
 	*/
-	REF_PTR_RELEASE(MatInfo);
-	MatInfo = NEW_REF( MaterialInfoClass,(*(srcmesh.MatInfo)));
+	MatInfo = std::make_shared<Graphics::ModelMaterials<RefCountPtr<TextureClass>>>(
+        srcmesh.MatInfo->Clone(WW3D::Get_Sync_Time()));
 
 	/*
 	** remap!
 	*/
-	MaterialRemapperClass remapper(srcmesh.MatInfo, MatInfo);
-	remapper.Remap_Mesh(srcmesh.CurMatDesc, CurMatDesc);
+	CurMatDesc->Remap_Resources(*srcmesh.CurMatDesc, *srcmesh.MatInfo, *MatInfo);
 }
 
 
 void MeshModelClass::install_alternate_material_desc(MeshLoadContextClass * context)
 {
-	if (context->AlternateMatDesc.Is_Empty() == false) {
-		WWASSERT(AlternateMatDesc == nullptr);
-		AlternateMatDesc = W3DNEW MeshMatDescClass;
-		AlternateMatDesc->Init_Alternate(*DefMatDesc,context->AlternateMatDesc);
+	if (!context->AlternateMatDesc.Is_Empty()) {
+		WWASSERT(!AlternateMatDesc);
+		AlternateMatDesc = std::make_unique<MaterialDescription>();
+		AlternateMatDesc->Init_Alternate(DefMatDesc,context->AlternateMatDesc,
+			WW3D::Get_Sync_Time());
 	}
 }
 
@@ -1494,9 +1306,6 @@ MeshLoadContextClass::~MeshLoadContextClass()
 	for (i=0; i<Textures.Count(); i++) {
 		Textures[i]->Release_Ref();
 	}
-	for (i=0; i<VertexMaterials.Count(); i++) {
-		VertexMaterials[i]->Release_Ref();
-	}
 	for (i=0; i<LegacyMaterials.Count(); i++) {
 		delete LegacyMaterials[i];
 	}
@@ -1538,7 +1347,7 @@ W3dTexCoordStruct * MeshLoadContextClass::Get_Texcoord_Array()
  * HISTORY:                                                                                    *
  *   12/10/98   GTH : Created.                                                                 *
  *=============================================================================================*/
-int MeshLoadContextClass::Add_Shader(ShaderClass shader)
+int MeshLoadContextClass::Add_Shader(Graphics::MaterialState shader)
 {
 	int index = Shaders.Count();
 	Shaders.Add(shader);
@@ -1558,12 +1367,11 @@ int MeshLoadContextClass::Add_Shader(ShaderClass shader)
  * HISTORY:                                                                                    *
  *   12/10/98   GTH : Created.                                                                 *
  *=============================================================================================*/
-int MeshLoadContextClass::Add_Vertex_Material(VertexMaterialClass * vmat)
+int MeshLoadContextClass::Add_Vertex_Material(const std::shared_ptr<Graphics::MeshMaterial>& vmat)
 {
 	WWASSERT(vmat != nullptr);
-	vmat->Add_Ref();
-	int index = VertexMaterials.Count();
-	VertexMaterials.Add(vmat);
+	int index = static_cast<int>(VertexMaterials.size());
+	VertexMaterials.push_back(vmat);
 	return index;
 }
 
@@ -1605,7 +1413,7 @@ int MeshLoadContextClass::Add_Texture(TextureClass * tex)
  * HISTORY:                                                                                    *
  *   12/10/98   GTH : Created.                                                                 *
  *=============================================================================================*/
-void MeshLoadContextClass::Add_Legacy_Material(ShaderClass shader,VertexMaterialClass * vmat,TextureClass * tex)
+void MeshLoadContextClass::Add_Legacy_Material(Graphics::MaterialState shader,const std::shared_ptr<Graphics::MeshMaterial>& vmat,TextureClass * tex)
 {
 	// create a new legacy material
 	LegacyMaterialClass * mat = W3DNEW LegacyMaterialClass;
@@ -1625,15 +1433,15 @@ void MeshLoadContextClass::Add_Legacy_Material(ShaderClass shader,VertexMaterial
 	if (vmat == nullptr) {
 		mat->VertexMaterialIdx = -1;
 	} else {
-		unsigned long crc = vmat->Get_CRC();
+		const auto key = vmat->Content_Key();
 		int vi=0;
-		for (; vi<VertexMaterialCrcs.Count(); vi++) {
-			if (VertexMaterialCrcs[vi] == crc) break;
+		for (; vi<static_cast<int>(VertexMaterialKeys.size()); vi++) {
+			if (VertexMaterialKeys[vi] == key) break;
 		}
-		if (vi == VertexMaterials.Count()) {
+		if (vi == static_cast<int>(VertexMaterials.size())) {
 			mat->VertexMaterialIdx = Add_Vertex_Material(vmat);
-			VertexMaterialCrcs.Add(crc);
-			WWASSERT(VertexMaterialCrcs.Count() == VertexMaterials.Count());
+			VertexMaterialKeys.push_back(key);
+			WWASSERT(static_cast<int>(VertexMaterialKeys.size()) == static_cast<int>(VertexMaterials.size()));
 		} else {
 			mat->VertexMaterialIdx = vi;
 		}
@@ -1646,7 +1454,7 @@ void MeshLoadContextClass::Add_Legacy_Material(ShaderClass shader,VertexMaterial
 		int ti=0;
 		for (; ti<Textures.Count(); ti++) {
 			if (Textures[ti] == tex) break;
-			if (WW3DString::Compare_No_Case(Textures[ti]->Get_Texture_Name(),tex->Get_Texture_Name()) == 0) break;
+			if (WWStringDetail::Compare_No_Case(Textures[ti]->Get_Texture_Name(),tex->Get_Texture_Name()) == 0) break;
 		}
 		if (ti == Textures.Count()) {
 			mat->TextureIdx = Add_Texture(tex);
@@ -1674,7 +1482,7 @@ void MeshLoadContextClass::Add_Legacy_Material(ShaderClass shader,VertexMaterial
  * HISTORY:                                                                                    *
  *   12/10/98   GTH : Created.                                                                 *
  *=============================================================================================*/
-ShaderClass MeshLoadContextClass::Peek_Legacy_Shader(int legacy_material_index)
+Graphics::MaterialState MeshLoadContextClass::Peek_Legacy_Shader(int legacy_material_index)
 {
 	WWASSERT(legacy_material_index >= 0);
 	WWASSERT(legacy_material_index < LegacyMaterials.Count());
@@ -1695,13 +1503,13 @@ ShaderClass MeshLoadContextClass::Peek_Legacy_Shader(int legacy_material_index)
  * HISTORY:                                                                                    *
  *   12/10/98   GTH : Created.                                                                 *
  *=============================================================================================*/
-VertexMaterialClass * MeshLoadContextClass::Peek_Legacy_Vertex_Material(int legacy_material_index)
+std::shared_ptr<Graphics::MeshMaterial> MeshLoadContextClass::Get_Legacy_Vertex_Material(int legacy_material_index)
 {
 	WWASSERT(legacy_material_index >= 0);
 	WWASSERT(legacy_material_index < LegacyMaterials.Count());
 	int vi = LegacyMaterials[legacy_material_index]->VertexMaterialIdx;
 	if (vi != -1) {
-		return Peek_Vertex_Material(vi);
+		return Get_Vertex_Material(vi);
 	} else {
 		return nullptr;
 	}
