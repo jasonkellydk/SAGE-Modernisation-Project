@@ -58,9 +58,10 @@ import Graphics.Scene.Props.Material;
 #include "WWLib/wwstring.h"
 #include "RInfo.h"
 #include "MeshGeometry.h"
+#include "WW3D2/Texture.h"
 import Graphics.Scene.Models.MeshMaterialBindings;
+import Graphics.Scene.Models.MaterialSlots;
 
-class TextureClass;
 class RenderInfoClass;
 class AABoxClass;
 class OBBoxClass;

@@ -188,7 +188,12 @@ BOOST_AUTO_TEST_CASE(material_identity_and_mesh_owners_preserve_contents_and_lif
     BOOST_CHECK(!weak.expired());
     BOOST_CHECK(mesh.Peek_Single_Material()==pass.material.get());
     BOOST_CHECK(mesh.Get_Material(1)==equivalent);
-    BOOST_CHECK(mesh.Peek_Material(0)==pass.material.get());
+    // An allocated empty slot stays empty; only an out-of-range peek falls
+    // back to the single material.
+    BOOST_CHECK(mesh.Peek_Material(0)==nullptr);
+    BOOST_CHECK(mesh.Get_Material(0)==nullptr);
+    BOOST_CHECK(mesh.Peek_Material(3)==pass.material.get());
+    BOOST_CHECK(mesh.Get_Material(3)==nullptr);
     mesh.Set_Single_Material(nullptr);
     BOOST_CHECK(!weak.expired());
     pass.material.reset();
