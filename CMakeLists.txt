@@ -104,6 +104,10 @@ endif()
 
 # Add main build targets
 if(RTS_BUILD_ZEROHOUR)
+    add_subdirectory(engine/navigation)
+    if(ENGINE_NAVIGATION_BUILD_TESTS)
+        enable_testing()
+    endif()
     add_subdirectory(GeneralsMD)
 endif()
 

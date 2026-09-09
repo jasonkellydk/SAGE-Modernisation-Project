@@ -1150,6 +1150,7 @@ set_property(TARGET z_gameengine PROPERTY CXX_SCAN_FOR_MODULES ON)
 add_dependencies(z_gameengine generals_graphics)
 add_dependencies(z_gameengine generals_video)
 add_dependencies(z_gameengine generals_ui_wnd)
+set_property(TARGET z_gameengine PROPERTY ENGINE_NAVIGATION_EXTRACTED TRUE)
 
 target_sources(z_gameengine PRIVATE
     ${GAMEENGINE_SRC}
@@ -1175,6 +1176,7 @@ target_link_libraries(z_gameengine PRIVATE
 )
 
 target_link_libraries(z_gameengine PUBLIC
+    engine_navigation
     corei_gameengine_public
     z_wwvegas
     generals_graphics
@@ -1186,3 +1188,5 @@ target_precompile_headers(z_gameengine PRIVATE
     [["Utility/CppMacros.h"]] # Must be first, to be removed when abandoning VC6
 #    Include/Precompiled/PreRTS.h
 )
+
+engine_navigation_attach_generalsmd(z_gameengine)
