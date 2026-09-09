@@ -8,6 +8,8 @@ export import Assets.ModelAssembly;
 import Assets.Adapters.W3D.Chunks;
 
 namespace Assets::W3D {
+export inline constexpr std::uint32_t W3DChunkAggregate = 0x00000600u;
+
 // Format classification is adapter metadata, separate from the generic asset.
 export struct W3DAggregateDescription final {
     ModelAggregateDesc model;

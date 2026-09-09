@@ -31,7 +31,7 @@
 
 namespace
 {
-Graphics::RenderLight Make_Modern_Light(const W3DDynamicLight &light) noexcept
+Graphics::RenderLight Make_Graphics_Light(const W3DDynamicLight &light) noexcept
 {
 	const Vector3 position = light.Get_Position();
 	Vector3 diffuse;
@@ -51,7 +51,7 @@ Graphics::RenderLight Make_Modern_Light(const W3DDynamicLight &light) noexcept
 }
 
 W3DDynamicLight::W3DDynamicLight():
-LightClass(LightClass::POINT)
+W3DLight(W3DLight::POINT)
 {
 	m_priorEnable = false;
 	m_processMe = false;
@@ -73,12 +73,12 @@ LightClass(LightClass::POINT)
 	m_targetRange = 0.0f;
 	m_targetAmbient = {};
 	m_targetDiffuse = {};
-	m_modernLight = Graphics::CreatePointLight(Make_Modern_Light(*this));
+	m_graphicsLight = Graphics::CreatePointLight(Make_Graphics_Light(*this));
 }
 
 W3DDynamicLight::~W3DDynamicLight()
 {
-	Graphics::DestroyPointLight(m_modernLight);
+	Graphics::DestroyPointLight(m_graphicsLight);
 }
 
 void W3DDynamicLight::setEnabled(Bool enabled)
@@ -88,13 +88,13 @@ void W3DDynamicLight::setEnabled(Bool enabled)
 	m_decayFrameCount = 0;
 	m_decayColor = false;
 	m_increaseFrameCount = 0;
-	Graphics::UpdatePointLight(m_modernLight, Make_Modern_Light(*this));
+	Graphics::UpdatePointLight(m_graphicsLight, Make_Graphics_Light(*this));
 }
 
 void W3DDynamicLight::On_Frame_Update()
 {
 	if (!m_enabled) {
-		Graphics::UpdatePointLight(m_modernLight, Make_Modern_Light(*this));
+		Graphics::UpdatePointLight(m_graphicsLight, Make_Graphics_Light(*this));
 		return;
 	}
 	Real factor = 1.0f;
@@ -109,22 +109,26 @@ void W3DDynamicLight::On_Frame_Update()
 		m_curDecayFrameCount--;
 		if (m_curDecayFrameCount == 0) {
 			m_enabled = false;
-			Graphics::UpdatePointLight(m_modernLight, Make_Modern_Light(*this));
+			Graphics::UpdatePointLight(m_graphicsLight, Make_Graphics_Light(*this));
 			return;
 		}
 		factor = m_curDecayFrameCount/(Real)m_decayFrameCount;
 	}
 	if (m_decayRange) {
-		this->FarAttenEnd = factor*m_targetRange;
-		if (FarAttenEnd < FarAttenStart) {
-			FarAttenEnd = FarAttenStart;
+		double far_start = 0.0;
+		double far_end = 0.0;
+		this->Get_Far_Attenuation_Range(far_start, far_end);
+		far_end = factor*m_targetRange;
+		if (far_end < far_start) {
+			far_end = far_start;
 		}
+		this->Set_Far_Attenuation_Range(far_start, far_end);
 	}
 	if (m_decayColor) {
-		this->Ambient = m_targetAmbient*factor;
-		this->Diffuse = m_targetDiffuse*factor;
+		this->Set_Ambient(m_targetAmbient*factor);
+		this->Set_Diffuse(m_targetDiffuse*factor);
 	}
-	Graphics::UpdatePointLight(m_modernLight, Make_Modern_Light(*this));
+	Graphics::UpdatePointLight(m_graphicsLight, Make_Graphics_Light(*this));
 }
 
 void W3DDynamicLight::setFrameFade(UnsignedInt frameIncreaseTime, UnsignedInt decayFrameTime)
@@ -133,8 +137,8 @@ void W3DDynamicLight::setFrameFade(UnsignedInt frameIncreaseTime, UnsignedInt de
 	m_curDecayFrameCount = decayFrameTime;
 	m_curIncreaseFrameCount = frameIncreaseTime;
 	m_increaseFrameCount = frameIncreaseTime;
-	m_targetAmbient = Ambient;
-	m_targetDiffuse = Diffuse;
-	m_targetRange = FarAttenEnd;
-	Graphics::UpdatePointLight(m_modernLight, Make_Modern_Light(*this));
+	Get_Ambient(&m_targetAmbient);
+	Get_Diffuse(&m_targetDiffuse);
+	m_targetRange = Get_Attenuation_Range();
+	Graphics::UpdatePointLight(m_graphicsLight, Make_Graphics_Light(*this));
 }

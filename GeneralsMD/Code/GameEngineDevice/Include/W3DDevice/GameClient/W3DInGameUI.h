@@ -47,7 +47,7 @@ import Assets.Cache.Animations;
 #include "GameClient/InGameUI.h"
 #include "GameClient/View.h"
 #include "W3DDevice/GameClient/W3DView.h"
-#include "WW3D2/RendObj.h"
+#include "W3DDevice/GameClient/W3DRenderObject.h"
 
 
 // W3DInGameUI ----------------------------------------------------------------
@@ -86,9 +86,9 @@ protected:
 	virtual void drawAttackHints( View *view );		///< draw attack hint visual feedback
 	virtual void drawPlaceAngle( View *view ); 		///< draw place building angle if needed
 
-	RenderObjClass *m_moveHintRenderObj[ MAX_MOVE_HINTS ];
+	W3DRenderObject *m_moveHintRenderObj[ MAX_MOVE_HINTS ];
 	Assets::AnimationAssetHandle m_moveHintAnim[ MAX_MOVE_HINTS ];
-	RenderObjClass *m_buildingPlacementAnchor;
-	RenderObjClass *m_buildingPlacementArrow;
+	W3DRenderObject *m_buildingPlacementAnchor;
+	W3DRenderObject *m_buildingPlacementArrow;
 
 };

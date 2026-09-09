@@ -9,7 +9,7 @@ module;
 export module Graphics.Scene.Tracks.Drawing.Tests;
 import Graphics.Scene.Tracks.Geometry;
 import Graphics.Scene.Surfaces.Renderer;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 using namespace Graphics;
 BOOST_AUTO_TEST_CASE(strip_seams_distance_fade_and_zero_alpha_anchors)
 {
@@ -34,10 +34,10 @@ BOOST_AUTO_TEST_CASE(strip_seams_distance_fade_and_zero_alpha_anchors)
 }
 BOOST_AUTO_TEST_CASE(track_texture_and_vertex_fade_blend_without_writing_depth)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     BOOST_REQUIRE(device.Is_Valid());
     SurfaceRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device,std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     std::array<TrackEdge,2> edges{};
     edges[0].positions = {{{-1,-1,0.5f},{1,-1,0.5f}}};
     edges[1].positions = {{{-1,1,0.5f},{1,1,0.5f}}};

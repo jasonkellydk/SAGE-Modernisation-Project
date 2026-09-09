@@ -10,7 +10,7 @@ module;
 
 export module Graphics.Scene.Ring.Snapshot.Tests;
 
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 import Graphics.RHI;
 import Graphics.Scene.Ring;
 import Graphics.Scene.Screen.FullscreenOverlay;
@@ -75,13 +75,13 @@ static bool Render_Ring_Overlay(Device &, CommandList &commands, RHITextureHandl
 
 static void Run_Ring_Snapshot(std::uint32_t mode, const char *name)
 {
-	DX11Device device({true});
+	GraphicsTestDevice device({true});
 	BOOST_REQUIRE(device.Is_Valid());
 
 	RingRenderer ring;
 	FullscreenOverlayRenderer overlay;
-	BOOST_REQUIRE(ring.Initialize(device, std::filesystem::path(GRAPHICS_RING_SNAPSHOT_SHADER_DIRECTORY)));
-	BOOST_REQUIRE(overlay.Initialize(device, std::filesystem::path(GRAPHICS_RING_SNAPSHOT_SHADER_DIRECTORY)));
+	BOOST_REQUIRE(ring.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_RING_SNAPSHOT_SHADER_DIRECTORY)));
+	BOOST_REQUIRE(overlay.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_RING_SNAPSHOT_SHADER_DIRECTORY)));
 
 	const VisualRegressionConfig config{
 		128,

@@ -4,8 +4,8 @@
 #include <span>
 import Graphics.Scene.Props.Renderer;
 import Graphics.Scene.Props.Lighting;
-class RenderObjClass;
-class RenderInfoClass;
+class W3DRenderObject;
+class W3DRenderContext;
 class W3DShroud;
 
 // Translates asset geometry and material state; graphics owns mesh resources,
@@ -17,9 +17,9 @@ public:
     ~W3DObjectGraphics();
     W3DObjectGraphics(const W3DObjectGraphics&) = delete;
     W3DObjectGraphics& operator=(const W3DObjectGraphics&) = delete;
-    static void Mark_Muzzle_Flash(RenderObjClass& object);
+    static void Mark_Muzzle_Flash(W3DRenderObject& object);
     void Invalidate();
-    bool Render(RenderObjClass& object, RenderInfoClass& info,
+    bool Render(W3DRenderObject& object, W3DRenderContext& info,
         const Graphics::PropLighting& lighting, W3DShroud* shroud, bool background = false);
 private:
     struct State;

@@ -1,8 +1,8 @@
 #include "W3DDevice/GameClient/W3DGraphicsResources.h"
-#include "WW3D2/Texture.h"
-#include "WW3D2/Camera.h"
+#include "W3DDevice/GameClient/W3DTextureHandle.h"
+#include "W3DDevice/GameClient/W3DCamera.h"
 #include "W3DDevice/GameClient/W3DShroud.h"
-import Graphics.Backends.DX11.FrameRuntime;
+import Graphics.Frame.Runtime;
 import Graphics.Resources.Textures.References;
 
 namespace
@@ -10,7 +10,7 @@ namespace
 Graphics::TextureReferences texture_references;
 }
 
-Graphics::RHITextureHandle Resolve_Graphics_Texture(TextureBaseClass *texture)
+Graphics::RHITextureHandle Resolve_Graphics_Texture(W3DTextureHandle *texture)
 {
     auto* device = Graphics::Shared_Frame_Device();
     if (device == nullptr || texture == nullptr || !texture->Ensure_Render_Backend_Texture()
@@ -23,7 +23,7 @@ void Release_Graphics_Textures() noexcept
     texture_references.Clear();
 }
 
-Graphics::SurfaceParameters Make_Surface_Parameters(CameraClass &camera)
+Graphics::SurfaceParameters Make_Surface_Parameters(W3DCamera &camera)
 {
     Matrix3D view;
     Matrix4x4 projection;

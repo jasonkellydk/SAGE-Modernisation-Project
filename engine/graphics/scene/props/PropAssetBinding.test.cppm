@@ -16,7 +16,7 @@ module;
 #include <vector>
 export module Graphics.Scene.Props.AssetBinding.Tests;
 import Graphics.Scene.Props.AssetBinding;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 import Graphics.Scene.Shadows.DirectionalRenderer;
 import Assets.Adapters.W3D;
 import Assets.Cache;
@@ -43,8 +43,8 @@ BOOST_AUTO_TEST_CASE(automatically_adapted_native_models_render_with_original_ri
     const char* legacy=std::getenv("GENERALS_W3D_LEGACY_TEXTURES");
     if(!directory || !textures) { BOOST_TEST_MESSAGE("Set adapted model directory for batch drawing");return; }
     auto upper=[](std::string value) { for(auto& c:value)c=static_cast<char>(std::toupper(static_cast<unsigned char>(c)));return value; };
-    DX11Device device({true});PropRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device,std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    GraphicsTestDevice device({true});PropRenderer renderer;
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     constexpr unsigned extent=512;
     const auto target=device.Create_Texture({extent,extent,1,RHITextureFormat::RGBA8_UNorm,static_cast<unsigned>(RHITextureUsage::RenderTarget)});
     const auto depth=device.Create_Texture({extent,extent,1,RHITextureFormat::D32_Float,static_cast<unsigned>(RHITextureUsage::DepthStencil)});
@@ -152,8 +152,8 @@ BOOST_AUTO_TEST_CASE(weighted_surface_pose_renders_and_survives_deferred_owner_r
     BOOST_REQUIRE(model->Skin_Bone_Count()>0);
     std::string error;ModelAssetPose pose;BOOST_REQUIRE_MESSAGE(pose.Initialize(model->Rig(),error),error);
     BOOST_REQUIRE(!model->Rig().animations.empty());
-    DX11Device device({true});PropRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device,std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    GraphicsTestDevice device({true});PropRenderer renderer;
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     PropAssetBinding binding;BOOST_REQUIRE_MESSAGE(binding.Load(device,renderer,assets,handle,error),error);
     constexpr unsigned extent=512;
     const auto target=device.Create_Texture({extent,extent,1,RHITextureFormat::RGBA8_UNorm,static_cast<unsigned>(RHITextureUsage::RenderTarget)});
@@ -204,8 +204,8 @@ BOOST_AUTO_TEST_CASE(converted_airfield_renders_through_typed_asset_and_prop_bin
     BOOST_REQUIRE(assets.Register_Model_Adapter(std::make_shared<Assets::W3DAdapter>()));
     const auto handle=assets.Request_Model("airfield.w3d"); assets.Wait(handle);
     BOOST_REQUIRE_MESSAGE(assets.Try_Get_Model(handle)!=nullptr,assets.Get_Error(handle));
-    DX11Device device({true}); PropRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device,std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    GraphicsTestDevice device({true}); PropRenderer renderer;
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     PropAssetBinding binding; std::string error;
     BOOST_REQUIRE_MESSAGE(binding.Load(device,renderer,assets,handle,error),error);
     BOOST_TEST(binding.Part_Count()==1u); BOOST_TEST(binding.Texture_Count()==3u);
@@ -263,8 +263,8 @@ BOOST_AUTO_TEST_CASE(converted_section_door_opens_through_native_rig_and_surface
     const auto handle=assets.Request_Model("ABArFrcCmd_A2.W3D");assets.Wait(handle);
     const auto* model=assets.Try_Get_Model(handle);BOOST_REQUIRE_MESSAGE(model,assets.Get_Error(handle));
     std::string error;ModelAssetPose pose;BOOST_REQUIRE_MESSAGE(pose.Initialize(model->Rig(),error),error);
-    DX11Device device({true});PropRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device,std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    GraphicsTestDevice device({true});PropRenderer renderer;
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     PropAssetBinding binding;BOOST_REQUIRE_MESSAGE(binding.Load(device,renderer,assets,handle,error),error);
     BOOST_REQUIRE_EQUAL(binding.Part_Count(),3u);
     constexpr unsigned extent=512;

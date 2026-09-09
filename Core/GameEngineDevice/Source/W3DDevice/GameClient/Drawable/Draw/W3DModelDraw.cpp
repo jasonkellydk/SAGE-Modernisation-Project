@@ -29,7 +29,6 @@
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 
-#define DEFINE_W3DANIMMODE_NAMES
 #define DEFINE_WEAPONSLOTTYPE_NAMES
 
 #define NO_DEBUG_CRC
@@ -71,14 +70,14 @@
 #include "W3DDevice/GameClient/W3DProjectedShadow.h"
 #include "W3DDevice/GameClient/W3DTerrainTracks.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
-#include "WW3D2/HLOD.h"
+#include "W3DDevice/GameClient/W3DHierarchyRenderObject.h"
 import Graphics.Scene.Models.Hierarchy;
-#include "WW3D2/RendObj.h"
-#include "WW3D2/Mesh.h"
-#include "WW3D2/MeshMdl.h"
+#include "W3DDevice/GameClient/W3DRenderObject.h"
+#include "W3DDevice/GameClient/W3DMeshRenderObject.h"
+#include "W3DDevice/GameClient/W3DMeshResource.h"
 import Graphics.Resources.Textures.Edit;
 import Assets.Identity;
-#include "WW3D2/Texture.h"
+#include "W3DDevice/GameClient/W3DTextureHandle.h"
 #include "Common/BitFlagsIO.h"
 #include "WWMath/sphere.h"
 #ifdef RTS_ZEROHOUR
@@ -369,7 +368,7 @@ Assets::AnimationAssetHandle W3DAnimationInfo::getAnimHandle() const
 	if (m_handle == nullptr)
 	{
 		// Acquire_Animation addrefs it, so we'll have to release it in our dtor.
-		m_handle = W3DDisplay::m_assetManager->Acquire_Animation(m_name.str());
+		m_handle = W3DDisplay::m_assetManager->Catalog().Acquire_Animation(m_name.str());
 		DEBUG_ASSERTCRASH(m_handle, ("*** ASSET ERROR: animation %s not found",m_name.str()));
 		if (m_handle)
 		{
@@ -381,7 +380,7 @@ Assets::AnimationAssetHandle W3DAnimationInfo::getAnimHandle() const
 		Assets::Get_Animation_Cache().Retain(m_handle);
 	return m_handle;
 #else
-	Assets::AnimationAssetHandle handle = W3DDisplay::m_assetManager->Acquire_Animation(m_name.str());
+	Assets::AnimationAssetHandle handle = W3DDisplay::m_assetManager->Catalog().Acquire_Animation(m_name.str());
 	DEBUG_ASSERTCRASH(handle, ("*** ASSET ERROR: animation %s not found",m_name.str()));
 	if (handle != nullptr && m_naturalDurationInMsec < 0)
 	{
@@ -456,7 +455,7 @@ inline Bool testFlagBit(Int flags, Int bit)
 }
 
 //-------------------------------------------------------------------------------------------------
-static Bool findSingleBone(RenderObjClass* robj, const AsciiString& boneName, Matrix3D& mtx, Int& boneIndex)
+static Bool findSingleBone(W3DRenderObject* robj, const AsciiString& boneName, Matrix3D& mtx, Int& boneIndex)
 {
 	if (boneName.isNone() || boneName.isEmpty())
 		return false;
@@ -474,12 +473,12 @@ static Bool findSingleBone(RenderObjClass* robj, const AsciiString& boneName, Ma
 }
 
 //-------------------------------------------------------------------------------------------------
-static Bool findSingleSubObj(RenderObjClass* robj, const AsciiString& boneName, Matrix3D& mtx, Int& boneIndex)
+static Bool findSingleSubObj(W3DRenderObject* robj, const AsciiString& boneName, Matrix3D& mtx, Int& boneIndex)
 {
 	if (boneName.isNone() || boneName.isEmpty())
 		return false;
 
-	RenderObjClass* childObject = robj->Get_Sub_Object_By_Name(boneName.str());
+	W3DRenderObject* childObject = robj->Get_Sub_Object_By_Name(boneName.str());
 	if (childObject)
 	{
 		mtx = childObject->Get_Transform();
@@ -489,7 +488,7 @@ static Bool findSingleSubObj(RenderObjClass* robj, const AsciiString& boneName, 
 
 		for (Int subObj = 0; subObj < robj->Get_Num_Sub_Objects(); subObj++)
 		{
-			RenderObjClass* test = robj->Get_Sub_Object(subObj);
+			W3DRenderObject* test = robj->Get_Sub_Object(subObj);
 			if (test == childObject)
 			{
 				boneIndex = robj->Get_Sub_Object_Bone_Index(0, subObj);
@@ -513,7 +512,7 @@ static Bool findSingleSubObj(RenderObjClass* robj, const AsciiString& boneName, 
 }
 
 //-------------------------------------------------------------------------------------------------
-static Bool doSingleBoneName(RenderObjClass* robj, const AsciiString& boneName, PristineBoneInfoMap& map)
+static Bool doSingleBoneName(W3DRenderObject* robj, const AsciiString& boneName, PristineBoneInfoMap& map)
 {
 	Bool foundAsBone = false;
 	Bool foundAsSubObj = false;
@@ -588,7 +587,7 @@ static Bool doSingleBoneName(RenderObjClass* robj, const AsciiString& boneName, 
 
 
 //-------------------------------------------------------------------------------------------------
-void ModelConditionInfo::validateStuff(RenderObjClass* robj, Real scale, const std::vector<AsciiString>& extraPublicBones) const
+void ModelConditionInfo::validateStuff(W3DRenderObject* robj, Real scale, const std::vector<AsciiString>& extraPublicBones) const
 {
 // srj sez: hm, this doesn't make sense; I think we really do need to validate transition states.
 //	if (m_transition != NO_TRANSITION)
@@ -609,7 +608,7 @@ void ModelConditionInfo::validateStuff(RenderObjClass* robj, Real scale, const s
 }
 
 //-------------------------------------------------------------------------------------------------
-void ModelConditionInfo::validateCachedBones(RenderObjClass* robj, Real scale) const
+void ModelConditionInfo::validateCachedBones(W3DRenderObject* robj, Real scale) const
 {
 	//DEBUG_ASSERTCRASH(isValidTimeToCalcLogicStuff(), ("calling validateCachedBones() from in GameClient!"));
 	if (m_validStuff & PRISTINE_BONES_VALID)
@@ -653,16 +652,16 @@ void ModelConditionInfo::validateCachedBones(RenderObjClass* robj, Real scale) c
 	}
 
 	Matrix3D			originalTransform = robj->Get_Transform();	// save the transform
-	HLodClass*		hlod = nullptr;
+	W3DHierarchyRenderObject*		hlod = nullptr;
 	Assets::AnimationAssetHandle curAnim = nullptr;
 	int						numFrames = 0;
 	float					frame = 0.0f;
 	int						mode = 0;
 	float					mult = 1.0f;
 
-	if (robj->Class_ID() == RenderObjClass::CLASSID_HLOD)
+	if (robj->Class_ID() == W3DRenderObject::CLASSID_HLOD)
 	{
-		hlod = (HLodClass*)robj;
+		hlod = (W3DHierarchyRenderObject*)robj;
 		curAnim = hlod->Peek_Animation_And_Info(frame, numFrames, mode, mult);
 	}
 
@@ -683,7 +682,7 @@ void ModelConditionInfo::validateCachedBones(RenderObjClass* robj, Real scale) c
 	{
 		// make sure we're in frame zero.
 		Int whichFrame = testFlagBit(m_flags, PRISTINE_BONE_POS_IN_FINAL_FRAME) ? static_cast<int>(Assets::Get_Animation_Cache().Resolve(animToUse)->frame_count)-1 : 0;
-		robj->Set_Animation(animToUse, whichFrame, RenderObjClass::ANIM_MODE_MANUAL);
+		robj->Set_Animation(animToUse, whichFrame, W3DRenderObject::ANIM_MODE_MANUAL);
 		// must balance the addref, above
 		Assets::Release_Animation(animToUse);
 		animToUse = nullptr;
@@ -1030,7 +1029,7 @@ void ModelConditionInfo::clear()
 	m_transitionKey = NAMEKEY_INVALID;
 	m_allowToFinishKey = NAMEKEY_INVALID;
 	m_iniReadFlags = 0;
-	m_mode = RenderObjClass::ANIM_MODE_ONCE;
+	m_mode = W3DRenderObject::ANIM_MODE_ONCE;
 	m_transitionSig = NO_TRANSITION;
 	m_animMinSpeedFactor = 1.0f;
 	m_animMaxSpeedFactor = 1.0f;
@@ -1440,6 +1439,10 @@ static Bool doesStateExist(const ModelConditionVector& v, const ModelConditionFl
 //-------------------------------------------------------------------------------------------------
 void W3DModelDrawModuleData::parseConditionState(INI* ini, void *instance, void * /*store*/, const void* userData)
 {
+	static const char* const TheAnimModeNames[] = {
+		"MANUAL", "LOOP", "ONCE", "LOOP_PINGPONG", "LOOP_BACKWARDS", "ONCE_BACKWARDS", nullptr
+	};
+	static_assert(std::size(TheAnimModeNames) == W3DRenderObject::ANIM_MODE_COUNT + 1);
 	static const FieldParse myFieldParse[] =
 	{
 		{ "Model",	parseAsciiStringLC, nullptr, offsetof(ModelConditionInfo, m_modelName) },
@@ -1674,7 +1677,7 @@ void W3DModelDrawModuleData::parseConditionState(INI* ini, void *instance, void 
 		throw INI_INVALID_DATA;
 	}
 
-	if ((info.m_iniReadFlags & (1<<GOT_IDLE_ANIMS)) && (info.m_mode != RenderObjClass::ANIM_MODE_ONCE && info.m_mode != RenderObjClass::ANIM_MODE_ONCE_BACKWARDS))
+	if ((info.m_iniReadFlags & (1<<GOT_IDLE_ANIMS)) && (info.m_mode != W3DRenderObject::ANIM_MODE_ONCE && info.m_mode != W3DRenderObject::ANIM_MODE_ONCE_BACKWARDS))
 	{
 		DEBUG_CRASH(("*** ASSET ERROR: Idle Anims should always use ONCE or ONCE_BACKWARDS (%s)",TheThingTemplateBeingParsedName.str()));
 		throw INI_INVALID_DATA;
@@ -1698,7 +1701,7 @@ void W3DModelDrawModuleData::parseConditionState(INI* ini, void *instance, void 
 			throw INI_INVALID_DATA;
 		}
 
-		if (info.m_mode != RenderObjClass::ANIM_MODE_ONCE && info.m_mode != RenderObjClass::ANIM_MODE_ONCE_BACKWARDS)
+		if (info.m_mode != W3DRenderObject::ANIM_MODE_ONCE && info.m_mode != W3DRenderObject::ANIM_MODE_ONCE_BACKWARDS)
 		{
 			DEBUG_CRASH(("*** ASSET ERROR: Transition States should always use ONCE or ONCE_BACKWARDS"));
 			throw INI_INVALID_DATA;
@@ -1747,7 +1750,7 @@ const ModelConditionInfo* W3DModelDrawModuleData::findBestInfo(const ModelCondit
 W3DModelDraw::W3DModelDraw(Thing *thing, const ModuleData* moduleData) : DrawModule(thing, moduleData)
 {
 	int i;
-	m_animationMode = RenderObjClass::ANIM_MODE_LOOP;
+	m_animationMode = W3DRenderObject::ANIM_MODE_LOOP;
 	m_hideHeadlights = true;
 	m_pauseAnimation = false;
 	m_curState = nullptr;
@@ -1929,13 +1932,13 @@ void W3DModelDraw::getRenderCost(RenderCost & rc) const
 
 /**recurse through sub-objs to collect stats about the rendering cost of this draw module */
 #if defined(RTS_DEBUG)
-void W3DModelDraw::getRenderCostRecursive(RenderCost & rc,RenderObjClass * robj) const
+void W3DModelDraw::getRenderCostRecursive(RenderCost & rc,W3DRenderObject * robj) const
 {
 	if (robj == nullptr) return;
 
 	// recurse through sub-objects
 	for (int i=0; i<robj->Get_Num_Sub_Objects(); i++) {
-		RenderObjClass * sub_obj = robj->Get_Sub_Object(i);
+		W3DRenderObject * sub_obj = robj->Get_Sub_Object(i);
 		getRenderCostRecursive(rc,sub_obj);
 		REF_PTR_RELEASE(sub_obj);
 	}
@@ -1945,13 +1948,13 @@ void W3DModelDraw::getRenderCostRecursive(RenderCost & rc,RenderObjClass * robj)
 	if (robj->Is_Not_Hidden_At_All()) {
 
 		// collect stats from meshes
-		if (robj->Class_ID() == RenderObjClass::CLASSID_MESH) {
-			MeshClass * mesh = (MeshClass*)robj;
-			MeshModelClass * model = mesh->Peek_Model();
+		if (robj->Class_ID() == W3DRenderObject::CLASSID_MESH) {
+			W3DMeshRenderObject * mesh = (W3DMeshRenderObject*)robj;
+			W3DMeshResource * model = mesh->Peek_Model();
 			if (model != nullptr)
-			{	if (model->Get_Flag(MeshGeometryClass::SORT))
+			{	if (model->Get_Flag(W3DMeshGeometry::SORT))
 					rc.addSortedMeshes(1);
-				if (model->Get_Flag(MeshGeometryClass::SKIN))
+				if (model->Get_Flag(W3DMeshGeometry::SKIN))
 					rc.addSkinMeshes(1);
 			}
 
@@ -1984,11 +1987,11 @@ void W3DModelDraw::setFullyObscuredByShroud(Bool fullyObscured)
 }
 
 //-------------------------------------------------------------------------------------------------
-static Bool isAnimationComplete(RenderObjClass* r)
+static Bool isAnimationComplete(W3DRenderObject* r)
 {
-	if (r && r->Class_ID() == RenderObjClass::CLASSID_HLOD)
+	if (r && r->Class_ID() == W3DRenderObject::CLASSID_HLOD)
 	{
-		HLodClass *hlod = (HLodClass*)r;
+		W3DHierarchyRenderObject *hlod = (W3DHierarchyRenderObject*)r;
 		return hlod->Is_Animation_Complete();
 	}
 
@@ -2161,12 +2164,12 @@ Real W3DModelDraw::getCurrentAnimFraction() const
 	if (m_curState != nullptr
 			&& isAnyMaintainFrameFlagSet(m_curState->m_flags)
 			&& m_renderObject != nullptr
-			&& m_renderObject->Class_ID() == RenderObjClass::CLASSID_HLOD)
+			&& m_renderObject->Class_ID() == W3DRenderObject::CLASSID_HLOD)
 	{
 		float framenum, dummy;
 		int mode, numFrames;
 
-		HLodClass* hlod = (HLodClass*)m_renderObject;
+		W3DHierarchyRenderObject* hlod = (W3DHierarchyRenderObject*)m_renderObject;
 		/*Assets::AnimationAssetHandle anim =*/ hlod->Peek_Animation_And_Info(framenum, numFrames, mode, dummy);
 		if (framenum < 0.0)
 			return 0.0;
@@ -2215,8 +2218,8 @@ void W3DModelDraw::adjustAnimation(const ModelConditionInfo* prevState, Real pre
 			if (animHandle)
 			{
 				Int startFrame = 0;
-				if (m_curState->m_mode == RenderObjClass::ANIM_MODE_ONCE_BACKWARDS ||
-						m_curState->m_mode == RenderObjClass::ANIM_MODE_LOOP_BACKWARDS)
+				if (m_curState->m_mode == W3DRenderObject::ANIM_MODE_ONCE_BACKWARDS ||
+						m_curState->m_mode == W3DRenderObject::ANIM_MODE_LOOP_BACKWARDS)
 				{
 					startFrame = static_cast<int>(Assets::Get_Animation_Cache().Resolve(animHandle)->frame_count)-1;
 				}
@@ -2248,9 +2251,9 @@ void W3DModelDraw::adjustAnimation(const ModelConditionInfo* prevState, Real pre
 				Assets::Release_Animation(animHandle);
 				animHandle = nullptr;
 
-				if (m_renderObject->Class_ID() == RenderObjClass::CLASSID_HLOD)
+				if (m_renderObject->Class_ID() == W3DRenderObject::CLASSID_HLOD)
 				{
-					HLodClass *hlod = (HLodClass*)m_renderObject;
+					W3DHierarchyRenderObject *hlod = (W3DHierarchyRenderObject*)m_renderObject;
 					Real factor = GameClientRandomValueReal( m_curState->m_animMinSpeedFactor, m_curState->m_animMaxSpeedFactor );
 					hlod->Set_Animation_Frame_Rate_Multiplier( factor );
 				}
@@ -2267,9 +2270,9 @@ void W3DModelDraw::adjustAnimation(const ModelConditionInfo* prevState, Real pre
 //-------------------------------------------------------------------------------------------------
 Bool W3DModelDraw::setCurAnimDurationInMsec(Real desiredDurationInMsec)
 {
-	if (m_renderObject && m_renderObject->Class_ID() == RenderObjClass::CLASSID_HLOD)
+	if (m_renderObject && m_renderObject->Class_ID() == W3DRenderObject::CLASSID_HLOD)
 	{
-		HLodClass* hlod = (HLodClass*)m_renderObject;
+		W3DHierarchyRenderObject* hlod = (W3DHierarchyRenderObject*)m_renderObject;
 		Assets::AnimationAssetHandle anim = hlod->Peek_Animation();
 		if (anim)
 		{
@@ -2306,7 +2309,7 @@ Real W3DModelDraw::getCurAnimDistanceCovered() const
 	Utility function to make it easier to recursively hide all objects connected to a certain bone.
 	We will hide all objects connected to bones which are children of boneIdx
 */
-static void doHideShowBoneSubObjs(Bool state, Int numSubObjects, Int boneIdx, RenderObjClass *fullObject, const Graphics::ModelHierarchy *htree)
+static void doHideShowBoneSubObjs(Bool state, Int numSubObjects, Int boneIdx, W3DRenderObject *fullObject, const Graphics::ModelHierarchy *htree)
 {
 #if 1	//(gth) fixed and tested this version
 	for (Int i=0; i < numSubObjects; i++)
@@ -2327,7 +2330,7 @@ static void doHideShowBoneSubObjs(Bool state, Int numSubObjects, Int boneIdx, Re
 
 		if (is_child)
 		{
-			RenderObjClass* childObject = fullObject->Get_Sub_Object(i);
+			W3DRenderObject* childObject = fullObject->Get_Sub_Object(i);
 			childObject->Set_Hidden(state);
 			childObject->Release_Ref();
 		}
@@ -2344,7 +2347,7 @@ static void doHideShowBoneSubObjs(Bool state, Int numSubObjects, Int boneIdx, Re
 
   	if (parentIndex == boneIdx)	// this object has our subobject as parent so copy hide state
   	{
-  		RenderObjClass* childObject = fullObject->Get_Sub_Object(i);
+		W3DRenderObject* childObject = fullObject->Get_Sub_Object(i);
   		// recurse down the hierarchy to hide all sub-children
   		doHideShowBoneSubObjs(state, numSubObjects, childBoneIndex, fullObject, htree);
 		childObject->Set_Hidden(state);
@@ -2355,11 +2358,11 @@ static void doHideShowBoneSubObjs(Bool state, Int numSubObjects, Int boneIdx, Re
 }
 
 //-------------------------------------------------------------------------------------------------
-void ModelConditionInfo::WeaponBarrelInfo::setMuzzleFlashHidden(RenderObjClass *fullObject, Bool hide) const
+void ModelConditionInfo::WeaponBarrelInfo::setMuzzleFlashHidden(W3DRenderObject *fullObject, Bool hide) const
 {
 	if (fullObject)
 	{
-		RenderObjClass* childObject = fullObject->Get_Sub_Object_On_Bone(0, m_muzzleFlashBone);
+		W3DRenderObject* childObject = fullObject->Get_Sub_Object_On_Bone(0, m_muzzleFlashBone);
 		if (childObject)
 		{
 			childObject->Set_Hidden(hide);
@@ -2386,7 +2389,7 @@ void W3DModelDraw::doHideShowSubObjs(const std::vector<ModelConditionInfo::HideS
 		for (std::vector<ModelConditionInfo::HideShowSubObjInfo>::const_iterator it = vec->begin(); it != vec->end(); ++it)
 		{
 			Int objIndex;
-			RenderObjClass* subObj;
+			W3DRenderObject* subObj;
 
 			if ((subObj = m_renderObject->Get_Sub_Object_By_Name(it->subObjName.str(), &objIndex)) != nullptr)
 			{
@@ -2850,7 +2853,7 @@ void W3DModelDraw::hideGarrisonFlags(Bool hide)
 		return;
 
 	Int objIndex;
-	RenderObjClass* subObj;
+	W3DRenderObject* subObj;
 
 	if ((subObj = m_renderObject->Get_Sub_Object_By_Name("POLE", &objIndex)) != nullptr)
 	{
@@ -2877,7 +2880,7 @@ void W3DModelDraw::hideAllHeadlights(Bool hide)
 	{
 		for (Int subObj = 0; subObj < m_renderObject->Get_Num_Sub_Objects(); subObj++)
 		{
-			RenderObjClass* test = m_renderObject->Get_Sub_Object(subObj);
+			W3DRenderObject* test = m_renderObject->Get_Sub_Object(subObj);
 			if (strstr(test->Get_Name(),"HEADLIGHT"))
 			{
 				test->Set_Hidden(hide);
@@ -2888,7 +2891,7 @@ void W3DModelDraw::hideAllHeadlights(Bool hide)
 }
 
 //-------------------------------------------------------------------------------------------------
-void W3DModelDraw::hideAllMuzzleFlashes(const ModelConditionInfo* state, RenderObjClass* renderObject)
+void W3DModelDraw::hideAllMuzzleFlashes(const ModelConditionInfo* state, W3DRenderObject* renderObject)
 {
 	if (!state || !renderObject)
 		return;
@@ -3868,19 +3871,19 @@ void W3DModelDraw::setPauseAnimation(Bool pauseAnim)
 
 	m_pauseAnimation = pauseAnim;
 
-	if (m_renderObject && m_renderObject->Class_ID() == RenderObjClass::CLASSID_HLOD)
+	if (m_renderObject && m_renderObject->Class_ID() == W3DRenderObject::CLASSID_HLOD)
 	{
 		float framenum, dummy;
 		int mode, numFrames;
 
-		HLodClass* hlod = (HLodClass*)m_renderObject;
+		W3DHierarchyRenderObject* hlod = (W3DHierarchyRenderObject*)m_renderObject;
 		Assets::AnimationAssetHandle anim = hlod->Peek_Animation_And_Info(framenum, numFrames, mode, dummy);
 		if (anim)
 		{
 			if (m_pauseAnimation)
 			{
 				m_animationMode = mode;
-				hlod->Set_Animation(anim, framenum, RenderObjClass::ANIM_MODE_MANUAL);
+				hlod->Set_Animation(anim, framenum, W3DRenderObject::ANIM_MODE_MANUAL);
 			}
 			else
 			{
@@ -4014,7 +4017,7 @@ void W3DModelDraw::updateSubObjects()
 		for (std::vector<ModelConditionInfo::HideShowSubObjInfo>::const_iterator it = m_subObjectVec.begin(); it != m_subObjectVec.end(); ++it)
 		{
 			Int objIndex;
-			RenderObjClass* subObj;
+			W3DRenderObject* subObj;
 
 			if ((subObj = m_renderObject->Get_Sub_Object_By_Name(it->subObjName.str(), &objIndex)) != nullptr)
 			{
@@ -4180,13 +4183,13 @@ void W3DModelDraw::xfer( Xfer *xfer )
 				// srj sez: don't save info for transition states, since we can't really
 				// restore them effectively.
 			if ( m_renderObject
-					&& m_renderObject->Class_ID() == RenderObjClass::CLASSID_HLOD
+					&& m_renderObject->Class_ID() == W3DRenderObject::CLASSID_HLOD
 					&& m_curState
 					&& m_curState->m_transitionSig == NO_TRANSITION )
 			{
 
 				// cast to HLod
-				HLodClass *hlod = (HLodClass*)m_renderObject;
+				W3DHierarchyRenderObject *hlod = (W3DHierarchyRenderObject*)m_renderObject;
 
 				// get animation info
 				Int mode, numFrames;
@@ -4248,9 +4251,9 @@ void W3DModelDraw::xfer( Xfer *xfer )
 				// cast render object to HLod, if this is no longer possible we have read the
 				// data already and can just ignore it
 				//
-				if( m_renderObject && m_renderObject->Class_ID() == RenderObjClass::CLASSID_HLOD )
+				if( m_renderObject && m_renderObject->Class_ID() == W3DRenderObject::CLASSID_HLOD )
 				{
-					HLodClass *hlod = (HLodClass *)m_renderObject;
+					W3DHierarchyRenderObject *hlod = (W3DHierarchyRenderObject *)m_renderObject;
 
 					// get anim
 					Assets::AnimationAssetHandle anim = hlod->Peek_Animation();

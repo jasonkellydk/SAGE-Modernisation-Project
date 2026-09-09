@@ -15,7 +15,7 @@ import Graphics.Scene.DrawParameters;
 import Graphics.Scene.Props.MaterialDrawState;
 import Graphics.Scene.Props.Renderer;
 import Graphics.Scene.Props.Geometry;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 import Graphics.RHI;
 import Assets.Adapters.W3D.Materials;
 using namespace Graphics;
@@ -117,9 +117,9 @@ BOOST_AUTO_TEST_CASE(material_order_retains_alpha_test_and_game_layer_values)
 
 BOOST_AUTO_TEST_CASE(draw_state_preserves_encoded_blends_alpha_cutoff_and_scene_write_mask)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     PropRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device,std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     const auto target=device.Create_Texture({8,8,1,RHITextureFormat::RGBA8_UNorm,
         static_cast<unsigned>(RHITextureUsage::RenderTarget)});
     const auto depth=device.Create_Texture({8,8,1,RHITextureFormat::D32_Float,

@@ -12,7 +12,7 @@ import Graphics.Materials.ProceduralPass;
 import Graphics.Materials.MeshMaterial;
 import Graphics.Materials.State;
 import Graphics.Scene.Props.MaterialPassQueue;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 using namespace Graphics;
 
 namespace
@@ -53,9 +53,9 @@ bool Prepare_Callback_Pass(const CallbackPass& pass, CallbackPass::Description& 
 
 BOOST_AUTO_TEST_CASE(deferred_pass_observes_opaque_depth_and_keeps_submission_order)
 {
-    DX11Device device({true}); BOOST_REQUIRE(device.Is_Valid());
+    GraphicsTestDevice device({true}); BOOST_REQUIRE(device.Is_Valid());
     PropRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device,std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     const auto target=device.Create_Texture({16,16,1,RHITextureFormat::RGBA8_UNorm,
         static_cast<std::uint32_t>(RHITextureUsage::RenderTarget)});
     const auto depth=device.Create_Texture({16,16,1,RHITextureFormat::D32_Float,
@@ -129,10 +129,10 @@ BOOST_AUTO_TEST_CASE(deferred_pass_observes_opaque_depth_and_keeps_submission_or
 
 BOOST_AUTO_TEST_CASE(description_callback_drives_texture_and_transform_after_renderer_recreation)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     BOOST_REQUIRE(device.Is_Valid());
     PropRenderer renderer;
-    const auto shaders = std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
+    const auto shaders = Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
     BOOST_REQUIRE(renderer.Initialize(device, shaders));
     const auto target = device.Create_Texture({8, 8, 1, RHITextureFormat::RGBA8_UNorm,
         static_cast<std::uint32_t>(RHITextureUsage::RenderTarget)});

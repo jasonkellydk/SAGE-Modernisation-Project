@@ -24,8 +24,8 @@
 #include "MeshPropPage.h"
 #include "WW3D2/RendObj.h"
 #include "WW3D2/AssetMgr.h"
-#include "WW3D2/Mesh.h"
-#include "WW3D2/MeshMdl.h"
+#include "W3DDevice/GameClient/W3DMeshRenderObject.h"
+#include "W3DDevice/GameClient/W3DMeshResource.h"
 #include "WW3D2/W3DFile.h"
 
 #ifdef RTS_DEBUG
@@ -98,7 +98,7 @@ CMeshPropPage::OnInitDialog ()
     if (m_stringMeshName.GetLength () > 0)
     {
         // Get a pointer to the mesh object from the asset manager
-        MeshClass *pCMesh = (MeshClass *)WW3DAssetManager::Get_Instance()->Create_Render_Obj (m_stringMeshName);
+        W3DMeshRenderObject *pCMesh = (W3DMeshRenderObject *)WW3DAssetManager::Get_Instance()->Create_Render_Obj (m_stringMeshName);
 
         ASSERT (pCMesh);
         if (pCMesh)
@@ -112,7 +112,7 @@ CMeshPropPage::OnInitDialog ()
             // Put the polygon count onto the dialog
             SetDlgItemInt (IDC_POLYGON_COUNT, pCMesh->Get_Num_Polys ());
 
-            MeshModelClass *pmeshmodel = pCMesh->Get_Model ();
+            W3DMeshResource *pmeshmodel = pCMesh->Get_Model ();
             ASSERT (pmeshmodel);
             if (pmeshmodel)
             {

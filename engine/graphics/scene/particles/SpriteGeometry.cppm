@@ -54,6 +54,7 @@ public:
         constexpr std::array<std::array<float, 2>, 3> triangle_positions{{{0, -2}, {-1.732f, 1}, {1.732f, 1}}};
         constexpr std::array<std::array<float, 2>, 3> triangle_uv{{{.5f, 0}, {0, .866f}, {1, .866f}}};
         constexpr std::array<unsigned, 6> quad_indices{0, 1, 2, 2, 3, 0};
+        constexpr std::array<unsigned, 3> triangle_indices{0, 2, 1};
         for (std::size_t i = 0; i < count; ++i) {
             const SpritePoint point = read_point(i);
             if (!Finite(point.position) || !Finite(point.color) || !Finite(point.texture_region)
@@ -82,7 +83,7 @@ public:
             }
             for (std::size_t index = 0; index < indices; ++index)
                 m_indices[i * indices + index] = static_cast<std::uint32_t>(i * corners
-                    + (shape == SpriteShape::Triangle ? index : quad_indices[index]));
+                    + (shape == SpriteShape::Triangle ? triangle_indices[index] : quad_indices[index]));
         }
         return true;
     }

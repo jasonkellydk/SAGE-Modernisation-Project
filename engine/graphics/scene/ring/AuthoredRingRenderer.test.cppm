@@ -20,7 +20,7 @@ import Graphics.Scene.Ring.Renderer;
 import Graphics.Scene.Ring.Runtime;
 
 #if defined(_WIN32)
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 import Graphics.RHI;
 import Graphics.Resources.Textures.References;
 import Graphics.Resources.Textures.Sampling;
@@ -115,7 +115,7 @@ void Check_Pixel_Bounds(const PixelBytes &pixels, unsigned width, unsigned x,
 	}
 }
 
-void Prepare_Target(Graphics::DX11Device &device,
+void Prepare_Target(Graphics::GraphicsTestDevice &device,
 	Graphics::RHITextureHandle target, Graphics::RHITextureHandle depth,
 	unsigned width, unsigned height, float alpha = 0.0f)
 {
@@ -125,7 +125,7 @@ void Prepare_Target(Graphics::DX11Device &device,
 	BOOST_REQUIRE(commands.Clear({0.0f, 0.0f, 0.0f, alpha}, 1.0f));
 }
 
-PixelBytes Read_Target(Graphics::DX11Device &device,
+PixelBytes Read_Target(Graphics::GraphicsTestDevice &device,
 	Graphics::RHITextureHandle target, unsigned width, unsigned height)
 {
 	PixelBytes pixels(static_cast<std::size_t>(width) * height * 4u);
@@ -146,14 +146,14 @@ Assets::RingAssetDesc Make_Ring_Asset()
 	return asset;
 }
 
-Graphics::RHITextureHandle Make_Solid_Texture(Graphics::DX11Device &device,
+Graphics::RHITextureHandle Make_Solid_Texture(Graphics::GraphicsTestDevice &device,
 	std::array<std::uint8_t, 4> color)
 {
 	return device.Create_Texture_Initialized({1, 1},
 		{std::as_bytes(std::span(color)), 4});
 }
 
-Graphics::RHITextureHandle Make_Tiled_Texture(Graphics::DX11Device &device)
+Graphics::RHITextureHandle Make_Tiled_Texture(Graphics::GraphicsTestDevice &device)
 {
 	const std::array<std::uint8_t, 32> texels{{
 		255, 0, 0, 255, 0, 255, 0, 255,
@@ -168,9 +168,9 @@ Graphics::RHITextureHandle Make_Tiled_Texture(Graphics::DX11Device &device)
 
 BOOST_AUTO_TEST_CASE(authored_annulus_draws_topology_alpha_and_survives_target_recreation)
 {
-	Graphics::DX11Device device({true});
+	Graphics::GraphicsTestDevice device({true});
 	BOOST_REQUIRE(device.Is_Valid());
-	const auto shader_directory = std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
+	const auto shader_directory = Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
 	Graphics::PropRenderer renderer;
 	Graphics::DirectionalShadowRenderer shadows;
 	Graphics::PropSubmission submission;
@@ -246,9 +246,9 @@ BOOST_AUTO_TEST_CASE(authored_annulus_draws_topology_alpha_and_survives_target_r
 
 BOOST_AUTO_TEST_CASE(authored_ring_samples_tiled_texture_after_invalid_and_source_release)
 {
-	Graphics::DX11Device device({true});
+	Graphics::GraphicsTestDevice device({true});
 	BOOST_REQUIRE(device.Is_Valid());
-	const auto shader_directory = std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
+	const auto shader_directory = Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
 	Graphics::PropRenderer renderer;
 	Graphics::DirectionalShadowRenderer shadows;
 	Graphics::PropSubmission submission;
@@ -340,9 +340,9 @@ BOOST_AUTO_TEST_CASE(authored_ring_samples_tiled_texture_after_invalid_and_sourc
 
 BOOST_AUTO_TEST_CASE(authored_ring_texture_transfer_preserves_cached_source_across_repeated_and_deferred_draws)
 {
-	Graphics::DX11Device device({true});
+	Graphics::GraphicsTestDevice device({true});
 	BOOST_REQUIRE(device.Is_Valid());
-	const auto shader_directory = std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
+	const auto shader_directory = Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
 	Graphics::PropRenderer renderer;
 	Graphics::DirectionalShadowRenderer shadows;
 	Graphics::PropSubmission submission;
@@ -439,9 +439,9 @@ BOOST_AUTO_TEST_CASE(authored_ring_texture_transfer_preserves_cached_source_acro
 
 BOOST_AUTO_TEST_CASE(authored_ring_submission_draws_immediately_and_preserves_transparent_fifo)
 {
-	Graphics::DX11Device device({true});
+	Graphics::GraphicsTestDevice device({true});
 	BOOST_REQUIRE(device.Is_Valid());
-	const auto shader_directory = std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
+	const auto shader_directory = Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
 	Graphics::PropRenderer renderer;
 	Graphics::DirectionalShadowRenderer shadows;
 	Graphics::PropSubmission submission;

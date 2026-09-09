@@ -44,17 +44,18 @@
 #include "W3DDevice/GameClient/W3DAssetManager.h"
 #include "W3DDevice/GameClient/W3DGUICallbacks.h"
 #include "W3DDevice/GameClient/W3DInGameUI.h"
+#include "W3DDevice/GameClient/W3DCastQuery.h"
 #include "W3DDevice/GameClient/W3DDisplay.h"
 #include "W3DDevice/GameClient/W3DScene.h"
 #include "W3DDevice/Common/W3DConvert.h"
-#include "WW3D2/WW3D.h"
+
 
 #include "Common/UnitTimings.h" //Contains the DO_UNIT_TIMINGS define jba.
 
 
 
 #include "W3DDevice/GameClient/W3DGraphicsResources.h"
-import Graphics.Backends.DX11.FrameRuntime;
+import Graphics.Frame.Runtime;
 import Graphics.Scene.Debug.Renderer;
 import Graphics.Diagnostics.Render;
 
@@ -62,7 +63,7 @@ import Graphics.Diagnostics.Render;
 #include "W3DDevice/GameClient/BaseHeightMap.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
 import Assets.Cache.Animations;
-class DebugHintObject : public RenderObjClass
+class DebugHintObject : public W3DRenderObject
 {
 
 public:
@@ -72,10 +73,10 @@ public:
 	DebugHintObject & operator = (const DebugHintObject &);
 	~DebugHintObject();
 
-	virtual RenderObjClass *	Clone() const;
+	virtual W3DRenderObject *	Clone() const;
 	virtual int						Class_ID() const;
-	virtual void					Render(RenderInfoClass & rinfo);
-	virtual Bool					Cast_Ray(RayCollisionTestClass & raytest);
+	virtual void					Render(W3DRenderContext & rinfo);
+	virtual Bool					Cast_Ray(W3DRayCastQuery & raytest);
 
 	virtual void					Get_Obj_Space_Bounding_Sphere(SphereClass & sphere) const;
   virtual void					Get_Obj_Space_Bounding_Box(AABoxClass & aabox) const;
@@ -100,7 +101,7 @@ DebugHintObject::~DebugHintObject()
 
 DebugHintObject::DebugHintObject() : m_myColor(0), m_mySize(0) {}
 
-Bool DebugHintObject::Cast_Ray(RayCollisionTestClass & raytest)
+Bool DebugHintObject::Cast_Ray(W3DRayCastQuery & raytest)
 {
 	return false;
 }
@@ -132,10 +133,10 @@ void DebugHintObject::Get_Obj_Space_Bounding_Box(AABoxClass & box) const
 
 Int DebugHintObject::Class_ID() const
 {
-	return RenderObjClass::CLASSID_UNKNOWN;
+	return W3DRenderObject::CLASSID_UNKNOWN;
 }
 
-RenderObjClass * DebugHintObject::Clone() const
+W3DRenderObject * DebugHintObject::Clone() const
 {
 	DEBUG_CRASH(("oops"));
 	return NEW DebugHintObject(*this);
@@ -155,14 +156,14 @@ void DebugHintObject::setLocAndColorAndSize(const Coord3D *loc, Int argb, Int si
         m_myLoc.z=TheTerrainRenderObject->getHeightMapHeight(m_myLoc.x,m_myLoc.y,nullptr);
 }
 
-void DebugHintObject::Render(RenderInfoClass& info)
+void DebugHintObject::Render(W3DRenderContext& info)
 {
     const SphereClass bounds(Vector3(m_myLoc.x,m_myLoc.y,m_myLoc.z),m_mySize);
     auto* device=Graphics::Shared_Frame_Device();
     if (!device || info.Camera.Cull_Sphere(bounds)) return;
     const float x=m_mySize*0.866f, y=m_mySize*0.5f;
     const std::array<Vector3,3> positions{Vector3(0,float(m_mySize),0),Vector3(-x,-y,0),Vector3(x,-y,0)};
-    Matrix3D transform(Transform); transform.Set_Translation(Vector3(m_myLoc.x,m_myLoc.y,m_myLoc.z));
+    Matrix3D transform(Get_Transform()); transform.Set_Translation(Vector3(m_myLoc.x,m_myLoc.y,m_myLoc.z));
     std::array<Graphics::SurfaceVertex,3> vertices{};
     for (unsigned i=0;i<3;++i) {
         Vector3 point; Matrix3D::Transform_Vector(transform,positions[i],&point);
@@ -405,15 +406,15 @@ void W3DInGameUI::drawMoveHints( View *view )
 			// create render object and add to scene of needed
 			if( m_moveHintRenderObj[ i ] == nullptr )
 			{
-				RenderObjClass *hint;
+				W3DRenderObject *hint;
 				Assets::AnimationAssetHandle anim;
 
 				// create hint object
-				hint = W3DDisplay::m_assetManager->Create_Render_Obj(TheGlobalData->m_moveHintName.str());
+				hint = W3DDisplay::m_assetManager->Catalog().Create_Render_Obj(TheGlobalData->m_moveHintName.str());
 
 				AsciiString animName;
 				animName.format("%s.%s", TheGlobalData->m_moveHintName.str(), TheGlobalData->m_moveHintName.str());
-				anim = W3DDisplay::m_assetManager->Acquire_Animation(animName.str());
+				anim = W3DDisplay::m_assetManager->Catalog().Acquire_Animation(animName.str());
 
 				// sanity
 				if( hint == nullptr )
@@ -440,7 +441,7 @@ void W3DInGameUI::drawMoveHints( View *view )
 				// add to scene
 				W3DDisplay::m_3DScene->Add_Render_Object( m_moveHintRenderObj[ i ] );
 				if (m_moveHintAnim[i])
-					m_moveHintRenderObj[i]->Set_Animation(m_moveHintAnim[i], 0, RenderObjClass::ANIM_MODE_ONCE);
+					m_moveHintRenderObj[i]->Set_Animation(m_moveHintAnim[i], 0, W3DRenderObject::ANIM_MODE_ONCE);
 			}
 
 			// move this hint render object to the position and align with terrain
@@ -521,7 +522,7 @@ void W3DInGameUI::drawPlaceAngle( View *view )
 	//Create the anchor & arrow if not already created!
 	if( !m_buildingPlacementAnchor )
 	{
-		m_buildingPlacementAnchor = W3DDisplay::m_assetManager->Create_Render_Obj( "Locater01" );
+		m_buildingPlacementAnchor = W3DDisplay::m_assetManager->Catalog().Create_Render_Obj( "Locater01" );
 
 		// sanity
 		if( !m_buildingPlacementAnchor )
@@ -532,7 +533,7 @@ void W3DInGameUI::drawPlaceAngle( View *view )
 	}
 	if( !m_buildingPlacementArrow )
 	{
-		m_buildingPlacementArrow = W3DDisplay::m_assetManager->Create_Render_Obj( "Locater02" );
+		m_buildingPlacementArrow = W3DDisplay::m_assetManager->Catalog().Create_Render_Obj( "Locater02" );
 
 		// sanity
 		if( !m_buildingPlacementArrow )
@@ -651,5 +652,3 @@ void W3DInGameUI::drawPlaceAngle( View *view )
 	//TheDisplay->drawLine( start.x, start.y, end.x, end.y, width, color );
 
 }
-
-

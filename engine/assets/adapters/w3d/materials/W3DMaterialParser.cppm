@@ -21,6 +21,20 @@ import Assets.Adapters.W3D.TextureMapping;
 namespace Assets::W3D
 {
 
+export inline constexpr std::uint32_t W3DChunkTextureInfo = 0x00000033u;
+
+export inline constexpr std::uint16_t W3DTextureAttributeNoLod = 0x0004u;
+export inline constexpr std::uint16_t W3DTextureAttributeClampU = 0x0008u;
+export inline constexpr std::uint16_t W3DTextureAttributeClampV = 0x0010u;
+export inline constexpr std::uint16_t W3DTextureAttributeMipLevelsMask = 0x00C0u;
+export inline constexpr std::uint16_t W3DTextureAttributeMipLevelsAll = 0x0000u;
+export inline constexpr std::uint16_t W3DTextureAttributeMipLevels2 = 0x0040u;
+export inline constexpr std::uint16_t W3DTextureAttributeMipLevels3 = 0x0080u;
+export inline constexpr std::uint16_t W3DTextureAttributeMipLevels4 = 0x00C0u;
+export inline constexpr std::uint16_t W3DTextureAttributeTypeMask = 0x1000u;
+export inline constexpr std::uint16_t W3DTextureAttributeTypeColorMap = 0x0000u;
+export inline constexpr std::uint16_t W3DTextureAttributeTypeBumpMap = 0x1000u;
+
 export struct W3DMaterialPass final
 {
 	std::uint32_t vertex_material_index = W3DInvalidIndex;
@@ -484,7 +498,7 @@ export bool W3DRead_Texture(W3DByteSpan bytes, W3DTextureData &result)
 			if (has_name) return false;
 			has_name = true;
 			parsed.name = W3DRead_String(chunk.payload);
-		} else if (chunk.id == 0x33) {
+		} else if (chunk.id == W3DChunkTextureInfo) {
 			std::uint32_t flags;
 			if (parsed.has_info || chunk.payload.size() < 12
 				|| !W3DRead_U32(chunk.payload,0,flags)

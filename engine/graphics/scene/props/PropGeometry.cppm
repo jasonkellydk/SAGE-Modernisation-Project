@@ -3,6 +3,7 @@ module;
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cassert>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -32,15 +33,16 @@ export struct PropVertex final
     std::array<float,4> material_specular{0,0,0,1};
     std::array<float,4> secondary_color{};
     std::array<float,4> tangent{0,0,0,1};
+    float bone_index=0;
 };
-static_assert(sizeof(PropVertex) == 152);
+static_assert(sizeof(PropVertex) == 156);
 
 export bool Finite_Prop_Vertices(std::span<const PropVertex> vertices) noexcept
 {
-    // All 38 components are contiguous binary32 values, with no padding.
+    // All 39 components are contiguous binary32 values, with no padding.
     // Inspect their exponent bits without floating-point comparisons: signed
     // zeros and subnormals remain valid, and every infinity/NaN is rejected.
-    static_assert(sizeof(PropVertex) == 38 * sizeof(float));
+    static_assert(sizeof(PropVertex) == 39 * sizeof(float));
     constexpr std::uint32_t exponent_mask = 0x7f800000u;
     const auto bytes = std::as_bytes(vertices);
     std::size_t offset = 0;
@@ -92,6 +94,17 @@ public:
     {
         if (source_index >= m_remap.size()
             || m_indices.size() >= std::numeric_limits<std::uint32_t>::max()/sizeof(std::uint32_t)) return false;
+        Append_Validated(source_index, extract);
+        return true;
+    }
+
+    // Mesh publication validates topology and batch sizing once. Internal
+    // extraction can then assert those preconditions without per-corner checks.
+    template<typename ExtractVertex>
+    void Append_Validated(std::uint32_t source_index, const ExtractVertex& extract)
+    {
+        assert(source_index < m_remap.size());
+        assert(m_indices.size() < (std::numeric_limits<std::uint32_t>::max)()/sizeof(std::uint32_t));
         auto& index = m_remap[source_index];
         if (index == InvalidIndex) {
             const auto next = static_cast<std::uint32_t>(m_vertices.size());
@@ -99,7 +112,6 @@ public:
             index = next;
         }
         m_indices.push_back(index);
-        return true;
     }
 
     std::span<const PropVertex> Vertices() const noexcept { return m_vertices; }
@@ -163,6 +175,7 @@ public:
     std::span<const PropVertex> Vertices() const noexcept { return m_vertices; }
     std::span<const std::uint32_t> Indices() const noexcept { return m_indices; }
 
+    std::uint32_t Maximum_Bone_Index() const noexcept { Update_Bounds(); return m_maximum_bone; }
     const std::array<float,3>& Minimum_Position() const noexcept { Update_Bounds(); return m_minimum; }
     const std::array<float,3>& Maximum_Position() const noexcept { Update_Bounds(); return m_maximum; }
 
@@ -175,6 +188,9 @@ private:
             m_minimum[axis] = std::min(m_minimum[axis],vertex.position[axis]);
             m_maximum[axis] = std::max(m_maximum[axis],vertex.position[axis]);
         }
+        m_maximum_bone = 0;
+        for (const auto& vertex : m_vertices)
+            m_maximum_bone = (std::max)(m_maximum_bone,static_cast<std::uint32_t>(vertex.bone_index));
         m_bounds_valid = true;
     }
 
@@ -185,6 +201,9 @@ private:
             || indices.size() > maximum_bytes / sizeof(std::uint32_t)
             || indices.size() % 3 != 0) return false;
         if (!Finite_Prop_Vertices(vertices)) return false;
+        for (const auto& vertex : vertices)
+            if (vertex.bone_index < 0 || vertex.bone_index > 65535
+                || vertex.bone_index != static_cast<float>(static_cast<std::uint32_t>(vertex.bone_index))) return false;
         for (std::uint32_t index : indices) if (index >= vertices.size()) return false;
         return true;
     }
@@ -192,5 +211,6 @@ private:
     std::vector<std::uint32_t> m_indices;
     mutable std::array<float,3> m_minimum{}, m_maximum{};
     mutable bool m_bounds_valid = false;
+    mutable std::uint32_t m_maximum_bone = 0;
 };
 }

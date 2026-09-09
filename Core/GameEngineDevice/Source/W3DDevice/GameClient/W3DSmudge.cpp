@@ -1,4 +1,4 @@
-#include "WW3D2/WW3D.h"
+
 /*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -35,9 +35,9 @@
 #include "Common/GameMemory.h"
 #include "GameClient/View.h"
 #include "GameClient/Display.h"
-#include "WW3D2/Texture.h"
-#include "WW3D2/RInfo.h"
-#include "WW3D2/Camera.h"
+#include "W3DDevice/GameClient/W3DTextureHandle.h"
+#include "W3DDevice/GameClient/W3DRenderContext.h"
+#include "W3DDevice/GameClient/W3DCamera.h"
 
 #include <cstddef>
 #include <span>

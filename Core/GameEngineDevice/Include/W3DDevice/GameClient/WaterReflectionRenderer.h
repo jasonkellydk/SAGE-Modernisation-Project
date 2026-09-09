@@ -8,13 +8,13 @@
 
 import Graphics.RHI;
 
-class CameraClass;
+class W3DCamera;
 
 class WaterReflectionRenderer
 {
 public:
 	virtual ~WaterReflectionRenderer() = default;
 
-	virtual void Render_Water_Reflection(CameraClass *camera,
+	virtual void Render_Water_Reflection(W3DCamera *camera,
 		const Graphics::RHIViewport &viewport) = 0;
 };

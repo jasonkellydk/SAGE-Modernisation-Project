@@ -35,6 +35,12 @@ BOOST_AUTO_TEST_CASE(sprite_shapes_preserve_view_transform_rotation_uvs_and_quan
     BOOST_CHECK_EQUAL(geometry.Vertices()[0].position[1],-2);
     BOOST_CHECK_EQUAL(geometry.Vertices()[1].position[0],-1.732f);
     BOOST_CHECK_EQUAL(geometry.Vertices()[2].uv[1],.866f);
+    // Both sprite shapes face the camera with the normal material culling mode.
+    const auto &first = geometry.Vertices()[geometry.Indices()[0]].position;
+    const auto &second = geometry.Vertices()[geometry.Indices()[1]].position;
+    const auto &third = geometry.Vertices()[geometry.Indices()[2]].position;
+    BOOST_CHECK_GT((second[0] - first[0]) * (third[1] - first[1])
+        - (second[1] - first[1]) * (third[0] - first[0]), 0);
 }
 
 BOOST_AUTO_TEST_CASE(atlas_frames_wrap_without_static_tables)

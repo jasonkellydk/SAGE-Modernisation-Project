@@ -1,5 +1,12 @@
+#include <functional>
+#include <functional>
+import Graphics.Frame.RenderClock;
+import Graphics.Scene.Views.CameraMatrices;
+import Graphics.Materials.MeshTextureMapping;
 import Assets.Images.PixelEncoding;
-#include "WW3D2/GraphicsMaterial.h"
+#include "WWMath/matrix4.h"
+import Graphics.Scene.Props.Renderer;
+import Assets.Adapters.W3D.Chunks;
 /*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -37,15 +44,13 @@ import Assets.Images.PixelEncoding;
 #include "WWLib/always.h"
 #include "WWLib/hash.h"
 #include "GameClient/View.h"
-#include "WW3D2/Camera.h"
-#include "WW3D2/Light.h"
-#include "WW3D2/WW3D.h"
-#include "WW3D2/HLOD.h"
-#include "WW3D2/Mesh.h"
-#include "WW3D2/MeshMdl.h"
-#include "WW3D2/AssetMgr.h"
-#include "WW3D2/TexProject.h"
-#include "WW3D2/GraphicsGeometry.h"
+#include "W3DDevice/GameClient/W3DCamera.h"
+
+#include "W3DDevice/GameClient/W3DHierarchyRenderObject.h"
+#include "W3DDevice/GameClient/W3DMeshRenderObject.h"
+#include "W3DDevice/GameClient/W3DMeshResource.h"
+#include "W3DDevice/GameClient/W3DAssetCatalog.h"
+
 #include "Lib/BaseType.h"
 #include "W3DDevice/GameClient/BaseHeightMap.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
@@ -60,10 +65,15 @@ import Assets.Images.PixelEncoding;
 #include "W3DDevice/GameClient/W3DGraphicsResources.h"
 #include "W3DDevice/GameClient/W3DObjectGraphics.h"
 #include <vector>
+#include <array>
+#include <cstdint>
 #include <cstring>
 import Graphics.Scene.Shadows.Projected;
+import Graphics.Scene.Shadows.ProjectedCapture;
+import Graphics.Materials.TextureProjector;
+import Graphics.Scene.Props.Material;
 import Graphics.Materials.ProceduralPass;
-import Graphics.Backends.DX11.FrameRuntime;
+import Graphics.Frame.Runtime;
 
 
 /** @todo: We're going to have a pool of a couple rendertargets to use
@@ -82,6 +92,44 @@ Maybe project onto a deformed terrain patch that molds to trays/bibs.
 #define DEFAULT_RENDER_TARGET_WIDTH			512
 #define DEFAULT_RENDER_TARGET_HEIGHT		512
 
+namespace
+{
+Graphics::TextureProjectorFit Build_Shadow_Fit(W3DRenderObject &object, const Vector3 &light_position)
+{
+	AABoxClass object_box;
+	object.Get_Obj_Space_Bounding_Box(object_box);
+	Graphics::TextureProjectorBounds bounds;
+	bounds.center = {object_box.Center.X, object_box.Center.Y, object_box.Center.Z};
+	bounds.extent = {object_box.Extent.X, object_box.Extent.Y, object_box.Extent.Z};
+	Graphics::Matrix4x4 object_transform = Graphics::Matrix4x4::Identity();
+	const Matrix3D &transform = object.Get_Transform();
+	for (unsigned row = 0; row < 3; ++row)
+		for (unsigned column = 0; column < 4; ++column)
+			object_transform.values[row * 4 + column] = transform[row][column];
+	return Graphics::Fit_Perspective_Texture_Projector(bounds, object_transform,
+		{light_position.X, light_position.Y, light_position.Z});
+}
+
+void Configure_Shadow_Camera(W3DCamera &camera, const Graphics::TextureProjectorFit &fit,
+	unsigned texture_width, unsigned texture_height)
+{
+	Matrix3D transform;
+	for (unsigned row = 0; row < 3; ++row)
+		for (unsigned column = 0; column < 4; ++column)
+			transform[row][column] = fit.camera_transform.values[row * 4 + column];
+	camera.Set_Transform(transform);
+	camera.Set_Projection_Type(W3DCamera::PERSPECTIVE);
+	camera.Set_View_Plane(fit.horizontal_fov, fit.vertical_fov);
+	camera.Set_Clip_Planes(0.01f, fit.fitting_clip_end);
+	const Vector2 viewport_min(1.0f / static_cast<float>(texture_width),
+		1.0f / static_cast<float>(texture_height));
+	const Vector2 viewport_max((static_cast<float>(texture_width) - 1.0f)
+		/ static_cast<float>(texture_width),
+		(static_cast<float>(texture_height) - 1.0f) / static_cast<float>(texture_height));
+	camera.Set_Viewport(viewport_min, viewport_max);
+}
+}
+
 W3DProjectedShadowManager *TheW3DProjectedShadowManager=nullptr;	//global singleton
 ProjectedShadowManager	*TheProjectedShadowManager;				//global singleton with simpler interface.
 extern const FrustumClass *shadowCameraFrustum;	//defined in W3DShadow.
@@ -98,7 +146,7 @@ struct W3DProjectedShadowManager::GraphicsState
     std::vector<std::uint32_t> indices;
     Graphics::PropMeshHandle decal_mesh;
     Graphics::PropMeshHandle projection_mesh;
-    CameraClass* camera = nullptr;
+    W3DCamera* camera = nullptr;
 
     void Release()
     {
@@ -124,7 +172,7 @@ public:
 	W3DShadowTextureManager();
 	~W3DShadowTextureManager();
 
-	int			 		createTexture(RenderObjClass *robj, const char *name);
+	int			 		createTexture(W3DRenderObject *robj, const char *name);
 	W3DShadowTexture *		getTexture(const char * name);
 	W3DShadowTexture *		peekTexture(const char * name);
 	Bool					addTexture(W3DShadowTexture *new_texture);
@@ -157,15 +205,15 @@ class W3DShadowTexture : public RefCountClass, public	HashableClass
 
 		virtual	const char * Get_Key() override { return m_namebuf;	}
 
-		Int init (RenderObjClass *robj);
+		Int init (W3DRenderObject *robj);
 
 		const char *		Get_Name() const	{ return m_namebuf;}
 		void				Set_Name(const char *name)
 		{
 			strlcpy(m_namebuf,name,sizeof(m_namebuf));
 		}
-		TextureClass	*getTexture()	{ return m_texture;}
-		void					 setTexture(TextureClass *texture)	{m_texture = texture;}
+		W3DTextureHandle	*getTexture()	{ return m_texture;}
+		void					 setTexture(W3DTextureHandle *texture)	{m_texture = texture;}
 		void					 setLightPosHistory(Vector3 &pos) {m_lastLightPosition=pos;}	///<updates the last position of light
 		Vector3&			 getLightPosHistory() {return m_lastLightPosition;}
 		void					 setObjectOrientationHistory(Matrix3x3 &mat) {m_lastObjectOrientation=mat;}	///<updates the last position of light
@@ -174,15 +222,15 @@ class W3DShadowTexture : public RefCountClass, public	HashableClass
 		AABoxClass&		 getBoundingBox()		{return m_areaEffectBox;}
 		void	 setBoundingSphere(SphereClass &sphere)	{m_areaEffectSphere=sphere;}
 		void	 setBoundingBox(AABoxClass &box)		{m_areaEffectBox=box;}
-		void	 updateBounds(Vector3 &lightPos, RenderObjClass *robj);	///<update extent of shadow
+		void	 updateBounds(Vector3 &lightPos, W3DRenderObject *robj);	///<update extent of shadow
 		void	 setDecalUVAxis(Vector3 &u, Vector3 &v)	{ m_shadowUV[0]=u; m_shadowUV[1]=v;}
 		void	 getDecalUVAxis(Vector3 *u, Vector3 *v)	{ *u=m_shadowUV[0]; *v=m_shadowUV[1];}
 
 	private:
 
-		char m_namebuf[2*W3D_NAME_LEN];	///<name of model hierarchy
+		char m_namebuf[2*Assets::W3D::W3DNameLength];	///<name of model hierarchy
 
-		TextureClass *m_texture; ///<texture holding the shadow for this renderobject
+		W3DTextureHandle *m_texture; ///<texture holding the shadow for this renderobject
 		Vector3		m_lastLightPosition;		///<position of light source at time of last texture update.
 		Matrix3x3	m_lastObjectOrientation;	///<orientation of shadow casting object when texture was generated.
 		AABoxClass	m_areaEffectBox;			///<boundary defining object-space volume affected by shadow.
@@ -249,8 +297,8 @@ void W3DProjectedShadowManager::reset()
 Bool W3DProjectedShadowManager::init()
 {
 	m_W3DShadowTextureManager = NEW W3DShadowTextureManager;
-	m_shadowCamera = NEW_REF( CameraClass, () );
-	m_shadowContext= NEW RenderInfoClass(*m_shadowCamera);
+	m_shadowCamera = NEW_REF( W3DCamera, () );
+	m_shadowContext= NEW W3DRenderContext(*m_shadowCamera);
 	m_shadowContext->light_environment = &m_shadowLightEnv;
 
 	return TRUE;
@@ -267,8 +315,8 @@ Bool W3DProjectedShadowManager::ReAcquireResources()
 	DEBUG_ASSERTCRASH(m_dynamicRenderTarget == nullptr, ("Acquire of existing shadow render target"));
 
 	m_renderTargetHasAlpha=TRUE;
-    m_dynamicRenderTarget=new TextureClass(DEFAULT_RENDER_TARGET_WIDTH,DEFAULT_RENDER_TARGET_HEIGHT,
-        Assets::PixelEncoding::BGRA8,MIP_LEVELS_1,TextureBaseClass::POOL_DEFAULT,true,false);
+    m_dynamicRenderTarget=new W3DTextureHandle(DEFAULT_RENDER_TARGET_WIDTH,DEFAULT_RENDER_TARGET_HEIGHT,
+        Assets::PixelEncoding::BGRA8,MIP_LEVELS_1,W3DTextureHandle::POOL_DEFAULT,true,false);
     if (!m_dynamicRenderTarget->Is_Initialized()) REF_PTR_RELEASE(m_dynamicRenderTarget);
 
     return m_dynamicRenderTarget != nullptr && Graphics::Shared_Frame_Device() != nullptr;
@@ -309,8 +357,14 @@ void W3DProjectedShadowManager::updateRenderTargetTextures()
 ///Renders shadow on part of terrain covered by world-space bounding box.
 Int W3DProjectedShadowManager::renderProjectedTerrainShadow(W3DProjectedShadow *shadow, AABoxClass &box)
 {
-    auto* device = Graphics::Shared_Frame_Device();
-    if (!device || !TheTerrainRenderObject || !m_graphics->camera) return 0;
+    auto *device = Graphics::Shared_Frame_Device();
+    if (!device || !TheTerrainRenderObject || !m_graphics->camera || shadow == nullptr) return 0;
+    auto *mapping = shadow->getShadowMapping();
+    auto *material = shadow->getShadowMaterial();
+    auto *shadow_texture = shadow->m_shadowTexture[0] != nullptr
+        ? shadow->m_shadowTexture[0]->getTexture() : nullptr;
+    if (mapping == nullptr || material == nullptr || shadow_texture == nullptr
+        || !shadow_texture->Ensure_Render_Backend_Texture()) return 0;
     auto* hmap = TheTerrainRenderObject->getMap();
     const int startX = __max(0, REAL_TO_INT_FLOOR((box.Center.X-box.Extent.X)/MAP_XY_FACTOR));
     const int startY = __max(0, REAL_TO_INT_FLOOR((box.Center.Y-box.Extent.Y)/MAP_XY_FACTOR));
@@ -321,15 +375,10 @@ Int W3DProjectedShadowManager::renderProjectedTerrainShadow(W3DProjectedShadow *
     std::vector<Graphics::PropVertex> vertices(width*(endY-startY+1));
     std::vector<std::uint32_t> indices;
     indices.reserve((endX-startX)*(endY-startY)*6);
-    const auto& pass = shadow->getShadowProjector()->Peek_Material_Pass();
-    if (!pass) return 0;
-    TexProjectMaterialPass::Description description;
-    if (!pass->Describe(description) || description.material == nullptr) return 0;
-    const auto& emissive = description.material->parameters.emissive;
     for (int y=startY;y<=endY;++y) for (int x=startX;x<=endX;++x) {
         auto& vertex = vertices[(y-startY)*width+x-startX];
         vertex.position = {float(x)*MAP_XY_FACTOR,float(y)*MAP_XY_FACTOR,float(hmap->getHeight(x,y))*MAP_HEIGHT_SCALE};
-        vertex.color = {emissive[0],emissive[1],emissive[2],1};
+        Graphics::Apply_Prop_Material(vertex, material->parameters);
         if (x==endX || y==endY) continue;
         const std::uint32_t i=(y-startY)*width+x-startX;
         UnsignedByte alpha[4]; float u[4],v[4]; Bool flip;
@@ -346,16 +395,13 @@ Int W3DProjectedShadowManager::renderProjectedTerrainShadow(W3DProjectedShadow *
     Matrix3D view; m_graphics->camera->Get_View_Matrix(&view);
     const Matrix4x4 view4(view);
     std::memcpy(parameters.view.data(),&view4,sizeof(view4));
-    parameters.primary_gradient = description.shader.Get_Primary_Gradient();
-    parameters.detail_color = description.shader.Get_Post_Detail_Color_Func();
-    parameters.detail_alpha = description.shader.Get_Post_Detail_Alpha_Func();
+    parameters.primary_gradient = 1.0f;
     parameters.alpha_cutoff = 96.0f/255.0f;
-    std::array<Graphics::RHITextureHandle,2> textures;
-    for (unsigned stage=0;stage<2;++stage) {
-        textures[stage] = Resolve_Graphics_Texture(description.textures[stage]);
-    }
-    Extract_Graphics_Texture_Mappers(parameters,description.material);
-    parameters.secondary_texture = textures[1].Is_Valid() ? 1.0f : 0.0f;
+    const std::array<Graphics::RHITextureHandle,2> textures{
+        Resolve_Graphics_Texture(shadow_texture), Graphics::RHITextureHandle{}};
+    Graphics::Extract_Mesh_Texture_Mappings(parameters, material, Graphics::Get_Render_Clock().Sync_Time(),
+        Graphics::Get_Camera_Matrices().view.values, Graphics::Get_Camera_Matrices().projection.values);
+    parameters.secondary_texture = 0.0f;
     const bool drawn = Graphics::Draw_Projected_Shadow(renderer,device->Immediate_Command_List(),mesh,parameters,textures);
     return drawn ? 1 : 0;
 }
@@ -404,7 +450,7 @@ void W3DProjectedShadowManager::queueDecal(W3DProjectedShadow *shadow)
 	Vector3 uVector,vVector;
 	Real uOffset,vOffset,vecLength;
 	Int borderSize;
-	RenderObjClass *robj=shadow->m_robj;
+	W3DRenderObject *robj=shadow->m_robj;
 	Real layerHeight=0;
 
 	if (TheTerrainRenderObject)
@@ -713,7 +759,7 @@ void W3DProjectedShadowManager::prepareShadows()
 	m_drawStartY=hmap->getDrawOrgY();
 }
 
-Int W3DProjectedShadowManager::renderShadows(RenderInfoClass & rinfo)
+Int W3DProjectedShadowManager::renderShadows(W3DRenderContext & rinfo)
 {
 	Int projectionCount=0;
 
@@ -883,7 +929,7 @@ Shadow* W3DProjectedShadowManager::addDecal(Shadow::ShadowTypeInfo *shadowInfo)
 	if (st == nullptr)
 	{
 		//Adding a new decal texture
-		TextureClass *w3dTexture=WW3DAssetManager::Get_Instance()->Get_Texture(texture_name);
+		W3DTextureHandle *w3dTexture=W3DAssetCatalog::Get_Instance()->Get_Texture(texture_name);
 		DEBUG_ASSERTCRASH(w3dTexture != nullptr, ("Could not load decal texture: %s",texture_name));
 		if (!w3dTexture)
 			return nullptr;
@@ -959,7 +1005,7 @@ Shadow* W3DProjectedShadowManager::addDecal(Shadow::ShadowTypeInfo *shadowInfo)
 
 /** Generic function which can be used to create arbitrary decals that follow the renderObject but don't have to be used for shadows.
 Some examples: Scorch marks, blood, stains, selection/status indicators, etc.*/
-Shadow* W3DProjectedShadowManager::addDecal(RenderObjClass *robj, Shadow::ShadowTypeInfo *shadowInfo)
+Shadow* W3DProjectedShadowManager::addDecal(W3DRenderObject *robj, Shadow::ShadowTypeInfo *shadowInfo)
 {
 	W3DShadowTexture *st=nullptr;
 	ShadowType shadowType=SHADOW_NONE;		/// type of projection
@@ -987,7 +1033,7 @@ Shadow* W3DProjectedShadowManager::addDecal(RenderObjClass *robj, Shadow::Shadow
 	if (st == nullptr)
 	{
 		//Adding a new decal texture
-		TextureClass *w3dTexture=WW3DAssetManager::Get_Instance()->Get_Texture(texture_name);
+		W3DTextureHandle *w3dTexture=W3DAssetCatalog::Get_Instance()->Get_Texture(texture_name);
 		DEBUG_ASSERTCRASH(w3dTexture != nullptr, ("Could not load decal texture: %s",texture_name));
 		if (!w3dTexture)
 			return nullptr;
@@ -1079,7 +1125,7 @@ Shadow* W3DProjectedShadowManager::addDecal(RenderObjClass *robj, Shadow::Shadow
 	return shadow;
 }
 
-W3DProjectedShadow* W3DProjectedShadowManager::addShadow(RenderObjClass *robj, Shadow::ShadowTypeInfo *shadowInfo, Drawable *draw)
+W3DProjectedShadow* W3DProjectedShadowManager::addShadow(W3DRenderObject *robj, Shadow::ShadowTypeInfo *shadowInfo, Drawable *draw)
 {
 	W3DShadowTexture *st=nullptr;
 	static char	defaultDecalName[]={"shadow.tga"};
@@ -1121,7 +1167,7 @@ W3DProjectedShadow* W3DProjectedShadowManager::addShadow(RenderObjClass *robj, S
 				if (st == nullptr)
 				{
 					//need to add this texture without creating it from a real renderobject
-					TextureClass *w3dTexture=WW3DAssetManager::Get_Instance()->Get_Texture(texture_name);
+					W3DTextureHandle *w3dTexture=W3DAssetCatalog::Get_Instance()->Get_Texture(texture_name);
 					DEBUG_ASSERTCRASH(w3dTexture != nullptr, ("Could not load decal texture"));
 					if (!w3dTexture)
 						return nullptr;
@@ -1299,7 +1345,7 @@ W3DProjectedShadow* W3DProjectedShadowManager::createDecalShadow(Shadow::ShadowT
 	if (st == nullptr)
 	{
 		//need to add this texture without creating it from a real renderobject
-		TextureClass *w3dTexture=WW3DAssetManager::Get_Instance()->Get_Texture(texture_name);
+		W3DTextureHandle *w3dTexture=W3DAssetCatalog::Get_Instance()->Get_Texture(texture_name);
 		DEBUG_ASSERTCRASH(w3dTexture != nullptr, ("Could not load decal texture"));
 		if (!w3dTexture)
 			return nullptr;
@@ -1464,7 +1510,6 @@ void W3DProjectedShadow::getRenderCost(RenderCost & rc) const
 W3DProjectedShadow::W3DProjectedShadow()
 {
 	m_diffuse=0xffffffff;
-	m_shadowProjector=nullptr;
 	m_lastObjPosition.Set(0,0,0);
 	m_type = SHADOW_NONE;		/// type of projection
 	m_allowWorldAlign = FALSE;	/// wrap shadow around world geometry - else align perpendicular to local z-axis.
@@ -1476,16 +1521,12 @@ W3DProjectedShadow::W3DProjectedShadow()
 
 W3DProjectedShadow::~W3DProjectedShadow()
 {
-	REF_PTR_RELEASE(m_shadowProjector);
 	for (Int i=0; i<MAX_SHADOW_LIGHTS; i++)
 		REF_PTR_RELEASE(m_shadowTexture[i]);
 }
 
 void W3DProjectedShadow::init()
 {
-
-	DEBUG_ASSERTCRASH(m_shadowProjector == nullptr, ("Init of existing shadow projector"));
-
 	if (m_type == SHADOW_PROJECTION)
 	{
 		if (m_shadowTexture[0] == nullptr || m_shadowTexture[0]->getTexture() == nullptr)
@@ -1494,9 +1535,16 @@ void W3DProjectedShadow::init()
 			return;
 		}
 
-		m_shadowProjector = NEW_REF(TexProjectClass,());
-		m_shadowProjector->Set_Intensity(0.4f,true);
-		m_shadowProjector->Set_Texture(m_shadowTexture[0]->getTexture());
+		m_shadowMapping = Graphics::TextureMapping::Create_Projection();
+		m_shadowMapping->Projection()->type = Graphics::TextureProjection::Perspective;
+		m_shadowMaterial = std::make_shared<Graphics::MeshMaterial>();
+		m_shadowMaterial->parameters.ambient = {0.0f, 0.0f, 0.0f};
+		m_shadowMaterial->parameters.diffuse = {0.0f, 0.0f, 0.0f};
+		m_shadowMaterial->parameters.specular = {0.0f, 0.0f, 0.0f};
+		m_shadowMaterial->parameters.emissive = {0.6f, 0.6f, 0.6f};
+		m_shadowMaterial->parameters.opacity = 1.0f;
+		m_shadowMaterial->parameters.lighting = true;
+		m_shadowMaterial->mappings[0] = m_shadowMapping;
 	}
 }
 
@@ -1504,7 +1552,7 @@ void W3DProjectedShadow::init()
 
 void W3DProjectedShadow::updateTexture(Vector3 &lightPos)
 {
-	RenderInfoClass *context;
+	W3DRenderContext *context;
 	if (m_shadowTexture[0] == nullptr || m_shadowTexture[0]->getTexture() == nullptr)
 	{
 		return;
@@ -1519,10 +1567,10 @@ void W3DProjectedShadow::updateTexture(Vector3 &lightPos)
 
 	if (m_type == SHADOW_PROJECTION)
 	{	//projected shadows use custom runtime generated textures based on object geometry
-		TextureClass *shadow_texture = m_shadowTexture[0]->getTexture();
-		TextureClass *render_target = TheW3DProjectedShadowManager != nullptr ?
+		W3DTextureHandle *shadow_texture = m_shadowTexture[0]->getTexture();
+		W3DTextureHandle *render_target = TheW3DProjectedShadowManager != nullptr ?
 			TheW3DProjectedShadowManager->getRenderTarget() : nullptr;
-		if (m_robj == nullptr || m_shadowProjector == nullptr ||
+		if (m_robj == nullptr || m_shadowMapping == nullptr || m_shadowMaterial == nullptr ||
 			!shadow_texture->Ensure_Render_Backend_Texture() ||
 			render_target == nullptr || !render_target->Ensure_Render_Backend_Texture())
 		{
@@ -1536,8 +1584,11 @@ void W3DProjectedShadow::updateTexture(Vector3 &lightPos)
 		objToLight.Normalize();
 		objToLight =  objPos + objToLight * 2000.0f;
 
-		m_shadowProjector->Compute_Perspective_Projection(m_robj,objToLight);
-		m_shadowProjector->Set_Render_Target(render_target);
+		m_shadowFit = Build_Shadow_Fit(*m_robj, objToLight);
+		if (!m_shadowFit.valid) return;
+		Assets::ImageDescription target_description;
+		render_target->Get_Level_Description(target_description);
+		if (target_description.width <= 0 || target_description.height <= 0) return;
 
 		//Set ambient to 0, so we get a black shadow on solid background
 
@@ -1546,15 +1597,28 @@ void W3DProjectedShadow::updateTexture(Vector3 &lightPos)
 		{
 			return;
 		}
+		Configure_Shadow_Camera(context->Camera, m_shadowFit,
+			static_cast<unsigned>(target_description.width), static_cast<unsigned>(target_description.height));
 
 		context->light_environment->Reset({(m_robj->Get_Position()).X,(m_robj->Get_Position()).Y,(m_robj->Get_Position()).Z}, {0,0,0});
 
-        if (!m_shadowProjector->Compute_Texture(m_robj,context,
-            [](RenderObjClass& object, RenderInfoClass& info) {
-                W3DObjectGraphics graphics;
-                Graphics::PropLighting lighting{};
-                return graphics.Render(object,info,lighting,nullptr);
-            })) return;
+		const bool captured = Graphics::Capture_Projected_Texture(
+			Graphics::Get_Attachment_Bindings(), render_target->Peek_Render_Backend_Texture(), *context,
+			[this, target_width = static_cast<unsigned>(target_description.width),
+				target_height = static_cast<unsigned>(target_description.height)](W3DRenderContext &info) {
+				info.Camera.Apply();
+				// W3DCamera::Apply converts its normalized viewport against the
+				// default screen target. The generated texture can have a different
+				// size, so restore the exact one-pixel border in target pixels.
+				const auto viewport = Graphics::Projected_Texture_Viewport(target_width,
+					target_height);
+				if (!Graphics::Get_Attachment_Bindings().Set_Viewport(viewport)) return false;
+				W3DObjectGraphics graphics;
+				Graphics::PropLighting lighting{};
+				return graphics.Render(*m_robj, info, lighting, nullptr);
+			},
+			[](W3DRenderContext &) { return true; });
+		if (!captured) return;
 
 		//Need to copy generated texture into permanent texture.
 		Graphics::TextureEdit *oldSurface=shadow_texture->Get_Surface_Level();
@@ -1625,10 +1689,22 @@ void W3DProjectedShadow::updateTexture(Vector3 &lightPos)
 
 void W3DProjectedShadow::updateProjectionParameters(const Matrix3D &cameraXform)
 {
-	if (m_shadowProjector != nullptr)
-	{
-		m_shadowProjector->Pre_Render_Update(cameraXform);
-	}
+	if (m_type != SHADOW_PROJECTION || m_shadowMapping == nullptr || !m_shadowFit.valid)
+		return;
+	Graphics::Matrix4x4 camera_transform = Graphics::Matrix4x4::Identity();
+	for (unsigned row = 0; row < 3; ++row)
+		for (unsigned column = 0; column < 4; ++column)
+			camera_transform.values[row * 4 + column] = cameraXform[row][column];
+	const auto view_to_texture = Graphics::Make_Texture_Projector_View_Transform(
+		m_shadowFit, camera_transform);
+	Assets::ImageDescription texture_description;
+	if (m_shadowTexture[0] == nullptr || m_shadowTexture[0]->getTexture() == nullptr)
+		return;
+	m_shadowTexture[0]->getTexture()->Get_Level_Description(texture_description);
+	if (texture_description.width <= 0) return;
+	std::array<float,16> transform = view_to_texture.values;
+	m_shadowMapping->Projection()->Set_Texture_Transform(transform,
+		static_cast<float>(texture_description.width));
 }
 
 void W3DProjectedShadow::update()
@@ -1649,17 +1725,17 @@ void W3DProjectedShadow::update()
 		///@todo: See why infinite light sources don't project shadows correctly.
 		if (m_type == SHADOW_PROJECTION)
 		{
-			Vector3 objToLight=TheW3DShadowManager->getLightPosWorld(0) - m_robj->Get_Position();
-			objToLight.Normalize();
-			objToLight =  m_robj->Get_Position() + objToLight * 2000.0f;
-
-			m_shadowProjector->Compute_Perspective_Projection(m_robj,objToLight);
+			Vector3 object_to_light = TheW3DShadowManager->getLightPosWorld(0)
+				- m_robj->Get_Position();
+			object_to_light.Normalize();
+			object_to_light = m_robj->Get_Position() + object_to_light * 2000.0f;
+			m_shadowFit = Build_Shadow_Fit(*m_robj, object_to_light);
 		}
 		setObjPosHistory(m_robj->Get_Position());
 	}
 }
 
-Int W3DShadowTexture::init(RenderObjClass *robj)
+Int W3DShadowTexture::init(W3DRenderObject *robj)
 {
 	///@todo: implement this function
 	if (TheW3DProjectedShadowManager == nullptr)
@@ -1667,7 +1743,7 @@ Int W3DShadowTexture::init(RenderObjClass *robj)
 		return FALSE;
 	}
 
-	TextureClass *render_target = TheW3DProjectedShadowManager->getRenderTarget();
+	W3DTextureHandle *render_target = TheW3DProjectedShadowManager->getRenderTarget();
 	if (render_target == nullptr || !render_target->Ensure_Render_Backend_Texture())
 	{
 		return FALSE;
@@ -1682,7 +1758,7 @@ Int W3DShadowTexture::init(RenderObjClass *robj)
 		return FALSE;
 	}
 
-	TextureClass *new_texture = MSGNEW("TextureClass") TextureClass(surface_desc.width,surface_desc.height,surface_desc.encoding,MIP_LEVELS_1);
+	W3DTextureHandle *new_texture = MSGNEW("W3DTextureHandle") W3DTextureHandle(surface_desc.width,surface_desc.height,surface_desc.encoding,MIP_LEVELS_1);
 	if (new_texture == nullptr || !new_texture->Ensure_Render_Backend_Texture())
 	{
 		REF_PTR_RELEASE(new_texture);
@@ -1694,7 +1770,7 @@ Int W3DShadowTexture::init(RenderObjClass *robj)
 	return TRUE;
 }
 
-void W3DShadowTexture::updateBounds(Vector3 &lightPos, RenderObjClass *robj)
+void W3DShadowTexture::updateBounds(Vector3 &lightPos, W3DRenderObject *robj)
 {
 		AABoxClass	&box=m_areaEffectBox;	///@todo: fix for multiple lights
 		Vector3			objPos;
@@ -1869,7 +1945,7 @@ Bool	W3DShadowTextureManager::isMissing( const char * name )
 }
 
 /** Create shadow geometry from a reference W3D RenderObject*/
-int W3DShadowTextureManager::createTexture(RenderObjClass *robj, const char *name)
+int W3DShadowTextureManager::createTexture(W3DRenderObject *robj, const char *name)
 {
 	Bool res=FALSE;
 

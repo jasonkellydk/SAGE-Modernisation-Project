@@ -44,7 +44,7 @@ import Assets.Cache.Animations;
 
 // FORWARD REFERENCES /////////////////////////////////////////////////////////////////////////////
 class Thing;
-class RenderObjClass;
+class W3DRenderObject;
 class Shadow;
 class FXList;
 
@@ -93,7 +93,7 @@ private:
 	AsciiString								m_animInitial;
 	AsciiString								m_animFlying;
 	AsciiString								m_animFinal;
-	RenderObjClass*						m_renderObject;										///< W3D Render object for this drawable
+	W3DRenderObject*						m_renderObject;										///< W3D Render object for this drawable
 	Assets::AnimationAssetHandle m_anims[STATECOUNT];
 	const FXList*							m_fxFinal;
 	Int												m_state;

@@ -13,6 +13,7 @@ export module Graphics.Scene.Terrain.Renderer;
 export import Graphics.Scene.Terrain.Geometry;
 export import Graphics.RHI;
 import Graphics.Shaders.Library;
+import Graphics.Resources.Textures.Sampling;
 import Graphics.Scene.Lighting.Environment;
 import Graphics.Scene.Terrain.Visibility;
 import Graphics.Scene.Shadows.DirectionalRenderer;
@@ -50,6 +51,14 @@ export struct TerrainDrawParameters final
     std::array<TerrainLight, 20> lights{};
 };
 static_assert(sizeof(TerrainDrawParameters) == 1456);
+
+struct TerrainPipeline final
+{
+    std::size_t pass;
+    bool wireframe;
+    RHISamplerDescription sampler;
+    RHIPipelineHandle handle;
+};
 
 // One instance owns one surface batch. Adapters supply cells and resolved
 // texture handles; all topology construction and GPU lifetime stays here.
@@ -98,33 +107,11 @@ public:
         shader.program.stages = ShaderStageMask::Vertex | ShaderStageMask::Pixel;
         shader.vertex_path = shader_directory / "terrain.vso";
         shader.fragment_path = shader_directory / "terrain.pso";
-        ShaderLibrary library;
-        const ShaderHandle handle = library.Load_Precompiled(shader);
-        if (!library.Is_Loaded(handle)) {
+        m_shaders = ShaderLibrary{};
+        m_shader = m_shaders.Load_Precompiled(shader);
+        if (!m_shaders.Is_Loaded(m_shader)) {
             Shutdown();
             return false;
-        }
-        for (std::size_t index = 0; index < m_pipelines.size(); ++index) {
-            const std::size_t pass = index % 5;
-            RHIPipeline pipeline;
-            pipeline.vertex_format = RHIVertexFormat::Position3Color4UV2UV2Normal3;
-            pipeline.cull_mode = RHICullMode::None;
-            pipeline.wireframe = index >= 10;
-            pipeline.depth_write = pass == 0 || pass == 4;
-            pipeline.color_write_mask = pass >= 3 ? 8 : 7;
-            pipeline.blend_mode = pass == 1 ? RHIBlendMode::Alpha
-                : pass == 2 ? RHIBlendMode::Multiply : RHIBlendMode::Disabled;
-            pipeline.sampler_count = 16;
-            pipeline.samplers[0].address.fill(RHISamplerAddress::Clamp);
-            pipeline.samplers[1].address.fill(RHISamplerAddress::Clamp);
-            pipeline.samplers[0].Set_Filter((index % 10 < 5 ? Graphics::RHISamplerFilter::Linear : Graphics::RHISamplerFilter::Point));
-            pipeline.samplers[1].Set_Filter((index % 10 < 5 ? Graphics::RHISamplerFilter::Linear : Graphics::RHISamplerFilter::Point));
-            m_pipelines[index] = device.Create_Pipeline(pipeline,
-                {library.Bytecode(handle, ShaderStage::Vertex)}, {library.Bytecode(handle, ShaderStage::Pixel)});
-            if (!m_pipelines[index].Is_Valid()) {
-                Shutdown();
-                return false;
-            }
         }
         m_constants = device.Create_Buffer({sizeof(TerrainDrawParameters), RHIBufferUsage::Constant});
         if (!m_constants.Is_Valid() || !m_environment.Initialize(device)) {
@@ -140,8 +127,8 @@ public:
         Release_GPU_Surface();
         if (m_device != nullptr) {
             m_environment.Shutdown(*m_device);
-            for (RHIPipelineHandle pipeline : m_pipelines)
-                if (pipeline.Is_Valid()) m_device->Destroy_Pipeline(pipeline);
+            for (const auto &pipeline : m_pipelines)
+                m_device->Destroy_Pipeline(pipeline.handle);
             if (m_constants.Is_Valid()) m_device->Destroy_Buffer(m_constants);
         }
         m_device = nullptr;
@@ -257,7 +244,9 @@ public:
             bindings[count].texture = textures[index];
             ++count;
         }
-        if (!(commands.Bind_Pipeline(m_pipelines[pass_index + (linear_filter ? 0 : 5) + (wireframe ? 10 : 0)])
+        const auto pipeline = Pipeline(pass_index, linear_filter, wireframe);
+        if (!pipeline.Is_Valid()) return false;
+        if (!(commands.Bind_Pipeline(pipeline)
             && commands.Set_Bindless_Resources(std::span<const RHIBindlessResource>(bindings.data(), count))
             && m_environment.Bind(*m_device, commands)
             && commands.Set_Vertex_Buffer(0, m_vertices, sizeof(TerrainVertex), 0)
@@ -270,6 +259,35 @@ public:
     }
 
 private:
+    RHIPipelineHandle Pipeline(std::size_t pass, bool linear_filter, bool wireframe)
+    {
+        auto sampler = Resolve_Texture_Sampling(TextureSampling{}, Get_Texture_Sampling_Settings());
+        sampler.address.fill(RHISamplerAddress::Clamp);
+        if (!linear_filter) {
+            sampler.Set_Filter(RHISamplerFilter::Point);
+            sampler.anisotropy = 1;
+        }
+        for (const auto &pipeline : m_pipelines)
+            if (pipeline.pass == pass && pipeline.wireframe == wireframe && pipeline.sampler == sampler)
+                return pipeline.handle;
+
+        RHIPipeline description;
+        description.vertex_format = RHIVertexFormat::Position3Color4UV2UV2Normal3;
+        description.cull_mode = RHICullMode::None;
+        description.wireframe = wireframe;
+        description.depth_write = pass == 0 || pass == 4;
+        description.color_write_mask = pass >= 3 ? 8 : 7;
+        description.blend_mode = pass == 1 ? RHIBlendMode::Alpha
+            : pass == 2 ? RHIBlendMode::Multiply : RHIBlendMode::Disabled;
+        description.sampler_count = 16;
+        description.samplers[0] = description.samplers[1] = sampler;
+        const auto handle = m_device->Create_Pipeline(description,
+            {m_shaders.Bytecode(m_shader, ShaderStage::Vertex)},
+            {m_shaders.Bytecode(m_shader, ShaderStage::Pixel)});
+        if (handle.Is_Valid()) m_pipelines.push_back({pass, wireframe, sampler, handle});
+        return handle;
+    }
+
     void Release_Shadow_Caster() noexcept
     {
         if (m_shadow_owner != nullptr) m_shadow_owner->Destroy_Caster(m_shadow_mesh);
@@ -283,7 +301,9 @@ private:
     EnvironmentLightingBinding m_environment;
     Device *m_device = nullptr;
     TerrainGeometry m_geometry;
-    std::array<RHIPipelineHandle, 20> m_pipelines{};
+    ShaderLibrary m_shaders;
+    ShaderHandle m_shader{};
+    std::vector<TerrainPipeline> m_pipelines;
     RHIBufferHandle m_vertices{};
     RHIBufferHandle m_indices{};
     RHIBufferHandle m_constants{};

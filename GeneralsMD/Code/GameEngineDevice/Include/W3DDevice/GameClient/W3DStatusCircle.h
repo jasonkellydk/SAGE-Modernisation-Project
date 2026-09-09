@@ -25,8 +25,9 @@
 #pragma once
 
 #include "WWLib/always.h"
-#include "WW3D2/RendObj.h"
-#include "WW3D2/W3DFile.h"
+#include "W3DDevice/GameClient/W3DRenderObject.h"
+#include "W3DDevice/GameClient/W3DCastQuery.h"
+#include "W3DDevice/GameClient/W3DIntersectionQuery.h"
 import Graphics.Materials.State;
 #include "Lib/BaseType.h"
 
@@ -35,7 +36,7 @@ import Graphics.Materials.State;
 // W3DStatusCircle: Object generated from 2D Height grid
 //
 //
-class W3DStatusCircle : public RenderObjClass
+class W3DStatusCircle : public W3DRenderObject
 {
 
 public:
@@ -48,17 +49,17 @@ public:
 	/////////////////////////////////////////////////////////////////////////////
 	// Render Object Interface
 	/////////////////////////////////////////////////////////////////////////////
-	virtual RenderObjClass *	Clone() const override;
+	virtual W3DRenderObject *	Clone() const override;
 	virtual int						Class_ID() const override;
-	virtual void					Render(RenderInfoClass & rinfo) override;
+	virtual void					Render(W3DRenderContext & rinfo) override;
 //	virtual void 					Set_Transform(const Matrix3D &m);
 //	virtual void 					Set_Position(const Vector3 &v);
 //TODO: MW: do these later - only needed for collision detection
-	virtual bool					Cast_Ray(RayCollisionTestClass & raytest) override;
-//	virtual Bool					Cast_AABox(AABoxCollisionTestClass & boxtest);
-//	virtual Bool					Cast_OBBox(OBBoxCollisionTestClass & boxtest);
-//	virtual Bool					Intersect_AABox(AABoxIntersectionTestClass & boxtest);
-//	virtual Bool					Intersect_OBBox(OBBoxIntersectionTestClass & boxtest);
+	virtual bool					Cast_Ray(W3DRayCastQuery & raytest) override;
+//	virtual Bool					Cast_AABox(W3DBoxCastQuery & boxtest);
+//	virtual Bool					Cast_OBBox(W3DOrientedBoxCastQuery & boxtest);
+//	virtual Bool					Intersect_AABox(W3DBoxIntersectionQuery & boxtest);
+//	virtual Bool					Intersect_OBBox(W3DOrientedBoxIntersectionQuery & boxtest);
 
 	virtual void					Get_Obj_Space_Bounding_Sphere(SphereClass & sphere) const override;
     virtual void					Get_Obj_Space_Bounding_Box(AABoxClass & aabox) const override;

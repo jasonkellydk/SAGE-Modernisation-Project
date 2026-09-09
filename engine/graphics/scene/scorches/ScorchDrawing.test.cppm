@@ -9,7 +9,7 @@ module;
 export module Graphics.Scene.Scorches.Drawing.Tests;
 import Graphics.Scene.Scorches.Geometry;
 import Graphics.Scene.Surfaces.Renderer;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 using namespace Graphics;
 BOOST_AUTO_TEST_CASE(terrain_diagonals_atlas_border_and_capacity)
 {
@@ -36,10 +36,10 @@ BOOST_AUTO_TEST_CASE(terrain_diagonals_atlas_border_and_capacity)
 }
 BOOST_AUTO_TEST_CASE(decal_blends_over_ground_preserving_destination_alpha)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     BOOST_REQUIRE(device.Is_Valid());
     SurfaceRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device, std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    BOOST_REQUIRE(renderer.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     ScorchGeometry geometry;
     BOOST_REQUIRE(geometry.Append({{0,0},1,0}, {3,3,1,1,0.01f}, {1,1,1,1},
         [](int,int) { return 0.5f; }, [](int,int) { return false; }));

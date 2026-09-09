@@ -13,8 +13,8 @@
 import Graphics.Scene.Water.Renderer;
 
 #include "WWMath/Vector4.h"
-class TextureBaseClass;
-class SceneClass;
+class W3DTextureHandle;
+class W3DScene;
 class Matrix4x4;
 
 // Water draw input retains packed color until graphics extraction.
@@ -53,36 +53,39 @@ public:
 	WaterMaterialClass(const WaterMaterialClass &) = delete;
 	WaterMaterialClass &operator=(const WaterMaterialClass &) = delete;
 
-	bool Apply_Ocean(TextureBaseClass *surface_texture,
-		TextureBaseClass *displacement_texture,
-		TextureBaseClass *normal_texture, TextureBaseClass *foam_texture,
-		TextureBaseClass *reflection_texture, Graphics::RHITextureHandle refraction_texture,
-		TextureBaseClass *environment_texture, TextureBaseClass *shroud_texture,
+	bool Apply_Ocean(W3DTextureHandle *surface_texture,
+		Graphics::RHITextureHandle displacement_texture,
+		W3DTextureHandle *normal_texture, W3DTextureHandle *foam_texture,
+		W3DTextureHandle *reflection_texture, Graphics::RHITextureHandle refraction_texture,
+		W3DTextureHandle *environment_texture, W3DTextureHandle *shroud_texture,
 		Graphics::RHITextureHandle scene_depth_texture,
+		W3DTextureHandle *caustics_texture, W3DTextureHandle *depth_lut_texture,
 		const WaterMaterialParameters &parameters, bool additive_blend);
-	bool Apply_Displacement(TextureBaseClass *static_displacement_texture,
-		const Vector4 &animation, const Vector4 &displacement_domain);
-	bool Apply_Surface(TextureBaseClass *surface_texture,
-		TextureBaseClass *normal_texture, TextureBaseClass *foam_texture,
-		TextureBaseClass *edge_texture, TextureBaseClass *reflection_texture,
-		Graphics::RHITextureHandle refraction_texture, TextureBaseClass *environment_texture,
-		TextureBaseClass *shroud_texture, Graphics::RHITextureHandle scene_depth_texture,
+	bool Apply_Surface(W3DTextureHandle *surface_texture,
+		W3DTextureHandle *normal_texture, W3DTextureHandle *foam_texture,
+		W3DTextureHandle *edge_texture, W3DTextureHandle *reflection_texture,
+		Graphics::RHITextureHandle refraction_texture, W3DTextureHandle *environment_texture,
+		W3DTextureHandle *shroud_texture, Graphics::RHITextureHandle scene_depth_texture,
 		const WaterMaterialParameters &parameters, bool additive_blend);
-	bool Apply_Track(TextureBaseClass *wave_texture);
-	bool Apply_Sky(TextureBaseClass *texture, bool alpha_blend,
+	bool Apply_Track(W3DTextureHandle *wave_texture);
+	bool Apply_Underwater(Graphics::RHITextureHandle scene_texture,
+		Graphics::RHITextureHandle depth_texture, W3DTextureHandle *caustics_texture,
+		W3DTextureHandle *depth_lut_texture, const WaterMaterialParameters &parameters);
+	bool Apply_Sky(W3DTextureHandle *texture, bool alpha_blend,
 		bool clamp_texture);
 
 	void Shutdown();
 	bool ReacquireResources();
 
     bool Draw(Graphics::WaterMeshHandle mesh, const Matrix4x4& world, bool wireframe = false);
-    void Set_Fog(SceneClass* scene);
+    bool Draw_Patches(Graphics::WaterMeshHandle mesh, const Graphics::OceanPatchGrid& grid);
+    void Set_Frame_Lighting(W3DScene* scene);
 
 private:
     void Set_Common_Constants(const WaterMaterialParameters& parameters);
     Graphics::WaterParameters m_parameters;
     Graphics::WaterStyle m_style;
-    std::array<Graphics::RHITextureHandle,9> m_textures{};
+    std::array<Graphics::RHITextureHandle,11> m_textures{};
 };
 
 bool Upload_Water_Geometry(Graphics::WaterMeshHandle& mesh,

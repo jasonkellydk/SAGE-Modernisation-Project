@@ -41,7 +41,7 @@ import Assets.Cache.Animations;
 #include "Common/ModelState.h"
 #include "Common/DrawModule.h"
 #ifdef BRUTAL_TIMING_HACK // hack for collecting model timing info.  jba.
-class RenderObjClass {
+class W3DRenderObject {
 public:
 	enum AnimMode
 	{
@@ -57,7 +57,7 @@ public:
 };
 
 #else
-#include "WW3D2/RendObj.h"
+#include "W3DDevice/GameClient/W3DRenderObject.h"
 #endif
 #include "Common/SparseMatchFinder.h"
 #include "GameClient/ParticleSys.h"
@@ -69,7 +69,7 @@ import Assets.Handles;
 
 // FORWARD REFERENCES /////////////////////////////////////////////////////////////////////////////
 class Thing;
-class RenderObjClass;
+class W3DRenderObject;
 enum GameLODLevel CPP_11(: Int);
 //-------------------------------------------------------------------------------------------------
 /** The default client update module */
@@ -204,7 +204,7 @@ struct ModelConditionInfo
 #endif
 		}
 
-		void setMuzzleFlashHidden(RenderObjClass *fullObject, Bool hide) const;
+		void setMuzzleFlashHidden(W3DRenderObject *fullObject, Bool hide) const;
 	};
 	typedef std::vector<WeaponBarrelInfo>	WeaponBarrelInfoVec;
 
@@ -225,7 +225,7 @@ struct ModelConditionInfo
 	NameKeyType												m_allowToFinishKey;
 	Int																m_flags;
 	Int																m_iniReadFlags;	// not read from ini, but used for helping with default states
-	RenderObjClass::AnimMode					m_mode;
+	W3DRenderObject::AnimMode					m_mode;
 	ParticleSysBoneInfoVector					m_particleSysBones;			///< Bone names and attached particle systems.
 	TransitionSig											m_transitionSig;
 	Real															m_animMinSpeedFactor; //Min speed factor (randomized each time it's played)
@@ -266,12 +266,12 @@ struct ModelConditionInfo
 	void addPublicBone(const AsciiString& boneName) const;
 	Bool matchesMode(Bool night, Bool snowy) const;
 
-	void validateStuff(RenderObjClass* robj, Real scale, const std::vector<AsciiString>& extraPublicBones) const;
+	void validateStuff(W3DRenderObject* robj, Real scale, const std::vector<AsciiString>& extraPublicBones) const;
 
 private:
 	void validateWeaponBarrelInfo() const;
 	void validateTurretInfo() const;
-	void validateCachedBones(RenderObjClass* robj, Real scale) const;
+	void validateCachedBones(W3DRenderObject* robj, Real scale) const;
 };
 typedef std::vector<ModelConditionInfo> ModelConditionVector;
 
@@ -367,7 +367,7 @@ public:
 
 #if defined(RTS_DEBUG)
 	virtual void getRenderCost(RenderCost & rc) const override;  ///< estimates the render cost of this draw module
-	void getRenderCostRecursive(RenderCost & rc,RenderObjClass * robj) const;
+	void getRenderCostRecursive(RenderCost & rc,W3DRenderObject * robj) const;
 #endif
 
 	virtual void setFullyObscuredByShroud(Bool fullyObscured) override;
@@ -431,7 +431,7 @@ public:
 	virtual const ObjectDrawInterface* getObjectDrawInterface() const override { return this; }
 
 	///@todo: I had to make this public because W3DDevice needs access for casting shadows -MW
-	RenderObjClass *getRenderObject() { return m_renderObject; }
+	W3DRenderObject *getRenderObject() { return m_renderObject; }
 	virtual Bool updateBonesForClientParticleSystems() override;///< this will reposition particle systems on the fly ML
 
 	virtual void onDrawableBoundToObject() override;
@@ -507,7 +507,7 @@ private:
 	Bool													m_needRecalcBoneParticleSystems;
 	Bool													m_fullyObscuredByShroud;
 	Bool													m_shadowEnabled;	///< cached state of shadow.  Used to determine if shadows should be enabled via options screen.
-	RenderObjClass*								m_renderObject;										///< W3D Render object for this drawable
+	W3DRenderObject*								m_renderObject;										///< W3D Render object for this drawable
 	ParticleSystemIDVec						m_particleSystemIDs;							///< The ID numbers of the particle systems currently running.
 	std::vector<ModelConditionInfo::HideShowSubObjInfo>		m_subObjectVec;
 	Bool													m_hideHeadlights;
@@ -530,7 +530,7 @@ private:
 	void nukeCurrentRender(Matrix3D* xform);
 	void doStartOrStopParticleSys();
 	void adjustAnimSpeedToMovementSpeed();
-	static void hideAllMuzzleFlashes(const ModelConditionInfo* state, RenderObjClass* renderObject);
+	static void hideAllMuzzleFlashes(const ModelConditionInfo* state, W3DRenderObject* renderObject);
 	void hideAllHeadlights(Bool hide);
 #if defined(RTS_DEBUG)	//art wants to see buildings without flags as a test.
 	void hideGarrisonFlags(Bool hide);

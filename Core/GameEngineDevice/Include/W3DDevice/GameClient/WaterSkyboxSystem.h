@@ -7,7 +7,7 @@
 
 #pragma once
 
-class RenderInfoClass;
+class W3DRenderContext;
 
 class WaterSkyboxSystem final
 {
@@ -19,7 +19,7 @@ public:
 	WaterSkyboxSystem &operator=(const WaterSkyboxSystem &) = delete;
 
 	bool Initialize(float scale);
-	void Render(RenderInfoClass &rinfo, float x, float y, float z);
+	void Render(W3DRenderContext &rinfo, float x, float y, float z);
 	void Replace_Texture(const char *old_name, const char *new_name);
 
 private:

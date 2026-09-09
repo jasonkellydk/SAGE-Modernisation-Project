@@ -26,8 +26,8 @@
 
 import Graphics.Scene.WeatherParticles;
 
-class RenderInfoClass;
-class TextureClass;
+class W3DRenderContext;
+class W3DTextureHandle;
 
 class W3DSnowManager : public SnowManager
 {

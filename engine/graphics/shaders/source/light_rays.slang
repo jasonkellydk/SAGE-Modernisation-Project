@@ -1,3 +1,4 @@
+#include "resource_access.slangh"
 // Based on Electronic Arts' Kane's Wrath PostFX_LightRays.fx (2006):
 // https://github.com/electronicarts/CnC_Modding_Support/blob/main/Kanes%20Wrath/Shaders/PostFX_LightRays.fx
 // Depth-limited world-space integration of cloud light and shadow visibility,
@@ -15,11 +16,11 @@ cbuffer LightRaysParameters : register(b0)
     uint ShroudEnabled;
     float3 Padding;
 };
-Texture2D<float4> Scene : register(t0);
-Texture2D<float> SceneDepth : register(t1);
-Texture2D<float4> Rays : register(t2);
-Texture2D<float4> Shroud : register(t3);
-SamplerState LinearClamp : register(s0);
+GRAPHICS_TEXTURE_2D(Scene, float4, 0)
+GRAPHICS_TEXTURE_2D(SceneDepth, float, 1)
+GRAPHICS_TEXTURE_2D(Rays, float4, 2)
+GRAPHICS_TEXTURE_2D(Shroud, float4, 3)
+GRAPHICS_SAMPLER(LinearClamp, 0)
 
 [shader("vertex")] VertexOutput light_rays_vertex(VertexInput input)
 {
@@ -66,7 +67,7 @@ float RayShadow(float3 world)
 float3 UpsampleRays(float2 uv, float ray_length)
 {
     uint width, height;
-    Rays.GetDimensions(width,height);
+    Rays().GetDimensions(width,height);
     float2 position = uv*float2(width,height)-0.5;
     int2 base = int2(floor(position));
     float2 fraction = frac(position);
@@ -74,7 +75,7 @@ float3 UpsampleRays(float2 uv, float ray_length)
     float weights = 0;
     [unroll] for (int y=0;y<2;++y) [unroll] for (int x=0;x<2;++x) {
         int2 texel = clamp(base+int2(x,y),int2(0,0),int2(width-1,height-1));
-        float4 sample = Rays.Load(int3(texel,0));
+        float4 sample = Rays().Load(int3(texel,0));
         float weight = (x != 0 ? fraction.x : 1-fraction.x)*(y != 0 ? fraction.y : 1-fraction.y);
         // Avoid carrying long background rays across a foreground silhouette.
         weight *= exp2(-abs(sample.a-ray_length)/max(1.0,ray_length*0.02));
@@ -87,19 +88,19 @@ float3 UpsampleRays(float2 uv, float ray_length)
 [shader("pixel")] float4 light_rays_pixel(VertexOutput input) : SV_TARGET
 {
     uint width, height;
-    SceneDepth.GetDimensions(width,height);
+    SceneDepth().GetDimensions(width,height);
     int2 pixel = clamp(int2(input.uv*float2(width,height)),int2(0,0),int2(width-1,height-1));
-    float depth = SceneDepth.Load(int3(pixel,0));
+    float depth = SceneDepth().Load(int3(pixel,0));
     float3 start = Unproject(input.uv,0);
     float3 end = Unproject(input.uv,depth);
     float ray_length = distance(start,end);
     if (Operation == 1) {
-        float4 scene = Scene.Load(int3(pixel,0));
+        float4 scene = Scene().Load(int3(pixel,0));
         // Unwritten background does not define a finite illuminated surface.
         if (depth >= 1) return scene;
         float visibility = 1;
         if (ShroudEnabled != 0)
-            visibility = Shroud.SampleLevel(LinearClamp,end.xy*ShroudProjection.xy+ShroudProjection.zw,0).r;
+            visibility = Shroud().SampleLevel(LinearClamp(),end.xy*ShroudProjection.xy+ShroudProjection.zw,0).r;
         return float4(scene.rgb+UpsampleRays(input.uv,ray_length)*visibility,scene.a);
     }
     if (depth >= 1) return float4(0,0,0,0);

@@ -10,7 +10,7 @@ module;
 
 export module Graphics.Scene.WeatherParticles.Snapshot.Tests;
 
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 import Graphics.Scene.Particles.Renderer;
 import Graphics.Scene.WeatherParticles;
 import Graphics.Testing.VisualRegression;
@@ -69,11 +69,11 @@ WeatherParticleFieldDescription Make_Field(std::array<float, 4> &starting_height
 
 static void Run_Weather_Snapshot(ParticleEmitterFlags flags, const char *name)
 {
-	DX11Device device({true});
+	GraphicsTestDevice device({true});
 	BOOST_REQUIRE(device.Is_Valid());
 
 	ParticleRenderer renderer;
-	BOOST_REQUIRE(renderer.Initialize(device, std::filesystem::path(GRAPHICS_WEATHER_SHADER_DIRECTORY), 1, 4));
+	BOOST_REQUIRE(renderer.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_WEATHER_SHADER_DIRECTORY), 1, 4));
 	const View view{
 		Matrix4x4::Identity(),
 		Matrix4x4::Identity(),

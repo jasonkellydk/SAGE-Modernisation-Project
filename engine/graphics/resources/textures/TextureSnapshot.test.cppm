@@ -9,16 +9,16 @@ module;
 #include <span>
 
 export module Graphics.Resources.Textures.Snapshot.Tests;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 import Graphics.Resources.Textures.Snapshot;
 import Graphics.Scene.Props.Renderer;
 using namespace Graphics;
 
 BOOST_AUTO_TEST_CASE(snapshot_sampling_preserves_depth_color_and_contents_across_resize)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     PropRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device, std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    BOOST_REQUIRE(renderer.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     auto& commands = device.Immediate_Command_List();
     const auto output = device.Create_Texture({8, 8, 1, RHITextureFormat::RGBA8_UNorm,
         static_cast<std::uint32_t>(RHITextureUsage::RenderTarget)});

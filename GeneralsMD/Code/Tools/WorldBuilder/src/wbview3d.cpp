@@ -22,7 +22,7 @@ import Graphics.Diagnostics.Render;
 //
 
 #include "StdAfx.h"
-import Graphics.Backends.DX11.FrameRuntime;
+import Graphics.Frame.Runtime;
 #include <SDL3/SDL.h>
 #include "resource.h"
 #include "WWMath/wwmath.h"
@@ -40,9 +40,9 @@ import Graphics.Frame.ToolFrame;
 #include "WW3D2/PartLdr.h"
 #include "WW3D2/HAnim.h"
 #include "WWMath/rect.h"
-#include "WW3D2/Mesh.h"
-#include "WW3D2/MeshMdl.h"
-#include "WW3D2/GraphicsGeometry.h"
+#include "W3DDevice/GameClient/W3DMeshRenderObject.h"
+#include "W3DDevice/GameClient/W3DMeshResource.h"
+
 #include "WW3D2/Line3D.h"
 #include "WW3D2/DynaMesh.h"
 #include "WW3D2/SphereObj.h"
@@ -53,7 +53,6 @@ import Graphics.Resources.Textures.Edit;
 #include "WW3D2/DecalSys.h"
 #include "WW3D2/ShatterSystem.h"
 #include "WW3D2/Light.h"
-#include "WW3D2/TexProject.h"
 #include "MapSettings.h"
 #include "WW3D2/PredLod.h"
 #include "SelectMacroTexture.h"
@@ -479,7 +478,7 @@ void WbView3d::shutdownWW3D()
 		Release_Graphics_Textures();
         Graphics::Shutdown_Tool_Frame();
 		WW3D::Shutdown();
-		Graphics::Graphics_DX11_Shutdown_Shared_Frame();
+		Graphics::Graphics_Shutdown_Shared_Frame();
 
 		WWMath::Shutdown();
 	}
@@ -2214,7 +2213,7 @@ void WbView3d::initWW3D()
 		bogusTacticalView.setWidth(m_actualWinSize.x);
 		bogusTacticalView.setHeight(m_actualWinSize.y);
 		bogusTacticalView.setOrigin(0,0);
-        Graphics::DX11DeviceOptions options;
+        Graphics::FrameDeviceOptions options;
         options.window = m_hWnd;
         options.width = m_actualWinSize.x; options.height = m_actualWinSize.y;
         options.backbuffer_format = Graphics::RHITextureFormat::BGRA8_UNorm;

@@ -14,7 +14,7 @@ export module Graphics.Scene.Models.AnimationRotation.Tests;
 import Graphics.Scene.Models.AnimationRotation;
 import Graphics.Scene.AffineTransform;
 import Graphics.Scene.Props.Renderer;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 using namespace Graphics;
 
 BOOST_AUTO_TEST_CASE(interpolation_preserves_endpoints_magnitude_and_opposite_hemispheres) {
@@ -29,8 +29,8 @@ BOOST_AUTO_TEST_CASE(interpolation_preserves_endpoints_magnitude_and_opposite_he
 }
 BOOST_AUTO_TEST_CASE(sampled_rotation_draws_at_expected_positions_after_resize_and_reverse_sampling) {
     for(bool warp:{true,false}) {
-        DX11Device device({warp});if(!warp&&!device.Is_Valid())continue;
-        PropRenderer renderer;BOOST_REQUIRE(renderer.Initialize(device,GRAPHICS_TERRAIN_SHADER_DIRECTORY));
+        GraphicsTestDevice device({warp});if(!warp&&!device.Is_Valid())continue;
+        PropRenderer renderer;BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
         auto& commands=device.Immediate_Command_List();
         PropStyle style;style.depth_test=false;style.depth_write=false;
         PropParameters parameters;parameters.textured=0;

@@ -9,14 +9,15 @@
 #include "W3DDevice/GameClient/W3DObjectGraphics.h"
 
 #include "W3DDevice/GameClient/W3DAssetManager.h"
-#include "WW3D2/Mesh.h"
-#include "WW3D2/RInfo.h"
-#include "WW3D2/RendObj.h"
-#include "WW3D2/Texture.h"
+#include "W3DDevice/GameClient/W3DDisplay.h"
+#include "W3DDevice/GameClient/W3DMeshRenderObject.h"
+#include "W3DDevice/GameClient/W3DRenderContext.h"
+#include "W3DDevice/GameClient/W3DRenderObject.h"
+#include "W3DDevice/GameClient/W3DTextureHandle.h"
 
 struct WaterSkyboxSystem::State
 {
-	RenderObjClass *skybox = nullptr;
+	W3DRenderObject *skybox = nullptr;
     W3DObjectGraphics graphics;
 };
 
@@ -40,16 +41,17 @@ bool WaterSkyboxSystem::Initialize(float scale)
 	if (m_state == nullptr || m_state->skybox != nullptr)
 		return m_state != nullptr;
 
-	W3DAssetManager *asset_manager =
-		static_cast<W3DAssetManager *>(W3DAssetManager::Get_Instance());
+	W3DAssetManager *asset_manager = W3DDisplay::m_assetManager;
+	if (asset_manager == nullptr)
+		return false;
 	m_state->skybox = asset_manager->Create_Render_Obj("new_skybox", scale, 0);
 	if (m_state->skybox == nullptr ||
-		m_state->skybox->Class_ID() != RenderObjClass::CLASSID_MESH)
+		m_state->skybox->Class_ID() != W3DRenderObject::CLASSID_MESH)
 	{
 		return m_state->skybox != nullptr;
 	}
 
-	MeshClass *mesh = static_cast<MeshClass *>(m_state->skybox);
+	W3DMeshRenderObject *mesh = static_cast<W3DMeshRenderObject *>(m_state->skybox);
 	auto material = mesh->Get_Material_Info();
 	if (material == nullptr)
 		return true;
@@ -65,7 +67,7 @@ bool WaterSkyboxSystem::Initialize(float scale)
 	return true;
 }
 
-void WaterSkyboxSystem::Render(RenderInfoClass &rinfo, float x, float y,
+void WaterSkyboxSystem::Render(W3DRenderContext &rinfo, float x, float y,
 	float z)
 {
 	if (m_state == nullptr || m_state->skybox == nullptr)
@@ -82,8 +84,9 @@ void WaterSkyboxSystem::Replace_Texture(const char *old_name,
 	if (m_state == nullptr || m_state->skybox == nullptr)
 		return;
 
-	W3DAssetManager *asset_manager =
-		static_cast<W3DAssetManager *>(W3DAssetManager::Get_Instance());
+	W3DAssetManager *asset_manager = W3DDisplay::m_assetManager;
+	if (asset_manager == nullptr)
+		return;
 	asset_manager->replacePrototypeTexture(m_state->skybox, old_name,
 		new_name);
     m_state->graphics.Invalidate();

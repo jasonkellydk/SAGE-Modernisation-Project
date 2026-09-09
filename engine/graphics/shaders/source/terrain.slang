@@ -1,15 +1,16 @@
+#include "resource_access.slangh"
 #include "environment_lighting.slangh"
-Texture2D TerrainDiffuseTexture : register(t0);
-Texture2D TerrainBlendTexture : register(t1);
-Texture2D TerrainCloudTexture : register(t2);
-Texture2D TerrainLightMapTexture : register(t3);
-Texture2D TerrainShroudTexture : register(t4);
+GRAPHICS_TEXTURE_2D(TerrainDiffuseTexture, float4, 0)
+GRAPHICS_TEXTURE_2D(TerrainBlendTexture, float4, 1)
+GRAPHICS_TEXTURE_2D(TerrainCloudTexture, float4, 2)
+GRAPHICS_TEXTURE_2D(TerrainLightMapTexture, float4, 3)
+GRAPHICS_TEXTURE_2D(TerrainShroudTexture, float4, 4)
 
-SamplerState TerrainDiffuseSampler : register(s0);
-SamplerState TerrainBlendSampler : register(s1);
-SamplerState TerrainCloudSampler : register(s2);
-SamplerState TerrainLightMapSampler : register(s3);
-SamplerState TerrainShroudSampler : register(s4);
+GRAPHICS_SAMPLER(TerrainDiffuseSampler, 0)
+GRAPHICS_SAMPLER(TerrainBlendSampler, 1)
+GRAPHICS_SAMPLER(TerrainCloudSampler, 2)
+GRAPHICS_SAMPLER(TerrainLightMapSampler, 3)
+GRAPHICS_SAMPLER(TerrainShroudSampler, 4)
 
 struct TerrainVertexInput
 {
@@ -113,10 +114,10 @@ struct TerrainPixelInput
 {
     ClipEnvironment(input.world_position);
     if (TerrainFeatures.w > 4.5)
-        return float4(0.0, 0.0, 0.0, TerrainShroudTexture.SampleLevel(TerrainShroudSampler, input.shroud_uv, 0.0).a);
+        return float4(0.0, 0.0, 0.0, TerrainShroudTexture().SampleLevel(TerrainShroudSampler(), input.shroud_uv, 0.0).a);
 
 	if (TerrainFeatures.w > 3.5)
-		return float4(0.0, 0.0, 0.0, TerrainDiffuseTexture.SampleLevel(TerrainDiffuseSampler, input.diffuse_uv, 0.0).a);
+		return float4(0.0, 0.0, 0.0, TerrainDiffuseTexture().SampleLevel(TerrainDiffuseSampler(), input.diffuse_uv, 0.0).a);
 
 	if (TerrainFeatures.z > 0.5)
 	{
@@ -128,8 +129,7 @@ struct TerrainPixelInput
     {
         // Third-layer tiles are an alpha overlay over the already-composed
         // terrain. Their vertex alpha is the overlay coverage.
-        color = TerrainDiffuseTexture.SampleLevel(TerrainDiffuseSampler,
-            input.diffuse_uv, 0.0);
+        color = TerrainDiffuseTexture().Sample(TerrainDiffuseSampler(), input.diffuse_uv);
         color.rgb *= input.color0.rgb;
         color.a = input.color0.a;
     }
@@ -137,17 +137,15 @@ struct TerrainPixelInput
     {
         // The shroud texture stores its modulation in RGB (R5G6B5 in the
         // release path), so this pass is intentionally independent of alpha.
-        float3 shroud = TerrainShroudTexture.SampleLevel(TerrainShroudSampler,
+        float3 shroud = TerrainShroudTexture().SampleLevel(TerrainShroudSampler(),
             input.shroud_uv, 0.0).rgb;
         return float4(shroud * TerrainLighting.rgb, 1.0);
     }
 
     else
     {
-        float4 base = TerrainDiffuseTexture.SampleLevel(TerrainDiffuseSampler,
-            input.diffuse_uv, 0.0);
-        float4 blend = TerrainBlendTexture.SampleLevel(TerrainBlendSampler,
-            input.blend_uv, 0.0);
+        float4 base = TerrainDiffuseTexture().Sample(TerrainDiffuseSampler(), input.diffuse_uv);
+        float4 blend = TerrainBlendTexture().Sample(TerrainBlendSampler(), input.blend_uv);
         color = lerp(base, blend, saturate(input.color0.a));
         color.rgb *= input.color0.rgb;
     }
@@ -161,12 +159,12 @@ struct TerrainPixelInput
     }
     else if (TerrainFeatures.x > 0.5)
     {
-        color.rgb *= TerrainCloudTexture.SampleLevel(TerrainCloudSampler,
+        color.rgb *= TerrainCloudTexture().SampleLevel(TerrainCloudSampler(),
             input.cloud_uv, 0.0).rgb;
     }
     if (TerrainFeatures.y > 0.5)
     {
-        color.rgb *= TerrainLightMapTexture.SampleLevel(TerrainLightMapSampler,
+        color.rgb *= TerrainLightMapTexture().SampleLevel(TerrainLightMapSampler(),
             input.lightmap_uv, 0.0).rgb;
     }
     color.rgb *= TerrainLighting.rgb;
@@ -174,7 +172,7 @@ struct TerrainPixelInput
     // Shroud modulation shares the surface depth and coverage.
     if (TerrainOptions.y > 0.5)
     {
-        color.rgb *= TerrainShroudTexture.SampleLevel(TerrainShroudSampler,
+        color.rgb *= TerrainShroudTexture().SampleLevel(TerrainShroudSampler(),
             input.shroud_uv, 0.0).rgb;
     }
     return color;

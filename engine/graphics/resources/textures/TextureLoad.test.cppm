@@ -12,7 +12,7 @@ module;
 #include <vector>
 export module Graphics.Resources.Textures.Load.Tests;
 import Graphics.Resources.Textures.Load;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 import Graphics.Scene.Props.Renderer;
 import Graphics.Resources.Textures.Quality;
 using namespace Graphics;
@@ -67,7 +67,7 @@ std::vector<std::byte> DDS(RHITextureDimension dimension,unsigned extent=4,unsig
 void Check_Drawing(Device& device,RHITextureHandle texture,const std::array<unsigned,4>& colors,unsigned mip=0)
 {
     PropRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device,GRAPHICS_TERRAIN_SHADER_DIRECTORY));
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     const auto target=device.Create_Texture({2,2,1,RHITextureFormat::RGBA8_UNorm,
         static_cast<unsigned>(RHITextureUsage::RenderTarget)});
     const auto depth=device.Create_Texture({2,2,1,RHITextureFormat::D32_Float,
@@ -101,7 +101,7 @@ void Check_Drawing(Device& device,RHITextureHandle texture,const std::array<unsi
 BOOST_AUTO_TEST_CASE(queued_image_decodes_on_worker_and_publishes_complete_rgb_and_alpha_on_owner)
 {
     for (const bool warp : {true,false}) {
-        DX11Device device({warp});
+        GraphicsTestDevice device({warp});
         if (!warp && !device.Is_Valid()) continue;
         ResourceLoadQueue queue;
         BOOST_REQUIRE(queue.Start());
@@ -138,7 +138,7 @@ BOOST_AUTO_TEST_CASE(queued_image_decodes_on_worker_and_publishes_complete_rgb_a
 BOOST_AUTO_TEST_CASE(dds_mip_selection_and_publication_preserve_retained_draw_generation)
 {
     for (const bool warp : {true,false}) {
-        DX11Device device({warp});
+        GraphicsTestDevice device({warp});
         if (!warp && !device.Is_Valid()) continue;
         std::unique_ptr<TextureResource> published;
         RHITextureHandle retained{};
@@ -181,7 +181,7 @@ BOOST_AUTO_TEST_CASE(dds_mip_selection_and_publication_preserve_retained_draw_ge
 BOOST_AUTO_TEST_CASE(cube_faces_and_compressed_volume_slices_reach_their_allocated_subresources)
 {
     for (const bool warp : {true,false}) {
-        DX11Device device({warp});
+        GraphicsTestDevice device({warp});
         if (!warp && !device.Is_Valid()) continue;
         for (const auto dimension : {RHITextureDimension::Cube,RHITextureDimension::Volume}) {
             TextureLoadRequest request;
@@ -221,7 +221,7 @@ BOOST_AUTO_TEST_CASE(cube_faces_and_compressed_volume_slices_reach_their_allocat
 
 BOOST_AUTO_TEST_CASE(failed_source_never_publishes_partial_pixels_and_completion_is_single_use)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     for (const bool fail_header : {true,false}) {
         TextureLoadRequest request;
         request.device=&device; request.mips.requested_count=1;
@@ -246,7 +246,7 @@ BOOST_AUTO_TEST_CASE(failed_source_never_publishes_partial_pixels_and_completion
 
 BOOST_AUTO_TEST_CASE(single_tga_initializes_every_requested_cube_face)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     TextureLoadRequest request;
     request.device=&device; request.dimension=RHITextureDimension::Cube; request.mips.requested_count=1;
     const std::array<unsigned,4> colors{0x00ff0000,0x4000ff00,0x800000ff,0xffffffff};
@@ -267,7 +267,7 @@ BOOST_AUTO_TEST_CASE(single_tga_initializes_every_requested_cube_face)
 BOOST_AUTO_TEST_CASE(authored_color_shift_and_precision_decode_into_the_actual_image_encoding)
 {
     for (const bool warp : {true,false}) {
-        DX11Device device({warp});
+        GraphicsTestDevice device({warp});
         if (!warp && !device.Is_Valid()) continue;
         TextureLoadRequest request;
         request.device=&device; request.mips.requested_count=1;

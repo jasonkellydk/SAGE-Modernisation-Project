@@ -9,14 +9,14 @@ module;
 #include <vector>
 export module Graphics.Renderer2D.Drawing.Tests;
 import Graphics.Renderer2D;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 using namespace Graphics;
 
 BOOST_AUTO_TEST_CASE(editor_overlay_widths_outlines_and_letterbox_follow_frame_dimensions)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     Renderer2D renderer;
-    BOOST_REQUIRE(renderer.Initialize(device, std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    BOOST_REQUIRE(renderer.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     for (const unsigned size : {64u, 96u, 64u}) {
         const auto target = device.Create_Texture({size, size, 1, RHITextureFormat::RGBA8_UNorm,
             static_cast<unsigned>(RHITextureUsage::RenderTarget)});
@@ -54,9 +54,9 @@ BOOST_AUTO_TEST_CASE(editor_overlay_widths_outlines_and_letterbox_follow_frame_d
 
 BOOST_AUTO_TEST_CASE(rotated_atlas_image_retains_alpha_orientation_and_scissor_order)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     Renderer2D renderer;
-    BOOST_REQUIRE(renderer.Initialize(device, std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    BOOST_REQUIRE(renderer.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     const auto target = device.Create_Texture({64, 64, 1, RHITextureFormat::RGBA8_UNorm,
         static_cast<unsigned>(RHITextureUsage::RenderTarget)});
     const auto depth = device.Create_Texture({64, 64, 1, RHITextureFormat::D24_UNorm_S8,
@@ -97,9 +97,9 @@ BOOST_AUTO_TEST_CASE(rotated_atlas_image_retains_alpha_orientation_and_scissor_o
 
 BOOST_AUTO_TEST_CASE(texture_residency_exceeds_binding_slots_without_losing_draw_order)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     Renderer2D renderer;
-    BOOST_REQUIRE(renderer.Initialize(device,std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     const auto target = device.Create_Texture({160,4,1,RHITextureFormat::RGBA8_UNorm,
         static_cast<std::uint32_t>(RHITextureUsage::RenderTarget)});
     const auto depth = device.Create_Texture({160,4,1,RHITextureFormat::D24_UNorm_S8,
@@ -154,9 +154,9 @@ BOOST_AUTO_TEST_CASE(texture_residency_exceeds_binding_slots_without_losing_draw
 BOOST_AUTO_TEST_CASE(compressed_texture_mapping_preserves_gpu_alpha_across_device_recreation)
 {
     for (unsigned cycle = 0; cycle < 2; ++cycle) {
-        DX11Device device({true});
+        GraphicsTestDevice device({true});
         Renderer2D renderer;
-        BOOST_REQUIRE(renderer.Initialize(device, std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+        BOOST_REQUIRE(renderer.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
         const unsigned size = cycle == 0 ? 16 : 24;
         const auto target = device.Create_Texture({size, size, 1, RHITextureFormat::RGBA8_UNorm,
             static_cast<unsigned>(RHITextureUsage::RenderTarget)});

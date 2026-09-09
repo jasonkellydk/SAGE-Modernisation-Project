@@ -9,7 +9,7 @@ module;
 export module Graphics.Scene.Models.ClipSampling.Tests;
 import Graphics.Scene.Models.ClipSampling;
 import Graphics.Scene.Props.Renderer;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 using namespace Graphics;
 using namespace Assets;
 namespace {
@@ -70,8 +70,8 @@ BOOST_AUTO_TEST_CASE(retained_clip_pixels_survive_cache_clear_reverse_sampling_a
     }
     BOOST_REQUIRE(handle);BOOST_REQUIRE(cache.Retain(handle));cache.Clear();
     for(bool warp:{true,false}) {
-        DX11Device device({warp});if(!warp&&!device.Is_Valid())continue;
-        PropRenderer renderer;BOOST_REQUIRE(renderer.Initialize(device,GRAPHICS_TERRAIN_SHADER_DIRECTORY));
+        GraphicsTestDevice device({warp});if(!warp&&!device.Is_Valid())continue;
+        PropRenderer renderer;BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
         auto& commands=device.Immediate_Command_List();
         PropStyle style;style.depth_test=false;style.depth_write=false;
         PropParameters parameters;parameters.textured=0;

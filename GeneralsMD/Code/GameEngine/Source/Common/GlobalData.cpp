@@ -32,7 +32,7 @@
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 #include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
 
-#include "WW3D2/WW3D.h"
+
 import Graphics.Resources.Textures.Sampling;
 
 #include "Common/GlobalData.h"

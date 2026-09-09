@@ -1,20 +1,21 @@
 import Graphics.Frame.AttachmentBindings;
+import Graphics.Scene.Models.MeshDrawing;
 import Graphics.Scene.Props.Submission;
 #include "W3DDevice/GameClient/W3DDirectionalShadows.h"
 #include "rts/profile.h"
 #include "Common/GlobalData.h"
 #include "Common/DrawModule.h"
 #include "GameClient/Shadow.h"
-#include "WW3D2/Camera.h"
-#include "WW3D2/GraphicsMesh.h"
-#include "WW3D2/GraphicsMaterial.h"
-#include "WW3D2/HLOD.h"
-#include "WW3D2/Mesh.h"
-#include "WW3D2/RInfo.h"
-#include "WW3D2/WW3D.h"
+#include "W3DDevice/GameClient/W3DCamera.h"
+#include "W3DDevice/GameClient/W3DMeshDrawing.h"
+#include "WWMath/matrix4.h"
+#include "W3DDevice/GameClient/W3DHierarchyRenderObject.h"
+#include "W3DDevice/GameClient/W3DMeshRenderObject.h"
+#include "W3DDevice/GameClient/W3DRenderContext.h"
+
 #include <algorithm>
 
-import Graphics.Backends.DX11.FrameRuntime;
+import Graphics.Frame.Runtime;
 import Graphics.Scene.Shadows.DirectionalRenderer;
 import Graphics.Scene.Lighting.Environment;
 
@@ -26,7 +27,7 @@ DirectionalShadow* first_shadow = nullptr;
 class DirectionalShadow final : public Shadow
 {
 public:
-    explicit DirectionalShadow(RenderObjClass* object) : object(object)
+    explicit DirectionalShadow(W3DRenderObject* object) : object(object)
     {
         m_type = SHADOW_VOLUME;
         m_isEnabled = TRUE;
@@ -53,13 +54,13 @@ public:
     }
 #endif
 
-    RenderObjClass* object;
+    W3DRenderObject* object;
     DirectionalShadow* next = nullptr;
     DirectionalShadow* previous = nullptr;
     int draw_count = 0;
 };
 
-bool Collect_Object(RenderObjClass& object,RenderInfoClass& info,int& draw_count)
+bool Collect_Object(W3DRenderObject& object,W3DRenderContext& info,int& draw_count)
 {
     // Visibility in the main camera is deliberately not a caster filter:
     // offscreen geometry can project a shadow into the camera frustum.
@@ -68,14 +69,14 @@ bool Collect_Object(RenderObjClass& object,RenderInfoClass& info,int& draw_count
     // Material extraction filters individual additive batches.
     if (!object.Is_Not_Hidden_At_All()) return true;
     object.Validate_Transform();
-    if (object.Class_ID() == RenderObjClass::CLASSID_MESH) {
-        GraphicsMeshOverrides overrides;
+    if (object.Class_ID() == W3DRenderObject::CLASSID_MESH) {
+        Graphics::ModelMeshDrawOverrides overrides;
         overrides.shadow_capture = true;
         ++draw_count;
-        return Draw_Graphics_Mesh(static_cast<MeshClass&>(object),info,overrides);
+        return Draw_W3D_Mesh(static_cast<W3DMeshRenderObject&>(object),info,overrides);
     }
-    if (object.Class_ID() == RenderObjClass::CLASSID_HLOD) {
-        auto& hierarchy = static_cast<HLodClass&>(object);
+    if (object.Class_ID() == W3DRenderObject::CLASSID_HLOD) {
+        auto& hierarchy = static_cast<W3DHierarchyRenderObject&>(object);
         object.Update_Sub_Object_Transforms();
         const int lod = hierarchy.Get_LOD_Level();
         for (int index=0;index<hierarchy.Get_Lod_Model_Count(lod);++index) {
@@ -91,7 +92,7 @@ bool Collect_Object(RenderObjClass& object,RenderInfoClass& info,int& draw_count
 }
 }
 
-Shadow* Create_Directional_Shadow(RenderObjClass* object)
+Shadow* Create_Directional_Shadow(W3DRenderObject* object)
 {
     return object != nullptr ? new DirectionalShadow(object) : nullptr;
 }
@@ -105,7 +106,7 @@ void Reset_Directional_Shadows()
     environment.shadow_textures = {};
 }
 
-bool Collect_Directional_Shadow_Casters(RenderInfoClass& info)
+bool Collect_Directional_Shadow_Casters(W3DRenderContext& info)
 {
     PROFILER_SECTION_NAME("Graphics.Shadows.Collect");
     Graphics::Get_Prop_Submission().Clear_Shadows();
@@ -119,7 +120,7 @@ bool Collect_Directional_Shadow_Casters(RenderInfoClass& info)
     return true;
 }
 
-bool Render_Directional_Shadow_Maps(RenderInfoClass& info)
+bool Render_Directional_Shadow_Maps(W3DRenderContext& info)
 {
     auto* device = Graphics::Shared_Frame_Device();
 

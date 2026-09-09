@@ -3,7 +3,7 @@ import Graphics.RHI;
 import Graphics.Resources.Textures.Atlas;
 #include <cstdint>
 #include <vector>
-#include "WW3D2/WW3D.h"
+
 /*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -44,7 +44,7 @@ import Graphics.Resources.Textures.Atlas;
 //
 // Created:   John Ahlquist, April 2001
 //
-// Desc:      TextureClass overrides to perform custom texturing for the terrain.
+// Desc:      W3DTextureHandle overrides to perform custom texturing for the terrain.
 //
 //-----------------------------------------------------------------------------
 
@@ -82,7 +82,7 @@ Graphics::AtlasTile Atlas_Tile(const UnsignedByte* pixels,unsigned extent,unsign
 texture of the desired height and mip level. */
 //=============================================================================
 TerrainTextureClass::TerrainTextureClass(int height) :
-	TextureClass(TERRAIN_TEXTURE_WIDTH, height,
+	W3DTextureHandle(TERRAIN_TEXTURE_WIDTH, height,
 		Assets::PixelEncoding::BGRA5551, MIP_LEVELS_3 ),
 	m_sourceHeightMap(nullptr),
 	m_isFlatTexture(false),
@@ -100,7 +100,7 @@ TerrainTextureClass::TerrainTextureClass(int height) :
 texture of the desired height and mip level. */
 //=============================================================================
 TerrainTextureClass::TerrainTextureClass(int height, int width) :
-	TextureClass(width, height,
+	W3DTextureHandle(width, height,
 		Assets::PixelEncoding::BGRA5551, MIP_LEVELS_1 ),
 	m_sourceHeightMap(nullptr),
 	m_isFlatTexture(true),
@@ -113,7 +113,7 @@ TerrainTextureClass::TerrainTextureClass(int height, int width) :
 
 bool TerrainTextureClass::Recreate_Procedural_Texture()
 {
-	if (!TextureClass::Recreate_Procedural_Texture()) {
+	if (!W3DTextureHandle::Recreate_Procedural_Texture()) {
 		return false;
 	}
 
@@ -208,9 +208,9 @@ then shares the base texture. This way the base tiles pass, drawn
 using TerrainTextureClass shares the same texture with the blended edges pass,
 saving lots of texture memory, and preventing seams between blended tiles. */
 //=============================================================================
-AlphaTerrainTextureClass::AlphaTerrainTextureClass( TextureClass *pBaseTex ):
-	TextureClass(8, 8,
-		Assets::PixelEncoding::BGRA5551, MIP_LEVELS_1, TextureClass::POOL_DEFAULT ),
+AlphaTerrainTextureClass::AlphaTerrainTextureClass( W3DTextureHandle *pBaseTex ):
+	W3DTextureHandle(8, 8,
+		Assets::PixelEncoding::BGRA5551, MIP_LEVELS_1, W3DTextureHandle::POOL_DEFAULT ),
 	m_baseTexture(nullptr)
 {
 	// Keep the scoped registration from the parent. Its recreation callback
@@ -226,7 +226,7 @@ AlphaTerrainTextureClass::AlphaTerrainTextureClass( TextureClass *pBaseTex ):
 	Set_Render_Backend_Texture(
 		Graphics::Retain_Texture_Resource(
 			m_baseTexture != nullptr ? m_baseTexture->Peek_Render_Backend_Texture() : 0));
-	Initialized = Peek_Render_Backend_Texture() != 0;
+	Residency().Set_Initialized(Peek_Render_Backend_Texture() != 0);
 }
 
 AlphaTerrainTextureClass::~AlphaTerrainTextureClass()
@@ -264,7 +264,7 @@ bool AlphaTerrainTextureClass::Recreate_Procedural_Texture()
 /** Constructor. Calls parent constructor to load the .tga texture. */
 //=============================================================================
 LightMapTerrainTextureClass::LightMapTerrainTextureClass(AsciiString name, MipCountType mipLevelCount) :
-TextureClass(name.isEmpty()?"TSNoiseUrb.tga":name.str(),name.isEmpty()?"TSNoiseUrb.tga":name.str(), mipLevelCount )
+W3DTextureHandle(name.isEmpty()?"TSNoiseUrb.tga":name.str(),name.isEmpty()?"TSNoiseUrb.tga":name.str(), mipLevelCount )
 {
 	Get_Sampling().minification = Graphics::SamplingFilter::Best;
 	Get_Sampling().magnification = Graphics::SamplingFilter::Best;
@@ -295,8 +295,8 @@ TextureClass(name.isEmpty()?"TSNoiseUrb.tga":name.str(),name.isEmpty()?"TSNoiseU
 *
 */
 AlphaEdgeTextureClass::AlphaEdgeTextureClass( int height, MipCountType mipLevelCount) :
-//	TextureClass("EdgingTemplate.tga","EdgingTemplate.tga", mipLevelCount )
-	TextureClass(TERRAIN_TEXTURE_WIDTH, height, Assets::PixelEncoding::BGRA8, mipLevelCount ),
+//	W3DTextureHandle("EdgingTemplate.tga","EdgingTemplate.tga", mipLevelCount )
+	W3DTextureHandle(TERRAIN_TEXTURE_WIDTH, height, Assets::PixelEncoding::BGRA8, mipLevelCount ),
 	m_sourceHeightMap(nullptr)
 {
 
@@ -327,7 +327,7 @@ int AlphaEdgeTextureClass::update(WorldHeightMap *htMap)
 
 bool AlphaEdgeTextureClass::Recreate_Procedural_Texture()
 {
-	if (!TextureClass::Recreate_Procedural_Texture()) {
+	if (!W3DTextureHandle::Recreate_Procedural_Texture()) {
 		return false;
 	}
 
@@ -355,7 +355,7 @@ up the "sliding" parameters for the clouds to slide over the terrain. */
 //=============================================================================
 //@todo - Allow adjustment of the cloud slide rate, and lose the hard coded "cloudmap.tga"
 CloudMapTerrainTextureClass::CloudMapTerrainTextureClass(MipCountType mipLevelCount) :
-	TextureClass("TSCloudMed.tga","TSCloudMed.tga", mipLevelCount )
+	W3DTextureHandle("TSCloudMed.tga","TSCloudMed.tga", mipLevelCount )
 {
 	Get_Sampling().mipmap =  Graphics::SamplingFilter::Fast ;
 	m_xSlidePerSecond = -0.02f;
@@ -392,9 +392,8 @@ void CloudMapTerrainTextureClass::Update_Animation(float frame_seconds)
 //=============================================================================
 /// @todo - get "EXScorch01.tga" from not hard coded location.
 ScorchTextureClass::ScorchTextureClass(MipCountType mipLevelCount) :
-	TextureClass("EXScorch01.tga","EXScorch01.tga", mipLevelCount )
+	W3DTextureHandle("EXScorch01.tga","EXScorch01.tga", mipLevelCount )
 // Hack to disable texture reduction.
-//	TextureClass("EXScorch01.tga","EXScorch01.tga", mipLevelCount,Assets::PixelEncoding::Unknown,true,false)
+//	W3DTextureHandle("EXScorch01.tga","EXScorch01.tga", mipLevelCount,Assets::PixelEncoding::Unknown,true,false)
 {
 }
-

@@ -6,13 +6,15 @@ import Assets.Adapters.W3D.Box;
 import Graphics.Scene.Debug.CollisionBox;
 import Graphics.Scene.Models.Factory;
 
-#include "WW3D2/RendObj.h"
+#include "W3DDevice/GameClient/W3DRenderObject.h"
+#include "W3DDevice/GameClient/W3DCastQuery.h"
+#include "W3DDevice/GameClient/W3DIntersectionQuery.h"
 #include "WWMath/obbox.h"
 
 class ChunkLoadClass;
-class RenderInfoClass;
+class W3DRenderContext;
 
-class CollisionBoxRenderObject final : public RenderObjClass
+class CollisionBoxRenderObject final : public W3DRenderObject
 {
 public:
 	CollisionBoxRenderObject();
@@ -23,21 +25,21 @@ public:
 	CollisionBoxRenderObject &operator=(const CollisionBoxRenderObject &source);
 	~CollisionBoxRenderObject() override = default;
 
-	RenderObjClass *Clone() const override;
+	W3DRenderObject *Clone() const override;
 	int Class_ID() const override;
 	int Get_Num_Polys() const override { return 12; }
 	const char *Get_Name() const override { return m_name.c_str(); }
 	void Set_Name(const char *name) override;
-	void Render(RenderInfoClass &rinfo) override;
+	void Render(W3DRenderContext &rinfo) override;
 
 	void Set_Transform(const Matrix3D &transform) override;
 	void Set_Position(const Vector3 &position) override;
 
-	bool Cast_Ray(RayCollisionTestClass &raytest) override;
-	bool Cast_AABox(AABoxCollisionTestClass &boxtest) override;
-	bool Cast_OBBox(OBBoxCollisionTestClass &boxtest) override;
-	bool Intersect_AABox(AABoxIntersectionTestClass &boxtest) override;
-	bool Intersect_OBBox(OBBoxIntersectionTestClass &boxtest) override;
+	bool Cast_Ray(W3DRayCastQuery &raytest) override;
+	bool Cast_AABox(W3DBoxCastQuery &boxtest) override;
+	bool Cast_OBBox(W3DOrientedBoxCastQuery &boxtest) override;
+	bool Intersect_AABox(W3DBoxIntersectionQuery &boxtest) override;
+	bool Intersect_OBBox(W3DOrientedBoxIntersectionQuery &boxtest) override;
 
 	void Get_Obj_Space_Bounding_Sphere(SphereClass &sphere) const override;
 	void Get_Obj_Space_Bounding_Box(AABoxClass &box) const override;
@@ -69,5 +71,4 @@ private:
 	Graphics::CollisionBoxRenderer m_graphics;
 };
 
-Graphics::ModelFactory<RenderObjClass> *Load_Collision_Box_Factory(ChunkLoadClass &cload);
-
+Graphics::ModelFactory<W3DRenderObject> *Load_Collision_Box_Factory(ChunkLoadClass &cload);

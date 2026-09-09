@@ -13,13 +13,13 @@ import Graphics.Scene.Props.Surface;
 import Graphics.Scene.Props.Submission;
 import Graphics.Scene.Shadows.DirectionalRenderer;
 import Graphics.Scene.Lighting.Environment;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 import Assets.Materials;
 using namespace Graphics;
 
 namespace {
 struct Drawing {
-    DX11Device device{{true}};
+    GraphicsTestDevice device{{true}};
     PropRenderer renderer;
     DirectionalShadowRenderer shadows;
     PropSubmission submission;
@@ -31,7 +31,7 @@ struct Drawing {
     PropStyle style;
     Drawing() {
         BOOST_REQUIRE(device.Is_Valid());
-        const auto directory=std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
+        const auto directory=Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
         BOOST_REQUIRE(renderer.Initialize(device,directory));
         BOOST_REQUIRE(shadows.Initialize(device,directory));
         submission.Initialize(device,renderer,shadows);

@@ -55,9 +55,8 @@ import Graphics.Scene.Surfaces.Renderer;
 //           Includes
 //-----------------------------------------------------------------------------
 #include "WWLib/always.h"
-#include "WW3D2/RendObj.h"
-#include "WW3D2/W3DFile.h"
-#include "WW3D2/Texture.h"
+#include "W3DDevice/GameClient/W3DRenderObject.h"
+#include "W3DDevice/GameClient/W3DTextureHandle.h"
 #include "Lib/BaseType.h"
 #include "Common/GameType.h"
 #include "Common/AsciiString.h"
@@ -67,7 +66,7 @@ import Graphics.Scene.Trees.Geometry;
 //-----------------------------------------------------------------------------
 //           Forward References
 //-----------------------------------------------------------------------------
-class MeshClass;
+class W3DMeshRenderObject;
 class W3DTreeBuffer;
 class TileData;
 class W3DTreeDrawModuleData;
@@ -127,7 +126,7 @@ typedef struct {
 
 /// The individual data for a tree type.
 typedef struct {
-	MeshClass * m_mesh;			///< Mesh for this kind of tree.
+	W3DMeshRenderObject * m_mesh;			///< Mesh for this kind of tree.
 	SphereClass m_bounds;		///< Bounding boxes for the base tree models.
 	const W3DTreeDrawModuleData *m_data;
 	ICoord2D		m_textureOrigin; ///< Texture origin in the mega texture.
@@ -153,7 +152,7 @@ class W3DTreeBuffer : public Snapshot
 	//-----------------------------------------------------------------------------
 	//                             W3DTreeTextureClass
 	//-----------------------------------------------------------------------------
-	class W3DTreeTextureClass : public TextureClass
+	class W3DTreeTextureClass : public W3DTextureHandle
 	{
 		W3DMPO_CODE(W3DTreeTextureClass)
 	public:
@@ -194,7 +193,7 @@ public:
 	/// Empties the tree buffer.
 	void setBounds(const Region2D &bounds) {m_bounds = bounds;}
 	/// Draws the trees.  Uses camera for culling.
-	void drawTrees(CameraClass * camera, Graphics::SceneObjectList<RenderObjClass>::Cursor *pDynamicLightsIterator);
+	void drawTrees(W3DCamera * camera, Graphics::SceneObjectList<W3DRenderObject>::Cursor *pDynamicLightsIterator);
     void prepareFrame();
     Bool collectShadowCasters();
 	/// Called when the view changes, and sort key needs to be recalculated.
@@ -229,7 +228,7 @@ private:
 	Short		m_areaPartition[PARTITION_WIDTH_HEIGHT*PARTITION_WIDTH_HEIGHT];
 	Region2D m_bounds;
 
-	TextureClass *m_treeTexture;	///<Trees texture
+	W3DTextureHandle *m_treeTexture;	///<Trees texture
 	Int			m_textureWidth;				///<Width in pixels m_treeTexture;
 	Int			m_textureHeight;				///<Width in pixels m_treeTexture;
 	Int			m_curNumTreeVertices[MAX_BUFFERS]; ///<Number of vertices used in m_vertexTree.
@@ -266,9 +265,9 @@ protected:
 protected:
 	/// Updates the sway offsets.
 	void updateSway(const BreezeInfo& info);
-	void loadTreesInVertexAndIndexBuffers(Graphics::SceneObjectList<RenderObjClass>::Cursor *pDynamicLightsIterator); ///< Fills the index and vertex buffers for drawing.
+	void loadTreesInVertexAndIndexBuffers(Graphics::SceneObjectList<W3DRenderObject>::Cursor *pDynamicLightsIterator); ///< Fills the index and vertex buffers for drawing.
 	void updateVertexBuffer(); ///< Fills the index and vertex buffers for drawing.
-	void cull(const CameraClass * camera);						 ///< Culls the trees.
+	void cull(const W3DCamera * camera);						 ///< Culls the trees.
 	UnsignedInt  doLighting(const Vector3 *normal,
 		const GlobalData::TerrainLighting	*objectLighting,
 		const Vector3 *emissive, UnsignedInt vertexDiffuse, Real scale) const;

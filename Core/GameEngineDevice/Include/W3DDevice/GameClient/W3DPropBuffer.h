@@ -51,8 +51,7 @@
 #include <unordered_map>
 #include "W3DDevice/GameClient/W3DObjectGraphics.h"
 #include "WWLib/always.h"
-#include "WW3D2/RendObj.h"
-#include "WW3D2/W3DFile.h"
+#include "W3DDevice/GameClient/W3DRenderObject.h"
 #include "Lib/BaseType.h"
 #include "Common/GameType.h"
 #include "Common/AsciiString.h"
@@ -61,8 +60,8 @@
 //-----------------------------------------------------------------------------
 //           Forward References
 //-----------------------------------------------------------------------------
-class RenderInfoClass;
-class LightClass;
+class W3DRenderContext;
+class W3DLight;
 class W3DPropDrawModuleData;
 class GeometryInfo;
 
@@ -72,7 +71,7 @@ class GeometryInfo;
 
 /// The individual data for a prop.
 typedef struct {
-	RenderObjClass *m_robj;			///< Render object for this kind of prop.
+	W3DRenderObject *m_robj;			///< Render object for this kind of prop.
 	Int					id;
 	Coord3D			location;			///< Drawing location
 	Int					propType;					///< Type of prop. Index into m_propTypes
@@ -83,7 +82,7 @@ typedef struct {
 
 /// The individual data for a prop type.
 typedef struct {
-	RenderObjClass *m_robj;			///< Render object for this kind of prop.
+	W3DRenderObject *m_robj;			///< Render object for this kind of prop.
 	AsciiString			m_robjName;	///< Name of the render obj.
 	SphereClass			m_bounds;		///< Bounding boxes for the base prop models.
 } TPropType;
@@ -121,7 +120,7 @@ public:
 	/// Empties the prop buffer.
 	void clearAllProps();
 	/// Draws the props.  Uses camera for culling.
-	void drawProps(RenderInfoClass &rinfo);
+	void drawProps(W3DRenderContext &rinfo);
 	/// Called when the view changes, and sort key needs to be recalculated.
 	void doFullUpdate() {m_doCull = true;};
 
@@ -142,9 +141,9 @@ protected:
 	Bool		m_doCull;
 	TPropType m_propTypes[MAX_TYPES];	///< Info about a kind of prop.
 	Int			m_numPropTypes;						///< Number of entries in m_propTypes.
-	std::unordered_map<RenderObjClass*,std::unique_ptr<W3DObjectGraphics>> m_graphics;
+	std::unordered_map<W3DRenderObject*,std::unique_ptr<W3DObjectGraphics>> m_graphics;
 
-	LightClass *m_light;
+	W3DLight *m_light;
 
-	void cull(CameraClass * camera);						 ///< Culls the props.
+	void cull(W3DCamera * camera);						 ///< Culls the props.
 };

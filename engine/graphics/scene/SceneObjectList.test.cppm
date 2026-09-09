@@ -8,7 +8,7 @@ module;
 #include <vector>
 export module Graphics.Scene.ObjectList.Tests;
 import Graphics.Scene.ObjectList;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 import Graphics.Scene.Props.Renderer;
 using namespace Graphics;
 
@@ -111,10 +111,10 @@ BOOST_AUTO_TEST_CASE(member_copy_does_not_copy_links_and_collection_destruction_
 BOOST_AUTO_TEST_CASE(scene_list_order_and_reinsertion_preserve_drawn_rgb_and_destination_alpha)
 {
     for (const bool warp : {true,false}) {
-        DX11Device device({warp});
+        GraphicsTestDevice device({warp});
         if (!warp && !device.Is_Valid()) continue;
         PropRenderer renderer;
-        BOOST_REQUIRE(renderer.Initialize(device,GRAPHICS_TERRAIN_SHADER_DIRECTORY));
+        BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
         const auto target=device.Create_Texture({1,1,1,RHITextureFormat::RGBA8_UNorm,
             static_cast<unsigned>(RHITextureUsage::RenderTarget)});
         const auto depth=device.Create_Texture({1,1,1,RHITextureFormat::D32_Float,

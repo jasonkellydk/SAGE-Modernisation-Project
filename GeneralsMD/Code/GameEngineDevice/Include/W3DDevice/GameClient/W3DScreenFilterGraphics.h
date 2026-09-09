@@ -1,16 +1,16 @@
 #pragma once
 #include "W3DDevice/GameClient/W3DGraphicsResources.h"
-#include "WW3D2/WW3D.h"
-#include "WW3D2/Texture.h"
+
+#include "W3DDevice/GameClient/W3DTextureHandle.h"
 import Graphics.Frame.AttachmentBindings;
-import Graphics.Backends.DX11.FrameRuntime;
+import Graphics.Frame.Runtime;
 import Graphics.Scene.Screen.Filters;
 
 // Translate the existing viewport quad and texture ownership into graphics data.
 template<typename QuadVertex>
-bool Draw_Screen_Filter_Quad(const QuadVertex* source, TextureClass* texture,
+bool Draw_Screen_Filter_Quad(const QuadVertex* source, W3DTextureHandle* texture,
     const Graphics::ScreenFilterParameters& parameters={},
-    const Graphics::ScreenFilterStyle& style={}, TextureClass* mask=nullptr)
+    const Graphics::ScreenFilterStyle& style={}, W3DTextureHandle* mask=nullptr)
 {
     auto* device=Graphics::Shared_Frame_Device();
     Graphics::RHIViewport viewport{};

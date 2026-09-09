@@ -34,8 +34,7 @@
 #include "Common/AudioEventRTS.h"
 #include "GameClient/ParticleSys.h"
 #include "W3DDevice/GameClient/Module/W3DModelDraw.h"
-#include "WW3D2/RendObj.h"
-#include "WW3D2/PartEmt.h"
+#include "W3DDevice/GameClient/W3DRenderObject.h"
 
 //-------------------------------------------------------------------------------------------------
 class W3DTruckDrawModuleData : public W3DModelDrawModuleData
@@ -130,7 +129,7 @@ protected:
 	AudioEventRTS		m_powerslideSound;
 	AudioEventRTS		m_landingSound;
 
-	RenderObjClass *m_prevRenderObj;
+	W3DRenderObject *m_prevRenderObj;
 
 	void createWheelEmitters(); ///< Create particle effects for wheels.
 	void tossWheelEmitters(); ///< Destroy particle effects for wheels.

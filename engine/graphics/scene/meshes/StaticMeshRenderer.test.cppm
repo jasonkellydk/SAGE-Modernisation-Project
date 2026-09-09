@@ -56,7 +56,7 @@ BOOST_AUTO_TEST_CASE(static_mesh_source_rejects_incompatible_layout)
 
 #if defined(_WIN32)
 
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 import Graphics.Testing.VisualRegression;
 
 #ifndef GRAPHICS_STATIC_MESH_REFERENCE_DIRECTORY
@@ -92,11 +92,11 @@ RenderTransform Make_LOD_Transform(float scale) noexcept
 
 BOOST_AUTO_TEST_CASE(static_mesh_variant_switch_keeps_instance_handle)
 {
-	DX11Device device({true});
+	GraphicsTestDevice device({true});
 	BOOST_REQUIRE(device.Is_Valid());
 
 	StaticMeshRenderer renderer;
-	BOOST_REQUIRE(renderer.Initialize(device, std::filesystem::path(GRAPHICS_STATIC_MESH_SHADER_DIRECTORY), 2, 1));
+	BOOST_REQUIRE(renderer.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_STATIC_MESH_SHADER_DIRECTORY), 2, 1));
 
 	const std::array<StaticMeshVertex, 3> vertices = {{
 		{{-0.5f, -0.5f, 0.0f}, {1.0f, 1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}},
@@ -160,11 +160,11 @@ BOOST_AUTO_TEST_CASE(static_mesh_variant_switch_keeps_instance_handle)
 
 BOOST_AUTO_TEST_CASE(static_mesh_lod_switch_uses_screen_space_selection)
 {
-	DX11Device device({true});
+	GraphicsTestDevice device({true});
 	BOOST_REQUIRE(device.Is_Valid());
 
 	StaticMeshRenderer renderer;
-	BOOST_REQUIRE(renderer.Initialize(device, std::filesystem::path(GRAPHICS_STATIC_MESH_SHADER_DIRECTORY), 2, 1));
+	BOOST_REQUIRE(renderer.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_STATIC_MESH_SHADER_DIRECTORY), 2, 1));
 
 	const std::array<std::uint16_t, 3> indices = {0, 1, 2};
 	const std::array<StaticMeshVertex, 3> high_detail_vertices = {{
@@ -230,11 +230,11 @@ BOOST_AUTO_TEST_CASE(static_mesh_lod_switch_uses_screen_space_selection)
 
 BOOST_AUTO_TEST_CASE(static_mesh_binding_queries_static_bone_and_attachment_transforms)
 {
-	DX11Device device({true});
+	GraphicsTestDevice device({true});
 	BOOST_REQUIRE(device.Is_Valid());
 
 	StaticMeshRenderer renderer;
-	BOOST_REQUIRE(renderer.Initialize(device, std::filesystem::path(GRAPHICS_STATIC_MESH_SHADER_DIRECTORY), 1, 1));
+	BOOST_REQUIRE(renderer.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_STATIC_MESH_SHADER_DIRECTORY), 1, 1));
 
 	const std::array<StaticMeshVertex, 3> vertices = {{
 		{{-0.5f, -0.5f, 0.0f}, {1.0f, 1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}},
@@ -290,11 +290,11 @@ BOOST_AUTO_TEST_CASE(static_mesh_binding_queries_static_bone_and_attachment_tran
 
 BOOST_AUTO_TEST_CASE(static_mesh_submesh_visibility_preserves_instance_state)
 {
-	DX11Device device({true});
+	GraphicsTestDevice device({true});
 	BOOST_REQUIRE(device.Is_Valid());
 
 	StaticMeshRenderer renderer;
-	BOOST_REQUIRE(renderer.Initialize(device, std::filesystem::path(GRAPHICS_STATIC_MESH_SHADER_DIRECTORY), 1, 1));
+	BOOST_REQUIRE(renderer.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_STATIC_MESH_SHADER_DIRECTORY), 1, 1));
 
 	const std::array<StaticMeshVertex, 6> vertices = {{
 		{{0.0f, 0.78f, 0.35f}, {1.0f, 0.20f, 0.10f, 1.0f}, {0.5f, 0.0f}},
@@ -355,11 +355,11 @@ BOOST_AUTO_TEST_CASE(static_mesh_submesh_visibility_preserves_instance_state)
 
 BOOST_AUTO_TEST_CASE(static_mesh_shadow_setting_preserves_instance_handle)
 {
-	DX11Device device({true});
+	GraphicsTestDevice device({true});
 	BOOST_REQUIRE(device.Is_Valid());
 
 	StaticMeshRenderer renderer;
-	BOOST_REQUIRE(renderer.Initialize(device, std::filesystem::path(GRAPHICS_STATIC_MESH_SHADER_DIRECTORY), 1, 1));
+	BOOST_REQUIRE(renderer.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_STATIC_MESH_SHADER_DIRECTORY), 1, 1));
 	const std::array<StaticMeshVertex, 3> vertices = {{
 		{{-0.5f, -0.5f, 0.0f}, {1.0f, 1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}},
 		{{0.0f, 0.5f, 0.0f}, {1.0f, 1.0f, 1.0f, 1.0f}, {0.5f, 0.0f}},
@@ -395,11 +395,11 @@ BOOST_AUTO_TEST_CASE(static_mesh_shadow_setting_preserves_instance_handle)
 
 BOOST_AUTO_TEST_CASE(static_mesh_renderer_matches_colocated_production_golden_image)
 {
-	DX11Device device({true});
+	GraphicsTestDevice device({true});
 	BOOST_REQUIRE(device.Is_Valid());
 
 	StaticMeshRenderer renderer;
-	BOOST_REQUIRE(renderer.Initialize(device, std::filesystem::path(GRAPHICS_STATIC_MESH_SHADER_DIRECTORY), 1, 1));
+	BOOST_REQUIRE(renderer.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_STATIC_MESH_SHADER_DIRECTORY), 1, 1));
 	const std::array<StaticMeshVertex, 3> vertices = {{
 		{{0.0f, 0.78f, 0.35f}, {1.0f, 0.20f, 0.10f, 1.0f}, {0.5f, 0.0f}},
 		{{-0.72f, -0.62f, 0.35f}, {0.10f, 0.85f, 0.20f, 1.0f}, {0.0f, 1.0f}},
@@ -451,11 +451,11 @@ BOOST_AUTO_TEST_CASE(static_mesh_renderer_matches_colocated_production_golden_im
 
 BOOST_AUTO_TEST_CASE(skinned_mesh_renderer_matches_colocated_production_golden_image)
 {
-	DX11Device device({true});
+	GraphicsTestDevice device({true});
 	BOOST_REQUIRE(device.Is_Valid());
 
 	StaticMeshRenderer renderer;
-	BOOST_REQUIRE(renderer.Initialize(device, std::filesystem::path(GRAPHICS_STATIC_MESH_SHADER_DIRECTORY), 1, 1, 4));
+	BOOST_REQUIRE(renderer.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_STATIC_MESH_SHADER_DIRECTORY), 1, 1, 4));
 
 	std::array<SkinnedMeshVertex, 3> vertices{};
 	vertices[0].position[0] = -0.72f;
@@ -546,11 +546,11 @@ BOOST_AUTO_TEST_CASE(skinned_mesh_renderer_matches_colocated_production_golden_i
 
 BOOST_AUTO_TEST_CASE(blended_skinned_mesh_renderer_matches_colocated_production_golden_image)
 {
-	DX11Device device({true});
+	GraphicsTestDevice device({true});
 	BOOST_REQUIRE(device.Is_Valid());
 
 	StaticMeshRenderer renderer;
-	BOOST_REQUIRE(renderer.Initialize(device, std::filesystem::path(GRAPHICS_STATIC_MESH_SHADER_DIRECTORY), 1, 1, 4));
+	BOOST_REQUIRE(renderer.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_STATIC_MESH_SHADER_DIRECTORY), 1, 1, 4));
 
 	std::array<SkinnedMeshVertex, 3> vertices{};
 	vertices[0].position[0] = -0.72f;

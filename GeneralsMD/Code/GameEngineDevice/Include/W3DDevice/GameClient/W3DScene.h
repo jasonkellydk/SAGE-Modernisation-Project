@@ -38,9 +38,9 @@
 #include <memory>
 
 // USER INCLUDES //////////////////////////////////////////////////////////////
-#include "WW3D2/Scene.h"
-#include "WW3D2/RInfo.h"
-#include "WW3D2/ColTest.h"
+#include "W3DDevice/GameClient/W3DSceneClass.h"
+#include "W3DDevice/GameClient/W3DRenderContext.h"
+#include "W3DDevice/GameClient/W3DCastQuery.h"
 import Graphics.RHI;
 import Graphics.Scene.Lighting.Local;
 #include "W3DDevice/GameClient/WaterReflectionRenderer.h"
@@ -49,7 +49,7 @@ import Graphics.Scene.Lighting.Local;
 // PROTOTYPES /////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////
 class W3DDynamicLight;
-class LightClass;
+class W3DLight;
 class Drawable;
 enum CustomScenePassModes CPP_11(: Int);
 //-----------------------------------------------------------------------------
@@ -57,7 +57,7 @@ enum CustomScenePassModes CPP_11(: Int);
 //-----------------------------------------------------------------------------
 /** Scene management for 3D RTS game */
 //-----------------------------------------------------------------------------
-class RTS3DScene : public SimpleSceneClass, public SubsystemInterface,
+class RTS3DScene : public W3DSimpleScene, public SubsystemInterface,
 	public WaterReflectionRenderer
 {
 
@@ -67,57 +67,57 @@ public:
 	virtual ~RTS3DScene() override;  ///< RTSScene destructor
 
 	/// ray picking against objects in scene
-	Bool castRay(RayCollisionTestClass & raytest, Bool testAll, Int collisionType);
+	Bool castRay(W3DRayCastQuery & raytest, Bool testAll, Int collisionType);
 
 	/// customizable renderer for the RTS3DScene
-	virtual void	Customized_Render( RenderInfoClass &rinfo ) override;
-	virtual void	Visibility_Check(CameraClass * camera) override;
-	virtual void  Render(RenderInfoClass & rinfo) override;
+	virtual void	Customized_Render( W3DRenderContext &rinfo ) override;
+	virtual void	Visibility_Check(W3DCamera * camera) override;
+	virtual void  Render(W3DRenderContext & rinfo) override;
 
 	void setCustomPassMode (CustomScenePassModes mode) {m_customPassMode = mode;}
 	CustomScenePassModes getCustomPassMode ()	{return m_customPassMode;}
 
-	void Flush(RenderInfoClass & rinfo);	//draw queued up models.
-	void Render_Water_Reflection(CameraClass *camera,
+	void Flush(W3DRenderContext & rinfo);	//draw queued up models.
+	void Render_Water_Reflection(W3DCamera *camera,
 		const Graphics::RHIViewport &viewport) override;
 	/// Drawing control method
 	void drawTerrainOnly(Bool draw) {m_drawTerrainOnly = draw;};
 
 	/// Drawing control method
-	void renderSpecificDrawables(RenderInfoClass &rinfo, Int numDrawables, Drawable **theDrawables) ;
+	void renderSpecificDrawables(W3DRenderContext &rinfo, Int numDrawables, Drawable **theDrawables) ;
 
 	/// Lighting methods
 	void addDynamicLight(W3DDynamicLight * obj);
 	void removeDynamicLight(W3DDynamicLight * obj);
-	Graphics::SceneObjectList<RenderObjClass>::Cursor *createLightsIterator();
-	void destroyLightsIterator(Graphics::SceneObjectList<RenderObjClass>::Cursor * it);
-	Graphics::SceneObjectList<RenderObjClass> *getDynamicLights() {return &m_dynamicLightList;};
+	Graphics::SceneObjectList<W3DRenderObject>::Cursor *createLightsIterator();
+	void destroyLightsIterator(Graphics::SceneObjectList<W3DRenderObject>::Cursor * it);
+	Graphics::SceneObjectList<W3DRenderObject> *getDynamicLights() {return &m_dynamicLightList;};
 	W3DDynamicLight *getADynamicLight();
-	void setGlobalLight(LightClass *pLight,Int lightIndex=0);
+	void setGlobalLight(W3DLight *pLight,Int lightIndex=0);
 	Graphics::LocalLighting &getDefaultLightEnv() {return m_defaultLightEnv;}
 
 	virtual void init() override {}
 	virtual void update() override {}
 	virtual void draw() override;
 	virtual void reset() override {}
-	void doRender(CameraClass * cam);
+	void doRender(W3DCamera * cam);
 
 protected:
-	void renderOneObject(RenderInfoClass &rinfo, RenderObjClass *robj, Int localPlayerIndex);
-	void updateFixedLightEnvironments(RenderInfoClass & rinfo);
-	void flushTranslucentObjects(RenderInfoClass & rinfo);
-	void flushOccludedObjects(RenderInfoClass & rinfo);
-	void flagOccludedObjects(CameraClass * camera);
-	void flushOccludedObjectsIntoStencil(RenderInfoClass & rinfo);
+	void renderOneObject(W3DRenderContext &rinfo, W3DRenderObject *robj, Int localPlayerIndex);
+	void updateFixedLightEnvironments(W3DRenderContext & rinfo);
+	void flushTranslucentObjects(W3DRenderContext & rinfo);
+	void flushOccludedObjects(W3DRenderContext & rinfo);
+	void flagOccludedObjects(W3DCamera * camera);
+	void flushOccludedObjectsIntoStencil(W3DRenderContext & rinfo);
 	void updatePlayerColorPasses();
 
 protected:
-	Graphics::SceneObjectList<RenderObjClass>	m_dynamicLightList;
+	Graphics::SceneObjectList<W3DRenderObject>	m_dynamicLightList;
 	Bool									m_drawTerrainOnly;
-	LightClass						*m_globalLight[Graphics::Material_Light_Count];				///< The global directional light (sun, moon) Applies to objects.
-	LightClass						*m_scratchLight; ///< a workspace for copying global lights and modifying // MLorenzen
+	W3DLight						*m_globalLight[Graphics::Material_Light_Count];				///< The global directional light (sun, moon) Applies to objects.
+	W3DLight						*m_scratchLight; ///< a workspace for copying global lights and modifying // MLorenzen
 	Vector3 m_infantryAmbient;	///<scene ambient modified to make infantry easier to see
-	LightClass						*m_infantryLight[Graphics::Material_Light_Count];	///< The global direction light modified to make infantry easier to see.
+	W3DLight						*m_infantryLight[Graphics::Material_Light_Count];	///< The global direction light modified to make infantry easier to see.
 	Int m_numGlobalLights;			///<number of global lights
 	Graphics::LocalLighting	m_defaultLightEnv;		///<default light environment applied to objects without custom/dynamic lighting.
 	Graphics::LocalLighting	m_foggedLightEnv;		///<default light environment applied to objects without custom/dynamic lighting.
@@ -131,16 +131,16 @@ protected:
 	std::shared_ptr<NativeMaterialPass> m_occludedMaterialPass[MAX_PLAYER_COUNT];
 	CustomScenePassModes m_customPassMode;					///< flag used to force a non-standard rendering of scene.
 	Int m_translucentObjectsCount;	///< number of translucent objects to render this frame.
-	RenderObjClass **m_translucentObjectsBuffer;	///< queue of current frame's translucent objects.
+	W3DRenderObject **m_translucentObjectsBuffer;	///< queue of current frame's translucent objects.
 	Int m_occludedObjectsCount;	///<number of objects in current frame that need special rendering because occluded.
-	RenderObjClass **m_potentialOccluders;	///<objects which may block other objects from being visible
-	RenderObjClass **m_potentialOccludees;	///<objects which may be blocked from visibility by other objects.
-	RenderObjClass **m_nonOccludersOrOccludees;	///<objects which are neither bockers or blockees (small rocks, shrubs, etc.).
+	W3DRenderObject **m_potentialOccluders;	///<objects which may block other objects from being visible
+	W3DRenderObject **m_potentialOccludees;	///<objects which may be blocked from visibility by other objects.
+	W3DRenderObject **m_nonOccludersOrOccludees;	///<objects which are neither bockers or blockees (small rocks, shrubs, etc.).
 	Int m_numPotentialOccluders;
 	Int m_numPotentialOccludees;
 	Int m_numNonOccluderOrOccludee;
 
-	CameraClass *m_camera;
+	W3DCamera *m_camera;
 };
 
 //-----------------------------------------------------------------------------
@@ -148,7 +148,7 @@ protected:
 //-----------------------------------------------------------------------------
 /** Scene management for 2D overlay on top of 3D scene */
 //-----------------------------------------------------------------------------
-class RTS2DScene : public SimpleSceneClass, public SubsystemInterface
+class RTS2DScene : public W3DSimpleScene, public SubsystemInterface
 {
 public:
 
@@ -156,17 +156,17 @@ public:
 	virtual ~RTS2DScene() override;
 
 	/// customizable renderer for the RTS2DScene
-	virtual void Customized_Render( RenderInfoClass &rinfo ) override;
+	virtual void Customized_Render( W3DRenderContext &rinfo ) override;
 	virtual void init() override {}
 	virtual void update() override {}
 	virtual void draw() override;
 	virtual void reset() override {}
-	void doRender(CameraClass * cam);
+	void doRender(W3DCamera * cam);
 
 protected:
 
-	RenderObjClass *m_status;
-	CameraClass *m_camera;
+	W3DRenderObject *m_status;
+	W3DCamera *m_camera;
 };
 
 //-----------------------------------------------------------------------------
@@ -174,7 +174,7 @@ protected:
 //-----------------------------------------------------------------------------
 /** Scene management for 3D interface overlay on top of 3D scene */
 //-----------------------------------------------------------------------------
-class RTS3DInterfaceScene : public SimpleSceneClass
+class RTS3DInterfaceScene : public W3DSimpleScene
 {
 public:
 
@@ -182,5 +182,5 @@ public:
 	virtual ~RTS3DInterfaceScene() override;
 
 	/// customizable renderer for the RTS3DInterfaceScene
-	virtual void Customized_Render( RenderInfoClass &rinfo ) override;
+	virtual void Customized_Render( W3DRenderContext &rinfo ) override;
 };

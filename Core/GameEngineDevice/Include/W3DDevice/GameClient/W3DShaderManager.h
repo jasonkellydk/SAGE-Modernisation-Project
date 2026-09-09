@@ -35,7 +35,7 @@
 
 #include <cstdint>
 
-#include "WW3D2/Texture.h"
+#include "W3DDevice/GameClient/W3DTextureHandle.h"
 enum FilterTypes CPP_11(: Int);
 enum FilterModes CPP_11(: Int);
 enum CustomScenePassModes CPP_11(: Int);
@@ -44,7 +44,7 @@ enum ChipsetType CPP_11(: Int);
 enum CpuType CPP_11(: Int);
 enum GraphicsVenderID CPP_11(: Int);
 
-class TextureClass;	///forward reference
+class W3DTextureHandle;	///forward reference
 /** System for managing complex rendering settings which are either not handled by
 	WW3D2 or need custom paths depending on the video card.  This system will determine
 	the proper shader given video card limitations and also allow the app to query the
@@ -96,8 +96,8 @@ public:
 	// Support routines for filter methods.
 	static Bool canRenderToTexture(void) { return m_renderTexture != nullptr;}
 	static void startRenderToTexture(void); ///< Sets render target to texture.
-	static TextureClass * endRenderToTexture(void); ///< Ends render to texture, & returns texture.
-	static TextureClass * getRenderTexture(void);	///< returns last used render target texture
+	static W3DTextureHandle * endRenderToTexture(void); ///< Ends render to texture, & returns texture.
+	static W3DTextureHandle * getRenderTexture(void);	///< returns last used render target texture
 	static Bool isRenderingToTexture(void) {return m_renderingToTexture; }
 	static void drawViewport(Int color);	///<draws 2 triangles covering the current tactical viewport
 
@@ -110,7 +110,7 @@ protected:
 	static FilterTypes m_currentFilter; ///< Last filter that was set.
 	// Info for a render to texture surface for special effects.
 	static Bool m_renderingToTexture;
-	static TextureClass *m_renderTexture;		///<texture into which rendering will be redirected.
+	static W3DTextureHandle *m_renderTexture;		///<texture into which rendering will be redirected.
 
 
 };
@@ -209,7 +209,7 @@ public:
 		m_fadeDirection = direction;
 	}
 	static Real getCurrentFadeValue()	{ return m_curFadeValue;}
-	static TextureClass *getCurrentMaskTexture() { return m_fadePatternTexture;}
+	static W3DTextureHandle *getCurrentMaskTexture() { return m_fadePatternTexture;}
 protected:
 	virtual Int set(FilterModes mode) override;		///<setup shader for the specified rendering pass.
 	virtual void reset() override;		///<do any custom resetting necessary to bring W3D in sync.
@@ -219,5 +219,5 @@ protected:
 	static Int m_curFadeFrame;
 	static Real m_curFadeValue;
 	static Bool m_skipRender;
-	static TextureClass *m_fadePatternTexture;	///<shape/pattern of the fade
+	static W3DTextureHandle *m_fadePatternTexture;	///<shape/pattern of the fade
 };

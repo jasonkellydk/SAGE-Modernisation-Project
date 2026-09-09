@@ -2,11 +2,13 @@ module;
 
 #include <cassert>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <utility>
 #include <vector>
 
 export module Graphics.Scene.Models.MaterialSlots;
+import Graphics.Scene.Models.SourceRevision;
 
 namespace Graphics {
 
@@ -22,6 +24,7 @@ class MaterialSlots final
         explicit Storage(std::size_t count) : values(count) {}
 
         std::vector<Owner> values;
+        SourceRevision revision;
     };
 
 public:
@@ -49,6 +52,7 @@ public:
         if (!m_storage) {
             m_storage = std::make_shared<Storage>(count);
         } else {
+            m_storage->revision.Invalidate();
             m_storage->values.resize(count);
         }
     }
@@ -63,6 +67,7 @@ public:
         MaterialSlots result;
         if (m_storage) {
             result.m_storage = std::make_shared<Storage>(*m_storage);
+            result.m_storage->revision.Reset();
         }
         return result;
     }
@@ -84,6 +89,7 @@ public:
         if (!m_storage || index >= m_storage->values.size()) {
             return nullptr;
         }
+        m_storage->revision.Expose_Writable();
         return &m_storage->values[index];
     }
 
@@ -101,7 +107,13 @@ public:
         if (!m_storage || index >= m_storage->values.size()) {
             return;
         }
+        m_storage->revision.Invalidate();
         m_storage->values[index] = owner;
+    }
+
+    std::uint64_t Revision() const noexcept
+    {
+        return m_storage ? m_storage->revision.Token() : 0;
     }
 
 private:

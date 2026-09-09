@@ -21,7 +21,7 @@ export module Graphics.Scene.Beams.LaserDrawing.Tests;
 import Graphics.Scene.Beams.Laser;
 import Graphics.Scene.Beams;
 import Graphics.RHI;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 
 using namespace Graphics;
 
@@ -250,14 +250,14 @@ void Write_Optional_PPM(const std::vector<std::byte> &pixels,
 BOOST_AUTO_TEST_CASE(laser_core_multiplies_authored_rgba_and_biases_shroud_visibility)
 {
 	for (const bool warp : {true, false}) {
-		DX11Device device({warp});
+		GraphicsTestDevice device({warp});
 		if (!warp && !device.Is_Valid())
 			continue;
 		BOOST_REQUIRE(device.Is_Valid());
 
 		LaserRenderer renderer;
 		BOOST_REQUIRE(renderer.Initialize(device,
-			std::filesystem::path(GRAPHICS_LASER_SHADER_DIRECTORY), 2));
+			Graphics::Test_Shader_Directory(GRAPHICS_LASER_SHADER_DIRECTORY), 2));
 		BOOST_REQUIRE(renderer.Set_View(Make_View(0)));
 
 		const std::array<std::byte, 4> base_pixel{
@@ -396,14 +396,14 @@ BOOST_AUTO_TEST_CASE(laser_core_multiplies_authored_rgba_and_biases_shroud_visib
 BOOST_AUTO_TEST_CASE(laser_distortion_is_masked_keeps_destination_alpha_and_survives_resize)
 {
 	for (const bool warp : {true, false}) {
-		DX11Device device({warp});
+		GraphicsTestDevice device({warp});
 		if (!warp && !device.Is_Valid())
 			continue;
 		BOOST_REQUIRE(device.Is_Valid());
 
 		LaserRenderer renderer;
 		BOOST_REQUIRE(renderer.Initialize(device,
-			std::filesystem::path(GRAPHICS_LASER_SHADER_DIRECTORY), 4));
+			Graphics::Test_Shader_Directory(GRAPHICS_LASER_SHADER_DIRECTORY), 4));
 		BOOST_REQUIRE(renderer.Set_View(Make_View(1000)));
 
 		const auto background_pixels = Make_Background(Width, Height);
@@ -463,9 +463,9 @@ BOOST_AUTO_TEST_CASE(laser_distortion_is_masked_keeps_destination_alpha_and_surv
 		std::vector<std::byte> distorted;
 		BOOST_REQUIRE(Draw(device, renderer, target, depth, Width, Height,
 			shroud_full, background, true, distorted));
-		Check_Exterior_Is_Background(distorted, background, Width, 1, 1);
-		Check_Exterior_Is_Background(distorted, background, Width, 30, 30);
-		const auto center_background = Pixel(background, Width, Width / 2, Height / 2);
+		Check_Exterior_Is_Background(distorted, background_pixels, Width, 1, 1);
+		Check_Exterior_Is_Background(distorted, background_pixels, Width, 30, 30);
+		const auto center_background = Pixel(background_pixels, Width, Width / 2, Height / 2);
 		const auto center_distorted = Pixel(distorted, Width, Width / 2, Height / 2);
 		const unsigned center_difference =
 			static_cast<unsigned>(std::abs(static_cast<int>(center_distorted[0]) -
@@ -497,12 +497,12 @@ BOOST_AUTO_TEST_CASE(laser_distortion_is_masked_keeps_destination_alpha_and_surv
 		std::vector<std::byte> steep_normal;
 		BOOST_REQUIRE(Draw(device, renderer, target, depth, Width, Height,
 			shroud_full, background, true, steep_normal));
-		const unsigned flat_difference = Difference(flat_normal, background, Width, Height, 0)
-			+ Difference(flat_normal, background, Width, Height, 1);
-		const unsigned weak_difference = Difference(weak_normal, background, Width, Height, 0)
-			+ Difference(weak_normal, background, Width, Height, 1);
-		const unsigned steep_difference = Difference(steep_normal, background, Width, Height, 0)
-			+ Difference(steep_normal, background, Width, Height, 1);
+		const unsigned flat_difference = Difference(flat_normal, background_pixels, Width, Height, 0)
+			+ Difference(flat_normal, background_pixels, Width, Height, 1);
+		const unsigned weak_difference = Difference(weak_normal, background_pixels, Width, Height, 0)
+			+ Difference(weak_normal, background_pixels, Width, Height, 1);
+		const unsigned steep_difference = Difference(steep_normal, background_pixels, Width, Height, 0)
+			+ Difference(steep_normal, background_pixels, Width, Height, 1);
 		BOOST_CHECK_LE(flat_difference, 4u);
 		BOOST_CHECK_GT(weak_difference, flat_difference + 4u);
 		BOOST_CHECK_GT(steep_difference, weak_difference + 4u);
@@ -513,7 +513,7 @@ BOOST_AUTO_TEST_CASE(laser_distortion_is_masked_keeps_destination_alpha_and_surv
 		BOOST_REQUIRE(Draw(device, renderer, target, depth, Width, Height,
 			shroud_full, background, true, combined_normals));
 		const auto combined_pixel = Pixel(combined_normals, Width, Width / 2, Height / 2);
-		const auto background_pixel = Pixel(background, Width, Width / 2, Height / 2);
+		const auto background_pixel = Pixel(background_pixels, Width, Width / 2, Height / 2);
 		const unsigned combined_center_difference =
 			static_cast<unsigned>(std::abs(static_cast<int>(combined_pixel[0]) -
 				static_cast<int>(background_pixel[0]))) +
@@ -538,12 +538,12 @@ BOOST_AUTO_TEST_CASE(laser_distortion_is_masked_keeps_destination_alpha_and_surv
 		std::vector<std::byte> zero;
 		BOOST_REQUIRE(Draw(device, renderer, zero_target, zero_depth, Width, Height,
 			shroud_zero, background, true, zero));
-		BOOST_CHECK_EQUAL(Difference(zero, background, Width, Height, 0), 0u);
-		BOOST_CHECK_EQUAL(Difference(zero, background, Width, Height, 1), 0u);
-		const unsigned half_difference = Difference(half, background, Width, Height, 0)
-			+ Difference(half, background, Width, Height, 1);
-		const unsigned full_difference = Difference(distorted, background, Width, Height, 0)
-			+ Difference(distorted, background, Width, Height, 1);
+		BOOST_CHECK_EQUAL(Difference(zero, background_pixels, Width, Height, 0), 0u);
+		BOOST_CHECK_EQUAL(Difference(zero, background_pixels, Width, Height, 1), 0u);
+		const unsigned half_difference = Difference(half, background_pixels, Width, Height, 0)
+			+ Difference(half, background_pixels, Width, Height, 1);
+		const unsigned full_difference = Difference(distorted, background_pixels, Width, Height, 0)
+			+ Difference(distorted, background_pixels, Width, Height, 1);
 		BOOST_CHECK_GT(half_difference, 0u);
 		BOOST_CHECK_LT(half_difference, full_difference);
 
@@ -652,14 +652,14 @@ BOOST_AUTO_TEST_CASE(laser_distortion_is_masked_keeps_destination_alpha_and_surv
 BOOST_AUTO_TEST_CASE(laser_scroll_starts_at_creation_time_and_repeats_are_stable)
 {
 	for (const bool warp : {true, false}) {
-		DX11Device device({warp});
+		GraphicsTestDevice device({warp});
 		if (!warp && !device.Is_Valid())
 			continue;
 		BOOST_REQUIRE(device.Is_Valid());
 
 		LaserRenderer renderer;
 		BOOST_REQUIRE(renderer.Initialize(device,
-			std::filesystem::path(GRAPHICS_LASER_SHADER_DIRECTORY), 1));
+			Graphics::Test_Shader_Directory(GRAPHICS_LASER_SHADER_DIRECTORY), 1));
 		const std::array<std::byte, 16> scroll_pixels{
 			std::byte(255), std::byte(0), std::byte(0), std::byte(255),
 			std::byte(0), std::byte(255), std::byte(0), std::byte(255),

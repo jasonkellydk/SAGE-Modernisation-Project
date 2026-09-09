@@ -8,6 +8,8 @@ export import Assets.ModelAssembly;
 import Assets.Adapters.W3D.Chunks;
 
 namespace Assets::W3D {
+export inline constexpr std::uint32_t W3DChunkCollection = 0x00000420u;
+
 export bool W3DRead_Model_Collection(W3DByteSpan bytes,ModelCollectionDesc& output,std::string& error)
 {
     ModelCollectionDesc next;

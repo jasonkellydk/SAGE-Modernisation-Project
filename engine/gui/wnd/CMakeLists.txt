@@ -71,9 +71,24 @@ if(RTS_BUILD_GRAPHICS_TESTS AND WIN32)
         FILE_SET CXX_MODULES FILES WNDTextureDrawing.test.cppm)
     target_compile_features(generals_ui_wnd_texture_drawing_test PRIVATE cxx_std_20)
     target_include_directories(generals_ui_wnd_texture_drawing_test PRIVATE ${Boost_INCLUDE_DIRS})
-    target_link_libraries(generals_ui_wnd_texture_drawing_test PRIVATE generals_ui_wnd)
+    target_link_libraries(generals_ui_wnd_texture_drawing_test PRIVATE
+        generals_ui_wnd
+        generals_graphics_test_support)
     target_compile_definitions(generals_ui_wnd_texture_drawing_test PRIVATE
         GRAPHICS_TERRAIN_SHADER_DIRECTORY="${WND_SHADER_DIRECTORY}")
     add_dependencies(generals_ui_wnd_texture_drawing_test generals_graphics_shaders)
-    add_test(NAME generals_ui_wnd_texture_drawing_test COMMAND generals_ui_wnd_texture_drawing_test)
+    set_property(GLOBAL APPEND PROPERTY GRAPHICS_TEST_TARGETS
+        generals_ui_wnd_texture_drawing_test)
+    foreach(graphics_test_backend IN ITEMS dx11 dx12)
+        foreach(graphics_test_driver IN ITEMS hardware warp)
+            set(graphics_test_instance
+                "generals_ui_wnd_texture_drawing_test.${graphics_test_backend}.${graphics_test_driver}")
+            add_test(NAME ${graphics_test_instance}
+                COMMAND generals_ui_wnd_texture_drawing_test)
+            set_tests_properties(${graphics_test_instance} PROPERTIES
+                LABELS "graphics;${graphics_test_backend};${graphics_test_driver}"
+                ENVIRONMENT
+                    "GRAPHICS_BACKEND=${graphics_test_backend};GRAPHICS_TEST_BACKEND=${graphics_test_backend};GRAPHICS_TEST_DRIVER=${graphics_test_driver};GRAPHICS_TEST_FAILURE_SUFFIX=${graphics_test_backend}-${graphics_test_driver}")
+        endforeach()
+    endforeach()
 endif()

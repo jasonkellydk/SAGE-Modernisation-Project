@@ -14,6 +14,22 @@ import Assets.Math;
 import Assets.MeshBoundsTree;
 
 namespace Assets::W3D {
+
+export inline constexpr std::uint32_t W3DMeshVersion4_1 = 0x00040001u;
+export inline constexpr std::uint32_t W3DMeshAttributeCollisionTypeMask = 0x00000FF0u;
+export inline constexpr std::uint32_t W3DMeshAttributeCollisionTypeShift = 4u;
+export inline constexpr std::uint32_t W3DMeshAttributeHidden = 0x00001000u;
+export inline constexpr std::uint32_t W3DMeshAttributeTwoSided = 0x00002000u;
+export inline constexpr std::uint32_t W3DMeshAttributeObsoleteLightmapped = 0x00004000u;
+export inline constexpr std::uint32_t W3DMeshAttributeCastShadow = 0x00008000u;
+export inline constexpr std::uint32_t W3DMeshAttributeGeometryTypeMask = 0x00FF0000u;
+export inline constexpr std::uint32_t W3DMeshAttributeGeometryTypeCameraAligned = 0x00010000u;
+export inline constexpr std::uint32_t W3DMeshAttributeGeometryTypeSkin = 0x00020000u;
+export inline constexpr std::uint32_t W3DMeshAttributeGeometryTypeCameraOriented = 0x00060000u;
+export inline constexpr std::uint32_t W3DMeshAttributePrelitMask = 0x0F000000u;
+export inline constexpr std::uint32_t W3DMeshAttributeNPatchable = 0x20000000u;
+export inline constexpr int W3DMeshSortLevelNone = 0;
+
 export bool W3DRead_Mesh_Bounds_Tree(W3DByteSpan bytes, std::uint32_t mesh_triangle_count,
     MeshBoundsTree& result)
 {

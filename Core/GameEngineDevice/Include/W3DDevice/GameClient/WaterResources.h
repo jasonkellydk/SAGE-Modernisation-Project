@@ -2,17 +2,17 @@
 ** Command & Conquer Generals Zero Hour(tm)
 **
 ** Water resource boundary for the modern water render system. The renderer
-** consumes TextureBaseClass handles; legacy asset/surface construction is
+** consumes W3DTextureHandle handles; legacy asset/surface construction is
 ** contained in the implementation of this adapter.
 */
 
 #pragma once
 
-class TextureBaseClass;
+class W3DTextureHandle;
 
-TextureBaseClass *Load_Water_Texture(const char *name);
-TextureBaseClass *Create_Water_White_Texture();
-TextureBaseClass *Create_Water_Depth_Lut_Texture();
-void Reinitialize_Water_Procedural_Texture(TextureBaseClass *texture,
+W3DTextureHandle *Load_Water_Texture(const char *name);
+W3DTextureHandle *Create_Water_White_Texture();
+W3DTextureHandle *Create_Water_Depth_Lut_Texture();
+void Reinitialize_Water_Procedural_Texture(W3DTextureHandle *texture,
 	bool depth_lut);
-unsigned Get_Water_Texture_Width(const TextureBaseClass *texture);
+unsigned Get_Water_Texture_Width(const W3DTextureHandle *texture);

@@ -47,11 +47,11 @@ import Graphics.Materials.State;
 #include "W3DDevice/GameClient/Module/W3DLaserDraw.h"
 #include "W3DDevice/GameClient/W3DDisplay.h"
 #include "W3DDevice/GameClient/W3DScene.h"
-#include "WW3D2/RInfo.h"
-#include "WW3D2/Camera.h"
-#include "WW3D2/SegLine.h"
+#include "W3DDevice/GameClient/W3DRenderContext.h"
+#include "W3DDevice/GameClient/W3DCamera.h"
+#include "W3DDevice/GameClient/W3DSegmentedLineRenderObject.h"
 #include "WWMath/vector3.h"
-#include "WW3D2/AssetMgr.h"
+#include "W3DDevice/GameClient/W3DAssetCatalog.h"
 
 // PUBLIC FUNCTIONS ///////////////////////////////////////////////////////////////////////////////
 
@@ -120,7 +120,7 @@ W3DLaserDraw::W3DLaserDraw( Thing *thing, const ModuleData* moduleData ) :
 	Int i;
 
 	const W3DLaserDrawModuleData *data = getW3DLaserDrawModuleData();
-	m_texture = WW3DAssetManager::Get_Instance()->Get_Texture( data->m_textureName.str() );
+	m_texture = W3DAssetCatalog::Get_Instance()->Get_Texture( data->m_textureName.str() );
 	if (m_texture)
 	{
 		if (!m_texture->Is_Initialized())
@@ -148,7 +148,7 @@ W3DLaserDraw::W3DLaserDraw( Thing *thing, const ModuleData* moduleData ) :
 #endif
 
 	//Allocate an array of lines equal to the number of beams * segments
-	m_line3D = NEW SegmentedLineClass *[ data->m_numBeams * data->m_segments ];
+	m_line3D = NEW W3DSegmentedLineRenderObject *[ data->m_numBeams * data->m_segments ];
 
 	for( UnsignedInt segment = 0; segment < data->m_segments; segment++ )
 	{
@@ -183,9 +183,9 @@ W3DLaserDraw::W3DLaserDraw( Thing *thing, const ModuleData* moduleData ) :
 				blue		= innerBlue								+ scale * (outerBlue - innerBlue) * innerAlpha;
 			}
 
-			m_line3D[ index ] = NEW SegmentedLineClass;
+			m_line3D[ index ] = NEW W3DSegmentedLineRenderObject;
 
-			SegmentedLineClass *line = m_line3D[ index ];
+			W3DSegmentedLineRenderObject *line = m_line3D[ index ];
 			if( line )
 			{
 				line->Set_Texture( m_texture );
@@ -195,7 +195,7 @@ W3DLaserDraw::W3DLaserDraw( Thing *thing, const ModuleData* moduleData ) :
 				line->Set_UV_Offset_Rate( Vector2(0.0f, data->m_scrollRate) );	//amount to scroll texture on each draw
 				if( m_texture )
 				{
-					line->Set_Texture_Mapping_Mode(SegLineRendererClass::TILED_TEXTURE_MAP);	//this tiles the texture across the line
+					line->Set_Texture_Mapping_Mode(Graphics::RibbonTextureMapping::Tiled);	//this tiles the texture across the line
 				}
 
 				// add to scene

@@ -4,9 +4,10 @@
 #include <cmath>
 
 #include "W3DDevice/GameClient/CollisionBoxRenderObject.h"
-#include "WW3D2/ColTest.h"
-#include "WW3D2/ColType.h"
-#include "WW3D2/IntTest.h"
+#include "W3DDevice/GameClient/W3DSegmentedLineRenderObject.h"
+#include "W3DDevice/GameClient/W3DCastQuery.h"
+#include "W3DDevice/GameClient/W3DSceneQueryMask.h"
+#include "W3DDevice/GameClient/W3DIntersectionQuery.h"
 #include "WWMath/aabox.h"
 #include "WWMath/castres.h"
 #include "WWMath/lineseg.h"
@@ -52,7 +53,7 @@ void Check_Ray_Hit(CollisionBoxRenderObject &object,
 {
 	CastResultStruct result;
 	result.ComputeContactPoint = true;
-	RayCollisionTestClass ray(line, &result, collision_type);
+	W3DRayCastQuery ray(line, &result, collision_type);
 	BOOST_REQUIRE(object.Cast_Ray(ray));
 	Check_Fraction(result, expected_fraction);
 	Check_Vector(result.Normal, expected_normal);
@@ -61,7 +62,7 @@ void Check_Ray_Hit(CollisionBoxRenderObject &object,
 }
 
 void Check_Swept_Hit(CollisionBoxRenderObject &object,
-	AABoxCollisionTestClass &test,
+	W3DBoxCastQuery &test,
 	float expected_fraction,
 	const Vector3 &expected_normal)
 {
@@ -72,7 +73,7 @@ void Check_Swept_Hit(CollisionBoxRenderObject &object,
 }
 
 void Check_Swept_Hit(CollisionBoxRenderObject &object,
-	OBBoxCollisionTestClass &test,
+	W3DOrientedBoxCastQuery &test,
 	float expected_fraction,
 	const Vector3 &expected_normal)
 {
@@ -101,7 +102,7 @@ BOOST_AUTO_TEST_CASE(moved_adapter_preserves_aa_and_ob_bounds_after_rotation_and
 	RefCountPtr<CollisionBoxRenderObject> ob_object =
 		Create_No_Add_Ref(new CollisionBoxRenderObject(
 			OBBoxClass(Vector3(0, 0, 0), local_extent, Rotated_Basis())));
-	BOOST_CHECK_EQUAL(ob_object->Class_ID(), RenderObjClass::CLASSID_OBBOX);
+	BOOST_CHECK_EQUAL(ob_object->Class_ID(), W3DRenderObject::CLASSID_OBBOX);
 	ob_object->Set_Local_Center_Extent(local_center, local_extent);
 	ob_object->Set_Transform(transform);
 	const OBBoxClass &ob_box = ob_object->Get_OB_Box();
@@ -124,13 +125,13 @@ BOOST_AUTO_TEST_CASE(query_masks_animation_hidden_and_preexisting_startbad_are_r
 	RefCountPtr<CollisionBoxRenderObject> object =
 		Create_No_Add_Ref(new CollisionBoxRenderObject(
 			AABoxClass(Vector3(0, 0, 0), Vector3(1, 1, 1))));
-	object->Set_Collision_Type(COLL_TYPE_PHYSICAL);
+	object->Set_Collision_Type(SCENE_QUERY_PHYSICAL);
 	const LineSegClass line(Vector3(-3, 0, 0), Vector3(3, 0, 0));
 
 	CastResultStruct masked_result;
 	masked_result.Fraction = 0.25f;
 	masked_result.Normal = Vector3(0, 1, 0);
-	RayCollisionTestClass masked(line, &masked_result, COLL_TYPE_PROJECTILE);
+	W3DRayCastQuery masked(line, &masked_result, SCENE_QUERY_PROJECTILE);
 	BOOST_CHECK(!object->Cast_Ray(masked));
 	Check_Fraction(masked_result, 0.25f);
 	Check_Vector(masked_result.Normal, Vector3(0, 1, 0));
@@ -138,7 +139,7 @@ BOOST_AUTO_TEST_CASE(query_masks_animation_hidden_and_preexisting_startbad_are_r
 
 	object->Set_Animation_Hidden(true);
 	CastResultStruct hidden_result;
-	RayCollisionTestClass hidden(line, &hidden_result, COLL_TYPE_PHYSICAL);
+	W3DRayCastQuery hidden(line, &hidden_result, SCENE_QUERY_PHYSICAL);
 	BOOST_CHECK(!object->Cast_Ray(hidden));
 	BOOST_CHECK(hidden.CollidedRenderObj == nullptr);
 	BOOST_CHECK(!hidden_result.StartBad);
@@ -148,7 +149,7 @@ BOOST_AUTO_TEST_CASE(query_masks_animation_hidden_and_preexisting_startbad_are_r
 	startbad_result.StartBad = true;
 	startbad_result.Fraction = 0.5f;
 	startbad_result.Normal = Vector3(0, 0, 1);
-	RayCollisionTestClass startbad(line, &startbad_result, COLL_TYPE_PHYSICAL);
+	W3DRayCastQuery startbad(line, &startbad_result, SCENE_QUERY_PHYSICAL);
 	BOOST_CHECK(!object->Cast_Ray(startbad));
 	BOOST_CHECK(startbad_result.StartBad);
 	Check_Fraction(startbad_result, 0.5f);
@@ -158,7 +159,7 @@ BOOST_AUTO_TEST_CASE(query_masks_animation_hidden_and_preexisting_startbad_are_r
 
 BOOST_AUTO_TEST_CASE(ray_queries_return_known_fraction_normal_contact_and_object)
 {
-	const int collision_type = COLL_TYPE_PROJECTILE;
+	const int collision_type = SCENE_QUERY_PROJECTILE;
 
 	RefCountPtr<CollisionBoxRenderObject> aa_object =
 		Create_No_Add_Ref(new CollisionBoxRenderObject(
@@ -177,9 +178,70 @@ BOOST_AUTO_TEST_CASE(ray_queries_return_known_fraction_normal_contact_and_object
 		collision_type, 0.4f, Vector3(0, -1, 0), Vector3(5, -1, 0));
 }
 
+BOOST_AUTO_TEST_CASE(segmented_line_ray_queries_preserve_mask_miss_transform_and_order)
+{
+	W3DSegmentedLineRenderObject object;
+	object.Set_Collision_Type(SCENE_QUERY_PHYSICAL);
+	object.Set_Width(0.5f);
+	const Vector3 points[] = {
+		Vector3(-2, -1, 0), Vector3(2, -1, 0), Vector3(2, 1, 0), Vector3(-2, 1, 0)};
+	object.Set_Points(4, points);
+
+	Matrix3D transform = Matrix3D::RotateZ90;
+	transform.Set_Translation(Vector3(10, 20, 30));
+	object.Set_Transform(transform);
+
+	CastResultStruct masked_result;
+	masked_result.Fraction = 0.25f;
+	const LineSegClass world_ray(
+		Vector3(5, 20, 30), Vector3(15, 20, 30));
+	W3DRayCastQuery masked(world_ray, &masked_result, SCENE_QUERY_PROJECTILE);
+	BOOST_CHECK(!object.Cast_Ray(masked));
+	BOOST_CHECK_EQUAL(masked_result.Fraction, 0.25f);
+	BOOST_CHECK(masked.CollidedRenderObj == nullptr);
+
+	CastResultStruct miss_result;
+	W3DRayCastQuery miss(
+        LineSegClass(Vector3(5, 20, 31), Vector3(15, 20, 31)),
+		&miss_result, SCENE_QUERY_PHYSICAL);
+	BOOST_CHECK(!object.Cast_Ray(miss));
+	BOOST_CHECK_EQUAL(miss_result.Fraction, 1.0f);
+	BOOST_CHECK(miss.CollidedRenderObj == nullptr);
+
+	CastResultStruct hit_result;
+	W3DRayCastQuery hit(world_ray, &hit_result, SCENE_QUERY_PHYSICAL);
+	BOOST_REQUIRE(object.Cast_Ray(hit));
+	// The first transformed segment is at x=11 (fraction .6). The later
+	// segment is at x=9 (fraction .4), but queries stop at the first accepted hit.
+	BOOST_CHECK_CLOSE(hit_result.Fraction, 0.6f, 0.001f);
+	BOOST_CHECK_EQUAL(hit_result.SurfaceType, 13u);
+	BOOST_CHECK(hit.CollidedRenderObj == &object);
+
+	// Picking uses the full authored width, independently of the drawn radius.
+	CastResultStruct width_result;
+	W3DRayCastQuery within_width(
+		LineSegClass(Vector3(5, 20, 30.4f), Vector3(15, 20, 30.4f)),
+		&width_result, SCENE_QUERY_PHYSICAL);
+	BOOST_REQUIRE(object.Cast_Ray(within_width));
+	Check_Fraction(width_result, 0.6f);
+
+	CastResultStruct nearer_result;
+	nearer_result.Fraction = 0.5f;
+	W3DRayCastQuery nearer(world_ray, &nearer_result, SCENE_QUERY_PHYSICAL);
+	BOOST_REQUIRE(object.Cast_Ray(nearer));
+	Check_Fraction(nearer_result, 0.4f);
+
+	CastResultStruct limited_result;
+	limited_result.Fraction = 0.3f;
+	W3DRayCastQuery limited(world_ray, &limited_result, SCENE_QUERY_PHYSICAL);
+	BOOST_CHECK(!object.Cast_Ray(limited));
+	Check_Fraction(limited_result, 0.3f);
+	BOOST_CHECK(limited.CollidedRenderObj == nullptr);
+}
+
 BOOST_AUTO_TEST_CASE(swept_aa_and_ob_queries_preserve_known_hits_and_normals)
 {
-	const int collision_type = COLL_TYPE_PHYSICAL;
+	const int collision_type = SCENE_QUERY_PHYSICAL;
 
 	RefCountPtr<CollisionBoxRenderObject> aa_target =
 		Create_No_Add_Ref(new CollisionBoxRenderObject(
@@ -187,14 +249,14 @@ BOOST_AUTO_TEST_CASE(swept_aa_and_ob_queries_preserve_known_hits_and_normals)
 	aa_target->Set_Collision_Type(collision_type);
 
 	CastResultStruct aa_result;
-	AABoxCollisionTestClass moving_aa(
+	W3DBoxCastQuery moving_aa(
 		AABoxClass(Vector3(-5, 0, 0), Vector3(1, 1, 1)),
 		Vector3(10, 0, 0), &aa_result, collision_type);
 	Check_Swept_Hit(*aa_target, moving_aa, 0.8f, Vector3(-1, 0, 0));
 
 	CastResultStruct ob_result;
 	const OBBoxClass moving_ob_box(Vector3(-5, 0, 0), Vector3(1, 1, 1));
-	OBBoxCollisionTestClass moving_ob(moving_ob_box,
+	W3DOrientedBoxCastQuery moving_ob(moving_ob_box,
 		Vector3(10, 0, 0), &ob_result, collision_type);
 	Check_Swept_Hit(*aa_target, moving_ob, 0.8f, Vector3(-1, 0, 0));
 
@@ -204,19 +266,19 @@ BOOST_AUTO_TEST_CASE(swept_aa_and_ob_queries_preserve_known_hits_and_normals)
 	oriented_target->Set_Collision_Type(collision_type);
 
 	CastResultStruct oriented_aa_result;
-	AABoxCollisionTestClass moving_aa_again(
+	W3DBoxCastQuery moving_aa_again(
 		AABoxClass(Vector3(5, -5, 0), Vector3(1, 1, 1)),
 		Vector3(0, 10, 0), &oriented_aa_result, collision_type);
 	Check_Swept_Hit(*oriented_target, moving_aa_again, 0.3f, Vector3(0, -1, 0));
 
 	CastResultStruct oriented_ob_result;
 	const OBBoxClass moving_ob_box_again(Vector3(5, -5, 0), Vector3(1, 1, 1));
-	OBBoxCollisionTestClass moving_ob_again(moving_ob_box_again,
+	W3DOrientedBoxCastQuery moving_ob_again(moving_ob_box_again,
 		Vector3(0, 10, 0), &oriented_ob_result, collision_type);
 	Check_Swept_Hit(*oriented_target, moving_ob_again, 0.3f, Vector3(0, -1, 0));
 
 	CastResultStruct miss_result;
-	AABoxCollisionTestClass moving_away(
+	W3DBoxCastQuery moving_away(
 		AABoxClass(Vector3(-5, 0, 0), Vector3(1, 1, 1)),
 		Vector3(-10, 0, 0), &miss_result, collision_type);
 	BOOST_CHECK(!aa_target->Cast_AABox(moving_away));
@@ -226,22 +288,22 @@ BOOST_AUTO_TEST_CASE(swept_aa_and_ob_queries_preserve_known_hits_and_normals)
 
 BOOST_AUTO_TEST_CASE(intersection_queries_cover_aa_ob_hit_miss_and_masks)
 {
-	const int collision_type = COLL_TYPE_PHYSICAL;
+	const int collision_type = SCENE_QUERY_PHYSICAL;
 	RefCountPtr<CollisionBoxRenderObject> aa_target =
 		Create_No_Add_Ref(new CollisionBoxRenderObject(
 			AABoxClass(Vector3(0, 0, 0), Vector3(1, 1, 1))));
 	aa_target->Set_Collision_Type(collision_type);
 
-	AABoxIntersectionTestClass aa_hit(
+	W3DBoxIntersectionQuery aa_hit(
 		AABoxClass(Vector3(1.5f, 0, 0), Vector3(1, 1, 1)), collision_type);
-	AABoxIntersectionTestClass aa_miss(
+	W3DBoxIntersectionQuery aa_miss(
 		AABoxClass(Vector3(2.1f, 0, 0), Vector3(1, 1, 1)), collision_type);
 	BOOST_CHECK(aa_target->Intersect_AABox(aa_hit));
 	BOOST_CHECK(!aa_target->Intersect_AABox(aa_miss));
 
-	OBBoxIntersectionTestClass ob_hit(
+	W3DOrientedBoxIntersectionQuery ob_hit(
 		OBBoxClass(Vector3(0, 1.5f, 0), Vector3(1, 1, 1), Rotated_Basis()), collision_type);
-	OBBoxIntersectionTestClass ob_miss(
+	W3DOrientedBoxIntersectionQuery ob_miss(
 		OBBoxClass(Vector3(0, 2.1f, 0), Vector3(1, 1, 1), Rotated_Basis()), collision_type);
 	BOOST_CHECK(aa_target->Intersect_OBBox(ob_hit));
 	BOOST_CHECK(!aa_target->Intersect_OBBox(ob_miss));
@@ -251,21 +313,21 @@ BOOST_AUTO_TEST_CASE(intersection_queries_cover_aa_ob_hit_miss_and_masks)
 		Create_No_Add_Ref(new CollisionBoxRenderObject(oriented_target_box));
 	oriented_target->Set_Collision_Type(collision_type);
 
-	AABoxIntersectionTestClass oriented_aa_hit(
+	W3DBoxIntersectionQuery oriented_aa_hit(
 		AABoxClass(Vector3(0, 1.5f, 0), Vector3(1, 1, 1)), collision_type);
-	AABoxIntersectionTestClass oriented_aa_miss(
+	W3DBoxIntersectionQuery oriented_aa_miss(
 		AABoxClass(Vector3(0, 2.1f, 0), Vector3(1, 1, 1)), collision_type);
 	BOOST_CHECK(oriented_target->Intersect_AABox(oriented_aa_hit));
 	BOOST_CHECK(!oriented_target->Intersect_AABox(oriented_aa_miss));
 
-	OBBoxIntersectionTestClass oriented_ob_hit(
+	W3DOrientedBoxIntersectionQuery oriented_ob_hit(
 		OBBoxClass(Vector3(1.5f, 0, 0), Vector3(1, 1, 1)), collision_type);
-	OBBoxIntersectionTestClass oriented_ob_miss(
+	W3DOrientedBoxIntersectionQuery oriented_ob_miss(
 		OBBoxClass(Vector3(3.1f, 0, 0), Vector3(1, 1, 1)), collision_type);
 	BOOST_CHECK(oriented_target->Intersect_OBBox(oriented_ob_hit));
 	BOOST_CHECK(!oriented_target->Intersect_OBBox(oriented_ob_miss));
 
-	AABoxIntersectionTestClass masked(
-		AABoxClass(Vector3(0, 0, 0), Vector3(1, 1, 1)), COLL_TYPE_PROJECTILE);
+	W3DBoxIntersectionQuery masked(
+		AABoxClass(Vector3(0, 0, 0), Vector3(1, 1, 1)), SCENE_QUERY_PROJECTILE);
 	BOOST_CHECK(!oriented_target->Intersect_AABox(masked));
 }

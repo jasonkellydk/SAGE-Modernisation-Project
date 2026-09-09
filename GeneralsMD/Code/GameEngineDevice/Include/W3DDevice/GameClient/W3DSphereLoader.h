@@ -6,16 +6,16 @@ import Assets.Spheres;
 import Graphics.Scene.Models.Factory;
 import Graphics.Scene.Sphere;
 
-#include "WW3D2/RendObj.h"
-#include "WW3D2/Texture.h"
+#include "W3DDevice/GameClient/W3DRenderObject.h"
+#include "W3DDevice/GameClient/W3DTextureHandle.h"
 
 class ChunkLoadClass;
-class RenderInfoClass;
+class W3DRenderContext;
 
 // Native W3D ownership and scene callbacks for an authored sphere. The
 // graphics module owns animation and prop submission; this adapter translates
-// the RenderObjClass contract and resource lifetime.
-class W3DSphereRenderObject final : public RenderObjClass
+// the W3DRenderObject contract and resource lifetime.
+class W3DSphereRenderObject final : public W3DRenderObject
 {
 public:
 	W3DSphereRenderObject();
@@ -24,16 +24,16 @@ public:
 	W3DSphereRenderObject &operator=(const W3DSphereRenderObject &source);
 	~W3DSphereRenderObject() override = default;
 
-	RenderObjClass *Clone() const override;
-	int Class_ID() const override { return RenderObjClass::CLASSID_SPHERE; }
-	void Render(RenderInfoClass &rinfo) override;
+	W3DRenderObject *Clone() const override;
+	int Class_ID() const override { return W3DRenderObject::CLASSID_SPHERE; }
+	void Render(W3DRenderContext &rinfo) override;
 	void Set_Transform(const Matrix3D &transform) override;
 	void Set_Position(const Vector3 &position) override;
 
 	void Get_Obj_Space_Bounding_Sphere(SphereClass &sphere) const override;
 	void Get_Obj_Space_Bounding_Box(AABoxClass &box) const override;
 
-	void Prepare_LOD(CameraClass &camera) override;
+	void Prepare_LOD(W3DCamera &camera) override;
 	void Increment_LOD() override;
 	void Decrement_LOD() override;
 	float Get_Cost() const override;
@@ -58,8 +58,8 @@ public:
 	const char *Get_Name() const override { return m_name.c_str(); }
 	void Set_Name(const char *name) override;
 
-	void Set_Texture(TextureClass *texture);
-	TextureClass *Peek_Texture() noexcept { return m_texture.Peek(); }
+	void Set_Texture(W3DTextureHandle *texture);
+	W3DTextureHandle *Peek_Texture() noexcept { return m_texture.Peek(); }
 
 protected:
 	void Update_Cached_Bounding_Volumes() const override;
@@ -69,8 +69,8 @@ private:
 
 	std::string m_name;
 	Graphics::SphereSceneObject m_sphere;
-	RefCountPtr<TextureClass> m_texture;
+	RefCountPtr<W3DTextureHandle> m_texture;
 	Graphics::SphereRenderer m_graphics;
 };
 
-Graphics::ModelFactory<RenderObjClass> *Load_Sphere_Factory(ChunkLoadClass &cload);
+Graphics::ModelFactory<W3DRenderObject> *Load_Sphere_Factory(ChunkLoadClass &cload);

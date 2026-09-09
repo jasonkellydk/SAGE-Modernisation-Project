@@ -8,7 +8,7 @@ module;
 #include <span>
 #include <vector>
 export module Graphics.Scene.Roads.Drawing.Tests;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 import Graphics.RHI;
 import Graphics.Scene.Surfaces.Geometry;
 import Assets.Math;
@@ -18,10 +18,10 @@ using namespace Graphics;
 
 BOOST_AUTO_TEST_CASE(road_cloud_and_masked_lightmap_preserve_transparent_edges_and_destination_alpha)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     BOOST_REQUIRE(device.Is_Valid());
     SurfaceRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device, std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    BOOST_REQUIRE(renderer.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     const auto texture = [&](std::array<std::uint8_t, 4> color) {
         return device.Create_Texture_Initialized({1, 1}, {std::as_bytes(std::span(color)), 4});
     };
@@ -81,7 +81,7 @@ BOOST_AUTO_TEST_CASE(road_cloud_and_masked_lightmap_preserve_transparent_edges_a
 
     // Device shutdown preserves CPU meshes while releasing GPU ownership.
     renderer.Shutdown();
-    BOOST_REQUIRE(renderer.Initialize(device, std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    BOOST_REQUIRE(renderer.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     parameters.masked_modulation = 0;
     textures[0] = road;
     BOOST_REQUIRE(renderer.Draw(commands, mesh, alpha, parameters, textures));
@@ -110,10 +110,10 @@ BOOST_AUTO_TEST_CASE(surface_geometry_rejects_invalid_edits_without_changing_seg
 
 BOOST_AUTO_TEST_CASE(surface_vertices_preserve_packed_channels_uvs_and_topology_after_source_release)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     BOOST_REQUIRE(device.Is_Valid());
     SurfaceRenderer renderer;
-    const auto shaders=std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
+    const auto shaders=Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
     BOOST_REQUIRE(renderer.Initialize(device,shaders));
     const std::array<std::uint8_t,8> texels{255,255,255,255,128,255,64,255};
     const auto texture=device.Create_Texture_Initialized({2,1},{std::as_bytes(std::span(texels)),8});

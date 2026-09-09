@@ -7,15 +7,15 @@ import Graphics.Scene.Models.Factory;
 import Graphics.Scene.Ring.Renderer;
 import Graphics.Scene.Ring.Runtime;
 
-#include "WW3D2/RendObj.h"
-#include "WW3D2/Texture.h"
+#include "W3DDevice/GameClient/W3DRenderObject.h"
+#include "W3DDevice/GameClient/W3DTextureHandle.h"
 
 class ChunkLoadClass;
-class RenderInfoClass;
+class W3DRenderContext;
 
 // Native W3D ownership and scene callbacks for an authored ring. Geometry,
 // animation, LOD selection, and draw submission stay in the graphics modules.
-class W3DRingRenderObject final : public RenderObjClass
+class W3DRingRenderObject final : public W3DRenderObject
 {
 public:
 	W3DRingRenderObject();
@@ -24,19 +24,19 @@ public:
 	W3DRingRenderObject &operator=(const W3DRingRenderObject &source);
 	~W3DRingRenderObject() override = default;
 
-	RenderObjClass *Clone() const override;
-	int Class_ID() const override { return RenderObjClass::CLASSID_RING; }
+	W3DRenderObject *Clone() const override;
+	int Class_ID() const override { return W3DRenderObject::CLASSID_RING; }
 	const char *Get_Name() const override { return m_name.c_str(); }
 	void Set_Name(const char *name) override;
 	int Get_Num_Polys() const override { return static_cast<int>(m_runtime.Num_Polys()); }
-	void Render(RenderInfoClass &rinfo) override;
+	void Render(W3DRenderContext &rinfo) override;
 	void Set_Transform(const Matrix3D &transform) override;
 	void Set_Position(const Vector3 &position) override;
 
 	void Get_Obj_Space_Bounding_Sphere(SphereClass &sphere) const override;
 	void Get_Obj_Space_Bounding_Box(AABoxClass &box) const override;
 
-	void Prepare_LOD(CameraClass &camera) override;
+	void Prepare_LOD(W3DCamera &camera) override;
 	void Increment_LOD() override;
 	void Decrement_LOD() override;
 	float Get_Cost() const override;
@@ -60,8 +60,8 @@ public:
 private:
 	std::string m_name;
 	Graphics::AuthoredRingRuntime m_runtime;
-	RefCountPtr<TextureClass> m_texture;
+	RefCountPtr<W3DTextureHandle> m_texture;
 	Graphics::AuthoredRingRenderer m_graphics;
 };
 
-Graphics::ModelFactory<RenderObjClass> *Load_Ring_Factory(ChunkLoadClass &cload);
+Graphics::ModelFactory<W3DRenderObject> *Load_Ring_Factory(ChunkLoadClass &cload);

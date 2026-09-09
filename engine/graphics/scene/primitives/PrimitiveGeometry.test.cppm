@@ -12,7 +12,7 @@ module;
 export module Graphics.Scene.Primitives.Geometry.Tests;
 import Graphics.Scene.Primitives.Geometry;
 import Graphics.Scene.Props.Renderer;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 using namespace Graphics;
 
 BOOST_AUTO_TEST_CASE(annulus_retains_orientation_strip_order_scaling_and_uv_seam)
@@ -90,10 +90,10 @@ BOOST_AUTO_TEST_CASE(sphere_uses_full_width_indices_and_rejects_invalid_dimensio
 
 BOOST_AUTO_TEST_CASE(primitives_draw_uvs_holes_and_animated_opacity_after_recreation)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     BOOST_REQUIRE(device.Is_Valid());
     PropRenderer renderer;
-    const auto shaders=std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
+    const auto shaders=Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
     BOOST_REQUIRE(renderer.Initialize(device,shaders));
     const auto target=device.Create_Texture({32,32,1,RHITextureFormat::RGBA8_UNorm,
         static_cast<unsigned>(RHITextureUsage::RenderTarget)});

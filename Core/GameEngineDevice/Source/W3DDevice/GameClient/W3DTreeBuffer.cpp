@@ -1,14 +1,16 @@
+import Graphics.Frame.RenderSettings;
+#include "W3DDevice/GameClient/W3DRenderServices.h"
 import Assets.Math;
 import Assets.Images.PixelEncoding;
 import Graphics.Resources.Textures.Atlas;
 #include <array>
 #include <span>
 #include <vector>
-import Graphics.Backends.DX11.FrameRuntime;
+import Graphics.Frame.Runtime;
 import Graphics.Scene.Shadows.DirectionalRenderer;
 #include <algorithm>
 #include "W3DDevice/GameClient/W3DGraphicsResources.h"
-#include "WW3D2/WW3D.h"
+
 /*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -58,9 +60,9 @@ import Graphics.Scene.Shadows.DirectionalRenderer;
 // ------------------------------------------------------------------------------------------------
 enum
 {
-	W3D_TOPPLE_OPTIONS_NONE			 = 0x00000000,
-	W3D_TOPPLE_OPTIONS_NO_BOUNCE = 0x00000001,  ///< do not bounce when hit the ground
-	W3D_TOPPLE_OPTIONS_NO_FX		 = 0x00000002	///< do not play any FX when hit the ground
+	TreeToppleOptionsNone = 0x00000000,
+	TreeToppleOptionsNoBounce = 0x00000001,  ///< do not bounce when hit the ground
+	TreeToppleOptionsNoFx = 0x00000002	///< do not play any FX when hit the ground
 };
 //-----------------------------------------------------------------------------
 //         Includes
@@ -68,8 +70,8 @@ enum
 
 #include "W3DDevice/GameClient/W3DTreeBuffer.h"
 
-#include <WW3D2/AssetMgr.h>
-#include <WW3D2/Texture.h>
+#include "W3DDevice/GameClient/W3DAssetCatalog.h"
+#include <W3DDevice/GameClient/W3DTextureHandle.h>
 #include "Common/FramePacer.h"
 #include "Common/GameUtility.h"
 #include "Common/MapReaderWriterInfo.h"
@@ -90,11 +92,11 @@ enum
 #include "W3DDevice/GameClient/W3DDynamicLight.h"
 #include "W3DDevice/GameClient/Module/W3DTreeDraw.h"
 #include "W3DDevice/GameClient/W3DShroud.h"
-#include "WW3D2/Camera.h"
-#include "WW3D2/Mesh.h"
-#include "WW3D2/MeshMdl.h"
+#include "W3DDevice/GameClient/W3DCamera.h"
+#include "W3DDevice/GameClient/W3DMeshRenderObject.h"
+#include "W3DDevice/GameClient/W3DMeshResource.h"
 import Graphics.Scene.Trees.Geometry;
-#include "WW3D2/WW3D.h"
+
 #include <string>
 #include <vector>
 
@@ -158,7 +160,7 @@ namespace
 texture of the desired height and mip level. */
 //=============================================================================
 W3DTreeBuffer::W3DTreeTextureClass::W3DTreeTextureClass(unsigned width, unsigned height) :
-	TextureClass(width, height,
+	W3DTextureHandle(width, height,
 		Assets::PixelEncoding::BGRA8, MIP_LEVELS_ALL )
 {
 }
@@ -206,7 +208,7 @@ int W3DTreeBuffer::W3DTreeTextureClass::update(W3DTreeBuffer *buffer)
 /** Culls the trees, marking the visible flag.  If a tree becomes visible, it sets
 it's sortKey */
 //=============================================================================
-void W3DTreeBuffer::cull(const CameraClass * camera)
+void W3DTreeBuffer::cull(const W3DCamera * camera)
 {
 	Int curTree;
 
@@ -435,7 +437,7 @@ void W3DTreeBuffer::updateTexture()
 		m_textureWidth = 64;
 		m_textureHeight = 64;
 		if (m_treeTexture==nullptr) {
-			m_treeTexture = new TextureClass("missing.tga");
+			m_treeTexture = new W3DTextureHandle("missing.tga");
 		}
 		DEBUG_CRASH(("Too many trees in a scene."));
 		return;
@@ -521,7 +523,7 @@ void W3DTreeBuffer::updateTexture()
 	for (i=0; i<m_numTiles; i++) {
 		REF_PTR_RELEASE (m_sourceTiles[i]);
 	}
-	//	m_treeTexture = NEW_REF (TextureClass, (m_treeTypes[0].m_textureName.str()));
+	//	m_treeTexture = NEW_REF (W3DTextureHandle, (m_treeTypes[0].m_textureName.str()));
 
 }
 
@@ -590,7 +592,7 @@ UnsignedInt W3DTreeBuffer::doLighting(const Vector3 *normal,
 //=============================================================================
 /** Loads the trees into the vertex buffer for drawing. */
 //=============================================================================
-void W3DTreeBuffer::loadTreesInVertexAndIndexBuffers(Graphics::SceneObjectList<RenderObjClass>::Cursor *pDynamicLightsIterator)
+void W3DTreeBuffer::loadTreesInVertexAndIndexBuffers(Graphics::SceneObjectList<W3DRenderObject>::Cursor *pDynamicLightsIterator)
 {
     m_graphicsGeometryDirty = true;
 	if (m_indexTree[0].empty() || m_vertexTree[0].empty() || !m_initialized) {
@@ -1002,7 +1004,7 @@ void W3DTreeBuffer::unitMoved(Object *unit)
 						toppleVector.set(m_trees[treeNdx].location.X, m_trees[treeNdx].location.Y, 0);
 						toppleVector.x -= unit->getPosition()->x;
 						toppleVector.y -= unit->getPosition()->y;
-						applyTopplingForce(m_trees+treeNdx, &toppleVector, 0, W3D_TOPPLE_OPTIONS_NONE);
+						applyTopplingForce(m_trees+treeNdx, &toppleVector, 0, TreeToppleOptionsNone);
 					} else if (m_treeTypes[m_trees[treeNdx].treeType].m_data->m_framesToMoveOutward>1) {
 						pushAsideTree(m_trees[treeNdx].drawableID, &pos, unit->getUnitDirectionVector2D(), unit->getID());
 					}
@@ -1115,23 +1117,23 @@ Int W3DTreeBuffer::addTreeType(const W3DTreeDrawModuleData *data)
 
 	m_treeTypes[m_numTreeTypes].m_mesh = nullptr;
 
-	RenderObjClass *robj=WW3DAssetManager::Get_Instance()->Create_Render_Obj(data->m_modelName.str());
+	W3DRenderObject *robj=W3DAssetCatalog::Get_Instance()->Create_Render_Obj(data->m_modelName.str());
 
 	if (robj==nullptr) {
 		DEBUG_CRASH(("Unable to find model for tree %s", data->m_modelName.str()));
 		return 0;
 	}
 	Vector3 offset(0,0,0);
-	if (robj->Class_ID() == RenderObjClass::CLASSID_HLOD) {
-		RenderObjClass *hlod = robj;
+	if (robj->Class_ID() == W3DRenderObject::CLASSID_HLOD) {
+		W3DRenderObject *hlod = robj;
 		robj = hlod->Get_Sub_Object(0);
 		const Matrix3D xfm = robj->Get_Bone_Transform(0);
 		xfm.Get_Translation(&offset);
 		REF_PTR_RELEASE(hlod);
 	}
 
-	if (robj->Class_ID() == RenderObjClass::CLASSID_MESH)
-		m_treeTypes[m_numTreeTypes].m_mesh = (MeshClass*)robj;
+	if (robj->Class_ID() == W3DRenderObject::CLASSID_MESH)
+		m_treeTypes[m_numTreeTypes].m_mesh = (W3DMeshRenderObject*)robj;
 
 	if (m_treeTypes[m_numTreeTypes].m_mesh==nullptr) {
 		DEBUG_CRASH(("Tree %s is not simple mesh. Tell artist to re-export. Don't Ignore!!!", data->m_modelName.str()));
@@ -1301,7 +1303,7 @@ DECLARE_PERF_TIMER(Tree_Render)
 //=============================================================================
 void W3DTreeBuffer::prepareFrame()
 {
-    const UnsignedInt frame = WW3D::Get_Frame_Count();
+    const UnsignedInt frame = Get_W3D_Render_Services().Frame_Count();
     if (m_preparedFrame == frame) return;
     m_preparedFrame = frame;
 	// if breeze changes, always process the full update, even if not visible,
@@ -1379,7 +1381,7 @@ void W3DTreeBuffer::prepareFrame()
 
 }
 
-void W3DTreeBuffer::drawTrees(CameraClass * camera, Graphics::SceneObjectList<RenderObjClass>::Cursor *pDynamicLightsIterator)
+void W3DTreeBuffer::drawTrees(W3DCamera * camera, Graphics::SceneObjectList<W3DRenderObject>::Cursor *pDynamicLightsIterator)
 {
 	USE_PERF_TIMER(Tree_Render)
 	if (!m_isTerrainPass) {
@@ -1429,7 +1431,7 @@ void W3DTreeBuffer::drawTrees(CameraClass * camera, Graphics::SceneObjectList<Re
     parameters.view_projection = surface.view_projection;
     parameters.shroud_projection = surface.shroud_projection;
     parameters.options = {shroud.Is_Valid() ? 1.0f : 0.0f,0.5f,
-        WW3D::Is_Overbright_Modify_On_Load_Enabled() ? 2.0f : 1.0f,0};
+        Graphics::Get_Render_Settings().Is_Overbright_Modify_On_Load_Enabled() ? 2.0f : 1.0f,0};
     for (Int i=0;i<MAX_SWAY_TYPES;++i)
         parameters.sway[i] = {m_currentSwayFactor[i].X,m_currentSwayFactor[i].Y,m_currentSwayFactor[i].Z,0};
     const std::array<Graphics::RHITextureHandle,2> textures{Resolve_Graphics_Texture(m_treeTexture),shroud};
@@ -1579,7 +1581,7 @@ void W3DTreeBuffer::updateTopplingTree(TTree *tree, Real timeScale)
 		// Hit so either bounce or stop if too little remaining velocity.
 		tree->m_angularVelocity *= -d->m_bounceVelocityPercent;
 
-		if( BitIsSet( tree->m_options, W3D_TOPPLE_OPTIONS_NO_BOUNCE ) == TRUE ||
+		if( BitIsSet( tree->m_options, TreeToppleOptionsNoBounce ) == TRUE ||
 				fabs(tree->m_angularVelocity) < VELOCITY_BOUNCE_LIMIT )
 		{
 			// too slow, just stop
@@ -1592,7 +1594,7 @@ void W3DTreeBuffer::updateTopplingTree(TTree *tree, Real timeScale)
 		else if( fabs(tree->m_angularVelocity) >= VELOCITY_BOUNCE_SOUND_LIMIT )
 		{
 			// fast enough bounce to warrant the bounce fx
-			if( BitIsSet( tree->m_options, W3D_TOPPLE_OPTIONS_NO_FX ) == FALSE ) {
+			if( BitIsSet( tree->m_options, TreeToppleOptionsNoFx ) == FALSE ) {
 				Vector3 loc(0, 0, 3*TREE_RADIUS_APPROX); // Kinda towards the top of the tree. jba. [7/11/2003]
 				Vector3 xloc;
 				tree->m_mtx.Transform_Vector(tree->m_mtx, loc, &xloc);

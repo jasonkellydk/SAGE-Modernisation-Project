@@ -7,15 +7,15 @@ module;
 #include <filesystem>
 #include <span>
 export module Graphics.Scene.Screen.Filters.Tests;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 import Graphics.Scene.Screen.Filters;
 using namespace Graphics;
 BOOST_AUTO_TEST_CASE(copy_tint_crossfade_motion_accumulation_and_capture)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     BOOST_REQUIRE(device.Is_Valid());
     ScreenFilterRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device,std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     const std::array<std::uint8_t,4> pixel{128,64,32,128},mask_pixel{128,255,255,128};
     const auto texture=device.Create_Texture_Initialized({1,1},{std::as_bytes(std::span(pixel)),4});
     const auto mask=device.Create_Texture_Initialized({1,1},{std::as_bytes(std::span(mask_pixel)),4});

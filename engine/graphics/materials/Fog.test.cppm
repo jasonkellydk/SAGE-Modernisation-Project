@@ -8,14 +8,14 @@ module;
 export module Graphics.Materials.Fog.Tests;
 import Graphics.Materials.Fog;
 import Graphics.Scene.Props.Renderer;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 using namespace Graphics;
 
 BOOST_AUTO_TEST_CASE(per_draw_fog_preserves_scene_color_and_fragment_alpha)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     PropRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device,std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     const auto target=device.Create_Texture({8,8,1,RHITextureFormat::RGBA8_UNorm,
         static_cast<unsigned>(RHITextureUsage::RenderTarget)});
     const auto depth=device.Create_Texture({8,8,1,RHITextureFormat::D32_Float,

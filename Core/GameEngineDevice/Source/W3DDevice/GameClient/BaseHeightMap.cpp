@@ -1,6 +1,7 @@
-import Graphics.Backends.DX11.FrameRuntime;
+#include "W3DDevice/GameClient/W3DRenderServices.h"
+import Graphics.Frame.Runtime;
 import Assets.Images.PixelEncoding;
-#include "WW3D2/WW3D.h"
+
 /*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -50,13 +51,13 @@ import Assets.Images.PixelEncoding;
 //-----------------------------------------------------------------------------
 
 #include <stdlib.h>
-#include <WW3D2/AssetMgr.h>
-#include <WW3D2/Texture.h>
+#include "W3DDevice/GameClient/W3DAssetCatalog.h"
+#include <W3DDevice/GameClient/W3DTextureHandle.h>
 #include <WWMath/tri.h>
 #include <WWMath/colmath.h>
-#include <WW3D2/ColTest.h>
-#include <WW3D2/RInfo.h>
-#include <WW3D2/Camera.h>
+#include <W3DDevice/GameClient/W3DCastQuery.h>
+#include "W3DDevice/GameClient/W3DRenderContext.h"
+#include "W3DDevice/GameClient/W3DCamera.h"
 
 #include "Common/GlobalData.h"
 #include "Common/PerfTimer.h"
@@ -70,6 +71,7 @@ import Assets.Images.PixelEncoding;
 #include "GameLogic/TerrainLogic.h"
 #include "W3DDevice/GameClient/TerrainTex.h"
 #include "W3DDevice/GameClient/W3DDynamicLight.h"
+#include "W3DDevice/GameClient/W3DLight.h"
 #include "W3DDevice/GameClient/W3DScene.h"
 #include "W3DDevice/GameClient/W3DTerrainTracks.h"
 #include "W3DDevice/GameClient/W3DBibBuffer.h"
@@ -84,8 +86,6 @@ import Assets.Images.PixelEncoding;
 #include "W3DDevice/GameClient/W3DShadow.h"
 #include "W3DDevice/GameClient/W3DWater.h"
 #include "W3DDevice/GameClient/W3DShroud.h"
-#include "WW3D2/Light.h"
-#include "WW3D2/Scene.h"
 #include "W3DDevice/GameClient/W3DPoly.h"
 #include "W3DDevice/GameClient/W3DCustomScene.h"
 
@@ -107,7 +107,7 @@ BaseHeightMapRenderObjClass *TheTerrainRenderObject=nullptr;
 
 /** Entry point so that trees can be drawn at the appropriate point in the rendering pipe for
     transparent objects. */
-void DoTrees(RenderInfoClass & rinfo)
+void DoTrees(W3DRenderContext & rinfo)
 {
 	if (TheTerrainRenderObject) {
 		TheTerrainRenderObject->renderTrees(&rinfo.Camera);
@@ -157,9 +157,9 @@ Int BaseHeightMapRenderObjClass::freeMapResources()
 //=============================================================================
 /** Draws the scorch marks. */
 //=============================================================================
-void BaseHeightMapRenderObjClass::drawScorches(CameraClass& camera)
+void BaseHeightMapRenderObjClass::drawScorches(W3DCamera& camera)
 {
-	if (m_map && Is_Hidden() == 0 && !WW3D::Is_Reflection_Render_Pass()) {
+	if (m_map && Is_Hidden() == 0 && !Get_W3D_Render_Services().Is_Reflection_Render_Pass()) {
 		m_staticScorches->drawScorches(*m_map, camera);
 		m_scorches->drawScorches(*m_map, camera);
 	}
@@ -472,7 +472,7 @@ void BaseHeightMapRenderObjClass::ReAcquireResources()
 /** Calculates the diffuse lighting for a vertex in the terrain, taking all of the
 static lights into account as well. Returns the retained packed color value. */
 //=============================================================================
-UnsignedInt BaseHeightMapRenderObjClass::computeVertexLighting(const Vector3& position, const Vector3*light, const Vector3*normal, Graphics::SceneObjectList<RenderObjClass>::Cursor *pLightsIterator, UnsignedByte alpha)
+UnsignedInt BaseHeightMapRenderObjClass::computeVertexLighting(const Vector3& position, const Vector3*light, const Vector3*normal, Graphics::SceneObjectList<W3DRenderObject>::Cursor *pLightsIterator, UnsignedByte alpha)
 {
 	Real shadeR, shadeG, shadeB;
 	Real shade;
@@ -483,12 +483,12 @@ UnsignedInt BaseHeightMapRenderObjClass::computeVertexLighting(const Vector3& po
 	if (pLightsIterator) {
 		for (pLightsIterator->First(); !pLightsIterator->Is_Done(); pLightsIterator->Next())
 		{
-			LightClass *pLight = (LightClass*)pLightsIterator->Peek_Obj();
+			W3DLight *pLight = (W3DLight*)pLightsIterator->Peek_Obj();
 			Vector3 lightDirection(position.X, position.Y, position.Z);
 			Real factor = 1.0f;
 			switch(pLight->Get_Type()) {
-			case LightClass::POINT:
-			case LightClass::SPOT: {
+			case W3DLight::POINT:
+			case W3DLight::SPOT: {
 					Vector3 lightLoc = pLight->Get_Position();
 					lightDirection -= lightLoc;
 					double range, midRange;
@@ -505,7 +505,7 @@ UnsignedInt BaseHeightMapRenderObjClass::computeVertexLighting(const Vector3& po
 					factor = WWMath::Clamp(factor,0.0f,1.0f);
 				}
 				break;
-			case LightClass::DIRECTIONAL:
+			case W3DLight::DIRECTIONAL:
 				lightDirection = pLight->Get_Transform().Get_Z_Vector();
 				factor = 1.0;
 				break;
@@ -632,7 +632,7 @@ relative to the ray so we can early exit as soon as we have a hit.
 // hit boxes even if the ray starts inside of it and no longer falls back to an
 // infinitely large search region if the initial boxes cannot be collided with.
 //=============================================================================
-bool BaseHeightMapRenderObjClass::Cast_Ray(RayCollisionTestClass & raytest)
+bool BaseHeightMapRenderObjClass::Cast_Ray(W3DRayCastQuery & raytest)
 {
 	if (!m_map)
 		return false;	//need valid pointer to heightmap samples
@@ -803,7 +803,7 @@ bool BaseHeightMapRenderObjClass::Cast_Ray(RayCollisionTestClass & raytest)
 				hit = hit || (Bool)CollisionMath::Collide(raytest.Ray, tri, raytest.Result);
 
 				if (hit)
-					raytest.Result->SurfaceType = SURFACE_TYPE_DEFAULT;	///@todo: WW3D uses this to return dirt, grass, etc.  Do we need this?
+					raytest.Result->SurfaceType = 0;	// Terrain uses the default collision surface.
 			}
 			// Don't break.  It is possible to intersect 2 triangles, and the second is closer. if (hit) break;
 		}
@@ -1378,7 +1378,7 @@ Bool BaseHeightMapRenderObjClass::getMaximumVisibleBox(const FrustumClass &frust
 //=============================================================================
 Int BaseHeightMapRenderObjClass::Class_ID() const
 {
-	return RenderObjClass::CLASSID_TILEMAP;
+	return W3DRenderObject::CLASSID_TILEMAP;
 }
 
 //=============================================================================
@@ -1386,7 +1386,7 @@ Int BaseHeightMapRenderObjClass::Class_ID() const
 //=============================================================================
 /** Not used, but required virtual method. */
 //=============================================================================
-RenderObjClass *	 BaseHeightMapRenderObjClass::Clone() const
+W3DRenderObject *	 BaseHeightMapRenderObjClass::Clone() const
 {
 	assert(false);
 	return nullptr;
@@ -1419,7 +1419,7 @@ void BaseHeightMapRenderObjClass::loadRoadsAndBridges(W3DTerrainLogic *pTerrainL
 	* of the bridge towers */
 // ============================================================================
 void BaseHeightMapRenderObjClass::worldBuilderUpdateBridgeTowers( W3DAssetManager *assetManager,
-																															SimpleSceneClass *scene )
+																															W3DSimpleScene *scene )
 {
 
 	if( m_bridgeBuffer )
@@ -1730,7 +1730,7 @@ void BaseHeightMapRenderObjClass::initDestAlphaLUT()
 Also allocates all rendering resources such as vertex buffers, index buffers,
 shaders, and materials.*/
 //=============================================================================
-Int BaseHeightMapRenderObjClass::initHeightData(Int x, Int y, WorldHeightMap *pMap, Graphics::SceneObjectList<RenderObjClass>::Cursor *pLightsIteratork, Bool updateExtraPassTiles)
+Int BaseHeightMapRenderObjClass::initHeightData(Int x, Int y, WorldHeightMap *pMap, Graphics::SceneObjectList<W3DRenderObject>::Cursor *pLightsIteratork, Bool updateExtraPassTiles)
 {
 
 	REF_PTR_SET(m_map, pMap);	//update our heightmap pointer in case it changed since last call.
@@ -1804,7 +1804,7 @@ Int BaseHeightMapRenderObjClass::initHeightData(Int x, Int y, WorldHeightMap *pM
 		REF_PTR_SET(m_map,pMap);	//update our heightmap pointer in case it changed since last call.
 		m_stageTwoTexture=NEW CloudMapTerrainTextureClass;
 		m_stageThreeTexture=NEW LightMapTerrainTextureClass(m_macroTextureName);
-		m_destAlphaTexture=MSGNEW("TextureClass") TextureClass(256,1,Assets::PixelEncoding::BGRA8,MIP_LEVELS_1);
+		m_destAlphaTexture=MSGNEW("W3DTextureHandle") W3DTextureHandle(256,1,Assets::PixelEncoding::BGRA8,MIP_LEVELS_1);
 		initDestAlphaLUT();
 		m_scorches->allocateBuffers();
 		m_staticScorches->allocateBuffers();
@@ -1902,7 +1902,7 @@ Int BaseHeightMapRenderObjClass::getStaticDiffuse(Int x, Int y)
 
 	RTS3DScene *pMyScene = (RTS3DScene *)Scene;
 	if (pMyScene) {
-		Graphics::SceneObjectList<RenderObjClass>::Cursor *it = pMyScene->createLightsIterator();
+		Graphics::SceneObjectList<W3DRenderObject>::Cursor *it = pMyScene->createLightsIterator();
 		diffuse = computeVertexLighting(position, lightRay, &normalAtTexel, it, 1);
 		if (it) {
 		 pMyScene->destroyLightsIterator(it);
@@ -2154,10 +2154,10 @@ void BaseHeightMapRenderObjClass::setTimeOfDay( TimeOfDay tod )
 /** W3D render object method, we use it to add ourselves to tthe update
 list, so On_Frame_Update gets called. */
 //=============================================================================
-void BaseHeightMapRenderObjClass::Notify_Added(SceneClass * scene)
+void BaseHeightMapRenderObjClass::Notify_Added(W3DScene * scene)
 {
-	RenderObjClass::Notify_Added(scene);
-	scene->Register(this,SceneClass::ON_FRAME_UPDATE);
+	W3DRenderObject::Notify_Added(scene);
+	scene->Register(this,W3DScene::ON_FRAME_UPDATE);
 }
 
 //=============================================================================
@@ -2169,7 +2169,7 @@ rendered portion of the terrain.  Only a 96x96 section is rendered at any time,
 even though maps can be up to 1024x1024.  This function determines which subset
 is rendered. */
 //=============================================================================
-void BaseHeightMapRenderObjClass::updateCenter(CameraClass *camera, const Vector3 *cameraPivot, Graphics::SceneObjectList<RenderObjClass>::Cursor *pLightsIterator)
+void BaseHeightMapRenderObjClass::updateCenter(W3DCamera *camera, const Vector3 *cameraPivot, Graphics::SceneObjectList<W3DRenderObject>::Cursor *pLightsIterator)
 {
 	if (m_map==nullptr) {
 		return;
@@ -2207,7 +2207,7 @@ void BaseHeightMapRenderObjClass::updateCenter(CameraClass *camera, const Vector
 //=============================================================================
 //DECLARE_PERF_TIMER(Terrain_Render)
 
-void BaseHeightMapRenderObjClass::Render(RenderInfoClass & rinfo)
+void BaseHeightMapRenderObjClass::Render(W3DRenderContext & rinfo)
 {
 
 }
@@ -2219,7 +2219,7 @@ void BaseHeightMapRenderObjClass::Render(RenderInfoClass & rinfo)
 /** Renders (draws) the trees. Since the trees are transparent, this has to be
 called after flush. */
 //=============================================================================
-void BaseHeightMapRenderObjClass::renderTrees(CameraClass * camera)
+void BaseHeightMapRenderObjClass::renderTrees(W3DCamera * camera)
 {
 #ifdef EXTENDED_STATS
 	if (Graphics::Get_Render_Diagnostics().disable_objects) {
@@ -2230,7 +2230,7 @@ void BaseHeightMapRenderObjClass::renderTrees(CameraClass * camera)
 	if (Scene==nullptr) return;
 	if (m_treeBuffer) {
 		RTS3DScene *pMyScene = (RTS3DScene *)Scene;
-		Graphics::SceneObjectList<RenderObjClass>::Cursor pDynamicLightsIterator(pMyScene->getDynamicLights());
+		Graphics::SceneObjectList<W3DRenderObject>::Cursor pDynamicLightsIterator(pMyScene->getDynamicLights());
 		m_treeBuffer->drawTrees(camera, &pDynamicLightsIterator);
 	}
 }

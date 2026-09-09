@@ -9,7 +9,7 @@ module;
 #include <vector>
 export module Engine.UI.WND.TextureDrawing.Tests;
 import Engine.UI.WND;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 using namespace Graphics;
 using namespace Engine::UI::WND;
 
@@ -25,11 +25,11 @@ BOOST_AUTO_TEST_CASE(viewport_labels_preserve_placement_coverage_and_font_after_
     space.character = ' ';
     space.spacing = 3;
     BOOST_REQUIRE(font.Build(Assets::FontAsset("Label", 15, false, 4, 0, {letter, space})));
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     BOOST_REQUIRE(device.Is_Valid());
     Renderer2D renderer;
     for (const unsigned size : {32u, 48u}) {
-        BOOST_REQUIRE(renderer.Initialize(device, std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+        BOOST_REQUIRE(renderer.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
         const auto target = device.Create_Texture({size,size,1,RHITextureFormat::RGBA8_UNorm,
             static_cast<std::uint32_t>(RHITextureUsage::RenderTarget)});
         const auto depth = device.Create_Texture({size,size,1,RHITextureFormat::D32_Float,
@@ -85,10 +85,10 @@ struct Layers {
 
 BOOST_AUTO_TEST_CASE(generated_map_layers_keep_orientation_alpha_updates_and_resize)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     BOOST_REQUIRE(device.Is_Valid());
     Renderer2D graphics;
-    BOOST_REQUIRE(graphics.Initialize(device, std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    BOOST_REQUIRE(graphics.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     const std::array<std::uint8_t, 8> terrain_pixels{255,0,0,255, 0,255,0,255};
     const std::array<std::uint8_t, 8> shroud_pixels{0,0,0,128, 0,0,0,0};
     const std::array<std::uint8_t, 4> marker_pixels{255,0,0,128};

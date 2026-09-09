@@ -1,5 +1,5 @@
 # Slang is intentionally built from a pinned source checkout. Do not replace
-# this with a package-manager lookup: WW3D2 owns the engine shader language and
+# this with a package-manager lookup: graphics owns the engine shader language and
 # must use the compiler configured together with this build.
 include(FetchContent)
 
@@ -21,7 +21,7 @@ set(SLANG_LIB_TYPE STATIC CACHE STRING "Build Slang as a static library" FORCE)
 set(SLANG_EMBED_CORE_MODULE ON CACHE BOOL "Embed Slang's core module" FORCE)
 set(SLANG_EMBED_CORE_MODULE_SOURCE ON CACHE BOOL "Embed Slang core module source" FORCE)
 
-# Keep the LLVM dependency disabled. The checked-in WW3D2 shader sources use
+# Keep the LLVM dependency disabled. The checked-in graphics shader sources use
 # Slang's built-in target backends and do not require the optional LLVM path.
 set(SLANG_SLANG_LLVM_FLAVOR DISABLE CACHE STRING "Slang LLVM flavor" FORCE)
 

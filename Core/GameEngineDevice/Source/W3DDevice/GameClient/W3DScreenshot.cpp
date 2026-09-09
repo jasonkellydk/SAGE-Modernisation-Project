@@ -28,7 +28,7 @@
 #include <span>
 #include <vector>
 
-import Graphics.Backends.DX11.FrameRuntime;
+import Graphics.Frame.Runtime;
 import Graphics.Capture.FrameCapture;
 import Video.Capture.ImageWriter;
 

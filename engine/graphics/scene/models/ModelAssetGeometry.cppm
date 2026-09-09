@@ -13,6 +13,7 @@ export module Graphics.Scene.Models.ModelAssetGeometry;
 export import Graphics.Scene.StaticMeshes;
 
 import Assets.Models;
+import Assets.Math;
 
 namespace Graphics
 {

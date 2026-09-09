@@ -9,7 +9,7 @@ module;
 export module Graphics.Resources.Textures.Atlas.Tests;
 import Graphics.Resources.Textures.Atlas;
 import Graphics.Resources.Textures.Resource;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 import Graphics.Scene.Props.Renderer;
 using namespace Graphics;
 
@@ -19,7 +19,7 @@ void Check_Drawing(TextureResource& texture,unsigned width,unsigned height,std::
 {
     auto& device=texture.Owner();
     PropRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device,GRAPHICS_TERRAIN_SHADER_DIRECTORY));
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     const auto target=device.Create_Texture({width,height,1,RHITextureFormat::RGBA8_UNorm,
         static_cast<unsigned>(RHITextureUsage::RenderTarget)});
     const auto depth=device.Create_Texture({width,height,1,RHITextureFormat::D32_Float,
@@ -59,7 +59,7 @@ AtlasTile Tile(std::span<const unsigned> pixels,unsigned width,unsigned height,u
 BOOST_AUTO_TEST_CASE(periodic_gutters_and_vertical_orientation_preserve_color_and_expanded_storage_alpha)
 {
     for (const bool warp : {true,false}) {
-        DX11Device device({warp});
+        GraphicsTestDevice device({warp});
         if (!warp && !device.Is_Valid()) continue;
         for (const auto encoding : {Assets::PixelEncoding::BGRA8,Assets::PixelEncoding::BGRA5551}) {
             std::unique_ptr<TextureResource> texture(TextureResource::Create(&device,{8,8,1},encoding));
@@ -84,7 +84,7 @@ BOOST_AUTO_TEST_CASE(periodic_gutters_and_vertical_orientation_preserve_color_an
 BOOST_AUTO_TEST_CASE(edge_masks_and_transparent_unused_tree_pixels_have_defined_alpha)
 {
     for (const bool warp : {true,false}) {
-        DX11Device device({warp});
+        GraphicsTestDevice device({warp});
         if (!warp && !device.Is_Valid()) continue;
         std::unique_ptr<TextureResource> texture(TextureResource::Create(&device,{4,1,1},Assets::PixelEncoding::BGRA8));
         BOOST_REQUIRE(texture);
@@ -99,7 +99,7 @@ BOOST_AUTO_TEST_CASE(edge_masks_and_transparent_unused_tree_pixels_have_defined_
 
 BOOST_AUTO_TEST_CASE(invalid_tile_or_gutter_rejects_upload_without_changing_existing_pixels)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     std::unique_ptr<TextureResource> texture(TextureResource::Create(&device,{2,2,1},Assets::PixelEncoding::BGRA8));
     BOOST_REQUIRE(texture);
     const std::array source{0x40ff0000u,0x8000ff00u,0xff0000ffu,0xffffffffu};
@@ -117,7 +117,7 @@ BOOST_AUTO_TEST_CASE(invalid_tile_or_gutter_rejects_upload_without_changing_exis
 BOOST_AUTO_TEST_CASE(flat_tile_positions_and_generated_mips_preserve_rgb_and_alpha)
 {
     for (const bool warp : {true,false}) {
-        DX11Device device({warp});
+        GraphicsTestDevice device({warp});
         if (!warp && !device.Is_Valid()) continue;
         std::unique_ptr<TextureResource> texture(TextureResource::Create(&device,{4,4,3},Assets::PixelEncoding::BGRA8));
         BOOST_REQUIRE(texture);

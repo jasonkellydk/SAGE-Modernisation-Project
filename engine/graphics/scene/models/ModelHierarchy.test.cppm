@@ -9,7 +9,7 @@ module;
 export module Graphics.Scene.Models.Hierarchy.Tests;
 import Graphics.Scene.Models.Hierarchy;
 import Graphics.Scene.Props.Renderer;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 import Assets.ModelRig;
 using namespace Graphics;
 
@@ -93,8 +93,8 @@ BOOST_AUTO_TEST_CASE(captured_and_hidden_attachments_draw_after_source_release_a
     Assets::ModelRigDesc rig;rig.skeleton_name="DRAW";rig.bones={{"ROOT"},{"DRAW",0,{.125f,0,0}}};
     ModelHierarchy hierarchy(rig);rig.bones.clear();
     for(bool warp:{true,false}) {
-        DX11Device device({warp});if(!warp&&!device.Is_Valid())continue;
-        PropRenderer renderer;BOOST_REQUIRE(renderer.Initialize(device,GRAPHICS_TERRAIN_SHADER_DIRECTORY));
+        GraphicsTestDevice device({warp});if(!warp&&!device.Is_Valid())continue;
+        PropRenderer renderer;BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
         auto& commands=device.Immediate_Command_List();
         PropStyle style;style.depth_test=false;style.depth_write=false;
         PropParameters parameters;parameters.textured=0;

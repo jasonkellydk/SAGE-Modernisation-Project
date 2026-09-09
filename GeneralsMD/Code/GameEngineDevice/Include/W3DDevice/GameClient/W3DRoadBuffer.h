@@ -52,8 +52,7 @@ import Graphics.Scene.Surfaces.Renderer;
 //           Includes
 //-----------------------------------------------------------------------------
 #include "WWLib/always.h"
-#include "WW3D2/RendObj.h"
-#include "WW3D2/W3DFile.h"
+#include "W3DDevice/GameClient/W3DRenderObject.h"
 import Graphics.Scene.Surfaces.Geometry;
 import Graphics.Materials.State;
 //#include "common/GameFileSystem.h"
@@ -154,7 +153,7 @@ public:
 	RoadType();
 	~RoadType();
 protected:
-	TextureClass *m_roadTexture;	///<Roads texture
+	W3DTextureHandle *m_roadTexture;	///<Roads texture
 	std::vector<Graphics::SurfaceVertex> m_vertices;
 	std::vector<UnsignedShort> m_indices;
 	Graphics::SurfaceMeshHandle m_mesh;
@@ -170,7 +169,7 @@ protected:
 public:
 	void loadTexture(AsciiString path, Int id);
 	bool uploadGeometry();
-	TextureClass *getTexture() const { return m_roadTexture; }
+	W3DTextureHandle *getTexture() const { return m_roadTexture; }
 	Graphics::SurfaceMeshHandle getMesh() const { return m_mesh; }
 	Int getStacking() {return m_stackingOrder;}
 	void setStacking(Int order) {m_stackingOrder = order;}
@@ -206,8 +205,8 @@ public:
 	/// Empties the road buffer.
 	void clearAllRoads();
 	/// Draws the roads.  Uses terrain bounds for culling.
-	void drawRoads(CameraClass * camera, TextureClass *cloudTexture, TextureClass *noiseTexture, Bool wireframe,
-																	Int minX, Int maxX, Int minY, Int maxY, Graphics::SceneObjectList<RenderObjClass>::Cursor *pDynamicLightsIterator);
+	void drawRoads(W3DCamera * camera, W3DTextureHandle *cloudTexture, W3DTextureHandle *noiseTexture, Bool wireframe,
+																	Int minX, Int maxX, Int minY, Int maxY, Graphics::SceneObjectList<W3DRenderObject>::Cursor *pDynamicLightsIterator);
 	/// Sets the map pointer.
 	void setMap(WorldHeightMap *pMap);
 	/// Updates the diffuse lighting in the buffers.
@@ -221,7 +220,7 @@ protected:
 	Int			m_numRoads;						///< Number of roads used in m_roads.
 	Bool		m_initialized;		///< True if the subsystem initialized.
 	WorldHeightMap *m_map;		///< Pointer to the height map data.
-	Graphics::SceneObjectList<RenderObjClass>::Cursor *m_lightsIterator;	///< Lighting iterator.
+	Graphics::SceneObjectList<W3DRenderObject>::Cursor *m_lightsIterator;	///< Lighting iterator.
 	Int m_curUniqueID;				///< Road type we are rendering at this pass.
 	Int m_curRoadType;
 #ifdef LOAD_TEST_ASSETS
@@ -274,7 +273,7 @@ protected:
 														Vector2 roadNormal, Vector2 roadVector,
 														Vector2 *cornersP,
 														Real uOffset, Real vOffset, Real uScale, Real vScale);
-	void loadLit4PtSection(RoadSegment *pRoad, UnsignedShort *ib, Graphics::SurfaceVertex *vb, Graphics::SceneObjectList<RenderObjClass>::Cursor *pDynamicLightsIterator);
+	void loadLit4PtSection(RoadSegment *pRoad, UnsignedShort *ib, Graphics::SurfaceVertex *vb, Graphics::SceneObjectList<W3DRenderObject>::Cursor *pDynamicLightsIterator);
 	void loadRoadsInVertexAndIndexBuffers(); ///< Fills the index and vertex buffers for drawing.
 	void loadRoadSegment(UnsignedShort *ib, Graphics::SurfaceVertex *vb, RoadSegment *pRoad); ///< Fills the index and vertex buffers for drawing 1 segment.
 	void allocateRoadBuffers();							 ///< Allocates the buffers.

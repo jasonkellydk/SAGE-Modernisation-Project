@@ -8,15 +8,15 @@ module;
 #include <span>
 export module Graphics.Scene.Lines.MaterialDrawing.Tests;
 import Graphics.Scene.Props.Renderer;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 using namespace Graphics;
 
 BOOST_AUTO_TEST_CASE(textured_lines_retain_tiling_scrolling_blend_and_scene_depth)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     BOOST_REQUIRE(device.Is_Valid());
     PropRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device,std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     std::array<PropVertex,4> vertices{};
     vertices[0].position={-1,-1,0.5f}; vertices[1].position={1,-1,0.5f};
     vertices[2].position={1,1,0.5f}; vertices[3].position={-1,1,0.5f};

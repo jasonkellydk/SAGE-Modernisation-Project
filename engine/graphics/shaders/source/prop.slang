@@ -1,11 +1,28 @@
+#include "resource_access.slangh"
 #include "environment_lighting.slangh"
-cbuffer PropConstants : register(b0)
+cbuffer PropViewConstants : register(b0)
 {
     row_major float4x4 ViewProjection;
     float4 ShroudProjection;
     float4 FogColor;
     float4 FogState;
     float4 CameraPosition;
+    row_major float4x4 View;
+};
+struct PropLightingData {
+
+    float4 SceneAmbient;
+    float4 LightDirection[4];
+    float4 LightDiffuse[4];
+    float4 LightSpecular[4];
+    float4 LightPosition[4];
+    float4 LightAttenuation[4];
+    float4 LightAmbient[4];
+    float4 LightSpot[4];
+};
+cbuffer PropLightingConstants : register(b1) { PropLightingData SharedLighting; };
+cbuffer PropMaterialConstants : register(b2)
+{
     float Textured;
     float SecondaryTexture;
     float AlphaCutoff;
@@ -18,19 +35,9 @@ cbuffer PropConstants : register(b0)
     float Opacity;
     float TextureLuminance;
     float NormalInWorldSpace;
-    float4 SceneAmbient;
-    float4 LightDirection[4];
-    float4 LightDiffuse[4];
-    float4 LightSpecular[4];
-    row_major float4x4 View;
     row_major float4x4 UVTransform[2];
     float4 UVSources;
     float4 BumpMatrix;
-    float4 LightPosition[4];
-    float4 LightAttenuation[4];
-    float4 LightAmbient[4];
-    float4 LightSpot[4];
-    row_major float4x4 World;
     float SurfaceModel;
     uint SurfaceMaps;
     float SurfaceNormalScale;
@@ -46,12 +53,16 @@ cbuffer PropConstants : register(b0)
     float4 SurfaceTeamColor;
     float4 MuzzleFlashState;
 };
-Texture2D BaseTexture : register(t0);
-Texture2D DetailTexture : register(t1);
-Texture2D ShroudTexture : register(t3);
-SamplerState BaseSampler : register(s0);
-SamplerState DetailSampler : register(s1);
-SamplerState ShroudSampler : register(s3);
+cbuffer PropObjectConstants : register(b3)
+{
+    row_major float4x4 World;
+};
+GRAPHICS_TEXTURE_2D(BaseTexture, float4, 0)
+GRAPHICS_TEXTURE_2D(DetailTexture, float4, 1)
+GRAPHICS_TEXTURE_2D(ShroudTexture, float4, 3)
+GRAPHICS_SAMPLER(BaseSampler, 0)
+GRAPHICS_SAMPLER(DetailSampler, 1)
+GRAPHICS_SAMPLER(ShroudSampler, 3)
 struct PropInput
 {
     float3 position : POSITION0;
@@ -65,6 +76,7 @@ struct PropInput
     float4 material_specular : COLOR4;
     float4 secondary_color : COLOR5;
     float4 tangent : TEXCOORD2;
+    float bone_index : TEXCOORD3;
 };
 struct PropOutput
 {
@@ -85,6 +97,7 @@ struct PropOutput
     float2 shroud_uv : TEXCOORD2;
     float distance : TEXCOORD3;
     float4 tangent : TEXCOORD9;
+    nointerpolation uint record_index : TEXCOORD10;
 };
 
 float2 Rotate_Muzzle_Flash_UV(float2 uv, float2 pivot, float angle)
@@ -105,18 +118,19 @@ void Prepare_Muzzle_Flash_UV(float2 source_uv,
     // The second sample counter-rotates around the same authored pivot.
     secondary_uv = Rotate_Muzzle_Flash_UV(source_uv, pivot, -MuzzleFlashState.y);
 }
-[shader("vertex")] PropOutput prop_vertex(PropInput input)
+PropOutput Transform_Prop_Vertex(PropInput input, row_major float4x4 WorldTransform)
 {
     PropOutput output;
-    float3 world_position = mul(World,float4(input.position,1)).xyz;
-    float3 world_normal = NormalInWorldSpace > 0.5 ? input.normal : mul(World,float4(input.normal,0)).xyz;
+    output.record_index = 0;
+    float3 world_position = mul(WorldTransform,float4(input.position,1)).xyz;
+    float3 world_normal = NormalInWorldSpace > 0.5 ? input.normal : mul(WorldTransform,float4(input.normal,0)).xyz;
     output.position = mul(ViewProjection,float4(world_position,1));
     output.color = input.color;
     output.secondary_color = input.secondary_color;
     output.normal = normalize(world_normal);
-    output.tangent = float4(mul(World,float4(input.tangent.xyz,0)).xyz,input.tangent.w);
+    output.tangent = float4(mul(WorldTransform,float4(input.tangent.xyz,0)).xyz,input.tangent.w);
     if (SurfaceModel > .5 && NormalInWorldSpace < .5) {
-        const float3 r0=World[0].xyz, r1=World[1].xyz, r2=World[2].xyz;
+        const float3 r0=WorldTransform[0].xyz, r1=WorldTransform[1].xyz, r2=WorldTransform[2].xyz;
         const float determinant=dot(r0,cross(r1,r2));
         const float orientation=determinant < 0 ? -1 : 1;
         const float3x3 cofactor=float3x3(cross(r1,r2),cross(r2,r0),cross(r0,r1));
@@ -145,6 +159,38 @@ void Prepare_Muzzle_Flash_UV(float2 source_uv,
     output.distance = length(CameraPosition.xyz-world_position);
     return output;
 }
+struct PropInstance { row_major float4x4 world; };
+GRAPHICS_STORAGE_BUFFER(PropInstances, PropInstance, 127)
+[shader("vertex")] PropOutput prop_vertex(PropInput input) {
+    return Transform_Prop_Vertex(input, World);
+}
+[shader("vertex")] PropOutput prop_vertex_instanced(PropInput input, uint instance : SV_InstanceID) {
+    return Transform_Prop_Vertex(input, PropInstances()[instance].world);
+}
+
+struct PropInstanceRecord {
+    row_major float4x4 world;
+    PropLightingData lighting;
+    uint4 skin;
+};
+GRAPHICS_STORAGE_BUFFER(PropRecords, PropInstanceRecord, 127)
+GRAPHICS_STORAGE_BUFFER(PropRecordIndices, uint, 126)
+struct PropBone { row_major float3x4 transform; };
+GRAPHICS_STORAGE_BUFFER(PropSkinPalette, PropBone, 125)
+[shader("vertex")] PropOutput prop_vertex_records(PropInput input, uint instance : SV_InstanceID) {
+    const uint index = PropRecordIndices()[instance];
+    const PropInstanceRecord record = PropRecords()[index];
+    if (record.skin.y != 0) {
+        const row_major float3x4 bone = PropSkinPalette()[record.skin.x+uint(input.bone_index)].transform;
+        input.position = mul(bone,float4(input.position,1));
+        if (NormalInWorldSpace < .5) input.normal = mul(bone,float4(input.normal,0));
+        input.tangent.xyz = mul(bone,float4(input.tangent.xyz,0));
+    }
+    PropOutput output = Transform_Prop_Vertex(input, record.world);
+    output.record_index = index;
+    return output;
+}
+
 float2 Prop_Coordinate(uint stage,PropOutput input)
 {
     float mode = stage==0 ? UVSources.x : UVSources.z;
@@ -159,20 +205,20 @@ float2 Prop_Coordinate(uint stage,PropOutput input)
     return coordinate.xy;
 }
 #include "prop_surface.slangh"
-[shader("pixel")] float4 prop_pixel(PropOutput input) : SV_TARGET
+float4 Shade_Prop_Pixel(PropOutput input, PropLightingData lighting)
 {
     ClipEnvironment(input.world_position);
-    if (ShroudOnly > 0.5) return float4(ShroudTexture.Sample(ShroudSampler,input.shroud_uv).rgb,1);
+    if (ShroudOnly > 0.5) return float4(ShroudTexture().Sample(ShroudSampler(),input.shroud_uv).rgb,1);
     if (MuzzleFlashState.x > 0.5 && Textured > 0.5 && SecondaryTexture > 0.5) {
-        float4 color = BaseTexture.Sample(BaseSampler,Prop_Coordinate(0,input));
-        color *= DetailTexture.Sample(DetailSampler,Prop_Coordinate(1,input));
+        float4 color = BaseTexture().Sample(BaseSampler(),Prop_Coordinate(0,input));
+        color *= DetailTexture().Sample(DetailSampler(),Prop_Coordinate(1,input));
         const float vertex_alpha = input.color.a;
         const float material_alpha = input.material_diffuse.a;
         const float3 authored_rgb = input.color.rgb*input.material_diffuse.rgb
             + input.material_emissive.rgb;
         color.rgb *= authored_rgb*Opacity;
         color.a *= vertex_alpha*material_alpha*Opacity;
-        if (Shroud > 0.5) color.rgb *= ShroudTexture.Sample(ShroudSampler,input.shroud_uv).rgb;
+        if (Shroud > 0.5) color.rgb *= ShroudTexture().Sample(ShroudSampler(),input.shroud_uv).rgb;
         if (FogState.z > 0.5) {
             const float fog = saturate((abs(input.camera_position.z)-FogState.x)/max(FogState.y-FogState.x,0.0001));
             color.rgb = lerp(color.rgb,FogColor.rgb,fog);
@@ -180,10 +226,10 @@ float2 Prop_Coordinate(uint stage,PropOutput input)
         return saturate(color);
     }
     if (SurfaceModel > .5) {
-        float4 surface=Shade_Prop_Surface(input);
+        float4 surface=Shade_Prop_Surface(input, lighting);
         surface.a*=Opacity;
         clip(surface.a-AlphaCutoff);
-        if (Shroud > .5) surface.rgb*=ShroudTexture.Sample(ShroudSampler,input.shroud_uv).rgb;
+        if (Shroud > .5) surface.rgb*=ShroudTexture().Sample(ShroudSampler(),input.shroud_uv).rgb;
         if (FogState.z > .5) {
             const float fog=saturate((abs(input.camera_position.z)-FogState.x)/max(FogState.y-FogState.x,.0001));
             surface.rgb=lerp(surface.rgb,FogColor.rgb,fog);
@@ -194,42 +240,42 @@ float2 Prop_Coordinate(uint stage,PropOutput input)
     if (input.material_ambient.w > 0.5) {
         float3 normal = normalize(input.normal);
         float3 view_direction = normalize(CameraPosition.xyz-input.world_position);
-        float3 lit = SceneAmbient.rgb*input.material_ambient.rgb+input.material_emissive.rgb;
+        float3 lit = lighting.SceneAmbient.rgb*input.material_ambient.rgb+input.material_emissive.rgb;
         float3 specular = 0;
         const float3 cloud_visibility = DirectionalVisibility(input.world_position);
         for (uint light=0;light<4;++light) {
-            if (LightDirection[light].w < 0.5) continue;
-            float3 direction = normalize(LightDirection[light].xyz);
+            if (lighting.LightDirection[light].w < 0.5) continue;
+            float3 direction = normalize(lighting.LightDirection[light].xyz);
             float attenuation = 1;
-            if (LightPosition[light].w > 0.5) {
-                const float3 delta = LightPosition[light].xyz-input.world_position;
+            if (lighting.LightPosition[light].w > 0.5) {
+                const float3 delta = lighting.LightPosition[light].xyz-input.world_position;
                 const float distance = length(delta);
                 direction = distance > 0.0001 ? delta/distance : float3(0,0,1);
-                const float4 coefficients = LightAttenuation[light];
+                const float4 coefficients = lighting.LightAttenuation[light];
                 attenuation = 1/max(coefficients.x+coefficients.y*distance
                     +coefficients.z*distance*distance,0.0001);
                 if (coefficients.w > 0 && distance > coefficients.w) attenuation = 0;
-                if (LightPosition[light].w > 1.5) {
-                    const float cosine = dot(-direction,normalize(LightDirection[light].xyz));
-                    const float inner = cos(0.5*LightSpot[light].y);
-                    const float outer = cos(0.5*LightSpot[light].z);
+                if (lighting.LightPosition[light].w > 1.5) {
+                    const float cosine = dot(-direction,normalize(lighting.LightDirection[light].xyz));
+                    const float inner = cos(0.5*lighting.LightSpot[light].y);
+                    const float outer = cos(0.5*lighting.LightSpot[light].z);
                     attenuation *= pow(saturate((cosine-outer)/max(inner-outer,0.0001)),
-                        max(LightSpot[light].x,0));
+                        max(lighting.LightSpot[light].x,0));
                 }
             }
             float amount = saturate(dot(normal,direction));
-            const float3 visibility = LightPosition[light].w < 0.5 ? cloud_visibility : float3(1,1,1);
-            lit += attenuation*(LightAmbient[light].rgb*input.material_ambient.rgb
-                +amount*LightDiffuse[light].rgb*input.material_diffuse.rgb*visibility);
+            const float3 visibility = lighting.LightPosition[light].w < 0.5 ? cloud_visibility : float3(1,1,1);
+            lit += attenuation*(lighting.LightAmbient[light].rgb*input.material_ambient.rgb
+                +amount*lighting.LightDiffuse[light].rgb*input.material_diffuse.rgb*visibility);
             if (SecondaryGradient > 0.5 && amount > 0) {
                 float3 half_vector = normalize(direction+view_direction);
                 specular += pow(saturate(dot(normal,half_vector)),max(input.material_specular.w,1.0))
-                    *LightSpecular[light].rgb*input.material_specular.rgb*attenuation*visibility;
+                    *lighting.LightSpecular[light].rgb*input.material_specular.rgb*attenuation*visibility;
             }
         }
         diffuse = float4(saturate(saturate(lit)+specular),input.material_diffuse.a);
     }
-    float4 color = Textured > 0.5 ? BaseTexture.Sample(BaseSampler,Prop_Coordinate(0,input)) : float4(1,1,1,1);
+    float4 color = Textured > 0.5 ? BaseTexture().Sample(BaseSampler(),Prop_Coordinate(0,input)) : float4(1,1,1,1);
     float2 bump_offset = 0;
     if (Textured < 0.5) color = diffuse;
     else if (PrimaryGradient == 1) color *= diffuse;
@@ -243,11 +289,11 @@ float2 Prop_Coordinate(uint stage,PropOutput input)
     if (TextureLuminance > 0.5) {
         // Preserve the packed texture-factor multiply-add / dot-product material.
         const float3 factor = float3(165,202,142)/255.0;
-        const float3 shifted = BaseTexture.Sample(BaseSampler,Prop_Coordinate(0,input)).rgb*(128.0/255.0)+(128.0/255.0)-0.5;
+        const float3 shifted = BaseTexture().Sample(BaseSampler(),Prop_Coordinate(0,input)).rgb*(128.0/255.0)+(128.0/255.0)-0.5;
         color.rgb = saturate(4*dot(shifted,factor-0.5)).xxx;
     }
     if (SecondaryTexture > 0.5) {
-        float4 detail = DetailTexture.Sample(DetailSampler,Prop_Coordinate(1,input)+bump_offset);
+        float4 detail = DetailTexture().Sample(DetailSampler(),Prop_Coordinate(1,input)+bump_offset);
         float3 local = color.rgb;
         if (DetailColor == 1) color.rgb = detail.rgb;
         else if (DetailColor == 2) color.rgb *= detail.rgb;
@@ -268,10 +314,17 @@ float2 Prop_Coordinate(uint stage,PropOutput input)
     if (SecondaryGradient > 0.5) color.rgb += input.secondary_color.rgb;
     color.a *= Opacity;
     clip(color.a-AlphaCutoff);
-    if (Shroud > 0.5) color.rgb *= ShroudTexture.Sample(ShroudSampler,input.shroud_uv).rgb;
+    if (Shroud > 0.5) color.rgb *= ShroudTexture().Sample(ShroudSampler(),input.shroud_uv).rgb;
     if (FogState.z > 0.5) {
         const float fog = saturate((abs(input.camera_position.z)-FogState.x)/max(FogState.y-FogState.x,0.0001));
         color.rgb = lerp(color.rgb,FogColor.rgb,fog);
     }
     return saturate(color);
+}
+
+[shader("pixel")] float4 prop_pixel(PropOutput input) : SV_TARGET {
+    return Shade_Prop_Pixel(input, SharedLighting);
+}
+[shader("pixel")] float4 prop_pixel_records(PropOutput input) : SV_TARGET {
+    return Shade_Prop_Pixel(input, PropRecords()[input.record_index].lighting);
 }

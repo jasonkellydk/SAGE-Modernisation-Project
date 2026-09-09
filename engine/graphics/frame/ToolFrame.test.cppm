@@ -10,9 +10,10 @@ module;
 
 export module Graphics.Frame.ToolFrame.Tests;
 import Graphics.Frame.ToolFrame;
-import Graphics.Backends.DX11.FrameRuntime;
+import Graphics.Frame.Runtime;
 import Graphics.Frame.AttachmentBindings;
 import Graphics.Renderer2D;
+import Graphics.Tests.Device;
 
 using namespace Graphics;
 
@@ -34,7 +35,7 @@ struct Runtime final
     ~Runtime()
     {
         Shutdown_Tool_Frame();
-        Graphics_DX11_Shutdown_Shared_Frame();
+        Graphics_Shutdown_Shared_Frame();
         if (window) DestroyWindow(window);
     }
 };
@@ -45,13 +46,14 @@ BOOST_AUTO_TEST_CASE(tool_overlay_pixels_survive_abort_resize_and_device_recreat
     for (const bool software : {true, false}) {
         Runtime runtime;
         BOOST_REQUIRE(runtime.window);
-        DX11DeviceOptions options;
+        FrameDeviceOptions options;
         options.window = runtime.window;
         options.width = options.height = 16;
-        options.use_warp = software;
+        options.use_warp = Graphics_Test_Uses_WARP(software);
         options.backbuffer_format = RHITextureFormat::RGBA8_UNorm;
         BOOST_REQUIRE(Initialize_Frame_Device(options));
-        const std::filesystem::path shaders(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
+        const std::filesystem::path shaders =
+            Frame_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
         BOOST_CHECK(!Initialize_Tool_Frame(shaders / "missing"));
         BOOST_CHECK(!Get_Renderer2D().Is_Initialized());
         BOOST_REQUIRE(Initialize_Tool_Frame(shaders));
@@ -66,7 +68,7 @@ BOOST_AUTO_TEST_CASE(tool_overlay_pixels_survive_abort_resize_and_device_recreat
             BOOST_REQUIRE(Get_Renderer2D().Add_Rect({float(size / 2), 0, float(size), float(size)}, {0, 1, 0, 1}));
             // Inspect the queued executor's pixels before presentation can
             // discard the swap-chain contents.
-            BOOST_REQUIRE(Graphics_DX11_Execute_Queued_Draws());
+            BOOST_REQUIRE(Graphics_Execute_Queued_Draws());
             const auto target = Get_Attachment_Bindings().Default().color;
             std::vector<std::byte> pixels(size * size * 4);
             BOOST_REQUIRE(Shared_Frame_Device()->Readback_Texture(target, pixels, size * 4));
@@ -77,8 +79,8 @@ BOOST_AUTO_TEST_CASE(tool_overlay_pixels_survive_abort_resize_and_device_recreat
                 BOOST_CHECK_EQUAL(std::to_integer<unsigned>(pixels[offset + 2]), 0u);
                 BOOST_CHECK_EQUAL(std::to_integer<unsigned>(pixels[offset + 3]), 255u);
             }
-            BOOST_REQUIRE(Graphics_DX11_End_Frame());
-            BOOST_REQUIRE(Graphics_DX11_Present());
+            BOOST_REQUIRE(Graphics_End_Frame());
+            BOOST_REQUIRE(Graphics_Present());
 
             BOOST_REQUIRE(Begin_Tool_Frame());
             BOOST_REQUIRE(Get_Renderer2D().Add_Rect({0, 0, float(size), float(size)}, {0, 0, 1, 1}));
@@ -95,7 +97,7 @@ BOOST_AUTO_TEST_CASE(tool_overlay_pixels_survive_abort_resize_and_device_recreat
             BOOST_REQUIRE(Begin_Tool_Frame());
             BOOST_CHECK(Get_Renderer2D().Is_Initialized());
             BOOST_REQUIRE(Get_Renderer2D().Add_Rect({0, 0, float(size), float(size)}, {1, 0, 0, 1}));
-            BOOST_REQUIRE(Graphics_DX11_Execute_Queued_Draws());
+            BOOST_REQUIRE(Graphics_Execute_Queued_Draws());
             BOOST_REQUIRE(Shared_Frame_Device()->Readback_Texture(
                 Get_Attachment_Bindings().Default().color, pixels, size * 4));
             const unsigned corner = (size * size - 1) * 4;

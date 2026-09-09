@@ -7,16 +7,16 @@ module;
 #include <filesystem>
 #include <span>
 export module Graphics.Scene.Shadows.Projected.Tests;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 import Graphics.Scene.Shadows.Projected;
 using namespace Graphics;
 
 BOOST_AUTO_TEST_CASE(gpu_shadow_texture_preserves_cutouts_and_background_after_recreation)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     BOOST_REQUIRE(device.Is_Valid());
     PropRenderer renderer;
-    const auto shaders=std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
+    const auto shaders=Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
     BOOST_REQUIRE(renderer.Initialize(device,shaders));
     const std::array<std::uint8_t,8> cutout_pixels{0,0,0,0,0,0,0,255};
     const auto cutout=device.Create_Texture_Initialized({2,1},
@@ -84,10 +84,10 @@ BOOST_AUTO_TEST_CASE(gpu_shadow_texture_preserves_cutouts_and_background_after_r
 
 BOOST_AUTO_TEST_CASE(decal_blends_and_projected_receiver_cutout)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     BOOST_REQUIRE(device.Is_Valid());
     PropRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device,std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     const std::array<std::uint8_t,4> texel{128,64,32,128};
     const auto texture=device.Create_Texture_Initialized({1,1},{std::as_bytes(std::span(texel)),4});
     const auto target=device.Create_Texture({16,16,1,RHITextureFormat::RGBA8_UNorm,

@@ -14,7 +14,7 @@ import Assets.Images.Preparation;
 import Assets.Identity;
 import Assets.Textures;
 import Graphics.Scene.Particles.Renderer;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 using namespace Graphics;
 
 BOOST_AUTO_TEST_CASE(texture_regions_select_distinct_atlas_cells_after_source_release_and_resize)
@@ -22,12 +22,12 @@ BOOST_AUTO_TEST_CASE(texture_regions_select_distinct_atlas_cells_after_source_re
     const std::array<std::array<unsigned, 4>, 4> colors{{
         {255, 0, 0, 255}, {0, 255, 0, 128}, {255, 255, 255, 0}, {255, 255, 0, 192}}};
     for (bool warp : {true, false}) {
-        DX11Device device({warp});
+        GraphicsTestDevice device({warp});
         if (!warp && !device.Is_Valid()) continue;
         BOOST_REQUIRE(device.Is_Valid());
         for (auto mode : {ParticleEmitterFlags::Billboard, ParticleEmitterFlags::PointSprite, ParticleEmitterFlags::None}) {
             ParticleRenderer renderer;
-            BOOST_REQUIRE(renderer.Initialize(device, std::filesystem::path(GRAPHICS_PARTICLE_SHADER_DIRECTORY), 1, 4));
+            BOOST_REQUIRE(renderer.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_PARTICLE_SHADER_DIRECTORY), 1, 4));
             Texture description;
             description.width = description.height = 8;
             description.mip_count = 1;
@@ -112,11 +112,11 @@ BOOST_AUTO_TEST_CASE(prepared_mip_chain_retains_recolor_and_alpha_in_gpu_drawing
     BOOST_REQUIRE_EQUAL(last.width, 1u); BOOST_REQUIRE_EQUAL(last.height, 1u);
     std::array<std::byte, 4> rgba{};
     BOOST_REQUIRE(Assets::Convert_Image_Pixel(rgba, Assets::PixelEncoding::RGBA8, last.bytes, last.encoding));
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     BOOST_REQUIRE(device.Is_Valid());
     ParticleRenderer renderer;
     for (unsigned cycle = 0; cycle < 2; ++cycle) {
-        BOOST_REQUIRE(renderer.Initialize(device, std::filesystem::path(GRAPHICS_PARTICLE_SHADER_DIRECTORY), 1, 1));
+        BOOST_REQUIRE(renderer.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_PARTICLE_SHADER_DIRECTORY), 1, 1));
         Texture texture;
         texture.width = texture.height = texture.mip_count = 1; texture.row_pitch = 4;
         texture.format = TextureFormat::RGBA8_UNorm; texture.usage = TextureUsage::Sampled;
@@ -178,11 +178,11 @@ BOOST_AUTO_TEST_CASE(reduced_cube_texture_recolor_retains_alpha_through_drawing_
     selected.surfaces.push_back(*surface); selected.surfaces[0].offset = 0;
     std::vector<std::byte> rgba;
     BOOST_REQUIRE(Assets::Decode_DDS_Surface(recolored, selected, 0, 0, 0, rgba));
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     BOOST_REQUIRE(device.Is_Valid());
     ParticleRenderer renderer;
     for (unsigned cycle = 0; cycle < 2; ++cycle) {
-        BOOST_REQUIRE(renderer.Initialize(device, std::filesystem::path(GRAPHICS_PARTICLE_SHADER_DIRECTORY), 1, 1));
+        BOOST_REQUIRE(renderer.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_PARTICLE_SHADER_DIRECTORY), 1, 1));
         Texture texture;
         texture.width = texture.height = 4; texture.mip_count = 1;
         texture.row_pitch = 16; texture.format = TextureFormat::RGBA8_UNorm; texture.usage = TextureUsage::Sampled;
@@ -224,14 +224,14 @@ BOOST_AUTO_TEST_CASE(reduced_cube_texture_recolor_retains_alpha_through_drawing_
 
 BOOST_AUTO_TEST_CASE(restart_invalidates_particle_resources_and_preserves_alpha_after_target_resize)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     BOOST_REQUIRE(device.Is_Valid());
     ParticleRenderer renderer;
     TextureHandle previous_texture;
     MaterialHandle previous_material;
     ParticleEmitterHandle previous_emitter;
     for (unsigned cycle = 0; cycle < 2; ++cycle) {
-        BOOST_REQUIRE(renderer.Initialize(device, std::filesystem::path(GRAPHICS_PARTICLE_SHADER_DIRECTORY), 2, 2));
+        BOOST_REQUIRE(renderer.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_PARTICLE_SHADER_DIRECTORY), 2, 2));
         Texture description;
         description.width = description.height = description.mip_count = 1;
         description.format = TextureFormat::RGBA8_UNorm;
@@ -291,10 +291,10 @@ BOOST_AUTO_TEST_CASE(restart_invalidates_particle_resources_and_preserves_alpha_
 
 BOOST_AUTO_TEST_CASE(point_sprite_retains_pixel_size_texture_alpha_and_viewport_origin)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     BOOST_REQUIRE(device.Is_Valid());
     ParticleRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device, std::filesystem::path(GRAPHICS_PARTICLE_SHADER_DIRECTORY), 1, 1));
+    BOOST_REQUIRE(renderer.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_PARTICLE_SHADER_DIRECTORY), 1, 1));
     Texture description;
     description.width = description.height = description.mip_count = 1;
     description.format = TextureFormat::RGBA8_UNorm;
@@ -351,10 +351,10 @@ BOOST_AUTO_TEST_CASE(point_sprite_retains_pixel_size_texture_alpha_and_viewport_
 
 BOOST_AUTO_TEST_CASE(ground_aligned_particles_preserve_corner_depth)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     BOOST_REQUIRE(device.Is_Valid());
     ParticleRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device,std::filesystem::path(GRAPHICS_PARTICLE_SHADER_DIRECTORY),1,1));
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_PARTICLE_SHADER_DIRECTORY),1,1));
     ParticleEmitter emitter;
     emitter.flags = ParticleEmitterFlags::Enabled;
     emitter.material = renderer.Default_Material();
@@ -393,10 +393,10 @@ BOOST_AUTO_TEST_CASE(ground_aligned_particles_preserve_corner_depth)
 
 BOOST_AUTO_TEST_CASE(alpha_test_preserves_authored_cutoff_boundary)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     BOOST_REQUIRE(device.Is_Valid());
     ParticleRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device,std::filesystem::path(GRAPHICS_PARTICLE_SHADER_DIRECTORY),1,1));
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_PARTICLE_SHADER_DIRECTORY),1,1));
     const auto target = device.Create_Texture({32,32,1,RHITextureFormat::RGBA8_UNorm,
         static_cast<std::uint32_t>(RHITextureUsage::RenderTarget)});
     const auto depth = device.Create_Texture({32,32,1,RHITextureFormat::D32_Float,
@@ -442,12 +442,12 @@ BOOST_AUTO_TEST_CASE(alpha_test_preserves_authored_cutoff_boundary)
 
 BOOST_AUTO_TEST_CASE(effect_textures_can_exceed_one_gpu_binding_page)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     BOOST_REQUIRE(device.Is_Valid());
     ParticleRenderer renderer;
     constexpr unsigned count = 130;
     constexpr unsigned width = 136, height = 64;
-    BOOST_REQUIRE(renderer.Initialize(device, std::filesystem::path(GRAPHICS_PARTICLE_SHADER_DIRECTORY), count, count));
+    BOOST_REQUIRE(renderer.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_PARTICLE_SHADER_DIRECTORY), count, count));
     BOOST_REQUIRE(renderer.Set_View({Matrix4x4::Identity(), Matrix4x4::Identity(), {}, {0,0,width,height,0,1}}));
     Texture description;
     description.width = description.height = description.mip_count = 1;
@@ -517,10 +517,10 @@ BOOST_AUTO_TEST_CASE(compressed_particle_texture_retains_color_and_cutout)
     BOOST_REQUIRE(loaded.Succeeded()); BOOST_REQUIRE(loaded.asset->Has_Pixels());
     BOOST_CHECK_EQUAL(std::to_integer<int>(loaded.asset->Pixels()[3]),0);
     BOOST_CHECK_EQUAL(std::to_integer<int>(loaded.asset->Pixels()[19]),255);
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     BOOST_REQUIRE(device.Is_Valid());
     ParticleRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device,std::filesystem::path(GRAPHICS_PARTICLE_SHADER_DIRECTORY),2,2));
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_PARTICLE_SHADER_DIRECTORY),2,2));
     const RHIViewport viewport{0,0,128,72};
     BOOST_REQUIRE(renderer.Set_View({Matrix4x4::Identity(),Matrix4x4::Identity(),{},{0,0,128,72,0,1}}));
     Texture description;
@@ -589,10 +589,10 @@ BOOST_AUTO_TEST_CASE(compressed_particle_texture_retains_color_and_cutout)
 
 BOOST_AUTO_TEST_CASE(ground_and_billboard_particles_preserve_authored_texture_orientation)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     BOOST_REQUIRE(device.Is_Valid());
     ParticleRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device, std::filesystem::path(GRAPHICS_PARTICLE_SHADER_DIRECTORY), 1, 1));
+    BOOST_REQUIRE(renderer.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_PARTICLE_SHADER_DIRECTORY), 1, 1));
     const std::array<std::array<std::uint8_t,4>,4> colors{{
         {255,0,0,255}, {0,255,0,255}, {0,0,255,255}, {255,255,0,255}}};
     std::array<std::byte,8*8*4> source{};
@@ -646,9 +646,9 @@ BOOST_AUTO_TEST_CASE(ground_and_billboard_particles_preserve_authored_texture_or
 
 BOOST_AUTO_TEST_CASE(mixed_particle_blends_preserve_black_borders_and_zero_alpha_flashes)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     ParticleRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device, std::filesystem::path(GRAPHICS_PARTICLE_SHADER_DIRECTORY), 3, 3));
+    BOOST_REQUIRE(renderer.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_PARTICLE_SHADER_DIRECTORY), 3, 3));
     BOOST_REQUIRE(renderer.Set_View({Matrix4x4::Identity(), Matrix4x4::Identity(), {}, {0,0,96,32,0,1}}));
     Texture desc;
     desc.width = desc.height = 8; desc.mip_count = 1;

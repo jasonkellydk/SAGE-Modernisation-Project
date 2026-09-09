@@ -12,7 +12,7 @@ export module Graphics.Passes.LightRays.Tests;
 import Graphics.Passes.LightRays;
 import Graphics.RHI;
 import Graphics.FrameTargets;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 import Graphics.Capture.FrameCapture;
 import Graphics.Scene.Lighting.Environment;
 
@@ -22,7 +22,7 @@ namespace
 {
 constexpr auto ColorFormat = RHITextureFormat::RGBA8_UNorm;
 constexpr auto DepthFormat = RHITextureFormat::D24_UNorm_S8;
-const std::filesystem::path Shaders(GRAPHICS_LIGHT_RAYS_SHADER_DIRECTORY);
+const std::filesystem::path Shaders(Graphics::Test_Shader_Directory(GRAPHICS_LIGHT_RAYS_SHADER_DIRECTORY));
 
 LightRaysInput OrthographicInput()
 {
@@ -35,7 +35,7 @@ LightRaysInput OrthographicInput()
 
 struct Fixture final
 {
-    DX11Device device;
+    GraphicsTestDevice device;
     LightRaysRenderer rays;
     FrameCapture capture;
     FrameTargets targets{};

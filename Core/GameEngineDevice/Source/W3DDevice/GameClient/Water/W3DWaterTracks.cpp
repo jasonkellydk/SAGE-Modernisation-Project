@@ -1,10 +1,11 @@
-import Graphics.Backends.DX11.FrameRuntime;
+#include "W3DDevice/GameClient/W3DRenderServices.h"
+import Graphics.Frame.Runtime;
 #include <array>
 #include <span>
 #include <vector>
 #include <SDL3/SDL.h>
 
-#include "WW3D2/WW3D.h"
+
 /*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -61,11 +62,11 @@ import Graphics.Backends.DX11.FrameRuntime;
 #include "Common/UnicodeString.h"
 #include "Common/file.h"
 #include "Common/FileSystem.h"
-#include "WW3D2/Texture.h"
+#include "W3DDevice/GameClient/W3DTextureHandle.h"
 #include "WWMath/colmath.h"
-#include "WW3D2/ColTest.h"
-#include "WW3D2/RInfo.h"
-#include "WW3D2/Camera.h"
+#include "W3DDevice/GameClient/W3DCastQuery.h"
+#include "W3DDevice/GameClient/W3DRenderContext.h"
+#include "W3DDevice/GameClient/W3DCamera.h"
 
 //number of vertex pages allocated - allows double buffering of vertex updates.
 //while one is being rendered, another is being updated.  Improves HW parallelism.
@@ -788,7 +789,7 @@ void setFPMode();
 //=============================================================================
 /** Draw all active track marks for this frame */
 //=============================================================================
-void WaterTracksRenderSystem::flush(RenderInfoClass & rinfo)
+void WaterTracksRenderSystem::flush(W3DRenderContext & rinfo)
 {
 /** @todo: Optimize system by drawing tracks as triangle strips and use dynamic vertex buffer access.
 May also try rendering all tracks with one call by grouping them by texture.
@@ -807,7 +808,7 @@ Try improving the fit to vertical surfaces like cliffs.
 
 	rinfo.Camera.Apply();
 
-	if (!m_usedModules || WW3D::Is_Reflection_Render_Pass())
+	if (!m_usedModules || Get_W3D_Render_Services().Is_Reflection_Render_Pass())
 		return;	//don't render track marks in reflections.
 
 	// Start each frame from a discarded dynamic-buffer region.

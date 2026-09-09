@@ -1,4 +1,4 @@
-import Graphics.Backends.DX11.FrameRuntime;
+import Graphics.Frame.Runtime;
 import Graphics.Frame.AttachmentBindings;
 /*
 **	Command & Conquer Generals Zero Hour(tm)

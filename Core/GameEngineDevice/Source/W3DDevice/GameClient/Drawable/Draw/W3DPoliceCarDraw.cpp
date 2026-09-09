@@ -108,7 +108,7 @@ void W3DPoliceCarDraw::doDrawModule(const Matrix3D* transformMtx)
 	const Real animAmt = 0.25f * TheFramePacer->getActualLogicTimeScaleOverFpsRatio();
 
 	// get pointers to our render objects that we'll need
-	RenderObjClass* policeCarRenderObj = getRenderObject();
+	W3DRenderObject* policeCarRenderObj = getRenderObject();
 	if( policeCarRenderObj == nullptr )
 		return;
 

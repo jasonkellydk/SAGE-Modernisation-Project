@@ -10,7 +10,7 @@ module;
 #include <vector>
 export module Graphics.Resources.Textures.Upload.Tests;
 import Graphics.Resources.Textures.Upload;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 import Graphics.Scene.Props.Renderer;
 import Graphics.Resources.Textures.Storage;
 import Assets.Adapters.DDS;
@@ -31,9 +31,9 @@ void Fill(RHITextureMapping mapping, unsigned width, unsigned height, unsigned d
 
 BOOST_AUTO_TEST_CASE(all_fifteen_mips_upload_and_sample_rgb_and_alpha)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     PropRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device,GRAPHICS_TERRAIN_SHADER_DIRECTORY));
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     const auto target=device.Create_Texture({1,1,1,RHITextureFormat::RGBA8_UNorm,
         static_cast<unsigned>(RHITextureUsage::RenderTarget)});
     const auto depth=device.Create_Texture({1,1,1,RHITextureFormat::D32_Float,
@@ -87,7 +87,7 @@ BOOST_AUTO_TEST_CASE(all_fifteen_mips_upload_and_sample_rgb_and_alpha)
 
 BOOST_AUTO_TEST_CASE(cube_faces_and_volume_slices_keep_independent_rows_and_mips)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     TextureUpload upload;
     for (bool cube : {true,false}) {
         RHITexture description{8,8,4};
@@ -127,7 +127,7 @@ BOOST_AUTO_TEST_CASE(cube_faces_and_volume_slices_keep_independent_rows_and_mips
 
 BOOST_AUTO_TEST_CASE(partial_mapping_failure_unwinds_owned_mappings_and_keeps_foreign_mapping)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     const auto texture=device.Create_Texture({4,4,3});
     BOOST_REQUIRE(texture.Is_Valid());
     RHITextureMapping foreign;
@@ -150,7 +150,7 @@ BOOST_AUTO_TEST_CASE(partial_mapping_failure_unwinds_owned_mappings_and_keeps_fo
 
 BOOST_AUTO_TEST_CASE(upload_retains_generation_and_finishes_on_destruction)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     auto texture=device.Create_Texture({2,2,1});
     BOOST_REQUIRE(texture.Is_Valid());
     {
@@ -180,13 +180,13 @@ BOOST_AUTO_TEST_CASE(upload_retains_generation_and_finishes_on_destruction)
 BOOST_AUTO_TEST_CASE(dds_upload_samples_compressed_and_expanded_colors_cutouts_and_alpha)
 {
     for (const bool warp : {true, false}) {
-    DX11Device device({warp});
+    GraphicsTestDevice device({warp});
     if (!warp && !device.Is_Valid()) {
         BOOST_TEST_MESSAGE("Hardware adapter unavailable; WARP drawing was verified.");
         continue;
     }
     PropRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device, GRAPHICS_TERRAIN_SHADER_DIRECTORY));
+    BOOST_REQUIRE(renderer.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     const auto target = device.Create_Texture({4,4,1,RHITextureFormat::RGBA8_UNorm,
         static_cast<unsigned>(RHITextureUsage::RenderTarget)});
     const auto depth = device.Create_Texture({4,4,1,RHITextureFormat::D32_Float,
@@ -253,10 +253,10 @@ BOOST_AUTO_TEST_CASE(dds_upload_samples_compressed_and_expanded_colors_cutouts_a
 BOOST_AUTO_TEST_CASE(tga_preparation_upload_preserves_image_origins_and_sampled_alpha)
 {
     for (const bool warp : {true,false}) {
-        DX11Device device({warp});
+        GraphicsTestDevice device({warp});
         if (!warp && !device.Is_Valid()) continue;
         PropRenderer renderer;
-        BOOST_REQUIRE(renderer.Initialize(device,GRAPHICS_TERRAIN_SHADER_DIRECTORY));
+        BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
         const auto target=device.Create_Texture({4,4,1,RHITextureFormat::RGBA8_UNorm,
             static_cast<unsigned>(RHITextureUsage::RenderTarget)});
         const auto depth=device.Create_Texture({4,4,1,RHITextureFormat::D32_Float,

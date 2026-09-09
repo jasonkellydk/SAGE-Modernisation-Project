@@ -1,8 +1,11 @@
 module;
 #include <array>
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <span>
+#include <utility>
 
 export module Graphics.Passes.Bloom;
 import Graphics.RHI;
@@ -12,7 +15,11 @@ import Graphics.Shaders.Library;
 
 namespace Graphics
 {
-// Owns post-scene GPU work only. Applications select quality and call before UI.
+export struct BloomSettings final
+{
+    float intensity = 0.5f;
+    std::array<float,3> exposure{1,1,1};
+};
 export class BloomRenderer final
 {
 public:
@@ -73,25 +80,55 @@ public:
     }
 
     bool Render(CommandList& commands, const FrameTargets& targets,
-        RHITextureFormat format, bool enabled)
+        RHITextureFormat format, bool enabled, const BloomSettings& settings = {})
     {
-        // Disabled quality never captures, allocates, binds, or draws.
         if (!enabled) return true;
+        if (!std::isfinite(settings.intensity) || settings.intensity < 0) return false;
+        for (const float value : settings.exposure)
+            if (!std::isfinite(value) || value < 0) return false;
         const auto color = targets.backbuffer;
         if (!m_device || !color.texture.Is_Valid() || !targets.depth.texture.Is_Valid()
             || !color.width || !color.height) return false;
-        const std::uint32_t width = color.width / 4 + (color.width % 4 != 0);
-        const std::uint32_t height = color.height / 4 + (color.height % 4 != 0);
+        const std::uint32_t width = (std::min)(256u,color.width);
+        const std::uint32_t height = (std::max)(1u,
+            static_cast<std::uint32_t>(static_cast<std::uint64_t>(color.height)*width/color.width));
         if (!Ensure_Targets(width, height)
             || !m_snapshot.Capture(*m_device, commands, color.texture, color.width, color.height, format)) return false;
-        const bool drawn = Draw(commands, m_targets[0], width, height, m_snapshot.Texture(),
-                {1.0f/color.width,1.0f/color.height,0,0.5f})
-            && Draw(commands, m_targets[1], width, height, m_targets[0],
-                {1.0f/width,1.0f/height,1,0.5f})
-            && Draw(commands, m_targets[0], width, height, m_targets[1],
-                {1.0f/width,1.0f/height,2,0.5f})
-            && Draw(commands, color.texture, color.width, color.height, m_targets[0],
-                {1.0f/width,1.0f/height,3,0.5f});
+        Parameters parameters{1.0f/color.width,1.0f/color.height,0,settings.intensity,settings.exposure};
+        parameters.half_kernel_size = std::clamp(static_cast<int>(color.width/static_cast<float>(width)*0.5f-0.5f),0,4)+1;
+        bool drawn = Draw(commands, m_targets[0].textures[0], width, height,
+            m_snapshot.Texture(), {}, parameters);
+        for (unsigned level = 1; drawn && level < m_targets.size(); ++level) {
+            const auto& source = m_targets[level-1];
+            const auto& target = m_targets[level];
+            parameters.texel_x = 1.0f/source.width;
+            parameters.texel_y = 1.0f/source.height;
+            parameters.operation = 4;
+            drawn = Draw(commands,target.textures[0],target.width,target.height,
+                source.textures[0],{},parameters);
+        }
+        for (int level = 2; drawn && level >= 0; --level) {
+            const auto& target = m_targets[level];
+            parameters.texel_x = 1.0f/target.width;
+            parameters.texel_y = 1.0f/target.height;
+            unsigned source = 0;
+            if (level < 2) {
+                parameters.operation = 5;
+                drawn = Draw(commands,target.textures[1],target.width,target.height,
+                    m_targets[level+1].textures[0],target.textures[0],parameters);
+                source = 1;
+            }
+            parameters.operation = 1;
+            drawn = drawn && Draw(commands,target.textures[1-source],target.width,target.height,
+                target.textures[source],{},parameters);
+            parameters.operation = 2;
+            drawn = drawn && Draw(commands,target.textures[source],target.width,target.height,
+                target.textures[1-source],{},parameters);
+            if (source == 1) std::swap(m_targets[level].textures[0],m_targets[level].textures[1]);
+        }
+        parameters.operation = 3;
+        drawn = drawn && Draw(commands,color.texture,color.width,color.height,
+            m_targets[0].textures[0],m_snapshot.Texture(),parameters);
         const bool restored = commands.Reset_State()
             && commands.Set_Render_Targets(color.texture, targets.depth.texture)
             && commands.Set_Viewport({0,0,color.width,color.height});
@@ -100,29 +137,49 @@ public:
 
 private:
     struct Vertex { std::array<float,3> position; std::array<float,4> color; std::array<float,2> uv; };
-    struct Parameters { float texel_x, texel_y; std::uint32_t operation; float intensity; };
-    static_assert(sizeof(Parameters) == 16);
+    struct Parameters {
+        float texel_x, texel_y;
+        std::uint32_t operation;
+        float intensity;
+        std::array<float,3> exposure;
+        std::uint32_t half_kernel_size = 1;
+    };
+    static_assert(sizeof(Parameters) == 32);
+    struct Level {
+        std::array<RHITextureHandle,2> textures{};
+        std::uint32_t width = 0, height = 0;
+    };
     void Release_Targets() noexcept
     {
-        if (m_device) for (const auto target : m_targets)
-            if (target.Is_Valid()) m_device->Destroy_Texture(target);
+        if (m_device) for (const auto& level : m_targets)
+            for (const auto target : level.textures)
+                if (target.Is_Valid()) m_device->Destroy_Texture(target);
         m_targets = {};
         m_width = m_height = 0;
     }
     bool Ensure_Targets(std::uint32_t width, std::uint32_t height)
     {
         if (m_width == width && m_height == height) return true;
-        std::array<RHITextureHandle,2> replacement{};
-        const RHITexture description{width,height,1,RHITextureFormat::RGBA16_Float,
-            static_cast<std::uint32_t>(RHITextureUsage::RenderTarget)
-                | static_cast<std::uint32_t>(RHITextureUsage::ShaderResource)};
-        for (auto& texture : replacement) {
-            texture = m_device->Create_Texture(description);
-            if (!texture.Is_Valid()) {
-                for (const auto created : replacement)
-                    if (created.Is_Valid()) m_device->Destroy_Texture(created);
-                return false;
+        std::array<Level,3> replacement{};
+        auto level_width = width;
+        auto level_height = height;
+        for (auto& level : replacement) {
+            level.width = level_width;
+            level.height = level_height;
+            const RHITexture description{level_width,level_height,1,RHITextureFormat::RGBA16_Float,
+                static_cast<std::uint32_t>(RHITextureUsage::RenderTarget)
+                    | static_cast<std::uint32_t>(RHITextureUsage::ShaderResource)};
+            for (auto& texture : level.textures) {
+                texture = m_device->Create_Texture(description);
+                if (!texture.Is_Valid()) {
+                    for (const auto& allocated : replacement)
+                        for (const auto created : allocated.textures)
+                            if (created.Is_Valid()) m_device->Destroy_Texture(created);
+                    return false;
+                }
             }
+            level_width = (std::max)(1u,level_width/4);
+            level_height = (std::max)(1u,level_height/4);
         }
         Release_Targets();
         m_targets = replacement;
@@ -131,7 +188,7 @@ private:
         return true;
     }
     bool Draw(CommandList& commands, RHITextureHandle target, std::uint32_t width,
-        std::uint32_t height, RHITextureHandle source, const Parameters& parameters)
+        std::uint32_t height, RHITextureHandle source, RHITextureHandle scene, const Parameters& parameters)
     {
         if (!m_device->Update_Buffer(m_constants,0,std::as_bytes(std::span(&parameters,1)))) return false;
         std::array<RHIBindlessResource,3> bindings{};
@@ -141,13 +198,12 @@ private:
         bindings[1].index = ResourceIndex{0,1};
         bindings[1].texture = source;
         bindings[2].index = ResourceIndex{1,1};
-        bindings[2].texture = m_snapshot.Texture();
-        // Unbind the preceding pass's SRVs before reusing its input as an RTV.
+        bindings[2].texture = scene;
         return commands.Reset_State()
             && commands.Set_Color_Target(target)
             && commands.Set_Viewport({0,0,width,height})
             && commands.Bind_Pipeline(m_pipeline)
-            && commands.Set_Bindless_Resources(bindings)
+            && commands.Set_Bindless_Resources(std::span(bindings.data(),scene.Is_Valid() ? 3 : 2))
             && commands.Set_Vertex_Buffer(0,m_vertices,sizeof(Vertex),0)
             && commands.Draw(3,0,1,0);
     }
@@ -155,7 +211,7 @@ private:
     TextureSnapshot m_snapshot;
     RHIPipelineHandle m_pipeline{};
     RHIBufferHandle m_vertices{}, m_constants{};
-    std::array<RHITextureHandle,2> m_targets{};
+    std::array<Level,3> m_targets{};
     std::uint32_t m_width = 0, m_height = 0;
 };
 namespace { BloomRenderer g_bloom; }

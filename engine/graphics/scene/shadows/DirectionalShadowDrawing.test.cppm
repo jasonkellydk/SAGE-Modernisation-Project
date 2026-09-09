@@ -8,8 +8,11 @@ module;
 #include <span>
 #include <vector>
 export module Graphics.Scene.Shadows.DirectionalDrawing.Tests;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 import Graphics.Scene.Shadows.DirectionalRenderer;
+import Graphics.Scene.Props.Renderer;
+import Graphics.Scene.Props.Instances;
+import Graphics.Scene.Props.SkinPalettes;
 import Graphics.Scene.Lighting.Environment;
 import Graphics.Scene.Trees.Renderer;
 import Graphics.Scene.Terrain.Renderer;
@@ -21,12 +24,12 @@ BOOST_AUTO_TEST_CASE(cascades_draw_off_slice_casters_and_clear_after_resource_re
         ~ResetEnvironment() { Get_Environment_Lighting() = {}; }
     } reset;
     Get_Environment_Lighting() = {};
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     BOOST_REQUIRE(device.Is_Valid());
     DirectionalShadowRenderer shadows;
     TerrainRenderer terrain;
     PropRenderer receiver;
-    const auto shaders = std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
+    const auto shaders = Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
     BOOST_REQUIRE(shadows.Initialize(device,shaders));
     BOOST_REQUIRE(receiver.Initialize(device,shaders));
     const auto target = device.Create_Texture({32,32,1,RHITextureFormat::RGBA8_UNorm,
@@ -144,9 +147,9 @@ BOOST_AUTO_TEST_CASE(cascades_draw_off_slice_casters_and_clear_after_resource_re
 
 BOOST_AUTO_TEST_CASE(retained_caster_handles_survive_frames_and_expire_on_shutdown)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     DirectionalShadowRenderer shadows;
-    const auto shaders = std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
+    const auto shaders = Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
     BOOST_REQUIRE(shadows.Initialize(device,shaders));
     std::array<PropVertex,3> vertices{};
     vertices[0].position = {-1,-1,0};
@@ -176,10 +179,10 @@ BOOST_AUTO_TEST_CASE(shared_caster_buffers_match_independent_meshes_with_mixed_c
 {
     struct ResetEnvironment { ~ResetEnvironment() { Get_Environment_Lighting() = {}; } } reset;
     Get_Environment_Lighting() = {};
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     DirectionalShadowRenderer shadows;
     PropRenderer receiver;
-    const auto shaders = std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
+    const auto shaders = Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
     BOOST_REQUIRE(shadows.Initialize(device,shaders));
     BOOST_REQUIRE(receiver.Initialize(device,shaders));
     constexpr unsigned extent = 64;
@@ -255,7 +258,8 @@ BOOST_AUTO_TEST_CASE(shared_caster_buffers_match_independent_meshes_with_mixed_c
                     } else {
                         BOOST_REQUIRE(receiver.Update_Mesh(mesh,vertices,indices));
                     }
-                    BOOST_REQUIRE(shadows.Add_Caster(receiver,mesh,material,textures,style));
+                    const bool added = shadows.Add_Caster(receiver,mesh,material,textures,style,PropInstanceHandle{});
+                    BOOST_REQUIRE(added);
                     // The shadow queue retains this exact version independently
                     // of the source owner and shares its GPU buffers.
                     BOOST_REQUIRE(receiver.Destroy_Mesh(mesh));
@@ -290,11 +294,11 @@ BOOST_AUTO_TEST_CASE(dense_caster_growth_preserves_every_shadow_across_frames)
         ~ResetEnvironment() { Get_Environment_Lighting() = {}; }
     } reset;
     Get_Environment_Lighting() = {};
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     BOOST_REQUIRE(device.Is_Valid());
     DirectionalShadowRenderer shadows;
     PropRenderer receiver;
-    const auto shaders = std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
+    const auto shaders = Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
     BOOST_REQUIRE(shadows.Initialize(device,shaders));
     BOOST_REQUIRE(receiver.Initialize(device,shaders));
     constexpr unsigned extent = 260;
@@ -330,9 +334,16 @@ BOOST_AUTO_TEST_CASE(dense_caster_growth_preserves_every_shadow_across_frames)
     PropStyle style;
     style.blend = RHIBlendMode::Disabled;
     auto& commands = device.Immediate_Command_List();
+    std::array<PropVertex,4> unit_vertices{};
+    unit_vertices[0].position = {0,0,-4}; unit_vertices[1].position = {1,0,-4};
+    unit_vertices[2].position = {1,1,-4}; unit_vertices[3].position = {0,1,-4};
+    const std::array instance_meshes{receiver.Create_Mesh(unit_vertices,indices),receiver.Create_Mesh(unit_vertices,indices)};
+    unsigned iteration = 0;
     // Cross 256, 1024 and 4096 allocations, then shrink and regrow. Every
     // caster occupies its own measured pixel; a dropped draw leaves it lit.
     for (const unsigned side : {17u,33u,65u,17u,65u}) {
+        const bool instanced = iteration == 1 || iteration >= 3;
+        ++iteration;
         shadows.Clear_Casters();
         for (unsigned y=0;y<side;++y) for (unsigned x=0;x<side;++x) {
             const float left = -1.0f + 2.0f*x/side;
@@ -343,9 +354,23 @@ BOOST_AUTO_TEST_CASE(dense_caster_growth_preserves_every_shadow_across_frames)
             vertices[2].position = {left+width,bottom+width,-4};
             vertices[3].position = {left,bottom+width,-4};
             const std::span<const RHITextureHandle> textures;
-            BOOST_REQUIRE(shadows.Add_Caster(vertices,indices,parameters,textures,style));
+            if (instanced) {
+                auto instance = parameters;
+                instance.world[0] = instance.world[5] = width;
+                instance.world[3] = left; instance.world[7] = bottom;
+                instance.scene_ambient[0] = static_cast<float>(x)/side;
+                instance.light_position[1] = {left,bottom,2,1};
+                const bool added = shadows.Add_Caster(receiver,instance_meshes[(x+y)%2],instance,textures,style,PropInstanceHandle{});
+                BOOST_REQUIRE(added);
+            } else BOOST_REQUIRE(shadows.Add_Caster(vertices,indices,parameters,textures,style));
         }
+        const auto before = commands.Submission_Counts();
         BOOST_REQUIRE(shadows.Render(commands,view,light,settings,target,depth,{0,0,extent,extent}));
+        if (instanced) {
+            const auto draws = commands.Submission_Counts().draw_calls-before.draw_calls;
+            BOOST_CHECK_GT(draws,0u);
+            BOOST_CHECK_LE(draws,settings.cascade_count*2u);
+        }
         BOOST_REQUIRE(commands.Clear({0,0,0,0},1));
         BOOST_REQUIRE(receiver.Draw(commands,receiver_mesh,style,parameters,{}));
         std::array<std::byte,extent*extent*4> pixels{};
@@ -359,6 +384,7 @@ BOOST_AUTO_TEST_CASE(dense_caster_growth_preserves_every_shadow_across_frames)
         }
     }
     shadows.Shutdown();
+    for (const auto mesh : instance_meshes) receiver.Destroy_Mesh(mesh);
     receiver.Destroy_Mesh(receiver_mesh);
     receiver.Shutdown();
     device.Destroy_Texture(target);
@@ -369,9 +395,9 @@ BOOST_AUTO_TEST_CASE(sloped_receivers_do_not_shadow_themselves_between_shadow_te
 {
     struct ResetEnvironment { ~ResetEnvironment() { Get_Environment_Lighting() = {}; } } reset;
     Get_Environment_Lighting() = {};
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     PropRenderer receiver;
-    BOOST_REQUIRE(receiver.Initialize(device,std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    BOOST_REQUIRE(receiver.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     // A planar surface's depth in the light view varies linearly across X.
     std::array<float,64> shadow_depth{};
     for (unsigned y=0;y<8;++y) for (unsigned x=0;x<8;++x)
@@ -423,3 +449,70 @@ BOOST_AUTO_TEST_CASE(sloped_receivers_do_not_shadow_themselves_between_shadow_te
 }
 
 
+
+BOOST_AUTO_TEST_CASE(skinned_casters_use_posed_bounds_and_retain_cutout_pose_through_recreation)
+{
+    struct ResetEnvironment { ~ResetEnvironment() { Get_Environment_Lighting()={}; } } reset;
+    Get_Environment_Lighting()={};
+    GraphicsTestDevice device({true});
+    PropRenderer renderer; DirectionalShadowRenderer shadows;
+    const auto shaders=Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
+    BOOST_REQUIRE(renderer.Initialize(device,shaders)); BOOST_REQUIRE(shadows.Initialize(device,shaders));
+    const auto target=device.Create_Texture({32,32,1,RHITextureFormat::RGBA8_UNorm,
+        static_cast<std::uint32_t>(RHITextureUsage::RenderTarget)});
+    const auto depth=device.Create_Texture({32,32,1,RHITextureFormat::D32_Float,
+        static_cast<std::uint32_t>(RHITextureUsage::DepthStencil)});
+    const std::array<std::uint8_t,8> texels{255,255,255,255,255,255,255,0};
+    const auto texture=device.Create_Texture_Initialized({2,1},{std::as_bytes(std::span(texels)),8});
+    const std::array textures{texture};
+    std::array<PropVertex,4> vertices{};
+    vertices[0].position={99,-1,-4}; vertices[1].position={101,-1,-4};
+    vertices[2].position={101,1,-4}; vertices[3].position={99,1,-4};
+    vertices[0].uv={0,1}; vertices[1].uv={1,1}; vertices[2].uv={1,0}; vertices[3].uv={0,0};
+    const std::array<std::uint32_t,6> indices{0,1,2,0,2,3};
+    const auto caster=renderer.Create_Mesh(vertices,indices);
+    for (auto& vertex : vertices) {
+        vertex.position[0]-=100; vertex.position[2]=-5;
+        vertex.material_ambient={1,1,1,1}; vertex.material_emissive={.1f,.1f,.1f,0};
+    }
+    const auto receiver=renderer.Create_Mesh(vertices,indices);
+    PropParameters parameters;
+    parameters.scene_ambient={.2f,.2f,.2f,0}; parameters.light_direction[0]={0,0,1,1};
+    parameters.light_diffuse[0]={.6f,.6f,.6f,0};
+    auto projection=Matrix4x4::Identity(); projection.values[10]=projection.values[11]=-1.f/9;
+    parameters.view_projection=projection.values;
+    const View view{Matrix4x4::Identity(),projection,{}, {0,0,32,32,0,1}};
+    RenderLight light; light.type=RenderLightType::Directional; light.flags=RenderLightFlags::Enabled; light.direction={0,0,-1};
+    ShadowSettings settings{2,1,10,.5f,2,128};
+    PropStyle style; style.blend=RHIBlendMode::Disabled;
+    PropSkinOwner skin; PropInstanceOwner instance;
+    auto& commands=device.Immediate_Command_List();
+    for (unsigned frame=0; frame<3; ++frame) {
+        shadows.Clear_Casters();
+        PropBoneTransform bone{1,0,0,frame==1 ? 100.f : -100.f,0,1,0,0,0,0,1,0};
+        auto palette=skin.Update(renderer.Instances().Palettes(),1,[&](std::size_t) -> const auto& { return bone; });
+        parameters.textured=1; parameters.alpha_cutoff=.5f;
+        const auto record=instance.Update(renderer.Instances(),parameters,palette);
+        BOOST_REQUIRE(shadows.Add_Caster(renderer,caster,parameters,textures,style,record));
+        // The submitted caster owns the original palette and its posed bounds.
+        bone[3]=500;
+        palette=skin.Update(renderer.Instances().Palettes(),1,[&](std::size_t) -> const auto& { return bone; });
+        instance.Update(renderer.Instances(),parameters,palette);
+        if (frame==2) { renderer.Shutdown(); BOOST_REQUIRE(renderer.Initialize(device,shaders)); }
+        const auto before=commands.Submission_Counts();
+        BOOST_REQUIRE(shadows.Render(commands,view,light,settings,target,depth,{0,0,32,32}));
+        if (frame==1) BOOST_CHECK_EQUAL(commands.Submission_Counts().draw_calls,before.draw_calls);
+        else BOOST_CHECK(commands.Submission_Counts().draw_calls>before.draw_calls);
+        BOOST_REQUIRE(commands.Clear({0,0,0,0},1));
+        parameters.textured=parameters.alpha_cutoff=0;
+        BOOST_REQUIRE(renderer.Draw(commands,receiver,style,parameters,{}));
+        std::array<std::byte,32*32*4> pixels{};
+        BOOST_REQUIRE(device.Readback_Texture(target,pixels,128));
+        for (const auto y : {10u,22u}) for (unsigned channel=0; channel<3; ++channel) {
+            BOOST_CHECK_SMALL(std::to_integer<int>(pixels[(y*32+8)*4+channel])-(frame==1 ? 230 : 77),2);
+            BOOST_CHECK_SMALL(std::to_integer<int>(pixels[(y*32+24)*4+channel])-230,2);
+        }
+    }
+    shadows.Shutdown(); renderer.Destroy_Mesh(caster); renderer.Destroy_Mesh(receiver); renderer.Shutdown();
+    device.Destroy_Texture(texture); device.Destroy_Texture(target); device.Destroy_Texture(depth);
+}

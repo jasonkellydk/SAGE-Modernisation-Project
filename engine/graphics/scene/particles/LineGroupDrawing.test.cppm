@@ -9,16 +9,16 @@ module;
 export module Graphics.Scene.Particles.LineGroupDrawing.Tests;
 import Graphics.Scene.Particles.LineGroupGeometry;
 import Graphics.Scene.Props.Renderer;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 using namespace Graphics;
 
 BOOST_AUTO_TEST_CASE(line_group_shapes_preserve_texture_transparency_after_source_release_and_target_recreation)
 {
     const std::array<float,9> rotation{1,0,0,0,1,0,0,0,1};
     for(bool warp:{true,false}) {
-        DX11Device device({warp});if(!warp&&!device.Is_Valid())continue;
+        GraphicsTestDevice device({warp});if(!warp&&!device.Is_Valid())continue;
         BOOST_REQUIRE(device.Is_Valid());
-        PropRenderer renderer;BOOST_REQUIRE(renderer.Initialize(device,GRAPHICS_TERRAIN_SHADER_DIRECTORY));
+        PropRenderer renderer;BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
         for(auto shape:{LineGroupShape::Tetrahedron,LineGroupShape::Prism})for(bool opaque:{true,false}) {
             const std::array<std::uint8_t,4> pixel{0,255,0,static_cast<std::uint8_t>(opaque?255:0)};
             const auto texture=device.Create_Texture_Initialized({1,1},{std::as_bytes(std::span(pixel)),4});

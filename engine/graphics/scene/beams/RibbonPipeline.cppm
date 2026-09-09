@@ -19,7 +19,7 @@ import Graphics.Scene.Props.Geometry;
 
 namespace Graphics {
 
-// The subdivision budget in SegLineRenderer is fixed at 128 segments after
+// The ribbon subdivision budget is fixed at 128 segments after
 // subdivision. Source segments per chunk therefore shrink with the level.
 // A chunk has one extra source point because adjacent chunks share their seam.
 export inline constexpr std::size_t RibbonPipelineChunkSegments = 128;
@@ -59,7 +59,7 @@ export struct RibbonPipelineChunk final {
     std::span<const std::uint32_t> indices{};
 };
 
-// Owns SegLineRenderer's traversal and temporary storage while leaving source
+// Owns ribbon traversal and temporary storage while leaving source
 // access, visual randomness, and submission to the caller. ReadPoint returns a
 // RibbonPoint whose position and (when selected) color are in object space;
 // its v component is replaced by the pipeline's absolute source-index UV.
@@ -99,8 +99,7 @@ public:
         ReadPoint &&read_point, RandomVector &&random_vector, ResetRandom &&reset_random,
         EmitChunk &&emit_chunk)
     {
-        // SegmentedLineClass returns before entering SegLineRenderer for a
-        // short line. Keep that no-op behavior while avoiding count - 1
+        // Short lines produce no geometry. Keep that no-op behavior without count - 1
         // underflow here. A level outside the renderer's fixed budget is an
         // invalid request and is rejected before reading source points.
         if (settings.subdivision_level > RibbonPipelineMaximumSubdivisionLevel)

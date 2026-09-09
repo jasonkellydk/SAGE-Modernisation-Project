@@ -3,7 +3,7 @@ module;
 
 export module Graphics.Frame.ToolFrame;
 
-import Graphics.Backends.DX11.FrameRuntime;
+import Graphics.Frame.Runtime;
 import Graphics.Frame.SceneRenderers;
 import Graphics.Renderer2D;
 import Graphics.Resources.Recreation;
@@ -54,11 +54,11 @@ export bool Begin_Tool_Frame()
 {
     if (!Frame_Device_Ready() && !Recover_Frame_Device()) return false;
     if (!initialized && !Initialize_Tool_Frame(shader_directory)) return false;
-    if (!Graphics_DX11_Begin_Frame()) return false;
+    if (!Graphics_Begin_Frame()) return false;
     if (!initialized) {
         // A device loss discovered during begin released the renderers. Retry
         // initialization while idle on the next frame.
-        Graphics_DX11_Abort_Frame();
+        Graphics_Abort_Frame();
         return false;
     }
     // Begin can recover the device. Borrow the drawable extent afterwards.
@@ -70,13 +70,13 @@ export bool Begin_Tool_Frame()
 export void Abort_Tool_Frame() noexcept
 {
     Get_Renderer2D().Discard();
-    Graphics_DX11_Abort_Frame();
+    Graphics_Abort_Frame();
 }
 
 export bool End_Tool_Frame()
 {
-    if (Graphics_DX11_Execute_Queued_Draws()
-        && Graphics_DX11_End_Frame() && Graphics_DX11_Present()) return true;
+    if (Graphics_Execute_Queued_Draws()
+        && Graphics_End_Frame() && Graphics_Present()) return true;
     Abort_Tool_Frame();
     return false;
 }

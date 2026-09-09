@@ -14,7 +14,6 @@
 #include <span>
 #include <vector>
 #include "WWLib/always.h"
-#include "WW3D2/W3DFile.h"
 #include "Lib/BaseType.h"
 #include "Common/GameType.h"
 #include "W3DDevice/GameClient/WaterMaterial.h"
@@ -23,15 +22,15 @@
 
 #define INVALID_WATER_HEIGHT 0.0f
 
-class CameraClass;
+class W3DCamera;
 class AABoxClass;
-class RenderInfoClass;
-class TextureBaseClass;
+class W3DRenderContext;
+class W3DTextureHandle;
 class WaterTracksRenderSystem;
 class WaterSkyboxSystem;
 
 // Water render system. It is submitted explicitly by RTS3DScene after
-// opaque scene rendering; it is not a legacy RenderObjClass scene node.
+// opaque scene rendering; it is not a legacy W3DRenderObject scene node.
 class WaterRenderSystem
 {
 public:
@@ -46,7 +45,7 @@ public:
 	WaterRenderSystem();
 	~WaterRenderSystem();
 
-	void Render(RenderInfoClass &rinfo);
+	void Render(W3DRenderContext &rinfo);
 	void renderWater();
 	void Set_Surface_Geometry(const WaterGeometry &geometry);
 	void Set_Grid_Render_Data(const WaterGridRenderData &data);
@@ -60,7 +59,7 @@ public:
 	void updateMapOverrides();
 	void setTimeOfDay(TimeOfDay tod);
 	void toggleCloudLayer(Bool state) { m_useCloudLayer = state; }
-	void updateRenderTargetTextures(CameraClass *cam);
+	void updateRenderTargetTextures(W3DCamera *cam);
 	void Capture_Refraction_Texture();
 	void ReleaseResources();
 	void ReAcquireResources();
@@ -70,10 +69,11 @@ public:
 
 protected:
 	WaterReflectionRenderer *m_reflectionRenderer;
-	TextureBaseClass *m_skyBodyTexture;
+	W3DTextureHandle *m_skyBodyTexture;
 	Real m_dx;
 	Real m_dy;
 	Real m_level;
+    Real m_reflectionHeight = 0;
 	Real m_worldPositionX;
 	Real m_worldPositionY;
 	Real m_worldPositionZ;
@@ -89,34 +89,35 @@ protected:
     std::vector<UnsignedShort> m_gridIndices;
     Graphics::WaterMeshHandle m_gridMesh;
     Graphics::WaterMeshHandle m_surfaceMesh;
-    Graphics::WaterMeshHandle m_displacementMesh;
 
 	Int m_numVertices;
 	Int m_numIndices;
-	TextureBaseClass *m_pReflectionTexture;
+	W3DTextureHandle *m_pReflectionTexture;
 	Graphics::RHITextureHandle m_sceneColorTexture;
 	Graphics::RHITextureHandle m_sceneDepthTexture{};
-	TextureBaseClass *m_pDisplacementTexture;
 	WaterSkyboxSystem *m_skyBox;
 	WaterTracksRenderSystem *m_waterTrackSystem;
 
 	Real m_riverVOrigin;
 	Real m_waterTime;
-	TextureBaseClass *m_riverTexture;
-	TextureBaseClass *m_whiteTexture;
-	TextureBaseClass *m_waterNoiseTexture;
-	TextureBaseClass *m_waterOceanHeightTexture;
-	TextureBaseClass *m_waterOceanNormalTexture;
-	TextureBaseClass *m_waterEnvironmentTexture;
-	TextureBaseClass *m_waterCausticsTexture;
-	TextureBaseClass *m_waterDepthLutTexture;
-	TextureBaseClass *m_waterSparklesTexture;
+	W3DTextureHandle *m_riverTexture;
+	W3DTextureHandle *m_whiteTexture;
+	W3DTextureHandle *m_waterNoiseTexture;
+	W3DTextureHandle *m_waterOceanHeightTexture;
+	W3DTextureHandle *m_waterOceanNormalTexture;
+	W3DTextureHandle *m_waterEnvironmentTexture;
+	W3DTextureHandle *m_waterCausticsTexture;
+	W3DTextureHandle *m_waterDepthLutTexture;
+	W3DTextureHandle *m_waterSparklesTexture;
 	Real m_riverXOffset;
 	Real m_riverYOffset;
-	Bool m_drawingRiver;
+	Bool m_drawingRiver = false;
 	Bool m_renderingOffscreen;
-	TextureBaseClass *m_riverAlphaEdge;
+	W3DTextureHandle *m_riverAlphaEdge;
 	WaterGeometry m_surfaceGeometry;
+    Vector4 m_surfaceDomain{0,0,0,0};
+    std::vector<std::vector<Graphics::WaterMeshHandle>> m_surfaceMeshes;
+    std::vector<Graphics::WaterBodyMotion> m_waterBodies;
 	WaterGridRenderData m_gridRenderData;
 	WaterMaterialClass m_waterMaterial;
 
@@ -124,8 +125,8 @@ protected:
 
 	struct Setting
 	{
-		TextureBaseClass *skyTexture;
-		TextureBaseClass *waterTexture;
+		W3DTextureHandle *skyTexture;
+		W3DTextureHandle *waterTexture;
 		Int waterRepeatCount;
 		Real skyTexelsPerUnit;
 		std::uint32_t vertex00Diffuse;
@@ -140,16 +141,20 @@ protected:
 
 	Setting m_settings[TIME_OF_DAY_COUNT];
 	void drawRiverWater(const WaterSurfacePolygon &polygon);
-	void drawTrapezoidWater(const WaterGeometryPoint points[4]);
+    void rebuildSurfaceMeshes();
+    Vector4 getDisplacementDomain() const;
+    void updateWaterBodies();
+    void drawSurfaceMesh(Graphics::WaterMeshHandle mesh);
 	void loadSetting(Setting *skySetting, TimeOfDay timeOfDay);
-	void renderSky();
+	void updateTextureAnimation();
+	void renderUnderwater(W3DRenderContext &rinfo, bool draw_grid);
 	void testCurvedWater();
-	void renderSkyBody(Matrix3D *mat);
+	bool updateGridGeometry();
 	void renderWaterMesh();
-	void renderMirror(CameraClass *cam);
-	void drawSea(RenderInfoClass &rinfo);
+	void renderMirror(W3DCamera *cam);
+	void drawSea(W3DRenderContext &rinfo);
 	bool updateDisplacementTexture();
-	Bool getClippedWaterPlane(CameraClass *cam, AABoxClass *box);
+	Bool getClippedWaterPlane(W3DCamera *cam, AABoxClass *box);
 	WaterMaterialParameters makeWaterMaterialParameters(bool river,
 		bool reflection, bool underwater) const;
 

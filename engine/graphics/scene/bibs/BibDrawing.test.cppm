@@ -8,14 +8,14 @@ module;
 #include <span>
 export module Graphics.Scene.Bibs.Drawing.Tests;
 import Graphics.Scene.Bibs.Renderer;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 using namespace Graphics;
 BOOST_AUTO_TEST_CASE(bibs_blend_before_models_and_draw_into_the_current_target)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     BOOST_REQUIRE(device.Is_Valid());
     SurfaceRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device,std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     const std::array<BibQuad,1> quads{{{{{{-1,-1,0.8f},{1,-1,0.8f},{1,1,0.8f},{-1,1,0.8f}}}}}};
     SurfaceMeshHandle mesh;
     const std::array<std::uint8_t,4> texel{128,128,128,128};

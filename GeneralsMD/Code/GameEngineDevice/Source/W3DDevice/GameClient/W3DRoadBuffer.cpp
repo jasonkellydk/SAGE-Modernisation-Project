@@ -50,11 +50,11 @@ import Assets.Math;
 import Assets.Images.PixelEncoding;
 #include "W3DDevice/GameClient/W3DRoadBuffer.h"
 #include "W3DDevice/GameClient/W3DGraphicsResources.h"
-import Graphics.Backends.DX11.FrameRuntime;
+import Graphics.Frame.Runtime;
 import Graphics.Scene.Roads.Renderer;
 
-#include <WW3D2/AssetMgr.h>
-#include <WW3D2/Texture.h>
+#include "W3DDevice/GameClient/W3DAssetCatalog.h"
+#include <W3DDevice/GameClient/W3DTextureHandle.h>
 #include "Common/GlobalData.h"
 #include "Common/RandomValue.h"
 //#include "Common/GameFileSystem.h"
@@ -65,13 +65,14 @@ import Graphics.Scene.Roads.Renderer;
 #include "W3DDevice/GameClient/WorldHeightMap.h"
 #include "W3DDevice/GameClient/W3DAssetManager.h"
 #include "W3DDevice/GameClient/W3DDynamicLight.h"
+#include "W3DDevice/GameClient/W3DLight.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
 
-#include "WW3D2/Camera.h"
+#include "W3DDevice/GameClient/W3DCamera.h"
 import Graphics.Scene.Surfaces.Geometry;
-#include "WW3D2/WW3D.h"
-#include "WW3D2/Mesh.h"
-#include "WW3D2/MeshMdl.h"
+
+#include "W3DDevice/GameClient/W3DMeshRenderObject.h"
+#include "W3DDevice/GameClient/W3DMeshResource.h"
 
 static const Real TEE_WIDTH_ADJUSTMENT = 1.03f;
 
@@ -147,11 +148,13 @@ bool RoadType::uploadGeometry()
 void RoadType::loadTexture(AsciiString path, Int ID)
 {
 	/// @todo - delay loading textures and only load textures referenced by map.
-	WW3DAssetManager *pMgr = W3DAssetManager::Get_Instance();
+	W3DAssetCatalog *catalog = W3DAssetCatalog::Get_Instance();
+	if (catalog == nullptr)
+		return;
 
-	m_roadTexture = pMgr->Get_Texture(path.str(), MIP_LEVELS_3);
+	m_roadTexture = catalog->Get_Texture(path.str(), MIP_LEVELS_3);
 	//Hack to disable texture reduction
-	//m_roadTexture = pMgr->Get_Texture(path.str(), MIP_LEVELS_3, Assets::PixelEncoding::Unknown,true,TextureBaseClass::TEX_REGULAR, false);
+	//m_roadTexture = pMgr->Get_Texture(path.str(), MIP_LEVELS_3, Assets::PixelEncoding::Unknown,true,W3DTextureHandle::TEX_REGULAR, false);
 
 	m_roadTexture->Get_Sampling().mipmap =  Graphics::SamplingFilter::Best ;
 
@@ -181,7 +184,7 @@ void RoadType::loadTestTexture()
 {
 	if (m_isAutoLoaded && m_uniqueID>0 && !m_texturePath.isEmpty()) {
 		/// @todo - delay loading textures and only load textures referenced by map.
-		m_roadTexture = NEW_REF(TextureClass, (m_texturePath.str(), m_texturePath.str(), MIP_LEVELS_3));
+		m_roadTexture = NEW_REF(W3DTextureHandle, (m_texturePath.str(), m_texturePath.str(), MIP_LEVELS_3));
 		m_roadTexture->Get_Sampling().mipmap =  Graphics::SamplingFilter::Best ;
 
 		m_roadTexture->Get_Sampling().address[0] = Graphics::RHISamplerAddress::Wrap;
@@ -760,7 +763,7 @@ terrain.  The road is loaded into the quadrilateral defined by the
 the road vector gives the direction of the road, and the road normal is perpendicular
 to the road normal.  */
 //=============================================================================
-void W3DRoadBuffer::loadLit4PtSection(RoadSegment *pRoad, UnsignedShort *ib, Graphics::SurfaceVertex *vb, Graphics::SceneObjectList<RenderObjClass>::Cursor *pDynamicLightsIterator)
+void W3DRoadBuffer::loadLit4PtSection(RoadSegment *pRoad, UnsignedShort *ib, Graphics::SurfaceVertex *vb, Graphics::SceneObjectList<W3DRenderObject>::Cursor *pDynamicLightsIterator)
 {
 
 	const Real FLOAT_AMOUNT = MAP_HEIGHT_SCALE/8;
@@ -775,10 +778,10 @@ void W3DRoadBuffer::loadLit4PtSection(RoadSegment *pRoad, UnsignedShort *ib, Gra
 	}
 	Int numLights = 0;
 	const Int maxLights = 8;
-	LightClass *lights[maxLights];
+	W3DLight *lights[maxLights];
 
 	for (pDynamicLightsIterator->First(); !pDynamicLightsIterator->Is_Done(); pDynamicLightsIterator->Next()) {
-			LightClass *pLight = (LightClass*)pDynamicLightsIterator->Peek_Obj();
+			W3DLight *pLight = (W3DLight*)pDynamicLightsIterator->Peek_Obj();
 			SphereClass bounds = pLight->Get_Bounding_Sphere();
 			if (Spheres_Intersect(pRoad->getBounds(), bounds)) {
 				lights[numLights] = pLight;
@@ -914,7 +917,7 @@ void W3DRoadBuffer::loadLit4PtSection(RoadSegment *pRoad, UnsignedShort *ib, Gra
 				Int k;
 				for (k=0; k<numLights; k++) {
 					Real factor;
-					if (lights[k]->Get_Type() == LightClass::POINT) {
+					if (lights[k]->Get_Type() == W3DLight::POINT) {
 						Vector3 lightLoc = lights[k]->Get_Position();
 						Vector3 vtx = curColumn.vtx[j];
 						Vector3 offset = vtx - lightLoc;
@@ -3201,9 +3204,9 @@ void W3DRoadBuffer::updateCenter()
 //=============================================================================
 /** Draws the roads.   */
 //=============================================================================
-void W3DRoadBuffer::drawRoads(CameraClass *camera, TextureClass *cloudTexture,
-    TextureClass *noiseTexture, Bool wireframe, Int minX, Int maxX, Int minY, Int maxY,
-    Graphics::SceneObjectList<RenderObjClass>::Cursor *)
+void W3DRoadBuffer::drawRoads(W3DCamera *camera, W3DTextureHandle *cloudTexture,
+    W3DTextureHandle *noiseTexture, Bool wireframe, Int minX, Int maxX, Int minY, Int maxY,
+    Graphics::SceneObjectList<W3DRenderObject>::Cursor *)
 {
     if (camera == nullptr || !m_initialized) return;
     auto *device = Graphics::Shared_Frame_Device();

@@ -6,14 +6,14 @@ module;
 #include <filesystem>
 export module Graphics.Scene.Screen.DistortionDrawing.Tests;
 import Graphics.Scene.Screen.Distortion;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 using namespace Graphics;
 
 BOOST_AUTO_TEST_CASE(distortion_samples_current_background_and_preserves_edges_and_depth)
 {
-    DX11Device device({true}); BOOST_REQUIRE(device.Is_Valid());
+    GraphicsTestDevice device({true}); BOOST_REQUIRE(device.Is_Valid());
     ScreenDistortionRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device,std::filesystem::path(GRAPHICS_SCREEN_SHADER_DIRECTORY),1));
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_SCREEN_SHADER_DIRECTORY),1));
     BOOST_REQUIRE(renderer.Set_View({Matrix4x4::Identity(),Matrix4x4::Identity(),{},{0,0,32,32,0,1}}));
     std::array<std::byte,32*32*4> source{};
     for (unsigned y=0;y<32;++y) for (unsigned x=0;x<32;++x) {

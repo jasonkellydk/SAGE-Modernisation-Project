@@ -10,7 +10,7 @@ module;
 
 export module Graphics.Scene.WorldQuads.Snapshot.Tests;
 
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 import Graphics.Scene.WorldQuads;
 import Graphics.Testing.VisualRegression;
 
@@ -95,11 +95,11 @@ static MaterialHandle Make_Material(WorldQuadRenderer &renderer, TextureHandle t
 
 static void Run_World_Quad_Snapshot(const char *name)
 {
-	DX11Device device({true});
+	GraphicsTestDevice device({true});
 	BOOST_REQUIRE(device.Is_Valid());
 
 	WorldQuadRenderer renderer;
-	BOOST_REQUIRE(renderer.Initialize(device, std::filesystem::path(GRAPHICS_WORLD_QUAD_SHADER_DIRECTORY), 4, 2));
+	BOOST_REQUIRE(renderer.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_WORLD_QUAD_SHADER_DIRECTORY), 4, 2));
 	const View view{
 		Matrix4x4::Identity(),
 		Matrix4x4::Identity(),

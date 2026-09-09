@@ -1233,7 +1233,7 @@ Image *getMapPreviewImage( AsciiString mapName )
 	mapPreviewImage->setName("MapPreview");
 	mapPreviewImage->setStatus(IMAGE_STATUS_RAW_TEXTURE);
 // allocate our terrain texture
-	TextureClass * texture = new TextureClass( size.x, size.y,
+	W3DTextureHandle * texture = new W3DTextureHandle( size.x, size.y,
 																			 Assets::PixelEncoding::BGRX8, MIP_LEVELS_1 );
 	uv.lo.x = 0.0f;
 	uv.lo.y = 1.0f;
@@ -1287,7 +1287,7 @@ Bool parseMapPreviewChunk(DataChunkInput &file, DataChunkInfo *info, void *userD
 	size.y = file.readInt();
 
 
-	surface = (TextureClass *)mapPreviewImage->getRawTextureData()->Get_Surface_Level();
+	surface = (W3DTextureHandle *)mapPreviewImage->getRawTextureData()->Get_Surface_Level();
 	//texture->Get_Surface_Level();
 
 	DEBUG_LOG(("BeginMapPreviewInfo"));

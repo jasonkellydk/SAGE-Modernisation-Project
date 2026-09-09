@@ -27,14 +27,13 @@
 
 #include <algorithm>
 #include <stdlib.h>
-#include <WW3D2/AssetMgr.h>
-#include <WW3D2/Texture.h>
+#include "W3DDevice/GameClient/W3DAssetCatalog.h"
+#include <W3DDevice/GameClient/W3DTextureHandle.h>
 #include <WWMath/tri.h>
 #include <WWMath/colmath.h>
-#include <WW3D2/ColTest.h>
-#include <WW3D2/RInfo.h>
-#include <WW3D2/Camera.h>
-#include "WW3D2/WW3D.h"
+#include <W3DDevice/GameClient/W3DCastQuery.h>
+#include "W3DDevice/GameClient/W3DCamera.h"
+
 import Graphics.Materials.State;
 #include "Common/GlobalData.h"
 #include "Common/MapObject.h"
@@ -59,7 +58,7 @@ W3DStatusCircle::~W3DStatusCircle()
 
 W3DStatusCircle::W3DStatusCircle() {}
 
-bool W3DStatusCircle::Cast_Ray(RayCollisionTestClass & raytest)
+bool W3DStatusCircle::Cast_Ray(W3DRayCastQuery & raytest)
 {
 
 	return false;
@@ -96,10 +95,10 @@ void W3DStatusCircle::Get_Obj_Space_Bounding_Box(AABoxClass & box) const
 
 Int W3DStatusCircle::Class_ID() const
 {
-	return RenderObjClass::CLASSID_UNKNOWN;
+	return W3DRenderObject::CLASSID_UNKNOWN;
 }
 
-RenderObjClass * W3DStatusCircle::Clone() const
+W3DRenderObject * W3DStatusCircle::Clone() const
 {
 	return NEW W3DStatusCircle(*this);
 }
@@ -170,7 +169,7 @@ bool W3DStatusCircle::queueGraphics()
 	return overlay_renderer.Set_Overlay(overlay);
 }
 
-void W3DStatusCircle::Render(RenderInfoClass &)
+void W3DStatusCircle::Render(W3DRenderContext &)
 {
     if (!TheGameLogic->isInGame() || TheGameLogic->getGameMode() == GAME_SHELL) return;
     queueGraphics();

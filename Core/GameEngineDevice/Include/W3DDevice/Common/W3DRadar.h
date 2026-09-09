@@ -37,7 +37,7 @@ import Assets.Images.PixelEncoding;
 import Graphics.RHI;
 
 // FORWARD REFERENCES /////////////////////////////////////////////////////////////////////////////
-class TextureClass;
+class W3DTextureHandle;
 import Graphics.Resources.Textures.Edit;
 class TerrainLogic;
 class RadarDrawData;
@@ -87,9 +87,9 @@ protected:
 	void drawViewBox(RadarDrawData &drawing, Int pixelX, Int pixelY, Int width, Int height );  ///< draw view box
 	void buildTerrainTexture( TerrainLogic *terrain );	 ///< create the terrain texture of the radar
 	void drawIcons(RadarDrawData &drawing, Int pixelX, Int pixelY, Int width, Int height );	///< draw all of the radar icons
-	void updateObjectTexture(TextureClass *texture);
+	void updateObjectTexture(W3DTextureHandle *texture);
 	static Bool canRenderObject( const RadarObject *rObj, const Player *localPlayer );
-	void renderObjectList( const RadarObject *listHead, TextureClass *texture );
+	void renderObjectList( const RadarObject *listHead, W3DTextureHandle *texture );
 	void interpolateColorForHeight( RGBColor *color,
 																	Real height,
 																	Real hiZ,
@@ -102,15 +102,15 @@ protected:
 
 	Assets::PixelEncoding m_terrainTextureFormat;						///< format to use for terrain texture
 	Image *m_terrainImage;												///< terrain image abstraction for drawing
-	TextureClass *m_terrainTexture;								///< terrain background texture
+	W3DTextureHandle *m_terrainTexture;								///< terrain background texture
 
 	Assets::PixelEncoding m_overlayTextureFormat;						///< format to use for overlay texture
 	Image *m_overlayImage;												///< overlay image abstraction for drawing
-	TextureClass *m_overlayTexture;								///< overlay texture
+	W3DTextureHandle *m_overlayTexture;								///< overlay texture
 
 	Assets::PixelEncoding m_shroudTextureFormat;							///< format to use for shroud texture
 	Image *m_shroudImage;													///< shroud image abstraction for drawing
-	TextureClass *m_shroudTexture;								///< shroud texture
+	W3DTextureHandle *m_shroudTexture;								///< shroud texture
 	Graphics::TextureEdit *m_shroudSurface;								///< surface to shroud texture
 
 	Int m_textureWidth;														///< width for all radar textures

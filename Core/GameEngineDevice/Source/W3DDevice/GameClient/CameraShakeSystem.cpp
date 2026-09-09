@@ -37,13 +37,12 @@
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 #include <stdlib.h>
-#include <WW3D2/AssetMgr.h>
-#include <WW3D2/Texture.h>
+#include "W3DDevice/GameClient/W3DAssetCatalog.h"
+#include <W3DDevice/GameClient/W3DTextureHandle.h>
 #include <WWMath/tri.h>
 #include <WWMath/colmath.h>
-#include <WW3D2/ColTest.h>
-#include <WW3D2/RInfo.h>
-#include <WW3D2/Camera.h>
+#include <W3DDevice/GameClient/W3DCastQuery.h>
+#include "W3DDevice/GameClient/W3DCamera.h"
 #include "Common/GlobalData.h"
 #include "Common/PerfTimer.h"
 
@@ -67,13 +66,11 @@
 #include "W3DDevice/GameClient/W3DShadow.h"
 #include "W3DDevice/GameClient/W3DWater.h"
 #include "W3DDevice/GameClient/W3DShroud.h"
-#include "WW3D2/Light.h"
-#include "WW3D2/Scene.h"
 #include "W3DDevice/GameClient/W3DPoly.h"
 #include "W3DDevice/GameClient/W3DCustomScene.h"
 
 #include "W3DDevice/GameClient/CameraShakeSystem.h"
-#include "WW3D2/Camera.h"
+#include "W3DDevice/GameClient/W3DCamera.h"
 
 //#include "W3DDevice/GameClient/camera.h"
 //#include "W3DDevice/GameClient/wwmemlog.h"

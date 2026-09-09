@@ -1,7 +1,7 @@
 import Assets.Math;
 import Graphics.Renderer2D;
 import Graphics.Frame.AttachmentBindings;
-import Graphics.Backends.DX11.FrameRuntime;
+import Graphics.Frame.Runtime;
 /*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -26,7 +26,9 @@ import Graphics.Scene.Views.CameraMatrices;
 import Graphics.Scene.DrawParameters;
 
 #include "DrawObject.h"
-#include "WW3D2/GraphicsGeometry.h"
+#include <span>
+#include "WWMath/matrix4.h"
+import Graphics.Scene.Surfaces.Geometry;
 
 #include <stdlib.h>
 #include <WW3D2/AssetMgr.h>
@@ -42,8 +44,8 @@ import Graphics.Scene.DrawParameters;
 #include "W3DDevice/GameClient/BaseHeightMap.h"
 #include "W3DDevice/GameClient/W3DAssetManager.h"
 #include "W3DDevice/GameClient/W3DWater.h"
-#include "WW3D2/Mesh.h"
-#include "WW3D2/MeshMdl.h"
+#include "W3DDevice/GameClient/W3DMeshRenderObject.h"
+#include "W3DDevice/GameClient/W3DMeshResource.h"
 import Graphics.Materials.State;
 #include "WW3D2/WW3D.h"
 #include "Common/MapObject.h"
@@ -295,14 +297,14 @@ void DrawObject::updateMeshVB()
 	if (m_moldMesh == nullptr) {
  		WW3DAssetManager *pMgr = W3DAssetManager::Get_Instance();
 		pMgr->Set_WW3D_Load_On_Demand(false);	 // We don't want it fishing for these assets in the game assets.
-		m_moldMesh = (MeshClass*)pMgr->Create_Render_Obj(m_curMeshModelName.str());
+		m_moldMesh = (W3DMeshRenderObject*)pMgr->Create_Render_Obj(m_curMeshModelName.str());
 		if (m_moldMesh == nullptr) {
 			// Try loading the mold asset.
 			AsciiString path("data\\editor\\molds\\");
 			path.concat(m_curMeshModelName);
 			path.concat(".w3d");
 			pMgr->Load_3D_Assets(path.str());
-			m_moldMesh = (MeshClass*)pMgr->Create_Render_Obj(m_curMeshModelName.str());
+			m_moldMesh = (W3DMeshRenderObject*)pMgr->Create_Render_Obj(m_curMeshModelName.str());
 		}
 		if (m_moldMesh) {
 			m_moldMeshBounds = m_moldMesh->Get_Bounding_Sphere();

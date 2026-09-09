@@ -15,7 +15,7 @@ export module Graphics.Scene.Particles.Renderer.Tests;
 
 import Graphics.Scene.Particles.Renderer;
 import Graphics.Testing.VisualRegression;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 
 using namespace Graphics;
 
@@ -72,11 +72,11 @@ bool Render_Particle_Scene(Device &, CommandList &commands, RHITextureHandle col
 
 BOOST_AUTO_TEST_CASE(particle_renderer_matches_colocated_golden_images)
 {
-	DX11Device device({true});
+	GraphicsTestDevice device({true});
 	BOOST_REQUIRE(device.Is_Valid());
 
 	ParticleRenderer renderer;
-	BOOST_REQUIRE(renderer.Initialize(device, std::filesystem::path(GRAPHICS_PARTICLE_SHADER_DIRECTORY), 1, 1));
+	BOOST_REQUIRE(renderer.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_PARTICLE_SHADER_DIRECTORY), 1, 1));
 
 	const View view{
 		Matrix4x4::Identity(),
@@ -122,11 +122,11 @@ BOOST_AUTO_TEST_CASE(particle_renderer_matches_colocated_golden_images)
 
 BOOST_AUTO_TEST_CASE(particle_renderer_samples_bindless_material_texture)
 {
-	DX11Device device({true});
+	GraphicsTestDevice device({true});
 	BOOST_REQUIRE(device.Is_Valid());
 
 	ParticleRenderer renderer;
-	BOOST_REQUIRE(renderer.Initialize(device, std::filesystem::path(GRAPHICS_PARTICLE_SHADER_DIRECTORY), 1, 1));
+	BOOST_REQUIRE(renderer.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_PARTICLE_SHADER_DIRECTORY), 1, 1));
 	BOOST_REQUIRE(renderer.Set_View({
 		Matrix4x4::Identity(),
 		Matrix4x4::Identity(),
@@ -197,11 +197,11 @@ BOOST_AUTO_TEST_CASE(particle_renderer_samples_bindless_material_texture)
 
 BOOST_AUTO_TEST_CASE(particle_renderer_keeps_interleaved_texture_indices_in_dx11_range)
 {
-	DX11Device device({true});
+	GraphicsTestDevice device({true});
 	BOOST_REQUIRE(device.Is_Valid());
 
 	ParticleRenderer renderer;
-	BOOST_REQUIRE(renderer.Initialize(device, std::filesystem::path(GRAPHICS_PARTICLE_SHADER_DIRECTORY), 1, 1));
+	BOOST_REQUIRE(renderer.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_PARTICLE_SHADER_DIRECTORY), 1, 1));
 	BOOST_REQUIRE(renderer.Set_View({
 		Matrix4x4::Identity(),
 		Matrix4x4::Identity(),
@@ -271,11 +271,11 @@ BOOST_AUTO_TEST_CASE(particle_renderer_keeps_interleaved_texture_indices_in_dx11
 
 BOOST_AUTO_TEST_CASE(particle_renderer_draws_with_d3d_depth_projection)
 {
-	DX11Device device({true});
+	GraphicsTestDevice device({true});
 	BOOST_REQUIRE(device.Is_Valid());
 
 	ParticleRenderer renderer;
-	BOOST_REQUIRE(renderer.Initialize(device, std::filesystem::path(GRAPHICS_PARTICLE_SHADER_DIRECTORY), 1, 1));
+	BOOST_REQUIRE(renderer.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_PARTICLE_SHADER_DIRECTORY), 1, 1));
 	const View view{
 		Matrix4x4::Identity(),
 		Make_D3D_Projection(1.0f, 100.0f),

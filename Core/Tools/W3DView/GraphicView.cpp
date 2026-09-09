@@ -1,4 +1,4 @@
-import Graphics.Backends.DX11.FrameRuntime;
+import Graphics.Frame.Runtime;
 /*
 **	Command & Conquer Renegade(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -42,10 +42,10 @@ import Graphics.Frame.ToolFrame;
 #include "WW3D2/HLOD.h"
 #include "ViewerScene.h"
 #include "ScreenCursor.h"
-#include "WW3D2/Mesh.h"
+#include "W3DDevice/GameClient/W3DMeshRenderObject.h"
 #include "WW3D2/ColTest.h"
 #include "WWLib/MPU.h"
-#include "WW3D2/Dazzle.h"
+#include "W3DDevice/GameClient/W3DDazzleRenderObject.h"
 #include "WWAudio/SoundScene.h"
 #include "WWAudio/WWAudio.h"
 #include "WW3D2/MetalMap.h"
@@ -206,7 +206,7 @@ CGraphicView::InitializeGraphicView ()
     if (Graphics::Shared_Frame_Device()) {
         bReturn = Graphics::Resize_Frame_Device(cx,cy,false);
     } else {
-        Graphics::DX11DeviceOptions options;
+        Graphics::FrameDeviceOptions options;
         options.window = m_hWnd; options.width = cx; options.height = cy;
         options.backbuffer_format = Graphics::RHITextureFormat::BGRA8_UNorm;
         bReturn = Graphics::Initialize_Frame_Device(options);

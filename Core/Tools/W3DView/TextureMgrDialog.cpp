@@ -38,7 +38,7 @@
 #include "StdAfx.h"
 #include "W3DView.h"
 #include "TextureMgrDialog.h"
-#include "WW3D2/Mesh.h"
+#include "W3DDevice/GameClient/W3DMeshRenderObject.h"
 #include "TextureSettingsDialog.h"
 #include "WW3D2/AssetMgr.h"
 #include "WW3D2/Texture.h"
@@ -290,7 +290,7 @@ TextureMgrDialogClass::Add_Subobjs_To_List (RenderObjClass *prender_obj)
 		m_NodeList.Add (pnode);
 
 		// Add all the mesh's textures to this list
-		Add_Textures_To_Node ((MeshClass *)prender_obj, pnode);
+		Add_Textures_To_Node ((W3DMeshRenderObject *)prender_obj, pnode);
 	}
 }
 
@@ -302,7 +302,7 @@ TextureMgrDialogClass::Add_Subobjs_To_List (RenderObjClass *prender_obj)
 void
 TextureMgrDialogClass::Add_Textures_To_Node
 (
-	MeshClass *pmesh,
+	W3DMeshRenderObject *pmesh,
 	TextureListNodeClass *pmesh_node
 )
 {

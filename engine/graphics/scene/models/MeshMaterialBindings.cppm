@@ -5,6 +5,7 @@ module;
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <utility>
 #include <vector>
@@ -14,6 +15,7 @@ export module Graphics.Scene.Models.MeshMaterialBindings;
 import Graphics.Materials.MeshMaterial;
 import Graphics.Materials.State;
 import Graphics.Scene.Models.MaterialSlots;
+import Graphics.Scene.Models.SourceRevision;
 import Graphics.Scene.Models.Materials;
 import Graphics.Scene.Models.VertexChannels;
 import Graphics.Scene.Props.Material;
@@ -31,7 +33,10 @@ class MeshMaterialBindings final
 
     struct ShaderStorage final
     {
+        ShaderStorage() = default;
+        ShaderStorage(const ShaderStorage& source) : values(source.values) {}
         std::vector<MaterialState> values;
+        SourceRevision revision;
     };
 
 public:
@@ -211,6 +216,38 @@ public:
     unsigned* Get_DIG_Array(int pass)
     {
         return Get_Color_Array_For_Source(m_dig_sources[pass]);
+    }
+
+    const unsigned* Peek_DCG_Array(int pass) const noexcept
+    {
+        return Peek_Color_Array(Color_Index(m_dcg_sources[pass]));
+    }
+
+    const unsigned* Peek_DIG_Array(int pass) const noexcept
+    {
+        return Peek_Color_Array(Color_Index(m_dig_sources[pass]));
+    }
+
+    std::uint64_t DCG_Revision(int pass) const noexcept
+    {
+        return Color_Revision(m_dcg_sources[pass]);
+    }
+
+    std::uint64_t DIG_Revision(int pass) const noexcept
+    {
+        return Color_Revision(m_dig_sources[pass]);
+    }
+
+    void Allocate_Color_Array(int index)
+    {
+        assert(index >= 0 && index < MAX_COLOR_ARRAYS);
+        m_colors.Allocate(static_cast<std::size_t>(index), m_vertex_count);
+    }
+
+    void Set_Color(int index, std::size_t vertex, unsigned value)
+    {
+        assert(index >= 0 && index < MAX_COLOR_ARRAYS);
+        m_colors.Set(static_cast<std::size_t>(index), vertex, value);
     }
 
     void Set_DCG_Source(int pass, PropColorSource source) noexcept
@@ -404,6 +441,19 @@ public:
         }
     }
 
+    std::optional<std::array<std::uint64_t, 4>> Grouping_Revisions(int pass) const noexcept
+    {
+        const std::array versions{
+            m_shader_arrays[pass] ? m_shader_arrays[pass]->revision.Token() : 0,
+            m_material_arrays[pass].Revision(), m_texture_arrays[pass][0].Revision(),
+            m_texture_arrays[pass][1].Revision()};
+        if ((Has_Shader_Array(pass) && versions[0] == 0)
+            || (Has_Material_Array(pass) && versions[1] == 0)
+            || (Has_Texture_Array(pass, 0) && versions[2] == 0)
+            || (Has_Texture_Array(pass, 1) && versions[3] == 0)) return std::nullopt;
+        return versions;
+    }
+
     void Set_Single_Shader(MaterialState shader, int pass = 0) noexcept
     {
         m_shaders[pass] = shader;
@@ -434,23 +484,20 @@ public:
 
     void Set_Shader(std::size_t polygon, MaterialState shader, int pass = 0)
     {
-        auto* shaders = Get_Shader_Array(pass, true);
+        Allocate_Shader_Array(pass);
         if (polygon < m_shader_arrays[pass]->values.size()) {
-            shaders[polygon] = shader;
+            m_shader_arrays[pass]->revision.Invalidate();
+            m_shader_arrays[pass]->values[polygon] = shader;
         }
     }
 
     MaterialState* Get_Shader_Array(int pass, bool create = true)
     {
-        if (create && !m_shader_arrays[pass]) {
-            m_shader_arrays[pass] = std::make_shared<ShaderStorage>();
-            // ShareBufferClass::Clear made newly created entries all bits zero;
-            // MaterialState's value default is a different authored preset.
-            m_shader_arrays[pass]->values.assign(m_polygon_count, MaterialState{0});
-        }
+        if (create) Allocate_Shader_Array(pass);
         if (!m_shader_arrays[pass] || m_shader_arrays[pass]->values.empty()) {
             return nullptr;
         }
+        m_shader_arrays[pass]->revision.Expose_Writable();
         return m_shader_arrays[pass]->values.data();
     }
 
@@ -471,6 +518,7 @@ public:
     void For_Each_Shader(int pass, Function&& function)
     {
         if (m_shader_arrays[pass]) {
+            m_shader_arrays[pass]->revision.Expose_Writable();
             for (auto& shader : m_shader_arrays[pass]->values) {
                 function(shader);
             }
@@ -612,6 +660,7 @@ public:
         for (int pass = 0; pass < m_pass_count; ++pass) {
             m_shaders[pass].Set_Cull_Mode(MaterialState::CULL_MODE_DISABLE);
             if (m_shader_arrays[pass]) {
+                m_shader_arrays[pass]->revision.Invalidate();
                 for (auto& shader : m_shader_arrays[pass]->values) {
                     shader.Set_Cull_Mode(MaterialState::CULL_MODE_DISABLE);
                 }
@@ -666,6 +715,28 @@ private:
                 m_textures[index][stage] = TextureOwner{};
             }
         }
+    }
+
+    void Allocate_Shader_Array(int pass)
+    {
+        if (!m_shader_arrays[pass]) {
+            m_shader_arrays[pass] = std::make_shared<ShaderStorage>();
+            // Newly allocated entries retain the authored all-zero default.
+            m_shader_arrays[pass]->values.assign(m_polygon_count, MaterialState{0});
+        }
+    }
+
+    static int Color_Index(PropColorSource source) noexcept
+    {
+        if (source == PropColorSource::PrimaryColor) return 0;
+        if (source == PropColorSource::SecondaryColor) return 1;
+        return -1;
+    }
+
+    std::uint64_t Color_Revision(PropColorSource source) const noexcept
+    {
+        const int index = Color_Index(source);
+        return index < 0 ? 0 : m_colors.Revision(static_cast<std::size_t>(index));
     }
 
     unsigned* Get_Color_Array_For_Source(PropColorSource source)

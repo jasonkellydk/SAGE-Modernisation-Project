@@ -57,7 +57,7 @@ class HLodClass;
 class ViewerSceneClass;
 class EmitterInstanceListClass;
 class ScreenCursorClass;
-class DazzleLayerClass;
+class W3DDazzleLayer;
 
 
 /////////////////////////////////////////////////////////////////////
@@ -293,7 +293,7 @@ private:
 	RefCountPtr<SceneClass>			m_pC2DScene;
 	RefCountPtr<SceneClass>			m_pCursorScene;
 	RefCountPtr<SceneClass>			m_pCBackObjectScene;
-	DazzleLayerClass *	m_pDazzleLayer;
+	W3DDazzleLayer *	m_pDazzleLayer;
 	RefCountPtr<RenderObjClass>		m_pCRenderObj;
 	RefCountPtr<RenderObjClass>		m_pCBackgroundObject;
 	RefCountPtr<HAnimClass>			m_pCAnimation;

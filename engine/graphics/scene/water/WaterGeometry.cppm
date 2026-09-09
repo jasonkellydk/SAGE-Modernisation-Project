@@ -1,5 +1,6 @@
 module;
 #include <array>
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -39,6 +40,49 @@ export std::vector<std::uint32_t> Expand_Water_Strip(std::span<const std::uint32
 export class WaterGeometry final
 {
 public:
+    bool Assign_Surface_Patch(std::span<const std::array<float,3>,4> corners, float spacing)
+    {
+        if (!std::isfinite(spacing) || spacing <= 0) return false;
+        for (const auto& corner : corners)
+            for (const float value : corner) if (!std::isfinite(value)) return false;
+        const auto edge_length = [&](unsigned first, unsigned second) {
+            const auto& a = corners[first];
+            const auto& b = corners[second];
+            return std::hypot(a[0]-b[0],a[1]-b[1],a[2]-b[2]);
+        };
+        const auto subdivisions = [&](float length) {
+            return static_cast<unsigned>(std::clamp(std::ceil(length/spacing),1.0f,250.0f));
+        };
+        const unsigned columns = subdivisions((std::max)(edge_length(0,1),edge_length(3,2)));
+        const unsigned rows = subdivisions((std::max)(edge_length(0,3),edge_length(1,2)));
+        m_vertices.resize((columns+1)*(rows+1));
+        m_indices.resize(columns*rows*6);
+        for (unsigned y = 0; y <= rows; ++y) {
+            const float v = static_cast<float>(y)/rows;
+            for (unsigned x = 0; x <= columns; ++x) {
+                const float u = static_cast<float>(x)/columns;
+                auto& vertex = m_vertices[y*(columns+1)+x];
+                vertex = {};
+                for (unsigned axis = 0; axis < 3; ++axis) {
+                    const float first = std::lerp(corners[0][axis],corners[1][axis],u);
+                    const float second = std::lerp(corners[3][axis],corners[2][axis],u);
+                    vertex.position[axis] = std::lerp(first,second,v);
+                }
+                vertex.uv = {vertex.position[0]/150,vertex.position[1]/150};
+                vertex.secondary_uv = {vertex.position[0]/50,(vertex.position[1]+0.3f*vertex.position[0])/50};
+            }
+        }
+        std::size_t index = 0;
+        for (unsigned y = 0; y < rows; ++y) {
+            for (unsigned x = 0; x < columns; ++x) {
+                const unsigned first = y*(columns+1)+x;
+                for (const unsigned vertex : {first,first+columns+2,first+columns+1,
+                    first,first+1,first+columns+2}) m_indices[index++] = vertex;
+            }
+        }
+        return true;
+    }
+
     bool Assign(std::span<const WaterVertex> vertices, std::span<const std::uint32_t> indices)
     {
         constexpr auto maximum_bytes = std::numeric_limits<std::uint32_t>::max();

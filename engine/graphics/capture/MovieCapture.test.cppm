@@ -10,12 +10,12 @@ module;
 #include <vector>
 export module Graphics.Capture.MovieCapture.Tests;
 import Graphics.Capture.MovieCapture;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 using namespace Graphics;
 
 BOOST_AUTO_TEST_CASE(recorded_gpu_colors_pause_single_frame_and_resize_segments)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     BOOST_REQUIRE(device.Is_Valid());
     const auto directory = std::filesystem::temp_directory_path() / "generals_graphics_capture_test";
     std::filesystem::create_directories(directory);

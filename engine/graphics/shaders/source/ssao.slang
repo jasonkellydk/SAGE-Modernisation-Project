@@ -1,3 +1,4 @@
+#include "resource_access.slangh"
 // Right-handed view space, -Z forward, [0,1] hardware depth.
 cbuffer Parameters : register(b0)
 {
@@ -8,9 +9,9 @@ cbuffer Parameters : register(b0)
     float Strength;
     uint Operation;
 };
-Texture2D<float4> Scene : register(t0);
-Texture2D<float> Depth : register(t1);
-Texture2D<float4> Occlusion : register(t2);
+GRAPHICS_TEXTURE_2D(Scene, float4, 0)
+GRAPHICS_TEXTURE_2D(Depth, float, 1)
+GRAPHICS_TEXTURE_2D(Occlusion, float4, 2)
 struct Input { float3 position : POSITION; float4 color : COLOR0; float2 uv : TEXCOORD0; };
 struct Output { float4 position : SV_POSITION; float2 uv : TEXCOORD0; };
 [shader("vertex")] Output ssao_vertex(Input input)
@@ -23,7 +24,7 @@ struct Output { float4 position : SV_POSITION; float2 uv : TEXCOORD0; };
 float3 ViewPosition(int2 pixel, int2 size)
 {
     float2 uv = (float2(pixel)+0.5)/float2(size);
-    float4 position = mul(InverseProjection,float4(uv.x*2-1,1-uv.y*2,Depth.Load(int3(pixel,0)),1));
+    float4 position = mul(InverseProjection,float4(uv.x*2-1,1-uv.y*2,Depth().Load(int3(pixel,0)),1));
     return position.xyz/position.w;
 }
 float3 SurfaceNormal(int2 pixel, int2 size, float3 position)
@@ -62,12 +63,12 @@ static const float3 Samples[16] = {
 [shader("pixel")] float4 ssao_pixel(Output input) : SV_TARGET
 {
     uint width,height;
-    Depth.GetDimensions(width,height);
+    Depth().GetDimensions(width,height);
     int2 size = int2(width,height);
     int2 pixel = clamp(int2(input.uv*float2(size)),0,size-1);
-    float depth = Depth.Load(int3(pixel,0));
+    float depth = Depth().Load(int3(pixel,0));
     if (depth>=1.0)
-        return Operation==0 ? float4(1,0,0,0) : Scene.Load(int3(pixel,0));
+        return Operation==0 ? float4(1,0,0,0) : Scene().Load(int3(pixel,0));
     float3 position = ViewPosition(pixel,size);
     if (Operation==0)
     {
@@ -90,7 +91,7 @@ static const float3 Samples[16] = {
             // Offscreen samples and cleared depth cannot occlude a surface.
             if (any(uv<0) || any(uv>=1) || ndc.z<0 || ndc.z>1) continue;
             int2 neighbor = int2(uv*float2(size));
-            if (Depth.Load(int3(neighbor,0))>=1.0) continue;
+            if (Depth().Load(int3(neighbor,0))>=1.0) continue;
             float3 surface = ViewPosition(neighbor,size);
             float3 delta = surface-position;
             if (surface.z>probe.z+Bias && dot(normal,delta)>Bias)
@@ -99,7 +100,7 @@ static const float3 Samples[16] = {
         return float4(saturate(1.0-occlusion/8.0),position.z,0,1);
     }
     uint aoWidth,aoHeight;
-    Occlusion.GetDimensions(aoWidth,aoHeight);
+    Occlusion().GetDimensions(aoWidth,aoHeight);
     float2 aoPixel = input.uv*float2(aoWidth,aoHeight)-0.5;
     int2 center = int2(floor(aoPixel+0.5));
     float total = 0, weighted = 0;
@@ -107,7 +108,7 @@ static const float3 Samples[16] = {
     {
         int2 samplePixel = center+int2(x,y);
         if (any(samplePixel<0) || any(samplePixel>=int2(aoWidth,aoHeight))) continue;
-        float4 aoSample = Occlusion.Load(int3(samplePixel,0));
+        float4 aoSample = Occlusion().Load(int3(samplePixel,0));
         float distanceZ = abs(aoSample.y-position.z);
         // Bilateral blur/upsampling must reject other surfaces and sky.
         if (aoSample.a==0 || distanceZ>max(Radius*0.1,Bias*2)) continue;
@@ -117,6 +118,6 @@ static const float3 Samples[16] = {
         total += weight;
     }
     float visibility = total>0 ? weighted/total : 1.0;
-    float4 scene = Scene.Load(int3(pixel,0));
+    float4 scene = Scene().Load(int3(pixel,0));
     return float4(scene.rgb*lerp(1.0,visibility,Strength),scene.a);
 }

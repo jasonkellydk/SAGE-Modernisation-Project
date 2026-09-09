@@ -39,7 +39,7 @@ NullRenderObject::NullRenderObject(
 
 NullRenderObject::NullRenderObject(const NullRenderObject &source)
 	// The historical NULL copy constructor intentionally default-constructed
-	// RenderObjClass. Keep that clone contract: identity is copied while base
+	// W3DRenderObject. Keep that clone contract: identity is copied while base
 	// scene, visibility, collision, and transform state starts fresh.
 	: m_name(source.m_name)
 {
@@ -50,16 +50,16 @@ NullRenderObject &NullRenderObject::operator=(const NullRenderObject &source)
 	if (this == &source)
 		return *this;
 	m_name = source.m_name;
-	RenderObjClass::operator=(source);
+	W3DRenderObject::operator=(source);
 	return *this;
 }
 
-RenderObjClass *NullRenderObject::Clone() const
+W3DRenderObject *NullRenderObject::Clone() const
 {
 	return NEW_REF(NullRenderObject, (*this));
 }
 
-void NullRenderObject::Render(RenderInfoClass &rinfo)
+void NullRenderObject::Render(W3DRenderContext &rinfo)
 {
 	(void)rinfo;
 }
@@ -76,7 +76,7 @@ void NullRenderObject::Get_Obj_Space_Bounding_Box(AABoxClass &box) const
 	box.Extent.Set(0.1f, 0.1f, 0.1f);
 }
 
-Graphics::ModelFactory<RenderObjClass> *Load_Null_Factory(ChunkLoadClass &cload)
+Graphics::ModelFactory<W3DRenderObject> *Load_Null_Factory(ChunkLoadClass &cload)
 {
 	std::array<std::byte, Assets::W3D::W3DNullPayloadSize> bytes{};
 	if (cload.Cur_Chunk_Length() < bytes.size()
@@ -88,16 +88,16 @@ Graphics::ModelFactory<RenderObjClass> *Load_Null_Factory(ChunkLoadClass &cload)
 	if (!Assets::W3D::W3DRead_Null(bytes, description, error))
 		return nullptr;
 	const std::string name = std::move(description.name);
-	return new Graphics::ModelFactory<RenderObjClass>(name,
-		RenderObjClass::CLASSID_NULL, [name] {
+	return new Graphics::ModelFactory<W3DRenderObject>(name,
+		W3DRenderObject::CLASSID_NULL, [name] {
 			return NEW_REF(NullRenderObject, (name.c_str()));
 		});
 }
 
-Graphics::ModelFactory<RenderObjClass> *Create_Null_Render_Object_Factory()
+Graphics::ModelFactory<W3DRenderObject> *Create_Null_Render_Object_Factory()
 {
-	return new Graphics::ModelFactory<RenderObjClass>("NULL",
-		RenderObjClass::CLASSID_NULL, [] {
+	return new Graphics::ModelFactory<W3DRenderObject>("NULL",
+		W3DRenderObject::CLASSID_NULL, [] {
 			return NEW_REF(NullRenderObject, ("NULL"));
 		});
 }

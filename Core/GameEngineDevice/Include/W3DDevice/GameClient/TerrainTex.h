@@ -30,7 +30,7 @@
 
 //#define DO_8STAGE_TERRAIN_PASS		//optimized terrain rendering for Nvidia based cards
 
-#include "WW3D2/Texture.h"
+#include "W3DDevice/GameClient/W3DTextureHandle.h"
 #include "WWMath/matrix3d.h"
 #include "Common/AsciiString.h"
 #include "W3DDevice/GameClient/TileData.h"
@@ -43,7 +43,7 @@ class WorldHeightMap;
 /** ***********************************************************************
 **                             TerrainTextureClass
 ***************************************************************************/
-class TerrainTextureClass : public TextureClass
+class TerrainTextureClass : public W3DTextureHandle
 {
 	W3DMPO_CODE(TerrainTextureClass)
 protected:
@@ -71,17 +71,17 @@ public:
 };
 
 
-class AlphaTerrainTextureClass : public TextureClass
+class AlphaTerrainTextureClass : public W3DTextureHandle
 {
 	W3DMPO_CODE(AlphaTerrainTextureClass)
 protected:
 		virtual bool Recreate_Procedural_Texture() override;
 
-	TextureClass *m_baseTexture;
+	W3DTextureHandle *m_baseTexture;
 
 public:
 		// Create texture for a height map.
-		AlphaTerrainTextureClass(TextureClass *pBaseTex );
+		AlphaTerrainTextureClass(W3DTextureHandle *pBaseTex );
 		virtual ~AlphaTerrainTextureClass() override;
 
 		// just use default destructor. ~TerrainTextureClass();
@@ -91,7 +91,7 @@ public:
 /** ***********************************************************************
 **                             AlphaEdgeTextureClass
 ***************************************************************************/
-class AlphaEdgeTextureClass : public TextureClass
+class AlphaEdgeTextureClass : public W3DTextureHandle
 {
 	W3DMPO_CODE(AlphaEdgeTextureClass)
 protected:
@@ -111,7 +111,7 @@ public:
 
 };
 
-class LightMapTerrainTextureClass : public TextureClass
+class LightMapTerrainTextureClass : public W3DTextureHandle
 {
 	W3DMPO_CODE(LightMapTerrainTextureClass)
 protected:
@@ -123,7 +123,7 @@ public:
 		// just use default destructor.
 };
 
-class ScorchTextureClass : public TextureClass
+class ScorchTextureClass : public W3DTextureHandle
 {
 	W3DMPO_CODE(ScorchTextureClass)
 protected:
@@ -135,7 +135,7 @@ public:
 		// just use default destructor. ~ScorchTextureClass();
 };
 
-class CloudMapTerrainTextureClass : public TextureClass
+class CloudMapTerrainTextureClass : public W3DTextureHandle
 {
 	W3DMPO_CODE(CloudMapTerrainTextureClass)
 protected:

@@ -15,7 +15,7 @@ export module Graphics.Scene.Attachments.Tests;
 import Graphics.Scene.Attachments;
 
 #if defined(_WIN32)
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 import Graphics.Scene.StaticMeshes;
 import Graphics.Testing.VisualRegression;
 #endif
@@ -284,10 +284,10 @@ RenderTransform Make_Visual_Transform(float x) noexcept
 
 BOOST_AUTO_TEST_CASE(attached_models_match_colocated_snapshot)
 {
-	DX11Device device({true});
+	GraphicsTestDevice device({true});
 	BOOST_REQUIRE(device.Is_Valid());
 	AttachmentVisualScene scene;
-	BOOST_REQUIRE(scene.renderer.Initialize(device, std::filesystem::path(GRAPHICS_ATTACHMENT_SHADER_DIRECTORY), 2, 2));
+	BOOST_REQUIRE(scene.renderer.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_ATTACHMENT_SHADER_DIRECTORY), 2, 2));
 
 	const std::array<StaticMeshVertex, 3> parent_vertices = {{
 		{{-0.35f, -0.35f, 0.35f}, {0.95f, 0.15f, 0.08f, 1.0f}, {0.0f, 1.0f}},

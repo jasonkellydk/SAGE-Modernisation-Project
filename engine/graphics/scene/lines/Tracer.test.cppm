@@ -14,7 +14,7 @@ module;
 
 export module Graphics.Scene.Lines.Tracer.Tests;
 
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 import Graphics.RHI;
 import Graphics.Scene.OrderedDraws;
 import Graphics.Scene.Lines.Tracer;
@@ -52,7 +52,7 @@ TracerDrawData Make_Test_Draw_Data(float opacity)
 	return data;
 }
 
-bool Read_Pixel(DX11Device &device, RHITextureHandle target, unsigned x, unsigned y,
+bool Read_Pixel(GraphicsTestDevice &device, RHITextureHandle target, unsigned x, unsigned y,
 	std::array<int, 4> &result)
 {
 	std::array<std::byte, 8 * 8 * 4> pixels{};
@@ -229,9 +229,9 @@ BOOST_AUTO_TEST_CASE(invalid_geometry_is_rejected_without_partial_output)
 
 BOOST_AUTO_TEST_CASE(replacing_a_mesh_releases_unretained_source)
 {
-	DX11Device device({true});
+	GraphicsTestDevice device({true});
 	PropRenderer renderer;
-	BOOST_REQUIRE(renderer.Initialize(device, std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+	BOOST_REQUIRE(renderer.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
 	TracerRenderer tracer;
 	BOOST_REQUIRE(tracer.Set_Description(renderer, {2.0f, .25f, {1, 0, 0, 1}}));
 	const PropMeshHandle previous_mesh = tracer.Mesh();
@@ -246,11 +246,11 @@ BOOST_AUTO_TEST_CASE(replacing_a_mesh_releases_unretained_source)
 
 BOOST_AUTO_TEST_CASE(authored_tracer_layers_preserve_priority_fifo_and_source_lifetime)
 {
-	DX11Device device({true});
+	GraphicsTestDevice device({true});
 	PropRenderer renderer;
 	DirectionalShadowRenderer shadows;
 	PropSubmission submission;
-	const auto shader_directory = std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
+	const auto shader_directory = Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
 	BOOST_REQUIRE(renderer.Initialize(device, shader_directory));
 	BOOST_REQUIRE(shadows.Initialize(device, shader_directory));
 	submission.Initialize(device, renderer, shadows);
@@ -336,9 +336,9 @@ BOOST_AUTO_TEST_CASE(authored_tracer_layers_preserve_priority_fifo_and_source_li
 
 BOOST_AUTO_TEST_CASE(gpu_drawing_preserves_opaque_alpha_and_resource_recreation)
 {
-	DX11Device device({true});
+	GraphicsTestDevice device({true});
 	PropRenderer renderer;
-	const auto shader_directory = std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
+	const auto shader_directory = Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
 	BOOST_REQUIRE(renderer.Initialize(device, shader_directory));
 	const auto target = device.Create_Texture({8, 8, 1, RHITextureFormat::RGBA8_UNorm,
 		static_cast<unsigned>(RHITextureUsage::RenderTarget)});

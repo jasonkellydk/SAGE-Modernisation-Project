@@ -12,7 +12,7 @@ module;
 export module Graphics.Scene.Debug.CollisionBox.Tests;
 
 import Graphics.RHI;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 import Graphics.Scene.Debug.CollisionBox;
 import Graphics.Scene.Props.Renderer;
 import Graphics.Scene.Props.Submission;
@@ -23,7 +23,7 @@ namespace
 
 using namespace Graphics;
 
-void Prepare_Target(DX11Device &device, RHITextureHandle target, RHITextureHandle depth)
+void Prepare_Target(GraphicsTestDevice &device, RHITextureHandle target, RHITextureHandle depth)
 {
 	auto &commands = device.Immediate_Command_List();
 	BOOST_REQUIRE(commands.Set_Render_Targets(target, depth));
@@ -31,7 +31,7 @@ void Prepare_Target(DX11Device &device, RHITextureHandle target, RHITextureHandl
 	BOOST_REQUIRE(commands.Clear({0, 0, 0, 0}, 1));
 }
 
-std::array<std::byte, 16 * 16 * 4> Read_Target(DX11Device &device, RHITextureHandle target)
+std::array<std::byte, 16 * 16 * 4> Read_Target(GraphicsTestDevice &device, RHITextureHandle target)
 {
 	std::array<std::byte, 16 * 16 * 4> pixels{};
 	BOOST_REQUIRE(device.Readback_Texture(target, pixels, 16 * 4));
@@ -95,11 +95,11 @@ BOOST_AUTO_TEST_CASE(box_geometry_rejects_non_finite_input_without_clobbering_pr
 
 BOOST_AUTO_TEST_CASE(box_submission_respects_display_mask_alpha_and_device_resource_recreation)
 {
-	DX11Device device({true});
+	GraphicsTestDevice device({true});
 	PropRenderer renderer;
 	DirectionalShadowRenderer shadows;
 	PropSubmission submission;
-	const auto shader_directory = std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
+	const auto shader_directory = Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
 	BOOST_REQUIRE(renderer.Initialize(device, shader_directory));
 	BOOST_REQUIRE(shadows.Initialize(device, shader_directory));
 	submission.Initialize(device, renderer, shadows);

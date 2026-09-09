@@ -9,14 +9,14 @@ module;
 #include <span>
 export module Graphics.Resources.Textures.Edit.Tests;
 import Graphics.Resources.Textures.Edit;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 import Graphics.Scene.Props.Renderer;
 import Assets.Images.Color;
 using namespace Graphics;
 
 BOOST_AUTO_TEST_CASE(readback_edits_retain_replaced_generation_and_commit_only_writable_maps)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     auto* texture=TextureResource::Create(&device,{4,4,2},Assets::PixelEncoding::BGRA8);
     BOOST_REQUIRE(texture);
     const auto handle=texture->Handle();
@@ -51,7 +51,7 @@ BOOST_AUTO_TEST_CASE(readback_edits_retain_replaced_generation_and_commit_only_w
 
 BOOST_AUTO_TEST_CASE(final_release_commits_pending_edit_and_compressed_tail_roundtrips)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     std::unique_ptr<TextureEdit> image(TextureEdit::Create(4,4,Assets::PixelEncoding::BC1));
     BOOST_REQUIRE(image);
     image->Image().Bytes()[0]=std::byte{0}; image->Image().Bytes()[1]=std::byte{0xf8};
@@ -82,10 +82,10 @@ BOOST_AUTO_TEST_CASE(final_release_commits_pending_edit_and_compressed_tail_roun
 BOOST_AUTO_TEST_CASE(packed_image_conversion_and_gpu_edit_preserve_sampled_rgb_and_alpha)
 {
     for (bool warp : {true,false}) {
-        DX11Device device({warp});
+        GraphicsTestDevice device({warp});
         if (!warp && !device.Is_Valid()) continue;
         PropRenderer renderer;
-        BOOST_REQUIRE(renderer.Initialize(device,GRAPHICS_TERRAIN_SHADER_DIRECTORY));
+        BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
         const auto target=device.Create_Texture({2,2,1,RHITextureFormat::RGBA8_UNorm,
             static_cast<unsigned>(RHITextureUsage::RenderTarget)});
         const auto depth=device.Create_Texture({2,2,1,RHITextureFormat::D32_Float,

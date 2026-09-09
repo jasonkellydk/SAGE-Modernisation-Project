@@ -8,7 +8,7 @@ module;
 #include <span>
 
 export module Graphics.Scene.MuzzleFlash.Tests;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 import Graphics.RHI;
 import Graphics.Scene.MuzzleFlash;
 import Graphics.Scene.Props.Renderer;
@@ -50,10 +50,10 @@ BOOST_AUTO_TEST_CASE(muzzle_flash_policy_is_time_driven_and_keeps_the_draw_contr
 
 BOOST_AUTO_TEST_CASE(muzzle_flash_draw_is_additive_depth_tested_and_unlit)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     PropRenderer renderer;
     BOOST_REQUIRE(renderer.Initialize(device,
-        std::filesystem::path(GRAPHICS_MUZZLE_FLASH_SHADER_DIRECTORY)));
+        Graphics::Test_Shader_Directory(GRAPHICS_MUZZLE_FLASH_SHADER_DIRECTORY)));
 
     const auto target=device.Create_Texture({32,32,1,RHITextureFormat::RGBA8_UNorm,
         static_cast<unsigned>(RHITextureUsage::RenderTarget)});

@@ -8,15 +8,15 @@ module;
 export module Graphics.Resources.Textures.References.Tests;
 import Graphics.Resources.Textures.References;
 import Graphics.Renderer2D;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 using namespace Graphics;
 
 BOOST_AUTO_TEST_CASE(shared_texture_versions_keep_their_pixels_until_the_resource_scope_ends)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     Renderer2D renderer;
     TextureReferences references;
-    BOOST_REQUIRE(renderer.Initialize(device, std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    BOOST_REQUIRE(renderer.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     const auto target = device.Create_Texture({8, 4, 1, RHITextureFormat::RGBA8_UNorm,
         static_cast<unsigned>(RHITextureUsage::RenderTarget)});
     const auto depth = device.Create_Texture({8, 4, 1, RHITextureFormat::D32_Float,
@@ -64,7 +64,7 @@ BOOST_AUTO_TEST_CASE(shared_texture_versions_keep_their_pixels_until_the_resourc
 
 BOOST_AUTO_TEST_CASE(texture_reference_scopes_reject_cross_device_handles_and_allow_rebinding_after_clear)
 {
-    DX11Device first({true}), second({true});
+    GraphicsTestDevice first({true}), second({true});
     const auto a = first.Create_Texture({1, 1});
     const auto b = second.Create_Texture({1, 1});
     BOOST_REQUIRE(a.Is_Valid()); BOOST_REQUIRE(b.Is_Valid());

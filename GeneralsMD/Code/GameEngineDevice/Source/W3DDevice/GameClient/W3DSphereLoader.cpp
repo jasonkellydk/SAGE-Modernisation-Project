@@ -1,3 +1,7 @@
+#include <functional>
+import Graphics.Frame.RenderClock;
+import Graphics.Frame.RenderSettings;
+#include "W3DDevice/GameClient/W3DRenderServices.h"
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -8,7 +12,7 @@
 #include <vector>
 
 import Assets.Adapters.W3D.Sphere;
-import Graphics.Backends.DX11.FrameRuntime;
+import Graphics.Frame.Runtime;
 import Graphics.Scene.DrawParameters;
 import Graphics.Scene.OrderedDraws;
 import Graphics.Scene.Props.Renderer;
@@ -17,10 +21,10 @@ import Graphics.Scene.Views.CameraMatrices;
 import Graphics.Scene.Views.View;
 
 #include "W3DDevice/GameClient/W3DSphereLoader.h"
-#include "WW3D2/Camera.h"
-#include "WW3D2/AssetMgr.h"
-#include "WW3D2/RInfo.h"
-#include "WW3D2/WW3D.h"
+#include "W3DDevice/GameClient/W3DCamera.h"
+#include "W3DDevice/GameClient/W3DAssetCatalog.h"
+#include "W3DDevice/GameClient/W3DRenderContext.h"
+
 #include "WWLib/chunkio.h"
 
 namespace
@@ -50,8 +54,8 @@ Assets::SphereAssetDesc W3DSphereRenderObject::With_Load_Fog(
 	const Assets::SphereAssetDesc &description)
 {
 	Assets::SphereAssetDesc result = description;
-	WW3DAssetManager *manager = WW3DAssetManager::Get_Instance();
-	if (manager != nullptr && manager->Get_Activate_Fog_On_Load()) {
+	W3DAssetCatalog *catalog = W3DAssetCatalog::Get_Instance();
+	if (catalog != nullptr && catalog->Get_Fog_On_Load()) {
 		switch (result.material.source_blend) {
 		case Assets::SphereBlendFactor::Zero:
 			if (result.material.destination_blend == Assets::SphereBlendFactor::SourceColor)
@@ -98,14 +102,14 @@ W3DSphereRenderObject::W3DSphereRenderObject(
 	: m_name(description.name),
 	  m_sphere(With_Load_Fog(description))
 {
-	if (WW3DAssetManager *manager = WW3DAssetManager::Get_Instance();
-		manager != nullptr && !description.texture_name.empty())
-		m_texture.Assign_No_Add_Ref(manager->Get_Texture(description.texture_name.c_str()));
+	if (W3DAssetCatalog *catalog = W3DAssetCatalog::Get_Instance();
+		catalog != nullptr && !description.texture_name.empty())
+		m_texture.Assign_No_Add_Ref(catalog->Get_Texture(description.texture_name.c_str()));
 }
 
 W3DSphereRenderObject::W3DSphereRenderObject(
 	const W3DSphereRenderObject &source)
-	: RenderObjClass(source),
+	: W3DRenderObject(source),
 	  m_name(source.m_name),
 	  m_sphere(source.m_sphere),
 	  m_texture(source.m_texture)
@@ -118,24 +122,24 @@ W3DSphereRenderObject &W3DSphereRenderObject::operator=(
 	if (this == &source)
 		return *this;
 	m_graphics.Release(Graphics::Get_Prop_Renderer());
-	RenderObjClass::operator=(source);
+	W3DRenderObject::operator=(source);
 	m_name = source.m_name;
 	m_sphere = source.m_sphere;
 	m_texture = source.m_texture;
 	return *this;
 }
 
-RenderObjClass *W3DSphereRenderObject::Clone() const
+W3DRenderObject *W3DSphereRenderObject::Clone() const
 {
 	return W3DNEW W3DSphereRenderObject(*this);
 }
 
-void W3DSphereRenderObject::Render(RenderInfoClass &rinfo)
+void W3DSphereRenderObject::Render(W3DRenderContext &rinfo)
 {
-	if (m_sphere.LOD_Level() == 0 || !RenderObjClass::Is_Not_Hidden_At_All())
+	if (m_sphere.LOD_Level() == 0 || !W3DRenderObject::Is_Not_Hidden_At_All())
 		return;
 
-	if (!WW3D::Is_Sorting_Enabled()) {
+	if (!Graphics::Get_Render_Settings().Is_Sorting_Enabled()) {
 		const std::uint32_t sort_level =
 			Graphics::Sphere_Ordered_Layer(m_sphere.Asset().material);
 		if (sort_level != 0 && Graphics::Get_Scene_Draw_Queue().Is_Enabled()
@@ -143,7 +147,7 @@ void W3DSphereRenderObject::Render(RenderInfoClass &rinfo)
 			return;
 	}
 
-	(void)m_sphere.Update(WW3D::Get_Logic_Frame_Time_Seconds());
+	(void)m_sphere.Update(Graphics::Get_Render_Clock().Logic_Frame_Time_Seconds());
 	const auto &camera = Graphics::Get_Camera_Matrices();
 	Graphics::SphereDrawInput input;
 	input.view_projection = Graphics::Compose_Matrices(camera.projection, camera.view).values;
@@ -153,13 +157,13 @@ void W3DSphereRenderObject::Render(RenderInfoClass &rinfo)
 	const Vector3 camera_position = rinfo.Camera.Get_Transform().Get_Translation();
 	input.camera_position = {camera_position.X, camera_position.Y, camera_position.Z, 1.0f};
 	input.scene = Graphics::Get_Scene_Draw_Parameters();
-	input.sorting_enabled = WW3D::Is_Sorting_Enabled();
-	input.front_counter_clockwise = !WW3D::Is_Reflection_Render_Pass();
+	input.sorting_enabled = Graphics::Get_Render_Settings().Is_Sorting_Enabled();
+	input.front_counter_clockwise = !Get_W3D_Render_Services().Is_Reflection_Render_Pass();
 	if (m_texture.Peek() != nullptr)
 		input.texture_sampling = m_texture->Get_Sampling();
 
 	auto *device = Graphics::Shared_Frame_Device();
-	TextureClass *texture_object = m_texture.Peek();
+	W3DTextureHandle *texture_object = m_texture.Peek();
 	if (!m_sphere.Asset().texture_name.empty() && texture_object == nullptr)
 		return;
 	Graphics::RHITextureHandle texture;
@@ -182,12 +186,12 @@ void W3DSphereRenderObject::Render(RenderInfoClass &rinfo)
 
 void W3DSphereRenderObject::Set_Transform(const Matrix3D &transform)
 {
-	RenderObjClass::Set_Transform(transform);
+	W3DRenderObject::Set_Transform(transform);
 }
 
 void W3DSphereRenderObject::Set_Position(const Vector3 &position)
 {
-	RenderObjClass::Set_Position(position);
+	W3DRenderObject::Set_Position(position);
 }
 
 void W3DSphereRenderObject::Get_Obj_Space_Bounding_Sphere(SphereClass &sphere) const
@@ -216,9 +220,9 @@ void W3DSphereRenderObject::Update_Cached_Bounding_Volumes() const
 	Validate_Cached_Bounding_Volumes();
 }
 
-void W3DSphereRenderObject::Prepare_LOD(CameraClass &camera)
+void W3DSphereRenderObject::Prepare_LOD(W3DCamera &camera)
 {
-	if (!RenderObjClass::Is_Not_Hidden_At_All())
+	if (!W3DRenderObject::Is_Not_Hidden_At_All())
 		return;
 	m_sphere.Prepare_LOD(Get_Screen_Size(camera));
 }
@@ -290,25 +294,25 @@ void W3DSphereRenderObject::Scale(float scalex, float scaley, float scalez)
 
 void W3DSphereRenderObject::Set_Hidden(int onoff)
 {
-	RenderObjClass::Set_Hidden(onoff);
+	W3DRenderObject::Set_Hidden(onoff);
 	m_sphere.Set_Hidden(onoff != 0);
 }
 
 void W3DSphereRenderObject::Set_Visible(int onoff)
 {
-	RenderObjClass::Set_Visible(onoff);
+	W3DRenderObject::Set_Visible(onoff);
 	m_sphere.Set_Visible(onoff != 0);
 }
 
 void W3DSphereRenderObject::Set_Animation_Hidden(int onoff)
 {
-	RenderObjClass::Set_Animation_Hidden(onoff);
+	W3DRenderObject::Set_Animation_Hidden(onoff);
 	m_sphere.Set_Animation_Hidden(onoff != 0);
 }
 
 void W3DSphereRenderObject::Set_Force_Visible(int onoff)
 {
-	RenderObjClass::Set_Force_Visible(onoff);
+	W3DRenderObject::Set_Force_Visible(onoff);
 	m_sphere.Set_Force_Visible(onoff != 0);
 }
 
@@ -323,12 +327,12 @@ void W3DSphereRenderObject::Set_Name(const char *name)
 		m_name = name;
 }
 
-void W3DSphereRenderObject::Set_Texture(TextureClass *texture)
+void W3DSphereRenderObject::Set_Texture(W3DTextureHandle *texture)
 {
 	m_texture.Assign_Add_Ref(texture);
 }
 
-Graphics::ModelFactory<RenderObjClass> *Load_Sphere_Factory(ChunkLoadClass &cload)
+Graphics::ModelFactory<W3DRenderObject> *Load_Sphere_Factory(ChunkLoadClass &cload)
 {
 	std::vector<std::byte> bytes(cload.Cur_Chunk_Length());
 	if (cload.Read(bytes.data(), static_cast<unsigned>(bytes.size())) != bytes.size())
@@ -339,8 +343,8 @@ Graphics::ModelFactory<RenderObjClass> *Load_Sphere_Factory(ChunkLoadClass &cloa
 	if (!Assets::W3D::W3DRead_Sphere(bytes, description, error))
 		return nullptr;
 	auto data = std::make_shared<const Assets::SphereAssetDesc>(std::move(description));
-	return new Graphics::ModelFactory<RenderObjClass>(data->name,
-		RenderObjClass::CLASSID_SPHERE, [data] {
+	return new Graphics::ModelFactory<W3DRenderObject>(data->name,
+		W3DRenderObject::CLASSID_SPHERE, [data] {
 			return NEW_REF(W3DSphereRenderObject, (*data));
 		});
 }

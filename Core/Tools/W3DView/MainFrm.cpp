@@ -85,7 +85,7 @@ import Graphics.Diagnostics.Render;
 #include <string>
 #include <system_error>
 
-import Graphics.Backends.DX11.FrameRuntime;
+import Graphics.Frame.Runtime;
 import Graphics.Capture.FrameCapture;
 import Video.Capture.ImageWriter;
 

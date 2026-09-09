@@ -1,3 +1,4 @@
+#include "resource_access.slangh"
 #ifndef GRAPHICS_ENVIRONMENT_LIGHTING
 #define GRAPHICS_ENVIRONMENT_LIGHTING
 cbuffer EnvironmentLightingConstants : register(b7)
@@ -11,17 +12,17 @@ cbuffer EnvironmentLightingConstants : register(b7)
     float4 ShadowViewDepth;
     float4 ShadowOptions;
 };
-Texture2D<float> EnvironmentShadowTextures[4] : register(t11);
-Texture2D EnvironmentCloudTexture : register(t15);
-SamplerState EnvironmentCloudSampler : register(s15);
+GRAPHICS_TEXTURE_ARRAY(EnvironmentShadowTextures, float, 11, 4)
+GRAPHICS_TEXTURE_2D(EnvironmentCloudTexture, float4, 15)
+GRAPHICS_SAMPLER(EnvironmentCloudSampler, 15)
 
 float3 CloudVisibility(float3 world_position)
 {
     if (CloudOffsetStrength.w <= 0) return float3(1,1,1);
     float2 uv = world_position.xy * CloudWorldMultiplier.xy
         - world_position.z * CloudWorldMultiplier.zw + CloudOffsetStrength.xy;
-    return lerp(float3(1,1,1), EnvironmentCloudTexture.SampleLevel(
-        EnvironmentCloudSampler, uv, 0).rgb, saturate(CloudOffsetStrength.z));
+    return lerp(float3(1,1,1), EnvironmentCloudTexture().SampleLevel(
+        EnvironmentCloudSampler(), uv, 0).rgb, saturate(CloudOffsetStrength.z));
 }
 
 float FilterShadow(Texture2D<float> shadow_map, float3 projected, float3 projected_dx, float3 projected_dy)
@@ -61,11 +62,18 @@ float CascadeVisibility(uint cascade, float3 world_position, float3 world_dx, fl
     float4 clip_dy = mul(ShadowViewProjection[cascade],float4(world_dy,0));
     float3 projected_dx = (clip_dx.xyz-projected*clip_dx.w) / max(clip_position.w,0.000001);
     float3 projected_dy = (clip_dy.xyz-projected*clip_dy.w) / max(clip_position.w,0.000001);
+#if defined(GRAPHICS_DX12)
+    // DX12 keeps the cascade SRV lookup divergent-safe instead of expanding
+    // it into one literal sample per cascade.
+    const uint shadow_index = cascade < 4u ? cascade : 3u;
+    return FilterShadow(EnvironmentShadowTextures[NonUniformResourceIndex(shadow_index)], projected, projected_dx, projected_dy);
+#else
     // SM5 supports dynamic matrix indexing but requires literal SRV indices.
     if (cascade == 0) return FilterShadow(EnvironmentShadowTextures[0],projected,projected_dx,projected_dy);
     if (cascade == 1) return FilterShadow(EnvironmentShadowTextures[1],projected,projected_dx,projected_dy);
     if (cascade == 2) return FilterShadow(EnvironmentShadowTextures[2],projected,projected_dx,projected_dy);
     return FilterShadow(EnvironmentShadowTextures[3],projected,projected_dx,projected_dy);
+#endif
 }
 
 float ShadowVisibility(float3 world_position)

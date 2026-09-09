@@ -1,12 +1,13 @@
+#include "resource_access.slangh"
 #include "environment_lighting.slangh"
-Texture2D BaseTexture : register(t0);
-Texture2D CloudTexture : register(t1);
-Texture2D LightMapTexture : register(t2);
-Texture2D ShroudTexture : register(t3);
-SamplerState BaseSampler : register(s0);
-SamplerState CloudSampler : register(s1);
-SamplerState LightMapSampler : register(s2);
-SamplerState ShroudSampler : register(s3);
+GRAPHICS_TEXTURE_2D(BaseTexture, float4, 0)
+GRAPHICS_TEXTURE_2D(CloudTexture, float4, 1)
+GRAPHICS_TEXTURE_2D(LightMapTexture, float4, 2)
+GRAPHICS_TEXTURE_2D(ShroudTexture, float4, 3)
+GRAPHICS_SAMPLER(BaseSampler, 0)
+GRAPHICS_SAMPLER(CloudSampler, 1)
+GRAPHICS_SAMPLER(LightMapSampler, 2)
+GRAPHICS_SAMPLER(ShroudSampler, 3)
 
 cbuffer SurfaceConstants : register(b0)
 {
@@ -52,11 +53,11 @@ struct PixelInput
 [shader("pixel")] float4 surface_pixel(PixelInput input) : SV_TARGET
 {
     ClipEnvironment(input.world_position);
-    if (ShroudOnly > 0.5) return float4(ShroudTexture.Sample(ShroudSampler,
+    if (ShroudOnly > 0.5) return float4(ShroudTexture().Sample(ShroudSampler(),
         input.world_xy * ShroudProjection.xy + ShroudProjection.zw).rgb, 1);
-    float4 base = Textured > 0.5 ? BaseTexture.Sample(BaseSampler, input.uv) : float4(1, 1, 1, 1);
+    float4 base = Textured > 0.5 ? BaseTexture().Sample(BaseSampler(), input.uv) : float4(1, 1, 1, 1);
     if (MaskedModulation > 0.5) {
-        float3 noise = LightMapTexture.Sample(LightMapSampler,
+        float3 noise = LightMapTexture().Sample(LightMapSampler(),
             input.world_xy * LightMapProjection.xy + LightMapProjection.zw).rgb;
         return float4(lerp(input.color.aaa, noise, base.a), 1);
     }
@@ -66,11 +67,11 @@ struct PixelInput
         float3 ambient = min(EnvironmentAmbient.rgb, input.color.rgb);
         color.rgb = base.rgb*(ambient+(input.color.rgb-ambient)*DirectionalVisibility(input.world_position));
     }
-    else if (Cloud > 0.5) color *= CloudTexture.Sample(CloudSampler,
+    else if (Cloud > 0.5) color *= CloudTexture().Sample(CloudSampler(),
         input.world_xy * CloudProjection.xy + CloudProjection.zw);
-    if (LightMap > 0.5) color *= LightMapTexture.Sample(LightMapSampler,
+    if (LightMap > 0.5) color *= LightMapTexture().Sample(LightMapSampler(),
         input.world_xy * LightMapProjection.xy + LightMapProjection.zw);
-    if (Shroud > 0.5) color.rgb *= ShroudTexture.Sample(ShroudSampler,
+    if (Shroud > 0.5) color.rgb *= ShroudTexture().Sample(ShroudSampler(),
         input.world_xy * ShroudProjection.xy + ShroudProjection.zw).rgb;
     clip(color.a - AlphaCutoff);
     return color;

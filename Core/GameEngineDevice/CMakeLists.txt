@@ -1,4 +1,10 @@
 set(GAMEENGINEDEVICE_SRC
+    Source/W3DDevice/GameClient/W3DSegmentedLineRenderObject.cpp
+    Include/W3DDevice/GameClient/W3DSegmentedLineRenderObject.h
+    Include/W3DDevice/GameClient/W3DCastQuery.h
+    Include/W3DDevice/GameClient/W3DIntersectionQuery.h
+    Include/W3DDevice/GameClient/W3DQueryBounds.h
+    Include/W3DDevice/GameClient/W3DSceneQueryMask.h
     Include/XAudio2AudioDevice/XAudio2AudioManager.h
     Include/XAudio2AudioDevice/XAudio2AudioSystem.h
     Include/XAudio2AudioDevice/XAudio2Decoder.h
@@ -185,6 +191,7 @@ set(GAMEENGINEDEVICE_SRC
 #    Source/W3DDevice/GameClient/W3dWaypointBuffer.cpp
 #    Source/W3DDevice/GameClient/W3DWebBrowser.cpp
     Source/W3DDevice/GameClient/Water/W3DWater.cpp
+    Source/W3DDevice/GameClient/Water/WaterInteractionInputs.cpp
     Source/W3DDevice/GameClient/WaterResources.cpp
     Source/W3DDevice/GameClient/WaterSkyboxSystem.cpp
     Source/W3DDevice/GameClient/WaterGridSimulation.cpp

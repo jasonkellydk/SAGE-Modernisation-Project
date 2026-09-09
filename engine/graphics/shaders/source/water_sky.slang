@@ -1,3 +1,4 @@
+#include "resource_access.slangh"
 cbuffer WaterConstants : register(b0)
 {
     row_major float4x4 World;
@@ -44,8 +45,8 @@ struct WaterSkyVertexOutput
     return output;
 }
 
-Texture2D WaterSkyTexture : register(t0);
-SamplerState WaterSkySampler : register(s0);
+GRAPHICS_TEXTURE_2D(WaterSkyTexture, float4, 0)
+GRAPHICS_SAMPLER(WaterSkySampler, 0)
 
 struct WaterSkyPixelInput
 {
@@ -56,6 +57,6 @@ struct WaterSkyPixelInput
 
 [shader("pixel")] float4 WaterSkyPixelMain(WaterSkyPixelInput input) : SV_TARGET
 {
-    return WaterSkyTexture.Sample(WaterSkySampler, input.texcoord0) *
+    return WaterSkyTexture().Sample(WaterSkySampler(), input.texcoord0) *
         input.color0;
 }

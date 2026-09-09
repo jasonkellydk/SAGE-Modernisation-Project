@@ -1,5 +1,6 @@
 module;
 #include <array>
+#include <cmath>
 #include <cstddef>
 #if defined(_M_X64) || defined(__SSE2__)
 #include <xmmintrin.h>
@@ -58,6 +59,46 @@ export RenderTransform Multiply_Affine(const RenderTransform& left,const RenderT
     }
 #endif
     return result;
+}
+
+// Inverts a full affine transform. On a singular or near-singular basis the
+// destination is left untouched, allowing callers to retain their last valid
+// cached inverse.
+export bool Try_Invert_Affine(const RenderTransform& source,RenderTransform& destination) noexcept {
+    const auto& m=source.matrix;
+    const float a00=m[0],a01=m[1],a02=m[2];
+    const float a10=m[4],a11=m[5],a12=m[6];
+    const float a20=m[8],a21=m[9],a22=m[10];
+    const float tx=m[3],ty=m[7],tz=m[11];
+
+    const float cofactor00=a11*a22-a12*a21;
+    const float cofactor01=a02*a21-a01*a22;
+    const float cofactor02=a01*a12-a02*a11;
+    const float cofactor10=a12*a20-a10*a22;
+    const float cofactor11=a00*a22-a02*a20;
+    const float cofactor12=a02*a10-a00*a12;
+    const float cofactor20=a10*a21-a11*a20;
+    const float cofactor21=a01*a20-a00*a21;
+    const float cofactor22=a00*a11-a01*a10;
+    const float determinant=a00*cofactor00+a01*cofactor10+a02*cofactor20;
+    if (std::fabs(determinant)<1e-8f) return false;
+
+    const float inverse_determinant=1.0f/determinant;
+    auto& out=destination.matrix;
+    out[0]=cofactor00*inverse_determinant;
+    out[1]=cofactor01*inverse_determinant;
+    out[2]=cofactor02*inverse_determinant;
+    out[4]=cofactor10*inverse_determinant;
+    out[5]=cofactor11*inverse_determinant;
+    out[6]=cofactor12*inverse_determinant;
+    out[8]=cofactor20*inverse_determinant;
+    out[9]=cofactor21*inverse_determinant;
+    out[10]=cofactor22*inverse_determinant;
+    out[3]=-(out[0]*tx+out[1]*ty+out[2]*tz);
+    out[7]=-(out[4]*tx+out[5]*ty+out[6]*tz);
+    out[11]=-(out[8]*tx+out[9]*ty+out[10]*tz);
+    out[12]=0;out[13]=0;out[14]=0;out[15]=1;
+    return true;
 }
 
 export void Translate_Affine(RenderTransform& transform,const std::array<float,3>& translation) noexcept {

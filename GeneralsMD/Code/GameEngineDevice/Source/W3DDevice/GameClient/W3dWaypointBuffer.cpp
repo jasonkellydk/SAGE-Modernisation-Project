@@ -58,8 +58,8 @@ import Graphics.Materials.State;
 
 #include "W3DDevice/GameClient/W3DWaypointBuffer.h"
 
-#include <WW3D2/AssetMgr.h>
-#include <WW3D2/Texture.h>
+#include "W3DDevice/GameClient/W3DAssetCatalog.h"
+#include <W3DDevice/GameClient/W3DTextureHandle.h>
 
 #include "Common/GameUtility.h"
 #include "Common/GlobalData.h"
@@ -80,14 +80,15 @@ import Graphics.Materials.State;
 #include "W3DDevice/GameClient/BaseHeightMap.h"
 #include "W3DDevice/GameClient/W3DGraphicsResources.h"
 #include <algorithm>
+#include <cstdint>
 import Graphics.Scene.Views.CameraMatrices;
 import Graphics.Scene.Lines.Drawing;
-import Graphics.Backends.DX11.FrameRuntime;
+import Graphics.Frame.Runtime;
 
-#include "WW3D2/Camera.h"
-#include "WW3D2/Mesh.h"
-#include "WW3D2/MeshMdl.h"
-#include "WW3D2/SegLine.h"
+#include "W3DDevice/GameClient/W3DCamera.h"
+#include "W3DDevice/GameClient/W3DMeshRenderObject.h"
+#include "W3DDevice/GameClient/W3DMeshResource.h"
+#include "W3DDevice/GameClient/W3DSegmentedLineRenderObject.h"
 
 
 #define MAX_DISPLAY_NODES 512
@@ -104,10 +105,10 @@ for the bibs. */
 //=============================================================================
 W3DWaypointBuffer::W3DWaypointBuffer()
 {
-	m_waypointNodeRobj = WW3DAssetManager::Get_Instance()->Create_Render_Obj( "SCMNode" );
-	m_line = new SegmentedLineClass;
+	m_waypointNodeRobj = W3DAssetCatalog::Get_Instance()->Create_Render_Obj( "SCMNode" );
+	m_line = new W3DSegmentedLineRenderObject;
 
-	m_texture = WW3DAssetManager::Get_Instance()->Get_Texture( "EXLaser.tga" );
+	m_texture = W3DAssetCatalog::Get_Instance()->Get_Texture( "EXLaser.tga" );
 
 
   setDefaultLineStyle();
@@ -149,7 +150,7 @@ void W3DWaypointBuffer::setDefaultLineStyle()
 	m_line->Set_Shader( lineShader );	//pick the alpha blending mode you want - see shader.h for others.
 	m_line->Set_Width( 1.5f );
 	m_line->Set_Color( Vector3( 0.25f, 0.5f, 1.0f ) );
-	m_line->Set_Texture_Mapping_Mode( SegLineRendererClass::TILED_TEXTURE_MAP );	//this tiles the texture across the line
+	m_line->Set_Texture_Mapping_Mode( Graphics::RibbonTextureMapping::Tiled );	//this tiles the texture across the line
 }
 
 
@@ -158,7 +159,7 @@ void W3DWaypointBuffer::setDefaultLineStyle()
 //=============================================================================
 /** Draws the waypoints. Uses camera to cull */
 //=============================================================================
-void W3DWaypointBuffer::drawWaypoints(RenderInfoClass &rinfo)
+void W3DWaypointBuffer::drawWaypoints(W3DRenderContext &rinfo)
 {
 
   if ( ! TheInGameUI )
@@ -176,7 +177,7 @@ void W3DWaypointBuffer::drawWaypoints(RenderInfoClass &rinfo)
 		Graphics::LocalLighting lightEnv;
 		lightEnv.Reset({0,0,0}, {1.0f,1.0f,1.0f});
 		lightEnv.Finalize();
-		RenderInfoClass localRinfo(rinfo.Camera);
+		W3DRenderContext localRinfo(rinfo.Camera);
 		localRinfo.light_environment=&lightEnv;
 		Vector3 points[ MAX_DISPLAY_NODES + 1 ]; //Lines have nodes + 1 points.
 
@@ -228,7 +229,7 @@ void W3DWaypointBuffer::drawWaypoints(RenderInfoClass &rinfo)
 		Graphics::LocalLighting lightEnv;
 		lightEnv.Reset({0,0,0}, {1.0f,1.0f,1.0f});
 		lightEnv.Finalize();
-		RenderInfoClass localRinfo(rinfo.Camera);
+		W3DRenderContext localRinfo(rinfo.Camera);
 		localRinfo.light_environment=&lightEnv;
 		Vector3 points[ MAX_DISPLAY_NODES + 1 ]; //Lines have nodes + 1 points.
 
@@ -544,7 +545,7 @@ void W3DWaypointBuffer::drawWaypoints(RenderInfoClass &rinfo)
 
 
 
-void W3DWaypointBuffer::drawLine(RenderInfoClass &info)
+void W3DWaypointBuffer::drawLine(W3DRenderContext &info)
 {
     struct Submission {
         Graphics::SurfaceMeshHandle &mesh;
@@ -552,10 +553,10 @@ void W3DWaypointBuffer::drawLine(RenderInfoClass &info)
         Graphics::RHITextureHandle texture;
     } submission{m_lineMesh,{},Resolve_Graphics_Texture(m_texture)};
     submission.projection = Graphics::Get_Camera_Matrices().projection.values;
-    SegLineGeometrySink sink;
+    W3DSegmentedLineGeometrySink sink;
     sink.context = &submission;
     sink.submit = [](void* context, const Graphics::PropVertex* source, unsigned vertex_count,
-        const unsigned* indices, unsigned index_count) {
+        const std::uint32_t* indices, unsigned index_count) {
         auto& submission = *static_cast<Submission*>(context);
         auto* device = Graphics::Shared_Frame_Device();
         if (!device) return;

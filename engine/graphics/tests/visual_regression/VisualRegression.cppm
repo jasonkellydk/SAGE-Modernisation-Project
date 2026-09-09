@@ -5,6 +5,7 @@ module;
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -391,6 +392,9 @@ public:
 	explicit VisualRegressionHarness(VisualRegressionConfig config) noexcept
 		: m_config(std::move(config))
 	{
+		const char *suffix = std::getenv("GRAPHICS_TEST_FAILURE_SUFFIX");
+		if (suffix != nullptr && *suffix != '\0' && !m_config.failure_directory.empty())
+			m_config.failure_directory /= suffix;
 	}
 
 	bool Render_Offscreen(Device &device, VisualRenderFunction render, void *context, RGBAImage &image)

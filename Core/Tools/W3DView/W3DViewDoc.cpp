@@ -43,7 +43,7 @@
 #include "WW3D2/W3DErr.h"
 #include "WWLib/chunkio.h"
 #include "AssetInfo.h"
-#include "WW3D2/MeshMdl.h"
+#include "W3DDevice/GameClient/W3DMeshResource.h"
 #include "WW3D2/AggDef.h"
 #include "WW3D2/HLOD.h"
 #include "RestrictedFileDialog.h"
@@ -51,7 +51,7 @@
 #include "WWLib/INI.h"
 #include "WW3D2/WW3D.h"
 #include "EmitterInstanceList.h"
-#include "WW3D2/Mesh.h"
+#include "W3DDevice/GameClient/W3DMeshRenderObject.h"
 #include "ScreenCursor.h"
 #include "WW3D2/SphereObj.h"
 #include "WW3D2/RingObj.h"
@@ -59,11 +59,11 @@
 #include "WW3D2/hmorpHAnim.h"
 #include "mmsystem.h"
 #include "WW3D2/SoundRObj.h"
-#include "WW3D2/Dazzle.h"
+#include "W3DDevice/GameClient/W3DDazzleRenderObject.h"
 
 #include <fstream>
 import Graphics.Capture.MovieCapture;
-import Graphics.Backends.DX11.FrameRuntime;
+import Graphics.Frame.Runtime;
 
 
 #ifdef RTS_DEBUG
@@ -402,8 +402,8 @@ CW3DViewDoc::InitScene ()
 		Set_Texture_Path2 (path2);
 
 		// Construct a dazzle layer object
-		m_pDazzleLayer  = new DazzleLayerClass();
-		DazzleRenderObjClass::Set_Current_Dazzle_Layer(m_pDazzleLayer);
+		m_pDazzleLayer  = new W3DDazzleLayer();
+		W3DDazzleRenderObject::Set_Current_Dazzle_Layer(m_pDazzleLayer);
 
 		// Enable fog if appropriate.
 		if (IsFogEnabled()) {
@@ -2637,7 +2637,7 @@ CW3DViewDoc::Toggle_Alternate_Materials(RenderObjClass * render_obj)
 		// If this is a mesh, toggle the materials
 		//
 		if (render_obj->Class_ID() == RenderObjClass::CLASSID_MESH) {
-			MeshModelClass * mdl = ((MeshClass *)render_obj)->Get_Model();
+			W3DMeshResource * mdl = ((W3DMeshRenderObject *)render_obj)->Get_Model();
 			mdl->Enable_Alternate_Material_Description(!mdl->Is_Alternate_Material_Description_Enabled());
 		}
 

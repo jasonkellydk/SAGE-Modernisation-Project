@@ -42,7 +42,7 @@
 #include "WWMath/vector3.h"
 import Graphics.Scene.ObjectList;
 
-class CameraClass;
+class W3DCamera;
 
 /**
 ** CameraShakeSystemClass

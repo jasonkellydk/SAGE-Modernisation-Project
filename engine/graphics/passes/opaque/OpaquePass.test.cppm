@@ -11,14 +11,14 @@ module;
 
 export module Graphics.Passes.Opaque.Tests;
 
-#ifndef GRAPHICS_DX11_TEST_SHADER_DIRECTORY
-#define GRAPHICS_DX11_TEST_SHADER_DIRECTORY "."
+#ifndef GRAPHICS_TEST_SHADER_DIRECTORY
+#define GRAPHICS_TEST_SHADER_DIRECTORY "."
 #endif
 
 import Graphics.Passes.Opaque;
 
 #if defined(_WIN32)
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 
 using namespace Graphics;
 #endif
@@ -214,10 +214,10 @@ BOOST_AUTO_TEST_CASE(opaque_pass_rejects_undeclared_targets_and_invalid_draw_rec
 #if defined(_WIN32)
 BOOST_AUTO_TEST_CASE(opaque_pass_executes_through_dx11)
 {
-	DX11DeviceOptions options;
+	GraphicsTestDeviceOptions options;
 	options.use_warp = true;
-	options.shader_directory = GRAPHICS_DX11_TEST_SHADER_DIRECTORY;
-	DX11Device device(options);
+	options.shader_directory = GRAPHICS_TEST_SHADER_DIRECTORY;
+	GraphicsTestDevice device(options);
 	BOOST_REQUIRE(device.Is_Valid());
 
 	const RHIBufferHandle vertex_buffer = device.Create_Buffer({108, RHIBufferUsage::Vertex, 36});

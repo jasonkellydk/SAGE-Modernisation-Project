@@ -1,4 +1,4 @@
-import Graphics.Backends.DX11.FrameRuntime;
+import Graphics.Frame.Runtime;
 /*
 **	Command & Conquer Renegade(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -399,7 +399,7 @@ CW3DViewApp::ExitInstance()
         Graphics::Shutdown_Tool_Frame();
 #endif
 		WW3D::Shutdown();
-		Graphics::Graphics_DX11_Shutdown_Shared_Frame();
+		Graphics::Graphics_Shutdown_Shared_Frame();
 
 		//
 		//	Shutdown the libraries

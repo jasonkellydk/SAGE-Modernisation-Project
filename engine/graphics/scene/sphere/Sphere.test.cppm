@@ -18,7 +18,7 @@ export module Graphics.Scene.Sphere.Tests;
 
 import Assets.Math;
 import Assets.Spheres;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 import Graphics.RHI;
 import Graphics.Resources.Textures.References;
 import Graphics.Scene.Props.Submission;
@@ -327,10 +327,10 @@ BOOST_AUTO_TEST_CASE(lod_value_sentinels_match_render_object_contract)
 
 BOOST_AUTO_TEST_CASE(sphere_geometry_draws_after_source_release_and_target_recreation)
 {
-	Graphics::DX11Device device({true});
+	Graphics::GraphicsTestDevice device({true});
 	BOOST_REQUIRE(device.Is_Valid());
 	Graphics::PropRenderer renderer;
-	const auto shader_directory = std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
+	const auto shader_directory = Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
 	BOOST_REQUIRE(renderer.Initialize(device, shader_directory));
 	Graphics::DirectionalShadowRenderer shadows;
 	BOOST_REQUIRE(shadows.Initialize(device, shader_directory));
@@ -473,9 +473,9 @@ BOOST_AUTO_TEST_CASE(sphere_geometry_draws_after_source_release_and_target_recre
 
 BOOST_AUTO_TEST_CASE(sphere_texture_transfer_preserves_cached_source_across_repeated_and_deferred_draws)
 {
-	Graphics::DX11Device device({true});
+	Graphics::GraphicsTestDevice device({true});
 	BOOST_REQUIRE(device.Is_Valid());
-	const auto shader_directory = std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
+	const auto shader_directory = Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
 	Graphics::PropRenderer renderer;
 	Graphics::DirectionalShadowRenderer shadows;
 	Graphics::PropSubmission submission;

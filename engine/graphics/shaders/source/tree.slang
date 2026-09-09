@@ -1,3 +1,4 @@
+#include "resource_access.slangh"
 #include "environment_lighting.slangh"
 cbuffer TreeConstants : register(b0)
 {
@@ -6,10 +7,10 @@ cbuffer TreeConstants : register(b0)
     float4 ShroudProjection;
     float4 Options;
 };
-Texture2D TreeTexture : register(t0);
-Texture2D ShroudTexture : register(t1);
-SamplerState TreeSampler : register(s0);
-SamplerState ShroudSampler : register(s1);
+GRAPHICS_TEXTURE_2D(TreeTexture, float4, 0)
+GRAPHICS_TEXTURE_2D(ShroudTexture, float4, 1)
+GRAPHICS_SAMPLER(TreeSampler, 0)
+GRAPHICS_SAMPLER(ShroudSampler, 1)
 struct TreeInput
 {
     float3 position : POSITION0;
@@ -41,9 +42,9 @@ struct TreeOutput
 [shader("pixel")] float4 tree_pixel(TreeOutput input) : SV_TARGET
 {
     ClipEnvironment(input.world_position);
-    float4 texel = TreeTexture.Sample(TreeSampler,input.uv);
+    float4 texel = TreeTexture().Sample(TreeSampler(),input.uv);
     clip(texel.a-Options.y);
-    float3 visibility = Options.x > 0.5 ? ShroudTexture.Sample(ShroudSampler,input.shroud_uv).rgb : float3(1,1,1);
+    float3 visibility = Options.x > 0.5 ? ShroudTexture().Sample(ShroudSampler(),input.shroud_uv).rgb : float3(1,1,1);
     float3 ambient = min(EnvironmentAmbient.rgb, input.color);
     float3 lighting = ambient + (input.color-ambient)*DirectionalVisibility(input.world_position);
     return float4(lighting*texel.rgb*visibility*Options.z,texel.a);

@@ -28,6 +28,10 @@ target_sources(generals_assets
             model/MeshBoundsTree.cppm
             particle/EmitterAsset.cppm
             ring/RingAsset.cppm
+            dazzle/DazzleAsset.cppm
+            adapters/w3d/dazzle/W3DDazzle.cppm
+            light/LightAsset.cppm
+            adapters/w3d/light/W3DLight.cppm
             sphere/SphereAsset.cppm
             model/ModelAssembly.cppm
             model/AnimationAsset.cppm
@@ -53,6 +57,7 @@ target_sources(generals_assets
             adapters/w3d/materials/W3DPassBindings.cppm
             adapters/w3d/mesh/W3DMeshParser.cppm
             adapters/w3d/mesh/W3DGeometry.cppm
+            adapters/w3d/mesh/W3DMeshData.cppm
             adapters/w3d/model/W3DModelBuilder.cppm
             adapters/w3d/model/W3DBox.cppm
             adapters/w3d/null/W3DNull.cppm
@@ -67,6 +72,8 @@ target_sources(generals_assets
             adapters/w3d/model/W3DRetention.cppm
             adapters/w3d/model/W3DAnimationChannels.cppm
             adapters/w3d/W3DAdapter.cppm
+            adapters/w3d/W3DRequestPolicy.cppm
+            adapters/w3d/W3DRequestPolicy.cppm
 )
 
 target_compile_features(generals_assets PUBLIC cxx_std_20)
@@ -140,6 +147,7 @@ if(RTS_BUILD_ASSET_TESTS)
     add_assets_test(generals_assets_w3d_shader_materials_test adapters/w3d/materials/W3DShaderMaterials.test.cppm)
     add_assets_test(generals_assets_w3d_mesh_test adapters/w3d/mesh/W3DMeshParser.test.cppm)
     add_assets_test(generals_assets_w3d_geometry_test adapters/w3d/mesh/W3DGeometry.test.cppm)
+    add_assets_test(generals_assets_w3d_mesh_data_test adapters/w3d/mesh/W3DMeshData.test.cppm)
     add_assets_test(generals_assets_w3d_model_test adapters/w3d/model/W3DModelBuilder.test.cppm)
     add_assets_test(generals_assets_w3d_box_test adapters/w3d/model/W3DBox.test.cppm)
     add_assets_test(generals_assets_w3d_null_test adapters/w3d/null/W3DNull.test.cppm)
@@ -147,11 +155,16 @@ if(RTS_BUILD_ASSET_TESTS)
     add_assets_test(generals_assets_w3d_assembly_test adapters/w3d/model/W3DAssembly.test.cppm)
     add_assets_test(generals_assets_w3d_emitter_test adapters/w3d/particles/W3DEmitter.test.cppm)
     add_assets_test(generals_assets_w3d_ring_test adapters/w3d/ring/W3DRing.test.cppm)
+    add_assets_test(generals_assets_dazzle_test dazzle/DazzleAsset.test.cppm)
+    add_assets_test(generals_assets_w3d_dazzle_test adapters/w3d/dazzle/W3DDazzle.test.cppm)
+    add_assets_test(generals_assets_light_test light/LightAsset.test.cppm)
+    add_assets_test(generals_assets_w3d_light_test adapters/w3d/light/W3DLight.test.cppm)
     add_assets_test(generals_assets_w3d_sphere_test adapters/w3d/sphere/W3DSphere.test.cppm)
     add_assets_test(generals_assets_skeleton_cache_test cache/SkeletonCache.test.cppm)
     add_assets_test(generals_assets_animation_cache_test cache/AnimationCache.test.cppm)
     add_assets_test(generals_assets_w3d_animation_channels_test adapters/w3d/model/W3DAnimationChannels.test.cppm)
     add_assets_test(generals_assets_w3d_adapter_test adapters/w3d/W3DAdapter.test.cppm)
+    add_assets_test(generals_assets_w3d_request_policy_test adapters/w3d/W3DRequestPolicy.test.cppm)
 
     # This is intentionally a path to a real, externally supplied game asset.
     # No proprietary W3D data is committed to the repository.

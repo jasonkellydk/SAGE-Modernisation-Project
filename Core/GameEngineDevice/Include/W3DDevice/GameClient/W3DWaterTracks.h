@@ -56,7 +56,7 @@ public:
         std::vector<WaterSurfaceVertex>& vertices, std::span<const unsigned short> indices);	///<draw this object
 
 protected:
-	TextureBaseClass *m_stageZeroTexture;	///<primary texture
+	W3DTextureHandle *m_stageZeroTexture;	///<primary texture
 	waveType	m_type;					///<used for render state sorting (set this to texture pointer for now).
 	Int			m_x;					///<vertex count
 	Int			m_y;					///<vertex count
@@ -112,7 +112,7 @@ public:
 	void ReleaseResources();	///< Release all backend resources so the device can be reset.
 	void ReAcquireResources();  ///< Reacquire all resources after device reset.
 
-	void flush (RenderInfoClass & rinfo);	///<draw all tracks that were requested for rendering.
+	void flush (W3DRenderContext & rinfo);	///<draw all tracks that were requested for rendering.
 	void update();	///<update the state of all edges (fade alpha, remove old, etc.)
 
 	void init();	///< pre-allocate track objects

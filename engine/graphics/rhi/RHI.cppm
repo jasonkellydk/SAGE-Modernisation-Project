@@ -219,7 +219,7 @@ export enum class RHIBlendFactor : std::uint8_t
 };
 
 export enum class RHIVertexSemantic : std::uint8_t { Position, Color, Normal, TexCoord };
-export enum class RHIVertexElementFormat : std::uint8_t { Float2, Float3, Float4 };
+export enum class RHIVertexElementFormat : std::uint8_t { Float2, Float3, Float4, Float1 };
 export struct RHIVertexElement final
 {
     RHIVertexSemantic semantic = RHIVertexSemantic::Position;

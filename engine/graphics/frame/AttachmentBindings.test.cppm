@@ -7,7 +7,7 @@ module;
 #include <vector>
 export module Graphics.Frame.AttachmentBindings.Tests;
 import Graphics.Frame.AttachmentBindings;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 import Graphics.Scene.Props.Renderer;
 using namespace Graphics;
 
@@ -22,7 +22,7 @@ std::unique_ptr<TextureResource> Target(Device& device,unsigned size)
 void Draw(Device& device,std::array<float,4> color)
 {
     PropRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device,GRAPHICS_TERRAIN_SHADER_DIRECTORY));
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     std::array<PropVertex,3> vertices{};
     vertices[0].position={-1,-1,0.5f}; vertices[1].position={3,-1,0.5f}; vertices[2].position={-1,3,0.5f};
     for (auto& vertex : vertices) vertex.color=color;
@@ -44,7 +44,7 @@ std::vector<std::byte> Pixels(Device& device,RHITextureHandle texture,unsigned s
 BOOST_AUTO_TEST_CASE(nested_passes_retain_destroyed_texture_owners_and_restore_viewport_and_depth)
 {
     for (const bool warp : {true,false}) {
-        DX11Device device({warp});
+        GraphicsTestDevice device({warp});
         if (!warp && !device.Is_Valid()) continue;
         auto main=Target(device,4),first=Target(device,2),second=Target(device,4);
         BOOST_REQUIRE(main && first && second);
@@ -93,7 +93,7 @@ BOOST_AUTO_TEST_CASE(nested_passes_retain_destroyed_texture_owners_and_restore_v
 
 BOOST_AUTO_TEST_CASE(invalid_and_foreign_bindings_preserve_the_active_drawing_target)
 {
-    DX11Device device({true}),foreign({true});
+    GraphicsTestDevice device({true}),foreign({true});
     auto main=Target(device,2),other=Target(foreign,2);
     BOOST_REQUIRE(main && other);
     AttachmentBindings bindings,foreign_bindings;
@@ -115,7 +115,7 @@ BOOST_AUTO_TEST_CASE(invalid_and_foreign_bindings_preserve_the_active_drawing_ta
 
 BOOST_AUTO_TEST_CASE(default_replacement_and_snapshot_lifetime_preserve_saved_gpu_generations)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     AttachmentSnapshot saved;
     RHITextureHandle old_handle{};
     {

@@ -68,7 +68,7 @@
 #include "GameClient/Keyboard.h"
 #include "GameClient/Mouse.h"
 #include "Platform/SDLPlatformWindow.h"
-#include "WW3D2/WW3D.h"
+
 #if defined(DEBUG_STACKTRACE) || defined(IG_DEBUG_STACKTRACE)
 	#include "Common/StackDump.h"
 #endif

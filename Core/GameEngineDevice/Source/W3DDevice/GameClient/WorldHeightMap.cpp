@@ -150,12 +150,12 @@ MapObject *MapObject::duplicate()
 	return pObj;
 }
 
-void MapObject::setRenderObj(RenderObjClass *pObj)
+void MapObject::setRenderObj(W3DRenderObject *pObj)
 {
 	REF_PTR_SET(m_renderObj, pObj);
 }
 
-void MapObject::setBridgeRenderObject( BridgeTowerType type, RenderObjClass* renderObj )
+void MapObject::setBridgeRenderObject( BridgeTowerType type, W3DRenderObject* renderObj )
 {
 
 	if( type >= 0 && type < BRIDGE_MAX_TOWERS )
@@ -163,7 +163,7 @@ void MapObject::setBridgeRenderObject( BridgeTowerType type, RenderObjClass* ren
 
 }
 
-RenderObjClass* MapObject::getBridgeRenderObject( BridgeTowerType type )
+W3DRenderObject* MapObject::getBridgeRenderObject( BridgeTowerType type )
 {
 
 	if( type >= 0 && type < BRIDGE_MAX_TOWERS )
@@ -2226,7 +2226,7 @@ void WorldHeightMap::getAlphaUVData(Int xIndex, Int yIndex, float U[4], float V[
 
 
 
-TextureClass *WorldHeightMap::getTerrainTexture()
+W3DTextureHandle *WorldHeightMap::getTerrainTexture()
 {
 	if (m_terrainTex == nullptr) {
 		Int edgeHeight;
@@ -2295,7 +2295,7 @@ TextureClass *WorldHeightMap::getTerrainTexture()
 	return m_terrainTex;
 }
 
-TextureClass *WorldHeightMap::getAlphaTerrainTexture()
+W3DTextureHandle *WorldHeightMap::getAlphaTerrainTexture()
 {
 	if (m_alphaTerrainTex == nullptr) {
 		getTerrainTexture();
@@ -2303,7 +2303,7 @@ TextureClass *WorldHeightMap::getAlphaTerrainTexture()
 	return m_alphaTerrainTex;
 }
 
-TextureClass *WorldHeightMap::getEdgeTerrainTexture()
+W3DTextureHandle *WorldHeightMap::getEdgeTerrainTexture()
 {
 	if (m_alphaEdgeTex == nullptr) {
 		getTerrainTexture();

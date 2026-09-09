@@ -20,7 +20,7 @@ import Graphics.Scene.Models.MaterialSlots;
 import Graphics.Scene.Props.Geometry;
 import Graphics.Scene.Props.Material;
 import Graphics.Scene.Props.Renderer;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 import Graphics.RHI;
 
 namespace {
@@ -157,10 +157,10 @@ BOOST_AUTO_TEST_CASE(cloned_resource_slots_draw_material_and_texture_pixels_afte
 {
     using namespace Graphics;
     using TextureOwner = std::shared_ptr<TestTexture>;
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     BOOST_REQUIRE(device.Is_Valid());
     PropRenderer renderer;
-    const auto shaders = std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
+    const auto shaders = Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
     BOOST_REQUIRE(renderer.Initialize(device,shaders));
     MaterialSlots<std::shared_ptr<MeshMaterial>> materials;
     MaterialSlots<TextureOwner> textures;

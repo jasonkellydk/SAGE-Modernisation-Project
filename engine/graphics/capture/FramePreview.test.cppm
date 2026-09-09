@@ -10,14 +10,57 @@ module;
 export module Graphics.Capture.FramePreview.Tests;
 import Graphics.Capture.FramePreview;
 import Graphics.FrameTargets;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 using namespace Graphics;
+
+BOOST_AUTO_TEST_CASE(rotating_targets_share_preview_interval_and_replacement_invalidates_it)
+{
+    GraphicsTestDevice device({true});
+    FramePreview preview;
+    BOOST_REQUIRE(preview.Initialize(device, Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    constexpr auto format = RHITextureFormat::RGBA8_UNorm;
+    constexpr std::uint32_t extent = 8;
+    const auto depth = device.Create_Texture({extent, extent, 1, RHITextureFormat::D24_UNorm_S8,
+        static_cast<std::uint32_t>(RHITextureUsage::DepthStencil)});
+    BOOST_REQUIRE(depth.Is_Valid());
+    std::array<RHITextureHandle, 3> colors{};
+    for (std::size_t channel = 0; channel < colors.size(); ++channel) {
+        std::array<std::byte, extent * extent * 4> pixels{};
+        for (std::size_t pixel = 0; pixel < extent * extent; ++pixel) {
+            pixels[pixel * 4 + channel] = std::byte{255};
+            pixels[pixel * 4 + 3] = std::byte{128};
+        }
+        colors[channel] = device.Create_Texture_Initialized({extent, extent, 1, format,
+            static_cast<std::uint32_t>(RHITextureUsage::RenderTarget)}, {pixels, extent * 4});
+        BOOST_REQUIRE(colors[channel].Is_Valid());
+    }
+    const auto check = [&](unsigned buffer, std::uint64_t identity, std::uint32_t time, unsigned expected) {
+        const auto frame = preview.Read({{colors[buffer], extent, extent}, {depth, extent, extent}, identity},
+            format, extent, time, 500);
+        BOOST_REQUIRE(frame.Is_Valid());
+        for (std::uint32_t y = 0; y < frame.height; ++y)
+            for (std::uint32_t x = 0; x < frame.width; ++x)
+                for (unsigned channel = 0; channel < 4; ++channel)
+                    BOOST_CHECK_EQUAL(std::to_integer<unsigned>(frame.pixels[y * frame.row_pitch + x * 4 + channel]),
+                        channel == 3 ? 128u : channel == expected ? 255u : 0u);
+    };
+    check(0, 1, 100, 0);
+    check(1, 1, 200, 0);
+    check(2, 1, 599, 0);
+    check(2, 1, 600, 2);
+    check(1, 2, 601, 1); // Replaced target set refreshes immediately at the same dimensions.
+    check(0, 0, 602, 0); // Anonymous sources retain individual texture identity.
+    check(1, 0, 603, 1);
+    preview.Shutdown();
+    for (const auto color : colors) device.Destroy_Texture(color);
+    device.Destroy_Texture(depth);
+}
 
 BOOST_AUTO_TEST_CASE(preview_preserves_channels_orientation_throttle_and_resize)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     FramePreview preview;
-    BOOST_REQUIRE(preview.Initialize(device,std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    BOOST_REQUIRE(preview.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     auto& commands = device.Immediate_Command_List();
     std::uint32_t time = 100;
     for (const auto format : {RHITextureFormat::BGRA8_UNorm,RHITextureFormat::RGBA8_UNorm}) {

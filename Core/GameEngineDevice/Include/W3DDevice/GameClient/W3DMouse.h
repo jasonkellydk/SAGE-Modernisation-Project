@@ -51,7 +51,7 @@
 #include "SDL3Device/GameClient/SDL3Mouse.h"
 
 // FORWARD REFERENCES /////////////////////////////////////////////////////////
-class CameraClass;
+class W3DCamera;
 import Graphics.Cursors.Cursor;
 
 // TYPE DEFINES ///////////////////////////////////////////////////////////////
@@ -83,7 +83,7 @@ private:
 	void applyCursor() override;
 
 	// W3D animated model cursor
-	CameraClass *m_camera;								///< our camera
+	W3DCamera *m_camera;								///< our camera
 	MouseCursor m_currentW3DCursor;
 	void initW3DAssets();		///< load models for mouse cursors, etc.
 	void freeW3DAssets();		///< unload models used by mouse cursors.

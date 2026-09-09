@@ -10,16 +10,16 @@ module;
 export module Graphics.Scene.Particles.SpriteGeometry.Drawing.Tests;
 import Graphics.Scene.Particles.SpriteGeometry;
 import Graphics.Scene.Props.Renderer;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 using namespace Graphics;
 
 BOOST_AUTO_TEST_CASE(authored_sprite_shapes_and_atlas_alpha_draw_after_source_release_and_resize)
 {
     const std::array<float,16> identity{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
     for(bool warp:{true,false}) {
-        DX11Device device({warp}); if(!warp&&!device.Is_Valid())continue;
+        GraphicsTestDevice device({warp}); if(!warp&&!device.Is_Valid())continue;
         BOOST_REQUIRE(device.Is_Valid());
-        PropRenderer renderer; BOOST_REQUIRE(renderer.Initialize(device,std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+        PropRenderer renderer; BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
         std::array<std::uint8_t,8*4*4> pixels{};
         for(unsigned y=0;y<4;++y)for(unsigned x=0;x<8;++x) {
             const auto offset=(y*8+x)*4;

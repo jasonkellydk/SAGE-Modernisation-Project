@@ -1,3 +1,4 @@
+#include "W3DDevice/GameClient/W3DRenderServices.h"
 /*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -42,16 +43,16 @@
 #include "W3DDevice/GameClient/W3DDisplay.h"
 #include "W3DDevice/GameClient/Module/W3DTracerDraw.h"
 #include "W3DDevice/GameClient/W3DScene.h"
-#include "WW3D2/Camera.h"
-#include "WW3D2/RInfo.h"
-#include "WW3D2/RendObj.h"
-#include "WW3D2/WW3D.h"
+#include "W3DDevice/GameClient/W3DCamera.h"
+#include "W3DDevice/GameClient/W3DRenderContext.h"
+#include "W3DDevice/GameClient/W3DRenderObject.h"
+
 
 import Graphics.Scene.Lines.Tracer;
 import Graphics.Scene.OrderedDraws;
 
 
-class W3DTracerRenderObject final : public RenderObjClass
+class W3DTracerRenderObject final : public W3DRenderObject
 {
 public:
 	W3DTracerRenderObject(float length, float width, const RGBColor &color, float opacity)
@@ -61,7 +62,7 @@ public:
 	}
 
 	W3DTracerRenderObject(const W3DTracerRenderObject &source)
-		: RenderObjClass(source), m_description(source.m_description), m_opacity(source.m_opacity)
+		: W3DRenderObject(source), m_description(source.m_description), m_opacity(source.m_opacity)
 	{
 	}
 
@@ -70,7 +71,7 @@ public:
 		m_graphics.Release(Graphics::Get_Prop_Renderer());
 	}
 
-	RenderObjClass *Clone() const override
+	W3DRenderObject *Clone() const override
 	{
 		return NEW W3DTracerRenderObject(*this);
 	}
@@ -85,7 +86,7 @@ public:
 		return static_cast<int>(Graphics::TracerIndexCount / 3);
 	}
 
-	void Render(RenderInfoClass &rinfo) override
+	void Render(W3DRenderContext &rinfo) override
 	{
 		if (!Is_Not_Hidden_At_All())
 			return;
@@ -102,7 +103,7 @@ public:
 		Submit(rinfo);
 	}
 
-	bool Submit(RenderInfoClass &rinfo)
+	bool Submit(W3DRenderContext &rinfo)
 	{
 		if (!m_graphics.Set_Description(Graphics::Get_Prop_Renderer(), m_description))
 			return false;
@@ -122,7 +123,7 @@ public:
 		data.camera_position = {camera.X, camera.Y, camera.Z, 1.0f};
 		data.camera_depth = {view_matrix[2][0], view_matrix[2][1], view_matrix[2][2], view_matrix[2][3]};
 		data.opacity = m_opacity;
-		data.front_counter_clockwise = !WW3D::Is_Reflection_Render_Pass();
+		data.front_counter_clockwise = !Get_W3D_Render_Services().Is_Reflection_Render_Pass();
 		return m_graphics.Submit(Graphics::Get_Prop_Renderer(), Graphics::Get_Prop_Submission(), data);
 	}
 

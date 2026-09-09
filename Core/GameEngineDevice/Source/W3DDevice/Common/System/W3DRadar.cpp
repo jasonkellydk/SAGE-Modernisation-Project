@@ -1,6 +1,6 @@
 import Assets.Images.Color;
 import Assets.Images.PixelEncoding;
-#include "WW3D2/WW3D.h"
+
 #include "W3DDevice/GameClient/W3DGraphicsResources.h"
 import Engine.UI.WND;
 /*
@@ -58,7 +58,7 @@ import Engine.UI.WND;
 #include "W3DDevice/GameClient/BaseHeightMap.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
 #include "W3DDevice/GameClient/W3DShroud.h"
-#include "WW3D2/Texture.h"
+#include "W3DDevice/GameClient/W3DTextureHandle.h"
 #include "WWMath/vector2i.h"
 import Graphics.RHI;
 import Graphics.Resources.Textures.Storage;
@@ -78,7 +78,7 @@ public:
 		if (image == nullptr) return;
 		Engine::UI::WND::ImageRef reference;
 		if (BitIsSet(image->getStatus(), IMAGE_STATUS_RAW_TEXTURE)) {
-			auto *texture = static_cast<TextureClass *>(const_cast<void *>(image->getRawTextureData()));
+			auto *texture = static_cast<W3DTextureHandle *>(const_cast<void *>(image->getRawTextureData()));
 			const auto handle = Resolve_Graphics_Texture(texture);
 			if (!handle.Is_Valid()) { succeeded = FALSE; return; }
 			reference.generated = Graphics::Get_Renderer2D().Register_Texture(
@@ -676,7 +676,7 @@ void W3DRadar::drawIcons(RadarDrawData &drawing, Int pixelX, Int pixelY, Int wid
 
 //-------------------------------------------------------------------------------------------------
 //-------------------------------------------------------------------------------------------------
-void W3DRadar::updateObjectTexture(TextureClass *texture)
+void W3DRadar::updateObjectTexture(W3DTextureHandle *texture)
 {
 	// reset the overlay texture
 	Graphics::TextureEdit *surface = texture->Get_Surface_Level();
@@ -739,7 +739,7 @@ Bool W3DRadar::canRenderObject( const RadarObject *rObj, const Player *localPlay
 //-------------------------------------------------------------------------------------------------
 /** Render an object list into the texture passed in */
 //-------------------------------------------------------------------------------------------------
-void W3DRadar::renderObjectList( const RadarObject *listHead, TextureClass *texture )
+void W3DRadar::renderObjectList( const RadarObject *listHead, W3DTextureHandle *texture )
 {
 
 	// sanity
@@ -960,12 +960,12 @@ void W3DRadar::init()
 
 	// allocate our terrain texture
 	// poolify
-	m_terrainTexture = MSGNEW("TextureClass") TextureClass( m_textureWidth, m_textureHeight,
+	m_terrainTexture = MSGNEW("W3DTextureHandle") W3DTextureHandle( m_textureWidth, m_textureHeight,
 																			 m_terrainTextureFormat, MIP_LEVELS_1 );
 	DEBUG_ASSERTCRASH( m_terrainTexture, ("W3DRadar: Unable to allocate terrain texture") );
 
 	// allocate our overlay texture
-	m_overlayTexture = MSGNEW("TextureClass") TextureClass( m_textureWidth, m_textureHeight,
+	m_overlayTexture = MSGNEW("W3DTextureHandle") W3DTextureHandle( m_textureWidth, m_textureHeight,
 																			 m_overlayTextureFormat, MIP_LEVELS_1 );
 	DEBUG_ASSERTCRASH( m_overlayTexture, ("W3DRadar: Unable to allocate overlay texture") );
 
@@ -974,7 +974,7 @@ void W3DRadar::init()
 //	m_overlayTexture->Set_Mag_Filter( Graphics::SamplingFilter::Disabled );
 
 	// allocate our shroud texture
-	m_shroudTexture = MSGNEW("TextureClass") TextureClass( m_textureWidth, m_textureHeight,
+	m_shroudTexture = MSGNEW("W3DTextureHandle") W3DTextureHandle( m_textureWidth, m_textureHeight,
 																			 m_shroudTextureFormat, MIP_LEVELS_1 );
 	DEBUG_ASSERTCRASH( m_shroudTexture, ("W3DRadar: Unable to allocate shroud texture") );
 	m_shroudTexture->Get_Sampling().minification =  Graphics::SamplingFilter::Default ;
@@ -1591,7 +1591,7 @@ void W3DRadar::notifyViewChanged()
 
 /*
  *
-	void W3DRadar::renderObjectList( const RadarObject *listHead, TextureClass *texture )
+	void W3DRadar::renderObjectList( const RadarObject *listHead, W3DTextureHandle *texture )
 {
 
 	// sanity

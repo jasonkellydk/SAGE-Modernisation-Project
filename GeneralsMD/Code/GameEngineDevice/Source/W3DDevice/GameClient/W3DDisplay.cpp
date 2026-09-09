@@ -1,3 +1,10 @@
+#include <functional>
+import Graphics.Frame.RenderClock;
+import Graphics.Scene.OrderedDraws;
+import Graphics.Frame.RenderSettings;
+#include "W3DDevice/GameClient/W3DRenderServices.h"
+#include "W3DDevice/GameClient/W3DDazzleRenderObject.h"
+#include "W3DDevice/GameClient/W3DDazzleResources.h"
 #include <climits>
 import Graphics.Presentation.DisplayModes;
 import Graphics.Resources.Textures.Quality;
@@ -58,7 +65,7 @@ import Graphics.Scene.Debug.CollisionBox;
 #include <utility>
 #include <vector>
 
-import Graphics.Backends.DX11.FrameRuntime;
+import Graphics.Frame.Runtime;
 import Graphics.Renderer2D;
 import Graphics.Frame.SceneRenderers;
 import Graphics.Passes.Bloom;
@@ -120,6 +127,7 @@ import Graphics.Scene.Screen.Filters;
 #include "W3DDevice/GameClient/W3DGameClient.h"
 #include "W3DDevice/GameClient/W3DFileSystem.h"
 #include "W3DDevice/GameClient/W3DDynamicLight.h"
+#include "W3DDevice/GameClient/W3DLight.h"
 #include "W3DDevice/GameClient/W3DParticleSys.h"
 #include "W3DDevice/GameClient/BaseHeightMap.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
@@ -133,22 +141,32 @@ import Graphics.Scene.Screen.Filters;
 #include "W3DDevice/GameClient/W3DScreenshot.h"
 #include "W3DDevice/GameClient/W3DShroud.h"
 #include "WWMath/wwmath.h"
-#include "WW3D2/WW3D.h"
-#include "WW3D2/W3DFile.h"
-#include "WW3D2/GraphicsGeometry.h"
-#include "WW3D2/PartEmt.h"
+
+#include "WWMath/matrix4.h"
 #include "W3DDevice/GameClient/W3DEmitterLoader.h"
 import Assets.Images.PixelEncoding;
+import Assets.Adapters.W3D.Chunks;
+import Assets.Adapters.W3D.Aggregate;
+import Assets.Adapters.W3D.Assembly;
+import Assets.Adapters.W3D.Box;
+import Assets.Adapters.W3D.Collection;
+import Assets.Adapters.W3D.Dazzle;
+import Assets.Adapters.W3D.LevelSet;
+import Assets.Adapters.W3D.Null;
+import Assets.Adapters.W3D.Particles;
+import Assets.Adapters.W3D.Ring;
+import Assets.Adapters.W3D.Sphere;
 import Graphics.RHI;
-#include "WW3D2/Mesh.h"
-#include "WW3D2/HLOD.h"
-#include "WW3D2/MeshMdl.h"
+#include "W3DDevice/GameClient/W3DMeshRenderObject.h"
+#include "W3DDevice/GameClient/W3DHierarchyRenderObject.h"
+#include "W3DDevice/GameClient/W3DCollectionRenderObject.h"
+#include "W3DDevice/GameClient/W3DMeshResource.h"
 
-extern "C" bool Graphics_DX11_Begin_Frame() noexcept;
-extern "C" bool Graphics_DX11_Execute_Queued_Draws() noexcept;
-extern "C" bool Graphics_DX11_End_Frame() noexcept;
-extern "C" bool Graphics_DX11_Present() noexcept;
-extern "C" void Graphics_DX11_Abort_Frame() noexcept;
+extern "C" bool Graphics_Begin_Frame() noexcept;
+extern "C" bool Graphics_Execute_Queued_Draws() noexcept;
+extern "C" bool Graphics_End_Frame() noexcept;
+extern "C" bool Graphics_Present() noexcept;
+extern "C" void Graphics_Abort_Frame() noexcept;
 
 #include "GameLogic/ScriptEngine.h"		// For TheScriptEngine - jkmcd
 #include "GameLogic/GameLogic.h"
@@ -217,11 +235,12 @@ static void Set_UI_Clip(Bool enabled, const IRegion2D &region) noexcept
 
 static bool initializeGraphicsSceneRenderers(Graphics::Device &device)
 {
-    return Graphics::Initialize_Scene_Renderers(device, std::filesystem::path("GraphicsShaders"))
-        && Graphics::Get_Bloom_Renderer().Initialize(device, std::filesystem::path("GraphicsShaders"))
-        && Graphics::Get_Light_Rays_Renderer().Initialize(device, std::filesystem::path("GraphicsShaders"))
-        && Graphics::Get_SSAO_Renderer().Initialize(device, std::filesystem::path("GraphicsShaders"))
-        && Initialize_Video_Presentation(device, std::filesystem::path("GraphicsShaders"));
+    const auto shader_directory = Graphics::Frame_Shader_Directory(std::filesystem::path("GraphicsShaders"));
+    return Graphics::Initialize_Scene_Renderers(device, shader_directory)
+        && Graphics::Get_Bloom_Renderer().Initialize(device, shader_directory)
+        && Graphics::Get_Light_Rays_Renderer().Initialize(device, shader_directory)
+        && Graphics::Get_SSAO_Renderer().Initialize(device, shader_directory)
+        && Initialize_Video_Presentation(device, shader_directory);
 }
 
 static bool executeGraphicsFramePasses(Graphics::Device &device, Graphics::CommandList &commands, const Graphics::FrameTargets &targets) noexcept
@@ -334,8 +353,8 @@ static void shutdownGraphicsRenderer() noexcept
 static bool beginGraphicsFrame()
 {
 	GENERALS_GRAPHICS_PROFILE_SCOPE("Graphics.Frame.Begin");
-    if (!Graphics_DX11_Begin_Frame()) {
-        Graphics_DX11_Abort_Frame();
+    if (!Graphics_Begin_Frame()) {
+        Graphics_Abort_Frame();
         return false;
     }
     auto* device = Graphics::Shared_Frame_Device();
@@ -346,7 +365,7 @@ static bool beginGraphicsFrame()
 	return true;
 }
 
-static void updateGraphicsView(CameraClass *camera)
+static void updateGraphicsView(W3DCamera *camera)
 {
 	if (camera == nullptr || Graphics::Shared_Frame_Device() == nullptr)
 		return;
@@ -397,20 +416,20 @@ static void updateGraphicsView(CameraClass *camera)
 		static_cast<W3DParticleSystemManager *>(TheParticleSystemManager)->Set_Graphics_Particle_View(graphicsParticleView);
 }
 
-static bool renderGraphicsScenePasses(CameraClass *camera)
+static bool renderGraphicsScenePasses(W3DCamera *camera)
 {
 	GENERALS_GRAPHICS_PROFILE_SCOPE("W3DDisplay::renderGraphicsScenePasses");
 	updateGraphicsView(camera);
-	if (!Graphics_DX11_Execute_Queued_Draws()) {
+	if (!Graphics_Execute_Queued_Draws()) {
 		uiFrameActive = false;
-		Graphics_DX11_Abort_Frame();
+		Graphics_Abort_Frame();
 		Graphics::Get_Frame_Submission_Statistics().Cancel();
 		return false;
 	}
 
-	if (!Graphics_DX11_End_Frame()) {
+	if (!Graphics_End_Frame()) {
 		uiFrameActive = false;
-		Graphics_DX11_Abort_Frame();
+		Graphics_Abort_Frame();
 		Graphics::Get_Frame_Submission_Statistics().Cancel();
 		return false;
 	}
@@ -423,9 +442,9 @@ static bool renderGraphicsScenePasses(CameraClass *camera)
 		}
 	}
 
-	if (!Graphics_DX11_Present()) {
+	if (!Graphics_Present()) {
 		uiFrameActive = false;
-		Graphics_DX11_Abort_Frame();
+		Graphics_Abort_Frame();
 		Graphics::Get_Frame_Submission_Statistics().Cancel();
 		return false;
 	}
@@ -745,14 +764,15 @@ W3DDisplay::~W3DDisplay()
 	Graphics::Get_Frame_Submission_Statistics().Reset();
 	if (!TheGlobalData->m_headless)
 		W3DShaderManager::shutdown();
-	m_assetManager->Free_Assets();
+	Shutdown_Dazzle_Resources();
+	m_assetManager->Catalog().Free_Assets();
 	delete m_assetManager;
 	graphicsRendererAvailable = false;
 	shutdownGraphicsRenderer();
 	W3DAssetRuntime::Shutdown();
 	if (!TheGlobalData->m_headless)
-		WW3D::Shutdown();
-		Graphics::Graphics_DX11_Shutdown_Shared_Frame();
+		Get_W3D_Render_Services().Shutdown();
+		Graphics::Graphics_Shutdown_Shared_Frame();
 	WWMath::Shutdown();
 	if (!TheGlobalData->m_headless)
 	delete TheW3DFileSystem;
@@ -950,14 +970,14 @@ void W3DDisplay::init()
 		m_3DScene =NEW_REF( RTS3DScene, () );
 	#if defined(RTS_DEBUG)
 		if( TheGlobalData->m_wireframe )
-			m_3DScene->Set_Polygon_Mode( SceneClass::LINE );
+			m_3DScene->Set_Polygon_Mode( W3DScene::LINE );
 	#endif
 	//============================================================================
 		// m_myLight = NEW_REF
 	//============================================================================
 		Int lindex;
 		for (lindex=0; lindex<TheGlobalData->m_numGlobalLights; lindex++)
-		{	m_myLight[lindex] = NEW_REF( LightClass, (LightClass::DIRECTIONAL) );
+		{	m_myLight[lindex] = NEW_REF( W3DLight, (W3DLight::DIRECTIONAL) );
 		}
 
 		setTimeOfDay( TheGlobalData->m_timeOfDay );	//set each light to correct values for given time
@@ -986,16 +1006,22 @@ void W3DDisplay::init()
 
 	// create a new asset manager
 	m_assetManager = NEW W3DAssetManager;
-	m_assetManager->Install_Reserved_Model_Factory(
-		std::unique_ptr<Graphics::ModelFactory<RenderObjClass>>(
+	m_assetManager->Catalog().Install_Reserved_Model_Factory(
+		std::unique_ptr<Graphics::ModelFactory<W3DRenderObject>>(
 			Create_Null_Render_Object_Factory()));
-	m_assetManager->Register_Model_Decoder(W3D_CHUNK_NULL_OBJECT, Load_Null_Factory);
-	m_assetManager->Register_Model_Decoder(W3D_CHUNK_EMITTER,Load_ParticleEmitter_Factory);
-	m_assetManager->Register_Model_Decoder(W3D_CHUNK_AGGREGATE,Load_Aggregate_Factory);
-	m_assetManager->Register_Model_Decoder(W3D_CHUNK_BOX,Load_Collision_Box_Factory);
-	m_assetManager->Register_Model_Decoder(W3D_CHUNK_RING,Load_Ring_Factory);
-	m_assetManager->Register_Model_Decoder(W3D_CHUNK_SPHERE,Load_Sphere_Factory);
-	m_assetManager->Set_WW3D_Load_On_Demand( true );
+	m_assetManager->Catalog().Register_Model_Decoder(Assets::W3D::W3DChunkDazzle, Load_Dazzle_Factory);
+	m_assetManager->Catalog().Register_Model_Decoder(Assets::W3D::W3DChunkMesh, Load_Mesh_Factory);
+	m_assetManager->Catalog().Register_Model_Decoder(Assets::W3D::W3DChunkNullObject, Load_Null_Factory);
+	m_assetManager->Catalog().Register_Model_Decoder(Assets::W3D::W3DChunkEmitter,Load_ParticleEmitter_Factory);
+	m_assetManager->Catalog().Register_Model_Decoder(Assets::W3D::W3DChunkAggregate,Load_Aggregate_Factory);
+	m_assetManager->Catalog().Register_Model_Decoder(Assets::W3D::W3DChunkHModel,Load_HModel_Factory);
+	m_assetManager->Catalog().Register_Model_Decoder(Assets::W3D::W3DChunkCollection,Load_Collection_Factory);
+	m_assetManager->Catalog().Register_Model_Decoder(Assets::W3D::W3DChunkHlod,Load_HLod_Factory);
+	m_assetManager->Catalog().Register_Model_Decoder(Assets::W3D::W3DChunkLodModel,Load_ModelLevels_Factory);
+	m_assetManager->Catalog().Register_Model_Decoder(Assets::W3D::W3DChunkBox,Load_Collision_Box_Factory);
+	m_assetManager->Catalog().Register_Model_Decoder(Assets::W3D::W3DChunkRing,Load_Ring_Factory);
+	m_assetManager->Catalog().Register_Model_Decoder(Assets::W3D::W3DChunkSphere,Load_Sphere_Factory);
+	m_assetManager->Catalog().Set_Load_On_Demand(true);
 
 	if (!TheGlobalData->m_headless)
 	{
@@ -1005,10 +1031,12 @@ void W3DDisplay::init()
 		}
 		Graphics::Get_Render_Diagnostics() = {};
 		Graphics::Get_Texture_Quality_Settings().prefer_16_bits = true;
-		if (WW3D::Init() != WW3D_ERROR_OK)
+		if (!Get_W3D_Render_Services().Initialize())
 			throw ERROR_INVALID_D3D;	//failed to initialize.  User probably doesn't have DX 8.1
 
-		WW3D::Set_Prelit_Mode( WW3D::PRELIT_MODE_LIGHTMAP_MULTI_PASS );
+		if (!Initialize_Dazzle_Resources()) throw ERROR_INVALID_D3D;
+
+		Graphics::Get_Render_Settings().Set_Prelit_Mode(Graphics::RenderPrelitMode::LightmapMultiPass);
 		Graphics::Set_Collision_Box_Display_Mask(0x00);	///<set to 0xff to make collision boxes visible
 		Graphics::Get_Scene_Draw_Queue().Set_Enabled(true);
 
@@ -1034,15 +1062,15 @@ void W3DDisplay::init()
                 TheWritableGlobalData->m_yResolution = height;
             }
             resizeSDLWindow(getWidth(),getHeight(),getWindowed());
-            Graphics::DX11DeviceOptions options;
+            Graphics::FrameDeviceOptions options;
             options.window = SDLPlatformWindow::nativeHandle();
             options.width = getWidth(); options.height = getHeight();
             options.backbuffer_format = Graphics::RHITextureFormat::BGRA8_UNorm;
             device_ready = Graphics::Initialize_Frame_Device(options);
         }
         if (!device_ready) {
-            WW3D::Shutdown();
-            Graphics::Graphics_DX11_Shutdown_Shared_Frame();
+            Get_W3D_Render_Services().Shutdown();
+            Graphics::Graphics_Shutdown_Shared_Frame();
             WWMath::Shutdown();
             throw ERROR_INVALID_D3D;
         }
@@ -1056,8 +1084,8 @@ void W3DDisplay::init()
 		Graphics::Get_Texture_Quality_Settings().prefer_16_bits = getBitDepth() == 16;
 		graphicsRendererAvailable = initializeGraphicsRenderer();
 		if (!graphicsRendererAvailable) {
-			WW3D::Shutdown();
-			Graphics::Graphics_DX11_Shutdown_Shared_Frame();
+			Get_W3D_Render_Services().Shutdown();
+			Graphics::Graphics_Shutdown_Shared_Frame();
 			WWMath::Shutdown();
 			throw ERROR_INVALID_D3D;
 		}
@@ -1132,10 +1160,10 @@ void W3DDisplay::reset()
 
 	if (m_3DScene != nullptr)
 	{
-		SceneIterator *sceneIter = m_3DScene->Create_Iterator();
+		W3DSceneIterator *sceneIter = m_3DScene->Create_Iterator();
 		sceneIter->First();
 		while(!sceneIter->Is_Done()) {
-			RenderObjClass * robj = sceneIter->Current_Item();
+			W3DRenderObject * robj = sceneIter->Current_Item();
 			robj->Add_Ref();
 			m_3DScene->Remove_Render_Object(robj);
 			robj->Release_Ref();
@@ -1148,7 +1176,7 @@ void W3DDisplay::reset()
 
 	// release any unused assets from W3D
 	/// @todo really need that "scene abstraction", having this stuff in the display is icky
-	m_assetManager->Release_Unused_Assets();
+		m_assetManager->Catalog().Release_Unused_Assets();
 
 	if (TheWritableGlobalData)
 		TheWritableGlobalData->m_drawSkyBox =0;
@@ -1840,18 +1868,18 @@ void W3DDisplay::calculateTerrainLOD()
 			Int64 startTime64 = getPerformanceCounter();
 			// start render block
 			updateViews();
-            if (!graphicsRendererAvailable || !Graphics_DX11_Begin_Frame()) {
-                Graphics_DX11_Abort_Frame();
+            if (!graphicsRendererAvailable || !Graphics_Begin_Frame()) {
+                Graphics_Abort_Frame();
                 m_3DScene->drawTerrainOnly(false);
                 return;
             }
-            if (WW3D::Begin_Render(true, true, Vector3(0.0f, 0.0f, 0.0f)) == WW3D_ERROR_OK) {
+            if (Get_W3D_Render_Services().Begin_Render(true, true, Vector3(0.0f, 0.0f, 0.0f))) {
                 drawViews();
-                WW3D::End_Render();
-                if (!Graphics_DX11_End_Frame() || !Graphics_DX11_Present())
-                    Graphics_DX11_Abort_Frame();
+                Get_W3D_Render_Services().End_Render();
+                if (!Graphics_End_Frame() || !Graphics_Present())
+                    Graphics_Abort_Frame();
             } else {
-                Graphics_DX11_Abort_Frame();
+                Graphics_Abort_Frame();
             }
 			Int64 time64 = getPerformanceCounter();
 			timeForFrame = (float)((double)(time64-startTime64) / (double)(freq64));
@@ -2037,12 +2065,12 @@ AGAIN:
 		}
 	}
 
-	WW3D::Update_Logic_Frame_Time(TheFramePacer->getLogicTimeStepMilliseconds());
+	Graphics::Get_Render_Clock().Update_Logic_Frame_Time(TheFramePacer->getLogicTimeStepMilliseconds());
 
 	// TheSuperHackers @info This binds the WW3D update to the logic update.
 	{
 		GENERALS_GRAPHICS_PROFILE_SCOPE("Graphics.Scene.Sync");
-		WW3D::Sync(TheGameLogic->hasUpdated());
+		Graphics::Get_Render_Clock().Sync(TheGameLogic->hasUpdated());
 	}
 
 	static Int now;
@@ -2115,9 +2143,9 @@ AGAIN:
 			if (graphicsRendererAvailable) {
 				graphicsFrame = beginGraphicsFrame();
 				if (!graphicsFrame)
-					Graphics_DX11_Abort_Frame();
+					Graphics_Abort_Frame();
 			}
-			if (graphicsFrame && (TheGlobalData->m_breakTheMovie == FALSE) && (TheGlobalData->m_disableRender == false) && WW3D::Begin_Render( true, true, Vector3( 0.0f, 0.0f, 0.0f ), TheWaterTransparency->m_minWaterOpacity ) == WW3D_ERROR_OK)
+			if (graphicsFrame && (TheGlobalData->m_breakTheMovie == FALSE) && (TheGlobalData->m_disableRender == false) && Get_W3D_Render_Services().Begin_Render( true, true, Vector3( 0.0f, 0.0f, 0.0f ), TheWaterTransparency->m_minWaterOpacity ))
 			{
 
 				if(TheGlobalData->m_loadScreenRender == TRUE)
@@ -2127,7 +2155,7 @@ AGAIN:
 						TheMouse->draw();	//keep applying the current cursor style so it remains hidden if needed.
 					if (graphicsFrame)
 						Submit_Videos(static_cast<std::uint32_t>(getWidth()), static_cast<std::uint32_t>(getHeight()));
-					WW3D::End_Render();
+					Get_W3D_Render_Services().End_Render();
 					if (graphicsFrame)
 						renderGraphicsScenePasses(primaryW3DView->get3DCamera());
 					continue;
@@ -2219,27 +2247,27 @@ AGAIN:
                     auto* device = Graphics::Shared_Frame_Device();
                     if (device) {
                         const auto frame = Graphics::Get_Frame_Preview().Read(
-                            {device->Get_Swap_Chain().Backbuffer(), device->Get_Swap_Chain().Depth_Target()},
+                            Graphics::Shared_Frame_Targets(),
                             Graphics::RHITextureFormat::BGRA8_UNorm, PROFILER_FRAME_IMAGE_SIZE,
-                            WW3D::Get_Logic_Time_Milliseconds(), PROFILER_FRAME_IMAGE_INTERVAL_MS);
+                            Graphics::Get_Render_Clock().Logic_Time_Milliseconds(), PROFILER_FRAME_IMAGE_INTERVAL_MS);
                         if (frame.Is_Valid())
                             PROFILER_FRAME_IMAGE(frame.pixels.data(), frame.width, frame.height, 0, false);
                     }
                 }
 #endif
                 // render is all done!
-				WW3D::End_Render();
+				Get_W3D_Render_Services().End_Render();
 				if (graphicsFrame)
 					renderGraphicsScenePasses(primaryW3DView->get3DCamera());
 			}
 			else
 			{
 				if (graphicsFrame)
-					Graphics_DX11_Abort_Frame();
+					Graphics_Abort_Frame();
 				if (couldRender)
 				{
 					couldRender = false;
-					DEBUG_LOG(("Could not do WW3D::Begin_Render()!  Are we ALT-Tabbed out?"));
+					DEBUG_LOG(("Could not prepare RenderServices::Begin_Render()!  Are we ALT-Tabbed out?"));
 				}
 			}
 		}
@@ -2355,7 +2383,7 @@ void W3DDisplay::createLightPulse( const Coord3D *pos, const RGBColor *color,
 	theDynamicLight->setDecayColor();
 	//theDynamicLight->setDonut(donut);
 	// (gth) CNC3 enable far attenuation.  C&C3 defaults to disabled.  Must enable to match Generals. MW 8-06-03
-	theDynamicLight->Set_Flag(LightClass::FAR_ATTENUATION,true);
+	theDynamicLight->Set_Flag(W3DLight::FAR_ATTENUATION,true);
 }
 
 void W3DDisplay::toggleLetterBox()
@@ -2709,13 +2737,13 @@ void W3DDisplay::takeScreenShot(ScreenshotFormat format, Int jpegQuality)
 
 static FILE *AssetDumpFile=nullptr;
 
-void dumpMeshAssets(MeshClass *mesh)
+void dumpMeshAssets(W3DMeshRenderObject *mesh)
 {
 	if (mesh)
 	{
-		TextureClass *texture;
-		MeshModelClass *model=mesh->Get_Model();
-		for (int stage=0;stage<MeshModelClass::MaterialDescription::MAX_TEX_STAGES;++stage)
+		W3DTextureHandle *texture;
+		W3DMeshResource *model=mesh->Get_Model();
+		for (int stage=0;stage<W3DMeshResource::MaterialDescription::MAX_TEX_STAGES;++stage)
 		{
 			for (int pass=0;pass<model->Get_Pass_Count();++pass)
 			{
@@ -2741,19 +2769,19 @@ void dumpMeshAssets(MeshClass *mesh)
 	}
 }
 
-void dumpHLODAssets(HLodClass *hlod)
+void dumpHLODAssets(W3DHierarchyRenderObject *hlod)
 {
 	if (hlod)
 	{
 		//model composed of multiple meshes.
 		for (Int i=0; i<hlod->Get_Num_Sub_Objects(); i++)
 		{
-			RenderObjClass *subObj=hlod->Get_Sub_Object(i);
-			if (subObj->Class_ID() == RenderObjClass::CLASSID_HLOD)
-				dumpHLODAssets((HLodClass *)subObj);
+			W3DRenderObject *subObj=hlod->Get_Sub_Object(i);
+			if (subObj->Class_ID() == W3DRenderObject::CLASSID_HLOD)
+				dumpHLODAssets((W3DHierarchyRenderObject *)subObj);
 			else
-			if (subObj->Class_ID() == RenderObjClass::CLASSID_MESH)
-				dumpMeshAssets((MeshClass *)subObj);
+			if (subObj->Class_ID() == W3DRenderObject::CLASSID_MESH)
+				dumpMeshAssets((W3DMeshRenderObject *)subObj);
 		}
 	}
 }
@@ -2769,19 +2797,19 @@ void W3DDisplay::dumpModelAssets(const char *path)
 		if (AssetDumpFile)
 		{
 			fprintf(AssetDumpFile,"Models and Textures used on %s:\n\n",TheGlobalData->m_mapName.str());
-			SceneIterator *sceneIter = m_3DScene->Create_Iterator();
+			W3DSceneIterator *sceneIter = m_3DScene->Create_Iterator();
 			sceneIter->First();
 			while(!sceneIter->Is_Done())
 			{
-				RenderObjClass * robj = sceneIter->Current_Item();
-				if (robj->Class_ID() == RenderObjClass::CLASSID_HLOD)
+				W3DRenderObject * robj = sceneIter->Current_Item();
+				if (robj->Class_ID() == W3DRenderObject::CLASSID_HLOD)
 				{	fprintf(AssetDumpFile,"%s.W3D:\n",robj->Get_Name());
-					dumpHLODAssets((HLodClass *)robj);
+					dumpHLODAssets((W3DHierarchyRenderObject *)robj);
 				}
 				else
-				if (robj->Class_ID() == RenderObjClass::CLASSID_MESH)
+				if (robj->Class_ID() == W3DRenderObject::CLASSID_MESH)
 				{	fprintf(AssetDumpFile,"%s.W3D:\n",robj->Get_Name());
-					dumpMeshAssets((MeshClass *)robj);
+					dumpMeshAssets((W3DMeshRenderObject *)robj);
 				}
 				sceneIter->Next();
 			}
@@ -2802,7 +2830,7 @@ void W3DDisplay::preloadModelAssets( AsciiString model )
 		AsciiString nameWithExtension;
 
 		nameWithExtension.format( "%s.w3d", model.str() );
-		m_assetManager->Load_3D_Assets( nameWithExtension.str() );
+		m_assetManager->Catalog().Load_3D_Assets( nameWithExtension.str() );
 
 	}
 
@@ -2816,7 +2844,7 @@ void W3DDisplay::preloadTextureAssets( AsciiString texture )
 
 	if( m_assetManager )
 	{
-		TextureClass *theTexture = m_assetManager->Get_Texture( texture.str() );
+		W3DTextureHandle *theTexture = m_assetManager->Catalog().Get_Texture( texture.str() );
 		theTexture->Release_Ref();//release reference
 	}
 
@@ -2829,7 +2857,7 @@ void W3DDisplay::doSmartAssetPurgeAndPreload(const char* usageFileName)
 	if (!m_assetManager || !usageFileName || !*usageFileName)
 		return;
 
-	DynamicVectorClass<StringClass> names(8000);
+	std::vector<std::string> retained_names;
 
 	// use TheFileSystem here so we can bigify these files
 	File* f = TheFileSystem->openFile(usageFileName, File::READ | File::TEXT);
@@ -2846,13 +2874,13 @@ void W3DDisplay::doSmartAssetPurgeAndPreload(const char* usageFileName)
 			if (tmp.str()[0] == ';')
 				continue;
 
-			names.Add(StringClass(tmp.str()));
+			retained_names.emplace_back(tmp.str());
 		}
 		f->close();
 	}
 
 	// just free everything if there's no exclusion list file (send in an empty list)
-	m_assetManager->Free_Assets_With_Exclusion_List(names);
+	m_assetManager->Catalog().Free_Assets_With_Exclusion_List(retained_names);
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -2863,8 +2891,8 @@ void W3DDisplay::dumpAssetUsage(const char* mapname)
 	if (!m_assetManager || !mapname || !*mapname)
 		return;
 
-	DynamicVectorClass<StringClass> names(8000);
-	m_assetManager->Create_Asset_List(names);
+	std::vector<std::string> names;
+	m_assetManager->Catalog().Create_Asset_List(names);
 
 	const char* leafname = strrchr(mapname, '\\');
 	if (leafname)
@@ -2885,10 +2913,9 @@ void W3DDisplay::dumpAssetUsage(const char* mapname)
 	FILE *fp = fopen(buf, "w");
 	if (fp)
 	{
-		for (int i=0; i<names.Count(); i++)
+		for (const std::string &name : names)
 		{
-			const char* n = names[i];
-			fprintf(fp, "%s\n", n);
+			fprintf(fp, "%s\n", name.c_str());
 		}
 		fclose(fp);
 	}

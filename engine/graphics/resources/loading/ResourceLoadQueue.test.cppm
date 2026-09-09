@@ -13,7 +13,7 @@ module;
 export module Graphics.Resources.Loading.Queue.Tests;
 import Graphics.Resources.Loading.Queue;
 import Graphics.Resources.Textures.Upload;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 import Graphics.Scene.Props.Renderer;
 using namespace Graphics;
 
@@ -181,11 +181,11 @@ BOOST_AUTO_TEST_CASE(shutdown_drains_pending_jobs_and_allows_clean_restart)
 
 BOOST_AUTO_TEST_CASE(worker_preparation_publishes_complete_texture_rgb_and_alpha)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     ResourceLoadQueue queue;
     BOOST_REQUIRE(queue.Start());
     PropRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device,GRAPHICS_TERRAIN_SHADER_DIRECTORY));
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     const auto target=device.Create_Texture({1,1,1,RHITextureFormat::RGBA8_UNorm,
         static_cast<unsigned>(RHITextureUsage::RenderTarget)});
     const auto depth=device.Create_Texture({1,1,1,RHITextureFormat::D32_Float,

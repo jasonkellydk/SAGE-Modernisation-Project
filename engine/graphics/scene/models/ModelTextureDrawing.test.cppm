@@ -11,7 +11,7 @@ import Assets.Identity;
 import Assets.Models;
 import Assets.Materials;
 import Graphics.Scene.Models.ModelAssetBinding;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 using namespace Graphics;
 
 BOOST_AUTO_TEST_CASE(model_binding_loads_named_texture_and_preserves_cutout)
@@ -37,9 +37,9 @@ BOOST_AUTO_TEST_CASE(model_binding_loads_named_texture_and_preserves_cutout)
     description.materials={material};
     const std::array material_handles{material_asset};
     const Assets::ModelAsset model({Assets::AssetType::Model,"quad"},std::move(description),material_handles);
-    DX11Device device({true}); BOOST_REQUIRE(device.Is_Valid());
+    GraphicsTestDevice device({true}); BOOST_REQUIRE(device.Is_Valid());
     StaticMeshRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device,std::filesystem::path(GRAPHICS_MODEL_SHADER_DIRECTORY),2,1,16,4));
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_MODEL_SHADER_DIRECTORY),2,1,16,4));
     renderer.Set_View({Matrix4x4::Identity(),Matrix4x4::Identity(),{},{0,0,128,72,0,1}});
     StaticMeshBinding binding;
     RenderTransform transform; transform.matrix=Matrix4x4::Identity().values;

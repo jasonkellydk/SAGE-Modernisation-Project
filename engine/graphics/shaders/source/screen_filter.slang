@@ -1,3 +1,4 @@
+#include "resource_access.slangh"
 cbuffer Parameters : register(b0)
 {
     float4 Tint;
@@ -6,10 +7,10 @@ cbuffer Parameters : register(b0)
     float VertexAlpha;
     float Textured;
 };
-Texture2D<float4> Source : register(t0);
-Texture2D<float4> Mask : register(t1);
-SamplerState SourceSampler : register(s0);
-SamplerState MaskSampler : register(s1);
+GRAPHICS_TEXTURE_2D(Source, float4, 0)
+GRAPHICS_TEXTURE_2D(Mask, float4, 1)
+GRAPHICS_SAMPLER(SourceSampler, 0)
+GRAPHICS_SAMPLER(MaskSampler, 1)
 struct Input
 {
     float3 position : POSITION;
@@ -34,13 +35,13 @@ Output screen_filter_vertex(Input input)
 }
 float4 screen_filter_pixel(Output input) : SV_Target
 {
-    float4 color=Textured>0.5 ? Source.Sample(SourceSampler,input.uv)*input.color : input.color;
+    float4 color=Textured>0.5 ? Source().Sample(SourceSampler(),input.uv)*input.color : input.color;
     if (Operation==1) {
         float grey=dot(color.rgb,float3(0.3,0.59,0.11));
         color=float4(lerp(color.rgb,grey*Tint.rgb,Fade),grey*Tint.a);
     }
     if (VertexAlpha>0.5) color.a=input.color.a;
-    if (Operation==2) color*=Mask.Sample(MaskSampler,input.maskUV);
+    if (Operation==2) color*=Mask().Sample(MaskSampler(),input.maskUV);
     if (Operation==3) color.rgb=color.bgr;
     return color;
 }

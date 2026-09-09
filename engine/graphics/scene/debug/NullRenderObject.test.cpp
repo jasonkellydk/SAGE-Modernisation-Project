@@ -13,18 +13,17 @@
 #include <vector>
 
 import Assets.Adapters.W3D.Null;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 import Graphics.RHI;
 import Graphics.Scene.Models.Factory;
 
 #include "W3DDevice/GameClient/NullRenderObject.h"
-#include "WW3D2/AssetMgr.h"
-#include "WW3D2/Camera.h"
-#include "WW3D2/ColTest.h"
-#include "WW3D2/ColType.h"
-#include "WW3D2/IntTest.h"
-#include "WW3D2/RInfo.h"
-#include "WW3D2/WW3DIds.h"
+#include "W3DDevice/GameClient/W3DAssetCatalog.h"
+#include "W3DDevice/GameClient/W3DCamera.h"
+#include "W3DDevice/GameClient/W3DCastQuery.h"
+#include "W3DDevice/GameClient/W3DSceneQueryMask.h"
+#include "W3DDevice/GameClient/W3DIntersectionQuery.h"
+#include "W3DDevice/GameClient/W3DRenderContext.h"
 #include "WWMath/aabox.h"
 #include "WWMath/lineseg.h"
 #include "WWMath/obbox.h"
@@ -72,9 +71,9 @@ public:
 		}
 	}
 
-	bool Load(WW3DAssetManager &manager)
+	bool Load(W3DAssetCatalog &catalog)
 	{
-		return m_ready && manager.Load_3D_Assets(m_file);
+		return m_ready && catalog.Load_3D_Assets(m_file);
 	}
 
 private:
@@ -82,24 +81,24 @@ private:
 	bool m_ready = false;
 };
 
-void Install_Null_Decoder(WW3DAssetManager &manager)
+void Install_Null_Decoder(W3DAssetCatalog &catalog)
 {
-	manager.Register_Model_Decoder(
+	catalog.Register_Model_Decoder(
 		static_cast<int>(Assets::W3D::W3DChunkNullObject), Load_Null_Factory);
 }
 
-void Install_Reserved_Null(WW3DAssetManager &manager)
+void Install_Reserved_Null(W3DAssetCatalog &catalog)
 {
-	BOOST_REQUIRE(manager.Install_Reserved_Model_Factory(
-		std::unique_ptr<Graphics::ModelFactory<RenderObjClass>>(
+	BOOST_REQUIRE(catalog.Install_Reserved_Model_Factory(
+		std::unique_ptr<Graphics::ModelFactory<W3DRenderObject>>(
 			Create_Null_Render_Object_Factory())));
 }
 
-void Add_Dynamic_Null(WW3DAssetManager &manager, const char *name)
+void Add_Dynamic_Null(W3DAssetCatalog &catalog, const char *name)
 {
 	const std::string identity(name);
-	manager.Add_Prototype(new Graphics::ModelFactory<RenderObjClass>(identity,
-		RenderObjClass::CLASSID_NULL, [identity] {
+	catalog.Add_Prototype(std::make_unique<Graphics::ModelFactory<W3DRenderObject>>(identity,
+		W3DRenderObject::CLASSID_NULL, [identity] {
 			return NEW_REF(NullRenderObject, (identity.c_str()));
 		}));
 }
@@ -118,7 +117,7 @@ BOOST_AUTO_TEST_CASE(null_object_preserves_class_identity_and_truncates_direct_n
 	const std::string long_name(64, 'N');
 	NullRenderObject object(long_name.c_str());
 
-	BOOST_CHECK_EQUAL(object.Class_ID(), RenderObjClass::CLASSID_NULL);
+	BOOST_CHECK_EQUAL(object.Class_ID(), W3DRenderObject::CLASSID_NULL);
 	BOOST_CHECK_EQUAL(object.Get_Num_Polys(), 0);
 	BOOST_CHECK_EQUAL(std::string(object.Get_Name()),
 		std::string(NullNameCapacity, 'N'));
@@ -143,16 +142,19 @@ BOOST_AUTO_TEST_CASE(null_clone_copies_name_but_starts_with_default_render_state
 	source.Set_Hidden(true);
 	source.Set_Animation_Hidden(true);
 	source.Set_Force_Visible(true);
-	source.Set_Collision_Type(COLL_TYPE_PROJECTILE);
+	source.Set_Collision_Type(SCENE_QUERY_PROJECTILE);
+	source.Set_ObjectScale(3.5f);
 
-	RefCountPtr<RenderObjClass> clone = Create_No_Add_Ref(source.Clone());
+	RefCountPtr<W3DRenderObject> clone = Create_No_Add_Ref(source.Clone());
 	BOOST_REQUIRE(clone != nullptr);
 	BOOST_CHECK_EQUAL(std::string(clone->Get_Name()), "source");
 	Check_Vector(clone->Get_Position(), Vector3(0, 0, 0));
 	BOOST_CHECK(!clone->Is_Hidden());
 	BOOST_CHECK(!clone->Is_Animation_Hidden());
 	BOOST_CHECK(!clone->Is_Force_Visible());
-	BOOST_CHECK_EQUAL(clone->Get_Collision_Type(), COLL_TYPE_ALL);
+	BOOST_CHECK(!clone->Is_Visible());
+	BOOST_CHECK_EQUAL(clone->Get_ObjectScale(), 1.0f);
+	BOOST_CHECK_EQUAL(clone->Get_Collision_Type(), SCENE_QUERY_ALL);
 }
 
 BOOST_AUTO_TEST_CASE(null_assignment_copies_render_flags_without_replacing_transform)
@@ -161,7 +163,7 @@ BOOST_AUTO_TEST_CASE(null_assignment_copies_render_flags_without_replacing_trans
 	source.Set_Hidden(true);
 	source.Set_Animation_Hidden(true);
 	source.Set_Force_Visible(true);
-	source.Set_Collision_Type(COLL_TYPE_PROJECTILE);
+	source.Set_Collision_Type(SCENE_QUERY_PROJECTILE);
 	source.Set_Native_Screen_Size(3.5f);
 
 	NullRenderObject target("target");
@@ -173,7 +175,7 @@ BOOST_AUTO_TEST_CASE(null_assignment_copies_render_flags_without_replacing_trans
 	BOOST_CHECK(target.Is_Hidden());
 	BOOST_CHECK(target.Is_Animation_Hidden());
 	BOOST_CHECK(target.Is_Force_Visible());
-	BOOST_CHECK_EQUAL(target.Get_Collision_Type(), COLL_TYPE_PROJECTILE | COLL_TYPE_ALL);
+	BOOST_CHECK_EQUAL(target.Get_Collision_Type(), SCENE_QUERY_PROJECTILE | SCENE_QUERY_ALL);
 	BOOST_CHECK_EQUAL(target.Get_Native_Screen_Size(), 3.5f);
 }
 
@@ -183,58 +185,58 @@ BOOST_AUTO_TEST_CASE(null_object_does_not_report_collision_queries)
 	const LineSegClass line(Vector3(-1, 0, 0), Vector3(1, 0, 0));
 
 	CastResultStruct ray_result;
-	RayCollisionTestClass ray(line, &ray_result, COLL_TYPE_ALL);
+	W3DRayCastQuery ray(line, &ray_result, SCENE_QUERY_ALL);
 	BOOST_CHECK(!object.Cast_Ray(ray));
 
 	CastResultStruct aa_cast_result;
-	AABoxCollisionTestClass moving_aa(
+	W3DBoxCastQuery moving_aa(
 		AABoxClass(Vector3(-1, 0, 0), Vector3(0.25f, 0.25f, 0.25f)),
-		Vector3(2, 0, 0), &aa_cast_result, COLL_TYPE_ALL);
+		Vector3(2, 0, 0), &aa_cast_result, SCENE_QUERY_ALL);
 	BOOST_CHECK(!object.Cast_AABox(moving_aa));
 
 	CastResultStruct ob_cast_result;
-	OBBoxCollisionTestClass moving_ob(
+	W3DOrientedBoxCastQuery moving_ob(
 		OBBoxClass(Vector3(-1, 0, 0), Vector3(0.25f, 0.25f, 0.25f)),
-		Vector3(2, 0, 0), &ob_cast_result, COLL_TYPE_ALL);
+		Vector3(2, 0, 0), &ob_cast_result, SCENE_QUERY_ALL);
 	BOOST_CHECK(!object.Cast_OBBox(moving_ob));
 
-	AABoxIntersectionTestClass aa_intersection(
-		AABoxClass(Vector3(0, 0, 0), Vector3(1, 1, 1)), COLL_TYPE_ALL);
+	W3DBoxIntersectionQuery aa_intersection(
+		AABoxClass(Vector3(0, 0, 0), Vector3(1, 1, 1)), SCENE_QUERY_ALL);
 	BOOST_CHECK(!object.Intersect_AABox(aa_intersection));
 
-	OBBoxIntersectionTestClass ob_intersection(
-		OBBoxClass(Vector3(0, 0, 0), Vector3(1, 1, 1)), COLL_TYPE_ALL);
+	W3DOrientedBoxIntersectionQuery ob_intersection(
+		OBBoxClass(Vector3(0, 0, 0), Vector3(1, 1, 1)), SCENE_QUERY_ALL);
 	BOOST_CHECK(!object.Intersect_OBBox(ob_intersection));
 }
 
 BOOST_AUTO_TEST_CASE(null_factory_creates_default_null_objects)
 {
-	const std::unique_ptr<Graphics::ModelFactory<RenderObjClass>> factory(
+	const std::unique_ptr<Graphics::ModelFactory<W3DRenderObject>> factory(
 		Create_Null_Render_Object_Factory());
 	BOOST_REQUIRE(factory != nullptr);
 	BOOST_CHECK_EQUAL(factory->name, "NULL");
-	BOOST_CHECK_EQUAL(factory->class_id, RenderObjClass::CLASSID_NULL);
+	BOOST_CHECK_EQUAL(factory->class_id, W3DRenderObject::CLASSID_NULL);
 
-	RefCountPtr<RenderObjClass> object = Create_No_Add_Ref(factory->Instantiate());
+	RefCountPtr<W3DRenderObject> object = Create_No_Add_Ref(factory->Instantiate());
 	BOOST_REQUIRE(object != nullptr);
-	BOOST_CHECK_EQUAL(object->Class_ID(), RenderObjClass::CLASSID_NULL);
+	BOOST_CHECK_EQUAL(object->Class_ID(), W3DRenderObject::CLASSID_NULL);
 	BOOST_CHECK_EQUAL(std::string(object->Get_Name()), "NULL");
 }
 
 BOOST_AUTO_TEST_CASE(null_reserved_factory_is_case_insensitive_and_instances_are_independent)
 {
-	WW3DAssetManager manager;
-	Install_Reserved_Null(manager);
+	W3DAssetCatalog catalog;
+	Install_Reserved_Null(catalog);
 
-	Graphics::ModelFactory<RenderObjClass> *reserved = manager.Find_Prototype("NULL");
+	Graphics::ModelFactory<W3DRenderObject> *reserved = catalog.Find_Prototype("NULL");
 	BOOST_REQUIRE(reserved != nullptr);
-	BOOST_CHECK(manager.Find_Prototype("nUlL") == reserved);
-	BOOST_CHECK(manager.Render_Obj_Exists("null"));
+	BOOST_CHECK(catalog.Find_Prototype("nUlL") == reserved);
+	BOOST_CHECK(catalog.Render_Obj_Exists("null"));
 
-	RefCountPtr<RenderObjClass> first =
-		Create_No_Add_Ref(manager.Create_Render_Obj("NULL"));
-	RefCountPtr<RenderObjClass> second =
-		Create_No_Add_Ref(manager.Create_Render_Obj("null"));
+	RefCountPtr<W3DRenderObject> first =
+		Create_No_Add_Ref(catalog.Create_Render_Obj("NULL"));
+	RefCountPtr<W3DRenderObject> second =
+		Create_No_Add_Ref(catalog.Create_Render_Obj("null"));
 	BOOST_REQUIRE(first != nullptr);
 	BOOST_REQUIRE(second != nullptr);
 	BOOST_CHECK(first.Peek() != second.Peek());
@@ -245,118 +247,117 @@ BOOST_AUTO_TEST_CASE(null_reserved_factory_is_case_insensitive_and_instances_are
 	Check_Vector(first->Get_Position(), Vector3(4, 5, 6));
 	Check_Vector(second->Get_Position(), Vector3(0, 0, 0));
 
-	// NULL inherits RenderObjClass's deliberately empty Set_Name contract.
+	// NULL inherits W3DRenderObject's deliberately empty Set_Name contract.
 	first->Set_Name("renamed");
 	BOOST_CHECK_EQUAL(std::string(first->Get_Name()), "NULL");
 }
 
 BOOST_AUTO_TEST_CASE(null_reserved_factory_survives_purge_and_named_nulls_load_from_ram)
 {
-	WW3DAssetManager manager;
-	Install_Reserved_Null(manager);
-	Install_Null_Decoder(manager);
-	Graphics::ModelFactory<RenderObjClass> *reserved = manager.Find_Prototype("NULL");
+	W3DAssetCatalog catalog;
+	Install_Reserved_Null(catalog);
+	Install_Null_Decoder(catalog);
+	Graphics::ModelFactory<W3DRenderObject> *reserved = catalog.Find_Prototype("NULL");
 	BOOST_REQUIRE(reserved != nullptr);
 
 	NullChunkFile authored("Authored.Null");
-	BOOST_REQUIRE(authored.Load(manager));
-	Graphics::ModelFactory<RenderObjClass> *authored_factory =
-		manager.Find_Prototype("authored.null");
+	BOOST_REQUIRE(authored.Load(catalog));
+	Graphics::ModelFactory<W3DRenderObject> *authored_factory =
+		catalog.Find_Prototype("authored.null");
 	BOOST_REQUIRE(authored_factory != nullptr);
-	BOOST_CHECK_EQUAL(authored_factory->class_id, RenderObjClass::CLASSID_NULL);
-	RefCountPtr<RenderObjClass> authored_object =
+	BOOST_CHECK_EQUAL(authored_factory->class_id, W3DRenderObject::CLASSID_NULL);
+	RefCountPtr<W3DRenderObject> authored_object =
 		Create_No_Add_Ref(authored_factory->Instantiate());
 	BOOST_REQUIRE(authored_object != nullptr);
 	BOOST_CHECK_EQUAL(std::string(authored_object->Get_Name()), "Authored.Null");
 
 	NullChunkFile collision("NULL");
-	BOOST_REQUIRE(collision.Load(manager));
-	BOOST_CHECK(manager.Find_Prototype("NULL") == reserved);
+	BOOST_REQUIRE(collision.Load(catalog));
+	BOOST_CHECK(catalog.Find_Prototype("NULL") == reserved);
 
-	DynamicVectorClass<StringClass> exclusions;
-	BOOST_REQUIRE(exclusions.Add(StringClass("Authored")));
-	manager.Free_Assets_With_Exclusion_List(exclusions);
-	BOOST_CHECK(manager.Find_Prototype("NULL") == reserved);
-	BOOST_CHECK(manager.Find_Prototype("AUTHORED.NULL") == authored_factory);
+	const std::vector<std::string> exclusions{"Authored"};
+	catalog.Free_Assets_With_Exclusion_List(exclusions);
+	BOOST_CHECK(catalog.Find_Prototype("NULL") == reserved);
+	BOOST_CHECK(catalog.Find_Prototype("AUTHORED.NULL") == authored_factory);
 
-	manager.Free_Assets();
-	BOOST_CHECK(manager.Find_Prototype("null") == reserved);
-	BOOST_CHECK(manager.Find_Prototype("Authored.Null") == nullptr);
+	catalog.Free_Assets();
+	BOOST_CHECK(catalog.Find_Prototype("null") == reserved);
+	BOOST_CHECK(catalog.Find_Prototype("Authored.Null") == nullptr);
 }
 
 BOOST_AUTO_TEST_CASE(null_reserved_factory_is_not_iterated_and_authored_collision_is_rejected)
 {
-	WW3DAssetManager manager;
-	Install_Reserved_Null(manager);
-	Install_Null_Decoder(manager);
-	Add_Dynamic_Null(manager, "Dynamic.One");
-	Add_Dynamic_Null(manager, "Dynamic.Two");
+	W3DAssetCatalog catalog;
+	Install_Reserved_Null(catalog);
+	Install_Null_Decoder(catalog);
+	Add_Dynamic_Null(catalog, "Dynamic.One");
+	Add_Dynamic_Null(catalog, "Dynamic.Two");
 
-	RenderObjIterator *iterator = manager.Create_Render_Obj_Iterator();
-	BOOST_REQUIRE(iterator != nullptr);
 	std::vector<std::string> names;
-	for (iterator->First(); !iterator->Is_Done(); iterator->Next())
-		names.emplace_back(iterator->Current_Item_Name());
-	manager.Release_Render_Obj_Iterator(iterator);
+	for (std::size_t index = 0; index < catalog.Prototype_Count(); ++index) {
+		const auto *prototype = catalog.Prototype_At(index);
+		if (prototype != nullptr)
+			names.emplace_back(prototype->name);
+	}
 	BOOST_CHECK_EQUAL(names.size(), 2u);
 	BOOST_CHECK(std::find(names.begin(), names.end(), "NULL") == names.end());
 	BOOST_CHECK(std::find(names.begin(), names.end(), "Dynamic.One") != names.end());
 	BOOST_CHECK(std::find(names.begin(), names.end(), "Dynamic.Two") != names.end());
 
-	Graphics::ModelFactory<RenderObjClass> *reserved = manager.Find_Prototype("NULL");
+	Graphics::ModelFactory<W3DRenderObject> *reserved = catalog.Find_Prototype("NULL");
 	BOOST_REQUIRE(reserved != nullptr);
 	NullChunkFile collision("NULL");
-	BOOST_REQUIRE(collision.Load(manager));
-	BOOST_CHECK(manager.Find_Prototype("null") == reserved);
+	BOOST_REQUIRE(collision.Load(catalog));
+	BOOST_CHECK(catalog.Find_Prototype("null") == reserved);
 
-	iterator = manager.Create_Render_Obj_Iterator();
-	BOOST_REQUIRE(iterator != nullptr);
 	std::vector<std::string> names_after_collision;
-	for (iterator->First(); !iterator->Is_Done(); iterator->Next())
-		names_after_collision.emplace_back(iterator->Current_Item_Name());
-	manager.Release_Render_Obj_Iterator(iterator);
+	for (std::size_t index = 0; index < catalog.Prototype_Count(); ++index) {
+		const auto *prototype = catalog.Prototype_At(index);
+		if (prototype != nullptr)
+			names_after_collision.emplace_back(prototype->name);
+	}
 	BOOST_CHECK_EQUAL_COLLECTIONS(names_after_collision.begin(), names_after_collision.end(),
 		names.begin(), names.end());
 }
 
 BOOST_AUTO_TEST_CASE(null_reserved_factory_rejects_replacement_and_removal_is_pointer_safe)
 {
-	WW3DAssetManager manager;
-	Install_Reserved_Null(manager);
-	Graphics::ModelFactory<RenderObjClass> *reserved = manager.Find_Prototype("NULL");
+	W3DAssetCatalog catalog;
+	Install_Reserved_Null(catalog);
+	Graphics::ModelFactory<W3DRenderObject> *reserved = catalog.Find_Prototype("NULL");
 	BOOST_REQUIRE(reserved != nullptr);
 
-	auto replacement = std::make_unique<Graphics::ModelFactory<RenderObjClass>>(
-		"Replacement", RenderObjClass::CLASSID_NULL, [] {
+	auto replacement = std::make_unique<Graphics::ModelFactory<W3DRenderObject>>(
+		"Replacement", W3DRenderObject::CLASSID_NULL, [] {
 			return NEW_REF(NullRenderObject, ("Replacement"));
 		});
-	BOOST_CHECK(!manager.Install_Reserved_Model_Factory(std::move(replacement)));
+	BOOST_CHECK(!catalog.Install_Reserved_Model_Factory(std::move(replacement)));
 	BOOST_CHECK(replacement == nullptr);
-	BOOST_CHECK(manager.Find_Prototype("replacement") == nullptr);
-	BOOST_CHECK(manager.Find_Prototype("NULL") == reserved);
+	BOOST_CHECK(catalog.Find_Prototype("replacement") == nullptr);
+	BOOST_CHECK(catalog.Find_Prototype("NULL") == reserved);
 
-	Add_Dynamic_Null(manager, "Pointer.Null");
-	Add_Dynamic_Null(manager, "Name.Null");
-	Graphics::ModelFactory<RenderObjClass> *pointer_factory =
-		manager.Find_Prototype("pointer.null");
+	Add_Dynamic_Null(catalog, "Pointer.Null");
+	Add_Dynamic_Null(catalog, "Name.Null");
+	Graphics::ModelFactory<W3DRenderObject> *pointer_factory =
+		catalog.Find_Prototype("pointer.null");
 	BOOST_REQUIRE(pointer_factory != nullptr);
-	manager.Remove_Prototype(static_cast<Graphics::ModelFactory<RenderObjClass> *>(nullptr));
-	manager.Remove_Prototype(reserved);
-	manager.Remove_Prototype("NULL");
-	BOOST_CHECK(manager.Find_Prototype("NULL") == reserved);
+	BOOST_CHECK(!catalog.Release_Prototype(nullptr));
+	catalog.Remove_Prototype("NULL");
+	BOOST_CHECK(catalog.Find_Prototype("NULL") == reserved);
 
-	manager.Remove_Prototype(pointer_factory);
-	delete pointer_factory;
-	BOOST_CHECK(manager.Find_Prototype("Pointer.Null") == nullptr);
-	manager.Remove_Prototype("name.null");
-	BOOST_CHECK(manager.Find_Prototype("Name.Null") == nullptr);
-	manager.Remove_Prototype("NULL");
-	BOOST_CHECK(manager.Find_Prototype("NULL") == reserved);
+	auto pointer_owner = catalog.Release_Prototype(pointer_factory);
+	BOOST_REQUIRE(pointer_owner != nullptr);
+	pointer_owner.reset();
+	BOOST_CHECK(catalog.Find_Prototype("Pointer.Null") == nullptr);
+	catalog.Remove_Prototype("name.null");
+	BOOST_CHECK(catalog.Find_Prototype("Name.Null") == nullptr);
+	catalog.Remove_Prototype("NULL");
+	BOOST_CHECK(catalog.Find_Prototype("NULL") == reserved);
 }
 
 BOOST_AUTO_TEST_CASE(null_render_does_not_submit_and_preserves_an_offscreen_clear)
 {
-	Graphics::DX11Device device({true});
+	Graphics::GraphicsTestDevice device({true});
 	BOOST_REQUIRE(device.Is_Valid());
 
 	const Graphics::RHITextureHandle color_target = device.Create_Texture({
@@ -373,8 +374,8 @@ BOOST_AUTO_TEST_CASE(null_render_does_not_submit_and_preserves_an_offscreen_clea
 	BOOST_REQUIRE(commands.Clear({0.125f, 0.25f, 0.5f, 1.0f}, 1.0f));
 	const Graphics::RHISubmissionCounts before = commands.Submission_Counts();
 
-	CameraClass camera;
-	RenderInfoClass render_info(camera);
+	W3DCamera camera;
+	W3DRenderContext render_info(camera);
 	NullRenderObject object("offscreen");
 	object.Render(render_info);
 
@@ -388,7 +389,9 @@ BOOST_AUTO_TEST_CASE(null_render_does_not_submit_and_preserves_an_offscreen_clea
 	for (std::size_t offset = 0; offset < pixels.size(); offset += 4) {
 		BOOST_CHECK_EQUAL(std::to_integer<unsigned>(pixels[offset]), 32u);
 		BOOST_CHECK_EQUAL(std::to_integer<unsigned>(pixels[offset + 1]), 64u);
-		BOOST_CHECK_EQUAL(std::to_integer<unsigned>(pixels[offset + 2]), 128u);
+		// Half intensity lies between two UNorm8 values on the tested devices.
+		const unsigned blue = std::to_integer<unsigned>(pixels[offset + 2]);
+		BOOST_CHECK(blue >= 127u && blue <= 128u);
 		BOOST_CHECK_EQUAL(std::to_integer<unsigned>(pixels[offset + 3]), 255u);
 	}
 
@@ -398,9 +401,9 @@ BOOST_AUTO_TEST_CASE(null_render_does_not_submit_and_preserves_an_offscreen_clea
 
 BOOST_AUTO_TEST_CASE(null_render_object_persistence_falls_back_to_reserved_factory)
 {
-	WW3DAssetManager manager;
-	Install_Reserved_Null(manager);
-	Graphics::ModelFactory<RenderObjClass> *reserved = manager.Find_Prototype("NULL");
+	W3DAssetCatalog catalog;
+	Install_Reserved_Null(catalog);
+	Graphics::ModelFactory<W3DRenderObject> *reserved = catalog.Find_Prototype("NULL");
 	BOOST_REQUIRE(reserved != nullptr);
 
 	NullRenderObject source("Saved.Null");
@@ -423,10 +426,10 @@ BOOST_AUTO_TEST_CASE(null_render_object_persistence_falls_back_to_reserved_facto
 	BOOST_REQUIRE(load.Close_Chunk());
 	file.Close();
 
-	RefCountPtr<RenderObjClass> loaded =
-		Create_No_Add_Ref(static_cast<RenderObjClass *>(persisted));
+	RefCountPtr<W3DRenderObject> loaded =
+		Create_No_Add_Ref(static_cast<W3DRenderObject *>(persisted));
 	BOOST_REQUIRE(loaded != nullptr);
 	BOOST_CHECK_EQUAL(std::string(loaded->Get_Name()), "NULL");
 	Check_Vector(loaded->Get_Position(), Vector3(7, 8, 9));
-	BOOST_CHECK(manager.Find_Prototype("NULL") == reserved);
+	BOOST_CHECK(catalog.Find_Prototype("NULL") == reserved);
 }

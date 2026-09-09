@@ -51,16 +51,16 @@
 #include <memory>
 #include <unordered_map>
 #include "W3DDevice/GameClient/W3DPropBuffer.h"
+#include "W3DDevice/GameClient/W3DLight.h"
 
-#include <WW3D2/AssetMgr.h>
+#include "W3DDevice/GameClient/W3DAssetCatalog.h"
 #include "Common/GameUtility.h"
 #include "Common/Geometry.h"
 #include "Common/PerfTimer.h"
 #include "Common/Player.h"
 #include "Common/PlayerList.h"
-#include "WW3D2/Camera.h"
-#include "WW3D2/RInfo.h"
-#include "WW3D2/Light.h"
+#include "W3DDevice/GameClient/W3DCamera.h"
+#include "W3DDevice/GameClient/W3DRenderContext.h"
 import Graphics.Scene.Lighting.Local;
 #include "W3DDevice/GameClient/Module/W3DPropDraw.h"
 #include "W3DDevice/GameClient/W3DShroud.h"
@@ -81,7 +81,7 @@ import Graphics.Scene.Lighting.Local;
 /** Culls the props, marking the visible flag.  If a prop becomes visible, it sets
 it's sortKey */
 //=============================================================================
-void W3DPropBuffer::cull(CameraClass * camera)
+void W3DPropBuffer::cull(W3DCamera * camera)
 {
 	Int curProp;
 
@@ -119,7 +119,7 @@ W3DPropBuffer::W3DPropBuffer()
 	m_initialized = false;
 	m_numProps = 0;
 	m_numPropTypes = 0;
-	m_light = NEW_REF( LightClass, (LightClass::DIRECTIONAL) );
+	m_light = NEW_REF( W3DLight, (W3DLight::DIRECTIONAL) );
 	m_initialized = true;
 }
 
@@ -160,7 +160,7 @@ Int W3DPropBuffer::addPropType(const AsciiString &modelName)
 		return 0;
 	}
 
-	m_propTypes[m_numPropTypes].m_robj = WW3DAssetManager::Get_Instance()->Create_Render_Obj(modelName.str());
+	m_propTypes[m_numPropTypes].m_robj = W3DAssetCatalog::Get_Instance()->Create_Render_Obj(modelName.str());
 	if (m_propTypes[m_numPropTypes].m_robj==nullptr) {
 		DEBUG_CRASH(("Unable to find model for prop %s", modelName.str()));
 		return -1;
@@ -324,7 +324,7 @@ DECLARE_PERF_TIMER(Prop_Render)
 //=============================================================================
 /** Draws the props.  Uses camera to cull. */
 //=============================================================================
-void W3DPropBuffer::drawProps(RenderInfoClass &rinfo)
+void W3DPropBuffer::drawProps(W3DRenderContext &rinfo)
 {
 	USE_PERF_TIMER(Prop_Render)
 
@@ -353,7 +353,9 @@ void W3DPropBuffer::drawProps(RenderInfoClass &rinfo)
 			m_light->Set_Specular(zeroVector);
 			mtx.Set(xVector, yVector, Vector3(objectLighting[i].lightPos.x, objectLighting[i].lightPos.y, objectLighting[i].lightPos.z), zeroVector);
 			m_light->Set_Transform(mtx);
-			lightEnv.Add(Describe_Material_Light(*m_light));
+			Graphics::MaterialLightSource source;
+			m_light->Get_Light_Description(source);
+			lightEnv.Add(source);
 	}
 
     lightEnv.Finalize();

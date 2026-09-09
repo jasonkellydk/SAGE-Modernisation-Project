@@ -7,16 +7,16 @@ module;
 #include <filesystem>
 #include <span>
 export module Graphics.Scene.Trees.Drawing.Tests;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 import Graphics.Scene.Trees.Renderer;
 using namespace Graphics;
 
 BOOST_AUTO_TEST_CASE(sway_pivot_cutout_darkening_overbright_and_shroud)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     BOOST_REQUIRE(device.Is_Valid());
     TreeRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device,std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     const auto texture = [&](std::array<std::uint8_t,4> color) {
         return device.Create_Texture_Initialized({1,1},{std::as_bytes(std::span(color)),4});
     };
@@ -64,7 +64,7 @@ BOOST_AUTO_TEST_CASE(sway_pivot_cutout_darkening_overbright_and_shroud)
     BOOST_REQUIRE(renderer.Draw(commands,mesh,parameters,textures));
     check({100,50,25,128});
     renderer.Shutdown();
-    BOOST_REQUIRE(renderer.Initialize(device,std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     BOOST_REQUIRE(commands.Clear({0,0,1,1},1));
     BOOST_REQUIRE(renderer.Draw(commands,mesh,parameters,textures));
     check({100,50,25,128});

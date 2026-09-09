@@ -34,11 +34,10 @@
 // USER INCLUDES //////////////////////////////////////////////////////////////
 #include "WWLib/always.h"
 #include "GameClient/View.h"
-#include "WW3D2/Camera.h"
-#include "WW3D2/Light.h"
-#include "WW3D2/HLOD.h"
-#include "WW3D2/Mesh.h"
-#include "WW3D2/MeshMdl.h"
+#include "W3DDevice/GameClient/W3DCamera.h"
+#include "W3DDevice/GameClient/W3DHierarchyRenderObject.h"
+#include "W3DDevice/GameClient/W3DMeshRenderObject.h"
+#include "W3DDevice/GameClient/W3DMeshResource.h"
 #include "Lib/BaseType.h"
 #include "W3DDevice/GameClient/BaseHeightMap.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
@@ -68,7 +67,7 @@ void PrepareShadows()
 }
 
 //DECLARE_PERF_TIMER(shadowsRender)
-void DoShadows(RenderInfoClass & rinfo, Bool stencilPass)
+void DoShadows(W3DRenderContext & rinfo, Bool stencilPass)
 {
     shadowCameraFrustum = &rinfo.Camera.Get_Frustum();
     if (TheW3DShadowManager != nullptr && stencilPass)
@@ -142,7 +141,7 @@ void W3DShadowManager::ReleaseResources()
 		TheW3DProjectedShadowManager->ReleaseResources();
 }
 
-Shadow *W3DShadowManager::addShadow( RenderObjClass *robj, Shadow::ShadowTypeInfo *shadowInfo, Drawable *draw)
+Shadow *W3DShadowManager::addShadow( W3DRenderObject *robj, Shadow::ShadowTypeInfo *shadowInfo, Drawable *draw)
 {
 	ShadowType type = SHADOW_VOLUME;
 

@@ -8,7 +8,7 @@ module;
 export module Graphics.Frame.ResourceLifecycle.Tests;
 import Graphics.Frame.ResourceLifecycle;
 import Graphics.Resources.Textures.Resource;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 using namespace Graphics;
 
 BOOST_AUTO_TEST_CASE(expired_owner_cannot_receive_device_shutdown_or_recreation_callbacks)
@@ -54,7 +54,7 @@ BOOST_AUTO_TEST_CASE(replacement_move_and_self_removal_preserve_the_current_owne
 BOOST_AUTO_TEST_CASE(resource_reset_replaces_drawable_generation_and_destruction_expires_callbacks)
 {
     for (const bool warp : {true,false}) {
-        DX11Device device({warp});
+        GraphicsTestDevice device({warp});
         if (!warp && !device.Is_Valid()) continue;
         FrameResourceLifecycle lifecycle;
         RHITextureHandle first{},second{};

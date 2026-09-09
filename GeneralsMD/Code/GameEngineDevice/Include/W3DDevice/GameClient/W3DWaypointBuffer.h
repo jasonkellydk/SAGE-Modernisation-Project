@@ -56,13 +56,11 @@ import Graphics.Scene.Surfaces.Renderer;
 //           Includes
 //-----------------------------------------------------------------------------
 #include "WWLib/always.h"
-#include "WW3D2/RendObj.h"
-#include "WW3D2/W3DFile.h"
+#include "W3DDevice/GameClient/W3DRenderObject.h"
+#include "W3DDevice/GameClient/W3DSegmentedLineRenderObject.h"
 import Graphics.Materials.State;
 #include "Lib/BaseType.h"
 #include "Common/GameType.h"
-
-class SegmentedLineClass;
 
 class W3DWaypointBuffer
 {
@@ -71,17 +69,17 @@ public:
 	W3DWaypointBuffer();
 	~W3DWaypointBuffer();
 
-	void drawWaypoints(RenderInfoClass &rinfo);
+	void drawWaypoints(W3DRenderContext &rinfo);
 	void freeWaypointBuffers();
 
 
 private:
   void setDefaultLineStyle();
-    void drawLine(RenderInfoClass &info);
+    void drawLine(W3DRenderContext &info);
     W3DObjectGraphics m_nodeGraphics;
     Graphics::SurfaceMeshHandle m_lineMesh;
 
-	RenderObjClass *m_waypointNodeRobj;
-	SegmentedLineClass *m_line;
-	TextureClass *m_texture;
+	W3DRenderObject *m_waypointNodeRobj;
+	W3DSegmentedLineRenderObject *m_line;
+	W3DTextureHandle *m_texture;
 };

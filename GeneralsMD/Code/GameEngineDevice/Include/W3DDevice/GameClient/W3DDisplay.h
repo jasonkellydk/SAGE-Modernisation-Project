@@ -41,11 +41,11 @@ import Graphics.Scene.Lighting.Local;
 class W3DDebugDisplay;
 class DisplayString;
 class W3DAssetManager;
-class LightClass;
+class W3DLight;
 class RTS3DScene;
 class RTS2DScene;
 class RTS3DInterfaceScene;
-class TextureClass;
+class W3DTextureHandle;
 
 
 //=============================================================================
@@ -165,7 +165,7 @@ protected:
 
 	std::vector<Graphics::DisplayResolution> m_displayResolutions;
 	Byte m_initialized;												///< TRUE when system is initialized
-	LightClass *m_myLight[Graphics::Material_Light_Count];										///< light hack for now
+	W3DLight *m_myLight[Graphics::Material_Light_Count];										///< light hack for now
 	IRegion2D m_clipRegion;									///< the clipping region for images
 	Bool m_isClippedEnabled;	///<used by 2D drawing operations to define clip re
 	Real m_averageFPS;		///<average fps over the last 30 frames.

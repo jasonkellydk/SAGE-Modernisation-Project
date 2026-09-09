@@ -26,7 +26,7 @@
 
 #include <memory>
 
-#include "WW3D2/RInfo.h"
+#include "W3DDevice/GameClient/W3DRenderContext.h"
 import Graphics.Resources.Textures.Sampling;
 import Graphics.Resources.Textures.Edit;
 import Assets.Images.Buffer;
@@ -51,10 +51,10 @@ public:
 	W3DShroud();
 	~W3DShroud();
 
-	void render(CameraClass *cam);	///< render the current shroud state as seen from camera
+	void render(W3DCamera *cam);	///< render the current shroud state as seen from camera
 	void init(WorldHeightMap *pMap, Real worldCellSizeX, Real worldCellSizeY);
 	void reset();
-	TextureClass *getShroudTexture() { return m_pDstTexture;}	//<return shroud projection texture.
+	W3DTextureHandle *getShroudTexture() { return m_pDstTexture;}	//<return shroud projection texture.
 	void ReleaseResources();	///<release resources that can't survive D3D device reset.
 	Bool ReAcquireResources();	///<allocate resources that can't survive D3D device reset.
 	void fillShroudData(W3DShroudLevel level);	///<sets the state of the current shroud to some constant value
@@ -82,7 +82,7 @@ protected:
 	Graphics::TextureEdit *m_pSrcTexture;		///<stores sysmem copy of visible shroud.
 	void *m_srcTextureData;					///<pointer to shroud data
 	UnsignedInt m_srcTexturePitch;			///<width (in bytes) of shroud data buffer.
-	TextureClass *m_pDstTexture;			///<stores vidmem copy of visible shroud.
+	W3DTextureHandle *m_pDstTexture;			///<stores vidmem copy of visible shroud.
 	Int m_dstTextureWidth;					///<dimensions of m_pDstTexture
 	Int m_dstTextureHeight;					///<dimensions of m_pDstTexture
 	Graphics::SamplingFilter m_shroudFilter;

@@ -7,16 +7,16 @@ module;
 #include <filesystem>
 #include <span>
 export module Graphics.Scene.Props.PointLightDrawing.Tests;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 import Graphics.Scene.Props.Renderer;
 using namespace Graphics;
 
 BOOST_AUTO_TEST_CASE(local_light_range_attenuation_and_ambient)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     BOOST_REQUIRE(device.Is_Valid());
     PropRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device,std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     const auto target=device.Create_Texture({1,1,1,RHITextureFormat::RGBA8_UNorm,
         static_cast<std::uint32_t>(RHITextureUsage::RenderTarget)});
     const auto depth=device.Create_Texture({1,1,1,RHITextureFormat::D32_Float,

@@ -10,6 +10,7 @@ export module Graphics.Scene.Models.MeshMaterialPreparation;
 import Assets.Math;
 import Graphics.Materials.MeshMaterial;
 import Graphics.Materials.State;
+import Graphics.Materials.Ordering;
 import Graphics.Scene.Models.MeshMaterialBindings;
 import Graphics.Scene.Props.Material;
 
@@ -108,15 +109,15 @@ void Prepare_Mesh_Materials(MeshMaterialBindings<TextureOwner, UVValue>& binding
             && bindings.Has_Color_Array(0)
             && bindings.Get_DIG_Source(pass) != PropColorSource::Material
             && bindings.Has_Color_Array(1)) {
-            auto* diffuse = bindings.Get_Color_Array(0, false);
-            auto* emissive = bindings.Get_Color_Array(1, false);
+            const auto* diffuse = bindings.Peek_Color_Array(0);
+            const auto* emissive = bindings.Peek_Color_Array(1);
             for (std::size_t vertex = 0; vertex < bindings.Get_Vertex_Count(); ++vertex) {
                 auto diffuse_value = Assets::Color_From_ARGB(diffuse[vertex]);
                 const auto emissive_value = Assets::Color_From_ARGB(emissive[vertex]);
                 diffuse_value.r *= emissive_value.r;
                 diffuse_value.g *= emissive_value.g;
                 diffuse_value.b *= emissive_value.b;
-                diffuse[vertex] = Assets::Color_To_ARGB(diffuse_value);
+                bindings.Set_Color(0, vertex, Assets::Color_To_ARGB(diffuse_value));
             }
         }
         bindings.Set_DIG_Source(pass, PropColorSource::Material);
@@ -126,7 +127,7 @@ void Prepare_Mesh_Materials(MeshMaterialBindings<TextureOwner, UVValue>& binding
             continue;
         }
 
-        auto* diffuse = bindings.Get_Color_Array(0, false);
+        const auto* diffuse = bindings.Peek_Color_Array(0);
         MaterialValues values = read_values(bindings.Peek_Material(0, pass));
         previous = nullptr;
         for (std::size_t vertex = 0; vertex < bindings.Get_Vertex_Count(); ++vertex) {
@@ -142,7 +143,7 @@ void Prepare_Mesh_Materials(MeshMaterialBindings<TextureOwner, UVValue>& binding
                 diffuse_value.g *= color[1];
                 diffuse_value.b *= color[2];
                 diffuse_value.a *= values.opacity;
-                diffuse[vertex] = Assets::Color_To_ARGB(diffuse_value);
+                bindings.Set_Color(0, vertex, Assets::Color_To_ARGB(diffuse_value));
             };
 
             // These are the four source combinations supported by the retained
@@ -309,4 +310,38 @@ void Apply_Mesh_Material_Fog(MeshMaterialBindings<TextureOwner, UVValue>& bindin
     }
 }
 
+export template<class TextureOwner, class UV>
+char Mesh_Material_Sort_Level(const MeshMaterialBindings<TextureOwner, UV>& bindings) {
+    const auto pass_flags = [&](int pass) {
+        unsigned flags = 0;
+        if (bindings.Has_Shader_Array(pass)) {
+            for (std::size_t i = 0; i < bindings.Shader_Count(pass); ++i)
+                flags |= 1u << Classify_Material_Order(bindings.Get_Shader(i, pass));
+        } else flags = 1u << Classify_Material_Order(bindings.Get_Single_Shader(pass));
+        return flags;
+    };
+    if (pass_flags(0) == (1u << MaterialState::SSCAT_OPAQUE)) return 0;
+    unsigned flags = 0;
+    for (int pass = 0; pass < bindings.Get_Pass_Count(); ++pass) flags |= pass_flags(pass);
+    switch (flags) {
+    case (1u << MaterialState::SSCAT_OPAQUE) | (1u << MaterialState::SSCAT_ALPHA_TEST): return 0;
+    case 1u << MaterialState::SSCAT_ADDITIVE: return 10;
+    case 1u << MaterialState::SSCAT_SCREEN: return 15;
+    default: return 20;
+    }
+}
+export template<class TextureOwner, class UV>
+void Apply_Mesh_Material_Overbright(MeshMaterialBindings<TextureOwner, UV>& bindings) {
+    const auto convert = [](MaterialState shader) {
+        if (shader.Get_Primary_Gradient() == MaterialState::GRADIENT_MODULATE)
+            shader.Set_Primary_Gradient(MaterialState::GRADIENT_MODULATE2X);
+        return shader;
+    };
+    for (int pass = 0; pass < bindings.Get_Pass_Count(); ++pass) {
+        bindings.Set_Single_Shader(convert(bindings.Get_Single_Shader(pass)), pass);
+        if (bindings.Has_Shader_Array(pass))
+            for (std::size_t i = 0; i < bindings.Get_Polygon_Count(); ++i)
+                bindings.Set_Shader(i, convert(bindings.Get_Shader(i, pass)), pass);
+    }
+}
 }

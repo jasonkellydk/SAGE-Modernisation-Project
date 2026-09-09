@@ -10,13 +10,15 @@ module;
 #include <vector>
 #include <windows.h>
 export module Graphics.Frame.Device.Tests;
-import Graphics.Backends.DX11.FrameRuntime;
+import Graphics.Frame.Runtime;
+import Graphics.FrameTargets;
 import Graphics.Frame.AttachmentBindings;
 import Graphics.Frame.ResourceLifecycle;
 import Graphics.Resources.Recreation;
 import Graphics.Resources.Loading.Queue;
 import Graphics.Scene.Props.Renderer;
 import Graphics.Diagnostics.Render;
+import Graphics.Tests.Device;
 using namespace Graphics;
 
 namespace
@@ -38,7 +40,7 @@ struct Window final
 };
 struct Runtime final
 {
-    ~Runtime() { Graphics_DX11_Shutdown_Shared_Frame(); }
+    ~Runtime() { Graphics_Shutdown_Shared_Frame(); }
 };
 struct LoadQueue final
 {
@@ -78,10 +80,10 @@ BOOST_AUTO_TEST_CASE(resize_retains_scene_resources_and_recreation_restores_pixe
         Window window;
         BOOST_REQUIRE(window.handle);
         Runtime runtime;
-        DX11DeviceOptions options;
+        FrameDeviceOptions options;
         options.window = window.handle;
         options.width = options.height = 16;
-        options.use_warp = software;
+        options.use_warp = Graphics_Test_Uses_WARP(software);
         options.backbuffer_format = RHITextureFormat::RGBA8_UNorm;
         BOOST_REQUIRE(Initialize_Frame_Device(options));
         BOOST_REQUIRE(Frame_Device_Ready());
@@ -93,7 +95,8 @@ BOOST_AUTO_TEST_CASE(resize_retains_scene_resources_and_recreation_restores_pixe
         BOOST_REQUIRE(Get_Resource_Load_Queue().Start());
         const auto acquire_renderer = [&] {
             BOOST_REQUIRE(Frame_Device_Ready());
-            BOOST_REQUIRE(renderer.Initialize(*Shared_Frame_Device(), GRAPHICS_TERRAIN_SHADER_DIRECTORY));
+            BOOST_REQUIRE(renderer.Initialize(*Shared_Frame_Device(),
+                Frame_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
             std::array<PropVertex,4> vertices{};
             vertices[0].position = {-1,-1,0.5f}; vertices[1].position = {1,-1,0.5f};
             vertices[2].position = {1,1,0.5f}; vertices[3].position = {-1,1,0.5f};
@@ -112,7 +115,7 @@ BOOST_AUTO_TEST_CASE(resize_retains_scene_resources_and_recreation_restores_pixe
         auto frame_registration = Get_Frame_Resource_Lifecycle().Register([&] {
             events.push_back(1);
             BOOST_REQUIRE(Shared_Frame_Device());
-            BOOST_CHECK(!Graphics_DX11_Begin_Frame());
+            BOOST_CHECK(!Graphics_Begin_Frame());
             BOOST_CHECK(!Recreate_Frame_Device());
             renderer.Shutdown();
         }, [&] {
@@ -131,7 +134,7 @@ BOOST_AUTO_TEST_CASE(resize_retains_scene_resources_and_recreation_restores_pixe
         acquire_renderer();
         acquire_texture();
         const auto draw = [&] {
-            BOOST_REQUIRE(Graphics_DX11_Begin_Frame());
+            BOOST_REQUIRE(Graphics_Begin_Frame());
             BOOST_CHECK(!Recreate_Frame_Device());
             auto* device = Shared_Frame_Device();
             auto& bindings = Get_Attachment_Bindings();
@@ -148,7 +151,7 @@ BOOST_AUTO_TEST_CASE(resize_retains_scene_resources_and_recreation_restores_pixe
             PropParameters parameters;
             parameters.view_projection = {1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
             BOOST_REQUIRE(renderer.Draw(device->Immediate_Command_List(),mesh,style,parameters,std::array{texture}));
-            BOOST_REQUIRE(Graphics_DX11_Execute_Queued_Draws());
+            BOOST_REQUIRE(Graphics_Execute_Queued_Draws());
             const auto target = device->Get_Swap_Chain().Backbuffer();
             BOOST_CHECK_EQUAL(screen.width,target.width);
             BOOST_CHECK_EQUAL(screen.height,target.height);
@@ -163,10 +166,13 @@ BOOST_AUTO_TEST_CASE(resize_retains_scene_resources_and_recreation_restores_pixe
                 for (unsigned c = 0; c < 4; ++c)
                     BOOST_CHECK_SMALL(std::to_integer<int>(pixels[pixel*4+c])-expected[c],2);
             }
-            BOOST_REQUIRE(Graphics_DX11_End_Frame());
-            BOOST_REQUIRE(Graphics_DX11_Present());
+            BOOST_REQUIRE(Graphics_End_Frame());
+            BOOST_REQUIRE(Graphics_Present());
         };
+        const auto initial_target_identity = Shared_Frame_Targets().identity;
+        BOOST_CHECK_NE(initial_target_identity, 0u);
         draw();
+        BOOST_CHECK_EQUAL(Shared_Frame_Targets().identity, initial_target_identity);
         auto* original_device = Shared_Frame_Device();
         const auto original_texture = texture;
         {
@@ -186,7 +192,9 @@ BOOST_AUTO_TEST_CASE(resize_retains_scene_resources_and_recreation_restores_pixe
         BOOST_CHECK(events.empty());
         draw();
         for (unsigned width : {24u,16u}) {
+            const auto previous_identity = Shared_Frame_Targets().identity;
             BOOST_REQUIRE(Resize_Frame_Device(width,16,false));
+            BOOST_CHECK_NE(Shared_Frame_Targets().identity, previous_identity);
             BOOST_CHECK(Shared_Frame_Device() == original_device);
             BOOST_CHECK(texture == original_texture);
             BOOST_CHECK(events.empty());
@@ -203,7 +211,9 @@ BOOST_AUTO_TEST_CASE(resize_retains_scene_resources_and_recreation_restores_pixe
         permit.set_value();
         Get_Render_Diagnostics().disable_water = true;
         Get_Render_Diagnostics().console_line_limit = 7;
+        const auto previous_identity = Shared_Frame_Targets().identity;
         BOOST_REQUIRE(Recreate_Frame_Device());
+        BOOST_CHECK_NE(Shared_Frame_Targets().identity, previous_identity);
         BOOST_CHECK(Get_Render_Diagnostics().disable_water);
         BOOST_CHECK_EQUAL(Get_Render_Diagnostics().console_line_limit,7);
         Get_Render_Diagnostics() = {};
@@ -227,11 +237,11 @@ BOOST_AUTO_TEST_CASE(resize_retains_scene_resources_and_recreation_restores_pixe
         BOOST_CHECK(events == std::vector<int>({1,2,3,4}));
         draw();
         events.clear();
-        Graphics_DX11_Shutdown_Shared_Frame();
+        Graphics_Shutdown_Shared_Frame();
         BOOST_CHECK(events == std::vector<int>({1,2}));
         BOOST_CHECK(!Frame_Device_Ready());
         BOOST_CHECK(!Get_Attachment_Bindings().Default().color.Is_Valid());
-        Graphics_DX11_Shutdown_Shared_Frame();
+        Graphics_Shutdown_Shared_Frame();
         BOOST_CHECK(events == std::vector<int>({1,2}));
     }
 }

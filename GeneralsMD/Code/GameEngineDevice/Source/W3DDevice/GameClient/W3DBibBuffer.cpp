@@ -49,17 +49,17 @@
 
 #include "W3DDevice/GameClient/W3DBibBuffer.h"
 
-#include <WW3D2/Texture.h>
+#include <W3DDevice/GameClient/W3DTextureHandle.h>
 #include "Common/GlobalData.h"
 #include "Common/RandomValue.h"
 #include "W3DDevice/GameClient/TerrainTex.h"
 #include "W3DDevice/GameClient/BaseHeightMap.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
 #include "W3DDevice/GameClient/W3DDynamicLight.h"
-#include "WW3D2/Camera.h"
-#include "WW3D2/WW3D.h"
-#include "WW3D2/Mesh.h"
-#include "WW3D2/MeshMdl.h"
+#include "W3DDevice/GameClient/W3DCamera.h"
+
+#include "W3DDevice/GameClient/W3DMeshRenderObject.h"
+#include "W3DDevice/GameClient/W3DMeshResource.h"
 
 #include <array>
 #include <cstddef>
@@ -67,7 +67,7 @@
 #include <vector>
 
 import Graphics.Scene.Bibs.Renderer;
-import Graphics.Backends.DX11.FrameRuntime;
+import Graphics.Frame.Runtime;
 #include "W3DDevice/GameClient/W3DGraphicsResources.h"
 
 //-----------------------------------------------------------------------------
@@ -107,8 +107,8 @@ W3DBibBuffer::W3DBibBuffer()
 {
 	s_current = this;
 	clearAllBibs();
-    m_bibTexture=NEW_REF(TextureClass,("TBBib.tga"));
-    m_highlightBibTexture=NEW_REF(TextureClass,("TBRedBib.tga"));
+    m_bibTexture=NEW_REF(W3DTextureHandle,("TBBib.tga"));
+    m_highlightBibTexture=NEW_REF(W3DTextureHandle,("TBRedBib.tga"));
 }
 
 void W3DBibBuffer::Release_Graphics_Bibs() noexcept
@@ -274,7 +274,7 @@ void W3DBibBuffer::removeBibDrawable(DrawableID id)
 //=============================================================================
 /** Draws the bibs.  Uses camera to cull. */
 //=============================================================================
-void W3DBibBuffer::renderBibs(CameraClass& camera)
+void W3DBibBuffer::renderBibs(W3DCamera& camera)
 {
     auto* device=Graphics::Shared_Frame_Device();
     if (!device || !TheGlobalData) return;

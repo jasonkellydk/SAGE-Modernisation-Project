@@ -13,15 +13,15 @@ class W3DTerrainGraphics : public BaseHeightMapRenderObjClass
 public:
     W3DTerrainGraphics();
     ~W3DTerrainGraphics() override;
-    void Render(RenderInfoClass &info) override;
+    void Render(W3DRenderContext &info) override;
     Bool collectShadowCasters() override;
-    int initHeightData(Int width, Int height, WorldHeightMap *map, Graphics::SceneObjectList<RenderObjClass>::Cursor *lights, Bool extra = TRUE) override;
+    int initHeightData(Int width, Int height, WorldHeightMap *map, Graphics::SceneObjectList<W3DRenderObject>::Cursor *lights, Bool extra = TRUE) override;
     Int freeMapResources() override;
     void ReleaseResources() override;
     void ReAcquireResources() override;
-    void updateCenter(CameraClass *camera, const Vector3 *pivot, Graphics::SceneObjectList<RenderObjClass>::Cursor *lights) override;
-    void doPartialUpdate(const IRegion2D &range, WorldHeightMap *map, Graphics::SceneObjectList<RenderObjClass>::Cursor *lights) override;
-    int updateBlock(Int x0, Int y0, Int x1, Int y1, WorldHeightMap *map, Graphics::SceneObjectList<RenderObjClass>::Cursor *lights) override;
+    void updateCenter(W3DCamera *camera, const Vector3 *pivot, Graphics::SceneObjectList<W3DRenderObject>::Cursor *lights) override;
+    void doPartialUpdate(const IRegion2D &range, WorldHeightMap *map, Graphics::SceneObjectList<W3DRenderObject>::Cursor *lights) override;
+    int updateBlock(Int x0, Int y0, Int x1, Int y1, WorldHeightMap *map, Graphics::SceneObjectList<W3DRenderObject>::Cursor *lights) override;
     void oversizeTerrain(Int tiles) override;
     void setTerrainDrawSize(Int width, Int height) override;
     Int getNumExtraBlendTiles(Bool visible) override;
@@ -33,7 +33,7 @@ protected:
 private:
     bool Update_Surface();
     bool Update_Textures();
-    bool Draw_Surface(RenderInfoClass &info);
+    bool Draw_Surface(W3DRenderContext &info);
     void Release_Texture_References() noexcept;
     std::array<Graphics::RHITextureHandle, 6> m_textures{};
     Graphics::Device *m_graphicsDevice = nullptr;

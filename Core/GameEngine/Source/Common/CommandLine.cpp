@@ -23,7 +23,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import Graphics.Frame.RenderSettings;
 
 #include "Common/ArchiveFileSystem.h"
 #include "Common/CommandLine.h"
@@ -37,7 +38,7 @@
 #include "GameClient/GameText.h"
 #include "GameNetwork/NetworkDefs.h"
 #include "WWLib/trim.h"
-#include "WW3D2/WW3D.h"
+
 
 
 
@@ -148,7 +149,7 @@ Int parseFPUPreserve(char *args[], int argc)
 {
 	if (argc > 1)
 	{
-		WW3D::Set_Preserve_FPU(atoi(args[1]) != 0);
+		Graphics::Get_Render_Settings().Set_Preserve_FPU(atoi(args[1]) != 0);
 	}
 	return 2;
 }

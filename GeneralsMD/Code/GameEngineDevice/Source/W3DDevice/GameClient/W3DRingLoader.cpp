@@ -1,3 +1,8 @@
+#include <functional>
+#include "W3DDevice/GameClient/W3DAssetCatalog.h"
+import Graphics.Frame.RenderClock;
+import Graphics.Frame.RenderSettings;
+#include "W3DDevice/GameClient/W3DRenderServices.h"
 import Graphics.Materials.State;
 #include <array>
 #include <cstddef>
@@ -9,7 +14,7 @@ import Graphics.Materials.State;
 #include <vector>
 
 import Assets.Adapters.W3D.Ring;
-import Graphics.Backends.DX11.FrameRuntime;
+import Graphics.Frame.Runtime;
 import Graphics.Scene.DrawParameters;
 import Graphics.Scene.OrderedDraws;
 import Graphics.Scene.Props.Renderer;
@@ -18,10 +23,9 @@ import Graphics.Scene.Views.CameraMatrices;
 import Graphics.Scene.Views.View;
 
 #include "W3DDevice/GameClient/W3DRingLoader.h"
-#include "WW3D2/AssetMgr.h"
-#include "WW3D2/Camera.h"
-#include "WW3D2/RInfo.h"
-#include "WW3D2/WW3D.h"
+#include "W3DDevice/GameClient/W3DCamera.h"
+#include "W3DDevice/GameClient/W3DRenderContext.h"
+
 #include "WWLib/chunkio.h"
 
 namespace
@@ -30,8 +34,8 @@ namespace
 Assets::RingAssetDesc Make_Effective_Description(const Assets::RingAssetDesc &source)
 {
 	Assets::RingAssetDesc description = source;
-	if (auto *manager = WW3DAssetManager::Get_Instance(); manager != nullptr &&
-		manager->Get_Activate_Fog_On_Load()) {
+	if (auto *catalog = W3DAssetCatalog::Get_Instance(); catalog != nullptr &&
+		catalog->Get_Fog_On_Load()) {
 		// RingPrototypeClass delegated fog selection to Graphics::MaterialState::Enable_Fog.
 		// Preserve its blend-pair table; unsupported pairs leave the authored fog
 		// mode unchanged while fog activation still disables culling.
@@ -87,13 +91,13 @@ W3DRingRenderObject::W3DRingRenderObject(const Assets::RingAssetDesc &descriptio
 	: m_name(description.name),
 	  m_runtime(Make_Effective_Description(description))
 {
-	if (auto *manager = WW3DAssetManager::Get_Instance(); manager != nullptr &&
+	if (auto *catalog = W3DAssetCatalog::Get_Instance(); catalog != nullptr &&
 		!description.texture_name.empty())
-		m_texture.Assign_No_Add_Ref(manager->Get_Texture(description.texture_name.c_str()));
+		m_texture.Assign_No_Add_Ref(catalog->Get_Texture(description.texture_name.c_str()));
 }
 
 W3DRingRenderObject::W3DRingRenderObject(const W3DRingRenderObject &source)
-	: RenderObjClass(source),
+	: W3DRenderObject(source),
 	  m_name(source.m_name),
 	  m_runtime(source.m_runtime),
 	  m_texture(source.m_texture)
@@ -105,32 +109,32 @@ W3DRingRenderObject &W3DRingRenderObject::operator=(const W3DRingRenderObject &s
 	if (this == &source)
 		return *this;
 	m_graphics.Release(Graphics::Get_Prop_Renderer());
-	RenderObjClass::operator=(source);
+	W3DRenderObject::operator=(source);
 	m_name = source.m_name;
 	m_runtime = source.m_runtime;
 	m_texture = source.m_texture;
 	return *this;
 }
 
-RenderObjClass *W3DRingRenderObject::Clone() const
+W3DRenderObject *W3DRingRenderObject::Clone() const
 {
 	return W3DNEW W3DRingRenderObject(*this);
 }
 
-void W3DRingRenderObject::Render(RenderInfoClass &rinfo)
+void W3DRingRenderObject::Render(W3DRenderContext &rinfo)
 {
 	if (Get_LOD_Level() == 0 || Is_Not_Hidden_At_All() == false ||
 		!m_runtime.Is_Authored_Visible())
 		return;
 
-	const unsigned sort_level = WW3D::Is_Sorting_Enabled() ? 0u :
+	const unsigned sort_level = Graphics::Get_Render_Settings().Is_Sorting_Enabled() ? 0u :
 		m_runtime.Ordered_Layer(m_runtime.Description().material);
 	if (Graphics::Get_Scene_Draw_Queue().Is_Enabled() && sort_level != 0u) {
 		Graphics::Get_Scene_Draw_Queue().Enqueue<Extract_Ordered_Draw>(sort_level, *this);
 		return;
 	}
 
-	m_runtime.Advance(WW3D::Get_Logic_Frame_Time_Seconds());
+	m_runtime.Advance(Graphics::Get_Render_Clock().Logic_Frame_Time_Seconds());
 	const auto &camera = Graphics::Get_Camera_Matrices();
 	Graphics::AuthoredRingDrawInput input;
 	input.view_projection = Graphics::Compose_Matrices(camera.projection, camera.view).values;
@@ -139,13 +143,13 @@ void W3DRingRenderObject::Render(RenderInfoClass &rinfo)
 	const Vector3 camera_z = rinfo.Camera.Get_Transform().Get_Z_Vector();
 	input.camera_z = {camera_z.X, camera_z.Y, camera_z.Z};
 	input.scene = Graphics::Get_Scene_Draw_Parameters();
-	input.sorting_enabled = WW3D::Is_Sorting_Enabled();
-	input.front_counter_clockwise = !WW3D::Is_Reflection_Render_Pass();
+	input.sorting_enabled = Graphics::Get_Render_Settings().Is_Sorting_Enabled();
+	input.front_counter_clockwise = !Get_W3D_Render_Services().Is_Reflection_Render_Pass();
 	if (m_texture.Peek() != nullptr)
 		input.texture_sampling = m_texture->Get_Sampling();
 
 	auto *device = Graphics::Shared_Frame_Device();
-	TextureClass *texture_object = m_texture.Peek();
+	W3DTextureHandle *texture_object = m_texture.Peek();
 	if (!m_runtime.Description().texture_name.empty() && texture_object == nullptr)
 		return;
 	Graphics::RHITextureHandle texture;
@@ -168,12 +172,12 @@ void W3DRingRenderObject::Render(RenderInfoClass &rinfo)
 
 void W3DRingRenderObject::Set_Transform(const Matrix3D &transform)
 {
-	RenderObjClass::Set_Transform(transform);
+	W3DRenderObject::Set_Transform(transform);
 }
 
 void W3DRingRenderObject::Set_Position(const Vector3 &position)
 {
-	RenderObjClass::Set_Position(position);
+	W3DRenderObject::Set_Position(position);
 }
 
 void W3DRingRenderObject::Get_Obj_Space_Bounding_Sphere(SphereClass &sphere) const
@@ -190,7 +194,7 @@ void W3DRingRenderObject::Get_Obj_Space_Bounding_Box(AABoxClass &box) const
 	box.Extent.Set(bounds.extent.x, bounds.extent.y, bounds.extent.z);
 }
 
-void W3DRingRenderObject::Prepare_LOD(CameraClass &camera)
+void W3DRingRenderObject::Prepare_LOD(W3DCamera &camera)
 {
 	if (Is_Not_Hidden_At_All() == false)
 		return;
@@ -264,25 +268,25 @@ void W3DRingRenderObject::Scale(float scalex, float scaley, float scalez)
 
 void W3DRingRenderObject::Set_Hidden(int onoff)
 {
-	RenderObjClass::Set_Hidden(onoff);
+	W3DRenderObject::Set_Hidden(onoff);
 	m_runtime.Set_Hidden(onoff != 0);
 }
 
 void W3DRingRenderObject::Set_Visible(int onoff)
 {
-	RenderObjClass::Set_Visible(onoff);
+	W3DRenderObject::Set_Visible(onoff);
 	m_runtime.Set_Visible(onoff != 0);
 }
 
 void W3DRingRenderObject::Set_Animation_Hidden(int onoff)
 {
-	RenderObjClass::Set_Animation_Hidden(onoff);
+	W3DRenderObject::Set_Animation_Hidden(onoff);
 	m_runtime.Set_Animation_Hidden(onoff != 0);
 }
 
 void W3DRingRenderObject::Set_Force_Visible(int onoff)
 {
-	RenderObjClass::Set_Force_Visible(onoff);
+	W3DRenderObject::Set_Force_Visible(onoff);
 	m_runtime.Set_Force_Visible(onoff != 0);
 }
 
@@ -292,7 +296,7 @@ void W3DRingRenderObject::Set_Name(const char *name)
 		m_name = name;
 }
 
-Graphics::ModelFactory<RenderObjClass> *Load_Ring_Factory(ChunkLoadClass &cload)
+Graphics::ModelFactory<W3DRenderObject> *Load_Ring_Factory(ChunkLoadClass &cload)
 {
 	std::vector<std::byte> bytes(cload.Cur_Chunk_Length());
 	if (cload.Read(bytes.data(), static_cast<unsigned>(bytes.size())) != bytes.size())
@@ -303,8 +307,8 @@ Graphics::ModelFactory<RenderObjClass> *Load_Ring_Factory(ChunkLoadClass &cload)
 	if (!Assets::W3D::W3DRead_Ring(bytes, description, error))
 		return nullptr;
 	auto data = std::make_shared<const Assets::RingAssetDesc>(std::move(description));
-	return new Graphics::ModelFactory<RenderObjClass>(data->name,
-		RenderObjClass::CLASSID_RING, [data] {
+	return new Graphics::ModelFactory<W3DRenderObject>(data->name,
+		W3DRenderObject::CLASSID_RING, [data] {
 			return NEW_REF(W3DRingRenderObject, (*data));
 		});
 }

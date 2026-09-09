@@ -20,7 +20,7 @@
 #include <span>
 #include <vector>
 import Graphics.Scene.Scorches.Geometry;
-import Graphics.Backends.DX11.FrameRuntime;
+import Graphics.Frame.Runtime;
 import Assets.Math;
 #include "W3DDevice/GameClient/W3DScorch.h"
 #include "W3DDevice/GameClient/W3DGraphicsResources.h"
@@ -32,7 +32,7 @@ import Assets.Math;
 #include "W3DDevice/GameClient/TerrainTex.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
 import Graphics.Materials.State;
-#include "WW3D2/WW3D.h"
+
 
 W3DScorch::W3DScorch(bool deduplicateScorches)
   : m_scorchTexture(nullptr)
@@ -119,7 +119,7 @@ Bool W3DScorch::isDuplicate(const TScorch& scorch) const
 	return false;
 }
 
-void W3DScorch::drawScorches(WorldHeightMap& map, CameraClass& camera)
+void W3DScorch::drawScorches(WorldHeightMap& map, W3DCamera& camera)
 {
     updateScorches(map);
     auto* device = Graphics::Shared_Frame_Device();

@@ -9,14 +9,14 @@ module;
 export module Graphics.Scene.Shadows.StencilVolumes.Tests;
 import Graphics.Scene.Shadows.StencilVolumes;
 import Graphics.Scene.Surfaces.Renderer;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 using namespace Graphics;
 BOOST_AUTO_TEST_CASE(volume_winding_stencil_count_and_occluder_mask)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     BOOST_REQUIRE(device.Is_Valid());
     SurfaceRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device,std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     std::array<SurfaceVertex,4> vertices{};
     vertices[0].position = {-1,-1,0.5f};
     vertices[1].position = {1,-1,0.5f};

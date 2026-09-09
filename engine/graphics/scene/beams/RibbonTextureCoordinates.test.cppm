@@ -16,7 +16,7 @@ import Graphics.Scene.Beams.RibbonSubdivision;
 import Graphics.Scene.Beams.RibbonIntersections;
 import Graphics.Scene.Props.Geometry;
 import Graphics.Scene.Props.Renderer;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 using namespace Graphics;
 
 namespace {
@@ -90,11 +90,11 @@ BOOST_AUTO_TEST_CASE(authored_mapping_uses_absolute_point_indices_across_chunks)
 BOOST_AUTO_TEST_CASE(scrolled_texture_pixels_and_transparency_survive_source_release_and_resize)
 {
     for (bool warp : {true, false}) {
-        DX11Device device({warp});
+        GraphicsTestDevice device({warp});
         if (!warp && !device.Is_Valid()) continue;
         BOOST_REQUIRE(device.Is_Valid());
         PropRenderer renderer;
-        BOOST_REQUIRE(renderer.Initialize(device, GRAPHICS_TERRAIN_SHADER_DIRECTORY));
+        BOOST_REQUIRE(renderer.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
         const std::array<std::uint8_t, 16> image{
             255,0,0,255, 0,255,0,255, 0,0,255,255, 0,0,0,0};
         const auto texture = device.Create_Texture_Initialized({4,1}, {std::as_bytes(std::span(image)),16});
@@ -163,11 +163,11 @@ BOOST_AUTO_TEST_CASE(scrolled_texture_pixels_and_transparency_survive_source_rel
 BOOST_AUTO_TEST_CASE(merged_corner_geometry_preserves_gpu_coverage_after_source_release)
 {
     for (bool warp : {true, false}) {
-        DX11Device device({warp});
+        GraphicsTestDevice device({warp});
         if (!warp && !device.Is_Valid()) continue;
         BOOST_REQUIRE(device.Is_Valid());
         PropRenderer renderer;
-        BOOST_REQUIRE(renderer.Initialize(device, GRAPHICS_TERRAIN_SHADER_DIRECTORY));
+        BOOST_REQUIRE(renderer.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
 
         const std::array<float, 3> top_direction{0.70710677f, 0.70710677f, 0};
         const std::array<float, 3> bottom_direction{0.70710677f, -0.70710677f, 0};

@@ -3,7 +3,7 @@ import Graphics.Frame.AttachmentBindings;
 import Assets.Images.PixelEncoding;
 import Graphics.Materials.State;
 #include "W3DDevice/GameClient/W3DScreenFilterGraphics.h"
-#include "WW3D2/WW3D.h"
+
 /*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -49,7 +49,7 @@ import Graphics.Materials.State;
 //
 //-----------------------------------------------------------------------------
 
-#include "WW3D2/AssetMgr.h"
+#include "W3DDevice/GameClient/W3DAssetCatalog.h"
 #include "Lib/BaseType.h"
 #include "W3DDevice/GameClient/W3DShaderManager.h"
 #include <SDL3/SDL.h>
@@ -69,7 +69,7 @@ import Graphics.Materials.State;
 #include "WWMath/matrix4.h"
 #include <cstdint>
 import Graphics.RHI;
-import Graphics.Backends.DX11.FrameRuntime;
+import Graphics.Frame.Runtime;
 
 static W3DFilterInterface *W3DFilters[FT_MAX];
 FilterTypes W3DShaderManager::m_currentFilter=FT_NULL_FILTER; ///< Last filter that was set.
@@ -78,7 +78,7 @@ GraphicsVenderID W3DShaderManager::m_currentVendor;
 std::int64_t W3DShaderManager::m_driverVersion;
 
 Bool W3DShaderManager::m_renderingToTexture = false;
-TextureClass *W3DShaderManager::m_renderTexture=nullptr;	///<texture into which rendering will be redirected.
+W3DTextureHandle *W3DShaderManager::m_renderTexture=nullptr;	///<texture into which rendering will be redirected.
 
 /*===========================================================================================*/
 /*=========      Screen Shaders	=============================================================*/
@@ -150,7 +150,7 @@ Bool ScreenDefaultFilter::preRender(Bool &skipRender, CustomScenePassModes &scen
 Bool ScreenDefaultFilter::postRender(FilterModes mode, Coord2D &scrollDelta,Bool &doExtraRender)
 {
 
-	TextureClass * tex =	W3DShaderManager::endRenderToTexture();
+	W3DTextureHandle * tex =	W3DShaderManager::endRenderToTexture();
 	DEBUG_ASSERTCRASH(tex, ("Require rendered texture."));
 	if (!tex) return false;
 	if (!set(mode)) return false;
@@ -241,7 +241,7 @@ Bool ScreenBWFilter::preRender(Bool &skipRender, CustomScenePassModes &scenePass
 Bool ScreenBWFilter::postRender(FilterModes mode, Coord2D &scrollDelta,Bool &doExtraRender)
 {
 
-	TextureClass * tex =	W3DShaderManager::endRenderToTexture();
+	W3DTextureHandle * tex =	W3DShaderManager::endRenderToTexture();
 	DEBUG_ASSERTCRASH(tex, ("Require rendered texture."));
 	if (!tex) return false;
 	if (!set(mode)) return false;
@@ -364,7 +364,7 @@ Int ScreenCrossFadeFilter::m_fadeFrames;
 Int ScreenCrossFadeFilter::m_curFadeFrame;
 Real ScreenCrossFadeFilter::m_curFadeValue;
 Int ScreenCrossFadeFilter::m_fadeDirection;
-TextureClass *ScreenCrossFadeFilter::m_fadePatternTexture=nullptr;
+W3DTextureHandle *ScreenCrossFadeFilter::m_fadePatternTexture=nullptr;
 Bool ScreenCrossFadeFilter::m_skipRender = FALSE;
 
 ScreenCrossFadeFilter screenCrossFadeFilter;
@@ -389,7 +389,7 @@ Int ScreenCrossFadeFilter::init()
 		return FALSE;
 
 	//Load an alpha mask texture that will mix foreground/background views.
-	m_fadePatternTexture=WW3DAssetManager::Get_Instance()->Get_Texture("exmask_g.tga");
+	m_fadePatternTexture=W3DAssetCatalog::Get_Instance()->Get_Texture("exmask_g.tga");
 	if (!m_fadePatternTexture)
 		return FALSE;
 	m_fadePatternTexture->Get_Sampling().address[0] = Graphics::RHISamplerAddress::Clamp;
@@ -458,7 +458,7 @@ Bool ScreenCrossFadeFilter::preRender(Bool &skipRender, CustomScenePassModes &sc
 Bool ScreenCrossFadeFilter::postRender(FilterModes mode, Coord2D &scrollDelta,Bool &doExtraRender)
 {
 
-	TextureClass * tex;
+	W3DTextureHandle * tex;
 
 	if (m_skipRender)
 	{
@@ -611,7 +611,7 @@ Bool ScreenMotionBlurFilter::preRender(Bool &skipRender, CustomScenePassModes &s
 Bool ScreenMotionBlurFilter::postRender(FilterModes mode, Coord2D &scrollDelta,Bool &doExtraRender)
 {
 
-	TextureClass * tex =	W3DShaderManager::endRenderToTexture();
+	W3DTextureHandle * tex =	W3DShaderManager::endRenderToTexture();
 	DEBUG_ASSERTCRASH(tex, ("Require rendered texture."));
 	if (!tex) return false;
 	if (!set(mode)) return false;
@@ -856,8 +856,8 @@ void W3DShaderManager::init()
 	int i,j;
     if (auto* device = Graphics::Shared_Frame_Device()) {
         const auto target = device->Get_Swap_Chain().Backbuffer();
-        m_renderTexture = new TextureClass(target.width,target.height,Assets::PixelEncoding::BGRA8,
-            MIP_LEVELS_1,TextureBaseClass::POOL_DEFAULT,true,false);
+        m_renderTexture = new W3DTextureHandle(target.width,target.height,Assets::PixelEncoding::BGRA8,
+            MIP_LEVELS_1,W3DTextureHandle::POOL_DEFAULT,true,false);
     }
 
 	W3DFilterInterface **filters;
@@ -1010,7 +1010,7 @@ void W3DShaderManager::startRenderToTexture()
 /** Ends rendering to a texture.
  */
 //=============================================================================
-TextureClass *W3DShaderManager::endRenderToTexture(void)
+W3DTextureHandle *W3DShaderManager::endRenderToTexture(void)
 {
 	DEBUG_ASSERTCRASH(m_renderingToTexture, ("Not rendering to texture."));
 	if (!m_renderingToTexture) return nullptr;
@@ -1022,7 +1022,7 @@ TextureClass *W3DShaderManager::endRenderToTexture(void)
 /**Returns texture containing the image that was last rendered using any of the effects requiring render target
 textures.  Used mostly for cross-fading effects that need an unmodified version of the view before the effect
 was applied.  NOTE: This texture does not survive device reset.. so quit effect on reset!*/
-TextureClass *W3DShaderManager::getRenderTexture(void)
+W3DTextureHandle *W3DShaderManager::getRenderTexture(void)
 {
 	return m_renderTexture;
 }

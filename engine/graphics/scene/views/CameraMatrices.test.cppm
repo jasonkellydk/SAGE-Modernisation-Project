@@ -9,15 +9,15 @@ export module Graphics.Scene.Views.CameraMatrices.Tests;
 import Graphics.Scene.Views.CameraMatrices;
 import Graphics.Scene.Props.Renderer;
 import Graphics.Scene.Props.MaterialPassQueue;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 using namespace Graphics;
 
 BOOST_AUTO_TEST_CASE(instance_transforms_and_perspective_camera_remain_independent_when_queued)
 {
     for (bool software : {true,false}) {
-        DX11Device device({software});
+        GraphicsTestDevice device({software});
         PropRenderer renderer;
-        BOOST_REQUIRE(renderer.Initialize(device,std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+        BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
         const auto target = device.Create_Texture({64,64,1,RHITextureFormat::RGBA8_UNorm,
             static_cast<unsigned>(RHITextureUsage::RenderTarget)});
         const auto depth = device.Create_Texture({64,64,1,RHITextureFormat::D32_Float,
@@ -75,9 +75,9 @@ BOOST_AUTO_TEST_CASE(instance_transforms_and_perspective_camera_remain_independe
 BOOST_AUTO_TEST_CASE(camera_space_effects_do_not_change_main_or_reflected_object_placement)
 {
     for (bool software : {true,false}) {
-        DX11Device device({software});
+        GraphicsTestDevice device({software});
         PropRenderer renderer;
-        BOOST_REQUIRE(renderer.Initialize(device,std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+        BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
         const auto target = device.Create_Texture({32,32,1,RHITextureFormat::RGBA8_UNorm,
             static_cast<unsigned>(RHITextureUsage::RenderTarget)});
         const auto depth = device.Create_Texture({32,32,1,RHITextureFormat::D32_Float,

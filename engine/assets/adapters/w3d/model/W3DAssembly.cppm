@@ -7,6 +7,9 @@ export module Assets.Adapters.W3D.Assembly;
 export import Assets.ModelAssembly;
 import Assets.Adapters.W3D.Chunks;
 namespace Assets::W3D {
+export inline constexpr std::uint32_t W3DChunkHModel = 0x00000300u;
+export inline constexpr std::uint32_t W3DChunkHlod = 0x00000700u;
+
 namespace AssemblyDetail {
 bool Array(W3DByteSpan bytes,ModelAssemblyLevel& level,std::string& error) {
     std::uint32_t count=0;bool header=false;

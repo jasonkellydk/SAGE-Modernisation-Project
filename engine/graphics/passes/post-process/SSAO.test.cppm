@@ -13,13 +13,13 @@ export module Graphics.Passes.SSAO.Tests;
 import Graphics.Passes.SSAO;
 import Graphics.RHI;
 import Graphics.FrameTargets;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 import Graphics.Capture.FrameCapture;
 import Graphics.Shaders.Library;
 using namespace Graphics;
 namespace
 {
-const std::filesystem::path Shaders(GRAPHICS_SSAO_SHADER_DIRECTORY);
+const std::filesystem::path Shaders(Graphics::Test_Shader_Directory(GRAPHICS_SSAO_SHADER_DIRECTORY));
 SSAOInput Camera(bool perspective)
 {
     SSAOInput input;
@@ -43,7 +43,7 @@ float DepthAt(float z, bool perspective)
 struct Vertex { std::array<float,3> position; std::array<float,4> color{1,1,1,1}; std::array<float,2> uv{}; };
 struct Fixture final
 {
-    DX11Device device;
+    GraphicsTestDevice device;
     SSAORenderer ssao;
     FrameCapture capture;
     FrameTargets targets{};

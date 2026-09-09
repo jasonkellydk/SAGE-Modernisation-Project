@@ -41,7 +41,8 @@ import Graphics.Materials.State;
 #include "WW3D2/RInfo.h"
 #include "WW3D2/Texture.h"
 #include <array>
-#include "WW3D2/GraphicsGeometry.h"
+#include "WWMath/matrix4.h"
+import Graphics.Scene.Surfaces.Geometry;
 
 
 ///////////////////////////////////////////////////////////////////

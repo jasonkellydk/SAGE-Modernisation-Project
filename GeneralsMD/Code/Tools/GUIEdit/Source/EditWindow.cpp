@@ -1,6 +1,6 @@
 import Graphics.Renderer2D;
 import Engine.UI.WND;
-import Graphics.Backends.DX11.FrameRuntime;
+import Graphics.Frame.Runtime;
 import Graphics.Resources.Textures.Quality;
 import Graphics.Diagnostics.Render;
 /*
@@ -464,7 +464,7 @@ void EditWindow::init( UnsignedInt clientWidth, UnsignedInt clientHeight )
 	Graphics::Get_Render_Diagnostics() = {};
 	Graphics::Get_Texture_Quality_Settings().prefer_16_bits = true;
 	WW3D::Init();
-    Graphics::DX11DeviceOptions options;
+    Graphics::FrameDeviceOptions options;
     options.window = m_editWindowHWnd;
     options.width = m_size.x; options.height = m_size.y;
     options.backbuffer_format = Graphics::RHITextureFormat::BGRA8_UNorm;
@@ -502,7 +502,7 @@ void EditWindow::shutdown()
 	// shutdown WW3D
 	Graphics::Shutdown_Tool_Frame();
 	WW3D::Shutdown();
-	Graphics::Graphics_DX11_Shutdown_Shared_Frame();
+	Graphics::Graphics_Shutdown_Shared_Frame();
 	WWMath::Shutdown();
 
 	// delete the w3d file system

@@ -245,6 +245,7 @@ public:
 	bool Draw_Indexed(std::uint32_t index_count, std::uint32_t first_index, std::int32_t base_vertex, std::uint32_t instance_count, std::uint32_t first_instance) noexcept override;
 	bool Reset_State() noexcept override;
 	void Reset_Frame_State() noexcept;
+	void Invalidate_Render_Target_Binding() noexcept { m_targets_bound = false; }
 
 private:
 	bool Is_Ready() const noexcept;
@@ -252,15 +253,25 @@ private:
 	bool Bind_Texture_At_Slot(RHIShaderStage stage, std::uint32_t slot, RHITextureHandle texture) noexcept;
 	bool Bind_Buffer_At_Slot(RHIShaderStage stage, std::uint32_t slot, RHIBufferHandle buffer) noexcept;
 
+	struct ShaderResourceBinding final {
+		RHITextureHandle texture{};
+		RHIBufferHandle buffer{};
+	};
+
 	DX11DeviceState *m_state = nullptr;
 	RHIPipelineHandle m_pipeline{};
 	std::array<std::array<RHIBufferHandle, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT>, 2> m_constant_buffers{};
+	std::array<std::array<ShaderResourceBinding, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT>, 2> m_shader_resources{};
 	RHIPrimitiveTopology m_topology = RHIPrimitiveTopology::TriangleList;
 	RHITextureHandle m_color_target{};
 	RHITextureHandle m_depth_target{};
+	bool m_targets_bound = false;
 	std::span<const RHIBindlessResource> m_bindless_resources{};
 	DX11NativeObject<ID3D11Buffer> m_draw_constants;
 	std::uint32_t m_draw_constants_size = 0;
+	std::array<std::byte, 256> m_draw_constants_data{};
+	std::size_t m_draw_constants_data_size = 0;
+	std::array<bool, 2> m_draw_constants_bound{};
 };
 
 struct DX11DeviceState final
@@ -478,7 +489,7 @@ static bool Create_DX11_Pipeline(
     if (description.vertex_element_count > 0) {
         if (description.vertex_element_count > custom_elements.size()) return false;
         constexpr const char* semantics[] = {"POSITION","COLOR","NORMAL","TEXCOORD"};
-        constexpr DXGI_FORMAT formats[] = {DXGI_FORMAT_R32G32_FLOAT,DXGI_FORMAT_R32G32B32_FLOAT,DXGI_FORMAT_R32G32B32A32_FLOAT};
+        constexpr DXGI_FORMAT formats[] = {DXGI_FORMAT_R32G32_FLOAT,DXGI_FORMAT_R32G32B32_FLOAT,DXGI_FORMAT_R32G32B32A32_FLOAT,DXGI_FORMAT_R32_FLOAT};
         for (unsigned i=0;i<description.vertex_element_count;++i) {
             const auto& source = description.vertex_elements[i];
             const auto semantic = static_cast<unsigned>(source.semantic);
@@ -863,6 +874,7 @@ bool DX11SwapChain::Create_Targets(std::uint32_t width, std::uint32_t height)
 
 	ID3D11DeviceContext *context = m_state->context.Get();
 	context->OMSetRenderTargets(0, nullptr, nullptr);
+	m_state->command_list.Invalidate_Render_Target_Binding();
 	m_state->textures.Destroy(m_backbuffer);
 	m_state->textures.Destroy(m_depth_target);
 	m_backbuffer = {};
@@ -994,19 +1006,33 @@ bool DX11CommandList::Bind_Pipeline(RHIPipelineHandle pipeline) noexcept
 	if (m_pipeline == pipeline)
 		return true;
 
-	ID3D11DeviceContext *context = m_state->context.Get();
-	context->IASetInputLayout(resource->input_layout.Get());
-	context->VSSetShader(resource->vertex_shader.Get(), nullptr, 0);
-	context->PSSetShader(resource->pixel_shader.Get(), nullptr, 0);
-	std::array<ID3D11SamplerState *, 16> samplers{};
-	for (std::size_t slot = 0; slot < resource->sampler_count; ++slot)
-		samplers[slot] = resource->sampler_states[slot].Get();
-	context->PSSetSamplers(0, resource->sampler_count, samplers.data());
-    context->VSSetSamplers(0, resource->sampler_count, samplers.data());
-	context->OMSetDepthStencilState(resource->depth_stencil_state.Get(), resource->stencil_reference);
-	context->OMSetBlendState(resource->blend_state.Get(), nullptr, 0xffffffffu);
-	context->RSSetState(resource->rasterizer_state.Get());
-	context->IASetPrimitiveTopology(To_DX11_Topology(resource->topology));
+    const DX11Pipeline* previous = m_state->pipelines.Resolve(m_pipeline);
+    ID3D11DeviceContext* context = m_state->context.Get();
+    if (!previous || previous->input_layout.Get() != resource->input_layout.Get())
+        context->IASetInputLayout(resource->input_layout.Get());
+    if (!previous || previous->vertex_shader.Get() != resource->vertex_shader.Get())
+        context->VSSetShader(resource->vertex_shader.Get(), nullptr, 0);
+    if (!previous || previous->pixel_shader.Get() != resource->pixel_shader.Get())
+        context->PSSetShader(resource->pixel_shader.Get(), nullptr, 0);
+    std::array<ID3D11SamplerState*, 16> samplers{};
+    bool samplers_changed = !previous || previous->sampler_count < resource->sampler_count;
+    for (std::size_t slot = 0; slot < resource->sampler_count; ++slot) {
+        samplers[slot] = resource->sampler_states[slot].Get();
+        samplers_changed |= !previous || previous->sampler_states[slot].Get() != samplers[slot];
+    }
+    if (samplers_changed) {
+        context->PSSetSamplers(0, resource->sampler_count, samplers.data());
+        context->VSSetSamplers(0, resource->sampler_count, samplers.data());
+    }
+    if (!previous || previous->depth_stencil_state.Get() != resource->depth_stencil_state.Get()
+        || previous->stencil_reference != resource->stencil_reference)
+        context->OMSetDepthStencilState(resource->depth_stencil_state.Get(), resource->stencil_reference);
+    if (!previous || previous->blend_state.Get() != resource->blend_state.Get())
+        context->OMSetBlendState(resource->blend_state.Get(), nullptr, 0xffffffffu);
+    if (!previous || previous->rasterizer_state.Get() != resource->rasterizer_state.Get())
+        context->RSSetState(resource->rasterizer_state.Get());
+    if (!previous || previous->topology != resource->topology)
+        context->IASetPrimitiveTopology(To_DX11_Topology(resource->topology));
 	m_pipeline = pipeline;
 	m_topology = resource->topology;
 	return true;
@@ -1021,11 +1047,19 @@ bool DX11CommandList::Bind_Texture_At_Slot(RHIShaderStage stage, std::uint32_t s
 	if (resource == nullptr || resource->shader_resource_view.Get() == nullptr)
 		return false;
 
+	auto& binding = m_shader_resources[stage == RHIShaderStage::Vertex ? 0 : 1][slot];
+	if (binding.texture == texture)
+		return true;
+
 	ID3D11ShaderResourceView *view = resource->shader_resource_view.Get();
 	if (stage == RHIShaderStage::Vertex)
 		m_state->context.Get()->VSSetShaderResources(slot, 1, &view);
 	else
 		m_state->context.Get()->PSSetShaderResources(slot, 1, &view);
+	// An output conflict makes DX11 bind null instead of the requested view.
+	// Such a request must never become a remembered successful binding.
+	binding = texture == m_color_target || texture == m_depth_target
+		? ShaderResourceBinding{} : ShaderResourceBinding{texture, {}};
 	return true;
 }
 
@@ -1042,11 +1076,15 @@ bool DX11CommandList::Bind_Buffer_At_Slot(RHIShaderStage stage, std::uint32_t sl
 	if (resource->usage == RHIBufferUsage::Storage) {
 		if (resource->shader_resource_view.Get() == nullptr)
 			return false;
+		auto& binding = m_shader_resources[stage == RHIShaderStage::Vertex ? 0 : 1][slot];
+		if (binding.buffer == buffer)
+			return true;
 		ID3D11ShaderResourceView *view = resource->shader_resource_view.Get();
 		if (stage == RHIShaderStage::Vertex)
 			context->VSSetShaderResources(slot, 1, &view);
 		else
 			context->PSSetShaderResources(slot, 1, &view);
+		binding = {{}, buffer};
 		return true;
 	}
 
@@ -1061,6 +1099,7 @@ bool DX11CommandList::Bind_Buffer_At_Slot(RHIShaderStage stage, std::uint32_t sl
 	else
 		context->PSSetConstantBuffers(slot, 1, &native_buffer);
 	if (slot < bindings.size()) bindings[slot] = buffer;
+	if (slot == 1) m_draw_constants_bound[stage == RHIShaderStage::Vertex ? 0 : 1] = false;
 	return true;
 }
 
@@ -1112,8 +1151,14 @@ bool DX11CommandList::Set_Render_Targets(RHITextureHandle color_target, RHITextu
 	if (color == nullptr || color->render_target_view.Get() == nullptr || depth == nullptr || depth->depth_stencil_view.Get() == nullptr)
 		return false;
 
+	if (m_targets_bound && m_color_target == color_target && m_depth_target == depth_target)
+		return true;
+
 	ID3D11RenderTargetView *color_view = color->render_target_view.Get();
 	m_state->context.Get()->OMSetRenderTargets(1, &color_view, depth->depth_stencil_view.Get());
+	// Output binding can implicitly unbind overlapping shader resources.
+	m_shader_resources = {};
+	m_targets_bound = true;
 	m_color_target = color_target;
 	m_depth_target = depth_target;
 	return true;
@@ -1128,8 +1173,13 @@ bool DX11CommandList::Set_Color_Target(RHITextureHandle color_target) noexcept
 	if (color == nullptr || color->render_target_view.Get() == nullptr)
 		return false;
 
+	if (m_targets_bound && m_color_target == color_target && !m_depth_target.Is_Valid())
+		return true;
+
 	ID3D11RenderTargetView *color_view = color->render_target_view.Get();
 	m_state->context.Get()->OMSetRenderTargets(1, &color_view, nullptr);
+	m_shader_resources = {};
+	m_targets_bound = true;
 	m_color_target = color_target;
 	m_depth_target = {};
 	return true;
@@ -1144,7 +1194,12 @@ bool DX11CommandList::Set_Depth_Target(RHITextureHandle depth_target) noexcept
 	if (depth == nullptr || depth->depth_stencil_view.Get() == nullptr)
 		return false;
 
+	if (m_targets_bound && !m_color_target.Is_Valid() && m_depth_target == depth_target)
+		return true;
+
 	m_state->context.Get()->OMSetRenderTargets(0, nullptr, depth->depth_stencil_view.Get());
+	m_shader_resources = {};
+	m_targets_bound = true;
 	m_color_target = {};
 	m_depth_target = depth_target;
 	return true;
@@ -1270,16 +1325,29 @@ bool DX11CommandList::Set_Draw_Constants(std::span<const std::byte> data) noexce
 			return false;
 		m_draw_constants.Reset(native_buffer);
 		m_draw_constants_size = byte_size;
+		m_draw_constants_data_size = 0;
+		m_draw_constants_bound = {};
 	}
 
-	std::array<std::byte, 256> aligned_data{};
-	std::memcpy(aligned_data.data(), data.data(), data.size());
-	m_state->context.Get()->UpdateSubresource(m_draw_constants.Get(), 0, nullptr, aligned_data.data(), 0, 0);
+	if (m_draw_constants_data_size != data.size()
+		|| std::memcmp(m_draw_constants_data.data(), data.data(), data.size()) != 0) {
+		m_draw_constants_data.fill(std::byte{});
+		std::memcpy(m_draw_constants_data.data(), data.data(), data.size());
+		m_state->context.Get()->UpdateSubresource(m_draw_constants.Get(), 0, nullptr,
+			m_draw_constants_data.data(), 0, 0);
+		m_draw_constants_data_size = data.size();
+	}
 	ID3D11Buffer *native_buffer = m_draw_constants.Get();
-	m_state->context.Get()->VSSetConstantBuffers(1, 1, &native_buffer);
-	m_state->context.Get()->PSSetConstantBuffers(1, 1, &native_buffer);
-	m_constant_buffers[0][1] = {};
-	m_constant_buffers[1][1] = {};
+	if (!m_draw_constants_bound[0]) {
+		m_state->context.Get()->VSSetConstantBuffers(1, 1, &native_buffer);
+		m_constant_buffers[0][1] = {};
+		m_draw_constants_bound[0] = true;
+	}
+	if (!m_draw_constants_bound[1]) {
+		m_state->context.Get()->PSSetConstantBuffers(1, 1, &native_buffer);
+		m_constant_buffers[1][1] = {};
+		m_draw_constants_bound[1] = true;
+	}
 	return true;
 }
 
@@ -1347,9 +1415,12 @@ void DX11CommandList::Reset_Frame_State() noexcept
 {
 	m_pipeline = {};
 	m_constant_buffers = {};
+	m_draw_constants_bound = {};
+	m_shader_resources = {};
 	m_topology = RHIPrimitiveTopology::TriangleList;
 	m_color_target = {};
 	m_depth_target = {};
+	m_targets_bound = false;
 	m_bindless_resources = {};
 }
 
@@ -1901,6 +1972,7 @@ bool DX11Device::End_Frame() noexcept
 		return false;
 
 	m_state->context.Get()->OMSetRenderTargets(0, nullptr, nullptr);
+	m_state->command_list.Invalidate_Render_Target_Binding();
 	m_state->gpu_profiler.End_Frame();
 	m_state->frame_active = false;
 	m_state->ready_to_present = true;

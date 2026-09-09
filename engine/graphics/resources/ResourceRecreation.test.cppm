@@ -9,7 +9,7 @@ module;
 export module Graphics.Resources.Recreation.Tests;
 import Graphics.Resources.Recreation;
 import Graphics.Resources.Textures.Resource;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 using namespace Graphics;
 
 BOOST_AUTO_TEST_CASE(growing_owner_storage_preserves_notification_order_and_expired_owners)
@@ -69,7 +69,7 @@ BOOST_AUTO_TEST_CASE(callback_removal_movement_and_new_registration_do_not_inval
 BOOST_AUTO_TEST_CASE(recreated_targets_preserve_rgb_alpha_and_independent_resource_owners)
 {
     for (const bool warp : {true,false}) {
-        DX11Device device({warp});
+        GraphicsTestDevice device({warp});
         if (!warp && !device.Is_Valid()) continue;
         ResourceRecreationRegistry registry;
         std::array<std::unique_ptr<TextureResource>,3> targets;
@@ -109,7 +109,7 @@ BOOST_AUTO_TEST_CASE(recreated_targets_preserve_rgb_alpha_and_independent_resour
 
 BOOST_AUTO_TEST_CASE(atlas_aliases_retain_the_recreated_generation_across_owner_notification_order)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     ResourceRecreationRegistry registry;
     TextureResource* atlas=nullptr;
     TextureResource* alias=nullptr;

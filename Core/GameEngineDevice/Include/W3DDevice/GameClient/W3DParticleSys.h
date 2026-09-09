@@ -7,7 +7,7 @@
 #include <vector>
 
 #include "GameClient/ParticleSys.h"
-#include "WW3D2/RInfo.h"
+#include "W3DDevice/GameClient/W3DRenderContext.h"
 
 import Graphics.Scene.Particles.Renderer;
 import Graphics.Scene.Beams;
@@ -19,7 +19,7 @@ public:
 	W3DParticleSystemManager();
 	virtual ~W3DParticleSystemManager() override;
 
-	virtual void doParticles(RenderInfoClass &rinfo) override;
+	virtual void doParticles(W3DRenderContext &rinfo) override;
 	virtual void queueParticleRender() override;
 	virtual Int getOnScreenParticleCount() override { return m_onScreenParticleCount; }
 

@@ -1,3 +1,5 @@
+import Graphics.Frame.RenderClock;
+#include "W3DDevice/GameClient/W3DRenderServices.h"
 /*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -47,7 +49,7 @@
 #include <span>
 #include <vector>
 import Graphics.Scene.Tracks.Geometry;
-import Graphics.Backends.DX11.FrameRuntime;
+import Graphics.Frame.Runtime;
 #include "W3DDevice/GameClient/W3DGraphicsResources.h"
 #include "W3DDevice/GameClient/W3DTerrainTracks.h"
 #include "W3DDevice/GameClient/BaseHeightMap.h"
@@ -55,14 +57,14 @@ import Graphics.Backends.DX11.FrameRuntime;
 #include "Common/PerfTimer.h"
 #include "Common/GlobalData.h"
 #include "Common/Debug.h"
-#include "WW3D2/Texture.h"
+#include "W3DDevice/GameClient/W3DTextureHandle.h"
 #include "WWMath/colmath.h"
-#include "WW3D2/ColTest.h"
-#include "WW3D2/RInfo.h"
-#include "WW3D2/Camera.h"
-#include "WW3D2/AssetMgr.h"
-#include "WW3D2/WW3D.h"
-#include "WW3D2/Scene.h"
+#include "W3DDevice/GameClient/W3DCastQuery.h"
+#include "W3DDevice/GameClient/W3DRenderContext.h"
+#include "W3DDevice/GameClient/W3DCamera.h"
+#include "W3DDevice/GameClient/W3DAssetCatalog.h"
+
+#include "W3DDevice/GameClient/W3DSceneClass.h"
 #include "GameLogic/TerrainLogic.h"
 #include "GameLogic/Object.h"
 #include "GameClient/Drawable.h"
@@ -125,7 +127,7 @@ void TerrainTracksRenderObjClass::Get_Obj_Space_Bounding_Box(AABoxClass & box) c
 //=============================================================================
 Int TerrainTracksRenderObjClass::Class_ID() const
 {
-	return RenderObjClass::CLASSID_IMAGE3D;
+	return W3DRenderObject::CLASSID_IMAGE3D;
 }
 
 //=============================================================================
@@ -133,7 +135,7 @@ Int TerrainTracksRenderObjClass::Class_ID() const
 //=============================================================================
 /** Not used, but required virtual method. */
 //=============================================================================
-RenderObjClass *	 TerrainTracksRenderObjClass::Clone() const
+W3DRenderObject *	 TerrainTracksRenderObjClass::Clone() const
 {
 	assert(false);
 	return nullptr;
@@ -175,7 +177,7 @@ void TerrainTracksRenderObjClass::init( Real width, Real length, const Char *tex
 	//no sense culling these things since they have very irregular shape and fade
 	//out over time.
 	Set_Force_Visible(TRUE);
-	m_stageZeroTexture=WW3DAssetManager::Get_Instance()->Get_Texture(texturename);
+	m_stageZeroTexture=W3DAssetCatalog::Get_Instance()->Get_Texture(texturename);
 }
 
 //=============================================================================
@@ -291,7 +293,7 @@ void TerrainTracksRenderObjClass::addCapEdgeToTrack(Real x, Real y)
 		topEdge.endPointUV[1].Y=1.0f;
 	}
 
-	topEdge.timeAdded=WW3D::Get_Sync_Time();
+	topEdge.timeAdded=Graphics::Get_Render_Clock().Sync_Time();
 	topEdge.alpha=0.0f;	//fully transparent at cap.
 	m_lastAnchor=vPos;
 	m_activeEdgeCount++;
@@ -408,7 +410,7 @@ void TerrainTracksRenderObjClass::addEdgeToTrack(Real x, Real y)
 		topEdge.endPointUV[1].Y=1.0f;
 	}
 
-	topEdge.timeAdded=WW3D::Get_Sync_Time();
+	topEdge.timeAdded=Graphics::Get_Render_Clock().Sync_Time();
 	topEdge.alpha=1.0f;	//fully opaque at start.
 	if (m_airborne || m_activeEdgeCount <= 1) {
 		topEdge.alpha=0.0f;	//smooth out track restarts by setting transparent
@@ -428,7 +430,7 @@ void TerrainTracksRenderObjClass::addEdgeToTrack(Real x, Real y)
 *  requested for rendering this frame.  Actual rendering is done in flush().
 */
 //=============================================================================
-void TerrainTracksRenderObjClass::Render(RenderInfoClass & rinfo)
+void TerrainTracksRenderObjClass::Render(W3DRenderContext & rinfo)
 {	///@todo: After adding track mark visibility tests, add visible marks to another list.
 	if (TheGlobalData->m_makeTrackMarks && m_activeEdgeCount >= 2)
 		TheTerrainTracksRenderObjClassSystem->m_edgesToFlush += m_activeEdgeCount;
@@ -440,7 +442,7 @@ void TerrainTracksRenderObjClass::Render(RenderInfoClass & rinfo)
 /**Find distance between the "trackfx" bones of the model.  This tells us the correct
    width for the trackmarks.
 */
-static Real computeTrackSpacing(RenderObjClass *renderObj)
+static Real computeTrackSpacing(W3DRenderObject *renderObj)
 {
 	Real trackSpacing = DEFAULT_TRACK_SPACING;
 	Int leftTrack;
@@ -473,7 +475,7 @@ static Real computeTrackSpacing(RenderObjClass *renderObj)
 		   texture to use for the tracks - image should be symetrical and include alpha channel.
 */
 //=============================================================================
-TerrainTracksRenderObjClass *TerrainTracksRenderObjClassSystem::bindTrack( RenderObjClass *renderObject, Real length, const Char *texturename)
+TerrainTracksRenderObjClass *TerrainTracksRenderObjClassSystem::bindTrack( W3DRenderObject *renderObject, Real length, const Char *texturename)
 {
 	TerrainTracksRenderObjClass *mod;
 
@@ -608,7 +610,7 @@ void TerrainTracksRenderObjClassSystem::ReleaseResources()
 //=============================================================================
 /**  initialize the system, allocate all the render objects we will need */
 //=============================================================================
-void TerrainTracksRenderObjClassSystem::init( SceneClass *TerrainTracksScene )
+void TerrainTracksRenderObjClassSystem::init( W3DScene *TerrainTracksScene )
 {
 	const Int numModules=TheGlobalData->m_maxTerrainTracks;
 
@@ -705,7 +707,7 @@ void TerrainTracksRenderObjClassSystem::shutdown()
 void TerrainTracksRenderObjClassSystem::update()
 {
 
-	Int		iTime=WW3D::Get_Sync_Time();
+	Int		iTime=Graphics::Get_Render_Clock().Sync_Time();
 	Real	iDiff;
 	TerrainTracksRenderObjClass *mod=m_usedModules,*nextMod;
 
@@ -757,9 +759,9 @@ void TerrainTracksRenderObjClassSystem::update()
 //=============================================================================
 /** Draw all active track marks for this frame */
 //=============================================================================
-void TerrainTracksRenderObjClassSystem::flush(CameraClass& camera)
+void TerrainTracksRenderObjClassSystem::flush(W3DCamera& camera)
 {
-    if (WW3D::Is_Reflection_Render_Pass()) return;
+    if (Get_W3D_Render_Services().Is_Reflection_Render_Pass()) return;
     auto* device = Graphics::Shared_Frame_Device();
     if (!device || !m_usedModules || m_edgesToFlush < 2) {
         m_edgesToFlush = 0;

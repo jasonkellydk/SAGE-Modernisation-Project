@@ -25,14 +25,14 @@ import Graphics.Scene.Models.Hierarchy;
 import Graphics.Scene.Models.FactoryStore;
 import Graphics.Scene.Models.Factory;
 import Graphics.Scene.Props.Renderer;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 using namespace Assets;
 using namespace Graphics;
 BOOST_AUTO_TEST_CASE(material_slots_retain_selected_textures_across_shared_edits_and_resize)
 {
     for(bool warp:{true,false}) {
-        DX11Device device({warp});if(!warp&&!device.Is_Valid())continue;
-        PropRenderer renderer;BOOST_REQUIRE(renderer.Initialize(device,GRAPHICS_TERRAIN_SHADER_DIRECTORY));
+        GraphicsTestDevice device({warp});if(!warp&&!device.Is_Valid())continue;
+        PropRenderer renderer;BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
         auto make_texture=[&](std::array<std::uint8_t,4> pixel) {
             const auto handle=device.Create_Texture_Initialized({1,1},{std::as_bytes(std::span(pixel)),4});
             BOOST_REQUIRE(handle.Is_Valid());
@@ -128,8 +128,8 @@ BOOST_AUTO_TEST_CASE(shared_uv_channels_draw_distinct_textures_after_edit_and_re
     auto edited=original;edited.Make_Unique(0);
     for(unsigned i=0;i<4;++i)edited.Get(0)[i][0]=.75f;
     for(bool warp:{true,false}) {
-        DX11Device device({warp});if(!warp&&!device.Is_Valid())continue;
-        PropRenderer renderer;BOOST_REQUIRE(renderer.Initialize(device,GRAPHICS_TERRAIN_SHADER_DIRECTORY));
+        GraphicsTestDevice device({warp});if(!warp&&!device.Is_Valid())continue;
+        PropRenderer renderer;BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
         const std::array<std::uint8_t,8> colors{255,0,0,255,0,255,0,255};
         const auto texture=device.Create_Texture_Initialized({2,1},{std::as_bytes(std::span(colors)),8});
         BOOST_REQUIRE(texture.Is_Valid());
@@ -263,8 +263,8 @@ BOOST_AUTO_TEST_CASE(bounds_tree_polygon_order_draws_every_leaf_after_resize)
     });
     positions.clear();triangles.clear();runtime={};
     for(bool warp:{true,false}) {
-        DX11Device device({warp});if(!warp&&!device.Is_Valid())continue;
-        PropRenderer renderer;BOOST_REQUIRE(renderer.Initialize(device,GRAPHICS_TERRAIN_SHADER_DIRECTORY));
+        GraphicsTestDevice device({warp});if(!warp&&!device.Is_Valid())continue;
+        PropRenderer renderer;BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
         const auto mesh=renderer.Create_Mesh(vertices,indices);
         auto& commands=device.Immediate_Command_List();
         PropStyle style;style.depth_test=false;style.depth_write=false;
@@ -294,8 +294,8 @@ BOOST_AUTO_TEST_CASE(decoded_aggregate_attachments_draw_on_named_bones_after_res
     rig.bones={{"ROOT"},{"LEFT",0,{-.5f,0,0}},{"RIGHT",0,{.5f,0,0}}};
     ModelHierarchy hierarchy(rig);hierarchy.Evaluate_Rest(Affine_Identity());
     for(bool warp:{true,false}) {
-        DX11Device device({warp});if(!warp&&!device.Is_Valid())continue;
-        PropRenderer renderer;BOOST_REQUIRE(renderer.Initialize(device,GRAPHICS_TERRAIN_SHADER_DIRECTORY));
+        GraphicsTestDevice device({warp});if(!warp&&!device.Is_Valid())continue;
+        PropRenderer renderer;BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
         auto& commands=device.Immediate_Command_List();
         PropStyle style;style.depth_test=false;style.depth_write=false;
         PropParameters parameters;parameters.textured=0;
@@ -331,8 +331,8 @@ BOOST_AUTO_TEST_CASE(decoded_model_level_selection_draws_distinct_details_after_
     BOOST_REQUIRE(W3D::W3DRead_Model_Level_Set(AssemblyTestData::LevelSet(),source,error));
     const auto instance=source;source={};
     for(bool warp:{true,false}) {
-        DX11Device device({warp});if(!warp&&!device.Is_Valid())continue;
-        PropRenderer renderer;BOOST_REQUIRE(renderer.Initialize(device,GRAPHICS_TERRAIN_SHADER_DIRECTORY));
+        GraphicsTestDevice device({warp});if(!warp&&!device.Is_Valid())continue;
+        PropRenderer renderer;BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
         auto& commands=device.Immediate_Command_List();
         PropStyle style;style.depth_test=false;style.depth_write=false;
         PropParameters parameters;parameters.textured=0;
@@ -385,8 +385,8 @@ BOOST_AUTO_TEST_CASE(collection_proxy_transform_draws_after_source_release_and_r
     geometry_bytes.clear();
 
     for(bool warp:{true,false}) {
-        DX11Device device({warp});if(!warp&&!device.Is_Valid())continue;
-        PropRenderer renderer;BOOST_REQUIRE(renderer.Initialize(device,GRAPHICS_TERRAIN_SHADER_DIRECTORY));
+        GraphicsTestDevice device({warp});if(!warp&&!device.Is_Valid())continue;
+        PropRenderer renderer;BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
         auto& commands=device.Immediate_Command_List();
         PropStyle style;style.depth_test=false;style.depth_write=false;
         PropParameters parameters;parameters.textured=0;
@@ -433,8 +433,8 @@ BOOST_AUTO_TEST_CASE(decoded_assembly_levels_and_bone_attachments_draw_after_sou
             BOOST_CHECK_EQUAL(hierarchy.World_Transform(instance.proxies.front().bone).matrix[3],.5f);
         }
         for(bool warp:{true,false}) {
-            DX11Device device({warp});if(!warp&&!device.Is_Valid())continue;
-            PropRenderer renderer;BOOST_REQUIRE(renderer.Initialize(device,GRAPHICS_TERRAIN_SHADER_DIRECTORY));
+            GraphicsTestDevice device({warp});if(!warp&&!device.Is_Valid())continue;
+            PropRenderer renderer;BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
             auto& commands=device.Immediate_Command_List();
             PropStyle style;style.depth_test=false;style.depth_write=false;
             PropParameters parameters;parameters.textured=0;

@@ -59,6 +59,17 @@ public:
 
     bool Bind(Device& device, CommandList& commands)
     {
+        std::array<RHIBindlessResource,6> resources{};
+        unsigned count=0;
+        return Prepare_Resources(device, resources, count)
+            && commands.Set_Bindless_Resources(std::span(resources.data(),count));
+    }
+
+    bool Prepare_Resources(Device& device, std::span<RHIBindlessResource> resources, unsigned& count)
+    {
+        count=0;
+        if (resources.size()<6) return false;
+        for (auto& resource : resources.first(6)) resource={};
         GRAPHICS_PROFILE_SCOPE("Graphics.Environment.Bind");
         const auto& state = Get_Environment_Lighting();
         auto parameters = state.parameters;
@@ -74,11 +85,10 @@ public:
             m_parameters = parameters;
             m_parameters_uploaded = true;
         }
-        std::array<RHIBindlessResource,6> resources{};
         resources[0].type = RHIResourceType::Material;
         resources[0].constant_buffer_slot = 7;
         resources[0].buffer = m_constants;
-        unsigned count = 1;
+        count = 1;
         if (parameters.cloud_offset_strength[3] > 0) {
             resources[count].type = RHIResourceType::Texture;
             resources[count].index = ResourceIndex{15,1};
@@ -89,7 +99,7 @@ public:
             resources[count].index = ResourceIndex{11+cascade,1};
             resources[count++].texture = state.shadow_textures[cascade];
         }
-        return commands.Set_Bindless_Resources(std::span(resources.data(),count));
+        return true;
     }
 
 private:

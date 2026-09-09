@@ -37,7 +37,7 @@
 
 // FORWARD REFERENCES /////////////////////////////////////////////////////////////////////////////
 class Thing;
-class RenderObjClass;
+class W3DRenderObject;
 class FXList;
 
 //-------------------------------------------------------------------------------------------------
@@ -70,7 +70,7 @@ private:
 
 #ifdef LOAD_TEST_ASSETS
 
-	RenderObjClass*		m_renderObject;										///< W3D Render object for this drawable
+	W3DRenderObject*		m_renderObject;										///< W3D Render object for this drawable
 	Shadow*				m_shadow;													///< Updates/Renders shadows of this object
 #endif
 };

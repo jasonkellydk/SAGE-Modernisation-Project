@@ -1,3 +1,4 @@
+#include "W3DDevice/GameClient/W3DRenderServices.h"
 import Graphics.Resources.Textures.Quality;
 /*
 **	Command & Conquer Generals Zero Hour(tm)
@@ -56,8 +57,7 @@ import Graphics.Resources.Textures.Quality;
 #include "W3DDevice/GameClient/W3DShadow.h"
 #include "W3DDevice/GameClient/BaseHeightMap.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
-#include "WW3D2/PartEmt.h"
-#include "WW3D2/AnimObj.h"  ///< @todo superhack for demo, remove!
+#include "W3DDevice/GameClient/W3DAnimatedModelRenderObject.h"  ///< @todo superhack for demo, remove!
 
 //-------------------------------------------------------------------------------------------------
 //-------------------------------------------------------------------------------------------------
@@ -203,7 +203,7 @@ void W3DGameClient::setTextureLOD( Int level )
 	{
 		Graphics::Get_Texture_Quality_Settings().mip_reduction = level;
 		Graphics::Get_Texture_Quality_Settings().minimum_dimension = 32;
-		WW3D::_Invalidate_Textures();
+		Get_W3D_Render_Services().Invalidate_Textures();
 
 		if( TheTerrainRenderObject )
 			TheTerrainRenderObject->setTextureLOD(level);

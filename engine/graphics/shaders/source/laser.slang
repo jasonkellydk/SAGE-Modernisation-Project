@@ -1,3 +1,4 @@
+#include "resource_access.slangh"
 cbuffer LaserConstants : register(b0)
 {
     row_major float4x4 ViewProjection;
@@ -25,14 +26,14 @@ struct LaserVertexOutput
     float distortion : TEXCOORD4;
 };
 
-Texture2D BaseTexture : register(t0);
-Texture2D DetailTexture : register(t1);
-Texture2D ShroudTexture : register(t2);
-Texture2D BackgroundTexture : register(t3);
-SamplerState BaseSampler : register(s0);
-SamplerState DetailSampler : register(s1);
-SamplerState ShroudSampler : register(s2);
-SamplerState BackgroundSampler : register(s3);
+GRAPHICS_TEXTURE_2D(BaseTexture, float4, 0)
+GRAPHICS_TEXTURE_2D(DetailTexture, float4, 1)
+GRAPHICS_TEXTURE_2D(ShroudTexture, float4, 2)
+GRAPHICS_TEXTURE_2D(BackgroundTexture, float4, 3)
+GRAPHICS_SAMPLER(BaseSampler, 0)
+GRAPHICS_SAMPLER(DetailSampler, 1)
+GRAPHICS_SAMPLER(ShroudSampler, 2)
+GRAPHICS_SAMPLER(BackgroundSampler, 3)
 
 float3 BiasShroud(float3 value)
 {
@@ -71,9 +72,9 @@ LaserVertexOutput laser_vertex(LaserVertexInput input)
 {
     // Match the authored laser shader: both RGBA textures participate in the
     // product, while the shroud is biased independently for effects.
-    const float4 base = BaseTexture.Sample(BaseSampler, input.uv);
-    const float4 detail = DetailTexture.Sample(DetailSampler, input.detail_uv);
-    const float3 shroud = BiasShroud(ShroudTexture.Sample(ShroudSampler,
+    const float4 base = BaseTexture().Sample(BaseSampler(), input.uv);
+    const float4 detail = DetailTexture().Sample(DetailSampler(), input.detail_uv);
+    const float3 shroud = BiasShroud(ShroudTexture().Sample(ShroudSampler(),
         input.shroud_uv).rgb);
     const float footprint = BeamFootprint(input.uv.x);
     float4 result = base * detail * input.color;
@@ -91,10 +92,10 @@ LaserVertexOutput laser_vertex(LaserVertexInput input)
 [shader("pixel")] float4 laser_distortion_pixel(
     LaserVertexOutput input) : SV_TARGET
 {
-    const float4 base = BaseTexture.Sample(BaseSampler, input.uv);
-    const float4 normal_sample_a = DetailTexture.Sample(DetailSampler,
+    const float4 base = BaseTexture().Sample(BaseSampler(), input.uv);
+    const float4 normal_sample_a = DetailTexture().Sample(DetailSampler(),
         input.detail_uv * float2(1.71, 0.93) + float2(0.13, 0.07));
-    const float4 normal_sample_b = DetailTexture.Sample(DetailSampler,
+    const float4 normal_sample_b = DetailTexture().Sample(DetailSampler(),
         input.detail_uv * float2(0.83, 1.89) + float2(0.47, 0.31));
 
     const float3 bump_a = normalize(normal_sample_a.rgb * 2.0 - 1.0);
@@ -114,8 +115,8 @@ LaserVertexOutput laser_vertex(LaserVertexInput input)
 
     const float2 distortion_direction = normalize(
         view_side.xy * bump_normal.x + view_along.xy * bump_normal.y);
-    const float3 biased_shroud = BiasShroud(ShroudTexture.Sample(
-        ShroudSampler, input.shroud_uv).rgb);
+    const float3 biased_shroud = BiasShroud(ShroudTexture().Sample(
+        ShroudSampler(), input.shroud_uv).rgb);
     const float shroud_mask = saturate(min(biased_shroud.r,
         min(biased_shroud.g, biased_shroud.b)));
     const float normal_mask = saturate(normal_sample_a.a * normal_sample_b.a);
@@ -125,7 +126,7 @@ LaserVertexOutput laser_vertex(LaserVertexInput input)
 
     uint background_width;
     uint background_height;
-    BackgroundTexture.GetDimensions(background_width, background_height);
+    BackgroundTexture().GetDimensions(background_width, background_height);
     const float2 dimensions = float2(max(background_width, 1u),
         max(background_height, 1u));
     const float2 screen_uv = input.position.xy / dimensions;
@@ -133,7 +134,7 @@ LaserVertexOutput laser_vertex(LaserVertexInput input)
     // radius.  A zero strength or a fogged/transparent beam has zero mask.
     const float2 pixel_offset = distortion_direction * (1.5 * mask);
     const float2 distorted_uv = saturate(screen_uv + pixel_offset / dimensions);
-    const float4 background = BackgroundTexture.Sample(BackgroundSampler,
+    const float4 background = BackgroundTexture().Sample(BackgroundSampler(),
         distorted_uv);
     return float4(background.rgb, mask);
 }

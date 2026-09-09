@@ -11,14 +11,14 @@ export module Graphics.Scene.DrawParameters.Tests;
 import Graphics.Scene.DrawParameters;
 import Graphics.Scene.Props.Renderer;
 import Graphics.Scene.Props.MaterialPassQueue;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 using namespace Graphics;
 
 namespace
 {
 struct Drawing final
 {
-    DX11Device device;
+    GraphicsTestDevice device;
     PropRenderer renderer;
     RHITextureHandle target, depth;
     std::vector<PropMeshHandle> meshes;
@@ -26,7 +26,7 @@ struct Drawing final
 
     explicit Drawing(bool software) : device({software})
     {
-        BOOST_REQUIRE(renderer.Initialize(device, std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+        BOOST_REQUIRE(renderer.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
         target = device.Create_Texture({size,size,1,RHITextureFormat::RGBA8_UNorm,
             static_cast<unsigned>(RHITextureUsage::RenderTarget)});
         depth = device.Create_Texture({size,size,1,RHITextureFormat::D24_UNorm_S8,

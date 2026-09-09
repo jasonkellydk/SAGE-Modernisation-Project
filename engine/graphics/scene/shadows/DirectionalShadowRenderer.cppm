@@ -2,9 +2,14 @@ module;
 #include "../../profiling/Tracy.h"
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <cmath>
+#include <cstring>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
+#include <numeric>
 #include <span>
 #include <vector>
 
@@ -41,8 +46,12 @@ public:
     void Clear_Casters() noexcept
     {
         for (const auto& caster : m_casters)
-            if (caster.source != nullptr) caster.source->Destroy_Mesh(caster.source_mesh);
+            if (caster.source != nullptr) {
+                caster.source->Instances().Release(caster.instance);
+                caster.source->Destroy_Mesh(caster.source_mesh);
+            }
         m_casters.clear();
+        m_caster_order.clear(); m_batches.clear(); m_instance_worlds.clear(); m_instance_indices.clear();
         if (m_transient_mesh.Is_Valid()) m_renderer.Update_Mesh(m_transient_mesh,{},{});
         m_transient_index_count = 0;
     }
@@ -138,7 +147,7 @@ public:
     // Share the exact mesh version used by color/reflection passes. Retain it
     // through all cascades even if its source publishes new geometry meanwhile.
     bool Add_Caster(PropRenderer& source,PropMeshHandle mesh,PropParameters parameters,
-        std::span<const RHITextureHandle> textures,const PropStyle& material_style = {})
+        std::span<const RHITextureHandle> textures,const PropStyle& material_style = {}, PropInstanceHandle instance = {})
     {
         if (m_device == nullptr || textures.size() > PropTextureCount) return false;
         const auto* geometry = source.Mesh_Geometry(mesh);
@@ -146,12 +155,16 @@ public:
         auto caster = Make_Caster(parameters,textures,material_style);
         caster.source = &source;
         caster.source_mesh = mesh;
+        if (!instance.Is_Valid()) instance=source.Instances().Update({},parameters);
+        else if (!source.Instances().Retain(instance)) { source.Destroy_Mesh(mesh); return false; }
+        caster.instance=instance;
         {
             GRAPHICS_PROFILE_SCOPE("Graphics.Shadows.MeshBounds");
-            caster.bounds.minimum = geometry->Minimum_Position();
-            caster.bounds.maximum = geometry->Maximum_Position();
+            if (!source.Mesh_Bounds(mesh,instance,caster.bounds.minimum,caster.bounds.maximum)) {
+                source.Instances().Release(instance); source.Destroy_Mesh(mesh); return false;
+            }
         }
-        caster.bounds = Transform_Bounds(caster.bounds,parameters.world);
+        caster.bounds = Transform_Bounds(caster.bounds,source.Instances().Resolve(instance)->world);
         m_casters.push_back(caster);
         return true;
     }
@@ -165,6 +178,7 @@ public:
         ShadowCascades cascades;
         if (!Build_Shadow_Cascades(view,LightHandle(0,1),light,settings,cascades)) return false;
         if (!Prepare_Maps(settings)) return false;
+        if (!Prepare_Batches()) return false;
         auto& environment = Get_Environment_Lighting();
         const auto saved = environment;
         environment.parameters.shadow_options[0] = 0;
@@ -179,19 +193,27 @@ public:
                     || !list.Set_Viewport({0,0,settings.map_size,settings.map_size})
                     || !list.Clear_Depth(1)) return false;
                 const auto planes = Cascade_Planes(cascades.views[cascade].view_projection);
-                for (const auto& caster : m_casters) {
-                    auto parameters = caster.parameters;
+                for (const auto& batch : m_batches) {
+                    const auto& first = m_casters[m_caster_order[batch.first]];
+                    std::size_t instance_count = 0;
+                    for (auto index=batch.first; index<batch.end; ++index) {
+                        const auto& caster = m_casters[m_caster_order[index]];
+                        if (Intersects_Cascade(caster.bounds,planes)) {
+                            m_instance_worlds[instance_count] = caster.parameters.world;
+                            m_instance_indices[instance_count] = caster.instance.Get_Index();
+                            ++instance_count;
+                        }
+                    }
+                    if (instance_count == 0) continue;
+                    auto parameters = first.parameters;
                     parameters.view_projection = cascades.views[cascade].view_projection.values;
-                    const auto* mesh = caster.mesh.Is_Valid() ? m_meshes.Resolve(caster.mesh) : &caster.bounds;
-                    if (mesh == nullptr) return false;
-                    if (!Intersects_Cascade(caster.bounds,planes)) continue;
-                    const auto textures = std::span(caster.textures.data(),caster.texture_count);
-                    if (caster.source != nullptr) {
-                        if (!caster.source->Draw(list,caster.source_mesh,caster.style,parameters,textures)) return false;
-                    } else if (caster.mesh.Is_Valid()) {
-                        if (!m_renderer.Draw(list,mesh->handle,caster.style,parameters,textures)) return false;
-                    } else if (!m_renderer.Draw_Range(list,m_transient_mesh,caster.style,parameters,textures,
-                        caster.first_index,caster.index_count)) return false;
+                    parameters.world = m_instance_worlds.front();
+                    const auto records = first.source ? std::span<const std::uint32_t>(m_instance_indices.data(),instance_count)
+                        : std::span<const std::uint32_t>{};
+                    const auto worlds = first.source || instance_count == 1 ? std::span<const std::array<float,16>>{}
+                        : std::span<const std::array<float,16>>(m_instance_worlds.data(),instance_count);
+                    if (!batch.renderer->Draw_Range(list,batch.mesh,first.style,parameters,
+                        std::span(first.textures.data(),first.texture_count),batch.first_index,batch.index_count,worlds,records)) return false;
                 }
                 return true;
             });
@@ -282,6 +304,7 @@ private:
     {
         PropRenderer* source = nullptr;
         PropMeshHandle source_mesh{};
+        PropInstanceHandle instance{};
         ShadowCasterHandle mesh{};
         Mesh bounds;
         std::uint32_t first_index = 0;
@@ -291,6 +314,84 @@ private:
         std::array<RHITextureHandle,PropTextureCount> textures{};
         std::uint32_t texture_count = 0;
     };
+
+    struct Batch final {
+        PropRenderer* renderer;
+        PropMeshHandle mesh;
+        std::uint32_t first_index, index_count;
+        std::size_t first, end;
+    };
+
+    bool Prepare_Batches()
+    {
+        // Every caster uses LessEqual depth writes with color and stencil
+        // writes disabled. Equal-depth fragments therefore commute as well.
+        // Group retained geometry once, before any cascade visibility loops.
+        m_caster_order.resize(m_casters.size());
+        std::iota(m_caster_order.begin(),m_caster_order.end(),std::size_t{0});
+        const auto less = [&](std::size_t a, std::size_t b) {
+            const auto& left = m_casters[a]; const auto& right = m_casters[b];
+            if (left.source != right.source) return std::less<PropRenderer*>{}(left.source,right.source);
+            if (left.source_mesh.Get_Index() != right.source_mesh.Get_Index())
+                return left.source_mesh.Get_Index() < right.source_mesh.Get_Index();
+            if (left.source_mesh.Get_Generation() != right.source_mesh.Get_Generation())
+                return left.source_mesh.Get_Generation() < right.source_mesh.Get_Generation();
+            if (left.mesh.Get_Index() != right.mesh.Get_Index()) return left.mesh.Get_Index() < right.mesh.Get_Index();
+            if (left.mesh.Get_Generation() != right.mesh.Get_Generation()) return left.mesh.Get_Generation() < right.mesh.Get_Generation();
+            return left.first_index < right.first_index;
+        };
+        std::sort(m_caster_order.begin(),m_caster_order.end(),less);
+        m_batches.clear();
+        m_batches.reserve(m_casters.size());
+        m_instance_worlds.resize(m_casters.size());
+        m_instance_indices.resize(m_casters.size());
+        for (std::size_t first=0; first<m_caster_order.size();) {
+            const auto& caster = m_casters[m_caster_order[first]];
+            assert(caster.style.color_write_mask == 0 && !caster.style.stencil.enabled);
+            auto* renderer = caster.source != nullptr ? caster.source : &m_renderer;
+            auto mesh = caster.source_mesh;
+            std::uint32_t first_index = 0, index_count = 0;
+            if (caster.source == nullptr) {
+                if (caster.mesh.Is_Valid()) {
+                    const auto* stored = m_meshes.Resolve(caster.mesh);
+                    if (stored == nullptr) return false;
+                    mesh = stored->handle;
+                } else {
+                    mesh = m_transient_mesh;
+                    first_index = caster.first_index; index_count = caster.index_count;
+                }
+            }
+            if (caster.source != nullptr || caster.mesh.Is_Valid()) {
+                const auto* geometry = renderer->Mesh_Geometry(mesh);
+                if (geometry == nullptr) return false;
+                index_count = static_cast<std::uint32_t>(geometry->Indices().size());
+            }
+            auto end = first+1;
+            while (end < m_caster_order.size()) {
+                const auto& next = m_casters[m_caster_order[end]];
+                if (next.source != caster.source || next.source_mesh != caster.source_mesh || next.mesh != caster.mesh
+                    || next.first_index != caster.first_index || next.index_count != caster.index_count
+                    || next.style != caster.style || next.texture_count != caster.texture_count || next.textures != caster.textures
+                    || !Same_Depth_Parameters(next.parameters,caster.parameters)) break;
+                ++end;
+            }
+            m_batches.push_back({renderer,mesh,first_index,index_count,first,end});
+            first = end;
+        }
+        return true;
+    }
+
+    static bool Same_Depth_Parameters(const PropParameters& left,const PropParameters& right) noexcept
+    {
+        // Local lights and ambient affect RGB only. Preserve all view, alpha,
+        // mapping and material inputs; the caster pipeline masks every color write.
+        constexpr auto lighting = offsetof(PropParameters,scene_ambient);
+        constexpr auto material = offsetof(PropParameters,textured);
+        constexpr auto world = offsetof(PropParameters,world);
+        return std::memcmp(&left,&right,lighting) == 0
+            && std::memcmp(reinterpret_cast<const std::byte*>(&left)+material,
+                reinterpret_cast<const std::byte*>(&right)+material,world-material) == 0;
+    }
 
     static Caster Make_Caster(PropParameters parameters,std::span<const RHITextureHandle> textures,
         const PropStyle& material_style)
@@ -341,6 +442,10 @@ private:
     std::array<GraphPassHandle,4> m_passes{};
     std::array<GraphResourceBinding,4> m_bindings{};
     std::vector<Caster> m_casters;
+    std::vector<std::size_t> m_caster_order;
+    std::vector<Batch> m_batches;
+    std::vector<std::array<float,16>> m_instance_worlds;
+    std::vector<std::uint32_t> m_instance_indices;
 };
 
 export DirectionalShadowRenderer& Get_Directional_Shadow_Renderer() noexcept

@@ -30,7 +30,7 @@ import Assets.Models;
 import Assets.Math;
 import Assets.States;
 import Assets.Textures;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 import Graphics.Scene.Models.ModelAssetBinding;
 import Graphics.Testing.VisualRegression;
 
@@ -211,7 +211,7 @@ struct ModelScenario final
 struct E2EContext final
 {
 	Assets::AssetCache assets{W3DTestSource{}};
-	Graphics::DX11Device device{{true}};
+	Graphics::GraphicsTestDevice device{{true}};
 	Graphics::StaticMeshRenderer renderer;
 	ModelScenario scenario;
 
@@ -220,7 +220,7 @@ struct E2EContext final
 	{
 		if (!device.Is_Valid()
 			|| !assets.Register_Model_Adapter(std::make_shared<Assets::W3DAdapter>())
-			|| !renderer.Initialize(device, std::filesystem::path(GRAPHICS_W3D_E2E_SHADER_DIRECTORY), 64, 8, 64, 64))
+			|| !renderer.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_W3D_E2E_SHADER_DIRECTORY), 64, 8, 64, 64))
 			return false;
 
 		const Assets::ModelAssetHandle model_handle = assets.Request_Model(model_name);

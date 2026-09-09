@@ -11,7 +11,7 @@ export module Graphics.Frame.Drawing.Tests;
 import Graphics.FrameOwner;
 import Graphics.Frame.AttachmentBindings;
 import Graphics.Scene.Props.Renderer;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 using namespace Graphics;
 
 namespace
@@ -53,15 +53,15 @@ BOOST_AUTO_TEST_CASE(scene_and_queued_pixels_survive_offscreen_passes_and_failed
     for (bool software : {true,false}) {
         Window window;
         BOOST_REQUIRE(window.handle != nullptr);
-        DX11DeviceOptions options;
+        GraphicsTestDeviceOptions options;
         options.window = window.handle;
         options.width = options.height = 32;
         options.use_warp = software;
         options.backbuffer_format = RHITextureFormat::RGBA8_UNorm;
-        DX11Device device(options);
+        GraphicsTestDevice device(options);
         BOOST_REQUIRE(device.Is_Valid());
         PropRenderer renderer;
-        BOOST_REQUIRE(renderer.Initialize(device,std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+        BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
         auto& commands = device.Immediate_Command_List();
         const auto color = device.Get_Swap_Chain().Backbuffer();
         const auto depth = device.Get_Swap_Chain().Depth_Target();
@@ -93,6 +93,9 @@ BOOST_AUTO_TEST_CASE(scene_and_queued_pixels_survive_offscreen_passes_and_failed
         for (bool fail : {false,true,false}) {
             overlay.fail = fail;
             BOOST_REQUIRE(owner.Begin_Frame(device));
+            const auto color = device.Get_Swap_Chain().Backbuffer();
+            const auto depth = device.Get_Swap_Chain().Depth_Target();
+            BOOST_REQUIRE(attachments.Initialize(device,{color.texture,depth.texture,{0,0,32,32}}));
             BOOST_REQUIRE(attachments.Restore_Default());
             attachments.Clear(true,true,{0,0,0,0});
             BOOST_REQUIRE(renderer.Draw(commands,scene_mesh,scene_style,parameters,{}));

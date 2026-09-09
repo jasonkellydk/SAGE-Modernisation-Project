@@ -1,3 +1,4 @@
+#include "resource_access.slangh"
 cbuffer WaterConstants : register(b0)
 {
     row_major float4x4 World;
@@ -49,8 +50,8 @@ struct WaterTrackVertexOutput
     return output;
 }
 
-Texture2D WaterTrackTexture : register(t0);
-SamplerState WaterTrackSampler : register(s0);
+GRAPHICS_TEXTURE_2D(WaterTrackTexture, float4, 0)
+GRAPHICS_SAMPLER(WaterTrackSampler, 0)
 
 struct WaterTrackPixelInput
 {
@@ -64,6 +65,6 @@ struct WaterTrackPixelInput
 {
     // wave256.tga contains the shoreline shape in its alpha channel.  The
     // vertex alpha is the time-dependent fade supplied by WaterTracksObj.
-    return WaterTrackTexture.Sample(WaterTrackSampler, input.texcoord0) *
+    return WaterTrackTexture().Sample(WaterTrackSampler(), input.texcoord0) *
         input.color0;
 }

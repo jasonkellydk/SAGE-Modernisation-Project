@@ -49,15 +49,24 @@ public:
     {
         return index<channels.size() && channels[index] ? channels[index]->revision.Token() : 0;
     }
-    Value* Create(std::size_t index,std::size_t count)
+    void Allocate(std::size_t index,std::size_t count)
     {
         if(index>=channels.size())channels.resize(index+1);
         if(!channels[index]) {
             auto channel=std::make_shared<Channel>();channel->values.resize(count);
             channels[index]=std::move(channel);
         }
-        channels[index]->revision.Expose_Writable();
-        return channels[index]->values.data();
+    }
+    void Set(std::size_t index,std::size_t vertex,const Value& value)
+    {
+        auto& channel=*channels.at(index);
+        channel.revision.Invalidate();
+        channel.values.at(vertex)=value;
+    }
+    Value* Create(std::size_t index,std::size_t count)
+    {
+        Allocate(index,count);
+        return Get(index);
     }
     void Make_Unique(std::size_t index)
     {

@@ -28,13 +28,17 @@ import Graphics.Scene.Beams;
 import Graphics.Scene.Lighting.Renderer;
 import Graphics.Shaders.Library;
 import Graphics.Testing.VisualRegression;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 import Graphics.Renderer2D;
 
 using namespace Graphics;
 
 #ifndef GRAPHICS_VISUAL_REFERENCE_DIRECTORY
 #define GRAPHICS_VISUAL_REFERENCE_DIRECTORY "."
+#endif
+
+#ifndef GRAPHICS_UI2D_REFERENCE_DIRECTORY
+#define GRAPHICS_UI2D_REFERENCE_DIRECTORY GRAPHICS_VISUAL_REFERENCE_DIRECTORY
 #endif
 
 #ifndef GRAPHICS_VISUAL_FAILURE_DIRECTORY
@@ -186,11 +190,11 @@ struct VisualScene final
 
 		std::vector<std::byte> vertex_shader;
 		std::vector<std::byte> pixel_shader;
-		if (!Load_Binary_File(std::filesystem::path(GRAPHICS_VISUAL_SHADER_DIRECTORY) / "visual_basic.vso", vertex_shader))
+		if (!Load_Binary_File(Graphics::Test_Shader_Directory(GRAPHICS_VISUAL_SHADER_DIRECTORY) / "visual_basic.vso", vertex_shader))
 			return false;
 
 		const char *pixel_name = kind == SceneKind::TexturedMesh ? "visual_textured.pso" : kind == SceneKind::LitMeshWithShadow ? "visual_lit_shadow.pso" : "visual_basic.pso";
-		if (!Load_Binary_File(std::filesystem::path(GRAPHICS_VISUAL_SHADER_DIRECTORY) / pixel_name, pixel_shader))
+		if (!Load_Binary_File(Graphics::Test_Shader_Directory(GRAPHICS_VISUAL_SHADER_DIRECTORY) / pixel_name, pixel_shader))
 			return false;
 
 		const RHIPipeline pipeline_description{static_cast<std::uint64_t>(kind) + 1, true, true, RHIPrimitiveTopology::TriangleList, RHIVertexFormat::Position3Color4UV2, RHIBlendMode::Disabled};
@@ -216,9 +220,9 @@ struct VisualScene final
 
 		ResourceIndex shadow_index{};
 		if (kind == SceneKind::LitMeshWithShadow) {
-			if (!Load_Binary_File(std::filesystem::path(GRAPHICS_VISUAL_SHADER_DIRECTORY) / "visual_shadow.vso", vertex_shader))
+			if (!Load_Binary_File(Graphics::Test_Shader_Directory(GRAPHICS_VISUAL_SHADER_DIRECTORY) / "visual_shadow.vso", vertex_shader))
 				return false;
-			if (!Load_Binary_File(std::filesystem::path(GRAPHICS_VISUAL_SHADER_DIRECTORY) / "visual_shadow.pso", pixel_shader))
+			if (!Load_Binary_File(Graphics::Test_Shader_Directory(GRAPHICS_VISUAL_SHADER_DIRECTORY) / "visual_shadow.pso", pixel_shader))
 				return false;
 			shadow_pipeline = device.Create_Pipeline(pipeline_description, {vertex_shader}, {pixel_shader});
 			if (!shadow_pipeline.Is_Valid())
@@ -264,7 +268,7 @@ struct VisualScene final
 
 	bool Initialize_UI2D(Device &device)
 	{
-		if (!ui_renderer.Initialize(device, std::filesystem::path(GRAPHICS_RENDERER_SHADER_DIRECTORY), 4096, 6144, 128))
+		if (!ui_renderer.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_RENDERER_SHADER_DIRECTORY), 4096, 6144, 128))
 			return false;
 
 		constexpr std::uint32_t texture_width = 64;
@@ -304,7 +308,7 @@ struct VisualScene final
 	bool Initialize_Beam(Device &device)
 	{
 		const std::size_t beam_capacity = kind == SceneKind::RopeAdapter || kind == SceneKind::ProjectileStreamAdapter ? 16 : 4;
-		if (!beam_renderer.Initialize(device, std::filesystem::path(GRAPHICS_RENDERER_SHADER_DIRECTORY), beam_capacity))
+		if (!beam_renderer.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_RENDERER_SHADER_DIRECTORY), beam_capacity))
 			return false;
 
 		if (kind == SceneKind::Beam) {
@@ -401,7 +405,7 @@ struct VisualScene final
 		}};
 	basic_indices = {0, 1, 2};
 
-		const ShaderHandle basic_shader = shader_library.Load_Basic_Opaque(std::filesystem::path(GRAPHICS_RENDERER_SHADER_DIRECTORY));
+		const ShaderHandle basic_shader = shader_library.Load_Basic_Opaque(Graphics::Test_Shader_Directory(GRAPHICS_RENDERER_SHADER_DIRECTORY));
 		if (!basic_shader.Is_Valid())
 			return false;
 
@@ -499,7 +503,7 @@ struct VisualScene final
 
 	bool Initialize_Dynamic_Light(Device &device)
 	{
-		const ShaderHandle basic_shader = shader_library.Load_Basic_Opaque(std::filesystem::path(GRAPHICS_RENDERER_SHADER_DIRECTORY));
+		const ShaderHandle basic_shader = shader_library.Load_Basic_Opaque(Graphics::Test_Shader_Directory(GRAPHICS_RENDERER_SHADER_DIRECTORY));
 		if (!basic_shader.Is_Valid())
 			return false;
 
@@ -759,12 +763,15 @@ static VisualRegressionConfig Make_Config() noexcept
 
 static void Run_Scene(SceneKind kind, const char *name)
 {
-	DX11Device device({true});
+	GraphicsTestDevice device({true});
 	BOOST_REQUIRE(device.Is_Valid());
 	VisualScene scene;
 	scene.kind = kind;
 	BOOST_REQUIRE(scene.Initialize(device));
-	VisualRegressionHarness harness(Make_Config());
+	VisualRegressionConfig config = Make_Config();
+	if (kind == SceneKind::UI2DHudAndMenu)
+		config.reference_directory = std::filesystem::path(GRAPHICS_UI2D_REFERENCE_DIRECTORY);
+	VisualRegressionHarness harness(config);
 	const VisualComparisonResult result = harness.Run(device, name, Render_Scene, &scene);
 	BOOST_CHECK_MESSAGE(result.expected_loaded, "missing visual reference image");
 	BOOST_CHECK_MESSAGE(result.matched, "visual regression mismatch");

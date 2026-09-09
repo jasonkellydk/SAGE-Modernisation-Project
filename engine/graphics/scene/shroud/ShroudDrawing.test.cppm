@@ -7,17 +7,17 @@ module;
 #include <filesystem>
 #include <span>
 export module Graphics.Scene.Shroud.Drawing.Tests;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 import Graphics.Scene.Props.Renderer;
 import Graphics.Scene.Shroud.Image;
 using namespace Graphics;
 
 BOOST_AUTO_TEST_CASE(packed_shroud_pixels_preserve_borders_changes_and_resource_recreation)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     BOOST_REQUIRE(device.Is_Valid());
     PropRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device,std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     constexpr unsigned texture_width=6, texture_height=5;
     const auto target=device.Create_Texture({texture_width,texture_height,1,RHITextureFormat::RGBA8_UNorm,
         static_cast<std::uint32_t>(RHITextureUsage::RenderTarget)});

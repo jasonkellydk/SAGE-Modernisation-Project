@@ -21,7 +21,7 @@ import Graphics.Scene.Props.Geometry;
 #if defined(_WIN32)
 import Graphics.Scene.Props.Renderer;
 import Graphics.RHI;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 #endif
 
 using namespace Graphics;
@@ -312,11 +312,11 @@ BOOST_AUTO_TEST_CASE(pipeline_chunks_draw_distinct_regions_and_both_ribbon_sides
     constexpr unsigned target_height = 32;
     constexpr std::size_t source_count = 260;
     for (const bool warp : {true, false}) {
-        DX11Device device({warp});
+        GraphicsTestDevice device({warp});
         if (!warp && !device.Is_Valid()) continue;
         BOOST_REQUIRE(device.Is_Valid());
         PropRenderer renderer;
-        BOOST_REQUIRE(renderer.Initialize(device, GRAPHICS_TERRAIN_SHADER_DIRECTORY));
+        BOOST_REQUIRE(renderer.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
 
         const auto target = device.Create_Texture({target_width, target_height, 1,
             RHITextureFormat::RGBA8_UNorm, static_cast<std::uint32_t>(RHITextureUsage::RenderTarget)});
@@ -411,11 +411,11 @@ BOOST_AUTO_TEST_CASE(merged_corner_pipeline_geometry_covers_both_fan_sides)
     constexpr unsigned target_width = 64;
     constexpr unsigned target_height = 64;
     for (const bool warp : {true, false}) {
-        DX11Device device({warp});
+        GraphicsTestDevice device({warp});
         if (!warp && !device.Is_Valid()) continue;
         BOOST_REQUIRE(device.Is_Valid());
         PropRenderer renderer;
-        BOOST_REQUIRE(renderer.Initialize(device, GRAPHICS_TERRAIN_SHADER_DIRECTORY));
+        BOOST_REQUIRE(renderer.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
 
         const auto target = device.Create_Texture({target_width, target_height, 1,
             RHITextureFormat::RGBA8_UNorm, static_cast<std::uint32_t>(RHITextureUsage::RenderTarget)});

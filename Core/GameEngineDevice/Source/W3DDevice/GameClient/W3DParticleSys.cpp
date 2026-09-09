@@ -5,8 +5,8 @@
 #include "W3DDevice/GameClient/W3DSnow.h"
 #include "W3DDevice/GameClient/W3DAssetManager.h"
 #include "Common/GlobalData.h"
-#include "WW3D2/Camera.h"
-#include "WW3D2/Texture.h"
+#include "W3DDevice/GameClient/W3DCamera.h"
+#include "W3DDevice/GameClient/W3DTextureHandle.h"
 
 #include <algorithm>
 #include <cmath>
@@ -79,13 +79,13 @@ void W3DParticleSystemManager::queueParticleRender()
 	m_readyToRender = true;
 }
 
-void DoParticles(RenderInfoClass &rinfo)
+void DoParticles(W3DRenderContext &rinfo)
 {
 	if (TheParticleSystemManager)
 		TheParticleSystemManager->doParticles(rinfo);
 }
 
-void W3DParticleSystemManager::doParticles(RenderInfoClass &rinfo)
+void W3DParticleSystemManager::doParticles(W3DRenderContext &rinfo)
 {
 	GENERALS_GRAPHICS_PROFILE_SCOPE("W3DParticleSystemManager::doParticles");
 	if (!m_readyToRender)

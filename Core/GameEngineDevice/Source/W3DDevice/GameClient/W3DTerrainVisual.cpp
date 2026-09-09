@@ -52,17 +52,17 @@
 #include "W3DDevice/GameClient/WorldHeightMap.h"
 #include "W3DDevice/GameClient/W3DWater.h"
 #include "W3DDevice/GameClient/W3DDisplay.h"
+#include "W3DDevice/GameClient/W3DLight.h"
 #include "W3DDevice/GameClient/W3DDebugIcons.h"
 #include "W3DDevice/GameClient/W3DTerrainTracks.h"
 #include "W3DDevice/GameClient/W3DShadow.h"
 #include "W3DDevice/GameClient/W3DTerrainGraphics.h"
 #include "W3DDevice/GameClient/W3DSmudge.h"
 #include "W3DDevice/GameClient/Module/W3DModelDraw.h"
-#include "WW3D2/Light.h"
-#include "WW3D2/RendObj.h"
-#include "WW3D2/ColType.h"
-#include "WW3D2/ColTest.h"
-#include "WW3D2/AssetMgr.h"
+#include "W3DDevice/GameClient/W3DRenderObject.h"
+#include "W3DDevice/GameClient/W3DSceneQueryMask.h"
+#include "W3DDevice/GameClient/W3DCastQuery.h"
+#include "W3DDevice/GameClient/W3DAssetCatalog.h"
 
 
 
@@ -566,26 +566,6 @@ void W3DTerrainVisual::syncWaterGridRenderData()
 Bool W3DTerrainVisual::load( AsciiString filename )
 {
 
-#if 0
-	// (gth) Testing exclusion list asset releasing
-	DynamicVectorClass<StringClass> exclusion_list(8000);
-
-	WW3DAssetManager::Get_Instance()->Create_Asset_List(exclusion_list);
-
-	exclusion_list.Add(StringClass("avcomanche"));
-	exclusion_list.Add(StringClass("avcomanche_d"));
-	exclusion_list.Add(StringClass("ptdogwood08"));
-	exclusion_list.Add(StringClass("ptdogwood01_b"));
-	exclusion_list.Add(StringClass("ptpalm01"));
-	exclusion_list.Add(StringClass("ptpalm01_b"));
-	exclusion_list.Add(StringClass("avhummer"));
-	exclusion_list.Add(StringClass("avhummer_d"));
-	exclusion_list.Add(StringClass("avleopard"));
-	exclusion_list.Add(StringClass("avleopard_d"));
-
-	WW3DAssetManager::Get_Instance()->Free_Assets_With_Exclusion_List(exclusion_list);
-#endif
-
 	// enhancing functionality specific for W3D terrain
 	if( TerrainVisual::load( filename ) == FALSE )
 		return FALSE;  // failed
@@ -635,7 +615,7 @@ Bool W3DTerrainVisual::load( AsciiString filename )
 				loc.z += d->getReal(TheKey_lightHeightAboveTerrain);
 			}
 			// It is a light, and handled at the device level.  jba.
-			LightClass* lightP = NEW_REF(LightClass, (LightClass::POINT));
+			W3DLight* lightP = NEW_REF(W3DLight, (W3DLight::POINT));
 
 			RGBColor c;
 			c.setFromInt(d->getInt(TheKey_lightAmbientColor));
@@ -654,7 +634,7 @@ Bool W3DTerrainVisual::load( AsciiString filename )
 	}
 
 
-	Graphics::SceneObjectList<RenderObjClass>::Cursor *it = W3DDisplay::m_3DScene ? W3DDisplay::m_3DScene->createLightsIterator() : nullptr;
+	Graphics::SceneObjectList<W3DRenderObject>::Cursor *it = W3DDisplay::m_3DScene ? W3DDisplay::m_3DScene->createLightsIterator() : nullptr;
 	// Preparation evaluates the map's static lights through the owning scene.
 	if (W3DDisplay::m_3DScene != nullptr)
 		W3DDisplay::m_3DScene->Add_Render_Object(m_terrainRenderObject);
@@ -762,7 +742,7 @@ Bool W3DTerrainVisual::intersectTerrain( Coord3D *rayStart,
 		CastResultStruct res;
 		LineSegClass lineSeg( Vector3( rayStart->x, rayStart->y, rayStart->z ),
 													Vector3( rayEnd->x, rayEnd->y, rayEnd->z ) );
-		RayCollisionTestClass rayTest( lineSeg, &res );
+		W3DRayCastQuery rayTest( lineSeg, &res );
 
 		hit = m_terrainRenderObject->Cast_Ray( rayTest );
 		if( hit && result )

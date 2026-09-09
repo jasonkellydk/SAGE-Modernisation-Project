@@ -31,7 +31,7 @@ import Graphics.Materials.State;
 // The draw objects draw a circle of diameter 1.0 cells.
 #define THE_RADIUS (0.8f*MAP_XY_FACTOR)
 
-class MeshClass;
+class W3DMeshRenderObject;
 class PolygonTrigger;
 class WaterRenderSystem;
 class MapObject;
@@ -102,7 +102,7 @@ public:
 
 
 
-	MeshClass *peekMesh() {return m_moldMesh;};
+	W3DMeshRenderObject *peekMesh() {return m_moldMesh;};
 	void getMeshBounds(SphereClass *pSphere) {*pSphere = m_moldMeshBounds;};
 
 protected:
@@ -135,7 +135,7 @@ protected:
 
 	AsciiString								m_curMeshModelName;  ///< Model name of m_moldMesh.
 
-	MeshClass									*m_moldMesh;		///< W3D mesh model for the mold.
+	W3DMeshRenderObject									*m_moldMesh;		///< W3D mesh model for the mold.
 	SphereClass								m_moldMeshBounds;				///< Bounding sphere for mold mesh.
 	CPoint										m_winSize;				//< Holds the size of the window.
 

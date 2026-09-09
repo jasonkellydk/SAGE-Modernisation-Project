@@ -11,7 +11,7 @@ module;
 
 export module Graphics.Video.Renderer.Tests;
 
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 import Graphics.Testing.VisualRegression;
 import Graphics.Video.Renderer;
 import Video.Frame;
@@ -89,11 +89,11 @@ bool Render_Video_Frame(
 
 BOOST_AUTO_TEST_CASE(video_frame_presentation_matches_colocated_snapshot_with_real_rhi)
 {
-	DX11Device device({true});
+	GraphicsTestDevice device({true});
 	BOOST_REQUIRE(device.Is_Valid());
 
 	VideoRenderer renderer;
-	const std::filesystem::path shader_directory(GRAPHICS_VIDEO_SHADER_DIRECTORY);
+	const std::filesystem::path shader_directory(Graphics::Test_Shader_Directory(GRAPHICS_VIDEO_SHADER_DIRECTORY));
 	BOOST_REQUIRE(renderer.Initialize(device, shader_directory));
 
 	const auto first_pixels = Make_Frame(0);
@@ -139,11 +139,11 @@ BOOST_AUTO_TEST_CASE(video_frame_presentation_matches_colocated_snapshot_with_re
 
 BOOST_AUTO_TEST_CASE(video_renderer_rejects_submissions_outside_real_rhi_frame_lifecycle)
 {
-	DX11Device device({true});
+	GraphicsTestDevice device({true});
 	BOOST_REQUIRE(device.Is_Valid());
 
 	VideoRenderer renderer;
-	BOOST_REQUIRE(renderer.Initialize(device, std::filesystem::path(GRAPHICS_VIDEO_SHADER_DIRECTORY)));
+	BOOST_REQUIRE(renderer.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_VIDEO_SHADER_DIRECTORY)));
 	const auto pixels = Make_Frame(0);
 	const Engine::Video::DecodedVideoFrame frame{
 		Video_Width, Video_Height, Video_Width * 4, Engine::Video::PixelFormat::RGBA8, 0, 0, pixels};

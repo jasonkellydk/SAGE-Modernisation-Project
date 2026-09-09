@@ -34,8 +34,8 @@ import Graphics.Materials.State;
 #include "W3DDevice/GameClient/Module/W3DProjectileStreamDraw.h"
 #include "W3DDevice/GameClient/W3DDisplay.h"
 #include "W3DDevice/GameClient/W3DScene.h"
-#include "WW3D2/AssetMgr.h"
-#include "WW3D2/SegLine.h"
+#include "W3DDevice/GameClient/W3DAssetCatalog.h"
+#include "W3DDevice/GameClient/W3DSegmentedLineRenderObject.h"
 #include "WWMath/vector3.h"
 
 //-------------------------------------------------------------------------------------------------
@@ -77,7 +77,7 @@ W3DProjectileStreamDraw::~W3DProjectileStreamDraw()
 
 	for( Int lineIndex = 0; lineIndex < m_linesValid; lineIndex++ )
 	{
-		SegmentedLineClass *deadLine = m_allLines[lineIndex];
+		W3DSegmentedLineRenderObject *deadLine = m_allLines[lineIndex];
 		if (deadLine)
 		{	if (deadLine->Peek_Scene())
 				W3DDisplay::m_3DScene->Remove_Render_Object( deadLine );
@@ -93,7 +93,7 @@ W3DProjectileStreamDraw::~W3DProjectileStreamDraw()
 W3DProjectileStreamDraw::W3DProjectileStreamDraw( Thing *thing, const ModuleData* moduleData ) : DrawModule( thing, moduleData )
 {
 	const W3DProjectileStreamDrawModuleData* d = getW3DProjectileStreamDrawModuleData();
-	m_texture = WW3DAssetManager::Get_Instance()->Get_Texture( d->m_textureName.str() );
+	m_texture = W3DAssetCatalog::Get_Instance()->Get_Texture( d->m_textureName.str() );
 	for( Int index = 0; index < MAX_PROJECTILE_STREAM; index++ )
 	{
 		m_allLines[index] = nullptr;
@@ -110,7 +110,7 @@ void W3DProjectileStreamDraw::setFullyObscuredByShroud(Bool fullyObscured)
 	{	//we need to remove all our lines from the scene because they are hidden
 		for( Int lineIndex = 0; lineIndex < m_linesValid; lineIndex++ )
 		{
-			SegmentedLineClass *deadLine = m_allLines[lineIndex];
+			W3DSegmentedLineRenderObject *deadLine = m_allLines[lineIndex];
 			if (deadLine && deadLine->Peek_Scene())
 				deadLine->Remove();
 		}
@@ -119,7 +119,7 @@ void W3DProjectileStreamDraw::setFullyObscuredByShroud(Bool fullyObscured)
 	{	//we need to restore lines into scene
 		for( Int lineIndex = 0; lineIndex < m_linesValid; lineIndex++ )
 		{
-			SegmentedLineClass *deadLine = m_allLines[lineIndex];
+			W3DSegmentedLineRenderObject *deadLine = m_allLines[lineIndex];
 			if (deadLine && !deadLine->Peek_Scene())
 				W3DDisplay::m_3DScene->Add_Render_Object(deadLine);
 		}
@@ -198,12 +198,12 @@ void W3DProjectileStreamDraw::makeOrUpdateLine( Vector3 *points, UnsignedInt poi
 	if( m_allLines[lineIndex] == nullptr )
 	{
 		//Need a new one if this is blank, otherwise I'll reset the existing one
-		m_allLines[lineIndex] = NEW SegmentedLineClass;
+		m_allLines[lineIndex] = NEW W3DSegmentedLineRenderObject;
 		m_linesValid++;
 		newLine = TRUE;
 	}
 
-	SegmentedLineClass *line = m_allLines[lineIndex];
+	W3DSegmentedLineRenderObject *line = m_allLines[lineIndex];
 
 	line->Set_Points(pointCount, points);	//tell the line which points to use
 
@@ -214,7 +214,7 @@ void W3DProjectileStreamDraw::makeOrUpdateLine( Vector3 *points, UnsignedInt poi
 		line->Set_Texture(m_texture);	//set the texture
 		line->Set_Shader(Graphics::MaterialState::AdditiveSprite());	//pick the alpha blending mode you want - see shader.h for others.
 		line->Set_Width(data->m_width);	//set line width in world units
-		line->Set_Texture_Mapping_Mode(SegLineRendererClass::TILED_TEXTURE_MAP);	//this tiles the texture across the line
+		line->Set_Texture_Mapping_Mode(Graphics::RibbonTextureMapping::Tiled);	//this tiles the texture across the line
 		line->Set_Texture_Tile_Factor(data->m_tileFactor);	//number of times to tile texture across each segment
 		line->Set_UV_Offset_Rate(Vector2(0.0f,data->m_scrollRate));	//amount to scroll texture on each draw
 		if (!m_obscured)
@@ -226,7 +226,7 @@ void W3DProjectileStreamDraw::removeLines(Int firstUnusedLine)
 {
 	for (Int lineIndex = firstUnusedLine; lineIndex < m_linesValid; ++lineIndex)
 	{
-		SegmentedLineClass *deadLine = m_allLines[lineIndex];
+		W3DSegmentedLineRenderObject *deadLine = m_allLines[lineIndex];
 		if (deadLine != nullptr)
 		{
 			if (deadLine->Peek_Scene())

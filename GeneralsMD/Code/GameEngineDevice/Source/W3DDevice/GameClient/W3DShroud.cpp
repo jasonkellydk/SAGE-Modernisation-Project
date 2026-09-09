@@ -1,3 +1,4 @@
+#include <functional>
 /*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -35,10 +36,10 @@ import Graphics.Materials.ProceduralPass;
 #include <SDL3/SDL.h>
 #include <cstdint>
 #include <span>
-#include "WW3D2/Camera.h"
-#include "WW3D2/Texture.h"
+#include "W3DDevice/GameClient/W3DCamera.h"
+#include "W3DDevice/GameClient/W3DTextureHandle.h"
 #include "WWLib/simplevec.h"
-#include "WW3D2/WW3D.h"
+
 import Graphics.Resources.Textures.Edit;
 #include "Common/MapObject.h"
 #include "Common/PerfTimer.h"
@@ -46,14 +47,14 @@ import Graphics.Resources.Textures.Edit;
 #include "W3DDevice/GameClient/WorldHeightMap.h"
 #include "W3DDevice/GameClient/W3DPoly.h"
 #include "W3DDevice/GameClient/W3DShaderManager.h"
-#include "WW3D2/AssetMgr.h"
+#include "W3DDevice/GameClient/W3DAssetCatalog.h"
 #include "W3DDevice/GameClient/W3DShroud.h"
 import Graphics.Resources.Textures.Storage;
 #include "Common/GlobalData.h"
 #include "GameLogic/PartitionManager.h"
 #include "W3DDevice/GameClient/W3DGraphicsResources.h"
 import Assets.Images.Buffer;
-import Graphics.Backends.DX11.FrameRuntime;
+import Graphics.Frame.Runtime;
 import Graphics.Scene.Shroud.Image;
 
 struct W3DShroud::GraphicsState
@@ -271,10 +272,10 @@ Bool W3DShroud::ReAcquireResources()
 		// Since we control the video memory copy, we can do partial updates more efficiently. Or do shift blits.
 #if defined(RTS_DEBUG)
 		if (TheGlobalData && TheGlobalData->m_fogOfWarOn)
-			m_pDstTexture = MSGNEW("TextureClass") TextureClass(m_dstTextureWidth,m_dstTextureHeight,Assets::PixelEncoding::BGRA4444,MIP_LEVELS_1, TextureClass::POOL_DEFAULT);
+			m_pDstTexture = MSGNEW("W3DTextureHandle") W3DTextureHandle(m_dstTextureWidth,m_dstTextureHeight,Assets::PixelEncoding::BGRA4444,MIP_LEVELS_1, W3DTextureHandle::POOL_DEFAULT);
 		else
 #endif
-			m_pDstTexture = MSGNEW("TextureClass") TextureClass(m_dstTextureWidth,m_dstTextureHeight,Assets::PixelEncoding::BGR565,MIP_LEVELS_1, TextureClass::POOL_DEFAULT);
+			m_pDstTexture = MSGNEW("W3DTextureHandle") W3DTextureHandle(m_dstTextureWidth,m_dstTextureHeight,Assets::PixelEncoding::BGR565,MIP_LEVELS_1, W3DTextureHandle::POOL_DEFAULT);
 
 		DEBUG_ASSERTCRASH( m_pDstTexture != nullptr, ("Failed ReAcquire of shroud texture"));
 
@@ -500,7 +501,7 @@ void W3DShroud::setBorderShroudLevel(W3DShroudLevel level)
 
 //-----------------------------------------------------------------------------
 ///@todo: remove this
-TextureClass *DummyTexture=nullptr;
+W3DTextureHandle *DummyTexture=nullptr;
 
 //#define LOAD_DUMMY_SHROUD
 
@@ -509,7 +510,7 @@ TextureClass *DummyTexture=nullptr;
 
 //-----------------------------------------------------------------------------
 /** Updates video memory surface with currently visible shroud data */
-void W3DShroud::render(CameraClass *cam)
+void W3DShroud::render(W3DCamera *cam)
 {
 	if (!m_pSrcTexture)
 		return; //nothing to update from.  Must be in reset state.
@@ -556,7 +557,7 @@ void W3DShroud::render(CameraClass *cam)
 		src[m_numCellsX*8+9]=(char)0xff;
 		src[m_numCellsX*8+7]=(char)0xff;
 
-		DummyTexture=WW3DAssetManager::Get_Instance()->Get_Texture("shroud1024.tga");
+		DummyTexture=W3DAssetCatalog::Get_Instance()->Get_Texture("shroud1024.tga");
 
 		Short *dataDest=(Short *)((char *)m_srcTextureData);	//offset to correct row of full sysmem shroud
 		Int pitchDest = m_srcTexturePitch >> 1;	//2 bytes per pixel so divide byte count by 2.

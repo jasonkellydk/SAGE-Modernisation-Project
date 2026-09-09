@@ -47,17 +47,18 @@
 //-----------------------------------------------------------------------------
 
 #include "W3DDevice/GameClient/W3DDebugIcons.h"
+#include "W3DDevice/GameClient/W3DCastQuery.h"
 #include "W3DDevice/GameClient/W3DGraphicsResources.h"
-#include "WW3D2/RInfo.h"
+#include "W3DDevice/GameClient/W3DRenderContext.h"
 #include <vector>
-import Graphics.Backends.DX11.FrameRuntime;
+import Graphics.Frame.Runtime;
 import Graphics.Scene.Debug.Renderer;
 
 #include "Common/GlobalData.h"
 #include "GameLogic/GameLogic.h"
 #include "Common/MapObject.h"
 import Graphics.Materials.State;
-#include "WW3D2/WW3D.h"
+
 
 #if defined(RTS_DEBUG)
 
@@ -120,7 +121,7 @@ W3DDebugIcons::W3DDebugIcons(Int mapWidth, Int mapHeight)
 }
 
 
-bool W3DDebugIcons::Cast_Ray(RayCollisionTestClass & raytest)
+bool W3DDebugIcons::Cast_Ray(W3DRayCastQuery & raytest)
 {
 
 	return false;
@@ -157,10 +158,10 @@ void W3DDebugIcons::Get_Obj_Space_Bounding_Box(AABoxClass & box) const
 
 Int W3DDebugIcons::Class_ID() const
 {
-	return RenderObjClass::CLASSID_UNKNOWN;
+	return W3DRenderObject::CLASSID_UNKNOWN;
 }
 
-RenderObjClass * W3DDebugIcons::Clone() const
+W3DRenderObject * W3DDebugIcons::Clone() const
 {
 	return NEW W3DDebugIcons(*this);	// poolify
 }
@@ -211,7 +212,7 @@ void W3DDebugIcons::addIcon(const Coord3D *pos, Real width, Int numFramesDuratio
 }
 
 /** Render draws into the current 3d context. */
-void W3DDebugIcons::Render(RenderInfoClass& info)
+void W3DDebugIcons::Render(W3DRenderContext& info)
 {
     if (Graphics::Get_Scene_Draw_Queue().Is_Enabled()) {
         Graphics::Get_Scene_Draw_Queue().Enqueue<Extract_Ordered_Draw>(1, *this); return;
@@ -235,7 +236,7 @@ void W3DDebugIcons::Render(RenderInfoClass& info)
             Vector3(icon.position.x-width,icon.position.y+width,icon.position.z)};
         const auto base=static_cast<std::uint32_t>(vertices.size());
         for (const auto& corner : corners) {
-            Vector3 point; Matrix3D::Transform_Vector(Transform,corner,&point);
+            Vector3 point; Matrix3D::Transform_Vector(Get_Transform(),corner,&point);
             Graphics::SurfaceVertex vertex;
             vertex.position={point.X,point.Y,point.Z};
             vertex.color={float((color>>16)&255)/255,float((color>>8)&255)/255,float(color&255)/255,float(color>>24)/255};
@@ -249,4 +250,3 @@ void W3DDebugIcons::Render(RenderInfoClass& info)
 }
 
 #endif // RTS_DEBUG
-

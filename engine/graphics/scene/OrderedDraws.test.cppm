@@ -8,7 +8,7 @@ module;
 #include <vector>
 export module Graphics.Scene.OrderedDraws.Tests;
 import Graphics.Scene.OrderedDraws;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 import Graphics.Scene.Props.Renderer;
 using namespace Graphics;
 
@@ -157,10 +157,10 @@ bool Draw(Object& object, void* context) {
 BOOST_AUTO_TEST_CASE(alpha_drawing_retains_layer_priority_and_equal_layer_submission_order_after_resize)
 {
     for (const bool warp : {true,false}) {
-        DX11Device device({warp});
+        GraphicsTestDevice device({warp});
         if (!warp && !device.Is_Valid()) continue;
         PropRenderer renderer;
-        BOOST_REQUIRE(renderer.Initialize(device, GRAPHICS_TERRAIN_SHADER_DIRECTORY));
+        BOOST_REQUIRE(renderer.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
         auto& commands = device.Immediate_Command_List();
         OrderedDrawQueue queue;
         queue.Set_Enabled(true);

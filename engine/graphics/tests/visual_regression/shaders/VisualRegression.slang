@@ -1,3 +1,5 @@
+#include "../../../shaders/source/resource_access.slangh"
+
 struct VisualVertexInput
 {
     float3 position : POSITION0;
@@ -20,21 +22,21 @@ cbuffer MaterialData : register(b0)
     uint2 MaterialReserved;
 };
 
-Texture2D BindlessTextures[16] : register(t0);
-SamplerState VisualSampler : register(s0);
+GRAPHICS_TEXTURE_ARRAY(BindlessTextures, float4, 0, 16)
+GRAPHICS_SAMPLER(VisualSampler, 0)
 
 float4 Sample_Bindless(uint index, float2 coordinates)
 {
     switch (index)
     {
-    case 0: return BindlessTextures[0].Sample(VisualSampler, coordinates);
-    case 1: return BindlessTextures[1].Sample(VisualSampler, coordinates);
-    case 2: return BindlessTextures[2].Sample(VisualSampler, coordinates);
-    case 3: return BindlessTextures[3].Sample(VisualSampler, coordinates);
-    case 4: return BindlessTextures[4].Sample(VisualSampler, coordinates);
-    case 5: return BindlessTextures[5].Sample(VisualSampler, coordinates);
-    case 6: return BindlessTextures[6].Sample(VisualSampler, coordinates);
-    case 7: return BindlessTextures[7].Sample(VisualSampler, coordinates);
+    case 0: return BindlessTextures[0].Sample(VisualSampler(), coordinates);
+    case 1: return BindlessTextures[1].Sample(VisualSampler(), coordinates);
+    case 2: return BindlessTextures[2].Sample(VisualSampler(), coordinates);
+    case 3: return BindlessTextures[3].Sample(VisualSampler(), coordinates);
+    case 4: return BindlessTextures[4].Sample(VisualSampler(), coordinates);
+    case 5: return BindlessTextures[5].Sample(VisualSampler(), coordinates);
+    case 6: return BindlessTextures[6].Sample(VisualSampler(), coordinates);
+    case 7: return BindlessTextures[7].Sample(VisualSampler(), coordinates);
     default: return float4(0.0, 0.0, 0.0, 1.0);
     }
 }

@@ -30,14 +30,14 @@
 
 import Graphics.Scene.Lighting.Renderer;
 
-#include "WW3D2/Light.h"
+#include "W3DDevice/GameClient/W3DLight.h"
 #include "Lib/BaseType.h"
 class HeightMapRenderObjClass;
 
 /*************************************************************************
 **                             W3DDynamicLight
 ***************************************************************************/
-class W3DDynamicLight : public LightClass
+class W3DDynamicLight : public W3DLight
 {
 friend class BaseHeightMapRenderObjClass;
 protected:
@@ -60,7 +60,7 @@ protected:
 	Real		m_targetRange;
 	Vector3 m_targetAmbient;
 	Vector3 m_targetDiffuse;
-	Graphics::LightHandle m_modernLight;
+	Graphics::LightHandle m_graphicsLight;
 
 
 public:

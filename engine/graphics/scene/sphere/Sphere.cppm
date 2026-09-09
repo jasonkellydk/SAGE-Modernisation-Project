@@ -417,7 +417,7 @@ export bool Calculate_Sphere_LOD_Values(float screen_area, float lod_bias,
 	if (!std::isfinite(screen_area) || !std::isfinite(lod_bias) || lod_bias < 0.0f
 		|| values.size() < SphereLODValueCount || costs.size() < SphereLODCount + 1)
 		return false;
-	// Match RenderObjClass's LOD sentinels: minimum LOD is a large positive
+	// Match W3DRenderObject's LOD sentinels: minimum LOD is a large positive
 	// value and the post-maximum sentinel is -1.
 	values[0] = (std::numeric_limits<float>::max)();
 	costs[0] = SphereNullLODCost;
@@ -603,7 +603,7 @@ public:
 	}
 	// IS_VISIBLE is camera-owned in the source object. It is intentionally
 	// separate from Is_Not_Hidden_At_All(), which only combines authored hidden
-	// and animation-hidden bits and is what SphereRenderObjClass::Render tests.
+	// and animation-hidden bits and is what SphereW3DRenderObject::Render tests.
 	void Set_Visible(bool visible) noexcept { m_visible_requested = visible; }
 	bool Is_Visible() const noexcept { return m_visible_requested; }
 	bool Is_Not_Hidden_At_All() const noexcept { return m_state.visible; }
@@ -719,7 +719,7 @@ public:
 		SphereDrawState draw_state;
 		if (!Build_Sphere_Draw_State_Unchecked(sphere.Asset(), sphere.State(), input, draw_state))
 			return false;
-		// SphereRenderObjClass selects texturing from its live texture pointer;
+		// SphereW3DRenderObject selects texturing from its live texture pointer;
 		// Set_Texture can attach one even when the serialized asset name is empty.
 		// The supplied handle is the authoritative presence check at submission.
 		draw_state.parameters.textured =

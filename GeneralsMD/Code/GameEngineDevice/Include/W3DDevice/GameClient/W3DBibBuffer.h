@@ -50,8 +50,7 @@
 //           Includes
 //-----------------------------------------------------------------------------
 #include "WWLib/always.h"
-#include "WW3D2/RendObj.h"
-#include "WW3D2/W3DFile.h"
+#include "W3DDevice/GameClient/W3DRenderObject.h"
 import Graphics.Materials.State;
 #include "Lib/BaseType.h"
 #include "Common/GameType.h"
@@ -63,7 +62,7 @@ import Graphics.Scene.Surfaces.Renderer;
 //-----------------------------------------------------------------------------
 //           Forward References
 //-----------------------------------------------------------------------------
-class MeshClass;
+class W3DMeshRenderObject;
 
 //-----------------------------------------------------------------------------
 //           Type Defines
@@ -101,7 +100,7 @@ public:
 	/// Removes highlighting.
 	void removeHighlighting();
 	/// Draws the bibs.
-	void renderBibs(CameraClass& camera);
+	void renderBibs(W3DCamera& camera);
 	static void Release_Graphics_Bibs() noexcept;
 	/// Called when the view changes, and sort key needs to be recalculated.
 	/// Normally sortKey gets calculated when a bib becomes visible.
@@ -115,8 +114,8 @@ protected:
 	Bool		m_anythingChanged;	///< Set to true if visibility or sorting changed.
 	Bool		m_updateAllKeys;  ///< Set to true when the view changes.
     Graphics::SurfaceMeshHandle m_graphicsMeshes[2];
-    TextureClass* m_bibTexture=nullptr;
-    TextureClass* m_highlightBibTexture=nullptr;
+    W3DTextureHandle* m_bibTexture=nullptr;
+    W3DTextureHandle* m_highlightBibTexture=nullptr;
 	static W3DBibBuffer *s_current;
 
 	void allocateBibBuffers();							 ///< Allocates the buffers.

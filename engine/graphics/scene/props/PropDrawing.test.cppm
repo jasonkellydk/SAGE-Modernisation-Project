@@ -10,7 +10,7 @@ module;
 #include <span>
 #include <vector>
 export module Graphics.Scene.Props.Drawing.Tests;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 import Graphics.Scene.Props.Renderer;
 import Graphics.Scene.Props.Material;
 import Graphics.Scene.Props.Extraction;
@@ -59,11 +59,83 @@ BOOST_AUTO_TEST_CASE(geometry_bounds_follow_owned_vertices_and_successful_edits)
     check({-7,-2,-5},{-7,-2,-5});
 }
 
+BOOST_AUTO_TEST_CASE(retained_materials_draw_correctly_after_switches_changes_and_renderer_recreation)
+{
+    GraphicsTestDevice device({true});
+    PropRenderer renderer;
+    const auto shaders = Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
+    BOOST_REQUIRE(renderer.Initialize(device, shaders));
+    const auto target = device.Create_Texture({32,8,1,RHITextureFormat::RGBA8_UNorm,
+        static_cast<unsigned>(RHITextureUsage::RenderTarget)});
+    BOOST_REQUIRE(target.Is_Valid());
+    const auto depth = device.Create_Texture({32,8,1,RHITextureFormat::D32_Float,
+        static_cast<unsigned>(RHITextureUsage::DepthStencil)});
+    BOOST_REQUIRE(depth.Is_Valid());
+    const std::array<std::byte,8> texels{
+        std::byte{200},std::byte{30},std::byte{60},std::byte{128},
+        std::byte{10},std::byte{180},std::byte{40},std::byte{192}};
+    const auto texture = device.Create_Texture_Initialized({2,1}, {texels,8});
+    BOOST_REQUIRE(texture.Is_Valid());
+    std::array<PropVertex,4> vertices{};
+    vertices[0].position = {-1,-1,.5f}; vertices[1].position = {1,-1,.5f};
+    vertices[2].position = {1,1,.5f}; vertices[3].position = {-1,1,.5f};
+    const std::array<std::uint32_t,6> indices{0,1,2,0,2,3};
+    const auto first = renderer.Create_Mesh(vertices, indices);
+    const auto second = renderer.Create_Mesh(vertices, indices);
+    BOOST_REQUIRE(first.Is_Valid()); BOOST_REQUIRE(second.Is_Valid());
+    PropStyle style;
+    style.blend = RHIBlendMode::Disabled;
+    style.depth_write = style.depth_test = false;
+    style.samplers[0].Set_Filter(RHISamplerFilter::Point);
+    const std::array<std::array<int,4>,8> expected{{
+        {200,30,60,128}, {10,180,40,96}, {200,30,60,128}, {10,180,40,96},
+        {200,30,60,32}, {10,180,40,48}, {0,0,0,0}, {10,180,40,96}}};
+    auto& commands = device.Immediate_Command_List();
+    for (unsigned frame = 0; frame < 3; ++frame) {
+        if (frame == 1) BOOST_REQUIRE(renderer.Update_Mesh(first, vertices, indices));
+        if (frame == 2) {
+            renderer.Shutdown();
+            BOOST_REQUIRE(renderer.Initialize(device, shaders));
+        }
+        BOOST_REQUIRE(commands.Set_Render_Targets(target, depth));
+        BOOST_REQUIRE(commands.Set_Viewport({0,0,32,8}));
+        BOOST_REQUIRE(commands.Clear({0,0,0,0},1));
+        PropParameters a;
+        a.view_projection = {1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
+        PropParameters b = a;
+        b.uv_transform[0][3] = .75f;
+        b.opacity = .5f;
+        const auto draw = [&](unsigned stripe, PropMeshHandle mesh, const PropParameters& parameters) {
+            BOOST_REQUIRE(commands.Set_Viewport({stripe*4,0,4,8}));
+            BOOST_REQUIRE(renderer.Draw(commands, mesh, style, parameters, std::array{texture}));
+        };
+        draw(0, first, a); draw(1, second, b);
+        draw(2, first, a); draw(3, second, b);
+        a.opacity = .25f; draw(4, first, a);
+        a.uv_transform[0][3] = .75f; draw(5, first, a);
+        b.alpha_cutoff = 1; draw(6, second, b);
+        b.alpha_cutoff = 0; draw(7, second, b);
+        if (frame == 2) {
+            BOOST_REQUIRE(renderer.Destroy_Mesh(first));
+            BOOST_REQUIRE(renderer.Destroy_Mesh(second));
+        }
+        std::array<std::byte,32*8*4> pixels{};
+        BOOST_REQUIRE(device.Readback_Texture(target, pixels, 32*4));
+        for (unsigned y = 0; y < 8; ++y)
+            for (unsigned x = 0; x < 32; ++x)
+                for (unsigned channel = 0; channel < 4; ++channel)
+                    BOOST_CHECK_SMALL(std::to_integer<int>(pixels[(y*32+x)*4+channel])
+                        - expected[x/4][channel], 2);
+    }
+    renderer.Shutdown(); device.Destroy_Texture(texture);
+    device.Destroy_Texture(target); device.Destroy_Texture(depth);
+}
+
 BOOST_AUTO_TEST_CASE(prepared_vertex_colors_retain_quantization_and_alpha_when_drawn)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     PropRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device,std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     const auto target=device.Create_Texture({8,8,1,RHITextureFormat::RGBA8_UNorm,
         static_cast<unsigned>(RHITextureUsage::RenderTarget)});
     BOOST_REQUIRE(target.Is_Valid());
@@ -107,9 +179,9 @@ BOOST_AUTO_TEST_CASE(prepared_vertex_colors_retain_quantization_and_alpha_when_d
 
 BOOST_AUTO_TEST_CASE(packed_drawing_colors_retain_gpu_rgb_and_alpha)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     PropRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device,std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     const auto target=device.Create_Texture({8,8,1,RHITextureFormat::RGBA8_UNorm,
         static_cast<unsigned>(RHITextureUsage::RenderTarget)});
     const auto depth=device.Create_Texture({8,8,1,RHITextureFormat::D32_Float,
@@ -190,9 +262,9 @@ BOOST_AUTO_TEST_CASE(packed_drawing_colors_retain_gpu_rgb_and_alpha)
 
 BOOST_AUTO_TEST_CASE(texture_coordinate_modes_and_projection_preserve_drawing_on_both_stages)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     PropRenderer renderer;
-    const auto shaders=std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
+    const auto shaders=Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
     BOOST_REQUIRE(renderer.Initialize(device,shaders));
     std::array<std::uint8_t,4*4*4> texels{};
     for (unsigned y=0;y<4;++y) for (unsigned x=0;x<4;++x) {
@@ -276,9 +348,9 @@ BOOST_AUTO_TEST_CASE(texture_coordinate_modes_and_projection_preserve_drawing_on
 
 BOOST_AUTO_TEST_CASE(detail_material_equations_preserve_rgb_and_alpha_between_draws)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     PropRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device,std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     const auto texture = [&](std::array<std::uint8_t,4> color) {
         const auto handle = device.Create_Texture_Initialized({1,1},{std::as_bytes(std::span(color)),4});
         BOOST_REQUIRE(handle.Is_Valid());
@@ -379,9 +451,9 @@ BOOST_AUTO_TEST_CASE(decoded_material_colors_survive_gpu_resource_recreation)
         vertex.normal={0,0,1};
         Apply_Prop_Material(vertex,material);
     }
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     PropRenderer renderer;
-    const auto shaders=std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
+    const auto shaders=Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
     BOOST_REQUIRE(renderer.Initialize(device,shaders));
     const std::array<std::uint32_t,6> indices{0,1,2,0,2,3};
     const auto mesh=renderer.Create_Mesh(vertices,indices);
@@ -421,9 +493,9 @@ BOOST_AUTO_TEST_CASE(decoded_material_colors_survive_gpu_resource_recreation)
 
 BOOST_AUTO_TEST_CASE(persistent_mesh_draws_indices_above_16_bits_after_resource_recreation)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     PropRenderer renderer;
-    const auto shaders = std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
+    const auto shaders = Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
     BOOST_REQUIRE(renderer.Initialize(device,shaders));
     const auto target = device.Create_Texture({16,8,1,RHITextureFormat::RGBA8_UNorm,
         static_cast<unsigned>(RHITextureUsage::RenderTarget)});
@@ -477,9 +549,9 @@ BOOST_AUTO_TEST_CASE(persistent_mesh_draws_indices_above_16_bits_after_resource_
 BOOST_AUTO_TEST_CASE(persistent_mesh_versions_survive_source_changes_and_device_recreation)
 {
     for (const bool prepared : {false,true}) {
-        DX11Device device({true});
+        GraphicsTestDevice device({true});
         PropRenderer renderer;
-        const auto shaders = std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
+        const auto shaders = Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
         BOOST_REQUIRE(renderer.Initialize(device,shaders));
         const auto target = device.Create_Texture({16,8,1,RHITextureFormat::RGBA8_UNorm,
             static_cast<unsigned>(RHITextureUsage::RenderTarget)});
@@ -546,9 +618,9 @@ BOOST_AUTO_TEST_CASE(persistent_mesh_versions_survive_source_changes_and_device_
 BOOST_AUTO_TEST_CASE(mesh_edits_preserve_vertices_topology_and_rejected_updates)
 {
     for (const bool prepared : {false,true}) {
-        DX11Device device({true});
+        GraphicsTestDevice device({true});
         PropRenderer renderer;
-        const auto shaders = std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
+        const auto shaders = Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
         BOOST_REQUIRE(renderer.Initialize(device,shaders));
         const auto target = device.Create_Texture({16,16,1,RHITextureFormat::RGBA8_UNorm,
             static_cast<unsigned>(RHITextureUsage::RenderTarget)});
@@ -612,9 +684,9 @@ BOOST_AUTO_TEST_CASE(persistent_local_mesh_instances_match_baked_geometry)
 {
     struct ResetEnvironment { ~ResetEnvironment() { Get_Environment_Lighting() = {}; } } reset;
     Get_Environment_Lighting() = {};
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     PropRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device,std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     constexpr unsigned extent = 32;
     const auto target = device.Create_Texture({extent,extent,1,RHITextureFormat::RGBA8_UNorm,
         static_cast<unsigned>(RHITextureUsage::RenderTarget)});
@@ -694,9 +766,9 @@ BOOST_AUTO_TEST_CASE(persistent_local_mesh_instances_match_baked_geometry)
 
 BOOST_AUTO_TEST_CASE(recycled_buffers_preserve_queued_draws_and_live_meshes)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     PropRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device,std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     const auto target = device.Create_Texture({64,16,1,RHITextureFormat::RGBA8_UNorm,
         static_cast<std::uint32_t>(RHITextureUsage::RenderTarget)});
     const auto depth = device.Create_Texture({64,16,1,RHITextureFormat::D32_Float,
@@ -772,9 +844,9 @@ BOOST_AUTO_TEST_CASE(vertex_validation_preserves_binary32_finite_boundaries)
 
 BOOST_AUTO_TEST_CASE(appended_ranges_preserve_queued_draws_and_reject_invalid_geometry)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     PropRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device,std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     const auto target = device.Create_Texture({16,8,1,RHITextureFormat::RGBA8_UNorm,
         static_cast<unsigned>(RHITextureUsage::RenderTarget)});
     const auto depth = device.Create_Texture({16,8,1,RHITextureFormat::D32_Float,
@@ -874,10 +946,10 @@ BOOST_AUTO_TEST_CASE(cloud_projection_uses_height_and_preserves_ambient_emissive
         ~ResetEnvironment() { Get_Environment_Lighting() = {}; }
     } reset;
     Get_Environment_Lighting() = {};
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     BOOST_REQUIRE(device.Is_Valid());
     PropRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device,std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     const std::array<std::uint8_t,8> pattern{0,0,0,255,255,255,255,255};
     const auto cloud = device.Create_Texture_Initialized({2,1},{std::as_bytes(std::span(pattern)),8});
     const std::array<std::uint8_t,8> reversed_pattern{255,255,255,255,0,0,0,255};
@@ -935,7 +1007,7 @@ BOOST_AUTO_TEST_CASE(cloud_projection_uses_height_and_preserves_ambient_emissive
     environment.parameters.shadow_options[0] = 0;
     draw_and_check(77); // Rejected settings do not corrupt the last uploaded values.
     renderer.Shutdown();
-    BOOST_REQUIRE(renderer.Initialize(device,std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     mesh = renderer.Create_Mesh(vertices,indices);
     draw_and_check(77); // Recreated buffers need an upload even when values match.
     for (auto& vertex : vertices) vertex.position[2] = 1.5f;
@@ -965,10 +1037,10 @@ BOOST_AUTO_TEST_CASE(shadow_depth_silhouette_attenuates_directional_light_on_rec
         ~ResetEnvironment() { Get_Environment_Lighting() = {}; }
     } reset;
     Get_Environment_Lighting() = {};
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     BOOST_REQUIRE(device.Is_Valid());
     PropRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device,std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     const auto target = device.Create_Texture({32,32,1,RHITextureFormat::RGBA8_UNorm,
         static_cast<std::uint32_t>(RHITextureUsage::RenderTarget)});
     const auto depth = device.Create_Texture({32,32,1,RHITextureFormat::D32_Float,
@@ -1034,10 +1106,10 @@ BOOST_AUTO_TEST_CASE(shadow_depth_silhouette_attenuates_directional_light_on_rec
 
 BOOST_AUTO_TEST_CASE(detail_materials_shroud_depth_and_background_drawing)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     BOOST_REQUIRE(device.Is_Valid());
     PropRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device,std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     const auto texture = [&](std::array<std::uint8_t,4> color) {
         return device.Create_Texture_Initialized({1,1},{std::as_bytes(std::span(color)),4});
     };
@@ -1230,9 +1302,9 @@ BOOST_AUTO_TEST_CASE(detail_materials_shroud_depth_and_background_drawing)
 
 BOOST_AUTO_TEST_CASE(indexed_batches_preserve_seams_material_changes_and_blended_pixels)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     PropRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device,std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     const auto target=device.Create_Texture({16,16,1,RHITextureFormat::RGBA8_UNorm,
         static_cast<std::uint32_t>(RHITextureUsage::RenderTarget)});
     const auto depth=device.Create_Texture({16,16,1,RHITextureFormat::D32_Float,
@@ -1309,9 +1381,9 @@ BOOST_AUTO_TEST_CASE(indexed_batches_preserve_seams_material_changes_and_blended
 
 BOOST_AUTO_TEST_CASE(material_color_sources_preserve_lit_and_prelit_drawing)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     PropRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device,std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     const auto target=device.Create_Texture({8,8,1,RHITextureFormat::RGBA8_UNorm,
         static_cast<std::uint32_t>(RHITextureUsage::RenderTarget)});
     const auto depth=device.Create_Texture({8,8,1,RHITextureFormat::D32_Float,
@@ -1416,9 +1488,9 @@ BOOST_AUTO_TEST_CASE(prepared_mesh_inputs_use_owned_contents_and_channel_boundar
 
 BOOST_AUTO_TEST_CASE(instance_prepared_meshes_retain_distinct_poses_through_deferred_drawing)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     PropRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device,std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     const auto target=device.Create_Texture({8,8,1,RHITextureFormat::RGBA8_UNorm,
         static_cast<unsigned>(RHITextureUsage::RenderTarget)});
     const auto depth=device.Create_Texture({8,8,1,RHITextureFormat::D32_Float,
@@ -1475,9 +1547,9 @@ BOOST_AUTO_TEST_CASE(instance_prepared_meshes_retain_distinct_poses_through_defe
 
 BOOST_AUTO_TEST_CASE(material_edits_update_persistent_mesh_rgb_and_opacity)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     PropRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device,std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     const auto target=device.Create_Texture({8,8,1,RHITextureFormat::RGBA8_UNorm,
         static_cast<unsigned>(RHITextureUsage::RenderTarget)});
     const auto depth=device.Create_Texture({8,8,1,RHITextureFormat::D32_Float,
@@ -1573,9 +1645,9 @@ BOOST_AUTO_TEST_CASE(preparation_versions_track_alias_writes_and_retained_pointe
 
 BOOST_AUTO_TEST_CASE(versioned_meshes_preserve_queued_geometry_color_and_alpha_after_recreation)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     PropRenderer renderer;
-    const auto shaders=std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
+    const auto shaders=Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
     BOOST_REQUIRE(renderer.Initialize(device,shaders));
     const auto target=device.Create_Texture({8,8,1,RHITextureFormat::RGBA8_UNorm,
         static_cast<unsigned>(RHITextureUsage::RenderTarget)});

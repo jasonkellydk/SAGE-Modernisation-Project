@@ -8,7 +8,7 @@ module;
 #include <vector>
 export module Graphics.Resources.Textures.Sampling.Tests;
 import Graphics.Resources.Textures.Sampling;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 import Graphics.Scene.Props.Renderer;
 using namespace Graphics;
 
@@ -58,10 +58,10 @@ BOOST_AUTO_TEST_CASE(authored_overrides_preserve_quality_modes_and_preference_va
 
 BOOST_AUTO_TEST_CASE(gpu_sampling_distinguishes_minification_magnification_mips_and_lod_clamps)
 {
-    DX11DeviceOptions options; options.use_warp = true;
-    DX11Device device(options);
+    GraphicsTestDeviceOptions options; options.use_warp = true;
+    GraphicsTestDevice device(options);
     PropRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device, GRAPHICS_TERRAIN_SHADER_DIRECTORY));
+    BOOST_REQUIRE(renderer.Initialize(device, Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     const auto target = device.Create_Texture({8, 8, 1, RHITextureFormat::RGBA8_UNorm,
         static_cast<unsigned>(RHITextureUsage::RenderTarget)});
     const auto depth = device.Create_Texture({8, 8, 1, RHITextureFormat::D32_Float,

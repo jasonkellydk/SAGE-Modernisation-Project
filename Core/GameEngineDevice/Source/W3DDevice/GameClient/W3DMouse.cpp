@@ -1,3 +1,4 @@
+#include "W3DDevice/GameClient/W3DRenderServices.h"
 /*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -30,10 +31,10 @@
 
 #include <span>
 #include "Common/GameMemory.h"
-#include "WW3D2/RendObj.h"
-#include "WW3D2/Camera.h"
+#include "W3DDevice/GameClient/W3DRenderObject.h"
+#include "W3DDevice/GameClient/W3DCamera.h"
 
-#include "WW3D2/AssetMgr.h"
+#include "W3DDevice/GameClient/W3DAssetCatalog.h"
 
 #include "W3DDevice/Common/W3DConvert.h"
 #include "W3DDevice/GameClient/W3DMouse.h"
@@ -53,7 +54,7 @@ import Graphics.Cursors.Load;
 
 //Since there can't be more than 1 mouse, might as well keep these static.
 static const Image *cursorImages[Mouse::NUM_MOUSE_CURSORS];			///<Images for use with the RM_POLYGON method.
-static RenderObjClass *cursorModels[Mouse::NUM_MOUSE_CURSORS];	///< W3D models for each cursor type
+static W3DRenderObject *cursorModels[Mouse::NUM_MOUSE_CURSORS];	///< W3D models for each cursor type
 static Assets::AnimationAssetHandle cursorAnims[Mouse::NUM_MOUSE_CURSORS];		///< W3D animations for each cursor type
 
 W3DMouse::W3DMouse()
@@ -163,24 +164,24 @@ void W3DMouse::initW3DAssets()
 			if (!m_cursorInfo[i].W3DAnimName.isEmpty())
 			{
 				DEBUG_ASSERTCRASH(cursorAnims[i] == nullptr, ("hmm, leak festival"));
-				cursorAnims[i] = W3DDisplay::m_assetManager->Acquire_Animation(m_cursorInfo[i].W3DAnimName.str());
+					cursorAnims[i] = W3DDisplay::m_assetManager->Catalog().Acquire_Animation(m_cursorInfo[i].W3DAnimName.str());
 				if (cursorAnims[i] && cursorModels[i])
 				{
-					cursorModels[i]->Set_Animation(cursorAnims[i], 0, (m_cursorInfo[i].loop) ? RenderObjClass::ANIM_MODE_LOOP : RenderObjClass::ANIM_MODE_ONCE);
+					cursorModels[i]->Set_Animation(cursorAnims[i], 0, (m_cursorInfo[i].loop) ? W3DRenderObject::ANIM_MODE_LOOP : W3DRenderObject::ANIM_MODE_ONCE);
 				}
 			}
 		}
 	}
 
 	// create the camera
-	m_camera = NEW_REF( CameraClass, () );
+	m_camera = NEW_REF( W3DCamera, () );
 	m_camera->Set_Position( Vector3( 0, 1, 1 ) );
 	Vector2 min = Vector2( -1, -1 );
 	Vector2 max = Vector2( +1, +1 );
 	m_camera->Set_View_Plane( min, max );
 	m_camera->Set_Clip_Planes( 0.995f, 20.0f );
 	if (m_orthoCamera)
-		m_camera->Set_Projection_Type( CameraClass::ORTHO );
+		m_camera->Set_Projection_Type( W3DCamera::ORTHO );
 }
 
 void W3DMouse::freeW3DAssets()
@@ -297,7 +298,7 @@ void W3DMouse::setCursor( MouseCursor cursor )
 					W3DDisplay::m_3DInterfaceScene->Add_Render_Object(cursorModels[m_currentW3DCursor]);
 					if (m_cursorInfo[m_currentW3DCursor].loop == FALSE && cursorAnims[m_currentW3DCursor])
 					{
-						cursorModels[m_currentW3DCursor]->Set_Animation(cursorAnims[m_currentW3DCursor], 0, RenderObjClass::ANIM_MODE_ONCE);
+						cursorModels[m_currentW3DCursor]->Set_Animation(cursorAnims[m_currentW3DCursor], 0, W3DRenderObject::ANIM_MODE_ONCE);
 					}
 				}
 			}
@@ -381,7 +382,7 @@ void W3DMouse::draw()
 				}
 				cursorModels[m_currentW3DCursor]->Set_Transform(tm);
 
-				WW3D::Render( W3DDisplay::m_3DInterfaceScene, m_camera );
+				Get_W3D_Render_Services().Render( W3DDisplay::m_3DInterfaceScene, m_camera );
 			}
 		}
 	}

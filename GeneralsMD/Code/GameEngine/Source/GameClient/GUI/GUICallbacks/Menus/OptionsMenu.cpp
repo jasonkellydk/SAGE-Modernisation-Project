@@ -75,7 +75,7 @@ import Graphics.Resources.Textures.Quality;
 #include "WWDownload/Registry.h"
 #include "GameClient/MessageBox.h"
 
-#include "WW3D2/WW3D.h"
+
 import Graphics.Resources.Textures.Sampling;
 
 // This is for non-RC builds only!!!
@@ -540,12 +540,14 @@ static void saveOptions()
 
 	//-------------------------------------------------------------------------------------------------
 	// texture filter mode
-	val = static_cast<int>(pref->getTextureFilterMode());
+	// Save the applied preset's values instead of restoring stale preferences.
+	val = TheWritableGlobalData->m_textureFilteringMode;
 	if (val >= 0)
 	{
 		val = clamp((int)Graphics::TextureSamplingMode::None, val, (int)Graphics::TextureSamplingMode::Anisotropic);
 
 		TheWritableGlobalData->m_textureFilteringMode = val;
+		Graphics::Set_Texture_Sampling_Mode(val);
 		AsciiString prefString;
 		prefString = Graphics::TextureSamplingModeNames[val];
 		(*pref)["TextureFilter"] = prefString;
@@ -553,12 +555,13 @@ static void saveOptions()
 
 	//-------------------------------------------------------------------------------------------------
 	// anisotropy level
-	val = pref->getTextureAnisotropyLevel();
+	val = TheWritableGlobalData->m_textureAnisotropyLevel;
 	if (val >= 0)
 	{
 		val = clamp((int)2, val, (int)16);
 
 		TheWritableGlobalData->m_textureAnisotropyLevel = val;
+		Graphics::Set_Texture_Anisotropy(val);
 		AsciiString prefString;
 		prefString.format("%d", val);
 		(*pref)["AnisotropyLevel"] = prefString;

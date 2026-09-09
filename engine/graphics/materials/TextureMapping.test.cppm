@@ -19,7 +19,7 @@ import Graphics.Materials.TextureProjection;
 import Graphics.Materials.TextureMapping;
 import Graphics.Scene.Props.Renderer;
 import Graphics.Scene.Props.Geometry;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 import Graphics.RHI;
 using namespace Graphics;
 using namespace Assets;
@@ -227,9 +227,9 @@ BOOST_AUTO_TEST_CASE(projector_padding_depth_normal_and_homogeneous_coordinates)
 
 BOOST_AUTO_TEST_CASE(mapped_materials_draw_authored_texels_and_alpha_on_both_triangles)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     PropRenderer renderer;
-    BOOST_REQUIRE(renderer.Initialize(device,std::filesystem::path(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
     const auto target=device.Create_Texture({8,8,1,RHITextureFormat::RGBA8_UNorm,static_cast<unsigned>(RHITextureUsage::RenderTarget)});
     const auto depth=device.Create_Texture({8,8,1,RHITextureFormat::D32_Float,static_cast<unsigned>(RHITextureUsage::DepthStencil)});
     std::array<std::uint8_t,64> texels{};

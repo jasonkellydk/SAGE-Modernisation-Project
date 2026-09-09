@@ -10,14 +10,14 @@ module;
 export module Graphics.Resources.Textures.Resource.Tests;
 import Graphics.Resources.Textures.Resource;
 import Graphics.Resources.Textures.Upload;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 import Graphics.Scene.Props.Renderer;
 import Assets.Adapters.DDS;
 using namespace Graphics;
 
 BOOST_AUTO_TEST_CASE(target_references_and_deferred_generation_have_separate_lifetimes)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     RHITexture description{8,8,0};
     description.usage |= static_cast<unsigned>(RHITextureUsage::RenderTarget);
     auto* texture=TextureResource::Create(&device,description,Assets::PixelEncoding::BGRA4444,
@@ -47,7 +47,7 @@ BOOST_AUTO_TEST_CASE(target_references_and_deferred_generation_have_separate_lif
 
 BOOST_AUTO_TEST_CASE(allocation_rejects_invalid_shapes_and_preserves_cube_and_depth_metadata)
 {
-    DX11Device device({true});
+    GraphicsTestDevice device({true});
     BOOST_CHECK(!TextureResource::Create(nullptr,{4,4,1},Assets::PixelEncoding::RGBA8));
     BOOST_CHECK(!TextureResource::Create(&device,{0,4,1},Assets::PixelEncoding::RGBA8));
     RHITexture cube{8,4,0}; cube.dimension=RHITextureDimension::Cube; cube.array_size=6;
@@ -75,7 +75,7 @@ BOOST_AUTO_TEST_CASE(allocation_rejects_invalid_shapes_and_preserves_cube_and_de
 BOOST_AUTO_TEST_CASE(compressed_volume_decodes_to_the_allocated_encoding)
 {
     for (const bool warp : {true,false}) {
-        DX11Device device({warp});
+        GraphicsTestDevice device({warp});
         if (!warp && !device.Is_Valid()) continue;
         std::vector<std::byte> bytes(128+32);
         const auto write=[&](unsigned offset,unsigned value) {
@@ -114,10 +114,10 @@ BOOST_AUTO_TEST_CASE(compressed_volume_decodes_to_the_allocated_encoding)
 BOOST_AUTO_TEST_CASE(upload_survives_owner_release_and_draws_rgb_and_transparency)
 {
     for (const bool warp : {true,false}) {
-        DX11Device device({warp});
+        GraphicsTestDevice device({warp});
         if (!warp && !device.Is_Valid()) continue;
         PropRenderer renderer;
-        BOOST_REQUIRE(renderer.Initialize(device,GRAPHICS_TERRAIN_SHADER_DIRECTORY));
+        BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
         const auto target=device.Create_Texture({2,2,1,RHITextureFormat::RGBA8_UNorm,
             static_cast<unsigned>(RHITextureUsage::RenderTarget)});
         const auto depth=device.Create_Texture({2,2,1,RHITextureFormat::D32_Float,

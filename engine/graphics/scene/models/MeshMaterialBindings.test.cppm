@@ -36,6 +36,63 @@ BOOST_AUTO_TEST_CASE(copy_preserves_vertex_color_sources)
     BOOST_CHECK(copy.Get_DIG_Source(1) == Graphics::PropColorSource::PrimaryColor);
 }
 
+BOOST_AUTO_TEST_CASE(controlled_color_changes_preserve_aliases_and_raw_pointer_fallback)
+{
+    Bindings source; source.Reset(1, 3, 1);
+    source.Allocate_Color_Array(0);
+    source.Set_DCG_Source(0, Graphics::PropColorSource::PrimaryColor);
+    source.Set_Color(0, 0, 0xff112233u);
+    Bindings copy = source;
+    const auto revision = source.DCG_Revision(0);
+    BOOST_CHECK_NE(revision, 0u);
+    BOOST_CHECK_EQUAL(copy.DCG_Revision(0), revision);
+    const auto* colors = source.Peek_DCG_Array(0);
+    BOOST_CHECK_EQUAL(source.DCG_Revision(0), revision);
+    copy.Set_Color(0, 0, 0xff445566u);
+    BOOST_CHECK_EQUAL(colors[0], 0xff445566u);
+    BOOST_CHECK_NE(source.DCG_Revision(0), revision);
+    BOOST_CHECK_EQUAL(source.DCG_Revision(0), copy.DCG_Revision(0));
+    auto* writable = copy.Get_DCG_Array(0);
+    BOOST_CHECK_EQUAL(source.DCG_Revision(0), 0u);
+    source.Set_Color(0, 0, 0xff778899u);
+    BOOST_CHECK_EQUAL(writable[0], 0xff778899u);
+    BOOST_CHECK_EQUAL(source.DCG_Revision(0), 0u);
+    writable[0] = 0xffaabbccu;
+    BOOST_CHECK_EQUAL(source.Peek_DCG_Array(0)[0], 0xffaabbccu);
+    source.Make_Color_Array_Unique(0);
+    source.Set_Color(0, 0, 0xffffffffu);
+    BOOST_CHECK_EQUAL(copy.Peek_DCG_Array(0)[0], 0xffaabbccu);
+}
+
+BOOST_AUTO_TEST_CASE(grouping_versions_follow_shared_slots_and_writable_shader_storage)
+{
+    Bindings source; source.Reset(2, 3, 1);
+    const auto shader = Graphics::MaterialState::Opaque();
+    source.Set_Shader(0, shader); source.Set_Shader(1, shader);
+    source.Set_Texture(0, std::make_shared<int>(1));
+    source.Set_Texture(1, std::make_shared<int>(2));
+    const auto versions = source.Grouping_Revisions(0);
+    BOOST_REQUIRE(versions);
+    Bindings clone = source;
+    BOOST_REQUIRE(clone.Grouping_Revisions(0));
+    BOOST_CHECK(*clone.Grouping_Revisions(0) != *versions);
+    auto slots = *source.Get_Texture_Array(0, 0);
+    slots.Set(1, std::make_shared<int>(3));
+    BOOST_CHECK(*source.Grouping_Revisions(0) != *versions);
+    BOOST_CHECK_EQUAL(*source.Peek_Texture(1), 3);
+    BOOST_CHECK_EQUAL(*clone.Peek_Texture(1), 2);
+    auto* writable = slots.Peek(1);
+    BOOST_CHECK(!source.Grouping_Revisions(0));
+    *writable = std::make_shared<int>(4);
+    BOOST_CHECK_EQUAL(*source.Peek_Texture(1), 4);
+    auto* shaders = clone.Get_Shader_Array(0);
+    BOOST_CHECK(!clone.Grouping_Revisions(0));
+    shaders[0] = Graphics::MaterialState{0};
+    clone.Set_Shader(1, shader);
+    BOOST_CHECK(!clone.Grouping_Revisions(0));
+    BOOST_CHECK_EQUAL(clone.Get_Shader(0).Get_Bits(), 0u);
+}
+
 BOOST_AUTO_TEST_CASE(two_sided_and_fog_update_single_and_array_shader_state)
 {
     Bindings bindings;

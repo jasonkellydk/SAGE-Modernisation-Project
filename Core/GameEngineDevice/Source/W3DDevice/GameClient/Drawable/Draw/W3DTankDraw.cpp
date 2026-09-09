@@ -1,3 +1,4 @@
+import Graphics.Frame.RenderClock;
 /*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -234,7 +235,7 @@ void W3DTankDraw::updateTreadPositions(Real uvDelta)
 /**Grab pointers to the sub-meshes for each tread*/
 void W3DTankDraw::updateTreadObjects()
 {
-	RenderObjClass *robj=getRenderObject();
+	W3DRenderObject *robj=getRenderObject();
 
 	//clear all previous tread pointers
 	for (Int i=0; i<m_treadCount; i++)
@@ -246,10 +247,10 @@ void W3DTankDraw::updateTreadObjects()
 	{
 		for (Int i=0; i < robj->Get_Num_Sub_Objects() && m_treadCount < MAX_TREADS_PER_TANK; i++)
 		{
-			RenderObjClass *subObj=robj->Get_Sub_Object(i);
+			W3DRenderObject *subObj=robj->Get_Sub_Object(i);
 			const char *meshName;
 			//Check if subobject name starts with "TREADS".
-			if (subObj && subObj->Class_ID() == RenderObjClass::CLASSID_MESH && subObj->Get_Name()
+			if (subObj && subObj->Class_ID() == W3DRenderObject::CLASSID_MESH && subObj->Get_Name()
 				&& ( (meshName=strchr(subObj->Get_Name(),'.') ) != nullptr && *(meshName++))
 				&&Assets::Asset_Name_Prefix_Equals_No_Case(meshName,"TREADS", 6))
 			{	//check if sub-object has the correct material to do texture scrolling.
@@ -303,7 +304,7 @@ void W3DTankDraw::doDrawModule(const Matrix3D* transformMtx)
 
 	// TheSuperHackers @tweak Update the draw on every WW Sync only.
 	// All calculations are originally catered to a 30 fps logic step.
-	if (WW3D::Get_Sync_Frame_Time() == 0)
+	if (Graphics::Get_Render_Clock().Sync_Delta() == 0)
 		return;
 
 	const Real DEBRIS_THRESHOLD = 0.00001f;

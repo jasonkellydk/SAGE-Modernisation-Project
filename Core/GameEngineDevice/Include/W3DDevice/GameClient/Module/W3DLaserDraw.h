@@ -34,8 +34,8 @@
 #include "Common/DrawModule.h"
 #include "GameClient/Color.h"
 
-class SegmentedLineClass;
-class TextureClass;
+class W3DSegmentedLineRenderObject;
+class W3DTextureHandle;
 class Vector3;
 
 class W3DLaserDrawModuleData : public ModuleData
@@ -91,8 +91,8 @@ public:
 
 protected:
 
-	SegmentedLineClass **m_line3D;  ///< line 3D for effect
-	TextureClass *m_texture;
+	W3DSegmentedLineRenderObject **m_line3D;  ///< line 3D for effect
+	W3DTextureHandle *m_texture;
 	Real m_textureAspectRatio;			///< aspect ratio of texture
 	Bool m_selfDirty;								// not saved
 

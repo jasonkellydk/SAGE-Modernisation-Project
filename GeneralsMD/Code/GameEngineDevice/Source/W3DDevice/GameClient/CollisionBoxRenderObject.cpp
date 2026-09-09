@@ -1,3 +1,5 @@
+#include "WWMath/matrix4.h"
+#include "W3DDevice/GameClient/W3DRenderServices.h"
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -11,11 +13,12 @@ import Graphics.Scene.Views.CameraMatrices;
 import Graphics.Scene.Views.View;
 
 #include "W3DDevice/GameClient/CollisionBoxRenderObject.h"
-#include "WW3D2/ColTest.h"
-#include "WW3D2/IntTest.h"
-#include "WW3D2/RInfo.h"
-#include "WW3D2/WW3D.h"
+#include "W3DDevice/GameClient/W3DCastQuery.h"
+#include "W3DDevice/GameClient/W3DIntersectionQuery.h"
+#include "W3DDevice/GameClient/W3DRenderContext.h"
+
 #include "WWLib/chunkio.h"
+#include "WWMath/matrix4.h"
 
 namespace
 {
@@ -37,7 +40,7 @@ Graphics::CollisionBoxDrawData Make_Draw_Data(const CollisionBoxRenderObject &ob
 	data.extent = {object.Get_Local_Extent().X, object.Get_Local_Extent().Y, object.Get_Local_Extent().Z};
 	data.color = {object.Get_Color().X, object.Get_Color().Y, object.Get_Color().Z, object.Get_Opacity()};
 	data.collision_type = static_cast<std::uint32_t>(object.Get_Collision_Type());
-	data.front_counter_clockwise = !WW3D::Is_Reflection_Render_Pass();
+	data.front_counter_clockwise = !Get_W3D_Render_Services().Is_Reflection_Render_Pass();
 
 	const auto &camera = Graphics::Get_Camera_Matrices();
 	data.view_projection = Graphics::Compose_Matrices(camera.projection, camera.view).values;
@@ -88,7 +91,7 @@ CollisionBoxRenderObject::CollisionBoxRenderObject(const OBBoxClass &box)
 }
 
 CollisionBoxRenderObject::CollisionBoxRenderObject(const CollisionBoxRenderObject &source)
-	: RenderObjClass(source),
+	: W3DRenderObject(source),
 	  m_name(source.m_name),
 	  m_color(source.m_color),
 	  m_local_center(source.m_local_center),
@@ -104,7 +107,7 @@ CollisionBoxRenderObject &CollisionBoxRenderObject::operator=(const CollisionBox
 {
 	if (this != &source) {
 		m_graphics.Release(Graphics::Get_Prop_Renderer());
-		RenderObjClass::operator=(source);
+		W3DRenderObject::operator=(source);
 		m_name = source.m_name;
 		m_color = source.m_color;
 		m_local_center = source.m_local_center;
@@ -117,14 +120,14 @@ CollisionBoxRenderObject &CollisionBoxRenderObject::operator=(const CollisionBox
 	return *this;
 }
 
-RenderObjClass *CollisionBoxRenderObject::Clone() const
+W3DRenderObject *CollisionBoxRenderObject::Clone() const
 {
 	return W3DNEW CollisionBoxRenderObject(*this);
 }
 
 int CollisionBoxRenderObject::Class_ID() const
 {
-	return m_oriented ? RenderObjClass::CLASSID_OBBOX : RenderObjClass::CLASSID_AABOX;
+	return m_oriented ? W3DRenderObject::CLASSID_OBBOX : W3DRenderObject::CLASSID_AABOX;
 }
 
 void CollisionBoxRenderObject::Set_Name(const char *name)
@@ -133,7 +136,7 @@ void CollisionBoxRenderObject::Set_Name(const char *name)
 		m_name = name;
 }
 
-void CollisionBoxRenderObject::Render(RenderInfoClass &rinfo)
+void CollisionBoxRenderObject::Render(W3DRenderContext &rinfo)
 {
 	(void)rinfo;
 	const auto data = Make_Draw_Data(*this);
@@ -142,13 +145,13 @@ void CollisionBoxRenderObject::Render(RenderInfoClass &rinfo)
 
 void CollisionBoxRenderObject::Set_Transform(const Matrix3D &transform)
 {
-	RenderObjClass::Set_Transform(transform);
+	W3DRenderObject::Set_Transform(transform);
 	Update_Cached_Box();
 }
 
 void CollisionBoxRenderObject::Set_Position(const Vector3 &position)
 {
-	RenderObjClass::Set_Position(position);
+	W3DRenderObject::Set_Position(position);
 	Update_Cached_Box();
 }
 
@@ -189,7 +192,7 @@ const OBBoxClass &CollisionBoxRenderObject::Get_OB_Box() const
 	return m_cached_ob_box;
 }
 
-bool CollisionBoxRenderObject::Cast_Ray(RayCollisionTestClass &raytest)
+bool CollisionBoxRenderObject::Cast_Ray(W3DRayCastQuery &raytest)
 {
 	if ((Get_Collision_Type() & raytest.CollisionType) == 0)
 		return false;
@@ -203,7 +206,7 @@ bool CollisionBoxRenderObject::Cast_Ray(RayCollisionTestClass &raytest)
 	return collided;
 }
 
-bool CollisionBoxRenderObject::Cast_AABox(AABoxCollisionTestClass &boxtest)
+bool CollisionBoxRenderObject::Cast_AABox(W3DBoxCastQuery &boxtest)
 {
 	if ((Get_Collision_Type() & boxtest.CollisionType) == 0 || boxtest.Result->StartBad)
 		return false;
@@ -215,7 +218,7 @@ bool CollisionBoxRenderObject::Cast_AABox(AABoxCollisionTestClass &boxtest)
 	return collided;
 }
 
-bool CollisionBoxRenderObject::Cast_OBBox(OBBoxCollisionTestClass &boxtest)
+bool CollisionBoxRenderObject::Cast_OBBox(W3DOrientedBoxCastQuery &boxtest)
 {
 	if ((Get_Collision_Type() & boxtest.CollisionType) == 0 || boxtest.Result->StartBad)
 		return false;
@@ -227,7 +230,7 @@ bool CollisionBoxRenderObject::Cast_OBBox(OBBoxCollisionTestClass &boxtest)
 	return collided;
 }
 
-bool CollisionBoxRenderObject::Intersect_AABox(AABoxIntersectionTestClass &boxtest)
+bool CollisionBoxRenderObject::Intersect_AABox(W3DBoxIntersectionQuery &boxtest)
 {
 	if ((Get_Collision_Type() & boxtest.CollisionType) == 0)
 		return false;
@@ -236,7 +239,7 @@ bool CollisionBoxRenderObject::Intersect_AABox(AABoxIntersectionTestClass &boxte
 		: CollisionMath::Intersection_Test(m_cached_aa_box, boxtest.Box);
 }
 
-bool CollisionBoxRenderObject::Intersect_OBBox(OBBoxIntersectionTestClass &boxtest)
+bool CollisionBoxRenderObject::Intersect_OBBox(W3DOrientedBoxIntersectionQuery &boxtest)
 {
 	if ((Get_Collision_Type() & boxtest.CollisionType) == 0)
 		return false;
@@ -255,7 +258,7 @@ void CollisionBoxRenderObject::Get_Obj_Space_Bounding_Box(AABoxClass &box) const
 	box.Init(m_local_center, m_local_extent);
 }
 
-Graphics::ModelFactory<RenderObjClass> *Load_Collision_Box_Factory(ChunkLoadClass &cload)
+Graphics::ModelFactory<W3DRenderObject> *Load_Collision_Box_Factory(ChunkLoadClass &cload)
 {
 	std::array<std::byte, Assets::W3D::W3DBoxPayloadSize> bytes{};
 	if (cload.Cur_Chunk_Length() != bytes.size()
@@ -267,9 +270,9 @@ Graphics::ModelFactory<RenderObjClass> *Load_Collision_Box_Factory(ChunkLoadClas
 	if (!Assets::W3D::W3DRead_Box(bytes, description, error))
 		return nullptr;
 	const int class_id = description.Is_Oriented()
-		? RenderObjClass::CLASSID_OBBOX : RenderObjClass::CLASSID_AABOX;
-	return new Graphics::ModelFactory<RenderObjClass>(description.name, class_id,
-		[description]() -> RenderObjClass * {
+		? W3DRenderObject::CLASSID_OBBOX : W3DRenderObject::CLASSID_AABOX;
+	return new Graphics::ModelFactory<W3DRenderObject>(description.name, class_id,
+		[description]() -> W3DRenderObject * {
 			return NEW_REF(CollisionBoxRenderObject, (description));
 		});
 }

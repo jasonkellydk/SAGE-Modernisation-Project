@@ -13,7 +13,7 @@ export module Graphics.Scene.Models.AnimationChannels.Tests;
 import Graphics.Scene.Models.AnimationChannels;
 import Graphics.Scene.Models.AssetPose;
 import Graphics.Scene.Props.Renderer;
-import Graphics.Backends.DX11;
+import Graphics.Tests.Device;
 import Assets.ModelRig;
 import Assets.Animations;
 import Assets.Adapters.W3D.Rig;
@@ -157,8 +157,8 @@ BOOST_AUTO_TEST_CASE(animated_pose_pixels_and_visibility_survive_reverse_samplin
     BOOST_REQUIRE(W3D::W3DRead_Pose_Animation(DrawingPoseAnimation(),pose_clip,error));
     const auto& pose_keys=pose_clip.channels[pose_clip.bone_channels[1]].keys;
     for(bool warp:{true,false}) {
-        DX11Device device({warp});if(!warp&&!device.Is_Valid())continue;
-        PropRenderer renderer;BOOST_REQUIRE(renderer.Initialize(device,GRAPHICS_TERRAIN_SHADER_DIRECTORY));
+        GraphicsTestDevice device({warp});if(!warp&&!device.Is_Valid())continue;
+        PropRenderer renderer;BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
         auto& commands=device.Immediate_Command_List();
         PropStyle style;style.depth_test=false;style.depth_write=false;
         PropParameters parameters;parameters.textured=0;

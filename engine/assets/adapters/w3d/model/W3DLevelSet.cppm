@@ -8,6 +8,8 @@ export import Assets.ModelAssembly;
 import Assets.Adapters.W3D.Chunks;
 
 namespace Assets::W3D {
+export inline constexpr std::uint32_t W3DChunkLodModel = 0x00000400u;
+
 export bool W3DRead_Model_Level_Set(W3DByteSpan bytes,ModelLevelSetDesc& output,std::string& error)
 {
     ModelLevelSetDesc next;

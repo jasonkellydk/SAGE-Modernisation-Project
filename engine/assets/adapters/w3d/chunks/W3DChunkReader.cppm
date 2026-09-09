@@ -14,6 +14,7 @@ namespace Assets::W3D
 {
 
 export using W3DByteSpan = std::span<const std::byte>;
+export inline constexpr std::size_t W3DNameLength = 16u;
 
 export inline constexpr std::uint32_t W3DChunkMesh = 0x00000000;
 export inline constexpr std::uint32_t W3DChunkVertices = 0x00000002;
@@ -41,6 +42,10 @@ export inline constexpr std::uint32_t W3DChunkMeshHeader3 = 0x0000001F;
 export inline constexpr std::uint32_t W3DChunkTriangles = 0x00000020;
 export inline constexpr std::uint32_t W3DChunkPerTriMaterials = 0x00000021;
 export inline constexpr std::uint32_t W3DChunkVertexShadeIndices = 0x00000022;
+export inline constexpr std::uint32_t W3DChunkPrelitUnlit = 0x00000023;
+export inline constexpr std::uint32_t W3DChunkPrelitVertex = 0x00000024;
+export inline constexpr std::uint32_t W3DChunkPrelitLightmapMultiPass = 0x00000025;
+export inline constexpr std::uint32_t W3DChunkPrelitLightmapMultiTexture = 0x00000026;
 export inline constexpr std::uint32_t W3DChunkMaterialInfo = 0x00000028;
 export inline constexpr std::uint32_t W3DChunkShaders = 0x00000029;
 export inline constexpr std::uint32_t W3DChunkVertexMaterials = 0x0000002A;
@@ -69,6 +74,8 @@ export inline constexpr std::uint32_t W3DChunkHierarchyHeader = 0x00000101;
 export inline constexpr std::uint32_t W3DChunkPivots = 0x00000102;
 export inline constexpr std::uint32_t W3DChunkAnimation = 0x00000200;
 export inline constexpr std::uint32_t W3DChunkAnimationHeader = 0x00000201;
+export inline constexpr std::uint32_t W3DChunkCompressedAnimation = 0x00000280;
+export inline constexpr std::uint32_t W3DChunkMorphAnimation = 0x000002C0;
 export inline constexpr std::uint32_t W3DChunkSizeMask = 0x7FFFFFFF;
 export inline constexpr std::uint32_t W3DChunkContainsChildren = 0x80000000;
 export inline constexpr std::uint32_t W3DInvalidIndex = 0xFFFFFFFF;

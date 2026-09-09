@@ -6,6 +6,6 @@
 #include <vector>
 import Graphics.Scene.Models.Factory;
 
-class RenderObjClass;
+class W3DRenderObject;
 class ChunkLoadClass;
-Graphics::ModelFactory<RenderObjClass>* Load_ParticleEmitter_Factory(ChunkLoadClass& source);
+Graphics::ModelFactory<W3DRenderObject>* Load_ParticleEmitter_Factory(ChunkLoadClass& source);

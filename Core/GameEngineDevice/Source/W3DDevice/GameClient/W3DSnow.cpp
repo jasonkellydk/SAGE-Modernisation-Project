@@ -1,6 +1,7 @@
+import Graphics.Frame.RenderClock;
 #include <array>
 #include <span>
-#include "WW3D2/WW3D.h"
+
 /*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -25,9 +26,9 @@
 #include "W3DDevice/GameClient/BaseHeightMap.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
 #include "GameClient/View.h"
-#include "WW3D2/RInfo.h"
-#include "WW3D2/Camera.h"
-#include "WW3D2/AssetMgr.h"
+#include "W3DDevice/GameClient/W3DRenderContext.h"
+#include "W3DDevice/GameClient/W3DCamera.h"
+#include "W3DDevice/GameClient/W3DAssetCatalog.h"
 
 #include <cmath>
 #include <cstddef>
@@ -85,7 +86,7 @@ void W3DSnowManager::reset()
 void W3DSnowManager::update()
 {
 	// TheSuperHackers @tweak The snow render update is now decoupled from the logic step.
-	m_time += WW3D::Get_Logic_Frame_Time_Seconds();
+	m_time += Graphics::Get_Render_Clock().Logic_Frame_Time_Seconds();
 
 	//find current time offset, adjusting for overflow
 	m_time=fmod(m_time,m_fullTimePeriod);
