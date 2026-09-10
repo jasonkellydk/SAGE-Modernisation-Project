@@ -1648,17 +1648,33 @@ export bool Add_Push_Button_Background(
 				return false;
 		}
 		else {
+			// Segmented atlas images are sampled with linear filtering.  Adjacent
+			// quads that only touch at an integer edge can therefore expose the
+			// transparent/filter border of the neighboring atlas cell, especially
+			// after the authored coordinates have been scaled for high-DPI output.
+			// Keep the authored layout, but overlap the tiled destination quads by
+			// half a physical pixel so their coverage remains continuous.
+			constexpr float seam_overlap = 0.5f;
+			auto seam_free_rectangle = [&](float segment_left, float segment_right) {
+				return Graphics::Rect2D{
+					std::max(left, segment_left - seam_overlap),
+					top,
+					std::min(right, segment_right + seam_overlap),
+					bottom};
+			};
+
 			float cursor = left_end;
 			if (button.middle_width > 0.0f) {
 				const int pieces = static_cast<int>(center_width / button.middle_width);
 				for (int piece = 0; piece < pieces; ++piece) {
+					const float segment_right = cursor + button.middle_width;
 					if (!draw_list.Add_Image(button.middle_image,
-							{cursor, top, cursor + button.middle_width, bottom},
+							seam_free_rectangle(cursor, segment_right),
 							button.image_color,
 							Graphics::Renderer2DBlendMode::Alpha,
 							button.grayscale))
 						return false;
-					cursor += button.middle_width;
+					cursor = segment_right;
 				}
 
 				const float remainder = right_start - cursor;
@@ -1666,7 +1682,8 @@ export bool Add_Push_Button_Background(
 					ImageRef partial = button.middle_image;
 					const float uv_width = partial.uv.right - partial.uv.left;
 					partial.uv.right = partial.uv.left + uv_width * remainder / button.middle_width;
-					if (!draw_list.Add_Image(partial, {cursor, top, right_start, bottom},
+					if (!draw_list.Add_Image(partial,
+							seam_free_rectangle(cursor, right_start),
 							button.image_color,
 							Graphics::Renderer2DBlendMode::Alpha,
 							button.grayscale))
