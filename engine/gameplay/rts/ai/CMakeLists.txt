@@ -1,3 +1,5 @@
+cmake_minimum_required(VERSION 4.4.3)
+
 add_library(engine_gameplay_rts_ai STATIC)
 target_sources(engine_gameplay_rts_ai PUBLIC FILE_SET cxx_modules TYPE CXX_MODULES FILES
 	components/force_production_controller.cppm
@@ -6,6 +8,8 @@ target_sources(engine_gameplay_rts_ai PUBLIC FILE_SET cxx_modules TYPE CXX_MODUL
 target_compile_features(engine_gameplay_rts_ai PUBLIC cxx_std_23)
 set_property(TARGET engine_gameplay_rts_ai PROPERTY CXX_SCAN_FOR_MODULES ON)
 target_link_libraries(engine_gameplay_rts_ai PUBLIC engine_ecs engine_time)
+
+add_subdirectory(squads)
 
 if(ENGINE_GAMEPLAY_BUILD_TESTS)
 	find_package(boost_included_unit_test_framework CONFIG REQUIRED)

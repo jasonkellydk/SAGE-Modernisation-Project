@@ -1,8 +1,11 @@
+cmake_minimum_required(VERSION 4.4.3)
+
 add_library(generalszh_order_rules STATIC)
 target_sources(generalszh_order_rules PUBLIC FILE_SET cxx_modules TYPE CXX_MODULES FILES
     inputs/attack_input.cppm systems/order_system.cppm)
 target_compile_features(generalszh_order_rules PUBLIC cxx_std_23)
-target_link_libraries(generalszh_order_rules PUBLIC engine_gameplay_rts_orders generalszh_combat_rules)
+target_link_libraries(generalszh_order_rules PUBLIC
+    engine_gameplay_rts_orders engine_gameplay_rts_ai_squads generalszh_combat_rules)
 if(RTS_BUILD_ZEROHOUR_EXTRAS)
     find_package(boost_included_unit_test_framework CONFIG REQUIRED)
     set_source_files_properties(systems/order_system.test PROPERTIES LANGUAGE CXX)

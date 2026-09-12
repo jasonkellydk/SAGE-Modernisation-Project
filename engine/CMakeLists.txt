@@ -1,7 +1,9 @@
 cmake_minimum_required(VERSION 4.4.3)
-project(engine_foundation LANGUAGES CXX)
 
-include(cmake/toolchain/validate.cmake)
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    project(engine_foundation LANGUAGES CXX)
+    include(cmake/toolchain/validate.cmake)
+endif()
 
 # Asset-free entry point. Do not include the legacy game's platform/dependency
 # configuration here: this build validates the modern engine in isolation.

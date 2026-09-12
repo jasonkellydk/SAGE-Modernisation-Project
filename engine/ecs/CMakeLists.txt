@@ -1,3 +1,9 @@
+cmake_minimum_required(VERSION 4.4.3)
+
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+	project(engine_ecs_check LANGUAGES CXX)
+endif()
+
 set(ENGINE_ECS_MODULES
 	core/component_registry.cppm
 	core/entity.cppm
