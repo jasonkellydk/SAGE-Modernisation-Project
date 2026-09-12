@@ -32,8 +32,8 @@
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 #include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
 
-#include "WW3D2/ww3d.h"
-#include "WW3D2/texturefilter.h"
+
+import Graphics.Resources.Textures.Sampling;
 
 #include "Common/GlobalData.h"
 
@@ -49,7 +49,6 @@
 #include "Common/FileSystem.h"
 #include "Common/GameAudio.h"
 #include "Common/INI.h"
-#include "Common/Registry.h"
 #include "Common/OptionPreferences.h"
 #include "Common/version.h"
 
@@ -939,9 +938,9 @@ GlobalData::GlobalData()
 
 	m_standardPublicBones.clear();
 
-	m_antiAliasLevel = WW3D::MultiSampleModeEnum::MULTISAMPLE_MODE_NONE;
-	m_textureFilteringMode = TextureFilterClass::TextureFilterMode::TEXTURE_FILTER_BILINEAR;
-	m_textureAnisotropyLevel = TextureFilterClass::AnisotropicFilterMode::TEXTURE_FILTER_ANISOTROPIC_2X;
+	m_antiAliasLevel = 0;
+	m_textureFilteringMode = static_cast<unsigned>(Graphics::TextureSamplingMode::Bilinear);
+	m_textureAnisotropyLevel = 2;
 
 //	m_languageFilterPref = false;
 	m_languageFilterPref = true;
@@ -1046,9 +1045,9 @@ GlobalData::GlobalData()
 
 	m_keyboardCameraRotateSpeed = 0.1f;
 
-	// Set user data directory based on registry settings instead of INI parameters.
-	// This allows us to localize the leaf name.
-	m_userDataDir = BuildUserDataPathFromRegistry();
+	// Keep user data in the normal Documents folder using the fixed Zero Hour
+	// data directory name.
+	m_userDataDir = BuildUserDataPath();
 	CreateDirectory(m_userDataDir.str(), nullptr);
 
 	//-allAdvice feature
@@ -1199,6 +1198,12 @@ void GlobalData::parseGameDataDefinition( INI* ini )
 	// parse the ini weapon definition
 	ini->initFromINI( TheWritableGlobalData, s_GlobalDataFieldParseTable );
 
+	// The constructor initializes the active terrain-light arrays before the
+	// INI data has populated the time-of-day lighting table.  Re-select the
+	// active time of day after parsing so terrain vertex lighting does not
+	// continue using the constructor's zero values.
+	TheWritableGlobalData->setTimeOfDay( TheWritableGlobalData->m_timeOfDay );
+
 
 	// override INI values with user preferences
 	OptionPreferences optionPref;
@@ -1228,7 +1233,7 @@ void GlobalData::parseGameDataDefinition( INI* ini )
 	TheWritableGlobalData->m_gameWindowTransitionSpeedMultiplier = optionPref.getGameWindowTransitionSpeedMultiplier();
 
 	TheWritableGlobalData->m_antiAliasLevel = optionPref.getAntiAliasing();
-	TheWritableGlobalData->m_textureFilteringMode = optionPref.getTextureFilterMode();
+	TheWritableGlobalData->m_textureFilteringMode = static_cast<unsigned>(optionPref.getTextureFilterMode());
 	TheWritableGlobalData->m_textureAnisotropyLevel = optionPref.getTextureAnisotropyLevel();
 
 	Int val=optionPref.getGammaValue();
@@ -1336,7 +1341,7 @@ UnsignedInt GlobalData::generateExeCRC()
 	return exeCRC.get();
 }
 
-AsciiString GlobalData::BuildUserDataPathFromRegistry()
+AsciiString GlobalData::BuildUserDataPath()
 {
 #if defined(_MSC_VER) && (_MSC_VER < 1300)
 	// VC6 lacks FOLDERID_Documents and KF_FLAG_DEFAULT
@@ -1378,15 +1383,7 @@ AsciiString GlobalData::BuildUserDataPathFromRegistry()
 		if (!myDocumentsDirectory.endsWith("\\"))
 			myDocumentsDirectory.concat('\\');
 
-		AsciiString leafName;
-		if (!GetStringFromRegistry("", "UserDataLeafName", leafName))
-		{
-			// Use something, anything
-			// [MH] had to remove this, otherwise mapcache build step won't run... DEBUG_CRASH( ( "Could not find registry key UserDataLeafName; defaulting to \"Command and Conquer Generals Zero Hour Data\" " ) );
-			leafName = "Command and Conquer Generals Zero Hour Data";
-		}
-
-		myDocumentsDirectory.concat(leafName);
+		myDocumentsDirectory.concat("Command and Conquer Generals Zero Hour Data");
 		if (!myDocumentsDirectory.endsWith("\\"))
 			myDocumentsDirectory.concat('\\');
 	}

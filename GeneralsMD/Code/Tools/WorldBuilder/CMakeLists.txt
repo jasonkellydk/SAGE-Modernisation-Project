@@ -198,8 +198,15 @@ set(WORLDBUILDER_SRC
 )
 
 add_executable(z_worldbuilder WIN32)
+set_property(TARGET z_worldbuilder PROPERTY CXX_SCAN_FOR_MODULES ON)
+add_dependencies(z_worldbuilder generals_graphics_shaders)
+add_custom_command(TARGET z_worldbuilder POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_BINARY_DIR}/engine/graphics/shaders/$<CONFIG>"
+        "$<TARGET_FILE_DIR:z_worldbuilder>/GraphicsShaders")
 
-target_sources(z_worldbuilder PRIVATE ${WORLDBUILDER_SRC})
+target_sources(z_worldbuilder PRIVATE ${WORLDBUILDER_SRC}
+    src/ViewportLabels.cpp include/ViewportLabels.h)
 
 target_include_directories(z_worldbuilder PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -208,7 +215,7 @@ target_include_directories(z_worldbuilder PRIVATE
 )
 
 target_precompile_headers(z_worldbuilder PRIVATE
-    [["Utility/CppMacros.h"]] # Must be first, to be removed when abandoning VC6
+    [["Utility/CppMacros.h"]] # Legacy source compatibility macros
     [["WWLib/always.h"]]
     [["Common/STLTypedefs.h"]]
     [["StdAfx.h"]]
@@ -216,13 +223,14 @@ target_precompile_headers(z_worldbuilder PRIVATE
 )
 
 target_link_libraries(z_worldbuilder PRIVATE
+    generals_graphics
+    generals_ui_wnd
+    SDL3::SDL3
     core_debug
-    core_profile
     d3d9lib
     imm32
     vfw32
     winmm
-    core_browserdispatch
     z_gameengine
     z_gameenginedevice
     zi_always

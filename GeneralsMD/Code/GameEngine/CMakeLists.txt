@@ -94,8 +94,8 @@ set(GAMEENGINE_SRC
 #    Include/Common/RandomValue.h
     Include/Common/Recorder.h
 #    Include/Common/ReplaySimulation.h
-    Include/Common/Registry.h
     Include/Common/ResourceGatheringManager.h
+    Include/Common/RuntimeConfig.h
     Include/Common/Science.h
     Include/Common/ScopedMutex.h
     Include/Common/ScoreKeeper.h
@@ -220,11 +220,9 @@ set(GAMEENGINE_SRC
 #    Include/GameClient/Statistics.h
 #    Include/GameClient/TerrainRoads.h
 #    Include/GameClient/TerrainVisual.h
-#    Include/GameClient/VideoPlayer.h
 #    Include/GameClient/View.h
 #    Include/GameClient/Water.h
 #    Include/GameClient/WindowLayout.h
-#    Include/GameClient/WindowVideoManager.h
 #    Include/GameClient/WindowXlat.h
 #    Include/GameClient/WinInstanceData.h
     Include/GameLogic/AI.h
@@ -545,8 +543,6 @@ set(GAMEENGINE_SRC
 #    Include/GameNetwork/Transport.h
 #    Include/GameNetwork/udp.h
 #    Include/GameNetwork/User.h
-#    Include/GameNetwork/WOLBrowser/FEBDispatch.h
-#    Include/GameNetwork/WOLBrowser/WebBrowser.h
 #    Include/Precompiled/PreRTS.h
 #    Source/Common/Audio/AudioEventRTS.cpp
 #    Source/Common/Audio/AudioRequest.cpp
@@ -593,10 +589,8 @@ set(GAMEENGINE_SRC
 #    Source/Common/INI/INITerrainBridge.cpp
 #    Source/Common/INI/INITerrainRoad.cpp
 #    Source/Common/INI/INIUpgrade.cpp
-#    Source/Common/INI/INIVideo.cpp
 #    Source/Common/INI/INIWater.cpp
 #    Source/Common/INI/INIWeapon.cpp
-#    Source/Common/INI/INIWebpageURL.cpp
 #    Source/Common/Language.cpp
 #    Source/Common/MessageStream.cpp
 #    Source/Common/MiniLog.cpp
@@ -652,7 +646,6 @@ set(GAMEENGINE_SRC
     Source/Common/System/QuotedPrintable.cpp
 #    Source/Common/System/Radar.cpp
 #    Source/Common/System/RAMFile.cpp
-    Source/Common/System/registry.cpp
     Source/Common/System/SaveGame/GameState.cpp
     Source/Common/System/SaveGame/GameStateMap.cpp
 #    Source/Common/System/Snapshot.cpp
@@ -787,9 +780,9 @@ set(GAMEENGINE_SRC
 #    Source/GameClient/GUI/Shell/Shell.cpp
 #    Source/GameClient/GUI/Shell/ShellMenuScheme.cpp
 #    Source/GameClient/GUI/WindowLayout.cpp
-#    Source/GameClient/GUI/WindowVideoManager.cpp
 #    Source/GameClient/GUI/WinInstanceData.cpp
     Source/GameClient/InGameUI.cpp
+    Source/GameClient/VideoRuntime.cpp
 #    Source/GameClient/Input/Keyboard.cpp
 #    Source/GameClient/Input/Mouse.cpp
 #    Source/GameClient/LanguageFilter.cpp
@@ -819,8 +812,6 @@ set(GAMEENGINE_SRC
 #    Source/GameClient/System/Smudge.cpp
 #    Source/GameClient/Terrain/TerrainRoads.cpp
 #    Source/GameClient/Terrain/TerrainVisual.cpp
-#    Source/GameClient/VideoPlayer.cpp
-#    Source/GameClient/VideoStream.cpp
 #    Source/GameClient/View.cpp
 #    Source/GameClient/Water.cpp
     Source/GameLogic/AI/AI.cpp
@@ -1128,7 +1119,6 @@ set(GAMEENGINE_SRC
 #    Source/GameNetwork/Transport.cpp
 #    Source/GameNetwork/udp.cpp
 #    Source/GameNetwork/User.cpp
-#    Source/GameNetwork/WOLBrowser/WebBrowser.cpp
 #    Source/Precompiled/PreRTS.cpp
 )
 
@@ -1150,9 +1140,16 @@ endif()
 
 
 add_library(z_gameengine STATIC)
+set_property(TARGET z_gameengine PROPERTY CXX_SCAN_FOR_MODULES ON)
+
+add_dependencies(z_gameengine generals_graphics)
+add_dependencies(z_gameengine generals_video)
+add_dependencies(z_gameengine generals_ui_wnd)
+set_property(TARGET z_gameengine PROPERTY ENGINE_NAVIGATION_EXTRACTED TRUE)
 
 target_sources(z_gameengine PRIVATE
     ${GAMEENGINE_SRC}
+    Source/Common/RuntimeModule.cpp
     ../../../Core/GameEngineDevice/Source/SDL3Device/Common/SDL3GameEngine.cpp
     ../../../Generals/Code/Main/Platform/SDLPlatformWindow.cpp
 )
@@ -1171,6 +1168,7 @@ target_include_directories(z_gameengine PRIVATE
 target_link_libraries(z_gameengine PRIVATE
     corei_gameengine_private
     zi_always
+    shell32
     SDL3::SDL3
 )
 
@@ -1179,11 +1177,26 @@ if(TARGET engine_ecs)
 endif()
 
 target_link_libraries(z_gameengine PUBLIC
+    engine_navigation
     corei_gameengine_public
     z_wwvegas
+    generals_graphics
+    generals_video
+    generals_ui_wnd
 )
 
 target_precompile_headers(z_gameengine PRIVATE
-    [["Utility/CppMacros.h"]] # Must be first, to be removed when abandoning VC6
+    [["Utility/CppMacros.h"]] # Legacy source compatibility macros
 #    Include/Precompiled/PreRTS.h
 )
+
+# Clang's PCH import does not preserve the Windows SDK's pragma-once state
+# for the UCRT headers included by legacy game headers. The game sources
+# already include PreRTS explicitly, so compile them without a PCH on Clang.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    set_target_properties(z_gameengine PROPERTIES DISABLE_PRECOMPILE_HEADERS ON)
+    target_compile_options(z_gameengine PRIVATE
+        "-include${CMAKE_SOURCE_DIR}/Dependencies/Utility/Utility/CppMacros.h")
+endif()
+
+engine_navigation_attach_generalsmd(z_gameengine)

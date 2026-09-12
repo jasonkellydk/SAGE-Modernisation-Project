@@ -100,7 +100,6 @@ set(GAMEENGINE_SRC
     Include/Common/RAMFile.h
     Include/Common/RandomValue.h
 #    Include/Common/Recorder.h
-#    Include/Common/Registry.h
     Include/Common/ReplaySimulation.h
 #    Include/Common/ResourceGatheringManager.h
 #    Include/Common/Science.h
@@ -555,8 +554,6 @@ set(GAMEENGINE_SRC
     Include/GameNetwork/Transport.h
     Include/GameNetwork/udp.h
     Include/GameNetwork/User.h
-    Include/GameNetwork/WOLBrowser/FEBDispatch.h
-    Include/GameNetwork/WOLBrowser/WebBrowser.h
     Include/Precompiled/PreRTS.h
     Source/Common/AddonCompat.cpp
     Source/Common/Audio/AudioEventRTS.cpp
@@ -611,7 +608,6 @@ set(GAMEENGINE_SRC
     Source/Common/INI/INIVideo.cpp
     Source/Common/INI/INIWater.cpp
     Source/Common/INI/INIWeapon.cpp
-    Source/Common/INI/INIWebpageURL.cpp
     Source/Common/Language.cpp
     Source/Common/MessageStream.cpp
     Source/Common/MiniLog.cpp
@@ -669,7 +665,6 @@ set(GAMEENGINE_SRC
 #    Source/Common/System/QuotedPrintable.cpp
     Source/Common/System/Radar.cpp
     Source/Common/System/RAMFile.cpp
-#    Source/Common/System/registry.cpp
 #    Source/Common/System/SaveGame/GameState.cpp
 #    Source/Common/System/SaveGame/GameStateMap.cpp
     Source/Common/System/Snapshot.cpp
@@ -838,7 +833,6 @@ set(GAMEENGINE_SRC
     Source/GameClient/Terrain/TerrainRoads.cpp
     Source/GameClient/Terrain/TerrainVisual.cpp
     Source/GameClient/VideoPlayer.cpp
-    Source/GameClient/VideoStream.cpp
     Source/GameClient/View.cpp
     Source/GameClient/Water.cpp
 #    Source/GameLogic/AI/AI.cpp
@@ -846,7 +840,8 @@ set(GAMEENGINE_SRC
 #    Source/GameLogic/AI/AIGroup.cpp
 #    Source/GameLogic/AI/AIGuard.cpp
 #    Source/GameLogic/AI/AIGuardRetaliate.cpp
-    Source/GameLogic/AI/AIPathfind.cpp
+    # GeneralsMD supplies its extracted implementation with the same compile context.
+    "$<$<NOT:$<BOOL:$<TARGET_PROPERTY:ENGINE_NAVIGATION_EXTRACTED>>>:${CMAKE_CURRENT_SOURCE_DIR}/Source/GameLogic/AI/AIPathfind.cpp>"
 #    Source/GameLogic/AI/AIPlayer.cpp
 #    Source/GameLogic/AI/AISkirmishPlayer.cpp
 #    Source/GameLogic/AI/AIStates.cpp
@@ -1147,7 +1142,6 @@ set(GAMEENGINE_SRC
     Source/GameNetwork/Transport.cpp
     Source/GameNetwork/udp.cpp
     Source/GameNetwork/User.cpp
-    Source/GameNetwork/WOLBrowser/WebBrowser.cpp
     Source/Precompiled/PreRTS.cpp
 )
 
@@ -1198,14 +1192,7 @@ target_include_directories(corei_gameengine_public INTERFACE
 
 target_link_libraries(corei_gameengine_public INTERFACE
     core_compression
-    core_browserdispatch
     #core_wwvegas
     d3d9lib
     gamespy::gamespy
-    stlport
 )
-
-# ReactOS ATL for MinGW-w64 only (MSVC uses native ATL)
-if(MINGW)
-    target_link_libraries(corei_gameengine_public INTERFACE reactos_atl)
-endif()

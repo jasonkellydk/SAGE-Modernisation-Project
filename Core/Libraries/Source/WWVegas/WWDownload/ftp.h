@@ -23,7 +23,7 @@
 //#include "../resource.h"       // main symbols
 
 #include <cstddef>
-#include <winsock.h>
+#include <winsock2.h>
 #include <Utility/stdio_adapter.h>
 
 #include "ftpdefs.h"
@@ -103,7 +103,7 @@ public:
 
 	HRESULT FindFile( LPCSTR szRemoteFileName, int * piSize );
 
-	HRESULT FileRecoveryPosition( LPCSTR szLocalFileName, LPCSTR szRegistryRoot );
+	HRESULT FileRecoveryPosition( LPCSTR szLocalFileName, LPCSTR unusedDownloadMetadata );
 	HRESULT RestartFrom( int i ) { m_iFilePos = i; return FTP_SUCCEEDED;  };
 
 	HRESULT GetNextFileBlock( LPCSTR szLocalFileName, int * piTotalRead );

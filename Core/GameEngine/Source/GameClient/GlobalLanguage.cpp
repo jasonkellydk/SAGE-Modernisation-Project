@@ -54,7 +54,7 @@
 
 #include "Common/AddonCompat.h"
 #include "Common/INI.h"
-#include "Common/Registry.h"
+#include "Common/RuntimeConfig.h"
 #include "Common/FileSystem.h"
 #include "Common/OptionPreferences.h"
 
@@ -150,7 +150,7 @@ void GlobalLanguage::init()
 {
 	{
 		AsciiString fname;
-		fname.format("Data\\%s\\Language", GetRegistryLanguage().str());
+		fname.format("Data\\%s\\Language", GetGameLanguage().str());
 
 		INI ini;
 		ini.loadFileDirectory( fname, INI_LOAD_OVERWRITE, nullptr );
@@ -236,6 +236,7 @@ Real GlobalLanguage::getResolutionFontSizeScale(ResolutionFontSizeMethod method,
 		const Real hScale = TheDisplay->getHeight() / (Real)DEFAULT_DISPLAY_HEIGHT;
 		adjustFactor = min(wScale, hScale);
 		adjustFactor = 1.0f + (adjustFactor - 1.0f) * scaler;
+		adjustFactor = min(adjustFactor, min(wScale, hScale));
 		break;
 	}
 	case ResolutionFontSizeMethod_Balanced:
@@ -269,7 +270,7 @@ Real GlobalLanguage::getResolutionFontSizeScale(ResolutionFontSizeMethod method,
 	}
 	}
 
-	if (adjustFactor < 1.0f)
+	if (adjustFactor < 1.0f && method != ResolutionFontSizeMethod_Strict)
 		adjustFactor = 1.0f;
 
 	return adjustFactor;
@@ -281,7 +282,7 @@ Int GlobalLanguage::adjustFontSize(Int theFontSize)
 	// Therefore cache the adjustFactor on resolution change to not recompute it on every call.
 	const Real resolutionScaler = getResolutionFontSizeAdjustment();
 	const Real adjustFactor = getResolutionFontSizeScale(m_resolutionFontSizeMethod, resolutionScaler);
-	const Int pointSize = REAL_TO_INT_FLOOR(theFontSize * adjustFactor);
+	const Int pointSize = max(1, static_cast<Int>(REAL_TO_INT_FLOOR(theFontSize * adjustFactor)));
 
 	return pointSize;
 }
