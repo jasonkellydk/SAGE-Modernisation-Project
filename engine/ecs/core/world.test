@@ -121,6 +121,8 @@ namespace ecs
 
 struct WorldTestAccess
 {
+	static void BeginExecution(World &world) { world.BeginScheduledExecution(); }
+	static void EndExecution(World &world) { world.EndScheduledExecution(); }
 	static void SetGeneration(World &world, const Entity entity, const EntityGeneration generation)
 	{
 		BOOST_REQUIRE(entity.index < world.m_records.size());
@@ -132,6 +134,17 @@ struct WorldTestAccess
 } // namespace ecs
 
 BOOST_AUTO_TEST_SUITE(ecs_world)
+
+BOOST_AUTO_TEST_CASE(execution_state_is_observable_without_mutating_world_structure)
+{
+	ecs::World world;
+	BOOST_TEST(!world.IsScheduledExecutionActive());
+	ecs::WorldTestAccess::BeginExecution(world);
+	BOOST_TEST(world.IsScheduledExecutionActive());
+	BOOST_TEST(world.EntityCount() == 0u);
+	ecs::WorldTestAccess::EndExecution(world);
+	BOOST_TEST(!world.IsScheduledExecutionActive());
+}
 
 BOOST_AUTO_TEST_CASE(component_entity_creation_requires_explicit_finalization)
 {

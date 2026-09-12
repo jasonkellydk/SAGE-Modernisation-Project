@@ -9,9 +9,19 @@
 #include <string>
 #include <string_view>
 #include <stdexcept>
+#include <span>
+#include <thread>
 #include <vector>
 
 import engine.ecs.scheduler.scheduler;
+
+namespace
+{
+constexpr engine::time::SimulationTime TestTime(std::uint64_t tick)
+{
+	return {tick, engine::time::FixedStep{60}};
+}
+}
 
 namespace ecs_scheduler_test
 {
@@ -337,10 +347,34 @@ struct LaterAfterFailureSystem
 	}
 };
 
+struct TimeIntegrationSystem
+{
+	using Query = ecs::Query<ecs::Write<Position>, ecs::Read<Velocity>>;
+	void Execute(Query::Chunk chunk, ecs::SystemContext &context) const
+	{
+		const double delta = context.Time().Delta().count();
+		auto positions = chunk.Get<Position>();
+		const auto velocities = chunk.Get<Velocity>();
+		for (std::size_t index = 0; index < positions.size(); ++index)
+			positions[index].value += static_cast<int>(velocities[index].value * delta);
+		const auto created = context.Commands().Create();
+		context.Commands().Add<Marker>(created, Marker{static_cast<int>(context.Tick())});
+	}
+};
+
 } // namespace ecs_scheduler_test
 
 namespace ecs
 {
+
+template<>
+struct SystemTraits<ecs_scheduler_test::TimeIntegrationSystem>
+{
+	static constexpr std::string_view StableName = "tests.scheduler.time_integration";
+	static constexpr SystemPhase Phase = SystemPhase::Simulation;
+	using Before = SystemTypeList<>;
+	using After = SystemTypeList<>;
+};
 
 template<>
 struct ComponentTraits<ecs_scheduler_test::Position>
@@ -607,13 +641,13 @@ BOOST_AUTO_TEST_CASE(systems_are_explicitly_finalized_before_scheduler_use)
 	ecs::SystemRegistry systems;
 	systems.Register(pre);
 	ecs::Scheduler scheduler(world, systems);
-	BOOST_CHECK_THROW(scheduler.Finalize(), std::logic_error);
+	BOOST_CHECK_THROW(scheduler.Finalize(engine::time::FixedStep{60}), std::logic_error);
 	BOOST_TEST(!scheduler.IsFinalized());
-	BOOST_CHECK_THROW(scheduler.Execute(1), std::logic_error);
+	BOOST_CHECK_THROW(scheduler.Execute(TestTime(1)), std::logic_error);
 
 	systems.Finalize(world.Components());
 	BOOST_TEST(systems.IsFrozen());
-	scheduler.Finalize();
+	scheduler.Finalize(engine::time::FixedStep{60});
 	BOOST_TEST(scheduler.IsFinalized());
 }
 
@@ -630,7 +664,7 @@ BOOST_AUTO_TEST_CASE(scheduler_rejects_a_different_component_schema)
 	ecs::World differentWorld;
 	RegisterSimulationComponents(differentWorld);
 	ecs::Scheduler scheduler(differentWorld, systems);
-	BOOST_CHECK_THROW(scheduler.Finalize(), std::logic_error);
+	BOOST_CHECK_THROW(scheduler.Finalize(engine::time::FixedStep{60}), std::logic_error);
 	BOOST_TEST(!scheduler.IsFinalized());
 }
 
@@ -645,7 +679,7 @@ BOOST_AUTO_TEST_CASE(read_read_and_unrelated_accesses_share_a_wave)
 	systems.Register(simulation);
 	systems.Finalize(world.Components());
 	ecs::Scheduler scheduler(world, systems);
-	scheduler.Finalize();
+	scheduler.Finalize(engine::time::FixedStep{60});
 
 	const auto &waves = scheduler.Plan().Phases()[1].waves;
 	BOOST_TEST(waves.size() == 1);
@@ -672,7 +706,7 @@ BOOST_AUTO_TEST_CASE(phases_and_explicit_transitive_ordering_are_deterministic)
 	firstSystems.Register(firstSimulation);
 	firstSystems.Finalize(firstWorld.Components());
 	ecs::Scheduler firstScheduler(firstWorld, firstSystems, engine::jobs::JobSystemConfig{1});
-		firstScheduler.Finalize();
+		firstScheduler.Finalize(engine::time::FixedStep{60});
 
 	ecs::World secondWorld;
 	RegisterSimulationComponents(secondWorld);
@@ -692,7 +726,7 @@ BOOST_AUTO_TEST_CASE(phases_and_explicit_transitive_ordering_are_deterministic)
 	secondSystems.Register(secondPost);
 	secondSystems.Finalize(secondWorld.Components());
 	ecs::Scheduler secondScheduler(secondWorld, secondSystems, engine::jobs::JobSystemConfig{1});
-		secondScheduler.Finalize();
+		secondScheduler.Finalize(engine::time::FixedStep{60});
 
 	BOOST_TEST(firstScheduler.Graph().NodeCount() == secondScheduler.Graph().NodeCount());
 	for (ecs::SystemId id = 0; id < firstScheduler.Graph().NodeCount(); ++id)
@@ -710,8 +744,8 @@ BOOST_AUTO_TEST_CASE(phases_and_explicit_transitive_ordering_are_deterministic)
 	const ecs::Entity secondEntity = secondWorld.Create<ecs_scheduler_test::Position>();
 	BOOST_TEST(firstWorld.IsAlive(firstEntity));
 	BOOST_TEST(secondWorld.IsAlive(secondEntity));
-	firstScheduler.Execute(9);
-	secondScheduler.Execute(9);
+	firstScheduler.Execute(TestTime(9));
+	secondScheduler.Execute(TestTime(9));
 	BOOST_TEST(firstPhaseLog == secondPhaseLog);
 	BOOST_TEST(firstPhaseLog.size() == 6);
 	BOOST_TEST(firstPhaseLog[0] == 9);
@@ -733,9 +767,9 @@ BOOST_AUTO_TEST_CASE(ambiguous_conflicting_systems_are_rejected)
 	systems.Register(first);
 	systems.Finalize(world.Components());
 	ecs::Scheduler scheduler(world, systems);
-	BOOST_CHECK_THROW(scheduler.Finalize(), std::logic_error);
+	BOOST_CHECK_THROW(scheduler.Finalize(engine::time::FixedStep{60}), std::logic_error);
 	BOOST_TEST(!scheduler.IsFinalized());
-	BOOST_CHECK_THROW(scheduler.Execute(0), std::logic_error);
+	BOOST_CHECK_THROW(scheduler.Execute(TestTime(0)), std::logic_error);
 }
 
 BOOST_AUTO_TEST_CASE(dependency_cycles_have_diagnostics_and_do_not_finalize)
@@ -751,7 +785,7 @@ BOOST_AUTO_TEST_CASE(dependency_cycles_have_diagnostics_and_do_not_finalize)
 	ecs::Scheduler scheduler(world, systems);
 	try
 	{
-		scheduler.Finalize();
+		scheduler.Finalize(engine::time::FixedStep{60});
 		BOOST_FAIL("Expected scheduler cycle validation to fail");
 	}
 	catch (const std::logic_error &error)
@@ -777,8 +811,8 @@ BOOST_AUTO_TEST_CASE(system_queries_execute_over_matching_chunks)
 	systems.Register(system);
 	systems.Finalize(world.Components());
 	ecs::Scheduler scheduler(world, systems, engine::jobs::JobSystemConfig{1});
-	scheduler.Finalize();
-	scheduler.Execute(17);
+	scheduler.Finalize(engine::time::FixedStep{60});
+	scheduler.Execute(TestTime(17));
 	BOOST_TEST(system.visited == 32);
 }
 
@@ -795,13 +829,13 @@ BOOST_AUTO_TEST_CASE(system_commands_commit_at_the_wave_barrier)
 	systems.Register(add);
 	systems.Finalize(world.Components());
 	ecs::Scheduler scheduler(world, systems, engine::jobs::JobSystemConfig{1});
-	scheduler.Finalize();
+	scheduler.Finalize(engine::time::FixedStep{60});
 
-	scheduler.Execute(1);
+	scheduler.Execute(TestTime(1));
 	BOOST_TEST(observe.observed == 1);
 	BOOST_TEST(world.Has<ecs_scheduler_test::Marker>(entity));
 
-	scheduler.Execute(2);
+	scheduler.Execute(TestTime(2));
 	BOOST_TEST(observe.observed == 2);
 }
 
@@ -819,8 +853,8 @@ BOOST_AUTO_TEST_CASE(system_command_buffers_use_deterministic_order_metadata)
 	systems.Register(add);
 	systems.Finalize(world.Components());
 	ecs::Scheduler scheduler(world, systems);
-	scheduler.Finalize();
-	scheduler.Execute(1);
+	scheduler.Finalize(engine::time::FixedStep{60});
+	scheduler.Execute(TestTime(1));
 
 	BOOST_TEST(!world.Has<ecs_scheduler_test::Marker>(entity));
 }
@@ -838,9 +872,9 @@ BOOST_AUTO_TEST_CASE(systems_in_one_wave_do_not_observe_each_others_structural_c
 	systems.Register(add);
 	systems.Finalize(world.Components());
 	ecs::Scheduler scheduler(world, systems, engine::jobs::JobSystemConfig{2});
-	scheduler.Finalize();
+	scheduler.Finalize(engine::time::FixedStep{60});
 
-	scheduler.Execute(1);
+	scheduler.Execute(TestTime(1));
 	BOOST_TEST(observe.observed.load() == 0);
 	BOOST_TEST(world.Has<ecs_scheduler_test::Marker>(entity));
 }
@@ -860,9 +894,9 @@ BOOST_AUTO_TEST_CASE(compatible_systems_execute_concurrently)
 	systems.Register(first);
 	systems.Finalize(world.Components());
 	ecs::Scheduler scheduler(world, systems, engine::jobs::JobSystemConfig{2});
-	scheduler.Finalize();
+	scheduler.Finalize(engine::time::FixedStep{60});
 
-	scheduler.Execute(1);
+	scheduler.Execute(TestTime(1));
 	BOOST_TEST(first.chunks.load() == 1);
 	BOOST_TEST(second.chunks.load() == 1);
 	BOOST_TEST(scheduler.Plan().Phases()[1].waves.size() == 1);
@@ -881,8 +915,8 @@ BOOST_AUTO_TEST_CASE(one_system_is_split_into_parallel_chunk_jobs)
 	systems.Register(system);
 	systems.Finalize(world.Components());
 	ecs::Scheduler scheduler(world, systems, engine::jobs::JobSystemConfig{4});
-	scheduler.Finalize();
-	scheduler.Execute(1);
+	scheduler.Finalize(engine::time::FixedStep{60});
+	scheduler.Execute(TestTime(1));
 
 	BOOST_TEST(system.chunkCount.load() > 1);
 	BOOST_TEST(system.entityCount.load() == entityCount);
@@ -913,8 +947,8 @@ DeterministicSnapshot RunDeterministicWorkload(const std::size_t workerCount)
 	systems.Register(system);
 	systems.Finalize(world.Components());
 	ecs::Scheduler scheduler(world, systems, engine::jobs::JobSystemConfig{workerCount});
-	scheduler.Finalize();
-	scheduler.Execute(42);
+	scheduler.Finalize(engine::time::FixedStep{60});
+	scheduler.Execute(TestTime(42));
 
 	DeterministicSnapshot snapshot;
 	snapshot.positions.reserve(initial.size());
@@ -923,7 +957,7 @@ DeterministicSnapshot RunDeterministicWorkload(const std::size_t workerCount)
 
 	ecs::Query<ecs::Read<ecs_scheduler_test::Marker>> markerQuery(world);
 	markerQuery.ForEachChunk([&](auto chunk) {
-		const auto values = chunk.Get<ecs_scheduler_test::Marker>();
+		const auto values = chunk.template Get<ecs_scheduler_test::Marker>();
 		const auto entities = chunk.Entities();
 		for (std::size_t index = 0; index < values.size(); ++index)
 			snapshot.markers.emplace_back(entities[index], values[index].value);
@@ -953,6 +987,79 @@ BOOST_AUTO_TEST_CASE(worker_count_does_not_change_simulation_state_or_deferred_e
 	}
 }
 
+BOOST_AUTO_TEST_CASE(explicit_delta_reaches_all_chunk_jobs_independently_of_workers_and_render_reads)
+{
+	auto run = [](std::size_t workers, int renderReads) {
+		ecs::World world{ecs::WorldConfig{256}};
+		RegisterSimulationComponents(world);
+		std::vector<ecs::Entity> entities;
+		for (int index = 0; index < 2048; ++index)
+		{
+			const auto entity = world.Create<ecs_scheduler_test::Position, ecs_scheduler_test::Velocity>();
+			world.Get<ecs_scheduler_test::Position>(entity)->value = index;
+			world.Get<ecs_scheduler_test::Velocity>(entity)->value = 120;
+			entities.push_back(entity);
+		}
+		ecs_scheduler_test::TimeIntegrationSystem system;
+		ecs::SystemRegistry systems;
+		systems.Register(system);
+		systems.Finalize(world.Components());
+		ecs::Scheduler scheduler(world, systems, engine::jobs::JobSystemConfig{workers});
+		scheduler.Finalize(engine::time::FixedStep{60});
+		for (std::uint64_t tick = 0; tick < 7; ++tick)
+		{
+			const auto time = TestTime(tick);
+			for (int render = 0; render < renderReads; ++render)
+				BOOST_TEST(time.Tick() == tick);
+			scheduler.Execute(time);
+		}
+		DeterministicSnapshot result;
+		for (std::size_t index = 0; index < entities.size(); ++index)
+		{
+			const int value = world.Get<ecs_scheduler_test::Position>(entities[index])->value;
+			BOOST_TEST(value == static_cast<int>(index) + 14);
+			result.positions.push_back(value);
+		}
+		ecs::Query<ecs::Read<ecs_scheduler_test::Marker>> query(world);
+		query.ForEachChunk([&](auto chunk) {
+			const auto markers = chunk.template Get<ecs_scheduler_test::Marker>();
+			for (std::size_t index = 0; index < markers.size(); ++index)
+				result.markers.emplace_back(chunk.Entities()[index], markers[index].value);
+		});
+		BOOST_TEST(result.markers.size() > 7u);
+		return result;
+	};
+	const auto one = run(1, 0);
+	const auto two = run(2, 3);
+	const auto four = run(4, 11);
+	BOOST_CHECK(one.positions == two.positions);
+	BOOST_CHECK(one.positions == four.positions);
+	BOOST_CHECK(one.markers == two.markers);
+	BOOST_CHECK(one.markers == four.markers);
+}
+
+BOOST_AUTO_TEST_CASE(step_rate_is_bound_at_finalization_and_mismatches_do_not_execute)
+{
+	ecs::World world;
+	RegisterSimulationComponents(world);
+	const auto entity = world.Create<ecs_scheduler_test::Position, ecs_scheduler_test::Velocity>();
+	world.Get<ecs_scheduler_test::Velocity>(entity)->value = 120;
+	ecs_scheduler_test::TimeIntegrationSystem system;
+	ecs::SystemRegistry systems;
+	systems.Register(system);
+	systems.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, systems, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	BOOST_CHECK_NO_THROW(scheduler.Finalize(engine::time::FixedStep{30}));
+	BOOST_CHECK_THROW(scheduler.Finalize(engine::time::FixedStep{60}), std::logic_error);
+	BOOST_CHECK_THROW(scheduler.Execute(TestTime(1)), std::invalid_argument);
+	BOOST_TEST(!scheduler.IsFailed());
+	BOOST_TEST(world.EntityCount() == 1u);
+	BOOST_TEST(world.Get<ecs_scheduler_test::Position>(entity)->value == 0);
+	scheduler.Execute(engine::time::SimulationTime{1, engine::time::FixedStep{30}});
+	BOOST_TEST(world.Get<ecs_scheduler_test::Position>(entity)->value == 4);
+}
+
 BOOST_AUTO_TEST_CASE(scheduler_waits_for_every_wave_job_before_committing)
 {
 	ecs::World world{ecs::WorldConfig{128}};
@@ -968,8 +1075,8 @@ BOOST_AUTO_TEST_CASE(scheduler_waits_for_every_wave_job_before_committing)
 	systems.Register(producer);
 	systems.Finalize(world.Components());
 	ecs::Scheduler scheduler(world, systems, engine::jobs::JobSystemConfig{4});
-	scheduler.Finalize();
-	scheduler.Execute(1);
+	scheduler.Finalize(engine::time::FixedStep{60});
+	scheduler.Execute(TestTime(1));
 
 	ecs::Query<ecs::Read<ecs_scheduler_test::Marker>> query(world);
 	std::size_t committed = 0;
@@ -988,9 +1095,9 @@ BOOST_AUTO_TEST_CASE(scheduled_execution_rejects_direct_structural_world_mutatio
 	systems.Register(system);
 	systems.Finalize(world.Components());
 	ecs::Scheduler scheduler(world, systems, engine::jobs::JobSystemConfig{2});
-	scheduler.Finalize();
+	scheduler.Finalize(engine::time::FixedStep{60});
 
-	scheduler.Execute(1);
+	scheduler.Execute(TestTime(1));
 	BOOST_TEST(system.rejected.load() == 1);
 	BOOST_TEST(system.commitRejected.load() == 1);
 	BOOST_TEST(world.EntityCount() == 1);
@@ -1008,12 +1115,326 @@ BOOST_AUTO_TEST_CASE(job_failure_stops_later_waves_and_fails_scheduler)
 	systems.Register(throwing);
 	systems.Finalize(world.Components());
 	ecs::Scheduler scheduler(world, systems, engine::jobs::JobSystemConfig{2});
-	scheduler.Finalize();
+	scheduler.Finalize(engine::time::FixedStep{60});
 
-	BOOST_CHECK_THROW(scheduler.Execute(1), std::runtime_error);
+	BOOST_CHECK_THROW(scheduler.Execute(TestTime(1)), std::runtime_error);
 	BOOST_TEST(scheduler.IsFailed());
 	BOOST_TEST(later.executed.load() == 0);
-	BOOST_CHECK_THROW(scheduler.Execute(2), std::logic_error);
+	BOOST_CHECK_THROW(scheduler.Execute(TestTime(2)), std::logic_error);
 }
 
+BOOST_AUTO_TEST_SUITE_END()
+
+namespace ecs_batch_test
+{
+struct Seed
+{
+    using Query = ecs::Query<ecs::Write<ecs_scheduler_test::Marker>>;
+    engine::jobs::JobSystem &jobs;
+    std::thread::id caller;
+    unsigned calls{};
+    bool guarded{}, onCaller{}, fail{};
+    void Execute(ecs::SystemContext &context)
+    {
+        ++calls;
+        onCaller = caller == std::this_thread::get_id();
+        try { context.GetWorld().Create(); }
+        catch (const std::logic_error &) { guarded = true; }
+        unsigned result{};
+        engine::jobs::Job work{[](void *value) { ++*static_cast<unsigned *>(value); }, &result};
+        jobs.Execute(std::span<engine::jobs::Job>(&work, 1));
+        if (result != 1) throw std::logic_error("Joined batch work did not complete");
+        const auto entity = context.Commands().Create();
+        context.Commands().Add<ecs_scheduler_test::Marker>(entity, ecs_scheduler_test::Marker{42});
+        if (fail) throw std::runtime_error("batch failure");
+    }
+};
+struct Observe
+{
+    using Query = ecs::Query<ecs::Read<ecs_scheduler_test::Marker>>;
+    std::atomic<unsigned> count{};
+    void Execute(Query::Chunk chunk, ecs::SystemContext &)
+    { count.fetch_add(static_cast<unsigned>(chunk.Count())); }
+};
+struct DeferredMarker
+{
+    using Query = ecs::Query<ecs::Read<ecs_scheduler_test::Position>>;
+    void Execute(Query::Chunk chunk, ecs::SystemContext &context)
+    {
+        for (const auto entity : chunk.Entities())
+            context.Commands().Add<ecs_scheduler_test::Marker>(entity, ecs_scheduler_test::Marker{7});
+    }
+};
+struct IndependentBatch
+{
+    using Query = ecs::Query<ecs::Read<ecs_scheduler_test::Velocity>>;
+    unsigned calls{};
+    void Execute(ecs::SystemContext &) { ++calls; }
+};
+}
+namespace ecs
+{
+template<> struct SystemTraits<ecs_batch_test::Seed>
+{
+    static constexpr std::string_view StableName = "tests.batch.seed";
+    static constexpr SystemPhase Phase = SystemPhase::PreSimulation;
+    static constexpr bool Batch = true;
+    using Before = SystemTypeList<>;
+    using After = SystemTypeList<>;
+};
+template<> struct SystemTraits<ecs_batch_test::Observe>
+{
+    static constexpr std::string_view StableName = "tests.batch.observe";
+    static constexpr SystemPhase Phase = SystemPhase::PostSimulation;
+    using Before = SystemTypeList<>;
+    using After = SystemTypeList<>;
+};
+template<> struct SystemTraits<ecs_batch_test::DeferredMarker>
+{
+    static constexpr std::string_view StableName = "tests.batch.deferred_marker";
+    static constexpr SystemPhase Phase = SystemPhase::Simulation;
+    using Before = SystemTypeList<>; using After = SystemTypeList<>;
+};
+template<> struct SystemTraits<ecs_batch_test::IndependentBatch>
+{
+    static constexpr std::string_view StableName = "tests.batch.independent";
+    static constexpr SystemPhase Phase = SystemPhase::Simulation;
+    static constexpr bool Batch = true;
+    using Before = SystemTypeList<>; using After = SystemTypeList<>;
+};
+}
+
+BOOST_AUTO_TEST_SUITE(ecs_composed_batch)
+BOOST_AUTO_TEST_CASE(independent_batch_does_not_split_ready_wave_structural_visibility)
+{
+    for (const std::size_t workers : {1u, 2u, 4u})
+    {
+        ecs::World world; world.RegisterComponent<ecs_scheduler_test::Position>();
+        world.RegisterComponent<ecs_scheduler_test::Marker>(); world.RegisterComponent<ecs_scheduler_test::Velocity>();
+        world.FinalizeComponents(); world.Create<ecs_scheduler_test::Position>();
+        ecs_batch_test::DeferredMarker producer;
+        ecs_batch_test::IndependentBatch batch;
+        ecs_batch_test::Observe observer;
+        ecs::SystemRegistry systems;
+        systems.Register(producer); systems.Register(batch); systems.Register(observer, ecs::SystemPhase::Simulation);
+        systems.Finalize(world.Components());
+        ecs::Scheduler scheduler(world, systems, engine::jobs::JobSystemConfig{workers});
+        scheduler.Finalize(engine::time::FixedStep{60});
+        const auto &waves = scheduler.Plan().Phases()[1].waves;
+        BOOST_REQUIRE(waves.size() == 1u); BOOST_TEST(waves.front().size() == 3u);
+        scheduler.Execute(TestTime(0));
+        BOOST_TEST(batch.calls == 1u); BOOST_TEST(observer.count.load() == 0u);
+        scheduler.Execute(TestTime(1));
+        BOOST_TEST(batch.calls == 2u); BOOST_TEST(observer.count.load() == 1u);
+    }
+}
+BOOST_AUTO_TEST_CASE(batch_runs_without_entities_on_caller_and_commits_before_dependent_chunks)
+{
+    for (const std::size_t workers : {1u, 2u, 4u})
+    {
+        ecs::World world;
+        world.RegisterComponent<ecs_scheduler_test::Marker>(); world.FinalizeComponents();
+        engine::jobs::JobSystem jobs({workers});
+        ecs_batch_test::Seed seed{jobs, std::this_thread::get_id()};
+        ecs_batch_test::Observe observer;
+        ecs::SystemRegistry systems;
+        systems.OrderBefore<ecs_batch_test::Seed, ecs_batch_test::Observe>();
+        if (workers == 2)
+        { systems.Register(observer, ecs::SystemPhase::Simulation); systems.Register(seed, ecs::SystemPhase::Simulation); }
+        else
+        { systems.Register(seed, ecs::SystemPhase::Simulation); systems.Register(observer, ecs::SystemPhase::Simulation); }
+        systems.Finalize(world.Components());
+        ecs::Scheduler scheduler(world, systems, jobs); scheduler.Finalize(engine::time::FixedStep{60});
+        const auto &waves = scheduler.Plan().Phases()[1].waves;
+        BOOST_REQUIRE_EQUAL(waves.size(), 2u);
+        BOOST_TEST(waves.front().size() == 1u);
+        scheduler.Execute(TestTime(0));
+        BOOST_TEST(seed.calls == 1u); BOOST_TEST(seed.guarded); BOOST_TEST(seed.onCaller);
+        BOOST_TEST(observer.count.load() == 1u);
+        scheduler.Execute(TestTime(1));
+        BOOST_TEST(seed.calls == 2u); BOOST_TEST(observer.count.load() == 3u);
+    }
+}
+BOOST_AUTO_TEST_CASE(batch_failure_skips_commit_and_later_nodes)
+{
+    ecs::World world; world.RegisterComponent<ecs_scheduler_test::Marker>(); world.FinalizeComponents();
+    engine::jobs::JobSystem jobs({2}); ecs_batch_test::Seed seed{jobs, std::this_thread::get_id()}; seed.fail = true;
+    ecs_batch_test::Observe observer; ecs::SystemRegistry systems;
+    systems.Register(seed); systems.Register(observer);
+    systems.OrderBefore<ecs_batch_test::Seed, ecs_batch_test::Observe>(); systems.Finalize(world.Components());
+    ecs::Scheduler scheduler(world, systems, jobs); scheduler.Finalize(engine::time::FixedStep{60});
+    BOOST_CHECK_THROW(scheduler.Execute(TestTime(0)), std::runtime_error);
+    BOOST_TEST(scheduler.IsFailed()); BOOST_TEST(world.EntityCount() == 0u); BOOST_TEST(observer.count.load() == 0u);
+    BOOST_TEST(!world.IsScheduledExecutionActive());
+    BOOST_CHECK_THROW(scheduler.Execute(TestTime(1)), std::logic_error);
+}
+BOOST_AUTO_TEST_CASE(batch_does_not_hide_ambiguous_component_conflicts)
+{
+    ecs::World world; world.RegisterComponent<ecs_scheduler_test::Marker>(); world.FinalizeComponents();
+    engine::jobs::JobSystem jobs({1}); ecs_batch_test::Seed seed{jobs, std::this_thread::get_id()};
+    ecs_batch_test::Observe observer; ecs::SystemRegistry systems;
+    systems.Register(seed, ecs::SystemPhase::Simulation); systems.Register(observer, ecs::SystemPhase::Simulation);
+    systems.Finalize(world.Components()); ecs::Scheduler scheduler(world, systems, jobs);
+    BOOST_CHECK_THROW(scheduler.Finalize(engine::time::FixedStep{60}), std::logic_error);
+    BOOST_TEST(!scheduler.IsFinalized());
+}
+BOOST_AUTO_TEST_CASE(composition_ordering_is_startup_only_and_validates_missing_nodes_and_cycles)
+{
+    ecs::World world; world.RegisterComponent<ecs_scheduler_test::Marker>(); world.FinalizeComponents();
+    engine::jobs::JobSystem jobs({1}); ecs_batch_test::Seed seed{jobs, std::this_thread::get_id()};
+    ecs_batch_test::Observe observer;
+    for (bool cycle : {false, true})
+    {
+        ecs::SystemRegistry systems;
+        systems.Register(seed, ecs::SystemPhase::Simulation);
+        systems.OrderBefore<ecs_batch_test::Seed, ecs_batch_test::Observe>();
+        if (cycle)
+        {
+            systems.Register(observer, ecs::SystemPhase::Simulation);
+            systems.OrderBefore<ecs_batch_test::Observe, ecs_batch_test::Seed>();
+        }
+        systems.Finalize(world.Components());
+        BOOST_CHECK_THROW((systems.OrderBefore<ecs_batch_test::Seed, ecs_batch_test::Observe>()), std::logic_error);
+        ecs::Scheduler scheduler(world, systems, jobs);
+        BOOST_CHECK_THROW(scheduler.Finalize(engine::time::FixedStep{60}), std::logic_error);
+        BOOST_TEST(!scheduler.IsFinalized());
+    }
+}
+BOOST_AUTO_TEST_SUITE_END()
+#include <algorithm>
+
+namespace ecs_lifecycle_test
+{
+struct Cohesive
+{
+    using Query = ecs::Query<ecs::Write<ecs_scheduler_test::Position>>;
+    using AuxiliaryAccess = ecs::Query<ecs::Read<ecs_scheduler_test::Position>, ecs::Write<ecs_scheduler_test::Velocity>>;
+    ecs::Entity totalEntity;
+    unsigned beforeCalls{}, afterCalls{};
+    unsigned failure{}; // 1=before, 2=chunk, 3=after
+    std::vector<unsigned> visits;
+    void Record(ecs::SystemContext &context, int value)
+    {
+        auto entity = context.Commands().Create();
+        context.Commands().Add<ecs_scheduler_test::Marker>(entity, ecs_scheduler_test::Marker{value});
+    }
+    void BeforeChunks(Query &query, ecs::SystemContext &context)
+    {
+        ++beforeCalls;
+        visits.assign(query.PrepareChunks(), 0);
+        if (!context.GetWorld().IsScheduledExecutionActive()) throw std::logic_error("unguarded before hook");
+        if (context.JobOrder() != 0) throw std::logic_error("invalid before order");
+        Record(context, -1);
+        if (failure == 1) throw std::runtime_error("before failure");
+    }
+    void Execute(Query::Chunk chunk, ecs::SystemContext &context)
+    {
+        if (beforeCalls != 1 || context.JobOrder() != context.ChunkOrder() + 1)
+            throw std::logic_error("invalid chunk lifecycle");
+        visits.at(context.ChunkOrder()) += static_cast<unsigned>(chunk.Count());
+        for (auto &position : chunk.Get<ecs_scheduler_test::Position>()) ++position.value;
+        Record(context, static_cast<int>(context.ChunkOrder()));
+        if (failure == 2) throw std::runtime_error("chunk failure");
+    }
+    void AfterChunks(Query &, ecs::SystemContext &context)
+    {
+        ++afterCalls;
+        if (!context.GetWorld().IsScheduledExecutionActive()) throw std::logic_error("unguarded after hook");
+        unsigned sum = 0;
+        for (unsigned count : visits) sum += count;
+        context.GetWorld().Get<ecs_scheduler_test::Velocity>(totalEntity)->value = static_cast<int>(sum);
+        if (context.JobOrder() != visits.size() + 1) throw std::logic_error("invalid after order");
+        Record(context, -2);
+        if (failure == 3) throw std::runtime_error("after failure");
+    }
+};
+struct Observe
+{
+    using Query = ecs::Query<ecs::Read<ecs_scheduler_test::Marker>>;
+    std::atomic<unsigned> count{};
+    void Execute(Query::Chunk chunk, ecs::SystemContext &) { count.fetch_add(static_cast<unsigned>(chunk.Count())); }
+};
+}
+namespace ecs
+{
+template<> struct SystemTraits<ecs_lifecycle_test::Cohesive>
+{
+    static constexpr std::string_view StableName = "tests.lifecycle.cohesive";
+    static constexpr SystemPhase Phase = SystemPhase::Simulation;
+    using Before = SystemTypeList<>; using After = SystemTypeList<>;
+};
+template<> struct SystemTraits<ecs_lifecycle_test::Observe>
+{
+    static constexpr std::string_view StableName = "tests.lifecycle.observe";
+    static constexpr SystemPhase Phase = SystemPhase::Simulation;
+    using Before = SystemTypeList<>; using After = SystemTypeList<>;
+};
+}
+BOOST_AUTO_TEST_SUITE(ecs_cohesive_lifecycle)
+BOOST_AUTO_TEST_CASE(one_node_runs_hooks_once_and_commits_in_canonical_order_across_worker_counts)
+{
+    for (const unsigned entities : {0u, 5000u})
+    {
+        std::vector<std::uint64_t> expected;
+        for (const unsigned workers : {1u, 2u, 4u})
+        {
+            ecs::World world;
+            world.RegisterComponent<ecs_scheduler_test::Position>(); world.RegisterComponent<ecs_scheduler_test::Velocity>();
+            world.RegisterComponent<ecs_scheduler_test::Marker>(); world.FinalizeComponents();
+            const auto total = world.Create<ecs_scheduler_test::Velocity>();
+            for (unsigned i=0; i!=entities; ++i) world.Create<ecs_scheduler_test::Position>();
+            ecs_lifecycle_test::Cohesive system{total}; ecs_lifecycle_test::Observe observer;
+            ecs::SystemRegistry registry; registry.Register(system); registry.Register(observer);
+            registry.OrderBefore<ecs_lifecycle_test::Cohesive, ecs_lifecycle_test::Observe>();
+            registry.Finalize(world.Components());
+            const auto &access = registry.Get(registry.TryGet<ecs_lifecycle_test::Cohesive>()).Access();
+            BOOST_TEST(access.WriteComponents().size() == 2u);
+            BOOST_TEST(access.ReadComponents().empty());
+            ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{workers});
+            scheduler.Finalize(engine::time::FixedStep{60});
+            BOOST_TEST(scheduler.Plan().Phases()[1].waves.front().size() == 1u);
+            scheduler.Execute(TestTime(0));
+            BOOST_TEST(system.beforeCalls == 1u); BOOST_TEST(system.afterCalls == 1u);
+            BOOST_TEST(world.Get<ecs_scheduler_test::Velocity>(total)->value == static_cast<int>(entities));
+            BOOST_TEST(observer.count.load() == system.visits.size() + 2);
+            if (entities) BOOST_TEST(system.visits.size() > 1u);
+            std::vector<std::uint64_t> result;
+            ecs::Query<ecs::Read<ecs_scheduler_test::Marker>> markers(world);
+            markers.ForEachChunk([&](auto chunk) {
+                const auto values = chunk.template Get<ecs_scheduler_test::Marker>();
+                for (std::size_t row=0; row!=chunk.Count(); ++row) {
+                    result.push_back(chunk.Entities()[row].index);
+                    result.push_back(chunk.Entities()[row].generation);
+                    result.push_back(static_cast<std::uint64_t>(values[row].value));
+                }
+            });
+            BOOST_REQUIRE(result.size() >= 6u);
+            BOOST_TEST(result[2] == static_cast<std::uint64_t>(-1));
+            BOOST_TEST(result.back() == static_cast<std::uint64_t>(-2));
+            if (workers==1) expected=result; else BOOST_CHECK(result==expected);
+        }
+    }
+}
+BOOST_AUTO_TEST_CASE(hook_and_chunk_failures_discard_the_wave_and_prevent_reexecution)
+{
+    for (const unsigned failure : {1u,2u,3u})
+    {
+        ecs::World world;
+        world.RegisterComponent<ecs_scheduler_test::Position>(); world.RegisterComponent<ecs_scheduler_test::Velocity>();
+        world.RegisterComponent<ecs_scheduler_test::Marker>(); world.FinalizeComponents();
+        const auto total = world.Create<ecs_scheduler_test::Velocity>(); world.Create<ecs_scheduler_test::Position>();
+        ecs_lifecycle_test::Cohesive system{total}; system.failure=failure;
+        ecs_lifecycle_test::Observe observer; ecs::SystemRegistry registry;
+        registry.Register(system); registry.Register(observer);
+        registry.OrderBefore<ecs_lifecycle_test::Cohesive,ecs_lifecycle_test::Observe>();
+        registry.Finalize(world.Components());
+        ecs::Scheduler scheduler(world,registry,engine::jobs::JobSystemConfig{4});
+        scheduler.Finalize(engine::time::FixedStep{60});
+        BOOST_CHECK_THROW(scheduler.Execute(TestTime(0)), std::runtime_error);
+        BOOST_TEST(scheduler.IsFailed()); BOOST_TEST(!world.IsScheduledExecutionActive());
+        BOOST_TEST(world.EntityCount()==2u); BOOST_TEST(observer.count.load()==0u);
+        BOOST_TEST(system.afterCalls==(failure==3 ? 1u : 0u));
+        BOOST_CHECK_THROW(scheduler.Execute(TestTime(1)), std::logic_error);
+    }
+}
 BOOST_AUTO_TEST_SUITE_END()

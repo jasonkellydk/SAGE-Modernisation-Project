@@ -20,7 +20,9 @@ export import engine.ecs.storage.signature;
 export namespace ecs
 {
 
-class World;
+// This cross-module friend has ordinary C++ ownership. Its definition remains
+// exported by core.world; a forward declaration must not attach it here.
+extern "C++" { class World; }
 
 class Archetype
 {

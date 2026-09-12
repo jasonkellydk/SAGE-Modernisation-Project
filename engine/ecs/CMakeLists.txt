@@ -39,6 +39,12 @@ endif()
 
 add_library(engine_ecs STATIC)
 
+if(NOT TARGET engine_time)
+	set(ENGINE_TIME_BUILD_TESTS ${ENGINE_ECS_BUILD_TESTS})
+	add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../time" "${CMAKE_CURRENT_BINARY_DIR}/../engine_time")
+endif()
+target_link_libraries(engine_ecs PUBLIC engine_time)
+
 target_sources(engine_ecs PUBLIC
 	FILE_SET cxx_modules
 	TYPE CXX_MODULES
@@ -49,7 +55,7 @@ target_include_directories(engine_ecs PUBLIC
 	"${CMAKE_CURRENT_SOURCE_DIR}/../.."
 )
 
-target_compile_features(engine_ecs PUBLIC cxx_std_20)
+target_compile_features(engine_ecs PUBLIC cxx_std_23)
 set_property(TARGET engine_ecs PROPERTY CXX_SCAN_FOR_MODULES ON)
 
 # core_config carries the repository-wide warning, runtime, and configuration policy.
@@ -76,7 +82,7 @@ if(ENGINE_ECS_BUILD_TESTS)
 		${ENGINE_ECS_TESTS}
 	)
 	set_property(TARGET engine_ecs_tests PROPERTY CXX_SCAN_FOR_MODULES ON)
-	target_compile_features(engine_ecs_tests PRIVATE cxx_std_20)
+	target_compile_features(engine_ecs_tests PRIVATE cxx_std_23)
 	target_compile_definitions(engine_ecs_tests PRIVATE BOOST_TEST_INCLUDED)
 	target_link_libraries(engine_ecs_tests PRIVATE
 		engine_ecs

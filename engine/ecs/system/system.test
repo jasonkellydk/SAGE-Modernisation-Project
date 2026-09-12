@@ -80,6 +80,13 @@ struct LateSystem
 	void Execute(Query::Chunk, ecs::SystemContext &) {}
 };
 
+struct CohesiveAccessSystem
+{
+	using Query = ecs::Query<ecs::Read<Position>, ecs::OptionalWrite<Velocity>>;
+	using AuxiliaryAccess = ecs::Query<ecs::Write<Position>, ecs::Read<Velocity>>;
+	void Execute(Query::Chunk, ecs::SystemContext &) {}
+};
+
 #define ECS_HIGH_COMPONENTS(X) \
 	X(Extra00, "tests.system.zz.extra.00") \
 	X(Extra01, "tests.system.zz.extra.01") \
@@ -204,6 +211,7 @@ ECS_SYSTEM_TRAITS(WritePositionSystem, "tests.system.write_position");
 ECS_SYSTEM_TRAITS(ReadVelocitySystem, "tests.system.read_velocity");
 ECS_SYSTEM_TRAITS(WriteVelocitySystem, "tests.system.write_velocity");
 ECS_SYSTEM_TRAITS(LateSystem, "tests.system.late");
+ECS_SYSTEM_TRAITS(CohesiveAccessSystem, "tests.system.cohesive_access");
 
 #undef ECS_SYSTEM_TRAITS
 
@@ -310,6 +318,19 @@ struct SystemTraits<ecs_system_test::HighWriteComponentSystem>
 
 BOOST_AUTO_TEST_SUITE(ecs_system)
 
+BOOST_AUTO_TEST_CASE(context_carries_explicit_immutable_time_input)
+{
+	ecs::World world;
+	ecs::CommandBuffer commands;
+	const engine::time::SimulationTime input{91, engine::time::FixedStep{30}};
+	ecs::SystemContext context(world, commands, input, 4, ecs::SystemPhase::Simulation, 7, 7);
+	BOOST_TEST(context.Tick() == 91u);
+	BOOST_TEST(context.Time().Step().TicksPerSecond() == 30u);
+	BOOST_TEST(context.Time().Delta().count() == 1.0 / 30.0);
+	BOOST_TEST(context.JobOrder() == 7u);
+	BOOST_CHECK(&context.Commands() == &commands);
+}
+
 BOOST_AUTO_TEST_CASE(system_ids_are_independent_of_registration_order)
 {
 	ecs::World world;
@@ -409,6 +430,37 @@ BOOST_AUTO_TEST_CASE(access_masks_express_read_write_conflicts)
 	BOOST_TEST(write.WriteComponents().size() == 1);
 }
 
+BOOST_AUTO_TEST_CASE(auxiliary_and_optional_writes_participate_in_canonical_conflicts)
+{
+	ecs::World world;
+	world.RegisterComponent<ecs_system_test::Position>();
+	world.RegisterComponent<ecs_system_test::Velocity>();
+	world.FinalizeComponents();
+	ecs_system_test::CohesiveAccessSystem cohesive;
+	ecs_system_test::ReadPositionSystem positionReader;
+	ecs_system_test::ReadVelocitySystem velocityReader;
+	ecs::SystemRegistry registry;
+	registry.Register(cohesive);
+	registry.Register(positionReader);
+	registry.Register(velocityReader);
+	registry.Finalize(world.Components());
+	const auto &access = registry.Get(registry.TryGet<ecs_system_test::CohesiveAccessSystem>()).Access();
+	BOOST_TEST(access.ReadComponents().empty());
+	BOOST_TEST(access.WriteComponents().size() == 2u);
+	BOOST_TEST(access.ReadMask().front() == 0u);
+	BOOST_TEST(access.ConflictsWith(registry.Get(registry.TryGet<ecs_system_test::ReadPositionSystem>()).Access()));
+	BOOST_TEST(access.ConflictsWith(registry.Get(registry.TryGet<ecs_system_test::ReadVelocitySystem>()).Access()));
+	// Auxiliary access protects hook work without narrowing the chunk population.
+	world.Create<ecs_system_test::Position>();
+	ecs_system_test::CohesiveAccessSystem::Query query(world);
+	std::size_t rows = 0;
+	query.ForEachChunk([&](auto chunk) {
+		rows += chunk.Count();
+		BOOST_TEST(chunk.template Get<ecs_system_test::Velocity>().empty());
+	});
+	BOOST_TEST(rows == 1u);
+}
+
 BOOST_AUTO_TEST_CASE(access_masks_scale_beyond_64_components)
 {
 	ecs::World world;
@@ -471,3 +523,18 @@ BOOST_AUTO_TEST_CASE(access_masks_scale_beyond_64_components)
 }
 
 BOOST_AUTO_TEST_SUITE_END()
+
+BOOST_AUTO_TEST_CASE(system_composition_phase_binding_is_explicit_and_immutable)
+{
+    ecs::World world;
+    world.RegisterComponent<ecs_system_test::Position>(); world.FinalizeComponents();
+    ecs_system_test::AlphaSystem system, other;
+    ecs::SystemRegistry registry;
+    registry.Register(system, ecs::SystemPhase::PostSimulation);
+    BOOST_CHECK_NO_THROW(registry.Register(system, ecs::SystemPhase::PostSimulation));
+    BOOST_CHECK_THROW(registry.Register(other, ecs::SystemPhase::PostSimulation), std::logic_error);
+    BOOST_CHECK_THROW(registry.Register(system, ecs::SystemPhase::Simulation), std::logic_error);
+    registry.Finalize(world.Components());
+    BOOST_CHECK(registry.Get(registry.TryGet<ecs_system_test::AlphaSystem>()).phase == ecs::SystemPhase::PostSimulation);
+    BOOST_CHECK_THROW(registry.Register(system, ecs::SystemPhase::PostSimulation), std::logic_error);
+}

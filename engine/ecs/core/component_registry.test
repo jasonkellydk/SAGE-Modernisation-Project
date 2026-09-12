@@ -223,6 +223,28 @@ BOOST_AUTO_TEST_CASE(schema_hash_includes_component_version)
 	BOOST_TEST(versionOne.SchemaHash() != versionTwo.SchemaHash());
 }
 
+BOOST_AUTO_TEST_CASE(canonical_identity_matches_fixed_cross_platform_vectors)
+{
+	// Independent FNV-1a vectors, not a second invocation of the implementation
+	// under test. Schema bytes: ASCII ECS_COMPONENT_SCHEMA, BE u32 format=1,
+	// BE u64 count=3, then sorted (BE u64 key, BE u32 version, u8 persistence).
+	BOOST_TEST(ecs::HashComponentKey("tests.order.a") == 0xae47592d9b9581b5ull);
+	BOOST_TEST(ecs::HashComponentKey("tests.order.b") == 0xae47562d9b957c9cull);
+	BOOST_TEST(ecs::HashComponentKey("tests.order.c") == 0xae47572d9b957e4full);
+	// char signedness must not alter hashing of canonical name bytes.
+	BOOST_TEST(ecs::HashComponentKey(std::string_view{"\x80\xff", 2}) == 0x09e5c907b65d72e0ull);
+
+	ecs::ComponentRegistry registry;
+	registry.Register<component_registry_test::OrderA>();
+	registry.Register<component_registry_test::OrderC>();
+	registry.Register<component_registry_test::OrderB>();
+	registry.Finalize();
+	BOOST_TEST(registry.TryGet<component_registry_test::OrderB>() == 0u);
+	BOOST_TEST(registry.TryGet<component_registry_test::OrderC>() == 1u);
+	BOOST_TEST(registry.TryGet<component_registry_test::OrderA>() == 2u);
+	BOOST_TEST(registry.SchemaHash() == 0x1b57a6da757a82e3ull);
+}
+
 BOOST_AUTO_TEST_CASE(duplicate_stable_keys_are_rejected)
 {
 	ecs::ComponentRegistry registry;

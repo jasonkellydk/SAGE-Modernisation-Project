@@ -23,6 +23,7 @@ export module engine.ecs.system.system;
 
 export import engine.ecs.commands.command_buffer;
 export import engine.ecs.query.query;
+export import engine.time.simulation_time;
 
 export namespace ecs
 {
@@ -130,6 +131,13 @@ private:
 	{
 		std::sort(readComponents.begin(), readComponents.end());
 		std::sort(writeComponents.begin(), writeComponents.end());
+		readComponents.erase(std::unique(readComponents.begin(), readComponents.end()), readComponents.end());
+		writeComponents.erase(std::unique(writeComponents.begin(), writeComponents.end()), writeComponents.end());
+		// Write access includes read access. Keep diagnostics and masks canonical
+		// when a hook's auxiliary declaration overlaps its chunk query.
+		std::erase_if(readComponents, [&](ComponentId id) { return std::binary_search(writeComponents.begin(), writeComponents.end(), id); });
+		for (ComponentId id : writeComponents)
+			readMask[id / 64] &= ~(std::uint64_t{1} << (id % 64));
 	}
 
 	std::vector<ComponentId> readComponents;
@@ -164,20 +172,29 @@ struct SystemInfo
 	ExecuteFunction execute{nullptr};
 	PrepareQueryFunction prepareQuery{nullptr};
 	ExecuteChunkFunction executeChunk{nullptr};
+	// Optional lifecycle of ONE cohesive chunk system, not extra graph nodes.
+	// Uses Query plus AuxiliaryAccess metadata and the same deferred wave commit.
+	ExecuteFunction beforeChunks{nullptr};
+	ExecuteFunction afterChunks{nullptr};
+	// Explicit joined reduction/preparation node, not ordinary chunk iteration.
+	// Runs once exclusively on the caller; shares its wave's final commit.
+	// Query declares its full access.
+	bool batch{false};
 
 	const SystemAccess &Access() const noexcept { return access; }
 	std::span<const SystemDependency> Before() const noexcept { return before; }
 	std::span<const SystemDependency> After() const noexcept { return after; }
 };
 
-class Scheduler;
+extern "C++" { class Scheduler; }
 
 class SystemContext
 {
 public:
 	World &GetWorld() const noexcept { return *m_world; }
 	CommandBuffer &Commands() const noexcept { return *m_commands; }
-	std::uint64_t Tick() const noexcept { return m_tick; }
+	std::uint64_t Tick() const noexcept { return m_time.Tick(); }
+	const engine::time::SimulationTime &Time() const noexcept { return m_time; }
 	SystemId Id() const noexcept { return m_system; }
 	SystemPhase Phase() const noexcept { return m_phase; }
 	std::uint32_t JobOrder() const noexcept { return m_jobOrder; }
@@ -187,14 +204,14 @@ public:
 	// ordering fields for each chunk job.
 	SystemContext(World &world,
 		CommandBuffer &commands,
-		std::uint64_t tick,
+		engine::time::SimulationTime time,
 		SystemId system,
 		SystemPhase phase,
 		std::uint32_t jobOrder = 0,
 		std::uint32_t chunkOrder = 0) noexcept :
 		m_world(&world),
 		m_commands(&commands),
-		m_tick(tick),
+		m_time(time),
 		m_system(system),
 		m_phase(phase),
 		m_jobOrder(jobOrder),
@@ -205,7 +222,7 @@ public:
 private:
 	World *m_world;
 	CommandBuffer *m_commands;
-	std::uint64_t m_tick;
+	engine::time::SimulationTime m_time;
 	SystemId m_system;
 	SystemPhase m_phase;
 	std::uint32_t m_jobOrder;
@@ -228,12 +245,21 @@ concept HasSystemTraits = requires
 };
 
 template<typename T>
-concept SystemDefinition = HasSystemTraits<T> && requires(T &system,
+inline constexpr bool IsBatchSystem = [] {
+	if constexpr (requires { SystemTraits<T>::Batch; })
+		return bool(SystemTraits<T>::Batch);
+	return false;
+}();
+
+template<typename T>
+concept SystemDefinition = HasSystemTraits<T> && ((!IsBatchSystem<T> && requires(T &system,
 	typename T::Query::Chunk chunk,
 	SystemContext &context)
 {
 	system.Execute(chunk, context);
-};
+}) || (IsBatchSystem<T> && requires(T &system, SystemContext &context) {
+	system.Execute(context);
+}));
 
 template<typename T>
 SystemDependency MakeSystemDependency()
@@ -260,7 +286,12 @@ class SystemRegistry
 {
 public:
 	template<typename T>
-	SystemId Register(T &system);
+	SystemId Register(T &system, SystemPhase phase = SystemTraits<T>::Phase);
+
+	// Game composition may order reusable systems without making engine types
+	// depend on game types. Like registration, this is startup-only metadata.
+	template<typename Before, typename After>
+	void OrderBefore();
 
 	template<typename T>
 	SystemId TryGet() const noexcept;
@@ -299,6 +330,7 @@ private:
 	std::unordered_map<std::type_index, SystemInfo *> m_typeToInfo;
 	std::unordered_map<SystemKey, SystemInfo *> m_keyToInfo;
 	std::vector<const SystemInfo *> m_idToInfo;
+	std::vector<std::pair<SystemDependency, SystemDependency>> m_ordering;
 	bool m_frozen{false};
 	ComponentSchemaHash m_componentSchemaHash{UnfinalizedSchemaHash};
 
@@ -306,7 +338,7 @@ private:
 };
 
 template<typename T>
-SystemId SystemRegistry::Register(T &system)
+SystemId SystemRegistry::Register(T &system, const SystemPhase phase)
 {
 	static_assert(std::is_object_v<T>, "ECS systems must be object types");
 	static_assert(detail::SystemDefinition<T>,
@@ -316,7 +348,11 @@ SystemId SystemRegistry::Register(T &system)
 
 	const std::type_index type = std::type_index(typeid(T));
 	if (const auto existing = m_typeToInfo.find(type); existing != m_typeToInfo.end())
+	{
+		if (existing->second->instance != &system || existing->second->phase != phase)
+			throw std::logic_error("ECS system registered with a different instance or phase");
 		return existing->second->id;
+	}
 
 	const std::string_view stableName = SystemTraits<T>::StableName;
 	if (stableName.empty())
@@ -331,7 +367,6 @@ SystemId SystemRegistry::Register(T &system)
 		throw std::logic_error("ECS system stable-key hash collision");
 	}
 
-	const auto phase = SystemTraits<T>::Phase;
 	if (SystemPhaseIndex(phase) >= SystemPhaseCount)
 		throw std::invalid_argument("ECS system phase is invalid");
 
@@ -347,6 +382,21 @@ SystemId SystemRegistry::Register(T &system)
 	info.execute = &ExecuteSystem<T>;
 	info.prepareQuery = &PrepareQuery<T>;
 	info.executeChunk = &ExecuteSystemChunk<T>;
+	info.batch = detail::IsBatchSystem<T>;
+	if constexpr (requires(T &value, typename T::Query &query, SystemContext &context) { value.BeforeChunks(query, context); })
+	{
+		static_assert(!detail::IsBatchSystem<T>, "Batch systems already execute once; chunk lifecycle hooks are unnecessary");
+		info.beforeChunks = [](void *instance, void *query, SystemContext &context) {
+			static_cast<T *>(instance)->BeforeChunks(*static_cast<typename T::Query *>(query), context);
+		};
+	}
+	if constexpr (requires(T &value, typename T::Query &query, SystemContext &context) { value.AfterChunks(query, context); })
+	{
+		static_assert(!detail::IsBatchSystem<T>, "Batch systems already execute once; chunk lifecycle hooks are unnecessary");
+		info.afterChunks = [](void *instance, void *query, SystemContext &context) {
+			static_cast<T *>(instance)->AfterChunks(*static_cast<typename T::Query *>(query), context);
+		};
+	}
 	detail::AppendDependencies(info.before, typename SystemTraits<T>::Before{});
 	detail::AppendDependencies(info.after, typename SystemTraits<T>::After{});
 
@@ -366,6 +416,14 @@ SystemId SystemRegistry::Register(T &system)
 	return InvalidSystemId;
 }
 
+template<typename Before, typename After>
+void SystemRegistry::OrderBefore()
+{
+	if (m_frozen)
+		throw std::logic_error("Cannot add ECS system ordering after finalization");
+	m_ordering.emplace_back(detail::MakeSystemDependency<Before>(), detail::MakeSystemDependency<After>());
+}
+
 template<typename T>
 SystemId SystemRegistry::TryGet() const noexcept
 {
@@ -378,12 +436,18 @@ void SystemRegistry::ResolveAccess(SystemAccess &access, const ComponentRegistry
 	access.Initialize(components.Count());
 	for (const AccessDescriptor descriptor : T::Query::ResolveAccesses(components))
 		access.Add(descriptor);
+	// Additional typed component access for joined reductions/auxiliary queries.
+	// Metadata only: this never changes chunk matching or builds another query.
+	if constexpr (requires { typename T::AuxiliaryAccess; })
+		for (const AccessDescriptor descriptor : T::AuxiliaryAccess::ResolveAccesses(components))
+			access.Add(descriptor);
 	access.SortComponents();
 }
 
 template<typename T>
 void *SystemRegistry::CreateQuery(World &world)
 {
+	if constexpr (detail::IsBatchSystem<T>) return nullptr;
 	using QueryType = typename T::Query;
 	void *memory = ::operator new(sizeof(QueryType), std::align_val_t(alignof(QueryType)));
 	try
@@ -410,18 +474,29 @@ template<typename T>
 void SystemRegistry::ExecuteSystem(void *instance, void *query, SystemContext &context)
 {
 	T &system = *static_cast<T *>(instance);
+	if constexpr (detail::IsBatchSystem<T>)
+		system.Execute(context);
+	else
+	{
 	using QueryType = typename T::Query;
 	QueryType &typedQuery = *static_cast<QueryType *>(query);
+	if constexpr (requires { system.BeforeChunks(typedQuery, context); }) system.BeforeChunks(typedQuery, context);
 	typedQuery.ForEachChunk([&](typename QueryType::Chunk chunk) {
 		system.Execute(chunk, context);
 	});
+	if constexpr (requires { system.AfterChunks(typedQuery, context); }) system.AfterChunks(typedQuery, context);
+	}
 }
 
 template<typename T>
 std::size_t SystemRegistry::PrepareQuery(void *query)
 {
+	if constexpr (detail::IsBatchSystem<T>) return 1;
+	else
+	{
 	using QueryType = typename T::Query;
 	return static_cast<QueryType *>(query)->PrepareChunks();
+	}
 }
 
 template<typename T>
@@ -431,11 +506,16 @@ void SystemRegistry::ExecuteSystemChunk(void *instance,
 	SystemContext &context)
 {
 	T &system = *static_cast<T *>(instance);
+	if constexpr (detail::IsBatchSystem<T>)
+		system.Execute(context);
+	else
+	{
 	using QueryType = typename T::Query;
 	QueryType &typedQuery = *static_cast<QueryType *>(query);
 	typedQuery.ExecutePreparedChunk(chunkIndex, [&](typename QueryType::Chunk chunk) {
 		system.Execute(chunk, context);
 	});
+	}
 }
 
 } // namespace ecs

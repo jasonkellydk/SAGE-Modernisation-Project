@@ -52,6 +52,14 @@ struct Optional
 	static constexpr bool IsExcluded = false;
 };
 
+// Optional columns still declare their full write conflict, but do not require
+// the component when matching an archetype. No per-entity lookup is introduced.
+template<typename T>
+struct OptionalWrite : Write<T>
+{
+	static constexpr bool IsOptional = true;
+};
+
 template<typename T>
 struct Exclude
 {

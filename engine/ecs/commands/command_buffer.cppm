@@ -86,6 +86,8 @@ private:
 	friend class CommandBuffer;
 };
 
+extern "C++"
+{
 class CommandBuffer
 {
 public:
@@ -349,12 +351,15 @@ private:
 
 	friend class World;
 };
+} // extern "C++"
 
 } // namespace ecs
 
 namespace ecs
 {
 
+extern "C++"
+{
 std::size_t CommandBuffer::PayloadArena::AlignUp(const std::size_t value, const std::size_t alignment)
 {
 	if (alignment == 0 || (alignment & (alignment - 1)) != 0)
@@ -773,4 +778,5 @@ void World::Commit(std::span<CommandBuffer *> commandBuffers)
 		buffer->Playback(*this);
 }
 
+} // extern "C++"
 } // namespace ecs

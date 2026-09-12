@@ -5,6 +5,7 @@ module;
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -51,6 +52,8 @@ private:
 	friend class Scheduler;
 };
 
+extern "C++"
+{
 class Scheduler
 {
 public:
@@ -66,14 +69,14 @@ public:
 	Scheduler(const Scheduler &) = delete;
 	Scheduler &operator=(const Scheduler &) = delete;
 
-	void Finalize();
+	void Finalize(engine::time::FixedStep step);
 	bool IsFinalized() const noexcept { return m_finalized; }
 	bool IsFailed() const noexcept { return m_failed; }
 
 	const DependencyGraph &Graph() const noexcept { return m_graph; }
 	const ExecutionPlan &Plan() const noexcept { return m_plan; }
 
-	void Execute(std::uint64_t tick);
+	void Execute(engine::time::SimulationTime time);
 
 private:
 	struct QueryBinding
@@ -89,6 +92,7 @@ private:
 		const SystemInfo *info{nullptr};
 		void *query{nullptr};
 		std::size_t chunkCount{0};
+		std::size_t beforeContext{0}, afterContext{0};
 	};
 
 	struct ChunkExecution
@@ -103,7 +107,7 @@ private:
 	static void ExecuteChunkJob(void *context);
 	void ExecuteWave(const ExecutionPlan::PhasePlan &phase,
 		const std::vector<SystemId> &wave,
-		std::uint64_t tick);
+		engine::time::SimulationTime time);
 	void DestroyQueries() noexcept;
 
 	World *m_world;
@@ -114,9 +118,11 @@ private:
 	ExecutionPlan m_plan;
 	std::vector<QueryBinding> m_queries;
 	bool m_finalized{false};
+	std::optional<engine::time::FixedStep> m_step;
 	bool m_failed{false};
 	bool m_executing{false};
 };
+} // extern "C++"
 
 } // namespace ecs
 
@@ -241,6 +247,8 @@ bool DependencyGraph::HasPath(const SystemId from, const SystemId to) const
 	return false;
 }
 
+extern "C++"
+{
 DependencyGraph Scheduler::BuildGraph(const SystemRegistry &systems)
 {
 	DependencyGraph graph;
@@ -262,6 +270,14 @@ DependencyGraph Scheduler::BuildGraph(const SystemRegistry &systems)
 			graph.AddEdge(info->id, ResolveDependency(systems, *info, dependency));
 		for (const SystemDependency &dependency : info->After())
 			graph.AddEdge(ResolveDependency(systems, *info, dependency), info->id);
+	}
+	for (const auto &[before, after] : systems.m_ordering)
+	{
+		const SystemId source = systems.TryGet(*before.type);
+		if (source == InvalidSystemId)
+			throw std::logic_error("ECS composition ordering references unregistered system '" + std::string(before.stableName) + "'");
+		const SystemInfo &info = systems.Get(source);
+		graph.AddEdge(ResolveDependency(systems, info, before), ResolveDependency(systems, info, after));
 	}
 
 	for (std::vector<SystemId> &edges : graph.m_edges)
@@ -321,6 +337,8 @@ ExecutionPlan Scheduler::BuildPlan(const SystemRegistry &systems, const Dependen
 		if (ready.empty())
 			throw std::logic_error("ECS scheduler cannot build an execution plan because the graph contains a cycle");
 
+		// Execution may join chunk groups around caller-side batch work, but
+		// never introduce extra structural visibility boundaries in a ready set.
 		waves.push_back(ready);
 		for (const SystemId system : ready)
 		{
@@ -389,10 +407,14 @@ void Scheduler::DestroyQueries() noexcept
 	m_queries.clear();
 }
 
-void Scheduler::Finalize()
+void Scheduler::Finalize(const engine::time::FixedStep step)
 {
 	if (m_finalized)
+	{
+		if (*m_step != step)
+			throw std::logic_error("Cannot change a finalized ECS scheduler's simulation step");
 		return;
+	}
 	if (!m_world->ComponentsFinalized())
 		throw std::logic_error("ECS component registry must be finalized before scheduler finalization");
 	if (!m_systems->IsFrozen())
@@ -433,6 +455,7 @@ void Scheduler::Finalize()
 	m_graph = std::move(graph);
 	m_plan = std::move(plan);
 	m_queries = std::move(queries);
+	m_step = step;
 	m_finalized = true;
 }
 
@@ -444,56 +467,73 @@ void Scheduler::ExecuteChunkJob(void *rawContext)
 
 void Scheduler::ExecuteWave(const ExecutionPlan::PhasePlan &phase,
 	const std::vector<SystemId> &wave,
-	const std::uint64_t tick)
+	const engine::time::SimulationTime time)
 {
 	std::vector<PreparedSystem> prepared;
 	prepared.reserve(wave.size());
 
 	std::size_t totalChunks = 0;
+	std::size_t lifecycleContexts = 0;
 	for (const SystemId systemId : wave)
 	{
 		const SystemInfo &info = m_systems->Get(systemId);
 		if (info.prepareQuery == nullptr || info.executeChunk == nullptr)
 			throw std::logic_error("ECS scheduler system is missing chunk execution metadata");
 		const std::size_t chunkCount = info.prepareQuery(m_queries[systemId].query);
-		if (chunkCount > (std::numeric_limits<std::uint32_t>::max)())
+		const bool lifecycle = info.beforeChunks || info.afterChunks;
+		if (chunkCount > (std::numeric_limits<std::uint32_t>::max)() - (lifecycle ? 2u : 0u))
 			throw std::length_error("ECS scheduler logical chunk order exceeds its representation");
 		if (totalChunks > (std::numeric_limits<std::size_t>::max)() - chunkCount)
 			throw std::length_error("ECS scheduler chunk batch is too large");
 		totalChunks += chunkCount;
+		if (lifecycle)
+		{
+			if (lifecycleContexts > (std::numeric_limits<std::size_t>::max)() - 2)
+				throw std::length_error("ECS lifecycle context capacity overflow");
+			lifecycleContexts += 2;
+		}
 		prepared.push_back(PreparedSystem{&info, m_queries[systemId].query, chunkCount});
 	}
 
-	if (totalChunks == 0)
+	if (totalChunks == 0 && lifecycleContexts == 0)
 		return;
+	if (lifecycleContexts > (std::numeric_limits<std::size_t>::max)() - totalChunks)
+		throw std::length_error("ECS lifecycle context capacity overflow");
 
 	std::vector<CommandBuffer> commands;
 	std::vector<SystemContext> contexts;
 	std::vector<ChunkExecution> executions;
 	std::vector<engine::jobs::Job> jobs;
 	std::vector<CommandBuffer *> commandPointers;
-	commands.reserve(totalChunks);
-	contexts.reserve(totalChunks);
+	commands.reserve(totalChunks + lifecycleContexts);
+	contexts.reserve(totalChunks + lifecycleContexts);
 	executions.reserve(totalChunks);
 	jobs.reserve(totalChunks);
-	commandPointers.reserve(totalChunks);
+	commandPointers.reserve(totalChunks + lifecycleContexts);
 
-	for (const PreparedSystem &system : prepared)
+	for (PreparedSystem &system : prepared)
 	{
+		const bool lifecycle = system.info->beforeChunks || system.info->afterChunks;
+		if (lifecycle)
+		{
+			system.beforeContext = contexts.size();
+			commands.emplace_back(CommandBufferOrder{static_cast<std::uint32_t>(SystemPhaseIndex(phase.phase)),system.info->id,0,0});
+			contexts.emplace_back(*m_world,commands.back(),time,system.info->id,phase.phase,0,0);
+		}
 		for (std::size_t chunkIndex = 0; chunkIndex < system.chunkCount; ++chunkIndex)
 		{
 			const std::uint32_t logicalOrder = static_cast<std::uint32_t>(chunkIndex);
 			commands.emplace_back(CommandBufferOrder{
 				static_cast<std::uint32_t>(SystemPhaseIndex(phase.phase)),
 				system.info->id,
-				logicalOrder,
+				logicalOrder + (lifecycle ? 1u : 0u),
 				logicalOrder});
 			contexts.emplace_back(*m_world,
 				commands.back(),
-				tick,
+				time,
 				system.info->id,
 				phase.phase,
-				logicalOrder,
+				logicalOrder + (lifecycle ? 1u : 0u),
 				logicalOrder);
 			executions.push_back(ChunkExecution{
 				system.info->executeChunk,
@@ -503,13 +543,45 @@ void Scheduler::ExecuteWave(const ExecutionPlan::PhasePlan &phase,
 				&contexts.back()});
 			jobs.push_back(engine::jobs::Job{&ExecuteChunkJob, &executions.back()});
 		}
+		if (lifecycle)
+		{
+			system.afterContext = contexts.size();
+			const auto order = static_cast<std::uint32_t>(system.chunkCount + 1);
+			commands.emplace_back(CommandBufferOrder{static_cast<std::uint32_t>(SystemPhaseIndex(phase.phase)),system.info->id,order,order});
+			contexts.emplace_back(*m_world,commands.back(),time,system.info->id,phase.phase,order,order);
+		}
 	}
 
 	m_world->BeginScheduledExecution();
 	bool scheduledExecutionActive = true;
 	try
 	{
-		m_jobSystem->Execute(std::span<engine::jobs::Job>(jobs));
+		// Caller-side hooks run once, including empty queries. No structural
+		// visibility changes here: every buffer commits only after the whole wave.
+		for (const PreparedSystem &system : prepared)
+			if (system.info->beforeChunks)
+				system.info->beforeChunks(system.info->instance,system.query,contexts[system.beforeContext]);
+		std::size_t firstJob = 0, nextJob = 0;
+		for (const PreparedSystem &system : prepared)
+		{
+			if (system.info->batch)
+			{
+				// Join outstanding compatible chunk work, then allow a typed
+				// batch node to borrow the pool on the caller. All commands stay
+				// deferred until the ENTIRE original wave has succeeded.
+				if (nextJob != firstJob)
+					m_jobSystem->Execute(std::span<engine::jobs::Job>(jobs).subspan(firstJob, nextJob - firstJob));
+				ExecuteChunkJob(&executions[nextJob]);
+				++nextJob;
+				firstJob = nextJob;
+			}
+			else nextJob += system.chunkCount;
+		}
+		if (nextJob != firstJob)
+			m_jobSystem->Execute(std::span<engine::jobs::Job>(jobs).subspan(firstJob, nextJob - firstJob));
+		for (const PreparedSystem &system : prepared)
+			if (system.info->afterChunks)
+				system.info->afterChunks(system.info->instance,system.query,contexts[system.afterContext]);
 		m_world->EndScheduledExecution();
 		scheduledExecutionActive = false;
 	}
@@ -532,7 +604,7 @@ void Scheduler::ExecuteWave(const ExecutionPlan::PhasePlan &phase,
 		m_world->Commit(std::span<CommandBuffer *>(commandPointers));
 }
 
-void Scheduler::Execute(const std::uint64_t tick)
+void Scheduler::Execute(const engine::time::SimulationTime time)
 {
 	if (!m_finalized)
 		throw std::logic_error("ECS scheduler must be finalized before execution");
@@ -540,6 +612,8 @@ void Scheduler::Execute(const std::uint64_t tick)
 		throw std::logic_error("ECS scheduler cannot execute after a failed simulation tick");
 	if (m_executing)
 		throw std::logic_error("ECS scheduler execution is not reentrant");
+	if (time.Step() != *m_step)
+		throw std::invalid_argument("ECS execution time does not match the finalized simulation step");
 
 	m_executing = true;
 	try
@@ -551,7 +625,7 @@ void Scheduler::Execute(const std::uint64_t tick)
 				// Every wave has its own job-local command buffers. This is the
 				// structural visibility boundary: later waves see this commit,
 				// while jobs in this wave cannot see one another's commands.
-				ExecuteWave(phase, wave, tick);
+				ExecuteWave(phase, wave, time);
 			}
 		}
 		m_executing = false;
@@ -564,4 +638,5 @@ void Scheduler::Execute(const std::uint64_t tick)
 	}
 }
 
+} // extern "C++"
 } // namespace ecs

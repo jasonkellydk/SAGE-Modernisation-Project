@@ -94,6 +94,11 @@ struct QueryView<Optional<T>>
 };
 
 template<typename T>
+struct QueryView<OptionalWrite<T>> : QueryView<Write<T>>
+{
+};
+
+template<typename T>
 struct QueryView<Exclude<T>>
 {
 	using Type = std::span<const typename Exclude<T>::ComponentType>;

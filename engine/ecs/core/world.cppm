@@ -18,14 +18,23 @@ export import engine.ecs.storage.archetype;
 export namespace ecs
 {
 
+extern "C++"
+{
 class CommandBuffer;
 class Scheduler;
+struct WorldTestAccess;
+}
 
 struct WorldConfig
 {
 	std::size_t chunkTargetBytes{ChunkLayout::DefaultTargetBytes};
 };
 
+// World and its cross-module collaborators use ordinary C++ linkage so that
+// forward declarations and World::Commit definitions share one entity across
+// named module boundaries. The public interface is still imported from here.
+extern "C++"
+{
 class World
 {
 public:
@@ -76,6 +85,10 @@ public:
 	{
 		return m_components.IsFrozen();
 	}
+
+	// Diagnostic/preflight query. The simulation owner still serializes scheduler
+	// launch and external lifecycle operations; this is not an exclusion lock.
+	bool IsScheduledExecutionActive() const noexcept { return m_scheduledExecutionActive; }
 
 	void Commit(CommandBuffer &commands);
 	void Commit(std::span<CommandBuffer *> commandBuffers);
@@ -217,12 +230,15 @@ private:
 	bool m_scheduledExecutionActive{false};
 	bool m_commandPlaybackActive{false};
 };
+} // extern "C++"
 
 } // namespace ecs
 
 namespace ecs
 {
 
+extern "C++"
+{
 World::World(WorldConfig config) :
 	m_config(config)
 {
@@ -493,4 +509,5 @@ void World::MoveEntity(Entity entity,
 	record.location = EntityLocation{&target, destination.chunk, destination.row};
 }
 
+} // extern "C++"
 } // namespace ecs
