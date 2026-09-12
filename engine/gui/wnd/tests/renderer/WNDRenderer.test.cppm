@@ -19,8 +19,7 @@ module;
 
 export module Engine.UI.WND.Tests;
 
-import Engine.UI.WND;
-import Engine.UI.WND.Layout;
+import Engine.UI.WND.Runtime;
 
 #if defined(ENGINE_UI_WND_VISUAL_REGRESSION)
 import Graphics.Testing.VisualRegression;

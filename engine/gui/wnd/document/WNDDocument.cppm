@@ -2,6 +2,7 @@ module;
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
@@ -11,6 +12,7 @@ module;
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -20,11 +22,10 @@ export module Engine.UI.WND.Document;
 import Assets.Runtime;
 import Assets.Cache;
 import Engine.UI.WND;
+import Engine.UI.WND.Controls;
 
 namespace Engine::UI::WND
 {
-
-export constexpr std::size_t WND_Draw_Cell_Count = 9;
 
 export enum class WindowType : std::uint8_t
 {
@@ -65,23 +66,15 @@ public:
 			return false;
 
 		const std::string key = Key(definition.name);
-		for (ImageDefinition &existing : m_definitions) {
-			if (Key(existing.name) == key) {
-				existing = std::move(definition);
-				return true;
-			}
-		}
-		m_definitions.push_back(std::move(definition));
+		m_definitions.insert_or_assign(key, std::move(definition));
 		return true;
 	}
 
 	const ImageDefinition *Find(std::string_view name) const noexcept
 	{
 		const std::string key = Key(name);
-		for (const ImageDefinition &definition : m_definitions)
-			if (Key(definition.name) == key)
-				return &definition;
-		return nullptr;
+		const auto found = m_definitions.find(key);
+		return found == m_definitions.end() ? nullptr : &found->second;
 	}
 
 	ImageRef Resolve(std::string_view name) const
@@ -107,22 +100,7 @@ private:
 		return result;
 	}
 
-	std::vector<ImageDefinition> m_definitions;
-};
-
-export struct WNDDrawCell final
-{
-	std::string image_name;
-	ImageRef image{};
-	std::uint32_t image_width = 0;
-	std::uint32_t image_height = 0;
-	Graphics::Color2D color{1.0f, 1.0f, 1.0f, 0.0f};
-	Graphics::Color2D border_color{1.0f, 1.0f, 1.0f, 0.0f};
-};
-
-export struct WNDDrawState final
-{
-	std::array<WNDDrawCell, WND_Draw_Cell_Count> cells{};
+	std::unordered_map<std::string, ImageDefinition> m_definitions;
 };
 
 namespace WNDDocumentDetail
@@ -209,6 +187,20 @@ bool Read_Color(std::string_view statement, std::string_view marker, Graphics::C
 	return true;
 }
 
+bool Read_Non_Negative(std::string_view value, std::uint32_t &result) noexcept
+{
+	const std::string trimmed = Trim(value);
+	if (trimmed.empty())
+		return false;
+	std::uint32_t parsed = 0;
+	const auto [end, error] = std::from_chars(
+		trimmed.data(), trimmed.data() + trimmed.size(), parsed);
+	if (error != std::errc{} || end != trimmed.data() + trimmed.size())
+		return false;
+	result = parsed;
+	return true;
+}
+
 WindowType Parse_Window_Type(std::string_view type) noexcept
 {
 	const std::string key = Key(type);
@@ -291,9 +283,9 @@ export bool Parse_Mapped_Image_INI(std::string_view source, ImageCatalog &catalo
 		if (field == "TEXTURE")
 			definition.texture = value;
 		else if (field == "TEXTUREWIDTH")
-			definition.texture_width = static_cast<std::uint32_t>(std::max(0, std::stoi(value)));
+			WNDDocumentDetail::Read_Non_Negative(value, definition.texture_width);
 		else if (field == "TEXTUREHEIGHT")
-			definition.texture_height = static_cast<std::uint32_t>(std::max(0, std::stoi(value)));
+			WNDDocumentDetail::Read_Non_Negative(value, definition.texture_height);
 		else if (field == "COORDS") {
 			int left = 0;
 			int top = 0;
@@ -343,7 +335,16 @@ export struct WNDWindow final
 	Rect authored_region{};
 	Rect screen_region{};
 	std::array<WNDDrawState, 3> draw_states{};
+	std::array<WNDDrawState, 3> thumb_draw_states{};
+	std::array<WNDDrawState, 3> combo_button_draw_states{};
+	std::array<WNDDrawState, 3> combo_entry_draw_states{};
 	std::array<TextStyle, 3> text_styles{};
+	int minimum = 0;
+	int maximum = 100;
+	int position = 50;
+	int progress = 50;
+	std::uint32_t list_length = 4;
+	std::uint32_t list_columns = 1;
 	NodeIndex first_child = Invalid_Node;
 	NodeIndex last_child = Invalid_Node;
 	NodeIndex next_sibling = Invalid_Node;
@@ -442,6 +443,35 @@ void Parse_Statement(
 		Parse_Draw_Data(value, window.draw_states[1].cells);
 	} else if (field == "HILITEDRAWDATA") {
 		Parse_Draw_Data(value, window.draw_states[2].cells);
+	} else if (field == "SLIDERDATA") {
+		Read_Int(value, "MINVALUE:", window.minimum);
+		Read_Int(value, "MAXVALUE:", window.maximum);
+		window.position = window.minimum;
+	} else if (field == "LISTBOXDATA") {
+		int length = 0;
+		int columns = 0;
+		if (Read_Int(value, "LENGTH:", length))
+			window.list_length = static_cast<std::uint32_t>((std::max)(0, length));
+		if (Read_Int(value, "COLUMNS:", columns))
+			window.list_columns = static_cast<std::uint32_t>((std::max)(0, columns));
+	} else if (field == "SLIDERTHUMBENABLEDDRAWDATA") {
+		Parse_Draw_Data(value, window.thumb_draw_states[0].cells);
+	} else if (field == "SLIDERTHUMBDISABLEDDRAWDATA") {
+		Parse_Draw_Data(value, window.thumb_draw_states[1].cells);
+	} else if (field == "SLIDERTHUMBHILITEDRAWDATA") {
+		Parse_Draw_Data(value, window.thumb_draw_states[2].cells);
+	} else if (field == "COMBOBOXDROPDOWNBUTTONENABLEDDRAWDATA") {
+		Parse_Draw_Data(value, window.combo_button_draw_states[0].cells);
+	} else if (field == "COMBOBOXDROPDOWNBUTTONDISABLEDDRAWDATA") {
+		Parse_Draw_Data(value, window.combo_button_draw_states[1].cells);
+	} else if (field == "COMBOBOXDROPDOWNBUTTONHILITEDRAWDATA") {
+		Parse_Draw_Data(value, window.combo_button_draw_states[2].cells);
+	} else if (field == "COMBOBOXEDITBOXENABLEDDRAWDATA") {
+		Parse_Draw_Data(value, window.combo_entry_draw_states[0].cells);
+	} else if (field == "COMBOBOXEDITBOXDISABLEDDRAWDATA") {
+		Parse_Draw_Data(value, window.combo_entry_draw_states[1].cells);
+	} else if (field == "COMBOBOXEDITBOXHILITEDRAWDATA") {
+		Parse_Draw_Data(value, window.combo_entry_draw_states[2].cells);
 	}
 }
 
@@ -525,10 +555,11 @@ public:
 		return true;
 	}
 
-	bool Resolve_Images(const ImageCatalog &catalog, WNDDocumentResolveReport &report)
+	bool Resolve_Images(const ImageCatalog &catalog, WNDDocumentResolveReport &report,
+		bool strict = true)
 	{
-		for (WNDWindow &window : m_windows)
-			for (WNDDrawState &state : window.draw_states)
+		auto resolve_states = [&](WNDWindow &window, std::array<WNDDrawState, 3> &states) {
+			for (WNDDrawState &state : states)
 				for (WNDDrawCell &cell : state.cells) {
 					if (cell.image_name.empty() || WNDDocumentDetail::Key(cell.image_name) == "NOIMAGE")
 						continue;
@@ -538,7 +569,7 @@ public:
 						// Static-text image cells are optional until the runtime
 						// gadget switches into image-background mode.  Image-backed
 						// windows and segmented controls, however, must resolve now.
-						if (window.image_style || window.type == WindowType::PushButton)
+						if (strict && (window.image_style || window.type == WindowType::PushButton))
 							++report.missing_images;
 						continue;
 					}
@@ -546,6 +577,13 @@ public:
 					cell.image_height = definition->height;
 					++report.resolved_images;
 				}
+		};
+		for (WNDWindow &window : m_windows) {
+			resolve_states(window, window.draw_states);
+			resolve_states(window, window.thumb_draw_states);
+			resolve_states(window, window.combo_button_draw_states);
+			resolve_states(window, window.combo_entry_draw_states);
+		}
 		m_report = report;
 		return report.missing_images == 0;
 	}
@@ -660,63 +698,60 @@ private:
 	{
 		const WNDDocument *document = static_cast<const WNDDocument *>(context);
 		const WNDWindow &window = *Window(pointer);
-		const auto &state = window.draw_states[
-			window.visual_state == VisualState::Disabled ? 1
-				: window.visual_state == VisualState::Highlighted ? 2 : 0];
+		const std::size_t state_index = window.visual_state == VisualState::Disabled ? 1
+			: window.visual_state == VisualState::Normal ? 0 : 2;
+		const auto &state = window.draw_states[state_index];
 		const float scale_x = document->m_last_scale_x;
 		const float scale_y = document->m_last_scale_y;
 		const Graphics::Rect2D rectangle{
 			window.screen_region.left * scale_x, window.screen_region.top * scale_y,
 			window.screen_region.right * scale_x, window.screen_region.bottom * scale_y};
 
-		if (window.type == WindowType::PushButton) {
-			if (state.cells[0].image.texture.Is_Valid() && state.cells[5].image.texture.Is_Valid()
-				&& state.cells[6].image.texture.Is_Valid()) {
-				PushButtonVisual visual;
-				visual.rectangle = rectangle;
-				visual.segmented = true;
-				visual.left_image = state.cells[0].image;
-				visual.middle_image = state.cells[5].image;
-				visual.right_image = state.cells[6].image;
-				visual.left_width = state.cells[0].image_width * scale_x;
-				visual.middle_width = state.cells[5].image_width * scale_x;
-				visual.right_width = state.cells[6].image_width * scale_x;
-				if (!Add_Push_Button_Background(draw_list, visual)
-					|| !Add_Push_Button_Overlays(draw_list, visual))
-					return false;
-			} else if (state.cells[0].image.texture.Is_Valid()
-				&& !draw_list.Add_Image(state.cells[0].image, rectangle)) {
-				return false;
-			}
-		} else {
-			const WNDDrawCell &cell = state.cells[0];
-			if (window.image_style && cell.image.texture.Is_Valid()) {
-				if (!draw_list.Add_Image(cell.image, rectangle))
-					return false;
-			} else if (cell.color.alpha > 0.0f && !draw_list.Add_Rect(rectangle, cell.color)) {
-				return false;
-			}
+		ControlVisual control;
+		control.kind = ControlKind::Unknown;
+		switch (window.type) {
+		case WindowType::User: control.kind = ControlKind::User; break;
+		case WindowType::PushButton: control.kind = ControlKind::PushButton; break;
+		case WindowType::CheckBox: control.kind = ControlKind::CheckBox; break;
+		case WindowType::RadioButton: control.kind = ControlKind::RadioButton; break;
+		case WindowType::TabControl: control.kind = ControlKind::TabControl; break;
+		case WindowType::ListBox: control.kind = ControlKind::ListBox; break;
+		case WindowType::ComboBox: control.kind = ControlKind::ComboBox; break;
+		case WindowType::HorizontalSlider: control.kind = ControlKind::HorizontalSlider; break;
+		case WindowType::VerticalSlider: control.kind = ControlKind::VerticalSlider; break;
+		case WindowType::ProgressBar: control.kind = ControlKind::ProgressBar; break;
+		case WindowType::StaticText: control.kind = ControlKind::StaticText; break;
+		case WindowType::TextEntry: control.kind = ControlKind::TextEntry; break;
+		default: break;
 		}
-
+		control.rectangle = rectangle;
+		control.state = &state;
+		control.thumb_state = &window.thumb_draw_states[state_index];
+		if (window.type == WindowType::ComboBox) {
+			control.secondary_state = &window.combo_entry_draw_states[state_index];
+			control.thumb_state = &window.combo_button_draw_states[state_index];
+		}
+		control.scale = (scale_x + scale_y) * 0.5f;
+		control.minimum = window.minimum;
+		control.maximum = window.maximum;
+		control.position = window.position;
+		control.progress = window.progress;
+		control.list_length = window.list_length;
+		control.list_columns = window.list_columns;
+		control.checked = window.visual_state == VisualState::Selected;
+		control.image_style = window.image_style;
+		control.font = window.font;
+		control.text = reinterpret_cast<const std::uint16_t *>(window.text.c_str());
+		control.text_style = window.text_styles[state_index];
+		control.centered_text = window.centered_text;
+		control.centered_text_vertically = window.centered_text_vertically;
+		if (!Render_Control(draw_list, control))
+			return false;
 		if (Has_Flag(window.flags, WindowFlag::Border)
 			&& state.cells[0].border_color.alpha > 0.0f
 			&& !draw_list.Add_Outline(rectangle, 1.0f, state.cells[0].border_color))
 			return false;
 
-		if (window.font != nullptr && !window.text.empty()) {
-			StaticTextVisual visual;
-			visual.rectangle = rectangle;
-			visual.centered = window.centered_text || window.type == WindowType::PushButton;
-			visual.centered_vertically = window.centered_text_vertically;
-			StaticTextContent content;
-			content.font = window.font;
-			content.text = reinterpret_cast<const std::uint16_t *>(window.text.c_str());
-			content.options.parse_hotkey = window.type == WindowType::PushButton;
-			content.style = window.text_styles[window.visual_state == VisualState::Disabled ? 1
-				: window.visual_state == VisualState::Highlighted ? 2 : 0];
-			if (!Add_Static_Text(draw_list, visual, content))
-				return false;
-		}
 		return true;
 	}
 

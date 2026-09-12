@@ -148,7 +148,25 @@ export Assets::AssetSource Make_Game_Asset_Source(std::shared_ptr<const GameData
 		}
 		if (identity.type != Assets::AssetType::Texture || data == nullptr)
 			return bytes;
-		const auto found = data->textures.find(Key(std::filesystem::path(identity.canonical_name).filename().string()));
+		const std::string filename = Key(
+			std::filesystem::path(identity.canonical_name).filename().string());
+		auto found = data->textures.find(filename);
+		// Older WND catalogs use a logical name such as MainMenuBackdrop.tga,
+		// while the remastered run tree stores the matching atlas as
+		// MainMenuBackdropuserinterface.tga.  Accept that canonical game alias
+		// without copying or renaming the source texture in the fixture.
+		if (found == data->textures.end()) {
+			const std::filesystem::path path(filename);
+			const std::string alias = path.stem().string() + "userinterface"
+				+ path.extension().string();
+			found = data->textures.find(alias);
+			if (found == data->textures.end()) {
+				// The remastered run tree stores several legacy UI atlases as DDS
+				// while their mapped-image INIs retain the original TGA name.
+				const std::string dds_alias = path.stem().string() + ".dds";
+				found = data->textures.find(dds_alias);
+			}
+		}
 		if (found != data->textures.end())
 			Read_Bytes(found->second, bytes);
 		return bytes;

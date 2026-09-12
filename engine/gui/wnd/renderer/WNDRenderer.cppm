@@ -5,6 +5,7 @@ module;
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <string>
 #include <span>
 #include <string_view>
 #include <vector>
@@ -36,6 +37,26 @@ export struct ImageRef final
 	Graphics::Rect2D uv{0.0f, 0.0f, 1.0f, 1.0f};
 	// Caller-owned generated images remain alive until the UI frame is submitted.
 	Graphics::Renderer2DTexture generated{};
+};
+
+// WND draw data is shared by the document parser and every control renderer.
+// Keeping it in the foundational module means controls do not need to depend on
+// the parser (and lets tools construct controls without loading a .wnd file).
+export constexpr std::size_t WND_Draw_Cell_Count = 9;
+
+export struct WNDDrawCell final
+{
+	std::string image_name;
+	ImageRef image{};
+	std::uint32_t image_width = 0;
+	std::uint32_t image_height = 0;
+	Graphics::Color2D color{1.0f, 1.0f, 1.0f, 0.0f};
+	Graphics::Color2D border_color{1.0f, 1.0f, 1.0f, 0.0f};
+};
+
+export struct WNDDrawState final
+{
+	std::array<WNDDrawCell, WND_Draw_Cell_Count> cells{};
 };
 
 export class ClipScope final

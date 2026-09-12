@@ -142,3 +142,24 @@ BOOST_AUTO_TEST_CASE(builds_a_modern_render_list_from_each_menu_document)
 		BOOST_CHECK(list.Root_Tail() != Invalid_Node);
 	}
 }
+
+BOOST_AUTO_TEST_CASE(parses_every_checked_in_generalsmd_wnd_fixture)
+{
+	GameData data;
+	const auto fixture = Load_Fixture(data);
+	BOOST_REQUIRE(fixture != nullptr);
+
+	std::size_t checked = 0;
+	for (const auto &entry : std::filesystem::recursive_directory_iterator(
+		fixture->root, std::filesystem::directory_options::skip_permission_denied)) {
+		if (!entry.is_regular_file() || entry.path().extension() != ".wnd")
+			continue;
+		std::string source;
+		BOOST_REQUIRE_MESSAGE(Load_WND_Source(entry.path(), source), entry.path().string());
+		WNDDocument document;
+		BOOST_REQUIRE_MESSAGE(document.Parse(source), entry.path().string());
+		BOOST_CHECK_GT(document.Size(), 0u);
+		++checked;
+	}
+	BOOST_REQUIRE_MESSAGE(checked >= 10u, "The checked-in fixture must cover the real WND menu set");
+}
