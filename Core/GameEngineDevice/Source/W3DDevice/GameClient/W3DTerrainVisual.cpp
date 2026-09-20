@@ -940,7 +940,6 @@ void W3DTerrainVisual::setRawMapHeight(const ICoord2D *gridPos, Int height)
  		if (m_logicHeightMap->getHeight(x,y) > height)
 		{
 			m_logicHeightMap->setRawHeight(x, y, height);
-			m_terrainRenderObject->staticLightingChanged(); // OOH! this could benefit from the new Seismic update code
 
 
 #ifdef DO_SEISMIC_SIMULATIONS
@@ -950,6 +949,7 @@ void W3DTerrainVisual::setRawMapHeight(const ICoord2D *gridPos, Int height)
           m_clientHeightMap->setRawHeight( x, y, height ); // if the client map is higher than this height, it will fall down to it anyway!
       }
 #endif
+			m_terrainRenderObject->doPartialUpdate({{x,y},{x,y}},m_terrainRenderObject->getMap(),nullptr);
 
 		}
 	}

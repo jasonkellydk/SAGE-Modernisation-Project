@@ -168,6 +168,10 @@ WindowTranslator::~WindowTranslator()
 //=============================================================================
 GameMessageDisposition WindowTranslator::translateGameMessage(const GameMessage *msg)
 {
+	if (TheInGameUI && !TheInGameUI->getPendingPlaceType() && !TheInGameUI->getGUICommand() &&
+		(TheInGameUI->hasFormationPlacement() || TheInGameUI->isFormationInputCaptured()) &&
+		msg->getType()>GameMessage::MSG_RAW_MOUSE_BEGIN && msg->getType()<GameMessage::MSG_RAW_MOUSE_END)
+		return KEEP_MESSAGE;
 	GameMessageDisposition disp = KEEP_MESSAGE;
 	Bool forceKeepMessage = FALSE;
 	WinInputReturnCode returnCode = WIN_INPUT_NOT_USED;

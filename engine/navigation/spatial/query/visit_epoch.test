@@ -1,0 +1,44 @@
+#include <boost/test/unit_test.hpp>
+#include <array>
+#include <cstdint>
+#include <limits>
+import engine.navigation.spatial.query.visit_epoch;
+
+BOOST_AUTO_TEST_CASE(spatial_query_epoch_rollover_cannot_hide_previously_visited_objects) {
+    using navigation::spatial::VisitEpoch;
+    constexpr auto last=std::numeric_limits<std::uint32_t>::max();
+    VisitEpoch epoch(last-1);
+    std::array<std::uint32_t,4> marks{1,2,last-1,0};
+    unsigned resets=0;
+    auto reset=[&] { marks.fill(0);++resets; };
+    const auto before=epoch.next(reset);
+    BOOST_TEST(before==last);
+    marks[3]=before;
+    BOOST_TEST(resets==0u);
+    const auto after=epoch.next(reset);
+    BOOST_TEST(after==1u);
+    BOOST_TEST(resets==1u);
+    unsigned visited=0;
+    // Multiple spatial cells can refer to the same object. Every object must
+    // be returned once, even if it last appeared in epoch one before rollover.
+    for (unsigned object : {0u,1u,0u,3u,2u,3u,1u}) {
+        if (marks[object]==after) continue;
+        marks[object]=after;++visited;
+    }
+    BOOST_TEST(visited==4u);
+    BOOST_TEST(epoch.next(reset)==2u);
+    BOOST_TEST(resets==1u);
+}
+
+BOOST_AUTO_TEST_CASE(spatial_query_epoch_crosses_signed_boundary_without_resetting_marks) {
+    navigation::spatial::VisitEpoch epoch(0x7ffffffeu);
+    unsigned resets=0;
+    auto reset=[&]{++resets;};
+    BOOST_TEST(epoch.next(reset)==0x7fffffffu);
+    BOOST_TEST(epoch.next(reset)==0x80000000u);
+    BOOST_TEST(epoch.next(reset)==0x80000001u);
+    BOOST_TEST(resets==0u);
+    navigation::spatial::VisitEpoch fresh;
+    BOOST_TEST(fresh.next(reset)==2u);
+    BOOST_TEST(resets==0u);
+}

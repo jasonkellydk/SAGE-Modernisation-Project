@@ -353,6 +353,7 @@ private:
 struct DX12Buffer final
 {
     bool mapped_storage=false;
+    bool mapped_geometry=false;
     std::uint64_t storage_descriptor_epoch=0;
     std::uint32_t storage_descriptor=0;
 	DX12NativeObject<ID3D12Resource> object;
@@ -367,6 +368,7 @@ struct DX12Buffer final
 	D3D12_RESOURCE_STATES state = D3D12_RESOURCE_STATE_COMMON;
     std::uint64_t gpu_base_address=0;
     std::uint64_t GPU_Base_Address() const noexcept {
+        if (mapped_geometry) return constants.GPU_Address();
         return mapped_storage ? (constants.page ? constants.page->gpu : 0) : gpu_base_address;
     }
 
@@ -374,7 +376,7 @@ struct DX12Buffer final
         // The page pool already owns mapped storage through device shutdown.
         // Its version lease and retirement fence protect reuse, so a second
         // COM reference per logical buffer is unnecessary.
-        return mapped_storage ? (constants.page ? constants.page->resource.Get() : nullptr) : object.Get();
+        return mapped_storage || mapped_geometry ? (constants.page ? constants.page->resource.Get() : nullptr) : object.Get();
     }
 };
 
@@ -737,6 +739,7 @@ struct DX12DeviceState final
 	DX12BufferCache buffer_cache;
     std::uint64_t recording_epoch=0;
 	DX12MappedBufferPool constant_memory;
+	DX12MappedBufferPool geometry_memory;
 	ResourcePool<DX12Buffer, RHIBufferHandle> buffers;
 	ResourcePool<DX12Texture, RHITextureHandle> textures;
 	ResourcePool<DX12Pipeline, RHIPipelineHandle> pipelines;
@@ -2460,9 +2463,10 @@ RHIBufferHandle DX12Device::Create_Buffer_Initialized(const RHIBuffer &descripti
 	if (description.usage == RHIBufferUsage::Storage
 		&& (description.stride == 0 || description.byte_size % description.stride != 0))
 		return {};
-	if (description.usage == RHIBufferUsage::Constant && description.byte_size > UINT32_MAX - 255u)
+	if ((description.usage == RHIBufferUsage::Constant || description.update_mode == RHIBufferUpdateMode::Discard)
+        && description.byte_size > UINT32_MAX - 255u)
 		return {};
-	std::uint32_t capacity = description.usage == RHIBufferUsage::Constant
+	std::uint32_t capacity = description.usage == RHIBufferUsage::Constant || description.update_mode == RHIBufferUpdateMode::Discard
 		? (description.byte_size + 255u) & ~255u : description.byte_size;
 	const D3D12_RESOURCE_STATES initial_state = description.usage == RHIBufferUsage::Storage
 		? Shader_Resource_State() : description.usage == RHIBufferUsage::Index
@@ -2475,7 +2479,17 @@ RHIBufferHandle DX12Device::Create_Buffer_Initialized(const RHIBuffer &descripti
 	resource.stride = description.stride;
 	resource.state = initial_state;
     resource.mapped_storage=description.usage==RHIBufferUsage::Storage && description.byte_size<=4096;
-    if (resource.mapped_storage) {
+    resource.mapped_geometry=description.update_mode==RHIBufferUpdateMode::Discard;
+    if (resource.mapped_geometry) {
+        // Discard geometry is produced on the CPU. Suballocate mapped pages
+        // instead of creating a committed default-heap resource and copy for
+        // every transient mesh. A lease plus the GPU fence protects each draw.
+        resource.constants=m_state->geometry_memory.Allocate(m_state->device.Get(),capacity,m_state->completed_fence);
+        if (!resource.constants.page) return {};
+        if (!initial_data.empty())
+            std::memcpy(resource.constants.page->cpu+resource.constants.offset,initial_data.data(),initial_data.size());
+        resource.state=D3D12_RESOURCE_STATE_GENERIC_READ;
+    } else if (resource.mapped_storage) {
         resource.constant_data.resize(capacity);
         if (!initial_data.empty()) std::memcpy(resource.constant_data.data(),initial_data.data(),initial_data.size());
         resource.constants=Allocate_Storage_Version(*m_state,capacity,description.stride);
@@ -2524,6 +2538,7 @@ RHIBufferHandle DX12Device::Create_Buffer_Initialized(const RHIBuffer &descripti
 		return {};
 	}
 	if (description.usage != RHIBufferUsage::Constant
+        && description.update_mode != RHIBufferUpdateMode::Discard
         && !(description.usage==RHIBufferUsage::Storage && description.byte_size<=4096)
 		&& !initial_data.empty() && !Update_Buffer(handle, 0, initial_data)) {
 		Destroy_Buffer(handle);
@@ -2831,6 +2846,18 @@ bool DX12Device::Update_Buffer(RHIBufferHandle buffer, std::uint32_t offset,
 		|| data.size() > resource->byte_size - offset
 		|| (resource->update_mode == RHIBufferUpdateMode::Discard && offset != 0))
 		return false;
+    if (resource->mapped_geometry) {
+        auto next=m_state->geometry_memory.Allocate(m_state->device.Get(),resource->capacity,m_state->completed_fence);
+        if (!next.page) return false;
+        std::memcpy(next.page->cpu+next.offset,data.data(),data.size());
+        resource->constants.Retire(m_state->Retirement_Fence());
+        resource->constants=std::move(next);
+        // Handle and stride are unchanged, but the input-assembly address is
+        // new. Draws without an explicit rebind must observe the new version.
+        m_state->command_list_facade.Mark_Graphics_State_Dirty();
+        m_state->command_list_facade.Invalidate_Constants(false);
+        return true;
+    }
     if (resource->mapped_storage) {
         auto next=Allocate_Storage_Version(*m_state,resource->capacity,resource->stride);
         if (!next.page) return false;
@@ -3984,6 +4011,7 @@ static bool Create_DX12_Device(DX12DeviceState &state, const DX12DeviceOptions &
 	}
 	Register_DX12_Debug_Messages(state);
 	state.constant_memory.Initialize(state.device.Get());
+	state.geometry_memory.Initialize(state.device.Get());
 	if (!Supports_DX12_Shader_Model_6_6(state.device.Get()))
 		return false;
 	D3D12_FEATURE_DATA_D3D12_OPTIONS binding_options{};

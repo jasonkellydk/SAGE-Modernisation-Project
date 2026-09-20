@@ -34,6 +34,7 @@
 #include "Common/GameMemory.h"
 #include "Common/STLTypedefs.h"
 #include "GameLogic/Module/UpdateModule.h"
+namespace navigation::testing { class Simulation; }
 
 enum
 {
@@ -59,6 +60,7 @@ public:
 //-------------------------------------------------------------------------------------------------
 class DockUpdate : public UpdateModule , public DockUpdateInterface
 {
+    friend class navigation::testing::Simulation;
 
 	MEMORY_POOL_GLUE_ABC( DockUpdate )
 	MAKE_STANDARD_MODULE_MACRO_ABC( DockUpdate )
@@ -143,6 +145,7 @@ protected:
 	VecCoord3D m_approachPositions;
 	ObjectIDVector m_approachPositionOwners;	///< Who is in or at least reserved each spot
 	BoolVector m_approachPositionReached;			///< Which positions have actually been reached
+	ObjectIDVector m_readyDockers;				///< Arrival order, independent of reused approach slots.
 
 	ObjectID m_activeDocker;	///< we could expand this to multiple dock paths since we always get docker in our methods
 	Bool m_dockerInside; ///< This is true while our active docker is between Enter and Exit. This is shorter than activeDocker's lifetime as it doesn't include approach to enter

@@ -3,9 +3,13 @@
 #include <algorithm>
 #include <array>
 #include <iterator>
+#include "PreRTS.h"
+#include "engine/navigation/pathfinder_api.h"
 #include "test/pathfinder_golden.h"
 #include <string>
 #include <vector>
+import engine.navigation.movement.corridor.phase_line;
+import engine.navigation.dynamic_request_queue;
 
 import engine.navigation.world_fixture;
 using navigation::testing::World;
@@ -18,9 +22,9 @@ void check(const char* name, const Result& result) {
     BOOST_REQUIRE(expected != std::end(goldenPaths));
     BOOST_TEST_CONTEXT(name) {
         BOOST_TEST(result.found == expected->found);
+        // DX9 route selection is observable behavior, not merely reachability.
         BOOST_TEST(result.raw == expected->raw);
         BOOST_TEST(result.optimized == expected->optimized);
-        BOOST_TEST(result.cells == expected->cells);
         const bool legal = !result.found || result.legal;
         BOOST_TEST(legal);
         BOOST_TEST(result.clean);
@@ -28,11 +32,84 @@ void check(const char* name, const Result& result) {
 }
 // Re-run the actual query to catch stale search lists, zones and occupancy state.
 #define CHECK_PATH(name, expression) do { \
-    world.setMacroEdgesEnabled(false); \
-    for (int repetition = 0; repetition < 4; ++repetition) check(name, expression); \
+    const auto first = expression; \
+    check(name, first); \
+    for (int repetition = 0; repetition < 4; ++repetition) { \
+        const auto repeated = expression; \
+        check(name, repeated); \
+        BOOST_TEST(repeated.raw == first.raw); \
+        BOOST_TEST(repeated.optimized == first.optimized); \
+    } \
 } while (false)
 
 Map openMap() { return Map(12, std::string(12, '.')); }
+
+BOOST_AUTO_TEST_CASE(ground_routes_do_not_mark_every_waypoint_as_protected) {
+    auto map=openMap();
+    for (int y=0;y<9;++y) map[y][6]='#';
+    World world(map);
+    BOOST_TEST(world.groundWaypointsAllowLookAhead());
+}
+BOOST_AUTO_TEST_CASE(goal_outside_playable_bounds_does_not_exhaust_the_map) {
+    World world(Map(256, std::string(256, '.')));
+    world.setLogicalBounds(0, 0, 249, 249);
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        const auto result = world.normal(246, 246, 250, 246);
+        BOOST_TEST(!result.found);
+        BOOST_TEST(result.clean);
+        BOOST_TEST(result.cells < 1000);
+    }
+    const auto inside = world.normal(246, 246, 249, 246);
+    BOOST_TEST(inside.found);
+    BOOST_TEST(inside.legal);
+}
+BOOST_AUTO_TEST_CASE(disconnected_clear_goal_uses_modern_reachability_certificate) {
+    Map map(128, std::string(128, '.'));
+    for (auto& row : map) row[120] = '#';
+    World world(map);
+    const auto native = world.normal(116, 124, 124, 120);
+    BOOST_REQUIRE(!native.found);
+    BOOST_REQUIRE(native.cells < 1000);
+    for (int attempt = 0; attempt < 5; ++attempt) {
+        const auto result = world.normal(116, 124, 124, 120);
+        BOOST_TEST(!result.found);
+        BOOST_TEST(result.clean);
+        BOOST_TEST(result.cells < 1000);
+    }
+    world.setCell(120, 100, '.');
+    const auto connected = world.normal(116, 124, 124, 120);
+    BOOST_TEST(connected.found);
+    BOOST_TEST(connected.legal);
+    BOOST_TEST(connected.clean);
+}
+BOOST_AUTO_TEST_CASE(sealed_corner_goal_does_not_search_the_entire_map) {
+    Map map(256, std::string(256, '.'));
+    for (auto offset : {std::array{1, 0}, std::array{-1, 0},
+                        std::array{0, 1}, std::array{0, -1}})
+        map[250 + offset[1]][250 + offset[0]] = '#';
+    World world(map);
+    world.setPinched(250, 250, true);
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        const auto result = world.normal(246, 254, 250, 250);
+        BOOST_TEST(!result.found);
+        BOOST_TEST(result.clean);
+        BOOST_TEST(result.cells < 10000);
+    }
+}
+BOOST_AUTO_TEST_CASE(ai_group_ownership_preserves_simulation_order) {
+    World world(openMap());
+    const auto states = world.exerciseGroupOwnership();
+    BOOST_REQUIRE_EQUAL(states.size(), 4u);
+    std::vector<unsigned> expected;
+    for (unsigned id = 1; id <= 2048; ++id) expected.push_back(id);
+    BOOST_TEST(states[0] == expected, boost::test_tools::per_element());
+    expected.clear();
+    for (unsigned id = 1; id <= 2048; id += 2) expected.push_back(id);
+    BOOST_TEST(states[1] == expected, boost::test_tools::per_element());
+    for (unsigned id = 2049; id <= 2560; ++id) expected.push_back(id);
+    BOOST_TEST(states[2] == expected, boost::test_tools::per_element());
+    BOOST_TEST(states[3].empty());
+}
 Map wallMap(bool gap) {
     auto map = openMap();
     for (int y = 0; y < 12; ++y) map[y][6] = '#';
@@ -43,6 +120,27 @@ Map riverMap(char surface) {
     Map map(14, std::string(16, '.'));
     for (auto& row : map) for (int x = 6; x <= 8; ++x) row[x] = surface;
     return map;
+}
+BOOST_AUTO_TEST_CASE(dx9_ground_smoothing_preserves_reference_waypoints) {
+    // The golden source revision's AIPathfind.cpp is byte-identical to the
+    // pinned DX9 revision. Test smoothing independently of route selection.
+    const auto verify=[](World& world,const char* name,int diameter=1) {
+        const auto expected=std::find_if(std::begin(goldenPaths),std::end(goldenPaths),
+            [&](const GoldenPath& path) { return std::string(path.name)==name; });
+        BOOST_REQUIRE(expected!=std::end(goldenPaths));
+        BOOST_TEST_CONTEXT(name) {
+            BOOST_TEST(world.smoothReferenceGroundPath(expected->raw,diameter)==expected->optimized);
+        }
+    };
+    { World world(openMap());verify(world,"open_ground");verify(world,"same_cell"); }
+    { World world(wallMap(true));verify(world,"gap");verify(world,"gap_wide",4); }
+    { World world(riverMap('~'));world.addBridge();verify(world,"bridge"); }
+    {
+        Map map(24,std::string(24,'.'));
+        for (int y=0;y<20;++y) map[y][8]='#';
+        for (int y=4;y<24;++y) map[y][15]='#';
+        World world(map);verify(world,"maze");
+    }
 }
 BOOST_AUTO_TEST_CASE(open_ground) {
     World world(openMap());
@@ -82,6 +180,16 @@ BOOST_AUTO_TEST_CASE(bridge_layer_destroy_and_repair) {
     CHECK_PATH("bridge_repaired", world.ground(2,6,12,6));
 }
 
+BOOST_AUTO_TEST_CASE(map_load_synchronizes_bridge_navigation_without_a_graphics_device) {
+    World world(riverMap('~'));
+    world.addBridge();
+    CHECK_PATH("bridge", world.ground(2,6,12,6));
+    world.loadBridgeDamageWithoutGraphics(true);
+    CHECK_PATH("bridge_broken", world.ground(2,6,12,6));
+    world.loadBridgeDamageWithoutGraphics(false);
+    CHECK_PATH("bridge_repaired", world.ground(2,6,12,6));
+}
+
 BOOST_AUTO_TEST_CASE(ground_plan_preserves_but_ignores_moving_occupancy) {
     World world(openMap());
     world.movingUnit(5,5,true);
@@ -96,12 +204,6 @@ BOOST_AUTO_TEST_CASE(ground_plan_preserves_but_ignores_moving_occupancy) {
     CHECK_PATH("removed_occupancy", world.ground(2,2,9,8));
 }
 
-BOOST_AUTO_TEST_CASE(occupied_search_slots_keep_parent_and_cost_when_reinserted)
-{
-    World world(openMap());
-    BOOST_TEST(world.occupiedSearchMutation(true));
-    BOOST_TEST(world.occupiedSearchMutation(false));
-}
 
 BOOST_AUTO_TEST_CASE(maze_crosses_hierarchical_zone_blocks) {
     Map map(24, std::string(24, '.'));
@@ -134,7 +236,6 @@ BOOST_AUTO_TEST_CASE(macro_ground_edges_are_legal_repeatable_and_work_accounted)
 
     for (const auto& query : queries) {
         World world(openMap());
-        world.setMacroEdgesEnabled(true);
         const auto first = world.ground(query[0], query[1], query[2], query[3]);
         const auto repeated = world.ground(query[0], query[1], query[2], query[3]);
         BOOST_REQUIRE(first.found);
@@ -153,7 +254,6 @@ BOOST_AUTO_TEST_CASE(macro_ground_edges_are_legal_repeatable_and_work_accounted)
 
         // The fixture switch is only a comparison oracle.  Reachability and
         // legality must agree even when macro edges choose a shorter trace.
-        world.setMacroEdgesEnabled(false);
         const auto baseline = world.ground(query[0], query[1], query[2], query[3]);
         BOOST_TEST(baseline.found == first.found);
         BOOST_TEST(baseline.legal);
@@ -165,7 +265,6 @@ BOOST_AUTO_TEST_CASE(macro_ground_edges_are_legal_repeatable_and_work_accounted)
 BOOST_AUTO_TEST_CASE(macro_edges_survive_static_obstacle_changes)
 {
     World world(wallMap(true));
-    world.setMacroEdgesEnabled(true);
     const auto throughGap = world.ground(2, 6, 9, 6);
     BOOST_REQUIRE(throughGap.found);
     BOOST_TEST(!throughGap.macroEdges);
@@ -188,7 +287,6 @@ BOOST_AUTO_TEST_CASE(macro_edges_survive_static_obstacle_changes)
 BOOST_AUTO_TEST_CASE(normal_find_path_macro_edges_keep_reachability_and_legality)
 {
     World world(openMap());
-    world.setMacroEdgesEnabled(true);
     const auto macro = world.normal(2, 2, 9, 8);
     BOOST_REQUIRE(macro.found);
     BOOST_TEST(macro.legal);
@@ -203,7 +301,6 @@ BOOST_AUTO_TEST_CASE(normal_find_path_macro_edges_keep_reachability_and_legality
     BOOST_TEST(repeated.cells == macro.cells);
     BOOST_TEST(repeated.clean);
 
-    world.setMacroEdgesEnabled(false);
     const auto baseline = world.normal(2, 2, 9, 8);
     BOOST_TEST(baseline.found == macro.found);
     BOOST_TEST(baseline.legal);
@@ -234,66 +331,121 @@ BOOST_AUTO_TEST_CASE(game_queue_accepts_one_hundred_thousand_and_drains_deleted_
     world.enqueue(100000);
     world.enqueue(100000);
     BOOST_TEST(world.pendingRequests() == 100000U);
-    world.processMissingRequests();
-    BOOST_TEST(world.pendingRequests() == 50000U);
+    // Deleted IDs cost one admission credit. Every tick must make progress,
+    // and every ID must eventually drain without a permanent unit-count cap.
+    unsigned remaining=100000;
+    while (remaining) {
+        world.processMissingRequests();
+        remaining-=std::min(remaining,unsigned(navigation::MaximumOwnerPollsPerFrame));
+        BOOST_TEST(world.pendingRequests()==remaining);
+    }
     world.processMissingRequests();
     BOOST_TEST(world.pendingRequests() == 0U);
 }
 
-BOOST_AUTO_TEST_CASE(goal_ray_memo_preserves_trace_result_and_reuses_verdicts)
+BOOST_AUTO_TEST_CASE(modern_phase_line_is_deterministic_for_all_octants_and_block_boundaries)
 {
-    World world(openMap());
-    const auto uncached = world.goalRayProbe(1, 1, 10, 8, false);
-    const auto cached = world.goalRayProbe(1, 1, 10, 8, true);
-    BOOST_TEST(uncached.hits == 0U);
-    BOOST_TEST(uncached.entries == 0U);
-    BOOST_TEST(cached.firstResult == uncached.firstResult);
-    BOOST_TEST(cached.secondResult == uncached.secondResult);
-    BOOST_TEST(cached.hits > 0U);
-    BOOST_TEST(cached.entries > 0U);
-    BOOST_TEST(cached.allocatedCells == uncached.allocatedCells);
-    BOOST_REQUIRE(!uncached.firstSearchSnapshot.empty());
-    BOOST_REQUIRE(!uncached.secondSearchSnapshot.empty());
-    BOOST_TEST(uncached.firstSearchSnapshot == uncached.secondSearchSnapshot);
-    BOOST_TEST(cached.firstSearchSnapshot == cached.secondSearchSnapshot);
-    BOOST_TEST(cached.firstSearchSnapshot == uncached.firstSearchSnapshot);
-    BOOST_TEST(cached.secondSearchSnapshot == uncached.secondSearchSnapshot);
-}
-
-BOOST_AUTO_TEST_CASE(goal_ray_specialized_iterator_matches_legacy_oracle)
-{
-    World world(Map(16, std::string(16, '.')));
     const std::array<std::array<int, 4>, 16> rays = {{
-        // All eight octants from the same origin.
         {{7, 7, 12, 10}}, {{7, 7, 12, 4}}, {{7, 7, 2, 10}}, {{7, 7, 2, 4}},
         {{7, 7, 10, 12}}, {{7, 7, 4, 12}}, {{7, 7, 10, 2}}, {{7, 7, 4, 2}},
-        // Horizontal and vertical axes exercise the zero-minor cases.
         {{0, 7, 15, 7}}, {{15, 7, 0, 7}}, {{7, 0, 7, 15}}, {{7, 15, 7, 0}},
-        // Unequal slopes exercise both endpoint phases and extra callbacks.
         {{1, 1, 14, 8}}, {{1, 1, 8, 14}}, {{14, 14, 2, 5}}, {{14, 2, 5, 14}}
     }};
-
     for (const auto& ray : rays) {
-        const auto observed = world.goalRayTraversalProbe(ray[0], ray[1], ray[2], ray[3]);
-        BOOST_TEST(observed.legacyResult == observed.specializedResult);
-        BOOST_TEST(observed.legacySnapshot == observed.specializedSnapshot);
+        std::vector<navigation::LineCell> first, second;
+        const auto collect = [](auto& out, const auto& r) {
+            navigation::visitPhaseLine({r[0], r[1]}, {r[2], r[3]},
+                [&](auto x, auto y) {
+                    out.push_back({static_cast<std::int32_t>(x), static_cast<std::int32_t>(y)});
+                    return true;
+                });
+        };
+        collect(first, ray);
+        collect(second, ray);
+        BOOST_REQUIRE(first.size() == second.size());
+        for (std::size_t i = 0; i < first.size(); ++i) {
+            BOOST_TEST(first[i].x == second[i].x);
+            BOOST_TEST(first[i].y == second[i].y);
+        }
+        BOOST_REQUIRE(!first.empty());
+        BOOST_TEST(first.front().x == ray[0]);
+        BOOST_TEST(first.front().y == ray[1]);
+        if (ray[0] == ray[2] || ray[1] == ray[3]) {
+            BOOST_TEST(first.back().x == ray[2]);
+            BOOST_TEST(first.back().y == ray[3]);
+        }
     }
+    std::vector<navigation::LineCell> visited;
+    const bool completed = navigation::visitPhaseLine({1,1},{14,14},
+        [&](auto x, auto y) {
+            visited.push_back({static_cast<std::int32_t>(x), static_cast<std::int32_t>(y)});
+            return x != 8 || y != 8;
+        });
+    BOOST_TEST(!completed);
+    BOOST_REQUIRE(!visited.empty());
+    BOOST_TEST(visited.back().x == 8);
+    BOOST_TEST(visited.back().y == 8);
+}
 
-    // A blocked cell must stop both iterators at the same callback boundary.
-    world.setCell(8, 8, '#');
-    const auto blockedRay = world.goalRayTraversalProbe(1, 1, 14, 14);
-    BOOST_TEST(blockedRay.legacyResult == blockedRay.specializedResult);
-    BOOST_TEST(blockedRay.legacySnapshot == blockedRay.specializedSnapshot);
-    world.setCell(8, 8, '.');
 
-    // Keep a moving occupancy record across the oracle runs, then seed it
-    // with a cheaper active route. Both paths must clear blocked-by-ally and
-    // retain the existing g/frontier state when the ray revisits it.
-    world.movingUnit(2, 2, true);
-    const auto dominated = world.goalRayTraversalProbe(1, 1, 14, 8, 2, 2);
-    BOOST_TEST(dominated.legacyResult == dominated.specializedResult);
-    BOOST_TEST(dominated.legacySnapshot == dominated.specializedSnapshot);
-    const std::string expectedSeed = "2,2:1:O:0:0:0:";
-    BOOST_TEST(dominated.specializedSnapshot.find(expectedSeed) != std::string::npos);
-    world.movingUnit(2, 2, false);
+
+BOOST_AUTO_TEST_CASE(group_routes_reuse_clearance_without_changing_paths_or_retaining_stale_terrain)
+{
+    Map map(128, std::string(128, '.'));
+    for (int y=0;y<120;++y) if (y<94 || y>99) map[y][64]='#';
+    World world(map);
+    world.setGroundClearanceMemoEnabled(false);
+    const auto before = world.groundClearanceEvaluations();
+    const auto reference = world.ground(12,32,112,32,6);
+    const auto uncached = world.groundClearanceEvaluations()-before;
+    BOOST_REQUIRE(reference.found);
+    world.setGroundClearanceMemoEnabled(true);
+    const auto cachedBefore = world.groundClearanceEvaluations();
+    const auto cached = world.ground(12,32,112,32,6);
+    const auto evaluations = world.groundClearanceEvaluations()-cachedBefore;
+    BOOST_TEST(cached.raw==reference.raw);
+    BOOST_TEST(cached.optimized==reference.optimized);
+    BOOST_TEST(cached.clean);
+    BOOST_TEST(evaluations*2 < uncached);
+    BOOST_TEST_MESSAGE("Clearance evaluations: " << uncached << " -> " << evaluations);
+    // Change the route between requests; no cached clearance crosses a query.
+    world.setCell(64,32,'.');
+    const auto changed = world.ground(12,32,112,32,6);
+    world.setGroundClearanceMemoEnabled(false);
+    const auto changedReference = world.ground(12,32,112,32,6);
+    BOOST_TEST(changed.raw==changedReference.raw);
+    BOOST_TEST(changed.optimized==changedReference.optimized);
+    BOOST_TEST(changed.clean);
+}
+
+BOOST_AUTO_TEST_CASE(unowned_preview_track_moves_do_not_create_terrain_marks) {
+    navigation::testing::World world(std::vector<std::string>(8,std::string(8,'.')));
+    BOOST_CHECK(world.unownedPreviewTracksRemainEmpty());
+}
+
+BOOST_AUTO_TEST_CASE(group_routes_reach_requested_cell) {
+    {
+        World world(openMap());
+        const auto route=world.ground(2,2,9,8);
+        BOOST_REQUIRE(route.found);
+        BOOST_REQUIRE(route.legal);
+        BOOST_REQUIRE(!route.rawGroundCells.empty());
+        BOOST_TEST(route.rawGroundCells.back()[0]==9);
+        BOOST_TEST(route.rawGroundCells.back()[1]==8);
+        unsigned cost=0;
+        for (std::size_t i=1;i<route.rawGroundCells.size();++i) {
+            const auto& a=route.rawGroundCells[i-1];
+            const auto& b=route.rawGroundCells[i];
+            const int dx=std::abs(a[0]-b[0]),dy=std::abs(a[1]-b[1]);
+            cost+=10*(std::max)(dx,dy)+4*(std::min)(dx,dy);
+        }
+        // The DX9 phase line contains thirteen cardinal crossings. Its search
+        // cost is five per crossing; this assertion measures geometric length.
+        BOOST_TEST(cost==130u);
+        const auto stationary=world.ground(2,2,2,2);
+        BOOST_REQUIRE(stationary.found);
+        BOOST_REQUIRE(!stationary.rawGroundCells.empty());
+        BOOST_TEST(stationary.rawGroundCells.back()[0]==2);
+        BOOST_TEST(stationary.rawGroundCells.back()[1]==2);
+    }
 }

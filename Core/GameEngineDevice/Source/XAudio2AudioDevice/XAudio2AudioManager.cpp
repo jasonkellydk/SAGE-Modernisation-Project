@@ -27,6 +27,7 @@
 #include "Common/AudioAffect.h"
 #include "Common/AudioHandleSpecialValues.h"
 #include "Common/AudioSettings.h"
+#include "Common/FileSystem.h"
 #include "Common/Thing.h"
 #include "GameLogic/GameLogic.h"
 #include "GameLogic/Object.h"
@@ -56,6 +57,17 @@ void XAudio2AudioManager::postProcessLoad()
 {
 	AudioManager::postProcessLoad();
 	theAudio().postProcessLoad();
+	// A first-use effect must not decode/resample on a gameplay frame. The
+	// registry is complete here; music/streaming remain separately managed.
+	// preloadEventAssets enumerates alternatives without selecting a variant
+	// or changing the audio/game random streams or playback state.
+	for (const auto& [name,info] : getAllAudioEvents()) {
+		if (!info || info->m_soundType!=AT_SoundEffect) continue;
+		AudioEventRTS event;
+		event.setEventName(name);
+		event.setAudioEventInfo(info);
+		preloadEventAssets(event);
+	}
 }
 
 void XAudio2AudioManager::reset()
@@ -76,6 +88,34 @@ void XAudio2AudioManager::update()
 	updatePlayingPositions();
 	setDeviceListenerPosition();
 	theAudio().update();
+}
+
+void XAudio2AudioManager::preloadEventAssets(const AudioEventRTS& event)
+{
+	auto* backend=theAudio().getBackend();
+	if (!backend || event.getEventName().isEmpty()) return;
+	AudioEventRTS source(event);
+	if (!source.getAudioEventInfo()) getInfoForAudioEvent(&source);
+	const auto* info=source.getAudioEventInfo();
+	if (!info || info->m_soundType!=AT_SoundEffect) return;
+	const auto prefix=source.generateFilenamePrefix(info->m_soundType,FALSE);
+	const auto localizedPrefix=source.generateFilenamePrefix(info->m_soundType,TRUE);
+	const auto extension=source.generateFilenameExtension(info->m_soundType);
+	// Enumerate every alternative directly. generateFilename() chooses variants
+	// and delays using random state, so it must never be used for preloading.
+	for (const auto* alternatives : {&info->m_sounds,&info->m_soundsMorning,
+		&info->m_soundsNight,&info->m_soundsEvening,&info->m_attackSounds,&info->m_decaySounds}) {
+		for (const auto& stem : *alternatives) {
+			if (stem.isEmpty()) continue;
+			auto path=prefix;
+			path.concat(stem);path.concat(extension);
+			auto localized=localizedPrefix;
+			const auto* filename=path.reverseFind('\\');
+			localized.concat(filename?filename+1:path.str());
+			if (TheFileSystem->doesFileExist(localized.str())) path=localized;
+			backend->precacheFile(path.str());
+		}
+	}
 }
 
 #if defined(RTS_DEBUG)

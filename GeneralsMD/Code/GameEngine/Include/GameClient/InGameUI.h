@@ -46,6 +46,7 @@
 
 // FORWARD DECLARATIONS ///////////////////////////////////////////////////////////////////////////
 class Drawable;
+class FormationPlacement;
 class Object;
 class ThingTemplate;
 class GameWindow;
@@ -326,6 +327,12 @@ protected:
 	typedef std::list<Object*>::iterator ObjectListIt;
 
 public:  // ***************************************************************************************
+	Bool handleFormationMouse(const GameMessage* message);
+	Bool isFormationInputCaptured() const { return m_formationInputCaptured; }
+	void cancelFormationPlacement();
+	void releaseFormationInput();
+	void updateFormationPlacement();
+	Bool hasFormationPlacement() const;
 
 	enum SelectionRules
 	{
@@ -736,6 +743,8 @@ protected:
 	ObjectID										m_pendingPlaceSourceObjectID;						///< source object of the thing constructing the item
 	Bool										m_preventLeftClickDeselectionInAlternateMouseModeForOneClick;
 	Drawable **									m_placeIcon;														///< array for drawables to appear at the cursor when building in the world
+	FormationPlacement* m_formationPlacement = nullptr;
+	Bool m_formationInputCaptured = false;
 	Bool												m_placeAnchorInProgress;								///< is place angle interface for placement active
 	ICoord2D										m_placeAnchorStart;											///< place angle anchor start
 	ICoord2D										m_placeAnchorEnd;												///< place angle anchor end

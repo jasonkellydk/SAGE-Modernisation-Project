@@ -10,6 +10,7 @@ module;
 #include <cstdint>
 #include <cstring>
 #include <d3d11.h>
+#include <d3d11_1.h>
 #include <d3dcompiler.h>
 #include <dxgi.h>
 #include <fstream>
@@ -23,6 +24,7 @@ module;
 #include <vector>
 #include <windows.h>
 #include "DX11GPUProfiling.h"
+#include "DX11DeviceHealth.h"
 
 export module Graphics.Backends.DX11;
 
@@ -87,6 +89,9 @@ struct DX11Buffer final
 	std::uint32_t byte_size = 0;
 	std::uint32_t capacity = 0;
     RHIBufferUpdateMode update_mode = RHIBufferUpdateMode::Preserve;
+    // Storage buffers are read-only on the GPU. Keep their complete CPU image
+    // so partial updates can rename the GPU allocation without losing bytes.
+    std::vector<std::byte> storage_contents;
 };
 
 // Recycle native vertex/index storage independently of public handle lifetime.
@@ -296,6 +301,7 @@ struct DX11DeviceState final
 {
 	DX11NativeObject<ID3D11Device> device;
 	DX11NativeObject<ID3D11DeviceContext> context;
+	DX11NativeObject<ID3D11DeviceContext1> context1;
 	DX11NativeObject<IDXGISwapChain> native_swap_chain;
 	DX11BufferCache buffer_cache;
 	ResourcePool<DX11Buffer, RHIBufferHandle> buffers;
@@ -306,10 +312,16 @@ struct DX11DeviceState final
 	std::string shader_directory;
 	std::string vertex_shader_name;
 	std::string fragment_shader_name;
+	DX11Detail::DeviceHealth health;
 	bool frame_active = false;
 	bool ready_to_present = false;
 	bool presented = false;
 	DX11Detail::GPUProfiler gpu_profiler;
+
+	bool Check_Result(HRESULT result) noexcept
+	{
+		return health.Check(result, [this] { return device.Get()->GetDeviceRemovedReason(); });
+	}
 
 	DX11DeviceState() noexcept
 		: swap_chain(this),
@@ -812,6 +824,9 @@ static bool Create_DX11_Device(DX11DeviceState &state, const DX11DeviceOptions &
 	if (SUCCEEDED(result)) {
 		state.device.Reset(native_device);
 		state.context.Reset(native_context);
+		ID3D11DeviceContext1* context1 = nullptr;
+		if (SUCCEEDED(native_context->QueryInterface(__uuidof(ID3D11DeviceContext1), reinterpret_cast<void**>(&context1))))
+			state.context1.Reset(context1);
 		state.native_swap_chain.Reset(native_swap_chain);
 	} else {
 		if (native_device != nullptr)
@@ -931,7 +946,7 @@ bool DX11SwapChain::Create_Targets(std::uint32_t width, std::uint32_t height)
 	m_depth_target = {};
 
 	ID3D11Texture2D *native_backbuffer = nullptr;
-	if (FAILED(m_state->native_swap_chain.Get()->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void **>(&native_backbuffer))))
+	if (!m_state->Check_Result(m_state->native_swap_chain.Get()->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void **>(&native_backbuffer))))
 		return false;
 
 	DX11Texture backbuffer;
@@ -944,7 +959,7 @@ bool DX11SwapChain::Create_Targets(std::uint32_t width, std::uint32_t height)
 		? RHITextureFormat::BGRA8_UNorm : RHITextureFormat::RGBA8_UNorm;
     backbuffer.description = {width, height, 1, backbuffer.format};
 	ID3D11RenderTargetView *native_render_target = nullptr;
-	if (FAILED(m_state->device.Get()->CreateRenderTargetView(native_backbuffer, nullptr, &native_render_target)))
+	if (!m_state->Check_Result(m_state->device.Get()->CreateRenderTargetView(native_backbuffer, nullptr, &native_render_target)))
 		return false;
 	backbuffer.render_target_view.Reset(native_render_target);
 	const RHITextureHandle backbuffer_handle = m_state->textures.Create(std::move(backbuffer));
@@ -961,7 +976,7 @@ bool DX11SwapChain::Create_Targets(std::uint32_t width, std::uint32_t height)
 	depth_description.Usage = D3D11_USAGE_DEFAULT;
 	depth_description.BindFlags = D3D11_BIND_DEPTH_STENCIL;
 	ID3D11Texture2D *native_depth = nullptr;
-	if (FAILED(m_state->device.Get()->CreateTexture2D(&depth_description, nullptr, &native_depth))) {
+	if (!m_state->Check_Result(m_state->device.Get()->CreateTexture2D(&depth_description, nullptr, &native_depth))) {
 		m_state->textures.Destroy(backbuffer_handle);
 		return false;
 	}
@@ -976,7 +991,7 @@ bool DX11SwapChain::Create_Targets(std::uint32_t width, std::uint32_t height)
 	D3D11_DEPTH_STENCIL_VIEW_DESC depth_view_description{};
 	depth_view_description.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
 	depth_view_description.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
-	if (FAILED(m_state->device.Get()->CreateDepthStencilView(native_depth, &depth_view_description, &native_depth_view))) {
+	if (!m_state->Check_Result(m_state->device.Get()->CreateDepthStencilView(native_depth, &depth_view_description, &native_depth_view))) {
 		m_state->textures.Destroy(backbuffer_handle);
 		return false;
 	}
@@ -1014,7 +1029,7 @@ bool DX11SwapChain::Resize(std::uint32_t width, std::uint32_t height)
 	m_depth_target = {};
 	m_width = 0;
 	m_height = 0;
-	if (FAILED(m_state->native_swap_chain.Get()->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, 0)))
+	if (!m_state->Check_Result(m_state->native_swap_chain.Get()->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, 0)))
 		return false;
 
 	return Create_Targets(width, height);
@@ -1026,7 +1041,7 @@ bool DX11SwapChain::Present() noexcept
 	if (!Is_Valid() || m_state->frame_active || !m_state->ready_to_present || m_state->presented)
 		return false;
 
-	if (FAILED(m_state->native_swap_chain.Get()->Present(0, 0)))
+	if (!m_state->Check_Result(m_state->native_swap_chain.Get()->Present(0, 0)))
 		return false;
 
 	m_state->ready_to_present = false;
@@ -1406,7 +1421,7 @@ bool DX11CommandList::Set_Draw_Constants(std::span<const std::byte> data) noexce
 		description.Usage = D3D11_USAGE_DEFAULT;
 		description.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
 		ID3D11Buffer *native_buffer = nullptr;
-		if (FAILED(m_state->device.Get()->CreateBuffer(&description, nullptr, &native_buffer)))
+		if (!m_state->Check_Result(m_state->device.Get()->CreateBuffer(&description, nullptr, &native_buffer)))
 			return false;
 		m_draw_constants.Reset(native_buffer);
 		m_draw_constants_size = byte_size;
@@ -1551,8 +1566,7 @@ bool DX11Device::Is_Valid() const noexcept
 RHIDeviceStatus DX11Device::Get_Status() const noexcept
 {
 	if (!Is_Valid()) return RHIDeviceStatus::Unavailable;
-	return FAILED(m_state->device.Get()->GetDeviceRemovedReason())
-		? RHIDeviceStatus::Removed : RHIDeviceStatus::Ready;
+	return m_state->health.Removed() ? RHIDeviceStatus::Removed : RHIDeviceStatus::Ready;
 }
 
 bool DX11Device::Get_Adapter_Info(RHIAdapterInfo& info) const noexcept
@@ -1628,13 +1642,18 @@ RHIBufferHandle DX11Device::Create_Buffer_Initialized(const RHIBuffer &descripti
 	resource.byte_size = logical_size;
 	resource.capacity = native_description.ByteWidth;
     resource.update_mode = description.update_mode;
+	if (description.usage == RHIBufferUsage::Storage && m_state->context1.Get() != nullptr) {
+		resource.storage_contents.resize(description.byte_size);
+		if (!initial_data.empty())
+			std::memcpy(resource.storage_contents.data(), initial_data.data(), initial_data.size());
+	}
 	resource.object = m_state->buffer_cache.Take(description.usage, description.byte_size,description.update_mode);
 	ID3D11Buffer *native_buffer = nullptr;
 	D3D11_SUBRESOURCE_DATA native_data{};
 	native_data.pSysMem = initial_data.data();
 	if (resource.object.Get() == nullptr) {
         GRAPHICS_PROFILE_SCOPE("Graphics.DX11.NativeCreateBuffer");
-		if (FAILED(m_state->device.Get()->CreateBuffer(&native_description,
+		if (!m_state->Check_Result(m_state->device.Get()->CreateBuffer(&native_description,
             initial_data.empty() || pooled || discard ? nullptr : &native_data, &native_buffer))) return {};
 		resource.object.Reset(native_buffer);
 	}
@@ -1644,7 +1663,7 @@ RHIBufferHandle DX11Device::Create_Buffer_Initialized(const RHIBuffer &descripti
         // new handle receives independent contents, even when recycling buffers.
         if (discard) {
             D3D11_MAPPED_SUBRESOURCE mapped{};
-            if (FAILED(m_state->context.Get()->Map(resource.object.Get(),0,D3D11_MAP_WRITE_DISCARD,0,&mapped))) return {};
+            if (!m_state->Check_Result(m_state->context.Get()->Map(resource.object.Get(),0,D3D11_MAP_WRITE_DISCARD,0,&mapped))) return {};
             std::memcpy(mapped.pData,initial_data.data(),initial_data.size());
             m_state->context.Get()->Unmap(resource.object.Get(),0);
         } else {
@@ -1659,7 +1678,7 @@ RHIBufferHandle DX11Device::Create_Buffer_Initialized(const RHIBuffer &descripti
 		view_description.BufferEx.FirstElement = 0;
 		view_description.BufferEx.NumElements = description.byte_size / description.stride;
 		ID3D11ShaderResourceView *native_view = nullptr;
-		if (FAILED(m_state->device.Get()->CreateShaderResourceView(native_buffer, &view_description, &native_view)))
+		if (!m_state->Check_Result(m_state->device.Get()->CreateShaderResourceView(native_buffer, &view_description, &native_view)))
 			return {};
 		resource.shader_resource_view.Reset(native_view);
 	}
@@ -1717,7 +1736,7 @@ RHITextureHandle DX11Device::Create_Texture_Initialized(const RHITexture &descri
         native.BindFlags = bind_flags;
         native.MiscFlags = misc;
         ID3D11Texture3D* texture = nullptr;
-        if (FAILED(m_state->device.Get()->CreateTexture3D(&native, nullptr, &texture))) return {};
+        if (!m_state->Check_Result(m_state->device.Get()->CreateTexture3D(&native, nullptr, &texture))) return {};
         resource.volume.Reset(texture);
     } else {
         D3D11_TEXTURE2D_DESC native{};
@@ -1731,7 +1750,7 @@ RHITextureHandle DX11Device::Create_Texture_Initialized(const RHITexture &descri
         native.BindFlags = bind_flags;
         native.MiscFlags = misc;
         ID3D11Texture2D* texture = nullptr;
-        if (FAILED(m_state->device.Get()->CreateTexture2D(&native, nullptr, &texture))) return {};
+        if (!m_state->Check_Result(m_state->device.Get()->CreateTexture2D(&native, nullptr, &texture))) return {};
         resource.object.Reset(texture);
     }
     auto* native_texture = resource.Resource();
@@ -1755,7 +1774,7 @@ RHITextureHandle DX11Device::Create_Texture_Initialized(const RHITexture &descri
             view.Texture2D.MipLevels = description.mip_count;
         }
         ID3D11ShaderResourceView* native_view = nullptr;
-        if (FAILED(m_state->device.Get()->CreateShaderResourceView(native_texture, &view, &native_view))) return {};
+        if (!m_state->Check_Result(m_state->device.Get()->CreateShaderResourceView(native_texture, &view, &native_view))) return {};
         resource.shader_resource_view.Reset(native_view);
     }
     if (Has_Texture_Usage(description, RHITextureUsage::RenderTarget)) {
@@ -1770,7 +1789,7 @@ RHITextureHandle DX11Device::Create_Texture_Initialized(const RHITexture &descri
             view.Texture2DArray.ArraySize = 1;
         } else view.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
         ID3D11RenderTargetView* native_view = nullptr;
-        if (FAILED(m_state->device.Get()->CreateRenderTargetView(native_texture, &view, &native_view))) return {};
+        if (!m_state->Check_Result(m_state->device.Get()->CreateRenderTargetView(native_texture, &view, &native_view))) return {};
         resource.render_target_view.Reset(native_view);
     }
     if (Has_Texture_Usage(description, RHITextureUsage::DepthStencil)) {
@@ -1782,12 +1801,12 @@ RHITextureHandle DX11Device::Create_Texture_Initialized(const RHITexture &descri
             view.Texture2DArray.ArraySize = 1;
         } else view.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
         ID3D11DepthStencilView* native_view = nullptr;
-        if (FAILED(m_state->device.Get()->CreateDepthStencilView(native_texture, &view, &native_view))) return {};
+        if (!m_state->Check_Result(m_state->device.Get()->CreateDepthStencilView(native_texture, &view, &native_view))) return {};
         resource.depth_stencil_view.Reset(native_view);
     }
     if (Has_Texture_Usage(description, RHITextureUsage::UnorderedAccess)) {
         ID3D11UnorderedAccessView* native_view = nullptr;
-        if (FAILED(m_state->device.Get()->CreateUnorderedAccessView(native_texture, nullptr, &native_view))) return {};
+        if (!m_state->Check_Result(m_state->device.Get()->CreateUnorderedAccessView(native_texture, nullptr, &native_view))) return {};
         resource.unordered_access_view.Reset(native_view);
     }
     const auto handle = m_state->textures.Create(std::move(resource));
@@ -1810,7 +1829,7 @@ bool DX11Device::Update_Buffer(RHIBufferHandle buffer, std::uint32_t offset, std
     if (resource->update_mode == RHIBufferUpdateMode::Discard) {
         if (offset != 0) return false;
         D3D11_MAPPED_SUBRESOURCE mapped{};
-        if (FAILED(m_state->context.Get()->Map(resource->object.Get(),0,D3D11_MAP_WRITE_DISCARD,0,&mapped))) return false;
+        if (!m_state->Check_Result(m_state->context.Get()->Map(resource->object.Get(),0,D3D11_MAP_WRITE_DISCARD,0,&mapped))) return false;
         std::memcpy(mapped.pData,data.data(),data.size());
         m_state->context.Get()->Unmap(resource->object.Get(),0);
         return true;
@@ -1819,13 +1838,22 @@ bool DX11Device::Update_Buffer(RHIBufferHandle buffer, std::uint32_t offset, std
 		if (offset != 0 || data.size() != resource->byte_size)
 			return false;
         D3D11_MAPPED_SUBRESOURCE mapped{};
-        if (FAILED(m_state->context.Get()->Map(resource->object.Get(),0,D3D11_MAP_WRITE_DISCARD,0,&mapped))) return false;
+        if (!m_state->Check_Result(m_state->context.Get()->Map(resource->object.Get(),0,D3D11_MAP_WRITE_DISCARD,0,&mapped))) return false;
         std::memcpy(mapped.pData,data.data(),data.size());
         m_state->context.Get()->Unmap(resource->object.Get(),0);
         return true;
 	}
 
 	D3D11_BOX destination_box{};
+	if (!resource->storage_contents.empty()) {
+		std::memcpy(resource->storage_contents.data() + offset, data.data(), data.size());
+		// Updating an in-use DEFAULT buffer otherwise makes the driver preserve
+		// its old allocation. DISCARD lets queued draws keep their previous image
+		// while this complete replacement becomes visible to subsequent draws.
+		m_state->context1.Get()->UpdateSubresource1(resource->object.Get(), 0, nullptr,
+			resource->storage_contents.data(), 0, 0, D3D11_COPY_DISCARD);
+		return true;
+	}
 	destination_box.left = offset;
 	destination_box.right = offset + static_cast<UINT>(data.size());
 	destination_box.top = 0;
@@ -1881,7 +1909,7 @@ bool DX11Device::Map_Texture(RHITextureHandle texture, std::uint32_t mip, std::u
         native.BindFlags = native.MiscFlags = 0;
         native.CPUAccessFlags = D3D11_CPU_ACCESS_READ | (read_only ? 0 : D3D11_CPU_ACCESS_WRITE);
         ID3D11Texture3D* object = nullptr;
-        if (FAILED(m_state->device.Get()->CreateTexture3D(&native, nullptr, &object))) return false;
+        if (!m_state->Check_Result(m_state->device.Get()->CreateTexture3D(&native, nullptr, &object))) return false;
         staging.Reset(object);
     } else {
         D3D11_TEXTURE2D_DESC native{};
@@ -1901,7 +1929,7 @@ bool DX11Device::Map_Texture(RHITextureHandle texture, std::uint32_t mip, std::u
         native.BindFlags = native.MiscFlags = 0;
         native.CPUAccessFlags = D3D11_CPU_ACCESS_READ | (read_only ? 0 : D3D11_CPU_ACCESS_WRITE);
         ID3D11Texture2D* object = nullptr;
-        if (FAILED(m_state->device.Get()->CreateTexture2D(&native, nullptr, &object))) return false;
+        if (!m_state->Check_Result(m_state->device.Get()->CreateTexture2D(&native, nullptr, &object))) return false;
         staging.Reset(object);
     }
     auto mapping = std::make_unique<DX11TextureMapping>();
@@ -1913,7 +1941,7 @@ bool DX11Device::Map_Texture(RHITextureHandle texture, std::uint32_t mip, std::u
     m_state->context.Get()->CopySubresourceRegion(mapping->staging.Get(), staging_mip, 0, 0, 0,
         resource->Resource(), layout.subresource, nullptr);
     D3D11_MAPPED_SUBRESOURCE mapped{};
-    if (FAILED(m_state->context.Get()->Map(mapping->staging.Get(), staging_mip,
+    if (!m_state->Check_Result(m_state->context.Get()->Map(mapping->staging.Get(), staging_mip,
         read_only ? D3D11_MAP_READ : D3D11_MAP_READ_WRITE, 0, &mapped))) return false;
     mapping->mapped = true;
     const auto slice_pitch = layout.depth > 1 ? mapped.DepthPitch : mapped.RowPitch * layout.rows;
@@ -1996,8 +2024,10 @@ RHIPipelineHandle DX11Device::Create_Pipeline(const RHIPipeline &description, RH
 		return {};
 
 	DX11Pipeline pipeline;
-	if (!Create_DX11_Pipeline(m_state->device.Get(), description, vertex_shader.data, fragment_shader.data, pipeline))
+	if (!Create_DX11_Pipeline(m_state->device.Get(), description, vertex_shader.data, fragment_shader.data, pipeline)) {
+		m_state->Check_Result(E_FAIL);
 		return {};
+	}
 
 	return m_state->pipelines.Create(std::move(pipeline));
 }
@@ -2047,7 +2077,7 @@ SwapChain &DX11Device::Get_Swap_Chain() noexcept
 bool DX11Device::Set_Exclusive_Fullscreen(bool fullscreen) noexcept
 {
     return Is_Valid() && m_state->native_swap_chain.Get() != nullptr && !m_state->frame_active
-        && SUCCEEDED(m_state->native_swap_chain.Get()->SetFullscreenState(fullscreen ? TRUE : FALSE, nullptr));
+        && m_state->Check_Result(m_state->native_swap_chain.Get()->SetFullscreenState(fullscreen ? TRUE : FALSE, nullptr));
 }
 
 bool DX11Device::Begin_Frame() noexcept

@@ -14,11 +14,6 @@ import Graphics.Scene.Props.Submission;
 #include "W3DDevice/GameClient/W3DRenderContext.h"
 
 #include <algorithm>
-#include <chrono>
-#include <cstdlib>
-#include <fstream>
-#include <string>
-#include <string_view>
 
 import Graphics.Frame.Runtime;
 import Graphics.Scene.Shadows.DirectionalRenderer;
@@ -95,6 +90,31 @@ bool Collect_Object(W3DRenderObject& object,W3DRenderContext& info,int& draw_cou
     }
     return true;
 }
+void Prepare_Shadow_View(W3DRenderContext& info,Graphics::View& view,
+    Graphics::ShadowSettings& settings,Graphics::RenderLight& light)
+{
+    Matrix3D view_matrix;
+    Matrix4x4 projection;
+    info.Camera.Get_View_Matrix(&view_matrix);
+    info.Camera.Get_Backend_Projection_Matrix(&projection);
+    view.view_matrix = Graphics::Matrix4x4::Identity();
+    for (int row=0;row<4;++row)
+        for (int column=0;column<4;++column) {
+            view.projection_matrix.values[row*4+column] = projection[row][column];
+            if (row<3) view.view_matrix.values[row*4+column] = view_matrix[row][column];
+        }
+    settings.cache_maps=true;
+    info.Camera.Get_Clip_Planes(settings.near_clip,settings.far_clip);
+    settings.depth_padding = 400;
+    const auto& direction = TheGlobalData->m_terrainLightPos[0];
+    light.type = Graphics::RenderLightType::Directional;
+    light.flags = Graphics::RenderLightFlags::Enabled;
+    light.direction = {direction.x,direction.y,direction.z};
+    Graphics::RHIViewport viewport;
+    viewport = Graphics::Get_Attachment_Bindings().Current().viewport;
+    settings.map_size = Graphics::Shadow_Map_Size_For_Viewport(viewport.width,viewport.height);
+}
+
 }
 
 Shadow* Create_Directional_Shadow(W3DRenderObject* object)
@@ -116,9 +136,20 @@ bool Collect_Directional_Shadow_Casters(W3DRenderContext& info)
     PROFILER_SECTION_NAME("Graphics.Shadows.Collect");
     Graphics::Get_Prop_Submission().Clear_Shadows();
     Graphics::Get_Environment_Lighting().parameters.shadow_options[0] = 0;
+    Graphics::View view;
+    Graphics::ShadowSettings settings;
+    Graphics::RenderLight light;
+    Prepare_Shadow_View(info,view,settings,light);
+    Graphics::ShadowCascades cascades;
+    if (!Graphics::Build_Shadow_Cascades(view,Graphics::LightHandle(0,1),light,settings,cascades)) return false;
+    const Graphics::ShadowCasterVolume volume(cascades);
     for (auto* shadow=first_shadow;shadow!=nullptr;shadow=shadow->next) {
         shadow->draw_count = 0;
         if (!shadow->isRenderEnabled() || shadow->isInvisibleEnabled()) continue;
+        shadow->object->Validate_Transform();
+        const auto& bounds=shadow->object->Get_Bounding_Box();
+        if (!volume.Intersects({bounds.Center.X,bounds.Center.Y,bounds.Center.Z},
+            {bounds.Extent.X,bounds.Extent.Y,bounds.Extent.Z})) continue;
         if (!Collect_Object(*shadow->object,info,shadow->draw_count)) return false;
         shadow->draw_count *= 4;
     }
@@ -130,68 +161,17 @@ bool Render_Directional_Shadow_Maps(W3DRenderContext& info)
     auto* device = Graphics::Shared_Frame_Device();
 
     if (device == nullptr || TheGlobalData == nullptr) return false;
-    Matrix3D view_matrix;
-    Matrix4x4 projection;
-    info.Camera.Get_View_Matrix(&view_matrix);
-    info.Camera.Get_Backend_Projection_Matrix(&projection);
     Graphics::View view;
-    view.view_matrix = Graphics::Matrix4x4::Identity();
-    for (int row=0;row<4;++row)
-        for (int column=0;column<4;++column) {
-            view.projection_matrix.values[row*4+column] = projection[row][column];
-            if (row<3) view.view_matrix.values[row*4+column] = view_matrix[row][column];
-        }
     Graphics::ShadowSettings settings;
-    static const bool cache_shadows=[] {
-        const auto* value=std::getenv("GENERALS_SHADOW_CACHE");
-        return value==nullptr || std::string_view(value)!="0";
-    }();
-    settings.cache_maps=cache_shadows;
-    info.Camera.Get_Clip_Planes(settings.near_clip,settings.far_clip);
-    settings.depth_padding = 400;
-    const auto& direction = TheGlobalData->m_terrainLightPos[0];
     Graphics::RenderLight light;
-    light.type = Graphics::RenderLightType::Directional;
-    light.flags = Graphics::RenderLightFlags::Enabled;
-    light.direction = {direction.x,direction.y,direction.z};
-    Graphics::RHIViewport viewport;
-    viewport = Graphics::Get_Attachment_Bindings().Current().viewport;
-    settings.map_size = Graphics::Shadow_Map_Size_For_Viewport(viewport.width,viewport.height);
+    Prepare_Shadow_View(info,view,settings,light);
+    const auto viewport=Graphics::Get_Attachment_Bindings().Current().viewport;
     const auto saved_target=Graphics::Get_Attachment_Bindings().Capture();
     const auto color = device->Get_Swap_Chain().Backbuffer();
     const auto depth = device->Get_Swap_Chain().Depth_Target();
-    const auto before=device->Immediate_Command_List().Submission_Counts();
-    const auto reused_before=Graphics::Get_Directional_Shadow_Renderer().Reused_Cascade_Count();
     const bool rendered = Graphics::Get_Directional_Shadow_Renderer().Render(
         device->Immediate_Command_List(),view,light,settings,color.texture,depth.texture,
         viewport);
-    static std::ofstream benchmark([] {
-        const auto* path=std::getenv("GENERALS_GRAPHICS_BENCHMARK");
-        return path ? std::string(path)+".shadows.csv" : std::string{};
-    }());
-    if (benchmark.is_open() && rendered) {
-        using Clock=std::chrono::steady_clock;
-        static auto start=Clock::now(), interval=start;
-        static Graphics::View previous;
-        static std::uint64_t frames=0,draws=0,triangles=0,unchanged=0;
-        static std::uint64_t reused=0;
-        const auto after=device->Immediate_Command_List().Submission_Counts();
-        draws+=after.draw_calls-before.draw_calls;
-        triangles+=after.triangles-before.triangles;
-        reused+=Graphics::Get_Directional_Shadow_Renderer().Reused_Cascade_Count()-reused_before;
-        unchanged+=previous.view_matrix.values==view.view_matrix.values
-            && previous.projection_matrix.values==view.projection_matrix.values;
-        previous=view; ++frames;
-        const auto now=Clock::now();
-        if (std::chrono::duration<double>(now-interval).count()>=1) {
-            benchmark<<std::chrono::duration<double>(now-start).count()<<','<<frames<<','
-                <<double(draws)/frames<<','<<double(triangles)/frames<<','<<double(unchanged)/frames
-                <<','<<double(reused)/frames<<'\n';
-            benchmark.flush(); interval=now;
-            frames=draws=triangles=unchanged=0;
-            reused=0;
-        }
-    }
     Graphics::Get_Attachment_Bindings().Restore(saved_target);
     Graphics::Get_Prop_Submission().Clear_Shadows();
     return rendered;

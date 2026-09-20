@@ -1,0 +1,490 @@
+#define BOOST_TEST_MODULE EngineNavigationSimulationTests
+#include <boost/test/included/unit_test.hpp>
+#include <cstdlib>
+#include <filesystem>
+#include <sstream>
+#include <string_view>
+
+import engine.navigation.simulation_fixture;
+
+BOOST_AUTO_TEST_CASE(crowded_native_and_captured_searches_agree,*boost::unit_test::disabled()) {
+    navigation::testing::Simulation simulation;
+    simulation.loadTwilightFlame();
+    BOOST_TEST_MESSAGE(simulation.compareCrowdedLiveAndCapturedRoute());
+}
+
+BOOST_AUTO_TEST_CASE(player_commands_respond_while_background_searches_are_busy,
+    *boost::unit_test::disabled()) {
+    const auto* configured=std::getenv("SAGE_NAVIGATION_COMMAND_UNIT");
+    const auto* type=configured?configured:"AmericaVehicleDozer";
+    navigation::testing::Simulation simulation;
+    simulation.loadTwilightFlame();
+    const auto result=simulation.playerUnitRespondsWithBusyNavigation(type);
+    BOOST_TEST_MESSAGE("Command response: " << type << " first_ticks=" << result.firstRouteTicks
+        << " replacement_ticks=" << result.replacementRouteTicks << " moved=" << result.moved << result.detail);
+    BOOST_TEST(result.firstRouteTicks==1u);
+    BOOST_TEST(result.replacementRouteTicks==1u);
+    BOOST_TEST(result.latestGoal);
+    BOOST_TEST(result.moved);
+}
+
+BOOST_AUTO_TEST_CASE(new_player_commands_overtake_older_player_command_batches,
+    *boost::unit_test::disabled()) {
+    navigation::testing::Simulation simulation;
+    simulation.loadTwilightFlame();
+    const auto result=simulation.playerUnitRespondsWithBusyNavigation("AmericaVehicleDozer",true);
+    BOOST_TEST_MESSAGE("New batch response: first_ticks=" << result.firstRouteTicks
+        << " replacement_ticks=" << result.replacementRouteTicks << " moved=" << result.moved << result.detail);
+    BOOST_TEST(result.firstRouteTicks==1u);
+    BOOST_TEST(result.replacementRouteTicks==1u);
+    BOOST_TEST(result.latestGoal);
+    BOOST_TEST(result.moved);
+}
+
+BOOST_AUTO_TEST_CASE(new_commands_overtake_same_tick_orders,*boost::unit_test::disabled()) {
+    navigation::testing::Simulation simulation;
+    simulation.loadTwilightFlame();
+    const auto result=simulation.playerUnitRespondsWithBusyNavigation("AmericaVehicleDozer",true,true);
+    BOOST_TEST_MESSAGE("Same-tick response: first=" << result.firstRouteTicks << " replacement=" << result.replacementRouteTicks);
+    BOOST_TEST(result.firstRouteTicks==1u);
+    BOOST_TEST(result.replacementRouteTicks==1u);
+    BOOST_TEST(result.latestGoal);
+    BOOST_TEST(result.moved);
+}
+
+BOOST_AUTO_TEST_CASE(new_commands_preempt_active_foreground_without_abandoning_earlier_orders,
+    *boost::unit_test::disabled()) {
+    navigation::testing::Simulation simulation;
+    simulation.loadTwilightFlame();
+    const auto result=simulation.playerUnitRespondsWithBusyNavigation("AmericaVehicleDozer",false,false,true);
+    BOOST_TEST_MESSAGE("Preempting response: first=" << result.firstRouteTicks << " replacement=" << result.replacementRouteTicks);
+    BOOST_TEST(result.firstRouteTicks==1u);
+    BOOST_TEST(result.replacementRouteTicks==1u);
+    BOOST_TEST(result.latestGoal);
+    BOOST_TEST(result.moved);
+}
+
+BOOST_AUTO_TEST_CASE(incremental_occupancy_matches_full_capture_during_native_movement,
+    *boost::unit_test::disabled()) {
+    navigation::testing::Simulation simulation;
+    simulation.loadTwilightFlame();
+    const auto group=simulation.moveHumveeGroup(64,600,false,{},false,true);
+    BOOST_TEST_MESSAGE("Incremental occupancy audit: captures=" << group.captureAudits
+        << " units=" << group.alive << " advanced=" << group.advanced);
+    BOOST_TEST(group.captureAudits==600u);
+    BOOST_TEST(group.alive==64u);
+    BOOST_TEST(group.advanced>0u);
+}
+
+BOOST_AUTO_TEST_CASE(long_replay_routes_repeat_on_static_twilight_terrain, *boost::unit_test::disabled()) {
+    navigation::testing::Simulation simulation;
+    simulation.loadTwilightFlame();
+    unsigned repeats=16;
+    if (const auto* configured=std::getenv("SAGE_NAVIGATION_ROUTE_REPEATS")) {
+        char* end=nullptr;
+        const auto value=std::strtoul(configured,&end,10);
+        BOOST_REQUIRE(end!=configured && *end=='\0' && value>=2 && value<=4096);
+        repeats=static_cast<unsigned>(value);
+    }
+    const auto* mode=std::getenv("SAGE_NAVIGATION_ROUTE_CAPTURED");
+    const bool captured=mode && std::string_view(mode)=="1";
+    const auto samples=simulation.longReplayRoutesOnStaticTerrain(repeats,std::getenv("SAGE_NAVIGATION_ROUTE_CSV"),captured);
+    BOOST_REQUIRE(samples.size()==5u);
+    // Independent reference captures: fixtures/dx9_twilight_routes. The first
+    // three are unmodified DX9 outputs. The tanks require only increasing its
+    // search-record pool; the modern solver must not inherit that fixed cap.
+    // Work is implementation-specific, but every repeat must agree on it.
+    const unsigned expectedNodes[]{361,371,324,478,471};
+    const std::uint64_t expectedDigest[]{12132883142395869448ull,14605634901908253982ull,3702353680965788933ull,
+        16046446919002575406ull,8741516313319190821ull};
+    for (std::size_t i=0;i<samples.size();++i) {
+        const auto& sample=samples[i];
+        BOOST_TEST_CONTEXT(sample.unitType) {
+            BOOST_TEST_MESSAGE("Replay terrain route: type=" << sample.unitType << " work=" << sample.work
+                << " nodes=" << sample.nodes << " digest=" << sample.digest
+                << " search_slices=" << sample.searchSlices << " maximum_slice_work=" << sample.maximumSliceWork
+                << " maximum_pending_poll_work=" << sample.maximumPendingPollWork
+                << " max_slice_ms=" << sample.maximumSearchSliceMilliseconds
+                << " max_dispatch_ms=" << sample.maximumDispatchMilliseconds
+                << " max_owner_poll_ms=" << sample.maximumOwnerPollMilliseconds
+                << " first_ms=" << sample.firstMilliseconds << " maximum_warm_ms=" << sample.maximumWarmMilliseconds);
+            BOOST_TEST(sample.found);
+            BOOST_TEST(sample.repeatable);
+            BOOST_TEST(sample.work>0u);
+            BOOST_TEST(sample.nodes==expectedNodes[i]);
+            BOOST_TEST(sample.digest==expectedDigest[i]);
+            if (captured) {
+                BOOST_TEST(sample.searchSlices>1u);
+                BOOST_TEST(sample.maximumSliceWork<=10000u);
+                BOOST_TEST(sample.maximumPendingPollWork==0u);
+            }
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(pending_navigation_orders_survive_snapshot_in_arrival_order, *boost::unit_test::disabled()) {
+    navigation::testing::Simulation simulation;
+    simulation.loadTwilightFlame();
+    const auto result=simulation.queuedOrdersSurviveNavigationSnapshot();
+    BOOST_TEST(result.fifo);
+    BOOST_TEST(result.crc);
+    BOOST_TEST(result.commandState);
+    BOOST_TEST(result.adopted==4u);
+    BOOST_TEST(result.moved==4u);
+}
+
+BOOST_AUTO_TEST_CASE(pending_navigation_orders_survive_full_game_save, *boost::unit_test::disabled()) {
+    navigation::testing::Simulation simulation;
+    simulation.loadTwilightFlame(true);
+    const auto result=simulation.queuedOrdersSurviveNavigationSnapshot(true);
+    BOOST_TEST(result.fifo);
+    BOOST_TEST(result.crc);
+    BOOST_TEST(result.commandState);
+    BOOST_TEST(result.adopted==4u);
+    BOOST_TEST(result.moved==4u);
+}
+
+BOOST_AUTO_TEST_CASE(mass_orders_keep_pending_requests_between_ticks, *boost::unit_test::disabled()) {
+    navigation::testing::Simulation simulation;
+    simulation.loadTwilightFlame();
+    const auto group=simulation.moveHumveeGroup(64,1200);
+    BOOST_TEST_MESSAGE("Budgeted orders: pending_after_first_update=" << group.pendingAfterFirstUpdate
+        << " alive=" << group.alive << " advanced=" << group.advanced
+        << " abandoned=" << group.abandoned << " worst_queue_ms=" << group.worstPathfindQueueMilliseconds);
+    BOOST_TEST(group.pendingAfterFirstUpdate>0u);
+    BOOST_TEST(group.alive==64u);
+    BOOST_TEST(group.advanced==64u);
+    BOOST_TEST(group.abandoned==0u);
+}
+
+BOOST_AUTO_TEST_CASE(clear_route_driving_does_not_repeatedly_reverse_steering, *boost::unit_test::disabled()) {
+    navigation::testing::Simulation simulation;
+    simulation.loadTwilightFlame();
+    for (const auto* type:{"AmericaInfantryRanger","AmericaVehicleHumvee","ChinaVehicleSupplyTruck"})
+        for (unsigned count:{1u,2u,8u}) for (float angle:{0.f,1.0f}) {
+            const auto result=simulation.driveClearParallelLane(type,count,angle);
+            BOOST_TEST_CONTEXT(type << " count=" << count << " initial_angle=" << angle) {
+                BOOST_TEST_MESSAGE("Driving: " << type << " count=" << count << " angle=" << angle
+                    << " reversals=" << result.reversals << " maximum_reversals=" << result.maximumReversals << " blocked=" << result.blocked
+                    << " progress=" << result.progress << " maximum_turn=" << result.maximumTurn);
+                for (const auto& detail:result.details) BOOST_TEST_MESSAGE(detail);
+                BOOST_TEST(result.maximumReversals<=2u);
+                BOOST_TEST(result.progress>50);
+            }
+        }
+}
+
+BOOST_AUTO_TEST_CASE(route_repair_rejoins_farther_tail_when_nearest_node_is_enclosed, *boost::unit_test::disabled()) {
+    // DX9 patchPath accepts every usable node in the original tail. It does
+    // not restrict the destination set to the geometrically closest node.
+    navigation::testing::Simulation simulation;
+    simulation.loadTwilightFlame();
+    BOOST_TEST(simulation.patchPathRejoinsBeyondEnclosedNearestNode());
+}
+
+BOOST_AUTO_TEST_CASE(northwest_twilight_crowd_keeps_moving, *boost::unit_test::disabled()) {
+    navigation::testing::Simulation simulation;
+    simulation.loadTwilightFlame();
+    // Allow the deterministic FIFO to serve the burst, then observe movement.
+    // Keep the all-units assertion: increasing the horizon must not hide drops.
+    const auto group=simulation.moveNorthwestCrowd(2400);
+    BOOST_TEST_MESSAGE("Northwest crowd: alive=" << group.alive << " advanced=" << group.advanced
+        << " closer=" << group.closer << " update_ms=" << group.updateMilliseconds
+        << " digest=" << group.digest);
+    for (const auto& detail:group.stalled) BOOST_TEST_MESSAGE(detail);
+    BOOST_TEST(group.created==1024u);
+    BOOST_TEST(group.alive==1024u);
+    BOOST_TEST(group.invalidInitialGoals==0u);
+    BOOST_TEST(group.abandoned==0u);
+    BOOST_TEST(group.advanced==1024u);
+}
+
+BOOST_AUTO_TEST_CASE(ten_thousand_formation_destinations_are_valid, *boost::unit_test::disabled()) {
+    navigation::testing::Simulation simulation;
+    simulation.loadTwilightFlame();
+    const auto group=simulation.moveHumveeGroup(10000,0,true);
+    for (const auto& detail:group.stalled) BOOST_TEST_MESSAGE(detail);
+    BOOST_TEST(group.created==10000u);
+    BOOST_TEST(group.invalidInitialGoals==0u);
+}
+
+BOOST_AUTO_TEST_CASE(ranger_keeps_moving_across_twilight_north_slope, *boost::unit_test::disabled()) {
+    navigation::testing::Simulation simulation;
+    simulation.loadTwilightFlame();
+    BOOST_TEST(simulation.adjustsRangerDestinationForClearance());
+    const auto result=simulation.moveRangerAcrossNorthSlope();
+    for (const auto& detail : result.stalled) BOOST_TEST_MESSAGE(detail);
+    BOOST_TEST(result.advanced==1u);
+    BOOST_TEST(result.closer==1u);
+    BOOST_TEST(result.abandoned==0u);
+    BOOST_TEST(simulation.resumeAfterShortFallback()>50.0f);
+}
+
+BOOST_AUTO_TEST_CASE(yield_requests_reject_missing_inputs, *boost::unit_test::disabled()) {
+    navigation::testing::Simulation simulation;
+    simulation.loadTwilightFlame();
+    for (unsigned missing=0; missing<4; ++missing) {
+        BOOST_TEST_CONTEXT("Yield request case " << missing) {
+            BOOST_TEST(simulation.validatesYieldInputs(missing));
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(deferred_ground_requests_keep_the_latest_order, *boost::unit_test::disabled()) {
+    navigation::testing::Simulation simulation;
+    simulation.loadTwilightFlame();
+    const auto result=simulation.deferredGroundRequestLifecycle();
+    BOOST_TEST(result.waiting);
+    BOOST_TEST(result.noFailureFallback);
+    BOOST_TEST(result.latestDestination);
+    BOOST_TEST(result.completed);
+    BOOST_TEST(result.destructionCancelled);
+    BOOST_TEST(result.staleIdDiscarded);
+    BOOST_TEST(simulation.usesCombinedGroundRequest());
+    BOOST_TEST(simulation.combinedSearchPreservesExactReservationPolicy());
+    BOOST_TEST(simulation.combinedDeferredFallbackKeepsItsStage());
+}
+
+BOOST_AUTO_TEST_CASE(queued_ground_searches_suspend_and_keep_the_previous_route, *boost::unit_test::disabled()) {
+    navigation::testing::Simulation simulation;
+    simulation.loadTwilightFlame();
+    BOOST_TEST(simulation.nativeGroundRequestsCompleteAcrossSlices());
+}
+
+BOOST_AUTO_TEST_CASE(combined_deferred_search_keeps_closest_result_and_negative_completion, *boost::unit_test::disabled()) {
+    navigation::testing::Simulation simulation;
+    simulation.loadTwilightFlame();
+    BOOST_TEST(simulation.combinedDeferredFallbackKeepsItsStage());
+}
+
+BOOST_AUTO_TEST_CASE(real_twilight_flame_initialization_and_objectless_vehicle_preview) {
+    navigation::testing::Simulation simulation;
+    BOOST_TEST(simulation.userDataPath() == simulation.expectedDataPath());
+    BOOST_TEST(simulation.hasUnitTemplate("AmericaVehicleHumvee"));
+    BOOST_TEST(simulation.hasUnitTemplate("AmericaTankPaladin"));
+    simulation.loadTwilightFlame();
+    BOOST_TEST(simulation.objectCount() > 100u);
+    BOOST_TEST(simulation.terrainWidth() > 4000.0f);
+    BOOST_TEST(simulation.generalPartitionRangesMatchBruteForce());
+    BOOST_TEST(simulation.movingSmallUnitsKeepPartitionMembershipsCurrent());
+    BOOST_TEST(simulation.destroyedMoversCancelWeightedTasks());
+    BOOST_TEST(simulation.replacementOrdersCancelWeightedTasks());
+    BOOST_TEST(simulation.capturedOccupantsOutliveNativeObjects());
+    BOOST_TEST(simulation.capturedCellsKeepHistoricalValues());
+    BOOST_TEST(simulation.destinationReservationsMatchCapturedState());
+    BOOST_TEST(simulation.groundBlockingFootprintMatchesFullPolicy());
+    BOOST_TEST(simulation.lineChecksDistinguishFixedAndMovingOccupancy());
+    BOOST_TEST(simulation.overlappingNativeContactsAreInitialized());
+    BOOST_TEST(simulation.lineChecksKeepCrusherCapabilitiesQueryLocal());
+    BOOST_TEST(simulation.followsProtectedCorner());
+    BOOST_TEST(simulation.dx9FollowerUsesVisibleWaypointAndRefreshesAfterSmallMovement());
+    BOOST_TEST(simulation.editedPathsDiscardCachedTargets());
+    BOOST_TEST(simulation.nativeGroundRequestsCompleteAcrossSlices());
+    BOOST_TEST(simulation.queuedSpecialRoutesCompleteAcrossSlices());
+    BOOST_TEST(simulation.queuedSpecialRoutesCompleteAcrossSlices(true));
+    BOOST_TEST(simulation.legacySpecialRouteContracts());
+    BOOST_TEST(simulation.patchPathRejoinsUsableTail());
+    BOOST_TEST(simulation.weightedRoutesPreserveAllyYieldFlag());
+    BOOST_TEST(simulation.dozerCanPlanThroughFriendlyConstruction());
+    const auto dockFailures=simulation.supplyTrucksCompleteDockCycles(4);
+    for (const auto& failure:dockFailures) BOOST_TEST_MESSAGE(failure);
+    BOOST_TEST(dockFailures.empty());
+    BOOST_TEST(simulation.destroyedArmiesLeaveSurvivorUpdatesScheduled());
+    BOOST_TEST(simulation.hijackingInvalidatesQueuedContacts());
+    BOOST_TEST(simulation.deferredDestinationIsRevalidatedBeforePublication());
+    BOOST_TEST(simulation.rangerMovesAfterTurningInsideItsWalkingAngle());
+    BOOST_TEST(simulation.moveObjectlessVehiclePreview());
+    BOOST_TEST(simulation.moveRealHumvee() > 100.0f);
+    // Observe queued traffic through two 20-second windows, including blocked
+    // recovery. Movement and progress are required for every unit; this is
+    // separate from the per-frame performance gate.
+    const auto group = simulation.moveHumveeGroup(250, 1200);
+    BOOST_TEST_MESSAGE("250 real Humvees: alive=" << group.alive << " advanced=" << group.advanced
+        << " closer=" << group.closer << " abandoned=" << group.abandoned << " command_ms=" << group.commandMilliseconds
+        << " update_ms=" << group.updateMilliseconds << " worst_update_ms=" << group.worstUpdateMilliseconds
+        << " pathfind_queue_ms=" << group.pathfindQueueMilliseconds
+        << " worst_pathfind_queue_ms=" << group.worstPathfindQueueMilliseconds
+        << " request_ms=" << group.requestMilliseconds
+        << " worst_request_ms=" << group.worstRequestMilliseconds
+        << " dispatch_ms=" << group.dispatchMilliseconds
+        << " worst_dispatch_ms=" << group.worstDispatchMilliseconds
+        << " max_slice_ms=" << group.maximumSliceMilliseconds
+        << " max_slice_object=" << group.maximumSliceObject
+        << " max_slice_work=" << group.maximumSliceWork
+        << " max_slice_start=" << group.maximumSliceStartX << ',' << group.maximumSliceStartY
+        << " max_slice_goal=" << group.maximumSliceGoalX << ',' << group.maximumSliceGoalY
+        << " slice_ms=" << group.sliceMilliseconds
+        << " commit_ms=" << group.commitMilliseconds
+        << " digest=" << group.digest);
+    for (const auto& stalled : group.stalled) BOOST_TEST_MESSAGE(stalled);
+    BOOST_TEST(group.created == 250u);
+    BOOST_TEST(group.alive == 250u);
+    BOOST_TEST(group.abandoned == 0u);
+    BOOST_TEST(group.advanced == 250u);
+    BOOST_TEST(group.closer == 250u);
+}
+
+BOOST_AUTO_TEST_CASE(fresh_destination_fallback_does_not_require_legacy_search_storage, *boost::unit_test::disabled()) {
+    navigation::testing::Simulation simulation;
+    simulation.loadTwilightFlame();
+    BOOST_TEST(simulation.fallbackHandlesUnallocatedDestinationCell());
+}
+
+BOOST_AUTO_TEST_CASE(ten_thousand_real_units_on_twilight_flame) {
+    navigation::testing::Simulation simulation;
+    simulation.loadTwilightFlame();
+    // A deterministic budget may defer admission. Allow a finite 400 simulated
+    // seconds for all 10,000 real units; keep the actual-movement requirement.
+    const auto group = simulation.moveHumveeGroup(10000, 12000, true);
+    BOOST_TEST_MESSAGE("10000 real Rangers: alive=" << group.alive << " advanced=" << group.advanced
+        << " pending_after_first_update=" << group.pendingAfterFirstUpdate
+        << " closer=" << group.closer << " abandoned=" << group.abandoned
+        << " waiting=" << group.waiting << " invalid_initial_goals=" << group.invalidInitialGoals
+        << " navigation_work=" << group.navigationWork
+        << " pathfind_queue_ms=" << group.pathfindQueueMilliseconds
+        << " worst_pathfind_queue_ms=" << group.worstPathfindQueueMilliseconds
+        << " request_ms=" << group.requestMilliseconds
+        << " worst_request_ms=" << group.worstRequestMilliseconds
+        << " dispatch_ms=" << group.dispatchMilliseconds
+        << " worst_dispatch_ms=" << group.worstDispatchMilliseconds
+        << " max_slice_ms=" << group.maximumSliceMilliseconds
+        << " max_slice_object=" << group.maximumSliceObject
+        << " max_slice_work=" << group.maximumSliceWork
+        << " max_slice_start=" << group.maximumSliceStartX << ',' << group.maximumSliceStartY
+        << " max_slice_goal=" << group.maximumSliceGoalX << ',' << group.maximumSliceGoalY
+        << " slice_ms=" << group.sliceMilliseconds
+        << " commit_ms=" << group.commitMilliseconds
+        << " maximum_navigation_work=" << group.maximumNavigationWork
+        << " budget_exhausted_updates=" << group.budgetExhaustedUpdates
+        << " command_ms=" << group.commandMilliseconds << " update_ms=" << group.updateMilliseconds
+        << " worst_update_ms=" << group.worstUpdateMilliseconds << " digest=" << group.digest);
+    for (const auto& stalled : group.stalled) BOOST_TEST_MESSAGE(stalled);
+    BOOST_TEST(group.created == 10000u);
+    BOOST_TEST(group.pendingAfterFirstUpdate>0u);
+    BOOST_TEST(group.invalidInitialGoals == 0u);
+    BOOST_TEST(group.alive == 10000u);
+    BOOST_TEST(group.abandoned == 0u);
+    BOOST_TEST(group.advanced == 10000u);
+}
+
+namespace {
+void verifyNativeSerial(unsigned count=2000) {
+    navigation::testing::Simulation simulation;
+    simulation.loadTwilightFlame();
+    simulation.resetNavigationPlanner();
+    const unsigned frames=count==2000?2600u:600u;
+    const auto group=simulation.moveHumveeGroup(count,frames,true,{},true);
+    BOOST_TEST_MESSAGE("Native serial units=" << group.alive
+        << " update_ms=" << group.updateMilliseconds << " navigation_work=" << group.navigationWork
+        << " advanced=" << group.advanced << " digest=" << group.digest);
+    BOOST_REQUIRE(group.alive==count);
+    BOOST_TEST(group.abandoned==0u);
+    if (count==2000) BOOST_TEST(group.advanced==count);
+    BOOST_REQUIRE(group.frameCRCs.size()==frames);
+    for (unsigned frame=0;frame<group.frameCRCs.size();++frame)
+        BOOST_TEST_MESSAGE("navigation_frame_crc=" << frame << ":" << group.frameCRCs[frame]);
+}
+
+BOOST_AUTO_TEST_CASE(save_oracle_many_unit_commands_reproduce_deterministically, *boost::unit_test::disabled()) {
+    const auto* configuredSave=std::getenv("SAGE_NAVIGATION_TEST_SAVE");
+    if (!configuredSave || !*configuredSave) {
+        BOOST_TEST_MESSAGE("SKIP: Set SAGE_NAVIGATION_TEST_SAVE to an external save fixture.");
+        return;
+    }
+    const std::filesystem::path oracle=configuredSave;
+    BOOST_REQUIRE_MESSAGE(std::filesystem::is_regular_file(oracle), "Save fixture does not exist: " << oracle.string());
+
+    bool resetPlanner=false;
+    if (const auto* value=std::getenv("SAGE_NAVIGATION_TEST_RESET_PLANNER"))
+        resetPlanner=std::strtoul(value,nullptr,10)!=0;
+    unsigned frames=120;
+    if (const auto* value=std::getenv("SAGE_NAVIGATION_TEST_SAVE_FRAMES"))
+        frames=static_cast<unsigned>(std::strtoul(value,nullptr,10));
+    BOOST_REQUIRE(frames>0u && frames<=10000u);
+    bool startupSeed=false;
+    if (const auto* value=std::getenv("SAGE_NAVIGATION_TEST_STARTUP_SEED"))
+        startupSeed=std::strtoul(value,nullptr,10)!=0;
+    navigation::testing::Simulation simulation;
+    const auto report=simulation.replaySaveOracle(oracle,frames,resetPlanner,startupSeed);
+    BOOST_REQUIRE(report.loaded);
+    BOOST_TEST(report.objectCount>100u);
+    BOOST_TEST(report.frames==frames);
+    BOOST_TEST(report.commandCount>0u);
+    BOOST_TEST(report.commands.size()==report.commandCount);
+    // save_oracle_determinism.cmake compares command and frame digests across
+    // fresh serial processes. Historical modern checksums (16046841180281878794,
+    // 13137731682003174573) predate restored DX9 terrain/route rules and are not
+    // a cross-version contract. Independently captured DX9 routes have their
+    // own frozen regression; full save/load continuation is tested separately.
+    BOOST_TEST(report.worstUpdateMilliseconds<500.0);
+    BOOST_TEST(report.totalUpdateMilliseconds<frames*500.0);
+    BOOST_TEST_MESSAGE("Save oracle: objects=" << report.objectCount
+        << " commands=" << report.commandCount
+        << " load_ms=" << report.loadMilliseconds
+        << " total_update_ms=" << report.totalUpdateMilliseconds
+        << " worst_update_ms=" << report.worstUpdateMilliseconds
+        << " max_path_queue_ms=" << report.maximumPathQueueMilliseconds
+        << " max_path_slice_ms=" << report.maximumPathSliceMilliseconds
+        << " max_path_slice_object=" << report.maximumPathSliceObject
+        << " max_path_slice_work=" << report.maximumPathSliceWork
+        << " max_path_commit_ms=" << report.maximumPathCommitMilliseconds
+        << " max_path_request_ms=" << report.maximumPathRequestMilliseconds
+        << " max_path_dispatch_ms=" << report.maximumPathDispatchMilliseconds
+        << " navigation_work=" << report.navigationWork
+        << " maximum_navigation_work=" << report.maximumNavigationWork
+        << " command_digest=" << report.commandDigest
+        << " frame_digest=" << report.frameDigest);
+    std::ostringstream commandFrames;
+    commandFrames << "Save oracle command counts per frame:";
+    for (const auto count:report.commandCountsPerFrame) commandFrames << ' ' << count;
+    BOOST_TEST_MESSAGE(commandFrames.str());
+    std::ostringstream divergentCommands;
+    divergentCommands << "Save oracle commands at frames 46-50:";
+    for (const auto& command:report.commands)
+        if (command.frame>=46 && command.frame<=50)
+            divergentCommands << ' ' << command.frame << ':' << command.objectId << ':' << command.command;
+    BOOST_TEST_MESSAGE(divergentCommands.str());
+
+    // Compare fresh serial processes, including planner reconstruction after load.
+}
+void verifySpecialSerial() {
+    navigation::testing::Simulation simulation;
+    simulation.loadTwilightFlame();
+    simulation.resetNavigationPlanner();
+    const auto crcs=simulation.specialRequestFrameCRCs();
+    BOOST_TEST_MESSAGE("Native serial scenario=mixed_approach_flee_cancellation");
+    BOOST_REQUIRE(crcs.size()==600u);
+    for (unsigned frame=0;frame<crcs.size();++frame)
+        BOOST_TEST_MESSAGE("navigation_frame_crc=" << frame << ":" << crcs[frame]);
+}
+}
+BOOST_AUTO_TEST_CASE(native_special_serial, *boost::unit_test::disabled()) { verifySpecialSerial(); }
+BOOST_AUTO_TEST_CASE(native_simulation_serial, *boost::unit_test::disabled()) { verifyNativeSerial(); }
+
+BOOST_AUTO_TEST_CASE(native_ten_thousand_serial, *boost::unit_test::disabled()) { verifyNativeSerial(10000); }
+
+BOOST_AUTO_TEST_CASE(supply_trucks_pick_up_and_deliver_through_shared_docks, *boost::unit_test::disabled()) {
+    navigation::testing::Simulation simulation;
+    simulation.loadTwilightFlame();
+    for (unsigned count:{1u,4u}) {
+        BOOST_TEST_MESSAGE("Supply truck count=" << count);
+        const auto failures=simulation.supplyTrucksCompleteDockCycles(count);
+        for (const auto& failure:failures) BOOST_TEST_MESSAGE(failure);
+        BOOST_TEST(failures.empty());
+    }
+}
+
+BOOST_AUTO_TEST_CASE(supply_trucks_keep_driving_between_shared_docks, *boost::unit_test::disabled()) {
+    navigation::testing::Simulation simulation;
+    simulation.loadTwilightFlame();
+    const auto failures=simulation.supplyTrucksCompleteDockCycles(8,3);
+    for (const auto& failure:failures) BOOST_TEST_MESSAGE(failure);
+    BOOST_TEST(failures.empty());
+}
+
+BOOST_AUTO_TEST_CASE(returning_supply_truck_does_not_overtake_a_waiting_truck, *boost::unit_test::disabled()) {
+    navigation::testing::Simulation simulation;
+    simulation.loadTwilightFlame();
+    BOOST_TEST(simulation.dockAdmissionsRespectArrival());
+    BOOST_TEST(simulation.dockAdmissionsRespectArrival(true));
+}

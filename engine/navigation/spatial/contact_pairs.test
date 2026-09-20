@@ -1,0 +1,72 @@
+#include <boost/test/unit_test.hpp>
+#include <set>
+#include <utility>
+#include <cstdint>
+#include <limits>
+#include <algorithm>
+import engine.navigation.spatial.contact_pairs;
+
+BOOST_AUTO_TEST_CASE(contact_probe_chains_wrap_and_reuse_deleted_prefix_slots) {
+    // These aligned pairs hash to slot 126 in the initial 128-slot table,
+    // forming a long chain across the end and the table's prefix.
+    constexpr unsigned identities[]={248u,286u,334u,392u,396u,408u,419u,428u,
+        471u,489u,662u,675u,785u,1190u,1233u,1238u,1398u,1584u,1805u,1960u,
+        1967u,2000u,2148u,2425u,2564u,2711u,2813u,2882u,3027u,3261u,
+        3272u,3368u,3575u,3685u,3754u,3783u,3925u,3946u,3985u,4002u};
+    navigation::ContactPairs pairs;
+    std::set<std::pair<std::uintptr_t,std::uintptr_t>> expected;
+    for (unsigned round=0;round<12;++round) {
+        for (auto id:identities) {
+            const std::uintptr_t a=id*16,b=(id+1)*16;
+            BOOST_REQUIRE(pairs.insert(a,b)==expected.emplace(a,b).second);
+            BOOST_REQUIRE(!pairs.insert(b,a));
+        }
+        BOOST_TEST(pairs.capacity()==128u);
+        for (unsigned i=round%3;i<40;i+=3) {
+            const std::uintptr_t a=identities[i]*16,b=(identities[i]+1)*16;
+            BOOST_REQUIRE(pairs.erase(b,a)==bool(expected.erase({a,b})));
+            BOOST_REQUIRE(!pairs.erase(a,b));
+        }
+        BOOST_TEST(pairs.size()==expected.size());
+        if (round%4==3) { pairs.clear(); expected.clear(); }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(contact_duplicates_after_deletions_do_not_consume_slots_or_grow) {
+    navigation::ContactPairs pairs;
+    for (unsigned i=0;i<5000;++i) BOOST_TEST(pairs.insert(i*16,(i+1)*16));
+    const auto capacity=pairs.capacity();
+    for (unsigned round=0;round<8;++round) {
+        for (unsigned i=0;i<5000;i+=2) BOOST_TEST(pairs.erase(i*16,(i+1)*16));
+        for (unsigned i=1;i<5000;i+=2) BOOST_TEST(!pairs.insert((i+1)*16,i*16));
+        BOOST_TEST(pairs.size()==2500u);
+        BOOST_TEST(pairs.capacity()==capacity);
+        for (unsigned i=0;i<5000;i+=2) BOOST_TEST(pairs.insert((i+1)*16,i*16));
+        BOOST_TEST(pairs.size()==5000u);
+        BOOST_TEST(pairs.capacity()==capacity);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(contact_membership_matches_ordered_oracle_through_growth_and_removal) {
+    navigation::ContactPairs pairs;
+    std::set<std::pair<std::uintptr_t,std::uintptr_t>> reference;
+    std::uint32_t random=12345;
+    for (unsigned i=0;i<100000;++i) {
+        random=random*1664525u+1013904223u;
+        std::uintptr_t a=random%10000,b=(random>>16)%10000;
+        const auto key=std::minmax(a,b);
+        if (i%7==0) BOOST_TEST(pairs.erase(b,a)==bool(reference.erase(key)));
+        else {
+            BOOST_TEST(pairs.insert(a,b)==reference.insert(key).second);
+            BOOST_TEST(!pairs.insert(b,a));
+        }
+        BOOST_TEST(pairs.size()==reference.size());
+        if (i%10003==0) { pairs.clear();reference.clear(); }
+    }
+    pairs.clear();
+    const auto largest=std::numeric_limits<std::uintptr_t>::max();
+    BOOST_TEST(pairs.insert(0,largest));
+    BOOST_TEST(!pairs.insert(largest,0));
+    BOOST_TEST(pairs.erase(0,largest));
+    BOOST_TEST(pairs.insert(largest,0));
+}

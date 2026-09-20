@@ -516,6 +516,12 @@ public:
 	void validate();
 
 	AsciiString getName() const { return m_name; }
+	const AsciiString* getSpriteTextureName() const {
+		return m_particleType==PARTICLE || m_particleType==VOLUME_PARTICLE ? &m_particleTypeName : nullptr;
+	}
+	const AsciiString* getStreakTextureName() const {
+		return m_particleType==STREAK ? &m_particleTypeName : nullptr;
+	}
 
 	// This function was made const because of update modules' module data being all const.
 	ParticleSystem *createSlaveSystem( Bool createSlaves = TRUE ) const ;					///< if returns non-null, it is a slave system for use

@@ -138,11 +138,10 @@ public:
             && std::memcmp(m_shadow_geometry.Indices().data(),indices.data(),indices.size_bytes()) == 0;
         if (!same) {
             if (!m_shadow_geometry.Assign(vertices,indices)) return false;
-            if (m_shadow_mesh.Is_Valid()) renderer.Destroy_Mesh(m_shadow_mesh);
-            m_shadow_mesh = {};
             std::map<std::pair<unsigned,std::uint32_t>,std::uint32_t> bones;
             m_shadow_bones.clear();
-            std::vector<PropVertex> bind_pose;
+            auto& bind_pose = m_shadow_bind_pose;
+            bind_pose.clear();
             bind_pose.reserve(vertices.size());
             for (const auto& source : vertices) {
                 const auto sway_index = static_cast<unsigned>(std::clamp(source.sway[0],1.0f,10.0f))-1;
@@ -158,10 +157,16 @@ public:
             }
             if (m_shadow_bones.size() > 65536)
                 return Add_CPU_Shadow_Caster(shadows,vertices,indices,parameters,texture);
-            const auto next = renderer.Create_Mesh(bind_pose,indices);
-            if (!next.Is_Valid()) return false;
-            if (m_shadow_mesh.Is_Valid()) renderer.Destroy_Mesh(m_shadow_mesh);
-            m_shadow_mesh = next;
+            // Keep CPU allocation capacity when moving/toppling trees change
+            // the forest geometry. Deferred shadow draws may still own the old
+            // mesh, in which case Update_Mesh refuses mutation and we publish
+            // a replacement with its own lifetime.
+            if (!m_shadow_mesh.Is_Valid() || !renderer.Update_Mesh(m_shadow_mesh,bind_pose,indices)) {
+                const auto next = renderer.Create_Mesh(bind_pose,indices);
+                if (!next.Is_Valid()) return false;
+                if (m_shadow_mesh.Is_Valid()) renderer.Destroy_Mesh(m_shadow_mesh);
+                m_shadow_mesh = next;
+            }
             m_shadow_pose.resize(m_shadow_bones.size());
         }
         for (std::size_t i=0; i<m_shadow_bones.size(); ++i) {
@@ -188,6 +193,7 @@ private:
         m_shadow_mesh = {};
         m_shadow_renderer = nullptr;
         m_shadow_geometry = {};
+        m_shadow_bind_pose = {};
         m_shadow_bones.clear();
         m_shadow_pose.clear();
     }
@@ -303,6 +309,7 @@ private:
     PropInstanceOwner m_shadow_instance;
     PropSkinOwner m_shadow_skin;
     TreeGeometry m_shadow_geometry;
+    std::vector<PropVertex> m_shadow_bind_pose;
     std::vector<ShadowBone> m_shadow_bones;
     std::vector<PropBoneTransform> m_shadow_pose;
     Device *m_device = nullptr;

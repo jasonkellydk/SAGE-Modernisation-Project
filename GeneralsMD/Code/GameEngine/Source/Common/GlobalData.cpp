@@ -548,7 +548,7 @@ GlobalData* GlobalData::m_theOriginal = nullptr;
 
 //-------------------------------------------------------------------------------------------------
 //-------------------------------------------------------------------------------------------------
-GlobalData::GlobalData()
+GlobalData::GlobalData(const char* userDataDirectory)
 {
 	Int i, j;
 
@@ -863,7 +863,9 @@ GlobalData::GlobalData()
 	m_stealthFriendlyOpacity = 0.5f;
 	m_defaultOcclusionDelay = LOGICFRAMES_PER_SECOND * 3;	//default to 3 seconds
 
-	m_preloadAssets = FALSE;
+	// Load faction models during map setup instead of stalling the simulation
+	// when ProductionUpdate creates a unit for the first time.
+	m_preloadAssets = TRUE;
 	m_preloadEverything = FALSE;
 	m_preloadReport = FALSE;
 
@@ -1045,9 +1047,10 @@ GlobalData::GlobalData()
 
 	m_keyboardCameraRotateSpeed = 0.1f;
 
-	// Keep user data in the normal Documents folder using the fixed Zero Hour
-	// data directory name.
-	m_userDataDir = BuildUserDataPath();
+	m_userDataDir = userDataDirectory && *userDataDirectory
+		? AsciiString(userDataDirectory) : BuildUserDataPath();
+	if (!m_userDataDir.isEmpty() && !m_userDataDir.endsWith("\\"))
+		m_userDataDir.concat('\\');
 	CreateDirectory(m_userDataDir.str(), nullptr);
 
 	//-allAdvice feature

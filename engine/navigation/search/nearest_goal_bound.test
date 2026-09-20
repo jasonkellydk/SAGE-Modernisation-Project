@@ -1,0 +1,62 @@
+#include <boost/test/unit_test.hpp>
+#include <algorithm>
+#include <array>
+#include <vector>
+#include <limits>
+#include <stdexcept>
+import engine.navigation.search.nearest_goal_bound;
+
+BOOST_AUTO_TEST_CASE(endpoint_bound_cancels_mid_layer_and_restarts_at_integer_edges) {
+    navigation::NearestGoalBound scan;
+    scan.begin(-2,-3,5,4,0,0,3);
+    BOOST_TEST(scan.advance(1,[](int,int,unsigned){return false;})==1u);
+    BOOST_TEST(!scan.complete());
+    scan.cancel();
+    BOOST_TEST(scan.advance(7,[](int,int,unsigned){BOOST_FAIL("Cancelled callback");return false;})==0u);
+    BOOST_TEST(scan.examined()==0u);
+    const int low=std::numeric_limits<int>::min(),high=std::numeric_limits<int>::max();
+    scan.begin(low,low,high,high,low,high,2);
+    unsigned visits=0;
+    while(!scan.complete()) scan.advance(1,[&](int x,int y,unsigned layer) {
+        BOOST_TEST(x==low);BOOST_TEST(y==high);BOOST_TEST(layer==visits++);return true;
+    });
+    BOOST_TEST(visits==2u);BOOST_TEST(scan.minimum().value()==0.0);
+    BOOST_CHECK_THROW(scan.begin(0,0,2,2,3,0,1),std::invalid_argument);
+    BOOST_CHECK_THROW(scan.begin(0,0,2,2,0,0,0),std::invalid_argument);
+}
+
+BOOST_AUTO_TEST_CASE(endpoint_bound_slices_match_ring_order_and_exhaustive_minimum) {
+    for (int width:{1,7,19}) for (int height:{1,9,23}) for (unsigned seed=0;seed<8;++seed) {
+        const int ox=int(seed)%width,oy=int(seed*3)%height;
+        auto eligible=[&](int x,int y,unsigned layer) { return seed!=0 && (x*13+y*7+layer*3+seed)%29==0; };
+        double expected=std::numeric_limits<double>::infinity();
+        for(int y=0;y<height;++y) for(int x=0;x<width;++x) for(unsigned l=0;l<3;++l)
+            if(eligible(x,y,l)) expected=std::min(expected,double((x-ox)*(x-ox)+(y-oy)*(y-oy)));
+        std::vector<std::array<int,3>> reference;
+        double best=std::numeric_limits<double>::infinity();
+        auto visit=[&](int x,int y) {
+            if(x<0||y<0||x>=width||y>=height) return;
+            for(unsigned l=0;l<3;++l) { reference.push_back({x,y,int(l)});
+                if(eligible(x,y,l)) best=std::min(best,double((x-ox)*(x-ox)+(y-oy)*(y-oy))); }
+        };
+        for(int r=0;r<=std::max(width,height)&&double(r)*r<=best;++r) {
+            if(!r) { visit(ox,oy);continue; }
+            for(int d=-r;d<=r;++d) {visit(ox+d,oy-r);visit(ox+d,oy+r);}
+            for(int d=-r+1;d<r;++d) {visit(ox-r,oy+d);visit(ox+r,oy+d);}
+        }
+        for(unsigned budget:{1u,7u,1000u}) {
+            navigation::NearestGoalBound scan;scan.begin(0,0,width-1,height-1,ox,oy,3);
+            std::vector<std::array<int,3>> visited;
+            BOOST_TEST(scan.advance(0,[](int,int,unsigned){BOOST_FAIL("Zero budget callback");return false;})==0u);
+            while(!scan.complete()) {
+                const auto before=visited.size();
+                const auto used=scan.advance(budget,[&](int x,int y,unsigned l){visited.push_back({x,y,int(l)});return eligible(x,y,l);});
+                BOOST_TEST(used<=budget);BOOST_TEST(visited.size()-before==used);
+            }
+            BOOST_TEST(visited==reference);
+            BOOST_TEST(scan.minimum().value_or(std::numeric_limits<double>::infinity())==expected);
+            BOOST_TEST(scan.examined()==visited.size());
+            scan.cancel();BOOST_TEST(!scan.minimum().has_value());BOOST_TEST(scan.complete());
+        }
+    }
+}

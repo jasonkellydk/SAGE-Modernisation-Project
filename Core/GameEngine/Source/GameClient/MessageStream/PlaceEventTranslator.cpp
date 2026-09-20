@@ -62,6 +62,7 @@ PlaceEventTranslator::~PlaceEventTranslator()
 //-------------------------------------------------------------------------------------------------
 GameMessageDisposition PlaceEventTranslator::translateGameMessage(const GameMessage *msg)
 {
+	if (msg->isMouseInputCaptured()) return KEEP_MESSAGE;
 	GameMessageDisposition disp = KEEP_MESSAGE;
 
 	switch(msg->getType())

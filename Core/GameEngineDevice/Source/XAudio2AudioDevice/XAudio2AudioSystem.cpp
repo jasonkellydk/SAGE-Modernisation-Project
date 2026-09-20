@@ -24,11 +24,15 @@
 #include "XAudio2PcmStream.h"
 #include "XAudio2Decoder.h"
 #include "AudioFileProvider.h"
+#include "GameLogic/GameLogic.h"
+#include <limits>
 
 #include <xaudio2.h>
 #include <x3daudio.h>
 #include <objbase.h>
 #include <cstring>
+
+import engine.navigation.diagnostics.frame_capture;
 
 #pragma comment(lib, "xaudio2.lib")
 
@@ -93,6 +97,11 @@ void XAudio2AudioSystem::openDevice()
 
 void XAudio2AudioSystem::closeDevice()
 {
+	m_pendingAudio.Clear();
+	// Workers own compressed bytes and only publish into the PCM cache. Join
+	// before destroying that cache or closing the device, never on cancellation.
+	for (auto& job : m_decodeJobs) job.second.wait();
+	m_decodeJobs.clear();
 	// Clean up direct-play sounds
 	for (auto &dpa : m_directPlayingSounds)
 	{
@@ -136,10 +145,21 @@ void *XAudio2AudioSystem::getDevice()
 
 void XAudio2AudioSystem::init() {}
 void XAudio2AudioSystem::postProcessLoad() {}
-void XAudio2AudioSystem::reset() {}
+void XAudio2AudioSystem::reset() { m_pendingAudio.Clear(); }
 
 void XAudio2AudioSystem::update()
 {
+	for (auto& pending : m_pendingAudio.TakeReady()) {
+		pending.event.filename=pending.filename.c_str();
+		if (pending.succeeded && isBusEnabled(pending.event.bus)
+			&& finalizePlay(pending.event,pending.handle)!=AUDIO_HANDLE_INVALID) {
+			setCompletionCallback(pending.handle,pending.callback,pending.callbackData);
+		} else if (pending.callback) pending.callback(pending.handle,pending.callbackData);
+	}
+	for (auto it=m_decodeJobs.begin(); it!=m_decodeJobs.end();) {
+		if (it->second.wait_for(std::chrono::seconds(0))==std::future_status::ready) it=m_decodeJobs.erase(it);
+		else ++it;
+	}
 	updateDirectPlayingSounds();
 }
 
@@ -164,6 +184,7 @@ static XAudio2Mastering::Bus audioBusToMasteringBus(AudioBus bus, bool is3D)
 
 XAudio2Voice *XAudio2AudioSystem::acquireDirectVoice(AudioBus bus, bool is3D, uint32_t channels, uint32_t sampleRate)
 {
+	auto timing=navigation::diagnostics::frameCapture().measure("Audio.NativeVoice.Create",TheGameLogic?TheGameLogic->getFrame():0);
 	if (!m_xaudio)
 		return nullptr;
 
@@ -181,6 +202,7 @@ XAudio2Voice *XAudio2AudioSystem::acquireDirectVoice(AudioBus bus, bool is3D, ui
 
 void XAudio2AudioSystem::releaseDirectVoice(XAudio2Voice *voice)
 {
+	auto timing=navigation::diagnostics::frameCapture().measure("Audio.NativeVoice.Destroy",TheGameLogic?TheGameLogic->getFrame():0);
 	if (voice)
 	{
 		voice->destroy();
@@ -200,7 +222,23 @@ AudioHandle XAudio2AudioSystem::playAudioEvent(const AudioEvent &event)
 	if (XAudio2Decoder::isCached(event.filename))
 		return finalizePlay(event);
 
-	// Slow path: pre-read file then decode synchronously from memory
+	auto& capture=navigation::diagnostics::frameCapture();
+	const auto frame=TheGameLogic?TheGameLogic->getFrame():0;
+	auto coldTiming=capture.measure("Audio.ColdPlay",frame);
+
+	const auto deferMusic = [&](std::shared_future<bool> decoded) {
+		const auto handle=m_nextDirectHandle++;
+		if (m_nextDirectHandle==0) m_nextDirectHandle=0x80000000;
+		m_pendingAudio.Add(handle,event,std::move(decoded));
+		return handle;
+	};
+	if (event.bus==AudioBus::Music) {
+		const auto job=m_decodeJobs.find(event.filename);
+		if (job!=m_decodeJobs.end()) return deferMusic(job->second);
+	}
+
+	// Read game-owned files on this thread. Music workers receive only owned
+	// compressed bytes; short effects keep their immediate playback behavior.
 	if (m_fileProvider)
 	{
 	AudioFileProvider::FileHandle fh = m_fileProvider->open(event.filename);
@@ -210,14 +248,25 @@ AudioHandle XAudio2AudioSystem::playAudioEvent(const AudioEvent &event)
 		}
 
 		int64_t sz = m_fileProvider->size(fh);
-		if (sz > 0)
+		if (sz > 0 && sz<=(std::numeric_limits<int>::max)())
 		{
 			std::vector<uint8_t> fileData(static_cast<size_t>(sz));
-			m_fileProvider->read(fh, fileData.data(), static_cast<int>(sz));
+			const auto read=m_fileProvider->read(fh, fileData.data(), static_cast<int>(sz));
 			m_fileProvider->close(fh);
+			if (read!=sz) return AUDIO_HANDLE_INVALID;
+			if (event.bus==AudioBus::Music) {
+				const std::string filename=event.filename;
+				auto decoded=std::async(std::launch::async,[filename,data=std::move(fileData)] {
+					return XAudio2Decoder::decodeFromMemory(filename.c_str(),data).data!=nullptr;
+				}).share();
+				m_decodeJobs.emplace(filename,decoded);
+				return deferMusic(std::move(decoded));
+			}
 
-			XAudio2Decoder::DecodedBuffer decoded =
-				XAudio2Decoder::decodeFromMemory(event.filename, fileData);
+			const auto decoded=[&] {
+				auto timing=capture.measure("Audio.Effect.Decode",frame);
+				return XAudio2Decoder::decodeFromMemory(event.filename, fileData);
+			}();
 			if (!decoded.data)
 			{
 				return AUDIO_HANDLE_INVALID;
@@ -261,6 +310,7 @@ void XAudio2AudioSystem::precacheFile(const char *filename)
 
 AudioHandle XAudio2AudioSystem::finalizePlay(const AudioEvent &event, AudioHandle preAssignedHandle)
 {
+	auto timing=navigation::diagnostics::frameCapture().measure("Audio.FinalizePlay",TheGameLogic?TheGameLogic->getFrame():0);
 	XAudio2Decoder::DecodedBuffer pcm = XAudio2Decoder::tryGetCached(event.filename);
 	if (!pcm.data)
 		return AUDIO_HANDLE_INVALID;
@@ -352,6 +402,7 @@ AudioHandle XAudio2AudioSystem::finalizePlay(const AudioEvent &event, AudioHandl
 
 void XAudio2AudioSystem::stopAudioEvent(AudioHandle handle)
 {
+	if (m_pendingAudio.Remove(handle)) return;
 	for (auto it = m_directPlayingSounds.begin(); it != m_directPlayingSounds.end(); ++it)
 	{
 		if (it->handle == handle)
@@ -372,6 +423,7 @@ void XAudio2AudioSystem::stopAudioEvent(AudioHandle handle)
 
 void XAudio2AudioSystem::pauseAudioEvent(AudioHandle handle)
 {
+	if (auto* pending=m_pendingAudio.Find(handle)) { pending->paused=true; return; }
 	for (auto &dpa : m_directPlayingSounds)
 	{
 		if (dpa.handle == handle)
@@ -385,6 +437,7 @@ void XAudio2AudioSystem::pauseAudioEvent(AudioHandle handle)
 
 void XAudio2AudioSystem::resumeAudioEvent(AudioHandle handle)
 {
+	if (auto* pending=m_pendingAudio.Find(handle)) { pending->paused=false; return; }
 	for (auto &dpa : m_directPlayingSounds)
 	{
 		if (dpa.handle == handle)
@@ -398,6 +451,10 @@ void XAudio2AudioSystem::resumeAudioEvent(AudioHandle handle)
 
 void XAudio2AudioSystem::setAudioPosition(AudioHandle handle, float x, float y, float z)
 {
+	if (auto* pending=m_pendingAudio.Find(handle)) {
+		pending->event.posX=x; pending->event.posY=y; pending->event.posZ=z;
+		return;
+	}
 	for (auto &dpa : m_directPlayingSounds)
 	{
 		if (dpa.handle == handle)
@@ -425,6 +482,7 @@ void XAudio2AudioSystem::setAudioPosition(AudioHandle handle, float x, float y, 
 
 void XAudio2AudioSystem::setAudioVolume(AudioHandle handle, float volume)
 {
+	if (auto* pending=m_pendingAudio.Find(handle)) { pending->event.volume=volume; return; }
 	for (auto &dpa : m_directPlayingSounds)
 	{
 		if (dpa.handle == handle)
@@ -440,6 +498,7 @@ void XAudio2AudioSystem::setAudioVolume(AudioHandle handle, float volume)
 
 void XAudio2AudioSystem::setAudioPitch(AudioHandle handle, float pitch)
 {
+	if (auto* pending=m_pendingAudio.Find(handle)) { pending->event.pitchShift=pitch; return; }
 	for (auto &dpa : m_directPlayingSounds)
 	{
 		if (dpa.handle == handle)
@@ -453,6 +512,7 @@ void XAudio2AudioSystem::setAudioPitch(AudioHandle handle, float pitch)
 
 bool XAudio2AudioSystem::isAudioPlaying(AudioHandle handle) const
 {
+	if (m_pendingAudio.Find(handle)) return true;
 	for (auto &dpa : m_directPlayingSounds)
 	{
 		if (dpa.handle == handle)
@@ -464,6 +524,10 @@ bool XAudio2AudioSystem::isAudioPlaying(AudioHandle handle) const
 void XAudio2AudioSystem::setCompletionCallback(AudioHandle handle,
 	AudioCompletionCallback callback, void *userData)
 {
+	if (auto* pending=m_pendingAudio.Find(handle)) {
+		pending->callback=callback; pending->callbackData=userData;
+		return;
+	}
 	for (auto &dpa : m_directPlayingSounds)
 	{
 		if (dpa.handle == handle)

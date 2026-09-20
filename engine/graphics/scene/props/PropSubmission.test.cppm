@@ -385,7 +385,7 @@ BOOST_AUTO_TEST_CASE(constant_updates_follow_frequency_and_retry_failed_uploads)
     std::array<RHIBindlessResource,4> resources{};
     const auto prepare=[&] { return constants.Prepare_Resources(device,parameters,material,resources); };
     BOOST_REQUIRE(prepare());
-    BOOST_CHECK((device.uploads==std::vector<std::size_t>{192,464,288,64}));
+    BOOST_CHECK((device.uploads==std::vector<std::size_t>{192,464,sizeof(PropMaterialConstants),64}));
     device.uploads.clear(); BOOST_REQUIRE(prepare()); BOOST_CHECK(device.uploads.empty());
     parameters.world[3]=2; BOOST_REQUIRE(prepare());
     BOOST_CHECK((device.uploads==std::vector<std::size_t>{64}));
@@ -394,14 +394,14 @@ BOOST_AUTO_TEST_CASE(constant_updates_follow_frequency_and_retry_failed_uploads)
     device.uploads.clear(); parameters.light_direction[0][0]=.5f; BOOST_REQUIRE(prepare());
     BOOST_CHECK((device.uploads==std::vector<std::size_t>{464}));
     device.uploads.clear(); parameters.opacity=.5f; BOOST_REQUIRE(prepare());
-    BOOST_CHECK((device.uploads==std::vector<std::size_t>{288}));
+    BOOST_CHECK((device.uploads==std::vector<std::size_t>{sizeof(PropMaterialConstants)}));
     device.uploads.clear(); parameters.world[3]=3; device.reject=true;
     BOOST_CHECK(!prepare()); device.reject=false; BOOST_REQUIRE(prepare());
     BOOST_CHECK((device.uploads==std::vector<std::size_t>{64,64}));
     constants.Shutdown(device); material.Shutdown(device);
     BOOST_REQUIRE(constants.Initialize(device));
     device.uploads.clear(); BOOST_REQUIRE(prepare());
-    BOOST_CHECK((device.uploads==std::vector<std::size_t>{192,464,288,64}));
+    BOOST_CHECK((device.uploads==std::vector<std::size_t>{192,464,sizeof(PropMaterialConstants),64}));
     constants.Shutdown(device); material.Shutdown(device);
 }
 
@@ -423,7 +423,7 @@ BOOST_AUTO_TEST_CASE(material_uploads_persist_across_other_meshes_and_retry_chan
     BOOST_REQUIRE(prepare(second, second_parameters));
     const auto second_buffer = resources[2].buffer;
     BOOST_CHECK(first_buffer != second_buffer);
-    BOOST_CHECK((device.uploads == std::vector<std::size_t>{288}));
+    BOOST_CHECK((device.uploads == std::vector<std::size_t>{sizeof(PropMaterialConstants)}));
     device.uploads.clear();
     for (unsigned frame = 0; frame < 3; ++frame) {
         BOOST_REQUIRE(prepare(first, first_parameters));
@@ -435,7 +435,7 @@ BOOST_AUTO_TEST_CASE(material_uploads_persist_across_other_meshes_and_retry_chan
 
     first_parameters.uv_transform[1][3] = .25f;
     BOOST_REQUIRE(prepare(first, first_parameters));
-    BOOST_CHECK((device.uploads == std::vector<std::size_t>{288}));
+    BOOST_CHECK((device.uploads == std::vector<std::size_t>{sizeof(PropMaterialConstants)}));
     device.uploads.clear();
     first_parameters.alpha_cutoff = .125f;
     device.reject = true;
@@ -444,7 +444,7 @@ BOOST_AUTO_TEST_CASE(material_uploads_persist_across_other_meshes_and_retry_chan
     BOOST_REQUIRE(prepare(second, second_parameters));
     BOOST_REQUIRE(prepare(first, first_parameters));
     BOOST_REQUIRE(prepare(first, first_parameters));
-    BOOST_CHECK((device.uploads == std::vector<std::size_t>{288,288}));
+    BOOST_CHECK((device.uploads == std::vector<std::size_t>{sizeof(PropMaterialConstants),sizeof(PropMaterialConstants)}));
 
     // Rebuilding shared view bindings does not invalidate retained materials.
     constants.Shutdown(device);
@@ -455,7 +455,7 @@ BOOST_AUTO_TEST_CASE(material_uploads_persist_across_other_meshes_and_retry_chan
     first.Shutdown(device);
     device.uploads.clear();
     BOOST_REQUIRE(prepare(first, first_parameters));
-    BOOST_CHECK((device.uploads == std::vector<std::size_t>{288}));
+    BOOST_CHECK((device.uploads == std::vector<std::size_t>{sizeof(PropMaterialConstants)}));
     BOOST_CHECK(resources[2].buffer != first_buffer);
     constants.Shutdown(device); first.Shutdown(device); second.Shutdown(device);
 }
@@ -542,6 +542,53 @@ BOOST_AUTO_TEST_CASE(retained_instances_batch_distinct_lighting_and_keep_queued_
     BOOST_REQUIRE(renderer.Instances().Prepare(device));
     BOOST_CHECK(renderer.Instances().Resolve(blue)!=nullptr);
     submission.Shutdown(); renderer.Destroy_Mesh(mesh); renderer.Shutdown();
+    device.Destroy_Texture(target); device.Destroy_Texture(depth);
+}
+
+BOOST_AUTO_TEST_CASE(partial_instance_uploads_preserve_other_records_and_already_submitted_draws)
+{
+    GraphicsTestDevice device({true});
+    PropRenderer renderer;
+    BOOST_REQUIRE(renderer.Initialize(device,Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    const auto target=device.Create_Texture({32,16,1,RHITextureFormat::RGBA8_UNorm,
+        static_cast<unsigned>(RHITextureUsage::RenderTarget)});
+    const auto depth=device.Create_Texture({32,16,1,RHITextureFormat::D32_Float,
+        static_cast<unsigned>(RHITextureUsage::DepthStencil)});
+    auto& commands=device.Immediate_Command_List();
+    BOOST_REQUIRE(commands.Set_Render_Targets(target,depth));
+    BOOST_REQUIRE(commands.Set_Viewport({0,0,32,16}));
+    BOOST_REQUIRE(commands.Clear({0,0,0,0},1));
+    std::array<PropVertex,4> vertices{};
+    vertices[0].position={-.3f,-.5f,.5f}; vertices[1].position={.3f,-.5f,.5f};
+    vertices[2].position={.3f,.5f,.5f}; vertices[3].position={-.3f,.5f,.5f};
+    for (auto& vertex:vertices) {
+        vertex.material_ambient={1,1,1,1}; vertex.material_diffuse={1,1,1,1};
+        vertex.material_emissive={0,0,0,0}; vertex.normal={0,0,1};
+    }
+    const auto mesh=renderer.Create_Mesh(vertices,std::array<std::uint32_t,6>{0,1,2,0,2,3});
+    PropStyle style; style.depth_test=false; style.depth_write=false;
+    PropParameters parameters; parameters.textured=0;
+    parameters.view_projection={1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
+    PropInstanceOwner left,right;
+    parameters.world[3]=-.5f; parameters.scene_ambient={1,0,0,0};
+    const auto red=left.Update(renderer.Instances(),parameters);
+    parameters.world[3]=.5f; parameters.scene_ambient={0,1,0,0};
+    const auto green=right.Update(renderer.Instances(),parameters);
+    BOOST_REQUIRE(renderer.Draw_Record(commands,mesh,style,parameters,{},red));
+    // Move only the first record off-screen after its draw has been submitted.
+    // No readback/flush intervenes: that draw must keep its old transform, and
+    // the untouched second record must survive the following partial upload.
+    parameters.world[3]=3;
+    BOOST_REQUIRE(left.Update(renderer.Instances(),parameters)==red);
+    BOOST_REQUIRE(renderer.Draw_Record(commands,mesh,style,parameters,{},green));
+    std::array<std::byte,32*16*4> pixels{};
+    BOOST_REQUIRE(device.Readback_Texture(target,pixels,128));
+    const auto red_pixel=(8*32+8)*4,green_pixel=(8*32+24)*4;
+    BOOST_CHECK_EQUAL(std::to_integer<unsigned>(pixels[red_pixel]),255u);
+    BOOST_CHECK_EQUAL(std::to_integer<unsigned>(pixels[red_pixel+1]),0u);
+    BOOST_CHECK_EQUAL(std::to_integer<unsigned>(pixels[green_pixel]),0u);
+    BOOST_CHECK_EQUAL(std::to_integer<unsigned>(pixels[green_pixel+1]),255u);
+    left.Reset(); right.Reset(); renderer.Destroy_Mesh(mesh); renderer.Shutdown();
     device.Destroy_Texture(target); device.Destroy_Texture(depth);
 }
 

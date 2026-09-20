@@ -1,0 +1,165 @@
+#include <boost/test/unit_test.hpp>
+#include <array>
+#include <algorithm>
+#include <vector>
+#include <limits>
+#include <stdexcept>
+import engine.navigation.movement.snapshot.cells;
+
+BOOST_AUTO_TEST_CASE(immutable_cell_snapshot_copies_share_the_captured_storage) {
+    const navigation::CellSnapshot original(1,0,0,31,31,[](int x,int y) {
+        navigation::CellState cell;
+        cell.occupancy={unsigned(x*32+y+1),true};
+        return cell;
+    });
+    const auto copy=original;
+    // Copying the immutable view must not duplicate every map cell before a
+    // regional update. Both owners retain the same unmodified cell storage.
+    BOOST_TEST(copy.cell(0,0)==original.cell(0,0));
+    BOOST_TEST(copy.cell(31,31)==original.cell(31,31));
+    BOOST_TEST(copy.cell(31,31)->occupancy.unit==1024u);
+}
+
+BOOST_AUTO_TEST_CASE(captured_cells_keep_terrain_and_occupancy_after_source_changes) {
+    std::array<navigation::CellState,6> source;
+    for (unsigned i=0;i<source.size();++i) {
+        source[i].occupancy={i+1,true,false,false,false,true};
+        source[i].goal=i+7;source[i].obstacle=i+20;
+        source[i].terrain=static_cast<unsigned char>(i);
+        source[i].connection=static_cast<unsigned char>(i+1);
+        source[i].pinched=(i&1)!=0;
+        source[i].fence=(i&2)!=0;
+    }
+    const navigation::CellSnapshot before(3,-1,4,1,5,[&](int x,int y) { return source[(x+1)*2+y-4]; });
+    source.fill({});
+    const navigation::CellSnapshot after(3,-1,4,1,5,[&](int x,int y) { return source[(x+1)*2+y-4]; });
+    BOOST_TEST(before.layer()==3u);
+    for (int x=-1;x<=1;++x) for (int y=4;y<=5;++y) {
+        const unsigned i=(x+1)*2+y-4;
+        const auto* cell=before.cell(x,y);
+        BOOST_REQUIRE(cell);
+        BOOST_TEST(cell->occupancy.unit==i+1);
+        BOOST_TEST(cell->goal==i+7);
+        BOOST_TEST(cell->obstacle==i+20);
+        BOOST_TEST(unsigned(cell->terrain)==i);
+        BOOST_TEST(unsigned(cell->connection)==i+1);
+        BOOST_TEST(cell->pinched==bool(i&1));
+        BOOST_TEST(cell->fence==bool(i&2));
+        BOOST_TEST(!after.occupancy(x,y).valid);
+        // Every captured terrain kind supports aircraft, even after its source
+        // disappears. The newer capture represents missing cells instead.
+        BOOST_TEST(before.permits({8,0,false},x,y));
+        BOOST_TEST(!after.permits({8,0,false},x,y));
+    }
+    BOOST_TEST(!before.occupancy(-2,4).valid);
+    BOOST_TEST(!before.occupancy(1,6).valid);
+}
+
+BOOST_AUTO_TEST_CASE(regional_cell_edits_preserve_old_views_and_untouched_pages) {
+    const navigation::CellSnapshot original(2,0,0,32,34,[](int,int) {
+        navigation::CellState value;value.occupancy={9,true};return value;
+    });
+    navigation::CellState first;
+    first.occupancy={17,true,false,true,true,true};
+    first.goal=18;first.obstacle=19;first.aircraftGoal=20;
+    first.terrain=3;first.connection=4;
+    first.pinched=true;first.fence=true;first.aircraftReserved=true;
+    auto last=first;last.occupancy.unit=21;
+    const std::array<navigation::CellSnapshotEdit,4> edits{{
+        {7,10,first},{7,11,first},{32,34,first},{7,10,last}}};
+    const auto changed=original.updatedCells(edits);
+    BOOST_TEST(changed.layer()==2u);
+    BOOST_TEST(changed.cell(7,10)->occupancy.unit==21u);
+    BOOST_TEST(changed.cell(7,11)->occupancy.unit==17u);
+    BOOST_TEST(changed.cell(32,34)->occupancy.unit==17u);
+    BOOST_TEST(changed.cell(20,0)==original.cell(20,0));
+    BOOST_TEST(changed.cell(0,0)!=original.cell(0,0));
+    BOOST_TEST(original.cell(7,10)->occupancy.unit==9u);
+    BOOST_TEST(original.cell(7,11)->occupancy.unit==9u);
+    BOOST_TEST(original.cell(32,34)->occupancy.unit==9u);
+    const auto* cell=changed.cell(7,10);
+    BOOST_TEST(cell->occupancy.valid);
+    BOOST_TEST(!cell->occupancy.empty);
+    BOOST_TEST(cell->occupancy.goal);
+    BOOST_TEST(cell->occupancy.moving);
+    BOOST_TEST(cell->occupancy.fixed);
+    BOOST_TEST(cell->goal==18u);BOOST_TEST(cell->obstacle==19u);
+    BOOST_TEST(cell->aircraftGoal==20u);
+    BOOST_TEST(unsigned(cell->terrain)==3u);BOOST_TEST(unsigned(cell->connection)==4u);
+    BOOST_TEST(cell->pinched);BOOST_TEST(cell->fence);BOOST_TEST(cell->aircraftReserved);
+    const auto ids=changed.occupantIds();
+    const std::array<unsigned,6> expected{9,17,18,19,20,21};
+    BOOST_TEST(ids==expected,boost::test_tools::per_element());
+    const auto unchanged=changed.updatedCells({});
+    BOOST_TEST(unchanged.cell(7,10)==changed.cell(7,10));
+    const std::array<navigation::CellSnapshotEdit,2> invalid{{{7,10,{}},{33,0,{}}}};
+    BOOST_CHECK_THROW(changed.updatedCells(invalid),std::out_of_range);
+    BOOST_TEST(changed.cell(7,10)->occupancy.unit==21u);
+}
+
+BOOST_AUTO_TEST_CASE(regional_cell_edits_own_their_pages_after_prior_views_are_destroyed) {
+    const auto retained=[] {
+        const navigation::CellSnapshot original(1,-1,-1,-1,-1,[](int,int) {
+            navigation::CellState value;value.occupancy={42,true};return value;
+        });
+        navigation::CellState replacement;replacement.goal=23;
+        const std::array<navigation::CellSnapshotEdit,1> edits{{{-1,-1,replacement}}};
+        return original.updatedCells(edits);
+    }();
+    const auto ids=retained.occupantIds();
+    BOOST_REQUIRE_EQUAL(ids.size(),1u);
+    BOOST_TEST(ids[0]==23u);
+    BOOST_TEST(retained.cell(-1,-1)->occupancy.unit==0u);
+    BOOST_TEST(retained.cell(-1,-1)->goal==23u);
+    const navigation::CellSnapshot empty;
+    const std::array<navigation::CellSnapshotEdit,1> edit{{{0,0,{}}}};
+    BOOST_CHECK_THROW(empty.updatedCells(edit),std::out_of_range);
+}
+
+BOOST_AUTO_TEST_CASE(cell_capture_handles_coordinate_limits_and_rejects_overflow) {
+    const int low=std::numeric_limits<int>::min(),high=std::numeric_limits<int>::max();
+    unsigned reads=0;
+    const navigation::CellSnapshot edge(1,high-1,low,high,low+1,[&](int x,int y) {
+        BOOST_TEST(x>=high-1);BOOST_TEST(y<=low+1);++reads;return navigation::CellState{};
+    });
+    BOOST_TEST(reads==4u);
+    BOOST_TEST(edge.cell(high,low)!=nullptr);
+    BOOST_TEST(edge.cell(low,high)==nullptr);
+    const auto read=[](int,int) { return navigation::CellState{}; };
+    BOOST_CHECK_THROW((navigation::CellSnapshot(1,2,0,1,0,read)),std::invalid_argument);
+    BOOST_CHECK_THROW((navigation::CellSnapshot(1,low,low,high,high,read)),std::length_error);
+}
+
+BOOST_AUTO_TEST_CASE(regional_snapshot_ids_match_a_fresh_capture_after_repeated_replacements) {
+    constexpr int width=37,height=29;
+    std::array<navigation::CellState,width*height> source{};
+    auto read=[&](int x,int y) { return source[x*height+y]; };
+    navigation::CellSnapshot current(1,0,0,width-1,height-1,read);
+    unsigned random=0x13579u;
+    for (unsigned batch=0;batch<100;++batch) {
+        std::array<navigation::CellSnapshotEdit,13> edits;
+        for (auto& edit:edits) {
+            random=random*1664525u+1013904223u;
+            const auto index=random%source.size();
+            auto& value=source[index];
+            value.occupancy.unit=batch%3 ? (random>>8)%41 : 0;
+            value.goal=batch%4 ? (random>>16)%41 : 0;
+            value.obstacle=batch%5 ? (random>>24)%41 : 0;
+            value.aircraftGoal=batch%6 ? std::numeric_limits<unsigned>::max() : 19;
+            edit={int(index/height),int(index%height),value};
+        }
+        const auto retained=current;
+        const auto retainedIds=current.occupantIds();
+        current=current.updatedCells(edits);
+        // Independent flat full scan: neither the old view nor a page summary
+        // may retain an ID whose final occurrence was removed in this batch.
+        std::vector<unsigned> expected;
+        for (const auto& value:source)
+            for (auto id:{value.occupancy.unit,value.goal,value.obstacle,value.aircraftGoal})
+                if (id && id!=std::numeric_limits<unsigned>::max()) expected.push_back(id);
+        std::sort(expected.begin(),expected.end());
+        expected.erase(std::unique(expected.begin(),expected.end()),expected.end());
+        BOOST_TEST(current.occupantIds()==expected,boost::test_tools::per_element());
+        BOOST_TEST(retained.occupantIds()==retainedIds,boost::test_tools::per_element());
+    }
+}

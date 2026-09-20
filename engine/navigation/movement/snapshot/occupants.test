@@ -1,0 +1,47 @@
+#include <boost/test/unit_test.hpp>
+#include <array>
+#include <vector>
+#include <limits>
+#include <stdexcept>
+import engine.navigation.movement.snapshot.occupants;
+import engine.navigation.movement.occupancy_policy;
+
+BOOST_AUTO_TEST_CASE(occupant_snapshot_owns_sparse_id_values_after_source_changes) {
+    std::vector<navigation::OccupantState> source;
+    for (unsigned i=1;i<=10000;++i) source.push_back({i*65536u,bool(i&1),bool(i&2),bool(i&4),bool(i&8),static_cast<unsigned char>(i%256)});
+    source.push_back({std::numeric_limits<unsigned>::max(),true,true,true,true});
+    const navigation::OccupantSnapshot snapshot(source);
+    source.clear();source.shrink_to_fit();
+    for (unsigned i=1;i<=10000;++i) {
+        const auto* unit=snapshot.find(i*65536u);
+        BOOST_REQUIRE(unit);
+        BOOST_TEST(snapshot.allied(unit)==bool(i&1));
+        BOOST_TEST(snapshot.infantry(unit)==bool(i&2));
+        BOOST_TEST(snapshot.canMoveAside(unit)==bool(i&4));
+        BOOST_TEST(snapshot.canCrush(unit)==bool(i&8));
+        BOOST_TEST(snapshot.crushableLevel(unit)==i%256);
+        BOOST_TEST(snapshot.find(i*65536u+1)==nullptr);
+    }
+    BOOST_REQUIRE(snapshot.find(std::numeric_limits<unsigned>::max()));
+    BOOST_TEST(snapshot.find(0)==nullptr);
+    const std::array duplicate{navigation::OccupantState{1},navigation::OccupantState{1}};
+    BOOST_CHECK_THROW(navigation::OccupantSnapshot{duplicate},std::invalid_argument);
+    const std::array invalid{navigation::OccupantState{0}};
+    BOOST_CHECK_THROW(navigation::OccupantSnapshot{invalid},std::invalid_argument);
+}
+
+BOOST_AUTO_TEST_CASE(occupancy_decisions_use_captured_relationships_and_mobility) {
+    std::array states{navigation::OccupantState{7,true,false,true,false}};
+    const navigation::OccupantSnapshot before(states);
+    states[0].allied=false;
+    const navigation::OccupantSnapshot after(states);
+    const navigation::OccupancyQuery query{99,0,0,0,0,1,false,false};
+    const auto cell=[](int,int) { return navigation::OccupancyCell{7,true,false,false,false,true}; };
+    navigation::OccupancyResult oldResult,newResult;
+    BOOST_TEST(navigation::checkOccupancy(query,oldResult,cell,before));
+    BOOST_TEST(navigation::checkOccupancy(query,newResult,cell,after));
+    BOOST_TEST(oldResult.allyFixedCount==1);
+    BOOST_TEST(!oldResult.enemyFixed);
+    BOOST_TEST(newResult.allyFixedCount==0);
+    BOOST_TEST(newResult.enemyFixed);
+}

@@ -1,0 +1,138 @@
+#include <boost/test/unit_test.hpp>
+#include <array>
+#include <limits>
+#include <vector>
+import engine.navigation.movement.destination.reservations;
+import engine.navigation.movement.terrain_policy;
+import engine.navigation.movement.snapshot.cells;
+import engine.navigation.movement.snapshot.occupants;
+
+BOOST_AUTO_TEST_CASE(destination_ground_goals_preserve_alliance_crushing_and_missing_owner_rules) {
+    using namespace navigation;
+    const std::array<OccupantState,3> states{{{3,true,false,true,false},
+        {4,false,false,true,false},{5,false,false,true,true}}};
+    const OccupantSnapshot units(states);
+    DestinationQuery query{1,2,0,true,true,false,true};
+    ReservationCell cell;
+    cell.present=true;cell.noUnits=false;
+    // Invalid, own, ignored, allied, enemy, crushable enemy, and missing identity.
+    constexpr std::array movingAllowed{true,true,true,false,true,true,true};
+    constexpr std::array fixedAllowed{true,true,true,false,false,true,true};
+    for (unsigned goal=0;goal<=6;++goal) {
+        cell.goalId=goal;
+        cell.stationary=false;
+        BOOST_TEST(permitsDestinationCell(query,cell,units)==movingAllowed[goal]);
+        cell.stationary=true;
+        BOOST_TEST(permitsDestinationCell(query,cell,units)==fixedAllowed[goal]);
+        query.hasMover=false;
+        BOOST_TEST(permitsDestinationCell(query,cell,units)==(goal<=2));
+        query.hasMover=true;
+    }
+    cell.noUnits=true;
+    BOOST_TEST(permitsDestinationCell(query,cell,units));
+    cell.present=false;
+    BOOST_TEST(!permitsDestinationCell(query,cell,units));
+}
+
+BOOST_AUTO_TEST_CASE(destination_aircraft_reservations_override_ground_rules_but_not_bounds) {
+    using namespace navigation;
+    const OccupantSnapshot units;
+    DestinationQuery query{1,2,0,true,true,true,true};
+    ReservationCell cell;
+    cell.present=true;cell.noUnits=false;cell.stationary=true;cell.goalId=999;
+    for (unsigned kind=0;kind<7;++kind) for (unsigned owner : {0u,1u,2u,3u}) {
+        cell.terrain=static_cast<TerrainKind>(kind);cell.aircraftId=owner;
+        cell.reservedForAircraft=false;
+        BOOST_TEST(permitsDestinationCell(query,cell,units));
+        cell.reservedForAircraft=true;
+        BOOST_TEST(permitsDestinationCell(query,cell,units)==(owner==1));
+    }
+    cell.present=false;cell.reservedForAircraft=false;
+    BOOST_TEST(!permitsDestinationCell(query,cell,units));
+}
+
+BOOST_AUTO_TEST_CASE(destination_obstacles_and_impassable_cells_require_their_exact_exceptions) {
+    using namespace navigation;
+    const OccupantSnapshot units;
+    DestinationQuery query{1,2,0,true,true,false,true};
+    ReservationCell cell;
+    cell.present=true;
+    for (unsigned kind=0;kind<7;++kind) {
+        cell.terrain=static_cast<TerrainKind>(kind);
+        for (unsigned obstacle : {0u,2u,3u}) {
+            cell.obstacleId=obstacle;
+            BOOST_TEST(permitsDestinationCell(query,cell,units)==(kind<4 || (kind==4 && obstacle==2)));
+            query.rejectImpassable=false;
+            BOOST_TEST(permitsDestinationCell(query,cell,units)==(kind!=4 || obstacle==2));
+            query.rejectImpassable=true;
+        }
+    }
+    query.ignored=0;cell.terrain=TerrainKind::obstacle;cell.obstacleId=0;
+    BOOST_TEST(!permitsDestinationCell(query,cell,units));
+}
+
+BOOST_AUTO_TEST_CASE(destination_footprints_check_every_cell_and_handle_coordinate_limits) {
+    using namespace navigation;
+    const OccupantSnapshot units;
+    DestinationQuery query{1,0,1,false,true,false,true};
+    unsigned reads=0;
+    const auto read=[&](int x,int y) {
+        ++reads;ReservationCell cell;cell.present=x>=0 && y>=0 && x<2 && y<2;return cell;
+    };
+    BOOST_TEST(permitsDestination(query,1,1,read,units));
+    BOOST_TEST(reads==4u);
+    BOOST_TEST(!permitsDestination(query,0,0,read,units));
+    const auto before=reads;
+    query.radius=-1;
+    BOOST_TEST(!permitsDestination(query,1,1,read,units));
+    BOOST_TEST(reads==before);
+    query.radius=0;query.center=false;
+    BOOST_TEST(permitsDestination(query,-100,-100,read,units));
+    BOOST_TEST(reads==before); // Preserve the native empty footprint.
+    query.center=true;
+    const auto clear=[&](int,int) { ++reads;ReservationCell cell;cell.present=true;return cell; };
+    BOOST_TEST(permitsDestination(query,std::numeric_limits<int>::max(),std::numeric_limits<int>::min(),clear,units));
+    BOOST_TEST(reads==before+1);
+    query.radius=1;
+    BOOST_TEST(!permitsDestination(query,std::numeric_limits<int>::min(),0,clear,units));
+    BOOST_TEST(reads==before+1);
+}
+
+BOOST_AUTO_TEST_CASE(destination_views_only_resolve_identities_when_the_rule_needs_them) {
+    using namespace navigation;
+    struct LazyCell : ReservationCell {
+        unsigned* goals;
+        unsigned* aircraftGoals;
+        unsigned goal() const { ++*goals;return goalId; }
+        unsigned aircraftGoal() const { ++*aircraftGoals;return aircraftId; }
+    } cell;
+    unsigned goals=0,aircraftGoals=0;
+    cell.goals=&goals;cell.aircraftGoals=&aircraftGoals;cell.present=true;
+    const OccupantSnapshot units;
+    DestinationQuery query;
+    BOOST_TEST(permitsDestinationCell(query,cell,units));
+    cell.terrain=TerrainKind::obstacle;
+    BOOST_TEST(!permitsDestinationCell(query,cell,units));
+    query.aircraft=true;
+    BOOST_TEST(permitsDestinationCell(query,cell,units));
+    BOOST_TEST(goals==0u);BOOST_TEST(aircraftGoals==0u);
+    cell.reservedForAircraft=true;
+    BOOST_TEST(permitsDestinationCell(query,cell,units));
+    BOOST_TEST(goals==0u);BOOST_TEST(aircraftGoals==1u);
+}
+
+BOOST_AUTO_TEST_CASE(captured_aircraft_destinations_retain_their_reservations) {
+    using namespace navigation;
+    CellState source;
+    source.occupancy.valid=true;source.aircraftGoal=17;source.aircraftReserved=true;
+    const CellSnapshot before(0,0,0,0,0,[&](int,int) { return source; });
+    source.aircraftGoal=0;source.aircraftReserved=false;
+    const CellSnapshot after(0,0,0,0,0,[&](int,int) { return source; });
+    const OccupantSnapshot units;
+    DestinationQuery query{1,17,0,true,true,true,true};
+    BOOST_TEST(!permitsDestinationCell(query,before.destination(0,0),units));
+    BOOST_TEST(permitsDestinationCell(query,after.destination(0,0),units));
+    query.self=17;
+    BOOST_TEST(permitsDestinationCell(query,before.destination(0,0),units));
+    BOOST_TEST(!permitsDestinationCell(query,before.destination(1,0),units));
+}

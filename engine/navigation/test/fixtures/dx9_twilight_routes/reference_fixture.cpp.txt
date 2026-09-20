@@ -1,0 +1,245 @@
+#include "PreRTS.h"
+#include <filesystem>
+#include <chrono>
+#include <vector>
+#include <bit>
+#include <string>
+#include <stdexcept>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
+#include <cstdlib>
+#include "Common/CommandLine.h"
+#include "Common/CriticalSection.h"
+#include "Common/FramePacer.h"
+#include "Common/GameEngine.h"
+#include "Common/GlobalData.h"
+#include "Common/PlayerTemplate.h"
+#include "Common/PlayerList.h"
+#include "Common/Player.h"
+#include "Common/RandomValue.h"
+#include "Common/ThingFactory.h"
+#include "Common/version.h"
+#include "BuildVersion.h"
+#include "GeneratedVersion.h"
+#include "GameNetwork/GameInfo.h"
+#include "GameLogic/AI.h"
+#include "GameLogic/AIPathfind.h"
+#include "GameLogic/GameLogic.h"
+#include "GameLogic/Object.h"
+#include "GameLogic/Module/AIUpdate.h"
+#include "GameLogic/TerrainLogic.h"
+#include "SDL3Device/Common/SDL3GameEngine.h"
+const Char* g_strFile = "data\\Generals.str";
+const Char* g_csfFile = "data\\%s\\Generals.csf";
+const char* gAppPrefix = "";
+class ReferenceGameEngine : public SDL3GameEngine {
+    Radar* createRadar(Bool dummy) override {
+        return dummy ? static_cast<Radar*>(NEW RadarDummy) : SDL3GameEngine::createRadar(dummy);
+    }
+};
+GameEngine* CreateGameEngine() { return NEW ReferenceGameEngine; }
+struct ReplayRouteSample {
+    std::string unitType;
+    unsigned work=0,nodes=0;
+    std::uint64_t digest=0;
+    double firstMilliseconds=0,maximumWarmMilliseconds=0;
+    bool found=false,repeatable=true;
+};
+class Simulation {
+    std::filesystem::path dataRoot;
+    static std::uint64_t mix(std::uint64_t state,std::uint64_t value) {
+        return (state^value)*1099511628211ull;
+    }
+public:
+    Simulation() {
+        if (TheGameEngine || TheGlobalData)
+            throw std::logic_error("Simulation requires an isolated engine process");
+        static auto* locks = new CriticalSection[5]; // Process-lifetime locks outlive baseline memory teardown.
+        TheAsciiStringCriticalSection = &locks[0];
+        TheUnicodeStringCriticalSection = &locks[1];
+        TheDmaCriticalSection = &locks[2];
+        TheMemoryPoolCriticalSection = &locks[3];
+        TheDebugLogCriticalSection = &locks[4];
+        initMemoryManager();
+        dataRoot = std::filesystem::temp_directory_path() /
+            ("generals-navigation-simulation-" + std::to_string(GetCurrentProcessId()));
+        std::filesystem::create_directories(dataRoot);
+        SetEnvironmentVariableA("SAGE_DX9_REFERENCE_USER_DATA", (dataRoot.string()+"\\").c_str());
+        TheWritableGlobalData = NEW GlobalData;
+        CommandLine::parseCommandLineForStartup();
+        TheWritableGlobalData->m_headless = true;
+        TheWritableGlobalData->m_playIntro = false;
+        TheWritableGlobalData->m_playSizzle = false;
+        TheWritableGlobalData->m_shellMapOn = false;
+        TheVersion = NEW Version;
+        TheVersion->setVersion(VERSION_MAJOR, VERSION_MINOR, VERSION_BUILDNUM, VERSION_LOCALBUILDNUM,
+            AsciiString(VERSION_BUILDUSER), AsciiString(VERSION_BUILDLOC),
+            AsciiString(__TIME__), AsciiString(__DATE__));
+        TheFramePacer = new FramePacer;
+        TheFramePacer->enableFramesPerSecondLimit(false);
+        TheGameEngine = CreateGameEngine();
+        TheGameEngine->setIsActive(true);
+        std::cerr << "Reference engine init" << std::endl;
+        TheGameEngine->init();
+        std::cerr << "Reference engine ready" << std::endl;
+    }
+    Simulation(const Simulation&) = delete;
+    Simulation& operator=(const Simulation&) = delete;
+    ~Simulation() {
+        delete TheFramePacer;
+        TheFramePacer = nullptr;
+        delete TheGameEngine;
+        TheGameEngine = nullptr;
+        // GameEngine owns and tears down the gameplay subsystems, but the
+        // process-level GlobalData allocation is created by this fixture.
+        // Release it here so the next Boost case can construct a genuinely
+        // isolated engine in the same test process.
+        if (TheWritableGlobalData) {
+            TheWritableGlobalData->reset();
+            delete TheWritableGlobalData;
+            TheWritableGlobalData = nullptr;
+        }
+        delete TheVersion;
+        TheVersion = nullptr;
+    }
+    bool hasUnitTemplate(const char* name) const {
+        return TheThingFactory && TheThingFactory->findTemplate(name) != nullptr;
+    }
+    void loadTwilightFlame(bool saveCompatibleSkirmish=false) {
+        if (!TheSkirmishGameInfo) TheSkirmishGameInfo = NEW SkirmishGameInfo;
+        auto* game = TheSkirmishGameInfo;
+        game->enterGame();
+        game->setMap("Maps\\Twilight Flame\\Twilight Flame.map");
+        game->setSeed(0x13579);
+        game->setLocalIP(saveCompatibleSkirmish?0:1);
+        const int faction = ThePlayerTemplateStore->getTemplateNumByName("FactionAmerica");
+        if (faction < 0) throw std::runtime_error("America player template is missing");
+        for (int i = 0; i < MAX_SLOTS; ++i) {
+            auto* slot = game->getSlot(i);
+            if (!slot) throw std::runtime_error("Engine did not initialize skirmish slots");
+            slot->setState(i==0 ? SLOT_PLAYER : i==1 ?
+                (saveCompatibleSkirmish?SLOT_EASY_AI:SLOT_PLAYER) : SLOT_CLOSED,
+                UnicodeString(i == 0 ? L"Navigation player" : L"Navigation opponent"),
+                saveCompatibleSkirmish?0:i+1);
+            slot->setPlayerTemplate(faction);
+            slot->setColor(i);
+            slot->setStartPos(i);
+            slot->setTeamNumber(0);
+        }
+        TheWritableGlobalData->m_mapName = game->getMap();
+        game->startGame(0);
+        if (game->getLocalSlotNum() != 0)
+            throw std::runtime_error("Skirmish fixture has no local player slot");
+        InitRandom(game->getSeed());
+        TheGameLogic->prepareNewGame(GAME_SKIRMISH, DIFFICULTY_NORMAL, 0);
+        // The normal new-game dispatch first arms loading; the next update loads it.
+        TheGameLogic->startNewGame(false);
+        TheGameLogic->UPDATE();
+        if (!TheGameLogic->isInGame() || TheGameLogic->isLoadingMap())
+            throw std::runtime_error("Twilight Flame did not finish loading");
+    }
+    std::vector<ReplayRouteSample> longReplayRoutesOnStaticTerrain(unsigned repeats=16,const char* dumpPath=nullptr) {
+        // Coordinates and mover types from the measured replay's long queries.
+        // This isolates its real terrain; replay-time traffic is deliberately
+        // absent, so these are repeatable kernel workloads, not a full replay.
+        struct Input { const char* type;float x,y,toX,toY; };
+        const Input inputs[]{
+            {"Slth_GLAVehicleQuadCannon",809.417f,1390.406f,380.5f,3550.5f},
+            {"Slth_GLAInfantryRebel",660.166f,1200.377f,390.5f,3520.5f},
+            {"GLAVehicleTechnicalChassisOne",660.548f,1664.811f,880.5f,3250.5f},
+            {"ChinaTankGattling",1804.996f,4024.823f,480.249f,1910.338f},
+            {"ChinaTankGattling",1807.941f,3954.264f,480.249f,1910.338f}};
+        std::vector<ReplayRouteSample> samples;
+        std::ofstream routes;
+        if (dumpPath) {
+            routes.open(dumpPath);
+            if (!routes) throw std::runtime_error("Cannot create terrain route dump");
+            routes << std::setprecision(9) << "query,kind,index,x,y,z,layer\n";
+        }
+        auto* pf=TheAI->pathfinder();
+        for (const auto& input:inputs) {
+            auto* unit=TheThingFactory->newObject(TheThingFactory->findTemplate(input.type),
+                ThePlayerList->getLocalPlayer()->getDefaultTeam());
+            Coord3D start{input.x,input.y,TheTerrainLogic->getGroundHeight(input.x,input.y)};
+            Coord3D goal{input.toX,input.toY,TheTerrainLogic->getGroundHeight(input.toX,input.toY)};
+            unit->setPosition(&start);
+            ReplayRouteSample sample;sample.unitType=input.type;
+            for (unsigned repeat=0;repeat<repeats;++repeat) {
+                pf->m_cumulativeCellsAllocated=0;
+                const auto began=std::chrono::steady_clock::now();
+                auto* path=pf->findPath(unit,unit->getAIUpdateInterface()->getLocomotorSet(),&start,&goal);
+                const auto elapsed=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-began).count();
+                unsigned nodes=0;
+                std::uint64_t digest=14695981039346656037ull;
+                if (path) {
+                    for (const auto* node=path->getFirstNode();node;node=node->getNext()) {
+                        ++nodes;
+                        const auto& p=*node->getPosition();
+                        for (float coordinate:{p.x,p.y,p.z}) digest=mix(digest,std::bit_cast<unsigned>(coordinate));
+                        digest=mix(digest,unsigned(node->getLayer()));
+                    }
+                    for (const auto* node=path->getFirstNode();node;node=node->getNextOptimized()) {
+                        const auto& p=*node->getPosition();
+                        for (float coordinate:{p.x,p.y,p.z}) digest=mix(digest,std::bit_cast<unsigned>(coordinate));
+                        digest=mix(digest,unsigned(node->getLayer()));
+                    }
+                }
+                const auto work=unsigned(pf->m_cumulativeCellsAllocated);
+                if (!repeat) {
+                    sample.found=path!=nullptr;sample.nodes=nodes;sample.work=work;
+                    sample.digest=digest;sample.firstMilliseconds=elapsed;
+                } else {
+                    sample.repeatable&=sample.found==(path!=nullptr) && sample.nodes==nodes &&
+                        sample.work==work && sample.digest==digest;
+                    sample.maximumWarmMilliseconds=std::max(sample.maximumWarmMilliseconds,elapsed);
+                }
+                if (path && dumpPath && !repeat) {
+                    unsigned index=0;
+                    for (const auto* node=path->getFirstNode();node;node=node->getNext(),++index) {
+                        const auto& p=*node->getPosition();
+                        routes << samples.size() << ",raw," << index << ',' << p.x << ',' << p.y << ',' << p.z << ',' << unsigned(node->getLayer()) << '\n';
+                    }
+                    index=0;
+                    for (const auto* node=path->getFirstNode();node;node=node->getNextOptimized(),++index) {
+                        const auto& p=*node->getPosition();
+                        routes << samples.size() << ",smooth," << index << ',' << p.x << ',' << p.y << ',' << p.z << ',' << unsigned(node->getLayer()) << '\n';
+                    }
+                }
+                if (path) deleteInstance(path);
+            }
+            samples.push_back(sample);
+            TheGameLogic->destroyObject(unit);TheGameLogic->UPDATE();
+        }
+        return samples;
+    }
+};
+int runFixture(int argc,char** argv) {
+    try {
+        if (argc!=3) throw std::runtime_error("Usage: dx9_route_reference ASSET_DIRECTORY OUTPUT_CSV");
+        const auto output=std::filesystem::absolute(argv[2]);
+        std::filesystem::current_path(argv[1]);
+        Simulation simulation;
+        simulation.loadTwilightFlame();
+        unsigned index=0;
+        for (const auto& sample:simulation.longReplayRoutesOnStaticTerrain(16,output.string().c_str())) {
+            std::cout << std::setprecision(17) << "DX9 reference query=" << index++ << " type=" << sample.unitType
+                << " found=" << sample.found << " nodes=" << sample.nodes << " digest=" << sample.digest << " work=" << sample.work
+                << " repeatable=" << sample.repeatable << " first_ms=" << sample.firstMilliseconds
+                << " maximum_warm_ms=" << sample.maximumWarmMilliseconds << std::endl;
+            if (!sample.repeatable) return 2;
+        }
+        return 0;
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << std::endl;
+        return 1;
+    }
+}
+int main(int argc,char** argv) {
+    const int result=runFixture(argc,argv);
+    // Fixture and engine teardown have completed. The historical build's CRT
+    // static destructors access released memory; they are outside this query
+    // oracle. Flush outputs and let the OS reclaim process-lifetime globals.
+    std::cout.flush();std::cerr.flush();
+    std::_Exit(result);
+}

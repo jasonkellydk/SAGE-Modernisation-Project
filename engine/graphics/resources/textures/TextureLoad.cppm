@@ -56,9 +56,7 @@ public:
         if (m_started || !m_request.device) return false;
         m_started = true;
         if (!(m_request.allow_compression && Allocate_DDS()) && !Allocate_TGA()) return false;
-        const auto& description = m_resource->Description();
-        m_prepared = m_upload.Begin(m_resource->Owner(), m_resource->Handle(),
-            description.mip_count, description.array_size);
+        m_prepared = m_upload.Begin_Overwrite(*m_resource);
         return m_prepared;
     }
 

@@ -35,6 +35,7 @@
 #include "Common/StateMachine.h"
 
 #include "GameLogic/TerrainLogic.h"
+namespace navigation::testing { class Simulation; }
 
 // FORWARD DECLARATIONS ///////////////////////////////////////////////////////////////////////////
 class AIGuardMachine;
@@ -127,6 +128,7 @@ extern Bool wantToSquishTarget( State *thisState, void* userData );
  */
 class AIStateMachine : public StateMachine
 {
+    friend class navigation::testing::Simulation;
 	MEMORY_POOL_GLUE_WITH_USERLOOKUP_CREATE( AIStateMachine, "AIStateMachine" );
 
 public:
@@ -301,7 +303,7 @@ private:
 																										//   occasionally false for things like car bombs.
 protected:
 	Bool					m_waitingForPath;										///< If we are waiting for a path.
-	Bool					m_tryOneMoreRepath;									///< If true, after we complete movement do another compute path.
+	Bool					m_tryOneMoreRepath = false;				///< If true, after we complete movement do another compute path.
 };
 EMPTY_DTOR(AIInternalMoveToState)
 
@@ -1067,6 +1069,7 @@ EMPTY_DTOR(AIDeadState)
 //-----------------------------------------------------------------------------------------------------------
 class AIDockState : public State
 {
+    friend class navigation::testing::Simulation;
 	MEMORY_POOL_GLUE_WITH_USERLOOKUP_CREATE(AIDockState, "AIDockState")
 public:
 	AIDockState( StateMachine *machine ) : State( machine, "AIDockState" ), m_dockMachine(nullptr), m_usingPrecisionMovement(FALSE) { }

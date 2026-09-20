@@ -5,6 +5,7 @@
 #include "W3DDevice/GameClient/W3DSnow.h"
 #include "W3DDevice/GameClient/W3DAssetManager.h"
 #include "Common/GlobalData.h"
+#include "GameLogic/GameLogic.h"
 #include "W3DDevice/GameClient/W3DCamera.h"
 #include "W3DDevice/GameClient/W3DTextureHandle.h"
 
@@ -30,6 +31,7 @@ import Assets.Cache;
 import Assets.Textures;
 import Graphics.Scene.Beams;
 import Graphics.Scene.Screen.Distortion;
+import engine.navigation.diagnostics.frame_capture;
 
 namespace
 {
@@ -38,6 +40,9 @@ bool Build_Graphics_Particle_Texture(const char *texture_name, Graphics::Texture
 {
     GENERALS_GRAPHICS_PROFILE_SCOPE("Build_Graphics_Particle_Texture");
     if (texture_name==nullptr || *texture_name=='\0') return false;
+    const auto frame=TheGameLogic?TheGameLogic->getFrame():0;
+    auto& capture=navigation::diagnostics::frameCapture();
+    auto timing=capture.measure("Graphics.Particles.TextureSource",frame);
     auto* cache=Assets::Try_Get_Asset_Cache();
     if (!cache) return false;
     const auto handle=cache->Request_Texture(texture_name);
@@ -67,6 +72,7 @@ W3DParticleSystemManager::W3DParticleSystemManager()
 	m_graphicsEmitters.reserve(1024);
 	m_graphicsStreaks.reserve(256);
 	m_graphicsMaterials.reserve(256);
+	m_graphicsStreakMaterials.reserve(64);
 	m_readyToRender = false;
 	m_graphicsParticlesPrepared = false;
 	m_onScreenParticleCount = 0;
@@ -80,6 +86,26 @@ W3DParticleSystemManager::~W3DParticleSystemManager()
 void W3DParticleSystemManager::queueParticleRender()
 {
 	m_readyToRender = true;
+}
+
+void W3DParticleSystemManager::preloadAssets(TimeOfDay timeOfDay)
+{
+	ParticleSystemManager::preloadAssets(timeOfDay);
+	const bool sprites=Graphics::GetParticleRenderer().Is_Initialized();
+	const bool streaks=Graphics::GetBeamRenderer().Is_Initialized();
+
+	// Rendering consumes decoded asset-cache pixels and renderer-owned materials.
+	// The base preload only visits the W3D texture catalog, leaving the modern
+	// path to wait for decoding and upload on a particle's first gameplay frame.
+	for (auto it=beginParticleSystemTemplate();it!=endParticleSystemTemplate();++it) {
+		const auto* particle=it->second;
+		if (const auto* texture=particle->getSpriteTextureName();sprites && texture && !texture->isEmpty())
+			Ensure_Graphics_Material(texture->str());
+		if (const auto* texture=particle->getStreakTextureName();streaks && texture && !texture->isEmpty())
+			Ensure_Graphics_Streak_Material(texture->str());
+	}
+	if (sprites && TheWeatherSetting && !TheWeatherSetting->m_snowTexture.isEmpty())
+		Ensure_Graphics_Material(TheWeatherSetting->m_snowTexture.str());
 }
 
 void DoParticles(W3DRenderContext &rinfo)
@@ -142,10 +168,11 @@ void W3DParticleSystemManager::Reset_Graphics_Particle_Bindings() noexcept
 		if (Graphics::GetBeamRenderer().Is_Initialized()) {
 			for (Graphics::BeamHandle beam : binding.beams)
 				Graphics::GetBeamRenderer().Destroy(beam);
-			if (binding.material.Is_Valid())
-				Graphics::GetBeamRenderer().Destroy_Material(binding.material);
-			if (binding.texture.Is_Valid())
-				Graphics::GetBeamRenderer().Destroy_Texture(binding.texture);
+		}
+	if (Graphics::GetBeamRenderer().Is_Initialized())
+		for (const auto& binding:m_graphicsStreakMaterials) {
+			Graphics::GetBeamRenderer().Destroy_Material(binding.material);
+			Graphics::GetBeamRenderer().Destroy_Texture(binding.texture);
 		}
 	if (TheSnowManager != nullptr)
 		static_cast<W3DSnowManager *>(TheSnowManager)->Release_Weather_Particles(renderer);
@@ -159,6 +186,7 @@ void W3DParticleSystemManager::Reset_Graphics_Particle_Bindings() noexcept
     m_graphicsEmitterSlots.clear();
 	m_graphicsStreaks.clear();
 	m_graphicsMaterials.clear();
+	m_graphicsStreakMaterials.clear();
 	m_graphicsSyncStamp = 0;
 	m_graphicsParticlesPrepared = false;
 	m_weatherParticlesReady = false;
@@ -378,10 +406,6 @@ void W3DParticleSystemManager::Prepare_Graphics_Particles()
 		}
 		for (Graphics::BeamHandle beam : binding.beams)
 			Graphics::GetBeamRenderer().Destroy(beam);
-		if (binding.material.Is_Valid())
-			Graphics::GetBeamRenderer().Destroy_Material(binding.material);
-		if (binding.texture.Is_Valid())
-			Graphics::GetBeamRenderer().Destroy_Texture(binding.texture);
 		m_graphicsStreaks[index] = std::move(m_graphicsStreaks.back());
 		m_graphicsStreaks.pop_back();
 	}
@@ -433,6 +457,7 @@ W3DParticleSystemManager::GraphicsEmitterBinding* W3DParticleSystemManager::Ensu
 	GENERALS_GRAPHICS_PROFILE_SCOPE("W3DParticleSystemManager::Ensure_Graphics_Emitter");
     if (const auto existing=m_graphicsEmitterSlots.find(&system);existing!=m_graphicsEmitterSlots.end())
         return &m_graphicsEmitters[existing->second];
+    auto timing=navigation::diagnostics::frameCapture().measure("Graphics.Particles.NewEmitter",TheGameLogic?TheGameLogic->getFrame():0);
 
 	Graphics::ParticleEmitter emitter;
 	emitter.material = Ensure_Graphics_Material(system.getParticleTypeName().str());
@@ -463,6 +488,7 @@ Graphics::MaterialHandle W3DParticleSystemManager::Ensure_Graphics_Material(cons
 	for (const GraphicsMaterialBinding &binding : m_graphicsMaterials)
 		if (binding.texture_name == texture_name)
 			return binding.material;
+    auto timing=navigation::diagnostics::frameCapture().measure("Graphics.Particles.NewMaterial",TheGameLogic?TheGameLogic->getFrame():0);
 
 	Graphics::ParticleRenderer &renderer = Graphics::GetParticleRenderer();
 	const Graphics::MaterialHandle unavailable_material{};
@@ -535,11 +561,27 @@ W3DParticleSystemManager::GraphicsStreakBinding *W3DParticleSystemManager::Ensur
 	GENERALS_GRAPHICS_PROFILE_SCOPE("W3DParticleSystemManager::Ensure_Graphics_Streak");
 	if (GraphicsStreakBinding *existing = Find_Graphics_Streak(&system))
 		return existing;
+    auto timing=navigation::diagnostics::frameCapture().measure("Graphics.Particles.NewStreak",TheGameLogic?TheGameLogic->getFrame():0);
 
 	GraphicsStreakBinding binding;
 	binding.legacy_system = &system;
 	binding.texture_name = system.getParticleTypeName().str();
+	binding.material = Ensure_Graphics_Streak_Material(binding.texture_name.c_str());
+	binding.beams.reserve(MAX_PARTICLES_PER_SYSTEM - 1);
+	m_graphicsStreaks.push_back(std::move(binding));
+	return &m_graphicsStreaks.back();
+}
+
+Graphics::MaterialHandle W3DParticleSystemManager::Ensure_Graphics_Streak_Material(const char *texture_name)
+{
 	Graphics::BeamRenderer &renderer = Graphics::GetBeamRenderer();
+	if (!renderer.Is_Initialized() || !texture_name || !*texture_name)
+		return renderer.Default_Material();
+	for (const auto& binding:m_graphicsStreakMaterials)
+		if (binding.texture_name==texture_name) return binding.material;
+	auto timing=navigation::diagnostics::frameCapture().measure("Graphics.Particles.NewStreakMaterial",TheGameLogic?TheGameLogic->getFrame():0);
+	GraphicsMaterialBinding binding;
+	binding.texture_name=texture_name;
 	Graphics::Texture texture_description;
 	std::vector<std::byte> pixels;
 	if (Build_Graphics_Particle_Texture(binding.texture_name.c_str(), texture_description, pixels)) {
@@ -555,11 +597,12 @@ W3DParticleSystemManager::GraphicsStreakBinding *W3DParticleSystemManager::Ensur
 			}
 		}
 	}
-	if (!binding.material.Is_Valid())
-		binding.material = renderer.Default_Material();
-	binding.beams.reserve(MAX_PARTICLES_PER_SYSTEM - 1);
-	m_graphicsStreaks.push_back(std::move(binding));
-	return &m_graphicsStreaks.back();
+	if (!binding.material.Is_Valid()) return renderer.Default_Material();
+	// Emitters borrow these immutable resources. Destroying one streak only
+	// releases its beam instances; the shared material lives until map reset.
+	const auto material=binding.material;
+	m_graphicsStreakMaterials.push_back(std::move(binding));
+	return material;
 }
 
 Graphics::BeamFlags W3DParticleSystemManager::Graphics_Streak_Flags(const ParticleSystem &system) const noexcept

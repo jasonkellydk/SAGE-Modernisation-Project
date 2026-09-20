@@ -5,9 +5,49 @@ module;
 #include <limits>
 #include <algorithm>
 #include <vector>
+#include <span>
 export module Graphics.Scene.Terrain.Geometry.Tests;
 import Graphics.Scene.Terrain.Geometry;
 using namespace Graphics;
+
+BOOST_AUTO_TEST_CASE(partial_edits_match_full_rebuild_across_visibility_batch_boundaries)
+{
+    std::vector<TerrainCell> cells(600);
+    for (std::size_t i=0; i<cells.size(); ++i) {
+        cells[i].origin = {static_cast<float>(i%30),static_cast<float>(i/30)};
+        cells[i].heights.fill(3);
+    }
+    TerrainGeometry partial, full;
+    BOOST_REQUIRE(partial.Build(cells,1));
+    for (unsigned edit=0; edit<3; ++edit) {
+        const std::size_t first = edit==0 ? 254 : edit==1 ? 511 : 599;
+        const std::size_t count = std::min<std::size_t>(4,cells.size()-first);
+        for (std::size_t i=first; i<first+count; ++i) {
+            cells[i].heights.fill(edit==1 ? -8.f : 10.f);
+            cells[i].alternate_diagonal = true;
+            cells[i].colors[0] = {.25f,.5f,.75f,1};
+            cells[i].normals[2] = {0,1,0};
+        }
+        BOOST_REQUIRE(partial.Update(first,std::span(cells).subspan(first,count)));
+        BOOST_REQUIRE(full.Build(cells,1));
+        BOOST_CHECK(std::equal(partial.Vertices().begin(),partial.Vertices().end(),full.Vertices().begin(),
+            [](const auto& a,const auto& b) {
+                return a.position==b.position && a.normal==b.normal && a.color==b.color
+                    && a.base_uv==b.base_uv && a.blend_uv==b.blend_uv;
+            }));
+        BOOST_CHECK_EQUAL_COLLECTIONS(partial.Indices().begin(),partial.Indices().end(),full.Indices().begin(),full.Indices().end());
+        BOOST_CHECK(std::equal(partial.Batches().begin(),partial.Batches().end(),full.Batches().begin(),
+            [](const auto& a,const auto& b) {
+                return a.minimum==b.minimum && a.maximum==b.maximum
+                    && a.first_index==b.first_index && a.index_count==b.index_count;
+            }));
+    }
+    auto invalid = cells.back();
+    invalid.heights[0] = std::numeric_limits<float>::quiet_NaN();
+    BOOST_CHECK(!partial.Update(599,std::span(&invalid,1)));
+    BOOST_CHECK(!partial.Update(600,std::span(cells).first(1)));
+    BOOST_CHECK_EQUAL(partial.Vertices()[599*4].position[2],10.f);
+}
 
 BOOST_AUTO_TEST_CASE(worker_counts_preserve_topology_attributes_and_visibility_batches)
 {

@@ -1,7 +1,6 @@
 module;
 // MSVC needs Tracy's static helpers when instantiating instrumented module templates.
 #include "../../profiling/Tracy.h"
-#include "../../profiling/Tracy.h"
 #define BOOST_TEST_MODULE ModelMeshDrawingTests
 #include <boost/test/included/unit_test.hpp>
 #include <array>
@@ -108,6 +107,7 @@ BOOST_AUTO_TEST_CASE(material_batches_draw_both_triangles_after_source_release_o
             submission.Initialize(device, renderer, shadows);
             Target target(device, width);
             for (const float opacity : {1.f, .5f, 1.f}) {
+                const auto created_before = renderer.Geometry_Created_Bytes();
                 target.Clear();
                 ModelMeshDrawContext context; context.parameters.view_projection = Identity; context.projection = Identity;
                 context.overrides.opacity = opacity;
@@ -120,6 +120,7 @@ BOOST_AUTO_TEST_CASE(material_batches_draw_both_triangles_after_source_release_o
                     return Submit_Prop_Material(device,renderer,submission,vertices,indices,draw_shader,textures,Resolve,parameters,{},overrides);
                 }));
                 BOOST_CHECK_EQUAL(draws, 2);
+                if (opacity == .5f) BOOST_CHECK_EQUAL(renderer.Geometry_Created_Bytes(), created_before);
                 const int rgb = opacity == 1 ? 255 : 128;
                 const int alpha = opacity == 1 ? 255 : 64;
                 target.Pixel(width*3/4,22,{rgb,0,0,alpha});
@@ -130,6 +131,85 @@ BOOST_AUTO_TEST_CASE(material_batches_draw_both_triangles_after_source_release_o
         }
         state.base.Clear(); state.additional.Clear();
     }
+}
+BOOST_AUTO_TEST_CASE(draw_material_overrides_match_baked_vertices_without_rebuilding_geometry) {
+    GraphicsTestDevice device({true}); BOOST_REQUIRE(device.Is_Valid());
+    PropRenderer renderer; BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    PropExtractionCache extraction;
+    DirectionalShadowRenderer shadows; PropSubmission submission; submission.Initialize(device,renderer,shadows);
+    Target target(device,32);
+    const std::array<Position,3> positions{{{-.8f,-.8f,.5f},{.8f,-.8f,.5f},{0,.8f,.5f}}};
+    const std::array<Triangle,1> triangles{{{0,1,2}}};
+    const std::array<std::uint32_t,1> polygons{0};
+    auto texture=Create_Texture_Owner(device,{200,160,120,255});
+    for (const bool additional : {false,true}) for (const bool lit : {false,true})
+    for (const auto source : {PropColorSource::Material,PropColorSource::PrimaryColor,PropColorSource::SecondaryColor})
+    for (const bool sorted : {false,true}) for (const bool additive : {false,true}) {
+        BOOST_TEST_CONTEXT("additional=" << additional << " lit=" << lit << " source=" << int(source)
+            << " sorted=" << sorted << " additive=" << additive) {
+            ModelMeshState<TextureOwner> state;
+            Bindings bindings; bindings.Reset(1,3,1);
+            auto material=std::make_shared<MeshMaterial>();
+            material->parameters.lighting=lit;
+            material->parameters.diffuse={.6f,.4f,.8f};
+            material->parameters.opacity=.7f;
+            material->parameters.diffuse_source=source;
+            material->parameters.emissive={.13f,.23f,.33f};
+            material->parameters.emissive_source=source;
+            bindings.Set_Single_Material(material);
+            auto shader=MaterialState::Opaque(); shader.Set_Cull_Mode(MaterialState::CULL_MODE_DISABLE);
+            shader.Set_Texturing(MaterialState::TEXTURING_ENABLE);
+            if (additive) shader.Set_Dst_Blend_Func(MaterialState::DSTBLEND_ONE);
+            bindings.Set_Single_Shader(shader); bindings.Set_Texture(0,texture);
+            PropMeshHandle previous;
+            for (const float opacity : {1.f,.23f,.71f,1.f}) {
+                ModelMeshDrawContext context; context.parameters.view_projection=context.projection=Identity;
+                context.parameters.scene_ambient={.35f,.45f,.55f,1};
+                context.sorted=sorted; context.additive=additive;
+                context.overrides.opacity=context.overrides.pass_opacity=opacity;
+                context.overrides.pass_emissive=opacity*.6f;
+                ModelMeshDrawing drawing(std::span<const Position>(positions),std::span<const Position>{},
+                    std::span<const Triangle>(triangles),1,bindings,state,renderer,extraction,context);
+                const auto created_before=renderer.Geometry_Created_Bytes();
+                const auto compare = [&](auto vertices,auto indices,auto draw_shader,auto textures,auto parameters,auto overrides) {
+                    if (previous.Is_Valid()) {
+                        BOOST_CHECK(overrides.mesh==previous);
+                        BOOST_CHECK_EQUAL(renderer.Geometry_Created_Bytes(),created_before);
+                    }
+                    previous=overrides.mesh;
+                    target.Clear();
+                    BOOST_REQUIRE(Submit_Prop_Material(device,renderer,submission,vertices,indices,draw_shader,textures,Resolve,parameters,{},overrides));
+                    std::vector<std::byte> actual(32*32*4), expected(actual.size());
+                    BOOST_REQUIRE(device.Readback_Texture(target.color,actual,32*4));
+                    std::vector<PropVertex> baked(vertices.begin(),vertices.end());
+                    // Independent reference: the pre-optimization CPU extraction rules.
+                    for (auto& vertex:baked) {
+                        if ((additional || !sorted) && opacity!=1 && (!lit || source==PropColorSource::Material)) {
+                            vertex.material_diffuse[3]=opacity;
+                            if (!additional && additive)
+                                vertex.material_diffuse[0]=vertex.material_diffuse[1]=vertex.material_diffuse[2]=opacity;
+                        }
+                        if (additional && source==PropColorSource::Material)
+                            for (unsigned c=0;c<3;++c) vertex.material_emissive[c]*=context.overrides.pass_emissive;
+                    }
+                    parameters.vertex_material_override={1,1,0,0};
+                    overrides.mesh={}; overrides.preparation=nullptr;
+                    target.Clear();
+                    BOOST_REQUIRE(Submit_Prop_Material(device,renderer,submission,std::span<const PropVertex>(baked),indices,
+                        draw_shader,textures,Resolve,parameters,{},overrides));
+                    BOOST_REQUIRE(device.Readback_Texture(target.color,expected,32*4));
+                    BOOST_CHECK(actual==expected);
+                    return true;
+                };
+                if (additional) {
+                    ProceduralMaterialPass<TextureOwner,int>::Description description;
+                    description.material=material.get(); description.shader=shader; description.textures[0]=texture.get();
+                    BOOST_REQUIRE(drawing.Draw_Additional(description,std::span<const std::uint32_t>(polygons),0,compare));
+                } else BOOST_REQUIRE(drawing.Draw_Base(compare));
+            }
+        }
+    }
+    submission.Shutdown(); renderer.Shutdown();
 }
 BOOST_AUTO_TEST_CASE(material_submission_retains_only_transferred_textures_and_preserves_deferred_visibility) {
     for (const bool warp : {true, false}) {
@@ -202,11 +282,12 @@ BOOST_AUTO_TEST_CASE(additional_pass_keeps_selection_world_coordinates_color_mas
             BOOST_CHECK_EQUAL(indices.size(),3); BOOST_CHECK_EQUAL(parameters.uv_sources[0],4.f);
             BOOST_CHECK_EQUAL(parameters.uv_transform[0][3],.25f); BOOST_CHECK(overrides.deferred_pass);
             for(const auto& vertex:vertices) {
-                BOOST_CHECK_EQUAL(vertex.material_diffuse[3],.5f);
-                BOOST_CHECK_SMALL(vertex.material_emissive[0]-.1f,1e-6f);
-                BOOST_CHECK_SMALL(vertex.material_emissive[1]-.2f,1e-6f);
-                BOOST_CHECK_EQUAL(vertex.material_emissive[2],.25f);
+                BOOST_CHECK_EQUAL(vertex.material_diffuse[3],1.f);
+                BOOST_CHECK_SMALL(vertex.material_emissive[0]-.4f,1e-6f);
+                BOOST_CHECK_SMALL(vertex.material_emissive[1]-.8f,1e-6f);
+                BOOST_CHECK_EQUAL(vertex.material_emissive[2],1.f);
             }
+            BOOST_CHECK(parameters.vertex_material_override == (std::array<float,4>{.5f,.25f,0,1}));
             return true;
         }));
     material->parameters.emissive={};

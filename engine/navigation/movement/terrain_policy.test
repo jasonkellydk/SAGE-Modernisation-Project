@@ -1,0 +1,25 @@
+#include <boost/test/unit_test.hpp>
+#include <array>
+import engine.navigation.movement.terrain_policy;
+
+BOOST_AUTO_TEST_CASE(terrain_permissions_cover_every_surface_combination) {
+    // Independent expected table: ground, water, cliff, rubble, and three air-only cells.
+    constexpr std::array<unsigned,8> expected{9,10,12,24,8,8,8,0};
+    for (unsigned kind=0;kind<256;++kind) for (unsigned mask=0;mask<32;++mask) {
+        const auto terrain=static_cast<navigation::TerrainKind>(kind);
+        const unsigned surfaces=kind<expected.size()?expected[kind]:0;
+        BOOST_TEST(navigation::permitsTerrain({mask,0,false},{terrain,0,true,false})==((surfaces&mask)!=0));
+        BOOST_TEST(!navigation::permitsTerrain({mask,17,true},{terrain,17,false,true}));
+    }
+}
+
+BOOST_AUTO_TEST_CASE(terrain_exceptions_require_the_correct_obstacle_or_crusher) {
+    using namespace navigation;
+    for (unsigned kind=0;kind<7;++kind) for (unsigned obstacle : {0u,17u,18u})
+        for (unsigned ignored : {0u,17u,18u}) for (bool fence : {false,true})
+            for (bool crusher : {false,true}) {
+                const bool expected=(kind==4 && ignored!=0 && obstacle==ignored)||(fence&&crusher);
+                BOOST_TEST(permitsTerrain({0,ignored,crusher},
+                    {static_cast<TerrainKind>(kind),obstacle,true,fence})==expected);
+            }
+}

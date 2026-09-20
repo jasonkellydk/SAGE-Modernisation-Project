@@ -6,7 +6,8 @@ add_library(engine_jobs STATIC)
 
 set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(Threads REQUIRED)
-target_link_libraries(engine_jobs PUBLIC Threads::Threads)
+find_package(SDL3 CONFIG REQUIRED)
+target_link_libraries(engine_jobs PUBLIC Threads::Threads SDL3::SDL3)
 
 target_sources(engine_jobs PUBLIC
 	FILE_SET cxx_modules
@@ -45,4 +46,5 @@ if(ENGINE_JOBS_BUILD_TESTS)
 
 	enable_testing()
 	add_test(NAME engine_jobs_tests COMMAND engine_jobs_tests)
+	set_tests_properties(engine_jobs_tests PROPERTIES TIMEOUT 60)
 endif()

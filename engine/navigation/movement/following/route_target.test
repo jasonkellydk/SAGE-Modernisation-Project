@@ -1,0 +1,103 @@
+#include <boost/test/unit_test.hpp>
+#include <array>
+#include <vector>
+import engine.navigation.movement.following.route_target;
+
+namespace {
+using namespace navigation::following;
+TargetEdge turn() { return {{0,0,7},{100,0,9},{100,100,11},1,0,100,0,0,0,false,true,true}; }
+void check(RouteTarget target,float x,float y,float z,int layer) {
+    BOOST_TEST(target.point.x==x);BOOST_TEST(target.point.y==y);
+    BOOST_TEST(target.point.z==z);BOOST_TEST(target.layer==layer);
+}
+}
+
+BOOST_AUTO_TEST_CASE(dx9_follower_targets_the_next_visible_waypoint) {
+    // Pinned DX9 Path::computePointOnPath: endpoint visibility precedes any
+    // corner look-ahead, and no lateral lane-preserving steering is injected.
+    std::vector<RoutePoint> probes;
+    const auto target=selectRouteTarget(turn(),{20,20,13},0,0,10,[&](RoutePoint p,int) {
+        probes.push_back(p);return true;
+    });
+    check(target,100,0,9,0);
+    BOOST_REQUIRE(probes.size()==1u);
+    BOOST_TEST(probes.front().x==100);
+    BOOST_TEST(probes.front().y==0);
+}
+
+BOOST_AUTO_TEST_CASE(dx9_route_targets_lead_toward_waypoints_and_then_round_corners) {
+    const auto edge=turn();
+    // DX9 aims at the visible endpoint, including its height.
+    for (float lateral:{-60.f,-20.f,0.f,20.f,60.f}) {
+        unsigned calls=0;
+        const auto result=selectRouteTarget(edge,{20,lateral,13},0,0,10,[&](RoutePoint p,int layer) {
+            ++calls;BOOST_TEST(p.x==100);BOOST_TEST(p.y==0);BOOST_TEST(layer==0);return true;
+        });
+        check(result,100,0,9,0);BOOST_TEST(calls==1u);
+    }
+    // A protected corner or the arrival edge goes to the actual endpoint.
+    auto protectedEdge=edge;protectedEdge.optimizable=false;
+    check(selectRouteTarget(protectedEdge,{70,20,13},0,0,10,[](auto,int){return true;}),100,0,9,0);
+    auto arrival=edge;arrival.hasAfter=false;
+    check(selectRouteTarget(arrival,{20,20,13},0,0,10,[](auto,int){return true;}),100,0,9,0);
+    // A nearby open corner can lead into the next segment.
+    check(selectRouteTarget(edge,{70,20,13},0,0,10,[](auto,int){return true;}),100,50,9,0);
+}
+
+BOOST_AUTO_TEST_CASE(route_targets_observe_live_terrain_for_each_proposal) {
+    auto edge=turn();edge.optimizable=false;
+    std::vector<RoutePoint> checked;
+    const auto query=[&](bool midpointClear) {
+        checked.clear();
+        return selectRouteTarget(edge,{70,40,13},0,0,10,[&](RoutePoint p,int) {
+            checked.push_back(p);return midpointClear && p.x==85;
+        });
+    };
+    check(query(true),85,0,7,0);
+    BOOST_REQUIRE(checked.size()==2u);BOOST_TEST(checked[0].x==100);BOOST_TEST(checked[1].x==85);
+    // No retained terrain answer: the same inputs use the new blocked result.
+    check(query(false),70,0,7,0);BOOST_TEST(checked.size()==2u);
+    edge=turn();
+    check(selectRouteTarget(edge,{100,0,13},0,0,10,[](RoutePoint p,int){return p.y==100;}),100,100,11,0);
+}
+
+BOOST_AUTO_TEST_CASE(route_targets_keep_layer_transitions_and_forbidden_waypoints) {
+    // The adapter's layer enum uses one for ground; the kernel must not assume
+    // that zero is the ground layer when passed a different convention.
+    auto nativeLayers=turn();
+    nativeLayers.startLayer=nativeLayers.endLayer=nativeLayers.afterLayer=1;
+    check(selectRouteTarget(nativeLayers,{20,20,13},1,1,10,[](auto,int){return true;},1),100,0,9,1);
+    nativeLayers.endLayer=2;
+    check(selectRouteTarget(nativeLayers,{70,20,13},1,1,10,[](auto,int){return true;},1),100,0,9,2);
+    for (int currentLayer:{0,1,2}) for (int startLayer:{0,1,2}) for (int endLayer:{0,1,2}) {
+        auto edge=turn();edge.startLayer=startLayer;edge.endLayer=endLayer;
+        edge.afterLayer=2;edge.optimizable=false;
+        std::vector<int> checkedLayers;
+        const auto result=selectRouteTarget(edge,{70,20,13},currentLayer,0,10,[&](auto,int layer) {
+            checkedLayers.push_back(layer);return true;
+        });
+        const int expected=endLayer>0?endLayer:startLayer;
+        check(result,100,0,9,expected);
+        BOOST_REQUIRE(checkedLayers.size()==1u);BOOST_TEST(checkedLayers.front()==expected);
+    }
+    auto edge=turn();edge.previousAboveGround=true;edge.optimizable=false;
+    check(selectRouteTarget(edge,{70,20,13},0,2,10,[](auto,int){return true;}),100,0,9,0);
+    edge=turn();edge.afterLayer=1;
+    // DX9 checks the current edge layers, not the layer after its endpoint.
+    check(selectRouteTarget(edge,{70,20,13},0,0,10,[](auto,int){return true;}),100,50,9,0);
+}
+
+BOOST_AUTO_TEST_CASE(route_target_queries_are_independent_of_interleaving) {
+    std::array<TargetEdge,3> edges{turn(),turn(),turn()};
+    edges[1].endLayer=1;edges[2].optimizable=false;
+    std::vector<RouteTarget> first;
+    const auto query=[&](unsigned i) {
+        return selectRouteTarget(edges[i%3],{float(i%101),float(int(i%121)-60),13},0,0,10,
+            [i](RoutePoint p,int layer){return layer==1 || p.x<float(i%73+40);});
+    };
+    for (unsigned i=0;i<4096;++i) first.push_back(query(i));
+    for (unsigned i=4096;i-->0;) {
+        const auto expected=first[i];
+        check(query(i),expected.point.x,expected.point.y,expected.point.z,expected.layer);
+    }
+}

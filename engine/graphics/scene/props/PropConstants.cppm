@@ -51,14 +51,17 @@ export struct PropParameters final
     std::array<float,4> bump_matrix{};
     PropSurfaceParameters surface{};
     std::array<float,4> muzzle_flash_state{};
+    // Opacity, emissive scale, additive RGB replacement, opacity override enabled.
+    // Per-draw effects must not change immutable mesh geometry.
+    std::array<float,4> vertex_material_override{1,1,0,0};
     // Object data is contiguous for direct comparison and upload.
     std::array<float,16> world{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
 };
-static_assert(sizeof(PropParameters) == 1008);
+static_assert(sizeof(PropParameters) == 1024);
 static_assert(offsetof(PropParameters,view_projection)==0);
 static_assert(offsetof(PropParameters,scene_ambient)==192);
 static_assert(offsetof(PropParameters,textured)==656);
-static_assert(offsetof(PropParameters,world)==944);
+static_assert(offsetof(PropParameters,world)==960);
 
 export struct PropViewConstants final {
     std::array<float,16> view_projection{};
@@ -96,13 +99,14 @@ export struct PropMaterialConstants final {
     std::array<float,4> bump_matrix{};
     PropSurfaceParameters surface{};
     std::array<float,4> muzzle_flash_state{};
+    std::array<float,4> vertex_material_override{1,1,0,0};
 };
 struct PropObjectConstants final {
     std::array<float,16> world{};
 };
 static_assert(sizeof(PropViewConstants)==192);
 static_assert(sizeof(PropLightingConstants)==464);
-static_assert(sizeof(PropMaterialConstants)==288);
+static_assert(sizeof(PropMaterialConstants)==304);
 static_assert(sizeof(PropObjectConstants)==64);
 
 export struct PropSharedParameters final {
@@ -117,7 +121,7 @@ export struct PropSharedParameters final {
             && std::memcmp(&material,&parameters.textured,sizeof(material))==0;
     }
 };
-static_assert(sizeof(PropSharedParameters)==480);
+static_assert(sizeof(PropSharedParameters)==496);
 
 // Each block owns its last successful upload. Command-list binding is still
 // performed on each draw, so other renderers cannot leave stale slots.
@@ -155,7 +159,7 @@ private:
 export class PropMaterialBinding final {
 public:
     bool Matches(const PropParameters& parameters) const noexcept {
-        return m_constants.Matches(std::as_bytes(std::span(&parameters,1)).subspan<656,288>());
+        return m_constants.Matches(std::as_bytes(std::span(&parameters,1)).subspan<656,sizeof(PropMaterialConstants)>());
     }
     bool Matches(const PropMaterialConstants& parameters) const noexcept {
         return m_constants.Matches(std::as_bytes(std::span<const PropMaterialConstants,1>(&parameters,1)));
@@ -163,7 +167,7 @@ public:
     bool Prepare(Device& device, const PropParameters& parameters) {
         if (!m_constants.Buffer().Is_Valid() && !m_constants.Initialize(device)) return false;
         const auto bytes = std::as_bytes(std::span(&parameters,1));
-        return m_constants.Update(device, bytes.subspan<656,288>());
+        return m_constants.Update(device, bytes.subspan<656,sizeof(PropMaterialConstants)>());
     }
     bool Prepare(Device& device, const PropMaterialConstants& parameters) {
         if (!m_constants.Buffer().Is_Valid() && !m_constants.Initialize(device)) return false;
@@ -215,6 +219,11 @@ export using PropInstanceIndexBinding = PropStorageBinding<std::uint32_t>;
 
 export class PropConstantBindings final {
 public:
+    bool Prepare_Record_Selection(Device& device,std::uint32_t index) {
+        std::array<std::uint32_t,16> selection{};
+        selection[0]=index;
+        return m_object.Update(device,std::as_bytes(std::span(selection)));
+    }
     bool Prepare_Lighting(Device& device,std::span<const std::byte,464> lighting) {
         return m_lighting.Update(device,lighting);
     }
@@ -233,7 +242,7 @@ public:
         if (!m_view.Update(device, bytes.subspan<0,192>())
             || (lighting && !instance_records && !m_lighting.Update(device, bytes.subspan<192,464>()))
             || (!material_prepared && !material.Prepare(device, parameters))
-            || (!instance_records && !m_object.Update(device, bytes.subspan<944,64>()))) return false;
+            || (!instance_records && !m_object.Update(device, bytes.subspan<offsetof(PropParameters,world),64>()))) return false;
         Bind(material,resources);
         return true;
     }

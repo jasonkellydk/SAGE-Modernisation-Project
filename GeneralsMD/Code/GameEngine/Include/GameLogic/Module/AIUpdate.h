@@ -28,11 +28,14 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "GameLogic/Module/UpdateModule.h"
 #include "GameLogic/AI.h"
 #include "GameLogic/AIStateMachine.h"
 #include "GameLogic/GameLogic.h"
 #include "GameLogic/LocomotorSet.h"
+#include "engine/navigation/movement/arrival_facing.h"
 
 class AIGroup;
 class AIStateMachine;
@@ -232,6 +235,7 @@ enum AIFreeToExitType CPP_11(: Int) // Note - written out in save/load xfer, don
  */
 class AIUpdateInterface : public UpdateModule, public AICommandInterface
 {
+    friend class navigation::testing::Simulation;
 
 	MEMORY_POOL_GLUE_WITH_USERLOOKUP_CREATE( AIUpdateInterface, "AIUpdateInterface" )
 	MAKE_STANDARD_MODULE_MACRO_WITH_MODULE_DATA( AIUpdateInterface, AIUpdateModuleData )
@@ -296,6 +300,9 @@ protected:
 
 
 public:
+	using CommandObserver = void (*)(ObjectID, const AICommandParms *, void *);
+	static void setCommandObserver(CommandObserver observer, void *context);
+
 	AIUpdateInterface( Thing *thing, const ModuleData* moduleData );
 	// virtual destructor prototype provided by memory pool declaration
 
@@ -408,6 +415,10 @@ public:
 	Bool isRecruitable() const {return m_isRecruitable;}
 	void setIsRecruitable(Bool isRecruitable) {m_isRecruitable = isRecruitable;}
 
+	void setArrivalFacing(Real angle) { m_arrivalFacing.set(angle); }
+	Bool isTurningAtArrival() const { return m_arrivalFacing.turning; }
+	Bool updateArrivalFacing(Bool positionReached);
+
 	Real getDesiredSpeed() const { return m_desiredSpeed; }
 	void setDesiredSpeed( Real speed ) { m_desiredSpeed = speed; }	///< how fast we want to go
 
@@ -486,10 +497,15 @@ public:
 	// They are used to determine when we are really through moving.  Due to the nature of the beast,
 	// we often exit one move state & immediately enter another.  This should not cause a "stop start".
 	// jba.
-	void friend_startingMove();
+	void friend_startingMove(Bool resetCollisionProgress = TRUE);
 	void friend_endingMove();
 
 	void friend_setPath(Path *newPath);
+	std::uint64_t getPathRequestRevision() const { return m_pathRequestRevision; }
+	Bool hasFreshPlayerPathCommand() const { return m_freshPlayerPathCommand; }
+	UnsignedInt getPlayerPathCommandFrame() const { return m_playerPathCommandFrame; }
+	std::uint64_t getPlayerPathCommandSequence() const { return m_playerPathCommandSequence; }
+	void acknowledgePlayerPathCommand() { m_freshPlayerPathCommand=FALSE; }
 	Path* friend_getPath() { return m_path; }
 
 	void friend_setGoalObject(Object *obj);
@@ -621,6 +637,7 @@ protected:
 	void chooseGoodLocomotorFromCurrentSet();
 
 	void setLastCommandSource( CommandSourceType source );
+	void beginPathCommand(CommandSourceType source);
 
 	// subclasses may want to override this, to use a subclass of AIStateMachine.
 	virtual AIStateMachine* makeStateMachine();
@@ -681,6 +698,7 @@ private:
 	// this should only be called by load/save, or by chooseLocomotorSet.
 	// it does no sanity checking; it just jams it in.
 	Bool chooseLocomotorSetExplicit(LocomotorSetType wst);
+	void releasePath(); // Clear route ownership while preserving the current request revision.
 
 private:
 	UnsignedInt					m_priorWaypointID;						///< ID of the path we followed to before the most recent one
@@ -689,6 +707,7 @@ private:
 	AIStateMachine*			m_stateMachine;							///< the state machine
 	UnsignedInt					m_nextEnemyScanTime;				///< how long until the next enemy scan
 	ObjectID						m_currentVictimID;					///< if not INVALID_ID, this agent's current victim.
+	navigation::ArrivalFacing m_arrivalFacing;
 	Real								m_desiredSpeed;							///< the desired speed of the tank
 	CommandSourceType		m_lastCommandSource;			/**< Keep track of the source of the last command we got.
 																									This is set immediately before the SetState that goes
@@ -706,6 +725,10 @@ private:
 	const AttackPriorityInfo*	m_attackInfo;
 
 	// "Planning Mode" -----------------------------------------------------------------------------------------
+	std::uint64_t m_pathRequestRevision = 0;
+	Bool m_freshPlayerPathCommand = FALSE;
+	UnsignedInt m_playerPathCommandFrame = 0;
+	std::uint64_t m_playerPathCommandSequence = 0;
 	enum { MAX_WAYPOINTS = 16 };
 	Coord3D						m_waypointQueue[ MAX_WAYPOINTS ];		///< the waypoint queue
 	Int								m_waypointCount;										///< number of waypoints in the queue
@@ -723,6 +746,7 @@ private:
 	ICoord2D		m_pathfindGoalCell;					///< Cell we are moving towards.
 	ICoord2D		m_pathfindCurCell;					///< Cell we are currently occupying.
 	Int					m_blockedFrames;						///< Number of frames we've been blocked.
+	UnsignedInt				m_lastBlockedRecoveryFrame = ~0u;
 	Real				m_curMaxBlockedSpeed;				///< Max speed we can have and not run into blocking things.
 	Real				m_bumpSpeedLimit;						///< Max speed after bumping a unit.
 	UnsignedInt	m_ignoreCollisionsUntil;		///< Timer to cheat if we get stuck.

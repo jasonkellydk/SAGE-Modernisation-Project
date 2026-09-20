@@ -1631,7 +1631,6 @@ void Locomotor::moveTowardsPositionLegs(Object* obj, PhysicsBehavior *physics, c
 	// Orient toward goal position
 	//
 	Real actualSpeed = physics->getForwardSpeed2D();
-	Real angle = obj->getOrientation();
 //	Real relAngle = ThePartitionManager->getRelativeAngle2D( obj, &goalPos );
 //	Real desiredAngle = angle + relAngle;
 	Real desiredAngle = atan2(goalPos.y - obj->getPosition()->y, goalPos.x - obj->getPosition()->x);
@@ -1653,8 +1652,12 @@ void Locomotor::moveTowardsPositionLegs(Object* obj, PhysicsBehavior *physics, c
 		desiredAngle = normalizeAngle(desiredAngle+m_angleOffset);
 	}
 
-	Real relAngle = stdAngleDiff(desiredAngle, angle);
 	locoUpdate_moveTowardsAngle(obj, desiredAngle);
+	// Modulate acceleration from the heading that will actually be used this
+	// frame.  Measuring against the pre-turn heading makes a turn just outside
+	// 45 degrees produce zero forward force, even though the unit has already
+	// turned inside its walking cone.
+	Real relAngle = stdAngleDiff(desiredAngle, obj->getOrientation());
 
 	//
 	// Modulate speed according to turning. The more we have to turn, the slower we go

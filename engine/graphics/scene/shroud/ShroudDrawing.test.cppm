@@ -6,11 +6,77 @@ module;
 #include <cstdint>
 #include <filesystem>
 #include <span>
+#include <vector>
 export module Graphics.Scene.Shroud.Drawing.Tests;
 import Graphics.Tests.Device;
 import Graphics.Scene.Props.Renderer;
 import Graphics.Scene.Shroud.Image;
 using namespace Graphics;
+
+BOOST_AUTO_TEST_CASE(changing_shroud_preserves_each_draw_before_gpu_completion)
+{
+    GraphicsTestDevice device({true});
+    BOOST_REQUIRE(device.Is_Valid());
+    PropRenderer renderer;
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    constexpr unsigned size=128, count=80;
+    const auto texture=device.Create_Texture({size,size,1,RHITextureFormat::BGR565_UNorm});
+    const auto depth=device.Create_Texture({size,size,1,RHITextureFormat::D32_Float,
+        static_cast<std::uint32_t>(RHITextureUsage::DepthStencil)});
+    BOOST_REQUIRE(texture.Is_Valid());
+    BOOST_REQUIRE(depth.Is_Valid());
+    std::array<PropVertex,4> vertices{};
+    vertices[0].position={-1,-1,0.5f}; vertices[0].uv={0,1};
+    vertices[1].position={1,-1,0.5f}; vertices[1].uv={1,1};
+    vertices[2].position={1,1,0.5f}; vertices[2].uv={1,0};
+    vertices[3].position={-1,1,0.5f}; vertices[3].uv={0,0};
+    const std::array<std::uint32_t,6> indices{0,1,2,0,2,3};
+    const auto mesh=renderer.Create_Mesh(vertices,indices);
+    PropParameters parameters;
+    parameters.view_projection={1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
+    PropStyle style;
+    style.blend=RHIBlendMode::Disabled;
+    style.samplers[0].Set_Filter(RHISamplerFilter::Point);
+    ShroudImage image;
+    std::vector<std::uint16_t> cells((size-2)*(size-2));
+    std::array<RHITextureHandle,count> targets{};
+    auto& commands=device.Immediate_Command_List();
+    // Keep uploads and draws outstanding together. Reading back after every
+    // update hides upload-memory reuse and stale texture-binding errors.
+    for (unsigned frame=0;frame<count;++frame) {
+        for (unsigned y=0;y<size-2;++y)
+            for (unsigned x=0;x<size-2;++x)
+                cells[y*(size-2)+x]=((x/7+y/11+frame)%3==0)?0:0xffff;
+        BOOST_REQUIRE(image.Set_Cells(cells,size-2,size-2,size-2,size,size,0));
+        BOOST_REQUIRE(image.Upload(device,texture));
+        targets[frame]=device.Create_Texture({size,size,1,RHITextureFormat::RGBA8_UNorm,
+            static_cast<std::uint32_t>(RHITextureUsage::RenderTarget)});
+        BOOST_REQUIRE(targets[frame].Is_Valid());
+        BOOST_REQUIRE(commands.Set_Render_Targets(targets[frame],depth));
+        BOOST_REQUIRE(commands.Set_Viewport({0,0,size,size}));
+        BOOST_REQUIRE(commands.Clear({1,0,1,1},1));
+        BOOST_REQUIRE(renderer.Draw(commands,mesh,style,parameters,std::span(&texture,1)));
+    }
+    std::vector<std::byte> pixels(size*size*4);
+    for (unsigned frame=0;frame<count;++frame) {
+        BOOST_REQUIRE(device.Readback_Texture(targets[frame],pixels,size*4));
+        unsigned mismatches=0;
+        for (unsigned y=0;y<size;++y) {
+            for (unsigned x=0;x<size;++x) {
+                const unsigned expected=x>0 && y>0 && x<size-1 && y<size-1
+                    && ((x-1)/7+(y-1)/11+frame)%3!=0 ? 255 : 0;
+                for (unsigned channel=0;channel<3;++channel)
+                    mismatches+=std::to_integer<unsigned>(pixels[(y*size+x)*4+channel])!=expected;
+            }
+        }
+        BOOST_TEST_CONTEXT("queued shroud frame " << frame) { BOOST_CHECK_EQUAL(mismatches,0u); }
+        device.Destroy_Texture(targets[frame]);
+    }
+    renderer.Destroy_Mesh(mesh);
+    renderer.Shutdown();
+    device.Destroy_Texture(texture);
+    device.Destroy_Texture(depth);
+}
 
 BOOST_AUTO_TEST_CASE(packed_shroud_pixels_preserve_borders_changes_and_resource_recreation)
 {

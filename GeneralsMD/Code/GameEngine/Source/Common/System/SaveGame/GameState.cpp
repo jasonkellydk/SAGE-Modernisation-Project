@@ -53,6 +53,8 @@
 #include "GameClient/ParticleSys.h"
 #include "GameClient/TerrainVisual.h"
 #include "GameLogic/GameLogic.h"
+#include "GameLogic/AI.h"
+#include "engine/navigation/pathfinder_api.h"
 #include "GameLogic/GhostObject.h"
 #include "GameLogic/PartitionManager.h"
 #include "GameLogic/ScriptEngine.h"
@@ -257,6 +259,7 @@ void GameState::init()
 	addSnapshotBlock( "CHUNK_TeamFactory",						TheTeamFactory,						SNAPSHOT_SAVELOAD );
 	addSnapshotBlock( "CHUNK_Players",								ThePlayerList,						SNAPSHOT_SAVELOAD );
 	addSnapshotBlock( "CHUNK_GameLogic",							TheGameLogic,							SNAPSHOT_SAVELOAD );
+	addSnapshotBlock( "CHUNK_Navigation", TheAI->pathfinder(), SNAPSHOT_SAVELOAD );
 	addSnapshotBlock( "CHUNK_Radar",									TheRadar,									SNAPSHOT_SAVELOAD );
 	addSnapshotBlock( "CHUNK_ScriptEngine",						TheScriptEngine,					SNAPSHOT_SAVELOAD );
 	addSnapshotBlock( "CHUNK_SidesList",							TheSidesList,							SNAPSHOT_SAVELOAD );
@@ -692,6 +695,12 @@ SaveCode GameState::loadGame( AvailableGameInfo gameInfo )
 // ------------------------------------------------------------------------------------------------
 void GameState::loadQueuedSaveGame()
 {
+	// Honor the explicit command-line seed for reproducible startup saves.
+	// Older save files do not store the random streams; without -seed retain
+	// the normal startup seed, including for interactive play.
+	if (TheGlobalData->m_fixedSeed >= 0)
+		InitRandom(static_cast<UnsignedInt>(TheGlobalData->m_fixedSeed));
+
 	AvailableGameInfo gameInfo;
 	gameInfo.filename = TheGlobalData->m_loadSaveGame;
 	gameInfo.next = nullptr;
@@ -730,6 +739,13 @@ void GameState::loadQueuedSaveGame()
 			TheGameLogic->clearGameData( FALSE );
 		TheGameEngine->reset();
 		TheGameEngine->setQuitting( TRUE );
+	}
+	else if (TheAI && TheAI->pathfinder())
+	{
+		// Save restoration can issue path requests before the final object/grid
+		// state is installed. Retire those immutable navigation snapshots before
+		// the first post-load simulation frame.
+		TheAI->pathfinder()->invalidateNavigationSnapshots();
 	}
 }
 

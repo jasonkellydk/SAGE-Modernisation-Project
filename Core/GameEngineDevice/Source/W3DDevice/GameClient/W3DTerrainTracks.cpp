@@ -193,6 +193,7 @@ void TerrainTracksRenderObjClass::init( Real width, Real length, const Char *tex
 //=============================================================================
 void TerrainTracksRenderObjClass::addCapEdgeToTrack(Real x, Real y)
 {
+	if (!m_ownerDrawable || !m_ownerDrawable->getObject()) return;
 	/// @todo: Have object pass its height and orientation so we can remove extra calls.
 
 	if (m_haveCap)
@@ -315,6 +316,8 @@ void TerrainTracksRenderObjClass::addCapEdgeToTrack(Real x, Real y)
 //=============================================================================
 void TerrainTracksRenderObjClass::addEdgeToTrack(Real x, Real y)
 {
+	// A preview drawable has no simulation object or navigation layer.
+	if (!m_ownerDrawable || !m_ownerDrawable->getObject()) return;
 	/// @todo: Have object pass its height and orientation so we can remove extra calls.
 
 	if (!m_haveAnchor)

@@ -104,6 +104,52 @@ public:
 
 export bool Calculate_Cascade_Splits(float near_clip, float far_clip, float split_lambda, std::span<float> splits) noexcept;
 
+// Coarse scene rejection uses the light volumes, including their depth padding,
+// rather than camera visibility: an off-screen object can still cast a shadow.
+export class ShadowCasterVolume final {
+    using Planes = std::array<std::array<float,4>,6>;
+    std::array<Planes,Max_Shadow_Cascades> m_planes{};
+    std::uint32_t m_count=0;
+public:
+    explicit ShadowCasterVolume(const ShadowCascades& cascades) noexcept
+        : m_count(cascades.count <= Max_Shadow_Cascades ? cascades.count : 0) {
+        for (std::uint32_t index=0;index<m_count;++index) {
+            const auto& matrix=cascades.views[index].view_projection;
+            auto& planes=m_planes[index];
+            for (unsigned column=0;column<4;++column) {
+                planes[0][column]=matrix(3,column)+matrix(0,column);
+                planes[1][column]=matrix(3,column)-matrix(0,column);
+                planes[2][column]=matrix(3,column)+matrix(1,column);
+                planes[3][column]=matrix(3,column)-matrix(1,column);
+                planes[4][column]=matrix(2,column);
+                planes[5][column]=matrix(3,column)-matrix(2,column);
+            }
+        }
+    }
+    bool Intersects(const std::array<float,3>& center,const std::array<float,3>& extent) const noexcept {
+        if (m_count==0) return true;
+        for (unsigned axis=0;axis<3;++axis)
+            if (!std::isfinite(center[axis]) || !std::isfinite(extent[axis]) || extent[axis]<0) return true;
+        for (std::uint32_t index=0;index<m_count;++index) {
+            bool outside=false;
+            for (const auto& plane:m_planes[index]) {
+                double distance=plane[3], magnitude=std::abs(distance);
+                for (unsigned axis=0;axis<3;++axis) {
+                    const double term=double(plane[axis])*center[axis];
+                    const double radius=std::abs(double(plane[axis]))*extent[axis];
+                    distance+=term+radius;
+                    magnitude+=std::abs(term)+radius;
+                }
+                if (distance < -0.001-16*std::numeric_limits<float>::epsilon()*magnitude) {
+                    outside=true; break;
+                }
+            }
+            if (!outside) return true;
+        }
+        return false;
+    }
+};
+
 export bool Build_Shadow_Cascades(
 	const View &view,
 	LightHandle light_handle,

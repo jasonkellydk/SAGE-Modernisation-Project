@@ -2423,6 +2423,7 @@ void DozerAIUpdate::aiDoCommand(const AICommandParms* parms)
 				aiIdle( CMD_FROM_AI );
 
 			// do the repair
+			beginPathCommand(parms->m_cmdSource);
 			privateRepair(parms->m_obj, parms->m_cmdSource);
 			break;
 
@@ -2437,6 +2438,7 @@ void DozerAIUpdate::aiDoCommand(const AICommandParms* parms)
 				aiIdle( CMD_FROM_AI );
 
 			// do the command
+			beginPathCommand(parms->m_cmdSource);
 			privateResumeConstruction( parms->m_obj, parms->m_cmdSource );
 			break;
 

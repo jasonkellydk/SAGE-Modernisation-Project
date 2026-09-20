@@ -199,6 +199,11 @@ void LookAtTranslator::setScreenEdgeScrollMode(ScreenEdgeScrollMode mode)
 GameMessageDisposition LookAtTranslator::translateGameMessage(const GameMessage *msg)
 {
 	GameMessageDisposition disp = KEEP_MESSAGE;
+	if (msg->isMouseInputCaptured() && msg->getType()>GameMessage::MSG_RAW_MOUSE_BEGIN &&
+		msg->getType()<GameMessage::MSG_RAW_MOUSE_END) {
+		if (m_isScrolling && m_scrollType == SCROLL_RMB) stopScrolling();
+		if (msg->getType() != GameMessage::MSG_RAW_MOUSE_POSITION) return KEEP_MESSAGE;
+	}
 
 	GameMessage::Type t = msg->getType();
 	switch (t)

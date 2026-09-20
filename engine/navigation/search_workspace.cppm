@@ -1,6 +1,8 @@
 module;
 
 #include <algorithm>
+#include <array>
+#include <bit>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -53,8 +55,23 @@ class IndexedMinHeap {
             if (first >= ids_.size()) break;
             SearchIndex best = static_cast<SearchIndex>(first);
             const auto end = std::min(first + Arity, ids_.size());
-            for (std::size_t child = first + 1; child < end; ++child)
-                if (keys_[child] < keys_[best]) best = static_cast<SearchIndex>(child);
+            if constexpr (Arity == 4) {
+                if (end == first + 4) {
+                    // Independent pairs avoid three serial, unpredictable
+                    // branches for the overwhelmingly common full child set.
+                    const SearchIndex left = keys_[first] < keys_[first + 1]
+                        ? best : best + 1;
+                    const SearchIndex right = keys_[first + 2] < keys_[first + 3]
+                        ? best + 2 : best + 3;
+                    best = keys_[left] < keys_[right] ? left : right;
+                } else {
+                    for (std::size_t child = first + 1; child < end; ++child)
+                        if (keys_[child] < keys_[best]) best = static_cast<SearchIndex>(child);
+                }
+            } else {
+                for (std::size_t child = first + 1; child < end; ++child)
+                    if (keys_[child] < keys_[best]) best = static_cast<SearchIndex>(child);
+            }
             if (key <= keys_[best]) break;
             place(position, ids_[best], keys_[best]);
             position = best;
@@ -68,7 +85,7 @@ public:
     bool empty() const { return ids_.empty(); }
     std::size_t size() const { return ids_.size(); }
     bool contains(SearchIndex id) const {
-        return id < positions_.size() && positions_[id] != NoSearchIndex;
+        return id < positions_.size() && positions_[id] < ids_.size() && ids_[positions_[id]]==id;
     }
     SearchIndex top() const { return empty() ? NoSearchIndex : ids_.front(); }
     SearchIndex at(std::size_t i) const { return ids_[i]; }
@@ -78,15 +95,26 @@ public:
         return i < ids_.size() ? ids_[i] : NoSearchIndex;
     }
     void push(SearchIndex id, std::uint32_t cost) {
+        pushRanked(id,cost,static_cast<std::uint32_t>(nextKey(cost)));
+    }
+    // Explicit secondary priorities let A* prefer lower remaining distance
+    // on equal-cost plateaus without changing the primary path cost.
+    void pushRanked(SearchIndex id, std::uint32_t cost, std::uint32_t rank) {
         assert(!contains(id));
-        reserveIndices(std::size_t(id) + 1);
-        // A unique insertion rank defines deterministic FIFO ties. Reset per
-        // search; never silently wrap and change ordering in an enormous query.
-        const auto key = nextKey(cost);
-        const auto position = static_cast<SearchIndex>(ids_.size());
+        reserveIndices(std::size_t(id)+1);
+        const auto key=(std::uint64_t(cost)<<32)|rank;
+        const auto position=static_cast<SearchIndex>(ids_.size());
         ids_.push_back(id);
         keys_.push_back(key);
-        siftUp(position, id, key);
+        siftUp(position,id,key);
+    }
+    void updateRanked(SearchIndex id, std::uint32_t cost, std::uint32_t rank) {
+        assert(contains(id));
+        const auto position=positions_[id];
+        const auto oldKey=keys_[position];
+        const auto key=(std::uint64_t(cost)<<32)|rank;
+        if (key<oldKey) siftUp(position,id,key);
+        else if (key>oldKey) siftDown(position,id,key);
     }
     void erase(SearchIndex id) {
         assert(contains(id));
@@ -126,12 +154,134 @@ public:
         return id;
     }
     void clear() {
-        while (!empty()) dropBack();
+        // Membership validates both directions, so stale inverse positions
+        // cannot survive clearing or alias a different ID after slot reuse.
+        ids_.clear();
+        keys_.clear();
         ticket_ = 0;
     }
     std::size_t storageBytes() const {
         return keys_.capacity() * sizeof(keys_[0]) + ids_.capacity() * sizeof(ids_[0])
              + positions_.capacity() * sizeof(positions_[0]);
+    }
+};
+
+// Navigation priorities are integer costs with FIFO ties. Common costs use
+// direct buckets, so removing the best cell does not sift a large heap. The
+// overflow heap preserves the full 32-bit cost range on unusually large maps.
+class SearchFrontier {
+    static constexpr std::uint32_t BucketCount = 65536;
+    struct Links {
+        SearchIndex previous = NoSearchIndex, next = NoSearchIndex;
+        SearchIndex position = NoSearchIndex;
+        std::uint32_t cost = 0;
+    };
+    struct Bucket { SearchIndex first = NoSearchIndex, last = NoSearchIndex; };
+    std::vector<Bucket> buckets_{BucketCount};
+    std::array<std::uint64_t, BucketCount / 64> occupied_{};
+    std::array<std::uint64_t, BucketCount / 4096> groups_{};
+    std::uint64_t root_ = 0;
+    std::vector<Links> links_;
+    std::vector<SearchIndex> active_;
+    IndexedMinHeap<4> overflow_;
+
+    void attach(SearchIndex id, std::uint32_t cost) {
+        auto& node = links_[id];
+        node.cost = cost;
+        if (cost >= BucketCount) { overflow_.push(id, cost); return; }
+        auto& bucket = buckets_[cost];
+        node.previous = bucket.last;
+        node.next = NoSearchIndex;
+        if (bucket.last != NoSearchIndex) links_[bucket.last].next = id;
+        else {
+            bucket.first = id;
+            occupied_[cost / 64] |= std::uint64_t{1} << (cost % 64);
+            groups_[cost / 4096] |= std::uint64_t{1} << (cost / 64 % 64);
+            root_ |= std::uint64_t{1} << (cost / 4096);
+        }
+        bucket.last = id;
+    }
+    void detach(SearchIndex id) {
+        const auto& node = links_[id];
+        if (node.cost >= BucketCount) { overflow_.erase(id); return; }
+        auto& bucket = buckets_[node.cost];
+        if (node.previous != NoSearchIndex) links_[node.previous].next = node.next;
+        else bucket.first = node.next;
+        if (node.next != NoSearchIndex) links_[node.next].previous = node.previous;
+        else bucket.last = node.previous;
+        if (bucket.first == NoSearchIndex) {
+            const auto word = node.cost / 64;
+            occupied_[word] &= ~(std::uint64_t{1} << (node.cost % 64));
+            if (!occupied_[word]) {
+                const auto group = word / 64;
+                groups_[group] &= ~(std::uint64_t{1} << (word % 64));
+                if (!groups_[group]) root_ &= ~(std::uint64_t{1} << group);
+            }
+        }
+    }
+public:
+    void reserveIndices(std::size_t count) {
+        if (count > links_.size()) links_.resize(count);
+    }
+    bool empty() const { return active_.empty(); }
+    std::size_t size() const { return active_.size(); }
+    bool contains(SearchIndex id) const {
+        return id < links_.size() && links_[id].position != NoSearchIndex;
+    }
+    SearchIndex top() const {
+        if (!root_) return overflow_.top();
+        const auto group = std::countr_zero(root_);
+        const auto word = group * 64 + std::countr_zero(groups_[group]);
+        return buckets_[word * 64 + std::countr_zero(occupied_[word])].first;
+    }
+    SearchIndex at(std::size_t index) const { return active_[index]; }
+    SearchIndex next(SearchIndex id) const {
+        assert(contains(id));
+        const auto position = (links_[id].position + 1) % active_.size();
+        const auto nextId = active_[position];
+        return nextId == top() ? NoSearchIndex : nextId;
+    }
+    void push(SearchIndex id, std::uint32_t cost) {
+        assert(!contains(id));
+        reserveIndices(std::size_t(id) + 1);
+        links_[id].position = static_cast<SearchIndex>(active_.size());
+        active_.push_back(id);
+        attach(id, cost);
+    }
+    void erase(SearchIndex id) {
+        assert(contains(id));
+        detach(id);
+        const auto position = links_[id].position;
+        const auto last = active_.back();
+        active_[position] = last;
+        links_[last].position = position;
+        active_.pop_back();
+        links_[id].position = NoSearchIndex;
+    }
+    void reinsert(SearchIndex id, std::uint32_t cost) {
+        assert(contains(id));
+        detach(id);
+        attach(id, cost);
+    }
+    SearchIndex pop() {
+        const auto id = top();
+        if (id != NoSearchIndex) erase(id);
+        return id;
+    }
+    SearchIndex dropBack() {
+        assert(!empty());
+        const auto id = active_.back();
+        erase(id);
+        return id;
+    }
+    void clear() {
+        while (!empty()) dropBack();
+        overflow_.clear();
+    }
+    std::size_t storageBytes() const {
+        return buckets_.capacity() * sizeof(Bucket) + sizeof(occupied_) + sizeof(groups_)
+            + links_.capacity() * sizeof(Links) + active_.capacity() * sizeof(SearchIndex)
+            + overflow_.storageBytes();
     }
 };
 
@@ -148,7 +298,7 @@ public:
     std::vector<State> state;
     std::vector<Owner*> owner;
     std::vector<std::uint32_t> goalUnit, positionUnit, goalAircraft;
-    IndexedMinHeap<4> open;
+    SearchFrontier open;
 private:
     std::vector<SearchIndex> free_;
     std::vector<std::uint8_t> allocated_;
@@ -221,7 +371,7 @@ public:
         if (state[id] == Open) {
             // Preserve the planner's re-insertion tie policy with one sift,
             // without an erase followed by a second heap insertion.
-            open.update(id, f[id], true);
+            open.reinsert(id, f[id]);
             return;
         }
         assert(state[id] == Unseen);

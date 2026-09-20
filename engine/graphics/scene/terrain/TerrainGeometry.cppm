@@ -74,6 +74,7 @@ public:
             if (!Is_Valid(cell))
                 return false;
         }
+        m_cells.assign(cells.begin(), cells.end());
         m_vertices.resize(cells.size() * 4);
         m_indices.resize(cells.size() * 6);
         constexpr std::size_t cells_per_batch = 256;
@@ -95,6 +96,21 @@ public:
         build_range(0);
         for (unsigned worker = 1; worker < worker_count; ++worker)
             workers[worker - 1].get();
+        return true;
+    }
+
+    // Fixed topology edits retain all unaffected cells and refresh the bounds
+    // of every touched visibility batch before publishing the result.
+    bool Update(std::size_t first, std::span<const TerrainCell> cells)
+    {
+        if (first > m_cells.size() || cells.size() > m_cells.size() - first) return false;
+        for (const auto& cell : cells) if (!Is_Valid(cell)) return false;
+        if (cells.empty()) return true;
+        std::copy(cells.begin(), cells.end(), m_cells.begin() + first);
+        constexpr std::size_t cells_per_batch = 256;
+        const auto last = (first + cells.size() - 1) / cells_per_batch;
+        for (auto batch = first / cells_per_batch; batch <= last; ++batch)
+            Build_Batch(m_cells, batch, cells_per_batch);
         return true;
     }
 
@@ -158,6 +174,7 @@ private:
         return true;
     }
 
+    std::vector<TerrainCell> m_cells;
     std::vector<TerrainGeometryBatch> m_batches;
     std::vector<TerrainVertex> m_vertices;
     std::vector<std::uint32_t> m_indices;

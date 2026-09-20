@@ -1,3 +1,5 @@
+module;
+
 #define BOOST_TEST_MODULE GraphicsSkinningTests
 
 #include <boost/test/included/unit_test.hpp>

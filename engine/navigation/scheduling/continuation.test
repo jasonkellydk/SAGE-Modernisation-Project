@@ -1,0 +1,47 @@
+#include <boost/test/unit_test.hpp>
+#include <coroutine>
+#include <memory>
+#include <stdexcept>
+import engine.navigation.scheduling.continuation;
+
+namespace {
+struct TrackedScope { unsigned& count; ~TrackedScope() { ++count; } };
+navigation::Continuation<std::unique_ptr<unsigned>> pausedWork(unsigned& steps,unsigned& destroyed,bool fail=false) {
+    TrackedScope scope{destroyed};
+    ++steps;
+    co_await std::suspend_always{};
+    ++steps;
+    if (fail) throw std::runtime_error("query failure");
+    co_return std::make_unique<unsigned>(steps);
+}
+}
+BOOST_AUTO_TEST_CASE(continuation_owns_suspended_state_and_delivers_one_result) {
+    unsigned steps=0,destroyed=0;
+    auto task=pausedWork(steps,destroyed);
+    BOOST_TEST(steps==0u);
+    BOOST_CHECK_THROW(task.take(),std::logic_error);
+    BOOST_TEST(task.resume());
+    BOOST_TEST(steps==1u);
+    auto moved=std::move(task);
+    BOOST_TEST(task.done());
+    BOOST_TEST(!moved.resume());
+    BOOST_TEST(destroyed==1u);
+    BOOST_TEST(*moved.take()==2u);
+    BOOST_CHECK_THROW(moved.take(),std::logic_error);
+    BOOST_TEST(!moved.resume());
+}
+BOOST_AUTO_TEST_CASE(continuation_cancellation_replacement_and_exception_release_locals) {
+    unsigned steps=0,destroyed=0;
+    {
+        auto task=pausedWork(steps,destroyed);
+        task.resume();
+        task=pausedWork(steps,destroyed,true);
+        BOOST_TEST(destroyed==1u);
+        task.resume();
+        BOOST_CHECK_THROW(task.resume(),std::runtime_error);
+        BOOST_CHECK_THROW(task.take(),std::runtime_error);
+        BOOST_TEST(destroyed==2u);
+    }
+    BOOST_TEST(steps==3u);
+    BOOST_TEST(destroyed==2u);
+}

@@ -1,0 +1,48 @@
+#include <boost/test/unit_test.hpp>
+#include <vector>
+import engine.navigation.path.reconstruction;
+
+BOOST_AUTO_TEST_CASE(dx9_reconstruction_flags_preserve_cliff_boundaries_across_slices_and_layers) {
+    struct Case { std::vector<unsigned> position,cliff,expected; };
+    // Expectations follow pinned DX9 prependCells' reverse walk, including
+    // its exclusion of the actual start and retention of the goalward layer.
+    const std::vector<Case> cases{
+        {{},{},{}},
+        {{0},{1},{0}},
+        {{0,1},{0,1},{0,1}},
+        {{0,1,2},{1,0,0},{0,1,1}},
+        {{0,1,2,3},{1,1,0,0},{0,1,0,1}},
+        {{0,1,2,3},{0,0,1,0},{0,0,1,0}},
+        {{0,1,2,3,4,5},{0,1,1,0,1,0},{0,1,1,0,1,0}},
+        {{0,1,2,2,3,4},{0,0,0,1,0,0},{0,0,1,1,0,1}},
+        {{0,1,2,2,3},{0,0,1,0,0},{0,1,1,1,1}},
+        {{0,1,2,2,2,3},{0,0,1,1,0,1},{0,1,0,0,0,1}}
+    };
+    for (const auto& input:cases) for (unsigned budget:{1u,2u,7u,128u}) {
+        unsigned reads=0;
+        const auto cliff=[&](std::size_t i) { ++reads;return input.cliff[i]!=0; };
+        const auto same=[&](std::size_t a,std::size_t b) { return input.position[a]==input.position[b]; };
+        navigation::ReconstructionFlags cursor(input.position.size());
+        BOOST_TEST(cursor.advance(0,cliff,same)==0u);
+        BOOST_TEST(reads==0u);
+        unsigned work=0;
+        while (!cursor.done()) {
+            const auto used=cursor.advance(budget,cliff,same);
+            BOOST_REQUIRE(used>0u);
+            BOOST_TEST(used<=budget);
+            work+=used;
+            // A suspended cursor owns all annotation state, including a
+            // protected goalward node and layer-run propagation position.
+            auto copy=cursor;
+            while (!copy.done()) copy.advance(3,cliff,same);
+            for (unsigned i=0;i<input.expected.size();++i)
+                BOOST_TEST(unsigned(copy.at(i))==input.expected[i]);
+        }
+        BOOST_TEST(work==(input.position.size()>1?2*input.position.size()-3:0));
+        for (unsigned i=0;i<input.expected.size();++i)
+            BOOST_TEST(unsigned(cursor.at(i))==input.expected[i]);
+        const auto finishedReads=reads;
+        BOOST_TEST(cursor.advance(budget,cliff,same)==0u);
+        BOOST_TEST(reads==finishedReads);
+    }
+}

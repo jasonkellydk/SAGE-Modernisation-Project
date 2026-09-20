@@ -1,0 +1,98 @@
+#include <boost/test/unit_test.hpp>
+#include <algorithm>
+#include <cstdint>
+#include <limits>
+#include <utility>
+#include <vector>
+import engine.navigation.movement.corridor.phase_line;
+
+BOOST_AUTO_TEST_CASE(phase_line_matches_integer_phase_equations_in_all_octants) {
+    using Point=std::pair<std::int64_t,std::int64_t>;
+    for (int dx=-32;dx<=32;++dx) for (int dy=-32;dy<=32;++dy) {
+        const int ax=dx<0?-dx:dx,ay=dy<0?-dy:dy;
+        const int major=std::max(ax,ay),minor=std::min(ax,ay);
+        std::vector<Point> expected,actual;
+        const auto point=[&](int a,int b) -> Point {
+            return ax>=ay?Point{17+a*(dx<0?-1:1),-23+b*(dy<0?-1:1)}:
+                Point{17+b*(dx<0?-1:1),-23+a*(dy<0?-1:1)};
+        };
+        if (!major) expected={{17,-23},{17,-22}};
+        else for (int i=0;i<=major;++i) {
+            const int before=(major/2+i*minor)/major;
+            const int after=(major/2+(i+1)*minor)/major;
+            expected.push_back(point(i,before));
+            if (after!=before) expected.push_back(point(i,after));
+        }
+        BOOST_TEST(navigation::visitPhaseLine({17,-23},{17+dx,-23+dy},[&](auto x,auto y) {
+            actual.emplace_back(x,y);return true;
+        }));
+        BOOST_REQUIRE(actual.size()==expected.size());
+        BOOST_TEST((actual==expected));
+        for (std::size_t stop:{std::size_t{0},expected.size()/2,expected.size()-1}) {
+            std::size_t calls=0;
+            BOOST_TEST(!navigation::visitPhaseLine({17,-23},{17+dx,-23+dy},[&](auto x,auto y) {
+                BOOST_TEST((Point{x,y}==expected[calls]));
+                return calls++!=stop;
+            }));
+            BOOST_TEST(calls==stop+1);
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(phase_line_handles_extreme_endpoints_and_nested_visitors) {
+    constexpr auto lo=std::numeric_limits<std::int32_t>::min();
+    constexpr auto hi=std::numeric_limits<std::int32_t>::max();
+    unsigned calls=0;
+    BOOST_TEST(!navigation::visitPhaseLine({lo,lo},{hi,hi},[&](auto x,auto y) {
+        BOOST_TEST(x>=lo);BOOST_TEST(y>=lo);
+        return ++calls<5;
+    }));
+    BOOST_TEST(calls==5u);
+    unsigned outer=0,inner=0;
+    BOOST_TEST(navigation::visitPhaseLine({hi,hi},{hi,hi},[&](auto x,auto y) {
+        BOOST_TEST(x==std::int64_t(hi));
+        BOOST_TEST(y==std::int64_t(hi)+outer++);
+        BOOST_TEST(navigation::visitPhaseLine({lo,lo},{lo,lo},[&](auto,auto) { ++inner;return true; }));
+        return true;
+    }));
+    BOOST_TEST(outer==2u);BOOST_TEST(inner==4u);
+}
+
+BOOST_AUTO_TEST_CASE(phase_line_cursor_resumes_at_individual_samples_without_changing_dx9_order) {
+    using Point=std::pair<std::int64_t,std::int64_t>;
+    for (int dx=-20;dx<=20;++dx) for (int dy=-20;dy<=20;++dy) {
+        const navigation::LineCell start{17,-23},end{17+dx,-23+dy};
+        std::vector<Point> expected;
+        navigation::visitPhaseLine(start,end,[&](auto x,auto y) {
+            expected.emplace_back(x,y);return true;
+        });
+        for (unsigned budget : {1u,2u,7u,64u}) {
+            navigation::PhaseLineCursor cursor(start,end);
+            std::vector<Point> actual;
+            while (!cursor.done()) {
+                // Copying owned state models a pause with no live callbacks.
+                auto resumed=cursor;
+                unsigned visited=0;
+                navigation::PhaseLineSample sample;
+                while (visited<budget && resumed.next(sample)) {
+                    actual.emplace_back(sample.x,sample.y);++visited;
+                }
+                BOOST_REQUIRE(visited>0);
+                BOOST_TEST(visited<=budget);
+                cursor=resumed;
+            }
+            BOOST_TEST((actual==expected));
+            navigation::PhaseLineSample untouched{123,456};
+            BOOST_TEST(!cursor.next(untouched));
+            BOOST_TEST(untouched.x==123);BOOST_TEST(untouched.y==456);
+        }
+    }
+    constexpr auto hi=std::numeric_limits<std::int32_t>::max();
+    navigation::PhaseLineCursor point({hi,hi},{hi,hi});
+    navigation::PhaseLineSample sample;
+    BOOST_REQUIRE(point.next(sample));
+    BOOST_TEST(sample.x==hi);BOOST_TEST(sample.y==hi);
+    BOOST_REQUIRE(point.next(sample));
+    BOOST_TEST(sample.x==hi);BOOST_TEST(sample.y==std::int64_t(hi)+1);
+    BOOST_TEST(point.done());
+}

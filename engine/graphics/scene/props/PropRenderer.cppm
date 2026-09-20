@@ -144,7 +144,9 @@ public:
             for (const auto &pipeline : m_pipelines) m_device->Destroy_Pipeline(pipeline.handle);
             m_constants.Shutdown(*m_device);
             m_instances.Shutdown(*m_device);
+            if (m_single_record_indices.Is_Valid()) m_device->Destroy_Buffer(m_single_record_indices);
         }
+        m_single_record_indices={};
         m_pipelines.clear();
         m_bindings = {};
         m_last_material_mesh = {};
@@ -156,6 +158,7 @@ public:
     {
         PropMesh mesh;
         if (!mesh.geometry.Assign(vertices, indices)) return {};
+        m_geometry_created_bytes+=vertices.size_bytes()+indices.size_bytes();
         return m_meshes.Create(std::move(mesh));
     }
 
@@ -164,6 +167,7 @@ public:
     {
         PropMesh *mesh = m_meshes.Resolve(handle);
         if (mesh == nullptr || mesh->references != 1 || !mesh->geometry.Assign(vertices, indices)) return false;
+        m_geometry_created_bytes+=vertices.size_bytes()+indices.size_bytes();
         mesh->skin_bounds.Clear();
         Release_Geometry(*mesh);
         return true;
@@ -183,6 +187,7 @@ public:
     {
         PropMesh *mesh = m_meshes.Resolve(handle);
         if (mesh == nullptr || mesh->references != 1 || !mesh->geometry.Append(vertices, indices)) return false;
+        m_geometry_created_bytes+=vertices.size_bytes()+indices.size_bytes();
         mesh->skin_bounds.Clear();
         Release_Geometry(*mesh);
         return true;
@@ -211,6 +216,7 @@ public:
         return geometry && record && (record->skin[1]==0 || geometry->Maximum_Bone_Index()<record->skin[1]);
     }
     std::uint64_t Geometry_Uploaded_Bytes() const noexcept { return m_geometry_uploaded_bytes; }
+    std::uint64_t Geometry_Created_Bytes() const noexcept { return m_geometry_created_bytes; }
     bool Mesh_Bounds(PropMeshHandle handle,PropInstanceHandle instance,
         std::array<float,3>& minimum,std::array<float,3>& maximum) {
         auto* mesh=m_meshes.Resolve(handle);
@@ -276,8 +282,19 @@ private:
         const bool color_output=style.color_write_mask != 0;
         const bool shared_lighting=color_output && records.size()==1;
         const bool record_lighting=color_output && records.size()>1;
-        if (!records.empty() && (!m_instances.Prepare(*m_device,record_lighting)
-            || !mesh->instance_indices.Prepare(*m_device,records))) return false;
+        const bool single_record=records.size()==1;
+        if (!records.empty()) {
+            if (!m_instances.Prepare(*m_device,record_lighting)
+                || !m_constants.Prepare_Record_Selection(*m_device,single_record ? records.front() : UINT32_MAX)) return false;
+            if (single_record) {
+                if (!m_single_record_indices.Is_Valid()) {
+                    const std::uint32_t unused=0;
+                    m_single_record_indices=m_device->Create_Buffer_Initialized(
+                        {sizeof(unused),RHIBufferUsage::Storage,sizeof(unused)},std::as_bytes(std::span(&unused,1)));
+                    if (!m_single_record_indices.Is_Valid()) return false;
+                }
+            } else if (!mesh->instance_indices.Prepare(*m_device,records)) return false;
+        }
         if (instanced && !mesh->instances.Prepare(*m_device,worlds)) return false;
         const RHIPipelineHandle pipeline = Pipeline(style, instanced, !records.empty(),shared_lighting);
         if (!pipeline.Is_Valid()) return false;
@@ -318,7 +335,7 @@ private:
                 m_bindings[count++].buffer = m_instances.Buffer();
                 m_bindings[count] = {};
                 m_bindings[count].type = RHIResourceType::Buffer;
-                m_bindings[count++].buffer = mesh->instance_indices.Buffer();
+                m_bindings[count++].buffer = single_record ? m_single_record_indices : mesh->instance_indices.Buffer();
                 m_bindings[count] = {};
                 m_bindings[count].type = RHIResourceType::Buffer;
                 m_bindings[count++].buffer = m_instances.Palettes().Buffer();
@@ -465,8 +482,10 @@ private:
       ShaderHandle m_shader{}, m_instanced_shader{}, m_record_shader{}, m_depth_shader{}, m_depth_instanced_shader{}, m_depth_record_shader{};
     PropMeshHandle m_last_material_mesh{};
     PropInstances m_instances;
+    RHIBufferHandle m_single_record_indices{};
     PropConstantBindings m_constants;
     std::uint64_t m_geometry_uploaded_bytes=0;
+    std::uint64_t m_geometry_created_bytes=0;
     ResourcePool<PropMesh, PropMeshHandle> m_meshes;
     std::vector<PropPipeline> m_pipelines;
     // Borrowed submission scratch. Every used texture entry is overwritten

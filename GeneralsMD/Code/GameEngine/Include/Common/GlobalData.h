@@ -80,7 +80,8 @@ class GlobalData : public SubsystemInterface
 
 public:
 
-	GlobalData();
+	// The data root is fixed at construction; isolated engine fixtures can supply their own.
+	explicit GlobalData(const char* userDataDirectory = nullptr);
 	virtual ~GlobalData() override;
 
 	virtual void init() override;

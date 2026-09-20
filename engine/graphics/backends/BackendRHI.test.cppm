@@ -14,6 +14,7 @@ module;
 #include <span>
 #include <vector>
 #include <windows.h>
+#include "dx11/DX11DeviceHealth.h"
 
 export module Graphics.Backends.Tests;
 
@@ -30,6 +31,47 @@ import Graphics.Resources.Bindless.BindlessResourceTable;
 import Graphics.Resources.Residency.GPUResourceResidency;
 
 using namespace Graphics;
+
+BOOST_AUTO_TEST_CASE(dx11_device_health_queries_the_driver_only_after_failures)
+{
+    DX11Detail::DeviceHealth health;
+    unsigned queries = 0;
+    auto ready = [&] { ++queries; return S_OK; };
+    for (unsigned frame = 0; frame < 10000; ++frame) {
+        BOOST_REQUIRE(health.Check(S_OK, ready));
+        BOOST_REQUIRE(!health.Removed());
+    }
+    BOOST_CHECK_EQUAL(queries, 0u);
+    // Occlusion is a successful status, not device removal.
+    BOOST_CHECK(health.Check(DXGI_STATUS_OCCLUDED, ready));
+    BOOST_CHECK_EQUAL(queries, 0u);
+    // Invalid operations must fail without poisoning an otherwise healthy device.
+    BOOST_CHECK(!health.Check(E_INVALIDARG, ready));
+    BOOST_CHECK(!health.Removed());
+    BOOST_CHECK_EQUAL(queries, 1u);
+    // A generic operation failure can still indicate underlying device loss.
+    BOOST_CHECK(!health.Check(E_FAIL, [&] { ++queries; return DXGI_ERROR_DEVICE_REMOVED; }));
+    BOOST_CHECK(health.Removed());
+    BOOST_CHECK_EQUAL(queries, 2u);
+    BOOST_CHECK(health.Check(S_OK, ready));
+    BOOST_CHECK(!health.Check(E_FAIL, ready));
+    BOOST_CHECK(health.Removed());
+    BOOST_CHECK_EQUAL(queries, 2u);
+}
+
+BOOST_AUTO_TEST_CASE(dx11_explicit_device_loss_is_sticky_until_device_recreation)
+{
+    for (const auto error : {DXGI_ERROR_DEVICE_REMOVED, DXGI_ERROR_DEVICE_RESET,
+            DXGI_ERROR_DEVICE_HUNG, DXGI_ERROR_DRIVER_INTERNAL_ERROR}) {
+        DX11Detail::DeviceHealth health;
+        unsigned queries = 0;
+        BOOST_CHECK(!health.Check(error, [&] { ++queries; return S_OK; }));
+        BOOST_CHECK(health.Removed());
+        BOOST_CHECK_EQUAL(queries, 0u);
+        DX11Detail::DeviceHealth replacement;
+        BOOST_CHECK(!replacement.Removed());
+    }
+}
 
 BOOST_AUTO_TEST_CASE(texture_content_versions_track_writes_and_exclude_gpu_outputs)
 {
@@ -507,6 +549,24 @@ BOOST_AUTO_TEST_CASE(dx11_draw_submission_counts_follow_successful_topologies_an
         BOOST_REQUIRE(commands.Draw_Indexed(3,3));
         BOOST_REQUIRE(commands.Set_Viewport({10,0,6,16}));
         BOOST_REQUIRE(commands.Draw_Indexed(3));
+        BOOST_REQUIRE(device.Destroy_Buffer(index_buffer));
+        BOOST_REQUIRE(device.Destroy_Buffer(vertex_buffer));
+        if (mode == RHIBufferUpdateMode::Discard) {
+            // Exceed several mapped pages while all three draws are pending.
+            // Releasing their logical handles must not permit page reuse before
+            // the fence, even when replacement handles repeatedly reuse slots.
+            auto replacement = vertices;
+            for (auto& vertex : replacement) {
+                vertex.color[0]=0; vertex.color[1]=0; vertex.color[2]=1;
+            }
+            for (unsigned allocation=0;allocation<5000;++allocation) {
+                const auto transient=device.Create_Buffer_Initialized(
+                    {sizeof(replacement),RHIBufferUsage::Vertex,sizeof(SubmissionTestVertex),mode},
+                    std::as_bytes(std::span(replacement)));
+                BOOST_REQUIRE(transient.Is_Valid());
+                BOOST_REQUIRE(device.Destroy_Buffer(transient));
+            }
+        }
         BOOST_REQUIRE(device.Readback_Texture(color_target,pixels,16*4));
         const std::array<unsigned,3> probes{2,7,13};
         for (unsigned region=0; region<probes.size(); ++region)
@@ -520,8 +580,6 @@ BOOST_AUTO_TEST_CASE(dx11_draw_submission_counts_follow_successful_topologies_an
         BOOST_CHECK(device.Destroy_Pipeline(list_pipeline));
         BOOST_CHECK(device.Destroy_Texture(depth_target));
         BOOST_CHECK(device.Destroy_Texture(color_target));
-        BOOST_CHECK(device.Destroy_Buffer(index_buffer));
-        BOOST_CHECK(device.Destroy_Buffer(vertex_buffer));
     }
 }
 

@@ -9,6 +9,7 @@ module;
 export module Graphics.Scene.Traversal.Tests;
 
 import Graphics.Scene.Traversal;
+import Graphics.Scene.Lighting;
 
 using namespace Graphics;
 

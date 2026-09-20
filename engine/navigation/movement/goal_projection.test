@@ -1,0 +1,100 @@
+#include <boost/test/unit_test.hpp>
+#include <limits>
+#include <vector>
+#include <algorithm>
+#include <optional>
+import engine.navigation.movement.goal_projection;
+
+BOOST_AUTO_TEST_CASE(map_destination_projection_matches_exhaustive_nearest_oracle) {
+    constexpr int width=31,height=27;
+    for (unsigned seed=0;seed<200;++seed) {
+        std::vector<bool> map(width*height);
+        for (unsigned i=0;i<map.size();++i) map[i]=((i*2654435761u+seed*12345u)%97u)<5;
+        const navigation::DestinationCell goal{int(seed*13%43)-6,int(seed*17%39)-6};
+        const int gx=std::clamp(goal.x,0,width-1),gy=std::clamp(goal.y,0,height-1);
+        std::optional<navigation::DestinationCell> expected;
+        int best=std::numeric_limits<int>::max();
+        for (int y=0;y<height;++y) for (int x=0;x<width;++x) {
+            const int distance=(x-gx)*(x-gx)+(y-gy)*(y-gy);
+            if (map[y*width+x] && distance<best) { best=distance;expected={{x,y}}; }
+        }
+        const auto actual=navigation::projectDestinationInGrid(goal,width,height,
+            [&](int x,int y) { return map[y*width+x]; });
+        BOOST_REQUIRE(actual.has_value()==expected.has_value());
+        if (actual) { BOOST_TEST(actual->x==expected->x);BOOST_TEST(actual->y==expected->y); }
+    }
+    unsigned calls=0;
+    BOOST_TEST(!navigation::projectDestinationInGrid({15,13},width,height,
+        [&](int,int) { ++calls;return false; }).has_value());
+    BOOST_TEST(calls==unsigned(width*height));
+    const auto distant=navigation::projectDestinationInGrid({0,0},200,1,
+        [](int x,int) { return x==150; });
+    BOOST_REQUIRE(distant.has_value());
+    BOOST_TEST(distant->x==150);
+    BOOST_TEST(!navigation::projectDestinationInGrid({0,0},0,1,[](int,int){return true;}).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(dx9_ground_destination_projection_preserves_eight_probe_order) {
+    // Ground projection preserves the old eight-probe order rather than
+    // selecting the globally nearest legal cell.
+    auto allowed=[](int x,int y) { return (x==-3 && y==-3) || (x==0 && y==4); };
+    const auto goal=navigation::projectGroundDestination({0,0},allowed);
+    BOOST_REQUIRE(goal.has_value());
+    BOOST_TEST(goal->x==-3);
+    BOOST_TEST(goal->y==-3);
+    const auto tie=navigation::projectGroundDestination({0,0},[](int x,int y) {
+        return (x==-1 && y==0) || (x==0 && y==-1);
+    });
+    BOOST_REQUIRE(tie.has_value());
+    BOOST_TEST(tie->x==-1);
+    BOOST_TEST(tie->y==0);
+}
+
+BOOST_AUTO_TEST_CASE(dx9_ground_destination_prefers_east_before_west) {
+    // findGroundPath in pinned DX9 probes E,NE,N,NW,W,SW,S,SE at each offset.
+    std::vector<navigation::DestinationCell> observed;
+    navigation::projectGroundDestination({6,6},[&](int x,int y) {
+        observed.push_back({x,y}); return false;
+    },1);
+    const std::vector<navigation::DestinationCell> expected{
+        {6,6},{7,6},{7,7},{6,7},{5,7},{5,6},{5,5},{6,5},{7,5}};
+    BOOST_REQUIRE(observed.size()==expected.size());
+    for (unsigned i=0;i<expected.size();++i) {
+        BOOST_TEST(observed[i].x==expected[i].x);
+        BOOST_TEST(observed[i].y==expected[i].y);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(ground_destination_projection_is_bounded_and_handles_coordinate_limits) {
+    unsigned calls=0;
+    BOOST_TEST(!navigation::projectGroundDestination({0,0},[&](int,int) { ++calls; return false; }).has_value());
+    BOOST_TEST(calls<=225u);
+    const int largest=(std::numeric_limits<int>::max)();
+    const auto edge=navigation::projectGroundDestination({largest,largest},[&](int x,int y) {
+        return x==largest-1 && y==largest;
+    });
+    BOOST_REQUIRE(edge.has_value());
+    BOOST_TEST(edge->x==largest-1);
+    BOOST_TEST(edge->y==largest);
+    BOOST_TEST(!navigation::projectGroundDestination({0,0},[](int,int){return true;},-1).has_value());
+    BOOST_TEST(!navigation::projectGroundDestination({0,0},[](int,int){return true;},65).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(ground_spiral_projection_preserves_deterministic_probe_order) {
+    std::vector<navigation::DestinationCell> probes;
+    const auto result=navigation::projectGroundSpiral({0,0},32,[&](int x,int y) {
+        probes.push_back({x,y});
+        return x==2 && y==0;
+    });
+    BOOST_REQUIRE(result.has_value());
+    BOOST_TEST(result->x==2);
+    BOOST_TEST(result->y==0);
+    const std::vector<navigation::DestinationCell> expected{
+        {0,0},{1,0},{1,1},{0,1},{-1,1},{-1,0},{-1,-1},
+        {0,-1},{1,-1},{2,-1},{2,0}};
+    BOOST_REQUIRE(probes.size()==expected.size());
+    for (std::size_t i=0;i<expected.size();++i) {
+        BOOST_TEST(probes[i].x==expected[i].x);
+        BOOST_TEST(probes[i].y==expected[i].y);
+    }
+}

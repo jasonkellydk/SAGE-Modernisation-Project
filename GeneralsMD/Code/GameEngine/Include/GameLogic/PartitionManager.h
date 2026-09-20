@@ -47,6 +47,7 @@
 #pragma once
 
 #include <vector>
+#include <memory>
 
 //-----------------------------------------------------------------------------
 //           Includes
@@ -418,7 +419,7 @@ private:
 	Int													m_coiArrayCount;					///< number of COIs allocated (may be more than are in use)
 	Int													m_coiInUseCount;					///< number of COIs that are actually in use
 	CellAndObjectIntersection		*m_coiArray;							///< The array of COIs
-	Int													m_doneFlag;
+	UnsignedInt m_doneFlag;
 	DirtyStatus									m_dirtyStatus;
 	ObjectShroudStatus					m_shroudedness[MAX_PLAYER_COUNT];
 	ObjectShroudStatus					m_shroudednessPrevious[MAX_PLAYER_COUNT];	///<previous frames value of m_shroudedness
@@ -580,8 +581,8 @@ public:
 
 	// these are only for use by getClosestObjects.
 	// (note, if we ever use other bits in this, smarten this up...)
-	Int friend_getDoneFlag() { return m_doneFlag; }
-	void friend_setDoneFlag(Int i) { m_doneFlag = i; }
+	UnsignedInt friend_getDoneFlag() { return m_doneFlag; }
+	void friend_setDoneFlag(UnsignedInt i) { m_doneFlag = i; }
 
 	Bool isInListDirtyModules(PartitionData* const* pListHead) const
 	{
@@ -1300,6 +1301,7 @@ protected:
 		This is an internal function that is used to implement the public
 		getClosestObject and iterateObjects calls.
 	*/
+	UnsignedInt nextQueryEpoch();
 	Object *getClosestObjects(
 		const Object *obj,
 		const Coord3D *pos,
@@ -1446,6 +1448,7 @@ public:
 	void getPMStats(double& gcoTimeThisFrameTotal, double& gcoTimeThisFrameAvg);
 #endif
 
+    // Unsorted center-distance query into reusable caller storage; excludes self.
 	SimpleObjectIterator *iterateObjectsInRange(
 		const Object *obj,
 		Real maxDist,

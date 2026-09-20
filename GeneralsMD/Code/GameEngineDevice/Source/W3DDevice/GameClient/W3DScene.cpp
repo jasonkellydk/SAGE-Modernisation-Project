@@ -82,6 +82,34 @@ import Graphics.Materials.ProceduralPass;
 import Graphics.Materials.State;
 
 import Graphics.Diagnostics.Render;
+import engine.navigation.diagnostics.frame_capture;
+
+namespace {
+struct SceneSubmissionScope {
+    const char* name;
+    Graphics::CommandList* commands=nullptr;
+    std::uint64_t before=0;
+    explicit SceneSubmissionScope(const char* label):name(label) {
+        if (navigation::diagnostics::frameCapture().detailsEnabled())
+            if (auto* device=Graphics::Shared_Frame_Device()) {
+                commands=&device->Immediate_Command_List();
+                before=commands->Submission_Counts().draw_calls;
+            }
+    }
+    ~SceneSubmissionScope() {
+        if (commands) navigation::diagnostics::frameCapture().counter(name,
+            TheGameLogic?TheGameLogic->getFrame():0,commands->Submission_Counts().draw_calls-before);
+    }
+};
+}
+
+#define GENERALS_SCENE_CAPTURE_NAME_IMPL(a,b) a##b
+#define GENERALS_SCENE_CAPTURE_NAME(a,b) GENERALS_SCENE_CAPTURE_NAME_IMPL(a,b)
+#define GENERALS_SCENE_PROFILE_SCOPE(name) \
+    PROFILER_SECTION_NAME(name); \
+    auto GENERALS_SCENE_CAPTURE_NAME(sceneCaptureScope_,__LINE__)= \
+        navigation::diagnostics::frameCapture().measure(name,TheGameLogic?TheGameLogic->getFrame():0); \
+    SceneSubmissionScope GENERALS_SCENE_CAPTURE_NAME(sceneSubmissionScope_,__LINE__)(name ".draw_calls")
 
 ///////////////////////////////////////////////////////////////////////////////
 // DEFINITIONS ////////////////////////////////////////////////////////////////
@@ -879,25 +907,29 @@ void RTS3DScene::Render_Water_Reflection(W3DCamera *camera,
 /**Draw everything that was submitted from this scene*/
 void RTS3DScene::Flush(W3DRenderContext & rinfo)
 {
-    PROFILER_SECTION_NAME("Graphics.Scene.Flush");
+    GENERALS_SCENE_PROFILE_SCOPE("Graphics.Scene.Flush");
 	// TheSuperHackers @bugfix Now always prepares shadows to guarantee correct state before doing any
 	// shadow draw calls. Originally just drawing shadows for trees would not properly prepare shadows.
-	PrepareShadows();
+	{
+		GENERALS_SCENE_PROFILE_SCOPE("Graphics.Scene.PrepareShadows");
+		PrepareShadows();
+	}
 
 	//don't draw shadows in this mode because they interfere with destination alpha or are invisible (wireframe)
 	if (m_customPassMode == SCENE_PASS_DEFAULT && Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE)
 	{
-		PROFILER_SECTION_NAME("Graphics.Scene.DecalShadows");
+		GENERALS_SCENE_PROFILE_SCOPE("Graphics.Scene.DecalShadows");
 		DoShadows(rinfo, false);	//draw all non-stencil shadows (decals) since they fall under other objects.
 	}
 
 	{
-		PROFILER_SECTION_NAME("Graphics.Scene.MaterialQueue");
+		GENERALS_SCENE_PROFILE_SCOPE("Graphics.Scene.MaterialQueue");
 		Graphics::Get_Prop_Submission().Flush_Materials();	//draw all non-translucent objects.
 	}
 
 
     {
+    GENERALS_SCENE_PROFILE_SCOPE("Graphics.Scene.Occlusion");
     Graphics::PropBatchScope prop_batches(Graphics::Get_Prop_Submission(),Graphics::Get_Attachment_Bindings().Current().viewport);
 	//draw all non-translucent objects which were separated because they are hidden and need custom rendering.
 #ifdef USE_NON_STENCIL_OCCLUSION
@@ -912,12 +944,15 @@ void RTS3DScene::Flush(W3DRenderContext & rinfo)
 	// (gth) CNC3 Flush the shader meshes
 
 	// Draw the trees last so they alpha blend onto everything correctly.
-	DoTrees(rinfo);
+	{
+		GENERALS_SCENE_PROFILE_SCOPE("Graphics.Scene.Trees");
+		DoTrees(rinfo);
+	}
 
 	//don't draw shadows in this mode because they interfere with destination alpha
 	if (m_customPassMode == SCENE_PASS_DEFAULT && Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE)
 	{
-		PROFILER_SECTION_NAME("Graphics.Scene.StencilShadows");
+		GENERALS_SCENE_PROFILE_SCOPE("Graphics.Scene.StencilShadows");
 		DoShadows(rinfo, true);	//draw all stencil shadows
 	}
 
@@ -925,19 +960,19 @@ void RTS3DScene::Flush(W3DRenderContext & rinfo)
 		m_customPassMode != SCENE_PASS_ALPHA_MASK &&
 		Get_Extra_Pass_Polygon_Mode() != EXTRA_PASS_CLEAR_LINE)
 	{
-		PROFILER_SECTION_NAME("Graphics.Scene.WaterDraw");
+		GENERALS_SCENE_PROFILE_SCOPE("Graphics.Scene.WaterDraw");
 		TheWaterRenderSystem->Capture_Refraction_Texture();
 		TheWaterRenderSystem->Render(rinfo);
 	}
 
 	{
-		PROFILER_SECTION_NAME("Graphics.Scene.StaticQueue");
+		GENERALS_SCENE_PROFILE_SCOPE("Graphics.Scene.StaticQueue");
 		Graphics::Get_Scene_Draw_Queue().Drain(&rinfo, [] { Graphics::Get_Prop_Submission().Flush_Materials(); });	//draw remaining static-sort submissions
 	}
 
 	if (m_customPassMode == SCENE_PASS_DEFAULT && Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE)
 	{
-		PROFILER_SECTION_NAME("Graphics.Scene.TransparentObjects");
+		GENERALS_SCENE_PROFILE_SCOPE("Graphics.Scene.TransparentObjects");
 		flushTranslucentObjects(rinfo);	//draw all translucent meshes which don't need per-polygon sorting.
 	}
 
@@ -947,8 +982,12 @@ void RTS3DScene::Flush(W3DRenderContext & rinfo)
 		//don't draw transparent in this mode because they interfere with destination alpha
 		if (m_customPassMode == SCENE_PASS_DEFAULT && Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE
             && !Get_W3D_Render_Services().Is_Reflection_Render_Pass())
+		{
+			GENERALS_SCENE_PROFILE_SCOPE("Graphics.Scene.Particles");
 			DoParticles(rinfo);	//prepare the main frame's deferred particle pass.
+		}
 
+		GENERALS_SCENE_PROFILE_SCOPE("Graphics.Scene.TransparentSubmission");
 		Graphics::Get_Prop_Submission().Flush_Transparent();	//draw sorted translucent polygons like particles.
 
 	}
@@ -1037,6 +1076,7 @@ void RTS3DScene::updatePlayerColorPasses()
 //DECLARE_PERF_TIMER(NonTerrainRender)
 void RTS3DScene::Render(W3DRenderContext & rinfo)
 {
+    GENERALS_SCENE_PROFILE_SCOPE("Graphics.Scene.Render");
     auto& draw_parameters = Graphics::Get_Scene_Draw_Parameters();
 	//USE_PERF_TIMER(NonTerrainRender)
 	draw_parameters.fog = {FogEnabled, FogStart, FogEnd, {FogColor.X, FogColor.Y, FogColor.Z, 1}};
@@ -1160,7 +1200,7 @@ void RTS3DScene::Render(W3DRenderContext & rinfo)
 //=============================================================================
 void RTS3DScene::Customized_Render( W3DRenderContext &rinfo )
 {
-    PROFILER_SECTION_NAME("Graphics.Scene.Traverse");
+    GENERALS_SCENE_PROFILE_SCOPE("Graphics.Scene.Traverse");
 #ifdef DIRTY_CONDITION_FLAGS
 	StDrawableDirtyStuffLocker lockDirtyStuff;
 #endif
@@ -1186,7 +1226,7 @@ void RTS3DScene::Customized_Render( W3DRenderContext &rinfo )
 	Graphics::SceneObjectList<W3DRenderObject>::Cursor it(&UpdateList);
 	// allow all objects in the update list to do their "every frame" processing
 	{
-		PROFILER_SECTION_NAME("Graphics.Scene.FrameUpdates");
+		GENERALS_SCENE_PROFILE_SCOPE("Graphics.Scene.FrameUpdates");
 		for (it.First(); !it.Is_Done(); it.Next()) {
 			W3DRenderObject * robj = it.Peek_Obj();
 			if (robj->Class_ID() == W3DRenderObject::CLASSID_TILEMAP)
@@ -1222,16 +1262,24 @@ void RTS3DScene::Customized_Render( W3DRenderContext &rinfo )
 	if (terrainObject != nullptr && !Get_W3D_Render_Services().Is_Reflection_Render_Pass()
         && m_customPassMode == SCENE_PASS_DEFAULT
         && Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE) {
-        if (!Collect_Directional_Shadow_Casters(rinfo)
-            || !static_cast<BaseHeightMapRenderObjClass*>(terrainObject)->collectShadowCasters()
-            || !Render_Directional_Shadow_Maps(rinfo)) {
+        bool shadows_ready;
+        {
+            GENERALS_SCENE_PROFILE_SCOPE("Graphics.Shadows.Collect");
+            shadows_ready=Collect_Directional_Shadow_Casters(rinfo)
+                && static_cast<BaseHeightMapRenderObjClass*>(terrainObject)->collectShadowCasters();
+        }
+        if (shadows_ready) {
+            GENERALS_SCENE_PROFILE_SCOPE("Graphics.Shadows.Render");
+            shadows_ready=Render_Directional_Shadow_Maps(rinfo);
+        }
+        if (!shadows_ready) {
             DEBUG_LOG(("Directional shadow submission failed.\n"));
         }
     }
 	//terrain needs to be rendered first
 	if (terrainObject)	// Don't check visibility - terrain is always visible. jba.
 	{
-		PROFILER_SECTION_NAME("Graphics.Scene.TerrainDraw");
+		GENERALS_SCENE_PROFILE_SCOPE("Graphics.Scene.TerrainDraw");
 		robj=terrainObject;
 		rinfo.light_environment = nullptr;		// Terrain is self lit.
 		rinfo.Camera.Set_User_Data(this);	//pass the scene to terrain via user data.

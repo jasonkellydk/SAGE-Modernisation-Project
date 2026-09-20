@@ -13,8 +13,11 @@ export extern "C++" {
 namespace navigation {
 
 // Shared deterministic simulation policy, not an adaptive wall-clock limit.
-// Measured with 10,000-query batches; see BENCHMARKS.md for hardware and costs.
 inline constexpr unsigned int CellsPerFrame = 50000;
+// Bound owner callbacks as well as search work. The owner gives fresh player
+// commands priority and preserves FIFO admission for ordinary work. This is
+// neither a wall-clock deadline nor a permanent limit on moving units.
+inline constexpr int MaximumOwnerPollsPerFrame = 1024;
 
 // Growable FIFO plus an open-addressed membership table. No per-request nodes,
 // no fixed unit-count limit, and no linear scan to suppress duplicate requests.
@@ -89,6 +92,24 @@ public:
         ++deleted_;
         return id;
     }
+    // Completed active searches leave the admission FIFO without rotating
+    // every waiting request through an AI callback. Preserve all other order.
+    bool erase(Id id) {
+        if (!contains(id)) return false;
+        std::size_t offset=0;
+        while (at(offset)!=id) ++offset;
+        const auto mask=ring_.size()-1;
+        if (offset<count_/2) {
+            for (auto i=offset;i>0;--i) ring_[(head_+i)&mask]=at(i-1);
+            head_=(head_+1)&mask;
+        } else {
+            for (auto i=offset;i+1<count_;++i) ring_[(head_+i)&mask]=at(i+1);
+        }
+        --count_;
+        membership_[find(id)]=Deleted;
+        ++deleted_;
+        return true;
+    }
     void clear() {
         head_ = count_ = deleted_ = 0;
         std::fill(membership_.begin(), membership_.end(), 0);
@@ -98,23 +119,5 @@ public:
     }
 };
 
-// Deterministic work budget, never a wall-clock deadline. New requests from a
-// callback wait until the next batch; zero-work/deleted requests still cost one
-// credit so reentrant or trivial work cannot monopolize a frame.
-template<class Resolve, class Process>
-int processRequests(PathRequestQueue& requests, int& work, Resolve resolve, Process process,
-                    int workBudget = int(CellsPerFrame))
-{
-    int completed = 0;
-    const auto batch = requests.size();
-    for (std::size_t i = 0; i < batch && !requests.empty() && work < workBudget; ++i) {
-        const auto before = work;
-        const auto id = requests.pop(); // Remove membership before callbacks can requeue.
-        if (auto* object = resolve(id))
-            if (process(object)) ++completed;
-        if (work <= before) work = before + 1;
-    }
-    return completed;
-}
 } // namespace navigation
 } // extern "C++"

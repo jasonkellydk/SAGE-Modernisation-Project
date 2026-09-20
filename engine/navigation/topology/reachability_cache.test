@@ -1,0 +1,175 @@
+#include <boost/test/unit_test.hpp>
+#include <array>
+#include <string>
+#include <vector>
+
+import engine.navigation.topology.reachability_cache;
+import engine.navigation.movement.occupancy_policy;
+
+BOOST_AUTO_TEST_SUITE(navigation_reachability)
+BOOST_AUTO_TEST_CASE(local_region_rejects_multiple_pockets_and_preserves_portals_and_start) {
+    for (unsigned budget:{1u,31u,4096u}) {
+        navigation::LocalGoalRegion<8> region(-4,0,0,0);
+        unsigned work=0;
+        while (!region.complete()) {
+            const auto used=region.advance(budget,[](int x,int y) {
+                const bool pocket=(std::abs(x)<=1 && std::abs(y)<=1) ||
+                    (x==-4 && y==0) || (x==4 && y==0);
+                return navigation::ReachabilityCell{pocket || std::abs(x)>=7 || std::abs(y)>=7,
+                    std::uint8_t(x==4 && y==0)};
+            });
+            BOOST_TEST(used<=budget);work+=used;BOOST_REQUIRE(work<=2u*289);
+        }
+        BOOST_TEST(!region.potentiallyReachable(0,0));
+        BOOST_TEST(region.potentiallyReachable(-4,0));
+        BOOST_TEST(region.potentiallyReachable(4,0));
+        BOOST_TEST(region.potentiallyReachable(7,0));
+        BOOST_TEST(region.potentiallyReachable(100,0));
+    }
+}
+BOOST_AUTO_TEST_CASE(local_probe_resumes_without_changing_its_proof) {
+    for (bool closed:{false,true}) for (unsigned budget:{1u,7u,1000u}) {
+        const auto read=[=](int x,int y) {
+            return navigation::ReachabilityCell{!closed || (std::abs(x)<4 && std::abs(y)<4),0};
+        };
+        navigation::LocalGoalProbe probe(-100,0,0,0);
+        unsigned work=0;
+        while (!probe.complete()) {
+            const auto used=probe.advance(budget,read);
+            BOOST_TEST(used<=budget);work+=used;
+            BOOST_REQUIRE(work<=289u);
+        }
+        BOOST_TEST(probe.enclosed()==closed);
+        BOOST_TEST(probe.enclosed()==navigation::localGoalIsEnclosed(-100,0,0,0,read));
+    }
+}
+BOOST_AUTO_TEST_CASE(replay_corner_goal_enclosed_by_stationary_units_uses_a_bounded_probe)
+{
+    // Golden replay, frame 62500, cells x=447..463/y=443..459.
+    // The rebel targets (455,451), using a two-by-two occupancy footprint.
+    // '#' is a building; 'E' reproduces the fixed blocking units.
+    std::array<std::string, 17> map{{
+        "#########........", "##########.......", "###########......",
+        "############.....", "##########.....EE", "#########EEE...EE",
+        "########.EEE...EE", ".######..EEE...##", ".######.......###",
+        "..####..EEE..####", "...#.EEEEEE.#####", ".....EEEEEE######",
+        ".....EEE..#######", ".........########", "........#########",
+        "........#########", "..........#######"
+    }};
+    struct Units {
+        const Units* find(std::uint32_t) const { return this; }
+        bool allied(const Units*) const { return false; }
+        bool infantry(const Units*) const { return false; }
+        bool canMoveAside(const Units*) const { return false; }
+        bool canCrush(const Units*) const { return false; }
+    } units;
+    int reads = 0;
+    const auto read = [&](int x, int y) {
+        ++reads;
+        if (x < 0 || y < 0 || x >= 17 || y >= 17 || map[y][x] == '#')
+            return navigation::ReachabilityCell{};
+        navigation::OccupancyQuery query{1, 0, x, y, 1, 1, false, false};
+        navigation::OccupancyResult result;
+        const bool allowed = navigation::checkOccupancy(query, result, [&](int fx, int fy) {
+            if (fx < 0 || fy < 0 || fx >= 17 || fy >= 17)
+                return navigation::OccupancyCell{0, false};
+            const bool fixed = map[fy][fx] == 'E';
+            return navigation::OccupancyCell{fixed ? 42U : 0U, true, !fixed, false, false, fixed};
+        }, units);
+        return navigation::ReachabilityCell{allowed && !result.enemyFixed, 0};
+    };
+    for (int attempt = 0; attempt < 200; ++attempt) {
+        reads = 0;
+        BOOST_TEST(navigation::localGoalIsEnclosed(-3, 7, 8, 8, read));
+        BOOST_TEST(reads <= 17 * 17);
+    }
+    // A moving blocker must take effect immediately; there is no retry timer
+    // or stale cached occupancy verdict to leave the unit stopped.
+    for (auto& row : map) for (auto& cell : row) if (cell == 'E') cell = '.';
+    reads = 0;
+    BOOST_TEST(!navigation::localGoalIsEnclosed(-3, 7, 8, 8, read));
+    BOOST_TEST(reads <= 17 * 17);
+}
+
+BOOST_AUTO_TEST_CASE(local_probe_defers_long_routes_and_layer_transitions)
+{
+    int reads = 0;
+    BOOST_TEST(!navigation::localGoalIsEnclosed(-100, 0, 0, 0, [&](int, int) {
+        ++reads; return navigation::ReachabilityCell{true, 0};
+    }));
+    BOOST_TEST(reads <= 17 * 17);
+    BOOST_TEST(!navigation::localGoalIsEnclosed(-100, 0, 0, 0, [](int x, int y) {
+        return navigation::ReachabilityCell{x == 0 && y == 0,
+            static_cast<std::uint8_t>(x == 1 && y == 0 ? 1 : 0)};
+    }));
+    BOOST_TEST(!navigation::localGoalIsEnclosed(0, 0, 0, 0, [](int, int) {
+        return navigation::ReachabilityCell{};
+    }));
+}
+BOOST_AUTO_TEST_CASE(local_probe_cannot_reject_a_possible_diagonal_connection) {
+    // DX9 checks corner terrain before rejecting occupied side anchors. The
+    // optimistic proof must allow a diagonal even if both side anchors fail
+    // their full-footprint occupancy checks.
+    BOOST_TEST(!navigation::localGoalIsEnclosed(1,1,0,0,[](int x,int y) {
+        return navigation::ReachabilityCell{(x==0 && y==0) || (x==1 && y==1),0};
+    }));
+}
+BOOST_AUTO_TEST_CASE(clear_destination_on_an_island_is_rejected_and_edits_reconnect_it)
+{
+    navigation::ReachabilityCache cache;
+    std::vector<navigation::ReachabilityCell> map(128 * 128, {true, 0});
+    for (int y = 0; y < 128; ++y) map[y * 128 + 120].passable = false;
+    int reads = 0;
+    const auto prepare = [&] { cache.prepare(128, 128, [&](int x, int y) {
+        ++reads; return map[y * 128 + x];
+    }); };
+    prepare();
+    for (int attempt = 0; attempt < 250; ++attempt) {
+        prepare();
+        BOOST_TEST(!cache.connected(118, 124, 124, 120));
+        BOOST_TEST(cache.connected(118, 124, 4, 4));
+    }
+    BOOST_TEST(reads == 128 * 128);
+    cache.invalidate(10, 10, 11, 11); prepare();
+    BOOST_TEST(reads == 128 * 128 + 4);
+    BOOST_TEST(cache.rebuilds() == 1U);
+    map[100 * 128 + 120].passable = true;
+    cache.invalidate(120, 100, 120, 100); prepare();
+    BOOST_TEST(cache.connected(118, 124, 124, 120));
+    map[100 * 128 + 120].passable = false;
+    cache.invalidate(120, 100, 120, 100); prepare();
+    BOOST_TEST(!cache.connected(118, 124, 124, 120));
+    BOOST_TEST(cache.rebuilds() == 3U);
+}
+BOOST_AUTO_TEST_CASE(bridge_portals_and_diagonal_connections_are_conservatively_admitted)
+{
+    navigation::ReachabilityCache cache;
+    std::array<navigation::ReachabilityCell, 25> map{};
+    map[0] = {true, 0}; map[6] = {true, 1};
+    map[18] = {true, 1}; map[24] = {true, 0};
+    const auto prepare = [&] { cache.prepare(5, 5, [&](int x, int y) { return map[y * 5 + x]; }); };
+    prepare();
+    BOOST_TEST(cache.connected(0, 0, 4, 4));
+    map[18].portal = 2;
+    cache.invalidate(); prepare();
+    BOOST_TEST(!cache.connected(0, 0, 4, 4));
+    BOOST_TEST(cache.connected(0, 0, 1, 1));
+    BOOST_TEST(!cache.connected(-1, 0, 1, 1));
+    cache.reset(); prepare();
+    BOOST_TEST(!cache.connected(0, 0, 4, 4));
+}
+BOOST_AUTO_TEST_SUITE_END()
+
+BOOST_AUTO_TEST_CASE(local_goal_probe_uses_a_proven_diagonal_restriction) {
+    unsigned reads=0;
+    const auto enclosed=[&](bool openSide) {
+        return navigation::localGoalIsEnclosed(-100,0,0,0,[&](int x,int y) {
+            ++reads;
+            const bool side=(x==0 && (y==1 || y==-1)) || (y==0 && (x==1 || x==-1));
+            return navigation::ReachabilityCell{!side || (openSide && x==-1 && y==0),0};
+        },[](int,int,int,int) { return false; });
+    };
+    BOOST_TEST(enclosed(false));
+    BOOST_TEST(reads==5u);
+    BOOST_TEST(!enclosed(true));
+}

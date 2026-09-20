@@ -1,0 +1,34 @@
+#include <boost/test/unit_test.hpp>
+import engine.navigation.movement.relationship_query;
+
+BOOST_AUTO_TEST_CASE(movement_relationship_cache_reuses_team_pair_and_tracks_transfers) {
+    navigation::RelationshipQueryCache cache;
+    unsigned calls=0;
+    const auto yes=[&] { ++calls; return true; };
+    const auto no=[&] { ++calls; return false; };
+    for(unsigned unit=0;unit<10000;++unit) BOOST_REQUIRE(cache.allied(1,2,false,false,yes));
+    BOOST_TEST(calls==1u);
+    BOOST_TEST(!cache.allied(1,3,false,false,no));
+    BOOST_TEST(!cache.allied(4,3,false,false,no));
+    BOOST_TEST(calls==3u);
+    // A fresh query observes diplomacy changes for unchanged team identities.
+    navigation::RelationshipQueryCache nextQuery;
+    BOOST_TEST(!nextQuery.allied(1,2,false,false,no));
+    BOOST_TEST(calls==4u);
+}
+
+BOOST_AUTO_TEST_CASE(movement_relationship_cache_preserves_undetected_defector_rules) {
+    navigation::RelationshipQueryCache cache;
+    unsigned calls=0;
+    const auto no=[&] { ++calls; return false; };
+    BOOST_TEST(!cache.allied(0,2,false,true,no));
+    BOOST_TEST(!cache.allied(1,2,true,true,no));
+    BOOST_TEST(cache.allied(1,2,false,true,no));
+    BOOST_TEST(calls==0u);
+    BOOST_TEST(!cache.allied(1,2,false,false,no));
+    BOOST_TEST(cache.allied(1,2,false,true,no));
+    BOOST_TEST(!cache.allied(1,2,false,false,no));
+    BOOST_TEST(calls==1u);
+    BOOST_TEST(!cache.allied(1,0,false,false,no));
+    BOOST_TEST(calls==2u);
+}

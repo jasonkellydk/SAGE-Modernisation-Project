@@ -1,0 +1,519 @@
+#include <boost/test/unit_test.hpp>
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <limits>
+#include <vector>
+#include <optional>
+import engine.navigation.search.route_search;
+
+BOOST_AUTO_TEST_SUITE(navigation_weighted_routes)
+BOOST_AUTO_TEST_CASE(phase_chain_continues_from_an_observed_cheaper_cost) {
+    for (bool reference:{true,false}) {
+        navigation::RouteSearchWorkspace search;
+        unsigned estimates=0;
+        const auto heuristic=[&](unsigned) { ++estimates;return 0u; };
+        search.useReferenceOrder(reference);
+        search.begin(5,0,4,heuristic);
+        search.relax(0,1,1,heuristic);
+        search.relax(0,2,20,heuristic);
+        estimates=0;
+        auto cost=search.relaxFromObserved(0,1,5,heuristic);
+        BOOST_TEST(cost==1u);
+        BOOST_TEST(estimates==0u);
+        cost=search.relaxFromObserved(1,2,std::uint64_t(cost)+5,heuristic);
+        BOOST_TEST(cost==6u);
+        cost=search.relaxFromObserved(2,3,std::uint64_t(cost)+5,heuristic);
+        BOOST_TEST(cost==11u);
+        BOOST_TEST(search.parentOf(2)==1u);
+        BOOST_TEST(search.parentOf(3)==2u);
+        BOOST_TEST(estimates==2u);
+        BOOST_TEST(search.relaxFromObserved(3,4,UINT32_MAX,heuristic)==UINT32_MAX);
+        BOOST_TEST(!search.observed(4));
+        BOOST_TEST(search.relaxFromObserved(3,2,std::uint64_t(UINT32_MAX)+1,heuristic)==6u);
+        BOOST_TEST(search.parentOf(2)==1u);
+        BOOST_TEST(estimates==2u);
+        search.relax(3,4,5,heuristic);
+        while (search.status()==navigation::RouteSearchStatus::Searching)
+            search.advance(1,heuristic,[](unsigned,auto) {});
+        BOOST_TEST(search.result().nodes==std::vector<unsigned>({0,1,2,3,4}));
+        BOOST_TEST(search.result().cost==16u);
+    }
+}
+BOOST_AUTO_TEST_CASE(reference_and_ranked_frontiers_keep_their_ties_across_reuse) {
+    navigation::RouteSearchWorkspace search;
+    for (unsigned scale:{1u,35000u,1u}) {
+        const auto heuristic=[&](unsigned id) { return (id==0?2u:id==2?1u:0u)*scale; };
+        const auto neighbors=[&](unsigned id,auto emit) {
+            if (id==0) { emit(2,scale);emit(1,2*scale); }
+            else if (id==1) emit(3,0);
+            else if (id==2) emit(3,scale);
+        };
+        for (bool reference:{true,false,true,false}) {
+            // Abandon a populated frontier in the other mode before reusing
+            // the workspace. No old entry may survive begin() or cancellation.
+            search.useReferenceOrder(!reference);
+            search.begin(4,0,3,heuristic);
+            search.advance(1,heuristic,neighbors);
+            search.useReferenceOrder(reference);
+            search.begin(4,0,3,heuristic);
+            while (search.status()==navigation::RouteSearchStatus::Searching)
+                search.advance(1,heuristic,neighbors);
+            const auto& result=search.result();
+            BOOST_TEST(result.nodes==std::vector<unsigned>({0,reference?2u:1u,3}));
+            BOOST_TEST(result.cost==2*scale);
+            BOOST_TEST(result.expanded==(reference?4u:3u));
+            search.cancel();
+        }
+    }
+}
+BOOST_AUTO_TEST_CASE(corridor_widening_reuses_search_state_and_slices_boundary_work) {
+    const auto heuristic=[](unsigned) { return 0u; };
+    const auto neighbors=[](unsigned node,auto emit) { if (node<99) emit(node+1,1); };
+    for (unsigned budget:{1u,7u,1000u}) {
+        navigation::RouteSearchWorkspace search;
+        unsigned admitted=10;
+        search.begin(100,0,99,heuristic);
+        search.setExpansionFilter([&](unsigned node) { return node<admitted; });
+        for (;;) {
+            while (search.status()==navigation::RouteSearchStatus::Searching) {
+                const auto before=search.result().work;
+                search.advance(budget,heuristic,neighbors);
+                BOOST_TEST(search.result().work-before<=budget);
+            }
+            if (search.result().found()) break;
+            BOOST_REQUIRE(admitted<100u);
+            admitted+=10;search.beginWidening();
+            while (search.widening()) BOOST_TEST(search.advanceWidening(budget,heuristic)<=budget);
+        }
+        BOOST_TEST(search.result().expanded==100u);
+        BOOST_TEST(search.result().cost==99u);
+        BOOST_REQUIRE(search.result().nodes.size()==100u);
+        for (unsigned i=0;i<100;++i) BOOST_TEST(search.result().nodes[i]==i);
+    }
+}
+BOOST_AUTO_TEST_CASE(long_route_reconstruction_is_sliced_and_never_publishes_a_partial_route) {
+    constexpr unsigned count=4096;
+    const auto heuristic=[](unsigned) { return 0u; };
+    const auto neighbors=[](unsigned id,auto emit) { if (id+1<count) emit(id+1,1); };
+    for (unsigned budget:{1u,7u,128u,16384u}) {
+        navigation::RouteSearchWorkspace search;
+        search.begin(count,0,count-1,heuristic);
+        unsigned calls=0;
+        while (search.status()==navigation::RouteSearchStatus::Searching) {
+            BOOST_TEST(!search.result().found());
+            const auto before=search.result().work;
+            search.advance(0,heuristic,neighbors);
+            BOOST_TEST(search.result().work==before);
+            search.advance(budget,heuristic,neighbors);
+            BOOST_TEST(search.result().work-before<=budget);
+            BOOST_REQUIRE(++calls<count*3);
+        }
+        BOOST_REQUIRE(search.result().nodes.size()==count);
+        for (unsigned id=0;id<count;++id) BOOST_TEST(search.result().nodes[id]==id);
+        BOOST_TEST(search.result().expanded==count);
+        BOOST_TEST(search.result().work==count*2+count/2);
+    }
+    navigation::RouteSearchWorkspace search;
+    search.begin(count,0,count-1,heuristic);
+    search.advance(count,heuristic,neighbors);
+    BOOST_CHECK(search.status()==navigation::RouteSearchStatus::Searching);
+    BOOST_TEST(!search.result().found());
+    search.advance(128,heuristic,[](unsigned,auto) { BOOST_FAIL("Reconstruction expanded the graph"); });
+    BOOST_TEST(search.result().work==count+128u);
+    search.cancel();
+    search.advance(128,heuristic,neighbors);
+    BOOST_TEST(search.result().work==0u);
+    BOOST_TEST(!search.result().found());
+    const auto replacement=search.find(2,0,1,heuristic,neighbors);
+    BOOST_TEST(replacement.nodes==std::vector<unsigned>({0,1}));
+    BOOST_TEST(replacement.work==5u);
+}
+
+BOOST_AUTO_TEST_CASE(fallback_search_and_endpoint_ranking_resume_within_the_work_budget) {
+    const auto heuristic=[](unsigned) { return 0u; };
+    const auto neighbors=[](unsigned id,auto emit) { if (id<198) emit(id+1,1); };
+    const auto rank=[](unsigned id,unsigned)->std::optional<double> {
+        return double(id>17?id-17:17-id);
+    };
+    for (unsigned scenario=0;scenario<3;++scenario) {
+        const unsigned goal=scenario==0?150:199;
+        const auto bound=scenario==2?std::optional<double>{0}:std::nullopt;
+        navigation::RouteSearchWorkspace reference;
+        const auto expected=reference.findWithFallback(200,0,goal,heuristic,neighbors,rank,bound);
+        for (unsigned budget:{1u,7u,199u,1000u}) {
+            navigation::RouteSearchWorkspace search;
+            search.beginWithFallback(200,0,goal,heuristic,bound);
+            unsigned advances=0,rankings=0;
+            while (search.status()==navigation::RouteSearchStatus::Searching) {
+                const auto before=search.result().expanded;
+                const auto workBefore=search.result().work;
+                const auto ranksBefore=rankings;
+                search.advanceWithFallback(0,heuristic,neighbors,rank);
+                BOOST_TEST(search.result().expanded==before);
+                BOOST_TEST(search.result().work==workBefore);
+                search.advanceWithFallback(budget,heuristic,neighbors,[&](unsigned id,unsigned cost) {
+                    ++rankings; return rank(id,cost);
+                });
+                const auto expansions=search.result().expanded-before;
+                BOOST_TEST(expansions+(bound?0:rankings-ranksBefore)<=budget);
+                BOOST_TEST(search.result().work-workBefore>=expansions+(bound?0:rankings-ranksBefore));
+                BOOST_TEST(search.result().work-workBefore<=budget);
+                if (bound) BOOST_TEST(rankings-ranksBefore<=expansions);
+                BOOST_REQUIRE(++advances<1000u);
+            }
+            BOOST_TEST(search.result().nodes==expected.nodes);
+            BOOST_TEST(search.result().cost==expected.cost);
+            BOOST_TEST(search.result().expanded==expected.expanded);
+            BOOST_TEST(search.result().work==expected.work);
+            BOOST_TEST(search.result().work==search.result().expanded+(bound?0:rankings)+
+                search.result().nodes.size()+search.result().nodes.size()/2);
+            BOOST_TEST(search.result().usedFallback==expected.usedFallback);
+            BOOST_TEST(search.result().nodes.back()==(scenario==0?150u:17u));
+            BOOST_TEST(rankings==(scenario==0?0u:scenario==1?199u:18u));
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(cancelling_deferred_endpoint_ranking_discards_the_previous_result) {
+    navigation::RouteSearchWorkspace search;
+    const auto heuristic=[](unsigned) { return 0u; };
+    const auto neighbors=[](unsigned id,auto emit) { if (id<98) emit(id+1,1); };
+    unsigned ranked=0;
+    const auto rank=[&](unsigned id,unsigned)->std::optional<double> { ++ranked; return double(99-id); };
+    search.beginWithFallback(100,0,99,heuristic);
+    search.advanceWithFallback(100,heuristic,neighbors,rank);
+    BOOST_CHECK(search.status()==navigation::RouteSearchStatus::Searching);
+    BOOST_TEST(search.result().expanded==99u);
+    BOOST_TEST(ranked==1u);
+    BOOST_TEST(search.result().work==100u);
+    search.cancel();
+    search.advanceWithFallback(100,heuristic,neighbors,rank);
+    BOOST_TEST(ranked==1u);
+    BOOST_TEST(search.result().work==0u);
+    search.beginWithFallback(100,95,98,heuristic);
+    while (search.status()==navigation::RouteSearchStatus::Searching)
+        search.advanceWithFallback(1,heuristic,neighbors,rank);
+    BOOST_TEST(search.result().nodes==std::vector<unsigned>({95,96,97,98}));
+    BOOST_TEST(!search.result().usedFallback);
+    BOOST_TEST(search.result().work==10u);
+    BOOST_TEST(ranked==1u);
+}
+
+BOOST_AUTO_TEST_CASE(unreachable_endpoint_ranking_is_included_in_search_work) {
+    navigation::RouteSearchWorkspace search;
+    const auto result=search.findWithFallback(1001,0,1000,[](unsigned) { return 0u; },
+        [](unsigned id,auto emit) { if (id<999) emit(id+1,1); },
+        [](unsigned id,unsigned)->std::optional<double> { return double(1000-id); });
+    BOOST_TEST(result.found());
+    BOOST_TEST(result.expanded==1000u);
+    BOOST_TEST(result.work==3500u);
+}
+
+BOOST_AUTO_TEST_CASE(reachable_exact_goal_does_not_evaluate_fallback_endpoints) {
+    navigation::RouteSearchWorkspace workspace;
+    unsigned rankings=0;
+    const auto neighbors=[](unsigned node,auto emit) { if(node<9) emit(node+1,1); };
+    const auto rank=[&](unsigned node,unsigned)->std::optional<double> { ++rankings; return double(9-node); };
+    const auto exact=workspace.findWithFallback(11,0,9,[](unsigned){return 0u;},neighbors,rank);
+    BOOST_REQUIRE(exact.found());
+    BOOST_TEST(!exact.usedFallback);
+    BOOST_TEST(exact.nodes.back()==9u);
+    BOOST_TEST(rankings==0u);
+    const auto fallback=workspace.findWithFallback(11,0,10,[](unsigned){return 0u;},neighbors,rank);
+    BOOST_REQUIRE(fallback.found());
+    BOOST_TEST(fallback.usedFallback);
+    BOOST_TEST(fallback.nodes.back()==9u);
+    BOOST_TEST(rankings==10u);
+}
+BOOST_AUTO_TEST_CASE(proven_fallback_bound_stops_only_after_the_bound_is_reached) {
+    navigation::RouteSearchWorkspace workspace;
+    unsigned visits=0;
+    const auto neighbors=[&](unsigned node,auto emit) {
+        ++visits;
+        if (node<998) emit(node+1,1);
+    };
+    const auto rank=[](unsigned node,unsigned)->std::optional<double> { return node==5?0.0:100.0; };
+    const auto shortRoute=workspace.findWithFallback(1000,0,999,[](unsigned){return 0u;},neighbors,rank,0.0);
+    BOOST_REQUIRE(shortRoute.found());
+    BOOST_TEST(shortRoute.nodes.back()==5u);
+    BOOST_TEST(visits==5u);
+    BOOST_TEST(shortRoute.expanded==6u);
+    visits=0;
+    const auto unattainable=[](unsigned node,unsigned)->std::optional<double> { return node==5?1.0:100.0; };
+    const auto fullRoute=workspace.findWithFallback(1000,0,999,[](unsigned){return 0u;},neighbors,unattainable,0.0);
+    BOOST_REQUIRE(fullRoute.found());
+    BOOST_TEST(fullRoute.nodes.back()==5u);
+    BOOST_TEST(visits==999u);
+    BOOST_TEST(fullRoute.expanded==999u);
+}
+BOOST_AUTO_TEST_CASE(nearest_fallback_matches_reachable_graph_oracle) {
+    constexpr unsigned count=13, infinity=1000000;
+    std::array<std::array<unsigned,count>,count> edges;
+    for (auto& row:edges) row.fill(infinity);
+    for (unsigned i=0;i<count;++i) edges[i][i]=0;
+    // The best fallback (10) requires first travelling through nodes whose
+    // endpoint scores are much worse; node 12 is disconnected.
+    for (unsigned i=0;i<10;++i) edges[i][i+1]=1+i%3;
+    edges[0][11]=2;
+    auto costs=edges;
+    for (unsigned k=0;k<count;++k) for (unsigned a=0;a<count;++a) for(unsigned b=0;b<count;++b)
+        costs[a][b]=std::min(costs[a][b],costs[a][k]+costs[k][b]);
+    for (unsigned start=0;start<12;++start) for(unsigned goal=0;goal<count;++goal) {
+        for (bool reverse : {false,true}) {
+            const auto score=[](unsigned node,unsigned cost)->std::optional<double> {
+                if (node==5) return {};
+                return (node==10?0.0:10000.0+node)+double(cost)*cost*0.2;
+            };
+            unsigned expected=goal;
+            if (costs[start][goal]>=infinity) {
+                expected=count;
+                double best=std::numeric_limits<double>::infinity();
+                for (unsigned node=0;node<count;++node) if(costs[start][node]<infinity) {
+                    const auto value=score(node,costs[start][node]);
+                    if (value && *value<best) { expected=node; best=*value; }
+                }
+            }
+            navigation::RouteSearchWorkspace workspace;
+            const auto result=workspace.findWithFallback(count,start,goal,[](unsigned){return 0u;},
+                [&](unsigned node,auto emit) {
+                    for(unsigned i=0;i<count;++i) {
+                        const unsigned target=reverse?count-1-i:i;
+                        if (target!=node && edges[node][target]<infinity) emit(target,edges[node][target]);
+                    }
+                },score);
+            BOOST_REQUIRE(result.found());
+            BOOST_TEST(result.nodes.back()==expected);
+            BOOST_TEST(result.cost==costs[start][expected]);
+        }
+    }
+}
+BOOST_AUTO_TEST_CASE(paused_searches_obey_expansion_limits_and_keep_exact_path_order) {
+    constexpr unsigned count=24, infinity=1000000;
+    std::array<std::array<unsigned,count>,count> costs{};
+    std::uint32_t random=7717;
+    for (unsigned a=0;a<count;++a) for(unsigned b=0;b<count;++b) {
+        random=random*1664525u+1013904223u;
+        costs[a][b]=a==b?0u:(random%4==0?1u+(random>>16)%40:infinity);
+    }
+    auto oracle=costs;
+    for(unsigned k=0;k<count;++k) for(unsigned a=0;a<count;++a) for(unsigned b=0;b<count;++b)
+        oracle[a][b]=std::min(oracle[a][b],oracle[a][k]+oracle[k][b]);
+    const auto heuristic=[](unsigned) { return 0u; };
+    for(unsigned start=0;start<count;++start) for(unsigned goal=0;goal<count;++goal) {
+        std::vector<std::uint32_t> expected;
+        unsigned expectedExpansions=0;
+        for (const unsigned budget : {1000u,1u,7u}) {
+            navigation::RouteSearchWorkspace search;
+            search.begin(count,start,goal,heuristic);
+            unsigned calls=0;
+            const auto neighbors=[&](unsigned id,auto emit) {
+                ++calls;
+                for(unsigned i=0;i<count;++i) {
+                    const auto next=budget==7?count-i-1:i;
+                    if (next!=id && costs[id][next]<infinity) emit(next,costs[id][next]);
+                }
+            };
+            search.advance(0,heuristic,neighbors);
+            BOOST_REQUIRE(calls==0);
+            while (search.status()==navigation::RouteSearchStatus::Searching) {
+                const auto before=search.result().expanded;
+                search.advance(budget,heuristic,neighbors);
+                BOOST_REQUIRE(search.result().expanded-before<=budget);
+            }
+            BOOST_REQUIRE(search.result().found()==(oracle[start][goal]<infinity));
+            if(search.result().found()) BOOST_REQUIRE(search.result().cost==oracle[start][goal]);
+            if (budget==1000) {
+                expected=search.result().nodes;
+                expectedExpansions=search.result().expanded;
+            } else {
+                BOOST_REQUIRE(search.result().nodes==expected);
+                BOOST_REQUIRE(search.result().expanded==expectedExpansions);
+            }
+            const auto before=search.result().expanded;
+            search.advance(1000,heuristic,neighbors);
+            BOOST_TEST(search.result().expanded==before);
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(paused_search_cancellation_and_replacement_clear_old_frontiers) {
+    navigation::RouteSearchWorkspace search;
+    const auto heuristic=[](unsigned) { return 0u; };
+    const auto chain=[](unsigned id,auto emit) { if(id<99) emit(id+1,1); };
+    search.begin(100,0,99,heuristic);
+    search.advance(3,heuristic,chain);
+    BOOST_REQUIRE(search.result().expanded==3);
+    search.cancel();
+    search.advance(100,heuristic,chain);
+    BOOST_TEST(search.result().expanded==0);
+    BOOST_TEST(!search.result().found());
+    search.begin(100,97,99,heuristic);
+    search.advance(100,heuristic,chain);
+    BOOST_TEST(search.result().cost==2);
+    BOOST_TEST(search.result().nodes==std::vector<std::uint32_t>({97,98,99}));
+    search.begin(0,0,0,heuristic);
+    search.advance(100,heuristic,chain);
+    BOOST_TEST(!search.result().found());
+    BOOST_TEST(search.result().expanded==0);
+    const auto immediate=search.find(100,97,99,heuristic,chain);
+    BOOST_TEST(immediate.cost==2);
+    BOOST_CHECK(search.status()==navigation::RouteSearchStatus::Idle);
+    BOOST_TEST(!search.result().found());
+}
+BOOST_AUTO_TEST_CASE(congestion_uses_free_parallel_lanes_and_recovers_when_traffic_clears) {
+    navigation::RouteSearchWorkspace search;
+    bool crowded=true;
+    const auto route=[&] {
+        return search.find(64,25,30,[](unsigned){return 0u;},[&](unsigned id,auto emit) {
+            const int x=id%8,y=id/8;
+            for (const auto [dx,dy]:std::array<std::pair<int,int>,4>{{{1,0},{0,1},{-1,0},{0,-1}}}) {
+                const int nx=x+dx,ny=y+dy;
+                if (nx>=0 && nx<8 && ny>=0 && ny<8)
+                    emit(ny*8+nx,10u+(crowded && ny==3 && nx>1 && nx<6 ? 100u:0u));
+            }
+        });
+    };
+    const auto detour=route();
+    BOOST_REQUIRE(detour.found());
+    BOOST_CHECK_EQUAL(detour.cost,70u);
+    BOOST_CHECK(std::any_of(detour.nodes.begin(),detour.nodes.end(),[](auto id){return id/8!=3;}));
+    crowded=false;
+    BOOST_CHECK_EQUAL(route().cost,50u);
+}
+BOOST_AUTO_TEST_CASE(weighted_graphs_match_independent_all_pairs_shortest_paths) {
+    constexpr unsigned count=20,inf=1000000;
+    std::array<std::array<unsigned,count>,count> costs{};
+    std::uint32_t random=0x73591;
+    for (unsigned a=0;a<count;++a) for (unsigned b=0;b<count;++b) {
+        random=random*1664525u+1013904223u;
+        costs[a][b]=a==b?0u:(random%5==0?1u+(random>>16)%80:inf);
+    }
+    auto reference=costs;
+    for (unsigned k=0;k<count;++k) for (unsigned a=0;a<count;++a) for (unsigned b=0;b<count;++b)
+        reference[a][b]=std::min(reference[a][b],reference[a][k]+reference[k][b]);
+    navigation::RouteSearchWorkspace search;
+    for (unsigned a=0;a<count;++a) for (unsigned b=0;b<count;++b) {
+        const auto run=[&](bool reverse) {
+            return search.find(count,a,b,[](unsigned){return 0u;},[&](unsigned id,auto emit) {
+                for (unsigned i=0;i<count;++i) {
+                    const auto next=reverse?count-1-i:i;
+                    if (next!=id && costs[id][next]<inf) emit(next,costs[id][next]);
+                }
+            });
+        };
+        const auto first=run(false),second=run(true);
+        BOOST_CHECK_EQUAL(first.found(),reference[a][b]<inf);
+        if (first.found()) BOOST_CHECK_EQUAL(first.cost,reference[a][b]);
+        BOOST_CHECK(first.nodes==second.nodes);
+    }
+}
+BOOST_AUTO_TEST_CASE(zero_cost_layer_portals_and_reused_workspace_have_no_stale_parents) {
+    navigation::RouteSearchWorkspace search;
+    const auto route=search.find(4,0,3,[](unsigned){return 0u;},[](unsigned id,auto emit) {
+        if (id==0) {emit(1,20);emit(2,2);}
+        if (id==2) emit(1,0);
+        if (id==1) emit(3,3);
+    });
+    BOOST_REQUIRE(route.found());
+    BOOST_CHECK_EQUAL(route.cost,5u);
+    BOOST_CHECK(!search.find(4,0,3,[](unsigned){return 0u;},[](unsigned,auto){}).found());
+    BOOST_CHECK(!search.find(4,0,3,[](unsigned){return 0u;},[](unsigned id,auto emit){
+        if (id==0) emit(1,std::numeric_limits<unsigned>::max()-1);
+        if (id==1) emit(3,10);
+    }).found());
+}
+BOOST_AUTO_TEST_SUITE_END()
+
+BOOST_AUTO_TEST_CASE(equal_cost_plateaus_do_not_expand_the_entire_open_map) {
+    navigation::RouteSearchWorkspace search;
+    constexpr unsigned width=96;
+    const auto result=search.find(width*width,0,width*width-1,
+        [](unsigned id) { return (width-1-id%width)+(width-1-id/width); },
+        [](unsigned id,auto emit) {
+            const unsigned x=id%width,y=id/width;
+            if (x+1<width) emit(id+1,1);
+            if (y+1<width) emit(id+width,1);
+            if (x) emit(id-1,1);
+            if (y) emit(id-width,1);
+        });
+    BOOST_REQUIRE(result.found());
+    BOOST_TEST(result.cost==2*(width-1));
+    BOOST_TEST(result.expanded<=2*width);
+}
+
+BOOST_AUTO_TEST_CASE(reference_neighbor_slices_preserve_phase_updates_fifo_ties_and_complete_routes) {
+    constexpr unsigned count=19;
+    const auto heuristic=[](unsigned id) { return count-1-id; };
+    for (unsigned start : {0u,3u,9u,18u}) {
+        navigation::RouteSearchWorkspace reference;
+        reference.useReferenceOrder();
+        std::vector<unsigned> expectedExpansions;
+        const auto expected=reference.find(count,start,count-1,heuristic,[&](unsigned id,auto emit) {
+            expectedExpansions.push_back(id);
+            if (id+2<count) reference.relax(id,id+2,4,heuristic);
+            if (id+1<count) emit(id+1,2);
+            if (id+5<count) emit(id+5,10);
+            if (id) emit(id-1,1);
+        });
+        BOOST_REQUIRE(expected.found());
+        for (unsigned budget : {1u,2u,3u,7u,64u}) {
+            navigation::RouteSearchWorkspace search;
+            search.useReferenceOrder();search.begin(count,start,count-1,heuristic);
+            std::vector<unsigned> expansions;
+            unsigned calls=0;
+            auto step=[&,phase=0u](unsigned id,unsigned available,auto emit) mutable {
+                BOOST_REQUIRE(available>0);
+                if (phase==0) {
+                    expansions.push_back(id);
+                    if (id+2<count) search.relax(id,id+2,4,heuristic);
+                } else if (phase==1) { if (id+1<count) emit(id+1,2); }
+                else if (phase==2) { if (id+5<count) emit(id+5,10); }
+                else if (id) emit(id-1,1);
+                const bool complete=++phase==4;
+                if (complete) phase=0;
+                ++calls;
+                return navigation::RouteNeighborProgress{1,complete};
+            };
+            BOOST_TEST(search.advanceReferenceSlice(0,heuristic,step)==0u);
+            BOOST_TEST(calls==0u);
+            unsigned slices=0;
+            while (search.status()==navigation::RouteSearchStatus::Searching) {
+                const auto before=search.result().work;
+                const auto used=search.advanceReferenceSlice(budget,heuristic,step);
+                BOOST_TEST(used<=budget);
+                BOOST_TEST(search.result().work-before==used);
+                BOOST_REQUIRE(++slices<10000);
+            }
+            BOOST_TEST(search.result().nodes==expected.nodes,boost::test_tools::per_element());
+            BOOST_TEST(search.result().cost==expected.cost);
+            BOOST_TEST(search.result().expanded==expected.expanded);
+            BOOST_TEST(expansions==expectedExpansions,boost::test_tools::per_element());
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(reference_neighbor_slices_cancel_unpublished_edges_and_reject_invalid_progress) {
+    navigation::RouteSearchWorkspace search;
+    search.useReferenceOrder();
+    const auto heuristic=[](unsigned) { return 0u; };
+    search.begin(4,0,3,heuristic);
+    BOOST_TEST(search.advanceReferenceSlice(2,heuristic,[](unsigned,unsigned,auto emit) {
+        emit(3,1);return navigation::RouteNeighborProgress{1,false};
+    })==2u);
+    BOOST_TEST(!search.observed(3)); // Emitted edge waits for complete expansion.
+    search.cancel();search.begin(4,0,3,heuristic);
+    search.advanceReferenceSlice(8,heuristic,[](unsigned,unsigned,auto) {
+        return navigation::RouteNeighborProgress{0,true};
+    });
+    BOOST_CHECK(search.status()==navigation::RouteSearchStatus::Unreachable);
+    BOOST_TEST(!search.result().found());
+    search.begin(4,0,3,heuristic);
+    BOOST_CHECK_THROW(search.advanceReferenceSlice(2,heuristic,[](unsigned,unsigned,auto) {
+        return navigation::RouteNeighborProgress{0,false};
+    }),std::logic_error);
+    search.begin(4,0,3,heuristic);
+    BOOST_CHECK_THROW(search.advanceReferenceSlice(2,heuristic,[](unsigned,unsigned available,auto) {
+        return navigation::RouteNeighborProgress{available+1,false};
+    }),std::logic_error);
+}

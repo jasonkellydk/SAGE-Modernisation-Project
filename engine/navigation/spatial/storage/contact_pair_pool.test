@@ -1,0 +1,61 @@
+#include <boost/test/unit_test.hpp>
+#include <cstddef>
+#include <stdexcept>
+import engine.navigation.spatial.storage.contact_pair_pool;
+
+BOOST_AUTO_TEST_CASE(contact_storage_reuses_capacity_without_retaining_membership) {
+    navigation::ContactPairPool pool;
+    std::size_t capacity=0;
+    std::size_t queueCapacity=0;
+    {
+        auto lease=pool.acquire();
+        for (unsigned i=0;i<20000;++i) BOOST_TEST(lease.pairs().insert(i,i+1));
+        capacity=lease.pairs().capacity();
+        for (unsigned i=1;i<20000;++i) lease.queue().append(i,i+1);
+        queueCapacity=lease.queue().capacity();
+    }
+    for (unsigned frame=0;frame<4;++frame) {
+        auto lease=pool.acquire();
+        BOOST_TEST(lease.pairs().size()==0u);
+        BOOST_TEST(lease.pairs().capacity()==capacity);
+        BOOST_TEST(lease.queue().size()==0u);
+        BOOST_TEST(lease.queue().capacity()==queueCapacity);
+        lease.queue().append(1,2);
+        for (unsigned i=0;i<20000;++i) BOOST_TEST(lease.pairs().insert(i,i+1));
+        BOOST_TEST(lease.pairs().capacity()==capacity);
+        BOOST_TEST(lease.pairs().erase(7,8));
+    }
+}
+
+BOOST_AUTO_TEST_CASE(contact_storage_leases_are_isolated_and_return_on_exception) {
+    navigation::ContactPairPool pool;
+    std::size_t peak=0;
+    {
+        auto outer=pool.acquire();
+        outer.queue().append(1,2);
+        BOOST_TEST(outer.pairs().insert(1,2));
+        {
+            auto inner=pool.acquire();
+            BOOST_TEST(inner.queue().size()==0u);
+            inner.queue().append(3,4);
+            BOOST_TEST(outer.queue().size()==1u);
+            BOOST_TEST(inner.pairs().size()==0u);
+            BOOST_TEST(inner.pairs().insert(2,1));
+            BOOST_TEST(!outer.pairs().insert(2,1));
+            for (unsigned i=100;i<5100;++i) inner.pairs().insert(i,i+1);
+            peak=inner.pairs().capacity();
+        }
+        BOOST_TEST(outer.pairs().size()==1u);
+    }
+    BOOST_CHECK_THROW(([&] {
+        auto lease=pool.acquire();
+        BOOST_TEST(lease.pairs().capacity()==peak);
+        lease.pairs().insert(1,2);
+        lease.queue().append(1,2);
+        throw std::runtime_error("Interrupted contact collection");
+    })(),std::runtime_error);
+    auto lease=pool.acquire();
+    BOOST_TEST(lease.pairs().size()==0u);
+    BOOST_TEST(lease.queue().size()==0u);
+    BOOST_TEST(lease.pairs().insert(1,2));
+}

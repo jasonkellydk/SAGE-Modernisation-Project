@@ -1,6 +1,9 @@
 #include <boost/test/unit_test.hpp>
 #include <array>
 #include <cstdint>
+#include <limits>
+#include "blocked_progress.h"
+#include "command_handoff.h"
 import engine.navigation.movement.occupancy_policy;
 
 namespace {
@@ -9,8 +12,9 @@ struct Unit {
 };
 struct Units {
     std::array<Unit, 4> values{};
-    const Unit* find(std::uint32_t id) const { return id && id <= values.size() ? &values[id-1] : nullptr; }
-    bool allied(const Unit* p) const { return p->ally; }
+    mutable unsigned lookups = 0, relationships = 0;
+    const Unit* find(std::uint32_t id) const { ++lookups; return id && id <= values.size() ? &values[id-1] : nullptr; }
+    bool allied(const Unit* p) const { ++relationships; return p->ally; }
     bool canMoveAside(const Unit* p) const { return p->movable; }
     bool infantry(const Unit* p) const { return p->infantry; }
     bool canCrush(const Unit* p) const { return p->crushable; }
@@ -34,6 +38,160 @@ struct Scene {
 }
 
 BOOST_AUTO_TEST_SUITE(movement_occupancy)
+BOOST_AUTO_TEST_CASE(blocking_only_checks_preserve_decisions_without_resolving_ignored_traffic)
+{
+    for (unsigned flags=0;flags<32;++flags) for (unsigned traits=0;traits<16;++traits)
+        for (unsigned identity:{0u,1u,7u,99u,101u})
+            for (bool transient:{false,true}) for (bool infantry:{false,true}) {
+                Units fullUnits,blockingUnits;
+                fullUnits.values[0]={bool(traits&1),bool(traits&2),bool(traits&4),bool(traits&8)};
+                blockingUnits.values=fullUnits.values;
+                const navigation::OccupancyCell cell{identity,bool(flags&1),bool(flags&2),
+                    bool(flags&4),bool(flags&8),bool(flags&16)};
+                navigation::OccupancyQuery query{99,101,2,2,1,1,transient,infantry};
+                navigation::OccupancyResult full,blocking;
+                const bool expected=navigation::checkOccupancy(query,full,[&](int,int){return cell;},fullUnits);
+                query.collectMovingTraffic=false;
+                unsigned identityReads=0;
+                const bool actual=navigation::checkOccupancy(query,blocking,[&](int,int) {
+                    auto descriptor=cell;descriptor.unit=0;
+                    return navigation::resolveOccupant(descriptor,[&]{++identityReads;return identity;},transient);
+                },blockingUnits);
+                BOOST_TEST(actual==expected);
+                BOOST_TEST(blocking.allyFixedCount==full.allyFixedCount);
+                BOOST_TEST(blocking.enemyFixed==full.enemyFixed);
+                if (!transient && !cell.fixed) {
+                    BOOST_TEST(identityReads==0u);
+                    BOOST_TEST(blockingUnits.lookups==0u);
+                }
+            }
+}
+BOOST_AUTO_TEST_CASE(two_by_two_specialization_matches_runtime_footprint_policy)
+{
+    for (unsigned flags=0;flags<32;++flags) for (unsigned policy=0;policy<16;++policy)
+        for (unsigned identity:{0u,1u,7u,99u,101u})
+            for (bool transient:{false,true}) for (bool infantry:{false,true}) {
+                Units singleUnits,generalUnits;
+                singleUnits.values[0]={bool(policy&1),bool(policy&2),bool(policy&4),bool(policy&8)};
+                generalUnits.values=singleUnits.values;
+                const navigation::OccupancyCell cell{identity,bool(flags&1),bool(flags&2),
+                    bool(flags&4),bool(flags&8),bool(flags&16)};
+                unsigned actualReads=0,expectedReads=0;
+                const auto read=[&](int x,int y) {
+                    BOOST_TEST(x>=6); BOOST_TEST(x<=7);
+                    BOOST_TEST(y>=8); BOOST_TEST(y<=9);
+                    ++actualReads; return cell;
+                };
+                navigation::OccupancyResult actual,expected;
+                const navigation::OccupancyQuery single{99,101,7,9,1,1,transient,infantry};
+                BOOST_TEST(navigation::checkOccupancy(single,actual,read,singleUnits)==
+                    (navigation::checkOccupancyFootprint<-1,-1>(single,expected,[&](int,int) {
+                        ++expectedReads; return cell;
+                    },generalUnits)));
+                BOOST_TEST(actualReads==expectedReads);
+                BOOST_TEST(actual.allyGoal==expected.allyGoal);
+                BOOST_TEST(actual.allyMoving==expected.allyMoving);
+                BOOST_TEST(actual.enemyFixed==expected.enemyFixed);
+                BOOST_TEST(actual.allyFixedCount==expected.allyFixedCount);
+                BOOST_TEST(singleUnits.lookups==generalUnits.lookups);
+                BOOST_TEST(singleUnits.relationships==generalUnits.relationships);
+            }
+}
+BOOST_AUTO_TEST_CASE(lazy_cell_identity_preserves_all_occupancy_decisions)
+{
+    for (unsigned flags=0; flags<32; ++flags) {
+        for (unsigned policy=0; policy<16; ++policy) {
+            for (unsigned identity : {0u,1u,99u}) {
+                Units eagerUnits, lazyUnits;
+                eagerUnits.values[0] = {bool(policy&1),bool(policy&2),bool(policy&4),bool(policy&8)};
+                lazyUnits.values=eagerUnits.values;
+                navigation::OccupancyCell eager{identity,bool(flags&1),bool(flags&2),
+                    bool(flags&4),bool(flags&8),bool(flags&16)};
+                auto descriptor=eager;
+                descriptor.unit=0;
+                unsigned reads=0;
+                const auto lazy=navigation::resolveOccupant(descriptor,[&] { ++reads; return identity; });
+                navigation::OccupancyQuery query{99,0,0,0,0,1,true,true};
+                navigation::OccupancyResult expected,actual;
+                const auto expectedAllowed=navigation::checkOccupancy(query,expected,
+                    [&](int,int) { return eager; },eagerUnits);
+                const auto actualAllowed=navigation::checkOccupancy(query,actual,
+                    [&](int,int) { return lazy; },lazyUnits);
+                BOOST_TEST(actualAllowed==expectedAllowed);
+                BOOST_TEST(actual.allyFixedCount==expected.allyFixedCount);
+                BOOST_TEST(actual.enemyFixed==expected.enemyFixed);
+                BOOST_TEST(actual.allyMoving==expected.allyMoving);
+                BOOST_TEST(actual.allyGoal==expected.allyGoal);
+                BOOST_TEST(lazyUnits.lookups==eagerUnits.lookups);
+                if (!eager.valid || (eager.empty && !eager.goal) || (!eager.moving && !eager.fixed))
+                    BOOST_TEST(reads==0u);
+                else BOOST_TEST(reads==1u);
+            }
+        }
+    }
+}
+BOOST_AUTO_TEST_CASE(aligned_unit_stopped_by_collision_reaches_repath_timeout)
+{
+    int blockedFrames=0;
+    for (int frame=0;frame<61;++frame) {
+        ++blockedFrames; // The preceding physics step reported contact.
+        blockedFrames=navigation::retainBlockedFrames(blockedFrames,false,true);
+    }
+    BOOST_CHECK_GT(blockedFrames,60);
+    // Losing contact starts a fresh blocked interval.
+    BOOST_CHECK_EQUAL(navigation::retainBlockedFrames(0,false,false),0);
+}
+
+BOOST_AUTO_TEST_CASE(unimpeded_traffic_does_not_accumulate_repath_time)
+{
+    BOOST_CHECK_EQUAL(navigation::retainBlockedFrames(40,false,false),1);
+    BOOST_CHECK_EQUAL(navigation::retainBlockedFrames(40,true,false),40);
+    BOOST_CHECK_EQUAL(navigation::retainBlockedFrames(40,true,true),40);
+}
+
+BOOST_AUTO_TEST_CASE(new_command_retains_the_old_route_until_the_replacement_is_ready)
+{
+    BOOST_TEST(navigation::retainRouteDuringCommandHandoff(true,true));
+    BOOST_TEST(!navigation::retainRouteDuringCommandHandoff(true,false));
+    BOOST_TEST(!navigation::retainRouteDuringCommandHandoff(false,true));
+}
+
+BOOST_AUTO_TEST_CASE(blocked_recovery_has_hysteresis_instead_of_twitching_each_frame)
+{
+    constexpr auto never = std::numeric_limits<std::uint32_t>::max();
+    BOOST_TEST(navigation::allowBlockedRecovery(100,never));
+    BOOST_TEST(!navigation::allowBlockedRecovery(101,100));
+    BOOST_TEST(!navigation::allowBlockedRecovery(107,100));
+    BOOST_TEST(navigation::allowBlockedRecovery(108,100));
+    BOOST_TEST(!navigation::allowBlockedRecovery(3,100)); // unsigned frame wrap is not accepted
+}
+BOOST_AUTO_TEST_CASE(large_vehicle_footprint_does_not_repeat_the_same_object_lookup)
+{
+    Scene scene;
+    scene.units.values[0] = {true, true, false, false};
+    for (int x=1;x<=3;++x)
+        for (int y=1;y<=3;++y) scene.fixed(x,y,1);
+    // One vehicle covers the nine tested cells. It is one object lookup and
+    // relationship query, while cell flags still contribute independently.
+    scene.moving(1,1,1);
+    scene.cells[6].goal = true;
+    BOOST_REQUIRE(scene.check());
+    BOOST_CHECK_EQUAL(scene.result.allyFixedCount,1);
+    BOOST_CHECK(scene.result.allyMoving);
+    BOOST_CHECK(scene.result.allyGoal);
+    BOOST_CHECK_EQUAL(scene.units.lookups,1);
+    BOOST_CHECK_EQUAL(scene.units.relationships,1);
+
+    // Ownership changes between checks must be observed, with no stale cache.
+    scene.units.values[0].ally = false;
+    BOOST_REQUIRE(scene.check());
+    BOOST_CHECK(scene.result.enemyFixed);
+    BOOST_CHECK(!scene.result.allyMoving);
+    BOOST_CHECK_EQUAL(scene.result.allyFixedCount,0);
+    BOOST_CHECK_EQUAL(scene.units.lookups,2);
+    BOOST_CHECK_EQUAL(scene.units.relationships,2);
+}
+
 BOOST_AUTO_TEST_CASE(stationary_units_block_the_entire_vehicle_footprint)
 {
     Scene scene;

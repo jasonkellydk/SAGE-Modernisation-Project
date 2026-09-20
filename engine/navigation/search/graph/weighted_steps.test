@@ -1,0 +1,205 @@
+#include <boost/test/unit_test.hpp>
+#include <array>
+#include <limits>
+#include <vector>
+import engine.navigation.search.graph.weighted_steps;
+import engine.navigation.search.route_search;
+
+namespace {
+using Edge=std::array<unsigned,4>;
+navigation::WeightedStepCell clearCell() { return {true,true,true,{}}; }
+}
+
+// DX9 oracle: 8fd97e8e1e0d89facfedc2e824f71c7d371f7f2b,
+// AIPathfind.cpp, examineNeighboringCells / costSoFar / findGroundPath,
+// Zero Hour (RTS_GENERALS=0). Expectations are literal reference decisions.
+BOOST_AUTO_TEST_CASE(dx9_diagonal_requires_one_terrain_side_not_two) {
+    for (unsigned sides=0;sides<4;++sides) {
+        navigation::WeightedStepQuery query{0,0,2,2,1,1};
+        bool diagonal=false;
+        navigation::forEachWeightedStep(query,1,1,[&](int x,int y) {
+            auto cell=clearCell();
+            if ((x==2 && y==1 && !(sides&1)) || (x==1 && y==2 && !(sides&2)))
+                cell.legal=cell.terrainAllowed=cell.cornerOpen=false;
+            return cell;
+        },[](int,int) { return 0.0f; },[](int,int) { return 0; },
+            [&](int x,int y,unsigned,bool) { if (x==2 && y==2) diagonal=true; });
+        BOOST_TEST_CONTEXT("open sides=" << sides) { BOOST_TEST(diagonal==(sides!=0)); }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(dx9_fixed_allies_add_one_42_point_penalty) {
+    for (unsigned allies:{0u,1u,2u,8u}) {
+        navigation::WeightedStepQuery query{0,0,1,0,0,0};
+        unsigned actual=0;
+        navigation::forEachWeightedStep(query,0,0,[&](int,int) {
+            auto cell=clearCell();cell.traffic.allyFixedCount=allies;return cell;
+        },[](int,int) { return 0.0f; },[](int,int) { return 0; },
+            [&](int,int,unsigned cost,bool) { actual=cost; });
+        BOOST_TEST(actual==(allies?52u:10u));
+    }
+}
+
+BOOST_AUTO_TEST_CASE(dx9_corner_flags_use_terrain_before_occupancy_but_after_gravity) {
+    for (bool downhill:{false,true}) {
+        navigation::WeightedStepQuery query{0,0,2,2,1,1};
+        query.downhillOnly=downhill;
+        bool northeast=false;
+        navigation::forEachWeightedStep(query,1,1,[&](int x,int y) {
+            auto cell=clearCell();
+            if (x==1 && y==2) cell.legal=cell.terrainAllowed=false;
+            if (x==2 && y==1) { cell.legal=false;cell.traffic.enemyFixed=true; }
+            return cell;
+        },[](int x,int y) { return x==2 && y==1?1.f:0.f; },
+            [](int,int) { return 0; },[&](int x,int y,unsigned,bool) {
+                if (x==2 && y==2) northeast=true;
+            });
+        BOOST_TEST(northeast==!downhill);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(dx9_pinched_step_includes_both_native_penalties) {
+    navigation::WeightedStepQuery query{0,0,1,0,0,0};
+    unsigned actual=0;
+    navigation::forEachWeightedStep(query,0,0,[](int,int) {
+        auto cell=clearCell();cell.pinched=true;return cell;
+    },[](int,int) { return 0.0f; },[](int,int) { return 0; },
+        [&](int,int,unsigned cost,bool) { actual=cost; });
+    // costSoFar adds 14; examineNeighboringCells adds another 10.
+    BOOST_TEST(actual==34u);
+}
+
+BOOST_AUTO_TEST_CASE(dx9_group_corridor_narrowing_costs_six_per_missing_cell) {
+    navigation::WeightedStepQuery query{0,0,1,0,0,0,5,false,false,false,true};
+    for (int clearance:{1,2,5,6}) {
+        unsigned actual=0;
+        navigation::forEachWeightedStep(query,0,0,[](int,int) { return clearCell(); },
+            [](int,int) { return 0.0f; },[&](int,int) { return clearance; },
+            [&](int,int,unsigned cost,bool) { actual=cost; });
+        BOOST_TEST(actual==10u+6u*unsigned(std::max(0,5-clearance)));
+    }
+}
+
+BOOST_AUTO_TEST_CASE(weighted_steps_keep_canonical_order_and_traffic_costs) {
+    navigation::WeightedStepQuery query{0,0,20,20,10,10,3,false,false,false,true};
+    std::vector<Edge> edges;
+    unsigned heights=0,clearances=0;
+    navigation::forEachWeightedStep(query,10,10,[](int,int) {
+        auto cell=clearCell();cell.traffic.allyFixedCount=2;cell.traffic.allyMoving=true;return cell;
+    },[&](int,int) { ++heights;return 0.0f; },[&](int,int) { ++clearances;return 1; },
+        [&](int x,int y,unsigned cost,bool escaping) { edges.push_back({unsigned(x),unsigned(y),cost,unsigned(escaping)}); });
+    const std::vector<Edge> expected{{11,10,106,0},{10,11,106,0},{9,10,106,0},{10,9,106,0},
+        {11,11,110,0},{9,11,110,0},{9,9,110,0},{11,9,110,0}};
+    BOOST_TEST(edges==expected);
+    BOOST_TEST(heights==0u);
+    BOOST_TEST(clearances==8u);
+}
+
+BOOST_AUTO_TEST_CASE(weighted_steps_respect_corner_blockers_and_start_escape_terrain) {
+    navigation::WeightedStepQuery query{0,0,2,2,1,1};
+    bool exists=true;
+    const auto run=[&] {
+        std::vector<Edge> edges;
+        navigation::forEachWeightedStep(query,1,1,[&](int x,int y) {
+            auto cell=clearCell();
+            if (x==2 && y==1) { cell.exists=exists;cell.legal=false;cell.terrainAllowed=false; }
+            return cell;
+        },[](int,int) { return 0.0f; },[](int,int) { return 0; },
+            [&](int x,int y,unsigned cost,bool escaping) { edges.push_back({unsigned(x),unsigned(y),cost,unsigned(escaping)}); });
+        return edges;
+    };
+    const std::vector<Edge> blocked{{1,2,10,0},{0,1,10,0},{1,0,10,0},
+        {2,2,14,0},{0,2,14,0},{0,0,14,0},{2,0,14,0}};
+    const std::vector<Edge> pinchedBlocked{{1,2,10,0},{0,1,10,0},{1,0,10,0}};
+    BOOST_TEST(run()==blocked);
+    query.escaping=true;
+    const auto escaped=run();
+    BOOST_REQUIRE(escaped.size()==8u);
+    BOOST_TEST(escaped.front()==(Edge{2,1,110,1}));
+    for (unsigned i=1;i<escaped.size();++i) BOOST_TEST(escaped[i][3]==0u);
+    query.pinchedStart=true;
+    BOOST_TEST(run()==pinchedBlocked);
+    query.pinchedStart=false;exists=false;
+    BOOST_TEST(run()==blocked);
+}
+
+BOOST_AUTO_TEST_CASE(weighted_downhill_steps_sample_parent_height_once_and_preserve_corner_rules) {
+    navigation::WeightedStepQuery query{0,0,2,2,1,1,0,false,false,true,false};
+    unsigned parents=0,heights=0,clearances=0;
+    std::vector<Edge> edges;
+    navigation::forEachWeightedStep(query,1,1,[](int,int) { return clearCell(); },[&](int x,int y) {
+        ++heights;if (x==1 && y==1) ++parents;return x==2 && y==1?1.0f:0.0f;
+    },[&](int,int) { ++clearances;return 0; },
+        [&](int x,int y,unsigned cost,bool escaping) { edges.push_back({unsigned(x),unsigned(y),cost,unsigned(escaping)}); });
+    BOOST_TEST(parents==1u);
+    BOOST_TEST(heights==9u);
+    BOOST_TEST(clearances==0u);
+    // The other side of each diagonal remains open despite the uphill edge.
+    const std::vector<Edge> expected{{1,2,10,0},{0,1,10,0},{1,0,10,0},
+        {2,2,14,0},{0,2,14,0},{0,0,14,0},{2,0,14,0}};
+    BOOST_TEST(edges==expected);
+}
+
+BOOST_AUTO_TEST_CASE(weighted_steps_clip_extreme_coordinates_without_overflow) {
+    const auto high=std::numeric_limits<int>::max(),low=std::numeric_limits<int>::min();
+    navigation::WeightedStepQuery query{high-2,-1,high,1,low,0};
+    unsigned count=0;
+    navigation::forEachWeightedStep(query,high,0,[&](int x,int y) {
+        BOOST_TEST(x>=high-1);BOOST_TEST(y>=-1);BOOST_TEST(y<=1);
+        auto cell=clearCell();cell.traffic.allyMoving=true;return cell;
+    },[](int,int) { return 0.0f; },[](int,int) { return 0; },[&](int,int,unsigned cost,bool escaping) {
+        ++count;BOOST_TEST(cost<42u);BOOST_TEST(!escaping);
+    });
+    BOOST_TEST(count==5u);
+}
+
+BOOST_AUTO_TEST_CASE(captured_weighted_graph_routes_match_independent_edges_across_update_budgets) {
+    using namespace navigation;
+    constexpr unsigned width=16,count=width*width;
+    std::vector<WeightedStepCell> source(count,clearCell());
+    for (unsigned id=0;id<count;++id) {
+        source[id].terrainAllowed=source[id].legal=!(id%width==8 && id/width!=12);
+        source[id].traffic.allyFixedCount=(id%11==0)?1:0;
+        source[id].traffic.allyMoving=(id%5==0);
+    }
+    const auto captured=source;
+    source.clear();source.shrink_to_fit();
+    const WeightedStepQuery query{0,0,15,15,0,0};
+    const auto heuristic=[](unsigned) { return 0u; };
+    const auto neighbors=[&](unsigned id,auto emit) {
+        forEachWeightedStep(query,int(id%width),int(id/width),[&](int x,int y) { return captured[y*width+x]; },
+            [](int,int) { return 0.0f; },[](int,int) { return 0; },
+            [&](int x,int y,unsigned cost,bool) { emit(unsigned(y*width+x),cost); });
+    };
+    const auto oracle=[&](unsigned id,auto emit) {
+        const int x=id%width,y=id/width;
+        for (int dy=-1;dy<=1;++dy) for (int dx=-1;dx<=1;++dx) {
+            if (dx==0 && dy==0) continue;
+            const int xx=x+dx,yy=y+dy;
+            if (xx<0 || yy<0 || xx>=16 || yy>=16) continue;
+            const auto& cell=captured[yy*width+xx];
+            if (!cell.legal) continue;
+            if (dx && dy && (!captured[y*width+xx].legal && !captured[yy*width+x].legal)) continue;
+            unsigned cost=(dx && dy)?14:10;
+            cost+=cell.traffic.allyFixedCount?42:0;
+            if (cell.traffic.allyMoving && xx<10 && yy<10) cost+=42;
+            emit(unsigned(yy*width+xx),cost);
+        }
+    };
+    RouteSearchWorkspace reference;
+    const auto expected=reference.find(count,0,count-1,heuristic,oracle);
+    BOOST_REQUIRE(expected.found());
+    for (unsigned budget : {1u,7u,63u,256u}) {
+        RouteSearchWorkspace search;
+        search.begin(count,0,count-1,heuristic);
+        unsigned advances=0;
+        while (search.status()==RouteSearchStatus::Searching) {
+            const auto before=search.result().expanded;
+            search.advance(budget,heuristic,neighbors);
+            BOOST_TEST(search.result().expanded-before<=budget);
+            BOOST_REQUIRE(++advances<=count);
+        }
+        BOOST_TEST(search.result().nodes==expected.nodes);
+        BOOST_TEST(search.result().cost==expected.cost);
+    }
+}

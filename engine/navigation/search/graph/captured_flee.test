@@ -1,0 +1,80 @@
+#include <boost/test/unit_test.hpp>
+#include <memory>
+#include <vector>
+import engine.navigation.search.graph.captured_flee;
+import engine.navigation.search.graph.captured_weighted;
+import engine.navigation.search.route_search;
+import engine.navigation.movement.snapshot.cells;
+import engine.navigation.movement.snapshot.occupants;
+import engine.navigation.movement.destination.reservations;
+import engine.navigation.movement.destination.flee_goal;
+import engine.navigation.movement.terrain_policy;
+
+BOOST_AUTO_TEST_CASE(flee_queries_keep_threat_state_and_routes_independent_of_slice_size) {
+    using namespace navigation;
+    auto cells=std::make_shared<const CellSnapshot>(1,0,0,30,30,[](int x,int y) {
+        CellState cell;cell.occupancy.valid=true;
+        if (x==0 || y==0 || x==30 || y==30) cell.terrain=unsigned(TerrainKind::cliff);
+        return cell;
+    });
+    const auto units=std::make_shared<const OccupantSnapshot>();
+    CapturedGraphQuery query;
+    query.movement.terrain.surfaces=1;query.occupancy.cellsAbove=1;
+    query.startX=query.goalX=15;query.startY=query.goalY=15;
+    const CapturedWeightedGraph source({{cells,{}}},units,query);
+    cells.reset();
+    const DestinationQuery destination{1,0,0,true,true,false,true};
+    const auto run=[&](unsigned index,unsigned budget) {
+        auto graph=source.cloneQuery();
+        FleeQuery threats{155,155,175,155,index%2?10000.f:60.f,2000};
+        CapturedFleePolicy policy(threats,index%3!=0);
+        RouteSearchWorkspace search;
+        const auto heuristic=[](unsigned) { return 0u; };
+        const auto neighbors=[&](unsigned id,auto emit) { policy.neighbors(graph,id,destination,emit); };
+        const auto rank=[&](unsigned id,unsigned) { return policy.rank(graph,id,destination); };
+        search.beginWithFallback(graph.nodeCount(),graph.start(),graph.terminal(),heuristic);
+        while (search.status()==RouteSearchStatus::Searching) {
+            search.advanceWithFallback(budget,heuristic,neighbors,rank);
+        }
+        return search.result();
+    };
+    std::vector<RouteSearchResult> reference;
+    for (unsigned i=0;i<24;++i) reference.push_back(run(i,10000));
+    for (unsigned budget:{1u,7u,31u}) {
+
+        std::vector<RouteSearchResult> results(reference.size());
+        for (std::size_t i=0;i<results.size();++i) { results[i]=run(unsigned(i),budget); }
+        for (unsigned i=0;i<results.size();++i) {
+            BOOST_TEST_CONTEXT("budget=" << budget << " query=" << i) {
+                BOOST_REQUIRE(results[i].found());
+                BOOST_TEST(results[i].nodes==reference[i].nodes);
+                BOOST_TEST(results[i].cost==reference[i].cost);
+                BOOST_TEST(results[i].work==reference[i].work);
+                BOOST_TEST(results[i].usedFallback==bool(i%2));
+            }
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(flee_with_no_legal_destination_is_rejected_before_frontier_expansion) {
+    using namespace navigation;
+    auto cells=std::make_shared<const CellSnapshot>(1,0,0,64,64,[](int,int) {
+        CellState cell;
+        cell.occupancy={2,true,false,true,true};
+        cell.goal=2;
+        return cell;
+    });
+    const std::vector<OccupantState> occupants{{2,true,true,false,false,0,false}};
+    const auto units=std::make_shared<const OccupantSnapshot>(occupants);
+    CapturedGraphQuery query;
+    query.movement.terrain.surfaces=1;
+    query.movement.cellsAbove=1;
+    query.startX=query.goalX=32;
+    query.startY=query.goalY=32;
+    const CapturedWeightedGraph graph({{cells,{}}},units,query);
+    const DestinationQuery destination{1,0,0,true,true,false,true};
+    const CapturedFleePolicy policy(FleeQuery{0,0,640,640,100,2000},true);
+
+    BOOST_TEST(!policy.hasAnyDestination(graph,destination));
+    BOOST_TEST(policy.heuristic(graph,graph.start())==0u);
+}

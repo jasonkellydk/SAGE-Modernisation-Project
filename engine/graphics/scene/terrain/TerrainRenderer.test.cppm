@@ -129,14 +129,14 @@ BOOST_AUTO_TEST_CASE(surface_blend_shroud_overlay_shoreline_and_depth_have_indep
     BOOST_REQUIRE(renderer.Render(commands, TerrainSurfacePass::Shoreline, parameters, shoreline));
     Check_Color(Center(device, color), {48, 64, 16, 128});
     cell.heights.fill(0.8f);
-    BOOST_REQUIRE(renderer.Set_Cells(std::span<const TerrainCell>(&cell, 1)));
+    BOOST_REQUIRE(renderer.Update_Cells(0,std::span<const TerrainCell>(&cell, 1)));
     parameters.features[3] = 0;
     BOOST_REQUIRE(renderer.Render(commands, TerrainSurfacePass::Surface, parameters, textures));
     Check_Color(Center(device, color), {48, 64, 16, 128});
     BOOST_REQUIRE(commands.Clear({0, 0, 0, 0.75f}, 1));
     cell.heights.fill(0.5f);
     for (auto &vertex : cell.colors) vertex = {0.5f, 0.5f, 0.5f, 0};
-    BOOST_REQUIRE(renderer.Set_Cells(std::span<const TerrainCell>(&cell, 1)));
+    BOOST_REQUIRE(renderer.Update_Cells(0,std::span<const TerrainCell>(&cell, 1)));
     parameters.options[1] = 0;
     parameters.light_options[0] = 1;
     parameters.lights[0].ambient_kind[3] = 1;

@@ -1,4 +1,6 @@
 module;
+
+#include <span>
 #define BOOST_TEST_MODULE ParticleTextureDrawingTests
 #include <boost/test/included/unit_test.hpp>
 #include <array>

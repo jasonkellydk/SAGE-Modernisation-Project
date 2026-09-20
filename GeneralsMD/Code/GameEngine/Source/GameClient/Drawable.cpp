@@ -4679,6 +4679,17 @@ Bool Drawable::isMassSelectable() const
 //-------------------------------------------------------------------------------------------------
 void Drawable::preloadAssets( TimeOfDay timeOfDay )
 {
+	if (TheAudio) {
+		for (const auto damage : {BODY_PRISTINE,BODY_DAMAGED,BODY_REALLYDAMAGED,BODY_RUBBLE})
+			TheAudio->preloadEventAssets(getAmbientSoundByDamage(damage));
+		if (m_ambientSound) TheAudio->preloadEventAssets(*m_ambientSound.Peek());
+		if (m_customSoundAmbientInfo) {
+			AudioEventRTS custom;
+			custom.setEventName(m_customSoundAmbientInfo->m_audioName);
+			custom.setAudioEventInfo(m_customSoundAmbientInfo);
+			TheAudio->preloadEventAssets(custom);
+		}
+	}
 
 	/// walk all our modules and preload any assets we need to
 	for( Int i = 0; i < NUM_DRAWABLE_MODULE_TYPES; ++i )

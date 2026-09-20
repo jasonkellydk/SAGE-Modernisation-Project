@@ -1,0 +1,107 @@
+#include <boost/test/unit_test.hpp>
+#include <cstdint>
+#include <map>
+#include <vector>
+#include <limits>
+#include <stdexcept>
+import engine.navigation.scheduling.deadline_queue;
+
+BOOST_AUTO_TEST_CASE(deadline_queue_removes_large_module_owners_without_disturbing_survivors) {
+    navigation::scheduling::DeadlineQueue<unsigned> queue;
+    std::vector<std::size_t> handles;
+    std::map<std::pair<std::uint32_t,unsigned>,unsigned> expected;
+    for (unsigned id=1;id<=8192;++id) {
+        handles.push_back(queue.insert(id,id%4));
+        expected.emplace(std::pair{id%4,id},id);
+    }
+    // Each owner has far more than 256 modules, interleaved in all deadlines.
+    for (unsigned owner:{1u,3u}) {
+        for (unsigned id=1;id<=8192;++id) {
+            if (id%5!=owner) continue;
+            BOOST_REQUIRE(queue.erase(handles[id-1],id));
+            expected.erase({id%4,id});
+        }
+        BOOST_TEST(queue.size()==expected.size());
+        BOOST_TEST(queue.front()==expected.begin()->second);
+    }
+    while (!expected.empty()) {
+        const auto id=expected.begin()->second;
+        BOOST_REQUIRE(queue.front()==id);
+        queue.erase(handles[id-1],id); expected.erase(expected.begin());
+    }
+    BOOST_TEST(queue.deadlineCount()==0u);
+}
+
+BOOST_AUTO_TEST_CASE(deadline_queue_matches_ordered_deadlines_and_stable_ties_for_ten_thousand_owners) {
+    navigation::scheduling::DeadlineQueue<unsigned> queue;
+    struct Owner { std::size_t handle; std::uint32_t priority; std::uint64_t order; bool live; };
+    std::vector<Owner> owners;
+    std::map<std::pair<std::uint32_t,std::uint64_t>,unsigned> reference;
+    std::uint64_t order=0;
+    for (unsigned id=1;id<=10000;++id) {
+        const auto priority=id%7;
+        owners.push_back({queue.insert(id,priority),priority,++order,true});
+        reference.emplace(std::pair{priority,order},id);
+    }
+    BOOST_TEST(queue.deadlineCount()==7u);
+    std::uint32_t random=0x13579;
+    for (unsigned step=0;step<100000;++step) {
+        random=random*1664525u+1013904223u;
+        const auto id=random%10000+1;
+        auto& owner=owners[id-1];
+        const auto priority=(random>>16)%1024;
+        if (!owner.live) {
+            owner={queue.insert(id,priority),priority,++order,true};
+            reference.emplace(std::pair{priority,order},id);
+        } else if (step%5==0) {
+            BOOST_REQUIRE(queue.erase(owner.handle,id));
+            BOOST_REQUIRE(!queue.erase(owner.handle,id));
+            reference.erase({owner.priority,owner.order}); owner.live=false;
+        } else {
+            queue.reschedule(owner.handle,id,priority);
+            if (owner.priority!=priority) {
+                reference.erase({owner.priority,owner.order});
+                owner.priority=priority; owner.order=++order;
+                reference.emplace(std::pair{priority,order},id);
+            }
+        }
+        BOOST_REQUIRE(queue.size()==reference.size());
+        BOOST_REQUIRE(queue.front()==reference.begin()->second);
+    }
+    while (!reference.empty()) {
+        const auto id=reference.begin()->second;
+        BOOST_REQUIRE(queue.front()==id);
+        BOOST_REQUIRE(queue.erase(owners[id-1].handle,id));
+        reference.erase(reference.begin());
+    }
+    BOOST_TEST(queue.empty()); BOOST_TEST(queue.deadlineCount()==0u);
+}
+
+BOOST_AUTO_TEST_CASE(deadline_queue_callback_mutation_keeps_owners_and_newly_awakened_work_valid) {
+    navigation::scheduling::DeadlineQueue<unsigned> queue;
+    const auto first=queue.insert(1,10),second=queue.insert(2,10),sleeping=queue.insert(3,100);
+    BOOST_TEST(queue.front()==1u);
+    // Simulate an executing callback inserting earlier work and waking another
+    // module. Completing the callback must reschedule its own retained handle.
+    const auto inserted=queue.insert(4,5);
+    queue.reschedule(sleeping,3,5);
+    queue.reschedule(first,1,20);
+    BOOST_TEST(queue.front()==4u);
+    queue.erase(inserted,4); BOOST_TEST(queue.front()==3u);
+    queue.erase(sleeping,3); BOOST_TEST(queue.front()==2u);
+    queue.erase(second,2);
+    const auto replacement=queue.insert(5,0);
+    BOOST_TEST(replacement==second);
+    BOOST_CHECK_THROW(queue.reschedule(second,2,0),std::out_of_range);
+    BOOST_TEST(!queue.erase(second,2)); BOOST_TEST(queue.front()==5u);
+    queue.reschedule(first,1,std::numeric_limits<std::uint32_t>::max());
+    queue.erase(replacement,5); BOOST_TEST(queue.front()==1u);
+    queue.reschedule(first,1,0); BOOST_TEST(queue.priority(first)==0u);
+    unsigned visited=0;
+    queue.forEach([&](auto handle,auto value) { ++visited; BOOST_TEST(queue.contains(handle,value)); });
+    BOOST_TEST(visited==1u);
+    queue.clear(); BOOST_TEST(queue.empty()); BOOST_TEST(queue.deadlineCount()==0u);
+    BOOST_CHECK_THROW(queue.front(),std::out_of_range);
+    const auto reused=queue.insert(9,7);
+    BOOST_TEST(queue.at(reused)==9u); BOOST_TEST(queue.front()==9u);
+}

@@ -349,6 +349,17 @@ Bool SelectionTranslator::killThemKillThemAll( Drawable *draw, GameMessage *kill
 GameMessageDisposition SelectionTranslator::translateGameMessage(const GameMessage *msg)
 {
 	GameMessageDisposition disp = KEEP_MESSAGE;
+	if (msg->getType()==GameMessage::MSG_BEGIN_AREA_SELECTION_HINT && !m_dragSelecting)
+		return DESTROY_MESSAGE;
+	if (msg->isMouseInputCaptured() && msg->getType()>GameMessage::MSG_RAW_MOUSE_BEGIN &&
+		msg->getType()<GameMessage::MSG_RAW_MOUSE_END) {
+		m_leftMouseButtonIsDown=FALSE;
+		m_dragSelecting=FALSE;
+		TheInGameUI->setSelecting(FALSE);
+		TheInGameUI->endAreaSelectHint(nullptr);
+		TheTacticalView->setMouseLock(FALSE);
+		return KEEP_MESSAGE;
+	}
 
 	if(	!TheInGameUI->getInputEnabled() )
 	{

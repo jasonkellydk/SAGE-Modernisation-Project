@@ -1,0 +1,46 @@
+#include <boost/test/unit_test.hpp>
+#include <cmath>
+#include <limits>
+import engine.navigation.spatial.collision.cylinder_contact;
+using namespace navigation::collision;
+
+BOOST_AUTO_TEST_CASE(contact_directions_are_defined_for_coincident_and_vertical_centers) {
+    const auto coincident=unitDirection({0,0,0});
+    BOOST_TEST(coincident.x==1);BOOST_TEST(coincident.y==0);BOOST_TEST(coincident.z==0);
+    for (float sign:{-1.f,1.f}) {
+        const auto vertical=unitDirection({0,0,sign*5});
+        BOOST_TEST(vertical.x==0);BOOST_TEST(vertical.y==0);BOOST_TEST(vertical.z==sign);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(cylinder_contacts_match_disc_and_vertical_interval_intersection) {
+    for (int x=-16;x<=16;++x) for (int y=-16;y<=16;++y)
+        for (int z=-6;z<=10;++z) for (float radius:{0.f,3.f,7.f}) {
+            const Cylinder a{{100,200,0},7,6},b{{100+float(x),200+float(y),float(z)},radius,4};
+            const bool expected=double(x)*x+double(y)*y<=(7.0+radius)*(7.0+radius) && z<=6 && z+4>=0;
+            Contact result{{-123,-456,-789},{-123,-456,-789}};
+            BOOST_TEST(cylinderContact(a,b,&result)==expected);
+            BOOST_TEST(cylinderContact(a,b,nullptr)==expected);
+            if (expected) {
+                BOOST_TEST(std::isfinite(result.position.x));
+                BOOST_TEST(std::isfinite(result.position.y));
+                BOOST_TEST(std::isfinite(result.position.z));
+                BOOST_TEST(std::abs(result.normal.x*result.normal.x+result.normal.y*result.normal.y-1)<0.00001f);
+                BOOST_TEST(result.normal.z==0);
+                if (x || y) BOOST_TEST(result.normal.x*x+result.normal.y*y>0);
+                else { BOOST_TEST(result.normal.x==1);BOOST_TEST(result.normal.y==0); }
+            } else BOOST_TEST(result.position.x==-123);
+        }
+}
+
+BOOST_AUTO_TEST_CASE(cylinder_contacts_reject_invalid_input_without_publishing_output) {
+    const Cylinder valid{{0,0,0},7,6};
+    for (float invalid:{-1.f,std::numeric_limits<float>::infinity(),std::numeric_limits<float>::quiet_NaN()}) {
+        auto other=valid;other.radius=invalid;
+        BOOST_TEST(!cylinderContact(valid,other,nullptr));
+        other=valid;other.height=invalid;
+        BOOST_TEST(!cylinderContact(valid,other,nullptr));
+    }
+    auto other=valid;other.position.x=std::numeric_limits<float>::max();
+    BOOST_TEST(!cylinderContact(valid,other,nullptr));
+}

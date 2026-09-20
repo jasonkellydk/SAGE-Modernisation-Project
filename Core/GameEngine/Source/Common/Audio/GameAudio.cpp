@@ -383,6 +383,10 @@ void AudioManager::getInfoForAudioEvent( const AudioEventRTS *eventToFindAndFill
 //-------------------------------------------------------------------------------------------------
 AudioHandle AudioManager::addAudioEvent(const AudioEventRTS *eventToAdd)
 {
+	// The headless simulator does not update the audio subsystem. Queuing
+	// events there retains every request and makes limit checks grow forever.
+	if (TheGlobalData && TheGlobalData->m_headless)
+		return AHSV_NoSound;
 	if (eventToAdd->getEventName().isEmpty() || eventToAdd->getEventName() == "NoSound") {
 		return AHSV_NoSound;
 	}

@@ -48,6 +48,11 @@
 //         Includes
 //-----------------------------------------------------------------------------
 #include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include <cstdint>
+import engine.navigation.spatial.contact_pairs;
+import engine.navigation.spatial.collision.cylinder_contact;
+import engine.navigation.spatial.storage.contact_pair_pool;
+import engine.navigation.spatial.query.visit_epoch;
 
 #include "Common/ActionManager.h"
 #include "Common/DiscreteCircle.h"
@@ -135,6 +140,11 @@ struct CollideInfo
 
 	CollideInfo(const Coord3D* p, const GeometryInfo& g, Real a) : position(*p), geom(g), angle(a) { }
 };
+
+static void normalizeContactDirection(Coord3D& direction) {
+    const auto unit=navigation::collision::unitDirection({direction.x,direction.y,direction.z});
+    direction={unit.x,unit.y,unit.z};
+}
 
 struct CellValueProcParms
 {
@@ -511,7 +521,7 @@ static Bool xy_collideTest_Rect_Circle(const CollideInfo *a, const CollideInfo *
 		if (cinfo)
 		{
 			vecDiff_2D(&b->position, &a->position, &cinfo->normal);
-			cinfo->normal.normalize();
+			normalizeContactDirection(cinfo->normal);
 			cinfo->loc.x = (maxReal(circ_l, rect_l) + minReal(circ_r, rect_r)) * 0.5f;
 			cinfo->loc.y = (maxReal(circ_t, rect_t) + minReal(circ_b, rect_b)) * 0.5f;
 			cinfo->loc.z = (a->position.z + b->position.z) * 0.5f;
@@ -538,7 +548,7 @@ static Bool xy_collideTest_Circle_Circle(const CollideInfo *a, const CollideInfo
 		if (cinfo)
 		{
 			cinfo->normal = diff;
-			cinfo->normal.normalize();
+			normalizeContactDirection(cinfo->normal);
 			cinfo->loc = a->position;
 			projectCoord3D(&cinfo->loc, &cinfo->normal, a->geom.getMajorRadius());
 		}
@@ -587,7 +597,7 @@ static Bool xy_collideTest_Rect_Rect(const CollideInfo *a, const CollideInfo *b,
 			// or (b) come up with a better definition of a useful normal in this case,
 			// I'm not sure we can do a whole lot better... (srj)
 			vecDiff_2D(&b->position, &a->position, &cinfo->normal);
-			cinfo->normal.normalize();
+			normalizeContactDirection(cinfo->normal);
 		}
 		return true;
 	}
@@ -672,6 +682,13 @@ inline Bool z_collideTest_Nonsphere_Nonsphere(CollideTestProc xyproc, const Coll
 	if (minRadius>r) minRadius = r;
 
 	Bool closeEnough = sqr(minRadius) > dSqr;
+	if (closeEnough && cinfo) {
+		const auto contact=navigation::collision::overlapContact(
+			{{a->position.x,a->position.y,a->position.z},a->geom.getMajorRadius(),a->geom.getMaxHeightAbovePosition()},
+			{{b->position.x,b->position.y,b->position.z},b->geom.getMajorRadius(),b->geom.getMaxHeightAbovePosition()});
+		cinfo->loc={contact.position.x,contact.position.y,contact.position.z};
+		cinfo->normal={contact.normal.x,contact.normal.y,contact.normal.z};
+	}
 
 	if (closeEnough || xyproc(a, b, cinfo))
 	{
@@ -708,7 +725,7 @@ static Bool collideTest_Sphere_Sphere(const CollideInfo *a, const CollideInfo *b
 		if (cinfo)
 		{
 			cinfo->normal = diff;
-			cinfo->normal.normalize();
+			normalizeContactDirection(cinfo->normal);
 			cinfo->loc = a->position;
 			projectCoord3D(&cinfo->loc, &cinfo->normal, a->geom.getMajorRadius());
 		}
@@ -742,7 +759,16 @@ static Bool collideTest_Cylinder_Sphere(const CollideInfo *a, const CollideInfo 
 //-----------------------------------------------------------------------------
 static Bool collideTest_Cylinder_Cylinder(const CollideInfo *a, const CollideInfo *b, CollideLocAndNormal *cinfo)
 {
-	return z_collideTest_Nonsphere_Nonsphere(xy_collideTest_Circle_Circle, a, b, cinfo);
+	navigation::collision::Contact contact;
+	const bool hit=navigation::collision::cylinderContact(
+		{{a->position.x,a->position.y,a->position.z},a->geom.getMajorRadius(),a->geom.getMaxHeightAbovePosition()},
+		{{b->position.x,b->position.y,b->position.z},b->geom.getMajorRadius(),b->geom.getMaxHeightAbovePosition()},
+		cinfo?&contact:nullptr);
+	if (hit && cinfo) {
+		cinfo->loc={contact.position.x,contact.position.y,contact.position.z};
+		cinfo->normal={contact.normal.x,contact.normal.y,contact.normal.z};
+	}
+	return hit;
 }
 
 //-----------------------------------------------------------------------------
@@ -993,46 +1019,20 @@ PartitionManager *ThePartitionManager = nullptr;  ///< the object manager single
 //-----------------------------------------------------------------------------
 //-----------------------------------------------------------------------------
 
-class PartitionContactListNode : public MemoryPoolObject
-{
-	MEMORY_POOL_GLUE_WITH_USERLOOKUP_CREATE(PartitionContactListNode, "PartitionContactListNode" )
-
-public:
-	PartitionContactListNode*			m_nextHash;	///< next node with same hash value
-	PartitionContactListNode*			m_next;			///< next node
-	PartitionData*								m_obj;			///< one object that is possibly colliding
-	PartitionData*								m_other;		///< the other object (or null for collisions with the terrain)
-	Int														m_hashValue;///< index into hash table
-};
-
-inline PartitionContactListNode::~PartitionContactListNode() { }
-
-//-----------------------------------------------------------------------------
-
 class PartitionContactList
 {
 private:
-
-	/*
-		socketcount should be prime (and "not too close to a power of 2) for best results.
-
-		if this one isn't large enough, try this website:
-		http://www.utm.edu/research/primes/lists/small/1000.txt
-
-		So how is this chosen? Eh, pretty much based on experimentation.
-	*/
-	enum { PartitionContactList_SOCKET_COUNT = 5381 };
-
-
-	PartitionContactListNode* m_contactHash[PartitionContactList_SOCKET_COUNT];
-	PartitionContactListNode* m_contactList;
+    navigation::ContactPairPool::Lease m_storage;
+    navigation::ContactPairs& m_pairs;
+    navigation::ContactQueue& m_contacts;
 
 public:
 
-	PartitionContactList()
+	explicit PartitionContactList(navigation::ContactPairPool& storage)
+        : m_storage(storage.acquire()), m_pairs(m_storage.pairs()), m_contacts(m_storage.queue())
 	{
-		memset(m_contactHash, 0, sizeof(m_contactHash));
-		m_contactList = nullptr;
+		m_pairs.clear();
+		m_contacts.clear();
 	}
 
 	~PartitionContactList()
@@ -2039,7 +2039,6 @@ void PartitionData::addPossibleCollisions(PartitionContactList *ctList)
 #endif
 
 	//DEBUG_LOG(("adding possible collision for %s",getObject()->getTemplate()->getName().str()));
-
 	CellAndObjectIntersection *myCoi = m_coiArray;
 	for (Int i = m_coiInUseCount; i > 0; --i, ++myCoi)
 	{
@@ -2066,6 +2065,21 @@ Bool PartitionData::collidesWith(const PartitionData *that, CollideLocAndNormal 
 
 	if( thisObj->isKindOf( KINDOF_NO_COLLIDE )  ||  thatObj->isKindOf( KINDOF_NO_COLLIDE ) )
 		return FALSE; // A collision extent of zero size is still a point and can collide, but we don't always want to.
+	const auto& geometryA=thisObj->getGeometryInfo();
+	const auto& geometryB=thatObj->getGeometryInfo();
+	if (geometryA.getGeomType()==GEOMETRY_CYLINDER && geometryB.getGeomType()==GEOMETRY_CYLINDER) {
+		const auto& a=*thisObj->getPosition();
+		const auto& b=*thatObj->getPosition();
+		navigation::collision::Contact contact;
+		const bool hit=navigation::collision::cylinderContact(
+			{{a.x,a.y,a.z},geometryA.getMajorRadius(),geometryA.getMaxHeightAbovePosition()},
+			{{b.x,b.y,b.z},geometryB.getMajorRadius(),geometryB.getMaxHeightAbovePosition()},cinfo?&contact:nullptr);
+		if (hit && cinfo) {
+			cinfo->loc={contact.position.x,contact.position.y,contact.position.z};
+			cinfo->normal={contact.normal.x,contact.normal.y,contact.normal.z};
+		}
+		return hit;
+	}
 
 	CollideInfo thisInfo(thisObj->getPosition(), thisObj->getGeometryInfo(), thisObj->getOrientation());
 	CollideInfo thatInfo(thatObj->getPosition(), thatObj->getGeometryInfo(), thatObj->getOrientation());
@@ -2164,36 +2178,57 @@ void PartitionData::updateCellsTouched()
 		return;
 	}
 
-	removeAllTouchedCells();
-	if (isSmall)
-	{
-		doSmallFill(pos.x, pos.y, majorRadius);
+	// Small movers usually remain in the same cells for many updates. Preserve
+	// those memberships instead of invalidating and rebuilding every cell list.
+	bool sameCoverage=false;
+	if (isSmall && majorRadius<=ThePartitionManager->getCellSize()*0.5f) {
+		Int left,top,right,bottom;
+		ThePartitionManager->worldToCell(pos.x-majorRadius,pos.y-majorRadius,&left,&top);
+		ThePartitionManager->worldToCell(pos.x+majorRadius,pos.y+majorRadius,&right,&bottom);
+		Int count=0;
+		sameCoverage=true;
+		for (Int x=left;x<=right && sameCoverage;++x) for (Int y=top;y<=bottom;++y) {
+			if (auto* cell=ThePartitionManager->getCellAt(x,y)) {
+				if (count>=m_coiInUseCount || m_coiArray[count].getCell()!=cell) {
+					sameCoverage=false; break;
+				}
+				++count;
+			}
+		}
+		sameCoverage=sameCoverage && count==m_coiInUseCount;
 	}
-	else
-	{
-		switch(geom)
+	if (!sameCoverage) {
+		removeAllTouchedCells();
+		if (isSmall)
 		{
-			case GEOMETRY_SPHERE:
-			case GEOMETRY_CYLINDER:
+			doSmallFill(pos.x, pos.y, majorRadius);
+		}
+		else
+		{
+			switch(geom)
 			{
-#if RETAIL_COMPATIBLE_CRC || RETAIL_COMPATIBLE_CIRCLE_FILL_ALGORITHM
-				doCircleFill(pos.x, pos.y, majorRadius);
-#else
-				// TheSuperHackers @bugfix Stubbjax 29/01/2026 Use precise circle fill to improve
-				// collision accuracy, most notably for objects with geometry radii >= 20 and < 40.
-				doCircleFillPrecise(pos.x, pos.y, majorRadius);
-#endif
-				break;
-			}
+				case GEOMETRY_SPHERE:
+				case GEOMETRY_CYLINDER:
+				{
+	#if RETAIL_COMPATIBLE_CRC || RETAIL_COMPATIBLE_CIRCLE_FILL_ALGORITHM
+					doCircleFill(pos.x, pos.y, majorRadius);
+	#else
+					// TheSuperHackers @bugfix Stubbjax 29/01/2026 Use precise circle fill to improve
+					// collision accuracy, most notably for objects with geometry radii >= 20 and < 40.
+					doCircleFillPrecise(pos.x, pos.y, majorRadius);
+	#endif
+					break;
+				}
 
-			case GEOMETRY_BOX:
-			{
-				doRectFill(pos.x, pos.y, majorRadius, minorRadius, angle);
-				break;
-			}
-		};
+				case GEOMETRY_BOX:
+				{
+					doRectFill(pos.x, pos.y, majorRadius, minorRadius, angle);
+					break;
+				}
+			};
+		}
+
 	}
-
 	Int currentCellIndexX, currentCellIndexY;
 	ThePartitionManager->worldToCell( pos.x, pos.y, &currentCellIndexX, &currentCellIndexY );
 	const PartitionCell *currentCell = ThePartitionManager->getCellAt( currentCellIndexX, currentCellIndexY );
@@ -2461,163 +2496,51 @@ void PartitionData::detachFromGhostObject()
 }
 
 //-----------------------------------------------------------------------------
-inline UnsignedInt hash2ints(Int a, Int b)
+void PartitionContactList::addToContactList(PartitionData* obj,PartitionData* other)
 {
-	// do it this way so that [a,b] always hashes to the same value as [b,a].
-	// this is unsophisticated but reasonable, since all ObjectIDs will
-	// quite likely be well below 65536...
-	if (a < b)
-	{
-		return (a<<16)+b;
-	}
-	else
-	{
-		return (b<<16)+a;
-	}
+    if (!obj || !other || obj==other || !obj->getObject() || !other->getObject()) return;
+    if (!m_pairs.insert(reinterpret_cast<std::uintptr_t>(obj),reinterpret_cast<std::uintptr_t>(other))) return;
+    try {
+        m_contacts.append(reinterpret_cast<std::uintptr_t>(obj),reinterpret_cast<std::uintptr_t>(other));
+    } catch (...) {
+        m_pairs.erase(reinterpret_cast<std::uintptr_t>(obj),reinterpret_cast<std::uintptr_t>(other));
+        throw;
+    }
 }
-
-
-//-----------------------------------------------------------------------------
-//-----------------------------------------------------------------------------
-//-----------------------------------------------------------------------------
-
-//-----------------------------------------------------------------------------
-void PartitionContactList::addToContactList( PartitionData *obj, PartitionData *other )
-{
-	if (obj == other || obj == nullptr || other == nullptr)
-		return;
-
-	Object* obj_obj = obj->getObject();
-	Object* other_obj = other->getObject();
-	if (obj_obj == nullptr || other_obj == nullptr)
-		return;
-
-	// compute hash index based on object's ids.
-	UnsignedInt hashValue = hash2ints(obj_obj->getID(), other_obj->getID());
-	hashValue %= PartitionContactList_SOCKET_COUNT;
-
-	// make sure given hit has not already been recorded
-	for (PartitionContactListNode* cd = m_contactHash[ hashValue ]; cd; cd = cd->m_nextHash )
-	{
-		if ((cd->m_obj == obj && cd->m_other == other) ||
-				(cd->m_obj == other && cd->m_other == obj))
-		{
-			// already noted
-			return;
-		}
-	}
-
-	// new hit
-	PartitionContactListNode *ncd = newInstance(PartitionContactListNode);
-	ncd->m_obj = obj;
-	ncd->m_other = other;
-	ncd->m_hashValue = hashValue;
-
-	// add to hash table
-	ncd->m_nextHash = m_contactHash[ hashValue ];
-	m_contactHash[ hashValue ] = ncd;
-
-	// add to list of contacts for this frame
-	ncd->m_next = m_contactList;
-	m_contactList = ncd;
-
-
-#if 0
-
-Int depth = 0;
-for (PartitionContactListNode *cd2 = m_contactHash[ hashValue ]; cd2; cd2 = cd2->m_nextHash )
-{
-	depth++;
-}
-if (depth > 3)
-{
-	DEBUG_LOG(("depth is %d for %s %08lx (%d) - %s %08lx (%d)",
-		depth,obj_obj->getTemplate()->getName().str(),obj_obj,obj_obj->getID(),
-		other_obj->getTemplate()->getName().str(),other_obj,other_obj->getID()
-		));
-
-	for (cd2 = m_contactHash[ hashValue ]; cd2; cd2 = cd2->m_nextHash )
-	{
-		UnsignedInt rawhash = djb2hash2ints(cd2->m_obj->getObject()->getID(), cd2->m_other->getObject()->getID());
-		//hashValue %= PartitionContactList_SOCKET_COUNT;
-
-
-		DEBUG_LOG(("ENTRY: %s %08lx (%d) - %s %08lx (%d) [rawhash %d]",
-			cd2->m_obj->getObject()->getTemplate()->getName().str(),cd2->m_obj->getObject(),cd2->m_obj->getObject()->getID(),
-			cd2->m_other->getObject()->getTemplate()->getName().str(),cd2->m_other->getObject(),cd2->m_other->getObject()->getID(),
-			rawhash));
-	}
-}
-
-static Real aggtotal = 0;
-static Real aggfull = 0;
-static Real aggcount = 0;
-for (int ii = 0; ii < PartitionContactList_SOCKET_COUNT; ++ii)
-{
-	if (m_contactHash[ii])
-		aggfull += 1.0f;
-
-	for (cd2 = m_contactHash[ ii ]; cd2; cd2 = cd2->m_nextHash )
-	{
-		aggtotal += 1.0f;
-	}
-}
-aggcount += 1.0f;
-DEBUG_ASSERTLOG(((Int)aggcount)%1000!=0,("avg hash depth at %f is %f, fullness %f%%",
-aggcount,aggtotal/(aggcount*PartitionContactList_SOCKET_COUNT),(aggfull*100)/(aggcount*PartitionContactList_SOCKET_COUNT)));
-#endif
-
-
-}
-
-//-----------------------------------------------------------------------------
 void PartitionContactList::removeSpecificPartitionData(PartitionData* data)
 {
-	for (PartitionContactListNode* cd = m_contactList; cd; cd = cd->m_next)
-	{
-		if (cd->m_obj == data || cd->m_other == data)
-		{
-			cd->m_obj = nullptr;
-			cd->m_other = nullptr;
-		}
-	}
+	m_contacts.removeIdentity(reinterpret_cast<std::uintptr_t>(data),
+        [&](auto pair) { m_pairs.erase(pair.first,pair.second); });
 }
 
 //-----------------------------------------------------------------------------
 void PartitionContactList::resetContactList()
 {
-	// remove items from hash table
-	PartitionContactListNode* cdnext;
-	for (PartitionContactListNode* cd = m_contactList; cd; cd = cdnext)
-	{
-		cdnext = cd->m_next;
-		deleteInstance(cd);
-	}
-
-	memset(m_contactHash, 0, sizeof(m_contactHash));
-	m_contactList = nullptr;
+	m_pairs.clear();
+	m_contacts.clear();
 }
 
 //-----------------------------------------------------------------------------
 void PartitionContactList::processContactList()
 {
-	for (PartitionContactListNode* cd = m_contactList; cd; cd = cd->m_next)
-	{
-		if (cd->m_obj == nullptr || cd->m_other == nullptr)
-			continue;
+	m_contacts.visitReverse([&](std::size_t index,auto pair) {
+		auto* first=reinterpret_cast<PartitionData*>(pair.first);
+		auto* second=reinterpret_cast<PartitionData*>(pair.second);
 
 		// we know that their partitions overlap; determine if they REALLY collide
 		// before proceeding...
 		CollideLocAndNormal cinfo;
-		if (!cd->m_obj->friend_collidesWith(cd->m_other, &cinfo))
-			continue;
+		if (!first->friend_collidesWith(second, &cinfo))
+		{
+			return;
+		}
 
-		Object* obj = cd->m_obj->getObject();
-		Object* other = cd->m_other->getObject();
+		Object* obj = first->getObject();
+		Object* other = second->getObject();
 
 		if( obj->getStatusBits().test( OBJECT_STATUS_NO_COLLISIONS ) ||
 				other->getStatusBits().test( OBJECT_STATUS_NO_COLLISIONS ) )
-			continue;
+			return;
 
 		DEBUG_ASSERTCRASH(!(obj->isKindOf(KINDOF_IMMOBILE) && other->isKindOf(KINDOF_IMMOBILE)),
 			("we should never have collisions between two immobile things reported"));
@@ -2625,8 +2548,8 @@ void PartitionContactList::processContactList()
 		// the onCollide() calls can remove the object(s) from the partition mgr,
 		// thus destroying the partitiondata for 'em. go ahead and null these out here
 		// so we won't be tempted to use 'em (since they might be bogus).
-		cd->m_obj = nullptr;
-		cd->m_other = nullptr;
+        m_pairs.erase(pair.first,pair.second);
+		m_contacts.invalidate(index);
 
 		obj->onCollide(other, &cinfo.loc, &cinfo.normal);
 		flipCoord3D(&cinfo.normal);
@@ -2637,7 +2560,7 @@ void PartitionContactList::processContactList()
  		//were missing.
  		if( !obj->isDestroyed() && !other->isDestroyed() )
  		{
- 			other->onCollide(obj, &cinfo.loc, &cinfo.normal);
+			other->onCollide(obj, &cinfo.loc, &cinfo.normal);
  		}
 
 		//
@@ -2656,7 +2579,7 @@ void PartitionContactList::processContactList()
 //DEBUG_LOG(("%d: re-dirtying collision of %s %08lx with %s %08lx [other]",TheGameLogic->getFrame(),other->getTemplate()->getName().str(),other,obj->getTemplate()->getName().str(),obj));
 			other->friend_getPartitionData()->makeDirty(false);
 		}
-	}
+	});
 }
 
 //-----------------------------------------------------------------------------
@@ -2851,10 +2774,13 @@ void PartitionManager::update()
 			m_updatedSinceLastReset = true;
 		}
 
-		PartitionContactList ctList;
+		static thread_local navigation::ContactPairPool pairStorage;
+		PartitionContactList ctList(pairStorage);
 		TheContactList = &ctList;
+		unsigned dirtyCount=0;
 		while (m_dirtyModules)
 		{
+			++dirtyCount;
 #ifdef INTENSE_DEBUG
 			++cc;
 #endif
@@ -2882,7 +2808,6 @@ void PartitionManager::update()
 				dirty->addPossibleCollisions(&ctList);
 			}
 		}
-
 		ctList.processContactList();
 #ifdef INTENSE_DEBUG
 		DEBUG_ASSERTLOG(cc==0,("updated partition info for %d objects",cc));
@@ -3357,6 +3282,14 @@ void PartitionManager::calcRadiusVec()
 
 //-----------------------------------------------------------------------------
 //DECLARE_PERF_TIMER(getClosestObjects)
+UnsignedInt PartitionManager::nextQueryEpoch()
+{
+    static navigation::spatial::VisitEpoch epochs;
+    return epochs.next([&] {
+        for (auto* module=m_moduleList;module;module=module->getNext()) module->friend_setDoneFlag(0);
+    });
+}
+
 Object *PartitionManager::getClosestObjects(
 	const Object *obj,
 	const Coord3D *pos,
@@ -3439,8 +3372,7 @@ Object *PartitionManager::getClosestObjects(
 
 	Bool foundAny = false;
 
-	static Int theIterFlag = 1;	// nonzero, thanks
-	++theIterFlag;
+	const auto theIterFlag=nextQueryEpoch();
 
 	/*
 		The span for curRadius describes the cells in m_radiusOffsets that could
@@ -3480,7 +3412,12 @@ Object *PartitionManager::getClosestObjects(
 
 				Real thisDistSqr;
 				Coord3D distVec;
-				if (!(*distProc)(objPos, objToUse, thisObj->getPosition(), thisObj, thisDistSqr, closestVecArg ? &distVec : nullptr, closestDistSqr))
+                const Bool inRange=dc==FROM_CENTER_2D ?
+                    distCalcProc_CenterAndCenter_2D(objPos,objToUse,thisObj->getPosition(),thisObj,
+                        thisDistSqr,closestVecArg?&distVec:nullptr,closestDistSqr) :
+                    (*distProc)(objPos,objToUse,thisObj->getPosition(),thisObj,
+                        thisDistSqr,closestVecArg?&distVec:nullptr,closestDistSqr);
+				if (!inRange)
 					continue;
 
 				if (!filtersAllow(filters, thisObj))
@@ -3529,8 +3466,7 @@ Object *PartitionManager::getClosestObjects(
 
 	Bool foundAny = false;
 
-	static Int theIterFlag = 1;	// nonzero, thanks
-	++theIterFlag;
+	const auto theIterFlag=nextQueryEpoch();
 
 	PartitionCell *thisCell;
 	while ((thisCell = iter.nextNonEmpty()) != nullptr)
