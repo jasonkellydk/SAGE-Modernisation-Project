@@ -108,6 +108,10 @@ public:
             environment.parameters.shadow_options[0] = 0;
             environment.shadow_textures = {};
             m_maps.Shutdown(*m_device);
+            environment.local_shadow_texture={};
+            environment.parameters.local_shadow_atlas={};
+            if (m_local_atlas.Is_Valid()) m_device->Destroy_Texture(m_local_atlas);
+            m_local_atlas={};
         }
         m_renderer.Shutdown();
         m_graph = {};
@@ -256,6 +260,88 @@ public:
         for (std::size_t column=0;column<4;++column)
             environment.parameters.shadow_view_depth[column] = -view.view_matrix(2,column);
         environment.parameters.shadow_options[0] = static_cast<float>(cascades.count);
+        return true;
+    }
+
+    // Local lights share the same caster meshes, skin poses, alpha cutouts and
+    // material depth shader as the sun. Every published local light gets a
+    // shadow view (six for an omnidirectional source), with no light impostors.
+    bool Render_Local(CommandList& commands, RHITextureHandle color_target,
+        RHITextureHandle depth_target, RHIViewport viewport)
+    {
+        if (!m_device) return false;
+        auto& environment=Get_Environment_Lighting();
+        environment.parameters.local_shadow_atlas={};
+        environment.local_shadow_texture={};
+        for(auto& spot:environment.parameters.local_spot) spot[2]=spot[3]=0;
+        const unsigned count=std::min(64u,static_cast<unsigned>(environment.parameters.local_light_options[0]));
+        if (!count) return true;
+        constexpr unsigned tile_size=256,columns=16,rows=24;
+        if (!m_local_atlas.Is_Valid())
+            m_local_atlas=m_device->Create_Texture({columns*tile_size,rows*tile_size,1,RHITextureFormat::D32_Float,
+                static_cast<unsigned>(RHITextureUsage::DepthStencil)|static_cast<unsigned>(RHITextureUsage::ShaderResource)});
+        if (!m_local_atlas.Is_Valid() || !Prepare_Batches()) return false;
+        const auto saved=environment;
+        environment.parameters.shadow_options[0]=0;
+        environment.parameters.clip_plane={};
+        environment.parameters.cloud_offset_strength[3]=0;
+        unsigned tile=0;
+        std::array<std::array<float,2>,64> allocation{};
+        const auto render=[&] {
+            if (!commands.Set_Depth_Target(m_local_atlas) || !commands.Clear_Depth(1)) return false;
+            for(unsigned light=0;light<count;++light) {
+                const auto& position=saved.parameters.local_positions[light];
+                const auto& direction=saved.parameters.local_direction[light];
+                if (position[3]<=.2f) continue;
+                const float near_clip=std::min(.2f,position[3]*.01f);
+                allocation[light]={float(tile+1),near_clip};
+                const unsigned faces=direction[3]<0 ? 6 : 1;
+                for(unsigned face=0;face<faces;++face,++tile) {
+                    const auto matrix=Local_Shadow_View_Projection(position,direction,face,near_clip);
+                    const auto planes=Cascade_Planes(matrix);
+                    if (!commands.Set_Viewport({(tile%columns)*tile_size,(tile/columns)*tile_size,tile_size,tile_size})) return false;
+                    for(const auto& batch:m_batches) {
+                        const auto& first=m_casters[m_caster_order[batch.first]];
+                        std::size_t instance_count=0;
+                        for(auto index=batch.first;index<batch.end;++index) {
+                            const auto& caster=m_casters[m_caster_order[index]];
+                            if (!Intersects_Cascade(caster.bounds,planes)) continue;
+                            if (!first.source) m_instance_worlds[instance_count]=caster.world;
+                            m_instance_indices[instance_count++]=caster.instance.Get_Index();
+                        }
+                        if (!instance_count) continue;
+                        const auto textures=std::span(first.textures.data(),first.texture_count);
+                        if (first.source) {
+                            auto parameters=first.parameters;
+                            parameters.view.view_projection=matrix.values;
+                            if (!batch.renderer->Draw_Records(commands,batch.mesh,first.style,parameters,textures,
+                                std::span<const std::uint32_t>(m_instance_indices.data(),instance_count))) return false;
+                        } else {
+                            PropParameters parameters;
+                            std::memcpy(&parameters,&first.parameters.view,sizeof(PropViewConstants));
+                            std::memcpy(&parameters.textured,&first.parameters.material,sizeof(PropMaterialConstants));
+                            parameters.view_projection=matrix.values;
+                            parameters.world=m_instance_worlds.front();
+                            const auto worlds=instance_count==1 ? std::span<const std::array<float,16>>{}
+                                : std::span<const std::array<float,16>>(m_instance_worlds.data(),instance_count);
+                            if (!batch.renderer->Draw_Range(commands,batch.mesh,first.style,parameters,textures,
+                                batch.first_index,batch.index_count,worlds)) return false;
+                        }
+                    }
+                }
+            }
+            return true;
+        };
+        const bool rendered=render();
+        environment=saved;
+        const bool restored=commands.Set_Render_Targets(color_target,depth_target) && commands.Set_Viewport(viewport);
+        if (!rendered || !restored) return false;
+        for(unsigned light=0;light<count;++light) {
+            environment.parameters.local_spot[light][2]=allocation[light][0];
+            environment.parameters.local_spot[light][3]=allocation[light][1];
+        }
+        environment.local_shadow_texture=m_local_atlas;
+        environment.parameters.local_shadow_atlas={float(tile_size),float(columns),float(columns*tile_size),float(rows*tile_size)};
         return true;
     }
 
@@ -578,6 +664,7 @@ private:
     PropMeshHandle m_transient_mesh{};
     std::uint32_t m_transient_index_count = 0;
     ShadowMapResources m_maps;
+    RHITextureHandle m_local_atlas{};
     RenderGraph m_graph;
     ExecutionPlan m_plan;
     std::array<GraphPassHandle,4> m_passes{};

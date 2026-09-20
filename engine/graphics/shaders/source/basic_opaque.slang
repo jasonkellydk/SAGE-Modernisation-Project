@@ -1,4 +1,5 @@
 #include "resource_access.slangh"
+#include "pbr_brdf.slangh"
 struct BasicOpaqueVertexInput
 {
     float3 position : POSITION;
@@ -140,6 +141,7 @@ BasicOpaqueVertexOutput basic_opaque_skinned_vertex(SkinnedOpaqueVertexInput inp
 float4 basic_opaque_pixel(BasicOpaqueVertexOutput input) : SV_TARGET
 {
     float3 light_color = 1.0.xxx;
+    float3 pbr_color=0;
     const GPUMaterialData material = Materials()[input.material_index];
     float4 albedo = 1.0.xxxx;
     const uint texture_index = material.texture_indices[0];
@@ -277,10 +279,27 @@ float4 basic_opaque_pixel(BasicOpaqueVertexOutput input) : SV_TARGET
     if (material.parameters[1].x > 0.5)
     {
         const GPULightData light = Lights()[0];
-        const float distance_to_light = length(input.world_position - light.position_range.xyz);
-        const float attenuation = saturate(1.0 - distance_to_light / max(light.position_range.w, 0.0001));
-        const float enabled = (light.flags & 1) != 0 ? 1.0 : 0.0;
-        light_color = light.color_inner_angle.rgb * light.direction_intensity.w * (0.2 + 0.8 * attenuation) * enabled;
+        const float3 view=Surface_Normalize(Views()[0].camera_position.xyz-input.world_position,float3(0,0,1));
+        float3 normal=Surface_Normalize(cross(ddx(input.world_position),ddy(input.world_position)),float3(0,0,1));
+        if(dot(normal,view)<0) normal=-normal;
+        const float3 delta=light.position_range.xyz-input.world_position;
+        const float distance_to_light=length(delta);
+        const float3 direction=light.type==0 ? Surface_Normalize(-light.direction_intensity.xyz,normal) : Surface_Normalize(delta,normal);
+        float attenuation=light.type==0 ? 1 : Surface_Light_Attenuation(distance_to_light,light.position_range.w,light.position_range.w*.5);
+        if(light.type==2) {
+            const float cosine=dot(-direction,Surface_Normalize(light.direction_intensity.xyz,-direction));
+            attenuation*=smoothstep(cos(light.outer_angle),cos(light.color_inner_angle.w),cosine);
+        }
+        const float enabled=(light.flags&1)!=0 ? 1 : 0;
+        const float3 base=Surface_Linear(input.color.rgb*material.parameters[0].rgb*albedo.rgb);
+        const float roughness=material.parameters[1].y>0 ? clamp(material.parameters[1].y,.05,1) : .7;
+        const float metallic=saturate(material.parameters[1].z);
+        const float3 lit=Surface_PBR(base,normal,view,direction,roughness,metallic)
+            *light.color_inner_angle.rgb*light.direction_intensity.w*attenuation*enabled;
+        // The generic renderer also uses GGX; texture-free materials use factors.
+        light_color=1;
+        pbr_color=Surface_Encoded(lit);
+
     }
     const float4 color = float4(input.color.rgb * material.parameters[0].rgb * albedo.rgb * light_color,
         input.color.a * material.parameters[0].a * albedo.a);
@@ -288,6 +307,7 @@ float4 basic_opaque_pixel(BasicOpaqueVertexOutput input) : SV_TARGET
         discard;
 
     float4 output = color;
+    if(material.parameters[1].x > .5) output.rgb=pbr_color;
     if ((material.flags & (1u << 7)) != 0 && Views()[0].fog_start_end.z > 0.5)
     {
         const float fog_distance = length(input.world_position - Views()[0].camera_position.xyz);

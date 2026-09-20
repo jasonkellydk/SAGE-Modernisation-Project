@@ -17,6 +17,8 @@
 #include <limits>
 #include <string_view>
 #include <vector>
+#include <thread>
+#include <chrono>
 
 #if defined(RTS_PROFILE_TRACY)
 #include <tracy/Tracy.hpp>
@@ -28,6 +30,7 @@
 import Graphics.Scene.Particles.Renderer;
 import Assets.Runtime;
 import Assets.Cache;
+import Assets.States;
 import Assets.Textures;
 import Graphics.Scene.Beams;
 import Graphics.Scene.Screen.Distortion;
@@ -46,7 +49,6 @@ bool Build_Graphics_Particle_Texture(const char *texture_name, Graphics::Texture
     auto* cache=Assets::Try_Get_Asset_Cache();
     if (!cache) return false;
     const auto handle=cache->Request_Texture(texture_name);
-    cache->Wait(handle);
     const auto* texture=cache->Try_Get_Texture(handle);
     if (!texture || !texture->Has_Pixels()) return false;
     const auto source=texture->Pixels();
@@ -93,6 +95,22 @@ void W3DParticleSystemManager::preloadAssets(TimeOfDay timeOfDay)
 	ParticleSystemManager::preloadAssets(timeOfDay);
 	const bool sprites=Graphics::GetParticleRenderer().Is_Initialized();
 	const bool streaks=Graphics::GetBeamRenderer().Is_Initialized();
+	auto* cache=Assets::Try_Get_Asset_Cache();
+	std::vector<Assets::TextureAssetHandle> pending;
+	if (cache) for (auto it=beginParticleSystemTemplate();it!=endParticleSystemTemplate();++it) {
+		for (const auto* name : {it->second->getSpriteTextureName(),it->second->getStreakTextureName(),it->second->getNormalTextureName()})
+			if (name && !name->isEmpty()) pending.push_back(cache->Request_Texture(name->str()));
+	}
+	if (cache && sprites && TheWeatherSetting && !TheWeatherSetting->m_snowTexture.isEmpty())
+		pending.push_back(cache->Request_Texture(TheWeatherSetting->m_snowTexture.str()));
+	// File IO/decode stays on cache workers. The owner services the loading UI
+	// until publication, so GPU material creation cannot spill into first fire.
+	if (cache) while (std::any_of(pending.begin(),pending.end(),[&](auto handle) {
+		return cache->Get_State(handle)==Assets::AssetState::Loading;
+	})) {
+		TheGameLogic->refreshLoadScreen();
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	}
 
 	// Rendering consumes decoded asset-cache pixels and renderer-owned materials.
 	// The base preload only visits the W3D texture catalog, leaving the modern
@@ -100,9 +118,10 @@ void W3DParticleSystemManager::preloadAssets(TimeOfDay timeOfDay)
 	for (auto it=beginParticleSystemTemplate();it!=endParticleSystemTemplate();++it) {
 		const auto* particle=it->second;
 		if (const auto* texture=particle->getSpriteTextureName();sprites && texture && !texture->isEmpty())
-			Ensure_Graphics_Material(texture->str());
+			Ensure_Graphics_Material(texture->str(),particle->getNormalTextureName()->str());
 		if (const auto* texture=particle->getStreakTextureName();streaks && texture && !texture->isEmpty())
 			Ensure_Graphics_Streak_Material(texture->str());
+		TheGameLogic->refreshLoadScreen();
 	}
 	if (sprites && TheWeatherSetting && !TheWeatherSetting->m_snowTexture.isEmpty())
 		Ensure_Graphics_Material(TheWeatherSetting->m_snowTexture.str());
@@ -180,16 +199,88 @@ void W3DParticleSystemManager::Reset_Graphics_Particle_Bindings() noexcept
 		if (renderer.Is_Initialized()) {
 			renderer.Destroy_Material(binding.material);
 			renderer.Destroy_Texture(binding.texture);
+            if(binding.normal_texture.Is_Valid()) renderer.Destroy_Texture(binding.normal_texture);
 		}
 	}
 	m_graphicsEmitters.clear();
     m_graphicsEmitterSlots.clear();
+    m_emissionColors.clear();
 	m_graphicsStreaks.clear();
 	m_graphicsMaterials.clear();
 	m_graphicsStreakMaterials.clear();
 	m_graphicsSyncStamp = 0;
 	m_graphicsParticlesPrepared = false;
 	m_weatherParticlesReady = false;
+}
+
+void W3DParticleSystemManager::Append_Emission_Lights(std::vector<Graphics::EnvironmentLocalLight>& lights)
+{
+    auto* cache=Assets::Try_Get_Asset_Cache();
+
+    const auto linear=[](float value) {
+        value=std::max(value,0.f);
+        return value<=.04045f ? value/12.92f : std::pow((value+.055f)/1.055f,2.4f);
+    };
+    for(auto* system:getAllParticleSystems()) {
+        // Additive particles represent emitted radiance. Smoke, dust and
+        // distortion particles receive light, but do not generate it.
+        if(!system || (system->getShaderType()!=ParticleSystemInfo::ADDITIVE
+            && system->m_renderMode!=ParticleSystemInfo::EMISSIVE_SPRITE)
+            || system->isUsingSmudge() || !system->getFirstParticle()) continue;
+        const std::string name=system->getParticleTypeName().str();
+        const int frames=std::clamp(system->m_animationFrames,1,256);
+        const int columns=std::clamp(system->m_animationColumns,1,frames);
+        const int rows=(frames+columns-1)/columns;
+        const std::string key=name+":"+std::to_string(columns)+":"+std::to_string(frames);
+        auto found=m_emissionColors.find(key);
+        if(found==m_emissionColors.end()) {
+            if(!cache) continue;
+            const auto handle=cache->Request_Texture(name);
+            const auto* texture=cache->Try_Get_Texture(handle);
+            if(!texture || !texture->Has_Pixels()) continue;
+            std::vector<std::array<float,3>> emission(frames);
+            const auto pixels=texture->Pixels();
+            for(int frame=0;frame<frames;++frame)
+                for(unsigned y=0;y<16;++y) for(unsigned x=0;x<16;++x) {
+                    const unsigned px=std::min(texture->Width()-1,unsigned(((frame%columns)+(x+.5f)/16)*texture->Width()/columns));
+                    const unsigned py=std::min(texture->Height()-1,unsigned(((frame/columns)+(y+.5f)/16)*texture->Height()/rows));
+                    const auto offset=std::size_t(py)*texture->Row_Pitch()+px*4;
+                    const float alpha=std::to_integer<unsigned>(pixels[offset+3])/255.f;
+                    for(unsigned c=0;c<3;++c)
+                        emission[frame][c]+=linear(std::to_integer<unsigned>(pixels[offset+c])/255.f)*alpha/256.f;
+                }
+            found=m_emissionColors.emplace(key,std::move(emission)).first;
+        }
+        std::array<float,3> power{},center{};
+        float weight_sum=0;
+        for(auto* particle=system->getFirstParticle();particle;particle=particle->m_systemNext) {
+            const auto* p=particle->getPosition();const auto* color=particle->getColor();
+            const float size=std::max(particle->getSize(),0.f);
+            const float coverage=system->getShaderType()==ParticleSystemInfo::ADDITIVE ? 1.f : std::clamp(particle->getAlpha(),0.f,1.f);
+            const float area=size*size*.78539816f*coverage;
+            const float frame=system->m_randomStartFrame
+                ? std::fmod(particle->getAgeSeconds()*std::max(0.f,system->m_animationFPS)+float(particle->getPersonality()%frames),float(frames))
+                : std::min(particle->getAgeSeconds()*std::max(0.f,system->m_animationFPS),float(frames-1));
+            const int first=int(frame),next=std::min(first+1,frames-1);
+            std::array<float,3> emission{};
+            for(unsigned c=0;c<3;++c) emission[c]=std::lerp(found->second[first][c],found->second[next][c],frame-first);
+            const std::array rgb{linear(color->red),linear(color->green),linear(color->blue)};
+            float weight=0;
+            for(unsigned c=0;c<3;++c) {
+                const float energy=rgb[c]*emission[c]*area;
+                power[c]+=energy;weight+=energy;
+            }
+            center[0]+=p->x*weight;center[1]+=p->y*weight;center[2]+=p->z*weight;
+            weight_sum+=weight;
+        }
+        if(weight_sum<=1e-5f) continue;
+        Graphics::EnvironmentLocalLight light;
+        // Bound the influence where incident irradiance falls below .02.
+        const float radius=std::sqrt(std::max({power[0],power[1],power[2]})/.02f);
+        light.position_range={center[0]/weight_sum,center[1]/weight_sum,center[2]/weight_sum,radius};
+        light.intensity={power[0],power[1],power[2],1};
+        lights.push_back(light);
+    }
 }
 
 bool W3DParticleSystemManager::Set_Graphics_Particle_View(const Graphics::View &view) noexcept
@@ -208,7 +299,7 @@ bool W3DParticleSystemManager::Render_Graphics_Particles(Graphics::CommandList &
 		commands,
 		targets.backbuffer.texture,
 		targets.depth.texture,
-		{0, 0, targets.backbuffer.width, targets.backbuffer.height, 0.0f, 1.0f}))
+		{0, 0, targets.backbuffer.width, targets.backbuffer.height, 0.0f, 1.0f},Graphics::RHITextureFormat::D24_UNorm_S8))
 		return false;
 
 	return Graphics::GetScreenDistortionRenderer().Render(
@@ -274,6 +365,7 @@ void W3DParticleSystemManager::Prepare_Graphics_Particles()
 			if (streak == nullptr)
 				continue;
 			streak->sync_stamp = m_graphicsSyncStamp;
+            if(!streak->material.Is_Valid()) streak->material=Ensure_Graphics_Streak_Material(streak->texture_name.c_str());
 			Update_Graphics_Streak(*system, *streak);
 			continue;
 		}
@@ -292,8 +384,8 @@ void W3DParticleSystemManager::Prepare_Graphics_Particles()
 		emitter.position = {system_position.x, system_position.y, system_position.z};
 		emitter.velocity = drift != nullptr ? Graphics::Vector3{drift->x, drift->y, drift->z} : Graphics::Vector3{};
         const char* texture_name=system->getParticleTypeName().str();
-        if (binding->texture_name!=texture_name) {
-            binding->material=Ensure_Graphics_Material(texture_name);
+        if (binding->texture_name!=texture_name || !binding->material.Is_Valid()) {
+            binding->material=Ensure_Graphics_Material(texture_name,system->m_normalTexture.str());
             binding->texture_name=texture_name;
         }
         emitter.material=binding->material;
@@ -303,7 +395,7 @@ void W3DParticleSystemManager::Prepare_Graphics_Particles()
 		if (!renderer.Update_Emitter(emitter_handle, emitter))
 			continue;
 
-		const std::size_t layer_count = system->isUsingVolumeParticles()
+		const std::size_t layer_count = system->m_renderMode == ParticleSystemInfo::SPRITE && system->isUsingVolumeParticles()
 			? std::clamp<std::size_t>(system->getVolumeParticleDepth(), 1, 16)
 			: 1;
 		const float layer_scale = layer_count > 1 ? 0.1f / static_cast<float>(layer_count) : 0.0f;
@@ -333,6 +425,12 @@ void W3DParticleSystemManager::Prepare_Graphics_Particles()
                 m_graphicsSizes[count]=render_size;
                 m_graphicsColorR[count]=rgb.red;m_graphicsColorG[count]=rgb.green;m_graphicsColorB[count]=rgb.blue;
                 m_graphicsColorA[count]=alpha;m_graphicsAngles[count]=angle;
+                const int frames=std::clamp(system->m_animationFrames,1,256);
+                const int columns=std::clamp(system->m_animationColumns,1,frames);
+                const float frame=system->m_randomStartFrame
+                    ? std::fmod(particle->getAgeSeconds()*std::max(0.f,system->m_animationFPS)+float(particle->getPersonality()%frames),float(frames))
+                    : std::min(particle->getAgeSeconds()*std::max(0.f,system->m_animationFPS),float(frames-1));
+                m_graphicsAnimations[count]={frame,float(columns),float((frames+columns-1)/columns),float(frames)};
                 ++count;
             };
             if (layer_count==1) {
@@ -373,7 +471,8 @@ void W3DParticleSystemManager::Prepare_Graphics_Particles()
 			std::span<const Graphics::MaterialHandle>(m_graphicsParticleMaterials.data(), count),
 			std::span<const Graphics::ParticleEmitterFlags>(m_graphicsEmitterFlags.data(), count),
 			{},
-			std::span<const Graphics::PipelineHandle>(m_graphicsPipelines.data(), count)
+			std::span<const Graphics::PipelineHandle>(m_graphicsPipelines.data(), count),
+            {}, std::span<const Graphics::ParticleAnimation>(m_graphicsAnimations.data(),count)
 		};
 		if (renderer.Append_Particles(emitter_handle, data))
 			m_onScreenParticleCount += static_cast<Int>(source_count);
@@ -460,7 +559,7 @@ W3DParticleSystemManager::GraphicsEmitterBinding* W3DParticleSystemManager::Ensu
     auto timing=navigation::diagnostics::frameCapture().measure("Graphics.Particles.NewEmitter",TheGameLogic?TheGameLogic->getFrame():0);
 
 	Graphics::ParticleEmitter emitter;
-	emitter.material = Ensure_Graphics_Material(system.getParticleTypeName().str());
+	emitter.material = Ensure_Graphics_Material(system.getParticleTypeName().str(),system.m_normalTexture.str());
 	emitter.flags = Graphics_Particle_Flags(system);
 	emitter.pipeline = Graphics::GetParticleRenderer().Pipeline_For_Flags(emitter.flags);
 	emitter.max_particles = static_cast<std::uint32_t>(MAX_PARTICLES_PER_SYSTEM);
@@ -479,14 +578,14 @@ W3DParticleSystemManager::GraphicsEmitterBinding* W3DParticleSystemManager::Ensu
     return &m_graphicsEmitters.back();
 }
 
-Graphics::MaterialHandle W3DParticleSystemManager::Ensure_Graphics_Material(const char *texture_name)
+Graphics::MaterialHandle W3DParticleSystemManager::Ensure_Graphics_Material(const char *texture_name, const char *normal_name)
 {
 	GENERALS_GRAPHICS_PROFILE_SCOPE("W3DParticleSystemManager::Ensure_Graphics_Material");
 	if (texture_name == nullptr || *texture_name == '\0')
 		return Graphics::GetParticleRenderer().Default_Material();
 
 	for (const GraphicsMaterialBinding &binding : m_graphicsMaterials)
-		if (binding.texture_name == texture_name)
+		if (binding.texture_name == texture_name && binding.normal_name == normal_name)
 			return binding.material;
     auto timing=navigation::diagnostics::frameCapture().measure("Graphics.Particles.NewMaterial",TheGameLogic?TheGameLogic->getFrame():0);
 
@@ -495,19 +594,29 @@ Graphics::MaterialHandle W3DParticleSystemManager::Ensure_Graphics_Material(cons
 	Graphics::Texture texture_description;
 	std::vector<std::byte> pixels;
 	if (!Build_Graphics_Particle_Texture(texture_name, texture_description, pixels)) {
-		m_graphicsMaterials.push_back({texture_name, {}, unavailable_material});
 		return unavailable_material;
 	}
 
 	const Graphics::TextureHandle texture = renderer.Create_Texture(texture_description, texture_description.pixel_data);
 	if (!texture.Is_Valid()) {
-		m_graphicsMaterials.push_back({texture_name, {}, unavailable_material});
 		return unavailable_material;
 	}
 
-	Graphics::Material material;
+	Graphics::TextureHandle normal_texture{};
+    if (normal_name && *normal_name) {
+        Graphics::Texture normal_description;
+        std::vector<std::byte> normal_pixels;
+        if (!Build_Graphics_Particle_Texture(normal_name,normal_description,normal_pixels)) {
+            renderer.Destroy_Texture(texture);
+            return unavailable_material;
+        }
+        normal_texture=renderer.Create_Texture(normal_description,normal_description.pixel_data);
+        if (!normal_texture.Is_Valid()) { renderer.Destroy_Texture(texture); return unavailable_material; }
+    }
+    Graphics::Material material;
 	material.shader = renderer.Particle_Shader();
 	material.textures[0] = texture;
+    material.textures[1] = normal_texture;
 	material.parameters.values[0] = 1.0f;
 	material.parameters.values[1] = 1.0f;
 	material.parameters.values[2] = 1.0f;
@@ -515,17 +624,22 @@ Graphics::MaterialHandle W3DParticleSystemManager::Ensure_Graphics_Material(cons
 	const Graphics::MaterialHandle material_handle = renderer.Create_Material(material);
 	if (!material_handle.Is_Valid()) {
 		renderer.Destroy_Texture(texture);
-		m_graphicsMaterials.push_back({texture_name, {}, unavailable_material});
+        if(normal_texture.Is_Valid()) renderer.Destroy_Texture(normal_texture);
 		return unavailable_material;
 	}
 
-	m_graphicsMaterials.push_back({texture_name, texture, material_handle});
+	m_graphicsMaterials.push_back({texture_name, texture, material_handle, normal_name, normal_texture});
 	return material_handle;
 }
 
 Graphics::ParticleEmitterFlags W3DParticleSystemManager::Graphics_Particle_Flags(const ParticleSystem &system) const noexcept
 {
 	Graphics::ParticleEmitterFlags flags = Graphics::ParticleEmitterFlags::Enabled;
+    if (system.m_renderMode == ParticleSystemInfo::LIT_SPRITE)
+        flags=flags|Graphics::ParticleEmitterFlags::LitSprite;
+    if (system.m_renderMode == ParticleSystemInfo::EMISSIVE_SPRITE)
+        flags=flags|Graphics::ParticleEmitterFlags::EmissiveSprite;
+
 	if (system.m_isGroundAligned == FALSE)
 		flags = flags | Graphics::ParticleEmitterFlags::Billboard;
 
@@ -597,7 +711,7 @@ Graphics::MaterialHandle W3DParticleSystemManager::Ensure_Graphics_Streak_Materi
 			}
 		}
 	}
-	if (!binding.material.Is_Valid()) return renderer.Default_Material();
+	if (!binding.material.Is_Valid()) return {};
 	// Emitters borrow these immutable resources. Destroying one streak only
 	// releases its beam instances; the shared material lives until map reset.
 	const auto material=binding.material;

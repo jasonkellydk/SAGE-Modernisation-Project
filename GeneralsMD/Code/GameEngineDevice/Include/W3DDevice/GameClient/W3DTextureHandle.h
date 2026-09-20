@@ -2,6 +2,11 @@
 
 #include <cstdint>
 #include <memory>
+#include <array>
+#include <optional>
+#include <functional>
+import Assets.Materials;
+import Graphics.Scene.Props.MaterialSubmission;
 
 #include "WWLib/always.h"
 #include "WWLib/refcount.h"
@@ -85,7 +90,9 @@ public:
         bool allow_compression = true,
         bool allow_reduction = true,
         TexAssetType asset_type = TEX_REGULAR,
-        Graphics::TextureResidencyClock clock = {});
+        Graphics::TextureResidencyClock clock = {},
+        bool linear_data = false,
+        std::function<bool(Assets::ImageBuffer&)> transform = {});
 
     W3DTextureHandle(
         Graphics::TextureEdit* surface,
@@ -113,6 +120,15 @@ public:
 
     void Init();
     bool Ensure_Render_Backend_Texture();
+    // Resolves optional authored companions once, owned with the source texture.
+    std::optional<Graphics::PropMaterialTexture> Resolve_PBR_Material();
+    W3DTextureHandle* PBR_Albedo() const noexcept { return m_pbr_textures[0].Peek(); }
+    void Enable_HDR_Render_Target() {
+        if (!m_render_target) return;
+        m_texture_description.format = Graphics::RHITextureFormat::RGBA16_Float;
+        Invalidate(); Ensure_Render_Backend_Texture();
+    }
+    void Inherit_PBR_Material(W3DTextureHandle* source) { m_pbr_source.Assign_Add_Ref(source); }
     void Invalidate() noexcept;
 
     Graphics::TextureResource* Peek_Render_Backend_Texture() const noexcept
@@ -206,6 +222,14 @@ protected:
     void Configure_File_Load();
 
 private:
+    bool m_pbr_probed = false;
+    RefCountPtr<W3DTextureHandle> m_pbr_source;
+    bool m_pbr_available = false;
+    bool m_pbr_data = false;
+    std::function<bool(Assets::ImageBuffer&)> m_image_transform;
+    std::uint64_t m_load_revision = 0;
+    Assets::MaterialSurfaceParameters m_pbr_surface{};
+    std::array<RefCountPtr<W3DTextureHandle>, Assets::MaterialSurfaceTextureCount + 1> m_pbr_textures;
     struct LoadState;
 
     std::unique_ptr<Graphics::ResourceLoadJob> Make_Load_Job(

@@ -8,6 +8,7 @@ module;
 #include <mutex>
 #include <thread>
 #include <utility>
+#include <vector>
 
 export module Graphics.Resources.Loading.Queue;
 
@@ -43,14 +44,15 @@ public:
     ResourceLoadQueue& operator=(const ResourceLoadQueue&) = delete;
     ~ResourceLoadQueue() { Shutdown(); }
 
-    bool Start()
+    bool Start(unsigned workers = 1)
     {
         std::lock_guard lock(m_mutex);
-        if (m_worker.joinable()) return m_accepting && m_owner==std::this_thread::get_id();
+        if (!m_workers.empty()) return m_accepting && m_owner==std::this_thread::get_id();
         m_owner=std::this_thread::get_id();
         m_stopping=false;
         m_accepting=true;
-        m_worker=std::thread([this] { Worker(); });
+        for (unsigned i=0;i<(workers ? workers : 1);++i)
+            m_workers.emplace_back([this] { Worker(); });
         return true;
     }
 
@@ -70,13 +72,14 @@ public:
     {
         if (!source) return false;
         std::shared_ptr<Entry> entry;
-        bool owner=false;
+        bool owner=false,created=false;
         {
             std::lock_guard lock(m_mutex);
             if (!m_accepting) return false;
             owner=m_owner==std::this_thread::get_id();
             auto [position,inserted]=m_entries.try_emplace(source);
             if (inserted) {
+                created=true;
                 position->second=std::make_shared<Entry>();
                 position->second->source=source;
                 m_pending.push_back(position->second);
@@ -88,14 +91,19 @@ public:
             }
         }
         m_changed.notify_all();
-        if (owner) Process(entry,priority==ResourceLoadPriority::Immediate);
+        if (owner && (created || priority==ResourceLoadPriority::Immediate))
+            Process(entry,priority==ResourceLoadPriority::Immediate);
         return true;
     }
 
-    void Update(void (*progress)() = nullptr)
+    // Limit publication work during rendering. Drain explicitly opts out while
+    // pumping progress even when a worker has not completed another image yet.
+    void Update(void (*progress)() = nullptr,
+        std::chrono::steady_clock::duration budget = std::chrono::milliseconds(2))
     {
         if (!Is_Owner_Thread()) return;
         auto last_progress=std::chrono::steady_clock::now();
+        const auto deadline=last_progress+budget;
         for (;;) {
             std::shared_ptr<Entry> entry;
             {
@@ -109,6 +117,7 @@ public:
                 progress(); last_progress=now;
             }
             Process(entry,false);
+            if (std::chrono::steady_clock::now()>=deadline) break;
         }
     }
 
@@ -116,10 +125,13 @@ public:
     {
         if (!Is_Owner_Thread()) return false;
         for (;;) {
-            Update(progress);
+            Update(progress,std::chrono::seconds(1));
             std::unique_lock lock(m_mutex);
             if (m_entries.empty()) return true;
-            m_changed.wait(lock,[this] { return !m_pending.empty() || !m_ready.empty() || m_entries.empty(); });
+            m_changed.wait_for(lock,std::chrono::milliseconds(20),
+                [this] { return !m_pending.empty() || !m_ready.empty() || m_entries.empty(); });
+            lock.unlock();
+            if (progress) progress();
         }
     }
 
@@ -127,7 +139,7 @@ public:
     {
         {
             std::lock_guard lock(m_mutex);
-            if (!m_worker.joinable()) return true;
+            if (m_workers.empty()) return true;
             if (m_owner!=std::this_thread::get_id()) return false;
             m_accepting=false;
         }
@@ -137,7 +149,8 @@ public:
             m_stopping=true;
         }
         m_changed.notify_all();
-        m_worker.join();
+        for (auto& worker : m_workers) worker.join();
+        m_workers.clear();
         std::lock_guard lock(m_mutex);
         m_pending.clear(); m_decode.clear(); m_ready.clear();
         m_owner={};
@@ -157,7 +170,7 @@ private:
 
     void Process(const std::shared_ptr<Entry>& entry, bool immediate)
     {
-        bool prepare=false;
+        bool prepare=false,queued_decode=false;
         {
             std::lock_guard lock(m_mutex);
             immediate=immediate || entry->immediate;
@@ -174,10 +187,14 @@ private:
             std::lock_guard lock(m_mutex);
             if (prepared) {
                 entry->phase=Phase::Prepared;
-                if (!immediate) m_decode.push_back(entry);
+                if (!immediate) {m_decode.push_back(entry);queued_decode=true;}
             } else entry->phase=Phase::Ready;
         }
         m_changed.notify_all();
+
+        // A fast worker may finish before Request returns. Publication still
+        // belongs to the next budgeted Update, never this unbudgeted request.
+        if(queued_decode) return;
 
         bool decode=false;
         {
@@ -216,9 +233,10 @@ private:
             std::shared_ptr<Entry> entry;
             {
                 std::unique_lock lock(m_mutex);
-                m_changed.wait(lock,[this] { return m_stopping || !m_decode.empty(); });
+                // Do not decode an entire map into RAM while the owner is busy.
+                m_changed.wait(lock,[this] { return m_stopping || (!m_decode.empty() && m_ready.size()<32); });
                 if (m_stopping) return;
-                entry=m_decode.back(); m_decode.pop_back();
+                entry=m_decode.front(); m_decode.pop_front();
                 if (entry->phase!=Phase::Prepared) continue;
                 entry->phase=Phase::Decoding;
             }
@@ -236,7 +254,7 @@ private:
 
     mutable std::mutex m_mutex;
     std::condition_variable m_changed;
-    std::thread m_worker;
+    std::vector<std::thread> m_workers;
     std::thread::id m_owner;
     bool m_accepting=false;
     bool m_stopping=false;

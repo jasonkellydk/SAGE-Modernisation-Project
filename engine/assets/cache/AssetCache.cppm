@@ -21,6 +21,8 @@ import Assets.Cache.ModelLoadTask;
 import Assets.Cache.MaterialLoadTask;
 import Assets.Cache.TextureLoadTask;
 import Assets.Cache.FontLoadTask;
+import Assets.Adapters.DDS;
+import Assets.Adapters.TGA.Image;
 import Assets.Handles;
 import Assets.Identity;
 import Assets.Importers.Models;
@@ -428,7 +430,20 @@ MaterialAssetHandle AssetCache::Request_Material(AssetIdentity identity, Materia
 			std::launch::async,
 			[this, entry]() {
 			try {
-				const MaterialAssetDesc description = entry->description;
+				MaterialAssetDesc description = entry->description;
+                Discover_PBR_Textures(description, [this](const std::string& name) {
+                    if (!m_source) return false;
+                    const auto bytes = m_source({AssetType::Texture, Canonicalize_Asset_Name(name)});
+                    TGAImageInfo tga;
+                    DDSLayout dds;
+                    return Read_TGA_Info(bytes, bytes.size(), tga) || Read_DDS_Layout(bytes, bytes.size(), dds);
+                });
+                if (description.surface.shading_model == MaterialShadingModel::Legacy
+                    && description.render_mode != MaterialRenderMode::Additive
+                    && description.render_mode != MaterialRenderMode::Multiply)
+                    description.surface = Upgrade_Legacy_Surface(description.primary_texture.empty() ? description.name : description.primary_texture,
+                        description.shininess,std::max({description.specular_color.r,
+                            description.specular_color.g,description.specular_color.b}));
 				TextureAssetHandle primary_texture = TextureAssetHandle::Invalid();
 				TextureAssetHandle secondary_texture = TextureAssetHandle::Invalid();
 				MaterialSurfaceTextureHandles surface_textures{};

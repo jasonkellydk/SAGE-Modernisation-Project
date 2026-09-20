@@ -33,6 +33,13 @@ import Graphics.Resources.Textures.Quality;
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <future>
+#include <fstream>
+#include <chrono>
+#include <memory>
+#include "WWLib/ffactory.h"
+#include "GameLogic/GameLogic.h"
+import Graphics.Frame.RenderServices;
 #include "Common/STLTypedefs.h"
 
 #include "Common/DataChunk.h"
@@ -996,9 +1003,82 @@ Bool WorldHeightMap::ParseBlendTileDataChunk(DataChunkInput &file, DataChunkInfo
 	return pThis->ParseBlendTileData(file, info, userData);
 }
 
-/** Function to read in the tiles for a texture class. */
-void WorldHeightMap::readTexClass(TXTextureClass *texClass, TileData **tileData)
+namespace {
+Bool Read_Independent_Tiles(const FileFactoryClass::IndependentSource& source, TileData** tileData, int width, int extent)
 {
+    std::vector<RefCountPtr<TileData>> owners;
+    std::vector<TileData*> tiles;
+    for (int i = 0; i < width * width; ++i) {
+    	owners.push_back(RefCountPtr<TileData>::Create_No_Add_Ref(MSGNEW("TerrainDecode") TileData));
+    	tiles.push_back(owners.back().Peek());
+    }
+    auto decode = std::async(std::launch::async, [source, width, extent, &tiles] {
+    	std::ifstream file(source.path, std::ios::binary | std::ios::ate);
+    	if (!file) return false;
+    	const auto end = file.tellg();
+    	if (end < 0 || static_cast<std::uint64_t>(end) < source.offset) return false;
+    	const auto available = static_cast<std::uint64_t>(end) - source.offset;
+    	const auto length = source.bounded ? source.size : available;
+    	if (!length || length > available || length > 512u * 1024u * 1024u) return false;
+    	struct ImageStream final : InputStream {
+    		std::vector<unsigned char> bytes;
+    		std::size_t offset = 0;
+    		Int read(void* destination, Int count) override {
+    			if (count < 0 || static_cast<std::size_t>(count) > bytes.size() - offset) return 0;
+    			std::memcpy(destination, bytes.data() + offset, count); offset += count; return count;
+    		}
+    	} stream;
+    	stream.bytes.resize(static_cast<std::size_t>(length));
+    	file.seekg(static_cast<std::streamoff>(source.offset));
+    	if (!file.read(reinterpret_cast<char*>(stream.bytes.data()), static_cast<std::streamsize>(length))) return false;
+    	return bool(WorldHeightMap::readTiles(&stream, tiles.data(), width, extent));
+    });
+    while (decode.wait_for(std::chrono::milliseconds(1)) != std::future_status::ready)
+    	if (TheGameLogic && !Graphics::Get_Render_Services().Is_Rendering()) TheGameLogic->refreshLoadScreen();
+    const bool decoded = decode.get();
+    if (decoded) for (int i = 0; i < width * width; ++i) {
+    	auto*& destination = tileData[i];
+    	REF_PTR_SET(destination, tiles[i]);
+    }
+    return decoded;
+}
+}
+
+Bool WorldHeightMap::readTilesFromFile(File* file, TileData** tiles, Int width, Int extent)
+{
+    if (!file || !tiles || width < 1 || width > 10) return false;
+    if (_TheFileFactory) if (auto source = _TheFileFactory->Resolve_Independent_Source(file->getName())) {
+        if (source->path.empty()) return false;
+        return Read_Independent_Tiles(*source, tiles, width, extent);
+    }
+    file->seek(0, File::START);
+    GDIFileStream stream(file);
+    return readTiles(&stream, tiles, width, extent);
+}
+
+/** Function to read in the tiles for a texture class. */
+void WorldHeightMap::readTexClass(TXTextureClass *texClass, TileData **tileData, const char* suffix)
+{
+	// Resolve the mounted archive on its owner thread. The worker owns its file
+	// handle and private tiles; neither filesystem caches nor reference counts
+	// are accessed by the decoder. Publish only after every mip is complete.
+	if (_TheFileFactory && texClass->width >= 1 && texClass->width <= 10 &&
+		texClass->numTiles >= texClass->width * texClass->width) {
+		if (auto* terrain = TheTerrainTypes->findTerrain(texClass->name)) {
+			std::string path = std::string(TERRAIN_TGA_DIR_PATH) + terrain->getTexture().str();
+			auto companion = path;
+			const auto dot = companion.find_last_of('.');
+			companion.insert(dot == std::string::npos ? companion.size() : dot, suffix ? suffix : "_albedo");
+			auto source = _TheFileFactory->Resolve_Independent_Source(companion.c_str());
+			if (source && source->path.empty() && !suffix)
+				source = _TheFileFactory->Resolve_Independent_Source(path.c_str());
+			if (source) {
+				if (source->path.empty()) return;
+				Read_Independent_Tiles(*source, tileData + texClass->firstTile, texClass->width, TERRAIN_TILE_PIXEL_EXTENT);
+				return;
+			}
+		}
+	}
 	File *theFile = nullptr;
 
 	// get the file from the description in TheTerrainTypes
@@ -1013,7 +1093,12 @@ void WorldHeightMap::readTexClass(TXTextureClass *texClass, TileData **tileData)
 	else
 	{
 		texturePath = std::string(TERRAIN_TGA_DIR_PATH) + terrain->getTexture().str();
-		theFile = TheFileSystem->openFile( texturePath.c_str(), File::READ|File::BINARY);
+		auto companion = texturePath;
+		const auto dot = companion.find_last_of('.');
+		companion.insert(dot == std::string::npos ? companion.size() : dot, suffix ? suffix : "_albedo");
+		theFile = TheFileSystem->openFile(companion.c_str(), File::READ|File::BINARY);
+		if (!theFile && !suffix)
+			theFile = TheFileSystem->openFile(texturePath.c_str(), File::READ|File::BINARY);
 	}
 
 	if (theFile != nullptr) {

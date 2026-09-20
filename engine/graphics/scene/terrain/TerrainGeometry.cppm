@@ -32,6 +32,60 @@ export struct TerrainCell final
     bool operator==(const TerrainCell &) const = default;
 };
 
+// Interpolate on the original triangles so refinement does not smooth away
+// cliffs or change the coarse terrain's silhouette before displacement.
+export std::array<float,4> Terrain_Cell_Weights(const TerrainCell& cell, float x, float y) noexcept
+{
+    if (cell.alternate_diagonal)
+        return x+y <= 1 ? std::array<float,4>{1-x-y,x,0,y}
+            : std::array<float,4>{0,1-y,x+y-1,1-x};
+    return x >= y ? std::array<float,4>{1-x,x-y,y,0}
+        : std::array<float,4>{1-y,0,x,y-x};
+}
+
+// Height callback is sampled in world space, letting adapters share heights
+// across UV seams. The same generated geometry is used for color and shadows.
+export template<class Height>
+bool Subdivide_Terrain_Cell(const TerrainCell& source, unsigned divisions,
+    std::span<TerrainCell> output, Height&& displacement)
+{
+    if (divisions < 1 || divisions > 8 || output.size() != divisions*divisions) return false;
+    constexpr float cx[]{0,1,1,0}, cy[]{0,0,1,1};
+    for (unsigned y=0; y<divisions; ++y) for (unsigned x=0; x<divisions; ++x) {
+        TerrainCell cell;
+        cell.spacing={source.spacing[0]/divisions,source.spacing[1]/divisions};
+        cell.origin={source.origin[0]+x*cell.spacing[0],source.origin[1]+y*cell.spacing[1]};
+        cell.alternate_diagonal=source.alternate_diagonal;
+        for (unsigned corner=0; corner<4; ++corner) {
+            const float u=(x+cx[corner])/divisions, v=(y+cy[corner])/divisions;
+            const auto weights=Terrain_Cell_Weights(source,u,v);
+            cell.normals[corner]={};
+            for (unsigned k=0; k<4; ++k) {
+                cell.heights[corner]+=weights[k]*source.heights[k];
+                for (unsigned c=0;c<4;++c) cell.colors[corner][c]+=weights[k]*source.colors[k][c];
+                for (unsigned c=0;c<3;++c) cell.normals[corner][c]+=weights[k]*source.normals[k][c];
+                for (unsigned c=0;c<2;++c) {
+                    cell.base_uv[corner][c]+=weights[k]*source.base_uv[k][c];
+                    cell.blend_uv[corner][c]+=weights[k]*source.blend_uv[k][c];
+                }
+            }
+            const float wx=source.origin[0]+u*source.spacing[0], wy=source.origin[1]+v*source.spacing[1];
+            const float offset=displacement(wx,wy);
+            if (!std::isfinite(offset)) return false;
+            cell.heights[corner]+=offset;
+            const float epsilon=std::min(cell.spacing[0],cell.spacing[1])*.1f;
+            const float dx=(displacement(wx+epsilon,wy)-displacement(wx-epsilon,wy))/(2*epsilon);
+            const float dy=(displacement(wx,wy+epsilon)-displacement(wx,wy-epsilon))/(2*epsilon);
+            auto& n=cell.normals[corner];
+            n[0]-=dx*n[2]; n[1]-=dy*n[2];
+            const float length=std::sqrt(n[0]*n[0]+n[1]*n[1]+n[2]*n[2]);
+            if (length > 1e-6f) for (auto& c:n) c/=length;
+        }
+        output[y*divisions+x]=cell;
+    }
+    return true;
+}
+
 export struct TerrainVertex final
 {
     std::array<float, 3> position{};

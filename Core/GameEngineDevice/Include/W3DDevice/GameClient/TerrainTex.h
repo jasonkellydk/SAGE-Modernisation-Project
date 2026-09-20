@@ -33,6 +33,7 @@
 #include "W3DDevice/GameClient/W3DTextureHandle.h"
 #include "WWMath/matrix3d.h"
 #include "Common/AsciiString.h"
+#include <vector>
 #include "W3DDevice/GameClient/TileData.h"
 
 class WorldHeightMap;
@@ -55,10 +56,20 @@ protected:
 	Int m_flatYCell;
 	Int m_flatCellWidth;
 	Int m_flatPixelsPerCell;
+	int m_surfaceRole = -1;
+    // Reduced single-channel CPU copy for geometric displacement; no GPU readback.
+    std::vector<unsigned char> m_heightSamples;
+    unsigned m_heightWidth = 0, m_heightHeight = 0;
+	std::array<RefCountPtr<TerrainTextureClass>, 3> m_surfaceMaps;
 
 public:
 		/// Create texture for a height map.
 		TerrainTextureClass(int height);
+        float Sample_Height(float u, float v) const;
+		TerrainTextureClass(int height, Assets::MaterialTextureRole role);
+		TerrainTextureClass* Surface_Map(unsigned index) const {
+			return index < m_surfaceMaps.size() ? m_surfaceMaps[index].Peek() : nullptr;
+		}
 
 		/// Create texture for a height map.
 		TerrainTextureClass(int height, int width);
@@ -67,7 +78,10 @@ public:
 public:
 	int update(WorldHeightMap *htMap); ///< Sets the pixels, and returns the actual height of the texture.
 	Bool updateFlat(WorldHeightMap *htMap, Int xCell, Int yCell, Int cellWidth, Int pixelsPerCell); ///< Sets the pixels.
-	void Clear_Source_Height_Map() { m_sourceHeightMap = nullptr; }
+	void Clear_Source_Height_Map() {
+		m_sourceHeightMap = nullptr;
+		for (const auto& map : m_surfaceMaps) if (map) map->Clear_Source_Height_Map();
+	}
 };
 
 

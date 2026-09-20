@@ -94,6 +94,7 @@ protected:
 	Int m_numIndices;
 	W3DTextureHandle *m_pReflectionTexture;
 	Graphics::RHITextureHandle m_sceneColorTexture;
+    bool m_underwaterRendered = false;
 	Graphics::RHITextureHandle m_sceneDepthTexture{};
 	WaterSkyboxSystem *m_skyBox;
 	WaterTracksRenderSystem *m_waterTrackSystem;
@@ -156,7 +157,7 @@ protected:
 	bool updateDisplacementTexture();
 	Bool getClippedWaterPlane(W3DCamera *cam, AABoxClass *box);
 	WaterMaterialParameters makeWaterMaterialParameters(bool river,
-		bool reflection, bool underwater) const;
+		bool reflection) const;
 
 	bool generateIndexBuffer(int sizeX, int sizeY);
 	bool generateVertexBuffer(Int sizeX, Int sizeY, Bool doFill);

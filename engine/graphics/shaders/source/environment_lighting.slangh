@@ -1,17 +1,9 @@
 #include "resource_access.slangh"
 #ifndef GRAPHICS_ENVIRONMENT_LIGHTING
 #define GRAPHICS_ENVIRONMENT_LIGHTING
-cbuffer EnvironmentLightingConstants : register(b7)
-{
-    float4 CloudWorldMultiplier;
-    float4 CloudOffsetStrength;
-    float4 EnvironmentAmbient;
-    float4 EnvironmentClipPlane;
-    row_major float4x4 ShadowViewProjection[4];
-    float4 ShadowSplits;
-    float4 ShadowViewDepth;
-    float4 ShadowOptions;
-};
+#include "environment_constants.slangh"
+GRAPHICS_TEXTURE_2D(EnvironmentRadianceTexture, float4, 16)
+GRAPHICS_TEXTURE_2D(EnvironmentLocalShadowTexture, float, 17)
 GRAPHICS_TEXTURE_ARRAY(EnvironmentShadowTextures, float, 11, 4)
 GRAPHICS_TEXTURE_2D(EnvironmentCloudTexture, float4, 15)
 GRAPHICS_SAMPLER(EnvironmentCloudSampler, 15)
@@ -100,6 +92,52 @@ float ShadowVisibility(float3 world_position)
 float3 DirectionalVisibility(float3 world_position)
 {
     return CloudVisibility(world_position) * ShadowVisibility(world_position);
+}
+
+float LocalLightVisibility(uint light_index,float3 position,float3 normal)
+{
+    const float4 atlas=EnvironmentLocalShadowAtlas;
+    const float4 spot=EnvironmentLocalSpot[light_index];
+    if (atlas.x<=0 || spot.z<1) return 1;
+    const float4 light=EnvironmentLocalPositions[light_index];
+    const float4 cone=EnvironmentLocalDirection[light_index];
+    float3 delta=position+normal*.04-light.xyz;
+    float3 forward=cone.xyz;
+    uint face=0;
+    const bool point=cone.w<0;
+    if (point) {
+        const float3 magnitude=abs(delta);
+        const uint axis=magnitude.x>=magnitude.y && magnitude.x>=magnitude.z ? 0 : (magnitude.y>=magnitude.z ? 1 : 2);
+        const float side=(axis==0 ? delta.x : axis==1 ? delta.y : delta.z)<0 ? -1 : 1;
+        face=axis*2+(side<0 ? 1 : 0);
+        forward=axis==0 ? float3(side,0,0) : axis==1 ? float3(0,side,0) : float3(0,0,side);
+    }
+    forward=normalize(forward);
+    const float3 reference=abs(forward.z)>.99 ? float3(0,1,0) : float3(0,0,1);
+    const float3 right=normalize(cross(forward,reference));
+    const float3 up=cross(right,forward);
+    const float distance=dot(delta,forward);
+    if (distance<=spot.w || distance>=light.w) return 1;
+    const float scale=point ? 1 : cone.w/sqrt(max(1-cone.w*cone.w,1e-6));
+    const float2 ndc=float2(dot(delta,right),dot(delta,up))*scale/distance;
+    if (any(abs(ndc)>1)) return 1;
+    const uint tile=uint(spot.z)-1+face;
+    const int2 origin=int2(tile%uint(atlas.y),tile/uint(atlas.y))*int(atlas.x);
+    const float2 pixel=(ndc*float2(.5,-.5)+.5)*atlas.x-.5;
+    const float depth=light.w/(light.w-spot.w)*(1-spot.w/distance)-.00015;
+    const int2 center=int2(floor(pixel+.5));
+    const int2 maximum=int2(int(atlas.x)-1,int(atlas.x)-1);
+    float visibility=0;
+    visibility+=depth<=EnvironmentLocalShadowTexture().Load(int3(origin+clamp(center+int2(-1,-1),int2(0,0),maximum),0)) ? 1 : 0;
+    visibility+=depth<=EnvironmentLocalShadowTexture().Load(int3(origin+clamp(center+int2(0,-1),int2(0,0),maximum),0)) ? 1 : 0;
+    visibility+=depth<=EnvironmentLocalShadowTexture().Load(int3(origin+clamp(center+int2(1,-1),int2(0,0),maximum),0)) ? 1 : 0;
+    visibility+=depth<=EnvironmentLocalShadowTexture().Load(int3(origin+clamp(center+int2(-1,0),int2(0,0),maximum),0)) ? 1 : 0;
+    visibility+=depth<=EnvironmentLocalShadowTexture().Load(int3(origin+clamp(center+int2(0,0),int2(0,0),maximum),0)) ? 1 : 0;
+    visibility+=depth<=EnvironmentLocalShadowTexture().Load(int3(origin+clamp(center+int2(1,0),int2(0,0),maximum),0)) ? 1 : 0;
+    visibility+=depth<=EnvironmentLocalShadowTexture().Load(int3(origin+clamp(center+int2(-1,1),int2(0,0),maximum),0)) ? 1 : 0;
+    visibility+=depth<=EnvironmentLocalShadowTexture().Load(int3(origin+clamp(center+int2(0,1),int2(0,0),maximum),0)) ? 1 : 0;
+    visibility+=depth<=EnvironmentLocalShadowTexture().Load(int3(origin+clamp(center+int2(1,1),int2(0,0),maximum),0)) ? 1 : 0;
+    return visibility/9;
 }
 
 void ClipEnvironment(float3 world_position)

@@ -6,12 +6,34 @@ module;
 #include <memory>
 #include <span>
 #include <vector>
+#include <future>
 export module Graphics.Resources.Textures.Atlas.Tests;
 import Graphics.Resources.Textures.Atlas;
 import Graphics.Resources.Textures.Resource;
+import Graphics.Resources.Textures.Upload;
 import Graphics.Tests.Device;
 import Graphics.Scene.Props.Renderer;
 using namespace Graphics;
+
+BOOST_AUTO_TEST_CASE(worker_preparation_is_independent_of_gpu_resource_lifetime)
+{
+    TextureUpload upload;
+    const std::array<unsigned,4> pixels{0xffff0000u,0xff00ff00u,0xff0000ffu,0xffffffffu};
+    const RHITexture description{2,2,1,RHITextureFormat::BGRA8_UNorm,
+        static_cast<unsigned>(RHITextureUsage::ShaderResource)};
+    auto worker=std::async(std::launch::async,[&] {
+        const AtlasTile tile{{std::as_bytes(std::span(pixels)),2,2,8,Assets::PixelEncoding::BGRA8},0,0,true};
+        return Prepare_Texture_Atlas(upload,description,Assets::PixelEncoding::BGRA8,
+            std::array{tile},{},AtlasAlpha::Source,AtlasBackground::Transparent);
+    });
+    BOOST_REQUIRE(worker.get());
+    BOOST_CHECK(!upload.Active());
+    const auto mapping=upload.Mapping(0);
+    BOOST_REQUIRE_EQUAL(mapping.bytes.size(),16u);
+    const auto* result=reinterpret_cast<const unsigned*>(mapping.bytes.data());
+    BOOST_CHECK_EQUAL(result[0],pixels[2]);
+    BOOST_CHECK_EQUAL(result[3],pixels[1]);
+}
 
 namespace
 {

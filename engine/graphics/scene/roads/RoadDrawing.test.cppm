@@ -9,6 +9,7 @@ module;
 #include <vector>
 export module Graphics.Scene.Roads.Drawing.Tests;
 import Graphics.Tests.Device;
+import Graphics.Scene.Lighting.Environment;
 import Graphics.RHI;
 import Graphics.Scene.Surfaces.Geometry;
 import Assets.Math;
@@ -176,4 +177,40 @@ BOOST_AUTO_TEST_CASE(surface_vertices_preserve_packed_channels_uvs_and_topology_
     BOOST_CHECK(renderer.Destroy_Mesh(mesh));
     renderer.Shutdown();
     BOOST_CHECK(device.Destroy_Texture(texture));
+}
+
+BOOST_AUTO_TEST_CASE(pbr_road_responds_to_shared_colored_point_lights)
+{
+    struct Reset { ~Reset(){Get_Environment_Lighting()={};} } reset;
+    Get_Environment_Lighting()={};
+    auto& env=Get_Environment_Lighting().parameters;
+    env.pbr_options[0]=1;env.camera={0,0,10,1};env.sky_radiance={};env.ground_radiance={};
+    env.local_light_options[0]=1;env.local_positions[0]={0,0,3,10};
+    env.local_direction[0]={0,0,-1,-1};env.local_diffuse[0]={3,0,0,5};
+    GraphicsTestDevice device({true});SurfaceRenderer renderer;
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    const std::array<std::uint8_t,4> white{255,255,255,255};
+    const auto texture=device.Create_Texture_Initialized({1,1},{std::as_bytes(std::span(white)),4});
+    const auto target=device.Create_Texture({16,16,1,RHITextureFormat::RGBA8_UNorm,static_cast<unsigned>(RHITextureUsage::RenderTarget)});
+    const auto depth=device.Create_Texture({16,16,1,RHITextureFormat::D32_Float,static_cast<unsigned>(RHITextureUsage::DepthStencil)});
+    std::array<SurfaceVertex,4> vertices{};
+    vertices[0].position={-1,-1,.5f};vertices[1].position={1,-1,.5f};
+    vertices[2].position={1,1,.5f};vertices[3].position={-1,1,.5f};
+    const std::array<std::uint32_t,6> indices{0,2,3,0,1,2};
+    const auto mesh=renderer.Create_Mesh(vertices,indices);
+    SurfaceParameters parameters;parameters.view_projection={1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
+    SurfaceStyle style;style.blend=RHIBlendMode::Disabled;
+    auto& commands=device.Immediate_Command_List();
+    BOOST_REQUIRE(commands.Set_Render_Targets(target,depth));BOOST_REQUIRE(commands.Set_Viewport({0,0,16,16}));
+    for(unsigned channel : {0u,2u}) {
+        env.local_diffuse[0]={0,0,0,5};env.local_diffuse[0][channel]=3;
+        BOOST_REQUIRE(commands.Clear({0,0,0,0},1));
+        BOOST_REQUIRE(renderer.Draw(commands,mesh,style,parameters,std::array{texture}));
+        std::array<std::byte,16*16*4> pixels{};
+        BOOST_REQUIRE(device.Readback_Texture(target,pixels,64));
+        BOOST_TEST(std::to_integer<int>(pixels[(8*16+8)*4+channel])>80);
+        BOOST_TEST(std::to_integer<int>(pixels[(8*16+8)*4+(2-channel)])<3);
+    }
+    renderer.Shutdown();
+    for(auto resource:{texture,target,depth})device.Destroy_Texture(resource);
 }

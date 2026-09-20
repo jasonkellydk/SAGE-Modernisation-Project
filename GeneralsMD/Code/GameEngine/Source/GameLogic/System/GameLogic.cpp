@@ -1096,6 +1096,18 @@ void GameLogic::updateLoadProgress( Int progress )
 	}
 }
 
+void GameLogic::refreshLoadScreen()
+{
+	if (!m_loadScreen || !TheGlobalData->m_loadScreenRender) return;
+	// Called only between owner-thread loading operations, never from a draw.
+	// The base update retains the derived screen's current progress and text.
+	static UnsignedInt lastRefresh = 0;
+	const UnsignedInt now = SDL_GetTicks();
+	if (now - lastRefresh < 16) return;
+	lastRefresh = now;
+	m_loadScreen->LoadScreen::update(0);
+}
+
 // ------------------------------------------------------------------------------------------------
 /** Delete the load screen */
 // ------------------------------------------------------------------------------------------------
@@ -2219,6 +2231,7 @@ void GameLogic::tryStartNewGame( Bool loadingSaveGame )
 		}
 	}
 
+	TheDisplay->finishPreloadAssets();
 	updateLoadProgress(LOAD_PROGRESS_END);
 
 	if(isInMultiplayerGame() && TheNetwork)

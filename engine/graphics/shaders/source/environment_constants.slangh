@@ -1,0 +1,29 @@
+#ifndef GRAPHICS_ENVIRONMENT_CONSTANTS
+#define GRAPHICS_ENVIRONMENT_CONSTANTS
+cbuffer EnvironmentLightingConstants : register(b7)
+{
+    float4 CloudWorldMultiplier;
+    float4 CloudOffsetStrength;
+    float4 EnvironmentAmbient;
+    float4 EnvironmentClipPlane;
+    row_major float4x4 ShadowViewProjection[4];
+    float4 ShadowSplits;
+    float4 ShadowViewDepth;
+    float4 ShadowOptions;
+    float4 EnvironmentCamera;
+    float4 EnvironmentSunDirection;
+    float4 EnvironmentSunRadiance;
+    float4 EnvironmentSkyRadiance;
+    float4 EnvironmentGroundRadiance;
+    float4 EnvironmentPBR;
+    float4 EnvironmentSecondarySunDirection[2];
+    float4 EnvironmentSecondarySunRadiance[2];
+    float4 EnvironmentLocalLightOptions;
+    float4 EnvironmentLocalPositions[64];
+    float4 EnvironmentLocalDiffuse[64];
+    float4 EnvironmentLocalAmbient[64];
+    float4 EnvironmentLocalDirection[64];
+    float4 EnvironmentLocalSpot[64];
+    float4 EnvironmentLocalShadowAtlas;
+};
+#endif

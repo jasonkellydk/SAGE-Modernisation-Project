@@ -39,6 +39,11 @@ import Graphics.Scene.OrderedDraws;
 import Graphics.Frame.AttachmentBindings;
 import Graphics.Scene.DrawParameters;
 import Graphics.Scene.Props.Submission;
+import Graphics.Scene.Lighting.Environment;
+import Graphics.Passes.IndirectLighting;
+#include <algorithm>
+#include <cmath>
+#include <vector>
 #include <stdlib.h>
 #include "rts/profile.h"
 #include "../../../../../../engine/graphics/profiling/Tracy.h"
@@ -66,6 +71,7 @@ import Graphics.Scene.Shadows.StencilVolumes;
 #include "W3DDevice/GameClient/W3DCastQuery.h"
 #include "W3DDevice/GameClient/W3DSceneQueryMask.h"
 #include "W3DDevice/GameClient/W3DLight.h"
+#include "W3DDevice/GameClient/W3DParticleSys.h"
 #include "W3DDevice/GameClient/W3DDynamicLight.h"
 #include "W3DDevice/GameClient/W3DShadow.h"
 #include "W3DDevice/GameClient/W3DDirectionalShadows.h"
@@ -85,6 +91,89 @@ import Graphics.Diagnostics.Render;
 import engine.navigation.diagnostics.frame_capture;
 
 namespace {
+// Publish one scene lighting contract before any material submits work. Terrain
+// must not own these lights: models, water and reflections use the same sources.
+void Update_Scene_Lighting(RTS3DScene& scene, W3DCamera& camera)
+{
+    auto& environment=Graphics::Get_Environment_Lighting().parameters;
+    const auto eye=camera.Get_Position();
+    environment.camera={eye.X,eye.Y,eye.Z,1};
+    environment.pbr_options[0]=Graphics::Get_Render_Settings().PBR_Enabled() ? 1.f : 0.f;
+    const auto linear=[](float value) {
+        value=std::max(value,0.f);
+        return value<=.04045f ? value/12.92f : std::pow((value+.055f)/1.055f,2.4f);
+    };
+    environment.sky_radiance={};
+    environment.ground_radiance={};
+    for(unsigned i=0;i<3;++i) {
+        auto& direction=i==0 ? environment.sun_direction : environment.secondary_sun_direction[i-1];
+        auto& radiance=i==0 ? environment.sun_radiance : environment.secondary_sun_radiance[i-1];
+        direction={0,0,1,0};radiance={};
+        if (!TheGlobalData || i>=static_cast<unsigned>(TheGlobalData->m_numGlobalLights)) continue;
+        const auto& d=TheGlobalData->m_terrainLightPos[i];
+        const auto& c=TheGlobalData->m_terrainDiffuse[i];
+        const auto& a=TheGlobalData->m_terrainAmbient[i];
+        direction={-d.x,-d.y,-d.z,0};
+        radiance={linear(c.red)*3.14159265f,linear(c.green)*3.14159265f,linear(c.blue)*3.14159265f,0};
+        const std::array ambient{linear(a.red),linear(a.green),linear(a.blue)};
+        for(unsigned channel=0;channel<3;++channel) {
+            environment.sky_radiance[channel]+=ambient[channel];
+            environment.ground_radiance[channel]+=ambient[channel]*.4f;
+        }
+    }
+    std::vector<Graphics::EnvironmentLocalLight> sources;
+    const auto collect=[&](W3DLight* light) {
+        if(light->Get_Type()==W3DLight::DIRECTIONAL) return;
+        double inner,outer;light->Get_Far_Attenuation_Range(inner,outer);
+        if(outer<=0) return;
+        const auto position=light->Get_Position();
+        Vector3 color;light->Get_Diffuse(&color);
+        Graphics::MaterialLightSource description;
+        light->Get_Light_Description(description);
+        // Upgrade brightness at the authored distance to radiant intensity.
+        const float intensity=3.14159265f*std::max(light->Get_Intensity(),0.f)
+            *std::max(float(inner*inner),float(outer*outer)*.0625f);
+        Graphics::EnvironmentLocalLight output;
+        output.position_range={position.X,position.Y,position.Z,static_cast<float>(outer)};
+        output.intensity={linear(color.X)*intensity,linear(color.Y)*intensity,linear(color.Z)*intensity,1};
+        const bool spot=light->Get_Type()==W3DLight::SPOT;
+        output.direction_cone={description.direction[0],description.direction[1],description.direction[2],
+            spot ? description.cone_cosine : -1.f};
+        output.spot={spot ? (1+light->Get_Spot_Angle_Cos())*.5f : 1.f,light->Get_Spot_Exponent(),0,0};
+        sources.push_back(output);
+    };
+    Graphics::SceneObjectList<W3DRenderObject>::Cursor dynamic(scene.getDynamicLights());
+    for(dynamic.First();!dynamic.Is_Done();dynamic.Next()) {
+        auto* light=static_cast<W3DDynamicLight*>(dynamic.Peek_Obj());
+        if(light->isEnabled()) collect(light);
+    }
+    auto* statics=scene.createLightsIterator();
+    for(statics->First();!statics->Is_Done();statics->Next()) collect(static_cast<W3DLight*>(statics->Peek_Obj()));
+    scene.destroyLightsIterator(statics);
+    if(TheParticleSystemManager)
+        static_cast<W3DParticleSystemManager*>(TheParticleSystemManager)->Append_Emission_Lights(sources);
+    struct Candidate { Graphics::EnvironmentLocalLight source; float importance; };
+    std::vector<Candidate> candidates;
+    for(const auto& source:sources) {
+        const auto& p=source.position_range;
+        const Vector3 position(p[0],p[1],p[2]);
+        if(camera.Cull_Sphere(SphereClass(position,p[3]))) continue;
+        const float power=std::max({source.intensity[0],source.intensity[1],source.intensity[2]});
+        if(power<=0) continue;
+        candidates.push_back({source,power/std::max((position-eye).Length2(),1.f)});
+    }
+    std::stable_sort(candidates.begin(),candidates.end(),[](const auto& a,const auto& b){return a.importance>b.importance;});
+    const auto count=std::min(candidates.size(),environment.local_positions.size());
+    environment.local_light_options[0]=static_cast<float>(count);
+    for(std::size_t i=0;i<count;++i) {
+        const auto& light=candidates[i].source;
+        environment.local_positions[i]=light.position_range;
+        environment.local_diffuse[i]=light.intensity;
+        environment.local_ambient[i]={};
+        environment.local_direction[i]=light.direction_cone;
+        environment.local_spot[i]=light.spot;
+    }
+}
 struct SceneSubmissionScope {
     const char* name;
     Graphics::CommandList* commands=nullptr;
@@ -637,7 +726,6 @@ void RTS3DScene::renderOneObject(W3DRenderContext &rinfo, W3DRenderObject *robj,
 	ObjectShroudStatus ss=OBJECTSHROUD_INVALID;
 	Bool doExtraMaterialPop=FALSE;
 	Bool doExtraFlagsPop=FALSE;
-	W3DLight **sceneLights=m_globalLight;
 
 	if (robj->Class_ID() == W3DRenderObject::CLASSID_IMAGE3D	)
 	{
@@ -645,8 +733,6 @@ void RTS3DScene::renderOneObject(W3DRenderContext &rinfo, W3DRenderObject *robj,
 		return;	//decals are not lit by this system yet so skip rest of lighting
 	}
 
-	Graphics::LocalLighting lightEnv;
-	SphereClass sph = robj->Get_Bounding_Sphere();
 	drawInfo = (DrawableInfo *)robj->Get_User_Data();
 	if (drawInfo)
 	{
@@ -657,18 +743,8 @@ void RTS3DScene::renderOneObject(W3DRenderContext &rinfo, W3DRenderObject *robj,
 			ss = OBJECTSHROUD_FOGGED;
 	}
 
-	// all this ambient business no longer handles the tinting and flashing stuff,
-	// but it does still light the drawable explicitly, and can be fudged like this
-	// infantry test does, here...
-	// the tint has been delegated to the getTint() stuff, below... MLorenzen
-	Vector3 ambient = Get_Ambient_Light();
 	if (draw && (drawableHidden=draw->isDrawableEffectivelyHidden()) != TRUE)
 	{
-#ifdef NOT_IN_USE
-		const Vector3* drawAmbient = draw->getAmbientLight();
-		if (drawAmbient)
-			ambient.Add(ambient, *drawAmbient, &ambient);
-#endif
 		obj = draw->getObject();
 		if (obj) {
 			ss = obj->getShroudedStatus(localPlayerIndex);
@@ -701,61 +777,6 @@ void RTS3DScene::renderOneObject(W3DRenderContext &rinfo, W3DRenderObject *robj,
 				Object *shroudObject=TheGameLogic->findObjectByID(drawInfo->m_shroudStatusObjectID);
 				if (shroudObject && shroudObject->getShroudedStatus(localPlayerIndex) >= OBJECTSHROUD_FOGGED)
 					ss = OBJECTSHROUD_SHROUDED;	//we will assume that drawables without objects are 'particle' like and therefore don't need drawing if fogged/shrouded.
-			}
-		}
-
-		if (draw->isKindOf(KINDOF_INFANTRY))
-		{
-			//ambient = m_infantryAmbient;  //has no effect - see comment on m_infantryAmbient
-			sceneLights = m_infantryLight;
-		}
-
-		lightEnv.Reset({(sph.Center).X,(sph.Center).Y,(sph.Center).Z}, {(ambient).X,(ambient).Y,(ambient).Z});
-
-
-		// HANDLE THE SPECIAL DRAWABLE-LEVEL COLORING SETTINGS FIRST
-
-		const Vector3 *tintColor = nullptr;
-		const Vector3 *selectionColor = nullptr;
-
-		tintColor			 = draw->getTintColor();
-		selectionColor = draw->getSelectionColor();
-
-		if ( tintColor || selectionColor )
-		{
-			Vector3 sumTint, temp, restore;
-
-			sumTint.Set(0,0,0);
-
-			if (tintColor)
-				Vector3::Add(sumTint, *tintColor, &sumTint);
-			if (selectionColor)
-				Vector3::Add(sumTint, *selectionColor, &sumTint);
-
-			for (Int globalLightIndex = 0; globalLightIndex < m_numGlobalLights; globalLightIndex++)
-			{
-				sceneLights[globalLightIndex]->Get_Diffuse( &temp );
-				restore = temp;
-
-				Vector3::Add(temp, sumTint, &temp);
-
-				sceneLights[globalLightIndex]->Set_Diffuse( temp );
-				lightEnv.Add(Get_Light_Source(*sceneLights[globalLightIndex]));
-				sceneLights[globalLightIndex]->Set_Diffuse( restore );
-
-			}
-
-			temp.Set(lightEnv.ambient[0],lightEnv.ambient[1],lightEnv.ambient[2]);
-			Vector3::Add(sumTint, temp, &temp );
-
-			lightEnv.ambient = {temp.X,temp.Y,temp.Z};
-
-		}
-		else // no funny coloring going on, so just add the lights normally
-		{
-			for (Int globalLightIndex = 0; globalLightIndex < m_numGlobalLights; globalLightIndex++)
-			{
-				lightEnv.Add(Get_Light_Source(*sceneLights[globalLightIndex]));
 			}
 		}
 
@@ -798,53 +819,17 @@ void RTS3DScene::renderOneObject(W3DRenderContext &rinfo, W3DRenderObject *robj,
 		{
 			//Must be ghost object because we don't fog normal things.  Fogged objects always have a predefined
 			//lighting environment applied which emulates the look of fog.
-			rinfo.light_environment = &m_foggedLightEnv;
-			robj->Render(rinfo);
-			rinfo.light_environment = nullptr;
+            rinfo.Push_Material_Pass(m_shroudMaterialPass);
+            robj->Render(rinfo);
+            rinfo.Pop_Material_Pass();
 			return;
 		}
-		else
-		{
-			lightEnv.Reset({(sph.Center).X,(sph.Center).Y,(sph.Center).Z}, {(ambient).X,(ambient).Y,(ambient).Z});
-			for (Int globalLightIndex = 0; globalLightIndex < m_numGlobalLights; globalLightIndex++)
-				lightEnv.Add(Get_Light_Source(*m_globalLight[globalLightIndex]));
-		}
+
 	}
 
 	if (!drawableHidden)
 	{
-		//standard scene lights
-		Graphics::SceneObjectList<W3DRenderObject>::Cursor it2(&LightList);
-		for (it2.First(); !it2.Is_Done(); it2.Next())
-		{
-			W3DLight *pLight = static_cast<W3DLight *>(it2.Peek_Obj());
-			SphereClass lSph = pLight->Get_Bounding_Sphere();
-			Bool cull = (pLight->Get_Type() == W3DLight::POINT && !Spheres_Intersect(sph, lSph));
-			if (!cull) {
-				lightEnv.Add(Get_Light_Source(*pLight));
-			}
-		}
-
-    if( draw && draw->getReceivesDynamicLights() )
-    {
-		  // dynamic lights
-		  Graphics::SceneObjectList<W3DRenderObject>::Cursor dynaLightIt(&m_dynamicLightList);
-		  for (dynaLightIt.First(); !dynaLightIt.Is_Done(); dynaLightIt.Next())
-		  {
-			  W3DDynamicLight* pDyna = (W3DDynamicLight*)dynaLightIt.Peek_Obj();
-			  if (!pDyna->isEnabled()) {
-				  continue;
-			  }
-			  SphereClass lSph = pDyna->Get_Bounding_Sphere();
-			  if (pDyna->Get_Type() == W3DLight::POINT && !Spheres_Intersect(sph, lSph)) {
-				  continue;
-			  }
-			  lightEnv.Add(Get_Light_Source(*pDyna));
-		  }
-    }
-
-		lightEnv.Finalize();
-		rinfo.light_environment = &lightEnv;
+        rinfo.light_environment = nullptr; // Shared scene PBR lights are bound once per view.
 
 		if (drawInfo)
 		{
@@ -956,6 +941,28 @@ void RTS3DScene::Flush(W3DRenderContext & rinfo)
 		DoShadows(rinfo, true);	//draw all stencil shadows
 	}
 
+    if(Graphics::Get_Render_Settings().PBR_Enabled()
+        && !Get_W3D_Render_Services().Is_Reflection_Render_Pass()
+        && m_customPassMode==SCENE_PASS_DEFAULT && Get_Extra_Pass_Polygon_Mode()==EXTRA_PASS_DISABLE) {
+        auto& bindings=Graphics::Get_Attachment_Bindings();
+        auto selection=bindings.Current();
+        if(selection.additional_colors[0].Is_Valid()) {
+            GENERALS_SCENE_PROFILE_SCOPE("Graphics.Scene.IndirectLighting");
+            selection.additional_colors={};
+            Graphics::IndirectLightingInput input;
+            Matrix3D camera_view;Matrix4x4 projection;
+            rinfo.Camera.Get_View_Matrix(&camera_view);
+            rinfo.Camera.Get_Backend_Projection_Matrix(&projection);
+            const Matrix4x4 view(camera_view),inverse=projection.Inverse();
+            std::copy_n(&projection[0][0],16,input.projection.data());
+            std::copy_n(&inverse[0][0],16,input.inverse_projection.data());
+            std::copy_n(&view[0][0],16,input.view.data());
+            auto* device=Graphics::Shared_Frame_Device();
+            if(!bindings.Bind(selection) || !Graphics::Get_Indirect_Lighting_Renderer().Render(
+                device->Immediate_Command_List(),Graphics::Shared_Frame_Targets(),input))
+                DEBUG_LOG(("Indirect lighting submission failed.\n"));
+        }
+    }
 	if (TheWaterRenderSystem != nullptr &&
 		m_customPassMode != SCENE_PASS_ALPHA_MASK &&
 		Get_Extra_Pass_Polygon_Mode() != EXTRA_PASS_CLEAR_LINE)
@@ -1239,6 +1246,8 @@ void RTS3DScene::Customized_Render( W3DRenderContext &rinfo )
 			}
 		}
 	}
+
+    Update_Scene_Lighting(*this,rinfo.Camera);
 
 	// Terrain objects are render objects first; some terrain implementations
 	// register only for rendering and therefore are not present in UpdateList.
@@ -1771,6 +1780,9 @@ W3DDynamicLight * RTS3DScene::getADynamicLight()
 	{
 		pLight = (W3DDynamicLight*)dynaLightIt.Peek_Obj();
 		if (!pLight->isEnabled()) {
+			// A previous owner may have used this pooled light as a spotlight.
+			pLight->Set_Type(W3DLight::POINT);
+			pLight->Set_Transform(Matrix3D(1));
 			pLight->setEnabled(true);
 			return(pLight);
 		}

@@ -1,8 +1,11 @@
 #include <winsock2.h>
 #include <functional>
 import Graphics.Frame.RenderClock;
+import Graphics.Resources.Loading.Queue;
 import Graphics.Scene.OrderedDraws;
 import Graphics.Frame.RenderSettings;
+import Graphics.Frame.AttachmentBindings;
+import Graphics.Scene.Lighting.Environment;
 #include "W3DDevice/GameClient/W3DRenderServices.h"
 #include "W3DDevice/GameClient/W3DDazzleRenderObject.h"
 #include "W3DDevice/GameClient/W3DDazzleResources.h"
@@ -71,6 +74,7 @@ import Graphics.Frame.SceneRenderers;
 import Graphics.Passes.Bloom;
 import Graphics.Passes.LightRays;
 import Graphics.Passes.SSAO;
+import Graphics.Passes.IndirectLighting;
 import Engine.UI.WND;
 import Graphics.Scene.Beams;
 import Graphics.Scene.Lighting.Renderer;
@@ -222,6 +226,8 @@ static Graphics::MovieCapture displayMovieCapture;
 #define no_SAMPLE_DYNAMIC_LIGHT	1
 static bool graphicsRendererAvailable = false;
 static bool uiFrameActive = false;
+static Graphics::FrameTargets graphicsSceneTargets;
+static bool graphicsHDR = false;
 static Graphics::BeamView graphicsBeamView;
 static Graphics::View graphicsParticleView;
 static Graphics::LightRaysInput graphicsLightRaysInput;
@@ -269,15 +275,19 @@ static bool initializeGraphicsSceneRenderers(Graphics::Device &device)
         && Graphics::Get_Bloom_Renderer().Initialize(device, shader_directory)
         && Graphics::Get_Light_Rays_Renderer().Initialize(device, shader_directory)
         && Graphics::Get_SSAO_Renderer().Initialize(device, shader_directory)
+        && Graphics::Get_Indirect_Lighting_Renderer().Initialize(device, shader_directory)
         && Initialize_Video_Presentation(device, shader_directory);
 }
 
-static bool executeGraphicsFramePasses(Graphics::Device &device, Graphics::CommandList &commands, const Graphics::FrameTargets &targets) noexcept
+static bool executeGraphicsFramePasses(Graphics::Device &device, Graphics::CommandList &commands, const Graphics::FrameTargets &output_targets) noexcept
 {
+    auto targets = graphicsHDR ? graphicsSceneTargets : output_targets;
+    const auto scene_format = graphicsHDR ? Graphics::RHITextureFormat::RGBA16_Float : Graphics::RHITextureFormat::BGRA8_UNorm;
+    if (!commands.Set_Render_Targets(targets.backbuffer.texture,targets.depth.texture)) return false;
     const auto detail = TheGameLODManager != nullptr
         ? TheGameLODManager->getStaticLODLevel() : STATIC_GAME_LOD_UNKNOWN;
-    if (!Graphics::Get_SSAO_Renderer().Render(commands, targets,
-        Graphics::RHITextureFormat::BGRA8_UNorm, Graphics::RHITextureFormat::D24_UNorm_S8, graphicsSSAOInput,
+    if (!graphicsHDR && !Graphics::Get_SSAO_Renderer().Render(commands, targets,
+        scene_format, Graphics::RHITextureFormat::D24_UNorm_S8, graphicsSSAOInput,
         TheTerrainRenderObject != nullptr && (detail == STATIC_GAME_LOD_HIGH || detail == STATIC_GAME_LOD_VERY_HIGH)))
         return false;
 
@@ -303,8 +313,11 @@ static bool executeGraphicsFramePasses(Graphics::Device &device, Graphics::Comma
 
 
 
-	if (!Graphics::Get_Bloom_Renderer().Render(commands, targets, Graphics::RHITextureFormat::BGRA8_UNorm,
-		detail == STATIC_GAME_LOD_HIGH || detail == STATIC_GAME_LOD_VERY_HIGH))
+    Graphics::BloomSettings bloom;
+    bloom.linear_hdr = graphicsHDR;
+    bloom.intensity = graphicsHDR ? .06f : .5f;
+	if (!Graphics::Get_Bloom_Renderer().Render(commands, targets, scene_format,
+		detail == STATIC_GAME_LOD_HIGH || detail == STATIC_GAME_LOD_VERY_HIGH,bloom))
 		return false;
 	// Composite after bloom to keep added ray light inside the shroud mask.
 	if (TheTerrainRenderObject != nullptr
@@ -318,9 +331,12 @@ static bool executeGraphicsFramePasses(Graphics::Device &device, Graphics::Comma
 		rays.shroud_texture = Set_Surface_Shroud(surface, TheTerrainRenderObject->getShroud());
 		rays.shroud_projection = surface.shroud_projection;
 		if (!Graphics::Get_Light_Rays_Renderer().Render(commands, targets,
-			Graphics::RHITextureFormat::BGRA8_UNorm, Graphics::RHITextureFormat::D24_UNorm_S8, rays, true))
+			scene_format, Graphics::RHITextureFormat::D24_UNorm_S8, rays, true))
 			return false;
 	}
+    if (graphicsHDR && !Graphics::Get_Bloom_Renderer().Tone_Map(commands,output_targets,
+        Graphics::Get_Environment_Lighting().parameters.pbr_options[3])) return false;
+    targets = output_targets;
 	if (!Render_Videos(commands, targets))
 		return false;
 
@@ -389,6 +405,17 @@ static bool beginGraphicsFrame()
     }
     auto* device = Graphics::Shared_Frame_Device();
     const auto resources = device->Get_Swap_Chain().Backbuffer();
+    graphicsHDR = TheTerrainRenderObject != nullptr && Graphics::Get_Render_Settings().PBR_Enabled();
+    Graphics::Get_Environment_Lighting().parameters.pbr_options[1] = graphicsHDR ? 1.0f : 0.0f;
+    if (graphicsHDR) {
+        graphicsSceneTargets = Graphics::Get_Bloom_Renderer().Scene_Targets(
+            {resources,device->Get_Swap_Chain().Depth_Target()});
+        const auto material_targets=Graphics::Get_Indirect_Lighting_Renderer().Begin_Frame(resources.width,resources.height);
+        if (!graphicsSceneTargets.backbuffer.texture.Is_Valid() || !material_targets[0].Is_Valid()
+            || !Graphics::Get_Attachment_Bindings().Initialize(*device,
+                {graphicsSceneTargets.backbuffer.texture,graphicsSceneTargets.depth.texture,
+                    {0,0,resources.width,resources.height,0,1},material_targets})) return false;
+    }
 	Begin_Video_Frame();
 	Graphics::Get_Renderer2D().Begin(resources.width, resources.height);
 	uiFrameActive = Graphics::Get_Renderer2D().Is_Initialized();
@@ -1110,6 +1137,11 @@ void W3DDisplay::init()
         Graphics::Set_Texture_Sampling_Mode(TheWritableGlobalData->m_textureFilteringMode);
         TheWritableGlobalData->m_textureFilteringMode = static_cast<unsigned>(Graphics::Get_Texture_Sampling_Settings().mode);
         Graphics::Set_Texture_Anisotropy(TheWritableGlobalData->m_textureAnisotropyLevel);
+        if(Graphics::Get_Render_Settings().PBR_Enabled()) {
+            Graphics::Set_Texture_Sampling_Mode(static_cast<int>(Graphics::TextureSamplingMode::Anisotropic));
+            Graphics::Set_Texture_Anisotropy(16);
+            TheWritableGlobalData->m_textureFilteringMode=static_cast<unsigned>(Graphics::TextureSamplingMode::Anisotropic);
+        }
         TheWritableGlobalData->m_textureAnisotropyLevel = Graphics::Get_Texture_Sampling_Settings().anisotropy;
 		Graphics::Get_Texture_Quality_Settings().prefer_16_bits = getBitDepth() == 16;
 		graphicsRendererAvailable = initializeGraphicsRenderer();
@@ -2125,7 +2157,7 @@ AGAIN:
 		}
 
 		// update all views of the world - recomputes data which will affect drawing
-		if (Graphics::Frame_Device_Ready())
+		if (Graphics::Frame_Device_Ready() && !TheGlobalData->m_loadScreenRender)
 		{	//Checking if we have the device before updating views because the heightmap crashes otherwise while
 			//trying to refresh the visible terrain geometry.
 //			if(TheGlobalData->m_loadScreenRender != TRUE)
@@ -2861,6 +2893,7 @@ void W3DDisplay::preloadModelAssets( AsciiString model )
 
 		nameWithExtension.format( "%s.w3d", model.str() );
 		m_assetManager->Catalog().Load_3D_Assets( nameWithExtension.str() );
+		TheGameLogic->refreshLoadScreen();
 
 	}
 
@@ -2871,13 +2904,32 @@ void W3DDisplay::preloadModelAssets( AsciiString model )
 //-------------------------------------------------------------------------------------------------
 void W3DDisplay::preloadTextureAssets( AsciiString texture )
 {
-
 	if( m_assetManager )
 	{
 		W3DTextureHandle *theTexture = m_assetManager->Catalog().Get_Texture( texture.str() );
-		theTexture->Release_Ref();//release reference
+		if (theTexture) {
+			theTexture->Ensure_Render_Backend_Texture();
+			theTexture->Release_Ref();//release reference
+		}
 	}
+	TheGameLogic->refreshLoadScreen();
 
+}
+
+void W3DDisplay::finishPreloadAssets()
+{
+	if (TheTerrainRenderObject) TheTerrainRenderObject->prepareMaterials();
+	if (!m_assetManager) return;
+	std::vector<RefCountPtr<W3DTextureHandle>> textures;
+	m_assetManager->Catalog().Visit_Textures([&](W3DTextureHandle* texture) {
+		textures.push_back(RefCountPtr<W3DTextureHandle>::Create_Add_Ref(texture));
+	});
+	for (const auto& texture : textures) {
+		texture->Ensure_Render_Backend_Texture();
+		texture->Resolve_PBR_Material();
+		TheGameLogic->refreshLoadScreen();
+	}
+	Graphics::Get_Resource_Load_Queue().Drain([] { TheGameLogic->refreshLoadScreen(); });
 }
 
 //-------------------------------------------------------------------------------------------------

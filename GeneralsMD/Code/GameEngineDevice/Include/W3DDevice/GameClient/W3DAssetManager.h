@@ -39,7 +39,7 @@ private:
 	W3DTextureHandle *Find_Texture(const char *name, int color);
 	W3DTextureHandle *Recolor_Texture(W3DTextureHandle *texture, int color);
 	W3DTextureHandle *Recolor_Texture_One_Time(W3DTextureHandle *texture, int color);
-	void Remap_Palette(Graphics::TextureEdit *surface, int color, Bool doPaletteOnly, Bool useAlpha);
+	static void Remap_Palette(Graphics::TextureEdit *surface, int color, Bool doPaletteOnly, Bool useAlpha);
 	int replaceAssetTexture(W3DRenderObject *robj, W3DTextureHandle *oldTex, W3DTextureHandle *newTex);
 	int replaceHLODTexture(W3DRenderObject *robj, W3DTextureHandle *oldTex, W3DTextureHandle *newTex);
 	int replaceMeshTexture(W3DRenderObject *robj, W3DTextureHandle *oldTex, W3DTextureHandle *newTex);

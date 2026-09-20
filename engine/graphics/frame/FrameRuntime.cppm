@@ -186,7 +186,10 @@ export FrameTargets Shared_Frame_Targets() noexcept
 {
 	if (!g_frame_device || !g_frame_device->Get_Swap_Chain().Is_Valid()) return {};
 	auto &swapchain = g_frame_device->Get_Swap_Chain();
-	return {swapchain.Backbuffer(), swapchain.Depth_Target(), g_frame_target_identity};
+    auto color = swapchain.Backbuffer();
+    const auto& defaults = Get_Attachment_Bindings().Default();
+    if (defaults.color.Is_Valid()) color.texture = defaults.color;
+	return {color, swapchain.Depth_Target(), g_frame_target_identity};
 }
 
 export FrameBackend Active_Frame_Backend() noexcept

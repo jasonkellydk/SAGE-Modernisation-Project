@@ -40,6 +40,8 @@ export struct PropMaterialDrawOverrides final {
 export struct PropMaterialTexture final {
     RHITextureHandle texture{};
     TextureSampling sampling{};
+    std::optional<PropSurfaceParameters> surface;
+    std::array<RHITextureHandle, PropSurfaceTextureCount> surface_textures{};
 };
 
 export struct PropMaterialDrawContext final {
@@ -152,7 +154,7 @@ bool Submit_Prop_Material_In_Place(Device& device, PropRenderer& renderer, PropS
     const bool textured = shader.Get_Texturing() != MaterialState::TEXTURING_DISABLE;
     const bool muzzle = overrides.muzzle_flash != MuzzleFlashDesignation::None && sources[0] && textured;
     if (muzzle) sources[1] = sources[0];
-    std::array<RHITextureHandle, 2> textures{};
+    std::array<RHITextureHandle, PropTextureCount> textures{};
     std::array<std::optional<TextureSampling>, 2> sampling;
     for (unsigned stage = 0; stage < 2; ++stage) {
         if (!sources[stage]) continue;
@@ -163,10 +165,25 @@ bool Submit_Prop_Material_In_Place(Device& device, PropRenderer& renderer, PropS
         if (textured) {
             if (!submission.Retain_Borrowed_Texture(binding->texture)) return false;
             textures[stage] = binding->texture;
+            if (stage == 0 && binding->surface && !muzzle
+                && !overrides.deferred_pass && !overrides.decal_pass && !overrides.force_multiply) {
+                const float parallax_scale = parameters.surface.height[2];
+                parameters.surface = *binding->surface;
+                parameters.surface.height[2] = parallax_scale;
+                for (std::size_t role = 0; role < PropSurfaceTextureCount; ++role) {
+                    const auto map = binding->surface_textures[role];
+                    if (!map.Is_Valid()) continue;
+                    if (!submission.Retain_Borrowed_Texture(map)) return false;
+                    textures[Prop_Surface_Texture_Slot(role)] = map;
+                }
+            }
         }
     }
     parameters.textured = textures[0].Is_Valid() ? 1.0f : 0.0f;
     parameters.secondary_texture = textures[1].Is_Valid() ? 1.0f : 0.0f;
+    if (overrides.deferred_pass || overrides.decal_pass || overrides.force_multiply || muzzle
+        || shader.Get_Dst_Blend_Func() == MaterialState::DSTBLEND_ONE)
+        parameters.surface.height[3] = -1;
     const auto settings = Get_Texture_Sampling_Settings();
     auto style = overrides.preparation
         ? overrides.preparation->Apply(shader, context, overrides, sampling, settings, parameters)

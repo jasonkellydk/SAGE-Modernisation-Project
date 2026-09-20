@@ -245,6 +245,7 @@ public:
 	bool Set_Bindless_Resources(std::span<const RHIBindlessResource> resources) noexcept override;
 	bool Set_Render_Targets(RHITextureHandle color_target, RHITextureHandle depth_target) noexcept override;
 	bool Set_Color_Target(RHITextureHandle color_target) noexcept override;
+    bool Set_Color_Targets(std::span<const RHITextureHandle> colors,RHITextureHandle depth = {}) noexcept override;
 	bool Set_Depth_Target(RHITextureHandle depth_target) noexcept override;
 	bool Clear(const std::array<float, 4> &color, float depth) noexcept override;
 	bool Clear_Depth(float depth) noexcept override;
@@ -287,6 +288,8 @@ private:
 	std::array<std::array<ShaderResourceBinding, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT>, 2> m_shader_resources{};
 	RHIPrimitiveTopology m_topology = RHIPrimitiveTopology::TriangleList;
 	RHITextureHandle m_color_target{};
+    std::array<RHITextureHandle,7> m_extra_color_targets{};
+    unsigned m_extra_color_count=0;
 	RHITextureHandle m_depth_target{};
 	bool m_targets_bound = false;
 	std::span<const RHIBindlessResource> m_bindless_resources{};
@@ -1146,7 +1149,7 @@ bool DX11CommandList::Bind_Texture_At_Slot(RHIShaderStage stage, std::uint32_t s
 		m_state->context.Get()->PSSetShaderResources(slot, 1, &view);
 	// An output conflict makes DX11 bind null instead of the requested view.
 	// Such a request must never become a remembered successful binding.
-	binding = texture == m_color_target || texture == m_depth_target
+	binding = texture == m_color_target || texture == m_depth_target || std::find(m_extra_color_targets.begin(),m_extra_color_targets.end(),texture)!=m_extra_color_targets.end()
 		? ShaderResourceBinding{} : ShaderResourceBinding{texture, {}};
 	return true;
 }
@@ -1238,6 +1241,31 @@ bool DX11CommandList::Set_Bindless_Resources(std::span<const RHIBindlessResource
 	return true;
 }
 
+bool DX11CommandList::Set_Color_Targets(std::span<const RHITextureHandle> colors,RHITextureHandle depth) noexcept
+{
+    if(!Is_Ready() || colors.empty() || colors.size()>8) return false;
+    std::array<ID3D11RenderTargetView*,8> views{};
+    unsigned width=0,height=0;
+    for(std::size_t i=0;i<colors.size();++i) {
+        auto* texture=m_state->textures.Resolve(colors[i]);
+        if(!texture || !texture->render_target_view.Get()) return false;
+        if(i==0) {width=texture->width;height=texture->height;}
+        if(texture->width!=width || texture->height!=height || colors[i]==depth
+            || std::find(colors.begin(),colors.begin()+i,colors[i])!=colors.begin()+i) return false;
+        views[i]=texture->render_target_view.Get();
+    }
+    auto* depth_texture=m_state->textures.Resolve(depth);
+    if(depth.Is_Valid() && (!depth_texture || !depth_texture->depth_stencil_view.Get()
+        || depth_texture->width!=width || depth_texture->height!=height)) return false;
+    m_state->context.Get()->OMSetRenderTargets(static_cast<UINT>(colors.size()),views.data(),
+        depth_texture ? depth_texture->depth_stencil_view.Get() : nullptr);
+    m_shader_resources={};m_targets_bound=true;
+    m_color_target=colors[0];m_depth_target=depth;
+    m_extra_color_targets={};m_extra_color_count=static_cast<unsigned>(colors.size()-1);
+    std::copy(colors.begin()+1,colors.end(),m_extra_color_targets.begin());
+    return true;
+}
+
 bool DX11CommandList::Set_Render_Targets(RHITextureHandle color_target, RHITextureHandle depth_target) noexcept
 {
 	if (!Is_Ready())
@@ -1248,7 +1276,7 @@ bool DX11CommandList::Set_Render_Targets(RHITextureHandle color_target, RHITextu
 	if (color == nullptr || color->render_target_view.Get() == nullptr || depth == nullptr || depth->depth_stencil_view.Get() == nullptr)
 		return false;
 
-	if (m_targets_bound && m_color_target == color_target && m_depth_target == depth_target)
+	if (m_targets_bound && m_extra_color_count==0 && m_color_target == color_target && m_depth_target == depth_target)
 		return true;
 
 	ID3D11RenderTargetView *color_view = color->render_target_view.Get();
@@ -1257,6 +1285,7 @@ bool DX11CommandList::Set_Render_Targets(RHITextureHandle color_target, RHITextu
 	m_shader_resources = {};
 	m_targets_bound = true;
 	m_color_target = color_target;
+    m_extra_color_targets={};m_extra_color_count=0;
 	m_depth_target = depth_target;
 	return true;
 }
@@ -1270,7 +1299,7 @@ bool DX11CommandList::Set_Color_Target(RHITextureHandle color_target) noexcept
 	if (color == nullptr || color->render_target_view.Get() == nullptr)
 		return false;
 
-	if (m_targets_bound && m_color_target == color_target && !m_depth_target.Is_Valid())
+	if (m_targets_bound && m_extra_color_count==0 && m_color_target == color_target && !m_depth_target.Is_Valid())
 		return true;
 
 	ID3D11RenderTargetView *color_view = color->render_target_view.Get();
@@ -1278,6 +1307,7 @@ bool DX11CommandList::Set_Color_Target(RHITextureHandle color_target) noexcept
 	m_shader_resources = {};
 	m_targets_bound = true;
 	m_color_target = color_target;
+    m_extra_color_targets={};m_extra_color_count=0;
 	m_depth_target = {};
 	return true;
 }
@@ -1291,13 +1321,14 @@ bool DX11CommandList::Set_Depth_Target(RHITextureHandle depth_target) noexcept
 	if (depth == nullptr || depth->depth_stencil_view.Get() == nullptr)
 		return false;
 
-	if (m_targets_bound && !m_color_target.Is_Valid() && m_depth_target == depth_target)
+	if (m_targets_bound && m_extra_color_count==0 && !m_color_target.Is_Valid() && m_depth_target == depth_target)
 		return true;
 
 	m_state->context.Get()->OMSetRenderTargets(0, nullptr, depth->depth_stencil_view.Get());
 	m_shader_resources = {};
 	m_targets_bound = true;
 	m_color_target = {};
+    m_extra_color_targets={};m_extra_color_count=0;
 	m_depth_target = depth_target;
 	return true;
 }
@@ -1529,6 +1560,7 @@ void DX11CommandList::Reset_Frame_State() noexcept
 	m_shader_resources = {};
 	m_topology = RHIPrimitiveTopology::TriangleList;
 	m_color_target = {};
+    m_extra_color_targets={};m_extra_color_count=0;
 	m_depth_target = {};
 	m_targets_bound = false;
 	m_bindless_resources = {};

@@ -1,20 +1,9 @@
 #include "resource_access.slangh"
 #include "environment_lighting.slangh"
-cbuffer WaterConstants : register(b0)
-{
-    row_major float4x4 World;
-    row_major float4x4 View;
-    row_major float4x4 Projection;
-    float4 WaterShroudProjection;
-    float4 WaterAnimation;
-    float4 WaterCameraPosition;
-    float4 WaterDisplacementDomain;
-    float4 WaterTint;
-    float4 WaterEffects;
-    float4 WaterSurfaceOptions;
-    float4 FogColor;
-    float4 WaterFogState;
-};
+#include "pbr.slangh"
+#include "water_constants.slangh"
+#include "water_pbr.slangh"
+
 // river/standing-water material for the RA3 water resource model.
 
 struct WaterSurfaceVertexInput
@@ -172,6 +161,16 @@ float Water_Fog_Factor(float3 world_position)
         input.world_position);
     float fresnel = pow(1.0 - saturate(abs(dot(surface_normal,
         view_direction))), 5.0);
+    if(EnvironmentPBR.x > .5) {
+        float3 normal=Surface_Normalize(float3((normal0.xy+normal1.xy)*WaterPBRSurface.y,1),float3(0,0,1));
+        float3 visibility=WaterEffects.y > .5 ? WaterShroudTexture().Sample(WaterShroudSampler(),input.shroud_uv).rgb : float3(1,1,1);
+        float edge=WaterEdgeTexture().Sample(WaterEdgeSampler(),input.normal_uv).r;
+        return Shade_PBR_Water(input.world_position,normal,input.position.xy,input.position.z,
+            input.depth_projection,Project_River_Position(input.projective_position),
+            edge,0,visibility,WaterReflectionTexture(),WaterReflectionSampler(),
+            WaterRefractionTexture(),WaterRefractionSampler(),WaterSceneDepthTexture(),WaterSceneDepthSampler(),
+            WaterEnvironmentTexture(),WaterEnvironmentSampler());
+    }
     float3 color = river * input.color0.rgb * WaterTint.rgb * 0.62;
 
     float foam0 = dot(WaterFoamTexture().Sample(WaterFoamSampler(),

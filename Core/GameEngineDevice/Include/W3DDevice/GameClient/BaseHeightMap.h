@@ -156,6 +156,7 @@ public:
 	Bool updateTreePosition(DrawableID id, Coord3D location, Real angle);
 	void renderTrees(W3DCamera * camera); ///< renders the tree buffer.
     virtual Bool collectShadowCasters();
+    virtual void prepareMaterials();
 
 	void addProp(Int id, Coord3D location, Real angle, Real scale, const AsciiString &modelName);
 	void removeProp(Int id);

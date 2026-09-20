@@ -23,6 +23,8 @@ export struct LightRaysInput final
     RHITextureHandle shroud_texture{};
     // Maximum added RGB in display-color space; the game tints it with sunlight.
     std::array<float,3> brightness{0.048f,0.048f,0.048f};
+    // Extinction per world unit, single-scattering albedo and HG anisotropy.
+    std::array<float,4> medium{.00015f,.9f,.35f,0};
 };
 
 export class LightRaysRenderer final
@@ -115,6 +117,7 @@ public:
         parameters.shroud_projection = input.shroud_projection;
         parameters.brightness = input.brightness;
         parameters.shroud_enabled = input.shroud_texture.Is_Valid() ? 1u : 0u;
+        parameters.medium=input.medium;
         const bool traced = captured && Draw(commands, m_rays, width, height, parameters, input.shroud_texture);
         parameters.operation = 1;
         const bool composed = traced && Draw(commands, color.texture, color.width, color.height,
@@ -135,8 +138,9 @@ private:
         std::uint32_t operation = 0;
         std::uint32_t shroud_enabled = 0;
         std::array<float,3> padding{};
+        std::array<float,4> medium{};
     };
-    static_assert(sizeof(Parameters) == 112);
+    static_assert(sizeof(Parameters) == 128);
 
     bool Ensure_Target(std::uint32_t width, std::uint32_t height)
     {

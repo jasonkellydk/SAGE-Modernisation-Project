@@ -6,6 +6,7 @@ module;
 #include <cstdint>
 #include <filesystem>
 #include <vector>
+#include <span>
 export module Graphics.Passes.Bloom.Tests;
 import Graphics.Passes.Bloom;
 import Graphics.RHI;
@@ -162,4 +163,78 @@ BOOST_AUTO_TEST_CASE(bright_patch_spreads_symmetrically_without_tint_or_alpha_le
         BOOST_CHECK_EQUAL(pixel(64,64,3),153u);
         device.Destroy_Texture(color); device.Destroy_Texture(depth);
     }
+}
+
+BOOST_AUTO_TEST_CASE(hdr_tone_mapping_preserves_highlight_order_and_recreates_scene_target)
+{
+    GraphicsTestDevice device;
+    BOOST_REQUIRE(device.Is_Valid());
+    BloomRenderer bloom; FrameCapture capture;
+    BOOST_REQUIRE(bloom.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_BLOOM_SHADER_DIRECTORY)));
+    auto& commands=device.Immediate_Command_List();
+    for(unsigned width : {16u,23u}) {
+        const auto color=device.Create_Texture({width,width,1,RHITextureFormat::RGBA8_UNorm,
+            static_cast<unsigned>(RHITextureUsage::RenderTarget)});
+        const auto depth=device.Create_Texture({width,width,1,RHITextureFormat::D32_Float,
+            static_cast<unsigned>(RHITextureUsage::DepthStencil)});
+        const FrameTargets output{{color,width,width},{depth,width,width}};
+        const auto hdr=bloom.Scene_Targets(output);
+        BOOST_REQUIRE(hdr.backbuffer.texture.Is_Valid());
+        BOOST_CHECK(hdr.depth.texture==depth);
+        BOOST_REQUIRE(commands.Set_Render_Targets(hdr.backbuffer.texture,depth));
+        BOOST_REQUIRE(commands.Clear({.25f,1,4,1},1));
+        BOOST_REQUIRE(bloom.Tone_Map(commands,output));
+        const auto frame=capture.Read(device,color,width,width,RHITextureFormat::RGBA8_UNorm);
+        BOOST_REQUIRE(frame.Is_Valid());
+        const int r=std::to_integer<int>(frame.pixels[0]),g=std::to_integer<int>(frame.pixels[1]),b=std::to_integer<int>(frame.pixels[2]);
+        BOOST_TEST(r>40);BOOST_TEST(g>r+10);BOOST_TEST(b>g+10);BOOST_TEST(b<255);
+        BOOST_REQUIRE(commands.Set_Render_Targets(hdr.backbuffer.texture,depth));
+        BOOST_REQUIRE(commands.Clear({.25f,.25f,.25f,1},1));
+        BOOST_REQUIRE(bloom.Tone_Map(commands,output,.25f));
+        const auto darker=capture.Read(device,color,width,width,RHITextureFormat::RGBA8_UNorm);
+        BOOST_REQUIRE(darker.Is_Valid());BOOST_CHECK_SMALL(std::to_integer<int>(darker.pixels[0])-71,2);
+        BOOST_REQUIRE(commands.Set_Render_Targets(hdr.backbuffer.texture,depth));
+        BOOST_REQUIRE(commands.Clear({4,0,0,1},1));
+        BOOST_REQUIRE(bloom.Tone_Map(commands,output));
+        const auto red=capture.Read(device,color,width,width,RHITextureFormat::RGBA8_UNorm);
+        BOOST_REQUIRE(red.Is_Valid());
+        BOOST_TEST(std::to_integer<int>(red.pixels[0])>240);
+        BOOST_TEST(std::to_integer<int>(red.pixels[1])==0);
+        BOOST_TEST(std::to_integer<int>(red.pixels[2])==0);
+        device.Destroy_Texture(color);device.Destroy_Texture(depth);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(world_antialiasing_filters_diagonal_edges_and_is_frame_stable)
+{
+    GraphicsTestDevice device;BloomRenderer bloom;FrameCapture capture;
+    BOOST_REQUIRE(bloom.Initialize(device,Test_Shader_Directory(GRAPHICS_BLOOM_SHADER_DIRECTORY)));
+    constexpr unsigned size=32;
+    const auto color=device.Create_Texture({size,size,1,RHITextureFormat::RGBA8_UNorm,static_cast<unsigned>(RHITextureUsage::RenderTarget)});
+    const auto depth=device.Create_Texture({size,size,1,RHITextureFormat::D32_Float,static_cast<unsigned>(RHITextureUsage::DepthStencil)});
+    const FrameTargets output{{color,size,size},{depth,size,size}};
+    const auto hdr=bloom.Scene_Targets(output);
+    std::vector<std::uint16_t> pixels(size*size*4);
+    for(unsigned y=0;y<size;++y)for(unsigned x=0;x<size;++x) {
+        const auto i=(y*size+x)*4;
+        pixels[i]=pixels[i+1]=pixels[i+2]=x>y*.6f+3 ? 0x3c00 : 0;
+        pixels[i+3]=0x3c00;
+    }
+    BOOST_REQUIRE(device.Update_Texture(hdr.backbuffer.texture,{std::as_bytes(std::span(pixels)),size*8}));
+    BOOST_REQUIRE(bloom.Tone_Map(device.Immediate_Command_List(),output));
+    const auto first=capture.Read(device,color,size,size,RHITextureFormat::RGBA8_UNorm);
+    unsigned edge_pixels=0;
+    for(unsigned y=0;y<size;++y)for(unsigned x=0;x<size;++x) {
+        const auto i=y*first.row_pitch+x*4;
+        const auto value=std::to_integer<unsigned>(first.pixels[i]);
+        if(value>0 && value<240) ++edge_pixels;
+        BOOST_CHECK(first.pixels[i]==first.pixels[i+1]);
+        BOOST_CHECK(first.pixels[i]==first.pixels[i+2]);
+    }
+    BOOST_TEST(edge_pixels>20u);
+    const std::vector<std::byte> saved(first.pixels.begin(),first.pixels.end());
+    BOOST_REQUIRE(bloom.Tone_Map(device.Immediate_Command_List(),output));
+    const auto second=capture.Read(device,color,size,size,RHITextureFormat::RGBA8_UNorm);
+    BOOST_CHECK(std::equal(saved.begin(),saved.end(),second.pixels.begin(),second.pixels.end()));
+    bloom.Shutdown();device.Destroy_Texture(color);device.Destroy_Texture(depth);
 }

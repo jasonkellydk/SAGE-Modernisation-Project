@@ -1,9 +1,11 @@
 import Graphics.Frame.RenderClock;
 import Graphics.Frame.RenderSettings;
+import Graphics.Scene.Props.Surface;
 #include "W3DDevice/GameClient/W3DRenderServices.h"
 #include <algorithm>
 #include <cstddef>
 #include <cstring>
+#include <fstream>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -15,6 +17,7 @@ import Graphics.Frame.RenderSettings;
 
 
 import Assets.Images.PixelEncoding;
+import Assets.Identity;
 import Graphics.Frame.Runtime;
 import Graphics.Resources.Loading.Queue;
 import Graphics.Resources.Textures.Load;
@@ -42,6 +45,22 @@ Graphics::TextureResidencyClock Make_Game_Texture_Residency_Clock(
 
 Graphics::TextureImageReader Make_Archive_Reader(std::string path)
 {
+    if (_TheFileFactory) if (auto source = _TheFileFactory->Resolve_Independent_Source(path.c_str())) {
+        return [source = std::move(*source)](std::size_t prefix, std::vector<std::byte>& bytes,
+            std::size_t& source_size) {
+            if (source.path.empty()) return false;
+            std::ifstream file(source.path,std::ios::binary | std::ios::ate);
+            if (!file) return false;
+            const auto end = file.tellg();
+            if (end < 0 || static_cast<std::uint64_t>(end) < source.offset) return false;
+            const auto available = static_cast<std::uint64_t>(end) - source.offset;
+            source_size = static_cast<std::size_t>(source.bounded ? source.size : available);
+            if (!source_size || source_size > available || prefix > source_size) return false;
+            bytes.resize(prefix ? prefix : source_size);
+            file.seekg(static_cast<std::streamoff>(source.offset));
+            return bool(file.read(reinterpret_cast<char*>(bytes.data()),static_cast<std::streamsize>(bytes.size())));
+        };
+    }
     return [path = std::move(path)](std::size_t prefix, std::vector<std::byte>& bytes,
         std::size_t& source_size) {
         if (!_TheFileFactory || path.empty())
@@ -141,7 +160,8 @@ W3DTextureHandle::W3DTextureHandle(unsigned width, unsigned height,
 W3DTextureHandle::W3DTextureHandle(const char* name, const char* full_path,
     MipCountType mip_level_count, Assets::PixelEncoding texture_format,
     bool allow_compression, bool allow_reduction, TexAssetType asset_type,
-    Graphics::TextureResidencyClock clock)
+    Graphics::TextureResidencyClock clock, bool linear_data,
+    std::function<bool(Assets::ImageBuffer&)> transform)
     : m_residency(Make_Game_Texture_Residency_Clock(std::move(clock))),
       m_sampling(Graphics::Make_Texture_Sampling(mip_level_count != MIP_LEVELS_1)),
       m_texture_format(texture_format),
@@ -153,6 +173,8 @@ W3DTextureHandle::W3DTextureHandle(const char* name, const char* full_path,
       m_reducible(allow_reduction),
       m_load_state(std::make_shared<LoadState>())
 {
+    m_pbr_data = linear_data;
+    m_image_transform = std::move(transform);
     if (Is_Compressed(m_texture_format))
         m_allow_compression = true;
     if (Is_Bump(m_texture_format)) {
@@ -362,8 +384,72 @@ bool W3DTextureHandle::Ensure_Render_Backend_Texture()
     return m_residency.Ensure();
 }
 
+std::optional<Graphics::PropMaterialTexture> W3DTextureHandle::Resolve_PBR_Material()
+{
+    if (!Graphics::Get_Render_Settings().PBR_Enabled()) return std::nullopt;
+    if (m_pbr_source) {
+        auto material = m_pbr_source->Resolve_PBR_Material();
+        if (!material || !Ensure_Render_Backend_Texture()) return std::nullopt;
+        material->texture = Peek_Graphics_Texture();
+        return material;
+    }
+    if (!m_pbr_probed) {
+        m_pbr_probed = true;
+        if (!Is_Procedural() && m_asset_type == TEX_REGULAR) {
+            Assets::MaterialAssetDesc material;
+            material.primary_texture = To_String(Get_Full_Path());
+            if (material.primary_texture.empty()) material.primary_texture = To_String(Get_Texture_Name());
+            m_pbr_available = Assets::Discover_PBR_Textures(material, [](const std::string& path) {
+                if (!_TheFileFactory) return false;
+                file_auto_ptr file(_TheFileFactory, path.c_str());
+                return file.get() && file->Is_Available();
+            });
+            if (!m_pbr_available && !material.primary_texture.empty()) {
+                material.surface = Assets::Upgrade_Legacy_Surface(material.primary_texture);
+                m_pbr_available = true;
+            }
+            if (m_pbr_available) {
+                m_pbr_surface = material.surface;
+                const auto create = [&](std::size_t slot, const std::string& path) {
+                    if (path.empty()) return;
+                    if (slot == 0 && Assets::Asset_Name_Equals_No_Case(path.c_str(),Get_Full_Path().str())) return;
+                    m_pbr_textures[slot] = RefCountPtr<W3DTextureHandle>::Create_No_Add_Ref(
+                        NEW_REF(W3DTextureHandle, (path.c_str(), path.c_str(), m_mip_level_count,
+                            Assets::PixelEncoding::Unknown, true, m_reducible, TEX_REGULAR,
+                            Graphics::TextureResidencyClock{}, slot != 0)));
+                    m_pbr_textures[slot]->Get_Sampling() = m_sampling;
+                    // Team-colour texture variants tint albedo only; data maps stay linear.
+                    if (slot == 0) m_pbr_textures[slot]->Set_HSV_Shift(m_hsv_shift);
+                };
+                create(0, material.primary_texture);
+                for (std::size_t role = 0; role < Assets::MaterialSurfaceTextureCount; ++role)
+                    create(role + 1, material.surface_textures[role]);
+            }
+        }
+    }
+    if (!m_pbr_available) return std::nullopt;
+    Graphics::PropMaterialTexture result;
+    result.sampling = m_sampling;
+    std::uint32_t maps = 0;
+    for (std::size_t slot = 0; slot < m_pbr_textures.size(); ++slot) {
+        const auto& texture = m_pbr_textures[slot];
+        if (!texture || !texture->Ensure_Render_Backend_Texture() || texture->Is_Missing_Texture()) continue;
+        if (slot == 0) result.texture = texture->Peek_Graphics_Texture();
+        else { result.surface_textures[slot - 1] = texture->Peek_Graphics_Texture(); maps |= 1u << (slot - 1); }
+    }
+    if (!result.texture.Is_Valid() && !m_pbr_textures[0] && Ensure_Render_Backend_Texture())
+        result.texture = Peek_Graphics_Texture();
+    if (!result.texture.Is_Valid()) return std::nullopt;
+    m_pbr_surface.normal_flip_green = Graphics::Get_Render_Settings().PBR_Normal_Flip_Green();
+    Graphics::PropSurfaceParameters surface;
+    if (!Graphics::Configure_Prop_Surface(m_pbr_surface, maps, surface)) return std::nullopt;
+    result.surface = surface;
+    return result;
+}
+
 void W3DTextureHandle::Invalidate() noexcept
 {
+    ++m_load_revision;
     m_residency.Invalidate();
 }
 
@@ -384,8 +470,10 @@ void W3DTextureHandle::Apply_New_Surface(Graphics::TextureResource* texture,
 
 void W3DTextureHandle::Set_HSV_Shift(const Vector3& hsv_shift) noexcept
 {
+    if (m_hsv_shift == hsv_shift) return;
     Invalidate();
     m_hsv_shift = hsv_shift;
+    if (m_pbr_textures[0]) m_pbr_textures[0]->Set_HSV_Shift(hsv_shift);
 }
 
 bool W3DTextureHandle::Is_Missing_Texture() const noexcept
@@ -396,6 +484,8 @@ bool W3DTextureHandle::Is_Missing_Texture() const noexcept
 
 Graphics::TextureEdit* W3DTextureHandle::Get_Surface_Level(unsigned level)
 {
+    if (!Is_Initialized() && m_residency.Load_Source())
+        Graphics::Get_Resource_Load_Queue().Request(m_residency.Load_Source(),Graphics::ResourceLoadPriority::Immediate);
     if (!Ensure_Render_Backend_Texture())
         return nullptr;
     auto* texture = m_residency.Resource();
@@ -406,6 +496,8 @@ void W3DTextureHandle::Get_Level_Description(Assets::ImageDescription& descripti
     unsigned level)
 {
     description = {};
+    if (!Is_Initialized() && m_residency.Load_Source())
+        Graphics::Get_Resource_Load_Queue().Request(m_residency.Load_Source(),Graphics::ResourceLoadPriority::Immediate);
     if (!Ensure_Render_Backend_Texture())
         return;
     const auto* texture = m_residency.Resource();
@@ -466,8 +558,9 @@ std::unique_ptr<Graphics::ResourceLoadJob> W3DTextureHandle::Make_Load_Job(
         static_cast<unsigned>((std::max)(0, quality.mip_reduction)),
         static_cast<unsigned>((std::max)(1, quality.minimum_dimension)), m_reducible};
     request.allow_compression = m_allow_compression;
-    request.prefer_16_bits = quality.prefer_16_bits;
+    request.prefer_16_bits = quality.prefer_16_bits && !m_pbr_data;
     request.hsv_shift = {m_hsv_shift.X, m_hsv_shift.Y, m_hsv_shift.Z};
+    request.transform = m_image_transform;
 
     std::string path = To_String(Get_Full_Path());
     request.read_tga = Make_Archive_Reader(path);
@@ -478,7 +571,11 @@ std::unique_ptr<Graphics::ResourceLoadJob> W3DTextureHandle::Make_Load_Job(
     }
 
     return std::make_unique<Graphics::TextureLoadJob>(std::move(request),
-        [owner = std::move(owner)](Graphics::TextureResource* resource) noexcept {
+        [owner = std::move(owner), revision = m_load_revision](Graphics::TextureResource* resource) noexcept {
+            if (owner->m_load_revision != revision) {
+                Graphics::Release_Texture_Resource(resource);
+                return;
+            }
             if (resource)
                 owner->Apply_New_Surface(resource, true);
             else
@@ -511,10 +608,7 @@ void W3DTextureHandle::Configure_File_Load()
             return;
         auto& queue = Graphics::Get_Resource_Load_Queue();
         const auto& source = m_residency.Load_Source();
-        if (!m_residency.Resource())
-            queue.Request(source, Graphics::ResourceLoadPriority::Immediate);
-        if (!m_residency.Is_Initialized())
-            queue.Request(source, Graphics::ResourceLoadPriority::Background);
+        queue.Request(source, Graphics::ResourceLoadPriority::Background);
     });
 
     if (Graphics::Get_Resource_Load_Queue().Is_Owner_Thread())

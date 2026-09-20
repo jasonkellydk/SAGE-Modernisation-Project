@@ -306,3 +306,21 @@ BOOST_AUTO_TEST_CASE(distant_rays_remain_bounded_and_preserve_sunlight_tint)
         }
     }
 }
+
+BOOST_AUTO_TEST_CASE(hdr_volume_conserves_transmission_and_scattered_light_color)
+{
+    Fixture f(false);
+    auto& env=Get_Environment_Lighting().parameters;
+    env.pbr_options={1,1,1,1};env.sun_radiance={2,0,0,0};
+    auto input=OrthographicInput();input.medium={.01f,.9f,.35f,0};
+    f.Reset(32,32);f.Render(input);
+    const auto lit=f.Read();
+    BOOST_TEST(std::to_integer<int>(lit.pixels[0])>16);
+    BOOST_TEST(std::to_integer<int>(lit.pixels[1])<16);
+    BOOST_CHECK(lit.pixels[1]==lit.pixels[2]);
+    input.medium[0]=0;
+    f.Reset(32,32);f.Render(input);
+    const auto vacuum=f.Read();
+    for(unsigned channel=0;channel<3;++channel)
+        BOOST_CHECK_EQUAL(std::to_integer<int>(vacuum.pixels[channel]),16);
+}

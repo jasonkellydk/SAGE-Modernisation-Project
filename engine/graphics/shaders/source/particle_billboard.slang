@@ -1,3 +1,5 @@
+#include "pbr_brdf.slangh"
+#include "environment_lighting.slangh"
 #include "resource_access.slangh"
 struct ParticleVertexInput
 {
@@ -16,6 +18,11 @@ struct ParticleVertexOutput
     float point_size_value : TEXCOORD3;
     float2 point_center : TEXCOORD4;
     nointerpolation float4 texture_region : TEXCOORD5;
+    float3 world_position : TEXCOORD6;
+    nointerpolation float4 animation : TEXCOORD7;
+    nointerpolation float radius : TEXCOORD8;
+    nointerpolation uint normal_texture_index : TEXCOORD9;
+    nointerpolation float angle : TEXCOORD10;
 };
 
 struct ParticlePixelInput
@@ -28,6 +35,11 @@ struct ParticlePixelInput
     float point_size_value : TEXCOORD3;
     float2 point_center : TEXCOORD4;
     nointerpolation float4 texture_region : TEXCOORD5;
+    float3 world_position : TEXCOORD6;
+    nointerpolation float4 animation : TEXCOORD7;
+    nointerpolation float radius : TEXCOORD8;
+    nointerpolation uint normal_texture_index : TEXCOORD9;
+    nointerpolation float angle : TEXCOORD10;
 };
 
 struct GPUParticleData
@@ -40,10 +52,14 @@ struct GPUParticleData
     float angle;
     uint texture_index;
     float4 texture_region;
+    float4 animation;
+    uint normal_texture_index;
+    uint3 padding;
 };
 
 GRAPHICS_STORAGE_BUFFER(Particles, GPUParticleData, 127)
-GRAPHICS_TEXTURE_ARRAY(Textures, float4, 0, 126)
+GRAPHICS_TEXTURE_ARRAY(Textures, float4, 0, 8)
+GRAPHICS_TEXTURE_2D(ParticleSceneDepth, float, 126)
 GRAPHICS_SAMPLER(ParticleSampler, 0)
 
 cbuffer MaterialParameters : register(b0)
@@ -56,6 +72,7 @@ cbuffer ParticleFrame : register(b1)
     row_major float4x4 ParticleView;
     row_major float4x4 ParticleProjection;
     uint4 ParticleOffset;
+    float4 ParticleDepthOptions;
 };
 
 ParticleVertexOutput particle_billboard_vertex(ParticleVertexInput input, uint instance_id : SV_InstanceID)
@@ -84,9 +101,14 @@ ParticleVertexOutput particle_billboard_vertex(ParticleVertexInput input, uint i
             -sine*input.position.x+cosine*input.position.y)*size;
         output.position = mul(ParticleProjection,mul(ParticleView,world_center+float4(corner,0,0)));
     }
+    output.animation=particle.animation;
+    output.radius=size;
+    output.normal_texture_index=particle.normal_texture_index;
+    output.angle=particle.angle;
     output.point_size_value = point_sprite ? max(size,1.0) : 1.0;
     output.point_center = clip_center.xy / max(abs(clip_center.w),0.000001);
     output.color = particle.color * Values[0];
+    output.world_position=world_center.xyz;
     // Ground effects assign UV(0,0) to the rotated world (+X,+Y)
     // corner; billboards assign it to the upper-left view-space corner.
     output.uv = !billboard && !point_sprite ? float2(1.0-input.uv.x,input.uv.y) : input.uv;
@@ -96,6 +118,74 @@ ParticleVertexOutput particle_billboard_vertex(ParticleVertexInput input, uint i
     return output;
 }
 
+
+// Reconstruct both perspective and orthographic depth without assuming a
+// particular near/far plane. Projection matrices use the engine's 0..1 depth.
+float3 ParticleViewPosition(float2 pixel, float depth)
+{
+    float2 ndc=(pixel-Values[1].zw)/Values[1].xy*float2(2,-2)+float2(-1,1);
+    float z=(ParticleProjection[2][3]-depth*ParticleProjection[3][3])/
+        (depth*ParticleProjection[3][2]-ParticleProjection[2][2]);
+    float w=ParticleProjection[3][2]*z+ParticleProjection[3][3];
+    return float3((ndc.x*w-ParticleProjection[0][2]*z-ParticleProjection[0][3])/ParticleProjection[0][0],
+        (ndc.y*w-ParticleProjection[1][2]*z-ParticleProjection[1][3])/ParticleProjection[1][1],z);
+}
+float3 ParticleWorldPosition(float3 view)
+{
+    return mul(transpose((float3x3)ParticleView),view-float3(ParticleView[0][3],ParticleView[1][3],ParticleView[2][3]));
+}
+float ParticlePhase(float cosine)
+{
+    const float g=.25;
+    return (1-g*g)/(12.56637061*pow(max(1+g*g-2*g*cosine,.01),1.5));
+}
+float ParticleLightResponse(float3 light, float3 view, float3 normal)
+{
+    // Authored normal maps describe the smoke surface; unmapped particles
+    // retain the scattering phase response. Both use the scene light/shadow data.
+    return dot(normal,normal)>.5 ? saturate(dot(normal,light))/3.14159265 : ParticlePhase(dot(light,view));
+}
+float4 ParticleTexture(uint index,float2 uv,float2 dx,float2 dy)
+{
+#if defined(GRAPHICS_DX12)
+    if(index<8u) return Textures[NonUniformResourceIndex(index)].SampleGrad(ParticleSampler(),uv,dx,dy);
+#else
+    switch(index) {
+    case 0: return Textures[0].SampleGrad(ParticleSampler(),uv,dx,dy);
+    case 1: return Textures[1].SampleGrad(ParticleSampler(),uv,dx,dy);
+    case 2: return Textures[2].SampleGrad(ParticleSampler(),uv,dx,dy);
+    case 3: return Textures[3].SampleGrad(ParticleSampler(),uv,dx,dy);
+    case 4: return Textures[4].SampleGrad(ParticleSampler(),uv,dx,dy);
+    case 5: return Textures[5].SampleGrad(ParticleSampler(),uv,dx,dy);
+    case 6: return Textures[6].SampleGrad(ParticleSampler(),uv,dx,dy);
+    case 7: return Textures[7].SampleGrad(ParticleSampler(),uv,dx,dy);
+    }
+#endif
+    return 1.xxxx;
+}
+float3 ParticleIncident(float3 position, float3 toward_camera, float3 normal)
+{
+    float3 incident=(EnvironmentSkyRadiance.rgb+EnvironmentGroundRadiance.rgb)*.5*EnvironmentPBR.z;
+    const float3 visibility=DirectionalVisibility(position);
+    incident+=EnvironmentSunRadiance.rgb*ParticleLightResponse(EnvironmentSunDirection.xyz,toward_camera,normal)*visibility;
+    [unroll] for(int sun=0;sun<2;++sun)
+        incident+=EnvironmentSecondarySunRadiance[sun].rgb*ParticleLightResponse(EnvironmentSecondarySunDirection[sun].xyz,toward_camera,normal)*visibility;
+    [loop] for(int i=0;i<min(int(EnvironmentLocalLightOptions.x),64);++i) {
+        const float3 delta=EnvironmentLocalPositions[i].xyz-position;
+        const float distance=length(delta);
+        if(distance<EnvironmentLocalPositions[i].w) {
+            const float3 light=Surface_Normalize(delta,float3(0,0,1));
+            float attenuation=Surface_Radiant_Attenuation(distance,EnvironmentLocalPositions[i].w);
+            if(EnvironmentLocalDirection[i].w>-1) {
+                const float cone=dot(-light,Surface_Normalize(EnvironmentLocalDirection[i].xyz,float3(0,0,-1)));
+                attenuation*=pow(saturate((cone-EnvironmentLocalDirection[i].w)/max(.0001,EnvironmentLocalSpot[i].x-EnvironmentLocalDirection[i].w)),max(1,EnvironmentLocalSpot[i].y));
+            }
+            attenuation*=LocalLightVisibility(i,position,float3(0,0,0));
+            incident+=EnvironmentLocalDiffuse[i].rgb*attenuation*ParticleLightResponse(light,toward_camera,normal);
+        }
+    }
+    return incident;
+}
 float4 particle_billboard_pixel(ParticlePixelInput input) : SV_TARGET
 {
     const bool point_sprite = (input.emitter_flags & 32u) != 0;
@@ -105,148 +195,56 @@ float4 particle_billboard_pixel(ParticlePixelInput input) : SV_TARGET
     const float2 sprite_uv = point_sprite
         ? (input.position.xy - point_center_pixels) / max(input.point_size_value, 1.0) + 0.5
         : input.uv;
-    const float2 point_sample_uv = lerp(input.texture_region.xy, input.texture_region.zw, sprite_uv);
-    float4 texture_color = float4(1.0, 1.0, 1.0, 1.0);
-    if (input.texture_index != 0xffffffffu)
-    {
-#if defined(GRAPHICS_DX12)
-        if (input.texture_index < 126u)
-            texture_color = Textures[NonUniformResourceIndex(input.texture_index)].Sample(ParticleSampler(), point_sample_uv);
-#else
-        switch (input.texture_index)
-        {
-        case 0: texture_color = Textures[0].Sample(ParticleSampler(), point_sample_uv); break;
-        case 1: texture_color = Textures[1].Sample(ParticleSampler(), point_sample_uv); break;
-        case 2: texture_color = Textures[2].Sample(ParticleSampler(), point_sample_uv); break;
-        case 3: texture_color = Textures[3].Sample(ParticleSampler(), point_sample_uv); break;
-        case 4: texture_color = Textures[4].Sample(ParticleSampler(), point_sample_uv); break;
-        case 5: texture_color = Textures[5].Sample(ParticleSampler(), point_sample_uv); break;
-        case 6: texture_color = Textures[6].Sample(ParticleSampler(), point_sample_uv); break;
-        case 7: texture_color = Textures[7].Sample(ParticleSampler(), point_sample_uv); break;
-        case 8: texture_color = Textures[8].Sample(ParticleSampler(), point_sample_uv); break;
-        case 9: texture_color = Textures[9].Sample(ParticleSampler(), point_sample_uv); break;
-        case 10: texture_color = Textures[10].Sample(ParticleSampler(), point_sample_uv); break;
-        case 11: texture_color = Textures[11].Sample(ParticleSampler(), point_sample_uv); break;
-        case 12: texture_color = Textures[12].Sample(ParticleSampler(), point_sample_uv); break;
-        case 13: texture_color = Textures[13].Sample(ParticleSampler(), point_sample_uv); break;
-        case 14: texture_color = Textures[14].Sample(ParticleSampler(), point_sample_uv); break;
-        case 15: texture_color = Textures[15].Sample(ParticleSampler(), point_sample_uv); break;
-        case 16: texture_color = Textures[16].Sample(ParticleSampler(), point_sample_uv); break;
-        case 17: texture_color = Textures[17].Sample(ParticleSampler(), point_sample_uv); break;
-        case 18: texture_color = Textures[18].Sample(ParticleSampler(), point_sample_uv); break;
-        case 19: texture_color = Textures[19].Sample(ParticleSampler(), point_sample_uv); break;
-        case 20: texture_color = Textures[20].Sample(ParticleSampler(), point_sample_uv); break;
-        case 21: texture_color = Textures[21].Sample(ParticleSampler(), point_sample_uv); break;
-        case 22: texture_color = Textures[22].Sample(ParticleSampler(), point_sample_uv); break;
-        case 23: texture_color = Textures[23].Sample(ParticleSampler(), point_sample_uv); break;
-        case 24: texture_color = Textures[24].Sample(ParticleSampler(), point_sample_uv); break;
-        case 25: texture_color = Textures[25].Sample(ParticleSampler(), point_sample_uv); break;
-        case 26: texture_color = Textures[26].Sample(ParticleSampler(), point_sample_uv); break;
-        case 27: texture_color = Textures[27].Sample(ParticleSampler(), point_sample_uv); break;
-        case 28: texture_color = Textures[28].Sample(ParticleSampler(), point_sample_uv); break;
-        case 29: texture_color = Textures[29].Sample(ParticleSampler(), point_sample_uv); break;
-        case 30: texture_color = Textures[30].Sample(ParticleSampler(), point_sample_uv); break;
-        case 31: texture_color = Textures[31].Sample(ParticleSampler(), point_sample_uv); break;
-        case 32: texture_color = Textures[32].Sample(ParticleSampler(), point_sample_uv); break;
-        case 33: texture_color = Textures[33].Sample(ParticleSampler(), point_sample_uv); break;
-        case 34: texture_color = Textures[34].Sample(ParticleSampler(), point_sample_uv); break;
-        case 35: texture_color = Textures[35].Sample(ParticleSampler(), point_sample_uv); break;
-        case 36: texture_color = Textures[36].Sample(ParticleSampler(), point_sample_uv); break;
-        case 37: texture_color = Textures[37].Sample(ParticleSampler(), point_sample_uv); break;
-        case 38: texture_color = Textures[38].Sample(ParticleSampler(), point_sample_uv); break;
-        case 39: texture_color = Textures[39].Sample(ParticleSampler(), point_sample_uv); break;
-        case 40: texture_color = Textures[40].Sample(ParticleSampler(), point_sample_uv); break;
-        case 41: texture_color = Textures[41].Sample(ParticleSampler(), point_sample_uv); break;
-        case 42: texture_color = Textures[42].Sample(ParticleSampler(), point_sample_uv); break;
-        case 43: texture_color = Textures[43].Sample(ParticleSampler(), point_sample_uv); break;
-        case 44: texture_color = Textures[44].Sample(ParticleSampler(), point_sample_uv); break;
-        case 45: texture_color = Textures[45].Sample(ParticleSampler(), point_sample_uv); break;
-        case 46: texture_color = Textures[46].Sample(ParticleSampler(), point_sample_uv); break;
-        case 47: texture_color = Textures[47].Sample(ParticleSampler(), point_sample_uv); break;
-        case 48: texture_color = Textures[48].Sample(ParticleSampler(), point_sample_uv); break;
-        case 49: texture_color = Textures[49].Sample(ParticleSampler(), point_sample_uv); break;
-        case 50: texture_color = Textures[50].Sample(ParticleSampler(), point_sample_uv); break;
-        case 51: texture_color = Textures[51].Sample(ParticleSampler(), point_sample_uv); break;
-        case 52: texture_color = Textures[52].Sample(ParticleSampler(), point_sample_uv); break;
-        case 53: texture_color = Textures[53].Sample(ParticleSampler(), point_sample_uv); break;
-        case 54: texture_color = Textures[54].Sample(ParticleSampler(), point_sample_uv); break;
-        case 55: texture_color = Textures[55].Sample(ParticleSampler(), point_sample_uv); break;
-        case 56: texture_color = Textures[56].Sample(ParticleSampler(), point_sample_uv); break;
-        case 57: texture_color = Textures[57].Sample(ParticleSampler(), point_sample_uv); break;
-        case 58: texture_color = Textures[58].Sample(ParticleSampler(), point_sample_uv); break;
-        case 59: texture_color = Textures[59].Sample(ParticleSampler(), point_sample_uv); break;
-        case 60: texture_color = Textures[60].Sample(ParticleSampler(), point_sample_uv); break;
-        case 61: texture_color = Textures[61].Sample(ParticleSampler(), point_sample_uv); break;
-        case 62: texture_color = Textures[62].Sample(ParticleSampler(), point_sample_uv); break;
-        case 63: texture_color = Textures[63].Sample(ParticleSampler(), point_sample_uv); break;
-        case 64: texture_color = Textures[64].Sample(ParticleSampler(), point_sample_uv); break;
-        case 65: texture_color = Textures[65].Sample(ParticleSampler(), point_sample_uv); break;
-        case 66: texture_color = Textures[66].Sample(ParticleSampler(), point_sample_uv); break;
-        case 67: texture_color = Textures[67].Sample(ParticleSampler(), point_sample_uv); break;
-        case 68: texture_color = Textures[68].Sample(ParticleSampler(), point_sample_uv); break;
-        case 69: texture_color = Textures[69].Sample(ParticleSampler(), point_sample_uv); break;
-        case 70: texture_color = Textures[70].Sample(ParticleSampler(), point_sample_uv); break;
-        case 71: texture_color = Textures[71].Sample(ParticleSampler(), point_sample_uv); break;
-        case 72: texture_color = Textures[72].Sample(ParticleSampler(), point_sample_uv); break;
-        case 73: texture_color = Textures[73].Sample(ParticleSampler(), point_sample_uv); break;
-        case 74: texture_color = Textures[74].Sample(ParticleSampler(), point_sample_uv); break;
-        case 75: texture_color = Textures[75].Sample(ParticleSampler(), point_sample_uv); break;
-        case 76: texture_color = Textures[76].Sample(ParticleSampler(), point_sample_uv); break;
-        case 77: texture_color = Textures[77].Sample(ParticleSampler(), point_sample_uv); break;
-        case 78: texture_color = Textures[78].Sample(ParticleSampler(), point_sample_uv); break;
-        case 79: texture_color = Textures[79].Sample(ParticleSampler(), point_sample_uv); break;
-        case 80: texture_color = Textures[80].Sample(ParticleSampler(), point_sample_uv); break;
-        case 81: texture_color = Textures[81].Sample(ParticleSampler(), point_sample_uv); break;
-        case 82: texture_color = Textures[82].Sample(ParticleSampler(), point_sample_uv); break;
-        case 83: texture_color = Textures[83].Sample(ParticleSampler(), point_sample_uv); break;
-        case 84: texture_color = Textures[84].Sample(ParticleSampler(), point_sample_uv); break;
-        case 85: texture_color = Textures[85].Sample(ParticleSampler(), point_sample_uv); break;
-        case 86: texture_color = Textures[86].Sample(ParticleSampler(), point_sample_uv); break;
-        case 87: texture_color = Textures[87].Sample(ParticleSampler(), point_sample_uv); break;
-        case 88: texture_color = Textures[88].Sample(ParticleSampler(), point_sample_uv); break;
-        case 89: texture_color = Textures[89].Sample(ParticleSampler(), point_sample_uv); break;
-        case 90: texture_color = Textures[90].Sample(ParticleSampler(), point_sample_uv); break;
-        case 91: texture_color = Textures[91].Sample(ParticleSampler(), point_sample_uv); break;
-        case 92: texture_color = Textures[92].Sample(ParticleSampler(), point_sample_uv); break;
-        case 93: texture_color = Textures[93].Sample(ParticleSampler(), point_sample_uv); break;
-        case 94: texture_color = Textures[94].Sample(ParticleSampler(), point_sample_uv); break;
-        case 95: texture_color = Textures[95].Sample(ParticleSampler(), point_sample_uv); break;
-        case 96: texture_color = Textures[96].Sample(ParticleSampler(), point_sample_uv); break;
-        case 97: texture_color = Textures[97].Sample(ParticleSampler(), point_sample_uv); break;
-        case 98: texture_color = Textures[98].Sample(ParticleSampler(), point_sample_uv); break;
-        case 99: texture_color = Textures[99].Sample(ParticleSampler(), point_sample_uv); break;
-        case 100: texture_color = Textures[100].Sample(ParticleSampler(), point_sample_uv); break;
-        case 101: texture_color = Textures[101].Sample(ParticleSampler(), point_sample_uv); break;
-        case 102: texture_color = Textures[102].Sample(ParticleSampler(), point_sample_uv); break;
-        case 103: texture_color = Textures[103].Sample(ParticleSampler(), point_sample_uv); break;
-        case 104: texture_color = Textures[104].Sample(ParticleSampler(), point_sample_uv); break;
-        case 105: texture_color = Textures[105].Sample(ParticleSampler(), point_sample_uv); break;
-        case 106: texture_color = Textures[106].Sample(ParticleSampler(), point_sample_uv); break;
-        case 107: texture_color = Textures[107].Sample(ParticleSampler(), point_sample_uv); break;
-        case 108: texture_color = Textures[108].Sample(ParticleSampler(), point_sample_uv); break;
-        case 109: texture_color = Textures[109].Sample(ParticleSampler(), point_sample_uv); break;
-        case 110: texture_color = Textures[110].Sample(ParticleSampler(), point_sample_uv); break;
-        case 111: texture_color = Textures[111].Sample(ParticleSampler(), point_sample_uv); break;
-        case 112: texture_color = Textures[112].Sample(ParticleSampler(), point_sample_uv); break;
-        case 113: texture_color = Textures[113].Sample(ParticleSampler(), point_sample_uv); break;
-        case 114: texture_color = Textures[114].Sample(ParticleSampler(), point_sample_uv); break;
-        case 115: texture_color = Textures[115].Sample(ParticleSampler(), point_sample_uv); break;
-        case 116: texture_color = Textures[116].Sample(ParticleSampler(), point_sample_uv); break;
-        case 117: texture_color = Textures[117].Sample(ParticleSampler(), point_sample_uv); break;
-        case 118: texture_color = Textures[118].Sample(ParticleSampler(), point_sample_uv); break;
-        case 119: texture_color = Textures[119].Sample(ParticleSampler(), point_sample_uv); break;
-        case 120: texture_color = Textures[120].Sample(ParticleSampler(), point_sample_uv); break;
-        case 121: texture_color = Textures[121].Sample(ParticleSampler(), point_sample_uv); break;
-        case 122: texture_color = Textures[122].Sample(ParticleSampler(), point_sample_uv); break;
-        case 123: texture_color = Textures[123].Sample(ParticleSampler(), point_sample_uv); break;
-        case 124: texture_color = Textures[124].Sample(ParticleSampler(), point_sample_uv); break;
-        case 125: texture_color = Textures[125].Sample(ParticleSampler(), point_sample_uv); break;
-        default: break;
-        }
-#endif
+    const float2 grid=max(input.animation.yz,1.xx);
+    const float frame=clamp(input.animation.x,0,max(input.animation.w-1,0));
+    const float first=floor(frame), next=min(first+1,max(input.animation.w-1,0));
+    const float2 cell0=float2(fmod(first,grid.x),floor(first/grid.x));
+    const float2 cell1=float2(fmod(next,grid.x),floor(next/grid.x));
+    const float2 local_uv=grid.x*grid.y>1 ? clamp(sprite_uv,.006,.994) : sprite_uv;
+    const float2 uv0=lerp(input.texture_region.xy,input.texture_region.zw,(cell0+local_uv)/grid);
+    const float2 uv1=lerp(input.texture_region.xy,input.texture_region.zw,(cell1+local_uv)/grid);
+    const float2 dx=ddx(sprite_uv)*(input.texture_region.zw-input.texture_region.xy)/grid;
+    const float2 dy=ddy(sprite_uv)*(input.texture_region.zw-input.texture_region.xy)/grid;
+    float4 first_color=ParticleTexture(input.texture_index,uv0,dx,dy);
+    float4 next_color=ParticleTexture(input.texture_index,uv1,dx,dy);
+    if(EnvironmentPBR.y>.5 && (input.emitter_flags&16u)==0) {
+        first_color.rgb=Surface_Linear(first_color.rgb);
+        next_color.rgb=Surface_Linear(next_color.rgb);
     }
-
-    const float4 color = input.color * texture_color;
+    // Alpha-weighted frame interpolation avoids dark fringes on fading smoke.
+    const float blend=frac(frame);
+    float4 texture_color=lerp(first_color,next_color,blend);
+    if(grid.x*grid.y>1 && (input.emitter_flags&8u)==0)
+        texture_color.rgb=lerp(first_color.rgb*first_color.a,next_color.rgb*next_color.a,blend)/max(texture_color.a,.00001);
+    float4 color=input.color*texture_color;
+    if(EnvironmentPBR.y>.5 && (input.emitter_flags&16u)==0) {
+        color.rgb=Surface_Linear(input.color.rgb)*texture_color.rgb;
+        if((input.emitter_flags&(8u|128u))==0) {
+            float3 normal=0;
+            if(input.normal_texture_index!=0xffffffffu) {
+                const float3 normal0=ParticleTexture(input.normal_texture_index,uv0,dx,dy).xyz*2-1;
+                const float3 normal1=ParticleTexture(input.normal_texture_index,uv1,dx,dy).xyz*2-1;
+                float3 tangent=Surface_Normalize(lerp(normal0,normal1,blend),float3(0,0,1));
+                const float c=cos(input.angle),s=sin(input.angle);
+                tangent.xy=float2(c*tangent.x-s*tangent.y,s*tangent.x+c*tangent.y);
+                tangent.z*=ParticleProjection[3][2]>0 ? -1 : 1;
+                normal=normalize(mul(transpose((float3x3)ParticleView),tangent));
+            }
+            const float3 surface=ParticleWorldPosition(ParticleViewPosition(input.position.xy,input.position.z));
+            color.rgb*=ParticleIncident(surface,
+                Surface_Normalize(EnvironmentCamera.xyz-surface,float3(0,0,1)),normal);
+        }
+    }
+    if(ParticleDepthOptions.x>.5 && (input.emitter_flags&4u)==0) {
+        const float scene_depth=ParticleSceneDepth().Load(int3(int2(input.position.xy),0));
+        const float3 scene_position=ParticleViewPosition(input.position.xy,scene_depth);
+        const float3 particle_position=ParticleViewPosition(input.position.xy,input.position.z);
+        const float fade=max(0,length(scene_position)-length(particle_position))/max(input.radius*.35,.05);
+        const float soft=saturate(fade);
+        if((input.emitter_flags&8u)!=0) color.rgb*=soft;
+        else if((input.emitter_flags&16u)!=0) color.rgb=lerp(1.xxx,color.rgb,soft);
+        else color.a*=soft;
+    }
     if ((input.emitter_flags & 4u) != 0 && color.a < (96.0 / 255.0))
         discard;
     return color;

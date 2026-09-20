@@ -1,0 +1,35 @@
+#ifndef GRAPHICS_PBR_BRDF
+#define GRAPHICS_PBR_BRDF
+#include "scene_color.slangh"
+float Surface_Radiant_Attenuation(float distance,float radius)
+{
+    const float cutoff=saturate(1-pow(distance/max(radius,.0001),4));
+    return cutoff*cutoff/max(distance*distance,1.0);
+}
+float Surface_Light_Attenuation(float distance,float radius,float reference)
+{
+    const float cutoff=saturate(1-pow(distance/max(radius,.0001),4));
+    // W3D radii encode an artist-authored pool of light, not luminous power.
+    // Calibrate the softened inverse-square response to that pool's midpoint.
+    reference=max(max(reference,radius*.5),1.0);
+    return cutoff*cutoff*reference*reference/(distance*distance+reference*reference);
+}
+float3 Surface_PBR(float3 albedo,float3 normal,float3 view,float3 light,float roughness,float metallic,float specular_scale = 1,float3 dielectric_f0=float3(.04,.04,.04))
+{
+    const float3 half_vector=Surface_Normalize(view+light,normal);
+    const float nl=saturate(dot(normal,light)),nv=max(saturate(dot(normal,view)),.0001);
+    const float nh=saturate(dot(normal,half_vector)),vh=saturate(dot(view,half_vector));
+    const float alpha=max(roughness*roughness,.0025),a2=alpha*alpha;
+    const float denominator=nh*nh*(a2-1)+1;
+    const float distribution=a2/max(3.14159265*denominator*denominator,1e-7);
+    // Height-correlated Smith GGX visibility (G / (4 NoV NoL)).
+    const float visibility=.5/max(nl*sqrt(nv*nv*(1-a2)+a2)
+        +nv*sqrt(nl*nl*(1-a2)+a2),1e-7);
+    const float3 f0=lerp(dielectric_f0,albedo,metallic);
+    const float3 fresnel=f0+(1-f0)*pow(1-vh,5);
+    const float3 specular=distribution*visibility*fresnel;
+    return ((1-fresnel)*(1-metallic)*albedo/3.14159265+specular*specular_scale)*nl;
+}
+
+
+#endif

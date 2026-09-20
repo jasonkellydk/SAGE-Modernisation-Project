@@ -56,6 +56,9 @@ import Assets.Adapters.W3D.TextureMapping;
 #include "W3DDevice/GameClient/W3DSceneQueryMask.h"
 
 #include "W3DDevice/GameClient/W3DLight.h"
+#include "W3DDevice/GameClient/W3DTerrainTracks.h"
+#include "W3DDevice/GameClient/W3DAssetCatalog.h"
+#include "Common/GlobalData.h"
 #include "WWLib/RAMFILE.h"
 #include "WWLib/chunkio.h"
 
@@ -1648,4 +1651,45 @@ BOOST_AUTO_TEST_CASE(emitted_particles_keep_scene_membership_until_their_lifetim
     BOOST_CHECK_EQUAL(scene.release_register_count, 1);
     scene.Remove_All_Render_Objects();
     BOOST_CHECK(!particles->Is_In_Scene());
+}
+
+// Parked vehicles retain their owner handles. Creating more vehicles than the
+// initial reserve must still allow trails, and expired handles must be reused.
+BOOST_AUTO_TEST_CASE(terrain_tracks_grow_beyond_parked_vehicle_reserve_and_reuse_expired_handles)
+{
+    GlobalData data(".");
+    struct RestoreGlobalData {
+        GlobalData* previous = TheWritableGlobalData;
+        ~RestoreGlobalData() { TheWritableGlobalData = previous; }
+    } restore;
+    TheWritableGlobalData = &data;
+    data.m_maxTerrainTracks = 2;
+    data.m_maxTankTrackEdges = 100;
+    data.m_maxTankTrackOpaqueEdges = 25;
+    data.m_maxTankTrackFadeDelay = 60000;
+    data.m_makeTrackMarks = true;
+    W3DAssetCatalog catalog;
+    W3DSimpleScene scene;
+    W3DLight vehicle(W3DLight::POINT);
+    TerrainTracksRenderObjClassSystem tracks;
+    tracks.init(&scene);
+    auto* parked1=tracks.bindTrack(&vehicle,10,nullptr);
+    auto* parked2=tracks.bindTrack(&vehicle,10,nullptr);
+    auto* moving=tracks.bindTrack(&vehicle,10,nullptr);
+    BOOST_CHECK(parked1 != nullptr);
+    BOOST_CHECK(parked2 != nullptr);
+    BOOST_CHECK(moving != nullptr);
+    BOOST_CHECK(moving != parked1 && moving != parked2);
+    if (moving) {
+        BOOST_CHECK(moving->Peek_Scene() == &scene);
+        tracks.unbindTrack(moving);
+        tracks.update();
+        BOOST_CHECK(moving->Peek_Scene() == nullptr);
+        auto* reused=tracks.bindTrack(&vehicle,10,nullptr);
+        BOOST_CHECK(reused == moving);
+        if (reused) tracks.unbindTrack(reused);
+    }
+    if (parked1) tracks.unbindTrack(parked1);
+    if (parked2) tracks.unbindTrack(parked2);
+    tracks.update();
 }

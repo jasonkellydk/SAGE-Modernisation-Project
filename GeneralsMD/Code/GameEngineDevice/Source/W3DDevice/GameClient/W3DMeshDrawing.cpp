@@ -4,6 +4,7 @@ import Graphics.Frame.RenderSettings;
 #include <optional>
 #include <array>
 import Graphics.Frame.Runtime;
+import Graphics.Frame.RenderSettings;
 import Graphics.Scene.DrawParameters;
 import Graphics.Scene.Props.Submission;
 import Graphics.Scene.Props.MaterialSubmission;
@@ -78,10 +79,6 @@ bool Draw_W3D_Mesh(W3DMeshRenderObject& mesh, W3DRenderContext& info, const Grap
     context.parameters.view_projection = view_projection.values;
     const auto camera_position = info.Camera.Get_Position();
     context.parameters.camera_position = {camera_position.X, camera_position.Y, camera_position.Z, 1};
-    {
-        auto lighting_timing=capture.accumulate("Graphics.Mesh.Lighting");
-        Graphics::Set_Prop_Lighting(context.parameters, mesh.Get_Lighting_Environment());
-    }
     context.projection = camera.projection.values;
     context.milliseconds = Graphics::Get_Render_Clock().Sync_Time();
     context.sorted = model->Get_Flag(W3DMeshGeometry::SORT) && Graphics::Get_Render_Settings().Is_Sorting_Enabled();
@@ -120,9 +117,21 @@ bool Draw_W3D_Mesh(W3DMeshRenderObject& mesh, W3DRenderContext& info, const Grap
         auto submit_timing=capture.accumulate(overrides.shadow_capture ? "Graphics.Mesh.ShadowSubmit" : "Graphics.Mesh.ColorSubmit");
         draw_overrides.instance = &mesh.Graphics_Instance();
         draw_overrides.skin = skin_palette;
+        const bool pbr = !draw_overrides.deferred_pass && !draw_overrides.decal_pass
+            && !draw_overrides.force_multiply && context.muzzle_flash == Graphics::MuzzleFlashDesignation::None
+            && shader.Get_Primary_Gradient() != Graphics::MaterialState::GRADIENT_BUMPENVMAP
+            && shader.Get_Primary_Gradient() != Graphics::MaterialState::GRADIENT_BUMPENVMAPLUMINANCE
+            && (shader.Get_Dst_Blend_Func() == Graphics::MaterialState::DSTBLEND_ZERO
+                || shader.Get_Dst_Blend_Func() == Graphics::MaterialState::DSTBLEND_ONE_MINUS_SRC_ALPHA);
+        if (pbr && Graphics::Get_Render_Settings().PBR_Enabled() && parameters.surface.shading_model < .5f) {
+            parameters.surface.shading_model = 2;
+            parameters.surface.roughness = .7f;
+        }
+        parameters.surface.height[2] = Graphics::Get_Render_Settings().PBR_Parallax_Scale();
         return Graphics::Submit_Prop_Material_In_Place(*device, Graphics::Get_Prop_Renderer(), Graphics::Get_Prop_Submission(),
             vertices, indices, shader, textures,
-            [](W3DTextureHandle* source, bool load) -> std::optional<Graphics::PropMaterialTexture> {
+            [pbr](W3DTextureHandle* source, bool load) -> std::optional<Graphics::PropMaterialTexture> {
+                if (load && pbr) if (auto material = source->Resolve_PBR_Material()) return material;
                 if (load && !source->Ensure_Render_Backend_Texture()) return std::nullopt;
                 return Graphics::PropMaterialTexture{source->Peek_Graphics_Texture(), source->Get_Sampling()};
             }, parameters, submission_context, draw_overrides);

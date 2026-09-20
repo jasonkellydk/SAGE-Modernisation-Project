@@ -26,6 +26,8 @@
 // Class to handle dynamic lights.
 // Author: John Ahlquist, April 2001
 #include <stdlib.h>
+#include <algorithm>
+#include "Common/FramePacer.h"
 
 #include "W3DDevice/GameClient/W3DDynamicLight.h"
 
@@ -36,16 +38,18 @@ Graphics::RenderLight Make_Graphics_Light(const W3DDynamicLight &light) noexcept
 	const Vector3 position = light.Get_Position();
 	Vector3 diffuse;
 	light.Get_Diffuse(&diffuse);
+	Graphics::MaterialLightSource source;
+	light.Get_Light_Description(source);
 	return {
-		Graphics::RenderLightType::Point,
+		source.type,
 		light.isEnabled() ? Graphics::RenderLightFlags::Enabled : Graphics::RenderLightFlags::None,
 		{position.X, position.Y, position.Z},
-		{0.0f, 0.0f, -1.0f},
+		{source.direction[0], source.direction[1], source.direction[2]},
 		{diffuse.X, diffuse.Y, diffuse.Z},
 		light.Get_Intensity(),
 		light.Get_Attenuation_Range(),
-		0.0f,
-		0.0f
+		light.Get_Spot_Angle() * 0.5f,
+		light.Get_Spot_Angle()
 	};
 }
 }
@@ -84,6 +88,7 @@ W3DDynamicLight::~W3DDynamicLight()
 void W3DDynamicLight::setEnabled(Bool enabled)
 {
 	m_enabled = enabled;
+    Set_Intensity(1.f);
 	m_decayRange = false;
 	m_decayFrameCount = 0;
 	m_decayColor = false;
@@ -98,15 +103,18 @@ void W3DDynamicLight::On_Frame_Update()
 		return;
 	}
 	Real factor = 1.0f;
+    // Fade durations are authored in simulation frames, not rendered frames.
+    // A 5-frame flash must last equally long at 30 and 240 render frames/sec.
+    const float step=TheFramePacer ? TheFramePacer->getActualLogicTimeScaleOverFpsRatio() : 1.f;
 	if (m_curIncreaseFrameCount>0 && m_increaseFrameCount>0) {
 		// increasing
-		m_curIncreaseFrameCount--;
+		m_curIncreaseFrameCount=std::max(0.f,m_curIncreaseFrameCount-step);
 		factor = (m_increaseFrameCount-m_curIncreaseFrameCount)/(Real)m_increaseFrameCount;
 
 	}	else if (m_decayFrameCount==0) {
 		factor = 1.0;  // never decays,
 	}	else {
-		m_curDecayFrameCount--;
+		m_curDecayFrameCount=std::max(0.f,m_curDecayFrameCount-step);
 		if (m_curDecayFrameCount == 0) {
 			m_enabled = false;
 			Graphics::UpdatePointLight(m_graphicsLight, Make_Graphics_Light(*this));

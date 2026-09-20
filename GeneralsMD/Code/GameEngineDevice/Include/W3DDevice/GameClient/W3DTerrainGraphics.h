@@ -30,12 +30,16 @@ public:
 protected:
     virtual float Get_Surface_Height(int x, int y) const;
 
+public:
+    void prepareMaterials() override;
+    void staticLightingChanged() override;
+
 private:
     bool Update_Surface();
     bool Update_Textures();
     bool Draw_Surface(W3DRenderContext &info);
     void Release_Texture_References() noexcept;
-    std::array<Graphics::RHITextureHandle, 6> m_textures{};
+    std::array<Graphics::RHITextureHandle, 9> m_textures{};
     Graphics::Device *m_graphicsDevice = nullptr;
     std::vector<Graphics::TerrainCell> m_surfaceCells;
     std::vector<Graphics::TerrainCell> m_overlayCells;

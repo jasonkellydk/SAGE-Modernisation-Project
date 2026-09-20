@@ -15,4 +15,9 @@ cbuffer WaterConstants : register(b0)
     float4 WaterSunColor;
     float4 WaterEnvironmentFrame[3];
     row_major float4x4 WaterInverseViewProjection;
+    float4 WaterPBRSurface;
+    float4 WaterAbsorption;
+    float4 WaterScattering;
+    float4 WaterWaveOptions;
+    float4 WaterBathymetryProjection;
 };

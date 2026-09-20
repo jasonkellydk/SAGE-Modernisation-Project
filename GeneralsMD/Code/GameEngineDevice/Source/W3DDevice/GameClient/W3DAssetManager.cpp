@@ -540,48 +540,31 @@ W3DTextureHandle * W3DAssetManager::Recolor_Texture_One_Time(W3DTextureHandle *t
 	// if texture is procedural return nullptr
 	if (name && name[0]=='!') return nullptr;
 
-	// make sure texture is loaded
-	if (!texture->Is_Initialized())
-		Graphics::Get_Resource_Load_Queue().Request(texture->Loading_Source(), Graphics::ResourceLoadPriority::Immediate);
-
-	Assets::ImageDescription desc;
-	Graphics::TextureEdit *newsurf, *oldsurf;
-	texture->Get_Level_Description(desc);
-
-	Int psize;
-	psize=Assets::Pixel_Size(desc.encoding);
-	DEBUG_ASSERTCRASH( psize == 2 || psize == 4, ("Can't Recolor Texture %s", name) );
-
-	oldsurf=texture->Get_Surface_Level();
-
-	newsurf=Graphics::TextureEdit::Create(desc.width,desc.height,desc.encoding);
-	if (!oldsurf || !newsurf || !newsurf->Copy_From(*oldsurf,
-        {0,0,int(desc.width),int(desc.height)}, {0,0,int(desc.width),int(desc.height)})) {
-        delete oldsurf; delete newsurf; return nullptr;
-    }
-
-	if (*(name+3) == 'D' || *(name+3) == 'd')
-		Remap_Palette(newsurf,color, true, false );	//texture only contains a palette stored in top row.
-	else
-	if (*(name+3) == 'A' || *(name+3) == 'a')
-		Remap_Palette(newsurf,color, false, true );	//texture only contains a palette stored in top row.
-
-	W3DTextureHandle * newtex=NEW_REF(W3DTextureHandle,(newsurf,(MipCountType)texture->Get_Mip_Level_Count()));
-	newtex->Get_Sampling().magnification = texture->Get_Sampling().magnification;
-	newtex->Get_Sampling().minification = texture->Get_Sampling().minification;
-	newtex->Get_Sampling().mipmap = texture->Get_Sampling().mipmap;
-	newtex->Get_Sampling().address[0] = texture->Get_Sampling().address[0];
-	newtex->Get_Sampling().address[1] = texture->Get_Sampling().address[1];
-
-	char newname[512];
-	Munge_Texture_Name(newname, ARRAY_SIZE(newname), name, color);
-	newtex->Set_Texture_Name(newname);
-
-	RefCountPtr<W3DTextureHandle> owner =
-		RefCountPtr<W3DTextureHandle>::Create_No_Add_Ref(newtex);
-
-	delete oldsurf; oldsurf = nullptr;
-	delete newsurf; newsurf = nullptr;
+    texture->Resolve_PBR_Material();
+    auto* albedo = texture->PBR_Albedo() ? texture->PBR_Albedo() : texture;
+    const bool palette = std::strlen(name)>3 && (name[3]=='D' || name[3]=='d');
+    const bool alpha = std::strlen(name)>3 && (name[3]=='A' || name[3]=='a');
+    char newname[512];
+    Munge_Texture_Name(newname, ARRAY_SIZE(newname), name, color);
+    // Decode and recolor CPU pixels on a worker. No GPU readback or synchronous
+    // texture initialization is needed to create a team-colour variant.
+    auto transform = [color,palette,alpha](Assets::ImageBuffer& image) {
+        if (!palette && !alpha) return true;
+        if (palette && image.Width()<TEAM_COLOR_PALETTE_SIZE) return false;
+        std::unique_ptr<Graphics::TextureEdit> edit(Graphics::TextureEdit::Create(
+            image.Width(),image.Height(),image.Encoding()));
+        if (!edit) return false;
+        std::memcpy(edit->Image().Bytes().data(),image.Bytes().data(),image.Bytes().size());
+        Remap_Palette(edit.get(),color,palette,alpha);
+        std::memcpy(image.Bytes().data(),edit->Image().Bytes().data(),image.Bytes().size());
+        return true;
+    };
+    auto* newtex = new W3DTextureHandle(newname,albedo->Get_Full_Path(),texture->Get_Mip_Level_Count(),
+        Assets::PixelEncoding::BGRA8,true,texture->Is_Reducible(),W3DTextureHandle::TEX_REGULAR,
+        Graphics::TextureResidencyClock{},false,std::move(transform));
+    newtex->Inherit_PBR_Material(texture);
+    newtex->Get_Sampling() = texture->Get_Sampling();
+    RefCountPtr<W3DTextureHandle> owner = RefCountPtr<W3DTextureHandle>::Create_No_Add_Ref(newtex);
 
 	return m_catalog.Adopt_Texture(owner);
 }

@@ -17,6 +17,7 @@ import Assets.Identity;
 import Assets.Textures;
 import Graphics.Scene.Particles.Renderer;
 import Graphics.Tests.Device;
+import Graphics.Scene.Lighting.Environment;
 using namespace Graphics;
 
 BOOST_AUTO_TEST_CASE(texture_regions_select_distinct_atlas_cells_after_source_release_and_resize)
@@ -696,4 +697,105 @@ BOOST_AUTO_TEST_CASE(mixed_particle_blends_preserve_black_borders_and_zero_alpha
         }
     }
     renderer.Shutdown(); device.Destroy_Texture(target); device.Destroy_Texture(depth);
+}
+
+BOOST_AUTO_TEST_CASE(animated_sprites_blend_frames_receive_colored_light_and_fade_at_depth)
+{
+    GraphicsTestDevice device({true});
+    BOOST_REQUIRE(device.Is_Valid());
+    struct RestoreEnvironment {
+        EnvironmentLightingState saved=Get_Environment_Lighting();
+        ~RestoreEnvironment(){Get_Environment_Lighting()=saved;}
+    } restore;
+    auto& environment=Get_Environment_Lighting();environment={};
+    environment.parameters.pbr_options={1,1,1,1};
+    environment.parameters.sky_radiance={1,1,1,0};
+    environment.parameters.ground_radiance={1,1,1,0};
+    ParticleRenderer renderer;
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_PARTICLE_SHADER_DIRECTORY),1,1));
+    Matrix4x4 projection{};
+    projection.values[0]=projection.values[5]=1;
+    projection.values[10]=-10.f/9;projection.values[11]=-10.f/9;projection.values[14]=-1;
+    BOOST_REQUIRE(renderer.Set_View({Matrix4x4::Identity(),projection,{}, {0,0,64,64,0,1}}));
+    ParticleEmitter emitter;
+    Texture description;
+    description.width=8;description.height=4;description.mip_count=1;description.row_pitch=32;
+    description.format=TextureFormat::RGBA8_UNorm;description.usage=TextureUsage::Sampled;
+    std::array<std::byte,128> texels{};
+    for(unsigned y=0;y<4;++y) for(unsigned x=0;x<8;++x) {
+        const unsigned p=(y*8+x)*4;
+        texels[p]=texels[p+3]=std::byte{255};
+        texels[p+1]=texels[p+2]=x<4 ? std::byte{255} : std::byte{0};
+    }
+    const auto texture=renderer.Create_Texture(description,texels);
+    BOOST_REQUIRE(texture.Is_Valid());
+    description.width=description.height=1;description.row_pitch=4;
+    const std::array<std::byte,4> normal_bytes{std::byte{128},std::byte{128},std::byte{255},std::byte{255}};
+    const auto normal=renderer.Create_Texture(description,normal_bytes);
+    BOOST_REQUIRE(normal.Is_Valid());
+    Material material;material.shader=renderer.Particle_Shader();material.textures[0]=texture;material.textures[1]=normal;
+    emitter.material=renderer.Create_Material(material);
+    BOOST_REQUIRE(emitter.material.Is_Valid());emitter.position={0,0,-3};emitter.particle_size=1;
+    emitter.color={1,1,1,1};emitter.max_particles=1;
+    emitter.flags=ParticleEmitterFlags::Enabled|ParticleEmitterFlags::Billboard|ParticleEmitterFlags::LitSprite;
+    emitter.pipeline=renderer.Pipeline_For_Flags(emitter.flags);
+    const auto owner=renderer.Create_Emitter(emitter);
+    ParticleSystem source;source.Reserve(1,1);
+    const auto source_owner=source.Create_Emitter(emitter);
+    BOOST_REQUIRE(source.Spawn(source_owner,1));
+    const auto set_frame=[&](float frame) {
+        renderer.Reset_Particles();auto data=source.Particles();
+        const std::array<ParticleAnimation,1> animation{{{frame,2,1,2}}};
+        data.animations=animation;
+        BOOST_REQUIRE(renderer.Append_Particles(owner,data));
+    };
+    set_frame(0);
+    const auto color=device.Create_Texture({64,64,1,RHITextureFormat::RGBA32_Float,static_cast<unsigned>(RHITextureUsage::RenderTarget)});
+    const auto depth=device.Create_Texture({64,64,1,RHITextureFormat::D32_Float,static_cast<unsigned>(RHITextureUsage::DepthStencil)});
+    auto& commands=device.Immediate_Command_List();
+    const auto draw=[&](float depth_value) {
+        BOOST_REQUIRE(commands.Set_Render_Targets(color,depth));
+        BOOST_REQUIRE(commands.Clear({0,0,0,0},depth_value));
+        BOOST_REQUIRE(renderer.Render(commands,color,depth,{0,0,64,64},RHITextureFormat::D32_Float));
+        std::vector<float> pixels(64*64*4);
+        BOOST_REQUIRE(device.Readback_Texture(color,std::as_writable_bytes(std::span(pixels)),64*16));
+        return pixels;
+    };
+    const auto full=draw(1);
+    const auto repeat=draw(1);
+    BOOST_CHECK(full==repeat); // Stable without temporal jitter.
+    const unsigned center=(32*64+32)*4;
+    BOOST_CHECK_GT(full[center+3],.2f);
+    BOOST_CHECK_GT(full[center],.02f);
+    BOOST_CHECK_SMALL(full[0],.0001f); // Outside the sprite.
+    // An opaque surface just behind the sprite creates a soft intersection.
+    const auto half=draw((10.f/9*3.175f-10.f/9)/3.175f);
+    BOOST_CHECK_GT(half[center+3],.01f);
+    BOOST_CHECK_LT(half[center+3],full[center+3]-.01f);
+    const auto hidden=draw(0);
+    BOOST_CHECK_SMALL(hidden[center+3],.0001f);
+    environment.parameters.sky_radiance={};environment.parameters.ground_radiance={};
+    environment.parameters.local_light_options[0]=1;
+    environment.parameters.local_positions[0]={0,0,-1,10};
+    environment.parameters.local_diffuse[0]={0,0,20,0};
+    environment.parameters.local_direction[0]={0,0,-1,-1};
+    const auto blue=draw(1);
+    BOOST_CHECK_SMALL(blue[center],.0001f);
+    BOOST_CHECK_GT(blue[center+2],.01f);
+    // Fire remains emissive in a dark scene and follows the same depth coverage.
+    environment.parameters.local_light_options[0]=0;
+    emitter.flags=emitter.flags|ParticleEmitterFlags::EmissiveSprite;
+    BOOST_REQUIRE(renderer.Update_Emitter(owner,emitter));
+    const auto fire=draw(1);
+    BOOST_CHECK_CLOSE(fire[center],1.f,.1f);
+    BOOST_REQUIRE(source.Update_Emitter(source_owner,emitter));
+    set_frame(.5f);
+    const auto blended=draw(1);
+    BOOST_CHECK_CLOSE(blended[center],1.f,.1f);
+    BOOST_CHECK_CLOSE(blended[center+2],.5f,.1f);
+    set_frame(1);
+    const auto last=draw(1);
+    BOOST_CHECK_CLOSE(last[center],1.f,.1f);
+    BOOST_CHECK_SMALL(last[center+2],.001f);
+    renderer.Shutdown();device.Destroy_Texture(color);device.Destroy_Texture(depth);
 }

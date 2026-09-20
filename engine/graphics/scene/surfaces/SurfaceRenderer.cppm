@@ -34,8 +34,10 @@ export struct SurfaceParameters final
     float shroud = 0;
     float opacity = 1;
     float shroud_only = 0;
+    std::array<float,4> surface{0,.8f,0,0}; // Enabled, roughness, metalness, maps.
+    std::array<float,4> detail{.08f,0,0,0}; // Height scale, normal green flip.
 };
-static_assert(sizeof(SurfaceParameters) == 144);
+static_assert(sizeof(SurfaceParameters) == 176);
 
 export struct SurfaceStyle final
 {
@@ -143,10 +145,13 @@ public:
     }
 
     bool Draw(CommandList &commands, SurfaceMeshHandle handle, const SurfaceStyle &style,
-        const SurfaceParameters &parameters, std::span<const RHITextureHandle> textures)
+        SurfaceParameters parameters, std::span<const RHITextureHandle> textures)
     {
         SurfaceMesh *mesh = m_meshes.Resolve(handle);
-        if (m_device == nullptr || mesh == nullptr || textures.size() > 4) return false;
+        if (m_device == nullptr || mesh == nullptr || textures.size() > 8) return false;
+        if (Get_Environment_Lighting().parameters.pbr_options[0] > .5f
+            && style.blend != RHIBlendMode::Multiply && style.blend != RHIBlendMode::Additive)
+            parameters.surface[0] = 1;
         if (mesh->geometry.Indices().empty()) return true;
         const auto has_texture = [&](std::size_t slot) {
             return slot < textures.size() && textures[slot].Is_Valid();
@@ -163,7 +168,7 @@ public:
             m_last_parameters=parameters;
             m_constants_uploaded=true;
         }
-        std::array<RHIBindlessResource, 5> bindings{};
+        std::array<RHIBindlessResource, 9> bindings{};
         bindings[0].type = RHIResourceType::Material;
         bindings[0].buffer = m_constants;
         std::size_t count = 1;

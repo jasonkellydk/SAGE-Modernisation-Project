@@ -1,0 +1,90 @@
+#ifndef GRAPHICS_WATER_PBR
+#define GRAPHICS_WATER_PBR
+#include "pbr.slangh"
+
+float Water_Linear_Depth(float depth,float4 projection)
+{
+    float denominator=depth*projection.z-projection.x;
+    return abs((projection.y-depth*projection.w)/(abs(denominator)>1e-6 ? denominator : 1e-6));
+}
+
+// Both ocean and river evaluate the same dielectric interface and participating
+// medium. Captured scene colours are already scene-linear when HDR is enabled.
+float4 Shade_PBR_Water(float3 position,float3 normal,float2 pixel_position,float device_depth,
+    float4 depth_projection,float2 reflection_uv,float coverage,float3 foam,float3 visibility,
+    Texture2D<float4> reflection_map,SamplerState reflection_sampler,
+    Texture2D<float4> scene_map,SamplerState scene_sampler,
+    Texture2D<float4> depth_map,SamplerState depth_sampler,
+    Texture2D<float4> environment_map,SamplerState environment_sampler)
+{
+    normal=Surface_Normalize(normal,float3(0,0,1));
+    float3 view=Surface_Normalize(WaterCameraPosition.xyz-position,normal);
+    if(dot(normal,view)<0) normal=-normal;
+    const float nv=saturate(dot(normal,view));
+    const float ior=max(WaterPBRSurface.z,1.001);
+    const float f0=pow((ior-1)/(ior+1),2);
+    const float fresnel=f0+(1-f0)*pow(1-nv,5);
+    // RA3 foam alpha is not a roughness map. Roughness belongs to the interface.
+    const float roughness=Surface_Filter_Roughness(clamp(WaterPBRSurface.x,.05,1),normal);
+    uint width,height;scene_map.GetDimensions(width,height);
+    const float2 dimensions=max(float2(width,height),1);
+    const float2 uv=pixel_position/dimensions;
+    // Bounded pixel displacement prevents sampling unrelated foreground objects.
+    float2 refracted_uv=saturate(uv+normal.xy*6/dimensions);
+    float thickness=WaterPBRSurface.w;
+    if(WaterSurfaceOptions.w > .5) {
+        float depth=depth_map.SampleLevel(depth_sampler,uv,0).r;
+        if(depth < .9999) {
+            const float surface_depth=Water_Linear_Depth(device_depth,depth_projection);
+            thickness=max(0,Water_Linear_Depth(depth,depth_projection)-surface_depth);
+            // Projection depth measures camera Z, whereas extinction uses
+            // distance along the viewing ray. Orthographic rays need no scale.
+            if(abs(depth_projection.z) > .5)
+                thickness*=length(WaterCameraPosition.xyz-position)/max(surface_depth,1e-5);
+        }
+        if(depth_map.SampleLevel(depth_sampler,refracted_uv,0).r < device_depth)
+            refracted_uv=uv;
+    }
+    float3 background=0;
+    if(WaterEffects.z > .5) {
+        background=scene_map.SampleLevel(scene_sampler,refracted_uv,0).rgb;
+        if(EnvironmentPBR.y < .5) background=Surface_Linear(background);
+    }
+    const float3 extinction=max(WaterAbsorption.rgb+WaterScattering.rgb,1e-6);
+    const float3 transmittance=exp(-extinction*thickness);
+    const float3 medium_albedo=WaterScattering.rgb/extinction;
+    const float3 irradiance=Surface_Lighting(medium_albedo,float3(0,0,1),view,position,1,0);
+    // The underwater pass already applies the authored depth LUT and caustics.
+    // Attenuating that capture again replaces the seabed with a solid tint.
+    const float3 transmitted=WaterEffects.w > .5 ? background
+        : background*transmittance+irradiance*(1-transmittance)*visibility;
+    float3 reflected=Surface_Environment(float3(0,0,0),normal,view,roughness,0,1,f0.xxx);
+    // The supplied RA3 environment is a light-space reflection pattern, stored
+    // as linear RGBM (range 4), not sRGB albedo or a transparency texture.
+    float3 environment_direction=reflect(-view,normal);
+    environment_direction=float3(dot(WaterEnvironmentFrame[0].xyz,environment_direction),
+        dot(WaterEnvironmentFrame[1].xyz,environment_direction),
+        dot(WaterEnvironmentFrame[2].xyz,environment_direction));
+    float2 environment_uv=float2(atan2(environment_direction.y,environment_direction.x)/(2*3.14159265)+.5,
+        .5-asin(clamp(environment_direction.z,-1,1))/3.14159265);
+    float4 environment_sample=environment_map.SampleLevel(environment_sampler,environment_uv,0);
+    reflected+=environment_sample.rgb*environment_sample.a*4
+        *(EnvironmentSunRadiance.rgb/3.14159265)*fresnel*DirectionalVisibility(position);
+    if(WaterEffects.x > .001 && all(reflection_uv>=0) && all(reflection_uv<=1)) {
+        float4 captured=reflection_map.SampleLevel(reflection_sampler,
+            saturate(reflection_uv+normal.xy*4/dimensions),0);
+        if(EnvironmentPBR.y < .5) captured.rgb=Surface_Linear(captured.rgb);
+        reflected=lerp(reflected,captured.rgb*fresnel,saturate(WaterEffects.x*captured.a));
+    }
+    float3 direct=Surface_Direct_Lighting(float3(0,0,0),normal,view,position,roughness,0,f0.xxx);
+    float3 color=transmitted*(1-fresnel)+(reflected+direct)*visibility;
+    const float3 foam_coverage=saturate(foam);
+    const float3 foam_color=Surface_Lighting(float3(.8,.8,.8),normal,view,position,.85,0)*visibility;
+    color=lerp(color,foam_color,foam_coverage);
+    float shoreline=WaterSurfaceOptions.w > .5 ? saturate(thickness/max(WaterSurfaceOptions.y*.1,.25)) : 1;
+    color=Scene_Color(color);
+    float fog=WaterFogState.z > .5 ? saturate((length(WaterCameraPosition.xyz-position)-WaterFogState.x)
+        /max(WaterFogState.y-WaterFogState.x,.0001)) : 0;
+    return float4(lerp(color,Scene_Legacy_Color(FogColor.rgb),fog),saturate(coverage)*shoreline);
+}
+#endif

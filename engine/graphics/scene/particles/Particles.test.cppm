@@ -208,3 +208,21 @@ BOOST_AUTO_TEST_CASE(external_soa_particle_updates_preserve_render_attributes)
 	BOOST_CHECK(data.materials[0] == materials[0]);
 	BOOST_CHECK(data.emitters[0] == handle);
 }
+
+BOOST_AUTO_TEST_CASE(atlas_frames_survive_copy_and_particle_compaction)
+{
+    ParticleSystem source,copy;source.Reserve(1,2);copy.Reserve(1,2);
+    auto a=source.Create_Emitter(),b=copy.Create_Emitter();
+    BOOST_REQUIRE(source.Spawn(a,2));
+    auto data=source.Particles();
+    std::array<ParticleAnimation,2> media{{{0,1,1,1},{2.5f,6,6,36}}};
+    std::array<float,2> life{.1f,1.8f};data.lifetimes=life;data.animations=media;
+    BOOST_REQUIRE(copy.Append_Particles(b,data));source.Clear();media={};
+    BOOST_REQUIRE(copy.Update(.3f));
+    BOOST_CHECK_EQUAL(copy.Particle_Count(),1);
+    auto packed=Pack_GPU_Particle(copy.Particles(),0,0);
+    BOOST_CHECK_CLOSE(packed.animation[0],2.5f,.001f);
+    BOOST_CHECK_CLOSE(packed.animation[1],6.f,.001f);
+    BOOST_CHECK_EQUAL(packed.animation[2],6);
+    BOOST_CHECK_CLOSE(packed.animation[3],36.f,.001f);
+}

@@ -163,7 +163,7 @@ class W3DTreeBuffer : public Snapshot
 
 			// just use default destructor. ~TerrainTextureClass();
 	public:
-		int update(W3DTreeBuffer *buffer); ///< Sets the pixels, and returns the actual height of the texture.
+		int update(W3DTreeBuffer *buffer, int channel = -1); ///< -1 albedo, 0 normal, 1 roughness, 2 height.
 	};
 
 public:
@@ -197,6 +197,7 @@ public:
 	/// Draws the trees.  Uses camera for culling.
 	void drawTrees(W3DCamera * camera, Graphics::SceneObjectList<W3DRenderObject>::Cursor *pDynamicLightsIterator);
     void prepareFrame();
+    void prepareMaterials();
     Bool collectShadowCasters();
 	/// Called when the view changes, and sort key needs to be recalculated.
 	/// Normally sortKey gets calculated when a tree becomes visible.
@@ -234,6 +235,7 @@ private:
 	Region2D m_bounds;
 
 	W3DTextureHandle *m_treeTexture;	///<Trees texture
+    std::array<RefCountPtr<W3DTextureHandle>,3> m_treeSurfaceMaps;
 	Int			m_textureWidth;				///<Width in pixels m_treeTexture;
 	Int			m_textureHeight;				///<Width in pixels m_treeTexture;
 	Int			m_curNumTreeVertices[MAX_BUFFERS]; ///<Number of vertices used in m_vertexTree.
@@ -273,9 +275,6 @@ protected:
 	void loadTreesInVertexAndIndexBuffers(Graphics::SceneObjectList<W3DRenderObject>::Cursor *pDynamicLightsIterator); ///< Fills the index and vertex buffers for drawing.
 	void updateVertexBuffer(); ///< Fills the index and vertex buffers for drawing.
 	void cull(const W3DCamera * camera);						 ///< Culls the trees.
-	UnsignedInt  doLighting(const Vector3 *normal,
-		const GlobalData::TerrainLighting	*objectLighting, const Vector3* lightRays,
-		const Vector3 *emissive, UnsignedInt vertexDiffuse, Real scale) const;
 #if 0 // sort is no longer used and messes up the order. jba [6/6/2003]
 	void sort( Int iterations );								 ///< Performs partial bubble sort.
 #endif

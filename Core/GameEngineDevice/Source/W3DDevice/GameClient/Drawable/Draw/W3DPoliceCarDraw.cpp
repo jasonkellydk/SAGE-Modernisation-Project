@@ -29,6 +29,9 @@
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 #include <stdlib.h>
+#include <cmath>
+#include <cstdio>
+#include <algorithm>
 
 #include "Common/FramePacer.h"
 #include "Common/STLTypedefs.h"
@@ -57,9 +60,6 @@ W3DDynamicLight *W3DPoliceCarDraw::createDynamicLight()
 
 		light->setEnabled( TRUE );
 		light->Set_Ambient( Vector3( 0.0f, 0.0f, 0.0f ) );
-		// Use all ambient, and no diffuse.  This produces a circle of light on
-		// even and uneven ground.  Diffuse lighting shows up ground unevenness, which looks
-		// funny on a searchlight.  So  no diffuse.  jba.
 		light->Set_Diffuse( Vector3( 0.0f, 0.0f, 0.0f ) );
 		light->Set_Position( Vector3( 0.0f, 0.0f, 0.0f ) );
 		light->Set_Far_Attenuation_Range( 5, 15 );
@@ -86,77 +86,94 @@ W3DPoliceCarDraw::W3DPoliceCarDraw( Thing *thing, const ModuleData* moduleData )
 W3DPoliceCarDraw::~W3DPoliceCarDraw()
 {
 
-	// disable the light ... the scene will re-use it later
-	if( m_light )
-	{
-		// Have it fade out over 5 frames.
-		m_light->setFrameFade(0, 5);
-		m_light->setDecayRange();
-		m_light->setDecayColor();
-		m_light = nullptr;
-	}
-
+    for(auto* light : {m_light,m_blueLight,m_headlights[0],m_headlights[1]}) {
+        if(!light) continue;
+        light->setFrameFade(0,5);
+        light->setDecayColor();
+    }
 }
 
 //-------------------------------------------------------------------------------------------------
 //-------------------------------------------------------------------------------------------------
 void W3DPoliceCarDraw::doDrawModule(const Matrix3D* transformMtx)
 {
-	const Real floatAmt = 8.0f;
+    // Set the current model, client-physics transform and scale before sampling
+    // lamp bones. Logic position alone omits those transforms.
+    W3DTruckDraw::doDrawModule(transformMtx);
+    W3DRenderObject* model = getRenderObject();
+    for (auto* light : {m_light,m_blueLight,m_headlights[0],m_headlights[1]})
+        if (light) light->Set_Intensity(0);
+    if (!model) return;
 
-	// TheSuperHackers @tweak bobtista 24/06/2026 The police car light animation time step is now decoupled from the render update.
-	const Real animAmt = 0.25f * TheFramePacer->getActualLogicTimeScaleOverFpsRatio();
+    const Real step = 0.25f * TheFramePacer->getActualLogicTimeScaleOverFpsRatio();
+    float frameCount = 15;
+    const auto animation = model->Peek_Animation();
+    if (animation) {
+        const auto* asset = Assets::Get_Animation_Cache().Resolve(animation);
+        if (asset && asset->frame_count > 0) frameCount = float(asset->frame_count);
+    }
+    m_curFrame = std::fmod(m_curFrame + step, frameCount);
+    if (animation) model->Set_Animation(animation, m_curFrame);
 
-	// get pointers to our render objects that we'll need
-	W3DRenderObject* policeCarRenderObj = getRenderObject();
-	if( policeCarRenderObj == nullptr )
-		return;
+    // The authored animation moves the inactive flare inside the body. Red is
+    // exposed during frames 0..6, blue during 7..14. Follow the actual lamp
+    // pose and fade across the transition rather than illuminating a guessed
+    // position while the corresponding flare is hidden.
+    const auto beacon = [&](W3DDynamicLight*& light, const char* boneName,
+                            const Vector3& color, bool blue) {
+        const int bone = model->Get_Bone_Index(boneName);
+        if (!bone) return; // Damaged models can have no light bar.
+        if (!light) light = createDynamicLight();
+        if (!light) return;
+        const float frame = m_curFrame * (15.f / frameCount);
+        const float phase = blue ? (frame - 7.f) / 8.f : frame / 7.f;
+        const float pulse = phase >= 0 && phase < 1
+            ? std::sin(phase * 3.14159265f) : 0.f;
+        light->Set_Type(W3DLight::POINT);
+        light->Set_Position(model->Get_Bone_Transform(bone).Get_Translation());
+        light->Set_Diffuse(color);
+        light->Set_Intensity(2.f * pulse * pulse);
+        light->Set_Far_Attenuation_Range(8,45);
+    };
+    beacon(m_light, "CXPOLICECAR001", Vector3(1.f,.01f,.005f), false);
+    beacon(m_blueLight, "CXPOLICECAR000", Vector3(.02f,.12f,1.f), true);
 
-	Assets::AnimationAssetHandle anim = policeCarRenderObj->Peek_Animation();
-	if (anim)
-	{
-		Real frames = static_cast<int>(Assets::Get_Animation_Cache().Resolve(anim)->frame_count);
-		m_curFrame += animAmt;
-		if (m_curFrame > frames-1) {
-			m_curFrame = 0;
-		}
-		policeCarRenderObj->Set_Animation(anim, m_curFrame);
-	}
-	Real red = 0;
-	Real green = 0;
-	Real blue = 0;
-	if (m_curFrame < 3) {
-		red = 1; green = 0.5;
-	} else if (m_curFrame < 6) {
-		red = 1;
-	} else if (m_curFrame < 7) {
-		red = 1; green = 0.5;
-	} else if (m_curFrame < 9) {
-		red = 0.5+(9-m_curFrame)/4;
-		blue = (m_curFrame-5)/6;
-	} else if (m_curFrame < 12) {
-		blue=1;
-	} else if (m_curFrame <= 14) {
-		green = (m_curFrame-11)/3;
-		blue = (14-m_curFrame)/2;
-		red =		(m_curFrame-11)/3;
-	}
+    // These bones carried textured light cones in the original W3D. Replace
+    // their illumination with real spotlights evaluated by all PBR surfaces.
+    for (int i=0; i<2; ++i) {
+        int bone = model->Get_Bone_Index(i ? "HEADLIGHT02" : "HEADLIGHT01");
+        if (!bone) bone = model->Get_Bone_Index(i ? "CXPOLICECAR005" : "CXPOLICECAR004");
+        if (!bone) continue;
+        auto*& light = m_headlights[i];
+        if (!light) light = createDynamicLight();
+        if (!light) continue;
+        light->Set_Type(W3DLight::SPOT);
+        light->Set_Transform(model->Get_Bone_Transform(bone));
+        light->Set_Spot_Direction(Vector3(0,1,0));
+        light->Set_Spot_Angle(.24f);
+        light->Set_Spot_Exponent(1);
+        light->Set_Diffuse(Vector3(1.f,.94f,.82f));
+        light->Set_Intensity(1.f);
+        light->Set_Far_Attenuation_Range(20,85);
+        for (int child=0; child<model->Get_Num_Sub_Objects_On_Bone(bone); ++child) {
+            auto* cone = model->Get_Sub_Object_On_Bone(child,bone);
+            if (!cone) continue;
+            cone->Set_Hidden(true);
+            cone->Release_Ref();
+        }
+    }
+    static FILE* trace=std::getenv("GENERALS_LIGHTING_TRACE") ? std::fopen("lighting-police-trace.txt","w") : nullptr;
+    static unsigned samples=0;
+    if(trace && ++samples%120==0) {
+        std::fprintf(trace,"model=%s frame=%.2f\n",model->Get_Name(),m_curFrame);
+        for(auto* light : {m_light,m_blueLight,m_headlights[0],m_headlights[1]}) {
+            if(!light) continue;
+            Graphics::MaterialLightSource source;light->Get_Light_Description(source);
+            std::fprintf(trace,"type=%d pos=%.2f,%.2f,%.2f direction=%.3f,%.3f,%.3f intensity=%.3f\n",int(light->Get_Type()),source.position[0],source.position[1],source.position[2],source.direction[0],source.direction[1],source.direction[2],source.intensity);
+        }
+        std::fflush(trace);
+    }
 
-	// make us a light if we don't already have one
-	if( m_light == nullptr )
-		m_light = createDynamicLight();
-
-
-	// if we have a search light, position it
-	if( m_light )
-	{
-		Coord3D pos = *getDrawable()->getPosition();
-		m_light->Set_Diffuse( Vector3( red, green, blue) );
-		m_light->Set_Ambient( Vector3( red/2, green/2, blue/2) );
-		m_light->Set_Far_Attenuation_Range( 3, 20 );
-		m_light->Set_Position( Vector3( pos.x,pos.y,pos.z+floatAmt ) );
-	}
-	W3DTruckDraw::doDrawModule(transformMtx);
 }
 
 

@@ -419,3 +419,40 @@ BOOST_AUTO_TEST_CASE(external_game_rigs_decode_without_changing_legacy_geometry)
 	}
 	BOOST_TEST(files>8000u);
 }
+
+BOOST_AUTO_TEST_CASE(generals_w3d_materials_discover_authored_pbr_companions)
+{
+    const char* textures=std::getenv("GENERALS_PBR_TEXTURES");
+    const auto path=Integration_Asset_Path();
+    if (!textures || path.empty() || !std::filesystem::exists(path)) {
+        BOOST_TEST_MESSAGE("Set GENERALS_W3D_INTEGRATION_ASSET and GENERALS_PBR_TEXTURES for real PBR assets");
+        return;
+    }
+    using namespace Assets;
+    const auto bytes=Read_File(path);
+    AssetCache cache([&](const AssetIdentity& identity) {
+        if (identity.type==AssetType::Model) return bytes;
+        auto file=std::filesystem::path(textures)/identity.canonical_name;
+        auto data=Read_File(file);
+        if (data.empty()) { file.replace_extension(".dds"); data=Read_File(file); }
+        return data;
+    });
+    BOOST_REQUIRE(cache.Register_Model_Adapter(std::make_shared<W3DAdapter>()));
+    const auto handle=cache.Request_Model(path.filename().string()); cache.Wait(handle);
+    BOOST_REQUIRE_MESSAGE(cache.Get_State(handle)==AssetState::Ready,cache.Get_Error(handle));
+    unsigned upgraded=0;
+    for (const auto material_handle:cache.Model_Material_Dependencies(handle)) {
+        const auto* material=cache.Try_Get_Material(material_handle);
+        BOOST_REQUIRE(material);
+        if (material->Surface().shading_model!=MaterialShadingModel::MetallicRoughness) continue;
+        ++upgraded;
+        const auto* albedo=cache.Try_Get_Texture(material->Primary_Texture());
+        BOOST_REQUIRE(albedo); BOOST_REQUIRE(albedo->Has_Pixels());
+        BOOST_TEST(albedo->Identity().canonical_name.find("_albedo")!=std::string::npos);
+        for (const auto role : {MaterialTextureRole::Normal,MaterialTextureRole::Roughness,MaterialTextureRole::Height}) {
+            const auto* map=cache.Try_Get_Texture(material->Surface_Texture(role));
+            BOOST_REQUIRE(map); BOOST_TEST(map->Has_Pixels());
+        }
+    }
+    BOOST_TEST(upgraded>0u);
+}

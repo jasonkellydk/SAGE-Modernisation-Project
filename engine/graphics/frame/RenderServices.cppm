@@ -1,6 +1,8 @@
 module;
 
 #include <array>
+#include <algorithm>
+#include <thread>
 #include <cstdint>
 
 export module Graphics.Frame.RenderServices;
@@ -45,7 +47,7 @@ public:
 			return false;
 
 		Get_Scene_Draw_Queue().Clear();
-		if (!Get_Resource_Load_Queue().Start())
+		if (!Get_Resource_Load_Queue().Start(std::clamp(std::thread::hardware_concurrency()/2,1u,4u)))
 			return false;
 		Get_Prop_Submission().Clear();
 		m_initialized = true;

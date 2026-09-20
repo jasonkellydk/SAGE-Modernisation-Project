@@ -56,9 +56,13 @@ public:
     // GPU contents (and a synchronous readback for every mip on DX12).
     bool Begin_Overwrite(TextureResource& resource)
     {
+        return Prepare_Overwrite(resource.Description(),resource.Encoding()) && Attach_Overwrite(resource);
+    }
+
+    // CPU storage only: safe on a decoding worker, without creating a GPU image.
+    bool Prepare_Overwrite(const RHITexture& description, Assets::PixelEncoding encoding)
+    {
         if (Active()) return false;
-        const auto& description = resource.Description();
-        const auto encoding = resource.Encoding();
         const bool compressed = Assets::Is_Block_Compressed(encoding);
         const unsigned unit = compressed ? (encoding == Assets::PixelEncoding::BC1 ? 8u : 16u)
             : Assets::Pixel_Size(encoding);
@@ -82,12 +86,21 @@ public:
                 m_mappings[index] = {m_staging[index], static_cast<unsigned>(pitch), static_cast<unsigned>(pitch * rows)};
             }
         }
+        m_mip_count = description.mip_count; m_mapped_count = count;
+        m_overwrite = true;
+        return true;
+    }
+
+    // Attach the completed CPU image on the device thread immediately before upload.
+    bool Attach_Overwrite(TextureResource& resource)
+    {
+        if (Active() || !m_overwrite || m_mappings.empty()
+            || resource.Description().mip_count != m_mip_count
+            || resource.Description().array_size * m_mip_count != m_mapped_count) return false;
         if (!resource.Owner().Retain_Texture(resource.Handle())) {
             m_staging.clear(); m_mappings.clear(); return false;
         }
         m_device = &resource.Owner(); m_texture = resource.Handle();
-        m_mip_count = description.mip_count; m_mapped_count = count;
-        m_overwrite = true;
         return true;
     }
 

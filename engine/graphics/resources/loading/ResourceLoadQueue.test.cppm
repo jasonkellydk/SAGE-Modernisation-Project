@@ -179,6 +179,53 @@ BOOST_AUTO_TEST_CASE(shutdown_drains_pending_jobs_and_allows_clean_restart)
     }
 }
 
+BOOST_AUTO_TEST_CASE(independent_workers_decode_concurrently_and_publish_on_owner)
+{
+    ResourceLoadQueue queue;
+    BOOST_REQUIRE(queue.Start(2));
+    std::array<Record,2> records;
+    std::array<std::promise<void>,2> entered;
+    std::promise<void> release;
+    const auto gate=release.get_future().share();
+    std::array<std::shared_ptr<const ResourceLoadSource>,2> sources;
+    for (unsigned i=0;i<2;++i) {
+        sources[i]=std::make_shared<const ResourceLoadSource>([&,i] {
+            ++records[i].created; records[i].factory_thread=std::this_thread::get_id();
+            auto job=std::make_unique<Job>(records[i]);
+            job->entered=&entered[i]; job->release=gate;
+            return job;
+        });
+        BOOST_REQUIRE(queue.Request(sources[i],ResourceLoadPriority::Background));
+    }
+    bool both=true;
+    for (auto& promise : entered)
+        both=(promise.get_future().wait_for(std::chrono::seconds(5))==std::future_status::ready) && both;
+    release.set_value();
+    BOOST_REQUIRE(queue.Drain());
+    BOOST_CHECK(both);
+    BOOST_CHECK(records[0].decode_thread!=records[1].decode_thread);
+    for (const auto& record : records) Check_Owner_Phases(record,std::this_thread::get_id());
+}
+
+BOOST_AUTO_TEST_CASE(frame_publication_budget_leaves_remaining_work_queued)
+{
+    ResourceLoadQueue queue;
+    BOOST_REQUIRE(queue.Start());
+    std::array<Record,3> records;
+    std::array<std::shared_ptr<const ResourceLoadSource>,3> sources;
+    for (unsigned i=0;i<sources.size();++i)
+        sources[i]=std::make_shared<const ResourceLoadSource>([&,i] {
+            auto job=std::make_unique<Job>(records[i]); job->prepare_ok=false; return job;
+        });
+    std::thread producer([&] { for (const auto& source : sources) queue.Request(source,ResourceLoadPriority::Background); });
+    producer.join();
+    queue.Update(nullptr,std::chrono::steady_clock::duration::zero());
+    BOOST_CHECK_EQUAL(records[0].completed,1u);
+    BOOST_CHECK_EQUAL(records[1].completed+records[2].completed,0u);
+    BOOST_REQUIRE(queue.Drain());
+    BOOST_CHECK_EQUAL(records[1].completed+records[2].completed,2u);
+}
+
 BOOST_AUTO_TEST_CASE(worker_preparation_publishes_complete_texture_rgb_and_alpha)
 {
     GraphicsTestDevice device({true});

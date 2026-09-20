@@ -1,10 +1,12 @@
 module;
 
 #include <array>
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <utility>
 
 export module Assets.Materials;
@@ -47,6 +49,7 @@ export enum class MaterialTextureRole : std::uint8_t
 	Metallic,
 	Occlusion,
 	TeamColor,
+	Height,
 	Count
 };
 
@@ -63,6 +66,7 @@ export struct MaterialSurfaceParameters final
 {
 	MaterialShadingModel shading_model = MaterialShadingModel::Legacy;
 	float normal_scale = 1.0f;
+	float height_scale = 0.1f;
 	float specular_scale = 1.0f;
 	float emissive_scale = 1.0f;
 	float roughness = 0.5f;
@@ -74,6 +78,11 @@ export struct MaterialSurfaceParameters final
 	MaterialTextureChannel team_color_channel = MaterialTextureChannel::Red;
 	float team_color_multiplier = 1.0f;
 	bool uv_offset_from_vertex_alpha = false;
+	// Legacy W3D has no metalness. Restrict the inferred metal profile to
+	// exposed, unsaturated texels; an authored metallic map always wins.
+	bool infer_metallic = false;
+	// W3D emissive RGB modulates the base texture (for example colored lamp sprites).
+	bool emissive_uses_base_color = false;
 };
 
 export bool Validate_Material_Surface(const MaterialSurfaceParameters &surface) noexcept
@@ -85,7 +94,7 @@ export bool Validate_Material_Surface(const MaterialSurfaceParameters &surface) 
 	if (surface.specular_channel > MaterialTextureChannel::RGB ||
 		surface.team_color_channel >= MaterialTextureChannel::RGB)
 		return false;
-	for (const float scale : {surface.normal_scale, surface.specular_scale, surface.emissive_scale, surface.team_color_multiplier})
+	for (const float scale : {surface.normal_scale, surface.height_scale, surface.specular_scale, surface.emissive_scale, surface.team_color_multiplier})
 		if (!std::isfinite(scale) || scale < 0.0f)
 			return false;
 	for (const float value : {surface.roughness, surface.metallic, surface.occlusion_strength, surface.alpha_cutoff})
@@ -114,6 +123,82 @@ export struct MaterialAssetDesc final
 	MaterialSurfaceParameters surface{};
 	MaterialSurfaceTextureNames surface_textures{};
 };
+
+export MaterialSurfaceParameters Upgrade_Legacy_Surface(std::string_view name,
+    float shininess = 0, float specular = 0)
+{
+    MaterialSurfaceParameters surface;
+    surface.shading_model = MaterialShadingModel::MetallicRoughness;
+    surface.emissive_uses_base_color = true;
+    surface.roughness = shininess > 1 && specular > .01f
+        ? std::clamp(std::pow(2.0f / (shininess + 2.0f), .25f), .18f, .8f) : .7f;
+    std::string lower(name);
+    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) {
+        return c >= 'A' && c <= 'Z' ? char(c + 32) : char(c);
+    });
+    const auto slash = lower.find_last_of("/\\");
+    const auto base = std::string_view(lower).substr(slash == std::string::npos ? 0 : slash + 1);
+    const auto has = [&](std::string_view token) { return base.find(token) != std::string_view::npos; };
+    const bool vehicle = base.starts_with("av") || base.starts_with("cv") || base.starts_with("uv")
+        || base.starts_with("nv") || base.starts_with("zhcv") || has("tank") || has("aircraft");
+    if (vehicle) surface.roughness = .5f;
+    if (has("chrome") || has("steel") || has("metal") || has("barrel") || has("tread") || has("track")) {
+        surface.metallic = .95f;
+        surface.infer_metallic = false;
+        surface.roughness = .3f;
+    }
+    if (has("glass")) { surface.metallic = 0; surface.roughness = .08f; surface.infer_metallic = false; }
+    if (has("rubber") || has("tire") || has("tyre") || has("wood") || has("concrete")) {
+        surface.metallic = 0; surface.roughness = .85f; surface.infer_metallic = false;
+    }
+    return surface;
+}
+
+// Probe through the caller's asset source so loose files and archives follow
+// the same policy. Existing explicit material parameters take precedence.
+export template<class Exists>
+bool Discover_PBR_Textures(MaterialAssetDesc& material, Exists&& exists)
+{
+	if (material.primary_texture.empty() || !material.texturing ||
+		material.surface.shading_model != MaterialShadingModel::Legacy ||
+		material.render_mode == MaterialRenderMode::Additive ||
+		material.render_mode == MaterialRenderMode::Multiply) return false;
+	std::string stem = material.primary_texture;
+	const auto dot = stem.find_last_of('.'), slash = stem.find_last_of("/\\");
+	std::string extension;
+	if (dot != std::string::npos && (slash == std::string::npos || dot > slash)) {
+		extension = stem.substr(dot); stem.resize(dot);
+	}
+	const auto find = [&](std::string_view suffix) -> std::string {
+		for (const auto& ext : {extension, std::string(".dds"), std::string(".tga")}) {
+			if (ext.empty()) continue;
+			auto candidate = stem + std::string(suffix) + ext;
+			if (exists(candidate)) return candidate;
+		}
+		return {};
+	};
+	auto albedo = find("_albedo");
+	if (albedo.empty()) return false;
+	material.primary_texture = std::move(albedo);
+	material.surface = Upgrade_Legacy_Surface(stem, material.shininess,
+        std::max({material.specular_color.r, material.specular_color.g, material.specular_color.b}));
+	material.surface.roughness = 1.0f; // The texture contains absolute roughness.
+	for (const auto& [role, suffix] : {
+		std::pair{MaterialTextureRole::Normal, "_normalmap"},
+		std::pair{MaterialTextureRole::Roughness, "_roughness"},
+		std::pair{MaterialTextureRole::Metallic, "_metallic"},
+		std::pair{MaterialTextureRole::Occlusion, "_ao"},
+		std::pair{MaterialTextureRole::Emissive, "_emissive"},
+		std::pair{MaterialTextureRole::Height, "_height"}})
+		material.surface_textures[static_cast<std::size_t>(role)] = find(suffix);
+	if (material.surface_textures[static_cast<std::size_t>(MaterialTextureRole::Roughness)].empty())
+		material.surface.roughness = Upgrade_Legacy_Surface(stem, material.shininess,
+            std::max({material.specular_color.r, material.specular_color.g, material.specular_color.b})).roughness;
+	if (!material.surface_textures[static_cast<std::size_t>(MaterialTextureRole::Metallic)].empty()) {
+        material.surface.metallic = 1; material.surface.infer_metallic = false;
+    }
+	return true;
+}
 
 export class MaterialAsset final
 {

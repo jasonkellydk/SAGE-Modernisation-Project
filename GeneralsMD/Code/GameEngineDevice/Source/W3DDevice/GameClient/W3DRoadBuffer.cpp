@@ -1,3 +1,4 @@
+import Graphics.Frame.RenderSettings;
 import Assets.Math;
 /*
 **	Command & Conquer Generals Zero Hour(tm)
@@ -3231,7 +3232,7 @@ void W3DRoadBuffer::drawRoads(W3DCamera *camera, W3DTextureHandle *cloudTexture,
     parameters.textured = wireframe ? 0 : 1;
     parameters.cloud = !wireframe && cloudTexture != nullptr ? 1 : 0;
     parameters.lightmap = !wireframe && noiseTexture != nullptr ? 1 : 0;
-    std::array<Graphics::RHITextureHandle, 3> textures{
+    std::array<Graphics::RHITextureHandle, 8> textures{
         Graphics::RHITextureHandle{}, Resolve_Graphics_Texture(cloudTexture), Resolve_Graphics_Texture(noiseTexture)};
     const bool filtered = TheGlobalData->m_bilinearTerrainTex || TheGlobalData->m_trilinearTerrainTex;
     auto &renderer = Graphics::Get_Surface_Renderer();
@@ -3245,6 +3246,20 @@ void W3DRoadBuffer::drawRoads(W3DCamera *camera, W3DTextureHandle *cloudTexture,
             if (loadBuffers) loadRoadsInVertexAndIndexBuffers();
             if (road.getNumIndices() == 0) continue;
             textures[0] = Resolve_Graphics_Texture(road.getTexture());
+            parameters.surface = {1,.85f,0,0};
+            for (unsigned slot=4;slot<textures.size();++slot) textures[slot]={};
+            if (auto* texture=road.getTexture()) if (auto pbr=texture->Resolve_PBR_Material()) {
+                textures[0]=pbr->texture;
+                const unsigned roles[]{0,3,7,4};
+                unsigned maps=0;
+                for (unsigned i=0;i<4;++i) {
+                    textures[4+i]=pbr->surface_textures[roles[i]];
+                    if (textures[4+i].Is_Valid()) maps|=1u<<i;
+                }
+                parameters.surface[3]=static_cast<float>(maps);
+                parameters.detail[1]=pbr->surface->normal_flip_green;
+                parameters.detail[2]=Graphics::Get_Render_Settings().PBR_Parallax_Scale();
+            }
             const bool drawn = Graphics::Draw_Road(renderer, commands, road.getMesh(), parameters, textures, filtered);
             if (!drawn) DEBUG_LOG(("Road graphics submission failed.\n"));
         }

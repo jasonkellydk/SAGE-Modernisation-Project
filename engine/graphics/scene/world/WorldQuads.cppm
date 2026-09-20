@@ -23,6 +23,8 @@ export import Graphics.Shaders.Library;
 
 import Graphics.Memory.AlignedAllocator;
 
+import Graphics.Scene.Lighting.Environment;
+
 namespace Graphics
 {
 
@@ -272,6 +274,7 @@ public:
 			return false;
 
 		m_device = &device;
+        if (!m_environment.Initialize(device)) { Shutdown(); return false; }
 		m_capacity = max_quads;
 		m_quads.Reserve(max_quads);
 		m_draws.reserve(max_quads);
@@ -343,6 +346,7 @@ public:
 	void Shutdown() noexcept
 	{
 		if (m_device != nullptr) {
+            m_environment.Shutdown(*m_device);
 			if (m_quad_buffer.Is_Valid())
 				m_device->Destroy_Buffer(m_quad_buffer);
 			if (m_gpu_quad_buffer.Is_Valid())
@@ -587,7 +591,7 @@ public:
 			viewport
 		};
 		return m_plan.Execute(*m_graph, commands, [&](GraphPassHandle pass, CommandList &command_list, const PassResources &resources) noexcept {
-			return pass == m_pass && WorldQuadPass::Execute(command_list, resources, input);
+			return pass == m_pass && m_environment.Bind_Constants(*m_device,command_list) && WorldQuadPass::Execute(command_list, resources, input);
 		});
 	}
 
@@ -668,6 +672,7 @@ private:
 		return true;
 	}
 
+	EnvironmentLightingBinding m_environment;
 	Device *m_device = nullptr;
 	std::size_t m_capacity = 0;
 	QuadStorage m_quads;

@@ -40,6 +40,9 @@
 #include "mutex.h"
 #include "Vector.h"
 #include "wwstring.h"
+#include <cstdint>
+#include <optional>
+#include <string>
 
 /*
 **
@@ -57,6 +60,14 @@ public:
 	virtual ~FileFactoryClass(){};
 	virtual FileClass * Get_File( char const *filename ) = 0;
 	virtual void Return_File( FileClass *file ) = 0;
+	// Resolve on the owner thread; workers open their own physical file handle.
+	// An empty path denotes a missing asset. nullopt retains legacy factories.
+	struct IndependentSource {
+		std::string path;
+		std::uint64_t offset = 0, size = 0;
+		bool bounded = false;
+	};
+	virtual std::optional<IndependentSource> Resolve_Independent_Source(const char*) { return std::nullopt; }
 };
 
 

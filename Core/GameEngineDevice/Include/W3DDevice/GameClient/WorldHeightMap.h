@@ -88,6 +88,7 @@ typedef struct {
 class W3DTextureHandle;
 class ChunkInputStream;
 class InputStream;
+class File;
 class OutputStream;
 class DataChunkInput;
 struct DataChunkInfo;
@@ -206,7 +207,7 @@ protected:
 	void getUVForNdx(Int ndx, float *minU, float *minV, float *maxU, float*maxV);
 	Bool getUVForTileIndex(Int ndx, Short tileNdx, float U[4], float V[4]);
 	Int getTextureClassFromNdx(Int tileNdx);
-	void readTexClass(TXTextureClass *texClass, TileData **tileData);
+	void readTexClass(TXTextureClass *texClass, TileData **tileData, const char* suffix = nullptr);
 	Int updateTileTexturePositions(Int *edgeHeight); ///< Places each tile in the texture.
 	void initCliffFlagsFromHeights();
 	void setCellCliffFlagFromHeights(Int xIndex, Int yIndex);
@@ -329,6 +330,7 @@ public:  // modify height value
 	};
 public: // Read tile utilities. jba [7/9/2003]
 	static Bool readTiles(InputStream *pStrm, TileData **tiles, Int numRows, Int tilePixelExtent=TILE_PIXEL_EXTENT);
+	static Bool readTilesFromFile(File* file, TileData** tiles, Int numRows, Int tilePixelExtent=TILE_PIXEL_EXTENT);
 	static Int countTiles(InputStream *pStrm, Bool *halfTile=nullptr, Int tilePixelExtent=TILE_PIXEL_EXTENT);
 
 protected:

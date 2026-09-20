@@ -26,8 +26,9 @@ export struct ParticleFrameParameters final
 	std::array<float, 16> view{};
 	std::array<float, 16> projection{};
 	std::array<std::uint32_t, 4> particle_offset{};
+    std::array<float,4> depth_options{}; // Enabled, full depth texture width/height, reserved.
 };
-static_assert(sizeof(ParticleFrameParameters) == 144);
+static_assert(sizeof(ParticleFrameParameters) == 160);
 
 export struct ParticlePassInput final
 {

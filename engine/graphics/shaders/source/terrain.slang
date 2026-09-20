@@ -1,5 +1,9 @@
 #include "resource_access.slangh"
 #include "environment_lighting.slangh"
+#include "pbr.slangh"
+GRAPHICS_TEXTURE_2D(TerrainNormalTexture, float4, 5)
+GRAPHICS_TEXTURE_2D(TerrainRoughnessTexture, float4, 6)
+GRAPHICS_TEXTURE_2D(TerrainHeightTexture, float4, 7)
 GRAPHICS_TEXTURE_2D(TerrainDiffuseTexture, float4, 0)
 GRAPHICS_TEXTURE_2D(TerrainBlendTexture, float4, 1)
 GRAPHICS_TEXTURE_2D(TerrainCloudTexture, float4, 2)
@@ -31,14 +35,7 @@ struct TerrainVertexOutput
     float2 lightmap_uv : TEXCOORD3;
     float2 shroud_uv : TEXCOORD4;
     float3 world_position : TEXCOORD5;
-};
-
-struct TerrainLight
-{
-    float4 position_range;
-    float4 diffuse_inner;
-    float4 ambient_kind;
-    float4 direction;
+    float3 normal : TEXCOORD6;
 };
 
 cbuffer TerrainConstants : register(b0)
@@ -50,8 +47,8 @@ cbuffer TerrainConstants : register(b0)
     float4 TerrainFeatures;
     float4 TerrainLighting;
     float4 TerrainOptions;
-    float4 TerrainLightOptions;
-    TerrainLight TerrainLights[20];
+    float4 TerrainCameraPosition;
+    float4 TerrainSurface;
 };
 
 float2 TerrainProjectedCoordinate(float3 world_position, float4 projection)
@@ -66,26 +63,6 @@ float2 TerrainProjectedCoordinate(float3 world_position, float4 projection)
 
     output.position = mul(ViewProjection, world_position);
     output.color0 = input.color0;
-    float3 lighting = input.color0.rgb;
-    for (int index = 0; index < min(int(TerrainLightOptions.x), 20); ++index)
-    {
-        TerrainLight light = TerrainLights[index];
-        float3 direction = light.direction.xyz;
-        float attenuation = 1.0;
-        if (light.ambient_kind.w < 0.5)
-        {
-            direction = input.position - light.position_range.xyz;
-            float distance = length(direction);
-            if (distance >= light.position_range.w || light.diffuse_inner.w < 0.1) continue;
-            attenuation = saturate(1.0 - (distance - light.diffuse_inner.w) /
-                max(light.position_range.w - light.diffuse_inner.w, 0.00001));
-            direction = distance > 0.0 ? direction / distance : float3(0, 0, -1);
-        }
-        float shade = saturate(dot(-direction, input.normal) * attenuation);
-        lighting += shade * light.diffuse_inner.rgb + attenuation * light.ambient_kind.rgb;
-    }
-    if (TerrainLightOptions.x > 0.0)
-        output.color0.rgb = floor(saturate(lighting) * 255.0) / 255.0;
     output.diffuse_uv = input.texcoord0;
     output.blend_uv = input.texcoord1;
     output.cloud_uv = TerrainProjectedCoordinate(world_position.xyz,
@@ -95,6 +72,7 @@ float2 TerrainProjectedCoordinate(float3 world_position, float4 projection)
     output.shroud_uv = TerrainProjectedCoordinate(world_position.xyz,
         TerrainShroudProjection);
     output.world_position = world_position.xyz;
+    output.normal = input.normal;
     return output;
 }
 
@@ -108,11 +86,60 @@ struct TerrainPixelInput
     float2 lightmap_uv : TEXCOORD3;
     float2 shroud_uv : TEXCOORD4;
     float3 world_position : TEXCOORD5;
+    float3 normal : TEXCOORD6;
 };
 
-[shader("pixel")] float4 terrain_pixel(TerrainPixelInput input) : SV_TARGET
+float3 Terrain_Surface_Normal(TerrainPixelInput input, float2 uv)
 {
-    ClipEnvironment(input.world_position);
+    float3 normal=Surface_Normalize(input.normal,float3(0,0,1));
+    if (TerrainOptions.z > .5) return normal;
+    float3 bump=TerrainNormalTexture().Sample(TerrainDiffuseSampler(),uv).xyz*2-1;
+    if (TerrainSurface.y > .5) bump.y=-bump.y;
+    normal=Surface_Mapped_Normal(normal,input.world_position,uv,bump);
+    return Surface_Height_Normal(normal,input.world_position,
+        TerrainHeightTexture().Sample(TerrainDiffuseSampler(),uv).r*TerrainSurface.z);
+}
+float4 Shade_Terrain_Surface(TerrainPixelInput input)
+{
+    const bool overlay=TerrainFeatures.w > 2.5;
+    const float3 geometric_normal=Surface_Normalize(input.normal,float3(0,0,1));
+    const float3 surface_view=Surface_Normalize(TerrainCameraPosition.xyz-input.world_position,geometric_normal);
+    if (TerrainSurface.w > 0 && TerrainOptions.z < .5) {
+        uint width,height; TerrainHeightTexture().GetDimensions(width,height);
+        const float2 limit=8.0/float2(width,height); // Stay within periodic atlas gutters.
+        input.diffuse_uv=Surface_Parallax(TerrainHeightTexture(),TerrainDiffuseSampler(),input.diffuse_uv,
+            input.world_position,geometric_normal,surface_view,TerrainSurface.z*TerrainSurface.w,limit);
+        input.blend_uv=Surface_Parallax(TerrainHeightTexture(),TerrainBlendSampler(),input.blend_uv,
+            input.world_position,geometric_normal,surface_view,TerrainSurface.z*TerrainSurface.w,limit);
+    }
+    const float weight=overlay ? 0 : saturate(input.color0.a);
+    const float3 base=Surface_Linear(TerrainDiffuseTexture().Sample(TerrainDiffuseSampler(),input.diffuse_uv).rgb);
+    float3 albedo=base;
+    float3 normal=Terrain_Surface_Normal(input,input.diffuse_uv);
+    float roughness=TerrainOptions.z > .5 ? .8 : TerrainRoughnessTexture().Sample(TerrainDiffuseSampler(),input.diffuse_uv).r;
+    if (!overlay) {
+        albedo=lerp(base,Surface_Linear(TerrainBlendTexture().Sample(TerrainBlendSampler(),input.blend_uv).rgb),weight);
+        normal=Surface_Normalize(lerp(normal,Terrain_Surface_Normal(input,input.blend_uv),weight),normal);
+        if (TerrainOptions.z < .5) roughness=lerp(roughness,TerrainRoughnessTexture().Sample(TerrainBlendSampler(),input.blend_uv).r,weight);
+    }
+    roughness=clamp(roughness,.05,1);
+    const float3 view=Surface_Normalize(TerrainCameraPosition.xyz-input.world_position,normal);
+    const float3 visibility=DirectionalVisibility(input.world_position);
+    // Macro variation belongs to reflectance, never to final illumination.
+    if (TerrainFeatures.y > .5)
+        albedo*=Surface_Linear(TerrainLightMapTexture().Sample(TerrainLightMapSampler(),input.lightmap_uv).rgb);
+    float3 color=Surface_Lighting(albedo,normal,view,input.world_position,roughness,0);
+    color=Scene_Color(color)*TerrainLighting.rgb;
+    Surface_Visibility(TerrainLighting.rgb);
+    if (TerrainOptions.y > .5) {
+        const float3 shroud=TerrainShroudTexture().SampleLevel(TerrainShroudSampler(),input.shroud_uv,0).rgb;
+        color*=shroud;Surface_Visibility(shroud);
+    }
+    return float4(color,overlay ? input.color0.a : 1);
+}
+
+float4 Shade_Terrain_Utility(TerrainPixelInput input)
+{
     if (TerrainFeatures.w > 4.5)
         return float4(0.0, 0.0, 0.0, TerrainShroudTexture().SampleLevel(TerrainShroudSampler(), input.shroud_uv, 0.0).a);
 
@@ -150,23 +177,6 @@ struct TerrainPixelInput
         color.rgb *= input.color0.rgb;
     }
 
-    if (CloudOffsetStrength.w > 0 || ShadowOptions.x > 0)
-    {
-        float3 illumination = max(input.color0.rgb, 0.00001);
-        float3 ambient = min(EnvironmentAmbient.rgb, illumination);
-        color.rgb *= (ambient + (illumination - ambient) *
-            DirectionalVisibility(input.world_position)) / illumination;
-    }
-    else if (TerrainFeatures.x > 0.5)
-    {
-        color.rgb *= TerrainCloudTexture().SampleLevel(TerrainCloudSampler(),
-            input.cloud_uv, 0.0).rgb;
-    }
-    if (TerrainFeatures.y > 0.5)
-    {
-        color.rgb *= TerrainLightMapTexture().SampleLevel(TerrainLightMapSampler(),
-            input.lightmap_uv, 0.0).rgb;
-    }
     color.rgb *= TerrainLighting.rgb;
 
     // Shroud modulation shares the surface depth and coverage.
@@ -176,4 +186,18 @@ struct TerrainPixelInput
             input.shroud_uv, 0.0).rgb;
     }
     return color;
+}
+
+[shader("pixel")] SurfaceOutput terrain_pixel(TerrainPixelInput input)
+{
+    ClipEnvironment(input.world_position);
+    // Keep one exit after selecting the lighting path. Early returns here
+    // miscompile with the DX11 software driver's derivative control flow.
+    float4 result;
+    if (TerrainSurface.x > .5 && TerrainFeatures.z < .5
+        && (TerrainFeatures.w < 1.5 || (TerrainFeatures.w > 2.5 && TerrainFeatures.w < 3.5)))
+        result=Shade_Terrain_Surface(input);
+    else
+        result=Shade_Terrain_Utility(input);
+    return Surface_Output(result);
 }

@@ -13,6 +13,7 @@ module;
 #include <vector>
 
 export module Graphics.Scene.Beams.Laser;
+import Graphics.Scene.Lighting.Environment;
 
 export import Graphics.Scene.Beams;
 export import Graphics.RHI;
@@ -224,6 +225,7 @@ public:
 		}
 
 		m_device = &device;
+        if (!m_environment.Initialize(device)) { Shutdown(); return false; }
 		m_constants = device.Create_Buffer({sizeof(LaserParameters), RHIBufferUsage::Constant});
 		if (!m_constants.Is_Valid() || !Ensure_Vertex_Capacity(max_lasers)) {
 			Shutdown();
@@ -299,6 +301,7 @@ public:
 	void Shutdown() noexcept
 	{
 		if (m_device != nullptr) {
+            m_environment.Shutdown(*m_device);
 			if (m_core_pipeline.Is_Valid())
 				m_device->Destroy_Pipeline(m_core_pipeline);
 			if (m_distortion_pipeline.Is_Valid())
@@ -392,6 +395,7 @@ public:
 		RHIViewport viewport, RHITextureHandle shroud_texture = {}, bool enable_distortion = true,
 		RHITextureFormat color_format = RHITextureFormat::BGRA8_UNorm) noexcept
 	{
+        if (Get_Environment_Lighting().parameters.pbr_options[1] > .5f) color_format=RHITextureFormat::RGBA16_Float;
 		if (!Is_Initialized() || !color_target.Is_Valid() || !depth_target.Is_Valid()
 			|| viewport.width == 0 || viewport.height == 0)
 			return false;
@@ -535,6 +539,7 @@ public:
 				|| !commands.Set_Viewport(viewport)
 				|| !commands.Bind_Pipeline(pipeline)
 				|| !commands.Set_Bindless_Resources(bindings)
+                || !m_environment.Bind_Constants(*m_device,commands)
 				|| !commands.Set_Vertex_Buffer(0, m_vertex_buffer, sizeof(LaserVertex), 0)
 				|| !commands.Draw(range.vertex_count, range.first_vertex))
 				return false;
@@ -543,6 +548,7 @@ public:
 	}
 
 	Device *m_device = nullptr;
+    EnvironmentLightingBinding m_environment;
 	ResourcePool<LaserRecord, LaserHandle> m_lasers;
 	LaserView m_view{};
 	std::vector<LaserVertex> m_vertices;

@@ -1021,7 +1021,10 @@ void GameEngine::execute()
 				}
 			}
 
-			TheFramePacer->update();
+            {
+                auto timing=capture.measure("engine.frame_pacing",TheGameLogic->getFrame());
+			    TheFramePacer->update();
+            }
 			if (capture.end(TheGameLogic->getFrame(),capturedObjects)) setQuitting(TRUE);
 		}
 

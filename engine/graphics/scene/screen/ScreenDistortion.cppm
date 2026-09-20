@@ -11,6 +11,7 @@ module;
 #include <vector>
 
 export module Graphics.Scene.Screen.Distortion;
+import Graphics.Scene.Lighting.Environment;
 
 export import Graphics.Resources.Bindless.BindlessResourceTable;
 export import Graphics.RenderGraph.Execution;
@@ -183,6 +184,7 @@ public:
 		RHIViewport viewport, const ScreenDistortionData &data,
         RHITextureFormat color_format=RHITextureFormat::BGRA8_UNorm) noexcept
 	{
+        if (Get_Environment_Lighting().parameters.pbr_options[1] > .5f) color_format=RHITextureFormat::RGBA16_Float;
 		if (!Is_Initialized() || !color_target.Is_Valid() || !depth_target.Is_Valid() || viewport.width == 0 || viewport.height == 0)
 			return false;
 		if (data.Size() == 0)

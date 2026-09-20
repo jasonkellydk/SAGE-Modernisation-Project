@@ -1,4 +1,5 @@
 import Graphics.Frame.RenderClock;
+import Graphics.Frame.RenderSettings;
 #include <algorithm>
 import Graphics.Scene.Views.CameraMatrices;
 import Graphics.Frame.AttachmentBindings;
@@ -456,7 +457,8 @@ void WaterRenderSystem::ReAcquireResources()
 
 	// The water type selects geometry only. Every mode uses the same // reflection/refraction material contract.
 	m_pReflectionTexture = new W3DTextureHandle(SEA_REFLECTION_SIZE,SEA_REFLECTION_SIZE,Assets::PixelEncoding::BGRA8,
-        MIP_LEVELS_1,W3DTextureHandle::POOL_DEFAULT,true,false);
+          MIP_LEVELS_1,W3DTextureHandle::POOL_DEFAULT,true,false);
+    if (Graphics::Get_Render_Settings().PBR_Enabled()) m_pReflectionTexture->Enable_HDR_Render_Target();
 
 
 	if (m_waterTrackSystem != nullptr)
@@ -649,7 +651,6 @@ void WaterRenderSystem::loadSetting( Setting *setting, TimeOfDay timeOfDay )
 
 	// texelss per unit
 	setting->skyTexelsPerUnit = WaterSettings[ timeOfDay ].m_skyTexelsPerUnit;
-	setting->skyTexelsPerUnit /= static_cast<Real>(Get_Water_Texture_Width(setting->waterTexture));
 
 	// water repeat
 	setting->waterRepeatCount = WaterSettings[ timeOfDay ].m_waterRepeatCount;
@@ -721,6 +722,7 @@ bool WaterRenderSystem::updateDisplacementTexture()
 void WaterRenderSystem::Capture_Refraction_Texture()
 {
     if (m_renderingOffscreen) return;
+    m_underwaterRendered = false;
     m_sceneColorTexture = {};
     m_sceneDepthTexture = {};
     if (auto* device = Graphics::Shared_Frame_Device()) {
@@ -728,8 +730,9 @@ void WaterRenderSystem::Capture_Refraction_Texture()
         auto& renderer = Graphics::Get_Water_Renderer();
         auto& commands = device->Immediate_Command_List();
         const auto& swap_chain = device->Get_Swap_Chain();
-        m_sceneColorTexture = renderer.Capture_Color(commands, swap_chain.Backbuffer(),
-            Graphics::RHITextureFormat::BGRA8_UNorm);
+        m_sceneColorTexture = renderer.Capture_Color(commands, Graphics::Shared_Frame_Targets().backbuffer,
+            Graphics::Get_Environment_Lighting().parameters.pbr_options[1] > .5f
+                ? Graphics::RHITextureFormat::RGBA16_Float : Graphics::RHITextureFormat::BGRA8_UNorm);
         m_sceneDepthTexture = renderer.Capture_Depth(commands, swap_chain.Depth_Target(),
             Graphics::RHITextureFormat::D24_UNorm_S8);
     }
@@ -769,7 +772,9 @@ void WaterRenderSystem::renderMirror(W3DCamera *cam)
 		return;
 	}
 
-    attachments.Clear(true,true,{0,0,0,1});
+    // Alpha marks reflected geometry. Uncovered sky samples use the lighting
+    // environment instead of replacing its radiance with the black clear.
+    attachments.Clear(true,true,{0,0,0,0});
 
 	cam->Set_Transform( reflectedTransform );
 
@@ -918,9 +923,8 @@ Bool WaterRenderSystem::getClippedWaterPlane(W3DCamera *cam, AABoxClass *box)
 }
 
 WaterMaterialParameters WaterRenderSystem::makeWaterMaterialParameters(
-	bool river, bool reflection, bool underwater) const
+	bool river, bool reflection) const
 {
-	(void)river;
 	WaterMaterialParameters parameters = {
 		Vector4(0.0f, 0.0f, 0.0f, 0.0f),
 		Vector4(m_uOffset, m_vOffset, m_waterTime, m_level),
@@ -929,7 +933,7 @@ WaterMaterialParameters WaterRenderSystem::makeWaterMaterialParameters(
 		Vector4(1.0f, 1.0f, 1.0f, 1.0f),
 		Vector4(reflection ? REFLECTION_FACTOR : 0.0f,
 			0.0f, m_sceneColorTexture.Is_Valid() ? 1.0f : 0.0f,
-			underwater ? 1.0f : 0.0f),
+			m_underwaterRendered ? 1.0f : 0.0f),
 		Vector4(river ? 1.0f : 0.0f,
 			TheWaterTransparency != nullptr ?
 				TheWaterTransparency->m_transparentWaterDepth : 0.0f,
@@ -946,8 +950,6 @@ WaterMaterialParameters WaterRenderSystem::makeWaterMaterialParameters(
 			std::span<const float,16>(&camera_transform[0][0],16),m_level);
 		const auto& position = water_view.camera_position;
 		parameters.camera_position = Vector4(position[0],position[1],position[2],1);
-		if (water_view.underwater)
-			parameters.effects[3] = 1.0f;
 	}
 
 	W3DShroud *shroud = TheTerrainRenderObject == nullptr ? nullptr :
@@ -992,23 +994,19 @@ void WaterRenderSystem::drawSea(W3DRenderContext & rinfo)
 	}
 
 	const WaterMaterialParameters parameters =
-		makeWaterMaterialParameters(false, m_pReflectionTexture != nullptr, false);
+		makeWaterMaterialParameters(false, m_pReflectionTexture != nullptr);
 	W3DShroud *shroud = TheTerrainRenderObject == nullptr ? nullptr :
 		TheTerrainRenderObject->getShroud();
-	W3DTextureHandle *foam_or_caustics = parameters.effects[3] > 0.5f &&
-		m_waterCausticsTexture != nullptr ? m_waterCausticsTexture :
-		m_waterSparklesTexture;
-	W3DTextureHandle *environment_or_depth = parameters.effects[3] > 0.5f &&
-		m_waterDepthLutTexture != nullptr ? m_waterDepthLutTexture :
-		m_waterEnvironmentTexture;
-	if (environment_or_depth == nullptr)
-		environment_or_depth = m_settings[m_tod].skyTexture;
+	W3DTextureHandle *foam_texture = m_waterSparklesTexture;
+	W3DTextureHandle *environment_texture = m_waterEnvironmentTexture;
+	if (environment_texture == nullptr)
+		environment_texture = m_settings[m_tod].skyTexture;
 
 	if (m_waterMaterial.Apply_Ocean(m_settings[m_tod].waterTexture,
 		Graphics::Get_Water_Renderer().Displacement().Texture(),
 		m_waterOceanNormalTexture != nullptr ? m_waterOceanNormalTexture : m_waterNoiseTexture,
-		foam_or_caustics, m_pReflectionTexture, m_sceneColorTexture,
-		environment_or_depth, shroud == nullptr ? nullptr : shroud->getShroudTexture(),
+		foam_texture, m_pReflectionTexture, m_sceneColorTexture,
+		environment_texture, shroud == nullptr ? nullptr : shroud->getShroudTexture(),
 		m_sceneDepthTexture, m_waterCausticsTexture, m_waterDepthLutTexture, parameters,
 		TheWaterTransparency != nullptr && TheWaterTransparency->m_additiveBlend))
 	{
@@ -1040,9 +1038,10 @@ void WaterRenderSystem::renderWater()
 //-------------------------------------------------------------------------------------------------
 void WaterRenderSystem::renderUnderwater(W3DRenderContext &rinfo, bool draw_grid)
 {
+    m_underwaterRendered = false;
     auto* device = Graphics::Shared_Frame_Device();
     if (!device || !m_sceneColorTexture.Is_Valid() || !m_sceneDepthTexture.Is_Valid()) return;
-    const auto parameters = makeWaterMaterialParameters(false,false,false);
+    const auto parameters = makeWaterMaterialParameters(false,false);
     if (!m_waterMaterial.Apply_Underwater(m_sceneColorTexture,m_sceneDepthTexture,
         m_waterCausticsTexture,m_waterDepthLutTexture,parameters)) return;
     if (m_waterType == WATER_TYPE_OCEAN) {
@@ -1052,17 +1051,19 @@ void WaterRenderSystem::renderUnderwater(W3DRenderContext &rinfo, bool draw_grid
             {box.Center.X-box.Extent.X,box.Center.Y-box.Extent.Y},
             {box.Center.X+box.Extent.X,box.Center.Y+box.Extent.Y},
             {m_worldPositionX,m_worldPositionY,0},PATCH_WIDTH,PATCH_SCALE};
-        m_waterMaterial.Draw_Patches(m_gridMesh,grid);
+        m_underwaterRendered = m_waterMaterial.Draw_Patches(m_gridMesh,grid);
     } else {
         for (const auto& meshes : m_surfaceMeshes)
             for (const auto mesh : meshes)
-                if (mesh.Is_Valid()) m_waterMaterial.Draw(mesh,Matrix4x4(true));
+                if (mesh.Is_Valid()) m_underwaterRendered |= m_waterMaterial.Draw(mesh,Matrix4x4(true));
         if (draw_grid)
-            m_waterMaterial.Draw(m_gridMesh,Matrix4x4(m_gridRenderData.transform));
+            m_underwaterRendered |= m_waterMaterial.Draw(m_gridMesh,Matrix4x4(m_gridRenderData.transform));
     }
     m_sceneColorTexture = Graphics::Get_Water_Renderer().Capture_Color(
-        device->Immediate_Command_List(),device->Get_Swap_Chain().Backbuffer(),
-        Graphics::RHITextureFormat::BGRA8_UNorm);
+        device->Immediate_Command_List(),Graphics::Shared_Frame_Targets().backbuffer,
+        Graphics::Get_Environment_Lighting().parameters.pbr_options[1] > .5f
+            ? Graphics::RHITextureFormat::RGBA16_Float : Graphics::RHITextureFormat::BGRA8_UNorm);
+    m_underwaterRendered &= m_sceneColorTexture.Is_Valid();
 }
 
 void WaterRenderSystem::updateTextureAnimation()
@@ -1071,8 +1072,11 @@ void WaterRenderSystem::updateTextureAnimation()
 	const Int timeNow = SDL_GetTicks();
 	const Int timeDiff = timeNow - m_LastUpdateTime;
 	m_LastUpdateTime = timeNow;
-	m_uOffset += timeDiff * setting.uScrollPerMs * setting.skyTexelsPerUnit;
-	m_vOffset += timeDiff * setting.vScrollPerMs * setting.skyTexelsPerUnit;
+	const unsigned width = Get_Water_Texture_Width(setting.waterTexture);
+	if (!width) return; // Dimensions become available when the asynchronous load publishes.
+	const Real texelsPerUnit = setting.skyTexelsPerUnit / static_cast<Real>(width);
+	m_uOffset += timeDiff * setting.uScrollPerMs * texelsPerUnit;
+	m_vOffset += timeDiff * setting.vScrollPerMs * texelsPerUnit;
 	m_uOffset -= static_cast<Int>(m_uOffset);
 	m_vOffset -= static_cast<Int>(m_vOffset);
 }
@@ -1187,20 +1191,16 @@ void WaterRenderSystem::renderWaterMesh()
 	W3DShroud *shroud = TheTerrainRenderObject == nullptr ? nullptr :
 		TheTerrainRenderObject->getShroud();
 	const WaterMaterialParameters parameters =
-		makeWaterMaterialParameters(true, m_pReflectionTexture != nullptr, false);
+		makeWaterMaterialParameters(true, m_pReflectionTexture != nullptr);
 	W3DTextureHandle *normal_texture = m_waterOceanNormalTexture != nullptr ?
 		m_waterOceanNormalTexture : m_waterNoiseTexture;
-	W3DTextureHandle *foam_or_caustics = parameters.effects[3] > 0.5f &&
-		m_waterCausticsTexture != nullptr ? m_waterCausticsTexture :
-		m_waterSparklesTexture;
-	W3DTextureHandle *environment_or_depth = parameters.effects[3] > 0.5f &&
-		m_waterDepthLutTexture != nullptr ? m_waterDepthLutTexture :
-		m_waterEnvironmentTexture;
-	if (environment_or_depth == nullptr)
-		environment_or_depth = m_settings[m_tod].skyTexture;
+	W3DTextureHandle *foam_texture = m_waterSparklesTexture;
+	W3DTextureHandle *environment_texture = m_waterEnvironmentTexture;
+	if (environment_texture == nullptr)
+		environment_texture = m_settings[m_tod].skyTexture;
 	if (m_waterMaterial.Apply_Surface(m_riverTexture, normal_texture,
-		foam_or_caustics, m_riverAlphaEdge, m_pReflectionTexture,
-		m_sceneColorTexture, environment_or_depth,
+		foam_texture, m_riverAlphaEdge, m_pReflectionTexture,
+		m_sceneColorTexture, environment_texture,
 		shroud == nullptr ? nullptr : shroud->getShroudTexture(),
 		m_sceneDepthTexture, parameters,
 		TheWaterTransparency != nullptr &&
@@ -1367,22 +1367,17 @@ void WaterRenderSystem::drawRiverWater(const WaterSurfacePolygon &polygon)
 	W3DShroud *shroud = TheTerrainRenderObject == nullptr ? nullptr :
 		TheTerrainRenderObject->getShroud();
 	const WaterMaterialParameters parameters =
-		makeWaterMaterialParameters(true, m_pReflectionTexture != nullptr,
-			false);
+		makeWaterMaterialParameters(true, m_pReflectionTexture != nullptr);
 	W3DTextureHandle *normal_texture = m_waterOceanNormalTexture != nullptr ?
 		m_waterOceanNormalTexture : m_waterNoiseTexture;
-	W3DTextureHandle *foam_or_caustics = parameters.effects[3] > 0.5f &&
-		m_waterCausticsTexture != nullptr ? m_waterCausticsTexture :
-		m_waterSparklesTexture;
-	W3DTextureHandle *environment_or_depth = parameters.effects[3] > 0.5f &&
-		m_waterDepthLutTexture != nullptr ? m_waterDepthLutTexture :
-		m_waterEnvironmentTexture;
-	if (environment_or_depth == nullptr)
-		environment_or_depth = m_settings[m_tod].skyTexture;
+	W3DTextureHandle *foam_texture = m_waterSparklesTexture;
+	W3DTextureHandle *environment_texture = m_waterEnvironmentTexture;
+	if (environment_texture == nullptr)
+		environment_texture = m_settings[m_tod].skyTexture;
 	if (m_waterMaterial.Apply_Surface(m_riverTexture, normal_texture,
-		foam_or_caustics, m_riverAlphaEdge, m_pReflectionTexture,
+		foam_texture, m_riverAlphaEdge, m_pReflectionTexture,
 		m_sceneColorTexture,
-		environment_or_depth, shroud == nullptr ? nullptr :
+		environment_texture, shroud == nullptr ? nullptr :
 			shroud->getShroudTexture(), m_sceneDepthTexture,
 		parameters, TheWaterTransparency != nullptr &&
 			TheWaterTransparency->m_additiveBlend))
@@ -1397,7 +1392,7 @@ void WaterRenderSystem::drawRiverWater(const WaterSurfacePolygon &polygon)
 void WaterRenderSystem::drawSurfaceMesh(Graphics::WaterMeshHandle mesh)
 {
     if (!Graphics::Shared_Frame_Device()) return;
-    auto parameters = makeWaterMaterialParameters(false,m_pReflectionTexture != nullptr,false);
+    auto parameters = makeWaterMaterialParameters(false,m_pReflectionTexture != nullptr);
     const std::uint32_t diffuse = getSurfaceDiffuse(false);
     parameters.tint = Vector4(((diffuse >> 16)&255)/255.0f,((diffuse >> 8)&255)/255.0f,
         (diffuse&255)/255.0f,(diffuse >> 24)/255.0f);

@@ -36,6 +36,7 @@
 #include <SDL3/SDL.h>
 
 #include <array>
+#include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <cstddef>
@@ -3794,8 +3795,22 @@ Bool W3DModelDraw::handleWeaponFireFX(WeaponSlotType wslot, Int specificBarrelTo
 		WeaponRecoilInfo& recoil = m_weaponRecoilInfoVec[wslot][specificBarrelToUse];
 		recoil.m_state = WeaponRecoilInfo::RECOIL_START;
 		recoil.m_recoilRate = getW3DModelDrawModuleData()->m_initialRecoil;
-		if (info.m_muzzleFlashBone != 0)
+		if (info.m_muzzleFlashBone != 0) {
 			info.setMuzzleFlashHidden(m_renderObject, false);
+            if(TheDisplay && m_renderObject && !m_renderObject->Is_Hidden()) {
+                // Mesh muzzle flashes are emissive geometry, independent of
+                // whether the weapon also spawns a particle-system FX list.
+                const auto transform=m_renderObject->Get_Bone_Transform(info.m_muzzleFlashBone);
+                const Coord3D position{transform.Get_X_Translation(),transform.Get_Y_Translation(),transform.Get_Z_Translation()};
+                float radius=18.f;
+                if(auto* flash=m_renderObject->Get_Sub_Object_On_Bone(0,info.m_muzzleFlashBone)) {
+                    radius=std::clamp(flash->Get_Bounding_Sphere().Radius*6.f,12.f,96.f);
+                    flash->Release_Ref();
+                }
+                const RGBColor radiance{1.f,.65f,.22f};
+                TheDisplay->createLightPulse(&position,&radiance,radius*.25f,radius*.75f,0,3);
+            }
+        }
 	}
 
 	return handled;

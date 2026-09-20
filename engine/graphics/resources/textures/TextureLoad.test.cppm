@@ -15,6 +15,7 @@ import Graphics.Resources.Textures.Load;
 import Graphics.Tests.Device;
 import Graphics.Scene.Props.Renderer;
 import Graphics.Resources.Textures.Quality;
+import Assets.Images.Buffer;
 using namespace Graphics;
 
 namespace
@@ -128,7 +129,8 @@ BOOST_AUTO_TEST_CASE(queued_image_decodes_on_worker_and_publishes_complete_rgb_a
         BOOST_REQUIRE(queue.Drain());
         BOOST_REQUIRE(published);
         BOOST_CHECK_EQUAL(publications,1u);
-        BOOST_CHECK(header_thread==owner); BOOST_CHECK(decode_thread!=owner); BOOST_CHECK(publish_thread==owner);
+        BOOST_CHECK(header_thread!=owner); BOOST_CHECK(header_thread==decode_thread);
+        BOOST_CHECK(decode_thread!=owner); BOOST_CHECK(publish_thread==owner);
         BOOST_CHECK(!published->Is_Placeholder());
         Check_Drawing(device,published->Handle(),colors);
         BOOST_REQUIRE(queue.Shutdown());
@@ -177,6 +179,38 @@ BOOST_AUTO_TEST_CASE(dds_mip_selection_and_publication_preserve_retained_draw_ge
         BOOST_CHECK(!device.Retain_Texture(retained));
         Get_Texture_Quality_Settings()={};
     }
+}
+
+BOOST_AUTO_TEST_CASE(worker_image_transform_regenerates_mips_before_single_publication)
+{
+    GraphicsTestDevice device({true});
+    ResourceLoadQueue queue;
+    BOOST_REQUIRE(queue.Start(2));
+    TextureLoadRequest request;
+    request.device=&device; request.mips.requested_count=2;
+    request.read_tga=Memory_Source(TGA({0xffff0000,0xffff0000,0xffff0000,0xffff0000}));
+    const auto owner=std::this_thread::get_id();
+    std::thread::id transform_thread;
+    request.transform=[&](Assets::ImageBuffer& image) {
+        transform_thread=std::this_thread::get_id();
+        for (unsigned y=0;y<image.Height();++y) for (unsigned x=0;x<image.Width();++x) {
+            const auto offset=std::size_t(y)*image.Row_Pitch()+x*4;
+            image.Bytes()[offset+1]=std::byte{255}; image.Bytes()[offset+2]=std::byte{0};
+        }
+        return true;
+    };
+    std::unique_ptr<TextureResource> published;
+    const auto source=std::make_shared<const ResourceLoadSource>([&] {
+        return std::make_unique<TextureLoadJob>(request,[&](TextureResource* resource) { published.reset(resource); });
+    });
+    BOOST_REQUIRE(queue.Request(source,ResourceLoadPriority::Background));
+    BOOST_REQUIRE(queue.Drain());
+    BOOST_REQUIRE(published);
+    BOOST_CHECK(transform_thread!=owner);
+    BOOST_CHECK_EQUAL(device.Texture_Map_Count(),0u);
+    Check_Drawing(device,published->Handle(),{0xff00ff00,0xff00ff00,0xff00ff00,0xff00ff00},0);
+    // The existing image-preparation box filter truncates each sample before summing.
+    Check_Drawing(device,published->Handle(),{0xfc00fc00,0xfc00fc00,0xfc00fc00,0xfc00fc00},1);
 }
 
 BOOST_AUTO_TEST_CASE(cube_faces_and_compressed_volume_slices_reach_their_allocated_subresources)
@@ -235,7 +269,7 @@ BOOST_AUTO_TEST_CASE(failed_source_never_publishes_partial_pixels_and_completion
         std::unique_ptr<TextureResource> published;
         unsigned publications=0;
         TextureLoadJob job(request,[&](TextureResource* resource) { ++publications; published.reset(resource); });
-        BOOST_CHECK_EQUAL(job.Prepare(),!fail_header);
+        BOOST_CHECK(job.Prepare());
         BOOST_CHECK(!job.Decode());
         BOOST_CHECK(!published);
         job.Complete(false); job.Complete(false);

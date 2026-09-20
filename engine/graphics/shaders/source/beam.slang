@@ -1,3 +1,4 @@
+#include "scene_color.slangh"
 #include "resource_access.slangh"
 struct BeamVertexInput
 {
@@ -171,5 +172,6 @@ float4 beam_pixel(BeamVertexOutput input) : SV_TARGET
         }
 #endif
     }
-    return input.color * texture_color;
+    float4 color=input.color * texture_color;
+    return float4(Scene_Legacy_Color(color.rgb),color.a);
 }

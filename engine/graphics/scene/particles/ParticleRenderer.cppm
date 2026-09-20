@@ -29,6 +29,9 @@ export import Graphics.Shaders.Library;
 
 import Graphics.Memory.AlignedAllocator;
 
+import Graphics.Scene.Lighting.Environment;
+import Graphics.Resources.Textures.Snapshot;
+
 namespace Graphics
 {
 
@@ -41,6 +44,7 @@ public:
 			return false;
 
 		m_device = &device;
+        if (!m_environment.Initialize(device)) { Shutdown(); return false; }
 		m_particles.Reserve(max_emitters, max_particles);
 		m_gpu_particles.resize(max_particles);
 		m_visible_storage.resize(max_particles);
@@ -87,12 +91,21 @@ public:
 			multiply_description,
 			alpha_test_description
 		};
-		m_pipelines[0] = m_shaders.Create_Pipeline(device, m_shader, pipeline_description);
-		m_pipelines[1] = m_shaders.Create_Pipeline(device, m_shader, additive_description);
-		m_pipelines[2] = m_shaders.Create_Pipeline(device, m_shader, multiply_description);
-		m_pipelines[3] = m_shaders.Create_Pipeline(device, m_shader, alpha_test_description);
+        const auto create_pipeline = [&](const PipelineDesc& source) {
+            RHIPipeline state{source.Key().value,source.depth_test,source.depth_write,source.topology,
+                source.vertex_format,source.blend_mode,source.cull_mode,source.blend_operation};
+            state.sampler_count=16;
+            state.samplers[0].address.fill(RHISamplerAddress::Clamp);
+            state.samplers[15].address.fill(RHISamplerAddress::Wrap);
+            return device.Create_Pipeline(state,{m_shaders.Bytecode(m_shader,ShaderStage::Vertex)},
+                {m_shaders.Bytecode(m_shader,ShaderStage::Pixel)});
+        };
+		m_pipelines[0] = create_pipeline(pipeline_description);
+		m_pipelines[1] = create_pipeline(additive_description);
+		m_pipelines[2] = create_pipeline(multiply_description);
+		m_pipelines[3] = create_pipeline(alpha_test_description);
 		for (std::size_t index = 0; index < point_sprite_descriptions.size(); ++index)
-			m_pipelines[index + 4] = m_shaders.Create_Pipeline(device, m_shader, point_sprite_descriptions[index]);
+			m_pipelines[index + 4] = create_pipeline(point_sprite_descriptions[index]);
 		m_pipeline = m_pipelines[0];
 		bool pipelines_valid = true;
 		for (const PipelineHandle pipeline : m_pipelines)
@@ -126,7 +139,7 @@ public:
 			return false;
 		}
 
-		m_bindless.Reserve(2, 1, 126, 0, 1);
+        m_bindless.Reserve(2,1,8,0,1);
 		if (!m_bindless.Register_Buffer(m_particle_buffer).Is_Valid() || !m_bindless.Register_Material(m_material, m_material_constants).Is_Valid()) {
 			Shutdown();
 			return false;
@@ -147,6 +160,8 @@ public:
 	{
 		m_residency.reset();
 		if (m_device != nullptr) {
+            m_environment.Shutdown(*m_device);
+            m_scene_depth.Shutdown();
 			if (m_billboard_buffer.Is_Valid())
 				m_device->Destroy_Buffer(m_billboard_buffer);
 			if (m_material_constants.Is_Valid())
@@ -336,7 +351,7 @@ public:
 		return true;
 	}
 
-	bool Render(CommandList &commands, RHITextureHandle color_target, RHITextureHandle depth_target, RHIViewport viewport) noexcept
+	bool Render(CommandList &commands, RHITextureHandle color_target, RHITextureHandle depth_target, RHIViewport viewport, RHITextureFormat depth_format=RHITextureFormat::Unknown) noexcept
 	{
 		GRAPHICS_PROFILE_SCOPE("Graphics::ParticleRenderer::Render");
 		if (!Is_Initialized() || !color_target.Is_Valid() || !depth_target.Is_Valid() || viewport.width == 0 || viewport.height == 0)
@@ -354,7 +369,13 @@ public:
 		if (m_draw_set.Size() > m_max_particles)
 			return false;
 		const std::span<const ParticleDrawData> draws = m_draw_set.Records();
-        const ParticleFrameParameters frame_constants{m_view.view_matrix.values,m_view.projection_matrix.values};
+        ParticleFrameParameters frame_constants{m_view.view_matrix.values,m_view.projection_matrix.values};
+        if(draws.empty()) return true;
+        if(depth_format!=RHITextureFormat::Unknown) {
+            if(!commands.Reset_State() || !m_scene_depth.Capture(*m_device,commands,depth_target,
+                viewport.width,viewport.height,depth_format)) return false;
+            frame_constants.depth_options={1,float(viewport.width),float(viewport.height),0};
+        }
 		std::array<float, MaterialParameterBlock::ValueCount> material_values{};
 		material_values[0] = 1.0f;
 		material_values[1] = 1.0f;
@@ -382,7 +403,7 @@ public:
             std::size_t count = 0;
             std::size_t texture_count = 0;
             MaterialHandle last_material{};
-            std::uint32_t last_texture_index=Invalid_Particle_Material_Index;
+            std::array<std::uint32_t,2> last_texture_indices{Invalid_Particle_Material_Index,Invalid_Particle_Material_Index};
             bool has_material=false;
             while (first + count < draws.size()) {
                 const auto& draw = draws[first + count];
@@ -390,39 +411,53 @@ public:
                 if (!has_material || material_handle!=last_material) {
                     const Material* material=m_materials.Resolve(material_handle);
                     if (material==nullptr) return false;
-                    const TextureHandle texture=material->textures[0];
-                    last_texture_index=Invalid_Particle_Material_Index;
-                    if (texture.Is_Valid()) {
-                        auto index=m_bindless.Texture_Index(texture);
-                        if (!index.Is_Valid()) {
-                            if (texture_count==126) break;
-                            const auto resident=m_residency->Texture_Info(texture);
-                            if (!resident.texture.Is_Valid()) return false;
-                            index=m_bindless.Register_Texture(texture,resident.texture);
-                            if (!index.Is_Valid()) return false;
-                            ++texture_count;
+                    unsigned needed=0;
+                    for(unsigned slot=0;slot<2;++slot)
+                        if(material->textures[slot].Is_Valid() && !m_bindless.Texture_Index(material->textures[slot]).Is_Valid()) ++needed;
+                    if(texture_count+needed>8) break;
+                    for(unsigned slot=0;slot<2;++slot) {
+                        const TextureHandle texture=material->textures[slot];
+                        last_texture_indices[slot]=Invalid_Particle_Material_Index;
+                        if(texture.Is_Valid()) {
+                            auto index=m_bindless.Texture_Index(texture);
+                            if(!index.Is_Valid()) {
+                                const auto resident=m_residency->Texture_Info(texture);
+                                if(!resident.texture.Is_Valid()) return false;
+                                index=m_bindless.Register_Texture(texture,resident.texture);
+                                if(!index.Is_Valid()) return false;
+                                ++texture_count;
+                            }
+                            last_texture_indices[slot]=index.Get_Index();
                         }
-                        last_texture_index=index.Get_Index();
                     }
                     last_material=material_handle;has_material=true;
                 }
                 // Material owners and this page's texture table remain stable
                 // while packing the ordered run; keep the resolved binding.
                 auto data=Pack_GPU_Particle(particles,draw.particle_index,draw.material_index);
-                data.texture_index=last_texture_index;
+                data.texture_index=last_texture_indices[0];
+                data.normal_texture_index=last_texture_indices[1];
                 m_gpu_particles[count]=data;
                 ++count;
             }
             if (!m_device->Update_Buffer(m_particle_buffer, 0,
                 std::as_bytes(std::span<const GPUParticleData>(m_gpu_particles.data(), count)))) return false;
+            std::vector<RHIBindlessResource> resources(m_bindless.Resources().begin(),m_bindless.Resources().end());
+            if(frame_constants.depth_options[0]>0) {
+                RHIBindlessResource depth_binding;
+                depth_binding.type=RHIResourceType::Texture;
+                depth_binding.index=ResourceIndex{126,1};depth_binding.texture=m_scene_depth.Texture();
+                resources.push_back(depth_binding);
+            }
             const ParticlePassInput input{
                 draws.subspan(first, count),
                 {m_billboard_buffer, sizeof(ParticleVertex), 6},
-                m_bindless.Resources(), m_color_resource, m_depth_resource, viewport, frame_constants
+                resources, m_color_resource, m_depth_resource, viewport, frame_constants
             };
             if (!m_plan.Execute(*m_graph, commands,
                 [&](GraphPassHandle pass, CommandList& command_list, const PassResources& resources) noexcept {
                     return pass == m_pass
+                        && m_environment.Bind(*m_device,command_list)
                         && ParticlePass::Execute(command_list, resources, input);
                 })) return false;
             first += count;
@@ -442,6 +477,8 @@ private:
 		return m_gpu_scene.Build(m_empty_scene, m_meshes, m_textures, m_samplers, m_materials);
 	}
 
+	EnvironmentLightingBinding m_environment;
+    TextureSnapshot m_scene_depth;
 	Device *m_device = nullptr;
 	std::size_t m_max_particles = 0;
 	ParticleSystem m_particles;

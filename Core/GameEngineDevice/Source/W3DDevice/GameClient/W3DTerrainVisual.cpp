@@ -601,6 +601,14 @@ Bool W3DTerrainVisual::load( AsciiString filename )
 
 #endif
 
+	// Finish terrain material preparation under the responsive loading screen,
+	// before a render pass can request it while holding active GPU attachments.
+#ifdef DO_SEISMIC_SIMULATIONS
+	m_clientHeightMap->getTerrainTexture();
+#else
+	m_logicHeightMap->getTerrainTexture();
+#endif
+
 	// Add any lights loaded by map.
 	MapObject *pMapObj = MapObject::getFirstMapObject();
 	while (pMapObj)

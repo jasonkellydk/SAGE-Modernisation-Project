@@ -1,6 +1,7 @@
 module;
 #include <array>
 #include <cstdint>
+#include <span>
 #include <utility>
 export module Graphics.Frame.AttachmentBindings;
 export import Graphics.Resources.Textures.Resource;
@@ -12,6 +13,7 @@ export struct AttachmentSelection final
 {
     RHITextureHandle color{},depth{};
     RHIViewport viewport{};
+    std::array<RHITextureHandle,7> additional_colors{};
 };
 
 // Retains GPU generations independently of the CPU objects that published them.
@@ -40,6 +42,8 @@ public:
         if (m_device) {
             if (m_selection.color.Is_Valid()) m_device->Destroy_Texture(m_selection.color);
             if (m_selection.depth.Is_Valid()) m_device->Destroy_Texture(m_selection.depth);
+            for(const auto color:m_selection.additional_colors)
+                if(color.Is_Valid()) m_device->Destroy_Texture(color);
         }
         m_device=nullptr; m_selection={};
     }
@@ -52,6 +56,17 @@ private:
         if (selection.depth.Is_Valid() && !device->Retain_Texture(selection.depth)) {
             if (selection.color.Is_Valid()) device->Destroy_Texture(selection.color);
             return false;
+        }
+        unsigned retained=0;
+        for(const auto color:selection.additional_colors) {
+            if(color.Is_Valid() && !device->Retain_Texture(color)) {
+                if(selection.color.Is_Valid()) device->Destroy_Texture(selection.color);
+                if(selection.depth.Is_Valid()) device->Destroy_Texture(selection.depth);
+                for(unsigned i=0;i<retained;++i)
+                    if(selection.additional_colors[i].Is_Valid()) device->Destroy_Texture(selection.additional_colors[i]);
+                return false;
+            }
+            ++retained;
         }
         m_device=device; m_selection=selection;
         return true;
@@ -94,9 +109,9 @@ public:
         AttachmentSnapshot next;
         if (!next.Acquire(device,selection)) return false;
         auto& commands=device->Immediate_Command_List();
-        if (!commands.Set_Render_Targets(selection.color,selection.depth)) return false;
+        if (!Bind_Targets(commands,selection)) return false;
         if (!commands.Set_Viewport(selection.viewport)) {
-            commands.Set_Render_Targets(Current().color,Current().depth);
+            Bind_Targets(commands,Current());
             commands.Set_Viewport(Current().viewport);
             return false;
         }
@@ -113,6 +128,7 @@ public:
         auto selection=Default();
         if (color) {
             selection.color=color->Handle(); selection.depth=color->Depth_Attachment();
+            selection.additional_colors={};
             selection.viewport={0,0,color->Description().width,color->Description().height,0,1};
         }
         if (depth) selection.depth=depth->Handle();
@@ -127,7 +143,7 @@ public:
     bool Rebind()
     {
         auto* device=m_default.Owner();
-        return device && device->Immediate_Command_List().Set_Render_Targets(Current().color,Current().depth)
+        return device && Bind_Targets(device->Immediate_Command_List(),Current())
             && device->Immediate_Command_List().Set_Viewport(Current().viewport);
     }
     void Clear(bool color,bool depth,std::array<float,4> value,float depth_value=1,std::uint8_t stencil=0)
@@ -135,9 +151,23 @@ public:
         if (!m_default.Owner()) return;
         auto& commands=m_default.Owner()->Immediate_Command_List();
         if (color) commands.Clear_Color_Target(Current().color,value);
+        if(color) for(const auto target:Current().additional_colors)
+            if(target.Is_Valid()) commands.Clear_Color_Target(target,value);
         if (depth) commands.Clear_Depth_Stencil_Target(Current().depth,depth_value,stencil);
     }
 private:
+    static bool Bind_Targets(CommandList& commands,const AttachmentSelection& selection)
+    {
+        if(!selection.additional_colors[0].Is_Valid())
+            return commands.Set_Render_Targets(selection.color,selection.depth);
+        std::array<RHITextureHandle,8> colors{};colors[0]=selection.color;
+        unsigned count=1;
+        for(const auto target:selection.additional_colors) {
+            if(!target.Is_Valid()) break;
+            colors[count++]=target;
+        }
+        return commands.Set_Color_Targets(std::span(colors.data(),count),selection.depth);
+    }
     AttachmentSnapshot m_default,m_current;
 };
 

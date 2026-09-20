@@ -125,3 +125,32 @@ BOOST_AUTO_TEST_CASE(invalid_edit_preserves_previous_geometry_and_empty_edit_cle
     BOOST_CHECK(geometry.Vertices().empty());
     BOOST_CHECK(geometry.Indices().empty());
 }
+
+BOOST_AUTO_TEST_CASE(displacement_refines_triangles_and_updates_geometry_bounds)
+{
+    TerrainCell source; source.spacing={4,4}; source.heights={0,2,7,1};
+    source.base_uv={{{0,0},{1,0},{1,1},{0,1}}};
+    for (bool alternate : {false,true}) {
+        source.alternate_diagonal=alternate;
+        std::array<TerrainCell,16> flat,displaced;
+        BOOST_REQUIRE(Subdivide_Terrain_Cell(source,4,flat,[](float,float){return 0.f;}));
+        BOOST_REQUIRE(Subdivide_Terrain_Cell(source,4,displaced,[](float x,float y){return -.5f*x*y;}));
+        for (unsigned i=0;i<16;++i) for (unsigned k=0;k<4;++k) {
+            const float x=displaced[i].base_uv[k][0]*4, y=displaced[i].base_uv[k][1]*4;
+            BOOST_CHECK_SMALL(displaced[i].heights[k]-flat[i].heights[k]+.5f*x*y,1e-5f);
+        }
+        for(unsigned y=0;y<4;++y) for(unsigned x=0;x<3;++x) {
+            BOOST_TEST(displaced[y*4+x].heights[1]==displaced[y*4+x+1].heights[0]);
+            BOOST_TEST(displaced[y*4+x].heights[2]==displaced[y*4+x+1].heights[3]);
+        }
+        TerrainGeometry geometry;
+        BOOST_REQUIRE(geometry.Build(displaced));
+        BOOST_TEST(geometry.Indices().size()==96u);
+        for (const auto& vertex:geometry.Vertices()) {
+            BOOST_TEST(vertex.position[2]>=geometry.Batches()[0].minimum[2]);
+            BOOST_TEST(vertex.position[2]<=geometry.Batches()[0].maximum[2]);
+        }
+    }
+    std::array<TerrainCell,1> one;
+    BOOST_TEST(!Subdivide_Terrain_Cell(source,0,one,[](float,float){return 0.f;}));
+}

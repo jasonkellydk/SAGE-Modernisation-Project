@@ -1,5 +1,6 @@
 #include "resource_access.slangh"
 #include "environment_lighting.slangh"
+#include "pbr.slangh"
 #include "water_constants.slangh"
 
 struct OceanVertexInput
@@ -38,6 +39,8 @@ float2 Rotate_Ocean_UV(float2 uv)
 
 GRAPHICS_TEXTURE_2D(OceanDisplacementTexture, float4, 1)
 GRAPHICS_SAMPLER(OceanDisplacementSampler, 1)
+GRAPHICS_TEXTURE_2D(OceanBottomTexture, float, 11)
+GRAPHICS_SAMPLER(OceanBottomSampler, 11)
 
 OceanVertexOutput Transform_Ocean_Vertex(OceanVertexInput input, float4x4 world)
 {
@@ -56,9 +59,28 @@ OceanVertexOutput Transform_Ocean_Vertex(OceanVertexInput input, float4x4 world)
         OceanDisplacementSampler(), displacement_uv, 0.0).xyz;
     wave_displacement = min(wave_displacement, 0.13);
     wave_displacement.x *= -1.0;
-    world_position.xyz += wave_displacement * 300.0;
+    float3 displacement=wave_displacement*300.0;
+    if(EnvironmentPBR.x > .5) {
+        displacement=wave_displacement*WaterWaveOptions.x;
+        displacement.z=clamp(displacement.z,-WaterWaveOptions.y,WaterWaveOptions.y);
+    }
+    if (WaterBathymetryProjection.x > 0) {
+        float2 bottom_uv=world_position.xy*WaterBathymetryProjection.xy+WaterBathymetryProjection.zw;
+        if (all(bottom_uv>=0) && all(bottom_uv<=1)) {
+            // Sample a conservative world-space seabed envelope at both ends
+            // of horizontal motion. Camera movement cannot change wave depth.
+            float bottom=OceanBottomTexture().SampleLevel(OceanBottomSampler(),bottom_uv,0);
+            float2 moved_uv=(world_position.xy+displacement.xy)*WaterBathymetryProjection.xy+WaterBathymetryProjection.zw;
+            bottom=max(bottom,OceanBottomTexture().SampleLevel(OceanBottomSampler(),moved_uv,0));
+            float clearance=max(world_position.z-bottom,0);
+            // Keep troughs in the water column. Deep-water waves retain their
+            // authored amplitude; shallow crests/troughs fade together.
+            displacement*=min(1,clearance/max(2*abs(displacement.z),.001));
+        }
+    }
+    world_position.xyz += displacement;
 
-    output.foam_height = max(wave_displacement.z * 300.0 - 1.0, 0.0);
+    output.foam_height = max(displacement.z - 1.0, 0.0);
     float4 camera_position = mul(View, world_position);
     float4 clip_position = mul(Projection, camera_position);
     output.position = clip_position;
@@ -212,7 +234,10 @@ float Linearize_Ocean_Depth(float depth, float4 projection)
     float3 view_direction = normalize(WaterCameraPosition.xyz -
         input.world_position);
 
-    float fresnel = 1.0 - dot(surface_normal, view_direction);
+    // Preserve the authored RA3 ocean response. Its light-space environment
+    // already represents the sun highlight; a generic dielectric replacement
+    // suppresses that response and disconnects it from the displacement field.
+    float fresnel = 1.0 - saturate(dot(surface_normal, view_direction));
 
     float3 color = pow(max(surface * input.color0.rgb * WaterTint.rgb,0.0),2.2);
     color *= 0.55 + surface_normal.z * 0.45;
@@ -278,11 +303,18 @@ float Linearize_Ocean_Depth(float depth, float4 projection)
             OceanRefractionSampler(), distorted_uv, 0.0).rgb;
         float3 refracted_base = OceanRefractionTexture().SampleLevel(
             OceanRefractionSampler(), saturate(capture_uv), 0.0).rgb;
-        refracted = pow(max(refracted,0.0),2.2);
-        refracted_base = pow(max(refracted_base,0.0),2.2);
+        if (EnvironmentPBR.y < .5) {
+            refracted = pow(max(refracted,0.0),2.2);
+            refracted_base = pow(max(refracted_base,0.0),2.2);
+        }
         refraction_base = refracted_base;
 
-        bool reject_refraction = distance(refracted, refracted_base) >= 0.1;
+        // HDR color differences are not an object-edge test: valid bright
+        // highlights can differ by much more than 0.1. Use geometry there;
+        // preserve the original color heuristic for the classic renderer.
+        bool reject_refraction = EnvironmentPBR.x > .5 && WaterSurfaceOptions.w > .5
+            ? OceanSceneDepthTexture().SampleLevel(OceanSceneDepthSampler(),distorted_uv,0).r < input.position.z
+            : distance(refracted, refracted_base) >= 0.1;
         if (reject_refraction) {
             refracted = refracted_base;
             distorted_uv = saturate(capture_uv);
@@ -298,7 +330,8 @@ float Linearize_Ocean_Depth(float depth, float4 projection)
         float2 reflection_uv = saturate(projective_uv + surface_normal.xy * 0.2);
         float3 reflection = OceanReflectionTexture().SampleLevel(
             OceanReflectionSampler(), reflection_uv, 0.0).rgb;
-        color += shroud * pow(max(reflection,0.0),2.2) * WaterEffects.x * 0.5;
+        if (EnvironmentPBR.y < .5) reflection=pow(max(reflection,0.0),2.2);
+        color += shroud * reflection * WaterEffects.x * 0.5;
     }
 
     float3 environment_direction = reflect(-view_direction, surface_normal);
@@ -306,17 +339,31 @@ float Linearize_Ocean_Depth(float depth, float4 projection)
         dot(WaterEnvironmentFrame[1].xyz,environment_direction),
         dot(WaterEnvironmentFrame[2].xyz,environment_direction));
     float4 environment_sample = OceanEnvironmentTexture().SampleLevel(
-        OceanEnvironmentSampler(), saturate(Environment_UV(
-            environment_direction)), 0.0);
+        OceanEnvironmentSampler(), Environment_UV(environment_direction), 0.0);
 
     float3 environment = environment_sample.rgb * environment_sample.a * 4.0;
+    float3 sunlight=EnvironmentPBR.x > .5
+        ? EnvironmentSunRadiance.rgb/3.14159265 : WaterSunColor.rgb;
     color += shroud * (environment * fresnel * 2.0 *
-        DirectionalVisibility(input.world_position) + foam) * WaterSunColor.rgb;
+        DirectionalVisibility(input.world_position) + foam) * sunlight;
+    if (EnvironmentPBR.x > .5) {
+        const float ior=max(WaterPBRSurface.z,1.001);
+        const float f0=pow((ior-1)/(ior+1),2);
+        const float roughness=Surface_Filter_Roughness(WaterPBRSurface.x,surface_normal);
+        // The authored environment supplies the sun response. Dynamic lights
+        // use the same GGX BRDF, radiance units and falloff as other materials.
+        float3 clear_water=Surface_Local_Lights(float3(0,0,0),surface_normal,view_direction,
+            input.world_position,roughness,0,f0.xxx);
+        float3 foam_lighting=Surface_Local_Lights(float3(.8,.8,.8),surface_normal,view_direction,
+            input.world_position,.85,0);
+        color+=shroud*(lerp(clear_water,foam_lighting,saturate(foam))
+            +Surface_Environment(float3(0,0,0),surface_normal,view_direction,roughness,0,1,f0.xxx));
+    }
 
     if (WaterEffects.z > 0.5 && WaterEffects.w > 0.5 && WaterSurfaceOptions.w > 0.5)
         color = lerp(refraction_base,color,water_depth_fade);
 
-    color = pow(max(color,0.0),1.0/2.2);
-    color = lerp(color, FogColor.rgb, Water_Fog_Factor(input.world_position));
-    return float4(saturate(color), water_alpha);
+    color = EnvironmentPBR.y > .5 ? max(color,0) : saturate(pow(max(color,0.0),1.0/2.2));
+    color = lerp(color, Scene_Legacy_Color(FogColor.rgb), Water_Fog_Factor(input.world_position));
+    return float4(color, water_alpha);
 }

@@ -131,6 +131,12 @@ W3DLight::LightType W3DLight::Get_Type() const noexcept
 	return To_W3D_Type(m_state.authored.type);
 }
 
+void W3DLight::Set_Type(LightType type) noexcept
+{
+	m_state.authored.type = To_Asset_Type(type);
+	Set_Force_Visible(type == DIRECTIONAL);
+}
+
 void W3DLight::Notify_Added(W3DScene *scene)
 {
 	W3DRenderObject::Notify_Added(scene);

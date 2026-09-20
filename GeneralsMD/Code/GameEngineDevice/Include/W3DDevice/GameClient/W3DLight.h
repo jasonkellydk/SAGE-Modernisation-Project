@@ -64,6 +64,7 @@ public:
 	void Get_Obj_Space_Bounding_Box(AABoxClass &box) const override;
 
 	LightType Get_Type() const noexcept;
+	void Set_Type(LightType type) noexcept;
 
 	void Set_Intensity(float intensity) noexcept { m_state.authored.intensity = intensity; }
 	float Get_Intensity() const noexcept { return m_state.authored.intensity; }

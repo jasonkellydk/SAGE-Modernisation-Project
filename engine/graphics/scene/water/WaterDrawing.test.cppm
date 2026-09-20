@@ -12,6 +12,7 @@ module;
 #include <vector>
 export module Graphics.Scene.Water.Drawing.Tests;
 import Graphics.Tests.Device;
+import Graphics.Scene.Lighting.Environment;
 import Graphics.Frame.AttachmentBindings;
 import Graphics.Scene.Water.Renderer;
 import Graphics.Scene.Terrain.Renderer;
@@ -255,7 +256,9 @@ BOOST_AUTO_TEST_CASE(ocean_depth_color_replaces_captured_seabed_and_foreground_m
     BOOST_REQUIRE(renderer.Draw(commands,mesh,style,parameters,textures));
     std::array<std::byte,16*16*4> pixels{};
     BOOST_REQUIRE(device.Readback_Texture(target,pixels,16*4));
-    const std::array<int,4> underwater{32,64,96,255};
+    // At this depth the legacy LUT reaches its endpoint, including the
+    // existing 10% linear-light depth attenuation before gamma encoding.
+    const std::array<int,4> underwater{31,61,92,255};
     const std::array<int,4> foreground{64,0,0,255};
     for (unsigned channel = 0; channel < 4; ++channel) {
         BOOST_CHECK_SMALL(std::to_integer<int>(pixels[(8*16+2)*4+channel])-underwater[channel],2);
@@ -322,7 +325,7 @@ BOOST_AUTO_TEST_CASE(underwater_instances_tint_submerged_geometry_before_surface
         std::array<std::byte,16*16*4> pixels{};
         BOOST_REQUIRE(device.Readback_Texture(target,pixels,16*4));
         const int caustic = frame == 2 ? 41 : frame == 3 ? 31 : 0;
-        const std::array<int,4> expected = frame < 2 ? std::array<int,4>{64,32,16,255} :
+        const std::array<int,4> expected = frame < 2 ? std::array<int,4>{61,31,15,255} :
             std::array<int,4>{caustic,caustic,caustic,255};
         for (unsigned channel = 0; channel < 4; ++channel)
             BOOST_CHECK_SMALL(std::to_integer<int>(pixels[(8*16+8)*4+channel])-expected[channel],2);
@@ -555,6 +558,24 @@ BOOST_AUTO_TEST_CASE(ocean_shell_map_perspective_preserves_underwater_pixels)
         for (unsigned channel = 0; channel < 3; ++channel)
             BOOST_CHECK_SMALL(std::to_integer<int>(pixels[(16*size+16)*4+channel])-expected[channel],2);
     }
+    // A tinted seabed is not evidence that the water surface drew: the
+    // underwater prepass can hide a missing surface. A green reflection makes
+    // surface coverage observable with the real shellmap camera and depths.
+    const auto reflected_green=solid({0,255,0,255});
+    trough_textures[4]=reflected_green;parameters.effects[0]=1;
+    const std::array<float,4> bottom{17.5f,17.5f,17.5f,17.5f};
+    for (const bool bounded : {false,true,false}) {
+        if (bounded) BOOST_REQUIRE(renderer.Set_Bathymetry(bottom,2,2,{1.f/4000,1.f/4000,.25f,.25f}));
+        else renderer.Clear_Bathymetry();
+        BOOST_REQUIRE(commands.Clear_Color_Target(target,{0.25f,0,0,1}));
+        draw(trough_textures);
+        BOOST_REQUIRE(device.Readback_Texture(target,pixels,size*4));
+        const int green=std::to_integer<int>(pixels[(16*size+16)*4+1]);
+        if (bounded) BOOST_CHECK_GT(green,180);
+        else BOOST_CHECK_SMALL(green-64,2);
+    }
+    parameters.effects[0]=0;
+    device.Destroy_Texture(reflected_green);
     device.Destroy_Texture(trough);
     if (!std::filesystem::exists(std::filesystem::path(GRAPHICS_WATER_TEXTURE_DIRECTORY)/"WaterOceanOctave.dds")) {
         renderer.Destroy_Mesh(mesh);
@@ -1412,4 +1433,146 @@ BOOST_AUTO_TEST_CASE(water_shader_passes_preserve_sampling_blending_and_displace
     renderer.Destroy_Mesh(mesh);
     renderer.Shutdown();
     for(auto handle : {base,wave,normal,black,white,grey,displacement,target,depth}) device.Destroy_Texture(handle);
+}
+
+BOOST_AUTO_TEST_CASE(pbr_water_transmits_hdr_without_gamma_or_duplicate_depth_tint)
+{
+    struct Reset { ~Reset(){Get_Environment_Lighting()={};} } reset;
+    Get_Environment_Lighting()={};
+    auto& env=Get_Environment_Lighting().parameters;
+    env.pbr_options={1,1,1,1};env.sky_radiance={};env.ground_radiance={};
+    GraphicsTestDevice device({true});WaterRenderer renderer;
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    const auto texture=[&](std::array<float,4> value) {
+        return device.Create_Texture_Initialized({1,1,1,RHITextureFormat::RGBA32_Float},{std::as_bytes(std::span(value)),16});
+    };
+    const auto black=texture({0,0,0,0}),normal=texture({.5f,.5f,1,1}),background=texture({2,.5f,.25f,1});
+    const auto target=device.Create_Texture({16,16,1,RHITextureFormat::RGBA32_Float,static_cast<unsigned>(RHITextureUsage::RenderTarget)});
+    const auto depth=device.Create_Texture({16,16,1,RHITextureFormat::D32_Float,static_cast<unsigned>(RHITextureUsage::DepthStencil)});
+    const std::array<std::array<float,3>,4> corners{{{-1,-1,.5f},{1,-1,.5f},{1,1,.5f},{-1,1,.5f}}};
+    const auto mesh=renderer.Create_Surface_Patch(corners,1);
+    WaterParameters parameters;
+    parameters.world=parameters.view=parameters.projection={1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
+    parameters.camera_position={0,0,100,1};parameters.effects[2]=1;
+    parameters.absorption={};parameters.scattering={};
+    WaterStyle style;style.pass=WaterPass::Surface;style.blend=RHIBlendMode::Disabled;
+    std::array<RHITextureHandle,9> textures{black,normal,black,background,black,background,black,black,black};
+    auto& commands=device.Immediate_Command_List();
+    BOOST_REQUIRE(commands.Set_Render_Targets(target,depth));BOOST_REQUIRE(commands.Set_Viewport({0,0,16,16}));
+    BOOST_REQUIRE(commands.Clear({0,0,0,0},1));
+    BOOST_REQUIRE(renderer.Draw(commands,mesh,style,parameters,textures));
+    std::array<float,16*16*4> pixels{};
+    BOOST_REQUIRE(device.Readback_Texture(target,std::as_writable_bytes(std::span(pixels)),16*16));
+    const auto offset=(8*16+8)*4;
+    BOOST_TEST(pixels[offset]>1.9f);BOOST_TEST(pixels[offset]<2.f);
+    BOOST_CHECK_SMALL(pixels[offset]/pixels[offset+1]-4.f,.02f);
+    BOOST_CHECK_SMALL(pixels[offset+1]/pixels[offset+2]-2.f,.02f);
+    parameters.absorption={.04f,.01f,.005f,0};
+    BOOST_REQUIRE(commands.Clear({0,0,0,0},1));
+    BOOST_REQUIRE(renderer.Draw(commands,mesh,style,parameters,textures));
+    std::array<float,16*16*4> absorbed{};
+    BOOST_REQUIRE(device.Readback_Texture(target,std::as_writable_bytes(std::span(absorbed)),16*16));
+    BOOST_TEST(absorbed[offset]<pixels[offset]*.1f);
+    BOOST_TEST(absorbed[offset+2]>pixels[offset+2]*.5f);
+    // Legacy opacity is not geometric coverage: transmission is already in
+    // RGB. A low wave sample must also stay within the material's world-space
+    // excursion instead of sinking the entire patch below the near plane.
+    std::array<WaterVertex,4> vertices{};
+    for(unsigned i=0;i<4;++i) { vertices[i].position=corners[i];vertices[i].color[3]=0; }
+    const std::array<std::uint32_t,6> indices{0,1,2,0,2,3};
+    BOOST_REQUIRE(renderer.Update_Mesh(mesh,vertices,indices));
+    const auto low_wave=texture({0,0,-.1f,0});
+    style.pass=WaterPass::Ocean;
+    textures={black,low_wave,normal,black,black,background,black,black,black};
+    parameters.wave_options[1]=1.5f; // Explicit calm-water excursion limit.
+    parameters.effects[3]=1;
+    parameters.world[11]=5;parameters.projection[10]=.1f;parameters.absorption={};
+    BOOST_REQUIRE(commands.Clear({0,0,0,0},1));
+    BOOST_REQUIRE(renderer.Draw(commands,mesh,style,parameters,textures));
+    BOOST_REQUIRE(device.Readback_Texture(target,std::as_writable_bytes(std::span(pixels)),16*16));
+    BOOST_TEST(pixels[offset]>1.9f);BOOST_TEST(pixels[offset+3]>.99f);
+    // An empty planar-reflection capture must retain environment reflection.
+    // This happens when the reflected camera looks into a sky with no geometry.
+    textures[1]=black;
+    parameters.effects={1,0,0,0};
+    env.sky_radiance={1,1,1,0};env.ground_radiance={1,1,1,0};
+    BOOST_REQUIRE(commands.Clear({0,0,0,0},1));
+    BOOST_REQUIRE(renderer.Draw(commands,mesh,style,parameters,textures));
+    BOOST_REQUIRE(device.Readback_Texture(target,std::as_writable_bytes(std::span(pixels)),16*16));
+    BOOST_TEST(pixels[offset]>.005f);
+    // A capture already processed with the RA3 depth LUT must retain its HDR
+    // radiance, even if fallback medium coefficients would fully absorb it.
+    env.sky_radiance={};env.ground_radiance={};
+    parameters.effects={0,0,1,1};parameters.absorption={10,10,10,0};
+    BOOST_REQUIRE(commands.Clear({0,0,0,0},1));
+    BOOST_REQUIRE(renderer.Draw(commands,mesh,style,parameters,textures));
+    BOOST_REQUIRE(device.Readback_Texture(target,std::as_writable_bytes(std::span(pixels)),16*16));
+    BOOST_TEST(pixels[offset]>1.9f);
+    BOOST_CHECK_SMALL(pixels[offset]/pixels[offset+1]-4.f,.02f);
+
+    // RGBM alpha scales authored reflection radiance; foam alpha must never
+    // alter interface roughness. Exercise both ocean and river shader paths.
+    const auto environment_full=texture({1,0,0,1});
+    const auto environment_half=texture({1,0,0,.5f});
+    const auto transparent_foam=texture({0,0,0,1});
+    env.sun_radiance={1000,0,0,0};
+    parameters.absorption={};parameters.effects={};
+    parameters.camera_position={100,0,100,1};
+    for (const auto pass : {WaterPass::Ocean,WaterPass::Surface}) {
+        style.pass=pass;
+        textures=pass==WaterPass::Ocean
+            ? std::array<RHITextureHandle,9>{black,black,normal,black,black,black,black,black,black}
+            : std::array<RHITextureHandle,9>{black,normal,black,background,black,black,black,black,black};
+        const auto read_red=[&]() {
+            BOOST_REQUIRE(commands.Clear({0,0,0,0},1));
+            BOOST_REQUIRE(renderer.Draw(commands,mesh,style,parameters,textures));
+            BOOST_REQUIRE(device.Readback_Texture(target,std::as_writable_bytes(std::span(pixels)),16*16));
+            return pixels[offset];
+        };
+        const float baseline=read_red();
+        textures[6]=environment_full;
+        const float full=read_red();
+        textures[6]=environment_half;
+        const float half=read_red();
+        BOOST_TEST(full-baseline>1.f);
+        BOOST_CHECK_CLOSE(full-baseline,2*(half-baseline),.1f);
+        textures[pass==WaterPass::Ocean ? 3 : 2]=transparent_foam;
+        BOOST_CHECK_CLOSE(read_red(),half,.01f);
+    }
+    for (auto resource : {environment_full,environment_half,transparent_foam}) device.Destroy_Texture(resource);
+    // The original ocean scale lifts a 0.01 displacement by three world units.
+    // Crests must expose the authored foam, not be flattened by the PBR path.
+    const auto crest=texture({0,0,.01f,0});
+    const auto white=texture({1,1,1,1});
+    style.pass=WaterPass::Ocean;
+    textures={black,black,normal,white,black,black,black,black,black};
+    parameters.wave_options=WaterParameters{}.wave_options;
+    parameters.camera_position={0,0,1000000,1};
+    parameters.effects={};parameters.projection[10]=.01f;
+    env.sun_radiance={3.14159265f,3.14159265f,3.14159265f,0};
+    BOOST_REQUIRE(commands.Clear({0,0,0,0},1));
+    BOOST_REQUIRE(renderer.Draw(commands,mesh,style,parameters,textures));
+    BOOST_REQUIRE(device.Readback_Texture(target,std::as_writable_bytes(std::span(pixels)),16*16));
+    const float calm_foam=pixels[offset];
+    textures[1]=crest;
+    BOOST_REQUIRE(commands.Clear({0,0,0,0},1));
+    BOOST_REQUIRE(renderer.Draw(commands,mesh,style,parameters,textures));
+    BOOST_REQUIRE(device.Readback_Texture(target,std::as_writable_bytes(std::span(pixels)),16*16));
+    BOOST_CHECK_CLOSE(calm_foam,.025f,.1f);
+    BOOST_CHECK_CLOSE(pixels[offset],.4f,.1f);
+    // Ocean specular response must use the shared colored local light list.
+    textures[1]=black;textures[3]=black;env.sun_radiance={};
+    env.local_light_options[0]=1;
+    env.local_positions[0]={0,0,15,30};
+    env.local_diffuse[0]={0,1000,0,0};
+    env.local_direction[0]={0,0,-1,-1};
+    BOOST_REQUIRE(commands.Clear({0,0,0,0},1));
+    BOOST_REQUIRE(renderer.Draw(commands,mesh,style,parameters,textures));
+    BOOST_REQUIRE(device.Readback_Texture(target,std::as_writable_bytes(std::span(pixels)),16*16));
+    BOOST_TEST(pixels[offset+1]>.1f);
+    BOOST_CHECK_SMALL(pixels[offset],1e-5f);
+    BOOST_CHECK_SMALL(pixels[offset+2],1e-5f);
+    device.Destroy_Texture(crest);device.Destroy_Texture(white);
+    device.Destroy_Texture(low_wave);
+    renderer.Shutdown();for(auto resource:{black,normal,background,target,depth})device.Destroy_Texture(resource);
 }

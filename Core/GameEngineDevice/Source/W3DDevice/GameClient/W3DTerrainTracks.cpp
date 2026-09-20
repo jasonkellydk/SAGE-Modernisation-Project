@@ -484,6 +484,16 @@ TerrainTracksRenderObjClass *TerrainTracksRenderObjClassSystem::bindTrack( W3DRe
 {
 	TerrainTracksRenderObjClass *mod;
 
+    // A vehicle owns its track object until it is destroyed, including while
+    // parked. The configured count is a reserve, not a lifetime vehicle limit:
+    // exhausting it used to leave every subsequently created vehicle trackless.
+    if (!m_freeModules) {
+        m_freeModules = NEW_REF(TerrainTracksRenderObjClass, ());
+        if (m_freeModules) {
+            m_freeModules->m_nextSystem = nullptr;
+            m_freeModules->m_prevSystem = nullptr;
+        }
+    }
 	mod = m_freeModules;
 	if( mod )
 	{
@@ -754,9 +764,11 @@ void TerrainTracksRenderObjClassSystem::update()
 				if (mod->m_bottomIndex >= m_maxTankTrackEdges)
 					mod->m_bottomIndex=0;	//roll buffer back to start
 			}
-			if (mod->m_activeEdgeCount == 0 && !mod->m_bound)
-				releaseTrack(mod);
 		}
+        // Empty, unbound owners need recycling too. Keeping this inside the
+        // edge loop leaked every vehicle that was destroyed without a trail.
+        if (mod->m_activeEdgeCount == 0 && !mod->m_bound)
+            releaseTrack(mod);
 		mod = nextMod;
 	}
 }
@@ -775,13 +787,9 @@ void TerrainTracksRenderObjClassSystem::flush(W3DCamera& camera)
         m_edgesToFlush = 0;
         return;
     }
-    const auto& ambient = TheGlobalData->m_terrainAmbient[0];
-    const auto& diffuse = TheGlobalData->m_terrainDiffuse[0];
-    const UnsignedInt packed = REAL_TO_INT((ambient.blue + diffuse.blue/2)*255)
-        | (REAL_TO_INT((ambient.green + diffuse.green/2)*255) << 8)
-        | (REAL_TO_INT((ambient.red + diffuse.red/2)*255) << 16);
-    const std::array<float,3> color{((packed>>16)&255)/255.0f,((packed>>8)&255)/255.0f,(packed&255)/255.0f};
-    const auto parameters = Make_Surface_Parameters(camera);
+    // Track vertices carry coverage only; all illumination comes from PBR.
+    constexpr std::array<float,3> color{1,1,1};
+    const auto base_parameters = Make_Surface_Parameters(camera);
     Graphics::SurfaceStyle style;
     style.cull = Graphics::RHICullMode::Back;
     style.front_counter_clockwise = true;
@@ -810,7 +818,22 @@ void TerrainTracksRenderObjClassSystem::flush(W3DCamera& camera)
         if (mod->m_graphicsMesh.Is_Valid()) {
             if (!renderer.Update_Mesh(mod->m_graphicsMesh,geometry.vertices,geometry.indices)) continue;
         } else mod->m_graphicsMesh = renderer.Create_Mesh(geometry.vertices,geometry.indices);
-        const std::array<Graphics::RHITextureHandle,4> textures{Resolve_Graphics_Texture(mod->m_stageZeroTexture),{},{},{}};
+        auto parameters = base_parameters;
+        parameters.surface = {1,.8f,0,0}; // Dirt is dielectric, including tank tread imprints.
+        std::array<Graphics::RHITextureHandle,8> textures{Resolve_Graphics_Texture(mod->m_stageZeroTexture)};
+        if (mod->m_stageZeroTexture) if (auto pbr = mod->m_stageZeroTexture->Resolve_PBR_Material()) {
+            textures[0] = pbr->texture;
+            // Surface slots: normal, roughness, height. Imprints retain their
+            // authored coverage; the vehicle's metalness is not applicable.
+            constexpr unsigned roles[]{0,3,7};
+            unsigned maps=0;
+            for (unsigned i=0;i<3;++i) {
+                textures[4+i]=pbr->surface_textures[roles[i]];
+                if (textures[4+i].Is_Valid()) maps|=1u<<i;
+            }
+            parameters.surface[3]=static_cast<float>(maps);
+            parameters.detail[1]=pbr->surface->normal_flip_green;
+        }
         renderer.Draw(device->Immediate_Command_List(),mod->m_graphicsMesh,style,parameters,textures);
     }
     m_edgesToFlush = 0;

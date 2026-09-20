@@ -14,12 +14,13 @@ import Graphics.Resources.Textures.Upload;
 import Assets.Adapters.DDS;
 import Assets.Adapters.TGA.Image;
 import Assets.Images.Preparation;
+import Assets.Images.Buffer;
 
 namespace Graphics
 {
 // Read a prefix, or the entire source when prefix_size is zero, and report the
 // complete source size. Archive/path policy stays with the supplying adapter.
-// Header reads run during Prepare; payload reads run during Decode.
+// All reads run during Decode on a worker; Prepare only snapshots device limits.
 export using TextureImageReader = std::function<bool(std::size_t prefix_size,
     std::vector<std::byte>& bytes, std::size_t& source_size)>;
 
@@ -33,6 +34,7 @@ export struct TextureLoadRequest final
     bool prefer_16_bits = false;
     std::array<float,3> hsv_shift{};
     TextureImageReader read_dds, read_tga;
+    std::function<bool(Assets::ImageBuffer&)> transform;
 };
 
 // The queue owns this job. Only Decode runs on its worker. Publication takes
@@ -55,8 +57,8 @@ public:
         GRAPHICS_PROFILE_SCOPE("Graphics.Texture.Prepare");
         if (m_started || !m_request.device) return false;
         m_started = true;
-        if (!(m_request.allow_compression && Allocate_DDS()) && !Allocate_TGA()) return false;
-        m_prepared = m_upload.Begin_Overwrite(*m_resource);
+        m_limits = m_request.device->Texture_Limits();
+        m_prepared = true;
         return m_prepared;
     }
 
@@ -64,7 +66,9 @@ public:
     {
         GRAPHICS_PROFILE_SCOPE("Graphics.Texture.Decode");
         if (!m_prepared || m_completed) return false;
+        if (!(m_request.allow_compression && Allocate_DDS()) && !Allocate_TGA()) return false;
         m_decoded = (m_request.allow_compression && Decode_DDS()) || Decode_TGA();
+        if (m_decoded && m_request.transform) m_decoded = Transform_Image();
         return m_decoded;
     }
 
@@ -73,7 +77,13 @@ public:
         GRAPHICS_PROFILE_SCOPE("Graphics.Texture.Complete");
         if (m_completed) return;
         m_completed = true;
-        const bool uploaded = m_upload.Finish();
+        bool uploaded = false;
+        if (decoded && m_decoded) {
+            try {
+                m_resource = TextureResource::Create(m_request.device,m_description,m_encoding);
+                uploaded = m_resource && m_upload.Attach_Overwrite(*m_resource) && m_upload.Finish();
+            } catch (...) { uploaded = false; }
+        }
         if (!decoded || !m_decoded || !uploaded) {
             Release_Texture_Resource(std::exchange(m_resource,nullptr));
             try { m_resource = TextureResource::Create_Placeholder(m_request.device); }
@@ -92,12 +102,15 @@ private:
 
     bool Allocate(TextureExtent extent, unsigned mips, Assets::PixelEncoding encoding)
     {
+        if (m_request.transform) encoding = Assets::PixelEncoding::BGRA8;
         RHITexture description{extent.width,extent.height,mips};
         description.dimension = m_request.dimension;
         description.array_size = m_request.dimension == RHITextureDimension::Cube ? 6u : 1u;
         description.depth = m_request.dimension == RHITextureDimension::Volume ? extent.depth : 1u;
-        m_resource = TextureResource::Create(m_request.device,description,encoding);
-        return m_resource != nullptr;
+        if (!TextureResource::Prepare_Description(description,encoding)) return false;
+        m_description = description;
+        m_encoding = encoding;
+        return m_upload.Prepare_Overwrite(description,encoding);
     }
 
     bool Allocate_DDS()
@@ -113,7 +126,7 @@ private:
         if (!surface) return false;
         TextureMipSelection selection;
         if (!Select_Compressed_Texture_Mips({surface->width,surface->height,surface->depth},
-            layout.mip_count,m_request.mips,m_request.device->Texture_Limits(),selection)) return false;
+            layout.mip_count,m_request.mips,m_limits,selection)) return false;
         const auto encoding = Select_Texture_Encoding(Assets::DDS_Pixel_Encoding(layout),
             m_request.allow_compression,m_request.prefer_16_bits);
         if (!Allocate(selection.extent,selection.mip_count,encoding)) return false;
@@ -129,7 +142,7 @@ private:
         Assets::TGAImageInfo info;
         if (!m_request.read_tga(18,bytes,source_size)
             || !Assets::Read_TGA_Info(bytes,source_size,info)) return false;
-        const auto extent = Select_Texture_Extent({info.width,info.height,1},m_request.device->Texture_Limits());
+        const auto extent = Select_Texture_Extent({info.width,info.height,1},m_limits);
         if (!extent.width || !extent.height || !extent.depth) return false;
         const auto encoding = Select_Texture_Encoding(m_request.encoding == Assets::PixelEncoding::Unknown
             ? info.encoding : m_request.encoding,false,m_request.prefer_16_bits);
@@ -147,8 +160,8 @@ private:
         if (!m_request.read_dds(0,bytes,source_size)
             || !Assets::Read_DDS_Layout(bytes,source_size,layout)
             || !Matches_Dimension(layout.dimension)) return false;
-        const auto& description = m_resource->Description();
-        const auto encoding = m_resource->Encoding();
+        const auto& description = m_description;
+        const auto encoding = m_encoding;
         const unsigned first = std::min(m_first_mip,layout.mip_count-1);
         for (unsigned layer=0;layer<description.array_size;++layer) {
             unsigned width=description.width, height=description.height, depth=description.depth;
@@ -172,9 +185,9 @@ private:
         std::size_t source_size = 0;
         Assets::TGAImage image;
         if (!m_request.read_tga(0,bytes,source_size) || !Assets::Decode_TGA_Image(bytes,image)) return false;
-        const auto& description = m_resource->Description();
+        const auto& description = m_description;
         std::vector<Assets::PreparedImage> levels;
-        if (!Assets::Prepare_Image_Levels(image.View(),m_resource->Encoding(),description.width,
+        if (!Assets::Prepare_Image_Levels(image.View(),m_encoding,description.width,
             description.height,description.mip_count,
             {m_request.hsv_shift[0],m_request.hsv_shift[1],m_request.hsv_shift[2]},levels)) return false;
         // A single image supplies the same pixels to every requested face/slice.
@@ -192,10 +205,33 @@ private:
         return true;
     }
 
+    bool Transform_Image()
+    {
+        if (m_description.dimension != RHITextureDimension::Texture2D) return false;
+        auto image = Assets::ImageBuffer::Create(m_description.width,m_description.height,m_encoding);
+        if (!image) return false;
+        const auto base = m_upload.Mapping(0);
+        for (unsigned y=0;y<m_description.height;++y)
+            std::copy_n(base.bytes.begin()+std::size_t(y)*base.row_pitch,image->Row_Pitch(),
+                image->Bytes().begin()+std::size_t(y)*image->Row_Pitch());
+        if (!m_request.transform(*image)) return false;
+        std::vector<Assets::PreparedImage> levels;
+        if (!Assets::Prepare_Image_Levels(image->View(),m_encoding,m_description.width,
+            m_description.height,m_description.mip_count,{},levels)) return false;
+        for (unsigned mip=0;mip<levels.size();++mip) {
+            const auto mapping = m_upload.Mapping(mip);
+            if (!Assets::Copy_Prepared_Image(levels[mip],mapping.bytes,mapping.row_pitch)) return false;
+        }
+        return true;
+    }
+
     const TextureLoadRequest m_request;
     const Publish m_publish;
     TextureResource* m_resource = nullptr;
     TextureUpload m_upload;
+    RHITextureLimits m_limits{};
+    RHITexture m_description{};
+    Assets::PixelEncoding m_encoding = Assets::PixelEncoding::Unknown;
     unsigned m_first_mip = 0;
     bool m_started = false, m_prepared = false, m_decoded = false, m_completed = false;
 };

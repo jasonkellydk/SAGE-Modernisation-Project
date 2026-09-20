@@ -22,20 +22,25 @@ public:
     TextureResource(const TextureResource&) = delete;
     TextureResource& operator=(const TextureResource&) = delete;
 
-    static TextureResource* Create(Device* device, RHITexture description,
-        Assets::PixelEncoding encoding, RHITextureFormat attachment_format = RHITextureFormat::Unknown)
+    // Pure allocation policy, also used by worker-side image preparation.
+    static bool Prepare_Description(RHITexture& description, Assets::PixelEncoding& encoding)
     {
-        if (!device || description.width == 0 || description.height == 0 || description.depth == 0) return nullptr;
+        if (description.width == 0 || description.height == 0 || description.depth == 0) return false;
         const bool depth = (description.usage & static_cast<unsigned>(RHITextureUsage::DepthStencil)) != 0;
         const bool target = (description.usage & static_cast<unsigned>(RHITextureUsage::RenderTarget)) != 0;
-        if (target && Assets::Is_Block_Compressed(encoding)) return nullptr;
-        if (description.dimension == RHITextureDimension::Cube && description.width != description.height) return nullptr;
+        if (target && Assets::Is_Block_Compressed(encoding)) return false;
+        if (description.dimension == RHITextureDimension::Cube && description.width != description.height) return false;
         if (depth) {
             if (description.format != RHITextureFormat::D16_UNorm
                 && description.format != RHITextureFormat::D24_UNorm_S8
-                && description.format != RHITextureFormat::D32_Float) return nullptr;
+                && description.format != RHITextureFormat::D32_Float) return false;
             encoding = Assets::PixelEncoding::Unknown;
             description.mip_count = 1;
+        } else if (target && (description.format == RHITextureFormat::RGBA16_Float
+            || description.format == RHITextureFormat::RGBA32_Float)) {
+            // Floating-point render targets have no legacy image encoding.
+            encoding = Assets::PixelEncoding::Unknown;
+            description.mip_count = std::max(description.mip_count,1u);
         } else {
             if (Texture_Storage_Format(encoding) == RHITextureFormat::Unknown
                 || (description.dimension == RHITextureDimension::Volume && Assets::Is_Block_Compressed(encoding)))
@@ -46,6 +51,15 @@ public:
                 description.mip_count = std::bit_width(std::max({description.width, description.height, description.depth}));
             description.generate_mips = description.mip_count > 1 && !Assets::Is_Block_Compressed(encoding);
         }
+        return true;
+    }
+
+    static TextureResource* Create(Device* device, RHITexture description,
+        Assets::PixelEncoding encoding, RHITextureFormat attachment_format = RHITextureFormat::Unknown)
+    {
+        if (!device || !Prepare_Description(description,encoding)) return nullptr;
+        const bool depth = (description.usage & static_cast<unsigned>(RHITextureUsage::DepthStencil)) != 0;
+        const bool target = (description.usage & static_cast<unsigned>(RHITextureUsage::RenderTarget)) != 0;
         auto resource = std::unique_ptr<TextureResource>(new TextureResource(*device,description,encoding));
         resource->m_texture = device->Create_Texture(description);
         if (!resource->m_texture.Is_Valid()) return nullptr;

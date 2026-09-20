@@ -172,18 +172,60 @@ W3DTreeBuffer::W3DTreeTextureClass::W3DTreeTextureClass(unsigned width, unsigned
 	pixel borders around them, so that when the tiles are scaled and bilinearly
 	interpolated, you don't get seams between the tiles.  */
 //=============================================================================
-int W3DTreeBuffer::W3DTreeTextureClass::update(W3DTreeBuffer *buffer)
+/********** GDIFileStream2 class ****************************/
+class GDIFileStream2 : public InputStream
+{
+protected:
+	File* m_file;
+public:
+	GDIFileStream2():m_file(nullptr) {};
+	GDIFileStream2(File* pFile):m_file(pFile) {};
+	virtual Int read(void *pData, Int numBytes) override {
+		return(m_file?m_file->read(pData, numBytes):0);
+	};
+};
+
+int W3DTreeBuffer::W3DTreeTextureClass::update(W3DTreeBuffer *buffer, int channel)
 {
     Get_Sampling().address[0]=Graphics::RHISamplerAddress::Clamp;
     Get_Sampling().address[1]=Graphics::RHISamplerAddress::Clamp;
     auto* texture=Peek_Render_Backend_Texture();
     if (!buffer || !texture || texture->Description().width<TILE_PIXEL_EXTENT) return 0;
     std::vector<Graphics::AtlasTile> tiles;
+    std::vector<TileData*> channel_tiles(buffer->getNumTiles(),nullptr);
+    std::vector<RefCountPtr<TileData>> owners;
+    std::vector<UnsignedByte> neutral(TILE_PIXEL_EXTENT*TILE_PIXEL_EXTENT*4);
+    if (channel >= 0) {
+        const char* suffix[]{"_normalmap.tga","_roughness.tga","_height.tga"};
+        for (Int i=0;i<buffer->m_numTreeTypes;++i) {
+            const auto& type=buffer->m_treeTypes[i];
+            if (!type.m_numTiles) continue;
+            std::string name=type.m_data->m_textureName.str();
+            const auto dot=name.find_last_of('.');
+            if (dot!=std::string::npos) name.resize(dot);
+            name+=suffix[channel];
+            File* file=nullptr;
+            for (const auto root : {TERRAIN_TGA_DIR_PATH,TGA_DIR_PATH}) {
+                file=TheFileSystem->openFile((std::string(root)+name).c_str(),File::READ|File::BINARY);
+                if (file) break;
+            }
+            if (!file) continue;
+            GDIFileStream2 stream(file);
+            WorldHeightMap::readTilesFromFile(file,channel_tiles.data()+type.m_firstTile,type.m_tileWidth);
+            file->close();
+        }
+        for (auto* tile:channel_tiles) owners.push_back(RefCountPtr<TileData>::Create_No_Add_Ref(tile));
+        for (std::size_t i=0;i<neutral.size();i+=4) {
+            neutral[i]=channel==0 ? 255 : channel==1 ? 210 : 128;
+            neutral[i+1]=neutral[i+2]=channel==0 ? 128 : neutral[i]; neutral[i+3]=255;
+        }
+    }
     for (Int i=0;i<buffer->getNumTiles();++i) {
         auto* tile=buffer->getSourceTile(i);
         if (!tile || tile->m_tileLocationInTexture.x<0) continue;
         const auto position=tile->m_tileLocationInTexture;
-        const auto* pixels=tile->getRGBDataForWidth(TILE_PIXEL_EXTENT);
+        const auto* pixels=channel < 0 ? tile->getRGBDataForWidth(TILE_PIXEL_EXTENT)
+            : channel_tiles[i] ? channel_tiles[i]->getRGBDataForWidth(TILE_PIXEL_EXTENT) : neutral.data();
         tiles.push_back({{{reinterpret_cast<const std::byte*>(pixels),std::size_t(TILE_PIXEL_EXTENT)*TILE_PIXEL_EXTENT*4},
             TILE_PIXEL_EXTENT,TILE_PIXEL_EXTENT,std::size_t(TILE_PIXEL_EXTENT)*4,Assets::PixelEncoding::BGRA8},
             static_cast<unsigned>(position.x),static_cast<unsigned>(position.y),true});
@@ -327,18 +369,7 @@ void W3DTreeBuffer::sort(Int numIterations)
 }
 #endif
 
-/********** GDIFileStream2 class ****************************/
-class GDIFileStream2 : public InputStream
-{
-protected:
-	File* m_file;
-public:
-	GDIFileStream2():m_file(nullptr) {};
-	GDIFileStream2(File* pFile):m_file(pFile) {};
-	virtual Int read(void *pData, Int numBytes) override {
-		return(m_file?m_file->read(pData, numBytes):0);
-	};
-};
+
 
 //=============================================================================
 // W3DTreeBuffer::updateTexture
@@ -373,7 +404,15 @@ void W3DTreeBuffer::updateTexture()
 		std::string texturePath;
 		m_treeTypes[i].m_numTiles = 0;
 		texturePath = std::string(TERRAIN_TGA_DIR_PATH) + m_treeTypes[i].m_data->m_textureName.str();
-		theFile = TheFileSystem->openFile( texturePath.c_str(), File::READ|File::BINARY);
+        std::string pbrName=m_treeTypes[i].m_data->m_textureName.str();
+        const auto dot=pbrName.find_last_of('.');
+        if (dot!=std::string::npos) pbrName.resize(dot);
+        pbrName+="_albedo.tga";
+        for (const auto root:{TERRAIN_TGA_DIR_PATH,TGA_DIR_PATH}) {
+            theFile=TheFileSystem->openFile((std::string(root)+pbrName).c_str(),File::READ|File::BINARY);
+            if (theFile) break;
+        }
+        if (!theFile) theFile = TheFileSystem->openFile( texturePath.c_str(), File::READ|File::BINARY);
 		if (theFile==nullptr) {
 			texturePath = std::string(TGA_DIR_PATH) + m_treeTypes[i].m_data->m_textureName.str();
 			theFile = TheFileSystem->openFile( texturePath.c_str(), File::READ|File::BINARY);
@@ -410,8 +449,13 @@ void W3DTreeBuffer::updateTexture()
 				m_treeTypes[i].m_tileWidth = width;
 				m_treeTypes[i].m_numTiles = numTiles;
 				m_treeTypes[i].m_halfTile = halfTile;
-				WorldHeightMap::readTiles(pStr, m_sourceTiles+m_treeTypes[i].m_firstTile, width);
-				m_numTiles += numTiles;
+				if (WorldHeightMap::readTilesFromFile(theFile, m_sourceTiles+m_treeTypes[i].m_firstTile, width)) {
+					m_numTiles += numTiles;
+				} else {
+					m_treeTypes[i].m_firstTile = 0;
+					m_treeTypes[i].m_tileWidth = 0;
+					m_treeTypes[i].m_numTiles = 0;
+				}
 			} else {
 				m_treeTypes[i].m_firstTile = 0;
 				m_treeTypes[i].m_tileWidth = 0;
@@ -517,6 +561,11 @@ void W3DTreeBuffer::updateTexture()
 	DEBUG_ASSERTCRASH(maxHeight<=m_textureWidth, ("Bad max height."));
 	W3DTreeTextureClass *tex = new W3DTreeTextureClass(static_cast<unsigned>(m_textureWidth), static_cast<unsigned>(m_textureWidth));
 	m_textureHeight = tex->update(this);
+    for (unsigned channel=0;channel<m_treeSurfaceMaps.size();++channel) {
+        auto* map=new W3DTreeTextureClass(m_textureWidth,m_textureWidth);
+        m_treeSurfaceMaps[channel]=RefCountPtr<W3DTextureHandle>::Create_No_Add_Ref(map);
+        map->update(this,channel);
+    }
 
 	m_treeTexture = tex;
 
@@ -534,55 +583,7 @@ void W3DTreeBuffer::updateTexture()
 //=============================================================================
 /** Calculates the diffuse lighting as affected by dynamic lighting. */
 //=============================================================================
-UnsignedInt W3DTreeBuffer::doLighting(const Vector3 *normal,
-															const GlobalData::TerrainLighting	*objectLighting, const Vector3* lightRays,
-															const Vector3 *emissive, UnsignedInt vertDiffuse, Real scale) const
-{
 
-	Real shadeR, shadeG, shadeB;
-	Real shade;
-	shadeR = objectLighting[0].ambient.red+emissive->X;	//only the first light contributes to ambient
-	shadeG = objectLighting[0].ambient.green+emissive->Y;
-	shadeB = objectLighting[0].ambient.blue+emissive->Z;
-
-	Int i;
-	for	(i=0; i<MAX_GLOBAL_LIGHTS; i++) {
-		shade = Vector3::Dot_Product(lightRays[i], *normal);
-
-		if (shade > 1.0) shade = 1.0;
-		if(shade < 0.0f) shade = 0.0f;
-		shadeR += shade*objectLighting[i].diffuse.red;
-		shadeG += shade*objectLighting[i].diffuse.green;
-		shadeB += shade*objectLighting[i].diffuse.blue;
-	}
-
-	shadeR *= scale;
-	shadeG *= scale;
-	shadeB *= scale;
-
-	if (shadeR > 1.0) shadeR = 1.0;
-	if(shadeR < 0.0f) shadeR = 0.0f;
-	if (shadeG > 1.0) shadeG = 1.0;
-	if(shadeG < 0.0f) shadeG = 0.0f;
-	if (shadeB > 1.0) shadeB = 1.0;
-	if(shadeB < 0.0f) shadeB = 0.0f;
-
-	if (vertDiffuse!=0xFFFFFFFF) {
-		shade = vertDiffuse&0xff; //blue;
-		shadeB *= shade/255.0f;
-		shade = (vertDiffuse>>8)&0xFF; // green;
-		shadeG *= shade/255.0f;
-		shade = (vertDiffuse>>16)&0xFF; // red;
-		shadeR *= shade/255.0f;
-	}
-
-	shadeR*=255.0f;
-	shadeG*=255.0f;
-	shadeB*=255.0f;
-	const Real alpha = 255.0;
-	return REAL_TO_UNSIGNEDINT(shadeB) | (REAL_TO_INT(shadeG) << 8) | (REAL_TO_INT(shadeR) << 16) | ((Int)alpha << 24);
-
-}
 
 //=============================================================================
 // W3DTreeBuffer::loadTreesInVertexAndIndexBuffers
@@ -606,14 +607,7 @@ void W3DTreeBuffer::loadTreesInVertexAndIndexBuffers(Graphics::SceneObjectList<W
 	m_anythingChanged = false;
 	Int curTree=0;
 	Int bNdx;
-	const GlobalData::TerrainLighting *objectLighting = TheGlobalData->m_terrainObjectsLighting[TheGlobalData->m_timeOfDay];
-    std::array<Vector3,MAX_GLOBAL_LIGHTS> lightRays;
-    for (Int light=0;light<MAX_GLOBAL_LIGHTS;++light) {
-        const auto& position=objectLighting[light].lightPos;
-        Vector3 direction(position.x,position.y,position.z);
-        direction.Normalize();
-        lightRays[light]=Vector3(-direction.X,-direction.Y,-direction.Z);
-    }
+
 	for (bNdx=0; bNdx<MAX_BUFFERS; bNdx++) {
 		m_curNumTreeVertices[bNdx] = 0;
 		m_curNumTreeIndices[bNdx] = 0;
@@ -647,32 +641,6 @@ void W3DTreeBuffer::loadTreesInVertexAndIndexBuffers(Graphics::SceneObjectList<W
 			Real theSin = m_trees[curTree].sin;
 			Real theCos = m_trees[curTree].cos;
 
-			Bool doVertexLighting = true;
-
-	#if 0 // no dynamic lighting.
-			for (pDynamicLightsIterator->First(); !pDynamicLightsIterator->Is_Done(); pDynamicLightsIterator->Next())
-			{
-				W3DDynamicLight *pLight = (W3DDynamicLight*)pDynamicLightsIterator->Peek_Obj();
-				if (!pLight->isEnabled()) {
-					continue; // he is turned off.
-				}
-				if (CollisionMath::Overlap_Test(m_trees[curTree].bounds, pLight->Get_Bounding_Sphere()) == CollisionMath::OUTSIDE) {
-					continue; // this tree is outside of the light's influence.
-				}
-				doVertexLighting = true;
-			}
-	#endif
-			Vector3 emissive(0.0f,0.0f,0.0f);
-			auto matInfo = m_treeTypes[type].m_mesh->Get_Material_Info();
-			if (matInfo) {
-				Graphics::MeshMaterial *vertMat = matInfo->materials[0].get();
-				if (vertMat) {
-					emissive.Set(vertMat->parameters.emissive[0],vertMat->parameters.emissive[1],vertMat->parameters.emissive[2]);
-				}
-			}
-			matInfo.reset();
-
-
 			Int startVertex = m_curNumTreeVertices[bNdx];
 			m_trees[curTree].firstIndex = startVertex;
 			m_trees[curTree].bufferNdx = bNdx;
@@ -696,13 +664,6 @@ void W3DTreeBuffer::loadTreesInVertexAndIndexBuffers(Graphics::SceneObjectList<W
 
 			const Vector3*normals = m_treeTypes[type].m_mesh->Peek_Model()->Get_Vertex_Normal_Array();
 			const unsigned *vecDiffuse = m_treeTypes[type].m_mesh->Peek_Model()->Get_Color_Array(0, false);
-
-			Int diffuse = 0;
-			if (normals == nullptr) {
-				doVertexLighting = false;
-				Vector3 normal(0.0f,0.0f,1.0f);
-				diffuse = doLighting(&normal, objectLighting, lightRays.data(), &emissive, 0xFFFFFFFF, 1.0f);
-			}
 
 			Real Uscale = m_treeTypes[type].m_tileWidth * (Real)TILE_PIXEL_EXTENT / (Real)m_textureWidth;
 			Real Vscale = m_treeTypes[type].m_tileWidth * (Real)TILE_PIXEL_EXTENT / (Real)m_textureHeight;
@@ -762,24 +723,19 @@ void W3DTreeBuffer::loadTreesInVertexAndIndexBuffers(Graphics::SceneObjectList<W
 				curVb->sway[0] = m_trees[curTree].swayType;
 				curVb->sway[1] = 1.0f - m_treeTypes[type].m_data->m_darkening*m_trees[curTree].pushAside;
 				curVb->sway[2] = loc.Z;
-				if (doVertexLighting) {
-					Vector3 normal(0.0f, 0.0f, 1.0f);
-					if (normals) {
-						normal.X = normals[i].X*theCos - normals[i].Y*theSin;
-						normal.Y = normals[i].Y*theCos + normals[i].X*theSin;
-						normal.Z = normals[i].Z;
-					}
-					UnsignedInt vertexDiffuse;
-					if (vecDiffuse) {
-						vertexDiffuse = vecDiffuse[i];
-					} else {
-						vertexDiffuse = 0xffffffff;
-					}
-					curVb->color = Assets::Color_From_ARGB(doLighting(&normal, objectLighting, lightRays.data(), &emissive,
-														vertexDiffuse, 1.0f)).To_Array();
-				} else {
-					curVb->color = Assets::Color_From_ARGB(diffuse).To_Array();
-				}
+                {
+                    curVb->color=Assets::Color_From_ARGB(vecDiffuse ? vecDiffuse[i] : 0xffffffff).To_Array();
+                    Vector3 n(0,0,1);
+                    if (normals) n.Set(normals[i].X*theCos-normals[i].Y*theSin,
+                        normals[i].Y*theCos+normals[i].X*theSin,normals[i].Z);
+                    if (m_trees[curTree].m_toppleState != TOPPLE_UPRIGHT)
+                        Matrix3D::Rotate_Vector(m_trees[curTree].m_mtx,n,&n);
+                    const float sum=std::abs(n.X)+std::abs(n.Y)+std::abs(n.Z);
+                    if (sum>0) n/=sum;
+                    curVb->reserved={n.X,n.Y};
+                    if (n.Z<0) curVb->reserved={(1-std::abs(n.Y))*(n.X<0 ? -1.0f : 1.0f),
+                        (1-std::abs(n.X))*(n.Y<0 ? -1.0f : 1.0f)};
+                }
 				curVb++;
 				m_curNumTreeVertices[bNdx]++;
 			}
@@ -1307,6 +1263,13 @@ DECLARE_PERF_TIMER(Tree_Render)
 //=============================================================================
 /** Draws the trees.  Uses camera to cull. */
 //=============================================================================
+void W3DTreeBuffer::prepareMaterials()
+{
+    if (!m_needToUpdateTexture) return;
+    m_needToUpdateTexture = false;
+    updateTexture();
+}
+
 void W3DTreeBuffer::prepareFrame()
 {
     const UnsignedInt frame = Get_W3D_Render_Services().Frame_Count();
@@ -1344,10 +1307,7 @@ void W3DTreeBuffer::prepareFrame()
 	}
 
 
-	if (m_needToUpdateTexture) {
-		m_needToUpdateTexture = false;
-		updateTexture();
-	}
+	prepareMaterials();
 	if (m_treeTexture==nullptr) {
 		return;
 	}
@@ -1444,7 +1404,11 @@ void W3DTreeBuffer::drawTrees(W3DCamera * camera, Graphics::SceneObjectList<W3DR
         Graphics::Get_Render_Settings().Is_Overbright_Modify_On_Load_Enabled() ? 2.0f : 1.0f,0};
     for (Int i=0;i<MAX_SWAY_TYPES;++i)
         parameters.sway[i] = {m_currentSwayFactor[i].X,m_currentSwayFactor[i].Y,m_currentSwayFactor[i].Z,0};
-    const std::array<Graphics::RHITextureHandle,2> textures{Resolve_Graphics_Texture(m_treeTexture),shroud};
+    const std::array<Graphics::RHITextureHandle,5> textures{Resolve_Graphics_Texture(m_treeTexture),shroud,
+        Resolve_Graphics_Texture(m_treeSurfaceMaps[0].Peek()),Resolve_Graphics_Texture(m_treeSurfaceMaps[1].Peek()),
+        Resolve_Graphics_Texture(m_treeSurfaceMaps[2].Peek())};
+    parameters.options[3]=textures[2].Is_Valid() && textures[3].Is_Valid() && textures[4].Is_Valid()
+        ? (Graphics::Get_Render_Settings().PBR_Normal_Flip_Green() ? 2.0f : 1.0f) : 0.0f;
     for (Int batch=0;batch<MAX_BUFFERS && m_curNumTreeIndices[batch]!=0;++batch)
         renderer.Draw(device->Immediate_Command_List(),meshes[batch],parameters,textures);
 }

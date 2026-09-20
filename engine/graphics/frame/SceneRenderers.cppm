@@ -9,6 +9,7 @@ import Graphics.Capture.FramePreview;
 import Graphics.Passes.Bloom;
 import Graphics.Passes.LightRays;
 import Graphics.Passes.SSAO;
+import Graphics.Passes.IndirectLighting;
 import Graphics.Scene.Beams;
 import Graphics.Scene.Beams.Laser;
 import Graphics.Scene.Lighting.Renderer;
@@ -38,6 +39,7 @@ export void Shutdown_Scene_Renderers() noexcept
     Get_Bloom_Renderer().Shutdown();
     Get_Light_Rays_Renderer().Shutdown();
     Get_SSAO_Renderer().Shutdown();
+    Get_Indirect_Lighting_Renderer().Shutdown();
     Get_Prop_Submission().Shutdown();
     Get_Environment_Lighting() = {};
     Get_Renderer2D().Shutdown();

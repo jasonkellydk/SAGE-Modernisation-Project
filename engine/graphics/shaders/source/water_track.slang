@@ -1,3 +1,4 @@
+#include "scene_color.slangh"
 #include "resource_access.slangh"
 cbuffer WaterConstants : register(b0)
 {
@@ -65,6 +66,6 @@ struct WaterTrackPixelInput
 {
     // wave256.tga contains the shoreline shape in its alpha channel.  The
     // vertex alpha is the time-dependent fade supplied by WaterTracksObj.
-    return WaterTrackTexture().Sample(WaterTrackSampler(), input.texcoord0) *
-        input.color0;
+    float4 color=WaterTrackTexture().Sample(WaterTrackSampler(), input.texcoord0) * input.color0;
+    return float4(Scene_Legacy_Color(color.rgb),color.a);
 }

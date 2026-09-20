@@ -11,6 +11,7 @@ export module Graphics.Scene.Terrain.Renderer.Tests;
 import Graphics.Tests.Device;
 import Graphics.Scene.Terrain.Renderer;
 import Graphics.Resources.Textures.Sampling;
+import Graphics.Scene.Lighting.Environment;
 using namespace Graphics;
 
 namespace
@@ -138,13 +139,11 @@ BOOST_AUTO_TEST_CASE(surface_blend_shroud_overlay_shoreline_and_depth_have_indep
     for (auto &vertex : cell.colors) vertex = {0.5f, 0.5f, 0.5f, 0};
     BOOST_REQUIRE(renderer.Update_Cells(0,std::span<const TerrainCell>(&cell, 1)));
     parameters.options[1] = 0;
-    parameters.light_options[0] = 1;
-    parameters.lights[0].ambient_kind[3] = 1;
-    parameters.lights[0].direction = {0, 0, -1, 0};
-    parameters.lights[0].diffuse_inner = {0.25f, 0, 0, 0};
-    const std::array<RHITextureHandle, 2> lit_textures{coverage, coverage};
-    BOOST_REQUIRE(renderer.Render(commands, TerrainSurfacePass::Surface, parameters, lit_textures));
-    Check_Color(Center(device, color), {191, 127, 127, 191});
+    // Utility/debug vertex color is unlit; scene illumination is exercised
+    // through shared PBR lights in the regression below.
+    const std::array<RHITextureHandle,2> lit_textures{coverage,coverage};
+    BOOST_REQUIRE(renderer.Render(commands,TerrainSurfacePass::Surface,parameters,lit_textures));
+    Check_Color(Center(device,color),{128,128,128,191});
     const std::array<std::uint8_t, 8> texels{255, 0, 0, 255, 0, 0, 255, 255};
     const RHITextureHandle split = device.Create_Texture_Initialized({2, 1},
         {std::as_bytes(std::span(texels)), 8});
@@ -152,7 +151,6 @@ BOOST_AUTO_TEST_CASE(surface_blend_shroud_overlay_shoreline_and_depth_have_indep
     for (auto &vertex : cell.colors) vertex = {1, 1, 1, 0};
     for (auto &uv : cell.base_uv) uv = {0.5f, 0.5f};
     BOOST_REQUIRE(renderer.Set_Cells(std::span<const TerrainCell>(&cell, 1)));
-    parameters.light_options[0] = 0;
     const std::array<RHITextureHandle, 2> filtered_textures{split, split};
     BOOST_REQUIRE(renderer.Render(commands, TerrainSurfacePass::Surface, parameters, filtered_textures, true));
     Check_Color(Center(device, color), {128, 0, 128, 191});
@@ -256,4 +254,83 @@ BOOST_AUTO_TEST_CASE(minified_surface_blend_and_overlay_select_texture_mips)
     }
     renderer.Shutdown();
     device.Destroy_Texture(texture); device.Destroy_Texture(target); device.Destroy_Texture(depth);
+}
+
+BOOST_AUTO_TEST_CASE(pbr_terrain_uses_pixel_normals_roughness_and_linear_layer_blending)
+{
+    GraphicsTestDevice device({true});
+    BOOST_REQUIRE(device.Is_Valid());
+    TerrainRenderer renderer;
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    TerrainCell cell; cell.origin={-1,-1}; cell.spacing={2,2}; cell.heights.fill(.5f);
+    cell.base_uv={{{0,0},{1,0},{1,1},{0,1}}}; cell.blend_uv=cell.base_uv;
+    for (auto& color : cell.colors) color={0,0,0,.5f}; // No baked illumination in the PBR path.
+    BOOST_REQUIRE(renderer.Set_Cells(std::span(&cell,1)));
+    const auto target=device.Create_Texture({32,32,1,RHITextureFormat::RGBA8_UNorm,static_cast<unsigned>(RHITextureUsage::RenderTarget)});
+    const auto depth=device.Create_Texture({32,32,1,RHITextureFormat::D32_Float,static_cast<unsigned>(RHITextureUsage::DepthStencil)});
+    const auto red=Solid_Texture(device,{128,0,0,255}), blue=Solid_Texture(device,{0,0,128,255});
+    const auto normal=Solid_Texture(device,{128,128,255,255}), tilted=Solid_Texture(device,{255,128,128,255});
+    const auto rough=Solid_Texture(device,{255,255,255,255}), smooth=Solid_Texture(device,{64,64,64,255});
+    const auto height=Solid_Texture(device,{128,128,128,255});
+    std::array<RHITextureHandle,8> textures{red,blue,{},{},{},normal,rough,height};
+    TerrainDrawParameters parameters;
+    parameters.view_projection={1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
+    parameters.camera_position={0,0,100,1}; parameters.surface={1,0,.25f,0};
+    struct Reset { ~Reset(){Get_Environment_Lighting()={};} } reset;
+    Get_Environment_Lighting()={};
+    auto& env=Get_Environment_Lighting().parameters;
+    env.pbr_options={1,0,1,1};env.sky_radiance={};env.ground_radiance={};
+    env.sun_direction={0,0,1,0};env.sun_radiance={.5f,.5f,.5f,0};
+    auto& commands=device.Immediate_Command_List();
+    const auto draw=[&] {
+        BOOST_REQUIRE(commands.Set_Render_Targets(target,depth));
+        BOOST_REQUIRE(commands.Set_Viewport({0,0,32,32}));
+        BOOST_REQUIRE(commands.Clear({0,0,0,1},1));
+        BOOST_REQUIRE(renderer.Render(commands,TerrainSurfacePass::Surface,parameters,textures));
+        return Center(device,target);
+    };
+    const auto baseline=draw();
+    BOOST_TEST(baseline[0]>20u); BOOST_CHECK_SMALL(int(baseline[0])-int(baseline[2]),2);
+    textures[5]=tilted;
+    const auto dark=draw(); BOOST_TEST(baseline[0]>dark[0]+10u);
+    textures[5]=normal; textures[6]=smooth;
+    const auto highlight=draw(); BOOST_TEST(highlight[1]>baseline[1]+20u);
+    renderer.Shutdown();
+    for (const auto texture : {target,depth,red,blue,normal,tilted,rough,smooth,height}) device.Destroy_Texture(texture);
+}
+
+BOOST_AUTO_TEST_CASE(pbr_terrain_uses_shared_colored_lights_even_without_detail_maps)
+{
+    struct Reset { ~Reset(){Get_Environment_Lighting()={};} } reset;
+    Get_Environment_Lighting()={};
+    auto& env=Get_Environment_Lighting().parameters;
+    env.pbr_options={1,0,1,1};env.sky_radiance={};env.ground_radiance={};
+    env.local_light_options[0]=1;env.local_positions[0]={0,0,3,10};
+    env.local_diffuse[0]={3,0,0,0};env.local_direction[0]={0,0,-1,-1};
+    GraphicsTestDevice device({true});
+    TerrainRenderer renderer;
+    BOOST_REQUIRE(renderer.Initialize(device,Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    TerrainCell cell;cell.origin={-1,-1};cell.spacing={2,2};cell.heights.fill(.5f);
+    for(auto& color:cell.colors) color={0,1,0,0}; // Former baked illumination must not tint PBR.
+    BOOST_REQUIRE(renderer.Set_Cells(std::span(&cell,1)));
+    const auto target=device.Create_Texture({32,32,1,RHITextureFormat::RGBA8_UNorm,static_cast<unsigned>(RHITextureUsage::RenderTarget)});
+    const auto depth=device.Create_Texture({32,32,1,RHITextureFormat::D32_Float,static_cast<unsigned>(RHITextureUsage::DepthStencil)});
+    const auto white=Solid_Texture(device,{255,255,255,255});
+    TerrainDrawParameters parameters;
+    parameters.view_projection={1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
+    parameters.camera_position={0,0,100,1};parameters.surface={1,0,.25f,0};parameters.options[2]=1;
+    auto& commands=device.Immediate_Command_List();
+    const auto draw=[&] {
+        BOOST_REQUIRE(commands.Set_Render_Targets(target,depth));
+        BOOST_REQUIRE(commands.Set_Viewport({0,0,32,32}));
+        BOOST_REQUIRE(commands.Clear({0,0,0,1},1));
+        BOOST_REQUIRE(renderer.Render(commands,TerrainSurfacePass::Surface,parameters,std::array{white,white}));
+        return Center(device,target);
+    };
+    const auto red=draw();BOOST_TEST(red[0]>80u);BOOST_TEST(red[1]<3u);BOOST_TEST(red[2]<3u);
+    env.local_diffuse[0]={0,0,3,0};
+    const auto blue=draw();BOOST_TEST(blue[2]>80u);BOOST_TEST(blue[0]<3u);BOOST_TEST(blue[1]<3u);
+    env.local_direction[0]={0,0,1,.8f};env.local_spot[0]={.95f,1,0,0};
+    BOOST_TEST(draw()[2]<3u);
+    renderer.Shutdown();for(auto texture:{target,depth,white}) device.Destroy_Texture(texture);
 }

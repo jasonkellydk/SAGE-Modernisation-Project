@@ -15,6 +15,7 @@ cbuffer LightRaysParameters : register(b0)
     uint Operation;
     uint ShroudEnabled;
     float3 Padding;
+    float4 Medium;
 };
 GRAPHICS_TEXTURE_2D(Scene, float4, 0)
 GRAPHICS_TEXTURE_2D(SceneDepth, float, 1)
@@ -101,19 +102,29 @@ float3 UpsampleRays(float2 uv, float ray_length)
         float visibility = 1;
         if (ShroudEnabled != 0)
             visibility = Shroud().SampleLevel(LinearClamp(),end.xy*ShroudProjection.xy+ShroudProjection.zw,0).r;
-        return float4(scene.rgb+UpsampleRays(input.uv,ray_length)*visibility,scene.a);
+        const float transmission=EnvironmentPBR.y > .5 ? exp(-Medium.x*ray_length) : 1;
+        return float4(scene.rgb*lerp(1,transmission,visibility)+UpsampleRays(input.uv,ray_length)*visibility,scene.a);
     }
     if (depth >= 1) return float4(0,0,0,0);
-    const uint steps = 100;
+    const uint steps = 48;
     float3 delta = (end-start)/steps;
-    float3 world = start;
+    float3 world = start-delta*.5;
     float3 light = 0;
+    const float g=clamp(Medium.z,-.9,.9);
+    const float angle=dot(normalize(end-start),normalize(EnvironmentSunDirection.xyz));
+    const float phase=(1-g*g)/(12.5663706*pow(max(1+g*g-2*g*angle,.001),1.5));
+    const float step_length=ray_length/steps;
     [loop] for (uint step=0;step<steps;++step) {
         world += delta;
-        light += CloudVisibility(world)*RayShadow(world);
+        const float3 visibility=CloudVisibility(world)*RayShadow(world);
+        if(EnvironmentPBR.y > .5)
+            light+=visibility*EnvironmentSunRadiance.rgb*phase*Medium.y
+                *(1-exp(-Medium.x*step_length))*exp(-Medium.x*step*step_length);
+        else light+=visibility;
     }
     // Keep the reference's distance response near the camera, but cap its
     // energy in this display-color framebuffer. Unbounded far-plane distances
     // otherwise turn the additive overlay into an opaque white wash.
-    return float4(light*(Brightness/400)*(min(ray_length,400.0)/steps),ray_length);
+    return float4(EnvironmentPBR.y > .5 ? light
+        : light*(Brightness/400)*(min(ray_length,400.0)/steps),ray_length);
 }

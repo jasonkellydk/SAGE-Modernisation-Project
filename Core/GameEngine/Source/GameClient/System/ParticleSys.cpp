@@ -815,7 +815,7 @@ void ParticleSystemInfo::xfer( Xfer *xfer )
 	Int i;
 
 	// version
-	XferVersion currentVersion = 1;
+	XferVersion currentVersion = 3;
 	XferVersion version = currentVersion;
 	xfer->xferVersion( &version, currentVersion );
 
@@ -1045,6 +1045,15 @@ void ParticleSystemInfo::xfer( Xfer *xfer )
 
 	// wind motion moving to end angle
 	xfer->xferByte( &m_windMotionMovingToEndAngle );
+    if (version >= 2) xfer->xferUser(&m_renderMode,sizeof(m_renderMode));
+    if (version == 2 && int(m_renderMode) == 3) m_renderMode = LIT_SPRITE;
+    if (version >= 3) {
+        xfer->xferInt(&m_animationColumns);
+        xfer->xferInt(&m_animationFrames);
+        xfer->xferReal(&m_animationFPS);
+        xfer->xferBool(&m_randomStartFrame);
+        xfer->xferAsciiString(&m_normalTexture);
+    }
 
 }
 
@@ -1186,6 +1195,12 @@ ParticleSystem::ParticleSystem( const ParticleSystemTemplate *sysTemplate,
 	m_windAngle = GameClientRandomValueReal( m_windMotionStartAngle, m_windMotionEndAngle );
 
 	m_shaderType = sysTemplate->m_shaderType;
+    m_renderMode = sysTemplate->m_renderMode;
+    m_animationColumns = sysTemplate->m_animationColumns;
+    m_animationFrames = sysTemplate->m_animationFrames;
+    m_animationFPS = sysTemplate->m_animationFPS;
+    m_randomStartFrame = sysTemplate->m_randomStartFrame;
+    m_normalTexture = sysTemplate->m_normalTexture;
 
 	m_particleType = sysTemplate->m_particleType;
 	m_particleTypeName = sysTemplate->m_particleTypeName;
@@ -2656,10 +2671,19 @@ void ParticleSystem::loadPostProcess()
 // ------------------------------------------------------------------------------------------------
 /** INI parse data */
 // ------------------------------------------------------------------------------------------------
+static const char* ParticleRenderModeNames[] = {"SPRITE","LIT_SPRITE","EMISSIVE_SPRITE",nullptr};
+
 const FieldParse ParticleSystemTemplate::m_fieldParseTable[] =
 {
 	{ "Priority",								INI::parseIndexList, ParticlePriorityNames, offsetof( ParticleSystemTemplate, m_priority ) },
 	{ "IsOneShot",							INI::parseBool,						nullptr,		offsetof( ParticleSystemTemplate, m_isOneShot ) },
+    { "RenderMode", INI::parseIndexList, ParticleRenderModeNames, offsetof(ParticleSystemTemplate,m_renderMode) },
+    { "AnimationColumns", INI::parseInt, nullptr, offsetof(ParticleSystemTemplate,m_animationColumns) },
+    { "AnimationFrames", INI::parseInt, nullptr, offsetof(ParticleSystemTemplate,m_animationFrames) },
+    { "AnimationFPS", INI::parseReal, nullptr, offsetof(ParticleSystemTemplate,m_animationFPS) },
+    { "RandomStartFrame", INI::parseBool, nullptr, offsetof(ParticleSystemTemplate,m_randomStartFrame) },
+    { "NormalTexture", INI::parseAsciiString, nullptr, offsetof(ParticleSystemTemplate,m_normalTexture) },
+
 	{ "Shader",									INI::parseIndexList,			ParticleShaderTypeNames,		offsetof( ParticleSystemTemplate, m_shaderType ) },
 	{ "Type",										INI::parseIndexList,			ParticleTypeNames,		offsetof( ParticleSystemTemplate, m_particleType ) },
 	{ "ParticleName",						INI::parseAsciiString,		nullptr,		offsetof( ParticleSystemTemplate, m_particleTypeName ) },

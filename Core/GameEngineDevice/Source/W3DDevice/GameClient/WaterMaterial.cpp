@@ -27,6 +27,8 @@ void WaterMaterialClass::Set_Common_Constants(const WaterMaterialParameters& par
     m_parameters.tint = Copy_Vector(parameters.tint);
     m_parameters.effects = Copy_Vector(parameters.effects);
     m_parameters.surface_options = Copy_Vector(parameters.surface_options);
+    // Legacy opacity/depth describe shoreline blending, not optical density.
+    // The underwater pass supplies the authored RA3 depth-dependent color.
 }
 void WaterMaterialClass::Set_Frame_Lighting(W3DScene* scene)
 {
@@ -94,8 +96,6 @@ bool WaterMaterialClass::Apply_Ocean(W3DTextureHandle *surface_texture,
 	m_textures[9] = Resolve_Graphics_Texture(caustics_texture);
 	m_textures[10] = Resolve_Graphics_Texture(depth_lut_texture);
 	Set_Common_Constants(parameters);
-    m_parameters.effects[3] = scene_depth_texture.Is_Valid() && m_textures[9].Is_Valid()
-        && m_textures[10].Is_Valid() ? 1.0f : 0.0f;
 	m_style.blend = additive_blend ? Graphics::RHIBlendMode::Additive : Graphics::RHIBlendMode::Alpha;
     m_style.clamp_texture = false;
 	return true;

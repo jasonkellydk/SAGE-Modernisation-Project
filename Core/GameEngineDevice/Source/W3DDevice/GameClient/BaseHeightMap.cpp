@@ -2246,6 +2246,12 @@ Bool BaseHeightMapRenderObjClass::collectShadowCasters()
     return m_treeBuffer == nullptr || m_treeBuffer->collectShadowCasters();
 }
 
+void BaseHeightMapRenderObjClass::prepareMaterials()
+{
+    if (m_map) m_map->getTerrainTexture();
+    if (m_treeBuffer) m_treeBuffer->prepareMaterials();
+}
+
 
 
 

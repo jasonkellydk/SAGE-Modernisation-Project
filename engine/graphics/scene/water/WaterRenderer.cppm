@@ -1,6 +1,8 @@
 module;
 #include "../../profiling/Tracy.h"
 #include <array>
+#include <algorithm>
+#include <cmath>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -45,8 +47,19 @@ export struct WaterParameters final
     std::array<float,4> sun_color{1,1,1,1};
     std::array<std::array<float,4>,3> environment_frame{{{1,0,0,0},{0,1,0,0},{0,0,1,0}}};
     std::array<float,16> inverse_view_projection{};
+    // Material units: perceptual roughness, normal strength, IOR, fallback optical depth.
+    std::array<float,4> pbr_surface{.12f,1.f,1.333f,100.f};
+    // Absorption/scattering coefficients per world unit, evaluated by Beer-Lambert.
+    // Coastal water: preferential red absorption and suspended-particle
+    // scattering. These are medium coefficients, not a surface albedo tint.
+    std::array<float,4> absorption{.12f,.045f,.025f,0};
+    std::array<float,4> scattering{.008f,.018f,.022f,0};
+    // Displacement-field units to world units, maximum vertical excursion.
+    std::array<float,4> wave_options{300.f,39.f,0,0};
+    // World XY to bathymetry UV; zero scale disables bottom-aware displacement.
+    std::array<float,4> bathymetry_projection{};
 };
-static_assert(sizeof(WaterParameters) == 464);
+static_assert(sizeof(WaterParameters) == 544);
 export enum class WaterPass { Ocean, Surface, Sky, Track, Underwater };
 export struct WaterStyle final
 {
@@ -138,12 +151,38 @@ public:
             });
             for (const auto& pipeline : m_pipelines) m_device->Destroy_Pipeline(pipeline.handle);
             if (m_emptyTexture.Is_Valid()) m_device->Destroy_Texture(m_emptyTexture);
+            if (m_bathymetryTexture.Is_Valid()) m_device->Destroy_Texture(m_bathymetryTexture);
             if (m_constants.Is_Valid()) m_device->Destroy_Buffer(m_constants);
         }
         m_pipelines.clear();
         m_emptyTexture = {};
+        m_bathymetryTexture = {};
+        m_bathymetryDirty = !m_bathymetry.empty();
         m_constants = {};
         m_device = nullptr;
+    }
+
+    // Map-owned world-space bottom heights survive device recreation. The
+    // terrain adapter refreshes them when foundations/deformations change.
+    bool Set_Bathymetry(std::span<const float> heights,std::uint32_t width,
+        std::uint32_t height,std::array<float,4> projection)
+    {
+        if (!width || !height || heights.size()!=static_cast<std::size_t>(width)*height) return false;
+        if (width!=m_bathymetryWidth || height!=m_bathymetryHeight) {
+            if (m_device && m_bathymetryTexture.Is_Valid()) m_device->Destroy_Texture(m_bathymetryTexture);
+            m_bathymetryTexture={};
+        }
+        m_bathymetry.assign(heights.begin(),heights.end());
+        m_bathymetryWidth=width;m_bathymetryHeight=height;
+        m_bathymetryProjection=projection;m_bathymetryDirty=true;
+        return true;
+    }
+
+    void Clear_Bathymetry()
+    {
+        if (m_device && m_bathymetryTexture.Is_Valid()) m_device->Destroy_Texture(m_bathymetryTexture);
+        m_bathymetryTexture={};m_bathymetry.clear();m_bathymetryProjection={};
+        m_bathymetryWidth=m_bathymetryHeight=0;m_bathymetryDirty=false;
     }
 
     WaterMeshHandle Create_Mesh(std::span<const WaterVertex> vertices,
@@ -238,9 +277,23 @@ private:
         if (style.pass == WaterPass::Ocean && !textures[1].Is_Valid()) return false;
         if (!Upload(*mesh)) return false;
         const RHIPipelineHandle pipeline = Pipeline(style,instanced);
+        auto constants=parameters;
+        constants.bathymetry_projection={};
+        if (style.pass==WaterPass::Ocean && !m_bathymetry.empty()) {
+            if (m_bathymetryDirty) {
+                const RHITextureUpload data{std::as_bytes(std::span(m_bathymetry)),m_bathymetryWidth*4u};
+                if (!m_bathymetryTexture.Is_Valid())
+                    m_bathymetryTexture=m_device->Create_Texture_Initialized(
+                        {m_bathymetryWidth,m_bathymetryHeight,1,RHITextureFormat::R32_Float},data);
+                else if (!m_device->Update_Texture(m_bathymetryTexture,data)) return false;
+                if (!m_bathymetryTexture.Is_Valid()) return false;
+                m_bathymetryDirty=false;
+            }
+            constants.bathymetry_projection=m_bathymetryProjection;
+        }
         if (!pipeline.Is_Valid() || !m_device->Update_Buffer(m_constants, 0,
-            std::as_bytes(std::span(&parameters, 1)))) return false;
-        std::array<RHIBindlessResource, 14> bindings{};
+            std::as_bytes(std::span(&constants, 1)))) return false;
+        std::array<RHIBindlessResource, 15> bindings{};
         bindings[0].type = RHIResourceType::Material;
         bindings[0].buffer = m_constants;
         std::size_t count = 1;
@@ -252,6 +305,10 @@ private:
         if (style.pass == WaterPass::Ocean) {
             bindings[count] = bindings[2];
             bindings[count++].stage = RHIShaderStage::Vertex;
+            bindings[count].type=RHIResourceType::Texture;
+            bindings[count].index=ResourceIndex{11,1};
+            bindings[count].texture=m_bathymetryTexture.Is_Valid() ? m_bathymetryTexture : m_emptyTexture;
+            bindings[count++].stage=RHIShaderStage::Vertex;
         }
         if (instanced) {
             bindings[count].type = RHIResourceType::Buffer;
@@ -322,6 +379,7 @@ private:
         description.wireframe = style.wireframe;
         description.sampler_count = 16;
         description.samplers[0] = surface_sampler;
+        description.samplers[11].address.fill(RHISamplerAddress::Clamp);
         if (style.pass == WaterPass::Ocean || style.pass == WaterPass::Underwater) {
             description.samplers[2] = surface_sampler;
             description.samplers[3] = surface_sampler;
@@ -369,6 +427,11 @@ private:
     ResourcePool<WaterMesh, WaterMeshHandle> m_meshes;
     std::vector<WaterPipeline> m_pipelines;
     RHITextureHandle m_emptyTexture{};
+    RHITextureHandle m_bathymetryTexture{};
+    std::vector<float> m_bathymetry;
+    std::uint32_t m_bathymetryWidth=0,m_bathymetryHeight=0;
+    std::array<float,4> m_bathymetryProjection{};
+    bool m_bathymetryDirty=false;
 };
 
 namespace { WaterRenderer g_water_renderer; }

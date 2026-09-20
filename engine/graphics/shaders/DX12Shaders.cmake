@@ -27,7 +27,13 @@ if(WIN32 AND TARGET slang-bootstrap AND DEFINED GRAPHICS_SHADER_ASSET_DIRECTORY)
     set(_GRAPHICS_DX12_SHADER_COMMON_DEPENDENCIES
         "${_GRAPHICS_DX12_SHADER_SOURCE_DIRECTORY}/resource_access.slangh"
         "${_GRAPHICS_DX12_SHADER_SOURCE_DIRECTORY}/environment_lighting.slangh"
-        "${_GRAPHICS_DX12_SHADER_SOURCE_DIRECTORY}/prop_surface.slangh")
+        "${_GRAPHICS_DX12_SHADER_SOURCE_DIRECTORY}/environment_constants.slangh"
+        "${_GRAPHICS_DX12_SHADER_SOURCE_DIRECTORY}/scene_color.slangh"
+        "${_GRAPHICS_DX12_SHADER_SOURCE_DIRECTORY}/prop_surface.slangh"
+        "${_GRAPHICS_DX12_SHADER_SOURCE_DIRECTORY}/pbr.slangh"
+        "${_GRAPHICS_DX12_SHADER_SOURCE_DIRECTORY}/pbr_brdf.slangh"
+        "${_GRAPHICS_DX12_SHADER_SOURCE_DIRECTORY}/water_pbr.slangh"
+        "${_GRAPHICS_DX12_SHADER_SOURCE_DIRECTORY}/water_constants.slangh")
     set(_GRAPHICS_DX12_SHADER_OUTPUTS)
 
     function(_graphics_add_dx12_shader_stage output_name stage entry source_name)
@@ -93,6 +99,8 @@ if(WIN32 AND TARGET slang-bootstrap AND DEFINED GRAPHICS_SHADER_ASSET_DIRECTORY)
     _graphics_add_dx12_shader_stage(surface.pso pixel surface_pixel surface.slang)
     _graphics_add_dx12_shader_stage(screen_filter.vso vertex screen_filter_vertex screen_filter.slang)
     _graphics_add_dx12_shader_stage(screen_filter.pso pixel screen_filter_pixel screen_filter.slang)
+    _graphics_add_dx12_shader_stage(indirect_lighting.vso vertex indirect_vertex indirect_lighting.slang)
+    _graphics_add_dx12_shader_stage(indirect_lighting.pso pixel indirect_pixel indirect_lighting.slang)
     _graphics_add_dx12_shader_stage(ssao.vso vertex ssao_vertex ssao.slang)
     _graphics_add_dx12_shader_stage(ssao.pso pixel ssao_pixel ssao.slang)
     _graphics_add_dx12_shader_stage(light_rays.vso vertex light_rays_vertex light_rays.slang)

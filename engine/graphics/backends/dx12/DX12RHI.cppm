@@ -437,6 +437,14 @@ struct DX12Pipeline final
 {
 	std::uint64_t key = 0;
 	std::array<DX12NativeObject<ID3D12PipelineState>, 24> pipeline_states;
+    struct AttachmentVariant {
+        std::array<DXGI_FORMAT,9> formats{};
+        DX12NativeObject<ID3D12PipelineState> state;
+    };
+    std::vector<AttachmentVariant> attachment_variants;
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC description{};
+    std::vector<std::byte> vertex_code,pixel_code;
+    std::vector<D3D12_INPUT_ELEMENT_DESC> input_elements;
 	std::array<std::uint32_t, 16> sampler_indices{};
 	std::uint8_t stencil_reference = 0;
 	RHIPrimitiveTopology topology = RHIPrimitiveTopology::TriangleList;
@@ -605,6 +613,7 @@ public:
 	bool Set_Bindless_Resources(std::span<const RHIBindlessResource> resources) noexcept override;
 	bool Set_Render_Targets(RHITextureHandle color_target, RHITextureHandle depth_target) noexcept override;
 	bool Set_Color_Target(RHITextureHandle color_target) noexcept override;
+    bool Set_Color_Targets(std::span<const RHITextureHandle> colors,RHITextureHandle depth = {}) noexcept override;
 	bool Set_Depth_Target(RHITextureHandle depth_target) noexcept override;
 	bool Clear(const std::array<float, 4> &color, float depth) noexcept override;
 	bool Clear_Depth(float depth) noexcept override;
@@ -673,6 +682,8 @@ private:
 	RHIPipelineHandle m_pipeline{};
 	RHIPrimitiveTopology m_topology = RHIPrimitiveTopology::TriangleList;
 	RHITextureHandle m_color_target{};
+    std::array<RHITextureHandle,7> m_extra_color_targets{};
+    unsigned m_extra_color_count=0;
 	RHITextureHandle m_depth_target{};
 	std::vector<RHIBindlessResource> m_bindless_cache;
 	// Register lookups store vector positions plus one (zero means unbound).
@@ -1689,7 +1700,7 @@ bool DX12CommandList::Bindless_Resources_Internal(std::span<const RHIBindlessRes
                     ++m_storage_count;
                 }
                 const bool target_conflict = resource.type == RHIResourceType::Texture
-                    && (resource.texture == m_color_target || resource.texture == m_depth_target);
+                    && (resource.texture == m_color_target || resource.texture == m_depth_target || std::find(m_extra_color_targets.begin(),m_extra_color_targets.end(),resource.texture)!=m_extra_color_targets.end());
                 if (target_conflict) {
                     if (slot != 0) {
                         changed = true;
@@ -1744,7 +1755,7 @@ bool DX12CommandList::Bindless_Resources_Internal(std::span<const RHIBindlessRes
             if (!rebuild_indices) continue;
             DX12Texture *texture = m_state->textures.Resolve(resource.texture);
             assert(texture != nullptr && resource.index.Get_Index() < BindlessSRVCount);
-            const bool target_conflict = resource.texture == m_color_target || resource.texture == m_depth_target;
+            const bool target_conflict = resource.texture == m_color_target || resource.texture == m_depth_target || std::find(m_extra_color_targets.begin(),m_extra_color_targets.end(),resource.texture)!=m_extra_color_targets.end();
             const bool sampleable = !target_conflict && texture->shader_resource_view.Is_Valid();
             if (sampleable && (!texture->uniform_state || texture->states.empty()
                 || texture->states.front()!=Shader_Resource_State())
@@ -1853,11 +1864,41 @@ bool DX12CommandList::Select_Pipeline_State() noexcept
 		color_format = To_DX12_Format(color->format);
 	if (const DX12Texture *depth = m_state->textures.Resolve(m_depth_target))
 		depth_format = To_DX12_Format(depth->format);
-	const std::uint32_t index = Pipeline_Depth_Variant(depth_format) * 6u
-		+ Pipeline_Color_Variant(color_format);
-	if (index >= pipeline->pipeline_states.size() || pipeline->pipeline_states[index].Get() == nullptr)
-		return false;
-    auto* native=pipeline->pipeline_states[index].Get();
+    ID3D12PipelineState* native=nullptr;
+    if(m_extra_color_count==0) {
+        const std::uint32_t index=Pipeline_Depth_Variant(depth_format)*6u+Pipeline_Color_Variant(color_format);
+        if(index>=pipeline->pipeline_states.size()) return false;
+        native=pipeline->pipeline_states[index].Get();
+    } else {
+        std::array<DXGI_FORMAT,9> formats{};
+        formats[0]=color_format;formats[8]=depth_format;
+        for(unsigned i=0;i<m_extra_color_count;++i) {
+            const auto* texture=m_state->textures.Resolve(m_extra_color_targets[i]);
+            if(!texture) return false;
+            formats[i+1]=To_DX12_Format(texture->format);
+        }
+        for(const auto& variant:pipeline->attachment_variants)
+            if(variant.formats==formats) {native=variant.state.Get();break;}
+        if(!native) {
+            auto description=pipeline->description;
+            description.VS={pipeline->vertex_code.data(),pipeline->vertex_code.size()};
+            description.PS={pipeline->pixel_code.data(),pipeline->pixel_code.size()};
+            description.InputLayout={pipeline->input_elements.data(),static_cast<UINT>(pipeline->input_elements.size())};
+            description.NumRenderTargets=m_extra_color_count+1;
+            std::copy_n(formats.data(),8,description.RTVFormats);
+            description.DSVFormat=depth_format;
+            if(depth_format==DXGI_FORMAT_UNKNOWN) {
+                description.DepthStencilState.DepthEnable=FALSE;
+                description.DepthStencilState.DepthWriteMask=D3D12_DEPTH_WRITE_MASK_ZERO;
+                description.DepthStencilState.StencilEnable=FALSE;
+            }
+            DX12Pipeline::AttachmentVariant variant;variant.formats=formats;
+            const auto result=m_state->device.Get()->CreateGraphicsPipelineState(&description,IID_PPV_ARGS(variant.state.Put()));
+            if(FAILED(result)) {Report_HResult("CreateGraphicsPipelineState attachments",result);return false;}
+            native=variant.state.Get();pipeline->attachment_variants.push_back(std::move(variant));
+        }
+    }
+    if(!native) return false;
     if (m_native_pipeline!=native) {
         m_state->command_list.Get()->SetPipelineState(native);
         m_native_pipeline=native;
@@ -1958,29 +1999,36 @@ bool DX12CommandList::Rebind_Targets() noexcept
 {
 	if (!m_color_target.Is_Valid() && !m_depth_target.Is_Valid())
 		return true;
-	D3D12_CPU_DESCRIPTOR_HANDLE color{};
+	std::array<D3D12_CPU_DESCRIPTOR_HANDLE,8> colors{};
 	D3D12_CPU_DESCRIPTOR_HANDLE depth{};
 	UINT color_count = 0;
 	if (m_color_target.Is_Valid()) {
 		const DX12Texture *target = m_state->textures.Resolve(m_color_target);
 		if (target == nullptr || !target->render_target_view.Is_Valid()) {
 			m_color_target = {};
+    m_extra_color_targets={};m_extra_color_count=0;
 			m_depth_target = {};
 			return false;
 		}
-		color = m_state->CpuRTV(target->render_target_view.index);
+		colors[0] = m_state->CpuRTV(target->render_target_view.index);
 		color_count = 1;
 	}
+    for(unsigned i=0;i<m_extra_color_count;++i) {
+        const auto* target=m_state->textures.Resolve(m_extra_color_targets[i]);
+        if(!target || !target->render_target_view.Is_Valid()) return false;
+        colors[color_count++]=m_state->CpuRTV(target->render_target_view.index);
+    }
 	if (m_depth_target.Is_Valid()) {
 		const DX12Texture *target = m_state->textures.Resolve(m_depth_target);
 		if (target == nullptr || !target->depth_stencil_view.Is_Valid()) {
 			m_color_target = {};
+    m_extra_color_targets={};m_extra_color_count=0;
 			m_depth_target = {};
 			return false;
 		}
 		depth = m_state->CpuDSV(target->depth_stencil_view.index);
 	}
-	m_state->command_list.Get()->OMSetRenderTargets(color_count, color_count ? &color : nullptr,
+	m_state->command_list.Get()->OMSetRenderTargets(color_count, color_count ? colors.data() : nullptr,
 		FALSE, depth.ptr != 0 ? &depth : nullptr);
 	return true;
 }
@@ -2028,6 +2076,36 @@ static bool Remove_Bindless_Texture(std::vector<RHIBindlessResource> &resources,
 	return true;
 }
 
+bool DX12CommandList::Set_Color_Targets(std::span<const RHITextureHandle> colors,RHITextureHandle depth) noexcept
+{
+    if(!Is_Ready() || colors.empty() || colors.size()>8) return false;
+    unsigned width=0,height=0;
+    for(std::size_t i=0;i<colors.size();++i) {
+        auto* texture=m_state->textures.Resolve(colors[i]);
+        if(!texture || !texture->render_target_view.Is_Valid()) return false;
+        if(i==0) {width=texture->width;height=texture->height;}
+        if(texture->width!=width || texture->height!=height || colors[i]==depth
+            || std::find(colors.begin(),colors.begin()+i,colors[i])!=colors.begin()+i) return false;
+    }
+    auto* depth_texture=m_state->textures.Resolve(depth);
+    if(depth.Is_Valid() && (!depth_texture || !depth_texture->depth_stencil_view.Is_Valid()
+        || depth_texture->width!=width || depth_texture->height!=height)) return false;
+    for(const auto handle:colors) {
+        if(!m_state->Transition(*m_state->textures.Resolve(handle),D3D12_RESOURCE_STATE_RENDER_TARGET)) return false;
+        Remove_Bindless_Texture(m_bindless_cache,handle);
+    }
+    if(depth_texture && !m_state->Transition(*depth_texture,D3D12_RESOURCE_STATE_DEPTH_WRITE)) return false;
+    Remove_Bindless_Texture(m_bindless_cache,depth);
+    m_color_target=colors[0];m_depth_target=depth;
+    m_extra_color_targets={};m_extra_color_count=static_cast<unsigned>(colors.size()-1);
+    std::copy(colors.begin()+1,colors.end(),m_extra_color_targets.begin());
+    m_pipeline_selection_dirty=true;m_scissor_dirty=true;
+    if(!Rebind_Targets()) return false;
+    Rebuild_Bindless_Slots();m_bindless_page=InvalidDescriptor;
+    if(!m_bindless_cache.empty() && !Bindless_Resources_Internal(m_bindless_cache,false)) return false;
+    return Select_Pipeline_State();
+}
+
 bool DX12CommandList::Set_Render_Targets(RHITextureHandle color_target,
 	RHITextureHandle depth_target) noexcept
 {
@@ -2046,6 +2124,7 @@ bool DX12CommandList::Set_Render_Targets(RHITextureHandle color_target,
 	m_state->command_list.Get()->OMSetRenderTargets(1, &color_view, FALSE, &depth_view);
     m_pipeline_selection_dirty=true; m_scissor_dirty=true;
 	m_color_target = color_target;
+    m_extra_color_targets={};m_extra_color_count=0;
 	m_depth_target = depth_target;
 	Remove_Bindless_Texture(m_bindless_cache, color_target);
 	Remove_Bindless_Texture(m_bindless_cache, depth_target);
@@ -2069,6 +2148,7 @@ bool DX12CommandList::Set_Color_Target(RHITextureHandle color_target) noexcept
 	m_state->command_list.Get()->OMSetRenderTargets(1, &color_view, FALSE, nullptr);
     m_pipeline_selection_dirty=true; m_scissor_dirty=true;
 	m_color_target = color_target;
+    m_extra_color_targets={};m_extra_color_count=0;
 	m_depth_target = {};
 	Remove_Bindless_Texture(m_bindless_cache, color_target);
 	Rebuild_Bindless_Slots();
@@ -2091,6 +2171,7 @@ bool DX12CommandList::Set_Depth_Target(RHITextureHandle depth_target) noexcept
 	m_state->command_list.Get()->OMSetRenderTargets(0, nullptr, FALSE, &depth_view);
     m_pipeline_selection_dirty=true; m_scissor_dirty=true;
 	m_color_target = {};
+    m_extra_color_targets={};m_extra_color_count=0;
 	m_depth_target = depth_target;
 	Remove_Bindless_Texture(m_bindless_cache, depth_target);
 	Rebuild_Bindless_Slots();
@@ -2331,6 +2412,7 @@ void DX12CommandList::Reset_Frame_State() noexcept
 	m_pipeline = {};
 	m_topology = RHIPrimitiveTopology::TriangleList;
 	m_color_target = {};
+    m_extra_color_targets={};m_extra_color_count=0;
 	m_depth_target = {};
 	m_bindless_cache.clear();
 	Rebuild_Bindless_Slots();
@@ -3545,6 +3627,8 @@ bool DX12Device::Destroy_Pipeline(RHIPipelineHandle pipeline) noexcept
 	for (auto &native : resource->pipeline_states)
 		if (!m_state->Defer(static_cast<IUnknown *>(native.Get()), fence_value))
 			return false;
+    for(auto& variant:resource->attachment_variants)
+        if(!m_state->Defer(static_cast<IUnknown*>(variant.state.Get()),fence_value)) return false;
 	m_state->command_list_facade.Release_Pipeline_Binding(pipeline);
 	m_state->Release_Samplers(resource->sampler_indices, fence_value);
 	return m_state->pipelines.Destroy(pipeline);
@@ -4355,6 +4439,10 @@ static bool Create_DX12_Pipeline(DX12DeviceState &state, const RHIPipeline &desc
 	}
 	blend.BlendOpAlpha = To_DX12_Blend_Operation(description.blend_operation);
 	blend.RenderTargetWriteMask = description.color_write_mask & D3D12_COLOR_WRITE_ENABLE_ALL;
+    pipeline.description=native;
+    pipeline.vertex_code.assign(vertex_bytecode.begin(),vertex_bytecode.end());
+    pipeline.pixel_code.assign(pixel_bytecode.begin(),pixel_bytecode.end());
+    pipeline.input_elements.assign(input_elements.begin(),input_elements.begin()+input_count);
 	constexpr std::array<DXGI_FORMAT, 6> colors = {
 		DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_B8G8R8A8_UNORM,
 		DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R32_FLOAT,

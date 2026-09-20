@@ -69,7 +69,7 @@ public:
             for(std::size_t role=0;role<PropSurfaceTextureCount;++role) {
                 const auto texture=material->Surface_Texture(static_cast<Assets::MaterialTextureRole>(role));
                 if(texture.Is_Valid()) maps|=1u<<role;
-                if(!next.Upload(assets,texture,part.textures[PropSurfaceTextureFirst+role])) { error="could not upload surface map"; return false; }
+                if(!next.Upload(assets,texture,part.textures[Prop_Surface_Texture_Slot(role)])) { error="could not upload surface map"; return false; }
             }
             if(!Configure_Prop_Surface(material->Surface(),maps,part.surface)) { error="invalid surface description"; return false; }
             switch(material->Render_Mode()) {

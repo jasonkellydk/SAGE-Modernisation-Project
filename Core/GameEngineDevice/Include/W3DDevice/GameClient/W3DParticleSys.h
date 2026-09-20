@@ -13,6 +13,7 @@
 import Graphics.Scene.Particles.Renderer;
 import Graphics.Scene.Beams;
 import Graphics.FrameTargets;
+import Graphics.Scene.Lighting.Environment;
 
 class W3DParticleSystemManager : public ParticleSystemManager
 {
@@ -28,8 +29,10 @@ public:
 	void Reset_Graphics_Particle_Bindings() noexcept;
 	bool Set_Graphics_Particle_View(const Graphics::View &view) noexcept;
 	bool Render_Graphics_Particles(Graphics::CommandList &commands, const Graphics::FrameTargets &targets) noexcept;
+    void Append_Emission_Lights(std::vector<Graphics::EnvironmentLocalLight>& lights);
 
 private:
+    std::unordered_map<std::string,std::vector<std::array<float,3>>> m_emissionColors;
 	static constexpr std::size_t MAX_PARTICLES_PER_SYSTEM = 512;
 	static constexpr std::size_t MAX_VOLUME_PARTICLES_PER_SYSTEM = MAX_PARTICLES_PER_SYSTEM * 16;
 	static constexpr std::size_t MAX_GRAPHICS_SMUDGES = 512;
@@ -57,6 +60,8 @@ private:
 		std::string texture_name;
 		Graphics::TextureHandle texture{};
 		Graphics::MaterialHandle material{};
+        std::string normal_name;
+        Graphics::TextureHandle normal_texture{};
 	};
 
 	void Prepare_Graphics_Particles();
@@ -66,7 +71,7 @@ private:
 	GraphicsStreakBinding *Ensure_Graphics_Streak(ParticleSystem &system);
 	Graphics::BeamFlags Graphics_Streak_Flags(const ParticleSystem &system) const noexcept;
 	void Update_Graphics_Streak(ParticleSystem &system, GraphicsStreakBinding &binding) noexcept;
-	Graphics::MaterialHandle Ensure_Graphics_Material(const char *texture_name);
+	Graphics::MaterialHandle Ensure_Graphics_Material(const char *texture_name, const char *normal_name = "");
 	Graphics::MaterialHandle Ensure_Graphics_Streak_Material(const char *texture_name);
 	Graphics::ParticleEmitterFlags Graphics_Particle_Flags(const ParticleSystem &system) const noexcept;
 	bool Passes_Terrain_Bounds(float x, float y, float z, float radius) const noexcept;
@@ -92,6 +97,7 @@ private:
 	std::array<float, MAX_VOLUME_PARTICLES_PER_SYSTEM> m_graphicsColorB{};
 	std::array<float, MAX_VOLUME_PARTICLES_PER_SYSTEM> m_graphicsColorA{};
 	std::array<float, MAX_VOLUME_PARTICLES_PER_SYSTEM> m_graphicsAngles{};
+    std::array<Graphics::ParticleAnimation, MAX_VOLUME_PARTICLES_PER_SYSTEM> m_graphicsAnimations{};
 	std::array<Graphics::MaterialHandle, MAX_VOLUME_PARTICLES_PER_SYSTEM> m_graphicsParticleMaterials{};
 	std::array<Graphics::ParticleEmitterFlags, MAX_VOLUME_PARTICLES_PER_SYSTEM> m_graphicsEmitterFlags{};
 	std::array<Graphics::PipelineHandle, MAX_VOLUME_PARTICLES_PER_SYSTEM> m_graphicsPipelines{};

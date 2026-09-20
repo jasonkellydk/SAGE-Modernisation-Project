@@ -1,10 +1,17 @@
 import Graphics.Frame.RenderClock;
+import Graphics.Frame.RenderSettings;
+import Graphics.Frame.RenderServices;
+import engine.navigation.diagnostics.frame_capture;
+#include "GameLogic/GameLogic.h"
+#include <future>
+#include <chrono>
 #include "W3DDevice/GameClient/W3DRenderServices.h"
 #include "W3DDevice/GameClient/W3DTerrainGraphics.h"
 #include "W3DDevice/GameClient/W3DGraphicsResources.h"
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <span>
 
 #include "Common/GlobalData.h"
@@ -31,6 +38,7 @@ import Graphics.Scene.DrawParameters;
 import Graphics.Frame.Runtime;
 import Graphics.Scene.Lighting.Environment;
 import Graphics.Scene.Shadows.DirectionalRenderer;
+import Graphics.Scene.Water.Renderer;
 import Graphics.Materials.ProceduralPass;
 
 W3DTerrainGraphics *W3DTerrainGraphics::s_active = nullptr;
@@ -82,6 +90,7 @@ Int W3DTerrainGraphics::freeMapResources()
     Graphics::Get_Terrain_Renderer().Release_Surface();
     Graphics::Get_Terrain_Overlay_Renderer().Release_Surface();
     Graphics::Get_Terrain_Shoreline_Renderer().Release_Surface();
+    Graphics::Get_Water_Renderer().Clear_Bathymetry();
     m_extraCells = 0;
     m_surfaceCells.clear(); m_overlayCells.clear(); m_overlayIndices.clear(); m_dirtyCells.clear();
     m_havePartialUpdate = false;
@@ -173,9 +182,11 @@ bool W3DTerrainGraphics::Update_Textures()
     }
     REF_PTR_SET(m_stageZeroTexture, m_map->getTerrainTexture());
     REF_PTR_SET(m_stageOneTexture, m_map->getAlphaTerrainTexture());
-    const std::array<W3DTextureHandle *, 6> sources{
+    auto* atlas = static_cast<TerrainTextureClass*>(m_stageZeroTexture);
+    const std::array<W3DTextureHandle *, 9> sources{
         m_stageZeroTexture, m_stageOneTexture, m_stageTwoTexture, m_stageThreeTexture,
-        m_shroud != nullptr ? m_shroud->getShroudTexture() : nullptr, m_destAlphaTexture};
+        m_shroud != nullptr ? m_shroud->getShroudTexture() : nullptr, m_destAlphaTexture,
+        atlas->Surface_Map(0), atlas->Surface_Map(1), atlas->Surface_Map(2)};
     for (std::size_t slot = 0; slot < sources.size(); ++slot) {
         W3DTextureHandle* texture = sources[slot];
         const auto handle = texture != nullptr && texture->Ensure_Render_Backend_Texture() && !texture->Is_Missing_Texture()
@@ -281,23 +292,82 @@ bool W3DTerrainGraphics::Update_Surface()
             }
         }
     }
-    if (full) {
-        if (!Graphics::Get_Terrain_Renderer().Set_Cells(cells)
-            || !Graphics::Get_Terrain_Overlay_Renderer().Set_Cells(overlays)) return false;
-    } else {
-        const auto update = [](auto& renderer, const auto& data, const auto& dirty) {
-            for (std::size_t first=0; first<dirty.size();) {
-                if (!dirty[first]) { ++first; continue; }
-                auto end=first+1;
-                while (end<dirty.size() && dirty[end]) ++end;
-                if (!renderer.Update_Cells(first,std::span(data).subspan(first,end-first))) return false;
-                first=end;
+    const auto& settings=Graphics::Get_Render_Settings();
+    const unsigned divisions=settings.PBR_Terrain_Subdivisions();
+    auto* atlas=static_cast<TerrainTextureClass*>(m_map->getTerrainTexture());
+    auto* height_map=atlas ? atlas->Surface_Map(2) : nullptr;
+    const float amplitude=!m_showImpassableAreas && height_map ? settings.PBR_Displacement_Scale() : 0;
+    // Average adjacent material heights near UV seams, giving both cells the
+    // same displaced edge even when they use unrelated terrain textures.
+    const auto displacement=[&](float wx,float wy) {
+        if (amplitude <= 0) return 0.f;
+        const float gx=wx/MAP_XY_FACTOR+border, gy=wy/MAP_XY_FACTOR+border;
+        const int ix=static_cast<int>(std::floor(gx)),iy=static_cast<int>(std::floor(gy));
+        float total=0,weight_sum=0;
+        for(int cy=iy-1;cy<=iy+1;++cy) for(int cx=ix-1;cx<=ix+1;++cx) {
+            if(cx<0 || cy<0 || cx>=width-1 || cy>=height-1) continue;
+            const float u=std::clamp(gx-cx,0.f,1.f),v=std::clamp(gy-cy,0.f,1.f);
+            const auto edge=[](float d) { const float t=std::clamp(1-std::abs(d)/.1f,0.f,1.f);return t*t*(3-2*t); };
+            const float contribution=edge(gx-cx-u)*edge(gy-cy-v);
+            if(contribution<=0) continue;
+            const auto& source=cells[static_cast<std::size_t>(cy)*(width-1)+cx];
+            const auto weights=Graphics::Terrain_Cell_Weights(source,u,v);
+            float bu=0,bv=0,du=0,dv=0,alpha=0;
+            for(unsigned k=0;k<4;++k) {
+                bu+=weights[k]*source.base_uv[k][0];bv+=weights[k]*source.base_uv[k][1];
+                du+=weights[k]*source.blend_uv[k][0];dv+=weights[k]*source.blend_uv[k][1];
+                alpha+=weights[k]*source.colors[k][3];
             }
-            return true;
+            const float h=std::lerp(height_map->Sample_Height(bu,bv),height_map->Sample_Height(du,dv),alpha);
+            total+=(h-1)*contribution;weight_sum+=contribution;
+        }
+        // Recess detail beneath the gameplay surface: foundations and roads
+        // stay above it, and navigation/collision heights remain deterministic.
+        return weight_sum>0 ? amplitude*total/weight_sum : 0.f;
+    };
+    const auto publish=[&](auto& renderer,const auto& data,const auto& dirty) {
+        const std::size_t children=divisions*divisions;
+        const auto generate=[&](std::size_t first,std::size_t end) {
+            std::vector<Graphics::TerrainCell> result((end-first)*children);
+            for(auto i=first;i<end;++i)
+                Graphics::Subdivide_Terrain_Cell(data[i],divisions,
+                    std::span(result).subspan((i-first)*children,children),displacement);
+            return result;
         };
-        if (!update(Graphics::Get_Terrain_Renderer(),cells,m_dirtyCells)
-            || !update(Graphics::Get_Terrain_Overlay_Renderer(),overlays,dirty_overlays)) return false;
+        if(full) {
+            auto prepared=std::async(std::launch::async,[&] {return generate(0,data.size());});
+            while(prepared.wait_for(std::chrono::milliseconds(1))!=std::future_status::ready)
+                if(TheGameLogic && !Graphics::Get_Render_Services().Is_Rendering()) TheGameLogic->refreshLoadScreen();
+            return renderer.Set_Cells(prepared.get());
+        }
+        for(std::size_t first=0;first<dirty.size();) {
+            if(!dirty[first]) {++first;continue;}
+            auto end=first+1;
+            while(end<dirty.size() && dirty[end]) ++end;
+            if(!renderer.Update_Cells(first*children,generate(first,end))) return false;
+            first=end;
+        }
+        return true;
+    };
+    if (!publish(Graphics::Get_Terrain_Renderer(),cells,m_dirtyCells)
+        || !publish(Graphics::Get_Terrain_Overlay_Renderer(),overlays,dirty_overlays)) return false;
+    // Wave displacement needs the seabed in world space, including terrain
+    // edits. A cell's maximum is conservative: material displacement recesses
+    // the rendered terrain below these gameplay heights. Expand by one cell
+    // so interpolation across the water mesh cannot miss a terrain peak.
+    const int bottom_width=width-1,bottom_height=height-1;
+    std::vector<float> bottom(count);
+    for (int y=0;y<bottom_height;++y) for (int x=0;x<bottom_width;++x) {
+        float highest=std::numeric_limits<float>::lowest();
+        for (int cy=std::max(0,y-1);cy<=std::min(bottom_height-1,y+1);++cy)
+            for (int cx=std::max(0,x-1);cx<=std::min(bottom_width-1,x+1);++cx)
+                for (float h:cells[static_cast<std::size_t>(cy)*bottom_width+cx].heights)
+                    highest=std::max(highest,h);
+        bottom[static_cast<std::size_t>(y)*bottom_width+x]=highest;
     }
+    if (!Graphics::Get_Water_Renderer().Set_Bathymetry(bottom,bottom_width,bottom_height,
+        {1.f/(bottom_width*MAP_XY_FACTOR),1.f/(bottom_height*MAP_XY_FACTOR),
+            float(border)/bottom_width,float(border)/bottom_height})) return false;
     // A foundation can change hundreds of height samples in one logic tick.
     // Rebuild shoreline membership once after all those edits have arrived.
     if (m_havePartialUpdate && dirty_x0<dirty_x1 && dirty_y0<dirty_y1)
@@ -312,6 +382,22 @@ bool W3DTerrainGraphics::Update_Surface()
 float W3DTerrainGraphics::Get_Surface_Height(int x, int y) const
 {
     return m_map->getHeight(x, y) * MAP_HEIGHT_SCALE;
+}
+
+void W3DTerrainGraphics::staticLightingChanged()
+{
+    const bool geometry_dirty=m_needFullUpdate;
+    BaseHeightMapRenderObjClass::staticLightingChanged();
+    // PBR evaluates lights per fragment. A beacon/time-of-day change does not
+    // alter geometry and must not regenerate the displaced map on the CPU.
+    if(Graphics::Get_Render_Settings().PBR_Enabled()) m_needFullUpdate=geometry_dirty;
+}
+
+void W3DTerrainGraphics::prepareMaterials()
+{
+    BaseHeightMapRenderObjClass::prepareMaterials();
+    Update_Textures();
+    Update_Surface();
 }
 
 Bool W3DTerrainGraphics::collectShadowCasters()
@@ -329,7 +415,16 @@ Bool W3DTerrainGraphics::collectShadowCasters()
 
 bool W3DTerrainGraphics::Draw_Surface(W3DRenderContext &info)
 {
-    if (!Update_Textures() || !Update_Surface()) return false;
+    auto& capture=navigation::diagnostics::frameCapture();
+    {
+        auto timing=capture.measure("Graphics.Terrain.Textures",TheGameLogic->getFrame());
+        if (!Update_Textures()) return false;
+    }
+    {
+        auto timing=capture.measure("Graphics.Terrain.Geometry",TheGameLogic->getFrame());
+        if (!Update_Surface()) return false;
+    }
+    auto drawing=capture.measure("Graphics.Terrain.Draw",TheGameLogic->getFrame());
     Graphics::TerrainDrawParameters parameters;
     Matrix3D camera_view;
     Matrix4x4 projection;
@@ -339,6 +434,14 @@ bool W3DTerrainGraphics::Draw_Surface(W3DRenderContext &info)
     for (int row = 0; row < 4; ++row)
         for (int column = 0; column < 4; ++column)
             parameters.view_projection[row * 4 + column] = transform[row][column];
+    const auto camera_position = info.Camera.Get_Position();
+    parameters.camera_position = {camera_position.X, camera_position.Y, camera_position.Z, 1};
+    parameters.surface = {!m_showImpassableAreas ? 1.f : 0.f,
+        Graphics::Get_Render_Settings().PBR_Normal_Flip_Green() ? 1.f : 0.f,
+        .25f, Graphics::Get_Render_Settings().PBR_Parallax_Scale()};
+    // Missing detail textures change material detail, never the lighting model.
+    parameters.options[2] = m_textures[6].Is_Valid() && m_textures[7].Is_Valid()
+        && m_textures[8].Is_Valid() ? 0.f : 1.f;
     const bool cloud = useCloud() && m_textures[2].Is_Valid();
     const float stretch = 1.0f / (63.0f * MAP_XY_FACTOR / 2.0f);
     parameters.cloud_projection = {stretch, stretch, cloud ? m_stageTwoTexture->Get_X_Offset() : 0.0f,
@@ -371,33 +474,6 @@ bool W3DTerrainGraphics::Draw_Surface(W3DRenderContext &info)
             (-m_shroud->getDrawOriginY() + m_shroud->getCellHeight()) * sy};
         parameters.options[1] = 1;
     }
-    if (Scene != nullptr) {
-        RTS3DScene *scene = static_cast<RTS3DScene *>(Scene);
-        Graphics::SceneObjectList<W3DRenderObject>::Cursor lights(scene->getDynamicLights());
-        std::size_t count = 0;
-        for (lights.First(); !lights.Is_Done() && count < parameters.lights.size(); lights.Next()) {
-            W3DDynamicLight *light = static_cast<W3DDynamicLight *>(lights.Peek_Obj());
-            if (!light->isEnabled()) continue;
-            const Vector3 position = light->Get_Position();
-            double inner, outer;
-            light->Get_Far_Attenuation_Range(inner, outer);
-            const float min_x = (m_map->getDrawOrgX() - m_map->getBorderSizeInline()) * MAP_XY_FACTOR;
-            const float min_y = (m_map->getDrawOrgY() - m_map->getBorderSizeInline()) * MAP_XY_FACTOR;
-            if (light->Get_Type() != W3DLight::DIRECTIONAL &&
-                (position.X + outer < min_x || position.Y + outer < min_y ||
-                 position.X - outer > min_x + m_x * MAP_XY_FACTOR || position.Y - outer > min_y + m_y * MAP_XY_FACTOR)) continue;
-            Vector3 diffuse, ambient, direction;
-            light->Get_Diffuse(&diffuse);
-            light->Get_Ambient(&ambient);
-            light->Get_Spot_Direction(direction);
-            Graphics::TerrainLight &output = parameters.lights[count++];
-            output.position_range = {position.X, position.Y, position.Z, static_cast<float>(outer)};
-            output.diffuse_inner = {diffuse.X, diffuse.Y, diffuse.Z, static_cast<float>(inner)};
-            output.ambient_kind = {ambient.X, ambient.Y, ambient.Z, light->Get_Type() == W3DLight::DIRECTIONAL ? 1.0f : 0.0f};
-            output.direction = {direction.X, direction.Y, direction.Z, 0};
-        }
-        parameters.light_options[0] = static_cast<float>(count);
-    }
     Graphics::CommandList &commands = m_graphicsDevice->Immediate_Command_List();
     const bool filtered = TheGlobalData->m_bilinearTerrainTex || TheGlobalData->m_trilinearTerrainTex;
     const bool wireframe = Graphics::Get_Scene_Draw_Parameters().wireframe;
@@ -415,7 +491,6 @@ bool W3DTerrainGraphics::Draw_Surface(W3DRenderContext &info)
         parameters.shroud_projection = {description.world_texture_transform[0], description.world_texture_transform[5],
             description.world_texture_transform[3], description.world_texture_transform[7]};
         parameters.features = {0, 0, 0, 5};
-        parameters.light_options[0] = 0;
         std::array<Graphics::RHITextureHandle, 5> textures{};
         textures[4] = mask;
         const bool result = Graphics::Get_Terrain_Renderer().Render(commands,
@@ -423,14 +498,16 @@ bool W3DTerrainGraphics::Draw_Surface(W3DRenderContext &info)
         m_graphicsDevice->Destroy_Texture(mask);
         return result;
     }
+    const std::array<Graphics::RHITextureHandle, 8> surface_textures{
+        m_textures[0], m_textures[1], m_textures[2], m_textures[3], m_textures[4],
+        m_textures[6], m_textures[7], m_textures[8]};
     if (!Graphics::Get_Terrain_Renderer().Render(commands, Graphics::TerrainSurfacePass::Surface,
-        parameters, std::span<const Graphics::RHITextureHandle>(m_textures.data(), 5), filtered, wireframe)) return false;
+        parameters, surface_textures, filtered, wireframe)) return false;
     if (TheGlobalData->m_use3WayTerrainBlends) {
         parameters.features[3] = 3;
         if (TheGlobalData->m_use3WayTerrainBlends == 2) parameters.features[2] = 1;
-        parameters.light_options[0] = 0;
-        const std::array<Graphics::RHITextureHandle, 5> overlay_textures{
-            m_textures[1], {}, m_textures[2], m_textures[3], m_textures[4]};
+        const std::array<Graphics::RHITextureHandle, 8> overlay_textures{
+            m_textures[1], {}, m_textures[2], m_textures[3], m_textures[4], m_textures[6], m_textures[7], m_textures[8]};
         if (!Graphics::Get_Terrain_Overlay_Renderer().Render(commands, Graphics::TerrainSurfacePass::Overlay, parameters, overlay_textures, filtered, wireframe)) return false;
     }
     if (TheGlobalData->m_showSoftWaterEdge && TheWaterTransparency->m_transparentWaterDepth != 0 && m_textures[5].Is_Valid()) {

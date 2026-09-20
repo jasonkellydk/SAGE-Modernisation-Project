@@ -1,0 +1,26 @@
+#ifndef GRAPHICS_SCENE_COLOR
+#define GRAPHICS_SCENE_COLOR
+#include "environment_constants.slangh"
+float3 Surface_Linear(float3 color)
+{
+    return select(color<=.04045,color/12.92,pow(max((color+.055)/1.055,0),2.4));
+}
+float3 Surface_Encoded(float3 color)
+{
+    color=max(color,0);
+    return select(color<=.0031308,color*12.92,1.055*pow(color,1.0/2.4)-.055);
+}
+float3 Surface_Normalize(float3 vector,float3 fallback)
+{
+    const float squared=dot(vector,vector);
+    return squared>1e-12 ? vector*rsqrt(squared) : fallback;
+}
+float3 Scene_Color(float3 linear_color)
+{
+    return EnvironmentPBR.y > .5 ? max(linear_color,0) : Surface_Encoded(linear_color);
+}
+float3 Scene_Legacy_Color(float3 encoded_color)
+{
+    return EnvironmentPBR.y > .5 ? Surface_Linear(encoded_color) : encoded_color;
+}
+#endif

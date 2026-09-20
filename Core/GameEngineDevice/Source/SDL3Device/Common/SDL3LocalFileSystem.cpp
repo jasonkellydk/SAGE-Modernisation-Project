@@ -84,6 +84,13 @@ namespace
 		if (std::filesystem::exists(input, error) && !error)
 			return input;
 
+#ifdef _WIN32
+		// Windows already resolves the game's case-insensitive asset names.
+		// A missing companion must not enumerate tens of thousands of texture
+		// files again for every possible PBR suffix and search directory.
+		return allowMissing ? input : Path();
+#else
+
 		Path current = input.root_path();
 		if (current.empty())
 		{
@@ -138,6 +145,7 @@ namespace
 		}
 
 		return current;
+#endif
 	}
 
 	std::string joinLogicalPath(const std::string &first, const std::string &second)

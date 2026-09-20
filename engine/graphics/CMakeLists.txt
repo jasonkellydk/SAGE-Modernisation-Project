@@ -1,3 +1,15 @@
+set(GRAPHICS_SHARED_SHADER_DEPENDENCIES
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/resource_access.slangh"
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/environment_lighting.slangh"
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/environment_constants.slangh"
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/scene_color.slangh"
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/pbr_brdf.slangh"
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/pbr.slangh"
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/prop_surface.slangh"
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/water_constants.slangh"
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/water_pbr.slangh"
+)
+
 cmake_minimum_required(VERSION 3.28)
 
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
@@ -231,6 +243,7 @@ target_sources(generals_graphics
             passes/post-process/PostProcess.cppm
             passes/post-process/Bloom.cppm
             passes/post-process/SSAO.cppm
+            passes/post-process/IndirectLighting.cppm
             passes/post-process/LightRays.cppm
             passes/sky/SkyPass.cppm
             passes/video/VideoPass.cppm
@@ -529,8 +542,7 @@ if(WIN32)
                 -entry screen_filter_pixel -stage pixel -O3 -matrix-layout-row-major
                 -o "${GRAPHICS_SCREEN_FILTER_FRAGMENT_SHADER}" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/screen_filter.slang"
             DEPENDS
-                "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/resource_access.slangh"
-                "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/environment_lighting.slangh"
+                ${GRAPHICS_SHARED_SHADER_DEPENDENCIES}
 				"${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/basic_opaque.slang"
 				"${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/particle_billboard.slang"
 				"${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/screen_distortion.slang"
@@ -952,6 +964,9 @@ if(RTS_BUILD_GRAPHICS_TESTS)
         add_graphics_test(generals_graphics_frame_preview_test capture/FramePreview.test.cppm)
         add_graphics_test(generals_graphics_bloom_test passes/post-process/Bloom.test.cppm)
         add_graphics_test(generals_graphics_ssao_test passes/post-process/SSAO.test.cppm)
+        add_graphics_test(generals_graphics_indirect_lighting_test passes/post-process/IndirectLighting.test.cppm)
+        target_compile_definitions(generals_graphics_indirect_lighting_test PRIVATE
+            GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
         target_compile_definitions(generals_graphics_ssao_test PRIVATE
             GRAPHICS_SSAO_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
         if(TARGET generals_graphics_shaders)
@@ -1740,10 +1755,20 @@ if(RTS_BUILD_GRAPHICS_TESTS)
 endif()
 
 if(WIN32 AND TARGET slang-bootstrap)
+    add_custom_command(OUTPUT "${GRAPHICS_SHADER_ASSET_DIRECTORY}/indirect_lighting.vso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/indirect_lighting.pso"
+        COMMAND $<TARGET_FILE:slang-bootstrap> -target dxbc -profile sm_5_0 -entry indirect_vertex -stage vertex -O3 -matrix-layout-row-major -o "${GRAPHICS_SHADER_ASSET_DIRECTORY}/indirect_lighting.vso" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/indirect_lighting.slang"
+        COMMAND $<TARGET_FILE:slang-bootstrap> -target dxbc -profile sm_5_0 -entry indirect_pixel -stage pixel -O3 -matrix-layout-row-major -o "${GRAPHICS_SHADER_ASSET_DIRECTORY}/indirect_lighting.pso" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/indirect_lighting.slang"
+        DEPENDS ${GRAPHICS_SHARED_SHADER_DEPENDENCIES} "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/indirect_lighting.slang" slang-bootstrap VERBATIM)
+    add_custom_target(generals_graphics_indirect_lighting_shaders DEPENDS "${GRAPHICS_SHADER_ASSET_DIRECTORY}/indirect_lighting.vso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/indirect_lighting.pso")
+    add_dependencies(generals_graphics generals_graphics_indirect_lighting_shaders)
+    if(TARGET generals_graphics_indirect_lighting_test)
+        add_dependencies(generals_graphics_indirect_lighting_test generals_graphics_indirect_lighting_shaders generals_graphics_shaders)
+    endif()
+
     add_custom_command(OUTPUT "${GRAPHICS_SHADER_ASSET_DIRECTORY}/ssao.vso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/ssao.pso"
         COMMAND $<TARGET_FILE:slang-bootstrap> -target dxbc -profile sm_5_0 -entry ssao_vertex -stage vertex -O3 -matrix-layout-row-major -o "${GRAPHICS_SHADER_ASSET_DIRECTORY}/ssao.vso" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/ssao.slang"
         COMMAND $<TARGET_FILE:slang-bootstrap> -target dxbc -profile sm_5_0 -entry ssao_pixel -stage pixel -O3 -matrix-layout-row-major -o "${GRAPHICS_SHADER_ASSET_DIRECTORY}/ssao.pso" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/ssao.slang"
-        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/resource_access.slangh" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/ssao.slang" slang-bootstrap VERBATIM)
+        DEPENDS ${GRAPHICS_SHARED_SHADER_DEPENDENCIES} "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/ssao.slang" slang-bootstrap VERBATIM)
     add_custom_target(generals_graphics_ssao_shaders DEPENDS "${GRAPHICS_SHADER_ASSET_DIRECTORY}/ssao.vso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/ssao.pso")
     add_dependencies(generals_graphics generals_graphics_ssao_shaders)
     if(TARGET generals_graphics_ssao_test)
@@ -1755,7 +1780,7 @@ if(WIN32 AND TARGET slang-bootstrap)
     add_custom_command(OUTPUT "${GRAPHICS_SHADER_ASSET_DIRECTORY}/light_rays.vso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/light_rays.pso"
         COMMAND $<TARGET_FILE:slang-bootstrap> -target dxbc -profile sm_5_0 -entry light_rays_vertex -stage vertex -O3 -matrix-layout-row-major -o "${GRAPHICS_SHADER_ASSET_DIRECTORY}/light_rays.vso" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/light_rays.slang"
         COMMAND $<TARGET_FILE:slang-bootstrap> -target dxbc -profile sm_5_0 -entry light_rays_pixel -stage pixel -O3 -matrix-layout-row-major -o "${GRAPHICS_SHADER_ASSET_DIRECTORY}/light_rays.pso" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/light_rays.slang"
-        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/resource_access.slangh" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/light_rays.slang" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/environment_lighting.slangh" slang-bootstrap VERBATIM)
+        DEPENDS ${GRAPHICS_SHARED_SHADER_DEPENDENCIES} "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/light_rays.slang" slang-bootstrap VERBATIM)
     add_custom_target(generals_graphics_light_rays_shaders DEPENDS "${GRAPHICS_SHADER_ASSET_DIRECTORY}/light_rays.vso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/light_rays.pso")
     add_dependencies(generals_graphics generals_graphics_light_rays_shaders)
     if(TARGET generals_graphics_light_rays_test)
@@ -1767,7 +1792,7 @@ if(WIN32 AND TARGET slang-bootstrap)
     add_custom_command(OUTPUT "${GRAPHICS_SHADER_ASSET_DIRECTORY}/bloom.vso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/bloom.pso"
         COMMAND $<TARGET_FILE:slang-bootstrap> -target dxbc -profile sm_5_0 -entry bloom_vertex -stage vertex -O3 -matrix-layout-row-major -o "${GRAPHICS_SHADER_ASSET_DIRECTORY}/bloom.vso" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/bloom.slang"
         COMMAND $<TARGET_FILE:slang-bootstrap> -target dxbc -profile sm_5_0 -entry bloom_pixel -stage pixel -O3 -matrix-layout-row-major -o "${GRAPHICS_SHADER_ASSET_DIRECTORY}/bloom.pso" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/bloom.slang"
-        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/resource_access.slangh" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/bloom.slang" slang-bootstrap VERBATIM)
+        DEPENDS ${GRAPHICS_SHARED_SHADER_DEPENDENCIES} "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/bloom.slang" slang-bootstrap VERBATIM)
     add_custom_target(generals_graphics_bloom_shaders DEPENDS "${GRAPHICS_SHADER_ASSET_DIRECTORY}/bloom.vso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/bloom.pso")
     add_dependencies(generals_graphics generals_graphics_bloom_shaders)
     if(TARGET generals_graphics_bloom_test)
@@ -1779,7 +1804,7 @@ if(WIN32 AND TARGET slang-bootstrap)
     add_custom_command(OUTPUT "${GRAPHICS_SHADER_ASSET_DIRECTORY}/tree.vso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/tree.pso"
         COMMAND $<TARGET_FILE:slang-bootstrap> -target dxbc -profile sm_5_0 -entry tree_vertex -stage vertex -O3 -matrix-layout-row-major -o "${GRAPHICS_SHADER_ASSET_DIRECTORY}/tree.vso" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/tree.slang"
         COMMAND $<TARGET_FILE:slang-bootstrap> -target dxbc -profile sm_5_0 -entry tree_pixel -stage pixel -O3 -matrix-layout-row-major -o "${GRAPHICS_SHADER_ASSET_DIRECTORY}/tree.pso" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/tree.slang"
-        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/resource_access.slangh" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/environment_lighting.slangh" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/tree.slang" slang-bootstrap VERBATIM)
+        DEPENDS ${GRAPHICS_SHARED_SHADER_DEPENDENCIES} "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/tree.slang" slang-bootstrap VERBATIM)
     add_custom_target(generals_graphics_tree_shaders DEPENDS "${GRAPHICS_SHADER_ASSET_DIRECTORY}/tree.vso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/tree.pso")
     add_dependencies(generals_graphics generals_graphics_tree_shaders)
 endif()
@@ -1793,10 +1818,10 @@ if(WIN32 AND TARGET slang-bootstrap)
     add_custom_command(OUTPUT "${GRAPHICS_SHADER_ASSET_DIRECTORY}/ocean.vso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/ocean.pso"
         COMMAND $<TARGET_FILE:slang-bootstrap> -target dxbc -profile sm_5_0 -entry OceanVertexMain -stage vertex -O3 -matrix-layout-row-major -o "${GRAPHICS_SHADER_ASSET_DIRECTORY}/ocean.vso" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/ocean.slang"
         COMMAND $<TARGET_FILE:slang-bootstrap> -target dxbc -profile sm_5_0 -entry OceanPixelMain -stage pixel -O3 -matrix-layout-row-major -o "${GRAPHICS_SHADER_ASSET_DIRECTORY}/ocean.pso" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/ocean.slang"
-        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/resource_access.slangh" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/environment_lighting.slangh" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/ocean.slang" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/water_constants.slangh" slang-bootstrap VERBATIM)
+        DEPENDS ${GRAPHICS_SHARED_SHADER_DEPENDENCIES} "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/ocean.slang" slang-bootstrap VERBATIM)
     add_custom_command(OUTPUT "${GRAPHICS_SHADER_ASSET_DIRECTORY}/ocean_instanced.vso"
         COMMAND $<TARGET_FILE:slang-bootstrap> -target dxbc -profile sm_5_0 -entry OceanVertexInstanced -stage vertex -O3 -matrix-layout-row-major -o "${GRAPHICS_SHADER_ASSET_DIRECTORY}/ocean_instanced.vso" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/ocean.slang"
-        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/resource_access.slangh" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/environment_lighting.slangh" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/ocean.slang" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/water_constants.slangh" slang-bootstrap VERBATIM)
+        DEPENDS ${GRAPHICS_SHARED_SHADER_DEPENDENCIES} "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/ocean.slang" slang-bootstrap VERBATIM)
     add_custom_target(generals_graphics_ocean_shaders DEPENDS "${GRAPHICS_SHADER_ASSET_DIRECTORY}/ocean_instanced.vso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/ocean.vso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/ocean.pso")
     add_dependencies(generals_graphics generals_graphics_ocean_shaders)
 endif()
@@ -1806,7 +1831,7 @@ if(WIN32 AND TARGET slang-bootstrap)
         COMMAND $<TARGET_FILE:slang-bootstrap> -target dxbc -profile sm_5_0 -entry UnderwaterVertexMain -stage vertex -O3 -matrix-layout-row-major -o "${GRAPHICS_SHADER_ASSET_DIRECTORY}/water_underwater.vso" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/water_underwater.slang"
         COMMAND $<TARGET_FILE:slang-bootstrap> -target dxbc -profile sm_5_0 -entry UnderwaterVertexInstanced -stage vertex -O3 -matrix-layout-row-major -o "${GRAPHICS_SHADER_ASSET_DIRECTORY}/water_underwater_instanced.vso" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/water_underwater.slang"
         COMMAND $<TARGET_FILE:slang-bootstrap> -target dxbc -profile sm_5_0 -entry UnderwaterPixelMain -stage pixel -O3 -matrix-layout-row-major -o "${GRAPHICS_SHADER_ASSET_DIRECTORY}/water_underwater.pso" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/water_underwater.slang"
-        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/resource_access.slangh" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/water_constants.slangh" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/water_underwater.slang" slang-bootstrap VERBATIM)
+        DEPENDS ${GRAPHICS_SHARED_SHADER_DEPENDENCIES} "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/water_underwater.slang" slang-bootstrap VERBATIM)
     add_custom_target(generals_graphics_water_underwater_shaders DEPENDS "${GRAPHICS_SHADER_ASSET_DIRECTORY}/water_underwater.vso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/water_underwater_instanced.vso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/water_underwater.pso")
     add_dependencies(generals_graphics generals_graphics_water_underwater_shaders)
 endif()
@@ -1815,7 +1840,7 @@ if(WIN32 AND TARGET slang-bootstrap)
     add_custom_command(OUTPUT "${GRAPHICS_SHADER_ASSET_DIRECTORY}/water_surface.vso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/water_surface.pso"
         COMMAND $<TARGET_FILE:slang-bootstrap> -target dxbc -profile sm_5_0 -entry WaterSurfaceVertexMain -stage vertex -O3 -matrix-layout-row-major -o "${GRAPHICS_SHADER_ASSET_DIRECTORY}/water_surface.vso" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/water_surface.slang"
         COMMAND $<TARGET_FILE:slang-bootstrap> -target dxbc -profile sm_5_0 -entry WaterSurfacePixelMain -stage pixel -O3 -matrix-layout-row-major -o "${GRAPHICS_SHADER_ASSET_DIRECTORY}/water_surface.pso" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/water_surface.slang"
-        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/resource_access.slangh" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/environment_lighting.slangh" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/water_surface.slang" slang-bootstrap VERBATIM)
+        DEPENDS ${GRAPHICS_SHARED_SHADER_DEPENDENCIES} "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/water_surface.slang" slang-bootstrap VERBATIM)
     add_custom_target(generals_graphics_water_surface_shaders DEPENDS "${GRAPHICS_SHADER_ASSET_DIRECTORY}/water_surface.vso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/water_surface.pso")
     add_dependencies(generals_graphics generals_graphics_water_surface_shaders)
 endif()
@@ -1824,7 +1849,7 @@ if(WIN32 AND TARGET slang-bootstrap)
     add_custom_command(OUTPUT "${GRAPHICS_SHADER_ASSET_DIRECTORY}/water_displacement.vso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/water_displacement.pso"
         COMMAND $<TARGET_FILE:slang-bootstrap> -target dxbc -profile sm_5_0 -entry WaterDisplacementVertexMain -stage vertex -O3 -matrix-layout-row-major -o "${GRAPHICS_SHADER_ASSET_DIRECTORY}/water_displacement.vso" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/water_displacement.slang"
         COMMAND $<TARGET_FILE:slang-bootstrap> -target dxbc -profile sm_5_0 -entry WaterDisplacementPixelMain -stage pixel -O3 -matrix-layout-row-major -o "${GRAPHICS_SHADER_ASSET_DIRECTORY}/water_displacement.pso" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/water_displacement.slang"
-        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/resource_access.slangh" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/water_displacement.slang" slang-bootstrap VERBATIM)
+        DEPENDS ${GRAPHICS_SHARED_SHADER_DEPENDENCIES} "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/water_displacement.slang" slang-bootstrap VERBATIM)
     add_custom_target(generals_graphics_water_displacement_shaders DEPENDS "${GRAPHICS_SHADER_ASSET_DIRECTORY}/water_displacement.vso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/water_displacement.pso")
     add_dependencies(generals_graphics generals_graphics_water_displacement_shaders)
 endif()
@@ -1833,7 +1858,7 @@ if(WIN32 AND TARGET slang-bootstrap)
     add_custom_command(OUTPUT "${GRAPHICS_SHADER_ASSET_DIRECTORY}/water_sky.vso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/water_sky.pso"
         COMMAND $<TARGET_FILE:slang-bootstrap> -target dxbc -profile sm_5_0 -entry WaterSkyVertexMain -stage vertex -O3 -matrix-layout-row-major -o "${GRAPHICS_SHADER_ASSET_DIRECTORY}/water_sky.vso" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/water_sky.slang"
         COMMAND $<TARGET_FILE:slang-bootstrap> -target dxbc -profile sm_5_0 -entry WaterSkyPixelMain -stage pixel -O3 -matrix-layout-row-major -o "${GRAPHICS_SHADER_ASSET_DIRECTORY}/water_sky.pso" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/water_sky.slang"
-        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/resource_access.slangh" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/water_sky.slang" slang-bootstrap VERBATIM)
+        DEPENDS ${GRAPHICS_SHARED_SHADER_DEPENDENCIES} "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/water_sky.slang" slang-bootstrap VERBATIM)
     add_custom_target(generals_graphics_water_sky_shaders DEPENDS "${GRAPHICS_SHADER_ASSET_DIRECTORY}/water_sky.vso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/water_sky.pso")
     add_dependencies(generals_graphics generals_graphics_water_sky_shaders)
 endif()
@@ -1842,7 +1867,7 @@ if(WIN32 AND TARGET slang-bootstrap)
     add_custom_command(OUTPUT "${GRAPHICS_SHADER_ASSET_DIRECTORY}/water_track.vso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/water_track.pso"
         COMMAND $<TARGET_FILE:slang-bootstrap> -target dxbc -profile sm_5_0 -entry WaterTrackVertexMain -stage vertex -O3 -matrix-layout-row-major -o "${GRAPHICS_SHADER_ASSET_DIRECTORY}/water_track.vso" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/water_track.slang"
         COMMAND $<TARGET_FILE:slang-bootstrap> -target dxbc -profile sm_5_0 -entry WaterTrackPixelMain -stage pixel -O3 -matrix-layout-row-major -o "${GRAPHICS_SHADER_ASSET_DIRECTORY}/water_track.pso" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/water_track.slang"
-        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/resource_access.slangh" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/water_track.slang" slang-bootstrap VERBATIM)
+        DEPENDS ${GRAPHICS_SHARED_SHADER_DEPENDENCIES} "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/water_track.slang" slang-bootstrap VERBATIM)
     add_custom_target(generals_graphics_water_track_shaders DEPENDS "${GRAPHICS_SHADER_ASSET_DIRECTORY}/water_track.vso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/water_track.pso")
     add_dependencies(generals_graphics generals_graphics_water_track_shaders)
 endif()
@@ -1851,26 +1876,26 @@ if(WIN32 AND TARGET slang-bootstrap)
     add_custom_command(OUTPUT "${GRAPHICS_SHADER_ASSET_DIRECTORY}/prop.vso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/prop.pso"
         COMMAND $<TARGET_FILE:slang-bootstrap> -target dxbc -profile sm_5_0 -entry prop_vertex -stage vertex -O3 -matrix-layout-row-major -o "${GRAPHICS_SHADER_ASSET_DIRECTORY}/prop.vso" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/prop.slang"
         COMMAND $<TARGET_FILE:slang-bootstrap> -target dxbc -profile sm_5_0 -entry prop_pixel -stage pixel -O3 -matrix-layout-row-major -o "${GRAPHICS_SHADER_ASSET_DIRECTORY}/prop.pso" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/prop.slang"
-        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/resource_access.slangh" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/environment_lighting.slangh" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/prop_surface.slangh" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/prop.slang" slang-bootstrap VERBATIM)
+        DEPENDS ${GRAPHICS_SHARED_SHADER_DEPENDENCIES} "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/prop.slang" slang-bootstrap VERBATIM)
     add_custom_command(OUTPUT "${GRAPHICS_SHADER_ASSET_DIRECTORY}/prop_depth.vso"
         COMMAND $<TARGET_FILE:slang-bootstrap> -target dxbc -profile sm_5_0 -entry prop_depth_vertex -stage vertex -O3 -matrix-layout-row-major -o "${GRAPHICS_SHADER_ASSET_DIRECTORY}/prop_depth.vso" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/prop.slang"
-        DEPENDS shaders/source/prop.slang shaders/source/prop_surface.slangh shaders/source/resource_access.slangh shaders/source/environment_lighting.slangh slang-bootstrap VERBATIM)
+        DEPENDS ${GRAPHICS_SHARED_SHADER_DEPENDENCIES} shaders/source/prop.slang slang-bootstrap VERBATIM)
     add_custom_command(OUTPUT "${GRAPHICS_SHADER_ASSET_DIRECTORY}/prop_depth_instanced.vso"
         COMMAND $<TARGET_FILE:slang-bootstrap> -target dxbc -profile sm_5_0 -entry prop_depth_vertex_instanced -stage vertex -O3 -matrix-layout-row-major -o "${GRAPHICS_SHADER_ASSET_DIRECTORY}/prop_depth_instanced.vso" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/prop.slang"
-        DEPENDS shaders/source/prop.slang shaders/source/prop_surface.slangh shaders/source/resource_access.slangh shaders/source/environment_lighting.slangh slang-bootstrap VERBATIM)
+        DEPENDS ${GRAPHICS_SHARED_SHADER_DEPENDENCIES} shaders/source/prop.slang slang-bootstrap VERBATIM)
     add_custom_command(OUTPUT "${GRAPHICS_SHADER_ASSET_DIRECTORY}/prop_depth_records.vso"
         COMMAND $<TARGET_FILE:slang-bootstrap> -target dxbc -profile sm_5_0 -entry prop_depth_vertex_records -stage vertex -O3 -matrix-layout-row-major -o "${GRAPHICS_SHADER_ASSET_DIRECTORY}/prop_depth_records.vso" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/prop.slang"
-        DEPENDS shaders/source/prop.slang shaders/source/prop_surface.slangh shaders/source/resource_access.slangh shaders/source/environment_lighting.slangh slang-bootstrap VERBATIM)
+        DEPENDS ${GRAPHICS_SHARED_SHADER_DEPENDENCIES} shaders/source/prop.slang slang-bootstrap VERBATIM)
     add_custom_command(OUTPUT "${GRAPHICS_SHADER_ASSET_DIRECTORY}/prop_depth.pso"
         COMMAND $<TARGET_FILE:slang-bootstrap> -target dxbc -profile sm_5_0 -entry prop_depth_pixel -stage pixel -O3 -matrix-layout-row-major -o "${GRAPHICS_SHADER_ASSET_DIRECTORY}/prop_depth.pso" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/prop.slang"
-        DEPENDS shaders/source/prop.slang shaders/source/prop_surface.slangh shaders/source/resource_access.slangh shaders/source/environment_lighting.slangh slang-bootstrap VERBATIM)
+        DEPENDS ${GRAPHICS_SHARED_SHADER_DEPENDENCIES} shaders/source/prop.slang slang-bootstrap VERBATIM)
     add_custom_command(OUTPUT "${GRAPHICS_SHADER_ASSET_DIRECTORY}/prop_instanced.vso"
         COMMAND $<TARGET_FILE:slang-bootstrap> -target dxbc -profile sm_5_0 -entry prop_vertex_instanced -stage vertex -O3 -matrix-layout-row-major -o "${GRAPHICS_SHADER_ASSET_DIRECTORY}/prop_instanced.vso" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/prop.slang"
-        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/resource_access.slangh" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/environment_lighting.slangh" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/prop_surface.slangh" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/prop.slang" slang-bootstrap VERBATIM)
+        DEPENDS ${GRAPHICS_SHARED_SHADER_DEPENDENCIES} "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/prop.slang" slang-bootstrap VERBATIM)
     add_custom_command(OUTPUT "${GRAPHICS_SHADER_ASSET_DIRECTORY}/prop_records.vso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/prop_records.pso"
         COMMAND $<TARGET_FILE:slang-bootstrap> -target dxbc -profile sm_5_0 -entry prop_vertex_records -stage vertex -O3 -matrix-layout-row-major -o "${GRAPHICS_SHADER_ASSET_DIRECTORY}/prop_records.vso" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/prop.slang"
         COMMAND $<TARGET_FILE:slang-bootstrap> -target dxbc -profile sm_5_0 -entry prop_pixel_records -stage pixel -O3 -matrix-layout-row-major -o "${GRAPHICS_SHADER_ASSET_DIRECTORY}/prop_records.pso" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/prop.slang"
-        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/resource_access.slangh" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/environment_lighting.slangh" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/prop_surface.slangh" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/prop.slang" slang-bootstrap VERBATIM)
+        DEPENDS ${GRAPHICS_SHARED_SHADER_DEPENDENCIES} "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/prop.slang" slang-bootstrap VERBATIM)
     add_custom_target(generals_graphics_prop_shaders DEPENDS "${GRAPHICS_SHADER_ASSET_DIRECTORY}/prop_depth.vso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/prop_depth_instanced.vso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/prop_depth_records.vso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/prop_depth.pso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/prop_records.vso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/prop_records.pso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/prop_instanced.vso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/prop.vso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/prop.pso")
     add_dependencies(generals_graphics generals_graphics_prop_shaders)
 endif()

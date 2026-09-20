@@ -1,6 +1,7 @@
 module;
 
 #include <array>
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -18,6 +19,51 @@ namespace Graphics
 {
 
 export inline constexpr std::size_t Max_Shadow_Cascades = 4;
+
+// Point lights use six perspective views; spots use their authored cone.
+// The receiver shader uses the same forward/right/up basis and depth equation.
+export Matrix4x4 Local_Shadow_View_Projection(const std::array<float,4>& position_range,
+    const std::array<float,4>& direction_cone, unsigned face, float near_clip) noexcept
+{
+    std::array<float,3> forward{direction_cone[0],direction_cone[1],direction_cone[2]};
+    const bool point=direction_cone[3]<0;
+    if (point) {
+        forward={};
+        forward[face/2]=face%2 ? -1.f : 1.f;
+    }
+    const auto normalize=[](std::array<float,3> value) {
+        const float length=std::sqrt(value[0]*value[0]+value[1]*value[1]+value[2]*value[2]);
+        if (length<1e-6f) return std::array<float,3>{0,0,-1};
+        for(auto& v:value) v/=length;
+        return value;
+    };
+    const auto cross=[](const auto& a,const auto& b) {
+        return std::array<float,3>{a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]};
+    };
+    forward=normalize(forward);
+    const std::array<float,3> reference=std::abs(forward[2])>.99f
+        ? std::array<float,3>{0,1,0} : std::array<float,3>{0,0,1};
+    const auto right=normalize(cross(forward,reference));
+    const auto up=cross(right,forward);
+    Matrix4x4 view=Matrix4x4::Identity();
+    for(unsigned axis=0;axis<3;++axis) {
+        view.values[axis]=right[axis];
+        view.values[4+axis]=up[axis];
+        view.values[8+axis]=-forward[axis];
+        view.values[3]-=right[axis]*position_range[axis];
+        view.values[7]-=up[axis]*position_range[axis];
+        view.values[11]+=forward[axis]*position_range[axis];
+    }
+    const float cosine=direction_cone[3];
+    const float scale=point ? 1.f : cosine/std::sqrt(std::max(1-cosine*cosine,1e-6f));
+    const float far_clip=position_range[3];
+    Matrix4x4 projection{};
+    projection.values[0]=projection.values[5]=scale;
+    projection.values[10]=-far_clip/(far_clip-near_clip);
+    projection.values[11]=-far_clip*near_clip/(far_clip-near_clip);
+    projection.values[14]=-1;
+    return Compose_Matrices(projection,view);
+}
 
 // Quality tiers avoid reallocating four depth maps for every pixel of a window
 // drag. A bounded allocation keeps large displays from exhausting GPU memory.

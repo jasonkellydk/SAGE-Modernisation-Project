@@ -67,6 +67,7 @@ public:
 	virtual int Size() override;
 	virtual int Write(void const *buffer, int len) override;
 	virtual void Close() override;
+	const std::string& Resolved_Path() const noexcept { return m_filePath; }
 
 protected:
 
@@ -89,6 +90,7 @@ public:
 
 	virtual FileClass * Get_File( char const *filename ) override;
 	virtual void Return_File( FileClass *file ) override;
+	std::optional<IndependentSource> Resolve_Independent_Source(const char* filename) override;
 
 private:
 

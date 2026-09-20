@@ -51,6 +51,7 @@ cbuffer PropMaterialConstants : register(b2)
     uint SurfaceTeamChannel;
     float SurfaceTeamMultiplier;
     float4 SurfaceTeamColor;
+    float4 SurfaceHeight;
     float4 MuzzleFlashState;
     float4 VertexMaterialOverride;
 };
@@ -170,7 +171,7 @@ PropOutput Transform_Prop_Vertex(PropInput input, row_major float4x4 WorldTransf
         output.uv = input.uv;
         output.secondary_uv = input.secondary_uv;
     }
-    if ((SurfaceMaps & 128u) != 0) {
+    if ((SurfaceMaps & 256u) != 0) {
         output.uv.x += input.color.a;
         output.color.a = 1.0;
     }
@@ -224,7 +225,7 @@ float2 Prop_Coordinate(uint stage,PropOutput input)
     return coordinate.xy;
 }
 #include "prop_surface.slangh"
-float4 Shade_Prop_Pixel(PropOutput input, PropLightingData lighting)
+float4 Shade_Prop_Effect(PropOutput input, PropLightingData lighting)
 {
     ClipEnvironment(input.world_position);
     if (ShroudOnly > 0.5) return float4(ShroudTexture().Sample(ShroudSampler(),input.shroud_uv).rgb,1);
@@ -242,57 +243,16 @@ float4 Shade_Prop_Pixel(PropOutput input, PropLightingData lighting)
             const float fog = saturate((abs(input.camera_position.z)-FogState.x)/max(FogState.y-FogState.x,0.0001));
             color.rgb = lerp(color.rgb,FogColor.rgb,fog);
         }
-        return saturate(color);
-    }
-    if (SurfaceModel > .5) {
-        float4 surface=Shade_Prop_Surface(input, lighting);
-        surface.a*=Opacity;
-        clip(surface.a-AlphaCutoff);
-        if (Shroud > .5) surface.rgb*=ShroudTexture().Sample(ShroudSampler(),input.shroud_uv).rgb;
-        if (FogState.z > .5) {
-            const float fog=saturate((abs(input.camera_position.z)-FogState.x)/max(FogState.y-FogState.x,.0001));
-            surface.rgb=lerp(surface.rgb,FogColor.rgb,fog);
-        }
-        return saturate(surface);
+        return float4(Scene_Legacy_Color(color.rgb),saturate(color.a));
     }
     float4 diffuse = input.color*input.material_diffuse;
     if (input.material_ambient.w > 0.5) {
-        float3 normal = normalize(input.normal);
-        float3 view_direction = normalize(CameraPosition.xyz-input.world_position);
-        float3 lit = lighting.SceneAmbient.rgb*input.material_ambient.rgb+input.material_emissive.rgb;
-        float3 specular = 0;
-        const float3 cloud_visibility = DirectionalVisibility(input.world_position);
-        for (uint light=0;light<4;++light) {
-            if (lighting.LightDirection[light].w < 0.5) continue;
-            float3 direction = normalize(lighting.LightDirection[light].xyz);
-            float attenuation = 1;
-            if (lighting.LightPosition[light].w > 0.5) {
-                const float3 delta = lighting.LightPosition[light].xyz-input.world_position;
-                const float distance = length(delta);
-                direction = distance > 0.0001 ? delta/distance : float3(0,0,1);
-                const float4 coefficients = lighting.LightAttenuation[light];
-                attenuation = 1/max(coefficients.x+coefficients.y*distance
-                    +coefficients.z*distance*distance,0.0001);
-                if (coefficients.w > 0 && distance > coefficients.w) attenuation = 0;
-                if (lighting.LightPosition[light].w > 1.5) {
-                    const float cosine = dot(-direction,normalize(lighting.LightDirection[light].xyz));
-                    const float inner = cos(0.5*lighting.LightSpot[light].y);
-                    const float outer = cos(0.5*lighting.LightSpot[light].z);
-                    attenuation *= pow(saturate((cosine-outer)/max(inner-outer,0.0001)),
-                        max(lighting.LightSpot[light].x,0));
-                }
-            }
-            float amount = saturate(dot(normal,direction));
-            const float3 visibility = lighting.LightPosition[light].w < 0.5 ? cloud_visibility : float3(1,1,1);
-            lit += attenuation*(lighting.LightAmbient[light].rgb*input.material_ambient.rgb
-                +amount*lighting.LightDiffuse[light].rgb*input.material_diffuse.rgb*visibility);
-            if (SecondaryGradient > 0.5 && amount > 0) {
-                float3 half_vector = normalize(direction+view_direction);
-                specular += pow(saturate(dot(normal,half_vector)),max(input.material_specular.w,1.0))
-                    *lighting.LightSpecular[light].rgb*input.material_specular.rgb*attenuation*visibility;
-            }
-        }
-        diffuse = float4(saturate(saturate(lit)+specular),input.material_diffuse.a);
+        const float3 normal=Surface_Normalize(input.normal,float3(0,0,1));
+        const float3 view_direction=Surface_Normalize(CameraPosition.xyz-input.world_position,normal);
+        const float roughness=clamp(pow(2/(max(input.material_specular.w,0)+2),.25),.12,.85);
+        const float3 lit=Surface_Lighting(Surface_Linear(input.material_diffuse.rgb),
+            normal,view_direction,input.world_position,roughness,0)+Surface_Linear(input.material_emissive.rgb);
+        diffuse=float4(Surface_Encoded(lit),input.material_diffuse.a);
     }
     float4 color = Textured > 0.5 ? BaseTexture().Sample(BaseSampler(),Prop_Coordinate(0,input)) : float4(1,1,1,1);
     float2 bump_offset = 0;
@@ -338,14 +298,41 @@ float4 Shade_Prop_Pixel(PropOutput input, PropLightingData lighting)
         const float fog = saturate((abs(input.camera_position.z)-FogState.x)/max(FogState.y-FogState.x,0.0001));
         color.rgb = lerp(color.rgb,FogColor.rgb,fog);
     }
-    return saturate(color);
+    return float4(Scene_Legacy_Color(color.rgb),saturate(color.a));
 }
 
-[shader("pixel")] float4 prop_pixel(PropOutput input) : SV_TARGET {
-    return Shade_Prop_Pixel(input, SharedLighting);
+float4 Shade_Modern_Prop_Pixel(PropOutput input, PropLightingData lighting)
+{
+        ClipEnvironment(input.world_position);
+        float4 surface=Shade_Prop_Surface(input, lighting);
+        surface.a*=Opacity;
+        clip(surface.a-AlphaCutoff);
+        if (Shroud > .5) {
+            const float3 visibility=ShroudTexture().Sample(ShroudSampler(),input.shroud_uv).rgb;
+            surface.rgb*=visibility;Surface_Visibility(visibility);
+        }
+        if (FogState.z > .5) {
+            const float fog=saturate((abs(input.camera_position.z)-FogState.x)/max(FogState.y-FogState.x,.0001));
+            surface.rgb=lerp(surface.rgb,Scene_Legacy_Color(FogColor.rgb),fog);
+            Surface_Visibility((1-fog).xxx);
+        }
+        return float4(max(surface.rgb,0),saturate(surface.a));
 }
-[shader("pixel")] float4 prop_pixel_records(PropOutput input) : SV_TARGET {
-    return Shade_Prop_Pixel(input, PropRecordLighting()[input.record_index]);
+float4 Shade_Prop_Pixel(PropOutput input, PropLightingData lighting)
+{
+    float4 result;
+    if (ShroudOnly < .5 && MuzzleFlashState.x < .5 &&
+        (SurfaceModel > .5 || (EnvironmentPBR.x > .5 && input.material_ambient.w > .5
+            && SurfaceHeight.w >= 0 && PrimaryGradient <= 1)))
+        result=Shade_Modern_Prop_Pixel(input,lighting);
+    else result=Shade_Prop_Effect(input,lighting);
+    return result;
+}
+[shader("pixel")] SurfaceOutput prop_pixel(PropOutput input) {
+    return Surface_Output(Shade_Prop_Pixel(input, SharedLighting));
+}
+[shader("pixel")] SurfaceOutput prop_pixel_records(PropOutput input) {
+    return Surface_Output(Shade_Prop_Pixel(input, PropRecordLighting()[input.record_index]));
 }
 
 // Only interpolate values that affect material discard or environment clipping.

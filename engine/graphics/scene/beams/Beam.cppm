@@ -31,6 +31,8 @@ export import Graphics.Shaders.Library;
 
 import Graphics.Memory.AlignedAllocator;
 
+import Graphics.Scene.Lighting.Environment;
+
 namespace Graphics
 {
 
@@ -601,6 +603,7 @@ public:
 			return false;
 
 		m_device = &device;
+        if (!m_environment.Initialize(device)) { Shutdown(); return false; }
 		m_beams.Reserve(max_beams);
 		m_vertices.resize(vertex_count);
 		m_order.reserve(max_beams);
@@ -680,6 +683,7 @@ public:
 	void Shutdown() noexcept
 	{
 		if (m_device != nullptr) {
+            m_environment.Shutdown(*m_device);
 			if (m_vertex_buffer.Is_Valid())
 				m_device->Destroy_Buffer(m_vertex_buffer);
 			if (m_material_constants.Is_Valid())
@@ -920,7 +924,7 @@ public:
 			std::span<const BeamDrawRange>(m_draw_ranges)
 		};
 		return m_plan.Execute(*m_graph, commands, [&](GraphPassHandle pass, CommandList &command_list, const PassResources &resources) noexcept {
-			return pass == m_pass && BeamPass::Execute(command_list, resources, input);
+			return pass == m_pass && m_environment.Bind_Constants(*m_device,command_list) && BeamPass::Execute(command_list, resources, input);
 		});
 	}
 
@@ -930,6 +934,7 @@ public:
 	}
 
 private:
+	EnvironmentLightingBinding m_environment;
 	Device *m_device = nullptr;
 	BeamSet m_beams;
 	BeamView m_view{};

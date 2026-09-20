@@ -1,3 +1,4 @@
+#include "scene_color.slangh"
 #include "resource_access.slangh"
 #include "water_constants.slangh"
 
@@ -46,6 +47,8 @@ float3 Shade_Underwater(float3 scene, float3 position, float water_level, float3
     float depth_range = water_level > 0.0 ? water_level : 200.0;
     float depth_uv = saturate((1.0 + water_level - position.z) / depth_range);
     float4 depth_lut = OceanDepthLutTexture().SampleLevel(OceanDepthLutSampler(),depth_uv.xx,0);
+    // RA3 authors depth-dependent transmission in this LUT. Decode it once
+    // into the linear HDR scene; the surface pass must not tint it again.
     scene *= pow(max(depth_lut.rgb,0.0),2.2);
     scene *= 1.0 - 0.1 * depth_uv;
     float3 light = WaterEnvironmentFrame[2].xyz;
@@ -68,7 +71,8 @@ float3 Shade_Underwater(float3 scene, float3 position, float water_level, float3
         * OceanCausticsTexture().Sample(OceanCausticsSampler(),-uv1 - distortion * 1.1).a;
     caustics = caustics * caustics * depth_lut.a * lerp(WaterSunColor.rgb,1.0,0.75)
         * saturate(dot(normal,light));
-    return scene + pow(max(caustics * 5.0,0.0),2.2);
+    return scene + (EnvironmentPBR.x > .5 ? Surface_Linear(caustics)*EnvironmentSunRadiance.rgb*.1
+        : pow(max(caustics*5.0,0),2.2));
 }
 
 [shader("pixel")] float4 UnderwaterPixelMain(UnderwaterVertexOutput input) : SV_TARGET
@@ -84,10 +88,10 @@ float3 Shade_Underwater(float3 scene, float3 position, float water_level, float3
     if (position.z > input.water_level)
         discard;
     float3 scene = UnderwaterSceneTexture().SampleLevel(UnderwaterSceneSampler(),uv,0).rgb;
-    float3 linear_scene = pow(max(scene,0.0),2.2);
+    float3 linear_scene = EnvironmentPBR.y > .5 ? scene : pow(max(scene,0),2.2);
     float3 color = Shade_Underwater(linear_scene,position,input.water_level,normal);
     float shoreline_opacity = WaterSurfaceOptions.y > 0.0 ?
         saturate(1.05 * (input.water_level - position.z) / WaterSurfaceOptions.y) : 1.0;
     color = lerp(linear_scene,color,shoreline_opacity);
-    return float4(pow(max(color,0.0),1.0/2.2),1);
+    return float4(EnvironmentPBR.y > .5 ? color : pow(max(color,0),1.0/2.2),1);
 }

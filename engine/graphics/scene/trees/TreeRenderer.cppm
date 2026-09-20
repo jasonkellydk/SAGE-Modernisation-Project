@@ -18,6 +18,7 @@ export import Graphics.RHI;
 import Graphics.Resources.Pools.ResourcePool;
 import Graphics.Shaders.Library;
 import Graphics.Scene.Lighting.Environment;
+import Graphics.Resources.Textures.Sampling;
 import Graphics.Scene.Shadows.DirectionalRenderer;
 
 namespace Graphics
@@ -231,7 +232,7 @@ public:
     {
         GRAPHICS_PROFILE_SCOPE("Graphics.Trees.Draw");
         TreeMesh *mesh = m_meshes.Resolve(handle);
-        if (m_device == nullptr || mesh == nullptr || textures.size() != 2) return false;
+        if (m_device == nullptr || mesh == nullptr || (textures.size() != 2 && textures.size() != 5)) return false;
         if (mesh->geometry.Indices().empty()) return true;
         const auto has_texture = [&](std::size_t slot) {
             return slot < textures.size() && textures[slot].Is_Valid();
@@ -241,7 +242,7 @@ public:
         const RHIPipelineHandle pipeline = Pipeline();
         if (!pipeline.Is_Valid() || !m_device->Update_Buffer(m_constants, 0,
             std::as_bytes(std::span(&parameters, 1)))) return false;
-        std::array<RHIBindlessResource, 5> bindings{};
+        std::array<RHIBindlessResource, 6> bindings{};
         bindings[0].type = RHIResourceType::Material;
         bindings[0].buffer = m_constants;
         std::size_t count = 1;
@@ -296,6 +297,8 @@ private:
         description.cull_mode = RHICullMode::None;
         description.color_write_mask = 15;
         description.sampler_count = 16;
+        const auto sampling=Resolve_Texture_Sampling(TextureSampling{},Get_Texture_Sampling_Settings());
+        for(unsigned i : {0u,2u,3u,4u}) description.samplers[i]=sampling;
         for (unsigned i=0;i<2;++i) description.samplers[i].address.fill(RHISamplerAddress::Clamp);
         m_pipeline = m_device->Create_Pipeline(description,
             {m_shaders.Bytecode(m_shader, ShaderStage::Vertex)}, {m_shaders.Bytecode(m_shader, ShaderStage::Pixel)});

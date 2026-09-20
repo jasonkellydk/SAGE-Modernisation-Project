@@ -57,11 +57,11 @@ export struct PropParameters final
     // Object data is contiguous for direct comparison and upload.
     std::array<float,16> world{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
 };
-static_assert(sizeof(PropParameters) == 1024);
+static_assert(sizeof(PropParameters) == 1040);
 static_assert(offsetof(PropParameters,view_projection)==0);
 static_assert(offsetof(PropParameters,scene_ambient)==192);
 static_assert(offsetof(PropParameters,textured)==656);
-static_assert(offsetof(PropParameters,world)==960);
+static_assert(offsetof(PropParameters,world)==976);
 
 export struct PropViewConstants final {
     std::array<float,16> view_projection{};
@@ -106,7 +106,7 @@ struct PropObjectConstants final {
 };
 static_assert(sizeof(PropViewConstants)==192);
 static_assert(sizeof(PropLightingConstants)==464);
-static_assert(sizeof(PropMaterialConstants)==304);
+static_assert(sizeof(PropMaterialConstants)==320);
 static_assert(sizeof(PropObjectConstants)==64);
 
 export struct PropSharedParameters final {
@@ -121,7 +121,7 @@ export struct PropSharedParameters final {
             && std::memcmp(&material,&parameters.textured,sizeof(material))==0;
     }
 };
-static_assert(sizeof(PropSharedParameters)==496);
+static_assert(sizeof(PropSharedParameters)==512);
 
 // Each block owns its last successful upload. Command-list binding is still
 // performed on each draw, so other renderers cannot leave stale slots.

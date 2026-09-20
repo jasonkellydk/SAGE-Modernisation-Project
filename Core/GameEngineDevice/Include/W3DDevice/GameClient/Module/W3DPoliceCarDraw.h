@@ -56,6 +56,8 @@ protected:
 	W3DDynamicLight *createDynamicLight();
 
 	W3DDynamicLight *m_light;  ///< light for the POLICECAR
+	W3DDynamicLight *m_blueLight = nullptr;
+	W3DDynamicLight *m_headlights[2] = {};
 	Real					m_curFrame;
 
 };

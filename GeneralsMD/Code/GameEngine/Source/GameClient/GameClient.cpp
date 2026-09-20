@@ -1102,7 +1102,10 @@ void GameClient::preloadAssets( TimeOfDay timeOfDay )
 	// first, for every drawable in the map load the assets for all states we care about
 	Drawable *draw;
 	for( draw = firstDrawable(); draw; draw = draw->getNextDrawable() )
+	{
 		draw->preloadAssets( timeOfDay );
+		TheGameLogic->refreshLoadScreen();
+	}
 
 	//
 	// now create a temporary drawable for each of the faction things we can create, preload
@@ -1129,6 +1132,7 @@ void GameClient::preloadAssets( TimeOfDay timeOfDay )
 
 			// destroy the drawable
 			destroyDrawable( draw );
+			TheGameLogic->refreshLoadScreen();
 
 		}
 
@@ -1160,6 +1164,7 @@ void GameClient::preloadAssets( TimeOfDay timeOfDay )
 	for (; i<debrisModelNamesGlobalHack.size(); ++i)
 	{
 		TheDisplay->preloadModelAssets(debrisModelNamesGlobalHack[i]);
+		TheGameLogic->refreshLoadScreen();
 	}
 	GlobalMemoryStatus(&after);
 	debrisModelNamesGlobalHack.clear();
@@ -1228,7 +1233,10 @@ void GameClient::preloadAssets( TimeOfDay timeOfDay )
 
 	GlobalMemoryStatus(&before);
 	for (i=0; *textureNames[i]; ++i)
+	{
 		TheDisplay->preloadTextureAssets(textureNames[i]);
+		TheGameLogic->refreshLoadScreen();
+	}
 	GlobalMemoryStatus(&after);
 
 	DEBUG_LOG(("Preloading memory dwAvailPageFile %d --> %d : %d",

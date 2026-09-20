@@ -86,3 +86,60 @@ BOOST_AUTO_TEST_CASE(material_runtime_retains_independent_lighting_colors)
 	BOOST_CHECK_EQUAL(material.Specular_Color().b, 0.5f);
 	BOOST_CHECK_EQUAL(material.Emissive_Color().r, 0.4f);
 }
+
+BOOST_AUTO_TEST_CASE(pbr_companions_resolve_dds_for_tga_names_and_keep_missing_maps_optional)
+{
+    using namespace Assets;
+    MaterialAssetDesc material;
+    material.primary_texture = "Art/Textures/tank.tga";
+    material.render_mode = MaterialRenderMode::AlphaTest;
+    const auto exists = [](const std::string& name) {
+        return name == "Art/Textures/tank_albedo.dds" || name == "Art/Textures/tank_normalmap.dds"
+            || name == "Art/Textures/tank_roughness.dds" || name == "Art/Textures/tank_height.dds";
+    };
+    BOOST_REQUIRE(Discover_PBR_Textures(material, exists));
+    BOOST_TEST(material.primary_texture == "Art/Textures/tank_albedo.dds");
+    BOOST_CHECK(material.surface.shading_model == MaterialShadingModel::MetallicRoughness);
+    BOOST_CHECK(material.render_mode == MaterialRenderMode::AlphaTest);
+    BOOST_TEST(material.surface.roughness == 1.0f);
+    BOOST_TEST(material.surface.metallic == 0.0f);
+    BOOST_TEST(!material.surface.infer_metallic);
+    BOOST_TEST(material.surface_textures[static_cast<std::size_t>(MaterialTextureRole::Height)] == "Art/Textures/tank_height.dds");
+    BOOST_CHECK(!Discover_PBR_Textures(material, exists));
+    material = {}; material.primary_texture = "dotted.directory/paint";
+    BOOST_REQUIRE(Discover_PBR_Textures(material, [](const std::string& name) { return name == "dotted.directory/paint_albedo.tga"; }));
+    BOOST_TEST(material.surface.roughness == 0.7f);
+    for (const auto& map : material.surface_textures) BOOST_TEST(map.empty());
+}
+BOOST_AUTO_TEST_CASE(pbr_discovery_does_not_reinterpret_effects_or_explicit_materials)
+{
+    using namespace Assets;
+    for (const auto mode : {MaterialRenderMode::Additive, MaterialRenderMode::Multiply}) {
+        MaterialAssetDesc material; material.primary_texture = "fire.dds"; material.render_mode = mode;
+        BOOST_CHECK(!Discover_PBR_Textures(material, [](const std::string&) { return true; }));
+        BOOST_TEST(material.primary_texture == "fire.dds");
+    }
+    MaterialAssetDesc material; material.primary_texture = "paint.dds";
+    BOOST_CHECK(!Discover_PBR_Textures(material, [](const std::string&) { return false; }));
+    BOOST_CHECK(material.surface.shading_model == MaterialShadingModel::Legacy);
+    material.surface.shading_model = MaterialShadingModel::SpecularGlossiness;
+    BOOST_CHECK(!Discover_PBR_Textures(material, [](const std::string&) { return true; }));
+    material.surface.height_scale = -1;
+    BOOST_CHECK(!Validate_Material_Surface(material.surface));
+}
+BOOST_AUTO_TEST_CASE(legacy_conversion_separates_exposed_metal_paint_glass_and_rubber)
+{
+    using namespace Assets;
+    BOOST_TEST(Upgrade_Legacy_Surface("Art/Textures/AVTank.tga").metallic == 0.f);
+    BOOST_TEST(Upgrade_Legacy_Surface("steel_panel").metallic == .95f);
+    BOOST_TEST(Upgrade_Legacy_Surface("tank_tire").metallic == 0);
+    BOOST_TEST(Upgrade_Legacy_Surface("concrete").roughness == .85f);
+    BOOST_TEST(Upgrade_Legacy_Surface("glass").roughness == .08f);
+    BOOST_TEST(Upgrade_Legacy_Surface("paint",64,.2f).roughness < Upgrade_Legacy_Surface("paint",2,.2f).roughness);
+    MaterialAssetDesc material; material.primary_texture="tank.tga";
+    BOOST_REQUIRE(Discover_PBR_Textures(material,[](const std::string& path) {
+        return path=="tank_albedo.tga" || path=="tank_metallic.tga";
+    }));
+    BOOST_TEST(material.surface.metallic == 1);
+    BOOST_TEST(!material.surface.infer_metallic);
+}

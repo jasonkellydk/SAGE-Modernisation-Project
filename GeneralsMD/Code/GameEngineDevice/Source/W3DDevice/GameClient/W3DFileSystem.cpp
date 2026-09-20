@@ -45,6 +45,7 @@
 #include "Common/Debug.h"
 #include "Common/file.h"
 #include "Common/FileSystem.h"
+#include "Common/LocalFileSystem.h"
 #include "Common/GlobalData.h"
 #include "Common/MapObject.h"
 #include "Common/RuntimeConfig.h"
@@ -163,6 +164,15 @@ char const * GameFileClass::Set_Name( char const *filename )
 	// save the filename
 	m_filename = filename;
 	m_filePath.clear();
+
+	// A mounted path is already resolved by the caller (terrain sheets and
+	// discovered PBR companions). Do not prepend Art/Textures a second time.
+	if ((strchr(filename, '/') || strchr(filename, '\\') || strchr(filename, ':'))
+		&& TheFileSystem->doesFileExist(filename)) {
+		m_filePath = filename;
+		m_fileExists = TRUE;
+		return m_filename.c_str();
+	}
 
 	GameFileType fileType = getFileType(filename);
 
@@ -456,6 +466,26 @@ W3DFileSystem::~W3DFileSystem()
 FileClass * W3DFileSystem::Get_File( char const *filename )
 {
 	return NEW GameFileClass( filename );	// poolify
+}
+
+std::optional<FileFactoryClass::IndependentSource> W3DFileSystem::Resolve_Independent_Source(const char* filename)
+{
+	GameFileClass file(filename);
+	IndependentSource source;
+	if (!file.Is_Available()) return source;
+	const auto& path = file.Resolved_Path();
+	if (TheLocalFileSystem->doesFileExist(path.c_str())) {
+		source.path = TheLocalFileSystem->normalizePath(AsciiString(path.c_str())).str();
+		return source;
+	}
+	if (auto* archive = TheArchiveFileSystem->getArchiveFile(path.c_str())) {
+		UnsignedInt offset = 0, size = 0;
+		if (archive->getReadRange(AsciiString(path.c_str()),offset,size)) {
+			source.path = TheLocalFileSystem->normalizePath(archive->getPath()).str();
+			source.offset = offset; source.size = size; source.bounded = true;
+		}
+	}
+	return source;
 }
 
 //-------------------------------------------------------------------------------------------------

@@ -171,6 +171,7 @@ public:
 #endif
 	virtual void preloadModelAssets( AsciiString model ) = 0;	///< preload model asset
 	virtual void preloadTextureAssets( AsciiString texture ) = 0;	///< preload texture asset
+	virtual void finishPreloadAssets() {} ///< Publish prepared materials before gameplay.
 
 	virtual void takeScreenShot(ScreenshotFormat format, Int jpegQuality = DEFAULT_JPEG_QUALITY) = 0;			///< saves screenshot in specified format
 	virtual void toggleMovieCapture() = 0;							///< starts saving frames to an avi or frame sequence

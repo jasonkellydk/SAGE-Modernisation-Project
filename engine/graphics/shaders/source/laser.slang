@@ -1,4 +1,5 @@
 #include "resource_access.slangh"
+#include "scene_color.slangh"
 cbuffer LaserConstants : register(b0)
 {
     row_major float4x4 ViewProjection;
@@ -80,6 +81,7 @@ LaserVertexOutput laser_vertex(LaserVertexInput input)
     float4 result = base * detail * input.color;
     result.rgb *= shroud;
     result.a *= footprint;
+    result.rgb=Scene_Legacy_Color(result.rgb);
     return result;
 }
 

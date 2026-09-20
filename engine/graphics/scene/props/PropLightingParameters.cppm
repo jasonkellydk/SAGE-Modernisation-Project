@@ -23,6 +23,7 @@ export void Set_Prop_Lighting(PropParameters& parameters, const LocalLighting* l
             parameters.light_position[i]={light.position[0],light.position[1],light.position[2],1};
             parameters.light_ambient[i]={light.source_ambient[0],light.source_ambient[1],light.source_ambient[2],0};
             const float inner=light.inner_radius, outer=light.outer_radius;
+            parameters.light_spot[i][3]=inner > 1 ? inner : 1;
             parameters.light_attenuation[i]={1,
                 std::abs(inner-outer)<0.00001f || inner<=0.00001f ? 0 : 0.1f/inner,
                 outer>0.00001f ? 8/(outer*outer) : 0,outer};

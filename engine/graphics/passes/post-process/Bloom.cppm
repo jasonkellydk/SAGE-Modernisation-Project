@@ -19,6 +19,7 @@ export struct BloomSettings final
 {
     float intensity = 0.5f;
     std::array<float,3> exposure{1,1,1};
+    bool linear_hdr = false;
 };
 export class BloomRenderer final
 {
@@ -70,15 +71,43 @@ public:
         m_snapshot.Shutdown();
         Release_Targets();
         if (m_device) {
+            if (m_scene.Is_Valid()) m_device->Destroy_Texture(m_scene);
             if (m_pipeline.Is_Valid()) m_device->Destroy_Pipeline(m_pipeline);
             if (m_vertices.Is_Valid()) m_device->Destroy_Buffer(m_vertices);
             if (m_constants.Is_Valid()) m_device->Destroy_Buffer(m_constants);
         }
         m_device = nullptr;
+        m_scene = {}; m_scene_width = m_scene_height = 0;
         m_pipeline = {};
         m_vertices = m_constants = {};
     }
 
+    FrameTargets Scene_Targets(const FrameTargets& output)
+    {
+        if (!m_device) return {};
+        if (m_scene_width != output.backbuffer.width || m_scene_height != output.backbuffer.height) {
+            if (m_scene.Is_Valid()) m_device->Destroy_Texture(m_scene);
+            m_scene = m_device->Create_Texture({output.backbuffer.width,output.backbuffer.height,1,
+                RHITextureFormat::RGBA16_Float,static_cast<unsigned>(RHITextureUsage::RenderTarget)
+                    | static_cast<unsigned>(RHITextureUsage::ShaderResource)});
+            if (!m_scene.Is_Valid()) { m_scene_width = m_scene_height = 0; return {}; }
+            m_scene_width=output.backbuffer.width; m_scene_height=output.backbuffer.height;
+        }
+        auto targets=output; targets.backbuffer.texture=m_scene;
+        return targets;
+    }
+    bool Tone_Map(CommandList& commands,const FrameTargets& output,float exposure=1)
+    {
+        Parameters parameters{};
+        parameters.operation=6; parameters.exposure={exposure,exposure,exposure};
+        parameters.texel_x=1.f/output.backbuffer.width;
+        parameters.texel_y=1.f/output.backbuffer.height;
+        return m_scene.Is_Valid() && Draw(commands,output.backbuffer.texture,
+            output.backbuffer.width,output.backbuffer.height,m_scene,{},parameters)
+            && commands.Reset_State()
+            && commands.Set_Render_Targets(output.backbuffer.texture,output.depth.texture)
+            && commands.Set_Viewport({0,0,output.backbuffer.width,output.backbuffer.height});
+    }
     bool Render(CommandList& commands, const FrameTargets& targets,
         RHITextureFormat format, bool enabled, const BloomSettings& settings = {})
     {
@@ -95,6 +124,7 @@ public:
         if (!Ensure_Targets(width, height)
             || !m_snapshot.Capture(*m_device, commands, color.texture, color.width, color.height, format)) return false;
         Parameters parameters{1.0f/color.width,1.0f/color.height,0,settings.intensity,settings.exposure};
+        parameters.linear_hdr = settings.linear_hdr ? 1.0f : 0.0f;
         parameters.half_kernel_size = std::clamp(static_cast<int>(color.width/static_cast<float>(width)*0.5f-0.5f),0,4)+1;
         bool drawn = Draw(commands, m_targets[0].textures[0], width, height,
             m_snapshot.Texture(), {}, parameters);
@@ -143,8 +173,10 @@ private:
         float intensity;
         std::array<float,3> exposure;
         std::uint32_t half_kernel_size = 1;
+        float linear_hdr = 0;
+        std::array<float,3> padding{};
     };
-    static_assert(sizeof(Parameters) == 32);
+    static_assert(sizeof(Parameters) == 48);
     struct Level {
         std::array<RHITextureHandle,2> textures{};
         std::uint32_t width = 0, height = 0;
@@ -208,6 +240,8 @@ private:
             && commands.Draw(3,0,1,0);
     }
     Device* m_device = nullptr;
+    RHITextureHandle m_scene{};
+    unsigned m_scene_width=0,m_scene_height=0;
     TextureSnapshot m_snapshot;
     RHIPipelineHandle m_pipeline{};
     RHIBufferHandle m_vertices{}, m_constants{};

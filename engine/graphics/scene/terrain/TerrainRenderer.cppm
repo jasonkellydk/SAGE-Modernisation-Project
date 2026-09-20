@@ -32,14 +32,6 @@ export enum class TerrainSurfacePass : std::uint8_t
     Mask
 };
 
-export struct TerrainLight final
-{
-    std::array<float, 4> position_range{};
-    std::array<float, 4> diffuse_inner{};
-    std::array<float, 4> ambient_kind{};
-    std::array<float, 4> direction{};
-};
-
 export struct TerrainDrawParameters final
 {
     std::array<float, 16> view_projection{};
@@ -49,10 +41,11 @@ export struct TerrainDrawParameters final
     std::array<float, 4> features{};
     std::array<float, 4> lighting{1.0f, 1.0f, 1.0f, 1.0f};
     std::array<float, 4> options{};
-    std::array<float, 4> light_options{};
-    std::array<TerrainLight, 20> lights{};
+    std::array<float,4> camera_position{};
+    // Enabled, green flip, height amplitude in world units, reserved.
+    std::array<float,4> surface{};
 };
-static_assert(sizeof(TerrainDrawParameters) == 1456);
+static_assert(sizeof(TerrainDrawParameters) == 192);
 
 struct TerrainPipeline final
 {
@@ -290,7 +283,7 @@ public:
     {
         GRAPHICS_PROFILE_SCOPE("Graphics.Terrain.Render");
         const std::size_t pass_index = static_cast<std::size_t>(pass);
-        if (m_device == nullptr || pass_index >= 5 || textures.size() > 5)
+        if (m_device == nullptr || pass_index >= 5 || textures.size() > 8)
             return false;
         if (m_index_count == 0) return true;
         const auto has_texture = [&](std::size_t slot) {
@@ -306,10 +299,11 @@ public:
                 || (parameters.features[1] > 0.5f && !has_texture(3))
                 || (parameters.options[1] > 0.5f && !has_texture(4))) return false;
         }
+        if (parameters.surface[0] > .5f && parameters.options[2] < .5f && pass_index < 2 && (!has_texture(5) || !has_texture(6) || !has_texture(7))) return false;
         if (!m_device->Update_Buffer(m_constants, 0,
             std::as_bytes(std::span<const TerrainDrawParameters>(&parameters, 1))))
             return false;
-        std::array<RHIBindlessResource, 6> bindings{};
+        std::array<RHIBindlessResource, 9> bindings{};
         bindings[0].type = RHIResourceType::Material;
         bindings[0].buffer = m_constants;
         std::size_t count = 1;

@@ -148,8 +148,17 @@ bool Collect_Directional_Shadow_Casters(W3DRenderContext& info)
         if (!shadow->isRenderEnabled() || shadow->isInvisibleEnabled()) continue;
         shadow->object->Validate_Transform();
         const auto& bounds=shadow->object->Get_Bounding_Box();
-        if (!volume.Intersects({bounds.Center.X,bounds.Center.Y,bounds.Center.Z},
-            {bounds.Extent.X,bounds.Extent.Y,bounds.Extent.Z})) continue;
+        bool required=volume.Intersects({bounds.Center.X,bounds.Center.Y,bounds.Center.Z},
+            {bounds.Extent.X,bounds.Extent.Y,bounds.Extent.Z});
+        const auto& environment=Graphics::Get_Environment_Lighting().parameters;
+        for(unsigned i=0;!required && i<static_cast<unsigned>(environment.local_light_options[0]);++i) {
+            const auto& p=environment.local_positions[i];
+            const float x=std::max(std::abs(bounds.Center.X-p[0])-bounds.Extent.X,0.f);
+            const float y=std::max(std::abs(bounds.Center.Y-p[1])-bounds.Extent.Y,0.f);
+            const float z=std::max(std::abs(bounds.Center.Z-p[2])-bounds.Extent.Z,0.f);
+            required=x*x+y*y+z*z<=p[3]*p[3];
+        }
+        if (!required) continue;
         if (!Collect_Object(*shadow->object,info,shadow->draw_count)) return false;
         shadow->draw_count *= 4;
     }
@@ -169,9 +178,11 @@ bool Render_Directional_Shadow_Maps(W3DRenderContext& info)
     const auto saved_target=Graphics::Get_Attachment_Bindings().Capture();
     const auto color = device->Get_Swap_Chain().Backbuffer();
     const auto depth = device->Get_Swap_Chain().Depth_Target();
-    const bool rendered = Graphics::Get_Directional_Shadow_Renderer().Render(
+    bool rendered = Graphics::Get_Directional_Shadow_Renderer().Render(
         device->Immediate_Command_List(),view,light,settings,color.texture,depth.texture,
         viewport);
+    if (rendered) rendered=Graphics::Get_Directional_Shadow_Renderer().Render_Local(
+        device->Immediate_Command_List(),color.texture,depth.texture,viewport);
     Graphics::Get_Attachment_Bindings().Restore(saved_target);
     Graphics::Get_Prop_Submission().Clear_Shadows();
     return rendered;

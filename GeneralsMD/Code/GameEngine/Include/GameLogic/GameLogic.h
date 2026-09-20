@@ -165,6 +165,7 @@ public:
 	void loadMapINI( AsciiString mapName );
 
 	void updateLoadProgress( Int progress );
+	void refreshLoadScreen(); ///< Keep UI/events responsive without changing progress.
 	void deleteLoadScreen();
 
 	//Kris: Cut setGameLoading() and replaced with setLoadingMap() and setLoadingSave() -- reason: nomenclature

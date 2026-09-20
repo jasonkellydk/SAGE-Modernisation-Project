@@ -10,9 +10,14 @@ namespace Graphics {
 // Slots 0/1 remain the legacy stages, 3 the shroud. Environment shadows and
 // clouds own 11..15. Surface maps occupy 4..10 without aliasing those bindings.
 export inline constexpr std::size_t PropSurfaceTextureFirst = 4;
-export inline constexpr std::size_t PropSurfaceTextureCount = 7;
+export inline constexpr std::size_t PropSurfaceTextureCount = 8;
 export inline constexpr std::size_t PropTextureCount = 11;
-export inline constexpr std::uint32_t PropSurfaceVertexAlphaUVOffset = 128;
+export inline constexpr std::uint32_t PropSurfaceVertexAlphaUVOffset = 256;
+export inline constexpr std::uint32_t PropSurfaceEmissiveUsesBaseColor = 512;
+// Height uses the spare legacy slot, preserving environment slots 11..15.
+export constexpr std::size_t Prop_Surface_Texture_Slot(std::size_t role) noexcept {
+    return role == 7 ? 2 : PropSurfaceTextureFirst + role;
+}
 
 export struct PropSurfaceParameters final {
     float shading_model = 0;
@@ -29,18 +34,22 @@ export struct PropSurfaceParameters final {
     float team_color_multiplier = 1;
     // Alpha enables tint; player colour is instance state, not texture data.
     std::array<float,4> team_color{1,1,1,0};
+    std::array<float,4> height{0.1f,0,0,0};
 };
-static_assert(sizeof(PropSurfaceParameters) == 64);
+static_assert(sizeof(PropSurfaceParameters) == 80);
 
 export bool Configure_Prop_Surface(const Assets::MaterialSurfaceParameters& source,
     std::uint32_t map_mask, PropSurfaceParameters& result) noexcept
 {
-    if (!Assets::Validate_Material_Surface(source) || (map_mask & ~127u) != 0) return false;
+    if (!Assets::Validate_Material_Surface(source) || (map_mask & ~255u) != 0) return false;
     PropSurfaceParameters parameters;
     parameters.shading_model = source.shading_model == Assets::MaterialShadingModel::Legacy ? 0
         : source.shading_model == Assets::MaterialShadingModel::SpecularGlossiness ? 1 : 2;
     parameters.maps = map_mask | (source.uv_offset_from_vertex_alpha ? PropSurfaceVertexAlphaUVOffset : 0u);
+    if (source.emissive_uses_base_color) parameters.maps |= PropSurfaceEmissiveUsesBaseColor;
     parameters.normal_scale = source.normal_scale;
+    parameters.height[0] = source.height_scale;
+    parameters.height[1] = source.infer_metallic ? 1.0f : 0.0f;
     parameters.normal_flip_green = source.normal_flip_green ? 1.0f : 0.0f;
     parameters.specular_scale = source.specular_scale;
     parameters.emissive_scale = source.emissive_scale;

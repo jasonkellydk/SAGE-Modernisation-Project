@@ -275,7 +275,7 @@ private:
             || ((material.shroud > 0.5f || material.shroud_only > 0.5f) && !has_texture(3))) return false;
         if (material.surface.shading_model > .5f)
             for (std::size_t role=0; role<PropSurfaceTextureCount; ++role)
-                if ((material.surface.maps & (1u << role)) != 0 && !has_texture(PropSurfaceTextureFirst+role)) return false;
+                if ((material.surface.maps & (1u << role)) != 0 && !has_texture(Prop_Surface_Texture_Slot(role))) return false;
         if (!Upload(*mesh)) return false;
         if (worlds.size() > std::numeric_limits<std::uint32_t>::max() / 64u) return false;
         const bool instanced = !worlds.empty();
@@ -490,7 +490,8 @@ private:
     std::vector<PropPipeline> m_pipelines;
     // Borrowed submission scratch. Every used texture entry is overwritten
     // before submission; the command list consumes the supplied span at once.
-    std::array<RHIBindlessResource, PropTextureCount+14> m_bindings{};
+    // Four constants, optional instance/skin/light buffers, eight environment bindings.
+    std::array<RHIBindlessResource, PropTextureCount+17> m_bindings{};
 };
 
 export bool Draw_Prop(PropRenderer& renderer, CommandList& commands, PropMeshHandle mesh,

@@ -189,6 +189,8 @@ public:
 	Real getSize() { return m_size; }
 	Real getAngle() { return m_angleZ; }
 	Real getAlpha() { return m_alpha; }
+    Real getAgeSeconds() const { return Real(m_lifetime-m_lifetimeLeft)/30.f; }
+    Real getRelativeAge() const { return m_lifetime ? Real(m_lifetime-m_lifetimeLeft)/m_lifetime : 1.f; }
 	const RGBColor *getColor() { return &m_color; }
 	void setColor( RGBColor *color ) { m_color = *color; }
 
@@ -285,6 +287,14 @@ public:
 		PARTICLE_TYPE_COUNT
 	}
 	m_particleType;
+
+	enum RenderMode { SPRITE, LIT_SPRITE, EMISSIVE_SPRITE };
+    RenderMode m_renderMode = SPRITE;
+    Int m_animationColumns = 1;
+    Int m_animationFrames = 1;
+    Real m_animationFPS = 0;
+    Bool m_randomStartFrame = FALSE;
+    AsciiString m_normalTexture;
 
 	AsciiString m_particleTypeName;							///< if PARTICLE, texture filename, if DRAWABLE, Drawable name
 
@@ -516,6 +526,7 @@ public:
 	void validate();
 
 	AsciiString getName() const { return m_name; }
+	const AsciiString* getNormalTextureName() const { return &m_normalTexture; }
 	const AsciiString* getSpriteTextureName() const {
 		return m_particleType==PARTICLE || m_particleType==VOLUME_PARTICLE ? &m_particleTypeName : nullptr;
 	}

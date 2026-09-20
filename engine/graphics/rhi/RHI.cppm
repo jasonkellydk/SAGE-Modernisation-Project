@@ -358,6 +358,13 @@ public:
 	virtual bool Bind_Pipeline(RHIPipelineHandle pipeline) noexcept = 0;
 	virtual bool Set_Bindless_Resources(std::span<const RHIBindlessResource> resources) noexcept = 0;
 	virtual bool Set_Render_Targets(RHITextureHandle color_target, RHITextureHandle depth_target) noexcept = 0;
+    // Simultaneous color attachments. All attachments must have matching sizes
+    // and distinct handles. The depth attachment is optional.
+    virtual bool Set_Color_Targets(std::span<const RHITextureHandle> colors,RHITextureHandle depth = {}) noexcept
+    {
+        return colors.size()==1 && (depth.Is_Valid()
+            ? Set_Render_Targets(colors[0],depth) : Set_Color_Target(colors[0]));
+    }
 	virtual bool Set_Color_Target(RHITextureHandle) noexcept
 	{
 		return false;

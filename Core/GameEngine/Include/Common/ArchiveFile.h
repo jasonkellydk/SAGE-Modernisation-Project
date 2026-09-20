@@ -64,6 +64,14 @@ public:
 
 	void									addFile(const AsciiString& path, const ArchivedFileInfo *fileInfo); ///< add this file to our directory tree.
 
+	// Snapshot archive metadata without sharing the archive's mutable seek cursor.
+	bool getReadRange(const AsciiString& filename, UnsignedInt& offset, UnsignedInt& size) const {
+		const auto* info = getArchivedFileInfo(filename);
+		if (!info) return false;
+		offset = info->m_offset; size = info->m_size;
+		return true;
+	}
+
 protected:
 	const ArchivedFileInfo *		getArchivedFileInfo(const AsciiString& filename) const;	///< return the ArchivedFileInfo from the directory tree.
 
