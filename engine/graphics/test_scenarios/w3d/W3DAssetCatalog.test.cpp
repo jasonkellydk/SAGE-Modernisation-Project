@@ -39,23 +39,27 @@ import Graphics.Tests.Device;
 #define GRAPHICS_W3D_CATALOG_SHADER_DIRECTORY "."
 #endif
 
+// The native asset fixture links GameText, whose filenames are owned by the
+// executable in the game and in other native graphics fixtures.
+const char* g_csfFile = "data\\generals.csf";
+const char* g_strFile = "data\\Generals.str";
+
 namespace
 {
 
-using Byte = std::byte;
 using Prototype = W3DAssetCatalog::Prototype;
 
-void Store_U32(std::vector<Byte> &bytes, std::size_t offset, std::uint32_t value)
+void Store_U32(std::vector<std::byte> &bytes, std::size_t offset, std::uint32_t value)
 {
 	BOOST_REQUIRE(offset <= bytes.size() && bytes.size() - offset >= sizeof(value));
 	for (unsigned shift = 0; shift < 32; shift += 8)
-		bytes[offset + shift / 8] = static_cast<Byte>((value >> shift) & 0xffu);
+		bytes[offset + shift / 8] = static_cast<std::byte>((value >> shift) & 0xffu);
 }
 
-std::vector<Byte> Make_Null_W3D(std::string_view name)
+std::vector<std::byte> Make_Null_W3D(std::string_view name)
 {
 	constexpr std::size_t header_size = 8;
-	std::vector<Byte> bytes(header_size + Assets::W3D::W3DNullPayloadSize);
+	std::vector<std::byte> bytes(header_size + Assets::W3D::W3DNullPayloadSize);
 	Store_U32(bytes, 0, Assets::W3D::W3DChunkNullObject);
 	Store_U32(bytes, 4, static_cast<std::uint32_t>(Assets::W3D::W3DNullPayloadSize));
 	Store_U32(bytes, header_size, 1u);
@@ -69,7 +73,7 @@ std::vector<Byte> Make_Null_W3D(std::string_view name)
 class MemoryFileFactory final : public FileFactoryClass
 {
 public:
-	void Add_File(std::string name, std::vector<Byte> contents)
+	void Add_File(std::string name, std::vector<std::byte> contents)
 	{
 		m_files.insert_or_assign(std::move(name), std::move(contents));
 	}
@@ -95,7 +99,7 @@ public:
 	}
 
 private:
-	std::unordered_map<std::string, std::vector<Byte>> m_files;
+	std::unordered_map<std::string, std::vector<std::byte>> m_files;
 	std::vector<std::string> m_requests;
 };
 
@@ -213,9 +217,9 @@ struct CatalogTextureFixture final
 		BOOST_REQUIRE(commands.Set_Render_Targets(target, depth));
 		BOOST_REQUIRE(commands.Set_Viewport({0, 0, 8, 8}));
 		BOOST_REQUIRE(commands.Clear(clear_color, 1.0f));
-		BOOST_REQUIRE(renderer.Draw(commands, mesh, style, parameters, {texture}));
+		BOOST_REQUIRE(renderer.Draw(commands, mesh, style, parameters, std::span(&texture, 1)));
 
-		std::array<Byte, 8 * 8 * 4> pixels{};
+		std::array<std::byte, 8 * 8 * 4> pixels{};
 		BOOST_REQUIRE(device.Readback_Texture(target, pixels, 8 * 4));
 		const std::size_t offset = (4 * 8 + 4) * 4;
 		return {
@@ -330,8 +334,8 @@ BOOST_AUTO_TEST_CASE(decoder_registration_is_first_wins)
 	g_first_decoder_calls = 0;
 	g_second_decoder_calls = 0;
 	MemoryFileFactory files;
-	std::vector<Byte> contents = Make_Null_W3D("Ignored");
-	const std::vector<Byte> second = Make_Null_W3D("Ignored");
+	std::vector<std::byte> contents = Make_Null_W3D("Ignored");
+	const std::vector<std::byte> second = Make_Null_W3D("Ignored");
 	contents.insert(contents.end(), second.begin(), second.end());
 	files.Add_File("Decoder.w3d", std::move(contents));
 	W3DAssetCatalog catalog(&files);
@@ -510,7 +514,7 @@ BOOST_AUTO_TEST_CASE(texture_owner_keeps_gpu_resource_resident_and_drawable)
 	Graphics::TextureResource *resource = Graphics::TextureResource::Create(
 		&fixture.device, {1, 1, 1}, Assets::PixelEncoding::RGBA8);
 	BOOST_REQUIRE(resource != nullptr);
-	const std::array<Byte, 4> color{Byte{220}, Byte{70}, Byte{35}, Byte{180}};
+	const std::array<std::byte, 4> color{std::byte{220}, std::byte{70}, std::byte{35}, std::byte{180}};
 	BOOST_REQUIRE(fixture.device.Update_Texture(resource->Handle(),
 		{std::as_bytes(std::span(color)), 4}));
 	resource->Retain();

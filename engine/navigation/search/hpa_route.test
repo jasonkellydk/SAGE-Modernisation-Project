@@ -1,0 +1,78 @@
+#include <boost/test/unit_test.hpp>
+#include <vector>
+import engine.navigation.search.hpa_route;
+
+BOOST_AUTO_TEST_CASE(hpa_finds_deterministic_portal_route_around_block) {
+    constexpr unsigned width=32,height=16;
+    std::vector<bool> cells(width*height,true);
+    for(unsigned y=0;y<height;++y) if(y!=height-1) cells[y*width+15]=false;
+    const auto passable=[&](int x,int y) { return x>=0&&y>=0&&x<int(width)&&y<int(height)&&cells[y*width+x]; };
+    const auto first=navigation::buildHpaRoute(width,height,{1,1},{30,1},passable,8);
+    const auto second=navigation::buildHpaRoute(width,height,{1,1},{30,1},passable,8);
+    BOOST_TEST(first.valid());
+    BOOST_TEST(first.clusters==second.clusters);
+    BOOST_TEST(first.clusters.size()>1u);
+    BOOST_TEST(first.lowerBound(1,1)>first.lowerBound(30,1));
+    const auto hierarchy=navigation::buildHpaHierarchy(width,height,passable,8);
+    const auto full=hierarchy->route({1,1},{30,1});
+    const auto lower=hierarchy->lowerBounds({1,1},{30,1});
+    BOOST_TEST(full.valid());
+    BOOST_TEST(lower.valid());
+    BOOST_TEST(lower.clusters.size()==1u);
+    BOOST_TEST(full.inCorridor(1,1));
+    BOOST_TEST(full.inCorridor(30,1));
+    for (unsigned y=0;y<height;++y) for (unsigned x=0;x<width;++x)
+        BOOST_TEST(lower.lowerBound(int(x),int(y))==full.lowerBound(int(x),int(y)));
+}
+
+BOOST_AUTO_TEST_CASE(hpa_rejects_disconnected_abstract_map) {
+    constexpr unsigned width=16,height=16;
+    const auto passable=[](int x,int y) { return x<8; };
+    const auto route=navigation::buildHpaRoute(width,height,{1,1},{14,1},passable,4);
+    BOOST_TEST(!route.valid());
+}
+
+BOOST_AUTO_TEST_CASE(hpa_keeps_the_start_component_when_goal_is_disconnected) {
+    constexpr unsigned width=32,height=16;
+    std::vector<bool> cells(width*height,true);
+    for (unsigned y=0;y<height;++y) cells[y*width+15]=false;
+    const auto passable=[&](int x,int y) {
+        return x>=0&&y>=0&&x<int(width)&&y<int(height)&&cells[y*width+x];
+    };
+    const auto hierarchy=navigation::buildHpaHierarchy(width,height,passable,8);
+    const auto route=hierarchy->lowerBounds({1,1},{30,1});
+    BOOST_TEST(!route.valid());
+    BOOST_TEST(route.hasStartComponent());
+    BOOST_TEST(route.inStartComponent(1,1));
+    BOOST_TEST(!route.inStartComponent(30,1));
+}
+
+BOOST_AUTO_TEST_CASE(hpa_fine_components_separate_pockets_inside_one_cluster) {
+    constexpr unsigned width=8,height=8;
+    const auto passable=[](int x,int y) {
+        return (x<3 && y<height) || (x>4 && y<height);
+    };
+    const auto hierarchy=navigation::buildHpaHierarchy(width,height,passable,16);
+    // Both endpoints are in one abstract cluster, so the macro lower bound is
+    // intentionally not a negative proof. The fine component is exact for
+    // ordinary no-corner-cutting movement and separates the two pockets.
+    const auto lower=hierarchy->lowerBounds({1,1},{6,1});
+    BOOST_TEST(lower.valid());
+    BOOST_TEST(!hierarchy->fineConnected({1,1},{6,1}));
+    BOOST_TEST(hierarchy->fineConnected({1,1},{1,6}));
+}
+
+BOOST_AUTO_TEST_CASE(hpa_preserves_a_legal_diagonal_cluster_transition) {
+    constexpr unsigned width=4,height=4;
+    const auto passable=[](int x,int y) {
+        return x>=0 && y>=0 && x<4 && y<4;
+    };
+    const auto hierarchy=navigation::buildHpaHierarchy(width,height,passable,2);
+    const auto route=hierarchy->route({1,1},{2,2});
+    BOOST_TEST(route.valid());
+    BOOST_TEST(route.clusters.size()==2u);
+    const auto lower=hierarchy->lowerBounds({1,1},{2,2});
+    BOOST_TEST(lower.valid());
+    BOOST_TEST(lower.inStartComponent(2,2));
+}
+

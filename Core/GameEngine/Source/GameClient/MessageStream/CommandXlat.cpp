@@ -2537,6 +2537,8 @@ GameMessage::Type CommandTranslator::evaluateContextCommand( Drawable *draw,
  */
 GameMessageDisposition CommandTranslator::translateGameMessage(const GameMessage *msg)
 {
+	if (msg->isMouseInputCaptured() && msg->getType()>GameMessage::MSG_RAW_MOUSE_BEGIN &&
+		msg->getType()<GameMessage::MSG_RAW_MOUSE_END) return DESTROY_MESSAGE;
 	GameMessage::Type t = msg->getType();
 	GameMessageDisposition disp = KEEP_MESSAGE;
 	// We want to always be able to get to the options menu even during no input times and a clear game data message should always go through

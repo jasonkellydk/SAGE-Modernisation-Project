@@ -640,6 +640,10 @@ public:
 
 	Type getType() const { return m_type; }					///< Return the message type
 
+	// Local ownership survives translator-by-translator batch dispatch.
+	void captureMouseInput() const { m_mouseInputCaptured = true; }
+	Bool isMouseInputCaptured() const { return m_mouseInputCaptured; }
+
 	const char *getCommandAsString() const; ///< returns a string representation of the command type.
 	static const char *getCommandTypeAsString(GameMessage::Type t);
 
@@ -674,6 +678,8 @@ public:
 private:
 	// friend classes are bad. don't use them. no, really.
 	// if for no other reason than the fact that they subvert MemoryPoolObject. (srj)
+
+	mutable Bool m_mouseInputCaptured = false;
 
 	GameMessage *m_next, *m_prev;								///< List links for message list
 	GameMessageList *m_list;										///< The list this message is on

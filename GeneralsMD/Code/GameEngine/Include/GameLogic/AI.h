@@ -34,6 +34,7 @@
 #include "Common/GameType.h"
 #include "GameLogic/Damage.h"
 #include "Common/STLTypedefs.h"
+#include <unordered_map>
 
 class AIGroup;
 class AttackPriorityInfo;
@@ -300,6 +301,8 @@ public:
 protected:
 	Pathfinder *m_pathfinder;							///< the pathfinding system
 	std::list<AIGroup *> m_groupList;			///< the list of AIGroups
+	// Lookup only: the list remains the authoritative simulation/CRC order.
+	std::unordered_map<AIGroup*, std::list<AIGroup*>::iterator> m_groupPositions;
 	TAiData *m_aiData;
 	void newOverride();
 	void addSideInfo(AISideInfo *info);
@@ -901,7 +904,8 @@ public:
 	UnsignedShort Num_Refs() const { return m_refCount.Num_Refs(); }
 #endif
 
-	void groupMoveToPosition( const Coord3D *pos, Bool addWaypoint, CommandSourceType cmdSource );
+	void groupMoveToPosition( const Coord3D *pos, Bool addWaypoint, CommandSourceType cmdSource,
+		Real formationFacing = 0, Real formationSpacing = 0, UnsignedInt formationColumns = 0 );
 	void groupMoveToAndEvacuate( const Coord3D *pos, CommandSourceType cmdSource );			///< move to given position(s)
 	void groupMoveToAndEvacuateAndExit( const Coord3D *pos, CommandSourceType cmdSource );			///< move to given position & unload transport.
 	void groupIdle(CommandSourceType cmdSource);						///< Enter idle state.

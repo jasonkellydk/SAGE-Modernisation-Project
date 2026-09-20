@@ -52,10 +52,17 @@ cbuffer PropMaterialConstants : register(b2)
     float SurfaceTeamMultiplier;
     float4 SurfaceTeamColor;
     float4 MuzzleFlashState;
+    float4 VertexMaterialOverride;
 };
 cbuffer PropObjectConstants : register(b3)
 {
     row_major float4x4 World;
+};
+// Record draws use the same object-constant binding with a different layout.
+// A single record needs no per-draw storage-buffer upload/indirection.
+cbuffer PropRecordSelectionConstants : register(b3)
+{
+    uint RecordIndex;
 };
 GRAPHICS_TEXTURE_2D(BaseTexture, float4, 0)
 GRAPHICS_TEXTURE_2D(DetailTexture, float4, 1)
@@ -150,6 +157,12 @@ PropOutput Transform_Prop_Vertex(PropInput input, row_major float4x4 WorldTransf
     output.material_ambient = input.material_ambient;
     output.material_diffuse = input.material_diffuse;
     output.material_emissive = input.material_emissive;
+    if (VertexMaterialOverride.w != 0) {
+        output.material_diffuse.a = VertexMaterialOverride.x;
+        if (VertexMaterialOverride.z != 0)
+            output.material_diffuse.rgb = VertexMaterialOverride.xxx;
+    }
+    output.material_emissive.rgb *= VertexMaterialOverride.y;
     output.material_specular = input.material_specular;
     if (MuzzleFlashState.x > 0.5)
         Prepare_Muzzle_Flash_UV(input.uv, output.uv, output.secondary_uv);
@@ -184,7 +197,7 @@ struct PropBone { row_major float3x4 transform; };
 GRAPHICS_STORAGE_BUFFER(PropSkinPalette, PropBone, 125)
 GRAPHICS_STORAGE_BUFFER(PropRecordLighting, PropLightingData, 124)
 [shader("vertex")] PropOutput prop_vertex_records(PropInput input, uint instance : SV_InstanceID) {
-    const uint index = PropRecordIndices()[instance];
+    const uint index = RecordIndex == 0xffffffffu ? PropRecordIndices()[instance] : RecordIndex;
     const PropInstanceRecord record = PropRecords()[index];
     if (record.skin.y != 0) {
         const row_major float3x4 bone = PropSkinPalette()[record.skin.x+uint(input.bone_index)].transform;

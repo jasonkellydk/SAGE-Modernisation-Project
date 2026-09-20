@@ -20,18 +20,20 @@
 
 #include "AudioSystem.h"
 #include "XAudio2Mastering.h"
+#include "PendingAudio.h"
 
 #include <cstdint>
 #include <list>
 #include <vector>
 #include <string>
+#include <unordered_map>
 
 struct IXAudio2;
 class XAudio2Voice;
 
 /// XAudio2 implementation of AudioSystem (Windows only).
 /// Uses XAudio2 for mixing/playback and X3DAudio for 3D spatialization.
-/// Audio decoding runs on a dedicated background thread to avoid main-thread stalls.
+/// Music decoding uses background workers; request and voice state stays on the calling thread.
 class XAudio2AudioSystem : public AudioSystem
 {
 public:
@@ -119,6 +121,8 @@ private:
 
 	uint32_t m_nextDirectHandle;
 	std::list<DirectPlayingAudio> m_directPlayingSounds;
+	PendingAudioQueue m_pendingAudio;
+	std::unordered_map<std::string,std::shared_future<bool>> m_decodeJobs;
 	float m_busVolume[static_cast<int>(AudioBus::Count)];
 	bool m_busEnabled[static_cast<int>(AudioBus::Count)];
 

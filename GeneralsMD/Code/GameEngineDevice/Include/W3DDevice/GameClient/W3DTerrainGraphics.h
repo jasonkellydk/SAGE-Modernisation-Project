@@ -37,6 +37,11 @@ private:
     void Release_Texture_References() noexcept;
     std::array<Graphics::RHITextureHandle, 6> m_textures{};
     Graphics::Device *m_graphicsDevice = nullptr;
+    std::vector<Graphics::TerrainCell> m_surfaceCells;
+    std::vector<Graphics::TerrainCell> m_overlayCells;
+    std::vector<int> m_overlayIndices;
+    std::vector<unsigned char> m_dirtyCells;
+    bool m_havePartialUpdate = false;
     Int m_extraCells = 0;
     Int m_requestedWidth = WorldHeightMap::NORMAL_DRAW_WIDTH;
     Int m_requestedHeight = WorldHeightMap::NORMAL_DRAW_HEIGHT;

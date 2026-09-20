@@ -16,6 +16,10 @@ module;
 export module Graphics.Scene.StaticMeshes.Tests;
 
 import Graphics.Scene.StaticMeshes;
+#if defined(_WIN32)
+import Graphics.Tests.Device;
+import Graphics.Testing.VisualRegression;
+#endif
 
 using namespace Graphics;
 
@@ -55,9 +59,6 @@ BOOST_AUTO_TEST_CASE(static_mesh_source_rejects_incompatible_layout)
 }
 
 #if defined(_WIN32)
-
-import Graphics.Tests.Device;
-import Graphics.Testing.VisualRegression;
 
 #ifndef GRAPHICS_STATIC_MESH_REFERENCE_DIRECTORY
 #define GRAPHICS_STATIC_MESH_REFERENCE_DIRECTORY "."

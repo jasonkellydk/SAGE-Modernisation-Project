@@ -94,8 +94,160 @@
 #include "GameNetwork/NetworkInterface.h"
 
 #include "Common/UnitTimings.h" //Contains the DO_UNIT_TIMINGS define jba.
+#include "GameLogic/Module/AIUpdate.h"
+#include "engine/navigation/movement/formation_gesture.h"
+#include <map>
 
 import Video.Runtime;
+import engine.navigation.movement.formation_layout;
+
+class FormationPlacement {
+public:
+	navigation::FormationGesture gesture;
+	Coord3D anchor{};
+	ICoord2D pixel{};
+	UnsignedInt columns=0;
+	Uint64 fadeStarted=0;
+	std::map<ObjectID, DrawableID> previews;
+	void clear() {
+		for (const auto& [object, id] : previews)
+			if (Drawable* draw = TheGameClient->findDrawableByID(id)) TheGameClient->destroyDrawable(draw);
+		previews.clear();
+		fadeStarted=0;
+	}
+};
+
+Bool InGameUI::hasFormationPlacement() const
+{
+	return m_formationPlacement && m_formationPlacement->gesture.active();
+}
+
+void InGameUI::updateFormationPlacement()
+{
+	if (!m_formationPlacement) return;
+	if (!getInputEnabled() || m_isQuitMenuVisible || getPendingPlaceType() || getGUICommand()) { cancelFormationPlacement(); return; }
+	if (m_formationPlacement->gesture.active()) {
+		GameMessage* refresh=newInstance(GameMessage)(GameMessage::MSG_RAW_MOUSE_POSITION);
+		refresh->appendPixelArgument(m_formationPlacement->pixel);
+		handleFormationMouse(refresh);
+		deleteInstance(refresh);
+	} else if (m_formationPlacement->fadeStarted) {
+		const float alpha=0.35f*(1.0f-float(SDL_GetTicks()-m_formationPlacement->fadeStarted)/500.0f);
+		if (alpha<=0) m_formationPlacement->clear();
+		else for (const auto& [object,id] : m_formationPlacement->previews)
+			if (Drawable* draw=TheGameClient->findDrawableByID(id)) draw->setDrawableOpacity(alpha);
+	}
+}
+
+void InGameUI::cancelFormationPlacement()
+{
+	if (!m_formationPlacement) return;
+	m_formationPlacement->gesture.update(navigation::FormationInput::Cancel, 0, 0, false);
+	m_formationPlacement->clear();
+}
+
+void InGameUI::releaseFormationInput()
+{
+	cancelFormationPlacement();
+	if (m_formationPlacement) m_formationPlacement->gesture.reset();
+	m_formationInputCaptured=FALSE;
+}
+
+Bool InGameUI::handleFormationMouse(const GameMessage* message)
+{
+	if (getPendingPlaceType() || getGUICommand()) {
+		releaseFormationInput();
+		return FALSE;
+	}
+	using navigation::FormationInput;
+	FormationInput input;
+	switch (message->getType()) {
+		case GameMessage::MSG_RAW_MOUSE_LEFT_BUTTON_DOWN:
+		case GameMessage::MSG_RAW_MOUSE_LEFT_DOUBLE_CLICK: input=FormationInput::LeftDown; break;
+		case GameMessage::MSG_RAW_MOUSE_RIGHT_BUTTON_DOWN:
+		case GameMessage::MSG_RAW_MOUSE_RIGHT_DOUBLE_CLICK: input=FormationInput::RightDown; break;
+		case GameMessage::MSG_RAW_MOUSE_LEFT_BUTTON_UP: input=FormationInput::LeftUp; break;
+		case GameMessage::MSG_RAW_MOUSE_RIGHT_BUTTON_UP: input=FormationInput::RightUp; break;
+		case GameMessage::MSG_RAW_MOUSE_POSITION: input=FormationInput::Move; break;
+		default: m_formationInputCaptured=false; return false;
+	}
+	if (!m_formationPlacement) m_formationPlacement = new FormationPlacement;
+	auto& placement = *m_formationPlacement;
+	std::vector<navigation::FormationUnit> units;
+	std::map<ObjectID, Object*> objects;
+	for (Drawable* draw : *getAllSelectedDrawables()) {
+		Object* obj = draw->getObject();
+		if (!obj || !obj->isLocallyControlled() || !obj->isMobile() || obj->isDisabledByType(DISABLED_HELD)) continue;
+		AIUpdateInterface* ai = obj->getAIUpdateInterface();
+		if (!ai || !ai->isDoingGroundMovement() || obj->isKindOf(KINDOF_CLIFF_JUMPER) ||
+			!(obj->isKindOf(KINDOF_INFANTRY) || obj->isKindOf(KINDOF_VEHICLE))) continue;
+		const float speed = ai->getCurLocomotorSpeed();
+		if (speed <= 0) continue;
+		units.push_back({static_cast<std::uint32_t>(obj->getID()), obj->getPosition()->x,
+			obj->getPosition()->y, obj->getGeometryInfo().getBoundingCircleRadius(), speed, obj->getTemplate()->getTemplateID(),
+			static_cast<std::uint32_t>(std::max(0,obj->getTemplate()->friend_getBuildCost()))});
+		objects.emplace(obj->getID(), obj);
+	}
+	if (placement.gesture.active()) {
+		for (const auto& [id,ghost] : placement.previews)
+			if (!objects.contains(id)) { cancelFormationPlacement(); break; }
+	}
+	const ICoord2D pixel = message->getArgument(0)->pixel;
+	placement.pixel=pixel;
+	Coord3D world=placement.anchor;
+	const Bool canBegin = getInputEnabled() && !getGUICommand() && !getPendingPlaceType() &&
+		!TheRecorder->isPlaybackInProgress() && units.size()>1 && TheTacticalView->screenToTerrain(&pixel, &world);
+	if (!canBegin && placement.gesture.active()) cancelFormationPlacement();
+	float facing = 0;
+	if (canBegin) {
+		double x=0, y=0;
+		for (const auto& [id,obj] : objects) { x+=obj->getPosition()->x; y+=obj->getPosition()->y; }
+		facing=std::atan2(world.y-float(y/units.size()), world.x-float(x/units.size()));
+	}
+	const auto event = placement.gesture.update(input, world.x, world.y, canBegin, facing, SDL_GetTicks());
+	m_formationInputCaptured=event.capture;
+	if (event.began) { placement.clear(); placement.anchor=world; }
+	if (event.changed && placement.gesture.visible()) {
+		Region3D extent;
+		TheTerrainLogic->getExtent(&extent);
+		const float margin=40.0f;
+		float pitch=22;
+		for (const auto& unit : units) pitch=std::max(pitch,2*unit.radius+2);
+		placement.columns=placement.gesture.frontage()>=40 ?
+			std::clamp(static_cast<unsigned>(placement.gesture.frontage()/pitch+0.5f),1u,static_cast<unsigned>(units.size())) : 0;
+		const auto plan=navigation::planFormation(units, placement.anchor.x, placement.anchor.y,
+			{extent.lo.x+margin,extent.lo.y+margin,extent.hi.x-margin,extent.hi.y-margin},
+			22.0f, placement.gesture.facing(), placement.columns);
+		for (const auto& slot : plan.destinations) {
+			const ObjectID id=static_cast<ObjectID>(slot.id);
+			Drawable* ghost=nullptr;
+			const auto old=placement.previews.find(id);
+			if (old!=placement.previews.end()) ghost=TheGameClient->findDrawableByID(old->second);
+			if (!ghost) {
+				Object* obj=objects.at(id);
+				ghost=TheThingFactory->newDrawable(obj->getTemplate(), DRAWABLE_STATUS_NO_STATE_PARTICLES);
+				if (!ghost) continue;
+				placement.previews[id]=ghost->getID();
+				ghost->setIndicatorColor(obj->getControllingPlayer()->getPlayerColor());
+				ghost->setDrawableOpacity(0.35f);
+				ghost->setModelConditionState(MODELCONDITION_MOVING);
+			}
+			Coord3D position={slot.x,slot.y,placement.anchor.z};
+			position.z=TheTerrainLogic->getLayerHeight(position.x,position.y,TheTerrainLogic->getLayerForDestination(&position));
+			ghost->setPosition(&position);
+			ghost->setOrientation(placement.gesture.facing());
+		}
+	}
+	if (event.commit) {
+		GameMessage* move=TheMessageStream->appendMessage(GameMessage::MSG_DO_MOVETO);
+		move->appendLocationArgument(placement.anchor);
+		move->appendRealArgument(placement.gesture.facing());
+		move->appendRealArgument(22.0f);
+		move->appendIntegerArgument(placement.columns);
+		placement.fadeStarted=SDL_GetTicks();
+	}
+	return event.capture;
+}
 
 
 
@@ -968,6 +1120,18 @@ namespace
 	constexpr const Int kHudAnchorY = -1;
 	constexpr const Int kHudGapPx = 6;
 	inline Bool isAtHudAnchorPos(const Coord2D &p) { return p.x == kHudAnchorX && p.y == kHudAnchorY; }
+
+	constexpr Real kReferenceCameraAspectRatio = 4.0f / 3.0f;
+
+	Real getWidescreenCameraHeightFactor()
+	{
+		if (TheDisplay == nullptr || TheDisplay->getHeight() == 0)
+			return 1.0f;
+
+		const Real displayAspectRatio = static_cast<Real>(TheDisplay->getWidth()) /
+			static_cast<Real>(TheDisplay->getHeight());
+		return std::max(1.0f, displayAspectRatio / kReferenceCameraAspectRatio);
+	}
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -1271,6 +1435,8 @@ InGameUI::InGameUI()
 //-------------------------------------------------------------------------------------------------
 InGameUI::~InGameUI()
 {
+	cancelFormationPlacement();
+	delete m_formationPlacement;
 	delete TheControlBar;
 	TheControlBar = nullptr;
 
@@ -1379,7 +1545,7 @@ void InGameUI::init()
 		TheTacticalView->setDefaultView(
 			DEG_TO_RADF(TheGlobalData->m_cameraPitch),
 			DEG_TO_RADF(TheGlobalData->m_cameraYaw),
-			1.0f);
+			getWidescreenCameraHeightFactor());
 	}
 
 	/** @todo this may be the wrong place to create the sidebar, but for now
@@ -1842,6 +2008,7 @@ void InGameUI::preDraw()
 //DECLARE_PERF_TIMER(InGameUI_update)
 void InGameUI::update()
 {
+	updateFormationPlacement();
 	//USE_PERF_TIMER(InGameUI_update)
 	Int i;
 
@@ -2126,6 +2293,10 @@ void InGameUI::unregisterWindowLayout( WindowLayout *layout )
 //-------------------------------------------------------------------------------------------------
 void InGameUI::reset()
 {
+	cancelFormationPlacement();
+	delete m_formationPlacement;
+	m_formationPlacement=nullptr;
+	m_formationInputCaptured=false;
 	m_isQuitMenuVisible = FALSE;
 	m_inputEnabled = true;
 	// reset the command bar
@@ -2134,7 +2305,7 @@ void InGameUI::reset()
 	TheTacticalView->setDefaultView(
 		DEG_TO_RADF(TheGlobalData->m_cameraPitch),
 		DEG_TO_RADF(TheGlobalData->m_cameraYaw),
-		1.0f);
+		getWidescreenCameraHeightFactor());
 
 	ResetInGameChat();
 
@@ -3168,6 +3339,7 @@ Coord2D InGameUI::getScrollAmount()
 //-------------------------------------------------------------------------------------------------
 void InGameUI::setGUICommand( const CommandButton *command )
 {
+	if (command) releaseFormationInput();
 	if (TheRecorder->getMode() == RECORDERMODETYPE_PLAYBACK)
 		return;
 
@@ -3260,6 +3432,7 @@ void InGameUI::destroyPlacementIcons()
 //-------------------------------------------------------------------------------------------------
 void InGameUI::placeBuildAvailable( const ThingTemplate *build, Drawable *buildDrawable )
 {
+	if (build) releaseFormationInput();
 
 	if (build != nullptr)
 	{

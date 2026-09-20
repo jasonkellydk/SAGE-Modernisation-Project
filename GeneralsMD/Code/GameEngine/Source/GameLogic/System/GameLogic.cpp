@@ -28,6 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 #include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+import engine.navigation.scheduling.deadline_queue;
+import engine.navigation.diagnostics.frame_capture;
 #include <SDL3/SDL.h>
 
 #include "Common/AudioAffect.h"
@@ -243,7 +245,9 @@ const char* toString(GameMode mode)
 // ------------------------------------------------------------------------------------------------
 /** GameLogic class constructor */
 // ------------------------------------------------------------------------------------------------
-GameLogic::GameLogic()
+struct GameLogic::ScheduledUpdates { navigation::scheduling::DeadlineQueue<UpdateModulePtr> queue; };
+
+GameLogic::GameLogic() : m_scheduledUpdates(std::make_unique<ScheduledUpdates>())
 {
 	m_background = nullptr;
 	m_CRC = 0;
@@ -473,11 +477,8 @@ void GameLogic::reset()
 #ifdef ALLOW_NONSLEEPY_UPDATES
 	m_normalUpdates.clear();
 #endif
-	for (std::vector<UpdateModulePtr>::iterator it = m_sleepyUpdates.begin(); it != m_sleepyUpdates.end(); ++it)
-	{
-		(*it)->friend_setIndexInLogic(-1);
-	}
-	m_sleepyUpdates.clear();
+	m_scheduledUpdates->queue.forEach([](auto,UpdateModulePtr module) { module->friend_setIndexInLogic(-1); });
+	m_scheduledUpdates->queue.clear();
 	m_curUpdateModule = nullptr;
 
 	m_isScoringEnabled = TRUE;
@@ -2550,12 +2551,6 @@ void GameLogic::processDestroyList()
 {
 	//USE_PERF_TIMER(processDestroyList)
 
-#if RTS_ZEROHOUR && RETAIL_COMPATIBLE_CRC
-	// TheSuperHackers @info Set m_classifyFenceZeroInit to true for the first object. It's set to false when this function exits.
-	// Pathfinder::classifyFence may be called indirectly from Object::~Object.
-	TheAI->pathfinder()->m_classifyFenceZeroInit = !m_objectsToDestroy.empty();
-#endif
-
 	for( ObjectPointerListIterator iterator = m_objectsToDestroy.begin(); iterator != m_objectsToDestroy.end(); iterator++ )
 	{
 		Object* currentObject = (*iterator);
@@ -2574,50 +2569,21 @@ void GameLogic::processDestroyList()
 		}
 #endif
 
-		/*
-			this looks odd, but is necessary; since erasing a single entry can shuffle others in the list
-			(in order to maintain its heap-ness), we must do two passes: one to find the updates for this
-			object, another to actually erase 'em.
-
-			(in case you're wondering: yes, this is still more efficient than just deleting them
-			and rebalancing the entire heap afterwards, at least for real-world maps, since an individual
-			rebalance is O(log N) and a full rebalance is O(N)... so unless you are deleting the majority
-			of the objects in the world every frame, we come out well ahead this way.)
-		*/
-
-		const Int MAX_SUO = 256;
-		UpdateModulePtr sleepyUpdatesForThisObject[MAX_SUO];
-		Int numSUO = 0;
-
-		for (std::vector<UpdateModulePtr>::iterator it2 = m_sleepyUpdates.begin(); it2 != m_sleepyUpdates.end(); ++it2)
+		for (BehaviorModule** module=currentObject->getBehaviorModules(); *module; ++module)
 		{
-			UpdateModulePtr u = *it2;
-			if (u->friend_getObject() == currentObject && numSUO < MAX_SUO)
-			{
-				sleepyUpdatesForThisObject[numSUO++] = u;
-			}
+#ifdef DIRECT_UPDATEMODULE_ACCESS
+			auto update=(UpdateModulePtr)((*module)->getUpdate());
+#else
+			auto update=(*module)->getUpdate();
+#endif
+			if (update && update->friend_getIndexInLogic()>=0) eraseSleepyUpdate(update);
 		}
-
-		for (--numSUO; numSUO >= 0; --numSUO)
-		{
-			// have to re-get idx each time since each call to erase might change others.
-			Int idx = sleepyUpdatesForThisObject[numSUO]->friend_getIndexInLogic();
-			DEBUG_ASSERTCRASH(m_sleepyUpdates[idx] == sleepyUpdatesForThisObject[numSUO], ("Hmm, expected update mismatch here"));
-			eraseSleepyUpdate(idx);
-			DEBUG_ASSERTCRASH(sleepyUpdatesForThisObject[numSUO]->friend_getIndexInLogic() == -1, ("Hmm, expected index to be -1 here"));
-		}
-
-
 		currentObject->removeFromList(&m_objList);//remove from object list
 
 		// remove object from lookup table
 		removeObjectFromLookupTable( currentObject );
 
 		Object::friend_deleteInstance(currentObject);//actual delete
-
-#if RTS_ZEROHOUR && RETAIL_COMPATIBLE_CRC
-		TheAI->pathfinder()->m_classifyFenceZeroInit = false;
-#endif
 	}
 
 	m_objectsToDestroy.clear();//list full of bad pointers now, clear it.  If anyone's deletion resulted
@@ -2832,270 +2798,36 @@ void GameLogic::deselectObject(Object *obj, PlayerMaskType playerMask, Bool affe
 // ------------------------------------------------------------------------------------------------
 inline void GameLogic::validateSleepyUpdate() const
 {
-// pretty slow, so do only for DEBUG_CRASHING for now. turn on if you suspect wonkiness.
 #ifdef DEBUG_CRASHING
-	#define SLEEPY_DEBUG
-#endif
-#ifdef SLEEPY_DEBUG
-	int sz = m_sleepyUpdates.size();
-	if (sz == 0)
-		return;
-
-	int i;
-	//DEBUG_LOG(("\n"));
-	//for (i = 0; i < sz; ++i)
-	//{
-	//	DEBUG_LOG(("u %04d: %08lx %08lx",i,m_sleepyUpdates[i],m_sleepyUpdates[i]->friend_getNextCallFrame()));
-	//}
-	for (i = 0; i < sz; ++i)
-	{
-		DEBUG_ASSERTCRASH(m_sleepyUpdates[i]->friend_getIndexInLogic() == i, ("index mismatch: expected %d, got %d",i,m_sleepyUpdates[i]->friend_getIndexInLogic()));
-		UnsignedInt pri = m_sleepyUpdates[i]->friend_getPriority();
-		if (i > 0)
-		{
-			Int i0 = (i+1)/2-1;
-			UnsignedInt pri0 = m_sleepyUpdates[i0]->friend_getPriority();
-			DEBUG_ASSERTCRASH(pri >= pri0, ("sleepyUpdates are munged (0)"));
-		}
-		Int i1 = 2*(i+1)-1;
-		Int i2 = 2*(i+1);
-		if (i1 < sz)
-		{
-			UnsignedInt pri1 = m_sleepyUpdates[i1]->friend_getPriority();
-			DEBUG_ASSERTCRASH(pri <= pri1, ("sleepyUpdates are munged (1)"));
-		}
-		if (i2 < sz)
-		{
-			UnsignedInt pri2 = m_sleepyUpdates[i2]->friend_getPriority();
-			DEBUG_ASSERTCRASH(pri <= pri2, ("sleepyUpdates are munged (2)"));
-		}
-	}
+    m_scheduledUpdates->queue.forEach([&](auto index,UpdateModulePtr module) {
+        DEBUG_ASSERTCRASH(module->friend_getIndexInLogic()==static_cast<Int>(index),("Scheduled owner index mismatch"));
+        DEBUG_ASSERTCRASH(module->friend_getPriority()==m_scheduledUpdates->queue.priority(index),("Scheduled deadline mismatch"));
+    });
 #endif
 }
 
-// ------------------------------------------------------------------------------------------------
-void GameLogic::eraseSleepyUpdate(Int i)
-{
-	USE_PERF_TIMER(SleepyMaintenance)
-
-	DEBUG_ASSERTCRASH(i >= 0 && i < m_sleepyUpdates.size(), ("bad sleepy idx"));
-
-	// swap with the final item, toss the final item, then rebalance
-	m_sleepyUpdates[i]->friend_setIndexInLogic(-1);
-
-	Int last = m_sleepyUpdates.size() - 1;
-	if (i < last)
-	{
-		m_sleepyUpdates[i] = m_sleepyUpdates[last];
-		m_sleepyUpdates[i]->friend_setIndexInLogic(i);
-		m_sleepyUpdates.pop_back();
-		rebalanceSleepyUpdate(i);
-	}
-	else
-	{
-		m_sleepyUpdates.pop_back();
-	}
-}
-
-// ------------------------------------------------------------------------------------------------
-inline Bool isLowerPriority(const UpdateModulePtr a, const UpdateModulePtr b)
-{
-	// return true iff a is lower pri than b.
-	// remember: lower ordinal value means higher priority.
-	// therefore, higher ordinal value means lower priority.
-	DEBUG_ASSERTCRASH(a && b, ("these may no longer be null"));
-	UnsignedInt f1 = a->friend_getPriority();
-	UnsignedInt f2 = b->friend_getPriority();
-	return f1 > f2;
-}
-
-// ------------------------------------------------------------------------------------------------
-Int GameLogic::rebalanceParentSleepyUpdate(Int i)
-{
-	USE_PERF_TIMER(SleepyMaintenance)
-
-	DEBUG_ASSERTCRASH(i >= 0 && i < m_sleepyUpdates.size(), ("bad sleepy idx"));
-
-	Int parent = ((i+1)>>1)-1;
-	while (parent >= 0 && isLowerPriority(m_sleepyUpdates[parent], m_sleepyUpdates[i]))
-	{
-		UpdateModulePtr a = m_sleepyUpdates[parent];
-		UpdateModulePtr b = m_sleepyUpdates[i];
-
-		m_sleepyUpdates[i] = a;
-		m_sleepyUpdates[parent] = b;
-
-		a->friend_setIndexInLogic(i);
-		b->friend_setIndexInLogic(parent);
-
-		i = parent;
-		parent = ((parent+1)>>1)-1;
-	}
-
-	return i;
-}
-
-// ------------------------------------------------------------------------------------------------
-Int GameLogic::rebalanceChildSleepyUpdate(Int i)
-{
-	USE_PERF_TIMER(SleepyMaintenance)
-
-	DEBUG_ASSERTCRASH(i >= 0 && i < m_sleepyUpdates.size(), ("bad sleepy idx"));
-
-// this function gets the brunt of the work (we frequently
-// balance down, not up), so this one is hand-unrolled for
-// max efficiency. I have left the pristine non-unrolled
-// version present for clarity. (Yes, this is worth doing.) (srj)
-#if 1
-	UpdateModulePtr* pI = &m_sleepyUpdates[i];
-
-	// our children are i*2 and i*2+1
-  Int child = ((i)<<1)+1;
-	UpdateModulePtr* pChild = &m_sleepyUpdates[0] + child;
-	UpdateModulePtr* pSZ = &m_sleepyUpdates[0] + m_sleepyUpdates.size();	// yes, this is off the end.
-
-  while (pChild < pSZ)
-	{
-		// choose the higher-priority of the two children; we must be higher-pri than that.
-		if (pChild < pSZ-1 && isLowerPriority(*pChild, *(pChild+1)))
-		{
-      ++pChild;
-			++child;
-		}
-
-		// if we're higher-pri than our children, we're done.
-		if (!isLowerPriority(*pI, *pChild))
-		{
-			break;
-		}
-
-		// doh. swap with the highest-pri child we have.
-		UpdateModulePtr a = *pChild;
-		UpdateModulePtr b = *pI;
-
-		*pI = a;
-		*pChild = b;
-
-		a->friend_setIndexInLogic(i);
-		b->friend_setIndexInLogic(child);
-
-		i = child;
-		pI = pChild;
-
-		child = ((i)<<1)+1;
-		pChild = &m_sleepyUpdates[0] + child;
-  }
-#else
-	// our children are i*2 and i*2+1
-	Int sz = m_sleepyUpdates.size();
-  Int child = ((i)<<1)+1;
-  while (child < sz)
-	{
-		// choose the higher-priority of the two children; we must be higher-pri than that.
-		if (child < sz-1 && isLowerPriority(m_sleepyUpdates[child], m_sleepyUpdates[child+1]))
-      ++child;
-
-		// if we're higher-pri than our children, we're done.
-		if (!isLowerPriority(m_sleepyUpdates[i], m_sleepyUpdates[child]))
-		{
-			break;
-		}
-
-		// doh. swap with the highest-pri child we have.
-		UpdateModulePtr a = m_sleepyUpdates[child];
-		UpdateModulePtr b = m_sleepyUpdates[i];
-
-		m_sleepyUpdates[i] = a;
-		m_sleepyUpdates[child] = b;
-
-		a->friend_setIndexInLogic(i);
-		b->friend_setIndexInLogic(child);
-		i = child;
-		child = ((i)<<1)+1;
-  }
+#if defined(RTS_DEBUG)
+Int GameLogic::getNumberSleepyUpdates() const { return static_cast<Int>(m_scheduledUpdates->queue.size()); }
 #endif
-	return i;
-}
 
-// ------------------------------------------------------------------------------------------------
-void GameLogic::rebalanceSleepyUpdate(Int i)
+void GameLogic::eraseSleepyUpdate(UpdateModulePtr module)
 {
-	USE_PERF_TIMER(SleepyMaintenance)
-
-	i = rebalanceParentSleepyUpdate(i);
-	i = rebalanceChildSleepyUpdate(i);
+    if (!m_scheduledUpdates->queue.erase(module->friend_getIndexInLogic(),module))
+        RELEASE_CRASH("Scheduled module ownership mismatch during removal");
+    module->friend_setIndexInLogic(-1);
 }
 
-// ------------------------------------------------------------------------------------------------
-void GameLogic::remakeSleepyUpdate()
+void GameLogic::pushSleepyUpdate(UpdateModulePtr module)
 {
-	USE_PERF_TIMER(SleepyMaintenance)
-
-	Int parent = m_sleepyUpdates.size() / 2;
-  while (true)
-	{
-    rebalanceChildSleepyUpdate(parent);
-    if (parent == 0)
-			break;
-    --parent;
-  }
-
-	validateSleepyUpdate();
+    const auto index=m_scheduledUpdates->queue.insert(module,module->friend_getPriority());
+    module->friend_setIndexInLogic(static_cast<Int>(index));
 }
 
-// ------------------------------------------------------------------------------------------------
-void GameLogic::pushSleepyUpdate(UpdateModulePtr u)
-{
-	USE_PERF_TIMER(SleepyMaintenance)
-
-	DEBUG_ASSERTCRASH(u != nullptr, ("You may not pass null for sleepy update info"));
-
-	m_sleepyUpdates.push_back(u);
-	u->friend_setIndexInLogic(m_sleepyUpdates.size() - 1);
-
-	rebalanceParentSleepyUpdate(m_sleepyUpdates.size()-1);
-}
-
-// ------------------------------------------------------------------------------------------------
 UpdateModulePtr GameLogic::peekSleepyUpdate() const
 {
-	USE_PERF_TIMER(SleepyMaintenance)
-
-	UpdateModulePtr u = m_sleepyUpdates.front();
-	DEBUG_ASSERTCRASH(u->friend_getIndexInLogic() == 0, ("index mismatch: expected %d, got %d",0,u->friend_getIndexInLogic()));
-	return u;
+    return m_scheduledUpdates->queue.front();
 }
 
-// ------------------------------------------------------------------------------------------------
-void GameLogic::popSleepyUpdate()
-{
-	USE_PERF_TIMER(SleepyMaintenance)
-
-	Int sz = m_sleepyUpdates.size();
-	if (sz == 0)
-	{
-		DEBUG_CRASH(("should not happen"));
-		return;
-	}
-
-	m_sleepyUpdates[0]->friend_setIndexInLogic(-1);
-	if (sz > 1)
-	{
-		m_sleepyUpdates[0] = m_sleepyUpdates[sz-1];
-		m_sleepyUpdates[0]->friend_setIndexInLogic(0);
-		m_sleepyUpdates.pop_back();
-		rebalanceChildSleepyUpdate(0);
-	}
-	else
-	{
-		m_sleepyUpdates.pop_back();
-	}
-}
-
-// ------------------------------------------------------------------------------------------------
-// this should be called only by UpdateModule, thanks.
-// ------------------------------------------------------------------------------------------------
-//DECLARE_PERF_TIMER(friend_awakenUpdateModule)
 void GameLogic::friend_awakenUpdateModule(Object* obj, UpdateModulePtr u, UnsignedInt whenToWakeUp)
 {
 	//USE_PERF_TIMER(friend_awakenUpdateModule)
@@ -3124,23 +2856,17 @@ void GameLogic::friend_awakenUpdateModule(Object* obj, UpdateModulePtr u, Unsign
 	Int idx = u->friend_getIndexInLogic();
 	if (obj->isInList(&m_objList))
 	{
-		if (idx < 0 || idx >= m_sleepyUpdates.size())
-		{
-			RELEASE_CRASH("fatal error! sleepy update module illegal index.");
-			return;
-		}
-
-		if (m_sleepyUpdates[idx] != u)
-		{
-			RELEASE_CRASH("fatal error! sleepy update module index mismatch.");
-			return;
-		}
+        if (!m_scheduledUpdates->queue.contains(static_cast<std::size_t>(idx),u))
+        {
+            RELEASE_CRASH("Scheduled module ownership mismatch during wakeup");
+            return;
+        }
 
 		// update the value.
 		u->friend_setNextCallFrame(whenToWakeUp);
 
-		// rebalance.
-		rebalanceSleepyUpdate(idx);
+		// Move the registered module to its new deadline.
+		m_scheduledUpdates->queue.reschedule(idx,u,u->friend_getPriority());
 
 		// validate. (harmless except in debug mode)
 		validateSleepyUpdate();
@@ -3687,6 +3413,10 @@ extern __int64 Total_Load_3D_Assets;
 // ------------------------------------------------------------------------------------------------
 void GameLogic::update()
 {
+	auto& capture=navigation::diagnostics::frameCapture();
+	capture.setModuleNameResolver([](unsigned key)->std::string {
+		return TheNameKeyGenerator ? TheNameKeyGenerator->keyToName(NameKeyType(key)).str() : "";
+	});
 	USE_PERF_TIMER(GameLogic_update)
 	PROFILER_SECTION_COLOR(0x4CAF50);
 
@@ -3739,6 +3469,7 @@ void GameLogic::update()
 
 	// update (execute) scripts
 	{
+		auto timing=capture.measure("logic.scripts",now);
 		TheScriptEngine->UPDATE();
 	}
 
@@ -3751,6 +3482,7 @@ void GameLogic::update()
 	// Note - TerrainLogic update needs to happen after ScriptEngine update, but before object updates.  jba.
 	// This way changes in bridges are noted in the script engine before being cleared in TerrainLogic->update
 	{
+		auto timing=capture.measure("logic.terrain",now);
 		TheTerrainLogic->UPDATE();
 	}
 
@@ -3768,6 +3500,7 @@ void GameLogic::update()
 
 	if (generateForSolo || generateForMP)
 	{
+		auto timing=capture.measure("logic.crc",now);
 		m_CRC = getCRC( CRC_RECALC );
 		bool isPlayback = (TheRecorder && TheRecorder->isPlaybackMode());
 
@@ -3794,11 +3527,13 @@ void GameLogic::update()
 
 	// Update the Recorder
 	{
+		auto timing=capture.measure("logic.recorder",now);
 		TheRecorder->UPDATE();
 	}
 
 	// process client commands
 	{
+		auto timing=capture.measure("logic.commands",now);
 		processCommandList( TheCommandList );
 	}
 
@@ -3836,7 +3571,7 @@ void GameLogic::update()
 #endif
 
 	{
-		while (!m_sleepyUpdates.empty())
+		while (!m_scheduledUpdates->queue.empty())
 		{
 			UpdateModulePtr u = peekSleepyUpdate();
 
@@ -3871,7 +3606,11 @@ void GameLogic::update()
 				//DEBUG_LOG(("calling update %08lx (%d %d)...",update,update->friend_getNextCallFrame(),update->friend_getNextCallPhase()));
 				m_curUpdateModule = u;
 
-				sleepLen = u->update();
+				{
+					auto timing=capture.measure("logic.object",now,
+						unsigned(u->friend_getObject()->getID()),unsigned(u->getModuleNameKey()));
+					sleepLen = u->update();
+				}
 				DEBUG_ASSERTCRASH(sleepLen > 0, ("you may not return 0 from update"));
 				if (sleepLen < 1)
 					sleepLen = UPDATE_SLEEP_NONE;
@@ -3882,7 +3621,7 @@ void GameLogic::update()
 
 			// else defer it till next frame and re-push it
 			u->friend_setNextCallFrame(now + sleepLen);
-			rebalanceSleepyUpdate(0);
+			m_scheduledUpdates->queue.reschedule(u->friend_getIndexInLogic(),u,u->friend_getPriority());
 		}
 	}
 
@@ -3890,16 +3629,19 @@ void GameLogic::update()
 
 	// update the Artificial Intelligence system
 	{
+		auto timing=capture.measure("logic.ai",now);
 		TheAI->UPDATE();
 	}
 
 	// production updates
 	{
+		auto timing=capture.measure("logic.production",now);
 		TheBuildAssistant->UPDATE();
 	}
 
 	// update partition info
 	{
+		auto timing=capture.measure("logic.partition",now);
 		ThePartitionManager->UPDATE();
 	}
 
@@ -5377,11 +5119,8 @@ void GameLogic::loadPostProcess()
 			m_nextObjID = (ObjectID)((UnsignedInt)obj->getID() + 1);
 
 	// blow away the sleepy update and normal update module lists
-	for (std::vector<UpdateModulePtr>::iterator it = m_sleepyUpdates.begin(); it != m_sleepyUpdates.end(); ++it)
-	{
-		(*it)->friend_setIndexInLogic(-1);
-	}
-	m_sleepyUpdates.clear();
+	m_scheduledUpdates->queue.forEach([](auto,UpdateModulePtr module) { module->friend_setIndexInLogic(-1); });
+	m_scheduledUpdates->queue.clear();
 #ifdef ALLOW_NONSLEEPY_UPDATES
 	m_normalUpdates.clear();
 #else
@@ -5423,15 +5162,13 @@ void GameLogic::loadPostProcess()
 				u->friend_setNextCallFrame(now);
 #endif
 			{
-				m_sleepyUpdates.push_back(u);
-				u->friend_setIndexInLogic(m_sleepyUpdates.size() - 1);
+				pushSleepyUpdate(u);
 			}
 
 		}
 
 	}
 
-	// re-sort the priority queue all at once now that all modules are on it
-	remakeSleepyUpdate();
+	validateSleepyUpdate();
 
 }

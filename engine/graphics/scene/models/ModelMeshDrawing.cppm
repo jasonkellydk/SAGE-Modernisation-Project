@@ -88,10 +88,7 @@ struct ModelMaterialGroups final {
         std::array<std::uint64_t, 5> revisions{};
         std::size_t vertices = 0;
         std::size_t normals = 0;
-        float opacity = 1;
-        bool sorted = false;
         bool lighting = true;
-        bool additive = false;
         std::uint64_t bone_revision = 0;
         bool operator==(const GeometryKey& other) const noexcept
         {
@@ -99,10 +96,7 @@ struct ModelMaterialGroups final {
                 && std::equal(revisions.begin(), revisions.end(), other.revisions.begin())
                 && vertices == other.vertices
                 && normals == other.normals
-                && opacity == other.opacity
-                && sorted == other.sorted
                 && lighting == other.lighting
-                && additive == other.additive
                 && bone_revision == other.bone_revision;
         }
     };
@@ -215,8 +209,7 @@ public:
                 {m_positions.data(), m_normals.data(), primary, secondary, uv, secondary_uv},
                 {m_revision, m_materials.DCG_Revision(pass), m_materials.DIG_Revision(pass),
                     m_materials.UV_Revision(pass, 0), m_materials.UV_Revision(pass, 1)},
-                m_positions.size(), m_normals.size(), overrides.opacity, m_context.sorted,
-                Get_Prop_Draw_Settings().lighting, m_context.additive, m_bone_revision};
+                m_positions.size(), m_normals.size(), Get_Prop_Draw_Settings().lighting, m_bone_revision};
             const bool tracked_geometry = m_revision != 0
                 && (!primary || geometry_key.revisions[1] != 0)
                 && (!secondary || geometry_key.revisions[2] != 0)
@@ -270,8 +263,7 @@ public:
                 }
                 if (m_context.two_sided) shader.Set_Cull_Mode(MaterialState::CULL_MODE_DISABLE);
                 const auto* vertex_material = material ? &material->parameters : nullptr;
-                const std::array preparation_state{overrides.opacity, m_context.sorted ? 1.0f : 0.0f,
-                    Get_Prop_Draw_Settings().lighting ? 1.0f : 0.0f, m_context.additive ? 1.0f : 0.0f};
+                const std::array preparation_state{Get_Prop_Draw_Settings().lighting ? 1.0f : 0.0f};
                 const auto bytes = [&](const auto* values) {
                     return std::as_bytes(std::span(values, values ? m_positions.size() : 0));
                 };
@@ -295,19 +287,13 @@ public:
                 }
                 const auto extract = [&](unsigned index) {
                     auto vertex = m_source[index].Make_Vertex();
-                if (!m_bone_links.empty()) vertex.bone_index=m_bone_links[index];
+                    if (!m_bone_links.empty()) vertex.bone_index=m_bone_links[index];
                     if (primary) vertex.color = MeshDrawingDetail::Unpack_Color(primary[index]);
                     if (secondary) vertex.secondary_color = MeshDrawingDetail::Unpack_Color(secondary[index]);
                     if (uv) vertex.uv = {uv[index][0], uv[index][1]};
                     if (secondary_uv) vertex.secondary_uv = {secondary_uv[index][0], secondary_uv[index][1]};
                     if (vertex_material) Apply_Prop_Material(vertex, *vertex_material);
                     if (!Get_Prop_Draw_Settings().lighting) vertex.material_ambient[3] = 0;
-                    if (!m_context.sorted && overrides.opacity != 1 && material &&
-                        (!material->parameters.lighting || material->parameters.diffuse_source == PropColorSource::Material)) {
-                        vertex.material_diffuse[3] = overrides.opacity;
-                        if (m_context.additive)
-                            vertex.material_diffuse[0] = vertex.material_diffuse[1] = vertex.material_diffuse[2] = overrides.opacity;
-                    }
                     return vertex;
                 };
                 if (!mesh.Is_Valid()) {
@@ -320,6 +306,9 @@ public:
                             batch.Append_Validated(m_triangles[polygon][corner], extract);
                 }
                 auto parameters = m_context.parameters;
+                if (!m_context.sorted && overrides.opacity != 1 && vertex_material &&
+                    (!vertex_material->lighting || vertex_material->diffuse_source == PropColorSource::Material))
+                    parameters.vertex_material_override = {overrides.opacity, 1, m_context.additive ? 1.0f : 0.0f, 1};
                 Extract_Mesh_Texture_Mappings(parameters, material, m_context.milliseconds,
                     parameters.view, m_context.projection, m_context.sorted ? std::nullopt : m_context.uv_offset);
                 draw.shadow_capture = overrides.shadow_capture;
@@ -375,8 +364,7 @@ public:
         const auto bytes = [&](const auto* values) {
             return std::as_bytes(std::span(values, values ? m_positions.size() : 0));
         };
-        const std::array preparation_state{m_context.overrides.pass_opacity, m_context.overrides.pass_emissive};
-        const std::array<PropPreparationInput,11> inputs{{
+        const std::array<PropPreparationInput,10> inputs{{
             {m_revision != 0 ? std::as_bytes(m_positions) : std::as_bytes(m_source), m_revision},
             {m_revision != 0 ? std::as_bytes(m_normals) : std::span<const std::byte>{}, m_revision},
             {std::as_bytes(m_triangles), m_topology_revision},
@@ -384,16 +372,12 @@ public:
             {bytes(primary), m_materials.DCG_Revision(0)}, {bytes(secondary), m_materials.DIG_Revision(0)},
             {bytes(uv), m_materials.UV_Revision(0,0)}, {bytes(secondary_uv), m_materials.UV_Revision(0,1)},
             {std::as_bytes(std::span(vertex_material, vertex_material ? 1u : 0u))},
-            {std::as_bytes(std::span(preparation_state))},
             {std::as_bytes(m_bone_links),m_bone_revision}}};
         auto mesh = m_state.additional.Find_Versioned(m_renderer,slot,inputs);
         if (!mesh.Is_Valid()) {
             Prepare_Source();
             auto& batch = m_workspace->Workspace().Batch();
             if (!batch.Begin(m_source.size(), polygons.size() * 3)) return false;
-            const bool override_opacity = vertex_material && m_context.overrides.pass_opacity != 1
-                && (!vertex_material->lighting || vertex_material->diffuse_source == PropColorSource::Material);
-            const bool scale_emissive = vertex_material && vertex_material->emissive_source == PropColorSource::Material;
             const auto extract = [&](unsigned index) {
                 auto vertex = m_source[index].Make_Vertex();
                 if (!m_bone_links.empty()) vertex.bone_index=m_bone_links[index];
@@ -402,9 +386,6 @@ public:
                 if (uv) vertex.uv = {uv[index][0], uv[index][1]};
                 if (secondary_uv) vertex.secondary_uv = {secondary_uv[index][0], secondary_uv[index][1]};
                 if (vertex_material) Apply_Prop_Material(vertex, *vertex_material);
-                if (override_opacity) vertex.material_diffuse[3] = m_context.overrides.pass_opacity;
-                if (scale_emissive)
-                    for (unsigned c = 0; c < 3; ++c) vertex.material_emissive[c] *= m_context.overrides.pass_emissive;
                 return vertex;
             };
             for (const auto polygon : polygons) {
@@ -416,6 +397,11 @@ public:
             if (!mesh.Is_Valid()) return false;
         }
         auto parameters = m_context.parameters;
+        const bool override_opacity = vertex_material && m_context.overrides.pass_opacity != 1
+            && (!vertex_material->lighting || vertex_material->diffuse_source == PropColorSource::Material);
+        const bool scale_emissive = vertex_material && vertex_material->emissive_source == PropColorSource::Material;
+        parameters.vertex_material_override = {m_context.overrides.pass_opacity,
+            scale_emissive ? m_context.overrides.pass_emissive : 1.0f, 0, override_opacity ? 1.0f : 0.0f};
         if (description.world_coordinates) {
             parameters.uv_sources[0] = 4;
             parameters.uv_transform[0] = description.world_texture_transform;

@@ -47,6 +47,7 @@ public:
 	void postProcessLoad() override;
 	void reset() override;
 	void update() override;
+	void preloadEventAssets(const AudioEventRTS& event) override;
 
 	// ── Device-dependent (delegated to AudioEngine) ──
 #if defined(RTS_DEBUG)

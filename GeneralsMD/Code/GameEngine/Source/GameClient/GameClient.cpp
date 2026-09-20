@@ -29,6 +29,7 @@
 
 // SYSTEM INCLUDES ////////////////////////////////////////////////////////////
 #include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+import engine.navigation.diagnostics.frame_capture;
 #include "GameClient/GameClient.h"
 
 // USER INCLUDES //////////////////////////////////////////////////////////////
@@ -522,6 +523,7 @@ DECLARE_PERF_TIMER(GameClient_update)
 DECLARE_PERF_TIMER(GameClient_draw)
 void GameClient::update()
 {
+	auto& capture=navigation::diagnostics::frameCapture();
 	USE_PERF_TIMER(GameClient_update)
 	PROFILER_FRAME_MARK;
 	PROFILER_SECTION_COLOR(0x2196F3);
@@ -611,6 +613,7 @@ void GameClient::update()
 
 	if (!freezeTime)
 	{
+		auto timing=capture.measure("client.drawables",TheGameLogic->getFrame());
 		Int numPlayers = ThePlayerList->getPlayerCount();
 		Int numNonLocalPlayers = 0;
 		Int nonLocalPlayerIndices[MAX_PLAYER_COUNT];
@@ -712,16 +715,19 @@ void GameClient::update()
 
 	// update the terrain visuals
 	{
+		auto timing=capture.measure("client.terrain",TheGameLogic->getFrame());
 		TheTerrainVisual->UPDATE();
 	}
 
 	// update display
 	{
+		auto timing=capture.measure("client.display_update",TheGameLogic->getFrame());
 		TheDisplay->UPDATE();
 	}
 
 	{
 		USE_PERF_TIMER(GameClient_draw)
+		auto timing=capture.measure("client.draw",TheGameLogic->getFrame());
 
 	// redraw all views, update the GUI
 	//if(TheGameLogic->getFrame() >= 2)

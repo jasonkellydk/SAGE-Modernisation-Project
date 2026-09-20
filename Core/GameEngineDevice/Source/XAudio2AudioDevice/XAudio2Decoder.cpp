@@ -250,7 +250,8 @@ XAudio2Decoder::DecodedBuffer XAudio2Decoder::decode(const char *filename, Audio
 	if (result.data)
 	{
 		std::lock_guard<std::mutex> lock(s_cacheMutex);
-		s_pcmCache[filename] = result;
+		const auto [entry,inserted]=s_pcmCache.emplace(filename,result);
+		if (!inserted) { std::free(result.data); result=entry->second; }
 	}
 
 	return result;
@@ -338,7 +339,8 @@ XAudio2Decoder::DecodedBuffer XAudio2Decoder::decodeFromMemory(const char *filen
 	if (result.data)
 	{
 		std::lock_guard<std::mutex> lock(s_cacheMutex);
-		s_pcmCache[filename] = result;
+		const auto [entry,inserted]=s_pcmCache.emplace(filename,result);
+		if (!inserted) { std::free(result.data); result=entry->second; }
 	}
 
 	return result;

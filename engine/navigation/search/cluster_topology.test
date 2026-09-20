@@ -1,0 +1,81 @@
+#include <boost/test/unit_test.hpp>
+#include <string>
+#include <vector>
+import engine.navigation.search.cluster_topology;
+import engine.navigation.search.route_search;
+
+BOOST_AUTO_TEST_CASE(hpa_cluster_route_goes_through_the_available_crossing) {
+    std::vector<std::string> cells(64,std::string(64,'.'));
+    for (auto& row:cells) row[31]='#';
+    cells[52][31]='.';
+    navigation::HpaClusterTopology topology;
+    topology.configure(64,64);
+    const auto graph=topology.prepare([&](int x,int y) { return cells[y][x]=='.'; });
+    std::vector<unsigned> expected;
+    for (unsigned budget:{1u,3u,128u}) {
+        navigation::HpaClusterSearch search;
+        search.begin(graph,4,4,60,4);
+        unsigned calls=0;
+        while (search.status()==navigation::RouteSearchStatus::Searching) {
+            search.advance(budget);
+            BOOST_REQUIRE(++calls<1000u);
+        }
+        BOOST_REQUIRE(search.result().found());
+        BOOST_TEST(search.result().nodes.front()==0u);
+        BOOST_TEST(search.result().nodes.back()==3u);
+        bool usesOpening=false;
+        for (const auto node:search.result().nodes) usesOpening|=node/4==3;
+        BOOST_TEST(usesOpening);
+        if (expected.empty()) expected=search.result().nodes;
+        else BOOST_TEST(search.result().nodes==expected);
+        const auto narrow=search.corridor(0),wide=search.corridor(1),full=search.corridor(64);
+        for (unsigned i=0;i<full.size();++i) {
+            BOOST_TEST(unsigned(narrow[i])<=unsigned(wide[i]));
+            BOOST_TEST(full[i]==1u);
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(hpa_cluster_edits_are_local_and_preserve_inflight_snapshots) {
+    std::vector<std::string> cells(256,std::string(256,'.'));
+    for (auto& row:cells) row[127]='#';
+    cells[100][127]='.';
+    navigation::HpaClusterTopology topology;
+    topology.configure(256,256);
+    const auto read=[&](int x,int y) { return cells[y][x]=='.'; };
+    const auto previous=topology.prepare(read);
+    const auto initialReads=topology.cellsRead();
+    BOOST_TEST(initialReads==256u*256u);
+    BOOST_TEST(topology.prepare(read).get()==previous.get());
+    BOOST_TEST(topology.cellsRead()==initialReads);
+    cells[100][127]='#';
+    topology.invalidate(127,100,127,100);
+    const auto closed=topology.prepare(read);
+    BOOST_TEST(topology.cellsRead()-initialReads<=9u*16u*16u);
+    BOOST_TEST(closed->revision==previous->revision+1);
+    navigation::HpaClusterSearch search;
+    for (const auto graph:{previous,closed}) {
+        search.begin(graph,100,100,150,100);
+        while (search.status()==navigation::RouteSearchStatus::Searching) search.advance(7);
+        BOOST_TEST(search.result().found()==(graph==previous));
+    }
+    cells[101][127]='.';
+    topology.invalidate(127,101,127,101);
+    search.begin(topology.prepare(read),100,100,150,100);
+    while (search.status()==navigation::RouteSearchStatus::Searching) search.advance(7);
+    BOOST_TEST(search.result().found());
+}
+
+BOOST_AUTO_TEST_CASE(hpa_cluster_graph_keeps_diagonal_crossings_and_rejects_invalid_endpoints) {
+    navigation::HpaClusterTopology topology;
+    topology.configure(32,32);
+    const auto graph=topology.prepare([](int x,int y) { return x==y; });
+    navigation::HpaClusterSearch search;
+    search.begin(graph,0,0,31,31);
+    while (search.status()==navigation::RouteSearchStatus::Searching) search.advance(1);
+    BOOST_REQUIRE(search.result().found());
+    BOOST_TEST(search.result().cost==14u);
+    search.begin(graph,-1,0,31,31);
+    BOOST_TEST(!search.result().found());
+    BOOST_CHECK(search.status()==navigation::RouteSearchStatus::Unreachable);
+}

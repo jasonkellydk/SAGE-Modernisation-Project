@@ -1315,12 +1315,23 @@ bool GameLogic::onDoForcemoveto(MAYBE_UNUSED GameMessage *msg, AIGroupPtr &curre
 bool GameLogic::onDoMoveto(MAYBE_UNUSED GameMessage *msg, AIGroupPtr &currentlySelectedGroup)
 {
 	Coord3D dest = msg->getArgument( 0 )->location;
+	Real facing = 0, spacing = 0;
+	UnsignedInt columns = 0;
+	if (msg->getArgumentCount() == 4) {
+		facing = msg->getArgument(1)->real;
+		spacing = msg->getArgument(2)->real;
+		if (!std::isfinite(facing) || !std::isfinite(spacing) || spacing < 8 || spacing > 96)
+			return false;
+		const Int requestedColumns=msg->getArgument(3)->integer;
+		if (requestedColumns < 0 || requestedColumns > 4096) return false;
+		columns=static_cast<UnsignedInt>(requestedColumns);
+	}
 
 	if( currentlySelectedGroup )
 	{
 		//DEBUG_LOG(("GameLogicDispatch - got a MSG_DO_MOVETO command"));
 		currentlySelectedGroup->releaseWeaponLockForGroup(LOCKED_TEMPORARILY);	// release any temporary locks.
-		currentlySelectedGroup->groupMoveToPosition( &dest, false, CMD_FROM_PLAYER );
+		currentlySelectedGroup->groupMoveToPosition( &dest, false, CMD_FROM_PLAYER, facing, spacing, columns );
 	}
 
 	return true;

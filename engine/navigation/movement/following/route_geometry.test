@@ -1,0 +1,84 @@
+#include <boost/test/unit_test.hpp>
+#include <cmath>
+#include <cstdint>
+#include <vector>
+import engine.navigation.movement.following.route_geometry;
+
+namespace {
+using navigation::following::RoutePoint;
+using Geometry=navigation::following::RouteGeometry<unsigned>;
+// Reference walks waypoint pairs and accumulates lengths on every query.
+Geometry::Closest reference(const std::vector<RoutePoint>& points,RoutePoint position,float& total) {
+    Geometry::Closest result;
+    total=0;
+    for (unsigned i=1;i<points.size();++i) {
+        const auto a=points[i-1],b=points[i];
+        float dx=b.x-a.x,dy=b.y-a.y;
+        float length=std::sqrt(dx*dx+dy*dy);
+        if (length==0) length=.01f;
+        dx/=length; dy/=length;
+        float along=dx*(position.x-a.x)+dy*(position.y-a.y);
+        RoutePoint point;
+        if (along<0) { along=0; point=a; }
+        else if (along>length) {
+            if (i+1<points.size()) { total+=length; continue; }
+            along=length; point=b;
+        } else point={a.x+along*dx,a.y+along*dy,0};
+        float x=position.x-point.x,y=position.y-point.y;
+        float distance=x*x+y*y;
+        if (distance<result.distanceSquared) result={i,point,total+along,distance};
+        total+=length;
+    }
+    return result;
+}
+void append(Geometry& geometry,RoutePoint a,RoutePoint b,unsigned id) {
+    float dx=b.x-a.x,dy=b.y-a.y;
+    float length=std::sqrt(dx*dx+dy*dy);
+    if (length==0) length=.01f;
+    geometry.append(a,b,dx/length,dy/length,length,id);
+}
+}
+
+BOOST_AUTO_TEST_CASE(cached_route_geometry_matches_waypoint_scan_exactly) {
+    std::uint32_t state=0x13579;
+    const auto coordinate=[&]() { state=state*1664525u+1013904223u; return float(int(state%20001)-10000)*.125f; };
+    Geometry geometry;
+    for (unsigned trial=0;trial<64;++trial) {
+        geometry.clear();
+        std::vector<RoutePoint> points;
+        for (unsigned i=0;i<trial*2;++i) {
+            RoutePoint point{coordinate(),coordinate(),coordinate()};
+            if (i && i%7==0) point=points.back();
+            if (i) append(geometry,points.back(),point,i);
+            points.push_back(point);
+        }
+        for (unsigned query=0;query<64;++query) {
+            RoutePoint position{coordinate(),coordinate(),coordinate()};
+            float total{};
+            const auto expected=reference(points,position,total),actual=geometry.closest(position);
+            BOOST_TEST(actual.handle==expected.handle);
+            BOOST_TEST(actual.point.x==expected.point.x);
+            BOOST_TEST(actual.point.y==expected.point.y);
+            BOOST_TEST(actual.point.z==expected.point.z);
+            BOOST_TEST(actual.along==expected.along);
+            BOOST_TEST(actual.distanceSquared==expected.distanceSquared);
+            BOOST_TEST(geometry.length()==total);
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(cached_route_geometry_preserves_ties_endpoints_and_replacement) {
+    Geometry geometry;
+    append(geometry,{0,0,7},{10,0,9},1);
+    append(geometry,{10,0,9},{0,0,7},2);
+    BOOST_TEST(geometry.closest({5,2,100}).handle==1u);
+    BOOST_TEST(geometry.closest({-5,0,0}).handle==1u);
+    BOOST_TEST(geometry.closest({-5,0,0}).point.z==7);
+    geometry.clear();
+    BOOST_TEST(geometry.length()==0);
+    BOOST_TEST(geometry.closest({}).handle==0u);
+    append(geometry,{0,0,3},{10,0,8},9);
+    BOOST_TEST(geometry.closest({20,0,0}).point.z==8);
+    BOOST_TEST(geometry.closest({20,0,0}).along==10);
+    BOOST_TEST(geometry.closest({5,0,0}).point.z==0);
+}

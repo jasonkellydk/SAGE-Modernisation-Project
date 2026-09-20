@@ -1,0 +1,563 @@
+#include <boost/test/unit_test.hpp>
+#include <array>
+#include <algorithm>
+#include <cstdint>
+#include <vector>
+#include <string>
+#include <memory>
+import engine.navigation.world_fixture;
+import engine.navigation.dynamic_request_queue;
+import engine.navigation.search.route_search;
+import engine.navigation.search.graph.captured_weighted;
+import engine.navigation.search.cluster_topology;
+namespace { constexpr int width=486,height=469; }
+
+BOOST_AUTO_TEST_CASE(reconstructed_waypoint_flags_follow_dx9_cliff_boundaries) {
+    // Pinned DX9 AIPathfind.cpp, Pathfinder::prependCells: non-start nodes
+    // allow look-ahead, except a non-cliff node immediately beside a cliff.
+    // Rubble does not by itself protect a waypoint. A single-cell lane fixes
+    // the raw sequence independently of frontier ordering and smoothing.
+    for (bool cliff:{false,true}) for (bool captured:{false,true}) {
+        std::vector<std::string> map(5,std::string(16,'#'));
+        map[2]=std::string(16,'.');
+        for (int x=5;x<=8;++x) map[2][x]=cliff?'^':'r';
+        navigation::testing::World world(map);
+        const auto route=world.reconstructedWaypointMetadata(cliff,captured);
+        BOOST_TEST_CONTEXT("cliff=" << cliff << " captured=" << captured) {
+            BOOST_REQUIRE(route.found);
+            BOOST_REQUIRE(route.rawGroundCells.size()==12u);
+            BOOST_REQUIRE(route.rawOptimizationFlags.size()==12u);
+            for (unsigned i=0;i<12;++i) {
+                BOOST_TEST(route.rawGroundCells[i][0]==int(i+1));
+                BOOST_TEST(route.rawGroundCells[i][1]==2);
+                const unsigned expected=i!=0 && !(cliff && (i==3 || i==8));
+                BOOST_TEST(route.rawOptimizationFlags[i]==expected);
+            }
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(incremental_occupancy_retains_old_snapshots_and_observes_same_frame_writes) {
+    navigation::testing::World world(std::vector<std::string>(16,std::string(16,'.')));
+    BOOST_TEST(world.incrementalOccupancyCapturesSameFrameMutations());
+}
+
+BOOST_AUTO_TEST_CASE(captured_failure_is_retried_when_terrain_opens_before_publication) {
+    navigation::testing::World world(std::vector<std::string>(64,std::string(64,'.')));
+    BOOST_TEST(world.capturedFailureRejectsChangedTerrain());
+}
+
+BOOST_AUTO_TEST_CASE(regional_terrain_edits_preserve_dynamic_journal_and_snapshot_consistency) {
+    navigation::testing::World world(std::vector<std::string>(16,std::string(16,'.')));
+    BOOST_TEST(world.incrementalOccupancyCapturesSameFrameMutations(true));
+}
+
+BOOST_AUTO_TEST_CASE(captured_hierarchy_reuses_equal_traversal_inputs_but_refreshes_fine_permissions) {
+    navigation::testing::World world(std::vector<std::string>(16,std::string(16,'.')));
+    BOOST_TEST(world.capturedHierarchyTracksTraversalRatherThanTerrainLabels());
+}
+
+BOOST_AUTO_TEST_CASE(regional_static_capture_preserves_untouched_pages_and_retained_views) {
+    navigation::testing::World world(std::vector<std::string>(32,std::string(32,'.')));
+    BOOST_TEST(world.regionalStaticCaptureRetainsUnaffectedPages());
+}
+
+BOOST_AUTO_TEST_CASE(regional_static_capture_reuses_unchanged_bridge_hierarchies) {
+    navigation::testing::World world(std::vector<std::string>(32,std::string(32,'.')));
+    BOOST_TEST(world.regionalCaptureReusesEveryUnchangedLayerHierarchy());
+}
+
+BOOST_AUTO_TEST_CASE(captured_dispatch_bounds_total_work_and_services_arrival_order) {
+    navigation::testing::World world(std::vector<std::string>(64,std::string(64,'.')));
+    BOOST_TEST(world.capturedDispatchServicesRequestsInArrivalOrder());
+}
+
+BOOST_AUTO_TEST_CASE(captured_routes_survive_unrelated_edits_and_reject_changed_route_terrain) {
+    for (bool bridge:{false,true}) for (bool intersects:{false,true}) {
+        navigation::testing::World world(std::vector<std::string>(64,std::string(64,'.')));
+        BOOST_TEST_CONTEXT("intersects route=" << intersects << " bridge=" << bridge) {
+            BOOST_TEST(world.capturedRouteHandlesRegionalEdits(intersects,bridge));
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(new_captured_requests_cannot_starve_existing_searches) {
+    navigation::testing::World world(std::vector<std::string>(64,std::string(64,'.')));
+    BOOST_TEST(world.capturedDispatchServicesRequestsInArrivalOrder(true));
+}
+
+BOOST_AUTO_TEST_CASE(captured_scratch_admission_is_bounded_while_all_requests_eventually_complete) {
+    navigation::testing::World world(std::vector<std::string>(64,std::string(64,'.')));
+    BOOST_TEST(world.capturedDispatchServicesRequestsInArrivalOrder(true,true));
+}
+
+namespace {
+// Exercise the captured fine graph under the same complete refinement policy
+// as live routing. The expected raw route still comes from the native adapter;
+// no native objects or lookup callbacks survive in this independent search.
+class CapturedReferenceSearch {
+    navigation::CapturedWeightedGraph& graph_;
+    navigation::RouteSearchWorkspace search_;
+    navigation::CapturedReferenceCursor cursor_;
+public:
+    explicit CapturedReferenceSearch(navigation::CapturedWeightedGraph& graph):graph_(graph) {
+        // DX9 phase rays observe cheaper predecessors outside coarse corridors.
+        // Ordinary queries therefore refine the complete fine graph.
+        search_.useReferenceOrder();
+        search_.begin(graph.nodeCount(),graph.start(),graph.goal(),[&](auto id){return graph.referenceHeuristic(id);});
+    }
+    bool done() const {
+        return search_.result().found() || search_.status()==navigation::RouteSearchStatus::Unreachable;
+    }
+    const navigation::RouteSearchResult& result() const { return search_.result(); }
+    void advance(unsigned budget) {
+        const auto heuristic=[&](auto id){return graph_.referenceHeuristic(id);};
+        search_.advanceReferenceSlice(budget,heuristic,[&](auto id,unsigned available,auto emit) {
+            return graph_.advanceReferenceNeighbors(id,search_,cursor_,available,emit);
+        });
+    }
+};
+}
+
+BOOST_AUTO_TEST_CASE(dx9_repair_bound_drains_queued_destinations_without_becoming_a_frame_budget) {
+    navigation::testing::World world(std::vector<std::string>(96,std::string(96,'.')));
+    for (unsigned slice:{1u,31u,4096u}) {
+        const auto queued=world.boundedRejoin(17,16,1,slice);
+        BOOST_TEST(queued.found);
+        const auto distant=world.boundedRejoin(85,85,2000,slice);
+        BOOST_TEST(!distant.found);
+        BOOST_TEST(distant.cells<2100);
+    }
+    // The same distant request is reachable when no gameplay bound applies.
+    BOOST_TEST(world.boundedRejoin(85,85,0,4096).found);
+}
+
+BOOST_AUTO_TEST_CASE(explicit_footprint_topology_and_dx9_anchor_routes_keep_distinct_rules) {
+    std::vector<std::string> map(128,std::string(128,'.'));
+    for (auto& row:map) row[63]='#';
+    map[64][63]='.';
+    for (int y=109;y<=111;++y) map[y][63]='.';
+    navigation::testing::World world(map);
+    // Explicit footprint topology uses the wide crossing. DX9 ordinary routing
+    // checks anchor terrain and uses the footprint only for unit traffic.
+    const auto coarse=world.coarseForFootprint(32,64,96,64,1);
+    BOOST_REQUIRE(!coarse.empty());
+    BOOST_TEST(std::any_of(coarse.begin(),coarse.end(),[](auto node) { return node/8==6; }));
+    const auto point=world.coarseForFootprint(32,64,96,64,0);
+    BOOST_REQUIRE(!point.empty());
+    BOOST_TEST(std::none_of(point.begin(),point.end(),[](auto node) { return node/8==6; }));
+    std::string raw,optimized;
+    for (unsigned budget:{1u,31u,4096u}) {
+        const auto before=world.hierarchyStats();
+        const auto route=world.hierarchicalForFootprint(32,64,96,64,1,budget);
+        BOOST_REQUIRE(route.found);
+        BOOST_TEST(route.legal);
+        BOOST_TEST(world.hierarchyStats()[0]==before[0]+1);
+        BOOST_TEST(world.hierarchyStats()[1]==before[1]);
+        BOOST_CHECK(std::find(route.rawGroundCells.begin(),route.rawGroundCells.end(),
+            std::array<int,2>{63,64})!=route.rawGroundCells.end());
+        if (raw.empty()) { raw=route.raw;optimized=route.optimized; }
+        else { BOOST_TEST(route.raw==raw);BOOST_TEST(route.optimized==optimized); }
+    }
+    for (int y=63;y<=65;++y) world.setCell(63,y,'.');
+    const auto opened=world.coarseForFootprint(32,64,96,64,1);
+    BOOST_REQUIRE(!opened.empty());
+    BOOST_TEST(std::none_of(opened.begin(),opened.end(),[](auto node) { return node/8==6; }));
+    const auto route=world.hierarchicalForFootprint(32,64,96,64,1,31);
+    BOOST_REQUIRE(route.found);
+    BOOST_TEST(route.legal);
+    BOOST_CHECK(std::find(route.rawGroundCells.begin(),route.rawGroundCells.end(),
+        std::array<int,2>{63,64})!=route.rawGroundCells.end());
+}
+
+BOOST_AUTO_TEST_CASE(native_hpa_terrain_edits_invalidate_distant_footprint_anchors) {
+    std::vector<std::string> map(128,std::string(128,'.'));
+    for (auto& row:map) row[63]='#';
+    for (int y=44;y<=84;++y) map[y][63]='.';
+    navigation::testing::World world(map);
+    // This unusually large footprint makes the dependency span more than a
+    // cluster. Closing the top cell invalidates the crossing anchored at y=64.
+    BOOST_REQUIRE(!world.coarseForFootprint(32,64,96,64,20).empty());
+    world.setCell(63,44,'#');
+    BOOST_TEST(world.coarseForFootprint(32,64,96,64,20).empty());
+    BOOST_TEST(!world.coarseForFootprint(32,64,96,64,0).empty());
+    world.setCell(63,44,'.');
+    BOOST_TEST(!world.coarseForFootprint(32,64,96,64,20).empty());
+}
+
+BOOST_AUTO_TEST_CASE(cached_terrain_planes_match_independent_footprint_enumeration) {
+    std::vector<std::string> map(32,std::string(32,'.'));
+    for (int i=3;i<29;++i) {
+        map[5][i]='#';map[12][i]='~';map[19][i]='^';map[26][i]='r';
+    }
+    navigation::testing::World world(map);
+    for (const auto surfaces:{1u,3u,5u,17u,21u,31u})
+        for (int radius=0;radius<=2;++radius) for (const bool centered:{false,true}) {
+            const auto actual=world.cachedTerrainForFootprint(radius,centered,surfaces);
+            BOOST_REQUIRE(actual.size()==1024u);
+            const int above=std::max(1,radius+int(centered));
+            for (int y=0;y<32;++y) for (int x=0;x<32;++x) {
+                bool expected=true;
+                for (int yy=y-radius;yy<y+above;++yy) for (int xx=x-radius;xx<x+above;++xx) {
+                    if (xx<0 || yy<0 || xx>=32 || yy>=32) { expected=false;continue; }
+                    const char cell=map[yy][xx];
+                    const unsigned required=cell=='.'?1:cell=='~'?2:cell=='^'?4:cell=='r'?16:0;
+                    expected&=(surfaces&8)!=0 || (surfaces&required)!=0;
+                }
+                BOOST_TEST_CONTEXT("surfaces=" << surfaces << " radius=" << radius << " centered=" << centered
+                    << " x=" << x << " y=" << y) {
+                    BOOST_TEST(bool(actual[y*32+x])==expected);
+                }
+            }
+        }
+}
+
+BOOST_AUTO_TEST_CASE(unrelated_bridge_cannot_create_an_unreachable_zero_distance_endpoint) {
+    std::vector<std::string> map(128,std::string(128,'.'));
+    for (int i=10;i<=20;++i) {
+        map[10][i]=map[20][i]='#';map[i][10]=map[i][20]='#';
+    }
+    map[15][20]='.';
+    navigation::testing::World world(map);
+    const auto ground=world.closestForFootprint(25,15,15,15,1);
+    BOOST_REQUIRE(ground.found);
+    world.addBridge();
+    const auto bridge=world.closestForFootprint(25,15,15,15,1);
+    BOOST_REQUIRE(bridge.found);
+    BOOST_TEST(bridge.legal);
+    BOOST_TEST(bridge.raw==ground.raw);
+    BOOST_TEST(bridge.cells<2000);
+}
+
+BOOST_AUTO_TEST_CASE(twilight_endpoint_bound_keeps_first_observations_across_slices) {
+    navigation::testing::World world(std::vector<std::string>(height,std::string(width,'.')));
+    world.loadTwilightFlameTerrain();
+    BOOST_TEST(world.weightedEndpointObservationsSurviveYield());
+}
+
+BOOST_AUTO_TEST_CASE(twilight_native_weighted_routes_materialize_with_bounded_work) {
+    navigation::testing::World world(std::vector<std::string>(height,std::string(width,'.')));
+    world.loadTwilightFlameTerrain();
+    BOOST_TEST(world.weightedRouteMaterializationStaysWithinSlices());
+}
+
+BOOST_AUTO_TEST_CASE(native_long_path_append_preserves_forward_backward_and_optimized_links) {
+    navigation::testing::World world({"...","...","..."});
+    BOOST_TEST(world.appendedPathLinksRemainOrdered());
+}
+
+BOOST_AUTO_TEST_CASE(native_zero_coordinate_destinations_are_rejected) {
+    navigation::testing::World world({"...","...","..."});
+    BOOST_TEST(world.zeroCoordinateRequestsAreRejected());
+}
+
+BOOST_AUTO_TEST_CASE(native_invalid_public_queries_return_safely) {
+    navigation::testing::World world({"...","...","..."});
+    BOOST_TEST(world.invalidPublicQueriesReturnSafely());
+}
+
+BOOST_AUTO_TEST_CASE(native_individual_routes_may_cross_pinched_ground) {
+    navigation::testing::World world({"........................................"});
+    BOOST_TEST(world.individualRoutesMayCrossPinchedGround());
+}
+
+BOOST_AUTO_TEST_CASE(native_waypoint_edits_refresh_skipping_incoming_and_outgoing_edges) {
+    navigation::testing::World world({"...","...","..."});
+    BOOST_TEST(world.editedWaypointDirectionsRemainCurrent());
+}
+
+BOOST_AUTO_TEST_CASE(dx9_path_publication_smooths_without_removing_raw_nodes) {
+    navigation::testing::World world({"...","...","..."});
+    BOOST_TEST(world.dx9PathPublicationSmoothsWithoutRemovingRawNodes());
+}
+
+BOOST_AUTO_TEST_CASE(captured_terrain_and_native_movement_match_surface_and_obstacle_rules) {
+    navigation::testing::World world({"...","...","..."});
+    BOOST_TEST(world.capturedTerrainMatchesNativePermissions());
+}
+
+BOOST_AUTO_TEST_CASE(captured_twilight_footprints_match_native_terrain_classification) {
+    navigation::testing::World world(std::vector<std::string>(height,std::string(width,'.')));
+    world.loadTwilightFlameTerrain();
+    BOOST_TEST(world.capturedFootprintsMatchNativeTerrain());
+}
+
+BOOST_AUTO_TEST_CASE(captured_twilight_corridors_match_original_widths) {
+    navigation::testing::World world(std::vector<std::string>(height,std::string(width,'.')));
+    world.loadTwilightFlameTerrain();
+    BOOST_TEST(world.capturedCorridorWidthsMatchOriginalTerrainRules());
+}
+
+BOOST_AUTO_TEST_CASE(captured_twilight_weighted_search_survives_world_destruction_and_resumes) {
+    const auto captured=[] {
+        navigation::testing::World world(std::vector<std::string>(height,std::string(width,'.')));
+        world.loadTwilightFlameTerrain();
+        return world.captureWeightedRoute(116,314,4,219);
+    }(); // Native map, pathfinder and game objects are destroyed here.
+    auto& graph=*captured.graph;
+    BOOST_REQUIRE(graph.goalAllowed());
+    BOOST_REQUIRE(captured.reference.size()>2u);
+    for (unsigned budget : {1u,31u,4096u}) {
+        auto query=graph.cloneQuery();
+        CapturedReferenceSearch search(query);
+        unsigned updates=0;
+        while (!search.done()) {
+            const auto before=search.result().work;
+            search.advance(budget);
+            BOOST_TEST(search.result().work-before<=budget);
+            // Credits now include individual phase samples, not just popped
+            // nodes. Retain a finite guard while allowing those smaller slices.
+            BOOST_REQUIRE(++updates<=std::uint64_t(graph.nodeCount())*32);
+        }
+        BOOST_TEST(search.result().nodes==captured.reference);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(twilight_captured_search_batches_repeat_identically) {
+    const auto captured=[] {
+        navigation::testing::World world(std::vector<std::string>(height,std::string(width,'.')));
+        world.loadTwilightFlameTerrain();
+        return world.captureWeightedRoute(116,314,4,219);
+    }();
+    // Share only immutable map/occupant planes. Every search owns its memo and
+    // workspace; no native world remains alive during execution.
+    std::vector<navigation::RouteSearchResult> reference;
+    for (unsigned repetition=0;repetition<3;++repetition) {
+
+        std::vector<navigation::CapturedWeightedGraph> graphs;
+        for (unsigned i=0;i<8;++i) graphs.push_back(captured.graph->cloneQuery());
+        std::vector<std::unique_ptr<CapturedReferenceSearch>> searches;
+        for (unsigned i=0;i<8;++i) {
+            searches.push_back(std::make_unique<CapturedReferenceSearch>(graphs[i]));
+        }
+        unsigned slices=0;
+        while (std::any_of(searches.begin(),searches.end(),[](const auto& search) {
+            return !search->done();
+        })) {
+            for (std::size_t i=0;i<8;++i) {
+                searches[i]->advance(31);
+            }
+            BOOST_REQUIRE(++slices<=graphs.front().nodeCount());
+        }
+        for (unsigned i=0;i<8;++i) {
+            const auto& result=searches[i]->result();
+            BOOST_TEST(result.nodes==captured.reference,boost::test_tools::per_element());
+            if (!repetition) reference.push_back(result);
+            else {
+                BOOST_TEST(result.nodes==reference[i].nodes,boost::test_tools::per_element());
+                BOOST_TEST(result.cost==reference[i].cost);
+                BOOST_TEST(result.expanded==reference[i].expanded);
+                BOOST_TEST(result.work==reference[i].work);
+            }
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(twilight_native_queue_charges_the_exhausted_search_and_its_endpoint_pass) {
+    navigation::testing::World world(std::vector<std::string>(height,std::string(width,'.')));
+    world.loadTwilightFlameTerrain();
+    const auto [work,evaluations]=world.weightedEndpointRankingWork();
+    BOOST_REQUIRE(evaluations>1000u);
+    BOOST_TEST(work==2ull*(evaluations-1));
+}
+
+BOOST_AUTO_TEST_CASE(twilight_native_search_can_pause_interleave_cancel_and_resume) {
+    navigation::testing::World world(std::vector<std::string>(height,std::string(width,'.')));
+    world.loadTwilightFlameTerrain();
+    const auto [total,maximum,resumes]=world.weightedContinuationSlices();
+    // Exact expansion counts are an implementation detail; repeated runs must
+    // perform identical accounted work and retain every slice boundary.
+    BOOST_TEST(total==world.weightedContinuationSlices()[0]);
+    BOOST_TEST(maximum<=navigation::CellsPerFrame);
+    BOOST_TEST(resumes>=9u);
+}
+
+BOOST_AUTO_TEST_CASE(twilight_map_edits_cancel_suspended_and_completed_native_searches) {
+    navigation::testing::World world(std::vector<std::string>(height,std::string(width,'.')));
+    world.loadTwilightFlameTerrain();
+    BOOST_TEST(world.obsoleteWeightedTasksAreCancelled());
+}
+
+BOOST_AUTO_TEST_CASE(twilight_flame_routes_match_independent_terrain_connectivity) {
+    navigation::testing::World world(std::vector<std::string>(height,std::string(width,'.')));
+    world.loadTwilightFlameTerrain();
+    const auto terrain=world.terrainClassification();
+    std::vector<int> components(width*height,-1), passable;
+    std::vector<int> queue;
+    int component=0;
+    for (int start=0;start<width*height;++start) {
+        if (terrain[start/width][start%width]!='.') continue;
+        passable.push_back(start);
+        if (components[start]>=0) continue;
+        queue={start}; components[start]=component++;
+        for (std::size_t head=0;head<queue.size();++head) {
+            const int x=queue[head]%width,y=queue[head]/width;
+            for (auto delta : {std::array{1,0},std::array{-1,0},std::array{0,1},std::array{0,-1}}) {
+                const int xx=x+delta[0],yy=y+delta[1];
+                if (xx<0 || xx>=width || yy<0 || yy>=height) continue;
+                const int next=yy*width+xx;
+                if (components[next]>=0 || terrain[yy][xx]!='.') continue;
+                components[next]=components[start]; queue.push_back(next);
+            }
+        }
+    }
+    BOOST_REQUIRE(passable.size()>50000u);
+    BOOST_REQUIRE(passable.size()<220000u);
+    // Real terrain, native route/clearance code, and persistent occupancy.
+    // These are occupancy records, not 10,000 simulated unit objects.
+    world.populateMovingUnits(10000);
+    std::uint32_t seed=0x7481u;
+    auto next=[&] { seed=1664525u*seed+1013904223u; return passable[seed%passable.size()]; };
+    for (int sample=0;sample<24;++sample) {
+        const int from=next(),to=next();
+        BOOST_TEST_CONTEXT("Twilight Flame route " << from << " -> " << to) {
+            const auto first=world.normal(from%width,from/width,to%width,to/width);
+            BOOST_TEST(first.found==(components[from]==components[to]));
+            BOOST_TEST(first.legal);
+            BOOST_TEST(first.clean);
+            const auto repeated=world.normal(from%width,from/width,to%width,to/width);
+            BOOST_TEST(first.raw==repeated.raw);
+            BOOST_TEST(first.optimized==repeated.optimized);
+            BOOST_TEST(world.movingUnitCount()==10000);
+            if (sample<4) {
+                // Paused kernels consume an immutable real-terrain view. This
+                // proves slicing invariance; it does not pause live unit AI yet.
+                const auto heuristic=[&](unsigned id) {
+                    return 10u*unsigned(std::abs(int(id)%width-to%width)+std::abs(int(id)/width-to/width));
+                };
+                const auto neighbors=[&](unsigned id,auto emit) {
+                    const int x=int(id)%width,y=int(id)/width;
+                    for (auto delta : {std::array{1,0},std::array{-1,0},std::array{0,1},std::array{0,-1}}) {
+                        const int xx=x+delta[0],yy=y+delta[1];
+                        if(xx>=0 && xx<width && yy>=0 && yy<height && terrain[yy][xx]=='.')
+                            emit(unsigned(yy*width+xx),10u);
+                    }
+                };
+                navigation::RouteSearchResult expected;
+                for (const unsigned budget : {50000u,73u,1u}) {
+                    navigation::RouteSearchWorkspace sliced;
+                    sliced.begin(width*height,from,to,heuristic);
+                    while(sliced.status()==navigation::RouteSearchStatus::Searching) {
+                        const auto before=sliced.result().expanded;
+                        sliced.advance(budget,heuristic,neighbors);
+                        BOOST_REQUIRE(sliced.result().expanded-before<=budget);
+                    }
+                    const auto& result=sliced.result();
+                    BOOST_REQUIRE(result.found()==(components[from]==components[to]));
+                    if (budget==50000) expected=result;
+                    else {
+                        BOOST_REQUIRE(result.nodes==expected.nodes);
+                        BOOST_REQUIRE(result.cost==expected.cost);
+                        BOOST_REQUIRE(result.expanded==expected.expanded);
+                    }
+                }
+            }
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(enclosed_goal_proof_preserves_dx9_anchor_terrain_crossings) {
+    // DX9 examineNeighboringCells checks anchor terrain; checkForMovement
+    // applies the footprint to traffic, not surrounding terrain cells.
+    std::vector<std::string> map(31,std::string(31,'.'));
+    for (int y=10;y<=20;++y) for (int x=10;x<=20;++x)
+        if (x==10 || x==20 || y==10 || y==20) map[y][x]='#';
+    map[15][20]='.';
+    navigation::testing::World world(map);
+    BOOST_TEST(!world.enclosedGoal(25,15,15,15,1));
+    BOOST_TEST(!world.enclosedGoal(25,15,15,15,0));
+    world.setCell(20,15,'#');
+    BOOST_TEST(world.enclosedGoal(25,15,15,15,1));
+    BOOST_TEST(world.enclosedGoal(25,15,15,15,0));
+}
+
+BOOST_AUTO_TEST_CASE(captured_twilight_regional_snapshot_costs) {
+    navigation::testing::World world(std::vector<std::string>(height,std::string(width,'.')));
+    world.loadTwilightFlameTerrain();
+    const auto ms=world.regionalStaticCaptureTimings();
+    BOOST_TEST_MESSAGE("Snapshot capture maximum ms over 16 edits: regional_static=" << ms[0]
+        << " regional_dynamic=" << ms[1] << " full_static=" << ms[2] << " full_dynamic=" << ms[3]);
+}
+
+BOOST_AUTO_TEST_CASE(closest_route_through_a_dx9_anchor_opening_reaches_the_goal) {
+    std::vector<std::string> map(128,std::string(128,'.'));
+    for (int y=10;y<=20;++y) for (int x=10;x<=20;++x)
+        if (x==10 || x==20 || y==10 || y==20) map[y][x]='#';
+    map[15][20]='.';
+    navigation::testing::World world(map);
+    const auto route=world.closestForFootprint(25,15,15,15,1);
+    BOOST_REQUIRE(route.found);
+    BOOST_TEST(route.legal);
+    BOOST_TEST(route.cells<2000);
+    BOOST_REQUIRE(!route.rawGroundCells.empty());
+    const auto end=route.rawGroundCells.back();
+    const int dx=end[0]-15,dy=end[1]-15;
+    BOOST_TEST(dx*dx+dy*dy==0);
+    const auto repeat=world.closestForFootprint(25,15,15,15,1);
+    BOOST_TEST(repeat.raw==route.raw);
+    BOOST_TEST(repeat.optimized==route.optimized);
+}
+
+BOOST_AUTO_TEST_CASE(twilight_flame_pinched_destination_is_projected_before_search) {
+    navigation::testing::World world(std::vector<std::string>(height,std::string(width,'.')));
+    world.loadTwilightFlameTerrain();
+    const auto route=world.ground(76,16,365,256);
+    BOOST_REQUIRE(route.found);
+    BOOST_TEST(route.legal);
+    BOOST_TEST(route.clean);
+    const auto repeat=world.ground(76,16,365,256);
+    BOOST_TEST(repeat.raw==route.raw);
+    BOOST_TEST(repeat.optimized==route.optimized);
+}
+
+BOOST_AUTO_TEST_CASE(twilight_flame_pinched_start_keeps_its_position_and_uses_a_local_exit) {
+    navigation::testing::World world(std::vector<std::string>(height,std::string(width,'.')));
+    world.loadTwilightFlameTerrain();
+    const auto route=world.ground(476,381,26,176);
+    BOOST_REQUIRE(route.found);
+    BOOST_TEST(route.legal);
+    BOOST_TEST(route.clean);
+    BOOST_REQUIRE(route.rawGroundCells.size()>1);
+    BOOST_TEST(route.rawGroundCells.front()[0]==476);
+    BOOST_TEST(route.rawGroundCells.front()[1]==381);
+    const auto exit=route.rawGroundCells[1];
+    BOOST_TEST(std::abs(exit[0]-476)+std::abs(exit[1]-381)==1);
+    const auto repeat=world.ground(476,381,26,176);
+    BOOST_TEST(repeat.raw==route.raw);
+    BOOST_TEST(repeat.optimized==route.optimized);
+}
+
+BOOST_AUTO_TEST_CASE(pinched_start_cannot_escape_through_an_enclosing_cliff_wall) {
+    std::vector<std::string> map(16,std::string(16,'.'));
+    for (int y=5;y<=9;++y) for (int x=5;x<=9;++x)
+        if (x==5 || x==9 || y==5 || y==9) map[y][x]='^';
+    navigation::testing::World world(map);
+    for (int y=6;y<=8;++y) for (int x=6;x<=8;++x) world.setPinched(x,y,true,true);
+    const auto route=world.ground(7,7,13,13);
+    BOOST_TEST(!route.found);
+    BOOST_TEST(route.clean);
+}
+
+BOOST_AUTO_TEST_CASE(twilight_flame_multiple_step_start_escape_preserves_start_and_route) {
+    navigation::testing::World world(std::vector<std::string>(height,std::string(width,'.')));
+    world.loadTwilightFlameTerrain();
+    const auto route=world.ground(116,314,4,219);
+    BOOST_REQUIRE(route.found);
+    BOOST_TEST(route.legal);
+    BOOST_TEST(route.clean);
+    BOOST_REQUIRE(route.rawGroundCells.size()>2);
+    BOOST_TEST(route.rawGroundCells.front()[0]==116);
+    BOOST_TEST(route.rawGroundCells.front()[1]==314);
+    const auto repeat=world.ground(116,314,4,219);
+    BOOST_TEST(repeat.raw==route.raw);
+    BOOST_TEST(repeat.optimized==route.optimized);
+}
+
+BOOST_AUTO_TEST_CASE(twilight_captured_routes_and_cancellation_repeat_identically) {
+    navigation::testing::World world(std::vector<std::string>(height,std::string(width,'.')));
+    world.loadTwilightFlameTerrain();
+    const auto serial=world.capturedNativeRoutes();
+    BOOST_REQUIRE(!serial.empty());
+    BOOST_TEST(world.capturedNativeRoutes()==serial);
+    BOOST_TEST(world.capturedNativeRoutes()==serial);
+}

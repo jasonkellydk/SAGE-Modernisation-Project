@@ -1,0 +1,44 @@
+#include <boost/test/unit_test.hpp>
+#include <limits>
+import engine.navigation.search.graph.destination_rank;
+
+BOOST_AUTO_TEST_CASE(destination_rank_exact_exception_requires_matching_layer_and_position) {
+    navigation::DestinationRankQuery query{4,7,2,true,0.01,0.5f};
+    unsigned calls=0;
+    auto reserved=[&](int,int,unsigned) { ++calls;return false; };
+    BOOST_TEST(navigation::rankDestination(query,4,7,2,0,reserved).value()==0);
+    BOOST_TEST(calls==0u);
+    BOOST_TEST(!navigation::rankDestination(query,4,7,1,0,reserved).has_value());
+    BOOST_TEST(!navigation::rankDestination(query,3,7,2,0,reserved).has_value());
+    query.allowReservedExact=false;
+    BOOST_TEST(!navigation::rankDestination(query,4,7,2,0,reserved).has_value());
+    BOOST_TEST(calls==3u);
+}
+
+BOOST_AUTO_TEST_CASE(destination_rank_matches_native_expression_without_integer_overflow) {
+    for (float multiplier : {0.f,0.1f,1.f,3.7f}) {
+        navigation::DestinationRankQuery query{std::numeric_limits<int>::max(),-29,1,false,0.01,multiplier};
+        for (unsigned cost : {0u,1u,137u,606798u,std::numeric_limits<unsigned>::max()}) {
+            for (int x : {std::numeric_limits<int>::min(),0,173}) {
+                const double dx=double(query.x)-x,dy=double(query.y)-37;
+                const double expected=dx*dx+dy*dy+double(cost)*cost*query.costToDistanceSquared*multiplier;
+                const auto actual=navigation::rankDestination(query,x,37,1,cost,[](int,int,unsigned){return true;});
+                BOOST_REQUIRE(actual.has_value());
+                BOOST_TEST(*actual==expected);
+            }
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(remaining_destination_bound_never_exceeds_a_possible_endpoint_rank) {
+    for (float multiplier:{0.f,0.0001f,0.2f,1.f,10.f}) {
+        navigation::DestinationRankQuery query{0,0,1,false,0.01,multiplier};
+        for (unsigned cost:{0u,1u,73u,2000u,std::numeric_limits<unsigned>::max()})
+            for (unsigned x=0;x<25;++x) for (unsigned y=0;y<25;++y) {
+                const unsigned heuristic=10*(x>y?x:y)+4*(x<y?x:y);
+                const auto bound=navigation::remainingDestinationRankBound(query,cost,heuristic);
+                const auto rank=navigation::rankDestination(query,int(x),int(y),1,cost,[](int,int,unsigned){return true;});
+                BOOST_TEST(bound<=*rank);
+            }
+    }
+}

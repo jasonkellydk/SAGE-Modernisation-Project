@@ -13,6 +13,24 @@ import Graphics.Scene.Shadows;
 
 using namespace Graphics;
 
+BOOST_AUTO_TEST_CASE(coarse_shadow_rejection_keeps_casters_in_any_light_volume)
+{
+    ShadowCascades cascades;
+    cascades.count=2;
+    cascades.views[0].view_projection=Matrix4x4::Identity();
+    cascades.views[1].view_projection=Matrix4x4::Identity();
+    cascades.views[1].view_projection.values[3]=-3;
+    ShadowCasterVolume volume(cascades);
+    BOOST_CHECK(volume.Intersects({0,0,.5f},{.1f,.1f,.1f}));
+    BOOST_CHECK(volume.Intersects({3,0,.5f},{.1f,.1f,.1f}));
+    BOOST_CHECK(volume.Intersects({1.1f,0,.5f},{.1f,.1f,.1f}));
+    BOOST_CHECK(!volume.Intersects({6,0,.5f},{.1f,.1f,.1f}));
+    BOOST_CHECK(!volume.Intersects({0,0,-2},{.1f,.1f,.1f}));
+    BOOST_CHECK(!volume.Intersects({0,0,2},{.1f,.1f,.1f}));
+    BOOST_CHECK(volume.Intersects({0,0,0},{-1,1,1}));
+    BOOST_CHECK(ShadowCasterVolume(ShadowCascades{}).Intersects({100,100,100},{1,1,1}));
+}
+
 BOOST_AUTO_TEST_CASE(shadow_resolution_tracks_viewport_in_bounded_quality_tiers)
 {
     BOOST_CHECK_EQUAL(Shadow_Map_Size_For_Viewport(1280,720),3072u);
@@ -52,12 +70,14 @@ BOOST_AUTO_TEST_CASE(cascade_receivers_and_upstream_casters_fit_gpu_depth_range)
     const ShadowSettings settings{4,1,100,0.5f,10,1024};
     ShadowCascades cascades;
     BOOST_REQUIRE(Build_Shadow_Cascades(view,LightHandle(0,1),light,settings,cascades));
+    const ShadowCasterVolume volume(cascades);
     for (std::uint32_t cascade=0;cascade<cascades.count;++cascade) {
         const auto& shadow = cascades.views[cascade];
         for (const float depth : {shadow.split_near,shadow.split_far}) {
             for (const float x : {-depth,depth}) {
                 for (const float y : {-depth,depth}) {
                     const std::array<float,4> world{x,y,-depth,1};
+                    BOOST_CHECK(volume.Intersects({x,y,-depth},{0,0,0}));
                     std::array<float,4> clip{};
                     for (std::size_t row=0;row<4;++row)
                         for (std::size_t column=0;column<4;++column)
@@ -73,6 +93,7 @@ BOOST_AUTO_TEST_CASE(cascade_receivers_and_upstream_casters_fit_gpu_depth_range)
         // A caster outside the camera slice can cast into the slice. Padding
         // must enlarge the depth interval, not just move the light camera.
         const float caster_z = -shadow.split_near + settings.depth_padding*0.5f;
+        BOOST_CHECK(volume.Intersects({0,0,caster_z},{0,0,0}));
         const float caster_depth = shadow.view_projection(2,2)*caster_z + shadow.view_projection(2,3);
         BOOST_CHECK_GE(caster_depth,0);
         BOOST_CHECK_LE(caster_depth,1);

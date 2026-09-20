@@ -1,0 +1,44 @@
+#include <boost/test/unit_test.hpp>
+#include <cstdint>
+#include <stdexcept>
+import engine.navigation.search.cell_query_cache;
+
+BOOST_AUTO_TEST_CASE(search_cell_cache_reuses_classification_only_within_one_query) {
+    struct Sample { bool passable; unsigned occupied; };
+    navigation::CellQueryCache<Sample> cache;
+    unsigned calls = 0;
+    BOOST_TEST(cache.find(0)==nullptr);
+    cache.begin(4096);
+    for (unsigned pass=0;pass<8;++pass)
+        for (unsigned i=0;i<4096;++i) {
+            const auto& sample=cache.get(i,[&] { ++calls; return Sample{i%3!=0,i%5}; });
+            BOOST_TEST(cache.find(i)==&sample);
+            BOOST_REQUIRE(sample.passable == (i%3!=0));
+            BOOST_REQUIRE(sample.occupied == i%5);
+        }
+    BOOST_TEST(calls == 4096u);
+    cache.begin(4096);
+    BOOST_TEST(cache.find(1)==nullptr);
+    const auto& changed=cache.get(1,[&] { ++calls; return Sample{false,123}; });
+    BOOST_TEST(!changed.passable);
+    BOOST_TEST(changed.occupied == 123u);
+    BOOST_TEST(calls == 4097u);
+}
+
+BOOST_AUTO_TEST_CASE(search_cell_cache_resize_epoch_wrap_and_failed_compute) {
+    navigation::CellQueryCache<unsigned,std::uint8_t> cache;
+    for (unsigned query=0;query<600;++query) {
+        cache.begin(query%2 ? 32 : 1);
+        BOOST_TEST(cache.find(0)==nullptr);
+        BOOST_TEST(cache.get(0,[&] { return query; }) == query);
+        BOOST_REQUIRE(cache.find(0)!=nullptr);
+        BOOST_TEST(*cache.find(0)==query);
+    }
+    cache.begin(0);
+    BOOST_TEST(cache.find(0)==nullptr);
+    BOOST_CHECK_THROW(cache.get(0,[] { return 1u; }),std::out_of_range);
+    cache.begin(1);
+    BOOST_CHECK_THROW(cache.get(0,[]()->unsigned { throw std::runtime_error("classifier"); }),std::runtime_error);
+    BOOST_TEST(cache.find(0)==nullptr);
+    BOOST_TEST(cache.get(0,[] { return 42u; }) == 42u);
+}

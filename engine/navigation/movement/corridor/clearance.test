@@ -1,0 +1,86 @@
+#include <boost/test/unit_test.hpp>
+#include <array>
+#include <limits>
+import engine.navigation.movement.corridor.clearance;
+import engine.navigation.movement.terrain_policy;
+import engine.navigation.movement.snapshot.cells;
+import engine.navigation.movement.snapshot.occupants;
+
+namespace {
+navigation::CorridorCell clearCell() { return {navigation::TerrainKind::ground,0,true,false,false}; }
+}
+
+BOOST_AUTO_TEST_CASE(corridor_widths_preserve_rounding_corner_cuts_and_narrowing) {
+    using namespace navigation;
+    const OccupantSnapshot units;
+    constexpr std::array widths{1,1,2,2,4,4,6,6,8,8};
+    for (int diameter=0;diameter<10;++diameter)
+        BOOST_TEST(corridorClearance(5,5,diameter,false,[](int,int) { return clearCell(); },units)==widths[diameter]);
+    int blockedX=3,blockedY=3;
+    const auto read=[&](int x,int y) {
+        auto cell=clearCell();
+        if (x==blockedX && y==blockedY) cell.terrain=TerrainKind::cliff;
+        return cell;
+    };
+    BOOST_TEST(corridorClearance(5,5,4,false,read,units)==4); // Outer corner is cut.
+    blockedX=4;blockedY=4;
+    BOOST_TEST(corridorClearance(5,5,4,false,read,units)==1);
+    blockedX=5;blockedY=5;
+    BOOST_TEST(corridorClearance(5,5,4,false,read,units)==0);
+}
+
+BOOST_AUTO_TEST_CASE(corridor_crushers_only_ignore_obstacle_fences) {
+    using namespace navigation;
+    const OccupantSnapshot units;
+    for (unsigned kind=0;kind<7;++kind) for (bool fence : {false,true}) for (bool crusher : {false,true}) {
+        const auto read=[&](int,int) { return CorridorCell{static_cast<TerrainKind>(kind),0,true,fence,false}; };
+        const int expected=kind==0 || (kind==4 && fence && crusher)?4:0;
+        BOOST_TEST(corridorClearance(5,5,4,crusher,read,units)==expected);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(corridor_occupancy_uses_captured_crushable_levels_and_fixed_flags) {
+    using namespace navigation;
+    for (unsigned level=0;level<4;++level) {
+        std::array states{OccupantState{17,false,false,true,true,static_cast<unsigned char>(level)}};
+        const OccupantSnapshot units(states);
+        states[0].crushableLevel=0;
+        CellState source;
+        source.occupancy={17,true,false,false,false,true};
+        const CellSnapshot cells(0,0,0,9,9,[&](int,int) { return source; });
+        source={};
+        const auto read=[&](int x,int y) { return cells.corridor(x,y); };
+        BOOST_TEST(corridorClearance(5,5,4,false,read,units)==(level>0?1:4));
+        BOOST_TEST(corridorClearance(5,5,4,true,read,units)==(level>1?1:4));
+        const OccupantSnapshot missing;
+        BOOST_TEST(corridorClearance(5,5,4,false,read,missing)==4);
+        BOOST_TEST(corridorClearance(5,5,4,false,[&](int x,int y) {
+            auto cell=read(x,y);cell.stationary=false;return cell;
+        },units)==4);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(corridor_missing_cells_and_coordinate_limits_do_not_recurse_or_overflow) {
+    using namespace navigation;
+    const OccupantSnapshot units;
+    const auto map=[](int x,int y) {
+        auto cell=clearCell();cell.present=x>=0 && x<3 && y>=0 && y<3;return cell;
+    };
+    BOOST_TEST(corridorClearance(1,1,2,false,map,units)==2);
+    BOOST_TEST(corridorClearance(1,1,4,false,map,units)==0);
+    unsigned reads=0;
+    const auto read=[&](int,int) { ++reads;return clearCell(); };
+    const int low=std::numeric_limits<int>::min(),high=std::numeric_limits<int>::max();
+    BOOST_TEST(corridorClearance(high,low,1,false,read,units)==1);
+    BOOST_TEST(reads==1u);
+    BOOST_TEST(corridorClearance(low,low,2,false,read,units)==0);
+    BOOST_TEST(corridorClearance(0,0,-1,false,read,units)==0);
+    BOOST_TEST(reads==1u);
+    // A later column must still detect missing cells after an earlier blocker.
+    BOOST_TEST(corridorClearance(1,1,2,false,[](int x,int y) {
+        auto cell=clearCell();
+        if (x==0 && y==0) cell.terrain=TerrainKind::cliff;
+        if (x==1 && y==0) cell.present=false;
+        return cell;
+    },units)==0);
+}

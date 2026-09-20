@@ -1,0 +1,42 @@
+#include <boost/test/unit_test.hpp>
+#include <array>
+#include <cstdint>
+#include <limits>
+#include <stdexcept>
+import engine.navigation.search.unsigned_divisor;
+
+BOOST_AUTO_TEST_CASE(precomputed_grid_division_matches_native_unsigned_boundaries) {
+    constexpr auto maximum=std::numeric_limits<std::uint32_t>::max();
+    BOOST_CHECK_THROW(navigation::UnsignedDivisor(0),std::invalid_argument);
+    for (unsigned bit=0;bit<32;++bit) {
+        const std::uint32_t power=std::uint32_t{1}<<bit;
+        for (auto divisor:std::array{power-1,power,power+1,maximum}) {
+            if (!divisor) continue;
+            const navigation::UnsignedDivisor divide(divisor);
+            for (auto n:std::array{0u,1u,divisor-1,divisor,maximum-1,maximum})
+                BOOST_TEST(divide.quotient(n)==n/divisor);
+            for (auto q:std::array{1u,2u,3u,17u,65535u,maximum/divisor}) {
+                const auto boundary=std::uint64_t(q)*divisor;
+                for (int delta=-1;delta<=1;++delta) {
+                    const auto value=static_cast<std::int64_t>(boundary)+delta;
+                    if (value<0 || value>maximum) continue;
+                    const auto n=static_cast<std::uint32_t>(value);
+                    BOOST_TEST(divide.quotient(n)==n/divisor);
+                }
+            }
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(precomputed_grid_division_matches_native_random_inputs) {
+    std::uint32_t seed=0x19790427;
+    const auto next=[&] { seed=seed*1664525u+1013904223u; return seed; };
+    for (unsigned sample=0;sample<200000;++sample) {
+        auto divisor=next();
+        if (!divisor) divisor=1;
+        if ((sample&1)==0) divisor=1+divisor%4096;
+        const navigation::UnsignedDivisor divide(divisor);
+        const auto n=next();
+        BOOST_TEST(divide.quotient(n)==n/divisor);
+    }
+}

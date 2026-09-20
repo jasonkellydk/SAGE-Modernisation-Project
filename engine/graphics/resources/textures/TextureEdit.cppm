@@ -35,15 +35,23 @@ public:
 
     static TextureEdit* Readback(TextureResource& texture,unsigned mip)
     {
+        std::unique_ptr<TextureEdit> edit(Overwrite(texture,mip));
+        if (!edit || !texture.Owner().Readback_Texture_Subresource(texture.Handle(),
+            {edit->m_image.Bytes(),edit->m_image.Row_Pitch(),0,mip})) return nullptr;
+        return edit.release();
+    }
+
+    // The caller supplies all texels. Retain the destination generation, but
+    // never synchronize with the GPU to fetch pixels that will be overwritten.
+    static TextureEdit* Overwrite(TextureResource& texture,unsigned mip=0)
+    {
         const auto& description=texture.Description();
         if (mip>=description.mip_count || description.dimension!=RHITextureDimension::Texture2D
             || description.array_size!=1 || Assets::Pixel_Size(texture.Encoding())==0
                 && !Assets::Is_Block_Compressed(texture.Encoding())) return nullptr;
         std::unique_ptr<TextureEdit> edit(Create(std::max(1u,description.width>>mip),
             std::max(1u,description.height>>mip),texture.Encoding()));
-        if (!edit || !texture.Owner().Readback_Texture_Subresource(texture.Handle(),
-            {edit->m_image.Bytes(),edit->m_image.Row_Pitch(),0,mip})
-            || !texture.Owner().Retain_Texture(texture.Handle())) return nullptr;
+        if (!edit || !texture.Owner().Retain_Texture(texture.Handle())) return nullptr;
         edit->m_device=&texture.Owner(); edit->m_texture=texture.Handle(); edit->m_mip=mip;
         return edit.release();
     }

@@ -1,0 +1,65 @@
+#include <boost/test/unit_test.hpp>
+#include <array>
+#include <limits>
+#include <span>
+#include <stdexcept>
+#include <vector>
+import engine.navigation.movement.corridor.yield_paths;
+
+BOOST_AUTO_TEST_CASE(yield_corridors_keep_both_paths_and_individual_widths_after_source_destruction) {
+    std::vector<navigation::YieldSegment> source{{1,2,3,4,5},{6,7,8,9,12}};
+    navigation::YieldPaths paths(source);
+    source.clear();source.shrink_to_fit();
+    unsigned calls=0;
+    const bool clear=paths.clear(20,30,[&](const auto& segment,float left,float top,float right,float bottom) {
+        const float width=calls==0?5.f:12.f;
+        BOOST_TEST(segment.x1==(calls==0?1.f:6.f));
+        BOOST_TEST(segment.y2==(calls==0?4.f:9.f));
+        BOOST_TEST(left==20-width);BOOST_TEST(right==20+width);
+        BOOST_TEST(top==30-width);BOOST_TEST(bottom==30+width);
+        return ++calls==2;
+    });
+    BOOST_TEST(!clear);BOOST_TEST(calls==2u);BOOST_TEST(paths.size()==2u);
+    calls=0;
+    BOOST_TEST(!paths.clear(20,30,[&](const auto&,float,float,float,float){++calls;return true;}));
+    BOOST_TEST(calls==1u);
+}
+
+BOOST_AUTO_TEST_CASE(yield_corridors_validate_values_and_empty_paths_need_no_geometry_work) {
+    const navigation::YieldPaths empty(std::span<const navigation::YieldSegment>{});
+    unsigned calls=0;
+    auto intersect=[&](const auto&,float,float,float,float){++calls;return true;};
+    BOOST_TEST(empty.clear(0,0,intersect));
+    BOOST_TEST(!empty.clear(std::numeric_limits<float>::quiet_NaN(),0,intersect));
+    BOOST_TEST(calls==0u);
+    for (unsigned field=0;field<5;++field) {
+        std::array<float,5> values{0,1,2,3,4};values[field]=std::numeric_limits<float>::infinity();
+        std::array source{navigation::YieldSegment{values[0],values[1],values[2],values[3],values[4]}};
+        BOOST_CHECK_THROW(navigation::YieldPaths{source},std::invalid_argument);
+    }
+    const std::array negative{navigation::YieldSegment{0,0,0,0,-1}};
+    BOOST_CHECK_THROW(navigation::YieldPaths{negative},std::invalid_argument);
+}
+
+BOOST_AUTO_TEST_CASE(yield_destination_captures_start_layer_and_native_cell_alignment) {
+    const std::array source{navigation::YieldSegment{0,0,1,1,0}};
+    navigation::YieldPaths paths(source);
+    for (bool centered : {false,true}) {
+        navigation::YieldDestinationQuery query{17,29,2,centered,10};
+        unsigned reservations=0,geometry=0;
+        auto allowed=[&](int,int,unsigned){++reservations;return true;};
+        auto intersects=[&](const auto&,float left,float top,float right,float bottom) {
+            ++geometry;
+            const float x=centered?(17.f+0.5f)*10:float((17.f+0.05)*10);
+            const float y=centered?(29.f+0.5f)*10:float((29.f+0.05)*10);
+            BOOST_TEST(left==x);BOOST_TEST(right==x);BOOST_TEST(top==y);BOOST_TEST(bottom==y);
+            return false;
+        };
+        BOOST_TEST(!paths.destination(query,17,29,2,allowed,intersects));
+        BOOST_TEST(reservations==0u);BOOST_TEST(geometry==0u);
+        BOOST_TEST(paths.destination(query,17,29,1,allowed,intersects));
+        BOOST_TEST(reservations==1u);BOOST_TEST(geometry==1u);
+        BOOST_TEST(!paths.destination(query,17,29,1,[](int,int,unsigned){return false;},intersects));
+        BOOST_TEST(geometry==1u);
+    }
+}

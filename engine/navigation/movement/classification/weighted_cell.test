@@ -1,0 +1,153 @@
+#include <boost/test/unit_test.hpp>
+#include <array>
+#include <limits>
+#include <vector>
+import engine.navigation.movement.classification.weighted_cell;
+import engine.navigation.movement.terrain_policy;
+import engine.navigation.movement.occupancy_policy;
+import engine.navigation.movement.snapshot.cells;
+import engine.navigation.movement.snapshot.occupants;
+
+namespace {
+navigation::WeightedTerrainCell clear() {
+    return {{navigation::TerrainKind::ground,0,true,false},false};
+}
+}
+
+BOOST_AUTO_TEST_CASE(dx9_individual_terrain_checks_the_anchor_and_traffic_checks_the_footprint) {
+    // Pinned AIPathfind.cpp: examineNeighboringCells validates the target cell;
+    // checkForMovement (5173) scans footprint occupancy, not footprint terrain.
+    using namespace navigation;
+    WeightedCellQuery query{{groundSurface,0,false},1,1};
+    OccupancyResult traffic;
+    unsigned terrainReads=0,trafficReads=0;
+    bool trafficAllowed=true;
+    const auto terrain=[&](int x,int y) {
+        ++terrainReads;
+        auto value=clear();
+        if (x!=5 || y!=5) value.terrain.kind=TerrainKind::cliff;
+        return value;
+    };
+    const auto occupants=[&](OccupancyResult& result) {
+        ++trafficReads;
+        result.enemyFixed=!trafficAllowed;
+        return trafficAllowed;
+    };
+    BOOST_TEST(classifyWeightedCell(query,5,5,traffic,terrain,occupants));
+    BOOST_TEST(terrainReads==1u);
+    BOOST_TEST(trafficReads==1u);
+    trafficAllowed=false;
+    BOOST_TEST(!classifyWeightedCell(query,5,5,traffic,terrain,occupants));
+    BOOST_TEST(traffic.enemyFixed);
+    BOOST_TEST(terrainReads==2u);
+    BOOST_TEST(trafficReads==2u);
+}
+
+BOOST_AUTO_TEST_CASE(weighted_anchor_terrain_preserves_pinched_and_traffic_rules) {
+    using namespace navigation;
+    WeightedCellQuery query{{groundSurface,0,false},1,1};
+    OccupancyResult traffic;
+    unsigned reads=0,trafficReads=0;
+    bool anchorPinched=false,neighborPinched=true,neighborBlocked=false;
+    const auto read=[&](int x,int y) {
+        ++reads;
+        auto cell=clear();
+        if (x==5 && y==5) cell.pinched=anchorPinched;
+        else {
+            cell.pinched=neighborPinched;
+            if (neighborBlocked) cell.terrain.kind=TerrainKind::cliff;
+        }
+        return cell;
+    };
+    const auto check=[&](OccupancyResult& value) { ++trafficReads;value.allyFixedCount=2;return true; };
+    BOOST_TEST(classifyWeightedCell(query,5,5,traffic,read,check));
+    BOOST_TEST(reads==1u); // Terrain belongs to the anchor, occupancy to the footprint.
+    BOOST_TEST(trafficReads==1u);
+    BOOST_TEST(traffic.allyFixedCount==2);
+    neighborBlocked=true;
+    BOOST_TEST(classifyWeightedCell(query,5,5,traffic,read,check));
+    BOOST_TEST(trafficReads==2u);
+    BOOST_TEST(traffic.allyFixedCount==2);
+    neighborBlocked=false;anchorPinched=true;
+    BOOST_TEST(classifyWeightedCell(query,5,5,traffic,read,check));
+    BOOST_TEST(trafficReads==3u);
+    neighborBlocked=true;
+    BOOST_TEST(classifyWeightedCell(query,5,5,traffic,read,check));
+    BOOST_TEST(trafficReads==4u);
+}
+
+BOOST_AUTO_TEST_CASE(weighted_corridors_narrow_but_do_not_bypass_anchor_or_logical_bounds) {
+    using namespace navigation;
+    WeightedCellQuery query{{groundSurface,0,false},3,3,5,5,7,7,true,true};
+    OccupancyResult traffic;
+    bool pinched=false;
+    unsigned reads=0,trafficReads=0;
+    const auto read=[&](int x,int y) {
+        ++reads;
+        return WeightedTerrainCell{{TerrainKind::ground,0,x==5&&y==5,false},pinched};
+    };
+    const auto check=[&](OccupancyResult&) { ++trafficReads;return false; };
+    BOOST_TEST(classifyWeightedCell(query,5,5,traffic,read,check));
+    BOOST_TEST(reads==1u);
+    BOOST_TEST(trafficReads==0u);
+    BOOST_TEST(!classifyWeightedCell(query,4,5,traffic,read,check));
+    BOOST_TEST(reads==1u);
+    pinched=true;
+    BOOST_TEST(!classifyWeightedCell(query,5,5,traffic,read,check));
+    pinched=false;query.corridor=false;
+    BOOST_TEST(!classifyWeightedCell(query,5,5,traffic,read,check));
+    // Logical bounds restrict the anchor only; a valid physical footprint may cross them.
+    BOOST_TEST(classifyWeightedCell(query,5,5,traffic,[](int,int) { return clear(); },
+        [](OccupancyResult&) { return true; }));
+}
+
+BOOST_AUTO_TEST_CASE(weighted_classification_uses_historical_occupancy_and_unit_relationships) {
+    using namespace navigation;
+    std::vector<OccupantState> sourceUnits{{17,true,false,true,false}};
+    const OccupantSnapshot units(sourceUnits);
+    CellState source;
+    source.occupancy={17,true,false,false,false,true};
+    const CellSnapshot before(0,0,0,1,1,[&](int,int) { return source; });
+    sourceUnits[0].allied=false;
+    const OccupantSnapshot enemies(sourceUnits);
+    source={};
+    sourceUnits.clear();sourceUnits.shrink_to_fit();
+    const WeightedCellQuery query{{groundSurface,0,false},1,1};
+    const OccupancyQuery occupancy{1,0,1,1,1,1,false,false};
+    OccupancyResult traffic;
+    const auto read=[&](int x,int y) {
+        const auto* cell=before.cell(x,y);
+        if (!cell) return WeightedTerrainCell{};
+        return WeightedTerrainCell{{static_cast<TerrainKind>(cell->terrain),cell->obstacle,
+            cell->occupancy.valid,cell->fence},cell->pinched};
+    };
+    const auto classify=[&](const OccupantSnapshot& occupants) {
+        return classifyWeightedCell(query,1,1,traffic,read,[&](OccupancyResult& result) {
+            return checkOccupancy(occupancy,result,[&](int x,int y) { return before.occupancy(x,y); },occupants);
+        });
+    };
+    BOOST_TEST(classify(units));
+    BOOST_TEST(traffic.allyFixedCount==1); // Same vehicle occupies all four cells.
+    BOOST_TEST(!classify(enemies));
+    BOOST_TEST(traffic.enemyFixed);
+    BOOST_TEST(classify(units));
+    BOOST_TEST(!traffic.enemyFixed);
+    BOOST_TEST(traffic.allyFixedCount==1);
+}
+
+BOOST_AUTO_TEST_CASE(weighted_classification_rejects_invalid_footprints_without_overflow) {
+    using namespace navigation;
+    WeightedCellQuery query{{groundSurface,0,false},1,1};
+    OccupancyResult traffic;
+    unsigned trafficReads=0;
+    const auto check=[&](OccupancyResult&) { ++trafficReads;return true; };
+    const auto read=[](int,int) { return clear(); };
+    const auto low=std::numeric_limits<int>::min(),high=std::numeric_limits<int>::max();
+    BOOST_TEST(!classifyWeightedCell(query,low,0,traffic,read,check));
+    BOOST_TEST(!classifyWeightedCell(query,0,high,traffic,read,check));
+    query.radius=-1;
+    BOOST_TEST(!classifyWeightedCell(query,0,0,traffic,read,check));
+    query.radius=1;query.cellsAbove=0;
+    BOOST_TEST(!classifyWeightedCell(query,0,0,traffic,read,check));
+    BOOST_TEST(trafficReads==0u);
+}

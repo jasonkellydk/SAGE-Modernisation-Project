@@ -1,3 +1,4 @@
+import engine.navigation.topology.terrain_slope;
 import Graphics.Resources.Textures.Quality;
 /*
 **	Command & Conquer Generals Zero Hour(tm)
@@ -61,7 +62,6 @@ import Graphics.Resources.Textures.Quality;
 
 #define K_OBSOLETE_HEIGHT_MAP_VERSION 8
 
-#define PATHFIND_CLIFF_SLOPE_LIMIT_F	9.8f
 
 // -----------------------------------------------------------
 static AsciiString validateName(AsciiString n, Int flags)
@@ -2421,16 +2421,7 @@ void WorldHeightMap::setCellCliffFlagFromHeights(Int xIndex, Int yIndex)
 	Real height2 = getHeight(xIndex+1, yIndex)*MAP_HEIGHT_SCALE;
 	Real height3 = getHeight(xIndex, yIndex+1)*MAP_HEIGHT_SCALE;
 	Real height4 = getHeight(xIndex+1, yIndex+1)*MAP_HEIGHT_SCALE;
-	Real minZ = height1;
-	if (minZ > height2) minZ = height2;
-	if (minZ > height3) minZ = height3;
-	if (minZ > height4) minZ = height4;
-	Real maxZ = height1;
-	if (maxZ < height2) maxZ = height2;
-	if (maxZ < height3) maxZ = height3;
-	if (maxZ < height4) maxZ = height4;
-	const Real cliffRange = PATHFIND_CLIFF_SLOPE_LIMIT_F;
-	Bool isCliff = (maxZ-minZ > cliffRange);
+	const Bool isCliff = navigation::terrainCellIsCliff({height1, height2, height3, height4});
 	setCliffState(xIndex, yIndex, isCliff);
 
 }

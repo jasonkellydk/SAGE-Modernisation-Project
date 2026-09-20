@@ -157,6 +157,8 @@ public:
 	GraphicsTestDevice &operator=(const GraphicsTestDevice &) = delete;
 
 	GraphicsTestBackend Backend() const noexcept { return m_backend; }
+	std::uint64_t Texture_Map_Count() const noexcept { return m_texture_maps; }
+	std::uint64_t Texture_Readback_Count() const noexcept { return m_texture_readbacks; }
 	bool Is_Selection_Valid() const noexcept { return m_backend != GraphicsTestBackend::Invalid && m_device != nullptr; }
 
 	bool Is_Valid() const noexcept override { return m_device != nullptr && m_device->Is_Valid(); }
@@ -172,9 +174,9 @@ public:
 	bool Update_Buffer(RHIBufferHandle buffer, std::uint32_t offset, std::span<const std::byte> data) noexcept override { return m_device != nullptr && m_device->Update_Buffer(buffer, offset, data); }
 	bool Update_Texture(RHITextureHandle texture, const RHITextureUpload &data) noexcept override { return m_device != nullptr && m_device->Update_Texture(texture, data); }
 	bool Readback_Texture(RHITextureHandle texture, std::span<std::byte> data, std::uint32_t row_pitch) noexcept override { return m_device != nullptr && m_device->Readback_Texture(texture, data, row_pitch); }
-	bool Readback_Texture_Subresource(RHITextureHandle texture, const RHITextureReadback &data) noexcept override { return m_device != nullptr && m_device->Readback_Texture_Subresource(texture, data); }
+	bool Readback_Texture_Subresource(RHITextureHandle texture, const RHITextureReadback &data) noexcept override { ++m_texture_readbacks; return m_device != nullptr && m_device->Readback_Texture_Subresource(texture, data); }
 	bool Generate_Texture_Mips(RHITextureHandle texture) noexcept override { return m_device != nullptr && m_device->Generate_Texture_Mips(texture); }
-	bool Map_Texture(RHITextureHandle texture, std::uint32_t mip, std::uint32_t layer, bool read_only, RHITextureMapping &mapping) override { return m_device != nullptr && m_device->Map_Texture(texture, mip, layer, read_only, mapping); }
+	bool Map_Texture(RHITextureHandle texture, std::uint32_t mip, std::uint32_t layer, bool read_only, RHITextureMapping &mapping) override { ++m_texture_maps; return m_device != nullptr && m_device->Map_Texture(texture, mip, layer, read_only, mapping); }
 	bool Unmap_Texture(RHITextureHandle texture, std::uint32_t mip, std::uint32_t layer) noexcept override { return m_device != nullptr && m_device->Unmap_Texture(texture, mip, layer); }
 	bool Retain_Texture(RHITextureHandle texture) noexcept override { return m_device != nullptr && m_device->Retain_Texture(texture); }
 	std::uint64_t Texture_Content_Version(RHITextureHandle texture) const noexcept override { return m_device ? m_device->Texture_Content_Version(texture) : 0; }
@@ -187,6 +189,8 @@ public:
 	bool End_Frame() noexcept override { return m_device != nullptr && m_device->End_Frame(); }
 
 private:
+	std::uint64_t m_texture_readbacks = 0;
+	std::uint64_t m_texture_maps = 0;
 	GraphicsTestBackend m_backend = GraphicsTestBackend::Invalid;
 	std::string m_shader_directory;
 	std::unique_ptr<Device> m_device;

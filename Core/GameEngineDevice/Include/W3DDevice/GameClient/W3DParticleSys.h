@@ -22,6 +22,7 @@ public:
 
 	virtual void doParticles(W3DRenderContext &rinfo) override;
 	virtual void queueParticleRender() override;
+	void preloadAssets(TimeOfDay timeOfDay) override;
 	virtual Int getOnScreenParticleCount() override { return m_onScreenParticleCount; }
 
 	void Reset_Graphics_Particle_Bindings() noexcept;
@@ -46,7 +47,6 @@ private:
 	{
 		ParticleSystem *legacy_system = nullptr;
 		std::string texture_name;
-		Graphics::TextureHandle texture{};
 		Graphics::MaterialHandle material{};
 		std::vector<Graphics::BeamHandle> beams;
 		std::uint32_t sync_stamp = 0;
@@ -67,6 +67,7 @@ private:
 	Graphics::BeamFlags Graphics_Streak_Flags(const ParticleSystem &system) const noexcept;
 	void Update_Graphics_Streak(ParticleSystem &system, GraphicsStreakBinding &binding) noexcept;
 	Graphics::MaterialHandle Ensure_Graphics_Material(const char *texture_name);
+	Graphics::MaterialHandle Ensure_Graphics_Streak_Material(const char *texture_name);
 	Graphics::ParticleEmitterFlags Graphics_Particle_Flags(const ParticleSystem &system) const noexcept;
 	bool Passes_Terrain_Bounds(float x, float y, float z, float radius) const noexcept;
 	bool Prepare_Weather_Snow();
@@ -76,6 +77,7 @@ private:
     std::unordered_map<ParticleSystem*,std::size_t> m_graphicsEmitterSlots;
 	std::vector<GraphicsStreakBinding> m_graphicsStreaks;
 	std::vector<GraphicsMaterialBinding> m_graphicsMaterials;
+	std::vector<GraphicsMaterialBinding> m_graphicsStreakMaterials;
 	std::uint32_t m_graphicsSyncStamp = 0;
 	std::array<float, MAX_VOLUME_PARTICLES_PER_SYSTEM> m_graphicsPositionX{};
 	std::array<float, MAX_VOLUME_PARTICLES_PER_SYSTEM> m_graphicsPositionY{};

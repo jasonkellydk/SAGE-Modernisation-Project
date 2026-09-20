@@ -1,0 +1,24 @@
+#include <boost/test/unit_test.hpp>
+import engine.navigation.movement.destination.flee_goal;
+
+BOOST_AUTO_TEST_CASE(flee_goal_requires_clearance_from_both_threats_and_uses_strict_radius) {
+    navigation::FleeGoal goal({0,0,20,0,10,2000});
+    BOOST_TEST(!goal.consider(0,0));
+    BOOST_TEST(!goal.consider(20,0));
+    BOOST_TEST(!goal.consider(10,0));
+    BOOST_TEST(!goal.consider(30,0));
+    BOOST_TEST(goal.consider(31,0));
+    BOOST_TEST(goal.consider(-11,0));
+}
+
+BOOST_AUTO_TEST_CASE(flee_goal_budget_accepts_progress_but_not_equal_or_worse_candidates) {
+    navigation::FleeQuery input{0,0,0,0,1000000,3};
+    navigation::FleeGoal goal(input);
+    input.radius=0; // The goal owns its query.
+    BOOST_TEST(!goal.consider(1,0));
+    BOOST_TEST(!goal.consider(2,0));
+    BOOST_TEST(!goal.consider(3,0));
+    BOOST_TEST(!goal.consider(-3,0));
+    BOOST_TEST(!goal.consider(2,0));
+    BOOST_TEST(goal.consider(4,0));
+}

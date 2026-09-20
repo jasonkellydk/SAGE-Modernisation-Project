@@ -1,0 +1,16 @@
+{
+  "source": "MapsZH.big: Maps/Twilight Flame/Twilight Flame.map",
+  "map_sha256": "3b8b47e1af6e5d8d479f282ef6b6e542b5c2dbbd700a91fcf55aa7da209b1100",
+  "height_sha256": "8e0e140e0686b18a8458a338c979e303666e358722c01af31bfa61f6b70d74b6",
+  "width": 630,
+  "height": 630,
+  "border": 70,
+  "height_scale": 0.625,
+  "chunk_version": 4,
+  "boundaries": [
+    [
+      486,
+      469
+    ]
+  ]
+}

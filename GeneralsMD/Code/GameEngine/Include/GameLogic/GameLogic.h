@@ -28,6 +28,7 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 #pragma once
+#include <memory>
 
 #include "Common/GameCommon.h"	// ensure we get DUMP_PERF_STATS, or not
 #include "Common/GameType.h"
@@ -116,7 +117,7 @@ public:
 	void preUpdate();
 
 #if defined(RTS_DEBUG)
-	Int getNumberSleepyUpdates() const {return m_sleepyUpdates.size();} //For profiling, so not in Release.
+	Int getNumberSleepyUpdates() const;
 #endif
 	void processCommandList( CommandList *list );		///< process the command list
 
@@ -287,12 +288,7 @@ private:
 
 	void pushSleepyUpdate(UpdateModulePtr u);
 	UpdateModulePtr peekSleepyUpdate() const;
-	void popSleepyUpdate();
-	void eraseSleepyUpdate(Int i);
-	void rebalanceSleepyUpdate(Int i);
-	Int rebalanceParentSleepyUpdate(Int i);
-	Int rebalanceChildSleepyUpdate(Int i);
-	void remakeSleepyUpdate();
+	void eraseSleepyUpdate(UpdateModulePtr module);
 	void validateSleepyUpdate() const;
 
 	bool onNewGame(GameMessage *msg);
@@ -419,11 +415,8 @@ private:
 //	ObjectPtrHash m_objHash;																///< Used for ObjectID lookups
 	ObjectPtrVector m_objVector;
 
-	// this is a vector, but is maintained as a priority queue.
-	// never modify it directly; please use the proper access methods.
-	// (for an excellent discussion of priority queues, please see:
-	// http://dogma.net/markn/articles/pq_stl/priority.htm)
-	std::vector<UpdateModulePtr> m_sleepyUpdates;
+	struct ScheduledUpdates;
+	std::unique_ptr<ScheduledUpdates> m_scheduledUpdates;
 
 #ifdef ALLOW_NONSLEEPY_UPDATES
 	// this is a plain old list, not a pq.

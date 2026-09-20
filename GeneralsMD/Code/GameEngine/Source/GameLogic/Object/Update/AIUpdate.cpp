@@ -53,6 +53,8 @@
 #include "GameClient/InGameUI.h"  // useful for printing quick debug strings when we need to
 
 #include "GameLogic/AI.h"
+#include "engine/navigation/movement/blocked_progress.h"
+#include "engine/navigation/movement/command_handoff.h"
 #include "GameLogic/AIPathfind.h"
 #include "GameLogic/Locomotor.h"
 #include "GameLogic/Module/AIUpdate.h"
@@ -71,7 +73,19 @@
 #include "GameLogic/Weapon.h"
 #include "Common/Radar.h"									// For TheRadar
 
+
 #define SLEEPY_AI
+
+namespace {
+AIUpdateInterface::CommandObserver s_commandObserver=nullptr;
+void* s_commandObserverContext=nullptr;
+}
+
+void AIUpdateInterface::setCommandObserver(CommandObserver observer, void* context)
+{
+	s_commandObserver=observer;
+	s_commandObserverContext=context;
+}
 
 
 //-------------------------------------------------------------------------------------------------
@@ -234,6 +248,7 @@ AIUpdateInterface::AIUpdateInterface( Thing *thing, const ModuleData* moduleData
 	m_pathfindGoalCell.x = m_pathfindGoalCell.y = -1;
 	m_pathfindCurCell.x = m_pathfindCurCell.y = -1;
 	m_blockedFrames = 0;
+	m_lastBlockedRecoveryFrame = ~0u;
 	m_curMaxBlockedSpeed = 0;
 	m_bumpSpeedLimit = FAST_AS_POSSIBLE;
 	m_ignoreCollisionsUntil = 0;
@@ -401,7 +416,6 @@ void AIUpdateInterface::doPathfind( PathfindServicesInterface *pathfinder )
 	//CRCDEBUG_LOG(("AIUpdateInterface::doPathfind() for object %d", getObject()->getID()));
 	m_waitingForPath = FALSE;
 	if (m_isSafePath) {
-		destroyPath();
 		Coord3D pos1, pos2;
 		pos1.set(-1000,-1000,0);
 		Object *repulsor = TheGameLogic->findObjectByID(m_repulsor1);
@@ -413,23 +427,36 @@ void AIUpdateInterface::doPathfind( PathfindServicesInterface *pathfinder )
 		if (repulsor) {
 			pos2 = *repulsor->getPosition();
 		}
-		m_path = pathfinder->findSafePath(getObject(), m_locomotorSet,
+		Path* replacement = pathfinder->findSafePath(getObject(), m_locomotorSet,
 			getObject()->getPosition(),
 			&pos1, 	&pos2,
 			getObject()->getVisionRange() + TheAI->getAiData()->m_repulsedDistance);
+		if (pathfinder->isGroundPathPending(getObject()->getID())) {
+			m_waitingForPath = TRUE;
+			return;
+		}
+		releasePath();
+		m_path = replacement;
+		wakeUpNow();
 		return;
 	}
 	if (m_isApproachPath & !isDoingGroundMovement()) {
 		m_isApproachPath = false;
 	}
 	if (m_isApproachPath) {
-		destroyPath();
-		m_path = pathfinder->findClosestPath(getObject(), m_locomotorSet, getObject()->getPosition(),
+		Path* replacement = pathfinder->findClosestPath(getObject(), m_locomotorSet, getObject()->getPosition(),
 			&m_requestedDestination, m_isBlockedAndStuck, 0.2f, FALSE );
+		if (pathfinder->isGroundPathPending(getObject()->getID())) {
+			m_waitingForPath = TRUE;
+			return;
+		}
+		releasePath();
+		m_path = replacement;
 		if (isDoingGroundMovement() && getPath()) {
 			TheAI->pathfinder()->updateGoal(getObject(), getPath()->getLastNode()->getPosition(),
 				getPath()->getLastNode()->getLayer());
 		}
+		wakeUpNow();
 		return;
 	}
 	if (m_isAttackPath) {
@@ -456,6 +483,9 @@ void AIUpdateInterface::doPathfind( PathfindServicesInterface *pathfinder )
 		}
 	}
 	computePath(pathfinder, &m_requestedDestination);
+	if (m_waitingForPath && pathfinder->isGroundPathPending(getObject()->getID())) {
+		return; // Completion will apply goal reservations and wake the unit.
+	}
 	if (m_isFinalGoal && isDoingGroundMovement() && getPath()) {
 		TheAI->pathfinder()->updateGoal(getObject(), getPath()->getLastNode()->getPosition(),
 			getPath()->getLastNode()->getLayer());
@@ -478,6 +508,7 @@ will be processed when we get to the front of the pathfind queue. jba */
 //-------------------------------------------------------------------------------------------------
 void AIUpdateInterface::requestPath( Coord3D *destination, Bool isFinalGoal )
 {
+	++m_pathRequestRevision;
 
 	if (m_locomotorSet.getValidSurfaces() == 0) {
 		DEBUG_CRASH(("Attempting to path immobile unit."));
@@ -496,7 +527,7 @@ void AIUpdateInterface::requestPath( Coord3D *destination, Bool isFinalGoal )
 		return;
 	}
 	m_waitingForPath = TRUE;
-	if (m_pathTimestamp > TheGameLogic->getFrame()-3) {
+	if (!m_freshPlayerPathCommand && m_pathTimestamp > TheGameLogic->getFrame()-3) {
 		/* Requesting path very quickly.  Can cause a spin. */
 		//DEBUG_LOG(("%d Pathfind - repathing in less than 3 frames.  Waiting 1 second",
 			//TheGameLogic->getFrame()));
@@ -519,6 +550,7 @@ void AIUpdateInterface::requestPath( Coord3D *destination, Bool isFinalGoal )
 //-------------------------------------------------------------------------------------------------
 void AIUpdateInterface::requestAttackPath( ObjectID victimID, const Coord3D* victimPos )
 {
+	++m_pathRequestRevision;
 	if (m_locomotorSet.getValidSurfaces() == 0) {
 		DEBUG_CRASH(("Attempting to path immobile unit."));
 	}
@@ -529,7 +561,7 @@ void AIUpdateInterface::requestAttackPath( ObjectID victimID, const Coord3D* vic
 	m_isApproachPath = FALSE;
 	m_isSafePath = FALSE;
 	m_waitingForPath = TRUE;
-	if (m_pathTimestamp > TheGameLogic->getFrame()-3) {
+	if (!m_freshPlayerPathCommand && m_pathTimestamp > TheGameLogic->getFrame()-3) {
 		/* Requesting path very quickly.  Can cause a spin. */
 		//DEBUG_LOG(("%d Pathfind - repathing in less than 3 frames.  Waiting 2 second",TheGameLogic->getFrame()));
 		setQueueForPathTime(2*LOGICFRAMES_PER_SECOND);
@@ -542,6 +574,7 @@ void AIUpdateInterface::requestAttackPath( ObjectID victimID, const Coord3D* vic
 //-------------------------------------------------------------------------------------------------
 void AIUpdateInterface::requestApproachPath( Coord3D *destination )
 {
+	++m_pathRequestRevision;
 	if (m_locomotorSet.getValidSurfaces() == 0) {
 		DEBUG_CRASH(("Attempting to path immobile unit."));
 	}
@@ -553,7 +586,7 @@ void AIUpdateInterface::requestApproachPath( Coord3D *destination )
 	m_isApproachPath = TRUE;
 	m_isSafePath = FALSE;
 	m_waitingForPath = TRUE;
-	if (m_pathTimestamp > TheGameLogic->getFrame()-3) {
+	if (!m_freshPlayerPathCommand && m_pathTimestamp > TheGameLogic->getFrame()-3) {
 		/* Requesting path very quickly.  Can cause a spin. */
 		//DEBUG_LOG(("%d Pathfind - repathing in less than 3 frames.  Waiting 2 second",TheGameLogic->getFrame()));
 		setQueueForPathTime(2*LOGICFRAMES_PER_SECOND);
@@ -566,6 +599,7 @@ void AIUpdateInterface::requestApproachPath( Coord3D *destination )
 // Requests a safe path away from the repulsor.
 void AIUpdateInterface::requestSafePath( ObjectID repulsor )
 {
+	++m_pathRequestRevision;
 	if (repulsor != m_repulsor1) {
 		m_repulsor2 = m_repulsor1; // save the prior repulsor.
 	}
@@ -577,7 +611,7 @@ void AIUpdateInterface::requestSafePath( ObjectID repulsor )
 	m_isApproachPath = FALSE;
 	m_isSafePath = TRUE;
 	m_waitingForPath = TRUE;
-	if (m_pathTimestamp > TheGameLogic->getFrame()-3) {
+	if (!m_freshPlayerPathCommand && m_pathTimestamp > TheGameLogic->getFrame()-3) {
 		/* Requesting path very quickly.  Can cause a spin. */
 		//DEBUG_LOG(("%d Pathfind - repathing in less than 3 frames.  Waiting 2 second",TheGameLogic->getFrame()));
 		setQueueForPathTime(2*LOGICFRAMES_PER_SECOND);
@@ -1535,7 +1569,9 @@ Bool AIUpdateInterface::processCollision(PhysicsBehavior *physics, Object *other
 			}
 			else
 			{
-				// We are rotating, so don't accumulate blocked frames.
+				// A unit that is still turning has not reached the point where a
+				// path repair is useful. Preserve the legacy one-frame marker so
+				// steering can retry after the turn completes.
 				m_blockedFrames = 1;
 			}
 		}
@@ -1667,11 +1703,8 @@ Bool AIUpdateInterface::computeQuickPath( const Coord3D *destination )
  */
 Bool AIUpdateInterface::computePath( PathfindServicesInterface *pathServices, Coord3D *destination )
 {
-
-	if (!m_isBlockedAndStuck)	{
-		destroyPath();
-	}
-
+	// Solve on the simulation thread and adopt the route at this dependency
+	// boundary, so later unit requests observe its destination reservation.
 	if (canComputeQuickPath())
 	{
 		return computeQuickPath(destination);
@@ -1705,13 +1738,17 @@ Bool AIUpdateInterface::computePath( PathfindServicesInterface *pathServices, Co
 	Coord3D originalDestination = *destination;
 	// sanity check - if destination cell is invalid, don't bother pathing
 
+	// DX9 uses an exact quick segment for intermediate movement (including
+	// docking approaches). Rounding it through the ground grid changes arrival.
 	LocomotorSurfaceTypeMask surfaces = m_locomotorSet.getValidSurfaces();
-	if (!m_isFinalGoal && TheAI->pathfinder()->isLinePassable( getObject(), surfaces,
+	if (!m_isFinalGoal && TheAI->pathfinder()->isLinePassable(getObject(), surfaces,
 			getObject()->getLayer(), *getObject()->getPosition(), originalDestination, false, true)) {
 		return computeQuickPath(destination);
 	}
 
 	PathfindLayerEnum destinationLayer = TheTerrainLogic->getLayerForDestination(destination);
+	Bool groundQueryStarted = FALSE;
+	Bool closestAlreadyTried = FALSE;
 	if (TheAI->pathfinder()->validMovementPosition( getObject()->getCrusherLevel()>0, destinationLayer, m_locomotorSet, destination ) == FALSE)
 	{
 		theNewPath = nullptr;
@@ -1719,24 +1756,44 @@ Bool AIUpdateInterface::computePath( PathfindServicesInterface *pathServices, Co
 	else
 	{
 		// compute a ground-based path
+		groundQueryStarted = TRUE;
 		if (m_isBlockedAndStuck) {
 			theNewPath = pathServices->patchPath( getObject(), m_locomotorSet,
 				getPath(), m_isBlockedAndStuck);
 		}	else {
-			theNewPath = pathServices->findPath( getObject(), m_locomotorSet, getObject()->getPosition(),
-				destination);
+			closestAlreadyTried = TRUE;
+			theNewPath = pathServices->findPathOrClosest(getObject(), m_locomotorSet, getObject()->getPosition(),
+				destination, m_isBlockedAndStuck, m_retryPath);
 		}
 	}
-	if (theNewPath==nullptr && m_path==nullptr) {
+	if (groundQueryStarted && !theNewPath && pathServices->isGroundPathPending(getObject()->getID())) {
+		TheAI->pathfinder()->setIgnoreObstacleID(INVALID_ID);
+		m_waitingForPath = TRUE;
+		// A pending replacement must not clear the current locomotor goal. The
+		// sliced route will be installed when it is ready, giving the
+		// locomotor a continuous command handoff instead of a hard stop.
+		if (navigation::retainRouteDuringCommandHandoff(m_path != nullptr, true))
+			setLocomotorGoalPositionOnPath();
+		return FALSE;
+	}
+	if (theNewPath==nullptr && m_path==nullptr && !closestAlreadyTried) {
 		Real pathCostFactor = 0.0f;
 		theNewPath = pathServices->findClosestPath( getObject(), m_locomotorSet, getObject()->getPosition(),
 			destination, m_isBlockedAndStuck, pathCostFactor, FALSE );
 		m_retryPath = true;
+		// An invalid exact destination still starts a deferred closest query.
+		// Keep its owner waiting until that query finishes, otherwise the queue
+		// drops the owner and its unpolled continuation blocks later admission.
+		if (!theNewPath && pathServices->isGroundPathPending(getObject()->getID())) {
+			TheAI->pathfinder()->setIgnoreObstacleID(INVALID_ID);
+			m_waitingForPath = TRUE;
+			return FALSE;
+		}
 	}
 	TheAI->pathfinder()->setIgnoreObstacleID( INVALID_ID );
 	if (theNewPath) {
 		// destroy previous path
-		destroyPath();
+		releasePath();
 		m_path = theNewPath;
 		if (getCurLocomotor() && getCurLocomotor()->isUltraAccurate()) {
 			// Move exactly to the destination.  Normal ground pathfinding moves to a gridded location.
@@ -1866,12 +1923,15 @@ Bool AIUpdateInterface::computeAttackPath( PathfindServicesInterface *pathServic
 		// Weapon is basically a contact weapon, like a car bomb.  The approach target logic
 		// has been modified to let it approach the object, so just approach the target position.	jba.
 		Coord3D tmp = *victimPos;
-		destroyPath();
 		if (this->getCurLocomotor())
 		{
 			getCurLocomotor()->setNoSlowDownAsApproachingDest(TRUE);
 		}
 		Bool ok = computePath(pathServices, &tmp);
+		if (pathServices->isGroundPathPending(getObject()->getID())) {
+			m_waitingForPath = TRUE;
+			return TRUE;
+		}
 		if (m_path==nullptr) return false;
 		Real dx, dy;
 		dx = victimPos->x - m_path->getLastNode()->getPosition()->x;
@@ -1962,14 +2022,20 @@ Bool AIUpdateInterface::computeAttackPath( PathfindServicesInterface *pathServic
 	}
 	else
 	{
-		// destroy previous path
-		destroyPath();
-
 		TheAI->pathfinder()->setIgnoreObstacleID( getIgnoredObstacleID() );
 
 		// compute a ground-based path
-		m_path = pathServices->findAttackPath( getObject(), m_locomotorSet, getObject()->getPosition(),
+		Path* replacement = pathServices->findAttackPath( getObject(), m_locomotorSet, getObject()->getPosition(),
 			victim, &localVictimPos, weapon);
+		if (pathServices->isGroundPathPending(getObject()->getID())) {
+			TheAI->pathfinder()->setIgnoreObstacleID( INVALID_ID );
+			m_waitingForPath = TRUE;
+			return TRUE;
+		}
+		if (replacement) {
+			releasePath();
+			m_path = replacement;
+		}
 		if (m_path) {
 			Coord3D goal = *m_path->getLastNode()->getPosition();
 			if (!weapon->isGoalPosWithinAttackRange(getObject(), &goal, victim, &localVictimPos)) {
@@ -2017,6 +2083,12 @@ Bool AIUpdateInterface::computeAttackPath( PathfindServicesInterface *pathServic
  */
 void AIUpdateInterface::destroyPath()
 {
+	++m_pathRequestRevision;
+	releasePath();
+}
+
+void AIUpdateInterface::releasePath()
+{
 	// destroy previous path
 	deleteInstance(m_path);
 	m_path = nullptr;
@@ -2031,12 +2103,14 @@ void AIUpdateInterface::destroyPath()
 /**
  * This is used by the internal move to state to indicate that a move started.
  */
-void AIUpdateInterface::friend_startingMove()
+void AIUpdateInterface::friend_startingMove(Bool resetCollisionProgress)
 {
 	m_movementComplete = FALSE; // we aren't finished moving.
 	m_isMoving = TRUE;
-	m_blockedFrames = 0;
-	m_isBlockedAndStuck = FALSE;
+	if (resetCollisionProgress) {
+		m_blockedFrames = 0;
+		m_isBlockedAndStuck = FALSE;
+	}
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -2102,11 +2176,10 @@ Bool AIUpdateInterface::isQuickPathAvailable( const Coord3D *destination ) const
 
 	const Coord3D *myPos = getObject()->getPosition();
 
-#if RTS_GENERALS && RETAIL_COMPATIBLE_PATHFINDING
-	return TheAI->pathfinder()->clientSafeQuickDoesPathExist(m_locomotorSet, myPos, destination);
-#else
+	// Quick availability must use the modern deterministic HPA-backed query.
+	// The retail-compatible branch was a legacy pathfinding behavior switch and
+	// allowed the live movement path to diverge from engine/navigation.
 	return TheAI->pathfinder()->clientSafeQuickDoesPathExistForUI(m_locomotorSet, myPos, destination);
-#endif
 
 }
 
@@ -2145,6 +2218,7 @@ UpdateSleepTime AIUpdateInterface::doLocomotor()
 	m_isBlocked = FALSE;
 
 	Bool blocked = m_blockedFrames > 0;
+	Bool collisionLimited = FALSE;
 	Bool requiresConstantCalling = TRUE;	// assume the worst.
 
 	if (m_curLocomotor)
@@ -2216,6 +2290,7 @@ UpdateSleepTime AIUpdateInterface::doLocomotor()
 
 						if (blocked && speed>m_curMaxBlockedSpeed)
 						{
+							collisionLimited = TRUE;
 							speed = m_curMaxBlockedSpeed;
 							if (m_bumpSpeedLimit>speed) {
 								m_bumpSpeedLimit = speed;
@@ -2287,10 +2362,7 @@ UpdateSleepTime AIUpdateInterface::doLocomotor()
 			}
 		}
 
-		if (!blocked && m_blockedFrames>1)
-		{
-			m_blockedFrames = 1;
-		}
+		m_blockedFrames = navigation::retainBlockedFrames(m_blockedFrames, blocked, collisionLimited);
 
 		// After our movement for the frame, update our AirborneTarget flag.
 		if(getObject()->getHeightAboveTerrain() > m_curLocomotor->getAirborneTargetingHeight() )
@@ -2337,6 +2409,13 @@ if (_isnan(m_locomotorGoalData.x) || _isnan(m_locomotorGoalData.y) || _isnan(m_l
 }
 
 //-------------------------------------------------------------------------------------------------
+Bool AIUpdateInterface::updateArrivalFacing(Bool positionReached)
+{
+	if (!m_arrivalFacing.update(positionReached, getObject()->getOrientation())) return FALSE;
+	setLocomotorGoalOrientation(m_arrivalFacing.angle);
+	return TRUE;
+}
+
 void AIUpdateInterface::setLocomotorGoalOrientation(Real angle)
 {
 	m_locomotorGoalType = ANGLE;
@@ -2649,7 +2728,12 @@ void AIUpdateInterface::aiDoCommand(const AICommandParms* parms)
 		}
 	}
 #endif
+	if (s_commandObserver)
+		s_commandObserver(getObject()->getID(),parms,s_commandObserverContext);
 
+
+	beginPathCommand(parms->m_cmdSource);
+	m_arrivalFacing.cancel();
 
 	switch (parms->m_cmd)
 	{
@@ -3221,6 +3305,9 @@ void AIUpdateInterface::privateMoveAwayFromUnit( Object *unit, CommandSourceType
 	// This can occur when a hacker is told to move away from an object when in its hacking state and is transitioning to a movement state.
 	if (!unit)
 		return;
+	if (cmdSource == CMD_FROM_AI && !navigation::allowBlockedRecovery(
+		TheGameLogic->getFrame(), m_lastBlockedRecoveryFrame))
+		return;
 
 	ObjectID id = unit->getID();
 	if (m_stateMachine->getTemporaryState() == AI_MOVE_OUT_OF_THE_WAY) {
@@ -3257,7 +3344,12 @@ void AIUpdateInterface::privateMoveAwayFromUnit( Object *unit, CommandSourceType
 	}
 
 	if (newPath) {
-		destroyPath();
+		if (cmdSource == CMD_FROM_AI)
+			m_lastBlockedRecoveryFrame = TheGameLogic->getFrame();
+		// Keep the locomotor's POSITION_ON_PATH goal alive while replacing the
+		// route. destroyPath() briefly publishes NONE and makes an AI recovery
+		// command visibly brake for a frame.
+		deleteInstance(m_path);
 		m_path = newPath;
 		wakeUpNow();
 		m_stateMachine->setTemporaryState(AI_MOVE_OUT_OF_THE_WAY, 10*LOGICFRAMES_PER_SECOND);
@@ -4332,6 +4424,19 @@ void AIUpdateInterface::setLastCommandSource( CommandSourceType source )
 	m_lastCommandSource = source;
 }
 
+void AIUpdateInterface::beginPathCommand(CommandSourceType source)
+{
+	++m_pathRequestRevision;
+	if (source==CMD_FROM_PLAYER) {
+		m_freshPlayerPathCommand=TRUE;
+		m_playerPathCommandFrame=TheGameLogic->getFrame();
+		m_playerPathCommandSequence=TheAI->pathfinder()->nextPlayerCommandSequence();
+		// Automatic repath backoff belongs to the previous order. Internal
+		// AI subcommands retain this token until the player's first path starts.
+		setQueueForPathTime(0);
+	}
+}
+
 //-------------------------------------------------------------------------------------------------
 UnsignedInt AIUpdateInterface::getMoodMatrixValue() const
 {
@@ -5084,12 +5189,9 @@ void AIUpdateInterface::crc( Xfer *x )
 // ------------------------------------------------------------------------------------------------
 void AIUpdateInterface::xfer( Xfer *xfer )
 {
-  // version
-#if RETAIL_COMPATIBLE_CRC || RETAIL_COMPATIBLE_XFER_SAVE
-	const XferVersion currentVersion = 4;
-#else
-	const XferVersion currentVersion = 5;
-#endif
+  // Modern navigation state must survive a save and participate in CRCs.
+  // Older retail versions remain readable through the versioned branches.
+	const XferVersion currentVersion = 9;
   XferVersion version = currentVersion;
   xfer->xferVersion( &version, currentVersion );
 
@@ -5105,6 +5207,22 @@ void AIUpdateInterface::xfer( Xfer *xfer )
 	xfer->xferUnsignedInt(&m_nextEnemyScanTime);
 	xfer->xferObjectID(&m_currentVictimID);
 	xfer->xferReal(&m_desiredSpeed);
+	if (version >= 6) {
+		xfer->xferReal(&m_arrivalFacing.angle);
+		xfer->xferBool(&m_arrivalFacing.requested);
+		xfer->xferBool(&m_arrivalFacing.turning);
+	} else if (xfer->getXferMode()==XFER_LOAD) m_arrivalFacing.cancel();
+	if (version >= 7) xfer->xferUser(&m_pathRequestRevision, sizeof(m_pathRequestRevision));
+	else if (xfer->getXferMode()==XFER_LOAD) m_pathRequestRevision=0;
+	if (version >= 8) {
+		xfer->xferBool(&m_freshPlayerPathCommand);
+		xfer->xferUnsignedInt(&m_playerPathCommandFrame);
+	} else if (xfer->getXferMode()==XFER_LOAD) {
+		m_freshPlayerPathCommand=FALSE;
+		m_playerPathCommandFrame=0;
+	}
+	if (version>=9) xfer->xferUser(&m_playerPathCommandSequence,sizeof(m_playerPathCommandSequence));
+	else if (xfer->getXferMode()==XFER_LOAD) m_playerPathCommandSequence=0;
 	xfer->xferUser(&m_lastCommandSource, sizeof(m_lastCommandSource));
 
 	if (version < 5)
@@ -5325,6 +5443,12 @@ void AIUpdateInterface::xfer( Xfer *xfer )
 void AIUpdateInterface::loadPostProcess()
 {
 	UpdateModule::loadPostProcess();
+
+	// Older saves did not retain the FIFO. Rebuild their immediately pending
+	// requests in the deterministic snapshot order. Timed retries enqueue when
+	// their saved deadline expires. New saves already have the exact FIFO.
+	if (!TheAI->pathfinder()->wasPathQueueLoaded() && m_waitingForPath && m_queueForPathFrame == 0)
+		TheAI->pathfinder()->queueForPath(getObject()->getID());
 
 	if (m_fixLocoInPostProcess && m_curLocomotorSet!=LOCOMOTORSET_INVALID)
 	{

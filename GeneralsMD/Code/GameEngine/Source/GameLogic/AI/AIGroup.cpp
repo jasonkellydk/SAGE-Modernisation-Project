@@ -55,6 +55,11 @@
 #include "GameLogic/Module/StealthUpdate.h"
 #include "GameLogic/Module/SpecialPowerUpdateModule.h"
 #include "GameLogic/ObjectIter.h"
+#include <map>
+#include <vector>
+#include <limits>
+
+import engine.navigation.movement.formation_layout;
 
 
 /**
@@ -1588,7 +1593,8 @@ void clampWaypointPosition( Coord3D &position, Int margin )
 /**
  * Move to given position(s)
  */
-void AIGroup::groupMoveToPosition( const Coord3D *p_posIn, Bool addWaypoint, CommandSourceType cmdSource )
+void AIGroup::groupMoveToPosition( const Coord3D *p_posIn, Bool addWaypoint, CommandSourceType cmdSource,
+	Real formationFacing, Real formationSpacing, UnsignedInt formationColumns )
 {
 
   Coord3D position = *p_posIn;
@@ -1604,22 +1610,17 @@ void AIGroup::groupMoveToPosition( const Coord3D *p_posIn, Bool addWaypoint, Com
 	Bool tightenGroup = FALSE;
 
 	Bool isFormation = getMinMaxAndCenter( &min, &max, &center );
-	if (addWaypoint)
+	if (addWaypoint || formationSpacing > 0)
   {
     isFormation = false;
   }
 
 
-	if (!addWaypoint && !isFormation) {
-		friend_computeGroundPath(pos, cmdSource);
-		didInfantry = friend_moveInfantryToPos(pos, cmdSource);
-		didVehicles = friend_moveVehicleToPos(pos, cmdSource);
-	}
 	if (m_dirty)
 		recompute();
 
 	std::list<Object *>::iterator i;
-	if( !isFormation && cmdSource == CMD_FROM_PLAYER && TheGlobalData->m_groupMoveClickToGatherFactor > 0.0f )
+	if( !isFormation && formationSpacing == 0 && cmdSource == CMD_FROM_PLAYER && TheGlobalData->m_groupMoveClickToGatherFactor > 0.0f )
 	{
 		ScaleRect2D( &min, &max, TheGlobalData->m_groupMoveClickToGatherFactor );
 
@@ -1678,11 +1679,59 @@ void AIGroup::groupMoveToPosition( const Coord3D *p_posIn, Bool addWaypoint, Com
 		return;
 	}
 
+	std::map<ObjectID, navigation::FormationDestination> formationDestinations;
+	if (!addWaypoint) {
+		std::vector<navigation::FormationUnit> units;
+		std::map<ObjectID, Object*> objects;
+		for (Object* obj : m_memberList) {
+			AIUpdateInterface* ai = obj->getAIUpdateInterface();
+			if (!ai || !obj->isMobile() || obj->isDisabledByType(DISABLED_HELD) ||
+				!ai->isDoingGroundMovement() || obj->isKindOf(KINDOF_CLIFF_JUMPER) ||
+				!(obj->isKindOf(KINDOF_INFANTRY) || obj->isKindOf(KINDOF_VEHICLE))) continue;
+			const Real speed = ai->getCurLocomotorSpeed();
+			if (speed <= 0) continue;
+			units.push_back({static_cast<std::uint32_t>(obj->getID()), obj->getPosition()->x, obj->getPosition()->y,
+				obj->getGeometryInfo().getBoundingCircleRadius(), speed, obj->getTemplate()->getTemplateID(),
+			static_cast<std::uint32_t>(std::max(0,obj->getTemplate()->friend_getBuildCost()))});
+			objects.emplace(obj->getID(), obj);
+		}
+		if (units.size() > 1) {
+			Region3D extent;
+			TheTerrainLogic->getExtent(&extent);
+			auto plan = navigation::prepareFormationMove(units, pos->x, pos->y,
+				{extent.lo.x+margin, extent.lo.y+margin, extent.hi.x-margin, extent.hi.y-margin},
+				[&](std::uint32_t id) { TheAI->pathfinder()->removeGoal(objects.at(static_cast<ObjectID>(id))); },
+				[&](navigation::FormationDestination& slot) {
+					Object* obj = objects.at(static_cast<ObjectID>(slot.id));
+					Coord3D goal = {slot.x, slot.y, pos->z};
+					if (!TheAI->pathfinder()->adjustDestination(obj, obj->getAIUpdateInterface()->getLocomotorSet(), &goal, nullptr) &&
+                        !TheAI->pathfinder()->projectFormationDestination(obj,obj->getAIUpdateInterface()->getLocomotorSet(),&goal))
+                        goal=*obj->getPosition();
+					TheAI->pathfinder()->updateGoal(obj, &goal, TheTerrainLogic->getLayerForDestination(&goal));
+					slot.x = goal.x;
+					slot.y = goal.y;
+                    slot.z = goal.z;
+				}, formationSpacing > 0 ? formationSpacing : 22.0f,
+				formationSpacing > 0 ? formationFacing : std::numeric_limits<float>::quiet_NaN(), formationColumns);
+			for (const auto& slot : plan.destinations) formationDestinations.emplace(static_cast<ObjectID>(slot.id), slot);
+		}
+		if (formationDestinations.empty()) {
+			friend_computeGroundPath(pos, cmdSource);
+			didInfantry = friend_moveInfantryToPos(pos, cmdSource);
+			didVehicles = friend_moveVehicleToPos(pos, cmdSource);
+		}
+	}
+
 	// Move.
+	// Stable insertion order also breaks equal-distance command ties, including
+	// commands whose state transitions consume simulation random values.
+	std::list<Object*> movementMembers = m_memberList;
+	if (!formationDestinations.empty())
+		movementMembers.sort([](const Object* a, const Object* b) { return a->getID() < b->getID(); });
 	MemoryPoolObjectHolder iterHolder;
 	SimpleObjectIterator *iter = newInstance(SimpleObjectIterator);
 	iterHolder.hold(iter);
-	for( i = m_memberList.begin(); i != m_memberList.end(); ++i )
+	for( i = movementMembers.begin(); i != movementMembers.end(); ++i )
 	{
 		Real dx, dy;
 		if ((*i)->isDisabledByType( DISABLED_HELD ) )
@@ -1713,7 +1762,8 @@ void AIGroup::groupMoveToPosition( const Coord3D *p_posIn, Bool addWaypoint, Com
 			}
 		}
 		Coord3D unitPos = *((*i)->getPosition());
-		TheAI->pathfinder()->removeGoal(*i);
+		if (!formationDestinations.contains((*i)->getID()))
+			TheAI->pathfinder()->removeGoal(*i);
 		dx = unitPos.x - pos->x;
 		dy = unitPos.y - pos->y;
 		// adjust so units are sorted first by move priority.
@@ -1754,7 +1804,14 @@ void AIGroup::groupMoveToPosition( const Coord3D *p_posIn, Bool addWaypoint, Com
 			}
 			firstUnit = false;
 		}
-		computeIndividualDestination( &dest, &goalPos, theUnit, &center, isFormation );
+		const auto formationSlot = formationDestinations.find(theUnit->getID());
+		if (formationSlot != formationDestinations.end()) {
+			dest.x = formationSlot->second.x;
+			dest.y = formationSlot->second.y;
+            dest.z = formationSlot->second.z;
+		} else {
+			computeIndividualDestination( &dest, &goalPos, theUnit, &center, isFormation );
+		}
 
 		if( cmdSource == CMD_FROM_PLAYER && theUnit->getStatusBits().test( OBJECT_STATUS_CAN_STEALTH ) && ai->canAutoAcquire() )
 		{
@@ -1783,6 +1840,8 @@ void AIGroup::groupMoveToPosition( const Coord3D *p_posIn, Bool addWaypoint, Com
 		if( !addWaypoint )
 		{
 			ai->aiMoveToPosition( &dest, cmdSource );
+			if (formationSpacing > 0 && formationDestinations.contains(theUnit->getID()))
+				ai->setArrivalFacing(formationFacing);
 		}
 		else
 		{

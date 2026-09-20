@@ -1,0 +1,15 @@
+#include <boost/test/unit_test.hpp>
+#include <array>
+import engine.navigation.topology.terrain_slope;
+
+BOOST_AUTO_TEST_CASE(terrain_cliff_classification_preserves_passable_ramps) {
+    BOOST_TEST(!navigation::terrainCellIsCliff({0, 0, 9.8f, 9.8f}));
+    BOOST_TEST(navigation::terrainCellIsCliff({0, 0, 9.81f, 0}));
+    for (unsigned corner = 0; corner < 4; ++corner) {
+        std::array<float, 4> heights{40, 40, 40, 40};
+        heights[corner] = 50;
+        BOOST_TEST(navigation::terrainCellIsCliff(heights));
+        heights[corner] = 49;
+        BOOST_TEST(!navigation::terrainCellIsCliff(heights));
+    }
+}

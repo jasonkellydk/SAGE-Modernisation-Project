@@ -1,0 +1,75 @@
+#include <boost/test/unit_test.hpp>
+#include <algorithm>
+#include <cstdint>
+#include <vector>
+import engine.navigation.spatial.storage.contact_queue;
+
+BOOST_AUTO_TEST_CASE(contact_queue_clear_cancels_active_traversal_before_identity_reuse) {
+    navigation::ContactQueue queue;
+    queue.append(1,2); queue.append(3,4);
+    unsigned calls=0;
+    queue.visitReverse([&](auto,auto pair) {
+        ++calls; BOOST_TEST(pair.first==3u);
+        queue.clear(); queue.append(1,5);
+    });
+    BOOST_TEST(calls==1u);
+    queue.visitReverse([&](auto,auto pair) { BOOST_TEST(pair.second==5u); });
+    queue.append(1,6);
+    queue.removeIdentity(1,[&](auto) { queue.clear(); queue.append(1,7); });
+    BOOST_TEST(queue.size()==1u);
+    queue.visitReverse([&](auto,auto pair) { BOOST_TEST(pair.second==7u); });
+}
+
+BOOST_AUTO_TEST_CASE(contact_queue_preserves_reverse_order_and_skips_removed_objects_during_callbacks) {
+    navigation::ContactQueue queue;
+    queue.append(1,2); queue.append(3,4); queue.append(5,6);
+    std::vector<std::uintptr_t> visited,removed;
+    queue.visitReverse([&](auto index,auto pair) {
+        visited.push_back(pair.first);
+        queue.invalidate(index);
+        if (pair.first==5) {
+            queue.removeIdentity(3,[&](auto erased) { removed.push_back(erased.first); });
+            // Force reallocation while the active traversal owns its pair value.
+            for (unsigned i=100;i<10000;++i) queue.append(i,i+1);
+            BOOST_TEST(pair.second==6u);
+        }
+    });
+    BOOST_REQUIRE(visited==std::vector<std::uintptr_t>({5,1}));
+    BOOST_REQUIRE(removed==std::vector<std::uintptr_t>({3}));
+    const auto capacity=queue.capacity();
+    queue.clear(); BOOST_TEST(queue.capacity()==capacity);
+    queue.append(3,4); // Removed identities may be reused in a later batch.
+    visited.clear();
+    queue.visitReverse([&](auto,auto pair) { visited.push_back(pair.first); });
+    BOOST_TEST(visited==std::vector<std::uintptr_t>({3}));
+}
+
+BOOST_AUTO_TEST_CASE(contact_queue_matches_linked_list_reference_through_dense_removal_and_consumption) {
+    struct Pair { std::uintptr_t first,second; };
+    std::vector<Pair> reference;
+    navigation::ContactQueue queue;
+    for (unsigned i=1;i<=20000;++i) {
+        const Pair pair{i%257+1,(i*19)%263+300};
+        reference.push_back(pair); queue.append(pair.first,pair.second);
+    }
+    for (unsigned identity=1;identity<257;identity+=7) {
+        std::vector<std::uintptr_t> expected,actual;
+        for (std::size_t i=reference.size();i--;) {
+            auto& pair=reference[i];
+            if (pair.first && (pair.first==identity || pair.second==identity)) {
+                expected.push_back(pair.second); pair={};
+            }
+        }
+        queue.removeIdentity(identity,[&](auto pair) { actual.push_back(pair.second); });
+        BOOST_REQUIRE(actual==expected);
+    }
+    std::size_t cursor=reference.size();
+    queue.visitReverse([&](auto index,auto pair) {
+        do { BOOST_REQUIRE(cursor>0); --cursor; } while (!reference[cursor].first);
+        BOOST_TEST(index==cursor);
+        BOOST_TEST(pair.first==reference[cursor].first);
+        BOOST_TEST(pair.second==reference[cursor].second);
+        queue.invalidate(index);
+    });
+    queue.visitReverse([&](auto,auto) { BOOST_FAIL("Consumed contact repeated"); });
+}

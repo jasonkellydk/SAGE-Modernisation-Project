@@ -29,6 +29,7 @@ target_sources(generals_graphics
             resources/ResourceRecreation.cppm
             resources/textures/TextureResource.cppm
             resources/textures/TextureEdit.cppm
+            resources/textures/CPUTextureImage.cppm
             resources/textures/TextureSnapshot.cppm
             resources/textures/TextureReferences.cppm
             resources/textures/TextureSampling.cppm

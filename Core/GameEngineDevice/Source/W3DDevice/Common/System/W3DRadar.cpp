@@ -1,4 +1,5 @@
 import Assets.Images.Color;
+import Graphics.Frame.Runtime;
 import Assets.Images.PixelEncoding;
 
 #include "W3DDevice/GameClient/W3DGraphicsResources.h"
@@ -228,7 +229,7 @@ void W3DRadar::deleteResources()
 	deleteInstance(m_shroudImage);
 	m_shroudImage = nullptr;
 
-	DEBUG_ASSERTCRASH(m_shroudSurface == nullptr, ("W3DRadar::deleteResources: m_shroudSurface is expected null"));
+	m_shroudPixels.Reset();
 
 }
 
@@ -678,14 +679,20 @@ void W3DRadar::drawIcons(RadarDrawData &drawing, Int pixelX, Int pixelY, Int wid
 //-------------------------------------------------------------------------------------------------
 void W3DRadar::updateObjectTexture(W3DTextureHandle *texture)
 {
-	// reset the overlay texture
-	Graphics::TextureEdit *surface = texture->Get_Surface_Level();
-	if (surface) { Assets::Fill_Packed_Image_Region(surface->Image(),{0,0,int(surface->Image().Width()),int(surface->Image().Height())},0); surface->Commit(); }
-	delete surface; surface = nullptr;
-
-	// rebuild the object overlay
-	renderObjectList( m_objectList, texture );
-	renderObjectList( m_localObjectList, texture );
+	if (!texture || !texture->Ensure_Render_Backend_Texture()) return;
+	const auto resource = texture->Peek_Render_Backend_Texture();
+	if (!resource) return;
+	// Rebuild both lists in one CPU image, then upload once. Reading the GPU
+	// image before clearing it, and between lists, forced three queue drains.
+	Graphics::TextureEdit *surface = Graphics::TextureEdit::Overwrite(*resource);
+	if (!surface) return;
+	Assets::Fill_Packed_Image_Region(surface->Image(),
+		{0,0,int(surface->Image().Width()),int(surface->Image().Height())},0);
+	renderObjectList( m_objectList, surface );
+	renderObjectList( m_localObjectList, surface );
+	surface->Commit();
+	delete surface;
+	m_lastObjectTextureFrame = TheGameClient->getFrame();
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -739,15 +746,12 @@ Bool W3DRadar::canRenderObject( const RadarObject *rObj, const Player *localPlay
 //-------------------------------------------------------------------------------------------------
 /** Render an object list into the texture passed in */
 //-------------------------------------------------------------------------------------------------
-void W3DRadar::renderObjectList( const RadarObject *listHead, W3DTextureHandle *texture )
+void W3DRadar::renderObjectList( const RadarObject *listHead, Graphics::TextureEdit *surface )
 {
 
 	// sanity
-	if( listHead == nullptr || texture == nullptr )
+	if( listHead == nullptr || surface == nullptr )
 		return;
-
-	// get surface for texture to render into
-	Graphics::TextureEdit *surface = texture->Get_Surface_Level();
 
 	// loop through all objects and draw
 	ICoord2D radarPoint;
@@ -814,9 +818,6 @@ void W3DRadar::renderObjectList( const RadarObject *listHead, W3DTextureHandle *
 			Assets::Write_Packed_Image_Pixel(surface->Image(), radarPoint.x, radarPoint.y, pixelColor);
 
 	}
-
-	surface->Commit();
-	delete surface; surface = nullptr;
 
 }
 
@@ -913,7 +914,7 @@ W3DRadar::W3DRadar()
 	m_shroudTextureFormat = Assets::PixelEncoding::Unknown;
 	m_shroudImage = nullptr;
 	m_shroudTexture = nullptr;
-	m_shroudSurface = nullptr;
+
 
 	m_textureWidth = RADAR_CELL_WIDTH;
 	m_textureHeight = RADAR_CELL_HEIGHT;
@@ -977,6 +978,7 @@ void W3DRadar::init()
 	m_shroudTexture = MSGNEW("W3DTextureHandle") W3DTextureHandle( m_textureWidth, m_textureHeight,
 																			 m_shroudTextureFormat, MIP_LEVELS_1 );
 	DEBUG_ASSERTCRASH( m_shroudTexture, ("W3DRadar: Unable to allocate shroud texture") );
+	m_shroudPixels.Initialize(m_textureWidth,m_textureHeight,m_shroudTextureFormat);
 	m_shroudTexture->Get_Sampling().minification =  Graphics::SamplingFilter::Default ;
 	m_shroudTexture->Get_Sampling().magnification =  Graphics::SamplingFilter::Default ;
 
@@ -1040,6 +1042,7 @@ void W3DRadar::init()
 //-------------------------------------------------------------------------------------------------
 void W3DRadar::reset()
 {
+	m_lastObjectTextureFrame = ~UnsignedInt{0};
 
 	// extending functionality, call base class
 	Radar::reset();
@@ -1341,19 +1344,9 @@ void W3DRadar::clearShroud()
 		return;
 #endif
 
-	Graphics::TextureEdit *surface = m_shroudTexture->Get_Surface_Level();
-
-	// fill to clear, shroud will make black.  Don't want to make something black that logic can't clear
-    if (!surface) return;
-	const Color color = GameMakeColor( 0, 0, 0, 0 );
-
-	for( Int y = 0; y < m_textureHeight; y++ )
-	{
-		Assets::Fill_Packed_Image_Region(surface->Image(), {0,y,m_textureWidth,y+1}, color);
-	}
-
-	surface->Commit();
-	delete surface; surface = nullptr;
+    if (!m_shroudPixels.Is_Valid()) return;
+    Assets::Fill_Packed_Image_Region(m_shroudPixels.Edit(),
+        {0,0,m_textureWidth,m_textureHeight},GameMakeColor(0,0,0,0));
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -1406,56 +1399,12 @@ void W3DRadar::setShroudLevel(Int shroudX, Int shroudY, CellShroudStatus setting
 	else
 		alpha = 0;
 
-	if (m_shroudSurface == nullptr)
-	{
-		// This is expensive.
-		Graphics::TextureEdit* surface = m_shroudTexture->Get_Surface_Level();
-		DEBUG_ASSERTCRASH( surface, ("W3DRadar: Can't get surface for Shroud texture") );
-		Assets::ImageDescription surfaceDesc;
-		if (!surface) return;
-    surfaceDesc=surface->Image().Description();
-		const Color argbColor = GameMakeColor( 0, 0, 0, alpha );
-		const unsigned int pixelColor = Assets::Pack_Image_Color(surfaceDesc.encoding, argbColor);
-
-		for( Int y = radarMinY; y <= radarMaxY; ++y )
-		{
-			for( Int x = radarMinX; x <= radarMaxX; ++x )
-			{
-				Assets::Write_Packed_Image_Pixel(surface->Image(), x, y, pixelColor);
-			}
-		}
-
-		surface->Commit();
-		delete surface; surface = nullptr;
-	}
-	else
-	{
-		// This is cheap.
-		const Color argbColor = GameMakeColor( 0, 0, 0, alpha );
-		const unsigned int pixelColor = Assets::Pack_Image_Color(m_shroudSurface->Image().Encoding(), argbColor);
-
-		for( Int y = radarMinY; y <= radarMaxY; ++y )
-		{
-			for( Int x = radarMinX; x <= radarMaxX; ++x )
-			{
-				Assets::Write_Packed_Image_Pixel(m_shroudSurface->Image(), x, y, pixelColor);
-			}
-		}
-	}
-}
-
-void W3DRadar::beginSetShroudLevel()
-{
-    DEBUG_ASSERTCRASH(m_shroudSurface == nullptr, ("W3DRadar: shroud batch already active"));
-    m_shroudSurface = m_shroudTexture ? m_shroudTexture->Get_Surface_Level() : nullptr;
-
-}
-
-void W3DRadar::endSetShroudLevel()
-{
-    if (m_shroudSurface) m_shroudSurface->Commit();
-    delete m_shroudSurface;
-    m_shroudSurface = nullptr;
+    if (!m_shroudPixels.Is_Valid()) return;
+    auto& pixels=m_shroudPixels.Edit();
+    const auto pixelColor=Assets::Pack_Image_Color(pixels.Encoding(),GameMakeColor(0,0,0,alpha));
+    for (Int y=radarMinY;y<=radarMaxY;++y)
+        for (Int x=radarMinX;x<=radarMaxX;++x)
+            Assets::Write_Packed_Image_Pixel(pixels,x,y,pixelColor);
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -1517,7 +1466,8 @@ Bool W3DRadar::drawData(Int pixelX, Int pixelY, Int width, Int height, void *dra
 	drawing.drawImage( m_terrainImage, ul.x, ul.y, lr.x, lr.y );
 
 	// refresh the overlay texture once every so many frames
-	if( TheGameClient->getFrame() % OVERLAY_REFRESH_RATE == 0 )
+	if( TheGameClient->getFrame() % OVERLAY_REFRESH_RATE == 0 &&
+		TheGameClient->getFrame() != m_lastObjectTextureFrame )
 	{
 		updateObjectTexture(m_overlayTexture);
 	}
@@ -1532,6 +1482,10 @@ Bool W3DRadar::drawData(Int pixelX, Int pixelY, Int width, Int height, void *dra
 	if (true)
 #endif
 	{
+        if (m_shroudTexture && m_shroudTexture->Ensure_Render_Backend_Texture()) {
+            if (auto* resource=m_shroudTexture->Peek_Render_Backend_Texture())
+                m_shroudPixels.Upload(*resource,Graphics::Shared_Frame_Targets().identity);
+        }
 		drawing.drawImage( m_shroudImage, ul.x, ul.y, lr.x, lr.y );
 	}
 

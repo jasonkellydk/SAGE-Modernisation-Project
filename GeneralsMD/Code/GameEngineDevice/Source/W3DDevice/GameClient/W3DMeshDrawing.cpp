@@ -25,10 +25,14 @@ import Graphics.Scene.Props.Extraction;
 import Graphics.Scene.Props.Renderer;
 import Graphics.Scene.Props.SkinPalettes;
 import Graphics.Scene.Props.LightingParameters;
+import engine.navigation.diagnostics.frame_capture;
+#include "GameLogic/GameLogic.h"
 
 bool Draw_W3D_Mesh(W3DMeshRenderObject& mesh, W3DRenderContext& info, const Graphics::ModelMeshDrawOverrides& overrides)
 {
     PROFILER_SECTION_NAME("Graphics.Mesh.ExtractDraw");
+    auto& capture=navigation::diagnostics::frameCapture();
+    auto mesh_timing=capture.accumulate(overrides.shadow_capture ? "Graphics.Mesh.ShadowTotal" : "Graphics.Mesh.ColorTotal");
     if (mesh.Get_Muzzle_Flash_Designation() != Graphics::MuzzleFlashDesignation::None && overrides.shadow_capture) return true;
     auto* model = mesh.Peek_Model();
     if (!model || model->Get_Vertex_Count() == 0 || model->Get_Polygon_Count() == 0) return true;
@@ -51,6 +55,7 @@ bool Draw_W3D_Mesh(W3DMeshRenderObject& mesh, W3DRenderContext& info, const Grap
         world.Obj_Look_At(position, info.Camera.Get_Position(), 0);
     } else if (skin) {
         PROFILER_SECTION_NAME("Graphics.Mesh.SkinPalette");
+        auto skin_timing=capture.accumulate(overrides.shadow_capture ? "Graphics.Mesh.ShadowSkin" : "Graphics.Mesh.ColorSkin");
         const auto vertex_count = static_cast<std::size_t>(model->Get_Vertex_Count());
         auto* container = mesh.Get_Container();
         WWASSERT(container && container->Get_Model_Hierarchy());
@@ -73,7 +78,10 @@ bool Draw_W3D_Mesh(W3DMeshRenderObject& mesh, W3DRenderContext& info, const Grap
     context.parameters.view_projection = view_projection.values;
     const auto camera_position = info.Camera.Get_Position();
     context.parameters.camera_position = {camera_position.X, camera_position.Y, camera_position.Z, 1};
-    Graphics::Set_Prop_Lighting(context.parameters, mesh.Get_Lighting_Environment());
+    {
+        auto lighting_timing=capture.accumulate("Graphics.Mesh.Lighting");
+        Graphics::Set_Prop_Lighting(context.parameters, mesh.Get_Lighting_Environment());
+    }
     context.projection = camera.projection.values;
     context.milliseconds = Graphics::Get_Render_Clock().Sync_Time();
     context.sorted = model->Get_Flag(W3DMeshGeometry::SORT) && Graphics::Get_Render_Settings().Is_Sorting_Enabled();
@@ -109,6 +117,7 @@ bool Draw_W3D_Mesh(W3DMeshRenderObject& mesh, W3DRenderContext& info, const Grap
         camera.view.values[10], camera.view.values[11]};
     const auto submit = [&](auto vertices, auto indices, auto shader, auto textures,
         auto& parameters, auto draw_overrides) {
+        auto submit_timing=capture.accumulate(overrides.shadow_capture ? "Graphics.Mesh.ShadowSubmit" : "Graphics.Mesh.ColorSubmit");
         draw_overrides.instance = &mesh.Graphics_Instance();
         draw_overrides.skin = skin_palette;
         return Graphics::Submit_Prop_Material_In_Place(*device, Graphics::Get_Prop_Renderer(), Graphics::Get_Prop_Submission(),
@@ -118,7 +127,14 @@ bool Draw_W3D_Mesh(W3DMeshRenderObject& mesh, W3DRenderContext& info, const Grap
                 return Graphics::PropMaterialTexture{source->Peek_Graphics_Texture(), source->Get_Sampling()};
             }, parameters, submission_context, draw_overrides);
     };
+    auto uploaded=Graphics::Get_Prop_Renderer().Geometry_Created_Bytes();
     bool success = drawing.Draw_Base(submit);
+    if (capture.detailsEnabled()) {
+        const auto after=Graphics::Get_Prop_Renderer().Geometry_Created_Bytes();
+        capture.resourceCounter(model->Get_Name(),overrides.shadow_capture ? "shadow" : "base",
+            TheGameLogic?TheGameLogic->getFrame():0,after-uploaded);
+        uploaded=after;
+    }
     for (int pass_index = 0; !overrides.shadow_capture && pass_index < info.Additional_Pass_Count(); ++pass_index) {
         auto* pass = info.Peek_Additional_Pass(pass_index);
         if (!drawing.Accepts_Additional_Pass(pass->enabled_on_translucent)) continue;
@@ -144,6 +160,8 @@ bool Draw_W3D_Mesh(W3DMeshRenderObject& mesh, W3DRenderContext& info, const Grap
                 state->Complete_Polygon_Revision())) success = false;
         }
     }
+    if (capture.detailsEnabled()) capture.resourceCounter(model->Get_Name(),"additional",
+        TheGameLogic?TheGameLogic->getFrame():0,Graphics::Get_Prop_Renderer().Geometry_Created_Bytes()-uploaded);
     return success;
 }
 

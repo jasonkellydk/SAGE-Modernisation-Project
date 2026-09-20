@@ -78,58 +78,65 @@ public:
         if (m_geometry.Indices().empty()) return true;
         PropParameters parameters;
         parameters.textured = 0;
-        const bool current=m_shadow_owner==&shadows && world==m_shadow_world
-            && !m_shadow_meshes.empty()
+        const auto source = m_geometry.Vertices();
+        const auto indices = m_geometry.Indices();
+        const bool current = m_shadow_owner == &shadows && world == m_shadow_world
+            && m_shadow_cell_patches.size() == source.size()/4
             && std::all_of(m_shadow_meshes.begin(),m_shadow_meshes.end(),
-                [&](auto mesh) { return shadows.Is_Caster_Valid(mesh); });
+                [&](auto mesh) { return !mesh.Is_Valid() || shadows.Is_Caster_Valid(mesh); });
         if (!current) {
             Release_Shadow_Caster();
-            const auto source=m_geometry.Vertices();
-            auto minimum=source.front().position, maximum=minimum;
-            for (const auto& vertex:source) for (unsigned axis=0;axis<2;++axis) {
-                minimum[axis]=std::min(minimum[axis],vertex.position[axis]);
-                maximum[axis]=std::max(maximum[axis],vertex.position[axis]);
+            m_shadow_owner = &shadows;
+            m_shadow_world = world;
+            auto minimum = source.front().position, maximum = minimum;
+            for (const auto& vertex : source) for (unsigned axis=0; axis<2; ++axis) {
+                minimum[axis] = std::min(minimum[axis],vertex.position[axis]);
+                maximum[axis] = std::max(maximum[axis],vertex.position[axis]);
             }
-            // Cells remain intact. Partition their XY footprint so each light
-            // cascade can cull retained patches instead of drawing the full map.
-            std::array<std::vector<PropVertex>,64> patch_vertices;
-            std::array<std::vector<std::uint32_t>,64> patch_indices;
-            const auto indices=m_geometry.Indices();
-            for (std::size_t cell=0;cell<source.size()/4;++cell) {
-                unsigned patch=0;
-                for (unsigned axis=0;axis<2;++axis) {
-                    const double extent=double(maximum[axis])-minimum[axis];
-                    const double center=(double(source[cell*4].position[axis])+source[cell*4+2].position[axis])*.5;
-                    const unsigned coordinate=extent>0
+            m_shadow_cell_patches.resize(source.size()/4);
+            for (std::size_t cell=0; cell<source.size()/4; ++cell) {
+                unsigned patch = 0;
+                for (unsigned axis=0; axis<2; ++axis) {
+                    const double extent = double(maximum[axis])-minimum[axis];
+                    const double center = (double(source[cell*4].position[axis])+source[cell*4+2].position[axis])*.5;
+                    const unsigned coordinate = extent>0
                         ? static_cast<unsigned>(std::clamp((center-minimum[axis])*8/extent,0.,7.)) : 0;
-                    patch+=coordinate*(axis==0 ? 1u : 8u);
+                    patch += coordinate*(axis==0 ? 1u : 8u);
                 }
-                auto& vertices=patch_vertices[patch];
-                auto& triangles=patch_indices[patch];
-                const auto first=static_cast<std::uint32_t>(vertices.size());
-                for (unsigned corner=0;corner<4;++corner) {
+                m_shadow_cell_patches[cell] = patch;
+                m_shadow_patch_cells[patch].push_back(cell);
+            }
+            m_shadow_dirty.fill(true);
+        }
+        for (unsigned patch=0; patch<64; ++patch) {
+            if (!m_shadow_dirty[patch]) continue;
+            std::vector<PropVertex> vertices;
+            std::vector<std::uint32_t> triangles;
+            vertices.reserve(m_shadow_patch_cells[patch].size()*4);
+            triangles.reserve(m_shadow_patch_cells[patch].size()*6);
+            for (const auto cell : m_shadow_patch_cells[patch]) {
+                const auto first = static_cast<std::uint32_t>(vertices.size());
+                for (unsigned corner=0; corner<4; ++corner) {
                     PropVertex vertex;
-                    const auto& position=source[cell*4+corner].position;
-                    for (unsigned row=0;row<3;++row)
-                        vertex.position[row]=world[row*4]*position[0]+world[row*4+1]*position[1]
+                    const auto& position = source[cell*4+corner].position;
+                    for (unsigned row=0; row<3; ++row)
+                        vertex.position[row] = world[row*4]*position[0]+world[row*4+1]*position[1]
                             +world[row*4+2]*position[2]+world[row*4+3];
                     vertices.push_back(vertex);
                 }
-                for (unsigned index=0;index<6;++index)
+                for (unsigned index=0; index<6; ++index)
                     triangles.push_back(first+indices[cell*6+index]-static_cast<std::uint32_t>(cell*4));
             }
-            m_shadow_meshes.reserve(64);
-            m_shadow_owner=&shadows;
-            for (unsigned patch=0;patch<64;++patch) {
-                if (patch_indices[patch].empty()) continue;
-                const auto mesh=shadows.Create_Caster(patch_vertices[patch],patch_indices[patch]);
-                if (!mesh.Is_Valid()) { Release_Shadow_Caster(); return false; }
-                m_shadow_meshes.push_back(mesh);
+            if (!triangles.empty()) {
+                const auto mesh = shadows.Create_Caster(vertices,triangles);
+                if (!mesh.Is_Valid()) return false;
+                if (m_shadow_meshes[patch].Is_Valid()) shadows.Destroy_Caster(m_shadow_meshes[patch]);
+                m_shadow_meshes[patch] = mesh;
             }
-            m_shadow_world=world;
+            m_shadow_dirty[patch] = false;
         }
-        for (auto mesh:m_shadow_meshes)
-            if (!shadows.Add_Caster(mesh,parameters,{})) return false;
+        for (auto mesh : m_shadow_meshes)
+            if (mesh.Is_Valid() && !shadows.Add_Caster(mesh,parameters,{})) return false;
         return true;
     }
 
@@ -205,6 +212,37 @@ public:
         Release_Shadow_Caster();
         m_index_count = 0;
         return m_device == nullptr || Upload_Surface();
+    }
+
+    bool Update_Cells(std::size_t first, std::span<const TerrainCell> cells)
+    {
+        const auto old_vertices = m_geometry.Vertices();
+        if (first > old_vertices.size()/4 || cells.size() > old_vertices.size()/4-first) return false;
+        bool footprint_changed = false;
+        for (std::size_t i=0; i<cells.size(); ++i) {
+            const auto& low = old_vertices[(first+i)*4].position;
+            const auto& high = old_vertices[(first+i)*4+2].position;
+            const auto& cell = cells[i];
+            footprint_changed |= low[0]!=cell.origin[0] || low[1]!=cell.origin[1]
+                || high[0]!=cell.origin[0]+cell.spacing[0] || high[1]!=cell.origin[1]+cell.spacing[1];
+        }
+        if (!m_geometry.Update(first,cells)) return false;
+        if (cells.empty()) return true;
+        if (footprint_changed) Release_Shadow_Caster();
+        else if (!m_shadow_cell_patches.empty())
+            for (std::size_t i=first; i<first+cells.size(); ++i)
+                m_shadow_dirty[m_shadow_cell_patches[i]] = true;
+        if (m_device == nullptr) return true;
+        if (!m_vertices.Is_Valid() || !m_indices.Is_Valid() || m_index_count == 0)
+            return Upload_Surface();
+        const auto vertices = std::as_bytes(m_geometry.Vertices().subspan(first*4,cells.size()*4));
+        const auto indices = std::as_bytes(m_geometry.Indices().subspan(first*6,cells.size()*6));
+        if (!m_device->Update_Buffer(m_vertices,static_cast<std::uint32_t>(first*4*sizeof(TerrainVertex)),vertices)
+            || !m_device->Update_Buffer(m_indices,static_cast<std::uint32_t>(first*6*sizeof(std::uint32_t)),indices)) {
+            m_index_count = 0;
+            return false;
+        }
+        return true;
     }
 
 private:
@@ -331,11 +369,17 @@ private:
         if (m_shadow_owner != nullptr)
             for (auto mesh:m_shadow_meshes) m_shadow_owner->Destroy_Caster(mesh);
         m_shadow_owner = nullptr;
-        m_shadow_meshes.clear();
+        m_shadow_meshes = {};
+        m_shadow_cell_patches.clear();
+        for (auto& cells : m_shadow_patch_cells) cells.clear();
+        m_shadow_dirty.fill(false);
     }
 
     DirectionalShadowRenderer* m_shadow_owner = nullptr;
-    std::vector<ShadowCasterHandle> m_shadow_meshes;
+    std::array<ShadowCasterHandle,64> m_shadow_meshes{};
+    std::array<bool,64> m_shadow_dirty{};
+    std::vector<unsigned> m_shadow_cell_patches;
+    std::array<std::vector<std::size_t>,64> m_shadow_patch_cells;
     std::array<float,16> m_shadow_world{};
     EnvironmentLightingBinding m_environment;
     Device *m_device = nullptr;

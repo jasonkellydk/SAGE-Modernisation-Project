@@ -59,7 +59,6 @@ import Graphics.Scene.Debug.CollisionBox;
 #include "Platform/SDLPlatformWindow.h"
 #include <SDL3/SDL.h>
 #include <filesystem>
-#include <fstream>
 #include <memory>
 #include <string>
 #include <time.h>
@@ -171,12 +170,41 @@ extern "C" void Graphics_Abort_Frame() noexcept;
 
 #include "GameLogic/ScriptEngine.h"		// For TheScriptEngine - jkmcd
 #include "GameLogic/GameLogic.h"
+import engine.navigation.diagnostics.frame_capture;
+import Graphics.Scene.Props.Renderer;
+import Graphics.Scene.Shadows.DirectionalRenderer;
+
+static bool presentMeasuredGraphicsFrame() noexcept
+{
+    const bool presented=Graphics_Present();
+    auto& capture=navigation::diagnostics::frameCapture();
+    if (presented) capture.presented();
+    if (presented && capture.detailsEnabled()) {
+        const auto frame=TheGameLogic?TheGameLogic->getFrame():0;
+        auto& props=Graphics::Get_Prop_Renderer();
+        auto& shadows=Graphics::Get_Directional_Shadow_Renderer();
+        capture.counter("prop.geometry_bytes",frame,props.Geometry_Uploaded_Bytes());
+        capture.counter("prop.instance_bytes",frame,props.Instances().Uploaded_Bytes());
+        capture.counter("shadow.rendered_cascades",frame,shadows.Rendered_Cascade_Count());
+        capture.counter("shadow.reused_cascades",frame,shadows.Reused_Cascade_Count());
+        const auto counts=Graphics::Get_Frame_Submission_Statistics().Last_Frame();
+        capture.counter("draw.calls",frame,counts.draw_calls);
+        capture.counter("draw.triangles",frame,counts.triangles);
+    }
+    return presented;
+}
+
+#define GENERALS_CAPTURE_NAME_IMPL(a,b) a##b
+#define GENERALS_CAPTURE_NAME(a,b) GENERALS_CAPTURE_NAME_IMPL(a,b)
+#define GENERALS_CAPTURE_GRAPHICS_SCOPE(name) \
+    auto GENERALS_CAPTURE_NAME(graphicsCaptureScope_,__LINE__)= \
+        navigation::diagnostics::frameCapture().measure(name,TheGameLogic?TheGameLogic->getFrame():0)
 
 #if defined(RTS_PROFILE_TRACY)
 #include <tracy/Tracy.hpp>
-#define GENERALS_GRAPHICS_PROFILE_SCOPE(name) ZoneScopedN(name)
+#define GENERALS_GRAPHICS_PROFILE_SCOPE(name) ZoneScopedN(name); GENERALS_CAPTURE_GRAPHICS_SCOPE(name)
 #else
-#define GENERALS_GRAPHICS_PROFILE_SCOPE(name) ((void)0)
+#define GENERALS_GRAPHICS_PROFILE_SCOPE(name) GENERALS_CAPTURE_GRAPHICS_SCOPE(name)
 #endif
 #ifdef DUMP_PERF_STATS
 #include "GameLogic/PartitionManager.h"
@@ -339,7 +367,8 @@ static bool initializeGraphicsRenderer()
 
 static void shutdownGraphicsRenderer() noexcept
 {
-	if (TheParticleSystemManager != nullptr)
+	// Headless games use ParticleSystemManager, not its W3D subclass.
+	if (!TheGlobalData->m_headless && TheParticleSystemManager != nullptr)
 		static_cast<W3DParticleSystemManager *>(TheParticleSystemManager)->Reset_Graphics_Particle_Bindings();
     uiFrameActive = false;
     Shutdown_Video_Presentation();
@@ -443,7 +472,7 @@ static bool renderGraphicsScenePasses(W3DCamera *camera)
 		}
 	}
 
-	if (!Graphics_Present()) {
+	if (!presentMeasuredGraphicsFrame()) {
 		uiFrameActive = false;
 		Graphics_Abort_Frame();
 		Graphics::Get_Frame_Submission_Statistics().Cancel();
@@ -1226,38 +1255,6 @@ void W3DDisplay::updateAverageFPS()
 	m_averageFPS = sum / FPS_HISTORY_SIZE;
 
 	lastUpdateTime64 = time64;
-
-	// Opt-in wall-clock frame counts for repeatable shellmap performance runs.
-	// Write only once a second; reported time includes logging overhead.
-	static std::ofstream benchmark([] {
-		const char* path = std::getenv("GENERALS_GRAPHICS_BENCHMARK");
-		return path ? path : "";
-	}());
-	if (benchmark.is_open()) {
-		static Int64 intervalStart = time64;
-		static Int64 runStart = time64;
-		static unsigned frames = 0;
-		static std::uint64_t draws = 0, triangles = 0;
-		static unsigned logicChanges = 0;
-		static auto lastLogicTime = Graphics::Get_Render_Clock().Sync_Time();
-		const auto logicTime = Graphics::Get_Render_Clock().Sync_Time();
-		logicChanges += logicTime != lastLogicTime;
-		lastLogicTime = logicTime;
-		const auto submitted = Graphics::Get_Frame_Submission_Statistics().Last_Frame();
-		draws += submitted.draw_calls;
-		triangles += submitted.triangles;
-		++frames;
-		const double seconds = double(time64 - intervalStart) / double(freq64);
-		if (seconds >= 1.0) {
-			benchmark << double(time64 - runStart) / double(freq64) << ','
-				<< frames << ',' << seconds << ',' << frames / seconds << ','
-				<< double(draws) / frames << ',' << double(triangles) / frames << ',' << logicChanges << '\n';
-			benchmark.flush();
-			frames = 0;
-			draws = triangles = logicChanges = 0;
-			intervalStart = time64;
-		}
-	}
 }
 
 #if defined(RTS_DEBUG)	//debug hack to view object under mouse stats
@@ -1909,7 +1906,7 @@ void W3DDisplay::calculateTerrainLOD()
             if (Get_W3D_Render_Services().Begin_Render(true, true, Vector3(0.0f, 0.0f, 0.0f))) {
                 drawViews();
                 Get_W3D_Render_Services().End_Render();
-                if (!Graphics_End_Frame() || !Graphics_Present())
+                if (!Graphics_End_Frame() || !presentMeasuredGraphicsFrame())
                     Graphics_Abort_Frame();
             } else {
                 Graphics_Abort_Frame();

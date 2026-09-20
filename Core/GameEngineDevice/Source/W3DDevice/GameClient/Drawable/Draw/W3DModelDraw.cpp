@@ -3690,7 +3690,8 @@ void W3DModelDraw::reactToTransformChange( const Matrix3D* oldMtx,
 		m_renderObject->Set_Transform(mtx);
 	}
 
-	if (m_trackRenderObject)
+	// Objectless previews move visually but must never leave terrain tracks.
+	if (m_trackRenderObject && getDrawable()->getObject())
 	{
 		Object *obj = getDrawable()->getObject();
 		const Coord3D* pos = getDrawable()->getPosition();

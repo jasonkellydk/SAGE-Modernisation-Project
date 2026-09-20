@@ -440,11 +440,14 @@ GameMessageDisposition MetaEventTranslator::translateGameMessage(const GameMessa
 
 	if (t == GameMessage::MSG_RAW_KEY_DOWN || t == GameMessage::MSG_RAW_KEY_UP)
 	{
+		if (t == GameMessage::MSG_RAW_KEY_DOWN && msg->getArgument(0)->integer == KEY_ESC)
+			TheInGameUI->cancelFormationPlacement();
 		onKeyEvent(msg, disp);
 	}
 	else if (t > GameMessage::MSG_RAW_MOUSE_BEGIN && t < GameMessage::MSG_RAW_MOUSE_END )
 	{
-		onMouseEvent(msg);
+		if (TheInGameUI->handleFormationMouse(msg)) msg->captureMouseInput();
+		else onMouseEvent(msg);
 	}
 
 	return disp;

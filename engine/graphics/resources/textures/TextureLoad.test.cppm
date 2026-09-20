@@ -153,6 +153,7 @@ BOOST_AUTO_TEST_CASE(dds_mip_selection_and_publication_preserve_retained_draw_ge
             request.read_dds=Memory_Source(DDS(RHITextureDimension::Texture2D,16,5));
             TextureLoadJob job(request,[&](TextureResource* resource) { published.reset(resource); });
             BOOST_REQUIRE(job.Prepare());
+            BOOST_CHECK_EQUAL(device.Texture_Map_Count(), 0u);
             // A quality change affects the next load, not this prepared upload
             // or a retained texture generation that is still being drawn.
             Get_Texture_Quality_Settings()={4,32,true};
@@ -190,6 +191,7 @@ BOOST_AUTO_TEST_CASE(cube_faces_and_compressed_volume_slices_reach_their_allocat
             std::unique_ptr<TextureResource> published;
             TextureLoadJob job(request,[&](TextureResource* resource) { published.reset(resource); });
             BOOST_REQUIRE(job.Prepare());
+            BOOST_CHECK_EQUAL(device.Texture_Map_Count(), 0u);
             BOOST_REQUIRE(job.Decode()); job.Complete(true);
             BOOST_REQUIRE(published);
             BOOST_CHECK(!published->Is_Placeholder());
@@ -253,7 +255,8 @@ BOOST_AUTO_TEST_CASE(single_tga_initializes_every_requested_cube_face)
     request.read_tga=Memory_Source(TGA(colors));
     std::unique_ptr<TextureResource> published;
     TextureLoadJob job(request,[&](TextureResource* resource) { published.reset(resource); });
-    BOOST_REQUIRE(job.Prepare()); BOOST_REQUIRE(job.Decode()); job.Complete(true);
+    BOOST_REQUIRE(job.Prepare());
+            BOOST_CHECK_EQUAL(device.Texture_Map_Count(), 0u); BOOST_REQUIRE(job.Decode()); job.Complete(true);
     BOOST_REQUIRE(published);
     BOOST_CHECK(!published->Is_Placeholder());
     for (unsigned face=0;face<6;++face) {
@@ -275,7 +278,8 @@ BOOST_AUTO_TEST_CASE(authored_color_shift_and_precision_decode_into_the_actual_i
         request.read_tga=Memory_Source(TGA({0x00ff0000,0x40ff0000,0x80ff0000,0xffff0000}));
         std::unique_ptr<TextureResource> published;
         TextureLoadJob job(request,[&](TextureResource* resource) { published.reset(resource); });
-        BOOST_REQUIRE(job.Prepare()); BOOST_REQUIRE(job.Decode()); job.Complete(true);
+        BOOST_REQUIRE(job.Prepare());
+            BOOST_CHECK_EQUAL(device.Texture_Map_Count(), 0u); BOOST_REQUIRE(job.Decode()); job.Complete(true);
         BOOST_REQUIRE(published);
         BOOST_CHECK(published->Encoding()==Assets::PixelEncoding::BGRA8);
         Check_Drawing(device,published->Handle(),{0x0000ff00,0x4000ff00,0x8000ff00,0xff00ff00});

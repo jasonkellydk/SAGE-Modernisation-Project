@@ -29,6 +29,7 @@
 
 // USER INCLUDES //////////////////////////////////////////////////////////////////////////////////
 #include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+import engine.navigation.diagnostics.frame_capture;
 
 #include "Common/BitFlagsIO.h"
 #include "Common/BuildAssistant.h"
@@ -812,13 +813,20 @@ UpdateSleepTime ProductionUpdate::update()
 						//
 						if( d->m_numDoorAnimations == 0 || door == nullptr || door->m_doorWaitOpenFrame != 0 )
 						{
-							Object *newObj = TheThingFactory->newObject( production->m_objectToProduce,
-																	creationBuilding->getControllingPlayer()->getDefaultTeam() );
+							Object *newObj;
+							{
+								auto timing=navigation::diagnostics::frameCapture().measure("production.create",now,unsigned(us->getID()));
+								newObj = TheThingFactory->newObject( production->m_objectToProduce,
+									creationBuilding->getControllingPlayer()->getDefaultTeam() );
+							}
 
 							newObj->setProducer(creationBuilding);
 
 							// call the exit interface to do the rally point and position stuff
-							exitInterface->exitObjectViaDoor( newObj, exitDoor );
+							{
+								auto timing=navigation::diagnostics::frameCapture().measure("production.exit",now,unsigned(newObj->getID()));
+								exitInterface->exitObjectViaDoor( newObj, exitDoor );
+							}
 
 							// since we successfully exited via this door, we should NOT call unreserveDoorForExit
 							// when we toss this production entry. so set it back to an innocuous value.
@@ -847,6 +855,7 @@ UpdateSleepTime ProductionUpdate::update()
 								//Call the voice created for the 1st object -- because it's possible to create multiple objects like redguards!
 								AudioEventRTS sound = *newObj->getTemplate()->getPerUnitSound( "VoiceCreate" );
 								sound.setObjectID( newObj->getID() );
+								auto timing=navigation::diagnostics::frameCapture().measure("production.audio",now,unsigned(newObj->getID()));
 								TheAudio->addAudioEvent( &sound );
 							}
 

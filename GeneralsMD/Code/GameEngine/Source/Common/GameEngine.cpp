@@ -29,6 +29,7 @@
 #include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
 #include <SDL3/SDL.h>
 #include "Platform/SDLPlatformWindow.h"
+import engine.navigation.diagnostics.frame_capture;
 
 #include "Common/ActionManager.h"
 #include "Common/AudioAffect.h"
@@ -253,6 +254,8 @@ GameEngine::GameEngine()
 //-------------------------------------------------------------------------------------------------
 GameEngine::~GameEngine()
 {
+	// Resolve diagnostic module names before destroying the name table.
+	navigation::diagnostics::frameCapture().finish();
 	//extern std::vector<std::string>	preloadTextureNamesGlobalHack;
 	//preloadTextureNamesGlobalHack.clear();
 
@@ -900,8 +903,14 @@ void GameEngine::update()
 
 			/// @todo Move audio init, update, etc, into GameClient update
 
-			TheAudio->UPDATE();
+			{
+				auto timing=navigation::diagnostics::frameCapture().measure("engine.audio",TheGameLogic->getFrame());
+				TheAudio->UPDATE();
+			}
+			auto& capture=navigation::diagnostics::frameCapture();
+			capture.beginPhase();
 			TheGameClient->UPDATE();
+			capture.endClient();
 			TheMessageStream->propagateMessages();
 
 			if (TheNetwork != nullptr)
@@ -913,12 +922,16 @@ void GameEngine::update()
 		// TheSuperHackers @info Ignores frozen time because the script engine needs updating in the logic update regardless.
 		if (canUpdateGameLogic(FramePacer::IgnoreFrozenTime))
 		{
+			auto& capture=navigation::diagnostics::frameCapture();
+			capture.beginPhase();
 			TheGameLogic->UPDATE();
 
 			if (!TheFramePacer->isTimeFrozen())
 			{
+				auto timing=capture.measure("client.step",TheGameLogic->getFrame());
 				TheGameClient->step();
 			}
+			capture.endLogic();
 		}
 	}
 }
@@ -928,6 +941,8 @@ void GameEngine::update()
  */
 void GameEngine::execute()
 {
+	auto& capture=navigation::diagnostics::frameCapture();
+	UnsignedInt capturedObjects=0,capturedObjectFrame=~0u;
 #if defined(RTS_DEBUG)
 	Uint64 startTime = SDL_GetTicks() / 1000;
 #endif
@@ -935,6 +950,16 @@ void GameEngine::execute()
 	// pretty basic for now
 	while( !m_quitting )
 	{
+		if (capture.enabled()) {
+			capture.begin(TheGameLogic->getFrame(),TheGameLogic->isInGame() && !TheGameLogic->isInShellGame(),
+				TheGameLogic->isGamePaused(),TheGlobalData->m_xResolution,TheGlobalData->m_yResolution,TheGlobalData->m_windowed);
+			// Include diagnostic overhead in the measured frame.
+			// Refresh once per simulated second rather than traversing each frame.
+			if (TheGameLogic->getFrame()/LOGICFRAMES_PER_SECOND!=capturedObjectFrame) {
+				capturedObjectFrame=TheGameLogic->getFrame()/LOGICFRAMES_PER_SECOND;
+				capturedObjects=TheGameLogic->getObjectCount();
+			}
+		}
 
 		//if (TheGlobalData->m_vTune)
 		{
@@ -997,6 +1022,7 @@ void GameEngine::execute()
 			}
 
 			TheFramePacer->update();
+			if (capture.end(TheGameLogic->getFrame(),capturedObjects)) setQuitting(TRUE);
 		}
 
 #ifdef PERF_TIMERS

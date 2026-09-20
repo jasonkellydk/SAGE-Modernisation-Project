@@ -185,6 +185,7 @@ public:
         ShadowCascades cascades;
         if (!Build_Shadow_Cascades(view,LightHandle(0,1),light,settings,cascades)) return false;
         if (!Prepare_Maps(settings)) return false;
+        Prepare_Visibility(cascades);
         std::array<bool,Max_Shadow_Cascades> dirty;
         if (settings.cache_maps) dirty=Prepare_Cache(cascades);
         else { dirty.fill(true); m_cacheable={}; }
@@ -204,13 +205,12 @@ public:
                 if (!list.Set_Depth_Target(resources.Texture(m_maps.Target(cascade)))
                     || !list.Set_Viewport({0,0,settings.map_size,settings.map_size})
                     || !list.Clear_Depth(1)) return false;
-                const auto planes = Cascade_Planes(cascades.views[cascade].view_projection);
                 for (const auto& batch : m_batches) {
                     const auto& first = m_casters[m_caster_order[batch.first]];
                     std::size_t instance_count = 0;
                     for (auto index=batch.first; index<batch.end; ++index) {
                         const auto& caster = m_casters[m_caster_order[index]];
-                        if (Intersects_Cascade(caster.bounds,planes)) {
+                        if (m_cascade_visibility[m_caster_order[index]] & (1u << cascade)) {
                             if (!first.source) m_instance_worlds[instance_count] = caster.world;
                             m_instance_indices[instance_count] = caster.instance.Get_Index();
                             ++instance_count;
@@ -273,14 +273,15 @@ private:
     std::array<bool,Max_Shadow_Cascades> Prepare_Cache(const ShadowCascades& cascades)
     {
         GRAPHICS_PROFILE_SCOPE("Graphics.Shadows.CacheInputs");
-        std::array<std::array<std::array<float,4>,6>,Max_Shadow_Cascades> planes;
         for (unsigned i=0;i<cascades.count;++i) {
             auto& key=m_current_keys[i]; key.data.clear(); key.styles.clear();
             key.Append(cascades.views[i].view_projection.values);
-            planes[i]=Cascade_Planes(cascades.views[i].view_projection);
             m_cacheable[i]=true;
         }
-        for (const auto& caster : m_casters) {
+        for (std::size_t caster_index=0;caster_index<m_casters.size();++caster_index) {
+            const auto& caster=m_casters[caster_index];
+            const auto visibility=m_cascade_visibility[caster_index];
+            if (!visibility) continue;
             auto* renderer=caster.source ? caster.source : &m_renderer;
             auto mesh=caster.source_mesh;
             if (!caster.source) {
@@ -296,7 +297,7 @@ private:
                 cacheable &= versions[texture]!=0;
             }
             for (unsigned i=0;i<cascades.count;++i) {
-                if (!Intersects_Cascade(caster.bounds,planes[i])) continue;
+                if (!(visibility & (1u << i))) continue;
                 auto& key=m_current_keys[i];
                 m_cacheable[i] &= cacheable;
                 key.Append(renderer); key.Append(mesh.Get_Index()); key.Append(mesh.Get_Generation());
@@ -329,6 +330,21 @@ private:
         std::array<float,3> minimum{};
         std::array<float,3> maximum{};
     };
+
+    // Cache validation and drawing use the same bounds and cascade matrices.
+    // Compute membership once per render and share it between both consumers.
+    std::vector<std::uint8_t> m_cascade_visibility;
+    void Prepare_Visibility(const ShadowCascades& cascades)
+    {
+        std::array<std::array<std::array<float,4>,6>,Max_Shadow_Cascades> planes;
+        for (unsigned i=0;i<cascades.count;++i)
+            planes[i]=Cascade_Planes(cascades.views[i].view_projection);
+        m_cascade_visibility.assign(m_casters.size(),0);
+        for (std::size_t index=0;index<m_casters.size();++index)
+            for (unsigned i=0;i<cascades.count;++i)
+                if (Intersects_Cascade(m_casters[index].bounds,planes[i]))
+                    m_cascade_visibility[index] |= static_cast<std::uint8_t>(1u << i);
+    }
 
     static Mesh Transform_Bounds(const Mesh& local,const std::array<float,16>& world) noexcept
     {
@@ -503,8 +519,22 @@ private:
         const PropStyle& material_style)
     {
         Caster caster(parameters);
-        caster.parameters.material.shroud = caster.parameters.material.shroud_only = 0;
-        caster.parameters.view.fog_state = {};
+        // Depth depends on position, generated UVs and material alpha only.
+        // Canonicalize colour-only inputs before batching and cache comparison:
+        // changing fog, shroud or a normal map must not invalidate a silhouette.
+        auto& view = caster.parameters.view;
+        view.view_projection = {}; // Replaced by each light cascade at draw time.
+        view.shroud_projection = view.fog_color = view.fog_state = view.camera_position = {};
+        auto& material = caster.parameters.material;
+        material.shroud = material.shroud_only = 0;
+        material.detail_color = material.secondary_gradient = material.texture_luminance = 0;
+        const auto shading_model = material.surface.shading_model;
+        const auto vertex_uv_offset = material.surface.maps & PropSurfaceVertexAlphaUVOffset;
+        material.surface = {};
+        material.surface.shading_model = shading_model;
+        material.surface.maps = vertex_uv_offset;
+        const auto camera_uv = [](float source) { return source == 1 || source == 2 || source == 3; };
+        if (!camera_uv(material.uv_sources[0]) && !camera_uv(material.uv_sources[2])) view.view = {};
         caster.style = material_style;
         caster.style.blend = RHIBlendMode::Disabled;
         caster.style.source_blend = RHIBlendFactor::One;
@@ -516,8 +546,10 @@ private:
         caster.style.wireframe = false;
         caster.style.cull = RHICullMode::None;
         caster.style.depth_bias = 0;
-        caster.texture_count = static_cast<std::uint32_t>(textures.size());
-        for (std::size_t index=0;index<textures.size();++index) caster.textures[index] = textures[index];
+        // Only the base/detail stages contribute alpha. Surface maps (4..10)
+        // and shroud (3) affect RGB exclusively, including the surface shader.
+        caster.texture_count = static_cast<std::uint32_t>((std::min)(textures.size(),std::size_t{2}));
+        for (std::size_t index=0;index<caster.texture_count;++index) caster.textures[index] = textures[index];
         return caster;
     }
 

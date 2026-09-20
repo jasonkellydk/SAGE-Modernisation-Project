@@ -1,9 +1,13 @@
 #define BOOST_TEST_MODULE EngineJobsTests
 #include <boost/test/included/unit_test.hpp>
 
+#include <SDL3/SDL.h>
+
 #include <atomic>
 #include <barrier>
+#include <chrono>
 #include <cstddef>
+#include <ctime>
 #include <mutex>
 #include <stdexcept>
 #include <thread>
@@ -38,6 +42,57 @@ struct CountContext
 {
 	std::atomic<std::size_t> completed{0};
 };
+
+struct StealContext
+{
+	std::atomic<bool> blockerStarted{false};
+	std::atomic<bool> stolen{false};
+	std::mutex mutex;
+	std::thread::id blocker;
+	std::thread::id stealer;
+};
+
+struct AsyncContext
+{
+	std::atomic<bool> started{false};
+	std::atomic<bool> release{false};
+	std::atomic<bool> finished{false};
+};
+
+void AsyncBlockingJob(void *rawContext)
+{
+	auto &context=*static_cast<AsyncContext *>(rawContext);
+	context.started.store(true,std::memory_order_release);
+	while (!context.release.load(std::memory_order_acquire))
+		std::this_thread::yield();
+	context.finished.store(true,std::memory_order_release);
+}
+
+void BlockingOwnerJob(void *rawContext)
+{
+	auto &context = *static_cast<StealContext *>(rawContext);
+	{
+		std::lock_guard lock(context.mutex);
+		context.blocker = std::this_thread::get_id();
+	}
+	context.blockerStarted.store(true, std::memory_order_release);
+	while (!context.stolen.load(std::memory_order_acquire))
+		std::this_thread::yield();
+}
+
+void StealableJob(void *rawContext)
+{
+	auto &context = *static_cast<StealContext *>(rawContext);
+	while (!context.blockerStarted.load(std::memory_order_acquire))
+		std::this_thread::yield();
+	{
+		std::lock_guard lock(context.mutex);
+		context.stealer = std::this_thread::get_id();
+	}
+	context.stolen.store(true, std::memory_order_release);
+}
+
+void ReadyJob(void *) {}
 
 void RunCountJob(void *rawContext)
 {
@@ -82,6 +137,58 @@ BOOST_AUTO_TEST_CASE(batches_can_be_reused_without_creating_threads_per_batch)
 	BOOST_CHECK_NO_THROW(jobs.Shutdown());
 }
 
+BOOST_AUTO_TEST_CASE(submit_does_not_block_the_calling_thread)
+{
+	engine::jobs::JobSystem jobs(engine::jobs::JobSystemConfig{1});
+	AsyncContext context;
+	engine::jobs::Job batch[]={{&AsyncBlockingJob,&context}};
+	jobs.Submit(batch);
+	while (!context.started.load(std::memory_order_acquire)) std::this_thread::yield();
+	BOOST_TEST(!jobs.TryComplete());
+	BOOST_TEST(!context.finished.load(std::memory_order_acquire));
+	context.release.store(true,std::memory_order_release);
+	jobs.Wait();
+	BOOST_TEST(context.finished.load(std::memory_order_acquire));
+}
+
+BOOST_AUTO_TEST_CASE(default_workers_use_half_of_sdl_logical_cores_and_idle_cleanly)
+{
+	engine::jobs::JobSystem jobs;
+	const auto logicalCores=SDL_GetNumLogicalCPUCores();
+	const auto expected=logicalCores>1 ? static_cast<std::size_t>(logicalCores/2) : 1U;
+	BOOST_TEST(jobs.WorkerCount() == expected);
+
+	// This is a regression test for the game freeze seen with many units:
+	// persistent workers must yield/idle once no batch is available instead of
+	// consuming a full logical core each. Process CPU time is summed across
+	// workers, so a tight-spin implementation exceeds this bound quickly.
+	const auto wallStart=std::chrono::steady_clock::now();
+	const auto cpuStart=std::clock();
+	std::this_thread::sleep_for(std::chrono::milliseconds(150));
+	const auto wallSeconds=std::chrono::duration<double>(
+		std::chrono::steady_clock::now()-wallStart).count();
+	const auto cpuSeconds=double(std::clock()-cpuStart)/double(CLOCKS_PER_SEC);
+	BOOST_TEST(cpuSeconds < wallSeconds*4.0);
+}
+
+BOOST_AUTO_TEST_CASE(idle_workers_steal_from_a_busy_owner_deque)
+{
+	engine::jobs::JobSystem jobs(engine::jobs::JobSystemConfig{2});
+	StealContext context;
+	// Jobs 0 and 2 share a deque. Whichever worker claims the waiting job,
+	// another worker must claim the other end to let the batch complete.
+	engine::jobs::Job batch[] = {
+		{&StealableJob, &context},
+		{&ReadyJob, nullptr},
+		{&BlockingOwnerJob, &context}};
+
+	jobs.Execute(batch);
+	std::lock_guard lock(context.mutex);
+	BOOST_TEST(context.blocker != std::thread::id{});
+	BOOST_TEST(context.stealer != std::thread::id{});
+	BOOST_TEST(context.blocker != context.stealer);
+}
+
 BOOST_AUTO_TEST_CASE(job_failure_is_reported_and_workers_remain_usable_until_shutdown)
 {
 	engine::jobs::JobSystem jobs(engine::jobs::JobSystemConfig{2});
@@ -94,6 +201,67 @@ BOOST_AUTO_TEST_CASE(job_failure_is_reported_and_workers_remain_usable_until_shu
 	BOOST_TEST(context.completed.load() == 1);
 	jobs.Shutdown();
 	BOOST_CHECK_THROW(jobs.Execute(succeeding), std::logic_error);
+}
+
+BOOST_AUTO_TEST_CASE(owner_thief_races_execute_each_submission_exactly_once)
+{
+    struct Slot {
+        std::atomic<unsigned> visits{0};
+    };
+    for (unsigned workers : {2u,4u,8u}) {
+        engine::jobs::JobSystem scheduler({workers});
+        // Small batches repeatedly race over the final item; larger uneven
+        // batches exercise stealing across several depleted owner queues.
+        for (unsigned count : {1u,2u,3u,7u,17u,129u}) {
+            std::vector<Slot> slots(count);
+            std::vector<engine::jobs::Job> jobs;
+            for (auto& slot : slots) jobs.push_back({[](void* raw) {
+                auto& item=*static_cast<Slot*>(raw);
+                item.visits.fetch_add(1,std::memory_order_relaxed);
+                std::this_thread::yield();
+            },&slot});
+            for (unsigned batch=0;batch<200;++batch) scheduler.Execute(jobs);
+            for (unsigned i=0;i<count;++i) {
+                BOOST_TEST_CONTEXT("workers=" << workers << " size=" << count << " slot=" << i) {
+                    BOOST_TEST(slots[i].visits.load()==200u);
+                }
+            }
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(shutdown_drains_a_submitted_batch_and_completion_keeps_it_closed)
+{
+	CountContext context;
+	engine::jobs::JobSystem jobs({2});
+	std::vector<engine::jobs::Job> batch(4097, {&RunCountJob, &context});
+	jobs.Submit(batch);
+	jobs.Shutdown();
+	BOOST_TEST(context.completed.load() == batch.size());
+	BOOST_TEST(jobs.TryComplete());
+	BOOST_CHECK_NO_THROW(jobs.Wait());
+	BOOST_CHECK_THROW(jobs.Submit(batch), std::logic_error);
+	BOOST_CHECK_NO_THROW(jobs.Shutdown());
+}
+
+BOOST_AUTO_TEST_CASE(destruction_drains_an_unretired_batch)
+{
+	CountContext context;
+	std::vector<engine::jobs::Job> batch(4097, {&RunCountJob, &context});
+	{
+		engine::jobs::JobSystem jobs({2});
+		jobs.Submit(batch);
+	}
+	BOOST_TEST(context.completed.load() == batch.size());
+}
+
+BOOST_AUTO_TEST_CASE(shutdown_can_drain_a_failed_batch_without_throwing)
+{
+	engine::jobs::JobSystem jobs({2});
+	engine::jobs::Job batch[] = {{&ThrowJob, nullptr}};
+	jobs.Submit(batch);
+	BOOST_CHECK_NO_THROW(jobs.Shutdown());
+	BOOST_CHECK_THROW(jobs.Submit(batch), std::logic_error);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -9,10 +9,83 @@ module;
 #include <span>
 export module Graphics.Resources.Textures.Edit.Tests;
 import Graphics.Resources.Textures.Edit;
+import Graphics.Resources.Textures.CPUImage;
 import Graphics.Tests.Device;
 import Graphics.Scene.Props.Renderer;
 import Assets.Images.Color;
 using namespace Graphics;
+
+BOOST_AUTO_TEST_CASE(cpu_texture_edits_preserve_cells_batch_uploads_and_restore_new_generations)
+{
+    GraphicsTestDevice device({true});
+    CPUTextureImage image;
+    BOOST_REQUIRE(image.Initialize(4,4,Assets::PixelEncoding::BGRA8));
+    BOOST_REQUIRE(Assets::Fill_Packed_Image_Region(image.Edit(),{0,0,4,4},0));
+    std::unique_ptr<TextureResource> target(TextureResource::Create(&device,{4,4,1},Assets::PixelEncoding::BGRA8));
+    BOOST_REQUIRE(target);
+    // Revealed, fogged and shrouded cells may be overwritten multiple times
+    // between draws. Only their final pixels are published, with no readback.
+    BOOST_REQUIRE(Assets::Write_Packed_Image_Pixel(image.Edit(),1,1,0xff000000));
+    BOOST_REQUIRE(Assets::Write_Packed_Image_Pixel(image.Edit(),1,1,0x7f000000));
+    BOOST_REQUIRE(Assets::Write_Packed_Image_Pixel(image.Edit(),2,2,0xff000000));
+    BOOST_REQUIRE(image.Upload(*target,1));
+    const auto version=device.Texture_Content_Version(target->Handle());
+    BOOST_REQUIRE(image.Upload(*target,1));
+    BOOST_CHECK_EQUAL(device.Texture_Content_Version(target->Handle()),version);
+    BOOST_CHECK_EQUAL(device.Texture_Readback_Count(),0u);
+    std::array<unsigned,16> pixels{};
+    BOOST_REQUIRE(device.Readback_Texture(target->Handle(),std::as_writable_bytes(std::span(pixels)),16));
+    BOOST_CHECK_EQUAL(pixels[5],0x7f000000u);
+    BOOST_CHECK_EQUAL(pixels[10],0xff000000u);
+    BOOST_CHECK_EQUAL(pixels[0],0u);
+    BOOST_REQUIRE(Assets::Write_Packed_Image_Pixel(image.Edit(),1,1,0));
+    std::unique_ptr<TextureResource> wrong(TextureResource::Create(&device,{2,2,1},Assets::PixelEncoding::BGRA8));
+    BOOST_REQUIRE(wrong);
+    BOOST_CHECK(!image.Upload(*wrong,1));
+    BOOST_REQUIRE(image.Upload(*target,1));
+    BOOST_REQUIRE(device.Readback_Texture(target->Handle(),std::as_writable_bytes(std::span(pixels)),16));
+    BOOST_CHECK_EQUAL(pixels[5],0u);
+    BOOST_CHECK_EQUAL(pixels[10],0xff000000u);
+    // Device/resource restoration republishes CPU pixels without changing them.
+    const auto before_restore=device.Texture_Content_Version(target->Handle());
+    BOOST_REQUIRE(image.Upload(*target,2));
+    BOOST_CHECK_GT(device.Texture_Content_Version(target->Handle()),before_restore);
+    target.reset(TextureResource::Create(&device,{4,4,1},Assets::PixelEncoding::BGRA8));
+    BOOST_REQUIRE(image.Upload(*target,2));
+    BOOST_REQUIRE(device.Readback_Texture(target->Handle(),std::as_writable_bytes(std::span(pixels)),16));
+    BOOST_CHECK_EQUAL(pixels[5],0u);
+    BOOST_CHECK_EQUAL(pixels[10],0xff000000u);
+    image.Reset();
+    BOOST_CHECK(!image.Upload(*target,2));
+}
+
+BOOST_AUTO_TEST_CASE(full_overlay_replacement_needs_no_gpu_readback_and_preserves_draw_order)
+{
+    GraphicsTestDevice device({true});
+    std::unique_ptr<TextureResource> texture(TextureResource::Create(&device,{4,4,1},Assets::PixelEncoding::BGRA8));
+    BOOST_REQUIRE(texture);
+    const auto handle=texture->Handle();
+    for (unsigned frame=0;frame<8;++frame) {
+        std::unique_ptr<TextureEdit> edit(TextureEdit::Overwrite(*texture));
+        BOOST_REQUIRE(edit);
+        BOOST_REQUIRE(Assets::Fill_Packed_Image_Region(edit->Image(),{0,0,4,4},0));
+        // Global blips first; local blips replace them where they overlap.
+        BOOST_REQUIRE(Assets::Write_Packed_Image_Pixel(edit->Image(),frame%4,1,0xffff0000));
+        BOOST_REQUIRE(Assets::Write_Packed_Image_Pixel(edit->Image(),frame%4,1,0xff00ff00));
+        BOOST_REQUIRE(edit->Commit());
+        BOOST_CHECK_EQUAL(device.Texture_Readback_Count(),0);
+        std::array<unsigned,16> pixels{};
+        BOOST_REQUIRE(device.Readback_Texture(handle,std::as_writable_bytes(std::span(pixels)),16));
+        for (unsigned i=0;i<pixels.size();++i)
+            BOOST_CHECK_EQUAL(pixels[i],i==4+frame%4 ? 0xff00ff00u : 0u);
+    }
+    // The edit retains the exact GPU generation even if its owner is released.
+    std::unique_ptr<TextureEdit> retained(TextureEdit::Overwrite(*texture));
+    BOOST_REQUIRE(retained);
+    texture.reset();
+    BOOST_REQUIRE(retained->Commit());
+    BOOST_CHECK_EQUAL(device.Texture_Readback_Count(),0);
+}
 
 BOOST_AUTO_TEST_CASE(readback_edits_retain_replaced_generation_and_commit_only_writable_maps)
 {

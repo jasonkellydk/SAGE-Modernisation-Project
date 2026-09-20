@@ -34,6 +34,10 @@ BOOST_AUTO_TEST_CASE(cached_shadow_pixels_follow_texture_geometry_camera_and_lig
         static_cast<unsigned>(RHITextureUsage::DepthStencil)});
     std::array<std::uint8_t,4> pixels{255,255,255,255};
     const auto texture=device.Create_Texture_Initialized({1,1},{std::as_bytes(std::span(pixels)),4});
+    const auto colour_texture=device.Create_Texture_Initialized({1,1},{std::as_bytes(std::span(pixels)),4});
+    std::array<RHITextureHandle,PropTextureCount> textures{};
+    textures[0]=texture;
+    textures[3]=textures[4]=textures[10]=colour_texture;
     std::array<PropVertex,4> vertices{};
     vertices[0].position={-1,-1,-4}; vertices[1].position={1,-1,-4};
     vertices[2].position={1,1,-4}; vertices[3].position={-1,1,-4};
@@ -49,7 +53,7 @@ BOOST_AUTO_TEST_CASE(cached_shadow_pixels_follow_texture_geometry_camera_and_lig
     auto& commands=device.Immediate_Command_List();
     const auto submit=[&] {
         shadows.Clear_Casters();
-        BOOST_REQUIRE(shadows.Add_Caster(geometry,mesh,parameters,std::array{texture}));
+        BOOST_REQUIRE(shadows.Add_Caster(geometry,mesh,parameters,textures));
     };
     const auto render=[&] { BOOST_REQUIRE(shadows.Render(commands,view,light,settings,target,depth,{0,0,16,16})); };
     const auto image=[&] {
@@ -63,6 +67,26 @@ BOOST_AUTO_TEST_CASE(cached_shadow_pixels_follow_texture_geometry_camera_and_lig
     BOOST_CHECK(std::any_of(original.begin(),original.end(),[](float z){return z<1;}));
     auto count=shadows.Rendered_Cascade_Count();
     submit(); render(); // New submission references must still reuse the map.
+    BOOST_CHECK_EQUAL(shadows.Rendered_Cascade_Count(),count);
+    BOOST_CHECK(image()==original);
+    // Changing colour inputs or their texture contents must reuse the depth
+    // map; compare against an uncached render as well as the previous pixels.
+    parameters.view_projection.fill(9);
+    parameters.shroud_projection={1,2,3,4};
+    parameters.fog_color={.2f,.3f,.4f,1};
+    parameters.fog_state={1,10,1,0};
+    parameters.camera_position={8,9,10,1};
+    parameters.view[3]=5; // Authored UVs do not depend on the camera matrix.
+    parameters.shroud=1;
+    parameters.secondary_gradient=1;
+    parameters.detail_color=2;
+    parameters.texture_luminance=1;
+    parameters.surface.maps=1|64;
+    parameters.surface.normal_scale=3;
+    parameters.surface.team_color={1,0,0,1};
+    const std::array<std::uint8_t,4> changed_colour{0,127,255,0};
+    BOOST_REQUIRE(device.Update_Texture(colour_texture,{std::as_bytes(std::span(changed_colour)),4}));
+    submit(); render();
     BOOST_CHECK_EQUAL(shadows.Rendered_Cascade_Count(),count);
     BOOST_CHECK(image()==original);
     settings.cache_maps=false; render();
@@ -98,6 +122,67 @@ BOOST_AUTO_TEST_CASE(cached_shadow_pixels_follow_texture_geometry_camera_and_lig
     BOOST_CHECK(std::all_of(empty.begin(),empty.end(),[](float z){return z==1;}));
     count=shadows.Rendered_Cascade_Count(); render();
     BOOST_CHECK_EQUAL(shadows.Rendered_Cascade_Count(),count);
+    shadows.Shutdown(); geometry.Destroy_Mesh(mesh); geometry.Shutdown();
+    device.Destroy_Texture(colour_texture); device.Destroy_Texture(texture);
+    device.Destroy_Texture(target); device.Destroy_Texture(depth);
+}
+
+BOOST_AUTO_TEST_CASE(shadow_depth_inputs_match_unmodified_material_draws)
+{
+    struct Reset { ~Reset(){ Get_Environment_Lighting()={}; } } reset;
+    GraphicsTestDevice device({true});
+    DirectionalShadowRenderer shadows;
+    PropRenderer geometry;
+    const auto shaders=Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
+    BOOST_REQUIRE(shadows.Initialize(device,shaders));
+    BOOST_REQUIRE(geometry.Initialize(device,shaders));
+    const auto target=device.Create_Texture({64,64,1,RHITextureFormat::RGBA8_UNorm,
+        static_cast<unsigned>(RHITextureUsage::RenderTarget)});
+    const auto depth=device.Create_Texture({64,64,1,RHITextureFormat::D32_Float,
+        static_cast<unsigned>(RHITextureUsage::DepthStencil)});
+    const std::array<std::uint8_t,8> pixels{20,90,200,255,200,80,20,0};
+    const auto texture=device.Create_Texture_Initialized({2,1},{std::as_bytes(std::span(pixels)),8});
+    std::array<RHITextureHandle,PropTextureCount> textures; textures.fill(texture);
+    std::array<PropVertex,4> vertices{};
+    vertices[0].position={-1,-1,-4}; vertices[1].position={1,-1,-4};
+    vertices[2].position={1,1,-4}; vertices[3].position={-1,1,-4};
+    vertices[0].uv={0,0}; vertices[1].uv={1,0}; vertices[2].uv={1,1}; vertices[3].uv={0,1};
+    for (auto& vertex:vertices) { vertex.secondary_uv=vertex.uv; vertex.normal={0,0,1}; }
+    const std::array<std::uint32_t,6> indices{0,1,2,0,2,3};
+    const auto mesh=geometry.Create_Mesh(vertices,indices);
+    auto projection=Matrix4x4::Identity(); projection.values[10]=projection.values[11]=-1.f/9;
+    View view{Matrix4x4::Identity(),projection,{}, {0,0,64,64,0,1}};
+    RenderLight light; light.type=RenderLightType::Directional;
+    light.flags=RenderLightFlags::Enabled; light.direction={0,0,-1};
+    ShadowSettings settings{1,1,10,.5f,2,64};
+    PropStyle style; style.blend=RHIBlendMode::Disabled; style.color_write_mask=0;
+    auto& commands=device.Immediate_Command_List();
+    for (unsigned variant=0;variant<12;++variant) {
+        PropParameters parameters; parameters.alpha_cutoff=.5f;
+        parameters.opacity=.8f; parameters.secondary_texture=1; parameters.detail_alpha=2;
+        parameters.vertex_material_override={variant%2 ? .91f : .4f,.3f,1,1};
+        parameters.detail_color=8; parameters.secondary_gradient=1; parameters.texture_luminance=1;
+        parameters.surface.shading_model=float(variant%3);
+        parameters.surface.maps=127u | (variant>=6 ? PropSurfaceVertexAlphaUVOffset : 0u);
+        parameters.surface.team_color={.2f,.7f,.3f,1};
+        parameters.uv_sources[0]=float(variant/3);
+        parameters.view[3]=.3f;
+        parameters.uv_transform[0][3]=.15f;
+        if (variant==11) parameters.muzzle_flash_state={1,.4f,.5f,.5f};
+        shadows.Clear_Casters();
+        BOOST_REQUIRE(shadows.Add_Caster(geometry,mesh,parameters,textures,style));
+        BOOST_REQUIRE(shadows.Render(commands,view,light,settings,target,depth,{0,0,64,64}));
+        std::array<float,64*64> actual{},expected{};
+        BOOST_REQUIRE(device.Readback_Texture(Get_Environment_Lighting().shadow_textures[0],
+            std::as_writable_bytes(std::span(actual)),64*sizeof(float)));
+        parameters.view_projection=Get_Environment_Lighting().parameters.shadow_view_projection[0];
+        BOOST_REQUIRE(commands.Set_Depth_Target(depth));
+        BOOST_REQUIRE(commands.Set_Viewport({0,0,64,64}));
+        BOOST_REQUIRE(commands.Clear_Depth(1));
+        BOOST_REQUIRE(geometry.Draw(commands,mesh,style,parameters,textures));
+        BOOST_REQUIRE(device.Readback_Texture(depth,std::as_writable_bytes(std::span(expected)),64*sizeof(float)));
+        BOOST_TEST_CONTEXT("material variant " << variant) { BOOST_CHECK(actual==expected); }
+    }
     shadows.Shutdown(); geometry.Destroy_Mesh(mesh); geometry.Shutdown();
     device.Destroy_Texture(texture); device.Destroy_Texture(target); device.Destroy_Texture(depth);
 }
@@ -152,6 +237,65 @@ BOOST_AUTO_TEST_CASE(terrain_shadow_patches_match_full_geometry_and_cull_distant
     device.Destroy_Texture(target); device.Destroy_Texture(depth);
 }
 
+BOOST_AUTO_TEST_CASE(partial_terrain_edit_preserves_other_shadow_patches_and_matches_full_rebuild)
+{
+    struct ResetEnvironment { ~ResetEnvironment() { Get_Environment_Lighting() = {}; } } reset;
+    GraphicsTestDevice device({true});
+    BOOST_REQUIRE(device.Is_Valid());
+    DirectionalShadowRenderer retained, reference;
+    TerrainRenderer partial_terrain, full_terrain;
+    const auto shaders = Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY);
+    BOOST_REQUIRE(retained.Initialize(device,shaders));
+    BOOST_REQUIRE(reference.Initialize(device,shaders));
+    const auto target=device.Create_Texture({32,32,1,RHITextureFormat::RGBA8_UNorm,
+        static_cast<std::uint32_t>(RHITextureUsage::RenderTarget)});
+    const auto depth=device.Create_Texture({32,32,1,RHITextureFormat::D32_Float,
+        static_cast<std::uint32_t>(RHITextureUsage::DepthStencil)});
+    std::array<TerrainCell,64> cells;
+    for (unsigned i=0; i<cells.size(); ++i) {
+        cells[i].origin = {-1.f+(i%8)*.25f,-1.f+(i/8)*.25f};
+        cells[i].spacing = {.25f,.25f};
+        cells[i].heights.fill(-4.f);
+    }
+    BOOST_REQUIRE(partial_terrain.Set_Cells(cells));
+    auto projection=Matrix4x4::Identity();
+    projection.values[10]=projection.values[11]=-1.f/9.f;
+    const View view{Matrix4x4::Identity(),projection,{}, {0,0,32,32,0,1}};
+    RenderLight light; light.type=RenderLightType::Directional;
+    light.flags=RenderLightFlags::Enabled; light.direction={0,0,-1};
+    ShadowSettings settings{1,1,10,.5f,2,64};
+    auto& commands=device.Immediate_Command_List();
+    std::uint64_t uploaded=0, initial_upload=0;
+    for (unsigned frame=0; frame<3; ++frame) {
+        retained.Clear_Casters(); reference.Clear_Casters();
+        if (frame) {
+            cells[36].heights.fill(-4.f+frame*.5f);
+            cells[36].alternate_diagonal = frame%2!=0;
+            BOOST_REQUIRE(partial_terrain.Update_Cells(36,std::span(cells).subspan(36,1)));
+        }
+        BOOST_REQUIRE(full_terrain.Set_Cells(cells));
+        BOOST_REQUIRE(partial_terrain.Add_Shadow_Caster(retained,Matrix4x4::Identity().values));
+        BOOST_REQUIRE(full_terrain.Add_Shadow_Caster(reference,Matrix4x4::Identity().values));
+        std::array<float,64*64> actual,expected;
+        BOOST_REQUIRE(retained.Render(commands,view,light,settings,target,depth,{0,0,32,32}));
+        BOOST_REQUIRE(device.Readback_Texture(Get_Environment_Lighting().shadow_textures[0],std::as_writable_bytes(std::span(actual)),64*4));
+        const auto current=retained.Caster_Renderer().Geometry_Uploaded_Bytes();
+        if (frame==0) initial_upload=current;
+        else {
+            BOOST_CHECK_GT(current,uploaded);
+            BOOST_CHECK_LT(current-uploaded,initial_upload);
+        }
+        uploaded=current;
+        BOOST_REQUIRE(reference.Render(commands,view,light,settings,target,depth,{0,0,32,32}));
+        BOOST_REQUIRE(device.Readback_Texture(Get_Environment_Lighting().shadow_textures[0],std::as_writable_bytes(std::span(expected)),64*4));
+        for (std::size_t pixel=0; pixel<actual.size(); ++pixel)
+            BOOST_CHECK_SMALL(actual[pixel]-expected[pixel],.00001f);
+    }
+    partial_terrain.Release_Surface(); full_terrain.Release_Surface();
+    retained.Shutdown(); reference.Shutdown();
+    device.Destroy_Texture(target); device.Destroy_Texture(depth);
+}
+
 BOOST_AUTO_TEST_CASE(tree_sway_reuses_geometry_and_matches_cpu_deformed_cutout_shadows)
 {
     struct ResetEnvironment { ~ResetEnvironment() { Get_Environment_Lighting() = {}; } } reset;
@@ -182,11 +326,11 @@ BOOST_AUTO_TEST_CASE(tree_sway_reuses_geometry_and_matches_cpu_deformed_cutout_s
     ShadowSettings settings{1,1,10,.5f,2,64};
     auto& commands=device.Immediate_Command_List();
     std::uint64_t uploaded=0, sorts=0;
-    for (unsigned frame=0; frame<5; ++frame) {
+    for (unsigned frame=0; frame<8; ++frame) {
         retained.Clear_Casters(); reference.Clear_Casters();
         TreeParameters parameters;
         parameters.sway[0]={frame%2 ? .5f : -.25f,0,.25f,0};
-        if (frame==4) for (auto& vertex:vertices) vertex.position[0]+=.25f;
+        if (frame>=4) for (auto& vertex:vertices) vertex.position[0]+=.125f;
         BOOST_REQUIRE(trees.Add_Shadow_Caster(retained,vertices,indices,parameters,texture));
         std::array<PropVertex,4> cpu;
         for (unsigned i=0;i<cpu.size();++i) {
@@ -200,7 +344,8 @@ BOOST_AUTO_TEST_CASE(tree_sway_reuses_geometry_and_matches_cpu_deformed_cutout_s
         std::array<float,64*64> actual,expected;
         BOOST_REQUIRE(retained.Render(commands,view,light,settings,target,depth,{0,0,32,32}));
         BOOST_REQUIRE(device.Readback_Texture(Get_Environment_Lighting().shadow_textures[0],std::as_writable_bytes(std::span(actual)),64*4));
-        if (frame>0 && frame<4) BOOST_CHECK_EQUAL(retained.Caster_Sort_Count(),sorts);
+        // Updating unshared geometry preserves mesh ownership and draw order.
+        if (frame>0) BOOST_CHECK_EQUAL(retained.Caster_Sort_Count(),sorts);
         else BOOST_CHECK_GT(retained.Caster_Sort_Count(),sorts);
         sorts=retained.Caster_Sort_Count();
         const auto current=retained.Caster_Renderer().Geometry_Uploaded_Bytes();

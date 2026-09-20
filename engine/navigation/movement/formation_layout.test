@@ -1,0 +1,295 @@
+#include <boost/test/unit_test.hpp>
+#include <algorithm>
+#include <cmath>
+#include <map>
+#include <vector>
+#include "engine/navigation/movement/formation_gesture.h"
+#include "engine/navigation/movement/arrival_facing.h"
+import engine.navigation.movement.formation_layout;
+using navigation::FormationUnit;
+using navigation::planFormation;
+namespace {
+std::vector<FormationUnit> infantry() {
+    std::vector<FormationUnit> units;
+    for (unsigned i=0;i<250;++i) units.push_back({i+1,(float(i%20)-9.5f)*22,(float(i/20)-6)*22,4,1});
+    return units;
+}
+}
+BOOST_AUTO_TEST_SUITE(navigation_group_formations)
+BOOST_AUTO_TEST_CASE(types_have_separate_rows_in_weakest_to_strongest_order) {
+    std::vector<FormationUnit> units{
+        {9,0,0,4,1,20,1100},{2,0,0,4,1,10,700},{8,0,0,4,1,20,1100},
+        {1,0,0,4,1,10,700},{7,0,0,4,1,20,1100},{3,0,0,4,1,10,700},
+        {6,0,0,4,1,20,1100},{5,0,0,4,1,20,1100}};
+    const auto plan=planFormation(units,0,0,{-2000,-2000,2000,2000},22,0,4);
+    BOOST_REQUIRE_EQUAL(plan.destinations.size(),8u);
+    BOOST_CHECK_EQUAL(plan.rows,3u);
+    std::map<float,unsigned> rowTypes;
+    float weakRow=-2000,strongFront=-2000;
+    for (const auto& slot:plan.destinations) {
+        const auto unit=std::find_if(units.begin(),units.end(),[&](const auto& u){return u.id==slot.id;});
+        const auto [it,inserted]=rowTypes.emplace(slot.x,unit->type);
+        BOOST_CHECK_EQUAL(it->second,unit->type);
+        if (unit->type==10) weakRow=slot.x; else strongFront=std::max(strongFront,slot.x);
+    }
+    BOOST_CHECK_GT(weakRow,strongFront);
+    std::reverse(units.begin(),units.end());
+    const auto again=planFormation(units,0,0,{-2000,-2000,2000,2000},22,0,4);
+    BOOST_REQUIRE_EQUAL(again.destinations.size(),plan.destinations.size());
+    for (unsigned i=0;i<plan.destinations.size();++i) {
+        BOOST_CHECK_EQUAL(again.destinations[i].id,plan.destinations[i].id);
+        BOOST_CHECK_EQUAL(again.destinations[i].x,plan.destinations[i].x);
+        BOOST_CHECK_EQUAL(again.destinations[i].y,plan.destinations[i].y);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(build_placement_handoff_releases_both_button_capture) {
+    navigation::FormationGesture gesture;
+    gesture.update(navigation::FormationInput::LeftDown,0,0,true);
+    BOOST_REQUIRE(gesture.update(navigation::FormationInput::RightDown,0,0,true).capture);
+    gesture.reset();
+    BOOST_CHECK(!gesture.active());
+    BOOST_CHECK(!gesture.update(navigation::FormationInput::LeftUp,0,0,false).capture);
+    BOOST_CHECK(!gesture.update(navigation::FormationInput::RightUp,0,0,false).capture);
+    BOOST_CHECK(!gesture.update(navigation::FormationInput::LeftDown,0,0,false).capture);
+    BOOST_CHECK(!gesture.update(navigation::FormationInput::Move,100,0,false).capture);
+    BOOST_CHECK(!gesture.update(navigation::FormationInput::LeftUp,100,0,false).capture);
+}
+
+BOOST_AUTO_TEST_CASE(explicit_preview_slots_survive_live_unit_movement_and_rotation) {
+    auto units=infantry();
+    const navigation::FormationBounds bounds{-10000,-10000,10000,10000};
+    const auto first=planFormation(units,0,0,bounds,22,0,20);
+    for (auto& unit : units) { unit.x=-unit.x+300; unit.y=-unit.y-200; }
+    std::reverse(units.begin(),units.end());
+    const auto moved=planFormation(units,0,0,bounds,22,0,20);
+    const auto rotated=planFormation(units,0,0,bounds,22,1.57079632679f,20);
+    BOOST_REQUIRE_EQUAL(first.destinations.size(),250u);
+    BOOST_REQUIRE_EQUAL(moved.destinations.size(),first.destinations.size());
+    BOOST_REQUIRE_EQUAL(rotated.destinations.size(),first.destinations.size());
+    for (unsigned i=0;i<first.destinations.size();++i) {
+        const auto& before=first.destinations[i];
+        BOOST_CHECK_EQUAL(moved.destinations[i].id,before.id);
+        BOOST_CHECK_EQUAL(moved.destinations[i].x,before.x);
+        BOOST_CHECK_EQUAL(moved.destinations[i].y,before.y);
+        BOOST_CHECK_EQUAL(rotated.destinations[i].id,before.id);
+        BOOST_CHECK_SMALL(rotated.destinations[i].x+before.y,0.001f);
+        BOOST_CHECK_SMALL(rotated.destinations[i].y-before.x,0.001f);
+    }
+}
+BOOST_AUTO_TEST_CASE(arrival_turn_waits_for_destination_and_finishes_at_requested_heading) {
+    navigation::ArrivalFacing facing;
+    facing.set(1.5f);
+    BOOST_CHECK(!facing.update(false,0));
+    BOOST_CHECK(!facing.turning);
+    BOOST_CHECK(facing.update(true,0));
+    BOOST_CHECK(facing.update(false,1.0f));
+    BOOST_CHECK(!facing.update(false,1.49f));
+    BOOST_CHECK(!facing.requested);
+    facing.set(3.13f);
+    BOOST_CHECK(!facing.update(true,-3.13f));
+    facing.set(1);
+    facing.cancel();
+    BOOST_CHECK(!facing.update(true,0));
+}
+
+BOOST_AUTO_TEST_CASE(two_hundred_fifty_units_receive_a_wide_compact_destination_in_front_of_them) {
+    const auto units=infantry();
+    const auto plan=planFormation(units,0,400,{-2000,-2000,2000,2000});
+    BOOST_REQUIRE_EQUAL(plan.destinations.size(),250u);
+    BOOST_TEST(plan.columns>=16u);
+    BOOST_TEST(plan.rows<=16u);
+    float lowX=2000,highX=-2000,lowY=2000,highY=-2000;
+    double centerX=0,centerY=0;
+    std::map<unsigned,bool> ids;
+    for (const auto& slot : plan.destinations) {
+        BOOST_TEST(ids.emplace(slot.id,true).second);
+        BOOST_TEST(slot.y>150); // No long tail of units assigned behind the starting group.
+        lowX=std::min(lowX,slot.x); highX=std::max(highX,slot.x);
+        lowY=std::min(lowY,slot.y); highY=std::max(highY,slot.y);
+        centerX+=slot.x; centerY+=slot.y;
+    }
+    BOOST_TEST(highX-lowX>highY-lowY);
+    BOOST_TEST(highY-lowY<350);
+    BOOST_TEST(std::abs(centerX/250)<0.001);
+    BOOST_TEST(std::abs(centerY/250-400)<0.001);
+    for (std::size_t i=0;i<plan.destinations.size();++i) for (std::size_t j=0;j<i;++j) {
+        const auto& a=plan.destinations[i]; const auto& b=plan.destinations[j];
+        BOOST_TEST(std::hypot(a.x-b.x,a.y-b.y)>=plan.spacing-0.001f);
+    }
+}
+BOOST_AUTO_TEST_CASE(selection_order_cannot_change_slots_or_arrival_speeds) {
+    auto units=infantry();
+    const auto first=planFormation(units,500,700,{-2000,-2000,2000,2000});
+    std::reverse(units.begin(),units.end());
+    const auto second=planFormation(units,500,700,{-2000,-2000,2000,2000});
+    BOOST_REQUIRE_EQUAL(first.destinations.size(),second.destinations.size());
+    for (std::size_t i=0;i<first.destinations.size();++i) {
+        BOOST_TEST(first.destinations[i].id==second.destinations[i].id);
+        BOOST_TEST(first.destinations[i].x==second.destinations[i].x);
+        BOOST_TEST(first.destinations[i].y==second.destinations[i].y);
+        BOOST_TEST(first.destinations[i].speed==second.destinations[i].speed);
+    }
+}
+BOOST_AUTO_TEST_CASE(mixed_units_keep_their_own_speed_in_a_wide_formation) {
+    auto units=infantry();
+    for (auto& unit:units) { unit.speed=unit.id%3+1; unit.radius=unit.id%2?4:12; }
+    const auto plan=planFormation(units,0,800,{-2000,-2000,2000,2000});
+    BOOST_REQUIRE_EQUAL(plan.destinations.size(),units.size());
+    for (const auto& slot:plan.destinations) {
+        const auto& unit=units[slot.id-1];
+        BOOST_REQUIRE(slot.speed>0);
+        BOOST_TEST(slot.speed==unit.speed);
+    }
+}
+BOOST_AUTO_TEST_CASE(map_edges_translate_the_whole_formation_without_collapsing_slots) {
+    const auto units=infantry();
+    const auto plan=planFormation(units,999,999,{-1000,-1000,1000,1000});
+    BOOST_REQUIRE_EQUAL(plan.destinations.size(),units.size());
+    for (const auto& slot:plan.destinations) {
+        BOOST_TEST(slot.x>=-996); BOOST_TEST(slot.x<=996);
+        BOOST_TEST(slot.y>=-996); BOOST_TEST(slot.y<=996);
+    }
+    const auto narrow=planFormation(units,0,1000,{-70,-3000,70,3000});
+    BOOST_REQUIRE_EQUAL(narrow.destinations.size(),units.size());
+    BOOST_TEST(narrow.columns<=7u);
+    for(const auto& slot:narrow.destinations) { BOOST_TEST(slot.x>=-66); BOOST_TEST(slot.x<=66); }
+}
+BOOST_AUTO_TEST_CASE(impossible_footprints_and_duplicate_members_do_not_publish_partial_plans) {
+    auto units=infantry();
+    BOOST_TEST(planFormation(units,0,0,{-5,-5,5,5}).destinations.empty());
+    units.back().id=units.front().id;
+    BOOST_TEST(planFormation(units,0,0,{-2000,-2000,2000,2000}).destinations.empty());
+}
+BOOST_AUTO_TEST_CASE(movement_adapter_clears_old_goals_before_reserving_adjusted_slots) {
+    const auto units = infantry();
+    std::vector<unsigned> removed, reserved;
+    const auto plan = navigation::prepareFormationMove(units, 0, 400,
+        {-2000,-2000,2000,2000},
+        [&](unsigned id) { removed.push_back(id); },
+        [&](auto& slot) {
+            BOOST_TEST(removed.size() == units.size());
+            reserved.push_back(slot.id);
+            // Model the native destination resolver finding blocked terrain.
+            if (slot.id == 1) slot.y += 150;
+        });
+    BOOST_REQUIRE_EQUAL(plan.destinations.size(), 250u);
+    BOOST_TEST(removed == reserved);
+    const auto original = planFormation(units, 0, 400, {-2000,-2000,2000,2000});
+    for (std::size_t i=0; i<plan.destinations.size(); ++i) {
+        const auto& slot = plan.destinations[i];
+        BOOST_TEST(slot.y == original.destinations[i].y + (slot.id == 1 ? 150 : 0));
+        const auto& unit = units[slot.id-1];
+        BOOST_REQUIRE(slot.speed > 0);
+        BOOST_TEST(slot.speed == unit.speed);
+    }
+}
+BOOST_AUTO_TEST_CASE(movement_reservations_and_speeds_do_not_depend_on_selection_order) {
+    auto units = infantry();
+    std::vector<unsigned> firstReservations, secondReservations;
+    const auto prepare = [&](auto& reservations) {
+        return navigation::prepareFormationMove(units, 0, 400, {-2000,-2000,2000,2000},
+            [](unsigned) {}, [&](auto& slot) {
+                reservations.push_back(slot.id);
+                slot.y += float(reservations.size()%3)*10;
+            });
+    };
+    const auto first = prepare(firstReservations);
+    std::reverse(units.begin(), units.end());
+    const auto second = prepare(secondReservations);
+    BOOST_TEST(firstReservations == secondReservations);
+    BOOST_REQUIRE_EQUAL(first.destinations.size(), second.destinations.size());
+    for (std::size_t i=0; i<first.destinations.size(); ++i) {
+        BOOST_TEST(first.destinations[i].id == second.destinations[i].id);
+        BOOST_TEST(first.destinations[i].x == second.destinations[i].x);
+        BOOST_TEST(first.destinations[i].y == second.destinations[i].y);
+        BOOST_TEST(first.destinations[i].speed == second.destinations[i].speed);
+    }
+}
+BOOST_AUTO_TEST_CASE(an_impossible_formation_preserves_existing_goal_reservations) {
+    unsigned changes = 0;
+    const auto plan = navigation::prepareFormationMove(infantry(), 0, 0, {-5,-5,5,5},
+        [&](unsigned) { ++changes; }, [&](auto&) { ++changes; });
+    BOOST_TEST(plan.destinations.empty());
+    BOOST_TEST(changes == 0u);
+}
+BOOST_AUTO_TEST_CASE(a_unit_already_at_its_resolved_slot_can_still_move_after_native_goal_snapping) {
+    const auto units = infantry();
+    const auto plan = navigation::prepareFormationMove(units, 0, 400, {-2000,-2000,2000,2000},
+        [](unsigned) {}, [&](auto& slot) {
+            if (slot.id == 1) { slot.x = units[0].x; slot.y = units[0].y; }
+        });
+    const auto slot = std::find_if(plan.destinations.begin(), plan.destinations.end(),
+        [](const auto& dest) { return dest.id == 1; });
+    BOOST_REQUIRE(slot != plan.destinations.end());
+    BOOST_TEST(slot->speed == units[0].speed);
+}
+BOOST_AUTO_TEST_SUITE_END()
+
+BOOST_AUTO_TEST_SUITE(navigation_formation_gesture)
+using navigation::FormationInput;
+BOOST_AUTO_TEST_CASE(both_button_orders_activate_and_commit_once_without_a_stray_click) {
+    for (bool leftFirst : {false,true}) {
+        navigation::FormationGesture gesture;
+        BOOST_TEST(!gesture.update(leftFirst?FormationInput::LeftDown:FormationInput::RightDown,100,100,true).capture);
+        BOOST_TEST(gesture.update(leftFirst?FormationInput::RightDown:FormationInput::LeftDown,100,100,true).began);
+        BOOST_TEST(gesture.update(FormationInput::Move,200,100,true).capture);
+        BOOST_TEST(gesture.visible());
+        const auto first=gesture.update(FormationInput::LeftUp,200,100,true);
+        BOOST_TEST(first.commit);
+        const auto second=gesture.update(FormationInput::RightUp,200,100,true);
+        BOOST_TEST(second.capture);
+        BOOST_TEST(!second.commit);
+        BOOST_TEST(!gesture.update(FormationInput::Move,200,100,true).capture);
+    }
+}
+BOOST_AUTO_TEST_CASE(ground_drag_direction_and_length_control_facing_and_frontage) {
+    navigation::FormationGesture gesture;
+    gesture.update(FormationInput::LeftDown,0,0,true);
+    gesture.update(FormationInput::RightDown,0,0,true,1.0f);
+    gesture.update(FormationInput::Move,0,100,true);
+    BOOST_TEST(std::abs(gesture.facing()-1.5707963f)<0.00001f);
+    BOOST_TEST(gesture.frontage()==100);
+    gesture.update(FormationInput::Move,-200,0,true);
+    BOOST_TEST(std::abs(gesture.facing()-3.1415927f)<0.00001f);
+    BOOST_TEST(gesture.frontage()==200);
+    gesture.update(FormationInput::Move,1,0,true);
+    BOOST_TEST(gesture.frontage()==200);
+    BOOST_TEST(std::abs(gesture.facing()-3.1415927f)<0.00001f);
+}
+BOOST_AUTO_TEST_CASE(short_chords_do_not_move_but_a_stationary_hold_activates_after_300ms) {
+    navigation::FormationGesture quick;
+    quick.update(FormationInput::LeftDown,0,0,true,0,100);
+    quick.update(FormationInput::RightDown,0,0,true,0,100);
+    BOOST_TEST(!quick.update(FormationInput::LeftUp,0,0,true,0,200).commit);
+    navigation::FormationGesture held;
+    held.update(FormationInput::RightDown,0,0,true,0,100);
+    held.update(FormationInput::LeftDown,0,0,true,0.7f,100);
+    held.update(FormationInput::Move,0,0,true,0,399);
+    BOOST_TEST(!held.visible());
+    held.update(FormationInput::Move,0,0,true,0,400);
+    BOOST_TEST(held.visible());
+    BOOST_TEST(held.facing()==0.7f);
+    BOOST_TEST(held.update(FormationInput::RightUp,0,0,true,0,401).commit);
+}
+BOOST_AUTO_TEST_CASE(cancellation_drains_both_buttons_without_issuing_a_move) {
+    navigation::FormationGesture gesture;
+    gesture.update(FormationInput::LeftDown,0,0,true);
+    gesture.update(FormationInput::RightDown,0,0,true);
+    gesture.update(FormationInput::Move,0,200,true);
+    BOOST_TEST(gesture.update(FormationInput::Cancel,0,0,false).cancelled);
+    BOOST_TEST(!gesture.update(FormationInput::LeftUp,0,200,true).commit);
+    BOOST_TEST(!gesture.update(FormationInput::RightUp,0,200,true).commit);
+    BOOST_TEST(!gesture.active());
+}
+BOOST_AUTO_TEST_CASE(explicit_facing_and_frontage_change_layout_without_changing_unit_speed) {
+    const auto units=infantry();
+    const auto narrow=planFormation(units,0,0,{-5000,-5000,5000,5000},22,0,5);
+    const auto wide=planFormation(units,0,0,{-5000,-5000,5000,5000},22,1.5707963f,25);
+    BOOST_TEST(narrow.columns==5u);
+    BOOST_TEST(narrow.rows==50u);
+    BOOST_TEST(wide.columns==25u);
+    BOOST_TEST(wide.rows==10u);
+    for (const auto& slot : wide.destinations) BOOST_TEST(slot.speed==units[slot.id-1].speed);
+}
+BOOST_AUTO_TEST_SUITE_END()

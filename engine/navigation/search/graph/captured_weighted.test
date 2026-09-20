@@ -1,0 +1,595 @@
+#include <boost/test/unit_test.hpp>
+#include <array>
+#include <limits>
+#include <memory>
+#include <vector>
+import engine.navigation.search.graph.captured_weighted;
+import engine.navigation.search.hpa_route;
+import engine.navigation.search.route_search;
+import engine.navigation.movement.snapshot.cells;
+import engine.navigation.movement.snapshot.occupants;
+import engine.navigation.movement.classification.weighted_cell;
+import engine.navigation.movement.occupancy_policy;
+import engine.navigation.movement.destination.reservations;
+import engine.navigation.movement.terrain_policy;
+import engine.navigation.search.graph.destination_rank;
+
+namespace {
+auto units() { return std::make_shared<const navigation::OccupantSnapshot>(); }
+navigation::CellState clearCell() { navigation::CellState cell;cell.occupancy.valid=true;return cell; }
+navigation::CapturedGraphQuery query(int x,int y) {
+    navigation::CapturedGraphQuery value;
+    value.movement.terrain.surfaces=1;
+    value.occupancy.cellsAbove=1;
+    value.goalX=x;value.goalY=y;return value;
+}
+navigation::RouteSearchResult run(const navigation::CapturedWeightedGraph& graph,unsigned budget) {
+    navigation::RouteSearchWorkspace search;
+    const auto heuristic=[&](unsigned id) { return graph.heuristic(id); };
+    const auto neighbors=[&](unsigned id,auto emit) { graph.neighbors(id,emit); };
+    search.begin(graph.nodeCount(),graph.start(),graph.goal(),heuristic);
+    unsigned updates=0;
+    while (search.status()==navigation::RouteSearchStatus::Searching) {
+        const auto before=search.result().work;
+        search.advance(budget,heuristic,neighbors);
+        BOOST_TEST(search.result().work-before<=budget);
+        // Expansion plus parent traversal and reversal all consume slices.
+        BOOST_REQUIRE(++updates<=graph.nodeCount()*3);
+    }
+    return search.result();
+}
+}
+
+BOOST_AUTO_TEST_CASE(captured_occupancy_index_matches_coordinate_lookup_for_sparse_and_dense_inputs) {
+    using namespace navigation;
+    for (unsigned count:{0u,7u,64u,129u}) for (int size:{32,1000,2048}) {
+        constexpr int left=-19,top=41;
+        std::vector<CapturedOccupancyCell> source;
+        for (unsigned i=0;i<count;++i) {
+            CapturedOccupancyCell cell;
+            cell.x=left+int(i%13);cell.y=top+int(i/13);cell.layer=i%3;
+            cell.occupancy.unit=i+17;cell.goal=i+99;
+            source.push_back(cell);
+        }
+        CapturedOccupancyIndex index(std::make_shared<const std::vector<CapturedOccupancyCell>>(source),
+            left,top,left+size-1,top+size-1,3);
+        for (unsigned layer=0;layer<4;++layer)
+            for (int x=left-1;x<left+35;++x) for (int y=top-1;y<top+16;++y) {
+                const auto expected=std::find_if(source.begin(),source.end(),[&](const auto& cell) {
+                    return cell.x==x && cell.y==y && cell.layer==layer;
+                });
+                const auto* actual=index.find(x,y,layer);
+                BOOST_REQUIRE(bool(actual)==(expected!=source.end()));
+                if (actual) {
+                    BOOST_TEST(actual->occupancy.unit==expected->occupancy.unit);
+                    BOOST_TEST(actual->goal==expected->goal);
+                }
+            }
+        BOOST_TEST((index.find(left+size-1,top+size-1,2)==nullptr));
+    }
+}
+
+BOOST_AUTO_TEST_CASE(dx9_weighted_search_charges_turns_between_route_edges) {
+    using namespace navigation;
+    // Pinned DX9 costSoFar: E -> SE -> S costs 10+14+10 + 4+4.
+    auto cells=std::make_shared<const CellSnapshot>(1,0,0,2,2,[](int x,int y) {
+        auto cell=clearCell();
+        if (x!=2 && y!=0) cell.terrain=unsigned(TerrainKind::impassable);
+        return cell;
+    });
+    auto config=query(2,2);config.useHpa=false;
+    CapturedWeightedGraph graph({{cells,{}}},units(),config);
+    RouteSearchWorkspace scratch;
+    const auto estimate=[&](unsigned id) { return graph.referenceHeuristic(id); };
+    const auto neighbors=[&](unsigned id,auto emit) { graph.neighbors(id,emit,scratch.parentOf(id)); };
+    scratch.begin(graph.nodeCount(),graph.start(),graph.goal(),estimate);
+    while (scratch.status()==RouteSearchStatus::Searching) scratch.advance(31,estimate,neighbors);
+    const auto& result=scratch.result();
+    BOOST_REQUIRE(result.found());
+    BOOST_TEST(result.cost==42u);
+}
+
+BOOST_AUTO_TEST_CASE(dx9_ordinary_neighbors_do_not_reuse_observed_corner_sides) {
+    using namespace navigation;
+    auto cells=std::make_shared<const CellSnapshot>(1,0,0,2,2,[](int x,int y) {
+        auto cell=clearCell();
+        if (x==1 && y==2) cell.terrain=unsigned(TerrainKind::impassable);
+        return cell;
+    });
+    auto config=query(2,2);config.startX=config.startY=1;
+    config.useHpa=false;config.downhillOnly=true;
+    auto heights=std::make_shared<const std::vector<float>>(9,0.f);
+    CapturedWeightedGraph graph({{cells,heights}},units(),config);
+    RouteSearchWorkspace search;
+    search.useReferenceOrder();
+    const auto estimate=[](unsigned) { return 0u; };
+    search.begin(graph.nodeCount(),graph.start(),graph.goal(),estimate);
+    const auto east=graph.encode(2,1,1);
+    search.relax(graph.start(),east,10,estimate);
+    std::vector<unsigned> neighbors;
+    graph.referenceNeighbors(graph.start(),search,[&](unsigned id,unsigned) { neighbors.push_back(id); });
+    // examineNeighboringCells skips open/closed cells before setting the side
+    // flag. Neither the observed east side nor the blocked north opens NE.
+    BOOST_TEST((std::find(neighbors.begin(),neighbors.end(),east)==neighbors.end()));
+    BOOST_TEST((std::find(neighbors.begin(),neighbors.end(),graph.goal())==neighbors.end()));
+}
+
+BOOST_AUTO_TEST_CASE(captured_phase_slices_match_unsliced_routes_with_traffic_layers_and_escape) {
+    using namespace navigation;
+    for (unsigned scenario=0;scenario<5;++scenario) {
+        auto ground=std::make_shared<const CellSnapshot>(1,0,0,19,16,[&](int x,int y) {
+            auto cell=clearCell();
+            if (x==8 && y!=5 && y!=12) cell.terrain=unsigned(TerrainKind::impassable);
+            if (x==4 && y==4) cell.pinched=true;
+            if (x==12 && y==10) cell.occupancy={17,true,false,false,false,true};
+            if (scenario==3 && x==1 && y==1) cell.terrain=unsigned(TerrainKind::impassable);
+            if (scenario==4 && (x==7 || x==9) && y==4) cell.connection=2;
+            return cell;
+        });
+        auto bridge=std::make_shared<const CellSnapshot>(2,0,0,19,16,[](int x,int y) {
+            auto cell=clearCell();
+            if ((x==7 || x==9) && y==4) cell.connection=1;
+            return cell;
+        });
+        auto heights=std::make_shared<const std::vector<float>>(20*17,0.0f);
+        std::vector<CapturedLayer> layers{{ground,heights}};
+        if (scenario==4) layers.push_back({bridge,heights});
+        const std::array occupants{OccupantState{17,true,false,true,false,2}};
+        auto config=query(17,13);config.startX=config.startY=1;config.useHpa=false;
+        config.checkOccupants=true;config.occupancy.self=1;
+        if (scenario==1) { config.movement.corridor=true;config.pathDiameter=2; }
+        if (scenario==2) config.downhillOnly=true;
+        CapturedWeightedGraph referenceGraph(layers,std::make_shared<const OccupantSnapshot>(occupants),config);
+        RouteSearchWorkspace reference;
+        reference.useReferenceOrder();
+        const auto expected=reference.find(referenceGraph.nodeCount(),referenceGraph.start(),referenceGraph.goal(),
+            [&](unsigned id) { return referenceGraph.referenceHeuristic(id); },
+            [&](unsigned id,auto emit) { referenceGraph.referenceNeighbors(id,reference,emit); });
+        for (unsigned budget : {1u,2u,7u,128u}) {
+            auto graph=referenceGraph.cloneQuery();
+            RouteSearchWorkspace search;search.useReferenceOrder();
+            const auto estimate=[&](unsigned id) { return graph.referenceHeuristic(id); };
+            auto step=[&,cursor=CapturedReferenceCursor{}](unsigned id,unsigned available,auto emit) mutable {
+                return graph.advanceReferenceNeighbors(id,search,cursor,available,emit);
+            };
+            search.begin(graph.nodeCount(),graph.start(),graph.goal(),estimate);
+            unsigned slices=0;
+            while (search.status()==RouteSearchStatus::Searching) {
+                const auto before=search.result().work;
+                const auto used=search.advanceReferenceSlice(budget,estimate,step);
+                BOOST_TEST(used<=budget);
+                BOOST_TEST(search.result().work-before==used);
+                BOOST_REQUIRE(++slices<500000);
+            }
+            BOOST_TEST_CONTEXT("scenario=" << scenario << " budget=" << budget) {
+                BOOST_TEST(search.result().nodes==expected.nodes,boost::test_tools::per_element());
+                BOOST_TEST(search.result().cost==expected.cost);
+                BOOST_TEST(search.result().expanded==expected.expanded);
+            }
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(one_phase_credit_has_a_fixed_sample_bound_and_resumes_the_same_ray) {
+    using namespace navigation;
+    auto cells=std::make_shared<const CellSnapshot>(1,0,0,255,0,[](int,int) { return clearCell(); });
+    CapturedWeightedGraph graph({{cells,{}}},units(),query(255,0));
+    RouteSearchWorkspace search;search.useReferenceOrder();
+    const auto estimate=[&](unsigned id) { return graph.referenceHeuristic(id); };
+    search.begin(graph.nodeCount(),graph.start(),graph.goal(),estimate);
+    CapturedReferenceCursor cursor;
+    const auto emit=[](unsigned,unsigned) {};
+    graph.advanceReferenceNeighbors(graph.start(),search,cursor,1,emit); // Begin expansion.
+    for (unsigned chunk=1;chunk<=3;++chunk) {
+        const auto result=graph.advanceReferenceNeighbors(graph.start(),search,cursor,1,emit);
+        BOOST_TEST(result.work==1u);
+        BOOST_TEST(!result.complete);
+        const auto end=chunk*CapturedWeightedGraph::PhaseSamplesPerCredit;
+        BOOST_TEST(search.observed(graph.encode(end-1,0,1)));
+        BOOST_TEST(!search.observed(graph.encode(end,0,1)));
+    }
+}
+
+BOOST_AUTO_TEST_CASE(captured_graph_owns_terrain_and_unit_answers_through_source_destruction) {
+    using namespace navigation;
+    std::array<CellState,25> source;
+    source.fill(clearCell());
+    source[2*5+2].occupancy={17,true,false,false,false,true};
+    source[2*5+2].goal=17;
+    auto cells=std::make_shared<const CellSnapshot>(1,0,0,4,4,[&](int x,int y) { return source[x*5+y]; });
+    std::array states{OccupantState{17,true,false,true,false,2}};
+    auto occupants=std::make_shared<const OccupantSnapshot>(states);
+    auto config=query(4,4);config.occupancy.self=1;
+    CapturedWeightedGraph graph({{cells,{}}},occupants,config);
+    auto corridor=config;corridor.movement.corridor=true;corridor.pathDiameter=2;
+    corridor.goalX=corridor.goalY=2;
+    CapturedWeightedGraph group({{cells,{}}},occupants,corridor);
+    cells.reset();occupants.reset();source.fill({});states[0].allied=false;
+    BOOST_TEST(graph.goalAllowed());
+    BOOST_TEST(!graph.destinationAllowed(2,2,1,{1,0,0,true,true,false,true}));
+    BOOST_TEST(group.clearance(2,2,1)==1);
+    BOOST_TEST(!group.goalAllowed());
+    const auto expected=run(graph,100);
+    BOOST_REQUIRE(expected.found());
+    for (auto id:expected.nodes) {
+        const auto point=graph.decode(id);
+        BOOST_TEST(!(point.x==2 && point.y==2)); // Avoid the allied fixed-unit cost.
+    }
+    for (unsigned budget : {1u,3u,7u}) {
+        const auto sliced=run(graph,budget);
+        BOOST_TEST(sliced.nodes==expected.nodes);
+        BOOST_TEST(sliced.cost==expected.cost);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(captured_fallback_preserves_reserved_destination_and_budget_independent_route) {
+    using namespace navigation;
+    auto cells=std::make_shared<const CellSnapshot>(1,0,0,4,2,[](int x,int y) {
+        auto cell=clearCell();
+        if (x==4 && y==1) { cell.goal=17;cell.occupancy={17,true,false,false,false,true}; }
+        return cell;
+    });
+    std::array source{OccupantState{17,true,false,true,false,0}};
+    auto occupants=std::make_shared<const OccupantSnapshot>(source);
+    auto config=query(4,1);config.checkOccupants=false;
+    CapturedWeightedGraph graph({{cells,{}}},occupants,config);
+    cells.reset();occupants.reset();source[0].allied=false;
+    const DestinationRankQuery target{4,1,1,false,0.01,0.f};
+    const DestinationQuery destination{1,0,0,true,true,false,true};
+    BOOST_TEST(!graph.rank(graph.goal(),0,target,destination).has_value());
+    BOOST_TEST(!graph.rank(graph.terminal(),0,target,destination).has_value());
+    RouteSearchResult expected;
+    for (unsigned budget : {100u,1u,3u,7u}) {
+        RouteSearchWorkspace search;
+        const auto heuristic=[&](unsigned id){return graph.heuristic(id);};
+        const auto neighbors=[&](unsigned id,auto emit){graph.neighbors(id,emit);};
+        const auto rank=[&](unsigned id,unsigned cost){return graph.rank(id,cost,target,destination);};
+        search.beginWithFallback(graph.nodeCount(),graph.start(),graph.terminal(),heuristic);
+        unsigned advances=0;
+        while (search.status()==RouteSearchStatus::Searching) {
+            const auto before=search.result().work;
+            search.advanceWithFallback(budget,heuristic,neighbors,rank);
+            BOOST_TEST(search.result().work-before<=budget);
+            // Deferred ranking and route reconstruction follow expansion.
+            BOOST_REQUIRE(++advances<=graph.nodeCount()*4);
+        }
+        const auto result=search.result();
+        BOOST_REQUIRE(result.found());
+        BOOST_TEST(result.usedFallback);
+        BOOST_TEST(result.nodes.back()!=graph.goal());
+        BOOST_TEST(rank(result.nodes.back(),result.cost).value()==1.0);
+        if (budget==100) expected=result;
+        else { BOOST_TEST(result.nodes==expected.nodes);BOOST_TEST(result.cost==expected.cost); }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(captured_graph_preserves_zero_cost_layer_connections) {
+    using namespace navigation;
+    auto ground=std::make_shared<const CellSnapshot>(1,0,0,2,0,[](int x,int) {
+        auto cell=clearCell();cell.occupancy.valid=x==0;cell.connection=x==0?2:0;return cell;
+    });
+    auto bridge=std::make_shared<const CellSnapshot>(2,0,0,2,0,[](int,int) { return clearCell(); });
+    auto config=query(2,0);config.goalLayer=2;
+    CapturedWeightedGraph graph({{ground,{}},{bridge,{}}},units(),config);
+    const auto result=run(graph,1);
+    BOOST_REQUIRE(result.found());
+    BOOST_TEST(result.cost==20u);
+    BOOST_REQUIRE(result.nodes.size()==4u);
+    BOOST_TEST(graph.decode(result.nodes[0]).layer==1u);
+    BOOST_TEST(graph.decode(result.nodes[1]).layer==2u);
+}
+
+BOOST_AUTO_TEST_CASE(captured_hpa_heuristic_is_ground_only_across_layer_connections) {
+    using namespace navigation;
+    auto ground=std::make_shared<const CellSnapshot>(1,0,0,2,0,[](int x,int) {
+        auto cell=clearCell();cell.connection=x==0?2:0;return cell;
+    });
+    auto bridge=std::make_shared<const CellSnapshot>(2,0,0,2,0,[](int,int) { return clearCell(); });
+    auto hierarchy=buildHpaHierarchy(3,1,[](int,int) { return true; },16);
+    auto config=query(2,0);config.goalLayer=2;config.useHpa=true;
+    CapturedWeightedGraph graph({{ground,{},hierarchy},{bridge,{}}},units(),config);
+    const auto bridgeNode=graph.encode(0,0,2);
+    BOOST_TEST(graph.heuristic(bridgeNode)==graph.geometricHeuristic(bridgeNode));
+}
+
+BOOST_AUTO_TEST_CASE(captured_fast_validation_rejects_fixed_but_ignores_moving_occupants) {
+    using namespace navigation;
+    auto cells=std::make_shared<const CellSnapshot>(1,0,0,2,0,[](int x,int) {
+        auto cell=clearCell();
+        if (x==1) cell.occupancy={17,true,false,false,true,false};
+        return cell;
+    });
+    const std::array states{OccupantState{17,true,false,false,false,0}};
+    auto occupants=std::make_shared<const OccupantSnapshot>(states);
+    WeightedCellQuery movement;
+    movement.terrain.surfaces=1;movement.radius=0;movement.cellsAbove=1;
+    OccupancyQuery occupancy;
+    occupancy.self=99;occupancy.cellsAbove=1;
+    CapturedLinePassability line(cells,occupants,{},movement,occupancy);
+
+    // A moving allied unit is a traffic hint, not a hard segment blocker.
+    BOOST_TEST(line.passable({0,0},{2,0},1,false,false,nullptr,true));
+
+    auto fixedCells=std::make_shared<const CellSnapshot>(1,0,0,2,0,[](int x,int) {
+        auto cell=clearCell();
+        if (x==1) cell.occupancy={17,true,false,false,false,true};
+        return cell;
+    });
+    CapturedLinePassability fixed(fixedCells,occupants,{},movement,occupancy);
+    BOOST_TEST(!fixed.passable({0,0},{2,0},1,false,false,nullptr,true));
+}
+
+BOOST_AUTO_TEST_CASE(captured_fast_validation_two_by_two_specialization_matches_fixed_policy) {
+    using namespace navigation;
+    auto cells=std::make_shared<const CellSnapshot>(1,-1,-1,2,1,[](int x,int y) {
+        auto cell=clearCell();
+        if (x==0 && y==0) cell.occupancy={17,true,false,false,false,true};
+        return cell;
+    });
+    WeightedCellQuery movement;
+    movement.terrain.surfaces=1;movement.radius=1;movement.cellsAbove=1;
+    OccupancyQuery occupancy;
+    occupancy.self=99;occupancy.cellsAbove=1;occupancy.radius=1;
+
+    const std::array movableAlly{OccupantState{17,true,false,true,false,0}};
+    CapturedLinePassability ally(cells,
+        std::make_shared<const OccupantSnapshot>(movableAlly),{},movement,occupancy);
+    BOOST_TEST(ally.passable({0,0},{2,0},1,false,false,nullptr,true));
+
+    const std::array blockedAlly{OccupantState{17,true,false,false,false,0}};
+    CapturedLinePassability blocked(cells,
+        std::make_shared<const OccupantSnapshot>(blockedAlly),{},movement,occupancy);
+    BOOST_TEST(!blocked.passable({0,0},{2,0},1,false,false,nullptr,true));
+
+    const std::array crushableEnemy{OccupantState{17,false,false,false,true,0}};
+    CapturedLinePassability crushable(cells,
+        std::make_shared<const OccupantSnapshot>(crushableEnemy),{},movement,occupancy);
+    BOOST_TEST(crushable.passable({0,0},{2,0},1,false,false,nullptr,true));
+
+    const std::array self{OccupantState{17,false,false,false,false,0}};
+    occupancy.self=17;
+    CapturedLinePassability ignored(cells,
+        std::make_shared<const OccupantSnapshot>(self),{},movement,occupancy);
+    BOOST_TEST(ignored.passable({0,0},{2,0},1,false,false,nullptr,true));
+}
+
+BOOST_AUTO_TEST_CASE(reserved_approach_bound_matches_exhaustive_destination_without_scanning_the_map) {
+    using namespace navigation;
+    for (bool wall:{false,true}) {
+        auto cells=std::make_shared<const CellSnapshot>(1,0,0,95,95,[&](int x,int y) {
+            auto cell=clearCell();
+            if (wall && x==40 && y<49) cell.terrain=unsigned(TerrainKind::cliff);
+            if (x==70 && y==64) { cell.goal=17;cell.occupancy={17,true,false,false,false,true}; }
+            return cell;
+        });
+        const std::array states{OccupantState{17,true,false,true,false,0}};
+        const auto occupants=std::make_shared<const OccupantSnapshot>(states);
+        auto config=query(70,64);config.startX=8;config.startY=12;config.checkOccupants=false;
+        CapturedWeightedGraph graph({{cells,{}}},occupants,config);
+        for (float multiplier:{0.01f,0.2f,1.f}) {
+            const DestinationRankQuery target{70,64,1,false,0.01,multiplier};
+            const DestinationQuery destination{1,0,0,true,true,false,true};
+            const auto heuristic=[&](unsigned id) { return graph.heuristic(id); };
+            const auto neighbors=[&](unsigned id,auto emit) { graph.neighbors(id,emit); };
+            const auto rank=[&](unsigned id,unsigned cost) { return graph.rank(id,cost,target,destination); };
+            RouteSearchWorkspace exhaustive;
+            const auto expected=exhaustive.findWithFallback(graph.nodeCount(),graph.start(),graph.terminal(),heuristic,neighbors,rank);
+            BOOST_REQUIRE(expected.found());
+            for (unsigned budget:{1u,97u,10000u}) {
+                RouteSearchWorkspace bounded;
+                bounded.beginWithFallback(graph.nodeCount(),graph.start(),graph.terminal(),heuristic,{},
+                    [=](unsigned cost,unsigned h) { return remainingDestinationRankBound(target,cost,h); });
+                while (bounded.status()==RouteSearchStatus::Searching)
+                    bounded.advanceWithFallback(budget,heuristic,neighbors,rank);
+                const auto& actual=bounded.result();
+                BOOST_TEST_CONTEXT("wall=" << wall << " multiplier=" << multiplier << " budget=" << budget) {
+                    BOOST_REQUIRE(actual.found());
+                    BOOST_TEST(actual.nodes==expected.nodes);
+                    BOOST_TEST(actual.cost==expected.cost);
+                    BOOST_TEST(actual.work<expected.work);
+                    if (!wall) BOOST_TEST(actual.work<expected.work/2);
+                }
+            }
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(captured_graph_uses_frozen_downhill_heights_and_start_escape_modes) {
+    using namespace navigation;
+    auto cells=std::make_shared<const CellSnapshot>(1,0,0,2,0,[](int x,int) {
+        auto cell=clearCell();if (x==0) cell.terrain=unsigned(TerrainKind::obstacle);return cell;
+    });
+    auto heights=std::make_shared<const std::vector<float>>(std::vector<float>{2,1,0});
+    auto config=query(2,0);config.downhillOnly=true;
+    CapturedWeightedGraph downhill({{cells,heights}},units(),config);
+    heights.reset();
+    BOOST_TEST(downhill.decode(downhill.start()).escaping);
+    const auto result=run(downhill,1);
+    BOOST_REQUIRE(result.found());
+    BOOST_TEST(result.cost==20u);
+    BOOST_TEST(!downhill.decode(result.nodes[1]).escaping);
+    auto rising=std::make_shared<const std::vector<float>>(std::vector<float>{0,1,2});
+    CapturedWeightedGraph uphill({{cells,rising}},units(),config);
+    BOOST_TEST(!run(uphill,1).found());
+}
+
+BOOST_AUTO_TEST_CASE(captured_graph_rejects_exact_goal_outside_hpa_start_component) {
+    using namespace navigation;
+    auto cells=std::make_shared<const CellSnapshot>(1,0,0,31,0,[](int x,int) {
+        auto cell=clearCell();
+        if (x==15 || x==16) cell.terrain=unsigned(TerrainKind::cliff);
+        return cell;
+    });
+    auto hierarchy=buildHpaHierarchy(32,1,[&](int x,int y) {
+        return cells->cell(x,y)->terrain!=unsigned(TerrainKind::cliff);
+    },16);
+    auto config=query(31,0);config.startX=0;config.startY=0;config.useHpa=true;
+    CapturedWeightedGraph graph({{cells,{},hierarchy}},units(),config);
+    BOOST_TEST(!graph.inStaticStartComponent(31,0,1));
+    BOOST_TEST(run(graph,1).found()==false);
+}
+
+BOOST_AUTO_TEST_CASE(captured_graph_rejects_a_dynamic_disconnection_before_fine_search) {
+    using namespace navigation;
+    auto cells=std::make_shared<const CellSnapshot>(1,0,0,31,15,[](int,int) {
+        return clearCell();
+    });
+    std::vector<OccupantState> states{OccupantState{17,false,false,false,false,0}};
+    auto occupants=std::make_shared<const OccupantSnapshot>(states);
+    std::vector<CapturedOccupancyCell> blocked;
+    for (int y=0;y<16;++y) {
+        CapturedOccupancyCell cell;
+        cell.layer=1;cell.x=15;cell.y=y;
+        cell.occupancy={17,true,false,false,false,true};
+        blocked.push_back(cell);
+    }
+    auto dynamicCells=std::make_shared<const std::vector<CapturedOccupancyCell>>(blocked);
+    auto dynamic=std::make_shared<const CapturedOccupancyIndex>(dynamicCells,0,0,31,15,2);
+    auto config=query(30,8);config.startX=1;config.startY=8;config.checkOccupants=true;
+    config.occupancy.self=99;config.occupancy.cellsAbove=1;
+    CapturedWeightedGraph graph({{cells, {}}},occupants,config,dynamic);
+    BOOST_TEST(graph.goalAllowed());
+    BOOST_TEST(graph.definitelyDisconnectedByCapturedOccupancy());
+}
+
+BOOST_AUTO_TEST_CASE(captured_graph_clearance_includes_dynamic_fixed_occupants) {
+    using namespace navigation;
+    auto cells=std::make_shared<const CellSnapshot>(1,0,0,2,2,[](int,int) {
+        return clearCell();
+    });
+    const std::vector<OccupantState> states{{17,false,false,false,false,1}};
+    auto occupants=std::make_shared<const OccupantSnapshot>(states);
+    CapturedOccupancyCell fixed;
+    fixed.layer=1; fixed.x=1; fixed.y=1;
+    fixed.occupancy={17,true,false,false,false,true};
+    auto dynamicCells=std::make_shared<const std::vector<CapturedOccupancyCell>>(
+        std::vector<CapturedOccupancyCell>{fixed});
+    auto dynamic=std::make_shared<const CapturedOccupancyIndex>(dynamicCells,0,0,2,2,2);
+    auto config=query(2,1);
+    config.startX=0; config.startY=1; config.movement.corridor=true;
+    config.pathDiameter=2; config.occupancy.self=99;
+    CapturedWeightedGraph graph({{cells,{}}},occupants,config,dynamic);
+    BOOST_TEST(graph.clearance(1,1,1)==1);
+}
+
+BOOST_AUTO_TEST_CASE(captured_graph_validates_planes_heights_endpoints_and_node_handles) {
+    using namespace navigation;
+    const auto make=[](unsigned layer,int right) {
+        return std::make_shared<const CellSnapshot>(layer,0,0,right,0,[](int,int) { return clearCell(); });
+    };
+    auto config=query(1,0);const auto cells=make(1,1);
+    BOOST_CHECK_THROW((CapturedWeightedGraph({},units(),config)),std::invalid_argument);
+    BOOST_CHECK_THROW((CapturedWeightedGraph({{cells,{}}},{},config)),std::invalid_argument);
+    BOOST_CHECK_THROW((CapturedWeightedGraph({{cells,{}},{cells,{}}},units(),config)),std::invalid_argument);
+    BOOST_CHECK_THROW((CapturedWeightedGraph({{cells,{}},{make(2,2),{}}},units(),config)),std::invalid_argument);
+    config.goalLayer=2;
+    BOOST_CHECK_THROW((CapturedWeightedGraph({{cells,{}}},units(),config)),std::invalid_argument);
+    config.goalLayer=1;config.downhillOnly=true;
+    BOOST_CHECK_THROW((CapturedWeightedGraph({{cells,{}}},units(),config)),std::invalid_argument);
+    const auto invalid=std::make_shared<const std::vector<float>>(std::vector<float>{0,std::numeric_limits<float>::quiet_NaN()});
+    BOOST_CHECK_THROW((CapturedWeightedGraph({{cells,invalid}},units(),config)),std::invalid_argument);
+    config.downhillOnly=false;
+    CapturedWeightedGraph graph({{cells,{}}},units(),config);
+    BOOST_CHECK_THROW(graph.decode(graph.terminal()),std::out_of_range);
+    BOOST_CHECK_THROW(graph.encode(2,0,1),std::out_of_range);
+    BOOST_CHECK_THROW(graph.encode(0,0,2),std::out_of_range);
+    BOOST_CHECK_THROW(graph.encode(0,0,1,true),std::out_of_range);
+}
+
+BOOST_AUTO_TEST_CASE(captured_graph_decodes_offset_cells_and_column_major_heights) {
+    using namespace navigation;
+    auto cells=std::make_shared<const CellSnapshot>(7,-2,4,-1,5,[](int,int) { return clearCell(); });
+    auto heights=std::make_shared<const std::vector<float>>(std::vector<float>{2,3,1,0});
+    auto config=query(-1,5);
+    config.startX=-2;config.startY=4;config.startLayer=config.goalLayer=7;config.downhillOnly=true;
+    CapturedWeightedGraph graph({{cells,heights}},units(),config);
+    for (int x=-2;x<=-1;++x) for (int y=4;y<=5;++y) {
+        const auto id=graph.encode(x,y,7);
+        BOOST_TEST(id==unsigned((y-4)*2+x+2));
+        const auto node=graph.decode(id);
+        BOOST_TEST(node.x==x);BOOST_TEST(node.y==y);BOOST_TEST(node.layer==7u);
+    }
+    std::vector<std::array<int,2>> edges;
+    graph.neighbors(graph.start(),[&](unsigned id,unsigned) {
+        const auto node=graph.decode(id);edges.push_back({node.x,node.y});
+    });
+    const std::vector<std::array<int,2>> expected{{-1,4},{-1,5}};
+    BOOST_TEST(edges==expected);
+}
+
+BOOST_AUTO_TEST_CASE(individual_route_crosses_pinched_ground_but_group_corridor_does_not) {
+    using namespace navigation;
+    // DX9 costSoFar adds 14 and examineNeighboringCells adds 10 for a pinch.
+    // findGroundPath rejects it for a group corridor.
+    auto cells=std::make_shared<const CellSnapshot>(1,0,0,2,0,[](int x,int) {
+        auto cell=clearCell();cell.pinched=x==1;return cell;
+    });
+    auto config=query(2,0);
+    CapturedWeightedGraph individual({{cells,{}}},units(),config);
+    const auto route=run(individual,1);
+    BOOST_REQUIRE(route.found());
+    BOOST_TEST(route.cost==44u);
+    config.movement.corridor=true;
+    CapturedWeightedGraph group({{cells,{}}},units(),config);
+    BOOST_TEST(!run(group,1).found());
+}
+
+BOOST_AUTO_TEST_CASE(obstacle_escape_ends_only_after_a_clear_unpinched_exit) {
+    using namespace navigation;
+    for (bool pinchedTransit:{true,false}) {
+        auto cells=std::make_shared<const CellSnapshot>(1,0,0,4,0,[&](int x,int) {
+            auto cell=clearCell();
+            if (x==0 || x==2) cell.terrain=unsigned(TerrainKind::obstacle);
+            cell.pinched=x==1 && pinchedTransit;
+            return cell;
+        });
+        CapturedWeightedGraph graph({{cells,{}}},units(),query(4,0));
+        for (unsigned budget:{1u,31u}) {
+            const auto route=run(graph,budget);
+            BOOST_TEST(route.found()==pinchedTransit);
+            if (pinchedTransit) {
+                BOOST_TEST(route.cost==164u);
+                BOOST_REQUIRE(route.nodes.size()==5u);
+                BOOST_TEST(graph.decode(route.nodes[1]).escaping);
+                BOOST_TEST(!graph.decode(route.nodes[3]).escaping);
+            }
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(captured_dozer_obstacle_exception_requires_captured_permission_and_has_a_large_cost) {
+    using namespace navigation;
+    auto cells=std::make_shared<const CellSnapshot>(1,0,0,4,0,[](int x,int) {
+        auto cell=clearCell();
+        if (x==2) {cell.terrain=unsigned(TerrainKind::obstacle);cell.obstacle=77;}
+        return cell;
+    });
+    for (bool permission:{false,true}) for (bool dozer:{false,true}) {
+        std::vector<OccupantState> source{{77,true,false,false,false,0,permission}};
+        auto owners=std::make_shared<const OccupantSnapshot>(source);
+        source.clear();
+        auto config=query(4,0);config.movement.dozer=dozer;
+        CapturedWeightedGraph graph({{cells,{}}},owners,config);
+        const auto route=run(graph,1);
+        BOOST_TEST(route.found()==(permission && dozer));
+        if (route.found()) BOOST_TEST(route.cost==1040u);
+    }
+    auto config=query(4,0);config.movement.dozer=true;
+    CapturedWeightedGraph missingOwner({{cells,{}}},units(),config);
+    BOOST_TEST(!run(missingOwner,1).found());
+}
+
+BOOST_AUTO_TEST_CASE(dozer_obstacle_permission_does_not_open_a_diagonal_corner) {
+    using namespace navigation;
+    auto cells=std::make_shared<const CellSnapshot>(1,0,0,1,1,[](int x,int y) {
+        auto cell=clearCell();
+        if (x==1 && y==0) {cell.terrain=unsigned(TerrainKind::obstacle);cell.obstacle=77;}
+        return cell;
+    });
+    const std::vector<OccupantState> source{{77,true,false,false,false,0,true}};
+    auto config=query(1,1);config.movement.dozer=true;
+    CapturedWeightedGraph graph({{cells,{}}},std::make_shared<const OccupantSnapshot>(source),config);
+    const auto route=run(graph,1);
+    BOOST_REQUIRE(route.found());
+    BOOST_TEST(route.cost==14u); // The other, clear side opens this DX9 diagonal.
+}

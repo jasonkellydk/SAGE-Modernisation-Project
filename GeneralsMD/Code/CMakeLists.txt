@@ -48,6 +48,16 @@ add_subdirectory(Main)
 
 engine_navigation_add_world_tests()
 
+option(ENGINE_AUDIO_BUILD_TESTS "Build audio playback lifecycle tests" ${RTS_BUILD_ZEROHOUR_EXTRAS})
+if (ENGINE_AUDIO_BUILD_TESTS)
+    find_package(boost_included_unit_test_framework CONFIG REQUIRED)
+    add_executable(generals_audio_pending_tests "${CMAKE_SOURCE_DIR}/Core/GameEngineDevice/Tests/PendingAudio.test.cpp")
+    target_compile_features(generals_audio_pending_tests PRIVATE cxx_std_20)
+    target_include_directories(generals_audio_pending_tests PRIVATE "${CMAKE_SOURCE_DIR}/Core/GameEngineDevice/Include/XAudio2AudioDevice")
+    target_link_libraries(generals_audio_pending_tests PRIVATE Boost::included_unit_test_framework)
+    add_test(NAME generals_audio_pending_tests COMMAND generals_audio_pending_tests)
+endif()
+
 if (RTS_BUILD_ZEROHOUR_TOOLS OR RTS_BUILD_ZEROHOUR_EXTRAS)
     add_subdirectory(Tools)
 endif()

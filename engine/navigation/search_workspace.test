@@ -10,6 +10,75 @@ import engine.navigation.search_workspace;
 
 BOOST_AUTO_TEST_SUITE(navigation_soa_search)
 
+BOOST_AUTO_TEST_CASE(cleared_frontier_indices_cannot_alias_reused_slots) {
+    navigation::IndexedMinHeap<4> heap;
+    std::set<unsigned> present;
+    for (unsigned round=0;round<12;++round) {
+        heap.clear();present.clear();
+        for (unsigned id=0;id<4096;++id) BOOST_REQUIRE(!heap.contains(id));
+        for (unsigned i=0;i<2048;++i) {
+            const unsigned id=(i*37+round*131)%4096;
+            heap.pushRanked(id,id,id);
+            present.insert(id);
+            // Probe both identities after an old slot has been reused.
+            const unsigned probe=(i*71+(round+1)*131)%4096;
+            BOOST_REQUIRE(heap.contains(probe)==present.contains(probe));
+        }
+        for (unsigned id=0;id<4096;++id) BOOST_REQUIRE(heap.contains(id)==present.contains(id));
+        for (unsigned id:present) BOOST_REQUIRE(heap.pop()==id);
+        BOOST_REQUIRE(heap.empty());
+    }
+}
+
+BOOST_AUTO_TEST_CASE(integer_frontier_matches_heap_for_large_repeated_searches)
+{
+    navigation::SearchFrontier frontier;
+    navigation::IndexedMinHeap<4> reference;
+    std::array<bool, 32771> present{};
+    std::uint32_t random = 0x45fd311a;
+    for (int search = 0; search < 3; ++search) {
+        for (int operation = 0; operation < 100000; ++operation) {
+            random ^= random << 13; random ^= random >> 17; random ^= random << 5;
+            const std::uint32_t id = random % present.size();
+            // Exercise ties, every bitmap boundary, and full-width overflow.
+            const std::uint32_t costs[] = {0, 63, 64, 4095, 4096, 65535, 65536,
+                                           70000, 0xffffffffU, random % 8192};
+            const auto cost = costs[(random >> 16) % std::size(costs)];
+            if (!present[id]) {
+                frontier.push(id, cost); reference.push(id, cost);
+                present[id] = true;
+            } else if (random & 1) {
+                frontier.reinsert(id, cost); reference.update(id, cost, true);
+            } else {
+                frontier.erase(id); reference.erase(id);
+                present[id] = false;
+            }
+            BOOST_REQUIRE_EQUAL(frontier.top(), reference.top());
+            BOOST_REQUIRE_EQUAL(frontier.size(), reference.size());
+        }
+        std::set<navigation::SearchIndex> visited;
+        for (auto id = frontier.top(); id != navigation::NoSearchIndex; id = frontier.next(id))
+            BOOST_REQUIRE(visited.insert(id).second);
+        BOOST_REQUIRE_EQUAL(visited.size(), frontier.size());
+        while (!reference.empty()) {
+            const auto id = reference.pop();
+            BOOST_REQUIRE_EQUAL(frontier.pop(), id);
+            present[id] = false;
+        }
+        BOOST_TEST(frontier.empty());
+        frontier.clear(); reference.clear();
+    }
+    // Cleanup is allowed to drain unsorted, but must remove bitmap ownership.
+    for (std::uint32_t id = 0; id < 4097; ++id) frontier.push(id, id * 32);
+    while (!frontier.empty()) {
+        const auto id = frontier.dropBack();
+        BOOST_TEST(!frontier.contains(id));
+    }
+    BOOST_TEST(frontier.top() == navigation::NoSearchIndex);
+    frontier.push(1, 64);
+    BOOST_TEST(frontier.pop() == 1U);
+}
+
 BOOST_AUTO_TEST_CASE(indexed_heap_matches_ordered_reference_during_updates_and_removals)
 {
     navigation::IndexedMinHeap<4> heap;
@@ -66,6 +135,39 @@ BOOST_AUTO_TEST_CASE(heap_uses_full_width_costs_and_fifo_ties)
     heap.update(1, 7, true);
     BOOST_TEST(heap.pop() == 2U);
     BOOST_TEST(heap.pop() == 1U);
+}
+
+BOOST_AUTO_TEST_CASE(large_frontier_preserves_fifo_after_reprioritizing_and_removing_cells)
+{
+    // Large failed/detouring searches drain thousands of frontier cells. Keep
+    // an independent ordered reference, including ties and partial child sets.
+    navigation::IndexedMinHeap<4> heap;
+    using Entry = std::tuple<std::uint32_t, std::uint32_t, std::uint32_t>;
+    std::set<Entry> ordered;
+    std::vector<Entry> entries(32771);
+    std::uint32_t sequence = 0;
+    for (std::uint32_t id = 0; id < entries.size(); ++id) {
+        const auto cost = (id * 2654435761U) % 1024;
+        entries[id] = {cost, sequence++, id};
+        ordered.insert(entries[id]);
+        heap.push(id, cost);
+    }
+    for (std::uint32_t id = 0; id < entries.size(); id += 3) {
+        ordered.erase(entries[id]);
+        if (id % 2 == 0) {
+            heap.erase(id);
+        } else {
+            entries[id] = {id % 17, sequence++, id};
+            ordered.insert(entries[id]);
+            heap.update(id, id % 17, true);
+        }
+    }
+    for (const auto& entry : ordered) {
+        const auto id = std::get<2>(entry);
+        BOOST_REQUIRE_EQUAL(heap.pop(), id);
+        BOOST_TEST(!heap.contains(id));
+    }
+    BOOST_TEST(heap.empty());
 }
 
 BOOST_AUTO_TEST_CASE(workspace_grows_beyond_legacy_pool_and_preserves_indices)

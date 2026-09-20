@@ -1,0 +1,38 @@
+#include <boost/test/unit_test.hpp>
+#include <limits>
+#include <vector>
+import engine.navigation.movement.start_escape;
+
+BOOST_AUTO_TEST_CASE(local_escape_uses_multiple_steps_without_cutting_blocked_corners) {
+    auto classify=[](int x,int y) {
+        if (y!=0 || x<0 || x>3) return navigation::EscapeCell::Blocked;
+        return x==3 ? navigation::EscapeCell::Exit : navigation::EscapeCell::Transit;
+    };
+    const auto result=navigation::findStartEscape({0,0},{100,0},classify);
+    BOOST_REQUIRE_EQUAL(result.path.size(),4u);
+    for (int i=0;i<4;++i) { BOOST_TEST(result.path[i].x==i); BOOST_TEST(result.path[i].y==0); }
+    const auto corner=navigation::findStartEscape({0,0},{1,1},[](int x,int y) {
+        if (x==0 && y==0) return navigation::EscapeCell::Transit;
+        if (x==1 && y==1) return navigation::EscapeCell::Exit;
+        return navigation::EscapeCell::Blocked;
+    });
+    BOOST_TEST(corner.path.empty());
+}
+
+BOOST_AUTO_TEST_CASE(local_escape_is_bounded_repeatable_and_safe_at_coordinate_limits) {
+    const auto noExit=navigation::findStartEscape({0,0},{100,100},[](int,int){return navigation::EscapeCell::Transit;});
+    BOOST_TEST(noExit.path.empty());
+    BOOST_TEST(noExit.examined==225u);
+    const int largest=(std::numeric_limits<int>::max)();
+    auto classify=[&](int x,int y) {
+        return x==largest-2 && y==largest ? navigation::EscapeCell::Exit : navigation::EscapeCell::Transit;
+    };
+    const auto edge=navigation::findStartEscape({largest,largest},{0,0},classify);
+    BOOST_REQUIRE(!edge.path.empty());
+    BOOST_TEST(edge.path.back().x==largest-2);
+    for (int i=0;i<10;++i) {
+        const auto again=navigation::findStartEscape({largest,largest},{0,0},classify);
+        BOOST_CHECK(again.path==edge.path);
+        BOOST_TEST(again.examined==edge.examined);
+    }
+}

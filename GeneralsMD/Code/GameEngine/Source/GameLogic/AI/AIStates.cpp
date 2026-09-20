@@ -1550,6 +1550,7 @@ void AIDeadState::onExit( StateExitType status )
 // ------------------------------------------------------------------------------------------------
 void AIInternalMoveToState::crc( Xfer *xfer )
 {
+	xfer->xferBool(&m_tryOneMoreRepath);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -1558,7 +1559,7 @@ void AIInternalMoveToState::crc( Xfer *xfer )
 void AIInternalMoveToState::xfer( Xfer *xfer )
 {
   // version
-  XferVersion currentVersion = 1;
+  XferVersion currentVersion = 2;
   XferVersion version = currentVersion;
   xfer->xferVersion( &version, currentVersion );
 
@@ -1570,6 +1571,8 @@ void AIInternalMoveToState::xfer( Xfer *xfer )
 	xfer->xferUnsignedInt(&m_pathTimestamp);
 	xfer->xferUnsignedInt(&m_blockedRepathTimestamp);
 	xfer->xferBool(&m_adjustDestinations);
+	if (version >= 2) xfer->xferBool(&m_tryOneMoreRepath);
+	else m_tryOneMoreRepath = true;
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -1604,7 +1607,10 @@ Bool AIInternalMoveToState::computePath()
 
 	m_waitingForPath = true;
 	ai->requestPath(&m_goalPosition, getAdjustsDestination());
-	ai->friend_startingMove();
+	// onEnter starts movement. A replacement path must retain the collision
+	// state until the queued search consumes it, otherwise recovery becomes
+	// another terrain-only route through the same blocked lane.
+	ai->friend_startingMove(FALSE);
 	return true;
 }
 
@@ -1793,6 +1799,12 @@ StateReturnType AIInternalMoveToState::update()
 		}
 		if (thePath==nullptr)
 		{
+			// A temporary yield ends movement and destroys its temporary path.
+			// Resume the original order instead of treating that as a failed search.
+			if (!ai->isMoving()) {
+				computePath();
+				return STATE_CONTINUE;
+			}
 			//Kris: 7/01/03 (Temporary debug hook for units not being able to leave maps)
 			if( blah )
 			{
@@ -1922,6 +1934,18 @@ StateReturnType AIInternalMoveToState::update()
 			if (delta.length() > 4*PATHFIND_CELL_SIZE_F) {
 				//DEBUG_LOG(("AIInternalMoveToState Trying to finish early.  Continuing..."));
 				onPathDistToGoal = ai->getLocomotorDistanceToGoal();
+				return STATE_CONTINUE;
+			}
+		}
+		// A fallback endpoint is temporary progress, not necessarily the order's
+		// destination. Try the original goal once more after traffic has moved.
+		if (m_tryOneMoreRepath && ai->getRetryPath()) {
+			m_tryOneMoreRepath = false;
+			const Real dx = obj->getPosition()->x - m_goalPosition.x;
+			const Real dy = obj->getPosition()->y - m_goalPosition.y;
+			const Real tolerance = ai->getCurLocomotor()->getCloseEnoughDist();
+			if (dx*dx + dy*dy > tolerance*tolerance) {
+				computePath();
 				return STATE_CONTINUE;
 			}
 		}
@@ -2075,6 +2099,8 @@ void AIMoveToState::onExit( StateExitType status )
 StateReturnType AIMoveToState::update()
 {
 	AIUpdateInterface *ai = getMachineOwner()->getAI();
+	if (ai->isTurningAtArrival())
+		return ai->updateArrivalFacing(TRUE) ? STATE_CONTINUE : STATE_SUCCESS;
 
 	//Kris: 7/01/03 (Temporary debug hook for units not being able to leave maps)
 	if( getMachineOwner()->testStatus( OBJECT_STATUS_RIDER8 ) )
@@ -2134,7 +2160,9 @@ StateReturnType AIMoveToState::update()
 
 	}
 
-	return AIInternalMoveToState::update();
+	const StateReturnType result=AIInternalMoveToState::update();
+	if (result==STATE_SUCCESS && ai->updateArrivalFacing(TRUE)) return STATE_CONTINUE;
+	return result;
 }
 
 //----------------------------------------------------------------------------------------------------------

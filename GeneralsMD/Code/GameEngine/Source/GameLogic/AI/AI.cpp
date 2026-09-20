@@ -37,6 +37,7 @@
 #include "Common/XferCRC.h"
 
 #include "GameLogic/AI.h"
+#include "GameLogic/GameLogic.h"
 #include "GameLogic/PartitionManager.h"
 #include "GameLogic/Module/AIUpdate.h"
 #include "GameLogic/Module/ContainModule.h"
@@ -44,6 +45,7 @@
 #include "GameLogic/SidesList.h"
 #include "GameLogic/AIPathfind.h"
 #include "GameLogic/Weapon.h"
+import engine.navigation.diagnostics.frame_capture;
 
 extern void addIcon(const Coord3D *pos, Real width, Int numFramesDuration, RGBColor color);
 
@@ -344,6 +346,7 @@ void AI::reset()
 
 	m_groupList.clear(); // Clear just in case...
 #endif
+	m_groupPositions.clear();
 
 	m_nextGroupID = 0;
 	m_nextFormationID = NO_FORMATION_ID;
@@ -356,10 +359,14 @@ void AI::reset()
 void AI::update()
 {
 	// Do pathfinding.
-	m_pathfinder->processPathfindQueue();
+	{
+		auto timing=navigation::diagnostics::frameCapture().measure("logic.ai.paths",TheGameLogic->getFrame());
+		m_pathfinder->processPathfindQueue();
+	}
 
 	// run player updates
 	{
+		auto timing=navigation::diagnostics::frameCapture().measure("logic.ai.players",TheGameLogic->getFrame());
 		ThePlayerList->UPDATE();
 	}
 
@@ -459,6 +466,8 @@ AIGroupPtr AI::createGroup()
 #else
 	m_groupList.push_back( group.Peek() );
 #endif
+	const auto position = --m_groupList.end();
+	m_groupPositions.emplace(*position, position);
 
 	return group;
 }
@@ -468,17 +477,18 @@ AIGroupPtr AI::createGroup()
  */
 void AI::destroyGroup( AIGroup *group )
 {
-	std::list<AIGroup *>::iterator i = std::find( m_groupList.begin(), m_groupList.end(), group );
+	const auto position = m_groupPositions.find(group);
 
 	// make sure group is actually in the list
-	if (i == m_groupList.end())
+	if (position == m_groupPositions.end())
 		return;
 
 	DEBUG_ASSERTCRASH(group != nullptr, ("A null group made its way into the AIGroup list.. jkmcd"));
 
 	// remove it
 //	DEBUG_LOG(("***AIGROUP %x is being removed from m_groupList.", group ));
-	m_groupList.erase( i );
+	m_groupList.erase(position->second);
+	m_groupPositions.erase(position);
 
 	// destroy group
 	deleteInstance(group);
@@ -500,7 +510,7 @@ AIGroup *AI::findGroup( UnsignedInt id )
 
 Bool AI::doesGroupExist(AIGroup* group) const
 {
-	return std::find(m_groupList.begin(), m_groupList.end(), group) != m_groupList.end();
+	return m_groupPositions.find(group) != m_groupPositions.end();
 }
 
 //--------------------------------------------------------------------------------------------------------

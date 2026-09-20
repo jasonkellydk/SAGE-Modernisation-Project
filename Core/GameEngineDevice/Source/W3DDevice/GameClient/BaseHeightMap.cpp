@@ -198,6 +198,7 @@ BaseHeightMapRenderObjClass::~BaseHeightMapRenderObjClass()
 
 	delete m_waypointBuffer;
 	m_waypointBuffer = nullptr;
+	m_shroud = nullptr;
 
 	delete m_shroud;
 	m_shroud = nullptr;
@@ -1399,14 +1400,14 @@ W3DRenderObject *	 BaseHeightMapRenderObjClass::Clone() const
 //=============================================================================
 void BaseHeightMapRenderObjClass::loadRoadsAndBridges(W3DTerrainLogic *pTerrainLogic, Bool saveGame)
 {
-	if (!Graphics::Frame_Device_Ready())
-		return;	//device not ready to render anything
-
 #ifdef DO_ROADS
-	if (m_roadBuffer) {
+	if (Graphics::Frame_Device_Ready() && m_roadBuffer) {
 		m_roadBuffer->loadRoads();
 	}
 #endif
+	// Bridge loading also creates simulation objects and navigation layers.
+	// It must run with the same ordering in headless playback and when the
+	// graphics device is unavailable; only the road upload needs the device.
 	if (m_bridgeBuffer) {
 		m_bridgeBuffer->loadBridges(pTerrainLogic, saveGame);
 	}
@@ -1631,7 +1632,10 @@ void BaseHeightMapRenderObjClass::updateShorelineTiles(Int minX, Int minY, Int m
 		}
 	}
 
-	if (TheWaterTransparency->m_transparentWaterDepth == 0 || !TheGlobalData->m_showSoftWaterEdge)
+	// Headless replay simulation loads the terrain but has no water renderer.
+	// Shoreline blend tiles are visual data; logical water remains in TerrainLogic.
+	if (!TheWaterRenderSystem || !TheWaterTransparency ||
+		TheWaterTransparency->m_transparentWaterDepth == 0 || !TheGlobalData->m_showSoftWaterEdge)
 		return;
 
 	//we want to add the tiles in a certain order to make culling faster

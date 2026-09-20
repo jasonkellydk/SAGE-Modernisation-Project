@@ -9,6 +9,7 @@ module;
 export module Graphics.Scene.Models.ModelAssetGeometry.Tests;
 
 import Assets.Models;
+import Assets.Identity;
 import Graphics.Scene.Models.ModelAssetGeometry;
 
 BOOST_AUTO_TEST_CASE(model_asset_geometry_translates_generic_data)

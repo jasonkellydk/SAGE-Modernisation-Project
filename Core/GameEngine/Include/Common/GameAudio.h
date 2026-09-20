@@ -166,6 +166,8 @@ class AudioManager : public SubsystemInterface
 		// control for AudioEventsRTS
 		virtual AudioHandle addAudioEvent( const AudioEventRTS *eventToAdd );	///< Add an audio event (event must be declared in an INI file)
 		virtual void removeAudioEvent( AudioHandle audioEvent );	///< Remove an audio event, stop for instance.
+		// Loading-time preparation only; do not select a variant or start playback.
+		virtual void preloadEventAssets(const AudioEventRTS& event) { (void)event; }
 		virtual void killAudioEventImmediately( AudioHandle audioEvent ) = 0;
 
 		virtual Bool isValidAudioEvent( const AudioEventRTS *eventToCheck ) const;	///< validate that this piece of audio exists

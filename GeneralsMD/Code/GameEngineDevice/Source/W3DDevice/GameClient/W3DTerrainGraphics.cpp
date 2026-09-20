@@ -83,6 +83,8 @@ Int W3DTerrainGraphics::freeMapResources()
     Graphics::Get_Terrain_Overlay_Renderer().Release_Surface();
     Graphics::Get_Terrain_Shoreline_Renderer().Release_Surface();
     m_extraCells = 0;
+    m_surfaceCells.clear(); m_overlayCells.clear(); m_overlayIndices.clear(); m_dirtyCells.clear();
+    m_havePartialUpdate = false;
     return BaseHeightMapRenderObjClass::freeMapResources();
 }
 
@@ -104,12 +106,27 @@ void W3DTerrainGraphics::doPartialUpdate(const IRegion2D &range, WorldHeightMap 
     updateBlock(range.lo.x, range.lo.y, range.hi.x, range.hi.y, map, lights);
 }
 
-int W3DTerrainGraphics::updateBlock(Int, Int, Int, Int, WorldHeightMap *map, Graphics::SceneObjectList<W3DRenderObject>::Cursor *)
+int W3DTerrainGraphics::updateBlock(Int x0, Int y0, Int x1, Int y1, WorldHeightMap *map, Graphics::SceneObjectList<W3DRenderObject>::Cursor *)
 {
+    const bool full = m_needFullUpdate || map != m_map || m_surfaceCells.empty();
     REF_PTR_SET(m_map, map);
     Invalidate_Cached_Bounding_Volumes();
-    if (map != nullptr) updateShorelineTiles(0, 0, map->getXExtent() - 1, map->getYExtent() - 1, map);
-    scheduleFullUpdate();
+    // Roads and scorch lighting depend on these heights as well. The terrain
+    // surface itself needs only the cells sharing a changed normal/vertex.
+    if (!m_havePartialUpdate) BaseHeightMapRenderObjClass::staticLightingChanged();
+    m_havePartialUpdate = true;
+    if (map == nullptr) return 0;
+    const int width = map->getXExtent()-1, height = map->getYExtent()-1;
+    if (width<=0 || height<=0) return 0;
+    if (full || m_dirtyCells.size() != static_cast<std::size_t>(width)*height) {
+        scheduleFullUpdate();
+        return 0;
+    }
+    m_needFullUpdate = false;
+    x0 = std::clamp(x0-2,0,width-1); y0 = std::clamp(y0-2,0,height-1);
+    x1 = std::clamp(x1+1,0,width-1); y1 = std::clamp(y1+1,0,height-1);
+    for (int y=y0; y<=y1; ++y) for (int x=x0; x<=x1; ++x)
+        m_dirtyCells[static_cast<std::size_t>(y)*width+x] = 1;
     return 0;
 }
 
@@ -173,19 +190,30 @@ bool W3DTerrainGraphics::Update_Textures()
 
 bool W3DTerrainGraphics::Update_Surface()
 {
-    if (!m_needFullUpdate) return true;
+    if (!m_needFullUpdate && !m_havePartialUpdate) return true;
     if (m_map == nullptr) return false;
     const int width = m_map->getXExtent();
     const int height = m_map->getYExtent();
     if (width < 2 || height < 2) return false;
     const int border = m_map->getBorderSizeInline();
-    std::vector<Graphics::TerrainCell> cells;
-    std::vector<Graphics::TerrainCell> overlays;
-    cells.reserve(static_cast<std::size_t>(width - 1) * (height - 1));
+    const auto count = static_cast<std::size_t>(width-1)*(height-1);
+    const bool full = m_needFullUpdate || m_surfaceCells.size()!=count;
+    auto& cells = m_surfaceCells;
+    auto& overlays = m_overlayCells;
+    if (full) {
+        cells.resize(count); overlays.clear(); m_overlayIndices.assign(count,-1);
+        m_dirtyCells.assign(count,0);
+    }
+    std::vector<unsigned char> dirty_overlays(overlays.size(),0);
+    int dirty_x0=width, dirty_y0=height, dirty_x1=0, dirty_y1=0;
     constexpr int corner_x[4]{0, 1, 1, 0};
     constexpr int corner_y[4]{0, 0, 1, 1};
     for (int y = 0; y < height - 1; ++y) {
         for (int x = 0; x < width - 1; ++x) {
+            const auto cell_index = static_cast<std::size_t>(y)*(width-1)+x;
+            if (!full && !m_dirtyCells[cell_index]) continue;
+            dirty_x0=std::min(dirty_x0,x); dirty_y0=std::min(dirty_y0,y);
+            dirty_x1=std::max(dirty_x1,x+1); dirty_y1=std::max(dirty_y1,y+1);
             Graphics::TerrainCell cell;
             cell.origin = {static_cast<float>((x - border) * MAP_XY_FACTOR), static_cast<float>((y - border) * MAP_XY_FACTOR)};
             cell.spacing = {MAP_XY_FACTOR, MAP_XY_FACTOR};
@@ -230,22 +258,54 @@ bool W3DTerrainGraphics::Update_Surface()
                     }
                 }
             }
-            cells.push_back(cell);
+            cells[cell_index] = cell;
             Bool cliff = FALSE;
-            if (m_map->getExtraAlphaUVData(x, y, u, v, alpha, &flip, &cliff)) {
+            const bool extra = m_map->getExtraAlphaUVData(x, y, u, v, alpha, &flip, &cliff);
+            if (!full && extra != (m_overlayIndices[cell_index]>=0)) {
+                scheduleFullUpdate();
+                return Update_Surface(); // An editor/topology edit changed overlay membership.
+            }
+            if (extra) {
                 cell.alternate_diagonal = flip || (cliff && std::abs(cell.heights[0] - cell.heights[2]) > std::abs(cell.heights[1] - cell.heights[3]));
                 for (int corner = 0; corner < 4; ++corner) {
                     cell.base_uv[corner] = {u[corner], v[corner]};
                     cell.colors[corner][3] = alpha[corner] / 255.0f;
                 }
-                overlays.push_back(cell);
+                if (full) {
+                    m_overlayIndices[cell_index] = static_cast<int>(overlays.size());
+                    overlays.push_back(cell);
+                } else {
+                    overlays[m_overlayIndices[cell_index]] = cell;
+                    dirty_overlays[m_overlayIndices[cell_index]] = 1;
+                }
             }
         }
     }
-    if (!Graphics::Get_Terrain_Renderer().Set_Cells(cells)
-        || !Graphics::Get_Terrain_Overlay_Renderer().Set_Cells(overlays)) return false;
+    if (full) {
+        if (!Graphics::Get_Terrain_Renderer().Set_Cells(cells)
+            || !Graphics::Get_Terrain_Overlay_Renderer().Set_Cells(overlays)) return false;
+    } else {
+        const auto update = [](auto& renderer, const auto& data, const auto& dirty) {
+            for (std::size_t first=0; first<dirty.size();) {
+                if (!dirty[first]) { ++first; continue; }
+                auto end=first+1;
+                while (end<dirty.size() && dirty[end]) ++end;
+                if (!renderer.Update_Cells(first,std::span(data).subspan(first,end-first))) return false;
+                first=end;
+            }
+            return true;
+        };
+        if (!update(Graphics::Get_Terrain_Renderer(),cells,m_dirtyCells)
+            || !update(Graphics::Get_Terrain_Overlay_Renderer(),overlays,dirty_overlays)) return false;
+    }
+    // A foundation can change hundreds of height samples in one logic tick.
+    // Rebuild shoreline membership once after all those edits have arrived.
+    if (m_havePartialUpdate && dirty_x0<dirty_x1 && dirty_y0<dirty_y1)
+        updateShorelineTiles(dirty_x0,dirty_y0,dirty_x1,dirty_y1,m_map);
     m_extraCells = static_cast<Int>(overlays.size());
     m_needFullUpdate = false;
+    m_havePartialUpdate = false;
+    std::fill(m_dirtyCells.begin(),m_dirtyCells.end(),0);
     return true;
 }
 

@@ -28,12 +28,14 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 #include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include <algorithm>
 #include "Common/Debug.h"
 #include "Common/Xfer.h"
 #include "GameClient/Drawable.h"
 #include "GameLogic/GameLogic.h"
 #include "GameLogic/Object.h"
 #include "GameLogic/PartitionManager.h"
+#include "GameLogic/TerrainLogic.h"
 #include "GameLogic/Module/DockUpdate.h"
 
 // ------------------------------------------------------------------------------------------------
@@ -254,6 +256,23 @@ void DockUpdate::getEnterPosition( Object* docker, Coord3D *position )
 			return;
 		}
 		*position = *docker->getPosition();
+		// A boneless supply dock has no entry waypoint to bring a waiting
+		// truck back after another vehicle has displaced it. Recover before
+		// processing supplies; action() must retain its normal distance check.
+		if (getObject()->isKindOf(KINDOF_SUPPLY_SOURCE)) {
+			const Real radius = docker->getGeometryInfo().getBoundingCircleRadius();
+			if (ThePartitionManager->getDistanceSquared(docker, getObject(), FROM_BOUNDINGSPHERE_2D) > sqr(2 * radius)) {
+				const Coord3D& center = *getObject()->getPosition();
+				const Real dx = position->x - center.x, dy = position->y - center.y;
+				const Real distance = sqrtf(dx * dx + dy * dy);
+				const Real targetDistance = getObject()->getGeometryInfo().getBoundingCircleRadius() + radius;
+				if (distance > targetDistance && distance > 0) {
+					position->x = center.x + dx * (targetDistance / distance);
+					position->y = center.y + dy * (targetDistance / distance);
+					position->z = TheTerrainLogic->getLayerHeight(position->x, position->y, getObject()->getLayer());
+				}
+			}
+		}
 		return;
 	}
 
@@ -320,6 +339,9 @@ void DockUpdate::onApproachReached( Object* docker )
 		if( m_approachPositionOwners[positionIndex] == dockerID )
 		{
 			m_approachPositionReached[positionIndex] = TRUE;
+			if (dockerID != m_activeDocker &&
+				std::find(m_readyDockers.begin(), m_readyDockers.end(), dockerID) == m_readyDockers.end())
+				m_readyDockers.push_back(dockerID);
 			return;
 		}
 	}
@@ -381,6 +403,7 @@ void DockUpdate::onExitReached( Object* docker )
 void DockUpdate::cancelDock( Object* docker )
 {
 	ObjectID dockerID = docker->getID();
+	m_readyDockers.erase(std::remove(m_readyDockers.begin(), m_readyDockers.end(), dockerID), m_readyDockers.end());
 	for( size_t positionIndex = 0; positionIndex < m_approachPositionOwners.size(); ++positionIndex )
 	{
 		if( m_approachPositionOwners[positionIndex] == dockerID )
@@ -418,11 +441,16 @@ UpdateSleepTime DockUpdate::update()
 	if( m_activeDocker == INVALID_ID  &&  !m_dockCrippled )
 	{
 		// if setDockCrippled has been called, I will never give entrance permission.
-		for( size_t positionIndex = 0; positionIndex < m_approachPositionReached.size(); ++positionIndex )
+		// Physical approach slots are reusable. Choosing the lowest slot lets a
+		// returning truck repeatedly overtake an earlier arrival in a higher slot.
+		for (auto ready = m_readyDockers.begin(); ready != m_readyDockers.end(); ++ready)
 		{
-			if( m_approachPositionReached[positionIndex] )
+			const auto owner = std::find(m_approachPositionOwners.begin(), m_approachPositionOwners.end(), *ready);
+			if (owner != m_approachPositionOwners.end() &&
+				m_approachPositionReached[owner - m_approachPositionOwners.begin()])
 			{
-				m_activeDocker = m_approachPositionOwners[positionIndex];
+				m_activeDocker = *ready;
+				m_readyDockers.erase(ready);
 				return UPDATE_SLEEP_NONE;
 			}
 		}
@@ -554,6 +582,9 @@ void DockUpdate::crc( Xfer *xfer )
 
 	// extend base class
 	UpdateModule::crc( xfer );
+	UnsignedInt readyCount = static_cast<UnsignedInt>(m_readyDockers.size());
+	xfer->xferUnsignedInt(&readyCount);
+	for (auto id : m_readyDockers) xfer->xferObjectID(&id);
 
 }
 
@@ -564,7 +595,7 @@ void DockUpdate::xfer( Xfer *xfer )
 {
 
 	// version
-	XferVersion currentVersion = 1;
+	XferVersion currentVersion = 2;
 	XferVersion version = currentVersion;
 	xfer->xferVersion( &version, currentVersion );
 
@@ -617,6 +648,7 @@ void DockUpdate::xfer( Xfer *xfer )
 		// Vector of Bool gets packed as bitfield internally
 		Bool unpack = m_approachPositionReached[vectorIndex];
 		xfer->xferBool( &unpack );
+		m_approachPositionReached[vectorIndex] = unpack;
 	}
 
 	// active docker
@@ -630,6 +662,18 @@ void DockUpdate::xfer( Xfer *xfer )
 
 	// dock open
 	xfer->xferBool( &m_dockOpen );
+	if (version >= 2) {
+		Int readyCount = static_cast<Int>(m_readyDockers.size());
+		xfer->xferInt(&readyCount);
+		m_readyDockers.resize(readyCount);
+		for (auto& id : m_readyDockers) xfer->xferObjectID(&id);
+	} else {
+		m_readyDockers.clear();
+		for (size_t i = 0; i < m_approachPositionOwners.size(); ++i)
+			if (m_approachPositionReached[i] && m_approachPositionOwners[i] != INVALID_ID &&
+				m_approachPositionOwners[i] != m_activeDocker)
+				m_readyDockers.push_back(m_approachPositionOwners[i]);
+	}
 
 }
 
