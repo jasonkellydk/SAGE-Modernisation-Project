@@ -43,12 +43,14 @@
 
 #pragma once
 
+
+#include <cassert>
 #include "WWLib/always.h"
 #include "persist.h"
 #include "parameter.h"
 #include "simpleparameter.h"
 #include "parameterlist.h"
-#include "WWDebug/wwdebug.h"
+
 
 //////////////////////////////////////////////////////////////////////////////////
 //
@@ -86,7 +88,7 @@ EditableClass::Get_Parameter_Count () const
 inline ParameterClass *
 EditableClass::Lock_Parameter (int i)
 {
-	WWASSERT (0);
+	assert((0));
 	return nullptr;
 }
 

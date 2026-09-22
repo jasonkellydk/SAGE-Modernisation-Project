@@ -46,6 +46,7 @@ class RTS3DScene;
 class RTS2DScene;
 class RTS3DInterfaceScene;
 class W3DTextureHandle;
+import engine.platform;
 
 
 //=============================================================================
@@ -56,7 +57,7 @@ class W3DDisplay : public Display
 {
 
 public:
-	W3DDisplay();
+	W3DDisplay(engine::platform::IPlatform& platform, engine::platform::IWindow* mainWindow);
 	virtual ~W3DDisplay() override;
 
 	virtual void init() override;  ///< initialize or re-initialize the system
@@ -164,6 +165,8 @@ protected:
 	virtual void onFlush() override;
 
 	std::vector<Graphics::DisplayResolution> m_displayResolutions;
+	engine::platform::IPlatform& m_platform;
+	engine::platform::IWindow* m_mainWindow{};
 	Byte m_initialized;												///< TRUE when system is initialized
 	W3DLight *m_myLight[Graphics::Material_Light_Count];										///< light hack for now
 	IRegion2D m_clipRegion;									///< the clipping region for images

@@ -44,9 +44,11 @@
 
 #pragma once
 
+
+#include <cassert>
 #include "Common/SubsystemInterface.h"
 #include "Common/GameMemory.h"
-#include "Common/Debug.h"
+
 #include "Common/Handicap.h"
 #include "Common/Money.h"
 #include "Common/Science.h"
@@ -76,7 +78,7 @@ public:
 
 	void setNameKey(NameKeyType namekey) { m_nameKey = namekey; }
 
-	NameKeyType getNameKey() const { DEBUG_ASSERTCRASH(m_nameKey != NAMEKEY_INVALID, ("bad namekey")); return m_nameKey; }
+	NameKeyType getNameKey() const { assert((m_nameKey != NAMEKEY_INVALID)); return m_nameKey; }
 	AsciiString getName() const { return KEYNAME(m_nameKey); }
 
 	UnicodeString getDisplayName() const { return m_displayName; }

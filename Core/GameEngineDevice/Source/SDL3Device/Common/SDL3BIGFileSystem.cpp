@@ -10,6 +10,7 @@
 #include "Utility/endian_compat.h"
 
 #include <string>
+import engine.debug;
 
 namespace
 {
@@ -26,8 +27,7 @@ SDL3BIGFileSystem::~SDL3BIGFileSystem() = default;
 
 void SDL3BIGFileSystem::init()
 {
-	DEBUG_ASSERTCRASH(TheLocalFileSystem != nullptr,
-		("TheLocalFileSystem must be initialized before TheArchiveFileSystem."));
+	engine::debug::invariant((TheLocalFileSystem != nullptr), "TheLocalFileSystem != nullptr", __FILE__, __LINE__, "TheLocalFileSystem must be initialized before TheArchiveFileSystem.");
 	if (TheLocalFileSystem == nullptr)
 		return;
 
@@ -57,14 +57,14 @@ ArchiveFile *SDL3BIGFileSystem::openArchiveFile(const Char *filename)
 	File *file = TheLocalFileSystem->openFile(filename, File::READ | File::BINARY);
 	if (file == nullptr)
 	{
-		DEBUG_LOG(("SDL3BIGFileSystem::openArchiveFile - could not open %s", filename));
+		engine::debug::log_info("SDL3BIGFileSystem::openArchiveFile - could not open %s", filename);
 		return nullptr;
 	}
 
 	char identifier[sizeof(BIGFileIdentifier)]{};
 	if (file->read(identifier, 4) != 4 || std::memcmp(identifier, BIGFileIdentifier, 4) != 0)
 	{
-		DEBUG_LOG(("SDL3BIGFileSystem::openArchiveFile - invalid BIGF header in %s", filename));
+		engine::debug::log_info("SDL3BIGFileSystem::openArchiveFile - invalid BIGF header in %s", filename);
 		file->close();
 		return nullptr;
 	}
@@ -206,7 +206,7 @@ Bool SDL3BIGFileSystem::loadBigFilesFromDirectory(AsciiString dir, AsciiString f
 		if (archiveFile == nullptr)
 			continue;
 
-		DEBUG_LOG(("SDL3BIGFileSystem::loadBigFilesFromDirectory - loading %s", iterator->str()));
+		engine::debug::log_info("SDL3BIGFileSystem::loadBigFilesFromDirectory - loading %s", iterator->str());
 		loadIntoDirectoryTree(archiveFile, overwrite);
 		m_archiveFileMap[*iterator] = archiveFile;
 		actuallyAdded = TRUE;

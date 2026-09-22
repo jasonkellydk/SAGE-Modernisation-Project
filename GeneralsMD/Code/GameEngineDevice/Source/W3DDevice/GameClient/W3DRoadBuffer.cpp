@@ -73,6 +73,7 @@ import Graphics.Scene.Surfaces.Geometry;
 
 #include "W3DDevice/GameClient/W3DMeshRenderObject.h"
 #include "W3DDevice/GameClient/W3DMeshResource.h"
+import engine.debug;
 
 static const Real TEE_WIDTH_ADJUSTMENT = 1.03f;
 
@@ -1225,7 +1226,7 @@ void W3DRoadBuffer::loadRoadsInVertexAndIndexBuffers()
 	this->m_roadTypes[m_curRoadType].setNumIndices(m_curNumRoadIndices);
     if (!m_roadTypes[m_curRoadType].uploadGeometry()) {
         m_roadTypes[m_curRoadType].setNumIndices(0);
-        DEBUG_LOG(("Road geometry upload failed.\n"));
+        engine::debug::log_info("Road geometry upload failed.\n");
     }
 }
 
@@ -1310,7 +1311,7 @@ void W3DRoadBuffer::moveRoadSegTo(Int fromNdx, Int toNdx)
 {
 	if (fromNdx<0 || fromNdx>=m_numRoads || toNdx<0 || toNdx>=m_numRoads) {
 #ifdef RTS_DEBUG
-		DEBUG_LOG(("bad moveRoadSegTo"));
+		engine::debug::log_info("bad moveRoadSegTo");
 #endif
 		return;
 	}
@@ -1343,9 +1344,9 @@ void W3DRoadBuffer::checkLinkBefore(Int ndx)
 
 	Vector2 loc2 = m_roads[ndx].m_pt2.loc;
 #ifdef RTS_DEBUG
-	DEBUG_ASSERTLOG(m_roads[ndx].m_pt1.loc == m_roads[ndx+1].m_pt2.loc, ("Bad link"));
+	if (!(m_roads[ndx].m_pt1.loc == m_roads[ndx+1].m_pt2.loc)) engine::debug::log_error("Bad link");
 	if (ndx>0) {
-		DEBUG_ASSERTLOG(m_roads[ndx].m_pt2.loc != m_roads[ndx-1].m_pt1.loc, ("Bad Link"));
+		if (!(m_roads[ndx].m_pt2.loc != m_roads[ndx-1].m_pt1.loc)) engine::debug::log_error("Bad Link");
 	}
 #endif
 
@@ -1360,7 +1361,7 @@ void W3DRoadBuffer::checkLinkBefore(Int ndx)
 	while (checkNdx < m_numRoads) {
 		if (m_roads[checkNdx].m_pt1.loc == loc2) {
 #ifdef RTS_DEBUG
-			DEBUG_ASSERTLOG(m_roads[checkNdx].m_pt1.count==1, ("Bad count"));
+			if (!(m_roads[checkNdx].m_pt1.count==1)) engine::debug::log_error("Bad count");
 #endif
 			moveRoadSegTo(checkNdx, ndx);
 			loc2 = m_roads[ndx].m_pt2.loc;
@@ -1368,7 +1369,7 @@ void W3DRoadBuffer::checkLinkBefore(Int ndx)
 			endOfCurSeg++;
 		} else if (m_roads[checkNdx].m_pt2.loc == loc2) {
 #ifdef RTS_DEBUG
-			DEBUG_ASSERTLOG(m_roads[checkNdx].m_pt2.count==1, ("Bad count"));
+			if (!(m_roads[checkNdx].m_pt2.count==1)) engine::debug::log_error("Bad count");
 #endif
 			flipTheRoad(&m_roads[checkNdx]);
 			moveRoadSegTo(checkNdx, ndx);
@@ -1402,14 +1403,14 @@ void W3DRoadBuffer::checkLinkAfter(Int ndx)
 
 	Vector2 loc1 = m_roads[ndx].m_pt1.loc;
 #ifdef RTS_DEBUG
-	DEBUG_ASSERTLOG(m_roads[ndx].m_pt2.loc == m_roads[ndx-1].m_pt1.loc, ("Bad link"));
+	if (!(m_roads[ndx].m_pt2.loc == m_roads[ndx-1].m_pt1.loc)) engine::debug::log_error("Bad link");
 #endif
 
 	Int checkNdx = ndx+1;
 	while (checkNdx < m_numRoads && ndx < m_numRoads-1) {
 		if (m_roads[checkNdx].m_pt2.loc == loc1) {
 #ifdef RTS_DEBUG
-			DEBUG_ASSERTLOG(m_roads[checkNdx].m_pt2.count==1, ("Bad count"));
+			if (!(m_roads[checkNdx].m_pt2.count==1)) engine::debug::log_error("Bad count");
 #endif
 			ndx++;
 			moveRoadSegTo(checkNdx, ndx);
@@ -1417,7 +1418,7 @@ void W3DRoadBuffer::checkLinkAfter(Int ndx)
 			if (m_roads[ndx].m_pt1.count != 1) return;
 		} else if (m_roads[checkNdx].m_pt1.loc == loc1) {
 #ifdef RTS_DEBUG
-			DEBUG_ASSERTLOG(m_roads[checkNdx].m_pt1.count==1, ("Wrong m_pt1.count."));
+			if (!(m_roads[checkNdx].m_pt1.count==1)) engine::debug::log_error("Wrong m_pt1.count.");
 #endif
 			flipTheRoad(&m_roads[checkNdx]);
 			ndx++;
@@ -1432,7 +1433,7 @@ void W3DRoadBuffer::checkLinkAfter(Int ndx)
 }
 
 static Bool warnSegments = true;
-#define CHECK_SEGMENTS {if (m_numRoads >= m_maxRoadSegments) { if (warnSegments) DEBUG_LOG(("****** Too many road segments.  Need to increase ini values.  See john a.")); warnSegments = false; return;}}
+#define CHECK_SEGMENTS {if (m_numRoads >= m_maxRoadSegments) { if (warnSegments) engine::debug::log_info("****** Too many road segments.  Need to increase ini values.  See john a."); warnSegments = false; return;}}
 
 //=============================================================================
 // W3DRoadBuffer::addMapObject
@@ -1537,7 +1538,7 @@ void W3DRoadBuffer::addMapObjects()
 		if (pMapObj->getFlag(FLAG_ROAD_POINT1)) {
 			pMapObj2 = pMapObj->getNext();
 #ifdef RTS_DEBUG
-			DEBUG_ASSERTLOG(pMapObj2 && pMapObj2->getFlag(FLAG_ROAD_POINT2), ("Bad Flag"));
+			if (!(pMapObj2 && pMapObj2->getFlag(FLAG_ROAD_POINT2))) engine::debug::log_error("Bad Flag");
 #endif
 			if (pMapObj2==nullptr) break;
 			if (!pMapObj2->getFlag(FLAG_ROAD_POINT2)) continue;
@@ -2638,13 +2639,13 @@ void W3DRoadBuffer::adjustStacking(Int topUniqueID, Int bottomUniqueID)
 	for (i=0; i<m_maxRoadTypes; i++) {
 		if (m_roadTypes[i].getUniqueID() == topUniqueID) break;
 	}
-	DEBUG_ASSERTLOG(i<m_maxRoadTypes, ("***** Wrong unique id- john a should fix."));
+	if (!(i<m_maxRoadTypes)) engine::debug::log_error("***** Wrong unique id- john a should fix.");
 	if (i>=m_maxRoadTypes) return;
 
 	for (j=0; j<m_maxRoadTypes; j++) {
 		if (m_roadTypes[j].getUniqueID() == bottomUniqueID) break;
 	}
-	DEBUG_ASSERTLOG(j<m_maxRoadTypes, ("***** Wrong unique id- john a should fix."));
+	if (!(j<m_maxRoadTypes)) engine::debug::log_error("***** Wrong unique id- john a should fix.");
 	if (j>=m_maxRoadTypes) return;
 
 	if (m_roadTypes[i].getStacking() > m_roadTypes[j].getStacking()) {
@@ -3246,7 +3247,7 @@ void W3DRoadBuffer::drawRoads(W3DCamera *camera, W3DTextureHandle *cloudTexture,
             if (road.getNumIndices() == 0) continue;
             textures[0] = Resolve_Graphics_Texture(road.getTexture());
             const bool drawn = Graphics::Draw_Road(renderer, commands, road.getMesh(), parameters, textures, filtered);
-            if (!drawn) DEBUG_LOG(("Road graphics submission failed.\n"));
+            if (!drawn) engine::debug::log_info("Road graphics submission failed.\n");
         }
     }
     m_curRoadType = 0;

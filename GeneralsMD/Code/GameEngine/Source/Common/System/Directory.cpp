@@ -22,7 +22,8 @@
 //																																						//
 ////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 #if (0)
 
 #include "Common/Directory.h"
@@ -53,7 +54,7 @@ void FileInfo::set( const WIN32_FIND_DATA& info )
 	modTime = FileTimeToTimet(info.ftLastWriteTime);
 	attributes = info.dwFileAttributes;
 	filesize = info.nFileSizeLow;
-	//DEBUG_LOG(("FileInfo::set(): fname=%s, size=%d", filename.str(), filesize));
+	//engine::debug::log_info("FileInfo::set(): fname=%s, size=%d", filename.str(), filesize);
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -67,7 +68,7 @@ Directory::Directory( const AsciiString& dirPath ) : m_dirPath(dirPath)
 	// sanity
 	if( m_dirPath.isEmpty() )
 	{
-		DEBUG_LOG(( "Empty dirname"));
+		engine::debug::log_info( "Empty dirname");
 		return;
 	}
 
@@ -77,7 +78,7 @@ Directory::Directory( const AsciiString& dirPath ) : m_dirPath(dirPath)
 	// switch into the directory provided
 	if( SetCurrentDirectory( m_dirPath.str() ) == 0 )
 	{
-		DEBUG_LOG(( "Can't set directory '%s'", m_dirPath.str() ));
+		engine::debug::log_info( "Can't set directory '%s'", m_dirPath.str() );
 		return;
 	}
 
@@ -86,7 +87,7 @@ Directory::Directory( const AsciiString& dirPath ) : m_dirPath(dirPath)
 	hFile = FindFirstFile( "*", &item);
 	if( hFile == INVALID_HANDLE_VALUE )
 	{
-		DEBUG_LOG(( "Can't search directory '%s'", m_dirPath.str() ));
+		engine::debug::log_info( "Can't search directory '%s'", m_dirPath.str() );
 		done = true;
 	}
 

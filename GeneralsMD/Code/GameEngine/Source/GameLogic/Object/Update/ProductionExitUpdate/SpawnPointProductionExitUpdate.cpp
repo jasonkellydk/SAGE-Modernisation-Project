@@ -28,7 +28,8 @@
 //					This instance puts guys at named bones.
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/Xfer.h"
 #include "GameClient/Drawable.h"
@@ -63,7 +64,7 @@ SpawnPointProductionExitUpdate::~SpawnPointProductionExitUpdate()
 //-------------------------------------------------------------------------------------------------
 void SpawnPointProductionExitUpdate::exitObjectViaDoor( Object *newObj, ExitDoorType exitDoor )
 {
-	DEBUG_ASSERTCRASH(exitDoor == DOOR_1, ("multiple exit doors not supported here"));
+	engine::debug::invariant((exitDoor == DOOR_1), "exitDoor == DOOR_1", __FILE__, __LINE__, "multiple exit doors not supported here");
 
 	if( !m_bonesInitialized )
 		initializeBonePositions();
@@ -79,7 +80,7 @@ void SpawnPointProductionExitUpdate::exitObjectViaDoor( Object *newObj, ExitDoor
 		}
 		if( positionIndex == m_spawnPointCount )
 		{
-			DEBUG_CRASH( ("A SpawnPoint exit thought it had room but then failed") );
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "A SpawnPoint exit thought it had room but then failed");
 			return;
 		}
 

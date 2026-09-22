@@ -48,13 +48,14 @@
 
 // USER INCLUDES //////////////////////////////////////////////////////////////
 #include "GUIEdit.h"
-#include "Common/Debug.h"
+
 #include "Common/NameKeyGenerator.h"
 #include "Common/FunctionLexicon.h"
 #include "GameClient/Display.h"
 #include "GameClient/GameWindow.h"
 #include "GameClient/GameWindowManager.h"
 #include "GameClient/GadgetRadioButton.h"
+import engine.debug;
 
 ///////////////////////////////////////////////////////////////////////////////
 // DEFINES ////////////////////////////////////////////////////////////////////
@@ -576,7 +577,7 @@ static Bool saveDrawData( const char *token, GameWindow *window,
 		else
 		{
 
-			DEBUG_LOG(( "Save draw data, unknown token '%s'", token ));
+			engine::debug::log_info( "Save draw data, unknown token '%s'", token );
 			assert( 0 );
 			return FALSE;
 
@@ -615,8 +616,8 @@ static Bool saveListboxData( GameWindow *window, FILE *fp, Int dataIndent )
 	if( listData == nullptr )
 	{
 
-		DEBUG_LOG(( "No listbox data to save for window '%d'",
-						 window->winGetWindowId() ));
+		engine::debug::log_info( "No listbox data to save for window '%d'",
+						 window->winGetWindowId() );
 		assert( 0 );
 		return FALSE;
 
@@ -701,8 +702,8 @@ static Bool saveComboBoxData( GameWindow *window, FILE *fp, Int dataIndent )
 	if( comboData == nullptr )
 	{
 
-		DEBUG_LOG(( "No comboData data to save for window '%d'",
-						 window->winGetWindowId() ));
+		engine::debug::log_info( "No comboData data to save for window '%d'",
+						 window->winGetWindowId() );
 		assert( 0 );
 		return FALSE;
 
@@ -801,8 +802,8 @@ static Bool saveRadioButtonData( GameWindow *window, FILE *fp, Int dataIndent )
 	{
 
 
-		DEBUG_LOG(( "No radio button data to save for window '%d'",
-						 window->winGetWindowId() ));
+		engine::debug::log_info( "No radio button data to save for window '%d'",
+						 window->winGetWindowId() );
 		assert( 0 );
 		return FALSE;
 
@@ -826,8 +827,8 @@ static Bool saveSliderData( GameWindow *window, FILE *fp, Int dataIndent )
 	if( sliderData == nullptr )
 	{
 
-		DEBUG_LOG(( "No slider data in window to save for window %d",
-							window->winGetWindowId() ));
+		engine::debug::log_info( "No slider data in window to save for window %d",
+							window->winGetWindowId() );
 		assert( 0 );
 		return FALSE;
 
@@ -864,8 +865,8 @@ static Bool saveStaticTextData( GameWindow *window, FILE *fp, Int dataIndent )
 	if( textData == nullptr )
 	{
 
-		DEBUG_LOG(( "No text data in window to save for window %d",
-							window->winGetWindowId() ));
+		engine::debug::log_info( "No text data in window to save for window %d",
+							window->winGetWindowId() );
 		assert( 0 );
 		return FALSE;
 
@@ -889,8 +890,8 @@ static Bool saveTextEntryData( GameWindow *window, FILE *fp, Int dataIndent )
 	if( entryData == nullptr )
 	{
 
-		DEBUG_LOG(( "No text entry data in window to save for window %d",
-							window->winGetWindowId() ));
+		engine::debug::log_info( "No text entry data in window to save for window %d",
+							window->winGetWindowId() );
 		assert( 0 );
 		return FALSE;
 
@@ -922,8 +923,8 @@ static Bool saveTabControlData( GameWindow *window, FILE *fp, Int dataIndent )
 	if( tabControlData == nullptr )
 	{
 
-		DEBUG_LOG(( "No text entry data in window to save for window %d",
-							window->winGetWindowId() ));
+		engine::debug::log_info( "No text entry data in window to save for window %d",
+							window->winGetWindowId() );
 		assert( 0 );
 		return FALSE;
 

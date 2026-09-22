@@ -51,7 +51,8 @@
 #include "sphere.h"
 #include "aabox.h"
 #include "obbox.h"
-#include "WWDebug/wwdebug.h"
+
+import engine.debug;
 
 
 // Sphere Intersection functions.  Does the sphere intersect the passed in object
@@ -152,7 +153,7 @@ CollisionMath::Overlap_Test(const SphereClass & sphere,const Vector3 & point)
 CollisionMath::OverlapType
 CollisionMath::Overlap_Test(const SphereClass & /*sphere*/,const LineSegClass & /*line*/)
 {
-	WWASSERT(0); //TODO
+	engine::debug::assert_condition((0), "0", __FILE__, __LINE__, "assertion failed"); //TODO
 	return POS;
 }
 
@@ -172,7 +173,7 @@ CollisionMath::Overlap_Test(const SphereClass & /*sphere*/,const LineSegClass & 
 CollisionMath::OverlapType
 CollisionMath::Overlap_Test(const SphereClass & /*sphere*/,const TriClass & /*tri*/)
 {
-	WWASSERT(0); //TODO
+	engine::debug::assert_condition((0), "0", __FILE__, __LINE__, "assertion failed"); //TODO
 	return POS;
 }
 

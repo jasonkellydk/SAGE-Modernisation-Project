@@ -36,11 +36,13 @@
 
 #pragma once
 
+
+#include <cassert>
 #include "always.h"
 #include "mutex.h"
 #include <stdarg.h>
 #include "trim.h"
-#include "WWDebug/wwdebug.h"
+
 #include <cctype>
 #include <cstring>
 #include <cwchar>
@@ -443,7 +445,7 @@ StringClass::Compare_No_Case (const TCHAR *string) const
 inline const TCHAR &
 StringClass::operator[] (int index) const
 {
-	WWASSERT (index >= 0 && index < Get_Length ());
+	assert((index >= 0 && index < Get_Length ()));
 	return m_Buffer[index];
 }
 
@@ -453,7 +455,7 @@ StringClass::operator[] (int index) const
 inline TCHAR &
 StringClass::operator[] (int index)
 {
-	WWASSERT (index >= 0 && index < Get_Length ());
+	assert((index >= 0 && index < Get_Length ()));
 	return m_Buffer[index];
 }
 
@@ -559,7 +561,7 @@ inline void StringClass::Trim()
 inline const StringClass &
 StringClass::operator+= (const TCHAR *string)
 {
-	WWASSERT (string != nullptr);
+	assert((string != nullptr));
 
 	int cur_len = Get_Length ();
 	int src_len = static_cast<int>(WWStringDetail::Length(string));
@@ -760,7 +762,7 @@ StringClass::Set_Buffer_And_Allocated_Length (TCHAR *buffer, int length)
 		Store_Allocated_Length (length);
 		Store_Length (0);
 	} else {
-		WWASSERT (length == 0);
+		assert((length == 0));
 	}
 }
 
@@ -808,7 +810,7 @@ StringClass::Store_Allocated_Length (int allocated_length)
 		HEADER *header					= Get_Header ();
 		header->allocated_length	= allocated_length;
 	} else {
-		WWASSERT (allocated_length == 0);
+		assert((allocated_length == 0));
 	}
 }
 
@@ -825,6 +827,6 @@ StringClass::Store_Length (int length)
 		HEADER *header		= Get_Header ();
 		header->length		= length;
 	} else {
-		WWASSERT (length == 0);
+		assert((length == 0));
 	}
 }

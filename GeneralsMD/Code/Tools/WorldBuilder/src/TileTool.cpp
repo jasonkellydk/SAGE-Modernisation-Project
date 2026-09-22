@@ -31,6 +31,7 @@
 #include "WorldBuilderView.h"
 #include "BrushTool.h"
 #include "DrawObject.h"
+import engine.debug;
 //
 // TileTool class.
 //
@@ -123,12 +124,12 @@ void TileTool::mouseMoved(TTrackingMode m, CPoint viewPt, WbView* pView, CWorldB
 		curViewPt.y = viewPt.y + ((count-k)*dy)/count;
 
 		if (k==0) {
-			DEBUG_ASSERTCRASH(curViewPt.x == m_prevViewPt.x, ("Bad x"));
-			DEBUG_ASSERTCRASH(curViewPt.y == m_prevViewPt.y, ("Bad y"));
+			engine::debug::invariant((curViewPt.x == m_prevViewPt.x), "curViewPt.x == m_prevViewPt.x", __FILE__, __LINE__, "Bad x");
+			engine::debug::invariant((curViewPt.y == m_prevViewPt.y), "curViewPt.y == m_prevViewPt.y", __FILE__, __LINE__, "Bad y");
 		}
 		if (k==count) {
-			DEBUG_ASSERTCRASH(curViewPt.x == viewPt.x, ("Bad x"));
-			DEBUG_ASSERTCRASH(curViewPt.y == viewPt.y, ("Bad y"));
+			engine::debug::invariant((curViewPt.x == viewPt.x), "curViewPt.x == viewPt.x", __FILE__, __LINE__, "Bad x");
+			engine::debug::invariant((curViewPt.y == viewPt.y), "curViewPt.y == viewPt.y", __FILE__, __LINE__, "Bad y");
 		}
 		CPoint ndx;
 		Int width = getWidth();

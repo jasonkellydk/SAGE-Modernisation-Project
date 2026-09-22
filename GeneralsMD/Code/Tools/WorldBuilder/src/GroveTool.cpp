@@ -32,11 +32,12 @@
 #include "Common/GlobalData.h"
 #include "GameLogic/LogicRandomValue.h"
 #include "W3DDevice/GameClient/BaseHeightMap.h"
-#include "Common/Debug.h"
+
 #include "DrawObject.h"
 #include "GroveOptions.h"
 #include "GameLogic/PolygonTrigger.h"
 #include "mapobjectprops.h"
+import engine.debug;
 
 #define DRAG_THRESHOLD	5
 #define MAX_TREE_RISE_OVER_RUN		(1.5f)
@@ -334,7 +335,7 @@ void GroveTool::mouseMoved(TTrackingMode m, CPoint viewPt, WbView* pView, CWorld
 void GroveTool::addObj(Coord3D *pos, AsciiString name)
 {
 	MapObject *pCur = ObjectOptions::getObjectNamed(name);
-	DEBUG_ASSERTCRASH(pCur!=nullptr, ("oops"));
+	engine::debug::invariant((pCur!=nullptr), "pCur!=nullptr", __FILE__, __LINE__, "oops");
 	if (!pCur) return;
 	Coord3D theLoc = *pos;
 	theLoc.z = 0;

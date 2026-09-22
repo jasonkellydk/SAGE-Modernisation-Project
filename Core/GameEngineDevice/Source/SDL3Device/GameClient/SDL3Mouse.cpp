@@ -1,4 +1,5 @@
 #include "SDL3Device/GameClient/SDL3Mouse.h"
+import engine.platform;
 
 #include "Common/GlobalData.h"
 #include "Common/LocalFileSystem.h"
@@ -9,6 +10,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+import engine.debug;
 
 namespace
 {
@@ -519,6 +521,11 @@ SDL_Cursor *createGameCursor(const CursorInfo &cursorInfo, Int direction)
 }
 } // namespace
 
+SDL3Mouse::SDL3Mouse(engine::platform::IClockService& clock)
+	: Mouse(clock)
+{
+}
+
 SDL3Mouse::~SDL3Mouse()
 {
 	SDL_SetCursor(nullptr);
@@ -565,7 +572,6 @@ void SDL3Mouse::reset()
 }
 void SDL3Mouse::update()
 {
-	SDL_PumpEvents();
 	m_reportedThisFrame = FALSE;
 	Mouse::update();
 }
@@ -610,8 +616,8 @@ Bool SDL3Mouse::loadCursorResource(MouseCursor cursor, Int direction)
 	m_cursorResources[cursor][direction] = createGameCursor(m_cursorInfo[cursor], direction);
 	if (m_cursorResources[cursor][direction] == nullptr)
 	{
-		DEBUG_LOG(("SDL3Mouse: unable to load game cursor %s (direction %d)",
-			m_cursorInfo[cursor].textureName.str(), direction));
+		engine::debug::log_info("SDL3Mouse: unable to load game cursor %s (direction %d)",
+			m_cursorInfo[cursor].textureName.str(), direction);
 		return FALSE;
 	}
 	return TRUE;
@@ -762,7 +768,7 @@ UnsignedByte SDL3Mouse::getMouseEvent(MouseIO *result, Bool)
 	const Real wheelUnits = m_pendingWheel * static_cast<Real>(MOUSE_WHEEL_DELTA);
 	result->wheelPos = static_cast<Int>(wheelUnits);
 	m_pendingWheel -= result->wheelPos / static_cast<Real>(MOUSE_WHEEL_DELTA);
-	result->time = SDL_GetTicks();
+	result->time = currentMilliseconds();
 	const auto transition = [buttons, this](Uint32 mask) {
 		const bool wasDown = (m_previousButtons & mask) != 0;
 		const bool isDown = (buttons & mask) != 0;

@@ -25,6 +25,7 @@
 #include "TeamObjectProperties.h"
 #include "Common/MapObject.h"
 #include "Common/WellKnownKeys.h"
+import engine.debug;
 
 
 /////////////////////////////////////////////////////////////////////////////
@@ -597,12 +598,12 @@ void TeamObjectProperties::_UpdateTeamMembers()
 	MapObject *pObj;
 	for (pObj=MapObject::getFirstMapObject(); pObj; pObj=pObj->getNext()) {
 		Dict* objectDict = pObj->getProperties();
-		DEBUG_ASSERTCRASH(objectDict, ("objectDict shouldn't be null"));
+		engine::debug::invariant((objectDict), "objectDict", __FILE__, __LINE__, "objectDict shouldn't be null");
 
 		AsciiString objectsTeam = objectDict->getAsciiString(TheKey_originalOwner);
 
 		if (teamName == objectsTeam) {
-			DEBUG_ASSERTCRASH(m_dictToEdit, ("m_dictToEdit shouldn't be null"));
+			engine::debug::invariant((m_dictToEdit), "m_dictToEdit", __FILE__, __LINE__, "m_dictToEdit shouldn't be null");
 			Bool exists;
 
 			Int value = m_dictToEdit->getInt(TheKey_teamObjectInitialHealth, &exists);

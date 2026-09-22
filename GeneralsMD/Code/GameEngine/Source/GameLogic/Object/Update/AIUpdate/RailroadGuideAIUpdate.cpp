@@ -28,6 +28,7 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 #include "PreRTS.h"
+import engine.debug;
 
 #include "Common/Player.h"
 #include "Common/ThingFactory.h"
@@ -539,7 +540,7 @@ void RailroadBehavior::loadTrackData()
 
 
 
-	DEBUG_ASSERTCRASH( anchorWaypoint, ( "Railroad... couldn't find a waypoint close enough to be the anchor.\n You should put your train engine right on a waypoint,\n and make sure the path forms a valid track.") );
+	engine::debug::invariant((anchorWaypoint), "anchorWaypoint", __FILE__, __LINE__,  "Railroad... couldn't find a waypoint close enough to be the anchor.\n You should put your train engine right on a waypoint,\n and make sure the path forms a valid track.");
 	if ( ! anchorWaypoint )
 		return;
 
@@ -941,7 +942,7 @@ void RailroadBehavior::createCarriages()
 
 	if ( ! m_isLocomotive )
 	{
-		DEBUG_ASSERTCRASH(m_isLocomotive, ("a not locomotive attempted to create carriages"));
+		engine::debug::invariant((m_isLocomotive), "m_isLocomotive", __FILE__, __LINE__, "a not locomotive attempted to create carriages");
 		return;
 	}
 
@@ -992,7 +993,7 @@ void RailroadBehavior::createCarriages()
 				else // or else let's use the defualt template list prvided in the INI
 				{
 					firstCarriage = TheThingFactory->newObject( temp, self->getTeam() );
-					DEBUG_LOG(("%s Added a carriage, %s ", self->getTemplate()->getName().str(),firstCarriage->getTemplate()->getName().str()));
+					engine::debug::log_info("%s Added a carriage, %s ", self->getTemplate()->getName().str(),firstCarriage->getTemplate()->getName().str());
 				}
 
 				if ( firstCarriage )
@@ -1011,10 +1012,9 @@ void RailroadBehavior::createCarriages()
 					}
 					else
 					{
-						DEBUG_ASSERTCRASH( rb,
-							("%s is attempting to hitch carriage, %s without a RailroadBehavior... \nwhat kind of nutty conductor are you? ",
+						engine::debug::invariant((rb), "rb", __FILE__, __LINE__, "%s is attempting to hitch carriage, %s without a RailroadBehavior... \nwhat kind of nutty conductor are you? ",
 							self->getTemplate()->getName().str(),
-							firstCarriage->getTemplate()->getName().str() ) );
+							firstCarriage->getTemplate()->getName().str() );
 					}
 				}
 
@@ -1032,7 +1032,7 @@ void RailroadBehavior::hitchNewCarriagebyTemplate( ObjectID locoID, const Templa
 
 	if ( m_isLocomotive )
 	{
-		DEBUG_ASSERTCRASH(m_isLocomotive, ("You can not hitch a locomotive in mid train, dude."));
+		engine::debug::invariant((m_isLocomotive), "m_isLocomotive", __FILE__, __LINE__, "You can not hitch a locomotive in mid train, dude.");
 		return;
 	}
 
@@ -1070,12 +1070,11 @@ void RailroadBehavior::hitchNewCarriagebyTemplate( ObjectID locoID, const Templa
 			}
 			else
 			{
-				DEBUG_ASSERTCRASH( rb,
-					("%s could not hitch a %s without a RailroadBehavior... \nwhat kind of nutty conductor are you? \nThe next carriage would have been a %s.",
+				engine::debug::invariant((rb), "rb", __FILE__, __LINE__, "%s could not hitch a %s without a RailroadBehavior... \nwhat kind of nutty conductor are you? \nThe next carriage would have been a %s.",
 					locomotive->getTemplate()->getName().str(),
 					newCarriage->getTemplate()->getName().str(),
 					iter->str()
-					) );
+					);
 			}
 
 		}
@@ -1090,7 +1089,7 @@ void RailroadBehavior::hitchNewCarriagebyProximity( ObjectID locoID, TrainTrack 
 {
 	if ( m_isLocomotive )
 	{
-		DEBUG_ASSERTCRASH(m_isLocomotive, ("You can not hitch a locomotive in mid train, dude."));
+		engine::debug::invariant((m_isLocomotive), "m_isLocomotive", __FILE__, __LINE__, "You can not hitch a locomotive in mid train, dude.");
 		return;
 	}
 
@@ -1145,10 +1144,9 @@ void RailroadBehavior::hitchNewCarriagebyProximity( ObjectID locoID, TrainTrack 
 			rb->hitchNewCarriagebyProximity( self->getID(), m_track );
 		else
 		{
-			DEBUG_ASSERTCRASH( rb,
-				("%s is attempting to hitch carriage, %s without a RailroadBehavior... \nwhat kind of nutty conductor are you? ",
+			engine::debug::invariant((rb), "rb", __FILE__, __LINE__, "%s is attempting to hitch carriage, %s without a RailroadBehavior... \nwhat kind of nutty conductor are you? ",
 				self->getTemplate()->getName().str(),
-				closeCarriage->getTemplate()->getName().str() ) );
+				closeCarriage->getTemplate()->getName().str() );
 		}
 	}
 
@@ -1233,7 +1231,7 @@ void alignToTerrain( Real angle, const Coord3D& pos, const Coord3D& normal, Matr
 		x.normalize();
 	}
 
-	DEBUG_ASSERTCRASH(fabs(x.x*z.x + x.y*z.y + x.z*z.z)<0.0001,("dot is not zero"));
+	engine::debug::invariant((fabs(x.x*z.x + x.y*z.y + x.z*z.z)<0.0001), "fabs(x.x*z.x + x.y*z.y + x.z*z.z)<0.0001", __FILE__, __LINE__, "dot is not zero");
 
 	// now computing the y vector is trivial.
 	y.crossProduct( z, x, y );
@@ -1499,7 +1497,7 @@ void RailroadBehavior::FindPosByPathDistance( Coord3D *pos, const Real dist, con
 
 	}
 
-	//DEBUG_CRASH(("Railroad could not find a position on the path!"));
+	//engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Railroad could not find a position on the path!");
 
 }
 

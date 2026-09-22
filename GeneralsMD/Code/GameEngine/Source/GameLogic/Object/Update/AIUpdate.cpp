@@ -27,7 +27,9 @@
 // Author: Michael S. Booth, 2001-2002
 // Subsequently : John Ahlquist 2002 and a cast of thousands.
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.profiling;
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #define DEFINE_LOCOMOTORSET_NAMES					// for TheLocomotorSetNames[]
 #define DEFINE_AUTOACQUIRE_NAMES
@@ -43,7 +45,7 @@
 #include "Common/ThingFactory.h"
 #include "Common/ThingTemplate.h"
 #include "Common/Upgrade.h"
-#include "Common/PerfTimer.h"
+
 #include "Common/UnitTimings.h"
 #include "Common/Xfer.h"
 #include "Common/XferCRC.h"
@@ -160,7 +162,7 @@ const LocomotorTemplateVector* AIUpdateModuleData::findLocomotorTemplateVector(L
 {
 	if (*(TurretAIData**)store)
 	{
-		DEBUG_CRASH(("Only one turret to a customer, for now"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Only one turret to a customer, for now");
 		throw INI_INVALID_DATA;
 	}
 
@@ -176,7 +178,7 @@ const LocomotorTemplateVector* AIUpdateModuleData::findLocomotorTemplateVector(L
 	AIUpdateModuleData *self = tt->friend_getAIModuleInfo();
 	if (!self)
 	{
-		DEBUG_CRASH( ("Attempted to specify a locomotor for object %s without an AIUpdate block.", tt->getName().str() ) );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Attempted to specify a locomotor for object %s without an AIUpdate block.", tt->getName().str() );
 		throw INI_INVALID_DATA;
 	}
 
@@ -185,7 +187,7 @@ const LocomotorTemplateVector* AIUpdateModuleData::findLocomotorTemplateVector(L
 	{
 		if (ini->getLoadType() != INI_LOAD_CREATE_OVERRIDES)
 		{
-			DEBUG_CRASH(("re-specifying a LocomotorSet is no longer allowed"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "re-specifying a LocomotorSet is no longer allowed");
 			throw INI_INVALID_DATA;
 		}
 	}
@@ -200,7 +202,7 @@ const LocomotorTemplateVector* AIUpdateModuleData::findLocomotorTemplateVector(L
 		const LocomotorTemplate* lt = TheLocomotorStore->findLocomotorTemplate(locoKey);
 		if (!lt)
 		{
-			DEBUG_CRASH(("Locomotor %s not found!",token));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Locomotor %s not found!",token);
 			throw INI_INVALID_DATA;
 		}
 		self->m_locomotorTemplates[set].push_back(lt);
@@ -511,13 +513,13 @@ void AIUpdateInterface::requestPath( Coord3D *destination, Bool isFinalGoal )
 	++m_pathRequestRevision;
 
 	if (m_locomotorSet.getValidSurfaces() == 0) {
-		DEBUG_CRASH(("Attempting to path immobile unit."));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Attempting to path immobile unit.");
 	}
 
-	//DEBUG_LOG(("Request Frame %d, obj %s %x", TheGameLogic->getFrame(), getObject()->getTemplate()->getName().str(), getObject()));
+	//engine::debug::log_info("Request Frame %d, obj %s %x", TheGameLogic->getFrame(), getObject()->getTemplate()->getName().str(), getObject());
 	m_requestedDestination = *destination;
 	m_isFinalGoal = isFinalGoal;
-	CRCDEBUG_LOG(("AIUpdateInterface::requestPath() - m_isAttackPath = FALSE for object %d", getObject()->getID()));
+	engine::debug::log_trace("AIUpdateInterface::requestPath() - m_isAttackPath = FALSE for object %d", getObject()->getID());
 	m_isAttackPath = FALSE;
 	m_requestedVictimID = INVALID_ID;
 	m_isApproachPath = FALSE;
@@ -529,12 +531,12 @@ void AIUpdateInterface::requestPath( Coord3D *destination, Bool isFinalGoal )
 	m_waitingForPath = TRUE;
 	if (!m_freshPlayerPathCommand && m_pathTimestamp > TheGameLogic->getFrame()-3) {
 		/* Requesting path very quickly.  Can cause a spin. */
-		//DEBUG_LOG(("%d Pathfind - repathing in less than 3 frames.  Waiting 1 second",
-			//TheGameLogic->getFrame()));
+		//engine::debug::log_info("%d Pathfind - repathing in less than 3 frames.  Waiting 1 second",
+			//TheGameLogic->getFrame());
 		setQueueForPathTime(LOGICFRAMES_PER_SECOND);
 		// See if it has been too soon.
 		// jba intense debug
-		//DEBUG_LOG(("Info - RePathing very quickly %d, %d.", m_pathTimestamp, TheGameLogic->getFrame()));
+		//engine::debug::log_info("Info - RePathing very quickly %d, %d.", m_pathTimestamp, TheGameLogic->getFrame());
 		if (m_path && m_isBlockedAndStuck) {
 			setIgnoreCollisionTime(2*LOGICFRAMES_PER_SECOND);
 			m_blockedFrames = 0;
@@ -552,9 +554,9 @@ void AIUpdateInterface::requestAttackPath( ObjectID victimID, const Coord3D* vic
 {
 	++m_pathRequestRevision;
 	if (m_locomotorSet.getValidSurfaces() == 0) {
-		DEBUG_CRASH(("Attempting to path immobile unit."));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Attempting to path immobile unit.");
 	}
-	CRCDEBUG_LOG(("AIUpdateInterface::requestAttackPath() - m_isAttackPath = TRUE for object %d", getObject()->getID()));
+	engine::debug::log_trace("AIUpdateInterface::requestAttackPath() - m_isAttackPath = TRUE for object %d", getObject()->getID());
 	m_requestedDestination = *victimPos;
 	m_requestedVictimID = victimID;
 	m_isAttackPath = TRUE;
@@ -563,7 +565,7 @@ void AIUpdateInterface::requestAttackPath( ObjectID victimID, const Coord3D* vic
 	m_waitingForPath = TRUE;
 	if (!m_freshPlayerPathCommand && m_pathTimestamp > TheGameLogic->getFrame()-3) {
 		/* Requesting path very quickly.  Can cause a spin. */
-		//DEBUG_LOG(("%d Pathfind - repathing in less than 3 frames.  Waiting 2 second",TheGameLogic->getFrame()));
+		//engine::debug::log_info("%d Pathfind - repathing in less than 3 frames.  Waiting 2 second",TheGameLogic->getFrame());
 		setQueueForPathTime(2*LOGICFRAMES_PER_SECOND);
 		setLocomotorGoalNone();
 		return;
@@ -576,11 +578,11 @@ void AIUpdateInterface::requestApproachPath( Coord3D *destination )
 {
 	++m_pathRequestRevision;
 	if (m_locomotorSet.getValidSurfaces() == 0) {
-		DEBUG_CRASH(("Attempting to path immobile unit."));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Attempting to path immobile unit.");
 	}
 	m_requestedDestination = *destination;
 	m_isFinalGoal = TRUE;
-	CRCDEBUG_LOG(("AIUpdateInterface::requestApproachPath() - m_isAttackPath = FALSE for object %d", getObject()->getID()));
+	engine::debug::log_trace("AIUpdateInterface::requestApproachPath() - m_isAttackPath = FALSE for object %d", getObject()->getID());
 	m_isAttackPath = FALSE;
 	m_requestedVictimID = INVALID_ID;
 	m_isApproachPath = TRUE;
@@ -588,7 +590,7 @@ void AIUpdateInterface::requestApproachPath( Coord3D *destination )
 	m_waitingForPath = TRUE;
 	if (!m_freshPlayerPathCommand && m_pathTimestamp > TheGameLogic->getFrame()-3) {
 		/* Requesting path very quickly.  Can cause a spin. */
-		//DEBUG_LOG(("%d Pathfind - repathing in less than 3 frames.  Waiting 2 second",TheGameLogic->getFrame()));
+		//engine::debug::log_info("%d Pathfind - repathing in less than 3 frames.  Waiting 2 second",TheGameLogic->getFrame());
 		setQueueForPathTime(2*LOGICFRAMES_PER_SECOND);
 		return;
 	}
@@ -605,7 +607,7 @@ void AIUpdateInterface::requestSafePath( ObjectID repulsor )
 	}
 	m_repulsor1 = repulsor;
 	m_isFinalGoal = FALSE;
-	CRCDEBUG_LOG(("AIUpdateInterface::requestSafePath() - m_isAttackPath = FALSE for object %d", getObject()->getID()));
+	engine::debug::log_trace("AIUpdateInterface::requestSafePath() - m_isAttackPath = FALSE for object %d", getObject()->getID());
 	m_isAttackPath = FALSE;
 	m_requestedVictimID = INVALID_ID;
 	m_isApproachPath = FALSE;
@@ -613,7 +615,7 @@ void AIUpdateInterface::requestSafePath( ObjectID repulsor )
 	m_waitingForPath = TRUE;
 	if (!m_freshPlayerPathCommand && m_pathTimestamp > TheGameLogic->getFrame()-3) {
 		/* Requesting path very quickly.  Can cause a spin. */
-		//DEBUG_LOG(("%d Pathfind - repathing in less than 3 frames.  Waiting 2 second",TheGameLogic->getFrame()));
+		//engine::debug::log_info("%d Pathfind - repathing in less than 3 frames.  Waiting 2 second",TheGameLogic->getFrame());
 		setQueueForPathTime(2*LOGICFRAMES_PER_SECOND);
 		return;
 	}
@@ -827,7 +829,7 @@ Real AIUpdateInterface::getCurLocomotorSpeed() const
 	if (m_curLocomotor != nullptr)
 		return m_curLocomotor->getMaxSpeedForCondition(getObject()->getBodyModule()->getDamageState());
 
-	DEBUG_LOG(("no current locomotor!"));
+	engine::debug::log_info("no current locomotor!");
 	return 0.0f;
 }
 
@@ -842,7 +844,7 @@ void AIUpdateInterface::setLocomotorUpgrade(Bool set)
 //=============================================================================
 Bool AIUpdateInterface::chooseLocomotorSet(LocomotorSetType wst)
 {
-	DEBUG_ASSERTCRASH(wst != LOCOMOTORSET_NORMAL_UPGRADED, ("never pass LOCOMOTORSET_NORMAL_UPGRADED here"));
+	engine::debug::invariant((wst != LOCOMOTORSET_NORMAL_UPGRADED), "wst != LOCOMOTORSET_NORMAL_UPGRADED", __FILE__, __LINE__, "never pass LOCOMOTORSET_NORMAL_UPGRADED here");
 	if (wst == LOCOMOTORSET_NORMAL && m_upgradedLocomotors)
 		wst = LOCOMOTORSET_NORMAL_UPGRADED;
 
@@ -952,7 +954,7 @@ Object* AIUpdateInterface::checkForCrateToPickup()
 //-------------------------------------------------------------------------------------------------
 void AIUpdateInterface::doSurrenderUpdateStuff()
 {
-	RELEASE_CRASH(("Read the comment in doSurrenderUpdateStuff"));
+	engine::debug::panic("Read the comment in doSurrenderUpdateStuff");
 
 	/*
 		If you ever re-enable this code, you must convert it to be
@@ -1032,12 +1034,11 @@ void AIUpdateInterface::friend_notifyStateMachineChanged()
 /**
  * The "main loop" of the AI subsystem
  */
-DECLARE_PERF_TIMER(AIUpdateInterface_update)
 UpdateSleepTime AIUpdateInterface::update()
 {
-	//DEBUG_LOG(("AIUpdateInterface frame %d: %08lx",TheGameLogic->getFrame(),getObject()));
+	//engine::debug::log_info("AIUpdateInterface frame %d: %08lx",TheGameLogic->getFrame(),getObject());
 
-	USE_PERF_TIMER(AIUpdateInterface_update)
+	engine::profiling::Scope profile_scope_1039("AIUpdateInterface_update");
 
 	m_isInUpdate = TRUE;
 
@@ -1150,7 +1151,7 @@ UpdateSleepTime AIUpdateInterface::update()
 		subMachineSleep = tmp;
 
 #ifdef ALLOW_DEMORALIZE
-	RELEASE_CRASH(("If ALLOW_DEMORALIZE is ever defined, this code must be redone to do proper SLEEPY updates. (srj)"));
+	engine::debug::panic("If ALLOW_DEMORALIZE is ever defined, this code must be redone to do proper SLEEPY updates. (srj)");
 	// update the demoralized frames if present
 	if( m_demoralizedFramesLeft > 0 )
 	{
@@ -1159,7 +1160,7 @@ UpdateSleepTime AIUpdateInterface::update()
 #endif
 
 #ifdef ALLOW_SURRENDER
-	RELEASE_CRASH(("If ALLOW_SURRENDER is ever defined, this code must be redone to do proper SLEEPY updates. (srj)"));
+	engine::debug::panic("If ALLOW_SURRENDER is ever defined, this code must be redone to do proper SLEEPY updates. (srj)");
 	doSurrenderUpdateStuff();
 #endif
 
@@ -1390,7 +1391,7 @@ Bool AIUpdateInterface::blockedBy(Object *other)
 
 	Real collisionAngle = ThePartitionManager->getRelativeAngle2D( obj, &otherPos );
 	Real otherAngle = ThePartitionManager->getRelativeAngle2D( other, &pos );
-	//DEBUG_LOG(("Collision angle %.2f, %.2f, %s, %x %s", collisionAngle*180/PI, otherAngle*180/PI, obj->getTemplate()->getName().str(), obj, other->getTemplate()->getName().str()));
+	//engine::debug::log_info("Collision angle %.2f, %.2f, %s, %x %s", collisionAngle*180/PI, otherAngle*180/PI, obj->getTemplate()->getName().str(), obj, other->getTemplate()->getName().str());
 	Real angleLimit = PI/4; // 45 degrees.
 	if (collisionAngle>PI/2 || collisionAngle<-PI/2) {
 		return FALSE; // we're moving away.
@@ -1410,7 +1411,7 @@ Bool AIUpdateInterface::blockedBy(Object *other)
 					return FALSE;
 				}
 			}	else {
-				//DEBUG_LOG(("Moving Away From EachOther"));
+				//engine::debug::log_info("Moving Away From EachOther");
 				return FALSE;  // moving away, so no need for corrective action.
 			}
 		} else {
@@ -1441,7 +1442,7 @@ Bool AIUpdateInterface::needToRotate()
 	if (getPath())
 	{
 		ClosestPointOnPathInfo info;
-		CRCDEBUG_LOG(("AIUpdateInterface::needToRotate() - calling computePointOnPath() for object %d", getObject()->getID()));
+		engine::debug::log_trace("AIUpdateInterface::needToRotate() - calling computePointOnPath() for object %d", getObject()->getID());
 		getPath()->computePointOnPath(getObject(), m_locomotorSet, *getObject()->getPosition(), info);
 		deltaAngle = ThePartitionManager->getRelativeAngle2D( getObject(), &info.posOnPath );
 	}
@@ -1533,7 +1534,7 @@ Bool AIUpdateInterface::processCollision(PhysicsBehavior *physics, Object *other
 #endif
 			}
 
-			//DEBUG_LOG(("Blocked %s, %x, %s", getObject()->getTemplate()->getName().str(), getObject(), other->getTemplate()->getName().str()));
+			//engine::debug::log_info("Blocked %s, %x, %s", getObject()->getTemplate()->getName().str(), getObject(), other->getTemplate()->getName().str());
 			if (m_blockedFrames==0) m_blockedFrames = 1;
 			if (!needToRotate())
 			{
@@ -1541,7 +1542,7 @@ Bool AIUpdateInterface::processCollision(PhysicsBehavior *physics, Object *other
 				if (!otherMoving)
 				{
 					// Intense logging jba
-					// DEBUG_LOG(("Blocked&Stuck !otherMoving"));
+					// engine::debug::log_info("Blocked&Stuck !otherMoving");
 					m_isBlockedAndStuck = TRUE;
 					return FALSE;
 				}
@@ -1558,7 +1559,7 @@ Bool AIUpdateInterface::processCollision(PhysicsBehavior *physics, Object *other
 							aiMoveAwayFromUnit(aiOther->getObject(), CMD_FROM_AI);
 							//m_isBlockedAndStuck = TRUE;
 							// Intense logging jba.
-							// DEBUG_LOG(("Blocked&Stuck other is blockedByUs, has higher priority"));
+							// engine::debug::log_info("Blocked&Stuck other is blockedByUs, has higher priority");
 						}
 					}
 				}
@@ -1600,7 +1601,7 @@ Bool AIUpdateInterface::processCollision(PhysicsBehavior *physics, Object *other
 				return false;  // we are doing a special ability.  Shouldn't move at this time.  jba.
 			}
 			// jba intense debug
-			//DEBUG_LOG(("*****Units ended up on top of each other.  Shouldn't happen."));
+			//engine::debug::log_info("*****Units ended up on top of each other.  Shouldn't happen.");
 			if (isIdle()) {
 				Coord3D safePosition = *getObject()->getPosition();
 
@@ -1876,7 +1877,7 @@ Bool AIUpdateInterface::computeAttackPath( PathfindServicesInterface *pathServic
 	Weapon *weapon = source->getCurrentWeapon();
 	if (!weapon)
 	{
-		DEBUG_CRASH(("no weapon in AIUpdateInterface::computeAttackPath"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "no weapon in AIUpdateInterface::computeAttackPath");
 		return FALSE;
 	}
 
@@ -1987,8 +1988,7 @@ Bool AIUpdateInterface::computeAttackPath( PathfindServicesInterface *pathServic
 		// build a trivial one-node path containing destination
 
 		weapon->computeApproachTarget(getObject(), victim, &localVictimPos, 0, localVictimPos);
-		//DEBUG_ASSERTCRASH(weapon->isGoalPosWithinAttackRange(getObject(), &localVictimPos, victim, victimPos, nullptr),
-		//	("position we just calced is not acceptable"));
+		//engine::debug::invariant((weapon->isGoalPosWithinAttackRange(getObject(), &localVictimPos, victim, victimPos, nullptr)), "weapon->isGoalPosWithinAttackRange(getObject(), &localVictimPos, victim, victimPos, nullptr)", __FILE__, __LINE__, //	("position we just calced is not acceptable"));
 
 		// First, see if our path already goes to the destination.
 		if (m_path)
@@ -2193,13 +2193,12 @@ Bool AIUpdateInterface::isValidLocomotorPosition(const Coord3D* pos) const
 }
 
 //-------------------------------------------------------------------------------------------------
-DECLARE_PERF_TIMER(doLocomotor)
 /**
  * Compute drive forces
  */
 UpdateSleepTime AIUpdateInterface::doLocomotor()
 {
-	USE_PERF_TIMER(doLocomotor)
+	engine::profiling::Scope profile_scope_2199("doLocomotor");
 
 	if (getObject()->isKindOf(KINDOF_IMMOBILE))
 		return UPDATE_SLEEP_FOREVER;
@@ -2254,12 +2253,12 @@ UpdateSleepTime AIUpdateInterface::doLocomotor()
 							{
 								return UPDATE_SLEEP_FOREVER;  // Can't move till we get our path.
 							}
-							DEBUG_LOG(("Dead %d, obj %s %x", isAiInDeadState(), getObject()->getTemplate()->getName().str(), getObject()));
+							engine::debug::log_info("Dead %d, obj %s %x", isAiInDeadState(), getObject()->getTemplate()->getName().str(), getObject());
 #ifdef STATE_MACHINE_DEBUG
-							DEBUG_LOG(("Waiting %d, state %s", m_waitingForPath, getStateMachine()->getCurrentStateName().str()));
+							engine::debug::log_info("Waiting %d, state %s", m_waitingForPath, getStateMachine()->getCurrentStateName().str());
 							m_stateMachine->setDebugOutput(1);
 #endif
-							DEBUG_CRASH(("must have a path here (doLocomotor)"));
+							engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "must have a path here (doLocomotor)");
 							break;
 						}
 						Coord3D goalPos;
@@ -2274,8 +2273,8 @@ UpdateSleepTime AIUpdateInterface::doLocomotor()
 							// Compute the actual goal position along the path to move towards.  Consider
 							// obstacles, and follow the intermediate path points.
 							ClosestPointOnPathInfo info;
-							CRCDEBUG_LOG(("AIUpdateInterface::doLocomotor() - calling computePointOnPath() for %s",
-								DebugDescribeObject(getObject()).str()));
+							engine::debug::log_trace("AIUpdateInterface::doLocomotor() - calling computePointOnPath() for %s",
+								DebugDescribeObject(getObject()).str());
 							getPath()->computePointOnPath(getObject(), m_locomotorSet, *getObject()->getPosition(), info);
 							onPathDistToGoal = info.distAlongPath;
 							goalPos = info.posOnPath;
@@ -2403,7 +2402,7 @@ void AIUpdateInterface::setLocomotorGoalPositionExplicit(const Coord3D& newPos)
 #ifdef RTS_DEBUG
 if (_isnan(m_locomotorGoalData.x) || _isnan(m_locomotorGoalData.y) || _isnan(m_locomotorGoalData.z))
 {
-	DEBUG_CRASH(("NAN in setLocomotorGoalPositionExplicit"));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "NAN in setLocomotorGoalPositionExplicit");
 }
 #endif
 }
@@ -2423,7 +2422,7 @@ void AIUpdateInterface::setLocomotorGoalOrientation(Real angle)
 #ifdef RTS_DEBUG
 if (_isnan(m_locomotorGoalData.x) || _isnan(m_locomotorGoalData.y) || _isnan(m_locomotorGoalData.z))
 {
-	DEBUG_CRASH(("NAN in setLocomotorGoalOrientation"));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "NAN in setLocomotorGoalOrientation");
 }
 #endif
 }
@@ -2475,7 +2474,7 @@ Bool AIUpdateInterface::isDoingGroundMovement() const
 	}
 
 	// After all exceptions, we must be doing ground movement.
-	//DEBUG_ASSERTLOG(getObject()->isSignificantlyAboveTerrain(), ("Object %s is significantly airborne but also doing ground movement. What?",getObject()->getTemplate()->getName().str()));
+	//if (!(getObject()->isSignificantlyAboveTerrain())) engine::debug::log_error("Object %s is significantly airborne but also doing ground movement. What?",getObject()->getTemplate()->getName().str());
 	return TRUE;
 }
 
@@ -2530,18 +2529,18 @@ Real AIUpdateInterface::getLocomotorDistanceToGoal()
 	switch (m_locomotorGoalType)
 	{
 		case POSITION_EXPLICIT:
-			DEBUG_CRASH(("not yet implemented"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "not yet implemented");
 			return 0.0f;
 
 		case POSITION_ON_PATH:
 			if (!getPath())
 			{
-				DEBUG_CRASH(("must have a path here (getLocomotorDistanceToGoal)"));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "must have a path here (getLocomotorDistanceToGoal)");
 				return 0.0f;
 			}
 			else if (!m_curLocomotor)
 			{
-				//DEBUG_LOG(("no locomotor here, so no dist. (this is ok.)"));
+				//engine::debug::log_info("no locomotor here, so no dist. (this is ok.)");
 				return 0.0f;
 			}
 			else if( m_curLocomotor->isCloseEnoughDist3D() || getObject()->isKindOf(KINDOF_PROJECTILE))
@@ -2566,7 +2565,7 @@ Real AIUpdateInterface::getLocomotorDistanceToGoal()
 				}	else {
 					// Ground based locomotor.
 					ClosestPointOnPathInfo info;
-					CRCDEBUG_LOG(("AIUpdateInterface::getLocomotorDistanceToGoal() - calling computePointOnPath() for object %d", getObject()->getID()));
+					engine::debug::log_trace("AIUpdateInterface::getLocomotorDistanceToGoal() - calling computePointOnPath() for object %d", getObject()->getID());
 					getPath()->computePointOnPath(getObject(), m_locomotorSet, *getObject()->getPosition(), info);
 					goalPos = info.posOnPath;
 					dist = info.distAlongPath;
@@ -2723,7 +2722,7 @@ void AIUpdateInterface::aiDoCommand(const AICommandParms* parms)
 				break;
 
 			default:
-				DEBUG_LOG(("ignoring ai cmd due to surrender condition"));
+				engine::debug::log_info("ignoring ai cmd due to surrender condition");
 				return;
 		}
 	}
@@ -2957,7 +2956,7 @@ void AIUpdateInterface::aiDoCommand(const AICommandParms* parms)
 			privateMoveAwayFromUnit( parms->m_obj, parms->m_cmdSource );
 			break;
 		default:
-			DEBUG_CRASH(("unhandled AI command!"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "unhandled AI command!");
 			break;
 	}
 }
@@ -3898,7 +3897,7 @@ void AIUpdateInterface::privateDock( Object *obj, CommandSourceType cmdSource )
 //----------------------------------------------------------------------------------------
 void AIUpdateInterface::privateCombatDrop( Object *target, const Coord3D& pos, CommandSourceType cmdSource )
 {
-	DEBUG_CRASH(("default implementation, should never be called"));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "default implementation, should never be called");
 	if( getObject()->getContain() )
 	{
 		getObject()->getContain()->removeAllContained(FALSE);
@@ -4275,7 +4274,7 @@ void AIUpdateInterface::privateHackInternet( CommandSourceType cmdSource )
 	}
 	else
 	{
-		DEBUG_CRASH(("Unit %s is expecting a 'Update = HackInternetAIUpdate' entry in FactionUnit.ini", getObject()->getTemplate()->getName().str() ) );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unit %s is expecting a 'Update = HackInternetAIUpdate' entry in FactionUnit.ini", getObject()->getTemplate()->getName().str() );
 	}
 }
 
@@ -4472,7 +4471,7 @@ UnsignedInt AIUpdateInterface::getMoodMatrixValue() const
 			case ATTITUDE_ALERT:			returnVal |= MM_Mood_Alert; break;
 			case ATTITUDE_AGGRESSIVE:	returnVal |= MM_Mood_Aggressive; break;
 			default:
-				DEBUG_CRASH(("Unknown mood '%d' in getMoodMatrixValue. (Team '%s'). Using normal. (jkmcd)", getAttitude(), getObject()->getTeam()->getName().str() ));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unknown mood '%d' in getMoodMatrixValue. (Team '%s'). Using normal. (jkmcd)", getAttitude(), getObject()->getTeam()->getName().str() );
 				returnVal |= MM_Mood_Normal;
 				break;
 		}
@@ -4689,7 +4688,7 @@ Object* AIUpdateInterface::getNextMoodTarget( Bool calledByAI, Bool calledDuring
 			return teamVictim;
 	}
 
-	DEBUG_ASSERTCRASH(m_nextMoodCheckTime != 0, ("m_nextMoodCheckTime should never be zero here."));
+	engine::debug::invariant((m_nextMoodCheckTime != 0), "m_nextMoodCheckTime != 0", __FILE__, __LINE__, "m_nextMoodCheckTime should never be zero here.");
 
 	if (calledByAI)
 	{
@@ -4773,7 +4772,7 @@ Object* AIUpdateInterface::getNextMoodTarget( Bool calledByAI, Bool calledDuring
 	Object *newVictim = TheAI->findClosestEnemy(obj, rangeToFindWithin, flags, getAttackInfo());
 
 /*
-DEBUG_LOG(("GNMT frame %d: %s %08lx (con %s %08lx) uses range %f, flags %08lx, %s finds %s %08lx",
+engine::debug::log_info("GNMT frame %d: %s %08lx (con %s %08lx) uses range %f, flags %08lx, %s finds %s %08lx",
 	now,
 	obj->getTemplate()->getName().str(),
 	obj,
@@ -4784,12 +4783,12 @@ DEBUG_LOG(("GNMT frame %d: %s %08lx (con %s %08lx) uses range %f, flags %08lx, %
 	getAttackInfo() != nullptr && getAttackInfo() != TheScriptEngine->getDefaultAttackInfo() ? "ATTACKINFO," : "",
 	newVictim ? newVictim->getTemplate()->getName().str() : "",
 	newVictim
-));
+);
 */
 
 	if (newVictim)
 	{
-		CRCDEBUG_LOG(("AIUpdateInterface::getNextMoodTarget() - %d is attacking %d", obj->getID(), newVictim->getID()));
+		engine::debug::log_trace("AIUpdateInterface::getNextMoodTarget() - %d is attacking %d", obj->getID(), newVictim->getID());
 /*
 srj debug hack. ignore.
 Int ot = getTmpValue();
@@ -5021,13 +5020,13 @@ void AIUpdateInterface::privateCommandButton( const CommandButton *commandButton
 							default:
 								if( owner->getName().isNotEmpty() )
 								{
-									DEBUG_CRASH( ("AIUpdate::privateCommandButton() -- unit %s ('%s'), command %s not implemented.",
-										owner->getTemplate()->getName().str(), owner->getName().str(), commandButton->getTextLabel().str() ) );
+									engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "AIUpdate::privateCommandButton() -- unit %s ('%s'), command %s not implemented.",
+										owner->getTemplate()->getName().str(), owner->getName().str(), commandButton->getTextLabel().str() );
 								}
 								else
 								{
-									DEBUG_CRASH( ("AIUpdate::privateCommandButton() -- unit %s, command %s not implemented.",
-										owner->getTemplate()->getName().str(), commandButton->getTextLabel().str() ) );
+									engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "AIUpdate::privateCommandButton() -- unit %s, command %s not implemented.",
+										owner->getTemplate()->getName().str(), commandButton->getTextLabel().str() );
 								}
 						}
 					}
@@ -5074,13 +5073,13 @@ void AIUpdateInterface::privateCommandButtonPosition( const CommandButton *comma
 							default:
 								if( owner->getName().isNotEmpty() )
 								{
-									DEBUG_CRASH( ("AIUpdate::privateCommandButtonPosition() -- unit %s ('%s'), command %s not implemented.",
-										owner->getTemplate()->getName().str(), owner->getName().str(), commandButton->getTextLabel().str() ) );
+									engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "AIUpdate::privateCommandButtonPosition() -- unit %s ('%s'), command %s not implemented.",
+										owner->getTemplate()->getName().str(), owner->getName().str(), commandButton->getTextLabel().str() );
 								}
 								else
 								{
-									DEBUG_CRASH( ("AIUpdate::privateCommandButtonPosition() -- unit %s, command %s not implemented.",
-										owner->getTemplate()->getName().str(), commandButton->getTextLabel().str() ) );
+									engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "AIUpdate::privateCommandButtonPosition() -- unit %s, command %s not implemented.",
+										owner->getTemplate()->getName().str(), commandButton->getTextLabel().str() );
 								}
 								break;
 						}
@@ -5141,8 +5140,8 @@ void AIUpdateInterface::privateCommandButtonObject( const CommandButton *command
 								targetNickname.format( "('%s')", obj->getName().str() );
 							}
 
-							DEBUG_CRASH( ("AIUpdate::privateCommandButtonPosition() -- unit %s %s, command %s at unit %s %s not implemented.",
-								myName.str(), myNickname.str(), commandButton->getTextLabel().str(), targetName.str(), targetNickname.str() ) );
+							engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "AIUpdate::privateCommandButtonPosition() -- unit %s %s, command %s at unit %s %s not implemented.",
+								myName.str(), myNickname.str(), commandButton->getTextLabel().str(), targetName.str(), targetNickname.str() );
 						}
 					}
 				}
@@ -5167,13 +5166,13 @@ AIGroup *AIUpdateInterface::getGroup()
 // ------------------------------------------------------------------------------------------------
 void AIUpdateInterface::crc( Xfer *x )
 {
-	CRCGEN_LOG(("AIUpdateInterface::crc() begin - %8.8X", ((XferCRC *)x)->getCRC()));
+	engine::debug::log_info("AIUpdateInterface::crc() begin - %8.8X", ((XferCRC *)x)->getCRC());
 	// extend base class
 	UpdateModule::crc( x );
 
 	xfer(x);
 
-	CRCGEN_LOG(("AIUpdateInterface::crc() end - %8.8X", ((XferCRC *)x)->getCRC()));
+	engine::debug::log_info("AIUpdateInterface::crc() end - %8.8X", ((XferCRC *)x)->getCRC());
 
 }
 
@@ -5266,7 +5265,7 @@ void AIUpdateInterface::xfer( Xfer *xfer )
 
 	xfer->xferInt(&m_waypointCount);
 	if (m_waypointCount<0 || m_waypointCount>MAX_WAYPOINTS) {
-		DEBUG_CRASH(("Invalid waypoint count %d, max = %d", m_waypointCount, MAX_WAYPOINTS));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Invalid waypoint count %d, max = %d", m_waypointCount, MAX_WAYPOINTS);
 		throw SC_INVALID_DATA;
 	}
 	Int i;
@@ -5406,7 +5405,7 @@ void AIUpdateInterface::xfer( Xfer *xfer )
 	else if (version == 2)
 	{
 #ifdef ALLOW_SURRENDER
-		DEBUG_CRASH(("fix me ALLOW_SURRENDER"));	// should not happen
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "fix me ALLOW_SURRENDER");	// should not happen
 #endif
 		// demoralize only
 #ifdef ALLOW_DEMORALIZE
@@ -5420,10 +5419,10 @@ void AIUpdateInterface::xfer( Xfer *xfer )
 	{
 		// else no surrender or demoralize
 #ifdef ALLOW_SURRENDER
-		DEBUG_CRASH(("fix me ALLOW_SURRENDER"));	// should not happen
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "fix me ALLOW_SURRENDER");	// should not happen
 #endif
 #ifdef ALLOW_DEMORALIZE
-		DEBUG_CRASH(("fix me ALLOW_DEMORALIZE"));	// should not happen
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "fix me ALLOW_DEMORALIZE");	// should not happen
 #endif
 	}
 

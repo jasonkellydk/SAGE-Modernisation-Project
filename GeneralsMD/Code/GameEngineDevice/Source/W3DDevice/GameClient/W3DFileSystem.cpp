@@ -42,13 +42,14 @@
 // #define MAINTAIN_LEGACY_FILES
 
 #include "Common/ArchiveFile.h"
-#include "Common/Debug.h"
+
 #include "Common/file.h"
 #include "Common/FileSystem.h"
 #include "Common/GlobalData.h"
 #include "Common/MapObject.h"
 #include "Common/RuntimeConfig.h"
 #include "W3DDevice/GameClient/W3DFileSystem.h"
+import engine.debug;
 
 import Assets.Identity;
 
@@ -528,9 +529,9 @@ void W3DFileSystem::reprioritizeTexturesBySize(ArchivedDirectoryInfo& dirInfo)
 						std::swap(it0->second, it1->second);
 
 #if ENABLE_FILESYSTEM_LOGGING
-						DEBUG_LOG(("W3DFileSystem::reprioritizeTexturesBySize - prioritize %s(%ukb) from %s over %s(%ukb) from %s",
+						engine::debug::log_info("W3DFileSystem::reprioritizeTexturesBySize - prioritize %s(%ukb) from %s over %s(%ukb) from %s",
 							file1.str(), UnsignedInt(info1.size() / 1024), archive1->getName().str(),
-							file0.str(), UnsignedInt(info0.size() / 1024), archive0->getName().str()));
+							file0.str(), UnsignedInt(info0.size() / 1024), archive0->getName().str());
 #endif
 					}
 				}

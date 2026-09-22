@@ -23,7 +23,8 @@
 // Ease in and out based on a parabolic function.
 // Author: Robert Minsk May 12, 2003
 // ============================================================================
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 #include "GameClient/ParabolicEase.h"
 // ============================================================================
 // ============================================================================
@@ -49,18 +50,18 @@ ParabolicEase::setEaseTimes(Real easeInTime, Real easeOutTime)
 {
 	m_in = easeInTime;
 	if (m_in < 0.0f || m_in > 1.0f) {
-		DEBUG_CRASH(("Ease-in out of range (in = %g)", m_in));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Ease-in out of range (in = %g)", m_in);
 		m_in = clamp(m_in);
 	}
 
 	m_out = 1.0f - easeOutTime;
 	if (m_out < 0.0f || m_out > 1.0f) {
-		DEBUG_CRASH(("Ease-out out of range (out = %g)", m_out));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Ease-out out of range (out = %g)", m_out);
 		m_out = clamp(m_out);
 	}
 
 	if (m_in > m_out) {
-		DEBUG_ASSERTCRASH(m_in <= m_out + FLT_EPSILON, ("Ease-in and ease-out overlap (in = %g, out = %g)", m_in, m_out));
+		engine::debug::invariant((m_in <= m_out + FLT_EPSILON), "m_in <= m_out + FLT_EPSILON", __FILE__, __LINE__, "Ease-in and ease-out overlap (in = %g, out = %g)", m_in, m_out);
 		m_in = m_out;
 	}
 }
@@ -70,7 +71,7 @@ Real
 ParabolicEase::operator ()(Real param) const
 {
 	if (param < 0.0f || param > 1.0f) {
-		DEBUG_CRASH(("Ease-in/ease-out parameter out of range (param = %g)", param));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Ease-in/ease-out parameter out of range (param = %g)", param);
 		param = clamp(param);
 	}
 #if 0

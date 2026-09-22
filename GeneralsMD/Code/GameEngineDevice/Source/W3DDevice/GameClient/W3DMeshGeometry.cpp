@@ -30,9 +30,10 @@
 #include "WWMath/obbox.h"
 #include "WWMath/sphere.h"
 #include "WWMath/plane.h"
-#include "WWDebug/wwdebug.h"
-#include "WWDebug/wwmemlog.h"
+
+
 #include "WWMath/vp.h"
+import engine.debug;
 import Assets.Adapters.W3D.Chunks;
 import Graphics.Scene.Models.Hierarchy;
 import Graphics.Scene.Models.GeometryMath;
@@ -102,7 +103,7 @@ void W3DMeshGeometry::Set_User_Text(char * usertext)
 
 void W3DMeshGeometry::Get_Bounding_Box(AABoxClass * set_box)
 {
-	WWASSERT(set_box != nullptr);
+	engine::debug::assert_condition((set_box != nullptr), "set_box != nullptr", __FILE__, __LINE__, "assertion failed");
 	set_box->Center = (Geometry.maximum + Geometry.minimum) * 0.5f;
 	set_box->Extent = (Geometry.maximum - Geometry.minimum) * 0.5f;
 }
@@ -110,7 +111,7 @@ void W3DMeshGeometry::Get_Bounding_Box(AABoxClass * set_box)
 
 void W3DMeshGeometry::Get_Bounding_Sphere(SphereClass * set_sphere)
 {
-	WWASSERT(set_sphere != nullptr);
+	engine::debug::assert_condition((set_sphere != nullptr), "set_sphere != nullptr", __FILE__, __LINE__, "assertion failed");
 	set_sphere->Center = Geometry.sphere_center;
 	set_sphere->Radius = Geometry.sphere_radius;
 }
@@ -149,7 +150,7 @@ void W3DMeshGeometry::Generate_Rigid_APT(const OBBoxClass & local_box,const Vect
 
 void W3DMeshGeometry::Generate_Skin_APT(const OBBoxClass & world_box, SimpleDynVecClass<uint32> & apt, const Vector3 *world_vertex_locs)
 {
-    WWASSERT(world_vertex_locs);
+    engine::debug::assert_condition((world_vertex_locs), "world_vertex_locs", __FILE__, __LINE__, "assertion failed");
     const MeshQueryAdapter::Triangles triangles(*this, world_vertex_locs);
     Graphics::Collect_Model_Polygons(std::views::iota(std::uint32_t{0}, static_cast<std::uint32_t>(Get_Polygon_Count())),
         [&](std::uint32_t polygon) { return triangles.Test(polygon, [&](const TriClass& triangle) {
@@ -294,7 +295,7 @@ int W3DMeshGeometry::cast_semi_infinite_axis_aligned_ray(const Vector3 & start_p
 	unsigned char & flags)
 {
     if (CullTree) return MeshQueryAdapter::Count_Axis_Ray(*CullTree, *this, start_point, axis_dir, flags);
-    WWASSERT(axis_dir >= 0 && axis_dir < 6);
+    engine::debug::assert_condition((axis_dir >= 0 && axis_dir < 6), "axis_dir >= 0 && axis_dir < 6", __FILE__, __LINE__, "assertion failed");
     const int axis = axis_dir / 2, first = (axis + 1) % 3, second = (axis + 2) % 3;
     const int direction = (axis_dir & 1) == 0;
     const auto* vertices = Peek_Vertex_Array();
@@ -458,7 +459,7 @@ void W3DMeshGeometry::Compute_Plane_Equations(Vector4 * peq)
 void W3DMeshGeometry::Compute_Vertex_Normals(Vector3 * vnorm)
 {
     Geometry.revision.Invalidate();
-    WWASSERT(vnorm);
+    engine::debug::assert_condition((vnorm), "vnorm", __FILE__, __LINE__, "assertion failed");
     if (Geometry.polygon_count == 0 || Geometry.vertex_count == 0) return;
     const auto* planes = Get_Plane_Array();
     const auto* shade_indices = Get_Vertex_Shade_Index_Array(false);
@@ -481,7 +482,7 @@ void W3DMeshGeometry::Compute_Bounds(Vector3 * verts)
 
 Vector3 * W3DMeshGeometry::get_vert_normals()
 {
-    WWASSERT(Geometry.normals);
+	engine::debug::assert_condition((Geometry.normals != nullptr), "Geometry.normals != nullptr", __FILE__, __LINE__, "assertion failed");
     return Geometry.normals->data();
 }
 
@@ -508,8 +509,8 @@ const Vector4 * W3DMeshGeometry::Get_Plane_Array(bool create)
 
 void W3DMeshGeometry::Compute_Plane(int pidx,PlaneClass * set_plane) const
 {
-	WWASSERT(pidx >= 0);
-	WWASSERT(pidx < Geometry.polygon_count);
+	engine::debug::assert_condition((pidx >= 0), "pidx >= 0", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((pidx < Geometry.polygon_count), "pidx < Geometry.polygon_count", __FILE__, __LINE__, "assertion failed");
 	TriIndex & poly = Geometry.triangles->data()[pidx];
 	Vector3 * verts = Geometry.positions->data();
 
@@ -519,7 +520,7 @@ void W3DMeshGeometry::Compute_Plane(int pidx,PlaneClass * set_plane) const
 
 void W3DMeshGeometry::Generate_Culling_Tree()
 {
- WWMEMLOG(MEM_CULLINGDATA);
+
  std::vector<Assets::Vector3f> vertices(Geometry.vertex_count);
  for (int i = 0; i < Geometry.vertex_count; ++i) {
   const auto& source = Geometry.positions->data()[i];
@@ -533,9 +534,9 @@ void W3DMeshGeometry::Generate_Culling_Tree()
  Assets::MeshBoundsTree tree;
  const bool built = Assets::Build_Mesh_Bounds_Tree(vertices, triangles,
   [] { return static_cast<unsigned>(rand()); }, tree);
- WWASSERT(built);
+ engine::debug::assert_condition((built), "built", __FILE__, __LINE__, "assertion failed");
  if (!built) return;
- DEBUG_ASSERTCRASH(CullTree == nullptr, ("W3DMeshGeometry::Generate_Culling_Tree: Leaking CullTree"));
+ engine::debug::invariant((CullTree == nullptr), "CullTree == nullptr", __FILE__, __LINE__, "W3DMeshGeometry::Generate_Culling_Tree: Leaking CullTree");
  CullTree = std::make_unique<Graphics::ModelBoundsTree>(std::move(tree));
 }
 
@@ -615,7 +616,7 @@ bool W3DMeshGeometry::Load_W3D(ChunkLoadClass& cload) {
 void W3DMeshGeometry::Scale(const Vector3 &sc)
 {
     Geometry.revision.Invalidate();
-    WWASSERT(Geometry.positions);
+	engine::debug::assert_condition((Geometry.positions != nullptr), "Geometry.positions != nullptr", __FILE__, __LINE__, "assertion failed");
     if (Graphics::Scale_Model_Geometry(std::span<Vector3>(*Geometry.positions), Geometry.minimum, Geometry.maximum,
         Geometry.sphere_center, Geometry.sphere_radius, sc)) Set_Flag(DIRTY_VNORMALS, true);
     Set_Flag(DIRTY_PLANES, true);
@@ -638,7 +639,7 @@ void W3DMeshGeometry::Scale(const Vector3 &sc)
 // Destination pointers MUST point to arrays large enough to hold all vertices
 void W3DMeshGeometry::get_deformed_vertices(Vector3 *dst_vert,const Graphics::ModelHierarchy * htree)
 {
-    WWASSERT(htree && Geometry.positions && Geometry.bone_indices);
+    engine::debug::assert_condition((htree && Geometry.positions && Geometry.bone_indices), "htree && Geometry.positions && Geometry.bone_indices", __FILE__, __LINE__, "assertion failed");
     Graphics::Deform_Model_Geometry(std::span<const Vector3>(*Geometry.positions), std::span<const Vector3>{},
         std::span<const std::uint16_t>(*Geometry.bone_indices), *htree,
         std::span(dst_vert, static_cast<std::size_t>(Geometry.vertex_count)));
@@ -648,10 +649,9 @@ void W3DMeshGeometry::get_deformed_vertices(Vector3 *dst_vert,const Graphics::Mo
 // Destination pointers MUST point to arrays large enough to hold all vertices
 void W3DMeshGeometry::get_deformed_vertices(Vector3 *dst_vert, Vector3 *dst_norm,const Graphics::ModelHierarchy * htree)
 {
-    WWASSERT(htree && Geometry.positions && Geometry.normals && Geometry.bone_indices);
+    engine::debug::assert_condition((htree && Geometry.positions && Geometry.normals && Geometry.bone_indices), "htree && Geometry.positions && Geometry.normals && Geometry.bone_indices", __FILE__, __LINE__, "assertion failed");
     Graphics::Deform_Model_Geometry(std::span<const Vector3>(*Geometry.positions), std::span<const Vector3>(*Geometry.normals),
         std::span<const std::uint16_t>(*Geometry.bone_indices), *htree,
         std::span(dst_vert, static_cast<std::size_t>(Geometry.vertex_count)),
         std::span(dst_norm, static_cast<std::size_t>(Geometry.vertex_count)));
 }
-

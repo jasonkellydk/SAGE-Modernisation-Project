@@ -44,7 +44,7 @@
 #include <W3DDevice/GameClient/W3DCastQuery.h>
 #include "W3DDevice/GameClient/W3DCamera.h"
 #include "Common/GlobalData.h"
-#include "Common/PerfTimer.h"
+
 
 #include "GameClient/TerrainVisual.h"
 #include "GameClient/View.h"
@@ -71,6 +71,7 @@
 
 #include "W3DDevice/GameClient/CameraShakeSystem.h"
 #include "W3DDevice/GameClient/W3DCamera.h"
+import engine.debug;
 
 //#include "W3DDevice/GameClient/camera.h"
 //#include "W3DDevice/GameClient/wwmemlog.h"
@@ -128,7 +129,7 @@ CameraShakeSystemClass::CameraShakerClass::~CameraShakerClass()
 
 void CameraShakeSystemClass::CameraShakerClass::Compute_Rotations(const Vector3 & camera_position, Vector3 * set_angles)
 {
-	WWASSERT(set_angles != nullptr);
+	engine::debug::assert_condition((set_angles != nullptr), "set_angles != nullptr", __FILE__, __LINE__, "assertion failed");
 
 	/*
 	** We want several different sinusiods, each with a different phase shift and

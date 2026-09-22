@@ -27,6 +27,7 @@
 #include "GameLogic/SidesList.h"
 #include "WorldBuilderDoc.h"
 #include "CUndoable.h"
+import engine.debug;
 
 /////////////////////////////////////////////////////////////////////////////
 // AddPlayerDialog dialog
@@ -85,7 +86,7 @@ void AddPlayerDialog::OnOK()
 			newSides.addPlayerByTemplate(m_addedSide);
 			Bool modified = newSides.validateSides();
 			(void)modified;
-			DEBUG_ASSERTLOG(!modified,("had to clean up sides in AddPlayerDialog::OnOK"));
+			if (!(!modified)) engine::debug::log_error("had to clean up sides in AddPlayerDialog::OnOK");
 
 			CWorldBuilderDoc* pDoc = CWorldBuilderDoc::GetActiveDoc();
 			SidesListUndoable *pUndo = new SidesListUndoable(newSides, pDoc);

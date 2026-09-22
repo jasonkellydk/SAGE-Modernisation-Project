@@ -29,6 +29,7 @@
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 #include "PreRTS.h"
+import engine.debug;
 #include "Common/GameState.h"
 #include "Common/GameUtility.h"
 #include "Common/Player.h"
@@ -417,8 +418,8 @@ void PropagandaTowerBehavior::doScan()
 			default:
 			{
 
-				DEBUG_CRASH(( "PropagandaTowerBehavior::doScan - Unknown upgrade type '%d'",
-											m_upgradeRequired->getUpgradeType() ));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "PropagandaTowerBehavior::doScan - Unknown upgrade type '%d'",
+											m_upgradeRequired->getUpgradeType() );
 				break;
 
 			}
@@ -610,7 +611,7 @@ void PropagandaTowerBehavior::xfer( Xfer *xfer )
 		if( m_insideList != nullptr )
 		{
 
-			DEBUG_CRASH(( "PropagandaTowerBehavior::xfer - m_insideList should be empty but is not" ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "PropagandaTowerBehavior::xfer - m_insideList should be empty but is not" );
 			throw SC_INVALID_DATA;
 
 		}

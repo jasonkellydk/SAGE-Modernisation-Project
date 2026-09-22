@@ -15,6 +15,7 @@
 #include <vector>
 #include "WWLib/always.h"
 #include "Lib/BaseType.h"
+#include "Common/AsciiString.h"
 #include "Common/GameType.h"
 #include "W3DDevice/GameClient/WaterMaterial.h"
 #include "W3DDevice/GameClient/WaterGeometry.h"

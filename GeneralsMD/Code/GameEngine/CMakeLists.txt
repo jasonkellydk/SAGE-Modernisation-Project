@@ -649,7 +649,6 @@ set(GAMEENGINE_SRC
     Source/Common/System/SaveGame/GameState.cpp
     Source/Common/System/SaveGame/GameStateMap.cpp
 #    Source/Common/System/Snapshot.cpp
-    Source/Common/System/StackDump.cpp
 #    Source/Common/System/StreamingArchiveFile.cpp
 #    Source/Common/System/SubsystemInterface.cpp
     Source/Common/System/Trig.cpp
@@ -1145,9 +1144,7 @@ set_property(TARGET z_gameengine PROPERTY ENGINE_NAVIGATION_EXTRACTED TRUE)
 
 target_sources(z_gameengine PRIVATE
     ${GAMEENGINE_SRC}
-    Source/Common/RuntimeModule.cpp
     ../../../Core/GameEngineDevice/Source/SDL3Device/Common/SDL3GameEngine.cpp
-    ../Main/Platform/SDLPlatformWindow.cpp
     ${CMAKE_SOURCE_DIR}/engine/gui/wnd/runtime/source/GameClient/GUI/GameFont.cppm
     ${CMAKE_SOURCE_DIR}/engine/gui/wnd/runtime/source/GameClient/GUI/GameWindow.cppm
     ${CMAKE_SOURCE_DIR}/engine/gui/wnd/runtime/source/GameClient/GUI/GameWindowGlobal.cppm
@@ -1211,6 +1208,7 @@ target_link_libraries(z_gameengine PRIVATE
     zi_always
     shell32
     SDL3::SDL3
+    engine_platform_sdl3
 )
 
 if(TARGET engine_ecs)

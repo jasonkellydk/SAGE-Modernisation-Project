@@ -6,7 +6,7 @@ import Graphics.Scene.Models.ObjectDrawing;
 import Graphics.Materials.MeshTextureMapping;
 import Graphics.Materials.State;
 #include <array>
-#include "rts/profile.h"
+
 #include <span>
 #include <vector>
 #include <cstring>
@@ -26,6 +26,7 @@ import Graphics.Scene.Props.Material;
 #include "W3DDevice/GameClient/W3DSceneClass.h"
 
 #include <algorithm>
+import engine.profiling;
 import Graphics.Scene.Views.CameraMatrices;
 import Graphics.Scene.DrawParameters;
 import Graphics.Frame.Runtime;
@@ -46,7 +47,7 @@ struct W3DObjectGraphics::State
 
     bool Extract(W3DRenderObject& object, W3DRenderContext& info)
     {
-        PROFILER_SECTION_NAME("Graphics.Objects.Extract");
+        engine::profiling::Scope profile_scope_49("Graphics.Objects.Extract");
         if (object.Is_Hidden()) return true;
         object.Validate_Transform();
         if (object.Class_ID() == W3DRenderObject::CLASSID_HLOD) {

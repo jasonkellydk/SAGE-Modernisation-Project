@@ -2,7 +2,7 @@ import Graphics.Frame.AttachmentBindings;
 import Graphics.Scene.Models.MeshDrawing;
 import Graphics.Scene.Props.Submission;
 #include "W3DDevice/GameClient/W3DDirectionalShadows.h"
-#include "rts/profile.h"
+
 #include "Common/GlobalData.h"
 #include "Common/DrawModule.h"
 #include "GameClient/Shadow.h"
@@ -14,6 +14,7 @@ import Graphics.Scene.Props.Submission;
 #include "W3DDevice/GameClient/W3DRenderContext.h"
 
 #include <algorithm>
+import engine.profiling;
 
 import Graphics.Frame.Runtime;
 import Graphics.Scene.Shadows.DirectionalRenderer;
@@ -133,7 +134,7 @@ void Reset_Directional_Shadows()
 
 bool Collect_Directional_Shadow_Casters(W3DRenderContext& info)
 {
-    PROFILER_SECTION_NAME("Graphics.Shadows.Collect");
+    engine::profiling::Scope profile_scope_136("Graphics.Shadows.Collect");
     Graphics::Get_Prop_Submission().Clear_Shadows();
     Graphics::Get_Environment_Lighting().parameters.shadow_options[0] = 0;
     Graphics::View view;

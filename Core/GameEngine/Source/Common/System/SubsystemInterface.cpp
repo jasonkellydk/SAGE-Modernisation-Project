@@ -24,29 +24,16 @@
 
 // FILE: SubsystemInterface.cpp
 // ----------------------------------------------------------------------------
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/SubsystemInterface.h"
 #include "Common/Xfer.h"
 
 
-#ifdef DUMP_PERF_STATS
-#include "GameLogic/GameLogic.h"
-#include "Common/PerfTimer.h"
-
-Real SubsystemInterface::s_msConsumed = 0;
-#endif
 
 //-----------------------------------------------------------------------------
 SubsystemInterface::SubsystemInterface()
-#ifdef DUMP_PERF_STATS
-:m_curDrawTime(0),
-m_startDrawTimeConsumed(0),
-m_startTimeConsumed(0),
-m_curUpdateTime(0),
-m_dumpUpdate(false),
-m_dumpDraw(false)
-#endif
 {
 	if (TheSubsystemList) {
 		TheSubsystemList->addSubsystem(this);
@@ -61,61 +48,6 @@ SubsystemInterface::~SubsystemInterface()
 	}
 }
 
-#ifdef DUMP_PERF_STATS
-static const Real MIN_TIME_THRESHOLD = 0.0002f; // .2 msec. [8/13/2003]
-void SubsystemInterface::UPDATE()
-{
-	__int64 startTime64;
-	__int64 endTime64,freq64;
-	GetPrecisionTimerTicksPerSec(&freq64);
-	GetPrecisionTimer(&startTime64);
-	m_startTimeConsumed = s_msConsumed;
-	update();
-	GetPrecisionTimer(&endTime64);
-	m_curUpdateTime = ((double)(endTime64-startTime64))/((double)(freq64));
-	Real subTime = s_msConsumed - m_startTimeConsumed;
-	if (m_name.isEmpty()) return;
-	if (m_curUpdateTime>MIN_TIME_THRESHOLD) {
-		m_dumpUpdate = true;
-	}
-	if (m_curUpdateTime > MIN_TIME_THRESHOLD/10.0f) {
-		//DLOG(Debug::Format("Subsys %s total time %.2f, subTime %.2f, net time %.2f\n",
-		//	m_name.str(), m_curUpdateTime*1000, subTime*1000, (m_curUpdateTime-subTime)*1000	));
-
-		m_curUpdateTime -= subTime;
-		s_msConsumed += m_curUpdateTime;
-	} else {
-		m_curUpdateTime = 0;
-	}
-
-}
-void SubsystemInterface::DRAW()
-{
-	__int64 startTime64;
-	__int64 endTime64,freq64;
-	GetPrecisionTimerTicksPerSec(&freq64);
-	GetPrecisionTimer(&startTime64);
-	m_startDrawTimeConsumed = s_msConsumed;
-	draw();
-	GetPrecisionTimer(&endTime64);
-	m_curDrawTime = ((double)(endTime64-startTime64))/((double)(freq64));
-	Real subTime = s_msConsumed - m_startDrawTimeConsumed;
-	if (m_name.isEmpty()) return;
-	if (m_curDrawTime>MIN_TIME_THRESHOLD) {
-		m_dumpDraw = true;
-	}
-	if (m_curDrawTime > MIN_TIME_THRESHOLD/10.0f) {
-		//DLOG(Debug::Format("Subsys %s total time %.2f, subTime %.2f, net time %.2f\n",
-		//	m_name.str(), m_curUpdateTime*1000, subTime*1000, (m_curUpdateTime-subTime)*1000	));
-
-		m_curDrawTime -= subTime;
-		s_msConsumed += m_curDrawTime;
-	} else {
-		m_curDrawTime = 0;
-	}
-
-}
-#endif
 
 
 //-----------------------------------------------------------------------------
@@ -126,29 +58,17 @@ SubsystemInterfaceList::SubsystemInterfaceList()
 //-----------------------------------------------------------------------------
 SubsystemInterfaceList::~SubsystemInterfaceList()
 {
-	DEBUG_ASSERTCRASH(m_subsystems.empty(), ("not empty"));
+	engine::debug::invariant((m_subsystems.empty()), "m_subsystems.empty()", __FILE__, __LINE__, "not empty");
 	shutdownAll();
 }
 
 //-----------------------------------------------------------------------------
 void SubsystemInterfaceList::addSubsystem(SubsystemInterface* sys)
 {
-#ifdef DUMP_PERF_STATS
-	m_allSubsystems.push_back(sys);
-#endif
 }
 //-----------------------------------------------------------------------------
 void SubsystemInterfaceList::removeSubsystem(SubsystemInterface* sys)
 {
-#ifdef DUMP_PERF_STATS
-	for (SubsystemList::iterator it = m_allSubsystems.begin(); it != m_allSubsystems.end(); ++it)
-	{
-		if ( (*it) == sys) {
-			m_allSubsystems.erase(it);
-			break;
-		}
-	}
-#endif
 }
 //-----------------------------------------------------------------------------
 void SubsystemInterfaceList::initSubsystem(SubsystemInterface* sys, const char* path1, const char* path2, Xfer *pXfer, AsciiString name)
@@ -195,42 +115,3 @@ void SubsystemInterfaceList::shutdownAll()
 	}
 	m_subsystems.clear();
 }
-
-#ifdef DUMP_PERF_STATS
-//-----------------------------------------------------------------------------
-AsciiString SubsystemInterfaceList::dumpTimesForAll()
-{
-
-	AsciiString buffer;
-	buffer = "ALL SUBSYSTEMS:\n";
-	//buffer.format("\nSUBSYSTEMS: total time %.2f MS\n",
-	//	SubsystemInterface::getTotalTime()*1000.0f);
-	Real misc = 0;
-	Real total = 0;
-	SubsystemInterface::clearTotalTime();
-	for (SubsystemList::reverse_iterator it = m_allSubsystems.rbegin(); it != m_allSubsystems.rend(); ++it)
-	{
-		SubsystemInterface* sys = *it;
-		total += sys->getUpdateTime();
-		if (sys->doDumpUpdate()) {
-			AsciiString curLine;
-			curLine.format("  Time %02.2f MS update() %s \n", sys->getUpdateTime()*1000.0f, sys->getName().str());
-			buffer.concat(curLine);
-		}	else {
-			misc += sys->getUpdateTime();
-		}
-		total += sys->getDrawTime();
-		if (sys->doDumpDraw()) {
-			AsciiString curLine;
-			curLine.format("  Time %02.2f MS  draw () %s \n", sys->getDrawTime()*1000.0f, sys->getName().str());
-			buffer.concat(curLine);
-		}	else {
-			misc += sys->getDrawTime();
-		}
-	}
-	AsciiString tmp;
-	tmp.format("TOTAL %.2f MS, Misc time %.2f MS\n", total*1000.0f, misc*1000.0f);
-	buffer.concat(tmp);
-	return buffer;
-}
-#endif

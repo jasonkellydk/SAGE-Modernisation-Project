@@ -36,7 +36,8 @@
 
 #include	"always.h"
 #include	"bufffile.h"
-#include	"WWDebug/wwdebug.h"
+import engine.debug;
+
 
 int		BufferedFileClass::_DesiredBufferSize	=	1024*16;
 
@@ -188,7 +189,7 @@ int BufferedFileClass::Read(void * buffer, int size)
 int BufferedFileClass::Write(void const * buffer, int size)
 {
 	if ( BufferSize != 0 ) {
-		WWASSERT( 0 );
+		engine::debug::assert_condition((0), "0", __FILE__, __LINE__, "assertion failed");
 	}
 
 	return BASECLASS::Write( buffer, size );

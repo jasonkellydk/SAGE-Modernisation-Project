@@ -1,11 +1,10 @@
 #include "SDL3Device/Common/SDL3GameEngine.h"
-#include <SDL3/SDL.h>
 #include "Common/GlobalData.h"
 #include "GameClient/Display.h"
 #include "GameClient/IMEManager.h"
 #include "GameClient/Keyboard.h"
 #include "GameClient/Mouse.h"
-#include "Platform/SDLPlatformWindow.h"
+import engine.platform.adapters.sdl3;
 
 namespace
 {
@@ -18,38 +17,7 @@ struct DisplaySizeChange
 	UnsignedInt newHeight = 0;
 };
 
-SDL_Window *windowForEvent(const SDL_Event &event)
-{
-	SDL_WindowID windowID = 0;
-	switch (event.type)
-	{
-	case SDL_EVENT_KEY_DOWN:
-	case SDL_EVENT_KEY_UP:
-		windowID = event.key.windowID;
-		break;
-	case SDL_EVENT_MOUSE_WHEEL:
-		windowID = event.wheel.windowID;
-		break;
-	case SDL_EVENT_WINDOW_RESIZED:
-	case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
-	case SDL_EVENT_WINDOW_DISPLAY_CHANGED:
-	case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
-	case SDL_EVENT_WINDOW_ENTER_FULLSCREEN:
-	case SDL_EVENT_WINDOW_LEAVE_FULLSCREEN:
-	case SDL_EVENT_WINDOW_FOCUS_GAINED:
-	case SDL_EVENT_WINDOW_FOCUS_LOST:
-		windowID = event.window.windowID;
-		break;
-	default:
-		break;
-	}
-
-	if (windowID != 0)
-		return SDL_GetWindowFromID(windowID);
-	return SDL_GetKeyboardFocus();
-}
-
-DisplaySizeChange synchronizeDisplayToWindow(SDL_Window *window)
+DisplaySizeChange synchronizeDisplayToWindow(engine::platform::IWindow* window)
 {
 	if (window == nullptr || TheDisplay == nullptr || TheTacticalView == nullptr ||
 		TheDisplay->getWidth() == 0 || TheDisplay->getHeight() == 0)
@@ -57,15 +25,15 @@ DisplaySizeChange synchronizeDisplayToWindow(SDL_Window *window)
 		return {};
 	}
 
-	int pixelWidth = 0;
-	int pixelHeight = 0;
-	if (!SDL_GetWindowSizeInPixels(window, &pixelWidth, &pixelHeight) ||
-		pixelWidth <= 0 || pixelHeight <= 0)
+	const auto drawable = window->drawable_size();
+	const int pixelWidth = drawable.width;
+	const int pixelHeight = drawable.height;
+	if (pixelWidth <= 0 || pixelHeight <= 0)
 	{
 		return {};
 	}
 
-	const Bool windowed = (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) == 0 ? TRUE : FALSE;
+	const Bool windowed = window->mode() == engine::platform::WindowMode::fullscreen ? FALSE : TRUE;
 	const UnsignedInt bitDepth = TheDisplay->getBitDepth() != 0 ?
 		TheDisplay->getBitDepth() : DEFAULT_DISPLAY_BIT_DEPTH;
 	if (TheDisplay->getWidth() == static_cast<UnsignedInt>(pixelWidth) &&
@@ -91,18 +59,23 @@ DisplaySizeChange synchronizeDisplayToWindow(SDL_Window *window)
 	return { true, oldWidth, oldHeight, TheDisplay->getWidth(), TheDisplay->getHeight() };
 }
 
-DisplaySizeChange toggleFullscreen()
+DisplaySizeChange toggleFullscreen(GameEngine& engine)
 {
-	SDL_Window *platformWindow = static_cast<SDL_Window *>(SDLPlatformWindow::window());
+	auto* platformWindow = engine.mainWindow();
 	if (platformWindow == nullptr)
 		return {};
 
-	const bool fullscreen = SDLPlatformWindow::isFullscreen();
-	if (!SDLPlatformWindow::setFullscreen(!fullscreen))
+	const bool fullscreen = platformWindow->mode() == engine::platform::WindowMode::fullscreen;
+	if (!platformWindow->set_mode(fullscreen ? engine::platform::WindowMode::windowed : engine::platform::WindowMode::fullscreen))
 		return {};
 
 	return synchronizeDisplayToWindow(platformWindow);
 }
+}
+
+SDL3GameEngine::SDL3GameEngine()
+	: GameEngine(std::make_unique<engine::platform::sdl3::SDL3PlatformAdapter>())
+{
 }
 
 void SDL3GameEngine::update()
@@ -113,33 +86,22 @@ void SDL3GameEngine::update()
 
 void SDL3GameEngine::serviceSDL3()
 {
-	SDL_Event event;
-	while (SDL_PollEvent(&event))
+	engine::platform::PlatformEvent event{};
+	while (platform().events().poll(event))
 	{
-		if (event.type == SDLPlatformWindow::fullscreenToggleEventType())
+		if (event.type == engine::platform::EventType::mouse_wheel && TheMouse != nullptr)
 		{
-			const DisplaySizeChange displayChange = toggleFullscreen();
-			if (displayChange.changed)
-				onDisplaySizeChanged(displayChange.oldWidth, displayChange.oldHeight,
-					displayChange.newWidth, displayChange.newHeight);
-			if (TheKeyboard)
-				TheKeyboard->resetKeys();
-			continue;
-		}
-
-		if (event.type == SDL_EVENT_MOUSE_WHEEL && TheMouse != nullptr)
-		{
-			Real wheelDelta = static_cast<Real>(event.wheel.y);
-			if (event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED)
+			Real wheelDelta = static_cast<Real>(event.y);
+			if (event.flipped)
 				wheelDelta = -wheelDelta;
 			TheMouse->addWheelDelta(wheelDelta);
 		}
 
-		if (event.type == SDL_EVENT_KEY_DOWN &&
-			(event.key.scancode == SDL_SCANCODE_RETURN || event.key.scancode == SDL_SCANCODE_KP_ENTER) &&
-			!event.key.repeat && (event.key.mod & SDL_KMOD_ALT) != 0)
+		if (event.type == engine::platform::EventType::key_down &&
+			(event.key == engine::platform::KeyCode::enter || event.key == engine::platform::KeyCode::keypad_enter) &&
+			!event.repeat && (event.modifiers & engine::platform::modifier_alt) != 0)
 		{
-			const DisplaySizeChange displayChange = toggleFullscreen();
+			const DisplaySizeChange displayChange = toggleFullscreen(*this);
 			if (displayChange.changed)
 				onDisplaySizeChanged(displayChange.oldWidth, displayChange.oldHeight,
 					displayChange.newWidth, displayChange.newHeight);
@@ -148,27 +110,20 @@ void SDL3GameEngine::serviceSDL3()
 			continue;
 		}
 
-		if (event.type == SDL_EVENT_WINDOW_RESIZED ||
-			event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED ||
-			event.type == SDL_EVENT_WINDOW_DISPLAY_CHANGED ||
-			event.type == SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED ||
-			event.type == SDL_EVENT_WINDOW_ENTER_FULLSCREEN ||
-			event.type == SDL_EVENT_WINDOW_LEAVE_FULLSCREEN)
+		if (event.type == engine::platform::EventType::window_resized)
 		{
-			SDL_Window *window = windowForEvent(event);
-			const DisplaySizeChange displayChange = synchronizeDisplayToWindow(window);
+			const DisplaySizeChange displayChange = synchronizeDisplayToWindow(mainWindow());
 			if (displayChange.changed)
 				onDisplaySizeChanged(displayChange.oldWidth, displayChange.oldHeight,
 					displayChange.newWidth, displayChange.newHeight);
 			continue;
 		}
 
-		if (TheIMEManager != nullptr &&
-			(TheIMEManager->serviceIMEMessage(&event, event.type, 0, 0)))
+		if (TheIMEManager != nullptr && TheIMEManager->servicePlatformEvent(event))
 			continue;
-		if (event.type == SDL_EVENT_QUIT)
+		if (event.type == engine::platform::EventType::quit || event.type == engine::platform::EventType::window_close_requested)
 			setQuitting(true);
-		else if (event.type == SDL_EVENT_WINDOW_FOCUS_GAINED)
+		else if (event.type == engine::platform::EventType::focus_gained)
 		{
 			setIsActive(true);
 			if (TheKeyboard)
@@ -176,7 +131,7 @@ void SDL3GameEngine::serviceSDL3()
 			if (TheMouse)
 				TheMouse->regainFocus();
 		}
-		else if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST)
+		else if (event.type == engine::platform::EventType::focus_lost)
 		{
 			setIsActive(false);
 			if (TheKeyboard)
@@ -185,4 +140,6 @@ void SDL3GameEngine::serviceSDL3()
 				TheMouse->loseFocus();
 		}
 	}
+	if (auto* window = mainWindow(); window != nullptr && platform().application().poll_activation_request(0))
+		platform().application().activate_window(window->id());
 }

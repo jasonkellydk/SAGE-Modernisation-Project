@@ -3,15 +3,9 @@ module;
 #include <cstddef>
 #include <span>
 
-#if defined(RTS_PROFILE_TRACY)
-#include <tracy/Tracy.hpp>
-#define GRAPHICS_PROFILE_SCOPE(name) ZoneScopedN(name)
-#else
-#define GRAPHICS_PROFILE_SCOPE(name) ((void)0)
-#endif
-
 export module Graphics.Scene.Visibility;
 
+import engine.profiling;
 export import Graphics.Scene.RenderScene;
 export import Graphics.Scene.Views.View;
 
@@ -83,7 +77,7 @@ bool Is_Visible(const Frustum &frustum, float center_x, float center_y, float ce
 
 export bool Build_Visible_Set(const RenderScene &scene, const View &view, VisibleSet &visible_set) noexcept
 {
-	GRAPHICS_PROFILE_SCOPE("Graphics::Build_Visible_Set");
+	engine::profiling::Scope profile_scope_78("Graphics::Build_Visible_Set");
 	visible_set.Clear();
 	const RenderSceneData scene_data = scene.Data();
 	for (std::size_t dense_index = 0; dense_index < scene_data.Size(); ++dense_index) {

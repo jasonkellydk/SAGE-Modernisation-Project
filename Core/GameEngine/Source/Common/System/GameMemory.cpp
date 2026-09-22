@@ -42,7 +42,9 @@
 //
 // ----------------------------------------------------------------------------
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.profiling;
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 // SYSTEM INCLUDES
 
@@ -51,7 +53,7 @@
 #include "Common/CriticalSection.h"
 #include "Common/Errors.h"
 #include "Common/GlobalData.h"
-#include "Common/PerfTimer.h"
+
 #ifdef RTS_ZEROHOUR
 #include <malloc.h>
 #endif
@@ -63,8 +65,6 @@
 #endif
 
 #ifdef MEMORYPOOL_DEBUG
-DECLARE_PERF_TIMER(MemoryPoolDebugging)
-DECLARE_PERF_TIMER(MemoryPoolInitFilling)
 #endif
 
 
@@ -129,7 +129,7 @@ DECLARE_PERF_TIMER(MemoryPoolInitFilling)
 			s_initFillerValue |= (~(s_initFillerValue << 4)) & 0xf0;
 			s_initFillerValue |= (s_initFillerValue << 8);
 			s_initFillerValue |= (s_initFillerValue << 16);
-			//DEBUG_LOG(("Setting MemoryPool initFillerValue to %08x (index %d)",s_initFillerValue,index));
+			//engine::debug::log_info("Setting MemoryPool initFillerValue to %08x (index %d)",s_initFillerValue,index);
 		}
 	#endif
 
@@ -256,10 +256,10 @@ static void* sysAllocateDoNotZero(Int numBytes)
 		throw ERROR_OUT_OF_MEMORY;
 #ifdef MEMORYPOOL_DEBUG
 	{
-		USE_PERF_TIMER(MemoryPoolDebugging)
+		engine::profiling::Scope profile_scope_257("MemoryPoolDebugging");
 		#ifdef USE_FILLER_VALUE
 		{
-			USE_PERF_TIMER(MemoryPoolInitFilling)
+			engine::profiling::Scope profile_scope_260("MemoryPoolInitFilling");
 			::memset32(p, s_initFillerValue, sysAllocationSize(p));
 		}
 		#endif
@@ -282,7 +282,7 @@ static void sysFree(void* p)
 	{
 #ifdef MEMORYPOOL_DEBUG
 		{
-			USE_PERF_TIMER(MemoryPoolDebugging)
+			engine::profiling::Scope profile_scope_283("MemoryPoolDebugging");
 			::memset32(p, GARBAGE_FILL_VALUE, sysAllocationSize(p));
 			theTotalSystemAllocationInBytes -= sysAllocationSize(p);
 		}
@@ -324,13 +324,13 @@ static void doStackDumpOutput(const char* m)
 	const char *PREPEND = "STACKTRACE";
 	if (*m == 0)
 	{
-		DEBUG_LOG((m));
+		engine::debug::log_info(m);
 	}
 	else
 	{
 		// Note - I am moving the prepend to the end, as this allows double clicking in the
 		// output window to open the file in VisualStudio.  jba.
-		DEBUG_LOG(("%s,    %s",m, PREPEND));
+		engine::debug::log_info("%s,    %s",m, PREPEND);
 	}
 }
 #endif
@@ -541,7 +541,7 @@ DynamicMemoryAllocator *TheDynamicMemoryAllocator = nullptr;
 //-----------------------------------------------------------------------------
 #ifdef MEMORYPOOL_CHECKPOINTING
 inline BlockCheckpointInfo *BlockCheckpointInfo::getNext() { return m_next; }
-inline void BlockCheckpointInfo::debugSetFreepoint(Int f) { DEBUG_ASSERTCRASH(m_freeCheckpoint == -1, ("already have a freepoint")); m_freeCheckpoint = f; }
+inline void BlockCheckpointInfo::debugSetFreepoint(Int f) { engine::debug::invariant((m_freeCheckpoint == -1), "m_freeCheckpoint == -1", __FILE__, __LINE__, "already have a freepoint"); m_freeCheckpoint = f; }
 #ifdef MEMORYPOOL_STACKTRACE
 inline void **BlockCheckpointInfo::getStacktraceInfo() { return m_stacktrace; }
 #endif
@@ -612,7 +612,7 @@ inline MemoryPoolBlob *MemoryPoolSingleBlock::getOwningBlob()
 */
 inline MemoryPoolSingleBlock *MemoryPoolSingleBlock::getNextFreeBlock()
 {
-	DEBUG_ASSERTCRASH(m_owningBlob != nullptr, ("must be called on blob block"));
+	engine::debug::invariant((m_owningBlob != nullptr), "m_owningBlob != nullptr", __FILE__, __LINE__, "must be called on blob block");
 	return m_nextBlock;
 }
 
@@ -623,9 +623,9 @@ inline MemoryPoolSingleBlock *MemoryPoolSingleBlock::getNextFreeBlock()
 */
 inline void MemoryPoolSingleBlock::setNextFreeBlock(MemoryPoolSingleBlock *b)
 {
-	//DEBUG_ASSERTCRASH(m_owningBlob != nullptr && b->m_owningBlob != nullptr, ("must be called on blob block"));
+	//engine::debug::invariant((m_owningBlob != nullptr && b->m_owningBlob != nullptr), "m_owningBlob != nullptr && b->m_owningBlob != nullptr", __FILE__, __LINE__, "must be called on blob block");
 	// don't check the 'b' block -- we need to call this before 'b' is fully initialized.
-	DEBUG_ASSERTCRASH(m_owningBlob != nullptr, ("must be called on blob block"));
+	engine::debug::invariant((m_owningBlob != nullptr), "m_owningBlob != nullptr", __FILE__, __LINE__, "must be called on blob block");
 	this->m_nextBlock = b;
 #ifdef MPSB_DLINK
 	if (b) {
@@ -640,7 +640,7 @@ inline void MemoryPoolSingleBlock::setNextFreeBlock(MemoryPoolSingleBlock *b)
 */
 inline MemoryPoolSingleBlock *MemoryPoolSingleBlock::getNextRawBlock()
 {
-	DEBUG_ASSERTCRASH(m_owningBlob == nullptr, ("must be called on raw block"));
+	engine::debug::invariant((m_owningBlob == nullptr), "m_owningBlob == nullptr", __FILE__, __LINE__, "must be called on raw block");
 	return m_nextBlock;
 }
 
@@ -650,7 +650,7 @@ inline MemoryPoolSingleBlock *MemoryPoolSingleBlock::getNextRawBlock()
 */
 inline void MemoryPoolSingleBlock::setNextRawBlock(MemoryPoolSingleBlock *b)
 {
-	DEBUG_ASSERTCRASH(m_owningBlob == nullptr && (!b || b->m_owningBlob == nullptr), ("must be called on raw block"));
+	engine::debug::invariant((m_owningBlob == nullptr && (!b || b->m_owningBlob == nullptr)), "m_owningBlob == nullptr && (!b || b->m_owningBlob == nullptr)", __FILE__, __LINE__, "must be called on raw block");
 	m_nextBlock = b;
 #ifdef MPSB_DLINK
 	if (b)
@@ -661,7 +661,7 @@ inline void MemoryPoolSingleBlock::setNextRawBlock(MemoryPoolSingleBlock *b)
 #ifdef MEMORYPOOL_DEBUG
 inline void MemoryPoolSingleBlock::debugIgnoreLeaksForThisBlock()
 {
-	//USE_PERF_TIMER(MemoryPoolDebugging) not worth it
+	//engine::profiling::Scope profile_scope_662("MemoryPoolDebugging") not worth it
 	m_debugFlags |= IGNORE_LEAKS;
 }
 /**
@@ -669,7 +669,7 @@ inline void MemoryPoolSingleBlock::debugIgnoreLeaksForThisBlock()
 */
 inline const char *MemoryPoolSingleBlock::debugGetLiteralTagString()
 {
-	//USE_PERF_TIMER(MemoryPoolDebugging) not worth it
+	//engine::profiling::Scope profile_scope_670("MemoryPoolDebugging") not worth it
 	return m_debugLiteralTagString;
 }
 #endif
@@ -680,7 +680,7 @@ inline const char *MemoryPoolSingleBlock::debugGetLiteralTagString()
 */
 inline Int MemoryPoolSingleBlock::debugGetLogicalSize()
 {
-	//USE_PERF_TIMER(MemoryPoolDebugging) not worth it
+	//engine::profiling::Scope profile_scope_681("MemoryPoolDebugging") not worth it
 	return m_logicalSize;
 }
 #endif
@@ -691,7 +691,7 @@ inline Int MemoryPoolSingleBlock::debugGetLogicalSize()
 */
 inline Int MemoryPoolSingleBlock::debugGetWastedSize()
 {
-	//USE_PERF_TIMER(MemoryPoolDebugging) not worth it
+	//engine::profiling::Scope profile_scope_692("MemoryPoolDebugging") not worth it
 	return m_wastedSize;
 }
 #endif
@@ -699,7 +699,7 @@ inline Int MemoryPoolSingleBlock::debugGetWastedSize()
 #ifdef MEMORYPOOL_DEBUG
 inline void MemoryPoolSingleBlock::debugSetWastedSize(Int w)
 {
-	//USE_PERF_TIMER(MemoryPoolDebugging) not worth it
+	//engine::profiling::Scope profile_scope_700("MemoryPoolDebugging") not worth it
 	m_wastedSize = w;
 }
 #endif
@@ -720,7 +720,7 @@ inline BlockCheckpointInfo *MemoryPoolSingleBlock::debugGetCheckpointInfo()
 */
 inline void MemoryPoolSingleBlock::debugSetCheckpointInfo(BlockCheckpointInfo *bi)
 {
-	DEBUG_ASSERTCRASH(m_checkpointInfo == nullptr, ("should be null"));
+	engine::debug::invariant((m_checkpointInfo == nullptr), "m_checkpointInfo == nullptr", __FILE__, __LINE__, "should be null");
 	m_checkpointInfo = bi;
 }
 #endif
@@ -795,17 +795,17 @@ Bool BlockCheckpointInfo::shouldBeInReport(Int flags, Int startCheckpoint, Int e
 
 	if (!bi)
 	{
-		DEBUG_LOG(("%s,%32s,%6s,%6s,%6s,%s",PREPEND,"POOLNAME","BLKSZ","ALLOC","FREED","BLOCKNAME"));
+		engine::debug::log_info("%s,%32s,%6s,%6s,%6s,%s",PREPEND,"POOLNAME","BLKSZ","ALLOC","FREED","BLOCKNAME");
 	}
 	else
 	{
-		DEBUG_ASSERTCRASH(startCheckpoint >= 0 && startCheckpoint <= endCheckpoint, ("bad checkpoints"));
-		DEBUG_ASSERTCRASH((flags & _REPORT_CP_ALLOCATED_DONTCARE) != 0, ("bad flags: must set at least one alloc flag"));
-		DEBUG_ASSERTCRASH((flags & _REPORT_CP_FREED_DONTCARE) != 0, ("bad flags: must set at least one freed flag"));
+		engine::debug::invariant((startCheckpoint >= 0 && startCheckpoint <= endCheckpoint), "startCheckpoint >= 0 && startCheckpoint <= endCheckpoint", __FILE__, __LINE__, "bad checkpoints");
+		engine::debug::invariant(((flags & _REPORT_CP_ALLOCATED_DONTCARE) != 0), "(flags & _REPORT_CP_ALLOCATED_DONTCARE) != 0", __FILE__, __LINE__, "bad flags: must set at least one alloc flag");
+		engine::debug::invariant(((flags & _REPORT_CP_FREED_DONTCARE) != 0), "(flags & _REPORT_CP_FREED_DONTCARE) != 0", __FILE__, __LINE__, "bad flags: must set at least one freed flag");
 
 		if (bi->shouldBeInReport(flags, startCheckpoint, endCheckpoint))
 		{
-			DEBUG_LOG(("%s,%32s,%6d,%6d,%6d,%s",PREPEND,poolName,bi->m_blockSize,bi->m_allocCheckpoint,bi->m_freeCheckpoint,bi->m_debugLiteralTagString));
+			engine::debug::log_info("%s,%32s,%6d,%6d,%6d,%s",PREPEND,poolName,bi->m_blockSize,bi->m_allocCheckpoint,bi->m_freeCheckpoint,bi->m_debugLiteralTagString);
 	#ifdef MEMORYPOOL_STACKTRACE
 			if (flags & REPORT_CP_STACKTRACE)
 			{
@@ -847,7 +847,7 @@ Bool BlockCheckpointInfo::shouldBeInReport(Int flags, Int startCheckpoint, Int e
 	Int blockSize
 )
 {
-	DEBUG_ASSERTCRASH(debugLiteralTagString != FREE_SINGLEBLOCK_TAG_STRING, ("bad tag string"));
+	engine::debug::invariant((debugLiteralTagString != FREE_SINGLEBLOCK_TAG_STRING), "debugLiteralTagString != FREE_SINGLEBLOCK_TAG_STRING", __FILE__, __LINE__, "bad tag string");
 
 	BlockCheckpointInfo *freed = nullptr;
 	try {
@@ -857,7 +857,7 @@ Bool BlockCheckpointInfo::shouldBeInReport(Int flags, Int startCheckpoint, Int e
 	}
 	if (freed)
 	{
-		DEBUG_ASSERTCRASH(debugLiteralTagString != nullptr, ("null tagstrings are not allowed"));
+		engine::debug::invariant((debugLiteralTagString != nullptr), "debugLiteralTagString != nullptr", __FILE__, __LINE__, "null tagstrings are not allowed");
 		freed->m_debugLiteralTagString = debugLiteralTagString;
 		freed->m_allocCheckpoint = allocCheckpoint;
 		freed->m_freeCheckpoint = -1;
@@ -883,16 +883,16 @@ void MemoryPoolSingleBlock::initBlock(Int logicalSize, MemoryPoolBlob *owningBlo
 {
 	// Note that while it is OK for owningBlob to be null, it is NEVER ok
 	// for owningFactory to be null.
-	DEBUG_ASSERTCRASH(owningFactory, ("null factory"));
+	engine::debug::invariant((owningFactory), "owningFactory", __FILE__, __LINE__, "null factory");
 
 #ifdef MEMORYPOOL_DEBUG
 {
-	USE_PERF_TIMER(MemoryPoolDebugging)
+	engine::profiling::Scope profile_scope_888("MemoryPoolDebugging");
 	m_magicCookie = SINGLEBLOCK_MAGIC_COOKIE;
 	m_debugFlags = 0;
 	if (!theMainInitFlag)
 		debugIgnoreLeaksForThisBlock();
-	DEBUG_ASSERTCRASH(debugLiteralTagString != nullptr, ("null tagstrings are not allowed"));
+	engine::debug::invariant((debugLiteralTagString != nullptr), "debugLiteralTagString != nullptr", __FILE__, __LINE__, "null tagstrings are not allowed");
 	m_debugLiteralTagString = debugLiteralTagString;
 	m_logicalSize = logicalSize;
 	m_wastedSize = 0;
@@ -934,7 +934,7 @@ void MemoryPoolSingleBlock::initBlock(Int logicalSize, MemoryPoolBlob *owningBlo
 */
 /* static */ MemoryPoolSingleBlock *MemoryPoolSingleBlock::recoverBlockFromUserData(void* pUserData)
 {
-	DEBUG_ASSERTCRASH(pUserData, ("null pUserData"));
+	engine::debug::invariant((pUserData), "pUserData", __FILE__, __LINE__, "null pUserData");
 	if (!pUserData)
 		return nullptr;
 	char* p = static_cast<char*>(pUserData) - userDataOffset();
@@ -971,24 +971,24 @@ void MemoryPoolSingleBlock::initBlock(Int logicalSize, MemoryPoolBlob *owningBlo
 */
 void MemoryPoolSingleBlock::removeBlockFromList(MemoryPoolSingleBlock **pHead)
 {
-	DEBUG_ASSERTCRASH(this->m_owningBlob == nullptr, ("this function should only be used on raw blocks"));
+	engine::debug::invariant((this->m_owningBlob == nullptr), "this->m_owningBlob == nullptr", __FILE__, __LINE__, "this function should only be used on raw blocks");
 #ifdef MPSB_DLINK
-	DEBUG_ASSERTCRASH(this->m_nextBlock == nullptr || this->m_nextBlock->m_owningBlob == nullptr, ("this function should only be used on raw blocks"));
+	engine::debug::invariant((this->m_nextBlock == nullptr || this->m_nextBlock->m_owningBlob == nullptr), "this->m_nextBlock == nullptr || this->m_nextBlock->m_owningBlob == nullptr", __FILE__, __LINE__, "this function should only be used on raw blocks");
 	if (this->m_prevBlock)
 	{
-		DEBUG_ASSERTCRASH(this->m_prevBlock->m_owningBlob == nullptr, ("this function should only be used on raw blocks"));
-		DEBUG_ASSERTCRASH(*pHead != this, ("bad linkage"));
+		engine::debug::invariant((this->m_prevBlock->m_owningBlob == nullptr), "this->m_prevBlock->m_owningBlob == nullptr", __FILE__, __LINE__, "this function should only be used on raw blocks");
+		engine::debug::invariant((*pHead != this), "*pHead != this", __FILE__, __LINE__, "bad linkage");
 		this->m_prevBlock->m_nextBlock = this->m_nextBlock;
 	}
 	else
 	{
-		DEBUG_ASSERTCRASH(*pHead == this, ("bad linkage"));
+		engine::debug::invariant((*pHead == this), "*pHead == this", __FILE__, __LINE__, "bad linkage");
 		*pHead = this->m_nextBlock;
 	}
 
 	if (this->m_nextBlock)
 	{
-		DEBUG_ASSERTCRASH(this->m_nextBlock->m_owningBlob == nullptr, ("this function should only be used on raw blocks"));
+		engine::debug::invariant((this->m_nextBlock->m_owningBlob == nullptr), "this->m_nextBlock->m_owningBlob == nullptr", __FILE__, __LINE__, "this function should only be used on raw blocks");
 		this->m_nextBlock->m_prevBlock = this->m_prevBlock;
 	}
 #else
@@ -999,7 +999,7 @@ void MemoryPoolSingleBlock::removeBlockFromList(MemoryPoolSingleBlock **pHead)
 	MemoryPoolSingleBlock *prev = nullptr;
 	for (MemoryPoolSingleBlock *cur = *pHead; cur; cur = cur->m_nextBlock)
 	{
-		DEBUG_ASSERTCRASH(cur->m_owningBlob == nullptr, ("this function should only be used on raw blocks"));
+		engine::debug::invariant((cur->m_owningBlob == nullptr), "cur->m_owningBlob == nullptr", __FILE__, __LINE__, "this function should only be used on raw blocks");
 		if (cur == this)
 		{
 			if (prev)
@@ -1021,7 +1021,7 @@ void MemoryPoolSingleBlock::removeBlockFromList(MemoryPoolSingleBlock **pHead)
 #ifdef MEMORYPOOL_DEBUG
 Int MemoryPoolSingleBlock::debugSingleBlockReportLeak(const char* owner)
 {
-	//USE_PERF_TIMER(MemoryPoolDebugging) skip end-of-run reporting stuff
+	//engine::profiling::Scope profile_scope_1022("MemoryPoolDebugging") skip end-of-run reporting stuff
 
 	// if allocated before main... just ignore the leak.
 	if (m_debugFlags & IGNORE_LEAKS)
@@ -1043,7 +1043,7 @@ Int MemoryPoolSingleBlock::debugSingleBlockReportLeak(const char* owner)
 	}
 	else
 	{
-		DEBUG_LOG(("Leaked a block of size %d, tagstring %s, from pool/dma %s",m_logicalSize,m_debugLiteralTagString,owner));
+		engine::debug::log_info("Leaked a block of size %d, tagstring %s, from pool/dma %s",m_logicalSize,m_debugLiteralTagString,owner);
 	}
 
 	#ifdef MEMORYPOOL_SINGLEBLOCK_GETS_STACKTRACE
@@ -1062,20 +1062,24 @@ Int MemoryPoolSingleBlock::debugSingleBlockReportLeak(const char* owner)
 */
 void MemoryPoolSingleBlock::debugVerifyBlock()
 {
-	USE_PERF_TIMER(MemoryPoolDebugging)
+	engine::profiling::Scope profile_scope_1063("MemoryPoolDebugging");
 
-	DEBUG_ASSERTCRASH(this, ("null this"));
-	DEBUG_ASSERTCRASH(m_magicCookie == SINGLEBLOCK_MAGIC_COOKIE, ("wrong cookie"));
-	DEBUG_ASSERTCRASH(m_debugLiteralTagString != nullptr, ("bad tagstring"));
+	engine::debug::invariant((this), "this", __FILE__, __LINE__, "null this");
+	engine::debug::invariant((m_magicCookie == SINGLEBLOCK_MAGIC_COOKIE), "m_magicCookie == SINGLEBLOCK_MAGIC_COOKIE", __FILE__, __LINE__, "wrong cookie");
+	engine::debug::invariant((m_debugLiteralTagString != nullptr), "m_debugLiteralTagString != nullptr", __FILE__, __LINE__, "bad tagstring");
 	/// @todo Put this check back in after the AI memory usage is under control (MSB)
-	//DEBUG_ASSERTCRASH(m_logicalSize>0 && m_logicalSize < 0x00ffffff, ("unlikely value for m_logicalSize"));
-	DEBUG_ASSERTCRASH(m_nextBlock == nullptr
+	//engine::debug::invariant((m_logicalSize>0 && m_logicalSize < 0x00ffffff), "m_logicalSize>0 && m_logicalSize < 0x00ffffff", __FILE__, __LINE__, "unlikely value for m_logicalSize");
+	engine::debug::invariant((m_nextBlock == nullptr
 		|| memcmp(&m_nextBlock->m_owningBlob, &s_initFillerValue, sizeof(s_initFillerValue)) == 0
-		|| m_nextBlock->m_owningBlob == m_owningBlob, ("owning blob mismatch..."));
+		|| m_nextBlock->m_owningBlob == m_owningBlob), "m_nextBlock == nullptr
+		|| memcmp(&m_nextBlock->m_owningBlob, &s_initFillerValue, sizeof(s_initFillerValue)) == 0
+		|| m_nextBlock->m_owningBlob == m_owningBlob", __FILE__, __LINE__, "owning blob mismatch...");
 #ifdef MPSB_DLINK
-	DEBUG_ASSERTCRASH(m_prevBlock == nullptr
+	engine::debug::invariant((m_prevBlock == nullptr
 		|| memcmp(&m_prevBlock->m_owningBlob, &s_initFillerValue, sizeof(s_initFillerValue)) == 0
-		|| m_prevBlock->m_owningBlob == m_owningBlob, ("owning blob mismatch..."));
+		|| m_prevBlock->m_owningBlob == m_owningBlob), "m_prevBlock == nullptr
+		|| memcmp(&m_prevBlock->m_owningBlob, &s_initFillerValue, sizeof(s_initFillerValue)) == 0
+		|| m_prevBlock->m_owningBlob == m_owningBlob", __FILE__, __LINE__, "owning blob mismatch...");
 #endif
 	debugCheckUnderrun();
 	debugCheckOverrun();
@@ -1089,7 +1093,7 @@ void MemoryPoolSingleBlock::debugVerifyBlock()
 */
 void MemoryPoolSingleBlock::debugMarkBlockAsFree()
 {
-	USE_PERF_TIMER(MemoryPoolDebugging)
+	engine::profiling::Scope profile_scope_1094("MemoryPoolDebugging");
 
 	::memset32(getUserDataNoDbg(), GARBAGE_FILL_VALUE, m_logicalSize);
 	m_debugLiteralTagString = FREE_SINGLEBLOCK_TAG_STRING;
@@ -1107,7 +1111,7 @@ void MemoryPoolSingleBlock::debugMarkBlockAsFree()
 */
 Bool MemoryPoolSingleBlock::debugCheckUnderrun()
 {
-	USE_PERF_TIMER(MemoryPoolDebugging)
+	engine::profiling::Scope profile_scope_1112("MemoryPoolDebugging");
 
 #ifdef MEMORYPOOL_BOUNDINGWALL
 	Int *p = (Int*)(((char*)getUserDataNoDbg()) - WALLSIZE);
@@ -1115,7 +1119,7 @@ Bool MemoryPoolSingleBlock::debugCheckUnderrun()
 	{
 		if (*p != m_wallPattern+i)
 		{
-			DEBUG_CRASH(("memory underrun for block \"%s\" (expected %08x, got %08x)",m_debugLiteralTagString,m_wallPattern+i,*p));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "memory underrun for block \"%s\" (expected %08x, got %08x)",m_debugLiteralTagString,m_wallPattern+i,*p);
 			return true;
 		}
 	}
@@ -1132,7 +1136,7 @@ Bool MemoryPoolSingleBlock::debugCheckUnderrun()
 */
 Bool MemoryPoolSingleBlock::debugCheckOverrun()
 {
-	USE_PERF_TIMER(MemoryPoolDebugging)
+	engine::profiling::Scope profile_scope_1137("MemoryPoolDebugging");
 
 #ifdef MEMORYPOOL_BOUNDINGWALL
 	Int *p = (Int*)(((char*)getUserDataNoDbg()) + m_logicalSize);
@@ -1140,7 +1144,7 @@ Bool MemoryPoolSingleBlock::debugCheckOverrun()
 	{
 		if (*p != m_wallPattern-i)
 		{
-			DEBUG_CRASH(("memory overrun for block \"%s\" (expected %08x, got %08x)",m_debugLiteralTagString,m_wallPattern+i,*p));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "memory overrun for block \"%s\" (expected %08x, got %08x)",m_debugLiteralTagString,m_wallPattern+i,*p);
 			return true;
 		}
 	}
@@ -1209,7 +1213,7 @@ MemoryPoolBlob::~MemoryPoolBlob()
 */
 void MemoryPoolBlob::initBlob(MemoryPool *owningPool, Int allocationCount)
 {
-	DEBUG_ASSERTCRASH(m_blockData == nullptr, ("unlikely init call"));
+	engine::debug::invariant((m_blockData == nullptr), "m_blockData == nullptr", __FILE__, __LINE__, "unlikely init call");
 
 	m_owningPool = owningPool;
 	m_totalBlocksInBlob = allocationCount;
@@ -1284,7 +1288,7 @@ void MemoryPoolBlob::removeBlobFromList(MemoryPoolBlob **ppHead, MemoryPoolBlob 
 */
 MemoryPoolSingleBlock *MemoryPoolBlob::allocateSingleBlock(DECLARE_LITERALSTRING_ARG1)
 {
-	DEBUG_ASSERTCRASH(m_firstFreeBlock, ("no free blocks available in MemoryPoolBlob"));
+	engine::debug::invariant((m_firstFreeBlock), "m_firstFreeBlock", __FILE__, __LINE__, "no free blocks available in MemoryPoolBlob");
 
 	MemoryPoolSingleBlock *block = m_firstFreeBlock;
 	m_firstFreeBlock = block->getNextFreeBlock();
@@ -1314,7 +1318,7 @@ MemoryPoolSingleBlock *MemoryPoolBlob::allocateSingleBlock(DECLARE_LITERALSTRING
 */
 void MemoryPoolBlob::freeSingleBlock(MemoryPoolSingleBlock *block)
 {
-	DEBUG_ASSERTCRASH(block->getOwningBlob() == this, ("block does not belong to this blob"));
+	engine::debug::invariant((block->getOwningBlob() == this), "block->getOwningBlob() == this", __FILE__, __LINE__, "block does not belong to this blob");
 
 	block->setNextFreeBlock(m_firstFreeBlock);
 	m_firstFreeBlock = block;
@@ -1339,11 +1343,11 @@ void MemoryPoolBlob::freeSingleBlock(MemoryPoolSingleBlock *block)
 */
 void MemoryPoolBlob::debugMemoryVerifyBlob()
 {
-	USE_PERF_TIMER(MemoryPoolDebugging)
+	engine::profiling::Scope profile_scope_1344("MemoryPoolDebugging");
 
-	DEBUG_ASSERTCRASH(m_owningPool != nullptr, ("bad owner"));
-	DEBUG_ASSERTCRASH(m_usedBlocksInBlob >= 0 && m_usedBlocksInBlob <= m_totalBlocksInBlob, ("unlikely m_usedBlocksInBlob"));
-	DEBUG_ASSERTCRASH(m_totalBlocksInBlob > 0, ("unlikely m_totalBlocksInBlob"));
+	engine::debug::invariant((m_owningPool != nullptr), "m_owningPool != nullptr", __FILE__, __LINE__, "bad owner");
+	engine::debug::invariant((m_usedBlocksInBlob >= 0 && m_usedBlocksInBlob <= m_totalBlocksInBlob), "m_usedBlocksInBlob >= 0 && m_usedBlocksInBlob <= m_totalBlocksInBlob", __FILE__, __LINE__, "unlikely m_usedBlocksInBlob");
+	engine::debug::invariant((m_totalBlocksInBlob > 0), "m_totalBlocksInBlob > 0", __FILE__, __LINE__, "unlikely m_totalBlocksInBlob");
 
 	Int rawBlockSize = MemoryPoolSingleBlock::calcRawBlockSize(m_owningPool->getAllocationSize());
 	char *blockData = m_blockData;
@@ -1359,7 +1363,7 @@ void MemoryPoolBlob::debugMemoryVerifyBlob()
 #ifdef MEMORYPOOL_DEBUG
 Int MemoryPoolBlob::debugBlobReportLeaks(const char* owner)
 {
-	//USE_PERF_TIMER(MemoryPoolDebugging) skip end-of-run reporting stuff
+	//engine::profiling::Scope profile_scope_1364("MemoryPoolDebugging") skip end-of-run reporting stuff
 
 	Int any = 0;
 	Int rawBlockSize = MemoryPoolSingleBlock::calcRawBlockSize(m_owningPool->getAllocationSize());
@@ -1380,7 +1384,7 @@ Int MemoryPoolBlob::debugBlobReportLeaks(const char* owner)
 */
 Bool MemoryPoolBlob::debugIsBlockInBlob(void *pBlockPtr)
 {
-	USE_PERF_TIMER(MemoryPoolDebugging)
+	engine::profiling::Scope profile_scope_1385("MemoryPoolDebugging");
 
 	MemoryPoolSingleBlock *block = MemoryPoolSingleBlock::recoverBlockFromUserData(pBlockPtr);
 	Int rawBlockSize = MemoryPoolSingleBlock::calcRawBlockSize(m_owningPool->getAllocationSize());
@@ -1490,13 +1494,13 @@ BlockCheckpointInfo *Checkpointable::debugAddCheckpointInfo(
 */
 void Checkpointable::debugCheckpointReport( Int flags, Int startCheckpoint, Int endCheckpoint, const char *poolName )
 {
-	DEBUG_ASSERTCRASH(startCheckpoint >= 0 && startCheckpoint <= endCheckpoint, ("bad checkpoints"));
-	DEBUG_ASSERTCRASH((flags & _REPORT_CP_ALLOCATED_DONTCARE) != 0, ("bad flags: must set at least one alloc flag"));
-	DEBUG_ASSERTCRASH((flags & _REPORT_CP_FREED_DONTCARE) != 0, ("bad flags: must set at least one freed flag"));
+	engine::debug::invariant((startCheckpoint >= 0 && startCheckpoint <= endCheckpoint), "startCheckpoint >= 0 && startCheckpoint <= endCheckpoint", __FILE__, __LINE__, "bad checkpoints");
+	engine::debug::invariant(((flags & _REPORT_CP_ALLOCATED_DONTCARE) != 0), "(flags & _REPORT_CP_ALLOCATED_DONTCARE) != 0", __FILE__, __LINE__, "bad flags: must set at least one alloc flag");
+	engine::debug::invariant(((flags & _REPORT_CP_FREED_DONTCARE) != 0), "(flags & _REPORT_CP_FREED_DONTCARE) != 0", __FILE__, __LINE__, "bad flags: must set at least one freed flag");
 
 	if (m_cpiEverFailed)
 	{
-		DEBUG_LOG(("  *** WARNING *** info on freed blocks may be inaccurate or incomplete!"));
+		engine::debug::log_info("  *** WARNING *** info on freed blocks may be inaccurate or incomplete!");
 	}
 
 	for (BlockCheckpointInfo *bi = m_firstCheckpointInfo; bi; bi = bi->getNext())
@@ -1587,7 +1591,7 @@ MemoryPool::~MemoryPool()
 */
 MemoryPoolBlob* MemoryPool::createBlob(Int allocationCount)
 {
-	DEBUG_ASSERTCRASH(allocationCount > 0 && allocationCount%MEM_BOUND_ALIGNMENT==0, ("bad allocationCount (must be >0 and evenly divisible by %d)",MEM_BOUND_ALIGNMENT));
+	engine::debug::invariant((allocationCount > 0 && allocationCount%MEM_BOUND_ALIGNMENT==0), "allocationCount > 0 && allocationCount%MEM_BOUND_ALIGNMENT==0", __FILE__, __LINE__, "bad allocationCount (must be >0 and evenly divisible by %d)",MEM_BOUND_ALIGNMENT);
 
 	MemoryPoolBlob* blob = new (::sysAllocateDoNotZero(sizeof(MemoryPoolBlob))) MemoryPoolBlob;	// will throw on failure
 
@@ -1595,7 +1599,7 @@ MemoryPoolBlob* MemoryPool::createBlob(Int allocationCount)
 
 	blob->addBlobToList(&m_firstBlob, &m_lastBlob);
 
-	DEBUG_ASSERTCRASH(m_firstBlobWithFreeBlocks == nullptr, ("DO NOT IGNORE. Please call John McD - x36872 (m_firstBlobWithFreeBlocks != nullptr)"));
+	engine::debug::invariant((m_firstBlobWithFreeBlocks == nullptr), "m_firstBlobWithFreeBlocks == nullptr", __FILE__, __LINE__, "DO NOT IGNORE. Please call John McD - x36872 (m_firstBlobWithFreeBlocks != nullptr)");
 	m_firstBlobWithFreeBlocks = blob;
 
 	// bookkeeping
@@ -1615,13 +1619,13 @@ MemoryPoolBlob* MemoryPool::createBlob(Int allocationCount)
 */
 Int MemoryPool::freeBlob(MemoryPoolBlob* blob)
 {
-	DEBUG_ASSERTCRASH(blob, ("null blob"));
-	DEBUG_ASSERTCRASH(blob->getOwningPool() == this, ("blob does not belong to this pool"));
+	engine::debug::invariant((blob), "blob", __FILE__, __LINE__, "null blob");
+	engine::debug::invariant((blob->getOwningPool() == this), "blob->getOwningPool() == this", __FILE__, __LINE__, "blob does not belong to this pool");
 
 	// save these for later...
 	Int totalBlocksInBlob = blob->getTotalBlockCount();
 	Int usedBlocksInBlob = blob->getUsedBlockCount();
-	DEBUG_ASSERTCRASH(usedBlocksInBlob == 0, ("freeing a nonempty blob (%d)",usedBlocksInBlob));
+	engine::debug::invariant((usedBlocksInBlob == 0), "usedBlocksInBlob == 0", __FILE__, __LINE__, "freeing a nonempty blob (%d)",usedBlocksInBlob);
 
 	// this is really just an estimate... will be too small in debug mode.
 	Int amtFreed = totalBlocksInBlob * getAllocationSize() + sizeof(MemoryPoolBlob);
@@ -1693,10 +1697,10 @@ void* MemoryPool::allocateBlockDoNotZeroImplementation(DECLARE_LITERALSTRING_ARG
 
 	MemoryPoolBlob *blob = m_firstBlobWithFreeBlocks;
 
-	DEBUG_ASSERTCRASH(blob, ("no blob with free blocks available in MemoryPool::allocate"));
+	engine::debug::invariant((blob), "blob", __FILE__, __LINE__, "no blob with free blocks available in MemoryPool::allocate");
 
 	MemoryPoolSingleBlock *block = blob->allocateSingleBlock(PASS_LITERALSTRING_ARG1);
-	DEBUG_ASSERTCRASH(block, ("should not fail here"));
+	engine::debug::invariant((block), "block", __FILE__, __LINE__, "should not fail here");
 
 #ifdef MEMORYPOOL_CHECKPOINTING
 	BlockCheckpointInfo *bi = debugAddCheckpointInfo(block->debugGetLiteralTagString(), m_factory->getCurCheckpoint(), getAllocationSize());
@@ -1713,7 +1717,7 @@ void* MemoryPool::allocateBlockDoNotZeroImplementation(DECLARE_LITERALSTRING_ARG
 	m_factory->adjustTotals(debugLiteralTagString, 1*getAllocationSize(), 0);
 	#ifdef USE_FILLER_VALUE
 	{
-		USE_PERF_TIMER(MemoryPoolInitFilling)
+		engine::profiling::Scope profile_scope_1718("MemoryPoolInitFilling");
 		::memset32(block->getUserData(), s_initFillerValue, getAllocationSize());
 	}
 	#endif
@@ -1752,11 +1756,11 @@ void MemoryPool::freeBlock(void* pBlockPtr)
 	const char* tagString = block->debugGetLiteralTagString();
 #endif
 
-	DEBUG_ASSERTCRASH(blob && blob->getOwningPool() == this, ("block does not belong to this pool"));
+	engine::debug::invariant((blob && blob->getOwningPool() == this), "blob && blob->getOwningPool() == this", __FILE__, __LINE__, "block does not belong to this pool");
 
 #ifdef MEMORYPOOL_CHECKPOINTING
 	BlockCheckpointInfo *bi = block->debugGetCheckpointInfo();
-	DEBUG_ASSERTCRASH(bi, ("hmm, no checkpoint info"));
+	engine::debug::invariant((bi), "bi", __FILE__, __LINE__, "hmm, no checkpoint info");
 	if (bi)
 		bi->debugSetFreepoint(m_factory->getCurCheckpoint());
 #endif
@@ -1885,21 +1889,21 @@ void MemoryPool::removeFromList(MemoryPool **pHead)
 */
 /*static*/ void MemoryPool::debugPoolInfoReport( MemoryPool *pool, FILE *fp )
 {
-	//USE_PERF_TIMER(MemoryPoolDebugging) skip end-of-run reporting stuff
+	//engine::profiling::Scope profile_scope_1890("MemoryPoolDebugging") skip end-of-run reporting stuff
 
 	const char *PREPEND = "POOLINFO";	// allows grepping more easily
 
 	if (!pool)
 	{
-		DEBUG_LOG(("%s,%32s,%6s,%6s,%6s,%6s,%6s,%6s",PREPEND,"POOLNAME","BLKSZ","INIT","OVRFL","USED","TOTAL","PEAK"));
+		engine::debug::log_info("%s,%32s,%6s,%6s,%6s,%6s,%6s,%6s",PREPEND,"POOLNAME","BLKSZ","INIT","OVRFL","USED","TOTAL","PEAK");
 		if( fp )
 			fprintf( fp, "%s,%32s,%6s,%6s,%6s,%6s,%6s,%6s\n",PREPEND,"POOLNAME","BLKSZ","INIT","OVRFL","USED","TOTAL","PEAK" );
 	}
 	else
 	{
-		DEBUG_LOG(("%s,%32s,%6d,%6d,%6d,%6d,%6d,%6d",PREPEND,
+		engine::debug::log_info("%s,%32s,%6d,%6d,%6d,%6d,%6d,%6d",PREPEND,
 			pool->m_poolName,pool->m_allocationSize,pool->m_initialAllocationCount,pool->m_overflowAllocationCount,
-			pool->m_usedBlocksInPool,pool->m_totalBlocksInPool,pool->m_peakUsedBlocksInPool));
+			pool->m_usedBlocksInPool,pool->m_totalBlocksInPool,pool->m_peakUsedBlocksInPool);
 		if( fp )
 		{
 			fprintf( fp, "%s,%32s,%6d,%6d,%6d,%6d,%6d,%6d\n",PREPEND,
@@ -1914,7 +1918,7 @@ void MemoryPool::removeFromList(MemoryPool **pHead)
 #ifdef MEMORYPOOL_DEBUG
 Int MemoryPool::debugPoolReportLeaks( const char* owner )
 {
-	//USE_PERF_TIMER(MemoryPoolDebugging) skip end-of-run reporting stuff
+	//engine::profiling::Scope profile_scope_1919("MemoryPoolDebugging") skip end-of-run reporting stuff
 
 	Int any = 0;
 	for (MemoryPoolBlob* blob = m_firstBlob; blob; blob = blob->getNextInList())
@@ -1932,7 +1936,7 @@ Int MemoryPool::debugPoolReportLeaks( const char* owner )
 */
 void MemoryPool::debugMemoryVerifyPool()
 {
-	USE_PERF_TIMER(MemoryPoolDebugging)
+	engine::profiling::Scope profile_scope_1937("MemoryPoolDebugging");
 
 	Int used = 0;
 	Int total = 0;
@@ -1942,8 +1946,8 @@ void MemoryPool::debugMemoryVerifyPool()
 		used += blob->getUsedBlockCount();
 		total += blob->getTotalBlockCount();
 	}
-	DEBUG_ASSERTCRASH(m_usedBlocksInPool == used, ("used mismatch %d %d",m_usedBlocksInPool,used));
-	DEBUG_ASSERTCRASH(m_totalBlocksInPool == total, ("total mismatch %d %d",m_totalBlocksInPool,total));
+	engine::debug::invariant((m_usedBlocksInPool == used), "m_usedBlocksInPool == used", __FILE__, __LINE__, "used mismatch %d %d",m_usedBlocksInPool,used);
+	engine::debug::invariant((m_totalBlocksInPool == total), "m_totalBlocksInPool == total", __FILE__, __LINE__, "total mismatch %d %d",m_totalBlocksInPool,total);
 }
 #endif
 
@@ -1954,7 +1958,7 @@ void MemoryPool::debugMemoryVerifyPool()
 */
 Bool MemoryPool::debugIsBlockInPool(void *pBlockPtr)
 {
-	USE_PERF_TIMER(MemoryPoolDebugging)
+	engine::profiling::Scope profile_scope_1959("MemoryPoolDebugging");
 
 	if (!pBlockPtr)
 		return false;
@@ -1976,7 +1980,7 @@ Bool MemoryPool::debugIsBlockInPool(void *pBlockPtr)
 			check2 = true;
 	}
 
-	DEBUG_ASSERTCRASH(check1 == check2, ("mismatch checks in debugIsBlockInPool"));
+	engine::debug::invariant((check1 == check2), "check1 == check2", __FILE__, __LINE__, "mismatch checks in debugIsBlockInPool");
 
 	return check1 && check2;
 }
@@ -1991,7 +1995,7 @@ Bool MemoryPool::debugIsBlockInPool(void *pBlockPtr)
 */
 const char *MemoryPool::debugGetBlockTagString(void *pBlockPtr)
 {
-	USE_PERF_TIMER(MemoryPoolDebugging)
+	engine::profiling::Scope profile_scope_1996("MemoryPoolDebugging");
 
 	if (!pBlockPtr)
 		return FREE_SINGLEBLOCK_TAG_STRING;
@@ -2001,7 +2005,7 @@ const char *MemoryPool::debugGetBlockTagString(void *pBlockPtr)
 #endif
 	if (!debugIsBlockInPool(pBlockPtr))
 	{
-		DEBUG_CRASH(("block is not in this pool"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "block is not in this pool");
 		return FREE_SINGLEBLOCK_TAG_STRING;
 	}
 	MemoryPoolSingleBlock *block = MemoryPoolSingleBlock::recoverBlockFromUserData(pBlockPtr);
@@ -2075,7 +2079,7 @@ void DynamicMemoryAllocator::init(MemoryPoolFactory *factory, Int numSubPools, c
 	m_usedBlocksInDma = 0;
 	for (Int i = 0; i < m_numPools; i++)
 	{
-		DEBUG_ASSERTCRASH(i == 0 || pParms[i].allocationSize > pParms[i-1].allocationSize, ("alloc size must increase monotonically for DMA"));
+		engine::debug::invariant((i == 0 || pParms[i].allocationSize > pParms[i-1].allocationSize), "i == 0 || pParms[i].allocationSize > pParms[i-1].allocationSize", __FILE__, __LINE__, "alloc size must increase monotonically for DMA");
 		m_pools[i] = m_factory->createMemoryPool(&pParms[i]);
 	}
 }
@@ -2086,7 +2090,7 @@ void DynamicMemoryAllocator::init(MemoryPoolFactory *factory, Int numSubPools, c
 */
 DynamicMemoryAllocator::~DynamicMemoryAllocator()
 {
-	DEBUG_ASSERTCRASH(m_usedBlocksInDma == 0, ("destroying a nonempty dma"));
+	engine::debug::invariant((m_usedBlocksInDma == 0), "m_usedBlocksInDma == 0", __FILE__, __LINE__, "destroying a nonempty dma");
 
 	/// @todo this may cause double-destruction of the subpools -- test & fix
 	for (Int i = 0; i < m_numPools; i++)
@@ -2110,7 +2114,7 @@ MemoryPool *DynamicMemoryAllocator::findPoolForSize(Int allocSize)
 {
 	for (Int i = 0; i < m_numPools; i++)
 	{
-		DEBUG_ASSERTCRASH(m_pools[i], ("null pool"));
+		engine::debug::invariant((m_pools[i]), "m_pools[i]", __FILE__, __LINE__, "null pool");
 		if (allocSize <= m_pools[i]->getAllocationSize())
 			return m_pools[i];
 	}
@@ -2158,26 +2162,26 @@ void DynamicMemoryAllocator::removeFromList(DynamicMemoryAllocator **pHead)
 #ifdef MEMORYPOOL_DEBUG
 void DynamicMemoryAllocator::debugIgnoreLeaksForThisBlock(void* pBlockPtr)
 {
-	USE_PERF_TIMER(MemoryPoolDebugging)
+	engine::profiling::Scope profile_scope_2163("MemoryPoolDebugging");
 
 	if (!pBlockPtr)
 		return;
 
 #ifdef MEMORYPOOL_CHECK_BLOCK_OWNERSHIP
-	DEBUG_ASSERTCRASH(debugIsBlockInDma(pBlockPtr), ("block is not in this dma"));
+	engine::debug::invariant((debugIsBlockInDma(pBlockPtr)), "debugIsBlockInDma(pBlockPtr)", __FILE__, __LINE__, "block is not in this dma");
 #endif
 
 	MemoryPoolSingleBlock *block = MemoryPoolSingleBlock::recoverBlockFromUserData(pBlockPtr);
 	if (block->getOwningBlob())
 	{
 #ifdef MEMORYPOOL_DEBUG
-		DEBUG_ASSERTCRASH(findPoolForSize(block->debugGetLogicalSize()) == block->getOwningBlob()->getOwningPool(), ("pool mismatch"));
+		engine::debug::invariant((findPoolForSize(block->debugGetLogicalSize()) == block->getOwningBlob()->getOwningPool()), "findPoolForSize(block->debugGetLogicalSize()) == block->getOwningBlob()->getOwningPool()", __FILE__, __LINE__, "pool mismatch");
 #endif
 		block->debugIgnoreLeaksForThisBlock();
 	}
 	else
 	{
-		DEBUG_CRASH(("cannot currently ignore leaks for raw blocks (allocation too large)"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "cannot currently ignore leaks for raw blocks (allocation too large)");
 	}
 }
 #endif
@@ -2197,7 +2201,7 @@ void *DynamicMemoryAllocator::allocateBytesDoNotZeroImplementation(Int numBytes 
 	void *result = nullptr;
 
 #ifdef MEMORYPOOL_DEBUG
-	DEBUG_ASSERTCRASH(debugLiteralTagString != nullptr, ("bad tagstring"));
+	engine::debug::invariant((debugLiteralTagString != nullptr), "debugLiteralTagString != nullptr", __FILE__, __LINE__, "bad tagstring");
 	Int waste = 0;
 #endif
 
@@ -2207,7 +2211,7 @@ void *DynamicMemoryAllocator::allocateBytesDoNotZeroImplementation(Int numBytes 
 		result = pool->allocateBlockDoNotZeroImplementation(PASS_LITERALSTRING_ARG1);
 #ifdef MEMORYPOOL_DEBUG
 	{
-		USE_PERF_TIMER(MemoryPoolDebugging)
+		engine::profiling::Scope profile_scope_2212("MemoryPoolDebugging");
 		waste = pool->getAllocationSize() - numBytes;
 		MemoryPoolSingleBlock *wblock = MemoryPoolSingleBlock::recoverBlockFromUserData(result);
 		wblock->debugSetWastedSize(waste);
@@ -2245,7 +2249,7 @@ void *DynamicMemoryAllocator::allocateBytesDoNotZeroImplementation(Int numBytes 
 
 #ifdef MEMORYPOOL_DEBUG
 {
-	USE_PERF_TIMER(MemoryPoolDebugging)
+	engine::profiling::Scope profile_scope_2250("MemoryPoolDebugging");
 	theTotalDMA += numBytes;
 	if (thePeakDMA < theTotalDMA)
 		thePeakDMA = theTotalDMA;
@@ -2267,11 +2271,11 @@ void *DynamicMemoryAllocator::allocateBytesDoNotZeroImplementation(Int numBytes 
 #endif // MEMORYPOOL_DEBUG
 
 	++m_usedBlocksInDma;
-	DEBUG_ASSERTCRASH(m_usedBlocksInDma >= 0, ("negative count for m_usedBlocksInDma"));
+	engine::debug::invariant((m_usedBlocksInDma >= 0), "m_usedBlocksInDma >= 0", __FILE__, __LINE__, "negative count for m_usedBlocksInDma");
 #ifdef MEMORYPOOL_DEBUG
 	#ifdef USE_FILLER_VALUE
 	{
-		USE_PERF_TIMER(MemoryPoolInitFilling)
+		engine::profiling::Scope profile_scope_2276("MemoryPoolInitFilling");
 		::memset32(result, s_initFillerValue, numBytes);
 	}
 	#endif
@@ -2311,7 +2315,7 @@ void DynamicMemoryAllocator::freeBytes(void* pBlockPtr)
 	ScopedCriticalSection scopedCriticalSection(TheDmaCriticalSection);
 
 #ifdef MEMORYPOOL_CHECK_BLOCK_OWNERSHIP
-	DEBUG_ASSERTCRASH(debugIsBlockInDma(pBlockPtr), ("block is not in this dma"));
+	engine::debug::invariant((debugIsBlockInDma(pBlockPtr)), "debugIsBlockInDma(pBlockPtr)", __FILE__, __LINE__, "block is not in this dma");
 #endif
 
 	MemoryPoolSingleBlock *block = MemoryPoolSingleBlock::recoverBlockFromUserData(pBlockPtr);
@@ -2321,7 +2325,7 @@ void DynamicMemoryAllocator::freeBytes(void* pBlockPtr)
 	const char* tagString;
 #endif
 	{
-		USE_PERF_TIMER(MemoryPoolDebugging)
+		engine::profiling::Scope profile_scope_2326("MemoryPoolDebugging");
 		waste = 0;
 		used = block->debugGetLogicalSize();
 		theTotalDMA -= used;
@@ -2337,8 +2341,8 @@ void DynamicMemoryAllocator::freeBytes(void* pBlockPtr)
 	{
 #ifdef MEMORYPOOL_DEBUG
 		{
-			USE_PERF_TIMER(MemoryPoolDebugging)
-			DEBUG_ASSERTCRASH(findPoolForSize(used) == block->getOwningBlob()->getOwningPool(), ("pool mismatch"));
+			engine::profiling::Scope profile_scope_2342("MemoryPoolDebugging");
+			engine::debug::invariant((findPoolForSize(used) == block->getOwningBlob()->getOwningPool()), "findPoolForSize(used) == block->getOwningBlob()->getOwningPool()", __FILE__, __LINE__, "pool mismatch");
 	#ifdef INTENSE_DMA_BOOKKEEPING
 			if (doingIntenseDMA == 0)
 	#endif
@@ -2357,7 +2361,7 @@ void DynamicMemoryAllocator::freeBytes(void* pBlockPtr)
 		// was allocated via sysAllocate.
 #ifdef MEMORYPOOL_CHECKPOINTING
 		BlockCheckpointInfo *bi = block->debugGetCheckpointInfo();
-		DEBUG_ASSERTCRASH(bi, ("hmm, no checkpoint info"));
+		engine::debug::invariant((bi), "bi", __FILE__, __LINE__, "hmm, no checkpoint info");
 		if (bi)
 			bi->debugSetFreepoint(m_factory->getCurCheckpoint());
 #endif
@@ -2376,7 +2380,7 @@ void DynamicMemoryAllocator::freeBytes(void* pBlockPtr)
 
 	}
 	--m_usedBlocksInDma;
-	DEBUG_ASSERTCRASH(m_usedBlocksInDma >= 0, ("negative count for m_usedBlocksInDma"));
+	engine::debug::invariant((m_usedBlocksInDma >= 0), "m_usedBlocksInDma >= 0", __FILE__, __LINE__, "negative count for m_usedBlocksInDma");
 
 #ifdef INTENSE_DMA_BOOKKEEPING
 	if (isMemoryManagerOfficiallyInited() && doingIntenseDMA == 0)
@@ -2429,7 +2433,7 @@ void DynamicMemoryAllocator::reset()
 */
 Bool DynamicMemoryAllocator::debugIsPoolInDma(MemoryPool *pool)
 {
-	USE_PERF_TIMER(MemoryPoolDebugging)
+	engine::profiling::Scope profile_scope_2434("MemoryPoolDebugging");
 
 	if (!pool)
 		return false;
@@ -2452,7 +2456,7 @@ Bool DynamicMemoryAllocator::debugIsPoolInDma(MemoryPool *pool)
 */
 Bool DynamicMemoryAllocator::debugIsBlockInDma(void *pBlockPtr)
 {
-	USE_PERF_TIMER(MemoryPoolDebugging)
+	engine::profiling::Scope profile_scope_2457("MemoryPoolDebugging");
 
 	if (!pBlockPtr)
 		return false;
@@ -2484,14 +2488,14 @@ Bool DynamicMemoryAllocator::debugIsBlockInDma(void *pBlockPtr)
 */
 const char *DynamicMemoryAllocator::debugGetBlockTagString(void *pBlockPtr)
 {
-	USE_PERF_TIMER(MemoryPoolDebugging)
+	engine::profiling::Scope profile_scope_2489("MemoryPoolDebugging");
 
 	if (!pBlockPtr)
 		return FREE_SINGLEBLOCK_TAG_STRING;
 
 	if (!debugIsBlockInDma(pBlockPtr))
 	{
-		DEBUG_CRASH(("block is not in this dma"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "block is not in this dma");
 		return FREE_SINGLEBLOCK_TAG_STRING;
 	}
 	MemoryPoolSingleBlock *block = MemoryPoolSingleBlock::recoverBlockFromUserData(pBlockPtr);
@@ -2506,7 +2510,7 @@ const char *DynamicMemoryAllocator::debugGetBlockTagString(void *pBlockPtr)
 */
 void DynamicMemoryAllocator::debugMemoryVerifyDma()
 {
-	USE_PERF_TIMER(MemoryPoolDebugging)
+	engine::profiling::Scope profile_scope_2511("MemoryPoolDebugging");
 
 	for (MemoryPoolSingleBlock *b = m_rawBlocks; b; b = b->getNextRawBlock())
 	{
@@ -2538,7 +2542,7 @@ void DynamicMemoryAllocator::debugResetCheckpoints()
 */
 Int DynamicMemoryAllocator::debugCalcRawBlockBytes(Int *numBlocks)
 {
-	USE_PERF_TIMER(MemoryPoolDebugging)
+	engine::profiling::Scope profile_scope_2543("MemoryPoolDebugging");
 
 	if (numBlocks)
 		*numBlocks = 0;
@@ -2557,7 +2561,7 @@ Int DynamicMemoryAllocator::debugCalcRawBlockBytes(Int *numBlocks)
 #ifdef MEMORYPOOL_DEBUG
 Int DynamicMemoryAllocator::debugDmaReportLeaks()
 {
-	//USE_PERF_TIMER(MemoryPoolDebugging) skip end-of-run reporting stuff
+	//engine::profiling::Scope profile_scope_2562("MemoryPoolDebugging") skip end-of-run reporting stuff
 
 	Int any = false;
 	for (MemoryPoolSingleBlock *b = m_rawBlocks; b; b = b->getNextRawBlock())
@@ -2575,16 +2579,16 @@ Int DynamicMemoryAllocator::debugDmaReportLeaks()
 */
 void DynamicMemoryAllocator::debugDmaInfoReport( FILE *fp )
 {
-	//USE_PERF_TIMER(MemoryPoolDebugging) skip end-of-run reporting stuff
+	//engine::profiling::Scope profile_scope_2580("MemoryPoolDebugging") skip end-of-run reporting stuff
 
 	const char *PREPEND = "POOLINFO";	// allows grepping more easily
 
 	Int numBlocks;
 	Int bytes = debugCalcRawBlockBytes(&numBlocks);
-	DEBUG_LOG(("%s,Total Raw Blocks = %d",PREPEND,numBlocks));
-	DEBUG_LOG(("%s,Total Raw Block Bytes = %d",PREPEND,bytes));
-	DEBUG_LOG(("%s,Average Raw Block Size = %d",PREPEND,numBlocks?bytes/numBlocks:0));
-	DEBUG_LOG(("%s,Raw Blocks:",PREPEND));
+	engine::debug::log_info("%s,Total Raw Blocks = %d",PREPEND,numBlocks);
+	engine::debug::log_info("%s,Total Raw Block Bytes = %d",PREPEND,bytes);
+	engine::debug::log_info("%s,Average Raw Block Size = %d",PREPEND,numBlocks?bytes/numBlocks:0);
+	engine::debug::log_info("%s,Raw Blocks:",PREPEND);
 	if( fp )
 	{
 		fprintf( fp, "%s,Total Raw Blocks = %d\n",PREPEND,numBlocks );
@@ -2594,7 +2598,7 @@ void DynamicMemoryAllocator::debugDmaInfoReport( FILE *fp )
 	}
 	for (MemoryPoolSingleBlock *b = m_rawBlocks; b; b = b->getNextRawBlock())
 	{
-		DEBUG_LOG(("%s,  Blocksize=%d",PREPEND,b->debugGetLogicalSize()));
+		engine::debug::log_info("%s,  Blocksize=%d",PREPEND,b->debugGetLogicalSize());
 		//if( fp )
 		//{
 		//	fprintf( fp, "%s,  Blocksize=%d\n",PREPEND,b->debugGetLogicalSize() );
@@ -2682,7 +2686,7 @@ MemoryPool *MemoryPoolFactory::createMemoryPool(const char *poolName, Int alloca
 	MemoryPool *pool = findMemoryPool(poolName);
 	if (pool)
 	{
-		DEBUG_ASSERTCRASH(allocationSize == pool->getAllocationSize(), ("pool size mismatch"));
+		engine::debug::invariant((allocationSize == pool->getAllocationSize()), "allocationSize == pool->getAllocationSize()", __FILE__, __LINE__, "pool size mismatch");
 		return pool;
 	}
 
@@ -2690,7 +2694,7 @@ MemoryPool *MemoryPoolFactory::createMemoryPool(const char *poolName, Int alloca
 
 	if (initialAllocationCount <= 0 || overflowAllocationCount < 0)
 	{
-		DEBUG_CRASH(("illegal pool size: %d %d",initialAllocationCount,overflowAllocationCount));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "illegal pool size: %d %d",initialAllocationCount,overflowAllocationCount);
 		throw ERROR_OUT_OF_MEMORY;
 	}
 
@@ -2714,7 +2718,7 @@ MemoryPool *MemoryPoolFactory::findMemoryPool(const char *poolName)
 	{
 		if (strcmp(poolName, pool->getPoolName()) == 0)
 		{
-			DEBUG_ASSERTCRASH(poolName == pool->getPoolName(), ("hmm, ptrs should probably match here"));
+			engine::debug::invariant((poolName == pool->getPoolName()), "poolName == pool->getPoolName()", __FILE__, __LINE__, "hmm, ptrs should probably match here");
 			return pool;
 		}
 	}
@@ -2730,7 +2734,7 @@ void MemoryPoolFactory::destroyMemoryPool(MemoryPool *pMemoryPool)
 	if (!pMemoryPool)
 		return;
 
-	DEBUG_ASSERTCRASH(pMemoryPool->getUsedBlockCount() == 0, ("destroying a nonempty pool"));
+	engine::debug::invariant((pMemoryPool->getUsedBlockCount() == 0), "pMemoryPool->getUsedBlockCount() == 0", __FILE__, __LINE__, "destroying a nonempty pool");
 
 	pMemoryPool->removeFromList(&m_firstPoolInFactory);
 
@@ -2834,7 +2838,7 @@ static const char* s_specialPrefixes[MAX_SPECIAL_USED] =
 */
 void MemoryPoolFactory::adjustTotals(const char* tagString, Int usedDelta, Int physDelta)
 {
-	USE_PERF_TIMER(MemoryPoolDebugging)
+	engine::profiling::Scope profile_scope_2839("MemoryPoolDebugging");
 
 	m_usedBytes += usedDelta;
 	m_physBytes += physDelta;
@@ -2884,7 +2888,7 @@ void MemoryPoolFactory::debugSetInitFillerIndex(Int index)
 */
 void MemoryPoolFactory::debugMemoryVerify()
 {
-	USE_PERF_TIMER(MemoryPoolDebugging)
+	engine::profiling::Scope profile_scope_2889("MemoryPoolDebugging");
 
 	Int used = 0, phys = 0;
 
@@ -2903,8 +2907,8 @@ void MemoryPoolFactory::debugMemoryVerify()
 		phys += tmp;
 	}
 
-	DEBUG_ASSERTCRASH(used == m_usedBytes, ("used count mismatch"));
-	DEBUG_ASSERTCRASH(phys == m_physBytes, ("phys count mismatch"));
+	engine::debug::invariant((used == m_usedBytes), "used == m_usedBytes", __FILE__, __LINE__, "used count mismatch");
+	engine::debug::invariant((phys == m_physBytes), "phys == m_physBytes", __FILE__, __LINE__, "phys count mismatch");
 }
 #endif
 
@@ -2916,7 +2920,7 @@ void MemoryPoolFactory::debugMemoryVerify()
 */
 Bool MemoryPoolFactory::debugIsBlockInAnyPool(void *pBlock)
 {
-	USE_PERF_TIMER(MemoryPoolDebugging)
+	engine::profiling::Scope profile_scope_2921("MemoryPoolDebugging");
 
 #ifdef MEMORYPOOL_INTENSE_VERIFY
 	debugMemoryVerify();
@@ -2946,7 +2950,7 @@ Bool MemoryPoolFactory::debugIsBlockInAnyPool(void *pBlock)
 */
 const char *MemoryPoolFactory::debugGetBlockTagString(void *pBlockPtr)
 {
-	USE_PERF_TIMER(MemoryPoolDebugging)
+	engine::profiling::Scope profile_scope_2951("MemoryPoolDebugging");
 
 	if (!pBlockPtr)
 		return FREE_SINGLEBLOCK_TAG_STRING;
@@ -2956,7 +2960,7 @@ const char *MemoryPoolFactory::debugGetBlockTagString(void *pBlockPtr)
 #endif
 	if (!debugIsBlockInAnyPool(pBlockPtr))
 	{
-		DEBUG_CRASH(("block is not in this factory"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "block is not in this factory");
 		return FREE_SINGLEBLOCK_TAG_STRING;
 	}
 	MemoryPoolSingleBlock *block = MemoryPoolSingleBlock::recoverBlockFromUserData(pBlockPtr);
@@ -2998,7 +3002,7 @@ void MemoryPoolFactory::debugResetCheckpoints()
 void MemoryPoolFactory::memoryPoolUsageReport( const char* filename, FILE *appendToFileInstead )
 {
 #ifdef MEMORYPOOL_DEBUG
-	//USE_PERF_TIMER(MemoryPoolDebugging) skip end-of-run reporting stuff
+	//engine::profiling::Scope profile_scope_3003("MemoryPoolDebugging") skip end-of-run reporting stuff
 
 	FILE* perfStatsFile = nullptr;
 	Int totalNamedPoolPeak = 0;
@@ -3017,7 +3021,7 @@ void MemoryPoolFactory::memoryPoolUsageReport( const char* filename, FILE *appen
 
 	if (perfStatsFile == nullptr)
 	{
-		DEBUG_CRASH(("could not open/create perf file %s -- is it open in another app?",filename));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "could not open/create perf file %s -- is it open in another app?",filename);
 		return;
 	}
 
@@ -3096,33 +3100,31 @@ void MemoryPoolFactory::memoryPoolUsageReport( const char* filename, FILE *appen
 */
 void MemoryPoolFactory::debugMemoryReport(Int flags, Int startCheckpoint, Int endCheckpoint, FILE *fp )
 {
-	//USE_PERF_TIMER(MemoryPoolDebugging) skip end-of-run reporting stuff
+	//engine::profiling::Scope profile_scope_3101("MemoryPoolDebugging") skip end-of-run reporting stuff
 
 #ifdef ALLOW_DEBUG_UTILS
-	Int oldFlags = DebugGetFlags();
-	DebugSetFlags(oldFlags & ~DEBUG_FLAG_PREPEND_TIME);
-#endif
+	#endif
 
 #ifdef MEMORYPOOL_CHECKPOINTING
 	Bool doBlockReport = (flags & _REPORT_CP_ALLOCATED_DONTCARE) != 0 && (flags & _REPORT_CP_FREED_DONTCARE) != 0;
-	DEBUG_ASSERTCRASH(startCheckpoint >= 0 && startCheckpoint <= endCheckpoint && endCheckpoint <= m_curCheckpoint, ("bad checkpoints"));
-	DEBUG_ASSERTCRASH(((flags & _REPORT_CP_ALLOCATED_DONTCARE) != 0) == ((flags & _REPORT_CP_FREED_DONTCARE) != 0), ("bad flags: must set at both alloc and free flag"));
+	engine::debug::invariant((startCheckpoint >= 0 && startCheckpoint <= endCheckpoint && endCheckpoint <= m_curCheckpoint), "startCheckpoint >= 0 && startCheckpoint <= endCheckpoint && endCheckpoint <= m_curCheckpoint", __FILE__, __LINE__, "bad checkpoints");
+	engine::debug::invariant((((flags & _REPORT_CP_ALLOCATED_DONTCARE) != 0) == ((flags & _REPORT_CP_FREED_DONTCARE) != 0)), "((flags & _REPORT_CP_ALLOCATED_DONTCARE) != 0) == ((flags & _REPORT_CP_FREED_DONTCARE) != 0)", __FILE__, __LINE__, "bad flags: must set at both alloc and free flag");
 #endif
 
 	debugMemoryVerify();
 
 	if (flags & REPORT_FACTORYINFO)
 	{
-		DEBUG_LOG(("------------------------------------------"));
-		DEBUG_LOG(("Begin Factory Info Report"));
-		DEBUG_LOG(("------------------------------------------"));
-		DEBUG_LOG(("Bytes in use (logical) = %d",m_usedBytes));
-		DEBUG_LOG(("Bytes in use (physical) = %d",m_physBytes));
-		DEBUG_LOG(("PEAK Bytes in use (logical) = %d",m_peakUsedBytes));
-		DEBUG_LOG(("PEAK Bytes in use (physical) = %d",m_peakPhysBytes));
-		DEBUG_LOG(("------------------------------------------"));
-		DEBUG_LOG(("End Factory Info Report"));
-		DEBUG_LOG(("------------------------------------------"));
+		engine::debug::log_info("------------------------------------------");
+		engine::debug::log_info("Begin Factory Info Report");
+		engine::debug::log_info("------------------------------------------");
+		engine::debug::log_info("Bytes in use (logical) = %d",m_usedBytes);
+		engine::debug::log_info("Bytes in use (physical) = %d",m_physBytes);
+		engine::debug::log_info("PEAK Bytes in use (logical) = %d",m_peakUsedBytes);
+		engine::debug::log_info("PEAK Bytes in use (physical) = %d",m_peakPhysBytes);
+		engine::debug::log_info("------------------------------------------");
+		engine::debug::log_info("End Factory Info Report");
+		engine::debug::log_info("------------------------------------------");
 		if( fp )
 		{
 			fprintf( fp, "------------------------------------------\n" );
@@ -3140,9 +3142,9 @@ void MemoryPoolFactory::debugMemoryReport(Int flags, Int startCheckpoint, Int en
 
 	if (flags & REPORT_POOLINFO)
 	{
-		DEBUG_LOG(("------------------------------------------"));
-		DEBUG_LOG(("Begin Pool Info Report"));
-		DEBUG_LOG(("------------------------------------------"));
+		engine::debug::log_info("------------------------------------------");
+		engine::debug::log_info("Begin Pool Info Report");
+		engine::debug::log_info("------------------------------------------");
 		if( fp )
 		{
 			fprintf( fp, "------------------------------------------\n" );
@@ -3158,9 +3160,9 @@ void MemoryPoolFactory::debugMemoryReport(Int flags, Int startCheckpoint, Int en
 		{
 			dma->debugDmaInfoReport( fp );
 		}
-		DEBUG_LOG(("------------------------------------------"));
-		DEBUG_LOG(("End Pool Info Report"));
-		DEBUG_LOG(("------------------------------------------"));
+		engine::debug::log_info("------------------------------------------");
+		engine::debug::log_info("End Pool Info Report");
+		engine::debug::log_info("------------------------------------------");
 		if( fp )
 		{
 			fprintf( fp, "------------------------------------------\n" );
@@ -3171,43 +3173,43 @@ void MemoryPoolFactory::debugMemoryReport(Int flags, Int startCheckpoint, Int en
 
 	if (flags & REPORT_POOL_OVERFLOW)
 	{
-		DEBUG_LOG(("------------------------------------------"));
-		DEBUG_LOG(("Begin Pool Overflow Report"));
-		DEBUG_LOG(("------------------------------------------"));
+		engine::debug::log_info("------------------------------------------");
+		engine::debug::log_info("Begin Pool Overflow Report");
+		engine::debug::log_info("------------------------------------------");
 		MemoryPool *pool = m_firstPoolInFactory;
 		for (; pool; pool = pool->getNextPoolInList())
 		{
 			if (pool->getPeakBlockCount() > pool->getInitialBlockCount())
 			{
-				DEBUG_LOG(("*** Pool %s overflowed initial allocation of %d (peak allocation was %d)",pool->getPoolName(),pool->getInitialBlockCount(),pool->getPeakBlockCount()));
+				engine::debug::log_info("*** Pool %s overflowed initial allocation of %d (peak allocation was %d)",pool->getPoolName(),pool->getInitialBlockCount(),pool->getPeakBlockCount());
 			}
 		}
-		DEBUG_LOG(("------------------------------------------"));
-		DEBUG_LOG(("End Pool Overflow Report"));
-		DEBUG_LOG(("------------------------------------------"));
-		DEBUG_LOG(("------------------------------------------"));
-		DEBUG_LOG(("Begin Pool Underflow Report"));
-		DEBUG_LOG(("------------------------------------------"));
+		engine::debug::log_info("------------------------------------------");
+		engine::debug::log_info("End Pool Overflow Report");
+		engine::debug::log_info("------------------------------------------");
+		engine::debug::log_info("------------------------------------------");
+		engine::debug::log_info("Begin Pool Underflow Report");
+		engine::debug::log_info("------------------------------------------");
 		for (pool = m_firstPoolInFactory; pool; pool = pool->getNextPoolInList())
 		{
 			Int peak = pool->getPeakBlockCount()*pool->getAllocationSize();
 			Int initial = pool->getInitialBlockCount()*pool->getAllocationSize();
 			if (peak < initial/2 && (initial - peak) > 4096)
 			{
-				DEBUG_LOG(("*** Pool %s used less than half its initial allocation of %d (peak allocation was %d, wasted %dk)",
-					pool->getPoolName(),pool->getInitialBlockCount(),pool->getPeakBlockCount(),(initial - peak)/1024));
+				engine::debug::log_info("*** Pool %s used less than half its initial allocation of %d (peak allocation was %d, wasted %dk)",
+					pool->getPoolName(),pool->getInitialBlockCount(),pool->getPeakBlockCount(),(initial - peak)/1024);
 			}
 		}
-		DEBUG_LOG(("------------------------------------------"));
-		DEBUG_LOG(("End Pool Underflow Report"));
-		DEBUG_LOG(("------------------------------------------"));
+		engine::debug::log_info("------------------------------------------");
+		engine::debug::log_info("End Pool Underflow Report");
+		engine::debug::log_info("------------------------------------------");
 	}
 
 	if( flags & REPORT_SIMPLE_LEAKS )
 	{
-		DEBUG_LOG(("------------------------------------------"));
-		DEBUG_LOG(("Begin Simple Leak Report"));
-		DEBUG_LOG(("------------------------------------------"));
+		engine::debug::log_info("------------------------------------------");
+		engine::debug::log_info("Begin Simple Leak Report");
+		engine::debug::log_info("------------------------------------------");
 		Int any = 0;
 		for (MemoryPool *pool = m_firstPoolInFactory; pool; pool = pool->getNextPoolInList())
 		{
@@ -3217,10 +3219,10 @@ void MemoryPoolFactory::debugMemoryReport(Int flags, Int startCheckpoint, Int en
 		{
 			any += dma->debugDmaReportLeaks();
 		}
-		DEBUG_ASSERTCRASH(!any, ("There were %d memory leaks. Please fix them.",any));
-		DEBUG_LOG(("------------------------------------------"));
-		DEBUG_LOG(("End Simple Leak Report"));
-		DEBUG_LOG(("------------------------------------------"));
+		engine::debug::invariant((!any), "!any", __FILE__, __LINE__, "There were %d memory leaks. Please fix them.",any);
+		engine::debug::log_info("------------------------------------------");
+		engine::debug::log_info("End Simple Leak Report");
+		engine::debug::log_info("------------------------------------------");
 	}
 
 #ifdef MEMORYPOOL_CHECKPOINTING
@@ -3228,18 +3230,18 @@ void MemoryPoolFactory::debugMemoryReport(Int flags, Int startCheckpoint, Int en
 	{
 		const char* nm = (this == TheMemoryPoolFactory) ? "TheMemoryPoolFactory" : "*** UNKNOWN *** MemoryPoolFactory";
 
-		DEBUG_LOG_RAW(("\n"));
-		DEBUG_LOG(("------------------------------------------"));
-		DEBUG_LOG(("Begin Block Report for %s", nm));
-		DEBUG_LOG(("------------------------------------------"));
+		engine::debug::log_info("\n");
+		engine::debug::log_info("------------------------------------------");
+		engine::debug::log_info("Begin Block Report for %s", nm);
+		engine::debug::log_info("------------------------------------------");
 		char buf[256] = "";
 		if (flags & _REPORT_CP_ALLOCATED_BEFORE) strcat(buf, "AllocBefore ");
 		if (flags & _REPORT_CP_ALLOCATED_BETWEEN) strcat(buf, "AllocBetween ");
 		if (flags & _REPORT_CP_FREED_BEFORE) strcat(buf, "FreedBefore ");
 		if (flags & _REPORT_CP_FREED_BETWEEN) strcat(buf, "FreedBetween ");
 		if (flags & _REPORT_CP_FREED_NEVER) strcat(buf, "StillExisting ");
-		DEBUG_LOG(("Options: Between checkpoints %d and %d, report on (%s)",startCheckpoint,endCheckpoint,buf));
-		DEBUG_LOG(("------------------------------------------"));
+		engine::debug::log_info("Options: Between checkpoints %d and %d, report on (%s)",startCheckpoint,endCheckpoint,buf);
+		engine::debug::log_info("------------------------------------------");
 
 		BlockCheckpointInfo::doBlockCheckpointReport( nullptr, "", 0, 0, 0 );
 		for (MemoryPool *pool = m_firstPoolInFactory; pool; pool = pool->getNextPoolInList())
@@ -3251,14 +3253,14 @@ void MemoryPoolFactory::debugMemoryReport(Int flags, Int startCheckpoint, Int en
 			dma->debugCheckpointReport(flags, startCheckpoint, endCheckpoint, "(Oversized)");
 		}
 
-		DEBUG_LOG(("------------------------------------------"));
-		DEBUG_LOG(("End Block Report for %s", nm));
-		DEBUG_LOG(("------------------------------------------"));
+		engine::debug::log_info("------------------------------------------");
+		engine::debug::log_info("End Block Report for %s", nm);
+		engine::debug::log_info("------------------------------------------");
 	}
 #endif
 
 #ifdef ALLOW_DEBUG_UTILS
-	DebugSetFlags(oldFlags);
+	
 #endif
 }
 #endif
@@ -3274,7 +3276,7 @@ void* STLSpecialAlloc::allocate(size_t __n)
 {
 	++theLinkTester;
 	preMainInitMemoryManager();
-	DEBUG_ASSERTCRASH(TheDynamicMemoryAllocator != nullptr, ("must init memory manager before calling global operator new"));
+	engine::debug::invariant((TheDynamicMemoryAllocator != nullptr), "TheDynamicMemoryAllocator != nullptr", __FILE__, __LINE__, "must init memory manager before calling global operator new");
 	return TheDynamicMemoryAllocator->allocateBytes(__n, "STL_");
 }
 
@@ -3283,7 +3285,7 @@ void STLSpecialAlloc::deallocate(void* __p, size_t)
 {
 	++theLinkTester;
 	preMainInitMemoryManager();
-	DEBUG_ASSERTCRASH(TheDynamicMemoryAllocator != nullptr, ("must init memory manager before calling global operator new"));
+	engine::debug::invariant((TheDynamicMemoryAllocator != nullptr), "TheDynamicMemoryAllocator != nullptr", __FILE__, __LINE__, "must init memory manager before calling global operator new");
 	TheDynamicMemoryAllocator->freeBytes(__p);
 }
 
@@ -3295,7 +3297,7 @@ void *operator new(size_t size)
 {
 	++theLinkTester;
 	preMainInitMemoryManager();
-	DEBUG_ASSERTCRASH(TheDynamicMemoryAllocator != nullptr, ("must init memory manager before calling global operator new"));
+	engine::debug::invariant((TheDynamicMemoryAllocator != nullptr), "TheDynamicMemoryAllocator != nullptr", __FILE__, __LINE__, "must init memory manager before calling global operator new");
 	return TheDynamicMemoryAllocator->allocateBytes(size, "global operator new");
 }
 
@@ -3307,7 +3309,7 @@ void *operator new[](size_t size)
 {
 	++theLinkTester;
 	preMainInitMemoryManager();
-	DEBUG_ASSERTCRASH(TheDynamicMemoryAllocator != nullptr, ("must init memory manager before calling global operator new"));
+	engine::debug::invariant((TheDynamicMemoryAllocator != nullptr), "TheDynamicMemoryAllocator != nullptr", __FILE__, __LINE__, "must init memory manager before calling global operator new");
 	return TheDynamicMemoryAllocator->allocateBytes(size, "global operator new[]");
 }
 
@@ -3319,7 +3321,7 @@ void operator delete(void *p)
 {
 	++theLinkTester;
 	preMainInitMemoryManager();
-	DEBUG_ASSERTCRASH(TheDynamicMemoryAllocator != nullptr, ("must init memory manager before calling global operator delete"));
+	engine::debug::invariant((TheDynamicMemoryAllocator != nullptr), "TheDynamicMemoryAllocator != nullptr", __FILE__, __LINE__, "must init memory manager before calling global operator delete");
 	TheDynamicMemoryAllocator->freeBytes(p);
 }
 
@@ -3331,7 +3333,7 @@ void operator delete[](void *p)
 {
 	++theLinkTester;
 	preMainInitMemoryManager();
-	DEBUG_ASSERTCRASH(TheDynamicMemoryAllocator != nullptr, ("must init memory manager before calling global operator delete"));
+	engine::debug::invariant((TheDynamicMemoryAllocator != nullptr), "TheDynamicMemoryAllocator != nullptr", __FILE__, __LINE__, "must init memory manager before calling global operator delete");
 	TheDynamicMemoryAllocator->freeBytes(p);
 }
 
@@ -3343,7 +3345,7 @@ void* operator new(size_t size, const char * fname, int)
 {
 	++theLinkTester;
 	preMainInitMemoryManager();
-	DEBUG_ASSERTCRASH(TheDynamicMemoryAllocator != nullptr, ("must init memory manager before calling global operator new"));
+	engine::debug::invariant((TheDynamicMemoryAllocator != nullptr), "TheDynamicMemoryAllocator != nullptr", __FILE__, __LINE__, "must init memory manager before calling global operator new");
 #ifdef MEMORYPOOL_DEBUG
 	return TheDynamicMemoryAllocator->allocateBytesImplementation(size, fname);
 #else
@@ -3359,7 +3361,7 @@ void operator delete(void * p, const char *, int)
 {
 	++theLinkTester;
 	preMainInitMemoryManager();
-	DEBUG_ASSERTCRASH(TheDynamicMemoryAllocator != nullptr, ("must init memory manager before calling global operator delete"));
+	engine::debug::invariant((TheDynamicMemoryAllocator != nullptr), "TheDynamicMemoryAllocator != nullptr", __FILE__, __LINE__, "must init memory manager before calling global operator delete");
 	TheDynamicMemoryAllocator->freeBytes(p);
 }
 
@@ -3371,7 +3373,7 @@ void* operator new[](size_t size, const char * fname, int)
 {
 	++theLinkTester;
 	preMainInitMemoryManager();
-	DEBUG_ASSERTCRASH(TheDynamicMemoryAllocator != nullptr, ("must init memory manager before calling global operator new"));
+	engine::debug::invariant((TheDynamicMemoryAllocator != nullptr), "TheDynamicMemoryAllocator != nullptr", __FILE__, __LINE__, "must init memory manager before calling global operator new");
 #ifdef MEMORYPOOL_DEBUG
 	return TheDynamicMemoryAllocator->allocateBytesImplementation(size, fname);
 #else
@@ -3387,7 +3389,7 @@ void operator delete[](void * p, const char *, int)
 {
 	++theLinkTester;
 	preMainInitMemoryManager();
-	DEBUG_ASSERTCRASH(TheDynamicMemoryAllocator != nullptr, ("must init memory manager before calling global operator delete"));
+	engine::debug::invariant((TheDynamicMemoryAllocator != nullptr), "TheDynamicMemoryAllocator != nullptr", __FILE__, __LINE__, "must init memory manager before calling global operator delete");
 	TheDynamicMemoryAllocator->freeBytes(p);
 }
 
@@ -3397,7 +3399,7 @@ void *calloc(size_t a, size_t b)
 {
 	++theLinkTester;
 	preMainInitMemoryManager();
-	DEBUG_ASSERTCRASH(TheDynamicMemoryAllocator != nullptr, ("must init memory manager"));
+	engine::debug::invariant((TheDynamicMemoryAllocator != nullptr), "TheDynamicMemoryAllocator != nullptr", __FILE__, __LINE__, "must init memory manager");
 	return TheDynamicMemoryAllocator->allocateBytes(a * b, "calloc");
 }
 #endif
@@ -3408,7 +3410,7 @@ void  free(void * p)
 {
 	++theLinkTester;
 	preMainInitMemoryManager();
-	DEBUG_ASSERTCRASH(TheDynamicMemoryAllocator != nullptr, ("must init memory manager"));
+	engine::debug::invariant((TheDynamicMemoryAllocator != nullptr), "TheDynamicMemoryAllocator != nullptr", __FILE__, __LINE__, "must init memory manager");
 	TheDynamicMemoryAllocator->freeBytes(p);
 }
 #endif
@@ -3419,7 +3421,7 @@ void *malloc(size_t a)
 {
 	++theLinkTester;
 	preMainInitMemoryManager();
-	DEBUG_ASSERTCRASH(TheDynamicMemoryAllocator != nullptr, ("must init memory manager"));
+	engine::debug::invariant((TheDynamicMemoryAllocator != nullptr), "TheDynamicMemoryAllocator != nullptr", __FILE__, __LINE__, "must init memory manager");
 	return TheDynamicMemoryAllocator->allocateBytesDoNotZero(a, "malloc");
 }
 #endif
@@ -3428,7 +3430,7 @@ void *malloc(size_t a)
 #ifdef MEMORYPOOL_OVERRIDE_MALLOC
 void *realloc(void *p, size_t s)
 {
-	DEBUG_CRASH(("realloc is evil. do not call it."));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "realloc is evil. do not call it.");
 	throw ERROR_OUT_OF_MEMORY;
 }
 #endif
@@ -3450,8 +3452,8 @@ void initMemoryManager()
 		userMemoryManagerInitPools();
 		thePreMainInitFlag = false;
 
-		DEBUG_INIT(DEBUG_FLAGS_DEFAULT);
-		DEBUG_LOG(("*** Initialized the Memory Manager"));
+		engine::debug::initialize();
+		engine::debug::log_info("*** Initialized the Memory Manager");
 	}
 	else
 	{
@@ -3461,7 +3463,7 @@ void initMemoryManager()
 		}
 		else
 		{
-			DEBUG_CRASH(("Memory Manager is already initialized"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Memory Manager is already initialized");
 		}
 	}
 
@@ -3492,7 +3494,7 @@ void initMemoryManager()
 	if (theLinkTester != 6)
 #endif
 	{
-		DEBUG_CRASH(("Wrong operator new/delete linked in! Fix this..."));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Wrong operator new/delete linked in! Fix this...");
 	}
 
 	theMainInitFlag = true;
@@ -3526,8 +3528,8 @@ static void preMainInitMemoryManager()
 		userMemoryManagerInitPools();
 		thePreMainInitFlag = true;
 
-		DEBUG_INIT(DEBUG_FLAGS_DEFAULT);
-		DEBUG_LOG(("*** Initialized the Memory Manager prior to main!"));
+		engine::debug::initialize();
+		engine::debug::log_info("*** Initialized the Memory Manager prior to main!");
 	}
 }
 
@@ -3541,14 +3543,14 @@ void shutdownMemoryManager()
 	if (thePreMainInitFlag)
 	{
 	#ifdef MEMORYPOOL_DEBUG
-		DEBUG_LOG(("*** Memory Manager was inited prior to main -- skipping shutdown!"));
+		engine::debug::log_info("*** Memory Manager was inited prior to main -- skipping shutdown!");
 	#endif
 	}
 	else
 	{
 		if (TheDynamicMemoryAllocator)
 		{
-			DEBUG_ASSERTCRASH(TheMemoryPoolFactory, ("hmm, no factory"));
+			engine::debug::invariant((TheMemoryPoolFactory), "TheMemoryPoolFactory", __FILE__, __LINE__, "hmm, no factory");
 			if (TheMemoryPoolFactory)
 				TheMemoryPoolFactory->destroyDynamicMemoryAllocator(TheDynamicMemoryAllocator);
 			TheDynamicMemoryAllocator = nullptr;
@@ -3565,15 +3567,15 @@ void shutdownMemoryManager()
 		}
 
 	#ifdef MEMORYPOOL_DEBUG
-		DEBUG_LOG(("Peak system allocation was %d bytes",thePeakSystemAllocationInBytes));
-		DEBUG_LOG(("Wasted DMA space (peak) was %d bytes",thePeakWastedDMA));
-		DEBUG_ASSERTCRASH(theTotalSystemAllocationInBytes == 0, ("Leaked a total of %d raw bytes", theTotalSystemAllocationInBytes));
+		engine::debug::log_info("Peak system allocation was %d bytes",thePeakSystemAllocationInBytes);
+		engine::debug::log_info("Wasted DMA space (peak) was %d bytes",thePeakWastedDMA);
+		engine::debug::invariant((theTotalSystemAllocationInBytes == 0), "theTotalSystemAllocationInBytes == 0", __FILE__, __LINE__, "Leaked a total of %d raw bytes", theTotalSystemAllocationInBytes);
 	#endif
 	}
 
 	theMainInitFlag = false;
 
-	DEBUG_SHUTDOWN();
+	engine::debug::shutdown();
 }
 
 //-----------------------------------------------------------------------------
@@ -3582,29 +3584,29 @@ void* createW3DMemPool(const char *poolName, int allocationSize)
 	++theLinkTester;
 	preMainInitMemoryManager();
 	MemoryPool* pool = TheMemoryPoolFactory->createMemoryPool(poolName, allocationSize, 0, 0);
-	DEBUG_ASSERTCRASH(pool && pool->getAllocationSize() == allocationSize, ("bad w3d pool"));
+	engine::debug::invariant((pool && pool->getAllocationSize() == allocationSize), "pool && pool->getAllocationSize() == allocationSize", __FILE__, __LINE__, "bad w3d pool");
 	return pool;
 }
 
 //-----------------------------------------------------------------------------
 void* allocateFromW3DMemPool(void* pool, int allocationSize)
 {
-	DEBUG_ASSERTCRASH(pool, ("pool is null"));
-	DEBUG_ASSERTCRASH(pool && ((MemoryPool*)pool)->getAllocationSize() == allocationSize, ("bad w3d pool size %s",((MemoryPool*)pool)->getPoolName()));
+	engine::debug::invariant((pool), "pool", __FILE__, __LINE__, "pool is null");
+	engine::debug::invariant((pool && ((MemoryPool*)pool)->getAllocationSize() == allocationSize), "pool && ((MemoryPool*)pool)->getAllocationSize() == allocationSize", __FILE__, __LINE__, "bad w3d pool size %s",((MemoryPool*)pool)->getPoolName());
 	return ((MemoryPool*)pool)->allocateBlock("allocateFromW3DMemPool");
 }
 
 //-----------------------------------------------------------------------------
 void* allocateFromW3DMemPool(void* pool, int allocationSize, const char* msg, int unused)
 {
-	DEBUG_ASSERTCRASH(pool, ("pool is null"));
-	DEBUG_ASSERTCRASH(pool && ((MemoryPool*)pool)->getAllocationSize() == allocationSize, ("bad w3d pool size %s",((MemoryPool*)pool)->getPoolName()));
+	engine::debug::invariant((pool), "pool", __FILE__, __LINE__, "pool is null");
+	engine::debug::invariant((pool && ((MemoryPool*)pool)->getAllocationSize() == allocationSize), "pool && ((MemoryPool*)pool)->getAllocationSize() == allocationSize", __FILE__, __LINE__, "bad w3d pool size %s",((MemoryPool*)pool)->getPoolName());
 	return ((MemoryPool*)pool)->allocateBlock(msg);
 }
 
 //-----------------------------------------------------------------------------
 void freeFromW3DMemPool(void* pool, void* p)
 {
-	DEBUG_ASSERTCRASH(pool, ("pool is null"));
+	engine::debug::invariant((pool), "pool", __FILE__, __LINE__, "pool is null");
 	((MemoryPool*)pool)->freeBlock(p);
 }

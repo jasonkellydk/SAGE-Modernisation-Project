@@ -41,6 +41,7 @@
 #include "GameLogic/Object.h"
 #include "GameLogic/Module/ContainModule.h"
 #include "W3DDevice/GameClient/Module/W3DOverlordAircraftDraw.h"
+import engine.debug;
 
 
 
@@ -104,7 +105,7 @@ void W3DOverlordAircraftDraw::doDrawModule(const Matrix3D* transformMtx)
       riderDraw->notifyDrawableDependencyCleared();
       riderDraw->draw();
     }
-    DEBUG_ASSERTCRASH( riderDraw, ("OverlordAircraftDraw finds no rider's drawable") );
+    engine::debug::invariant((riderDraw), "riderDraw", __FILE__, __LINE__, "OverlordAircraftDraw finds no rider's drawable");
 
 	}
 }

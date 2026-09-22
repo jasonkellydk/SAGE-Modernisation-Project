@@ -33,6 +33,7 @@
 #include "Common/ThingTemplate.h"
 #include "Common/ThingFactory.h"
 #include "Common/ThingSort.h"
+import engine.debug;
 
 /////////////////////////////////////////////////////////////////////////////
 // EditObjectParameter dialog
@@ -119,7 +120,7 @@ void EditObjectParameter::addObject( const ThingTemplate *thingTemplate  )
 
 		// first sort by Side, either create or find the tree item with matching side name
 		AsciiString side = thingTemplate->getDefaultOwningSide();
-		DEBUG_ASSERTCRASH(!side.isEmpty(), ("null default side in template") );
+		engine::debug::invariant((!side.isEmpty()), "!side.isEmpty()", __FILE__, __LINE__, "null default side in template");
 		parent = findOrAdd( parent, side.str());
 
 		// next tier uses the editor sorting that design can specify in the INI

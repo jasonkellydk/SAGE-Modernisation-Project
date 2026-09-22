@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // USER INCLUDES //////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/NameKeyGenerator.h"
 #include "Common/ThingTemplate.h"
@@ -93,15 +94,15 @@ void ControlBar::populateInvDataCallback( Object *obj, void *userData )
 	if( data->currIndex > data->maxIndex )
 	{
 
-		DEBUG_CRASH( ("There is not enough GUI slots to hold the # of items inside a '%s'",
-													data->transport->getTemplate()->getName().str()) );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "There is not enough GUI slots to hold the # of items inside a '%s'",
+													data->transport->getTemplate()->getName().str());
 		return;
 
 	}
 
 	// get the window control that we're going to put our smiling faces in
 	GameWindow *control = data->controls[ data->currIndex ];
-	DEBUG_ASSERTCRASH( control, ("populateInvDataCallback: Control not found") );
+	engine::debug::invariant((control), "control", __FILE__, __LINE__, "populateInvDataCallback: Control not found");
 
 	// assign our control and object id to the transport data
 	m_containData[ data->currIndex ].control = control;
@@ -414,7 +415,7 @@ void ControlBar::populateCommand( Object *obj )
 											//All purchase sciences specify a single science.
 											if( command->getScienceVec().empty() )
 											{
-												DEBUG_CRASH( ("Commandbutton %s is a purchase science button without any science! Please add it.", command->getName().str() ) );
+												engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Commandbutton %s is a purchase science button without any science! Please add it.", command->getName().str() );
 											}
 											else if( command->getScienceVec()[0] == science )
 											{
@@ -433,7 +434,7 @@ void ControlBar::populateCommand( Object *obj )
 											//All purchase sciences specify a single science.
 											if( command->getScienceVec().empty() )
 											{
-												DEBUG_CRASH( ("Commandbutton %s is a purchase science button without any science! Please add it.", command->getName().str() ) );
+												engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Commandbutton %s is a purchase science button without any science! Please add it.", command->getName().str() );
 											}
 											else if( command->getScienceVec()[0] == science )
 											{
@@ -452,7 +453,7 @@ void ControlBar::populateCommand( Object *obj )
 											//All purchase sciences specify a single science.
 											if( command->getScienceVec().empty() )
 											{
-												DEBUG_CRASH( ("Commandbutton %s is a purchase science button without any science! Please add it.", command->getName().str() ) );
+												engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Commandbutton %s is a purchase science button without any science! Please add it.", command->getName().str() );
 											}
 											else if( command->getScienceVec()[0] == science )
 											{
@@ -786,7 +787,7 @@ void ControlBar::updateContextCommand()
 				static NameKeyType winID = TheNameKeyGenerator->nameToKey( "ControlBar.wnd:ButtonQueue01" );
 				GameWindow *win = TheWindowManager->winGetWindowFromId( m_contextParent[ CP_BUILD_QUEUE ], winID );
 
-				DEBUG_ASSERTCRASH( win, ("updateContextCommand: Unable to find first build queue button") );
+				engine::debug::invariant((win), "win", __FILE__, __LINE__, "updateContextCommand: Unable to find first build queue button");
 				//				UnicodeString text;
 				//
 				//				text.format( L"%.0f%%", produce->getPercentComplete() );
@@ -882,9 +883,8 @@ void ControlBar::updateContextCommand()
 		{
 
 			// sanity, check like commands should have windows that are check like as well
-			DEBUG_ASSERTCRASH( BitIsSet( win->winGetStatus(), WIN_STATUS_CHECK_LIKE ),
-												 ("updateContextCommand: Error, gadget window for command '%s' is not check-like!",
-												 command->getName().str()) );
+			engine::debug::invariant((BitIsSet( win->winGetStatus(), WIN_STATUS_CHECK_LIKE )), "BitIsSet( win->winGetStatus(), WIN_STATUS_CHECK_LIKE )", __FILE__, __LINE__, "updateContextCommand: Error, gadget window for command '%s' is not check-like!",
+												 command->getName().str());
 
 			if( availability == COMMAND_ACTIVE )
 				GadgetCheckLikeButtonSetVisualCheck( win, TRUE );
@@ -1147,7 +1147,7 @@ CommandAvailability ControlBar::getCommandAvailability( const CommandButton *com
 
 			dozerAI = obj->getAIUpdateInterface()->getDozerAIInterface();
 
-			DEBUG_ASSERTCRASH( dozerAI != nullptr, ("Something KINDOF_DOZER must have a Dozer-like AIUpdate") );
+			engine::debug::invariant((dozerAI != nullptr), "dozerAI != nullptr", __FILE__, __LINE__, "Something KINDOF_DOZER must have a Dozer-like AIUpdate");
 			if( dozerAI == nullptr )
 				return COMMAND_RESTRICTED;
 
@@ -1250,7 +1250,7 @@ CommandAvailability ControlBar::getCommandAvailability( const CommandButton *com
 			// no production update, can't possibly do this command
 			if( pu == nullptr )
 			{
-				DEBUG_CRASH(("Objects that have Object-Level Upgrades must also have ProductionUpdate. Just cuz."));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Objects that have Object-Level Upgrades must also have ProductionUpdate. Just cuz.");
 				return COMMAND_RESTRICTED;
 			}
 
@@ -1290,8 +1290,8 @@ CommandAvailability ControlBar::getCommandAvailability( const CommandButton *com
 
 			// changed this to Log rather than Crash, because this can legitimately happen now for
 			// dozers and workers with mine-clearing stuff... (srj)
-			//DEBUG_ASSERTLOG( w, ("Unit %s's CommandButton %s is trying to access weaponslot %d, but doesn't have a weapon there in its FactionUnit ini entry.",
-			//	obj->getTemplate()->getName().str(), command->getName().str(), (Int)command->getWeaponSlot() ) );
+			//if (!(w)) engine::debug::log_error("Unit %s's CommandButton %s is trying to access weaponslot %d, but doesn't have a weapon there in its FactionUnit ini entry.",
+			//	obj->getTemplate()->getName().str(), command->getName().str(), (Int)command->getWeaponSlot() );
 
 			UnsignedInt now = TheGameLogic->getFrame();
 
@@ -1401,8 +1401,7 @@ CommandAvailability ControlBar::getCommandAvailability( const CommandButton *com
 		case GUI_COMMAND_SPECIAL_POWER_CONSTRUCT_FROM_SHORTCUT:
 		{
 			// sanity
-			DEBUG_ASSERTCRASH( command->getSpecialPowerTemplate() != nullptr,
-												 ("The special power in the command '%s' is null", command->getName().str()) );
+			engine::debug::invariant((command->getSpecialPowerTemplate() != nullptr), "command->getSpecialPowerTemplate() != nullptr", __FILE__, __LINE__, "The special power in the command '%s' is null", command->getName().str());
 			// get special power module from the object to execute it
 			SpecialPowerModuleInterface *mod = obj->getSpecialPowerModule( command->getSpecialPowerTemplate() );
 
@@ -1410,8 +1409,8 @@ CommandAvailability ControlBar::getCommandAvailability( const CommandButton *com
 			{
 				// sanity ... we must have a module for the special power, if we don't somebody probably
 				// forgot to put it in the object
-				DEBUG_CRASH(( "Object %s does not contain special power module (%s) to execute.  Did you forget to add it to the object INI?",
-											obj->getTemplate()->getName().str(), command->getSpecialPowerTemplate()->getName().str() ));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Object %s does not contain special power module (%s) to execute.  Did you forget to add it to the object INI?",
+											obj->getTemplate()->getName().str(), command->getSpecialPowerTemplate()->getName().str() );
 			}
 			else if( mod->isReady() == FALSE )
 			{
@@ -1463,8 +1462,8 @@ CommandAvailability ControlBar::getCommandAvailability( const CommandButton *com
 			// ask the ai which weapon is in the current slot
 			const Weapon* w = obj->getWeaponInWeaponSlot( command->getWeaponSlot() );
 
-			DEBUG_ASSERTCRASH( w, ("Unit %s's CommandButton %s is trying to access weaponslot %d, but doesn't have a weapon there in its FactionUnit ini entry.",
-				obj->getTemplate()->getName().str(), command->getName().str(), (Int)command->getWeaponSlot() ) );
+			engine::debug::invariant((w), "w", __FILE__, __LINE__, "Unit %s's CommandButton %s is trying to access weaponslot %d, but doesn't have a weapon there in its FactionUnit ini entry.",
+				obj->getTemplate()->getName().str(), command->getName().str(), (Int)command->getWeaponSlot() );
 
 			if( w == nullptr)
 				return COMMAND_RESTRICTED;

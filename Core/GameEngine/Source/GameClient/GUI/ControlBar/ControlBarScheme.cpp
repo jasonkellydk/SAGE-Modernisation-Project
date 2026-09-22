@@ -51,7 +51,8 @@
 //-----------------------------------------------------------------------------
 // USER INCLUDES //////////////////////////////////////////////////////////////
 //-----------------------------------------------------------------------------
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 import Engine.UI.WND.Layout;
 
@@ -427,9 +428,9 @@ void ControlBarScheme::init()
 	win= TheWindowManager->winGetWindowFromId( nullptr, TheNameKeyGenerator->nameToKey( "ControlBar.wnd:PopupCommunicator" ) );
 	if(win)
 	{
-//		DEBUG_ASSERTCRASH(m_buddyButtonEnable,     ("No enable button image for communicator in scheme %s!", m_name.str()));
-//		DEBUG_ASSERTCRASH(m_buddyButtonHightlited, ("No hilite button image for communicator in scheme %s!", m_name.str()));
-//		DEBUG_ASSERTCRASH(m_buddyButtonPushed,     ("No pushed button image for communicator in scheme %s!", m_name.str()));
+//		engine::debug::invariant((m_buddyButtonEnable), "m_buddyButtonEnable", __FILE__, __LINE__, "No enable button image for communicator in scheme %s!", m_name.str());
+//		engine::debug::invariant((m_buddyButtonHightlited), "m_buddyButtonHightlited", __FILE__, __LINE__, "No hilite button image for communicator in scheme %s!", m_name.str());
+//		engine::debug::invariant((m_buddyButtonPushed), "m_buddyButtonPushed", __FILE__, __LINE__, "No pushed button image for communicator in scheme %s!", m_name.str());
 		GadgetButtonSetEnabledImage(win, m_buddyButtonEnable);
 		GadgetButtonSetHiliteImage(win, m_buddyButtonHightlited);
 		GadgetButtonSetHiliteSelectedImage(win, m_buddyButtonPushed);
@@ -576,7 +577,7 @@ void ControlBarScheme::init()
 		}
 		win->winSetPosition(x,y );
 		win->winSetSize((m_powerBarLR.x - m_powerBarUL.x)*resMultiplier.x+ COMMAND_BAR_SIZE_OFFSET,(m_powerBarLR.y - m_powerBarUL.y)*resMultiplier.y+ COMMAND_BAR_SIZE_OFFSET);
-		DEBUG_LOG(("Power Bar UL X:%d Y:%d LR X:%d Y:%d size X:%d Y:%d",m_powerBarUL.x, m_powerBarUL.y,m_powerBarLR.x, m_powerBarLR.y, (m_powerBarLR.x - m_powerBarUL.x)*resMultiplier.x+ COMMAND_BAR_SIZE_OFFSET,(m_powerBarLR.y - m_powerBarUL.y)*resMultiplier.y+ COMMAND_BAR_SIZE_OFFSET  ));
+		engine::debug::log_info("Power Bar UL X:%d Y:%d LR X:%d Y:%d size X:%d Y:%d",m_powerBarUL.x, m_powerBarUL.y,m_powerBarLR.x, m_powerBarLR.y, (m_powerBarLR.x - m_powerBarUL.x)*resMultiplier.x+ COMMAND_BAR_SIZE_OFFSET,(m_powerBarLR.y - m_powerBarUL.y)*resMultiplier.y+ COMMAND_BAR_SIZE_OFFSET  );
 	}
 
 	win= TheWindowManager->winGetWindowFromId( nullptr, TheNameKeyGenerator->nameToKey( "ControlBar.wnd:ButtonGeneral" ) );
@@ -674,7 +675,7 @@ void ControlBarScheme::addAnimation( ControlBarSchemeAnimation *schemeAnim )
 {
 	if( !schemeAnim )
 	{
-		DEBUG_CRASH(("Trying to add a null animation to the controlbarscheme"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Trying to add a null animation to the controlbarscheme");
 		return;
 	}
 	m_animations.push_back( schemeAnim );
@@ -687,14 +688,14 @@ void ControlBarScheme::addImage( ControlBarSchemeImage *schemeImage )
 {
 	if( !schemeImage )
 	{
-		DEBUG_CRASH(("Trying to add a null image to the controlbarscheme"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Trying to add a null image to the controlbarscheme");
 		return;
 	}
 
 	if(schemeImage->m_layer < 0 || schemeImage->m_layer >= MAX_CONTROL_BAR_SCHEME_IMAGE_LAYERS)
 	{
-		DEBUG_CRASH(("SchemeImage %s attempted to be added to layer %d which is not Between to %d, %d",
-								 schemeImage->m_name.str(), schemeImage->m_layer, 0, MAX_CONTROL_BAR_SCHEME_IMAGE_LAYERS));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "SchemeImage %s attempted to be added to layer %d which is not Between to %d, %d",
+								 schemeImage->m_name.str(), schemeImage->m_layer, 0, MAX_CONTROL_BAR_SCHEME_IMAGE_LAYERS);
 		// bring the foobar to the front so we make it obvious that something's wrong
 		schemeImage->m_layer = 0;
 	}
@@ -716,7 +717,7 @@ void ControlBarScheme::updateAnim (ControlBarSchemeAnimation * anim)
 		}
 		default:
 		{
-			DEBUG_CRASH(("We tried to animate but not animate function was found %d", anim->m_animType));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "We tried to animate but not animate function was found %d", anim->m_animType);
 		}
 	}
 }
@@ -733,7 +734,7 @@ void ControlBarScheme::update()
 		ControlBarSchemeAnimation *anim = *it;
 		if( !anim )
 		{
-			DEBUG_CRASH(("THere's no Animation in the ControlBarSchemeAnimationList:m_animations"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "THere's no Animation in the ControlBarSchemeAnimationList:m_animations");
 			return;
 		}
 		updateAnim( anim );
@@ -841,7 +842,7 @@ ControlBarScheme *ControlBarSchemeManager::newControlBarScheme( AsciiString name
 	ControlBarScheme *cbScheme = 	findControlBarScheme(name);
 	if(cbScheme)
 	{
-		DEBUG_CRASH(("We're overwriting a previous control bar scheme %s",name.str()));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "We're overwriting a previous control bar scheme %s",name.str());
 		cbScheme->reset();
 		cbScheme->m_name.set( name );
 		cbScheme->m_name.toLower();
@@ -852,7 +853,7 @@ ControlBarScheme *ControlBarSchemeManager::newControlBarScheme( AsciiString name
 
 	if( !cbScheme  || name.isEmpty() )
 	{
-		DEBUG_CRASH(("Could not create controlbar %s", name.str()));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Could not create controlbar %s", name.str());
 		return nullptr;
 	}
 
@@ -879,7 +880,7 @@ ControlBarScheme *ControlBarSchemeManager::findControlBarScheme( AsciiString nam
 		ControlBarScheme *CBScheme = *it;
 		if( !CBScheme )
 		{
-			DEBUG_CRASH(("There's no ControlBarScheme in the ControlBarSchemeList:m_schemeList"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "There's no ControlBarScheme in the ControlBarSchemeList:m_schemeList");
 			return nullptr;
 		}
 		if(CBScheme->m_name.compareNoCase( name ) == 0)
@@ -899,7 +900,7 @@ void ControlBarSchemeManager::preloadAssets( TimeOfDay timeOfDay )
 		ControlBarScheme *CBScheme = *it;
 		if( !CBScheme )
 		{
-			DEBUG_CRASH(("There's no ControlBarScheme in the ControlBarSchemeList:m_schemeList"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "There's no ControlBarScheme in the ControlBarSchemeList:m_schemeList");
 			continue;
 		}
 
@@ -953,7 +954,7 @@ void ControlBarSchemeManager::init()
 //	}
 	if( m_schemeList.empty() )
 	{
-		DEBUG_CRASH(("There's no ControlBarScheme in the ControlBarSchemeList:m_schemeList that was just read from the INI file"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "There's no ControlBarScheme in the ControlBarSchemeList:m_schemeList that was just read from the INI file");
 		return;
 	}
 
@@ -975,7 +976,7 @@ void ControlBarSchemeManager::setControlBarScheme(AsciiString schemeName)
 	}
 	else
 	{
-		DEBUG_CRASH(("There's no ControlBarScheme in the ControlBarSchemeList:m_schemeList"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "There's no ControlBarScheme in the ControlBarSchemeList:m_schemeList");
 		m_currentScheme = nullptr;
 	}
 	if(m_currentScheme)
@@ -1002,14 +1003,14 @@ void ControlBarSchemeManager::setControlBarSchemeByPlayerTemplate( const PlayerT
 	{
 		m_currentScheme->init();
 
-		DEBUG_LOG(("setControlBarSchemeByPlayer already is using %s as its side", side.str()));
+		engine::debug::log_info("setControlBarSchemeByPlayer already is using %s as its side", side.str());
 		return;
 	}
 
 	// if we don't have a side, set it to Observer shell
 	if(side.isEmpty())
 		side.set("Observer");
-	DEBUG_LOG(("setControlBarSchemeByPlayer used %s as its side", side.str()));
+	engine::debug::log_info("setControlBarSchemeByPlayer used %s as its side", side.str());
 	ControlBarScheme *tempScheme = nullptr;
 
 	ControlBarSchemeList::iterator it = m_schemeList.begin();
@@ -1020,7 +1021,7 @@ void ControlBarSchemeManager::setControlBarSchemeByPlayerTemplate( const PlayerT
 		ControlBarScheme *CBScheme = *it;
 		if( !CBScheme )
 		{
-			DEBUG_CRASH(("There's no ControlBarScheme in the ControlBarSchemeList:m_schemeList"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "There's no ControlBarScheme in the ControlBarSchemeList:m_schemeList");
 			it++;
 			continue;
 		}
@@ -1045,7 +1046,7 @@ void ControlBarSchemeManager::setControlBarSchemeByPlayerTemplate( const PlayerT
 	{
 		// well, we couldn't find
 		m_currentScheme = findControlBarScheme("Default");
-		DEBUG_LOG(("There's no ControlBarScheme with a side of %s", side.str()));
+		engine::debug::log_info("There's no ControlBarScheme with a side of %s", side.str());
 //		m_currentScheme = nullptr;
 	}
 	if(m_currentScheme)
@@ -1070,14 +1071,14 @@ void ControlBarSchemeManager::setControlBarSchemeByPlayer(Player *p)
 	{
 		m_currentScheme->init();
 
-		DEBUG_LOG(("setControlBarSchemeByPlayer already is using %s as its side", side.str()));
+		engine::debug::log_info("setControlBarSchemeByPlayer already is using %s as its side", side.str());
 		return;
 	}
 
 	// if we don't have a side, set it to Observer shell
 	if(side.isEmpty())
 		side.set("Observer");
-	DEBUG_LOG(("setControlBarSchemeByPlayer used %s as its side", side.str()));
+	engine::debug::log_info("setControlBarSchemeByPlayer used %s as its side", side.str());
 	ControlBarScheme *tempScheme = nullptr;
 
 	ControlBarSchemeList::iterator it = m_schemeList.begin();
@@ -1088,7 +1089,7 @@ void ControlBarSchemeManager::setControlBarSchemeByPlayer(Player *p)
 		ControlBarScheme *CBScheme = *it;
 		if( !CBScheme )
 		{
-			DEBUG_CRASH(("There's no ControlBarScheme in the ControlBarSchemeList:m_schemeList"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "There's no ControlBarScheme in the ControlBarSchemeList:m_schemeList");
 			it++;
 			continue;
 		}
@@ -1113,7 +1114,7 @@ void ControlBarSchemeManager::setControlBarSchemeByPlayer(Player *p)
 	{
 		// well, we couldn't find
 		m_currentScheme = findControlBarScheme("Default");
-		DEBUG_LOG(("There's no ControlBarScheme with a side of %s", side.str()));
+		engine::debug::log_info("There's no ControlBarScheme with a side of %s", side.str());
 //		m_currentScheme = nullptr;
 	}
 	if(m_currentScheme)

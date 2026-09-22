@@ -43,7 +43,8 @@
 //-----------------------------------------------------------------------------
 ///////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/Dict.h"
 #include "Common/GameMemory.h"
@@ -111,20 +112,20 @@ void Dict::DictPair::setNameAndType(NameKeyType key, Dict::DataType type)
 void Dict::validate() const
 {
 	if (!m_data) return;
-	DEBUG_ASSERTCRASH(m_data->m_refCount > 0, ("m_refCount is zero"));
-	DEBUG_ASSERTCRASH(m_data->m_refCount < 32000, ("m_refCount is suspiciously large"));
-	DEBUG_ASSERTCRASH(m_data->m_numPairsAllocated > 0, ("m_numPairsAllocated is zero"));
-	DEBUG_ASSERTCRASH(m_data->m_numPairsUsed >= 0, ("m_numPairsUsed is neg"));
-	DEBUG_ASSERTCRASH(m_data->m_numPairsAllocated >= m_data->m_numPairsUsed, ("m_numPairsAllocated too small"));
-	DEBUG_ASSERTCRASH(m_data->m_numPairsAllocated < 1024, ("m_numPairsAllocated suspiciously large"));
+	engine::debug::invariant((m_data->m_refCount > 0), "m_data->m_refCount > 0", __FILE__, __LINE__, "m_refCount is zero");
+	engine::debug::invariant((m_data->m_refCount < 32000), "m_data->m_refCount < 32000", __FILE__, __LINE__, "m_refCount is suspiciously large");
+	engine::debug::invariant((m_data->m_numPairsAllocated > 0), "m_data->m_numPairsAllocated > 0", __FILE__, __LINE__, "m_numPairsAllocated is zero");
+	engine::debug::invariant((m_data->m_numPairsUsed >= 0), "m_data->m_numPairsUsed >= 0", __FILE__, __LINE__, "m_numPairsUsed is neg");
+	engine::debug::invariant((m_data->m_numPairsAllocated >= m_data->m_numPairsUsed), "m_data->m_numPairsAllocated >= m_data->m_numPairsUsed", __FILE__, __LINE__, "m_numPairsAllocated too small");
+	engine::debug::invariant((m_data->m_numPairsAllocated < 1024), "m_data->m_numPairsAllocated < 1024", __FILE__, __LINE__, "m_numPairsAllocated suspiciously large");
 }
 #endif
 
 // -----------------------------------------------------
 Dict::DictPair* Dict::findPairByKey(NameKeyType key) const
 {
-	DEBUG_ASSERTCRASH(key != NAMEKEY_INVALID, ("invalid namekey!"));
-	DEBUG_ASSERTCRASH((UnsignedInt)key < (1L<<23), ("namekey too large!"));
+	engine::debug::invariant((key != NAMEKEY_INVALID), "key != NAMEKEY_INVALID", __FILE__, __LINE__, "invalid namekey!");
+	engine::debug::invariant(((UnsignedInt)key < (1L<<23)), "(UnsignedInt)key < (1L<<23)", __FILE__, __LINE__, "namekey too large!");
 	if (!m_data)
 		return nullptr;
 	DictPair* base = m_data->peek();
@@ -160,8 +161,8 @@ Dict::DictPair *Dict::ensureUnique(int numPairsNeeded, Bool preserveData, DictPa
 	Dict::DictPairData* newData = nullptr;
 	if (numPairsNeeded > 0)
 	{
-		DEBUG_ASSERTCRASH(TheDynamicMemoryAllocator != nullptr, ("Cannot use dynamic memory allocator before its initialization. Check static initialization order."));
-		DEBUG_ASSERTCRASH(numPairsNeeded <= MAX_LEN, ("Dict::ensureUnique exceeds max pairs length %d with requested length %d", MAX_LEN, numPairsNeeded));
+		engine::debug::invariant((TheDynamicMemoryAllocator != nullptr), "TheDynamicMemoryAllocator != nullptr", __FILE__, __LINE__, "Cannot use dynamic memory allocator before its initialization. Check static initialization order.");
+		engine::debug::invariant((numPairsNeeded <= MAX_LEN), "numPairsNeeded <= MAX_LEN", __FILE__, __LINE__, "Dict::ensureUnique exceeds max pairs length %d with requested length %d", MAX_LEN, numPairsNeeded);
 		int minBytes = sizeof(Dict::DictPairData) + numPairsNeeded*sizeof(Dict::DictPair);
 		int actualBytes = TheDynamicMemoryAllocator->getActualAllocationSize(minBytes);
 		// note: be certain to alloc with zero; we'll take advantage of the fact that all-zero
@@ -229,11 +230,11 @@ Dict::Dict(Int numPairsToPreAllocate) : m_data(nullptr)
 		This is currently true, but if that assumption ever changes, all hell
 		will break loose. So we do a quick check to assure this...
 	*/
-	DEBUG_ASSERTCRASH(sizeof(Bool) <= sizeof(void*) &&
+	engine::debug::invariant((sizeof(Bool) <= sizeof(void*) &&
 										sizeof(Int) <= sizeof(void*) &&
 										sizeof(Real) <= sizeof(void*) &&
 										sizeof(AsciiString) <= sizeof(void*) &&
-										sizeof(UnicodeString) <= sizeof(void*), ("oops, this code needs attention"));
+										sizeof(UnicodeString) <= sizeof(void*)), "legacy dictionary size constraints", __FILE__, __LINE__, "oops, this code needs attention");
 
 	if (numPairsToPreAllocate)
 		ensureUnique(numPairsToPreAllocate, false, nullptr);	// will throw on error
@@ -274,7 +275,7 @@ Bool Dict::getBool(NameKeyType key, Bool *exists/*=nullptr*/) const
 		if (exists) *exists = true;
 		return *pair->asBool();
 	}
-	DEBUG_ASSERTCRASH(exists != nullptr, ("dict key missing, or of wrong type"));	// only assert if they didn't check result
+	engine::debug::invariant((exists != nullptr), "exists != nullptr", __FILE__, __LINE__, "dict key missing, or of wrong type");	// only assert if they didn't check result
 	if (exists) *exists = false;
 	return false;
 }
@@ -289,7 +290,7 @@ Int Dict::getInt(NameKeyType key, Bool *exists/*=nullptr*/) const
 		if (exists) *exists = true;
 		return *pair->asInt();
 	}
-	DEBUG_ASSERTCRASH(exists != nullptr,("dict key missing, or of wrong type"));	// only assert if they didn't check result
+	engine::debug::invariant((exists != nullptr), "exists != nullptr", __FILE__, __LINE__, "dict key missing, or of wrong type");	// only assert if they didn't check result
 	if (exists) *exists = false;
 	return 0;
 }
@@ -304,7 +305,7 @@ Real Dict::getReal(NameKeyType key, Bool *exists/*=nullptr*/) const
 		if (exists) *exists = true;
 		return *pair->asReal();
 	}
-	DEBUG_ASSERTCRASH(exists != nullptr,("dict key missing, or of wrong type"));	// only assert if they didn't check result
+	engine::debug::invariant((exists != nullptr), "exists != nullptr", __FILE__, __LINE__, "dict key missing, or of wrong type");	// only assert if they didn't check result
 	if (exists) *exists = false;
 	return 0.0f;
 }
@@ -319,7 +320,7 @@ AsciiString Dict::getAsciiString(NameKeyType key, Bool *exists/*=nullptr*/) cons
 		if (exists) *exists = true;
 		return *pair->asAsciiString();
 	}
-	DEBUG_ASSERTCRASH(exists != nullptr,("dict key missing, or of wrong type"));	// only assert if they didn't check result
+	engine::debug::invariant((exists != nullptr), "exists != nullptr", __FILE__, __LINE__, "dict key missing, or of wrong type");	// only assert if they didn't check result
 	if (exists) *exists = false;
 	return AsciiString::TheEmptyString;
 }
@@ -334,7 +335,7 @@ UnicodeString Dict::getUnicodeString(NameKeyType key, Bool *exists/*=nullptr*/) 
 		if (exists) *exists = true;
 		return *pair->asUnicodeString();
 	}
-	DEBUG_ASSERTCRASH(exists != nullptr,("dict key missing, or of wrong type"));	// only assert if they didn't check result
+	engine::debug::invariant((exists != nullptr), "exists != nullptr", __FILE__, __LINE__, "dict key missing, or of wrong type");	// only assert if they didn't check result
 	if (exists) *exists = false;
 	return UnicodeString::TheEmptyString;
 }
@@ -343,14 +344,14 @@ UnicodeString Dict::getUnicodeString(NameKeyType key, Bool *exists/*=nullptr*/) 
 Bool Dict::getNthBool(Int n) const
 {
 	validate();
-	DEBUG_ASSERTCRASH(n >= 0 && n < getPairCount(), ("n out of range"));
+	engine::debug::invariant((n >= 0 && n < getPairCount()), "n >= 0 && n < getPairCount()", __FILE__, __LINE__, "n out of range");
 	if (m_data)
 	{
 		DictPair* pair = &m_data->peek()[n];
 		if (pair && pair->getType() == DICT_BOOL)
 			return *pair->asBool();
 	}
-	DEBUG_CRASH(("dict key missing, or of wrong type"));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "dict key missing, or of wrong type");
 	return false;
 }
 
@@ -358,14 +359,14 @@ Bool Dict::getNthBool(Int n) const
 Int Dict::getNthInt(Int n) const
 {
 	validate();
-	DEBUG_ASSERTCRASH(n >= 0 && n < getPairCount(), ("n out of range"));
+	engine::debug::invariant((n >= 0 && n < getPairCount()), "n >= 0 && n < getPairCount()", __FILE__, __LINE__, "n out of range");
 	if (m_data)
 	{
 		DictPair* pair = &m_data->peek()[n];
 		if (pair && pair->getType() == DICT_INT)
 			return *pair->asInt();
 	}
-	DEBUG_CRASH(("dict key missing, or of wrong type"));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "dict key missing, or of wrong type");
 	return 0;
 }
 
@@ -373,14 +374,14 @@ Int Dict::getNthInt(Int n) const
 Real Dict::getNthReal(Int n) const
 {
 	validate();
-	DEBUG_ASSERTCRASH(n >= 0 && n < getPairCount(), ("n out of range"));
+	engine::debug::invariant((n >= 0 && n < getPairCount()), "n >= 0 && n < getPairCount()", __FILE__, __LINE__, "n out of range");
 	if (m_data)
 	{
 		DictPair* pair = &m_data->peek()[n];
 		if (pair && pair->getType() == DICT_REAL)
 			return *pair->asReal();
 	}
-	DEBUG_CRASH(("dict key missing, or of wrong type"));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "dict key missing, or of wrong type");
 	return 0.0f;
 }
 
@@ -388,14 +389,14 @@ Real Dict::getNthReal(Int n) const
 AsciiString Dict::getNthAsciiString(Int n) const
 {
 	validate();
-	DEBUG_ASSERTCRASH(n >= 0 && n < getPairCount(), ("n out of range"));
+	engine::debug::invariant((n >= 0 && n < getPairCount()), "n >= 0 && n < getPairCount()", __FILE__, __LINE__, "n out of range");
 	if (m_data)
 	{
 		DictPair* pair = &m_data->peek()[n];
 		if (pair && pair->getType() == DICT_ASCIISTRING)
 			return *pair->asAsciiString();
 	}
-	DEBUG_CRASH(("dict key missing, or of wrong type"));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "dict key missing, or of wrong type");
 	return AsciiString::TheEmptyString;
 }
 
@@ -403,14 +404,14 @@ AsciiString Dict::getNthAsciiString(Int n) const
 UnicodeString Dict::getNthUnicodeString(Int n) const
 {
 	validate();
-	DEBUG_ASSERTCRASH(n >= 0 && n < getPairCount(), ("n out of range"));
+	engine::debug::invariant((n >= 0 && n < getPairCount()), "n >= 0 && n < getPairCount()", __FILE__, __LINE__, "n out of range");
 	if (m_data)
 	{
 		DictPair* pair = &m_data->peek()[n];
 		if (pair && pair->getType() == DICT_UNICODESTRING)
 			return *pair->asUnicodeString();
 	}
-	DEBUG_CRASH(("dict key missing, or of wrong type"));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "dict key missing, or of wrong type");
 	return UnicodeString::TheEmptyString;
 }
 
@@ -427,7 +428,7 @@ Dict::DictPair *Dict::setPrep(NameKeyType key, Dict::DataType type)
 		pair = &m_data->peek()[m_data->m_numPairsUsed++];
 	}
 	pair->setNameAndType(key, type);
-	DEBUG_ASSERTCRASH(pair, ("pair must not be null here"));
+	engine::debug::invariant((pair), "pair", __FILE__, __LINE__, "pair must not be null here");
 	return pair;
 }
 
@@ -525,7 +526,7 @@ Bool Dict::remove(NameKeyType key)
 		validate();
 		return true;
 	}
-	DEBUG_CRASH(("dict key missing in remove"));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "dict key missing in remove");
 	return false;
 }
 

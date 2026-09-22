@@ -40,6 +40,7 @@
 #include "GameClient/Color.h"
 
 #include <list>
+import engine.debug;
 
 ObjectOptions *ObjectOptions::m_staticThis = nullptr;
 Bool ObjectOptions::m_updating = false;
@@ -99,7 +100,7 @@ static Int findSideListEntryWithPlayerOfSide(AsciiString side)
 		}
 	}
 
-	// DEBUG_CRASH(("no SideList entry found for %s!",side.str()));
+	// engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "no SideList entry found for %s!",side.str());
 	return -1;
 }
 
@@ -169,7 +170,7 @@ void ObjectOptions::updateLabel()
 	{
 		Dict *d = TheSidesList->getTeamInfo(i)->getDict();
 		AsciiString name = d->getAsciiString(TheKey_teamName);
-		DEBUG_ASSERTCRASH(!name.isEmpty(),("bad"));
+		engine::debug::invariant((!name.isEmpty()), "!name.isEmpty()", __FILE__, __LINE__, "bad");
 
 		if (name == defTeamName)
 			sel = i;
@@ -181,20 +182,20 @@ void ObjectOptions::updateLabel()
 		}
 		list->AddString(name.str());
 	}
-	DEBUG_ASSERTCRASH(TheSidesList->getNumTeams() == 0 || neutral != -1, ("must have a neutral"));
+	engine::debug::invariant((TheSidesList->getNumTeams() == 0 || neutral != -1), "TheSidesList->getNumTeams() == 0 || neutral != -1", __FILE__, __LINE__, "must have a neutral");
 	if (sel == -1)
 	{
-		DEBUG_ASSERTCRASH(defTeamName.isEmpty(), ("owning team not found, using neutral"));
+		engine::debug::invariant((defTeamName.isEmpty()), "defTeamName.isEmpty()", __FILE__, __LINE__, "owning team not found, using neutral");
 		sel = neutral;
 	}
 	if (sel == -1)
 	{
-		DEBUG_ASSERTCRASH(!pCur || TheSidesList->getNumTeams()==0,("hmm, should not happen"));
+		engine::debug::invariant((!pCur || TheSidesList->getNumTeams()==0), "!pCur || TheSidesList->getNumTeams()==0", __FILE__, __LINE__, "hmm, should not happen");
 		m_curOwnerName.clear();
 	}
 	else
 	{
-		DEBUG_ASSERTCRASH(pCur,("hmm, should not happen"));
+		engine::debug::invariant((pCur), "pCur", __FILE__, __LINE__, "hmm, should not happen");
 		m_curOwnerName = TheSidesList->getTeamInfo(sel)->getDict()->getAsciiString(TheKey_teamName);
 	}
 	list->SetCurSel(sel);
@@ -216,7 +217,7 @@ static const PlayerTemplate* findFirstPlayerTemplateOnSide(AsciiString side)
 		}
 	}
 
-	DEBUG_CRASH(("no player found for %s!",side.str()));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "no player found for %s!",side.str());
 	return nullptr;
 }
 #endif
@@ -406,7 +407,7 @@ HTREEITEM ObjectOptions::_FindOrDont(const char* pLabel, HTREEITEM startPoint)
 		char buffer[_MAX_PATH];
 		HTREEITEM hItem = itemsToEx.front();
 		itemsToEx.pop_front();
-		DEBUG_ASSERTCRASH(hItem != nullptr, ("Unexpected tree item pointer in ObjectOptions::_FindOrDont"));
+		engine::debug::invariant((hItem != nullptr), "hItem != nullptr", __FILE__, __LINE__, "Unexpected tree item pointer in ObjectOptions::_FindOrDont");
 
 		if (!m_objectTreeView.ItemHasChildren(hItem)) {
 			TVITEM item;
@@ -468,7 +469,7 @@ void ObjectOptions::addObject( MapObject *mapObject, const char *pPath,
 
 		// first sort by side, either create or find the tree item with matching side name
 		AsciiString side = thingTemplate->getDefaultOwningSide();
-		DEBUG_ASSERTCRASH( !side.isEmpty(), ("null default side in template") );
+		engine::debug::invariant((!side.isEmpty()), "!side.isEmpty()", __FILE__, __LINE__, "null default side in template");
 		parent = findOrAdd( parent, side.str());
 
 		// next tier uses the editor sorting that design can specify in the INI

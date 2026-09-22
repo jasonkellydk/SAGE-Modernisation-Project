@@ -29,6 +29,8 @@
 
 #pragma once
 
+
+#include <cassert>
 #include "Common/BitFlags.h"
 #include "Common/INI.h"
 #include "Common/Xfer.h"
@@ -80,7 +82,7 @@ void BitFlags<NUMBITS, TAG>::parse(INI* ini, AsciiString* str)
 		{
 			if (foundNormal || foundAddOrSub)
 			{
-				DEBUG_CRASH(("you may not mix normal and +- ops in bitstring lists"));
+				assert(false);
 				throw INI_INVALID_NAME_LIST;
 			}
 			clear();
@@ -91,7 +93,7 @@ void BitFlags<NUMBITS, TAG>::parse(INI* ini, AsciiString* str)
 		{
 			if (foundNormal)
 			{
-				DEBUG_CRASH(("you may not mix normal and +- ops in bitstring lists"));
+				assert(false);
 				throw INI_INVALID_NAME_LIST;
 			}
 			Int bitIndex = INI::scanIndexList(token+1, s_bitNameList);	// this throws if the token is not found
@@ -102,7 +104,7 @@ void BitFlags<NUMBITS, TAG>::parse(INI* ini, AsciiString* str)
 		{
 			if (foundNormal)
 			{
-				DEBUG_CRASH(("you may not mix normal and +- ops in bitstring lists"));
+				assert(false);
 				throw INI_INVALID_NAME_LIST;
 			}
 			Int bitIndex = INI::scanIndexList(token+1, s_bitNameList);	// this throws if the token is not found
@@ -113,7 +115,7 @@ void BitFlags<NUMBITS, TAG>::parse(INI* ini, AsciiString* str)
 		{
 			if (foundAddOrSub)
 			{
-				DEBUG_CRASH(("you may not mix normal and +- ops in bitstring lists"));
+				assert(false);
 				throw INI_INVALID_NAME_LIST;
 			}
 
@@ -203,7 +205,7 @@ void BitFlags<NUMBITS, TAG>::xfer(Xfer* xfer)
 			Bool valid = setBitByName( string.str() );
 			if (!valid)
 			{
-				DEBUG_CRASH(("invalid bit name %s",string.str()));
+				assert(false);
 				throw XFER_READ_ERROR;
 			}
 
@@ -224,7 +226,7 @@ void BitFlags<NUMBITS, TAG>::xfer(Xfer* xfer)
 	else
 	{
 
-		DEBUG_CRASH(( "BitFlagsXfer - Unknown xfer mode '%d'", xfer->getXferMode() ));
+		assert(false);
 		throw XFER_MODE_UNKNOWN;
 
 	}

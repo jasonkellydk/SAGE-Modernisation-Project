@@ -1,10 +1,10 @@
 module;
-#include "../../profiling/Tracy.h"
 #include <array>
 #include <cstring>
 #include <span>
 
 export module Graphics.Scene.Lighting.Environment;
+import engine.profiling;
 export import Graphics.RHI;
 
 namespace Graphics
@@ -70,7 +70,7 @@ public:
         count=0;
         if (resources.size()<6) return false;
         for (auto& resource : resources.first(6)) resource={};
-        GRAPHICS_PROFILE_SCOPE("Graphics.Environment.Bind");
+        engine::profiling::Scope profile_scope_72("Graphics.Environment.Bind");
         const auto& state = Get_Environment_Lighting();
         auto parameters = state.parameters;
         if (!state.cloud_texture.Is_Valid()) parameters.cloud_offset_strength[3] = 0;

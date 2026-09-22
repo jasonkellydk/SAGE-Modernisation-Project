@@ -55,6 +55,7 @@
 
 
 #include "W3DDevice/GameClient/W3DGraphicsResources.h"
+import engine.debug;
 import Graphics.Frame.Runtime;
 import Graphics.Scene.Debug.Renderer;
 import Graphics.Diagnostics.Render;
@@ -113,7 +114,7 @@ DebugHintObject::DebugHintObject(const DebugHintObject & src)
 
 DebugHintObject & DebugHintObject::operator = (const DebugHintObject & that)
 {
-	DEBUG_CRASH(("oops"));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "oops");
 	return *this;
 }
 
@@ -138,7 +139,7 @@ Int DebugHintObject::Class_ID() const
 
 W3DRenderObject * DebugHintObject::Clone() const
 {
-	DEBUG_CRASH(("oops"));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "oops");
 	return NEW DebugHintObject(*this);
 }
 
@@ -184,7 +185,8 @@ void DebugHintObject::Render(W3DRenderContext& info)
 
 //-------------------------------------------------------------------------------------------------
 //-------------------------------------------------------------------------------------------------
-W3DInGameUI::W3DInGameUI()
+W3DInGameUI::W3DInGameUI(engine::platform::IClockService& clock)
+	: InGameUI(clock)
 {
 	Int i;
 
@@ -420,7 +422,7 @@ void W3DInGameUI::drawMoveHints( View *view )
 				if( hint == nullptr )
 				{
 
-					DEBUG_CRASH(("unable to create hint"));
+					engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "unable to create hint");
 					return;
 
 				}
@@ -527,7 +529,7 @@ void W3DInGameUI::drawPlaceAngle( View *view )
 		// sanity
 		if( !m_buildingPlacementAnchor )
 		{
-			DEBUG_CRASH( ("Unable to create BuildingPlacementAnchor (Locator01.w3d) -- cursor for placing buildings") );
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unable to create BuildingPlacementAnchor (Locator01.w3d) -- cursor for placing buildings");
 			return;
 		}
 	}
@@ -538,7 +540,7 @@ void W3DInGameUI::drawPlaceAngle( View *view )
 		// sanity
 		if( !m_buildingPlacementArrow )
 		{
-			DEBUG_CRASH( ("Unable to create BuildingPlacementArrow (Locator02.w3d) -- cursor for placing buildings") );
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unable to create BuildingPlacementArrow (Locator02.w3d) -- cursor for placing buildings");
 			return;
 		}
 	}

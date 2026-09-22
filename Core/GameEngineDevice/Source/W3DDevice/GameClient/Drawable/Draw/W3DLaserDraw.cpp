@@ -52,6 +52,7 @@ import Graphics.Materials.State;
 #include "W3DDevice/GameClient/W3DSegmentedLineRenderObject.h"
 #include "WWMath/vector3.h"
 #include "W3DDevice/GameClient/W3DAssetCatalog.h"
+import engine.debug;
 
 // PUBLIC FUNCTIONS ///////////////////////////////////////////////////////////////////////////////
 
@@ -264,7 +265,7 @@ void W3DLaserDraw::doDrawModule(const Matrix3D* transformMtx)
 	LaserUpdate *update = (LaserUpdate*)draw->findClientUpdateModule( key_LaserUpdate );
 	if( !update )
 	{
-		DEBUG_CRASH( ("W3DLaserDraw::doDrawModule() expects its owner drawable %s to have a ClientUpdate = LaserUpdate module.", draw->getTemplate()->getName().str() ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "W3DLaserDraw::doDrawModule() expects its owner drawable %s to have a ClientUpdate = LaserUpdate module.", draw->getTemplate()->getName().str() );
 		return;
 	}
 

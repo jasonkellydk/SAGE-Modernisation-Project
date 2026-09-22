@@ -38,6 +38,7 @@
 #include "GameClient/GameClient.h"
 #include "GameLogic/GameLogic.h"
 #include "W3DDevice/GameClient/Module/W3DRopeDraw.h"
+import engine.debug;
 
 namespace
 {
@@ -85,7 +86,7 @@ W3DRopeDraw::W3DRopeDraw( Thing *thing, const ModuleData* moduleData ) : DrawMod
 //-------------------------------------------------------------------------------------------------
 void W3DRopeDraw::buildSegments()
 {
-	DEBUG_ASSERTCRASH(m_segments.empty(), ("Hmmn, not empty"));
+	engine::debug::invariant((m_segments.empty()), "m_segments.empty()", __FILE__, __LINE__, "Hmmn, not empty");
 	m_segments.clear();
 
 	Int numSegs = ceil(m_maxLen / m_wobbleLen);

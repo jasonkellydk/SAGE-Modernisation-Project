@@ -29,7 +29,8 @@
 
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #define DEFINE_SURFACECATEGORY_NAMES
 #define DEFINE_LOCO_Z_NAMES
@@ -362,10 +363,9 @@ LocomotorTemplate::~LocomotorTemplate()
 void LocomotorTemplate::validate()
 {
 	// this is ok; parachutes need it!
-	//DEBUG_ASSERTCRASH(m_lift == 0.0f || m_lift > fabs(TheGlobalData->m_gravity), ("Lift is too low to counteract gravity!"));
-	//DEBUG_ASSERTCRASH(m_liftDamaged == 0.0f || m_liftDamaged > fabs(TheGlobalData->m_gravity), ("LiftDamaged is too low to counteract gravity!"));
-	//DEBUG_ASSERTCRASH(m_preferredHeight == 0.0f || (m_behaviorZ == Z_SURFACE_RELATIVE_HEIGHT || m_behaviorZ == Z_ABSOLUTE_HEIGHT || m_appearance == LOCO_THRUST),
-	//	("You must use Z_SURFACE_RELATIVE_HEIGHT or Z_ABSOLUTE_HEIGHT (or THRUST) to use preferredHeight"));
+	//engine::debug::invariant((m_lift == 0.0f || m_lift > fabs(TheGlobalData->m_gravity)), "m_lift == 0.0f || m_lift > fabs(TheGlobalData->m_gravity)", __FILE__, __LINE__, "Lift is too low to counteract gravity!");
+	//engine::debug::invariant((m_liftDamaged == 0.0f || m_liftDamaged > fabs(TheGlobalData->m_gravity)), "m_liftDamaged == 0.0f || m_liftDamaged > fabs(TheGlobalData->m_gravity)", __FILE__, __LINE__, "LiftDamaged is too low to counteract gravity!");
+	//engine::debug::invariant((m_preferredHeight == 0.0f || (m_behaviorZ == Z_SURFACE_RELATIVE_HEIGHT || m_behaviorZ == Z_ABSOLUTE_HEIGHT || m_appearance == LOCO_THRUST)), "m_preferredHeight == 0.0f || (m_behaviorZ == Z_SURFACE_RELATIVE_HEIGHT || m_behaviorZ == Z_ABSOLUTE_HEIGHT || m_appearance == LOCO_THRUST)", __FILE__, __LINE__, //	("You must use Z_SURFACE_RELATIVE_HEIGHT or Z_ABSOLUTE_HEIGHT (or THRUST) to use preferredHeight"));
 
 	// for 'damaged' stuff that was omitted, set 'em to be the same as 'undamaged'...
 	if (m_maxSpeedDamaged < 0.0f)
@@ -384,12 +384,12 @@ void LocomotorTemplate::validate()
 	{
 		if (m_minSpeed <= 0.0f)
 		{
-			DEBUG_CRASH(("WINGS should always have positive minSpeeds (otherwise, they hover)"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "WINGS should always have positive minSpeeds (otherwise, they hover)");
 			m_minSpeed = 0.01f;
 		}
 		if (m_minTurnSpeed <= 0.0f)
 		{
-			DEBUG_CRASH(("WINGS should always have positive minTurnSpeed"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "WINGS should always have positive minTurnSpeed");
 			m_minTurnSpeed = 0.01f;
 		}
 	}
@@ -400,25 +400,25 @@ void LocomotorTemplate::validate()
 				m_lift != 0.0f ||
 				m_liftDamaged != 0.0f)
 		{
-			DEBUG_CRASH(("THRUST locos may not use ZAxisBehavior or lift!"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "THRUST locos may not use ZAxisBehavior or lift!");
 			throw INI_INVALID_DATA;
 		}
 		if (m_maxSpeed <= 0.0f)
 		{
 			// if one of these was omitted, it defaults to zero... just quietly heal it here, rather than crashing
-			DEBUG_LOG(("THRUST locos may not have zero m_maxSpeed; healing..."));
+			engine::debug::log_info("THRUST locos may not have zero m_maxSpeed; healing...");
 			m_maxSpeed = 0.01f;
 		}
 		if (m_maxSpeedDamaged <= 0.0f)
 		{
 			// if one of these was omitted, it defaults to zero... just quietly heal it here, rather than crashing
-			DEBUG_LOG(("THRUST locos may not have zero m_maxSpeedDamaged; healing..."));
+			engine::debug::log_info("THRUST locos may not have zero m_maxSpeedDamaged; healing...");
 			m_maxSpeedDamaged = 0.01f;
 		}
 		if (m_minSpeed <= 0.0f)
 		{
 			// if one of these was omitted, it defaults to zero... just quietly heal it here, rather than crashing
-			DEBUG_LOG(("THRUST locos may not have zero m_minSpeed; healing..."));
+			engine::debug::log_info("THRUST locos may not have zero m_minSpeed; healing...");
 			m_minSpeed = 0.01f;
 		}
 	}
@@ -760,7 +760,7 @@ void Locomotor::xfer( Xfer *xfer )
 	xfer->xferReal(&m_maxTurnRate);
 	xfer->xferReal(&m_closeEnoughDist);
 #ifdef CIRCLE_FOR_LANDING
-	DEBUG_CRASH(("not supported, must fix me"));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "not supported, must fix me");
 #endif
 	xfer->xferUnsignedInt(&m_flags);
 	xfer->xferReal(&m_preferredHeight);
@@ -875,7 +875,7 @@ void Locomotor::locoUpdate_moveTowardsAngle(Object* obj, Real goalAngle)
 	PhysicsBehavior *physics = obj->getPhysics();
 	if (physics == nullptr)
 	{
-		DEBUG_CRASH(("you can only apply Locomotors to objects with Physics"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "you can only apply Locomotors to objects with Physics");
 		return;
 	}
 
@@ -886,7 +886,7 @@ void Locomotor::locoUpdate_moveTowardsAngle(Object* obj, Real goalAngle)
 	}
 
 #ifdef DEBUG_OBJECT_ID_EXISTS
-//	DEBUG_ASSERTLOG(obj->getID() != TheObjectIDToDebug, ("locoUpdate_moveTowardsAngle %f (%f deg), spd %f (%f)",goalAngle,goalAngle*180/PI,physics->getSpeed(),physics->getForwardSpeed2D()));
+//	if (!(obj->getID() != TheObjectIDToDebug)) engine::debug::log_error("locoUpdate_moveTowardsAngle %f (%f deg), spd %f (%f)",goalAngle,goalAngle*180/PI,physics->getSpeed(),physics->getForwardSpeed2D());
 #endif
 
 	Real minSpeed = getMinSpeed();
@@ -907,7 +907,7 @@ void Locomotor::locoUpdate_moveTowardsAngle(Object* obj, Real goalAngle)
 	}
 	else
 	{
-		DEBUG_ASSERTCRASH(m_template->m_appearance != LOCO_THRUST, ("THRUST should always have minspeeds!"));
+		engine::debug::invariant((m_template->m_appearance != LOCO_THRUST), "m_template->m_appearance != LOCO_THRUST", __FILE__, __LINE__, "THRUST should always have minspeeds!");
 		Coord3D desiredPos = *obj->getPosition();
 		desiredPos.x += Cos(goalAngle) * 1000.0f;
 		desiredPos.y += Sin(goalAngle) * 1000.0f;
@@ -934,7 +934,7 @@ void Locomotor::setPhysicsOptions(Object* obj)
 	PhysicsBehavior *physics = obj->getPhysics();
 	if (physics == nullptr)
 	{
-		DEBUG_CRASH(("you can only apply Locomotors to objects with Physics"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "you can only apply Locomotors to objects with Physics");
 		return;
 	}
 
@@ -968,7 +968,7 @@ void Locomotor::locoUpdate_moveTowardsPosition(Object* obj, const Coord3D& goalP
 	PhysicsBehavior *physics = obj->getPhysics();
 	if (physics == nullptr)
 	{
-		DEBUG_CRASH(("you can only apply Locomotors to objects with Physics"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "you can only apply Locomotors to objects with Physics");
 		return;
 	}
 
@@ -979,7 +979,7 @@ void Locomotor::locoUpdate_moveTowardsPosition(Object* obj, const Coord3D& goalP
 	}
 
 #ifdef DEBUG_OBJECT_ID_EXISTS
-//	DEBUG_ASSERTLOG(obj->getID() != TheObjectIDToDebug, ("locoUpdate_moveTowardsPosition %f %f %f (dtg %f, spd %f), speed %f (%f)",goalPos.x,goalPos.y,goalPos.z,onPathDistToGoal,desiredSpeed,physics->getSpeed(),physics->getForwardSpeed2D()));
+//	if (!(obj->getID() != TheObjectIDToDebug)) engine::debug::log_error("locoUpdate_moveTowardsPosition %f %f %f (dtg %f, spd %f), speed %f (%f)",goalPos.x,goalPos.y,goalPos.z,onPathDistToGoal,desiredSpeed,physics->getSpeed(),physics->getForwardSpeed2D());
 #endif
 
 	//
@@ -1242,8 +1242,8 @@ void Locomotor::moveTowardsPositionTreads(Object* obj, PhysicsBehavior *physics,
 	}
 
 
-	//DEBUG_LOG(("Actual speed %f, Braking factor %f, slowDownDist %f, Pathdist %f, goalSpeed %f",
-	//	actualSpeed, m_brakingFactor, slowDownDist, onPathDistToGoal, goalSpeed));
+	//engine::debug::log_info("Actual speed %f, Braking factor %f, slowDownDist %f, Pathdist %f, goalSpeed %f",
+	//	actualSpeed, m_brakingFactor, slowDownDist, onPathDistToGoal, goalSpeed);
 
 	//
 	// Maintain goal speed
@@ -1451,8 +1451,8 @@ void Locomotor::moveTowardsPositionWheels(Object* obj, PhysicsBehavior *physics,
 	}
 
 
-	//DEBUG_LOG(("Actual speed %f, Braking factor %f, slowDownDist %f, Pathdist %f, goalSpeed %f",
-	//	actualSpeed, m_brakingFactor, slowDownDist, onPathDistToGoal, goalSpeed));
+	//engine::debug::log_info("Actual speed %f, Braking factor %f, slowDownDist %f, Pathdist %f, goalSpeed %f",
+	//	actualSpeed, m_brakingFactor, slowDownDist, onPathDistToGoal, goalSpeed);
 
 
 	// Wheeled can only turn while moving.
@@ -1502,8 +1502,8 @@ void Locomotor::moveTowardsPositionWheels(Object* obj, PhysicsBehavior *physics,
 		if (fabs(accelForce) > fabs(maxForceNeeded))
 			accelForce = maxForceNeeded;
 
-		//DEBUG_LOG(("Braking %d, actualSpeed %f, goalSpeed %f, delta %f, accel %f", getFlag(IS_BRAKING),
-			//actualSpeed, goalSpeed, speedDelta, accelForce));
+		//engine::debug::log_info("Braking %d, actualSpeed %f, goalSpeed %f, delta %f, accel %f", getFlag(IS_BRAKING),
+			//actualSpeed, goalSpeed, speedDelta, accelForce);
 
 		const Coord3D *dir = obj->getUnitDirectionVector2D();
 
@@ -2013,7 +2013,7 @@ void Locomotor::moveTowardsPositionThrust(Object* obj, PhysicsBehavior *physics,
 		Vector3 curVel(physics->getVelocity()->x, physics->getVelocity()->y, physics->getVelocity()->z);
 
 		Vector3 accelVec = thrustDir * maxAccel - curVel * damping;
-		//DEBUG_LOG(("accel %f (max %f) vel %f (max %f) damping %f",accelVec.Length(),maxAccel,curVel.Length(),maxForwardSpeed,damping));
+		//engine::debug::log_info("accel %f (max %f) vel %f (max %f) damping %f",accelVec.Length(),maxAccel,curVel.Length(),maxForwardSpeed,damping);
 
 		Real mass = physics->getMass();
 
@@ -2296,7 +2296,7 @@ Bool Locomotor::handleBehaviorZ(Object* obj, PhysicsBehavior *physics, const Coo
 
 					Real liftToUse = calcLiftToUseAtPt(obj, physics, pos.z, surfaceHt, preferredHeight);
 
-					//DEBUG_LOG(("HandleBZ %d LiftToUse %f",TheGameLogic->getFrame(),liftToUse));
+					//engine::debug::log_info("HandleBZ %d LiftToUse %f",TheGameLogic->getFrame(),liftToUse);
 					if (liftToUse != 0.0f)
 					{
 						Coord3D force;
@@ -2329,7 +2329,7 @@ Bool Locomotor::handleBehaviorZ(Object* obj, PhysicsBehavior *physics, const Coo
 
 					Real liftToUse = calcLiftToUseAtPt(obj, physics, pos.z, surfaceHt, preferredHeight);
 
-					//DEBUG_LOG(("HandleBZ %d LiftToUse %f",TheGameLogic->getFrame(),liftToUse));
+					//engine::debug::log_info("HandleBZ %d LiftToUse %f",TheGameLogic->getFrame(),liftToUse);
 					if (liftToUse != 0.0f)
 					{
 						Coord3D force;
@@ -2369,9 +2369,9 @@ void Locomotor::moveTowardsPositionOther(Object* obj, PhysicsBehavior *physics, 
 	const Coord3D* pos =  obj->getPosition();
 	Coord3D dirToApplyForce = *obj->getUnitDirectionVector2D();
 
-//DEBUG_ASSERTLOG(!getFlag(ULTRA_ACCURATE),("thresh %f %f (%f %f)",
+//if (!(!getFlag(ULTRA_ACCURATE))) engine::debug::log_error("thresh %f %f (%f %f)",
 //fabs(goalPos.y - pos->y),fabs(goalPos.x - pos->x),
-//fabs(goalPos.y - pos->y)/goalSpeed,fabs(goalPos.x - pos->x)/goalSpeed));
+//fabs(goalPos.y - pos->y)/goalSpeed,fabs(goalPos.x - pos->x)/goalSpeed);
 	if (getFlag(ULTRA_ACCURATE) &&
 				fabs(goalPos.y - pos->y) <= goalSpeed * m_template->m_ultraAccurateSlideIntoPlaceFactor &&
 				fabs(goalPos.x - pos->x) <= goalSpeed * m_template->m_ultraAccurateSlideIntoPlaceFactor)
@@ -2446,12 +2446,12 @@ Bool Locomotor::locoUpdate_maintainCurrentPosition(Object* obj)
 	PhysicsBehavior *physics = obj->getPhysics();
 	if (physics == nullptr)
 	{
-		DEBUG_CRASH(("you can only apply Locomotors to objects with Physics"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "you can only apply Locomotors to objects with Physics");
 		return TRUE;
 	}
 
 #ifdef DEBUG_OBJECT_ID_EXISTS
-//	DEBUG_ASSERTLOG(obj->getID() != TheObjectIDToDebug, ("locoUpdate_maintainCurrentPosition %f %f %f, speed %f (%f)",m_maintainPos.x,m_maintainPos.y,m_maintainPos.z,physics->getSpeed(),physics->getForwardSpeed2D()));
+//	if (!(obj->getID() != TheObjectIDToDebug)) engine::debug::log_error("locoUpdate_maintainCurrentPosition %f %f %f, speed %f (%f)",m_maintainPos.x,m_maintainPos.y,m_maintainPos.z,physics->getSpeed(),physics->getForwardSpeed2D());
 #endif
 
 	Bool requiresConstantCalling = TRUE;	// assume the worst.
@@ -2503,7 +2503,7 @@ Bool Locomotor::locoUpdate_maintainCurrentPosition(Object* obj)
 //-------------------------------------------------------------------------------------------------
 void Locomotor::maintainCurrentPositionThrust(Object* obj, PhysicsBehavior *physics)
 {
-	DEBUG_ASSERTCRASH(getFlag(MAINTAIN_POS_IS_VALID), ("invalid maintain pos"));
+	engine::debug::invariant((getFlag(MAINTAIN_POS_IS_VALID)), "getFlag(MAINTAIN_POS_IS_VALID)", __FILE__, __LINE__, "invalid maintain pos");
 	/// @todo srj -- should these also use the "circling radius" stuff, like wings?
 	moveTowardsPositionThrust(obj, physics, m_maintainPos, 0, getMinSpeed());
 }
@@ -2511,7 +2511,7 @@ void Locomotor::maintainCurrentPositionThrust(Object* obj, PhysicsBehavior *phys
 //-------------------------------------------------------------------------------------------------
 void Locomotor::maintainCurrentPositionWings(Object* obj, PhysicsBehavior *physics)
 {
-	DEBUG_ASSERTCRASH(getFlag(MAINTAIN_POS_IS_VALID), ("invalid maintain pos"));
+	engine::debug::invariant((getFlag(MAINTAIN_POS_IS_VALID)), "getFlag(MAINTAIN_POS_IS_VALID)", __FILE__, __LINE__, "invalid maintain pos");
 	physics->setTurning(TURN_NONE);
 	if (physics->isMotive() && obj->isAboveTerrain())	// no need to stop something that isn't moving (or is just sitting on the ground)
 	{
@@ -2553,7 +2553,7 @@ void Locomotor::maintainCurrentPositionHover(Object* obj, PhysicsBehavior *physi
 	physics->setTurning(TURN_NONE);
 	if (physics->isMotive())	// no need to stop something that isn't moving.
 	{
-		DEBUG_ASSERTCRASH(m_template->m_minSpeed == 0.0f, ("HOVER should always have zero minSpeeds (otherwise, they WING)"));
+		engine::debug::invariant((m_template->m_minSpeed == 0.0f), "m_template->m_minSpeed == 0.0f", __FILE__, __LINE__, "HOVER should always have zero minSpeeds (otherwise, they WING)");
 
 		BodyDamageType bdt = obj->getBodyModule()->getDamageState();
 		Real maxAcceleration = getMaxAcceleration(bdt);
@@ -2620,7 +2620,7 @@ LocomotorSet::LocomotorSet()
 //-------------------------------------------------------------------------------------------------
 LocomotorSet::LocomotorSet(const LocomotorSet& that)
 {
-	DEBUG_CRASH(("unimplemented"));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "unimplemented");
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -2628,7 +2628,7 @@ LocomotorSet& LocomotorSet::operator=(const LocomotorSet& that)
 {
 	if (this != &that)
 	{
-		DEBUG_CRASH(("unimplemented"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "unimplemented");
 	}
 	return *this;
 }
@@ -2679,7 +2679,7 @@ void LocomotorSet::xfer( Xfer *xfer )
 		// vector should be empty at this point
 		if (m_locomotors.empty() == FALSE)
 		{
-			DEBUG_CRASH(( "LocomotorSet::xfer - vector is not empty, but should be" ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "LocomotorSet::xfer - vector is not empty, but should be" );
 			throw XFER_LIST_NOT_EMPTY;
 		}
 
@@ -2691,7 +2691,7 @@ void LocomotorSet::xfer( Xfer *xfer )
 			const LocomotorTemplate* lt = TheLocomotorStore->findLocomotorTemplate(NAMEKEY(name));
 			if (lt == nullptr)
 			{
-				DEBUG_CRASH(( "LocomotorSet::xfer - template %s not found", name.str() ));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "LocomotorSet::xfer - template %s not found", name.str() );
 				throw XFER_UNKNOWN_STRING;
 			}
 
@@ -2746,7 +2746,7 @@ void LocomotorSet::xferSelfAndCurLocoPtr(Xfer *xfer, Locomotor** loco)
 				}
 			}
 
-			DEBUG_CRASH(( "LocomotorSet::xfer - template %s not found", name.str() ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "LocomotorSet::xfer - template %s not found", name.str() );
 			throw XFER_UNKNOWN_STRING;
 		}
 	}
@@ -2778,7 +2778,7 @@ void LocomotorSet::addLocomotor(const LocomotorTemplate* lt)
 		}
 		else // Previous locos were gravity only, but this one isn't!
 		{
-			DEBUG_ASSERTCRASH(!m_downhillOnly,("LocomotorSet, YOU CAN NOT MIX DOWNHILL-ONLY LOCOMOTORS WITH NON-DOWNHILL-ONLY ONES."));
+			engine::debug::invariant((!m_downhillOnly), "!m_downhillOnly", __FILE__, __LINE__, "LocomotorSet, YOU CAN NOT MIX DOWNHILL-ONLY LOCOMOTORS WITH NON-DOWNHILL-ONLY ONES.");
 		}
 
 	}

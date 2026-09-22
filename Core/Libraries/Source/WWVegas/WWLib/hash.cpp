@@ -36,8 +36,9 @@
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 #include "hash.h"
-#include "WWDebug/wwdebug.h"
+
 #include "realcrc.h"
+import engine.debug;
 
 /*
 ** HashTableClass
@@ -46,7 +47,7 @@ HashTableClass::HashTableClass( int size ) :
 	HashTableSize( size )
 {
 	// Assert HashTableSize is a power of 2
-	WWASSERT( (HashTableSize & (HashTableSize-1)) == 0 );
+	engine::debug::assert_condition(((HashTableSize & (HashTableSize-1)) == 0), "(HashTableSize & (HashTableSize-1)) == 0", __FILE__, __LINE__, "assertion failed");
 
 	// Allocate and clear the table
 	HashTable = W3DNEWARRAY HashableClass * [ HashTableSize ];
@@ -69,17 +70,17 @@ void	HashTableClass::Reset()
 
 void	HashTableClass::Add( HashableClass * entry )
 {
-	WWASSERT( entry != nullptr);
+	engine::debug::assert_condition((entry != nullptr), "entry != nullptr", __FILE__, __LINE__, "assertion failed");
 
 	int index = Hash( entry->Get_Key() );
-	WWASSERT( entry->NextHash == nullptr );
+	engine::debug::assert_condition((entry->NextHash == nullptr), "entry->NextHash == nullptr", __FILE__, __LINE__, "assertion failed");
 	entry->NextHash = HashTable[ index ];
 	HashTable[ index ] = entry;
 }
 
 bool	HashTableClass::Remove( HashableClass * entry )
 {
-	WWASSERT(entry != nullptr);
+	engine::debug::assert_condition((entry != nullptr), "entry != nullptr", __FILE__, __LINE__, "assertion failed");
 
 	// Find in the hash table.
 	const char *key = entry->Get_Key();

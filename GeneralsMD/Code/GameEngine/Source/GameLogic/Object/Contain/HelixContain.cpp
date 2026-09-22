@@ -32,7 +32,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // USER INCLUDES //////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 #include "Common/Player.h"
 #include "Common/Xfer.h"
 #include "Common/ThingTemplate.h"
@@ -172,7 +173,7 @@ void HelixContain::createPayload()
 			  }
 			  else
 			  {
-				  DEBUG_CRASH( ( "HelixContain::createPayload: %s is full, or not valid for the payload %s!", object->getName().str(), self->m_initialPayload.name.str() ) );
+				  engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "HelixContain::createPayload: %s is full, or not valid for the payload %s!", object->getName().str(), self->m_initialPayload.name.str() );
 			  }
 
       }
@@ -269,8 +270,7 @@ void HelixContain::addToContainList( Object *obj )
       portable->friend_setContainedByID(INVALID_ID);
     }
 #else
-    DEBUG_ASSERTCRASH(getObject() == nullptr || !getObject()->isDestroyed(),
-      ("HelixContain::addToContainList - Adding to a destroyed container"));
+    engine::debug::invariant((getObject() == nullptr || !getObject()->isDestroyed()), "getObject() == nullptr || !getObject()->isDestroyed()", __FILE__, __LINE__, "HelixContain::addToContainList - Adding to a destroyed container");
 #endif
   }
   else
@@ -305,8 +305,7 @@ void HelixContain::addToContain( Object *obj )
       portable->friend_setContainedByID(INVALID_ID);
     }
 #else
-    DEBUG_ASSERTCRASH(getObject() == nullptr || !getObject()->isDestroyed(),
-      ("HelixContain::addToContain - Adding to a destroyed container"));
+    engine::debug::invariant((getObject() == nullptr || !getObject()->isDestroyed()), "getObject() == nullptr || !getObject()->isDestroyed()", __FILE__, __LINE__, "HelixContain::addToContain - Adding to a destroyed container");
 #endif
   }
   else

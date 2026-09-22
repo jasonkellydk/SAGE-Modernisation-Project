@@ -39,7 +39,7 @@
 #include "matrix3d.h"
 #include "WWSaveLoad/persistfactory.h"
 #include "wwmathids.h"
-#include "WWDebug/wwmemlog.h"
+
 
 
 //////////////////////////////////////////////////////////////////////
@@ -283,7 +283,7 @@ Find_Tangents
 void
 VehicleCurveClass::Update_Arc_List ()
 {
-	WWMEMLOG(MEM_PATHFIND);
+
 	m_ArcList.Delete_All ();
 
 	//

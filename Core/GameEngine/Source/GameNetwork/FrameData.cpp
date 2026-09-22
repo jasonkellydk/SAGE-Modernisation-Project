@@ -23,7 +23,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "GameNetwork/FrameData.h"
 #include "GameNetwork/networkutil.h"
@@ -63,7 +64,7 @@ void FrameData::init()
 	m_commandList->reset();
 
 	m_frameCommandCount = -1;
-	//DEBUG_LOG(("FrameData::init"));
+	//engine::debug::log_info("FrameData::init");
 	m_commandCount = 0;
 	m_lastFailedCC = -2;
 	m_lastFailedFrameCC = -2;
@@ -108,23 +109,23 @@ FrameDataReturnType FrameData::allCommandsReady(Bool debugSpewage) {
 
 	if (debugSpewage) {
 		if ((m_lastFailedFrameCC != m_frameCommandCount) || (m_lastFailedCC != m_commandCount)) {
-			DEBUG_LOG(("FrameData::allCommandsReady - failed, frame command count = %d, command count = %d", m_frameCommandCount, m_commandCount));
+			engine::debug::log_info("FrameData::allCommandsReady - failed, frame command count = %d, command count = %d", m_frameCommandCount, m_commandCount);
 			m_lastFailedFrameCC = m_frameCommandCount;
 			m_lastFailedCC = m_commandCount;
 		}
 	}
 
 	if (m_commandCount > m_frameCommandCount) {
-		DEBUG_LOG(("FrameData::allCommandsReady - There are more commands than there should be (%d, should be %d).  Commands in command list are...", m_commandCount, m_frameCommandCount));
+		engine::debug::log_info("FrameData::allCommandsReady - There are more commands than there should be (%d, should be %d).  Commands in command list are...", m_commandCount, m_frameCommandCount);
 		NetCommandRef *ref = m_commandList->getFirstMessage();
 		while (ref != nullptr) {
-			DEBUG_LOG(("%s, frame = %d, id = %d", GetNetCommandTypeAsString(ref->getCommand()->getNetCommandType()), ref->getCommand()->getExecutionFrame(), ref->getCommand()->getID()));
+			engine::debug::log_info("%s, frame = %d, id = %d", GetNetCommandTypeAsString(ref->getCommand()->getNetCommandType()), ref->getCommand()->getExecutionFrame(), ref->getCommand()->getID());
 			ref = ref->getNext();
 		}
-		DEBUG_LOG(("FrameData::allCommandsReady - End of command list."));
-		DEBUG_LOG(("FrameData::allCommandsReady - about to clear the command list"));
+		engine::debug::log_info("FrameData::allCommandsReady - End of command list.");
+		engine::debug::log_info("FrameData::allCommandsReady - about to clear the command list");
 		reset();
-		DEBUG_LOG(("FrameData::allCommandsReady - command list cleared. command list length = %d, command count = %d, frame command count = %d", m_commandList->length(), m_commandCount, m_frameCommandCount));
+		engine::debug::log_info("FrameData::allCommandsReady - command list cleared. command list length = %d, command count = %d, frame command count = %d", m_commandList->length(), m_commandCount, m_frameCommandCount);
 		return FRAMEDATA_RESEND;
 	}
 	return FRAMEDATA_NOTREADY;
@@ -134,7 +135,7 @@ FrameDataReturnType FrameData::allCommandsReady(Bool debugSpewage) {
  * Set the command count for this frame
  */
 void FrameData::setFrameCommandCount(UnsignedInt frameCommandCount) {
-	//DEBUG_LOG(("setFrameCommandCount to %d for frame %d", frameCommandCount, m_frame));
+	//engine::debug::log_info("setFrameCommandCount to %d for frame %d", frameCommandCount, m_frame);
 	m_frameCommandCount = frameCommandCount;
 }
 
@@ -169,7 +170,7 @@ void FrameData::addCommand(NetCommandMsg *msg) {
 	m_commandList->addMessage(msg);
 
 	++m_commandCount;
-	//DEBUG_LOG(("added command %d, type = %d(%s), command count = %d, frame command count = %d", msg->getID(), msg->getNetCommandType(), GetNetCommandTypeAsString(msg->getNetCommandType()), m_commandCount, m_frameCommandCount));
+	//engine::debug::log_info("added command %d, type = %d(%s), command count = %d, frame command count = %d", msg->getID(), msg->getNetCommandType(), GetNetCommandTypeAsString(msg->getNetCommandType()), m_commandCount, m_frameCommandCount);
 }
 
 /**

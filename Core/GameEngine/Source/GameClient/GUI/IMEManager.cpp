@@ -45,11 +45,12 @@
 //         Includes
 //----------------------------------------------------------------------------
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "mbstring.h"
 
-#include "Common/Debug.h"
+
 #include "Common/Language.h"
 #include "Common/UnicodeString.h"
 #include "GameClient/Display.h"
@@ -400,7 +401,7 @@ void		IMEManager::printMessageInfo( Int message, Int wParam, Int lParam )
 		{
 			Char *notifyName = getMessageName( m_notifyInfo, wParam );
 			if ( notifyName == nullptr ) notifyName = "unknown";
-			DEBUG_LOG(( "IMM: %s(0x%04x) - %s(0x%04x) - 0x%08x",  messageText, message, notifyName, wParam, lParam ));
+			engine::debug::log_info( "IMM: %s(0x%04x) - %s(0x%04x) - 0x%08x",  messageText, message, notifyName, wParam, lParam );
 			break;
 		}
 		case WM_IME_CONTROL:
@@ -408,7 +409,7 @@ void		IMEManager::printMessageInfo( Int message, Int wParam, Int lParam )
 			Char *controlName = getMessageName( m_controlInfo, wParam );
 			if ( controlName == nullptr ) controlName = "unknown";
 
-			DEBUG_LOG(( "IMM: %s(0x%04x) - %s(0x%04x) - 0x%08x",  messageText, message, controlName, wParam, lParam ));
+			engine::debug::log_info( "IMM: %s(0x%04x) - %s(0x%04x) - 0x%08x",  messageText, message, controlName, wParam, lParam );
 			break;
 		}
 		#ifdef WM_IME_REQUEST
@@ -417,7 +418,7 @@ void		IMEManager::printMessageInfo( Int message, Int wParam, Int lParam )
 			Char *requestName = getMessageName( m_requestInfo, wParam );
 			if ( requestName == nullptr ) requestName = "unknown";
 
-			DEBUG_LOG(( "IMM: %s(0x%04x) - %s(0x%04x) - 0x%08x",  messageText, message, requestName, wParam, lParam ));
+			engine::debug::log_info( "IMM: %s(0x%04x) - %s(0x%04x) - 0x%08x",  messageText, message, requestName, wParam, lParam );
 			break;
 		}
 		#endif
@@ -427,13 +428,13 @@ void		IMEManager::printMessageInfo( Int message, Int wParam, Int lParam )
 
 			buildFlagsString( m_setContextInfo, lParam, flags );
 
-			DEBUG_LOG(( "IMM: %s(0x%04x) - 0x%08x - %s(0x%04x)",  messageText, message, wParam, flags.str(), lParam ));
+			engine::debug::log_info( "IMM: %s(0x%04x) - 0x%08x - %s(0x%04x)",  messageText, message, wParam, flags.str(), lParam );
 			break;
 		}
 		default:
 			if ( messageText )
 			{
-				DEBUG_LOG(( "IMM: %s(0x%04x) - 0x%08x - 0x%08x",  messageText, message, wParam, lParam ));
+				engine::debug::log_info( "IMM: %s(0x%04x) - 0x%08x - 0x%08x",  messageText, message, wParam, lParam );
 			}
 			break;
 	}
@@ -454,7 +455,7 @@ void IMEManager::printConversionStatus()
 
 		buildFlagsString( m_setCmodeInfo, mode, flags );
 
-		DEBUG_LOG(( "IMM: Conversion mode = (%s)", flags.str()));
+		engine::debug::log_info( "IMM: Conversion mode = (%s)", flags.str());
 	}
 }
 
@@ -473,7 +474,7 @@ void IMEManager::printSentenceStatus()
 
 		buildFlagsString( m_setSmodeInfo, mode, flags );
 
-		DEBUG_LOG(( "IMM: Sentence mode = (%s)", flags.str()));
+		engine::debug::log_info( "IMM: Sentence mode = (%s)", flags.str());
 	}
 }
 #endif // DEBUG_IME
@@ -667,7 +668,7 @@ void IMEManager::detach()
 Bool IMEManager::serviceIMEMessage(	void *windowsHandle, UnsignedInt message,	Int wParam,	Int lParam )
 {
 
-	DEBUG_ASSERTCRASH( windowsHandle == ApplicationHWnd, ("Unexpected window handle for IMEManager") );
+	engine::debug::invariant((windowsHandle == ApplicationHWnd), "windowsHandle == ApplicationHWnd", __FILE__, __LINE__, "Unexpected window handle for IMEManager");
 	#ifdef DEBUG_IME
 	printMessageInfo( message, wParam, lParam );
 	#endif
@@ -679,7 +680,7 @@ Bool IMEManager::serviceIMEMessage(	void *windowsHandle, UnsignedInt message,	In
 			{
 				WideChar wchar = convertCharToWide(wParam);
 				#ifdef DEBUG_IME
-				DEBUG_LOG(("IMM: WM_IME_CHAR - '%hc'0x%04x", wchar, wchar ));
+				engine::debug::log_info("IMM: WM_IME_CHAR - '%hc'0x%04x", wchar, wchar );
 				#endif
 
 				if ( m_window && (wchar > 32 || wchar == VK_RETURN ))
@@ -697,7 +698,7 @@ Bool IMEManager::serviceIMEMessage(	void *windowsHandle, UnsignedInt message,	In
 					WideChar wchar = (WideChar) (wParam & 0xffff);
 
 				#ifdef DEBUG_IME
-				DEBUG_LOG(("IMM: WM_CHAR - '%hc'0x%04x", wchar, wchar ));
+				engine::debug::log_info("IMM: WM_CHAR - '%hc'0x%04x", wchar, wchar );
 				#endif
 
 				if ( m_window && (wchar >= 32 || wchar == VK_RETURN) )
@@ -711,7 +712,7 @@ Bool IMEManager::serviceIMEMessage(	void *windowsHandle, UnsignedInt message,	In
 
 			// --------------------------------------------------------------------
       case WM_IME_SELECT:
-					DEBUG_LOG(("IMM: WM_IME_SELECT"));
+					engine::debug::log_info("IMM: WM_IME_SELECT");
 				return FALSE;
       case WM_IME_STARTCOMPOSITION:
         //The WM_IME_STARTCOMPOSITION message is sent immediately before an
@@ -941,10 +942,10 @@ Bool IMEManager::serviceIMEMessage(	void *windowsHandle, UnsignedInt message,	In
 					case IMN_SETSTATUSWINDOWPOS:     //This message is sent when the status window position in the input context is updated.
 						return FALSE;
 					case IMN_OPENSTATUSWINDOW:       //This message is sent when an IME is about to create the status window.
-						DEBUG_LOG(("Open Status Window"));
+						engine::debug::log_info("Open Status Window");
 						return FALSE;
 					case IMN_CLOSESTATUSWINDOW:      //This message is sent to the application when an input method editor (IME) is about to close the status window.
-						DEBUG_LOG(("Close Status Window"));
+						engine::debug::log_info("Close Status Window");
 						return FALSE;
 					case IMN_SETOPENSTATUS:          //This message is sent when the open status of the input context is updated.
 					case IMN_SETCOMPOSITIONFONT:     //This message is sent when the font of the input context is updated.
@@ -1153,7 +1154,7 @@ void IMEManager::updateCompositionString()
 		}
 	}
 
-	DEBUG_ASSERTCRASH( m_compositionStringLength < MAX_COMPSTRINGLEN, ("composition string too large"));
+	engine::debug::invariant((m_compositionStringLength < MAX_COMPSTRINGLEN), "m_compositionStringLength < MAX_COMPSTRINGLEN", __FILE__, __LINE__, "composition string too large");
 	m_compositionString[m_compositionStringLength] = 0;
 	GameArrayEnd(m_compositionString);
 }
@@ -1198,7 +1199,7 @@ void IMEManager::getResultsString ()
 		}
 	}
 
-	DEBUG_ASSERTCRASH( stringLen < MAX_COMPSTRINGLEN, ("results string too large"));
+	engine::debug::invariant((stringLen < MAX_COMPSTRINGLEN), "stringLen < MAX_COMPSTRINGLEN", __FILE__, __LINE__, "results string too large");
 	m_resultsString[stringLen] = 0;
 	GameArrayEnd(m_resultsString);
 }
@@ -1393,7 +1394,7 @@ void IMEManager::updateCandidateList( Int candidateFlags  )
 
 			if ( bytesCopied == 0 || bytesCopied > size )
 			{
-				DEBUG_ASSERTCRASH(bytesCopied < size,("IME candidate buffer overrun"));
+				engine::debug::invariant((bytesCopied < size), "bytesCopied < size", __FILE__, __LINE__, "IME candidate buffer overrun");
 				ok = FALSE;
 			}
 
@@ -1413,7 +1414,7 @@ void IMEManager::updateCandidateList( Int candidateFlags  )
 				m_selectedIndex = clist->dwSelection;
 
 				#ifdef DEBUG_IME
-				DEBUG_LOG(("IME: Candidate Update: Candidates = %d, pageSize = %d pageStart = %d, selected = %d", m_candidateCount, m_pageStart, m_pageSize, m_selectedIndex ));
+				engine::debug::log_info("IME: Candidate Update: Candidates = %d, pageSize = %d pageStart = %d, selected = %d", m_candidateCount, m_pageStart, m_pageSize, m_selectedIndex );
 				#endif
 
 				if ( m_candidateUpArrow )

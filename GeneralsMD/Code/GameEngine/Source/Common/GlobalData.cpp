@@ -30,7 +30,8 @@
 //#pragma once
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 
 import Graphics.Resources.Textures.Sampling;
@@ -1037,11 +1038,6 @@ GlobalData::GlobalData(const char* userDataDirectory)
 	// Default DoubleClickTime to System double click time.
 	m_doubleClickTimeMS = GetDoubleClickTime(); // Note: This is actual MS, not frames.
 
-#ifdef DUMP_PERF_STATS
-	m_dumpPerformanceStatistics = FALSE;
-  m_dumpStatsAtInterval = FALSE;
-  m_statsInterval = 30;
-#endif
 
 	m_forceBenchmark = FALSE;	///<forces running of CPU detection benchmark, even on known cpu's.
 
@@ -1073,7 +1069,7 @@ GlobalData::GlobalData(const char* userDataDirectory)
 //-------------------------------------------------------------------------------------------------
 GlobalData::~GlobalData()
 {
-	DEBUG_ASSERTCRASH( TheWritableGlobalData->m_next == nullptr, ("~GlobalData: theOriginal is not original") );
+	engine::debug::invariant((TheWritableGlobalData->m_next == nullptr), "TheWritableGlobalData->m_next == nullptr", __FILE__, __LINE__, "~GlobalData: theOriginal is not original");
 
 	deleteInstance(m_weaponBonusSet);
 
@@ -1115,7 +1111,7 @@ GlobalData *GlobalData::newOverride()
 	GlobalData *overrideData = NEW GlobalData;
 
 	// copy the data from the latest override (TheWritableGlobalData) to the newly created instance
-	DEBUG_ASSERTCRASH( TheWritableGlobalData, ("GlobalData::newOverride() - no existing data") );
+	engine::debug::invariant((TheWritableGlobalData), "TheWritableGlobalData", __FILE__, __LINE__, "GlobalData::newOverride() - no existing data");
 	*overrideData = *TheWritableGlobalData;
 
 	//
@@ -1144,7 +1140,7 @@ void GlobalData::init()
 //-------------------------------------------------------------------------------------------------
 void GlobalData::reset()
 {
-	DEBUG_ASSERTCRASH(this == TheWritableGlobalData, ("calling reset on wrong GlobalData"));
+	engine::debug::invariant((this == TheWritableGlobalData), "this == TheWritableGlobalData", __FILE__, __LINE__, "calling reset on wrong GlobalData");
 
 	//
 	// delete	any data instances that were loaded as an override and set the original
@@ -1168,8 +1164,8 @@ void GlobalData::reset()
 	// we now have the one single global data in TheWritableGlobalData singleton, lets sanity check
 	// some of all that
 	//
-	DEBUG_ASSERTCRASH( TheWritableGlobalData->m_next == nullptr, ("ResetGlobalData: theOriginal is not original") );
-	DEBUG_ASSERTCRASH( TheWritableGlobalData == GlobalData::m_theOriginal, ("ResetGlobalData: oops") );
+	engine::debug::invariant((TheWritableGlobalData->m_next == nullptr), "TheWritableGlobalData->m_next == nullptr", __FILE__, __LINE__, "ResetGlobalData: theOriginal is not original");
+	engine::debug::invariant((TheWritableGlobalData == GlobalData::m_theOriginal), "TheWritableGlobalData == GlobalData::m_theOriginal", __FILE__, __LINE__, "ResetGlobalData: oops");
 
 }
 
@@ -1270,7 +1266,7 @@ void GlobalData::parseCustomDefinition()
 
 UnsignedInt GlobalData::generateExeCRC()
 {
-	DEBUG_ASSERTCRASH(TheFileSystem != nullptr, ("TheFileSystem is null"));
+	engine::debug::invariant((TheFileSystem != nullptr), "TheFileSystem != nullptr", __FILE__, __LINE__, "TheFileSystem is null");
 
 	// lets CRC the executable!  Whee!
 	const Int blockSize = 65536;
@@ -1285,7 +1281,7 @@ UnsignedInt GlobalData::generateExeCRC()
 #define GENERALSMD_104_EAAPP_EXE_CRC 0xc4181eb9u
 
 	exeCRC.set(GENERALSMD_104_CD_EXE_CRC);
-	DEBUG_LOG(("Fake EXE CRC is 0x%8.8X", exeCRC.get()));
+	engine::debug::log_info("Fake EXE CRC is 0x%8.8X", exeCRC.get());
 
 #else
 	{
@@ -1299,12 +1295,12 @@ UnsignedInt GlobalData::generateExeCRC()
 			{
 				exeCRC.computeCRC(crcBlock, amtRead);
 			}
-			DEBUG_LOG(("EXE CRC is 0x%8.8X", exeCRC.get()));
+			engine::debug::log_info("EXE CRC is 0x%8.8X", exeCRC.get());
 			fp->close();
 			fp = nullptr;
 		}
 		else {
-			DEBUG_CRASH(("Executable file has failed to open"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Executable file has failed to open");
 		}
 	}
 #endif
@@ -1339,7 +1335,7 @@ UnsignedInt GlobalData::generateExeCRC()
 		fp = nullptr;
 	}
 
-	DEBUG_LOG(("EXE+Version(%d.%d)+SCB CRC is 0x%8.8X", version >> 16, version & 0xffff, exeCRC.get()));
+	engine::debug::log_info("EXE+Version(%d.%d)+SCB CRC is 0x%8.8X", version >> 16, version & 0xffff, exeCRC.get());
 
 	return exeCRC.get();
 }

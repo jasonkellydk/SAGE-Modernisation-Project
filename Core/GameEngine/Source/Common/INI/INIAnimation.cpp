@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/INI.h"
 #include "GameClient/Anim2D.h"
@@ -65,16 +66,16 @@ void INI::parseAnim2DDefinition( INI* ini )
 
 		// item not found, create a new one
 		animTemplate = TheAnim2DCollection->newTemplate( name );
-		DEBUG_ASSERTCRASH( animTemplate, ("INI::parseAnim2DDefinition -  unable to allocate animation template for '%s'",
-											 name.str()) );
+		engine::debug::invariant((animTemplate), "animTemplate", __FILE__, __LINE__, "INI::parseAnim2DDefinition -  unable to allocate animation template for '%s'",
+											 name.str());
 
 	}
 	else
 	{
 
 		// we're loading over an existing animation template ... something is probably wrong
-		DEBUG_CRASH(( "INI::parseAnim2DDefinition - Animation template '%s' already exists",
-									animTemplate->getName().str() ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "INI::parseAnim2DDefinition - Animation template '%s' already exists",
+									animTemplate->getName().str() );
 		return;
 
 	}

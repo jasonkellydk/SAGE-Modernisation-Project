@@ -49,7 +49,7 @@
 
 // USER INCLUDES //////////////////////////////////////////////////////////////
 #include "Lib/BaseType.h"
-#include "Common/Debug.h"
+
 #include "Common/file.h"
 #include "Common/FileSystem.h"
 #include "Common/GameMemory.h"
@@ -71,6 +71,7 @@
 #include "GameClient/GadgetSlider.h"
 #include "GameClient/GameText.h"
 #include "GameClient/HeaderTemplate.h"
+import engine.debug;
 
 
 
@@ -239,7 +240,7 @@ static void parseBitString( const char *inBuffer, UnsignedInt *bits, ConstCharPt
 		{
 			if ( !parseBitFlag( tok, bits, flagList ) )
 			{
-				DEBUG_LOG(( "ParseBitString: Invalid flag '%s'.", tok ));
+				engine::debug::log_info( "ParseBitString: Invalid flag '%s'.", tok );
 			}
 		}
 	}
@@ -286,7 +287,7 @@ static void readUntilSemicolon( File *fp, char *buffer, int maxBufLen )
 
 	}
 
-	DEBUG_LOG(( "ReadUntilSemicolon: ERROR - Read buffer overflow - input truncated." ));
+	engine::debug::log_info( "ReadUntilSemicolon: ERROR - Read buffer overflow - input truncated." );
 
 	buffer[ maxBufLen - 1 ] = '\000';
 
@@ -389,7 +390,7 @@ static void pushWindow( GameWindow *window )
   if( stackPtr == &windowStack[ WIN_STACK_DEPTH - 1 ] )
 	{
 
-    DEBUG_LOG(( "pushWindow: Warning, stack overflow" ));
+    engine::debug::log_info( "pushWindow: Warning, stack overflow" );
     return;
 
   }
@@ -700,7 +701,7 @@ static Bool parseSystemCallback( const char *token, WinInstanceData *instData,
 	c = strtok( ptr, stringSeps );  // name value
 
 	// save a pointer of the function address
-	DEBUG_ASSERTCRASH( TheNameKeyGenerator && TheFunctionLexicon, ("Invalid singletons") );
+	engine::debug::invariant((TheNameKeyGenerator && TheFunctionLexicon), "TheNameKeyGenerator && TheFunctionLexicon", __FILE__, __LINE__, "Invalid singletons");
 	theSystemString = c;
 	NameKeyType key = TheNameKeyGenerator->nameToKey( theSystemString );
 	systemFunc = TheFunctionLexicon->gameWinSystemFunc( key );
@@ -727,7 +728,7 @@ static Bool parseInputCallback( const char *token, WinInstanceData *instData,
 	c = strtok( ptr, stringSeps );  // name value
 
 	// save a pointer of the function address
-	DEBUG_ASSERTCRASH( TheNameKeyGenerator && TheFunctionLexicon, ("Invalid singletons") );
+	engine::debug::invariant((TheNameKeyGenerator && TheFunctionLexicon), "TheNameKeyGenerator && TheFunctionLexicon", __FILE__, __LINE__, "Invalid singletons");
 	theInputString = c;
 	NameKeyType key = TheNameKeyGenerator->nameToKey( theInputString );
 	inputFunc = TheFunctionLexicon->gameWinInputFunc( key );
@@ -754,7 +755,7 @@ static Bool parseTooltipCallback( const char *token, WinInstanceData *instData,
 	c = strtok( ptr, stringSeps );  // name value
 
 	// save a pointer of the function address
-	DEBUG_ASSERTCRASH( TheNameKeyGenerator && TheFunctionLexicon, ("Invalid singletons") );
+	engine::debug::invariant((TheNameKeyGenerator && TheFunctionLexicon), "TheNameKeyGenerator && TheFunctionLexicon", __FILE__, __LINE__, "Invalid singletons");
 	theTooltipString = c;
 	NameKeyType key = TheNameKeyGenerator->nameToKey( theTooltipString );
 	tooltipFunc = TheFunctionLexicon->gameWinTooltipFunc( key );
@@ -781,7 +782,7 @@ static Bool parseDrawCallback( const char *token, WinInstanceData *instData,
 	c = strtok( ptr, stringSeps );  // name value
 
 	// save a pointer of the function address
-	DEBUG_ASSERTCRASH( TheNameKeyGenerator && TheFunctionLexicon, ("Invalid singletons") );
+	engine::debug::invariant((TheNameKeyGenerator && TheFunctionLexicon), "TheNameKeyGenerator && TheFunctionLexicon", __FILE__, __LINE__, "Invalid singletons");
 	theDrawString = c;
 	NameKeyType key = TheNameKeyGenerator->nameToKey( theDrawString );
 	drawFunc = TheFunctionLexicon->gameWinDrawFunc( key );
@@ -808,7 +809,7 @@ static Bool parseHeaderTemplate( const char *token, WinInstanceData *instData,
 	c = strtok( ptr, stringSeps );  // name value
 
 	// save a pointer of the function address
-	DEBUG_ASSERTCRASH( TheNameKeyGenerator && TheFunctionLexicon, ("Invalid singletons") );
+	engine::debug::invariant((TheNameKeyGenerator && TheFunctionLexicon), "TheNameKeyGenerator && TheFunctionLexicon", __FILE__, __LINE__, "Invalid singletons");
 
 	instData->m_headerTemplateName = c;
 
@@ -990,7 +991,7 @@ static Bool parseTooltipText( const char *token, WinInstanceData *instData,
 	if( strlen( c ) >= MAX_TEXT_LABEL )
 	{
 
-		DEBUG_LOG(( "TextTooltip label '%s' is too long, max is '%d'", c, MAX_TEXT_LABEL ));
+		engine::debug::log_info( "TextTooltip label '%s' is too long, max is '%d'", c, MAX_TEXT_LABEL );
 		assert( 0 );
 		return FALSE;
 
@@ -1040,7 +1041,7 @@ static Bool parseText( const char *token, WinInstanceData *instData,
 	if( strlen( c ) >= MAX_TEXT_LABEL )
 	{
 
-		DEBUG_LOG(( "Text label '%s' is too long, max is '%d'", c, MAX_TEXT_LABEL ));
+		engine::debug::log_info( "Text label '%s' is too long, max is '%d'", c, MAX_TEXT_LABEL );
 		assert( 0 );
 		return FALSE;
 
@@ -1079,7 +1080,7 @@ static Bool parseTextColor( const char *token, WinInstanceData *instData,
 		else
 		{
 
-			DEBUG_LOG(( "Undefined state for text color" ));
+			engine::debug::log_info( "Undefined state for text color" );
 			assert( 0 );
 			return FALSE;
 
@@ -1307,7 +1308,7 @@ static Bool parseDrawData( const char *token, WinInstanceData *instData,
 		else
 		{
 
-			DEBUG_LOG(( "ParseDrawData, undefined token '%s'", token ));
+			engine::debug::log_info( "ParseDrawData, undefined token '%s'", token );
 			assert( 0 );
 			return FALSE;
 
@@ -2237,7 +2238,7 @@ static Bool parseChildWindows( GameWindow *window,
   if( lastWindow != window )
 	{
 
-    DEBUG_LOG(( "parseChildWindows: unmatched window on stack.  Corrupt stack or bad source" ));
+    engine::debug::log_info( "parseChildWindows: unmatched window on stack.  Corrupt stack or bad source" );
     return FALSE;
 
   }
@@ -2407,7 +2408,7 @@ static GameWindow *parseWindow( File *inFile, char *buffer )
 
 				if (parse->parse( token, &instData, buffer, data ) == FALSE )
 				{
-					DEBUG_LOG(( "parseGameObject: Error parsing %s", parse->name ));
+					engine::debug::log_info( "parseGameObject: Error parsing %s", parse->name );
 					goto cleanupAndExit;
 				}
 
@@ -2430,7 +2431,7 @@ static GameWindow *parseWindow( File *inFile, char *buffer )
 
 				if( parseData( &data, type, buffer ) == FALSE )
 				{
-					DEBUG_LOG(( "parseGameWindow: Error parsing %s", parse->name ));
+					engine::debug::log_info( "parseGameWindow: Error parsing %s", parse->name );
 					goto cleanupAndExit;
 				}
 
@@ -2729,7 +2730,7 @@ GameWindow *GameWindowManager::winCreateFromScript( AsciiString filenameString,
 	inFile = TheFileSystem->openFile(filepath, File::READ);
 	if (inFile == nullptr)
 	{
-		DEBUG_LOG(( "WinCreateFromScript: Cannot access file '%s'.", filename ));
+		engine::debug::log_info( "WinCreateFromScript: Cannot access file '%s'.", filename );
 		return nullptr;
 	}
 
@@ -2746,7 +2747,7 @@ GameWindow *GameWindowManager::winCreateFromScript( AsciiString filenameString,
 		if( parseLayoutBlock( inFile, buffer, version, &scriptInfo ) == FALSE )
 		{
 
-			DEBUG_LOG(( "WinCreateFromScript: Error parsing layout block" ));
+			engine::debug::log_info( "WinCreateFromScript: Error parsing layout block" );
 			return FALSE;
 
 		}

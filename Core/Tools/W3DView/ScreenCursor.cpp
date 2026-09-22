@@ -42,6 +42,7 @@ import Graphics.Materials.State;
 #include "WW3D2/Texture.h"
 #include <array>
 #include "WWMath/matrix4.h"
+import engine.debug;
 import Graphics.Scene.Surfaces.Geometry;
 
 
@@ -249,7 +250,7 @@ ScreenCursorClass::Render (RenderInfoClass &rinfo)
             indices[i * 3 + corner] = m_Triangles[i][corner];
     if (!Draw_Graphics_Prelit_Geometry(vertices, indices, Matrix4x4(true),
         Graphics::MaterialState::ATestBlend2D(), m_pTexture.Peek()))
-        DEBUG_LOG(("Viewer cursor graphics submission failed.\n"));
+        engine::debug::log_info("Viewer cursor graphics submission failed.\n");
 
 }
 

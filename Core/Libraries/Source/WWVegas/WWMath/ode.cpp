@@ -41,6 +41,7 @@
 
 #include "ode.h"
 #include <assert.h>
+import engine.debug;
 
 static StateVectorClass		Y0;
 static StateVectorClass		Y1;
@@ -71,7 +72,7 @@ static StateVectorClass		_WorkVector7;
  *=============================================================================================*/
 void IntegrationSystem::Euler_Integrate(ODESystemClass * sys, float dt)
 {
-	WWASSERT(sys != nullptr);
+	engine::debug::assert_condition((sys != nullptr), "sys != nullptr", __FILE__, __LINE__, "assertion failed");
 
 	/*
 	** Get the current state

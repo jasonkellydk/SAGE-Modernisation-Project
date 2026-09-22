@@ -53,7 +53,7 @@ module;
 
 #include "Common/AudioEventRTS.h"
 #include "Common/Language.h"
-#include "Common/Debug.h"
+
 #include "Common/GameAudio.h"
 #include "GameClient/DisplayStringManager.h"
 #include "GameClient/GameWindow.h"
@@ -63,6 +63,7 @@ module;
 
 export module Engine.UI.WND.Runtime.Gadget.ListBox;
 
+import engine.debug;
 #include "GameClient/Gadget.h"
 #include "GameClient/GadgetListBox.h"
 #include "GameClient/GadgetPushButton.h"
@@ -349,7 +350,7 @@ static Int addImageEntry( const Image *image, Color color, Int row, Int column, 
 
 	if( column >= list->columns  || row >= list->listLength )
 	{
-		DEBUG_CRASH(("Tried to add Image to Listbox at invalid position"));
+		engine::debug::invariant(false, "debug invariant", __FILE__, __LINE__, "Tried to add Image to Listbox at invalid position");
 		return -1;
 	}
 
@@ -452,7 +453,7 @@ static Int addEntry( UnicodeString *string, Int color, Int row, Int column, Game
 	// make sure our params are good
 	if( column >= list->columns  || row >= list->listLength )
 	{
-		DEBUG_CRASH(("Tried to add text to Listbox at invalid position"));
+		engine::debug::invariant(false, "debug invariant", __FILE__, __LINE__, "Tried to add text to Listbox at invalid position");
 		return -1;
 	}
 
@@ -1613,7 +1614,7 @@ WindowMsgHandledType GadgetListBoxSystem( GameWindow *window, UnsignedInt msg,
 		{
 			const Int *selectList = (const Int *)mData1;
 			Int selectCount = (Int)mData2;
-			DEBUG_ASSERTCRASH( list->multiSelect || selectCount == 1, ("Bad selection size"));
+			engine::debug::invariant((list->multiSelect || selectCount == 1), "list->multiSelect || selectCount == 1", __FILE__, __LINE__, "Bad selection size");
 
 			if( selectList[0] < 0 || list->listLength <= selectList[0] )
 			{
@@ -2231,8 +2232,8 @@ Int GadgetListBoxAddEntryText( GameWindow *listbox,
 	/// @TODO: Don't do this type cast!
 	index = (Int) TheWindowManager->winSendSystemMsg( listbox, GLM_ADD_ENTRY, (WindowMsgData)&addInfo, color );
 
-	//DEBUG_ASSERTLOG(!listData->scrollIfAtEnd, ("Adding line %d (orig end was %d, newEntryOffset is %d, (%d-%d)?=%d, isFull=%d/%d ll=%d, end=%d",
-		//index, oldBottomIndex, newEntryOffset, index, oldBottomIndex, newEntryOffset, wasFull, GadgetListBoxIsFull(listbox), listData->listLength, listData->endPos));
+	//if (!(!listData->scrollIfAtEnd)) engine::debug::log_error("Adding line %d (orig end was %d, newEntryOffset is %d, (%d-%d)?=%d, isFull=%d/%d ll=%d, end=%d",
+		//index, oldBottomIndex, newEntryOffset, index, oldBottomIndex, newEntryOffset, wasFull, GadgetListBoxIsFull(listbox), listData->listLength, listData->endPos);
 	if(listData->scrollIfAtEnd && index - oldBottomIndex == newEntryOffset && GadgetListBoxIsFull(listbox))
 	{
 	  GadgetListBoxSetBottomVisibleEntry( listbox, index );
@@ -2429,11 +2430,11 @@ void GadgetListBoxAddMultiSelect( GameWindow *listbox )
 {
 	ListboxData *listboxData = (ListboxData *)listbox->winGetUserData();
 
-	DEBUG_ASSERTCRASH(listboxData && listboxData->selections == nullptr, ("selections is not null"));
+	engine::debug::invariant((listboxData && listboxData->selections == nullptr), "listboxData && listboxData->selections == nullptr", __FILE__, __LINE__, "selections is not null");
 	listboxData->selections = NEW Int [listboxData->listLength];
-	DEBUG_LOG(( "Enable list box multi select: listLength (select) = %d * %d = %d bytes;",
+	engine::debug::log_info( "Enable list box multi select: listLength (select) = %d * %d = %d bytes;",
 					 listboxData->listLength, sizeof(Int),
-					 listboxData->listLength *sizeof(Int) ));
+					 listboxData->listLength *sizeof(Int) );
 
 	if( listboxData->selections == nullptr )
 	{
@@ -2485,16 +2486,16 @@ void GadgetListBoxSetListLength( GameWindow *listbox, Int newLength )
 
 //	ListboxData *listboxData = (ListboxData *)listbox->winGetUserData();
 //	ListEntry *newData = (ListEntry *)malloc(newLength * sizeof(ListEntry));
-	DEBUG_ASSERTCRASH(listboxData, ("We don't have our needed listboxData!"));
+	engine::debug::invariant((listboxData), "listboxData", __FILE__, __LINE__, "We don't have our needed listboxData!");
 	if( !listboxData )
 		return;
-	DEBUG_ASSERTCRASH(listboxData->columns > 0,("We need at least one Column in the listbox"));
+	engine::debug::invariant((listboxData->columns > 0), "listboxData->columns > 0", __FILE__, __LINE__, "We need at least one Column in the listbox");
 	if( listboxData->columns < 1 )
 		return;
 
   Int columns = listboxData->columns;
 	ListEntryRow *newData = NEW ListEntryRow[ newLength ];
-	DEBUG_ASSERTCRASH(newData, ("Unable to allocate new data structures for the Listbox"));
+	engine::debug::invariant((newData), "newData", __FILE__, __LINE__, "Unable to allocate new data structures for the Listbox");
 	if( !newData )
 		return;
 	Int i;
@@ -2564,7 +2565,7 @@ void GadgetListBoxSetListLength( GameWindow *listbox, Int newLength )
 	if( listboxData->listData == nullptr )
 	{
 
-		DEBUG_LOG(( "Unable to allocate listbox data pointer" ));
+		engine::debug::log_info( "Unable to allocate listbox data pointer" );
 		assert( 0 );
 		return;
 

@@ -23,7 +23,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "GameNetwork/NetCommandRef.h"
 
@@ -52,7 +53,7 @@ NetCommandRef::NetCommandRef(NetCommandMsg *msg)
 
 #ifdef DEBUG_NETCOMMANDREF
 	m_id = ++refNum;
-	DEBUG_LOG(("NetCommandRef %d allocated in file %s line %d", m_id, filename, line));
+	engine::debug::log_info("NetCommandRef %d allocated in file %s line %d", m_id, filename, line);
 #endif
 }
 
@@ -65,11 +66,11 @@ NetCommandRef::~NetCommandRef()
 	{
 		m_msg->detach();
 	}
-	DEBUG_ASSERTCRASH(m_next == nullptr, ("NetCommandRef::~NetCommandRef - m_next != nullptr"));
-	DEBUG_ASSERTCRASH(m_prev == nullptr, ("NetCommandRef::~NetCommandRef - m_prev != nullptr"));
+	engine::debug::invariant((m_next == nullptr), "m_next == nullptr", __FILE__, __LINE__, "NetCommandRef::~NetCommandRef - m_next != nullptr");
+	engine::debug::invariant((m_prev == nullptr), "m_prev == nullptr", __FILE__, __LINE__, "NetCommandRef::~NetCommandRef - m_prev != nullptr");
 
 #ifdef DEBUG_NETCOMMANDREF
-	DEBUG_LOG(("NetCommandRef %d deleted", m_id));
+	engine::debug::log_info("NetCommandRef %d deleted", m_id);
 #endif
 }
 

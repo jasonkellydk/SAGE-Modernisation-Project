@@ -29,7 +29,8 @@
 
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 #define DEFINE_SLOWDEATHPHASE_NAMES
 
 #include "Common/GlobalData.h"
@@ -356,7 +357,7 @@ void GenerateMinefieldBehavior::placeMinesInFootprint(const GeometryInfo& geom, 
 			pt.z += target->z;
 			--maxRetry;
 		} while (isAnythingTooClose2D(minesCreatedSoFar, pt, minDistSqr) && maxRetry > 0);
-		DEBUG_ASSERTCRASH(maxRetry>0,("ran out of retries %f",minDistSqr));
+		engine::debug::invariant((maxRetry>0), "maxRetry>0", __FILE__, __LINE__, "ran out of retries %f",minDistSqr);
 
 		if (getObject()->getGeometryInfo().isPointInFootprint(*target, pt))
 			continue;
@@ -387,7 +388,7 @@ void GenerateMinefieldBehavior::placeMines()
 
 	if (!mineTemplate)
 	{
-		DEBUG_CRASH(("mine %s not found",d->m_mineName.str()));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "mine %s not found",d->m_mineName.str());
 		return;
 	}
 

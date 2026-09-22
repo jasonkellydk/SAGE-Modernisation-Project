@@ -29,6 +29,7 @@
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 #include "PreRTS.h"
+import engine.debug;
 #include "Common/Xfer.h"
 
 #include "GameLogic/Module/StatusDamageHelper.h"
@@ -57,7 +58,7 @@ StatusDamageHelper::~StatusDamageHelper()
 // ------------------------------------------------------------------------------------------------
 UpdateSleepTime StatusDamageHelper::update()
 {
-	DEBUG_ASSERTCRASH(m_frameToHeal <= TheGameLogic->getFrame(), ("StatusDamageHelper woke up too soon.") );
+	engine::debug::invariant((m_frameToHeal <= TheGameLogic->getFrame()), "m_frameToHeal <= TheGameLogic->getFrame()", __FILE__, __LINE__, "StatusDamageHelper woke up too soon.");
 
 	clearStatusCondition(); // We are sleep driven, so seeing an update means our timer is ready implicitly
 	return UPDATE_SLEEP_FOREVER;

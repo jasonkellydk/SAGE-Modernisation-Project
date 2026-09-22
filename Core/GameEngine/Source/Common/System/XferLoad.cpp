@@ -28,8 +28,9 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // USER INCLUDES //////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
-#include "Common/Debug.h"
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
+
 #include "Common/GameState.h"
 #include "Common/Snapshot.h"
 #include "Common/XferLoad.h"
@@ -53,7 +54,7 @@ XferLoad::~XferLoad()
 	if( m_fileFP != nullptr )
 	{
 
-		DEBUG_CRASH(( "Warning: Xfer file '%s' was left open", m_identifier.str() ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Warning: Xfer file '%s' was left open", m_identifier.str() );
 		close();
 
 	}
@@ -70,8 +71,8 @@ void XferLoad::open( AsciiString identifier )
 	if( m_fileFP != nullptr )
 	{
 
-		DEBUG_CRASH(( "Cannot open file '%s' cause we've already got '%s' open",
-									identifier.str(), m_identifier.str() ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Cannot open file '%s' cause we've already got '%s' open",
+									identifier.str(), m_identifier.str() );
 		throw XFER_FILE_ALREADY_OPEN;
 
 	}
@@ -84,7 +85,7 @@ void XferLoad::open( AsciiString identifier )
 	if( m_fileFP == nullptr )
 	{
 
-		DEBUG_CRASH(( "File '%s' not found", identifier.str() ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "File '%s' not found", identifier.str() );
 		throw XFER_FILE_NOT_FOUND;
 
 	}
@@ -101,7 +102,7 @@ void XferLoad::close()
 	if( m_fileFP == nullptr )
 	{
 
-		DEBUG_CRASH(( "Xfer close called, but no file was open" ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Xfer close called, but no file was open" );
 		throw XFER_FILE_NOT_OPEN;
 
 	}
@@ -122,15 +123,15 @@ Int XferLoad::beginBlock()
 {
 
 	// sanity
-	DEBUG_ASSERTCRASH( m_fileFP != nullptr, ("Xfer begin block - file pointer for '%s' is null",
-										 m_identifier.str()) );
+	engine::debug::invariant((m_fileFP != nullptr), "m_fileFP != nullptr", __FILE__, __LINE__, "Xfer begin block - file pointer for '%s' is null",
+										 m_identifier.str());
 
 	// read block size
 	XferBlockSize blockSize;
 	if( fread( &blockSize, sizeof( XferBlockSize ), 1, m_fileFP ) != 1 )
 	{
 
-		DEBUG_CRASH(( "Xfer - Error reading block size for '%s'", m_identifier.str() ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Xfer - Error reading block size for '%s'", m_identifier.str() );
 		return 0;
 
 	}
@@ -155,12 +156,12 @@ void XferLoad::skip( Int dataSize )
 {
 
 	// sanity
-	DEBUG_ASSERTCRASH( m_fileFP != nullptr, ("XferLoad::skip - file pointer for '%s' is null",
-										 m_identifier.str()) );
+	engine::debug::invariant((m_fileFP != nullptr), "m_fileFP != nullptr", __FILE__, __LINE__, "XferLoad::skip - file pointer for '%s' is null",
+										 m_identifier.str());
 
 	// sanity
-	DEBUG_ASSERTCRASH( dataSize >=0, ("XferLoad::skip - dataSize '%d' must be greater than 0",
-										 dataSize) );
+	engine::debug::invariant((dataSize >=0), "dataSize >=0", __FILE__, __LINE__, "XferLoad::skip - dataSize '%d' must be greater than 0",
+										 dataSize);
 
 	// skip datasize in the file from the current position
 	if( fseek( m_fileFP, dataSize, SEEK_CUR ) != 0 )
@@ -177,7 +178,7 @@ void XferLoad::xferSnapshot( Snapshot *snapshot )
 	if( snapshot == nullptr )
 	{
 
-		DEBUG_CRASH(( "XferLoad::xferSnapshot - Invalid parameters" ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "XferLoad::xferSnapshot - Invalid parameters" );
 		throw XFER_INVALID_PARAMETERS;
 
 	}
@@ -244,14 +245,14 @@ void XferLoad::xferImplementation( void *data, Int dataSize )
 {
 
 	// sanity
-	DEBUG_ASSERTCRASH( m_fileFP != nullptr, ("XferLoad - file pointer for '%s' is null",
-										 m_identifier.str()) );
+	engine::debug::invariant((m_fileFP != nullptr), "m_fileFP != nullptr", __FILE__, __LINE__, "XferLoad - file pointer for '%s' is null",
+										 m_identifier.str());
 
 	// read data from file
 	if( fread( data, dataSize, 1, m_fileFP ) != 1 )
 	{
 
-		DEBUG_CRASH(( "XferLoad - Error reading from file '%s'", m_identifier.str() ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "XferLoad - Error reading from file '%s'", m_identifier.str() );
 		throw XFER_READ_ERROR;
 
 	}

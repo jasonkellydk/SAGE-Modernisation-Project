@@ -16,7 +16,8 @@
 **	along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 #include "Common/WorkerProcess.h"
 
 // We need Job-related functions, but these aren't defined in the Windows-headers that VC6 uses.
@@ -149,7 +150,7 @@ bool WorkerProcess::fetchStdOutput()
 	{
 		// Call PeekNamedPipe to make sure ReadFile won't block
 		DWORD bytesAvailable = 0;
-		DEBUG_ASSERTCRASH(m_readHandle != nullptr, ("Is not expected null"));
+		engine::debug::invariant((m_readHandle != nullptr), "m_readHandle != nullptr", __FILE__, __LINE__, "Is not expected null");
 		BOOL success = PeekNamedPipe(m_readHandle, nullptr, 0, nullptr, &bytesAvailable, nullptr);
 		if (!success)
 			return true;
@@ -164,7 +165,7 @@ bool WorkerProcess::fetchStdOutput()
 		success = ReadFile(m_readHandle, buffer, ARRAY_SIZE(buffer)-1, &readBytes, nullptr);
 		if (!success)
 			return true;
-		DEBUG_ASSERTCRASH(readBytes != 0, ("expected readBytes to be non null"));
+		engine::debug::invariant((readBytes != 0), "readBytes != 0", __FILE__, __LINE__, "expected readBytes to be non null");
 
 		// Remove \r, otherwise each new line is doubled when we output it again
 		for (int i = 0; i < readBytes; i++)

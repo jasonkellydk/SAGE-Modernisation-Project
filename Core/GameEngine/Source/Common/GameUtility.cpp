@@ -17,6 +17,7 @@
 */
 
 #include "PreRTS.h"
+import engine.debug;
 
 #include "Common/GameUtility.h"
 #include "Common/PlayerList.h"
@@ -67,11 +68,11 @@ bool localPlayerHasRadar()
 
 Player* getObservedOrLocalPlayer()
 {
-	DEBUG_ASSERTCRASH(TheControlBar != nullptr, ("TheControlBar is null"));
+	engine::debug::invariant((TheControlBar != nullptr), "TheControlBar != nullptr", __FILE__, __LINE__, "TheControlBar is null");
 	Player* player = TheControlBar->getObservedPlayer();
 	if (player == nullptr)
 	{
-		DEBUG_ASSERTCRASH(ThePlayerList != nullptr, ("ThePlayerList is null"));
+		engine::debug::invariant((ThePlayerList != nullptr), "ThePlayerList != nullptr", __FILE__, __LINE__, "ThePlayerList is null");
 		player = ThePlayerList->getLocalPlayer();
 	}
 	return player;
@@ -101,7 +102,7 @@ PlayerIndex getObservedOrLocalPlayerIndex_Safe()
 
 void changeLocalPlayer(Player* player)
 {
-	DEBUG_ASSERTCRASH(player != nullptr, ("Player is null"));
+	engine::debug::invariant((player != nullptr), "player != nullptr", __FILE__, __LINE__, "Player is null");
 
 	ThePlayerList->setLocalPlayer(player);
 	TheControlBar->setObserverLookAtPlayer(nullptr);

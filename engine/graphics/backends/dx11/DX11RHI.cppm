@@ -1,5 +1,4 @@
 module;
-#include "../../profiling/Tracy.h"
 
 #define NOMINMAX
 
@@ -28,6 +27,7 @@ module;
 
 export module Graphics.Backends.DX11;
 
+import engine.profiling;
 export import Graphics.RHI;
 
 import Graphics.Resources.Pools.ResourcePool;
@@ -1037,7 +1037,7 @@ bool DX11SwapChain::Resize(std::uint32_t width, std::uint32_t height)
 
 bool DX11SwapChain::Present() noexcept
 {
-    GRAPHICS_PROFILE_SCOPE("Graphics.DX11.Present");
+    engine::profiling::Scope profile_scope_1039("Graphics.DX11.Present");
 	if (!Is_Valid() || m_state->frame_active || !m_state->ready_to_present || m_state->presented)
 		return false;
 
@@ -1061,7 +1061,7 @@ bool DX11CommandList::Is_Pipeline_Valid() const noexcept
 
 bool DX11CommandList::Bind_Pipeline(RHIPipelineHandle pipeline) noexcept
 {
-    GRAPHICS_PROFILE_SCOPE("Graphics.DX11.BindPipeline");
+    engine::profiling::Scope profile_scope_1063("Graphics.DX11.BindPipeline");
 	if (!Is_Ready())
 		return false;
 
@@ -1453,7 +1453,7 @@ bool DX11CommandList::Set_Draw_Constants(std::span<const std::byte> data) noexce
 
 bool DX11CommandList::Set_Vertex_Buffer(std::uint32_t slot, RHIBufferHandle buffer, std::uint32_t stride, std::uint32_t offset) noexcept
 {
-    GRAPHICS_PROFILE_FOCUS_SCOPE("Graphics.DX11.SetVertexBuffer");
+    engine::profiling::Scope profile_scope_1456("Graphics.DX11.SetVertexBuffer");
 	if (!Is_Ready() || slot >= m_vertex_bindings.size())
 		return false;
 
@@ -1473,7 +1473,7 @@ bool DX11CommandList::Set_Vertex_Buffer(std::uint32_t slot, RHIBufferHandle buff
 
 bool DX11CommandList::Set_Index_Buffer(RHIBufferHandle buffer, RHIIndexFormat format, std::uint32_t offset) noexcept
 {
-    GRAPHICS_PROFILE_FOCUS_SCOPE("Graphics.DX11.SetIndexBuffer");
+    engine::profiling::Scope profile_scope_1476("Graphics.DX11.SetIndexBuffer");
 	if (!Is_Ready())
 		return false;
 
@@ -1490,7 +1490,7 @@ bool DX11CommandList::Set_Index_Buffer(RHIBufferHandle buffer, RHIIndexFormat fo
 
 bool DX11CommandList::Draw(std::uint32_t vertex_count, std::uint32_t first_vertex, std::uint32_t instance_count, std::uint32_t first_instance) noexcept
 {
-    GRAPHICS_PROFILE_FOCUS_SCOPE("Graphics.DX11.Draw");
+    engine::profiling::Scope profile_scope_1493("Graphics.DX11.Draw");
 	if (!Is_Pipeline_Valid() || vertex_count == 0 || instance_count == 0)
 		return false;
 
@@ -1504,7 +1504,7 @@ bool DX11CommandList::Draw(std::uint32_t vertex_count, std::uint32_t first_verte
 
 bool DX11CommandList::Draw_Indexed(std::uint32_t index_count, std::uint32_t first_index, std::int32_t base_vertex, std::uint32_t instance_count, std::uint32_t first_instance) noexcept
 {
-    GRAPHICS_PROFILE_FOCUS_SCOPE("Graphics.DX11.DrawIndexed");
+    engine::profiling::Scope profile_scope_1507("Graphics.DX11.DrawIndexed");
 	if (!Is_Pipeline_Valid() || index_count == 0 || instance_count == 0)
 		return false;
 
@@ -1603,7 +1603,7 @@ RHIBufferHandle DX11Device::Create_Buffer(const RHIBuffer &description)
 
 RHIBufferHandle DX11Device::Create_Buffer_Initialized(const RHIBuffer &description, std::span<const std::byte> initial_data)
 {
-    GRAPHICS_PROFILE_SCOPE("Graphics.DX11.CreateBuffer");
+    engine::profiling::Scope profile_scope_1605("Graphics.DX11.CreateBuffer");
 	if (!Is_Valid() || description.byte_size == 0)
 		return {};
     if (description.update_mode != RHIBufferUpdateMode::Preserve
@@ -1652,13 +1652,13 @@ RHIBufferHandle DX11Device::Create_Buffer_Initialized(const RHIBuffer &descripti
 	D3D11_SUBRESOURCE_DATA native_data{};
 	native_data.pSysMem = initial_data.data();
 	if (resource.object.Get() == nullptr) {
-        GRAPHICS_PROFILE_SCOPE("Graphics.DX11.NativeCreateBuffer");
+        engine::profiling::Scope profile_scope_1654("Graphics.DX11.NativeCreateBuffer");
 		if (!m_state->Check_Result(m_state->device.Get()->CreateBuffer(&native_description,
             initial_data.empty() || pooled || discard ? nullptr : &native_data, &native_buffer))) return {};
 		resource.object.Reset(native_buffer);
 	}
 	if ((pooled || discard) && !initial_data.empty()) {
-        GRAPHICS_PROFILE_SCOPE("Graphics.DX11.InitialBufferUpload");
+        engine::profiling::Scope profile_scope_1660("Graphics.DX11.InitialBufferUpload");
         // Discard mapping gives pending draws their previous storage while the
         // new handle receives independent contents, even when recycling buffers.
         if (discard) {
@@ -1819,7 +1819,7 @@ RHITextureHandle DX11Device::Create_Texture_Initialized(const RHITexture &descri
 
 bool DX11Device::Update_Buffer(RHIBufferHandle buffer, std::uint32_t offset, std::span<const std::byte> data) noexcept
 {
-    GRAPHICS_PROFILE_SCOPE("Graphics.DX11.UpdateBuffer");
+    engine::profiling::Scope profile_scope_1821("Graphics.DX11.UpdateBuffer");
 	if (!Is_Valid() || data.empty() || data.size() > std::numeric_limits<std::uint32_t>::max())
 		return false;
 

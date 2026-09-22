@@ -30,7 +30,7 @@
 // Author: Mark Wilczynski, August 2002
 ///////////////////////////////////////////////////////////////////////////////
 
-#include "Common/Debug.h"
+
 #include "Common/Player.h"
 #include "Common/PlayerList.h"
 #include "Common/ThingTemplate.h"
@@ -49,6 +49,7 @@
 #include "W3DDevice/GameClient/W3DRenderObject.h"
 #include "W3DDevice/GameClient/W3DHierarchyRenderObject.h"
 #include "W3DDevice/GameClient/W3DSceneClass.h"
+import engine.debug;
 import Assets.Cache.Animations;
 
 
@@ -200,7 +201,7 @@ void W3DRenderObjectSnapshot::xfer( Xfer *xfer )
 	xfer->xferVersion( &version, currentVersion );
 
 	// sanity
-	DEBUG_ASSERTCRASH( m_robj, ("W3DRenderObjectSnapshot::xfer - invalid m_robj") );
+	engine::debug::invariant((m_robj), "m_robj", __FILE__, __LINE__, "W3DRenderObjectSnapshot::xfer - invalid m_robj");
 
 	// transform on the main render object
 	Matrix3D transform;
@@ -316,12 +317,12 @@ W3DGhostObject::~W3DGhostObject()
 	{
 		for (Int i = 0; i < MAX_PLAYER_COUNT; i++)
 		{
-			DEBUG_ASSERTCRASH(m_parentSnapshots[i] == nullptr, ("Delete of non-empty GhostObject"));
+			engine::debug::invariant((m_parentSnapshots[i] == nullptr), "m_parentSnapshots[i] == nullptr", __FILE__, __LINE__, "Delete of non-empty GhostObject");
 		}
 	}
 	else
 	{
-		DEBUG_ASSERTCRASH(m_parentSnapshots[TheGhostObjectManager->getLocalPlayerIndex()] == nullptr, ("Delete of non-empty GhostObject"));
+		engine::debug::invariant((m_parentSnapshots[TheGhostObjectManager->getLocalPlayerIndex()] == nullptr), "m_parentSnapshots[TheGhostObjectManager->getLocalPlayerIndex()] == nullptr", __FILE__, __LINE__, "Delete of non-empty GhostObject");
 	}
 #endif
 }
@@ -333,8 +334,7 @@ Should only be called when object enters the fogged state.*/
 // ------------------------------------------------------------------------------------------------
 void W3DGhostObject::snapShot(int playerIndex)
 {
-	DEBUG_ASSERTCRASH(TheGhostObjectManager->trackAllPlayers() || playerIndex == TheGhostObjectManager->getLocalPlayerIndex(),
-		("We are supposed to only snapshot things for the initial local player because local player can't change in non-debug game."));
+	engine::debug::invariant((TheGhostObjectManager->trackAllPlayers() || playerIndex == TheGhostObjectManager->getLocalPlayerIndex()), "TheGhostObjectManager->trackAllPlayers() || playerIndex == TheGhostObjectManager->getLocalPlayerIndex()", __FILE__, __LINE__, "We are supposed to only snapshot things for the initial local player because local player can't change in non-debug game.");
 
 	Drawable *draw = m_parentObject->getDrawable();
 
@@ -439,7 +439,7 @@ void W3DGhostObject::removeParentObject()
 			W3DRenderObject *robj = w3dDraw->getRenderObject();
 			if (robj)
 			{
-				DEBUG_ASSERTCRASH(robj->Peek_Scene() != nullptr, ("Removing GhostObject parent not in scene"));
+				engine::debug::invariant((robj->Peek_Scene() != nullptr), "robj->Peek_Scene() != nullptr", __FILE__, __LINE__, "Removing GhostObject parent not in scene");
 				robj->Remove();
 			}
 		}
@@ -627,7 +627,7 @@ void W3DGhostObject::xfer( Xfer *xfer )
 
 		// sanity
 		if( drawableID != INVALID_DRAWABLE_ID && m_drawableInfo.m_drawable == nullptr )
-			DEBUG_CRASH(( "W3DGhostObject::xfer - Unable to find drawable for ghost object" ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "W3DGhostObject::xfer - Unable to find drawable for ghost object" );
 	}
 
 	//
@@ -661,7 +661,7 @@ void W3DGhostObject::xfer( Xfer *xfer )
 		//
 		if( snapshotCount == 0 && m_parentSnapshots[ i ] != nullptr )
 		{
-			DEBUG_CRASH(( "W3DGhostObject::xfer - m_parentSnapshots[ %d ] has data present but the count from the xfer stream is empty", i ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "W3DGhostObject::xfer - m_parentSnapshots[ %d ] has data present but the count from the xfer stream is empty", i );
 			throw INI_INVALID_DATA;
 		}
 
@@ -850,7 +850,7 @@ void W3DGhostObjectManager::reset()
 		mod = nextmod;
 	}
 
-	DEBUG_ASSERTCRASH(m_usedModules == nullptr, ("Reset of Non-Empty GhostObjectManager"));
+	engine::debug::invariant((m_usedModules == nullptr), "m_usedModules == nullptr", __FILE__, __LINE__, "Reset of Non-Empty GhostObjectManager");
 
 	//Delete any remaining modules (should be none)
 	mod = m_usedModules;
@@ -904,8 +904,7 @@ GhostObject *W3DGhostObjectManager::addGhostObject(Object *object, PartitionData
 		W3DGhostObject *sanity = m_usedModules;
 		while( sanity )
 		{
-			DEBUG_ASSERTCRASH( sanity->m_parentObject != object,
-				("W3DGhostObjectManager::addGhostObject - Duplicate ghost object detected") );
+			engine::debug::invariant((sanity->m_parentObject != object), "sanity->m_parentObject != object", __FILE__, __LINE__, "W3DGhostObjectManager::addGhostObject - Duplicate ghost object detected");
 			sanity = sanity->m_nextSystem;
 		}
 	}
@@ -1180,12 +1179,10 @@ void W3DGhostObjectManager::xfer( Xfer *xfer )
 	else
 	{
 		// sanity, there should be no ghost objects loaded at this time
-		DEBUG_ASSERTCRASH( m_usedModules == nullptr,
-			("W3DGhostObjectManager::xfer - The used module list is not null upon load, but should be!") );
+		engine::debug::invariant((m_usedModules == nullptr), "m_usedModules == nullptr", __FILE__, __LINE__, "W3DGhostObjectManager::xfer - The used module list is not null upon load, but should be!");
 
 		// now it's time to unlock the ghost objects for loading
-		DEBUG_ASSERTCRASH( m_saveLockGhostObjects == TRUE,
-			("W3DGhostObjectManager::xfer - Ghost object manager is not save locked, but should be") );
+		engine::debug::invariant((m_saveLockGhostObjects == TRUE), "m_saveLockGhostObjects == TRUE", __FILE__, __LINE__, "W3DGhostObjectManager::xfer - Ghost object manager is not save locked, but should be");
 
 		TheGhostObjectManager->saveLockGhostObjects( FALSE );
 
@@ -1208,12 +1205,10 @@ void W3DGhostObjectManager::xfer( Xfer *xfer )
 				ghostObject = addGhostObject( object, object->friend_getPartitionData() );
 
 				// sanity
-				DEBUG_ASSERTCRASH( ghostObject != nullptr,
-					("W3DGhostObjectManager::xfer - Could not create ghost object for object '%s'", object->getTemplate()->getName().str()) );
+				engine::debug::invariant((ghostObject != nullptr), "ghostObject != nullptr", __FILE__, __LINE__, "W3DGhostObjectManager::xfer - Could not create ghost object for object '%s'", object->getTemplate()->getName().str());
 
 				// link the ghost object and logical object together through partition/ghostObject dat
-				DEBUG_ASSERTCRASH( object->friend_getPartitionData()->getGhostObject() == nullptr,
-					("W3DGhostObjectManager::xfer - Ghost object already on object '%s'", object->getTemplate()->getName().str()) );
+				engine::debug::invariant((object->friend_getPartitionData()->getGhostObject() == nullptr), "object->friend_getPartitionData()->getGhostObject() == nullptr", __FILE__, __LINE__, "W3DGhostObjectManager::xfer - Ghost object already on object '%s'", object->getTemplate()->getName().str());
 
 				object->friend_getPartitionData()->friend_setGhostObject( ghostObject );
 			}

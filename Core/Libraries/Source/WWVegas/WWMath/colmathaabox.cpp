@@ -51,7 +51,8 @@
 #include "sphere.h"
 #include "aabox.h"
 #include "obbox.h"
-#include "WWDebug/wwdebug.h"
+
+import engine.debug;
 
 
 /***********************************************************************************************
@@ -586,8 +587,8 @@ exit:
 		result->Normal[context.AxisId] = -context.Side;
 
 		if (result->ComputeContactPoint) {
-			//WWASSERT(0); // TODO
-			WWDEBUG_SAY(("AABox-AABox collision does not currently support contact point computation"));
+			//engine::debug::assert_condition((0), "0", __FILE__, __LINE__, "assertion failed"); // TODO
+			engine::debug::log_info("AABox-AABox collision does not currently support contact point computation");
 		}
 
 		return true;

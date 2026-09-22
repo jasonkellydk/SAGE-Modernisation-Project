@@ -26,6 +26,7 @@
 #include "WorldBuilderDoc.h"
 #include "WHeightMapEdit.h"
 #include "wbview3d.h"
+import engine.debug;
 
 /////////////////////////////////////////////////////////////////////////////
 // CWBFrameWnd
@@ -55,7 +56,7 @@ BOOL CWBFrameWnd::LoadFrame(UINT nIDResource,
 			SWP_NOZORDER|SWP_NOSIZE);
 		if (!m_cellSizeToolBar.Create(this, IDD_CELL_SLIDER, CBRS_LEFT, IDD_CELL_SLIDER))
 		{
-			DEBUG_CRASH(("Failed to create toolbar"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Failed to create toolbar");
 		}
 		EnableDocking(CBRS_ALIGN_ANY);
 		m_cellSizeToolBar.SetupSlider();

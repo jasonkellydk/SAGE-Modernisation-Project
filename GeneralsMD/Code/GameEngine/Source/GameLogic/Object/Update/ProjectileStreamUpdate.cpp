@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/Xfer.h"
 #include "GameLogic/GameLogic.h"
@@ -74,7 +75,7 @@ UpdateSleepTime ProjectileStreamUpdate::update()
 
 void ProjectileStreamUpdate::addProjectile( ObjectID sourceID, ObjectID newID, ObjectID victimID, const Coord3D *victimPos )
 {
-	DEBUG_ASSERTCRASH( m_owningObject == INVALID_ID  ||  m_owningObject == sourceID, ("Two objects are trying to use the same Projectile stream.") );//Don't cross the streams!
+	engine::debug::invariant((m_owningObject == INVALID_ID  ||  m_owningObject == sourceID), "m_owningObject == INVALID_ID  ||  m_owningObject == sourceID", __FILE__, __LINE__, "Two objects are trying to use the same Projectile stream.");//Don't cross the streams!
 	if( m_owningObject == INVALID_ID )
 		m_owningObject = sourceID;
 
@@ -112,13 +113,13 @@ void ProjectileStreamUpdate::addProjectile( ObjectID sourceID, ObjectID newID, O
 	}
 	else
 	{
-		DEBUG_CRASH(("A projectile stream was fired at neither an object nor a position.  Probably bad."));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "A projectile stream was fired at neither an object nor a position.  Probably bad.");
 	}
 
 	// Keep track of the id in a circular array
 	m_projectileIDs[ m_nextFreeIndex ] = newID;
 	m_nextFreeIndex = (m_nextFreeIndex + 1) % MAX_PROJECTILE_STREAM;
-	DEBUG_ASSERTCRASH( m_nextFreeIndex != m_firstValidIndex, ("Need to increase the allowed number of simultaneous particles in ProjectileStreamUpdate.") );
+	engine::debug::invariant((m_nextFreeIndex != m_firstValidIndex), "m_nextFreeIndex != m_firstValidIndex", __FILE__, __LINE__, "Need to increase the allowed number of simultaneous particles in ProjectileStreamUpdate.");
 }
 
 void ProjectileStreamUpdate::cullFrontOfList()

@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/Xfer.h"
 #include "GameClient/Drawable.h"
@@ -102,7 +103,7 @@ static void parseFXLocInfo( INI *ini, void *instance, FXLocInfo *locInfo )
 		if( stricmp( token, "randombone" ) != 0 )
 		{
 
-			DEBUG_CRASH(( "parseFXLocInfo: Bone name not followed by RandomBone specifier\nPress IGNORE to see which INI file and line # is incorrect." ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "parseFXLocInfo: Bone name not followed by RandomBone specifier\nPress IGNORE to see which INI file and line # is incorrect." );
 			throw INI_INVALID_DATA;
 
 		}
@@ -256,7 +257,7 @@ void TransitionDamageFX::onDelete()
 static Coord3D getLocalEffectPos( const FXLocInfo *locInfo, Drawable *draw, const RandomValueClass &random = LogicRandomValueClass() )
 {
 
-	DEBUG_ASSERTCRASH( locInfo, ("getLocalEffectPos: locInfo is null") );
+	engine::debug::invariant((locInfo), "locInfo", __FILE__, __LINE__, "getLocalEffectPos: locInfo is null");
 
 	if( locInfo->locType == FX_DAMAGE_LOC_TYPE_BONE && draw )
 	{

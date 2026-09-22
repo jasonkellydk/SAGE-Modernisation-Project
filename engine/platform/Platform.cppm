@@ -1,0 +1,21 @@
+export module engine.platform;
+export import engine.platform.core.types;
+export import engine.platform.application;
+export import engine.platform.window.interface;
+export import engine.platform.window.service;
+export import engine.platform.events;
+export import engine.platform.input;
+export import engine.platform.text_input;
+export import engine.platform.text_input.interface;
+export import engine.platform.threading;
+export import engine.platform.time;
+export import engine.platform.display;
+export import engine.platform.dialogs;
+export import engine.platform.clipboard;
+export import engine.platform.system;
+export import engine.platform.crash_reporting;
+export import engine.platform.libraries;
+export import engine.platform.process;
+export import engine.platform.network;
+
+export import engine.platform.interface;

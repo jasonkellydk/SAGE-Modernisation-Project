@@ -58,12 +58,13 @@
 #include "MPU.h"
 //#include "commando\nat.h"
 #include "thread.h"
-#include "WWDebug/wwdebug.h"
-#include "WWDebug/wwmemlog.h"
+
+
 
 #include	<conio.h>
 #include	<imagehlp.h>
 #include <crtdbg.h>
+import engine.debug;
 
 #if defined(_M_X64)
 
@@ -88,11 +89,6 @@ unsigned long Get_Main_Thread_ID() { return 0; }
 
 #else
 
-#ifdef WWDEBUG
-#define DebugString 	WWDebug_Printf
-#else
-void DebugString(char const *, ...){};
-#endif //WWDEBUG
 
 /*
 ** Enable this define to get the 'demo timed out' message on a crash or assert failure.
@@ -194,12 +190,12 @@ int __cdecl _purecall()
 {
 	int return_code = 0;
 
-#ifdef WWDEBUG
+#ifdef RTS_DEBUG
 	/*
 	** Use int3 to cause an exception.
 	*/
-	WWDEBUG_SAY(("Pure Virtual Function call. Oh No!"));
-	WWDEBUG_BREAK
+	engine::debug::log_info("Pure Virtual Function call. Oh No!");
+	engine::debug::panic("Pure Virtual Function call")
 #endif	//_DEBUG_ASSERT
 
 	return(return_code);
@@ -280,7 +276,7 @@ static void Add_Txt (char const *txt)
 			}
 		}
 
-		DebugString(_debug_output_txt);
+		engine::debug::log_error(_debug_output_txt);
 	}
 #endif //(0)
 }
@@ -357,7 +353,7 @@ void Dump_Exception_Info(EXCEPTION_POINTERS *e_info)
 		"Error code: ?????\r\r\nDescription: Unknown exception."
 	};
 
-	DebugString("Dump exception info\n");
+	engine::debug::log_error("Dump exception info\n");
 
 	/*
 	** Scrap buffer for constructing dump strings
@@ -376,7 +372,7 @@ void Dump_Exception_Info(EXCEPTION_POINTERS *e_info)
 	HINSTANCE imagehelp = LoadLibrary("IMAGEHLP.DLL");
 
 	if (imagehelp != nullptr) {
-		DebugString ("Exception Handler: Found IMAGEHLP.DLL - linking to required functions\n");
+		engine::debug::log_error ("Exception Handler: Found IMAGEHLP.DLL - linking to required functions\n");
 		char const *function_name = nullptr;
 		unsigned long *fptr = (unsigned long*) &_SymCleanup;
 		int count = 0;
@@ -390,7 +386,7 @@ void Dump_Exception_Info(EXCEPTION_POINTERS *e_info)
 			}
 		} while (function_name);
 	} else {
-		DebugString("Exception Handler: Unable to load IMAGEHLP.DLL\n");
+		engine::debug::log_error("Exception Handler: Unable to load IMAGEHLP.DLL\n");
 	}
 
 
@@ -405,12 +401,12 @@ void Dump_Exception_Info(EXCEPTION_POINTERS *e_info)
 	int symbols_available = false;
 
 	if (_SymInitialize != nullptr && _SymInitialize (GetCurrentProcess(), nullptr, false))	{
-		DebugString("Exception Handler: Symbols are available\r\n\n");
+		engine::debug::log_error("Exception Handler: Symbols are available\r\n\n");
 		symbols_available = true;
 	}
 
 	if (!symbols_available)	{
-		DebugString ("Exception Handler: SymInitialize failed with code %d - %s\n", GetLastError(), Last_Error_Text());
+		engine::debug::log_error ("Exception Handler: SymInitialize failed with code %d - %s\n", GetLastError(), Last_Error_Text());
 	} else {
 		if (_SymSetOptions != nullptr) {
 			_SymSetOptions(SYMOPT_DEFERRED_LOADS | SYMOPT_UNDNAME);
@@ -425,7 +421,7 @@ void Dump_Exception_Info(EXCEPTION_POINTERS *e_info)
 
 		if (!symload) {
 			assert(_SymLoadModule != nullptr);
-			DebugString ("Exception Handler: SymLoad failed for module %s with code %d - %s\n", module_name, GetLastError(), Last_Error_Text());
+			engine::debug::log_error ("Exception Handler: SymLoad failed for module %s with code %d - %s\n", module_name, GetLastError(), Last_Error_Text());
 		}
 	}
 
@@ -446,11 +442,11 @@ void Dump_Exception_Info(EXCEPTION_POINTERS *e_info)
 	unsigned long access_address = 0;
 
 	if (e_info->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION) {
-		DebugString("Exception Handler: Exception is access violation\n");
+		engine::debug::log_error("Exception Handler: Exception is access violation\n");
 		access_read_write = e_info->ExceptionRecord->ExceptionInformation[0];  // 0=read, 1=write
 		access_address = e_info->ExceptionRecord->ExceptionInformation[1];
 	} else {
-		DebugString ("Exception Handler: Exception code is %d\n", e_info->ExceptionRecord->ExceptionCode);
+		engine::debug::log_error ("Exception Handler: Exception code is %d\n", e_info->ExceptionRecord->ExceptionCode);
 	}
 
 	/*
@@ -459,7 +455,7 @@ void Dump_Exception_Info(EXCEPTION_POINTERS *e_info)
 	int i=0;
 	for (; _codes[i] != 0xffffffff ; i++) {
 		if (_codes[i] == e_info->ExceptionRecord->ExceptionCode) {
-			DebugString("Exception Handler: Found exception description\n");
+			engine::debug::log_error("Exception Handler: Found exception description\n");
 			break;
 		}
 	}
@@ -495,14 +491,14 @@ void Dump_Exception_Info(EXCEPTION_POINTERS *e_info)
 			snprintf(scrap, ARRAY_SIZE(scrap), "Exception occurred at %08X - %s + %08X\r\n",
 				context->Eip, symptr->Name, displacement);
 		} else {
-			DebugString ("Exception Handler: Failed to get symbol for EIP\r\n");
+			engine::debug::log_error ("Exception Handler: Failed to get symbol for EIP\r\n");
 			if (_SymGetSymFromAddr != nullptr) {
-				DebugString ("Exception Handler: SymGetSymFromAddr failed with code %d - %s\n", GetLastError(), Last_Error_Text());
+				engine::debug::log_error ("Exception Handler: SymGetSymFromAddr failed with code %d - %s\n", GetLastError(), Last_Error_Text());
 			}
 			sprintf (scrap, "Exception occurred at %08X\r\n", context->Eip);
 		}
 	} else {
-		DebugString ("Exception Handler: context->Eip is bad code pointer\n");
+		engine::debug::log_error ("Exception Handler: context->Eip is bad code pointer\n");
 	}
 
 	Add_Txt (scrap);
@@ -510,7 +506,7 @@ void Dump_Exception_Info(EXCEPTION_POINTERS *e_info)
 	/*
 	** Try to walk the stack. It might work....
 	*/
-	DebugString("Stack walk...\n");
+	engine::debug::log_error("Stack walk...\n");
 	Add_Txt("\r\n  Stack walk...\r\n");
 
 	unsigned long return_addresses[256];
@@ -545,7 +541,7 @@ void Dump_Exception_Info(EXCEPTION_POINTERS *e_info)
 
 		Add_Txt("\r\n\r\n");
 	} else {
-		DebugString("Stack walk failed!\n");
+		engine::debug::log_error("Stack walk failed!\n");
 		Add_Txt("Stack walk failed!\r\n");
 	}
 
@@ -603,7 +599,7 @@ void Dump_Exception_Info(EXCEPTION_POINTERS *e_info)
 
 	Add_Txt("\r\nDetails:\r\n");
 
-	DebugString("Register dump...\n");
+	engine::debug::log_error("Register dump...\n");
 
 	/*
 	** Dump the registers.
@@ -666,7 +662,7 @@ void Dump_Exception_Info(EXCEPTION_POINTERS *e_info)
 	/*
 	** Dump the bytes at EIP. This will make it easier to match the crash address with later versions of the game.
 	*/
-	DebugString("EIP bytes dump...\n");
+	engine::debug::log_error("EIP bytes dump...\n");
 	sprintf(scrap, "\r\nBytes at CS:EIP (%08X)  : ", context->Eip);
 
 	unsigned char *eip_ptr = (unsigned char *) (context->Eip);
@@ -688,7 +684,7 @@ void Dump_Exception_Info(EXCEPTION_POINTERS *e_info)
 	/*
 	** Dump out the values on the stack.
 	*/
-	DebugString("Stack dump...\n");
+	engine::debug::log_error("Stack dump...\n");
 	Add_Txt("Stack dump (* indicates possible code address) :\r\n");
 	unsigned long *stackptr = (unsigned long*) context->Esp;
 
@@ -776,7 +772,7 @@ void Dump_Exception_Info(EXCEPTION_POINTERS *e_info)
  *=============================================================================================*/
 int Exception_Handler(int exception_code, EXCEPTION_POINTERS *e_info)
 {
-	DebugString("Exception!\n");
+	engine::debug::log_error("Exception!\n");
 
 #ifdef DEMO_TIME_OUT
 	if ( !WindowedMode ) {
@@ -816,9 +812,9 @@ int Exception_Handler(int exception_code, EXCEPTION_POINTERS *e_info)
 	exception_code = exception_code;
 #endif	//RTS_DEBUG
 
-#ifdef WWDEBUG
+#ifdef RTS_DEBUG
 	//CONTEXT *context;
-#endif // WWDEBUG
+#endif
 
 	if (ExceptionRecursions == 0) {
 
@@ -844,16 +840,16 @@ int Exception_Handler(int exception_code, EXCEPTION_POINTERS *e_info)
 			** Copy the exception debug file to the network. No point in doing this for the debug version
 			** since symbols are not normally available.
 			*/
-			DebugString ("About to copy debug file\n");
+			engine::debug::log_error ("About to copy debug file\n");
 			char filename[512];
 			if (Get_Global_Output_File_Name ("EXCEPT", filename, 512)) {
-				DebugString ("Copying DEBUG.TXT to %s\n", filename);
+				engine::debug::log_error ("Copying DEBUG.TXT to %s\n", filename);
 				int result = CopyFile("debug.txt", filename, false);
 				if (result == 0) {
-					DebugString ("CopyFile failed with error code %d - %s\n", GetLastError(), Last_Error_Text());
+					engine::debug::log_error ("CopyFile failed with error code %d - %s\n", GetLastError(), Last_Error_Text());
 				}
 			}
-			DebugString ("Debug file copied\n");
+			engine::debug::log_error ("Debug file copied\n");
 #endif	//RTS_DEBUG
 #endif	//_DEBUG_PRINT
 #endif	//(0)
@@ -880,7 +876,7 @@ int Exception_Handler(int exception_code, EXCEPTION_POINTERS *e_info)
 
 		unsigned long id = Get_Main_Thread_ID();
 		if (id != GetCurrentThreadId()) {
-			DebugString("Exiting due to exception in sub thread\n");
+			engine::debug::log_error("Exiting due to exception in sub thread\n");
 			ExitProcess(EXIT_SUCCESS);
 		}
 
@@ -910,7 +906,7 @@ int Exception_Handler(int exception_code, EXCEPTION_POINTERS *e_info)
  *=============================================================================================*/
 void Register_Thread_ID(unsigned long thread_id, char *thread_name, bool main_thread)
 {
-	WWMEMLOG(MEM_GAMEDATA);
+
 	if (thread_name) {
 
 		/*
@@ -1128,7 +1124,7 @@ void Load_Image_Helper()
 				SymbolsAvailable = true;
 			} else {
 				//assert (_SymLoadModule != nullptr);
-				//DebugString ("SymLoad failed for module %s with code %d - %s\n", szModuleName, GetLastError(), Last_Error_Text());
+				//engine::debug::log_error ("SymLoad failed for module %s with code %d - %s\n", szModuleName, GetLastError(), Last_Error_Text());
 			}
 		}
 	}

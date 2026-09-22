@@ -46,6 +46,8 @@
 //----------------------------------------------------------------------------
 
 #include "PreRTS.h"
+import engine.profiling;
+import engine.debug;
 
 #include <fcntl.h>
 #include <io.h>
@@ -54,7 +56,7 @@
 #include "Common/AsciiString.h"
 #include "Common/FileSystem.h"
 #include "Common/RAMFile.h"
-#include "Common/PerfTimer.h"
+
 
 
 //----------------------------------------------------------------------------
@@ -134,10 +136,9 @@ RAMFile::~RAMFile()
 	*/
 //=================================================================
 
-//DECLARE_PERF_TIMER(RAMFile)
 Bool RAMFile::open( const Char *filename, Int access, size_t bufferSize )
 {
-	//USE_PERF_TIMER(RAMFile)
+	//engine::profiling::Scope profile_scope_139("RAMFile")
 
 	bufferSize = 0; // RAM File needs no file buffer because it is read in one go.
 
@@ -161,7 +162,7 @@ Bool RAMFile::open( const Char *filename, Int access, size_t bufferSize )
 
 Bool RAMFile::open( File *file )
 {
-	//USE_PERF_TIMER(RAMFile)
+	//engine::profiling::Scope profile_scope_163("RAMFile")
 	if ( file == nullptr )
 	{
 		return FALSE;
@@ -202,7 +203,7 @@ Bool RAMFile::open( File *file )
 //============================================================================
 Bool RAMFile::openFromArchive(File *archiveFile, const AsciiString& filename, Int offset, Int size)
 {
-	//USE_PERF_TIMER(RAMFile)
+	//engine::profiling::Scope profile_scope_204("RAMFile")
 	if (archiveFile == nullptr) {
 		return FALSE;
 	}
@@ -357,7 +358,7 @@ Int RAMFile::seek( Int pos, seekMode mode)
 			newPos = m_pos + pos;
 			break;
 		case END:
-			DEBUG_ASSERTCRASH(pos <= 0, ("RAMFile::seek - position should be <= 0 for a seek starting from the end."));
+			engine::debug::invariant((pos <= 0), "pos <= 0", __FILE__, __LINE__, "RAMFile::seek - position should be <= 0 for a seek starting from the end.");
 			newPos = m_size + pos;
 			break;
 		default:
@@ -551,7 +552,7 @@ char* RAMFile::readEntireAndClose()
 
 	if (m_data == nullptr)
 	{
-		DEBUG_CRASH(("m_data is null in RAMFile::readEntireAndClose -- should not happen!"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "m_data is null in RAMFile::readEntireAndClose -- should not happen!");
 		return NEW char[1];	// just to avoid crashing...
 	}
 

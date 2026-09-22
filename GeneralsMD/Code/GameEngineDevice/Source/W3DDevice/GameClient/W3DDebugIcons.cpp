@@ -57,6 +57,7 @@ import Graphics.Scene.Debug.Renderer;
 #include "Common/GlobalData.h"
 #include "GameLogic/GameLogic.h"
 #include "Common/MapObject.h"
+import engine.debug;
 import Graphics.Materials.State;
 
 
@@ -137,7 +138,7 @@ W3DDebugIcons::W3DDebugIcons(const W3DDebugIcons & src)
 
 W3DDebugIcons & W3DDebugIcons::operator = (const W3DDebugIcons & that)
 {
-	DEBUG_CRASH(("oops"));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "oops");
 	return *this;
 }
 
@@ -169,7 +170,7 @@ W3DRenderObject * W3DDebugIcons::Clone() const
 
 void W3DDebugIcons::allocateIconsArray()
 {
-	DEBUG_ASSERTCRASH(m_debugIcons == nullptr, ("debugIcons array already allocated!"));
+	engine::debug::invariant((m_debugIcons == nullptr), "m_debugIcons == nullptr", __FILE__, __LINE__, "debugIcons array already allocated!");
 	m_debugIcons = NEW DebugIcon[m_maxDebugIcons];
 	m_numDebugIcons = 0;
 }
@@ -196,7 +197,7 @@ void W3DDebugIcons::addIcon(const Coord3D *pos, Real width, Int numFramesDuratio
 {
 	if (pos==nullptr) {
 		if (m_numDebugIcons > maxIcons) {
-			DEBUG_LOG(("Max icons %d", m_numDebugIcons));
+			engine::debug::log_info("Max icons %d", m_numDebugIcons);
 			maxIcons = m_numDebugIcons;
 		}
 		m_numDebugIcons = 0;

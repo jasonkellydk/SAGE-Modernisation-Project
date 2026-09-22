@@ -28,11 +28,12 @@
 
 #include "Common/AsciiString.h"
 #include "Common/GameMemory.h"
-#include "Common/PerfTimer.h"
+
 #include "StdDevice/Common/StdLocalFileSystem.h"
 #include "StdDevice/Common/StdLocalFile.h"
 
 #include <filesystem>
+import engine.debug;
 
 StdLocalFileSystem::StdLocalFileSystem() : LocalFileSystem()
 {
@@ -41,7 +42,6 @@ StdLocalFileSystem::StdLocalFileSystem() : LocalFileSystem()
 StdLocalFileSystem::~StdLocalFileSystem() {
 }
 
-//DECLARE_PERF_TIMER(StdLocalFileSystem_openFile)
 static std::filesystem::path fixFilenameFromWindowsPath(const Char *filename, Int access)
 {
 	std::string fixedFilename(filename);
@@ -104,8 +104,8 @@ static std::filesystem::path fixFilenameFromWindowsPath(const Char *filename, In
 				// Required to allow creation of new files
 				if (!(access & File::WRITE))
 				{
-					DEBUG_LOG(("StdLocalFileSystem::fixFilenameFromWindowsPath - Error finding file %s", filename.string().c_str()));
-					DEBUG_LOG(("StdLocalFileSystem::fixFilenameFromWindowsPath - Got so far %s", pathCurrent.string().c_str()));
+					engine::debug::log_info("StdLocalFileSystem::fixFilenameFromWindowsPath - Error finding file %s", filename.string().c_str());
+					engine::debug::log_info("StdLocalFileSystem::fixFilenameFromWindowsPath - Got so far %s", pathCurrent.string().c_str());
 
 					return std::filesystem::path();
 				}
@@ -127,7 +127,6 @@ static std::filesystem::path fixFilenameFromWindowsPath(const Char *filename, In
 
 File * StdLocalFileSystem::openFile(const Char *filename, Int access, size_t bufferSize)
 {
-	//USE_PERF_TIMER(StdLocalFileSystem_openFile)
 
 	// sanity check
 	if (strlen(filename) <= 0) {
@@ -147,7 +146,7 @@ File * StdLocalFileSystem::openFile(const Char *filename, Int access, size_t buf
 		std::error_code ec;
 		if (!std::filesystem::exists(dir, ec) || ec) {
 			if(!std::filesystem::create_directories(dir, ec) || ec) {
-				DEBUG_LOG(("StdLocalFileSystem::openFile - Error creating directory %s", dir.string().c_str()));
+				engine::debug::log_info("StdLocalFileSystem::openFile - Error creating directory %s", dir.string().c_str());
 				return nullptr;
 			}
 		}
@@ -196,7 +195,6 @@ void StdLocalFileSystem::reset()
 {
 }
 
-//DECLARE_PERF_TIMER(StdLocalFileSystem_doesFileExist)
 Bool StdLocalFileSystem::doesFileExist(const Char *filename) const
 {
 	std::filesystem::path path = fixFilenameFromWindowsPath(filename, 0);
@@ -234,7 +232,7 @@ void StdLocalFileSystem::getFileListInDirectory(const AsciiString& currentDirect
 	done = iter == std::filesystem::directory_iterator();
 
 	if (ec) {
-		DEBUG_LOG(("StdLocalFileSystem::getFileListInDirectory - Error opening directory %s", fixedDirectory.c_str()));
+		engine::debug::log_info("StdLocalFileSystem::getFileListInDirectory - Error opening directory %s", fixedDirectory.c_str());
 		return;
 	}
 
@@ -258,7 +256,7 @@ void StdLocalFileSystem::getFileListInDirectory(const AsciiString& currentDirect
 		auto iter = std::filesystem::directory_iterator(fixedDirectory, ec);
 
 		if (ec) {
-			DEBUG_LOG(("StdLocalFileSystem::getFileListInDirectory - Error opening subdirectory %s", fixedDirectory.c_str()));
+			engine::debug::log_info("StdLocalFileSystem::getFileListInDirectory - Error opening subdirectory %s", fixedDirectory.c_str());
 			return;
 		}
 

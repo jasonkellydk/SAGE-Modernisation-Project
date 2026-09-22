@@ -29,7 +29,8 @@ import Graphics.Resources.Textures.Quality;
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "gamespy/ghttp/ghttp.h"
 
@@ -621,7 +622,7 @@ static void saveOptions()
 	if(val > 0)
 	{
 		TheWritableGlobalData->m_keyboardScrollFactor = val/100.0f;
-		DEBUG_LOG(("Scroll Speed val %d, keyboard scroll factor %f", val, TheGlobalData->m_keyboardScrollFactor));
+		engine::debug::log_info("Scroll Speed val %d, keyboard scroll factor %f", val, TheGlobalData->m_keyboardScrollFactor);
 		AsciiString prefString;
 		prefString.format("%d", val);
 		(*pref)["ScrollFactor"] = prefString;
@@ -1327,7 +1328,7 @@ void OptionsMenuInit( WindowLayout *layout, void *userData )
 
 	//set scroll options
 	AsciiString test = (*pref)["DrawScrollAnchor"];
-	DEBUG_LOG(("DrawScrollAnchor == [%s]", test.str()));
+	engine::debug::log_info("DrawScrollAnchor == [%s]", test.str());
 	if (test == "yes" || (test.isEmpty() && TheInGameUI->getDrawRMBScrollAnchor()))
 	{
 		GadgetCheckBoxSetChecked( checkDrawAnchor, true);
@@ -1339,7 +1340,7 @@ void OptionsMenuInit( WindowLayout *layout, void *userData )
 		TheInGameUI->setDrawRMBScrollAnchor(false);
 	}
 	test = (*pref)["MoveScrollAnchor"];
-	DEBUG_LOG(("MoveScrollAnchor == [%s]", test.str()));
+	engine::debug::log_info("MoveScrollAnchor == [%s]", test.str());
 	if (test == "yes" || (test.isEmpty() && TheInGameUI->getMoveRMBScrollAnchor()))
 	{
 		GadgetCheckBoxSetChecked( checkMoveAnchor, true);
@@ -1371,7 +1372,7 @@ void OptionsMenuInit( WindowLayout *layout, void *userData )
 	{
 		GadgetSliderSetPosition( sliderScrollSpeed, scrollPos );
 	}
-	DEBUG_LOG(("Scroll Speed %d", scrollPos));
+	engine::debug::log_info("Scroll Speed %d", scrollPos);
 
  	// set volume sliders
 

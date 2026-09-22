@@ -20,7 +20,7 @@
 #include "W3DDevice/GameClient/W3DMeshDrawing.h"
 #include <assert.h>
 #include "W3DDevice/GameClient/W3DAssetCatalog.h"
-#include "WWDebug/wwdebug.h"
+
 import Graphics.Materials.MeshMaterial;
 import Graphics.Scene.OrderedDraws;
 import Graphics.Scene.Props.Material;
@@ -37,7 +37,9 @@ import Assets.Adapters.W3D.Geometry;
 #include "W3DDevice/GameClient/W3DRenderContext.h"
 #include "W3DDevice/GameClient/W3DCastQuery.h"
 #include "W3DDevice/GameClient/W3DIntersectionQuery.h"
-#include <WWDebug/wwprofile.h>
+import engine.profiling;
+import engine.debug;
+
 
 
 
@@ -195,16 +197,16 @@ void W3DMeshRenderObject::Scale(float scalex, float scaley, float scalez)
 
 void	W3DMeshRenderObject::Get_Deformed_Vertices(Vector3 *dst_vert, Vector3 *dst_norm)
 {
-	WWASSERT(Model->Get_Flag(W3DMeshGeometry::SKIN));
+	engine::debug::assert_condition((Model->Get_Flag(W3DMeshGeometry::SKIN)), "Model->Get_Flag(W3DMeshGeometry::SKIN)", __FILE__, __LINE__, "assertion failed");
 	Model->get_deformed_vertices(dst_vert,dst_norm,Container->Get_Model_Hierarchy());
 }
 
 
 void W3DMeshRenderObject::Get_Deformed_Vertices(Vector3 *dst_vert)
 {
-	WWASSERT(Model->Get_Flag(W3DMeshGeometry::SKIN));
-	WWASSERT(Container != nullptr);
-	WWASSERT(Container->Get_Model_Hierarchy() != nullptr);
+	engine::debug::assert_condition((Model->Get_Flag(W3DMeshGeometry::SKIN)), "Model->Get_Flag(W3DMeshGeometry::SKIN)", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((Container != nullptr), "Container != nullptr", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((Container->Get_Model_Hierarchy() != nullptr), "Container->Get_Model_Hierarchy() != nullptr", __FILE__, __LINE__, "assertion failed");
 
 	Model->get_deformed_vertices(dst_vert,Container->Get_Model_Hierarchy());
 }
@@ -213,7 +215,7 @@ int W3DMeshRenderObject::Get_Num_Polys() const
 {
 	if (Model) {
 		int num_passes=Model->Get_Pass_Count();
-		WWASSERT(num_passes>0);
+		engine::debug::assert_condition((num_passes>0), "num_passes>0", __FILE__, __LINE__, "assertion failed");
 		int poly_count=Model->Get_Polygon_Count();
 		return num_passes*poly_count;
 	} else {
@@ -224,7 +226,7 @@ int W3DMeshRenderObject::Get_Num_Polys() const
 
 void W3DMeshRenderObject::Render(W3DRenderContext & rinfo)
 {
-    WWPROFILE("Mesh::Render");
+    engine::profiling::Scope profile_scope_227("Mesh::Render");
     if (!Is_Not_Hidden_At_All()) return;
     const unsigned sort_level=static_cast<unsigned>(Model->Get_Sort_Level());
     if (Graphics::Get_Scene_Draw_Queue().Is_Enabled()
@@ -246,7 +248,7 @@ void W3DMeshRenderObject::Render(W3DRenderContext & rinfo)
     }
     [[maybe_unused]] const bool drawn=Draw_W3D_Mesh(*this,rinfo,
         {m_alphaOverride,m_materialPassAlphaOverride,m_materialPassEmissiveOverride});
-    WWASSERT(drawn);
+    engine::debug::assert_condition((drawn), "drawn", __FILE__, __LINE__, "assertion failed");
 
 }
 
@@ -290,7 +292,7 @@ bool W3DMeshRenderObject::Load_W3D(ChunkLoadClass & cload)
 	*/
 	Model = NEW_REF(W3DMeshResource,());
 	if (Model == nullptr) {
-		WWDEBUG_SAY(("W3DMeshRenderObject::Load - Failed to allocate model"));
+		engine::debug::log_info("W3DMeshRenderObject::Load - Failed to allocate model");
 		return false;
 	}
 
@@ -372,7 +374,7 @@ bool W3DMeshRenderObject::Cast_Ray(W3DRayCastQuery & raytest)
 	world.Get_Inverse(world_to_obj);
 	W3DRayCastQuery objray(raytest,world_to_obj);
 
-	WWASSERT(Model);
+	engine::debug::assert_condition((Model), "Model", __FILE__, __LINE__, "assertion failed");
 
 	bool hit = Model->Cast_Ray(objray);
 
@@ -394,7 +396,7 @@ bool W3DMeshRenderObject::Cast_AABox(W3DBoxCastQuery & boxtest)
 	if ((Get_Collision_Type() & boxtest.CollisionType) == 0) return false;
 	if (boxtest.Result->StartBad) return false;
 
-	WWASSERT(Model);
+	engine::debug::assert_condition((Model), "Model", __FILE__, __LINE__, "assertion failed");
 
 	// This function analyses the transform to call optimized functions in certain cases
 	bool hit = Model->Cast_World_Space_AABox(boxtest, Get_Transform());
@@ -420,7 +422,7 @@ bool W3DMeshRenderObject::Cast_OBBox(W3DOrientedBoxCastQuery & boxtest)
 	tm.Get_Orthogonal_Inverse(world_to_obj);
 	W3DOrientedBoxCastQuery localtest(boxtest,world_to_obj);
 
-	WWASSERT(Model);
+	engine::debug::assert_condition((Model), "Model", __FILE__, __LINE__, "assertion failed");
 
 	bool hit = Model->Cast_OBBox(localtest);
 
@@ -446,7 +448,7 @@ bool W3DMeshRenderObject::Intersect_AABox(W3DBoxIntersectionQuery & boxtest)
 	Matrix3D inv_tm;
 	Get_Transform().Get_Orthogonal_Inverse(inv_tm);
 	W3DOrientedBoxIntersectionQuery local_test(boxtest,inv_tm);
-	WWASSERT(Model);
+	engine::debug::assert_condition((Model), "Model", __FILE__, __LINE__, "assertion failed");
 	return Model->Intersect_OBBox(local_test);
 }
 
@@ -458,7 +460,7 @@ bool W3DMeshRenderObject::Intersect_OBBox(W3DOrientedBoxIntersectionQuery & boxt
 	Matrix3D inv_tm;
 	Get_Transform().Get_Orthogonal_Inverse(inv_tm);
 	W3DOrientedBoxIntersectionQuery local_test(boxtest,inv_tm);
-	WWASSERT(Model);
+	engine::debug::assert_condition((Model), "Model", __FILE__, __LINE__, "assertion failed");
 	return Model->Intersect_OBBox(local_test);
 }
 

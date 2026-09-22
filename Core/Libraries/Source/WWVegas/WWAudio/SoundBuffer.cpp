@@ -37,10 +37,11 @@
 
 #include "SoundBuffer.h"
 #include "WWLib/RAWFILE.h"
-#include "WWDebug/wwdebug.h"
+
 #include "Utils.h"
 #include "WWLib/ffactory.h"
 #include "WWLib/win.h"
+import engine.debug;
 
 
 
@@ -163,7 +164,7 @@ SoundBufferClass::Load_From_File (const char *filename)
 	bool retval = false;
 
 	// Param OK?
-	WWASSERT (filename != nullptr);
+	engine::debug::assert_condition((filename != nullptr), "filename != nullptr", __FILE__, __LINE__, "assertion failed");
 	if (filename != nullptr) {
 
 		// Create a file object and pass it onto the appropriate function
@@ -204,7 +205,7 @@ SoundBufferClass::Load_From_File (FileClass &file)
 
 	// Determine the size of the buffer
 	m_Length = file.Size ();
-	WWASSERT	(m_Length > 0L);
+	engine::debug::assert_condition((m_Length > 0L), "m_Length > 0L", __FILE__, __LINE__, "assertion failed");
 	if (m_Length > 0L) {
 
 		// Allocate a new buffer of the correct length and read the contents
@@ -250,8 +251,8 @@ SoundBufferClass::Load_From_Memory
 	Set_Filename ("unknown.wav");
 
 	// Params OK?
-	WWASSERT (mem_buffer != nullptr);
-	WWASSERT (size > 0L);
+	engine::debug::assert_condition((mem_buffer != nullptr), "mem_buffer != nullptr", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((size > 0L), "size > 0L", __FILE__, __LINE__, "assertion failed");
 	if ((mem_buffer != nullptr) && (size > 0L)) {
 
 		// Allocate a new buffer of the correct length and copy the contents

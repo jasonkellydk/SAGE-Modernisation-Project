@@ -27,12 +27,13 @@
 // Desc:   Keeps track of shots fired and people targeted for weapons that want a history of such a thing
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/AudioHandleSpecialValues.h"
 #include "Common/GameType.h"
 #include "Common/GameAudio.h"
-#include "Common/PerfTimer.h"
+
 #include "Common/ThingTemplate.h"
 #include "Common/Xfer.h"
 
@@ -181,7 +182,7 @@ void FiringTracker::shotFired(const Weapon* weaponFired, ObjectID victimID)
 //-------------------------------------------------------------------------------------------------
 UpdateSleepTime FiringTracker::update()
 {
-	//DEBUG_ASSERTCRASH(m_frameToStartCooldown != 0 || m_frameToStopLoopingSound != 0, ("hmm, should be asleep"));
+	//engine::debug::invariant((m_frameToStartCooldown != 0 || m_frameToStopLoopingSound != 0), "m_frameToStartCooldown != 0 || m_frameToStopLoopingSound != 0", __FILE__, __LINE__, "hmm, should be asleep");
 
 	UnsignedInt now = TheGameLogic->getFrame();
 

@@ -36,6 +36,7 @@
 #include "Common/ThingTemplate.h"
 #include "Common/WellKnownKeys.h"
 #include "wbview3d.h"
+import engine.debug;
 
 BuildList *BuildList::m_staticThis = nullptr;
 Bool BuildList::m_updating = false;
@@ -117,7 +118,7 @@ void BuildList::loadSides()
 {
 	CComboBox *pCombo = (CComboBox*)GetDlgItem(IDC_SIDES_COMBO);
 	if (!pCombo) {
-		DEBUG_LOG(("*** BuildList::loadSides Missing resource!!!"));
+		engine::debug::log_info("*** BuildList::loadSides Missing resource!!!");
 		return;
 	}
 	pCombo->ResetContent();
@@ -144,7 +145,7 @@ void BuildList::updateCurSide()
 
 	CComboBox *pCombo = (CComboBox*)GetDlgItem(IDC_SIDES_COMBO);
 	if (!pCombo) {
-		DEBUG_LOG(("*** BuildList::updateCurSide Missing resource!!!"));
+		engine::debug::log_info("*** BuildList::updateCurSide Missing resource!!!");
 		return;
 	}
 	if (m_curSide<0 || m_curSide >= TheSidesList->getNumSides()) {
@@ -157,7 +158,7 @@ void BuildList::updateCurSide()
 
 	CListBox *pList = (CListBox*)GetDlgItem(IDC_BUILD_LIST);
 	if (!pList) {
-		DEBUG_LOG(("*** BuildList::updateCurSide Missing resource!!! IDC_BUILD_LIST"));
+		engine::debug::log_info("*** BuildList::updateCurSide Missing resource!!! IDC_BUILD_LIST");
 		return;
 	}
 	pList->ResetContent();
@@ -178,7 +179,7 @@ void BuildList::OnSelchangeSidesCombo()
 
 	CComboBox *pCombo = (CComboBox*)GetDlgItem(IDC_SIDES_COMBO);
 	if (!pCombo) {
-		DEBUG_LOG(("*** BuildList::OnSelchangeSidesCombo Missing resource!!!"));
+		engine::debug::log_info("*** BuildList::OnSelchangeSidesCombo Missing resource!!!");
 		return;
 	}
 
@@ -198,7 +199,7 @@ void BuildList::OnMoveUp()
 {
 	CListBox *pList = (CListBox*)GetDlgItem(IDC_BUILD_LIST);
 	if (!pList) {
-		DEBUG_LOG(("*** BuildList::updateCurSide Missing resource!!! IDC_BUILD_LIST"));
+		engine::debug::log_info("*** BuildList::updateCurSide Missing resource!!! IDC_BUILD_LIST");
 		return;
 	}
 	m_curBuildList = pList->GetCurSel();
@@ -231,7 +232,7 @@ void BuildList::OnMoveDown()
 {
 	CListBox *pList = (CListBox*)GetDlgItem(IDC_BUILD_LIST);
 	if (!pList) {
-		DEBUG_LOG(("*** BuildList::updateCurSide Missing resource!!! IDC_BUILD_LIST"));
+		engine::debug::log_info("*** BuildList::updateCurSide Missing resource!!! IDC_BUILD_LIST");
 		return;
 	}
 	if (m_curBuildList < 0) return;
@@ -330,7 +331,7 @@ void BuildList::OnSelchangeBuildList()
 
 	CListBox *pList = (CListBox*)GetDlgItem(IDC_BUILD_LIST);
 	if (!pList) {
-		DEBUG_LOG(("*** BuildList::updateCurSide Missing resource!!! IDC_BUILD_LIST"));
+		engine::debug::log_info("*** BuildList::updateCurSide Missing resource!!! IDC_BUILD_LIST");
 		return;
 	}
 	m_curBuildList = pList->GetCurSel();
@@ -419,7 +420,7 @@ void BuildList::OnSelchangeBuildList()
 	{
 		energyUsed = 1.0f;
 	}
-	//DEBUG_LOG(("Energy: %d/%d - %g", energyConsumption, energyProduction, energyUsed));
+	//engine::debug::log_info("Energy: %d/%d - %g", energyConsumption, energyProduction, energyUsed);
 	CProgressCtrl *progressWnd = (CProgressCtrl *)GetDlgItem(IDC_POWER);
 	if (progressWnd)
 	{
@@ -485,7 +486,7 @@ void BuildList::OnAlreadyBuild()
 {
 	CListBox *pList = (CListBox*)GetDlgItem(IDC_BUILD_LIST);
 	if (!pList) {
-		DEBUG_LOG(("*** BuildList::updateCurSide Missing resource!!! IDC_BUILD_LIST"));
+		engine::debug::log_info("*** BuildList::updateCurSide Missing resource!!! IDC_BUILD_LIST");
 		return;
 	}
 	SidesInfo *pSide = TheSidesList->getSideInfo(m_curSide);
@@ -508,7 +509,7 @@ void BuildList::OnDeleteBuilding()
 {
 	CListBox *pList = (CListBox*)GetDlgItem(IDC_BUILD_LIST);
 	if (!pList) {
-		DEBUG_LOG(("*** BuildList::updateCurSide Missing resource!!! IDC_BUILD_LIST"));
+		engine::debug::log_info("*** BuildList::updateCurSide Missing resource!!! IDC_BUILD_LIST");
 		return;
 	}
 	m_curBuildList = pList->GetCurSel();
@@ -629,7 +630,7 @@ void BuildList::GetPopSliderInfo(const long sliderID, long *pMin, long *pMax, lo
 
 		default:
 			// uh-oh!
-			DEBUG_CRASH(("Slider message from unknown control"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Slider message from unknown control");
 			break;
 	}
 }
@@ -657,7 +658,7 @@ void BuildList::PopSliderChanged(const long sliderID, long theVal)
 
 		default:
 			// uh-oh!
-			DEBUG_CRASH(("Slider message from unknown control"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Slider message from unknown control");
 			break;
 	}
 }
@@ -671,7 +672,7 @@ void BuildList::PopSliderFinished(const long sliderID, long theVal)
 
 		default:
 			// uh-oh!
-			DEBUG_CRASH(("Slider message from unknown control"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Slider message from unknown control");
 			break;
 	}
 
@@ -756,7 +757,7 @@ void BuildList::OnExport()
 
 		AsciiString tmplname = d->getAsciiString(TheKey_playerFaction);
 		const PlayerTemplate* pt = ThePlayerTemplateStore->findPlayerTemplate(NAMEKEY(tmplname));
-		DEBUG_ASSERTCRASH(pt != nullptr, ("PlayerTemplate %s not found -- this is an obsolete map (please open and resave in WB)",tmplname.str()));
+		engine::debug::invariant((pt != nullptr), "pt != nullptr", __FILE__, __LINE__, "PlayerTemplate %s not found -- this is an obsolete map (please open and resave in WB)",tmplname.str());
 
 		fprintf(theLogFile, ";Skirmish AI Build List\n");
 		fprintf(theLogFile, "SkirmishBuildList %s\n", pt->getSide().str());

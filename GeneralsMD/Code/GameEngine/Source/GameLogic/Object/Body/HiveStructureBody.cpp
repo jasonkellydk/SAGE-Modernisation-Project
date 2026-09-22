@@ -29,7 +29,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/Xfer.h"
 #include "Common/ThingTemplate.h"
@@ -125,7 +126,7 @@ void HiveStructureBody::attemptDamage( DamageInfo *damageInfo )
     }
 		else
 		{
-			DEBUG_CRASH( ("%s has a HiveStructureBody module, which requires a SpawnBehavior module. Thus it is unable to propagate damage to slaves.", hive->getTemplate()->getName().str() ) );
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "%s has a HiveStructureBody module, which requires a SpawnBehavior module. Thus it is unable to propagate damage to slaves.", hive->getTemplate()->getName().str() );
 		}
 
 

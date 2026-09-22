@@ -36,13 +36,12 @@
 /**
  * This is the entry point for the game system.
  */
-Int GameMain()
+Int GameMain(GameEngine& gameEngine)
 {
 	int exitcode = 0;
-	// initialize the game engine using factory function
 	TheFramePacer = new FramePacer();
 	TheFramePacer->enableFramesPerSecondLimit(TRUE);
-	TheGameEngine = CreateGameEngine();
+	TheGameEngine = &gameEngine;
 	TheGameEngine->init();
 
 	if (!TheGlobalData->m_simulateReplays.empty())
@@ -58,9 +57,7 @@ Int GameMain()
 	// since execute() returned, we are exiting the game
 	delete TheFramePacer;
 	TheFramePacer = nullptr;
-	delete TheGameEngine;
 	TheGameEngine = nullptr;
 
 	return exitcode;
 }
-

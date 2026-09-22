@@ -29,7 +29,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // USER INCLUDES //////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/BuildAssistant.h"
 #include "Common/Money.h"
@@ -124,7 +125,7 @@ CBCommandStatus ControlBar::processCommandUI( GameWindow *control,
 	const CommandButton *commandButton = (const CommandButton *)GadgetButtonGetData(control);
 	if( !commandButton )
 	{
-		DEBUG_CRASH( ("ControlBar::processCommandUI() -- Button activated has no data. Ignoring...") );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "ControlBar::processCommandUI() -- Button activated has no data. Ignoring...");
 		return CBC_COMMAND_NOT_USED;
 	}
 
@@ -273,7 +274,7 @@ CBCommandStatus ControlBar::processCommandUI( GameWindow *control,
 		{
 			//Determine the object that would construct it.
 			const SpecialPowerTemplate *spTemplate = commandButton->getSpecialPowerTemplate();
-			DEBUG_ASSERTCRASH(spTemplate != nullptr, ("Special Power Button is missing Special Power template"));
+			engine::debug::invariant((spTemplate != nullptr), "spTemplate != nullptr", __FILE__, __LINE__, "Special Power Button is missing Special Power template");
 
 			SpecialPowerType spType = spTemplate->getSpecialPowerType();
 			Object* obj = ThePlayerList->getLocalPlayer()->findMostReadyShortcutSpecialPowerOfType( spType );
@@ -392,8 +393,8 @@ CBCommandStatus ControlBar::processCommandUI( GameWindow *control,
 				break;
 
 			// sanity, we must have something to build
-			DEBUG_ASSERTCRASH( whatToBuild, ("Undefined BUILD command for object '%s'",
-												 commandButton->getThingTemplate()->getName().str()) );
+			engine::debug::invariant((whatToBuild), "whatToBuild", __FILE__, __LINE__, "Undefined BUILD command for object '%s'",
+												 commandButton->getThingTemplate()->getName().str());
 
 			CanMakeType cmt = TheBuildAssistant->canMakeUnit(factory, whatToBuild);
 
@@ -420,9 +421,9 @@ CBCommandStatus ControlBar::processCommandUI( GameWindow *control,
 			}
 			else if (cmt != CANMAKE_OK)
 			{
-				DEBUG_CRASH( ("Cannot create '%s' because the factory object '%s' returns false for canMakeUnit",
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Cannot create '%s' because the factory object '%s' returns false for canMakeUnit",
 																whatToBuild->getName().str(),
-																factory->getTemplate()->getName().str()) );
+																factory->getTemplate()->getName().str());
 				break;
 			}
 
@@ -433,9 +434,9 @@ CBCommandStatus ControlBar::processCommandUI( GameWindow *control,
 			if( pu == nullptr )
 			{
 
-				DEBUG_CRASH( ("Cannot create '%s' because the factory object '%s' is not capable of producing units",
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Cannot create '%s' because the factory object '%s' is not capable of producing units",
 																whatToBuild->getName().str(),
-																factory->getTemplate()->getName().str()) );
+																factory->getTemplate()->getName().str());
 				break;
 
 			}
@@ -467,7 +468,7 @@ CBCommandStatus ControlBar::processCommandUI( GameWindow *control,
 			if( i == MAX_BUILD_QUEUE_BUTTONS )
 			{
 
-				DEBUG_CRASH( ("Control not found in build queue data") );
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Control not found in build queue data");
 				break;
 
 			}
@@ -500,7 +501,7 @@ CBCommandStatus ControlBar::processCommandUI( GameWindow *control,
 		case GUI_COMMAND_PLAYER_UPGRADE:
 		{
 			const UpgradeTemplate *upgradeT = commandButton->getUpgradeTemplate();
-			DEBUG_ASSERTCRASH( upgradeT, ("Undefined upgrade '%s' in player upgrade command", "UNKNOWN") );
+			engine::debug::invariant((upgradeT), "upgradeT", __FILE__, __LINE__, "Undefined upgrade '%s' in player upgrade command", "UNKNOWN");
 
 			// sanity
 			if( obj == nullptr || upgradeT == nullptr )
@@ -536,7 +537,7 @@ CBCommandStatus ControlBar::processCommandUI( GameWindow *control,
 		case GUI_COMMAND_OBJECT_UPGRADE:
 		{
 			const UpgradeTemplate *upgradeT = commandButton->getUpgradeTemplate();
-			DEBUG_ASSERTCRASH( upgradeT, ("Undefined upgrade '%s' in object upgrade command", "UNKNOWN") );
+			engine::debug::invariant((upgradeT), "upgradeT", __FILE__, __LINE__, "Undefined upgrade '%s' in object upgrade command", "UNKNOWN");
 			// sanity
 			if( upgradeT == nullptr )
 				break;
@@ -591,7 +592,7 @@ CBCommandStatus ControlBar::processCommandUI( GameWindow *control,
 			if( i == MAX_BUILD_QUEUE_BUTTONS )
 			{
 
-				DEBUG_CRASH( ("Control not found in build queue data") );
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Control not found in build queue data");
 				break;
 
 			}
@@ -798,7 +799,7 @@ CBCommandStatus ControlBar::processCommandUI( GameWindow *control,
 		case GUI_COMMAND_GUARD_FLYING_UNITS_ONLY:
 		case GUI_COMMAND_COMBATDROP:
 		{
-			DEBUG_CRASH(("hmm, should never occur"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "hmm, should never occur");
 		}
 		break;
 
@@ -896,7 +897,7 @@ CBCommandStatus ControlBar::processCommandUI( GameWindow *control,
 		//---------------------------------------------------------------------------------------------
 		default:
 
-			DEBUG_CRASH( ("Unknown command '%d'", commandButton->getCommandType()) );
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unknown command '%d'", commandButton->getCommandType());
 			return CBC_COMMAND_NOT_USED;
 
 	}

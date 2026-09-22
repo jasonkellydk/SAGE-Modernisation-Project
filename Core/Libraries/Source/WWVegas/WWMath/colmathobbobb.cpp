@@ -56,7 +56,8 @@
 #include "colmath.h"
 #include "obbox.h"
 #include "aabox.h"
-#include "WWDebug/wwdebug.h"
+
+import engine.debug;
 
 
 /*
@@ -758,7 +759,7 @@ static inline void compute_contact_normal(ObbCollisionStruct & context,CastResul
 	{
 	case INTERSECTION:
 #pragma message("Fatal assert disabled for demo, obb-obb collision")
-//		WWASSERT(0);
+//		engine::debug::assert_condition((0), "0", __FILE__, __LINE__, "assertion failed");
 //		break;
 
 	case AXIS_A0:

@@ -29,7 +29,8 @@
 // the game.
 // Author: Matthew D. Campbell, June 2002
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/RuntimeConfig.h"
 #include "Common/OptionPreferences.h"
@@ -45,7 +46,7 @@
 #include "WWLib/mutex.h"
 #include "WWLib/thread.h"
 
-#include "Common/MiniLog.h"
+
 
 
 // enable this for trying to track down why SBServers are losing their keyvals  -MDC 2/20/2003
@@ -54,24 +55,12 @@
 void CheckServers(PEER peer);
 #endif // SERVER_DEBUGGING
 
-#ifdef DEBUG_LOGGING
 //#define PING_TEST
-static LogClass s_pingLog("Ping.txt");
-#define PING_LOG(x) s_pingLog.log x
-#else // DEBUG_LOGGING
-#define PING_LOG(x)
-#endif // DEBUG_LOGGING
+static engine::debug::FileLog s_pingLog("Ping.txt");
 
-#ifdef DEBUG_LOGGING
-static LogClass s_stateChangedLog("StateChanged.txt");
+static engine::debug::FileLog s_stateChangedLog("StateChanged.txt");
 
-#define STATECHANGED_LOG(x) s_stateChangedLog.log x
 
-#else // DEBUG_LOGGING
-
-#define STATECHANGED_LOG(x)
-
-#endif // DEBUG_LOGGING
 
 // we should always be using broadcast keys from now on.  Remove the old code sometime when
 // we're not in a rush, ok?
@@ -384,13 +373,13 @@ void PeerThreadClass::clearPlayerStats(RoomType roomType)
 
 void PeerThreadClass::pushStatsToRoom(PEER peer)
 {
-	DEBUG_LOG(("PeerThreadClass::pushStatsToRoom(): stats are %s=%s,%s=%s,%s=%s,%s=%s,%s=%s,%s=%s",
+engine::debug::log_info("PeerThreadClass::pushStatsToRoom(): stats are %s=%s,%s=%s,%s=%s,%s=%s,%s=%s,%s=%s",
 		s_keys[0], s_values[0],
 		s_keys[1], s_values[1],
 		s_keys[2], s_values[2],
 		s_keys[3], s_values[3],
 		s_keys[4], s_values[4],
-		s_keys[5], s_values[5]));
+		s_keys[5], s_values[5]);
 	peerSetRoomKeys(peer, GroupRoom, m_loginName.c_str(), 6, s_keys, s_values);
 	peerSetRoomKeys(peer, StagingRoom, m_loginName.c_str(), 6, s_keys, s_values);
 }
@@ -437,7 +426,7 @@ SBServer PeerThreadClass::findServerByID( Int id )
 		SBServer server = it->second;
 		if (server && !server->keyvals)
 		{
-			DEBUG_CRASH(("Referencing a missing server!"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Referencing a missing server!");
 			return nullptr;
 		}
 		return it->second;
@@ -504,7 +493,7 @@ enum CallbackType
 void connectCallbackWrapper( PEER peer, PEERBool success, int failureReason, void *param )
 {
 #ifdef SERVER_DEBUGGING
-	DEBUG_LOG(("In connectCallbackWrapper()"));
+engine::debug::log_info("In connectCallbackWrapper()");
 	CheckServers(peer);
 #endif // SERVER_DEBUGGING
 	if (param != nullptr)
@@ -688,7 +677,7 @@ static void updateBuddyStatus( GameSpyBuddyStatus status, Int groupRoom = 0, std
 			strcpy(req.arg.status.locationString, "");
 			break;
 	}
-	DEBUG_LOG(("updateBuddyStatus %d:%s", req.arg.status.status, req.arg.status.statusString));
+engine::debug::log_info("updateBuddyStatus %d:%s", req.arg.status.status, req.arg.status.statusString);
 	TheGameSpyBuddyMessageQueue->addRequest(req);
 }
 
@@ -741,25 +730,20 @@ static void QRServerKeyCallback
 	void * param
 )
 {
-	//DEBUG_LOG(("QR_SERVER_KEY | %d (%s)", key, qr2_registered_key_list[key]));
+engine::debug::log_info("QR_SERVER_KEY | %d (%s)", key, qr2_registered_key_list[key]);
 	PeerThreadClass *t = (PeerThreadClass *)param;
 	if (!t)
 	{
-		DEBUG_LOG(("QRServerKeyCallback: bailing because of no thread info"));
+engine::debug::log_info("QRServerKeyCallback: bailing because of no thread info");
 		return;
 	}
 
 	if (!t->isHosting())
 		t->stopHostingAlready(peer);
 
-#ifdef DEBUG_LOGGING
 	AsciiString val;
 #define ADD(x) { qr2_buffer_add(buffer, x); val = x; }
 #define ADDINT(x) { qr2_buffer_add_int(buffer, x); val.format("%d",x); }
-#else
-#define ADD(x) { qr2_buffer_add(buffer, x); }
-#define ADDINT(x) { qr2_buffer_add_int(buffer, x); }
-#endif
 
 	switch(key)
 	{
@@ -817,11 +801,11 @@ static void QRServerKeyCallback
 		break;
 	default:
 		ADD("");
-		//DEBUG_LOG(("QR_SERVER_KEY | %d (%s)", key, qr2_registered_key_list[key]));
+engine::debug::log_info("QR_SERVER_KEY | %d (%s)", key, qr2_registered_key_list[key]);
 		break;
 	}
 
-	DEBUG_LOG(("QR_SERVER_KEY | %d (%s) = [%s]", key, qr2_registered_key_list[key], val.str()));
+engine::debug::log_info("QR_SERVER_KEY | %d (%s) = [%s]", key, qr2_registered_key_list[key], val.str());
 }
 
 static void QRPlayerKeyCallback
@@ -833,11 +817,11 @@ static void QRPlayerKeyCallback
 	void * param
 )
 {
-	//DEBUG_LOG(("QR_PLAYER_KEY | %d | %d (%s)", key, index, qr2_registered_key_list[key]));
+engine::debug::log_info("QR_PLAYER_KEY | %d | %d (%s)", key, index, qr2_registered_key_list[key]);
 	PeerThreadClass *t = (PeerThreadClass *)param;
 	if (!t)
 	{
-		DEBUG_LOG(("QRPlayerKeyCallback: bailing because of no thread info"));
+engine::debug::log_info("QRPlayerKeyCallback: bailing because of no thread info");
 		return;
 	}
 
@@ -846,14 +830,9 @@ static void QRPlayerKeyCallback
 
 #undef ADD
 #undef ADDINT
-#ifdef DEBUG_LOGGING
 	AsciiString val;
 #define ADD(x) { qr2_buffer_add(buffer, x); val = x; }
 #define ADDINT(x) { qr2_buffer_add_int(buffer, x); val.format("%d",x); }
-#else
-#define ADD(x) { qr2_buffer_add(buffer, x); }
-#define ADDINT(x) { qr2_buffer_add_int(buffer, x); }
-#endif
 
 	switch(key)
 	{
@@ -877,11 +856,11 @@ static void QRPlayerKeyCallback
 		break;
 	default:
 		ADD("");
-		//DEBUG_LOG(("QR_PLAYER_KEY | %d | %d (%s)", key, index, qr2_registered_key_list[key]));
+engine::debug::log_info("QR_PLAYER_KEY | %d | %d (%s)", key, index, qr2_registered_key_list[key]);
 		break;
 	}
 
-	DEBUG_LOG(("QR_PLAYER_KEY | %d | %d (%s) = [%s]", key, index, qr2_registered_key_list[key], val.str()));
+engine::debug::log_info("QR_PLAYER_KEY | %d | %d (%s) = [%s]", key, index, qr2_registered_key_list[key], val.str());
 }
 
 static void QRTeamKeyCallback
@@ -893,12 +872,12 @@ static void QRTeamKeyCallback
 	void * param
 )
 {
-	//DEBUG_LOG(("QR_TEAM_KEY | %d | %d", key, index));
+engine::debug::log_info("QR_TEAM_KEY | %d | %d", key, index);
 
 	PeerThreadClass *t = (PeerThreadClass *)param;
 	if (!t)
 	{
-		DEBUG_LOG(("QRTeamKeyCallback: bailing because of no thread info"));
+engine::debug::log_info("QRTeamKeyCallback: bailing because of no thread info");
 		return;
 	}
 	if (!t->isHosting())
@@ -916,13 +895,13 @@ static void QRKeyListCallback
 	void * param
 )
 {
-	DEBUG_LOG(("QR_KEY_LIST | %s", KeyTypeToString(type)));
+engine::debug::log_info("QR_KEY_LIST | %s", KeyTypeToString(type));
 
 	/*
 	PeerThreadClass *t = (PeerThreadClass *)param;
 	if (!t)
 	{
-		DEBUG_LOG(("QRKeyListCallback: bailing because of no thread info"));
+engine::debug::log_info("QRKeyListCallback: bailing because of no thread info");
 		return;
 	}
 	if (!t->isHosting())
@@ -975,7 +954,7 @@ static int QRCountCallback
 	PeerThreadClass *t = (PeerThreadClass *)param;
 	if (!t)
 	{
-		DEBUG_LOG(("QRCountCallback: bailing because of no thread info"));
+engine::debug::log_info("QRCountCallback: bailing because of no thread info");
 		return 0;
 	}
 	if (!t->isHosting())
@@ -983,16 +962,16 @@ static int QRCountCallback
 
 	if(type == key_player)
 	{
-		DEBUG_LOG(("QR_COUNT | %s = %d", KeyTypeToString(type), t->getNumPlayers() + t->getNumObservers()));
+engine::debug::log_info("QR_COUNT | %s = %d", KeyTypeToString(type), t->getNumPlayers() + t->getNumObservers());
 		return t->getNumPlayers() + t->getNumObservers();
 	}
 	else if(type == key_team)
 	{
-		DEBUG_LOG(("QR_COUNT | %s = %d", KeyTypeToString(type), 0));
+engine::debug::log_info("QR_COUNT | %s = %d", KeyTypeToString(type), 0);
 		return 0;
 	}
 
-	DEBUG_LOG(("QR_COUNT | %s = %d", KeyTypeToString(type), 0));
+engine::debug::log_info("QR_COUNT | %s = %d", KeyTypeToString(type), 0);
 	return 0;
 }
 
@@ -1017,7 +996,7 @@ static void QRAddErrorCallback
 	void * param
 )
 {
-	DEBUG_LOG(("QR_ADD_ERROR | %s | %s", ErrorTypeToString(error), errorString));
+engine::debug::log_info("QR_ADD_ERROR | %s | %s", ErrorTypeToString(error), errorString);
 	PeerResponse resp;
 	resp.peerResponseType = PeerResponse::PEERRESPONSE_FAILEDTOHOST;
 	TheGameSpyPeerMessageQueue->addResponse(resp);
@@ -1030,7 +1009,7 @@ static void QRNatNegotiateCallback
 	void * param
 )
 {
-	DEBUG_LOG(("QR_NAT_NEGOTIATE | 0x%08X", cookie));
+engine::debug::log_info("QR_NAT_NEGOTIATE | 0x%08X", cookie);
 }
 
 static void KickedCallback
@@ -1042,7 +1021,7 @@ static void KickedCallback
 	void * param
 )
 {
-	DEBUG_LOG(("Kicked from %d by %s: \"%s\"", roomType, nick, reason));
+engine::debug::log_info("Kicked from %d by %s: \"%s\"", roomType, nick, reason);
 }
 
 static void NewPlayerListCallback
@@ -1052,7 +1031,7 @@ static void NewPlayerListCallback
 	void * param
 )
 {
-	DEBUG_LOG(("NewPlayerListCallback"));
+engine::debug::log_info("NewPlayerListCallback");
 }
 
 #define INBUF_LEN 256
@@ -1126,7 +1105,7 @@ void PeerThreadClass::Thread_Function()
 	m_qmGroupRoom = 0;
 
 	peer = peerInitialize( &callbacks );
-	DEBUG_ASSERTCRASH( peer != nullptr, ("null peer!") );
+	engine::debug::invariant((peer != nullptr), "peer != nullptr", __FILE__, __LINE__, "null peer!");
 	m_isConnected = m_isConnecting = false;
 
 	qr2_register_key(EXECRC_KEY, EXECRC_STR);
@@ -1255,7 +1234,7 @@ void PeerThreadClass::Thread_Function()
 	/////////////////
 	if(!peerSetTitle( peer , gameName, secretKey, gameName, secretKey, GetGameVersion(), 30, PEERTrue, pingRooms, crossPingRooms))
 	{
-		DEBUG_CRASH(("Error setting title"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Error setting title");
 		peerShutdown( peer );
 		peer = nullptr;
 		return;
@@ -1264,16 +1243,16 @@ void PeerThreadClass::Thread_Function()
 	OptionPreferences pref;
 	UnsignedInt preferredIP = INADDR_ANY;
 	UnsignedInt selectedIP = pref.getOnlineIPAddress();
-	DEBUG_LOG(("Looking for IP %X", selectedIP));
+engine::debug::log_info("Looking for IP %X", selectedIP);
 	IPEnumeration IPs;
 	EnumeratedIP *IPlist = IPs.getAddresses();
 	while (IPlist)
 	{
-		DEBUG_LOG(("Looking at IP %s", IPlist->getIPstring().str()));
+engine::debug::log_info("Looking at IP %s", IPlist->getIPstring().str());
 		if (selectedIP == IPlist->getIP())
 		{
 			preferredIP = IPlist->getIP();
-			DEBUG_LOG(("Connecting to GameSpy chat server via IP address %8.8X", preferredIP));
+engine::debug::log_info("Connecting to GameSpy chat server via IP address %8.8X", preferredIP);
 			break;
 		}
 		IPlist = IPlist->getNext();
@@ -1293,7 +1272,7 @@ void PeerThreadClass::Thread_Function()
 		// deal with requests
 		if (TheGameSpyPeerMessageQueue->getRequest(incomingRequest))
 		{
-			DEBUG_LOG(("TheGameSpyPeerMessageQueue->getRequest() got request of type %d", incomingRequest.peerRequestType));
+engine::debug::log_info("TheGameSpyPeerMessageQueue->getRequest() got request of type %d", incomingRequest.peerRequestType);
 			switch (incomingRequest.peerRequestType)
 			{
 			case PeerRequest::PEERREQUEST_LOGIN:
@@ -1306,7 +1285,7 @@ void PeerThreadClass::Thread_Function()
 				m_email = incomingRequest.email;
 				peerConnect( peer, incomingRequest.nick.c_str(), incomingRequest.login.profileID, nickErrorCallbackWrapper, connectCallbackWrapper, this, PEERTrue );
 #ifdef SERVER_DEBUGGING
-				DEBUG_LOG(("After peerConnect()"));
+engine::debug::log_info("After peerConnect()");
 				CheckServers(peer);
 #endif // SERVER_DEBUGGING
 				m_isConnecting = false;
@@ -1340,7 +1319,7 @@ void PeerThreadClass::Thread_Function()
 				}
 				m_isHosting = false;
 				m_localRoomID = m_groupRoomID;
-				DEBUG_LOG(("Requesting to join room %d in thread %X", m_localRoomID, this));
+engine::debug::log_info("Requesting to join room %d in thread %X", m_localRoomID, this);
 				peerJoinGroupRoom( peer, incomingRequest.groupRoom.id, joinRoomCallback, (void *)this, PEERTrue );
 				break;
 
@@ -1359,9 +1338,9 @@ void PeerThreadClass::Thread_Function()
 					peerLeaveRoom( peer, StagingRoom, nullptr ); m_isHosting = false;
 					SBServer server = findServerByID(incomingRequest.stagingRoom.id);
 					m_localStagingServerName = incomingRequest.text;
-					DEBUG_LOG(("Setting m_localStagingServerName to [%ls]", m_localStagingServerName.c_str()));
+engine::debug::log_info("Setting m_localStagingServerName to [%ls]", m_localStagingServerName.c_str());
 					m_localRoomID = incomingRequest.stagingRoom.id;
-					DEBUG_LOG(("Requesting to join room %d", m_localRoomID));
+engine::debug::log_info("Requesting to join room %d", m_localRoomID);
 					if (server)
 					{
 						peerJoinStagingRoom( peer, server, incomingRequest.password.c_str(), joinRoomCallback, (void *)this, PEERTrue );
@@ -1414,8 +1393,8 @@ void PeerThreadClass::Thread_Function()
 
 			case PeerRequest::PEERREQUEST_PUSHSTATS:
 				{
-					DEBUG_LOG(("PEERREQUEST_PUSHSTATS: stats are %d,%d,%d,%d,%d,%d",
-						incomingRequest.statsToPush.locale, incomingRequest.statsToPush.wins, incomingRequest.statsToPush.losses, incomingRequest.statsToPush.rankPoints, incomingRequest.statsToPush.side, incomingRequest.statsToPush.preorder));
+engine::debug::log_info("PEERREQUEST_PUSHSTATS: stats are %d,%d,%d,%d,%d,%d",
+						incomingRequest.statsToPush.locale, incomingRequest.statsToPush.wins, incomingRequest.statsToPush.losses, incomingRequest.statsToPush.rankPoints, incomingRequest.statsToPush.side, incomingRequest.statsToPush.preorder);
 
 					// Testing alternate way to push stats
 #ifdef USE_BROADCAST_KEYS
@@ -1452,7 +1431,7 @@ void PeerThreadClass::Thread_Function()
 					m_numPlayers = incomingRequest.gameOptions.numPlayers;
 					m_numObservers = incomingRequest.gameOptions.numObservers;
 					m_maxPlayers = incomingRequest.gameOptions.maxPlayers;
-					DEBUG_LOG(("peerStateChanged(): Marking game options state as changed - %d players, %d observers", m_numPlayers, m_numObservers));
+engine::debug::log_info("peerStateChanged(): Marking game options state as changed - %d players, %d observers", m_numPlayers, m_numObservers);
 					for (Int i=0; i<MAX_SLOTS; ++i)
 					{
 						m_playerNames[i] = incomingRequest.gameOptsPlayerNames[i];
@@ -1468,13 +1447,11 @@ void PeerThreadClass::Thread_Function()
 					/*
 					peerStateChanged( peer );
 
-#ifdef DEBUG_LOGGING
 					static UnsignedInt prev = 0;
 					UnsignedInt now = timeGetTime();
 					UnsignedInt diff = now - prev;
 					prev = now;
-#endif
-					STATECHANGED_LOG(("peerStateChanged() at time %d (difference of %d ms)", now, diff));
+					s_stateChangedLog.write("peerStateChanged() at time %d (difference of %d ms)", now, diff);
 					*/
 
 					peerUTMRoom( peer, StagingRoom, "SL/", incomingRequest.options.c_str(), PEERFalse ); // send the full string to people in the room
@@ -1486,12 +1463,12 @@ void PeerThreadClass::Thread_Function()
 					SBServer server = findServerByID( incomingRequest.stagingRoom.id );
 					if (server)
 					{
-						DEBUG_LOG(("Requesting full update on a game"));
+engine::debug::log_info("Requesting full update on a game");
 						peerUpdateGame( peer, server, PEERTrue );
 					}
 					else
 					{
-						DEBUG_LOG(("Tried to update non-existent server!"));
+engine::debug::log_info("Tried to update non-existent server!");
 					}
 				}
 				break;
@@ -1516,7 +1493,7 @@ void PeerThreadClass::Thread_Function()
 						{
 							preferredQRPort = 6500 + (ntohl(localIP) & 0xff);
 						}
-						DEBUG_LOG(("Using %8.8X:%d for QR2", ntohl(localIP), preferredQRPort));
+engine::debug::log_info("Using %8.8X:%d for QR2", ntohl(localIP), preferredQRPort);
 					}
 					else
 					{
@@ -1530,7 +1507,7 @@ void PeerThreadClass::Thread_Function()
 					saddr.sin_family=AF_INET;
 					if (bind(qr2Sock, (sockaddr *)&saddr, sizeof(saddr)) != 0)
 					{
-						DEBUG_LOG(("Could not bind to %d!  Falling back to GameSpy's default port", preferredQRPort));
+engine::debug::log_info("Could not bind to %d!  Falling back to GameSpy's default port", preferredQRPort);
 						closesocket(qr2Sock);
 						qr2Sock = INVALID_SOCKET;
 						preferredQRPort = 0;
@@ -1542,8 +1519,8 @@ void PeerThreadClass::Thread_Function()
 					m_playerNames[0] = m_loginName;
 					peerCreateStagingRoomWithSocket(peer, compositeGame.c_str(), MAX_SLOTS, incomingRequest.password.c_str(), qr2Sock, preferredQRPort, createRoomCallback, (void *)&res, PEERTrue);
 					//peerCreateStagingRoomWithSocket(peer, WideCharStringToMultiByte(incomingRequest.text.c_str()).c_str(), MAX_SLOTS, incomingRequest.password.c_str(), qr2Sock, preferredQRPort, createRoomCallback, (void *)&res, PEERTrue);
-					DEBUG_LOG(("PEERREQUEST_CREATESTAGINGROOM - creating staging room, name is %ls, passwd is %s, result = %d",
-						incomingRequest.text.c_str(), incomingRequest.password.c_str(), res));
+engine::debug::log_info("PEERREQUEST_CREATESTAGINGROOM - creating staging room, name is %ls, passwd is %s, result = %d",
+						incomingRequest.text.c_str(), incomingRequest.password.c_str(), res);
 
 					PeerResponse resp;
 					resp.peerResponseType = PeerResponse::PEERRESPONSE_CREATESTAGINGROOM;
@@ -1553,7 +1530,7 @@ void PeerThreadClass::Thread_Function()
 					if (res != PEERJoinSuccess && res != PEERAlreadyInRoom)
 					{
 						m_localRoomID = oldGroupID;
-						DEBUG_LOG(("Requesting to join room %d", m_localRoomID));
+engine::debug::log_info("Requesting to join room %d", m_localRoomID);
 						if (incomingRequest.stagingRoomCreation.restrictGameList)
 						{
 							peerLeaveRoom( peer, StagingRoom, nullptr );
@@ -1605,7 +1582,7 @@ void PeerThreadClass::Thread_Function()
 						pushStatsToRoom(peer);
 #endif // USE_BROADCAST_KEYS
 
-						DEBUG_LOG(("Setting m_localStagingServerName to [%ls]", m_localStagingServerName.c_str()));
+engine::debug::log_info("Setting m_localStagingServerName to [%ls]", m_localStagingServerName.c_str());
 						updateBuddyStatus( BUDDY_STAGING, 0, WideCharStringToMultiByte(m_localStagingServerName.c_str()) );
 					}
 				}
@@ -1671,13 +1648,11 @@ void PeerThreadClass::Thread_Function()
 				s_wantStateChangedHeartbeat = FALSE;
 				peerStateChanged( peer );
 
-#ifdef DEBUG_LOGGING
 				static UnsignedInt prev = 0;
 				UnsignedInt now = timeGetTime();
 				UnsignedInt diff = now - prev;
 				prev = now;
-#endif
-				STATECHANGED_LOG(("peerStateChanged() at time %d (difference of %d ms)", now, diff));
+				s_stateChangedLog.write("peerStateChanged() at time %d (difference of %d ms)", now, diff);
 			}
 		}
 
@@ -1698,11 +1673,11 @@ void PeerThreadClass::Thread_Function()
 		Switch_Thread();
 	}
 
-	DEBUG_LOG(("voluntarily ending peer thread %d", running));
+engine::debug::log_info("voluntarily ending peer thread %d", running);
 	peerShutdown( peer );
 
 	} catch ( ... ) {
-		DEBUG_CRASH(("Exception in peer thread!"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Exception in peer thread!");
 
 		try {
 			PeerResponse resp;
@@ -1737,7 +1712,7 @@ void quickmatchEnumPlayersCallback( PEER peer, PEERBool success, RoomType roomTy
 
 	Int id = 0;
 	peerGetPlayerProfileID(peer, nick, qmProfileIDCallback, &id, PEERTrue);
-	DEBUG_LOG(("Saw player %s with id %d (looking for %d)", nick, id, matchbotProfileID));
+engine::debug::log_info("Saw player %s with id %d (looking for %d)", nick, id, matchbotProfileID);
 	if (id == matchbotProfileID)
 	{
 		t->sawMatchbot(nick);
@@ -1864,7 +1839,7 @@ void PeerThreadClass::doQuickMatch( PEER peer )
 					break;
 				default:
 					{
-						DEBUG_CRASH(("Unanticipated request %d to peer thread!", incomingRequest.peerRequestType));
+						engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unanticipated request %d to peer thread!", incomingRequest.peerRequestType);
 					}
 					break;
 				}
@@ -1887,7 +1862,7 @@ void PeerThreadClass::doQuickMatch( PEER peer )
 						peerLeaveRoom( peer, StagingRoom, nullptr ); m_isHosting = false;
 						m_localRoomID = m_groupRoomID;
 						m_roomJoined = false;
-						DEBUG_LOG(("Requesting to join room %d in thread %X", m_localRoomID, this));
+engine::debug::log_info("Requesting to join room %d in thread %X", m_localRoomID, this);
 						peerJoinGroupRoom( peer, m_localRoomID, joinRoomCallback, (void *)this, PEERTrue );
 						if (m_roomJoined)
 						{
@@ -1959,7 +1934,7 @@ void PeerThreadClass::doQuickMatch( PEER peer )
 									else
 										msg.append("0");
 								}
-								DEBUG_LOG(("Sending QM options of [%s] to %s", msg.c_str(), m_matchbotName.c_str()));
+engine::debug::log_info("Sending QM options of [%s] to %s", msg.c_str(), m_matchbotName.c_str());
 								peerMessagePlayer( peer, m_matchbotName.c_str(), msg.c_str(), NormalMessage );
 								m_qmStatus = QM_WORKING;
 								PeerResponse resp;
@@ -2034,13 +2009,13 @@ static void getPlayerProfileIDCallback(PEER peer,  PEERBool success,  const char
 
 static void stagingRoomPlayerEnum( PEER peer, PEERBool success, RoomType roomType, int index, const char * nick, int flags, void * param )
 {
-	DEBUG_LOG(("Enum: success=%d, index=%d, nick=%s, flags=%d", success, index, nick, flags));
+engine::debug::log_info("Enum: success=%d, index=%d, nick=%s, flags=%d", success, index, nick, flags);
 	if (!nick || !success)
 		return;
 
 	Int id = 0;
 	peerGetPlayerProfileID(peer, nick, getPlayerProfileIDCallback, &id, PEERTrue);
-	DEBUG_ASSERTCRASH(id != 0, ("Failed to fetch player ID!"));
+	engine::debug::invariant((id != 0), "id != 0", __FILE__, __LINE__, "Failed to fetch player ID!");
 
 	PeerResponse *resp = (PeerResponse *)param;
 	if (flags & PEER_FLAG_OP)
@@ -2063,13 +2038,13 @@ static void stagingRoomPlayerEnum( PEER peer, PEERBool success, RoomType roomTyp
 
 static void joinRoomCallback(PEER peer, PEERBool success, PEERJoinResult result, RoomType roomType, void *param)
 {
-	DEBUG_LOG(("JoinRoomCallback: success==%d, result==%d", success, result));
+engine::debug::log_info("JoinRoomCallback: success==%d, result==%d", success, result);
 	PeerThreadClass *t = (PeerThreadClass *)param;
 	if (!t)
 		return;
-	DEBUG_LOG(("Room id was %d from thread %X", t->getLocalRoomID(), t));
-	DEBUG_LOG(("Current staging server name is [%ls]", t->getLocalStagingServerName().c_str()));
-	DEBUG_LOG(("Room type is %d (GroupRoom=%d, StagingRoom=%d, TitleRoom=%d)", roomType, GroupRoom, StagingRoom, TitleRoom));
+engine::debug::log_info("Room id was %d from thread %X", t->getLocalRoomID(), t);
+engine::debug::log_info("Current staging server name is [%ls]", t->getLocalStagingServerName().c_str());
+engine::debug::log_info("Room type is %d (GroupRoom=%d, StagingRoom=%d, TitleRoom=%d)", roomType, GroupRoom, StagingRoom, TitleRoom);
 
 #ifdef USE_BROADCAST_KEYS
 	if (success)
@@ -2092,10 +2067,10 @@ static void joinRoomCallback(PEER peer, PEERBool success, PEERJoinResult result,
 				resp.joinGroupRoom.ok = success;
 				TheGameSpyPeerMessageQueue->addResponse(resp);
 				t->roomJoined(success == PEERTrue);
-				DEBUG_LOG(("Entered group room %d, qm is %d", t->getLocalRoomID(), t->getQMGroupRoom()));
+engine::debug::log_info("Entered group room %d, qm is %d", t->getLocalRoomID(), t->getQMGroupRoom());
 				if ((!t->getQMGroupRoom()) || (t->getQMGroupRoom() != t->getLocalRoomID()))
 				{
-					DEBUG_LOG(("Updating buddy status"));
+engine::debug::log_info("Updating buddy status");
 					updateBuddyStatus( BUDDY_LOBBY, t->getLocalRoomID() );
 				}
 			}
@@ -2112,14 +2087,14 @@ static void joinRoomCallback(PEER peer, PEERBool success, PEERJoinResult result,
 				resp.joinStagingRoom.result = result;
 				if (success)
 				{
-					DEBUG_LOG(("joinRoomCallback() - game name is now '%ls'", t->getLocalStagingServerName().c_str()));
+engine::debug::log_info("joinRoomCallback() - game name is now '%ls'", t->getLocalStagingServerName().c_str());
 					updateBuddyStatus( BUDDY_STAGING, 0, WideCharStringToMultiByte(t->getLocalStagingServerName().c_str()) );
 				}
 
 				resp.joinStagingRoom.isHostPresent = FALSE;
-				DEBUG_LOG(("Enum of staging room players"));
+engine::debug::log_info("Enum of staging room players");
 				peerEnumPlayers(peer, StagingRoom, stagingRoomPlayerEnum, &resp);
-				DEBUG_LOG(("Host %s present", (resp.joinStagingRoom.isHostPresent)?"is":"is not"));
+engine::debug::log_info("Host %s present", (resp.joinStagingRoom.isHostPresent)?"is":"is not");
 
 				TheGameSpyPeerMessageQueue->addResponse(resp);
 			}
@@ -2137,20 +2112,20 @@ static void listGroupRoomsCallback(PEER peer, PEERBool success,
 														int maxWaiting, int numGames,
 														int numPlaying, void * param)
 {
-	DEBUG_LOG(("listGroupRoomsCallback, success=%d, server=%X, groupID=%d", success, server, groupID));
+engine::debug::log_info("listGroupRoomsCallback, success=%d, server=%X, groupID=%d", success, server, groupID);
 #ifdef SERVER_DEBUGGING
 	CheckServers(peer);
 #endif // SERVER_DEBUGGING
 	PeerThreadClass *t = (PeerThreadClass *)param;
 	if (!t)
 	{
-		DEBUG_LOG(("No thread!  Bailing!"));
+engine::debug::log_info("No thread!  Bailing!");
 		return;
 	}
 
 	if (success)
 	{
-		DEBUG_LOG(("Saw group room of %d (%s) at address %X %X", groupID, name, server, (server)?server->keyvals:0));
+engine::debug::log_info("Saw group room of %d (%s) at address %X %X", groupID, name, server, (server)?server->keyvals:0);
 		PeerResponse resp;
 		resp.peerResponseType = PeerResponse::PEERRESPONSE_GROUPROOM;
 		resp.groupRoom.id = groupID;
@@ -2166,12 +2141,12 @@ static void listGroupRoomsCallback(PEER peer, PEERBool success,
 		TheGameSpyPeerMessageQueue->addResponse(resp);
 #ifdef SERVER_DEBUGGING
 		CheckServers(peer);
-		DEBUG_LOG((""));
+engine::debug::log_info("");
 #endif // SERVER_DEBUGGING
 	}
 	else
 	{
-		DEBUG_LOG(("Failure!"));
+engine::debug::log_info("Failure!");
 	}
 }
 
@@ -2190,7 +2165,7 @@ void PeerThreadClass::connectCallback( PEER peer, PEERBool success )
 	updateBuddyStatus( BUDDY_ONLINE );
 
 	m_isConnected = true;
-	DEBUG_LOG(("Connected as profile %d (%s)", m_profileID, m_loginName.c_str()));
+engine::debug::log_info("Connected as profile %d (%s)", m_profileID, m_loginName.c_str());
 	resp.peerResponseType = PeerResponse::PEERRESPONSE_LOGIN;
 	resp.player.profileID = m_profileID;
 	resp.nick = m_loginName;
@@ -2209,12 +2184,12 @@ void PeerThreadClass::connectCallback( PEER peer, PEERBool success )
 	TheGameSpyPSMessageQueue->addRequest(psReq);
 
 #ifdef SERVER_DEBUGGING
-	DEBUG_LOG(("Before peerListGroupRooms()"));
+engine::debug::log_info("Before peerListGroupRooms()");
 	CheckServers(peer);
 #endif // SERVER_DEBUGGING
 	peerListGroupRooms( peer, nullptr, listGroupRoomsCallback, this, PEERTrue );
 #ifdef SERVER_DEBUGGING
-	DEBUG_LOG(("After peerListGroupRooms()"));
+engine::debug::log_info("After peerListGroupRooms()");
 	CheckServers(peer);
 #endif // SERVER_DEBUGGING
 }
@@ -2232,7 +2207,7 @@ void PeerThreadClass::nickErrorCallback( PEER peer, Int type, const char *nick )
 			nickStr.erase(len-3, 3);
 		}
 
-		DEBUG_LOG(("Nickname taken: was %s, new val = %d, new nick = %s", nick, newVal, nickStr.c_str()));
+engine::debug::log_info("Nickname taken: was %s, new val = %d, new nick = %s", nick, newVal, nickStr.c_str());
 
 		if (newVal < 10)
 		{
@@ -2271,9 +2246,9 @@ void PeerThreadClass::nickErrorCallback( PEER peer, Int type, const char *nick )
 
 void disconnectedCallback(PEER peer, const char * reason, void * param)
 {
-	DEBUG_LOG(("disconnectedCallback(): reason was '%s'", reason));
+engine::debug::log_info("disconnectedCallback(): reason was '%s'", reason);
 	PeerThreadClass *t = (PeerThreadClass *)param;
-	DEBUG_ASSERTCRASH(t, ("No Peer thread!"));
+	engine::debug::invariant((t), "t", __FILE__, __LINE__, "No Peer thread!");
 	if (t)
 		t->markAsDisconnected();
 	//updateBuddyStatus( BUDDY_OFFLINE );
@@ -2292,13 +2267,13 @@ void roomMessageCallback(PEER peer, RoomType roomType, const char * nick, const 
 	resp.message.isPrivate = FALSE;
 	resp.message.isAction = (messageType == ActionMessage);
 	TheGameSpyPeerMessageQueue->addResponse(resp);
-	DEBUG_LOG(("Saw text [%hs] (%ls) %d chars Orig was %s (%d chars)", nick, resp.text.c_str(), resp.text.length(), message, strlen(message)));
+engine::debug::log_info("Saw text [%hs] (%ls) %d chars Orig was %s (%d chars)", nick, resp.text.c_str(), resp.text.length(), message, strlen(message));
 
 	UnsignedInt IP;
 	peerGetPlayerInfoNoWait(peer, nick, &IP, &resp.message.profileID);
 
 	PeerThreadClass *t = (PeerThreadClass *)param;
-	DEBUG_ASSERTCRASH(t, ("No Peer thread!"));
+	engine::debug::invariant((t), "t", __FILE__, __LINE__, "No Peer thread!");
 	if (t && (t->getQMStatus() != QM_IDLE && t->getQMStatus() != QM_STOPPED))
 	{
 		if (resp.message.profileID == matchbotProfileID)
@@ -2358,7 +2333,7 @@ void playerMessageCallback(PEER peer, const char * nick, const char * message, M
 
 
 	PeerThreadClass *t = (PeerThreadClass *)param;
-	DEBUG_ASSERTCRASH(t, ("No Peer thread!"));
+	engine::debug::invariant((t), "t", __FILE__, __LINE__, "No Peer thread!");
 	if (t && (t->getQMStatus() != QM_IDLE && t->getQMStatus() != QM_STOPPED))
 	{
 		if (resp.message.isPrivate && resp.message.profileID == matchbotProfileID)
@@ -2399,7 +2374,7 @@ void playerMessageCallback(PEER peer, const char * nick, const char * message, M
 				if (numPlayers > 1)
 				{
 					// woohoo!  got everything needed for a match!
-					DEBUG_LOG(("Saw %d-player QM match: map index = %s, seed = %s", numPlayers, mapNumStr, seedStr));
+engine::debug::log_info("Saw %d-player QM match: map index = %s, seed = %s", numPlayers, mapNumStr, seedStr);
 					t->handleQMMatch(peer, atoi(mapNumStr), atoi(seedStr), playerStr, playerIPStr, playerSideStr, playerColorStr, playerNATStr);
 				}
 			}
@@ -2428,7 +2403,7 @@ void playerMessageCallback(PEER peer, const char * nick, const char * message, M
 
 void roomUTMCallback(PEER peer, RoomType roomType, const char * nick, const char * command, const char * parameters, PEERBool authenticated, void * param)
 {
-	DEBUG_LOG(("roomUTMCallback: %s says %s = [%s]", nick, command, parameters));
+engine::debug::log_info("roomUTMCallback: %s says %s = [%s]", nick, command, parameters);
 	if (roomType != StagingRoom)
 		return;
 	PeerResponse resp;
@@ -2441,7 +2416,7 @@ void roomUTMCallback(PEER peer, RoomType roomType, const char * nick, const char
 
 void playerUTMCallback(PEER peer, const char * nick, const char * command, const char * parameters, PEERBool authenticated, void * param)
 {
-	DEBUG_LOG(("playerUTMCallback: %s says %s = [%s]", nick, command, parameters));
+engine::debug::log_info("playerUTMCallback: %s says %s = [%s]", nick, command, parameters);
 	PeerResponse resp;
 	resp.peerResponseType = PeerResponse::PEERRESPONSE_PLAYERUTM;
 	resp.nick = nick;
@@ -2486,27 +2461,25 @@ static void getPlayerInfo(PeerThreadClass *t, PEER peer, const char *nick, Int& 
 #endif // USE_BROADCAST_KEYS
 	flags = 0;
 	peerGetPlayerFlags(peer, nick, roomType, &flags);
-	DEBUG_LOG(("getPlayerInfo(%d) - %s has locale %s, wins:%d, losses:%d, rankPoints:%d, side:%d, preorder:%d",
-		id, nick, locale.c_str(), wins, losses, rankPoints, side, preorder));
+engine::debug::log_info("getPlayerInfo(%d) - %s has locale %s, wins:%d, losses:%d, rankPoints:%d, side:%d, preorder:%d",
+		id, nick, locale.c_str(), wins, losses, rankPoints, side, preorder);
 }
 
 static void roomKeyChangedCallback(PEER peer, RoomType roomType, const char *nick, const char *key, const char *val, void *param)
 {
 #ifdef USE_BROADCAST_KEYS
 	PeerThreadClass *t = (PeerThreadClass *)param;
-	DEBUG_ASSERTCRASH(t, ("No Peer thread!"));
+	engine::debug::invariant((t), "t", __FILE__, __LINE__, "No Peer thread!");
 	if (!t || !nick || !key || !val)
 	{
-		DEBUG_ASSERTCRASH(nick && strcmp(nick,"(END)")==0, ("roomKeyChangedCallback bad values = nick:%X:%s, key:%X:%s, val:%X:%s", nick, nick, key, key, val, val));
+		engine::debug::invariant((nick && strcmp(nick,"(END)")==0), "nick && strcmp(nick,\"(END)\")==0", __FILE__, __LINE__, "roomKeyChangedCallback bad values = nick:%X:%s, key:%X:%s, val:%X:%s", nick, nick, key, key, val, val);
 		return;
 	}
 
-#ifdef DEBUG_LOGGING
 	if (strcmp(key, "username") != 0 && strcmp(key, "b_flags") != 0)
 	{
-		DEBUG_LOG(("roomKeyChangedCallback() - %s set %s=%s", nick, key, val));
+engine::debug::log_info("roomKeyChangedCallback() - %s set %s=%s", nick, key, val);
 	}
-#endif
 
 	t->trackStatsForPlayer(roomType, nick, key, val);
 
@@ -2527,10 +2500,10 @@ static void roomKeyChangedCallback(PEER peer, RoomType roomType, const char *nic
 void getRoomKeysCallback(PEER peer, PEERBool success, RoomType roomType, const char *nick, int num, char **keys, char **values, void *param)
 {
 	PeerThreadClass *t = (PeerThreadClass *)param;
-	DEBUG_ASSERTCRASH(t, ("No Peer thread!"));
+	engine::debug::invariant((t), "t", __FILE__, __LINE__, "No Peer thread!");
 	if (!t || !nick || !num || !success || !keys || !values)
 	{
-		DEBUG_ASSERTCRASH(!nick || strcmp(nick,"(END)")==0, ("getRoomKeysCallback bad key/value %X/%X, nick=%s", keys, values, nick));
+		engine::debug::invariant((!nick || strcmp(nick,"(END)")==0), "!nick || strcmp(nick,\"(END)\")==0", __FILE__, __LINE__, "getRoomKeysCallback bad key/value %X/%X, nick=%s", keys, values, nick);
 		return;
 	}
 
@@ -2558,7 +2531,7 @@ static void globalKeyChangedCallback(PEER peer, const char *nick, const char *ke
 		return;
 
 	PeerThreadClass *t = (PeerThreadClass *)param;
-	DEBUG_ASSERTCRASH(t, ("No Peer thread!"));
+	engine::debug::invariant((t), "t", __FILE__, __LINE__, "No Peer thread!");
 	if (!t)
 		return;
 
@@ -2580,7 +2553,7 @@ void playerJoinedCallback(PEER peer, RoomType roomType, const char * nick, void 
 		return;
 
 	PeerThreadClass *t = (PeerThreadClass *)param;
-	DEBUG_ASSERTCRASH(t, ("No Peer thread!"));
+	engine::debug::invariant((t), "t", __FILE__, __LINE__, "No Peer thread!");
 	if (!t)
 		return;
 
@@ -2605,7 +2578,7 @@ void playerLeftCallback(PEER peer, RoomType roomType, const char * nick, const c
 	resp.player.profileID = 0;
 
 	PeerThreadClass *t = (PeerThreadClass *)param;
-	DEBUG_ASSERTCRASH(t, ("No Peer thread!"));
+	engine::debug::invariant((t), "t", __FILE__, __LINE__, "No Peer thread!");
 	if (!t)
 		return;
 
@@ -2641,7 +2614,7 @@ void playerChangedNickCallback(PEER peer, RoomType roomType, const char * oldNic
 	resp.player.roomType = roomType;
 
 	PeerThreadClass *t = (PeerThreadClass *)param;
-	DEBUG_ASSERTCRASH(t, ("No Peer thread!"));
+	engine::debug::invariant((t), "t", __FILE__, __LINE__, "No Peer thread!");
 	if (!t)
 		return;
 
@@ -2662,7 +2635,7 @@ static void playerInfoCallback(PEER peer, RoomType roomType, const char * nick, 
 	resp.player.roomType = roomType;
 
 	PeerThreadClass *t = (PeerThreadClass *)param;
-	DEBUG_ASSERTCRASH(t, ("No Peer thread!"));
+	engine::debug::invariant((t), "t", __FILE__, __LINE__, "No Peer thread!");
 	if (!t)
 		return;
 
@@ -2670,7 +2643,7 @@ static void playerInfoCallback(PEER peer, RoomType roomType, const char * nick, 
 		resp.locale, resp.player.wins, resp.player.losses,
 		resp.player.rankPoints, resp.player.side, resp.player.preorder,
 		roomType, resp.player.flags);
-DEBUG_LOG(("**GS playerInfoCallback name=%s, local=%s", nick, resp.locale.c_str() ));
+engine::debug::log_info("**GS playerInfoCallback name=%s, local=%s", nick, resp.locale.c_str() );
 	TheGameSpyPeerMessageQueue->addResponse(resp);
 }
 
@@ -2684,7 +2657,7 @@ static void playerFlagsChangedCallback(PEER peer, RoomType roomType, const char 
 	resp.player.roomType = roomType;
 
 	PeerThreadClass *t = (PeerThreadClass *)param;
-	DEBUG_ASSERTCRASH(t, ("No Peer thread!"));
+	engine::debug::invariant((t), "t", __FILE__, __LINE__, "No Peer thread!");
 	if (!t)
 		return;
 
@@ -2695,14 +2668,12 @@ static void playerFlagsChangedCallback(PEER peer, RoomType roomType, const char 
 	TheGameSpyPeerMessageQueue->addResponse(resp);
 }
 
-#ifdef DEBUG_LOGGING
 /*
 static void enumFunc(char *key, char *val, void *param)
 {
-	DEBUG_LOG(("  [%s] = [%s]", key, val));
+engine::debug::log_info("  [%s] = [%s]", key, val);
 }
 */
-#endif
 
 static void listingGamesCallback(PEER peer, PEERBool success, const char * name, SBServer server, PEERBool staging, int msg, Int percentListed, void * param)
 {
@@ -2710,7 +2681,6 @@ static void listingGamesCallback(PEER peer, PEERBool success, const char * name,
 	if (!t || !success)
 		return;
 
-#ifdef DEBUG_LOGGING
 	AsciiString cmdStr = "<Unknown>";
 	switch(msg)
 	{
@@ -2730,14 +2700,13 @@ static void listingGamesCallback(PEER peer, PEERBool success, const char * name,
 			cmdStr = "PEER_COMPLETE";
 			break;
 	}
-	DEBUG_LOG(("listingGamesCallback() - doing command %s on server %X", cmdStr.str(), server));
-#endif // DEBUG_LOGGING
+engine::debug::log_info("listingGamesCallback() - doing command %s on server %X", cmdStr.str(), server);
 
 //	PeerThreadClass *t = (PeerThreadClass *)param;
-	DEBUG_ASSERTCRASH(name || msg==PEER_CLEAR || msg==PEER_COMPLETE, ("Game has no name!"));
+	engine::debug::invariant((name || msg==PEER_CLEAR || msg==PEER_COMPLETE), "name || msg==PEER_CLEAR || msg==PEER_COMPLETE", __FILE__, __LINE__, "Game has no name!");
 	if (!t || !success || (!name && (msg == PEER_ADD || msg == PEER_UPDATE)))
 	{
-		DEBUG_LOG(("Bailing from listingGamesCallback() - success=%d, name=%X, server=%X, msg=%X", success, name, server, msg));
+engine::debug::log_info("Bailing from listingGamesCallback() - success=%d, name=%X, server=%X, msg=%X", success, name, server, msg);
 		return;
 	}
 	if (!name)
@@ -2745,7 +2714,7 @@ static void listingGamesCallback(PEER peer, PEERBool success, const char * name,
 
 	if (server && (msg == PEER_ADD || msg == PEER_UPDATE))
 	{
-		DEBUG_ASSERTCRASH(server->keyvals, ("Looking at an already-freed server for msg type %d!", msg));
+		engine::debug::invariant((server->keyvals), "server->keyvals", __FILE__, __LINE__, "Looking at an already-freed server for msg type %d!", msg);
 		if (!server->keyvals)
 		{
 			msg = PEER_REMOVE;
@@ -2754,7 +2723,7 @@ static void listingGamesCallback(PEER peer, PEERBool success, const char * name,
 
 	if (server && success && (msg == PEER_ADD || msg == PEER_UPDATE))
 	{
-		DEBUG_LOG(("Game name is '%s'", name));
+engine::debug::log_info("Game name is '%s'", name);
 		const char *newname = SBServerGetStringValue(server, "gamename", (char *)name);
 #if RTS_GENERALS
 		if (strcmp(newname, "ccgenerals") != 0)
@@ -2762,10 +2731,10 @@ static void listingGamesCallback(PEER peer, PEERBool success, const char * name,
 		if (strcmp(newname, "ccgenzh") != 0)
 #endif
 			name = newname;
-		DEBUG_LOG(("Game name is now '%s'", name));
+engine::debug::log_info("Game name is now '%s'", name);
 	}
 
-	DEBUG_LOG(("listingGamesCallback - got percent complete %d", percentListed));
+engine::debug::log_info("listingGamesCallback - got percent complete %d", percentListed);
 	if (percentListed == 100)
 	{
 		if (!t->getSawCompleteGameList())
@@ -2786,7 +2755,7 @@ static void listingGamesCallback(PEER peer, PEERBool success, const char * name,
 	{
 		gameName.set(firstSpace + 1);
 		//gameName.trim();
-		DEBUG_LOG(("Hostname/Gamename split leaves '%s' hosting '%s'", hostName.str(), gameName.str()));
+engine::debug::log_info("Hostname/Gamename split leaves '%s' hosting '%s'", hostName.str(), gameName.str());
 	}
 	PeerResponse resp;
 	resp.peerResponseType = PeerResponse::PEERRESPONSE_STAGINGROOM;
@@ -2829,23 +2798,21 @@ static void listingGamesCallback(PEER peer, PEERBool success, const char * name,
 			resp.stagingRoom.profileID[i] = SBServerGetPlayerIntValue(server, i, "pid", 0);
 			resp.stagingRoom.color[i] = SBServerGetPlayerIntValue(server, i, COLOR__STR, 0);
 			resp.stagingRoom.faction[i] = SBServerGetPlayerIntValue(server, i, FACTION__STR, 0);
-#ifdef DEBUG_LOGGING
 			if (resp.stagingRoomPlayerNames[i].length())
 			{
-				DEBUG_LOG(("Player %d raw stuff: [%s] [%d] [%d] [%d]", i, resp.stagingRoomPlayerNames[i].c_str(), resp.stagingRoom.wins[i], resp.stagingRoom.losses[i], resp.stagingRoom.profileID[i]));
+engine::debug::log_info("Player %d raw stuff: [%s] [%d] [%d] [%d]", i, resp.stagingRoomPlayerNames[i].c_str(), resp.stagingRoom.wins[i], resp.stagingRoom.losses[i], resp.stagingRoom.profileID[i]);
 			}
-#endif
 		}
 		if (resp.stagingRoomPlayerNames[0].empty())
 		{
 			resp.stagingRoomPlayerNames[0] = hostName.str();
 		}
-		DEBUG_ASSERTCRASH(resp.stagingRoomPlayerNames[0].empty() == false, ("No host!"));
-		DEBUG_LOG(("Raw stuff: [%s] [%s] [%s] [%d] [%d] [%d]", verStr, exeStr, iniStr, hasPassword, allowObservers, usesStats));
-		DEBUG_LOG(("Raw stuff: [%s] [%s] [%d]", pingStr, ladIPStr, ladPort));
-		DEBUG_LOG(("Saw game with stuff %s %d %X %X %X %s", resp.stagingRoomMapName.c_str(), hasPassword, verVal, exeVal, iniVal, SBServerGetStringValue(server, "password", "missing")));
+		engine::debug::invariant((resp.stagingRoomPlayerNames[0].empty() == false), "resp.stagingRoomPlayerNames[0].empty() == false", __FILE__, __LINE__, "No host!");
+engine::debug::log_info("Raw stuff: [%s] [%s] [%s] [%d] [%d] [%d]", verStr, exeStr, iniStr, hasPassword, allowObservers, usesStats);
+engine::debug::log_info("Raw stuff: [%s] [%s] [%d]", pingStr, ladIPStr, ladPort);
+engine::debug::log_info("Saw game with stuff %s %d %X %X %X %s", resp.stagingRoomMapName.c_str(), hasPassword, verVal, exeVal, iniVal, SBServerGetStringValue(server, "password", "missing"));
 #ifdef PING_TEST
-	PING_LOG(("%s", pingStr));
+	s_pingLog.write("%s", pingStr);
 #endif
 	}
 
@@ -2855,20 +2822,20 @@ static void listingGamesCallback(PEER peer, PEERBool success, const char * name,
 		{
 			if (SBServerHasBasicKeys(server))
 			{
-				DEBUG_LOG(("Server %x does not have basic keys", server));
+engine::debug::log_info("Server %x does not have basic keys", server);
 				return;
 			}
 			else
 			{
-				DEBUG_LOG(("Server %x has basic keys, yet has no info", server));
+engine::debug::log_info("Server %x has basic keys, yet has no info", server);
 			}
 			if (msg == PEER_UPDATE)
 			{
 				PeerRequest req;
 				req.peerRequestType = PeerRequest::PEERREQUEST_GETEXTENDEDSTAGINGROOMINFO;
 				req.stagingRoom.id = t->findServer( server );
-				DEBUG_LOG(("Add/update a 0/0 server %X (%d, %s) - requesting full update to see if that helps.",
-					server, resp.stagingRoom.id, gameName.str()));
+engine::debug::log_info("Add/update a 0/0 server %X (%d, %s) - requesting full update to see if that helps.",
+					server, resp.stagingRoom.id, gameName.str());
 				TheGameSpyPeerMessageQueue->addRequest(req);
 			}
 			return; // don't actually try to list it.
@@ -2883,15 +2850,13 @@ static void listingGamesCallback(PEER peer, PEERBool success, const char * name,
 		case PEER_ADD:
 		case PEER_UPDATE:
 			resp.stagingRoom.id = t->findServer( server );
-			DEBUG_LOG(("Add/update on server %X (%d, %s)", server, resp.stagingRoom.id, gameName.str()));
+engine::debug::log_info("Add/update on server %X (%d, %s)", server, resp.stagingRoom.id, gameName.str());
 			resp.stagingServerName = MultiByteToWideCharSingleLine( gameName.str() );
-			DEBUG_LOG(("Server had basic=%d, full=%d", SBServerHasBasicKeys(server), SBServerHasFullKeys(server)));
-#ifdef DEBUG_LOGGING
+engine::debug::log_info("Server had basic=%d, full=%d", SBServerHasBasicKeys(server), SBServerHasFullKeys(server));
 			//SBServerEnumKeys(server, enumFunc, nullptr);
-#endif
 			break;
 		case PEER_REMOVE:
-			DEBUG_LOG(("Removing server %X (%d)", server, resp.stagingRoom.id));
+engine::debug::log_info("Removing server %X (%d)", server, resp.stagingRoom.id);
 			resp.stagingRoom.id = t->removeServerFromMap( server );
 			break;
 	}
@@ -2900,4 +2865,3 @@ static void listingGamesCallback(PEER peer, PEERBool success, const char * name,
 }
 
 //-------------------------------------------------------------------------
-

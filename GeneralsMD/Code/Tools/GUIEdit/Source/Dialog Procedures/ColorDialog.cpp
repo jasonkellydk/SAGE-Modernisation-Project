@@ -52,7 +52,8 @@
 #include "resource.h"
 #include "GUIEditColor.h"
 #include "Properties.h"
-#include "Common/Debug.h"
+import engine.debug;
+
 
 // DEFINES ////////////////////////////////////////////////////////////////////
 #define MODE_RGB 0
@@ -184,7 +185,7 @@ RGBColorReal hsvToRGB( HSVColorReal hsvColor )
     }
     else
 		{
-      DEBUG_LOG(( "HSVToRGB error, hue should be undefined" ));
+      engine::debug::log_info( "HSVToRGB error, hue should be undefined" );
     }
 
   }

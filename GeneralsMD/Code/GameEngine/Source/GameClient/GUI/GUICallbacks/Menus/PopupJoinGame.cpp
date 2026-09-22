@@ -50,7 +50,8 @@
 //-----------------------------------------------------------------------------
 // USER INCLUDES //////////////////////////////////////////////////////////////
 //-----------------------------------------------------------------------------
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/GlobalData.h"
 #include "Common/NameKeyGenerator.h"
@@ -257,7 +258,7 @@ static void joinGame( AsciiString password )
 	req.stagingRoom.id = ourRoom->getID();
 	req.password = password.str();
 	TheGameSpyPeerMessageQueue->addRequest(req);
-	DEBUG_LOG(("Attempting to join game %d(%ls) with password [%s]", ourRoom->getID(), ourRoom->getGameName().str(), password.str()));
+	engine::debug::log_info("Attempting to join game %d(%ls) with password [%s]", ourRoom->getID(), ourRoom->getGameName().str(), password.str());
 	GameSpyCloseOverlay(GSOVERLAY_GAMEPASSWORD);
 	parentPopup = nullptr;
 }

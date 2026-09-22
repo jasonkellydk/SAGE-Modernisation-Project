@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/INI.h"
 #include "GameClient/Image.h"
@@ -57,7 +58,7 @@ void INI::parseMappedImageDefinition( INI* ini )
 	}
 	Image *image = const_cast<Image*>(TheMappedImageCollection->findImageByName( name ));
 	if(image)
-		DEBUG_ASSERTCRASH(!image->getRawTextureData(), ("We are trying to parse over an existing image that contains a non-null rawTextureData, you should fix that"));
+		engine::debug::invariant((!image->getRawTextureData()), "!image->getRawTextureData()", __FILE__, __LINE__, "We are trying to parse over an existing image that contains a non-null rawTextureData, you should fix that");
 
 	if( image == nullptr )
 	{
@@ -66,7 +67,7 @@ void INI::parseMappedImageDefinition( INI* ini )
 		image = newInstance(Image);
 		image->setName( name );
 		TheMappedImageCollection->addImage(image);
-		DEBUG_ASSERTCRASH( image, ("parseMappedImage: unable to allocate image for '%s'", name) );
+		engine::debug::invariant((image), "image", __FILE__, __LINE__, "parseMappedImage: unable to allocate image for '%s'", name);
 
 	}
 

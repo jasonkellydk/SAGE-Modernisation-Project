@@ -29,7 +29,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Lib/BaseType.h"
 #include "Common/crc.h"
@@ -348,7 +349,7 @@ static void playerTooltip(GameWindow *window,
 	LANPlayer *player = TheLAN->LookupPlayer(playerIP);
 	if (!player)
 	{
-		DEBUG_CRASH(("No player info in listbox!"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "No player info in listbox!");
 		//TheMouse->setCursorTooltip( TheGameText->fetch("TOOLTIP:LobbyPlayers") );
 		return;
 	}
@@ -428,7 +429,7 @@ void LanLobbyMenuInit( WindowLayout *layout, void *userData )
 			IPlist = IPlist->getNext();
 		}
 		*/
-		DEBUG_ASSERTCRASH(IPlist, ("No IP addresses found!"));
+		engine::debug::invariant((IPlist), "IPlist", __FILE__, __LINE__, "No IP addresses found!");
 		if (!IPlist)
 		{
 			/// @todo: display error and exit lan lobby if no IPs are found
@@ -615,7 +616,7 @@ void LanLobbyMenuUpdate( WindowLayout * layout, void *userData)
 
 	if (LANSocketErrorDetected == TRUE) {
 		LANSocketErrorDetected = FALSE;
-		DEBUG_LOG(("SOCKET ERROR!  BAILING!"));
+		engine::debug::log_info("SOCKET ERROR!  BAILING!");
 		MessageBoxOk(TheGameText->fetch("GUI:NetworkError"), TheGameText->fetch("GUI:SocketError"), nullptr);
 
 		// we have a socket problem, back out to the main menu.
@@ -762,7 +763,7 @@ WindowMsgHandledType LanLobbyMenuSystem( GameWindow *window, UnsignedInt msg,
 				{
 					//shellmapOn = TRUE;
 					LANbuttonPushed = true;
-					DEBUG_LOG(("Back was hit - popping to main menu"));
+					engine::debug::log_info("Back was hit - popping to main menu");
 					TheShell->pop();
 					delete TheLAN;
 					TheLAN = nullptr;

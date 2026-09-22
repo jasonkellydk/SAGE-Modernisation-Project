@@ -38,6 +38,7 @@ class Matrix3D;
 class WaterHandle;
 class BaseHeightMapRenderObjClass;
 class WorldHeightMap;
+import engine.platform.time;
 
 //-------------------------------------------------------------------------------------------------
 /** W3D implementation of visual terrain details singleton */
@@ -47,7 +48,7 @@ class W3DTerrainVisual : public TerrainVisual
 
 public:
 
-	W3DTerrainVisual();
+	explicit W3DTerrainVisual(engine::platform::IClockService& clock);
 	virtual ~W3DTerrainVisual() override;
 
 	virtual void init() override;
@@ -170,6 +171,7 @@ protected:
 #endif
 
 	BaseHeightMapRenderObjClass *m_terrainRenderObject;  ///< W3D render object for terrain
+	engine::platform::IClockService& m_clock;
 	WaterRenderSystem	*m_waterRenderSystem;	///< modern water render system
 	WaterGridSimulation m_waterGridSimulation;	///< gameplay-owned water grid state
 

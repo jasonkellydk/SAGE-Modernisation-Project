@@ -28,6 +28,7 @@
 
 #pragma once
 
+
 #include "GameNetwork/GameInfo.h"
 #include "GameNetwork/LANPlayer.h"
 
@@ -146,12 +147,7 @@ public:
 	}
 
 	/// Set the last time we heard from the player
-	void setPlayerLastHeard( int who, UnsignedInt lastHeard )
-	{
-		DEBUG_LOG(("LANGameInfo::setPlayerLastHeard - changing player %d last heard from %d to %d", who, getPlayerLastHeard(who), lastHeard));
-		if (m_LANSlot[who].isHuman())
-			m_LANSlot[who].setLastHeard(lastHeard);
-	}
+	void setPlayerLastHeard( int who, UnsignedInt lastHeard );
 
 	/// Return the hosts IP or 0
 	UnsignedInt getHostIP()

@@ -249,6 +249,11 @@ target_sources(z_gameenginedevice PRIVATE
 )
 
 set_source_files_properties(
+    Source/W3DDevice/GameClient/W3DDisplay.cpp
+    PROPERTIES COMPILE_OPTIONS "-fno-lto"
+)
+
+set_source_files_properties(
     ${CMAKE_SOURCE_DIR}/engine/gui/wnd/runtime/renderer/source/W3DDevice/GameClient/GUI/W3DGameWindowManager.cppm
     PROPERTIES COMPILE_OPTIONS "-x;c++"
 )
@@ -284,6 +289,7 @@ target_link_libraries(z_gameenginedevice PRIVATE
     zi_main
     stb
     SDL3::SDL3
+    engine_platform_sdl3
 )
 
 target_link_libraries(z_gameenginedevice PUBLIC

@@ -29,7 +29,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // USER INCLUDES //////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/BuildAssistant.h"
 #include "Common/GlobalData.h"
@@ -310,7 +311,7 @@ void BuildAssistant::xferTheSellList( Xfer *xfer )
 			xfer->xferUnsignedInt(&sellInfo->m_sellFrame);
 			count--;
 		}
-		DEBUG_ASSERTCRASH(count==0, ("Inconsistent list size counts."));
+		engine::debug::invariant((count==0), "count==0", __FILE__, __LINE__, "Inconsistent list size counts.");
 	}
 
 }
@@ -332,8 +333,7 @@ Object *BuildAssistant::buildObjectNow( Object *constructorObject, const ThingTe
 	// sanity
 	if( constructorObject )
 	{
-		DEBUG_ASSERTCRASH( constructorObject->getControllingPlayer() == owningPlayer,
-											 ("buildObjectNow: Constructor object player is not the same as the controlling player passed in\n") );
+		engine::debug::invariant((constructorObject->getControllingPlayer() == owningPlayer), "constructorObject->getControllingPlayer() == owningPlayer", __FILE__, __LINE__, "buildObjectNow: Constructor object player is not the same as the controlling player passed in\n");
 
 	}
 
@@ -583,8 +583,8 @@ void BuildAssistant::iterateFootprint( const ThingTemplate *build,
 	else
 	{
 
-		DEBUG_CRASH( ("iterateFootprint: Undefined geometry '%d' for '%s'",
-											     build->getTemplateGeometryInfo().getGeomType(), build->getName().str()) );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "iterateFootprint: Undefined geometry '%d' for '%s'",
+											     build->getTemplateGeometryInfo().getGeomType(), build->getName().str());
 		return;
 
 	}
@@ -936,7 +936,7 @@ LegalBuildCode BuildAssistant::isLocationLegalToBuild( const Coord3D *worldPos,
 			Int playerIndex = -1;
 			if (builderObject && builderObject->getControllingPlayer())
 				playerIndex = builderObject->getControllingPlayer()->getPlayerIndex();
-			DEBUG_ASSERTCRASH(playerIndex >= 0, ("isLocationLegalToBuild() needs a builderObject with a team to check for shroud"));
+			engine::debug::invariant((playerIndex >= 0), "playerIndex >= 0", __FILE__, __LINE__, "isLocationLegalToBuild() needs a builderObject with a team to check for shroud");
 			if( ThePartitionManager->getShroudStatusForPlayer(playerIndex, x, y) != CELLSHROUD_CLEAR )
 			{
 				return LBC_SHROUD;
@@ -1148,7 +1148,7 @@ BuildAssistant::TileBuildInfo *BuildAssistant::buildTiledLocations( const ThingT
 		// lets try to at least keep sanity here so that we don't have a completely unbounded
 		// allocation spot in the code here
 		//
-		DEBUG_ASSERTCRASH( m_buildPositionSize < 200, ("Do you really need to tile this many objects!!!") );
+		engine::debug::invariant((m_buildPositionSize < 200), "m_buildPositionSize < 200", __FILE__, __LINE__, "Do you really need to tile this many objects!!!");
 
 	}
 	Coord3D *positions = m_buildPositions;
@@ -1260,10 +1260,10 @@ Bool BuildAssistant::isPossibleToMakeUnit( Object *builder, const ThingTemplate 
 	if( commandSet == nullptr )
 	{
 
-		DEBUG_ASSERTLOG( 0, ("Can't build a '%s' from the builder '%s' because '%s' doesn't have any command set defined",
+		if (!(0)) engine::debug::log_error("Can't build a '%s' from the builder '%s' because '%s' doesn't have any command set defined",
 													whatToBuild->getName().str(),
 													builder->getTemplate()->getName().str(),
-													builder->getTemplate()->getName().str()) );
+													builder->getTemplate()->getName().str());
 		return FALSE;
 
 	}
@@ -1366,7 +1366,7 @@ Bool BuildAssistant::isRemovableForConstruction( Object *obj )
 
 	if (obj->isKindOf(KINDOF_INERT))
 	{
-		DEBUG_CRASH(("should not have gotten here."));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "should not have gotten here.");
 		return FALSE;
 	}
 

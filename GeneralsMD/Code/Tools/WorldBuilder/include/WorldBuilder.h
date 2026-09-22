@@ -21,6 +21,8 @@
 
 #pragma once
 
+
+#include <cassert>
 #ifndef __AFXWIN_H__
 	#error include 'stdafx.h' before including this file for PCH
 #endif
@@ -52,7 +54,7 @@
 #include "RampTool.h"
 #include "ScorchTool.h"
 #include "RulerTool.h"
-#include "Common/Debug.h"
+
 
 /////////////////////////////////////////////////////////////////////////////
 // CWorldBuilderApp:
@@ -170,7 +172,7 @@ public:
 	/// Return true if the hand scroll tool is active.
 	Bool isHandScroll() {return m_curTool == &m_handScrollTool; }
 
-	void lockCurTool()		{ DEBUG_ASSERTCRASH(!m_lockCurTool,("already locked")); m_lockCurTool = 1; }
+	void lockCurTool()		{ assert((!m_lockCurTool)); m_lockCurTool = 1; }
 	void unlockCurTool()	{ m_lockCurTool = 0; }
 	Bool isCurToolLocked()	{ return m_lockCurTool != 0; }
 

@@ -27,9 +27,10 @@
 // Desc:   Behavior common to all DockUpdates is here.  Everything but action()
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 #include <algorithm>
-#include "Common/Debug.h"
+
 #include "Common/Xfer.h"
 #include "GameClient/Drawable.h"
 #include "GameLogic/GameLogic.h"
@@ -395,7 +396,7 @@ void DockUpdate::onExitReached( Object* docker )
 		// to continue moving to the exit position cause they are leaving after all
 		//
 		if( isDockOpen() )
-			DEBUG_CRASH( ("Fiddle.  Someone said goodbye to a dock when the dock didn't think it was talking to that someone."));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Fiddle.  Someone said goodbye to a dock when the dock didn't think it was talking to that someone.");
 
 	}
 }

@@ -28,6 +28,7 @@ import Graphics.Frame.RenderClock;
 #include "W3DDevice/GameClient/W3DSceneClass.h"
 
 #include "WWLib/chunkio.h"
+import engine.debug;
 import Assets.Adapters.W3D.Dazzle;
 import Graphics.Frame.Runtime;
 import Graphics.Frame.AttachmentBindings;
@@ -106,7 +107,7 @@ void W3DDazzleRenderObject::Render(W3DRenderContext& info) {
 }
 void W3DDazzleRenderObject::Set_Layer(W3DDazzleLayer* layer) {
     if (m_membership.queued) return;
-    WWASSERT(layer);
+    engine::debug::assert_condition((layer), "layer", __FILE__, __LINE__, "assertion failed");
     if (!layer || m_type >= Get_Dazzle_Resources().Size()) return;
     layer->m_layer.Queue(m_type, m_membership, [&] { return RefCountPtr<W3DDazzleRenderObject>::Create_Add_Ref(this); });
 }
@@ -144,7 +145,7 @@ void W3DDazzleLayer::Render(W3DCamera* camera) {
                 if (load && !source->Ensure_Render_Backend_Texture()) return std::nullopt;
                 return Graphics::PropMaterialTexture{source->Peek_Graphics_Texture(), source->Get_Sampling()};
             }, context);
-        WWASSERT(drawn);
+        engine::debug::assert_condition((drawn), "drawn", __FILE__, __LINE__, "assertion failed");
     });
 }
 float W3DDazzleVisibility::Compute_Dazzle_Visibility(W3DRenderContext& info, W3DDazzleRenderObject* dazzle, const Vector3& point) const {

@@ -29,6 +29,8 @@
 
 #pragma once
 
+
+#include <cassert>
 #include "Lib/BaseType.h"
 #include "WWLib/refcount.h"
 #include "WWMath/vector3.h"
@@ -251,8 +253,8 @@ public:  // height map info.
 
 	Int getDrawWidth() {return m_drawWidthX;}
 	Int getDrawHeight() {return m_drawHeightY;}
-	void setDrawWidth(Int width) {DEBUG_ASSERTCRASH(width <= m_width, ("Draw width must not exceed map width")); m_drawWidthX = width;}
-	void setDrawHeight(Int height) {DEBUG_ASSERTCRASH(height <= m_height, ("Draw height must not exceed map height")); m_drawHeightY = height;}
+	void setDrawWidth(Int width) {assert((width <= m_width)); m_drawWidthX = width;}
+	void setDrawHeight(Int height) {assert((height <= m_height)); m_drawHeightY = height;}
 	virtual Int getBorderSize() override {return m_borderSize;}
   Int getBorderSizeInline() const { return m_borderSize; }
 	/// Get height with the offset that HeightMapRenderObjClass uses built in.

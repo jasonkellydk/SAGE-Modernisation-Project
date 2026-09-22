@@ -53,6 +53,7 @@ module;
 #include "GameClient/TerrainVisual.h"
 
 export module engine.navigation.simulation_fixture;
+import engine.debug;
 import engine.navigation.pathfinder;
 import engine.navigation.dynamic_request_queue;
 import engine.navigation.scheduling.continuation;
@@ -188,7 +189,7 @@ public:
         TheWritableGlobalData->m_playIntro = false;
         TheWritableGlobalData->m_playSizzle = false;
         TheWritableGlobalData->m_shellMapOn = false;
-        DebugSetHeadlessMode(true);
+        engine::debug::set_headless(true);
         TheVersion = NEW Version;
         TheVersion->setVersion(VERSION_MAJOR, VERSION_MINOR, VERSION_BUILDNUM, VERSION_LOCALBUILDNUM,
             AsciiString(VERSION_BUILDUSER), AsciiString(VERSION_BUILDLOC),

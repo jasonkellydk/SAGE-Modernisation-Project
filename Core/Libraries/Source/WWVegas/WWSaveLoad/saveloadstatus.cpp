@@ -18,6 +18,7 @@
 
 #include "saveloadstatus.h"
 #include "WWLib/mutex.h"
+import engine.debug;
 
 #define MAX_STATUS_TEXT_ID 2
 
@@ -27,7 +28,7 @@ static StringClass status_text[MAX_STATUS_TEXT_ID];
 void SaveLoadStatus::Set_Status_Text(const char* text,int id)
 {
 	CriticalSectionClass::LockClass m(text_mutex);
-	WWASSERT(id<MAX_STATUS_TEXT_ID);
+	engine::debug::assert_condition((id<MAX_STATUS_TEXT_ID), "id<MAX_STATUS_TEXT_ID", __FILE__, __LINE__, "assertion failed");
 	status_text[id]=text;
 	if (id==0) status_text[1]="";
 }
@@ -35,7 +36,7 @@ void SaveLoadStatus::Set_Status_Text(const char* text,int id)
 void SaveLoadStatus::Get_Status_Text(StringClass& text, int id)
 {
 	CriticalSectionClass::LockClass m(text_mutex);
-	WWASSERT(id<MAX_STATUS_TEXT_ID);
+	engine::debug::assert_condition((id<MAX_STATUS_TEXT_ID), "id<MAX_STATUS_TEXT_ID", __FILE__, __LINE__, "assertion failed");
 	text=status_text[id];
 }
 

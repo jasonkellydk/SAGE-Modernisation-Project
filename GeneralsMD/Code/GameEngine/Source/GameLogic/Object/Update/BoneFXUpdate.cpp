@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/GameState.h"
 #include "Common/Thing.h"
@@ -98,7 +99,7 @@ void BoneFXUpdate::onObjectCreated()
 	BoneFXDamage* bfxd = (BoneFXDamage*)getObject()->findDamageModule(key_BoneFXDamage);
 	if (bfxd == nullptr)
 	{
-		DEBUG_CRASH(("BoneFXUpdate requires BoneFXDamage"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "BoneFXUpdate requires BoneFXDamage");
 		throw INI_INVALID_DATA;
 	}
 }
@@ -500,13 +501,13 @@ void BoneFXUpdate::resolveBoneLocations() {
 	const BoneFXUpdateModuleData *d = getBoneFXUpdateModuleData();
 	Object *building = getObject();
 	if (building == nullptr) {
-		DEBUG_ASSERTCRASH(building != nullptr, ("There is no object?"));
+		engine::debug::invariant((building != nullptr), "building != nullptr", __FILE__, __LINE__, "There is no object?");
 		return;
 	}
 
 	Drawable *drawable = building->getDrawable();
 	if (drawable == nullptr) {
-		DEBUG_ASSERTCRASH(drawable != nullptr, ("There is no drawable?"));
+		engine::debug::invariant((drawable != nullptr), "drawable != nullptr", __FILE__, __LINE__, "There is no drawable?");
 		return;
 	}
 
@@ -597,7 +598,7 @@ void BoneFXUpdate::xfer( Xfer *xfer )
 		if( m_particleSystemIDs.empty() == FALSE )
 		{
 
-			DEBUG_CRASH(( "BoneFXUpdate::xfer - m_particleSystemIDs should be empty but is not" ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "BoneFXUpdate::xfer - m_particleSystemIDs should be empty but is not" );
 			throw SC_INVALID_DATA;
 
 		}

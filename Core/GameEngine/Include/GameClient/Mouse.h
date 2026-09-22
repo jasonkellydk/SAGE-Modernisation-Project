@@ -57,6 +57,7 @@
 // FORWARD REFERENCES /////////////////////////////////////////////////////////
 
 enum GameMode CPP_11(: Int);
+import engine.platform.time;
 
 // TYPE DEFINES ///////////////////////////////////////////////////////////////
 
@@ -268,7 +269,9 @@ public:
 public:
 
 	Mouse();
+	explicit Mouse(engine::platform::IClockService& clock);
 	virtual ~Mouse() override;
+	engine::platform::IClockService* m_clock{};
 
 	// you may need to extend these for your device
 	virtual void parseIni();	///< parse ini settings associated with mouse (do this before init()).
@@ -363,6 +366,8 @@ public:
 
 
 protected:
+	Mouse(engine::platform::IClockService* clock);
+	UnsignedInt currentMilliseconds() const;
 
 	Bool canCapture() const; ///< true if the mouse can be captured
 	void unblockCapture(CursorCaptureBlockReason reason); // unset a reason to block mouse capture
@@ -439,6 +444,10 @@ protected:
 // Mouse that does nothing. Used for Headless Mode.
 class MouseDummy : public Mouse
 {
+public:
+	using Mouse::Mouse;
+
+private:
 	virtual void parseIni() override {}
 	virtual void update() override {}
 	virtual void initCursorResources() override {}

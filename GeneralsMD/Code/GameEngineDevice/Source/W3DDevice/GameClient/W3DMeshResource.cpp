@@ -22,6 +22,7 @@ import Graphics.Frame.RenderSettings;
 #include "W3DDevice/GameClient/W3DTextureHandle.h"
 #include "WWMath/vp.h"
 #include "W3DDevice/GameClient/W3DCamera.h"
+import engine.debug;
 
 
 
@@ -101,8 +102,8 @@ void W3DMeshResource::Reset(int polycount,int vertcount,int passcount)
 
 void W3DMeshResource::Replace_Texture(W3DTextureHandle* texture,W3DTextureHandle* new_texture)
 {
-	WWASSERT(texture);
-	WWASSERT(new_texture);
+	engine::debug::assert_condition((texture), "texture", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((new_texture), "new_texture", __FILE__, __LINE__, "assertion failed");
 	for (int stage=0;stage<MaterialDescription::MAX_TEX_STAGES;++stage) {
 		for (int pass=0;pass<Get_Pass_Count();++pass) {
 			if (Has_Texture_Array(pass,stage)) {
@@ -123,8 +124,8 @@ void W3DMeshResource::Replace_Texture(W3DTextureHandle* texture,W3DTextureHandle
 
 void W3DMeshResource::Replace_VertexMaterial(Graphics::MeshMaterial* vmat,const std::shared_ptr<Graphics::MeshMaterial>& new_vmat)
 {
-	WWASSERT(vmat);
-	WWASSERT(new_vmat);
+	engine::debug::assert_condition((vmat), "vmat", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((new_vmat != nullptr), "new_vmat != nullptr", __FILE__, __LINE__, "assertion failed");
 
 	for (int pass=0;pass<Get_Pass_Count();++pass) {
 		if (Has_Material_Array(pass)) {

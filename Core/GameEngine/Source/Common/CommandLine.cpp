@@ -24,12 +24,13 @@
 
 
 #include "PreRTS.h"
+import engine.debug;
 import Graphics.Frame.RenderSettings;
 
 #include "Common/ArchiveFileSystem.h"
 #include "Common/CommandLine.h"
 #include "Common/CRCDebug.h"
-#include "Common/Debug.h"
+
 #include "Common/LocalFileSystem.h"
 #include "Common/Recorder.h"
 #include "Common/version.h"
@@ -81,7 +82,7 @@ static void ConvertShortMapPathToLongMapPath(AsciiString &mapName)
 
 	if ((path.find('\\') == nullptr) && (path.find('/') == nullptr))
 	{
-		DEBUG_CRASH(("Invalid map name %s", mapName.str()));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Invalid map name %s", mapName.str());
 		return;
 	}
 	path.nextToken(&token, "\\/");
@@ -94,7 +95,7 @@ static void ConvertShortMapPathToLongMapPath(AsciiString &mapName)
 
 	if (!token.endsWithNoCase(".map"))
 	{
-		DEBUG_CRASH(("Invalid map name %s", mapName.str()));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Invalid map name %s", mapName.str());
 	}
 	// remove the .map from the end.
 	token.truncateBy(4);
@@ -111,7 +112,7 @@ static void ConvertShortMapPathToLongMapPath(AsciiString &mapName)
 //=============================================================================
 Int parseNoLogOrCrash(char *args[], int)
 {
-	DEBUG_CRASH(("-NoLogOrCrash not supported in this build"));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "-NoLogOrCrash not supported in this build");
 	return 1;
 }
 
@@ -355,7 +356,7 @@ Int parseNoDraw(char *args[], int argc)
 Int parseLogToConsole(char *args[], int)
 {
 #ifdef ALLOW_DEBUG_UTILS
-	DebugSetFlags(DebugGetFlags() | DEBUG_FLAG_LOG_TO_CONSOLE);
+	
 #endif
 	return 1;
 }
@@ -423,7 +424,7 @@ Int parseHeadless(char *args[], int num)
 	TheWritableGlobalData->m_playSizzle = FALSE;
 
 	// Keep assert handling in headless mode after TheGlobalData has been destroyed.
-	DebugSetHeadlessMode(true);
+	engine::debug::set_headless(true);
 
 	return 1;
 }
@@ -985,17 +986,6 @@ Int parseBenchmark(char *args[], int num)
 #endif
 
 #if defined(RTS_DEBUG)
-#ifdef DUMP_PERF_STATS
-Int parseStats(char *args[], int num)
-{
-	if (num > 1)
-	{
-		TheWritableGlobalData->m_dumpStatsAtInterval = TRUE;
-		TheWritableGlobalData->m_statsInterval  = atoi(args[1]);
-	}
-	return 2;
-}
-#endif
 #endif
 
 #ifdef DEBUG_CRASHING
@@ -1066,11 +1056,11 @@ Int parseMod(char *args[], Int num)
 		{
 			modPath.format("%s%s", TheGlobalData->getPath_UserData().str(), args[1]);
 		}
-		DEBUG_LOG(("Looking for mod '%s'", modPath.str()));
+		engine::debug::log_info("Looking for mod '%s'", modPath.str());
 
 		if (!TheLocalFileSystem->doesFileExist(modPath.str()))
 		{
-			DEBUG_LOG(("Mod does not exist."));
+			engine::debug::log_info("Mod does not exist.");
 			return 2; // no such file/dir.
 		}
 
@@ -1078,7 +1068,7 @@ Int parseMod(char *args[], Int num)
 		struct _stat statBuf;
 		if (_stat(modPath.str(), &statBuf) != 0)
 		{
-			DEBUG_LOG(("Could not _stat() mod."));
+			engine::debug::log_info("Could not _stat() mod.");
 			return 2; // could not stat the file/dir.
 		}
 
@@ -1086,12 +1076,12 @@ Int parseMod(char *args[], Int num)
 		{
 			if (!modPath.endsWith("\\") && !modPath.endsWith("/"))
 				modPath.concat('\\');
-			DEBUG_LOG(("Mod dir is '%s'.", modPath.str()));
+			engine::debug::log_info("Mod dir is '%s'.", modPath.str());
 			TheWritableGlobalData->m_modDir = modPath;
 		}
 		else
 		{
-			DEBUG_LOG(("Mod file is '%s'.", modPath.str()));
+			engine::debug::log_info("Mod file is '%s'.", modPath.str());
 			TheWritableGlobalData->m_modBIG = modPath;
 		}
 
@@ -1099,42 +1089,6 @@ Int parseMod(char *args[], Int num)
 	}
 	return 1;
 }
-
-#ifdef DEBUG_LOGGING
-Int parseSetDebugLevel(char *args[], int num)
-{
-	if (num > 1)
-	{
-		AsciiString val = args[1];
-		for (Int i=0; i<DEBUG_LEVEL_MAX; ++i)
-		{
-			if (val == TheDebugLevels[i])
-			{
-				DebugLevelMask |= 1<<i;
-				break;
-			}
-		}
-	}
-	return 2;
-}
-
-Int parseClearDebugLevel(char *args[], int num)
-{
-	if (num > 1)
-	{
-		AsciiString val = args[1];
-		for (Int i=0; i<DEBUG_LEVEL_MAX; ++i)
-		{
-			if (val == TheDebugLevels[i])
-			{
-				DebugLevelMask &= ~(1<<i);
-				break;
-			}
-		}
-	}
-	return 2;
-}
-#endif
 
 // Initial Params are parsed before Windows Creation.
 // Note that except for TheGlobalData, no other global objects exist yet when these are parsed.
@@ -1194,9 +1148,6 @@ static CommandLineParam paramsForEngineInit[] =
 	{ "-noLogOrCrash", parseNoLogOrCrash },
 	{ "-FPUPreserve", parseFPUPreserve },
 	{ "-benchmark", parseBenchmark },
-#ifdef DUMP_PERF_STATS
-	{ "-stats", parseStats },
-#endif
 	{ "-saveStats", parseSaveStats },
 	{ "-localMOTD", parseLocalMOTD },
 	{ "-UseCSF", parseUseCSF },
@@ -1206,7 +1157,6 @@ static CommandLineParam paramsForEngineInit[] =
 	// TheSuperHackers @info helmutbuhler 04/09/2025
 	// The following arguments are useful for CRC debugging.
 	// Note that you need to have a debug or internal configuration build in order to use this.
-	// Release configuration also works if RELEASE_DEBUG_LOGGING is defined in Debug.h
 	// Also note that all players need to play in the same configuration, otherwise mismatch will
 	// occur almost immediately.
 	// Try this if you want to play the game and have useful debug information in case mismatch occurs:
@@ -1308,10 +1258,6 @@ static CommandLineParam paramsForEngineInit[] =
 	{ "-extraLogging", parseExtraLogging },
 #endif
 
-#ifdef DEBUG_LOGGING
-	{ "-setDebugLevel", parseSetDebugLevel },
-	{ "-clearDebugLevel", parseClearDebugLevel },
-#endif
 
 #ifdef DEBUG_CRASHING
 	{ "-ignoreAsserts", parseIgnoreAsserts },
@@ -1399,18 +1345,14 @@ static void parseCommandLine(const CommandLineParam* params, int numParams)
 
 	int arg = 1;
 
-#ifdef DEBUG_LOGGING
-	DEBUG_LOG(("Command-line args:"));
-	int debugFlags = DebugGetFlags();
-	DebugSetFlags(debugFlags & ~DEBUG_FLAG_PREPEND_TIME); // turn off timestamps
+	engine::debug::log_info("Command-line args:");
 	for (arg=1; arg<argc; arg++)
 	{
-		DEBUG_LOG((" %s", argv[arg]));
+		engine::debug::log_info(" %s", argv[arg]);
 	}
-	DEBUG_LOG_RAW(("\n"));
-	DebugSetFlags(debugFlags); // turn timestamps back on iff they were on before
+	engine::debug::log_info("\n");
+	
 	arg = 1;
-#endif // DEBUG_LOGGING
 
 	// To parse command-line parameters, we loop through a table holding arguments
 	// and functions to handle them.  Comparisons can be case-(in)sensitive, and
@@ -1464,10 +1406,8 @@ void CommandLine::parseCommandLineForEngineInit()
 {
 	createGlobalData();
 
-	DEBUG_ASSERTCRASH(TheGlobalData->m_commandLineData.m_hasParsedCommandLineForStartup,
-		("parseCommandLineForStartup is expected to be called before parseCommandLineForEngineInit\n"));
-	DEBUG_ASSERTCRASH(!TheGlobalData->m_commandLineData.m_hasParsedCommandLineForEngineInit,
-		("parseCommandLineForEngineInit is expected to be called once only\n"));
+	engine::debug::invariant((TheGlobalData->m_commandLineData.m_hasParsedCommandLineForStartup), "TheGlobalData->m_commandLineData.m_hasParsedCommandLineForStartup", __FILE__, __LINE__, "parseCommandLineForStartup is expected to be called before parseCommandLineForEngineInit\n");
+	engine::debug::invariant((!TheGlobalData->m_commandLineData.m_hasParsedCommandLineForEngineInit), "!TheGlobalData->m_commandLineData.m_hasParsedCommandLineForEngineInit", __FILE__, __LINE__, "parseCommandLineForEngineInit is expected to be called once only\n");
 	TheWritableGlobalData->m_commandLineData.m_hasParsedCommandLineForEngineInit = true;
 
 	parseCommandLine(paramsForEngineInit, ARRAY_SIZE(paramsForEngineInit));

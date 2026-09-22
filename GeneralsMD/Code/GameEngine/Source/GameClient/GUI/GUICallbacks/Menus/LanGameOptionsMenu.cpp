@@ -27,7 +27,8 @@
 // Author: Chris Huybregts, October 2001
 // Description: Lan Game Options Menu
 ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 
 #include "Common/PlayerTemplate.h"
@@ -210,7 +211,7 @@ static void playerTooltip(GameWindow *window,
 	LANPlayer *player = slot->getUser();
 	if (!player)
 	{
-		DEBUG_ASSERTCRASH(TheLAN->GetMyGame()->getIP(i) == 0, ("No player info in listbox!"));
+		engine::debug::invariant((TheLAN->GetMyGame()->getIP(i) == 0), "TheLAN->GetMyGame()->getIP(i) == 0", __FILE__, __LINE__, "No player info in listbox!");
 		TheMouse->setCursorTooltip( UnicodeString::TheEmptyString );
 		return;
 	}
@@ -685,32 +686,32 @@ void InitLanGameGadgets()
 
 	// Initialize the pointers to our gadgets
 	parentLanGameOptions = TheWindowManager->winGetWindowFromId( nullptr, parentLanGameOptionsID );
-	DEBUG_ASSERTCRASH(parentLanGameOptions, ("Could not find the parentLanGameOptions"));
+	engine::debug::invariant((parentLanGameOptions), "parentLanGameOptions", __FILE__, __LINE__, "Could not find the parentLanGameOptions");
 	buttonChat = TheWindowManager->winGetWindowFromId( parentLanGameOptions,buttonChatID  );
-	DEBUG_ASSERTCRASH(buttonChat, ("Could not find the buttonChat"));
+	engine::debug::invariant((buttonChat), "buttonChat", __FILE__, __LINE__, "Could not find the buttonChat");
 	buttonSelectMap = TheWindowManager->winGetWindowFromId( parentLanGameOptions,buttonSelectMapID  );
-	DEBUG_ASSERTCRASH(buttonSelectMap, ("Could not find the buttonSelectMap"));
+	engine::debug::invariant((buttonSelectMap), "buttonSelectMap", __FILE__, __LINE__, "Could not find the buttonSelectMap");
 	buttonStart = TheWindowManager->winGetWindowFromId( parentLanGameOptions,buttonStartID  );
-	DEBUG_ASSERTCRASH(buttonStart, ("Could not find the buttonStart"));
+	engine::debug::invariant((buttonStart), "buttonStart", __FILE__, __LINE__, "Could not find the buttonStart");
 	buttonBack = TheWindowManager->winGetWindowFromId( parentLanGameOptions,  buttonBackID);
-	DEBUG_ASSERTCRASH(buttonBack, ("Could not find the buttonBack"));
+	engine::debug::invariant((buttonBack), "buttonBack", __FILE__, __LINE__, "Could not find the buttonBack");
 	listboxChatWindowLanGame = TheWindowManager->winGetWindowFromId( parentLanGameOptions, listboxChatWindowLanGameID );
-	DEBUG_ASSERTCRASH(listboxChatWindowLanGame, ("Could not find the listboxChatWindowLanGame"));
+	engine::debug::invariant((listboxChatWindowLanGame), "listboxChatWindowLanGame", __FILE__, __LINE__, "Could not find the listboxChatWindowLanGame");
 	textEntryChat = TheWindowManager->winGetWindowFromId( parentLanGameOptions, textEntryChatID );
-	DEBUG_ASSERTCRASH(textEntryChat, ("Could not find the textEntryChat"));
+	engine::debug::invariant((textEntryChat), "textEntryChat", __FILE__, __LINE__, "Could not find the textEntryChat");
 	textEntryMapDisplay = TheWindowManager->winGetWindowFromId( parentLanGameOptions, textEntryMapDisplayID );
-	DEBUG_ASSERTCRASH(textEntryMapDisplay, ("Could not find the textEntryMapDisplay"));
+	engine::debug::invariant((textEntryMapDisplay), "textEntryMapDisplay", __FILE__, __LINE__, "Could not find the textEntryMapDisplay");
   checkboxLimitSuperweapons = TheWindowManager->winGetWindowFromId( parentLanGameOptions, checkboxLimitSuperweaponsID );
-  DEBUG_ASSERTCRASH(checkboxLimitSuperweapons, ("Could not find the checkboxLimitSuperweapons"));
+  engine::debug::invariant((checkboxLimitSuperweapons), "checkboxLimitSuperweapons", __FILE__, __LINE__, "Could not find the checkboxLimitSuperweapons");
   comboBoxStartingCash = TheWindowManager->winGetWindowFromId( parentLanGameOptions, comboBoxStartingCashID );
-  DEBUG_ASSERTCRASH(comboBoxStartingCash, ("Could not find the comboBoxStartingCash"));
+  engine::debug::invariant((comboBoxStartingCash), "comboBoxStartingCash", __FILE__, __LINE__, "Could not find the comboBoxStartingCash");
 	PopulateStartingCashComboBox(comboBoxStartingCash, TheLAN->GetMyGame());
 
 	windowMap = TheWindowManager->winGetWindowFromId( parentLanGameOptions,windowMapID  );
-	DEBUG_ASSERTCRASH(windowMap, ("Could not find the LanGameOptionsMenu.wnd:MapWindow" ));
+	engine::debug::invariant((windowMap), "windowMap", __FILE__, __LINE__, "Could not find the LanGameOptionsMenu.wnd:MapWindow" );
 
 	Int localSlotNum = TheLAN->GetMyGame()->getLocalSlotNum();
-	DEBUG_ASSERTCRASH(localSlotNum >= 0, ("Bad slot number!"));
+	engine::debug::invariant((localSlotNum >= 0), "localSlotNum >= 0", __FILE__, __LINE__, "Bad slot number!");
 
 	//Tooltip function is being set for techBuildings, and supplyDocks
 	windowMap->winSetTooltipFunc(MapSelectorTooltip);
@@ -743,14 +744,14 @@ void InitLanGameGadgets()
 		tmpString.format("LanGameOptionsMenu.wnd:ComboBoxColor%d", i);
 		comboBoxColorID[i] = TheNameKeyGenerator->nameToKey( tmpString );
 		comboBoxColor[i] = TheWindowManager->winGetWindowFromId( parentLanGameOptions, comboBoxColorID[i] );
-		DEBUG_ASSERTCRASH(comboBoxColor[i], ("Could not find the comboBoxColor[%d]",i ));
+		engine::debug::invariant((comboBoxColor[i]), "comboBoxColor[i]", __FILE__, __LINE__, "Could not find the comboBoxColor[%d]",i );
 		PopulateColorComboBox(i, comboBoxColor, TheLAN->GetMyGame());
 		GadgetComboBoxSetSelectedPos(comboBoxColor[i], 0);
 
 		tmpString.format("LanGameOptionsMenu.wnd:ComboBoxPlayerTemplate%d", i);
 		comboBoxPlayerTemplateID[i] = TheNameKeyGenerator->nameToKey( tmpString );
 		comboBoxPlayerTemplate[i] = TheWindowManager->winGetWindowFromId( parentLanGameOptions, comboBoxPlayerTemplateID[i] );
-		DEBUG_ASSERTCRASH(comboBoxPlayerTemplate[i], ("Could not find the comboBoxPlayerTemplate[%d]",i ));
+		engine::debug::invariant((comboBoxPlayerTemplate[i]), "comboBoxPlayerTemplate[i]", __FILE__, __LINE__, "Could not find the comboBoxPlayerTemplate[%d]",i );
 		PopulatePlayerTemplateComboBox(i, comboBoxPlayerTemplate, TheLAN->GetMyGame(), TRUE);
 
 		// add tooltips to the player template combobox and listbox
@@ -760,25 +761,25 @@ void InitLanGameGadgets()
 		tmpString.format("LanGameOptionsMenu.wnd:ComboBoxTeam%d", i);
 		comboBoxTeamID[i] = TheNameKeyGenerator->nameToKey( tmpString );
 		comboBoxTeam[i] = TheWindowManager->winGetWindowFromId( parentLanGameOptions, comboBoxTeamID[i] );
-		DEBUG_ASSERTCRASH(comboBoxTeam[i], ("Could not find the comboBoxTeam[%d]",i ));
+		engine::debug::invariant((comboBoxTeam[i]), "comboBoxTeam[i]", __FILE__, __LINE__, "Could not find the comboBoxTeam[%d]",i );
 		PopulateTeamComboBox(i, comboBoxTeam, TheLAN->GetMyGame());
 
 		tmpString.clear();
 		tmpString.format("LanGameOptionsMenu.wnd:ButtonAccept%d", i);
 		buttonAcceptID[i] = TheNameKeyGenerator->nameToKey( tmpString );
 		buttonAccept[i] = TheWindowManager->winGetWindowFromId( parentLanGameOptions, buttonAcceptID[i] );
-		DEBUG_ASSERTCRASH(buttonAccept[i], ("Could not find the buttonAccept[%d]",i ));
+		engine::debug::invariant((buttonAccept[i]), "buttonAccept[i]", __FILE__, __LINE__, "Could not find the buttonAccept[%d]",i );
 		buttonAccept[i]->winSetTooltipFunc(gameAcceptTooltip);
 //
 //		tmpString.format("LanGameOptionsMenu.wnd:ButtonStartPosition%d", i);
 //		buttonStartPositionID[i] = TheNameKeyGenerator->nameToKey( tmpString );
 //		buttonStartPosition[i] = TheWindowManager->winGetWindowFromId( parentLanGameOptions, buttonStartPositionID[i] );
-//		DEBUG_ASSERTCRASH(buttonStartPosition[i], ("Could not find the ButtonStartPosition[%d]",i ));
+//		engine::debug::invariant((buttonStartPosition[i]), "buttonStartPosition[i]", __FILE__, __LINE__, "Could not find the ButtonStartPosition[%d]",i );
 
 		tmpString.format("LanGameOptionsMenu.wnd:ButtonMapStartPosition%d", i);
 		buttonMapStartPositionID[i] = TheNameKeyGenerator->nameToKey( tmpString );
 		buttonMapStartPosition[i] = TheWindowManager->winGetWindowFromId( parentLanGameOptions, buttonMapStartPositionID[i] );
-		DEBUG_ASSERTCRASH(buttonMapStartPosition[i], ("Could not find the ButtonMapStartPosition[%d]",i ));
+		engine::debug::invariant((buttonMapStartPosition[i]), "buttonMapStartPosition[i]", __FILE__, __LINE__, "Could not find the ButtonMapStartPosition[%d]",i );
 
 		if(i !=0 && buttonAccept[i])
 			buttonAccept[i]->winHide(TRUE);
@@ -826,7 +827,7 @@ void LanGameOptionsMenuInit( WindowLayout *layout, void *userData )
 	{
 		// If we init while the game is in progress, we are really returning to the menu
 		// after the game.  So, we pop the menu and go back to the lobby.  Whee!
-		DEBUG_LOG(("Popping to lobby after a game!"));
+		engine::debug::log_info("Popping to lobby after a game!");
 		TheShell->popImmediate();
 		return;
 	}
@@ -882,7 +883,7 @@ void LanGameOptionsMenuInit( WindowLayout *layout, void *userData )
 	else
 	{
 
-		//DEBUG_LOG(("LanGameOptionsMenuInit(): map is %s", TheLAN->GetMyGame()->getMap().str()));
+		//engine::debug::log_info("LanGameOptionsMenuInit(): map is %s", TheLAN->GetMyGame()->getMap().str());
 		buttonStart->winSetText(TheGameText->fetch("GUI:Accept"));
 		buttonSelectMap->winEnable( FALSE );
     checkboxLimitSuperweapons->winEnable( FALSE ); // Can look but only host can touch
@@ -975,7 +976,7 @@ void updateGameOptions()
       }
     }
 
-    DEBUG_ASSERTCRASH( index < itemCount, ("Could not find new starting cash amount %d in list", theGame->getStartingCash().countMoney() ) );
+    engine::debug::invariant((index < itemCount), "index < itemCount", __FILE__, __LINE__, "Could not find new starting cash amount %d in list", theGame->getStartingCash().countMoney() );
 	}
 }
 

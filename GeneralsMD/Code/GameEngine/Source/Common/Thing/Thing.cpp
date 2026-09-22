@@ -32,9 +32,11 @@
 //						"Things"
 //
 //-----------------------------------------------------------------------------
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.profiling;
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
-#include "Common/PerfTimer.h"
+
 #include "Common/Thing.h"
 #include "Common/ThingTemplate.h"
 #include "Common/ThingFactory.h"
@@ -60,7 +62,7 @@ Thing::Thing( const ThingTemplate *thingTemplate )
 	{
 
 		// cannot create thing without template
-		DEBUG_CRASH(( "no template" ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "no template" );
 		return;
 
 	}
@@ -88,9 +90,7 @@ Thing::~Thing()
 {
 }
 
-//DECLARE_PERF_TIMER(ThingMatrixStuff)
-
-//=============================================================================
+////=============================================================================
 const ThingTemplate *Thing::getTemplate() const
 {
 	return m_template;
@@ -105,7 +105,7 @@ Bool Thing::isPositioned() const
 //=============================================================================
 const Coord3D* Thing::getUnitDirectionVector2D() const
 {
-	//USE_PERF_TIMER(ThingMatrixStuff)
+	//engine::profiling::Scope profile_scope_106("ThingMatrixStuff")
 	if (!(m_cacheFlags & VALID_DIRVECTOR))
 	{
 		Real angle = getOrientation();
@@ -138,7 +138,7 @@ void Thing::getUnitDirectionVector3D(Coord3D& dir) const
 // the nice thing about this is that we don't have to recalc out cached terrain stuff.
 void Thing::setPositionZ( Real z )
 {
-	//USE_PERF_TIMER(ThingMatrixStuff)
+	//engine::profiling::Scope profile_scope_139("ThingMatrixStuff")
 	if( !m_template->isKindOf( KINDOF_STICK_TO_TERRAIN_SLOPE) )
 	{
 		Real oldAngle = m_cachedAngle;
@@ -168,20 +168,20 @@ void Thing::setPositionZ( Real z )
 		TheTerrainLogic->alignOnTerrain(getOrientation(), pos, stickToGround, mtx );
 		setTransformMatrix(&mtx);
 	}
-	DEBUG_ASSERTCRASH(!(_isnan(getPosition()->x) || _isnan(getPosition()->y) || _isnan(getPosition()->z)), ("Drawable/Object position NAN! '%s'", m_template->getName().str() ));
+	engine::debug::invariant((!(_isnan(getPosition()->x) || _isnan(getPosition()->y) || _isnan(getPosition()->z))), "!(_isnan(getPosition()->x) || _isnan(getPosition()->y) || _isnan(getPosition()->z))", __FILE__, __LINE__, "Drawable/Object position NAN! '%s'", m_template->getName().str() );
 }
 
 //=============================================================================
 void Thing::setPosition( const Coord3D *pos )
 {
-	//USE_PERF_TIMER(ThingMatrixStuff)
+	//engine::profiling::Scope profile_scope_175("ThingMatrixStuff")
 	if( !m_template->isKindOf( KINDOF_STICK_TO_TERRAIN_SLOPE) )
 	{
 		Real oldAngle = m_cachedAngle;
 		Coord3D oldPos = m_cachedPos;
 		Matrix3D oldMtx = m_transform;
 
-		//DEBUG_ASSERTCRASH(!(_isnan(pos->x) || _isnan(pos->y) || _isnan(pos->z)), ("Drawable/Object position NAN! '%s'", m_template->getName().str() ));
+		//engine::debug::invariant((!(_isnan(pos->x) || _isnan(pos->y) || _isnan(pos->z))), "!(_isnan(pos->x) || _isnan(pos->y) || _isnan(pos->z))", __FILE__, __LINE__, "Drawable/Object position NAN! '%s'", m_template->getName().str() );
 		m_transform.Set_X_Translation( pos->x );
 		m_transform.Set_Y_Translation( pos->y );
 		m_transform.Set_Z_Translation( pos->z );
@@ -197,13 +197,13 @@ void Thing::setPosition( const Coord3D *pos )
 		TheTerrainLogic->alignOnTerrain(getOrientation(), *pos, stickToGround, mtx );
 		setTransformMatrix(&mtx);
 	}
-	DEBUG_ASSERTCRASH(!(_isnan(getPosition()->x) || _isnan(getPosition()->y) || _isnan(getPosition()->z)), ("Drawable/Object position NAN! '%s'", m_template->getName().str() ));
+	engine::debug::invariant((!(_isnan(getPosition()->x) || _isnan(getPosition()->y) || _isnan(getPosition()->z))), "!(_isnan(getPosition()->x) || _isnan(getPosition()->y) || _isnan(getPosition()->z))", __FILE__, __LINE__, "Drawable/Object position NAN! '%s'", m_template->getName().str() );
 }
 
 //=============================================================================
 void Thing::setOrientation( Real angle )
 {
-	//USE_PERF_TIMER(ThingMatrixStuff)
+	//engine::profiling::Scope profile_scope_204("ThingMatrixStuff")
 	Coord3D u, x, y, z, pos;
 
 	// setOrientation always forces us straight up in the Z axis,
@@ -241,13 +241,13 @@ void Thing::setOrientation( Real angle )
 											x.z, y.z, z.z, pos.z );
 	}
 
-	//DEBUG_ASSERTCRASH(-PI <= angle && angle <= PI, ("Please pass only normalized (-PI..PI) angles to setOrientation (%f).", angle));
+	//engine::debug::invariant((-PI <= angle && angle <= PI), "-PI <= angle && angle <= PI", __FILE__, __LINE__, "Please pass only normalized (-PI..PI) angles to setOrientation (%f).", angle);
 	m_cachedAngle = normalizeAngle(angle);
 	m_cachedPos = pos;
 	m_cacheFlags &= ~VALID_DIRVECTOR;	// but don't clear the altitude flags.
 
 	reactToTransformChange(&oldMtx, &oldPos, oldAngle);
-	DEBUG_ASSERTCRASH(!(_isnan(getPosition()->x) || _isnan(getPosition()->y) || _isnan(getPosition()->z)), ("Drawable/Object position NAN! '%s'", m_template->getName().str() ));
+	engine::debug::invariant((!(_isnan(getPosition()->x) || _isnan(getPosition()->y) || _isnan(getPosition()->z))), "!(_isnan(getPosition()->x) || _isnan(getPosition()->y) || _isnan(getPosition()->z))", __FILE__, __LINE__, "Drawable/Object position NAN! '%s'", m_template->getName().str() );
 }
 
 //=============================================================================
@@ -255,7 +255,7 @@ void Thing::setOrientation( Real angle )
 //=============================================================================
 void Thing::setTransformMatrix( const Matrix3D *mx )
 {
-	//USE_PERF_TIMER(ThingMatrixStuff)
+	//engine::profiling::Scope profile_scope_256("ThingMatrixStuff")
 	Real oldAngle = m_cachedAngle;
 	Coord3D oldPos = m_cachedPos;
 	Matrix3D oldMtx = m_transform;
@@ -268,7 +268,7 @@ void Thing::setTransformMatrix( const Matrix3D *mx )
 	m_cacheFlags = 0;
 
 	reactToTransformChange(&oldMtx, &oldPos, oldAngle);
-	DEBUG_ASSERTCRASH(!(_isnan(getPosition()->x) || _isnan(getPosition()->y) || _isnan(getPosition()->z)), ("Drawable/Object position NAN! '%s'", m_template->getName().str() ));
+	engine::debug::invariant((!(_isnan(getPosition()->x) || _isnan(getPosition()->y) || _isnan(getPosition()->z))), "!(_isnan(getPosition()->x) || _isnan(getPosition()->y) || _isnan(getPosition()->z))", __FILE__, __LINE__, "Drawable/Object position NAN! '%s'", m_template->getName().str() );
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -292,7 +292,7 @@ Bool Thing::isAnyKindOf( const KindOfMaskType& anyKindOf ) const
 // ------------------------------------------------------------------------------------------------
 Real Thing::calculateHeightAboveTerrain() const
 {
-	//USE_PERF_TIMER(ThingMatrixStuff)
+	//engine::profiling::Scope profile_scope_293("ThingMatrixStuff")
 	const Coord3D* pos = getPosition();
 	Real terrainZ = TheTerrainLogic->getGroundHeight( pos->x, pos->y );
 	Real myZ = pos->z;
@@ -313,7 +313,7 @@ Real Thing::getHeightAboveTerrain() const
 //-------------------------------------------------------------------------------------------------
 Real Thing::getHeightAboveTerrainOrWater() const
 {
-	//USE_PERF_TIMER(ThingMatrixStuff)
+	//engine::profiling::Scope profile_scope_314("ThingMatrixStuff")
 	if (!(m_cacheFlags & VALID_ALTITUDE_SEALEVEL))
 	{
 		const Coord3D* pos = getPosition();

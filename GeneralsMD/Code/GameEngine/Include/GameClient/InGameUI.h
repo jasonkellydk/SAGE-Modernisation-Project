@@ -30,6 +30,8 @@
 
 #pragma once
 
+import engine.platform.time;
+
 #include "Common/GameCommon.h"
 #include "Common/GameType.h"
 #include "Common/MessageStream.h"		// for GameMessageTranslator
@@ -366,8 +368,9 @@ public:  // ********************************************************************
 		NUM_ACTIONTYPES
 	};
 
-	InGameUI();
+	explicit InGameUI(engine::platform::IClockService& clock);
 	virtual ~InGameUI() override;
+	engine::platform::IClockService& m_clock;
 
 	// Inherited from subsystem interface -----------------------------------------------------------
 	virtual	void init() override;															///< Initialize the in-game user interface

@@ -45,7 +45,8 @@
 //         Includes
 //----------------------------------------------------------------------------
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "GameClient/DebugDisplay.h"
 
@@ -211,7 +212,7 @@ void	DebugDisplay::printf( const Char *format, ...)
 		return;
 	}
 
-	DEBUG_ASSERTCRASH( result < sizeof(text), ("text overflow in DebugDisplay::printf() - string too long"));
+	engine::debug::invariant((result < sizeof(text)), "result < sizeof(text)", __FILE__, __LINE__, "text overflow in DebugDisplay::printf() - string too long");
 
 	// find every line and print it
 	Char *ptr = text;

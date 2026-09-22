@@ -21,7 +21,6 @@ option(RTS_MEMORYPOOL_DEBUG_CHECK_BLOCK_OWNERSHIP "Enables debug to verify that 
 option(RTS_MEMORYPOOL_DEBUG_INTENSE_DMA_BOOKKEEPING "Prints statistics for memory usage of Memory Pools." OFF)
 
 # Memory dump options
-option(RTS_CRASHDUMP_ENABLE "Enables writing crash dumps on unhandled exceptions or release crash failures." ON)
 
 # Game Memory features
 add_feature_info(GameMemoryEnable RTS_GAMEMEMORY_ENABLE "Build with the original game memory implementation")
@@ -41,7 +40,6 @@ add_feature_info(MemoryPoolDebugCheckBlockOwnership RTS_MEMORYPOOL_DEBUG_CHECK_B
 add_feature_info(MemoryPoolDebugIntenseDmaBookkeeping RTS_MEMORYPOOL_DEBUG_INTENSE_DMA_BOOKKEEPING "Build with Memory Pool intense DMA bookkeeping")
 
 # Memory dump features
-add_feature_info(CrashDumpEnable RTS_CRASHDUMP_ENABLE "Build with Crash Dumps")
 
 # Game Memory features
 if(NOT RTS_GAMEMEMORY_ENABLE)
@@ -91,8 +89,4 @@ else()
     if(RTS_MEMORYPOOL_DEBUG_INTENSE_DMA_BOOKKEEPING)
         target_compile_definitions(core_config INTERFACE INTENSE_DMA_BOOKKEEPING=1)
     endif()
-endif()
-
-if(RTS_CRASHDUMP_ENABLE)
-    target_compile_definitions(core_config INTERFACE RTS_ENABLE_CRASHDUMP=1)
 endif()

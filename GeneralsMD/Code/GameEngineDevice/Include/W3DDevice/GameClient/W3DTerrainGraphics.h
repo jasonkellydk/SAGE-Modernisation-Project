@@ -3,6 +3,7 @@
 #include "W3DDevice/GameClient/BaseHeightMap.h"
 #include <array>
 #include <vector>
+import engine.platform.time;
 
 import Graphics.Scene.Terrain.Renderer;
 
@@ -11,7 +12,7 @@ import Graphics.Scene.Terrain.Renderer;
 class W3DTerrainGraphics : public BaseHeightMapRenderObjClass
 {
 public:
-    W3DTerrainGraphics();
+    explicit W3DTerrainGraphics(engine::platform::IClockService& clock);
     ~W3DTerrainGraphics() override;
     void Render(W3DRenderContext &info) override;
     Bool collectShadowCasters() override;

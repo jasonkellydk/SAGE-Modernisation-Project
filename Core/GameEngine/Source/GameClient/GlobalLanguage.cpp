@@ -51,6 +51,7 @@
 // USER INCLUDES //////////////////////////////////////////////////////////////
 //-----------------------------------------------------------------------------
 #include "PreRTS.h"
+import engine.debug;
 
 #include "Common/AddonCompat.h"
 #include "Common/INI.h"
@@ -113,7 +114,7 @@ void INI::parseLanguageDefinition( INI *ini )
 {
 	if( !TheGlobalLanguageData )
 	{
-		DEBUG_ASSERTCRASH(TheGlobalLanguageData, ("INI::parseLanguageDefinition - TheGlobalLanguage Data is not around, please create it before trying to parse the ini file."));
+		engine::debug::invariant((TheGlobalLanguageData), "TheGlobalLanguageData", __FILE__, __LINE__, "INI::parseLanguageDefinition - TheGlobalLanguage Data is not around, please create it before trying to parse the ini file.");
 		return;
 	}
 
@@ -162,7 +163,7 @@ void GlobalLanguage::init()
 		AsciiString font = *it;
 		if(AddFontResource(font.str()) == 0)
 		{
-			DEBUG_CRASH(("GlobalLanguage::init Failed to add font %s", font.str()));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "GlobalLanguage::init Failed to add font %s", font.str());
 		}
 		else
 		{

@@ -29,6 +29,7 @@
 #include "Common/ThingFactory.h"
 #include "Common/ThingSort.h"
 #include "GameLogic/SidesList.h"
+import engine.debug;
 
 static const char* NEUTRAL_NAME_STR = "(neutral)";
 
@@ -145,7 +146,7 @@ BOOL TeamIdentity::OnInitDialog()
 	TheSidesList->findSideInfo(cur_oname, &myPlayerIndex);
 	AsciiString oname_ui = TheSidesList->getSideInfo(myPlayerIndex)->getDict()->getAsciiString(TheKey_playerName);
 	int oindex_in_list = owner->FindStringExact(-1, oname_ui.str());
-	DEBUG_ASSERTCRASH(oindex_in_list >= 0, ("hmm"));
+	engine::debug::invariant((oindex_in_list >= 0), "oindex_in_list >= 0", __FILE__, __LINE__, "hmm");
 	owner->SetCurSel(oindex_in_list);
 
 	CButton *pCheck = (CButton *) GetDlgItem(IDC_AUTO_REINFORCE);

@@ -25,7 +25,8 @@
 // SimpleObjectIterator
 // Implementation of a simple object iterator
 // Author: Steven Johnson, September 2001
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "GameLogic/ObjectIter.h"
 
@@ -72,7 +73,7 @@ SimpleObjectIterator::~SimpleObjectIterator()
 //=============================================================================
 void SimpleObjectIterator::insert(Object *obj, Real numeric)
 {
-	DEBUG_ASSERTCRASH(obj, ("sorry, no nulls allowed here"));
+	engine::debug::invariant((obj), "obj", __FILE__, __LINE__, "sorry, no nulls allowed here");
 
 	Clump *clump = newInstance(Clump)();
 
@@ -119,7 +120,7 @@ void SimpleObjectIterator::makeEmpty()
 		m_firstClump = next;
 		--m_clumpCount;
 	}
-	DEBUG_ASSERTCRASH(m_clumpCount == 0, ("hmm"));
+	engine::debug::invariant((m_clumpCount == 0), "m_clumpCount == 0", __FILE__, __LINE__, "hmm");
 
 	m_firstClump = nullptr;
 	m_curClump = nullptr;
@@ -134,10 +135,10 @@ void SimpleObjectIterator::sort(IterOrderType order)
 
 #ifdef INTENSE_DEBUG
 {
-	DEBUG_LOG(("\n\n---------- BEFORE sort for %d -----------",order));
+	engine::debug::log_info("\n\n---------- BEFORE sort for %d -----------",order);
 	for (Clump *p = m_firstClump; p; p = p->m_nextClump)
 	{
-		DEBUG_LOG(("    obj %08lx numeric %f",p->m_obj,p->m_numeric));
+		engine::debug::log_info("    obj %08lx numeric %f",p->m_obj,p->m_numeric);
 	}
 }
 #endif
@@ -176,38 +177,38 @@ void SimpleObjectIterator::sort(IterOrderType order)
 			Int subCount = sub ? n : 0;
 
 			// merge the two lists.
-			DEBUG_ASSERTCRASH(to_do_count + subCount >= 0, ("uhoh"));
+			engine::debug::invariant((to_do_count + subCount >= 0), "to_do_count + subCount >= 0", __FILE__, __LINE__, "uhoh");
 			while (to_do_count + subCount > 0) {
 
-				DEBUG_ASSERTCRASH(to_do_count + subCount >= 0, ("uhoh"));
+				engine::debug::invariant((to_do_count + subCount >= 0), "to_do_count + subCount >= 0", __FILE__, __LINE__, "uhoh");
 
 				Clump *tmp;
 
 				// bleah, coalesce into more elegant test case
 				if (subCount == 0)
 				{
-					DEBUG_ASSERTCRASH(to_do_count > 0, ("hmm, expected nonzero to_do_count"));
+					engine::debug::invariant((to_do_count > 0), "to_do_count > 0", __FILE__, __LINE__, "hmm, expected nonzero to_do_count");
 					tmp = to_do;
 					to_do = to_do->m_nextClump;
 					--to_do_count;
 				}
 				else if (to_do_count == 0)
 				{
-					DEBUG_ASSERTCRASH(subCount > 0, ("hmm, expected nonzero subCount"));
+					engine::debug::invariant((subCount > 0), "subCount > 0", __FILE__, __LINE__, "hmm, expected nonzero subCount");
 					tmp = sub;
 					sub = sub->m_nextClump;
 					--subCount;
 				}
 				else if ((*cmpProc)(to_do, sub) <= 0.0f)
 				{
-					DEBUG_ASSERTCRASH(to_do_count > 0, ("hmm, expected nonzero to_do_count"));
+					engine::debug::invariant((to_do_count > 0), "to_do_count > 0", __FILE__, __LINE__, "hmm, expected nonzero to_do_count");
 					tmp = to_do;
 					to_do = to_do->m_nextClump;
 					--to_do_count;
 				}
 				else
 				{
-					DEBUG_ASSERTCRASH(subCount > 0, ("hmm, expected nonzero subCount"));
+					engine::debug::invariant((subCount > 0), "subCount > 0", __FILE__, __LINE__, "hmm, expected nonzero subCount");
 					tmp = sub;
 					sub = sub->m_nextClump;
 					--subCount;
@@ -233,10 +234,10 @@ void SimpleObjectIterator::sort(IterOrderType order)
 
 #ifdef INTENSE_DEBUG
 {
-	DEBUG_LOG(("\n\n---------- sort for %d -----------",order));
+	engine::debug::log_info("\n\n---------- sort for %d -----------",order);
 	for (Clump *p = m_firstClump; p; p = p->m_nextClump)
 	{
-		DEBUG_LOG(("    obj %08lx numeric %f",p->m_obj,p->m_numeric));
+		engine::debug::log_info("    obj %08lx numeric %f",p->m_obj,p->m_numeric);
 	}
 }
 #endif

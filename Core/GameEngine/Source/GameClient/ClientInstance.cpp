@@ -16,13 +16,15 @@
 **	along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 #include "PreRTS.h"
+import engine.debug;
 #include "GameClient/ClientInstance.h"
+import engine.platform.application;
 
 #define GENERALS_GUID "685EAFF2-3216-4265-B047-251C5F4B82F3"
 
 namespace rts
 {
-SDL_Mutex *ClientInstance::s_mutexHandle = nullptr;
+bool ClientInstance::s_initialized = false;
 UnsignedInt ClientInstance::s_instanceIndex = 0;
 
 #if defined(RTS_MULTI_INSTANCE)
@@ -31,22 +33,23 @@ Bool ClientInstance::s_isMultiInstance = true;
 Bool ClientInstance::s_isMultiInstance = false;
 #endif
 
-bool ClientInstance::initialize()
+bool ClientInstance::initialize(engine::platform::IApplicationService& application)
 {
 	if (isInitialized())
 	{
 		return true;
 	}
 
-	// SDL mutexes are process-local; multi-instance behavior is delegated to
-	// SDLPlatformWindow's native-instance restoration boundary when required.
-	s_mutexHandle = SDL_CreateMutex();
-	return s_mutexHandle != nullptr;
+	if (!s_isMultiInstance && s_instanceIndex == 0 &&
+		!application.acquire_single_instance(GENERALS_GUID))
+		return false;
+	s_initialized = true;
+	return true;
 }
 
 bool ClientInstance::isInitialized()
 {
-	return s_mutexHandle != nullptr;
+	return s_initialized;
 }
 
 bool ClientInstance::isMultiInstance()
@@ -58,7 +61,7 @@ void ClientInstance::setMultiInstance(bool v)
 {
 	if (isInitialized())
 	{
-		DEBUG_CRASH(("ClientInstance::setMultiInstance(%d) - cannot set multi instance after initialization", (int)v));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "ClientInstance::setMultiInstance(%d) - cannot set multi instance after initialization", (int)v);
 		return;
 	}
 	s_isMultiInstance = v;
@@ -68,7 +71,7 @@ void ClientInstance::skipPrimaryInstance()
 {
 	if (isInitialized())
 	{
-		DEBUG_CRASH(("ClientInstance::skipPrimaryInstance() - cannot skip primary instance after initialization"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "ClientInstance::skipPrimaryInstance() - cannot skip primary instance after initialization");
 		return;
 	}
 	s_instanceIndex = 1;
@@ -76,7 +79,7 @@ void ClientInstance::skipPrimaryInstance()
 
 UnsignedInt ClientInstance::getInstanceIndex()
 {
-	DEBUG_ASSERTLOG(isInitialized(), ("ClientInstance::isInitialized() failed"));
+	if (!(isInitialized())) engine::debug::log_error("ClientInstance::isInitialized() failed");
 	return s_instanceIndex;
 }
 

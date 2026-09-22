@@ -7,10 +7,11 @@ import Graphics.Frame.RenderSettings;
 #include "W3DDevice/GameClient/W3DCastQuery.h"
 #include "W3DDevice/GameClient/W3DRenderContext.h"
 #include "W3DDevice/GameClient/W3DRenderObject.h"
-#include "WWDebug/wwdebug.h"
+
 
 #include "WWLib/chunkio.h"
 #include "WWMath/lineseg.h"
+import engine.debug;
 
 import Graphics.Frame.AttachmentBindings;
 import Graphics.Scene.DrawParameters;
@@ -257,8 +258,8 @@ void W3DScene::Load(ChunkLoadClass &load)
 			load.Close_Micro_Chunk();
 		}
 	} else {
-		WWDEBUG_SAY(("Unhandled Chunk: 0x%X in file: %s line: %d",
-			load.Cur_Chunk_ID(), __FILE__, __LINE__));
+		engine::debug::log_info("Unhandled Chunk: 0x%X in file: %s line: %d",
+			load.Cur_Chunk_ID(), __FILE__, __LINE__);
 	}
 
 	load.Close_Chunk();

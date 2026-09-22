@@ -32,6 +32,8 @@
 
 #pragma once
 
+
+#include <cassert>
 #include "SoundSceneObj.h"
 #include "WWLib/bittype.h"
 #include "WWMath/vector3.h"
@@ -121,7 +123,7 @@ class LogicalListenerClass : public SoundSceneObjClass
 		static uint32			Get_Newest_Timestamp ()		{ return m_NewestTimestamp - 1; }
 
 		static uint32			Get_Oldest_Timestamp ()				{ return m_OldestTimestamp; }
-		static void				Set_Oldest_Timestamp (uint32 timestamp)	{ WWASSERT (m_OldestTimestamp < timestamp); m_OldestTimestamp = timestamp; }
+		static void				Set_Oldest_Timestamp (uint32 timestamp)	{ assert((m_OldestTimestamp < timestamp)); m_OldestTimestamp = timestamp; }
 
 	protected:
 

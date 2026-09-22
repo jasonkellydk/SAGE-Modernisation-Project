@@ -35,6 +35,7 @@
 
 #include "GameLogic/Module/UpgradeModule.h"
 #include "GameLogic/Module/GenerateMinefieldBehavior.h"
+import engine.debug;
 
 const char* NEUTRAL_TEAM_UI_STR = "(neutral)";
 const char* NEUTRAL_TEAM_INTERNAL_STR = "team";
@@ -48,7 +49,7 @@ const char* NEUTRAL_TEAM_INTERNAL_STR = "team";
 
 void MapObjectProps::makeMain()
 {
-	DEBUG_ASSERTCRASH(TheMapObjectProps == nullptr, ("already have a main props"));
+	engine::debug::invariant((TheMapObjectProps == nullptr), "TheMapObjectProps == nullptr", __FILE__, __LINE__, "already have a main props");
 	if (TheMapObjectProps == nullptr)
 		TheMapObjectProps = this;
 }
@@ -212,7 +213,7 @@ void MapObjectProps::_DictToTeam()
     if (name == NEUTRAL_TEAM_INTERNAL_STR)
       name = NEUTRAL_TEAM_UI_STR;
     i = owner->FindStringExact(-1, name.str());
-		DEBUG_ASSERTLOG(i >= 0, ("missing team '%s'. Non-fatal (jkmcd)", name.str()));
+		if (!(i >= 0)) engine::debug::log_error("missing team '%s'. Non-fatal (jkmcd)", name.str());
 
   }
   owner->SetCurSel(i);
@@ -604,7 +605,7 @@ void MapObjectProps::GetPopSliderInfo(const long sliderID, long *pMin, long *pMa
 
 		default:
 			// uh-oh!
-			DEBUG_CRASH(("Slider message from unknown control"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Slider message from unknown control");
 			break;
 	}
 }
@@ -652,7 +653,7 @@ void MapObjectProps::PopSliderChanged(const long sliderID, long theVal)
 
 		default:
 			// uh-oh!
-			DEBUG_CRASH(("Slider message from unknown control"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Slider message from unknown control");
 			break;
 	}
 }
@@ -676,7 +677,7 @@ void MapObjectProps::PopSliderFinished(const long sliderID, long theVal)
 
 		default:
 			// uh-oh!
-			DEBUG_CRASH(("Slider message from unknown control"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Slider message from unknown control");
 			break;
 	}
 
@@ -836,7 +837,7 @@ void MapObjectProps::_DictToPrebuiltUpgrades()
     if (exists) {
       Int selNdx = pBox->FindStringExact(-1, upgradeString.str());
       if (selNdx == LB_ERR) {
-        DEBUG_CRASH(("Object claims '%s', but it wasn't found in the list of possible upgrades.", upgradeString.str()));
+        engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Object claims '%s', but it wasn't found in the list of possible upgrades.", upgradeString.str());
         ++upgradeNum;
         continue;
       }
@@ -1691,7 +1692,7 @@ void MapObjectProps::updateTheUI(MapObject *pMapObj)
 void MapObjectProps::InitSound()
 {
   CComboBox * priorityComboBox = (CComboBox *)GetDlgItem(IDC_PRIORITY_COMBO);
-  DEBUG_ASSERTCRASH( priorityComboBox != nullptr, ("Cannot find sound priority combobox" ) );
+  engine::debug::invariant((priorityComboBox != nullptr), "priorityComboBox != nullptr", __FILE__, __LINE__, "Cannot find sound priority combobox" );
 
   if ( priorityComboBox != nullptr )
   {
@@ -1700,12 +1701,12 @@ void MapObjectProps::InitSound()
     {
       Int index = priorityComboBox->InsertString( i,theAudioPriorityNames[i] );
       (void)index;
-      DEBUG_ASSERTCRASH( index == i, ("insert string returned %d, expected %d", index, i ) );
+      engine::debug::invariant((index == i), "index == i", __FILE__, __LINE__, "insert string returned %d, expected %d", index, i );
     }
   }
 
   CComboBox * soundComboBox = (CComboBox *)GetDlgItem(IDC_SOUND_COMBO);
-  DEBUG_ASSERTCRASH( soundComboBox != nullptr, ("Cannot find sound combobox" ) );
+  engine::debug::invariant((soundComboBox != nullptr), "soundComboBox != nullptr", __FILE__, __LINE__, "Cannot find sound combobox" );
   m_defaultEntryIndex = 0;
   m_defaultIsNone = true;
 
@@ -2144,7 +2145,7 @@ void MapObjectProps::dictToAttachedSound()
   }
   else
   {
-    DEBUG_CRASH( ("Could not find existing sound's name %s in combo box", sound.str() ) );
+    engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Could not find existing sound's name %s in combo box", sound.str() );
     soundComboBox->SetCurSel( m_defaultEntryIndex );
   }
 }
@@ -2734,7 +2735,7 @@ void MapObjectProps::dictToPriority()
     {
       if ( priorityEnum < 0 || priorityEnum > AP_CRITICAL )
       {
-        DEBUG_CRASH( ("Bad soundAmbientPriority key %d", priorityEnum ) );
+        engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Bad soundAmbientPriority key %d", priorityEnum );
         priorityEnum = AP_LOWEST;
       }
 

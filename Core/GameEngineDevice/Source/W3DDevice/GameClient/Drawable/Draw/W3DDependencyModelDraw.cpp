@@ -37,6 +37,7 @@
 #include "GameLogic/Object.h"
 #include "GameLogic/Module/ContainModule.h"
 #include "W3DDevice/GameClient/Module/W3DDependencyModelDraw.h"
+import engine.debug;
 
 
 
@@ -145,7 +146,7 @@ void W3DDependencyModelDraw::adjustTransformMtx(Matrix3D& mtx) const
 			else
 			{
         mtx = *theirDrawable->getTransformMatrix();//TransformMatrix();
-				DEBUG_LOG(("m_attachToDrawableBoneInContainer %s not found",getW3DDependencyModelDrawModuleData()->m_attachToDrawableBoneInContainer.str()));
+				engine::debug::log_info("m_attachToDrawableBoneInContainer %s not found",getW3DDependencyModelDrawModuleData()->m_attachToDrawableBoneInContainer.str());
 			}
 		}
 	}

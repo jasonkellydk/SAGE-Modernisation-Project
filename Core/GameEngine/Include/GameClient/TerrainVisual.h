@@ -29,6 +29,8 @@
 
 #pragma once
 
+
+#include <cassert>
 #include "Common/Terrain.h"
 #include "Common/Snapshot.h"
 #include "Common/MapObject.h"
@@ -124,7 +126,7 @@ struct SeismicSimulationNode
 
   Real applyGravity( Real velocityIn )
   {
-    DEBUG_ASSERTCRASH( callbackFilter, ("SeismicSimulationNode::applyGravity() has no callback filter!") );
+    assert((callbackFilter));
 
     if ( callbackFilter == nullptr )
       return velocityIn;//oops, we have no callback!

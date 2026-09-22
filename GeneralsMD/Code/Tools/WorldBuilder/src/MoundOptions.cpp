@@ -25,6 +25,7 @@
 #include "MoundOptions.h"
 #include "WorldBuilderView.h"
 #include "MoundTool.h"
+import engine.debug;
 
 MoundOptions *MoundOptions::m_staticThis = nullptr;
 Int MoundOptions::m_currentWidth = 0;
@@ -210,7 +211,7 @@ void MoundOptions::GetPopSliderInfo(const long sliderID, long *pMin, long *pMax,
 
 		default:
 			// uh-oh!
-			DEBUG_CRASH(("Slider message from unknown control"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Slider message from unknown control");
 			break;
 	}
 }
@@ -247,7 +248,7 @@ void MoundOptions::PopSliderChanged(const long sliderID, long theVal)
 
 		default:
 			// uh-oh!
-			DEBUG_CRASH(("Slider message from unknown control"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Slider message from unknown control");
 			break;
 	}
 }
@@ -264,7 +265,7 @@ void MoundOptions::PopSliderFinished(const long sliderID, long theVal)
 
 		default:
 			// uh-oh!
-			DEBUG_CRASH(("Slider message from unknown control"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Slider message from unknown control");
 			break;
 	}
 

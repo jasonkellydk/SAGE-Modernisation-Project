@@ -28,7 +28,7 @@
 
 #pragma once
 
-#include "Common/GameCommon.h"	// ensure we get DUMP_PERF_STATS, or not
+#include "Common/GameCommon.h"
 #include "Common/SubsystemInterface.h"
 #include "Lib/BaseType.h"
 #include "Common/GameMemory.h"
@@ -432,9 +432,6 @@ public:
 #if defined(RTS_DEBUG)
 		MSG_META_DEMO_TOGGLE_AUDIODEBUG,						///< show/hide the audio debug info
 #endif//defined(RTS_DEBUG)
-#ifdef DUMP_PERF_STATS
-		MSG_META_DEMO_PERFORM_STATISTICAL_DUMP,			///< dump performance stats for this frame to StatisticsDump.txt
-#endif//DUMP_PERF_STATS
 
 		MSG_META_PLACE_BEACON,
 		MSG_META_REMOVE_BEACON,

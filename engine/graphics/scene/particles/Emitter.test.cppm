@@ -1,6 +1,5 @@
 module;
 
-#include "../../profiling/Tracy.h"
 #define BOOST_TEST_MODULE EmitterTests
 #include <boost/test/included/unit_test.hpp>
 #include <array>

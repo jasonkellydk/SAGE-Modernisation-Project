@@ -24,7 +24,8 @@
 
 /** FrameMetrics.cpp */
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include <numeric>
 
@@ -84,13 +85,13 @@ void FrameMetrics::doPerFrameMetrics(UnsignedInt frame) {
 	time_t curTime = timeGetTime();
 	if ((curTime - m_lastFpsTimeThing) >= 1000) {
 //		if ((m_fpsListIndex % 16) == 0) {
-//			DEBUG_LOG(("FrameMetrics::doPerFrameMetrics - adding %f to fps history. average before: %f ", m_fpsList[m_fpsListIndex], m_averageFps));
+//			engine::debug::log_info("FrameMetrics::doPerFrameMetrics - adding %f to fps history. average before: %f ", m_fpsList[m_fpsListIndex], m_averageFps);
 //		}
 		m_averageFps -= ((m_fpsList[m_fpsListIndex])) / TheGlobalData->m_networkFPSHistoryLength; // subtract out the old value from the average.
 		m_fpsList[m_fpsListIndex] = TheDisplay->getAverageFPS();
 //		m_fpsList[m_fpsListIndex] = TheGameClient->getFrame() - m_fpsStartingFrame;
 		m_averageFps += ((Real)(m_fpsList[m_fpsListIndex])) / TheGlobalData->m_networkFPSHistoryLength; // add the new value to the average.
-//		DEBUG_LOG(("average after: %f", m_averageFps));
+//		engine::debug::log_info("average after: %f", m_averageFps);
 		++m_fpsListIndex;
 		m_fpsListIndex %= TheGlobalData->m_networkFPSHistoryLength;
 		m_lastFpsTimeThing = curTime;
@@ -112,7 +113,7 @@ void FrameMetrics::processLatencyResponse(UnsignedInt frame) {
 	m_averageLatency = latencySum / (Real)TheGlobalData->m_networkLatencyHistoryLength;
 
 	if (frame % 16 == 0) {
-//		DEBUG_LOG(("ConnectionManager::processFrameInfoAck - average latency = %f", m_averageLatency));
+//		engine::debug::log_info("ConnectionManager::processFrameInfoAck - average latency = %f", m_averageLatency);
 	}
 }
 

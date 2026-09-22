@@ -29,6 +29,8 @@
 
 #pragma once
 
+
+#include <cassert>
 // SYSTEM INCLUDES ////////////////////////////////////////////////////////////
 
 // USER INCLUDES //////////////////////////////////////////////////////////////
@@ -82,12 +84,12 @@ public:
 	virtual void reset() override;		///< Reset the system
 	virtual void update() override
 	{
-		DEBUG_CRASH(("Call update(Int) instead.  This update isn't supported"));
+		assert(false);
 	};
 	virtual void update(Int percent) override;		 ///< Update the state of the progress bar
 	virtual void processProgress(Int playerId, Int percentage) override
 	{
-		DEBUG_CRASH(("We Got to a single player load screen throw the Network..."));
+		assert(false);
 	}
 
 	virtual void setProgressRange( Int min, Int max ) override;
@@ -129,12 +131,12 @@ public:
 	virtual void reset() override;		///< Reset the system
 	virtual void update() override
 	{
-		DEBUG_CRASH(("Call update(Int) instead.  This update isn't supported"));
+		assert(false);
 	};
 	virtual void update(Int percent) override;		 ///< Update the state of the progress bar
 	virtual void processProgress(Int playerId, Int percentage) override
 	{
-		DEBUG_CRASH(("We Got to a single player load screen throw the Network..."));
+		assert(false);
 	}
 
 	virtual void setProgressRange( Int min, Int max ) override;
@@ -198,12 +200,12 @@ public:
 	virtual void reset() override;		///< Reset the system
 	virtual void update() override
 	{
-		DEBUG_CRASH(("Call update(Int) instead.  This update isn't supported"));
+		assert(false);
 	};
 	virtual void update(Int percent) override;		 ///< Update the state of the progress bar
 	virtual void processProgress(Int playerId, Int percentage) override
 	{
-		DEBUG_CRASH(("We Got to a single player load screen throw the Network..."));
+		assert(false);
 	}
 	virtual void setProgressRange( Int min, Int max ) override { }
 
@@ -226,7 +228,7 @@ public:
 	virtual void reset() override;		///< Reset the system
 	virtual void update() override
 	{
-		DEBUG_CRASH(("Call update(Int) instead.  This update isn't supported"));
+		assert(false);
 	};
 	virtual void update(Int percent) override;		 ///< Update the state of the progress bar
 	virtual void processProgress(Int playerId, Int percentage) override;
@@ -257,7 +259,7 @@ public:
 	virtual void reset() override;		///< Reset the system
 	virtual void update() override
 	{
-		DEBUG_CRASH(("Call update(Int) instead.  This update isn't supported"));
+		assert(false);
 	};
 	virtual void update(Int percent) override;		 ///< Update the state of the progress bar
 	virtual void processProgress(Int playerId, Int percentage) override;
@@ -295,12 +297,12 @@ public:
 	virtual void reset() override;							///< Reset the system
 	virtual void update() override
 	{
-		DEBUG_CRASH(("Call update(Int) instead.  This update isn't supported"));
+		assert(false);
 	};
 	virtual void update(Int percent) override;				///< Update the state of the progress bar
 	virtual void processProgress(Int playerId, Int percentage) override
 	{
-		DEBUG_CRASH(("Call processProgress(Int, Int, AsciiString) instead."));
+		assert(false);
 	}
 	void processProgress(Int playerId, Int percentage, AsciiString stateStr);
 	virtual void setProgressRange( Int min, Int max ) override { }

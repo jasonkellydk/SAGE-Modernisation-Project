@@ -25,7 +25,8 @@
 ////// NetCommandWrapperList.cpp ////////////////////////////////
 // Bryan Cleveland
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "GameNetwork/NetCommandWrapperList.h"
 #include "GameNetwork/NetPacket.h"
@@ -80,14 +81,14 @@ UnsignedInt NetCommandWrapperListNode::getRawDataLength() {
 
 void NetCommandWrapperListNode::copyChunkData(NetWrapperCommandMsg *msg) {
 	if (msg == nullptr) {
-		DEBUG_CRASH(("Trying to copy data from a non-existent wrapper command message"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Trying to copy data from a non-existent wrapper command message");
 		return;
 	}
 
 	UnsignedInt chunkNumber = msg->getChunkNumber();
 
 	if (chunkNumber >= m_numChunks) {
-		DEBUG_CRASH(("Data chunk %u exceeds the expected maximum of %u chunks", chunkNumber, m_numChunks));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Data chunk %u exceeds the expected maximum of %u chunks", chunkNumber, m_numChunks);
 		return;
 	}
 
@@ -101,21 +102,21 @@ void NetCommandWrapperListNode::copyChunkData(NetWrapperCommandMsg *msg) {
 
 	// TheSuperHackers @security Mauller 04/12/2025 Prevent out of bounds memory access
 	if (chunkDataOffset >= m_totalDataLength) {
-		DEBUG_CRASH(("Data chunk offset %u exceeds the total data length %u", chunkDataOffset, m_totalDataLength));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Data chunk offset %u exceeds the total data length %u", chunkDataOffset, m_totalDataLength);
 		return;
 	}
 
 	if (chunkDataLength > MAX_PACKET_SIZE ) {
-		DEBUG_CRASH(("Data Chunk size %u greater than max packet size %u", chunkDataLength, MAX_PACKET_SIZE));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Data Chunk size %u greater than max packet size %u", chunkDataLength, MAX_PACKET_SIZE);
 		return;
 	}
 
 	if (chunkDataOffset + chunkDataLength > m_totalDataLength) {
-		DEBUG_CRASH(("Data chunk exceeds data array size"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Data chunk exceeds data array size");
 		return;
 	}
 
-	DEBUG_LOG(("NetCommandWrapperListNode::copyChunkData() - copying chunk %u", chunkNumber));
+	engine::debug::log_info("NetCommandWrapperListNode::copyChunkData() - copying chunk %u", chunkNumber);
 
 	memcpy(m_data + chunkDataOffset, msg->getData(), chunkDataLength);
 

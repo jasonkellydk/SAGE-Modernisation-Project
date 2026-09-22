@@ -1,6 +1,5 @@
 module;
 // MSVC needs Tracy's static helpers when instantiating instrumented module templates.
-#include "../../profiling/Tracy.h"
 #define BOOST_TEST_MODULE ModelMeshDrawingTests
 #include <boost/test/included/unit_test.hpp>
 #include <array>

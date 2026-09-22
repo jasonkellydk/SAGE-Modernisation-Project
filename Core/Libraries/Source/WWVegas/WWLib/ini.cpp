@@ -109,6 +109,7 @@
 #include	"wwstring.h"
 #include "widestring.h"
 #include "nstrdup.h"
+import engine.debug;
 
 #if defined(__WATCOMC__)
 // Disable the "temporary object used to initialize a non-constant reference" warning.
@@ -1058,7 +1059,7 @@ bool INIClass::Put_Wide_String(char const * section, char const * entry, wchar_t
 			new_length += added;
 		} while (added);
 		buffer[new_length] = 0;
-		WWASSERT(new_length != 0);
+		engine::debug::assert_condition((new_length != 0), "new_length != 0", __FILE__, __LINE__, "assertion failed");
 		Put_String(section, entry, buffer);
 	}
 	return(true);
@@ -1658,7 +1659,7 @@ bool INIClass::Put_String(char const * section, char const * entry, char const *
 
 		// If this assert fires, then the string will be truncated on load, because
 		// there will not be enough room in the loading buffer!
-		WWASSERT(strlen(string) < MAX_LINE_LENGTH);
+		engine::debug::assert_condition((strlen(string) < MAX_LINE_LENGTH), "strlen(string) < MAX_LINE_LENGTH", __FILE__, __LINE__, "assertion failed");
 
 		if (entryptr == nullptr) {
 			return(false);

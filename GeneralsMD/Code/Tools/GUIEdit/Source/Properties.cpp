@@ -52,7 +52,7 @@
 #include <assert.h>
 
 // USER INCLUDES //////////////////////////////////////////////////////////////
-#include "Common/Debug.h"
+
 #include "GameClient/Gadget.h"
 #include "GameClient/GameWindowManager.h"
 #include "GameClient/GadgetRadioButton.h"
@@ -67,6 +67,7 @@
 #include "resource.h"
 #include "HierarchyView.h"
 #include "GameClient/GameText.h"
+import engine.debug;
 
 // DEFINES ////////////////////////////////////////////////////////////////////
 
@@ -431,7 +432,7 @@ void InitPropertiesDialog( GameWindow *window, Int x, Int y )
 	if( dialog == nullptr )
 	{
 
-		DEBUG_LOG(( "Error creating properties dialog" ));
+		engine::debug::log_info( "Error creating properties dialog" );
 		MessageBox( TheEditor->getWindowHandle(), "Error creating property dialog!", "Error", MB_OK );
 		assert( 0 );
 		return;
@@ -982,7 +983,7 @@ static void adjustGadgetDrawMethods( Bool useImages, GameWindow *window )
 			else
 			{
 
-				DEBUG_LOG(( "Unable to adjust draw method, undefined gadget" ));
+				engine::debug::log_info( "Unable to adjust draw method, undefined gadget" );
 				assert( 0 );
 				return;
 
@@ -1020,7 +1021,7 @@ static void adjustGadgetDrawMethods( Bool useImages, GameWindow *window )
 			else
 			{
 
-				DEBUG_LOG(( "Unable to adjust draw method, undefined gadget" ));
+				engine::debug::log_info( "Unable to adjust draw method, undefined gadget" );
 				assert( 0 );
 				return;
 
@@ -1348,7 +1349,7 @@ void SwitchToState( StateIdentifier id, HWND dialog )
 	if( info == nullptr )
 	{
 
-		DEBUG_LOG(( "Invalid state request" ));
+		engine::debug::log_info( "Invalid state request" );
 		assert( 0 );
 		return;
 

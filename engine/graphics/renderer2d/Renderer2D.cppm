@@ -1,6 +1,5 @@
 module;
 
-#include "../profiling/Tracy.h"
 
 #include <array>
 #include <algorithm>
@@ -17,6 +16,7 @@ module;
 
 export module Graphics.Renderer2D;
 
+import engine.profiling;
 export import Graphics.RenderGraph.Execution;
 export import Graphics.Resources.Bindless.BindlessResourceTable;
 export import Graphics.FrameTargets;
@@ -579,7 +579,7 @@ public:
 
 	bool Execute(Device &device, CommandList &command_list, RHITextureHandle color_target, RHITextureHandle depth_target, RHIViewport viewport) noexcept
 	{
-		GRAPHICS_PROFILE_SCOPE("Graphics.Renderer2D.Execute");
+		engine::profiling::Scope profile_scope_581("Graphics.Renderer2D.Execute");
 		if (!m_initialized || m_device != &device || !color_target.Is_Valid() || !depth_target.Is_Valid() || viewport.width == 0 || viewport.height == 0)
 			return false;
 

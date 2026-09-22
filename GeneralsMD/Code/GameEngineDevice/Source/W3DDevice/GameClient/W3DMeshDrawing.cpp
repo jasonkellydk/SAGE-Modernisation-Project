@@ -10,7 +10,7 @@ import Graphics.Scene.Props.MaterialSubmission;
 #include <memory>
 #include <span>
 #include <vector>
-#include "rts/profile.h"
+
 #include "W3DDevice/GameClient/W3DMeshDrawing.h"
 #include "W3DDevice/GameClient/W3DTextureHandle.h"
 #include "W3DDevice/GameClient/W3DMeshRenderObject.h"
@@ -27,10 +27,12 @@ import Graphics.Scene.Props.SkinPalettes;
 import Graphics.Scene.Props.LightingParameters;
 import engine.navigation.diagnostics.frame_capture;
 #include "GameLogic/GameLogic.h"
+import engine.profiling;
+import engine.debug;
 
 bool Draw_W3D_Mesh(W3DMeshRenderObject& mesh, W3DRenderContext& info, const Graphics::ModelMeshDrawOverrides& overrides)
 {
-    PROFILER_SECTION_NAME("Graphics.Mesh.ExtractDraw");
+    engine::profiling::Scope profile_scope_33("Graphics.Mesh.ExtractDraw");
     auto& capture=navigation::diagnostics::frameCapture();
     auto mesh_timing=capture.accumulate(overrides.shadow_capture ? "Graphics.Mesh.ShadowTotal" : "Graphics.Mesh.ColorTotal");
     if (mesh.Get_Muzzle_Flash_Designation() != Graphics::MuzzleFlashDesignation::None && overrides.shadow_capture) return true;
@@ -54,11 +56,11 @@ bool Draw_W3D_Mesh(W3DMeshRenderObject& mesh, W3DRenderContext& info, const Grap
         const auto position = world.Get_Translation();
         world.Obj_Look_At(position, info.Camera.Get_Position(), 0);
     } else if (skin) {
-        PROFILER_SECTION_NAME("Graphics.Mesh.SkinPalette");
+        engine::profiling::Scope profile_scope_57("Graphics.Mesh.SkinPalette");
         auto skin_timing=capture.accumulate(overrides.shadow_capture ? "Graphics.Mesh.ShadowSkin" : "Graphics.Mesh.ColorSkin");
         const auto vertex_count = static_cast<std::size_t>(model->Get_Vertex_Count());
         auto* container = mesh.Get_Container();
-        WWASSERT(container && container->Get_Model_Hierarchy());
+        engine::debug::assert_condition((container && container->Get_Model_Hierarchy()), "container && container->Get_Model_Hierarchy()", __FILE__, __LINE__, "assertion failed");
         const auto& hierarchy=*container->Get_Model_Hierarchy();
         bone_links=std::span(model->Get_Vertex_Bone_Links(),vertex_count);
         skin_palette=mesh.Graphics_Skin().Update(Graphics::Get_Prop_Renderer().Instances().Palettes(),

@@ -41,7 +41,8 @@
 // Desc:      Contains the information describing scripts.
 //
 //-----------------------------------------------------------------------------
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Lib/BaseType.h"
 
@@ -259,7 +260,7 @@ void ScriptList::xfer( Xfer *xfer )
 	if( countVerify != scriptCount )
 	{
 
-		DEBUG_CRASH(( "ScriptList::xfer - Script list count has changed, attempting to recover."));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "ScriptList::xfer - Script list count has changed, attempting to recover.");
 		// throw SC_INVALID_DATA; try to recover. jba.
 
 	}
@@ -271,7 +272,7 @@ void ScriptList::xfer( Xfer *xfer )
 		if (scriptCount==0) break;
 	}
 	if (scriptCount>0) {
-		DEBUG_CRASH(("Stripping out extra scripts - Bad..."));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Stripping out extra scripts - Bad...");
 		if (s_mtScript==nullptr) s_mtScript = newInstance(Script);	// Yes it leaks, but this is unusual recovery only. jba.
 		while (scriptCount) {
 			xfer->xferSnapshot(s_mtScript);
@@ -289,7 +290,7 @@ void ScriptList::xfer( Xfer *xfer )
 	if( countVerify != scriptGroupCount )
 	{
 
-		DEBUG_CRASH(( "ScriptList::xfer - Script group count has changed, attempting to recover."));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "ScriptList::xfer - Script group count has changed, attempting to recover.");
 
 	}
 
@@ -300,7 +301,7 @@ void ScriptList::xfer( Xfer *xfer )
 		if (scriptGroupCount==0) break;
 	}
 	if (scriptGroupCount>0) {
-		DEBUG_CRASH(("Stripping out extra groups. - Bad..."));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Stripping out extra groups. - Bad...");
 		if (s_mtGroup == nullptr) s_mtGroup = newInstance(ScriptGroup);	// Yes it leaks, but this is only for recovery.
 		while (scriptGroupCount) {
 			xfer->xferSnapshot(s_mtGroup);
@@ -425,7 +426,7 @@ void ScriptList::addGroup(ScriptGroup *pGrp, Int ndx)
 {
 	ScriptGroup *pPrev = nullptr;
 	ScriptGroup *pCur = m_firstGroup;
-	DEBUG_ASSERTCRASH(pGrp->getNext()==nullptr, ("Adding already linked group."));
+	engine::debug::invariant((pGrp->getNext()==nullptr), "pGrp->getNext()==nullptr", __FILE__, __LINE__, "Adding already linked group.");
 	while (ndx && pCur) {
 		pPrev = pCur;
 		pCur = pCur->getNext();
@@ -449,7 +450,7 @@ void ScriptList::addScript(Script *pScr, Int ndx)
 {
 	Script *pPrev = nullptr;
 	Script *pCur = m_firstScript;
-	DEBUG_ASSERTCRASH(pScr->getNext()==nullptr, ("Adding already linked group."));
+	engine::debug::invariant((pScr->getNext()==nullptr), "pScr->getNext()==nullptr", __FILE__, __LINE__, "Adding already linked group.");
 	while (ndx && pCur) {
 		pPrev = pCur;
 		pCur = pCur->getNext();
@@ -475,7 +476,7 @@ void ScriptList::deleteScript(Script *pScr)
 		pPrev = pCur;
 		pCur = pCur->getNext();
 	}
-	DEBUG_ASSERTCRASH(pCur, ("Couldn't find script."));
+	engine::debug::invariant((pCur), "pCur", __FILE__, __LINE__, "Couldn't find script.");
 	if (pCur==nullptr) return;
 
 	if (pPrev) {
@@ -501,7 +502,7 @@ void ScriptList::deleteGroup(ScriptGroup *pGrp)
 		pPrev = pCur;
 		pCur = pCur->getNext();
 	}
-	DEBUG_ASSERTCRASH(pCur, ("Couldn't find group."));
+	engine::debug::invariant((pCur), "pCur", __FILE__, __LINE__, "Couldn't find group.");
 	if (pCur==nullptr) return;
 	if (pPrev) {
 		// unlink from previous group.
@@ -526,7 +527,7 @@ Bool ScriptList::ParseScriptsDataChunk(DataChunkInput &file, DataChunkInfo *info
 {
 	Int i;
 	file.registerParser( "ScriptList", info->label, ScriptList::ParseScriptListDataChunk );
-	DEBUG_ASSERTCRASH(s_numInReadList==0, ("Leftover scripts floating around."));
+	engine::debug::invariant((s_numInReadList==0), "s_numInReadList==0", __FILE__, __LINE__, "Leftover scripts floating around.");
 	for (i=0; i<s_numInReadList; i++) {
 		deleteInstance(s_readLists[i]);
 		s_readLists[i] = nullptr;
@@ -537,7 +538,7 @@ Bool ScriptList::ParseScriptsDataChunk(DataChunkInput &file, DataChunkInfo *info
 	}
 	readInfo.numLists = 0;
 	if (file.parse(&readInfo)) {
-		DEBUG_ASSERTCRASH(readInfo.numLists<MAX_PLAYER_COUNT, ("Read too many, overrun buffer."));
+		engine::debug::invariant((readInfo.numLists<MAX_PLAYER_COUNT), "readInfo.numLists<MAX_PLAYER_COUNT", __FILE__, __LINE__, "Read too many, overrun buffer.");
 		s_numInReadList = readInfo.numLists;
 		for (i=0; i<s_numInReadList; i++) {
 			s_readLists[i] = readInfo.readLists[i];
@@ -611,7 +612,7 @@ void ScriptList::WriteScriptListDataChunk(DataChunkOutput &chunkWriter)
 Bool ScriptList::ParseScriptListDataChunk(DataChunkInput &file, DataChunkInfo *info, void *userData)
 {
 	TScriptListReadInfo *pInfo = (TScriptListReadInfo*)userData;
-	DEBUG_ASSERTCRASH(pInfo->numLists < MAX_PLAYER_COUNT, ("Too many."));
+	engine::debug::invariant((pInfo->numLists < MAX_PLAYER_COUNT), "pInfo->numLists < MAX_PLAYER_COUNT", __FILE__, __LINE__, "Too many.");
 	if (pInfo->numLists >= MAX_PLAYER_COUNT) return false;
 	pInfo->readLists[pInfo->numLists] = newInstance(ScriptList);
 	Int cur = pInfo->numLists;
@@ -699,7 +700,7 @@ void ScriptGroup::xfer( Xfer *xfer )
 	if( countVerify != scriptCount )
 	{
 
-		DEBUG_CRASH(( "ScriptGroup::xfer - Script list count has changed, attempting to recover."));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "ScriptGroup::xfer - Script list count has changed, attempting to recover.");
 		// throw SC_INVALID_DATA; try to recover. jba.
 
 	}
@@ -711,7 +712,7 @@ void ScriptGroup::xfer( Xfer *xfer )
 		if (scriptCount==0) break;
 	}
 	if (scriptCount>0) {
-		DEBUG_CRASH(("Stripping out extra scripts - Bad..."));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Stripping out extra scripts - Bad...");
 		if (s_mtScript==nullptr) s_mtScript = newInstance(Script);	// Yes it leaks, but this is unusual recovery only. jba.
 		while (scriptCount) {
 			xfer->xferSnapshot(s_mtScript);
@@ -809,7 +810,7 @@ void ScriptGroup::deleteScript(Script *pScr)
 		pPrev = pCur;
 		pCur = pCur->getNext();
 	}
-	DEBUG_ASSERTCRASH(pCur, ("Couldn't find script."));
+	engine::debug::invariant((pCur), "pCur", __FILE__, __LINE__, "Couldn't find script.");
 	if (pCur==nullptr) return;
 	if (pPrev) {
 		pPrev->setNextScript(pCur->getNext());
@@ -828,7 +829,7 @@ void ScriptGroup::addScript(Script *pScr, Int ndx)
 {
 	Script *pPrev = nullptr;
 	Script *pCur = m_firstScript;
-	DEBUG_ASSERTCRASH(pScr->getNext()==nullptr, ("Adding already linked group."));
+	engine::debug::invariant((pScr->getNext()==nullptr), "pScr->getNext()==nullptr", __FILE__, __LINE__, "Adding already linked group.");
 	while (ndx && pCur) {
 		pPrev = pCur;
 		pCur = pCur->getNext();
@@ -1087,7 +1088,7 @@ void Script::deleteOrCondition(OrCondition *pCond)
 		pPrev = pCur;
 		pCur = pCur->getNextOrCondition();
 	}
-	DEBUG_ASSERTCRASH(pCur, ("Couldn't find condition."));
+	engine::debug::invariant((pCur), "pCur", __FILE__, __LINE__, "Couldn't find condition.");
 	if (pCur==nullptr) return;
 	if (pPrev) {
 		pPrev->setNextOrCondition(pCur->getNextOrCondition());
@@ -1110,7 +1111,7 @@ void Script::deleteAction(ScriptAction *pAct)
 		pPrev = pCur;
 		pCur = pCur->getNext();
 	}
-	DEBUG_ASSERTCRASH(pCur, ("Couldn't find action."));
+	engine::debug::invariant((pCur), "pCur", __FILE__, __LINE__, "Couldn't find action.");
 	if (pCur==nullptr) return;
 	if (pPrev) {
 		pPrev->setNextAction(pCur->getNext());
@@ -1133,7 +1134,7 @@ void Script::deleteFalseAction(ScriptAction *pAct)
 		pPrev = pCur;
 		pCur = pCur->getNext();
 	}
-	DEBUG_ASSERTCRASH(pCur, ("Couldn't find action."));
+	engine::debug::invariant((pCur), "pCur", __FILE__, __LINE__, "Couldn't find action.");
 	if (pCur==nullptr) return;
 	if (pPrev) {
 		pPrev->setNextAction(pCur->getNext());
@@ -1254,7 +1255,7 @@ Script *Script::ParseScript(DataChunkInput &file, unsigned short version)
 	{
 		return nullptr;
 	}
-	DEBUG_ASSERTCRASH(file.atEndOfChunk(), ("Unexpected data left over."));
+	engine::debug::invariant((file.atEndOfChunk()), "file.atEndOfChunk()", __FILE__, __LINE__, "Unexpected data left over.");
 	return pScript;
 }
 
@@ -1270,7 +1271,7 @@ Bool Script::ParseScriptFromListDataChunk(DataChunkInput &file, DataChunkInfo *i
 	ScriptList *pList = (ScriptList *)userData;
 	Script *pScript = ParseScript(file, info->version);
 	pList->addScript(pScript, AT_END);
-	DEBUG_ASSERTCRASH(file.atEndOfChunk(), ("Unexpected data left over."));
+	engine::debug::invariant((file.atEndOfChunk()), "file.atEndOfChunk()", __FILE__, __LINE__, "Unexpected data left over.");
 	return true;
 }
 
@@ -1286,7 +1287,7 @@ Bool Script::ParseScriptFromGroupDataChunk(DataChunkInput &file, DataChunkInfo *
 	ScriptGroup *pGroup = (ScriptGroup *)userData;
 	Script *pScript = ParseScript(file, info->version);
 	pGroup->addScript(pScript, AT_END);
-	DEBUG_ASSERTCRASH(file.atEndOfChunk(), ("Unexpected data left over."));
+	engine::debug::invariant((file.atEndOfChunk()), "file.atEndOfChunk()", __FILE__, __LINE__, "Unexpected data left over.");
 	return true;
 }
 
@@ -1310,7 +1311,7 @@ OrCondition *Script::findPreviousOrCondition( OrCondition *curOr )
 		myConditions = myConditions->getNextOrCondition();
 	}
 
-	DEBUG_CRASH(("Tried to find an OrCondition that doesn't seem to exist (jkmcd)"));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Tried to find an OrCondition that doesn't seem to exist (jkmcd)");
 	return nullptr;
 }
 
@@ -1382,7 +1383,7 @@ Condition *OrCondition::removeCondition(Condition *pCond)
 		pCur = pCur->getNext();
 	}
 
-	DEBUG_ASSERTCRASH(pCur, ("Couldn't find condition."));
+	engine::debug::invariant((pCur), "pCur", __FILE__, __LINE__, "Couldn't find condition.");
 	if (pCur==nullptr)
 		return nullptr;
 	if (pPrev) {
@@ -1398,7 +1399,7 @@ Condition *OrCondition::removeCondition(Condition *pCond)
 void OrCondition::deleteCondition(Condition *pCond)
 {
 	Condition *pCur = removeCondition(pCond);
-	DEBUG_ASSERTCRASH(pCur, ("Couldn't find condition."));
+	engine::debug::invariant((pCur), "pCur", __FILE__, __LINE__, "Couldn't find condition.");
 	if (pCur==nullptr)
 		return;
 	deleteInstance(pCur);
@@ -1469,7 +1470,7 @@ Condition *OrCondition::findPreviousCondition( Condition *curCond )
 		myConditions = myConditions->getNext();
 	}
 
-	DEBUG_CRASH(("Searched for non-existent And Condition. (jkmcd)"));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Searched for non-existent And Condition. (jkmcd)");
 	return nullptr;
 }
 
@@ -1632,7 +1633,7 @@ void Condition::WriteConditionDataChunk(DataChunkOutput &chunkWriter, Condition	
 			if (ct) {
 				chunkWriter.writeNameKey(ct->m_internalNameKey);
 			}	else {
-				DEBUG_CRASH(("Invalid condition."));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Invalid condition.");
 				chunkWriter.writeNameKey(NAMEKEY("Bogus"));
 			}
 			chunkWriter.writeInt(pCondition->m_numParms);
@@ -1670,7 +1671,7 @@ Bool Condition::ParseConditionDataChunk(DataChunkInput &file, DataChunkInfo *inf
 				ct = TheScriptEngine->getConditionTemplate(i);
 				if (key == ct->m_internalNameKey) {
 					match = true;
-					DEBUG_LOG(("Rematching script condition %s", KEYNAME(key).str()));
+					engine::debug::log_info("Rematching script condition %s", KEYNAME(key).str());
 					pCondition->m_conditionType = (enum ConditionType)i;
 					break;
 				}
@@ -1678,7 +1679,7 @@ Bool Condition::ParseConditionDataChunk(DataChunkInput &file, DataChunkInfo *inf
 		}
 		if (!match) {
 			// Invalid script [3/20/2003]
-			DEBUG_CRASH(("Invalid script condition.  Making it false. jba."));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Invalid script condition.  Making it false. jba.");
 			pCondition->m_conditionType = CONDITION_FALSE;
 			pCondition->m_numParms = 0;
 		}
@@ -1718,7 +1719,7 @@ Bool Condition::ParseConditionDataChunk(DataChunkInput &file, DataChunkInfo *inf
 #endif
 	if (ct->getNumParameters() != pCondition->getNumParameters()) {
 		// Invalid script [3/20/2003]
-		DEBUG_CRASH(("Invalid script condition.  Making it false. jba."));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Invalid script condition.  Making it false. jba.");
 		pCondition->m_conditionType = ConditionType::CONDITION_FALSE;
 		pCondition->m_numParms = 0;
 	}
@@ -1731,7 +1732,7 @@ Bool Condition::ParseConditionDataChunk(DataChunkInput &file, DataChunkInfo *inf
 	} else {
 		pOr->setFirstAndCondition(pCondition);
 	}
-	DEBUG_ASSERTCRASH(file.atEndOfChunk(), ("Unexpected data left over."));
+	engine::debug::invariant((file.atEndOfChunk()), "file.atEndOfChunk()", __FILE__, __LINE__, "Unexpected data left over.");
 	return true;
 }
 
@@ -1766,13 +1767,13 @@ enum Parameter::ParameterType Template::getParameterType(Int ndx) const
 	if (ndx >= 0 && ndx < m_numParameters) {
 		return m_parameters[ndx];
 	}
-	DEBUG_CRASH(("Index out of range."));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Index out of range.");
 	return Parameter::INT;
 }
 
 void Parameter::getCoord3D(Coord3D *pLoc) const
 {
-	DEBUG_ASSERTCRASH(m_paramType==COORD3D, ("Wrong parameter type."));
+	engine::debug::invariant((m_paramType==COORD3D), "m_paramType==COORD3D", __FILE__, __LINE__, "Wrong parameter type.");
 	pLoc->x = pLoc->y = pLoc->z = 0;
 	if (m_paramType==COORD3D) {
 		*pLoc = m_coord;
@@ -1781,7 +1782,7 @@ void Parameter::getCoord3D(Coord3D *pLoc) const
 
 void Parameter::setCoord3D(const Coord3D *pLoc)
 {
-	DEBUG_ASSERTCRASH(m_paramType==COORD3D, ("Wrong parameter type."));
+	engine::debug::invariant((m_paramType==COORD3D), "m_paramType==COORD3D", __FILE__, __LINE__, "Wrong parameter type.");
 	if (m_paramType==COORD3D) {
 		m_coord= *pLoc ;
 	}
@@ -1824,7 +1825,7 @@ AsciiString Parameter::getUiText() const
 	switch (m_paramType)
 	{
 		default:
-			DEBUG_CRASH(("Unknown parameter type."));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unknown parameter type.");
 			break;
 		case SOUND:
 			uiText.format("Sound '%s'", uiString.str());
@@ -1918,7 +1919,7 @@ AsciiString Parameter::getUiText() const
 				case GREATER_EQUAL: uiText.format("Greater Than or Equal To"); break;
 				case GREATER: uiText.format("Greater Than"); break;
 				case NOT_EQUAL: uiText.format("Not Equal To"); break;
-				default : DEBUG_CRASH(("Unknown comparison type."));
+				default : engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unknown comparison type.");
 			}
 			break;
 
@@ -1927,7 +1928,7 @@ AsciiString Parameter::getUiText() const
 				case REL_ENEMY: uiText.format("Enemy"); break;
 				case REL_NEUTRAL: uiText.format("Neutral"); break;
 				case REL_FRIEND: uiText.format("Friend"); break;
-				default : DEBUG_CRASH(("Unknown Relation type."));
+				default : engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unknown Relation type.");
 			}
 			break;
 
@@ -1938,20 +1939,20 @@ AsciiString Parameter::getUiText() const
 				case ATTITUDE_NORMAL: uiText.format("Normal"); break;
 				case ATTITUDE_ALERT: uiText.format("Alert"); break;
 				case ATTITUDE_AGGRESSIVE: uiText.format("Aggressive"); break;
-				default : DEBUG_CRASH(("Unknown AI Mood type."));
+				default : engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unknown AI Mood type.");
 			}
 			break;
 
 		case RADAR_EVENT_TYPE:
 			switch (m_int) {
 				//case RADAR_EVENT_INVALID: ++m_int;	// continue to the next case.
-				case RADAR_EVENT_INVALID: DEBUG_CRASH(("Invalid radar event")); uiText.format("Construction"); break;
+				case RADAR_EVENT_INVALID: engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Invalid radar event"); uiText.format("Construction"); break;
 				case RADAR_EVENT_CONSTRUCTION: uiText.format("Construction"); break;
 				case RADAR_EVENT_UPGRADE: uiText.format("Upgrade"); break;
 				case RADAR_EVENT_UNDER_ATTACK: uiText.format("Under Attack"); break;
 				case RADAR_EVENT_INFORMATION: uiText.format("Information"); break;
 				case RADAR_EVENT_INFILTRATION: uiText.format("Infiltration"); break;
-				default : DEBUG_CRASH(("Unknown Radar event type."));
+				default : engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unknown Radar event type.");
 			}
 			break;
 
@@ -2133,7 +2134,7 @@ Parameter *Parameter::ReadParameter(DataChunkInput &file)
 			char newName[256];
 			strcpy(newName, "GLA");
 			strlcat(newName, pParm->m_string.str() + offset, ARRAY_SIZE(newName));
-			DEBUG_LOG(("Changing Script Ref from %s to %s", pParm->m_string.str(), newName));
+			engine::debug::log_info("Changing Script Ref from %s to %s", pParm->m_string.str(), newName);
 			pParm->m_string.set(newName);
 		}
 	}
@@ -2182,7 +2183,7 @@ Parameter *Parameter::ReadParameter(DataChunkInput &file)
 					//????
 					pParm->setInt(i);
 					found = true;
-					DEBUG_CRASH(( "Kindof CRUSHER no longer exists -- in order to get your map to load, it has been switched to OBSTACLE, please call Kris (x36844).", pParm->m_string.str()));
+					engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Kindof CRUSHER no longer exists -- in order to get your map to load, it has been switched to OBSTACLE, please call Kris (x36844).", pParm->m_string.str());
 					break;
 				}
 				else if( !pParm->m_string.compareNoCase( "CRUSHABLE" ) )
@@ -2190,7 +2191,7 @@ Parameter *Parameter::ReadParameter(DataChunkInput &file)
 					//????
 					pParm->setInt(i);
 					found = true;
-					DEBUG_CRASH(( "Kindof CRUSHABLE no longer exists -- in order to get your map to load, it has been switched to OBSTACLE, please call Kris (x36844).", pParm->m_string.str()));
+					engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Kindof CRUSHABLE no longer exists -- in order to get your map to load, it has been switched to OBSTACLE, please call Kris (x36844).", pParm->m_string.str());
 					break;
 				}
 				else if( !pParm->m_string.compareNoCase( "OVERLAPPABLE" ) )
@@ -2198,7 +2199,7 @@ Parameter *Parameter::ReadParameter(DataChunkInput &file)
 					//????
 					pParm->setInt(i);
 					found = true;
-					DEBUG_CRASH(( "Kindof OVERLAPPABLE no longer exists -- in order to get your map to load, it has been switched to OBSTACLE, please call Kris (x36844).", pParm->m_string.str()));
+					engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Kindof OVERLAPPABLE no longer exists -- in order to get your map to load, it has been switched to OBSTACLE, please call Kris (x36844).", pParm->m_string.str());
 					break;
 				}
 				else if( !pParm->m_string.compareNoCase( "MISSILE" ) )
@@ -2214,13 +2215,13 @@ Parameter *Parameter::ReadParameter(DataChunkInput &file)
 							break;
 						}
 					}
-					DEBUG_CRASH(("Unable to find Kindof SMALL_MISSILE', please call KrisM (x36844).", pParm->m_string.str()));
+					engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unable to find Kindof SMALL_MISSILE', please call KrisM (x36844).", pParm->m_string.str());
 				}
 
 			}
 			if (!found)
       {
-				DEBUG_CRASH(("Unable to find Kindof '%s', please call JKM (x36872).", pParm->m_string.str()));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unable to find Kindof '%s', please call JKM (x36872).", pParm->m_string.str());
 				throw ERROR_BUG;
 			}
 		}
@@ -2388,7 +2389,7 @@ void ScriptAction::WriteActionDataChunk(DataChunkOutput &chunkWriter, ScriptActi
 			if (at) {
 				chunkWriter.writeNameKey(at->m_internalNameKey);
 			}	else {
-				DEBUG_CRASH(("Invalid action."));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Invalid action.");
 				chunkWriter.writeNameKey(NAMEKEY("Bogus"));
 			}
 			chunkWriter.writeInt(pScriptAction->m_numParms);
@@ -2428,14 +2429,14 @@ ScriptAction *ScriptAction::ParseAction(DataChunkInput &file, DataChunkInfo *inf
 				at = TheScriptEngine->getActionTemplate(i);
 				if (key == at->m_internalNameKey) {
 					match = true;
-					DEBUG_LOG(("Rematching script action %s", KEYNAME(key).str()));
+					engine::debug::log_info("Rematching script action %s", KEYNAME(key).str());
 					pScriptAction->m_actionType = (enum ScriptActionType)i;
 					break;
 				}
 			}
 			if (!match) {
 				// Invalid script [3/20/2003]
-				DEBUG_CRASH(("Invalid script action.  Making it noop. jba."));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Invalid script action.  Making it noop. jba.");
 				pScriptAction->m_actionType = ScriptAction::NO_OP;
 				pScriptAction->m_numParms = 0;
 			}
@@ -2444,7 +2445,7 @@ ScriptAction *ScriptAction::ParseAction(DataChunkInput &file, DataChunkInfo *inf
 #ifdef DEBUG_CRASHING
 	Script *pScript = (Script *)userData;
 	if (at && (at->getName().isEmpty() || (at->getName().compareNoCase("(placeholder)") == 0))) {
-		DEBUG_CRASH(("Invalid Script Action found in script '%s'", pScript->getName().str()));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Invalid Script Action found in script '%s'", pScript->getName().str());
 	}
 #endif
 #ifdef COUNT_SCRIPT_USAGE
@@ -2569,11 +2570,11 @@ ScriptAction *ScriptAction::ParseAction(DataChunkInput &file, DataChunkInfo *inf
 
 	if (at->getNumParameters() != pScriptAction->getNumParameters()) {
 		// Invalid script [3/20/2003]
-		DEBUG_CRASH(("Invalid script action.  Making it noop. jba."));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Invalid script action.  Making it noop. jba.");
 		pScriptAction->m_actionType = ScriptAction::NO_OP;
 		pScriptAction->m_numParms = 0;
 	}
-	DEBUG_ASSERTCRASH(file.atEndOfChunk(), ("Unexpected data left over."));
+	engine::debug::invariant((file.atEndOfChunk()), "file.atEndOfChunk()", __FILE__, __LINE__, "Unexpected data left over.");
 	return pScriptAction;
 }
 
@@ -2604,7 +2605,7 @@ Bool ScriptAction::ParseActionDataChunk(DataChunkInput &file, DataChunkInfo *inf
 	{
 		pScript->setAction(pScriptAction);
 	}
-	DEBUG_ASSERTCRASH(file.atEndOfChunk(), ("Unexpected data left over."));
+	engine::debug::invariant((file.atEndOfChunk()), "file.atEndOfChunk()", __FILE__, __LINE__, "Unexpected data left over.");
 	return true;
 }
 
@@ -2625,7 +2626,7 @@ void ScriptAction::WriteActionFalseDataChunk(DataChunkOutput &chunkWriter, Scrip
 			if (at) {
 				chunkWriter.writeNameKey(at->m_internalNameKey);
 			}	else {
-				DEBUG_CRASH(("Invalid action."));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Invalid action.");
 				chunkWriter.writeNameKey(NAMEKEY("Bogus"));
 			}
 			chunkWriter.writeInt(pScriptAction->m_numParms);
@@ -2660,7 +2661,7 @@ Bool ScriptAction::ParseActionFalseDataChunk(DataChunkInput &file, DataChunkInfo
 	} else {
 		pScript->setFalseAction(pScriptAction);
 	}
-	DEBUG_ASSERTCRASH(file.atEndOfChunk(), ("Unexpected data left over."));
+	engine::debug::invariant((file.atEndOfChunk()), "file.atEndOfChunk()", __FILE__, __LINE__, "Unexpected data left over.");
 	return true;
 }
 

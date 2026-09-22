@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/CRCDebug.h"
 #include "Common/FramePacer.h"
@@ -100,7 +101,7 @@ static int thePlanSubjectCount = 0;
 static void doMoveTo( Object *obj, const Coord3D *pos )
 {
 	AIUpdateInterface *ai = obj->getAIUpdateInterface();
-	DEBUG_ASSERTCRASH(ai, ("Attempted doMoveTo() on an Object with no AI"));
+	engine::debug::invariant((ai), "ai", __FILE__, __LINE__, "Attempted doMoveTo() on an Object with no AI");
 	if (ai)
 	{
 		if (theBuildPlan)
@@ -219,7 +220,7 @@ static Object * getSingleObjectFromSelection(const AIGroup *currentlySelectedGro
 	if( currentlySelectedGroup && !currentlySelectedGroup->isEmpty() )
 	{
 		const VecObjectID& selectedObjects = currentlySelectedGroup->getAllIDs();
-		DEBUG_ASSERTCRASH(selectedObjects.size() == 1, ("Trying to get single object from multiple selection!"));
+		engine::debug::invariant((selectedObjects.size() == 1), "selectedObjects.size() == 1", __FILE__, __LINE__, "Trying to get single object from multiple selection!");
 		VecObjectID::const_iterator it = selectedObjects.begin();
 		return TheGameLogic->findObjectByID(*it);
 	}
@@ -253,14 +254,14 @@ void GameLogic::clearGameData( Bool showScoreScreen )
 {
 	if( !isInGame() )
 	{
-		DEBUG_CRASH(("We tried to clear the game data when we weren't in a game"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "We tried to clear the game data when we weren't in a game");
 		return;
 	}
 
 	setClearingGameData( TRUE );
 
 //	m_background = TheWindowManager->winCreateLayout("Menus/BlankWindow.wnd");
-//	DEBUG_ASSERTCRASH(m_background,("We Couldn't Load Menus/BlankWindow.wnd"));
+//	engine::debug::invariant((m_background), "m_background", __FILE__, __LINE__, "We Couldn't Load Menus/BlankWindow.wnd");
 //	m_background->hide(FALSE);
 //	m_background->bringForward();
 	// reset the game engine to accept data for a new game
@@ -326,7 +327,7 @@ void GameLogic::prepareNewGame( GameMode gameMode, GameDifficulty diff, Int rank
 	if(!m_background)
 	{
 		m_background = TheWindowManager->winCreateLayout("Menus/BlankWindow.wnd");
-		DEBUG_ASSERTCRASH(m_background,("We Couldn't Load Menus/BlankWindow.wnd"));
+		engine::debug::invariant((m_background), "m_background", __FILE__, __LINE__, "We Couldn't Load Menus/BlankWindow.wnd");
 		m_background->hide(FALSE);
 		m_background->bringForward();
 	}
@@ -339,7 +340,7 @@ void GameLogic::prepareNewGame( GameMode gameMode, GameDifficulty diff, Int rank
 	}
 
 	m_rankPointsToAddAtGameStart = rankPoints;
-	DEBUG_LOG(("GameLogic::prepareNewGame() - m_rankPointsToAddAtGameStart = %d", m_rankPointsToAddAtGameStart));
+	engine::debug::log_info("GameLogic::prepareNewGame() - m_rankPointsToAddAtGameStart = %d", m_rankPointsToAddAtGameStart);
 
 	// If we're about to start a game, hide the shell.
 	if(!isInShellGame())
@@ -357,13 +358,13 @@ void GameLogic::prepareNewGame( GameMode gameMode, GameDifficulty diff, Int rank
 void GameLogic::logicMessageDispatcher( GameMessage *msg, void *userData )
 {
 #ifdef RTS_DEBUG
-	DEBUG_ASSERTCRASH(msg != nullptr && msg != (GameMessage*)0xdeadbeef, ("bad msg"));
+	engine::debug::invariant((msg != nullptr && msg != (GameMessage*)0xdeadbeef), "msg != nullptr && msg != (GameMessage*)0xdeadbeef", __FILE__, __LINE__, "bad msg");
 #endif
 
 	Player *msgPlayer = getMessagePlayer(msg);
 	if (msgPlayer == nullptr)
 	{
-		DEBUG_CRASH(("logicMessageDispatcher: Processing message from unknown player (player index '%d')", msg->getPlayerIndex()));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "logicMessageDispatcher: Processing message from unknown player (player index '%d')", msg->getPlayerIndex());
 		return;
 	}
 
@@ -376,7 +377,7 @@ void GameLogic::logicMessageDispatcher( GameMessage *msg, void *userData )
 			if (msg->getType() != GameMessage::MSG_LOGIC_CRC && msg->getType() != GameMessage::MSG_SET_REPLAY_CAMERA)
 			{
 				currentlySelectedGroup = TheAI->createGroup(); // can't do this outside a game - it'll cause sync errors galore.
-				CRCGEN_LOG(( "Creating AIGroup %d in GameLogic::logicMessageDispatcher()", currentlySelectedGroup?currentlySelectedGroup->getID():0 ));
+				engine::debug::log_info( "Creating AIGroup %d in GameLogic::logicMessageDispatcher()", currentlySelectedGroup?currentlySelectedGroup->getID():0 );
 #if RETAIL_COMPATIBLE_AIGROUP
 				msgPlayer->getCurrentSelectionAsAIGroup(currentlySelectedGroup);
 #else
@@ -405,7 +406,6 @@ void GameLogic::logicMessageDispatcher( GameMessage *msg, void *userData )
 		}
 	}
 
-#ifdef DEBUG_LOGGING
 	AsciiString commandName;
 
 	commandName = msg->getCommandAsString();
@@ -420,11 +420,10 @@ void GameLogic::logicMessageDispatcher( GameMessage *msg, void *userData )
 #if 0
 	if (commandName.isNotEmpty() /*&& msg->getType() != GameMessage::MSG_FRAME_TICK*/)
 	{
-		DEBUG_LOG(("Frame %d: GameLogic::logicMessageDispatcher() saw a %s from player %d (%ls)", getFrame(), commandName.str(),
-			msgPlayer->getPlayerIndex(), msgPlayer->getPlayerDisplayName().str()));
+		engine::debug::log_info("Frame %d: GameLogic::logicMessageDispatcher() saw a %s from player %d (%ls)", getFrame(), commandName.str(),
+			msgPlayer->getPlayerIndex(), msgPlayer->getPlayerDisplayName().str());
 	}
 #endif
-#endif // DEBUG_LOGGING
 
 	// process the message
 	GameMessage::Type msgType = msg->getType();
@@ -861,14 +860,14 @@ bool GameLogic::onNewGame(MAYBE_UNUSED GameMessage *msg)
 	// can be force-triggered in an online match by using cheats.
 	if ( isInGame() || isClearingGameData() || isLoadingMap() )
 	{
-		DEBUG_CRASH( ("Called MSG_NEW_GAME while game is not ready (inGame=%d, clearingData=%d, loadingMap=%d)",
-			isInGame(), isClearingGameData(), isLoadingMap()) );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Called MSG_NEW_GAME while game is not ready (inGame=%d, clearingData=%d, loadingMap=%d)",
+			isInGame(), isClearingGameData(), isLoadingMap());
 
 		return false;
 	}
 #endif
 
-	//DEBUG_ASSERTCRASH(msg->getArgumentCount() == 1 || msg->getArgumentCount() == 2, ("%d arguments to MSG_NEW_GAME", msg->getArgumentCount()));
+	//engine::debug::invariant((msg->getArgumentCount() == 1 || msg->getArgumentCount() == 2), "msg->getArgumentCount() == 1 || msg->getArgumentCount() == 2", __FILE__, __LINE__, "%d arguments to MSG_NEW_GAME", msg->getArgumentCount());
 	GameMode gameMode = (GameMode)msg->getArgument( 0 )->integer;
 	Int rankPoints = 0;
 	GameDifficulty diff = DIFFICULTY_NORMAL;
@@ -882,7 +881,7 @@ bool GameLogic::onNewGame(MAYBE_UNUSED GameMessage *msg)
 		Int maxFPS = msg->getArgument( 3 )->integer;
 		if (maxFPS < 1 || maxFPS > 1000)
 			maxFPS = TheGlobalData->m_framesPerSecondLimit;
-		DEBUG_LOG(("Setting logic time scale to %d FPS", maxFPS));
+		engine::debug::log_info("Setting logic time scale to %d FPS", maxFPS);
 		TheFramePacer->setLogicTimeScaleFps(maxFPS);
 		TheFramePacer->enableLogicTimeScale(TRUE);
 	}
@@ -919,8 +918,8 @@ bool GameLogic::onClearGameData(MAYBE_UNUSED GameMessage *msg, AIGroupPtr &curre
 
 bool GameLogic::onBeginPathBuild(MAYBE_UNUSED GameMessage *msg)
 {
-	DEBUG_LOG(("META: begin path build"));
-	DEBUG_ASSERTCRASH(!theBuildPlan, ("mismatched theBuildPlan"));
+	engine::debug::log_info("META: begin path build");
+	engine::debug::invariant((!theBuildPlan), "!theBuildPlan", __FILE__, __LINE__, "mismatched theBuildPlan");
 
 	if (theBuildPlan == false)
 	{
@@ -933,8 +932,8 @@ bool GameLogic::onBeginPathBuild(MAYBE_UNUSED GameMessage *msg)
 
 bool GameLogic::onEndPathBuild(MAYBE_UNUSED GameMessage *msg)
 {
-	DEBUG_LOG(("META: end path build"));
-	DEBUG_ASSERTCRASH(theBuildPlan, ("mismatched theBuildPlan"));
+	engine::debug::log_info("META: end path build");
+	engine::debug::invariant((theBuildPlan), "theBuildPlan", __FILE__, __LINE__, "mismatched theBuildPlan");
 
 	// tell everyone who participated in the plan to move
 	for( int i=0; i<thePlanSubjectCount; i++ )
@@ -963,10 +962,10 @@ bool GameLogic::onSetRallyPoint(MAYBE_UNUSED GameMessage *msg)
 	Player *msgPlayer = getMessagePlayer(msg);
 	if ( obj->getControllingPlayer() != msgPlayer )
 	{
-		DEBUG_CRASH( ("MSG_SET_RALLY_POINT: Player '%ls' attempted to set the rally point of object '%s' owned by player '%ls'.",
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "MSG_SET_RALLY_POINT: Player '%ls' attempted to set the rally point of object '%s' owned by player '%ls'.",
 			msgPlayer->getPlayerDisplayName().str(),
 			obj->getTemplate()->getName().str(),
-			obj->getControllingPlayer()->getPlayerDisplayName().str()) );
+			obj->getControllingPlayer()->getPlayerDisplayName().str());
 		return false;
 	}
 #endif
@@ -1092,10 +1091,9 @@ bool GameLogic::onEnableRetaliationMode(MAYBE_UNUSED GameMessage *msg)
 	Player *player = ThePlayerList->getNthPlayer( playerIndex );
 	if( player )
 	{
-		DEBUG_ASSERTCRASH(player == msgPlayer,
-			("Retaliation mode of player '%ls' was illegally set by player '%ls'. Before: '%d', after: '%d'.",
+		engine::debug::invariant((player == msgPlayer), "player == msgPlayer", __FILE__, __LINE__, "Retaliation mode of player '%ls' was illegally set by player '%ls'. Before: '%d', after: '%d'.",
 				player->getPlayerDisplayName().str(), msgPlayer->getPlayerDisplayName().str(),
-				player->isLogicalRetaliationModeEnabled(), enableRetaliation) );
+				player->isLogicalRetaliationModeEnabled(), enableRetaliation);
 
 		player->setLogicalRetaliationModeEnabled( enableRetaliation );
 	}
@@ -1143,10 +1141,10 @@ bool GameLogic::onDoSpecialPower(MAYBE_UNUSED GameMessage *msg, AIGroupPtr &curr
 		Player *msgPlayer = getMessagePlayer(msg);
 		if ( source->getControllingPlayer() != msgPlayer )
 		{
-			DEBUG_CRASH( ("MSG_DO_SPECIAL_POWER: Player '%ls' attempted to control the object '%s' owned by player '%ls'.",
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "MSG_DO_SPECIAL_POWER: Player '%ls' attempted to control the object '%s' owned by player '%ls'.",
 					msgPlayer->getPlayerDisplayName().str(),
 					source->getTemplate()->getName().str(),
-					source->getControllingPlayer()->getPlayerDisplayName().str()) );
+					source->getControllingPlayer()->getPlayerDisplayName().str());
 			return false;
 		}
 #endif
@@ -1203,10 +1201,10 @@ bool GameLogic::onDoSpecialPowerAtLocation(MAYBE_UNUSED GameMessage *msg, AIGrou
 		Player *msgPlayer = getMessagePlayer(msg);
 		if ( source->getControllingPlayer() != msgPlayer )
 		{
-			DEBUG_CRASH( ("MSG_DO_SPECIAL_POWER_AT_LOCATION: Player '%ls' attempted to control the object '%s' owned by player '%ls'.",
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "MSG_DO_SPECIAL_POWER_AT_LOCATION: Player '%ls' attempted to control the object '%s' owned by player '%ls'.",
 					msgPlayer->getPlayerDisplayName().str(),
 					source->getTemplate()->getName().str(),
-					source->getControllingPlayer()->getPlayerDisplayName().str()) );
+					source->getControllingPlayer()->getPlayerDisplayName().str());
 			return false;
 		}
 #endif
@@ -1259,10 +1257,10 @@ bool GameLogic::onDoSpecialPowerAtObject(MAYBE_UNUSED GameMessage *msg, AIGroupP
 		Player *msgPlayer = getMessagePlayer(msg);
 		if ( source->getControllingPlayer() != msgPlayer )
 		{
-			DEBUG_CRASH( ("MSG_DO_SPECIAL_POWER_AT_OBJECT: Player '%ls' attempted to control the object '%s' owned by player '%ls'.",
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "MSG_DO_SPECIAL_POWER_AT_OBJECT: Player '%ls' attempted to control the object '%s' owned by player '%ls'.",
 					msgPlayer->getPlayerDisplayName().str(),
 					source->getTemplate()->getName().str(),
-					source->getControllingPlayer()->getPlayerDisplayName().str()) );
+					source->getControllingPlayer()->getPlayerDisplayName().str());
 			return false;
 		}
 #endif
@@ -1329,7 +1327,7 @@ bool GameLogic::onDoMoveto(MAYBE_UNUSED GameMessage *msg, AIGroupPtr &currentlyS
 
 	if( currentlySelectedGroup )
 	{
-		//DEBUG_LOG(("GameLogicDispatch - got a MSG_DO_MOVETO command"));
+		//engine::debug::log_info("GameLogicDispatch - got a MSG_DO_MOVETO command");
 		currentlySelectedGroup->releaseWeaponLockForGroup(LOCKED_TEMPORARILY);	// release any temporary locks.
 		currentlySelectedGroup->groupMoveToPosition( &dest, false, CMD_FROM_PLAYER, facing, spacing, columns );
 	}
@@ -1343,7 +1341,7 @@ bool GameLogic::onAddWaypoint(MAYBE_UNUSED GameMessage *msg, AIGroupPtr &current
 
 	if( currentlySelectedGroup )
 	{
-		//DEBUG_LOG(("GameLogicDispatch - got a MSG_DO_MOVETO command"));
+		//engine::debug::log_info("GameLogicDispatch - got a MSG_DO_MOVETO command");
 		currentlySelectedGroup->releaseWeaponLockForGroup(LOCKED_TEMPORARILY);	// release any temporary locks.
 		currentlySelectedGroup->groupMoveToPosition( &dest, true, CMD_FROM_PLAYER );
 	}
@@ -1680,10 +1678,10 @@ bool GameLogic::onDoSpecialPowerOverrideDestination(MAYBE_UNUSED GameMessage *ms
 		Player *msgPlayer = getMessagePlayer(msg);
 		if ( source->getControllingPlayer() != msgPlayer )
 		{
-			DEBUG_CRASH( ("MSG_DO_SPECIAL_POWER_OVERRIDE_DESTINATION: Player '%ls' attempted to control the object '%s' owned by player '%ls'.",
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "MSG_DO_SPECIAL_POWER_OVERRIDE_DESTINATION: Player '%ls' attempted to control the object '%s' owned by player '%ls'.",
 					msgPlayer->getPlayerDisplayName().str(),
 					source->getTemplate()->getName().str(),
-					source->getControllingPlayer()->getPlayerDisplayName().str()) );
+					source->getControllingPlayer()->getPlayerDisplayName().str());
 			return false;
 		}
 #endif
@@ -1840,8 +1838,8 @@ bool GameLogic::onQueueUnitCreate(MAYBE_UNUSED GameMessage *msg, AIGroupPtr &cur
 	ProductionUpdateInterface *pu = producer->getProductionUpdateInterface();
 	if( pu == nullptr )
 	{
-		DEBUG_CRASH( ("MSG_QUEUE_UNIT_CREATE: Producer '%s' doesn't have a unit production interface",
-													producer->getTemplate()->getName().str()) );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "MSG_QUEUE_UNIT_CREATE: Producer '%s' doesn't have a unit production interface",
+													producer->getTemplate()->getName().str());
 		return false;
 	}
 
@@ -2089,7 +2087,7 @@ bool GameLogic::onPlaceBeacon(MAYBE_UNUSED GameMessage *msg)
 		// how many does this player have active?
 		Int count;
 		msgPlayer->countObjectsByThingTemplate( 1, &thing, false, &count );
-		DEBUG_LOG(("Player already has %d beacons active", count));
+		engine::debug::log_info("Player already has %d beacons active", count);
 		if (count >= TheMultiplayerSettings->getMaxBeaconsPerPlayer())
 		{
 			if (msgPlayer == ThePlayerList->getLocalPlayer())
@@ -2150,7 +2148,7 @@ bool GameLogic::onPlaceBeacon(MAYBE_UNUSED GameMessage *msg)
 					++clientModules;
 				}
 			}
-			DEBUG_ASSERTCRASH(updateCount == 1, ("Saw %d update modules for the beacon!", updateCount));
+			engine::debug::invariant((updateCount == 1), "updateCount == 1", __FILE__, __LINE__, "Saw %d update modules for the beacon!", updateCount);
 
 		}
 	}
@@ -2419,15 +2417,15 @@ bool GameLogic::onLogicCrc(MAYBE_UNUSED GameMessage *msg)
 		}
 
 		UnsignedInt newCRC = msg->getArgument(0)->integer;
-		//DEBUG_LOG(("Received CRC of %8.8X from %ls on frame %d", newCRC,
-			//msgPlayer->getPlayerDisplayName().str(), m_frame));
+		//engine::debug::log_info("Received CRC of %8.8X from %ls on frame %d", newCRC,
+			//msgPlayer->getPlayerDisplayName().str(), m_frame);
 		m_cachedCRCs[msgPlayer->getPlayerIndex()] = newCRC;
 	}
 	else if (TheRecorder && TheRecorder->isPlaybackMode())
 	{
 		UnsignedInt newCRC = msg->getArgument(0)->integer;
-		//DEBUG_LOG(("Saw CRC of %X from player %d.  Our CRC is %X.  Arg count is %d",
-			//newCRC, msgPlayer->getPlayerIndex(), getCRC(), msg->getArgumentCount()));
+		//engine::debug::log_info("Saw CRC of %X from player %d.  Our CRC is %X.  Arg count is %d",
+			//newCRC, msgPlayer->getPlayerIndex(), getCRC(), msg->getArgumentCount());
 
 		TheRecorder->handleCRCMessage(newCRC, msgPlayer->getPlayerIndex(), (msg->getArgument(1)->boolean));
 	}

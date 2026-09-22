@@ -29,6 +29,7 @@
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 #include "PreRTS.h"
+import engine.debug;
 #include "Common/Xfer.h"
 #include "GameLogic/GameLogic.h"
 #include "GameLogic/Module/UpdateModule.h"
@@ -43,7 +44,7 @@ UpdateSleepTime UpdateModule::frameToSleepTime(
 	UnsignedInt frame4
 )
 {
-	DEBUG_ASSERTCRASH(frame1 != 0 && frame2 != 0 && frame3 != 0 && frame4 != 0, ("probably should not pass zero to frameToSleepTime."));
+	engine::debug::invariant((frame1 != 0 && frame2 != 0 && frame3 != 0 && frame4 != 0), "frame1 != 0 && frame2 != 0 && frame3 != 0 && frame4 != 0", __FILE__, __LINE__, "probably should not pass zero to frameToSleepTime.");
 	if (frame1 > frame2) frame1 = frame2;
 	if (frame1 > frame3) frame1 = frame3;
 	if (frame1 > frame4) frame1 = frame4;
@@ -58,7 +59,7 @@ UpdateSleepTime UpdateModule::frameToSleepTime(
 	}
 	else
 	{
-		DEBUG_CRASH(("frameToSleepTime: frame is in the past. oops."));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "frameToSleepTime: frame is in the past. oops.");
 		return UPDATE_SLEEP_NONE;
 	}
 }

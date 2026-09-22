@@ -29,7 +29,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "gamespy/peer/peer.h"
 
@@ -284,7 +285,7 @@ static void updateNumPlayersOnline()
 				g = grabUByte(aLine.str()+5);
 				b = grabUByte(aLine.str()+7);
 				c = GameMakeColor(r, g, b, a);
-				DEBUG_LOG(("MOTD line '%s' has color %X", aLine.str(), c));
+				engine::debug::log_info("MOTD line '%s' has color %X", aLine.str(), c);
 				aLine = aLine.str() + 9;
 			}
 			line = UnicodeString(MultiByteToWideCharSingleLine(aLine.str()).c_str());
@@ -323,12 +324,12 @@ static const char* FindNextNumber( const char* pStart )
 //parse win/loss stats received from GameSpy
 void HandleOverallStats( const char* szHTTPStats, unsigned len )
 {
-//x	DEBUG_LOG(("Parsing win percent stats:\n%s", szHTTPStats));
+//x	engine::debug::log_info("Parsing win percent stats:\n%s", szHTTPStats);
 	//find today's stats
 	const char* pToday = strstr( szHTTPStats, "Today" );
 	if( !pToday )
 	{	//error
-		DEBUG_LOG(( "Unable to parse win/loss stats.  Could not find 'Today' in:\n%s", szHTTPStats ));
+		engine::debug::log_info( "Unable to parse win/loss stats.  Could not find 'Today' in:\n%s", szHTTPStats );
 		return;
 	}
 	s_winStats.clear();
@@ -349,7 +350,7 @@ void HandleOverallStats( const char* szHTTPStats, unsigned len )
 		const char* pSide = strstr( pToday, side.str() );
 		if( pSide == nullptr )
 		{	//error, skip this side
-			DEBUG_LOG(( "Unable to parse win/loss stats for %s in:\n%s", side.str(), szHTTPStats ));
+			engine::debug::log_info( "Unable to parse win/loss stats for %s in:\n%s", side.str(), szHTTPStats );
 			continue;
 		}
 
@@ -361,7 +362,7 @@ void HandleOverallStats( const char* szHTTPStats, unsigned len )
 		s_totalWinPercent += percent;
 
 		s_winStats.insert(std::make_pair( side, percent ));
-//x		DEBUG_LOG(("Added win percent: %s, %d", side.str(), percent));
+//x		engine::debug::log_info("Added win percent: %s, %d", side.str(), percent);
 	}
 }
 
@@ -384,7 +385,7 @@ static void updateOverallStats()
 		wndName.format( "WOLWelcomeMenu.wnd:Percent%s", it->first.str() );
 		pWin = TheWindowManager->winGetWindowFromId( nullptr, NAMEKEY(wndName) );
 		GadgetCheckBoxSetText( pWin, percStr );
-//x		DEBUG_LOG(("Initialized win percent: %s -> %s %f=%s", wndName.str(), it->first.str(), it->second, percStr.str() ));
+//x		engine::debug::log_info("Initialized win percent: %s -> %s %f=%s", wndName.str(), it->first.str(), it->second, percStr.str() );
 	}
 }
 
@@ -485,7 +486,7 @@ void WOLWelcomeMenuInit( WindowLayout *layout, void *userData )
 	GadgetStaticTextSetText(staticTextHighscoreRank, questionMark);
 	*/
 
-	//DEBUG_ASSERTCRASH(listboxInfo, ("No control found!"));
+	//engine::debug::invariant((listboxInfo), "listboxInfo", __FILE__, __LINE__, "No control found!");
 
 	buttonQuickMatchID = TheNameKeyGenerator->nameToKey( "WOLWelcomeMenu.wnd:ButtonQuickMatch" );
 	buttonQuickMatch = TheWindowManager->winGetWindowFromId( parentWOLWelcome, buttonQuickMatchID );
@@ -780,7 +781,7 @@ WindowMsgHandledType WOLWelcomeMenuSystem( GameWindow *window, UnsignedInt msg,
 
 				if ( controlID == buttonBackID )
 				{
-					//DEBUG_ASSERTCRASH(TheGameSpyChat->getPeer(), ("No GameSpy Peer object!"));
+					//engine::debug::invariant((TheGameSpyChat->getPeer()), "TheGameSpyChat->getPeer()", __FILE__, __LINE__, "No GameSpy Peer object!");
 					//TheGameSpyChat->disconnectFromChat();
 
 					PeerRequest req;
@@ -790,7 +791,7 @@ WindowMsgHandledType WOLWelcomeMenuSystem( GameWindow *window, UnsignedInt msg,
 					breq.buddyRequestType = BuddyRequest::BUDDYREQUEST_LOGOUT;
 					TheGameSpyBuddyMessageQueue->addRequest( breq );
 
-					DEBUG_LOG(("Tearing down GameSpy from WOLWelcomeMenuSystem(GBM_SELECTED)"));
+					engine::debug::log_info("Tearing down GameSpy from WOLWelcomeMenuSystem(GBM_SELECTED)");
 					TearDownGameSpy();
 
 					/*

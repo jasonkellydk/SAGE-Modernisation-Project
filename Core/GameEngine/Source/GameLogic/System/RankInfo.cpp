@@ -27,7 +27,8 @@
 // Desc:
 //-----------------------------------------------------------------------------
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/INI.h"
 #include "Common/Player.h"
@@ -58,7 +59,7 @@ RankInfoStore::~RankInfoStore()
 //-----------------------------------------------------------------------------
 void RankInfoStore::init()
 {
-	DEBUG_ASSERTCRASH(m_rankInfos.empty(), ("Hmm"));
+	engine::debug::invariant((m_rankInfos.empty()), "m_rankInfos.empty()", __FILE__, __LINE__, "Hmm");
 	m_rankInfos.clear();
 }
 
@@ -76,7 +77,7 @@ void RankInfoStore::reset()
 			Overridable* temp = ri->deleteOverrides();
 			if (!temp)
 			{
-				DEBUG_CRASH(("hmm, should not be possible for RankInfo"));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "hmm, should not be possible for RankInfo");
 				it = m_rankInfos.erase(it);
 			}
 			else
@@ -129,14 +130,14 @@ void RankInfoStore::friend_parseRankDefinition( INI* ini )
 			// we aren't allowed to add ranks in overrides, only to override existing ones.
 			if (rank < 1 || rank > TheRankInfoStore->m_rankInfos.size())
 			{
-				DEBUG_CRASH(("Rank not found in map.ini"));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Rank not found in map.ini");
 				throw INI_INVALID_DATA;
 			}
 
 			RankInfo* info = TheRankInfoStore->m_rankInfos[rank-1];
 			if (!info)
 			{
-				DEBUG_CRASH(("Rank not found in map.ini"));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Rank not found in map.ini");
 				throw INI_INVALID_DATA;
 			}
 
@@ -157,7 +158,7 @@ void RankInfoStore::friend_parseRankDefinition( INI* ini )
 		{
 			if (rank != TheRankInfoStore->m_rankInfos.size() + 1)
 			{
-				DEBUG_CRASH(("Ranks must increase monotonically"));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Ranks must increase monotonically");
 				throw INI_INVALID_DATA;
 			}
 			RankInfo* info = newInstance(RankInfo);

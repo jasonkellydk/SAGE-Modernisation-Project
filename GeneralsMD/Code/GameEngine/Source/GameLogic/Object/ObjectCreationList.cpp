@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #define DEFINE_SHADOW_NAMES								// for TheShadowNames[]
 #define DEFINE_WEAPONSLOTTYPE_NAMES
@@ -136,7 +137,7 @@ public:
 	{
 		if (!primaryObj || !primary || !secondary)
 		{
-			DEBUG_CRASH(("You must have a primary and secondary source for this effect"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "You must have a primary and secondary source for this effect");
       return nullptr;
     }
 
@@ -183,7 +184,7 @@ public:
 	{
 		if (!primaryObj || !primary || !secondary)
 		{
-			DEBUG_CRASH(("You must have a primary and secondary source for this effect"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "You must have a primary and secondary source for this effect");
       return nullptr;
     }
 
@@ -270,7 +271,7 @@ public:
 	{
 		if (!primaryObj || !primary || !secondary)
 		{
-			DEBUG_CRASH(("You must have a primary and secondary source for this effect"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "You must have a primary and secondary source for this effect");
       return nullptr;
     }
 
@@ -441,8 +442,8 @@ public:
 					const ThingTemplate* payloadTmpl = TheThingFactory->findTemplate(it->m_payloadName);
 					if( !payloadTmpl )
 					{
-						DEBUG_CRASH( ("DeliverPayloadNugget::create() -- %s couldn't create %s (template not found).",
-							transport->getTemplate()->getName().str(), it->m_payloadName.str() ) );
+						engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "DeliverPayloadNugget::create() -- %s couldn't create %s (template not found).",
+							transport->getTemplate()->getName().str(), it->m_payloadName.str() );
 						return nullptr;
 					}
 					for (int i = 0; i < it->m_payloadCount; ++i)
@@ -484,7 +485,7 @@ public:
 							}
 							else
 							{
-								DEBUG_CRASH(("DeliverPayload: PutInContainer %s is full, or not valid for the payload %s!",m_putInContainerName.str(),it->m_payloadName.str()));
+								engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "DeliverPayload: PutInContainer %s is full, or not valid for the payload %s!",m_putInContainerName.str(),it->m_payloadName.str());
 							}
 						}
 
@@ -494,14 +495,14 @@ public:
 						}
 						else
 						{
-							DEBUG_CRASH(("DeliverPayload: transport %s is full, or not valid for the payload %s!",m_transportName.str(),it->m_payloadName.str()));
+							engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "DeliverPayload: transport %s is full, or not valid for the payload %s!",m_transportName.str(),it->m_payloadName.str());
 						}
 					}
 				}
 			}
 			else
 			{
-				DEBUG_CRASH(("You should really have a DeliverPayloadAIUpdate here"));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "You should really have a DeliverPayloadAIUpdate here");
 			}
 		}
 		return firstTransport;
@@ -640,19 +641,19 @@ public:
       }
       else
       {
-  			DEBUG_CRASH(("You must have a Physics module source for this effect"));
+  			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "You must have a Physics module source for this effect");
       }
 		}
 		else
 		{
-			DEBUG_CRASH(("You must have a primary source for this effect"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "You must have a primary source for this effect");
 		}
 		return nullptr;
 	}
 
 	virtual Object* create(const Object* primaryObj, const Coord3D *primary, const Coord3D* secondary, Real angle, UnsignedInt lifetimeFrames = 0 ) const override
 	{
-		DEBUG_CRASH(("You must call this effect with an object, not a location"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "You must call this effect with an object, not a location");
 		return nullptr;
 	}
 
@@ -786,7 +787,7 @@ public:
 		}
 		else
 		{
-			DEBUG_CRASH(("You must have a primary source for this effect"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "You must have a primary source for this effect");
 		}
 		return nullptr;
 	}
@@ -805,7 +806,7 @@ public:
 		}
 		else
 		{
-			DEBUG_CRASH(("You must have a primary source for this effect"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "You must have a primary source for this effect");
 		}
 		return nullptr;
 	}
@@ -901,7 +902,7 @@ public:
 
 		ini->initFromINIMulti(nugget, p);
 
-		DEBUG_ASSERTCRASH(nugget->m_mass > 0.0f, ("Zero masses are not allowed for debris!"));
+		engine::debug::invariant((nugget->m_mass > 0.0f), "nugget->m_mass > 0.0f", __FILE__, __LINE__, "Zero masses are not allowed for debris!");
 		((ObjectCreationList*)instance)->addObjectCreationNugget(nugget);
 	}
 
@@ -1007,8 +1008,8 @@ protected:
 
 		if (m_inheritsVeterancy && sourceObj && obj->getExperienceTracker()->isTrainable())
 		{
-			DEBUG_LOG(("Object %s inherits veterancy level %d from %s",
-				obj->getTemplate()->getName().str(), sourceObj->getVeterancyLevel(), sourceObj->getTemplate()->getName().str()));
+			engine::debug::log_info("Object %s inherits veterancy level %d from %s",
+				obj->getTemplate()->getName().str(), sourceObj->getVeterancyLevel(), sourceObj->getTemplate()->getName().str());
 			VeterancyLevel v = sourceObj->getVeterancyLevel();
 
 			// TheSuperHackers @bugfix Caball009 22/04/2026 Disable audiovisual cues for a veterancy level change because this object was just created.
@@ -1131,7 +1132,7 @@ protected:
 					DUMPREAL(m_mass);
 					objUp->setMass( m_mass );
 				}
-				DEBUG_ASSERTCRASH(objUp->getMass() > 0.0f, ("Zero masses are not allowed for obj!"));
+				engine::debug::invariant((objUp->getMass() > 0.0f), "objUp->getMass() > 0.0f", __FILE__, __LINE__, "Zero masses are not allowed for obj!");
 
 				objUp->setExtraBounciness(m_extraBounciness);
 				objUp->setExtraFriction(m_extraFriction);
@@ -1247,7 +1248,7 @@ protected:
 			}
 			else
 			{
-				DEBUG_CRASH(("A OCL with ContainInsideSourceObject failed the contain and is killing the new object."));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "A OCL with ContainInsideSourceObject failed the contain and is killing the new object.");
 				// If we fail to contain it, we can't just leave it.  Stillborn it.
 				TheGameLogic->destroyObject(obj);
 			}
@@ -1329,7 +1330,7 @@ protected:
 				container = TheThingFactory->newObject( containerTmpl, debrisOwner );
 				if( !container )
 				{
-					DEBUG_CRASH( ("OCL::reallyCreate() failed to create container %s.", m_putInContainer.str() ) );
+					engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "OCL::reallyCreate() failed to create container %s.", m_putInContainer.str() );
 					return firstObject;
 				}
 				firstObject = container;
@@ -1353,14 +1354,14 @@ protected:
 
 				tmpl = debrisTemplate;
 			}
-			DEBUG_ASSERTCRASH(tmpl, ("Object %s not found",m_names[pick].str()));
+			engine::debug::invariant((tmpl), "tmpl", __FILE__, __LINE__, "Object %s not found",m_names[pick].str());
 			if (!tmpl)
 				continue;
 
 			Object *debris = TheThingFactory->newObject( tmpl, debrisOwner );
 			if( !debris )
 			{
-				DEBUG_CRASH( ("OCL::reallyCreate() failed to create debris %s.", tmpl->getName().str() ) );
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "OCL::reallyCreate() failed to create debris %s.", tmpl->getName().str() );
 				return firstObject;
 			}
 			if( !firstObject )
@@ -1397,10 +1398,10 @@ protected:
 
 				if (!ThePartitionManager->findPositionAround(pos, &fpOptions, &resultPos))
 				{
-					DEBUG_ASSERTCRASH(resultPos == *pos, ("Position should not have been changed"));
+					engine::debug::invariant((resultPos == *pos), "resultPos == *pos", __FILE__, __LINE__, "Position should not have been changed");
 
 #if RETAIL_COMPATIBLE_CRC
-					DEBUG_CRASH(("A mismatch is likely to happen if this code path is used in a match with unpatched clients."));
+					engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "A mismatch is likely to happen if this code path is used in a match with unpatched clients.");
 #endif
 				}
 				doStuffToObj( debris, m_names[pick], &resultPos, mtx, orientation, sourceObj, lifetimeFrames );
@@ -1543,7 +1544,7 @@ void ObjectCreationList::addObjectCreationNugget(ObjectCreationNugget* nugget)
 //-------------------------------------------------------------------------------------------------
 Object* ObjectCreationList::createInternal( const Object* primaryObj, const Coord3D *primary, const Coord3D* secondary, Bool createOwner, UnsignedInt lifetimeFrames ) const
 {
-	DEBUG_ASSERTCRASH(primaryObj != nullptr, ("You should always call OCLs with a non-null primary Obj, even for positional calls, to get team ownership right"));
+	engine::debug::invariant((primaryObj != nullptr), "primaryObj != nullptr", __FILE__, __LINE__, "You should always call OCLs with a non-null primary Obj, even for positional calls, to get team ownership right");
 	Object *theFirstObject = nullptr;
 	for (ObjectCreationNuggetVector::const_iterator i = m_nuggets.begin(); i != m_nuggets.end(); ++i)
 	{
@@ -1558,7 +1559,7 @@ Object* ObjectCreationList::createInternal( const Object* primaryObj, const Coor
 //-------------------------------------------------------------------------------------------------
 Object* ObjectCreationList::createInternal( const Object* primaryObj, const Coord3D *primary, const Coord3D* secondary, Real angle, UnsignedInt lifetimeFrames ) const
 {
-	DEBUG_ASSERTCRASH(primaryObj != nullptr, ("You should always call OCLs with a non-null primary Obj, even for positional calls, to get team ownership right"));
+	engine::debug::invariant((primaryObj != nullptr), "primaryObj != nullptr", __FILE__, __LINE__, "You should always call OCLs with a non-null primary Obj, even for positional calls, to get team ownership right");
 	Object *theFirstObject = nullptr;
 	for (ObjectCreationNuggetVector::const_iterator i = m_nuggets.begin(); i != m_nuggets.end(); ++i)
 	{
@@ -1573,7 +1574,7 @@ Object* ObjectCreationList::createInternal( const Object* primaryObj, const Coor
 //-------------------------------------------------------------------------------------------------
 Object* ObjectCreationList::createInternal( const Object* primary, const Object* secondary, UnsignedInt lifetimeFrames ) const
 {
-	DEBUG_ASSERTCRASH(primary != nullptr, ("You should always call OCLs with a non-null primary Obj, even for positional calls, to get team ownership right"));
+	engine::debug::invariant((primary != nullptr), "primary != nullptr", __FILE__, __LINE__, "You should always call OCLs with a non-null primary Obj, even for positional calls, to get team ownership right");
 	Object *theFirstObject = nullptr;
 	for (ObjectCreationNuggetVector::const_iterator i = m_nuggets.begin(); i != m_nuggets.end(); ++i)
 	{

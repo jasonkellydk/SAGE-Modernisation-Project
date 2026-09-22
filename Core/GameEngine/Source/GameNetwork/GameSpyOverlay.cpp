@@ -26,7 +26,8 @@
 // Westwood Online screen setup/teardown
 // Author: Matthew D. Campbell, November 2001
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 #include "Common/AudioEventRTS.h"
 
 #include "GameClient/GadgetListBox.h"
@@ -54,7 +55,7 @@ static Bool reOpenPlayerInfoFlag = FALSE;
 	*/
 static void messageBoxOK()
 {
-	DEBUG_ASSERTCRASH(messageBoxWindow, ("Message box window went away without being there in the first place!"));
+	engine::debug::invariant((messageBoxWindow), "messageBoxWindow", __FILE__, __LINE__, "Message box window went away without being there in the first place!");
 	messageBoxWindow = nullptr;
 	if (okFunc)
 	{
@@ -69,7 +70,7 @@ static void messageBoxOK()
 	*/
 static void messageBoxCancel()
 {
-	DEBUG_ASSERTCRASH(messageBoxWindow, ("Message box window went away without being there in the first place!"));
+	engine::debug::invariant((messageBoxWindow), "messageBoxWindow", __FILE__, __LINE__, "Message box window went away without being there in the first place!");
 	messageBoxWindow = nullptr;
 	if (cancelFunc)
 	{
@@ -235,28 +236,28 @@ void GameSpyCloseOverlay( GSOverlayType overlay )
 	switch(overlay)
 	{
 		case GSOVERLAY_PLAYERINFO:
-			DEBUG_LOG(("Closing overlay GSOVERLAY_PLAYERINFO"));
+			engine::debug::log_info("Closing overlay GSOVERLAY_PLAYERINFO");
 			break;
 		case GSOVERLAY_MAPSELECT:
-			DEBUG_LOG(("Closing overlay GSOVERLAY_MAPSELECT"));
+			engine::debug::log_info("Closing overlay GSOVERLAY_MAPSELECT");
 			break;
 		case GSOVERLAY_BUDDY:
-			DEBUG_LOG(("Closing overlay GSOVERLAY_BUDDY"));
+			engine::debug::log_info("Closing overlay GSOVERLAY_BUDDY");
 			break;
 		case GSOVERLAY_PAGE:
-			DEBUG_LOG(("Closing overlay GSOVERLAY_PAGE"));
+			engine::debug::log_info("Closing overlay GSOVERLAY_PAGE");
 			break;
 		case GSOVERLAY_GAMEOPTIONS:
-			DEBUG_LOG(("Closing overlay GSOVERLAY_GAMEOPTIONS"));
+			engine::debug::log_info("Closing overlay GSOVERLAY_GAMEOPTIONS");
 			break;
 		case GSOVERLAY_GAMEPASSWORD:
-			DEBUG_LOG(("Closing overlay GSOVERLAY_GAMEPASSWORD"));
+			engine::debug::log_info("Closing overlay GSOVERLAY_GAMEPASSWORD");
 			break;
 		case GSOVERLAY_LADDERSELECT:
-			DEBUG_LOG(("Closing overlay GSOVERLAY_LADDERSELECT"));
+			engine::debug::log_info("Closing overlay GSOVERLAY_LADDERSELECT");
 			break;
 		case GSOVERLAY_OPTIONS:
-			DEBUG_LOG(("Closing overlay GSOVERLAY_OPTIONS"));
+			engine::debug::log_info("Closing overlay GSOVERLAY_OPTIONS");
 			if( overlayLayouts[overlay] )
 			{
 				SignalUIInteraction(SHELL_SCRIPT_HOOK_OPTIONS_CLOSED);

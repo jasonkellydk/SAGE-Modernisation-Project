@@ -13,15 +13,9 @@ module;
 #include <utility>
 #include <vector>
 
-#if defined(RTS_PROFILE_TRACY)
-#include <tracy/Tracy.hpp>
-#define GRAPHICS_PROFILE_SCOPE(name) ZoneScopedN(name)
-#else
-#define GRAPHICS_PROFILE_SCOPE(name) ((void)0)
-#endif
-
 export module Graphics.Scene.Beams;
 
+import engine.profiling;
 export import Graphics.Resources.Bindless.BindlessResourceTable;
 export import Graphics.Resources.Handles.ResourceHandle;
 export import Graphics.Resources.Materials.Material;
@@ -857,7 +851,7 @@ public:
 
 	bool Render(CommandList &commands, RHITextureHandle color_target, RHITextureHandle depth_target, RHIViewport viewport) noexcept
 	{
-		GRAPHICS_PROFILE_SCOPE("Graphics::BeamRenderer::Render");
+		engine::profiling::Scope profile_scope_852("Graphics::BeamRenderer::Render");
 		if (!Is_Initialized() || !color_target.Is_Valid() || !depth_target.Is_Valid() || viewport.width == 0 || viewport.height == 0)
 			return false;
 

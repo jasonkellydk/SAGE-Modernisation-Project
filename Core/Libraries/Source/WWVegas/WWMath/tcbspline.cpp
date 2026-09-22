@@ -36,16 +36,17 @@
 
 
 #include "tcbspline.h"
-#include "WWDebug/wwdebug.h"
+
 #include "WWSaveLoad/persistfactory.h"
 #include "wwmathids.h"
-#include "WWDebug/wwhack.h"
+import engine.debug;
+
 
 
 /*
 ** Force-Link this module because the linker can't detect that we actually need it...
 */
-DECLARE_FORCE_LINK(tcbspline);
+void force_link_tcbspline() {}
 
 /*
 ** Save-Load stuff
@@ -91,8 +92,8 @@ void TCBSpline3DClass::Clear_Keys()
 
 void TCBSpline3DClass::Set_TCB_Params(int i,float tension,float continuity,float bias)
 {
-	WWASSERT(i >= 0);
-	WWASSERT(i < Params.Count());
+	engine::debug::assert_condition((i >= 0), "i >= 0", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((i < Params.Count()), "i < Params.Count()", __FILE__, __LINE__, "assertion failed");
 	Params[i].Tension = tension;
 	Params[i].Continuity = continuity;
 	Params[i].Bias = bias;
@@ -238,7 +239,7 @@ bool TCBSpline3DClass::Load(ChunkLoadClass &cload)
 				break;
 
 			default:
-				WWDEBUG_SAY(("Unhandled Chunk: 0x%X File: %s Line: %d",__FILE__,__LINE__));
+				engine::debug::log_info("Unhandled Chunk: 0x%X File: %s Line: %d",__FILE__,__LINE__);
 				break;
 		}
 		cload.Close_Chunk();

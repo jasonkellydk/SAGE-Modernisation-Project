@@ -28,12 +28,10 @@
 
 #pragma once
 
-#include "Common/Debug.h"
+
 
 #ifndef NO_DEBUG_CRC
-	#ifdef DEBUG_LOGGING
 		#define DEBUG_CRC
-	#endif
 #endif
 
 #ifdef DEBUG_CRC

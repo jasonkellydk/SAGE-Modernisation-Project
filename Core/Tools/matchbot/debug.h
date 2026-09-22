@@ -22,6 +22,7 @@
 
 #pragma once
 
+
 #ifdef DEBUG
 
 #include <cstdarg>
@@ -33,10 +34,7 @@ void DebugLog( const char *fmt, ... );
 #ifdef __cplusplus
 }
 #endif
-#define DEBUG_LOG(x) DebugLog x
 
 #else // DEBUG
-
-#define DEBUG_LOG(x)
 
 #endif // DEBUG

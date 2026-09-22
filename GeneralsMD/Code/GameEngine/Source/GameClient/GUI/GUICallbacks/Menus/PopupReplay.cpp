@@ -45,7 +45,8 @@
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/LocalFileSystem.h"
 #include "Common/MessageStream.h"
@@ -124,7 +125,7 @@ void PopupReplayInit( WindowLayout *layout, void *userData )
 	NameKeyType replaySavedParentID = TheNameKeyGenerator->nameToKey("PopupReplay.wnd:PopupReplaySaved");
 	replaySavedParent = TheWindowManager->winGetWindowFromId( nullptr, replaySavedParentID);
 	if (replaySavedParent == nullptr) {
-		DEBUG_CRASH(("replaySavedParent == nullptr"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "replaySavedParent == nullptr");
 	}
 
 	ShowReplaySavedPopup(FALSE);
@@ -135,7 +136,7 @@ void PopupReplayInit( WindowLayout *layout, void *userData )
 
 	// get the listbox that will have the save games in it
 	GameWindow *listboxGames = TheWindowManager->winGetWindowFromId( nullptr, listboxGamesKey );
-	DEBUG_ASSERTCRASH( listboxGames != nullptr, ("PopupReplayInit - Unable to find games listbox") );
+	engine::debug::invariant((listboxGames != nullptr), "listboxGames != nullptr", __FILE__, __LINE__, "PopupReplayInit - Unable to find games listbox");
 
 	// populate the listbox with the save games on disk
 	PopulateReplayFileListbox(listboxGames);
@@ -296,7 +297,7 @@ void reallySaveReplay()
 
 			// get the listbox that will have the save games in it
 			GameWindow *listboxGames = TheWindowManager->winGetWindowFromId( parent, listboxGamesKey );
-			DEBUG_ASSERTCRASH( listboxGames != nullptr, ("reallySaveReplay - Unable to find games listbox") );
+			engine::debug::invariant((listboxGames != nullptr), "listboxGames != nullptr", __FILE__, __LINE__, "reallySaveReplay - Unable to find games listbox");
 
 			// populate the listbox with the save games on disk
 			PopulateReplayFileListbox(listboxGames);
@@ -323,7 +324,7 @@ void reallySaveReplay()
 
 	// get the listbox that will have the save games in it
 	GameWindow *listboxGames = TheWindowManager->winGetWindowFromId( parent, listboxGamesKey );
-	DEBUG_ASSERTCRASH( listboxGames != nullptr, ("reallySaveReplay - Unable to find games listbox") );
+	engine::debug::invariant((listboxGames != nullptr), "listboxGames != nullptr", __FILE__, __LINE__, "reallySaveReplay - Unable to find games listbox");
 
 	// populate the listbox with the save games on disk
 	PopulateReplayFileListbox(listboxGames);
@@ -375,7 +376,7 @@ WindowMsgHandledType PopupReplaySystem( GameWindow *window, UnsignedInt msg,
 			GameWindow *control = (GameWindow *)mData1;
 
 			GameWindow *listboxGames = TheWindowManager->winGetWindowFromId( window, listboxGamesKey );
-			DEBUG_ASSERTCRASH( listboxGames != nullptr, ("PopupReplaySystem - Unable to find games listbox") );
+			engine::debug::invariant((listboxGames != nullptr), "listboxGames != nullptr", __FILE__, __LINE__, "PopupReplaySystem - Unable to find games listbox");
 
 			//
 			// handle games listbox, when certain items are selected in the listbox only some
@@ -389,7 +390,7 @@ WindowMsgHandledType PopupReplaySystem( GameWindow *window, UnsignedInt msg,
 					UnicodeString filename;
 					filename = GadgetListBoxGetText(listboxGames, rowSelected);
 					GameWindow *textEntryReplayName = TheWindowManager->winGetWindowFromId( window, textEntryReplayNameKey );
-					DEBUG_ASSERTCRASH( textEntryReplayName != nullptr, ("PopupReplaySystem - Unable to find text entry") );
+					engine::debug::invariant((textEntryReplayName != nullptr), "textEntryReplayName != nullptr", __FILE__, __LINE__, "PopupReplaySystem - Unable to find text entry");
 					GadgetTextEntrySetText(textEntryReplayName, filename);
 				}
 			}
@@ -427,7 +428,7 @@ WindowMsgHandledType PopupReplaySystem( GameWindow *window, UnsignedInt msg,
       {
 				// get the filename, and see if we are overwriting
 				GameWindow *textEntryReplayName = TheWindowManager->winGetWindowFromId( window, textEntryReplayNameKey );
-				DEBUG_ASSERTCRASH( textEntryReplayName != nullptr, ("PopupReplaySystem - Unable to find text entry") );
+				engine::debug::invariant((textEntryReplayName != nullptr), "textEntryReplayName != nullptr", __FILE__, __LINE__, "PopupReplaySystem - Unable to find text entry");
 
 				UnicodeString filename = GadgetTextEntryGetText( textEntryReplayName );
 				if (filename.isEmpty())

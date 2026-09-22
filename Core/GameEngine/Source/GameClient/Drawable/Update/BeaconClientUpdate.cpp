@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h" // This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug; // This must go first in EVERY cpp file in the GameEngine
 
 #include "GameClient/Drawable.h"
 #include "GameClient/ParticleSys.h"
@@ -94,7 +95,7 @@ static ParticleSystem* createParticleSystem( Drawable *draw )
 			AsciiString templateName;
 			templateName.format("BeaconSmoke%6.6X", (0xffffff & obj->getIndicatorColor()));
 			const ParticleSystemTemplate *particleTemplate = TheParticleSystemManager->findTemplate( templateName );
-			DEBUG_ASSERTCRASH(TheParticleSystemManager->isDummy() || particleTemplate, ("Could not find particle system %s", templateName.str()));
+			engine::debug::invariant((TheParticleSystemManager->isDummy() || particleTemplate), "TheParticleSystemManager->isDummy() || particleTemplate", __FILE__, __LINE__, "Could not find particle system %s", templateName.str());
 			if (particleTemplate)
 			{
 				system = TheParticleSystemManager->createParticleSystem( particleTemplate );
@@ -105,7 +106,7 @@ static ParticleSystem* createParticleSystem( Drawable *draw )
 			{// THis this will whip up a new particle system to match the house color provided
 				templateName.format("BeaconSmokeFFFFFF");
 				const ParticleSystemTemplate *failsafeTemplate = TheParticleSystemManager->findTemplate( templateName );
-				DEBUG_ASSERTCRASH(TheParticleSystemManager->isDummy() || failsafeTemplate, ("Doh, this is bad \n I Could not even find the white particle system to make a failsafe system out of."));
+				engine::debug::invariant((TheParticleSystemManager->isDummy() || failsafeTemplate), "TheParticleSystemManager->isDummy() || failsafeTemplate", __FILE__, __LINE__, "Doh, this is bad \n I Could not even find the white particle system to make a failsafe system out of.");
 				system = TheParticleSystemManager->createParticleSystem( failsafeTemplate );
 				if (system)
 				{
@@ -147,7 +148,7 @@ void BeaconClientUpdate::hideBeacon()
 
 	}
 
-//	DEBUG_LOG(("in hideBeacon(): draw=%d, m_particleSystemID=%d", draw, m_particleSystemID));
+//	engine::debug::log_info("in hideBeacon(): draw=%d, m_particleSystemID=%d", draw, m_particleSystemID);
 
 }
 

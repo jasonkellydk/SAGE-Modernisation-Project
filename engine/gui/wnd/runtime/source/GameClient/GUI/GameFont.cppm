@@ -30,6 +30,7 @@
 #include "PreRTS.h"
 
 #include "GameClient/GameFont.h"
+import engine.debug;
 
 
 // PUBLIC DATA ////////////////////////////////////////////////////////////////////////////////////
@@ -76,7 +77,7 @@ void FontLibrary::unlinkFont( GameFont *font )
 	if( other == nullptr )
 	{
 
-		DEBUG_CRASH(( "Font '%s' not found in library", font->nameString.str() ));
+		engine::debug::invariant(false, "debug invariant", __FILE__, __LINE__,  "Font '%s' not found in library", font->nameString.str() );
 		return;
 
 	}
@@ -204,7 +205,7 @@ GameFont *FontLibrary::getFont( AsciiString name, Int pointSize, Bool bold )
 	if( font == nullptr )
 	{
 
-		DEBUG_CRASH(( "getFont: Unable to allocate new font list element" ));
+		engine::debug::invariant(false, "debug invariant", __FILE__, __LINE__,  "getFont: Unable to allocate new font list element" );
 		return nullptr;
 
 	}
@@ -215,12 +216,12 @@ GameFont *FontLibrary::getFont( AsciiString name, Int pointSize, Bool bold )
 	font->bold = bold;
 	font->fontData = nullptr;
 
-	//DEBUG_LOG(("Font: Loading font '%s' %d point", font->nameString.str(), font->pointSize));
+	//engine::debug::log_info("Font: Loading font '%s' %d point", font->nameString.str(), font->pointSize);
 	// load the device specific data pointer
 	if( loadFontData( font ) == FALSE )
 	{
 
-		DEBUG_CRASH(( "getFont: Unable to load font data pointer '%s'", name.str() ));
+		engine::debug::invariant(false, "debug invariant", __FILE__, __LINE__,  "getFont: Unable to load font data pointer '%s'", name.str() );
 		deleteInstance(font);
 		return nullptr;
 

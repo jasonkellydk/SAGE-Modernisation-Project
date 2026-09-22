@@ -27,7 +27,8 @@
 // Desc:      @todo
 //-----------------------------------------------------------------------------
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/INI.h"
 #include "Common/Player.h"
@@ -39,7 +40,7 @@ ScienceStore* TheScienceStore = nullptr;
 //-----------------------------------------------------------------------------
 void ScienceStore::init()
 {
-	DEBUG_ASSERTCRASH(m_sciences.empty(), ("Hmm"));
+	engine::debug::invariant((m_sciences.empty()), "m_sciences.empty()", __FILE__, __LINE__, "Hmm");
 	m_sciences.clear();
 }
 
@@ -213,7 +214,7 @@ const ScienceInfo* ScienceStore::findScienceInfo(ScienceType st) const
 		{
 			if (info != nullptr)
 			{
-				DEBUG_CRASH(("duplicate science %s!",c));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "duplicate science %s!",c);
 				throw INI_INVALID_DATA;
 			}
 			info = newInstance(ScienceInfo);
@@ -355,7 +356,7 @@ ScienceType ScienceStore::friend_lookupScience(const char* scienceName) const
 	ScienceType st = (ScienceType)nkt;
 	if (!isValidScience(st))
 	{
-		DEBUG_CRASH(("Science name %s not known! (Did you define it in Science.ini?)",scienceName));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Science name %s not known! (Did you define it in Science.ini?)",scienceName);
 		throw INI_INVALID_DATA;
 	}
 	return st;

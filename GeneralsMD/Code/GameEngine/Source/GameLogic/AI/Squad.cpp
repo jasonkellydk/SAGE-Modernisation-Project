@@ -36,7 +36,8 @@
 /* Revision History:                                                         */
 /*		4/19/2002 : Initial creation                                          */
 /*---------------------------------------------------------------------------*/
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "GameLogic/Squad.h"
 
@@ -236,7 +237,7 @@ void Squad::xfer( Xfer *xfer )
 		if( !m_objectsCached.empty() )
 		{
 
-			DEBUG_CRASH(( "Squad::xfer - m_objectsCached should be empty, but is not" ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Squad::xfer - m_objectsCached should be empty, but is not" );
 			throw SC_INVALID_DATA;
 
 		}

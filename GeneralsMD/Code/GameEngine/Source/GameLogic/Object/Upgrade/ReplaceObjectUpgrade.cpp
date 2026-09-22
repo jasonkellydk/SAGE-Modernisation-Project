@@ -26,7 +26,8 @@
 // Author: Graham Smallwood, July 2003
 // Desc:	 UpgradeModule that creates a new Object in our exact location and then deletes our object
 ///////////////////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "GameLogic/Module/ReplaceObjectUpgrade.h"
 
@@ -86,7 +87,7 @@ void ReplaceObjectUpgrade::upgradeImplementation()
 
 		if (replacementTemplate == nullptr)
 		{
-			DEBUG_ASSERTCRASH(replacementTemplate != nullptr, ("No such object '%s' in ReplaceObjectUpgrade.", data->m_replaceObjectName.str()));
+			engine::debug::invariant((replacementTemplate != nullptr), "replacementTemplate != nullptr", __FILE__, __LINE__, "No such object '%s' in ReplaceObjectUpgrade.", data->m_replaceObjectName.str());
 			return;
 		}
 

@@ -64,6 +64,7 @@
 #include "matrix3.h"
 #include "matrix4.h"
 #include "quat.h"
+import engine.debug;
 
 // some static matrices which are sometimes useful
 const Matrix3D Matrix3D::Identity
@@ -993,38 +994,38 @@ not_equal2:
 
 	}
 /*
-	WWDEBUG_SAY(("{%2.2f, %2.2f, %2.2f, %2.2f}, {%2.2f, %2.2f, %2.2f, %2.2f}, {%2.2f, %2.2f, %2.2f, %2.2f}"
+	engine::debug::log_info("{%2.2f, %2.2f, %2.2f, %2.2f}, {%2.2f, %2.2f, %2.2f, %2.2f}, {%2.2f, %2.2f, %2.2f, %2.2f}"
 		,res[0][0],res[0][1],res[0][2],res[0][3]
 		,res[1][0],res[1][1],res[1][2],res[1][3]
-		,res[2][0],res[2][1],res[2][2],res[2][3]));
-	WWDEBUG_SAY(("{%2.2f, %2.2f, %2.2f, %2.2f}, {%2.2f, %2.2f, %2.2f, %2.2f}, {%2.2f, %2.2f, %2.2f, %2.2f}"
+		,res[2][0],res[2][1],res[2][2],res[2][3]);
+	engine::debug::log_info("{%2.2f, %2.2f, %2.2f, %2.2f}, {%2.2f, %2.2f, %2.2f, %2.2f}, {%2.2f, %2.2f, %2.2f, %2.2f}"
 		,res2[0][0],res2[0][1],res2[0][2],res2[0][3]
 		,res2[1][0],res2[1][1],res2[1][2],res2[1][3]
-		,res2[2][0],res2[2][1],res2[2][2],res2[2][3]));
+		,res2[2][0],res2[2][1],res2[2][2],res2[2][3]);
 //	res[2][3]=res2[2][3];
 //	res=res2;
 */
 /*	for (int y=0;y<3;++y) {
 		for (int x=0;x<4;++x) {
 			if (fabs(res2[y][x]-res[y][x])>0.001f) {
-				WWDEBUG_SAY(("x: %d, y: %d, %f != %f",x,y,res2[y][x],res[y][x]));
+				engine::debug::log_info("x: %d, y: %d, %f != %f",x,y,res2[y][x],res[y][x]);
 				__asm nop
 			}
 		}
 	}
 */
-/*	WWASSERT(res2[0][0]==res[0][0]);
-	WWASSERT(res2[0][1]==res[0][1]);
-	WWASSERT(res2[0][2]==res[0][2]);
-	WWASSERT(res2[0][3]==res[0][3]);
-	WWASSERT(res2[1][0]==res[1][0]);
-	WWASSERT(res2[1][1]==res[1][1]);
-	WWASSERT(res2[1][2]==res[1][2]);
-	WWASSERT(res2[1][3]==res[1][3]);
-	WWASSERT(res2[2][0]==res[2][0]);
-	WWASSERT(res2[2][1]==res[2][1]);
-	WWASSERT(res2[2][2]==res[2][2]);
-	WWASSERT(res2[2][3]==res[2][3]);
+/*	engine::debug::assert_condition((res2[0][0]==res[0][0]), "res2[0][0]==res[0][0]", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((res2[0][1]==res[0][1]), "res2[0][1]==res[0][1]", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((res2[0][2]==res[0][2]), "res2[0][2]==res[0][2]", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((res2[0][3]==res[0][3]), "res2[0][3]==res[0][3]", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((res2[1][0]==res[1][0]), "res2[1][0]==res[1][0]", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((res2[1][1]==res[1][1]), "res2[1][1]==res[1][1]", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((res2[1][2]==res[1][2]), "res2[1][2]==res[1][2]", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((res2[1][3]==res[1][3]), "res2[1][3]==res[1][3]", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((res2[2][0]==res[2][0]), "res2[2][0]==res[2][0]", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((res2[2][1]==res[2][1]), "res2[2][1]==res[2][1]", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((res2[2][2]==res[2][2]), "res2[2][2]==res[2][2]", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((res2[2][3]==res[2][3]), "res2[2][3]==res[2][3]", __FILE__, __LINE__, "assertion failed");
 */
 }
 #endif
@@ -1049,8 +1050,8 @@ void Matrix3D::Transform_Min_Max_AABox
 	Vector3 *				set_max
 ) const
 {
-	WWASSERT(set_min != &min);
-	WWASSERT(set_max != &max);
+	engine::debug::assert_condition((set_min != &min), "set_min != &min", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((set_max != &max), "set_max != &max", __FILE__, __LINE__, "assertion failed");
 
 	float tmp0,tmp1;
 
@@ -1103,8 +1104,8 @@ void Matrix3D::Transform_Center_Extent_AABox
 	Vector3 *				set_extent
 ) const
 {
-	WWASSERT(set_center != &center);
-	WWASSERT(set_extent != &extent);
+	engine::debug::assert_condition((set_center != &center), "set_center != &center", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((set_extent != &extent), "set_extent != &extent", __FILE__, __LINE__, "assertion failed");
 
 	// push each extent out to the projections of the original extents
 	for (int i=0; i<3; i++) {

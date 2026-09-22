@@ -50,7 +50,8 @@
 //-----------------------------------------------------------------------------
 // USER INCLUDES //////////////////////////////////////////////////////////////
 //-----------------------------------------------------------------------------
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/GlobalData.h"
 #include "Common/NameKeyGenerator.h"
@@ -101,7 +102,7 @@ void InGamePopupMessageInit( WindowLayout *layout, void *userData )
 
 	if(!pMData)
 	{
-		DEBUG_ASSERTCRASH(pMData, ("We're in InGamePopupMessage without a pointer to pMData") );
+		engine::debug::invariant((pMData), "pMData", __FILE__, __LINE__, "We're in InGamePopupMessage without a pointer to pMData");
 		///< @todo: add a call to the close this bitch method when I implement it CLH
 		return;
 	}

@@ -2,7 +2,6 @@ module;
 
 #define BOOST_TEST_MODULE LightStateTests
 
-#include "../../profiling/Tracy.h"
 #include <boost/test/included/unit_test.hpp>
 
 #include <array>

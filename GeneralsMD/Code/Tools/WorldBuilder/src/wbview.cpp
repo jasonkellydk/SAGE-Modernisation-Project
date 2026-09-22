@@ -28,13 +28,14 @@
 #include "wbview.h"
 #include "WHeightMapEdit.h"
 #include "MainFrm.h"
-#include "Common/Debug.h"
+
 #include "Common/ThingTemplate.h"
 #include "W3DDevice/GameClient/BaseHeightMap.h"
 #include "GlobalLightOptions.h"
 #include "playerlistdlg.h"
 #include "teamsdialog.h"
 #include "LayersList.h"
+import engine.debug;
 
 Bool WbView::m_snapToGrid = false;
 
@@ -148,7 +149,7 @@ END_MESSAGE_MAP()
 
 void WbView::OnDraw(CDC* pDC)
 {
-	DEBUG_ASSERTCRASH((0),("oops"));
+	engine::debug::invariant(((0)), "(0)", __FILE__, __LINE__, "oops");
 }
 
 /////////////////////////////////////////////////////////////////////////////
@@ -172,7 +173,7 @@ void WbView::Dump(CDumpContext& dc) const
 // ----------------------------------------------------------------------------
 void WbView::mouseDown(TTrackingMode m, CPoint viewPt)
 {
-	// can happen if you press 2 mouse buttons.  DEBUG_ASSERTCRASH((m_trackingMode==TRACK_NONE),("oops"));
+	// can happen if you press 2 mouse buttons.  engine::debug::invariant(((m_trackingMode==TRACK_NONE)), "(m_trackingMode==TRACK_NONE)", __FILE__, __LINE__, "oops");
 	if (m_trackingMode != TRACK_NONE)
 		return;
 
@@ -195,7 +196,7 @@ void WbView::mouseMove(TTrackingMode m, CPoint viewPt)
 	while (::PeekMessage(&msg, m_hWnd, WM_MOUSEMOVE, WM_MOUSEMOVE, PM_REMOVE)) {
 		viewPt.x = (short)LOWORD(msg.lParam);  // horizontal position of cursor
 		viewPt.y = (short)HIWORD(msg.lParam);  // vertical position of cursor
-		DEBUG_LOG(("Peek mouse %d, %d", viewPt.x,  viewPt.y));
+		engine::debug::log_info("Peek mouse %d, %d", viewPt.x,  viewPt.y);
 	}
 
 	if (m_trackingMode == TRACK_NONE) {
@@ -311,7 +312,7 @@ void WbView::mouseMove(TTrackingMode m, CPoint viewPt)
 // ----------------------------------------------------------------------------
 void WbView::mouseUp(TTrackingMode m, CPoint viewPt)
 {
-	//DEBUG_ASSERTCRASH((m_trackingMode!=TRACK_NONE),("oops"));
+	//engine::debug::invariant(((m_trackingMode!=TRACK_NONE)), "(m_trackingMode!=TRACK_NONE)", __FILE__, __LINE__, "oops");
 	if (m_trackingMode == TRACK_NONE)
 		return;
 
@@ -509,7 +510,7 @@ void WbView::OnEditCopy()
 	for (pMapObj = MapObject::getFirstMapObject(); pMapObj; pMapObj = pMapObj->getNext()) {
 		if (pMapObj->getFlag(FLAG_ROAD_POINT1)) {
 			pMapObj2 = pMapObj->getNext();
-			DEBUG_ASSERTCRASH(pMapObj2 && pMapObj2->getFlag(FLAG_ROAD_POINT2), ("oops"));
+			engine::debug::invariant((pMapObj2 && pMapObj2->getFlag(FLAG_ROAD_POINT2)), "pMapObj2 && pMapObj2->getFlag(FLAG_ROAD_POINT2)", __FILE__, __LINE__, "oops");
 			if (pMapObj2==nullptr) break;
 			if (!pMapObj2->getFlag(FLAG_ROAD_POINT2)) continue;
 			// If one end of a road segment is selected, both are.
@@ -1002,7 +1003,7 @@ void WbView::OnValidationFixTeams()
 				SidesInfo* pSide = TheSidesList->findSideInfo(teamOwner);
 				if (!pSide) {
 					teamExists = false;
-					DEBUG_LOG(("Side '%s' could not be found in sides list!", teamOwner.str()));
+					engine::debug::log_info("Side '%s' could not be found in sides list!", teamOwner.str());
 				}
 			} else {
 				// Couldn't find team. [8/8/2003]

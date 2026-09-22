@@ -48,6 +48,7 @@
 #include "WWLib/ffactory.h"
 #include <string>
 #include <vector>
+import engine.debug;
 import Assets.Cache.Animations;
 import Graphics.Cursors.Load;
 
@@ -57,7 +58,8 @@ static const Image *cursorImages[Mouse::NUM_MOUSE_CURSORS];			///<Images for use
 static W3DRenderObject *cursorModels[Mouse::NUM_MOUSE_CURSORS];	///< W3D models for each cursor type
 static Assets::AnimationAssetHandle cursorAnims[Mouse::NUM_MOUSE_CURSORS];		///< W3D animations for each cursor type
 
-W3DMouse::W3DMouse()
+W3DMouse::W3DMouse(engine::platform::IClockService& clock)
+	: SDL3Mouse(clock)
 {
 	// zero our event list
 	for (Int i=0; i<NUM_MOUSE_CURSORS; i++)
@@ -163,7 +165,7 @@ void W3DMouse::initW3DAssets()
 		{
 			if (!m_cursorInfo[i].W3DAnimName.isEmpty())
 			{
-				DEBUG_ASSERTCRASH(cursorAnims[i] == nullptr, ("hmm, leak festival"));
+				engine::debug::invariant((cursorAnims[i] == nullptr), "cursorAnims[i] == nullptr", __FILE__, __LINE__, "hmm, leak festival");
 					cursorAnims[i] = W3DDisplay::m_assetManager->Catalog().Acquire_Animation(m_cursorInfo[i].W3DAnimName.str());
 				if (cursorAnims[i] && cursorModels[i])
 				{
@@ -262,7 +264,7 @@ void W3DMouse::setCursor( MouseCursor cursor )
 		if (cursor != NONE)
 		{
 			m_currentHardwareCursor = cursor;
-			if (!loadHardwareCursor(cursor)) DEBUG_LOG(("Unable to load hardware cursor %s", m_cursorInfo[cursor].textureName.str()));
+			if (!loadHardwareCursor(cursor)) engine::debug::log_info("Unable to load hardware cursor %s", m_cursorInfo[cursor].textureName.str());
 		}
 	}
 	else if (m_currentRedrawMode == RM_POLYGON)

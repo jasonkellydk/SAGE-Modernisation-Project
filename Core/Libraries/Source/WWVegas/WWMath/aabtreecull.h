@@ -137,7 +137,7 @@ protected:
 	/*
 	** Internal stat tracking
 	*/
-#ifdef WWDEBUG
+#ifdef RTS_DEBUG
 	void	NODE_ACCEPTED()					{ Stats.NodesAccepted ++; }
 	void	NODE_TRIVIALLY_ACCEPTED()		{ Stats.NodesTriviallyAccepted ++; }
 	void	NODE_REJECTED()					{ Stats.NodesRejected ++; }

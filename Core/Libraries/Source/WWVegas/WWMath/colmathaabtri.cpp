@@ -50,7 +50,8 @@
 #include "colmath.h"
 #include "aabox.h"
 #include "tri.h"
-#include "WWDebug/wwdebug.h"
+
+import engine.debug;
 
 
 /*
@@ -557,7 +558,7 @@ static inline void aabtri_compute_contact_normal
 			break;
 	}
 
-	WWASSERT(set_norm.Length2() > 0.0f);
+	engine::debug::assert_condition((set_norm.Length2() > 0.0f), "set_norm.Length2() > 0.0f", __FILE__, __LINE__, "assertion failed");
 
 #else
 	set_norm = *CollisionContext.N;
@@ -570,11 +571,11 @@ static inline void aabtri_compute_contact_normal
 
 inline void VERIFY_CROSS(const Vector3 & a, const Vector3 & b,const Vector3 & cross)
 {
-#ifdef WWDEBUG
+#ifdef RTS_DEBUG
 	Vector3 tmp_cross;
 	Vector3::Cross_Product(a,b,&tmp_cross);
 	Vector3 diff = cross - tmp_cross;
-	WWASSERT(WWMath::Fabs(diff.Length()) < 0.0001f);
+	engine::debug::assert_condition((WWMath::Fabs(diff.Length()) < 0.0001f), "WWMath::Fabs(diff.Length()) < 0.0001f", __FILE__, __LINE__, "assertion failed");
 #endif
 }
 
@@ -834,7 +835,7 @@ exit:
 				(Vector3::Dot_Product(tmp_norm,move) < Vector3::Dot_Product(result->Normal,move)))
 		{
 			result->Normal = tmp_norm;
-			WWASSERT(WWMath::Fabs(result->Normal.Length() - 1.0f) < WWMATH_EPSILON);
+			engine::debug::assert_condition((WWMath::Fabs(result->Normal.Length() - 1.0f) < WWMATH_EPSILON), "WWMath::Fabs(result->Normal.Length() - 1.0f) < WWMATH_EPSILON", __FILE__, __LINE__, "assertion failed");
 		}
 
 		result->Fraction = CollisionContext.MaxFrac;

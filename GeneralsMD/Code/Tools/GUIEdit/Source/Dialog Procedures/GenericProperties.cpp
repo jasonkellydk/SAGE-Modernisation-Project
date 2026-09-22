@@ -50,7 +50,7 @@
 #include <commctrl.h>
 
 // USER INCLUDES //////////////////////////////////////////////////////////////
-#include "Common/Debug.h"
+
 #include "Common/FunctionLexicon.h"
 #include "GUIEdit.h"
 #include "Properties.h"

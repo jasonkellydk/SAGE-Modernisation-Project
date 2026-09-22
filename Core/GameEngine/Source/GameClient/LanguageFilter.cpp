@@ -23,7 +23,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "GameClient/LanguageFilter.h"
 #include "Common/FileSystem.h"
@@ -61,7 +62,7 @@ void LanguageFilter::init() {
 		}
 		UnicodeString uniword(word);
 		unHaxor(uniword);
-		//DEBUG_LOG(("Just read %ls from the bad word file.  Entered as %ls", word, uniword.str()));
+		//engine::debug::log_info("Just read %ls from the bad word file.  Entered as %ls", word, uniword.str());
 		m_wordList[uniword] = true;
 	}
 
@@ -89,7 +90,7 @@ void LanguageFilter::filterLine(UnicodeString &line)
 	while (newLine.nextToken(&token, L" ;,.!?:=\\/><`~()&^%#\n\t")) {
 		wchar_t *pos = wcsstr(buf, token.str());
 		if (pos == nullptr) {
-			DEBUG_CRASH(("Couldn't find the token in its own string."));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Couldn't find the token in its own string.");
 			continue;
 		}
 
@@ -98,7 +99,7 @@ void LanguageFilter::filterLine(UnicodeString &line)
 		unHaxor(token);
 		LangMapIter iter = m_wordList.find(token);
 		if (iter != m_wordList.end()) {
-			DEBUG_LOG(("Found word %ls in bad word list. Token was %ls", (*iter).first.str(), token.str()));
+			engine::debug::log_info("Found word %ls in bad word list. Token was %ls", (*iter).first.str(), token.str());
 			for (Int i = 0; i < len; ++i) {
 				*pos = L'*';
 				++pos;
@@ -187,4 +188,20 @@ Bool LanguageFilter::readWord(File *file1, WideChar *buf) {
 LanguageFilter * createLanguageFilter()
 {
 	return NEW LanguageFilter;
+}
+Bool AsciiStringLessThan::operator()(AsciiString a, AsciiString b) const
+{
+	return a.compareNoCase(b) < 0;
+}
+
+Bool UnicodeStringLessThan::operator()(UnicodeString a, UnicodeString b) const
+{
+	return a.compareNoCase(b) < 0;
+}
+
+Bool UnicodeStringsEqual::operator()(UnicodeString a, UnicodeString b) const
+{
+	const Bool result = a.compareNoCase(b) == 0;
+	engine::debug::log_info("Comparing %ls with %ls, return value is %s.", a.str(), b.str(), result ? "true" : "false");
+	return result;
 }

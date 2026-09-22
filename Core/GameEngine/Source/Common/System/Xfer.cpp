@@ -30,7 +30,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // USER INCLUDES //////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 #include "Common/Upgrade.h"
 #include "Common/GameState.h"
 #include "Common/Xfer.h"
@@ -85,8 +86,8 @@ void Xfer::xferVersion( XferVersion *versionData, XferVersion currentVersion )
 	if( *versionData > currentVersion )
 	{
 
-		DEBUG_CRASH(( "XferVersion - Unknown version '%d' should be no higher than '%d'",
-									*versionData, currentVersion ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "XferVersion - Unknown version '%d' should be no higher than '%d'",
+									*versionData, currentVersion );
 		throw XFER_INVALID_VERSION;
 
 	}
@@ -398,7 +399,7 @@ void Xfer::xferSTLObjectIDVector( std::vector<ObjectID> *objectIDVectorData )
 		if( !objectIDVectorData->empty() )
 		{
 
-			DEBUG_CRASH(( "Xfer::xferSTLObjectIDList - object vector should be empty before loading" ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Xfer::xferSTLObjectIDList - object vector should be empty before loading" );
 			throw XFER_LIST_NOT_EMPTY;
 
 		}
@@ -416,7 +417,7 @@ void Xfer::xferSTLObjectIDVector( std::vector<ObjectID> *objectIDVectorData )
 	else
 	{
 
-		DEBUG_CRASH(( "xferSTLObjectIDList - Unknown xfer mode '%d'", getXferMode() ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "xferSTLObjectIDList - Unknown xfer mode '%d'", getXferMode() );
 		throw XFER_MODE_UNKNOWN;
 
 	}
@@ -465,7 +466,7 @@ void Xfer::xferSTLObjectIDList( std::list< ObjectID > *objectIDListData )
 		if( !objectIDListData->empty() )
 		{
 
-			DEBUG_CRASH(( "Xfer::xferSTLObjectIDList - object list should be empty before loading" ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Xfer::xferSTLObjectIDList - object list should be empty before loading" );
 			throw XFER_LIST_NOT_EMPTY;
 
 		}
@@ -483,7 +484,7 @@ void Xfer::xferSTLObjectIDList( std::list< ObjectID > *objectIDListData )
 	else
 	{
 
-		DEBUG_CRASH(( "xferSTLObjectIDList - Unknown xfer mode '%d'", getXferMode() ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "xferSTLObjectIDList - Unknown xfer mode '%d'", getXferMode() );
 		throw XFER_MODE_UNKNOWN;
 
 	}
@@ -531,7 +532,7 @@ void Xfer::xferSTLIntList( std::list< Int > *intListData )
 		if( !intListData->empty() )
 		{
 
-			DEBUG_CRASH(( "Xfer::xferSTLIntList - int list should be empty before loading" ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Xfer::xferSTLIntList - int list should be empty before loading" );
 			throw XFER_LIST_NOT_EMPTY;
 
 		}
@@ -549,7 +550,7 @@ void Xfer::xferSTLIntList( std::list< Int > *intListData )
 	else
 	{
 
-		DEBUG_CRASH(( "xferSTLIntList - Unknown xfer mode '%d'", getXferMode() ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "xferSTLIntList - Unknown xfer mode '%d'", getXferMode() );
 		throw XFER_MODE_UNKNOWN;
 
 	}
@@ -562,7 +563,7 @@ void Xfer::xferScienceType( ScienceType *science )
 {
 
 	// sanity
-	DEBUG_ASSERTCRASH( science != nullptr, ("xferScienceType - Invalid parameters") );
+	engine::debug::invariant((science != nullptr), "science != nullptr", __FILE__, __LINE__, "xferScienceType - Invalid parameters");
 
 	AsciiString scienceName;
 
@@ -584,7 +585,7 @@ void Xfer::xferScienceType( ScienceType *science )
 		if( *science == SCIENCE_INVALID )
 		{
 
-			DEBUG_CRASH(( "xferScienceType - Unknown science '%s'", scienceName.str() ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "xferScienceType - Unknown science '%s'", scienceName.str() );
 			throw XFER_UNKNOWN_STRING;
 
 		}
@@ -598,7 +599,7 @@ void Xfer::xferScienceType( ScienceType *science )
 	else
 	{
 
-		DEBUG_CRASH(( "xferScienceType - Unknown xfer mode '%d'", getXferMode() ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "xferScienceType - Unknown xfer mode '%d'", getXferMode() );
 		throw XFER_MODE_UNKNOWN;
 
 	}
@@ -611,7 +612,7 @@ void Xfer::xferScienceVec( ScienceVec *scienceVec )
 {
 
 	// sanity
-	DEBUG_ASSERTCRASH( scienceVec != nullptr, ("xferScienceVec - Invalid parameters") );
+	engine::debug::invariant((scienceVec != nullptr), "scienceVec != nullptr", __FILE__, __LINE__, "xferScienceVec - Invalid parameters");
 
 	// this deserves a version number
 	const XferVersion currentVersion = 1;
@@ -639,7 +640,7 @@ void Xfer::xferScienceVec( ScienceVec *scienceVec )
 			scienceVec->clear();
 
 			// Homework for today.  Write 2000 words reconciling "Your code must never crash" with "Intentionally putting crashes in the code".  Fucktard.
-//			DEBUG_CRASH(( "xferScienceVec - vector is not empty, but should be" ));
+//			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "xferScienceVec - vector is not empty, but should be" );
 //			throw XFER_LIST_NOT_EMPTY;
 		}
 
@@ -662,7 +663,7 @@ void Xfer::xferScienceVec( ScienceVec *scienceVec )
 	else
 	{
 
-		DEBUG_CRASH(( "xferScienceVec - Unknown xfer mode '%d'", getXferMode() ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "xferScienceVec - Unknown xfer mode '%d'", getXferMode() );
 		throw XFER_MODE_UNKNOWN;
 
 	}
@@ -715,7 +716,7 @@ void Xfer::xferKindOf( KindOfType *kindOfData )
 	else
 	{
 
-		DEBUG_CRASH(( "xferKindOf - Unknown xfer mode '%d'", getXferMode() ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "xferKindOf - Unknown xfer mode '%d'", getXferMode() );
 		throw XFER_MODE_UNKNOWN;
 
 	}
@@ -795,7 +796,7 @@ void Xfer::xferUpgradeMask( UpgradeMaskType *upgradeMaskData )
 			if( upgradeTemplate == nullptr )
 			{
 
-				DEBUG_CRASH(( "Xfer::xferUpgradeMask - Unknown upgrade '%s'", upgradeName.str() ));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Xfer::xferUpgradeMask - Unknown upgrade '%s'", upgradeName.str() );
 				throw XFER_UNKNOWN_STRING;
 
 			}
@@ -824,7 +825,7 @@ void Xfer::xferUpgradeMask( UpgradeMaskType *upgradeMaskData )
 	else
 	{
 
-		DEBUG_CRASH(( "xferUpgradeMask - Unknown xfer mode '%d'", getXferMode() ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "xferUpgradeMask - Unknown xfer mode '%d'", getXferMode() );
 		throw XFER_MODE_UNKNOWN;
 
 	}

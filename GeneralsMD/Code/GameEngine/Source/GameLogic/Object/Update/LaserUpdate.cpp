@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/GameUtility.h"
 #include "Common/Player.h"
@@ -132,8 +133,8 @@ void LaserUpdate::updateStartPos()
 			//TheGameClient->destroyDrawable( getDrawable() );
 
 			m_startPos.set( *parentDrawable->getPosition() );
-			DEBUG_CRASH( ("LaserUpdate::updateStartPos() -- Drawable %s is expecting to find a bone %s but can't. Defaulting to position of drawable.",
-				parentDrawable->getTemplate()->getName().str(), m_parentBoneName.str() ) );
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "LaserUpdate::updateStartPos() -- Drawable %s is expecting to find a bone %s but can't. Defaulting to position of drawable.",
+				parentDrawable->getTemplate()->getName().str(), m_parentBoneName.str() );
 
 			return;
 		}

@@ -27,13 +27,15 @@
 // Author: Michael S. Booth, November 2001
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.profiling;
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #define DEFINE_PARTICLE_SYSTEM_NAMES
 
 #include "Common/GameState.h"
 #include "Common/INI.h"
-#include "Common/PerfTimer.h"
+
 #include "Common/ThingFactory.h"
 #include "Common/GameLOD.h"
 #include "Common/Xfer.h"
@@ -53,7 +55,7 @@
 
 //------------------------------------------------------------------------------ Performance Timers
 //#include "Common/PerfMetrics.h"
-//#include "Common/PerfTimer.h"
+//
 
 //static PerfTimer s_particleSys("ParticleSys::update", false, PERFMETRICS_LOGIC_STARTFRAME, PERFMETRICS_LOGIC_STOPFRAME);
 //-------------------------------------------------------------------------------------------------
@@ -333,7 +335,7 @@ Particle::Particle( ParticleSystem *system, const ParticleInfo *info )
 	// add this particle to the Particle System list, retaining local creation order
 	m_system->addParticle(this);
 
-	//DEBUG_ASSERTLOG(!(totalParticleCount % 100 == 0), ( "TotalParticleCount = %d", m_totalParticleCount ));
+	//if (!(!(totalParticleCount % 100 == 0))) engine::debug::log_error( "TotalParticleCount = %d", m_totalParticleCount );
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -355,7 +357,7 @@ Particle::~Particle()
 	// remove from the global list
 	TheParticleSystemManager->removeParticle(this);
 
-	//DEBUG_ASSERTLOG(!(totalParticleCount % 100 == 0), ( "TotalParticleCount = %d", m_totalParticleCount ));
+	//if (!(!(totalParticleCount % 100 == 0))) engine::debug::log_error( "TotalParticleCount = %d", m_totalParticleCount );
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -501,7 +503,7 @@ Bool Particle::update()
 	if (m_lifetimeLeft && --m_lifetimeLeft == 0)
 		return false;
 
-	DEBUG_ASSERTCRASH( m_lifetimeLeft, ( "A particle has an infinite lifetime..." ));
+	engine::debug::invariant((m_lifetimeLeft), "m_lifetimeLeft", __FILE__, __LINE__,  "A particle has an infinite lifetime..." );
 
 	// if we've gone totally invisible, destroy ourselves
 	if (isInvisible())
@@ -735,7 +737,7 @@ void Particle::loadPostProcess()
 		if( m_systemUnderControlID == INVALID_PARTICLE_SYSTEM_ID )
 		{
 
-			DEBUG_CRASH(( "Particle::loadPostProcess - Unable to find system under control pointer" ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Particle::loadPostProcess - Unable to find system under control pointer" );
 			throw SC_INVALID_DATA;
 
 		}
@@ -1221,7 +1223,7 @@ ParticleSystem::ParticleSystem( const ParticleSystemTemplate *sysTemplate,
 		TheParticleSystemManager->friend_addParticleSystem(this);
 	}
 
-	//DEBUG_ASSERTLOG(!(m_totalParticleSystemCount % 10 == 0), ( "TotalParticleSystemCount = %d", m_totalParticleSystemCount ));
+	//if (!(!(m_totalParticleSystemCount % 10 == 0))) engine::debug::log_error( "TotalParticleSystemCount = %d", m_totalParticleSystemCount );
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -1234,7 +1236,7 @@ ParticleSystem::~ParticleSystem()
 	if( m_slaveSystem )
 	{
 
-		DEBUG_ASSERTCRASH( m_slaveSystem->getMaster() == this, ("~ParticleSystem: Our slave doesn't have us as a master!") );
+		engine::debug::invariant((m_slaveSystem->getMaster() == this), "m_slaveSystem->getMaster() == this", __FILE__, __LINE__, "~ParticleSystem: Our slave doesn't have us as a master!");
 		m_slaveSystem->setMaster( nullptr );
 		setSlave( nullptr );
 
@@ -1244,7 +1246,7 @@ ParticleSystem::~ParticleSystem()
 	if( m_masterSystem )
 	{
 
-		DEBUG_ASSERTCRASH( m_masterSystem->getSlave() == this, ("~ParticleSystem: Our master doesn't have us as a slave!") );
+		engine::debug::invariant((m_masterSystem->getSlave() == this), "m_masterSystem->getSlave() == this", __FILE__, __LINE__, "~ParticleSystem: Our master doesn't have us as a slave!");
 		m_masterSystem->setSlave( nullptr );
 		setMaster( nullptr );
 
@@ -1268,7 +1270,7 @@ ParticleSystem::~ParticleSystem()
 	{
 		TheParticleSystemManager->friend_removeParticleSystem(this);
 	}
-	//DEBUG_ASSERTLOG(!(m_totalParticleSystemCount % 10 == 0), ( "TotalParticleSystemCount = %d", m_totalParticleSystemCount ));
+	//if (!(!(m_totalParticleSystemCount % 10 == 0))) engine::debug::log_error( "TotalParticleSystemCount = %d", m_totalParticleSystemCount );
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -1782,7 +1784,7 @@ const ParticleInfo *ParticleSystem::generateParticleInfo( Int particleNum, Int p
 {
 	static ParticleInfo info;
 	if (particleCount == 0) {
-		DEBUG_CRASH(("particleCount must NOT be 0. Set to 1 or greater."));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "particleCount must NOT be 0. Set to 1 or greater.");
 		return &info;
 	}
 
@@ -2164,7 +2166,7 @@ void ParticleSystem::updateWindMotion()
 			Real endAngle = m_windMotionEndAngle;
 
 			// this only works when start angle is less than end angle
-			DEBUG_ASSERTCRASH( startAngle < endAngle, ("updateWindMotion: startAngle must be < endAngle") );
+			engine::debug::invariant((startAngle < endAngle), "startAngle < endAngle", __FILE__, __LINE__, "updateWindMotion: startAngle must be < endAngle");
 
 			// how big is the total angle span
 			Real totalSpan = endAngle - startAngle;
@@ -2345,7 +2347,7 @@ void ParticleSystem::removeParticle( Particle *particleToRemove )
 ParticleInfo ParticleSystem::mergeRelatedParticleSystems( ParticleSystem *masterParticleSystem, ParticleSystem *slaveParticleSystem, Bool slaveNeedsFullPromotion)
 {
 	if (!masterParticleSystem || !slaveParticleSystem) {
-		DEBUG_CRASH(("masterParticleSystem or slaveParticleSystem was null. Should not happen. JKMCD"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "masterParticleSystem or slaveParticleSystem was null. Should not happen. JKMCD");
 		ParticleInfo bogus;
 		return bogus;
 	}
@@ -2573,7 +2575,7 @@ void ParticleSystem::xfer( Xfer *xfer )
 			particle = createParticle( info, priority, TRUE );
 
 			// sanity
-			DEBUG_ASSERTCRASH( particle, ("ParticleSystem::xfer - Unable to create particle for loading") );
+			engine::debug::invariant((particle), "particle", __FILE__, __LINE__, "ParticleSystem::xfer - Unable to create particle for loading");
 
 			// read in the particle data
 			xfer->xferSnapshot( particle );
@@ -2601,7 +2603,7 @@ void ParticleSystem::loadPostProcess()
 		if( m_slaveSystem != nullptr )
 		{
 
-			DEBUG_CRASH(( "ParticleSystem::loadPostProcess - m_slaveSystem is not null but should be" ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "ParticleSystem::loadPostProcess - m_slaveSystem is not null but should be" );
 			throw SC_INVALID_DATA;
 
 		}
@@ -2613,7 +2615,7 @@ void ParticleSystem::loadPostProcess()
 		if( m_slaveSystem == nullptr || m_slaveSystem->isDestroyed() == TRUE )
 		{
 
-			DEBUG_CRASH(( "ParticleSystem::loadPostProcess - m_slaveSystem is null or destroyed" ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "ParticleSystem::loadPostProcess - m_slaveSystem is null or destroyed" );
 			throw SC_INVALID_DATA;
 
 		}
@@ -2628,7 +2630,7 @@ void ParticleSystem::loadPostProcess()
 		if( m_masterSystem != nullptr )
 		{
 
-			DEBUG_CRASH(( "ParticleSystem::loadPostProcess - m_masterSystem is not null but should be" ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "ParticleSystem::loadPostProcess - m_masterSystem is not null but should be" );
 			throw SC_INVALID_DATA;
 
 		}
@@ -2640,7 +2642,7 @@ void ParticleSystem::loadPostProcess()
 		if( m_masterSystem == nullptr || m_masterSystem->isDestroyed() == TRUE )
 		{
 
-			DEBUG_CRASH(( "ParticleSystem::loadPostProcess - m_masterSystem is null or destroyed" ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "ParticleSystem::loadPostProcess - m_masterSystem is null or destroyed" );
 			throw SC_INVALID_DATA;
 
 		}
@@ -2956,8 +2958,8 @@ void ParticleSystemManager::init()
 	{
 
 		// sanity
-		DEBUG_ASSERTCRASH( m_allParticlesHead[ i ] == nullptr, ("INIT: ParticleSystem all particles head[%d] is not null!", i) );
-		DEBUG_ASSERTCRASH( m_allParticlesTail[ i ] == nullptr, ("INIT: ParticleSystem all particles tail[%d] is not null!", i) );
+		engine::debug::invariant((m_allParticlesHead[ i ] == nullptr), "m_allParticlesHead[ i ] == nullptr", __FILE__, __LINE__, "INIT: ParticleSystem all particles head[%d] is not null!", i);
+		engine::debug::invariant((m_allParticlesTail[ i ] == nullptr), "m_allParticlesTail[ i ] == nullptr", __FILE__, __LINE__, "INIT: ParticleSystem all particles tail[%d] is not null!", i);
 
 		// just to be clean set them to nullptr
 		m_allParticlesHead[ i ] = nullptr;
@@ -2974,19 +2976,19 @@ void ParticleSystemManager::reset()
 {
 	while (!m_allParticleSystemList.empty())
 	{
-		DEBUG_ASSERTCRASH(m_allParticleSystemList.front() != nullptr, ("ParticleSystemManager::reset: ParticleSystem is null"));
+		engine::debug::invariant((m_allParticleSystemList.front() != nullptr), "m_allParticleSystemList.front() != nullptr", __FILE__, __LINE__, "ParticleSystemManager::reset: ParticleSystem is null");
 		deleteInstance(m_allParticleSystemList.front());
 	}
-	DEBUG_ASSERTCRASH(m_particleSystemCount == 0, ("ParticleSystemManager::reset: m_particleSystemCount is %u, not 0", m_particleSystemCount));
-	DEBUG_ASSERTCRASH(m_systemMap.size() == 0, ("ParticleSystemManager::reset: m_systemMap size is %zu, not 0", m_systemMap.size()));
+	engine::debug::invariant((m_particleSystemCount == 0), "m_particleSystemCount == 0", __FILE__, __LINE__, "ParticleSystemManager::reset: m_particleSystemCount is %u, not 0", m_particleSystemCount);
+	engine::debug::invariant((m_systemMap.size() == 0), "m_systemMap.size() == 0", __FILE__, __LINE__, "ParticleSystemManager::reset: m_systemMap size is %zu, not 0", m_systemMap.size());
 
 	// sanity, our lists must be empty!!
 	for( Int i = 0; i < NUM_PARTICLE_PRIORITIES; ++i )
 	{
 
 		// sanity
-		DEBUG_ASSERTCRASH( m_allParticlesHead[ i ] == nullptr, ("RESET: ParticleSystem all particles head[%d] is not null!", i) );
-		DEBUG_ASSERTCRASH( m_allParticlesTail[ i ] == nullptr, ("RESET: ParticleSystem all particles tail[%d] is not null!", i) );
+		engine::debug::invariant((m_allParticlesHead[ i ] == nullptr), "m_allParticlesHead[ i ] == nullptr", __FILE__, __LINE__, "RESET: ParticleSystem all particles head[%d] is not null!", i);
+		engine::debug::invariant((m_allParticlesTail[ i ] == nullptr), "m_allParticlesTail[ i ] == nullptr", __FILE__, __LINE__, "RESET: ParticleSystem all particles tail[%d] is not null!", i);
 
 		// just to be clean set them to nullptr
 		m_allParticlesHead[ i ] = nullptr;
@@ -3007,7 +3009,6 @@ void ParticleSystemManager::reset()
 // ------------------------------------------------------------------------------------------------
 /** Update all particle systems */
 // ------------------------------------------------------------------------------------------------
-//DECLARE_PERF_TIMER(ParticleSystemManager)
 void ParticleSystemManager::update()
 {
 	if (m_lastLogicFrameUpdate == TheGameLogic->getFrame()) {
@@ -3017,13 +3018,13 @@ void ParticleSystemManager::update()
 	// update the last logic frame.
 	m_lastLogicFrameUpdate = TheGameLogic->getFrame();
 
-	//USE_PERF_TIMER(ParticleSystemManager)
+	//engine::profiling::Scope profile_scope_3019("ParticleSystemManager")
 	ParticleSystemListIt it = m_allParticleSystemList.begin();
 	while( it != m_allParticleSystemList.end() )
 	{
 		// TheSuperHackers @info Must increment the list iterator before potential element erasure from the list.
 		ParticleSystem* sys = *it++;
-		DEBUG_ASSERTCRASH(sys != nullptr, ("ParticleSystemManager::update: ParticleSystem is null"));
+		engine::debug::invariant((sys != nullptr), "sys != nullptr", __FILE__, __LINE__, "ParticleSystemManager::update: ParticleSystem is null");
 
 		if (sys->update(m_localPlayerIndex) == false)
 		{
@@ -3205,7 +3206,7 @@ void ParticleSystemManager::destroyAttachedSystems( Object *obj )
 	{
 
 		ParticleSystem *system = *it;
-		DEBUG_ASSERTCRASH(system != nullptr, ("ParticleSystemManager::destroyAttachedSystems: ParticleSystem is null"));
+		engine::debug::invariant((system != nullptr), "system != nullptr", __FILE__, __LINE__, "ParticleSystemManager::destroyAttachedSystems: ParticleSystem is null");
 
 		if( system->getAttachedObject() == obj->getID() )
 			system->destroy();
@@ -3281,7 +3282,7 @@ void ParticleSystemManager::removeParticle( Particle *particleToRemove)
 // ------------------------------------------------------------------------------------------------
 void ParticleSystemManager::friend_addParticleSystem( ParticleSystem *particleSystemToAdd )
 {
-	DEBUG_ASSERTCRASH(particleSystemToAdd != nullptr, ("ParticleSystemManager::friend_addParticleSystem: ParticleSystem is null"));
+	engine::debug::invariant((particleSystemToAdd != nullptr), "particleSystemToAdd != nullptr", __FILE__, __LINE__, "ParticleSystemManager::friend_addParticleSystem: ParticleSystem is null");
 	m_allParticleSystemList.push_back(particleSystemToAdd);
 	m_systemMap[particleSystemToAdd->getSystemID()] = particleSystemToAdd;
 	++m_particleSystemCount;
@@ -3298,7 +3299,7 @@ void ParticleSystemManager::friend_removeParticleSystem( ParticleSystem *particl
 		m_allParticleSystemList.erase(it);
 		--m_particleSystemCount;
 	} else {
-		DEBUG_CRASH(("ParticleSystemManager::friend_removeParticleSystem: ParticleSystem to remove was not recognized"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "ParticleSystemManager::friend_removeParticleSystem: ParticleSystem to remove was not recognized");
 	}
 }
 
@@ -3405,12 +3406,12 @@ void ParticleSystemManager::xfer( Xfer *xfer )
 			xfer->xferSnapshot( system );
 
 		}
-		DEBUG_ASSERTCRASH(systemCount==0, ("Mismatch in write count."));
+		engine::debug::invariant((systemCount==0), "systemCount==0", __FILE__, __LINE__, "Mismatch in write count.");
 
 	}
 	else
 	{
-		DEBUG_ASSERTCRASH(m_allParticleSystemList.empty(), ("ParticleSystemManager: particle systems list is expected empty at start of xfer-load."));
+		engine::debug::invariant((m_allParticleSystemList.empty()), "m_allParticleSystemList.empty()", __FILE__, __LINE__, "ParticleSystemManager: particle systems list is expected empty at start of xfer-load.");
 
 		const ParticleSystemTemplate *systemTemplate;
 
@@ -3429,8 +3430,8 @@ void ParticleSystemManager::xfer( Xfer *xfer )
 			if( systemTemplate == nullptr )
 			{
 
-				DEBUG_CRASH(( "ParticleSystemManager::xfer - Unknown particle system template '%s'",
-											systemName.str() ));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "ParticleSystemManager::xfer - Unknown particle system template '%s'",
+											systemName.str() );
 				throw SC_INVALID_DATA;
 
 			}
@@ -3447,8 +3448,8 @@ void ParticleSystemManager::xfer( Xfer *xfer )
 
 			if( system->getSystemID() == INVALID_PARTICLE_SYSTEM_ID )
 			{
-				DEBUG_CRASH(( "ParticleSystemManager::xfer - Unable to restore system ID to particle system '%s'",
-											systemName.str() ));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "ParticleSystemManager::xfer - Unable to restore system ID to particle system '%s'",
+											systemName.str() );
 				deleteInstance(system);
 				throw SC_INVALID_DATA;
 			}
@@ -3554,4 +3555,3 @@ static Real angleBetween(const Coord2D *vecA, const Coord2D *vecB)
 
 	return -theta;
 }
-

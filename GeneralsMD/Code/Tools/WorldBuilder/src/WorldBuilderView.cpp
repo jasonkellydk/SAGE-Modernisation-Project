@@ -54,7 +54,8 @@
 #include "ContourOptions.h"
 #include "MainFrm.h"
 #include "CUndoable.h"
-#include "Common/Debug.h"
+import engine.debug;
+
 
 //-----------------------------------------------------------------------------
 //         Private Data
@@ -735,7 +736,7 @@ determines where the height ht occurs along the line. */
 //=============================================================================
 void CWorldBuilderView::interpolate(CPoint *pt, Int ht, CPoint pt1, Int ht1, CPoint pt2, Int ht2)
 {
-	DEBUG_ASSERTCRASH((ht1!=ht2),("oops"));
+	engine::debug::invariant(((ht1!=ht2)), "(ht1!=ht2)", __FILE__, __LINE__, "oops");
 	// Paranoid check to avoid divide by zero.
 	if (ht1==ht2) {
 		*pt = pt1;
@@ -744,7 +745,7 @@ void CWorldBuilderView::interpolate(CPoint *pt, Int ht, CPoint pt1, Int ht1, CPo
 	Int delta = ht2 - ht1;
 	Int d1 = ht2-ht;
 	Int d2 = ht-ht1;
-	DEBUG_ASSERTCRASH((d1+d2==delta),("oops"));
+	engine::debug::invariant(((d1+d2==delta)), "(d1+d2==delta)", __FILE__, __LINE__, "oops");
 	// Interpolate between pt1 and pt2.
 	pt->x = (pt1.x*d1 + pt2.x*d2)/delta;
 	pt->y = (pt1.y*d1 + pt2.y*d2)/delta;
@@ -1060,8 +1061,8 @@ Bool CWorldBuilderView::viewToDocCoords(CPoint curPt, Coord3D *newPt, Bool const
 #ifdef X_DEBUG
 CPoint curPt2;
 docToViewCoords(*newPt, &curPt2);
-DEBUG_ASSERTCRASH((curPt.x==curPt2.x),("oops"));
-DEBUG_ASSERTCRASH((curPt.y==curPt2.y),("oops"));
+engine::debug::invariant(((curPt.x==curPt2.x)), "(curPt.x==curPt2.x)", __FILE__, __LINE__, "oops");
+engine::debug::invariant(((curPt.y==curPt2.y)), "(curPt.y==curPt2.y)", __FILE__, __LINE__, "oops");
 #endif
 	return true;
 }
@@ -1075,8 +1076,8 @@ Bool CWorldBuilderView::docToViewCoords(Coord3D curPt, CPoint* newPt)
 #ifdef X_DEBUG
 Coord3D curPt2;
 viewToDocCoords(*newPt, &curPt2);
-DEBUG_ASSERTCRASH((abs(curPt.x-curPt2.x)<1),("oops"));
-DEBUG_ASSERTCRASH((abs(curPt.y-curPt2.y)<1),("oops"));
+engine::debug::invariant(((abs(curPt.x-curPt2.x)<1)), "(abs(curPt.x-curPt2.x)<1)", __FILE__, __LINE__, "oops");
+engine::debug::invariant(((abs(curPt.y-curPt2.y)<1)), "(abs(curPt.y-curPt2.y)<1)", __FILE__, __LINE__, "oops");
 #endif
 	return true;
 }

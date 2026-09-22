@@ -15,17 +15,9 @@
 **	You should have received a copy of the GNU General Public License
 **	along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
-#ifdef __debugbreak
-#pragma push_macro("__debugbreak")
-#undef __debugbreak
-#define RTS_CLIENT_INSTANCE_RESTORE_DEBUGBREAK
-#endif
-#include <SDL3/SDL.h>
-#ifdef RTS_CLIENT_INSTANCE_RESTORE_DEBUGBREAK
-#pragma pop_macro("__debugbreak")
-#undef RTS_CLIENT_INSTANCE_RESTORE_DEBUGBREAK
-#endif
 #include "Lib/BaseType.h"
+
+import engine.platform.application;
 
 namespace rts
 {
@@ -36,7 +28,7 @@ class ClientInstance
 {
 public:
 	// Can be called N times, but is initialized just once.
-	static bool initialize();
+	static bool initialize(engine::platform::IApplicationService& application);
 
 	static bool isInitialized();
 
@@ -59,7 +51,7 @@ public:
 	static const char* getFirstInstanceName();
 
 private:
-	static SDL_Mutex *s_mutexHandle;
+	static bool s_initialized;
 	static UnsignedInt s_instanceIndex;
 	static Bool s_isMultiInstance;
 };

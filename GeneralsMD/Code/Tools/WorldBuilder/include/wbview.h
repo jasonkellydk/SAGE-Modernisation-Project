@@ -18,9 +18,11 @@
 
 #pragma once
 
+
+#include <cassert>
 #include "Lib/BaseType.h"
 #include "Tool.h"
-#include "Common/Debug.h"
+
 #include "Common/ThingSort.h"
 
 class CWorldBuilderDoc;
@@ -102,8 +104,8 @@ public:
 
 	void doLightFeedback(Bool doFeedback, Coord3D direction, Int lightIndex) { m_doLightFeedback=doFeedback; if (m_doLightFeedback) m_lightDirection[lightIndex]=direction;}
 
-	virtual Bool viewToDocCoords(CPoint curPt, Coord3D *newPt, Bool constrained=true) { DEBUG_CRASH(("should not call")); newPt->zero(); return false; }
-	virtual Bool docToViewCoords(Coord3D curPt, CPoint* newPt) { DEBUG_CRASH(("should not call")); return false; }
+	virtual Bool viewToDocCoords(CPoint curPt, Coord3D *newPt, Bool constrained=true) { assert(false); newPt->zero(); return false; }
+	virtual Bool docToViewCoords(Coord3D curPt, CPoint* newPt) { assert(false); return false; }
 
 	virtual Bool viewToDocCoordZ(CPoint curPt, Coord3D *newPt, Real Z) { return viewToDocCoords(curPt, newPt, false); }
 
@@ -117,7 +119,7 @@ public:
 	virtual void adjustDocSize() { }
 
 	/// Scrolls the window by this amount.
-	virtual void scrollInView(Real x, Real y, Bool end) { DEBUG_CRASH(("should not call"));  }
+	virtual void scrollInView(Real x, Real y, Bool end) { assert(false);  }
 
 	/// Invalidates an object. Pass null to inval all objects.
 	virtual void invalObjectInView(MapObject *pObj) { }

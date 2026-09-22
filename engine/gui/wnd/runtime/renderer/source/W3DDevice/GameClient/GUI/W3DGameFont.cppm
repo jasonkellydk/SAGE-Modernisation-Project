@@ -52,8 +52,9 @@ import Assets.Cache;
 import Assets.Runtime;
 
 // USER INCLUDES //////////////////////////////////////////////////////////////
-#include "Common/Debug.h"
+
 #include "W3DDevice/GameClient/W3DGameFont.h"
+import engine.debug;
 
 // DEFINES ////////////////////////////////////////////////////////////////////
 
@@ -92,7 +93,7 @@ Bool W3DFontLibrary::loadFontData( GameFont *font )
 	cache->Wait(handle);
 	const Assets::FontAsset *font_asset = cache->Try_Get_Font(handle);
 	if (font_asset == nullptr) {
-		DEBUG_CRASH(( "Unable to load font asset '%s'", font->nameString.str() ));
+		engine::debug::invariant(false, "debug invariant", __FILE__, __LINE__,  "Unable to load font asset '%s'", font->nameString.str() );
 		return FALSE;
 	}
 

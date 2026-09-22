@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/ThingTemplate.h"
 #include "Common/GameState.h"
@@ -170,9 +171,8 @@ void RailedTransportAIUpdate::pickAndMoveToInitialLocation()
 	}
 
 	// a path must have been found
-	DEBUG_ASSERTCRASH( closestPath != INVALID_PATH,
-										 ("No suitable starting waypoint path could be found for '%s'",
-										 us->getTemplate()->getName().str()) );
+	engine::debug::invariant((closestPath != INVALID_PATH), "closestPath != INVALID_PATH", __FILE__, __LINE__, "No suitable starting waypoint path could be found for '%s'",
+										 us->getTemplate()->getName().str());
 
 	// follow the waypoint path to its destination end point
 	aiFollowWaypointPath( closestEndWaypoint, CMD_FROM_AI );
@@ -220,14 +220,13 @@ UpdateSleepTime RailedTransportAIUpdate::update()
 	{
 
 		// sanity
-		DEBUG_ASSERTCRASH( m_currentPath != INVALID_PATH,
-											 ("RailedTransportAIUpdate: Invalid current path '%s'", m_currentPath) );
+		engine::debug::invariant((m_currentPath != INVALID_PATH), "m_currentPath != INVALID_PATH", __FILE__, __LINE__, "RailedTransportAIUpdate: Invalid current path '%s'", m_currentPath);
 
 		// get our target waypoint
 		Waypoint *waypoint = TheTerrainLogic->getWaypointByID( m_path[ m_currentPath ].endWaypointID );
 
 		// sanity
-		DEBUG_ASSERTCRASH( waypoint, ("RailedTransportAIUpdate: Invalid target waypoint") );
+		engine::debug::invariant((waypoint), "waypoint", __FILE__, __LINE__, "RailedTransportAIUpdate: Invalid target waypoint");
 
 		if (waypoint)
 		{
@@ -324,7 +323,7 @@ void RailedTransportAIUpdate::privateExecuteRailedTransport( CommandSourceType c
 
 	// find the start waypoint for our current path
 	Waypoint *startWaypoint = TheTerrainLogic->getWaypointByID( m_path[ m_currentPath ].startWaypointID );
-	DEBUG_ASSERTCRASH( startWaypoint, ("RailedTransportAIUpdate: Start waypoint not found") );
+	engine::debug::invariant((startWaypoint), "startWaypoint", __FILE__, __LINE__, "RailedTransportAIUpdate: Start waypoint not found");
 
 	// follow this waypoint path
 	aiFollowWaypointPath( startWaypoint, CMD_FROM_AI );
@@ -393,7 +392,7 @@ void RailedTransportAIUpdate::xfer( Xfer *xfer )
 	xfer->xferBool(&m_inTransit);
 	xfer->xferInt(&m_numPaths);
 	if (m_numPaths > MAX_WAYPOINT_PATHS) {
-		DEBUG_CRASH(("m_numPaths %d exceeds limit %d.", m_numPaths, MAX_WAYPOINT_PATHS));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "m_numPaths %d exceeds limit %d.", m_numPaths, MAX_WAYPOINT_PATHS);
 		throw SC_INVALID_DATA;
 	}
 	Int i;

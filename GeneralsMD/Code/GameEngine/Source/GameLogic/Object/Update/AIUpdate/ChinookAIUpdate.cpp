@@ -24,7 +24,8 @@
 
 // ChinookAIUpdate.cpp //////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #define DEFINE_VETERANCY_NAMES				// for TheVeterancyNames[]
 
@@ -437,7 +438,7 @@ protected:
 			{
 				if (!m_ropes.empty())
 				{
-					DEBUG_CRASH(( "ChinookCombatDropState - ropes should be empty" ));
+					engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "ChinookCombatDropState - ropes should be empty" );
 					throw SC_INVALID_DATA;
 				}
 				m_ropes.resize(numRopes);
@@ -597,7 +598,7 @@ public:
 					}
 					else
 					{
-						DEBUG_CRASH(("rappeller is not free to exit... what?"));
+						engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "rappeller is not free to exit... what?");
 					}
 #else
 					// TheSuperHackers @bugfix 03/01/2026 Bypass door reservation as rappellers are always

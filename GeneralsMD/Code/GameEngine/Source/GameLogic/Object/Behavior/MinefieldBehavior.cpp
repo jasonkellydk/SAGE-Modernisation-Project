@@ -29,7 +29,8 @@
 
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 #define DEFINE_RELATIONSHIP_NAMES
 #include "Common/GameState.h"
 #include "Common/RandomValue.h"
@@ -220,7 +221,7 @@ UpdateSleepTime MinefieldBehavior::update()
 		if (TheGameLogic->findObjectByID(m_immunes[i].id) == nullptr ||
 				now > m_immunes[i].collideTime + 2)
 		{
-			//DEBUG_LOG(("expiring an immunity %d",m_immunes[i].id));
+			//engine::debug::log_info("expiring an immunity %d",m_immunes[i].id);
 			m_immunes[i].id = INVALID_ID;	// he's dead, jim.
 			m_immunes[i].collideTime = 0;
 		}
@@ -355,7 +356,7 @@ void MinefieldBehavior::onCollide( Object *other, const Coord3D *loc, const Coor
 	{
 		if (m_immunes[i].id == other->getID())
 		{
-			//DEBUG_LOG(("ignoring due to immunity %d",m_immunes[i].id));
+			//engine::debug::log_info("ignoring due to immunity %d",m_immunes[i].id);
 			m_immunes[i].collideTime = now;
 			return;
 		}
@@ -395,7 +396,7 @@ void MinefieldBehavior::onCollide( Object *other, const Coord3D *loc, const Coor
 		{
 			if (m_immunes[i].id == INVALID_ID || m_immunes[i].id == other->getID())
 			{
-				//DEBUG_LOG(("add/update immunity %d",m_immunes[i].id));
+				//engine::debug::log_info("add/update immunity %d",m_immunes[i].id);
 				m_immunes[i].id = other->getID();
 				m_immunes[i].collideTime = now;
 
@@ -670,7 +671,7 @@ void MinefieldBehavior::xfer( Xfer *xfer )
 	if( maxImmunity != MAX_IMMUNITY )
 	{
 
-		DEBUG_CRASH(( "MinefieldBehavior::xfer - MAX_IMMUNITY has changed size, you must version this code and then you can remove this error message" ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "MinefieldBehavior::xfer - MAX_IMMUNITY has changed size, you must version this code and then you can remove this error message" );
 		throw SC_INVALID_DATA;
 
 	}

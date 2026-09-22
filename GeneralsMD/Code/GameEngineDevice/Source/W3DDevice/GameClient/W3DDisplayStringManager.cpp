@@ -29,13 +29,14 @@
 
 #include <stdlib.h>
 
-#include "Common/Debug.h"
+
 #include "GameClient/GameClient.h"
 #include "GameClient/GameText.h"
 #include "GameClient/DisplayString.h"
 #include "GameClient/DrawGroupInfo.h"
 #include "GameClient/GlobalLanguage.h"
 #include "W3DDevice/GameClient/W3DDisplayStringManager.h"
+import engine.debug;
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 // PUBLIC FUNCTIONS
@@ -109,7 +110,7 @@ DisplayString *W3DDisplayStringManager::newDisplayString()
 	if( newString == nullptr )
 	{
 
-		DEBUG_LOG(( "newDisplayString: Could not allocate new W3D display string" ));
+		engine::debug::log_info( "newDisplayString: Could not allocate new W3D display string" );
 		assert( 0 );
 		return nullptr;
 
@@ -226,7 +227,7 @@ DisplayString *W3DDisplayStringManager::getGroupNumeralString( Int numeral )
 {
 	if (numeral < 0 || numeral > MAX_GROUPS - 1 )
 	{
-		DEBUG_CRASH(("Numeral '%d' out of range.", numeral));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Numeral '%d' out of range.", numeral);
 		return m_groupNumeralStrings[0];
 	}
 

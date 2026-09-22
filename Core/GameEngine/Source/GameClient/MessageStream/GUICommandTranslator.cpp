@@ -30,7 +30,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // USER INCLUDES //////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/ActionManager.h"
 #include "Common/GameCommon.h"
@@ -190,8 +191,8 @@ static CommandStatus doFireWeaponCommand( const CommandButton *command, const IC
 
 		//This could be legit now -- think of firing a self destruct weapon
 		//-----------------------------------------------------------------
-		//DEBUG_CRASH( ("doFireWeaponCommand: Command options say it doesn't need additional user input '%s'",
-		//											command->m_name.str()) );
+		//engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "doFireWeaponCommand: Command options say it doesn't need additional user input '%s'",
+		//											command->m_name.str());
 		//return COMMAND_COMPLETE;
 
 	}
@@ -269,7 +270,7 @@ static CommandStatus doAttackMoveCommand( const CommandButton *command, const IC
 	// so we must be sure there is only one thing selected (that thing we will set the point on)
 	//
 	Drawable *draw = TheInGameUI->getFirstSelectedDrawable();
-	DEBUG_ASSERTCRASH( draw, ("doAttackMoveCommand: No selected object(s)") );
+	engine::debug::invariant((draw), "draw", __FILE__, __LINE__, "doAttackMoveCommand: No selected object(s)");
 
 	// sanity
 	if( draw == nullptr || draw->getObject() == nullptr )
@@ -306,10 +307,9 @@ static CommandStatus doSetRallyPointCommand( const CommandButton *command, const
 	// we can only set rally points for structures ... and we never multiple select structures
 	// so we must be sure there is only one thing selected (that thing we will set the point on)
 	//
-	DEBUG_ASSERTCRASH( TheInGameUI->getSelectCount() == 1,
-										 ("doSetRallyPointCommand: The selected count is not 1, we can only set a rally point on a *SINGLE* building\n") );
+	engine::debug::invariant((TheInGameUI->getSelectCount() == 1), "TheInGameUI->getSelectCount() == 1", __FILE__, __LINE__, "doSetRallyPointCommand: The selected count is not 1, we can only set a rally point on a *SINGLE* building\n");
 	Drawable *draw = TheInGameUI->getFirstSelectedDrawable();
-	DEBUG_ASSERTCRASH( draw, ("doSetRallyPointCommand: No selected object") );
+	engine::debug::invariant((draw), "draw", __FILE__, __LINE__, "doSetRallyPointCommand: No selected object");
 
 	// sanity
 	if( draw == nullptr || draw->getObject() == nullptr )

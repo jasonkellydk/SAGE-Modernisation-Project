@@ -41,7 +41,7 @@
 #include "vector4.h"
 #include "matrix3d.h"
 #include "matrix4.h"
-#include "WWDebug/wwdebug.h"
+
 #include "WWLib/cpudetect.h"
 #include <memory.h>
 

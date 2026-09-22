@@ -49,6 +49,7 @@ import Graphics.Materials.MeshMaterial;
 #include "GameClient/ParticleSys.h"
 #include "W3DDevice/GameClient/W3DGameClient.h"
 #include "W3DDevice/GameClient/Module/W3DTankTruckDraw.h"
+import engine.debug;
 
 // TheSuperHackers @info Is disabled by default and therefore compatible with the Retail INI setups.
 #define SHOW_DEFAULT_TANK_DEBRIS (0)
@@ -262,8 +263,8 @@ void W3DTankTruckDraw::createWheelEmitters()
 				else
 				{
 					if (!effectNames[i]->isEmpty()) {
-						DEBUG_LOG(("*** ERROR - Missing particle system '%s' in thing '%s'",
-							effectNames[i]->str(), getDrawable()->getObject()->getTemplate()->getName().str()));
+						engine::debug::log_info("*** ERROR - Missing particle system '%s' in thing '%s'",
+							effectNames[i]->str(), getDrawable()->getObject()->getTemplate()->getName().str());
 					}
 				}
 			}
@@ -313,10 +314,10 @@ void W3DTankTruckDraw::updateBones() {
 		if( !getW3DTankTruckDrawModuleData()->m_frontLeftTireBoneName.isEmpty() )
 		{
 			m_frontLeftTireBone = getRenderObject()->Get_Bone_Index(getW3DTankTruckDrawModuleData()->m_frontLeftTireBoneName.str());
-			DEBUG_ASSERTCRASH(m_frontLeftTireBone, ("Missing front-left tire bone %s in model %s", getW3DTankTruckDrawModuleData()->m_frontLeftTireBoneName.str(), getRenderObject()->Get_Name()));
+			engine::debug::invariant((m_frontLeftTireBone), "m_frontLeftTireBone", __FILE__, __LINE__, "Missing front-left tire bone %s in model %s", getW3DTankTruckDrawModuleData()->m_frontLeftTireBoneName.str(), getRenderObject()->Get_Name());
 
 			m_frontRightTireBone = getRenderObject()->Get_Bone_Index(getW3DTankTruckDrawModuleData()->m_frontRightTireBoneName.str());
-			DEBUG_ASSERTCRASH(m_frontRightTireBone, ("Missing front-right tire bone %s in model %s", getW3DTankTruckDrawModuleData()->m_frontRightTireBoneName.str(), getRenderObject()->Get_Name()));
+			engine::debug::invariant((m_frontRightTireBone), "m_frontRightTireBone", __FILE__, __LINE__, "Missing front-right tire bone %s in model %s", getW3DTankTruckDrawModuleData()->m_frontRightTireBoneName.str(), getRenderObject()->Get_Name());
 
 			if (!m_frontRightTireBone )
 			{
@@ -327,10 +328,10 @@ void W3DTankTruckDraw::updateBones() {
 		if( !getW3DTankTruckDrawModuleData()->m_rearLeftTireBoneName.isEmpty() )
 		{
 			m_rearLeftTireBone = getRenderObject()->Get_Bone_Index(getW3DTankTruckDrawModuleData()->m_rearLeftTireBoneName.str());
-			DEBUG_ASSERTCRASH(m_rearLeftTireBone, ("Missing rear-left tire bone %s in model %s", getW3DTankTruckDrawModuleData()->m_rearLeftTireBoneName.str(), getRenderObject()->Get_Name()));
+			engine::debug::invariant((m_rearLeftTireBone), "m_rearLeftTireBone", __FILE__, __LINE__, "Missing rear-left tire bone %s in model %s", getW3DTankTruckDrawModuleData()->m_rearLeftTireBoneName.str(), getRenderObject()->Get_Name());
 
 			m_rearRightTireBone = getRenderObject()->Get_Bone_Index(getW3DTankTruckDrawModuleData()->m_rearRightTireBoneName.str());
-			DEBUG_ASSERTCRASH(m_rearRightTireBone, ("Missing rear-left tire bone %s in model %s", getW3DTankTruckDrawModuleData()->m_rearRightTireBoneName.str(), getRenderObject()->Get_Name()));
+			engine::debug::invariant((m_rearRightTireBone), "m_rearRightTireBone", __FILE__, __LINE__, "Missing rear-left tire bone %s in model %s", getW3DTankTruckDrawModuleData()->m_rearRightTireBoneName.str(), getRenderObject()->Get_Name());
 
 			if (!m_rearRightTireBone)
 			{
@@ -342,10 +343,10 @@ void W3DTankTruckDraw::updateBones() {
 		if( !getW3DTankTruckDrawModuleData()->m_midFrontLeftTireBoneName.isEmpty() )
 		{
 			m_midFrontLeftTireBone = getRenderObject()->Get_Bone_Index(getW3DTankTruckDrawModuleData()->m_midFrontLeftTireBoneName.str());
-			DEBUG_ASSERTCRASH(m_midFrontLeftTireBone, ("Missing mid-front-left tire bone %s in model %s", getW3DTankTruckDrawModuleData()->m_midFrontLeftTireBoneName.str(), getRenderObject()->Get_Name()));
+			engine::debug::invariant((m_midFrontLeftTireBone), "m_midFrontLeftTireBone", __FILE__, __LINE__, "Missing mid-front-left tire bone %s in model %s", getW3DTankTruckDrawModuleData()->m_midFrontLeftTireBoneName.str(), getRenderObject()->Get_Name());
 
 			m_midFrontRightTireBone = getRenderObject()->Get_Bone_Index(getW3DTankTruckDrawModuleData()->m_midFrontRightTireBoneName.str());
-			DEBUG_ASSERTCRASH(m_midFrontRightTireBone, ("Missing mid-front-right tire bone %s in model %s", getW3DTankTruckDrawModuleData()->m_midFrontRightTireBoneName.str(), getRenderObject()->Get_Name()));
+			engine::debug::invariant((m_midFrontRightTireBone), "m_midFrontRightTireBone", __FILE__, __LINE__, "Missing mid-front-right tire bone %s in model %s", getW3DTankTruckDrawModuleData()->m_midFrontRightTireBoneName.str(), getRenderObject()->Get_Name());
 
 			if (!m_midFrontRightTireBone )
 			{
@@ -357,10 +358,10 @@ void W3DTankTruckDraw::updateBones() {
 		if( !getW3DTankTruckDrawModuleData()->m_midRearLeftTireBoneName.isEmpty() )
 		{
 			m_midRearLeftTireBone = getRenderObject()->Get_Bone_Index(getW3DTankTruckDrawModuleData()->m_midRearLeftTireBoneName.str());
-			DEBUG_ASSERTCRASH(m_midRearLeftTireBone, ("Missing mid-rear-left tire bone %s in model %s", getW3DTankTruckDrawModuleData()->m_midRearLeftTireBoneName.str(), getRenderObject()->Get_Name()));
+			engine::debug::invariant((m_midRearLeftTireBone), "m_midRearLeftTireBone", __FILE__, __LINE__, "Missing mid-rear-left tire bone %s in model %s", getW3DTankTruckDrawModuleData()->m_midRearLeftTireBoneName.str(), getRenderObject()->Get_Name());
 
 			m_midRearRightTireBone = getRenderObject()->Get_Bone_Index(getW3DTankTruckDrawModuleData()->m_midRearRightTireBoneName.str());
-			DEBUG_ASSERTCRASH(m_midRearRightTireBone, ("Missing mid-rear-right tire bone %s in model %s", getW3DTankTruckDrawModuleData()->m_midRearRightTireBoneName.str(), getRenderObject()->Get_Name()));
+			engine::debug::invariant((m_midRearRightTireBone), "m_midRearRightTireBone", __FILE__, __LINE__, "Missing mid-rear-right tire bone %s in model %s", getW3DTankTruckDrawModuleData()->m_midRearRightTireBoneName.str(), getRenderObject()->Get_Name());
 
 			if (!m_midRearRightTireBone)
 			{
@@ -401,7 +402,7 @@ void W3DTankTruckDraw::updateTreadPositions(Real uvDelta)
 			offset_u = pTread->m_materialSettings.customUVOffset.X - uvDelta;
 		else
 		{
-			DEBUG_CRASH(("Unhandled case in W3DTankTruckDraw::updateTreadPositions"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unhandled case in W3DTankTruckDraw::updateTreadPositions");
 			offset_u = 0.0f;
 		}
 
@@ -473,9 +474,9 @@ void W3DTankTruckDraw::updateTreadObjects()
 //-------------------------------------------------------------------------------------------------
 void W3DTankTruckDraw::onRenderObjRecreated()
 {
-	//DEBUG_LOG(("Old obj %x, newObj %x, new bones %d, old bones %d",
+	//engine::debug::log_info("Old obj %x, newObj %x, new bones %d, old bones %d",
 	//	m_prevRenderObj, getRenderObject(), getRenderObject()->Get_Num_Bones(),
-	//	m_prevNumBones));
+	//	m_prevNumBones);
 	m_prevRenderObj = nullptr;
 	m_frontLeftTireBone = 0;
 	m_frontRightTireBone = 0;
@@ -605,7 +606,7 @@ void W3DTankTruckDraw::doDrawModule(const Matrix3D* transformMtx)
 		Coord3D accel = *physics->getAcceleration();
 		accel.z = 0; // ignore gravitational force.
 		Bool accelerating = accel.length()>ACCEL_THRESHOLD;
-		//DEBUG_LOG(("Accel %f, speed %f", accel.length(), speed));
+		//engine::debug::log_info("Accel %f, speed %f", accel.length(), speed);
 		if (accelerating)	{
 			Real dot = accel.x*vel->x + accel.y*vel->y;
 			if (dot<0) {

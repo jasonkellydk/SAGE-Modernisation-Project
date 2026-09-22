@@ -52,7 +52,7 @@ import Graphics.Diagnostics.Render;
 #include <stdlib.h>
 
 // USER INCLUDES //////////////////////////////////////////////////////////////
-#include "Common/Debug.h"
+
 #include "Common/FramePacer.h"
 #include "GameClient/Display.h"
 #include "GameClient/GameWindowManager.h"
@@ -64,6 +64,7 @@ import Graphics.Diagnostics.Render;
 #include "HierarchyView.h"
 #include "Properties.h"
 #include "WW3D2/WW3D.h"
+import engine.debug;
 import Graphics.Frame.ToolFrame;
 
 // DEFINES ////////////////////////////////////////////////////////////////////
@@ -809,7 +810,7 @@ void EditWindow::mouseEvent( UnsignedInt windowsMessage,
 			else if( m_resizingWindow )
 			{
 				GameWindow *window = TheEditor->getFirstSelected();
-				DEBUG_ASSERTCRASH(window, ("No window selected for resize!"));
+				engine::debug::invariant((window), "window", __FILE__, __LINE__, "No window selected for resize!");
 
 				if (window)
 				{

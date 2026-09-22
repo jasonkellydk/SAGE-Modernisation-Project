@@ -38,13 +38,14 @@
 #include "hermitespline.h"
 #include "wwmathids.h"
 #include "WWSaveLoad/persistfactory.h"
-#include "WWDebug/wwhack.h"
+import engine.debug;
+
 
 
 /*
 ** Force-Link this module because the linker can't detect that we actually need it...
 */
-DECLARE_FORCE_LINK(hermitespline);
+void force_link_hermitespline() {}
 
 /*
 ** Save-Load stuff
@@ -258,13 +259,13 @@ bool HermiteSpline3DClass::Load(ChunkLoadClass &cload)
 				break;
 
 			default:
-				WWDEBUG_SAY(("Unhandled Chunk: 0x%X File: %s Line: %d",__FILE__,__LINE__));
+				engine::debug::log_info("Unhandled Chunk: 0x%X File: %s Line: %d",__FILE__,__LINE__);
 				break;
 		}
 		cload.Close_Chunk();
 	}
 
-	WWASSERT(Keys.Count() == Tangents.Count());
+	engine::debug::assert_condition((Keys.Count() == Tangents.Count()), "Keys.Count() == Tangents.Count()", __FILE__, __LINE__, "assertion failed");
 	return true;
 }
 
@@ -425,13 +426,13 @@ bool HermiteSpline1DClass::Load(ChunkLoadClass &cload)
 				break;
 
 			default:
-				WWDEBUG_SAY(("Unhandled Chunk: 0x%X File: %s Line: %d",__FILE__,__LINE__));
+				engine::debug::log_info("Unhandled Chunk: 0x%X File: %s Line: %d",__FILE__,__LINE__);
 				break;
 		}
 		cload.Close_Chunk();
 	}
 
-	WWASSERT(Keys.Count() == Tangents.Count());
+	engine::debug::assert_condition((Keys.Count() == Tangents.Count()), "Keys.Count() == Tangents.Count()", __FILE__, __LINE__, "assertion failed");
 	return true;
 }
 

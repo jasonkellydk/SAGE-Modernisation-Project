@@ -65,6 +65,7 @@ import Graphics.Materials.State;
 #include "W3DDevice/Common/W3DConvert.h"
 #include "GameLogic/Weapon.h"
 #include "Common/AudioEventInfo.h"
+import engine.debug;
 
 #ifdef RTS_DEBUG
 #define NO_INTENSE_DEBUG 1
@@ -182,7 +183,7 @@ DrawObject::DrawObject(const DrawObject & src)
 
 DrawObject & DrawObject::operator = (const DrawObject & that)
 {
-	DEBUG_CRASH(("oops"));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "oops");
 	return *this;
 }
 
@@ -1825,7 +1826,7 @@ void DrawObject::updateVBWithSoundRanges(MapObject *pMapObj, CameraClass* camera
     {
       if ( TheAudio == nullptr )
       {
-        DEBUG_CRASH( ("TheAudio is null! Can't draw sound circles") );
+        engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "TheAudio is null! Can't draw sound circles");
         return;
       }
 
@@ -1833,7 +1834,7 @@ void DrawObject::updateVBWithSoundRanges(MapObject *pMapObj, CameraClass* camera
 
       if ( audioInfo == nullptr )
       {
-        DEBUG_CRASH( ("Override audio named %s is missing; Can't draw sound circles", ambientName.str() ) );
+        engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Override audio named %s is missing; Can't draw sound circles", ambientName.str() );
         return;
       }
     }
@@ -1866,7 +1867,7 @@ void DrawObject::updateVBWithSoundRanges(MapObject *pMapObj, CameraClass* camera
       // May just not be set up yet
       if ( TheAudio == nullptr )
       {
-        DEBUG_CRASH( ("TheAudio is null! Can't draw sound circles") );
+        engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "TheAudio is null! Can't draw sound circles");
         return;
       }
 
@@ -1874,14 +1875,14 @@ void DrawObject::updateVBWithSoundRanges(MapObject *pMapObj, CameraClass* camera
 
       if ( audioInfo == nullptr )
       {
-        DEBUG_CRASH( ("Default ambient sound %s has no info; Can't draw sound circles", event->getEventName().str() ) );
+        engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Default ambient sound %s has no info; Can't draw sound circles", event->getEventName().str() );
         return;
       }
     }
   }
 
   // Should have set up audioInfo or returned by now
-  DEBUG_ASSERTCRASH( audioInfo != nullptr, ("Managed to finish setting up audio info without setting it?!?" ) );
+  engine::debug::invariant((audioInfo != nullptr), "audioInfo != nullptr", __FILE__, __LINE__, "Managed to finish setting up audio info without setting it?!?" );
   if ( audioInfo == nullptr )
   {
     return;
@@ -2019,7 +2020,7 @@ void DrawObject::setFeedbackPos(Coord3D pos)
 
 void DrawObject::setRampFeedbackParms(const Coord3D *start, const Coord3D *end, Real rampWidth)
 {
-	DEBUG_ASSERTCRASH(start && end, ("Parameter passed into setRampFeedbackParms was null. Not allowed"));
+	engine::debug::invariant((start && end), "start && end", __FILE__, __LINE__, "Parameter passed into setRampFeedbackParms was null. Not allowed");
 	if (!(start && end)) {
 		return;
 	}
@@ -2057,12 +2058,12 @@ if (_skip_drawobject_render) {
     const auto draw = [&](unsigned vertex_count, unsigned first_index, unsigned triangle_count) {
         if (vertex_count > vertices.size() || first_index > indices.size()
             || triangle_count > (indices.size() - first_index) / 3) {
-            DEBUG_CRASH(("Editor overlay geometry exceeds its CPU batch."));
+            engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Editor overlay geometry exceeds its CPU batch.");
             return;
         }
         if (!Draw_Graphics_Prelit_Geometry(vertices.first(vertex_count),
             indices.subspan(first_index, triangle_count * 3), projection * view * world, shader, nullptr))
-            DEBUG_LOG(("Editor overlay graphics submission failed.\n"));
+            engine::debug::log_info("Editor overlay graphics submission failed.\n");
     };
 	shader = Graphics::MaterialState(m_shaderClass);
 	indices = m_indexBuffer;

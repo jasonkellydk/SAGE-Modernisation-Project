@@ -54,9 +54,9 @@ import Graphics.Frame.Runtime;
 #include "W3DDevice/GameClient/W3DTerrainTracks.h"
 #include "W3DDevice/GameClient/BaseHeightMap.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
-#include "Common/PerfTimer.h"
+
 #include "Common/GlobalData.h"
-#include "Common/Debug.h"
+
 #include "W3DDevice/GameClient/W3DTextureHandle.h"
 #include "WWMath/colmath.h"
 #include "W3DDevice/GameClient/W3DCastQuery.h"
@@ -68,6 +68,7 @@ import Graphics.Frame.Runtime;
 #include "GameLogic/TerrainLogic.h"
 #include "GameLogic/Object.h"
 #include "GameClient/Drawable.h"
+import engine.debug;
 
 
 #define BRIDGE_OFFSET_FACTOR	0.25f	//amount to raise tracks above bridges.
@@ -537,7 +538,7 @@ void TerrainTracksRenderObjClassSystem::releaseTrack( TerrainTracksRenderObjClas
 	if (mod==nullptr)
 		return;
 
-	DEBUG_ASSERTCRASH(mod->m_bound == false, ("mod is bound."));
+	engine::debug::invariant((mod->m_bound == false), "mod->m_bound == false", __FILE__, __LINE__, "mod is bound.");
 
 	// remove module from used list
 	if( mod->m_nextSystem )

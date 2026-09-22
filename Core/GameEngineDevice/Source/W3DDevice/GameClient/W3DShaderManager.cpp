@@ -68,6 +68,7 @@ import Graphics.Materials.State;
 #include "WWLib/cpudetect.h"
 #include "WWMath/matrix4.h"
 #include <cstdint>
+import engine.debug;
 import Graphics.RHI;
 import Graphics.Frame.Runtime;
 
@@ -151,7 +152,7 @@ Bool ScreenDefaultFilter::postRender(FilterModes mode, Coord2D &scrollDelta,Bool
 {
 
 	W3DTextureHandle * tex =	W3DShaderManager::endRenderToTexture();
-	DEBUG_ASSERTCRASH(tex, ("Require rendered texture."));
+	engine::debug::invariant((tex), "tex", __FILE__, __LINE__, "Require rendered texture.");
 	if (!tex) return false;
 	if (!set(mode)) return false;
 
@@ -242,7 +243,7 @@ Bool ScreenBWFilter::postRender(FilterModes mode, Coord2D &scrollDelta,Bool &doE
 {
 
 	W3DTextureHandle * tex =	W3DShaderManager::endRenderToTexture();
-	DEBUG_ASSERTCRASH(tex, ("Require rendered texture."));
+	engine::debug::invariant((tex), "tex", __FILE__, __LINE__, "Require rendered texture.");
 	if (!tex) return false;
 	if (!set(mode)) return false;
 
@@ -472,7 +473,7 @@ Bool ScreenCrossFadeFilter::postRender(FilterModes mode, Coord2D &scrollDelta,Bo
 
 	tex=W3DShaderManager::getRenderTexture();
 
-	DEBUG_ASSERTCRASH(tex, ("Require last rendered texture."));
+	engine::debug::invariant((tex), "tex", __FILE__, __LINE__, "Require last rendered texture.");
 	if (!tex) return false;
 	if (!set(mode)) return false;
 
@@ -612,7 +613,7 @@ Bool ScreenMotionBlurFilter::postRender(FilterModes mode, Coord2D &scrollDelta,B
 {
 
 	W3DTextureHandle * tex =	W3DShaderManager::endRenderToTexture();
-	DEBUG_ASSERTCRASH(tex, ("Require rendered texture."));
+	engine::debug::invariant((tex), "tex", __FILE__, __LINE__, "Require rendered texture.");
 	if (!tex) return false;
 	if (!set(mode)) return false;
 
@@ -872,7 +873,7 @@ void W3DShaderManager::init()
 		}
 	}
 
-	DEBUG_LOG(("ShaderManager ChipsetID %d", W3DShaderManager::getChipset()));
+	engine::debug::log_info("ShaderManager ChipsetID %d", W3DShaderManager::getChipset());
 }
 
 // W3DShaderManager::shutdown =======================================================
@@ -981,7 +982,7 @@ void W3DShaderManager::drawViewport(Int color)
 //=============================================================================
 void W3DShaderManager::startRenderToTexture()
 {
-	DEBUG_ASSERTCRASH(!m_renderingToTexture, ("Already rendering to texture - cannot nest calls."));
+	engine::debug::invariant((!m_renderingToTexture), "!m_renderingToTexture", __FILE__, __LINE__, "Already rendering to texture - cannot nest calls.");
 
 	if (m_renderingToTexture || m_renderTexture == nullptr) return;
 	if (!m_renderTexture->Ensure_Render_Backend_Texture()
@@ -1012,7 +1013,7 @@ void W3DShaderManager::startRenderToTexture()
 //=============================================================================
 W3DTextureHandle *W3DShaderManager::endRenderToTexture(void)
 {
-	DEBUG_ASSERTCRASH(m_renderingToTexture, ("Not rendering to texture."));
+	engine::debug::invariant((m_renderingToTexture), "m_renderingToTexture", __FILE__, __LINE__, "Not rendering to texture.");
 	if (!m_renderingToTexture) return nullptr;
 	Graphics::Get_Attachment_Bindings().Restore_Default();
 	m_renderingToTexture = false;

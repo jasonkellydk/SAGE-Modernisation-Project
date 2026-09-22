@@ -36,10 +36,15 @@
 
 
 #include "wwmath.h"
-#include "WWDebug/wwhack.h"
+
 #include <stdlib.h>
-#include "WWDebug/wwdebug.h"
-#include "WWDebug/wwprofile.h"
+
+void force_link_curve();
+void force_link_hermitespline();
+void force_link_catmullromspline();
+void force_link_cardinalspline();
+void force_link_tcbspline();
+
 
 // TODO: convert to use loouptablemanager...
 float _FastAcosTable[ARC_TABLE_SIZE];
@@ -83,10 +88,9 @@ float		WWMath::Random_Float()
 */
 void Do_Force_Links()
 {
-	FORCE_LINK(curve);
-	FORCE_LINK(hermitespline);
-	FORCE_LINK(catmullromspline);
-	FORCE_LINK(cardinalspline);
-	FORCE_LINK(tcbspline);
+	force_link_curve();
+	force_link_hermitespline();
+	force_link_catmullromspline();
+	force_link_cardinalspline();
+	force_link_tcbspline();
 }
-

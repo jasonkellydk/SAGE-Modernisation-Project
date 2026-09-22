@@ -50,7 +50,8 @@
 //-----------------------------------------------------------------------------
 // USER INCLUDES //////////////////////////////////////////////////////////////
 //-----------------------------------------------------------------------------
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "GameClient/CampaignManager.h"
 
@@ -97,7 +98,7 @@ void INI::parseCampaignDefinition( INI *ini )
 	name.set( c );
 
 	// find existing item if present
-	DEBUG_ASSERTCRASH( TheCampaignManager, ("parseCampaignDefinition: Unable to Get TheCampaignManager") );
+	engine::debug::invariant((TheCampaignManager), "TheCampaignManager", __FILE__, __LINE__, "parseCampaignDefinition: Unable to Get TheCampaignManager");
 	if( !TheCampaignManager )
 		return;
 
@@ -105,7 +106,7 @@ void INI::parseCampaignDefinition( INI *ini )
 	campaign = TheCampaignManager->newCampaign( name );
 
 	// sanity
-	DEBUG_ASSERTCRASH( campaign, ("parseCampaignDefinition: Unable to allocate campaign '%s'", name.str()) );
+	engine::debug::invariant((campaign), "campaign", __FILE__, __LINE__, "parseCampaignDefinition: Unable to allocate campaign '%s'", name.str());
 
 	// parse the ini definition
 	ini->initFromINI( campaign, TheCampaignManager->getFieldParse() );
@@ -178,7 +179,7 @@ Mission *Campaign::getMission( AsciiString missionName )
 			return mission;
 		++it;
 	}
-	DEBUG_CRASH(("getMission couldn't find %s", missionName.str()));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "getMission couldn't find %s", missionName.str());
 	return nullptr;
 }
 
@@ -206,7 +207,7 @@ Mission *Campaign::getNextMission( Mission *current)
 			return mission;
 		++it;
 	}
-//	DEBUG_CRASH(("GetNextMission couldn't find %s", current->m_nextMission.str()));
+//	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "GetNextMission couldn't find %s", current->m_nextMission.str());
 	return nullptr;
 }
 
@@ -492,7 +493,7 @@ void CampaignManager::loadPostProcess()
 {
 	if(TheChallengeGenerals == nullptr)
 	{
-		DEBUG_CRASH(("TheChallengeGenerals singleton does not exist. This loaded game will not have a working Continue button for GC mode."));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "TheChallengeGenerals singleton does not exist. This loaded game will not have a working Continue button for GC mode.");
 		return;
 	}
 

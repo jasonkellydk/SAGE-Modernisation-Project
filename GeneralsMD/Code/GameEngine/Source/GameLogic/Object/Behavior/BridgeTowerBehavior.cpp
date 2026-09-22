@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/ThingTemplate.h"
 #include "Common/Xfer.h"
@@ -115,7 +116,7 @@ void BridgeTowerBehavior::onDamage( DamageInfo *damageInfo )
 			break;
 
 	}
-	DEBUG_ASSERTCRASH( bridgeInterface != nullptr, ("BridgeTowerBehavior::onDamage - no 'BridgeBehaviorInterface' found") );
+	engine::debug::invariant((bridgeInterface != nullptr), "bridgeInterface != nullptr", __FILE__, __LINE__, "BridgeTowerBehavior::onDamage - no 'BridgeBehaviorInterface' found");
 	if( bridgeInterface )
 	{
 
@@ -196,7 +197,7 @@ void BridgeTowerBehavior::onHealing( DamageInfo *damageInfo )
 			break;
 
 	}
-	DEBUG_ASSERTCRASH( bridgeInterface != nullptr, ("BridgeTowerBehavior::onHealing - no 'BridgeBehaviorInterface' found") );
+	engine::debug::invariant((bridgeInterface != nullptr), "bridgeInterface != nullptr", __FILE__, __LINE__, "BridgeTowerBehavior::onHealing - no 'BridgeBehaviorInterface' found");
 	if( bridgeInterface )
 	{
 

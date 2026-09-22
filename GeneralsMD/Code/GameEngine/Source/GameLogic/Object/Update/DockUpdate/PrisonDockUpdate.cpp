@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/ThingTemplate.h"
 #include "Common/Xfer.h"
@@ -73,11 +74,11 @@ Bool PrisonDockUpdate::action( Object *docker, Object *drone )
 
 	// unload the prisoners from the docker into us
 	AIUpdateInterface *ai = docker->getAIUpdateInterface();
-	DEBUG_ASSERTCRASH( ai, ("'%s' docking with prison has no AI",
-												 docker->getTemplate()->getName().str()) );
+	engine::debug::invariant((ai), "ai", __FILE__, __LINE__, "'%s' docking with prison has no AI",
+												 docker->getTemplate()->getName().str());
 	POWTruckAIUpdateInterface *powAI = ai->getPOWTruckAIUpdateInterface();
-	DEBUG_ASSERTCRASH( powAI, ("'s' docking with prison has no POW Truck AI",
-														docker->getTemplate()->getName().str()) );
+	engine::debug::invariant((powAI), "powAI", __FILE__, __LINE__, "'s' docking with prison has no POW Truck AI",
+														docker->getTemplate()->getName().str());
 
 	powAI->unloadPrisonersToPrison( getObject() );
 

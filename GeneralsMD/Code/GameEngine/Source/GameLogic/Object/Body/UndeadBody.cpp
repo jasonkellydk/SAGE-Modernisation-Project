@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 #include "Common/Xfer.h"
 #include "GameLogic/Module/UndeadBody.h"
 
@@ -127,7 +128,7 @@ void UndeadBody::startSecondLife(DamageInfo *damageInfo)
 			total += sdu->getProbabilityModifier( damageInfo );
 		}
 	}
-	DEBUG_ASSERTCRASH(total > 0, ("Hmm, this is wrong"));
+	engine::debug::invariant((total > 0), "total > 0", __FILE__, __LINE__, "Hmm, this is wrong");
 
 
 	// this returns a value from 1...total, inclusive

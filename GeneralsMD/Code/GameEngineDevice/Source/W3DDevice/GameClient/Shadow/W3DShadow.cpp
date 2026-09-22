@@ -45,8 +45,9 @@
 #include "W3DDevice/GameClient/W3DProjectedShadow.h"
 #include "W3DDevice/GameClient/W3DShadow.h"
 #include "W3DDevice/GameClient/W3DDirectionalShadows.h"
-#include "Common/Debug.h"
-#include "Common/PerfTimer.h"
+import engine.debug;
+
+
 
 #define SUN_DISTANCE_FROM_GROUND	10000.0f	//distance of sun (our only light source).
 
@@ -66,7 +67,6 @@ void PrepareShadows()
 		TheW3DProjectedShadowManager->prepareShadows();
 }
 
-//DECLARE_PERF_TIMER(shadowsRender)
 void DoShadows(W3DRenderContext & rinfo, Bool stencilPass)
 {
     shadowCameraFrustum = &rinfo.Camera.Get_Frustum();
@@ -81,8 +81,7 @@ void DoShadows(W3DRenderContext & rinfo, Bool stencilPass)
 
 W3DShadowManager::W3DShadowManager()
 {
-	DEBUG_ASSERTCRASH(TheW3DProjectedShadowManager == nullptr,
-		("Creating new shadow managers without deleting old ones"));
+	engine::debug::invariant((TheW3DProjectedShadowManager == nullptr), "TheW3DProjectedShadowManager == nullptr", __FILE__, __LINE__, "Creating new shadow managers without deleting old ones");
 
 	m_shadowColor = 0x7fa0a0a0;
 	m_isShadowScene = FALSE;

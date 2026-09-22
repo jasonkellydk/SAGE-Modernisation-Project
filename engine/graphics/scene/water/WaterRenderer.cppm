@@ -1,5 +1,4 @@
 module;
-#include "../../profiling/Tracy.h"
 #include <array>
 #include <cassert>
 #include <cstddef>
@@ -11,6 +10,7 @@ module;
 #include <vector>
 
 export module Graphics.Scene.Water.Renderer;
+import engine.profiling;
 export import Graphics.Scene.Water.Geometry;
 export import Graphics.Scene.Water.View;
 export import Graphics.Scene.Water.OceanPatches;
@@ -228,7 +228,7 @@ private:
     bool Draw_Mesh(CommandList &commands, WaterMesh* mesh, const WaterStyle& style,
         const WaterParameters &parameters, std::span<const RHITextureHandle> textures, bool instanced)
     {
-        GRAPHICS_PROFILE_SCOPE("Graphics.Water.Draw");
+        engine::profiling::Scope profile_scope_230("Graphics.Water.Draw");
         assert(m_device != nullptr && mesh != nullptr && (textures.size() == 9 || textures.size() == 11));
         if (mesh->geometry.Indices().empty()) return true;
         if (style.pass == WaterPass::Underwater) {

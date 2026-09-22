@@ -44,6 +44,7 @@ so forth is all handled in the object options panel.  jba. */
 #include "GameClient/Color.h"
 
 #include <list>
+import engine.debug;
 
 FenceOptions *FenceOptions::m_staticThis = nullptr;
 Bool FenceOptions::m_updating = false;
@@ -260,7 +261,7 @@ void FenceOptions::addObject( MapObject *mapObject, const char *pPath, const cha
 
 		// first sort by side, either create or find the tree item with matching side name
 		AsciiString side = thingTemplate->getDefaultOwningSide();
-		DEBUG_ASSERTCRASH( !side.isEmpty(), ("null default side in template") );
+		engine::debug::invariant((!side.isEmpty()), "!side.isEmpty()", __FILE__, __LINE__, "null default side in template");
 		parent = findOrAdd( parent, side.str());
 
 		// next tier uses the editor sorting that design can specify in the INI

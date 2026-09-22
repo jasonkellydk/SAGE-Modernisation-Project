@@ -1,5 +1,4 @@
 module;
-#include "../../profiling/Tracy.h"
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
@@ -8,6 +7,7 @@ module;
 #include <vector>
 
 export module Graphics.Scene.Shroud.Image;
+import engine.profiling;
 export import Graphics.RHI;
 
 namespace Graphics
@@ -23,7 +23,7 @@ public:
         std::uint32_t height, std::uint32_t row_stride, std::uint32_t texture_width,
         std::uint32_t texture_height, std::uint16_t border)
     {
-        GRAPHICS_PROFILE_SCOPE("Graphics.Shroud.SetCells");
+        engine::profiling::Scope profile_scope_25("Graphics.Shroud.SetCells");
         const auto count = std::uint64_t(texture_width)*texture_height;
         if (width == 0 || height == 0 || row_stride < width
             || std::uint64_t(width)+2 > texture_width || std::uint64_t(height)+2 > texture_height
@@ -56,7 +56,7 @@ public:
 
     bool Upload(Device& device, RHITextureHandle texture)
     {
-        GRAPHICS_PROFILE_SCOPE("Graphics.Shroud.Upload");
+        engine::profiling::Scope profile_scope_58("Graphics.Shroud.Upload");
         if (m_pixels.empty() || !texture.Is_Valid()) return false;
         if (!m_dirty && m_device == &device && m_uploaded_texture == texture) return true;
         if (!device.Update_Texture(texture,{std::as_bytes(std::span(m_pixels)),

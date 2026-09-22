@@ -60,7 +60,7 @@ import Assets.Images.PixelEncoding;
 #include "W3DDevice/GameClient/W3DCamera.h"
 
 #include "Common/GlobalData.h"
-#include "Common/PerfTimer.h"
+
 #include "Common/Xfer.h"
 
 #include "GameClient/TerrainVisual.h"
@@ -96,6 +96,7 @@ import Assets.Images.PixelEncoding;
 #include "W3DDevice/GameClient/WorldHeightMap.h"
 #include "W3DDevice/GameClient/W3DSmudge.h"
 #include "W3DDevice/GameClient/W3DSnow.h"
+import engine.debug;
 import Graphics.Diagnostics.Render;
 
 
@@ -221,7 +222,7 @@ BaseHeightMapRenderObjClass::~BaseHeightMapRenderObjClass()
 //=============================================================================
 /** Constructor. Mostly nulls out the member variables. */
 //=============================================================================
-BaseHeightMapRenderObjClass::BaseHeightMapRenderObjClass()
+BaseHeightMapRenderObjClass::BaseHeightMapRenderObjClass(engine::platform::IClockService& clock)
 {
 	m_x=0;
 	m_y=0;
@@ -289,11 +290,11 @@ BaseHeightMapRenderObjClass::BaseHeightMapRenderObjClass()
 #endif
 #if ENABLE_CONFIGURABLE_SHROUD
 	if (TheGlobalData->m_shroudOn)
-		m_shroud = NEW W3DShroud;
+		m_shroud = NEW W3DShroud(clock);
 	else
 		m_shroud = nullptr;
 #else
-	m_shroud = NEW W3DShroud;
+	m_shroud = NEW W3DShroud(clock);
 #endif
     m_resourceRegistration = Graphics::Get_Frame_Resource_Lifecycle().Register(
         [this] { ReleaseResources(); },[this] { ReAcquireResources(); });
@@ -902,7 +903,7 @@ Real BaseHeightMapRenderObjClass::getHeightMapHeight(Real x, Real y, Coord3D* no
 		height = (p1 + fy*(p2-p1) + (1.0f-fx)*(p0-p1)) * MAP_HEIGHT_SCALE;
 	}
 
-//  DEBUG_ASSERTCRASH( height < 30, ("SOMEBODY THINKS THE CLIENT HEIGHTMAP IS GOOD ENOUGH FOR LOGIC SAMPLING."));
+//  engine::debug::invariant((height < 30), "height < 30", __FILE__, __LINE__, "SOMEBODY THINKS THE CLIENT HEIGHTMAP IS GOOD ENOUGH FOR LOGIC SAMPLING.");
 
 	if (normal) {
 		//		9		  8
@@ -2209,8 +2210,6 @@ void BaseHeightMapRenderObjClass::updateCenter(W3DCamera *camera, const Vector3 
 //=============================================================================
 /** Renders (draws) the terrain. */
 //=============================================================================
-//DECLARE_PERF_TIMER(Terrain_Render)
-
 void BaseHeightMapRenderObjClass::Render(W3DRenderContext & rinfo)
 {
 

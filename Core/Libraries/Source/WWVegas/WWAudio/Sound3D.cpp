@@ -44,6 +44,7 @@
 #include "WWSaveLoad/persistfactory.h"
 #include "WWLib/chunkio.h"
 #include "sound3dhandle.h"
+import engine.debug;
 
 
 //////////////////////////////////////////////////////////////////////////////////
@@ -385,7 +386,7 @@ Sound3DClass::Set_Velocity (const Vector3 &velocity)
 	//
 	if (m_SoundHandle != nullptr) {
 
-		//WWDEBUG_SAY (("Current Velocity: %.2f %.2f %.2f", m_CurrentVelocity.X, m_CurrentVelocity.Y, m_CurrentVelocity.Z));
+		//engine::debug::log_info("Current Velocity: %.2f %.2f %.2f", m_CurrentVelocity.X, m_CurrentVelocity.Y, m_CurrentVelocity.Z);
 		::AIL_set_3D_velocity_vector (m_SoundHandle->Get_H3DSAMPLE (),
 												-m_CurrentVelocity.Y,
 												m_CurrentVelocity.Z,

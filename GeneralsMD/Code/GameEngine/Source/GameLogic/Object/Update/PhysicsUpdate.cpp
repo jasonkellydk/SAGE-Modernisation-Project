@@ -26,12 +26,14 @@
 // Simple rigid body physics
 // Author: Michael S. Booth, November 2001
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.profiling;
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 // please talk to MDC (x36804) before taking this out
 #define NO_DEBUG_CRC
 
-#include "Common/PerfTimer.h"
+
 #include "Common/Player.h"
 #include "Common/ThingTemplate.h"
 #include "Common/Xfer.h"
@@ -315,7 +317,7 @@ void PhysicsBehavior::applyForce( const Coord3D *force )
 {
 // TheSuperHackers @info helmutbuhler 06/05/2025 This debug mutates the code to become CRC incompatible
 #if defined(RTS_DEBUG) || !RETAIL_COMPATIBLE_CRC
-	DEBUG_ASSERTCRASH(!(_isnan(force->x) || _isnan(force->y) || _isnan(force->z)), ("PhysicsBehavior::applyForce force NAN!"));
+	engine::debug::invariant((!(_isnan(force->x) || _isnan(force->y) || _isnan(force->z))), "!(_isnan(force->x) || _isnan(force->y) || _isnan(force->z))", __FILE__, __LINE__, "PhysicsBehavior::applyForce force NAN!");
 #endif
 	if (_isnan(force->x) || _isnan(force->y) || _isnan(force->z)) {
 		return;
@@ -337,9 +339,9 @@ void PhysicsBehavior::applyForce( const Coord3D *force )
 	m_accel.y += modForce.y * massInv;
 	m_accel.z += modForce.z * massInv;
 
-	//DEBUG_ASSERTCRASH(!(_isnan(m_accel.x) || _isnan(m_accel.y) || _isnan(m_accel.z)), ("PhysicsBehavior::applyForce accel NAN!"));
-	//DEBUG_ASSERTCRASH(!(_isnan(m_vel.x) || _isnan(m_vel.y) || _isnan(m_vel.z)), ("PhysicsBehavior::applyForce vel NAN!"));
-	//DEBUG_ASSERTCRASH(fabs(force->z) < 3, ("unlikely z-force"));
+	//engine::debug::invariant((!(_isnan(m_accel.x) || _isnan(m_accel.y) || _isnan(m_accel.z))), "!(_isnan(m_accel.x) || _isnan(m_accel.y) || _isnan(m_accel.z))", __FILE__, __LINE__, "PhysicsBehavior::applyForce accel NAN!");
+	//engine::debug::invariant((!(_isnan(m_vel.x) || _isnan(m_vel.y) || _isnan(m_vel.z))), "!(_isnan(m_vel.x) || _isnan(m_vel.y) || _isnan(m_vel.z))", __FILE__, __LINE__, "PhysicsBehavior::applyForce vel NAN!");
+	//engine::debug::invariant((fabs(force->z) < 3), "fabs(force->z) < 3", __FILE__, __LINE__, "unlikely z-force");
 #ifdef SLEEPY_PHYSICS
 	if (getFlag(IS_IN_UPDATE))
 	{
@@ -431,7 +433,7 @@ void PhysicsBehavior::resetDynamicPhysics()
 	m_pitchRate = 0;
 	setFlag(HAS_PITCHROLLYAW, false);
 #ifdef SLEEPY_PHYSICS
-	DEBUG_ASSERTCRASH(!getFlag(IS_IN_UPDATE), ("hmm, should not happen, may not work"));
+	engine::debug::invariant((!getFlag(IS_IN_UPDATE)), "!getFlag(IS_IN_UPDATE)", __FILE__, __LINE__, "hmm, should not happen, may not work");
 	setWakeFrame(getObject(), calcSleepTime());
 #endif
 }
@@ -614,10 +616,9 @@ void PhysicsBehavior::setBounceSound(const AudioEventRTS* bounceSound)
  * @todo Currently, only translations are integrated. Rotations should also be integrated. (MSB)
  */
 
-DECLARE_PERF_TIMER(PhysicsBehavior)
 UpdateSleepTime PhysicsBehavior::update()
 {
-	USE_PERF_TIMER(PhysicsBehavior)
+	engine::profiling::Scope profile_scope_619("PhysicsBehavior");
 
 	Object*														obj = getObject();
 	const PhysicsBehaviorModuleData*	d = getPhysicsBehaviorModuleData();
@@ -626,7 +627,7 @@ UpdateSleepTime PhysicsBehavior::update()
 	Coord3D														bounceForce;
 	Bool															gotBounceForce = false;
 
-	DEBUG_ASSERTCRASH(!getFlag(IS_IN_UPDATE), ("impossible"));
+	engine::debug::invariant((!getFlag(IS_IN_UPDATE)), "!getFlag(IS_IN_UPDATE)", __FILE__, __LINE__, "impossible");
 	setFlag(IS_IN_UPDATE, true);
 
 	if (!getFlag(UPDATE_EVER_RUN))
@@ -679,7 +680,7 @@ UpdateSleepTime PhysicsBehavior::update()
 
 		if (_isnan(mtx.Get_X_Translation()) || _isnan(mtx.Get_Y_Translation()) ||
 			_isnan(mtx.Get_Z_Translation())) {
-			DEBUG_CRASH(("Object position is NAN, deleting."));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Object position is NAN, deleting.");
 			TheGameLogic->destroyObject(obj);
 		}
 
@@ -873,7 +874,7 @@ UpdateSleepTime PhysicsBehavior::update()
 				damageInfo.in.m_amount = damageAmt;
         damageInfo.in.m_shockWaveAmount = 0.0f;
 				obj->attemptDamage( &damageInfo );
-				//DEBUG_LOG(("Dealing %f (%f %f) points of falling damage to %s!",damageAmt,damageInfo.out.m_actualDamageDealt, damageInfo.out.m_actualDamageClipped,obj->getTemplate()->getName().str()));
+				//engine::debug::log_info("Dealing %f (%f %f) points of falling damage to %s!",damageAmt,damageInfo.out.m_actualDamageDealt, damageInfo.out.m_actualDamageClipped,obj->getTemplate()->getName().str());
 
 				// if this killed us, add SPLATTED to get a cool death.
 				if (obj->isEffectivelyDead())
@@ -961,7 +962,7 @@ Real PhysicsBehavior::getForwardSpeed2D() const
 	Real dot = vx + vy;
 
 	Real speedSquared = vx*vx + vy*vy;
-//	DEBUG_ASSERTCRASH( speedSquared != 0, ("zero speedSquared will overflow sqrtf()!") );// lorenzen... sanity check
+//	engine::debug::invariant((speedSquared != 0), "speedSquared != 0", __FILE__, __LINE__, "zero speedSquared will overflow sqrtf()!");// lorenzen... sanity check
 
 	Real speed = (Real)sqrtf( speedSquared );
 
@@ -1154,10 +1155,9 @@ void PhysicsBehavior::doBounceSound(const Coord3D& prevPos)
  * @todo Make this work properly for non-cylindrical objects (MSB)
  * @todo Physics collision resolution is 2D - should it be 3D? (MSB)
  */
-//DECLARE_PERF_TIMER(PhysicsBehavioronCollide)
 void PhysicsBehavior::onCollide( Object *other, const Coord3D *loc, const Coord3D *normal )
 {
-	//USE_PERF_TIMER(PhysicsBehavioronCollide)
+	
 	if (m_pui != nullptr)
 	{
 		// projectiles always get a chance to handle their own collisions, and not go thru here
@@ -1448,7 +1448,7 @@ void PhysicsBehavior::onCollide( Object *other, const Coord3D *loc, const Coord3
 		force.x = factor * delta.x / dist;
 		force.y = factor * delta.y / dist;
 		force.z = factor * delta.z / dist;	// will be zero for 2d case.
-		DEBUG_ASSERTCRASH(!(_isnan(force.x) || _isnan(force.y) || _isnan(force.z)), ("PhysicsBehavior::onCollide force NAN!"));
+		engine::debug::invariant((!(_isnan(force.x) || _isnan(force.y) || _isnan(force.z))), "!(_isnan(force.x) || _isnan(force.y) || _isnan(force.z))", __FILE__, __LINE__, "PhysicsBehavior::onCollide force NAN!");
 
 		applyForce( &force );
 	}
@@ -1493,9 +1493,9 @@ Bool PhysicsBehavior::checkForOverlapCollision(Object *other)
 	if( selfCrushingOther && selfBeingCrushed )
 	{
 		//Is it possible to crush and be crushed at the same time?
-		DEBUG_CRASH( ("%s (Crusher:%d, Crushable:%d) is attempting to crush %s (Crusher:%d, Crushable:%d) but it is reciprocating -- shouldn't be possible!",
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "%s (Crusher:%d, Crushable:%d) is attempting to crush %s (Crusher:%d, Crushable:%d) but it is reciprocating -- shouldn't be possible!",
 			crusherMe->getTemplate()->getName().str(), crusherMe->getCrusherLevel(), crusherMe->getCrushableLevel(),
-			crusheeOther->getTemplate()->getName().str(), crusheeOther->getCrusherLevel(), crusheeOther->getCrushableLevel() ) );
+			crusheeOther->getTemplate()->getName().str(), crusheeOther->getCrusherLevel(), crusheeOther->getCrushableLevel() );
 		return false;
 	}
 

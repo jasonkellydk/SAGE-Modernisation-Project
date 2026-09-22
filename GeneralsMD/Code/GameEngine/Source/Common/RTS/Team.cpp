@@ -28,11 +28,13 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.profiling;
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 #include "Common/GameState.h"
 #include "Common/Team.h"
 #include "Common/ThingFactory.h"
-#include "Common/PerfTimer.h"
+
 #include "Common/Player.h"
 #include "Common/PlayerList.h"
 #include "Common/PlayerTemplate.h"
@@ -234,9 +236,9 @@ void TeamFactory::initFromSides(SidesList *sides)
 // ------------------------------------------------------------------------
 void TeamFactory::initTeam(const AsciiString& name, const AsciiString& owner, Bool isSingleton, Dict *d)
 {
-	DEBUG_ASSERTCRASH(findTeamPrototype(name)==nullptr,("team already exists"));
+	engine::debug::invariant((findTeamPrototype(name)==nullptr), "findTeamPrototype(name)==nullptr", __FILE__, __LINE__, "team already exists");
 	Player *pOwner = ThePlayerList->findPlayerWithNameKey(NAMEKEY(owner));
-	DEBUG_ASSERTCRASH(pOwner, ("no owner found for team %s (%s)",name.str(),owner.str()));
+	engine::debug::invariant((pOwner), "pOwner", __FILE__, __LINE__, "no owner found for team %s (%s)",name.str(),owner.str());
 	if (!pOwner)
 		pOwner = ThePlayerList->getNeutralPlayer();
 	/*TeamPrototype *tp =*/ newInstance(TeamPrototype)(this, name, pOwner, isSingleton, d, ++m_uniqueTeamPrototypeID);
@@ -253,7 +255,7 @@ void TeamFactory::addTeamPrototypeToList(TeamPrototype* team)
 	TeamPrototypeMap::iterator it = m_prototypes.find(nk);
 	if (it != m_prototypes.end())
 	{
-		DEBUG_ASSERTCRASH((*it).second==team, ("TeamFactory::addTeamPrototypeToList: Team %s already exists... skipping.", team->getName().str()));
+		engine::debug::invariant(((*it).second==team), "(*it).second==team", __FILE__, __LINE__, "TeamFactory::addTeamPrototypeToList: Team %s already exists... skipping.", team->getName().str());
 		return;	// already present
 	}
 
@@ -331,7 +333,7 @@ Team *TeamFactory::createInactiveTeam(const AsciiString& name)
 {
 	TeamPrototype *tp = findTeamPrototype(name);
 	if (!tp) {
-		DEBUG_CRASH(( "Team prototype '%s' does not exist", name.str() ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Team prototype '%s' does not exist", name.str() );
 		return nullptr;
 	}
 
@@ -451,8 +453,8 @@ void TeamFactory::xfer( Xfer *xfer )
 	if( prototypeCount != m_prototypes.size() )
 	{
 
-		DEBUG_CRASH(( "TeamFactory::xfer - Prototype count mismatch '%d should be '%d'",
-									prototypeCount, m_prototypes.size() ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "TeamFactory::xfer - Prototype count mismatch '%d should be '%d'",
+									prototypeCount, m_prototypes.size() );
 		throw SC_INVALID_DATA;
 
 	}
@@ -499,7 +501,7 @@ void TeamFactory::xfer( Xfer *xfer )
 			if( teamPrototype == nullptr )
 			{
 
-				DEBUG_CRASH(( "TeamFactory::xfer - Unable to find team prototype by id" ));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "TeamFactory::xfer - Unable to find team prototype by id" );
 				throw SC_INVALID_DATA;
 
 			}
@@ -815,7 +817,7 @@ TeamPrototype::TeamPrototype( TeamFactory *tf,
 	m_productionConditionAlwaysFalse(false),
 	m_productionConditionScript(nullptr)
 {
-	DEBUG_ASSERTCRASH(!(m_owningPlayer == nullptr), ("bad args to TeamPrototype ctor"));
+	engine::debug::invariant((!(m_owningPlayer == nullptr)), "!(m_owningPlayer == nullptr)", __FILE__, __LINE__, "bad args to TeamPrototype ctor");
 	if (m_factory)
 		m_factory->addTeamPrototypeToList(this);
 
@@ -879,7 +881,7 @@ Team *TeamPrototype::findTeamByID( TeamID teamID )
 // ------------------------------------------------------------------------
 void TeamPrototype::setControllingPlayer(Player *newController)
 {
-	DEBUG_ASSERTCRASH(newController, ("Attempted to set null player as team-owner, illegal."));
+	engine::debug::invariant((newController), "newController", __FILE__, __LINE__, "Attempted to set null player as team-owner, illegal.");
 	if (!newController) {
 		return;
 	}
@@ -926,7 +928,7 @@ Script *TeamPrototype::getGenericScript(Int scriptToRetrieve)
 				if (tmpScript) {
 					scriptToSave = tmpScript->duplicate();
 				} else {
-					DEBUG_CRASH(("We attempted to find a generic script, but couldn't. ('%s')", m_teamTemplate.m_teamGenericScripts[i].str()));
+					engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "We attempted to find a generic script, but couldn't. ('%s')", m_teamTemplate.m_teamGenericScripts[i].str());
 				}
 			}
 
@@ -1348,7 +1350,7 @@ Team::Team(TeamPrototype *proto, TeamID id ) :
 // ------------------------------------------------------------------------
 Team::~Team()
 {
-//	DEBUG_ASSERTCRASH(getFirstItemIn_TeamMemberList() == nullptr, ("Team still has members in existence"));
+//	engine::debug::invariant((getFirstItemIn_TeamMemberList() == nullptr), "getFirstItemIn_TeamMemberList() == nullptr", __FILE__, __LINE__, "Team still has members in existence");
 
 	TheScriptEngine->notifyOfTeamDestruction(this);
 
@@ -1367,9 +1369,9 @@ Team::~Team()
 		tm->setTeam(nullptr);
 	}
 //this test is valid, but will generate a 'false positive' during game teardown
-//DEBUG_ASSERTCRASH(!(getControllingPlayer() && getControllingPlayer()->getDefaultTeam()==this),("I am still someones default team -- sure you want to delete me?"));
+//engine::debug::invariant((!(getControllingPlayer() && getControllingPlayer()->getDefaultTeam()==this)), "!(getControllingPlayer() && getControllingPlayer()->getDefaultTeam()==this)", __FILE__, __LINE__, "I am still someones default team -- sure you want to delete me?");
 
-	DEBUG_ASSERTCRASH(m_proto, ("proto should not be null"));
+	engine::debug::invariant((m_proto), "m_proto", __FILE__, __LINE__, "proto should not be null");
 	if (m_proto && m_proto->isInList_TeamInstanceList(this))
 		m_proto->removeFrom_TeamInstanceList(this);
 
@@ -2526,10 +2528,8 @@ Bool Team::hasAnyBuildFacility() const
 }
 
 // ------------------------------------------------------------------------
-//DECLARE_PERF_TIMER(updateGenericScripts)
 void Team::updateGenericScripts()
 {
-	//USE_PERF_TIMER(updateGenericScripts)
 	for (Int i = 0; i < MAX_GENERIC_SCRIPTS; ++i) {
 		if (m_shouldAttemptGenericScript[i]) {
 			// Does the condition succeed? If so, run it. If it is a run once script, also mark that we
@@ -2582,8 +2582,8 @@ void Team::xfer( Xfer *xfer )
 	if( teamID != m_id )
 	{
 
-		DEBUG_CRASH(( "Team::xfer - TeamID mismatch.  Xfered '%d' but should be '%d'",
-									teamID, m_id ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Team::xfer - TeamID mismatch.  Xfered '%d' but should be '%d'",
+									teamID, m_id );
 		throw SC_INVALID_DATA;
 
 	}
@@ -2673,7 +2673,7 @@ void Team::xfer( Xfer *xfer )
 	xfer->xferUnsignedShort( &shouldAttemptGenericScriptCount );
 	if ( shouldAttemptGenericScriptCount != MAX_GENERIC_SCRIPTS )
 	{
-		DEBUG_CRASH(("Team::xfer - The number of allowable Generic scripts has changed, and this chunk needs to be versioned."));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Team::xfer - The number of allowable Generic scripts has changed, and this chunk needs to be versioned.");
 		throw SC_INVALID_DATA;
 	}
 
@@ -2717,7 +2717,7 @@ void Team::loadPostProcess()
 		if( obj == nullptr )
 		{
 
-			DEBUG_CRASH(( "Team::loadPostProcess - Unable to post process object to member list, object ID = '%d'", *it ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Team::loadPostProcess - Unable to post process object to member list, object ID = '%d'", *it );
 			throw SC_INVALID_DATA;
 
 		}
@@ -2731,8 +2731,8 @@ void Team::loadPostProcess()
 		if( isInList_TeamMemberList( obj ) == FALSE )
 		{
 
-			DEBUG_CRASH(( "Team::loadPostProcess - Object '%s'(%d) should be in team list but is not",
-										obj->getTemplate()->getName().str(), obj->getID() ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Team::loadPostProcess - Object '%s'(%d) should be in team list but is not",
+										obj->getTemplate()->getName().str(), obj->getID() );
 			throw SC_INVALID_DATA;
 
 		}
@@ -2752,4 +2752,3 @@ void Team::loadPostProcess()
 // ------------------------------------------------------------------------
 // ------------------------------------------------------------------------
 // ------------------------------------------------------------------------
-

@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 #include "Common/Xfer.h"
 #include "GameLogic/Object.h"
 #include "GameLogic/Damage.h"
@@ -61,7 +62,7 @@ void ImmortalBody::internalChangeHealth( Real delta )
 	ActiveBody::internalChangeHealth( delta );
 
 	// nothing -- never mark it as dead.
-	DEBUG_ASSERTCRASH( (getHealth() > 0 && !getObject()->isEffectivelyDead() ), ("Immortal objects should never get marked as dead!"));
+	engine::debug::invariant(((getHealth() > 0 && !getObject()->isEffectivelyDead() )), "(getHealth() > 0 && !getObject()->isEffectivelyDead() )", __FILE__, __LINE__, "Immortal objects should never get marked as dead!");
 
 }
 

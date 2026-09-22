@@ -35,8 +35,10 @@
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 #include "cullsys.h"
-#include "WWDebug/wwdebug.h"
-#include "WWDebug/wwprofile.h"
+import engine.profiling;
+
+
+import engine.debug;
 
 
 /*************************************************************************
@@ -56,14 +58,14 @@ CullableClass::~CullableClass()
 	// the cull system that contains us is responsible for any culling link
 	// so we better be out of it and it should have cleared our pointer before
 	// we are deleted.
-	WWASSERT(CullLink == nullptr);
+	engine::debug::assert_condition((CullLink == nullptr), "CullLink == nullptr", __FILE__, __LINE__, "assertion failed");
 }
 
 void CullableClass::Set_Cull_Box(const AABoxClass & box,bool just_loaded)
 {
 	CullBox = box;
 
-	WWPROFILE("Cullable::Set_Cull_Box");
+	engine::profiling::Scope profile_scope_66("Cullable::Set_Cull_Box");
 
 	// Just_loaded flag allows us to update the box without notifying the
 	// culling system.  Use this when you've saved and loaded the linkage
@@ -144,7 +146,7 @@ void CullSystemClass::Reset_Collection()
 
 void CullSystemClass::Add_To_Collection(CullableClass * obj)
 {
-	WWASSERT(obj != nullptr);
+	engine::debug::assert_condition((obj != nullptr), "obj != nullptr", __FILE__, __LINE__, "assertion failed");
 	obj->NextCollected = CollectionHead;
 	CollectionHead = obj;
 }

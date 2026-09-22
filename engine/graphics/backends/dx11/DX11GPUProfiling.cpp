@@ -2,7 +2,7 @@
 #include "DX11GPUProfiling.h"
 #if defined(RTS_PROFILE_TRACY)
 #include <optional>
-#include <tracy/TracyD3D11.hpp>
+#include <tracy/tracy/TracyD3D11.hpp>
 #endif
 
 namespace Graphics::DX11Detail {

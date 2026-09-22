@@ -29,7 +29,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/Player.h"
 #include "Common/RandomValue.h"
@@ -169,7 +170,7 @@ void TunnelContain::killAllContained()
 	while ( it != list.end() )
 	{
 		Object *obj = *it++;
-		DEBUG_ASSERTCRASH( obj, ("Contain list must not contain null element"));
+		engine::debug::invariant((obj), "obj", __FILE__, __LINE__, "Contain list must not contain null element");
 
 		removeFromContain( obj, true );
 
@@ -194,7 +195,7 @@ void TunnelContain::removeAllContained( Bool exposeStealthUnits )
 	while ( it != list.end() )
 	{
 		Object *obj = *it++;
-		DEBUG_ASSERTCRASH( obj, ("Contain list must not contain null element"));
+		engine::debug::invariant((obj), "obj", __FILE__, __LINE__, "Contain list must not contain null element");
 
 		removeFromContain( obj, exposeStealthUnits );
 	}
@@ -509,7 +510,7 @@ void TunnelContain::onCapture( Player *oldOwner, Player *newOwner )
 		TunnelTracker *oldTunnelTracker = oldOwner->getTunnelSystem();
 		if( oldTunnelTracker )
 		{
-			DEBUG_ASSERTCRASH( oldTunnelTracker->getContainCount() == 0, ("You shouldn't force a capture of a Tunnel with people in it. Future ExitFromContainer scripts will fail."));
+			engine::debug::invariant((oldTunnelTracker->getContainCount() == 0), "oldTunnelTracker->getContainCount() == 0", __FILE__, __LINE__, "You shouldn't force a capture of a Tunnel with people in it. Future ExitFromContainer scripts will fail.");
 			oldTunnelTracker->onTunnelDestroyed(getObject());
 		}
 

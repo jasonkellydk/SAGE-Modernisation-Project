@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cmath>
+import engine.debug;
 
 WaterGridSimulation::WaterGridSimulation() :
 	m_enabled(FALSE),
@@ -308,7 +309,7 @@ void WaterGridSimulation::xfer(Xfer *xfer)
 	xfer->xferInt(&cells_x);
 	if (cells_x != m_gridCellsX)
 	{
-		DEBUG_CRASH(("WaterGridSimulation::xfer - cells X mismatch"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "WaterGridSimulation::xfer - cells X mismatch");
 		throw SC_INVALID_DATA;
 	}
 
@@ -316,7 +317,7 @@ void WaterGridSimulation::xfer(Xfer *xfer)
 	xfer->xferInt(&cells_y);
 	if (cells_y != m_gridCellsY)
 	{
-		DEBUG_CRASH(("WaterGridSimulation::xfer - cells Y mismatch"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "WaterGridSimulation::xfer - cells Y mismatch");
 		throw SC_INVALID_DATA;
 	}
 

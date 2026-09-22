@@ -28,12 +28,9 @@
 
 #pragma once
 
-#include "Common/PerfTimer.h"
-#include <mutex>
 
-#ifdef PERF_TIMERS
-extern PerfGather TheCritSecPerfGather;
-#endif
+
+#include <mutex>
 
 class CriticalSection
 {
@@ -42,33 +39,23 @@ class CriticalSection
 	public:
 		CriticalSection()
 		{
-			#ifdef PERF_TIMERS
-			AutoPerfGather a(TheCritSecPerfGather);
-			#endif
 			// std::recursive_mutex matches the legacy critical-section reentrancy.
 		}
 
 		virtual ~CriticalSection()
 		{
-			#ifdef PERF_TIMERS
-			AutoPerfGather a(TheCritSecPerfGather);
-			#endif
 		}
 
 	public:	// Use these when entering/exiting a critical section.
 		void enter()
 		{
-			#ifdef PERF_TIMERS
-			AutoPerfGather a(TheCritSecPerfGather);
-			#endif
+			
 			m_sdl3Mutex.lock();
 		}
 
 		void exit()
 		{
-			#ifdef PERF_TIMERS
-			AutoPerfGather a(TheCritSecPerfGather);
-			#endif
+			
 			m_sdl3Mutex.unlock();
 		}
 };

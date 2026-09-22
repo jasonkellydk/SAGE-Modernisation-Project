@@ -1,4 +1,6 @@
 #pragma once
+
+#include <cassert>
 #include "W3DDevice/GameClient/W3DMeshGeometry.h"
 #include "W3DDevice/GameClient/W3DCastQuery.h"
 #include "W3DDevice/GameClient/W3DIntersectionQuery.h"
@@ -88,7 +90,7 @@ inline int Count_Axis_Ray(const Graphics::ModelBoundsTree& tree,W3DMeshGeometry&
 {
     static const int axes[6]={0,0,1,1,2,2},first_axes[6]={1,1,2,2,0,0},second_axes[6]={2,2,0,0,1,1};
     static const int directions[6]={1,0,1,0,1,0};
-    WWASSERT(axis_dir>=0 && axis_dir<6);
+    assert((axis_dir>=0 && axis_dir<6));
     const int axis=axes[axis_dir],first=first_axes[axis_dir],second=second_axes[axis_dir],direction=directions[axis_dir];
     flags=TRI_RAYCAST_FLAG_NONE;
     int count=0;

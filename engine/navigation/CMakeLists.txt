@@ -9,6 +9,9 @@ endif()
 option(ENGINE_NAVIGATION_BUILD_TESTS "Build navigation characterization tests" ${NAVIGATION_STANDALONE})
 
 add_library(engine_navigation STATIC)
+if(TARGET engine_debug)
+    target_link_libraries(engine_navigation PUBLIC engine_debug engine_profiling)
+endif()
 target_sources(engine_navigation PUBLIC
     FILE_SET CXX_MODULES FILES
         navigation.cppm
@@ -88,9 +91,11 @@ function(engine_navigation_attach_generalsmd game_target)
     target_link_libraries(engine_navigation_generalsmd PUBLIC engine_navigation)
     target_link_libraries(engine_navigation_generalsmd PRIVATE
         generals_graphics
+        engine_platform
+        engine_debug
+        engine_profiling
         zi_always
         corei_gameengine_public
-        core_profile_legacy
         z_wwvegas
         SDL3::SDL3
     )

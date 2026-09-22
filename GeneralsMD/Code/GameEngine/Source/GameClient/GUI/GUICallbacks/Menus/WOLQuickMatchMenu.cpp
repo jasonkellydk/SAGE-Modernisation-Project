@@ -29,7 +29,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/GameEngine.h"
 #include "Common/QuickmatchPreferences.h"
@@ -68,15 +69,11 @@
 #include "GameNetwork/RankPointValue.h"
 #include "GameNetwork/GameSpy/LadderDefs.h"
 
-#ifdef DEBUG_LOGGING
-#include "Common/MiniLog.h"
+
 //#define PERF_TEST
-static LogClass s_perfLog("QMPerf.txt");
+static engine::debug::FileLog s_perfLog("QMPerf.txt");
 static Bool s_inQM = FALSE;
-#define PERF_LOG(x) s_perfLog.log x
-#else // DEBUG_LOGGING
-#define PERF_LOG(x)
-#endif // DEBUG_LOGGING
+#define PERF_LOG(x) s_perfLog.write x
 
 // PRIVATE DATA ///////////////////////////////////////////////////////////////////////////////////
 // window ids ------------------------------------------------------------------------------
@@ -710,7 +707,7 @@ void WOLQuickMatchMenuInit( WindowLayout *layout, void *userData )
 			GameSpyCloseAllOverlays();
 			GSMessageBoxOk( title, body );
 			TheGameSpyInfo->reset();
-			DEBUG_LOG(("WOLQuickMatchMenuInit() - game was in progress, and we were disconnected, so pop immediate back to main menu"));
+			engine::debug::log_info("WOLQuickMatchMenuInit() - game was in progress, and we were disconnected, so pop immediate back to main menu");
 			TheShell->popImmediate();
 			return;
 		}
@@ -1115,17 +1112,17 @@ void WOLQuickMatchMenuUpdate( WindowLayout * layout, void *userData)
 				{
 					if (stricmp(resp.command.c_str(), "STATS") == 0)
 					{
-						DEBUG_LOG(("Saw STATS from %s, data was '%s'", resp.nick.c_str(), resp.commandOptions.c_str()));
+						engine::debug::log_info("Saw STATS from %s, data was '%s'", resp.nick.c_str(), resp.commandOptions.c_str());
 						AsciiString data = resp.commandOptions.c_str();
 						AsciiString idStr;
 						data.nextToken(&idStr, " ");
 						Int id = atoi(idStr.str());
-						DEBUG_LOG(("data: %d(%s) - '%s'", id, idStr.str(), data.str()));
+						engine::debug::log_info("data: %d(%s) - '%s'", id, idStr.str(), data.str());
 
 						PSPlayerStats stats = TheGameSpyPSMessageQueue->parsePlayerKVPairs(data.str());
 						PSPlayerStats oldStats = TheGameSpyPSMessageQueue->findPlayerStatsByID(id);
 						stats.id = id;
-						DEBUG_LOG(("Parsed ID is %d, old ID is %d", stats.id, oldStats.id));
+						engine::debug::log_info("Parsed ID is %d, old ID is %d", stats.id, oldStats.id);
 						if (stats.id && (oldStats.id == 0))
 							TheGameSpyPSMessageQueue->trackPlayerStats(stats);
 
@@ -1156,12 +1153,12 @@ void WOLQuickMatchMenuUpdate( WindowLayout * layout, void *userData)
 								(val <= FirewallHelperClass::FIREWALL_TYPE_DESTINATION_PORT_DELTA))
 						{
 							slot->setNATBehavior((FirewallHelperClass::FirewallBehaviorType)val);
-							DEBUG_LOG(("Setting NAT behavior to %d for player %d", val, slotNum));
+							engine::debug::log_info("Setting NAT behavior to %d for player %d", val, slotNum);
 							change = true;
 						}
 						else
 						{
-							DEBUG_LOG(("Rejecting invalid NAT behavior %d from player %d", val, slotNum));
+							engine::debug::log_info("Rejecting invalid NAT behavior %d from player %d", val, slotNum);
 						}
 					}
 					*/
@@ -1360,7 +1357,7 @@ void WOLQuickMatchMenuUpdate( WindowLayout * layout, void *userData)
 							}
 
 							Int numPlayersPerTeam = numPlayers/2;
-							DEBUG_ASSERTCRASH(numPlayersPerTeam, ("0 players per team???"));
+							engine::debug::invariant((numPlayersPerTeam), "numPlayersPerTeam", __FILE__, __LINE__, "0 players per team???");
 							if (!numPlayersPerTeam)
 								numPlayersPerTeam = 1;
 
@@ -1388,7 +1385,7 @@ void WOLQuickMatchMenuUpdate( WindowLayout * layout, void *userData)
 								}
 							}
 
-							DEBUG_LOG(("Starting a QM game: options=[%s]", GameInfoToAsciiString(TheGameSpyGame).str()));
+							engine::debug::log_info("Starting a QM game: options=[%s]", GameInfoToAsciiString(TheGameSpyGame).str());
 							SendStatsToOtherPlayers(TheGameSpyGame);
 							TheGameSpyGame->startGame(0);
 							GameWindow *buttonBuddies = TheWindowManager->winGetWindowFromId(nullptr, buttonBuddiesID);
@@ -1709,7 +1706,7 @@ WindowMsgHandledType WOLQuickMatchMenuSystem( GameWindow *window, UnsignedInt ms
 					if (ladderInfo && ladderInfo->randomFactions)
 					{
 						Int sideNum = GameClientRandomValue(0, ladderInfo->validFactions.size()-1);
-						DEBUG_LOG(("Looking for %d out of %d random sides", sideNum, ladderInfo->validFactions.size()));
+						engine::debug::log_info("Looking for %d out of %d random sides", sideNum, ladderInfo->validFactions.size());
 						AsciiStringListConstIterator cit = ladderInfo->validFactions.begin();
 						while (sideNum)
 						{
@@ -1720,13 +1717,13 @@ WindowMsgHandledType WOLQuickMatchMenuSystem( GameWindow *window, UnsignedInt ms
 						{
 							Int numPlayerTemplates = ThePlayerTemplateStore->getPlayerTemplateCount();
 							AsciiString sideStr = *cit;
-							DEBUG_LOG(("Chose %s as our side... finding", sideStr.str()));
+							engine::debug::log_info("Chose %s as our side... finding", sideStr.str());
 							for (Int c=0; c<numPlayerTemplates; ++c)
 							{
 								const PlayerTemplate *fac = ThePlayerTemplateStore->getNthPlayerTemplate(c);
 								if (fac && fac->getSide() == sideStr)
 								{
-									DEBUG_LOG(("Found %s in index %d", sideStr.str(), c));
+									engine::debug::log_info("Found %s in index %d", sideStr.str(), c);
 									req.QM.side = c;
 									break;
 								}

@@ -27,7 +27,8 @@
 // Desc:   Update will create and monitor a group of spawned units and replace as needed
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/GameState.h"
 #include "Common/ThingFactory.h"
@@ -423,7 +424,7 @@ CanAttackResult SpawnBehavior::getCanAnySlavesAttackSpecificTarget( AbleToAttack
 					break;
 
 				default:
-					DEBUG_CRASH( ("SpawnBehavior::getCanAnySlavesAttackSpecificTarget encountered unhandled CanAttackResult of %d. Treating as not possible...", result) );
+					engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "SpawnBehavior::getCanAnySlavesAttackSpecificTarget encountered unhandled CanAttackResult of %d. Treating as not possible...", result);
 					break;
 			}
 		}
@@ -461,7 +462,7 @@ CanAttackResult SpawnBehavior::getCanAnySlavesUseWeaponAgainstTarget( AbleToAtta
 					break;
 
 				default:
-					DEBUG_CRASH( ("SpawnBehavior::getCanAnySlavesUseWeaponAgainstTarget encountered unhandled CanAttackResult of %d. Treating as not possible...", result) );
+					engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "SpawnBehavior::getCanAnySlavesUseWeaponAgainstTarget encountered unhandled CanAttackResult of %d. Treating as not possible...", result);
 					break;
 			}
 		}
@@ -601,7 +602,7 @@ Bool SpawnBehavior::createSpawn()
 	ExitInterface* exitInterface = parent->getObjectExitInterface();
 	if( exitInterface == nullptr )
 	{
-		DEBUG_ASSERTCRASH( exitInterface != nullptr, ("Something cannot have SpawnBehavior without an exit interface") );
+		engine::debug::invariant((exitInterface != nullptr), "exitInterface != nullptr", __FILE__, __LINE__, "Something cannot have SpawnBehavior without an exit interface");
 		return FALSE;
 	}
 
@@ -1111,7 +1112,7 @@ void SpawnBehavior::xfer( Xfer *xfer )
 			if( m_spawnTemplate == nullptr )
 			{
 
-				DEBUG_CRASH(( "SpawnBehavior::xfer - Unable to find template '%s'", name.str() ));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "SpawnBehavior::xfer - Unable to find template '%s'", name.str() );
 				throw SC_INVALID_DATA;
 
 			}

@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/FramePacer.h"
 #include "Common/GameEngine.h"
@@ -177,7 +178,7 @@ static void restartMissionMenu()
 
 	// TheSuperHackers @bugfix Caball009 07/02/2026 Reuse the previous seed value for the new skirmish match to prevent mismatches.
 	// Campaign, challenge, and skirmish single-player scenarios all use GAME_SINGLE_PLAYER and are expected to use 0 as seed value.
-	DEBUG_ASSERTCRASH((TheSkirmishGameInfo != nullptr) == (gameMode == GAME_SKIRMISH), ("Unexpected game mode on map / mission restart"));
+	engine::debug::invariant(((TheSkirmishGameInfo != nullptr) == (gameMode == GAME_SKIRMISH)), "(TheSkirmishGameInfo != nullptr) == (gameMode == GAME_SKIRMISH)", __FILE__, __LINE__, "Unexpected game mode on map / mission restart");
 	const Int seed = TheSkirmishGameInfo ? TheSkirmishGameInfo->getSeed() : 0;
 
 	//
@@ -214,10 +215,9 @@ static void restartMissionMenu()
 		msg->appendIntegerArgument(diff);
 		msg->appendIntegerArgument(rankPointsStartedWith);
 		msg->appendIntegerArgument(fps);
-		DEBUG_LOG(("Restarting game mode %d, Diff=%d, RankPoints=%d", gameMode,
+		engine::debug::log_info("Restarting game mode %d, Diff=%d, RankPoints=%d", gameMode,
 																																		TheScriptEngine->getGlobalDifficulty(),
-																																		rankPointsStartedWith)
-							);
+																																		rankPointsStartedWith);
 
 		InitRandom(seed);
 	}
@@ -283,18 +283,18 @@ void ToggleQuitMenu()
 	if (TheShell->getOptionsLayout(FALSE) != FALSE) {
 		WindowLayout *optLayout = TheShell->getOptionsLayout(FALSE);
 		GameWindow *optionsParent = optLayout->getFirstWindow();
-		DEBUG_ASSERTCRASH(optionsParent != nullptr, ("Not able to get the options layout parent window"));
+		engine::debug::invariant((optionsParent != nullptr), "optionsParent != nullptr", __FILE__, __LINE__, "Not able to get the options layout parent window");
 		GameWindow *optionsBack = TheWindowManager->winGetWindowFromId(optionsParent, TheNameKeyGenerator->nameToKey( "OptionsMenu.wnd:ButtonBack" ));
-		DEBUG_ASSERTCRASH(optionsBack != nullptr, ("Not able to get the back button window from the options menu"));
+		engine::debug::invariant((optionsBack != nullptr), "optionsBack != nullptr", __FILE__, __LINE__, "Not able to get the back button window from the options menu");
 		TheWindowManager->winSendSystemMsg(optLayout->getFirstWindow(), GBM_SELECTED, (WindowMsgData)optionsBack, 0);
 		return;
 	}
 	if ((saveLoadMenuLayout != nullptr) && (saveLoadMenuLayout->isHidden() == FALSE))
 	{
 		GameWindow *saveLoadParent = saveLoadMenuLayout->getFirstWindow();
-		DEBUG_ASSERTCRASH(saveLoadParent != nullptr, ("Not able to get the save/load layout parent window"));
+		engine::debug::invariant((saveLoadParent != nullptr), "saveLoadParent != nullptr", __FILE__, __LINE__, "Not able to get the save/load layout parent window");
 		GameWindow *saveLoadBack = TheWindowManager->winGetWindowFromId(saveLoadParent, TheNameKeyGenerator->nameToKey( "PopupSaveLoad.wnd:ButtonBack" ));
-		DEBUG_ASSERTCRASH(saveLoadBack != nullptr, ("Not able to get the back button window from the save/load menu"));
+		engine::debug::invariant((saveLoadBack != nullptr), "saveLoadBack != nullptr", __FILE__, __LINE__, "Not able to get the back button window from the save/load menu");
 		TheWindowManager->winSendSystemMsg(saveLoadMenuLayout->getFirstWindow(), GBM_SELECTED, (WindowMsgData)saveLoadBack, 0);
 		saveLoadMenuLayout = nullptr;
 		return;
@@ -359,7 +359,7 @@ void ToggleQuitMenu()
 		// load the quit menu from the layout file if needed
 		if( quitMenuLayout == nullptr )
 		{
-			DEBUG_CRASH(("Could not load a quit menu layout"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Could not load a quit menu layout");
 			isVisible = FALSE;
 			TheInGameUI->setQuitMenuVisible(FALSE);
 			return;
@@ -499,7 +499,7 @@ WindowMsgHandledType QuitMenuSystem( GameWindow *window, UnsignedInt msg,
 			else if( buttonOptions == controlID )
 			{
 				WindowLayout *optLayout = TheShell->getOptionsLayout(TRUE);
-				DEBUG_ASSERTCRASH(optLayout != nullptr, ("options menu layout is null"));
+				engine::debug::invariant((optLayout != nullptr), "optLayout != nullptr", __FILE__, __LINE__, "options menu layout is null");
 				optLayout->runInit();
 				optLayout->hide(FALSE);
 				optLayout->bringForward();

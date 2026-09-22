@@ -29,6 +29,8 @@
 
 #pragma once
 
+
+#include <cassert>
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 #include "Common/ThingTemplate.h"
 #include "GameLogic/Object.h"
@@ -66,7 +68,7 @@ public:
 		ObjectHelper( thing, modData )
 	{
 		// unlike other helpers, this one needs to start active.
-		DEBUG_ASSERTCRASH(getObject()->getTemplate()->canPossiblyHaveAnyWeapon(), ("should not be instantiated if we have no weapon"));
+		assert((getObject()->getTemplate()->canPossiblyHaveAnyWeapon()));
 		setWakeFrame(getObject(), UPDATE_SLEEP_NONE);
 	}
 	// virtual destructor prototype provided by memory pool object

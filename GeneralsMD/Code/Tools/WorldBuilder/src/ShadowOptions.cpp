@@ -26,6 +26,7 @@
 #include "Common/GlobalData.h"
 #include "ShadowOptions.h"
 #include "W3DDevice/GameClient/W3DShadow.h"
+import engine.debug;
 
 /////////////////////////////////////////////////////////////////////////////
 // ShadowOptions dialog
@@ -82,7 +83,7 @@ void ShadowOptions::setShadowColor()
 	if (b<0) b = 0;
 
 	UnsignedInt clr = (255<<24) + (r<<16) + (g<<8) + b;
-	DEBUG_LOG(("Setting shadows to %x", clr));
+	engine::debug::log_info("Setting shadows to %x", clr);
 	TheW3DShadowManager->setShadowColor(clr);
 }
 

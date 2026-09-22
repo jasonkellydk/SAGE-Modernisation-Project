@@ -29,6 +29,8 @@
 
 #pragma once
 
+
+#include <cassert>
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 #include "Common/BitFlags.h"
 #include "Common/STLTypedefs.h"
@@ -177,11 +179,7 @@ private:
 		{
 			AsciiString curConditionStr;
 			bits.buildDescription(&curConditionStr);
-			DEBUG_CRASH(("ambiguous model match in findBestInfoSlow \n\nbetween \n(%s)\n<and>\n(%s)\n\n(%d extra matches found)\n\ncurrent bits are (\n%s)",
-					curBestMatchStr.str(),
-					dupMatchStr.str(),
-					numDupMatches,
-					curConditionStr.str()));
+			assert(false);
 		}
 #endif
 
@@ -233,7 +231,7 @@ public:
 
 		const MATCHABLE* info = findBestInfoSlow(v, bits);
 
-		DEBUG_ASSERTCRASH(info != nullptr, ("no suitable match for criteria was found!"));
+		assert((info != nullptr));
 		if (info != nullptr) {
 			m_bestMatches[bits] = info;
 		}

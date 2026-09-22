@@ -19,7 +19,7 @@
 
 #include "thread.h"
 #include "Except.h"
-#include "WWDebug/wwdebug.h"
+
 #pragma warning ( push )
 #pragma warning ( disable : 4201 )
 #include "systimer.h"
@@ -28,6 +28,7 @@
 #ifdef _WIN32
 #include <process.h>
 #include <windows.h>
+import engine.debug;
 #endif
 
 ThreadClass::ThreadClass(const char *thread_name, ExceptionHandlerType exception_handler) : handle(0), running(false), thread_priority(0)
@@ -86,14 +87,14 @@ void __cdecl ThreadClass::Internal_Thread_Function(void* params)
 
 void ThreadClass::Execute()
 {
-	WWASSERT(!handle);	// Only one thread at a time!
+	engine::debug::assert_condition((!handle), "!handle", __FILE__, __LINE__, "assertion failed");	// Only one thread at a time!
 	#ifdef _UNIX
 		// assert(0);
 		return;
 	#else
 		handle=_beginthread(&Internal_Thread_Function,0,this);
 		SetThreadPriority((HANDLE)handle,THREAD_PRIORITY_NORMAL+thread_priority);
-		WWDEBUG_SAY(("ThreadClass::Execute: Started thread %s, thread ID is %X", ThreadName, handle));
+		engine::debug::log_info("ThreadClass::Execute: Started thread %s, thread ID is %X", ThreadName, handle);
 	#endif
 }
 
@@ -120,7 +121,7 @@ void ThreadClass::Stop(unsigned ms)
 			if ((TIMEGETTIME()-time)>ms) {
 				int res=TerminateThread((HANDLE)handle,0);
 				res;	// just to silence compiler warnings
-				WWASSERT(res);	// Thread still not killed!
+				engine::debug::assert_condition((res), "res", __FILE__, __LINE__, "assertion failed");	// Thread still not killed!
 				handle=0;
 			}
 			Sleep(0);

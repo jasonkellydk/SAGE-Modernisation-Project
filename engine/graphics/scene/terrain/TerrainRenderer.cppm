@@ -1,5 +1,4 @@
 module;
-#include "../../profiling/Tracy.h"
 
 #include <algorithm>
 #include <array>
@@ -12,6 +11,7 @@ module;
 
 export module Graphics.Scene.Terrain.Renderer;
 
+import engine.profiling;
 export import Graphics.Scene.Terrain.Geometry;
 export import Graphics.RHI;
 import Graphics.Shaders.Library;
@@ -288,7 +288,7 @@ public:
         const TerrainDrawParameters &parameters, std::span<const RHITextureHandle> textures,
         bool linear_filter = true, bool wireframe = false) noexcept
     {
-        GRAPHICS_PROFILE_SCOPE("Graphics.Terrain.Render");
+        engine::profiling::Scope profile_scope_290("Graphics.Terrain.Render");
         const std::size_t pass_index = static_cast<std::size_t>(pass);
         if (m_device == nullptr || pass_index >= 5 || textures.size() > 5)
             return false;

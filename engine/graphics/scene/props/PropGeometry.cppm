@@ -1,5 +1,4 @@
 module;
-#include "../../profiling/Tracy.h"
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -16,6 +15,7 @@ module;
 
 export module Graphics.Scene.Props.Geometry;
 
+import engine.profiling;
 namespace Graphics
 {
 // Vertex attributes have the GPU's IEEE binary32 representation.
@@ -144,7 +144,7 @@ public:
 
     bool Assign(std::span<const PropVertex> vertices, std::span<const std::uint32_t> indices)
     {
-        GRAPHICS_PROFILE_SCOPE("Graphics.Props.AssignGeometry");
+        engine::profiling::Scope profile_scope_146("Graphics.Props.AssignGeometry");
         if (!Valid(vertices, indices)) return false;
         m_vertices.assign(vertices.begin(), vertices.end());
         m_indices.assign(indices.begin(), indices.end());
@@ -158,7 +158,7 @@ public:
     // cannot alter earlier draw ranges.
     bool Append(std::span<const PropVertex> vertices, std::span<const std::uint32_t> indices)
     {
-        GRAPHICS_PROFILE_SCOPE("Graphics.Props.AppendGeometry");
+        engine::profiling::Scope profile_scope_160("Graphics.Props.AppendGeometry");
         constexpr auto maximum_bytes = std::numeric_limits<std::uint32_t>::max();
         if (vertices.size() > maximum_bytes / sizeof(PropVertex) - m_vertices.size()
             || indices.size() > maximum_bytes / sizeof(std::uint32_t) - m_indices.size()

@@ -4,15 +4,9 @@ module;
 #include <cstdint>
 #include <span>
 
-#if defined(RTS_PROFILE_TRACY)
-#include <tracy/Tracy.hpp>
-#define GRAPHICS_PROFILE_SCOPE(name) ZoneScopedN(name)
-#else
-#define GRAPHICS_PROFILE_SCOPE(name) ((void)0)
-#endif
-
 export module Graphics.Scene.ParticleVisibility;
 
+import engine.profiling;
 export import Graphics.Scene.Particles;
 export import Graphics.Scene.Views.View;
 
@@ -87,7 +81,7 @@ bool Is_Visible(const Frustum &frustum, float x, float y, float z, float radius)
 
 export bool Build_Visible_Particles(const ParticleSystem &particles, const View &view, VisibleParticleSet &visible_particles) noexcept
 {
-	GRAPHICS_PROFILE_SCOPE("Graphics::Build_Visible_Particles");
+	engine::profiling::Scope profile_scope_82("Graphics::Build_Visible_Particles");
 	visible_particles.Clear();
 	const ParticleData data = particles.Particles();
 	for (std::size_t particle_index = 0; particle_index < data.Size(); ++particle_index) {

@@ -25,11 +25,12 @@
 // AI.cpp
 // The Artificial Intelligence system
 // Author: Michael S. Booth, November 2000
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/CRCDebug.h"
 #include "Common/GameState.h"
-#include "Common/PerfTimer.h"
+
 #include "Common/Player.h"
 #include "Common/PlayerList.h"
 #include "Common/ThingTemplate.h"
@@ -124,7 +125,7 @@ void AISideBuildList::addInfo(BuildListInfo *info)
 		while (cur && cur->getNext()) {
 			cur = cur->getNext();
 		}
-		DEBUG_ASSERTCRASH(cur && cur->getNext()==nullptr, ("Logic error."));
+		engine::debug::invariant((cur && cur->getNext()==nullptr), "cur && cur->getNext()==nullptr", __FILE__, __LINE__, "Logic error.");
 		cur->setNextBuildList(info);
 	}
 	info->setNextBuildList(nullptr); // should be at the end of the list.
@@ -258,7 +259,7 @@ void AI::parseScience(INI *ini, void *instance, void* /*store*/, const void* /*u
 	if (skillset->m_numSkills>=MAX_AI_UPGRADES) {
 #ifdef DEBUG_CRASHING
 		const char* c = ini->getNextToken();
-		DEBUG_CRASH(("Too many SCIENCE skills in skillset. Skill = %s, max is %d", c, MAX_AI_UPGRADES));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Too many SCIENCE skills in skillset. Skill = %s, max is %d", c, MAX_AI_UPGRADES);
 #endif
 		return;
 	}
@@ -267,8 +268,8 @@ void AI::parseScience(INI *ini, void *instance, void* /*store*/, const void* /*u
 	ScienceType science = skillset->m_skills[skillset->m_numSkills];
 	if (science != SCIENCE_INVALID) {
 		if (TheScienceStore->getSciencePurchaseCost(science)==0) {
-			DEBUG_CRASH(("Science %s is not purchaseable, can't be bought.",
-				TheScienceStore->getInternalNameForScience(science).str()));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Science %s is not purchaseable, can't be bought.",
+				TheScienceStore->getInternalNameForScience(science).str());
 			return;
 		}
 		skillset->m_numSkills++;
@@ -342,7 +343,7 @@ void AI::reset()
 		}
 	}
 #else
-	DEBUG_ASSERTCRASH(m_groupList.empty(), ("AI::m_groupList is expected empty already"));
+	engine::debug::invariant((m_groupList.empty()), "m_groupList.empty()", __FILE__, __LINE__, "AI::m_groupList is expected empty already");
 
 	m_groupList.clear(); // Clear just in case...
 #endif
@@ -367,7 +368,7 @@ void AI::update()
 	// run player updates
 	{
 		auto timing=navigation::diagnostics::frameCapture().measure("logic.ai.players",TheGameLogic->getFrame());
-		ThePlayerList->UPDATE();
+		ThePlayerList->update();
 	}
 
 }
@@ -460,7 +461,7 @@ AIGroupPtr AI::createGroup()
 #endif
 
 	// add it to the list
-//	DEBUG_LOG(("***AIGROUP %x is being added to m_groupList.", group ));
+//	engine::debug::log_info("***AIGROUP %x is being added to m_groupList.", group );
 #if RETAIL_COMPATIBLE_AIGROUP
 	m_groupList.push_back( group );
 #else
@@ -483,10 +484,10 @@ void AI::destroyGroup( AIGroup *group )
 	if (position == m_groupPositions.end())
 		return;
 
-	DEBUG_ASSERTCRASH(group != nullptr, ("A null group made its way into the AIGroup list.. jkmcd"));
+	engine::debug::invariant((group != nullptr), "group != nullptr", __FILE__, __LINE__, "A null group made its way into the AIGroup list.. jkmcd");
 
 	// remove it
-//	DEBUG_LOG(("***AIGROUP %x is being removed from m_groupList.", group ));
+//	engine::debug::log_info("***AIGROUP %x is being removed from m_groupList.", group );
 	m_groupList.erase(position->second);
 	m_groupPositions.erase(position);
 
@@ -744,8 +745,8 @@ Object *AI::findClosestEnemy( const Object *me, Real range, UnsignedInt qualifie
 		}
 	}
 	if (bestEnemy) {
-		//DEBUG_LOG(("Find closest found %s, hunter %s, info %s", bestEnemy->getTemplate()->getName().str(),
-		//	me->getTemplate()->getName().str(), info->getName().str()));
+		//engine::debug::log_info("Find closest found %s, hunter %s, info %s", bestEnemy->getTemplate()->getName().str(),
+		//	me->getTemplate()->getName().str(), info->getName().str());
 	}
 	return bestEnemy;
 }
@@ -831,7 +832,7 @@ Real AI::getAdjustedVisionRangeForObject(const Object *object, Int factorsToCons
 
 	if (!ai)
 	{
-		DEBUG_CRASH(("Unit without AI ('%s') calling AI::getAdjustedVisionRangeForObject. Notify jkmcd.", object->getTemplate()->getName().str()));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unit without AI ('%s') calling AI::getAdjustedVisionRangeForObject. Notify jkmcd.", object->getTemplate()->getName().str());
 		return 0.0f;
 	}
 
@@ -995,7 +996,7 @@ void TAiData::crc( Xfer *xfer )
 	xfer->xferReal( &m_skirmishBaseDefenseExtraDistance );
 	xfer->xferReal( &m_repulsedDistance );
 	xfer->xferBool( &m_enableRepulsors );
-	CRCGEN_LOG(("CRC after AI TAiData for frame %d is 0x%8.8X", TheGameLogic->getFrame(), ((XferCRC *)xfer)->getCRC()));
+	engine::debug::log_info("CRC after AI TAiData for frame %d is 0x%8.8X", TheGameLogic->getFrame(), ((XferCRC *)xfer)->getCRC());
 
 }
 
@@ -1021,7 +1022,7 @@ void AI::crc( Xfer *xfer )
 {
 
 	xfer->xferSnapshot( m_pathfinder );
-	CRCGEN_LOG(("CRC after AI pathfinder for frame %d is 0x%8.8X", TheGameLogic->getFrame(), ((XferCRC *)xfer)->getCRC()));
+	engine::debug::log_info("CRC after AI pathfinder for frame %d is 0x%8.8X", TheGameLogic->getFrame(), ((XferCRC *)xfer)->getCRC());
 
 	AsciiString marker;
 	TAiData *aiData = m_aiData;

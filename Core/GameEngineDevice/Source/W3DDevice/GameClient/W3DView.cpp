@@ -50,7 +50,7 @@ import Graphics.Frame.AttachmentBindings;
 #include "Common/RandomValue.h"
 #include "Common/ThingTemplate.h"
 #include "Common/ThingSort.h"
-#include "Common/PerfTimer.h"
+
 #include "Common/PlayerList.h"
 #include "Common/Player.h"
 
@@ -98,6 +98,8 @@ import Graphics.Frame.AttachmentBindings;
 
 
 #include "W3DDevice/GameClient/CameraShakeSystem.h"
+import engine.debug;
+import engine.profiling;
 
 // 30 fps
 Real TheW3DFrameLengthInMsec = MSEC_PER_LOGICFRAME_REAL; // default is 33msec/frame == 30fps. but we may change it depending on sys config.
@@ -376,8 +378,8 @@ void W3DView::buildCameraPosition( Vector3& sourcePos, Vector3& targetPos )
 void W3DView::buildCameraTransform( Matrix3D *transform, const Vector3 &sourcePos, const Vector3 &targetPos )
 {
 	//m_3DCamera->Set_View_Plane(DEG_TO_RADF(50.0f));
-	//DEBUG_LOG(("zoom %f, SourceZ %f, posZ %f, groundLevel %f CamOffZ %f",
-	//			zoom, sourcePos.Z, pos.z, groundLevel, getCameraOffsetZ()));
+	//engine::debug::log_info("zoom %f, SourceZ %f, posZ %f, groundLevel %f CamOffZ %f",
+	//			zoom, sourcePos.Z, pos.z, groundLevel, getCameraOffsetZ());
 
 	// build new camera transform
 	transform->Make_Identity();
@@ -394,7 +396,7 @@ void W3DView::buildCameraTransform( Matrix3D *transform, const Vector3 &sourcePo
 
 	//if (m_shakerAngles.X >= 0.0f)
 	//{
-	//	DEBUG_LOG(("m_shakerAngles %f, %f, %f", m_shakerAngles.X, m_shakerAngles.Y, m_shakerAngles.Z));
+	//	engine::debug::log_info("m_shakerAngles %f, %f, %f", m_shakerAngles.X, m_shakerAngles.Y, m_shakerAngles.Z);
 	//}
 
 	// (gth) check if the camera is being controlled by an animation
@@ -536,7 +538,7 @@ Note the following restrictions on camera constraints!
 */
 void W3DView::calcCameraAreaConstraints()
 {
-//	DEBUG_LOG(("*** rebuilding cam constraints"));
+//	engine::debug::log_info("*** rebuilding cam constraints");
 
 	// ok, now check to ensure that we can't see outside the map region,
 	// and twiddle the camera if needed
@@ -1331,7 +1333,7 @@ Bool W3DView::updateCameraMovements()
 */
 void W3DView::updateView()
 {
-	UPDATE();
+	update();
 }
 
 // TheSuperHackers @tweak xezon 12/08/2025 The camera shaker is no longer tied to the render
@@ -1363,10 +1365,9 @@ void W3DView::stepView()
 	}
 }
 
-//DECLARE_PERF_TIMER(W3DView_updateView)
 void W3DView::update()
 {
-	//USE_PERF_TIMER(W3DView_updateView)
+	engine::profiling::Scope update_scope{"Graphics.View.Update"};
 	Bool didScriptedMovement = false;
 #ifdef LOG_FRAME_TIMES
 	__int64 curTime64,freq64;
@@ -1835,13 +1836,12 @@ void W3DView::calcDeltaScroll(Coord2D &screenDelta)
 //-------------------------------------------------------------------------------------------------
 void W3DView::drawView()
 {
-	DRAW();
+	draw();
 }
 
-//DECLARE_PERF_TIMER(W3DView_drawView)
 void W3DView::draw()
 {
-	//USE_PERF_TIMER(W3DView_drawView)
+	engine::profiling::Scope draw_scope{"Graphics.View.Draw"};
 	Bool skipRender = false;
 	Bool doExtraRender = false;
 	CustomScenePassModes customScenePassMode  = SCENE_PASS_DEFAULT;
@@ -2146,7 +2146,7 @@ void W3DView::scrollBy( const Coord2D *delta )
 		Coord2D pos = getPosition2D();
 		pos.x += world.X;
 		pos.y += world.Y;
-		//DEBUG_LOG(("Delta %.2f, %.2f", world.X, world.Z));
+		//engine::debug::log_info("Delta %.2f, %.2f", world.X, world.Z);
 		setPosition2D(pos);
 
 		//m_cameraConstraintValid = false;	// pos change does NOT invalidate cam constraints
@@ -3193,7 +3193,7 @@ void W3DView::setupWaypointPath(Bool orient)
 			angle -= PI/2;
 			normAngle(angle);
 		}
-		//DEBUG_LOG(("Original Index %d, angle %.2f", i, angle*180/PI));
+		//engine::debug::log_info("Original Index %d, angle %.2f", i, angle*180/PI);
 		m_mcwpInfo.cameraAngle[i] = angle;
 	}
 	m_mcwpInfo.cameraAngle[1] = getAngle();
@@ -3218,7 +3218,7 @@ void W3DView::setupWaypointPath(Bool orient)
 		m_mcwpInfo.timeMultiplier[i] = m_timeMultiplier;
 		m_mcwpInfo.waypoints[i].z = m_pos.z*factor1 + newGround*factor2;
 		curDistance += m_mcwpInfo.waySegLength[i];
-		//DEBUG_LOG(("New Index %d, angle %.2f", i, m_mcwpInfo.cameraAngle[i]*180/PI));
+		//engine::debug::log_info("New Index %d, angle %.2f", i, m_mcwpInfo.cameraAngle[i]*180/PI);
 	}
 
 	// Pad the end.
@@ -3361,7 +3361,7 @@ void W3DView::zoomCameraOneFrame()
 		m_zoom = m_zcInfo.endZoom;
 	}
 
-	//DEBUG_LOG(("W3DView::zoomCameraOneFrame() - m_zoom = %g", m_zoom));
+	//engine::debug::log_info("W3DView::zoomCameraOneFrame() - m_zoom = %g", m_zoom);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -3475,7 +3475,7 @@ void W3DView::moveAlongWaypointPath(Real milliseconds)
 	{
 		if (hasScriptedState(Scripted_MoveOnWaypointPath))
 		{
-			//WWDEBUG_SAY(( "MBL TEST: Camera waypoint along path reached!" ));
+			//engine::debug::log_info( "MBL TEST: Camera waypoint along path reached!" );
 			m_CameraArrivedAtWaypointOnPathFlag = true;
 		}
 
@@ -3511,7 +3511,7 @@ void W3DView::moveAlongWaypointPath(Real milliseconds)
 	Real deltaAngle = angle-m_angle;
 	normAngle(deltaAngle);
 	if (fabs(deltaAngle) > PI/10) {
-		DEBUG_LOG(("Huh."));
+		engine::debug::log_info("Huh.");
 	}
 	View::setAngle(m_angle + (avgFactor*deltaAngle));
 
@@ -3556,7 +3556,7 @@ void W3DView::moveAlongWaypointPath(Real milliseconds)
 	result.z = m_mcwpInfo.waypoints[m_mcwpInfo.curSegment].z*factor1 +
 			m_mcwpInfo.waypoints[m_mcwpInfo.curSegment+1].z*factor2;
 /*
-	DEBUG_LOG(("Dx %.2f, dy %.2f, DeltaANgle = %.2f, %.2f DeltaGround %.2f", m_pos.x-result.x, m_pos.y-result.y, deltaAngle, result.z, result.z-m_pos.z));
+	engine::debug::log_info("Dx %.2f, dy %.2f, DeltaANgle = %.2f, %.2f DeltaGround %.2f", m_pos.x-result.x, m_pos.y-result.y, deltaAngle, result.z, result.z-m_pos.z);
 */
 	setPosition(result);
 	// Note - assuming that the scripter knows what he is doing, we adjust the constraints so that
@@ -3709,7 +3709,7 @@ bool W3DView::getDesiredTerrainDrawSize(ICoord2D &dimensions) const
 {
 	if (TheGlobalData && TheGlobalData->m_drawEntireTerrain)
 	{
-		DEBUG_ASSERTCRASH(TheTerrainRenderObject != nullptr, ("TheTerrainRenderObject is null"));
+		engine::debug::invariant((TheTerrainRenderObject != nullptr), "TheTerrainRenderObject != nullptr", __FILE__, __LINE__, "TheTerrainRenderObject is null");
 
 		if (const WorldHeightMap *heightMap = TheTerrainRenderObject->getMap())
 		{
@@ -3741,7 +3741,7 @@ bool W3DView::getDesiredTerrainDrawSize(ICoord2D &dimensions) const
 
 void W3DView::updateTerrain()
 {
-	DEBUG_ASSERTCRASH(TheTerrainRenderObject != nullptr, ("TheTerrainRenderObject is null"));
+	engine::debug::invariant((TheTerrainRenderObject != nullptr), "TheTerrainRenderObject != nullptr", __FILE__, __LINE__, "TheTerrainRenderObject is null");
 
 	ICoord2D drawSize;
 

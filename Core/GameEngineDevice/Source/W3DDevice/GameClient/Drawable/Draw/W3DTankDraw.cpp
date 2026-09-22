@@ -50,6 +50,7 @@ import Graphics.Materials.MeshMaterial;
 #include "GameClient/ParticleSys.h"
 #include "W3DDevice/GameClient/W3DGameClient.h"
 #include "W3DDevice/GameClient/Module/W3DTankDraw.h"
+import engine.debug;
 
 
 class Matrix3D;
@@ -222,7 +223,7 @@ void W3DTankDraw::updateTreadPositions(Real uvDelta)
 			offset_u = pTread->m_materialSettings.customUVOffset.X - uvDelta;
 		else
 		{
-			DEBUG_CRASH(("Unhandled case in W3DTankDraw::updateTreadPositions"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unhandled case in W3DTankDraw::updateTreadPositions");
 			offset_u = 0.0f;
 		}
 

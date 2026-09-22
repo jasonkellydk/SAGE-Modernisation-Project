@@ -34,6 +34,7 @@ import Assets.Images.Buffer;
 
 class AABoxClass;
 class WorldHeightMap;
+import engine.platform.time;
 
 typedef UnsignedByte W3DShroudLevel;
 // In Global Data now
@@ -49,7 +50,7 @@ class W3DShroud
 {
 
 public:
-	W3DShroud();
+	explicit W3DShroud(engine::platform::IClockService& clock);
 	~W3DShroud();
 
 	void render(W3DCamera *cam);	///< render the current shroud state as seen from camera
@@ -98,4 +99,5 @@ protected:
 	void fillBorderShroudData(W3DShroudLevel level);
 	struct GraphicsState;
 	std::unique_ptr<GraphicsState> m_graphics;
+	engine::platform::IClockService& m_clock;
 };

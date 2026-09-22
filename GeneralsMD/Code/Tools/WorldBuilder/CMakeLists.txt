@@ -226,7 +226,7 @@ target_link_libraries(z_worldbuilder PRIVATE
     generals_graphics
     generals_ui_wnd
     SDL3::SDL3
-    core_debug
+    engine_debug
     d3d9lib
     imm32
     vfw32

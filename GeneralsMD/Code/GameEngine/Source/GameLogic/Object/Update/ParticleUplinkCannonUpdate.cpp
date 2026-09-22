@@ -27,7 +27,8 @@
 // Desc:   Update module to handle building states and weapon firing of the particle uplink cannon.
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #define DEFINE_DEATH_NAMES
 
@@ -247,7 +248,7 @@ void ParticleUplinkCannonUpdate::onObjectCreated()
 
 	if( !data->m_specialPowerTemplate )
 	{
-		DEBUG_CRASH( ("%s object's ParticleUplinkCannonUpdate lacks access to the SpecialPowerTemplate. Needs to be specified in ini.", obj->getTemplate()->getName().str() ) );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "%s object's ParticleUplinkCannonUpdate lacks access to the SpecialPowerTemplate. Needs to be specified in ini.", obj->getTemplate()->getName().str() );
 		m_invalidSettings = TRUE;
 		return;
 	}
@@ -280,7 +281,7 @@ Bool ParticleUplinkCannonUpdate::initiateIntentToDoSpecialPower(const SpecialPow
 
 	if( !BitIsSet( commandOptions, COMMAND_FIRED_BY_SCRIPT ) )
 	{
-		DEBUG_ASSERTCRASH(targetPos, ("Particle Cannon target data must not be null"));
+		engine::debug::invariant((targetPos), "targetPos", __FILE__, __LINE__, "Particle Cannon target data must not be null");
 
 		//All human players have manual control and must "drive" the beam around!
 		m_startAttackFrame = TheGameLogic->getFrame();
@@ -327,7 +328,7 @@ Bool ParticleUplinkCannonUpdate::initiateIntentToDoSpecialPower(const SpecialPow
 	}
 	else
 	{
-		DEBUG_ASSERTCRASH(targetPos || targetObj, ("Particle Cannon target data must not be null"));
+		engine::debug::invariant((targetPos || targetObj), "targetPos || targetObj", __FILE__, __LINE__, "Particle Cannon target data must not be null");
 
 		//All computer controlled players have automatic control -- the "S" curve.
 		UnsignedInt now = TheGameLogic->getFrame();
@@ -663,8 +664,7 @@ UpdateSleepTime ParticleUplinkCannonUpdate::update()
 			damageRadius = logicalLaserRadius * data->m_damageRadiusScalar;
 			scorchRadius = logicalLaserRadius * data->m_scorchMarkScalar;
 #if defined(RETAIL_COMPATIBLE_CRC)
-			DEBUG_ASSERTCRASH(logicalLaserRadius == visualLaserRadius,
-				("ParticleUplinkCannonUpdate's laser radius does not match LaserUpdate's laser radius - will cause mismatch in VS6 retail compatible builds"));
+			engine::debug::invariant((logicalLaserRadius == visualLaserRadius), "logicalLaserRadius == visualLaserRadius", __FILE__, __LINE__, "ParticleUplinkCannonUpdate's laser radius does not match LaserUpdate's laser radius - will cause mismatch in VS6 retail compatible builds");
 #endif
 
 			//Create scorch marks periodically
@@ -1120,7 +1120,7 @@ Bool ParticleUplinkCannonUpdate::calculateDefaultInformation()
 
 	if( numBones != data->m_outerEffectNumBones )
 	{
-		DEBUG_CRASH( ("Particle cannon requires %d outer node bones, but can only find %d bones.", data->m_outerEffectNumBones, numBones ) );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Particle cannon requires %d outer node bones, but can only find %d bones.", data->m_outerEffectNumBones, numBones );
 		m_invalidSettings = TRUE;
 		return FALSE;
 	}
@@ -1556,7 +1556,7 @@ void ParticleUplinkCannonUpdate::loadPostProcess()
 			}
 			else
 			{
-				DEBUG_CRASH(( "ParticleUplinkCannonUpdate::loadPostProcess - Unable to find drawable for m_orbitToTargetBeamID" ));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "ParticleUplinkCannonUpdate::loadPostProcess - Unable to find drawable for m_orbitToTargetBeamID" );
 			}
 		}
 

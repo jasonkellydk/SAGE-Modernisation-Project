@@ -21,6 +21,7 @@
 #include "encrypt.h"
 #include "timezone.h"
 #include "debug.h"
+import engine.debug;
 
 #ifdef _WIN32
 #define usleep(x) Sleep((x)/100000)
@@ -240,30 +241,30 @@ static void NickErrorCallback ( PEER peer, int type, const char * badNick, int n
 void callbackEach( CHAT chat, CHATBool success, int index, const char *channel,
                    const char *topic, int numUsers, void *param )
 {
-	DEBUG_LOG(("Chat channel success: %d", success));
+	engine::debug::log_info("Chat channel success: %d", success);
 	if (!success)
 	{
 		return;
 	}
-	DEBUG_LOG(("Channel[%d]: %s (%s), %d users",
-	           index, channel, topic, numUsers));
+	engine::debug::log_info("Channel[%d]: %s (%s), %d users",
+	           index, channel, topic, numUsers);
 }
 
 void callbackAll( CHAT chat, CHATBool success, int numChannels, const char **channels,
                   const char **topics, int *numUsers, void *param )
 {
-	DEBUG_LOG(("Chat channels success: %d", success));
+	engine::debug::log_info("Chat channels success: %d", success);
 	if (!success)
 	{
 		return;
 	}
 
-	DEBUG_LOG(("%d channels found", numChannels));
+	engine::debug::log_info("%d channels found", numChannels);
 
 	for (int i=0; i<numChannels; ++i)
 	{
-		DEBUG_LOG(("Channel[%d]: %s (%s), %d users",
-		           i, channels[i], topics[i], numUsers[i]));
+		engine::debug::log_info("Channel[%d]: %s (%s), %d users",
+		           i, channels[i], topics[i], numUsers[i]);
 	}
 }
 
@@ -271,9 +272,9 @@ void MatcherClass::handleConnect( bool success )
 {
 	m_connectSuccess = success;
 
-	//DEBUG_LOG(("Enumerating chat channels"));
+	//engine::debug::log_info("Enumerating chat channels");
 	//chatEnumChannels( peerGetChat(m_peer), "", callbackEach, callbackAll, nullptr, CHATTrue );
-	//DEBUG_LOG(("Done enumerating chat channels"));
+	//engine::debug::log_info("Done enumerating chat channels");
 }
 
 void MatcherClass::handleGroupRoomList( bool success, int groupID, const char *name )

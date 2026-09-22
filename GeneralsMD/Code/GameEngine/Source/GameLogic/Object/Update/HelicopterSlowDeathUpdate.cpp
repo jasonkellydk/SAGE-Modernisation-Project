@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // USER INCLUDES //////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/GameAudio.h"
 #include "Common/GlobalData.h"
@@ -346,8 +347,8 @@ UpdateSleepTime HelicopterSlowDeathBehavior::update()
 
 		// get the physics update module
 		PhysicsBehavior *physics = copter->getPhysics();
-		DEBUG_ASSERTCRASH( physics, ("HelicopterSlowDeathBehavior: object '%s' does not have a physics module",
-																 copter->getTemplate()->getName().str()) );
+		engine::debug::invariant((physics), "physics", __FILE__, __LINE__, "HelicopterSlowDeathBehavior: object '%s' does not have a physics module",
+																 copter->getTemplate()->getName().str());
 
 		//
 		// apply a force to the helicopter pushing it in a forward motion	according to the

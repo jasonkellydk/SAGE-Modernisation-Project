@@ -28,7 +28,8 @@
 // Description: LAN callback handlers
 ///////////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/crc.h"
 #include "Common/GameState.h"
@@ -225,7 +226,7 @@ static Bool IsSpaceCharacter(const WideChar c)
 
 static Bool ContainsInvalidChars(const WideChar* playerName)
 {
-	DEBUG_ASSERTCRASH(playerName != nullptr, ("playerName is null"));
+	engine::debug::invariant((playerName != nullptr), "playerName != nullptr", __FILE__, __LINE__, "playerName is null");
 	while (*playerName)
 	{
 		if (IsInvalidCharForPlayerName(*playerName++))
@@ -237,7 +238,7 @@ static Bool ContainsInvalidChars(const WideChar* playerName)
 
 static Bool ContainsAnyReadableChars(const WideChar* playerName)
 {
-	DEBUG_ASSERTCRASH(playerName != nullptr, ("playerName is null"));
+	engine::debug::invariant((playerName != nullptr), "playerName != nullptr", __FILE__, __LINE__, "playerName is null");
 	while (*playerName)
 	{
 		if (!IsSpaceCharacter(*playerName++))
@@ -266,7 +267,7 @@ void LANAPI::handleRequestJoin( LANMessage *msg, UnsignedInt senderIP )
 			reply.GameNotJoined.reason = LANAPIInterface::RET_GAME_STARTED;
 			reply.GameNotJoined.gameIP = m_localIP;
 			reply.GameNotJoined.playerIP = senderIP;
-			DEBUG_LOG(("LANAPI::handleRequestJoin - join denied because game already started."));
+			engine::debug::log_info("LANAPI::handleRequestJoin - join denied because game already started.");
 		}
 		else
 		{
@@ -282,9 +283,9 @@ void LANAPI::handleRequestJoin( LANMessage *msg, UnsignedInt senderIP )
 			if (msg->GameToJoin.iniCRC != TheGlobalData->m_iniCRC ||
 					msg->GameToJoin.exeCRC != TheGlobalData->m_exeCRC)
 			{
-				DEBUG_LOG(("LANAPI::handleRequestJoin - join denied because of CRC mismatch. CRCs are them/us INI:%X/%X exe:%X/%X",
+				engine::debug::log_info("LANAPI::handleRequestJoin - join denied because of CRC mismatch. CRCs are them/us INI:%X/%X exe:%X/%X",
 					msg->GameToJoin.iniCRC, TheGlobalData->m_iniCRC,
-					msg->GameToJoin.exeCRC, TheGlobalData->m_exeCRC));
+					msg->GameToJoin.exeCRC, TheGlobalData->m_exeCRC);
 				reply.messageType = LANMessage::MSG_JOIN_DENY;
 				reply.GameNotJoined.reason = LANAPIInterface::RET_CRC_MISMATCH;
 				reply.GameNotJoined.gameIP = m_localIP;
@@ -310,7 +311,7 @@ void LANAPI::handleRequestJoin( LANMessage *msg, UnsignedInt senderIP )
 					reply.GameNotJoined.playerIP = senderIP;
 					canJoin = false;
 
-					DEBUG_LOG(("LANAPI::handleRequestJoin - join denied because of illegal characters in the player name."));
+					engine::debug::log_info("LANAPI::handleRequestJoin - join denied because of illegal characters in the player name.");
 				}
 			}	
 
@@ -327,7 +328,7 @@ void LANAPI::handleRequestJoin( LANMessage *msg, UnsignedInt senderIP )
 					reply.GameNotJoined.playerIP = senderIP;
 					canJoin = false;
 
-					DEBUG_LOG(("LANAPI::handleRequestJoin - join denied because of duplicate names."));
+					engine::debug::log_info("LANAPI::handleRequestJoin - join denied because of duplicate names.");
 					break;
 				}
 			}
@@ -351,7 +352,7 @@ void LANAPI::handleRequestJoin( LANMessage *msg, UnsignedInt senderIP )
 					newSlot.setLastHeard(timeGetTime());
 					newSlot.setSerial(msg->GameToJoin.serial);
 					m_currentGame->setSlot(player,newSlot);
-					DEBUG_LOG(("LANAPI::handleRequestJoin - added player %ls at ip 0x%08x to the game", msg->name, senderIP));
+					engine::debug::log_info("LANAPI::handleRequestJoin - added player %ls at ip 0x%08x to the game", msg->name, senderIP);
 
 					OnPlayerJoin(player, UnicodeString(msg->name));
 					responseIP = 0;
@@ -367,7 +368,7 @@ void LANAPI::handleRequestJoin( LANMessage *msg, UnsignedInt senderIP )
 				reply.GameNotJoined.reason = LANAPIInterface::RET_GAME_FULL;
 				reply.GameNotJoined.gameIP = m_localIP;
 				reply.GameNotJoined.playerIP = senderIP;
-				DEBUG_LOG(("LANAPI::handleRequestJoin - join denied because game is full."));
+				engine::debug::log_info("LANAPI::handleRequestJoin - join denied because game is full.");
 			}
 		}
 	}
@@ -392,7 +393,7 @@ void LANAPI::handleJoinAccept( LANMessage *msg, UnsignedInt senderIP )
 
 			if (!m_currentGame)
 			{
-				DEBUG_CRASH(("Could not find game to join!"));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Could not find game to join!");
 				OnGameJoin(RET_UNKNOWN, nullptr);
 			}
 			else
@@ -423,8 +424,8 @@ void LANAPI::handleJoinAccept( LANMessage *msg, UnsignedInt senderIP )
 				prefs.write();
 
 				OnGameJoin(RET_OK, m_currentGame);
-				//DEBUG_CRASH(("setting host to %ls@%ls", m_currentGame->getLANSlot(0)->getUser()->getLogin().str(),
-				//	m_currentGame->getLANSlot(0)->getUser()->getHost().str()));
+				//engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "setting host to %ls@%ls", m_currentGame->getLANSlot(0)->getUser()->getLogin().str(),
+				//	m_currentGame->getLANSlot(0)->getUser()->getHost().str());
 			}
 			m_pendingAction = ACT_NONE;
 			m_expiration = 0;
@@ -496,7 +497,7 @@ void LANAPI::handleRequestGameLeave( LANMessage *msg, UnsignedInt senderIP )
 				}
 				break;
 			}
-			DEBUG_ASSERTCRASH(player < MAX_SLOTS, ("Didn't find player!"));
+			engine::debug::invariant((player < MAX_SLOTS), "player < MAX_SLOTS", __FILE__, __LINE__, "Didn't find player!");
 		}
 	}
 	else if (m_inLobby)
@@ -591,10 +592,10 @@ void LANAPI::handleChat( LANMessage *msg, UnsignedInt senderIP )
 	{
 		if (LookupGame(UnicodeString(msg->Chat.gameName)) != m_currentGame)
 		{
-			DEBUG_LOG(("Game '%ls' is not my game", msg->Chat.gameName));
+			engine::debug::log_info("Game '%ls' is not my game", msg->Chat.gameName);
 			if (m_currentGame)
 			{
-				DEBUG_LOG(("Current game is '%ls'", m_currentGame->getName().str()));
+				engine::debug::log_info("Current game is '%ls'", m_currentGame->getName().str());
 			}
 			return;
 		}

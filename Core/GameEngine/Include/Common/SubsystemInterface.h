@@ -29,6 +29,8 @@
 
 #pragma once
 
+
+#include <cassert>
 #include "Common/INI.h"
 #include "Common/STLTypedefs.h"
 
@@ -107,30 +109,8 @@ public:
 	virtual void update() = 0;
 
 
-	virtual void draw(){DEBUG_CRASH(("Shouldn't call base class.  jba."));}
+	virtual void draw(){assert(false);}
 
-#ifdef DUMP_PERF_STATS
-	void UPDATE();
-	void DRAW();
-	Real getUpdateTime() {return m_curUpdateTime;}
-	Real getDrawTime() {return m_curDrawTime;}
-	Bool doDumpUpdate() {return m_dumpUpdate;}
-	Bool doDumpDraw() {return m_dumpDraw;}
-	static Real getTotalTime() {return s_msConsumed;}
-	static void clearTotalTime() {s_msConsumed = 0;}
-protected:
-	static Real s_msConsumed;
-	Real m_startTimeConsumed;
-	Real m_curUpdateTime;
-
-	Real m_startDrawTimeConsumed;
-	Real m_curDrawTime;
-	Bool m_dumpUpdate;
-	Bool m_dumpDraw;
-#else
-	void UPDATE() {update();}
-	void DRAW() {draw();}
-#endif
 protected:
 	AsciiString m_name;
 public:
@@ -153,9 +133,6 @@ public:
 	void postProcessLoadAll();
 	void resetAll();
 	void shutdownAll();
-#ifdef DUMP_PERF_STATS
-	AsciiString dumpTimesForAll();
-#endif
 
 private:
 

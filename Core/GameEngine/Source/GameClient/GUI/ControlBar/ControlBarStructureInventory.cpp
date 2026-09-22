@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // USER INCLUDES //////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/NameKeyGenerator.h"
 #include "Common/ThingTemplate.h"
@@ -65,9 +66,8 @@ void ControlBar::populateButtonProc( Object *obj, void *userData )
 	PopulateButtonInfo* info = (PopulateButtonInfo*)userData;
 
 	// sanity
-	DEBUG_ASSERTCRASH( info->buttonIndex < MAX_STRUCTURE_INVENTORY_BUTTONS,
-										 ("Too many objects inside '%s' for the inventory buttons to hold",
-											info->source->getTemplate()->getName().str()) );
+	engine::debug::invariant((info->buttonIndex < MAX_STRUCTURE_INVENTORY_BUTTONS), "info->buttonIndex < MAX_STRUCTURE_INVENTORY_BUTTONS", __FILE__, __LINE__, "Too many objects inside '%s' for the inventory buttons to hold",
+											info->source->getTemplate()->getName().str());
 
 	// put object in inventory data
 	info->self->m_containData[ info->buttonIndex ].control = info->inventoryButtons[ info->buttonIndex ];
@@ -117,7 +117,7 @@ void ControlBar::populateStructureInventory( Object *building )
 
 	// get the contain module of the object
 	ContainModuleInterface *contain = building->getContain();
-	DEBUG_ASSERTCRASH( contain, ("Object in structure inventory does not contain a Contain Module") );
+	engine::debug::invariant((contain), "contain", __FILE__, __LINE__, "Object in structure inventory does not contain a Contain Module");
 	if (!contain)
 		return;
 
@@ -223,7 +223,7 @@ void ControlBar::updateContextStructureInventory()
 	// about we need to repopulate the buttons of the interface
 	//
 	ContainModuleInterface *contain = source->getContain();
-	DEBUG_ASSERTCRASH( contain, ("No contain module defined for object in the inventory bar") );
+	engine::debug::invariant((contain), "contain", __FILE__, __LINE__, "No contain module defined for object in the inventory bar");
 	if (!contain)
 		return;
 

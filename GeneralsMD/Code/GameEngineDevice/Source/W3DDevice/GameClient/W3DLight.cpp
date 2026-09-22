@@ -30,6 +30,7 @@
 #include "WWMath/wwmath.h"
 #include "WWSaveLoad/persistfactory.h"
 #include "WWSaveLoad/saveloadids.h"
+import engine.debug;
 
 import Assets.Adapters.W3D.Light;
 import Assets.Adapters.W3D.Chunks;
@@ -359,7 +360,7 @@ bool W3DLight::Load(ChunkLoadClass &load)
 			}
 			break;
 		default:
-			WWDEBUG_SAY(("Unhandled Chunk: 0x%X File: %s Line: %d", __FILE__, __LINE__));
+			engine::debug::log_info("Unhandled Chunk: 0x%X File: %s Line: %d", __FILE__, __LINE__);
 			break;
 		}
 		load.Close_Chunk();

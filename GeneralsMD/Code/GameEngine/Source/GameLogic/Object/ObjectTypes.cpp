@@ -28,6 +28,7 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 #include "PreRTS.h"
+import engine.debug;
 #include "GameLogic/ObjectTypes.h"
 
 #include "Common/GameState.h"
@@ -62,7 +63,7 @@ void ObjectTypes::addObjectType(const AsciiString &objectType)
 void ObjectTypes::removeObjectType(const AsciiString &objectType)
 {
 	if (!isInSet(objectType)) {
-		DEBUG_CRASH(("Attempted to remove '%s' from '%s', but it wasn't there.", objectType.str(), m_listName.str()));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Attempted to remove '%s' from '%s', but it wasn't there.", objectType.str(), m_listName.str());
 		return;
 	}
 
@@ -179,7 +180,7 @@ void ObjectTypes::xfer(Xfer *xfer)
 		if( m_objectTypes.empty() == FALSE )
 		{
 
-			DEBUG_CRASH(( "ObjectTypes::xfer - m_objectTypes vector should be empty but is not!" ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "ObjectTypes::xfer - m_objectTypes vector should be empty but is not!" );
 			throw SC_INVALID_DATA;
 
 		}

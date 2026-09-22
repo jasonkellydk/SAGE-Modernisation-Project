@@ -56,7 +56,7 @@ import Graphics.RHI;
 #include "Common/FramePacer.h"
 #include "Common/GameState.h"
 #include "Common/GlobalData.h"
-#include "Common/PerfTimer.h"
+
 #include "Common/Xfer.h"
 #include "Common/GameLOD.h"
 
@@ -72,6 +72,8 @@ import Graphics.RHI;
 #include <cstring>
 #include <vector>
 #include <SDL3/SDL.h>
+import engine.profiling;
+import engine.debug;
 import Graphics.Diagnostics.Render;
 import Graphics.Scene.Lighting.Environment;
 import Graphics.Frame.Runtime;
@@ -640,7 +642,7 @@ void WaterRenderSystem::setTimeOfDay(TimeOfDay tod)
 void WaterRenderSystem::loadSetting( Setting *setting, TimeOfDay timeOfDay )
 {
 	// sanity
-	DEBUG_ASSERTCRASH( setting, ("WaterRenderSystem::loadSetting, null setting") );
+	engine::debug::invariant((setting), "setting", __FILE__, __LINE__, "WaterRenderSystem::loadSetting, null setting");
 
 	// textures
 	setting->skyTexture = Load_Water_Texture(
@@ -740,7 +742,7 @@ void WaterRenderSystem::Capture_Refraction_Texture()
 //-------------------------------------------------------------------------------------------------
 void WaterRenderSystem::renderMirror(W3DCamera *cam)
 {
-    PROFILER_SECTION_NAME("Graphics.Water.Reflection");
+    engine::profiling::Scope profile_scope_743("Graphics.Water.Reflection");
 #ifdef EXTENDED_STATS
 	if (Graphics::Get_Render_Diagnostics().disable_water) {
 		return;
@@ -820,11 +822,9 @@ void WaterRenderSystem::renderMirror(W3DCamera *cam)
 	*	This algorithm doesn't apply to translucent water, which is rendered into a
 	*   texture and rendered at end of scene. */
 //-------------------------------------------------------------------------------------------------
-//DECLARE_PERF_TIMER(Water)
 void WaterRenderSystem::Render(W3DRenderContext & rinfo)
 {
     m_waterMaterial.Set_Frame_Lighting(TheTerrainRenderObject ? TheTerrainRenderObject->Peek_Scene() : nullptr);
-	//USE_PERF_TIMER(Water)
 	if (TheTerrainRenderObject && !TheTerrainRenderObject->getMap())
 		return;	//no map has been loaded yet.
 

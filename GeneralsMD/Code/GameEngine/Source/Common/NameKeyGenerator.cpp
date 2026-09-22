@@ -28,7 +28,8 @@
 // Desc:      Name key system to translate between names and unique key ids
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 // Public Data ////////////////////////////////////////////////////////////////////////////////////
 NameKeyGenerator *TheNameKeyGenerator = nullptr;  ///< name key gen. singleton
@@ -56,7 +57,7 @@ NameKeyGenerator::~NameKeyGenerator()
 //-------------------------------------------------------------------------------------------------
 void NameKeyGenerator::init()
 {
-	DEBUG_ASSERTCRASH(m_nextID == (UnsignedInt)NAMEKEY_INVALID, ("NameKeyGen already inited"));
+	engine::debug::invariant((m_nextID == (UnsignedInt)NAMEKEY_INVALID), "m_nextID == (UnsignedInt)NAMEKEY_INVALID", __FILE__, __LINE__, "NameKeyGen already inited");
 
 	// start keys at the beginning again
 	freeSockets();
@@ -139,8 +140,7 @@ void NameKeyGenerator::syncNameKeyID()
 void NameKeyGenerator::verifyNameKeyID(UnsignedInt expectedNextID) const
 {
 	// this should only be called before the initialization of TheScienceStore and TheUpgradeCenter in GameEngine::init
-	DEBUG_ASSERTCRASH(expectedNextID == m_nextID,
-		("Retail client expects items to start with name key ID %d for unmodded files, but starts with %d", expectedNextID, m_nextID));
+	engine::debug::invariant((expectedNextID == m_nextID), "expectedNextID == m_nextID", __FILE__, __LINE__, "Retail client expects items to start with name key ID %d for unmodded files, but starts with %d", expectedNextID, m_nextID);
 }
 #endif
 
@@ -248,7 +248,7 @@ NameKeyType NameKeyGenerator::createNameKey(UnsignedInt hash, const AsciiString&
 	// if more than a small percent of the sockets are getting deep, probably want to increase the socket count.
 	if (numOverThresh > SOCKET_COUNT/20)
 	{
-		DEBUG_CRASH(("hmm, might need to increase the number of bucket-sockets for NameKeyGenerator (numOverThresh %d = %f%%)",numOverThresh,(Real)numOverThresh/(Real)(SOCKET_COUNT/20)));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "hmm, might need to increase the number of bucket-sockets for NameKeyGenerator (numOverThresh %d = %f%%)",numOverThresh,(Real)numOverThresh/(Real)(SOCKET_COUNT/20));
 	}
 #endif
 
@@ -269,7 +269,7 @@ NameKeyType StaticNameKey::key() const
 {
 	if (m_key == NAMEKEY_INVALID)
 	{
-		DEBUG_ASSERTCRASH(TheNameKeyGenerator, ("no TheNameKeyGenerator yet"));
+		engine::debug::invariant((TheNameKeyGenerator), "TheNameKeyGenerator", __FILE__, __LINE__, "no TheNameKeyGenerator yet");
 		if (TheNameKeyGenerator)
 			m_key = TheNameKeyGenerator->nameToKey(m_name);
 	}

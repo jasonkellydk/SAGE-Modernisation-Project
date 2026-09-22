@@ -22,7 +22,8 @@
 //																																						//
 ////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "GameClient/DisconnectMenu.h"
 #include "GameClient/GUICallbacks.h"
@@ -294,7 +295,7 @@ void DisconnectMenu::removePlayer(Int slot, UnicodeString playerName) {
 }
 
 void DisconnectMenu::voteForPlayer(Int slot) {
-	DEBUG_LOG(("Casting vote for disconnect slot %d", slot));
+	engine::debug::log_info("Casting vote for disconnect slot %d", slot);
 	TheNetwork->voteForPlayerDisconnect(slot); // Do this next.
 }
 

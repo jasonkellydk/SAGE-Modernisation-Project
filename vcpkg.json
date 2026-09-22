@@ -8,6 +8,8 @@
       "zlib",
       "ffmpeg",
       "stb",
-      "boost-test"
+      "boost-test",
+      "spdlog",
+      "tracy"
     ]
   }

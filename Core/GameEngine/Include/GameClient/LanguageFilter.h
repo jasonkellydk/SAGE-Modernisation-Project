@@ -24,6 +24,7 @@
 
 #pragma once
 
+
 #include "Common/STLTypedefs.h"
 #include "Common/AsciiString.h"
 #include "Common/UnicodeString.h"
@@ -32,28 +33,17 @@ class File;
 
 struct AsciiStringLessThan
 {
-	Bool operator()(AsciiString a, AsciiString b) const
-	{
-		return (a.compareNoCase(b) < 0);
-	}
+	Bool operator()(AsciiString a, AsciiString b) const;
 };
 
 struct UnicodeStringLessThan
 {
-	Bool operator()(UnicodeString a, UnicodeString b) const
-	{
-		return (a.compareNoCase(b) < 0);
-	}
+	Bool operator()(UnicodeString a, UnicodeString b) const;
 };
 
 struct UnicodeStringsEqual
 {
-	Bool operator()(UnicodeString a, UnicodeString b) const
-	{
-		Bool retval = (a.compareNoCase(b) == 0);
-		DEBUG_LOG(("Comparing %ls with %ls, return value is %s.", a.str(), b.str(), retval ? "true" : "false"));
-		return retval;
-	}
+	Bool operator()(UnicodeString a, UnicodeString b) const;
 };
 
 typedef std::map<UnicodeString, Bool, UnicodeStringLessThan> LangMap;

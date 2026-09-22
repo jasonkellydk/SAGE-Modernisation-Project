@@ -27,7 +27,8 @@
 // Desc:   Update module to handle weapon firing of the SpectreGunship Generals special power.
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #define DEFINE_DEATH_NAMES
 
@@ -172,7 +173,7 @@ void SpectreGunshipUpdate::onObjectCreated()
 
 	if( !data->m_specialPowerTemplate )
 	{
-		DEBUG_CRASH( ("%s object's SpectreGunshipUpdate lacks access to the SpecialPowerTemplate. Needs to be specified in ini.", obj->getTemplate()->getName().str() ) );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "%s object's SpectreGunshipUpdate lacks access to the SpecialPowerTemplate. Needs to be specified in ini.", obj->getTemplate()->getName().str() );
 		return;
 	}
 
@@ -243,7 +244,7 @@ Bool SpectreGunshipUpdate::initiateIntentToDoSpecialPower(const SpecialPowerTemp
       if ( gattlingTemplate )
       {
         newGattling = TheThingFactory->newObject( gattlingTemplate, getObject()->getTeam() );
-        DEBUG_ASSERTCRASH( gunShip, ("SpecterGunshipUpdate failed to find or create a GATTLING object"));
+        engine::debug::invariant((gunShip), "gunShip", __FILE__, __LINE__, "SpecterGunshipUpdate failed to find or create a GATTLING object");
         shipContain->addToContain( newGattling );
         m_gattlingID = newGattling->getID();
       }

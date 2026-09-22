@@ -26,7 +26,8 @@
 // Part of header detangling
 // John McDonald, Aug 2002
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/GameCommon.h"
 
@@ -53,7 +54,7 @@ static_assert(ARRAY_SIZE(TheRelationshipNames) == RELATIONSHIP_COUNT + 1, "Incor
 // TheSuperHackers @todo DO NOT USE THIS FUNCTION! Use WWMath::Normalize_Angle instead. Delete this.
 Real normalizeAngle(Real angle)
 {
-	DEBUG_ASSERTCRASH(!_isnan(angle), ("Angle is NAN in normalizeAngle!"));
+	engine::debug::invariant((!_isnan(angle)), "!_isnan(angle)", __FILE__, __LINE__, "Angle is NAN in normalizeAngle!");
 
 	if( _isnan(angle) )
 		return 0;// ARGH!!!! Don't assert and then not handle it!  Error bad!  Fix error!

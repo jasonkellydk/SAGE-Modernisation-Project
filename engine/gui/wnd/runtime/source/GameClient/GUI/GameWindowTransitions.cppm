@@ -57,6 +57,7 @@
 #include "GameClient/GameWindowManager.h"
 #include "Common/FramePacer.h"
 #include "Common/GlobalData.h"
+import engine.debug;
 
 //-----------------------------------------------------------------------------
 // DEFINES ////////////////////////////////////////////////////////////////////
@@ -83,7 +84,7 @@ void INI::parseWindowTransitions( INI* ini )
 
 	// find existing item if present
 
-	DEBUG_ASSERTCRASH( TheTransitionHandler, ("parseWindowTransitions: TheTransitionHandler doesn't exist yet") );
+	engine::debug::invariant((TheTransitionHandler), "TheTransitionHandler", __FILE__, __LINE__, "parseWindowTransitions: TheTransitionHandler doesn't exist yet");
 	if( !TheTransitionHandler )
 		return;
 
@@ -92,7 +93,7 @@ void INI::parseWindowTransitions( INI* ini )
 	g = TheTransitionHandler->getNewGroup( name );
 
 	// sanity
-	DEBUG_ASSERTCRASH( g, ("parseWindowTransitions: Unable to allocate group '%s'", name.str()) );
+	engine::debug::invariant((g), "g", __FILE__, __LINE__, "parseWindowTransitions: Unable to allocate group '%s'", name.str());
 
 	// parse the ini definition
 	ini->initFromINI( g, TheTransitionHandler->getFieldParse() );
@@ -138,7 +139,7 @@ Transition *getTransitionForStyle( Int style )
 		return NEW ScoreScaleUpTransition;
 
 	default:
-		DEBUG_CRASH(("getTransitionForStyle:: An invalid style was passed in. Style = %d", style));
+		engine::debug::invariant(false, "debug invariant", __FILE__, __LINE__, "getTransitionForStyle:: An invalid style was passed in. Style = %d", style);
 		return nullptr;
 	}
 	return nullptr;
@@ -170,7 +171,7 @@ Bool TransitionWindow::init()
 	m_winID = TheNameKeyGenerator->nameToKey(m_winName);
 	m_win		= TheWindowManager->winGetWindowFromId(nullptr, m_winID);
 	m_currentFrameDelay = m_frameDelay;
-//	DEBUG_ASSERTCRASH( m_win, ("TransitionWindow::init Failed to find window %s", m_winName.str()));
+//	engine::debug::invariant((m_win), "m_win", __FILE__, __LINE__, "TransitionWindow::init Failed to find window %s", m_winName.str());
 //	if( !m_win )
 //		return FALSE;
 
@@ -559,7 +560,7 @@ TransitionGroup *GameWindowTransitionsHandler::getNewGroup( AsciiString name )
 	// test to see if we're trying to add an already existing group.
 	if(findGroup(name))
 	{
-		DEBUG_CRASH(("GameWindowTransitionsHandler::getNewGroup - We already have a group %s", name.str()));
+		engine::debug::invariant(false, "debug invariant", __FILE__, __LINE__, "GameWindowTransitionsHandler::getNewGroup - We already have a group %s", name.str());
 		return nullptr;
 	}
 	TransitionGroup *g = NEW TransitionGroup;

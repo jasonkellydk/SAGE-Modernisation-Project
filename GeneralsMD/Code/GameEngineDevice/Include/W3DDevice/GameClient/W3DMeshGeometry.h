@@ -18,6 +18,8 @@
 
 #pragma once
 
+
+#include <cassert>
 #include <cstdint>
 #include <memory>
 #include <span>
@@ -37,7 +39,7 @@ import Assets.Adapters.W3D.MeshData;
 #include "WWMath/vector3.h"
 #include "WWMath/Vector3i.h"
 #include "WWMath/vector4.h"
-#include "WWDebug/wwdebug.h"
+
 #include "W3DDevice/GameClient/W3DCastQuery.h"
 #include "W3DDevice/GameClient/W3DIntersectionQuery.h"
 
@@ -112,15 +114,15 @@ public:
 	int							Get_Vertex_Count() const								{ return Geometry.vertex_count; }
 
 	const TriIndex*			Get_Polygon_Array()										{ return get_polys(); }
-	Vector3 *					Get_Vertex_Array()										{ WWASSERT(Geometry.positions); Geometry.revision.Expose_Writable(); return Geometry.positions->data(); }
-    const Vector3* Peek_Vertex_Array() const { WWASSERT(Geometry.positions); return Geometry.positions->data(); }
+	Vector3 *					Get_Vertex_Array()										{ assert((Geometry.positions)); Geometry.revision.Expose_Writable(); return Geometry.positions->data(); }
+    const Vector3* Peek_Vertex_Array() const { assert((Geometry.positions)); return Geometry.positions->data(); }
     std::uint64_t Geometry_Revision() const noexcept { return Geometry.revision.Token(); }
 	const Vector3 *			Get_Vertex_Normal_Array();
 	const Vector4 *			Get_Plane_Array(bool create = true);
 	void							Compute_Plane(int pidx,PlaneClass * set_plane) const;
 	const uint32 *				Get_Vertex_Shade_Index_Array(bool create = true)	{ return get_shade_indices(create); }
 	const uint16 *				Get_Vertex_Bone_Links()								{ return get_bone_links(); }
-	uint8 *						Get_Poly_Surface_Type_Array()						{ WWASSERT(Geometry.surface_types); return Geometry.surface_types->data(); }
+	uint8 *						Get_Poly_Surface_Type_Array()						{ assert((Geometry.surface_types)); return Geometry.surface_types->data(); }
 	uint8							Get_Poly_Surface_Type(int poly_index) const;
 
 	void							Get_Bounding_Box(AABoxClass * set_box);
@@ -207,7 +209,7 @@ protected:
 */
 inline TriIndex * W3DMeshGeometry::get_polys()
 {
-	WWASSERT(Geometry.triangles);
+	assert((Geometry.triangles));
 	return Geometry.triangles->data();
 }
 
@@ -224,8 +226,8 @@ inline uint16 * W3DMeshGeometry::get_bone_links(bool create)
 
 inline uint8 W3DMeshGeometry::Get_Poly_Surface_Type(int poly_index) const
 {
-	WWASSERT(Geometry.surface_types);
-	WWASSERT(poly_index >= 0 && poly_index < Geometry.polygon_count);
+	assert((Geometry.surface_types));
+	assert((poly_index >= 0 && poly_index < Geometry.polygon_count));
 	uint8 *type = Geometry.surface_types->data();
 	return type[poly_index];
 }

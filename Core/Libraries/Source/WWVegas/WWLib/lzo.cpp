@@ -38,8 +38,9 @@
 
 #include "lzo.h"
 #include "mutex.h"
-#include "WWDebug/wwdebug.h"
+
 #include <stdlib.h>
+import engine.debug;
 
 /*
 ** Work Buffer for the LZOCompressor...
@@ -74,15 +75,15 @@ int LZOCompressor::Compress
 {
 	CriticalSectionClass::LockClass m(mutex);
 
-#ifdef WWDEBUG
+#ifdef RTS_DEBUG
 	// Debugging code to verify that the work buffer is not overrun...
 	*EOWorkBuffer = BUFFER_OVERRUN_TEST_VALUE;
 #endif
 
 	int result = lzo1x_1_compress(in,in_len,out,out_len,WorkBuffer);
 
-#ifdef WWDEBUG
-	WWASSERT(*EOWorkBuffer == BUFFER_OVERRUN_TEST_VALUE);
+#ifdef RTS_DEBUG
+	engine::debug::assert_condition((*EOWorkBuffer == BUFFER_OVERRUN_TEST_VALUE), "*EOWorkBuffer == BUFFER_OVERRUN_TEST_VALUE", __FILE__, __LINE__, "assertion failed");
 #endif
 
 	return result;

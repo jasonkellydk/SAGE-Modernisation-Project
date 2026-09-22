@@ -24,7 +24,8 @@
 
 //// EstablishConnectionsMenu.cpp /////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "GameClient/GUICallbacks.h"
 #include "GameClient/EstablishConnectionsMenu.h"
@@ -110,7 +111,7 @@ void EstablishConnectionsMenu::setPlayerName(Int slot, UnicodeString name) {
 	GameWindow *control = TheWindowManager->winGetWindowFromId(nullptr, controlID);
 
 	if (control == nullptr) {
-		DEBUG_ASSERTCRASH(control != nullptr, ("player name control for slot %d is null", slot));
+		engine::debug::invariant((control != nullptr), "control != nullptr", __FILE__, __LINE__, "player name control for slot %d is null", slot);
 		return;
 	}
 	GadgetStaticTextSetText(control, name);
@@ -121,7 +122,7 @@ void EstablishConnectionsMenu::setPlayerStatus(Int slot, NATConnectionState stat
 	GameWindow *control = TheWindowManager->winGetWindowFromId(nullptr, controlID);
 
 	if (control == nullptr) {
-		DEBUG_ASSERTCRASH(control != nullptr, ("player status control for slot %d is null", slot));
+		engine::debug::invariant((control != nullptr), "control != nullptr", __FILE__, __LINE__, "player status control for slot %d is null", slot);
 		return;
 	}
 	if (state == NATCONNECTIONSTATE_WAITINGFORMANGLERRESPONSE) {

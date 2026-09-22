@@ -26,7 +26,8 @@
 // Message stream translator
 // Author: Michael S. Booth, January 2001
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/ActionManager.h"
 #include "Common/GameAudio.h"
@@ -1142,7 +1143,7 @@ GameMessageDisposition SelectionTranslator::onMetaCreateTeam(MAYBE_UNUSED const 
 	Int group = msg->getType() - GameMessage::MSG_META_CREATE_TEAM0;
 	if ( group >= 0 && group < 10 )
 	{
-		DEBUG_LOG(("META: create team %d",group));
+		engine::debug::log_info("META: create team %d",group);
 		// Assign selected items to a group
 		GameMessage *newmsg = TheMessageStream->appendMessage((GameMessage::Type)(GameMessage::MSG_CREATE_TEAM0 + group));
 		Drawable *drawable = TheGameClient->getDrawableList();
@@ -1164,7 +1165,7 @@ GameMessageDisposition SelectionTranslator::onMetaSelectTeam(MAYBE_UNUSED const 
 	Int group = msg->getType() - GameMessage::MSG_META_SELECT_TEAM0;
 	if ( group >= 0 && group < 10 )
 	{
-		DEBUG_LOG(("META: select team %d",group));
+		engine::debug::log_info("META: select team %d",group);
 
 		UnsignedInt now = timeGetTime();
 		if ( m_lastGroupSelTime == 0 )
@@ -1177,7 +1178,7 @@ GameMessageDisposition SelectionTranslator::onMetaSelectTeam(MAYBE_UNUSED const 
 		// check for double-press to jump view
 		if ( now - m_lastGroupSelTime < TheGlobalData->m_doubleClickTimeMS && group == m_lastGroupSelGroup )
 		{
-			DEBUG_LOG(("META: DOUBLETAP select team %d",group));
+			engine::debug::log_info("META: DOUBLETAP select team %d",group);
 			// TheSuperHackers @bugfix Stubbjax 26/05/2025 Perform selection on double-press
 			// if the group or part of it is somehow deselected between presses.
 			performSelection = FALSE;
@@ -1236,7 +1237,7 @@ GameMessageDisposition SelectionTranslator::onMetaAddTeam(MAYBE_UNUSED const Gam
 	Int group = msg->getType() - GameMessage::MSG_META_ADD_TEAM0;
 	if ( group >= 0 && group < 10 )
 	{
-		DEBUG_LOG(("META: select team %d",group));
+		engine::debug::log_info("META: select team %d",group);
 
 		UnsignedInt now = timeGetTime();
 		if ( m_lastGroupSelTime == 0 )
@@ -1248,7 +1249,7 @@ GameMessageDisposition SelectionTranslator::onMetaAddTeam(MAYBE_UNUSED const Gam
 
 		if ( now - m_lastGroupSelTime < TheGlobalData->m_doubleClickTimeMS && group == m_lastGroupSelGroup )
 		{
-			DEBUG_LOG(("META: DOUBLETAP select team %d",group));
+			engine::debug::log_info("META: DOUBLETAP select team %d",group);
 			Player *player = ThePlayerList->getLocalPlayer();
 			if (player)
 			{
@@ -1315,7 +1316,7 @@ GameMessageDisposition SelectionTranslator::onMetaViewTeam(MAYBE_UNUSED const Ga
 	// TheSuperHackers @bugfix Fix the group index range so control group 0 can be viewed.
 	if ( group >= 0 && group < 10 )
 	{
-		DEBUG_LOG(("META: view team %d",group));
+		engine::debug::log_info("META: view team %d",group);
 		Player *player = ThePlayerList->getLocalPlayer();
 		if (player)
 		{

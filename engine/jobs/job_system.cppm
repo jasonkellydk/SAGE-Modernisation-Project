@@ -14,8 +14,6 @@ module;
 #include <utility>
 #include <vector>
 
-#include <SDL3/SDL.h>
-
 #if defined(_M_X64) || defined(_M_IX86) || defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
 #endif
@@ -35,8 +33,8 @@ struct Job
 
 struct JobSystemConfig
 {
-	// Zero selects half of SDL's logical CPU count, with one worker as the
-	// fallback when SDL cannot report a usable count.
+	// Zero selects half of the standard library's logical CPU count, with one
+	// worker as the fallback when the host cannot report a usable count.
 	std::size_t workerCount{0};
 };
 
@@ -101,8 +99,7 @@ inline void spinPause(std::size_t &iterations) noexcept
 {
  const auto iteration=iterations++;
  // Spin briefly for hand-off latency, then back off so an idle game does not
- // burn a logical processor per worker. SDL owns platform details; this
- // scheduler intentionally has no direct Win32 affinity or timing APIs.
+ // burn a logical processor per worker. This scheduler has no direct OS APIs.
  if (iteration>=1024) {
   std::this_thread::sleep_for(std::chrono::milliseconds(1));
   return;
@@ -178,8 +175,8 @@ JobSystem::JobSystem(const JobSystemConfig config)
 	m_workerCount = config.workerCount;
 	if (m_workerCount == 0)
 	{
-		const int logicalCores=SDL_GetNumLogicalCPUCores();
-		m_workerCount=logicalCores>1 ? static_cast<std::size_t>(logicalCores/2) : 1;
+		const unsigned int logicalCores = std::thread::hardware_concurrency();
+		m_workerCount = logicalCores > 1 ? static_cast<std::size_t>(logicalCores / 2) : 1;
 	}
 
  try

@@ -25,6 +25,7 @@
 #include "FeatherOptions.h"
 #include "WorldBuilderView.h"
 #include "FeatherTool.h"
+import engine.debug;
 
 FeatherOptions *FeatherOptions::m_staticThis = nullptr;
 Int FeatherOptions::m_currentFeather = 0;
@@ -170,7 +171,7 @@ void FeatherOptions::GetPopSliderInfo(const long sliderID, long *pMin, long *pMa
 
 
 		default:
-			DEBUG_CRASH(("Slider message from unknown control"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Slider message from unknown control");
 			break;
 	}
 }
@@ -219,7 +220,7 @@ void FeatherOptions::PopSliderFinished(const long sliderID, long theVal)
 			break;
 
 		default:
-			DEBUG_CRASH(("Slider message from unknown control"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Slider message from unknown control");
 			break;
 	}
 

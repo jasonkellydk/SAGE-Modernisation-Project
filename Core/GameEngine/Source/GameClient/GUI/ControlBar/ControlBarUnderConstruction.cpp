@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // USER INCLUDES //////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/NameKeyGenerator.h"
 #include "Common/ThingTemplate.h"
@@ -52,7 +53,7 @@ void ControlBar::updateConstructionTextDisplay( Object *obj )
 	GameWindow *descWindow = TheWindowManager->winGetWindowFromId( nullptr, descID );
 
 	// sanity
-	DEBUG_ASSERTCRASH( descWindow, ("Under construction window not found") );
+	engine::debug::invariant((descWindow), "descWindow", __FILE__, __LINE__, "Under construction window not found");
 
 	// format the message
 	text.format( TheGameText->fetch( "CONTROLBAR:UnderConstructionDesc" ),

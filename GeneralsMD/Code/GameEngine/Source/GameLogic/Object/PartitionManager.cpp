@@ -47,7 +47,9 @@
 //-----------------------------------------------------------------------------
 //         Includes
 //-----------------------------------------------------------------------------
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.profiling;
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 #include <cstdint>
 import engine.navigation.spatial.contact_pairs;
 import engine.navigation.spatial.collision.cylinder_contact;
@@ -61,7 +63,7 @@ import engine.navigation.spatial.query.visit_epoch;
 #include "Common/GameUtility.h"
 #include "Common/MessageStream.h"
 #include "Common/NameKeyGenerator.h"
-#include "Common/PerfTimer.h"
+
 #include "Common/Player.h"
 #include "Common/PlayerList.h"
 #include "Common/Radar.h"
@@ -93,13 +95,6 @@ import engine.navigation.spatial.query.visit_epoch;
 #include "Common/MapObject.h"
 #endif
 
-#ifdef DUMP_PERF_STATS
-	long s_countInClosestObjects = 0;
-	long s_countInClosestObjectsThisFrame = 0;
-	Int64 s_timeInClosestObjects = 0;
-	Int64 s_timeInClosestObjectsThisFrame = 0;
-	UnsignedInt s_gcoPerfFrame = 0xffffffff;
-#endif
 
 
 extern void addIcon(const Coord3D *pos, Real width, Int numFramesDuration, RGBColor color);
@@ -110,7 +105,7 @@ const Real HUGE_DIST_SQR = (HUGE_DIST*HUGE_DIST);
 
 //------------------------------------------------------------------------------ Performance Timers
 //#include "Common/PerfMetrics.h"
-//#include "Common/PerfTimer.h"
+//
 
 //-------------------------------------------------------------------------------------------------
 //-----------------------------------------------------------------------------
@@ -196,10 +191,9 @@ typedef Bool (*DistCalcProc)
 Bool DoFilterProfiling = false;
 #endif
 
-//DECLARE_PERF_TIMER(filtersAllow)
 inline Bool filtersAllow(PartitionFilter **filters, Object *objOther)
 {
-	//USE_PERF_TIMER(filtersAllow)
+	//engine::profiling::Scope profile_scope_201("filtersAllow")
 #ifdef FILTER_PROFILING
 	const Int MAXR = 32;
 	static const char* names[MAXR];
@@ -239,7 +233,7 @@ inline Bool filtersAllow(PartitionFilter **filters, Object *objOther)
 				if (idx == maxEver)
 				{
 					namesarr[maxEver++] = (*fp)->debugGetName();
-					DEBUG_ASSERTCRASH(maxEver<MAXR,("hmm, enlarge this array"));
+					engine::debug::invariant((maxEver<MAXR), "maxEver<MAXR", __FILE__, __LINE__, "hmm, enlarge this array");
 				}
 				++rejections[idx];
 				if (allow)
@@ -257,10 +251,10 @@ inline Bool filtersAllow(PartitionFilter **filters, Object *objOther)
 
 	if (DoFilterProfiling && calls > 0 && calls % 1000==0)
 	{
-		DEBUG_LOG(("\n"));
+		engine::debug::log_info("\n");
 		for (idx = 0; idx < maxEver; idx++)
 		{
-			DEBUG_LOG(("rejections[%s] = %d (useful = %d)",names[idx],rejections[idx],usefulRejections[idx]));
+			engine::debug::log_info("rejections[%s] = %d (useful = %d)",names[idx],rejections[idx],usefulRejections[idx]);
 		}
 	}
 
@@ -281,7 +275,7 @@ inline Bool filtersAllow(PartitionFilter **filters, Object *objOther)
 //-----------------------------------------------------------------------------
 inline void vecDiff_2D(const Coord3D *posA, const Coord3D *posB, Coord3D *resultVec)
 {
-	DEBUG_ASSERTCRASH(posA && posB && resultVec, ("null parm"));
+	engine::debug::invariant((posA && posB && resultVec), "posA && posB && resultVec", __FILE__, __LINE__, "null parm");
 	resultVec->x = posA->x - posB->x;
 	resultVec->y = posA->y - posB->y;
 	resultVec->z = 0.0f;
@@ -290,7 +284,7 @@ inline void vecDiff_2D(const Coord3D *posA, const Coord3D *posB, Coord3D *result
 //-----------------------------------------------------------------------------
 inline void vecDiff_3D(const Coord3D *posA, const Coord3D *posB, Coord3D *resultVec)
 {
-	DEBUG_ASSERTCRASH(posA && posB && resultVec, ("null parm"));
+	engine::debug::invariant((posA && posB && resultVec), "posA && posB && resultVec", __FILE__, __LINE__, "null parm");
 	resultVec->x = posA->x - posB->x;
 	resultVec->y = posA->y - posB->y;
 	resultVec->z = posA->z - posB->z;
@@ -412,7 +406,7 @@ static void testRotatedPointsAgainstRect(
 	Int *avgTot
 )
 {
-	//DEBUG_ASSERTCRASH(a->geom.getGeomType() == GEOMETRY_BOX, ("only boxes are ok here"));
+	//engine::debug::invariant((a->geom.getGeomType() == GEOMETRY_BOX), "a->geom.getGeomType() == GEOMETRY_BOX", __FILE__, __LINE__, "only boxes are ok here");
 	Real major = a->geom.getMajorRadius();
 	Real minor = (a->geom.getGeomType() == GEOMETRY_SPHERE) ? a->geom.getMajorRadius() : a->geom.getMinorRadius();
 
@@ -432,7 +426,7 @@ static void testRotatedPointsAgainstRect(
 		#ifdef INTENSE_DEBUG
 		Real mag_a = sqr(ptx)+sqr(pty);
 		Real mag_b = sqr(ptx_new)+sqr(pty_new);
-		DEBUG_ASSERTCRASH(fabs(mag_a - mag_b) <= 1.0, ("hmm, unlikely"));
+		engine::debug::invariant((fabs(mag_a - mag_b) <= 1.0), "fabs(mag_a - mag_b) <= 1.0", __FILE__, __LINE__, "hmm, unlikely");
 		#endif
 
 		if (ptx_new <= major && pty_new <= minor)
@@ -879,7 +873,7 @@ static Bool distCalcProc_BoundaryAndBoundary_2D(
 
 	if (abVec)
 	{
-		DEBUG_ASSERTCRASH(shrinkFactor >= 0.0f && shrinkFactor <= 1.0f, ("Hmm, this should not be possible."));
+		engine::debug::invariant((shrinkFactor >= 0.0f && shrinkFactor <= 1.0f), "shrinkFactor >= 0.0f && shrinkFactor <= 1.0f", __FILE__, __LINE__, "Hmm, this should not be possible.");
 		diff.x *= shrinkFactor;
 		diff.y *= shrinkFactor;
 		*abVec = diff;
@@ -971,7 +965,7 @@ static Bool distCalcProc_BoundaryAndBoundary_3D(
 
 	if (abVec)
 	{
-		DEBUG_ASSERTCRASH(shrinkFactor >= 0.0f && shrinkFactor <= 1.0f, ("Hmm, this should not be possible."));
+		engine::debug::invariant((shrinkFactor >= 0.0f && shrinkFactor <= 1.0f), "shrinkFactor >= 0.0f && shrinkFactor <= 1.0f", __FILE__, __LINE__, "Hmm, this should not be possible.");
 		diff.x *= shrinkFactor;
 		diff.y *= shrinkFactor;
 		diff.z *= shrinkFactor;
@@ -1149,14 +1143,14 @@ CellAndObjectIntersection::CellAndObjectIntersection()
 //-----------------------------------------------------------------------------
 CellAndObjectIntersection::~CellAndObjectIntersection()
 {
-	DEBUG_ASSERTCRASH(m_prevCoi == nullptr && m_nextCoi == nullptr, ("destroying a linked COI"));
-	DEBUG_ASSERTCRASH(!getModule(), ("destroying an in-use COI"));
+	engine::debug::invariant((m_prevCoi == nullptr && m_nextCoi == nullptr), "m_prevCoi == nullptr && m_nextCoi == nullptr", __FILE__, __LINE__, "destroying a linked COI");
+	engine::debug::invariant((!getModule()), "!getModule()", __FILE__, __LINE__, "destroying an in-use COI");
 }
 
 //-----------------------------------------------------------------------------
 void CellAndObjectIntersection::friend_addToCellList(CellAndObjectIntersection **pListHead)
 {
-	DEBUG_ASSERTCRASH(m_prevCoi == nullptr && m_nextCoi == nullptr && *pListHead != this, ("trying to add a cell to list, but it appears to already be in a list"));
+	engine::debug::invariant((m_prevCoi == nullptr && m_nextCoi == nullptr && *pListHead != this), "m_prevCoi == nullptr && m_nextCoi == nullptr && *pListHead != this", __FILE__, __LINE__, "trying to add a cell to list, but it appears to already be in a list");
 
 	this->m_nextCoi = *pListHead;
 	if (*pListHead)
@@ -1168,19 +1162,19 @@ void CellAndObjectIntersection::friend_addToCellList(CellAndObjectIntersection *
 void CellAndObjectIntersection::friend_removeFromCellList(CellAndObjectIntersection **pListHead)
 {
 #define DEBUG_ASSERTINLIST(c) \
-	DEBUG_ASSERTCRASH((c)->m_prevCoi != nullptr || (c)->m_nextCoi != nullptr || *pListHead == (c), ("cell is not in list"));
+	engine::debug::invariant(((c)->m_prevCoi != nullptr || (c)->m_nextCoi != nullptr || *pListHead == (c)), "(c)->m_prevCoi != nullptr || (c)->m_nextCoi != nullptr || *pListHead == (c)", __FILE__, __LINE__, "cell is not in list");
 
 	DEBUG_ASSERTINLIST(this);
 
 	if (this->m_prevCoi)
 	{
 		DEBUG_ASSERTINLIST(this->m_prevCoi);
-		DEBUG_ASSERTCRASH(*pListHead != this, ("bad linkage"));
+		engine::debug::invariant((*pListHead != this), "*pListHead != this", __FILE__, __LINE__, "bad linkage");
 		this->m_prevCoi->m_nextCoi = this->m_nextCoi;
 	}
 	else
 	{
-		DEBUG_ASSERTCRASH(*pListHead == this, ("bad linkage"));
+		engine::debug::invariant((*pListHead == this), "*pListHead == this", __FILE__, __LINE__, "bad linkage");
 		*pListHead = this->m_nextCoi;
 	}
 
@@ -1199,12 +1193,12 @@ void CellAndObjectIntersection::friend_removeFromCellList(CellAndObjectIntersect
 //-----------------------------------------------------------------------------
 void CellAndObjectIntersection::addCoverage(PartitionCell *cell, PartitionData *module)
 {
-	DEBUG_ASSERTCRASH(m_cell == nullptr || m_cell == cell, ("mismatch"));
-	DEBUG_ASSERTCRASH(m_module == nullptr || m_module == module, ("mismatch"));
+	engine::debug::invariant((m_cell == nullptr || m_cell == cell), "m_cell == nullptr || m_cell == cell", __FILE__, __LINE__, "mismatch");
+	engine::debug::invariant((m_module == nullptr || m_module == module), "m_module == nullptr || m_module == module", __FILE__, __LINE__, "mismatch");
 
 	if (m_module != nullptr && m_module != module)
 	{
-		DEBUG_CRASH(("COI already in use by another module!"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "COI already in use by another module!");
 		return;
 	}
 
@@ -1220,7 +1214,7 @@ void CellAndObjectIntersection::removeAllCoverage()
 {
 	if (m_module == nullptr)
 	{
-		DEBUG_CRASH(("COI not in use"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "COI not in use");
 		return;
 	}
 
@@ -1267,7 +1261,7 @@ PartitionCell::PartitionCell()
 //-----------------------------------------------------------------------------
 PartitionCell::~PartitionCell()
 {
-	DEBUG_ASSERTCRASH(m_firstCoiInCell == nullptr && m_coiCount == 0, ("destroying a nonempty PartitionCell"));
+	engine::debug::invariant((m_firstCoiInCell == nullptr && m_coiCount == 0), "m_firstCoiInCell == nullptr && m_coiCount == 0", __FILE__, __LINE__, "destroying a nonempty PartitionCell");
 	// but don't destroy the Cois; they don't belong to us
 }
 
@@ -1284,12 +1278,11 @@ void PartitionCell::rebuildCompactMembers()
 	for (CellAndObjectIntersection *coi = m_firstCoiInCell; coi; coi = coi->getNextCoi())
 	{
 		PartitionData *module = coi->getModule();
-		DEBUG_ASSERTCRASH(module != nullptr, ("a cell COI must have a module when its compact view is rebuilt"));
+		engine::debug::invariant((module != nullptr), "module != nullptr", __FILE__, __LINE__, "a cell COI must have a module when its compact view is rebuilt");
 		m_compactMembers.push_back({ module, module ? module->getObject() : nullptr });
 	}
 
-	DEBUG_ASSERTCRASH(m_compactMembers.size() == static_cast<std::size_t>(m_coiCount),
-		("compact cell membership count mismatch"));
+	engine::debug::invariant((m_compactMembers.size() == static_cast<std::size_t>(m_coiCount)), "m_compactMembers.size() == static_cast<std::size_t>(m_coiCount)", __FILE__, __LINE__, "compact cell membership count mismatch");
 	m_compactMembersDirty = false;
 }
 
@@ -1311,13 +1304,13 @@ void PartitionCell::addLooker(Int playerIndex)
 
 	CellShroudStatus newShroud = getShroudStatusForPlayer( playerIndex );
 
-//	DEBUG_LOG(( "ADD    %d, %d.  CS = %d, AS = %d for player %d.",
+//	engine::debug::log_info( "ADD    %d, %d.  CS = %d, AS = %d for player %d.",
 //							m_cellX,
 //							m_cellY,
 //							m_shroudLevel[playerIndex].m_currentShroud,
 //							m_shroudLevel[playerIndex].m_activeShroudLevel,
 //							playerIndex
-//							));
+//							);
 
 	if( oldShroud != newShroud )
 	{
@@ -1342,18 +1335,18 @@ void PartitionCell::removeLooker(Int playerIndex)
 		m_shroudLevel[playerIndex].m_currentShroud = min( m_shroudLevel[playerIndex].m_activeShroudLevel, (Short)1 );
 	else
 	{
-		DEBUG_ASSERTCRASH( m_shroudLevel[playerIndex].m_currentShroud < 0, ("Someone is RemoveLooker-ing on a cell that is not looked at.  This will make a permanent shroud blob.") );
+		engine::debug::invariant((m_shroudLevel[playerIndex].m_currentShroud < 0), "m_shroudLevel[playerIndex].m_currentShroud < 0", __FILE__, __LINE__, "Someone is RemoveLooker-ing on a cell that is not looked at.  This will make a permanent shroud blob.");
 		m_shroudLevel[playerIndex].m_currentShroud++;
 	}
 	CellShroudStatus newShroud = getShroudStatusForPlayer( playerIndex );
 
-//	DEBUG_LOG(( "REMOVE %d, %d.  CS = %d, AS = %d for player %d.",
+//	engine::debug::log_info( "REMOVE %d, %d.  CS = %d, AS = %d for player %d.",
 //							m_cellX,
 //							m_cellY,
 //							m_shroudLevel[playerIndex].m_currentShroud,
 //							m_shroudLevel[playerIndex].m_activeShroudLevel,
 //							playerIndex
-//							));
+//							);
 
 	if( oldShroud != newShroud )
 	{
@@ -1402,7 +1395,7 @@ void PartitionCell::removeShrouder( Int playerIndex )
 	// Decreasing active shroud: just decrement activeLevel.  This will never result in a client change.
 	// Either it was passive shroud and is now active, or it was being looked at and still is.
 	m_shroudLevel[playerIndex].m_activeShroudLevel--;
-	DEBUG_ASSERTCRASH( m_shroudLevel[playerIndex].m_activeShroudLevel >= 0, ("Shroud generation has gone negative.  This can't happen.") );
+	engine::debug::invariant((m_shroudLevel[playerIndex].m_activeShroudLevel >= 0), "m_shroudLevel[playerIndex].m_activeShroudLevel >= 0", __FILE__, __LINE__, "Shroud generation has gone negative.  This can't happen.");
 }
 
 //-----------------------------------------------------------------------------
@@ -1440,7 +1433,7 @@ void PartitionCell::addThreatValue( Int playerIndex, UnsignedInt threatValue )
 	if (playerIndex >= 0 && playerIndex < MAX_PLAYER_COUNT) {
 #ifdef DEBUG_CRASHING
 		UnsignedInt oldThreatVal = m_threatValue[playerIndex];
-		DEBUG_ASSERTCRASH(oldThreatVal <= oldThreatVal + threatValue, ("adding new threat value overflowed allotted storage."));
+		engine::debug::invariant((oldThreatVal <= oldThreatVal + threatValue), "oldThreatVal <= oldThreatVal + threatValue", __FILE__, __LINE__, "adding new threat value overflowed allotted storage.");
 #endif
 		m_threatValue[playerIndex] += threatValue;
 	}
@@ -1452,7 +1445,7 @@ void PartitionCell::removeThreatValue( Int playerIndex, UnsignedInt threatValue 
 	if (playerIndex >= 0 && playerIndex < MAX_PLAYER_COUNT) {
 #ifdef DEBUG_CRASHING
 		UnsignedInt oldThreatVal = m_threatValue[playerIndex];
-		DEBUG_ASSERTCRASH(oldThreatVal >= oldThreatVal - threatValue, ("removing new threat value underflowed allotted storage."));
+		engine::debug::invariant((oldThreatVal >= oldThreatVal - threatValue), "oldThreatVal >= oldThreatVal - threatValue", __FILE__, __LINE__, "removing new threat value underflowed allotted storage.");
 #endif
 		m_threatValue[playerIndex] -= threatValue;
 	}
@@ -1473,7 +1466,7 @@ void PartitionCell::addCashValue( Int playerIndex, UnsignedInt cashValue )
 	if (playerIndex >= 0 && playerIndex < MAX_PLAYER_COUNT) {
 #ifdef DEBUG_CRASHING
 		UnsignedInt oldCashVal = m_cashValue[playerIndex];
-		DEBUG_ASSERTCRASH(oldCashVal <= oldCashVal + cashValue, ("adding new cash value overflowed allotted storage."));
+		engine::debug::invariant((oldCashVal <= oldCashVal + cashValue), "oldCashVal <= oldCashVal + cashValue", __FILE__, __LINE__, "adding new cash value overflowed allotted storage.");
 #endif
 		m_cashValue[playerIndex] += cashValue;
 	}
@@ -1485,7 +1478,7 @@ void PartitionCell::removeCashValue( Int playerIndex, UnsignedInt cashValue )
 	if (playerIndex >= 0 && playerIndex < MAX_PLAYER_COUNT) {
 #ifdef DEBUG_CRASHING
 		UnsignedInt oldCashVal = m_cashValue[playerIndex];
-		DEBUG_ASSERTCRASH(oldCashVal >= oldCashVal - cashValue, ("removing new cash value underflowed allotted storage."));
+		engine::debug::invariant((oldCashVal >= oldCashVal - cashValue), "oldCashVal >= oldCashVal - cashValue", __FILE__, __LINE__, "removing new cash value underflowed allotted storage.");
 #endif
 		m_cashValue[playerIndex] -= cashValue;
 	}
@@ -1527,10 +1520,10 @@ void PartitionCell::validateCoiList()
 	for (CellAndObjectIntersection *coi = getFirstCoiInCell(); coi; prevCoi = coi, coi = nextCoi)
 	{
 		nextCoi = coi->getNextCoi();
-		DEBUG_ASSERTCRASH(coi->getPrevCoi() == prevCoi, ("coi link mismatch"));
-		DEBUG_ASSERTCRASH(prevCoi == nullptr || prevCoi->getNextCoi() == coi, ("coi link mismatch"));
-		DEBUG_ASSERTCRASH((coi == getFirstCoiInCell()) == (prevCoi == nullptr) , ("coi link mismatch"));
-		DEBUG_ASSERTCRASH(nextCoi == nullptr || nextCoi->getPrevCoi() == coi, ("coi link mismatch"));
+		engine::debug::invariant((coi->getPrevCoi() == prevCoi), "coi->getPrevCoi() == prevCoi", __FILE__, __LINE__, "coi link mismatch");
+		engine::debug::invariant((prevCoi == nullptr || prevCoi->getNextCoi() == coi), "prevCoi == nullptr || prevCoi->getNextCoi() == coi", __FILE__, __LINE__, "coi link mismatch");
+		engine::debug::invariant(((coi == getFirstCoiInCell()) == (prevCoi == nullptr)), "(coi == getFirstCoiInCell()) == (prevCoi == nullptr)", __FILE__, __LINE__, "coi link mismatch");
+		engine::debug::invariant((nextCoi == nullptr || nextCoi->getPrevCoi() == coi), "nextCoi == nullptr || nextCoi->getPrevCoi() == coi", __FILE__, __LINE__, "coi link mismatch");
 	}
 }
 #endif
@@ -1580,7 +1573,7 @@ void PartitionCell::loadPostProcess()
 //-----------------------------------------------------------------------------
 PartitionData::PartitionData()
 {
-	//DEBUG_LOG(("create pd %08lx",this));
+	//engine::debug::log_info("create pd %08lx",this);
 	m_next = nullptr;
 	m_prev = nullptr;
 	m_nextDirty = nullptr;
@@ -1604,15 +1597,15 @@ PartitionData::PartitionData()
 //-----------------------------------------------------------------------------
 PartitionData::~PartitionData()
 {
-	//DEBUG_LOG(("toss pd for pd %08lx obj %08lx",this,m_object));
+	//engine::debug::log_info("toss pd for pd %08lx obj %08lx",this,m_object);
 	removeAllTouchedCells();
 	freeCoiArray();
-	DEBUG_ASSERTCRASH(ThePartitionManager, ("ThePartitionManager is null"));
+	engine::debug::invariant((ThePartitionManager), "ThePartitionManager", __FILE__, __LINE__, "ThePartitionManager is null");
 	if (ThePartitionManager && ThePartitionManager->isInListDirtyModules(this))
 	{
-		//DEBUG_LOG(("remove pd %08lx from dirty list (%08lx %08lx)",this,m_prevDirty,m_nextDirty));
+		//engine::debug::log_info("remove pd %08lx from dirty list (%08lx %08lx)",this,m_prevDirty,m_nextDirty);
 		ThePartitionManager->removeFromDirtyModules(this);
-		//DEBUG_ASSERTCRASH(!ThePartitionManager->isInListDirtyModules(this), ("hmm"));
+		//engine::debug::invariant((!ThePartitionManager->isInListDirtyModules(this)), "!ThePartitionManager->isInListDirtyModules(this)", __FILE__, __LINE__, "hmm");
 	}
 }
 
@@ -1641,11 +1634,11 @@ Int PartitionData::getControllingPlayerIndex() const
 	if (p)
 	{
 		Int playerIndex = p->getPlayerIndex();
-		DEBUG_ASSERTCRASH(playerIndex >= 0 && playerIndex < MAX_PLAYER_COUNT, ("bad playerIndex"));
+		engine::debug::invariant((playerIndex >= 0 && playerIndex < MAX_PLAYER_COUNT), "playerIndex >= 0 && playerIndex < MAX_PLAYER_COUNT", __FILE__, __LINE__, "bad playerIndex");
 		return playerIndex;
 	}
 
-	DEBUG_CRASH(("this should never happen"));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "this should never happen");
 	throw ERROR_BUG;
 	return 0;
 }
@@ -1670,8 +1663,7 @@ void PartitionData::friend_setShroudednessPrevious(Int playerIndex, ObjectShroud
 ObjectShroudStatus PartitionData::getShroudedStatus(Int playerIndex)
 {
 	// sanity
-	DEBUG_ASSERTCRASH( playerIndex >= 0 && playerIndex < MAX_PLAYER_COUNT,
-										 ("PartitionData::getShroudedStatus - Invalid player index '%d'", playerIndex) );
+	engine::debug::invariant((playerIndex >= 0 && playerIndex < MAX_PLAYER_COUNT), "playerIndex >= 0 && playerIndex < MAX_PLAYER_COUNT", __FILE__, __LINE__, "PartitionData::getShroudedStatus - Invalid player index '%d'", playerIndex);
 
 	if (!ThePartitionManager->getUpdatedSinceLastReset())
 	{
@@ -1784,19 +1776,19 @@ void PartitionData::removeAllTouchedCells()
 	{
 		if (coi->getModule())
 		{
-			DEBUG_ASSERTCRASH(coi->getModule() == this, ("coi uses wrong module"));
+			engine::debug::invariant((coi->getModule() == this), "coi->getModule() == this", __FILE__, __LINE__, "coi uses wrong module");
 			coi->removeAllCoverage();
-			DEBUG_ASSERTCRASH(!coi->getModule(), ("coi should no longer be in use"));
+			engine::debug::invariant((!coi->getModule()), "!coi->getModule()", __FILE__, __LINE__, "coi should no longer be in use");
 			--m_coiInUseCount;
 		}
 	}
-	DEBUG_ASSERTCRASH(m_coiInUseCount == 0, ("hmm, coi count mismatch"));
+	engine::debug::invariant((m_coiInUseCount == 0), "m_coiInUseCount == 0", __FILE__, __LINE__, "hmm, coi count mismatch");
 }
 
 // -----------------------------------------------------------------------------
 void PartitionData::addSubPixToCoverage(PartitionCell *cell)
 {
-	DEBUG_ASSERTCRASH(m_coiInUseCount < m_coiArrayCount, ("not enough cois allocated for this object"));
+	engine::debug::invariant((m_coiInUseCount < m_coiArrayCount), "m_coiInUseCount < m_coiArrayCount", __FILE__, __LINE__, "not enough cois allocated for this object");
 	if (cell)
 	{
 		// see if we already have a coi for this cell.
@@ -1810,7 +1802,7 @@ void PartitionData::addSubPixToCoverage(PartitionCell *cell)
 				break;
 			}
 		}
-		DEBUG_ASSERTCRASH(coiToUse != nullptr || m_coiInUseCount < m_coiArrayCount, ("not enough cois allocated for this object"));
+		engine::debug::invariant((coiToUse != nullptr || m_coiInUseCount < m_coiArrayCount), "coiToUse != nullptr || m_coiInUseCount < m_coiArrayCount", __FILE__, __LINE__, "not enough cois allocated for this object");
 		if (coiToUse == nullptr && m_coiInUseCount < m_coiArrayCount)
 		{
 			// nope, no coi for this cell, allocate a new one
@@ -1903,7 +1895,7 @@ void PartitionData::doCircleFill(
 	Real radius
 )
 {
-	DEBUG_ASSERTCRASH(m_coiInUseCount == 0, ("expected no coi in use here"));
+	engine::debug::invariant((m_coiInUseCount == 0), "m_coiInUseCount == 0", __FILE__, __LINE__, "expected no coi in use here");
 
 	Int cellCenterX, cellCenterY;
 	ThePartitionManager->worldToCell(centerX, centerY, &cellCenterX, &cellCenterY);
@@ -1982,12 +1974,12 @@ void PartitionData::doSmallFill(
 	Real radius
 )
 {
-	DEBUG_ASSERTCRASH(m_coiInUseCount == 0, ("expected no coi in use here"));
+	engine::debug::invariant((m_coiInUseCount == 0), "m_coiInUseCount == 0", __FILE__, __LINE__, "expected no coi in use here");
 
 	Real halfCellSize = ThePartitionManager->getCellSize() * 0.5f;
 	if (radius > halfCellSize)
 	{
-		DEBUG_CRASH(("object is too large to use a 'small' geometry, truncating size to cellsize"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "object is too large to use a 'small' geometry, truncating size to cellsize");
 		radius = halfCellSize;
 	}
 
@@ -1995,8 +1987,8 @@ void PartitionData::doSmallFill(
 	ThePartitionManager->worldToCell(centerX - radius, centerY - radius, &cx1, &cy1);
 	ThePartitionManager->worldToCell(centerX + radius, centerY + radius, &cx2, &cy2);
 
-	DEBUG_ASSERTCRASH(absInt(cx2-cx1)<=1,("bad cx"));
-	DEBUG_ASSERTCRASH(absInt(cy2-cy1)<=1,("bad cy"));
+	engine::debug::invariant((absInt(cx2-cx1)<=1), "absInt(cx2-cx1)<=1", __FILE__, __LINE__, "bad cx");
+	engine::debug::invariant((absInt(cy2-cy1)<=1), "absInt(cy2-cy1)<=1", __FILE__, __LINE__, "bad cy");
 
 	for (Int x = cx1; x <= cx2; x++)
 	{
@@ -2015,7 +2007,7 @@ void PartitionData::doSmallFill(
 	{
 		for (int j = 0; j < i; j++)
 		{
-			DEBUG_ASSERTCRASH(m_coiArray[i].getCell() != m_coiArray[j].getCell(), ("dup cells"));
+			engine::debug::invariant((m_coiArray[i].getCell() != m_coiArray[j].getCell()), "m_coiArray[i].getCell() != m_coiArray[j].getCell()", __FILE__, __LINE__, "dup cells");
 		}
 	}
 	#endif
@@ -2038,7 +2030,7 @@ void PartitionData::addPossibleCollisions(PartitionContactList *ctList)
 	}
 #endif
 
-	//DEBUG_LOG(("adding possible collision for %s",getObject()->getTemplate()->getName().str()));
+	//engine::debug::log_info("adding possible collision for %s",getObject()->getTemplate()->getName().str());
 	CellAndObjectIntersection *myCoi = m_coiArray;
 	for (Int i = m_coiInUseCount; i > 0; --i, ++myCoi)
 	{
@@ -2174,7 +2166,7 @@ void PartitionData::updateCellsTouched()
 	}
 	else
 	{
-		DEBUG_CRASH(("must be attached to an Object here"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "must be attached to an Object here");
 		return;
 	}
 
@@ -2252,7 +2244,7 @@ void PartitionData::updateCellsTouched()
 		{
 			if (m_coiArray[i].getCell() == m_coiArray[j].getCell())
 			{
-				DEBUG_CRASH(("dup cells in COI array, this is bad"));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "dup cells in COI array, this is bad");
 			}
 		}
 	}
@@ -2294,7 +2286,7 @@ Int PartitionData::calcMaxCoiForShape(GeometryType geom, Real majorRadius, Real 
 //	{
 //		#if defined(RTS_DEBUG)
 //		Int chk = calcMaxCoiForShape(geom, majorRadius, minorRadius, false);
-//		DEBUG_ASSERTCRASH(chk <= 4, ("Small objects should be <= 4 cells, but I calced %s as %d",theObjName.str(),chk));
+//		engine::debug::invariant((chk <= 4), "chk <= 4", __FILE__, __LINE__, "Small objects should be <= 4 cells, but I calced %s as %d",theObjName.str(),chk);
 //		#endif
 //		result = 4;
 //	}
@@ -2334,7 +2326,7 @@ Int PartitionData::calcMaxCoiForShape(GeometryType geom, Real majorRadius, Real 
 Int PartitionData::calcMaxCoiForObject()
 {
 	Object *obj = getObject();
-	DEBUG_ASSERTCRASH(obj != nullptr, ("must be attached to an Object here 2"));
+	engine::debug::invariant((obj != nullptr), "obj != nullptr", __FILE__, __LINE__, "must be attached to an Object here 2");
 
 	GeometryType geom = obj->getGeometryInfo().getGeomType();
 	Real majorRadius = obj->getGeometryInfo().getMajorRadius();
@@ -2349,7 +2341,7 @@ theObjName = obj->getTemplate()->getName();
 //-----------------------------------------------------------------------------
 void PartitionData::makeDirty(Bool needToUpdateCells)
 {
-	//DEBUG_LOG(("makeDirty for pd %08lx obj %08lx",this,m_object));
+	//engine::debug::log_info("makeDirty for pd %08lx obj %08lx",this,m_object);
 	if (!ThePartitionManager->isInListDirtyModules(this))
 	{
 		if (needToUpdateCells)
@@ -2369,8 +2361,8 @@ void PartitionData::makeDirty(Bool needToUpdateCells)
 //-----------------------------------------------------------------------------
 void PartitionData::allocCoiArray()
 {
-	DEBUG_ASSERTCRASH(m_coiArrayCount == 0 && m_coiArray == nullptr, ("hmm, coi should probably be null here"));
-	DEBUG_ASSERTCRASH(m_coiInUseCount == 0, ("hmm, coi count mismatch"));
+	engine::debug::invariant((m_coiArrayCount == 0 && m_coiArray == nullptr), "m_coiArrayCount == 0 && m_coiArray == nullptr", __FILE__, __LINE__, "hmm, coi should probably be null here");
+	engine::debug::invariant((m_coiInUseCount == 0), "m_coiInUseCount == 0", __FILE__, __LINE__, "hmm, coi count mismatch");
 	m_coiArrayCount = calcMaxCoiForObject();
 	m_coiArray = MSGNEW("PartitionManager_COI") CellAndObjectIntersection[m_coiArrayCount];	// may throw!
 	m_coiInUseCount = 0;
@@ -2411,11 +2403,11 @@ void PartitionData::attachToObject(Object* object)
 			m_ghostObject = TheGhostObjectManager->addGhostObject(object, this);
 	}
 
-	//DEBUG_LOG(("attach pd for pd %08lx obj %08lx",this,m_object));
+	//engine::debug::log_info("attach pd for pd %08lx obj %08lx",this,m_object);
 
 	// (re)calc maxCoi and (re)alloc cois
-	DEBUG_ASSERTCRASH(m_coiArrayCount == 0 && m_coiArray == nullptr, ("hmm, coi should probably be null here"));
-	DEBUG_ASSERTCRASH(m_coiInUseCount == 0, ("hmm, coi count mismatch"));
+	engine::debug::invariant((m_coiArrayCount == 0 && m_coiArray == nullptr), "m_coiArrayCount == 0 && m_coiArray == nullptr", __FILE__, __LINE__, "hmm, coi should probably be null here");
+	engine::debug::invariant((m_coiInUseCount == 0), "m_coiInUseCount == 0", __FILE__, __LINE__, "hmm, coi count mismatch");
 	freeCoiArray();
 	allocCoiArray();	// may throw!
 
@@ -2442,7 +2434,7 @@ void PartitionData::detachFromObject()
 	removeAllTouchedCells();
 	freeCoiArray();
 
-	//DEBUG_LOG(("detach pd for pd %08lx obj %08lx",this,m_object));
+	//engine::debug::log_info("detach pd for pd %08lx obj %08lx",this,m_object);
 
 	// no longer attached to object
 	friend_setObject(nullptr);
@@ -2459,8 +2451,8 @@ void PartitionData::attachToGhostObject(GhostObject* object)
 	m_ghostObject = object;
 
 	// (re)calc maxCoi and (re)alloc cois
-	DEBUG_ASSERTCRASH(m_coiArrayCount == 0 && m_coiArray == nullptr, ("hmm, coi should probably be null here"));
-	DEBUG_ASSERTCRASH(m_coiInUseCount == 0, ("hmm, coi count mismatch"));
+	engine::debug::invariant((m_coiArrayCount == 0 && m_coiArray == nullptr), "m_coiArrayCount == 0 && m_coiArray == nullptr", __FILE__, __LINE__, "hmm, coi should probably be null here");
+	engine::debug::invariant((m_coiInUseCount == 0), "m_coiInUseCount == 0", __FILE__, __LINE__, "hmm, coi count mismatch");
 	freeCoiArray();
 
 	m_coiArrayCount = calcMaxCoiForShape(object->getGeometryType(), object->getGeometryMajorRadius(), object->getGeometryMinorRadius(),object->getGeometrySmall());
@@ -2488,7 +2480,7 @@ void PartitionData::detachFromGhostObject()
 	removeAllTouchedCells();
 	freeCoiArray();
 
-	//DEBUG_LOG(("detach pd for pd %08lx obj %08lx",this,m_object));
+	//engine::debug::log_info("detach pd for pd %08lx obj %08lx",this,m_object);
 
 	// no longer attached to object
 	friend_setObject(nullptr);
@@ -2542,8 +2534,7 @@ void PartitionContactList::processContactList()
 				other->getStatusBits().test( OBJECT_STATUS_NO_COLLISIONS ) )
 			return;
 
-		DEBUG_ASSERTCRASH(!(obj->isKindOf(KINDOF_IMMOBILE) && other->isKindOf(KINDOF_IMMOBILE)),
-			("we should never have collisions between two immobile things reported"));
+		engine::debug::invariant((!(obj->isKindOf(KINDOF_IMMOBILE) && other->isKindOf(KINDOF_IMMOBILE))), "!(obj->isKindOf(KINDOF_IMMOBILE) && other->isKindOf(KINDOF_IMMOBILE))", __FILE__, __LINE__, "we should never have collisions between two immobile things reported");
 
 		// the onCollide() calls can remove the object(s) from the partition mgr,
 		// thus destroying the partitiondata for 'em. go ahead and null these out here
@@ -2571,12 +2562,12 @@ void PartitionContactList::processContactList()
 		//
 		if (!obj->isDestroyed() && obj->friend_getPartitionData() != nullptr && !obj->isKindOf(KINDOF_IMMOBILE))
 		{
-//DEBUG_LOG(("%d: re-dirtying collision of %s %08lx with %s %08lx",TheGameLogic->getFrame(),obj->getTemplate()->getName().str(),obj,other->getTemplate()->getName().str(),other));
+//engine::debug::log_info("%d: re-dirtying collision of %s %08lx with %s %08lx",TheGameLogic->getFrame(),obj->getTemplate()->getName().str(),obj,other->getTemplate()->getName().str(),other);
 			obj->friend_getPartitionData()->makeDirty(false);
 		}
 		if (!other->isDestroyed() && other->friend_getPartitionData() != nullptr && !other->isKindOf(KINDOF_IMMOBILE))
 		{
-//DEBUG_LOG(("%d: re-dirtying collision of %s %08lx with %s %08lx [other]",TheGameLogic->getFrame(),other->getTemplate()->getName().str(),other,obj->getTemplate()->getName().str(),obj));
+//engine::debug::log_info("%d: re-dirtying collision of %s %08lx with %s %08lx [other]",TheGameLogic->getFrame(),other->getTemplate()->getName().str(),other,obj->getTemplate()->getName().str(),obj);
 			other->friend_getPartitionData()->makeDirty(false);
 		}
 	});
@@ -2616,7 +2607,7 @@ PartitionManager::~PartitionManager()
 #ifdef PM_CACHE_TERRAIN_HEIGHT
 static void calcHeights(const Region3D& world, Real cellSize, Int x, Int y, Real& loZ, Real& hiZ)
 {
-	DEBUG_ASSERTCRASH(TheTerrainLogic, ("no TheTerrainLogic"));
+	engine::debug::invariant((TheTerrainLogic), "TheTerrainLogic", __FILE__, __LINE__, "no TheTerrainLogic");
 	Real xbase = world.lo.x + (x * cellSize);
 	Real ybase = world.lo.y + (y * cellSize);
 	const Real ROUGH_STEP_SIZE = MAP_XY_FACTOR;	// no point in stepping smaller than grid scale
@@ -2645,12 +2636,12 @@ void PartitionManager::init()
 
 	m_cellSizeInv = (Real)(1.0 / m_cellSize);
 
-	DEBUG_ASSERTCRASH(m_cells == nullptr, ("double init"));
+	engine::debug::invariant((m_cells == nullptr), "m_cells == nullptr", __FILE__, __LINE__, "double init");
 
 	if (TheTerrainLogic)
 	{
 		TheTerrainLogic->getExtent(&m_worldExtents);
-		//DEBUG_ASSERTLOG(m_worldExtents.width() > 0 && m_worldExtents.height() > 0, ("TheTerrainLogic must be loaded before ThePartitionManager"));
+		//if (!(m_worldExtents.width() > 0 && m_worldExtents.height() > 0)) engine::debug::log_error("TheTerrainLogic must be loaded before ThePartitionManager");
 		// you'd think it wouldn't be legal for terrainlogic to have zero area, but apparently
 		// that's what it resets itself to. let's just make the world a simple place and pretend
 		// it's nonzero in area, so that we can proceed without crashing.
@@ -2694,29 +2685,10 @@ void PartitionManager::init()
 }
 
 //-----------------------------------------------------------------------------
-#ifdef DUMP_PERF_STATS
-void PartitionManager::getPMStats(double& gcoTimeThisFrameTotal, double& gcoTimeThisFrameAvg)
-{
-	Int64 freq64;
-	GetPrecisionTimerTicksPerSec(&freq64);
-
-	double gcoTimeInMSecs = (double)s_timeInClosestObjectsThisFrame * 1000.0f / (double)freq64;
-
-	gcoTimeThisFrameTotal = gcoTimeInMSecs;
-	gcoTimeThisFrameAvg = gcoTimeInMSecs / (double)s_countInClosestObjectsThisFrame;
-}
-#endif
 
 //-----------------------------------------------------------------------------
 void PartitionManager::reset()
 {
-#ifdef DUMP_PERF_STATS
-	s_countInClosestObjects = 0;
-	s_timeInClosestObjects = 0;
-	s_countInClosestObjectsThisFrame = 0;
-	s_timeInClosestObjectsThisFrame = 0;
-	s_gcoPerfFrame = 0xffffffff;
-#endif
 
 	resetPendingUndoShroudRevealQueue();
 
@@ -2732,12 +2704,12 @@ void PartitionManager::shutdown()
 
 #ifdef RTS_DEBUG
 	// the above *should* remove all the touched cells (via unRegisterObject), but let's check:
-	DEBUG_ASSERTCRASH( m_moduleList == nullptr, ("hmm, modules left over"));
+	engine::debug::invariant((m_moduleList == nullptr), "m_moduleList == nullptr", __FILE__, __LINE__, "hmm, modules left over");
 	PartitionData *mod, *nextMod;
 	for( mod = m_moduleList; mod; mod = nextMod )
 	{
 		nextMod = mod->getNext();
-		DEBUG_ASSERTCRASH(mod->friend_getCoiInUseCount() == 0, ("hmm, coi count mismatch"));
+		engine::debug::invariant((mod->friend_getCoiInUseCount() == 0), "mod->friend_getCoiInUseCount() == 0", __FILE__, __LINE__, "hmm, coi count mismatch");
 		mod->friend_removeAllTouchedCells();
 	}
 #endif
@@ -2761,10 +2733,9 @@ void PartitionManager::shutdown()
 }
 
 //-----------------------------------------------------------------------------
-//DECLARE_PERF_TIMER(PartitionManager_update)
 void PartitionManager::update()
 {
-	//USE_PERF_TIMER(PartitionManager_update)
+	//engine::profiling::Scope profile_scope_2762("PartitionManager_update")
 	{
 #ifdef INTENSE_DEBUG
 		Int cc = 0;
@@ -2787,8 +2758,7 @@ void PartitionManager::update()
 
 			// save it.
 			PartitionData *dirty = m_dirtyModules;
-			DEBUG_ASSERTCRASH(dirty->getObject() != nullptr || dirty->getGhostObject() != nullptr,
-												("must be attached to an Object here %08lx",dirty));
+			engine::debug::invariant((dirty->getObject() != nullptr || dirty->getGhostObject() != nullptr), "dirty->getObject() != nullptr || dirty->getGhostObject() != nullptr", __FILE__, __LINE__, "must be attached to an Object here %08lx",dirty);
 
 			// get this BEFORE removing from dirty list, since that clears the
 			// flag in question.
@@ -2810,7 +2780,7 @@ void PartitionManager::update()
 		}
 		ctList.processContactList();
 #ifdef INTENSE_DEBUG
-		DEBUG_ASSERTLOG(cc==0,("updated partition info for %d objects",cc));
+		if (!(cc==0)) engine::debug::log_error("updated partition info for %d objects",cc);
 #endif
 		TheContactList = nullptr;
 
@@ -2890,8 +2860,8 @@ void PartitionManager::registerObject( Object* object )
 	// if object is already part of this system get out of here
 	if( object->friend_getPartitionData() != nullptr )
 	{
-		DEBUG_LOG(( "Object '%s' already registered with partition manager",
-								object->getTemplate()->getName().str() ));
+		engine::debug::log_info( "Object '%s' already registered with partition manager",
+								object->getTemplate()->getName().str() );
 		return;
 	}
 
@@ -2965,7 +2935,7 @@ void PartitionManager::registerGhostObject( GhostObject* object)
 	// if object is already part of this system get out of here
 	if( object->friend_getPartitionData() != nullptr )
 	{
-		DEBUG_LOG(( "GhostObject already registered with partition manager"));
+		engine::debug::log_info( "GhostObject already registered with partition manager");
 		return;
 	}
 
@@ -3237,7 +3207,7 @@ void PartitionManager::calcRadiusVec()
 				contain objects that are <= (curRadius * cellSize) distance away from cell (0,0).
 			*/
 			Int curRadius = calcMinRadius(cur);
-			DEBUG_ASSERTCRASH(curRadius <= m_maxGcoRadius, ("expected max of %d but got %d",m_maxGcoRadius,curRadius));
+			engine::debug::invariant((curRadius <= m_maxGcoRadius), "curRadius <= m_maxGcoRadius", __FILE__, __LINE__, "expected max of %d but got %d",m_maxGcoRadius,curRadius);
 			if (curRadius <= m_maxGcoRadius)
 				++m_radiusVec[curRadius].end;
 		}
@@ -3272,16 +3242,15 @@ void PartitionManager::calcRadiusVec()
 	for (Int i = 0; i <= m_maxGcoRadius; ++i)
 	{
 		total += m_radiusVec[i].end - m_radiusVec[i].begin;
-		//DEBUG_LOG(("radius %d has %d entries",i,m_radiusVec[i].size()));
+		//engine::debug::log_info("radius %d has %d entries",i,m_radiusVec[i].size());
 	}
-	DEBUG_ASSERTCRASH(total == (cx*2-1)*(cy*2-1),("expected %d, got %d",(cx*2-1)*(cy*2-1),total));
+	engine::debug::invariant((total == (cx*2-1)*(cy*2-1)), "total == (cx*2-1)*(cy*2-1)", __FILE__, __LINE__, "expected %d, got %d",(cx*2-1)*(cy*2-1),total);
 #endif
 
 }
 #endif
 
 //-----------------------------------------------------------------------------
-//DECLARE_PERF_TIMER(getClosestObjects)
 UnsignedInt PartitionManager::nextQueryEpoch()
 {
     static navigation::spatial::VisitEpoch epochs;
@@ -3301,29 +3270,16 @@ Object *PartitionManager::getClosestObjects(
 	Coord3D *closestVecArg
 )
 {
-	//USE_PERF_TIMER(getClosestObjects)
+	//engine::profiling::Scope profile_scope_3297("getClosestObjects")
 
-#ifdef DUMP_PERF_STATS
-	if (TheGameLogic->getFrame() != s_gcoPerfFrame)
-	{
-		s_gcoPerfFrame = TheGameLogic->getFrame();
-		s_countInClosestObjectsThisFrame = 0;
-		s_timeInClosestObjectsThisFrame = 0;
-	}
-	++s_countInClosestObjects;
-	++s_countInClosestObjectsThisFrame;
-
-	Int64 startTime64;
-	GetPrecisionTimer(&startTime64);
-#endif
 
 #ifdef RTS_DEBUG
 	static Int theEntrancyCount = 0;
-	DEBUG_ASSERTCRASH(theEntrancyCount == 0, ("sorry, this routine is not reentrant"));
+	engine::debug::invariant((theEntrancyCount == 0), "theEntrancyCount == 0", __FILE__, __LINE__, "sorry, this routine is not reentrant");
 	++theEntrancyCount;
 #endif
 
-	DEBUG_ASSERTCRASH((obj==nullptr) != (pos == nullptr), ("either obj or pos must be null"));
+	engine::debug::invariant(((obj==nullptr) != (pos == nullptr)), "(obj==nullptr) != (pos == nullptr)", __FILE__, __LINE__, "either obj or pos must be null");
 
 	DistCalcProc distProc = theDistCalcProcs[dc];
 
@@ -3538,13 +3494,6 @@ Object *PartitionManager::getClosestObjects(
 
 #ifdef RTS_DEBUG
 	--theEntrancyCount;
-#endif
-#ifdef DUMP_PERF_STATS
-	Int64 endTime64;
-	GetPrecisionTimer(&endTime64);
-	Int64 delta = (endTime64 - startTime64);
-	s_timeInClosestObjects += delta;
-	s_timeInClosestObjectsThisFrame += delta;
 #endif
 
 	return closestObj;	// might be null...
@@ -4007,9 +3956,7 @@ Bool PartitionManager::findPositionAround( const Coord3D *center,
 		return true;
 	}
 	// sanity, FPF_IGNORE_WATER and FPF_WATER_ONLY are mutually exclusive
-	DEBUG_ASSERTCRASH( !(BitIsSet( options->flags, FPF_IGNORE_WATER ) == TRUE &&
-										   BitIsSet( options->flags, FPF_WATER_ONLY ) == TRUE),
-										 ("PartitionManager::findPositionAround - The options FPF_WATER_ONLY and FPF_IGNORE_WATER are mutually exclusive.  You cannot use them together") );
+	engine::debug::invariant((!(BitIsSet(options->flags, FPF_IGNORE_WATER) && BitIsSet(options->flags, FPF_WATER_ONLY))), "mutually exclusive water flags", __FILE__, __LINE__, "PartitionManager::findPositionAround - The water flags are mutually exclusive.");
 
 	// pick a random angle from the center location to start at
 	Real startAngle;
@@ -4355,7 +4302,7 @@ void PartitionManager::undoValueAffect( Real centerX, Real centerY, Real radius,
 //-----------------------------------------------------------------------------
 void PartitionManager::getCellCenterPos(Int x, Int y, Real& xx, Real& yy)
 {
-	DEBUG_ASSERTCRASH(x >= 0 && y >= 0, ("hmm, invalid cell"));
+	engine::debug::invariant((x >= 0 && y >= 0), "x >= 0 && y >= 0", __FILE__, __LINE__, "hmm, invalid cell");
 	Real half = m_cellSize*0.5f;
 	xx = m_worldExtents.lo.x + (x * m_cellSize) + half;
 	yy = m_worldExtents.lo.y + (y * m_cellSize) + half;
@@ -4492,7 +4439,7 @@ Int PartitionManager::iterateCellsAlongLine(const Coord3D& pos, const Coord3D& p
 	for (Int curpixel = 0; curpixel <= numpixels; curpixel++)
 	{
 		PartitionCell* cell = getCellAt(x, y);	// might be null if off the edge
-		DEBUG_ASSERTCRASH(cell != nullptr, ("off the map"));
+		engine::debug::invariant((cell != nullptr), "cell != nullptr", __FILE__, __LINE__, "off the map");
 		if (cell)
 		{
 			Int ret = (*proc)(cell, userData);
@@ -4640,7 +4587,7 @@ Bool PartitionManager::isClearLineOfSightTerrain(const Object* obj, const Coord3
 	Real maxZ;
 	Coord2D maxZPos;
 	Bool valid = estimateTerrainExtremesAlongLine(pos, posOther, nullptr, &maxZ, nullptr, &maxZPos);
-	DEBUG_ASSERTCRASH(valid, ("this should never happen unless both positions are off-map"));
+	engine::debug::invariant((valid), "valid", __FILE__, __LINE__, "this should never happen unless both positions are off-map");
 	if (!valid)
 		return true;
 
@@ -4661,7 +4608,7 @@ Bool PartitionManager::isClearLineOfSightTerrain(const Object* obj, const Coord3
 	const Real LOS_FUDGE = 0.5f;
 	if (terrainAtHighPoint > lineOfSightAtHighPoint + LOS_FUDGE)
 	{
-		//DEBUG_LOG(("isClearLineOfSightTerrain fails"));
+		//engine::debug::log_info("isClearLineOfSightTerrain fails");
 		return false;
 	}
 
@@ -4712,7 +4659,7 @@ void PartitionManager::xfer( Xfer *xfer )
 	if( cellSize != m_cellSize )
 	{
 
-		DEBUG_CRASH(( "Partition cell size has changed, this save game file is invalid" ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Partition cell size has changed, this save game file is invalid" );
 		throw SC_INVALID_DATA;
 
 	}
@@ -4725,8 +4672,8 @@ void PartitionManager::xfer( Xfer *xfer )
 	if( totalCellCount != m_totalCellCount )
 	{
 
-		DEBUG_CRASH(( "Partition total cell count mismatch %d, should be %d",
-									totalCellCount, m_totalCellCount ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Partition total cell count mismatch %d, should be %d",
+									totalCellCount, m_totalCellCount );
 		throw SC_INVALID_DATA;
 
 	}
@@ -4768,7 +4715,7 @@ void PartitionManager::xfer( Xfer *xfer )
 			// have to remove this assert, because during load there is a setTeam call for each guy on a sub-team, and that results
 			// in a queued unlook, so we actually have stuff in here at the start.  I am fairly certain that setTeam should wait
 			// until loadPostProcess, but I ain't gonna change it now.
-//			DEBUG_ASSERTCRASH(m_pendingUndoShroudReveals.empty(), ("At load, we appear to not be in a reset state.") );
+//			engine::debug::invariant((m_pendingUndoShroudReveals.empty()), "m_pendingUndoShroudReveals.empty()", __FILE__, __LINE__, "At load, we appear to not be in a reset state.");
 
 			// I have to split this up though, since on Load I need to make new instances.
 			for( Int infoIndex = 0; infoIndex < queueSize; infoIndex++ )
@@ -4885,7 +4832,7 @@ void PartitionManager::getMostValuableLocation( Int playerIndex, UnsignedInt whi
 	}
 
 	if (greatestValueCell == -1 || maxCellValue == -1) {
-		DEBUG_CRASH(("PartitionManager::getMostValuableLocation: jkmcd"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "PartitionManager::getMostValuableLocation: jkmcd");
 		return;
 	}
 
@@ -4957,7 +4904,7 @@ void PartitionManager::storeFoggedCells(ShroudStatusStoreRestore &outPartitionSt
 
 	for (p = 0; p < MAX_PLAYER_COUNT; ++p) {
 		if (outPartitionStore.m_foggedOrRevealed[p].size() != m_totalCellCount) {
-			DEBUG_CRASH(("PartitionManager::storeFoggedCells: jkmcd - x36872"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "PartitionManager::storeFoggedCells: jkmcd - x36872");
 			continue;
 		}
 
@@ -5473,7 +5420,7 @@ Bool PartitionFilterPossibleToAttack::allow(Object *objOther)
 	// objOther is guaranteed to be non-null, so we don't need to check (srj)
 
 	// we should have already filtered out isAbleToAttack!
-	DEBUG_ASSERTCRASH(m_obj->isAbleToAttack(), ("if the object is unable to attack at all, you should filter that out ahead of time!"));
+	engine::debug::invariant((m_obj->isAbleToAttack()), "m_obj->isAbleToAttack()", __FILE__, __LINE__, "if the object is unable to attack at all, you should filter that out ahead of time!");
 
 	CanAttackResult result = m_obj->getAbleToAttackSpecificObject( m_attackType, objOther, m_commandSource );
 	if( result == ATTACKRESULT_POSSIBLE || result == ATTACKRESULT_POSSIBLE_AFTER_MOVING )
@@ -5953,4 +5900,3 @@ SightingInfo::~SightingInfo()
 {
 
 }
-

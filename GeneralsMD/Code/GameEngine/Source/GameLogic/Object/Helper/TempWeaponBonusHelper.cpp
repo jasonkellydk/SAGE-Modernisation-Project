@@ -29,6 +29,7 @@
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 #include "PreRTS.h"
+import engine.debug;
 #include "Common/Xfer.h"
 
 #include "GameLogic/Module/TempWeaponBonusHelper.h"
@@ -59,7 +60,7 @@ TempWeaponBonusHelper::~TempWeaponBonusHelper()
 // ------------------------------------------------------------------------------------------------
 UpdateSleepTime TempWeaponBonusHelper::update()
 {
-	DEBUG_ASSERTCRASH(m_frameToRemove <= TheGameLogic->getFrame(), ("TempWeaponBonusHelper woke up too soon.") );
+	engine::debug::invariant((m_frameToRemove <= TheGameLogic->getFrame()), "m_frameToRemove <= TheGameLogic->getFrame()", __FILE__, __LINE__, "TempWeaponBonusHelper woke up too soon.");
 
 	clearTempWeaponBonus(); // We are sleep driven, so seeing an update means our timer is ready implicitly
 	return UPDATE_SLEEP_FOREVER;

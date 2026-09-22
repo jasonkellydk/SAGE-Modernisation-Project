@@ -28,7 +28,9 @@ import Graphics.Frame.RenderClock;
 // Author: Michael S. Booth, March 2001
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.profiling;
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/AudioEventInfo.h"
 #include "Common/DynamicAudioEventInfo.h"
@@ -44,7 +46,7 @@ import Graphics.Frame.RenderClock;
 #include "Common/GameUtility.h"
 #include "Common/GlobalData.h"
 #include "Common/ModuleFactory.h"
-#include "Common/PerfTimer.h"
+
 #include "Common/Player.h"
 #include "Common/PlayerList.h"
 #include "Common/ThingFactory.h"
@@ -210,8 +212,7 @@ DrawableLocoInfo::~DrawableLocoInfo()
 static const char *drawableIconIndexToName( DrawableIconType iconIndex )
 {
 
-	DEBUG_ASSERTCRASH( iconIndex >= ICON_FIRST && iconIndex < MAX_ICONS,
-										 ("drawableIconIndexToName - Illegal index '%d'", iconIndex) );
+	engine::debug::invariant((iconIndex >= ICON_FIRST && iconIndex < MAX_ICONS), "iconIndex >= ICON_FIRST && iconIndex < MAX_ICONS", __FILE__, __LINE__, "drawableIconIndexToName - Illegal index '%d'", iconIndex);
 
 	return TheDrawableIconNames[ iconIndex ];
 
@@ -222,7 +223,7 @@ static const char *drawableIconIndexToName( DrawableIconType iconIndex )
 static DrawableIconType drawableIconNameToIndex( const char *iconName )
 {
 
-	DEBUG_ASSERTCRASH( iconName != nullptr, ("drawableIconNameToIndex - Illegal name") );
+	engine::debug::invariant((iconName != nullptr), "iconName != nullptr", __FILE__, __LINE__, "drawableIconNameToIndex - Illegal name");
 
 	for( Int i = ICON_FIRST; i < MAX_ICONS; ++i )
 		if( stricmp( TheDrawableIconNames[ i ], iconName ) == 0 )
@@ -1127,10 +1128,8 @@ void Drawable::imitateStealthLook( Drawable& otherDraw )
 //-------------------------------------------------------------------------------------------------
 /** update is called once per frame */
 //-------------------------------------------------------------------------------------------------
-//DECLARE_PERF_TIMER(updateDrawable)
 void Drawable::updateDrawable()
 {
-	//USE_PERF_TIMER(updateDrawable)
 
 	UnsignedInt now = TheGameLogic->getFrame();
 	Object *obj = getObject();
@@ -1195,7 +1194,7 @@ void Drawable::updateDrawable()
 
 		if (m_expirationDate != 0 && now >= m_expirationDate)
 		{
-			DEBUG_ASSERTCRASH(obj == nullptr, ("Drawables with Objects should not have expiration dates!"));
+			engine::debug::invariant((obj == nullptr), "obj == nullptr", __FILE__, __LINE__, "Drawables with Objects should not have expiration dates!");
 			TheGameClient->destroyDrawable(this);
 			return;
 		}
@@ -2484,14 +2483,14 @@ void Drawable::validatePos() const
 	const Coord3D* ourPos = getPosition();
 	if (_isnan(ourPos->x) || _isnan(ourPos->y) || _isnan(ourPos->z))
 	{
-		DEBUG_CRASH(("Drawable/Object position NAN! '%s'", getTemplate()->getName().str()));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Drawable/Object position NAN! '%s'", getTemplate()->getName().str());
 	}
 	if (getObject())
 	{
 		const Coord3D* objPos = getObject()->getPosition();
 		if (ourPos->x != objPos->x || ourPos->y != objPos->y || ourPos->z != objPos->z)
 		{
-			DEBUG_CRASH(("Drawable/Object position mismatch! '%s'", getTemplate()->getName().str()));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Drawable/Object position mismatch! '%s'", getTemplate()->getName().str());
 		}
 	}
 }
@@ -2798,7 +2797,7 @@ void Drawable::setEmoticon( const AsciiString &name, Int duration )
 	Anim2DTemplate *animTemplate = TheAnim2DCollection->findTemplate( name );
 	if( animTemplate )
 	{
-		DEBUG_ASSERTCRASH( getIconInfo()->m_icon[ ICON_EMOTICON ] == nullptr, ("Drawable::setEmoticon - Emoticon isn't empty, need to refuse to set or destroy the old one in favor of the new one") );
+		engine::debug::invariant((getIconInfo()->m_icon[ ICON_EMOTICON ] == nullptr), "getIconInfo()->m_icon[ ICON_EMOTICON ] == nullptr", __FILE__, __LINE__, "Drawable::setEmoticon - Emoticon isn't empty, need to refuse to set or destroy the old one in favor of the new one");
 		if( getIconInfo()->m_icon[ ICON_EMOTICON ] == nullptr )
 		{
 			getIconInfo()->m_icon[ ICON_EMOTICON ] = newInstance(Anim2D)( animTemplate, TheAnim2DCollection );
@@ -3900,7 +3899,7 @@ void Drawable::clearAndSetModelConditionState( ModelConditionFlagType clr, Model
 DrawModule** Drawable::getDrawModulesNonDirty()
 {
 	DrawModule** dm = (DrawModule**)getModuleList(MODULETYPE_DRAW);
-	DEBUG_ASSERTCRASH(dm != nullptr, ("Draw Module List is not expected null"));
+	engine::debug::invariant((dm != nullptr), "dm != nullptr", __FILE__, __LINE__, "Draw Module List is not expected null");
 	return dm;
 }
 
@@ -3914,7 +3913,7 @@ DrawModule** Drawable::getDrawModules()
 	{
 		if (s_modelLockCount > 0)
 		{
-			DEBUG_CRASH(("Should not need to update dirty stuff while locked-for-iteration. Ignoring."));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Should not need to update dirty stuff while locked-for-iteration. Ignoring.");
 			// this shouldn't happen, but if it does, just return the current (dirty) scenario.
 			// we must NOT update the condition state, as someone is relying on the current
 			// list of W3D render objects not being munged. (srj)
@@ -3926,7 +3925,7 @@ DrawModule** Drawable::getDrawModules()
 	}
 #endif
 
-	DEBUG_ASSERTCRASH(dm != nullptr, ("Draw Module List is not expected null"));
+	engine::debug::invariant((dm != nullptr), "dm != nullptr", __FILE__, __LINE__, "Draw Module List is not expected null");
 	return dm;
 }
 
@@ -3940,7 +3939,7 @@ DrawModule const** Drawable::getDrawModules() const
 	{
 		if (s_modelLockCount > 0)
 		{
-			DEBUG_CRASH(("Should not need to update dirty stuff while locked-for-iteration. Ignoring."));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Should not need to update dirty stuff while locked-for-iteration. Ignoring.");
 			// this shouldn't happen, but if it does, just return the current (dirty) scenario.
 			// we must NOT update the condition state, as someone is relying on the current
 			// list of W3D render objects not being munged. (srj)
@@ -3952,7 +3951,7 @@ DrawModule const** Drawable::getDrawModules() const
 	}
 #endif
 
-	DEBUG_ASSERTCRASH(dm != nullptr, ("Draw Module List is not expected null"));
+	engine::debug::invariant((dm != nullptr), "dm != nullptr", __FILE__, __LINE__, "Draw Module List is not expected null");
 	return dm;
 }
 
@@ -4076,7 +4075,7 @@ DrawableID Drawable::getID() const
 {
 
 	// we should never be getting the ID of a drawable who doesn't yet have and ID assigned to it
-	DEBUG_ASSERTCRASH( m_id != 0, ("Drawable::getID - Using ID before it was assigned!!!!") );
+	engine::debug::invariant((m_id != 0), "m_id != 0", __FILE__, __LINE__, "Drawable::getID - Using ID before it was assigned!!!!");
 
 	return m_id;
 
@@ -4111,7 +4110,7 @@ void Drawable::friend_bindToObject( Object *obj ) ///< bind this drawable to an 
 	PhysicsXformInfo physicsXform;
 	if (calcPhysicsXform(physicsXform))
 	{
-		DEBUG_ASSERTCRASH(m_physicsXform == nullptr, ("m_physicsXform is not null"));
+		engine::debug::invariant((m_physicsXform == nullptr), "m_physicsXform == nullptr", __FILE__, __LINE__, "m_physicsXform is not null");
 		m_physicsXform = new PhysicsXformInfo;
 		*m_physicsXform = physicsXform;
 	}
@@ -4355,7 +4354,7 @@ void Drawable::setCustomSoundAmbientInfo( DynamicAudioEventInfo * customAmbientI
 
   // This is mostly to make sure no one delete's the no sound marker, causing it to be
   // recycled as a new no sound marker
-  DEBUG_ASSERTCRASH( customAmbientInfo != getNoSoundMarker(), ("No sound marker passed as custom ambient") );
+  engine::debug::invariant((customAmbientInfo != getNoSoundMarker()), "customAmbientInfo != getNoSoundMarker()", __FILE__, __LINE__, "No sound marker passed as custom ambient");
 
   // Set name to something different so we don't get confused
 
@@ -4471,7 +4470,7 @@ void Drawable::startAmbientSound(BodyDamageType dt, TimeOfDay tod, Bool onlyIfPe
 		}
 		else
 		{
-			DEBUG_CRASH( ("Ambient sound %s missing! Skipping...", m_ambientSound->getEventName().str() ) );
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Ambient sound %s missing! Skipping...", m_ambientSound->getEventName().str() );
 			m_ambientSound.Clear();
 		}
 	}
@@ -4773,8 +4772,7 @@ void Drawable::xferDrawableModules( Xfer *xfer )
 
 				// write module identifier
 				moduleIdentifier = TheNameKeyGenerator->keyToName( (*m)->getModuleTagNameKey() );
-				DEBUG_ASSERTCRASH( moduleIdentifier != AsciiString::TheEmptyString,
-													 ("Drawable::xferDrawableModules - module name key does not translate to a string!") );
+				engine::debug::invariant((moduleIdentifier != AsciiString::TheEmptyString), "moduleIdentifier != AsciiString::TheEmptyString", __FILE__, __LINE__, "Drawable::xferDrawableModules - module name key does not translate to a string!");
 				xfer->xferAsciiString( &moduleIdentifier );
 
 				// begin data block
@@ -4825,8 +4823,8 @@ void Drawable::xferDrawableModules( Xfer *xfer )
 				{
 
 					// for testing purposes, this module better be found
-					DEBUG_CRASH(( "Drawable::xferDrawableModules - Module '%s' was indicated in file, but not found on Drawable %s %d",
-												moduleIdentifier.str(), getTemplate()->getName().str(),getID() ));
+					engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Drawable::xferDrawableModules - Module '%s' was indicated in file, but not found on Drawable %s %d",
+												moduleIdentifier.str(), getTemplate()->getName().str(),getID() );
 
 					// skip this data in the file
 					xfer->skip( dataSize );
@@ -4991,8 +4989,8 @@ void Drawable::xfer( Xfer *xfer )
 			if( objectID != m_object->getID() )
 			{
 
-				DEBUG_CRASH(( "Drawable::xfer - Drawable '%s' is attached to wrong object '%s'",
-											getTemplate()->getName().str(), m_object->getTemplate()->getName().str() ));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Drawable::xfer - Drawable '%s' is attached to wrong object '%s'",
+											getTemplate()->getName().str(), m_object->getTemplate()->getName().str() );
 				throw SC_INVALID_DATA;
 
 			}
@@ -5007,10 +5005,10 @@ void Drawable::xfer( Xfer *xfer )
 #ifdef DEBUG_CRASHING
 				Object *obj = TheGameLogic->findObjectByID( objectID );
 
-				DEBUG_CRASH(( "Drawable::xfer - Drawable '%s' is not attached to an object but should be attached to object '%s' with id '%d'",
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Drawable::xfer - Drawable '%s' is not attached to an object but should be attached to object '%s' with id '%d'",
 											getTemplate()->getName().str(),
 											obj ? obj->getTemplate()->getName().str() : "Unknown",
-											objectID ));
+											objectID );
 #endif
 				throw SC_INVALID_DATA;
 
@@ -5147,8 +5145,7 @@ void Drawable::xfer( Xfer *xfer )
 	{
 
 		// sanity, we don't write old versions we can only read them
-		DEBUG_ASSERTCRASH( xfer->getXferMode() == XFER_LOAD,
-											 ("Drawable::xfer - Writing an old format!!!") );
+		engine::debug::invariant((xfer->getXferMode() == XFER_LOAD), "xfer->getXferMode() == XFER_LOAD", __FILE__, __LINE__, "Drawable::xfer - Writing an old format!!!");
 
 		// condition state, note that when we're loading we need to force a replace of these flags
 		m_conditionState.xfer( xfer );
@@ -5230,7 +5227,7 @@ void Drawable::xfer( Xfer *xfer )
 			if( animTemplate == nullptr )
 			{
 
-				DEBUG_CRASH(( "Drawable::xfer - Unknown icon template '%s'", iconTemplateName.str() ));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Drawable::xfer - Unknown icon template '%s'", iconTemplateName.str() );
 				throw SC_INVALID_DATA;
 
 			}
@@ -5264,7 +5261,7 @@ void Drawable::xfer( Xfer *xfer )
 	//
 #ifdef DIRTY_CONDITION_FLAGS
 	if( xfer->getXferMode() == XFER_SAVE )
-		DEBUG_ASSERTCRASH( m_isModelDirty == FALSE, ("Drawable::xfer - m_isModelDirty is not FALSE!") );
+		engine::debug::invariant((m_isModelDirty == FALSE), "m_isModelDirty == FALSE", __FILE__, __LINE__, "Drawable::xfer - m_isModelDirty is not FALSE!");
 	else
 		m_isModelDirty = TRUE;
 #endif
@@ -5312,7 +5309,7 @@ void Drawable::xfer( Xfer *xfer )
 
           if ( baseInfo == nullptr )
           {
-            DEBUG_CRASH( ( "Load failed to load customized ambient sound because sound '%s' no longer exists", baseInfoName.str() ) );
+            engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Load failed to load customized ambient sound because sound '%s' no longer exists", baseInfoName.str() );
 
             // Keep trying to load if we possibly can... Don't completely ruin save files just because an old sound
             // entry in the INI files was removed or renamed
@@ -5638,4 +5635,3 @@ void TintEnvelope::loadPostProcess()
 {
 
 }
-

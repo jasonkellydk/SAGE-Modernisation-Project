@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // USER INCLUDES //////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 #include "Common/XferSave.h"
 #include "Common/Snapshot.h"
 #include "Common/GameMemory.h"
@@ -70,7 +71,7 @@ XferSave::~XferSave()
 	if( m_fileFP != nullptr )
 	{
 
-		DEBUG_CRASH(( "Warning: Xfer file '%s' was left open", m_identifier.str() ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Warning: Xfer file '%s' was left open", m_identifier.str() );
 		close();
 
 	}
@@ -83,7 +84,7 @@ XferSave::~XferSave()
 	{
 
 		// tell the user there is an error
-		DEBUG_CRASH(( "Warning: XferSave::~XferSave - m_blockStack was not null!" ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Warning: XferSave::~XferSave - m_blockStack was not null!" );
 
 		// delete the block stack
 		XferBlockData *next;
@@ -110,8 +111,8 @@ void XferSave::open( AsciiString identifier )
 	if( m_fileFP != nullptr )
 	{
 
-		DEBUG_CRASH(( "Cannot open file '%s' cause we've already got '%s' open",
-									identifier.str(), m_identifier.str() ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Cannot open file '%s' cause we've already got '%s' open",
+									identifier.str(), m_identifier.str() );
 		throw XFER_FILE_ALREADY_OPEN;
 
 	}
@@ -124,7 +125,7 @@ void XferSave::open( AsciiString identifier )
 	if( m_fileFP == nullptr )
 	{
 
-		DEBUG_CRASH(( "File '%s' not found", identifier.str() ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "File '%s' not found", identifier.str() );
 		throw XFER_FILE_NOT_FOUND;
 
 	}
@@ -141,7 +142,7 @@ void XferSave::close()
 	if( m_fileFP == nullptr )
 	{
 
-		DEBUG_CRASH(( "Xfer close called, but no file was open" ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Xfer close called, but no file was open" );
 		throw XFER_FILE_NOT_OPEN;
 
 	}
@@ -166,8 +167,8 @@ Int XferSave::beginBlock()
 {
 
 	// sanity
-	DEBUG_ASSERTCRASH( m_fileFP != nullptr, ("Xfer begin block - file pointer for '%s' is null",
-										 m_identifier.str()) );
+	engine::debug::invariant((m_fileFP != nullptr), "m_fileFP != nullptr", __FILE__, __LINE__, "Xfer begin block - file pointer for '%s' is null",
+										 m_identifier.str());
 
 	// get the current file position so we can back up here for the next end block call
 	XferFilePos filePos = ftell( m_fileFP );
@@ -177,8 +178,8 @@ Int XferSave::beginBlock()
 	if( fwrite( &blockSize, sizeof( XferBlockSize ), 1, m_fileFP ) != 1 )
 	{
 
-		DEBUG_CRASH(( "XferSave::beginBlock - Error writing block size in '%s'",
-									m_identifier.str() ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "XferSave::beginBlock - Error writing block size in '%s'",
+									m_identifier.str() );
 		return XFER_WRITE_ERROR;
 
 	}
@@ -189,7 +190,7 @@ Int XferSave::beginBlock()
 //	if( top == nullptr )
 //	{
 //
-//		DEBUG_CRASH(( "XferSave - Begin block, out of memory - can't save block stack data" ));
+//		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "XferSave - Begin block, out of memory - can't save block stack data" );
 //		return XFER_OUT_OF_MEMORY;
 //
 //	}  // end if
@@ -211,14 +212,14 @@ void XferSave::endBlock()
 {
 
 	// sanity
-	DEBUG_ASSERTCRASH( m_fileFP != nullptr, ("Xfer end block - file pointer for '%s' is null",
-										 m_identifier.str()) );
+	engine::debug::invariant((m_fileFP != nullptr), "m_fileFP != nullptr", __FILE__, __LINE__, "Xfer end block - file pointer for '%s' is null",
+										 m_identifier.str());
 
 	// sanity, make sure we have a block started
 	if( m_blockStack == nullptr )
 	{
 
-		DEBUG_CRASH(( "Xfer end block called, but no matching begin block was found" ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Xfer end block called, but no matching begin block was found" );
 		throw XFER_BEGIN_END_MISMATCH;
 
 	}
@@ -238,7 +239,7 @@ void XferSave::endBlock()
 	if( fwrite( &blockSize, sizeof( XferBlockSize ), 1, m_fileFP ) != 1 )
 	{
 
-		DEBUG_CRASH(( "Error writing block size to file '%s'", m_identifier.str() ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Error writing block size to file '%s'", m_identifier.str() );
 		throw XFER_WRITE_ERROR;
 
 	}
@@ -258,8 +259,8 @@ void XferSave::skip( Int dataSize )
 {
 
 	// sanity
-	DEBUG_ASSERTCRASH( m_fileFP != nullptr, ("XferSave - file pointer for '%s' is null",
-										 m_identifier.str()) );
+	engine::debug::invariant((m_fileFP != nullptr), "m_fileFP != nullptr", __FILE__, __LINE__, "XferSave - file pointer for '%s' is null",
+										 m_identifier.str());
 
 
 	// skip forward dataSize bytes
@@ -276,7 +277,7 @@ void XferSave::xferSnapshot( Snapshot *snapshot )
 	if( snapshot == nullptr )
 	{
 
-		DEBUG_CRASH(( "XferSave::xferSnapshot - Invalid parameters" ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "XferSave::xferSnapshot - Invalid parameters" );
 		throw XFER_INVALID_PARAMETERS;
 
 	}
@@ -296,7 +297,7 @@ void XferSave::xferAsciiString( AsciiString *asciiStringData )
 	if( asciiStringData->getLength() > 255 )
 	{
 
-		DEBUG_CRASH(( "XferSave cannot save this unicode string because it's too long.  Change the size of the length header (but be sure to preserve save file compatability" ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "XferSave cannot save this unicode string because it's too long.  Change the size of the length header (but be sure to preserve save file compatability" );
 		throw XFER_STRING_ERROR;
 
 	}
@@ -321,7 +322,7 @@ void XferSave::xferUnicodeString( UnicodeString *unicodeStringData )
 	if( unicodeStringData->getLength() > 255 )
 	{
 
-		DEBUG_CRASH(( "XferSave cannot save this unicode string because it's too long.  Change the size of the length header (but be sure to preserve save file compatability" ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "XferSave cannot save this unicode string because it's too long.  Change the size of the length header (but be sure to preserve save file compatability" );
 		throw XFER_STRING_ERROR;
 
 	}
@@ -343,14 +344,14 @@ void XferSave::xferImplementation( void *data, Int dataSize )
 {
 
 	// sanity
-	DEBUG_ASSERTCRASH( m_fileFP != nullptr, ("XferSave - file pointer for '%s' is null",
-										 m_identifier.str()) );
+	engine::debug::invariant((m_fileFP != nullptr), "m_fileFP != nullptr", __FILE__, __LINE__, "XferSave - file pointer for '%s' is null",
+										 m_identifier.str());
 
 	// write data to file
 	if( fwrite( data, dataSize, 1, m_fileFP ) != 1 )
 	{
 
-		DEBUG_CRASH(( "XferSave - Error writing to file '%s'", m_identifier.str() ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "XferSave - Error writing to file '%s'", m_identifier.str() );
 		throw XFER_WRITE_ERROR;
 
 	}

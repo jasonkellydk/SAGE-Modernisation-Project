@@ -43,7 +43,7 @@
 
 // USER INCLUDES //////////////////////////////////////////////////////////////
 #include "Lib/BaseType.h"
-#include "Common/Debug.h"
+
 #include "Common/GameMemory.h"
 #include "Common/GlobalData.h"
 #include "Common/NameKeyGenerator.h"
@@ -61,7 +61,7 @@
 #include "Common/FileSystem.h"
 #include "Common/ArchiveFileSystem.h"
 #include "Common/LocalFileSystem.h"
-#include "Common/Debug.h"
+
 #include "Common/StackDump.h"
 #include "Common/GameMemory.h"
 #include "Common/Science.h"
@@ -100,6 +100,7 @@
 
 #include <io.h>
 #include "WWLib/trim.h"
+import engine.debug;
 
 
 // DEFINES ////////////////////////////////////////////////////////////////////
@@ -235,7 +236,7 @@ Int APIENTRY WinMain( HINSTANCE hInstance, HINSTANCE hPrevInstance,
 	while (token != nullptr) {
 		char * str = strtrim(token);
 		argvSet.push_back(str);
-		DEBUG_LOG(("Adding '%s'", str));
+		engine::debug::log_info("Adding '%s'", str);
 		token = nextParam(nullptr, "\" ");
 	}
 
@@ -284,7 +285,7 @@ Int APIENTRY WinMain( HINSTANCE hInstance, HINSTANCE hPrevInstance,
 	// add in allowed maps
 	for (std::list<std::string>::const_iterator cit = argvSet.begin(); cit != argvSet.end(); ++cit)
 	{
-		DEBUG_LOG(("Adding shipping map: '%s'", cit->c_str()));
+		engine::debug::log_info("Adding shipping map: '%s'", cit->c_str());
 		TheMapCache->addShippingMap((*cit).c_str());
 	}
 
@@ -312,7 +313,7 @@ Int APIENTRY WinMain( HINSTANCE hInstance, HINSTANCE hPrevInstance,
 	}
 	catch (...)
 	{
-		DEBUG_CRASH(("Munkee munkee!"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Munkee munkee!");
 	}
 
 	shutdownMemoryManager();

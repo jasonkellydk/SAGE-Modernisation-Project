@@ -36,10 +36,12 @@
 
 #pragma once
 
+
+#include <cassert>
 #include "WWLib/always.h"
 #include "WWLib/Vector.h"
 #include "parameter.h"
-#include "WWDebug/wwdebug.h"
+
 
 //////////////////////////////////////////////////////////////////////////////////
 //
@@ -102,7 +104,7 @@ ParameterListClass::Add (void *data, const char *param_name, ParameterClass::Typ
 	//
 	//	Add the new parameter object to our list
 	//
-	WWASSERT (new_param != nullptr);
+	assert((new_param != nullptr));
 	if (new_param != nullptr) {
 		DynamicVectorClass<ParameterClass *>::Add (new_param);
 	}

@@ -42,7 +42,8 @@
 //
 //-----------------------------------------------------------------------------
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #define DEFINE_VETERANCY_NAMES				// for TheVeterancyNames[]
 
@@ -294,7 +295,7 @@ Int PlayerTemplateStore::getTemplateNumByName(AsciiString name) const
 		if (m_playerTemplates[num].getName().compareNoCase(name.str()) == 0)
 			return num;
 	}
-	DEBUG_CRASH(("Template doesn't exist for given name"));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Template doesn't exist for given name");
 	return -1;
 }
 

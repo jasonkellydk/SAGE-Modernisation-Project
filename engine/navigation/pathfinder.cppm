@@ -45,7 +45,7 @@ module;
 
 #include "engine/navigation/pathfinder_api.h"
 
-#include "Common/PerfTimer.h"
+
 #include "Common/Player.h"
 #include "Common/CRCDebug.h"
 #include "Common/GlobalData.h"
@@ -84,6 +84,7 @@ module;
 
 export module engine.navigation.pathfinder;
 
+import engine.debug;
 import engine.navigation;
 import engine.navigation.search.route_search;
 import engine.navigation.path.reconstruction;
@@ -343,12 +344,12 @@ PathfindLayerEnum Pathfinder::addBridge(Bridge *theBridge)
 			if (m_layers[layer].init(theBridge, (PathfindLayerEnum)layer) ) {
 				return (PathfindLayerEnum)layer;
 			}
-			DEBUG_LOG(("WARNING: Bridge failed to init in pathfinder"));
+			engine::debug::log_info("WARNING: Bridge failed to init in pathfinder");
 			return LAYER_GROUND; // failed to init, usually cause off of the map.  jba.
 		}
 		layer++;
 	}
-	DEBUG_CRASH(("Ran out of bridge layers."));
+	engine::debug::invariant(false, "debug invariant", __FILE__, __LINE__, "Ran out of bridge layers.");
 	return LAYER_GROUND;
 }
 
@@ -362,7 +363,7 @@ void Pathfinder::updateLayer(Object *obj, PathfindLayerEnum layer)
 			layer = LAYER_GROUND;
 		}
 	}
-	//DEBUG_LOG(("Object layer is %d", layer));
+	//engine::debug::log_info("Object layer is %d", layer);
 	obj->setLayer(layer);
 }
 
@@ -824,7 +825,7 @@ void Pathfinder::newMap()
 	// so the second time through, dataAllocated==TRUE, so we skip the allocate.
 	if (!dataAllocated) {
 		m_extent = bounds;
-		DEBUG_ASSERTCRASH(m_map == nullptr, ("Can't reallocate pathfind cells."));
+		engine::debug::invariant((m_map == nullptr), "m_map == nullptr", __FILE__, __LINE__, "Can't reallocate pathfind cells.");
 		// Allocate cells.
 		m_blockOfMapCells = MSGNEW("PathfindMapCells") PathfindCell[(bounds.hi.x+1)*(bounds.hi.y+1)];
 		m_map = MSGNEW("PathfindMapCells") PathfindCellP[bounds.hi.x+1];
@@ -1548,19 +1549,6 @@ Bool Pathfinder::adjustToPossibleDestination(Object *obj, const LocomotorSet& lo
  */
 Bool Pathfinder::queueForPath(ObjectID id)
 {
-#ifdef DEBUG_LOGGING
-	{
-		Object *tmpObj = TheGameLogic->findObjectByID(id);
-		if (tmpObj) {
-			AIUpdateInterface *tmpAI = tmpObj->getAIUpdateInterface();
-			if (tmpAI) {
-				const Coord3D* pos = tmpAI->friend_getRequestedDestination();
-				DEBUG_ASSERTLOG(pos->x != 0.0 && pos->y != 0.0, ("Queueing pathfind to (0, 0), usually a bug. (Unit Name: '%s', Type: '%s')", tmpObj->getName().str(), tmpObj->getTemplate()->getName().str()));
-			}
-		}
-	}
-#endif
-
 	m_pathRequests->push(static_cast<UnsignedInt>(id));
 	return true;
 }
@@ -1752,7 +1740,6 @@ Path *Pathfinder::getAircraftPath( const Object *obj, const Coord3D *to )
 /**
  * Process some path requests in the pathfind queue.
  */
-//DECLARE_PERF_TIMER(processPathfindQueue)
 Bool Pathfinder::isGroundPathPending(ObjectID id) const { return m_groundPlanner->hasPending(id); }
 
 void Pathfinder::processPathfindQueue()
@@ -1765,7 +1752,6 @@ void Pathfinder::processPathfindQueue()
 	};
 	m_groundPlanner->discardStalePending();
 	m_groundPlanner->discardUnqueuedRequests();
-	//USE_PERF_TIMER(processPathfindQueue)
 	if (!m_isMapReady) {
 		recordQueueTime();
 		return;
@@ -3259,7 +3245,7 @@ void Pathfinder::updatePos( Object *obj, const Coord3D *newPos)
 	ai->setCurPathfindCell(newCell);
 	Int i,j;
 	ICoord2D cellNdx;
-	//DEBUG_LOG(("Updating unit pos at cell %d, %d", newCell.x, newCell.y));
+	//engine::debug::log_info("Updating unit pos at cell %d, %d", newCell.x, newCell.y);
 	if (curCell.x>=0 && curCell.y>=0) {
 		for (i=curCell.x-radius; i<curCell.x+numCellsAbove; i++) {
 			for (j=curCell.y-radius; j<curCell.y+numCellsAbove; j++) {
@@ -3330,7 +3316,7 @@ void Pathfinder::removePos( Object *obj)
 
 	Int i,j;
 	ICoord2D cellNdx;
-	//DEBUG_LOG(("Updating unit pos at cell %d, %d", newCell.x, newCell.y));
+	//engine::debug::log_info("Updating unit pos at cell %d, %d", newCell.x, newCell.y);
 	if (curCell.x>=0 && curCell.y>=0) {
 		for (i=curCell.x-radius; i<curCell.x+numCellsAbove; i++) {
 			for (j=curCell.y-radius; j<curCell.y+numCellsAbove; j++) {
@@ -3676,22 +3662,22 @@ Path *Pathfinder::findSafePath(const Object* obj,const LocomotorSet& locomotors,
 
 void Pathfinder::crc( Xfer *xfer )
 {
-	CRCDEBUG_LOG(("Pathfinder::crc() on frame %d", TheGameLogic->getFrame()));
-	CRCDEBUG_LOG(("beginning CRC: %8.8X", ((XferCRC *)xfer)->getCRC()));
+	engine::debug::log_trace("Pathfinder::crc() on frame %d", TheGameLogic->getFrame());
+	engine::debug::log_trace("beginning CRC: %8.8X", ((XferCRC *)xfer)->getCRC());
 
 	xfer->xferUser( &m_extent, sizeof(IRegion2D) );
-	CRCDEBUG_LOG(("m_extent: %8.8X", ((XferCRC *)xfer)->getCRC()));
+	engine::debug::log_trace("m_extent: %8.8X", ((XferCRC *)xfer)->getCRC());
 
 	xfer->xferBool( &m_isMapReady );
-	CRCDEBUG_LOG(("m_isMapReady: %8.8X", ((XferCRC *)xfer)->getCRC()));
+	engine::debug::log_trace("m_isMapReady: %8.8X", ((XferCRC *)xfer)->getCRC());
 	xfer->xferBool( &m_isTunneling );
-	CRCDEBUG_LOG(("m_isTunneling: %8.8X", ((XferCRC *)xfer)->getCRC()));
+	engine::debug::log_trace("m_isTunneling: %8.8X", ((XferCRC *)xfer)->getCRC());
 
 	Int obsolete1 = 0;
 	xfer->xferInt( &obsolete1 );
 
 	xfer->xferUser(&m_ignoreObstacleID, sizeof(ObjectID));
-	CRCDEBUG_LOG(("m_ignoreObstacleID: %8.8X", ((XferCRC *)xfer)->getCRC()));
+	engine::debug::log_trace("m_ignoreObstacleID: %8.8X", ((XferCRC *)xfer)->getCRC());
 
     // Hash logical FIFO contents, independent of capacity, wrap position or hash buckets.
     UnsignedInt pending = static_cast<UnsignedInt>(m_pathRequests->size());
@@ -3703,16 +3689,16 @@ void Pathfinder::crc( Xfer *xfer )
     xfer->xferUser(&m_playerCommandSequence,sizeof(m_playerCommandSequence));
 
 	xfer->xferInt(&m_numWallPieces);
-	CRCDEBUG_LOG(("m_numWallPieces: %8.8X", ((XferCRC *)xfer)->getCRC()));
+	engine::debug::log_trace("m_numWallPieces: %8.8X", ((XferCRC *)xfer)->getCRC());
 
 	xfer->xferUser(m_wallPieces, sizeof(m_wallPieces));
 
-	CRCDEBUG_LOG(("m_wallPieces: %8.8X", ((XferCRC *)xfer)->getCRC()));
+	engine::debug::log_trace("m_wallPieces: %8.8X", ((XferCRC *)xfer)->getCRC());
 
 	xfer->xferReal(&m_wallHeight);
-	CRCDEBUG_LOG(("m_wallHeight: %8.8X", ((XferCRC *)xfer)->getCRC()));
+	engine::debug::log_trace("m_wallHeight: %8.8X", ((XferCRC *)xfer)->getCRC());
 	xfer->xferInt(&m_cumulativeCellsAllocated);
-	CRCDEBUG_LOG(("m_cumulativeCellsAllocated: %8.8X", ((XferCRC *)xfer)->getCRC()));
+	engine::debug::log_trace("m_cumulativeCellsAllocated: %8.8X", ((XferCRC *)xfer)->getCRC());
 
 }
 

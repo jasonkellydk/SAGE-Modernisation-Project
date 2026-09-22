@@ -4,6 +4,7 @@
 #include "GameClient/GameWindowManager.h"
 
 #include <algorithm>
+import engine.debug;
 
 
 WindowLayout::WindowLayout()
@@ -17,7 +18,7 @@ WindowLayout::WindowLayout()
 
 WindowLayout::~WindowLayout()
 {
-	DEBUG_ASSERTCRASH(m_windows.empty(), ("Window layout being destroyed still has window references"));
+	engine::debug::invariant((m_windows.empty()), "m_windows.empty()", __FILE__, __LINE__, "Window layout being destroyed still has window references");
 }
 
 void WindowLayout::hide(Bool hide)
@@ -76,8 +77,8 @@ Bool WindowLayout::load(AsciiString filename)
 	GameWindow *target = TheWindowManager->winCreateFromScript(filename, &info);
 	if (target == nullptr)
 	{
-		DEBUG_ASSERTCRASH(target, ("WindowLayout::load - Failed to load layout"));
-		DEBUG_LOG(("WindowLayout::load - Unable to load layout file '%s'", filename.str()));
+		engine::debug::invariant((target), "target", __FILE__, __LINE__, "WindowLayout::load - Failed to load layout");
+		engine::debug::log_info("WindowLayout::load - Unable to load layout file '%s'", filename.str());
 		return FALSE;
 	}
 

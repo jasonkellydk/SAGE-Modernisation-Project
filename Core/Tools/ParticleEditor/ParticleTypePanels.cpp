@@ -35,6 +35,7 @@
 #include "ParticleTypePanels.h"
 #include "ParticleEditorDialog.h"
 #include <direct.h>
+import engine.debug;
 
 #define ARBITRARY_BUFF_SIZE 128
 static const char *PATH = "Art\\Textures\\";
@@ -64,7 +65,7 @@ void ParticlePanelParticle::InitPanel()
 	findString = PATH;
 	findString += PREFIX;
 	findString += POSTFIX;
-//	DEBUG_LOG(("ParticlePanedParticle::InitPanel - looking for textures, search string is '%s'", findString.begin()));
+//	engine::debug::log_info("ParticlePanedParticle::InitPanel - looking for textures, search string is '%s'", findString.begin());
 	BOOL bWorkin = finder.FindFile(findString.c_str());
 	while (bWorkin) {
 		bWorkin = finder.FindNextFile();

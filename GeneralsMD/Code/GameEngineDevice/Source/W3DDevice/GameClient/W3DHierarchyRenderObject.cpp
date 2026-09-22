@@ -29,6 +29,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
+import engine.debug;
 import Assets.Adapters.W3D.Assembly;
 import Assets.Adapters.W3D.LevelSet;
 import Assets.Adapters.W3D.Aggregate;
@@ -89,9 +90,9 @@ W3DHierarchyRenderObject::W3DHierarchyRenderObject(const char * name,W3DRenderOb
 	Proxies()
 {
 	// enforce parameters
-	WWASSERT(name != nullptr);
-	WWASSERT(lods != nullptr);
-	WWASSERT(count > 0);
+	engine::debug::assert_condition((name != nullptr), "name != nullptr", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((lods != nullptr), "lods != nullptr", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((count > 0), "count > 0", __FILE__, __LINE__, "assertion failed");
 
 	// Set the name
 	Set_Name(name);
@@ -112,7 +113,7 @@ W3DHierarchyRenderObject::W3DHierarchyRenderObject(const char * name,W3DRenderOb
 	// Ok, now suck the sub-objects out of each LOD model and place them into this HLOD.
 	for (int lod_index=0; lod_index < m_children.Level_Count(); lod_index++) {
 		W3DRenderObject * lod_obj = lods[lod_index];
-		WWASSERT(lod_obj);
+		engine::debug::assert_condition((lod_obj), "lod_obj", __FILE__, __LINE__, "assertion failed");
 
 		if (	(lod_obj->Class_ID() == W3DRenderObject::CLASSID_HMODEL) ||
 				(lod_obj->Class_ID() == W3DRenderObject::CLASSID_HLOD) ||
@@ -361,7 +362,7 @@ const AABoxClass &W3DHierarchyRenderObject::Get_Bounding_Box() const
 
 void W3DHierarchyRenderObject::Set_Max_Screen_Size(int lod_index, float size)
 {
-    WWASSERT(lod_index >= 0 && lod_index < m_children.Level_Count());
+    engine::debug::assert_condition((lod_index >= 0 && lod_index < m_children.Level_Count()), "lod_index >= 0 && lod_index < m_children.Level_Count()", __FILE__, __LINE__, "assertion failed");
     if (lod_index < 0 || lod_index >= m_children.Level_Count()) return;
     m_detail_levels.Set_Maximum_Area(lod_index, size);
     Recalculate_Static_LOD_Factors();
@@ -371,7 +372,7 @@ void W3DHierarchyRenderObject::Set_Max_Screen_Size(int lod_index, float size)
 
 float W3DHierarchyRenderObject::Get_Max_Screen_Size(int lod_index) const
 {
-    WWASSERT(lod_index >= 0 && lod_index < m_children.Level_Count());
+    engine::debug::assert_condition((lod_index >= 0 && lod_index < m_children.Level_Count()), "lod_index >= 0 && lod_index < m_children.Level_Count()", __FILE__, __LINE__, "assertion failed");
     return lod_index >= 0 && lod_index < m_children.Level_Count()
         ? m_detail_levels.Maximum_Area(lod_index) : (std::numeric_limits<float>::max)();
 }
@@ -394,8 +395,8 @@ int W3DHierarchyRenderObject::Get_Lod_Model_Count(int lod_index) const
 	int count = 0;
 
 	// Params valid?
-	WWASSERT(lod_index >= 0);
-	WWASSERT(lod_index < m_children.Level_Count());
+	engine::debug::assert_condition((lod_index >= 0), "lod_index >= 0", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((lod_index < m_children.Level_Count()), "lod_index < m_children.Level_Count()", __FILE__, __LINE__, "assertion failed");
 	if ((lod_index >= 0) && (lod_index < m_children.Level_Count())) {
 
 		// Get the number of models in this Lod
@@ -411,8 +412,8 @@ W3DRenderObject *W3DHierarchyRenderObject::Peek_Lod_Model(int lod_index, int mod
 	W3DRenderObject *pmodel = nullptr;
 
 	// Params valid?
-	WWASSERT(lod_index >= 0);
-	WWASSERT(lod_index < m_children.Level_Count());
+	engine::debug::assert_condition((lod_index >= 0), "lod_index >= 0", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((lod_index < m_children.Level_Count()), "lod_index < m_children.Level_Count()", __FILE__, __LINE__, "assertion failed");
 	if ((lod_index >= 0) &&
 		 (lod_index < m_children.Level_Count()) &&
 		 (model_index < static_cast<int>(m_children.Level(lod_index).size()))) {
@@ -430,8 +431,8 @@ W3DRenderObject *W3DHierarchyRenderObject::Get_Lod_Model(int lod_index, int mode
 	W3DRenderObject *pmodel = nullptr;
 
 	// Params valid?
-	WWASSERT(lod_index >= 0);
-	WWASSERT(lod_index < m_children.Level_Count());
+	engine::debug::assert_condition((lod_index >= 0), "lod_index >= 0", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((lod_index < m_children.Level_Count()), "lod_index < m_children.Level_Count()", __FILE__, __LINE__, "assertion failed");
 	if ((lod_index >= 0) &&
 		 (lod_index < m_children.Level_Count()) &&
 		 (model_index < static_cast<int>(m_children.Level(lod_index).size()))) {
@@ -452,8 +453,8 @@ int W3DHierarchyRenderObject::Get_Lod_Model_Bone(int lod_index, int model_index)
 	int bone_index = 0;
 
 	// Params valid?
-	WWASSERT(lod_index >= 0);
-	WWASSERT(lod_index < m_children.Level_Count());
+	engine::debug::assert_condition((lod_index >= 0), "lod_index >= 0", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((lod_index < m_children.Level_Count()), "lod_index < m_children.Level_Count()", __FILE__, __LINE__, "assertion failed");
 	if ((lod_index >= 0) &&
 		 (lod_index < m_children.Level_Count()) &&
 		 (model_index < static_cast<int>(m_children.Level(lod_index).size()))) {
@@ -476,8 +477,8 @@ W3DRenderObject * W3DHierarchyRenderObject::Peek_Additional_Model (int model_ind
 	W3DRenderObject *pmodel = nullptr;
 
 	// Param valid?
-	WWASSERT(model_index >= 0);
-	WWASSERT(model_index < static_cast<int>(m_children.Additional().size()));
+	engine::debug::assert_condition((model_index >= 0), "model_index >= 0", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((model_index < static_cast<int>(m_children.Additional().size())), "model_index < static_cast<int>(m_children.Additional().size())", __FILE__, __LINE__, "assertion failed");
 	if ((model_index >= 0) &&
 		 (model_index < static_cast<int>(m_children.Additional().size()))) {
 
@@ -494,8 +495,8 @@ W3DRenderObject * W3DHierarchyRenderObject::Get_Additional_Model (int model_inde
 	W3DRenderObject *pmodel = nullptr;
 
 	// Param valid?
-	WWASSERT(model_index >= 0);
-	WWASSERT(model_index < static_cast<int>(m_children.Additional().size()));
+	engine::debug::assert_condition((model_index >= 0), "model_index >= 0", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((model_index < static_cast<int>(m_children.Additional().size())), "model_index < static_cast<int>(m_children.Additional().size())", __FILE__, __LINE__, "assertion failed");
 	if ((model_index >= 0) &&
 		 (model_index < static_cast<int>(m_children.Additional().size()))) {
 
@@ -515,8 +516,8 @@ int W3DHierarchyRenderObject::Get_Additional_Model_Bone (int model_index) const
 	int bone_index = 0;
 
 	// Params valid?
-	WWASSERT(model_index >= 0);
-	WWASSERT(model_index < static_cast<int>(m_children.Additional().size()));
+	engine::debug::assert_condition((model_index >= 0), "model_index >= 0", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((model_index < static_cast<int>(m_children.Additional().size())), "model_index < static_cast<int>(m_children.Additional().size())", __FILE__, __LINE__, "assertion failed");
 	if ((model_index >= 0) &&
 		 (model_index < static_cast<int>(m_children.Additional().size()))) {
 
@@ -584,7 +585,7 @@ int W3DHierarchyRenderObject::Get_Num_Sub_Objects() const
 W3DRenderObject * W3DHierarchyRenderObject::Get_Sub_Object(int index) const
 {
     const auto* child = index >= 0 ? m_children.At(index) : nullptr;
-    WWASSERT(child);
+    engine::debug::assert_condition((child), "child", __FILE__, __LINE__, "assertion failed");
     if (!child) return nullptr;
     auto retained = child->model;
     return retained.Release();
@@ -636,7 +637,7 @@ int W3DHierarchyRenderObject::Get_Sub_Object_Bone_Index(int LodIndex, int ModelI
 
 int W3DHierarchyRenderObject::Add_Sub_Object_To_Bone(W3DRenderObject * subobj,int boneindex)
 {
-    WWASSERT(subobj);
+    engine::debug::assert_condition((subobj), "subobj", __FILE__, __LINE__, "assertion failed");
     if (boneindex < 0 || boneindex >= Hierarchy->Bone_Count()) return 0;
     subobj->Set_LOD_Bias(m_detail_levels.Bias());
     auto owner = ChildOwner::Create_Add_Ref(subobj);
@@ -817,7 +818,7 @@ int W3DHierarchyRenderObject::Get_Num_Snap_Points()
 
 void W3DHierarchyRenderObject::Get_Snap_Point(int index,Vector3 * set)
 {
-	WWASSERT(set != nullptr);
+	engine::debug::assert_condition((set != nullptr), "set != nullptr", __FILE__, __LINE__, "assertion failed");
 	if (index>=0 && static_cast<std::size_t>(index)<SnapPoints.size()) {
 		const auto& point=SnapPoints[index];
 		set->Set(point.x,point.y,point.z);
@@ -898,7 +899,7 @@ void W3DHierarchyRenderObject::Update_Obj_Space_Bounding_Volumes()
 	Hierarchy->Evaluate_Rest(Graphics::Import_Affine_Transform(Matrix3D(true)));
 
 	robj = Get_Sub_Object(0);
-	WWASSERT(robj);
+	engine::debug::assert_condition((robj), "robj", __FILE__, __LINE__, "assertion failed");
 
 	const Matrix3D & bonetm = Graphics::Export_Affine_Transform<Matrix3D>(Hierarchy->World_Transform(Get_Sub_Object_Bone_Index(robj)));
 	robj->Get_Obj_Space_Bounding_Sphere(sphere);
@@ -912,7 +913,7 @@ void W3DHierarchyRenderObject::Update_Obj_Space_Bounding_Volumes()
 
 	for (i=1; i<Get_Num_Sub_Objects(); i++) {
 		robj = Get_Sub_Object(i);
-		WWASSERT(robj);
+		engine::debug::assert_condition((robj), "robj", __FILE__, __LINE__, "assertion failed");
 
 		const Matrix3D & bonetm = Graphics::Export_Affine_Transform<Matrix3D>(Hierarchy->World_Transform(Get_Sub_Object_Bone_Index(robj)));
 
@@ -942,9 +943,9 @@ void W3DHierarchyRenderObject::Update_Obj_Space_Bounding_Volumes()
 
 void W3DHierarchyRenderObject::Add_Lod_Model(int lod, W3DRenderObject * robj, int boneindex)
 {
-    WWASSERT(robj);
+    engine::debug::assert_condition((robj), "robj", __FILE__, __LINE__, "assertion failed");
     if (boneindex >= Hierarchy->Bone_Count()) {
-        WWDEBUG_SAY(("ERROR: Model %s tried to use bone %d in skeleton %s. Please re-export!", Get_Name(), boneindex, Hierarchy->Name()));
+        engine::debug::log_info("ERROR: Model %s tried to use bone %d in skeleton %s. Please re-export!", Get_Name(), boneindex, Hierarchy->Name());
         boneindex = 0;
     }
     auto owner = ChildOwner::Create_Add_Ref(robj);

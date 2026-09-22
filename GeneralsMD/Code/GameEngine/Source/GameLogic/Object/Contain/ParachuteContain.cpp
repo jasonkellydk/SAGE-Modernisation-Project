@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // USER INCLUDES //////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/CRCDebug.h"
 #include "Common/Player.h"
@@ -160,17 +161,17 @@ void ParachuteContain::updateBonePositions()
 		{
 			if (parachuteDraw->getPristineBonePositions( "PARA_COG", 0, &m_paraSwayBone, nullptr, 1) != 1)
 			{
-				DEBUG_CRASH(("PARA_COG not found"));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "PARA_COG not found");
 				m_paraSwayBone.zero();
 			}
 
 			if (parachuteDraw->getPristineBonePositions( "PARA_ATTCH", 0, &m_paraAttachBone, nullptr, 1 ) != 1)
 			{
-				DEBUG_CRASH(("PARA_ATTCH not found"));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "PARA_ATTCH not found");
 				m_paraAttachBone.zero();
 			}
 		}
-		//DEBUG_LOG(("updating para bone positions %d...",TheGameLogic->getFrame()));
+		//engine::debug::log_info("updating para bone positions %d...",TheGameLogic->getFrame());
 	}
 
 	if (m_needToUpdateRiderBones)
@@ -184,13 +185,13 @@ void ParachuteContain::updateBonePositions()
 		{
 			if (riderDraw->getPristineBonePositions( "PARA_MAN", 0, &m_riderAttachBone, nullptr, 1) != 1)
 			{
-				//DEBUG_LOG(("*** No parachute-attach bone... using object height!"));
+				//engine::debug::log_info("*** No parachute-attach bone... using object height!");
 				m_riderAttachBone.zero();
 				m_riderAttachBone.z += riderDraw->getDrawableGeometryInfo().getMaxHeightAbovePosition();
 			}
 		}
 
-		//DEBUG_LOG(("updating rider bone positions %d...",TheGameLogic->getFrame()));
+		//engine::debug::log_info("updating rider bone positions %d...",TheGameLogic->getFrame());
 	}
 }
 

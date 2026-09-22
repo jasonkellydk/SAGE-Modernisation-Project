@@ -29,6 +29,8 @@
 
 #pragma once
 
+
+#include <cassert>
 #include "Common/GameMemory.h"
 #include "Common/Snapshot.h"
 #include "Common/STLTypedefs.h"
@@ -229,9 +231,9 @@ public:
 
 	virtual Real getGroundHeight( Real x, Real y, Coord3D* normal = nullptr )  const;
 	virtual Real getLayerHeight(Real x, Real y, PathfindLayerEnum layer, Coord3D* normal = nullptr, Bool clip = true) const;
-	virtual void getExtent( Region3D *extent ) const { DEBUG_CRASH(("not implemented"));  }		///< @todo This should not be a stub - this should own this functionality
-	virtual void getExtentIncludingBorder( Region3D *extent ) const { DEBUG_CRASH(("not implemented"));  }		///< @todo This should not be a stub - this should own this functionality
-	virtual void getMaximumPathfindExtent( Region3D *extent ) const { DEBUG_CRASH(("not implemented"));  }		///< @todo This should not be a stub - this should own this functionality
+	virtual void getExtent( Region3D *extent ) const { assert(false);  }		///< @todo This should not be a stub - this should own this functionality
+	virtual void getExtentIncludingBorder( Region3D *extent ) const { assert(false);  }		///< @todo This should not be a stub - this should own this functionality
+	virtual void getMaximumPathfindExtent( Region3D *extent ) const { assert(false);  }		///< @todo This should not be a stub - this should own this functionality
 	virtual Coord3D findClosestEdgePoint( const Coord3D *closestTo ) const ;
 	virtual Coord3D findFarthestEdgePoint( const Coord3D *farthestFrom ) const ;
 	virtual Bool isClearLineOfSight(const Coord3D& pos, const Coord3D& posOther) const;

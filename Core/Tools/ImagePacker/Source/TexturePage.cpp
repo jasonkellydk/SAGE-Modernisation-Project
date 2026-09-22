@@ -43,9 +43,10 @@
 #include <Utility/stdio_adapter.h>
 
 // USER INCLUDES //////////////////////////////////////////////////////////////
-#include "Common/Debug.h"
+
 #include "TexturePage.h"
 #include "ImagePacker.h"
+import engine.debug;
 
 // DEFINES ////////////////////////////////////////////////////////////////////
 
@@ -393,7 +394,7 @@ void TexturePage::extendImageEdges( Byte *destBuffer,
 				// first column in this image, and the prevPixel should be FALSE since
 				// previous would be "off" the image which is by definition "open"
 				//
-				DEBUG_ASSERTCRASH( x != 0, ("Coming from off image and detecting right edge!") );
+				engine::debug::invariant((x != 0), "x != 0", __FILE__, __LINE__, "Coming from off image and detecting right edge!");
 
 				// extend the previous pixel to this location
 				if( destBPP == 4 )
@@ -524,7 +525,7 @@ Bool TexturePage::addImageData( Byte *destBuffer,
 		char buffer[ _MAX_PATH + 32 ];
 
 		sprintf( buffer, "Error loading source file '%s'\n", image->m_path );
-		DEBUG_CRASH( (buffer) );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, buffer);
 		MessageBox( nullptr, buffer, "Cannot Load Source File", MB_OK | MB_ICONERROR );
 		return FALSE;
 
@@ -532,7 +533,7 @@ Bool TexturePage::addImageData( Byte *destBuffer,
 
 	// get the source image buffer
 	char *sourceBuffer = source.GetImage();
-	DEBUG_ASSERTCRASH( sourceBuffer, ("No Source buffer for source image") );
+	engine::debug::invariant((sourceBuffer), "sourceBuffer", __FILE__, __LINE__, "No Source buffer for source image");
 
 	// get the source bytes per pixel
 	Int sourceBPP = TGA_BytesPerPixel( source.Header.PixelDepth );
@@ -863,7 +864,7 @@ TexturePage::TexturePage( Int width, Int height )
 	// create a "canvas" to represent used and unused areas
 	canvasSize = m_size.x * m_size.y;
 	m_canvas = new UnsignedByte[ canvasSize ];
-	DEBUG_ASSERTCRASH( m_canvas, ("Cannot allocate canvas for texture page") );
+	engine::debug::invariant((m_canvas), "m_canvas", __FILE__, __LINE__, "Cannot allocate canvas for texture page");
 	memset( m_canvas, FREE, sizeof( UnsignedByte ) * canvasSize );
 
 }
@@ -896,7 +897,7 @@ Bool TexturePage::addImage( ImageInfo *image )
 	if( image == nullptr )
 	{
 
-		DEBUG_ASSERTCRASH( image, ("TexturePage::addImage: null image!") );
+		engine::debug::invariant((image), "image", __FILE__, __LINE__, "TexturePage::addImage: null image!");
 		return TRUE;  // say it was added
 
 	}
@@ -1178,8 +1179,8 @@ Bool TexturePage::generateTexture()
 		return FALSE;
 
 	// sanity
-	DEBUG_ASSERTCRASH( m_packedImage == nullptr, ("The packed image list must be null before generating texture") );
-	DEBUG_ASSERTCRASH( m_targa == nullptr, ("The targa must be null before generating a new texture") );
+	engine::debug::invariant((m_packedImage == nullptr), "m_packedImage == nullptr", __FILE__, __LINE__, "The packed image list must be null before generating texture");
+	engine::debug::invariant((m_targa == nullptr), "m_targa == nullptr", __FILE__, __LINE__, "The targa must be null before generating a new texture");
 
 	// allocate targa to help us generate the final texture
 	m_targa = new Targa;
@@ -1188,7 +1189,7 @@ Bool TexturePage::generateTexture()
 		char buffer[ 128 ];
 
 		sprintf( buffer, "Unable to allocate new targa to generate texture\n" );
-		DEBUG_ASSERTCRASH( m_targa, (buffer) );
+		engine::debug::invariant((m_targa), "m_targa", __FILE__, __LINE__, buffer);
 		MessageBox( nullptr, buffer, "Internal Error", MB_OK | MB_ICONERROR );
 		return FALSE;
 
@@ -1217,7 +1218,7 @@ Bool TexturePage::generateTexture()
 		char buffer[ 128 ];
 
 		sprintf( buffer, "Unable to allocate final packed image buffer\n" );
-		DEBUG_ASSERTCRASH( m_packedImage, (buffer) );
+		engine::debug::invariant((m_packedImage), "m_packedImage", __FILE__, __LINE__, buffer);
 		MessageBox( nullptr, buffer, "Internal Error", MB_OK | MB_ICONERROR );
 		BitSet( m_status, PAGE_ERROR );
 		BitSet( m_status, CANT_ALLOCATE_PACKED_IMAGE );

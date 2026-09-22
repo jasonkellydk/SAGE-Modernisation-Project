@@ -1,5 +1,4 @@
 module;
-#include "../../profiling/Tracy.h"
 #include <array>
 #include <algorithm>
 #include <bit>
@@ -13,6 +12,7 @@ module;
 #include <vector>
 
 export module Graphics.Scene.Trees.Renderer;
+import engine.profiling;
 export import Graphics.Scene.Trees.Geometry;
 export import Graphics.RHI;
 import Graphics.Resources.Pools.ResourcePool;
@@ -229,7 +229,7 @@ public:
     bool Draw(CommandList &commands, TreeMeshHandle handle,
         const TreeParameters &parameters, std::span<const RHITextureHandle> textures)
     {
-        GRAPHICS_PROFILE_SCOPE("Graphics.Trees.Draw");
+        engine::profiling::Scope profile_scope_231("Graphics.Trees.Draw");
         TreeMesh *mesh = m_meshes.Resolve(handle);
         if (m_device == nullptr || mesh == nullptr || textures.size() != 2) return false;
         if (mesh->geometry.Indices().empty()) return true;

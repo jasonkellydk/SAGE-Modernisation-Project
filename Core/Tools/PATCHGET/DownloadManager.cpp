@@ -24,6 +24,7 @@
 #include "CHATAPI.h"
 #include "DownloadManager.h"
 #include "RESOURCE.h"
+import engine.debug;
 
 namespace patchget
 {
@@ -112,7 +113,7 @@ HRESULT DownloadManager::downloadNextQueuedFile()
 	}
 	else
 	{
-		DEBUG_CRASH(("Starting non-existent download!"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Starting non-existent download!");
 		return S_OK;
 	}
 }
@@ -153,27 +154,27 @@ HRESULT DownloadManager::OnError( int error )
 			break;
 	}
 	m_errorString = s;
-	DEBUG_LOG(("DownloadManager::OnError(): %s(%d)", s.c_str(), error));
+	engine::debug::log_info("DownloadManager::OnError(): %s(%d)", s.c_str(), error);
 	return S_OK;
 }
 
 HRESULT DownloadManager::OnEnd()
 {
 	m_sawEnd = true;
-	DEBUG_LOG(("DownloadManager::OnEnd()"));
+	engine::debug::log_info("DownloadManager::OnEnd()");
 	return S_OK;
 }
 
 HRESULT DownloadManager::OnQueryResume()
 {
-	DEBUG_LOG(("DownloadManager::OnQueryResume()"));
+	engine::debug::log_info("DownloadManager::OnQueryResume()");
 	//return DOWNLOADEVENT_DONOTRESUME;
 	return DOWNLOADEVENT_RESUME;
 }
 
 HRESULT DownloadManager::OnProgressUpdate( int bytesread, int totalsize, int timetaken, int timeleft )
 {
-	DEBUG_LOG(("DownloadManager::OnProgressUpdate(): %d/%d %d/%d", bytesread, totalsize, timetaken, timeleft));
+	engine::debug::log_info("DownloadManager::OnProgressUpdate(): %d/%d %d/%d", bytesread, totalsize, timetaken, timeleft);
 	return S_OK;
 }
 
@@ -208,7 +209,7 @@ HRESULT DownloadManager::OnStatusUpdate( int status )
 			break;
 	}
 	m_statusString = s;
-	DEBUG_LOG(("DownloadManager::OnStatusUpdate(): %s(%d)", s.c_str(), status));
+	engine::debug::log_info("DownloadManager::OnStatusUpdate(): %s(%d)", s.c_str(), status);
 	return S_OK;
 }
 

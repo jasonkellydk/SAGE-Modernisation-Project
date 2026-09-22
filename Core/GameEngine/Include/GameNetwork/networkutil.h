@@ -36,14 +36,10 @@ Bool CommandRequiresDirectSend(const NetCommandMsg *msg);
 Bool IsCommandSynchronized(NetCommandType type);
 const char* GetNetCommandTypeAsString(NetCommandType type);
 
-#ifdef DEBUG_LOGGING
 extern "C" {
 void dumpBufferToLog(const void *vBuf, Int len, const char *fname, Int line);
 };
 #define LOGBUFFER(buf, len) dumpBufferToLog(buf, len, __FILE__, __LINE__)
-#else
-#define LOGBUFFER(buf, len)
-#endif // DEBUG_LOGGING
 
 inline UnsignedInt AssembleIp(UnsignedByte a, UnsignedByte b, UnsignedByte c, UnsignedByte d)
 {

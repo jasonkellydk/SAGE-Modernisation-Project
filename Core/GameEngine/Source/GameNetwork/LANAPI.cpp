@@ -22,7 +22,8 @@
 //																																						//
 ////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #define WIN32_LEAN_AND_MEAN  // only bare bones windows stuff wanted
 
@@ -66,8 +67,8 @@ LANGame::LANGame()
 
 LANAPI::LANAPI() : m_transport(nullptr)
 {
-	DEBUG_LOG(("LANAPI::LANAPI() - max game option size is %d, sizeof(LANMessage)=%d, MAX_LANAPI_PACKET_SIZE=%d",
-		m_lanMaxOptionsLength, sizeof(LANMessage), MAX_LANAPI_PACKET_SIZE));
+	engine::debug::log_info("LANAPI::LANAPI() - max game option size is %d, sizeof(LANMessage)=%d, MAX_LANAPI_PACKET_SIZE=%d",
+		m_lanMaxOptionsLength, sizeof(LANMessage), MAX_LANAPI_PACKET_SIZE);
 
 	m_lastResendTime = 0;
 	//
@@ -353,49 +354,49 @@ void LANAPI::update()
 			}
 
 			LANMessage *msg = (LANMessage *)(m_transport->m_inBuffer[i].data);
-			//DEBUG_LOG(("LAN message type %s from %ls (%s@%s)", GetMessageTypeString(msg->messageType).str(),
-			//	msg->name, msg->userName, msg->hostName));
+			//engine::debug::log_info("LAN message type %s from %ls (%s@%s)", GetMessageTypeString(msg->messageType).str(),
+			//	msg->name, msg->userName, msg->hostName);
 			switch (msg->messageType)
 			{
 				// Location specification
 			case LANMessage::MSG_REQUEST_LOCATIONS:		// Hey, where is everybody?
-				DEBUG_LOG(("LANAPI::update - got a MSG_REQUEST_LOCATIONS from %d.%d.%d.%d", PRINTF_IP_AS_4_INTS(senderIP)));
+				engine::debug::log_info("LANAPI::update - got a MSG_REQUEST_LOCATIONS from %d.%d.%d.%d", PRINTF_IP_AS_4_INTS(senderIP));
 				handleRequestLocations( msg, senderIP );
 				break;
 			case LANMessage::MSG_GAME_ANNOUNCE:				// Here someone is, and here's his game info!
-				DEBUG_LOG(("LANAPI::update - got a MSG_GAME_ANNOUNCE from %d.%d.%d.%d", PRINTF_IP_AS_4_INTS(senderIP)));
+				engine::debug::log_info("LANAPI::update - got a MSG_GAME_ANNOUNCE from %d.%d.%d.%d", PRINTF_IP_AS_4_INTS(senderIP));
 				handleGameAnnounce( msg, senderIP );
 				break;
 			case LANMessage::MSG_LOBBY_ANNOUNCE:			// Hey, I'm in the lobby!
-				DEBUG_LOG(("LANAPI::update - got a MSG_LOBBY_ANNOUNCE from %d.%d.%d.%d", PRINTF_IP_AS_4_INTS(senderIP)));
+				engine::debug::log_info("LANAPI::update - got a MSG_LOBBY_ANNOUNCE from %d.%d.%d.%d", PRINTF_IP_AS_4_INTS(senderIP));
 				handleLobbyAnnounce( msg, senderIP );
 				break;
 			case LANMessage::MSG_REQUEST_GAME_INFO:
-				DEBUG_LOG(("LANAPI::update - got a MSG_REQUEST_GAME_INFO from %d.%d.%d.%d", PRINTF_IP_AS_4_INTS(senderIP)));
+				engine::debug::log_info("LANAPI::update - got a MSG_REQUEST_GAME_INFO from %d.%d.%d.%d", PRINTF_IP_AS_4_INTS(senderIP));
 				handleRequestGameInfo( msg, senderIP );
 				break;
 
 				// Joining games
 			case LANMessage::MSG_REQUEST_JOIN:				// Let me in!  Let me in!
-				DEBUG_LOG(("LANAPI::update - got a MSG_REQUEST_JOIN from %d.%d.%d.%d", PRINTF_IP_AS_4_INTS(senderIP)));
+				engine::debug::log_info("LANAPI::update - got a MSG_REQUEST_JOIN from %d.%d.%d.%d", PRINTF_IP_AS_4_INTS(senderIP));
 				handleRequestJoin( msg, senderIP );
 				break;
 			case LANMessage::MSG_JOIN_ACCEPT:					// Okay, you can join.
-				DEBUG_LOG(("LANAPI::update - got a MSG_JOIN_ACCEPT from %d.%d.%d.%d", PRINTF_IP_AS_4_INTS(senderIP)));
+				engine::debug::log_info("LANAPI::update - got a MSG_JOIN_ACCEPT from %d.%d.%d.%d", PRINTF_IP_AS_4_INTS(senderIP));
 				handleJoinAccept( msg, senderIP );
 				break;
 			case LANMessage::MSG_JOIN_DENY:						// Go away!  We don't want any!
-				DEBUG_LOG(("LANAPI::update - got a MSG_JOIN_DENY from %d.%d.%d.%d", PRINTF_IP_AS_4_INTS(senderIP)));
+				engine::debug::log_info("LANAPI::update - got a MSG_JOIN_DENY from %d.%d.%d.%d", PRINTF_IP_AS_4_INTS(senderIP));
 				handleJoinDeny( msg, senderIP );
 				break;
 
 				// Leaving games, lobby
 			case LANMessage::MSG_REQUEST_GAME_LEAVE:				// I'm outa here!
-				DEBUG_LOG(("LANAPI::update - got a MSG_REQUEST_GAME_LEAVE from %d.%d.%d.%d", PRINTF_IP_AS_4_INTS(senderIP)));
+				engine::debug::log_info("LANAPI::update - got a MSG_REQUEST_GAME_LEAVE from %d.%d.%d.%d", PRINTF_IP_AS_4_INTS(senderIP));
 				handleRequestGameLeave( msg, senderIP );
 				break;
 			case LANMessage::MSG_REQUEST_LOBBY_LEAVE:				// I'm outa here!
-				DEBUG_LOG(("LANAPI::update - got a MSG_REQUEST_LOBBY_LEAVE from %d.%d.%d.%d", PRINTF_IP_AS_4_INTS(senderIP)));
+				engine::debug::log_info("LANAPI::update - got a MSG_REQUEST_LOBBY_LEAVE from %d.%d.%d.%d", PRINTF_IP_AS_4_INTS(senderIP));
 				handleRequestLobbyLeave( msg, senderIP );
 				break;
 
@@ -416,7 +417,7 @@ void LANAPI::update()
 				handleGameStartTimer( msg, senderIP );
 				break;
 			case LANMessage::MSG_GAME_OPTIONS:				// Here's some info about the game.
-				DEBUG_LOG(("LANAPI::update - got a MSG_GAME_OPTIONS from %d.%d.%d.%d", PRINTF_IP_AS_4_INTS(senderIP)));
+				engine::debug::log_info("LANAPI::update - got a MSG_GAME_OPTIONS from %d.%d.%d.%d", PRINTF_IP_AS_4_INTS(senderIP));
 				handleGameOptions( msg, senderIP );
 				break;
 			case LANMessage::MSG_INACTIVE:		// someone is telling us that we're inactive.
@@ -424,7 +425,7 @@ void LANAPI::update()
 				break;
 
 			default:
-				DEBUG_LOG(("Unknown LAN message type %d", msg->messageType));
+				engine::debug::log_info("Unknown LAN message type %d", msg->messageType);
 			}
 
 			// Mark it as read
@@ -595,7 +596,7 @@ void LANAPI::update()
 	}
 	else if (m_gameStartTime && m_gameStartTime <= now)
 	{
-//		DEBUG_LOG(("m_gameStartTime=%d, now=%d, m_gameStartSeconds=%d", m_gameStartTime, now, m_gameStartSeconds));
+//		engine::debug::log_info("m_gameStartTime=%d, now=%d, m_gameStartSeconds=%d", m_gameStartTime, now, m_gameStartSeconds);
 		ResetGameStartTimer();
 		RequestGameStart();
 	}
@@ -833,7 +834,7 @@ void LANAPI::RequestGameStartTimer( Int seconds )
 
 void LANAPI::RequestGameOptions( AsciiString gameOptions, Bool isPublic, UnsignedInt ip /* = 0 */ )
 {
-	DEBUG_ASSERTCRASH(gameOptions.getLength() < m_lanMaxOptionsLength, ("Game options string is too long!"));
+	engine::debug::invariant((gameOptions.getLength() < m_lanMaxOptionsLength), "gameOptions.getLength() < m_lanMaxOptionsLength", __FILE__, __LINE__, "Game options string is too long!");
 
 	if (!m_currentGame)
 		return;
@@ -858,7 +859,7 @@ void LANAPI::RequestGameOptions( AsciiString gameOptions, Bool isPublic, Unsigne
 
 	// We can request game options (side, color, etc) while we don't have a slot yet.  Of course, we don't need to
 	// call OnGameOptions for those, so it's okay to silently fail.
-	//DEBUG_ASSERTCRASH(player != MAX_SLOTS, ("Requested game options, but we're not in slot list!");
+	//ENGINE_DEBUG_ASSERT(player != MAX_SLOTS, ("Requested game options, but we're not in slot list!");
 }
 
 void LANAPI::RequestGameCreate( UnicodeString gameName, Bool isDirectConnect )
@@ -868,7 +869,7 @@ void LANAPI::RequestGameCreate( UnicodeString gameName, Bool isDirectConnect )
 
 	if ((!m_inLobby || m_currentGame) && !isDirectConnect)
 	{
-		DEBUG_ASSERTCRASH(m_inLobby && m_currentGame, ("Can't create a game while in one!"));
+		engine::debug::invariant((m_inLobby && m_currentGame), "m_inLobby && m_currentGame", __FILE__, __LINE__, "Can't create a game while in one!");
 		OnGameCreate(LANAPIInterface::RET_BUSY);
 		return;
 	}
@@ -896,7 +897,7 @@ void LANAPI::RequestGameCreate( UnicodeString gameName, Bool isDirectConnect )
 
 	s.truncateTo(g_lanGameNameLength);
 
-	DEBUG_LOG(("Setting local game name to '%ls'", s.str()));
+	engine::debug::log_info("Setting local game name to '%ls'", s.str());
 
 	myGame->setName(s);
 
@@ -966,7 +967,7 @@ AsciiString LANAPI::createSlotString()
 		{
 			str = "H";
 			LANPlayer *user = slot->getUser();
-			DEBUG_ASSERTCRASH(user, ("Human player has no User*!"));
+			engine::debug::invariant((user), "user", __FILE__, __LINE__, "Human player has no User*!");
 			AsciiString name;
 			name.translate(user->getName());
 			str.concat(name);
@@ -991,7 +992,7 @@ AsciiString LANAPI::createSlotString()
 		}
 		else
 		{
-			DEBUG_CRASH(("Bad slot type"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Bad slot type");
 			str = "X,";
 		}
 
@@ -1155,7 +1156,7 @@ void LANAPI::removeGame( LANGameInfo *game )
 		else
 		{
 			// Odd.  We went the whole way without finding it in the list.
-			DEBUG_CRASH(("LANGameInfo wasn't in the list"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "LANGameInfo wasn't in the list");
 		}
 	}
 }
@@ -1196,7 +1197,7 @@ void LANAPI::removePlayer( LANPlayer *player )
 		else
 		{
 			// Odd.  We went the whole way without finding it in the list.
-			DEBUG_CRASH(("LANPlayer wasn't in the list"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "LANPlayer wasn't in the list");
 		}
 	}
 }
@@ -1285,16 +1286,16 @@ Bool LANAPI::AmIHost()
 }
 
 void LANAPI::setIsActive(Bool isActive) {
-	DEBUG_LOG(("LANAPI::setIsActive - entering"));
+	engine::debug::log_info("LANAPI::setIsActive - entering");
 	if (isActive != m_isActive) {
-		DEBUG_LOG(("LANAPI::setIsActive - m_isActive changed to %s", isActive ? "TRUE" : "FALSE"));
+		engine::debug::log_info("LANAPI::setIsActive - m_isActive changed to %s", isActive ? "TRUE" : "FALSE");
 		if (isActive == FALSE) {
 			if ((m_inLobby == FALSE) && (m_currentGame != nullptr)) {
 				LANMessage msg;
 				fillInLANMessage( &msg );
 				msg.messageType = LANMessage::MSG_INACTIVE;
 				sendMessage(&msg);
-				DEBUG_LOG(("LANAPI::setIsActive - sent an IsActive message"));
+				engine::debug::log_info("LANAPI::setIsActive - sent an IsActive message");
 			}
 		}
 	}

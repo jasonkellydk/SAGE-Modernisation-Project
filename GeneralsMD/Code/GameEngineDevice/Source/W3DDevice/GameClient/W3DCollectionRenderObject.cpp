@@ -23,8 +23,9 @@
 import Assets.Adapters.W3D.Collection;
 #include "WWLib/chunkio.h"
 #include "W3DDevice/GameClient/W3DCamera.h"
-#include "WWDebug/wwdebug.h"
+
 #include "W3DDevice/GameClient/W3DAssetCatalog.h"
+import engine.debug;
 
 //#include "sr.hpp"
 
@@ -134,7 +135,7 @@ int W3DCollectionRenderObject::Get_Num_Sub_Objects() const
 W3DRenderObject * W3DCollectionRenderObject::Get_Sub_Object(int index) const
 {
     const auto* child = index >= 0 ? m_children.At(index) : nullptr;
-    WWASSERT(child);
+    engine::debug::assert_condition((child), "child", __FILE__, __LINE__, "assertion failed");
     if (!child) return nullptr;
     auto retained = child->model;
     return retained.Release();
@@ -142,7 +143,7 @@ W3DRenderObject * W3DCollectionRenderObject::Get_Sub_Object(int index) const
 
 int W3DCollectionRenderObject::Add_Sub_Object(W3DRenderObject * subobj)
 {
-    WWASSERT(subobj);
+    engine::debug::assert_condition((subobj), "subobj", __FILE__, __LINE__, "assertion failed");
     auto owner = ChildOwner::Create_Add_Ref(subobj);
     subobj->Set_Container(this);
     subobj->Set_Transform(Get_Transform_No_Validity_Check());
@@ -216,7 +217,7 @@ int W3DCollectionRenderObject::Snap_Point_Count()
 
 void W3DCollectionRenderObject::Get_Snap_Point(int index,Vector3 * set)
 {
-	WWASSERT(set != nullptr);
+	engine::debug::assert_condition((set != nullptr), "set != nullptr", __FILE__, __LINE__, "assertion failed");
 	if (index >= 0 && static_cast<std::size_t>(index) < SnapPoints.size()) {
 		const auto& point = SnapPoints[index];
 		set->Set(point.x, point.y, point.z);

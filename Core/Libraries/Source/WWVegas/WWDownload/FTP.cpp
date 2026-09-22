@@ -39,6 +39,7 @@
 //#include "wlib/wstring.h"
 
 #include "DownloadDebug.h"
+import engine.debug;
 
 // umm... what?? BGC 3/27/03
 //#ifndef RTS_DEBUG
@@ -1593,18 +1594,18 @@ HRESULT  Cftp::GetNextFileBlock( LPCSTR szLocalFileName, int * piTotalRead )
 		char curdir[256];
 		_getcwd(curdir,256);
 		Prepare_Directories(curdir, m_szLocalFileName);
-		DEBUG_LOG(("CWD: %s", curdir));
+		engine::debug::log_info("CWD: %s", curdir);
 
 		if( rename( downloadfilename, m_szLocalFileName ) != 0 )	{
-			DEBUG_LOG(("First rename of %s to %s failed with errno of %d", downloadfilename, m_szLocalFileName, errno));
+			engine::debug::log_info("First rename of %s to %s failed with errno of %d", downloadfilename, m_szLocalFileName, errno);
 			/* Error moving file - remove file that's already there and try again. */
 			_chmod( m_szLocalFileName, _S_IWRITE | _S_IREAD);	// make sure it's not readonly
-			DEBUG_LOG(("_chmod of %s failed with errno of %d", m_szLocalFileName, errno));
+			engine::debug::log_info("_chmod of %s failed with errno of %d", m_szLocalFileName, errno);
 			remove( m_szLocalFileName );
-			DEBUG_LOG(("remove of %s failed with errno of %d", m_szLocalFileName, errno));
+			engine::debug::log_info("remove of %s failed with errno of %d", m_szLocalFileName, errno);
 
 			if( rename( downloadfilename, m_szLocalFileName ) != 0 )	{
-				DEBUG_LOG(("Second rename of %s to %s failed with errno of %d", downloadfilename, m_szLocalFileName, errno));
+				engine::debug::log_info("Second rename of %s to %s failed with errno of %d", downloadfilename, m_szLocalFileName, errno);
 				return( FTP_FAILED );
 			}
 		}

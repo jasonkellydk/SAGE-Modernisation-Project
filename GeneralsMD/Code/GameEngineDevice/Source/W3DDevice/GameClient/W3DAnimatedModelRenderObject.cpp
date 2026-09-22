@@ -20,8 +20,9 @@ import Graphics.Frame.RenderClock;
 #include "W3DDevice/GameClient/W3DAnimatedModelRenderObject.h"
 import Graphics.Scene.Models.Hierarchy;
 #include "W3DDevice/GameClient/W3DAssetCatalog.h"
+import engine.debug;
 
-#include "WWDebug/wwmemlog.h"
+
 import Assets.Cache.Animations;
 
 static_assert(static_cast<int>(Graphics::ModelPlaybackMode::Manual) == W3DRenderObject::ANIM_MODE_MANUAL);
@@ -47,7 +48,7 @@ W3DAnimatedModelRenderObject::W3DAnimatedModelRenderObject(const char * htree_na
 		if (source != nullptr) {
 			Hierarchy.reset(W3DNEW Graphics::ModelHierarchy(*source));
 		} else {
-			WWDEBUG_SAY(("Unable to find Hierarchy: %s",htree_name));
+			engine::debug::log_info("Unable to find Hierarchy: %s",htree_name);
 			Hierarchy.reset(W3DNEW Graphics::ModelHierarchy);
 			Hierarchy->Initialize_Default();
 		}
@@ -165,8 +166,8 @@ Assets::AnimationAssetHandle W3DAnimatedModelRenderObject::Peek_Animation()
 Matrix3D 	W3DAnimatedModelRenderObject::Get_Bone_Transform(const char * bonename)
 {
 	if (Hierarchy) {
-		WWASSERT(Hierarchy);
-		WWASSERT(bonename);
+		engine::debug::assert_condition((Hierarchy != nullptr), "Hierarchy != nullptr", __FILE__, __LINE__, "assertion failed");
+		engine::debug::assert_condition((bonename), "bonename", __FILE__, __LINE__, "assertion failed");
 
 		int idx = Hierarchy->Bone_Index(bonename);
 		return Get_Bone_Transform(idx);
@@ -216,10 +217,10 @@ bool W3DAnimatedModelRenderObject::Is_Bone_Captured(int boneindex) const
 
 void W3DAnimatedModelRenderObject::Control_Bone(int bindex,const Matrix3D & objtm,bool world_space_translation)
 {
-#ifdef WWDEBUG
+#ifdef RTS_DEBUG
 	for (int j=0; j<3; j++) {
 		for (int i=0; i<4; i++) {
-			WWASSERT(WWMath::Is_Valid_Float(objtm[j][i]));
+			engine::debug::assert_condition((WWMath::Is_Valid_Float(objtm[j][i])), "WWMath::Is_Valid_Float(objtm[j][i])", __FILE__, __LINE__, "assertion failed");
 		}
 	}
 #endif

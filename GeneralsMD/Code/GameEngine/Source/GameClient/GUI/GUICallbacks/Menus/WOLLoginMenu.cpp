@@ -29,7 +29,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/STLTypedefs.h"
 
@@ -348,7 +349,7 @@ static void shutdownComplete( WindowLayout *layout )
 	}
 	else
 	{
-		DEBUG_ASSERTCRASH(loginPref != nullptr, ("loginPref == nullptr"));
+		engine::debug::invariant((loginPref != nullptr), "loginPref != nullptr", __FILE__, __LINE__, "loginPref == nullptr");
 		if (loginPref)
 		{
 			loginPref->write();
@@ -528,13 +529,13 @@ void WOLLoginMenuInit( WindowLayout *layout, void *userData )
 		GameSpyUseProfiles = true;
 #endif // ALLOW_NON_PROFILED_LOGIN
 
-		DEBUG_ASSERTCRASH(buttonBack,						("buttonBack missing!"));
-		DEBUG_ASSERTCRASH(buttonLogin,					("buttonLogin missing!"));
-		DEBUG_ASSERTCRASH(buttonCreateAccount,	("buttonCreateAccount missing!"));
-		//DEBUG_ASSERTCRASH(buttonDontUseAccount,	("buttonDontUseAccount missing!"));
-		DEBUG_ASSERTCRASH(comboBoxEmail,				("comboBoxEmail missing!"));
-		DEBUG_ASSERTCRASH(comboBoxLoginName,		("comboBoxLoginName missing!"));
-		DEBUG_ASSERTCRASH(textEntryPassword,		("textEntryPassword missing!"));
+		engine::debug::invariant((buttonBack), "buttonBack", __FILE__, __LINE__, "buttonBack missing!");
+		engine::debug::invariant((buttonLogin), "buttonLogin", __FILE__, __LINE__, "buttonLogin missing!");
+		engine::debug::invariant((buttonCreateAccount), "buttonCreateAccount", __FILE__, __LINE__, "buttonCreateAccount missing!");
+		//engine::debug::invariant((buttonDontUseAccount), "buttonDontUseAccount", __FILE__, __LINE__, "buttonDontUseAccount missing!");
+		engine::debug::invariant((comboBoxEmail), "comboBoxEmail", __FILE__, __LINE__, "comboBoxEmail missing!");
+		engine::debug::invariant((comboBoxLoginName), "comboBoxLoginName", __FILE__, __LINE__, "comboBoxLoginName missing!");
+		engine::debug::invariant((textEntryPassword), "textEntryPassword", __FILE__, __LINE__, "textEntryPassword missing!");
 
 		//TheShell->registerWithAnimateManager(parentWOLLogin, WIN_ANIMATION_SLIDE_TOP, TRUE);
 		/**/
@@ -579,11 +580,11 @@ void WOLLoginMenuInit( WindowLayout *layout, void *userData )
 		textEntryPassword =						TheWindowManager->winGetWindowFromId( nullptr,  textEntryPasswordID);
 		checkBoxRememberPassword =		TheWindowManager->winGetWindowFromId( nullptr,  checkBoxRememberPasswordID);
 
-		DEBUG_ASSERTCRASH(buttonBack,						("buttonBack missing!"));
-		DEBUG_ASSERTCRASH(buttonLogin,					("buttonLogin missing!"));
-		DEBUG_ASSERTCRASH(buttonCreateAccount,	("buttonCreateAccount missing!"));
-		DEBUG_ASSERTCRASH(buttonUseAccount,			("buttonUseAccount missing!"));
-		DEBUG_ASSERTCRASH(textEntryLoginName,		("textEntryLoginName missing!"));
+		engine::debug::invariant((buttonBack), "buttonBack", __FILE__, __LINE__, "buttonBack missing!");
+		engine::debug::invariant((buttonLogin), "buttonLogin", __FILE__, __LINE__, "buttonLogin missing!");
+		engine::debug::invariant((buttonCreateAccount), "buttonCreateAccount", __FILE__, __LINE__, "buttonCreateAccount missing!");
+		engine::debug::invariant((buttonUseAccount), "buttonUseAccount", __FILE__, __LINE__, "buttonUseAccount missing!");
+		engine::debug::invariant((textEntryLoginName), "textEntryLoginName", __FILE__, __LINE__, "textEntryLoginName missing!");
 		TheWindowManager->winSetFocus( textEntryLoginName );
 		//TheShell->registerWithAnimateManager(parentWOLLogin, WIN_ANIMATION_SLIDE_TOP, TRUE);
 
@@ -755,7 +756,7 @@ static void checkLogin()
 	{
 		// save off our ping string, and end those threads
 		AsciiString pingStr = ThePinger->getPingString( 1000 );
-		DEBUG_LOG(("Ping string is %s", pingStr.str()));
+		engine::debug::log_info("Ping string is %s", pingStr.str());
 		TheGameSpyInfo->setPingString(pingStr);
 		//delete ThePinger;
 		//ThePinger = nullptr;
@@ -854,7 +855,7 @@ void WOLLoginMenuUpdate( WindowLayout * layout, void *userData)
 					// kill & restart the threads
 					AsciiString motd = TheGameSpyInfo->getMOTD();
 					AsciiString config = TheGameSpyInfo->getConfig();
-					DEBUG_LOG(("Tearing down GameSpy from WOLLoginMenuUpdate(PEERRESPONSE_DISCONNECT)"));
+					engine::debug::log_info("Tearing down GameSpy from WOLLoginMenuUpdate(PEERRESPONSE_DISCONNECT)");
 					TearDownGameSpy();
 					SetUpGameSpy( motd.str(), config.str() );
 				}
@@ -880,7 +881,7 @@ void WOLLoginMenuUpdate( WindowLayout * layout, void *userData)
 		// kill & restart the threads
 		AsciiString motd = TheGameSpyInfo->getMOTD();
 		AsciiString config = TheGameSpyInfo->getConfig();
-		DEBUG_LOG(("Tearing down GameSpy from WOLLoginMenuUpdate(login timeout)"));
+		engine::debug::log_info("Tearing down GameSpy from WOLLoginMenuUpdate(login timeout)");
 		TearDownGameSpy();
 		SetUpGameSpy( motd.str(), config.str() );
 	}
@@ -1255,7 +1256,7 @@ WindowMsgHandledType WOLLoginMenuSystem( GameWindow *window, UnsignedInt msg,
 							//TheGameSpyInfo->setLocalProfileID( resp.player.profileID );
 							TheGameSpyInfo->setLocalEmail( email );
 							TheGameSpyInfo->setLocalPassword( password );
-							DEBUG_LOG(("before create: TheGameSpyInfo->stuff(%s/%s/%s)", TheGameSpyInfo->getLocalBaseName().str(), TheGameSpyInfo->getLocalEmail().str(), TheGameSpyInfo->getLocalPassword().str()));
+							engine::debug::log_info("before create: TheGameSpyInfo->stuff(%s/%s/%s)", TheGameSpyInfo->getLocalBaseName().str(), TheGameSpyInfo->getLocalEmail().str(), TheGameSpyInfo->getLocalPassword().str());
 
 							TheGameSpyBuddyMessageQueue->addRequest( req );
 							if(checkBoxRememberPassword && GadgetCheckBoxIsChecked(checkBoxRememberPassword))
@@ -1344,7 +1345,7 @@ WindowMsgHandledType WOLLoginMenuSystem( GameWindow *window, UnsignedInt msg,
 							//TheGameSpyInfo->setLocalProfileID( resp.player.profileID );
 							TheGameSpyInfo->setLocalEmail( email );
 							TheGameSpyInfo->setLocalPassword( password );
-							DEBUG_LOG(("before login: TheGameSpyInfo->stuff(%s/%s/%s)", TheGameSpyInfo->getLocalBaseName().str(), TheGameSpyInfo->getLocalEmail().str(), TheGameSpyInfo->getLocalPassword().str()));
+							engine::debug::log_info("before login: TheGameSpyInfo->stuff(%s/%s/%s)", TheGameSpyInfo->getLocalBaseName().str(), TheGameSpyInfo->getLocalEmail().str(), TheGameSpyInfo->getLocalPassword().str());
 
 							TheGameSpyBuddyMessageQueue->addRequest( req );
 							if(checkBoxRememberPassword && GadgetCheckBoxIsChecked(checkBoxRememberPassword))
@@ -1440,7 +1441,7 @@ WindowMsgHandledType WOLLoginMenuSystem( GameWindow *window, UnsignedInt msg,
 								UnicodeString uniLine;
 								uniLine = UnicodeString(MultiByteToWideCharSingleLine(asciiLine.str()).c_str());
 								uniLine.trimEnd();
-								DEBUG_LOG(("adding TOS line: [%ls]", uniLine.str()));
+								engine::debug::log_info("adding TOS line: [%ls]", uniLine.str());
 								GadgetListBoxAddEntryText(listboxTOS, uniLine, tosColor, -1);
 							}
 						}

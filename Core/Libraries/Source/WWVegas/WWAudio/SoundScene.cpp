@@ -41,9 +41,11 @@
 #include "LogicalListener.h"
 #include "WWLib/chunkio.h"
 #include "WWSaveLoad/persistfactory.h"
-#include "WWDebug/wwprofile.h"
+
 #include "Threads.h"
-#include "WWDebug/wwmemlog.h"
+import engine.profiling;
+import engine.debug;
+
 
 
 DEFINE_AUTO_POOL(SoundSceneClass::AudibleInfoClass, 64);
@@ -84,7 +86,7 @@ SoundSceneClass::SoundSceneClass ()
 		m_MaxExtents (500, 500, 500),
 		m_IsBatchMode (false)
 {
-	WWMEMLOG(MEM_SOUND);
+
 	m_Listener = W3DNEW Listener3DClass;
 	m_DynamicCullingSystem.Re_Partition (m_MinExtents, m_MaxExtents, 100.00F);
 	m_LogicalCullingSystem.Re_Partition (m_MinExtents, m_MaxExtents, 100.00F);
@@ -135,7 +137,7 @@ SoundSceneClass::Re_Partition
 void
 SoundSceneClass::Collect_Logical_Sounds (unsigned int milliseconds, int listener_count)
 {
-	WWPROFILE ("Collect_Logical_Sounds");
+	engine::profiling::Scope profile_scope_138("Collect_Logical_Sounds");
 
 	uint32 timestamp = ::GetTickCount ();
 
@@ -237,7 +239,7 @@ SoundSceneClass::Collect_Audible_Sounds
 	COLLECTED_SOUNDS &list
 )
 {
-	WWPROFILE ("Collect_Audible_Sounds");
+	engine::profiling::Scope profile_scope_240("Collect_Audible_Sounds");
 
 	//
 	// Collect a list of the audible dynamic sounds
@@ -332,7 +334,7 @@ SoundSceneClass::Collect_Audible_Sounds
 void
 SoundSceneClass::On_Frame_Update (unsigned int milliseconds)
 {
-	WWPROFILE ("On_Frame_Update");
+	engine::profiling::Scope profile_scope_335("On_Frame_Update");
 
 	COLLECTED_SOUNDS auxiliary_sounds;
 	COLLECTED_SOUNDS primary_sounds;
@@ -473,7 +475,7 @@ SoundSceneClass::On_Frame_Update (unsigned int milliseconds)
 			//
 			//	Make sure we cull the sound
 			//
-			WWASSERT(sound_obj != nullptr);
+			engine::debug::assert_condition((sound_obj != nullptr), "sound_obj != nullptr", __FILE__, __LINE__, "assertion failed");
 			sound_obj->Cull_Sound (true);
 			sound_obj->Set_Runtime_Priority (0);
 		}
@@ -515,10 +517,9 @@ SoundSceneClass::Add_Sound
 	bool						start_playing
 )
 {
-	WWPROFILE ("Add_Sound");
-	WWMEMLOG(MEM_SOUND);
+	engine::profiling::Scope profile_scope_518("Add_Sound");
 
-	WWASSERT (sound_obj != nullptr);
+	engine::debug::assert_condition((sound_obj != nullptr), "sound_obj != nullptr", __FILE__, __LINE__, "assertion failed");
 	if (sound_obj != nullptr && sound_obj->Is_In_Scene () == false) {
 		bool cull_sound = true;
 
@@ -585,7 +586,7 @@ SoundSceneClass::Remove_Sound
 	bool stop_playing
 )
 {
-	WWPROFILE ("Remove_Sound");
+	engine::profiling::Scope profile_scope_587("Remove_Sound");
 
 	if (sound_obj == nullptr) {
 		return ;
@@ -642,9 +643,9 @@ SoundSceneClass::Add_Static_Sound
 	bool						start_playing
 )
 {
-	WWPROFILE ("Add_Static_Sound");
+	engine::profiling::Scope profile_scope_644("Add_Static_Sound");
 
-	WWASSERT (sound_obj != nullptr);
+	engine::debug::assert_condition((sound_obj != nullptr), "sound_obj != nullptr", __FILE__, __LINE__, "assertion failed");
 	if (sound_obj != nullptr) {
 
 		//
@@ -721,7 +722,7 @@ SoundSceneClass::Remove_Static_Sound
 	bool						stop_playing
 )
 {
-	WWPROFILE ("Remove_Static_Sound");
+	engine::profiling::Scope profile_scope_723("Remove_Static_Sound");
 
 	if (sound_obj == nullptr) {
 		return ;
@@ -778,9 +779,9 @@ SoundSceneClass::Add_Logical_Sound
 	bool						single_shot
 )
 {
-	WWPROFILE ("Add_Logical_Sound");
+	engine::profiling::Scope profile_scope_780("Add_Logical_Sound");
 
-	WWASSERT (sound_obj != nullptr);
+	engine::debug::assert_condition((sound_obj != nullptr), "sound_obj != nullptr", __FILE__, __LINE__, "assertion failed");
 	if (sound_obj != nullptr) {
 
 		//
@@ -839,7 +840,7 @@ SoundSceneClass::Remove_Logical_Sound
 	bool						remove_from_list
 )
 {
-	WWPROFILE ("Remove_Logical_Sound");
+	engine::profiling::Scope profile_scope_841("Remove_Logical_Sound");
 
 	if (sound_obj == nullptr) {
 		return ;
@@ -920,9 +921,9 @@ SoundSceneClass::Remove_Logical_Sound
 void
 SoundSceneClass::Add_Logical_Listener (LogicalListenerClass *listener_obj)
 {
-	WWPROFILE ("Add_Logical_Listener");
+	engine::profiling::Scope profile_scope_922("Add_Logical_Listener");
 
-	WWASSERT (listener_obj != nullptr);
+	engine::debug::assert_condition((listener_obj != nullptr), "listener_obj != nullptr", __FILE__, __LINE__, "assertion failed");
 	if (listener_obj != nullptr) {
 
 		//
@@ -945,9 +946,9 @@ SoundSceneClass::Add_Logical_Listener (LogicalListenerClass *listener_obj)
 void
 SoundSceneClass::Remove_Logical_Listener (LogicalListenerClass *listener_obj)
 {
-	WWPROFILE ("Remove_Logical_Listener");
+	engine::profiling::Scope profile_scope_947("Remove_Logical_Listener");
 
-	WWASSERT (listener_obj != nullptr);
+	engine::debug::assert_condition((listener_obj != nullptr), "listener_obj != nullptr", __FILE__, __LINE__, "assertion failed");
 	if (listener_obj != nullptr) {
 
 		//

@@ -28,7 +28,8 @@
 //						 and assign callbacks
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/FunctionLexicon.h"
 #include "GameClient/GameWindow.h"
@@ -649,8 +650,8 @@ Bool FunctionLexicon::validate()
 							if( sourceEntry->func == lookAtEntry->func )
 							{
 
-								DEBUG_LOG(( "WARNING! Function lexicon entries match same address! '%s' and '%s'",
-														sourceEntry->name, lookAtEntry->name ));
+								engine::debug::log_info( "WARNING! Function lexicon entries match same address! '%s' and '%s'",
+														sourceEntry->name, lookAtEntry->name );
 								valid = FALSE;
 
 							}

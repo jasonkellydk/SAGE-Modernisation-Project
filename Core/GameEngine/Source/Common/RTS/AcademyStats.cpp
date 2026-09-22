@@ -43,7 +43,8 @@
 //
 //-----------------------------------------------------------------------------
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/AcademyStats.h"
 #include "Common/Energy.h"
@@ -1065,7 +1066,7 @@ Bool AcademyStats::calculateAcademyAdvice( AcademyAdviceInfo *info )
 	//Sanity
 	if( !info )
 	{
-		DEBUG_CRASH( ("AcademyStats::calculateAcademyAdvice() was passed in null AcademyAdviceInfo.") );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "AcademyStats::calculateAcademyAdvice() was passed in null AcademyAdviceInfo.");
 		return FALSE;
 	}
 

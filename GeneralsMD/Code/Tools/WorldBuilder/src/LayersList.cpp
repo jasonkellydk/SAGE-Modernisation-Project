@@ -45,6 +45,7 @@
 #include "GameLogic/PolygonTrigger.h"
 
 #include <stack>
+import engine.debug;
 
 
 static int newLayerNum = 1;
@@ -203,7 +204,7 @@ void LayersList::resetLayers()
 void LayersList::addMapObjectToLayersList(MapObject *objToAdd, AsciiString layerToAddTo)
 {
 	if (!objToAdd || findMapObjectAndList(objToAdd)) {
-		DEBUG_CRASH(("MapObject added was null or object already in Layers List. jkmcd"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "MapObject added was null or object already in Layers List. jkmcd");
 		return;
 	}
 	ListLayerIt layerIt;
@@ -228,7 +229,7 @@ void LayersList::addMapObjectToLayersList(MapObject *objToAdd, AsciiString layer
 void LayersList::addPolygonTriggerToLayersList(PolygonTrigger *triggerToAdd, AsciiString layerToAddTo)
 {
 	if (!triggerToAdd || findPolygonTriggerAndList(triggerToAdd)) {
-		DEBUG_CRASH(("PolygonTrigger added was null or object already in Layers List. jkmcd"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "PolygonTrigger added was null or object already in Layers List. jkmcd");
 		return;
 	}
 	ListLayerIt layerIt;
@@ -256,7 +257,7 @@ AsciiString LayersList::removeMapObjectFromLayersList(MapObject *objToRemove)
 	ListLayerIt layerIt;
 	ListMapObjectPtrIt objIt;
 	if (!objToRemove || !findMapObjectAndList(objToRemove, &layerIt, &objIt)) {
-		DEBUG_CRASH(("Couldn't find that object in the layers list. jkmcd"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Couldn't find that object in the layers list. jkmcd");
 		return AsciiString::TheEmptyString;
 	}
 
@@ -269,7 +270,7 @@ AsciiString LayersList::removePolygonTriggerFromLayersList(PolygonTrigger *trigg
 	ListLayerIt layerIt;
 	ListPolygonTriggerPtrIt triggerIt;
 	if (!triggerToRemove || !findPolygonTriggerAndList(triggerToRemove, &layerIt, &triggerIt)) {
-		DEBUG_CRASH(("Couldn't find that polygon trigger in the layers list. jkmcd"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Couldn't find that polygon trigger in the layers list. jkmcd");
 		return AsciiString::TheEmptyString;
 	}
 
@@ -281,7 +282,7 @@ AsciiString LayersList::removePolygonTriggerFromLayersList(PolygonTrigger *trigg
 void LayersList::changeMapObjectLayer(MapObject *objToChange, AsciiString layerToPlaceOn)
 {
 	if (!objToChange) {
-		DEBUG_CRASH(("Attempted to change location of null object. jkmcd"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Attempted to change location of null object. jkmcd");
 		return;
 	}
 
@@ -292,7 +293,7 @@ void LayersList::changeMapObjectLayer(MapObject *objToChange, AsciiString layerT
 void LayersList::changePolygonTriggerLayer(PolygonTrigger *triggerToChange, AsciiString layerToPlaceOn)
 {
 	if (!triggerToChange) {
-		DEBUG_CRASH(("Attempted to change location of null object. jkmcd"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Attempted to change location of null object. jkmcd");
 		return;
 	}
 
@@ -303,7 +304,7 @@ void LayersList::changePolygonTriggerLayer(PolygonTrigger *triggerToChange, Asci
 void LayersList::addLayerNamed(IN AsciiString layerToAdd)
 {
 	if (findLayerNamed(layerToAdd)) {
-		DEBUG_CRASH(("Already found a layer named %s", layerToAdd.str()));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Already found a layer named %s", layerToAdd.str());
 		return;
 	}
 
@@ -333,7 +334,7 @@ void LayersList::removeLayerNamed(IN AsciiString layerToRemove)
 
 	// If we can't find the layer, how can we remove it?
 	if (!findLayerNamed(layerToRemove, &layerIt)) {
-		DEBUG_CRASH(("Couldn't find layer named %s", layerToRemove.str()));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Couldn't find layer named %s", layerToRemove.str());
 		return;
 	}
 
@@ -350,7 +351,7 @@ void LayersList::changeLayerName(IN AsciiString oldLayerName, AsciiString newLay
 {
 	ListLayerIt layerIt;
 	if (!findLayerNamed(oldLayerName, &layerIt)) {
-		DEBUG_CRASH(("Couldn't find the layer named %s", oldLayerName.str()));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Couldn't find the layer named %s", oldLayerName.str());
 		return;
 	}
 
@@ -529,7 +530,7 @@ Bool LayersList::findLayerNamed(IN AsciiString layerName, OUT ListLayerIt *layer
 void LayersList::addMapObjectToLayer(IN MapObject *objectToAdd, IN ListLayerIt *layerIt)
 {
 	if (!objectToAdd) {
-		DEBUG_CRASH(("No object to add in addMapObjectToLayer. This should not happen. jkmcd"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "No object to add in addMapObjectToLayer. This should not happen. jkmcd");
 		return;
 	}
 
@@ -582,7 +583,7 @@ void LayersList::addMapObjectToLayer(IN MapObject *objectToAdd, IN ListLayerIt *
 void LayersList::addPolygonTriggerToLayer(IN PolygonTrigger *triggerToAdd, IN ListLayerIt *layerIt)
 {
 	if (!triggerToAdd) {
-		DEBUG_CRASH(("No trigger to add in addPolygonTriggerToLayer. This should not happen. jkmcd"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "No trigger to add in addPolygonTriggerToLayer. This should not happen. jkmcd");
 		return;
 	}
 
@@ -631,7 +632,7 @@ void LayersList::addPolygonTriggerToLayer(IN PolygonTrigger *triggerToAdd, IN Li
 void LayersList::removeMapObjectFromLayer(IN MapObject *objectToRemove, IN ListLayerIt *layerIt, IN ListMapObjectPtrIt *objectIt)
 {
 	if (!objectToRemove) {
-		DEBUG_CRASH(("Attempted to remove null object from layers list. jkmcd"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Attempted to remove null object from layers list. jkmcd");
 		return;
 	}
 
@@ -643,7 +644,7 @@ void LayersList::removeMapObjectFromLayer(IN MapObject *objectToRemove, IN ListL
 		objectBeingRemove = (*objectIt);
 	} else {
 		if (!findMapObjectAndList(objectToRemove, &layerToRemoveFrom, &objectBeingRemove)) {
-			DEBUG_CRASH(("Couldn't find the object anywhere. Why did we try to remove it? jkmcd"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Couldn't find the object anywhere. Why did we try to remove it? jkmcd");
 			return;
 		}
 	}
@@ -671,7 +672,7 @@ void LayersList::removeMapObjectFromLayer(IN MapObject *objectToRemove, IN ListL
 void LayersList::removePolygonTriggerFromLayer(IN PolygonTrigger *triggerToRemove, IN ListLayerIt *layerIt, IN ListPolygonTriggerPtrIt *triggerIt)
 {
 	if (!triggerToRemove) {
-		DEBUG_CRASH(("Attempted to remove null trigger from layers list. jkmcd"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Attempted to remove null trigger from layers list. jkmcd");
 		return;
 	}
 
@@ -683,7 +684,7 @@ void LayersList::removePolygonTriggerFromLayer(IN PolygonTrigger *triggerToRemov
 		triggerBeingRemove = (*triggerIt);
 	} else {
 		if (!findPolygonTriggerAndList(triggerToRemove, &layerToRemoveFrom, &triggerBeingRemove)) {
-			DEBUG_CRASH(("Couldn't find the object anywhere. Why did we try to remove it? jkmcd"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Couldn't find the object anywhere. Why did we try to remove it? jkmcd");
 			return;
 		}
 	}

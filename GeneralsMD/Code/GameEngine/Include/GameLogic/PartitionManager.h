@@ -46,13 +46,15 @@
 
 #pragma once
 
+
+#include <cassert>
 #include <vector>
 #include <memory>
 
 //-----------------------------------------------------------------------------
 //           Includes
 //-----------------------------------------------------------------------------
-#include "Common/GameCommon.h"	// ensure we get DUMP_PERF_STATS, or not
+#include "Common/GameCommon.h"
 #include "GameLogic/ObjectIter.h"
 #include "Common/ObjectStatusTypes.h"
 #include "Common/KindOf.h"
@@ -587,12 +589,12 @@ public:
 	Bool isInListDirtyModules(PartitionData* const* pListHead) const
 	{
 		Bool result = (*pListHead == this || m_prevDirty || m_nextDirty);
-		DEBUG_ASSERTCRASH(result == (m_dirtyStatus != NOT_DIRTY), ("dirty flag mismatch"));
+		assert((result == (m_dirtyStatus != NOT_DIRTY)));
 		return result;
 	}
 	void prependToDirtyModules(PartitionData** pListHead)
 	{
-		DEBUG_ASSERTCRASH((m_dirtyStatus != NOT_DIRTY), ("dirty flag mismatch"));
+		assert(((m_dirtyStatus != NOT_DIRTY)));
 		m_nextDirty = *pListHead;
 		if (*pListHead)
 			(*pListHead)->m_prevDirty = this;
@@ -1158,7 +1160,7 @@ private:
 
 public:
 	PartitionFilterThing(const ThingTemplate *thing, Bool match) : m_tThing(thing), m_match(match) {
-		DEBUG_ASSERTCRASH(m_tThing != nullptr, ("ThingTemplate for PartitionFilterThing is null"));
+		assert((m_tThing != nullptr));
 	}
 protected:
 	virtual Bool allow( Object *other ) override;
@@ -1374,10 +1376,10 @@ public:
 	void processEntirePendingUndoShroudRevealQueue(); ///< process every pending one regardless of timestamp
 
 	/// return the number of PartitionCells in the x-dimension.
-	Int getCellCountX() { DEBUG_ASSERTCRASH(m_cellCountX != 0, ("partition not inited")); return m_cellCountX; }
+	Int getCellCountX() { assert((m_cellCountX != 0)); return m_cellCountX; }
 
 	/// return the number of PartitionCells in the y-dimension.
-	Int getCellCountY() { DEBUG_ASSERTCRASH(m_cellCountY != 0, ("partition not inited")); return m_cellCountY; }
+	Int getCellCountY() { assert((m_cellCountY != 0)); return m_cellCountY; }
 
 	/// return the PartitionCell located at cell coordinates (x,y).
 	PartitionCell *getCellAt(Int x, Int y);
@@ -1444,9 +1446,6 @@ public:
 	Bool estimateTerrainExtremesAlongLine(const Coord3D& startWorld, const Coord3D& endWorld, Real* minZ, Real* maxZ, Coord2D* minZPos, Coord2D* maxZPos);
 #endif
 
-#ifdef DUMP_PERF_STATS
-	void getPMStats(double& gcoTimeThisFrameTotal, double& gcoTimeThisFrameAvg);
-#endif
 
     // Unsorted center-distance query into reusable caller storage; excludes self.
 	SimpleObjectIterator *iterateObjectsInRange(

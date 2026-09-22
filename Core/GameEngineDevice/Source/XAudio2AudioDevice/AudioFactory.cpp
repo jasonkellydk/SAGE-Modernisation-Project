@@ -18,7 +18,7 @@
 
 #include "AudioFactory.h"
 
-#include "Common/Debug.h"
+
 #include "Lib/BaseType.h"
 
 // Include all backends
@@ -29,6 +29,7 @@
 
 #include <cstdlib>
 #include <string>
+import engine.debug;
 
 /// Create an audio system with fallback chain:
 ///   Windows:  XAudio2 → Null
@@ -71,15 +72,15 @@ std::unique_ptr<AudioSystem> createAudioSystem(const AudioBackendConfig &config)
 		xaudio->openDevice();
 		if (xaudio->getDevice() != nullptr)
 		{
-			DEBUG_LOG(("Audio: Using XAudio2 backend\n"));
+			engine::debug::log_info("Audio: Using XAudio2 backend\n");
 			return xaudio;
 		}
-		DEBUG_LOG(("Audio: XAudio2 init failed, falling back to Null\n"));
+		engine::debug::log_info("Audio: XAudio2 init failed, falling back to Null\n");
 	}
 #endif
 
 	// Fallback to null
-	DEBUG_LOG(("Audio: Using Null backend (no audio)\n"));
+	engine::debug::log_info("Audio: Using Null backend (no audio)\n");
 	auto sys = std::make_unique<NullAudioSystem>();
 	applyConfig(sys.get());
 	return sys;

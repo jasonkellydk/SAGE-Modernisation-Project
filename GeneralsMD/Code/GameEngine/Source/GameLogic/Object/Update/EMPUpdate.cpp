@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/Thing.h"
 #include "Common/ThingTemplate.h"
@@ -86,7 +87,7 @@ EMPUpdate::EMPUpdate( Thing *thing, const ModuleData* moduleData ) : UpdateModul
 	if ( data )
 	{
 		//SANITY
-		DEBUG_ASSERTCRASH( TheGameLogic, ("EMPUpdate::EMPUpdate - TheGameLogic is null" ) );
+		engine::debug::invariant((TheGameLogic), "TheGameLogic", __FILE__, __LINE__, "EMPUpdate::EMPUpdate - TheGameLogic is null" );
 		UnsignedInt now = TheGameLogic->getFrame();
 
 		m_currentScale = data->m_startScale;
@@ -102,13 +103,13 @@ EMPUpdate::EMPUpdate( Thing *thing, const ModuleData* moduleData ) : UpdateModul
 
 		getObject()->setOrientation(GameLogicRandomValueReal(-PI,PI));
 
-		DEBUG_ASSERTCRASH( m_tintEnvPlayFrame < m_dieFrame, ("EMPUpdate::EMPUpdate - you cant play fade after death" ) );
+		engine::debug::invariant((m_tintEnvPlayFrame < m_dieFrame), "m_tintEnvPlayFrame < m_dieFrame", __FILE__, __LINE__, "EMPUpdate::EMPUpdate - you cant play fade after death" );
 
 		return;
 	}
 
 	//SANITY
-	DEBUG_ASSERTCRASH( data, ("EMPUpdate::EMPUpdate - getEMPUpdateModuleData is null" ) );
+	engine::debug::invariant((data), "data", __FILE__, __LINE__, "EMPUpdate::EMPUpdate - getEMPUpdateModuleData is null" );
 	m_currentScale = 1.0f;
 	m_dieFrame = 0;
 	m_tintEnvFadeFrames = 0;
@@ -430,7 +431,7 @@ LeafletDropBehavior::LeafletDropBehavior( Thing *thing, const ModuleData* module
 	if ( data )
 	{
 		//SANITY
-		DEBUG_ASSERTCRASH( TheGameLogic, ("LeafletDropBehavior::LeafletDropBehavior - TheGameLogic is null" ) );
+		engine::debug::invariant((TheGameLogic), "TheGameLogic", __FILE__, __LINE__, "LeafletDropBehavior::LeafletDropBehavior - TheGameLogic is null" );
 		UnsignedInt now = TheGameLogic->getFrame();
     m_startFrame = now + data->m_delayFrames;
 
@@ -438,7 +439,7 @@ LeafletDropBehavior::LeafletDropBehavior( Thing *thing, const ModuleData* module
 	}
 
 	//SANITY
-	DEBUG_ASSERTCRASH( data, ("LeafletDropBehavior::LeafletDropBehavior - getLeafletDropBehaviorModuleData is null" ) );
+	engine::debug::invariant((data), "data", __FILE__, __LINE__, "LeafletDropBehavior::LeafletDropBehavior - getLeafletDropBehaviorModuleData is null" );
 	m_startFrame = TheGameLogic->getFrame() + 1;
 }
 

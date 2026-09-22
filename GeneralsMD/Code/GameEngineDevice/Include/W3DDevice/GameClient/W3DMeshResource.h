@@ -30,7 +30,7 @@ import Graphics.Scene.Models.MeshDrawing;
 #include "WWMath/Vector3i.h"
 #include "WWLib/sharebuf.h"
 import Graphics.Materials.State;
-#include "WWDebug/wwdebug.h"
+
 import Graphics.Materials.MeshMaterial;
 import Graphics.Scene.Props.Material;
 #include "WWLib/ref_ptr.h"

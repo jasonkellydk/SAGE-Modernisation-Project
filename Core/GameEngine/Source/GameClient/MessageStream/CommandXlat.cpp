@@ -27,7 +27,8 @@ import Graphics.Resources.Textures.Quality;
 // Translate raw input events into tactical commands
 // Author: Michael S. Booth, February 2001
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "stdlib.h"				// VC++ wants this here, or gives compile error...
 
@@ -42,7 +43,7 @@ import Graphics.Resources.Textures.Quality;
 #include "Common/MessageStream.h"
 #include "Common/MiscAudio.h"
 #include "Common/MultiplayerSettings.h"
-#include "Common/PerfTimer.h"
+
 #include "Common/Player.h"
 #include "Common/PlayerList.h"
 #include "Common/PlayerTemplate.h"
@@ -99,8 +100,8 @@ void countObjects(Object *obj, void *userData)
 {
 	Int *numObjects = (Int *)userData;
 
-	DEBUG_LOG(("Looking at obj %d (%s) - isEffectivelyDead()==%d, isDestroyed==%d, numObjects==%d",
-		obj->getID(), obj->getTemplate()->getName().str(), obj->isEffectivelyDead(), obj->isDestroyed(), *numObjects));
+	engine::debug::log_info("Looking at obj %d (%s) - isEffectivelyDead()==%d, isDestroyed==%d, numObjects==%d",
+		obj->getID(), obj->getTemplate()->getName().str(), obj->isEffectivelyDead(), obj->isDestroyed(), *numObjects);
 
 	if (!obj->isEffectivelyDead() && !obj->isDestroyed() && !obj->isKindOf(KINDOF_INERT))
 		++(*numObjects);
@@ -813,7 +814,7 @@ void pickAndPlayUnitVoiceResponse( const DrawableList *list, GameMessage::Type m
 				break;
 
 			default:
-				DEBUG_LOG(("Requested to add voice of message type %d, but don't know how - jkmcd", msgType));
+				engine::debug::log_info("Requested to add voice of message type %d, but don't know how - jkmcd", msgType);
 				break;
 		}
 		if( skip )
@@ -1102,7 +1103,7 @@ GameMessage::Type CommandTranslator::issueAttackCommand( Drawable *target,
 	if( m_teamExists )
 	{
 
-		//DEBUG_LOG(("issuing team-attack cmd against %s",enemy->getTemplate()->getName().str()));
+		//engine::debug::log_info("issuing team-attack cmd against %s",enemy->getTemplate()->getName().str());
 
 		// insert team attack command message into stream
 		switch( command )
@@ -1116,7 +1117,7 @@ GameMessage::Type CommandTranslator::issueAttackCommand( Drawable *target,
 				msgType = GameMessage::MSG_DO_ATTACK_OBJECT;
 				break;
 			default:
-				DEBUG_CRASH( ("issueAttackCommand was passed in a GUICommandType type that isn't supported yet...") );
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "issueAttackCommand was passed in a GUICommandType type that isn't supported yet...");
 				return msgType;
 		}
 
@@ -1136,7 +1137,7 @@ GameMessage::Type CommandTranslator::issueAttackCommand( Drawable *target,
 	}
 	else
 	{
-		DEBUG_LOG(("issuing NON-team-attack cmd against %s",target->getTemplate()->getName().str()));
+		engine::debug::log_info("issuing NON-team-attack cmd against %s",target->getTemplate()->getName().str());
 
 		// send single attack command for selected drawable
 		const DrawableList *selected = TheInGameUI->getAllSelectedDrawables();
@@ -1397,7 +1398,7 @@ GameMessage::Type CommandTranslator::issueFireWeaponCommand( const CommandButton
 		{
 			GameMessage *msg;
 			msg = TheMessageStream->appendMessage( msgType );
-			DEBUG_ASSERTCRASH( (command->getSpecialPowerTemplate()), ("No Special Power Weapon here to 'do' with! ML"));
+			engine::debug::invariant(((command->getSpecialPowerTemplate())), "(command->getSpecialPowerTemplate())", __FILE__, __LINE__, "No Special Power Weapon here to 'do' with! ML");
 			msg->appendIntegerArgument( command->getSpecialPowerTemplate()->getID() );
 		}
 	}
@@ -1419,7 +1420,7 @@ GameMessage::Type CommandTranslator::createEnterMessage( Drawable *enter,
 		return msgType;
 
 	// sanity
-	DEBUG_ASSERTCRASH( commandType == DO_COMMAND, ("createEnterMessage - commandType is not DO_COMMAND") );
+	engine::debug::invariant((commandType == DO_COMMAND), "commandType == DO_COMMAND", __FILE__, __LINE__, "createEnterMessage - commandType is not DO_COMMAND");
 
 	if( m_teamExists )
 	{
@@ -1434,7 +1435,7 @@ GameMessage::Type CommandTranslator::createEnterMessage( Drawable *enter,
 	}
 	else
 	{
-		DEBUG_CRASH(("Shouldn't get here. jkmcd"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Shouldn't get here. jkmcd");
 	}
 
 	// return the type of the message used
@@ -3218,7 +3219,7 @@ GameMessageDisposition CommandTranslator::translateGameMessage(const GameMessage
 		//-----------------------------------------------------------------------------------------
 		case GameMessage::MSG_META_DEPLOY:
 			#ifdef RTS_DEBUG
-			DEBUG_CRASH(("unimplemented meta command MSG_META_DEPLOY !"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "unimplemented meta command MSG_META_DEPLOY !");
 			#endif
 			/// @todo srj implement me
 			disp = DESTROY_MESSAGE;
@@ -3227,7 +3228,7 @@ GameMessageDisposition CommandTranslator::translateGameMessage(const GameMessage
 		//-----------------------------------------------------------------------------------------
 		case GameMessage::MSG_META_FOLLOW:
 			#ifdef RTS_DEBUG
-			DEBUG_CRASH(("unimplemented meta command MSG_META_FOLLOW !"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "unimplemented meta command MSG_META_FOLLOW !");
 			#endif
 			/// @todo srj implement me
 			disp = DESTROY_MESSAGE;
@@ -3294,7 +3295,7 @@ GameMessageDisposition CommandTranslator::translateGameMessage(const GameMessage
 				Int count;
 				const ThingTemplate *thing = TheThingFactory->findTemplate( ThePlayerList->getLocalPlayer()->getPlayerTemplate()->getBeaconTemplate() );
 				ThePlayerList->getLocalPlayer()->countObjectsByThingTemplate( 1, &thing, false, &count );
-				DEBUG_LOG(("MSG_META_PLACE_BEACON - Player already has %d beacons active", count));
+				engine::debug::log_info("MSG_META_PLACE_BEACON - Player already has %d beacons active", count);
 				if (count < TheMultiplayerSettings->getMaxBeaconsPerPlayer())
 				{
 					const CommandButton *commandButton = TheControlBar->findCommandButton( "Command_PlaceBeacon" );
@@ -3464,11 +3465,11 @@ GameMessageDisposition CommandTranslator::translateGameMessage(const GameMessage
 			break;
 
 		case GameMessage::MSG_META_BEGIN_CAMERA_ROTATE_LEFT:
-			DEBUG_ASSERTCRASH(!TheInGameUI->isCameraRotatingLeft(), ("Setting rotate camera left, but it's already set!"));
+			engine::debug::invariant((!TheInGameUI->isCameraRotatingLeft()), "!TheInGameUI->isCameraRotatingLeft()", __FILE__, __LINE__, "Setting rotate camera left, but it's already set!");
 			TheInGameUI->setCameraRotateLeft( true );
 			break;
 		case GameMessage::MSG_META_END_CAMERA_ROTATE_LEFT:
-			DEBUG_ASSERTCRASH(TheInGameUI->isCameraRotatingLeft(), ("Clearing rotate camera left, but it's already clear!"));
+			engine::debug::invariant((TheInGameUI->isCameraRotatingLeft()), "TheInGameUI->isCameraRotatingLeft()", __FILE__, __LINE__, "Clearing rotate camera left, but it's already clear!");
 			TheInGameUI->setCameraRotateLeft( false );
 			break;
 		case GameMessage::MSG_META_ALT_CAMERA_ROTATE_LEFT:
@@ -3476,11 +3477,11 @@ GameMessageDisposition CommandTranslator::translateGameMessage(const GameMessage
 				TheTacticalView->rotateCamera(-1.0f / 8.0f, 500, 100, 400);
 			break;
 		case GameMessage::MSG_META_BEGIN_CAMERA_ROTATE_RIGHT:
-			DEBUG_ASSERTCRASH(!TheInGameUI->isCameraRotatingRight(), ("Setting rotate camera right, but it's already set!"));
+			engine::debug::invariant((!TheInGameUI->isCameraRotatingRight()), "!TheInGameUI->isCameraRotatingRight()", __FILE__, __LINE__, "Setting rotate camera right, but it's already set!");
 			TheInGameUI->setCameraRotateRight( true );
 			break;
 		case GameMessage::MSG_META_END_CAMERA_ROTATE_RIGHT:
-			DEBUG_ASSERTCRASH(TheInGameUI->isCameraRotatingRight(), ("Clearing rotate camera right, but it's already clear!"));
+			engine::debug::invariant((TheInGameUI->isCameraRotatingRight()), "TheInGameUI->isCameraRotatingRight()", __FILE__, __LINE__, "Clearing rotate camera right, but it's already clear!");
 			TheInGameUI->setCameraRotateRight( false );
 			break;
 		case GameMessage::MSG_META_ALT_CAMERA_ROTATE_RIGHT:
@@ -3488,19 +3489,19 @@ GameMessageDisposition CommandTranslator::translateGameMessage(const GameMessage
 				TheTacticalView->rotateCamera(1.0f / 8.0f, 500, 100, 400);
 			break;
 		case GameMessage::MSG_META_BEGIN_CAMERA_ZOOM_IN:
-			DEBUG_ASSERTCRASH(!TheInGameUI->isCameraZoomingIn(), ("Setting zoom camera in, but it's already set!"));
+			engine::debug::invariant((!TheInGameUI->isCameraZoomingIn()), "!TheInGameUI->isCameraZoomingIn()", __FILE__, __LINE__, "Setting zoom camera in, but it's already set!");
 			TheInGameUI->setCameraZoomIn( true );
 			break;
 		case GameMessage::MSG_META_END_CAMERA_ZOOM_IN:
-			DEBUG_ASSERTCRASH(TheInGameUI->isCameraZoomingIn(), ("Clearing zoom camera in, but it's already clear!"));
+			engine::debug::invariant((TheInGameUI->isCameraZoomingIn()), "TheInGameUI->isCameraZoomingIn()", __FILE__, __LINE__, "Clearing zoom camera in, but it's already clear!");
 			TheInGameUI->setCameraZoomIn( false );
 			break;
 		case GameMessage::MSG_META_BEGIN_CAMERA_ZOOM_OUT:
-			DEBUG_ASSERTCRASH(!TheInGameUI->isCameraZoomingOut(), ("Setting zoom camera out, but it's already set!"));
+			engine::debug::invariant((!TheInGameUI->isCameraZoomingOut()), "!TheInGameUI->isCameraZoomingOut()", __FILE__, __LINE__, "Setting zoom camera out, but it's already set!");
 			TheInGameUI->setCameraZoomOut( true );
 			break;
 		case GameMessage::MSG_META_END_CAMERA_ZOOM_OUT:
-			DEBUG_ASSERTCRASH(TheInGameUI->isCameraZoomingOut(), ("Clearing zoom camera out, but it's already clear!"));
+			engine::debug::invariant((TheInGameUI->isCameraZoomingOut()), "TheInGameUI->isCameraZoomingOut()", __FILE__, __LINE__, "Clearing zoom camera out, but it's already clear!");
 			TheInGameUI->setCameraZoomOut( false );
 			break;
 		case GameMessage::MSG_META_CAMERA_RESET:
@@ -3747,19 +3748,19 @@ GameMessageDisposition CommandTranslator::translateGameMessage(const GameMessage
 
 		//-----------------------------------------------------------------------------------------
 		case GameMessage::MSG_META_BEGIN_FORCEMOVE:
-			DEBUG_ASSERTCRASH(!TheInGameUI->isInForceMoveToMode(), ("forceMoveToMode mismatch"));
+			engine::debug::invariant((!TheInGameUI->isInForceMoveToMode()), "!TheInGameUI->isInForceMoveToMode()", __FILE__, __LINE__, "forceMoveToMode mismatch");
 			TheInGameUI->setForceMoveMode( true );
 			break;
 
 		//-----------------------------------------------------------------------------------------
 		case GameMessage::MSG_META_END_FORCEMOVE:
-			DEBUG_ASSERTCRASH(TheInGameUI->isInForceMoveToMode(), ("forceMoveToMode mismatch"));
+			engine::debug::invariant((TheInGameUI->isInForceMoveToMode()), "TheInGameUI->isInForceMoveToMode()", __FILE__, __LINE__, "forceMoveToMode mismatch");
 			TheInGameUI->setForceMoveMode( false );
 			break;
 
 		//-----------------------------------------------------------------------------------------
 		case GameMessage::MSG_META_BEGIN_WAYPOINTS:
-//			DEBUG_ASSERTCRASH( !TheInGameUI->isInWaypointMode(), ("Setting m_waypointMode but it's already set!") );
+//			engine::debug::invariant((!TheInGameUI->isInWaypointMode()), "!TheInGameUI->isInWaypointMode()", __FILE__, __LINE__, "Setting m_waypointMode but it's already set!");
 			TheInGameUI->setWaypointMode( true );
 			break;
 
@@ -3775,7 +3776,7 @@ GameMessageDisposition CommandTranslator::translateGameMessage(const GameMessage
 
 		//-----------------------------------------------------------------------------------------
 		case GameMessage::MSG_META_END_WAYPOINTS:
-//			DEBUG_ASSERTCRASH( TheInGameUI->isInWaypointMode(), ("Clearing m_waypointMode but it's already clear!") );
+//			engine::debug::invariant((TheInGameUI->isInWaypointMode()), "TheInGameUI->isInWaypointMode()", __FILE__, __LINE__, "Clearing m_waypointMode but it's already clear!");
 			TheInGameUI->setWaypointMode( false );
 			break;
 
@@ -4661,7 +4662,7 @@ GameMessageDisposition CommandTranslator::translateGameMessage(const GameMessage
 						TheInGameUI->messageNoFormat( TheGameText->FETCH_OR_SUBSTITUTE_FORMAT("GUI:DebugExtent",
 							L"Extent %hs --> %hs   %d %g", oldGeometry.getDescriptiveString().str(), newGeometry.getDescriptiveString().str(), extentModType, extentModAmount ) );
 
-						DEBUG_LOG(("Extent %s --> %s   %d %g", oldGeometry.getDescriptiveString().str(), newGeometry.getDescriptiveString().str(), extentModType, extentModAmount));
+						engine::debug::log_info("Extent %s --> %s   %d %g", oldGeometry.getDescriptiveString().str(), newGeometry.getDescriptiveString().str(), extentModType, extentModAmount);
 
 						pObject->setGeometryInfo( newGeometry );
 					}
@@ -5000,18 +5001,6 @@ GameMessageDisposition CommandTranslator::translateGameMessage(const GameMessage
 
 		//------------------------------------------------------------------------------- DEMO MESSAGES
 		//-----------------------------------------------------------------------------------------
-#ifdef PERF_TIMERS
-		case GameMessage::MSG_META_DEMO_TOGGLE_METRICS:
-		{
-			TheWritableGlobalData->m_showMetrics = !TheGlobalData->m_showMetrics;
-			if (TheGlobalData->m_showMetrics) {
-				TheDisplay->setDebugDisplayCallback(StatMetricsDisplay);
-			} else {
-				TheDisplay->setDebugDisplayCallback(nullptr);
-			}
-			break;
-		}
-#endif // #ifdef PERF_TIMERS
 
 		//------------------------------------------------------------------------------- DEMO MESSAGES
 		//-----------------------------------------------------------------------------------------
@@ -5583,17 +5572,6 @@ GameMessageDisposition CommandTranslator::translateGameMessage(const GameMessage
 
 #endif//defined(RTS_DEBUG)
 
-#ifdef DUMP_PERF_STATS
-		//------------------------------------------------------------------------DEMO MESSAGES
-		//-----------------------------------------------------------------------------------------
-		case GameMessage::MSG_META_DEMO_PERFORM_STATISTICAL_DUMP:
-			//Dump performance statistics for this frame.
-			TheWritableGlobalData->m_dumpPerformanceStatistics = TRUE;
-
-			TheInGameUI->messageNoFormat( TheGameText->FETCH_OR_SUBSTITUTE_FORMAT("GUI:DebugPerformStatisticalDump",
-				L"Statistics dump made on frame: %d", TheGameLogic->getFrame() ) );
-			break;
-#endif // DUMP_PERF_STATS
 
 
 	}

@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/INI.h"
 #include "GameClient/TerrainRoads.h"
@@ -53,8 +54,8 @@ void INI::parseTerrainBridgeDefinition( INI* ini )
 	{
 
 		// sanity
-		DEBUG_ASSERTCRASH( bridge->isBridge(), ("Redefining road '%s' as a bridge!",
-											 bridge->getName().str()) );
+		engine::debug::invariant((bridge->isBridge()), "bridge->isBridge()", __FILE__, __LINE__, "Redefining road '%s' as a bridge!",
+											 bridge->getName().str());
 		throw INI_INVALID_DATA;
 
 	}
@@ -62,7 +63,7 @@ void INI::parseTerrainBridgeDefinition( INI* ini )
 	if( bridge == nullptr )
 		bridge = TheTerrainRoads->newBridge( name );
 
-	DEBUG_ASSERTCRASH( bridge, ("Unable to allocate bridge '%s'", name.str()) );
+	engine::debug::invariant((bridge), "bridge", __FILE__, __LINE__, "Unable to allocate bridge '%s'", name.str());
 
 	// parse the ini definition
 	ini->initFromINI( bridge, bridge->getBridgeFieldParse() );

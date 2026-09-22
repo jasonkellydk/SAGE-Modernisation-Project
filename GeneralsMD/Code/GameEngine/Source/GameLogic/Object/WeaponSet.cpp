@@ -29,7 +29,8 @@
 
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #define DEFINE_WEAPONSLOTTYPE_NAMES
 #define DEFINE_COMMANDSOURCEMASK_NAMES
@@ -274,7 +275,7 @@ void WeaponSet::xfer( Xfer *xfer )
 			{
 				const WeaponTemplate* wt = m_curWeaponTemplateSet->getNth((WeaponSlotType)i);
 				if (wt==nullptr) {
-					DEBUG_CRASH(("xfer backwards compatibility code - old save file??? jba."));
+					engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "xfer backwards compatibility code - old save file??? jba.");
 					wt = m_curWeaponTemplateSet->getNth((WeaponSlotType)0);
 				}
 				m_weapons[i] = TheWeaponStore->allocateNewWeapon(wt, (WeaponSlotType)i);
@@ -319,12 +320,12 @@ void WeaponSet::loadPostProcess()
 void WeaponSet::updateWeaponSet(const Object* obj)
 {
 	const WeaponTemplateSet* set = obj->getTemplate()->findWeaponTemplateSet(obj->getWeaponSetFlags());
-	DEBUG_ASSERTCRASH(set, ("findWeaponSet should never return null"));
+	engine::debug::invariant((set), "set", __FILE__, __LINE__, "findWeaponSet should never return null");
 	if (set && set != m_curWeaponTemplateSet)
 	{
 		if( ! set->isWeaponLockSharedAcrossSets() )
 		{
-			DEBUG_ASSERTLOG(!isCurWeaponLocked(), ("changing WeaponSet while Weapon is Locked... implicit unlock occurring!"));
+			if (!(!isCurWeaponLocked())) engine::debug::log_error("changing WeaponSet while Weapon is Locked... implicit unlock occurring!");
 			releaseWeaponLock(LOCKED_PERMANENTLY);	// release all locks. sorry!
 			m_curWeapon = PRIMARY_WEAPON;
 		}
@@ -357,7 +358,7 @@ void WeaponSet::updateWeaponSet(const Object* obj)
 			}
 		}
 		m_curWeaponTemplateSet = set;
-		//DEBUG_LOG(("WeaponSet::updateWeaponSet -- changed curweapon to %s",getCurWeapon()->getName().str()));
+		//engine::debug::log_info("WeaponSet::updateWeaponSet -- changed curweapon to %s",getCurWeapon()->getName().str());
 	}
 }
 
@@ -420,7 +421,7 @@ static Int getVictimAntiMask(const Object* victim)
 		}
 		else if( !victim->isKindOf( KINDOF_UNATTACKABLE ) )
 		{
-			DEBUG_CRASH( ("Object %s is being targeted as airborne, but is not infantry, nor vehicle. Is this legit? -- tell Kris", victim->getTemplate()->getName().str() ) );
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Object %s is being targeted as airborne, but is not infantry, nor vehicle. Is this legit? -- tell Kris", victim->getTemplate()->getName().str() );
 		}
 		return 0;
 	}
@@ -983,7 +984,7 @@ Bool WeaponSet::chooseBestWeaponForTarget(const Object* obj, const Object* victi
 		m_curWeapon = PRIMARY_WEAPON;
 	}
 
-	//DEBUG_LOG(("WeaponSet::chooseBestWeaponForTarget -- changed curweapon to %s",getCurWeapon()->getName().str()));
+	//engine::debug::log_info("WeaponSet::chooseBestWeaponForTarget -- changed curweapon to %s",getCurWeapon()->getName().str());
 
 	return found;
 }
@@ -1077,7 +1078,7 @@ Bool WeaponSet::setWeaponLock( WeaponSlotType weaponSlot, WeaponLockType lockTyp
 {
 	if (lockType == NOT_LOCKED)
 	{
-		DEBUG_CRASH(("calling setWeaponLock with NOT_LOCKED, so I am doing nothing... did you mean to use releaseWeaponLock()?"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "calling setWeaponLock with NOT_LOCKED, so I am doing nothing... did you mean to use releaseWeaponLock()?");
 		return false;
 	}
 
@@ -1089,19 +1090,19 @@ Bool WeaponSet::setWeaponLock( WeaponSlotType weaponSlot, WeaponLockType lockTyp
 		{
 			m_curWeapon = weaponSlot;
 			m_curWeaponLockedStatus = lockType;
-			//DEBUG_LOG(("WeaponSet::setWeaponLock permanently -- changed curweapon to %s",getCurWeapon()->getName().str()));
+			//engine::debug::log_info("WeaponSet::setWeaponLock permanently -- changed curweapon to %s",getCurWeapon()->getName().str());
 		}
 		else if( lockType == LOCKED_TEMPORARILY && m_curWeaponLockedStatus != LOCKED_PERMANENTLY )
 		{
 			m_curWeapon = weaponSlot;
 			m_curWeaponLockedStatus = lockType;
-			//DEBUG_LOG(("WeaponSet::setWeaponLock temporarily -- changed curweapon to %s",getCurWeapon()->getName().str()));
+			//engine::debug::log_info("WeaponSet::setWeaponLock temporarily -- changed curweapon to %s",getCurWeapon()->getName().str());
 		}
 
 		return true;
 	}
 
-	DEBUG_CRASH(("setWeaponLock: weapon %d not found (missing an upgrade?)", (Int)weaponSlot));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "setWeaponLock: weapon %d not found (missing an upgrade?)", (Int)weaponSlot);
 	return false;
 }
 
@@ -1126,7 +1127,7 @@ void WeaponSet::releaseWeaponLock(WeaponLockType lockType)
 	}
 	else
 	{
-		DEBUG_CRASH(("calling releaseWeaponLock with NOT_LOCKED makes no sense. why did you do this?"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "calling releaseWeaponLock with NOT_LOCKED makes no sense. why did you do this?");
 	}
 }
 

@@ -29,7 +29,8 @@
 
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 #define DEFINE_OBJECT_STATUS_NAMES
 #include "Common/Xfer.h"
 #include "GameLogic/Object.h"
@@ -144,16 +145,14 @@ void FireWeaponCollide::xfer( Xfer *xfer )
 	if( collideWeaponPresent )
 	{
 
-		DEBUG_ASSERTCRASH( m_collideWeapon != nullptr,
-											 ("FireWeaponCollide::xfer - m_collideWeapon present mismatch") );
+		engine::debug::invariant((m_collideWeapon != nullptr), "m_collideWeapon != nullptr", __FILE__, __LINE__, "FireWeaponCollide::xfer - m_collideWeapon present mismatch");
 		xfer->xferSnapshot( m_collideWeapon );
 
 	}
 	else
 	{
 
-		DEBUG_ASSERTCRASH( m_collideWeapon == nullptr,
-											 ("FireWeaponCollide::Xfer - m_collideWeapon missing mismatch" ));
+		engine::debug::invariant((m_collideWeapon == nullptr), "m_collideWeapon == nullptr", __FILE__, __LINE__, "FireWeaponCollide::Xfer - m_collideWeapon missing mismatch" );
 
 	}
 

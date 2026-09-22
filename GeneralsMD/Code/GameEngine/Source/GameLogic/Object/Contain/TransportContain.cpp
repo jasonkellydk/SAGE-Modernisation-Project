@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // USER INCLUDES //////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/Player.h"
 #include "Common/ThingTemplate.h"
@@ -284,9 +285,9 @@ void TransportContain::onContaining( Object *rider, Bool wasSelected )
 
 	Int transportSlotCount = rider->getTransportSlotCount();
 
-	DEBUG_ASSERTCRASH(transportSlotCount > 0, ("Hmm, this object isnt transportable"));
+	engine::debug::invariant((transportSlotCount > 0), "transportSlotCount > 0", __FILE__, __LINE__, "Hmm, this object isnt transportable");
 	m_extraSlotsInUse += transportSlotCount - 1;
-	DEBUG_ASSERTCRASH(m_extraSlotsInUse >= 0 && m_extraSlotsInUse + getContainCount() <= getContainMax(), ("Hmm, bad slot count"));
+	engine::debug::invariant((m_extraSlotsInUse >= 0 && m_extraSlotsInUse + getContainCount() <= getContainMax()), "m_extraSlotsInUse >= 0 && m_extraSlotsInUse + getContainCount() <= getContainMax()", __FILE__, __LINE__, "Hmm, bad slot count");
 
 	//
 	// when we go from holding nothing to holding something we have a model condition
@@ -369,9 +370,9 @@ void TransportContain::onRemoving( Object *rider )
 	}
 
 	Int transportSlotCount = rider->getTransportSlotCount();
-	DEBUG_ASSERTCRASH(transportSlotCount > 0, ("Hmm, this object isnt transportable"));
+	engine::debug::invariant((transportSlotCount > 0), "transportSlotCount > 0", __FILE__, __LINE__, "Hmm, this object isnt transportable");
 	m_extraSlotsInUse -= transportSlotCount - 1;
-	DEBUG_ASSERTCRASH(m_extraSlotsInUse >= 0 && m_extraSlotsInUse + getContainCount() <= getContainMax(), ("Hmm, bad slot count"));
+	engine::debug::invariant((m_extraSlotsInUse >= 0 && m_extraSlotsInUse + getContainCount() <= getContainMax()), "m_extraSlotsInUse >= 0 && m_extraSlotsInUse + getContainCount() <= getContainMax()", __FILE__, __LINE__, "Hmm, bad slot count");
 
 	// when we are empty again, clear the model condition for loaded
 	if( getContainCount() == 0 )
@@ -453,7 +454,7 @@ void TransportContain::createPayload()
 			}
 			else
 			{
-				DEBUG_CRASH( ( "DeliverPayload: PutInContainer %s is full, or not valid for the payload %s!", object->getName().str(), self->m_initialPayload.name.str() ) );
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "DeliverPayload: PutInContainer %s is full, or not valid for the payload %s!", object->getName().str(), self->m_initialPayload.name.str() );
 			}
 		}
 		contain->enableLoadSounds( TRUE );
@@ -627,7 +628,7 @@ Bool TransportContain::isPassengerAllowedToFire( ObjectID id ) const
   if ( heWhoContainsMe)
   {
     ContainModuleInterface *hisContain = heWhoContainsMe->getContain();
-    DEBUG_ASSERTCRASH( hisContain,("TransportContain::isPassengerAllowedToFire()... CONTAINER WITHOUT A CONTAIN! AARRGH!") );
+    engine::debug::invariant((hisContain), "hisContain", __FILE__, __LINE__, "TransportContain::isPassengerAllowedToFire()... CONTAINER WITHOUT A CONTAIN! AARRGH!");
     if ( hisContain && hisContain->isSpecialOverlordStyleContainer() )
       return hisContain->isPassengerAllowedToFire( id );
   }

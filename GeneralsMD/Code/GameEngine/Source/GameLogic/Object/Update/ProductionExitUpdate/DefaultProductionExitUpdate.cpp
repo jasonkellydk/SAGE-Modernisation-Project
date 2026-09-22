@@ -28,7 +28,8 @@
 //					This instance simply spits the guy out at a point.
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/RandomValue.h"
 #include "Common/ThingTemplate.h"
@@ -58,7 +59,7 @@ DefaultProductionExitUpdate::~DefaultProductionExitUpdate()
 //-------------------------------------------------------------------------------------------------
 void DefaultProductionExitUpdate::exitObjectViaDoor( Object *newObj, ExitDoorType exitDoor )
 {
-	DEBUG_ASSERTCRASH(exitDoor == DOOR_1, ("multiple exit doors not supported here"));
+	engine::debug::invariant((exitDoor == DOOR_1), "exitDoor == DOOR_1", __FILE__, __LINE__, "multiple exit doors not supported here");
 
 	Object *creationObject = getObject();
 	if (creationObject)

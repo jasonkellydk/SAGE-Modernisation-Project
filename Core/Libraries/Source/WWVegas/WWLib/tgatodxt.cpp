@@ -41,8 +41,9 @@
 #include "nvdxtlib.h"
 #include "TARGA.h"
 #include "tgatodxt.h"
-#include "WWDebug/wwdebug.h"
+
 #include <io.h>
+import engine.debug;
 #include	<stdlib.h>
 
 // Singletons.
@@ -60,7 +61,7 @@ TGAToDXTClass::TGAToDXTClass()
 	  BufferCount (0)
 {
 	Buffer = new unsigned char [BufferSize];
-	WWASSERT (Buffer != nullptr);
+	engine::debug::assert_condition((Buffer != nullptr), "Buffer != nullptr", __FILE__, __LINE__, "assertion failed");
 }
 
 
@@ -234,7 +235,7 @@ void TGAToDXTClass::Write (const char *outputpathname)
 void ReadDTXnFile (DWORD datacount, void *data)
 {
 	// Not implemented.
-	WWASSERT (false);
+	engine::debug::assert_condition((false), "false", __FILE__, __LINE__, "assertion failed");
 }
 
 
@@ -253,7 +254,7 @@ void WriteDTXnFile (DWORD datacount, void *data)
 
 		newbuffersize = MAX (_TGAToDXTConverter.BufferSize * 2, _TGAToDXTConverter.BufferCount + datacount);
 		newbuffer	  = new unsigned char [newbuffersize];
-		WWASSERT (newbuffer != nullptr);
+		engine::debug::assert_condition((newbuffer != nullptr), "newbuffer != nullptr", __FILE__, __LINE__, "assertion failed");
 		memcpy (newbuffer, _TGAToDXTConverter.Buffer, _TGAToDXTConverter.BufferCount);
 		delete [] _TGAToDXTConverter.Buffer;
 		_TGAToDXTConverter.Buffer = newbuffer;

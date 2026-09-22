@@ -49,7 +49,8 @@ Some info about partitioning problems:
 	http://odysseus.nat.uni-magdeburg.de/~mertens/npp/index.shtml
 **************************************************************************************************/
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/PartitionSolver.h"
 
@@ -113,7 +114,7 @@ void PartitionSolver::solve()
 			}
 		}
 	} else {
-		DEBUG_CRASH(("PREFER_CORRECT_SOLUTION @todo impl"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "PREFER_CORRECT_SOLUTION @todo impl");
 	}
 }
 

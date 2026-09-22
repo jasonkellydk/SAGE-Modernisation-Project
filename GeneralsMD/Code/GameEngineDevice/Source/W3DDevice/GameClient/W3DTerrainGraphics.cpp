@@ -26,6 +26,7 @@ import Graphics.Frame.RenderClock;
 #include "W3DDevice/GameClient/W3DTerrainTracks.h"
 #include "W3DDevice/GameClient/W3DWaypointBuffer.h"
 #include "W3DDevice/GameClient/W3DBibBuffer.h"
+import engine.debug;
 
 import Graphics.Scene.DrawParameters;
 import Graphics.Frame.Runtime;
@@ -35,7 +36,11 @@ import Graphics.Materials.ProceduralPass;
 
 W3DTerrainGraphics *W3DTerrainGraphics::s_active = nullptr;
 
-W3DTerrainGraphics::W3DTerrainGraphics() { s_active = this; }
+W3DTerrainGraphics::W3DTerrainGraphics(engine::platform::IClockService& clock)
+    : BaseHeightMapRenderObjClass(clock)
+{
+    s_active = this;
+}
 W3DTerrainGraphics::~W3DTerrainGraphics()
 {
     freeMapResources();
@@ -464,7 +469,7 @@ void W3DTerrainGraphics::Render(W3DRenderContext &info)
     if (Graphics::Shared_Frame_Device() == nullptr) return;
     const bool rendered = Draw_Surface(info);
     if (!rendered) {
-        DEBUG_LOG(("Terrain graphics submission failed.\n"));
+        engine::debug::log_info("Terrain graphics submission failed.\n");
         return;
     }
     RTS3DScene *render_scene = static_cast<RTS3DScene *>(info.Camera.Get_User_Data());

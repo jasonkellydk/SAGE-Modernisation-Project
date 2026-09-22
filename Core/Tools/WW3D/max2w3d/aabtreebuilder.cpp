@@ -63,6 +63,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+import engine.debug;
 
 #define WWASSERT	assert					// can't use WWASSERT because we use this module in the MAX plugin...
 const float COINCIDENCE_EPSILON = 0.001f;
@@ -151,10 +152,10 @@ void AABTreeBuilderClass::Reset()
  *=============================================================================================*/
 void AABTreeBuilderClass::Build_AABTree(int polycount,Vector3i * polys,int vertcount,Vector3 * verts)
 {
-	WWASSERT(polycount > 0);
-	WWASSERT(vertcount > 0);
-	WWASSERT(polys != nullptr);
-	WWASSERT(verts != nullptr);
+	engine::debug::assert_condition((polycount > 0), "polycount > 0", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((vertcount > 0), "vertcount > 0", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((polys != nullptr), "polys != nullptr", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((verts != nullptr), "verts != nullptr", __FILE__, __LINE__, "assertion failed");
 
 	/*
 	** If we already have allocated data, release it
@@ -271,7 +272,7 @@ void AABTreeBuilderClass::Build_Tree(CullNodeStruct * node,int polycount,int * p
 	** deletes the poly array.
 	*/
 	if (arrays.FrontCount) {
-		WWASSERT(arrays.FrontPolys != nullptr);
+		engine::debug::assert_condition((arrays.FrontPolys != nullptr), "arrays.FrontPolys != nullptr", __FILE__, __LINE__, "assertion failed");
 		node->Front = new CullNodeStruct;
 		Build_Tree(node->Front,arrays.FrontCount,arrays.FrontPolys);
 		arrays.FrontPolys = nullptr;
@@ -282,7 +283,7 @@ void AABTreeBuilderClass::Build_Tree(CullNodeStruct * node,int polycount,int * p
 	** deletes the tile array.
 	*/
 	if (arrays.BackCount) {
-		WWASSERT(arrays.BackPolys != nullptr);
+		engine::debug::assert_condition((arrays.BackPolys != nullptr), "arrays.BackPolys != nullptr", __FILE__, __LINE__, "assertion failed");
 
 		node->Back = new CullNodeStruct;
 		Build_Tree(node->Back,arrays.BackCount,arrays.BackPolys);
@@ -307,7 +308,7 @@ void AABTreeBuilderClass::Build_Tree(CullNodeStruct * node,int polycount,int * p
 AABTreeBuilderClass::SplitChoiceStruct
 AABTreeBuilderClass::Select_Splitting_Plane(int polycount,int * polyindices)
 {
-	WWASSERT(polyindices != nullptr);
+	engine::debug::assert_condition((polyindices != nullptr), "polyindices != nullptr", __FILE__, __LINE__, "assertion failed");
 
 	const int NUM_TRIES = 50;
 
@@ -539,8 +540,8 @@ void AABTreeBuilderClass::Split_Polys
 	/*
 	** when we are all done, the counts should match.
 	*/
-	WWASSERT(arrays->FrontCount == sc.FrontCount);
-	WWASSERT(arrays->BackCount == sc.BackCount);
+	engine::debug::assert_condition((arrays->FrontCount == sc.FrontCount), "arrays->FrontCount == sc.FrontCount", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((arrays->BackCount == sc.BackCount), "arrays->BackCount == sc.BackCount", __FILE__, __LINE__, "assertion failed");
 }
 
 
@@ -607,12 +608,12 @@ void AABTreeBuilderClass::Compute_Bounding_Box(CullNodeStruct * node)
 		if (node->Back->Max.Z > node->Max.Z) node->Max.Z = node->Back->Max.Z;
 	}
 
-	WWASSERT(node->Min.X != 100000.0f);
-	WWASSERT(node->Min.Y != 100000.0f);
-	WWASSERT(node->Min.Z != 100000.0f);
-	WWASSERT(node->Max.X != -100000.0f);
-	WWASSERT(node->Max.Y != -100000.0f);
-	WWASSERT(node->Max.Z != -100000.0f);
+	engine::debug::assert_condition((node->Min.X != 100000.0f), "node->Min.X != 100000.0f", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((node->Min.Y != 100000.0f), "node->Min.Y != 100000.0f", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((node->Min.Z != 100000.0f), "node->Min.Z != 100000.0f", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((node->Max.X != -100000.0f), "node->Max.X != -100000.0f", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((node->Max.Y != -100000.0f), "node->Max.Y != -100000.0f", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((node->Max.Z != -100000.0f), "node->Max.Z != -100000.0f", __FILE__, __LINE__, "assertion failed");
 }
 
 
@@ -636,7 +637,7 @@ int AABTreeBuilderClass::Assign_Index(CullNodeStruct * node,int index)
 	** an array so this index is used to determine which slot
 	** in the array to put each node into.
 	*/
-	WWASSERT(node);
+	engine::debug::assert_condition((node), "node", __FILE__, __LINE__, "assertion failed");
 	node->Index = index;
 	index++;
 
@@ -896,7 +897,7 @@ void AABTreeBuilderClass::Build_W3D_AABTree_Recursive
 	*/
 	if (node->Front != nullptr) {
 
-		WWASSERT(node->Back != nullptr);		// if we have one child, we better have both!
+		engine::debug::assert_condition((node->Back != nullptr), "node->Back != nullptr", __FILE__, __LINE__, "assertion failed");		// if we have one child, we better have both!
 		newnode->FrontOrPoly0 = node->Front->Index;
 		newnode->BackOrPolyCount = node->Back->Index;
 

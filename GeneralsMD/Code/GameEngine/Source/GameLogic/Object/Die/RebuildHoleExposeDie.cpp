@@ -29,7 +29,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDE FILES //////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/Player.h"
 #include "Common/PlayerList.h"
@@ -163,7 +164,7 @@ void RebuildHoleExposeDie::onDie( const DamageInfo *damageInfo )
 		RebuildHoleBehaviorInterface *rhbi = RebuildHoleBehavior::getRebuildHoleBehaviorInterfaceFromObject( hole );
 
 		// sanity
-		DEBUG_ASSERTCRASH( rhbi, ("RebuildHoleExposeDie: No Rebuild Hole Behavior interface on hole") );
+		engine::debug::invariant((rhbi), "rhbi", __FILE__, __LINE__, "RebuildHoleExposeDie: No Rebuild Hole Behavior interface on hole");
 
 		// start the rebuild process
 		if( rhbi )

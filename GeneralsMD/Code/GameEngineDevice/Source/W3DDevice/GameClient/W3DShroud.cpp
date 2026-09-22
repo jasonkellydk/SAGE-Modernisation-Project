@@ -33,16 +33,16 @@ import Graphics.Materials.State;
 import Graphics.Materials.ProceduralPass;
 #include "Lib/BaseType.h"
 #include "GameClient/View.h"
-#include <SDL3/SDL.h>
 #include <cstdint>
 #include <span>
+import engine.platform;
 #include "W3DDevice/GameClient/W3DCamera.h"
 #include "W3DDevice/GameClient/W3DTextureHandle.h"
 #include "WWLib/simplevec.h"
 
 import Graphics.Resources.Textures.Edit;
 #include "Common/MapObject.h"
-#include "Common/PerfTimer.h"
+
 #include "W3DDevice/GameClient/BaseHeightMap.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
 #include "W3DDevice/GameClient/W3DPoly.h"
@@ -53,6 +53,7 @@ import Graphics.Resources.Textures.Storage;
 #include "Common/GlobalData.h"
 #include "GameLogic/PartitionManager.h"
 #include "W3DDevice/GameClient/W3DGraphicsResources.h"
+import engine.debug;
 import Assets.Images.Buffer;
 import Graphics.Frame.Runtime;
 import Graphics.Scene.Shroud.Image;
@@ -89,7 +90,8 @@ struct W3DShroud::GraphicsState
 #define DEFAULT_VISIBLE_TERRAIN 96	//assumed size of visible terrain cells.
 
 //-----------------------------------------------------------------------------
-W3DShroud::W3DShroud() : m_graphics(std::make_unique<GraphicsState>())
+W3DShroud::W3DShroud(engine::platform::IClockService& clock)
+	: m_graphics(std::make_unique<GraphicsState>()), m_clock(clock)
 {
 	m_finalFogData=nullptr;
 	m_currentFogData=nullptr;
@@ -130,8 +132,8 @@ W3DShroud::~W3DShroud()
 */
 void W3DShroud::init(WorldHeightMap *pMap, Real worldCellSizeX, Real worldCellSizeY)
 {
-	DEBUG_ASSERTCRASH( m_pSrcTexture == nullptr, ("ReAcquire of existing shroud textures"));
-	DEBUG_ASSERTCRASH( pMap != nullptr, ("Shroud init with null WorldHeightMap"));
+	engine::debug::invariant((m_pSrcTexture == nullptr), "m_pSrcTexture == nullptr", __FILE__, __LINE__, "ReAcquire of existing shroud textures");
+	engine::debug::invariant((pMap != nullptr), "pMap != nullptr", __FILE__, __LINE__, "Shroud init with null WorldHeightMap");
 
 	Int dstTextureWidth=0;
 	Int dstTextureHeight=0;
@@ -187,7 +189,7 @@ void W3DShroud::init(WorldHeightMap *pMap, Real worldCellSizeX, Real worldCellSi
 #endif
 		m_pSrcTexture = Graphics::TextureEdit::Create(srcWidth,srcHeight, Assets::PixelEncoding::BGR565);
 
-	DEBUG_ASSERTCRASH( m_pSrcTexture != nullptr, ("Failed to Allocate Shroud Src Surface"));
+	engine::debug::invariant((m_pSrcTexture != nullptr), "m_pSrcTexture != nullptr", __FILE__, __LINE__, "Failed to Allocate Shroud Src Surface");
 
 	Graphics::ImageMapping rect = {};
 
@@ -201,7 +203,7 @@ void W3DShroud::init(WorldHeightMap *pMap, Real worldCellSizeX, Real worldCellSi
 	}
 	else
 	{
-		DEBUG_ASSERTCRASH(false, ("Failed to lock shroud src surface"));
+		engine::debug::invariant((false), "false", __FILE__, __LINE__, "Failed to lock shroud src surface");
 		return;
 	}
 
@@ -266,7 +268,7 @@ Bool W3DShroud::ReAcquireResources()
 		if (!m_dstTextureWidth)
 			return TRUE;	//nothing to reacquire since shroud was never initialized with valid data
 
-		DEBUG_ASSERTCRASH( m_pDstTexture == nullptr, ("ReAcquire of existing shroud texture"));
+		engine::debug::invariant((m_pDstTexture == nullptr), "m_pDstTexture == nullptr", __FILE__, __LINE__, "ReAcquire of existing shroud texture");
 
 		// Create destination texture (stored in video memory).
 		// Since we control the video memory copy, we can do partial updates more efficiently. Or do shift blits.
@@ -277,7 +279,7 @@ Bool W3DShroud::ReAcquireResources()
 #endif
 			m_pDstTexture = MSGNEW("W3DTextureHandle") W3DTextureHandle(m_dstTextureWidth,m_dstTextureHeight,Assets::PixelEncoding::BGR565,MIP_LEVELS_1, W3DTextureHandle::POOL_DEFAULT);
 
-		DEBUG_ASSERTCRASH( m_pDstTexture != nullptr, ("Failed ReAcquire of shroud texture"));
+		engine::debug::invariant((m_pDstTexture != nullptr), "m_pDstTexture != nullptr", __FILE__, __LINE__, "Failed ReAcquire of shroud texture");
 
 		if (!m_pDstTexture)
 		{	//could not create a valid texture
@@ -296,7 +298,7 @@ Bool W3DShroud::ReAcquireResources()
 //-----------------------------------------------------------------------------
 W3DShroudLevel W3DShroud::getShroudLevel(Int x, Int y)
 {
-	DEBUG_ASSERTCRASH( m_pSrcTexture != nullptr, ("Reading empty shroud"));
+	engine::debug::invariant((m_pSrcTexture != nullptr), "m_pSrcTexture != nullptr", __FILE__, __LINE__, "Reading empty shroud");
 
 	if (x >= 0 && y >= 0 && x < m_numCellsX && y < m_numCellsY)
 	{
@@ -317,7 +319,7 @@ W3DShroudLevel W3DShroud::getShroudLevel(Int x, Int y)
 //-----------------------------------------------------------------------------
 void W3DShroud::setShroudLevel(Int x, Int y, W3DShroudLevel level, Bool textureOnly)
 {
-	DEBUG_ASSERTCRASH( m_pSrcTexture != nullptr, ("Writing empty shroud.  Usually means that map failed to load."));
+	engine::debug::invariant((m_pSrcTexture != nullptr), "m_pSrcTexture != nullptr", __FILE__, __LINE__, "Writing empty shroud.  Usually means that map failed to load.");
 
 	if (!m_pSrcTexture)
 		return;
@@ -506,9 +508,7 @@ W3DTextureHandle *DummyTexture=nullptr;
 //#define LOAD_DUMMY_SHROUD
 
 //-----------------------------------------------------------------------------
-//DECLARE_PERF_TIMER(shroudCopy)
-
-//-----------------------------------------------------------------------------
+////-----------------------------------------------------------------------------
 /** Updates video memory surface with currently visible shroud data */
 void W3DShroud::render(W3DCamera *cam)
 {
@@ -531,7 +531,7 @@ void W3DShroud::render(W3DCamera *cam)
 	}
 #endif
 
-	DEBUG_ASSERTCRASH( m_pSrcTexture != nullptr, ("Updating unallocated shroud texture"));
+	engine::debug::invariant((m_pSrcTexture != nullptr), "m_pSrcTexture != nullptr", __FILE__, __LINE__, "Updating unallocated shroud texture");
 
 #ifdef LOAD_DUMMY_SHROUD
 
@@ -640,9 +640,9 @@ void W3DShroud::render(W3DCamera *cam)
 //-----------------------------------------------------------------------------
 void W3DShroud::interpolateFogLevels(const Assets::ImageRegion *rect)
 {
-	static UnsignedInt prevTime = static_cast<UnsignedInt>(SDL_GetTicks());
+	static UnsignedInt prevTime = static_cast<UnsignedInt>(m_clock.monotonic_nanoseconds() / 1'000'000);
 
-	UnsignedInt timeDiff=static_cast<UnsignedInt>(SDL_GetTicks())-prevTime;
+	UnsignedInt timeDiff=static_cast<UnsignedInt>(m_clock.monotonic_nanoseconds() / 1'000'000)-prevTime;
 
 	if (!timeDiff)
 		return;	//no time has elapsed

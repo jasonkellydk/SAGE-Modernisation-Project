@@ -256,9 +256,7 @@ if(TARGET generals_video)
     target_link_libraries(generals_graphics PUBLIC generals_video)
 endif()
 
-if(TARGET core_profile_tracy)
-    target_link_libraries(generals_graphics PUBLIC core_profile_tracy)
-endif()
+target_link_libraries(generals_graphics PUBLIC engine_profiling)
 
 if(WIN32)
 	set(GRAPHICS_SHADER_ASSET_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/shaders/precompiled/dx11")

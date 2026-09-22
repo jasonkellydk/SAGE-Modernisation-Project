@@ -29,6 +29,7 @@
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 #include "PreRTS.h"
+import engine.debug;
 #include "Common/Xfer.h"
 #include "GameClient/InGameUI.h"
 #include "GameLogic/GameLogic.h"
@@ -193,7 +194,7 @@ UpdateSleepTime BridgeScaffoldBehavior::update()
 			break;
 
 		default:
-			DEBUG_CRASH(("Unhandled case in BridgeScaffoldBehavior::update()"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unhandled case in BridgeScaffoldBehavior::update()");
 			return UPDATE_SLEEP_NONE;
 
 	}

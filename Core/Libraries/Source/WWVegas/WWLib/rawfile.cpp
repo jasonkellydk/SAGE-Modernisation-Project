@@ -60,6 +60,7 @@
 #include	<errno.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+import engine.debug;
 
 
 #if 0		//#ifdef NEVER    (gth) the MAX sdk must #define NEVER! yikes :-)
@@ -1031,7 +1032,7 @@ unsigned long RawFileClass::Get_Date_Time()
  *=============================================================================================*/
 bool RawFileClass::Set_Date_Time(unsigned long datetime)
 {
-	DEBUG_ASSERTLOG(false, ("Set_Date_Time is not implemented"));
+	if (!(false)) engine::debug::log_error("Set_Date_Time is not implemented");
 	return(false);
 }
 

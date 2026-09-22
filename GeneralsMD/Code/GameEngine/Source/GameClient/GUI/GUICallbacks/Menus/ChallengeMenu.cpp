@@ -28,7 +28,8 @@
 // Description: General's Challenge Mode Menu
 ///////////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/FileSystem.h"
 #include "Common/GameEngine.h"
@@ -365,7 +366,7 @@ void ChallengeMenuInit( WindowLayout *layout, void *userData )
 		strButtonName.format("ChallengeMenu.wnd:GeneralPosition%d", i);
 		buttonGeneralPositionID[i] = TheNameKeyGenerator->nameToKey( strButtonName );
 		buttonGeneralPosition[i] = TheWindowManager->winGetWindowFromId( parentMenu, buttonGeneralPositionID[i] );
-		DEBUG_ASSERTCRASH(buttonGeneralPosition[i], ("Could not find the ButtonGeneralPosition[%d]",i ));
+		engine::debug::invariant((buttonGeneralPosition[i]), "buttonGeneralPosition[i]", __FILE__, __LINE__, "Could not find the ButtonGeneralPosition[%d]",i );
 
 		// start all buttons hidden, then expose them later if there is a general for this spot
 		buttonGeneralPosition[i]->winHide( TRUE );
@@ -668,7 +669,7 @@ WindowMsgHandledType ChallengeMenuSystem( GameWindow *window, UnsignedInt msg, W
 					TheGameLogic->clearGameData();
 
 				// If the campaign has been reset, so has the campaign difficulty.  Restore it, just in case.
-				DEBUG_ASSERTCRASH(TheChallengeGenerals, ("TheChallengeGenerals are not initialized."));
+				engine::debug::invariant((TheChallengeGenerals), "TheChallengeGenerals", __FILE__, __LINE__, "TheChallengeGenerals are not initialized.");
 				if (TheChallengeGenerals)
 				{
 	        TheCampaignManager->setGameDifficulty(TheChallengeGenerals->getCurrentDifficulty());

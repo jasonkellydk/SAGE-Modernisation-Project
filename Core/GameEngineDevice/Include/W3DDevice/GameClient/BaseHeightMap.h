@@ -45,6 +45,7 @@ class W3DScene;
 class W3DSimpleScene;
 class W3DScorchInterface;
 class W3DShroud;
+import engine.platform.time;
 class W3DPropDrawModuleData;
 class W3DPropBuffer;
 class W3DTreeDrawModuleData;
@@ -82,7 +83,7 @@ class BaseHeightMapRenderObjClass : public W3DRenderObject, public Snapshot
     Graphics::FrameResourceRegistration m_resourceRegistration;
 public:
 
-	BaseHeightMapRenderObjClass();
+	explicit BaseHeightMapRenderObjClass(engine::platform::IClockService& clock);
 	virtual ~BaseHeightMapRenderObjClass() override;
 
 	virtual void ReleaseResources(); ///< Release render resources before device reset.

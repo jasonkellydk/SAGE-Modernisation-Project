@@ -26,7 +26,8 @@
 // Author: Michael S. Booth, December 2001
 // Desc:   Implementation of missile behavior
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/GameState.h"
 #include "Common/Thing.h"
@@ -144,7 +145,7 @@ void NeutronMissileUpdate::onDelete()
 //-------------------------------------------------------------------------------------------------
 void NeutronMissileUpdate::projectileLaunchAtObjectOrPosition(const Object *victim, const Coord3D* victimPos, const Object *launcher, WeaponSlotType wslot, Int specificBarrelToUse, const WeaponTemplate* detWeap, const ParticleSystemTemplate* exhaustSysOverride)
 {
-	DEBUG_ASSERTCRASH(specificBarrelToUse>=0, ("specificBarrelToUse must now be explicit"));
+	engine::debug::invariant((specificBarrelToUse>=0), "specificBarrelToUse>=0", __FILE__, __LINE__, "specificBarrelToUse must now be explicit");
 
 	m_launcherID = launcher ? launcher->getID() : INVALID_ID;
 	m_attach_wslot = wslot;
@@ -215,7 +216,7 @@ void NeutronMissileUpdate::doLaunch()
 		if (!launcher->getDrawable() ||
 			!launcher->getDrawable()->getProjectileLaunchOffset(m_attach_wslot, m_attach_specificBarrelToUse, &attachTransform, TURRET_INVALID, nullptr))
 		{
-			DEBUG_CRASH(("ProjectileLaunchPos %d %d not found!",m_attach_wslot, m_attach_specificBarrelToUse));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "ProjectileLaunchPos %d %d not found!",m_attach_wslot, m_attach_specificBarrelToUse);
 			attachTransform.Make_Identity();
 		}
 
@@ -417,9 +418,9 @@ void NeutronMissileUpdate::doAttack()
 	pos.y += m_vel.y;
 	pos.z += m_vel.z;
 
-//DEBUG_LOG(("vel %f accel %f z %f",m_vel.length(),m_accel.length(), pos.z));
+//engine::debug::log_info("vel %f accel %f z %f",m_vel.length(),m_accel.length(), pos.z);
 //Real vm = sqrt(m_vel.x*m_vel.x+m_vel.y*m_vel.y+m_vel.z*m_vel.z);
-//DEBUG_LOG(("vel is %f %f %f (%f)",m_vel.x,m_vel.y,m_vel.z,vm));
+//engine::debug::log_info("vel is %f %f %f (%f)",m_vel.x,m_vel.y,m_vel.z,vm);
 	getObject()->setTransformMatrix( &mx );
 	getObject()->setPosition( &pos );
 
@@ -513,7 +514,7 @@ UpdateSleepTime NeutronMissileUpdate::update()
 	{
 		Coord3D newPos = *getObject()->getPosition();
 		Real distThisTurn = sqrt(sqr(newPos.x-oldPos.x) + sqr(newPos.y-oldPos.y) + sqr(newPos.z-oldPos.z));
-		//DEBUG_LOG(("noTurnDist goes from %f to %f",m_noTurnDistLeft,m_noTurnDistLeft-distThisTurn));
+		//engine::debug::log_info("noTurnDist goes from %f to %f",m_noTurnDistLeft,m_noTurnDistLeft-distThisTurn);
 		m_noTurnDistLeft -= distThisTurn;
 	}
 
@@ -619,7 +620,7 @@ void NeutronMissileUpdate::xfer( Xfer *xfer )
 			if( m_exhaustSysTmpl == nullptr )
 			{
 
-				DEBUG_CRASH(( "NeutronMissileUpdate::xfer - Unable to find particle system '%s'", name.str() ));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "NeutronMissileUpdate::xfer - Unable to find particle system '%s'", name.str() );
 				throw SC_INVALID_DATA;
 
 			}

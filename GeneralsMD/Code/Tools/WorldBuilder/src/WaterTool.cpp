@@ -34,6 +34,7 @@
 #include "DrawObject.h"
 #include "GameLogic/PolygonTrigger.h"
 #include "Common/GlobalData.h"
+import engine.debug;
 
 //
 // WaterTool class.
@@ -109,7 +110,7 @@ void WaterTool::mouseDown(TTrackingMode m, CPoint viewPt, WbView* pView, CWorldB
 	docPt.z = m_currentZ;
 	m_poly_mouseDownPt = docPt;
 	if (m_poly_curSelectedPolygon) {
-		DEBUG_ASSERTCRASH(m_poly_curSelectedPolygon->isWaterArea(), ("Should be water."));
+		engine::debug::invariant((m_poly_curSelectedPolygon->isWaterArea()), "m_poly_curSelectedPolygon->isWaterArea()", __FILE__, __LINE__, "Should be water.");
 		m_currentZ = m_poly_curSelectedPolygon->getPoint(0)->z;
 		m_poly_mouseDownPt.z = m_currentZ;
 	}
@@ -260,19 +261,19 @@ void WaterTool::fillTheArea(TTrackingMode m, CPoint viewPt, WbView* pView, CWorl
 		intMapHeight = pMap->getHeight(i, j);
 #ifdef INTENSE_DEBUG
 		if (bottom) {
-			DEBUG_LOG(("Bottom %d,%d", i, j));
+			engine::debug::log_info("Bottom %d,%d", i, j);
 		} else if (left) {
-			DEBUG_LOG(("Left %d,%d", i, j));
+			engine::debug::log_info("Left %d,%d", i, j);
 		} else if (right) {
-			DEBUG_LOG(("Right %d,%d", i, j));
+			engine::debug::log_info("Right %d,%d", i, j);
 		} else if (top) {
-			DEBUG_LOG(("Top %d,%d", i, j));
+			engine::debug::log_info("Top %d,%d", i, j);
 		}
 #endif
 		if (bottom) {
 			bottom = false;
 			if (waterHeight<mapZtoHeight(intMapHeight)) {
-				DEBUG_ASSERTCRASH(waterHeight>mapZtoHeight(pMap->getHeight(i+1, j)), ("Logic error. jba."));
+				engine::debug::invariant((waterHeight>mapZtoHeight(pMap->getHeight(i+1, j))), "waterHeight>mapZtoHeight(pMap->getHeight(i+1, j))", __FILE__, __LINE__, "Logic error. jba.");
 				Real dx = (mapZtoHeight(pMap->getHeight(i,j))-waterHeight) / (mapZtoHeight(pMap->getHeight(i,j)-pMap->getHeight(i+1,j)));
 				pt.x += dx*MAP_XY_FACTOR;
 				Bool topLeftDry = (waterHeight<mapZtoHeight(pMap->getHeight(i, j+1)));
@@ -303,7 +304,7 @@ void WaterTool::fillTheArea(TTrackingMode m, CPoint viewPt, WbView* pView, CWorl
 					}
 				}
 			} else {
-				DEBUG_ASSERTCRASH(i==0, ("Logic error. jba."));
+				engine::debug::invariant((i==0), "i==0", __FILE__, __LINE__, "Logic error. jba.");
 				left = true;
 				while (j<pMap->getYExtent()-2 && waterHeight>mapZtoHeight(pMap->getHeight(i, j+1))) {
 					j++;
@@ -319,7 +320,7 @@ void WaterTool::fillTheArea(TTrackingMode m, CPoint viewPt, WbView* pView, CWorl
 		} else if (left) {
 			left = false;
 			if (waterHeight<mapZtoHeight(pMap->getHeight(i, j+1))) {
-				DEBUG_ASSERTCRASH(waterHeight>mapZtoHeight(intMapHeight), ("Logic error. jba."));
+				engine::debug::invariant((waterHeight>mapZtoHeight(intMapHeight)), "waterHeight>mapZtoHeight(intMapHeight)", __FILE__, __LINE__, "Logic error. jba.");
 				Real dy = (waterHeight-mapZtoHeight(pMap->getHeight(i,j))) / (mapZtoHeight(pMap->getHeight(i,j+1)-pMap->getHeight(i,j)));
 				pt.y += dy*MAP_XY_FACTOR;
 				Bool bottomRightDry = (waterHeight<mapZtoHeight(pMap->getHeight(i+1, j)));
@@ -351,7 +352,7 @@ void WaterTool::fillTheArea(TTrackingMode m, CPoint viewPt, WbView* pView, CWorl
 				}
 			} else {
 				pt.y = (j+1)*MAP_XY_FACTOR;
-				DEBUG_ASSERTCRASH(j==pMap->getYExtent()-2, ("Logic error. jba."));
+				engine::debug::invariant((j==pMap->getYExtent()-2), "j==pMap->getYExtent()-2", __FILE__, __LINE__, "Logic error. jba.");
 				while (i<pMap->getXExtent()-2 && waterHeight>mapZtoHeight(pMap->getHeight(i+1, j+1))) {
 					i++;
 				}
@@ -367,7 +368,7 @@ void WaterTool::fillTheArea(TTrackingMode m, CPoint viewPt, WbView* pView, CWorl
 			right = false;
 			pt.x = (i+1)*MAP_XY_FACTOR;
 			if (waterHeight<mapZtoHeight(pMap->getHeight(i+1, j))) {
-				DEBUG_ASSERTCRASH(waterHeight>mapZtoHeight(pMap->getHeight(i+1,j+1)), ("Logic error. jba."));
+				engine::debug::invariant((waterHeight>mapZtoHeight(pMap->getHeight(i+1,j+1))), "waterHeight>mapZtoHeight(pMap->getHeight(i+1,j+1))", __FILE__, __LINE__, "Logic error. jba.");
 				Real dy = (mapZtoHeight(pMap->getHeight(i+1,j))-waterHeight) / (mapZtoHeight(pMap->getHeight(i+1,j)-pMap->getHeight(i+1,j+1)));
 				pt.y += dy*MAP_XY_FACTOR;
 				Bool bottomLeftDry = (waterHeight<mapZtoHeight(pMap->getHeight(i, j)));
@@ -398,7 +399,7 @@ void WaterTool::fillTheArea(TTrackingMode m, CPoint viewPt, WbView* pView, CWorl
 					}
 				}
 			} else {
-				DEBUG_ASSERTCRASH(j==0, ("Logic error. jba."));
+				engine::debug::invariant((j==0), "j==0", __FILE__, __LINE__, "Logic error. jba.");
 				while (i>0 && waterHeight>mapZtoHeight(pMap->getHeight(i, j))) {
 					i--;
 				}
@@ -412,7 +413,7 @@ void WaterTool::fillTheArea(TTrackingMode m, CPoint viewPt, WbView* pView, CWorl
 			top = false;
 			pt.y = (j+1)*MAP_XY_FACTOR;
 			if (waterHeight<mapZtoHeight(pMap->getHeight(i+1, j+1))) {
-				DEBUG_ASSERTCRASH(waterHeight>mapZtoHeight(pMap->getHeight(i, j+1)), ("Logic error. jba."));
+				engine::debug::invariant((waterHeight>mapZtoHeight(pMap->getHeight(i, j+1))), "waterHeight>mapZtoHeight(pMap->getHeight(i, j+1))", __FILE__, __LINE__, "Logic error. jba.");
 				Real dx = (waterHeight-mapZtoHeight(pMap->getHeight(i,j+1))) / (mapZtoHeight(pMap->getHeight(i+1,j+1)-pMap->getHeight(i,j+1)));
 				pt.x += dx*MAP_XY_FACTOR;
 				Bool bottomLeftDry = (waterHeight<mapZtoHeight(pMap->getHeight(i, j)));
@@ -443,7 +444,7 @@ void WaterTool::fillTheArea(TTrackingMode m, CPoint viewPt, WbView* pView, CWorl
 					}
 				}
 			} else {
-				DEBUG_ASSERTCRASH(i==pMap->getXExtent()-2, ("Logic error. jba."));
+				engine::debug::invariant((i==pMap->getXExtent()-2), "i==pMap->getXExtent()-2", __FILE__, __LINE__, "Logic error. jba.");
 				while (j>0 && waterHeight>mapZtoHeight(pMap->getHeight(i+1, j))) {
 					j--;
 				}
@@ -457,7 +458,7 @@ void WaterTool::fillTheArea(TTrackingMode m, CPoint viewPt, WbView* pView, CWorl
 				pt.x = (i+1)*MAP_XY_FACTOR;
 			}
 		} else {
-			DEBUG_CRASH(("Logic error. jba.")); // shouldn't get here.
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Logic error. jba."); // shouldn't get here.
 		}
 		pt.x -= pMap->getBorderSize()*MAP_XY_FACTOR;
 		pt.y -= pMap->getBorderSize()*MAP_XY_FACTOR;

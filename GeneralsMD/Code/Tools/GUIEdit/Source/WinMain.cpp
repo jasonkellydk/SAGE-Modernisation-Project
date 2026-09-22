@@ -49,7 +49,7 @@
 #include <commctrl.h>
 
 // USER INCLUDES //////////////////////////////////////////////////////////////
-#include "Common/Debug.h"
+
 #include "Common/FramePacer.h"
 #include "Common/GameMemory.h"
 #include "GameClient/GameWindowManager.h"

@@ -46,10 +46,11 @@
 //----------------------------------------------------------------------------
 
 #include "PreRTS.h"
+import engine.debug;
 #include "Common/ArchiveFile.h"
 #include "Common/ArchiveFileSystem.h"
 #include "Common/AsciiString.h"
-#include "Common/PerfTimer.h"
+
 
 
 //----------------------------------------------------------------------------
@@ -168,44 +169,6 @@ void ArchiveFileSystem::loadIntoDirectoryTree(ArchiveFile *archiveFile, Bool ove
 
 		dirInfo->m_files.insert(fileIt, std::make_pair(token, archiveFile));
 
-#if defined(DEBUG_LOGGING) && ENABLE_FILESYSTEM_LOGGING
-		{
-			const stl::const_range<ArchivedFileLocationMap> range = stl::get_range(dirInfo->m_files, token, 0);
-			if (range.distance() >= 2)
-			{
-				ArchivedFileLocationMap::const_iterator rangeIt0;
-				ArchivedFileLocationMap::const_iterator rangeIt1;
-
-				if (overwrite)
-				{
-					rangeIt0 = range.begin;
-					rangeIt1 = std::next(rangeIt0);
-
-					DEBUG_LOG(("ArchiveFileSystem::loadIntoDirectoryTree - adding file %s, archived in %s, overwriting same file in %s",
-						it->str(),
-						rangeIt0->second->getName().str(),
-						rangeIt1->second->getName().str()
-					));
-				}
-				else
-				{
-					rangeIt1 = std::prev(range.end);
-					rangeIt0 = std::prev(rangeIt1);
-
-					DEBUG_LOG(("ArchiveFileSystem::loadIntoDirectoryTree - adding file %s, archived in %s, overwritten by same file in %s",
-						it->str(),
-						rangeIt1->second->getName().str(),
-						rangeIt0->second->getName().str()
-					));
-				}
-			}
-			else
-			{
-				DEBUG_LOG(("ArchiveFileSystem::loadIntoDirectoryTree - adding file %s, archived in %s", it->str(), archiveFile->getName().str()));
-			}
-		}
-#endif
-
 		it++;
 	}
 }
@@ -217,14 +180,14 @@ void ArchiveFileSystem::loadMods()
 		ArchiveFile *archiveFile = openArchiveFile(TheGlobalData->m_modBIG.str());
 
 		if (archiveFile != nullptr) {
-			DEBUG_LOG(("ArchiveFileSystem::loadMods - loading %s into the directory tree.", TheGlobalData->m_modBIG.str()));
+			engine::debug::log_info("ArchiveFileSystem::loadMods - loading %s into the directory tree.", TheGlobalData->m_modBIG.str());
 			loadIntoDirectoryTree(archiveFile, TRUE);
 			m_archiveFileMap[TheGlobalData->m_modBIG] = archiveFile;
-			DEBUG_LOG(("ArchiveFileSystem::loadMods - %s inserted into the archive file map.", TheGlobalData->m_modBIG.str()));
+			engine::debug::log_info("ArchiveFileSystem::loadMods - %s inserted into the archive file map.", TheGlobalData->m_modBIG.str());
 		}
 		else
 		{
-			DEBUG_LOG(("ArchiveFileSystem::loadMods - could not openArchiveFile(%s)", TheGlobalData->m_modBIG.str()));
+			engine::debug::log_info("ArchiveFileSystem::loadMods - could not openArchiveFile(%s)", TheGlobalData->m_modBIG.str());
 		}
 	}
 
@@ -232,7 +195,7 @@ void ArchiveFileSystem::loadMods()
 	{
 		MAYBE_UNUSED Bool ret = loadBigFilesFromDirectory(TheGlobalData->m_modDir, "*.big", TRUE);
 		(void)ret;
-		DEBUG_ASSERTLOG(ret, ("loadBigFilesFromDirectory(%s) returned FALSE!", TheGlobalData->m_modDir.str()));
+		if (!(ret)) engine::debug::log_error("loadBigFilesFromDirectory(%s) returned FALSE!", TheGlobalData->m_modDir.str());
 	}
 }
 

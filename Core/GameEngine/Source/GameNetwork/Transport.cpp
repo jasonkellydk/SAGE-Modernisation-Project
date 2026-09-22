@@ -23,7 +23,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/crc.h"
 #include "GameNetwork/Transport.h"
@@ -117,8 +118,8 @@ Bool Transport::init( UnsignedInt ip, UnsignedShort port )
 	}
 
 	if (retval != 0) {
-		DEBUG_CRASH(("Could not bind to 0x%8.8X:%d", ip, port));
-		DEBUG_LOG(("Transport::init - Failure to bind socket with error code %x", retval));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Could not bind to 0x%8.8X:%d", ip, port);
+engine::debug::log_info("Transport::init - Failure to bind socket with error code %x", retval);
 		delete m_udpsock;
 		m_udpsock = nullptr;
 		return false;
@@ -178,19 +179,19 @@ Bool Transport::update()
 	{
 		retval = FALSE;
 	}
-	DEBUG_ASSERTLOG(retval, ("WSA error is %s", GetWSAErrorString(WSAGetLastError()).str()));
+	if (!(retval)) engine::debug::log_error("WSA error is %s", GetWSAErrorString(WSAGetLastError()).str());
 	if (doSend() == FALSE && m_udpsock && m_udpsock->GetStatus() == UDP::ADDRNOTAVAIL)
 	{
 		retval = FALSE;
 	}
-	DEBUG_ASSERTLOG(retval, ("WSA error is %s", GetWSAErrorString(WSAGetLastError()).str()));
+	if (!(retval)) engine::debug::log_error("WSA error is %s", GetWSAErrorString(WSAGetLastError()).str());
 	return retval;
 }
 
 Bool Transport::doSend() {
 	if (!m_udpsock)
 	{
-		DEBUG_LOG(("Transport::doSend() - m_udpSock is null!"));
+engine::debug::log_info("Transport::doSend() - m_udpSock is null!");
 		return FALSE;
 	}
 
@@ -224,22 +225,22 @@ Bool Transport::doSend() {
 			// Send this message
 			if ((bytesSent = m_udpsock->Write((unsigned char *)(&m_outBuffer[i]), bytesToSend, m_outBuffer[i].addr, m_outBuffer[i].port)) > 0)
 			{
-				//DEBUG_LOG(("Sending %d bytes to %d.%d.%d.%d:%d", bytesToSend, PRINTF_IP_AS_4_INTS(m_outBuffer[i].addr), m_outBuffer[i].port));
+engine::debug::log_info("Sending %d bytes to %d.%d.%d.%d:%d", bytesToSend, PRINTF_IP_AS_4_INTS(m_outBuffer[i].addr), m_outBuffer[i].port);
 				m_outgoingPackets[m_statisticsSlot]++;
 				m_outgoingBytes[m_statisticsSlot] += m_outBuffer[i].length + sizeof(TransportMessageHeader);
 				m_outBuffer[i].length = 0;  // Remove from queue
 				if (bytesSent != bytesToSend)
 				{
-					DEBUG_LOG(("Transport::doSend - wanted to send %d bytes, only sent %d bytes to %d.%d.%d.%d:%d",
+engine::debug::log_info("Transport::doSend - wanted to send %d bytes, only sent %d bytes to %d.%d.%d.%d:%d",
 						bytesToSend, bytesSent,
-						PRINTF_IP_AS_4_INTS(m_outBuffer[i].addr), m_outBuffer[i].port));
+						PRINTF_IP_AS_4_INTS(m_outBuffer[i].addr), m_outBuffer[i].port);
 				}
 			}
 			else
 			{
-				//DEBUG_LOG(("Could not write to socket!!!  Not discarding message!"));
+engine::debug::log_info("Could not write to socket!!!  Not discarding message!");
 				retval = FALSE;
-				//DEBUG_LOG(("Transport::doSend returning FALSE"));
+engine::debug::log_info("Transport::doSend returning FALSE");
 			}
 		}
 	}
@@ -276,7 +277,7 @@ Bool Transport::doRecv()
 {
 	if (!m_udpsock)
 	{
-		DEBUG_LOG(("Transport::doRecv() - m_udpSock is null!"));
+engine::debug::log_info("Transport::doRecv() - m_udpSock is null!");
 		return FALSE;
 	}
 
@@ -295,7 +296,7 @@ Bool Transport::doRecv()
 	unsigned char *buf = (unsigned char *)&incomingMessage;
 	int len = MAX_NETWORK_MESSAGE_LEN;
 	size_t bufferIndex = 0;
-//	DEBUG_LOG(("Transport::doRecv - checking"));
+engine::debug::log_info("Transport::doRecv - checking");
 	while ( (len=m_udpsock->Read(buf, MAX_NETWORK_MESSAGE_LEN, &from)) > 0 )
 	{
 #if defined(RTS_DEBUG)
@@ -309,31 +310,31 @@ Bool Transport::doRecv()
 		}
 #endif
 
-//		DEBUG_LOG(("Transport::doRecv - Got something! len = %d", len));
+engine::debug::log_info("Transport::doRecv - Got something! len = %d", len);
 		// Decrypt the packet
-//		DEBUG_LOG_RAW(("buffer = "));
+engine::debug::log_info("buffer = ");
 //		for (Int munkee = 0; munkee < len; ++munkee) {
-//			DEBUG_LOG_RAW(("%02x", *(buf + munkee)));
+//			engine::debug::log_info("%02x", *(buf + munkee));
 //		}
-//		DEBUG_LOG_RAW(("\n"));
+engine::debug::log_info("\n");
 		decryptBuf(buf, len);
 
 		incomingMessage.length = len - sizeof(TransportMessageHeader);
 
 		if (len <= sizeof(TransportMessageHeader) || !isGeneralsPacket( &incomingMessage ))
 		{
-			DEBUG_LOG(("Transport::doRecv - unknownPacket! len = %d", len));
+engine::debug::log_info("Transport::doRecv - unknownPacket! len = %d", len);
 			m_unknownPackets[m_statisticsSlot]++;
 			m_unknownBytes[m_statisticsSlot] += len;
 			continue;
 		}
 
 		// Something there; stick it somewhere
-//		DEBUG_LOG(("Saw %d bytes from %d:%d", len, ntohl(from.sin_addr.S_un.S_addr), ntohs(from.sin_port)));
+engine::debug::log_info("Saw %d bytes from %d:%d", len, ntohl(from.sin_addr.S_un.S_addr), ntohs(from.sin_port));
 		m_incomingPackets[m_statisticsSlot]++;
 		m_incomingBytes[m_statisticsSlot] += len;
 
-		DEBUG_ASSERTCRASH(bufferIndex < MAX_MESSAGES, ("Message lost!"));
+		engine::debug::invariant((bufferIndex < MAX_MESSAGES), "bufferIndex < MAX_MESSAGES", __FILE__, __LINE__, "Message lost!");
 
 #if defined(RTS_DEBUG)
 		// Latency simulation
@@ -378,7 +379,7 @@ Bool Transport::doRecv()
 
 	if (len == -1) {
 		// there was a socket error trying to perform a read.
-		//DEBUG_LOG(("Transport::doRecv returning FALSE"));
+engine::debug::log_info("Transport::doRecv returning FALSE");
 		retval = FALSE;
 	}
 
@@ -390,7 +391,7 @@ Bool Transport::queueSend(UnsignedInt addr, UnsignedShort port, const UnsignedBy
 {
 	if (len < 1 || len > MAX_PACKET_SIZE)
 	{
-		DEBUG_LOG(("Transport::queueSend - Invalid Packet size"));
+engine::debug::log_info("Transport::queueSend - Invalid Packet size");
 		return false;
 	}
 
@@ -409,18 +410,18 @@ Bool Transport::queueSend(UnsignedInt addr, UnsignedShort port, const UnsignedBy
 
 			CRC crc;
 			crc.computeCRC( (unsigned char *)(&(m_outBuffer[i].header.magic)), m_outBuffer[i].length + sizeof(TransportMessageHeader) - sizeof(UnsignedInt) );
-//			DEBUG_LOG(("About to assign the CRC for the packet"));
+engine::debug::log_info("About to assign the CRC for the packet");
 			m_outBuffer[i].header.crc = crc.get();
 
 			// Encrypt packet
-//			DEBUG_LOG(("buffer: "));
+engine::debug::log_info("buffer: ");
 			encryptBuf((unsigned char *)&m_outBuffer[i], len + sizeof(TransportMessageHeader));
-//			DEBUG_LOG((""));
+engine::debug::log_info("");
 
 			return true;
 		}
 	}
-	DEBUG_LOG(("Send Queue is getting full, dropping packets"));
+engine::debug::log_info("Send Queue is getting full, dropping packets");
 	return false;
 }
 
@@ -511,6 +512,5 @@ Real Transport::getUnknownPacketsPerSecond()
 	}
 	return val / (MAX_TRANSPORT_STATISTICS_SECONDS-1);
 }
-
 
 

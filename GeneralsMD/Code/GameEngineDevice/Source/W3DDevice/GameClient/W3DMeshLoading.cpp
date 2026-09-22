@@ -30,6 +30,7 @@ import Graphics.Frame.RenderSettings;
 
 #include "WWLib/chunkio.h"
 #include "WWLib/RANDOM.h"
+import engine.debug;
 import Assets.Adapters.W3D.MeshData;
 import Assets.Adapters.W3D.Materials;
 import Assets.Adapters.W3D.Geometry;
@@ -79,7 +80,7 @@ RefCountPtr<W3DTextureHandle> Acquire_Texture(const Assets::W3D::W3DTextureData&
                     break;
 
                 default:
-                    WWASSERT (false);
+                    engine::debug::assert_condition((false), "false", __FILE__, __LINE__, "assertion failed");
                     mipcount = MIP_LEVELS_ALL;
                     break;
             }
@@ -107,7 +108,7 @@ RefCountPtr<W3DTextureHandle> Acquire_Texture(const Assets::W3D::W3DTextureData&
             }
 
             default:
-                WWASSERT (false);
+                engine::debug::assert_condition((false), "false", __FILE__, __LINE__, "assertion failed");
                 break;
         }
 
@@ -127,7 +128,7 @@ RefCountPtr<W3DTextureHandle> Acquire_Texture(const Assets::W3D::W3DTextureData&
         newtex = W3DAssetCatalog::Get_Instance()->Get_Texture(decoded.name.c_str());
     }
 
-    WWASSERT(newtex);
+    engine::debug::assert_condition((newtex), "newtex", __FILE__, __LINE__, "assertion failed");
     return RefCountPtr<W3DTextureHandle>::Create_No_Add_Ref(newtex);
 }
 }
@@ -177,7 +178,7 @@ bool W3DMeshResource::Load_W3D(ChunkLoadClass& cload) {
     Set_Flag(SORT, loaded.sorted);
     SortLevel = loaded.sort_level;
     if (loaded.animated_material3_texture)
-        WWDEBUG_SAY(("ERROR: Animated Material3 texture detected in model: %s", Get_Name()));
+        engine::debug::log_info("ERROR: Animated Material3 texture detected in model: %s", Get_Name());
     if (Get_Flag(SKIN)) CullTree.reset();
     return true;
 }

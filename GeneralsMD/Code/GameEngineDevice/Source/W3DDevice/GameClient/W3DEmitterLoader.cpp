@@ -17,6 +17,7 @@ import Assets.Images.PixelEncoding;
 #include "W3DDevice/GameClient/W3DTextureHandle.h"
 #include "WWLib/chunkio.h"
 #include "WWLib/ref_ptr.h"
+import engine.debug;
 
 namespace {
 
@@ -49,7 +50,7 @@ Graphics::MaterialState Create_Shader(const Assets::EmitterShaderDesc& data)
     case Assets::EmitterBlendFactor::One: shader.Set_Src_Blend_Func(Graphics::MaterialState::SRCBLEND_ONE); break;
     case Assets::EmitterBlendFactor::SourceAlpha: shader.Set_Src_Blend_Func(Graphics::MaterialState::SRCBLEND_SRC_ALPHA); break;
     case Assets::EmitterBlendFactor::OneMinusSourceAlpha: shader.Set_Src_Blend_Func(Graphics::MaterialState::SRCBLEND_ONE_MINUS_SRC_ALPHA); break;
-    default: WWASSERT(false); break;
+    default: engine::debug::assert_condition((false), "false", __FILE__, __LINE__, "assertion failed"); break;
     }
     shader.Set_Primary_Gradient(static_cast<Graphics::MaterialState::PriGradientType>(data.primary_gradient));
     shader.Set_Secondary_Gradient(static_cast<Graphics::MaterialState::SecGradientType>(data.secondary_gradient));

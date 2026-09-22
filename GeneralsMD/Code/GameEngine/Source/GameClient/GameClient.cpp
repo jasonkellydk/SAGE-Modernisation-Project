@@ -28,8 +28,11 @@
 ///////////////////////////////////////////////////////////////////////////////
 
 // SYSTEM INCLUDES ////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.profiling;
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 import engine.navigation.diagnostics.frame_capture;
+import engine.platform;
 #include "GameClient/GameClient.h"
 
 // USER INCLUDES //////////////////////////////////////////////////////////////
@@ -39,7 +42,7 @@ import engine.navigation.diagnostics.frame_capture;
 #include "Common/GameState.h"
 #include "Common/GameUtility.h"
 #include "Common/GlobalData.h"
-#include "Common/PerfTimer.h"
+
 #include "Common/Player.h"
 #include "Common/PlayerList.h"
 #include "Common/ThingFactory.h"
@@ -58,7 +61,6 @@ import engine.navigation.diagnostics.frame_capture;
 #include "GameClient/Eva.h"
 #include "GameClient/GameWindowManager.h"
 #include "GameClient/GlobalLanguage.h"
-#include "GameClient/GraphDraw.h"
 #include "GameClient/GUICommandTranslator.h"
 #include "GameClient/HeaderTemplate.h"
 #include "GameClient/HintSpy.h"
@@ -93,7 +95,8 @@ import engine.navigation.diagnostics.frame_capture;
 GameClient *TheGameClient = nullptr;
 
 //-------------------------------------------------------------------------------------------------
-GameClient::GameClient()
+GameClient::GameClient(engine::platform::IPlatform& platform, std::uint32_t mainWindowId)
+	: m_platform(platform), m_mainWindowId(mainWindowId)
 {
 
 	// zero our translator list
@@ -121,10 +124,6 @@ GameClient::GameClient()
 //-------------------------------------------------------------------------------------------------
 GameClient::~GameClient()
 {
-#ifdef PERF_TIMERS
-	delete TheGraphDraw;
-	TheGraphDraw = nullptr;
-#endif
 
 	delete TheDrawGroupInfo;
 	TheDrawGroupInfo = nullptr;
@@ -132,17 +131,17 @@ GameClient::~GameClient()
 	// clear any drawable TOC we might have
 	m_drawableTOC.clear();
 
-	//DEBUG_LOG(("Preloaded texture files ------------------------------------------"));
+	//engine::debug::log_info("Preloaded texture files ------------------------------------------");
 	//for (Int oog=0; oog<preloadTextureNamesGlobalHack2.size(); ++oog)
 	//{
-	//	DEBUG_LOG(("%s", preloadTextureNamesGlobalHack2[oog]));
+	//	engine::debug::log_info("%s", preloadTextureNamesGlobalHack2[oog]);
 	//}
-	//DEBUG_LOG(("------------------------------------------------------------------"));
+	//engine::debug::log_info("------------------------------------------------------------------");
 	//for (oog=0; oog<preloadTextureNamesGlobalHack.size(); ++oog)
 	//{
-	//	DEBUG_LOG(("%s", preloadTextureNamesGlobalHack[oog]));
+	//	engine::debug::log_info("%s", preloadTextureNamesGlobalHack[oog]);
 	//}
-	//DEBUG_LOG(("End Texture files ------------------------------------------------"));
+	//engine::debug::log_info("End Texture files ------------------------------------------------");
 
 	delete TheCampaignManager;
 	TheCampaignManager = nullptr;
@@ -325,7 +324,7 @@ void GameClient::init()
 		TheFontLibrary->init();
 
 	// create the mouse
-	TheMouse = TheGlobalData->m_headless ? NEW MouseDummy : createMouse();
+	TheMouse = TheGlobalData->m_headless ? NEW MouseDummy(m_platform.clock()) : createMouse();
 	TheMouse->parseIni();
 	TheMouse->initCursorResources();
  	TheMouse->setName("TheMouse");
@@ -354,7 +353,7 @@ void GameClient::init()
 	}
 
 	// create the IME manager
-	TheIMEManager = CreateIMEManagerInterface();
+	TheIMEManager = CreateIMEManagerInterface(m_platform.text_input(), m_mainWindowId);
 	if ( TheIMEManager )
 	{
 		TheIMEManager->init();
@@ -445,9 +444,6 @@ void GameClient::init()
 
 	m_intro = NEW Intro;
 
-#ifdef PERF_TIMERS
-	TheGraphDraw = new GraphDraw;
-#endif
 
 }
 
@@ -519,14 +515,12 @@ void GameClient::registerDrawable( Drawable *draw )
 /** -----------------------------------------------------------------------------------------------
  * Redraw all views, update the GUI, play sound effects, etc.
  */
-DECLARE_PERF_TIMER(GameClient_update)
-DECLARE_PERF_TIMER(GameClient_draw)
 void GameClient::update()
 {
 	auto& capture=navigation::diagnostics::frameCapture();
-	USE_PERF_TIMER(GameClient_update)
-	PROFILER_FRAME_MARK;
-	PROFILER_SECTION_COLOR(0x2196F3);
+	engine::profiling::Scope profile_scope_527("GameClient_update");
+	engine::profiling::mark_frame();
+	engine::profiling::Scope profile_scope_529("Unnamed", 0x2196F3);
 
 	// Video playback owns its timing in engine/video. Advance it before the
 	// intro early-return path as well as the normal gameplay path.
@@ -558,26 +552,26 @@ void GameClient::update()
 
 	//Update snow particles.
 	if (TheSnowManager)
-		TheSnowManager->UPDATE();
+		TheSnowManager->update();
 
 	// update animation 2d collection
-	TheAnim2DCollection->UPDATE();
+	TheAnim2DCollection->update();
 
 	// update the keyboard
 	if( TheKeyboard )
 	{
-		TheKeyboard->UPDATE();
+		TheKeyboard->update();
 		TheKeyboard->createStreamMessages();
 
 	}
 
 	// Update the Eva stuff
-	TheEva->UPDATE();
+	TheEva->update();
 
 	// update the mouse
 	if( TheMouse )
 	{
-		TheMouse->UPDATE();
+		TheMouse->update();
 		TheMouse->createStreamMessages();
 
 	}
@@ -597,14 +591,14 @@ void GameClient::update()
 	if (m_intro != nullptr)
 	{
 		// redraw all views, update the GUI
-		TheDisplay->UPDATE();
-		TheDisplay->DRAW();
+		TheDisplay->update();
+		TheDisplay->draw();
 		return;
 	}
 
 	// update the window system itself
 	{
-		TheWindowManager->UPDATE();
+		TheWindowManager->update();
 	}
 
 	const Bool freezeTime = TheGameEngine->isTimeFrozen() || TheGameEngine->isGameHalted();
@@ -716,23 +710,23 @@ void GameClient::update()
 	// update the terrain visuals
 	{
 		auto timing=capture.measure("client.terrain",TheGameLogic->getFrame());
-		TheTerrainVisual->UPDATE();
+		TheTerrainVisual->update();
 	}
 
 	// update display
 	{
 		auto timing=capture.measure("client.display_update",TheGameLogic->getFrame());
-		TheDisplay->UPDATE();
+		TheDisplay->update();
 	}
 
 	{
-		USE_PERF_TIMER(GameClient_draw)
+		engine::profiling::Scope profile_scope_729("GameClient_draw");
 		auto timing=capture.measure("client.draw",TheGameLogic->getFrame());
 
 	// redraw all views, update the GUI
 	//if(TheGameLogic->getFrame() >= 2)
 
-		TheDisplay->DRAW();
+		TheDisplay->draw();
 	}
 
 	{
@@ -742,12 +736,12 @@ void GameClient::update()
 
 	{
 		// update the shell
-		TheShell->UPDATE();
+		TheShell->update();
 	}
 
 	{
 		// update the in game UI
-		TheInGameUI->UPDATE();
+		TheInGameUI->update();
 	}
 }
 
@@ -783,7 +777,7 @@ Bool GameClient::isMovieAbortRequested()
 	// TheSuperHackers @feature User can skip video by pressing ESC
 	if (TheKeyboard)
 	{
-		TheKeyboard->UPDATE();
+		TheKeyboard->update();
 		KeyboardIO *io = TheKeyboard->findKey(KEY_ESC, KeyboardIO::STATUS_UNUSED);
 		if (io && BitIsSet(io->state, KEY_STATE_UP))
 		{
@@ -873,7 +867,7 @@ void GameClient::destroyDrawable( Drawable *draw )
 	if( obj )
 	{
 
-		DEBUG_ASSERTCRASH( obj->getDrawable() == draw, ("Object/Drawable pointer mismatch!") );
+		engine::debug::invariant((obj->getDrawable() == draw), "obj->getDrawable() == draw", __FILE__, __LINE__, "Object/Drawable pointer mismatch!");
 		obj->friend_bindToDrawable( nullptr );
 
 	}
@@ -1135,23 +1129,23 @@ void GameClient::preloadAssets( TimeOfDay timeOfDay )
 	}
 	GlobalMemoryStatus(&after);
 
-	DEBUG_LOG(("Preloading memory dwAvailPageFile %d --> %d : %d",
-		before.dwAvailPageFile, after.dwAvailPageFile, before.dwAvailPageFile - after.dwAvailPageFile));
-	DEBUG_LOG(("Preloading memory dwAvailPhys     %d --> %d : %d",
-		before.dwAvailPhys, after.dwAvailPhys, before.dwAvailPhys - after.dwAvailPhys));
-	DEBUG_LOG(("Preloading memory dwAvailVirtual  %d --> %d : %d",
-		before.dwAvailVirtual, after.dwAvailVirtual, before.dwAvailVirtual - after.dwAvailVirtual));
+	engine::debug::log_info("Preloading memory dwAvailPageFile %d --> %d : %d",
+		before.dwAvailPageFile, after.dwAvailPageFile, before.dwAvailPageFile - after.dwAvailPageFile);
+	engine::debug::log_info("Preloading memory dwAvailPhys     %d --> %d : %d",
+		before.dwAvailPhys, after.dwAvailPhys, before.dwAvailPhys - after.dwAvailPhys);
+	engine::debug::log_info("Preloading memory dwAvailVirtual  %d --> %d : %d",
+		before.dwAvailVirtual, after.dwAvailVirtual, before.dwAvailVirtual - after.dwAvailVirtual);
 	/*
-	DEBUG_LOG(("Preloading memory dwLength        %d --> %d : %d",
-		before.dwLength, after.dwLength, before.dwLength - after.dwLength));
-	DEBUG_LOG(("Preloading memory dwMemoryLoad    %d --> %d : %d",
-		before.dwMemoryLoad, after.dwMemoryLoad, before.dwMemoryLoad - after.dwMemoryLoad));
-	DEBUG_LOG(("Preloading memory dwTotalPageFile %d --> %d : %d",
-		before.dwTotalPageFile, after.dwTotalPageFile, before.dwTotalPageFile - after.dwTotalPageFile));
-	DEBUG_LOG(("Preloading memory dwTotalPhys     %d --> %d : %d",
-		before.dwTotalPhys , after.dwTotalPhys, before.dwTotalPhys - after.dwTotalPhys));
-	DEBUG_LOG(("Preloading memory dwTotalVirtual  %d --> %d : %d",
-		before.dwTotalVirtual , after.dwTotalVirtual, before.dwTotalVirtual - after.dwTotalVirtual));
+	engine::debug::log_info("Preloading memory dwLength        %d --> %d : %d",
+		before.dwLength, after.dwLength, before.dwLength - after.dwLength);
+	engine::debug::log_info("Preloading memory dwMemoryLoad    %d --> %d : %d",
+		before.dwMemoryLoad, after.dwMemoryLoad, before.dwMemoryLoad - after.dwMemoryLoad);
+	engine::debug::log_info("Preloading memory dwTotalPageFile %d --> %d : %d",
+		before.dwTotalPageFile, after.dwTotalPageFile, before.dwTotalPageFile - after.dwTotalPageFile);
+	engine::debug::log_info("Preloading memory dwTotalPhys     %d --> %d : %d",
+		before.dwTotalPhys , after.dwTotalPhys, before.dwTotalPhys - after.dwTotalPhys);
+	engine::debug::log_info("Preloading memory dwTotalVirtual  %d --> %d : %d",
+		before.dwTotalVirtual , after.dwTotalVirtual, before.dwTotalVirtual - after.dwTotalVirtual);
 	*/
 
 	GlobalMemoryStatus(&before);
@@ -1164,12 +1158,12 @@ void GameClient::preloadAssets( TimeOfDay timeOfDay )
 	GlobalMemoryStatus(&after);
 	debrisModelNamesGlobalHack.clear();
 
-	DEBUG_LOG(("Preloading memory dwAvailPageFile %d --> %d : %d",
-		before.dwAvailPageFile, after.dwAvailPageFile, before.dwAvailPageFile - after.dwAvailPageFile));
-	DEBUG_LOG(("Preloading memory dwAvailPhys     %d --> %d : %d",
-		before.dwAvailPhys, after.dwAvailPhys, before.dwAvailPhys - after.dwAvailPhys));
-	DEBUG_LOG(("Preloading memory dwAvailVirtual  %d --> %d : %d",
-		before.dwAvailVirtual, after.dwAvailVirtual, before.dwAvailVirtual - after.dwAvailVirtual));
+	engine::debug::log_info("Preloading memory dwAvailPageFile %d --> %d : %d",
+		before.dwAvailPageFile, after.dwAvailPageFile, before.dwAvailPageFile - after.dwAvailPageFile);
+	engine::debug::log_info("Preloading memory dwAvailPhys     %d --> %d : %d",
+		before.dwAvailPhys, after.dwAvailPhys, before.dwAvailPhys - after.dwAvailPhys);
+	engine::debug::log_info("Preloading memory dwAvailVirtual  %d --> %d : %d",
+		before.dwAvailVirtual, after.dwAvailVirtual, before.dwAvailVirtual - after.dwAvailVirtual);
 
 	TheControlBar->preloadAssets( timeOfDay );
 
@@ -1177,12 +1171,12 @@ void GameClient::preloadAssets( TimeOfDay timeOfDay )
 	TheParticleSystemManager->preloadAssets( timeOfDay );
 	GlobalMemoryStatus(&after);
 
-	DEBUG_LOG(("Preloading memory dwAvailPageFile %d --> %d : %d",
-		before.dwAvailPageFile, after.dwAvailPageFile, before.dwAvailPageFile - after.dwAvailPageFile));
-	DEBUG_LOG(("Preloading memory dwAvailPhys     %d --> %d : %d",
-		before.dwAvailPhys, after.dwAvailPhys, before.dwAvailPhys - after.dwAvailPhys));
-	DEBUG_LOG(("Preloading memory dwAvailVirtual  %d --> %d : %d",
-		before.dwAvailVirtual, after.dwAvailVirtual, before.dwAvailVirtual - after.dwAvailVirtual));
+	engine::debug::log_info("Preloading memory dwAvailPageFile %d --> %d : %d",
+		before.dwAvailPageFile, after.dwAvailPageFile, before.dwAvailPageFile - after.dwAvailPageFile);
+	engine::debug::log_info("Preloading memory dwAvailPhys     %d --> %d : %d",
+		before.dwAvailPhys, after.dwAvailPhys, before.dwAvailPhys - after.dwAvailPhys);
+	engine::debug::log_info("Preloading memory dwAvailVirtual  %d --> %d : %d",
+		before.dwAvailVirtual, after.dwAvailVirtual, before.dwAvailVirtual - after.dwAvailVirtual);
 
 	const char *const textureNames[] = {
 		"ptspruce01.tga",
@@ -1231,12 +1225,12 @@ void GameClient::preloadAssets( TimeOfDay timeOfDay )
 		TheDisplay->preloadTextureAssets(textureNames[i]);
 	GlobalMemoryStatus(&after);
 
-	DEBUG_LOG(("Preloading memory dwAvailPageFile %d --> %d : %d",
-		before.dwAvailPageFile, after.dwAvailPageFile, before.dwAvailPageFile - after.dwAvailPageFile));
-	DEBUG_LOG(("Preloading memory dwAvailPhys     %d --> %d : %d",
-		before.dwAvailPhys, after.dwAvailPhys, before.dwAvailPhys - after.dwAvailPhys));
-	DEBUG_LOG(("Preloading memory dwAvailVirtual  %d --> %d : %d",
-		before.dwAvailVirtual, after.dwAvailVirtual, before.dwAvailVirtual - after.dwAvailVirtual));
+	engine::debug::log_info("Preloading memory dwAvailPageFile %d --> %d : %d",
+		before.dwAvailPageFile, after.dwAvailPageFile, before.dwAvailPageFile - after.dwAvailPageFile);
+	engine::debug::log_info("Preloading memory dwAvailPhys     %d --> %d : %d",
+		before.dwAvailPhys, after.dwAvailPhys, before.dwAvailPhys - after.dwAvailPhys);
+	engine::debug::log_info("Preloading memory dwAvailVirtual  %d --> %d : %d",
+		before.dwAvailVirtual, after.dwAvailVirtual, before.dwAvailVirtual - after.dwAvailVirtual);
 
 //	preloadTextureNamesGlobalHack2 = preloadTextureNamesGlobalHack;
 //	preloadTextureNamesGlobalHack.clear();
@@ -1295,7 +1289,7 @@ static Bool shouldSaveDrawable(const Drawable* draw)
 		}
 		else
 		{
-			DEBUG_CRASH(("You should not ever set DRAWABLE_STATUS_NO_SAVE for a Drawable with an object. (%s)",draw->getTemplate()->getName().str()));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "You should not ever set DRAWABLE_STATUS_NO_SAVE for a Drawable with an object. (%s)",draw->getTemplate()->getName().str());
 		}
 	}
 	return true;
@@ -1448,7 +1442,7 @@ void GameClient::xfer( Xfer *xfer )
 			if( tocEntry == nullptr )
 			{
 
-				DEBUG_CRASH(( "GameClient::xfer - Drawable TOC entry not found for '%s'", draw->getTemplate()->getName().str() ));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "GameClient::xfer - Drawable TOC entry not found for '%s'", draw->getTemplate()->getName().str() );
 				throw SC_INVALID_DATA;
 
 			}
@@ -1490,7 +1484,7 @@ void GameClient::xfer( Xfer *xfer )
 			if( tocEntry == nullptr )
 			{
 
-				DEBUG_CRASH(( "GameClient::xfer - No TOC entry match for id '%d'", tocID ));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "GameClient::xfer - No TOC entry match for id '%d'", tocID );
 				throw SC_INVALID_DATA;
 
 			}
@@ -1503,8 +1497,8 @@ void GameClient::xfer( Xfer *xfer )
 			if( thingTemplate == nullptr )
 			{
 
-				DEBUG_CRASH(( "GameClient::xfer - Unrecognized thing template '%s', skipping.  ENGINEERS - Are you *sure* it's OK to be ignoring this object from the save file???  Think hard about it!",
-											tocEntry->name.str() ));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "GameClient::xfer - Unrecognized thing template '%s', skipping.  ENGINEERS - Are you *sure* it's OK to be ignoring this object from the save file???  Think hard about it!",
+											tocEntry->name.str() );
 				xfer->skip( dataSize );
 				continue;
 
@@ -1525,8 +1519,8 @@ void GameClient::xfer( Xfer *xfer )
 				if( object == nullptr )
 				{
 
-					DEBUG_CRASH(( "GameClient::xfer - Cannot find object '%d' that is supposed to be attached to this drawable '%s'",
-												objectID, thingTemplate->getName().str() ));
+					engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "GameClient::xfer - Cannot find object '%d' that is supposed to be attached to this drawable '%s'",
+												objectID, thingTemplate->getName().str() );
 					throw SC_INVALID_DATA;
 
 				}
@@ -1536,8 +1530,8 @@ void GameClient::xfer( Xfer *xfer )
 				if( draw == nullptr )
 				{
 
-					DEBUG_CRASH(( "GameClient::xfer - There is no drawable attached to the object '%s' (%d) and there should be",
-												object->getTemplate()->getName().str(), object->getID() ));
+					engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "GameClient::xfer - There is no drawable attached to the object '%s' (%d) and there should be",
+												object->getTemplate()->getName().str(), object->getID() );
 					throw SC_INVALID_DATA;
 
 				}
@@ -1571,8 +1565,8 @@ void GameClient::xfer( Xfer *xfer )
 				if( draw == nullptr )
 				{
 
-					DEBUG_CRASH(( "GameClient::xfer - Unable to create drawable for '%s'",
-												thingTemplate->getName().str() ));
+					engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "GameClient::xfer - Unable to create drawable for '%s'",
+												thingTemplate->getName().str() );
 					throw SC_INVALID_DATA;
 
 				}
@@ -1597,11 +1591,11 @@ void GameClient::xfer( Xfer *xfer )
 			BriefingList *bList = GetBriefingTextList();
 			Int numEntries = bList->size();
 			xfer->xferInt(&numEntries);
-			DEBUG_LOG(("Saving %d briefing lines", numEntries));
+			engine::debug::log_info("Saving %d briefing lines", numEntries);
 			for (BriefingList::const_iterator bIt = bList->begin(); bIt != bList->end(); ++bIt)
 			{
 				AsciiString tempStr = *bIt;
-				DEBUG_LOG(("'%s'", tempStr.str()));
+				engine::debug::log_info("'%s'", tempStr.str());
 				xfer->xferAsciiString(&tempStr);
 			}
 		}
@@ -1609,13 +1603,13 @@ void GameClient::xfer( Xfer *xfer )
 		{
 			Int numEntries = 0;
 			xfer->xferInt(&numEntries);
-			DEBUG_LOG(("Loading %d briefing lines", numEntries));
+			engine::debug::log_info("Loading %d briefing lines", numEntries);
 			UpdateDiplomacyBriefingText(AsciiString::TheEmptyString, TRUE); // clear out briefing list first
 			while (numEntries-- > 0)
 			{
 				AsciiString tempStr;
 				xfer->xferAsciiString(&tempStr);
-				DEBUG_LOG(("'%s'", tempStr.str()));
+				engine::debug::log_info("'%s'", tempStr.str());
 				UpdateDiplomacyBriefingText(tempStr, FALSE);
 			}
 		}

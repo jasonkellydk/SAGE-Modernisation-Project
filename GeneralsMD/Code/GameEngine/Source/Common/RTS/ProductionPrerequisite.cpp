@@ -42,7 +42,8 @@
 //
 //-----------------------------------------------------------------------------
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/ProductionPrerequisite.h"
 #include "Common/Player.h"
@@ -90,7 +91,7 @@ void ProductionPrerequisite::resolveNames()
  			/** @todo for now removing this assert until we can completely remove
  			the GDF stuff, the problem is that some INI files refer to GDF names, and they
  			aren't yet loaded in the world builder but will all go away later anyway etc */
-			DEBUG_ASSERTCRASH(m_prereqUnits[i].unit,("could not find prereq %s",m_prereqUnits[i].name.str()));
+			engine::debug::invariant((m_prereqUnits[i].unit), "m_prereqUnits[i].unit", __FILE__, __LINE__, "could not find prereq %s",m_prereqUnits[i].name.str());
 
 			m_prereqUnits[i].name.clear(); // we're done with it
 		}
@@ -130,7 +131,7 @@ Int ProductionPrerequisite::getAllPossibleBuildFacilityTemplates(const ThingTemp
 //-----------------------------------------------------------------------------
 const ThingTemplate *ProductionPrerequisite::getExistingBuildFacilityTemplate( const Player *player ) const
 {
-	DEBUG_ASSERTCRASH(player, ("player may not be null"));
+	engine::debug::invariant((player), "player", __FILE__, __LINE__, "player may not be null");
 	if (!m_prereqUnits.empty())
 	{
 		Int ownCount[MAX_PREREQ];

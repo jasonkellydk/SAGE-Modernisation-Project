@@ -26,6 +26,7 @@
 #include "wbview3d.h"
 #include "Common/WellKnownKeys.h"
 #include "WorldBuilderDoc.h"
+import engine.debug;
 
 #define DEFAULT_SCORCHMARK_RADIUS 20
 
@@ -174,7 +175,7 @@ void ScorchOptions::GetPopSliderInfo(const long sliderID, long *pMin, long *pMax
 
 		default:
 			// uh-oh!
-			DEBUG_CRASH(("Slider message from unknown control"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Slider message from unknown control");
 			break;
 	}
 }
@@ -195,7 +196,7 @@ void ScorchOptions::PopSliderChanged(const long sliderID, long theVal)
 
 		default:
 			// uh-oh!
-			DEBUG_CRASH(("Slider message from unknown control"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Slider message from unknown control");
 			break;
 	}
 	m_updating = false;
@@ -210,7 +211,7 @@ void ScorchOptions::PopSliderFinished(const long sliderID, long theVal)
 
 		default:
 			// uh-oh!
-			DEBUG_CRASH(("Slider message from unknown control"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Slider message from unknown control");
 			break;
 	}
 

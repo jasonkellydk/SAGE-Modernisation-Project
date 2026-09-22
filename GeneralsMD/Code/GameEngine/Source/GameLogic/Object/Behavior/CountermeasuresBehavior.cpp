@@ -30,7 +30,8 @@
 
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 #include "Common/Thing.h"
 #include "Common/ThingTemplate.h"
 #include "Common/INI.h"
@@ -128,8 +129,7 @@ void CountermeasuresBehavior::reportMissileForCountermeasures( Object *missile )
 				{
 					//Make sure the missile diverts after a delay. The delay needs to be larger than
 					//the countermeasure reaction time or else the missile won't have a countermeasure to divert to!
-					DEBUG_ASSERTCRASH( data->m_countermeasureReactionFrames < data->m_missileDecoyFrames,
-						("MissileDecoyDelay needs to be less than CountermeasureReactionTime in order to function properly.") );
+					engine::debug::invariant((data->m_countermeasureReactionFrames < data->m_missileDecoyFrames), "data->m_countermeasureReactionFrames < data->m_missileDecoyFrames", __FILE__, __LINE__, "MissileDecoyDelay needs to be less than CountermeasureReactionTime in order to function properly.");
 					pui->setFramesTillCountermeasureDiversionOccurs( data->m_missileDecoyFrames );
 					m_divertedMissiles++;
 

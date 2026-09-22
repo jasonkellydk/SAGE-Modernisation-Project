@@ -29,7 +29,8 @@
 
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 #define DEFINE_SLOWDEATHPHASE_NAMES
 
 #include "Common/Thing.h"
@@ -144,7 +145,7 @@ void InstantDeathBehavior::onDie( const DamageInfo *damageInfo )
 	{
 		idx = (size_t)GameLogicRandomValue(0, listSize-1);
 		const FXListVec& v = d->m_fx;
-		DEBUG_ASSERTCRASH(idx>=0&&idx<v.size(),("bad idx"));
+		engine::debug::invariant((idx>=0&&idx<v.size()), "idx>=0&&idx<v.size()", __FILE__, __LINE__, "bad idx");
 		const FXList* fxl = v[idx];
 		FXList::doFXObj(fxl, getObject(), nullptr);
 	}
@@ -154,7 +155,7 @@ void InstantDeathBehavior::onDie( const DamageInfo *damageInfo )
 	{
 		idx = (size_t)GameLogicRandomValue(0, listSize-1);
 		const OCLVec& v = d->m_ocls;
-		DEBUG_ASSERTCRASH(idx>=0&&idx<v.size(),("bad idx"));
+		engine::debug::invariant((idx>=0&&idx<v.size()), "idx>=0&&idx<v.size()", __FILE__, __LINE__, "bad idx");
 		const ObjectCreationList* ocl = v[idx];
 		ObjectCreationList::create(ocl, getObject(), nullptr);
 	}
@@ -170,7 +171,7 @@ void InstantDeathBehavior::onDie( const DamageInfo *damageInfo )
 		{
 			idx = (size_t)GameLogicRandomValue(0, listSize-1);
 			const WeaponTemplateVec& v = d->m_weapons;
-			DEBUG_ASSERTCRASH(idx>=0&&idx<v.size(),("bad idx"));
+			engine::debug::invariant((idx>=0&&idx<v.size()), "idx>=0&&idx<v.size()", __FILE__, __LINE__, "bad idx");
 			const WeaponTemplate* wt = v[idx];
 			if (wt)
 			{

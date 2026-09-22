@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "GameClient/FXList.h"
 
@@ -214,7 +215,7 @@ public:
 		}
 		else
 		{
-			DEBUG_CRASH(("You must have a primary and secondary source for this effect"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "You must have a primary and secondary source for this effect");
 		}
 	}
 
@@ -266,7 +267,7 @@ public:
 	virtual void doFXPos(const Coord3D *primary, const Matrix3D* /*primaryMtx*/, const Real /*primarySpeed*/, const Coord3D * secondary, const Real /*overrideRadius*/ ) const override
 	{
 		const ThingTemplate* tmpl = TheThingFactory->findTemplate(m_templateName);
-		DEBUG_ASSERTCRASH(tmpl, ("RayEffect %s not found",m_templateName.str()));
+		engine::debug::invariant((tmpl), "tmpl", __FILE__, __LINE__, "RayEffect %s not found",m_templateName.str());
 		if (primary && secondary && tmpl)
 		{
 			Coord3D sourcePos = *primary;
@@ -283,7 +284,7 @@ public:
 		}
 		else
 		{
-			DEBUG_CRASH(("You must have a primary AND secondary source for this effect"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "You must have a primary AND secondary source for this effect");
 		}
 	}
 
@@ -333,7 +334,7 @@ public:
 		}
 		else
 		{
-			DEBUG_CRASH(("You must have a primary source for this effect"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "You must have a primary source for this effect");
 		}
 	}
 
@@ -345,7 +346,7 @@ public:
 		}
 		else
 		{
-			DEBUG_CRASH(("You must have a primary source for this effect"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "You must have a primary source for this effect");
 		}
 	}
 
@@ -394,7 +395,7 @@ public:
 		}
 		else
 		{
-			DEBUG_CRASH(("You must have a primary source for this effect"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "You must have a primary source for this effect");
 		}
 	}
 
@@ -458,7 +459,7 @@ public:
 		}
 		else
 		{
-			DEBUG_CRASH(("You must have a primary source for this effect"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "You must have a primary source for this effect");
 		}
 	}
 
@@ -531,7 +532,7 @@ public:
 		}
 		else
 		{
-			DEBUG_CRASH(("You must have a primary source for this effect"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "You must have a primary source for this effect");
 		}
 	}
 
@@ -559,7 +560,7 @@ public:
 		}
 		else
 		{
-			DEBUG_CRASH(("You must have a primary source for this effect"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "You must have a primary source for this effect");
 		}
 	}
 
@@ -600,7 +601,7 @@ protected:
 		}
 
 		const ParticleSystemTemplate *tmp = TheParticleSystemManager->findTemplate(m_name);
-		DEBUG_ASSERTCRASH(TheParticleSystemManager->isDummy() || tmp, ("ParticleSystem %s not found",m_name.str()));
+		engine::debug::invariant((TheParticleSystemManager->isDummy() || tmp), "TheParticleSystemManager->isDummy() || tmp", __FILE__, __LINE__, "ParticleSystem %s not found",m_name.str());
 		if (tmp)
 		{
 			for (Int i = 0; i < m_count; i++ )
@@ -697,7 +698,7 @@ public:
 
 	virtual void doFXPos(const Coord3D *primary, const Matrix3D* primaryMtx, const Real /*primarySpeed*/, const Coord3D * /*secondary*/, const Real /*overrideRadius*/ ) const override
 	{
-		DEBUG_CRASH(("You must use the object form for this effect"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "You must use the object form for this effect");
 	}
 
 	virtual void doFXObj(const Object* primary, const Object* /*secondary*/) const override
@@ -712,7 +713,7 @@ public:
 		}
 		else
 		{
-			DEBUG_CRASH(("You must have a primary source for this effect"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "You must have a primary source for this effect");
 		}
 	}
 

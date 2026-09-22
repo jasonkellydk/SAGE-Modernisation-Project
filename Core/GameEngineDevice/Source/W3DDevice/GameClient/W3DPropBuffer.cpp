@@ -51,12 +51,13 @@
 #include <memory>
 #include <unordered_map>
 #include "W3DDevice/GameClient/W3DPropBuffer.h"
+import engine.profiling;
 #include "W3DDevice/GameClient/W3DLight.h"
 
 #include "W3DDevice/GameClient/W3DAssetCatalog.h"
 #include "Common/GameUtility.h"
 #include "Common/Geometry.h"
-#include "Common/PerfTimer.h"
+
 #include "Common/Player.h"
 #include "Common/PlayerList.h"
 #include "W3DDevice/GameClient/W3DCamera.h"
@@ -66,6 +67,7 @@ import Graphics.Scene.Lighting.Local;
 #include "W3DDevice/GameClient/W3DShroud.h"
 #include "W3DDevice/GameClient/BaseHeightMap.h"
 #include "GameLogic/PartitionManager.h"
+import engine.debug;
 
 
 
@@ -156,13 +158,13 @@ void W3DPropBuffer::clearAllProps()
 Int W3DPropBuffer::addPropType(const AsciiString &modelName)
 {
 	if (m_numPropTypes>=MAX_TYPES) {
-		DEBUG_CRASH(("Too many kinds of props in map.  Reduce kinds of props, or raise prop limit. jba."));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Too many kinds of props in map.  Reduce kinds of props, or raise prop limit. jba.");
 		return 0;
 	}
 
 	m_propTypes[m_numPropTypes].m_robj = W3DAssetCatalog::Get_Instance()->Create_Render_Obj(modelName.str());
 	if (m_propTypes[m_numPropTypes].m_robj==nullptr) {
-		DEBUG_CRASH(("Unable to find model for prop %s", modelName.str()));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unable to find model for prop %s", modelName.str());
 		return -1;
 	}
 	m_propTypes[m_numPropTypes].m_robjName = modelName;
@@ -317,8 +319,6 @@ void W3DPropBuffer::notifyShroudChanged()
 }
 
 
-DECLARE_PERF_TIMER(Prop_Render)
-
 //=============================================================================
 // W3DPropBuffer::drawProps
 //=============================================================================
@@ -326,7 +326,7 @@ DECLARE_PERF_TIMER(Prop_Render)
 //=============================================================================
 void W3DPropBuffer::drawProps(W3DRenderContext &rinfo)
 {
-	USE_PERF_TIMER(Prop_Render)
+	engine::profiling::Scope prop_render_scope{"Graphics.Props.Render"};
 
 	Int i;
 	if (m_doCull) {
@@ -433,4 +433,3 @@ void W3DPropBuffer::loadPostProcess()
 {
 	// empty. jba [8/11/2003]
 }
-

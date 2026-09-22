@@ -28,6 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 #pragma once
+
+#include <cassert>
 #include <memory>
 #include <span>
 #include <string>
@@ -255,7 +257,7 @@ struct ModelConditionInfo
 	void loadAnimations() const;
 	void preloadAssets( TimeOfDay timeOfDay, Real scale );			///< preload any assets for time of day
 
-	Int getConditionsYesCount() const { DEBUG_ASSERTCRASH(!m_conditionsYesVec.empty(), ("empty m_conditionsYesVec.size(), see srj")); return m_conditionsYesVec.size(); }
+	Int getConditionsYesCount() const { assert((!m_conditionsYesVec.empty())); return m_conditionsYesVec.size(); }
 	const ModelConditionFlags& getNthConditionsYes(Int i) const { return m_conditionsYesVec[i]; }
 #if defined(RTS_DEBUG)
 	inline AsciiString getDescription() const { return m_description; }

@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 #include "Common/ThingTemplate.h"
 #include "Common/Xfer.h"
 #include "GameClient/InGameUI.h"
@@ -103,11 +104,11 @@ void POWTruckBehavior::onCollide( Object *other, const Coord3D *loc, const Coord
 
 	// get our AI info
 	AIUpdateInterface *ourAI = us->getAIUpdateInterface();
-	DEBUG_ASSERTCRASH( ourAI, ("POWTruckBehavior::onCollide - '%s' has no AI",
-														us->getTemplate()->getName().str()) );
+	engine::debug::invariant((ourAI), "ourAI", __FILE__, __LINE__, "POWTruckBehavior::onCollide - '%s' has no AI",
+														us->getTemplate()->getName().str());
 	POWTruckAIUpdateInterface *powTruckAI = ourAI->getPOWTruckAIUpdateInterface();
-	DEBUG_ASSERTCRASH( powTruckAI, ("POWTruckBehavior::onCollide - '%s' has no POWTruckAI",
-																 us->getTemplate()->getName().str()) );
+	engine::debug::invariant((powTruckAI), "powTruckAI", __FILE__, __LINE__, "POWTruckBehavior::onCollide - '%s' has no POWTruckAI",
+																 us->getTemplate()->getName().str());
 
 	// pick up the prisoner
 	powTruckAI->loadPrisoner( other );

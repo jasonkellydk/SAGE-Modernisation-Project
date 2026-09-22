@@ -41,6 +41,7 @@
 #include "Common/RuntimeConfig.h"
 #include "WWDownload/urlBuilder.h"
 #include "debug.h"
+import engine.debug;
 
 namespace patchget
 {
@@ -187,7 +188,7 @@ static void startOnline()
 	{
 		if (MessageBox(nullptr, "Patches Available.  Download?", GAME_NAME, MB_YESNO) == IDYES)
 		{
-			DEBUG_LOG(("Downloading patches"));
+			engine::debug::log_info("Downloading patches");
 			while (queuedDownloads.size())
 			{
 				TheDownload = queuedDownloads.front();
@@ -197,7 +198,7 @@ static void startOnline()
 		    int retVal = DialogBox(Global_instance, MAKEINTRESOURCE(IDD_DOWNLOAD_DIALOG), g_PrimaryWindow, downloadDialogProc);
 				if (retVal)
 				{
-					DEBUG_LOG(("Error %d", GetLastError()));
+					engine::debug::log_info("Error %d", GetLastError());
 				}
 				/**/
 				/*
@@ -370,9 +371,9 @@ static void queuePatch(bool mandatory, std::string downloadURL)
 	}
 	fileDir.append(fileName);
 
-	DEBUG_LOG(("download URL split: %d [%s] [%s] [%s] [%s] [%s] [%s] [%s]",
+	engine::debug::log_info("download URL split: %d [%s] [%s] [%s] [%s] [%s] [%s] [%s]",
 		success, connectionType.c_str(), server.c_str(), user.c_str(), pass.c_str(),
-		filePath.c_str(), fileName.c_str(), fileDir.c_str()));
+		filePath.c_str(), fileName.c_str(), fileDir.c_str());
 
 	if (!success)
 		return;
@@ -401,9 +402,9 @@ static void queuePatch(bool mandatory, std::string downloadURL)
 static GHTTPBool patchCheckCallback( GHTTPRequest request, GHTTPResult result, char * buffer, GHTTPByteCount bufferLen, void * param )
 {
 	--checksLeft;
-	DEBUG_ASSERTCRASH(checksLeft>=0, ("Too many callbacks"));
+	engine::debug::invariant((checksLeft>=0), "checksLeft>=0", __FILE__, __LINE__, "Too many callbacks");
 
-	DEBUG_LOG(("Result=%d, buffer=[%s], len=%d", result, buffer, bufferLen));
+	engine::debug::log_info("Result=%d, buffer=[%s], len=%d", result, buffer, bufferLen);
 	if (result != GHTTPSuccess)
 	{
 		cantConnect = true;
@@ -425,7 +426,7 @@ static GHTTPBool patchCheckCallback( GHTTPRequest request, GHTTPResult result, c
 		ok = ok && nextToken(line, url, " ");
 		if (ok && type == "patch")
 		{
-			DEBUG_LOG(("Saw a patch: %d/[%s]", atoi(req.c_str()), url.c_str()));
+			engine::debug::log_info("Saw a patch: %d/[%s]", atoi(req.c_str()), url.c_str());
 			queuePatch( atoi(req.c_str()), url );
 		}
 		else if (ok && type == "server")
@@ -457,7 +458,7 @@ static void StartPatchCheck()
 	ghttpGet(gameURL.c_str(), GHTTPFalse, patchCheckCallback, nullptr);
 	ghttpGet(mapURL.c_str(), GHTTPFalse, patchCheckCallback, nullptr);
 
-	DEBUG_LOG(("Started looking for patches at '%s' && '%s'", gameURL.c_str(), mapURL.c_str()));
+	engine::debug::log_info("Started looking for patches at '%s' && '%s'", gameURL.c_str(), mapURL.c_str());
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////
@@ -533,15 +534,15 @@ BOOL CALLBACK downloadDialogProc( HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM
 			break;
 
 		case WM_TIMER:
-			DEBUG_LOG(("TIMER"));
+			engine::debug::log_info("TIMER");
 			if( g_Finished == 0 )
 			{
-				DEBUG_LOG(("Entering PumpMsgs"));
+				engine::debug::log_info("Entering PumpMsgs");
 				TheDownloadManager->update();
 				/*
 				pDownload->PumpMessages();
 				*/
-				DEBUG_LOG(("Done with PumpMsgs"));
+				engine::debug::log_info("Done with PumpMsgs");
 				if (strlen(g_DLTimeRem))
 					SetDlgItemText( hwndDlg, IDC_TIMEREM, g_DLTimeRem );
 				if (strlen(g_DLBytesLeft))
@@ -551,7 +552,7 @@ BOOL CALLBACK downloadDialogProc( HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM
 			}
 			else
 			{
-				DEBUG_LOG(("TIMER: Finished"));
+				engine::debug::log_info("TIMER: Finished");
 				EndDialog( hwndDlg, g_Finished );
 				DestroyWindow( hwndDlg );
 			}

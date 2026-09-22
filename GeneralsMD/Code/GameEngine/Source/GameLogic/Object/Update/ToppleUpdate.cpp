@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/ThingTemplate.h"
 #include "Common/ThingFactory.h"
@@ -142,7 +143,7 @@ void ToppleUpdate::applyTopplingForce( const Coord3D* toppleDirection, Real topp
 	if (getObject()->isEffectivelyDead())
 		return;
 
-	//DEBUG_LOG(("awaking ToppleUpdate %08lx",this));
+	//engine::debug::log_info("awaking ToppleUpdate %08lx",this);
 	setWakeFrame(getObject(), UPDATE_SLEEP_NONE);
 
 	const ToppleUpdateModuleData* d = getToppleUpdateModuleData();
@@ -264,8 +265,8 @@ static void deathByToppling(Object* obj)
 //-------------------------------------------------------------------------------------------------
 UpdateSleepTime ToppleUpdate::update()
 {
-	//DEBUG_LOG(("updating ToppleUpdate %08lx",this));
-	DEBUG_ASSERTCRASH(m_toppleState != TOPPLE_UPRIGHT, ("hmm, we should be sleeping here"));
+	//engine::debug::log_info("updating ToppleUpdate %08lx",this);
+	engine::debug::invariant((m_toppleState != TOPPLE_UPRIGHT), "m_toppleState != TOPPLE_UPRIGHT", __FILE__, __LINE__, "hmm, we should be sleeping here");
 	if ( (m_toppleState == TOPPLE_UPRIGHT)  ||  (m_toppleState == TOPPLE_DOWN) )
 		return UPDATE_SLEEP_FOREVER;
 

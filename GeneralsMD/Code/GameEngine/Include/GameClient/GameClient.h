@@ -33,6 +33,9 @@
 #include "Common/Snapshot.h"
 #include "Common/STLTypedefs.h"
 #include "Common/SubsystemInterface.h"
+#include <cstdint>
+
+import engine.platform;
 #include "GameClient/CommandXlat.h"
 #include "GameClient/Drawable.h"
 
@@ -86,8 +89,10 @@ class GameClient : public SubsystemInterface,
 
 public:
 
-	GameClient();
+	GameClient(engine::platform::IPlatform& platform, std::uint32_t mainWindowId);
 	virtual ~GameClient() override;
+	engine::platform::IPlatform& m_platform;
+	std::uint32_t m_mainWindowId{};
 
 	// subsystem methods
 	virtual void init() override;																					///< Initialize resources

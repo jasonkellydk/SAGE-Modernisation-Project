@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/Radar.h"
 #include "Common/ThingFactory.h"
@@ -176,7 +177,7 @@ Bool WaveGuideUpdate::startMoving()
 			if( verify->getNumLinks() > 1 )
 			{
 
-				DEBUG_CRASH(( "WaveGuideUpdate::startMoving - The waypoint path cannot have multiple link choices at any node" ));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "WaveGuideUpdate::startMoving - The waypoint path cannot have multiple link choices at any node" );
 				return FALSE;
 
 			}
@@ -194,7 +195,7 @@ Bool WaveGuideUpdate::startMoving()
 		if( next == nullptr )
 		{
 
-			DEBUG_CRASH(( "WaveGuideUpdate:startMoving - There must be a linked waypoint path to follow" ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "WaveGuideUpdate:startMoving - There must be a linked waypoint path to follow" );
 			return FALSE;
 
 		}

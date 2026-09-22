@@ -11,6 +11,7 @@
 #include "W3DDevice/GameClient/W3DCamera.h"
 #include "W3DDevice/GameClient/W3DRenderContext.h"
 #include "W3DDevice/GameClient/W3DSceneClass.h"
+import engine.debug;
 
 import Assets.Identity;
 
@@ -87,8 +88,8 @@ W3DRenderObject::~W3DRenderObject()
 
 void W3DRenderObject::Add(W3DScene *scene)
 {
-    WWASSERT(scene != nullptr);
-    WWASSERT(Container == nullptr);
+    engine::debug::assert_condition((scene != nullptr), "scene != nullptr", __FILE__, __LINE__, "assertion failed");
+    engine::debug::assert_condition((Container == nullptr), "Container == nullptr", __FILE__, __LINE__, "assertion failed");
     Scene = scene;
     scene->Add_Render_Object(this);
 }
@@ -115,7 +116,7 @@ W3DScene *W3DRenderObject::Get_Scene()
 
 void W3DRenderObject::Set_Container(W3DRenderObject *container)
 {
-    WWASSERT(container == nullptr || Container == nullptr);
+    engine::debug::assert_condition((container == nullptr || Container == nullptr), "container == nullptr || Container == nullptr", __FILE__, __LINE__, "assertion failed");
     Container = container;
 }
 

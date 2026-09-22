@@ -27,7 +27,8 @@
 // Author: Colin Day, April 2001
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 
 #include "Common/DataChunk.h"
@@ -132,7 +133,7 @@ Object *Bridge::createTower( Coord3D *worldPos,
 	if( towerTemplate == nullptr || bridge == nullptr )
 	{
 
-		DEBUG_CRASH(( "Bridge::createTower(): Invalid params" ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Bridge::createTower(): Invalid params" );
 		return nullptr;
 
 	}
@@ -167,7 +168,7 @@ Object *Bridge::createTower( Coord3D *worldPos,
 
 		// --------------------------------------------------------------------------------------------
 		default:
-			DEBUG_CRASH(( "Bridge::createTower - Unknown bridge tower type '%d'", towerType ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Bridge::createTower - Unknown bridge tower type '%d'", towerType );
 			return nullptr;
 
 	}
@@ -178,13 +179,13 @@ Object *Bridge::createTower( Coord3D *worldPos,
 
 	// tie it to the bridge
 	BridgeBehaviorInterface *bridgeInterface = BridgeBehavior::getBridgeBehaviorInterfaceFromObject( bridge );
-	DEBUG_ASSERTCRASH( bridgeInterface != nullptr, ("Bridge::createTower - no 'BridgeBehaviorInterface' found") );
+	engine::debug::invariant((bridgeInterface != nullptr), "bridgeInterface != nullptr", __FILE__, __LINE__, "Bridge::createTower - no 'BridgeBehaviorInterface' found");
 	if( bridgeInterface )
 		bridgeInterface->setTower( towerType, tower );
 
 	// tie the bridge to us
 	BridgeTowerBehaviorInterface *bridgeTowerInterface = BridgeTowerBehavior::getBridgeTowerBehaviorInterfaceFromObject( tower );
-	DEBUG_ASSERTCRASH( bridgeTowerInterface != nullptr, ("Bridge::createTower - no 'BridgeTowerBehaviorInterface' found") );
+	engine::debug::invariant((bridgeTowerInterface != nullptr), "bridgeTowerInterface != nullptr", __FILE__, __LINE__, "Bridge::createTower - no 'BridgeTowerBehaviorInterface' found");
 	if( bridgeTowerInterface )
 	{
 
@@ -242,7 +243,7 @@ m_bridgeInfo(theInfo)
 
 	static const ThingTemplate* genericBridgeTemplate = TheThingFactory->findTemplate("GenericBridge");
 	if (!genericBridgeTemplate) {
-		DEBUG_LOG(("*** GenericBridge template not found."));
+		engine::debug::log_info("*** GenericBridge template not found.");
 		return;
 	}
 	Object *bridge = TheThingFactory->newObject(genericBridgeTemplate, nullptr);
@@ -270,7 +271,7 @@ m_bridgeInfo(theInfo)
 	// get the template of the bridge
 	TerrainRoadType *bridgeTemplate = TheTerrainRoads->findBridge( bridgeTemplateName );
 	if( bridgeTemplate == nullptr ) {
-		DEBUG_LOG(( "*** Bridge Template Not Found '%s'.", bridgeTemplateName.str() ));
+		engine::debug::log_info( "*** Bridge Template Not Found '%s'.", bridgeTemplateName.str() );
 		return;
 	}
 
@@ -331,7 +332,7 @@ Bridge::Bridge(Object *bridgeObj)
 	// save the template name
 	m_templateName = bridgeObj->getTemplate()->getName();
 
-	DEBUG_ASSERTLOG( bridgeObj->getGeometryInfo().getGeomType()==GEOMETRY_BOX, ("Bridges need to be rectangles."));
+	if (!(bridgeObj->getGeometryInfo().getGeomType()==GEOMETRY_BOX)) engine::debug::log_error("Bridges need to be rectangles.");
 
 	const Coord3D *pos = bridgeObj->getPosition();
 	Real angle = bridgeObj->getOrientation();
@@ -381,7 +382,7 @@ Bridge::Bridge(Object *bridgeObj)
 	AsciiString bridgeTemplateName = bridgeObj->getTemplate()->getName();
 	TerrainRoadType *bridgeTemplate = TheTerrainRoads->findBridge( bridgeTemplateName );
 	if( bridgeTemplate == nullptr ) {
-		DEBUG_LOG(( "*** Bridge Template Not Found '%s'.", bridgeTemplateName.str() ));
+		engine::debug::log_info( "*** Bridge Template Not Found '%s'.", bridgeTemplateName.str() );
 		return;
 	}
 
@@ -857,7 +858,7 @@ Drawable *Bridge::pickBridge(const Vector3 &from, const Vector3 &to, Vector3 *po
 
 	if (isPointOnBridge(&loc)) {
 		*pos = intersectPos;
-		//DEBUG_LOG(("Picked bridge %.2f, %.2f, %.2f", intersectPos.X, intersectPos.Y, intersectPos.Z));
+		//engine::debug::log_info("Picked bridge %.2f, %.2f, %.2f", intersectPos.X, intersectPos.Y, intersectPos.Z);
 		Object *bridge = TheGameLogic->findObjectByID(m_bridgeInfo.bridgeObjectID);
 		if (bridge) {
 			return bridge->getDrawable();
@@ -925,7 +926,7 @@ void Bridge::updateDamageState()
 		}
 	}	else {
 		m_bridgeInfo.bridgeObjectID = INVALID_ID;
-		DEBUG_CRASH(("Bridge object disappeared - unexpected. jba."));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Bridge object disappeared - unexpected. jba.");
 	}
 
 }
@@ -1209,8 +1210,8 @@ void TerrainLogic::enableWaterGrid( Bool enable )
 		if( waterSettingIndex == -1 )
 		{
 
-			DEBUG_CRASH(( "!!!!!! Deformable water won't work because there was no group of vertex water data defined in GameData.INI for this map name '%s' !!!!!! (C. Day)",
-										TheGlobalData->m_mapName.str() ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "!!!!!! Deformable water won't work because there was no group of vertex water data defined in GameData.INI for this map name '%s' !!!!!! (C. Day)",
+										TheGlobalData->m_mapName.str() );
 			return;
 
 		}
@@ -1272,40 +1273,37 @@ Bool TerrainLogic::loadMap( AsciiString filename, Bool query )
 			// Read the waypoints.
 			file.registerParser( "WaypointsList", AsciiString::TheEmptyString, parseWaypointDataChunk );
 			if (!file.parse(this)) {
-				DEBUG_CRASH(("Unable to read waypoint info."));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unable to read waypoint info.");
 				return false;
 			}
 		}
 		theInputStream.close();
 	} catch (...) {
 		// Eat the error - legacy files are not valid chunk format (and don't have waypoint info.)
-		DEBUG_LOG(("Unable to read waypoint info."));
+		engine::debug::log_info("Unable to read waypoint info.");
 	}
-#if 0 //def DEBUG_LOGGING
 	// Dump out the waypoint links.
 	Waypoint *pWay;
 	// Traverse all waypoints.
 	int count = 0;
 	for (pWay = getFirstWaypoint(); pWay; pWay = pWay->getNext()) {
 		count++;
-		Coord3D loc;
-		pWay->getLocation(&loc);
-		DEBUG_LOG_RAW(("Waypoint %d - '%s' id=%d ", count, pWay->getName().str(), pWay->getID()));
-		DEBUG_LOG_RAW(("{%.2f, %.2f, %.2f} ", loc.x, loc.y, loc.z));
+		Coord3D loc = *pWay->getLocation();
+		engine::debug::log_info("Waypoint %d - '%s' id=%d ", count, pWay->getName().str(), pWay->getID());
+		engine::debug::log_info("{%.2f, %.2f, %.2f} ", loc.x, loc.y, loc.z);
 		Int i;
 		if (pWay->getNumLinks()) {
-			DEBUG_LOG_RAW(("Links to: "));
+			engine::debug::log_info("Links to: ");
 			for (i=0; i<pWay->getNumLinks(); i++) {
 				Waypoint *pLink = pWay->getLink(i);
-				DEBUG_LOG_RAW(("'%s' id=%d ", pLink->getName().str(), pLink->getID()));
+				engine::debug::log_info("'%s' id=%d ", pLink->getName().str(), pLink->getID());
 			}
 		} else {
-			DEBUG_LOG_RAW(("No links."));
+			engine::debug::log_info("No links.");
 		}
-		DEBUG_LOG_RAW(("\n"));
+		engine::debug::log_info("\n");
 	}
-	DEBUG_LOG(("Total of %d waypoints.", count));
-#endif
+	engine::debug::log_info("Total of %d waypoints.", count);
 
 	if (!query) {
 		// tell the game interface a new terrain file has been loaded up
@@ -1337,7 +1335,7 @@ Bool TerrainLogic::parseWaypointData(DataChunkInput &file, DataChunkInfo *info, 
 		Int waypoint2 = file.readInt();
 		addWaypointLink(waypoint1, waypoint2);
 	}
-	DEBUG_ASSERTCRASH(file.atEndOfChunk(), ("Unexpected data left over."));
+	engine::debug::invariant((file.atEndOfChunk()), "file.atEndOfChunk()", __FILE__, __LINE__, "Unexpected data left over.");
 	return true;
 }
 
@@ -1356,7 +1354,7 @@ void TerrainLogic::addWaypoint(MapObject *pMapObj)
 	label3 = pMapObj->getProperties()->getAsciiString(TheKey_waypointPathLabel3, &exists);
 	Bool biDirectional;
 	biDirectional = pMapObj->getProperties()->getBool(TheKey_waypointPathBiDirectional, &exists);
-	DEBUG_ASSERTCRASH(pMapObj->isWaypoint(), ("not a waypoint"));
+	engine::debug::invariant((pMapObj->isWaypoint()), "pMapObj->isWaypoint()", __FILE__, __LINE__, "not a waypoint");
 	Waypoint *pWay = newInstance(Waypoint)(pMapObj->getWaypointID(), pMapObj->getWaypointName(),
 																&loc, label1, label2, label3, biDirectional);
 	pWay->setNext(m_waypointListHead);
@@ -1421,7 +1419,7 @@ void TerrainLogic::deleteWaypoints()
 //-------------------------------------------------------------------------------------------------
 Bool TerrainLogic::isClearLineOfSight(const Coord3D& pos, const Coord3D& posOther) const
 {
-	DEBUG_CRASH(("implement ME"));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "implement ME");
 	return false;
 }
 
@@ -1490,7 +1488,7 @@ void makeAlignToNormalMatrix( Real angle, const Coord3D& pos, const Coord3D& nor
 		x.normalize();
 	}
 
-	DEBUG_ASSERTCRASH(fabs(x.x*z.x + x.y*z.y + x.z*z.z)<0.0001,("dot is not zero (%f)",fabs(x.x*z.x + x.y*z.y + x.z*z.z)));
+	engine::debug::invariant((fabs(x.x*z.x + x.y*z.y + x.z*z.z)<0.0001), "fabs(x.x*z.x + x.y*z.y + x.z*z.z)<0.0001", __FILE__, __LINE__, "dot is not zero (%f)",fabs(x.x*z.x + x.y*z.y + x.z*z.z));
 
 	// now computing the y vector is trivial.
 	y.crossProduct( z, x, y );
@@ -1589,7 +1587,7 @@ Waypoint *TerrainLogic::getClosestWaypointOnPath( const Coord3D *pos, AsciiStrin
 	Real distSqr = 0;
 	Waypoint *pClosestWay = nullptr;
 	if (label.isEmpty()) {
-		DEBUG_LOG(("***Warning - asking for empty path label."));
+		engine::debug::log_info("***Warning - asking for empty path label.");
 		return nullptr;
 	}
 
@@ -1620,7 +1618,7 @@ Waypoint *TerrainLogic::getClosestWaypointOnPath( const Coord3D *pos, AsciiStrin
 Bool TerrainLogic::isPurposeOfPath( Waypoint *pWay, AsciiString label )
 {
 	if (label.isEmpty() || pWay==nullptr) {
-		DEBUG_LOG(("***Warning - asking for empth path label."));
+		engine::debug::log_info("***Warning - asking for empth path label.");
 		return false;
 	}
 
@@ -2288,13 +2286,13 @@ Real TerrainLogic::getWaterHeight( const WaterHandle *water )
 	if( water == &m_gridWaterHandle )
 	{
 
-		DEBUG_CRASH(( "TerrainLogic::getWaterHeight( WaterHandle *water ) - water is a grid handle, cannot make this query" ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "TerrainLogic::getWaterHeight( WaterHandle *water ) - water is a grid handle, cannot make this query" );
 		return 0.0f;
 
 	}
 
 	// sanity
-	DEBUG_ASSERTCRASH( water->m_polygon != nullptr, ("getWaterHeight: polygon trigger in water handle is null") );
+	engine::debug::invariant((water->m_polygon != nullptr), "water->m_polygon != nullptr", __FILE__, __LINE__, "getWaterHeight: polygon trigger in water handle is null");
 
 	// return the height of the water using the polygon trigger
 	return water->m_polygon->getPoint( 0 )->z;
@@ -2437,7 +2435,7 @@ void TerrainLogic::changeWaterHeightOverTime( const WaterHandle *water,
 	if( m_numWaterToUpdate >= MAX_DYNAMIC_WATER )
 	{
 
-		DEBUG_CRASH(( "Only '%d' simultaneous water table changes are supported", MAX_DYNAMIC_WATER ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Only '%d' simultaneous water table changes are supported", MAX_DYNAMIC_WATER );
 		return;
 
 	}
@@ -2986,8 +2984,8 @@ void TerrainLogic::xfer( Xfer *xfer )
 				if( poly == nullptr )
 				{
 
-					DEBUG_CRASH(( "TerrainLogic::xfer - Unable to find polygon trigger for water table with trigger ID '%d'",
-												triggerID ));
+					engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "TerrainLogic::xfer - Unable to find polygon trigger for water table with trigger ID '%d'",
+												triggerID );
 					throw SC_INVALID_DATA;
 
 				}
@@ -2999,7 +2997,7 @@ void TerrainLogic::xfer( Xfer *xfer )
 				if( m_waterToUpdate[ i ].waterTable == nullptr )
 				{
 
-					DEBUG_CRASH(( "TerrainLogic::xfer - Polygon trigger to use for water handle has no water handle!" ));
+					engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "TerrainLogic::xfer - Polygon trigger to use for water handle has no water handle!" );
 					throw SC_INVALID_DATA;
 
 				}

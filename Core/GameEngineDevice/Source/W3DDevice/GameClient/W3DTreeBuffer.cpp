@@ -69,6 +69,7 @@ enum
 //-----------------------------------------------------------------------------
 
 #include "W3DDevice/GameClient/W3DTreeBuffer.h"
+import engine.profiling;
 
 #include "W3DDevice/GameClient/W3DAssetCatalog.h"
 #include <W3DDevice/GameClient/W3DTextureHandle.h>
@@ -77,7 +78,7 @@ enum
 #include "Common/MapReaderWriterInfo.h"
 #include "Common/FileSystem.h"
 #include "Common/file.h"
-#include "Common/PerfTimer.h"
+
 #include "Common/Player.h"
 #include "Common/PlayerList.h"
 #include "GameLogic/ScriptEngine.h"
@@ -99,6 +100,7 @@ import Graphics.Scene.Trees.Geometry;
 
 #include <string>
 #include <vector>
+import engine.debug;
 
 
 #define USE_STATIC 1
@@ -254,7 +256,7 @@ Int W3DTreeBuffer::getPartitionBucket(const Coord3D &pos) const
 	if (y>m_bounds.hi.y) y = m_bounds.hi.y;
 	Int xIndex = REAL_TO_INT_FLOOR ( (x/(m_bounds.hi.x-m_bounds.lo.x)) * (PARTITION_WIDTH_HEIGHT-0.1f) );
 	Int yIndex = REAL_TO_INT_FLOOR ( (y/(m_bounds.hi.y-m_bounds.lo.y)) * (PARTITION_WIDTH_HEIGHT-0.1f) );
-	DEBUG_ASSERTCRASH(xIndex>=0 && yIndex>=0 && xIndex<PARTITION_WIDTH_HEIGHT && yIndex<PARTITION_WIDTH_HEIGHT, ("Invalid range."));
+	engine::debug::invariant((xIndex>=0 && yIndex>=0 && xIndex<PARTITION_WIDTH_HEIGHT && yIndex<PARTITION_WIDTH_HEIGHT), "xIndex>=0 && yIndex>=0 && xIndex<PARTITION_WIDTH_HEIGHT && yIndex<PARTITION_WIDTH_HEIGHT", __FILE__, __LINE__, "Invalid range.");
 	return yIndex*PARTITION_WIDTH_HEIGHT + xIndex;
 }
 
@@ -419,7 +421,7 @@ void W3DTreeBuffer::updateTexture()
 			}
 			theFile->close();
 		} else {
-			DEBUG_CRASH(("Could not find texture %s", m_treeTypes[i].m_data->m_textureName.str()));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Could not find texture %s", m_treeTypes[i].m_data->m_textureName.str());
 			m_treeTypes[i].m_firstTile = 0;
 			m_treeTypes[i].m_tileWidth = 0;
 			m_treeTypes[i].m_numTiles = 0;
@@ -439,7 +441,7 @@ void W3DTreeBuffer::updateTexture()
 		if (m_treeTexture==nullptr) {
 			m_treeTexture = new W3DTextureHandle("missing.tga");
 		}
-		DEBUG_CRASH(("Too many trees in a scene."));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Too many trees in a scene.");
 		return;
 	}
 
@@ -514,7 +516,7 @@ void W3DTreeBuffer::updateTexture()
 			}
 		}
 	}
-	DEBUG_ASSERTCRASH(maxHeight<=m_textureWidth, ("Bad max height."));
+	engine::debug::invariant((maxHeight<=m_textureWidth), "maxHeight<=m_textureWidth", __FILE__, __LINE__, "Bad max height.");
 	W3DTreeTextureClass *tex = new W3DTreeTextureClass(static_cast<unsigned>(m_textureWidth), static_cast<unsigned>(m_textureWidth));
 	m_textureHeight = tex->update(this);
 
@@ -835,7 +837,7 @@ void W3DTreeBuffer::updateVertexBuffer()
 			Vector3 loc = m_trees[curTree].location;
 			Real theSin = m_trees[curTree].sin;
 			Real theCos = m_trees[curTree].cos;
-			DEBUG_ASSERTCRASH(type>=0 && m_treeTypes[type].m_mesh!=nullptr, ("Invalid tree type or mesh."));
+			engine::debug::invariant((type>=0 && m_treeTypes[type].m_mesh!=nullptr), "type>=0 && m_treeTypes[type].m_mesh!=nullptr", __FILE__, __LINE__, "Invalid tree type or mesh.");
 
 			Int startVertex = m_trees[curTree].firstIndex;
 			curVb = vb+startVertex;
@@ -974,7 +976,7 @@ void W3DTreeBuffer::unitMoved(Object *unit)
 	if (y>m_bounds.hi.y) y = m_bounds.hi.y;
 	Int xIndex = REAL_TO_INT_FLOOR ( (x/(m_bounds.hi.x-m_bounds.lo.x)) * (PARTITION_WIDTH_HEIGHT-0.1f) );
 	Int yIndex = REAL_TO_INT_FLOOR ( (y/(m_bounds.hi.y-m_bounds.lo.y)) * (PARTITION_WIDTH_HEIGHT-0.1f) );
-	DEBUG_ASSERTCRASH(xIndex>=0 && yIndex>=0 && xIndex<PARTITION_WIDTH_HEIGHT && yIndex<PARTITION_WIDTH_HEIGHT, ("Invalid range."));
+	engine::debug::invariant((xIndex>=0 && yIndex>=0 && xIndex<PARTITION_WIDTH_HEIGHT && yIndex<PARTITION_WIDTH_HEIGHT), "xIndex>=0 && yIndex>=0 && xIndex<PARTITION_WIDTH_HEIGHT && yIndex<PARTITION_WIDTH_HEIGHT", __FILE__, __LINE__, "Invalid range.");
 
 	x = pos.x+radius;
 	y = pos.y+radius;
@@ -984,7 +986,7 @@ void W3DTreeBuffer::unitMoved(Object *unit)
 	if (y>m_bounds.hi.y) y = m_bounds.hi.y;
 	Int xMax = REAL_TO_INT_CEIL ( (x/(m_bounds.hi.x-m_bounds.lo.x)) * (PARTITION_WIDTH_HEIGHT-0.1f) );
 	Int yMax = REAL_TO_INT_CEIL ( (y/(m_bounds.hi.y-m_bounds.lo.y)) * (PARTITION_WIDTH_HEIGHT-0.1f) );
-	DEBUG_ASSERTCRASH(xMax>=0 && yMax>=0 && xMax<=PARTITION_WIDTH_HEIGHT && yMax<=PARTITION_WIDTH_HEIGHT, ("Invalid range."));
+	engine::debug::invariant((xMax>=0 && yMax>=0 && xMax<=PARTITION_WIDTH_HEIGHT && yMax<=PARTITION_WIDTH_HEIGHT), "xMax>=0 && yMax>=0 && xMax<=PARTITION_WIDTH_HEIGHT && yMax<=PARTITION_WIDTH_HEIGHT", __FILE__, __LINE__, "Invalid range.");
 	Int i, j;
 	for (i=xIndex; i<xMax; i++) {
 		for (j=yIndex; j<yMax; j++) {
@@ -992,7 +994,7 @@ void W3DTreeBuffer::unitMoved(Object *unit)
 			while (treeNdx != END_OF_PARTITION) {
 				// paranoia [7/7/2003]
 				if (treeNdx<0 || treeNdx>=m_numTrees) {
-					DEBUG_CRASH(("Invalid index."));
+					engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Invalid index.");
 					break;
 				}
 				if (m_trees[treeNdx].treeType<0) {
@@ -1116,7 +1118,7 @@ void W3DTreeBuffer::removeTreesForConstruction(const Coord3D* pos, const Geometr
 Int W3DTreeBuffer::addTreeType(const W3DTreeDrawModuleData *data)
 {
 	if (m_numTreeTypes>=MAX_TYPES) {
-		DEBUG_CRASH(("Too many kinds of trees in map.  Reduce kinds of trees, or raise tree limit. jba."));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Too many kinds of trees in map.  Reduce kinds of trees, or raise tree limit. jba.");
 		return 0;
 	}
 	m_needToUpdateTexture = true;
@@ -1126,7 +1128,7 @@ Int W3DTreeBuffer::addTreeType(const W3DTreeDrawModuleData *data)
 	W3DRenderObject *robj=W3DAssetCatalog::Get_Instance()->Create_Render_Obj(data->m_modelName.str());
 
 	if (robj==nullptr) {
-		DEBUG_CRASH(("Unable to find model for tree %s", data->m_modelName.str()));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unable to find model for tree %s", data->m_modelName.str());
 		return 0;
 	}
 	Vector3 offset(0,0,0);
@@ -1142,7 +1144,7 @@ Int W3DTreeBuffer::addTreeType(const W3DTreeDrawModuleData *data)
 		m_treeTypes[m_numTreeTypes].m_mesh = (W3DMeshRenderObject*)robj;
 
 	if (m_treeTypes[m_numTreeTypes].m_mesh==nullptr) {
-		DEBUG_CRASH(("Tree %s is not simple mesh. Tell artist to re-export. Don't Ignore!!!", data->m_modelName.str()));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Tree %s is not simple mesh. Tell artist to re-export. Don't Ignore!!!", data->m_modelName.str());
 		return 0;
 	}
 
@@ -1300,8 +1302,6 @@ void W3DTreeBuffer::pushAsideTree(DrawableID id, const Coord3D *pusherPos,
 	}
 }
 
-DECLARE_PERF_TIMER(Tree_Render)
-
 //=============================================================================
 // W3DTreeBuffer::drawTrees
 //=============================================================================
@@ -1389,7 +1389,7 @@ void W3DTreeBuffer::prepareFrame()
 
 void W3DTreeBuffer::drawTrees(W3DCamera * camera, Graphics::SceneObjectList<W3DRenderObject>::Cursor *pDynamicLightsIterator)
 {
-	USE_PERF_TIMER(Tree_Render)
+	engine::profiling::Scope tree_render_scope{"Graphics.Trees.Render"};
 	if (!m_isTerrainPass) {
 		return;
 	}
@@ -1601,7 +1601,7 @@ static const Real ANGULAR_LIMIT = PI/2 - PI/64;
 void W3DTreeBuffer::updateTopplingTree(TTree *tree, Real timeScale)
 {
 	//DLOG(Debug::Format("updating W3DTreeBuffer %08lx\n",this));
-	DEBUG_ASSERTCRASH(tree->m_toppleState != TOPPLE_UPRIGHT, ("hmm, we should be sleeping here"));
+	engine::debug::invariant((tree->m_toppleState != TOPPLE_UPRIGHT), "tree->m_toppleState != TOPPLE_UPRIGHT", __FILE__, __LINE__, "hmm, we should be sleeping here");
 	if ( (tree->m_toppleState == TOPPLE_UPRIGHT)  ||  (tree->m_toppleState == TOPPLE_DOWN) )
 		return;
 

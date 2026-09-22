@@ -28,7 +28,8 @@
 // Description: WOL Game Options Menu
 ///////////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/GameEngine.h"
 #include "Common/GameState.h"
@@ -75,26 +76,24 @@ extern void MapSelectorTooltip(GameWindow *window, WinInstanceData *instData,	Un
 
 #if defined(RTS_DEBUG)
 extern Bool g_debugSlots;
-void slotListDebugLog(const char *fmt, ...)
-{
-	static char buf[1024];
-	va_list va;
-	va_start( va, fmt );
-	vsnprintf(buf, 1024, fmt, va );
-	va_end( va );
-
-	DEBUG_LOG(("%s", buf));
-	if (g_debugSlots)
-	{
-		UnicodeString msg;
-		msg.translate(buf);
-		TheGameSpyInfo->addText(msg, GameSpyColor[GSCOLOR_DEFAULT], nullptr);
-	}
-}
-#define SLOTLIST_DEBUG_LOG(x) slotListDebugLog x
-#else
-#define SLOTLIST_DEBUG_LOG(x) DEBUG_LOG(x)
 #endif
+void slotListDebugLog(const char *format, ...)
+{
+    char buffer[1024];
+    va_list args;
+    va_start(args, format);
+    vsnprintf(buffer, sizeof(buffer), format, args);
+    va_end(args);
+    engine::debug::log_info("%s", buffer);
+#if defined(RTS_DEBUG)
+    if (g_debugSlots)
+    {
+        UnicodeString message;
+        message.translate(buffer);
+        TheGameSpyInfo->addText(message, GameSpyColor[GSCOLOR_DEFAULT], nullptr);
+    }
+#endif
+}
 
 void SendStatsToOtherPlayers(const GameInfo *game)
 {
@@ -126,7 +125,7 @@ void SendStatsToOtherPlayers(const GameInfo *game)
 			AsciiString hostName;
 			hostName.translate(slot->getName());
 			req.nick = hostName.str();
-			DEBUG_LOG(("SendStatsToOtherPlayers() - sending to '%s', data of\n\t'%s'", hostName.str(), req.options.c_str()));
+			engine::debug::log_info("SendStatsToOtherPlayers() - sending to '%s', data of\n\t'%s'", hostName.str(), req.options.c_str());
 			TheGameSpyPeerMessageQueue->addRequest(req);
 		}
 	}
@@ -246,7 +245,7 @@ void PopBackToLobby()
 		//TheGameSpyInfo->joinBestGroupRoom();
 	}
 
-	DEBUG_LOG(("PopBackToLobby() - parentWOLGameSetup is %X", parentWOLGameSetup));
+	engine::debug::log_info("PopBackToLobby() - parentWOLGameSetup is %X", parentWOLGameSetup);
 	if (parentWOLGameSetup)
 	{
 		nextScreen = "Menus/WOLCustomLobby.wnd";
@@ -284,7 +283,7 @@ void WOLPositionStartSpots()
 				// set the map name in the global data map name
 				AsciiString asciiMap;
 				const char *mapFname = (const char *)GadgetListBoxGetItemData( listboxMap, selected );
-				DEBUG_ASSERTCRASH(mapFname, ("No map item data"));
+				engine::debug::invariant((mapFname), "mapFname", __FILE__, __LINE__, "No map item data");
 				if (mapFname) {
 					asciiMap = mapFname;
 				} else {
@@ -296,7 +295,7 @@ void WOLPositionStartSpots()
 		}
 
 	} else {
-		DEBUG_ASSERTCRASH(win != nullptr, ("no map preview window"));
+		engine::debug::invariant((win != nullptr), "win != nullptr", __FILE__, __LINE__, "no map preview window");
 		positionStartSpots( TheGameSpyInfo->getCurrentStagingRoom(), buttonMapStartPosition, win);
 	}
 }
@@ -1026,7 +1025,7 @@ void WOLDisplayGameOptions()
     }
   }
 
-  DEBUG_ASSERTCRASH( index < itemCount, ("Could not find new starting cash amount %d in list", theGame->getStartingCash().countMoney() ) );
+  engine::debug::invariant((index < itemCount), "index < itemCount", __FILE__, __LINE__, "Could not find new starting cash amount %d in list", theGame->getStartingCash().countMoney() );
 }
 
 
@@ -1042,7 +1041,7 @@ void WOLDisplaySlotList()
 	if (!game->isInGame())
 		return;
 
-	DEBUG_ASSERTCRASH(!game->getConstSlot(0)->isOpen(), ("Open host!"));
+	engine::debug::invariant((!game->getConstSlot(0)->isOpen()), "!game->getConstSlot(0)->isOpen()", __FILE__, __LINE__, "Open host!");
 
 	UpdateSlotList( game, comboBoxPlayer, comboBoxColor,
 		comboBoxPlayerTemplate, comboBoxTeam, buttonAccept, buttonStart, buttonMapStartPosition );
@@ -1095,9 +1094,9 @@ void InitWOLGameGadgets()
 	pingImages[0] = TheMappedImageCollection->findImageByName("Ping03");
 	pingImages[1] = TheMappedImageCollection->findImageByName("Ping02");
 	pingImages[2] = TheMappedImageCollection->findImageByName("Ping01");
-	DEBUG_ASSERTCRASH(pingImages[0], ("Can't find ping image!"));
-	DEBUG_ASSERTCRASH(pingImages[1], ("Can't find ping image!"));
-	DEBUG_ASSERTCRASH(pingImages[2], ("Can't find ping image!"));
+	engine::debug::invariant((pingImages[0]), "pingImages[0]", __FILE__, __LINE__, "Can't find ping image!");
+	engine::debug::invariant((pingImages[1]), "pingImages[1]", __FILE__, __LINE__, "Can't find ping image!");
+	engine::debug::invariant((pingImages[2]), "pingImages[2]", __FILE__, __LINE__, "Can't find ping image!");
 
 	//Initialize the gadget IDs
 	parentWOLGameSetupID = TheNameKeyGenerator->nameToKey( "GameSpyGameOptionsMenu.wnd:GameSpyGameOptionsMenuParent" );
@@ -1128,15 +1127,15 @@ void InitWOLGameGadgets()
 	textEntryChat = TheWindowManager->winGetWindowFromId( parentWOLGameSetup, textEntryChatID );
 	textEntryMapDisplay = TheWindowManager->winGetWindowFromId( parentWOLGameSetup, textEntryMapDisplayID );
 	windowMap = TheWindowManager->winGetWindowFromId( parentWOLGameSetup,windowMapID  );
-  DEBUG_ASSERTCRASH(windowMap, ("Could not find the parentWOLGameSetup.wnd:MapWindow" ));
+  engine::debug::invariant((windowMap), "windowMap", __FILE__, __LINE__, "Could not find the parentWOLGameSetup.wnd:MapWindow" );
 
   checkBoxLimitSuperweapons = TheWindowManager->winGetWindowFromId( parentWOLGameSetup, checkBoxLimitSuperweaponsID );
-  DEBUG_ASSERTCRASH(windowMap, ("Could not find the GameSpyGameOptionsMenu.wnd:CheckboxLimitSuperweapons" ));
+  engine::debug::invariant((windowMap), "windowMap", __FILE__, __LINE__, "Could not find the GameSpyGameOptionsMenu.wnd:CheckboxLimitSuperweapons" );
   comboBoxStartingCash = TheWindowManager->winGetWindowFromId( parentWOLGameSetup, comboBoxStartingCashID );
-  DEBUG_ASSERTCRASH(windowMap, ("Could not find the GameSpyGameOptionsMenu.wnd:ComboBoxStartingCash" ));
+  engine::debug::invariant((windowMap), "windowMap", __FILE__, __LINE__, "Could not find the GameSpyGameOptionsMenu.wnd:ComboBoxStartingCash" );
   PopulateStartingCashComboBox( comboBoxStartingCash, TheGameSpyGame );
   checkBoxLimitArmies = TheWindowManager->winGetWindowFromId( parentWOLGameSetup, checkBoxLimitArmiesID );
-  DEBUG_ASSERTCRASH(windowMap, ("Could not find the GameSpyGameOptionsMenu.wnd:CheckBoxLimitArmies" ));
+  engine::debug::invariant((windowMap), "windowMap", __FILE__, __LINE__, "Could not find the GameSpyGameOptionsMenu.wnd:CheckBoxLimitArmies" );
 
   // Limit Armies can ONLY be set in the Host Game window (PopupHostGame.wnd)
   checkBoxLimitArmies->winEnable( false );
@@ -1175,7 +1174,7 @@ void InitWOLGameGadgets()
 
 	if (!theGameInfo)
 	{
-		DEBUG_CRASH(("No staging room!"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "No staging room!");
 		return;
 	}
 
@@ -1208,14 +1207,14 @@ void InitWOLGameGadgets()
 		tmpString.format("GameSpyGameOptionsMenu.wnd:ComboBoxColor%d", i);
 		comboBoxColorID[i] = TheNameKeyGenerator->nameToKey( tmpString );
 		comboBoxColor[i] = TheWindowManager->winGetWindowFromId( parentWOLGameSetup, comboBoxColorID[i] );
-		DEBUG_ASSERTCRASH(comboBoxColor[i], ("Could not find the comboBoxColor[%d]",i ));
+		engine::debug::invariant((comboBoxColor[i]), "comboBoxColor[i]", __FILE__, __LINE__, "Could not find the comboBoxColor[%d]",i );
 		PopulateColorComboBox(i, comboBoxColor, theGameInfo);
 		GadgetComboBoxSetSelectedPos(comboBoxColor[i], 0);
 
 		tmpString.format("GameSpyGameOptionsMenu.wnd:ComboBoxPlayerTemplate%d", i);
 		comboBoxPlayerTemplateID[i] = TheNameKeyGenerator->nameToKey( tmpString );
 		comboBoxPlayerTemplate[i] = TheWindowManager->winGetWindowFromId( parentWOLGameSetup, comboBoxPlayerTemplateID[i] );
-		DEBUG_ASSERTCRASH(comboBoxPlayerTemplate[i], ("Could not find the comboBoxPlayerTemplate[%d]",i ));
+		engine::debug::invariant((comboBoxPlayerTemplate[i]), "comboBoxPlayerTemplate[i]", __FILE__, __LINE__, "Could not find the comboBoxPlayerTemplate[%d]",i );
 		PopulatePlayerTemplateComboBox(i, comboBoxPlayerTemplate, theGameInfo, theGameInfo->getAllowObservers() );
 
 		// add tooltips to the player template combobox and listbox
@@ -1225,30 +1224,30 @@ void InitWOLGameGadgets()
 		tmpString.format("GameSpyGameOptionsMenu.wnd:ComboBoxTeam%d", i);
 		comboBoxTeamID[i] = TheNameKeyGenerator->nameToKey( tmpString );
 		comboBoxTeam[i] = TheWindowManager->winGetWindowFromId( parentWOLGameSetup, comboBoxTeamID[i] );
-		DEBUG_ASSERTCRASH(comboBoxTeam[i], ("Could not find the comboBoxTeam[%d]",i ));
+		engine::debug::invariant((comboBoxTeam[i]), "comboBoxTeam[i]", __FILE__, __LINE__, "Could not find the comboBoxTeam[%d]",i );
 		PopulateTeamComboBox(i, comboBoxTeam, theGameInfo);
 
 		tmpString.format("GameSpyGameOptionsMenu.wnd:ButtonAccept%d", i);
 		buttonAcceptID[i] = TheNameKeyGenerator->nameToKey( tmpString );
 		buttonAccept[i] = TheWindowManager->winGetWindowFromId( parentWOLGameSetup, buttonAcceptID[i] );
-		DEBUG_ASSERTCRASH(buttonAccept[i], ("Could not find the buttonAccept[%d]",i ));
+		engine::debug::invariant((buttonAccept[i]), "buttonAccept[i]", __FILE__, __LINE__, "Could not find the buttonAccept[%d]",i );
 		buttonAccept[i]->winSetTooltipFunc(gameAcceptTooltip);
 
 		tmpString.format("GameSpyGameOptionsMenu.wnd:GenericPing%d", i);
 		genericPingWindowID[i] = TheNameKeyGenerator->nameToKey( tmpString );
 		genericPingWindow[i] = TheWindowManager->winGetWindowFromId( parentWOLGameSetup, genericPingWindowID[i] );
-		DEBUG_ASSERTCRASH(genericPingWindow[i], ("Could not find the genericPingWindow[%d]",i ));
+		engine::debug::invariant((genericPingWindow[i]), "genericPingWindow[i]", __FILE__, __LINE__, "Could not find the genericPingWindow[%d]",i );
 		genericPingWindow[i]->winSetTooltipFunc(pingTooltip);
 
 //		tmpString.format("GameSpyGameOptionsMenu.wnd:ButtonStartPosition%d", i);
 //		buttonStartPositionID[i] = TheNameKeyGenerator->nameToKey( tmpString );
 //		buttonStartPosition[i] = TheWindowManager->winGetWindowFromId( parentWOLGameSetup, buttonStartPositionID[i] );
-//		DEBUG_ASSERTCRASH(buttonStartPosition[i], ("Could not find the ButtonStartPosition[%d]",i ));
+//		engine::debug::invariant((buttonStartPosition[i]), "buttonStartPosition[i]", __FILE__, __LINE__, "Could not find the ButtonStartPosition[%d]",i );
 
 		tmpString.format("GameSpyGameOptionsMenu.wnd:ButtonMapStartPosition%d", i);
 		buttonMapStartPositionID[i] = TheNameKeyGenerator->nameToKey( tmpString );
 		buttonMapStartPosition[i] = TheWindowManager->winGetWindowFromId( parentWOLGameSetup, buttonMapStartPositionID[i] );
-		DEBUG_ASSERTCRASH(buttonMapStartPosition[i], ("Could not find the ButtonMapStartPosition[%d]",i ));
+		engine::debug::invariant((buttonMapStartPosition[i]), "buttonMapStartPosition[i]", __FILE__, __LINE__, "Could not find the ButtonMapStartPosition[%d]",i );
 
 //		if (buttonStartPosition[i])
 //			buttonStartPosition[i]->winHide(TRUE);
@@ -1326,18 +1325,18 @@ void WOLGameSetupMenuInit( WindowLayout *layout, void *userData )
 			GameSpyCloseAllOverlays();
 			GSMessageBoxOk( title, body );
 			TheGameSpyInfo->reset();
-			DEBUG_LOG(("WOLGameSetupMenuInit() - game was in progress, and we were disconnected, so pop immediate back to main menu"));
+			engine::debug::log_info("WOLGameSetupMenuInit() - game was in progress, and we were disconnected, so pop immediate back to main menu");
 			TheShell->popImmediate();
 			return;
 		}
 
 		// If we init while the game is in progress, we are really returning to the menu
 		// after the game.  So, we pop the menu and go back to the lobby.  Whee!
-		DEBUG_LOG(("WOLGameSetupMenuInit() - game was in progress, so pop immediate back to lobby"));
+		engine::debug::log_info("WOLGameSetupMenuInit() - game was in progress, so pop immediate back to lobby");
 		TheShell->popImmediate();
 		if (TheGameSpyPeerMessageQueue && TheGameSpyPeerMessageQueue->isConnected())
 		{
-			DEBUG_LOG(("We're still connected, so pushing back on the lobby"));
+			engine::debug::log_info("We're still connected, so pushing back on the lobby");
 			TheShell->push("Menus/WOLCustomLobby.wnd", TRUE);
 		}
 		return;
@@ -1506,7 +1505,7 @@ static void shutdownComplete( WindowLayout *layout )
 	{
 		if (!TheGameSpyPeerMessageQueue || !TheGameSpyPeerMessageQueue->isConnected())
 		{
-			DEBUG_LOG(("GameSetup shutdownComplete() - skipping push because we're disconnected"));
+			engine::debug::log_info("GameSetup shutdownComplete() - skipping push because we're disconnected");
 		}
 		else
 		{
@@ -1652,7 +1651,7 @@ void WOLGameSetupMenuUpdate( WindowLayout * layout, void *userData)
 			{
 				// haven't seen ourselves
 				buttonPushed = true;
-				DEBUG_LOG(("Haven't seen ourselves in slotlist"));
+				engine::debug::log_info("Haven't seen ourselves in slotlist");
 				if (TheGameSpyGame)
 					TheGameSpyGame->reset();
 				TheGameSpyInfo->leaveStagingRoom();
@@ -1703,13 +1702,13 @@ void WOLGameSetupMenuUpdate( WindowLayout * layout, void *userData)
 
 		if (!TheLobbyQueuedUTMs.empty())
 		{
-			DEBUG_LOG(("Got response from queued lobby UTM list"));
+			engine::debug::log_info("Got response from queued lobby UTM list");
 			resp = TheLobbyQueuedUTMs.front();
 			TheLobbyQueuedUTMs.pop_front();
 		}
 		else if (TheGameSpyPeerMessageQueue->getResponse( resp ))
 		{
-			DEBUG_LOG(("Got response from message queue"));
+			engine::debug::log_info("Got response from message queue");
 		}
 			else
 		{
@@ -1945,8 +1944,8 @@ void WOLGameSetupMenuUpdate( WindowLayout * layout, void *userData)
 #if defined(RTS_DEBUG)
 					if (g_debugSlots)
 					{
-						DEBUG_LOG(("About to process a room UTM.  Command is '%s', command options is '%s'",
-							resp.command.c_str(), resp.commandOptions.c_str()));
+						engine::debug::log_info("About to process a room UTM.  Command is '%s', command options is '%s'",
+							resp.command.c_str(), resp.commandOptions.c_str());
 					}
 #endif
 					if (strcmp(resp.command.c_str(), "SL") == 0)
@@ -1956,28 +1955,28 @@ void WOLGameSetupMenuUpdate( WindowLayout * layout, void *userData)
 						Bool isValidSlotList = game && game->getSlot(0) && game->getSlot(0)->isPlayer( resp.nick.c_str() ) && !TheGameSpyInfo->amIHost();
 						if (!isValidSlotList)
 						{
-							SLOTLIST_DEBUG_LOG(("Not a valid slotlist"));
+							slotListDebugLog("Not a valid slotlist");
 							if (!game)
 							{
-								SLOTLIST_DEBUG_LOG(("No game!"));
+								slotListDebugLog("No game!");
 							}
 							else
 							{
 								if (!game->getSlot(0))
 								{
-									SLOTLIST_DEBUG_LOG(("No slot 0!"));
+									slotListDebugLog("No slot 0!");
 								}
 								else
 								{
 									if (TheGameSpyInfo->amIHost())
 									{
-										SLOTLIST_DEBUG_LOG(("I'm the host!"));
+										slotListDebugLog("I'm the host!");
 									}
 									else
 									{
-										SLOTLIST_DEBUG_LOG(("Not from the host!  isHuman:%d, name:'%ls', sender:'%s'",
+										slotListDebugLog("Not from the host!  isHuman:%d, name:'%ls', sender:'%s'",
 											game->getSlot(0)->isHuman(), game->getSlot(0)->getName().str(),
-											resp.nick.c_str()));
+										resp.nick.c_str());
 									}
 								}
 							}
@@ -2015,14 +2014,12 @@ void WOLGameSetupMenuUpdate( WindowLayout * layout, void *userData)
 								{
 									if (game && game->getSlot(i))
 									{
-#ifdef DEBUG_LOGGING
 										UnsignedShort newPort = game->getConstSlot(i)->getPort();
 										UnsignedInt newIP = game->getConstSlot(i)->getIP();
-										DEBUG_ASSERTLOG(newIP == ips[i], ("IP was different for player %d (%X --> %X)",
-											i, ips[i], newIP));
-										DEBUG_ASSERTLOG(newPort == ports[i], ("Port was different for player %d (%d --> %d)",
-											i, ports[i], newPort));
-#endif
+										if (!(newIP == ips[i])) engine::debug::log_error("IP was different for player %d (%X --> %X)",
+											i, ips[i], newIP);
+										if (!(newPort == ports[i])) engine::debug::log_error("Port was different for player %d (%d --> %d)",
+											i, ports[i], newPort);
 										game->getSlot(i)->setPort(ports[i]);
 										game->getSlot(i)->setIP(ips[i]);
 									}
@@ -2032,15 +2029,15 @@ void WOLGameSetupMenuUpdate( WindowLayout * layout, void *userData)
 							Bool isInGame = newLocalSlotNum >= 0;
 							if (!optionsOK)
 							{
-								SLOTLIST_DEBUG_LOG(("Options are bad!  bailing!"));
+								slotListDebugLog("Options are bad!  bailing!");
 								break;
 							}
 							else
 							{
-								SLOTLIST_DEBUG_LOG(("Options are good, local slot is %d", newLocalSlotNum));
+								slotListDebugLog("Options are good, local slot is %d", newLocalSlotNum);
 								if (!isInGame)
 								{
-									SLOTLIST_DEBUG_LOG(("Not in game; players are:"));
+									slotListDebugLog("Not in game; players are:");
 									for (Int i=0; i<MAX_SLOTS; ++i)
 									{
 										const GameSpyGameSlot *slot = game->getGameSpySlot(i);
@@ -2048,7 +2045,7 @@ void WOLGameSetupMenuUpdate( WindowLayout * layout, void *userData)
 										{
 											UnicodeString munkee;
 											munkee.format(L"\t%d: %ls", i, slot->getName().str());
-											SLOTLIST_DEBUG_LOG(("%ls", munkee.str()));
+											slotListDebugLog("%ls", munkee.str());
 										}
 									}
 								}
@@ -2108,7 +2105,7 @@ void WOLGameSetupMenuUpdate( WindowLayout * layout, void *userData)
 								{
 									// can't see ourselves
 									buttonPushed = true;
-									DEBUG_LOG(("Can't see ourselves in slotlist %s", options.str()));
+									engine::debug::log_info("Can't see ourselves in slotlist %s", options.str());
 									TheGameSpyInfo->getCurrentStagingRoom()->reset();
 									TheGameSpyInfo->leaveStagingRoom();
 									//TheGameSpyInfo->joinBestGroupRoom();
@@ -2195,7 +2192,7 @@ void WOLGameSetupMenuUpdate( WindowLayout * layout, void *userData)
 								UnicodeString message = TheGameText->fetch("GUI:GSKicked");
 								AsciiString commandMessage = resp.commandOptions.c_str();
 								commandMessage.trim();
-								DEBUG_LOG(("We were kicked: reason was '%s'", resp.commandOptions.c_str()));
+								engine::debug::log_info("We were kicked: reason was '%s'", resp.commandOptions.c_str());
 								if (commandMessage == "GameStarted")
 								{
 									message = TheGameText->fetch("GUI:GSKickedGameStarted");
@@ -2257,7 +2254,7 @@ void WOLGameSetupMenuUpdate( WindowLayout * layout, void *userData)
 								options.nextToken(&key, "=");
 								Int val = atoi(options.str()+1);
 								UnsignedInt uVal = atoi(options.str()+1);
-								DEBUG_LOG(("GameOpt request: key=%s, val=%s from player %d", key.str(), options.str()+1, slotNum));
+								engine::debug::log_info("GameOpt request: key=%s, val=%s from player %d", key.str(), options.str()+1, slotNum);
 
 								GameSpyGameSlot *slot = game->getGameSpySlot(slotNum);
 								if (!slot)
@@ -2286,7 +2283,7 @@ void WOLGameSetupMenuUpdate( WindowLayout * layout, void *userData)
 									}
 									else
 									{
-										DEBUG_LOG(("Rejecting invalid color %d", val));
+										engine::debug::log_info("Rejecting invalid color %d", val);
 									}
 								}
 								else if (key == "PlayerTemplate")
@@ -2315,7 +2312,7 @@ void WOLGameSetupMenuUpdate( WindowLayout * layout, void *userData)
 									}
 									else
 									{
-										DEBUG_LOG(("Rejecting invalid PlayerTemplate %d", val));
+										engine::debug::log_info("Rejecting invalid PlayerTemplate %d", val);
 									}
 								}
 								else if (key == "StartPos")
@@ -2342,7 +2339,7 @@ void WOLGameSetupMenuUpdate( WindowLayout * layout, void *userData)
 									}
 									else
 									{
-										DEBUG_LOG(("Rejecting invalid startPos %d", val));
+										engine::debug::log_info("Rejecting invalid startPos %d", val);
 									}
 								}
 								else if (key == "Team")
@@ -2355,21 +2352,21 @@ void WOLGameSetupMenuUpdate( WindowLayout * layout, void *userData)
 									}
 									else
 									{
-										DEBUG_LOG(("Rejecting invalid team %d", val));
+										engine::debug::log_info("Rejecting invalid team %d", val);
 									}
 								}
 								else if (key == "IP")
 								{
 									if (uVal != slot->getIP())
 									{
-										DEBUG_LOG(("setting IP of player %ls from 0x%08x to be 0x%08x", slot->getName().str(), slot->getIP(), uVal));
+										engine::debug::log_info("setting IP of player %ls from 0x%08x to be 0x%08x", slot->getName().str(), slot->getIP(), uVal);
 										slot->setIP(uVal);
 										change = true;
 										shouldUnaccept = true;
 									}
 									else
 									{
-										DEBUG_LOG(("Rejecting invalid IP %d", uVal));
+										engine::debug::log_info("Rejecting invalid IP %d", uVal);
 									}
 								}
 								else if (key == "NAT")
@@ -2378,19 +2375,19 @@ void WOLGameSetupMenuUpdate( WindowLayout * layout, void *userData)
 											(val <= FirewallHelperClass::FIREWALL_MAX))
 									{
 										slot->setNATBehavior((FirewallHelperClass::FirewallBehaviorType)val);
-										DEBUG_LOG(("Setting NAT behavior to %d for player %d", val, slotNum));
+										engine::debug::log_info("Setting NAT behavior to %d for player %d", val, slotNum);
 										change = true;
 									}
 									else
 									{
-										DEBUG_LOG(("Rejecting invalid NAT behavior %d from player %d", val, slotNum));
+										engine::debug::log_info("Rejecting invalid NAT behavior %d from player %d", val, slotNum);
 									}
 								}
 								else if (key == "Ping")
 								{
 									slot->setPingString(options.str()+1);
 									TheGameSpyInfo->setGameOptions();
-									DEBUG_LOG(("Setting ping string to %s for player %d", options.str()+1, slotNum));
+									engine::debug::log_info("Setting ping string to %s for player %d", options.str()+1, slotNum);
 								}
 
 								if (change)
@@ -2401,9 +2398,9 @@ void WOLGameSetupMenuUpdate( WindowLayout * layout, void *userData)
 									TheGameSpyInfo->setGameOptions();
 
 									WOLDisplaySlotList();
-									DEBUG_LOG(("Slot value is color=%d, PlayerTemplate=%d, startPos=%d, team=%d, IP=0x%8.8X",
-										slot->getColor(), slot->getPlayerTemplate(), slot->getStartPos(), slot->getTeamNumber(), slot->getIP()));
-									DEBUG_LOG(("Slot list updated to %s", GameInfoToAsciiString(game).str()));
+									engine::debug::log_info("Slot value is color=%d, PlayerTemplate=%d, startPos=%d, team=%d, IP=0x%8.8X",
+										slot->getColor(), slot->getPlayerTemplate(), slot->getStartPos(), slot->getTeamNumber(), slot->getIP());
+									engine::debug::log_info("Slot list updated to %s", GameInfoToAsciiString(game).str());
 								}
 							}
 						}
@@ -2436,7 +2433,7 @@ WindowMsgHandledType WOLGameSetupMenuInput( GameWindow *window, UnsignedInt msg,
 
 			GameWindow *control = (GameWindow *)mData1;
 			NameKeyType controlID = (NameKeyType)control->winGetWindowId();
-			DEBUG_LOG(("GWM_RIGHT_UP for control %d(%s)", controlID, TheNameKeyGenerator->keyToName(controlID).str()));
+			engine::debug::log_info("GWM_RIGHT_UP for control %d(%s)", controlID, TheNameKeyGenerator->keyToName(controlID).str());
 			break;
 		}
 
@@ -2870,5 +2867,4 @@ WindowMsgHandledType WOLGameSetupMenuSystem( GameWindow *window, UnsignedInt msg
 	}
 	return MSG_HANDLED;
 }
-
 

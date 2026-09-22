@@ -36,6 +36,8 @@
 
 #pragma once
 
+
+#include <cassert>
 #include "WWLib/always.h"
 #include "stdlib.h"
 #include "aabox.h"
@@ -54,8 +56,8 @@ class FrustumClass;
 class CullLinkClass
 {
 public:
-	WWINLINE CullLinkClass(CullSystemClass * system)								{ System = system; WWASSERT(System); }
-	virtual ~CullLinkClass()												{ WWASSERT(System == nullptr); }
+	WWINLINE CullLinkClass(CullSystemClass * system)								{ System = system; assert((System)); }
+	virtual ~CullLinkClass()												{ assert((System == nullptr)); }
 
 	WWINLINE void					Set_Culling_System(CullSystemClass * sys)		{ System = sys; }
 	WWINLINE CullSystemClass * Get_Culling_System()							{ return System; }

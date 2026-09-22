@@ -25,6 +25,7 @@
 #include "GameLogic/Scripts.h"
 #include "EditCondition.h"
 #include "ScriptDialog.h"
+import engine.debug;
 
 /////////////////////////////////////////////////////////////////////////////
 // ScriptConditionsDlg property page
@@ -315,14 +316,14 @@ Int ScriptConditionsDlg::doMoveDown( OrCondition **outWhichNow )
 			pPrev = pCur;
 			pCur = pCur->getNext();
 		}
-		DEBUG_ASSERTCRASH(pCur, ("Didn't find condition in list."));
+		engine::debug::invariant((pCur), "pCur", __FILE__, __LINE__, "Didn't find condition in list.");
 		if (!pCur) return 0;
 		if (pPrev) {
 			pPrev->setNextCondition(pNext);
 			pCur->setNextCondition(pNext->getNext());
 			pNext->setNextCondition(pCur);
 		} else {
-			DEBUG_ASSERTCRASH(m_condition == m_orCondition->getFirstAndCondition(), ("Logic error."));
+			engine::debug::invariant((m_condition == m_orCondition->getFirstAndCondition()), "m_condition == m_orCondition->getFirstAndCondition()", __FILE__, __LINE__, "Logic error.");
 			pCur->setNextCondition(pNext->getNext());
 			pNext->setNextCondition(pCur);
 			m_orCondition->setFirstAndCondition(pNext);
@@ -337,14 +338,14 @@ Int ScriptConditionsDlg::doMoveDown( OrCondition **outWhichNow )
 			pPrev = pCur;
 			pCur = pCur->getNextOrCondition();
 		}
-		DEBUG_ASSERTCRASH(pCur, ("Didn't find Or in list."));
+		engine::debug::invariant((pCur), "pCur", __FILE__, __LINE__, "Didn't find Or in list.");
 		if (!pCur) return 0;
 		if (pPrev) {
 			pPrev->setNextOrCondition(pNext);
 			pCur->setNextOrCondition(pNext->getNextOrCondition());
 			pNext->setNextOrCondition(pCur);
 		} else {
-			DEBUG_ASSERTCRASH(m_orCondition == m_script->getOrCondition(), ("Logic error."));
+			engine::debug::invariant((m_orCondition == m_script->getOrCondition()), "m_orCondition == m_script->getOrCondition()", __FILE__, __LINE__, "Logic error.");
 			pCur->setNextOrCondition(pNext->getNextOrCondition());
 			pNext->setNextOrCondition(pCur);
 			m_script->setOrCondition(pNext);

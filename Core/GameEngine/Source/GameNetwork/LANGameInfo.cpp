@@ -26,12 +26,21 @@
 // LAN game setup state info
 // Author: Matthew D. Campbell, December 2001
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "GameClient/GameInfoWindow.h"
 #include "GameClient/GameText.h"
 #include "GameClient/GadgetListBox.h"
 #include "GameNetwork/LANGameInfo.h"
+import engine.debug;
+
+void LANGameInfo::setPlayerLastHeard(int who, UnsignedInt lastHeard)
+{
+	engine::debug::log_info("LANGameInfo::setPlayerLastHeard - changing player %d last heard from %d to %d", who, getPlayerLastHeard(who), lastHeard);
+	if (m_LANSlot[who].isHuman())
+		m_LANSlot[who].setLastHeard(lastHeard);
+}
 #include "GameNetwork/LANAPICallbacks.h"
 #include "Common/MultiplayerSettings.h"
 #include "WWLib/strtok_r.h"
@@ -100,7 +109,7 @@ LANGameInfo::LANGameInfo()
 
 void LANGameInfo::setSlot( Int slotNum, LANGameSlot slotInfo )
 {
-	DEBUG_ASSERTCRASH( slotNum >= 0 && slotNum < MAX_SLOTS, ("LANGameInfo::setSlot - Invalid slot number"));
+	engine::debug::invariant((slotNum >= 0 && slotNum < MAX_SLOTS), "slotNum >= 0 && slotNum < MAX_SLOTS", __FILE__, __LINE__, "LANGameInfo::setSlot - Invalid slot number");
 	if (slotNum < 0 || slotNum >= MAX_SLOTS)
 		return;
 
@@ -115,7 +124,7 @@ void LANGameInfo::setSlot( Int slotNum, LANGameSlot slotInfo )
 
 LANGameSlot* LANGameInfo::getLANSlot( Int slotNum )
 {
-	DEBUG_ASSERTCRASH( slotNum >= 0 && slotNum < MAX_SLOTS, ("LANGameInfo::getLANSlot - Invalid slot number"));
+	engine::debug::invariant((slotNum >= 0 && slotNum < MAX_SLOTS), "slotNum >= 0 && slotNum < MAX_SLOTS", __FILE__, __LINE__, "LANGameInfo::getLANSlot - Invalid slot number");
 	if (slotNum < 0 || slotNum >= MAX_SLOTS)
 		return nullptr;
 
@@ -124,7 +133,7 @@ LANGameSlot* LANGameInfo::getLANSlot( Int slotNum )
 
 const LANGameSlot* LANGameInfo::getConstLANSlot( Int slotNum ) const
 {
-	DEBUG_ASSERTCRASH( slotNum >= 0 && slotNum < MAX_SLOTS, ("LANGameInfo::getConstLANSlot - Invalid slot number"));
+	engine::debug::invariant((slotNum >= 0 && slotNum < MAX_SLOTS), "slotNum >= 0 && slotNum < MAX_SLOTS", __FILE__, __LINE__, "LANGameInfo::getConstLANSlot - Invalid slot number");
 	if (slotNum < 0 || slotNum >= MAX_SLOTS)
 		return nullptr;
 
@@ -133,7 +142,7 @@ const LANGameSlot* LANGameInfo::getConstLANSlot( Int slotNum ) const
 
 Int LANGameInfo::getLocalSlotNum() const
 {
-	DEBUG_ASSERTCRASH(m_inGame, ("Looking for local game slot while not in game"));
+	engine::debug::invariant((m_inGame), "m_inGame", __FILE__, __LINE__, "Looking for local game slot while not in game");
 	if (!m_inGame)
 		return -1;
 
@@ -148,7 +157,7 @@ Int LANGameInfo::getLocalSlotNum() const
 
 Int LANGameInfo::getSlotNum( UnicodeString userName )
 {
-	DEBUG_ASSERTCRASH(m_inGame, ("Looking for game slot while not in game"));
+	engine::debug::invariant((m_inGame), "m_inGame", __FILE__, __LINE__, "Looking for game slot while not in game");
 	if (!m_inGame)
 		return -1;
 
@@ -163,7 +172,7 @@ Int LANGameInfo::getSlotNum( UnicodeString userName )
 
 Bool LANGameInfo::amIHost() const
 {
-	DEBUG_ASSERTCRASH(m_inGame, ("Looking for game slot while not in game"));
+	engine::debug::invariant((m_inGame), "m_inGame", __FILE__, __LINE__, "Looking for game slot while not in game");
 	if (!m_inGame)
 		return false;
 
@@ -268,7 +277,7 @@ Bool ParseGameOptionsString(LANGameInfo *game, AsciiString options)
 		LANGameSlot *slot = game->getLANSlot(i);
 		if (slot && slot->isHuman())
 		{
-			//DEBUG_LOG(("Saving off %ls@%ls for %ls", slot->getUser()->getLogin().str(), slot->getUser()->getHost().str(), slot->getName().str()));
+			//engine::debug::log_info("Saving off %ls@%ls for %ls", slot->getUser()->getLogin().str(), slot->getUser()->getHost().str(), slot->getName().str());
 			oldLogins[slot->getName()] = slot->getUser()->getLogin();
 			oldMachines[slot->getName()] = slot->getUser()->getHost();
 		}
@@ -282,7 +291,7 @@ Bool ParseGameOptionsString(LANGameInfo *game, AsciiString options)
 		{
 //			Int hasMap = game->getSlot(newLocalSlotNum)->hasMap();
 			newMapCRC = game->getMapCRC();
-			//DEBUG_LOG(("wasInGame:%d isInGame:%d hadMap:%d hasMap:%d oldMap:%s newMap:%s", wasInGame, isInGame, hadMap, hasMap, oldMap.str(), game->getMap().str()));
+			//engine::debug::log_info("wasInGame:%d isInGame:%d hadMap:%d hasMap:%d oldMap:%s newMap:%s", wasInGame, isInGame, hadMap, hasMap, oldMap.str(), game->getMap().str());
 			if ( (oldMapCRC ^ newMapCRC)/*(hasMap ^ hadMap)*/ || (!wasInGame && isInGame) )
 			{
 				// it changed.  send it
@@ -306,7 +315,7 @@ Bool ParseGameOptionsString(LANGameInfo *game, AsciiString options)
 				mapIt = oldMachines.find(slot->getName());
 				if (mapIt != oldMachines.end())
 					slot->setHost(mapIt->second);
-				//DEBUG_LOG(("Restored %ls@%ls for %ls", slot->getUser()->getLogin().str(), slot->getUser()->getHost().str(), slot->getName().str()));
+				//engine::debug::log_info("Restored %ls@%ls for %ls", slot->getUser()->getLogin().str(), slot->getUser()->getHost().str(), slot->getName().str());
 			}
 		}
 
@@ -315,4 +324,3 @@ Bool ParseGameOptionsString(LANGameInfo *game, AsciiString options)
 
 	return false;
 }
-

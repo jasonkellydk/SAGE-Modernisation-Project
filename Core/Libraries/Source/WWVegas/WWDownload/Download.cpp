@@ -25,6 +25,7 @@
 #include <direct.h>
 #include <stdlib.h>
 #include <sys/stat.h>
+import engine.debug;
 
 /////////////////////////////////////////////////////////////////////////////
 // CDownload
@@ -370,13 +371,13 @@ HRESULT CDownload::PumpMessages()
 			//m_predictionTimes[ predictionIndex ] = ( ( m_FileSize - m_BytesRead )  * timetaken ) / ( m_BytesRead - m_StartPosition );
 			//m_predictionTimes[ predictionIndex ] = ( ( m_FileSize - m_BytesRead ) / ( m_BytesRead - m_StartPosition ) * timetaken );
 
-			DEBUG_LOG(("About to OnProgressUpdate() - m_FileSize=%d, m_BytesRead=%d, timetaken=%d, numerator=%d",
-				m_FileSize, m_BytesRead, timetaken, ( ( m_FileSize - m_BytesRead )  * timetaken )));
-			DEBUG_LOG((", m_startPosition=%d, denominator=%d, predictionTime=%d",
-				m_StartPosition, ( m_BytesRead - m_StartPosition ), predictionIndex));
-			DEBUG_LOG(("vals are %d %d %d %d %d %d %d %d",
+			engine::debug::log_info("About to OnProgressUpdate() - m_FileSize=%d, m_BytesRead=%d, timetaken=%d, numerator=%d",
+				m_FileSize, m_BytesRead, timetaken, ( ( m_FileSize - m_BytesRead )  * timetaken ));
+			engine::debug::log_info(", m_startPosition=%d, denominator=%d, predictionTime=%d",
+				m_StartPosition, ( m_BytesRead - m_StartPosition ), predictionIndex);
+			engine::debug::log_info("vals are %d %d %d %d %d %d %d %d",
 				m_predictionTimes[ 0 ], m_predictionTimes[ 1 ], m_predictionTimes[ 2 ], m_predictionTimes[ 3 ],
-				m_predictionTimes[ 4 ], m_predictionTimes[ 5 ], m_predictionTimes[ 6 ], m_predictionTimes[ 7 ]));
+				m_predictionTimes[ 4 ], m_predictionTimes[ 5 ], m_predictionTimes[ 6 ], m_predictionTimes[ 7 ]);
 
 			if( m_predictions > 8 )
 			{

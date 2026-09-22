@@ -66,10 +66,16 @@ add_subdirectory(Dependencies/Utility)
 
 add_subdirectory(resources)
 
+if(RTS_BUILD_ZEROHOUR)
+    add_subdirectory(engine/debug)
+    add_subdirectory(engine/profiling)
+endif()
+
 add_subdirectory(Core)
 
 if(RTS_BUILD_ZEROHOUR)
     include(CTest)
+    add_subdirectory(engine/platform)
     add_subdirectory(engine/assets)
     add_subdirectory(engine/geometry)
     add_subdirectory(engine/video)

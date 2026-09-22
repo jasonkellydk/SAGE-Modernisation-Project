@@ -36,15 +36,16 @@
 
 
 #include "cardinalspline.h"
-#include "WWDebug/wwdebug.h"
+
 #include "WWSaveLoad/persistfactory.h"
 #include "wwmathids.h"
-#include "WWDebug/wwhack.h"
+import engine.debug;
+
 
 /*
 ** Force-Link this module because the linker can't detect that we actually need it...
 */
-DECLARE_FORCE_LINK(cardinalspline);
+void force_link_cardinalspline() {}
 
 
 /*
@@ -90,8 +91,8 @@ void CardinalSpline3DClass::Clear_Keys()
 
 void CardinalSpline3DClass::Set_Tightness(int i,float tightness)
 {
-	WWASSERT(i >= 0);
-	WWASSERT(i < Tightness.Count());
+	engine::debug::assert_condition((i >= 0), "i >= 0", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((i < Tightness.Count()), "i < Tightness.Count()", __FILE__, __LINE__, "assertion failed");
 	Tightness[i] = tightness;
 	TangentsDirty = true;
 }
@@ -205,7 +206,7 @@ bool CardinalSpline3DClass::Load(ChunkLoadClass &cload)
 				break;
 
 			default:
-				WWDEBUG_SAY(("Unhandled Chunk: 0x%X File: %s Line: %d",__FILE__,__LINE__));
+				engine::debug::log_info("Unhandled Chunk: 0x%X File: %s Line: %d",__FILE__,__LINE__);
 				break;
 		}
 		cload.Close_Chunk();
@@ -240,8 +241,8 @@ void CardinalSpline1DClass::Clear_Keys()
 
 void CardinalSpline1DClass::Set_Tightness(int i,float tightness)
 {
-	WWASSERT(i >= 0);
-	WWASSERT(i < Tightness.Count());
+	engine::debug::assert_condition((i >= 0), "i >= 0", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((i < Tightness.Count()), "i < Tightness.Count()", __FILE__, __LINE__, "assertion failed");
 	Tightness[i] = tightness;
 	TangentsDirty = true;
 }
@@ -344,7 +345,7 @@ bool CardinalSpline1DClass::Load(ChunkLoadClass &cload)
 				break;
 
 			default:
-				WWDEBUG_SAY(("Unhandled Chunk: 0x%X File: %s Line: %d",__FILE__,__LINE__));
+				engine::debug::log_info("Unhandled Chunk: 0x%X File: %s Line: %d",__FILE__,__LINE__);
 				break;
 		}
 		cload.Close_Chunk();

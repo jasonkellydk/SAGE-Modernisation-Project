@@ -29,7 +29,8 @@
 
 // USER INCLUDES //////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 #define DEFINE_GUI_COMMAND_NAMES
 #define DEFINE_COMMAND_OPTION_NAMES
 #define DEFINE_WEAPONSLOTTYPE_NAMES
@@ -153,7 +154,7 @@ void ControlBar::markUIDirty()
 
 	if( m_consecutiveDirtyFrames > 20 )
 	{
-		DEBUG_CRASH( ("Serious flaw in interface system! Either new code or INI has caused the interface to be marked dirty every frame. This problem actually causes the interface to completely lockup not allowing you to click normal game buttons.") );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Serious flaw in interface system! Either new code or INI has caused the interface to be marked dirty every frame. This problem actually causes the interface to completely lockup not allowing you to click normal game buttons.");
 	}
 
 #endif
@@ -815,8 +816,8 @@ void CommandSet::parseCommandButton( INI* ini, void *instance, void *store, cons
 	if( commandButton == nullptr )
 	{
 
-		DEBUG_CRASH(( "[LINE: %d - FILE: '%s'] Unknown command '%s' found in command set",
-								  ini->getLineNum(), ini->getFilename().str(), token ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "[LINE: %d - FILE: '%s'] Unknown command '%s' found in command set",
+								  ini->getLineNum(), ini->getFilename().str(), token );
 		throw INI_INVALID_DATA;
 
 	}
@@ -826,8 +827,8 @@ void CommandSet::parseCommandButton( INI* ini, void *instance, void *store, cons
 	Int buttonIndex = (Int)userData;
 
 	// sanity
-	DEBUG_ASSERTCRASH( buttonIndex < MAX_COMMANDS_PER_SET, ("parseCommandButton: button index '%d' out of range",
-										 buttonIndex) );
+	engine::debug::invariant((buttonIndex < MAX_COMMANDS_PER_SET), "buttonIndex < MAX_COMMANDS_PER_SET", __FILE__, __LINE__, "parseCommandButton: button index '%d' out of range",
+										 buttonIndex);
 
 	// save it
 	buttonArray[ buttonIndex ] = commandButton;
@@ -1574,7 +1575,7 @@ void ControlBar::update()
 	{
 
 		// we better be in the default none context
-		DEBUG_ASSERTCRASH( m_currContext == CB_CONTEXT_NONE, ("ControlBar::update no selection, but not we're not showing the default NONE context") );
+		engine::debug::invariant((m_currContext == CB_CONTEXT_NONE), "m_currContext == CB_CONTEXT_NONE", __FILE__, __LINE__, "ControlBar::update no selection, but not we're not showing the default NONE context");
 		return;
 
 	}
@@ -2033,7 +2034,7 @@ CommandButton *ControlBar::newCommandButtonOverride( CommandButton *buttonToOver
 		//with the same name, and just nuke the old button with the new one.
 		//So, I (KM) have added this assert to notify in case of two same-name
 		//command set.
-		DEBUG_CRASH(( "[LINE: %d in '%s'] Duplicate commandset %s found!", ini->getLineNum(), ini->getFilename().str(), name.str() ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "[LINE: %d in '%s'] Duplicate commandset %s found!", ini->getLineNum(), ini->getFilename().str(), name.str() );
 		throw INI_INVALID_DATA;
 
 		//@todo SUPPORT OVERRIDES -- JM
@@ -2042,7 +2043,7 @@ CommandButton *ControlBar::newCommandButtonOverride( CommandButton *buttonToOver
 	}
 
 	// sanity
-	DEBUG_ASSERTCRASH( commandSet, ("parseCommandSetDefinition: Unable to allocate set '%s'", name.str()) );
+	engine::debug::invariant((commandSet), "commandSet", __FILE__, __LINE__, "parseCommandSetDefinition: Unable to allocate set '%s'", name.str());
 
 	// parse the ini definition
 	ini->initFromINI( commandSet, commandSet->friend_getFieldParse() );
@@ -2405,7 +2406,7 @@ void ControlBar::switchToContext( ControlBarContext context, Drawable *draw )
 		default:
 		{
 
-			DEBUG_CRASH( ("ControlBar::switchToContext, unknown context '%d'", context) );
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "ControlBar::switchToContext, unknown context '%d'", context);
 			break;
 
 		}
@@ -2466,7 +2467,7 @@ void ControlBar::setControlCommand( GameWindow *button, const CommandButton *com
 	if( button->winGetInputFunc() != GadgetPushButtonInput )
 	{
 
-		DEBUG_CRASH( ("setControlCommand: Window is not a button") );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "setControlCommand: Window is not a button");
 		return;
 
 	}
@@ -2475,7 +2476,7 @@ void ControlBar::setControlCommand( GameWindow *button, const CommandButton *com
 	if( commandButton == nullptr )
 	{
 
-		DEBUG_CRASH( ("setControlCommand: null commandButton passed in") );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "setControlCommand: null commandButton passed in");
 		return;
 
 	}
@@ -2547,7 +2548,7 @@ void CommandButton::cacheButtonImage()
 	if( m_buttonImageName.isNotEmpty() )
 	{
 		m_buttonImage = TheMappedImageCollection->findImageByName( m_buttonImageName );
-		DEBUG_ASSERTCRASH( m_buttonImage, ("CommandButton: %s is looking for button image %s but can't find it. Skipping...", m_name.str(), m_buttonImageName.str() ) );
+		engine::debug::invariant((m_buttonImage), "m_buttonImage", __FILE__, __LINE__, "CommandButton: %s is looking for button image %s but can't find it. Skipping...", m_name.str(), m_buttonImageName.str() );
 		m_buttonImageName.clear();	// we're done with this, so nuke it
 	}
 }
@@ -2577,7 +2578,7 @@ void ControlBar::setControlCommand( const AsciiString& buttonWindowName, GameWin
 	if( win == nullptr )
 	{
 
-		DEBUG_CRASH( ("setControlCommand: Unable to find window '%s'", buttonWindowName.str()) );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "setControlCommand: Unable to find window '%s'", buttonWindowName.str());
 		return;
 
 	}
@@ -2745,7 +2746,7 @@ void ControlBar::showRallyPoint(const Coord3D* loc)
 	{
 		const ThingTemplate* ttn = TheThingFactory->findTemplate("RallyPointMarker");
 		marker = TheThingFactory->newDrawable(ttn);
-		DEBUG_ASSERTCRASH(marker, ("showRallyPoint: Unable to create rally point drawable"));
+		engine::debug::invariant((marker), "marker", __FILE__, __LINE__, "showRallyPoint: Unable to create rally point drawable");
 		if (marker)
 		{
 			marker->setDrawableStatus(DRAWABLE_STATUS_NO_SAVE);
@@ -2756,7 +2757,7 @@ void ControlBar::showRallyPoint(const Coord3D* loc)
 		marker = TheGameClient->findDrawableByID(m_rallyPointDrawableID);
 
 	// sanity
-	DEBUG_ASSERTCRASH(marker, ("showRallyPoint: No rally point marker found"));
+	engine::debug::invariant((marker), "marker", __FILE__, __LINE__, "showRallyPoint: No rally point marker found");
 
 	// set the position of the rally point drawable to the position passed in
 	marker->setPosition(loc);
@@ -2793,7 +2794,7 @@ void ControlBar::setControlBarSchemeByPlayer(Player *p)
 	{
 		m_isObserverCommandBar = TRUE;
 		switchToContext( CB_CONTEXT_OBSERVER_LIST, nullptr );
-		DEBUG_LOG(("We're loading the Observer Command Bar"));
+		engine::debug::log_info("We're loading the Observer Command Bar");
 
 		if (buttonPlaceBeacon)
 			buttonPlaceBeacon->winHide(TRUE);
@@ -2838,7 +2839,7 @@ void ControlBar::setControlBarSchemeByPlayerTemplate( const PlayerTemplate *pt)
 	{
 		m_isObserverCommandBar = TRUE;
 		switchToContext( CB_CONTEXT_OBSERVER_LIST, nullptr );
-		DEBUG_LOG(("We're loading the Observer Command Bar"));
+		engine::debug::log_info("We're loading the Observer Command Bar");
 
 		if (buttonPlaceBeacon)
 			buttonPlaceBeacon->winHide(TRUE);
@@ -3046,7 +3047,7 @@ void ControlBar::switchControlBarStage( ControlBarStages stage )
 		setHiddenControlBar();
 		break;
 	default:
-		DEBUG_CRASH(("ControlBar::switchControlBarStage we were passed in a stage that's not supported %d", stage));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "ControlBar::switchControlBarStage we were passed in a stage that's not supported %d", stage);
 	}
 
 }
@@ -3434,7 +3435,7 @@ void ControlBar::populateSpecialPowerShortcut( Player *player)
 				if( !power )
 				{
 					//Should have the power.. button is probably missing the SpecialPower = xxx entry.
-					DEBUG_CRASH( ("CommandButton %s needs a SpecialPower entry, but it's either incorrect or missing.", commandButton->getName().str()) );
+					engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "CommandButton %s needs a SpecialPower entry, but it's either incorrect or missing.", commandButton->getName().str());
 					continue;
 				}
 
@@ -3511,7 +3512,7 @@ void ControlBar::populateSpecialPowerShortcut( Player *player)
 									//All purchase sciences specify a single science.
 									if( command->getScienceVec().empty() )
 									{
-										DEBUG_CRASH( ("Commandbutton %s is a purchase science button without any science! Please add it.", command->getName().str() ) );
+										engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Commandbutton %s is a purchase science button without any science! Please add it.", command->getName().str() );
 									}
 									else if( command->getScienceVec()[0] == science )
 									{
@@ -3530,7 +3531,7 @@ void ControlBar::populateSpecialPowerShortcut( Player *player)
 									//All purchase sciences specify a single science.
 									if( command->getScienceVec().empty() )
 									{
-										DEBUG_CRASH( ("Commandbutton %s is a purchase science button without any science! Please add it.", command->getName().str() ) );
+										engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Commandbutton %s is a purchase science button without any science! Please add it.", command->getName().str() );
 									}
 									else if( command->getScienceVec()[0] == science )
 									{
@@ -3549,7 +3550,7 @@ void ControlBar::populateSpecialPowerShortcut( Player *player)
 									//All purchase sciences specify a single science.
 									if( command->getScienceVec().empty() )
 									{
-										DEBUG_CRASH( ("Commandbutton %s is a purchase science button without any science! Please add it.", command->getName().str() ) );
+										engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Commandbutton %s is a purchase science button without any science! Please add it.", command->getName().str() );
 									}
 									else if( command->getScienceVec()[0] == science )
 									{
@@ -3574,8 +3575,8 @@ void ControlBar::populateSpecialPowerShortcut( Player *player)
 				}
 			}
 
-			DEBUG_ASSERTCRASH(m_specialPowerShortcutButtons[ currentButton ] != nullptr, ("m_specialPowerShortcutButtons[%d] is null", currentButton));
-			DEBUG_ASSERTCRASH(m_specialPowerShortcutButtonParents[ currentButton ] != nullptr, ("m_specialPowerShortcutButtonParents[%d] is null", currentButton));
+			engine::debug::invariant((m_specialPowerShortcutButtons[ currentButton ] != nullptr), "m_specialPowerShortcutButtons[ currentButton ] != nullptr", __FILE__, __LINE__, "m_specialPowerShortcutButtons[%d] is null", currentButton);
+			engine::debug::invariant((m_specialPowerShortcutButtonParents[ currentButton ] != nullptr), "m_specialPowerShortcutButtonParents[ currentButton ] != nullptr", __FILE__, __LINE__, "m_specialPowerShortcutButtonParents[%d] is null", currentButton);
 
 			// make sure the window is not hidden
 			m_specialPowerShortcutButtons[ currentButton ]->winHide( FALSE );

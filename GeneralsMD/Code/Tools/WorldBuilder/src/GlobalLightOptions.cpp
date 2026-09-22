@@ -26,6 +26,7 @@
 #include "WorldBuilderDoc.h"
 #include "Common/GlobalData.h"
 #include "wbview3d.h"
+import engine.debug;
 
 /////////////////////////////////////////////////////////////////////////////
 /// GlobalLightOptions dialog trivial constructor - Create does the real work.
@@ -141,7 +142,7 @@ void GlobalLightOptions::applyAngle(Int lightIndex)
 static void SpitLights()
 {
 #ifdef DEBUG_LOGGING
-	DEBUG_LOG(("GlobalLighting\n"));
+	engine::debug::log_info("GlobalLighting\n");
 	Int redA, greenA, blueA;
 	Int redD, greenD, blueD;
 	Real x, y, z;
@@ -170,9 +171,9 @@ static void SpitLights()
 			y = TheGlobalData->m_terrainLighting[time+TIME_OF_DAY_FIRST][light].lightPos.y;
 			z = TheGlobalData->m_terrainLighting[time+TIME_OF_DAY_FIRST][light].lightPos.z;
 
-			DEBUG_LOG(("TerrainLighting%sAmbient%s = R:%d G:%d B:%d", times[time], lights[light], redA, greenA, blueA));
-			DEBUG_LOG(("TerrainLighting%sDiffuse%s = R:%d G:%d B:%d", times[time], lights[light], redD, greenD, blueD));
-			DEBUG_LOG(("TerrainLighting%sLightPos%s = X:%0.2f Y:%0.2f Z:%0.2f", times[time], lights[light], x, y, z));
+			engine::debug::log_info("TerrainLighting%sAmbient%s = R:%d G:%d B:%d", times[time], lights[light], redA, greenA, blueA);
+			engine::debug::log_info("TerrainLighting%sDiffuse%s = R:%d G:%d B:%d", times[time], lights[light], redD, greenD, blueD);
+			engine::debug::log_info("TerrainLighting%sLightPos%s = X:%0.2f Y:%0.2f Z:%0.2f", times[time], lights[light], x, y, z);
 
 			redA = TheGlobalData->m_terrainObjectsLighting[time+TIME_OF_DAY_FIRST][light].ambient.red*255;
 			greenA = TheGlobalData->m_terrainObjectsLighting[time+TIME_OF_DAY_FIRST][light].ambient.green*255;
@@ -186,50 +187,50 @@ static void SpitLights()
 			y = TheGlobalData->m_terrainObjectsLighting[time+TIME_OF_DAY_FIRST][light].lightPos.y;
 			z = TheGlobalData->m_terrainObjectsLighting[time+TIME_OF_DAY_FIRST][light].lightPos.z;
 
-			DEBUG_LOG(("TerrainObjectsLighting%sAmbient%s = R:%d G:%d B:%d", times[time], lights[light], redA, greenA, blueA));
-			DEBUG_LOG(("TerrainObjectsLighting%sDiffuse%s = R:%d G:%d B:%d", times[time], lights[light], redD, greenD, blueD));
-			DEBUG_LOG(("TerrainObjectsLighting%sLightPos%s = X:%0.2f Y:%0.2f Z:%0.2f", times[time], lights[light], x, y, z));
+			engine::debug::log_info("TerrainObjectsLighting%sAmbient%s = R:%d G:%d B:%d", times[time], lights[light], redA, greenA, blueA);
+			engine::debug::log_info("TerrainObjectsLighting%sDiffuse%s = R:%d G:%d B:%d", times[time], lights[light], redD, greenD, blueD);
+			engine::debug::log_info("TerrainObjectsLighting%sLightPos%s = X:%0.2f Y:%0.2f Z:%0.2f", times[time], lights[light], x, y, z);
 
-			DEBUG_LOG_RAW(("\n"));
+			engine::debug::log_info("\n");
 		}
-		DEBUG_LOG_RAW(("\n"));
+		engine::debug::log_info("\n");
 	}
 
-	DEBUG_LOG(("GlobalLighting Code\n"));
+	engine::debug::log_info("GlobalLighting Code\n");
 	for (time=0; time<4; time++) {
 		for (Int light=0; light<3; light++) {
 			Int theTime = time+TIME_OF_DAY_FIRST;
 			GlobalData::TerrainLighting tl = TheGlobalData->m_terrainLighting[theTime][light];
 
-			DEBUG_LOG(("TheGlobalData->m_terrainLighting[%d][%d].ambient.red = %0.4ff;", theTime, light, tl.ambient.red));
-			DEBUG_LOG(("TheGlobalData->m_terrainLighting[%d][%d].ambient.green = %0.4ff;", theTime, light, tl.ambient.green));
-			DEBUG_LOG(("TheGlobalData->m_terrainLighting[%d][%d].ambient.blue = %0.4ff;", theTime, light, tl.ambient.blue));
+			engine::debug::log_info("TheGlobalData->m_terrainLighting[%d][%d].ambient.red = %0.4ff;", theTime, light, tl.ambient.red);
+			engine::debug::log_info("TheGlobalData->m_terrainLighting[%d][%d].ambient.green = %0.4ff;", theTime, light, tl.ambient.green);
+			engine::debug::log_info("TheGlobalData->m_terrainLighting[%d][%d].ambient.blue = %0.4ff;", theTime, light, tl.ambient.blue);
 
-			DEBUG_LOG(("TheGlobalData->m_terrainLighting[%d][%d].diffuse.red = %0.4ff;", theTime, light, tl.diffuse.red));
-			DEBUG_LOG(("TheGlobalData->m_terrainLighting[%d][%d].diffuse.green = %0.4ff;", theTime, light, tl.diffuse.green));
-			DEBUG_LOG(("TheGlobalData->m_terrainLighting[%d][%d].diffuse.blue = %0.4ff;", theTime, light, tl.diffuse.blue));
+			engine::debug::log_info("TheGlobalData->m_terrainLighting[%d][%d].diffuse.red = %0.4ff;", theTime, light, tl.diffuse.red);
+			engine::debug::log_info("TheGlobalData->m_terrainLighting[%d][%d].diffuse.green = %0.4ff;", theTime, light, tl.diffuse.green);
+			engine::debug::log_info("TheGlobalData->m_terrainLighting[%d][%d].diffuse.blue = %0.4ff;", theTime, light, tl.diffuse.blue);
 
-			DEBUG_LOG(("TheGlobalData->m_terrainLighting[%d][%d].lightPos.x = %0.4ff;", theTime, light, tl.lightPos.x));
-			DEBUG_LOG(("TheGlobalData->m_terrainLighting[%d][%d].lightPos.y = %0.4ff;", theTime, light, tl.lightPos.y));
-			DEBUG_LOG(("TheGlobalData->m_terrainLighting[%d][%d].lightPos.z = %0.4ff;", theTime, light, tl.lightPos.z));
+			engine::debug::log_info("TheGlobalData->m_terrainLighting[%d][%d].lightPos.x = %0.4ff;", theTime, light, tl.lightPos.x);
+			engine::debug::log_info("TheGlobalData->m_terrainLighting[%d][%d].lightPos.y = %0.4ff;", theTime, light, tl.lightPos.y);
+			engine::debug::log_info("TheGlobalData->m_terrainLighting[%d][%d].lightPos.z = %0.4ff;", theTime, light, tl.lightPos.z);
 
 			tl = TheGlobalData->m_terrainObjectsLighting[theTime][light];
 
-			DEBUG_LOG(("TheGlobalData->m_terrainObjectsLighting[%d][%d].ambient.red = %0.4ff;", theTime, light, tl.ambient.red));
-			DEBUG_LOG(("TheGlobalData->m_terrainObjectsLighting[%d][%d].ambient.green = %0.4ff;", theTime, light, tl.ambient.green));
-			DEBUG_LOG(("TheGlobalData->m_terrainObjectsLighting[%d][%d].ambient.blue = %0.4ff;", theTime, light, tl.ambient.blue));
+			engine::debug::log_info("TheGlobalData->m_terrainObjectsLighting[%d][%d].ambient.red = %0.4ff;", theTime, light, tl.ambient.red);
+			engine::debug::log_info("TheGlobalData->m_terrainObjectsLighting[%d][%d].ambient.green = %0.4ff;", theTime, light, tl.ambient.green);
+			engine::debug::log_info("TheGlobalData->m_terrainObjectsLighting[%d][%d].ambient.blue = %0.4ff;", theTime, light, tl.ambient.blue);
 
-			DEBUG_LOG(("TheGlobalData->m_terrainObjectsLighting[%d][%d].diffuse.red = %0.4ff;", theTime, light, tl.diffuse.red));
-			DEBUG_LOG(("TheGlobalData->m_terrainObjectsLighting[%d][%d].diffuse.green = %0.4ff;", theTime, light, tl.diffuse.green));
-			DEBUG_LOG(("TheGlobalData->m_terrainObjectsLighting[%d][%d].diffuse.blue = %0.4ff;", theTime, light, tl.diffuse.blue));
+			engine::debug::log_info("TheGlobalData->m_terrainObjectsLighting[%d][%d].diffuse.red = %0.4ff;", theTime, light, tl.diffuse.red);
+			engine::debug::log_info("TheGlobalData->m_terrainObjectsLighting[%d][%d].diffuse.green = %0.4ff;", theTime, light, tl.diffuse.green);
+			engine::debug::log_info("TheGlobalData->m_terrainObjectsLighting[%d][%d].diffuse.blue = %0.4ff;", theTime, light, tl.diffuse.blue);
 
-			DEBUG_LOG(("TheGlobalData->m_terrainObjectsLighting[%d][%d].lightPos.x = %0.4ff;", theTime, light, tl.lightPos.x));
-			DEBUG_LOG(("TheGlobalData->m_terrainObjectsLighting[%d][%d].lightPos.y = %0.4ff;", theTime, light, tl.lightPos.y));
-			DEBUG_LOG(("TheGlobalData->m_terrainObjectsLighting[%d][%d].lightPos.z = %0.4ff;", theTime, light, tl.lightPos.z));
+			engine::debug::log_info("TheGlobalData->m_terrainObjectsLighting[%d][%d].lightPos.x = %0.4ff;", theTime, light, tl.lightPos.x);
+			engine::debug::log_info("TheGlobalData->m_terrainObjectsLighting[%d][%d].lightPos.y = %0.4ff;", theTime, light, tl.lightPos.y);
+			engine::debug::log_info("TheGlobalData->m_terrainObjectsLighting[%d][%d].lightPos.z = %0.4ff;", theTime, light, tl.lightPos.z);
 
-			DEBUG_LOG_RAW(("\n"));
+			engine::debug::log_info("\n");
 		}
-		DEBUG_LOG_RAW(("\n"));
+		engine::debug::log_info("\n");
 	}
 #endif
 }
@@ -771,7 +772,7 @@ void GlobalLightOptions::GetPopSliderInfo(const long sliderID, long *pMin, long 
 
 		default:
 			// uh-oh!
-			DEBUG_CRASH(("Slider message from unknown control"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Slider message from unknown control");
 			break;
 	}
 }
@@ -818,7 +819,7 @@ void GlobalLightOptions::PopSliderChanged(const long sliderID, long theVal)
 
 		default:
 			// uh-oh!
-			DEBUG_CRASH(("Slider message from unknown control"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Slider message from unknown control");
 			break;
 	}
 }
@@ -841,7 +842,7 @@ void GlobalLightOptions::PopSliderFinished(const long sliderID, long theVal)
 
 		default:
 			// uh-oh!
-			DEBUG_CRASH(("Slider message from unknown control"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Slider message from unknown control");
 			break;
 	}
 

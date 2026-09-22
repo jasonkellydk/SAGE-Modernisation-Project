@@ -23,7 +23,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "GameNetwork/NetCommandMsg.h"
 #include "GameNetwork/NetPacketStructs.h"
@@ -67,7 +68,7 @@ void NetCommandMsg::detach() {
 		deleteInstance(this);
 		return;
 	}
-	DEBUG_ASSERTCRASH(m_referenceCount > 0, ("Invalid reference count for NetCommandMsg")); // Just to make sure...
+	engine::debug::invariant((m_referenceCount > 0), "m_referenceCount > 0", __FILE__, __LINE__, "Invalid reference count for NetCommandMsg"); // Just to make sure...
 	if (m_referenceCount < 0) {
 		deleteInstance(this);
 	}

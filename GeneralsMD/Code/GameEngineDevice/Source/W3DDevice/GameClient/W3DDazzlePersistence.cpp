@@ -21,6 +21,7 @@
 #include "WWSaveLoad/persistfactory.h"
 #include "WWSaveLoad/saveloadids.h"
 #include "WWSaveLoad/saveload.h"
+import engine.debug;
 namespace
 {
 
@@ -75,7 +76,7 @@ PersistClass *	DazzlePersistFactory::Load(ChunkLoadClass & cload) const
 				break;
 
 			default:
-				WWDEBUG_SAY(("Unhandled Chunk: 0x%X File: %s Line: %d",__FILE__,__LINE__));
+				engine::debug::log_info("Unhandled Chunk: 0x%X File: %s Line: %d",__FILE__,__LINE__);
 				break;
 		};
 		cload.Close_Chunk();
@@ -88,13 +89,13 @@ PersistClass *	DazzlePersistFactory::Load(ChunkLoadClass & cload) const
 	if (new_obj == nullptr) {
 		static int count = 0;
 		if ( count++ < 10 ) {
-			WWDEBUG_SAY(("DazzlePersistFactory failed to create dazzle of type: %s!!",dazzle_type));
-			WWDEBUG_SAY(("Replacing it with a null render object!"));
+			engine::debug::log_info("DazzlePersistFactory failed to create dazzle of type: %s!!",dazzle_type);
+			engine::debug::log_info("Replacing it with a null render object!");
 		}
 		new_obj = W3DAssetCatalog::Get_Instance()->Create_Render_Obj("NULL");
 	}
 
-	WWASSERT(new_obj != nullptr);
+	engine::debug::assert_condition((new_obj != nullptr), "new_obj != nullptr", __FILE__, __LINE__, "assertion failed");
 	if (new_obj) {
 		new_obj->Set_Transform(tm);
 	}

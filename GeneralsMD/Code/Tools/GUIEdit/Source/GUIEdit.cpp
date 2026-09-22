@@ -49,7 +49,7 @@
 #include <commctrl.h>
 
 // USER INCLUDES //////////////////////////////////////////////////////////////
-#include "Common/Debug.h"
+
 #include "Common/NameKeyGenerator.h"
 #include "Common/GameEngine.h"
 #include "Common/GlobalData.h"
@@ -96,6 +96,7 @@
 #include "GUIEditDisplay.h"
 #include "DialogProc.h"
 #include "LayoutScheme.h"
+import engine.debug;
 
 ///////////////////////////////////////////////////////////////////////////////
 // DEFINES ////////////////////////////////////////////////////////////////////
@@ -754,7 +755,7 @@ Bool GUIEdit::writeConfigFile( const char *filename )
 	if( fp == nullptr )
 	{
 
-		DEBUG_LOG(( "writeConfigFile: Unable to open file '%s'", filename ));
+		engine::debug::log_info( "writeConfigFile: Unable to open file '%s'", filename );
 		assert( 0 );
 		return FALSE;
 
@@ -3386,7 +3387,7 @@ void GUIEdit::statusMessage( StatusPart part, const char *message )
 	if( part < 0 || part >= STATUS_NUM_PARTS )
 	{
 
-		DEBUG_LOG(( "Status message part out of range '%d', '%s'", part, message ));
+		engine::debug::log_info( "Status message part out of range '%d', '%s'", part, message );
 		assert( 0 );
 		return;
 
@@ -3883,7 +3884,7 @@ void GUIEdit::selectWindow( GameWindow *window )
 	if( entry == nullptr )
 	{
 
-		DEBUG_LOG(( "Unable to allocate selection entry for window" ));
+		engine::debug::log_info( "Unable to allocate selection entry for window" );
 		assert( 0 );
 		return;
 
@@ -4022,7 +4023,7 @@ void GUIEdit::deleteSelected()
 	if( deleteList == nullptr )
 	{
 
-		DEBUG_LOG(( "Cannot allocate delete list!" ));
+		engine::debug::log_info( "Cannot allocate delete list!" );
 		assert( 0 );
 		return;
 
@@ -4065,7 +4066,7 @@ void GUIEdit::bringSelectedToTop()
 	if( snapshot == nullptr )
 	{
 
-		DEBUG_LOG(( "bringSelectedToTop: Unable to allocate selectList" ));
+		engine::debug::log_info( "bringSelectedToTop: Unable to allocate selectList" );
 		assert( 0 );
 		return;
 

@@ -38,15 +38,16 @@
 
 
 #include "curve.h"
-#include "WWDebug/wwdebug.h"
+
 #include "WWSaveLoad/persistfactory.h"
 #include "wwmathids.h"
-#include "WWDebug/wwhack.h"
+import engine.debug;
+
 
 /*
 ** Force-Link this module because the linker can't detect that we actually need it...
 */
-DECLARE_FORCE_LINK(curve);
+void force_link_curve() {}
 
 /*
 ** Persist factories and chunk-id's used to save and load.
@@ -187,8 +188,8 @@ void Curve3DClass::Clear_Keys()
 
 void Curve3DClass::Find_Interval(float time,int * i0,int * i1,float * t)
 {
-	WWASSERT(time >= Keys[0].Time);
-	WWASSERT(time <= Keys[Keys.Count()-1].Time);
+	engine::debug::assert_condition((time >= Keys[0].Time), "time >= Keys[0].Time", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((time <= Keys[Keys.Count()-1].Time), "time <= Keys[Keys.Count()-1].Time", __FILE__, __LINE__, "assertion failed");
 
 	int i=0;
 	while (time > Keys[i+1].Time) {
@@ -252,7 +253,7 @@ bool Curve3DClass::Load(ChunkLoadClass & cload)
 				break;
 
 			default:
-				WWDEBUG_SAY(("Unhandled Chunk: 0x%X File: %s Line: %d",__FILE__,__LINE__));
+				engine::debug::log_info("Unhandled Chunk: 0x%X File: %s Line: %d",__FILE__,__LINE__);
 				break;
 		}
 		cload.Close_Chunk();
@@ -312,7 +313,7 @@ bool LinearCurve3DClass::Load(ChunkLoadClass & cload)
 				break;
 
 			default:
-				WWDEBUG_SAY(("Unhandled Chunk: 0x%X File: %s Line: %d",__FILE__,__LINE__));
+				engine::debug::log_info("Unhandled Chunk: 0x%X File: %s Line: %d",__FILE__,__LINE__);
 				break;
 		}
 		cload.Close_Chunk();
@@ -452,8 +453,8 @@ void Curve1DClass::Find_Interval(float time,int * i0,int * i1,float * t)
 		}
 	}
 	else {
-		WWASSERT(time >= Keys[0].Time);
-		WWASSERT(time <= Keys[Keys.Count()-1].Time);
+		engine::debug::assert_condition((time >= Keys[0].Time), "time >= Keys[0].Time", __FILE__, __LINE__, "assertion failed");
+		engine::debug::assert_condition((time <= Keys[Keys.Count()-1].Time), "time <= Keys[Keys.Count()-1].Time", __FILE__, __LINE__, "assertion failed");
 	}
 
 	int i=0;
@@ -520,7 +521,7 @@ bool Curve1DClass::Load(ChunkLoadClass & cload)
 				break;
 
 			default:
-				WWDEBUG_SAY(("Unhandled Chunk: 0x%X File: %s Line: %d",__FILE__,__LINE__));
+				engine::debug::log_info("Unhandled Chunk: 0x%X File: %s Line: %d",__FILE__,__LINE__);
 				break;
 		}
 		cload.Close_Chunk();
@@ -579,7 +580,7 @@ bool LinearCurve1DClass::Load(ChunkLoadClass & cload)
 				break;
 
 			default:
-				WWDEBUG_SAY(("Unhandled Chunk: 0x%X File: %s Line: %d",__FILE__,__LINE__));
+				engine::debug::log_info("Unhandled Chunk: 0x%X File: %s Line: %d",__FILE__,__LINE__);
 				break;
 		}
 		cload.Close_Chunk();

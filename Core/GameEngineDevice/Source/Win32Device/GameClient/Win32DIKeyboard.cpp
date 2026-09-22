@@ -31,12 +31,13 @@
 #include <windows.h>
 #include <assert.h>
 
-#include "Common/Debug.h"
+
 #include "Common/Language.h"
 #include "GameClient/KeyDefs.h"
 #include "GameClient/Keyboard.h"
 #include "Win32Device/GameClient/Win32DIKeyboard.h"
 #include "WinMain.h"
+import engine.debug;
 
 // DEFINES ////////////////////////////////////////////////////////////////////////////////////////
 enum { KEYBOARD_BUFFER_SIZE = 256 };
@@ -100,7 +101,7 @@ static void printReturnCode( char *label, HRESULT hr )
 
 		if( error->error == hr )
 		{
-			DEBUG_LOG(( "%s: '%s' - '0x%08x'", label, error->string, hr ));
+			engine::debug::log_info( "%s: '%s' - '0x%08x'", label, error->string, hr );
 			break;
 		}
 		error++;
@@ -125,7 +126,7 @@ void DirectInputKeyboard::openKeyboard()
 	if( FAILED( hr ) )
 	{
 
-		DEBUG_LOG(( "ERROR - openKeyboard: DirectInputCreate failed" ));
+		engine::debug::log_info( "ERROR - openKeyboard: DirectInputCreate failed" );
 		assert( 0 );
 		closeKeyboard();
 		return;
@@ -139,7 +140,7 @@ void DirectInputKeyboard::openKeyboard()
 	if( FAILED( hr ) )
 	{
 
-		DEBUG_LOG(( "ERROR - openKeyboard: Unable to create keyboard device" ));
+		engine::debug::log_info( "ERROR - openKeyboard: Unable to create keyboard device" );
 		assert( 0 );
 		closeKeyboard();
 		return;
@@ -151,7 +152,7 @@ void DirectInputKeyboard::openKeyboard()
 	if( FAILED( hr ) )
 	{
 
-		DEBUG_LOG(( "ERROR - openKeyboard: Unable to set data format for keyboard" ));
+		engine::debug::log_info( "ERROR - openKeyboard: Unable to set data format for keyboard" );
 		assert( 0 );
 		closeKeyboard();
 		return;
@@ -169,7 +170,7 @@ void DirectInputKeyboard::openKeyboard()
 	if( FAILED( hr ) )
 	{
 
-		DEBUG_LOG(( "ERROR - openKeyboard: Unable to set cooperative level" ));
+		engine::debug::log_info( "ERROR - openKeyboard: Unable to set cooperative level" );
 		assert( 0 );
 		closeKeyboard();
 		return;
@@ -187,7 +188,7 @@ void DirectInputKeyboard::openKeyboard()
 	if( FAILED( hr ) )
 	{
 
-		DEBUG_LOG(( "ERROR - openKeyboard: Unable to set keyboard buffer size property" ));
+		engine::debug::log_info( "ERROR - openKeyboard: Unable to set keyboard buffer size property" );
 		assert( 0 );
 		closeKeyboard();
 		return;
@@ -199,7 +200,7 @@ void DirectInputKeyboard::openKeyboard()
 	if( FAILED( hr ) )
 	{
 
-		DEBUG_LOG(( "ERROR - openKeyboard: Unable to acquire keyboard device" ));
+		engine::debug::log_info( "ERROR - openKeyboard: Unable to acquire keyboard device" );
 		// Note - This can happen in windowed mode, and we can re-acquire later.  So don't
 		// close the keyboard. jba.
 		// closeKeyboard();
@@ -207,7 +208,7 @@ void DirectInputKeyboard::openKeyboard()
 
 	}
 
-	DEBUG_LOG(( "OK - Keyboard initialized successfully." ));
+	engine::debug::log_info( "OK - Keyboard initialized successfully." );
 
 }
 
@@ -223,7 +224,7 @@ void DirectInputKeyboard::closeKeyboard()
 		m_pKeyboardDevice->Unacquire();
 		m_pKeyboardDevice->Release();
 		m_pKeyboardDevice = nullptr;
-		DEBUG_LOG(( "OK - Keyboard deviced closed" ));
+		engine::debug::log_info( "OK - Keyboard deviced closed" );
 
 	}
 	if( m_pDirectInput )
@@ -231,11 +232,11 @@ void DirectInputKeyboard::closeKeyboard()
 
 		m_pDirectInput->Release();
 		m_pDirectInput = nullptr;
-		DEBUG_LOG(( "OK - Keyboard direct input interface closed" ));
+		engine::debug::log_info( "OK - Keyboard direct input interface closed" );
 
 	}
 
-	DEBUG_LOG(( "OK - Keyboard shutdown complete" ));
+	engine::debug::log_info( "OK - Keyboard shutdown complete" );
 
 }
 

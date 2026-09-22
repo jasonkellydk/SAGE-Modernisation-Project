@@ -51,7 +51,8 @@
 //-----------------------------------------------------------------------------
 // USER INCLUDES //////////////////////////////////////////////////////////////
 //-----------------------------------------------------------------------------
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "GameClient/AnimateWindowManager.h"
 #include "GameClient/GameWindow.h"
@@ -190,7 +191,7 @@ void AnimateWindowManager::update()
 			wnd::AnimateWindow *animWin = *it;
 			if (!animWin)
 			{
-				DEBUG_CRASH(("There's No AnimateWindow in the AnimateWindow List"));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "There's No AnimateWindow in the AnimateWindow List");
 				return;
 			}
 			processAnim = getProcessAnimate( animWin->getAnimType() );
@@ -219,7 +220,7 @@ void AnimateWindowManager::update()
 		wnd::AnimateWindow *animWin = *it;
 		if (!animWin)
 		{
-			DEBUG_CRASH(("There's No AnimateWindow in the AnimateWindow List"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "There's No AnimateWindow in the AnimateWindow List");
 			return;
 		}
 		processAnim = getProcessAnimate( animWin->getAnimType() );
@@ -242,12 +243,12 @@ void AnimateWindowManager::registerGameWindow(GameWindow *win, AnimTypes animTyp
 {
 	if(!win)
 	{
-		DEBUG_CRASH(("Win was null as it was passed into registerGameWindow... not good indeed"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Win was null as it was passed into registerGameWindow... not good indeed");
 		return;
 	}
 	if(animType <= WIN_ANIMATION_NONE || animType >= WIN_ANIMATION_COUNT )
 	{
-		DEBUG_CRASH(("an Invalid WIN_ANIMATION type was passed into registerGameWindow... please fix me "));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "an Invalid WIN_ANIMATION type was passed into registerGameWindow... please fix me ");
 		return;
 	}
 
@@ -330,7 +331,7 @@ void AnimateWindowManager::reverseAnimateWindow()
 		wnd::AnimateWindow *animWin = *it;
 		if (!animWin)
 		{
-			DEBUG_CRASH(("There's No AnimateWindow in the AnimateWindow List"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "There's No AnimateWindow in the AnimateWindow List");
 			return;
 		}
 		if(animWin->getDelay() > maxDelay)
@@ -344,7 +345,7 @@ void AnimateWindowManager::reverseAnimateWindow()
 		wnd::AnimateWindow *animWin = *it;
 		if (!animWin)
 		{
-			DEBUG_CRASH(("There's No AnimateWindow in the AnimateWindow List"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "There's No AnimateWindow in the AnimateWindow List");
 			return;
 		}
 		// Run the window through the processAnim's init function.
@@ -365,7 +366,7 @@ void AnimateWindowManager::reverseAnimateWindow()
 		wnd::AnimateWindow *animWin = *it;
 		if (!animWin)
 		{
-			DEBUG_CRASH(("There's No AnimateWindow in the AnimateWindow List"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "There's No AnimateWindow in the AnimateWindow List");
 			return;
 		}
 		processAnim = getProcessAnimate( animWin->getAnimType() );
@@ -390,7 +391,7 @@ void AnimateWindowManager::resetToRestPosition()
 		wnd::AnimateWindow *animWin = *it;
 		if (!animWin)
 		{
-			DEBUG_CRASH(("There's No AnimateWindow in the AnimateWindow List"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "There's No AnimateWindow in the AnimateWindow List");
 			return;
 		}
 		ICoord2D restPos = animWin->getRestPos();
@@ -405,7 +406,7 @@ void AnimateWindowManager::resetToRestPosition()
 		wnd::AnimateWindow *animWin = *it;
 		if (!animWin)
 		{
-			DEBUG_CRASH(("There's No AnimateWindow in the AnimateWindow List"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "There's No AnimateWindow in the AnimateWindow List");
 			return;
 		}
 		ICoord2D restPos = animWin->getRestPos();

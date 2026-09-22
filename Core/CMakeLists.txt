@@ -15,12 +15,12 @@ target_sources(corei_libraries_include PRIVATE
     Libraries/Include/Lib/BaseType.h
     Libraries/Include/Lib/BaseTypeCore.h
     Libraries/Include/Lib/trig.h
-    Libraries/Include/rts/debug.h
-    Libraries/Include/rts/profile.h
 )
 target_link_libraries(corei_always INTERFACE
     core_config
-    core_profile_tracy
+    engine_debug
+    engine_profiling
+    engine_profiling
     core_utility
     corei_libraries_include
     resources

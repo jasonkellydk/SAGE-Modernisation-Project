@@ -38,7 +38,7 @@
 #include "Common/ThingFactory.h"
 #include "Common/ThingTemplate.h"
 #include "Common/RandomValue.h"
-#include "Common/PerfTimer.h"
+
 #include "Common/Xfer.h"
 #include "GameLogic/Object.h"
 #include "GameLogic/ScriptEngine.h"

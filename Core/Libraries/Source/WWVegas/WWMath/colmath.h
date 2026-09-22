@@ -54,7 +54,7 @@ const float COLLISION_EPSILON = 0.001f;
 /*
 ** #define COLMATH_STAT_TRACKING to enable stat tracking for the collision math functions
 */
-#ifdef WWDEBUG
+#ifdef RTS_DEBUG
 #define COLMATH_STAT_TRACKING
 #endif
 

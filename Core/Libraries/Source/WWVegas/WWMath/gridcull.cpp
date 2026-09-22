@@ -59,6 +59,7 @@
 #include "WWLib/iostruct.h"
 #include "colmath.h"
 #include "colmathinlines.h"
+import engine.debug;
 
 
 
@@ -422,9 +423,9 @@ void GridCullSystemClass::Re_Partition(const Vector3 & input_min,const Vector3 &
 	Vector3 world_dim = max - min;
 	MaxObjExtent = objdim;
 
-	WWASSERT(world_dim.X > 0.0f);
-	WWASSERT(world_dim.Y > 0.0f);
-	WWASSERT(world_dim.Z > 0.0f);
+	engine::debug::assert_condition((world_dim.X > 0.0f), "world_dim.X > 0.0f", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((world_dim.Y > 0.0f), "world_dim.Y > 0.0f", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((world_dim.Z > 0.0f), "world_dim.Z > 0.0f", __FILE__, __LINE__, "assertion failed");
 
 	/*
 	** how many cells should we use on each dimension?
@@ -557,8 +558,8 @@ void GridCullSystemClass::Collect_And_Unlink_All()
  *=============================================================================================*/
 void GridCullSystemClass::Update_Culling(CullableClass * obj)
 {
-	WWASSERT(obj);
-	WWASSERT(obj->Get_Culling_System() == this);
+	engine::debug::assert_condition((obj), "obj", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((obj->Get_Culling_System() == this), "obj->Get_Culling_System() == this", __FILE__, __LINE__, "assertion failed");
 
 	int address;
 	GridLinkClass * link = (GridLinkClass *)obj->Get_Cull_Link();
@@ -590,7 +591,7 @@ void GridCullSystemClass::Load(ChunkLoadClass & cload)
 	*/
 	uint32 version;
 	cload.Open_Chunk();
-	WWASSERT(cload.Cur_Chunk_ID() == GRID_CHUNK_VERSION);
+	engine::debug::assert_condition((cload.Cur_Chunk_ID() == GRID_CHUNK_VERSION), "cload.Cur_Chunk_ID() == GRID_CHUNK_VERSION", __FILE__, __LINE__, "assertion failed");
 	cload.Read(&version,sizeof(version));
 	cload.Close_Chunk();
 
@@ -600,7 +601,7 @@ void GridCullSystemClass::Load(ChunkLoadClass & cload)
 	IOGridParametersStruct params;
 	memset(&params,0,sizeof(params));
 	cload.Open_Chunk();
-	WWASSERT(cload.Cur_Chunk_ID() == GRID_CHUNK_PARAMETERS);
+	engine::debug::assert_condition((cload.Cur_Chunk_ID() == GRID_CHUNK_PARAMETERS), "cload.Cur_Chunk_ID() == GRID_CHUNK_PARAMETERS", __FILE__, __LINE__, "assertion failed");
 	cload.Read(&params,sizeof(params));
 	cload.Close_Chunk();
 
@@ -748,8 +749,8 @@ const GridCullSystemClass::StatsStruct & GridCullSystemClass::Get_Statistics()
  *=============================================================================================*/
 void GridCullSystemClass::Add_Object_Internal(CullableClass * obj)
 {
-	WWASSERT(obj);
-	WWASSERT(obj->Get_Culling_System() == nullptr);
+	engine::debug::assert_condition((obj), "obj", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((obj->Get_Culling_System() == nullptr), "obj->Get_Culling_System() == nullptr", __FILE__, __LINE__, "assertion failed");
 
 	GridLinkClass * link = new GridLinkClass(this);
 	obj->Set_Cull_Link(link);
@@ -774,8 +775,8 @@ void GridCullSystemClass::Add_Object_Internal(CullableClass * obj)
  *=============================================================================================*/
 void GridCullSystemClass::Remove_Object_Internal(CullableClass * obj)
 {
-	WWASSERT(obj);
-	WWASSERT(obj->Get_Culling_System() == this);
+	engine::debug::assert_condition((obj), "obj", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((obj->Get_Culling_System() == this), "obj->Get_Culling_System() == this", __FILE__, __LINE__, "assertion failed");
 	GridLinkClass * link = (GridLinkClass *)obj->Get_Cull_Link();
 
 	unlink_object(obj);
@@ -802,8 +803,8 @@ void GridCullSystemClass::Remove_Object_Internal(CullableClass * obj)
  *=============================================================================================*/
 void GridCullSystemClass::link_object(CullableClass * obj)
 {
-	WWASSERT(obj);
-	WWASSERT(obj->Get_Culling_System() == this);
+	engine::debug::assert_condition((obj), "obj", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((obj->Get_Culling_System() == this), "obj->Get_Culling_System() == this", __FILE__, __LINE__, "assertion failed");
 
 	int address;
 	map_point_to_address(obj->Get_Cull_Box().Center,address);
@@ -813,10 +814,10 @@ void GridCullSystemClass::link_object(CullableClass * obj)
 
 void GridCullSystemClass::link_object(CullableClass * obj,int address)
 {
-	WWASSERT(obj);
-	WWASSERT(obj->Get_Culling_System() == this);
+	engine::debug::assert_condition((obj), "obj", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((obj->Get_Culling_System() == this), "obj->Get_Culling_System() == this", __FILE__, __LINE__, "assertion failed");
 	GridLinkClass * link = (GridLinkClass *)obj->Get_Cull_Link();
-	WWASSERT(link != nullptr);
+	engine::debug::assert_condition((link != nullptr), "link != nullptr", __FILE__, __LINE__, "assertion failed");
 
 	/*
 	** if obj cannot be inserted into the grid, add it to the NoGridList
@@ -852,8 +853,8 @@ void GridCullSystemClass::link_object(CullableClass * obj,int address)
  *=============================================================================================*/
 void GridCullSystemClass::unlink_object(CullableClass * obj)
 {
-	WWASSERT(obj);
-	WWASSERT(obj->Get_Culling_System() == this);
+	engine::debug::assert_condition((obj), "obj", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((obj->Get_Culling_System() == this), "obj->Get_Culling_System() == this", __FILE__, __LINE__, "assertion failed");
 	GridLinkClass * link = (GridLinkClass *)obj->Get_Cull_Link();
 
 	if (link->GridAddress == UNGRIDDED_ADDRESS) {
@@ -878,8 +879,8 @@ void GridCullSystemClass::unlink_object(CullableClass * obj)
  *=============================================================================================*/
 void GridCullSystemClass::link_object_to_list(CullableClass ** head,CullableClass * obj)
 {
-	WWASSERT(obj);
-	WWASSERT(obj->Get_Culling_System() == this);
+	engine::debug::assert_condition((obj), "obj", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((obj->Get_Culling_System() == this), "obj->Get_Culling_System() == this", __FILE__, __LINE__, "assertion failed");
 	GridLinkClass * link = (GridLinkClass *)obj->Get_Cull_Link();
 
 	/*
@@ -890,7 +891,7 @@ void GridCullSystemClass::link_object_to_list(CullableClass ** head,CullableClas
 
 	if (link->Next != nullptr) {
 		GridLinkClass * next_link = (GridLinkClass *)link->Next->Get_Cull_Link();
-		WWASSERT(next_link != nullptr);
+		engine::debug::assert_condition((next_link != nullptr), "next_link != nullptr", __FILE__, __LINE__, "assertion failed");
 		next_link->Prev = obj;
 	}
 
@@ -912,21 +913,21 @@ void GridCullSystemClass::link_object_to_list(CullableClass ** head,CullableClas
  *=============================================================================================*/
 void GridCullSystemClass::unlink_object_from_list(CullableClass ** head,CullableClass * obj)
 {
-	WWASSERT(obj);
-	WWASSERT(obj->Get_Culling_System() == this);
+	engine::debug::assert_condition((obj), "obj", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((obj->Get_Culling_System() == this), "obj->Get_Culling_System() == this", __FILE__, __LINE__, "assertion failed");
 	GridLinkClass * link = (GridLinkClass *)obj->Get_Cull_Link();
 
 	/*
 	** check to see that the object is actually in this list
 	*/
-#ifdef WWDEBUG
+#ifdef RTS_DEBUG
 	CullableClass * tmp = *head;
 	bool found = false;
 	while (tmp && !found) {
 		if (tmp == obj) found = true;
 		tmp = ((GridLinkClass *)(tmp->Get_Cull_Link()))->Next;
 	}
-	WWASSERT(found);
+	engine::debug::assert_condition((found), "found", __FILE__, __LINE__, "assertion failed");
 #endif
 
 	/*

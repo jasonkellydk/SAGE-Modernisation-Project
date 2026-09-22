@@ -28,7 +28,8 @@
 //				 instances that we can assign to objects, drawables, and things to contain
 //				 data and code for specific events, or just to hold data
 ///////////////////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 #include "Common/Module.h"
@@ -108,13 +109,13 @@ ObjectModule::ObjectModule( Thing *thing, const ModuleData* moduleData ) : Modul
 {
 	if (!moduleData)
 	{
-		DEBUG_CRASH(("module data may not be null"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "module data may not be null");
 		throw INI_INVALID_DATA;
 	}
 
-	DEBUG_ASSERTCRASH( thing, ("Thing passed to ObjectModule is null!") );
+	engine::debug::invariant((thing), "thing", __FILE__, __LINE__, "Thing passed to ObjectModule is null!");
 	m_object = AsObject(thing);
-	DEBUG_ASSERTCRASH( m_object, ("Thing passed to ObjectModule is not an Object!") );
+	engine::debug::invariant((m_object), "m_object", __FILE__, __LINE__, "Thing passed to ObjectModule is not an Object!");
 
 }
 
@@ -171,13 +172,13 @@ DrawableModule::DrawableModule( Thing *thing, const ModuleData* moduleData ) : M
 {
 	if (!moduleData)
 	{
-		DEBUG_CRASH(("module data may not be null"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "module data may not be null");
 		throw INI_INVALID_DATA;
 	}
 
-	DEBUG_ASSERTCRASH( thing, ("Thing passed to DrawableModule is null!") );
+	engine::debug::invariant((thing), "thing", __FILE__, __LINE__, "Thing passed to DrawableModule is null!");
 	m_drawable = AsDrawable(thing);
-	DEBUG_ASSERTCRASH( m_drawable, ("Thing passed to DrawableModule is not a Drawable!") );
+	engine::debug::invariant((m_drawable), "m_drawable", __FILE__, __LINE__, "Thing passed to DrawableModule is not a Drawable!");
 
 }
 
@@ -254,7 +255,7 @@ void UpgradeMuxData::muxDataProcessUpgradeRemoval(Object* obj) const
 			const UpgradeTemplate* theTemplate = TheUpgradeCenter->findUpgrade( *it );
 			if( !theTemplate )
 			{
-				DEBUG_CRASH(("An upgrade module references '%s', which is not an Upgrade", it->str()));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "An upgrade module references '%s', which is not an Upgrade", it->str());
 				throw INI_INVALID_DATA;
 			}
 
@@ -296,7 +297,7 @@ void UpgradeMuxData::getUpgradeActivationMasks(UpgradeMaskType& activation, Upgr
 			const UpgradeTemplate* theTemplate = TheUpgradeCenter->findUpgrade( *it );
 			if( !theTemplate )
 			{
-				DEBUG_CRASH(("An upgrade module references '%s', which is not an Upgrade", it->str()));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "An upgrade module references '%s', which is not an Upgrade", it->str());
 				throw INI_INVALID_DATA;
 			}
 
@@ -310,7 +311,7 @@ void UpgradeMuxData::getUpgradeActivationMasks(UpgradeMaskType& activation, Upgr
 			const UpgradeTemplate* theTemplate = TheUpgradeCenter->findUpgrade( *it );
 			if( !theTemplate )
 			{
-				DEBUG_CRASH(("An upgrade module references '%s', which is not an Upgrade", it->str()));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "An upgrade module references '%s', which is not an Upgrade", it->str());
 				throw INI_INVALID_DATA;
 			}
 

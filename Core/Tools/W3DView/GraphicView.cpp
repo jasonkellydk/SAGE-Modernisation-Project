@@ -50,6 +50,7 @@ import Graphics.Frame.ToolFrame;
 #include "WWAudio/WWAudio.h"
 #include "WW3D2/MetalMap.h"
 #include "WWMath/matrix3.h"
+import engine.debug;
 
 #ifdef RTS_DEBUG
 #define new DEBUG_NEW
@@ -544,7 +545,7 @@ CGraphicView::RepaintView
 
         // Finish out the rendering process
         WW3D::End_Render();
-        if (!Graphics::End_Tool_Frame()) DEBUG_LOG(("Viewer frame submission failed.\n"));
+        if (!Graphics::End_Tool_Frame()) engine::debug::log_info("Viewer frame submission failed.\n");
 
 
 		//

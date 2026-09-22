@@ -26,7 +26,8 @@
 // Implementation of Data Chunk save/load system
 // Author: Michael S. Booth, October 2000
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "stdlib.h"
 #include "Compression.h"
@@ -63,33 +64,33 @@ Bool CachedFileInputStream::open(AsciiString path)
 
 	if (CompressionManager::isDataCompressed(m_buffer, m_size) == 0)
 	{
-		//DEBUG_LOG(("CachedFileInputStream::open() - file %s is uncompressed at %d bytes!", path.str(), m_size));
+		//engine::debug::log_info("CachedFileInputStream::open() - file %s is uncompressed at %d bytes!", path.str(), m_size);
 	}
 	else
 	{
 		Int uncompLen = CompressionManager::getUncompressedSize(m_buffer, m_size);
-		//DEBUG_LOG(("CachedFileInputStream::open() - file %s is compressed!  It should go from %d to %d", path.str(),
-		//	m_size, uncompLen));
+		//engine::debug::log_info("CachedFileInputStream::open() - file %s is compressed!  It should go from %d to %d", path.str(),
+		//	m_size, uncompLen);
 		char *uncompBuffer = NEW char[uncompLen];
 		Int actualLen = CompressionManager::decompressData(m_buffer, m_size, uncompBuffer, uncompLen);
 		if (actualLen == uncompLen)
 		{
-			//DEBUG_LOG(("Using uncompressed data"));
+			//engine::debug::log_info("Using uncompressed data");
 			delete[] m_buffer;
 			m_buffer = uncompBuffer;
 			m_size = uncompLen;
 		}
 		else
 		{
-			//DEBUG_LOG(("Decompression failed - using compressed data"));
+			//engine::debug::log_info("Decompression failed - using compressed data");
 			// decompression failed.  Maybe we invalidly thought it was compressed?
 			delete[] uncompBuffer;
 		}
 	}
 	//if (m_size >= 4)
 	//{
-	//	DEBUG_LOG(("File starts as '%c%c%c%c'", m_buffer[0], m_buffer[1],
-	//		m_buffer[2], m_buffer[3]));
+	//	engine::debug::log_info("File starts as '%c%c%c%c'", m_buffer[0], m_buffer[1],
+	//		m_buffer[2], m_buffer[3]);
 	//}
 
 	if (file)
@@ -287,7 +288,7 @@ void DataChunkOutput::openDataChunk( const char *name, DataChunkVersionType ver 
 	// remember this m_tmp_file position so we can write the real data size later
 	c->filepos = ::ftell(m_tmp_file);
 #ifdef VERBOSE
-	DEBUG_LOG(("Writing chunk %s at %d (%x)", name, ::ftell(m_tmp_file), ::ftell(m_tmp_file)));
+	engine::debug::log_info("Writing chunk %s at %d (%x)", name, ::ftell(m_tmp_file), ::ftell(m_tmp_file));
 #endif
 	// store a placeholder for the data size
 	Int dummy = 0xffff;
@@ -320,7 +321,7 @@ void DataChunkOutput::closeDataChunk()
 	// pop the chunk off the stack
 	OutputChunk *c = m_chunkStack;
 #ifdef VERBOSE
-	DEBUG_LOG(("Closing chunk %s at %d (%x)", m_contents.getName(c->id).str(), here, here));
+	engine::debug::log_info("Closing chunk %s at %d (%x)", m_contents.getName(c->id).str(), here, here);
 #endif
 	m_chunkStack = m_chunkStack->next;
 	deleteInstance(c);
@@ -403,7 +404,7 @@ void DataChunkOutput::writeDict( const Dict& d )
 				writeUnicodeString(d.getNthUnicodeString(i));
 				break;
 			default:
-				DEBUG_CRASH(("impossible"));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "impossible");
 				break;
 		}
 	}
@@ -453,7 +454,7 @@ UnsignedInt DataChunkTableOfContents::getID( const AsciiString& name )
 	if (m)
 		return m->id;
 
-	DEBUG_CRASH(("name not found in DataChunkTableOfContents::getName for name %s",name.str()));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "name not found in DataChunkTableOfContents::getName for name %s",name.str());
 	return 0;
 }
 
@@ -466,7 +467,7 @@ AsciiString DataChunkTableOfContents::getName( UnsignedInt id )
 		if (m->id == id)
 			return m->name;
 
-	DEBUG_CRASH(("name not found in DataChunkTableOfContents::getName for id %d",id));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "name not found in DataChunkTableOfContents::getName for id %d",id);
 	return AsciiString::TheEmptyString;
 }
 
@@ -639,7 +640,7 @@ Bool DataChunkInput::parse( void *userData )
 	{
 		if (m_chunkStack) { // If we are parsing chunks in a chunk, check current length.
 			if (m_chunkStack->dataLeft < CHUNK_HEADER_BYTES) {
-				DEBUG_ASSERTCRASH( m_chunkStack->dataLeft==0, ("Unexpected extra data in chunk."));
+				engine::debug::invariant((m_chunkStack->dataLeft==0), "m_chunkStack->dataLeft==0", __FILE__, __LINE__, "Unexpected extra data in chunk.");
 				break;
 			}
 		}
@@ -717,7 +718,7 @@ AsciiString DataChunkInput::openDataChunk(DataChunkVersionType *ver )
 	c->id = 0;
 	c->version = 0;
 	c->dataSize = 0;
-	//DEBUG_LOG(("Opening data chunk at offset %d (%x)", m_file->tell(), m_file->tell()));
+	//engine::debug::log_info("Opening data chunk at offset %d (%x)", m_file->tell(), m_file->tell());
 	// read the chunk ID
 	m_file->read( (char *)&c->id, sizeof(UnsignedInt) );
 	decrementDataLeft( sizeof(UnsignedInt) );
@@ -774,7 +775,7 @@ AsciiString DataChunkInput::getChunkLabel()
 	if (m_chunkStack == nullptr)
 	{
 		// TODO: Throw exception
-		DEBUG_CRASH(("Bad."));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Bad.");
 		return AsciiString::TheEmptyString;
 	}
 
@@ -787,7 +788,7 @@ DataChunkVersionType DataChunkInput::getChunkVersion()
 	if (m_chunkStack == nullptr)
 	{
 		// TODO: Throw exception
-		DEBUG_CRASH(("Bad."));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Bad.");
 		return 0;
 	}
 
@@ -800,7 +801,7 @@ UnsignedInt DataChunkInput::getChunkDataSize()
 	if (m_chunkStack == nullptr)
 	{
 		// TODO: Throw exception
-		DEBUG_CRASH(("Bad."));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Bad.");
 		return 0;
 	}
 
@@ -814,7 +815,7 @@ UnsignedInt DataChunkInput::getChunkDataSizeLeft()
 	if (m_chunkStack == nullptr)
 	{
 		// TODO: Throw exception
-		DEBUG_CRASH(("Bad."));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Bad.");
 		return 0;
 	}
 
@@ -851,7 +852,7 @@ void DataChunkInput::decrementDataLeft( Int size )
 Real DataChunkInput::readReal()
 {
 	Real r;
-	DEBUG_ASSERTCRASH(m_chunkStack->dataLeft>=sizeof(Real), ("Read past end of chunk."));
+	engine::debug::invariant((m_chunkStack->dataLeft>=sizeof(Real)), "m_chunkStack->dataLeft>=sizeof(Real)", __FILE__, __LINE__, "Read past end of chunk.");
 	m_file->read( (char *)&r, sizeof(Real) );
 	decrementDataLeft( sizeof(Real) );
 	return r;
@@ -860,7 +861,7 @@ Real DataChunkInput::readReal()
 Int DataChunkInput::readInt()
 {
 	Int i;
-	DEBUG_ASSERTCRASH(m_chunkStack->dataLeft>=sizeof(Int), ("Read past end of chunk."));
+	engine::debug::invariant((m_chunkStack->dataLeft>=sizeof(Int)), "m_chunkStack->dataLeft>=sizeof(Int)", __FILE__, __LINE__, "Read past end of chunk.");
 	m_file->read( (char *)&i, sizeof(Int) );
 	decrementDataLeft( sizeof(Int) );
 	return i;
@@ -869,7 +870,7 @@ Int DataChunkInput::readInt()
 Byte DataChunkInput::readByte()
 {
 	Byte b;
-	DEBUG_ASSERTCRASH(m_chunkStack->dataLeft>=sizeof(Byte), ("Read past end of chunk."));
+	engine::debug::invariant((m_chunkStack->dataLeft>=sizeof(Byte)), "m_chunkStack->dataLeft>=sizeof(Byte)", __FILE__, __LINE__, "Read past end of chunk.");
 	m_file->read( (char *)&b, sizeof(Byte) );
 	decrementDataLeft( sizeof(Byte) );
 	return b;
@@ -877,7 +878,7 @@ Byte DataChunkInput::readByte()
 
 void DataChunkInput::readArrayOfBytes(char *ptr, Int len)
 {
-	DEBUG_ASSERTCRASH(m_chunkStack->dataLeft>=len, ("Read past end of chunk."));
+	engine::debug::invariant((m_chunkStack->dataLeft>=len), "m_chunkStack->dataLeft>=len", __FILE__, __LINE__, "Read past end of chunk.");
 	m_file->read( ptr, len );
 	decrementDataLeft( len );
 }
@@ -887,7 +888,7 @@ NameKeyType DataChunkInput::readNameKey()
 		Int keyAndType = readInt();
 #ifdef DEBUG_CRASHING
 		Dict::DataType t = (Dict::DataType)(keyAndType & 0xff);
-		DEBUG_ASSERTCRASH(t==Dict::DICT_ASCIISTRING,("Invalid key data."));
+		engine::debug::invariant((t==Dict::DICT_ASCIISTRING), "t==Dict::DICT_ASCIISTRING", __FILE__, __LINE__, "Invalid key data.");
 #endif
 		keyAndType >>= 8;
 
@@ -899,10 +900,10 @@ NameKeyType DataChunkInput::readNameKey()
 Dict DataChunkInput::readDict()
 {
 	UnsignedShort len;
-	DEBUG_ASSERTCRASH(m_chunkStack->dataLeft>=sizeof(UnsignedShort), ("Read past end of chunk."));
+	engine::debug::invariant((m_chunkStack->dataLeft>=sizeof(UnsignedShort)), "m_chunkStack->dataLeft>=sizeof(UnsignedShort)", __FILE__, __LINE__, "Read past end of chunk.");
 	m_file->read( &len, sizeof(UnsignedShort) );
 	decrementDataLeft( sizeof(UnsignedShort) );
-	DEBUG_ASSERTCRASH(m_chunkStack->dataLeft>=len, ("Read past end of chunk."));
+	engine::debug::invariant((m_chunkStack->dataLeft>=len), "m_chunkStack->dataLeft>=len", __FILE__, __LINE__, "Read past end of chunk.");
 
 	Dict d(len);
 
@@ -944,10 +945,10 @@ Dict DataChunkInput::readDict()
 AsciiString DataChunkInput::readAsciiString()
 {
 	UnsignedShort len;
-	DEBUG_ASSERTCRASH(m_chunkStack->dataLeft>=sizeof(UnsignedShort), ("Read past end of chunk."));
+	engine::debug::invariant((m_chunkStack->dataLeft>=sizeof(UnsignedShort)), "m_chunkStack->dataLeft>=sizeof(UnsignedShort)", __FILE__, __LINE__, "Read past end of chunk.");
 	m_file->read( &len, sizeof(UnsignedShort) );
 	decrementDataLeft( sizeof(UnsignedShort) );
-	DEBUG_ASSERTCRASH(m_chunkStack->dataLeft>=len, ("Read past end of chunk."));
+	engine::debug::invariant((m_chunkStack->dataLeft>=len), "m_chunkStack->dataLeft>=len", __FILE__, __LINE__, "Read past end of chunk.");
 	AsciiString theString;
 	if (len>0) {
 		char *str = theString.getBufferForRead(len);
@@ -963,10 +964,10 @@ AsciiString DataChunkInput::readAsciiString()
 UnicodeString DataChunkInput::readUnicodeString()
 {
 	UnsignedShort len;
-	DEBUG_ASSERTCRASH(m_chunkStack->dataLeft>=sizeof(UnsignedShort), ("Read past end of chunk."));
+	engine::debug::invariant((m_chunkStack->dataLeft>=sizeof(UnsignedShort)), "m_chunkStack->dataLeft>=sizeof(UnsignedShort)", __FILE__, __LINE__, "Read past end of chunk.");
 	m_file->read( &len, sizeof(UnsignedShort) );
 	decrementDataLeft( sizeof(UnsignedShort) );
-	DEBUG_ASSERTCRASH(m_chunkStack->dataLeft>=len, ("Read past end of chunk."));
+	engine::debug::invariant((m_chunkStack->dataLeft>=len), "m_chunkStack->dataLeft>=len", __FILE__, __LINE__, "Read past end of chunk.");
 	UnicodeString theString;
 	if (len>0) {
 		WideChar *str = theString.getBufferForRead(len);

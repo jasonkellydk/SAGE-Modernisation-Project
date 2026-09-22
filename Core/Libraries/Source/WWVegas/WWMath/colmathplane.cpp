@@ -47,7 +47,8 @@
 #include "sphere.h"
 #include "aabox.h"
 #include "obbox.h"
-#include "WWDebug/wwdebug.h"
+
+import engine.debug;
 
 
 
@@ -130,7 +131,7 @@ CollisionMath::OverlapType
 CollisionMath::Overlap_Test(const AAPlaneClass & /*plane*/,const OBBoxClass & /*box*/)
 {
 // TODO
-	WWASSERT(0);
+	engine::debug::assert_condition((0), "0", __FILE__, __LINE__, "assertion failed");
 	return POS;
 }
 

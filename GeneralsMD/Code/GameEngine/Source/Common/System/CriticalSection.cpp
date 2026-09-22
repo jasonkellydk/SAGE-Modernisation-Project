@@ -33,7 +33,4 @@ CriticalSection *TheDmaCriticalSection = nullptr;
 CriticalSection *TheMemoryPoolCriticalSection = nullptr;
 CriticalSection *TheDebugLogCriticalSection = nullptr;
 
-#ifdef PERF_TIMERS
-PerfGather TheCritSecPerfGather("CritSec");
-#endif
 

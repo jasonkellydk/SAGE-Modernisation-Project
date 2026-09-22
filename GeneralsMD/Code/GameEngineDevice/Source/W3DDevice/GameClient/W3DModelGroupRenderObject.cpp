@@ -56,8 +56,9 @@
 #include "W3DDevice/GameClient/W3DModelGroupRenderObject.h"
 #include "W3DDevice/GameClient/W3DCastQuery.h"
 #include "W3DDevice/GameClient/W3DIntersectionQuery.h"
-#include "WWDebug/wwdebug.h"
+
 #include <stdlib.h>
+import engine.debug;
 
 
 /***********************************************************************************************
@@ -148,7 +149,7 @@ void W3DModelGroupRenderObject::Restart()
 {
 	for (int ni = 0; ni < Get_Num_Sub_Objects(); ni++) {
 		W3DRenderObject * robj = Get_Sub_Object(ni);
-		WWASSERT(robj);
+		engine::debug::assert_condition((robj), "robj", __FILE__, __LINE__, "assertion failed");
 		robj->Restart();
 		robj->Release_Ref();
 	}
@@ -234,7 +235,7 @@ int W3DModelGroupRenderObject::Get_Num_Polys() const
 	int count = 0;
 	for (int ni = 0; ni < Get_Num_Sub_Objects(); ni++) {
 		W3DRenderObject * robj = Get_Sub_Object(ni);
-		WWASSERT(robj);
+		engine::debug::assert_condition((robj), "robj", __FILE__, __LINE__, "assertion failed");
 		count += robj->Get_Num_Polys();
 		robj->Release_Ref();
 	}
@@ -259,7 +260,7 @@ void W3DModelGroupRenderObject::Notify_Added(W3DScene * scene)
 	W3DRenderObject::Notify_Added(scene);
 	for (int ni = 0; ni < Get_Num_Sub_Objects(); ni++) {
 		W3DRenderObject * robj = Get_Sub_Object(ni);
-		WWASSERT(robj);
+		engine::debug::assert_condition((robj), "robj", __FILE__, __LINE__, "assertion failed");
 		robj->Notify_Added(scene);
 		robj->Release_Ref();
 	}
@@ -282,7 +283,7 @@ void W3DModelGroupRenderObject::Notify_Removed(W3DScene * scene)
 {
 	for (int ni = 0; ni < Get_Num_Sub_Objects(); ni++) {
 		W3DRenderObject * robj = Get_Sub_Object(ni);
-		WWASSERT(robj);
+		engine::debug::assert_condition((robj), "robj", __FILE__, __LINE__, "assertion failed");
 		robj->Notify_Removed(scene);
 		robj->Release_Ref();
 	}
@@ -307,7 +308,7 @@ bool W3DModelGroupRenderObject::Cast_Ray(W3DRayCastQuery & raytest)
 	bool res = false;
 	for (int i=0; i<Get_Num_Sub_Objects(); i++) {
 		W3DRenderObject * robj = Get_Sub_Object(i);
-		WWASSERT(robj);
+		engine::debug::assert_condition((robj), "robj", __FILE__, __LINE__, "assertion failed");
 		res |= robj->Cast_Ray(raytest);
 		robj->Release_Ref();
 	}
@@ -332,7 +333,7 @@ bool W3DModelGroupRenderObject::Cast_AABox(W3DBoxCastQuery & boxtest)
 	bool res = false;
 	for (int i=0; i<Get_Num_Sub_Objects(); i++) {
 		W3DRenderObject * robj = Get_Sub_Object(i);
-		WWASSERT(robj);
+		engine::debug::assert_condition((robj), "robj", __FILE__, __LINE__, "assertion failed");
 		res |= robj->Cast_AABox(boxtest);
 		robj->Release_Ref();
 	}
@@ -357,7 +358,7 @@ bool W3DModelGroupRenderObject::Cast_OBBox(W3DOrientedBoxCastQuery & boxtest)
 	bool res = false;
 	for (int i=0; i<Get_Num_Sub_Objects(); i++) {
 		W3DRenderObject * robj = Get_Sub_Object(i);
-		WWASSERT(robj);
+		engine::debug::assert_condition((robj), "robj", __FILE__, __LINE__, "assertion failed");
 		res |= robj->Cast_OBBox(boxtest);
 		robj->Release_Ref();
 	}
@@ -382,7 +383,7 @@ bool W3DModelGroupRenderObject::Intersect_AABox(W3DBoxIntersectionQuery & boxtes
 	bool res = false;
 	for (int i=0; i<Get_Num_Sub_Objects(); i++) {
 		W3DRenderObject * robj = Get_Sub_Object(i);
-		WWASSERT(robj);
+		engine::debug::assert_condition((robj), "robj", __FILE__, __LINE__, "assertion failed");
 		res |= robj->Intersect_AABox(boxtest);
 		robj->Release_Ref();
 	}
@@ -407,7 +408,7 @@ bool W3DModelGroupRenderObject::Intersect_OBBox(W3DOrientedBoxIntersectionQuery 
 	bool res = false;
 	for (int i=0; i<Get_Num_Sub_Objects(); i++) {
 		W3DRenderObject * robj = Get_Sub_Object(i);
-		WWASSERT(robj);
+		engine::debug::assert_condition((robj), "robj", __FILE__, __LINE__, "assertion failed");
 		res |= robj->Intersect_OBBox(boxtest);
 		robj->Release_Ref();
 	}
@@ -447,7 +448,7 @@ void W3DModelGroupRenderObject::Update_Obj_Space_Bounding_Volumes()
 
 	// loop through all sub-objects, combining their object-space bounding spheres and boxes.
 	robj = Get_Sub_Object(0);
-	WWASSERT(robj);
+	engine::debug::assert_condition((robj), "robj", __FILE__, __LINE__, "assertion failed");
 	robj->Get_Obj_Space_Bounding_Sphere(ObjSphere);
 	robj->Get_Obj_Space_Bounding_Box(obj_aabox);
 	robj->Release_Ref();
@@ -456,7 +457,7 @@ void W3DModelGroupRenderObject::Update_Obj_Space_Bounding_Volumes()
 	for (i=1; i<Get_Num_Sub_Objects(); i++) {
 
 		robj = Get_Sub_Object(i);
-		WWASSERT(robj);
+		engine::debug::assert_condition((robj), "robj", __FILE__, __LINE__, "assertion failed");
 
 		robj->Get_Obj_Space_Bounding_Sphere(sphere);
 		robj->Get_Obj_Space_Bounding_Box(obj_aabox);
@@ -494,7 +495,7 @@ void W3DModelGroupRenderObject::Set_User_Data(void *value, bool recursive)
 	if (recursive) {
 		for (int i=0; i<Get_Num_Sub_Objects(); i++) {
 			W3DRenderObject * robj = Get_Sub_Object(i);
-			WWASSERT(robj);
+			engine::debug::assert_condition((robj), "robj", __FILE__, __LINE__, "assertion failed");
 			robj->Set_User_Data(value,recursive);
 			robj->Release_Ref();
 		}

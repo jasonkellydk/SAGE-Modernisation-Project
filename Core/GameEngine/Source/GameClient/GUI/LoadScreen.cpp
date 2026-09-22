@@ -47,7 +47,8 @@
 //-----------------------------------------------------------------------------
 // SYSTEM INCLUDES ////////////////////////////////////////////////////////////
 //-----------------------------------------------------------------------------
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include <algorithm>
 #include <cstdint>
@@ -378,22 +379,22 @@ void SinglePlayerLoadScreen::init( GameInfo *game )
 
 	// create the layout of the load screen
 	m_loadScreen = TheWindowManager->winCreateFromScript( "Menus/SinglePlayerLoadScreen.wnd" );
-	DEBUG_ASSERTCRASH(m_loadScreen, ("Can't initialize the single player loadscreen"));
+	engine::debug::invariant((m_loadScreen), "m_loadScreen", __FILE__, __LINE__, "Can't initialize the single player loadscreen");
 	m_loadScreen->winHide(FALSE);
 	m_loadScreen->winBringToTop();
 //	Mission *mission = TheCampaignManager->getCurrentMission();
 	// Store the pointer to the progress bar on the loadscreen
 	m_progressBar = TheWindowManager->winGetWindowFromId( m_loadScreen,TheNameKeyGenerator->nameToKey( "SinglePlayerLoadScreen.wnd:ProgressLoad" ));
-	DEBUG_ASSERTCRASH(m_progressBar, ("Can't initialize the progressbar for the single player loadscreen"));
+	engine::debug::invariant((m_progressBar), "m_progressBar", __FILE__, __LINE__, "Can't initialize the progressbar for the single player loadscreen");
 	GadgetProgressBarSetProgress(m_progressBar, 0 );
 
 	m_percent = TheWindowManager->winGetWindowFromId( m_loadScreen,TheNameKeyGenerator->nameToKey( "SinglePlayerLoadScreen.wnd:Percent" ));
-	DEBUG_ASSERTCRASH(m_percent, ("Can't initialize the m_percent for the single player loadscreen"));
+	engine::debug::invariant((m_percent), "m_percent", __FILE__, __LINE__, "Can't initialize the m_percent for the single player loadscreen");
 	GadgetStaticTextSetText(m_percent,L"0%");
 	m_percent->winHide(TRUE);
 
 	m_objectiveWin = TheWindowManager->winGetWindowFromId( m_loadScreen,TheNameKeyGenerator->nameToKey( "SinglePlayerLoadScreen.wnd:ObjectivesWin" ));
-	DEBUG_ASSERTCRASH(m_objectiveWin, ("Can't initialize the m_objectiveWin for the single player loadscreen"));
+	engine::debug::invariant((m_objectiveWin), "m_objectiveWin", __FILE__, __LINE__, "Can't initialize the m_objectiveWin for the single player loadscreen");
 	m_objectiveWin->winHide(TRUE);
 
 
@@ -404,7 +405,7 @@ void SinglePlayerLoadScreen::init( GameInfo *game )
 	{
 		lineName.format("SinglePlayerLoadScreen.wnd:StaticTextLine%d",i);
 		m_objectiveLines[i] = TheWindowManager->winGetWindowFromId( m_loadScreen,TheNameKeyGenerator->nameToKey( lineName ));
-		DEBUG_ASSERTCRASH(m_objectiveLines[i], ("Can't initialize the m_objectiveLines[%d] for the single player loadscreen", i));
+		engine::debug::invariant((m_objectiveLines[i]), "m_objectiveLines[i]", __FILE__, __LINE__, "Can't initialize the m_objectiveLines[%d] for the single player loadscreen", i);
 		GadgetStaticTextSetText(m_objectiveLines[i],UnicodeString::TheEmptyString);
 
 		// translate the objective lines
@@ -416,12 +417,12 @@ void SinglePlayerLoadScreen::init( GameInfo *game )
 	{
 		lineName.format("SinglePlayerLoadScreen.wnd:StaticTextCameoText%d",i);
 		m_unitDesc[i] = TheWindowManager->winGetWindowFromId( m_loadScreen,TheNameKeyGenerator->nameToKey( lineName ));
-		DEBUG_ASSERTCRASH(m_unitDesc[i], ("Can't initialize the m_objectiveLines[%d] for the single player loadscreen", i));
+		engine::debug::invariant((m_unitDesc[i]), "m_unitDesc[i]", __FILE__, __LINE__, "Can't initialize the m_objectiveLines[%d] for the single player loadscreen", i);
 		GadgetStaticTextSetText(m_unitDesc[i],TheGameText->fetch(mission->m_unitNames[i]));
 		m_unitDesc[i]->winHide(TRUE);
 	}
 	m_location = TheWindowManager->winGetWindowFromId( m_loadScreen,TheNameKeyGenerator->nameToKey( "SinglePlayerLoadScreen.wnd:StaticTextCameoText3" ));
-	DEBUG_ASSERTCRASH(m_location, ("Can't initialize the m_objectiveWin for the single player loadscreen"));
+	engine::debug::invariant((m_location), "m_location", __FILE__, __LINE__, "Can't initialize the m_objectiveWin for the single player loadscreen");
 	m_location->winHide(TRUE);
 	GadgetStaticTextSetText(m_location, TheGameText->fetch(mission->m_locationNameLabel));
 
@@ -433,34 +434,34 @@ void SinglePlayerLoadScreen::init( GameInfo *game )
 	m_finishedObjectiveText = FALSE;
 /*
 	m_cameoWindow1 = TheWindowManager->winGetWindowFromId( m_loadScreen,TheNameKeyGenerator->nameToKey( "SinglePlayerLoadScreen.wnd:WindowCameo1" ));
-	DEBUG_ASSERTCRASH(m_cameoWindow1, ("Can't initialize the m_cameoWindow1 for the single player loadscreen"));
+	engine::debug::invariant((m_cameoWindow1), "m_cameoWindow1", __FILE__, __LINE__, "Can't initialize the m_cameoWindow1 for the single player loadscreen");
 	m_cameoWindow1->winHide(TRUE);
 	m_cameoWindow1->winEnable(FALSE);
 	m_cameoWindow1->winSetEnabledImage(0, mission->m_cameoImage[0]);
 	m_cameoWindow1->winSetDisabledImage(0, mission->m_cameoDisabledImage[0]);
 
 	m_cameoWindow2 = TheWindowManager->winGetWindowFromId( m_loadScreen,TheNameKeyGenerator->nameToKey( "SinglePlayerLoadScreen.wnd:WindowCameo2" ));
-	DEBUG_ASSERTCRASH(m_cameoWindow2, ("Can't initialize the m_cameoWindow2 for the single player loadscreen"));
+	engine::debug::invariant((m_cameoWindow2), "m_cameoWindow2", __FILE__, __LINE__, "Can't initialize the m_cameoWindow2 for the single player loadscreen");
 	m_cameoWindow2->winHide(TRUE);
 	m_cameoWindow2->winEnable(FALSE);
 	m_cameoWindow2->winSetEnabledImage(0, mission->m_cameoImage[1]);
 	m_cameoWindow2->winSetDisabledImage(0, mission->m_cameoDisabledImage[1]);
 
 	m_cameoWindow3 = TheWindowManager->winGetWindowFromId( m_loadScreen,TheNameKeyGenerator->nameToKey( "SinglePlayerLoadScreen.wnd:WindowCameo3" ));
-	DEBUG_ASSERTCRASH(m_cameoWindow3, ("Can't initialize the m_cameoWindow3 for the single player loadscreen"));
+	engine::debug::invariant((m_cameoWindow3), "m_cameoWindow3", __FILE__, __LINE__, "Can't initialize the m_cameoWindow3 for the single player loadscreen");
 	m_cameoWindow3->winHide(TRUE);
 	m_cameoWindow3->winEnable(FALSE);
 	m_cameoWindow3->winSetEnabledImage(0, mission->m_cameoImage[2]);
 	m_cameoWindow3->winSetDisabledImage(0, mission->m_cameoDisabledImage[2]);
 
 	m_headMovie = TheWindowManager->winGetWindowFromId( m_loadScreen,TheNameKeyGenerator->nameToKey( "SinglePlayerLoadScreen.wnd:WindowHead" ));
-	DEBUG_ASSERTCRASH(m_headMovie, ("Can't initialize the m_headMovie for the single player loadscreen"));
+	engine::debug::invariant((m_headMovie), "m_headMovie", __FILE__, __LINE__, "Can't initialize the m_headMovie for the single player loadscreen");
 	m_headMovie->winHide(TRUE);
 	m_cameoFrame = TheWindowManager->winGetWindowFromId( m_loadScreen,TheNameKeyGenerator->nameToKey( "SinglePlayerLoadScreen.wnd:WindowHiliteCameo" ));
-	DEBUG_ASSERTCRASH(m_cameoFrame, ("Can't initialize the m_cameoFrame for the single player loadscreen"));
+	engine::debug::invariant((m_cameoFrame), "m_cameoFrame", __FILE__, __LINE__, "Can't initialize the m_cameoFrame for the single player loadscreen");
 	m_cameoFrame->winHide(TRUE);
 	m_cameoText = TheWindowManager->winGetWindowFromId( m_loadScreen,TheNameKeyGenerator->nameToKey( "SinglePlayerLoadScreen.wnd:StaticTextCameoText" ));
-	DEBUG_ASSERTCRASH(m_cameoText, ("Can't initialize the m_cameoText for the single player loadscreen"));
+	engine::debug::invariant((m_cameoText), "m_cameoText", __FILE__, __LINE__, "Can't initialize the m_cameoText for the single player loadscreen");
 
 */
 	m_ambientLoop.setEventName("LoadScreenAmbient");
@@ -620,7 +621,7 @@ ChallengeLoadScreen::~ChallengeLoadScreen()
 // returns the updated position of the readout
 Int updateTeletypeText( Int num_chars, GameWindow* window, UnicodeString full_text, Int current_text_pos )
 {
-	DEBUG_ASSERTCRASH(window, ("No window for teletype text update"));
+	engine::debug::invariant((window), "window", __FILE__, __LINE__, "No window for teletype text update");
 	UnicodeString currentText = GadgetStaticTextGetText(window);
 	WideChar wChar;
 	for (Int i = 0; i < num_chars; i++)
@@ -818,18 +819,18 @@ void ChallengeLoadScreen::init( GameInfo *game )
 	const GeneralPersona* generalPlayer = TheChallengeGenerals->getPlayerGeneralByCampaignName( campaign->m_name );
 
 	// the opponent general is tied to the mission
-	DEBUG_ASSERTCRASH(mission->m_generalName.isNotEmpty(), ("No GeneralName associated with this mission, check Campaign.ini"));
+	engine::debug::invariant((mission->m_generalName.isNotEmpty()), "mission->m_generalName.isNotEmpty()", __FILE__, __LINE__, "No GeneralName associated with this mission, check Campaign.ini");
 	const GeneralPersona* generalOpponent = TheChallengeGenerals->getGeneralByGeneralName( mission->m_generalName );
 
 	// create the layout of the load screen
 	m_loadScreen = TheWindowManager->winCreateFromScript( "Menus/ChallengeLoadScreen.wnd" );
-	DEBUG_ASSERTCRASH(m_loadScreen, ("Can't initialize the single player loadscreen"));
+	engine::debug::invariant((m_loadScreen), "m_loadScreen", __FILE__, __LINE__, "Can't initialize the single player loadscreen");
 	m_loadScreen->winHide(FALSE);
 	m_loadScreen->winBringToTop();
 
 	// Store the pointer to the progress bar on the loadscreen
 	m_progressBar = TheWindowManager->winGetWindowFromId( m_loadScreen,TheNameKeyGenerator->nameToKey( "ChallengeLoadScreen.wnd:ProgressLoad" ));
-	DEBUG_ASSERTCRASH(m_progressBar, ("Can't initialize the progressbar for the single player loadscreen"));
+	engine::debug::invariant((m_progressBar), "m_progressBar", __FILE__, __LINE__, "Can't initialize the progressbar for the single player loadscreen");
 	GadgetProgressBarSetProgress(m_progressBar, 0 );
 
 	m_ambientLoop.setEventName("LoadScreenAmbient");
@@ -991,13 +992,13 @@ void ShellGameLoadScreen::init( GameInfo *game )
 
 	// create the layout of the load screen
 	m_loadScreen = TheWindowManager->winCreateFromScript( "Menus/ShellGameLoadScreen.wnd" );
-	DEBUG_ASSERTCRASH(m_loadScreen, ("Can't initialize the ShellGame loadscreen"));
+	engine::debug::invariant((m_loadScreen), "m_loadScreen", __FILE__, __LINE__, "Can't initialize the ShellGame loadscreen");
 	m_loadScreen->winHide(FALSE);
 	m_loadScreen->winBringToTop();
 
 	// Store the pointer to the progress bar on the loadscreen
 	m_progressBar = TheWindowManager->winGetWindowFromId( m_loadScreen,TheNameKeyGenerator->nameToKey( "ShellGameLoadScreen.wnd:ProgressLoad" ));
-	DEBUG_ASSERTCRASH(m_progressBar, ("Can't initialize the progressbar for the single player loadscreen"));
+	engine::debug::invariant((m_progressBar), "m_progressBar", __FILE__, __LINE__, "Can't initialize the progressbar for the single player loadscreen");
 	GadgetProgressBarSetProgress(m_progressBar, 0 );
 	m_progressBar->winHide(TRUE);
 
@@ -1063,7 +1064,7 @@ void MultiPlayerLoadScreen::init( GameInfo *game )
 {
 	// create the layout of the load screen
 	m_loadScreen = TheWindowManager->winCreateFromScript( "Menus/MultiplayerLoadScreen.wnd" );
-	DEBUG_ASSERTCRASH(m_loadScreen, ("Can't initialize the Multiplayer loadscreen"));
+	engine::debug::invariant((m_loadScreen), "m_loadScreen", __FILE__, __LINE__, "Can't initialize the Multiplayer loadscreen");
 	m_loadScreen->winHide(FALSE);
 	m_loadScreen->winBringToTop();
 	m_mapPreview = TheWindowManager->winGetWindowFromId( m_loadScreen,TheNameKeyGenerator->nameToKey( "MultiplayerLoadScreen.wnd:WinMapPreview"));
@@ -1099,7 +1100,7 @@ void MultiPlayerLoadScreen::init( GameInfo *game )
 		else if (pt->getName() == "FactionChina")
 			portrait = TheMappedImageCollection->findImageByName("SNFactionLogoLg_China");
 		else
-			DEBUG_CRASH(("Unexpected player template"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unexpected player template");
 
 		localName = pt->getDisplayName();
 	}
@@ -1124,8 +1125,8 @@ void MultiPlayerLoadScreen::init( GameInfo *game )
 
 	}
 
-	//DEBUG_ASSERTCRASH(TheNetwork, ("Where the Heck is the Network!!!!"));
-	//DEBUG_LOG(("NumPlayers %d", TheNetwork->getNumPlayers()));
+	//engine::debug::invariant((TheNetwork), "TheNetwork", __FILE__, __LINE__, "Where the Heck is the Network!!!!");
+	//engine::debug::log_info("NumPlayers %d", TheNetwork->getNumPlayers());
 
 	GameWindow *teamWin[MAX_SLOTS];
 	Int i = 0;
@@ -1142,25 +1143,25 @@ void MultiPlayerLoadScreen::init( GameInfo *game )
 		AsciiString winName;
 		winName.format( "MultiplayerLoadScreen.wnd:ProgressLoad%d",i);
 		m_progressBars[i] = TheWindowManager->winGetWindowFromId( m_loadScreen,TheNameKeyGenerator->nameToKey( winName ));
-		DEBUG_ASSERTCRASH(m_progressBars[i], ("Can't initialize the progressbars for the Multiplayer loadscreen"));
+		engine::debug::invariant((m_progressBars[i]), "m_progressBars[i]", __FILE__, __LINE__, "Can't initialize the progressbars for the Multiplayer loadscreen");
 		// set the progressbar to zero
 		GadgetProgressBarSetProgress(m_progressBars[i], 0 );
 
 		// Load MapStart Positions
 		winName.format( "MultiplayerLoadScreen.wnd:ButtonMapStartPosition%d",i);
 		m_buttonMapStartPosition[i] = TheWindowManager->winGetWindowFromId( m_loadScreen,TheNameKeyGenerator->nameToKey( winName ));
-		DEBUG_ASSERTCRASH(m_buttonMapStartPosition[i], ("Can't initialize the MapStart Positions for the MultiplayerLoadScreen loadscreen"));
+		engine::debug::invariant((m_buttonMapStartPosition[i]), "m_buttonMapStartPosition[i]", __FILE__, __LINE__, "Can't initialize the MapStart Positions for the MultiplayerLoadScreen loadscreen");
 
 
 		// Load the Player's name
 		winName.format( "MultiplayerLoadScreen.wnd:StaticTextPlayer%d",i);
 		m_playerNames[i] = TheWindowManager->winGetWindowFromId( m_loadScreen,TheNameKeyGenerator->nameToKey( winName ));
-		DEBUG_ASSERTCRASH(m_playerNames[i], ("Can't initialize the Names for the Multiplayer loadscreen"));
+		engine::debug::invariant((m_playerNames[i]), "m_playerNames[i]", __FILE__, __LINE__, "Can't initialize the Names for the Multiplayer loadscreen");
 
 		// Load the Player's Side
 		winName.format( "MultiplayerLoadScreen.wnd:StaticTextSide%d",i);
 		m_playerSide[i] = TheWindowManager->winGetWindowFromId( m_loadScreen,TheNameKeyGenerator->nameToKey( winName ));
-		DEBUG_ASSERTCRASH(m_playerSide[i], ("Can't initialize the Sides for the Multiplayer loadscreen"));
+		engine::debug::invariant((m_playerSide[i]), "m_playerSide[i]", __FILE__, __LINE__, "Can't initialize the Sides for the Multiplayer loadscreen");
 
 		winName.format( "MultiplayerLoadScreen.wnd:StaticTextTeam%d",i);
 		teamWin[i] = TheWindowManager->winGetWindowFromId( m_loadScreen,TheNameKeyGenerator->nameToKey( winName ));
@@ -1276,10 +1277,10 @@ void MultiPlayerLoadScreen::processProgress(Int playerId, Int percentage)
 
 	if( percentage < 0 || percentage > 100 || playerId >= MAX_SLOTS || playerId < 0 || m_playerLookup[playerId] == -1)
 	{
-		DEBUG_CRASH(("Percentage %d was passed in for Player %d", percentage, playerId));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Percentage %d was passed in for Player %d", percentage, playerId);
 		return;
 	}
-	//DEBUG_LOG(("Percentage %d was passed in for Player %d (in loadscreen position %d)", percentage, playerId, m_playerLookup[playerId]));
+	//engine::debug::log_info("Percentage %d was passed in for Player %d (in loadscreen position %d)", percentage, playerId, m_playerLookup[playerId]);
 	if(m_progressBars[m_playerLookup[playerId]])
 		GadgetProgressBarSetProgress(m_progressBars[m_playerLookup[playerId]], percentage );
 }
@@ -1326,12 +1327,12 @@ void GameSpyLoadScreen::init( GameInfo *game )
 {
 	// create the layout of the load screen
 	m_loadScreen = TheWindowManager->winCreateFromScript( "Menus/GameSpyLoadScreen.wnd" );
-	DEBUG_ASSERTCRASH(m_loadScreen, ("Can't initialize the Multiplayer loadscreen"));
+	engine::debug::invariant((m_loadScreen), "m_loadScreen", __FILE__, __LINE__, "Can't initialize the Multiplayer loadscreen");
 	m_loadScreen->winHide(FALSE);
 	m_loadScreen->winBringToTop();
 	m_mapPreview = TheWindowManager->winGetWindowFromId( m_loadScreen,TheNameKeyGenerator->nameToKey( "GameSpyLoadScreen.wnd:WinMapPreview"));
-	DEBUG_ASSERTCRASH(TheNetwork, ("Where the Heck is the Network!!!!"));
-	DEBUG_LOG(("NumPlayers %d", TheNetwork->getNumPlayers()));
+	engine::debug::invariant((TheNetwork), "TheNetwork", __FILE__, __LINE__, "Where the Heck is the Network!!!!");
+	engine::debug::log_info("NumPlayers %d", TheNetwork->getNumPlayers());
 GameSlot *lSlot = game->getSlot(game->getLocalSlotNum());
 	const PlayerTemplate* pt;
 	if (lSlot->getPlayerTemplate() >= 0)
@@ -1364,7 +1365,7 @@ GameSlot *lSlot = game->getSlot(game->getLocalSlotNum());
 		else if (pt->getName() == "FactionChina")
 			portrait = TheMappedImageCollection->findImageByName("SNFactionLogo144_China");
 		else
-			DEBUG_CRASH(("Unexpected player template"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unexpected player template");
 
 		localName = pt->getDisplayName();
 	}
@@ -1392,55 +1393,55 @@ GameSlot *lSlot = game->getSlot(game->getLocalSlotNum());
 		AsciiString winName;
 		winName.format( "GameSpyLoadScreen.wnd:ProgressLoad%d",i);
 		m_progressBars[i] = TheWindowManager->winGetWindowFromId( m_loadScreen,TheNameKeyGenerator->nameToKey( winName ));
-		DEBUG_ASSERTCRASH(m_progressBars[i], ("Can't initialize the progressbars for the GameSpyLoadScreen loadscreen"));
+		engine::debug::invariant((m_progressBars[i]), "m_progressBars[i]", __FILE__, __LINE__, "Can't initialize the progressbars for the GameSpyLoadScreen loadscreen");
 		// set the progressbar to zero
 		GadgetProgressBarSetProgress(m_progressBars[i], 0 );
 
 		// Load the Player's name
 		winName.format( "GameSpyLoadScreen.wnd:StaticTextPlayer%d",i);
 		m_playerNames[i] = TheWindowManager->winGetWindowFromId( m_loadScreen,TheNameKeyGenerator->nameToKey( winName ));
-		DEBUG_ASSERTCRASH(m_playerNames[i], ("Can't initialize the Names for the GameSpyLoadScreen loadscreen"));
+		engine::debug::invariant((m_playerNames[i]), "m_playerNames[i]", __FILE__, __LINE__, "Can't initialize the Names for the GameSpyLoadScreen loadscreen");
 
 		// Load MapStart Positions
 		winName.format( "GameSpyLoadScreen.wnd:ButtonMapStartPosition%d",i);
 		m_buttonMapStartPosition[i] = TheWindowManager->winGetWindowFromId( m_loadScreen,TheNameKeyGenerator->nameToKey( winName ));
-		DEBUG_ASSERTCRASH(m_buttonMapStartPosition[i], ("Can't initialize the MapStart Positions for the GameSpyLoadScreen loadscreen"));
+		engine::debug::invariant((m_buttonMapStartPosition[i]), "m_buttonMapStartPosition[i]", __FILE__, __LINE__, "Can't initialize the MapStart Positions for the GameSpyLoadScreen loadscreen");
 
 
 		// Load the Player's Side
 		winName.format( "GameSpyLoadScreen.wnd:StaticTextSide%d",i);
 		m_playerSide[i] = TheWindowManager->winGetWindowFromId( m_loadScreen,TheNameKeyGenerator->nameToKey( winName ));
-		DEBUG_ASSERTCRASH(m_playerSide[i], ("Can't initialize the Sides for the GameSpyLoadScreen loadscreen"));
+		engine::debug::invariant((m_playerSide[i]), "m_playerSide[i]", __FILE__, __LINE__, "Can't initialize the Sides for the GameSpyLoadScreen loadscreen");
 
 		// Load the Player's window
 		winName.format( "GameSpyLoadScreen.wnd:WinPlayer%d",i);
 		m_playerWin[i] = TheWindowManager->winGetWindowFromId( m_loadScreen,TheNameKeyGenerator->nameToKey( winName ));
-		DEBUG_ASSERTCRASH(m_playerWin[i], ("Can't initialize the WinPlayer for the GameSpyLoadScreen loadscreen"));
+		engine::debug::invariant((m_playerWin[i]), "m_playerWin[i]", __FILE__, __LINE__, "Can't initialize the WinPlayer for the GameSpyLoadScreen loadscreen");
 
 		// Load the Player's m_playerTotalDisconnects
 		winName.format( "GameSpyLoadScreen.wnd:StaticTextTotalDisconnects%d",i);
 		m_playerTotalDisconnects[i] = TheWindowManager->winGetWindowFromId( m_loadScreen,TheNameKeyGenerator->nameToKey( winName ));
-		DEBUG_ASSERTCRASH(m_playerTotalDisconnects[i], ("Can't initialize the m_playerTotalDisconnects for the GameSpyLoadScreen loadscreen"));
+		engine::debug::invariant((m_playerTotalDisconnects[i]), "m_playerTotalDisconnects[i]", __FILE__, __LINE__, "Can't initialize the m_playerTotalDisconnects for the GameSpyLoadScreen loadscreen");
 
 //		// Load the Player's m_playerFavoriteFactions
 //		winName.format( "GameSpyLoadScreen.wnd:StaticTextFavoriteFaction%d",i);
 //		m_playerFavoriteFactions[i] = TheWindowManager->winGetWindowFromId( m_loadScreen,TheNameKeyGenerator->nameToKey( winName ));
-//		DEBUG_ASSERTCRASH(m_playerFavoriteFactions[i], ("Can't initialize the StaticTextFavoriteFaction for the GameSpyLoadScreen loadscreen"));
+//		engine::debug::invariant((m_playerFavoriteFactions[i]), "m_playerFavoriteFactions[i]", __FILE__, __LINE__, "Can't initialize the StaticTextFavoriteFaction for the GameSpyLoadScreen loadscreen");
 
 		// Load the Player's m_playerWinLosses
 		winName.format( "GameSpyLoadScreen.wnd:StaticTextWinLoss%d",i);
 		m_playerWinLosses[i] = TheWindowManager->winGetWindowFromId( m_loadScreen,TheNameKeyGenerator->nameToKey( winName ));
-		DEBUG_ASSERTCRASH(m_playerWinLosses[i], ("Can't initialize the m_playerWinLosses for the GameSpyLoadScreen loadscreen"));
+		engine::debug::invariant((m_playerWinLosses[i]), "m_playerWinLosses[i]", __FILE__, __LINE__, "Can't initialize the m_playerWinLosses for the GameSpyLoadScreen loadscreen");
 
 		// Load the Player's m_playerWinLosses
 		winName.format( "GameSpyLoadScreen.wnd:WinRank%d",i);
 		m_playerRank[i] = TheWindowManager->winGetWindowFromId( m_loadScreen,TheNameKeyGenerator->nameToKey( winName ));
-		DEBUG_ASSERTCRASH(m_playerRank[i], ("Can't initialize the m_playerRank for the GameSpyLoadScreen loadscreen"));
+		engine::debug::invariant((m_playerRank[i]), "m_playerRank[i]", __FILE__, __LINE__, "Can't initialize the m_playerRank for the GameSpyLoadScreen loadscreen");
 
 		// Load the Player's m_playerOfficerMedal
 		winName.format( "GameSpyLoadScreen.wnd:WinOfficer%d",i);
 		m_playerOfficerMedal[i] = TheWindowManager->winGetWindowFromId( m_loadScreen,TheNameKeyGenerator->nameToKey( winName ));
-		DEBUG_ASSERTCRASH(m_playerOfficerMedal[i], ("Can't initialize the m_playerOfficerMedal for the GameSpyLoadScreen loadscreen"));
+		engine::debug::invariant((m_playerOfficerMedal[i]), "m_playerOfficerMedal[i]", __FILE__, __LINE__, "Can't initialize the m_playerOfficerMedal for the GameSpyLoadScreen loadscreen");
 
 		winName.format( "MultiplayerLoadScreen.wnd:StaticTextTeam%d",i);
 		teamWin[i] = TheWindowManager->winGetWindowFromId( m_loadScreen,TheNameKeyGenerator->nameToKey( winName ));
@@ -1469,8 +1470,8 @@ GameSlot *lSlot = game->getSlot(game->getLocalSlotNum());
 
 		// Get the stats for the player
 		PSPlayerStats stats = TheGameSpyPSMessageQueue->findPlayerStatsByID(slot->getProfileID());
-		DEBUG_LOG(("LoadScreen - populating info for %ls(%d) - stats returned id %d",
-			slot->getName().str(), slot->getProfileID(), stats.id));
+		engine::debug::log_info("LoadScreen - populating info for %ls(%d) - stats returned id %d",
+			slot->getName().str(), slot->getProfileID(), stats.id);
 
 		Bool isPreorder = TheGameSpyInfo->didPlayerPreorder(stats.id);
 		Int rankPoints = CalculateRank(stats);
@@ -1635,10 +1636,10 @@ void GameSpyLoadScreen::processProgress(Int playerId, Int percentage)
 
 	if( percentage < 0 || percentage > 100 || playerId >= MAX_SLOTS || playerId < 0 || m_playerLookup[playerId] == -1)
 	{
-		DEBUG_CRASH(("Percentage %d was passed in for Player %d", percentage, playerId));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Percentage %d was passed in for Player %d", percentage, playerId);
 		return;
 	}
-	//DEBUG_LOG(("Percentage %d was passed in for Player %d (in loadscreen position %d)", percentage, playerId, m_playerLookup[playerId]));
+	//engine::debug::log_info("Percentage %d was passed in for Player %d (in loadscreen position %d)", percentage, playerId, m_playerLookup[playerId]);
 	if(m_progressBars[m_playerLookup[playerId]])
 		GadgetProgressBarSetProgress(m_progressBars[m_playerLookup[playerId]], percentage );
 }
@@ -1668,26 +1669,26 @@ void MapTransferLoadScreen::init( GameInfo *game )
 {
 	// create the layout of the load screen
 	m_loadScreen = TheWindowManager->winCreateFromScript( "Menus/MapTransferScreen.wnd" );
-	DEBUG_ASSERTCRASH(m_loadScreen, ("Can't initialize the map transfer loadscreen"));
+	engine::debug::invariant((m_loadScreen), "m_loadScreen", __FILE__, __LINE__, "Can't initialize the map transfer loadscreen");
 	if (!m_loadScreen)
 		return;
 
 	m_loadScreen->winHide(FALSE);
 	m_loadScreen->winBringToTop();
 
-	DEBUG_ASSERTCRASH(TheNetwork, ("Where the Heck is the Network?!!!!"));
-	DEBUG_LOG(("NumPlayers %d", TheNetwork->getNumPlayers()));
+	engine::debug::invariant((TheNetwork), "TheNetwork", __FILE__, __LINE__, "Where the Heck is the Network?!!!!");
+	engine::debug::log_info("NumPlayers %d", TheNetwork->getNumPlayers());
 
 	AsciiString winName;
 	Int i;
 
 	// Load the Filename Text
 	m_fileNameText = TheWindowManager->winGetWindowFromId( m_loadScreen,TheNameKeyGenerator->nameToKey( "MapTransferScreen.wnd:StaticTextCurrentFile" ));
-	DEBUG_ASSERTCRASH(m_fileNameText, ("Can't initialize the filename for the map transfer loadscreen"));
+	engine::debug::invariant((m_fileNameText), "m_fileNameText", __FILE__, __LINE__, "Can't initialize the filename for the map transfer loadscreen");
 
 	// Load the Timeout Text
 	m_timeoutText = TheWindowManager->winGetWindowFromId( m_loadScreen,TheNameKeyGenerator->nameToKey( "MapTransferScreen.wnd:StaticTextTimeout" ));
-	DEBUG_ASSERTCRASH(m_timeoutText, ("Can't initialize the timeout for the map transfer loadscreen"));
+	engine::debug::invariant((m_timeoutText), "m_timeoutText", __FILE__, __LINE__, "Can't initialize the timeout for the map transfer loadscreen");
 
 	Int netSlot = 0;
 	// Loop through and make the loadscreen look all good.
@@ -1696,19 +1697,19 @@ void MapTransferLoadScreen::init( GameInfo *game )
 		// Load the Progress Bar
 		winName.format( "MapTransferScreen.wnd:ProgressLoad%d",i);
 		m_progressBars[i] = TheWindowManager->winGetWindowFromId( m_loadScreen,TheNameKeyGenerator->nameToKey( winName ));
-		DEBUG_ASSERTCRASH(m_progressBars[i], ("Can't initialize the progressbars for the map transfer loadscreen"));
+		engine::debug::invariant((m_progressBars[i]), "m_progressBars[i]", __FILE__, __LINE__, "Can't initialize the progressbars for the map transfer loadscreen");
 		// set the progressbar to zero
 		GadgetProgressBarSetProgress(m_progressBars[i], 0 );
 
 		// Load the Player's name
 		winName.format( "MapTransferScreen.wnd:StaticTextPlayer%d",i);
 		m_playerNames[i] = TheWindowManager->winGetWindowFromId( m_loadScreen,TheNameKeyGenerator->nameToKey( winName ));
-		DEBUG_ASSERTCRASH(m_playerNames[i], ("Can't initialize the Names for the map transfer loadscreen"));
+		engine::debug::invariant((m_playerNames[i]), "m_playerNames[i]", __FILE__, __LINE__, "Can't initialize the Names for the map transfer loadscreen");
 
 		// Load the Progress Text
 		winName.format( "MapTransferScreen.wnd:StaticTextProgress%d",i);
 		m_progressText[i] = TheWindowManager->winGetWindowFromId( m_loadScreen,TheNameKeyGenerator->nameToKey( winName ));
-		DEBUG_ASSERTCRASH(m_progressText[i], ("Can't initialize the progress text for the map transfer loadscreen"));
+		engine::debug::invariant((m_progressText[i]), "m_progressText[i]", __FILE__, __LINE__, "Can't initialize the progress text for the map transfer loadscreen");
 
 		// get the slot man!
 		GameSlot *slot = game->getSlot(i);
@@ -1773,7 +1774,7 @@ void MapTransferLoadScreen::processProgress(Int playerId, Int percentage, AsciiS
 
 	if( percentage < 0 || percentage > 100 || playerId >= MAX_SLOTS || playerId < 0 || m_playerLookup[playerId] == -1)
 	{
-		DEBUG_CRASH(("Percentage %d was passed in for Player %d", percentage, playerId));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Percentage %d was passed in for Player %d", percentage, playerId);
 		return;
 	}
 

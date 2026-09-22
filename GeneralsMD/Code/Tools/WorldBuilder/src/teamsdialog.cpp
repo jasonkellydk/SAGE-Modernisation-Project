@@ -34,6 +34,7 @@
 #include "WorldBuilderDoc.h"
 #include "CUndoable.h"
 #include "wbview3d.h"
+import engine.debug;
 
 static Int thePrevCurTeam = 0;
 
@@ -116,7 +117,7 @@ static AsciiString UIToInternal(SidesList& sides, const AsciiString& n)
 			return sides.getSideInfo(i)->getDict()->getAsciiString(TheKey_playerName);
 	}
 
-	DEBUG_CRASH(("ui name not found"));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "ui name not found");
 	return AsciiString::TheEmptyString;
 }
 
@@ -131,7 +132,7 @@ static Int findTeamParentIndex(SidesList& sides, Int i)
 			return -(j+1);
 		}
 	}
-	DEBUG_CRASH(("hmm"));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "hmm");
 	return 0;
 }
 
@@ -144,7 +145,7 @@ void CTeamsDialog::updateUI(Int whatToRebuild)
 
 	// make sure everything is canonical.
 	Bool modified = m_sides.validateSides();
-	DEBUG_ASSERTLOG(!modified,("had to clean up sides in CTeamsDialog::updateUI! (caller should do this)"));
+	if (!(!modified)) engine::debug::log_error("had to clean up sides in CTeamsDialog::updateUI! (caller should do this)");
 	if (modified)
 	{
 		whatToRebuild = REBUILD_ALL;	// assume the worst.
@@ -225,7 +226,7 @@ void CTeamsDialog::OnOK()
 {
 	Bool modified = m_sides.validateSides();
 	(void)modified;
-	DEBUG_ASSERTLOG(!modified,("had to clean up sides in CTeamsDialog::OnOK"));
+	if (!(!modified)) engine::debug::log_error("had to clean up sides in CTeamsDialog::OnOK");
 
 	CWorldBuilderDoc* pDoc = CWorldBuilderDoc::GetActiveDoc();
 	SidesListUndoable *pUndo = new SidesListUndoable(m_sides, pDoc);
@@ -276,7 +277,7 @@ void CTeamsDialog::OnDeleteteam()
 	Bool isDefault = isPlayerDefaultTeamIndex(m_sides, m_curTeam);
 	if (isDefault)
 	{
-		DEBUG_CRASH(("should not be allowed"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "should not be allowed");
 		return;
 	}
 

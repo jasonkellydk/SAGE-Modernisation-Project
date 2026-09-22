@@ -74,6 +74,7 @@
 #include <io.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+import engine.debug;
 #endif
 
 
@@ -1374,23 +1375,23 @@ long Targa_Error_Handler(long load_err,const char* filename)
 	case 0:
 		return 0;
 	case TGAERR_OPEN:
-//		WWDEBUG_SAY(("Targa: Failed to open file \"%s\"", filename));
+//		engine::debug::log_info("Targa: Failed to open file \"%s\"", filename);
 		break;
 
 	case TGAERR_READ:
-//		WWDEBUG_SAY(("Targa: Failed to read file \"%s\"", filename));
+//		engine::debug::log_info("Targa: Failed to read file \"%s\"", filename);
 		break;
 
 	case TGAERR_NOTSUPPORTED:
-//		WWDEBUG_SAY(("Targa: File \"%s\" is an unsupported Targa type", filename));
+//		engine::debug::log_info("Targa: File \"%s\" is an unsupported Targa type", filename);
 		break;
 
 	case TGAERR_NOMEM:
-//		WWDEBUG_SAY(("Targa: Failed to allocate memory for file \"%s\"", filename));
+//		engine::debug::log_info("Targa: Failed to allocate memory for file \"%s\"", filename);
 		break;
 
 	default:
-//		WWDEBUG_SAY(("Targa: Unknown error when loading file \"%s\"", filename));
+//		engine::debug::log_info("Targa: Unknown error when loading file \"%s\"", filename);
 		break;
 	}
 	return load_err;

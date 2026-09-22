@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/MessageStream.h"
 #include "GameClient/GameClient.h"
@@ -49,8 +50,8 @@ GameMessageDisposition GameClientMessageDispatcher::translateGameMessage(const G
 	if (msg->getType() == GameMessage::MSG_FRAME_TICK)
 		return KEEP_MESSAGE;
 
-	//DEBUG_LOG(("GameClientMessageDispatcher::translateGameMessage() - eating a %s on frame %d",
-		//((GameMessage *)msg)->getCommandAsString(), TheGameClient->getFrame()));
+	//engine::debug::log_info("GameClientMessageDispatcher::translateGameMessage() - eating a %s on frame %d",
+		//((GameMessage *)msg)->getCommandAsString(), TheGameClient->getFrame());
 
 	return DESTROY_MESSAGE;
 }

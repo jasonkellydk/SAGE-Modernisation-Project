@@ -28,7 +28,8 @@
 // Description: File Transfer wrapper using TheNetwork
 ///////////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "GameClient/LoadScreen.h"
 #include "GameClient/Shell.h"
@@ -67,7 +68,7 @@ static Bool doFileTransfer( AsciiString filename, MapTransferLoadScreen *ls, Int
 			sentFile = TRUE;
 		}
 
-		DEBUG_LOG(("Starting file transfer loop"));
+		engine::debug::log_info("Starting file transfer loop");
 
 		while (!fileTransferDone)
 		{
@@ -105,14 +106,14 @@ static Bool doFileTransfer( AsciiString filename, MapTransferLoadScreen *ls, Int
 			}
 			else
 			{
-				DEBUG_LOG(("File transfer is 100%%!"));
+				engine::debug::log_info("File transfer is 100%%!");
 				ls->processProgress(0, fileTransferPercent, "MapTransfer:Done");
 			}
 
 			Int now = timeGetTime();
 			if (now > startTime + timeoutPeriod) // bail if we don't finish in a reasonable amount of time
 			{
-				DEBUG_LOG(("Timing out file transfer"));
+				engine::debug::log_info("Timing out file transfer");
 				break;
 			}
 			else
@@ -250,7 +251,7 @@ Bool DoAnyMapTransfers(GameInfo *game)
 	{
 		if (TheGameInfo->getConstSlot(i)->isHuman() && !TheGameInfo->getConstSlot(i)->hasMap())
 		{
-			DEBUG_LOG(("Adding player %d to transfer mask", i));
+			engine::debug::log_info("Adding player %d to transfer mask", i);
 			mask |= (1<<i);
 		}
 	}

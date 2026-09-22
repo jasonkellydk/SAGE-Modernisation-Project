@@ -25,7 +25,8 @@
 // AIGroup.cpp
 // Encapsulation of a simple group of AI agents
 // Author: Michael S. Booth, January 2002
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 
 #include "Common/ActionManager.h"
@@ -75,14 +76,14 @@ import engine.navigation.movement.formation_layout;
  */
 AIGroup::AIGroup()
 {
-//	DEBUG_LOG(("***AIGROUP %x is being constructed.", this));
+//	engine::debug::log_info("***AIGROUP %x is being constructed.", this);
 	m_groundPath = nullptr;
 	m_speed = 0.0f;
 	m_dirty = false;
 	m_id = TheAI->getNextGroupID();
 	m_memberListSize = 0;
 	m_memberList.clear();
-	//DEBUG_LOG(( "AIGroup #%d created", m_id ));
+	//engine::debug::log_info( "AIGroup #%d created", m_id );
 }
 
 /**
@@ -90,7 +91,7 @@ AIGroup::AIGroup()
  */
 AIGroup::~AIGroup()
 {
-//	DEBUG_LOG(("***AIGROUP %x is being destructed.", this));
+//	engine::debug::log_info("***AIGROUP %x is being destructed.", this);
 	// disassociate each member from the group
 
 #if RETAIL_COMPATIBLE_AIGROUP
@@ -119,7 +120,7 @@ AIGroup::~AIGroup()
 	deleteInstance(m_groundPath);
 	m_groundPath = nullptr;
 
-	//DEBUG_LOG(( "AIGroup #%d destroyed", m_id ));
+	//engine::debug::log_info( "AIGroup #%d destroyed", m_id );
 }
 
 /**
@@ -178,8 +179,8 @@ Bool AIGroup::isMember( Object *obj )
  */
 void AIGroup::add( Object *obj )
 {
-//	DEBUG_LOG(("***AIGROUP %x is adding Object %x (%s).", this, obj, obj->getTemplate()->getName().str()));
-	DEBUG_ASSERTCRASH(obj != nullptr, ("trying to add null obj to AIGroup"));
+//	engine::debug::log_info("***AIGROUP %x is adding Object %x (%s).", this, obj, obj->getTemplate()->getName().str());
+	engine::debug::invariant((obj != nullptr), "obj != nullptr", __FILE__, __LINE__, "trying to add null obj to AIGroup");
 	if (obj == nullptr)
 		return;
 
@@ -201,7 +202,7 @@ void AIGroup::add( Object *obj )
 	// add to group's list of objects
 	m_memberList.push_back( obj );
 	++m_memberListSize;
-//	DEBUG_LOG(("***AIGROUP %x has size %u now.", this, m_memberListSize));
+//	engine::debug::log_info("***AIGROUP %x has size %u now.", this, m_memberListSize);
 
 	obj->enterGroup( this );
 
@@ -219,7 +220,7 @@ Bool AIGroup::remove( Object *obj )
 	AIGroupPtr refThis = Create_Add_Ref(this);
 #endif
 
-//	DEBUG_LOG(("***AIGROUP %x is removing Object %x (%s).", this, obj, obj->getTemplate()->getName().str()));
+//	engine::debug::log_info("***AIGROUP %x is removing Object %x (%s).", this, obj, obj->getTemplate()->getName().str());
 	std::list<Object *>::iterator i = std::find( m_memberList.begin(), m_memberList.end(), obj );
 
 	// make sure object is actually in the group
@@ -229,7 +230,7 @@ Bool AIGroup::remove( Object *obj )
 	// remove it
 	m_memberList.erase( i );
 	--m_memberListSize;
-//	DEBUG_LOG(("***AIGROUP %x has size %u now.", this, m_memberListSize));
+//	engine::debug::log_info("***AIGROUP %x has size %u now.", this, m_memberListSize);
 
 	// tell object to forget about group
 	obj->leaveGroup();
@@ -3386,22 +3387,22 @@ void AIGroup::crc( Xfer *xfer )
 		if (*it)
 			id = (*it)->getID();
 		xfer->xferUser(&id, sizeof(ObjectID));
-		CRCGEN_LOG(("CRC after AI AIGroup m_memberList for frame %d is 0x%8.8X", TheGameLogic->getFrame(), ((XferCRC *)xfer)->getCRC()));
+		engine::debug::log_info("CRC after AI AIGroup m_memberList for frame %d is 0x%8.8X", TheGameLogic->getFrame(), ((XferCRC *)xfer)->getCRC());
 	}
 
 	xfer->xferUnsignedInt( &m_memberListSize );
-	CRCGEN_LOG(("CRC after AI AIGroup m_memberListSize for frame %d is 0x%8.8X", TheGameLogic->getFrame(), ((XferCRC *)xfer)->getCRC()));
+	engine::debug::log_info("CRC after AI AIGroup m_memberListSize for frame %d is 0x%8.8X", TheGameLogic->getFrame(), ((XferCRC *)xfer)->getCRC());
 
 	id = INVALID_ID;	// Used to be leader id, unused now. jba.
 	xfer->xferObjectID( &id );
-	CRCGEN_LOG(("CRC after AI AIGroup m_leader for frame %d is 0x%8.8X", TheGameLogic->getFrame(), ((XferCRC *)xfer)->getCRC()));
+	engine::debug::log_info("CRC after AI AIGroup m_leader for frame %d is 0x%8.8X", TheGameLogic->getFrame(), ((XferCRC *)xfer)->getCRC());
 	xfer->xferReal( &m_speed );
-	CRCGEN_LOG(("CRC after AI AIGroup m_speed for frame %d is 0x%8.8X", TheGameLogic->getFrame(), ((XferCRC *)xfer)->getCRC()));
+	engine::debug::log_info("CRC after AI AIGroup m_speed for frame %d is 0x%8.8X", TheGameLogic->getFrame(), ((XferCRC *)xfer)->getCRC());
 	xfer->xferBool( &m_dirty );
-	CRCGEN_LOG(("CRC after AI AIGroup m_dirty for frame %d is 0x%8.8X", TheGameLogic->getFrame(), ((XferCRC *)xfer)->getCRC()));
+	engine::debug::log_info("CRC after AI AIGroup m_dirty for frame %d is 0x%8.8X", TheGameLogic->getFrame(), ((XferCRC *)xfer)->getCRC());
 
 	xfer->xferUnsignedInt( &m_id );
-	CRCGEN_LOG(("CRC after AI AIGroup m_id (%d) for frame %d is 0x%8.8X", m_id, TheGameLogic->getFrame(), ((XferCRC *)xfer)->getCRC()));
+	engine::debug::log_info("CRC after AI AIGroup m_id (%d) for frame %d is 0x%8.8X", m_id, TheGameLogic->getFrame(), ((XferCRC *)xfer)->getCRC());
 
 }
 

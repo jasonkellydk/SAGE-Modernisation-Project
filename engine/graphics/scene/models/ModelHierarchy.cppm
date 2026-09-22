@@ -1,5 +1,4 @@
 module;
-#include "../../profiling/Tracy.h"
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -10,6 +9,7 @@ module;
 #include <utility>
 #include <vector>
 export module Graphics.Scene.Models.Hierarchy;
+import engine.profiling;
 export import Graphics.Scene.Models.Animation;
 export import Graphics.Scene.AffineTransform;
 import Graphics.Memory.AlignedAllocator;
@@ -126,7 +126,7 @@ public:
     }
 
     void Evaluate_Rest(const RenderTransform& root) {
-        GRAPHICS_PROFILE_SCOPE("Graphics.Models.EvaluateRestHierarchy");
+        engine::profiling::Scope profile_scope_128("Graphics.Models.EvaluateRestHierarchy");
         if (m_rest_revision != 0 && m_rest_revision == Revision() && m_rest_root.matrix == root.matrix) return;
         Evaluate(root,[](int) { BoneMotion motion;motion.set_visibility=true;return motion; });
         m_rest_revision=Revision();m_rest_root=root;

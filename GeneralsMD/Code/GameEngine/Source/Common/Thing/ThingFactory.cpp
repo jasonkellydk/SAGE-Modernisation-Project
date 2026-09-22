@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/ThingFactory.h"
 #include "Common/ThingTemplate.h"
@@ -84,7 +85,7 @@ void ThingFactory::addTemplate( ThingTemplate *tmplate )
 	ThingTemplateHashMapIt tIt = m_templateHashMap.find(tmplate->getName());
 
 	if (tIt != m_templateHashMap.end()) {
-		DEBUG_CRASH(("Duplicate Thing Template name found: %s", tmplate->getName().str()));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Duplicate Thing Template name found: %s", tmplate->getName().str());
 	}
 
 	// Link it to the list
@@ -146,7 +147,7 @@ ThingTemplate *ThingFactory::newTemplate( const AsciiString& name )
 
 	// give template a unique identifier
 	newTemplate->friend_setTemplateID( m_nextTemplateID++ );
-	DEBUG_ASSERTCRASH( m_nextTemplateID != 0, ("m_nextTemplateID wrapped to zero") );
+	engine::debug::invariant((m_nextTemplateID != 0), "m_nextTemplateID != 0", __FILE__, __LINE__, "m_nextTemplateID wrapped to zero");
 
 	// assign name
 	newTemplate->friend_setTemplateName( name );
@@ -169,12 +170,11 @@ ThingTemplate* ThingFactory::newOverride( ThingTemplate *thingTemplate )
 {
 
 	// sanity
-	DEBUG_ASSERTCRASH( thingTemplate, ("newOverride(): null 'parent' thing template") );
+	engine::debug::invariant((thingTemplate), "thingTemplate", __FILE__, __LINE__, "newOverride(): null 'parent' thing template");
 
 	// sanity just for debugging, the weapon must be in the master list to do overrides
-	DEBUG_ASSERTCRASH( findTemplate( thingTemplate->getName() ) != nullptr,
-										 ("newOverride(): Thing template '%s' not in master list",
-										 thingTemplate->getName().str()) );
+	engine::debug::invariant((findTemplate( thingTemplate->getName() ) != nullptr), "findTemplate( thingTemplate->getName() ) != nullptr", __FILE__, __LINE__, "newOverride(): Thing template '%s' not in master list",
+										 thingTemplate->getName().str());
 
 	// find final override of the 'parent' template
 	ThingTemplate *child = (ThingTemplate*) thingTemplate->friend_getFinalOverride();
@@ -215,7 +215,7 @@ void ThingFactory::reset()
 		// t itself can be deleted if it is something created for this map only. Therefore,
 		// we need to store what the next item is so that we don't orphan a bunch of templates.
 		ThingTemplate *nextT = t->friend_getNextTemplate();
-		DEBUG_ASSERTCRASH(!nextT || t->getTemplateID() == nextT->getTemplateID() + 1, ("Next template ID is unexpected"));
+		engine::debug::invariant((!nextT || t->getTemplateID() == nextT->getTemplateID() + 1), "!nextT || t->getTemplateID() == nextT->getTemplateID() + 1", __FILE__, __LINE__, "Next template ID is unexpected");
 
 		if (t == m_firstTemplate) {
 			possibleAdjustment = TRUE;
@@ -242,7 +242,7 @@ void ThingFactory::reset()
 	}
 
 	// TheSuperHackers @bugfix Caball009 25/12/2025 Avoid mismatches by making m_nextTemplateID unique for a single match instead of unique since game launch.
-	DEBUG_ASSERTCRASH(m_firstTemplate && m_firstTemplate->getTemplateID() == m_templateHashMap.size(), ("Template ID is unexpected after deleting overrides"));
+	engine::debug::invariant((m_firstTemplate && m_firstTemplate->getTemplateID() == m_templateHashMap.size()), "m_firstTemplate && m_firstTemplate->getTemplateID() == m_templateHashMap.size()", __FILE__, __LINE__, "Template ID is unexpected after deleting overrides");
 	m_nextTemplateID = static_cast<UnsignedShort>(m_firstTemplate->getTemplateID() + 1);
 }
 
@@ -264,7 +264,7 @@ const ThingTemplate *ThingFactory::findByTemplateID( UnsignedShort id )
 		if (tmpl->getTemplateID() == id)
 			return tmpl;
 	}
-	DEBUG_CRASH(("template %d not found",(Int)id));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "template %d not found",(Int)id);
 	return nullptr;
 }
 
@@ -300,7 +300,7 @@ ThingTemplate *ThingFactory::findTemplateInternal( const AsciiString& name, Bool
 
 	if( check && name.isNotEmpty() )
 	{
-		DEBUG_CRASH( ("Failed to find thing template %s (case sensitive) This issue has a chance of crashing after you ignore it!", name.str() ) );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Failed to find thing template %s (case sensitive) This issue has a chance of crashing after you ignore it!", name.str() );
 	}
 	return nullptr;
 
@@ -321,7 +321,7 @@ Object *ThingFactory::newObject( const ThingTemplate *tmplate, Team *team, Objec
 			tmplate = tmp;
 	}
 
-	DEBUG_ASSERTCRASH(!tmplate->isKindOf(KINDOF_DRAWABLE_ONLY), ("You may not create Objects with the template %s, only Drawables",tmplate->getName().str()));
+	engine::debug::invariant((!tmplate->isKindOf(KINDOF_DRAWABLE_ONLY)), "!tmplate->isKindOf(KINDOF_DRAWABLE_ONLY)", __FILE__, __LINE__, "You may not create Objects with the template %s, only Drawables",tmplate->getName().str());
 
 	// have the game logic create an object of the correct type.
 	// (this will throw an exception on failure.)
@@ -400,7 +400,7 @@ AsciiString TheThingTemplateBeingParsedName;
 		//allow you to define multiple objects with the same name, and just
 		//nuke the old one with the new one. So, I (KM) have added this
 		//assert to notify in case of two same-name objects.
-		DEBUG_CRASH(( "[LINE: %d in '%s'] Duplicate factionunit %s found!", ini->getLineNum(), ini->getFilename().str(), name.str() ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "[LINE: %d in '%s'] Duplicate factionunit %s found!", ini->getLineNum(), ini->getFilename().str(), name.str() );
 	}
 	else
 	{
@@ -419,7 +419,7 @@ AsciiString TheThingTemplateBeingParsedName;
 		}
 		else
 		{
-			DEBUG_CRASH(("ObjectReskin must come after the original Object (%s, %s).",reskinFrom.str(),name.str()));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "ObjectReskin must come after the original Object (%s, %s).",reskinFrom.str(),name.str());
 			throw INI_INVALID_DATA;
 		}
 	}

@@ -7,15 +7,9 @@ module;
 #include <limits>
 #include <span>
 
-#if defined(RTS_PROFILE_TRACY)
-#include <tracy/Tracy.hpp>
-#define GRAPHICS_PROFILE_SCOPE(name) ZoneScopedN(name)
-#else
-#define GRAPHICS_PROFILE_SCOPE(name) ((void)0)
-#endif
-
 export module Graphics.Scene.LOD;
 
+import engine.profiling;
 export import Graphics.Resources.Meshes.Mesh;
 export import Graphics.Scene.RenderScene;
 export import Graphics.Scene.Visibility;
@@ -242,7 +236,7 @@ export bool Build_LOD_Set(const RenderScene &scene, const MeshPool &meshes, cons
 export bool Build_LOD_Set(const RenderScene &scene, const MeshPool &meshes, const VisibleSet &visible_set, const View &view,
 	LODSet &lod_set, LODHistory &history, LODSelectionOptions options) noexcept
 {
-	GRAPHICS_PROFILE_SCOPE("Graphics::Build_LOD_Set");
+	engine::profiling::Scope profile_scope_237("Graphics::Build_LOD_Set");
 	lod_set.Clear();
 	const RenderSceneData scene_data = scene.Data();
 

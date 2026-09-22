@@ -48,7 +48,7 @@
 #include <commctrl.h>
 
 // USER INCLUDES //////////////////////////////////////////////////////////////
-#include "Common/Debug.h"
+
 #include "GameClient/Gadget.h"
 #include "resource.h"
 #include "HierarchyView.h"
@@ -57,6 +57,7 @@
 #include "EditWindow.h"
 #include "GUIEditWindowManager.h"
 #include "Properties.h"
+import engine.debug;
 
 // DEFINES ////////////////////////////////////////////////////////////////////
 
@@ -704,7 +705,7 @@ void HierarchyView::addWindowToTree( GameWindow *window,
 		if( newItem == nullptr )
 		{
 
-			DEBUG_LOG(( "Error adding window to tree" ));
+			engine::debug::log_info( "Error adding window to tree" );
 			assert( 0 );
 			return;
 
@@ -985,7 +986,7 @@ void HierarchyView::bringWindowToTop( GameWindow *window )
 	if( item == nullptr )
 	{
 
-		DEBUG_LOG(( "Cannot bring window to top, no entry in tree!" ));
+		engine::debug::log_info( "Cannot bring window to top, no entry in tree!" );
 		assert( 0 );
 		return;
 
@@ -1018,7 +1019,7 @@ void HierarchyView::updateWindowName( GameWindow *window )
 	if( item == nullptr )
 	{
 
-		DEBUG_LOG(( "updateWindowName: No hierarchy entry for window!" ));
+		engine::debug::log_info( "updateWindowName: No hierarchy entry for window!" );
 		assert( 0 );
 		return;
 
@@ -1122,7 +1123,7 @@ void HierarchyView::moveWindowAheadOf( GameWindow *window,
 	if( aheadOfItem == nullptr )
 	{
 
-		DEBUG_LOG(( "moveWindowAheadOf: aheadOf has no hierarchy entry!" ));
+		engine::debug::log_info( "moveWindowAheadOf: aheadOf has no hierarchy entry!" );
 		assert( 0 );
 		return;
 
@@ -1158,7 +1159,7 @@ void HierarchyView::moveWindowAheadOf( GameWindow *window,
 	if( newItem == nullptr )
 	{
 
-		DEBUG_LOG(( "moveWindowAheadOf: Error adding window to tree" ));
+		engine::debug::log_info( "moveWindowAheadOf: Error adding window to tree" );
 		assert( 0 );
 		return;
 
@@ -1206,7 +1207,7 @@ void HierarchyView::moveWindowChildOf( GameWindow *window, GameWindow *parent )
 	if( parentItem == nullptr )
 	{
 
-		DEBUG_LOG(( "moveWindowChildOf: No parent entry" ));
+		engine::debug::log_info( "moveWindowChildOf: No parent entry" );
 		assert( 0 );
 		return;
 

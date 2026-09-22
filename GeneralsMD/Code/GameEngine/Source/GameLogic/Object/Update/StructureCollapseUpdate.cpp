@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/Thing.h"
 #include "Common/ThingTemplate.h"
@@ -172,7 +173,7 @@ UpdateSleepTime StructureCollapseUpdate::update()
 
 	if (m_collapseState == COLLAPSESTATE_STANDING)
 	{
-		DEBUG_CRASH(("hmm, what?"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "hmm, what?");
 		return UPDATE_SLEEP_FOREVER;
 	}
 
@@ -301,7 +302,7 @@ static void buildNonDupRandomIndexList(Int range, Int count, Int idxList[])
 //-------------------------------------------------------------------------------------------------
 void StructureCollapseUpdate::doPhaseStuff(StructureCollapsePhaseType scphase, const Coord3D *target)
 {
-	DEBUG_LOG(("Firing phase %d on frame %d", scphase, TheGameLogic->getFrame()));
+	engine::debug::log_info("Firing phase %d on frame %d", scphase, TheGameLogic->getFrame());
 
 	const StructureCollapseUpdateModuleData* d = getStructureCollapseUpdateModuleData();
 	Int i, idx, count, listSize;
@@ -316,7 +317,7 @@ void StructureCollapseUpdate::doPhaseStuff(StructureCollapsePhaseType scphase, c
 		{
 			idx = idxList[i];
 			const FXVec& v = d->m_fxs[scphase];
-			DEBUG_ASSERTCRASH(idx>=0&&idx<v.size(),("bad idx"));
+			engine::debug::invariant((idx>=0&&idx<v.size()), "idx>=0&&idx<v.size()", __FILE__, __LINE__, "bad idx");
 			const FXList* fxl = v[idx];
 			FXList::doFXPos(fxl, target);
 		}
@@ -331,7 +332,7 @@ void StructureCollapseUpdate::doPhaseStuff(StructureCollapsePhaseType scphase, c
 		{
 			idx = idxList[i];
 			const OCLVec& v = d->m_ocls[scphase];
-			DEBUG_ASSERTCRASH(idx>=0&&idx<v.size(),("bad idx"));
+			engine::debug::invariant((idx>=0&&idx<v.size()), "idx>=0&&idx<v.size()", __FILE__, __LINE__, "bad idx");
 			const ObjectCreationList* ocl = v[idx];
 			ObjectCreationList::create(ocl, getObject(), target, nullptr, getObject()->getOrientation() );
 		}

@@ -64,7 +64,7 @@ class W3DMouse : public SDL3Mouse
 
 public:
 
-	W3DMouse();
+	explicit W3DMouse(engine::platform::IClockService& clock);
 	virtual ~W3DMouse() override;
 
 	virtual void init() override;		///< init mouse, extend this functionality, do not replace

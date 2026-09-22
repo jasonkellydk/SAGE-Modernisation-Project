@@ -29,6 +29,7 @@
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 #include "PreRTS.h"
+import engine.debug;
 #include "Common/Xfer.h"
 #include "GameLogic/GameLogic.h"
 #include "GameLogic/Object.h"
@@ -96,8 +97,8 @@ DynamicShroudClearingRangeUpdate::DynamicShroudClearingRangeUpdate( Thing *thing
 	m_growStartDeadline =   m_stateCountDown - md->m_growDelay;
 	m_sustainDeadline  = m_growStartDeadline - md->m_growTime;
 
-	DEBUG_ASSERTCRASH((m_sustainDeadline >= m_shrinkStartDeadline),("DynamicShroudClearingRangeUpdate\nYOU WILL NEVER REACH FULL SHROUD CLEARING RANGE WITH THESE TIMES AND DELAYS"));
-	DEBUG_ASSERTCRASH((m_growStartDeadline >= m_shrinkStartDeadline),("DynamicShroudClearingRangeUpdate\nYOU WILL NEVER REACH FULL SHROUD CLEARING RANGE WITH THESE TIMES AND DELAYS"));
+	engine::debug::invariant(((m_sustainDeadline >= m_shrinkStartDeadline)), "(m_sustainDeadline >= m_shrinkStartDeadline)", __FILE__, __LINE__, "DynamicShroudClearingRangeUpdate\nYOU WILL NEVER REACH FULL SHROUD CLEARING RANGE WITH THESE TIMES AND DELAYS");
+	engine::debug::invariant(((m_growStartDeadline >= m_shrinkStartDeadline)), "(m_growStartDeadline >= m_shrinkStartDeadline)", __FILE__, __LINE__, "DynamicShroudClearingRangeUpdate\nYOU WILL NEVER REACH FULL SHROUD CLEARING RANGE WITH THESE TIMES AND DELAYS");
 
 	m_doneForeverFrame = TheGameLogic->getFrame() + m_stateCountDown;// a failsafe to force a shutdown on schedule
 

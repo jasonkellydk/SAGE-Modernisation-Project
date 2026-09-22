@@ -43,7 +43,8 @@
 //
 //-----------------------------------------------------------------------------
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/DataChunk.h"
 #include "Common/GameState.h"
@@ -134,7 +135,7 @@ SidesInfo& SidesInfo::operator=(const SidesInfo& that)
 */
 void SidesInfo::addToBuildList(BuildListInfo *pBuildList, Int position)
 {
-	DEBUG_ASSERTLOG(pBuildList->getNext()==nullptr, ("WARNING***Adding already linked element."));
+	if (!(pBuildList->getNext()==nullptr)) engine::debug::log_error("WARNING***Adding already linked element.");
 	BuildListInfo *pCur = nullptr;
 	while (position) {
 		position--;
@@ -175,7 +176,7 @@ void SidesInfo::reorderInBuildList(BuildListInfo *pBuildList, Int newPosition)
 */
 Int SidesInfo::removeFromBuildList(BuildListInfo *pBuildList)
 {
-	DEBUG_ASSERTCRASH(pBuildList, ("Removing null list."));
+	engine::debug::invariant((pBuildList), "pBuildList", __FILE__, __LINE__, "Removing null list.");
 	if (pBuildList==nullptr) return 0;
 
 	Int position = 0;
@@ -191,7 +192,7 @@ Int SidesInfo::removeFromBuildList(BuildListInfo *pBuildList)
 			pPrev = pPrev->getNext();
 			position++;
 		}
-		DEBUG_ASSERTCRASH(pPrev, ("Removing item not in list."));
+		engine::debug::invariant((pPrev), "pPrev", __FILE__, __LINE__, "Removing item not in list.");
 		if (pPrev) {
 			pPrev->setNextBuildList(pBuildList->getNext());
 		}
@@ -244,7 +245,7 @@ void SidesList::clear()
 */
 Bool SidesList::ParseSidesDataChunk(DataChunkInput &file, DataChunkInfo *info, void *userData)
 {
-	DEBUG_ASSERTCRASH(TheSidesList, ("TheSidesList is null"));
+	engine::debug::invariant((TheSidesList), "TheSidesList", __FILE__, __LINE__, "TheSidesList is null");
 
 	if (TheSidesList==nullptr)
 		return false;
@@ -315,7 +316,7 @@ Bool SidesList::ParseSidesDataChunk(DataChunkInput &file, DataChunkInfo *info, v
 	}
 	TheSidesList->validateSides();
 
-	DEBUG_ASSERTCRASH(file.atEndOfChunk(), ("Incorrect data file length."));
+	engine::debug::invariant((file.atEndOfChunk()), "file.atEndOfChunk()", __FILE__, __LINE__, "Incorrect data file length.");
 	return true;
 }
 
@@ -329,7 +330,7 @@ Bool SidesList::ParseSidesDataChunk(DataChunkInput &file, DataChunkInfo *info, v
 */
 void SidesList::WriteSidesDataChunk(DataChunkOutput &chunkWriter)
 {
-	DEBUG_ASSERTCRASH(TheSidesList, ("TheSidesList is null"));
+	engine::debug::invariant((TheSidesList), "TheSidesList", __FILE__, __LINE__, "TheSidesList is null");
 	if (TheSidesList==nullptr)
 		return;
 	/**********HEIGHT MAP DATA ***********************/
@@ -383,7 +384,7 @@ void SidesList::WriteSidesDataChunk(DataChunkOutput &chunkWriter)
 	chunkWriter.closeDataChunk();
 
 	Bool modified = TheSidesList->validateSides();
-	DEBUG_ASSERTLOG(!modified, ("*** had to clean up sideslist on read"));
+	if (!(!modified)) engine::debug::log_error("*** had to clean up sideslist on read");
 	modified = false;	// silence compiler warnings in release build
 
 }
@@ -447,7 +448,7 @@ static Bool ParsePlayersDataChunk(DataChunkInput &file, DataChunkInfo *info, voi
 			Dict sideDict = file.readDict();
 		}
 	}
-	DEBUG_ASSERTCRASH(file.atEndOfChunk(), ("Unexpected data left over."));
+	engine::debug::invariant((file.atEndOfChunk()), "file.atEndOfChunk()", __FILE__, __LINE__, "Unexpected data left over.");
 	return true;
 }
 
@@ -467,12 +468,12 @@ static Bool ParseTeamsDataChunk(DataChunkInput &file, DataChunkInfo *info, void 
 		if (sides->findSkirmishSideInfo(player)) {
 			// player exists, so just add it.
 			sides->addSkirmishTeam(&teamDict);
-			//DEBUG_LOG(("Adding team %s", teamName.str()));
+			//engine::debug::log_info("Adding team %s", teamName.str());
 		} else {
-			//DEBUG_LOG(("Couldn't add team %s, no player %s", teamName.str(), player.str()));
+			//engine::debug::log_info("Couldn't add team %s, no player %s", teamName.str(), player.str());
 		}
 	}
-	DEBUG_ASSERTCRASH(file.atEndOfChunk(), ("Unexpected data left over."));
+	engine::debug::invariant((file.atEndOfChunk()), "file.atEndOfChunk()", __FILE__, __LINE__, "Unexpected data left over.");
 	return true;
 }
 
@@ -518,7 +519,7 @@ void SidesList::prepareForMP_or_Skirmish()
 	}
 	if (!gotScripts) {
 		AsciiString path = "data\\Scripts\\SkirmishScripts.scb";
-		DEBUG_LOG(("Skirmish map using standard scripts"));
+		engine::debug::log_info("Skirmish map using standard scripts");
 		m_skirmishTeamrec.clear();
 		CachedFileInputStream theInputStream;
 		if (theInputStream.open(path)) {
@@ -528,7 +529,7 @@ void SidesList::prepareForMP_or_Skirmish()
 				file.registerParser( "ScriptsPlayers", AsciiString::TheEmptyString, ParsePlayersDataChunk );
 				file.registerParser( "ScriptTeams", AsciiString::TheEmptyString, ParseTeamsDataChunk );
 				if (!file.parse(this)) {
-					DEBUG_LOG(("ERROR - Unable to read in skirmish scripts."));
+					engine::debug::log_info("ERROR - Unable to read in skirmish scripts.");
 					return;
 				}
 				ScriptList *scripts[MAX_PLAYER_COUNT];
@@ -604,7 +605,7 @@ void SidesList::emptyTeams()
 
 void SidesList::addSide(const Dict* d)
 {
-	DEBUG_ASSERTCRASH(m_numSides < MAX_PLAYER_COUNT, ("too many players"));
+	engine::debug::invariant((m_numSides < MAX_PLAYER_COUNT), "m_numSides < MAX_PLAYER_COUNT", __FILE__, __LINE__, "too many players");
 	if (m_numSides < MAX_PLAYER_COUNT)
 		m_sides[m_numSides++].init(d);
 }
@@ -760,21 +761,21 @@ Bool SidesList::validateSides()
 			// make sure the team owner points back to the player.
 			if (ti->getDict()->getAsciiString(TheKey_teamOwner) != pname)
 			{
-				DEBUG_CRASH(("hmm, team owner mismatch (%s) (%s), this should not normally be possible",ti->getDict()->getAsciiString(TheKey_teamOwner).str(), pname.str()));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "hmm, team owner mismatch (%s) (%s), this should not normally be possible",ti->getDict()->getAsciiString(TheKey_teamOwner).str(), pname.str());
 				ti->getDict()->setAsciiString(TheKey_teamOwner, pname);
 				modified = true;
 			}
 			// default teams are always singletons.
 			if (!ti->getDict()->getBool(TheKey_teamIsSingleton))
 			{
-				DEBUG_CRASH(("hmm, this should not normally be possible"));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "hmm, this should not normally be possible");
 				ti->getDict()->setBool(TheKey_teamIsSingleton, true);
 				modified = true;
 			}
 		}
 		else
 		{
-			DEBUG_LOG(("*** default team for player %s missing (should not be possible), adding it...",tname.str()));
+			engine::debug::log_info("*** default team for player %s missing (should not be possible), adding it...",tname.str());
 			Dict d;
 			d.setAsciiString(TheKey_teamName, tname);
 			d.setAsciiString(TheKey_teamOwner, pname);
@@ -790,14 +791,14 @@ Bool SidesList::validateSides()
 		// (note that owners can be teams or players, but allies/enemies can only be teams.)
 		if (validateAllyEnemyList(pname, allies))
 		{
-			DEBUG_LOG(("bad allies..."));
+			engine::debug::log_info("bad allies...");
 			pdict->setAsciiString(TheKey_playerAllies, allies);
 			modified = true;
 		}
 
 		if (validateAllyEnemyList(pname, enemies))
 		{
-			DEBUG_LOG(("bad enemies..."));
+			engine::debug::log_info("bad enemies...");
 			pdict->setAsciiString(TheKey_playerEnemies, enemies);
 			modified = true;
 		}
@@ -812,7 +813,7 @@ validate_team_names:
 		AsciiString tname = tdict->getAsciiString(TheKey_teamName);
 		if (findSideInfo(tname))
 		{
-			DEBUG_CRASH(("name %s is duplicate between player and team, removing...",tname.str()));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "name %s is duplicate between player and team, removing...",tname.str());
 			removeTeam(i);
 			modified = true;
 			goto validate_team_names;
@@ -827,7 +828,7 @@ validate_team_names:
 		SidesInfo* si = findSideInfo(towner);
 		if (si == nullptr || towner == tname)
 		{
-			DEBUG_LOG(("bad owner %s; reparenting to neutral...",towner.str()));
+			engine::debug::log_info("bad owner %s; reparenting to neutral...",towner.str());
 			tdict->setAsciiString(TheKey_teamOwner, AsciiString::TheEmptyString);
 			modified = true;
 		}
@@ -868,7 +869,7 @@ void SidesList::xfer( Xfer *xfer )
 	if( sideCount != getNumSides() )
 	{
 
-		DEBUG_CRASH(( "SidesList::xfer - The sides list size has changed, this was not supposed to happen, you must version this method and figure out how to translate between old and new versions now" ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "SidesList::xfer - The sides list size has changed, this was not supposed to happen, you must version this method and figure out how to translate between old and new versions now" );
 		throw SC_INVALID_DATA;
 
 	}
@@ -887,7 +888,7 @@ void SidesList::xfer( Xfer *xfer )
 				(scriptList != nullptr && scriptListPresent == FALSE) )
 		{
 
-			DEBUG_CRASH(( "SidesList::xfer - script list missing/present mismatch" ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "SidesList::xfer - script list missing/present mismatch" );
 			throw SC_INVALID_DATA;
 
 		}
@@ -1131,7 +1132,7 @@ void TeamsInfoRec::addTeam(const Dict* d)
 		TEAM_ALLOC_CHUNK = 8	///< how many teams to alloc at a time
 	};
 
-	DEBUG_ASSERTCRASH(m_numTeams < 2048, ("%d teams have been allocated (so far). This seems excessive.", m_numTeams ));
+	engine::debug::invariant((m_numTeams < 2048), "m_numTeams < 2048", __FILE__, __LINE__, "%d teams have been allocated (so far). This seems excessive.", m_numTeams );
 	if (m_numTeams >= m_numTeamsAllocated)
 	{
 		// pool[]ify

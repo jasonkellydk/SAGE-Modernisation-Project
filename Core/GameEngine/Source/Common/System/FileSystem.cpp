@@ -46,18 +46,18 @@
 //----------------------------------------------------------------------------
 
 #include "PreRTS.h"
+import engine.profiling;
+import engine.debug;
 #include "Common/file.h"
 #include "Common/FileSystem.h"
 
 #include "Common/ArchiveFileSystem.h"
 #include "Common/GameAudio.h"
 #include "Common/LocalFileSystem.h"
-#include "Common/PerfTimer.h"
+
 
 #include "Lib/PathUtil.h"
 
-
-DECLARE_PERF_TIMER(FileSystem)
 
 //----------------------------------------------------------------------------
 //         Externals
@@ -152,7 +152,7 @@ void		FileSystem::init()
 
 void		FileSystem::update()
 {
-	USE_PERF_TIMER(FileSystem)
+	engine::profiling::Scope profile_scope_153("FileSystem");
 	TheLocalFileSystem->update();
 	TheArchiveFileSystem->update();
 }
@@ -163,7 +163,7 @@ void		FileSystem::update()
 
 void		FileSystem::reset()
 {
-	USE_PERF_TIMER(FileSystem)
+	engine::profiling::Scope profile_scope_164("FileSystem");
 	TheLocalFileSystem->reset();
 	TheArchiveFileSystem->reset();
 }
@@ -174,7 +174,7 @@ void		FileSystem::reset()
 
 File*		FileSystem::openFile( const Char *filename, Int access, size_t bufferSize, FileInstance instance )
 {
-	USE_PERF_TIMER(FileSystem)
+	engine::profiling::Scope profile_scope_175("FileSystem");
 	File *file = nullptr;
 
 	if ( TheLocalFileSystem != nullptr )
@@ -225,7 +225,7 @@ File*		FileSystem::openFile( const Char *filename, Int access, size_t bufferSize
 
 Bool FileSystem::doesFileExist(const Char *filename, FileInstance instance) const
 {
-	USE_PERF_TIMER(FileSystem)
+	engine::profiling::Scope profile_scope_226("FileSystem");
 
 #if ENABLE_FILESYSTEM_EXISTENCE_CACHE
 	{
@@ -285,7 +285,7 @@ Bool FileSystem::doesFileExist(const Char *filename, FileInstance instance) cons
 //============================================================================
 void FileSystem::getFileListInDirectory(const AsciiString& directory, const AsciiString& searchName, FilenameList &filenameList, Bool searchSubdirectories) const
 {
-	USE_PERF_TIMER(FileSystem)
+	engine::profiling::Scope profile_scope_286("FileSystem");
 	TheLocalFileSystem->getFileListInDirectory(AsciiString::TheEmptyString, directory, searchName, filenameList, searchSubdirectories);
 	TheArchiveFileSystem->getFileListInDirectory(AsciiString::TheEmptyString, directory, searchName, filenameList, searchSubdirectories);
 }
@@ -295,7 +295,7 @@ void FileSystem::getFileListInDirectory(const AsciiString& directory, const Asci
 //============================================================================
 Bool FileSystem::getFileInfo(const AsciiString& filename, FileInfo *fileInfo, FileInstance instance) const
 {
-	USE_PERF_TIMER(FileSystem)
+	engine::profiling::Scope profile_scope_296("FileSystem");
 
 	// TheSuperHackers @todo Add file info cache?
 
@@ -324,7 +324,7 @@ Bool FileSystem::getFileInfo(const AsciiString& filename, FileInfo *fileInfo, Fi
 //============================================================================
 Bool FileSystem::createDirectory(AsciiString directory)
 {
-	USE_PERF_TIMER(FileSystem)
+	engine::profiling::Scope profile_scope_325("FileSystem");
 	if (TheLocalFileSystem != nullptr) {
 		return TheLocalFileSystem->createDirectory(directory);
 	}
@@ -349,12 +349,12 @@ Bool FileSystem::isPathInDirectory(const AsciiString& testPath, const AsciiStrin
 
 	if (basePathNormalized.isEmpty())
 	{
-		DEBUG_CRASH(("Unable to normalize base directory path '%s'.", basePath.str()));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unable to normalize base directory path '%s'.", basePath.str());
 		return false;
 	}
 	else if (testPathNormalized.isEmpty())
 	{
-		DEBUG_CRASH(("Unable to normalize file path '%s'.", testPath.str()));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unable to normalize file path '%s'.", testPath.str());
 		return false;
 	}
 

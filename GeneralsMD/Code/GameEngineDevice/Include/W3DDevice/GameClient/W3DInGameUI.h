@@ -60,7 +60,7 @@ class W3DInGameUI : public InGameUI
 
 public:
 
-	W3DInGameUI();
+	explicit W3DInGameUI(engine::platform::IClockService& clock);
 	virtual ~W3DInGameUI() override;
 
 	// Inherited from subsystem interface -----------------------------------------------------------

@@ -27,7 +27,8 @@
 // Desc:   This is a manager for data pertaining to the Generals' Challenge personas and related GUI.
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "GameClient/ChallengeGenerals.h"
 
@@ -133,7 +134,7 @@ const GeneralPersona* ChallengeGenerals::getPlayerGeneralByCampaignName( AsciiSt
 		if (campaignName.compareNoCase( name.str() ) == 0)
 			return &m_position[i];
 	}
-	DEBUG_CRASH(("Can't find General by Campaign Name"));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Can't find General by Campaign Name");
 	return nullptr;
 }
 

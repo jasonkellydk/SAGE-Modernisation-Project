@@ -26,7 +26,8 @@
 // Author: Michael S. Booth, December 2001
 // Desc:   Implementation of missile behavior
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/Thing.h"
 #include "Common/ThingTemplate.h"
@@ -190,7 +191,7 @@ void MissileAIUpdate::projectileLaunchAtObjectOrPosition(
 	const ParticleSystemTemplate* exhaustSysOverride
 )
 {
-	DEBUG_ASSERTCRASH(specificBarrelToUse>=0, ("specificBarrelToUse must now be explicit"));
+	engine::debug::invariant((specificBarrelToUse>=0), "specificBarrelToUse>=0", __FILE__, __LINE__, "specificBarrelToUse must now be explicit");
 
 	m_launcherID = launcher ? launcher->getID() : INVALID_ID;
 	m_detonationWeaponTmpl = detWeap;
@@ -328,7 +329,7 @@ Bool MissileAIUpdate::projectileHandleCollision( Object *other )
  		// if it's not the specific thing we were targeting, see if we should incidentally collide...
  		if (!m_detonationWeaponTmpl->shouldProjectileCollideWith(projectileLauncher, obj, other, m_victimID))
 		{
-			//DEBUG_LOG(("ignoring projectile collision with %s at frame %d",other->getTemplate()->getName().str(),TheGameLogic->getFrame()));
+			//engine::debug::log_info("ignoring projectile collision with %s at frame %d",other->getTemplate()->getName().str(),TheGameLogic->getFrame());
 			return true;
 		}
 
@@ -348,7 +349,7 @@ Bool MissileAIUpdate::projectileHandleCollision( Object *other )
 						Object* thingToKill = *it++;
 						if (!thingToKill->isEffectivelyDead() && thingToKill->isKindOfMulti(d->m_garrisonHitKillKindof, d->m_garrisonHitKillKindofNot))
 						{
-							//DEBUG_LOG(("Killed a garrisoned unit (%08lx %s) via Flash-Bang!",thingToKill,thingToKill->getTemplate()->getName().str()));
+							//engine::debug::log_info("Killed a garrisoned unit (%08lx %s) via Flash-Bang!",thingToKill,thingToKill->getTemplate()->getName().str());
 							if (projectileLauncher)
 								projectileLauncher->scoreTheKill( thingToKill );
 							thingToKill->kill();
@@ -624,7 +625,7 @@ void MissileAIUpdate::doKillState()
 				closeEnough = curLoco->getMaxSpeedForCondition(BODY_PRISTINE);
 			}
 			Real distanceToTargetSq = ThePartitionManager->getDistanceSquared( getObject(), getGoalObject(), FROM_BOUNDINGSPHERE_3D);
-			//DEBUG_LOG(("Distance to target %f, closeEnough %f", sqrt(distanceToTargetSq), closeEnough));
+			//engine::debug::log_info("Distance to target %f, closeEnough %f", sqrt(distanceToTargetSq), closeEnough);
 			if (distanceToTargetSq < closeEnough*closeEnough) {
 				Coord3D pos = *getGoalObject()->getPosition();
 				getObject()->setPosition(&pos);

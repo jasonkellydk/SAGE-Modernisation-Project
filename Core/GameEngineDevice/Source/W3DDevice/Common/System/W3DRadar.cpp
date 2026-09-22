@@ -36,7 +36,7 @@ import Engine.UI.WND;
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 #include "Common/AudioEventRTS.h"
-#include "Common/Debug.h"
+
 #include "Common/GlobalData.h"
 #include "Common/GameUtility.h"
 #include "Common/Player.h"
@@ -61,6 +61,7 @@ import Engine.UI.WND;
 #include "W3DDevice/GameClient/W3DShroud.h"
 #include "W3DDevice/GameClient/W3DTextureHandle.h"
 #include "WWMath/vector2i.h"
+import engine.debug;
 import Graphics.RHI;
 import Graphics.Resources.Textures.Storage;
 
@@ -150,7 +151,7 @@ static Assets::PixelEncoding findFormat(const Assets::PixelEncoding formats[])
 		}
 
 	}
-	DEBUG_CRASH(("WW3DRadar: No appropriate texture format") );
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "WW3DRadar: No appropriate texture format");
 	return Assets::PixelEncoding::Unknown;
 }
 
@@ -963,12 +964,12 @@ void W3DRadar::init()
 	// poolify
 	m_terrainTexture = MSGNEW("W3DTextureHandle") W3DTextureHandle( m_textureWidth, m_textureHeight,
 																			 m_terrainTextureFormat, MIP_LEVELS_1 );
-	DEBUG_ASSERTCRASH( m_terrainTexture, ("W3DRadar: Unable to allocate terrain texture") );
+	engine::debug::invariant((m_terrainTexture), "m_terrainTexture", __FILE__, __LINE__, "W3DRadar: Unable to allocate terrain texture");
 
 	// allocate our overlay texture
 	m_overlayTexture = MSGNEW("W3DTextureHandle") W3DTextureHandle( m_textureWidth, m_textureHeight,
 																			 m_overlayTextureFormat, MIP_LEVELS_1 );
-	DEBUG_ASSERTCRASH( m_overlayTexture, ("W3DRadar: Unable to allocate overlay texture") );
+	engine::debug::invariant((m_overlayTexture), "m_overlayTexture", __FILE__, __LINE__, "W3DRadar: Unable to allocate overlay texture");
 
 	// set filter type for the overlay texture, try it and see if you like it, I don't ;)
 //	m_overlayTexture->Set_Min_Filter( Graphics::SamplingFilter::Disabled );
@@ -977,7 +978,7 @@ void W3DRadar::init()
 	// allocate our shroud texture
 	m_shroudTexture = MSGNEW("W3DTextureHandle") W3DTextureHandle( m_textureWidth, m_textureHeight,
 																			 m_shroudTextureFormat, MIP_LEVELS_1 );
-	DEBUG_ASSERTCRASH( m_shroudTexture, ("W3DRadar: Unable to allocate shroud texture") );
+	engine::debug::invariant((m_shroudTexture), "m_shroudTexture", __FILE__, __LINE__, "W3DRadar: Unable to allocate shroud texture");
 	m_shroudPixels.Initialize(m_textureWidth,m_textureHeight,m_shroudTextureFormat);
 	m_shroudTexture->Get_Sampling().minification =  Graphics::SamplingFilter::Default ;
 	m_shroudTexture->Get_Sampling().magnification =  Graphics::SamplingFilter::Default ;
@@ -1119,7 +1120,7 @@ void W3DRadar::buildTerrainTexture( TerrainLogic *terrain )
 
 	// get the terrain surface to draw in
 	surface = m_terrainTexture->Get_Surface_Level();
-	DEBUG_ASSERTCRASH( surface, ("W3DRadar: Can't get surface for terrain texture") );
+	engine::debug::invariant((surface), "surface", __FILE__, __LINE__, "W3DRadar: Can't get surface for terrain texture");
 
 	// build the terrain
 	RGBColor sampleColor;
@@ -1260,7 +1261,7 @@ void W3DRadar::buildTerrainTexture( TerrainLogic *terrain )
 									TerrainRoadType *bridgeTemplate = TheTerrainRoads->findBridge( bridgeTName );
 
 									// sanity
-									DEBUG_ASSERTCRASH( bridgeTemplate, ("W3DRadar::buildTerrainTexture - Can't find bridge template for '%s'", bridgeTName.str()) );
+									engine::debug::invariant((bridgeTemplate), "bridgeTemplate", __FILE__, __LINE__, "W3DRadar::buildTerrainTexture - Can't find bridge template for '%s'", bridgeTName.str());
 
 									// use bridge color
 									if ( bridgeTemplate )

@@ -60,10 +60,10 @@ import Assets.Images.PixelEncoding;
 import Assets.Identity;
 import Graphics.RHI;
 import Assets.Math;
-#include <WWDebug/wwprofile.h>
-#include "WWDebug/wwmemlog.h"
+
+
 #include "WWLib/ffactory.h"
-#include "Common/PerfTimer.h"
+
 #include "Common/GlobalData.h"
 #include "Common/GameCommon.h"
 #include <cctype>
@@ -71,6 +71,8 @@ import Assets.Math;
 #include <cstdio>
 #include <string>
 #include <string_view>
+import engine.profiling;
+import engine.debug;
 import Assets.Cache.Animations;
 
 
@@ -550,7 +552,7 @@ W3DTextureHandle * W3DAssetManager::Recolor_Texture_One_Time(W3DTextureHandle *t
 
 	Int psize;
 	psize=Assets::Pixel_Size(desc.encoding);
-	DEBUG_ASSERTCRASH( psize == 2 || psize == 4, ("Can't Recolor Texture %s", name) );
+	engine::debug::invariant((psize == 2 || psize == 4), "psize == 2 || psize == 4", __FILE__, __LINE__, "Can't Recolor Texture %s", name);
 
 	oldsurf=texture->Get_Surface_Level();
 
@@ -629,8 +631,7 @@ W3DRenderObject * W3DAssetManager::Create_Render_Obj(
 
 	// create a new one based on existing prototype
 
-	WWPROFILE( "W3DAssetManager::Create_Render_Obj" );
-	WWMEMLOG(MEM_GEOMETRY);
+	engine::profiling::Scope profile_scope_632("W3DAssetManager::Create_Render_Obj");
 
 	// Try to find a prototype
 	Graphics::ModelFactory<W3DRenderObject> * proto = m_catalog.Find_Prototype(name);
@@ -663,7 +664,7 @@ W3DRenderObject * W3DAssetManager::Create_Render_Obj(
 		static int warning_count = 0;
 		if (++warning_count <= 20)
 		{
-			WWDEBUG_SAY(("WARNING: Failed to create Render Object: %s",name));
+			engine::debug::log_info("WARNING: Failed to create Render Object: %s",name);
 		}
 		return nullptr;		// Failed to find a prototype
 	}

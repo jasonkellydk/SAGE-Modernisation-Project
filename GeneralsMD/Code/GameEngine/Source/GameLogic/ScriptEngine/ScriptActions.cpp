@@ -27,7 +27,8 @@
 // Author: John Ahlquist, Nov. 2001
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/AudioAffect.h"
 #include "Common/AudioHandleSpecialValues.h"
@@ -197,7 +198,7 @@ void ScriptActions::doQuickVictory()
 //-------------------------------------------------------------------------------------------------
 void ScriptActions::doSetInfantryLightingOverride(Real setting)
 {
-	DEBUG_ASSERTCRASH( (setting == -1.0f) || (setting > 0.0f), ("Invalid setting (%d) in Infantry Lighting Override script.", setting) );
+	engine::debug::invariant(((setting == -1.0f) || (setting > 0.0f)), "(setting == -1.0f) || (setting > 0.0f)", __FILE__, __LINE__, "Invalid setting (%d) in Infantry Lighting Override script.", setting);
 	TheWritableGlobalData->m_scriptOverrideInfantryLightScale = setting;
 }
 
@@ -423,7 +424,7 @@ void ScriptActions::doMoveToWaypoint(const AsciiString& team, const AsciiString&
 		Waypoint *way = TheTerrainLogic->getWaypointByName(waypoint);
 		if (way) {
 			Coord3D destination = *way->getLocation();
-			//DEBUG_LOG(("Moving team to waypoint %f, %f, %f", destination.x, destination.y, destination.z));
+			//engine::debug::log_info("Moving team to waypoint %f, %f, %f", destination.x, destination.y, destination.z);
  			theGroup->groupMoveToPosition( &destination, false, CMD_FROM_SCRIPT );
 		}
 	}
@@ -512,7 +513,7 @@ void ScriptActions::doCreateReinforcements(const AsciiString& team, const AsciiS
 
 	destination = *way->getLocation();
 	if (!theTeamProto) {
-		DEBUG_LOG(("***WARNING - Team %s not found.", team.str()));
+		engine::debug::log_info("***WARNING - Team %s not found.", team.str());
 		return;
 	}
 	const TeamTemplateInfo *pInfo = theTeamProto->getTemplateInfo();
@@ -622,7 +623,7 @@ void ScriptActions::doCreateReinforcements(const AsciiString& team, const AsciiS
 				}
 				else
 				{
-					DEBUG_CRASH( ("doCreateReinforcement script -- transport doesn't have contain to hold guys.") );
+					engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "doCreateReinforcement script -- transport doesn't have contain to hold guys.");
 				}
 			}
 			else
@@ -712,7 +713,7 @@ void ScriptActions::doCreateReinforcements(const AsciiString& team, const AsciiS
 					}
 					else
 					{
-						DEBUG_CRASH( ("doCreateReinforcements: PutInContainer %s is full, or not valid for the payload %s!", putInContainerTemplate->getName().str(), obj->getTemplate()->getName().str() ) );
+						engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "doCreateReinforcements: PutInContainer %s is full, or not valid for the payload %s!", putInContainerTemplate->getName().str(), obj->getTemplate()->getName().str() );
 					}
 				}
 
@@ -993,7 +994,7 @@ void ScriptActions::doCreateObject(const AsciiString& objectName, const AsciiStr
 	if (!theTeam) {
 		TheScriptEngine->AppendDebugMessage("***WARNING - Team not found:***", false);
 		TheScriptEngine->AppendDebugMessage(teamName, true);
-		DEBUG_LOG(("WARNING - Team %s not found.", teamName.str()));
+		engine::debug::log_info("WARNING - Team %s not found.", teamName.str());
 		return;
 	}
 	const ThingTemplate *thingTemplate;
@@ -1025,7 +1026,7 @@ void ScriptActions::doCreateObject(const AsciiString& objectName, const AsciiStr
 
 		}
 	} else {
-		DEBUG_LOG(("WARNING - ThingTemplate '%s' not found.", thingName.str()));
+		engine::debug::log_info("WARNING - ThingTemplate '%s' not found.", thingName.str());
 	}
 }
 
@@ -1184,7 +1185,7 @@ void ScriptActions::createUnitOnTeamAt(const AsciiString& unitName, const AsciiS
 	if (!theTeam) {
 		TheScriptEngine->AppendDebugMessage("***WARNING - Team not found:***", false);
 		TheScriptEngine->AppendDebugMessage(teamName, true);
-		DEBUG_LOG(("WARNING - Team %s not found.", teamName.str()));
+		engine::debug::log_info("WARNING - Team %s not found.", teamName.str());
 		return;
 	}
 	const ThingTemplate *thingTemplate;
@@ -1212,7 +1213,7 @@ void ScriptActions::createUnitOnTeamAt(const AsciiString& unitName, const AsciiS
 			}
 		}
 	} else {
-		DEBUG_LOG(("WARNING - ThingTemplate '%s' not found.", objType.str()));
+		engine::debug::log_info("WARNING - ThingTemplate '%s' not found.", objType.str());
 	}
 }
 
@@ -1498,7 +1499,7 @@ void ScriptActions::doLoadAllTransports(const AsciiString& teamName)
 			}
 			else
 			{
-				DEBUG_CRASH( ("doLoadAllTransports script -- transport doesn't have a container!") );
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "doLoadAllTransports script -- transport doesn't have a container!");
 			}
 		}
 		else
@@ -1657,7 +1658,7 @@ void ScriptActions::doNamedFollowWaypoints(const AsciiString& unitName, const As
 		return;
 	}
 
-	DEBUG_ASSERTLOG(TheTerrainLogic->isPurposeOfPath(way, waypointPathLabel), ("***Wrong waypoint purpose. Make jba fix this."));
+	if (!(TheTerrainLogic->isPurposeOfPath(way, waypointPathLabel))) engine::debug::log_error("***Wrong waypoint purpose. Make jba fix this.");
 
 	theUnit->leaveGroup();
 	aiUpdate->chooseLocomotorSet(LOCOMOTORSET_NORMAL);
@@ -1684,7 +1685,7 @@ void ScriptActions::doNamedFollowWaypointsExact(const AsciiString& unitName, con
 		return;
 	}
 
-	DEBUG_ASSERTLOG(TheTerrainLogic->isPurposeOfPath(way, waypointPathLabel), ("***Wrong waypoint purpose. Make jba fix this."));
+	if (!(TheTerrainLogic->isPurposeOfPath(way, waypointPathLabel))) engine::debug::log_error("***Wrong waypoint purpose. Make jba fix this.");
 
 	theUnit->leaveGroup();
 	aiUpdate->chooseLocomotorSet(LOCOMOTORSET_NORMAL);
@@ -1749,7 +1750,7 @@ void ScriptActions::doTeamFollowSkirmishApproachPath(const AsciiString& teamName
 		aiPlayer->checkBridges(firstUnit, way);
 	}
 
-	DEBUG_ASSERTLOG(TheTerrainLogic->isPurposeOfPath(way, pathLabel), ("***Wrong waypoint purpose. Make jba fix this."));
+	if (!(TheTerrainLogic->isPurposeOfPath(way, pathLabel))) engine::debug::log_error("***Wrong waypoint purpose. Make jba fix this.");
 	if (asTeam)
 	{
 		theGroup->groupFollowWaypointPathAsTeam(way, CMD_FROM_SCRIPT);
@@ -1806,7 +1807,7 @@ void ScriptActions::doTeamMoveToSkirmishApproachPath(const AsciiString& teamName
 	if (!way) {
 		return;
 	}
-	DEBUG_ASSERTLOG(TheTerrainLogic->isPurposeOfPath(way, pathLabel), ("***Wrong waypoint purpose. Make jba fix this."));
+	if (!(TheTerrainLogic->isPurposeOfPath(way, pathLabel))) engine::debug::log_error("***Wrong waypoint purpose. Make jba fix this.");
 	theGroup->groupMoveToPosition(way->getLocation(), false, CMD_FROM_SCRIPT);
 }
 
@@ -1852,7 +1853,7 @@ void ScriptActions::doTeamFollowWaypoints(const AsciiString& teamName, const Asc
 	if (!way) {
 		return;
 	}
-	DEBUG_ASSERTLOG(TheTerrainLogic->isPurposeOfPath(way, waypointPathLabel), ("***Wrong waypoint purpose. Make jba fix this."));
+	if (!(TheTerrainLogic->isPurposeOfPath(way, waypointPathLabel))) engine::debug::log_error("***Wrong waypoint purpose. Make jba fix this.");
 	if (asTeam)
 	{
 		theGroup->groupFollowWaypointPathAsTeam(way, CMD_FROM_SCRIPT);
@@ -1903,7 +1904,7 @@ void ScriptActions::doTeamFollowWaypointsExact(const AsciiString& teamName, cons
 	if (!way) {
 		return;
 	}
-	DEBUG_ASSERTLOG(TheTerrainLogic->isPurposeOfPath(way, waypointPathLabel), ("***Wrong waypoint purpose. Make jba fix this."));
+	if (!(TheTerrainLogic->isPurposeOfPath(way, waypointPathLabel))) engine::debug::log_error("***Wrong waypoint purpose. Make jba fix this.");
 	if (asTeam)
 	{
 		theGroup->groupFollowWaypointPathAsTeamExact(way, CMD_FROM_SCRIPT);
@@ -2672,7 +2673,7 @@ void ScriptActions::doCameoFlash(const AsciiString& name, Int timeInSeconds)
 	button = TheControlBar->findCommandButton( name );
 	if( button == nullptr )
 	{
-		DEBUG_CRASH(( "ScriptActions::doCameoFlash can't find AsciiString cameoflash" ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "ScriptActions::doCameoFlash can't find AsciiString cameoflash" );
 		return;
 	}
 
@@ -3060,7 +3061,7 @@ static PlayerMaskType getHumanPlayerMask()
 #endif
 	}
 
-	//DEBUG_LOG(("getHumanPlayerMask(): mask was %4.4X", mask));
+	//engine::debug::log_info("getHumanPlayerMask(): mask was %4.4X", mask);
 	return mask;
 }
 
@@ -3119,22 +3120,22 @@ void ScriptActions::doShroudMapAtWaypoint(const AsciiString& waypointName, Real 
 //-------------------------------------------------------------------------------------------------
 void ScriptActions::doRevealMapEntire(const AsciiString& playerName)
 {
-	DEBUG_LOG(("ScriptActions::doRevealMapEntire() for player named '%s'", playerName.str()));
+	engine::debug::log_info("ScriptActions::doRevealMapEntire() for player named '%s'", playerName.str());
 	Player* player = TheScriptEngine->getPlayerFromAsciiString(playerName);
 	if (player && playerName.isNotEmpty())
 	{
-		DEBUG_LOG(("ScriptActions::doRevealMapEntire() for player named '%ls' in position %d", player->getPlayerDisplayName().str(), player->getPlayerIndex()));
+		engine::debug::log_info("ScriptActions::doRevealMapEntire() for player named '%ls' in position %d", player->getPlayerDisplayName().str(), player->getPlayerIndex());
 		ThePartitionManager->revealMapForPlayer( player->getPlayerIndex() );
 	}
 	else
 	{
-		DEBUG_LOG(("ScriptActions::doRevealMapEntire() - no player, so doing all human players"));
+		engine::debug::log_info("ScriptActions::doRevealMapEntire() - no player, so doing all human players");
 		for (Int i=0; i<ThePlayerList->getPlayerCount(); ++i)
 		{
 			Player *player = ThePlayerList->getNthPlayer(i);
 			if (player->getPlayerType() == PLAYER_HUMAN)
 			{
-				DEBUG_LOG(("ScriptActions::doRevealMapEntire() for player %d", i));
+				engine::debug::log_info("ScriptActions::doRevealMapEntire() for player %d", i);
 				ThePartitionManager->revealMapForPlayer( i );
 			}
 		}
@@ -3158,7 +3159,7 @@ void ScriptActions::doRevealMapEntirePermanently( Bool reveal, const AsciiString
 			Player *player = ThePlayerList->getNthPlayer(i);
 			if (player->getPlayerType() == PLAYER_HUMAN)
 			{
-				DEBUG_LOG(("ScriptActions::doRevealMapEntirePermanently() for player %d", i));
+				engine::debug::log_info("ScriptActions::doRevealMapEntirePermanently() for player %d", i);
 				if( reveal )
 					ThePartitionManager->revealMapForPlayerPermanently( i );
 				else
@@ -3185,7 +3186,7 @@ void ScriptActions::doShroudMapEntire(const AsciiString& playerName)
 			Player *player = ThePlayerList->getNthPlayer(i);
 			if (player->getPlayerType() == PLAYER_HUMAN)
 			{
-				DEBUG_LOG(("ScriptActions::doShroudMapEntire() for player %d", i));
+				engine::debug::log_info("ScriptActions::doShroudMapEntire() for player %d", i);
 				ThePartitionManager->shroudMapForPlayer( i );
 			}
 		}
@@ -3210,7 +3211,7 @@ void ScriptActions::doTeamAvailableForRecruitment(const AsciiString& teamName, B
 //-------------------------------------------------------------------------------------------------
 void ScriptActions::doCollectNearbyForTeam(const AsciiString& teamName)
 {
-	DEBUG_CRASH(("You would think this has been implemented, but you'd be wrong. (doCollectNearbyForTeam)"));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "You would think this has been implemented, but you'd be wrong. (doCollectNearbyForTeam)");
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -3310,7 +3311,7 @@ void ScriptActions::doIdleAllPlayerUnits(const AsciiString& playerName)
 			Player *player = ThePlayerList->getNthPlayer(i);
 			if (player->getPlayerType() == PLAYER_HUMAN)
 			{
-				DEBUG_LOG(("ScriptActions::doIdleAllPlayerUnits() for player %d", i));
+				engine::debug::log_info("ScriptActions::doIdleAllPlayerUnits() for player %d", i);
 				player->setUnitsShouldIdleOrResume(true);
 			}
 		}
@@ -3334,7 +3335,7 @@ void ScriptActions::doResumeSupplyTruckingForIdleUnits(const AsciiString& player
 			Player *player = ThePlayerList->getNthPlayer(i);
 			if (player->getPlayerType() == PLAYER_HUMAN)
 			{
-				DEBUG_LOG(("ScriptActions::doResumeSupplyTruckingForIdleUnits() for player %d", i));
+				engine::debug::log_info("ScriptActions::doResumeSupplyTruckingForIdleUnits() for player %d", i);
 				player->setUnitsShouldIdleOrResume(false);
 			}
 		}
@@ -3386,7 +3387,7 @@ void ScriptActions::doTeamGarrisonSpecificBuilding(const AsciiString& teamName, 
 
 	if( !theBuilding->getContain() )
 	{
-		DEBUG_CRASH( ("doTeamGarrisonSpecificBuilding script -- building doesn't have a container!" ) );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "doTeamGarrisonSpecificBuilding script -- building doesn't have a container!" );
 		return;
 	}
 	PlayerMaskType player = theBuilding->getContain()->getPlayerWhoEntered();
@@ -3551,7 +3552,7 @@ void ScriptActions::doUnitGarrisonSpecificBuilding(const AsciiString& unitName, 
 	ContainModuleInterface *contain = theBuilding->getContain();
 	if( !contain )
 	{
-		DEBUG_CRASH(("doUnitGarrisonSpecificBuilding script -- building doesn't have a container" ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "doUnitGarrisonSpecificBuilding script -- building doesn't have a container" );
 		return;
 	}
 	PlayerMaskType player = theBuilding->getContain()->getPlayerWhoEntered();
@@ -3619,7 +3620,7 @@ void ScriptActions::doUnitGarrisonNearestBuilding(const AsciiString& unitName)
 		ContainModuleInterface *contain = theBuilding->getContain();
 		if( !contain )
 		{
-			DEBUG_CRASH( ("doUnitGarrisonNearestBuilding script -- building doesn't have a container.") );
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "doUnitGarrisonNearestBuilding script -- building doesn't have a container.");
 			continue;
 		}
 		PlayerMaskType player = theBuilding->getContain()->getPlayerWhoEntered();
@@ -4284,7 +4285,7 @@ void ScriptActions::doSkirmishFireSpecialPowerAtMostCost( const AsciiString &pla
 						}
 					}
 
-          DEBUG_ASSERTCRASH( locationFound, ("ScriptActions::doSkirmishFireSpecialPowerAtMostCost() could not find a valid (costly) location.") );
+          engine::debug::invariant((locationFound), "locationFound", __FILE__, __LINE__, "ScriptActions::doSkirmishFireSpecialPowerAtMostCost() could not find a valid (costly) location.");
 
 					if( locationFound && location.lengthSqr() > 0.0f )
 					{
@@ -4834,7 +4835,7 @@ void ScriptActions::doNamedFireWeaponFollowingWaypointPath( const AsciiString& u
 		{
 			return;
 		}
-		DEBUG_ASSERTLOG(TheTerrainLogic->isPurposeOfPath(way, waypointPath), ("***Wrong waypoint purpose. Make jba fix this."));
+		if (!(TheTerrainLogic->isPurposeOfPath(way, waypointPath))) engine::debug::log_error("***Wrong waypoint purpose. Make jba fix this.");
 
 		projectile->leaveGroup();
 		aiUpdate->chooseLocomotorSet(LOCOMOTORSET_NORMAL);
@@ -5434,7 +5435,7 @@ void ScriptActions::doUnitReceiveUpgrade( const AsciiString& unitName, const Asc
 		return;
 	}
 
-	DEBUG_ASSERTCRASH(obj->affectedByUpgrade(templ), ("Design bug: Unit '%s' was given upgrade '%s', but he is unaffected.", unitName.str(), upgradeName.str()));
+	engine::debug::invariant((obj->affectedByUpgrade(templ)), "obj->affectedByUpgrade(templ)", __FILE__, __LINE__, "Design bug: Unit '%s' was given upgrade '%s', but he is unaffected.", unitName.str(), upgradeName.str());
 
 	obj->giveUpgrade(templ);
 }
@@ -6230,7 +6231,7 @@ void ScriptActions::doC3CameraShake
 )
 {
 	Waypoint *way = TheTerrainLogic->getWaypointByName(waypointName);
-	DEBUG_ASSERTLOG( (way != nullptr), ("Camera shake with No Valid Waypoint") );
+	if (!((way != nullptr))) engine::debug::log_error("Camera shake with No Valid Waypoint");
 	Coord3D pos = *way->getLocation();
 
 	TheTacticalView->Add_Camera_Shake(pos, radius, duration_seconds, amplitude);
@@ -6542,7 +6543,7 @@ void ScriptActions::executeAction( ScriptAction *pAction )
 {
 	switch (pAction->getActionType()) {
 		default:
-			DEBUG_CRASH(("Unknown ScriptAction type %d", pAction->getActionType())); return;
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unknown ScriptAction type %d", pAction->getActionType()); return;
 		case ScriptAction::DEBUG_MESSAGE_BOX:
 			doDebugMessage(pAction->getParameter(0)->getString(), true);
 			return;
@@ -6890,7 +6891,7 @@ void ScriptActions::executeAction( ScriptAction *pAction )
 			{
 				const char* MSG = "Your Script requested the following message be displayed:\n\n";
 				const char* MSG2 = "\n\nTHIS IS NOT A BUG. DO NOT REPORT IT.";
-				DEBUG_CRASH(("%s%s%s",MSG,pAction->getParameter(0)->getString().str(),MSG2));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "%s%s%s",MSG,pAction->getParameter(0)->getString().str(),MSG2);
 			}
 #endif
 			return;
@@ -7482,22 +7483,22 @@ void ScriptActions::executeAction( ScriptAction *pAction )
 
 		case ScriptAction::SKIRMISH_WAIT_FOR_COMMANDBUTTON_AVAILABLE_ALL:
 			// We should never get here.
-			DEBUG_CRASH(("\"[Skirmish] Wait for command button available - all\" should never be used outside of Sequential scripts. - jkmcd"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "\"[Skirmish] Wait for command button available - all\" should never be used outside of Sequential scripts. - jkmcd");
 			return;
 
 		case ScriptAction::SKIRMISH_WAIT_FOR_COMMANDBUTTON_AVAILABLE_PARTIAL:
 			// We should never get here.
-			DEBUG_CRASH(("\"[Skirmish] Wait for command button available - partial\" should never be used outside of Sequential scripts. - jkmcd"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "\"[Skirmish] Wait for command button available - partial\" should never be used outside of Sequential scripts. - jkmcd");
 			return;
 
 		case ScriptAction::TEAM_WAIT_FOR_NOT_CONTAINED_ALL:
 			// We should never get here.
-			DEBUG_CRASH(("\"[Team] Wait for team no longer contained - all\" should never be used outside of Sequential scripts. - jkmcd"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "\"[Team] Wait for team no longer contained - all\" should never be used outside of Sequential scripts. - jkmcd");
 			return;
 
 		case ScriptAction::TEAM_WAIT_FOR_NOT_CONTAINED_PARTIAL:
 			// We should never get here.
-			DEBUG_CRASH(("\"[Team] Wait for team no longer contained - partial\" should never be used outside of Sequential scripts. - jkmcd"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "\"[Team] Wait for team no longer contained - partial\" should never be used outside of Sequential scripts. - jkmcd");
 			return;
 
 		case ScriptAction::TEAM_SPIN_FOR_FRAMECOUNT:

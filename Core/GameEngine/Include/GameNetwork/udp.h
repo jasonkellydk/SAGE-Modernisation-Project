@@ -120,6 +120,4 @@ class UDP
 	Int						AllowBroadcasts(Bool status);
 };
 
-#ifdef DEBUG_LOGGING
 AsciiString GetWSAErrorString( Int error );
-#endif

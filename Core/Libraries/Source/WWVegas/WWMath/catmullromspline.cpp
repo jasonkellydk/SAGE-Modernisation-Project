@@ -46,12 +46,13 @@
 #include "catmullromspline.h"
 #include "WWSaveLoad/persistfactory.h"
 #include "wwmathids.h"
-#include "WWDebug/wwhack.h"
+import engine.debug;
+
 
 /*
 ** Force-Link this module because the linker can't detect that we actually need it...
 */
-DECLARE_FORCE_LINK(catmullromspline);
+void force_link_catmullromspline() {}
 
 /*
 ** Save-Load stuff
@@ -205,7 +206,7 @@ bool CatmullRomSpline3DClass::Load(ChunkLoadClass &cload)
 				break;
 
 			default:
-				WWDEBUG_SAY(("Unhandled Chunk: 0x%X File: %s Line: %d",__FILE__,__LINE__));
+				engine::debug::log_info("Unhandled Chunk: 0x%X File: %s Line: %d",__FILE__,__LINE__);
 				break;
 		}
 		cload.Close_Chunk();
@@ -344,7 +345,7 @@ bool CatmullRomSpline1DClass::Load(ChunkLoadClass &cload)
 				break;
 
 			default:
-				WWDEBUG_SAY(("Unhandled Chunk: 0x%X File: %s Line: %d",__FILE__,__LINE__));
+				engine::debug::log_info("Unhandled Chunk: 0x%X File: %s Line: %d",__FILE__,__LINE__);
 				break;
 		}
 		cload.Close_Chunk();

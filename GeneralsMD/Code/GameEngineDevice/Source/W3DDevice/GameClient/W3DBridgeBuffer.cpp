@@ -77,6 +77,7 @@ import Graphics.Scene.Surfaces.Geometry;
 #include "W3DDevice/GameClient/W3DSceneClass.h"
 import Assets.Identity;
 #include <string>
+import engine.debug;
 
 
 //-----------------------------------------------------------------------------
@@ -266,7 +267,7 @@ Bool W3DBridge::load(BodyDamageType curDamageState)
 			right = pSub->Get_Name();
 		}
 		REF_PTR_RELEASE(pSub);
-		//DEBUG_LOG(("Sub obj name %s", pSub->Get_Name()));
+		//engine::debug::log_info("Sub obj name %s", pSub->Get_Name());
 	}
 
 	REF_PTR_RELEASE(pObj);
@@ -506,13 +507,13 @@ void W3DBridge::getIndicesNVertices(UnsignedShort *destination_ib, Graphics::Sur
 		numV = getModelVerticesFixed(destination_vb, *curVertexP, m_leftMtx, m_leftMesh, pLightsIterator);
 		if (!numV)
 		{	//not enough room for vertices
-			DEBUG_ASSERTCRASH( numV, ("W3DBridge::GetIndicesNVertices(). Vertex overflow.") );
+			engine::debug::invariant((numV), "numV", __FILE__, __LINE__, "W3DBridge::GetIndicesNVertices(). Vertex overflow.");
 			return;
 		}
 		numI = getModelIndices( destination_ib, *curIndexP, *curVertexP, m_leftMesh);
 		if (!numI)
 		{	//not enough room for indices
-			DEBUG_ASSERTCRASH( numI, ("W3DBridge::GetIndicesNVertices(). Index overflow.") );
+			engine::debug::invariant((numI), "numI", __FILE__, __LINE__, "W3DBridge::GetIndicesNVertices(). Index overflow.");
 			return;
 		}
 		*curIndexP += numI;
@@ -556,13 +557,13 @@ void W3DBridge::getIndicesNVertices(UnsignedShort *destination_ib, Graphics::Sur
 		m_leftMtx, m_leftMesh, pLightsIterator);
 	if (!numV)
 	{	//not enough room for vertices
-		DEBUG_ASSERTCRASH( numV, ("W3DBridge::GetIndicesNVertices(). Vertex overflow.") );
+		engine::debug::invariant((numV), "numV", __FILE__, __LINE__, "W3DBridge::GetIndicesNVertices(). Vertex overflow.");
 		return;
 	}
 	numI = getModelIndices( destination_ib, *curIndexP, *curVertexP, m_leftMesh);
 	if (!numI)
 	{	//not enough room for indices
-		DEBUG_ASSERTCRASH( numI, ("W3DBridge::GetIndicesNVertices(). Index overflow.") );
+		engine::debug::invariant((numI), "numI", __FILE__, __LINE__, "W3DBridge::GetIndicesNVertices(). Index overflow.");
 		return;
 	}
 	*curIndexP += numI;
@@ -577,13 +578,13 @@ void W3DBridge::getIndicesNVertices(UnsignedShort *destination_ib, Graphics::Sur
 			m_sectionMtx, m_sectionMesh, pLightsIterator);
 		if (!numV)
 		{	//not enough room for vertices
-			DEBUG_ASSERTCRASH( numV, ("W3DBridge::GetIndicesNVertices(). Vertex overflow.") );
+			engine::debug::invariant((numV), "numV", __FILE__, __LINE__, "W3DBridge::GetIndicesNVertices(). Vertex overflow.");
 			return;
 		}
 		numI = getModelIndices( destination_ib, *curIndexP, *curVertexP, m_sectionMesh);
 		if (!numI)
 		{	//not enough room for indices
-			DEBUG_ASSERTCRASH( numI, ("W3DBridge::GetIndicesNVertices(). Index overflow.") );
+			engine::debug::invariant((numI), "numI", __FILE__, __LINE__, "W3DBridge::GetIndicesNVertices(). Index overflow.");
 			return;
 		}
 		*curIndexP += numI;
@@ -597,13 +598,13 @@ void W3DBridge::getIndicesNVertices(UnsignedShort *destination_ib, Graphics::Sur
 		m_rightMtx, m_rightMesh, pLightsIterator);
 	if (!numV)
 	{	//not enough room for vertices
-		DEBUG_ASSERTCRASH( numV, ("W3DBridge::GetIndicesNVertices(). Vertex overflow.") );
+		engine::debug::invariant((numV), "numV", __FILE__, __LINE__, "W3DBridge::GetIndicesNVertices(). Vertex overflow.");
 		return;
 	}
 	numI = getModelIndices( destination_ib, *curIndexP, *curVertexP, m_rightMesh);
 	if (!numI)
 	{	//not enough room for indices
-		DEBUG_ASSERTCRASH( numI, ("W3DBridge::GetIndicesNVertices(). Index overflow.") );
+		engine::debug::invariant((numI), "numI", __FILE__, __LINE__, "W3DBridge::GetIndicesNVertices(). Index overflow.");
 		return;
 	}
 	*curIndexP += numI;
@@ -681,7 +682,7 @@ void W3DBridgeBuffer::loadBridgesInVertexAndIndexBuffers(Graphics::SceneObjectLi
 			&m_curNumBridgeVertices, pLightsIterator);
         if (!m_bridges[curBridge].uploadGeometry(m_vertices, m_indices)) {
             m_bridges[curBridge].releaseGeometry();
-            DEBUG_LOG(("Bridge geometry upload failed.\n"));
+            engine::debug::log_info("Bridge geometry upload failed.\n");
         }
 	}
 }
@@ -776,7 +777,7 @@ void W3DBridgeBuffer::loadBridges(W3DTerrainLogic *pTerrainLogic, Bool saveGame)
 		if (pMapObj->getFlag(FLAG_BRIDGE_POINT1)) {
 			pMapObj2 = pMapObj->getNext();
 			if ( !pMapObj2 || !pMapObj2->getFlag(FLAG_BRIDGE_POINT2)) {
-				DEBUG_LOG(("Missing second bridge point.  Ignoring first."));
+				engine::debug::log_info("Missing second bridge point.  Ignoring first.");
 			}
 			if (pMapObj2==nullptr) break;
 			if (!pMapObj2->getFlag(FLAG_BRIDGE_POINT2)) continue;
@@ -813,7 +814,7 @@ static W3DRenderObject* createTower( W3DSimpleScene *scene,
 		return nullptr;
 
 	// get template for this bridge
-	DEBUG_ASSERTCRASH( TheTerrainRoads, ("createTower: TheTerrainRoads is null") );
+	engine::debug::invariant((TheTerrainRoads), "TheTerrainRoads", __FILE__, __LINE__, "createTower: TheTerrainRoads is null");
 	TerrainRoadType *bridgeTemplate = TheTerrainRoads->findBridge( mapObject->getName() );
 	if( bridgeTemplate == nullptr )
 		return nullptr;
@@ -836,7 +837,7 @@ static W3DRenderObject* createTower( W3DSimpleScene *scene,
 
 	// find the thing template for the tower we want to construct
 	AsciiString towerTemplateName = bridgeTemplate->getTowerObjectName( type );
-	DEBUG_ASSERTCRASH( TheThingFactory, ("createTower: TheThingFactory is null") );
+	engine::debug::invariant((TheThingFactory), "TheThingFactory", __FILE__, __LINE__, "createTower: TheThingFactory is null");
 	const ThingTemplate *towerTemplate = TheThingFactory->findTemplate( towerTemplateName );
 	if( towerTemplate == nullptr )
 		return nullptr;
@@ -949,7 +950,7 @@ void W3DBridgeBuffer::worldBuilderUpdateBridgeTowers( W3DAssetManager *assetMana
 
 			pMapObj2 = pMapObj->getNext();
 			if( !pMapObj2 || !pMapObj2->getFlag( FLAG_BRIDGE_POINT2 ) )
-				DEBUG_LOG(("Missing second bridge point.  Ignoring first."));
+				engine::debug::log_info("Missing second bridge point.  Ignoring first.");
 
 			if( pMapObj2 == nullptr )
 				break;
@@ -998,8 +999,8 @@ void W3DBridgeBuffer::worldBuilderUpdateBridgeTowers( W3DAssetManager *assetMana
 						}
 
 						// sanity
-						DEBUG_ASSERTCRASH( towerRenderObj != nullptr, ("worldBuilderUpdateBridgeTowers: unable to create tower for bridge '%s'",
-															 m_bridges[ i ].getTemplateName().str()) );
+						engine::debug::invariant((towerRenderObj != nullptr), "towerRenderObj != nullptr", __FILE__, __LINE__, "worldBuilderUpdateBridgeTowers: unable to create tower for bridge '%s'",
+															 m_bridges[ i ].getTemplateName().str());
 
 						// update the position of the towers
 						updateTowerPos( towerRenderObj, (BridgeTowerType)j, &bridgeInfo );
@@ -1136,5 +1137,5 @@ void W3DBridgeBuffer::drawBridges(W3DCamera * camera, Bool wireframe, W3DTexture
     }
     if (!Graphics::Draw_Bridges(Graphics::Get_Surface_Renderer(), device->Immediate_Command_List(),
         draws, parameters, cloud, shroud))
-        DEBUG_LOG(("Bridge graphics submission failed.\n"));
+        engine::debug::log_info("Bridge graphics submission failed.\n");
 }

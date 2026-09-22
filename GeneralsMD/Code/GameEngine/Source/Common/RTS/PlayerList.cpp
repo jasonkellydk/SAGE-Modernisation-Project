@@ -42,7 +42,8 @@
 //
 //-----------------------------------------------------------------------------
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/Errors.h"
 #include "Common/DataChunk.h"
@@ -91,7 +92,7 @@ Player *PlayerList::getNthPlayer(Int i)
 {
 	if( i < 0 || i >= MAX_PLAYER_COUNT )
 	{
-//		DEBUG_CRASH( ("Illegal player index") );
+//		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Illegal player index");
 		return nullptr;
 	}
 	return m_players[i];
@@ -126,7 +127,7 @@ void PlayerList::newGame()
 {
 	Int i;
 
-	DEBUG_ASSERTCRASH(this != nullptr, ("null this"));
+	engine::debug::invariant((this != nullptr), "this != nullptr", __FILE__, __LINE__, "null this");
 
 	reset();
 
@@ -147,7 +148,7 @@ void PlayerList::newGame()
 		Bool exists;	// throwaway, since we don't care if it exists
 		if (d->getBool(TheKey_multiplayerIsLocal, &exists))
 		{
-			DEBUG_LOG(("Player %s is multiplayer local", pname.str()));
+			engine::debug::log_info("Player %s is multiplayer local", pname.str());
 			setLocalPlayer(p);
 			setLocal = true;
 		}
@@ -166,7 +167,7 @@ void PlayerList::newGame()
 
 	if (!setLocal)
 	{
-		DEBUG_ASSERTCRASH(TheNetwork, ("*** Map has no human player... picking first nonneutral player for control"));
+		engine::debug::invariant((TheNetwork), "TheNetwork", __FILE__, __LINE__, "*** Map has no human player... picking first nonneutral player for control");
 		for( i = 0; i < TheSidesList->getNumSides(); i++)
 		{
 			Player* p = getNthPlayer(i);
@@ -200,7 +201,7 @@ void PlayerList::newGame()
 			}
 			else
 			{
-				DEBUG_LOG(("unknown enemy %s",tok.str()));
+				engine::debug::log_info("unknown enemy %s",tok.str());
 			}
 		}
 
@@ -214,7 +215,7 @@ void PlayerList::newGame()
 			}
 			else
 			{
-				DEBUG_LOG(("unknown ally %s",tok.str()));
+				engine::debug::log_info("unknown ally %s",tok.str());
 			}
 		}
 
@@ -297,11 +298,11 @@ Team *PlayerList::validateTeam( AsciiString owner )
 	Team *t = TheTeamFactory->findTeam(owner);
 	if (t)
 	{
-		//DEBUG_LOG(("assigned obj %08lx to team %s",obj,owner.str()));
+		//engine::debug::log_info("assigned obj %08lx to team %s",obj,owner.str());
 	}
 	else
 	{
-		DEBUG_CRASH(("no team or player named %s could be found!", owner.str()));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "no team or player named %s could be found!", owner.str());
 		t = getNeutralPlayer()->getDefaultTeam();
 	}
 	return t;
@@ -313,7 +314,7 @@ void PlayerList::setLocalPlayer(Player *player)
 	// can't set local player to null -- if you try, you get neutral.
 	if (player == nullptr)
 	{
-		DEBUG_CRASH(("local player may not be null"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "local player may not be null");
 		player = getNeutralPlayer();
 	}
 
@@ -330,18 +331,18 @@ void PlayerList::setLocalPlayer(Player *player)
 	if (player)
 	{
 		// did you know? you can use "%ls" to print a doublebyte string, even in a single-byte printf...
-		DEBUG_LOG(("Switching local players. The new player is named '%ls' (%s) and owns the following objects:",
+		engine::debug::log_info("Switching local players. The new player is named '%ls' (%s) and owns the following objects:",
 			player->getPlayerDisplayName().str(),
 			TheNameKeyGenerator->keyToName(player->getPlayerNameKey()).str()
-		));
+		);
 		for (Object *obj = player->getFirstOwnedObject(); obj; obj = obj->getNextOwnedObject())
 		{
-			DEBUG_LOG_RAW(("Obj %08lx is of type %s",obj,obj->getTemplate()->getName().str()));
+			engine::debug::log_info("Obj %08lx is of type %s",obj,obj->getTemplate()->getName().str());
 			if (!player->canBuild(obj->getTemplate()))
 			{
-				DEBUG_LOG_RAW((" (NOT BUILDABLE)"));
+				engine::debug::log_info(" (NOT BUILDABLE)");
 			}
-			DEBUG_LOG_RAW(("\n"));
+			engine::debug::log_info("\n");
 		}
 	}
 #endif
@@ -363,7 +364,7 @@ Player *PlayerList::getPlayerFromMask( PlayerMaskType mask )
 
 	}
 
-	DEBUG_CRASH( ("Player does not exist for mask") );
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Player does not exist for mask");
 	return nullptr; // mask not found
 
 }
@@ -385,7 +386,7 @@ Player *PlayerList::getEachPlayerFromMask( PlayerMaskType& maskToAdjust )
 		}
 	}
 
-	DEBUG_CRASH( ("No players found that contain any matching masks.") );
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "No players found that contain any matching masks.");
 	maskToAdjust = 0;
 	return nullptr; // mask not found
 }
@@ -469,7 +470,7 @@ void PlayerList::xfer( Xfer *xfer )
 	if( playerCount != m_playerCount )
 	{
 
-		DEBUG_CRASH(( "Invalid player count '%d', should be '%d'", playerCount, m_playerCount ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Invalid player count '%d', should be '%d'", playerCount, m_playerCount );
 		throw SC_INVALID_DATA;
 
 	}

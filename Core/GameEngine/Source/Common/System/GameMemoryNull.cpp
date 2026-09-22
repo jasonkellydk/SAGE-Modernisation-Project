@@ -17,6 +17,7 @@
 */
 
 #include "PreRTS.h"
+import engine.debug;
 
 #include <malloc.h>
 
@@ -112,12 +113,12 @@ void initMemoryManager()
 		TheMemoryPoolFactory = new (malloc(sizeof MemoryPoolFactory)) MemoryPoolFactory;
 		TheDynamicMemoryAllocator = new (malloc(sizeof DynamicMemoryAllocator)) DynamicMemoryAllocator;
 
-		DEBUG_INIT(DEBUG_FLAGS_DEFAULT);
-		DEBUG_LOG(("*** Initialized the Null Memory Manager"));
+		engine::debug::initialize();
+		engine::debug::log_info("*** Initialized the Null Memory Manager");
 	}
 	else
 	{
-			DEBUG_CRASH(("Null Memory Manager is already initialized"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Null Memory Manager is already initialized");
 	}
 
 	theMainInitFlag = true;
@@ -152,7 +153,7 @@ void shutdownMemoryManager()
 
 	theMainInitFlag = false;
 
-	DEBUG_SHUTDOWN();
+	engine::debug::shutdown();
 }
 
 

@@ -31,7 +31,7 @@
 
 #include "Common/GameState.h"
 #include "Common/GlobalData.h"
-#include "Common/PerfTimer.h"
+
 #include "Common/MapReaderWriterInfo.h"
 #include "Common/ThingTemplate.h"
 #include "Common/WellKnownKeys.h"
@@ -63,6 +63,7 @@
 #include "W3DDevice/GameClient/W3DSceneQueryMask.h"
 #include "W3DDevice/GameClient/W3DCastQuery.h"
 #include "W3DDevice/GameClient/W3DAssetCatalog.h"
+import engine.debug;
 
 
 
@@ -156,7 +157,8 @@ static TestSeismicFilter testSeismicFilter;
 
 //-------------------------------------------------------------------------------------------------
 //-------------------------------------------------------------------------------------------------
-W3DTerrainVisual::W3DTerrainVisual()
+W3DTerrainVisual::W3DTerrainVisual(engine::platform::IClockService& clock)
+	: m_clock(clock)
 {
 
 	m_terrainRenderObject = nullptr;
@@ -209,7 +211,7 @@ void W3DTerrainVisual::init()
 	// extend
 	TerrainVisual::init();
 	// create a new render object for W3D
-	m_terrainRenderObject = NEW_REF(W3DTerrainGraphics, ());
+	m_terrainRenderObject = NEW_REF(W3DTerrainGraphics, (m_clock));
 	m_terrainRenderObject->Set_Collision_Type( PICK_TYPE_TERRAIN );
 	TheTerrainRenderObject = m_terrainRenderObject;
 
@@ -376,7 +378,7 @@ void W3DTerrainVisual::handleSeismicSimulations()
       if ( ssn )
       {
         SeismicSimulationFilterBase::SeismicSimStatusCode code = ssn->handleFilterCallback( m_clientHeightMap );
-        DEBUG_ASSERTCRASH( code != SeismicSimulationFilterBase::SEISMIC_STATUS_INVALID, ("Trouble in the Seismic simulator.") );
+        engine::debug::invariant((code != SeismicSimulationFilterBase::SEISMIC_STATUS_INVALID), "code != SeismicSimulationFilterBase::SEISMIC_STATUS_INVALID", __FILE__, __LINE__, "Trouble in the Seismic simulator.");
 
         switch ( code )
         {
@@ -1220,7 +1222,7 @@ void W3DTerrainVisual::xfer( Xfer *xfer )
 	if( gridEnabled != m_isWaterGridRenderingEnabled )
 	{
 
-		DEBUG_CRASH(( "W3DTerrainVisual::xfer - m_isWaterGridRenderingEnabled mismatch" ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "W3DTerrainVisual::xfer - m_isWaterGridRenderingEnabled mismatch" );
 		throw SC_INVALID_DATA;
 
 	}
@@ -1241,16 +1243,16 @@ void W3DTerrainVisual::xfer( Xfer *xfer )
 		if( width != getGridWidth() )
 		{
 
-			DEBUG_CRASH(( "W3DTerrainVisual::xfer - grid width mismatch '%d' should be '%d'",
-										width, getGridWidth() ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "W3DTerrainVisual::xfer - grid width mismatch '%d' should be '%d'",
+										width, getGridWidth() );
 			throw SC_INVALID_DATA;
 
 		}
 		if( height != getGridHeight() )
 		{
 
-			DEBUG_CRASH(( "W3DTerrainVisual::xfer - grid height mismatch '%d' should be '%d'",
-										height, getGridHeight() ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "W3DTerrainVisual::xfer - grid height mismatch '%d' should be '%d'",
+										height, getGridHeight() );
 			throw SC_INVALID_DATA;
 
 		}
@@ -1267,7 +1269,7 @@ void W3DTerrainVisual::xfer( Xfer *xfer )
 		Int xferLen = len;
 		xfer->xferInt(&xferLen);
 		if (len!=xferLen) {
-			DEBUG_CRASH(("Bad height map length."));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Bad height map length.");
 			if (len>xferLen) {
 				len = xferLen;
 			}

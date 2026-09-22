@@ -73,7 +73,7 @@ import Graphics.Resources.Textures.Edit;
 #include "ShadowOptions.h"
 #include "WorldBuilder.h"
 #include "wbview3d.h"
-#include "Common/Debug.h"
+
 #include "Common/FramePacer.h"
 #include "Common/ThingFactory.h"
 #include "GameClient/Water.h"
@@ -88,6 +88,7 @@ import Graphics.Resources.Textures.Edit;
 #include "GlobalLightOptions.h"
 #include "LayersList.h"
 #include "ImpassableOptions.h"
+import engine.debug;
 import Graphics.Scene.Props.Submission;
 
 
@@ -121,30 +122,9 @@ static Int theFlashCount = 0;
 // Static Functions
 // ----------------------------------------------------------------------------
 
-static void		WWDebug_Message_Callback(DebugType type, const char * message);
-static void		WWAssert_Callback(const char * message);
 static void		Debug_Refs();
 
 // ----------------------------------------------------------------------------
-static void WWDebug_Message_Callback(DebugType type, const char * message)
-{
-#ifdef RTS_DEBUG
-	SDL_Log("%s", message);
-	SDL_Log("%s", "\n");
-#endif
-}
-
-// ----------------------------------------------------------------------------
-static void WWAssert_Callback(const char * message)
-{
-#ifdef RTS_DEBUG
-	SDL_Log("%s", message);
-	SDL_Log("%s", "\n");
-	::DebugBreak();
-#endif
-}
-
-
 // The W3DShadowManager accesses TheTacticalView, so we have to create
 // a stub class & object in Worldbuilder for it to access.
 class PlaceholderView : public View
@@ -579,7 +559,7 @@ void WbView3d::setupCamera()
 		Real zAbs = zOffset + zPos;
 		if (zAbs<0) zAbs = -zAbs;
 		if (zAbs<0.01) zAbs = 0.01f;
-		//DEBUG_LOG(("zOffset = %.2f, zAbs = %.2f, zPos = %.2f", zOffset, zAbs, zPos));
+		//engine::debug::log_info("zOffset = %.2f, zAbs = %.2f, zPos = %.2f", zOffset, zAbs, zPos);
 		if (zOffset > 0) {
 			zOffset *= zAbs;
 		}	else if (zOffset < -0.3f) {
@@ -588,7 +568,7 @@ void WbView3d::setupCamera()
 		if (zOffset < -0.6f) {
 			zOffset = -0.3f + zOffset/2.0f;
 		}
-		//DEBUG_LOG(("zOffset = %.2f", zOffset));
+		//engine::debug::log_info("zOffset = %.2f", zOffset);
 		zoom = zAbs;
 	}
 
@@ -658,12 +638,12 @@ void WbView3d::setupCamera()
 	m_cameraSource = sourcePos;
 	m_cameraTarget = targetPos;
 	/*
-	DEBUG_LOG(("Camera: pos=(%g,%g) height=%g pitch=%g FXPitch=%g yaw=%g groundLevel=%g",
+	engine::debug::log_info("Camera: pos=(%g,%g) height=%g pitch=%g FXPitch=%g yaw=%g groundLevel=%g",
 		targetPos.X, targetPos.Y,
 		m_actualHeightAboveGround,
 		pitch,
 		m_FXPitch,
-		angle, m_groundLevel));
+		angle, m_groundLevel);
 		*/
 
 	// build new camera transform
@@ -1152,7 +1132,7 @@ void WbView3d::invalBuildListItemInView(BuildListInfo *pBuildToInval)
 						shadowInfo.allowUpdates=FALSE;	//shadow image will never update
 						shadowInfo.allowWorldAlign=TRUE;	//shadow image will wrap around world objects
 						strlcpy(shadowInfo.m_ShadowName, tTemplate->getShadowTextureName().str(), ARRAY_SIZE(shadowInfo.m_ShadowName));
-						DEBUG_ASSERTCRASH(shadowInfo.m_ShadowName[0] != '\0', ("this should be validated in ThingTemplate now"));
+						engine::debug::invariant((shadowInfo.m_ShadowName[0] != '\0'), "shadowInfo.m_ShadowName[0] != '\0'", __FILE__, __LINE__, "this should be validated in ThingTemplate now");
 						shadowInfo.m_type=(ShadowType)tTemplate->getShadowType();
 						shadowInfo.m_sizeX=tTemplate->getShadowSizeX();
 						shadowInfo.m_sizeY=tTemplate->getShadowSizeY();
@@ -1430,7 +1410,7 @@ void WbView3d::invalObjectInView(MapObject *pMapObjIn)
 					if (tTemplate && tTemplate->getShadowType() != SHADOW_NONE && !(pMapObj->getFlags() & FLAG_DONT_RENDER))
 					{	//add correct type of shadow
 						strlcpy(shadowInfo.m_ShadowName, tTemplate->getShadowTextureName().str(), ARRAY_SIZE(shadowInfo.m_ShadowName));
-						DEBUG_ASSERTCRASH(shadowInfo.m_ShadowName[0] != '\0', ("this should be validated in ThingTemplate now"));
+						engine::debug::invariant((shadowInfo.m_ShadowName[0] != '\0'), "shadowInfo.m_ShadowName[0] != '\0'", __FILE__, __LINE__, "this should be validated in ThingTemplate now");
 						shadowInfo.m_type=(ShadowType)tTemplate->getShadowType();
 						shadowInfo.m_sizeX=tTemplate->getShadowSizeX();
 						shadowInfo.m_sizeY=tTemplate->getShadowSizeY();
@@ -1650,7 +1630,7 @@ BuildListInfo *WbView3d::pickedBuildObjectInView(CPoint viewPt)
 // ----------------------------------------------------------------------------
 Bool WbView3d::viewToDocCoords(CPoint curPt, Coord3D *newPt, Bool constrain)
 {
-	DEBUG_ASSERTCRASH((this),("oops"));
+	engine::debug::invariant(((this)), "(this)", __FILE__, __LINE__, "oops");
 //	const Int VIEW_BORDER = 3000;  // keeps you from falling off the edge of the world.
 	Bool result = false;
 	CRect client;
@@ -1780,7 +1760,7 @@ Bool WbView3d::viewToDocCoords(CPoint curPt, Coord3D *newPt, Bool constrain)
 // ----------------------------------------------------------------------------
 Bool WbView3d::viewToDocCoordZ(CPoint curPt, Coord3D *newPt, Real theZ)
 {
-	DEBUG_ASSERTCRASH((this),("oops"));
+	engine::debug::invariant(((this)), "(this)", __FILE__, __LINE__, "oops");
 	CRect client;
 	this->GetClientRect(&client);
 
@@ -1987,7 +1967,7 @@ void WbView3d::redraw()
 
 	setupCamera();
 
-	DEBUG_ASSERTCRASH((m_heightMapRenderObj),("oops"));
+	engine::debug::invariant(((m_heightMapRenderObj)), "(m_heightMapRenderObj)", __FILE__, __LINE__, "oops");
 	if (m_heightMapRenderObj) {
 		if (m_needToLoadRoads) {
 			m_heightMapRenderObj->loadRoadsAndBridges(nullptr,FALSE);
@@ -2003,7 +1983,7 @@ void WbView3d::redraw()
 
 		curTicks = SDL_GetTicks()-curTicks;
 //		if (curTicks>2) {
-//			WWDEBUG_SAY(("%d ms for updateCenter, %d FPS", curTicks, 1000/curTicks));
+//			engine::debug::log_info("%d ms for updateCenter, %d FPS", curTicks, 1000/curTicks);
 //		}
 	}
 	if (m_drawObject) {
@@ -2040,7 +2020,7 @@ void WbView3d::render()
 	if (WW3D::Begin_Render(true,true,Vector3(0.5f,0.5f,0.5f), TheWaterTransparency->m_minWaterOpacity) == WW3D_ERROR_OK)
 	{
 
-		DEBUG_ASSERTCRASH((m_heightMapRenderObj),("oops"));
+		engine::debug::invariant(((m_heightMapRenderObj)), "(m_heightMapRenderObj)", __FILE__, __LINE__, "oops");
 
 
 		if (m_heightMapRenderObj) {
@@ -2091,7 +2071,7 @@ void WbView3d::render()
 
 
 		WW3D::End_Render();
-        if (!Graphics::End_Tool_Frame()) DEBUG_LOG(("Editor frame submission failed.\n"));
+        if (!Graphics::End_Tool_Frame()) engine::debug::log_info("Editor frame submission failed.\n");
 	} else {
         Graphics::Abort_Tool_Frame();
     }
@@ -2218,11 +2198,11 @@ void WbView3d::initWW3D()
         options.width = m_actualWinSize.x; options.height = m_actualWinSize.y;
         options.backbuffer_format = Graphics::RHITextureFormat::BGRA8_UNorm;
         if (!Graphics::Initialize_Frame_Device(options)) {
-            DEBUG_CRASH(("Unable to create the graphics device."));
+            engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unable to create the graphics device.");
             return;
         }
 
-		if (!m_labels.Initialize()) DEBUG_CRASH(("Unable to initialize viewport label font."));
+		if (!m_labels.Initialize()) engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unable to initialize viewport label font.");
 
 		Graphics::Get_Scene_Draw_Queue().Set_Enabled(true);
 
@@ -2254,10 +2234,6 @@ int WbView3d::OnCreate(LPCREATESTRUCT lpCreateStruct)
 {
 	if (WbView::OnCreate(lpCreateStruct) == -1)
 		return -1;
-
-	// install debug callbacks
-	WWDebug_Install_Message_Handler(WWDebug_Message_Callback);
-	WWDebug_Install_Assert_Handler(WWAssert_Callback);
 
 	m_timer = SetTimer(0, UPDATE_TIME, nullptr);
 
@@ -2441,7 +2417,7 @@ void WbView3d::drawLabels(HDC hdc)
 						if (!hdc) {
                             if (!m_labels.Draw(name.str(), pt.x + 1, pt.y - 5,
                                 0xAF000000u | (unsigned(red) << 16) | (unsigned(green) << 8)))
-                                DEBUG_CRASH(("Viewport label submission failed."));
+                                engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Viewport label submission failed.");
 						} else {
 							//docToViewCoords(pos, &pt);
 							::SetBkMode(hdc, TRANSPARENT);
@@ -2713,7 +2689,7 @@ Real WbView3d::getCurrentZoom()
 		Real zAbs = zOffset + zPos;
 		if (zAbs<0) zAbs = -zAbs;
 		if (zAbs<0.01) zAbs = 0.01f;
-		//DEBUG_LOG(("zOffset = %.2f, zAbs = %.2f, zPos = %.2f", zOffset, zAbs, zPos));
+		//engine::debug::log_info("zOffset = %.2f, zAbs = %.2f, zPos = %.2f", zOffset, zAbs, zPos);
 		if (zOffset > 0) {
 			zOffset *= zAbs;
 		}	else if (zOffset < -0.3f) {
@@ -2722,7 +2698,7 @@ Real WbView3d::getCurrentZoom()
 		if (zOffset < -0.6f) {
 			zOffset = -0.3f + zOffset/2.0f;
 		}
-		//DEBUG_LOG(("zOffset = %.2f", zOffset));
+		//engine::debug::log_info("zOffset = %.2f", zOffset);
 		zoom = zAbs;
 	}
 	return zoom;
@@ -3166,4 +3142,3 @@ void WbView3d::OnUpdateViewShowSoundCircles(CCmdUI* pCmdUI)
 {
   pCmdUI->SetCheck(m_showSoundCircles ? 1 : 0);
 }
-

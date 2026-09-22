@@ -19,9 +19,10 @@
 #if defined(_WIN32) && (!defined(_WIN32_WINNT) || _WIN32_WINNT >= 0x0602)
 
 #include "Lib/BaseType.h"
-#include "Common/Debug.h"
+
 #include "XAudio2Decoder.h"
 #include "AudioFileProvider.h"
+import engine.debug;
 
 #include <unordered_map>
 #include <string>
@@ -197,14 +198,14 @@ XAudio2Decoder::DecodedBuffer XAudio2Decoder::decode(const char *filename, Audio
 
 	if (!provider)
 	{
-		DEBUG_LOG(("XAudio2Decoder: No file provider set\n"));
+		engine::debug::log_info("XAudio2Decoder: No file provider set\n");
 		return {nullptr, 0, 0, 0, 0};
 	}
 
 	AudioFileProvider::FileHandle fh = provider->open(filename);
 	if (!fh.isValid())
 	{
-		DEBUG_LOG(("Missing Audio File: '%s'\n", filename));
+		engine::debug::log_info("Missing Audio File: '%s'\n", filename);
 		return {nullptr, 0, 0, 0, 0};
 	}
 

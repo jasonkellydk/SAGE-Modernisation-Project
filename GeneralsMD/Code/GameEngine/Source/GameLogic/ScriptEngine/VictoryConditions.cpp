@@ -26,7 +26,8 @@
 // Generals multiplayer victory condition specifications
 // Author: Matthew D. Campbell, February 2002
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/AudioEventRTS.h"
 #include "Common/GameAudio.h"
@@ -220,7 +221,7 @@ void VictoryConditions::update()
 
 				if (slot && slot->isAI())
 				{
-					DEBUG_LOG(("Marking AI player %s as defeated", TheNameKeyGenerator->keyToName(p->getPlayerNameKey()).str()));
+					engine::debug::log_info("Marking AI player %s as defeated", TheNameKeyGenerator->keyToName(p->getPlayerNameKey()).str());
 					slot->setLastFrameInGame(TheGameLogic->getFrame());
 				}
 			}
@@ -366,10 +367,10 @@ void VictoryConditions::cachePlayerPtrs()
 	for (Int i=0; i<MAX_PLAYER_COUNT; ++i)
 	{
 		Player *player = ThePlayerList->getNthPlayer(i);
-		DEBUG_LOG(("Checking whether to cache player %d - [%ls], house [%ls]", i, player?player->getPlayerDisplayName().str():L"<NOBODY>", (player&&player->getPlayerTemplate())?player->getPlayerTemplate()->getDisplayName().str():L"<NONE>"));
+		engine::debug::log_info("Checking whether to cache player %d - [%ls], house [%ls]", i, player?player->getPlayerDisplayName().str():L"<NOBODY>", (player&&player->getPlayerTemplate())?player->getPlayerTemplate()->getDisplayName().str():L"<NONE>");
 		if (player && player != ThePlayerList->getNeutralPlayer() && player->getPlayerTemplate() && player->getPlayerTemplate() != civTemplate && !player->isPlayerObserver())
 		{
-			DEBUG_LOG(("Caching player"));
+			engine::debug::log_info("Caching player");
 			m_players[playerCount] = player;
 			if (m_players[playerCount]->isLocalPlayer())
 				m_localSlotNum = playerCount;

@@ -46,6 +46,8 @@
 //----------------------------------------------------------------------------
 
 #include "PreRTS.h"
+import engine.profiling;
+import engine.debug;
 
 #include <fcntl.h>
 #include <io.h>
@@ -56,7 +58,7 @@
 #include "Common/LocalFile.h"
 #include "Common/RAMFile.h"
 #include "Lib/BaseType.h"
-#include "Common/PerfTimer.h"
+
 
 
 
@@ -138,10 +140,9 @@ LocalFile::~LocalFile()
 	*/
 //=================================================================
 
-//DECLARE_PERF_TIMER(LocalFile)
 Bool LocalFile::open( const Char *filename, Int access, size_t bufferSize )
 {
-	//USE_PERF_TIMER(LocalFile)
+	//engine::profiling::Scope profile_scope_143("LocalFile")
 	if( !File::open( filename, access) )
 	{
 		return FALSE;
@@ -213,7 +214,7 @@ Bool LocalFile::open( const Char *filename, Int access, size_t bufferSize )
 			result = setvbuf(m_file, nullptr, bufferMode, bufferSize);
 		}
 
-		DEBUG_ASSERTCRASH(result == 0, ("LocalFile::open - setvbuf failed"));
+		engine::debug::invariant((result == 0), "result == 0", __FILE__, __LINE__, "LocalFile::open - setvbuf failed");
 	}
 
 #else
@@ -265,7 +266,7 @@ Bool LocalFile::open( const Char *filename, Int access, size_t bufferSize )
 #endif
 
 	++s_totalOpen;
-///	DEBUG_LOG(("LocalFile::open %s (total %d)",filename,s_totalOpen));
+///	engine::debug::log_info("LocalFile::open %s (total %d)",filename,s_totalOpen);
 	if ( m_access & APPEND )
 	{
 		if ( seek ( 0, END ) < 0 )
@@ -334,7 +335,7 @@ void LocalFile::closeFile()
 
 Int LocalFile::read( void *buffer, Int bytes )
 {
-	//USE_PERF_TIMER(LocalFile)
+	//engine::profiling::Scope profile_scope_336("LocalFile")
 	if( !m_open )
 	{
 		return -1;
@@ -480,7 +481,7 @@ Int LocalFile::seek( Int pos, seekMode mode)
 	switch( mode )
 	{
 		case START:
-			DEBUG_ASSERTCRASH(pos >= 0, ("LocalFile::seek - pos must be >= 0 when seeking from the beginning of the file"));
+			engine::debug::invariant((pos >= 0), "pos >= 0", __FILE__, __LINE__, "LocalFile::seek - pos must be >= 0 when seeking from the beginning of the file");
 			lmode = SEEK_SET;
 			break;
 		case CURRENT:
@@ -490,7 +491,7 @@ Int LocalFile::seek( Int pos, seekMode mode)
 			lmode = SEEK_END;
 			break;
 		default:
-			DEBUG_CRASH(("LocalFile::seek - bad seek mode"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "LocalFile::seek - bad seek mode");
 			return -1;
 	}
 

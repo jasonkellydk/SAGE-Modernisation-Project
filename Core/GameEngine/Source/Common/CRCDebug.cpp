@@ -23,11 +23,12 @@
 ////////////////////////////////////////////////////////////////////////////////
 
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/CRCDebug.h"
-#include "Common/Debug.h"
-#include "Common/PerfTimer.h"
+
+
 #include "Common/LocalFileSystem.h"
 #include "GameClient/InGameUI.h"
 #include "GameNetwork/IPEnumeration.h"
@@ -52,7 +53,6 @@ static Int numDebugStrings = 0;
 
 CRCVerification::CRCVerification()
 {
-#ifdef DEBUG_LOGGING
 /**/
 	if (g_verifyClientCRC && (IS_FRAME_OK_TO_LOG))
 	{
@@ -63,29 +63,26 @@ CRCVerification::CRCVerification()
 		m_startCRC = 0;
 	}
 /**/
-#endif
 }
 
 CRCVerification::~CRCVerification()
 {
-#ifdef DEBUG_LOGGING
 /**/
 	UnsignedInt endCRC = 0;
 	if (g_verifyClientCRC && (IS_FRAME_OK_TO_LOG))
 	{
 		endCRC = TheGameLogic->getCRC(CRC_RECALC, (g_clientDeepCRC)?"clientPost.crc":"");
 	}
-	DEBUG_ASSERTCRASH(!TheGameLogic->isInGame() || m_startCRC == endCRC, ("GameLogic changed outside of GameLogic::update() on frame %d!", TheGameLogic->getFrame()));
+	engine::debug::invariant((!TheGameLogic->isInGame() || m_startCRC == endCRC), "!TheGameLogic->isInGame() || m_startCRC == endCRC", __FILE__, __LINE__, "GameLogic changed outside of GameLogic::update() on frame %d!", TheGameLogic->getFrame());
 	if (TheGameLogic->isInMultiplayerGame() && m_startCRC != endCRC)
 	{
 		if (TheInGameUI)
 		{
 			TheInGameUI->message(L"GameLogic changed outside of GameLogic::update() - call Matt (x36804)!");
 		}
-		CRCDEBUG_LOG(("GameLogic changed outside of GameLogic::update()!!!"));
+		engine::debug::log_trace("GameLogic changed outside of GameLogic::update()!!!");
 	}
 /**/
-#endif
 }
 
 void outputCRCDebugLines()
@@ -102,7 +99,7 @@ void outputCRCDebugLines()
 	for (Int i=start; i<end; ++i)
 	{
 		const char *line = DebugStrings[ (i + MaxStrings) % MaxStrings ];
-		DEBUG_LOG(("%s", line));
+		engine::debug::log_info("%s", line);
 		if (fp) fprintf(fp, "%s\n", line);
 	}
 
@@ -158,7 +155,7 @@ static void outputCRCDebugLinesPerFrame()
 	for (Int i=start; i<end; ++i)
 	{
 		const char *line = DebugStrings[ (i + MaxStrings) % MaxStrings ];
-		//DEBUG_LOG(("%s", line));
+		//engine::debug::log_info("%s", line);
 		fprintf(fp, "%s\n", line);
 	}
 
@@ -176,7 +173,7 @@ void outputCRCDumpLines()
 	for (Int i=start; i<end; ++i)
 	{
 		const char *line = DumpStrings[ (i + MaxStrings) % MaxStrings ];
-		DEBUG_LOG(("%s", line));
+		engine::debug::log_info("%s", line);
 	}
 	*/
 }
@@ -216,7 +213,7 @@ static void addCRCDebugLineInternal(bool count, const char *fmt, va_list args)
 		++tmp;
 	}
 
-	//DEBUG_LOG(("%s", DebugStrings[nextDebugString]));
+	//engine::debug::log_info("%s", DebugStrings[nextDebugString]);
 
 	++nextDebugString;
 	++numDebugStrings;
@@ -256,7 +253,7 @@ void addCRCGenLine(const char *fmt, ...)
 	va_end( va );
 	addCRCDebugLine("%s", buf);
 
-	//DEBUG_LOG(("%s", buf));
+	//engine::debug::log_info("%s", buf);
 }
 
 void addCRCDumpLine(const char *fmt, ...)

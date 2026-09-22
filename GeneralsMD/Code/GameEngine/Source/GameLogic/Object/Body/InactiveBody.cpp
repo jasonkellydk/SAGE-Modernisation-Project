@@ -30,7 +30,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 #include "Common/ThingTemplate.h"
 #include "Common/Xfer.h"
 #include "GameLogic/Module/InactiveBody.h"
@@ -95,7 +96,7 @@ void InactiveBody::attemptDamage( DamageInfo *damageInfo )
 	if (damageInfo->in.m_damageType == DAMAGE_UNRESISTABLE)
 	{
 
-		DEBUG_ASSERTCRASH(!getObject()->getTemplate()->isPrerequisite(), ("Prerequisites should not have InactiveBody"));
+		engine::debug::invariant((!getObject()->getTemplate()->isPrerequisite()), "!getObject()->getTemplate()->isPrerequisite()", __FILE__, __LINE__, "Prerequisites should not have InactiveBody");
 
 		damageInfo->out.m_noEffect = false;
 

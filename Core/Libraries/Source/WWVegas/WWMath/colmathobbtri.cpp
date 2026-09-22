@@ -54,7 +54,8 @@
 #include "colmath.h"
 #include "obbox.h"
 #include "tri.h"
-#include "WWDebug/wwdebug.h"
+
+import engine.debug;
 
 
 /*
@@ -533,7 +534,7 @@ static inline void obbtri_compute_contact_normal
 	switch(context.AxisId)
 	{
 		case INTERSECTION:
-//			WWASSERT(0);
+//			engine::debug::assert_condition((0), "0", __FILE__, __LINE__, "assertion failed");
 			break;
 		case AXIS_N:
 			*set_normal = -context.Side * *context.Tri.N;
@@ -584,7 +585,7 @@ static inline void obbtri_compute_contact_normal
 			set_normal->Normalize();
 			break;
 	}
-	WWASSERT(set_normal->Length2() > 0.0f);
+	engine::debug::assert_condition((set_normal->Length2() > 0.0f), "set_normal->Length2() > 0.0f", __FILE__, __LINE__, "assertion failed");
 }
 
 
@@ -747,7 +748,7 @@ static inline void obbtri_compute_contact_point
 	{
 
 	case INTERSECTION:
-		WWASSERT(0);
+		engine::debug::assert_condition((0), "0", __FILE__, __LINE__, "assertion failed");
 		return;
 
 	case AXIS_N:		// part of the box is touching the face of the triangle
@@ -1065,7 +1066,7 @@ exit:
 
 #pragma message ("(gth) disabling an assert in obb->tri collision, investigate later\n")
 #if 0
-	WWASSERT((context.AxisId != INTERSECTION) || (context.StartBad));
+	engine::debug::assert_condition(((context.AxisId != INTERSECTION) || (context.StartBad)), "(context.AxisId != INTERSECTION) || (context.StartBad)", __FILE__, __LINE__, "assertion failed");
 #else
 	if (context.AxisId == INTERSECTION) {
 		context.StartBad = true;

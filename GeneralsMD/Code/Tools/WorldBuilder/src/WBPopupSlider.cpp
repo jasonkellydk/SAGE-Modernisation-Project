@@ -24,7 +24,8 @@
 #include "Lib/BaseType.h"
 #include "WBPopupSlider.h"
 #include "resource.h"
-#include "Common/Debug.h"
+import engine.debug;
+
 
 /////////////////////////////////////////////////////////////////////////////
 // WBPopupSliderButton public member functions
@@ -223,10 +224,9 @@ void PopupSlider::New(CWnd *pParentWnd, long kind,
 {
 	PopupSlider * pPopupSlider;
 
-	DEBUG_ASSERTCRASH(((SB_HORZ == kind) || (SB_VERT == kind)),
-					("PopupSlider - unexpected kind of slider!"));
+	engine::debug::invariant((((SB_HORZ == kind) || (SB_VERT == kind))), "((SB_HORZ == kind) || (SB_VERT == kind))", __FILE__, __LINE__, "PopupSlider - unexpected kind of slider!");
 
-	DEBUG_ASSERTCRASH(pSliderOwner, ("slider owner is null!"));
+	engine::debug::invariant((pSliderOwner), "pSliderOwner", __FILE__, __LINE__, "slider owner is null!");
 
 	try {
 		CRect rect;
@@ -246,8 +246,8 @@ void PopupSlider::New(CWnd *pParentWnd, long kind,
 								&(pPopupSlider->m_lineSize),
 								&(pPopupSlider->m_curValue));
 
-		DEBUG_ASSERTCRASH(pPopupSlider->m_hi != pPopupSlider->m_lo, ("PopupSlider: endpoint values are the same!"));
-		DEBUG_ASSERTCRASH(pPopupSlider->m_lineSize != 0, ("PopupSlider: line size is zero!"));
+		engine::debug::invariant((pPopupSlider->m_hi != pPopupSlider->m_lo), "pPopupSlider->m_hi != pPopupSlider->m_lo", __FILE__, __LINE__, "PopupSlider: endpoint values are the same!");
+		engine::debug::invariant((pPopupSlider->m_lineSize != 0), "pPopupSlider->m_lineSize != 0", __FILE__, __LINE__, "PopupSlider: line size is zero!");
 
 		pPopupSlider->Create(rect, pParentWnd);
 
@@ -287,7 +287,7 @@ PopupSlider::~PopupSlider()
 	if (mIcon) {
 		BOOL bRet = DestroyIcon(mIcon);
 		(void)bRet;
-		DEBUG_ASSERTCRASH(bRet != 0, ("Oops."));
+		engine::debug::invariant((bRet != 0), "bRet != 0", __FILE__, __LINE__, "Oops.");
 
 		mIcon = nullptr;
 	}

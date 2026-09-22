@@ -59,7 +59,7 @@ import Assets.Adapters.W3D.Chunks;
 #include "W3DDevice/GameClient/WorldHeightMap.h"
 #include "Common/GlobalData.h"
 #include "W3DDevice/GameClient/W3DProjectedShadow.h"
-#include "Common/Debug.h"
+
 #include "GameLogic/Object.h"
 #include "GameLogic/PartitionManager.h"
 #include "GameLogic/TerrainLogic.h"
@@ -71,6 +71,7 @@ import Assets.Adapters.W3D.Chunks;
 #include <array>
 #include <cstdint>
 #include <cstring>
+import engine.debug;
 import Graphics.Scene.Shadows.Projected;
 import Graphics.Scene.Shadows.ProjectedCapture;
 import Graphics.Materials.TextureProjector;
@@ -283,15 +284,15 @@ W3DProjectedShadowManager::~W3DProjectedShadowManager()
 	m_W3DShadowTextureManager = nullptr;
 
 	//all shadows should be freed up at this point but check anyway
-	DEBUG_ASSERTCRASH(m_shadowList == nullptr, ("Destroy of non-empty projected shadow list"));
-	DEBUG_ASSERTCRASH(m_decalList == nullptr, ("Destroy of non-empty projected decal list"));
+	engine::debug::invariant((m_shadowList == nullptr), "m_shadowList == nullptr", __FILE__, __LINE__, "Destroy of non-empty projected shadow list");
+	engine::debug::invariant((m_decalList == nullptr), "m_decalList == nullptr", __FILE__, __LINE__, "Destroy of non-empty projected decal list");
 }
 
 void W3DProjectedShadowManager::reset()
 {
 
-	DEBUG_ASSERTCRASH(m_shadowList == nullptr, ("Reset of non-empty projected shadow list"));
-	DEBUG_ASSERTCRASH(m_decalList == nullptr, ("Reset of non-empty projected decal list"));
+	engine::debug::invariant((m_shadowList == nullptr), "m_shadowList == nullptr", __FILE__, __LINE__, "Reset of non-empty projected shadow list");
+	engine::debug::invariant((m_decalList == nullptr), "m_decalList == nullptr", __FILE__, __LINE__, "Reset of non-empty projected decal list");
 
 	m_W3DShadowTextureManager->freeAllTextures();
 
@@ -315,7 +316,7 @@ Bool W3DProjectedShadowManager::ReAcquireResources()
 
 	///@todo: We should allocate our render target pool here.
 
-	DEBUG_ASSERTCRASH(m_dynamicRenderTarget == nullptr, ("Acquire of existing shadow render target"));
+	engine::debug::invariant((m_dynamicRenderTarget == nullptr), "m_dynamicRenderTarget == nullptr", __FILE__, __LINE__, "Acquire of existing shadow render target");
 
 	m_renderTargetHasAlpha=TRUE;
     m_dynamicRenderTarget=new W3DTextureHandle(DEFAULT_RENDER_TARGET_WIDTH,DEFAULT_RENDER_TARGET_HEIGHT,
@@ -658,7 +659,7 @@ void W3DProjectedShadowManager::queueDecal(W3DProjectedShadow *shadow)
 		vVector.Normalize();
 		vVector /= decalSizeY + (1.0f+4.0f/64.0f);
 		*/
-		DEBUG_ASSERTCRASH(numVerts == ((endY-startY+1)*(endX-startX+1)), ("queueDecal VB size mismatch"));
+		engine::debug::invariant((numVerts == ((endY-startY+1)*(endX-startX+1))), "numVerts == ((endY-startY+1)*(endX-startX+1))", __FILE__, __LINE__, "queueDecal VB size mismatch");
 
 		if(pvVertices)
 		{
@@ -933,7 +934,7 @@ Shadow* W3DProjectedShadowManager::addDecal(Shadow::ShadowTypeInfo *shadowInfo)
 	{
 		//Adding a new decal texture
 		W3DTextureHandle *w3dTexture=W3DAssetCatalog::Get_Instance()->Get_Texture(texture_name);
-		DEBUG_ASSERTCRASH(w3dTexture != nullptr, ("Could not load decal texture: %s",texture_name));
+		engine::debug::invariant((w3dTexture != nullptr), "w3dTexture != nullptr", __FILE__, __LINE__, "Could not load decal texture: %s",texture_name);
 		if (!w3dTexture)
 			return nullptr;
 
@@ -1037,7 +1038,7 @@ Shadow* W3DProjectedShadowManager::addDecal(W3DRenderObject *robj, Shadow::Shado
 	{
 		//Adding a new decal texture
 		W3DTextureHandle *w3dTexture=W3DAssetCatalog::Get_Instance()->Get_Texture(texture_name);
-		DEBUG_ASSERTCRASH(w3dTexture != nullptr, ("Could not load decal texture: %s",texture_name));
+		engine::debug::invariant((w3dTexture != nullptr), "w3dTexture != nullptr", __FILE__, __LINE__, "Could not load decal texture: %s",texture_name);
 		if (!w3dTexture)
 			return nullptr;
 
@@ -1171,7 +1172,7 @@ W3DProjectedShadow* W3DProjectedShadowManager::addShadow(W3DRenderObject *robj, 
 				{
 					//need to add this texture without creating it from a real renderobject
 					W3DTextureHandle *w3dTexture=W3DAssetCatalog::Get_Instance()->Get_Texture(texture_name);
-					DEBUG_ASSERTCRASH(w3dTexture != nullptr, ("Could not load decal texture"));
+					engine::debug::invariant((w3dTexture != nullptr), "w3dTexture != nullptr", __FILE__, __LINE__, "Could not load decal texture");
 					if (!w3dTexture)
 						return nullptr;
 
@@ -1215,7 +1216,7 @@ W3DProjectedShadow* W3DProjectedShadowManager::addShadow(W3DRenderObject *robj, 
 					//try loading again
 					st=m_W3DShadowTextureManager->getTexture(texture_name);
 
-					DEBUG_ASSERTCRASH(st != nullptr, ("Could not create shadow texture"));
+					engine::debug::invariant((st != nullptr), "st != nullptr", __FILE__, __LINE__, "Could not create shadow texture");
 
 					if (st==nullptr)
 						return nullptr;	//could not create the shadow texture
@@ -1349,7 +1350,7 @@ W3DProjectedShadow* W3DProjectedShadowManager::createDecalShadow(Shadow::ShadowT
 	{
 		//need to add this texture without creating it from a real renderobject
 		W3DTextureHandle *w3dTexture=W3DAssetCatalog::Get_Instance()->Get_Texture(texture_name);
-		DEBUG_ASSERTCRASH(w3dTexture != nullptr, ("Could not load decal texture"));
+		engine::debug::invariant((w3dTexture != nullptr), "w3dTexture != nullptr", __FILE__, __LINE__, "Could not load decal texture");
 		if (!w3dTexture)
 			return nullptr;
 
@@ -1893,7 +1894,7 @@ W3DShadowTexture * W3DShadowTextureManager::getTexture(const char * name)
 /** Add texture to cache */
 Bool W3DShadowTextureManager::addTexture(W3DShadowTexture *newTexture)
 {
-	WWASSERT (newTexture != nullptr);
+	engine::debug::assert_condition((newTexture != nullptr), "newTexture != nullptr", __FILE__, __LINE__, "assertion failed");
 
 	// Increment the refcount on the new texture and add it to our table.
 	newTexture->Add_Ref ();

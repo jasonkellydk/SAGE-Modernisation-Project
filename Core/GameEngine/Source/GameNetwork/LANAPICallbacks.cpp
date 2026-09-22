@@ -27,7 +27,8 @@
 // Author: Chris Huybregts, October 2001
 // Description: LAN API Callbacks
 ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "WWLib/strtok_r.h"
 #include "Common/GameEngine.h"
@@ -196,8 +197,8 @@ void LANAPI::OnGameStartTimer( Int seconds )
 
 void LANAPI::OnGameStart()
 {
-	//DEBUG_LOG(("Map is '%s', preview is '%s'", m_currentGame->getMap().str(), GetPreviewFromMap(m_currentGame->getMap()).str()));
-	//DEBUG_LOG(("Map is '%s', INI is '%s'", m_currentGame->getMap().str(), GetINIFromMap(m_currentGame->getMap()).str()));
+	//engine::debug::log_info("Map is '%s', preview is '%s'", m_currentGame->getMap().str(), GetPreviewFromMap(m_currentGame->getMap()).str());
+	//engine::debug::log_info("Map is '%s', INI is '%s'", m_currentGame->getMap().str(), GetINIFromMap(m_currentGame->getMap()).str());
 
 	if (m_currentGame)
 	{
@@ -220,7 +221,7 @@ void LANAPI::OnGameStart()
 		//m_currentGame->startGame(0);
 
 		// Set up the game network
-		DEBUG_ASSERTCRASH(TheNetwork == nullptr, ("For some reason TheNetwork isn't null at the start of this game.  Better look into that."));
+		engine::debug::invariant((TheNetwork == nullptr), "TheNetwork == nullptr", __FILE__, __LINE__, "For some reason TheNetwork isn't null at the start of this game.  Better look into that.");
 
 		delete TheNetwork;
 		TheNetwork = nullptr;
@@ -242,7 +243,7 @@ void LANAPI::OnGameStart()
 		TheMapCache->updateCache();
 		if (!filesOk || TheMapCache->findMap(m_currentGame->getMap()) == nullptr)
 		{
-			DEBUG_LOG(("After transfer, we didn't really have the map.  Bailing..."));
+			engine::debug::log_info("After transfer, we didn't really have the map.  Bailing...");
 			OnPlayerLeave(m_name);
 			removeGame(m_currentGame);
 			m_currentGame = nullptr;
@@ -270,7 +271,7 @@ void LANAPI::OnGameStart()
 
 		// Set the seeds
 		InitRandom( m_currentGame->getSeed() );
-		DEBUG_LOG(("InitRandom( %d )", m_currentGame->getSeed()));
+		engine::debug::log_info("InitRandom( %d )", m_currentGame->getSeed());
 	}
 }
 
@@ -319,7 +320,7 @@ void LANAPI::OnGameOptions( UnsignedInt playerIP, Int playerSlot, AsciiString op
 			AsciiString key;
 			AsciiString munkee = options;
 			munkee.nextToken(&key, "=");
-			//DEBUG_LOG(("GameOpt request: key=%s, val=%s from player %d", key.str(), munkee.str(), playerSlot));
+			//engine::debug::log_info("GameOpt request: key=%s, val=%s from player %d", key.str(), munkee.str(), playerSlot);
 
 			LANGameSlot *slot = m_currentGame->getLANSlot(playerSlot);
 			if (!slot)
@@ -352,7 +353,7 @@ void LANAPI::OnGameOptions( UnsignedInt playerIP, Int playerSlot, AsciiString op
 				AsciiString key;
 				options.nextToken(&key, "=");
 				Int val = atoi(options.str()+1);
-				DEBUG_LOG(("GameOpt request: key=%s, val=%s from player %d", key.str(), options.str(), playerSlot));
+				engine::debug::log_info("GameOpt request: key=%s, val=%s from player %d", key.str(), options.str(), playerSlot);
 
 				LANGameSlot *slot = m_currentGame->getLANSlot(playerSlot);
 				if (!slot)
@@ -381,7 +382,7 @@ void LANAPI::OnGameOptions( UnsignedInt playerIP, Int playerSlot, AsciiString op
 					}
 					else
 					{
-						DEBUG_LOG(("Rejecting invalid color %d", val));
+						engine::debug::log_info("Rejecting invalid color %d", val);
 					}
 				}
 				else if (key == "PlayerTemplate")
@@ -400,7 +401,7 @@ void LANAPI::OnGameOptions( UnsignedInt playerIP, Int playerSlot, AsciiString op
 					}
 					else
 					{
-						DEBUG_LOG(("Rejecting invalid PlayerTemplate %d", val));
+						engine::debug::log_info("Rejecting invalid PlayerTemplate %d", val);
 					}
 				}
 				else if (key == "StartPos" && slot->getPlayerTemplate() != PLAYERTEMPLATE_OBSERVER)
@@ -426,7 +427,7 @@ void LANAPI::OnGameOptions( UnsignedInt playerIP, Int playerSlot, AsciiString op
 					}
 					else
 					{
-						DEBUG_LOG(("Rejecting invalid startPos %d", val));
+						engine::debug::log_info("Rejecting invalid startPos %d", val);
 					}
 				}
 				else if (key == "Team")
@@ -439,7 +440,7 @@ void LANAPI::OnGameOptions( UnsignedInt playerIP, Int playerSlot, AsciiString op
 					}
 					else
 					{
-						DEBUG_LOG(("Rejecting invalid team %d", val));
+						engine::debug::log_info("Rejecting invalid team %d", val);
 					}
 				}
 				else if (key == "NAT")
@@ -448,12 +449,12 @@ void LANAPI::OnGameOptions( UnsignedInt playerIP, Int playerSlot, AsciiString op
 							(val <= FirewallHelperClass::FIREWALL_TYPE_DESTINATION_PORT_DELTA))
 					{
 						slot->setNATBehavior((FirewallHelperClass::FirewallBehaviorType)val);
-						DEBUG_LOG(("NAT behavior set to %d for player %d", val, playerSlot));
+						engine::debug::log_info("NAT behavior set to %d for player %d", val, playerSlot);
 						change = true;
 					}
 					else
 					{
-						DEBUG_LOG(("Rejecting invalid NAT behavior %d", (Int)val));
+						engine::debug::log_info("Rejecting invalid NAT behavior %d", (Int)val);
 					}
 				}
 
@@ -463,9 +464,9 @@ void LANAPI::OnGameOptions( UnsignedInt playerIP, Int playerSlot, AsciiString op
 						m_currentGame->resetAccepted();
 					RequestGameOptions(GenerateGameOptionsString(), true);
 					lanUpdateSlotList();
-					DEBUG_LOG(("Slot value is color=%d, PlayerTemplate=%d, startPos=%d, team=%d",
-						slot->getColor(), slot->getPlayerTemplate(), slot->getStartPos(), slot->getTeamNumber()));
-					DEBUG_LOG(("Slot list updated to %s", GenerateGameOptionsString().str()));
+					engine::debug::log_info("Slot value is color=%d, PlayerTemplate=%d, startPos=%d, team=%d",
+						slot->getColor(), slot->getPlayerTemplate(), slot->getStartPos(), slot->getTeamNumber());
+					engine::debug::log_info("Slot list updated to %s", GenerateGameOptionsString().str());
 				}
 			}
 		}
@@ -546,24 +547,24 @@ void LANAPI::OnGameJoin( ReturnType ret, LANGameInfo *theGame )
 
 void LANAPI::OnHostLeave()
 {
-	DEBUG_ASSERTCRASH(!m_inLobby && m_currentGame, ("Game info is gone!"));
+	engine::debug::invariant((!m_inLobby && m_currentGame), "!m_inLobby && m_currentGame", __FILE__, __LINE__, "Game info is gone!");
 	if (m_inLobby || !m_currentGame)
 		return;
 	LANbuttonPushed = true;
-	DEBUG_LOG(("Host left - popping to lobby"));
+	engine::debug::log_info("Host left - popping to lobby");
 	TheShell->pop();
 }
 
 void LANAPI::OnPlayerLeave( UnicodeString player )
 {
-	DEBUG_ASSERTCRASH(!m_inLobby && m_currentGame, ("Game info is gone!"));
+	engine::debug::invariant((!m_inLobby && m_currentGame), "!m_inLobby && m_currentGame", __FILE__, __LINE__, "Game info is gone!");
 	if (m_inLobby || !m_currentGame || m_currentGame->isGameInProgress())
 		return;
 
 	if (m_name.compare(player) == 0)
 	{
 		// We're leaving.  Save options and Pop the shell up a screen.
-		//DEBUG_CRASH(("Slot is %d", m_currentGame->getLocalSlotNum()));
+		//engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Slot is %d", m_currentGame->getLocalSlotNum());
 		if (m_currentGame && m_currentGame->isInGame() && m_currentGame->getLocalSlotNum() >= 0)
 		{
 			LANPreferences pref;
@@ -577,7 +578,7 @@ void LANAPI::OnPlayerLeave( UnicodeString player )
 			pref.write();
 		}
 		LANbuttonPushed = true;
-		DEBUG_LOG(("OnPlayerLeave says we're leaving!  pop away!"));
+		engine::debug::log_info("OnPlayerLeave says we're leaving!  pop away!");
 		TheShell->pop();
 	}
 	else
