@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/Player.h"
 #include "Common/PlayerList.h"
@@ -165,12 +166,12 @@ void CrushDie::onDie( const DamageInfo * damageInfo )
 	if (!isDieApplicable(damageInfo))
 		return;
 
-	DEBUG_ASSERTCRASH(damageInfo->in.m_damageType == DAMAGE_CRUSH, ("this should only be used for crush damage"));
+	engine::debug::invariant((damageInfo->in.m_damageType == DAMAGE_CRUSH), "damageInfo->in.m_damageType == DAMAGE_CRUSH", __FILE__, __LINE__, "this should only be used for crush damage");
 	if (damageInfo->in.m_damageType != DAMAGE_CRUSH)
 		return;
 
 	Object *damageDealer = TheGameLogic->findObjectByID( damageInfo->in.m_sourceID );
-	DEBUG_ASSERTCRASH(damageDealer,("You must have a damageDealer source for this effect"));
+	engine::debug::invariant((damageDealer), "damageDealer", __FILE__, __LINE__, "You must have a damageDealer source for this effect");
 
 	CrushEnum crushType = damageDealer ? crushLocationCheck(damageDealer, getObject()) : TOTAL_CRUSH;
 

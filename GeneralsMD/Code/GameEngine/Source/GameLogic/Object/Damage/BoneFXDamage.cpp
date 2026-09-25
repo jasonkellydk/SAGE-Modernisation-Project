@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/Xfer.h"
 #include "GameClient/Drawable.h"
@@ -58,7 +59,7 @@ void BoneFXDamage::onObjectCreated()
 	BoneFXUpdate* bfxu = (BoneFXUpdate*)getObject()->findUpdateModule(key_BoneFXUpdate);
 	if (bfxu == nullptr)
 	{
-		DEBUG_ASSERTCRASH(bfxu != nullptr, ("BoneFXDamage requires BoneFXUpdate"));
+		engine::debug::invariant((bfxu != nullptr), "bfxu != nullptr", __FILE__, __LINE__, "BoneFXDamage requires BoneFXUpdate");
 		throw INI_INVALID_DATA;
 	}
 }

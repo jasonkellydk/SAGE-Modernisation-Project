@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // USER INCLUDES //////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/XferCRC.h"
 #include "Common/XferDeepCRC.h"
@@ -189,7 +190,7 @@ XferDeepCRC::~XferDeepCRC()
 	if( m_fileFP != nullptr )
 	{
 
-		DEBUG_CRASH(( "Warning: Xfer file '%s' was left open", m_identifier.str() ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Warning: Xfer file '%s' was left open", m_identifier.str() );
 		close();
 
 	}
@@ -208,8 +209,8 @@ void XferDeepCRC::open( AsciiString identifier )
 	if( m_fileFP != nullptr )
 	{
 
-		DEBUG_CRASH(( "Cannot open file '%s' cause we've already got '%s' open",
-									identifier.str(), m_identifier.str() ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Cannot open file '%s' cause we've already got '%s' open",
+									identifier.str(), m_identifier.str() );
 		throw XFER_FILE_ALREADY_OPEN;
 
 	}
@@ -222,7 +223,7 @@ void XferDeepCRC::open( AsciiString identifier )
 	if( m_fileFP == nullptr )
 	{
 
-		DEBUG_CRASH(( "File '%s' not found", identifier.str() ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "File '%s' not found", identifier.str() );
 		throw XFER_FILE_NOT_FOUND;
 
 	}
@@ -242,7 +243,7 @@ void XferDeepCRC::close()
 	if( m_fileFP == nullptr )
 	{
 
-		DEBUG_CRASH(( "Xfer close called, but no file was open" ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Xfer close called, but no file was open" );
 		throw XFER_FILE_NOT_OPEN;
 
 	}
@@ -268,14 +269,14 @@ void XferDeepCRC::xferImplementation( void *data, Int dataSize )
 	}
 
 	// sanity
-	DEBUG_ASSERTCRASH( m_fileFP != nullptr, ("XferSave - file pointer for '%s' is null",
-										 m_identifier.str()) );
+	engine::debug::invariant((m_fileFP != nullptr), "m_fileFP != nullptr", __FILE__, __LINE__, "XferSave - file pointer for '%s' is null",
+										 m_identifier.str());
 
 	// write data to file
 	if( fwrite( data, dataSize, 1, m_fileFP ) != 1 )
 	{
 
-		DEBUG_CRASH(( "XferSave - Error writing to file '%s'", m_identifier.str() ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "XferSave - Error writing to file '%s'", m_identifier.str() );
 		throw XFER_WRITE_ERROR;
 
 	}
@@ -302,7 +303,7 @@ void XferDeepCRC::xferAsciiString( AsciiString *asciiStringData )
 	if( asciiStringData->getLength() > 16385 )
 	{
 
-		DEBUG_CRASH(( "XferSave cannot save this ascii string because it's too long.  Change the size of the length header (but be sure to preserve save file compatability" ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "XferSave cannot save this ascii string because it's too long.  Change the size of the length header (but be sure to preserve save file compatability" );
 		throw XFER_STRING_ERROR;
 
 	}
@@ -327,7 +328,7 @@ void XferDeepCRC::xferUnicodeString( UnicodeString *unicodeStringData )
 	if( unicodeStringData->getLength() > 255 )
 	{
 
-		DEBUG_CRASH(( "XferSave cannot save this unicode string because it's too long.  Change the size of the length header (but be sure to preserve save file compatability" ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "XferSave cannot save this unicode string because it's too long.  Change the size of the length header (but be sure to preserve save file compatability" );
 		throw XFER_STRING_ERROR;
 
 	}

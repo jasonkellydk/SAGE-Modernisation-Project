@@ -38,11 +38,12 @@
 
 #include "WWLib/always.h"
 #include "parameter.h"
-#include "WWMath/vector2.h"
-#include "WWMath/vector3.h"
-#include "WWMath/matrix3d.h"
-#include "WWMath/rect.h"
 #include <float.h>
+
+import Engine.Core.Math.AffineTransform3;
+import Engine.Core.Math.Rectangle2;
+import Engine.Core.Math.Vector2;
+import Engine.Core.Math.Vector3;
 
 
 //////////////////////////////////////////////////////////////////////////////////
@@ -156,11 +157,12 @@ SimpleParameterClass<T, type>::Copy_Value (const ParameterClass &src)
 //
 //////////////////////////////////////////////////////////////////////////////////
 typedef SimpleParameterClass<bool,		ParameterClass::TYPE_BOOL>			BoolParameterClass;
-typedef SimpleParameterClass<Vector2,	ParameterClass::TYPE_VECTOR2>		Vector2ParameterClass;
-typedef SimpleParameterClass<Vector3,	ParameterClass::TYPE_VECTOR3>		Vector3ParameterClass;
-typedef SimpleParameterClass<Matrix3D, ParameterClass::TYPE_MATRIX3D>	Matrix3DParameterClass;
-typedef SimpleParameterClass<RectClass,ParameterClass::TYPE_RECT>			RectParameterClass;
-typedef SimpleParameterClass<Vector3,	ParameterClass::TYPE_COLOR	>		ColorParameterClass;
+typedef SimpleParameterClass<Engine::Math::Vector2, ParameterClass::TYPE_VECTOR2> Vector2ParameterClass;
+typedef SimpleParameterClass<Engine::Math::Vector3, ParameterClass::TYPE_VECTOR3> Vector3ParameterClass;
+typedef SimpleParameterClass<Engine::Math::AffineTransform3, ParameterClass::TYPE_AFFINE_TRANSFORM3>
+	AffineTransform3ParameterClass;
+typedef SimpleParameterClass<Engine::Math::Rectangle2,ParameterClass::TYPE_RECT>	RectangleParameterClass;
+typedef SimpleParameterClass<Engine::Math::Vector3, ParameterClass::TYPE_COLOR> ColorParameterClass;
 typedef SimpleParameterClass<int,		ParameterClass::TYPE_STRINGSDB_ID>	StringsDBEntryParameterClass;
 
 

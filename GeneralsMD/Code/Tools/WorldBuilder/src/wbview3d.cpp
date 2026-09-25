@@ -1,5 +1,9 @@
 import Graphics.Resources.Textures.Quality;
 import Graphics.Diagnostics.Render;
+import Engine.Core.Math.Vector3;
+import Engine.Core.Math.Vector2;
+import Engine.Core.Math.AffineTransform3;
+import Engine.Core.Math.LineSegment3;
 /*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -25,7 +29,6 @@ import Graphics.Diagnostics.Render;
 import Graphics.Frame.Runtime;
 #include <SDL3/SDL.h>
 #include "resource.h"
-#include "WWMath/wwmath.h"
 #include "WW3D2/WW3D.h"
 import Graphics.Frame.ToolFrame;
 #include "W3DDevice/GameClient/W3DGraphicsResources.h"
@@ -39,7 +42,6 @@ import Graphics.Frame.ToolFrame;
 #include "WW3D2/AggDef.h"
 #include "WW3D2/PartLdr.h"
 #include "WW3D2/HAnim.h"
-#include "WWMath/rect.h"
 #include "W3DDevice/GameClient/W3DMeshRenderObject.h"
 #include "W3DDevice/GameClient/W3DMeshResource.h"
 
@@ -48,7 +50,6 @@ import Graphics.Frame.ToolFrame;
 #include "WW3D2/SphereObj.h"
 #include "WW3D2/RingObj.h"
 import Graphics.Resources.Textures.Edit;
-#include "WWMath/vector2i.h"
 #include "WW3D2/Bmp2D.h"
 #include "WW3D2/DecalSys.h"
 #include "WW3D2/ShatterSystem.h"
@@ -73,7 +74,7 @@ import Graphics.Resources.Textures.Edit;
 #include "ShadowOptions.h"
 #include "WorldBuilder.h"
 #include "wbview3d.h"
-#include "Common/Debug.h"
+
 #include "Common/FramePacer.h"
 #include "Common/ThingFactory.h"
 #include "GameClient/Water.h"
@@ -88,6 +89,7 @@ import Graphics.Resources.Textures.Edit;
 #include "GlobalLightOptions.h"
 #include "LayersList.h"
 #include "ImpassableOptions.h"
+import engine.debug;
 import Graphics.Scene.Props.Submission;
 
 
@@ -121,30 +123,18 @@ static Int theFlashCount = 0;
 // Static Functions
 // ----------------------------------------------------------------------------
 
-static void		WWDebug_Message_Callback(DebugType type, const char * message);
-static void		WWAssert_Callback(const char * message);
 static void		Debug_Refs();
 
-// ----------------------------------------------------------------------------
-static void WWDebug_Message_Callback(DebugType type, const char * message)
+// Converts an engine transform to the WW3D2 render-object transform type.
+static Matrix3D To_W3D_Transform(const Engine::Math::AffineTransform3 &transform)
 {
-#ifdef RTS_DEBUG
-	SDL_Log("%s", message);
-	SDL_Log("%s", "\n");
-#endif
+	float elements[12];
+	for (int index = 0; index < 12; ++index)
+		elements[index] = transform.elements[index];
+	return Matrix3D(elements);
 }
 
 // ----------------------------------------------------------------------------
-static void WWAssert_Callback(const char * message)
-{
-#ifdef RTS_DEBUG
-	SDL_Log("%s", message);
-	SDL_Log("%s", "\n");
-	::DebugBreak();
-#endif
-}
-
-
 // The W3DShadowManager accesses TheTacticalView, so we have to create
 // a stub class & object in Worldbuilder for it to access.
 class PlaceholderView : public View
@@ -170,10 +160,10 @@ public:
 																				void *userData ) override {return 0;};
   virtual WorldToScreenReturn worldToScreenTriReturn( const Coord3D *w, ICoord2D *s ) override { return WTS_INVALID; };	///< Transform world coordinate "w" into screen coordinate "s"
 	virtual Bool screenToTerrain( const ICoord2D *screen, Coord3D *world ) override { return false; }
-	virtual PlaneClass::IntersectionResType screenToWorldAtZ( const ICoord2D *s, Coord3D *w, Real z ) override { return PlaneClass::NO_INTERSECTION; }
-	virtual PlaneClass::IntersectionResType getScreenCornerWorldPointsAtZ( Coord3D *topLeft, Coord3D *topRight,
+	virtual Engine::Math::SegmentPlaneHit screenToWorldAtZ( const ICoord2D *s, Coord3D *w, Real z ) override { return Engine::Math::SegmentPlaneHit::Parallel; }
+	virtual Engine::Math::SegmentPlaneHit getScreenCornerWorldPointsAtZ( Coord3D *topLeft, Coord3D *topRight,
 																							Coord3D *bottomRight, Coord3D *bottomLeft,
-																							Real z, ViewportClass viewPort = ViewportClass() ) override { return PlaneClass::NO_INTERSECTION; }
+																					Real z, ViewportClass viewPort = ViewportClass() ) override { return Engine::Math::SegmentPlaneHit::Parallel; }
 
 	virtual void drawView() override {};															///< Render the world visible in this view.
 	virtual void updateView() override {};															///< Render the world visible in this view.
@@ -339,10 +329,9 @@ void WbView3d::setObjTracking(MapObject *pMapObj,  Coord3D pos, Real angle, Bool
 		return;
 	}
 	pos.z += m_heightMapRenderObj->getHeightMapHeight(pos.x, pos.y, nullptr);
-	Matrix3D renderObjPos(true);	// init to identity
-	renderObjPos.Translate(pos.x, pos.y, pos.z);
-	renderObjPos.Rotate_Z(angle);
-	m_objectToolTrackingObj->Set_Transform( renderObjPos );
+	Engine::Math::AffineTransform3 renderObjPos = Engine::Math::AffineTransform3::From_Translation({pos.x, pos.y, pos.z});
+	renderObjPos.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Z(angle));
+	m_objectToolTrackingObj->Set_Transform( To_W3D_Transform(renderObjPos) );
 }
 
 // ----------------------------------------------------------------------------
@@ -479,8 +468,6 @@ void WbView3d::shutdownWW3D()
         Graphics::Shutdown_Tool_Frame();
 		WW3D::Shutdown();
 		Graphics::Graphics_Shutdown_Shared_Frame();
-
-		WWMath::Shutdown();
 	}
 	m_ww3dInited = false;
 }
@@ -571,7 +558,7 @@ static Real getHeightAroundPos(WBHeightMap *heightMap, Real x, Real y)
 // ----------------------------------------------------------------------------
 void WbView3d::setupCamera()
 {
-	Matrix3D camtransform(1);
+	Engine::Math::AffineTransform3 camtransform;
 	float zOffset = - m_mouseWheelOffset / 1200;
 	Real zoom = 1.0f;
 	if (zOffset != 0) {
@@ -579,7 +566,7 @@ void WbView3d::setupCamera()
 		Real zAbs = zOffset + zPos;
 		if (zAbs<0) zAbs = -zAbs;
 		if (zAbs<0.01) zAbs = 0.01f;
-		//DEBUG_LOG(("zOffset = %.2f, zAbs = %.2f, zPos = %.2f", zOffset, zAbs, zPos));
+		//engine::debug::log_info("zOffset = %.2f, zAbs = %.2f, zPos = %.2f", zOffset, zAbs, zPos);
 		if (zOffset > 0) {
 			zOffset *= zAbs;
 		}	else if (zOffset < -0.3f) {
@@ -588,7 +575,7 @@ void WbView3d::setupCamera()
 		if (zOffset < -0.6f) {
 			zOffset = -0.3f + zOffset/2.0f;
 		}
-		//DEBUG_LOG(("zOffset = %.2f", zOffset));
+		//engine::debug::log_info("zOffset = %.2f", zOffset);
 		zoom = zAbs;
 	}
 
@@ -623,19 +610,20 @@ void WbView3d::setupCamera()
 	Real factor = 1.0 - (groundLevel/sourcePos.Z );
 
 	// construct a matrix to rotate around the up vector by the given angle
-	Matrix3D angleTransform( Vector3( 0.0f, 0.0f, 1.0f ), angle );
+	const Engine::Math::AffineTransform3 angleTransform =
+		Engine::Math::AffineTransform3::From_Axis_Angle_Legacy( {0.0f, 0.0f, 1.0f}, angle );
 
 	// construct a matrix to rotate around the horizontal vector by the given angle
-	Matrix3D pitchTransform( Vector3( 1.0f, 0.0f, 0.0f ), pitch );
+	const Engine::Math::AffineTransform3 pitchTransform =
+		Engine::Math::AffineTransform3::From_Axis_Angle_Legacy( {1.0f, 0.0f, 0.0f}, pitch );
 
 	// rotate camera position (pitch, then angle)
-#ifdef ALLOW_TEMPORARIES
-	sourcePos = pitchTransform * sourcePos;
-	sourcePos = angleTransform * sourcePos;
-#else
-	pitchTransform.mulVector3(sourcePos);
-	angleTransform.mulVector3(sourcePos);
-#endif
+	{
+		Engine::Math::Vector3 rotated{sourcePos.X, sourcePos.Y, sourcePos.Z};
+		rotated = pitchTransform.Transform_Point(rotated);
+		rotated = angleTransform.Transform_Point(rotated);
+		sourcePos.Set(rotated.x, rotated.y, rotated.z);
+	}
 	//sourcePos *= factor+zOffset;
 	sourcePos *= factor;
 
@@ -658,20 +646,20 @@ void WbView3d::setupCamera()
 	m_cameraSource = sourcePos;
 	m_cameraTarget = targetPos;
 	/*
-	DEBUG_LOG(("Camera: pos=(%g,%g) height=%g pitch=%g FXPitch=%g yaw=%g groundLevel=%g",
+	engine::debug::log_info("Camera: pos=(%g,%g) height=%g pitch=%g FXPitch=%g yaw=%g groundLevel=%g",
 		targetPos.X, targetPos.Y,
 		m_actualHeightAboveGround,
 		pitch,
 		m_FXPitch,
-		angle, m_groundLevel));
+		angle, m_groundLevel);
 		*/
 
-	// build new camera transform
-	camtransform.Make_Identity();
+	// build new camera transform (Matrix3D::Look_At: -Z towards the target, no roll)
 	if (factor < 0) { //WST 11/11/02. Fix camera flipping over when near the ground too early
 		targetPos = sourcePos + (sourcePos-targetPos);
 	}
-	camtransform.Look_At( sourcePos, targetPos, 0 );
+	camtransform = Engine::Math::AffineTransform3::Look_At(
+		{sourcePos.X, sourcePos.Y, sourcePos.Z}, {targetPos.X, targetPos.Y, targetPos.Z});
 	/////////////////////////////////////////////////////////////
 	targetPos.Z = 0;
 	Real lookDistance = (targetPos-sourcePos).Length();
@@ -682,8 +670,7 @@ void WbView3d::setupCamera()
 
 	if (m_heightMapRenderObj) {
 		if (m_projection) {
-			camtransform.Make_Identity();
-			camtransform.Set_Translation(Vector3(targetPos.X, targetPos.Y, lookDistance));
+			camtransform = Engine::Math::AffineTransform3::From_Translation({targetPos.X, targetPos.Y, lookDistance});
 			m_heightMapRenderObj->setFlattenHeights(true);
 			//m_camera->Set_Projection_Type(CameraClass::ORTHO);
 		} else {
@@ -691,7 +678,7 @@ void WbView3d::setupCamera()
 			//m_camera->Set_Projection_Type(CameraClass::PERSPECTIVE);
 		}
 	}
-	m_camera->Set_Transform( camtransform );
+	m_camera->Set_Transform( To_W3D_Transform(camtransform) );
 	if (m_heightMapRenderObj) {
 		m_heightMapRenderObj->setDrawEntireMap(m_showEntireMap);
 	}
@@ -720,8 +707,8 @@ void WbView3d::init3dScene()
 	if(red==0 && blue==0 && green==0) {
 		red = green = blue = 1;
 	}
-	theDynamicLight->Set_Ambient( Vector3( red, green, blue ) );
-	theDynamicLight->Set_Diffuse( Vector3( red, green, blue) );
+	theDynamicLight->Set_Ambient({red, green, blue});
+	theDynamicLight->Set_Diffuse({red, green, blue});
 	theDynamicLight->Set_Position(Vector3(211, 363, 10));
 	theDynamicLight->Set_Far_Attenuation_Range(5, 15);
 	// Note: Don't Add_Render_Object dynamic lights.
@@ -731,9 +718,9 @@ void WbView3d::init3dScene()
 	m_baseBuildScene = NEW_REF(SkeletonSceneClass,());
 	m_transparentObjectsScene = NEW_REF(SkeletonSceneClass,());
 //	m_scene->Set_Polygon_Mode(SceneClass::LINE);
-	m_scene->Set_Ambient_Light(Vector3(0.5f,0.5f,0.5f));
-	m_overlayScene->Set_Ambient_Light(Vector3(0.5f,0.5f,0.5f));
-	m_baseBuildScene->Set_Ambient_Light(Vector3(0.5f,0.5f,0.5f));
+	m_scene->Set_Ambient_Light(Engine::Math::Vector3{0.5f,0.5f,0.5f});
+	m_overlayScene->Set_Ambient_Light(Engine::Math::Vector3{0.5f,0.5f,0.5f});
+	m_baseBuildScene->Set_Ambient_Light(Engine::Math::Vector3{0.5f,0.5f,0.5f});
 
 	// Scene needs camera to be rendered with ----------------------------------
 	m_camera = NEW_REF(CameraClass,());
@@ -824,15 +811,15 @@ void WbView3d::setLighting(const GlobalData::TerrainLighting *tl, Int whichLight
 	const GlobalData::TerrainLighting *ol = &TheGlobalData->m_terrainObjectsLighting[TheGlobalData->m_timeOfDay][whichLight];
 	TheWritableGlobalData->setTimeOfDay(TheGlobalData->m_timeOfDay);
 	if( m_globalLight ) {
-		m_globalLight[whichLight]->Set_Ambient( Vector3( 0.0f, 0.0f, 0.0f ) );
-		m_globalLight[whichLight]->Set_Diffuse( Vector3(ol->diffuse.red, ol->diffuse.green, ol->diffuse.blue ) );
-		m_globalLight[whichLight]->Set_Specular( Vector3(0,0,0) );
-		Matrix3D mtx;
-		mtx.Set(Vector3(1,0,0), Vector3(0,1,0), Vector3(ol->lightPos.x, ol->lightPos.y, ol->lightPos.z), Vector3(0,0,0));
-		m_globalLight[whichLight]->Set_Transform(mtx);
+		m_globalLight[whichLight]->Set_Ambient({0.0f, 0.0f, 0.0f});
+		m_globalLight[whichLight]->Set_Diffuse({ol->diffuse.red, ol->diffuse.green, ol->diffuse.blue});
+		m_globalLight[whichLight]->Set_Specular({0,0,0});
+		const Engine::Math::AffineTransform3 mtx = Engine::Math::AffineTransform3::From_Basis(
+			{1,0,0}, {0,1,0}, {ol->lightPos.x, ol->lightPos.y, ol->lightPos.z}, {0,0,0});
+		m_globalLight[whichLight]->Set_Transform(To_W3D_Transform(mtx));
 		if( m_scene && whichLight == 0) {	//only let the first light contribute to ambient
-			m_scene->Set_Ambient_Light( Vector3(ol->ambient.red, ol->ambient.green, ol->ambient.blue) );
-			m_baseBuildScene->Set_Ambient_Light( Vector3(ol->ambient.red, ol->ambient.green, ol->ambient.blue) );
+			m_scene->Set_Ambient_Light( Engine::Math::Vector3{ol->ambient.red, ol->ambient.green, ol->ambient.blue} );
+			m_baseBuildScene->Set_Ambient_Light( Engine::Math::Vector3{ol->ambient.red, ol->ambient.green, ol->ambient.blue} );
 		}
 	}
 	if(TheTerrainRenderObject) {
@@ -859,8 +846,8 @@ void WbView3d::updateLights()
 
 		if( m_scene )
 		{
-			m_scene->Set_Ambient_Light( Vector3(ol->ambient.red, ol->ambient.green, ol->ambient.blue) );
-			m_baseBuildScene->Set_Ambient_Light( Vector3(ol->ambient.red, ol->ambient.green, ol->ambient.blue) );
+			m_scene->Set_Ambient_Light( Engine::Math::Vector3{ol->ambient.red, ol->ambient.green, ol->ambient.blue} );
+			m_baseBuildScene->Set_Ambient_Light( Engine::Math::Vector3{ol->ambient.red, ol->ambient.green, ol->ambient.blue} );
 		}
 
 		if (TheW3DShadowManager) {
@@ -873,12 +860,12 @@ void WbView3d::updateLights()
 			if( m_globalLight[i] )
 			{
 				ol = &TheGlobalData->m_terrainObjectsLighting[TheGlobalData->m_timeOfDay][i];
-				m_globalLight[i]->Set_Ambient( Vector3( 0.0f, 0.0f, 0.0f ) );
-				m_globalLight[i]->Set_Diffuse( Vector3(ol->diffuse.red, ol->diffuse.green, ol->diffuse.blue ) );
-				m_globalLight[i]->Set_Specular( Vector3(0,0,0) );
-				Matrix3D mtx;
-				mtx.Set(Vector3(1,0,0), Vector3(0,1,0), Vector3(ol->lightPos.x, ol->lightPos.y, ol->lightPos.z), Vector3(0,0,0));
-				m_globalLight[i]->Set_Transform(mtx);
+				m_globalLight[i]->Set_Ambient({0.0f, 0.0f, 0.0f});
+				m_globalLight[i]->Set_Diffuse({ol->diffuse.red, ol->diffuse.green, ol->diffuse.blue});
+				m_globalLight[i]->Set_Specular({0,0,0});
+				const Engine::Math::AffineTransform3 mtx = Engine::Math::AffineTransform3::From_Basis(
+					{1,0,0}, {0,1,0}, {ol->lightPos.x, ol->lightPos.y, ol->lightPos.z}, {0,0,0});
+				m_globalLight[i]->Set_Transform(To_W3D_Transform(mtx));
  				m_scene->setGlobalLight(m_globalLight[i],i);
  				m_baseBuildScene->setGlobalLight(m_globalLight[i],i);
 			}
@@ -913,8 +900,8 @@ void WbView3d::updateLights()
 			lightAmbientColor.setFromInt(props->getInt(TheKey_lightAmbientColor));
 			lightDiffuseColor.setFromInt(props->getInt(TheKey_lightDiffuseColor));
 
-			lightP->Set_Ambient( Vector3( lightAmbientColor.red, lightAmbientColor.green, lightAmbientColor.blue ) );
-			lightP->Set_Diffuse( Vector3(  lightDiffuseColor.red, lightDiffuseColor.green, lightDiffuseColor.blue) );
+			lightP->Set_Ambient({lightAmbientColor.red, lightAmbientColor.green, lightAmbientColor.blue});
+			lightP->Set_Diffuse({lightDiffuseColor.red, lightDiffuseColor.green, lightDiffuseColor.blue});
 
 			lightP->Set_Position(Vector3(loc.x, loc.y, loc.z+lightHeightAboveTerrain));
 
@@ -1020,10 +1007,9 @@ void WbView3d::updateFenceListObjects(MapObject *pObject)
 
 			// set item's position to loc, and get scale from item and apply it.
 
-			Matrix3D renderObjPos(true);	// init to identity
-			renderObjPos.Translate(loc.x, loc.y, loc.z);
-			renderObjPos.Rotate_Z(pMapObj->getAngle());
-			renderObj->Set_Transform( renderObjPos );
+			Engine::Math::AffineTransform3 renderObjPos = Engine::Math::AffineTransform3::From_Translation({loc.x, loc.y, loc.z});
+			renderObjPos.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Z(pMapObj->getAngle()));
+			renderObj->Set_Transform( To_W3D_Transform(renderObjPos) );
 
 
 			m_scene->Add_Render_Object(renderObj);
@@ -1152,7 +1138,7 @@ void WbView3d::invalBuildListItemInView(BuildListInfo *pBuildToInval)
 						shadowInfo.allowUpdates=FALSE;	//shadow image will never update
 						shadowInfo.allowWorldAlign=TRUE;	//shadow image will wrap around world objects
 						strlcpy(shadowInfo.m_ShadowName, tTemplate->getShadowTextureName().str(), ARRAY_SIZE(shadowInfo.m_ShadowName));
-						DEBUG_ASSERTCRASH(shadowInfo.m_ShadowName[0] != '\0', ("this should be validated in ThingTemplate now"));
+						engine::debug::invariant((shadowInfo.m_ShadowName[0] != '\0'), "shadowInfo.m_ShadowName[0] != '\0'", __FILE__, __LINE__, "this should be validated in ThingTemplate now");
 						shadowInfo.m_type=(ShadowType)tTemplate->getShadowType();
 						shadowInfo.m_sizeX=tTemplate->getShadowSizeX();
 						shadowInfo.m_sizeY=tTemplate->getShadowSizeY();
@@ -1166,10 +1152,9 @@ void WbView3d::invalBuildListItemInView(BuildListInfo *pBuildToInval)
 				pBuild->setRenderObj(renderObj);
 				pBuild->setShadowObj(shadowObj);
 				// set item's position to loc.
-				Matrix3D renderObjPos(true);	// init to identity
-				renderObjPos.Translate(loc.x, loc.y, loc.z);
-				renderObjPos.Rotate_Z(pBuild->getAngle());
-				renderObj->Set_Transform( renderObjPos );
+				Engine::Math::AffineTransform3 renderObjPos = Engine::Math::AffineTransform3::From_Translation({loc.x, loc.y, loc.z});
+				renderObjPos.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Z(pBuild->getAngle()));
+				renderObj->Set_Transform( To_W3D_Transform(renderObjPos) );
 
 				m_baseBuildScene->Add_Render_Object(renderObj);
 
@@ -1430,7 +1415,7 @@ void WbView3d::invalObjectInView(MapObject *pMapObjIn)
 					if (tTemplate && tTemplate->getShadowType() != SHADOW_NONE && !(pMapObj->getFlags() & FLAG_DONT_RENDER))
 					{	//add correct type of shadow
 						strlcpy(shadowInfo.m_ShadowName, tTemplate->getShadowTextureName().str(), ARRAY_SIZE(shadowInfo.m_ShadowName));
-						DEBUG_ASSERTCRASH(shadowInfo.m_ShadowName[0] != '\0', ("this should be validated in ThingTemplate now"));
+						engine::debug::invariant((shadowInfo.m_ShadowName[0] != '\0'), "shadowInfo.m_ShadowName[0] != '\0'", __FILE__, __LINE__, "this should be validated in ThingTemplate now");
 						shadowInfo.m_type=(ShadowType)tTemplate->getShadowType();
 						shadowInfo.m_sizeX=tTemplate->getShadowSizeX();
 						shadowInfo.m_sizeY=tTemplate->getShadowSizeY();
@@ -1451,19 +1436,18 @@ void WbView3d::invalObjectInView(MapObject *pMapObjIn)
 
 			// set item's position to loc, and get scale from item and apply it.
 
-			Matrix3D renderObjPos(true);	// init to identity
-			renderObjPos.Translate(loc.x, loc.y, loc.z);
-			renderObjPos.Rotate_Z(pMapObj->getAngle());
-			renderObj->Set_Transform( renderObjPos );
+			Engine::Math::AffineTransform3 renderObjPos = Engine::Math::AffineTransform3::From_Translation({loc.x, loc.y, loc.z});
+			renderObjPos.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Z(pMapObj->getAngle()));
+			renderObj->Set_Transform( To_W3D_Transform(renderObjPos) );
 
 			if (isVehicle) {
 				// note that this affects our orientation, but NOT our position... specifically,
 				// it does NOT force us to "stick" to the ground!
-				Matrix3D mtx;
+				Engine::Math::AffineTransform3 transform;
 				Coord3D terrainNormal;
 				m_heightMapRenderObj->getHeightMapHeight(loc.x, loc.y, &terrainNormal );
-				makeAlignToNormalMatrix(pMapObj->getAngle(), loc, terrainNormal, mtx);
-				renderObj->Set_Transform( mtx );
+				makeAlignToNormalTransform(pMapObj->getAngle(), loc, terrainNormal, transform);
+				renderObj->Set_Transform(To_W3D_Transform(transform));
 			}
 
 			m_scene->Add_Render_Object(renderObj);
@@ -1650,7 +1634,7 @@ BuildListInfo *WbView3d::pickedBuildObjectInView(CPoint viewPt)
 // ----------------------------------------------------------------------------
 Bool WbView3d::viewToDocCoords(CPoint curPt, Coord3D *newPt, Bool constrain)
 {
-	DEBUG_ASSERTCRASH((this),("oops"));
+	engine::debug::invariant(((this)), "(this)", __FILE__, __LINE__, "oops");
 //	const Int VIEW_BORDER = 3000;  // keeps you from falling off the edge of the world.
 	Bool result = false;
 	CRect client;
@@ -1661,7 +1645,8 @@ Bool WbView3d::viewToDocCoords(CPoint curPt, Coord3D *newPt, Bool constrain)
 	float logY = (Real)curPt.y / (Real)client.Height();
 	Vector3 intersection(0,0,0);
 	// determine the ray corresponding to the camera and distance to projection plane
-	Matrix3D camera_matrix = m_camera->Get_Transform();
+	const Engine::Math::AffineTransform3 camera_matrix =
+		Engine::Math::AffineTransform3::From_Row_Matrix(m_camera->Get_Transform());
 
 	Vector3 camera_location  = m_camera->Get_Position();
 
@@ -1673,14 +1658,14 @@ Bool WbView3d::viewToDocCoords(CPoint curPt, Coord3D *newPt, Bool constrain)
 	// determine the location of the screen coordinate in camera-model space
 	const ViewportClass &viewport = m_camera->Get_Viewport();
 
-	Vector2 min,max;
+	Engine::Math::Vector2 min,max;
 	m_camera->Get_View_Plane(min,max);
-	float xscale = (max.X - min.X);
-	float yscale = (max.Y - min.Y);
+	float xscale = (max.x - min.x);
+	float yscale = (max.y - min.y);
 
 	float zmod = -1.0; // Scene->vpd; // Note: view plane distance is now always 1.0 from the camera
-	float xmod = (-logX + 0.5 + viewport.Min.X) * zmod * xscale;// / aspect;
-	float ymod = (logY - 0.5 - viewport.Min.Y) * zmod * yscale;// * aspect;
+	float xmod = (-logX + 0.5 + viewport.Min.x) * zmod * xscale;// / aspect;
+	float ymod = (logY - 0.5 - viewport.Min.y) * zmod * yscale;// * aspect;
 
 	// transform the screen coordinates by the camera's matrix into world coordinates.
 	float x = zmod * camera_matrix[0][2] + xmod * camera_matrix[0][0] + ymod * camera_matrix[0][1];
@@ -1688,11 +1673,13 @@ Bool WbView3d::viewToDocCoords(CPoint curPt, Coord3D *newPt, Bool constrain)
 	float z = zmod * camera_matrix[2][2] + xmod * camera_matrix[2][0] + ymod * camera_matrix[2][1];
 
 	rayDirection.Set(x,y,z);
-	rayDirection.Normalize();
+	rayDirection.normalize();
 	float MaxDistance =  m_camera->Get_Depth()*MAP_XY_FACTOR;
 	rayDirectionPt = rayLocation + rayDirection*MaxDistance;
 
-	LineSegClass ray(rayLocation, rayDirectionPt);
+	const Engine::Math::LineSegment3 ray{
+		{rayLocation.X, rayLocation.Y, rayLocation.Z},
+		{rayDirectionPt.X, rayDirectionPt.Y, rayDirectionPt.Z}};
 
 	// Note - there are 2 ways to track.  One is for tools (like paint texture)
 	// that follow the terrain.  They want to track the terrain, so the texturing
@@ -1704,12 +1691,13 @@ Bool WbView3d::viewToDocCoords(CPoint curPt, Coord3D *newPt, Bool constrain)
 		followTerrain = WbApp()->getCurTool()->followsTerrain();
 	}
 	if (followTerrain && TheTerrainRenderObject) {
-		CastResultStruct castResult;
+		Engine::Math::CollisionResult3 castResult;
 		RayCollisionTestClass rayCollide(ray, &castResult) ;
 		if( TheTerrainRenderObject->Cast_Ray(rayCollide) )
 		{
 			// get the point of intersection according to W3D
-			intersection = castResult.ContactPoint;
+			intersection.Set(castResult.contact_point.x,
+				castResult.contact_point.y, castResult.contact_point.z);
 			m_curTrackingZ = intersection.Z;
 			result = true;
 		}
@@ -1780,7 +1768,7 @@ Bool WbView3d::viewToDocCoords(CPoint curPt, Coord3D *newPt, Bool constrain)
 // ----------------------------------------------------------------------------
 Bool WbView3d::viewToDocCoordZ(CPoint curPt, Coord3D *newPt, Real theZ)
 {
-	DEBUG_ASSERTCRASH((this),("oops"));
+	engine::debug::invariant(((this)), "(this)", __FILE__, __LINE__, "oops");
 	CRect client;
 	this->GetClientRect(&client);
 
@@ -1789,7 +1777,8 @@ Bool WbView3d::viewToDocCoordZ(CPoint curPt, Coord3D *newPt, Real theZ)
 	float logY = (Real)curPt.y / (Real)client.Height();
 	Vector3 intersection(0,0,0);
 	// determine the ray corresponding to the camera and distance to projection plane
-	Matrix3D camera_matrix = m_camera->Get_Transform();
+	const Engine::Math::AffineTransform3 camera_matrix =
+		Engine::Math::AffineTransform3::From_Row_Matrix(m_camera->Get_Transform());
 
 	Vector3 camera_location  = m_camera->Get_Position();
 
@@ -1801,14 +1790,14 @@ Bool WbView3d::viewToDocCoordZ(CPoint curPt, Coord3D *newPt, Real theZ)
 	// determine the location of the screen coordinate in camera-model space
 	const ViewportClass &viewport = m_camera->Get_Viewport();
 
-	Vector2 min,max;
+	Engine::Math::Vector2 min,max;
 	m_camera->Get_View_Plane(min,max);
-	float xscale = (max.X - min.X);
-	float yscale = (max.Y - min.Y);
+	float xscale = (max.x - min.x);
+	float yscale = (max.y - min.y);
 
 	float zmod = -1.0; // Scene->vpd; // Note: view plane distance is now always 1.0 from the camera
-	float xmod = (-logX + 0.5 + viewport.Min.X) * zmod * xscale;// / aspect;
-	float ymod = (logY - 0.5 - viewport.Min.Y) * zmod * yscale;// * aspect;
+	float xmod = (-logX + 0.5 + viewport.Min.x) * zmod * xscale;// / aspect;
+	float ymod = (logY - 0.5 - viewport.Min.y) * zmod * yscale;// * aspect;
 
 	// transform the screen coordinates by the camera's matrix into world coordinates.
 	float x = zmod * camera_matrix[0][2] + xmod * camera_matrix[0][0] + ymod * camera_matrix[0][1];
@@ -1816,11 +1805,13 @@ Bool WbView3d::viewToDocCoordZ(CPoint curPt, Coord3D *newPt, Real theZ)
 	float z = zmod * camera_matrix[2][2] + xmod * camera_matrix[2][0] + ymod * camera_matrix[2][1];
 
 	rayDirection.Set(x,y,z);
-	rayDirection.Normalize();
+	rayDirection.normalize();
 	float MaxDistance =  m_camera->Get_Depth()*MAP_XY_FACTOR;
 	rayDirectionPt = rayLocation + rayDirection*MaxDistance;
 
-	LineSegClass ray(rayLocation, rayDirectionPt);
+	const Engine::Math::LineSegment3 ray{
+		{rayLocation.X, rayLocation.Y, rayLocation.Z},
+		{rayDirectionPt.X, rayDirectionPt.Y, rayDirectionPt.Z}};
 
 	intersection.X = Vector3::Find_X_At_Z(theZ, rayLocation, rayDirectionPt);
 	intersection.Y = Vector3::Find_Y_At_Z(theZ, rayLocation, rayDirectionPt);
@@ -1844,7 +1835,8 @@ void WbView3d::updateHysteresis()
 	float logY = (Real)curPt.y / (Real)client.Height();
 	Vector3 intersection(0,0,0);
 	// determine the ray corresponding to the camera and distance to projection plane
-	Matrix3D camera_matrix = m_camera->Get_Transform();
+	const Engine::Math::AffineTransform3 camera_matrix =
+		Engine::Math::AffineTransform3::From_Row_Matrix(m_camera->Get_Transform());
 
 	Vector3 camera_location  = m_camera->Get_Position();
 
@@ -1856,14 +1848,14 @@ void WbView3d::updateHysteresis()
 	// determine the location of the screen coordinate in camera-model space
 	const ViewportClass &viewport = m_camera->Get_Viewport();
 
-	Vector2 min,max;
+	Engine::Math::Vector2 min,max;
 	m_camera->Get_View_Plane(min,max);
-	float xscale = (max.X - min.X);
-	float yscale = (max.Y - min.Y);
+	float xscale = (max.x - min.x);
+	float yscale = (max.y - min.y);
 
 	float zmod = -1.0; // Scene->vpd; // Note: view plane distance is now always 1.0 from the camera
-	float xmod = (-logX + 0.5 + viewport.Min.X) * zmod * xscale;// / aspect;
-	float ymod = (logY - 0.5 - viewport.Min.Y) * zmod * yscale;// * aspect;
+	float xmod = (-logX + 0.5 + viewport.Min.x) * zmod * xscale;// / aspect;
+	float ymod = (logY - 0.5 - viewport.Min.y) * zmod * yscale;// * aspect;
 
 	// transform the screen coordinates by the camera's matrix into world coordinates.
 	float x = zmod * camera_matrix[0][2] + xmod * camera_matrix[0][0] + ymod * camera_matrix[0][1];
@@ -1880,8 +1872,8 @@ void WbView3d::updateHysteresis()
 	logX = (Real)(curPt.x+3) / (Real)client.Width();
 	Vector3 offset(0,0,0);
 
-	xmod = (-logX + 0.5 + viewport.Min.X) * zmod * xscale;// / aspect;
-	ymod = (logY - 0.5 - viewport.Min.Y) * zmod * yscale;// * aspect;
+	xmod = (-logX + 0.5 + viewport.Min.x) * zmod * xscale;// / aspect;
+	ymod = (logY - 0.5 - viewport.Min.y) * zmod * yscale;// * aspect;
 
 	// transform the screen coordinates by the camera's matrix into world coordinates.
 	x = zmod * camera_matrix[0][2] + xmod * camera_matrix[0][0] + ymod * camera_matrix[0][1];
@@ -1897,8 +1889,8 @@ void WbView3d::updateHysteresis()
 	logX = (Real)(curPt.x) / (Real)client.Width();
 	logY = (Real)(curPt.y+3) / (Real)client.Height();
 
-	xmod = (-logX + 0.5 + viewport.Min.X) * zmod * xscale;// / aspect;
-	ymod = (logY - 0.5 - viewport.Min.Y) * zmod * yscale;// * aspect;
+	xmod = (-logX + 0.5 + viewport.Min.x) * zmod * xscale;// / aspect;
+	ymod = (logY - 0.5 - viewport.Min.y) * zmod * yscale;// * aspect;
 
 	// transform the screen coordinates by the camera's matrix into world coordinates.
 	x = zmod * camera_matrix[0][2] + xmod * camera_matrix[0][0] + ymod * camera_matrix[0][1];
@@ -1987,7 +1979,7 @@ void WbView3d::redraw()
 
 	setupCamera();
 
-	DEBUG_ASSERTCRASH((m_heightMapRenderObj),("oops"));
+	engine::debug::invariant(((m_heightMapRenderObj)), "(m_heightMapRenderObj)", __FILE__, __LINE__, "oops");
 	if (m_heightMapRenderObj) {
 		if (m_needToLoadRoads) {
 			m_heightMapRenderObj->loadRoadsAndBridges(nullptr,FALSE);
@@ -2003,7 +1995,7 @@ void WbView3d::redraw()
 
 		curTicks = SDL_GetTicks()-curTicks;
 //		if (curTicks>2) {
-//			WWDEBUG_SAY(("%d ms for updateCenter, %d FPS", curTicks, 1000/curTicks));
+//			engine::debug::log_info("%d ms for updateCenter, %d FPS", curTicks, 1000/curTicks);
 //		}
 	}
 	if (m_drawObject) {
@@ -2040,7 +2032,7 @@ void WbView3d::render()
 	if (WW3D::Begin_Render(true,true,Vector3(0.5f,0.5f,0.5f), TheWaterTransparency->m_minWaterOpacity) == WW3D_ERROR_OK)
 	{
 
-		DEBUG_ASSERTCRASH((m_heightMapRenderObj),("oops"));
+		engine::debug::invariant(((m_heightMapRenderObj)), "(m_heightMapRenderObj)", __FILE__, __LINE__, "oops");
 
 
 		if (m_heightMapRenderObj) {
@@ -2050,14 +2042,14 @@ void WbView3d::render()
 		m_scene->Set_Polygon_Mode(SceneClass::FILL);
 		// Render 3D scene
 		WW3D::Render(m_scene,m_camera);
-		Vector3 amb = m_baseBuildScene->Get_Ambient_Light();
-		Vector3 newAmb(amb);
+		Engine::Math::Vector3 amb = m_baseBuildScene->Get_Ambient_Light();
+		Engine::Math::Vector3 newAmb(amb);
 		Real mul = m_buildRedMultiplier;
 		if (mul>2.0f) mul = 4.0f-mul;
 		Real gMul = 2.0-mul;
-		newAmb.X *= mul;
-		newAmb.Y *= gMul;
-		if (newAmb.X>1) newAmb.X = 1;
+		newAmb.x *= mul;
+		newAmb.y *= gMul;
+		if (newAmb.x>1) newAmb.x = 1;
 		m_baseBuildScene->Set_Ambient_Light(newAmb);
 		WW3D::Render(m_baseBuildScene,m_camera);
 		m_baseBuildScene->Set_Ambient_Light(amb);
@@ -2077,7 +2069,7 @@ void WbView3d::render()
 			Graphics::Get_Prop_Draw_Settings().force_multiply = true;
 			Graphics::Get_Prop_Draw_Settings().lighting = false;
 			Real lightLevel = 1.0f;
-			m_transparentObjectsScene->Set_Ambient_Light(Vector3(lightLevel,lightLevel,lightLevel));
+			m_transparentObjectsScene->Set_Ambient_Light(Engine::Math::Vector3{lightLevel,lightLevel,lightLevel});
 			WW3D::Render(m_transparentObjectsScene, m_camera);
 			Graphics::Get_Prop_Draw_Settings().lighting = true;
 			Graphics::Get_Prop_Draw_Settings().force_multiply = false;
@@ -2091,7 +2083,7 @@ void WbView3d::render()
 
 
 		WW3D::End_Render();
-        if (!Graphics::End_Tool_Frame()) DEBUG_LOG(("Editor frame submission failed.\n"));
+        if (!Graphics::End_Tool_Frame()) engine::debug::log_info("Editor frame submission failed.\n");
 	} else {
         Graphics::Abort_Tool_Frame();
     }
@@ -2198,9 +2190,6 @@ void WbView3d::initWW3D()
 
 
 		m_ww3dInited = true;
-
-		WWMath::Init();
-
 		WW3D::Set_Prelit_Mode(WW3D::PRELIT_MODE_VERTEX);
 
 		initAssets();
@@ -2218,11 +2207,11 @@ void WbView3d::initWW3D()
         options.width = m_actualWinSize.x; options.height = m_actualWinSize.y;
         options.backbuffer_format = Graphics::RHITextureFormat::BGRA8_UNorm;
         if (!Graphics::Initialize_Frame_Device(options)) {
-            DEBUG_CRASH(("Unable to create the graphics device."));
+            engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unable to create the graphics device.");
             return;
         }
 
-		if (!m_labels.Initialize()) DEBUG_CRASH(("Unable to initialize viewport label font."));
+		if (!m_labels.Initialize()) engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unable to initialize viewport label font.");
 
 		Graphics::Get_Scene_Draw_Queue().Set_Enabled(true);
 
@@ -2254,10 +2243,6 @@ int WbView3d::OnCreate(LPCREATESTRUCT lpCreateStruct)
 {
 	if (WbView::OnCreate(lpCreateStruct) == -1)
 		return -1;
-
-	// install debug callbacks
-	WWDebug_Install_Message_Handler(WWDebug_Message_Callback);
-	WWDebug_Install_Assert_Handler(WWAssert_Callback);
 
 	m_timer = SetTimer(0, UPDATE_TIME, nullptr);
 
@@ -2441,7 +2426,7 @@ void WbView3d::drawLabels(HDC hdc)
 						if (!hdc) {
                             if (!m_labels.Draw(name.str(), pt.x + 1, pt.y - 5,
                                 0xAF000000u | (unsigned(red) << 16) | (unsigned(green) << 8)))
-                                DEBUG_CRASH(("Viewport label submission failed."));
+                                engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Viewport label submission failed.");
 						} else {
 							//docToViewCoords(pos, &pt);
 							::SetBkMode(hdc, TRANSPARENT);
@@ -2508,13 +2493,12 @@ void WbView3d::drawLabels(HDC hdc)
 			if (m_lightFeedbackMesh[lIndex]==nullptr) {
 				break;
 			}
-			Matrix3D lightMat;
-
-			lightMat.Look_At(worldEnd,worldStart,0);
-			lightMat.Set_Translation(worldEnd);
+			Engine::Math::AffineTransform3 lightMat = Engine::Math::AffineTransform3::Look_At(
+				{worldEnd.X, worldEnd.Y, worldEnd.Z}, {worldStart.X, worldStart.Y, worldStart.Z});
+			lightMat.Set_Translation({worldEnd.X, worldEnd.Y, worldEnd.Z});
 
 			m_lightFeedbackMesh[lIndex]->Add(m_scene);
-			m_lightFeedbackMesh[lIndex]->Set_Transform(lightMat);
+			m_lightFeedbackMesh[lIndex]->Set_Transform(To_W3D_Transform(lightMat));
 #ifdef DRAW_LIGHT_DIRECTION_RAYS
 			if (CameraClass::INSIDE_FRUSTUM == m_camera->Project( screenStart, worldStart ) &&
 				CameraClass::INSIDE_FRUSTUM == m_camera->Project( screenEnd, worldEnd ))
@@ -2713,7 +2697,7 @@ Real WbView3d::getCurrentZoom()
 		Real zAbs = zOffset + zPos;
 		if (zAbs<0) zAbs = -zAbs;
 		if (zAbs<0.01) zAbs = 0.01f;
-		//DEBUG_LOG(("zOffset = %.2f, zAbs = %.2f, zPos = %.2f", zOffset, zAbs, zPos));
+		//engine::debug::log_info("zOffset = %.2f, zAbs = %.2f, zPos = %.2f", zOffset, zAbs, zPos);
 		if (zOffset > 0) {
 			zOffset *= zAbs;
 		}	else if (zOffset < -0.3f) {
@@ -2722,7 +2706,7 @@ Real WbView3d::getCurrentZoom()
 		if (zOffset < -0.6f) {
 			zOffset = -0.3f + zOffset/2.0f;
 		}
-		//DEBUG_LOG(("zOffset = %.2f", zOffset));
+		//engine::debug::log_info("zOffset = %.2f", zOffset);
 		zoom = zAbs;
 	}
 	return zoom;
@@ -3166,4 +3150,3 @@ void WbView3d::OnUpdateViewShowSoundCircles(CCmdUI* pCmdUI)
 {
   pCmdUI->SetCheck(m_showSoundCircles ? 1 : 0);
 }
-

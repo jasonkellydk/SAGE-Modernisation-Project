@@ -10,6 +10,7 @@ export module Graphics.Scene.Particles.EmitterEmission;
 
 import Assets.Math;
 import Assets.Particles;
+import Engine.Core.Math.QuaternionInterpolator;
 import Graphics.Scene.Particles.EmitterKinematics;
 
 namespace Graphics
@@ -29,40 +30,17 @@ export class EmitterRotationInterval final
 public:
     EmitterRotationInterval(const std::array<float, 4> &first,
         const std::array<float, 4> &second) noexcept
-        : m_first(first), m_second(second)
-    {
-        float cosine = first[0] * second[0] + first[1] * second[1]
-            + first[2] * second[2] + first[3] * second[3];
-        m_flip = cosine < 0.0f;
-        if (m_flip)
-            cosine = -cosine;
-        m_linear = 1.0f - cosine < 0.001;
-        if (!m_linear)
-            m_angle = std::acos(cosine);
-    }
+        : m_interpolator({first[0], first[1], first[2], first[3]},
+            {second[0], second[1], second[2], second[3]}) {}
 
     std::array<float, 4> Sample(float fraction) const noexcept
     {
-        float complement;
-        if (m_linear)
-            complement = 1.0f - fraction;
-        else {
-            const float inverse_angle = 1.0f / m_angle;
-            complement = std::sin(m_angle - fraction * m_angle) * inverse_angle;
-            fraction = std::sin(fraction * m_angle) * inverse_angle;
-        }
-        if (m_flip)
-            fraction = -fraction;
-        std::array<float, 4> result;
-        for (unsigned axis = 0; axis < 4; ++axis)
-            result[axis] = complement * m_first[axis] + fraction * m_second[axis];
-        return result;
+		const auto value = m_interpolator.Sample(fraction);
+		return {value.x, value.y, value.z, value.w};
     }
 
 private:
-    std::array<float, 4> m_first, m_second;
-    float m_angle = 0;
-    bool m_flip = false, m_linear = true;
+	Engine::Math::QuaternionInterpolator m_interpolator;
 };
 
 export std::array<float, 3> Rotate_Emitter_Vector(const std::array<float, 4> &q,

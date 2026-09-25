@@ -43,6 +43,7 @@
 #include "W3DDevice/GameClient/W3DCastQuery.h"
 import Graphics.RHI;
 import Graphics.Scene.Lighting.Local;
+import Engine.Core.Math.Vector3;
 #include "W3DDevice/GameClient/WaterReflectionRenderer.h"
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -116,7 +117,7 @@ protected:
 	Bool									m_drawTerrainOnly;
 	W3DLight						*m_globalLight[Graphics::Material_Light_Count];				///< The global directional light (sun, moon) Applies to objects.
 	W3DLight						*m_scratchLight; ///< a workspace for copying global lights and modifying // MLorenzen
-	Vector3 m_infantryAmbient;	///<scene ambient modified to make infantry easier to see
+	Engine::Math::Vector3 m_infantryAmbient;	///<scene ambient modified to make infantry easier to see
 	W3DLight						*m_infantryLight[Graphics::Material_Light_Count];	///< The global direction light modified to make infantry easier to see.
 	Int m_numGlobalLights;			///<number of global lights
 	Graphics::LocalLighting	m_defaultLightEnv;		///<default light environment applied to objects without custom/dynamic lighting.

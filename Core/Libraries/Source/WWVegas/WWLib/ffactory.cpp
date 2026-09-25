@@ -38,6 +38,7 @@
 #include "bufffile.h"
 #include "realcrc.h"
 #include <stdlib.h>
+import engine.debug;
 #include	<assert.h>
 
 /*
@@ -138,7 +139,7 @@ void SimpleFileFactoryClass::Prepend_Sub_Directory( const char * sub_directory )
 	int sub_len = strlen(sub_directory);
 	// Overflow prevention
 	if (sub_len > 1021) {
-		WWASSERT(0);
+		engine::debug::assert_condition((0), "0", __FILE__, __LINE__, "assertion failed");
 		return;
 	} else if (sub_len < 1) {
 		return;
@@ -173,7 +174,7 @@ void SimpleFileFactoryClass::Append_Sub_Directory( const char * sub_directory )
 	int sub_len = strlen(sub_directory);
 	// Overflow prevention
 	if (sub_len > 1022) {
-		WWASSERT(0);
+		engine::debug::assert_condition((0), "0", __FILE__, __LINE__, "assertion failed");
 		return;
 	} else if (sub_len < 1) {
 		return;

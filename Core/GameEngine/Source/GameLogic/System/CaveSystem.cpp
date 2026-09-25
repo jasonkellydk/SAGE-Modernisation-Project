@@ -27,7 +27,8 @@
 // Desc:   System responsible for keeping track of all cave systems on the map
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/GameState.h"
 #include "Common/TunnelTracker.h"
@@ -123,7 +124,7 @@ TunnelTracker *CaveSystem::getTunnelTrackerForCaveIndex( Int theIndex )
 		theTracker = m_tunnelTrackerVector[theIndex];
 	}
 
-	DEBUG_ASSERTCRASH( theTracker != nullptr, ("No one should be interested in a sub-cave that doesn't exist.") );
+	engine::debug::invariant((theTracker != nullptr), "theTracker != nullptr", __FILE__, __LINE__, "No one should be interested in a sub-cave that doesn't exist.");
 
 	return theTracker;
 }
@@ -166,7 +167,7 @@ void CaveSystem::xfer( Xfer *xfer )
 		if( m_tunnelTrackerVector.empty() == FALSE )
 		{
 
-			DEBUG_CRASH(( "CaveSystem::xfer - m_tunnelTrackerVector should be empty but is not" ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "CaveSystem::xfer - m_tunnelTrackerVector should be empty but is not" );
 			throw SC_INVALID_DATA;
 
 		}

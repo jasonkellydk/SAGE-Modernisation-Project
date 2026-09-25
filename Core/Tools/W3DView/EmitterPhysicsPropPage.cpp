@@ -114,8 +114,10 @@ EmitterPhysicsPropPageClass::Initialize ()
 		//
 		// Get the emitter's settings
 		//
-		m_Velocity				= m_pEmitterList->Get_Velocity ();
-		m_Acceleration			= m_pEmitterList->Get_Acceleration ();
+		const Vector3 velocity = m_pEmitterList->Get_Velocity ();
+		const Vector3 acceleration = m_pEmitterList->Get_Acceleration ();
+		m_Velocity = {velocity.X, velocity.Y, velocity.Z};
+		m_Acceleration = {acceleration.X, acceleration.Y, acceleration.Z};
 		m_OutFactor				= m_pEmitterList->Get_Outward_Vel ();
 		m_InheritanceFactor	= m_pEmitterList->Get_Vel_Inherit ();
 		m_Randomizer			= m_pEmitterList->Get_Velocity_Random ();
@@ -139,16 +141,16 @@ EmitterPhysicsPropPageClass::OnInitDialog ()
 	//
 	::Initialize_Spinner (m_OutSpin, m_OutFactor, -10000, 10000);
 	::Initialize_Spinner (m_InheritanceSpin, m_InheritanceFactor, -10000, 10000);
-	::Initialize_Spinner (m_VelocityXSpin, m_Velocity.X, -10000, 10000);
-	::Initialize_Spinner (m_VelocityYSpin, m_Velocity.Y, -10000, 10000);
-	::Initialize_Spinner (m_VelocityZSpin, m_Velocity.Z, -10000, 10000);
+	::Initialize_Spinner (m_VelocityXSpin, m_Velocity.x, -10000, 10000);
+	::Initialize_Spinner (m_VelocityYSpin, m_Velocity.y, -10000, 10000);
+	::Initialize_Spinner (m_VelocityZSpin, m_Velocity.z, -10000, 10000);
 
 	//
 	//	Setup the acceleration controls
 	//
-	::Initialize_Spinner (m_AccelXSpin, m_Acceleration.X, -10000, 10000);
-	::Initialize_Spinner (m_AccelYSpin, m_Acceleration.Y, -10000, 10000);
-	::Initialize_Spinner (m_AccelZSpin, m_Acceleration.Z, -10000, 10000);
+	::Initialize_Spinner (m_AccelXSpin, m_Acceleration.x, -10000, 10000);
+	::Initialize_Spinner (m_AccelYSpin, m_Acceleration.y, -10000, 10000);
+	::Initialize_Spinner (m_AccelZSpin, m_Acceleration.z, -10000, 10000);
 	return TRUE;
 }
 
@@ -164,18 +166,18 @@ EmitterPhysicsPropPageClass::OnApply ()
 	//
 	//	Read the velocity settings
 	//
-	m_Velocity.X = ::GetDlgItemFloat (m_hWnd, IDC_VELOCITY_X_EDIT);
-	m_Velocity.Y = ::GetDlgItemFloat (m_hWnd, IDC_VELOCITY_Y_EDIT);
-	m_Velocity.Z = ::GetDlgItemFloat (m_hWnd, IDC_VELOCITY_Z_EDIT);
+	m_Velocity.x = ::GetDlgItemFloat (m_hWnd, IDC_VELOCITY_X_EDIT);
+	m_Velocity.y = ::GetDlgItemFloat (m_hWnd, IDC_VELOCITY_Y_EDIT);
+	m_Velocity.z = ::GetDlgItemFloat (m_hWnd, IDC_VELOCITY_Z_EDIT);
 	m_OutFactor = ::GetDlgItemFloat (m_hWnd, IDC_OUT_FACTOR_SPIN);
 	m_InheritanceFactor = ::GetDlgItemFloat (m_hWnd, IDC_INHERITANCE_FACTOR_SPIN);
 
 	//
 	//	Read the acceleration settings
 	//
-	m_Acceleration.X = ::GetDlgItemFloat (m_hWnd, IDC_ACCELERATION_X_EDIT);
-	m_Acceleration.Y = ::GetDlgItemFloat (m_hWnd, IDC_ACCELERATION_Y_EDIT);
-	m_Acceleration.Z = ::GetDlgItemFloat (m_hWnd, IDC_ACCELERATION_Z_EDIT);
+	m_Acceleration.x = ::GetDlgItemFloat (m_hWnd, IDC_ACCELERATION_X_EDIT);
+	m_Acceleration.y = ::GetDlgItemFloat (m_hWnd, IDC_ACCELERATION_Y_EDIT);
+	m_Acceleration.z = ::GetDlgItemFloat (m_hWnd, IDC_ACCELERATION_Z_EDIT);
 
 	// Allow the base class to process this message
 	return CPropertyPage::OnApply ();
@@ -227,7 +229,7 @@ EmitterPhysicsPropPageClass::OnSpecifyVelocityRandom ()
 		SAFE_DELETE (m_Randomizer);
 		m_Randomizer = dialog.Get_Randomizer ();
 		if (m_Randomizer != nullptr) {
-			m_pEmitterList->Set_Velocity_Random (m_Randomizer->Clone ());
+			m_pEmitterList->Set_Velocity_Random (new Engine::Math::RandomVector3Generator (*m_Randomizer));
 			SetModified ();
 		}
 	}
@@ -326,11 +328,11 @@ EmitterPhysicsPropPageClass::On_Setting_Changed (UINT ctrl_id)
 		case IDC_VELOCITY_Y_SPIN:
 		case IDC_VELOCITY_Z_SPIN:
 		{
-			Vector3 velocity;
-			velocity.X = ::GetDlgItemFloat (m_hWnd, IDC_VELOCITY_X_EDIT);
-			velocity.Y = ::GetDlgItemFloat (m_hWnd, IDC_VELOCITY_Y_EDIT);
-			velocity.Z = ::GetDlgItemFloat (m_hWnd, IDC_VELOCITY_Z_EDIT);
-			m_pEmitterList->Set_Velocity (velocity);
+			const Engine::Math::Vector3 velocity{
+				::GetDlgItemFloat (m_hWnd, IDC_VELOCITY_X_EDIT),
+				::GetDlgItemFloat (m_hWnd, IDC_VELOCITY_Y_EDIT),
+				::GetDlgItemFloat (m_hWnd, IDC_VELOCITY_Z_EDIT)};
+			m_pEmitterList->Set_Velocity ({velocity.x, velocity.y, velocity.z});
 			SetModified ();
 		}
 		break;
@@ -342,11 +344,11 @@ EmitterPhysicsPropPageClass::On_Setting_Changed (UINT ctrl_id)
 		case IDC_ACCELERATION_Y_SPIN:
 		case IDC_ACCELERATION_Z_SPIN:
 		{
-			Vector3 acceleration;
-			acceleration.X = ::GetDlgItemFloat (m_hWnd, IDC_ACCELERATION_X_EDIT);
-			acceleration.Y = ::GetDlgItemFloat (m_hWnd, IDC_ACCELERATION_Y_EDIT);
-			acceleration.Z = ::GetDlgItemFloat (m_hWnd, IDC_ACCELERATION_Z_EDIT);
-			m_pEmitterList->Set_Acceleration (acceleration);
+			const Engine::Math::Vector3 acceleration{
+				::GetDlgItemFloat (m_hWnd, IDC_ACCELERATION_X_EDIT),
+				::GetDlgItemFloat (m_hWnd, IDC_ACCELERATION_Y_EDIT),
+				::GetDlgItemFloat (m_hWnd, IDC_ACCELERATION_Z_EDIT)};
+			m_pEmitterList->Set_Acceleration ({acceleration.x, acceleration.y, acceleration.z});
 			SetModified ();
 		}
 		break;
@@ -370,4 +372,3 @@ EmitterPhysicsPropPageClass::On_Setting_Changed (UINT ctrl_id)
 		break;
 	}
 }
-

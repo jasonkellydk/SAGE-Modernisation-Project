@@ -29,6 +29,8 @@
 
 #pragma once
 
+
+#include <cassert>
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 #include "Common/NameKeyGenerator.h"
 #include "Common/Override.h"
@@ -308,7 +310,7 @@ public:
 	void setMaxLift(Real lift) { m_maxLift = lift; }
 	void setMaxSpeed(Real speed)
 	{
-		DEBUG_ASSERTCRASH(!(speed <= 0.0f && m_template->m_appearance == LOCO_THRUST), ("THRUST locos may not have zero speeds!"));
+		assert((!(speed <= 0.0f && m_template->m_appearance == LOCO_THRUST)));
 		m_maxSpeed = speed;
 	}
 	void setMaxAcceleration(Real accel) { m_maxAccel = accel; }

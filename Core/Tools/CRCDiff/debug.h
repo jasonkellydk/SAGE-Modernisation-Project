@@ -22,15 +22,13 @@
 
 #pragma once
 
+
 #ifdef DEBUG
 
 #include <cstdarg>
 
 void DebugLog( const char *fmt, ... );
-#define DEBUG_LOG(x) DebugLog x
 
 #else // DEBUG
-
-#define DEBUG_LOG(x)
 
 #endif // DEBUG

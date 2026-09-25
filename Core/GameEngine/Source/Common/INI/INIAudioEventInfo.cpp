@@ -27,7 +27,8 @@
 // Desc:   Parsing AudioEvent, MusicTrack and DialogEvent INI entries
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/INI.h"
 #include "Common/GameAudio.h"
@@ -159,7 +160,7 @@ static void parseDelay( INI* ini, void *instance, void *store, const void* /*use
 	Int min = ini->scanInt(ini->getNextToken());
 	Int max = ini->scanInt(ini->getNextToken());
 
-	DEBUG_ASSERTCRASH( min >= 0 && max >= min, ("Bad delay values for audio event %s", attribs->m_audioName.str()));
+	engine::debug::invariant((min >= 0 && max >= min), "min >= 0 && max >= min", __FILE__, __LINE__, "Bad delay values for audio event %s", attribs->m_audioName.str());
 	attribs->m_delayMax = max;
 	attribs->m_delayMin = min;
 }
@@ -172,7 +173,7 @@ static void parsePitchShift( INI* ini, void *instance, void *store, const void* 
 	Real min = ini->scanReal(ini->getNextToken());
 	Real max = ini->scanReal(ini->getNextToken());
 
-	DEBUG_ASSERTCRASH( min > -100 && max >= min, ("Bad pitch shift values for audio event %s", attribs->m_audioName.str()));
+	engine::debug::invariant((min > -100 && max >= min), "min > -100 && max >= min", __FILE__, __LINE__, "Bad pitch shift values for audio event %s", attribs->m_audioName.str());
 	attribs->m_pitchShiftMin = 1.0f + min/100;
 	attribs->m_pitchShiftMax = 1.0f + max/100;
 }

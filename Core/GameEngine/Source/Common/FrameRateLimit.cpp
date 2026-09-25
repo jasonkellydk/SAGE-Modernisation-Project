@@ -17,6 +17,7 @@
 */
 
 #include "PreRTS.h"
+import engine.profiling;
 #include "Common/FrameRateLimit.h"
 
 
@@ -32,7 +33,7 @@ FrameRateLimit::FrameRateLimit()
 
 Real FrameRateLimit::wait(UnsignedInt maxFps)
 {
-	PROFILER_SECTION;
+	engine::profiling::Scope profile_scope_35("function");
 	LARGE_INTEGER tick;
 	QueryPerformanceCounter(&tick);
 	double elapsedSeconds = static_cast<double>(tick.QuadPart - m_start) / m_freq;

@@ -22,9 +22,10 @@
 //
 
 #include "resource.h"
-#include "WWMath/vector3.h"
 #include "ColorBar.h"
 #include "WW3D2/PartEmt.h"
+
+import Engine.Core.Math.Vector3;
 
 // Forward declarations
 class EmitterInstanceListClass;
@@ -87,10 +88,10 @@ protected:
 		void								Set_Emitter (EmitterInstanceListClass *pemitter_list) { m_pEmitterList = pemitter_list; Initialize (); }
 		bool								Is_Data_Valid () const { return m_bValid; }
 
-		void								Get_Color_Keyframes (ParticlePropertyStruct<Vector3> &colors)	{ colors = m_CurrentColors; }
+		void							Get_Color_Keyframes (ParticlePropertyStruct<Engine::Math::Vector3> &colors) { colors = m_CurrentColors; }
 		void								Get_Opacity_Keyframes (ParticlePropertyStruct<float> &opacity)	{ opacity = m_CurrentOpacities; }
-		/*const Vector3 &				Get_Start_Color () const { return m_StartColor; }
-		const Vector3 &				Get_End_Color () const { return m_EndColor; }
+		/*const Engine::Math::Vector3 &Get_Start_Color () const { return m_StartColor; }
+		const Engine::Math::Vector3 &Get_End_Color () const { return m_EndColor; }
 		float								Get_Start_Opacity () const { return m_StartOpacity; }
 		float								Get_End_Opacity () const { return m_EndOpacity; }
 		float								Get_Fade_Time () const { return m_FadeTime; }*/
@@ -117,9 +118,9 @@ protected:
 		bool								m_bValid;
 		ColorBarClass *				m_ColorBar;
 		ColorBarClass *				m_OpacityBar;
-		ParticlePropertyStruct<Vector3>	m_OrigColors;
+		ParticlePropertyStruct<Engine::Math::Vector3> m_OrigColors;
 		ParticlePropertyStruct<float>		m_OrigOpacities;
-		ParticlePropertyStruct<Vector3>	m_CurrentColors;
+		ParticlePropertyStruct<Engine::Math::Vector3> m_CurrentColors;
 		ParticlePropertyStruct<float>		m_CurrentOpacities;
 		float								m_Lifetime;
 };

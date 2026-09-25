@@ -28,6 +28,7 @@ import Graphics.Frame.RenderClock;
 #include "W3DDevice/GameClient/W3DSceneClass.h"
 
 #include "WWLib/chunkio.h"
+import engine.debug;
 import Assets.Adapters.W3D.Dazzle;
 import Graphics.Frame.Runtime;
 import Graphics.Frame.AttachmentBindings;
@@ -67,21 +68,19 @@ W3DDazzleRenderObject& W3DDazzleRenderObject::operator=(const W3DDazzleRenderObj
     return *this;
 }
 W3DRenderObject* W3DDazzleRenderObject::Clone() const { return NEW_REF(W3DDazzleRenderObject, (*this)); }
-void W3DDazzleRenderObject::Get_Obj_Space_Bounding_Sphere(SphereClass& sphere) const {
-    sphere.Center.Set(0, 0, 0);
-    sphere.Radius = m_radius*m_state.scale;
+void W3DDazzleRenderObject::Get_Local_Bounding_Sphere(Engine::Math::Sphere3& sphere) const {
+    sphere = {{0, 0, 0}, m_radius * m_state.scale};
 }
-void W3DDazzleRenderObject::Get_Obj_Space_Bounding_Box(AABoxClass& box) const {
-    box.Center.Set(0, 0, 0);
-    box.Extent.Set(m_radius, m_radius, m_radius);
-    box.Extent *= m_state.scale;
+void W3DDazzleRenderObject::Get_Local_Bounds(Engine::Math::AxisAlignedBox3& box) const {
+    const float extent = m_radius * m_state.scale;
+    box = {{-extent, -extent, -extent}, {extent, extent, extent}};
 }
-void W3DDazzleRenderObject::Set_Transform(const Matrix3D& transform) {
+void W3DDazzleRenderObject::Set_Transform(const Engine::Math::AffineTransform3& transform) {
     W3DRenderObject::Set_Transform(transform);
     const auto& resources = Get_Dazzle_Resources();
     if (m_type >= resources.Size()) return;
     std::array<float, 16> matrix{};
-    std::copy_n(&transform[0][0], 12, matrix.begin());
+    std::copy(transform.elements.begin(), transform.elements.end(), matrix.begin());
     matrix[15] = 1;
     Graphics::Set_Dazzle_Direction(m_state, resources.Definition(m_type), matrix);
 }
@@ -97,16 +96,16 @@ void W3DDazzleRenderObject::Render(W3DRenderContext& info) {
     view.view = matrices.view.values;
     view.projection = matrices.projection.values;
     const auto camera = info.Camera.Get_Position();
-    view.camera_position = {camera.X, camera.Y, camera.Z};
+    view.camera_position = {camera.x, camera.y, camera.z};
     view.milliseconds = Graphics::Get_Render_Clock().Sync_Time();
     view.frame_milliseconds = Graphics::Get_Render_Clock().Logic_Frame_Time_Milliseconds();
     const auto position = Get_Position();
-    if (Graphics::Prepare_Dazzle(m_state, resources.Definition(m_type), {position.X, position.Y, position.Z}, view,
-        [&] { return visibility_handler->Compute_Dazzle_Visibility(info, this, position); })) Set_Layer(current_layer);
+    if (Graphics::Prepare_Dazzle(m_state, resources.Definition(m_type), {position.x, position.y, position.z}, view,
+        [&] { return visibility_handler->Compute_Dazzle_Visibility(info, this, Engine::Math::Vector3{position.x, position.y, position.z}); })) Set_Layer(current_layer);
 }
 void W3DDazzleRenderObject::Set_Layer(W3DDazzleLayer* layer) {
     if (m_membership.queued) return;
-    WWASSERT(layer);
+    engine::debug::assert_condition((layer), "layer", __FILE__, __LINE__, "assertion failed");
     if (!layer || m_type >= Get_Dazzle_Resources().Size()) return;
     layer->m_layer.Queue(m_type, m_membership, [&] { return RefCountPtr<W3DDazzleRenderObject>::Create_Add_Ref(this); });
 }
@@ -144,10 +143,10 @@ void W3DDazzleLayer::Render(W3DCamera* camera) {
                 if (load && !source->Ensure_Render_Backend_Texture()) return std::nullopt;
                 return Graphics::PropMaterialTexture{source->Peek_Graphics_Texture(), source->Get_Sampling()};
             }, context);
-        WWASSERT(drawn);
+        engine::debug::assert_condition((drawn), "drawn", __FILE__, __LINE__, "assertion failed");
     });
 }
-float W3DDazzleVisibility::Compute_Dazzle_Visibility(W3DRenderContext& info, W3DDazzleRenderObject* dazzle, const Vector3& point) const {
+float W3DDazzleVisibility::Compute_Dazzle_Visibility(W3DRenderContext& info, W3DDazzleRenderObject* dazzle, const Engine::Math::Vector3& point) const {
     W3DScene* scene = dazzle->Get_Scene();
     auto* container = dazzle->Get_Container();
     while (!scene && container) { scene = container->Get_Scene(); container = container->Get_Container(); }

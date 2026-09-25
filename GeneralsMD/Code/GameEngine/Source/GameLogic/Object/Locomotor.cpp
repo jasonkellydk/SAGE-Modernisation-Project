@@ -29,7 +29,13 @@
 
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
+import Engine.Core.Math.AffineTransform3;
+import Engine.Core.Math.Vector3;
+using MathVector3 = Engine::Math::Vector3;
+
+#include "Common/LegacyTransformMath.h"
 
 #define DEFINE_SURFACECATEGORY_NAMES
 #define DEFINE_LOCO_Z_NAMES
@@ -109,9 +115,9 @@ inline Bool isNearly(Real a, Real val)
 // return the angle delta (in 3-space) we turned.
 static Real tryToRotateVector3D(
 	Real maxAngle,						// if negative, it's a percent (0...1) of the dist to rotate 'em
-	const Vector3& inCurDir,
-	const Vector3& inGoalDir,
-	Vector3& actualDir
+	const MathVector3& inCurDir,
+	const MathVector3& inGoalDir,
+	MathVector3& actualDir
 )
 {
 	if (isNearlyZero(maxAngle))
@@ -120,14 +126,12 @@ static Real tryToRotateVector3D(
 		return 0.0f;
 	}
 
-	Vector3 curDir = inCurDir;
-	curDir.Normalize();
+	MathVector3 curDir = inCurDir.Normalized_Legacy();
 
-	Vector3 goalDir = inGoalDir;
-	goalDir.Normalize();
+	MathVector3 goalDir = inGoalDir.Normalized_Legacy();
 
 	// dot of two unit vectors is cos of angle between them.
-	Real cosine = Vector3::Dot_Product(curDir, goalDir);
+	Real cosine = curDir.Dot(goalDir);
 	// bound it in case of numerical error
 	Real angleBetween = (Real)ACos(clamp(-1.0f, cosine, 1.0f));
 
@@ -152,34 +156,37 @@ static Real tryToRotateVector3D(
 		// we need to rotate around the axis perpendicular to these two vecs.
 		// but: cross of two vectors is the perpendicular axis!
 #ifdef ALLOW_TEMPORARIES
-		Vector3 objCrossGoal = Vector3::Cross_Product(curDir, goalDir);
-		objCrossGoal.Normalize();
+		MathVector3 objCrossGoal = curDir.Cross(goalDir).Normalized_Legacy();
 #else
-		Vector3 objCrossGoal;
-		Vector3::Normalized_Cross_Product(curDir, goalDir, &objCrossGoal);
+		MathVector3 objCrossGoal = curDir.Cross(goalDir).Normalized_Legacy();
 #endif
 
 		angleBetween = maxAngle;
-		Matrix3D rotMtx(objCrossGoal, angleBetween);
-		actualDir = rotMtx.Rotate_Vector(curDir);
+		const auto rotation = Engine::Math::AffineTransform3::From_Axis_Angle_Legacy(objCrossGoal, angleBetween);
+		actualDir = rotation.Transform_Vector(curDir);
 	}
 
 	return angleBetween;
 }
 
-//-------------------------------------------------------------------------------------------------
-static Real tryToOrientInThisDirection3D(Object* obj, Real maxTurnRate, const Vector3& desiredDir)
+static MathVector3 WorldForwardDirection(const Object *object)
 {
-	Vector3 actualDir;
-	Real relAngle = tryToRotateVector3D(maxTurnRate, obj->getTransformMatrix()->Get_X_Vector(), desiredDir, actualDir);
+	const auto transform = object->worldTransform();
+	const auto direction = transform.Basis_X();
+	return {direction.x, direction.y, direction.z};
+}
+
+//-------------------------------------------------------------------------------------------------
+static Real tryToOrientInThisDirection3D(Object* obj, Real maxTurnRate, const MathVector3& desiredDir)
+{
+	MathVector3 actualDir;
+	Real relAngle = tryToRotateVector3D(maxTurnRate, WorldForwardDirection(obj), desiredDir, actualDir);
 	if (relAngle != 0.0f)
 	{
-		Vector3 objPos(obj->getPosition()->x, obj->getPosition()->y, obj->getPosition()->z);
-
-		Matrix3D newXform;
-		newXform.buildTransformMatrix( objPos, actualDir );
-
-		obj->setTransformMatrix( &newXform );
+		const auto position = obj->getPosition();
+		const auto transform = Engine::Math::AffineTransform3::From_Unit_Forward_Direction(
+			{position->x, position->y, position->z}, actualDir);
+		obj->setWorldTransform(transform);
 	}
 	return relAngle;
 }
@@ -187,7 +194,7 @@ static Real tryToOrientInThisDirection3D(Object* obj, Real maxTurnRate, const Ve
 //-------------------------------------------------------------------------------------------------
 inline Real tryToOrientInThisDirection3D(Object* obj, Real maxTurnRate, const Coord3D* dir)
 {
-	return tryToOrientInThisDirection3D(obj, maxTurnRate, Vector3(dir->x, dir->y, dir->z));
+	return tryToOrientInThisDirection3D(obj, maxTurnRate, MathVector3{dir->x, dir->y, dir->z});
 }
 
 //-----------------------------------------------------------------------------
@@ -196,7 +203,7 @@ static void calcDirectionToApplyThrust(
 	const PhysicsBehavior* physics,
 	const Coord3D& ingoalPos,
 	Real maxAccel,
-	Vector3& goalDir
+	MathVector3& goalDir
 )
 {
 	/*
@@ -210,29 +217,29 @@ static void calcDirectionToApplyThrust(
 	*/
 
 	// convert to Vector3, to use all its handy stuff
-	Vector3 objPos(obj->getPosition()->x, obj->getPosition()->y, obj->getPosition()->z);
-	Vector3 goalPos(ingoalPos.x, ingoalPos.y, ingoalPos.z);
+	MathVector3 objPos{obj->getPosition()->x, obj->getPosition()->y, obj->getPosition()->z};
+	MathVector3 goalPos{ingoalPos.x, ingoalPos.y, ingoalPos.z};
 
-	Vector3 vecToGoal = goalPos - objPos;
-	if (isNearlyZero(vecToGoal.Length2()))
+	MathVector3 vecToGoal = goalPos - objPos;
+	if (isNearlyZero(vecToGoal.Length_Squared()))
 	{
 		// goal pos is essentially same as current pos, so just stay the same & return
-		goalDir = obj->getTransformMatrix()->Get_X_Vector();
+		goalDir = WorldForwardDirection(obj);
 		return;
 	}
 
 	/*
 		get our cur vel into a useful Vector3 form
 	*/
-	Vector3 curVel(physics->getVelocity()->x, physics->getVelocity()->y, physics->getVelocity()->z);
+	MathVector3 curVel{physics->getVelocity()->x, physics->getVelocity()->y, physics->getVelocity()->z};
 
 	// add gravity to our vel so that we account for it in our calcs
-	curVel.Z += TheGlobalData->m_gravity;
+	curVel.z += TheGlobalData->m_gravity;
 
 	Bool foundSolution = false;
-	Real distToGoalSqr = vecToGoal.Length2();
+	Real distToGoalSqr = vecToGoal.Length_Squared();
 	Real distToGoal = sqrt(distToGoalSqr);
-	Real curVelMagSqr = curVel.Length2();
+	Real curVelMagSqr = curVel.Length_Squared();
 	Real curVelMag = sqrt(curVelMagSqr);
 	Real maxAccelSqr = sqr(maxAccel);
 
@@ -251,10 +258,10 @@ static void calcDirectionToApplyThrust(
 			// plug it in.
 			if (!isNearlyZero(t))
 			{
-				goalDir.X = (vecToGoal.X / t) - curVel.X;
-				goalDir.Y = (vecToGoal.Y / t) - curVel.Y;
-				goalDir.Z = (vecToGoal.Z / t) - curVel.Z;
-				goalDir.Normalize();
+				goalDir.x = (vecToGoal.x / t) - curVel.x;
+				goalDir.y = (vecToGoal.y / t) - curVel.y;
+				goalDir.z = (vecToGoal.z / t) - curVel.z;
+				goalDir = goalDir.Normalized_Legacy();
 				foundSolution = true;
 			}
 		}
@@ -263,7 +270,7 @@ static void calcDirectionToApplyThrust(
 	{
 		// Doh... no (useful) solution. revert to dumb.
 		goalDir = vecToGoal;
-		goalDir.Normalize();
+		goalDir = goalDir.Normalized_Legacy();
 	}
 
 }
@@ -362,10 +369,9 @@ LocomotorTemplate::~LocomotorTemplate()
 void LocomotorTemplate::validate()
 {
 	// this is ok; parachutes need it!
-	//DEBUG_ASSERTCRASH(m_lift == 0.0f || m_lift > fabs(TheGlobalData->m_gravity), ("Lift is too low to counteract gravity!"));
-	//DEBUG_ASSERTCRASH(m_liftDamaged == 0.0f || m_liftDamaged > fabs(TheGlobalData->m_gravity), ("LiftDamaged is too low to counteract gravity!"));
-	//DEBUG_ASSERTCRASH(m_preferredHeight == 0.0f || (m_behaviorZ == Z_SURFACE_RELATIVE_HEIGHT || m_behaviorZ == Z_ABSOLUTE_HEIGHT || m_appearance == LOCO_THRUST),
-	//	("You must use Z_SURFACE_RELATIVE_HEIGHT or Z_ABSOLUTE_HEIGHT (or THRUST) to use preferredHeight"));
+	//engine::debug::invariant((m_lift == 0.0f || m_lift > fabs(TheGlobalData->m_gravity)), "m_lift == 0.0f || m_lift > fabs(TheGlobalData->m_gravity)", __FILE__, __LINE__, "Lift is too low to counteract gravity!");
+	//engine::debug::invariant((m_liftDamaged == 0.0f || m_liftDamaged > fabs(TheGlobalData->m_gravity)), "m_liftDamaged == 0.0f || m_liftDamaged > fabs(TheGlobalData->m_gravity)", __FILE__, __LINE__, "LiftDamaged is too low to counteract gravity!");
+	//engine::debug::invariant((m_preferredHeight == 0.0f || (m_behaviorZ == Z_SURFACE_RELATIVE_HEIGHT || m_behaviorZ == Z_ABSOLUTE_HEIGHT || m_appearance == LOCO_THRUST)), "m_preferredHeight == 0.0f || (m_behaviorZ == Z_SURFACE_RELATIVE_HEIGHT || m_behaviorZ == Z_ABSOLUTE_HEIGHT || m_appearance == LOCO_THRUST)", __FILE__, __LINE__, //	("You must use Z_SURFACE_RELATIVE_HEIGHT or Z_ABSOLUTE_HEIGHT (or THRUST) to use preferredHeight"));
 
 	// for 'damaged' stuff that was omitted, set 'em to be the same as 'undamaged'...
 	if (m_maxSpeedDamaged < 0.0f)
@@ -384,12 +390,12 @@ void LocomotorTemplate::validate()
 	{
 		if (m_minSpeed <= 0.0f)
 		{
-			DEBUG_CRASH(("WINGS should always have positive minSpeeds (otherwise, they hover)"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "WINGS should always have positive minSpeeds (otherwise, they hover)");
 			m_minSpeed = 0.01f;
 		}
 		if (m_minTurnSpeed <= 0.0f)
 		{
-			DEBUG_CRASH(("WINGS should always have positive minTurnSpeed"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "WINGS should always have positive minTurnSpeed");
 			m_minTurnSpeed = 0.01f;
 		}
 	}
@@ -400,25 +406,25 @@ void LocomotorTemplate::validate()
 				m_lift != 0.0f ||
 				m_liftDamaged != 0.0f)
 		{
-			DEBUG_CRASH(("THRUST locos may not use ZAxisBehavior or lift!"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "THRUST locos may not use ZAxisBehavior or lift!");
 			throw INI_INVALID_DATA;
 		}
 		if (m_maxSpeed <= 0.0f)
 		{
 			// if one of these was omitted, it defaults to zero... just quietly heal it here, rather than crashing
-			DEBUG_LOG(("THRUST locos may not have zero m_maxSpeed; healing..."));
+			engine::debug::log_info("THRUST locos may not have zero m_maxSpeed; healing...");
 			m_maxSpeed = 0.01f;
 		}
 		if (m_maxSpeedDamaged <= 0.0f)
 		{
 			// if one of these was omitted, it defaults to zero... just quietly heal it here, rather than crashing
-			DEBUG_LOG(("THRUST locos may not have zero m_maxSpeedDamaged; healing..."));
+			engine::debug::log_info("THRUST locos may not have zero m_maxSpeedDamaged; healing...");
 			m_maxSpeedDamaged = 0.01f;
 		}
 		if (m_minSpeed <= 0.0f)
 		{
 			// if one of these was omitted, it defaults to zero... just quietly heal it here, rather than crashing
-			DEBUG_LOG(("THRUST locos may not have zero m_minSpeed; healing..."));
+			engine::debug::log_info("THRUST locos may not have zero m_minSpeed; healing...");
 			m_minSpeed = 0.01f;
 		}
 	}
@@ -760,7 +766,7 @@ void Locomotor::xfer( Xfer *xfer )
 	xfer->xferReal(&m_maxTurnRate);
 	xfer->xferReal(&m_closeEnoughDist);
 #ifdef CIRCLE_FOR_LANDING
-	DEBUG_CRASH(("not supported, must fix me"));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "not supported, must fix me");
 #endif
 	xfer->xferUnsignedInt(&m_flags);
 	xfer->xferReal(&m_preferredHeight);
@@ -875,7 +881,7 @@ void Locomotor::locoUpdate_moveTowardsAngle(Object* obj, Real goalAngle)
 	PhysicsBehavior *physics = obj->getPhysics();
 	if (physics == nullptr)
 	{
-		DEBUG_CRASH(("you can only apply Locomotors to objects with Physics"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "you can only apply Locomotors to objects with Physics");
 		return;
 	}
 
@@ -886,7 +892,7 @@ void Locomotor::locoUpdate_moveTowardsAngle(Object* obj, Real goalAngle)
 	}
 
 #ifdef DEBUG_OBJECT_ID_EXISTS
-//	DEBUG_ASSERTLOG(obj->getID() != TheObjectIDToDebug, ("locoUpdate_moveTowardsAngle %f (%f deg), spd %f (%f)",goalAngle,goalAngle*180/PI,physics->getSpeed(),physics->getForwardSpeed2D()));
+//	if (!(obj->getID() != TheObjectIDToDebug)) engine::debug::log_error("locoUpdate_moveTowardsAngle %f (%f deg), spd %f (%f)",goalAngle,goalAngle*180/PI,physics->getSpeed(),physics->getForwardSpeed2D());
 #endif
 
 	Real minSpeed = getMinSpeed();
@@ -907,7 +913,7 @@ void Locomotor::locoUpdate_moveTowardsAngle(Object* obj, Real goalAngle)
 	}
 	else
 	{
-		DEBUG_ASSERTCRASH(m_template->m_appearance != LOCO_THRUST, ("THRUST should always have minspeeds!"));
+		engine::debug::invariant((m_template->m_appearance != LOCO_THRUST), "m_template->m_appearance != LOCO_THRUST", __FILE__, __LINE__, "THRUST should always have minspeeds!");
 		Coord3D desiredPos = *obj->getPosition();
 		desiredPos.x += Cos(goalAngle) * 1000.0f;
 		desiredPos.y += Sin(goalAngle) * 1000.0f;
@@ -934,7 +940,7 @@ void Locomotor::setPhysicsOptions(Object* obj)
 	PhysicsBehavior *physics = obj->getPhysics();
 	if (physics == nullptr)
 	{
-		DEBUG_CRASH(("you can only apply Locomotors to objects with Physics"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "you can only apply Locomotors to objects with Physics");
 		return;
 	}
 
@@ -968,7 +974,7 @@ void Locomotor::locoUpdate_moveTowardsPosition(Object* obj, const Coord3D& goalP
 	PhysicsBehavior *physics = obj->getPhysics();
 	if (physics == nullptr)
 	{
-		DEBUG_CRASH(("you can only apply Locomotors to objects with Physics"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "you can only apply Locomotors to objects with Physics");
 		return;
 	}
 
@@ -979,7 +985,7 @@ void Locomotor::locoUpdate_moveTowardsPosition(Object* obj, const Coord3D& goalP
 	}
 
 #ifdef DEBUG_OBJECT_ID_EXISTS
-//	DEBUG_ASSERTLOG(obj->getID() != TheObjectIDToDebug, ("locoUpdate_moveTowardsPosition %f %f %f (dtg %f, spd %f), speed %f (%f)",goalPos.x,goalPos.y,goalPos.z,onPathDistToGoal,desiredSpeed,physics->getSpeed(),physics->getForwardSpeed2D()));
+//	if (!(obj->getID() != TheObjectIDToDebug)) engine::debug::log_error("locoUpdate_moveTowardsPosition %f %f %f (dtg %f, spd %f), speed %f (%f)",goalPos.x,goalPos.y,goalPos.z,onPathDistToGoal,desiredSpeed,physics->getSpeed(),physics->getForwardSpeed2D());
 #endif
 
 	//
@@ -1242,8 +1248,8 @@ void Locomotor::moveTowardsPositionTreads(Object* obj, PhysicsBehavior *physics,
 	}
 
 
-	//DEBUG_LOG(("Actual speed %f, Braking factor %f, slowDownDist %f, Pathdist %f, goalSpeed %f",
-	//	actualSpeed, m_brakingFactor, slowDownDist, onPathDistToGoal, goalSpeed));
+	//engine::debug::log_info("Actual speed %f, Braking factor %f, slowDownDist %f, Pathdist %f, goalSpeed %f",
+	//	actualSpeed, m_brakingFactor, slowDownDist, onPathDistToGoal, goalSpeed);
 
 	//
 	// Maintain goal speed
@@ -1451,8 +1457,8 @@ void Locomotor::moveTowardsPositionWheels(Object* obj, PhysicsBehavior *physics,
 	}
 
 
-	//DEBUG_LOG(("Actual speed %f, Braking factor %f, slowDownDist %f, Pathdist %f, goalSpeed %f",
-	//	actualSpeed, m_brakingFactor, slowDownDist, onPathDistToGoal, goalSpeed));
+	//engine::debug::log_info("Actual speed %f, Braking factor %f, slowDownDist %f, Pathdist %f, goalSpeed %f",
+	//	actualSpeed, m_brakingFactor, slowDownDist, onPathDistToGoal, goalSpeed);
 
 
 	// Wheeled can only turn while moving.
@@ -1502,8 +1508,8 @@ void Locomotor::moveTowardsPositionWheels(Object* obj, PhysicsBehavior *physics,
 		if (fabs(accelForce) > fabs(maxForceNeeded))
 			accelForce = maxForceNeeded;
 
-		//DEBUG_LOG(("Braking %d, actualSpeed %f, goalSpeed %f, delta %f, accel %f", getFlag(IS_BRAKING),
-			//actualSpeed, goalSpeed, speedDelta, accelForce));
+		//engine::debug::log_info("Braking %d, actualSpeed %f, goalSpeed %f, delta %f, accel %f", getFlag(IS_BRAKING),
+			//actualSpeed, goalSpeed, speedDelta, accelForce);
 
 		const Coord3D *dir = obj->getUnitDirectionVector2D();
 
@@ -1957,7 +1963,7 @@ void Locomotor::moveTowardsPositionThrust(Object* obj, PhysicsBehavior *physics,
 #endif
 	}
 
-	Vector3 forwardDir = obj->getTransformMatrix()->Get_X_Vector();
+	MathVector3 forwardDir = WorldForwardDirection(obj);
 
 	// Maintain goal speed
 	Real forwardSpeedDelta = desiredSpeed - actualForwardSpeed;
@@ -1965,26 +1971,26 @@ void Locomotor::moveTowardsPositionThrust(Object* obj, PhysicsBehavior *physics,
 	Real maxTurnRate = getMaxTurnRate(bdt);
 
 	// what direction do we need to thrust in, in order to reach the goalpos?
-	Vector3 desiredThrustDir;
+	MathVector3 desiredThrustDir;
 	calcDirectionToApplyThrust(obj, physics, localGoalPos, maxAccel, desiredThrustDir);
 
 	// we might not be able to thrust in that dir, so thrust as closely as we can
 	Real maxThrustAngle =	(maxTurnRate > 0) ? (m_template->m_maxThrustAngle) : 0;
-	Vector3 thrustDir;
+	MathVector3 thrustDir;
 	Real thrustAngle = tryToRotateVector3D(maxThrustAngle, forwardDir, desiredThrustDir, thrustDir);
 
 	// note that we are trying to orient in the direction of our vel, not the dir of our thrust.
 	if (!isNearlyZero(physics->getVelocityMagnitude()))
 	{
 		const Coord3D* veltmp = physics->getVelocity();
-		Vector3 vel(veltmp->x, veltmp->y, veltmp->z);
+		MathVector3 vel{veltmp->x, veltmp->y, veltmp->z};
 		Bool adjust = true;
 		if( obj->getStatusBits().test( OBJECT_STATUS_BRAKING ) )
 		{
 			// align to target, cause that's where we're going anyway.
 
-			vel.Set(goalPos.x - pos.x, goalPos.y-pos.y, goalPos.z-pos.z);
-			if (isNearlyZero(sqr(vel.X)+sqr(vel.Y)+sqr(vel.Z))) {
+			vel = {goalPos.x - pos.x, goalPos.y-pos.y, goalPos.z-pos.z};
+			if (isNearlyZero(sqr(vel.x)+sqr(vel.y)+sqr(vel.z))) {
 				// we are at target.
 				adjust = false;
 			}
@@ -1993,7 +1999,7 @@ void Locomotor::moveTowardsPositionThrust(Object* obj, PhysicsBehavior *physics,
 #ifdef USE_ZDIR_DAMPING
 		if (zDirDamping != 0.0f)
 		{
-			Vector3 vel2D(veltmp->x, veltmp->y, 0);
+			MathVector3 vel2D{veltmp->x, veltmp->y, 0};
 			// no need to normalize -- this call does that internally
 			tryToRotateVector3D(-zDirDamping, vel, vel2D, vel);
 		}
@@ -2010,17 +2016,17 @@ void Locomotor::moveTowardsPositionThrust(Object* obj, PhysicsBehavior *physics,
 			maxForwardSpeed = 0.01f; // In some cases, this is 0, hack for now.  jba.
 		}
 		Real damping = clamp(0.0f, maxAccel / maxForwardSpeed, 1.0f);
-		Vector3 curVel(physics->getVelocity()->x, physics->getVelocity()->y, physics->getVelocity()->z);
+		MathVector3 curVel{physics->getVelocity()->x, physics->getVelocity()->y, physics->getVelocity()->z};
 
-		Vector3 accelVec = thrustDir * maxAccel - curVel * damping;
-		//DEBUG_LOG(("accel %f (max %f) vel %f (max %f) damping %f",accelVec.Length(),maxAccel,curVel.Length(),maxForwardSpeed,damping));
+		MathVector3 accelVec = thrustDir * maxAccel - curVel * damping;
+		//engine::debug::log_info("accel %f (max %f) vel %f (max %f) damping %f",accelVec.Length(),maxAccel,curVel.Length(),maxForwardSpeed,damping);
 
 		Real mass = physics->getMass();
 
 		Coord3D force;
-		force.x = mass * accelVec.X;
-		force.y = mass * accelVec.Y;
-		force.z = mass * accelVec.Z;
+		force.x = mass * accelVec.x;
+		force.y = mass * accelVec.y;
+		force.z = mass * accelVec.z;
 
 		// apply forces to object
 		physics->applyMotiveForce( &force );
@@ -2183,15 +2189,14 @@ PhysicsTurningType Locomotor::rotateObjAroundLocoPivot(Object* obj, const Coord3
 		amount = angleDesiredForTurnPos - angle;
 #endif
 		/// @todo srj -- there's probably a more efficient & more direct way to do this. find it.
-		Matrix3D mtx;
-		Matrix3D tmp(1);
-		tmp.Translate(turnPos.x, turnPos.y, 0);
-		tmp.In_Place_Pre_Rotate_Z(amount);
-		tmp.Translate(-turnPos.x, -turnPos.y, 0);
+		Engine::Math::AffineTransform3 tmp = Engine::Math::AffineTransform3::Identity();
+		Legacy_Translate(tmp, turnPos.x, turnPos.y, 0);
+		Legacy_In_Place_Pre_Rotate_Z(tmp, amount);
+		Legacy_Translate(tmp, -turnPos.x, -turnPos.y, 0);
 
-		mtx.mul(tmp, *obj->getTransformMatrix());
+		const Engine::Math::AffineTransform3 transform = Compose(tmp, obj->worldTransform());
 
-		obj->setTransformMatrix(&mtx);
+		obj->setWorldTransform(transform);
 	}
 	else
 	{
@@ -2296,7 +2301,7 @@ Bool Locomotor::handleBehaviorZ(Object* obj, PhysicsBehavior *physics, const Coo
 
 					Real liftToUse = calcLiftToUseAtPt(obj, physics, pos.z, surfaceHt, preferredHeight);
 
-					//DEBUG_LOG(("HandleBZ %d LiftToUse %f",TheGameLogic->getFrame(),liftToUse));
+					//engine::debug::log_info("HandleBZ %d LiftToUse %f",TheGameLogic->getFrame(),liftToUse);
 					if (liftToUse != 0.0f)
 					{
 						Coord3D force;
@@ -2329,7 +2334,7 @@ Bool Locomotor::handleBehaviorZ(Object* obj, PhysicsBehavior *physics, const Coo
 
 					Real liftToUse = calcLiftToUseAtPt(obj, physics, pos.z, surfaceHt, preferredHeight);
 
-					//DEBUG_LOG(("HandleBZ %d LiftToUse %f",TheGameLogic->getFrame(),liftToUse));
+					//engine::debug::log_info("HandleBZ %d LiftToUse %f",TheGameLogic->getFrame(),liftToUse);
 					if (liftToUse != 0.0f)
 					{
 						Coord3D force;
@@ -2369,9 +2374,9 @@ void Locomotor::moveTowardsPositionOther(Object* obj, PhysicsBehavior *physics, 
 	const Coord3D* pos =  obj->getPosition();
 	Coord3D dirToApplyForce = *obj->getUnitDirectionVector2D();
 
-//DEBUG_ASSERTLOG(!getFlag(ULTRA_ACCURATE),("thresh %f %f (%f %f)",
+//if (!(!getFlag(ULTRA_ACCURATE))) engine::debug::log_error("thresh %f %f (%f %f)",
 //fabs(goalPos.y - pos->y),fabs(goalPos.x - pos->x),
-//fabs(goalPos.y - pos->y)/goalSpeed,fabs(goalPos.x - pos->x)/goalSpeed));
+//fabs(goalPos.y - pos->y)/goalSpeed,fabs(goalPos.x - pos->x)/goalSpeed);
 	if (getFlag(ULTRA_ACCURATE) &&
 				fabs(goalPos.y - pos->y) <= goalSpeed * m_template->m_ultraAccurateSlideIntoPlaceFactor &&
 				fabs(goalPos.x - pos->x) <= goalSpeed * m_template->m_ultraAccurateSlideIntoPlaceFactor)
@@ -2446,12 +2451,12 @@ Bool Locomotor::locoUpdate_maintainCurrentPosition(Object* obj)
 	PhysicsBehavior *physics = obj->getPhysics();
 	if (physics == nullptr)
 	{
-		DEBUG_CRASH(("you can only apply Locomotors to objects with Physics"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "you can only apply Locomotors to objects with Physics");
 		return TRUE;
 	}
 
 #ifdef DEBUG_OBJECT_ID_EXISTS
-//	DEBUG_ASSERTLOG(obj->getID() != TheObjectIDToDebug, ("locoUpdate_maintainCurrentPosition %f %f %f, speed %f (%f)",m_maintainPos.x,m_maintainPos.y,m_maintainPos.z,physics->getSpeed(),physics->getForwardSpeed2D()));
+//	if (!(obj->getID() != TheObjectIDToDebug)) engine::debug::log_error("locoUpdate_maintainCurrentPosition %f %f %f, speed %f (%f)",m_maintainPos.x,m_maintainPos.y,m_maintainPos.z,physics->getSpeed(),physics->getForwardSpeed2D());
 #endif
 
 	Bool requiresConstantCalling = TRUE;	// assume the worst.
@@ -2503,7 +2508,7 @@ Bool Locomotor::locoUpdate_maintainCurrentPosition(Object* obj)
 //-------------------------------------------------------------------------------------------------
 void Locomotor::maintainCurrentPositionThrust(Object* obj, PhysicsBehavior *physics)
 {
-	DEBUG_ASSERTCRASH(getFlag(MAINTAIN_POS_IS_VALID), ("invalid maintain pos"));
+	engine::debug::invariant((getFlag(MAINTAIN_POS_IS_VALID)), "getFlag(MAINTAIN_POS_IS_VALID)", __FILE__, __LINE__, "invalid maintain pos");
 	/// @todo srj -- should these also use the "circling radius" stuff, like wings?
 	moveTowardsPositionThrust(obj, physics, m_maintainPos, 0, getMinSpeed());
 }
@@ -2511,7 +2516,7 @@ void Locomotor::maintainCurrentPositionThrust(Object* obj, PhysicsBehavior *phys
 //-------------------------------------------------------------------------------------------------
 void Locomotor::maintainCurrentPositionWings(Object* obj, PhysicsBehavior *physics)
 {
-	DEBUG_ASSERTCRASH(getFlag(MAINTAIN_POS_IS_VALID), ("invalid maintain pos"));
+	engine::debug::invariant((getFlag(MAINTAIN_POS_IS_VALID)), "getFlag(MAINTAIN_POS_IS_VALID)", __FILE__, __LINE__, "invalid maintain pos");
 	physics->setTurning(TURN_NONE);
 	if (physics->isMotive() && obj->isAboveTerrain())	// no need to stop something that isn't moving (or is just sitting on the ground)
 	{
@@ -2553,7 +2558,7 @@ void Locomotor::maintainCurrentPositionHover(Object* obj, PhysicsBehavior *physi
 	physics->setTurning(TURN_NONE);
 	if (physics->isMotive())	// no need to stop something that isn't moving.
 	{
-		DEBUG_ASSERTCRASH(m_template->m_minSpeed == 0.0f, ("HOVER should always have zero minSpeeds (otherwise, they WING)"));
+		engine::debug::invariant((m_template->m_minSpeed == 0.0f), "m_template->m_minSpeed == 0.0f", __FILE__, __LINE__, "HOVER should always have zero minSpeeds (otherwise, they WING)");
 
 		BodyDamageType bdt = obj->getBodyModule()->getDamageState();
 		Real maxAcceleration = getMaxAcceleration(bdt);
@@ -2620,7 +2625,7 @@ LocomotorSet::LocomotorSet()
 //-------------------------------------------------------------------------------------------------
 LocomotorSet::LocomotorSet(const LocomotorSet& that)
 {
-	DEBUG_CRASH(("unimplemented"));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "unimplemented");
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -2628,7 +2633,7 @@ LocomotorSet& LocomotorSet::operator=(const LocomotorSet& that)
 {
 	if (this != &that)
 	{
-		DEBUG_CRASH(("unimplemented"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "unimplemented");
 	}
 	return *this;
 }
@@ -2679,7 +2684,7 @@ void LocomotorSet::xfer( Xfer *xfer )
 		// vector should be empty at this point
 		if (m_locomotors.empty() == FALSE)
 		{
-			DEBUG_CRASH(( "LocomotorSet::xfer - vector is not empty, but should be" ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "LocomotorSet::xfer - vector is not empty, but should be" );
 			throw XFER_LIST_NOT_EMPTY;
 		}
 
@@ -2691,7 +2696,7 @@ void LocomotorSet::xfer( Xfer *xfer )
 			const LocomotorTemplate* lt = TheLocomotorStore->findLocomotorTemplate(NAMEKEY(name));
 			if (lt == nullptr)
 			{
-				DEBUG_CRASH(( "LocomotorSet::xfer - template %s not found", name.str() ));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "LocomotorSet::xfer - template %s not found", name.str() );
 				throw XFER_UNKNOWN_STRING;
 			}
 
@@ -2746,7 +2751,7 @@ void LocomotorSet::xferSelfAndCurLocoPtr(Xfer *xfer, Locomotor** loco)
 				}
 			}
 
-			DEBUG_CRASH(( "LocomotorSet::xfer - template %s not found", name.str() ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "LocomotorSet::xfer - template %s not found", name.str() );
 			throw XFER_UNKNOWN_STRING;
 		}
 	}
@@ -2778,7 +2783,7 @@ void LocomotorSet::addLocomotor(const LocomotorTemplate* lt)
 		}
 		else // Previous locos were gravity only, but this one isn't!
 		{
-			DEBUG_ASSERTCRASH(!m_downhillOnly,("LocomotorSet, YOU CAN NOT MIX DOWNHILL-ONLY LOCOMOTORS WITH NON-DOWNHILL-ONLY ONES."));
+			engine::debug::invariant((!m_downhillOnly), "!m_downhillOnly", __FILE__, __LINE__, "LocomotorSet, YOU CAN NOT MIX DOWNHILL-ONLY LOCOMOTORS WITH NON-DOWNHILL-ONLY ONES.");
 		}
 
 	}
@@ -2795,5 +2800,3 @@ Locomotor* LocomotorSet::findLocomotor(LocomotorSurfaceTypeMask t)
 	}
 	return nullptr;
 }
-
-

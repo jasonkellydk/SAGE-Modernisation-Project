@@ -27,7 +27,8 @@
 // Desc:   Update module to handle deployment of the SpectreGunship Generals special power.from command center
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #define DEFINE_DEATH_NAMES
 
@@ -128,7 +129,7 @@ void SpectreGunshipDeploymentUpdate::onObjectCreated()
 
 	if( !data->m_specialPowerTemplate )
 	{
-		DEBUG_CRASH( ("%s object's SpectreGunshipDeploymentUpdate lacks access to the SpecialPowerTemplate. Needs to be specified in ini.", obj->getTemplate()->getName().str() ) );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "%s object's SpectreGunshipDeploymentUpdate lacks access to the SpecialPowerTemplate. Needs to be specified in ini.", obj->getTemplate()->getName().str() );
 		return;
 	}
 
@@ -175,7 +176,7 @@ Bool SpectreGunshipDeploymentUpdate::initiateIntentToDoSpecialPower(const Specia
 		newGunship = TheThingFactory->newObject( gunshipTemplate, getObject()->getTeam() );
   }
 
-  DEBUG_ASSERTCRASH( newGunship, ("SpecterGunshipUpdate failed to find or create a gunship object"));
+  engine::debug::invariant((newGunship), "newGunship", __FILE__, __LINE__, "SpecterGunshipUpdate failed to find or create a gunship object");
   if ( newGunship )
   {
     //PRODUCER

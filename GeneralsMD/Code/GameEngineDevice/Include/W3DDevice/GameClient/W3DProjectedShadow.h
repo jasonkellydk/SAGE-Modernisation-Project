@@ -32,6 +32,7 @@
 ///////////////////////////////////////////////////////////////////////////////
 
 #pragma once
+import Engine.Core.Math.AffineTransform3;
 
 #include <memory>
 
@@ -40,6 +41,7 @@ import Graphics.Scene.Lighting.Local;
 import Graphics.Materials.MeshMaterial;
 import Graphics.Materials.TextureMapping;
 import Graphics.Materials.TextureProjector;
+import Engine.Core.Math.AxisAlignedBox3;
 
 class W3DShadowTexture;	//forward reference
 class W3DShadowTextureManager;	//forward reference
@@ -79,7 +81,8 @@ class W3DProjectedShadowManager	: public ProjectedShadowManager
 		void flushDecals(W3DShadowTexture *texture, ShadowType type);	///<empty queue by rendering all decals with given texture
 
 	private:
-		Int renderProjectedTerrainShadow(W3DProjectedShadow *shadow, AABoxClass &box);	///<render shadow on map terrain.
+		Int renderProjectedTerrainShadow(W3DProjectedShadow *shadow,
+			const Engine::Math::AxisAlignedBox3 &box);	///<render shadow on map terrain.
 		void updateShadowNumbers(ShadowType shadowType, Int addNum);
 
 	private:
@@ -115,12 +118,12 @@ class W3DProjectedShadow	: public Shadow
 		W3DProjectedShadow();
 		~W3DProjectedShadow();
 		void setRenderObject( W3DRenderObject	*robj) {m_robj=robj;}
-		void setObjPosHistory(const Vector3 &pos)	{m_lastObjPosition=pos;}	///<position of object when projection matrix was updated.
+		void setObjPosHistory(const Engine::Math::Vector3 &pos)	{m_lastObjPosition=pos;}	///<position of object when projection matrix was updated.
 		void setTexture(Int lightIndex,W3DShadowTexture *texture)	{m_shadowTexture[lightIndex]=texture;}	///<texture with light's shadow
 		void update();	///<updates the texture and/or projection parameters when the object or light moves.
 		void init();		///<allocates local member variables used for projection
-		void updateTexture(Vector3 &lightPos);	///<updates the shadow texture image using render object and given light position.
-		void updateProjectionParameters(const Matrix3D &cameraXform);	///<recompute projection matrix - needed when light or object moves.
+		void updateTexture(Engine::Math::Vector3 &lightPos);	///<updates the shadow texture image using render object and given light position.
+		void updateProjectionParameters(const Engine::Math::AffineTransform3 &cameraTransform);	///<Recomputes the projector matrix when the camera or object moves.
 		Graphics::TextureMapping *getShadowMapping() const { return m_shadowMapping.get(); }
 		Graphics::MeshMaterial *getShadowMaterial() const { return m_shadowMaterial.get(); }
 		#if defined(RTS_DEBUG)
@@ -135,7 +138,7 @@ class W3DProjectedShadow	: public Shadow
 		std::shared_ptr<Graphics::MeshMaterial> m_shadowMaterial;
 		Graphics::TextureProjectorFit m_shadowFit;
 		W3DRenderObject	*m_robj;						///<render object used to cast the shadow.
-		Vector3		m_lastObjPosition;	///<position of  object at time of projection matrix update.
+		Engine::Math::Vector3		m_lastObjPosition;	///<position of  object at time of projection matrix update.
 		W3DProjectedShadow *m_next;	/// for the shadow manager list
 		Bool	m_allowWorldAlign;	/// wrap shadow around world geometry - else align perpendicular to local z-axis.
 		Real	m_decalOffsetU;		/// texture coordinate offset so not centered at object origin.

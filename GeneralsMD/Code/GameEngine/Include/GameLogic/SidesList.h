@@ -29,6 +29,8 @@
 
 #pragma once
 
+
+#include <cassert>
 #include "Common/Dict.h"
 #include "Common/Errors.h"
 #include "Common/GameType.h"
@@ -113,7 +115,7 @@ public:
 		{
 			return(&m_teams[team]);
 		}
-		DEBUG_CRASH(("Out of range."));
+		assert(false);
 		throw ERROR_BAD_ARG;
 		return nullptr;
 	}
@@ -219,7 +221,7 @@ inline SidesInfo * SidesList::getSideInfo(Int side)
 	{
 		return(&m_sides[side]);
 	}
-	DEBUG_CRASH(("Out of range."));
+	assert(false);
 	throw ERROR_BAD_ARG;
 	return nullptr;
 }
@@ -230,7 +232,7 @@ inline SidesInfo * SidesList::getSkirmishSideInfo(Int side)
 	{
 		return(&m_skirmishSides[side]);
 	}
-	DEBUG_CRASH(("Out of range."));
+	assert(false);
 	throw ERROR_BAD_ARG;
 	return nullptr;
 }

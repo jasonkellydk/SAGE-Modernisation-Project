@@ -37,6 +37,7 @@
 #include "GameClient/Drawable.h"
 #include "W3DDevice/GameClient/Module/W3DTreeDraw.h"
 #include "W3DDevice/GameClient/BaseHeightMap.h"
+import engine.debug;
 
 
 //-------------------------------------------------------------------------------------------------
@@ -126,7 +127,7 @@ void W3DTreeDraw::addToTreeBuffer()
 	const W3DTreeDrawModuleData *moduleData = getW3DTreeDrawModuleData();
 	const Drawable *draw = getDrawable();
 
-	DEBUG_ASSERTCRASH(draw->isPositioned(), ("W3DTreeDraw::addToTreeBuffer - This tree was not positioned!"));
+	engine::debug::invariant((draw->isPositioned()), "draw->isPositioned()", __FILE__, __LINE__, "W3DTreeDraw::addToTreeBuffer - This tree was not positioned!");
 
 	Real scale = draw->getScale();
 	Real scaleRandomness = draw->getTemplate()->getInstanceScaleFuzziness();

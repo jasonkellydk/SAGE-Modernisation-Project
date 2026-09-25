@@ -26,7 +26,8 @@
 // Generals ladder code
 // Author: Matthew D. Campbell, August 2002
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "GameNetwork/GameSpy/ThreadUtils.h"
 #include "GameNetwork/GameSpy/LadderDefs.h"
@@ -58,7 +59,7 @@ LadderInfo::LadderInfo()
 
 static LadderInfo *parseLadder(AsciiString raw)
 {
-	DEBUG_LOG(("Looking at ladder:\n%s", raw.str()));
+	engine::debug::log_info("Looking at ladder:\n%s", raw.str());
 	LadderInfo *lad = nullptr;
 	AsciiString line;
 	while (raw.nextToken(&line, "\n"))
@@ -157,15 +158,15 @@ static LadderInfo *parseLadder(AsciiString raw)
 		}
 		else if ( lad && line.compare("</Ladder>") == 0 )
 		{
-			DEBUG_LOG(("Saw a ladder: name=%ls, addr=%s:%d, players=%dv%d, pass=%s, replay=%d, homepage=%s",
+			engine::debug::log_info("Saw a ladder: name=%ls, addr=%s:%d, players=%dv%d, pass=%s, replay=%d, homepage=%s",
 				lad->name.str(), lad->address.str(), lad->port, lad->playersPerTeam, lad->playersPerTeam, lad->cryptedPassword.str(),
-				lad->submitReplay, lad->homepageURL.str()));
+				lad->submitReplay, lad->homepageURL.str());
 			// end of a ladder
 			if (lad->playersPerTeam >= 1 && lad->playersPerTeam <= MAX_SLOTS/2)
 			{
 				if (lad->validFactions.empty())
 				{
-					DEBUG_LOG(("No factions specified.  Using all."));
+					engine::debug::log_info("No factions specified.  Using all.");
 					lad->validFactions.clear();
 					Int numTemplates = ThePlayerTemplateStore->getPlayerTemplateCount();
 					for ( Int i = 0; i < numTemplates; ++i )
@@ -186,13 +187,13 @@ static LadderInfo *parseLadder(AsciiString raw)
 						AsciiString faction = *it;
 						AsciiString marker;
 						marker.format("INI:Faction%s", faction.str());
-						DEBUG_LOG(("Faction %s has marker %s corresponding to str %ls", faction.str(), marker.str(), TheGameText->fetch(marker).str()));
+						engine::debug::log_info("Faction %s has marker %s corresponding to str %ls", faction.str(), marker.str(), TheGameText->fetch(marker).str());
 					}
 				}
 
 				if (lad->validMaps.empty())
 				{
-					DEBUG_LOG(("No maps specified.  Using all."));
+					engine::debug::log_info("No maps specified.  Using all.");
 					std::list<AsciiString> qmMaps = TheGameSpyConfig->getQMMaps();
 					for (std::list<AsciiString>::const_iterator it = qmMaps.begin(); it != qmMaps.end(); ++it)
 					{
@@ -308,12 +309,12 @@ LadderList::LadderList()
 					lad->index = index++;
 					if (inLadders)
 					{
-						DEBUG_LOG(("Adding to standard ladders"));
+						engine::debug::log_info("Adding to standard ladders");
 						m_standardLadders.push_back(lad);
 					}
 					else
 					{
-						DEBUG_LOG(("Adding to special ladders"));
+						engine::debug::log_info("Adding to special ladders");
 						m_specialLadders.push_back(lad);
 					}
 				}
@@ -330,7 +331,7 @@ LadderList::LadderList()
 	// look for local ladders
 	loadLocalLadders();
 
-	DEBUG_LOG(("After looking for ladders, we have %d local, %d special && %d normal", m_localLadders.size(), m_specialLadders.size(), m_standardLadders.size()));
+	engine::debug::log_info("After looking for ladders, we have %d local, %d special && %d normal", m_localLadders.size(), m_specialLadders.size(), m_standardLadders.size());
 }
 
 LadderList::~LadderList()
@@ -452,7 +453,7 @@ void LadderList::loadLocalLadders()
 	while (it != filenameList.end())
 	{
 		AsciiString filename = *it;
-		DEBUG_LOG(("Looking at possible ladder info file '%s'", filename.str()));
+		engine::debug::log_info("Looking at possible ladder info file '%s'", filename.str());
 		filename.toLower();
 		checkLadder( filename, index-- );
 		++it;
@@ -478,7 +479,7 @@ void LadderList::checkLadder( AsciiString fname, Int index )
 		fp = nullptr;
 	}
 
-	DEBUG_LOG(("Read %d bytes from '%s'", rawData.getLength(), fname.str()));
+	engine::debug::log_info("Read %d bytes from '%s'", rawData.getLength(), fname.str());
 	if (rawData.isEmpty())
 		return;
 
@@ -491,21 +492,21 @@ void LadderList::checkLadder( AsciiString fname, Int index )
 	// sanity check
 	if (li->address.isEmpty())
 	{
-		DEBUG_LOG(("Bailing because of li->address.isEmpty()"));
+		engine::debug::log_info("Bailing because of li->address.isEmpty()");
 		delete li;
 		return;
 	}
 
 	if (!li->port)
 	{
-		DEBUG_LOG(("Bailing because of !li->port"));
+		engine::debug::log_info("Bailing because of !li->port");
 		delete li;
 		return;
 	}
 
 	if (li->validMaps.empty())
 	{
-		DEBUG_LOG(("Bailing because of li->validMaps.empty()"));
+		engine::debug::log_info("Bailing because of li->validMaps.empty()");
 		delete li;
 		return;
 	}
@@ -520,6 +521,6 @@ void LadderList::checkLadder( AsciiString fname, Int index )
 	//	fname.removeLastChar(); // remove .lad
 	//li->name = UnicodeString(MultiByteToWideCharSingleLine(fname.reverseFind('\\')+1).c_str());
 
-	DEBUG_LOG(("Adding local ladder %ls", li->name.str()));
+	engine::debug::log_info("Adding local ladder %ls", li->name.str());
 	m_localLadders.push_back(li);
 }

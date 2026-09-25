@@ -38,7 +38,7 @@
 #include "Common/ThingTemplate.h"
 #include "Common/RandomValue.h"
 #include "Common/DrawModule.h"
-#include "Common/PerfTimer.h"
+
 #include "Common/Xfer.h"
 #include "GameLogic/Object.h"
 #include "GameLogic/ScriptEngine.h"

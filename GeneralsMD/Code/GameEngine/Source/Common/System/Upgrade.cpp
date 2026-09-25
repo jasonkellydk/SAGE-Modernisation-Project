@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // USER INCLUDES //////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #define DEFINE_VETERANCY_NAMES
 #include "Common/Upgrade.h"
@@ -208,7 +209,7 @@ void UpgradeTemplate::cacheButtonImage()
 	if( m_buttonImageName.isNotEmpty() )
 	{
 		m_buttonImage = TheMappedImageCollection->findImageByName( m_buttonImageName );
-		DEBUG_ASSERTCRASH( m_buttonImage, ("UpgradeTemplate: %s is looking for button image %s but can't find it. Skipping...", m_name.str(), m_buttonImageName.str() ) );
+		engine::debug::invariant((m_buttonImage), "m_buttonImage", __FILE__, __LINE__, "UpgradeTemplate: %s is looking for button image %s but can't find it. Skipping...", m_name.str(), m_buttonImageName.str() );
 		m_buttonImageName.clear();	// we're done with this, so nuke it
 	}
 }
@@ -382,7 +383,7 @@ UpgradeTemplate *UpgradeCenter::newUpgrade( const AsciiString& name )
 	newMask.set( m_nextTemplateMaskBit );
 	//Int64 newMask = 1i64 << m_nextTemplateMaskBit;
 	m_nextTemplateMaskBit++;
-	DEBUG_ASSERTCRASH( m_nextTemplateMaskBit < UPGRADE_MAX_COUNT, ("Can't have over %d types of Upgrades and have a Bitfield function.", UPGRADE_MAX_COUNT) );
+	engine::debug::invariant((m_nextTemplateMaskBit < UPGRADE_MAX_COUNT), "m_nextTemplateMaskBit < UPGRADE_MAX_COUNT", __FILE__, __LINE__, "Can't have over %d types of Upgrades and have a Bitfield function.", UPGRADE_MAX_COUNT);
 	newUpgrade->friend_setUpgradeMask( newMask );
 
 	// link upgrade
@@ -492,7 +493,7 @@ void UpgradeCenter::parseUpgradeDefinition( INI *ini )
 	}
 
 	// sanity
-	DEBUG_ASSERTCRASH( upgrade, ("parseUpgradeDefinition: Unable to allocate upgrade '%s'", name) );
+	engine::debug::invariant((upgrade), "upgrade", __FILE__, __LINE__, "parseUpgradeDefinition: Unable to allocate upgrade '%s'", name);
 
 	// parse the ini definition
 	ini->initFromINI( upgrade, upgrade->getFieldParse() );

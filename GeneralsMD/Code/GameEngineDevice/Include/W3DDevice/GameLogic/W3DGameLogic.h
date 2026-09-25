@@ -54,6 +54,8 @@ class W3DGameLogic : public GameLogic
 {
 
 public:
+	W3DGameLogic(engine::platform::IClockService& clock, engine::platform::IThreadingService& threading)
+		: GameLogic(clock, threading) {}
 
 protected:
 

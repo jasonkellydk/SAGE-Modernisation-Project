@@ -46,6 +46,8 @@
 //----------------------------------------------------------------------------
 
 #include "PreRTS.h"
+import engine.profiling;
+import engine.debug;
 
 #include <fcntl.h>
 #include <io.h>
@@ -54,7 +56,55 @@
 #include "Common/AsciiString.h"
 #include "Common/FileSystem.h"
 #include "Common/StreamingArchiveFile.h"
-#include "Common/PerfTimer.h"
+
+void StreamingArchiveFile::nextLine(Char *, Int)
+{
+	engine::debug::invariant(false, "streaming file line access", __FILE__, __LINE__,
+		"Should not call nextLine on a streaming file.");
+}
+
+Bool StreamingArchiveFile::scanInt(Int &)
+{
+	engine::debug::invariant(false, "streaming file integer scan", __FILE__, __LINE__,
+		"Should not call scanInt on a streaming file.");
+	return FALSE;
+}
+
+Bool StreamingArchiveFile::scanReal(Real &)
+{
+	engine::debug::invariant(false, "streaming file real scan", __FILE__, __LINE__,
+		"Should not call scanReal on a streaming file.");
+	return FALSE;
+}
+
+Bool StreamingArchiveFile::scanString(AsciiString &)
+{
+	engine::debug::invariant(false, "streaming file string scan", __FILE__, __LINE__,
+		"Should not call scanString on a streaming file.");
+	return FALSE;
+}
+
+Bool StreamingArchiveFile::copyDataToFile(File *)
+{
+	engine::debug::invariant(false, "streaming file copy", __FILE__, __LINE__,
+		"Are you sure you meant to copyDataToFile on a streaming file?");
+	return FALSE;
+}
+
+char *StreamingArchiveFile::readEntireAndClose()
+{
+	engine::debug::invariant(false, "streaming file read entire", __FILE__, __LINE__,
+		"Are you sure you meant to readEntireAndClose on a streaming file?");
+	return nullptr;
+}
+
+File *StreamingArchiveFile::convertToRAMFile()
+{
+	engine::debug::invariant(false, "streaming file convert", __FILE__, __LINE__,
+		"Are you sure you meant to readEntireAndClose on a streaming file?");
+	return this;
+}
+
 
 
 //----------------------------------------------------------------------------
@@ -134,10 +184,9 @@ StreamingArchiveFile::~StreamingArchiveFile()
 	*/
 //=================================================================
 
-//DECLARE_PERF_TIMER(StreamingArchiveFile)
 Bool StreamingArchiveFile::open( const Char *filename, Int access, size_t bufferSize )
 {
-	//USE_PERF_TIMER(StreamingArchiveFile)
+	//engine::profiling::Scope profile_scope_139("StreamingArchiveFile")
 	File *file = TheFileSystem->openFile( filename, access, bufferSize );
 
 	if ( file == nullptr )
@@ -162,7 +211,7 @@ Bool StreamingArchiveFile::open( File *file )
 //============================================================================
 Bool StreamingArchiveFile::openFromArchive(File *archiveFile, const AsciiString& filename, Int offset, Int size)
 {
-	//USE_PERF_TIMER(StreamingArchiveFile)
+	//engine::profiling::Scope profile_scope_164("StreamingArchiveFile")
 	if (archiveFile == nullptr) {
 		return FALSE;
 	}
@@ -236,7 +285,7 @@ Int StreamingArchiveFile::read( void *buffer, Int bytes )
 
 Int StreamingArchiveFile::write( const void *buffer, Int bytes )
 {
-	DEBUG_CRASH(("Cannot write to streaming files."));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Cannot write to streaming files.");
 	return -1;
 }
 
@@ -257,7 +306,7 @@ Int StreamingArchiveFile::seek( Int pos, seekMode mode)
 			newPos = m_curPos + pos;
 			break;
 		case END:
-			DEBUG_ASSERTCRASH(pos <= 0, ("StreamingArchiveFile::seek - position should be <= 0 for a seek starting from the end."));
+			engine::debug::invariant((pos <= 0), "pos <= 0", __FILE__, __LINE__, "StreamingArchiveFile::seek - position should be <= 0 for a seek starting from the end.");
 			newPos = m_size + pos;
 			break;
 		default:
@@ -279,4 +328,3 @@ Int StreamingArchiveFile::seek( Int pos, seekMode mode)
 	return m_curPos;
 
 }
-

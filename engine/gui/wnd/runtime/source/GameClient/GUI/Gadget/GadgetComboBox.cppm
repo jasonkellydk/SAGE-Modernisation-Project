@@ -53,7 +53,7 @@ module;
 #include "Common/Language.h"
 #include "Common/AudioEventRTS.h"
 #include "Common/GameAudio.h"
-#include "Common/Debug.h"
+
 #include "GameClient/DisplayStringManager.h"
 #include "GameClient/GameWindow.h"
 #include "GameClient/GameWindowManager.h"
@@ -61,6 +61,7 @@ module;
 
 export module Engine.UI.WND.Runtime.Gadget.ComboBox;
 
+import engine.debug;
 import Engine.UI.WND.Layout;
 
 #include "GameClient/Gadget.h"
@@ -402,7 +403,7 @@ WindowMsgHandledType GadgetComboBoxSystem( GameWindow *window, UnsignedInt msg,
 				GadgetListBoxGetSelected(comboData->listBox, (Int *)mData2);
 			else
 			{
-				DEBUG_CRASH(("We don't have a listbox as part of the combo box"));
+				engine::debug::invariant(false, "debug invariant", __FILE__, __LINE__, "We don't have a listbox as part of the combo box");
 				*(Int *)mData2 = -1;
 			}
 			break;

@@ -3,6 +3,7 @@
 #include "W3DDevice/GameClient/BaseHeightMap.h"
 #include <array>
 #include <vector>
+import engine.platform.time;
 
 import Graphics.Scene.Terrain.Renderer;
 
@@ -11,7 +12,7 @@ import Graphics.Scene.Terrain.Renderer;
 class W3DTerrainGraphics : public BaseHeightMapRenderObjClass
 {
 public:
-    W3DTerrainGraphics();
+    explicit W3DTerrainGraphics(engine::platform::IClockService& clock);
     ~W3DTerrainGraphics() override;
     void Render(W3DRenderContext &info) override;
     Bool collectShadowCasters() override;
@@ -19,7 +20,7 @@ public:
     Int freeMapResources() override;
     void ReleaseResources() override;
     void ReAcquireResources() override;
-    void updateCenter(W3DCamera *camera, const Vector3 *pivot, Graphics::SceneObjectList<W3DRenderObject>::Cursor *lights) override;
+    void updateCenter(W3DCamera *camera, const Engine::Math::Vector3 *pivot, Graphics::SceneObjectList<W3DRenderObject>::Cursor *lights) override;
     void doPartialUpdate(const IRegion2D &range, WorldHeightMap *map, Graphics::SceneObjectList<W3DRenderObject>::Cursor *lights) override;
     int updateBlock(Int x0, Int y0, Int x1, Int y1, WorldHeightMap *map, Graphics::SceneObjectList<W3DRenderObject>::Cursor *lights) override;
     void oversizeTerrain(Int tiles) override;

@@ -95,11 +95,11 @@ std::size_t W3DSmudgeManager::Collect_Graphics_Smudges(std::span<float> position
 		for (Smudge *smudge : set->getUsedSmudgeList()) {
 			if (smudge == nullptr || !smudge->m_draw || count >= capacity)
 				continue;
-			position_x[count] = smudge->m_pos.X;
-			position_y[count] = smudge->m_pos.Y;
-			position_z[count] = smudge->m_pos.Z;
-			offset_x[count] = smudge->m_offset.X;
-			offset_y[count] = smudge->m_offset.Y;
+			position_x[count] = smudge->m_pos.x;
+			position_y[count] = smudge->m_pos.y;
+			position_z[count] = smudge->m_pos.z;
+			offset_x[count] = smudge->m_offset.x;
+			offset_y[count] = smudge->m_offset.y;
 			sizes[count] = smudge->m_size*0.5f;
 			opacities[count] = smudge->m_opacity;
 			++count;
@@ -107,4 +107,3 @@ std::size_t W3DSmudgeManager::Collect_Graphics_Smudges(std::span<float> position
 	}
 	return count;
 }
-

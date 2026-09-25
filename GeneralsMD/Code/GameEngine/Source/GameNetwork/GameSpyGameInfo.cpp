@@ -26,7 +26,8 @@
 // GameSpy game setup state info
 // Author: Matthew D. Campbell, December 2001
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/GameEngine.h"
 #include "Common/Player.h"
@@ -159,18 +160,18 @@ Bool GetLocalChatConnectionAddress(AsciiString serverName, UnsignedShort serverP
 		"DELETE_TCB"
 	};
 
-	DEBUG_LOG(("Finding local address used to talk to the chat server"));
-	DEBUG_LOG(("Current chat server name is %s", serverName.str()));
-	DEBUG_LOG(("Chat server port is %d", serverPort));
+	engine::debug::log_info("Finding local address used to talk to the chat server");
+	engine::debug::log_info("Current chat server name is %s", serverName.str());
+	engine::debug::log_info("Chat server port is %d", serverPort);
 
 	/*
 	** Get the address of the chat server.
 	*/
-	DEBUG_LOG( ("About to call gethostbyname"));
+	engine::debug::log_info("About to call gethostbyname");
 	struct hostent *host_info = gethostbyname(serverName.str());
 
 	if (!host_info) {
-		DEBUG_LOG( ("gethostbyname failed! Error code %d", WSAGetLastError()));
+		engine::debug::log_info("gethostbyname failed! Error code %d", WSAGetLastError());
 		return(false);
 	}
 
@@ -179,24 +180,24 @@ Bool GetLocalChatConnectionAddress(AsciiString serverName, UnsignedShort serverP
 	temp = ntohl(temp);
 	*((unsigned long*)(&serverAddress[0])) = temp;
 
-	DEBUG_LOG(("Host address is %d.%d.%d.%d", serverAddress[3], serverAddress[2], serverAddress[1], serverAddress[0]));
+	engine::debug::log_info("Host address is %d.%d.%d.%d", serverAddress[3], serverAddress[2], serverAddress[1], serverAddress[0]);
 
 	/*
 	** Load the MIB-II SNMP DLL.
 	*/
-	DEBUG_LOG(("About to load INETMIB1.DLL"));
+	engine::debug::log_info("About to load INETMIB1.DLL");
 
 	HINSTANCE mib_ii_dll = LoadLibrary("inetmib1.dll");
 	if (mib_ii_dll == nullptr) {
-		DEBUG_LOG(("Failed to load INETMIB1.DLL"));
+		engine::debug::log_info("Failed to load INETMIB1.DLL");
 		return(false);
 	}
 
-	DEBUG_LOG(("About to load SNMPAPI.DLL"));
+	engine::debug::log_info("About to load SNMPAPI.DLL");
 
 	HINSTANCE snmpapi_dll = LoadLibrary("snmpapi.dll");
 	if (snmpapi_dll == nullptr) {
-		DEBUG_LOG(("Failed to load SNMPAPI.DLL"));
+		engine::debug::log_info("Failed to load SNMPAPI.DLL");
 		FreeLibrary(mib_ii_dll);
 		return(false);
 	}
@@ -209,7 +210,7 @@ Bool GetLocalChatConnectionAddress(AsciiString serverName, UnsignedShort serverP
 	SnmpUtilMemAllocPtr = (void *(__stdcall *)(unsigned long)) GetProcAddress(snmpapi_dll, "SnmpUtilMemAlloc");
 	SnmpUtilMemFreePtr = (void (__stdcall *)(void *)) GetProcAddress(snmpapi_dll, "SnmpUtilMemFree");
 	if (SnmpExtensionInitPtr == nullptr || SnmpExtensionQueryPtr == nullptr || SnmpUtilMemAllocPtr == nullptr || SnmpUtilMemFreePtr == nullptr) {
-		DEBUG_LOG(("Failed to get proc addresses for linked functions"));
+		engine::debug::log_info("Failed to get proc addresses for linked functions");
 		FreeLibrary(snmpapi_dll);
 		FreeLibrary(mib_ii_dll);
 		return(false);
@@ -222,14 +223,14 @@ Bool GetLocalChatConnectionAddress(AsciiString serverName, UnsignedShort serverP
 	/*
 	** OK, here we go. Try to initialise the .dll
 	*/
-	DEBUG_LOG(("About to init INETMIB1.DLL"));
+	engine::debug::log_info("About to init INETMIB1.DLL");
 	int ok = SnmpExtensionInitPtr(GetCurrentTime(), &trap_handle, &first_supported_region);
 
 	if (!ok) {
 		/*
 		** Aw crap.
 		*/
-		DEBUG_LOG(("Failed to init the .dll"));
+		engine::debug::log_info("Failed to init the .dll");
 		SnmpUtilMemFreePtr(bind_list_ptr);
 		SnmpUtilMemFreePtr(bind_ptr);
 		FreeLibrary(snmpapi_dll);
@@ -278,7 +279,7 @@ Bool GetLocalChatConnectionAddress(AsciiString serverName, UnsignedShort serverP
 
 		if (!SnmpExtensionQueryPtr(SNMP_PDU_GETNEXT, bind_list_ptr, &error_status, &error_index)) {
 		//if (!SnmpExtensionQueryPtr(ASN_RFC1157_GETNEXTREQUEST, bind_list_ptr, &error_status, &error_index)) {
-			DEBUG_LOG(("SnmpExtensionQuery returned false"));
+			engine::debug::log_info("SnmpExtensionQuery returned false");
 			SnmpUtilMemFreePtr(bind_list_ptr);
 			SnmpUtilMemFreePtr(bind_ptr);
 			FreeLibrary(snmpapi_dll);
@@ -342,7 +343,7 @@ Bool GetLocalChatConnectionAddress(AsciiString serverName, UnsignedShort serverP
 			** 2. Local address field.
 			*/
 			case tcpConnLocalAddress:
-				DEBUG_ASSERTCRASH(index < connectionVector.size(), ("Bad connection index"));
+				engine::debug::invariant((index < connectionVector.size()), "index < connectionVector.size()", __FILE__, __LINE__, "Bad connection index");
 				connectionVector[index].LocalIP = *((unsigned long*)bind_ptr->value.asnValue.address.stream);
 				index++;
 				break;
@@ -351,7 +352,7 @@ Bool GetLocalChatConnectionAddress(AsciiString serverName, UnsignedShort serverP
 			** 3. Local port field.
 			*/
 			case tcpConnLocalPort:
-				DEBUG_ASSERTCRASH(index < connectionVector.size(), ("Bad connection index"));
+				engine::debug::invariant((index < connectionVector.size()), "index < connectionVector.size()", __FILE__, __LINE__, "Bad connection index");
 				connectionVector[index].LocalPort = bind_ptr->value.asnValue.number;
 				//connectionVector[index]->LocalPort = ntohs(connectionVector[index]->LocalPort);
 				index++;
@@ -361,7 +362,7 @@ Bool GetLocalChatConnectionAddress(AsciiString serverName, UnsignedShort serverP
 			** 4. Remote address field.
 			*/
 			case tcpConnRemAddress:
-				DEBUG_ASSERTCRASH(index < connectionVector.size(), ("Bad connection index"));
+				engine::debug::invariant((index < connectionVector.size()), "index < connectionVector.size()", __FILE__, __LINE__, "Bad connection index");
 				connectionVector[index].RemoteIP = *((unsigned long*)bind_ptr->value.asnValue.address.stream);
 				index++;
 				break;
@@ -370,7 +371,7 @@ Bool GetLocalChatConnectionAddress(AsciiString serverName, UnsignedShort serverP
 			** 5. Remote port field.
 			*/
 			case tcpConnRemPort:
-				DEBUG_ASSERTCRASH(index < connectionVector.size(), ("Bad connection index"));
+				engine::debug::invariant((index < connectionVector.size()), "index < connectionVector.size()", __FILE__, __LINE__, "Bad connection index");
 				connectionVector[index].RemotePort = bind_ptr->value.asnValue.number;
 				//connectionVector[index]->RemotePort = ntohs(connectionVector[index]->RemotePort);
 				index++;
@@ -382,7 +383,7 @@ Bool GetLocalChatConnectionAddress(AsciiString serverName, UnsignedShort serverP
 	SnmpUtilMemFreePtr(bind_ptr);
 	SnmpUtilMemFreePtr(mib_ii_name_ptr);
 
-	DEBUG_LOG(("Got %d connections in list, parsing...", connectionVector.size()));
+	engine::debug::log_info("Got %d connections in list, parsing...", connectionVector.size());
 
 	/*
 	** Right, we got the lot. Lets see if any of them have the same address as the chat
@@ -399,29 +400,29 @@ Bool GetLocalChatConnectionAddress(AsciiString serverName, UnsignedShort serverP
 		** See if this connection has the same address as our server.
 		*/
 		if (!found && memcmp(remoteAddress, serverAddress, 4) == 0) {
-			DEBUG_LOG(("Found connection with same remote address as server"));
+			engine::debug::log_info("Found connection with same remote address as server");
 
 			if (serverPort == 0 || serverPort == (unsigned int)connection.RemotePort) {
 
-				DEBUG_LOG(("Connection has same port"));
+				engine::debug::log_info("Connection has same port");
 				/*
 				** Make sure the connection is current.
 				*/
 				if (connection.State == ESTABLISHED) {
-					DEBUG_LOG(("Connection is ESTABLISHED"));
+					engine::debug::log_info("Connection is ESTABLISHED");
 					localIP = connection.LocalIP;
 					found = true;
 				} else {
-					DEBUG_LOG(("Connection is not ESTABLISHED - skipping"));
+					engine::debug::log_info("Connection is not ESTABLISHED - skipping");
 				}
 			} else {
-				DEBUG_LOG(("Connection has different port. Port is %d, looking for %d", connection.RemotePort, serverPort));
+				engine::debug::log_info("Connection has different port. Port is %d, looking for %d", connection.RemotePort, serverPort);
 			}
 		}
 	}
 
 	if (found) {
-		DEBUG_LOG(("Using address 0x%8.8X to talk to chat server", localIP));
+		engine::debug::log_info("Using address 0x%8.8X to talk to chat server", localIP);
 	}
 
 	FreeLibrary(snmpapi_dll);
@@ -492,7 +493,7 @@ void GameSpyLaunchGame()
 		// Set up the game network
 		AsciiString user;
 		AsciiString userList;
-		DEBUG_ASSERTCRASH(TheNetwork == nullptr, ("For some reason TheNetwork isn't null at the start of this game.  Better look into that."));
+		engine::debug::invariant((TheNetwork == nullptr), "TheNetwork == nullptr", __FILE__, __LINE__, "For some reason TheNetwork isn't null at the start of this game.  Better look into that.");
 
 		if (TheNetwork != nullptr) {
 			delete TheNetwork;
@@ -516,7 +517,7 @@ void GameSpyLaunchGame()
 			GameSlot *slot = TheGameSpyGame->getSlot(i);
 			if (!slot)
 			{
-				DEBUG_CRASH(("No GameSlot[%d]!", i));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "No GameSlot[%d]!", i);
 				delete TheNetwork;
 				TheNetwork = nullptr;
 				return;
@@ -564,7 +565,7 @@ void GameSpyLaunchGame()
 
 		// Set the random seed
 		InitGameLogicRandom( TheGameSpyGame->getSeed() );
-		DEBUG_LOG(("InitGameLogicRandom( %d )", TheGameSpyGame->getSeed()));
+		engine::debug::log_info("InitGameLogicRandom( %d )", TheGameSpyGame->getSeed());
 
 		if (TheNAT != nullptr) {
 			delete TheNAT;
@@ -588,13 +589,13 @@ void GameSpyGameInfo::resetAccepted()
 	{
 		// ANCIENTMUNKEE peerStateChanged(TheGameSpyChat->getPeer());
 		m_hasBeenQueried = false;
-		DEBUG_LOG(("resetAccepted() called peerStateChange()"));
+		engine::debug::log_info("resetAccepted() called peerStateChange()");
 	}
 }
 
 Int GameSpyGameInfo::getLocalSlotNum() const
 {
-	DEBUG_ASSERTCRASH(m_inGame, ("Looking for local game slot while not in game"));
+	engine::debug::invariant((m_inGame), "m_inGame", __FILE__, __LINE__, "Looking for local game slot while not in game");
 	if (!m_inGame)
 		return -1;
 
@@ -614,15 +615,15 @@ Int GameSpyGameInfo::getLocalSlotNum() const
 
 void GameSpyGameInfo::gotGOACall()
 {
-	DEBUG_LOG(("gotGOACall()"));
+	engine::debug::log_info("gotGOACall()");
 	m_hasBeenQueried = true;
 }
 
 void GameSpyGameInfo::startGame(Int gameID)
 {
-	DEBUG_LOG(("GameSpyGameInfo::startGame - game id = %d", gameID));
-	DEBUG_ASSERTCRASH(m_transport == nullptr, ("m_transport is not null when it should be"));
-	DEBUG_ASSERTCRASH(TheNAT == nullptr, ("TheNAT is not null when it should be"));
+	engine::debug::log_info("GameSpyGameInfo::startGame - game id = %d", gameID);
+	engine::debug::invariant((m_transport == nullptr), "m_transport == nullptr", __FILE__, __LINE__, "m_transport is not null when it should be");
+	engine::debug::invariant((TheNAT == nullptr), "TheNAT == nullptr", __FILE__, __LINE__, "TheNAT is not null when it should be");
 
 	// fill in GS-specific info
 	for (Int i=0; i<MAX_SLOTS; ++i)
@@ -642,7 +643,7 @@ void GameSpyGameInfo::startGame(Int gameID)
 			}
 			else
 			{
-				DEBUG_CRASH(("No player info for %s", gsName.str()));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "No player info for %s", gsName.str());
 			}
 		}
 	}

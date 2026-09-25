@@ -37,7 +37,7 @@
 
 #include "AudibleSound.h"
 #include "WWAudio.h"
-#include "WWDebug/wwdebug.h"
+
 #include "SoundBuffer.h"
 #include "Utils.h"
 #include "SoundScene.h"
@@ -1052,7 +1052,7 @@ AudibleSoundClass::Cull_Sound (bool culled)
 //
 ////////////////////////////////////////////////////////////////////////////////////////////////
 void
-AudibleSoundClass::Set_Transform (const Matrix3D &transform)
+AudibleSoundClass::Set_Transform (const Engine::Math::AffineTransform3 &transform)
 {
 	// Update our internal transform
 	m_PrevTransform	= m_Transform;
@@ -1067,10 +1067,12 @@ AudibleSoundClass::Set_Transform (const Matrix3D &transform)
 //
 ////////////////////////////////////////////////////////////////////////////////////////////////
 void
-AudibleSoundClass::Set_Position (const Vector3 &position)
+AudibleSoundClass::Set_Position (Engine::Math::Vector3 position)
 {
 	// Update our internal transform
-	m_Transform.Set_Translation (position);
+	m_Transform.elements[3] = position.x;
+	m_Transform.elements[7] = position.y;
+	m_Transform.elements[11] = position.z;
 	Set_Dirty ();
 }
 

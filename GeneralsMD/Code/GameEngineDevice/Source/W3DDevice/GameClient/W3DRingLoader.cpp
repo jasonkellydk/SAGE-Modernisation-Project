@@ -73,16 +73,6 @@ Assets::RingAssetDesc Make_Effective_Description(const Assets::RingAssetDesc &so
 	return description;
 }
 
-template <typename Matrix>
-std::array<float, 16> Copy_Matrix(const Matrix &matrix) noexcept
-{
-	std::array<float, 16> result{};
-	for (std::size_t row = 0; row < 4; ++row)
-		for (std::size_t column = 0; column < 4; ++column)
-			result[row * 4 + column] = matrix[row][column];
-	return result;
-}
-
 }
 
 W3DRingRenderObject::W3DRingRenderObject() = default;
@@ -139,9 +129,9 @@ void W3DRingRenderObject::Render(W3DRenderContext &rinfo)
 	Graphics::AuthoredRingDrawInput input;
 	input.view_projection = Graphics::Compose_Matrices(camera.projection, camera.view).values;
 	input.view = camera.view.values;
-	input.world = Copy_Matrix(Matrix4x4(Get_Transform()));
-	const Vector3 camera_z = rinfo.Camera.Get_Transform().Get_Z_Vector();
-	input.camera_z = {camera_z.X, camera_z.Y, camera_z.Z};
+	input.world = W3DCamera::Build_World_Matrix(Get_Transform());
+	const auto camera_z = rinfo.Camera.Get_Transform().Basis_Z();
+	input.camera_z = {camera_z.x, camera_z.y, camera_z.z};
 	input.scene = Graphics::Get_Scene_Draw_Parameters();
 	input.sorting_enabled = Graphics::Get_Render_Settings().Is_Sorting_Enabled();
 	input.front_counter_clockwise = !Get_W3D_Render_Services().Is_Reflection_Render_Pass();
@@ -170,28 +160,30 @@ void W3DRingRenderObject::Render(W3DRenderContext &rinfo)
 	}
 }
 
-void W3DRingRenderObject::Set_Transform(const Matrix3D &transform)
+void W3DRingRenderObject::Set_Transform(const Engine::Math::AffineTransform3 &transform)
 {
 	W3DRenderObject::Set_Transform(transform);
 }
 
-void W3DRingRenderObject::Set_Position(const Vector3 &position)
+void W3DRingRenderObject::Set_Position(Engine::Math::Vector3 position)
 {
 	W3DRenderObject::Set_Position(position);
 }
 
-void W3DRingRenderObject::Get_Obj_Space_Bounding_Sphere(SphereClass &sphere) const
+void W3DRingRenderObject::Get_Local_Bounding_Sphere(Engine::Math::Sphere3 &sphere) const
 {
 	const auto bounds = m_runtime.Bounds();
-	sphere.Center.Set(bounds.center.x, bounds.center.y, bounds.center.z);
-	sphere.Radius = Vector3(bounds.extent.x, bounds.extent.y, bounds.extent.z).Length();
+	const Engine::Math::Vector3 center{bounds.center.x, bounds.center.y, bounds.center.z};
+	const Engine::Math::Vector3 extent{bounds.extent.x, bounds.extent.y, bounds.extent.z};
+	sphere = {center, extent.Length()};
 }
 
-void W3DRingRenderObject::Get_Obj_Space_Bounding_Box(AABoxClass &box) const
+void W3DRingRenderObject::Get_Local_Bounds(Engine::Math::AxisAlignedBox3 &box) const
 {
 	const auto bounds = m_runtime.Bounds();
-	box.Center.Set(bounds.center.x, bounds.center.y, bounds.center.z);
-	box.Extent.Set(bounds.extent.x, bounds.extent.y, bounds.extent.z);
+	const Engine::Math::Vector3 center{bounds.center.x, bounds.center.y, bounds.center.z};
+	const Engine::Math::Vector3 extent{bounds.extent.x, bounds.extent.y, bounds.extent.z};
+	box = {center - extent, center + extent};
 }
 
 void W3DRingRenderObject::Prepare_LOD(W3DCamera &camera)

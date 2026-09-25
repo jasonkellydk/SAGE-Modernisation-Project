@@ -6,7 +6,7 @@
 class SDL3Mouse : public Mouse
 {
 public:
-	SDL3Mouse() = default;
+	explicit SDL3Mouse(engine::platform::IClockService& clock);
 	~SDL3Mouse() override;
 	void init() override;
 	void reset() override;

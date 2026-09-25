@@ -24,10 +24,10 @@ module;
 #include <vector>
 #include <windows.h>
 #include <wrl/client.h>
-#include "../../profiling/Tracy.h"
 
 export module Graphics.Backends.DX12;
 
+import engine.profiling;
 export import Graphics.RHI;
 
 import Graphics.Resources.Pools.ResourcePool;
@@ -1270,7 +1270,7 @@ void DX12DeviceState::Collect_Deferred() noexcept
 
 bool DX12DeviceState::Wait_For_Fence(std::uint64_t value) noexcept
 {
-	GRAPHICS_PROFILE_FOCUS_SCOPE("Graphics.DX12.WaitForFence");
+	engine::profiling::Scope profile_scope_1272("Graphics.DX12.WaitForFence");
 	if (fence.Get() == nullptr || value == 0)
 		return true;
 	Collect_Deferred();
@@ -1502,7 +1502,7 @@ bool DX12SwapChain::Present() noexcept
 {
 	if (!Is_Valid() || m_state->frame_active || !m_state->ready_to_present || m_state->presented)
 		return false;
-	GRAPHICS_PROFILE_FOCUS_SCOPE("Graphics.DX12.Present");
+	engine::profiling::Scope profile_scope_1504("Graphics.DX12.Present");
 	const HRESULT result = m_state->native_swap_chain.Get()->Present(0,
 		m_state->allow_tearing ? DXGI_PRESENT_ALLOW_TEARING : 0);
 	if (FAILED(result)) {
@@ -1584,7 +1584,7 @@ void DX12CommandList::Bind_Graphics_Root() noexcept
 
 bool DX12CommandList::Bind_Pipeline(RHIPipelineHandle pipeline) noexcept
 {
-	GRAPHICS_PROFILE_FOCUS_SCOPE("Graphics.DX12.BindPipeline");
+	engine::profiling::Scope profile_scope_1586("Graphics.DX12.BindPipeline");
 	if (!Is_Ready())
 		return false;
 	DX12Pipeline *resource = m_state->pipelines.Resolve(pipeline);
@@ -1637,7 +1637,7 @@ void DX12CommandList::Rebuild_Bindless_Slots() noexcept
 bool DX12CommandList::Bindless_Resources_Internal(std::span<const RHIBindlessResource> resources,
     bool cache) noexcept
 {
-    GRAPHICS_PROFILE_FOCUS_SCOPE("Graphics.DX12.BindlessResources");
+    engine::profiling::Scope profile_scope_1639("Graphics.DX12.BindlessResources");
     if (!Is_Ready())
         return false;
     bool changed = false;
@@ -1840,7 +1840,7 @@ bool DX12CommandList::Set_Bindless_Resources(std::span<const RHIBindlessResource
 
 bool DX12CommandList::Select_Pipeline_State() noexcept
 {
-	GRAPHICS_PROFILE_FOCUS_SCOPE("Graphics.DX12.SelectPipelineState");
+	engine::profiling::Scope profile_scope_1842("Graphics.DX12.SelectPipelineState");
     if (m_native_pipeline!=nullptr && !m_pipeline_selection_dirty) return Apply_Scissor();
 	if (!m_pipeline.Is_Valid())
 		return true;
@@ -2838,7 +2838,7 @@ static bool Transition_Buffer(DX12DeviceState &state, DX12Buffer &buffer,
 bool DX12Device::Update_Buffer(RHIBufferHandle buffer, std::uint32_t offset,
 	std::span<const std::byte> data) noexcept
 {
-	GRAPHICS_PROFILE_FOCUS_SCOPE("Graphics.DX12.UpdateBuffer");
+	engine::profiling::Scope profile_scope_2840("Graphics.DX12.UpdateBuffer");
 	if (!Is_Valid() || data.empty() || data.size() > UINT32_MAX)
 		return false;
 	DX12Buffer *resource = m_state->buffers.Resolve(buffer);
@@ -3490,7 +3490,7 @@ bool DX12Device::Retain_Texture(RHITextureHandle texture) noexcept
 
 bool DX12Device::Destroy_Buffer(RHIBufferHandle buffer) noexcept
 {
-	GRAPHICS_PROFILE_FOCUS_SCOPE("Graphics.DX12.DestroyBuffer");
+	engine::profiling::Scope profile_scope_3492("Graphics.DX12.DestroyBuffer");
 	if (m_state == nullptr)
 		return false;
 	DX12Buffer *resource = m_state->buffers.Resolve(buffer);
@@ -3510,7 +3510,7 @@ bool DX12Device::Destroy_Buffer(RHIBufferHandle buffer) noexcept
 
 bool DX12Device::Destroy_Texture(RHITextureHandle texture) noexcept
 {
-	GRAPHICS_PROFILE_FOCUS_SCOPE("Graphics.DX12.DestroyTexture");
+	engine::profiling::Scope profile_scope_3512("Graphics.DX12.DestroyTexture");
 	if (m_state == nullptr)
 		return false;
 	DX12Texture *resource = m_state->textures.Resolve(texture);
@@ -3535,7 +3535,7 @@ bool DX12Device::Destroy_Texture(RHITextureHandle texture) noexcept
 
 bool DX12Device::Destroy_Pipeline(RHIPipelineHandle pipeline) noexcept
 {
-	GRAPHICS_PROFILE_FOCUS_SCOPE("Graphics.DX12.DestroyPipeline");
+	engine::profiling::Scope profile_scope_3537("Graphics.DX12.DestroyPipeline");
 	if (m_state == nullptr)
 		return false;
 	DX12Pipeline *resource = m_state->pipelines.Resolve(pipeline);
@@ -3755,7 +3755,7 @@ bool DX12DeviceState::Ensure_Recording() noexcept
 
 std::uint64_t DX12DeviceState::Submit_Current(bool wait) noexcept
 {
-	GRAPHICS_PROFILE_FOCUS_SCOPE("Graphics.DX12.Submit");
+	engine::profiling::Scope profile_scope_3757("Graphics.DX12.Submit");
 	if (removed) return 0;
 	if (!recording)
 		return last_submitted_fence;
@@ -4216,7 +4216,7 @@ static bool Create_DX12_Pipeline(DX12DeviceState &state, const RHIPipeline &desc
 	std::span<const std::byte> vertex_bytecode, std::span<const std::byte> pixel_bytecode,
 	DX12Pipeline &pipeline) noexcept
 {
-	GRAPHICS_PROFILE_FOCUS_SCOPE("Graphics.DX12.CreatePipeline");
+	engine::profiling::Scope profile_scope_4218("Graphics.DX12.CreatePipeline");
 	if (state.device.Get() == nullptr || state.graphics_root_signature.Get() == nullptr
 		|| vertex_bytecode.empty() || pixel_bytecode.empty()
 		|| description.sampler_count == 0 || description.sampler_count > description.samplers.size()

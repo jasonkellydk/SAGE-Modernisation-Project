@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/GlobalData.h"
 #include "Common/ThingTemplate.h"
@@ -234,8 +235,8 @@ UpdateSleepTime JetSlowDeathBehavior::update()
 
 	// roll us around in the air
 	PhysicsBehavior *physics = us->getPhysics();
-	DEBUG_ASSERTCRASH( physics, ("JetSlowDeathBehavior::beginSlowDeath - '%s' has no physics",
-															us->getTemplate()->getName().str()) );
+	engine::debug::invariant((physics), "physics", __FILE__, __LINE__, "JetSlowDeathBehavior::beginSlowDeath - '%s' has no physics",
+															us->getTemplate()->getName().str());
 	if( physics )
 		physics->setRollRate( m_rollRate );
 

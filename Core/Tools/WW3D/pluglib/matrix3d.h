@@ -73,6 +73,7 @@
 #pragma once
 
 #ifdef _UNIX
+#include <cmath>
 #include "osdep.h"
 #endif
 
@@ -534,7 +535,7 @@ inline void Matrix3D::Set(const Vector3 & axis,float angle)
  *=============================================================================================*/
 inline void Matrix3D::Set(const Vector3 & axis,float s,float c)
 {
-	assert(WWMath::Fabs(axis.Length2() - 1.0f) < 0.001f);
+	assert(std::fabs(axis.Length2() - 1.0f) < 0.001f);
 
 	Row[0].Set(
 		(float)(axis[0]*axis[0] + c*(1.0f - axis[0]*axis[0])),

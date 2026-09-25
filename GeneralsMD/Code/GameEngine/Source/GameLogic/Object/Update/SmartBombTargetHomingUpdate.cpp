@@ -29,6 +29,7 @@
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 #include "PreRTS.h"
+import engine.debug;
 #include "Common/RandomValue.h"
 #include "Common/Xfer.h"
 #include "GameLogic/GameLogic.h"
@@ -58,7 +59,7 @@ void SmartBombTargetHomingUpdate::SetTargetPosition( const Coord3D& target )
 {
 
   // Ensure that we have been passed a real-world location
-  DEBUG_ASSERTCRASH( target.length() > 0.0f, ("SmartBombTargetHomingUpdate::SetTargetPosition() received a zero coord") );
+  engine::debug::invariant((target.length() > 0.0f), "target.length() > 0.0f", __FILE__, __LINE__, "SmartBombTargetHomingUpdate::SetTargetPosition() received a zero coord");
   if ( ! (target.length() > 0.0f) )
     return;
 

@@ -1,5 +1,11 @@
 #include "SDL3Device/GameClient/SDL3Keyboard.h"
 #include <SDL3/SDL.h>
+import engine.platform;
+
+SDL3Keyboard::SDL3Keyboard(engine::platform::IInputService& input, engine::platform::IClockService& clock)
+	: m_input(input), m_clock(clock)
+{
+}
 
 namespace
 {
@@ -84,48 +90,46 @@ static KeyDefType keyForScanCode(SDL_Scancode scan)
 void SDL3Keyboard::init()
 {
 	Keyboard::init();
-	SDL_PumpEvents();
-	const bool *state = SDL_GetKeyboardState(nullptr);
+	const auto state = m_input.keyboard_state();
 	for (int i = 0; i < SDL_SCANCODE_COUNT; ++i)
-		m_previousState[i] = state[i];
+		m_previousState[i] = state.down(i);
 }
 
 void SDL3Keyboard::reset()
 {
 	Keyboard::reset();
 	m_scanCode = 0;
-	SDL_PumpEvents();
-	const bool *state = SDL_GetKeyboardState(nullptr);
+	const auto state = m_input.keyboard_state();
 	for (int i = 0; i < SDL_SCANCODE_COUNT; ++i)
-		m_previousState[i] = state[i];
+		m_previousState[i] = state.down(i);
 }
 void SDL3Keyboard::update()
 {
-	SDL_PumpEvents();
 	m_scanCode = 0;
 	Keyboard::update();
 }
 Bool SDL3Keyboard::getCapsState()
 {
-	return (SDL_GetModState() & SDL_KMOD_CAPS) != 0;
+	return m_input.keyboard_state().caps_lock;
 }
 
 void SDL3Keyboard::getKey(KeyboardIO *key)
 {
-	const bool *state = SDL_GetKeyboardState(nullptr);
+	const auto state = m_input.keyboard_state();
 	const int count = SDL_SCANCODE_COUNT;
 	while (m_scanCode < count)
 	{
 		const SDL_Scancode scan = static_cast<SDL_Scancode>(m_scanCode++);
 		const KeyDefType mapped = keyForScanCode(scan);
-		const bool changed = state[scan] != m_previousState[scan];
-		m_previousState[scan] = state[scan];
+		const bool down = state.down(scan);
+		const bool changed = down != m_previousState[scan];
+		m_previousState[scan] = down;
 		if (mapped != KEY_NONE && changed)
 		{
 			key->key = mapped;
 			key->status = KeyboardIO::STATUS_UNUSED;
-			key->state = state[scan] ? KEY_STATE_DOWN : KEY_STATE_UP;
-			key->keyDownTimeMsec = SDL_GetTicks();
+			key->state = down ? KEY_STATE_DOWN : KEY_STATE_UP;
+	key->keyDownTimeMsec = static_cast<UnsignedInt>(m_clock.monotonic_nanoseconds() / 1'000'000);
 			return;
 		}
 	}

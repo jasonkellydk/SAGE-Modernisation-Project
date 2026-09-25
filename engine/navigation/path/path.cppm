@@ -18,6 +18,7 @@ module;
 static inline Int IABS(Int value) { return value < 0 ? -value : value; }
 
 export module engine.navigation.path;
+import engine.debug;
 import engine.navigation.movement.following.route_target;
 import engine.navigation.path.smoothing;
 
@@ -90,7 +91,7 @@ void PathNode::setNextOptimized(PathNode *node)
 		m_nextOptiDist2D = m_nextOptiDirNorm2D.length();
 		if (m_nextOptiDist2D == 0.0f)
 		{
-			//DEBUG_LOG(("Warning - Path Seg length == 0, adjusting. john a."));
+			//engine::debug::log_info("Warning - Path Seg length == 0, adjusting. john a.");
 			m_nextOptiDist2D = 0.01f;
 		}
 		m_nextOptiDirNorm2D.x /= m_nextOptiDist2D;
@@ -202,13 +203,13 @@ void Path::xfer( Xfer *xfer )
 			count--;
 			node = node->getPrevious();
 		}
-		DEBUG_ASSERTCRASH(count==0, ("Wrong data count"));
+		engine::debug::invariant((count==0), "count==0", __FILE__, __LINE__, "Wrong data count");
 	} else {
 		invalidateFollowing();
 		while (count) {
 			Int nodeId;
 			xfer->xferInt(&nodeId);
-			DEBUG_ASSERTCRASH(nodeId==count, ("Bad data"));
+			engine::debug::invariant((nodeId==count), "nodeId==count", __FILE__, __LINE__, "Bad data");
 			Coord3D pos;
 			xfer->xferCoord3D(&pos);
 			PathfindLayerEnum layer;
@@ -228,7 +229,7 @@ void Path::xfer( Xfer *xfer )
 				while (optNode && optNode->m_id != optID) {
 					optNode = optNode->getNext();
 				}
-				DEBUG_ASSERTCRASH (optNode && optNode->m_id == optID, ("Could not find optimized link."));
+				engine::debug::invariant((optNode && optNode->m_id == optID), "optNode && optNode->m_id == optID", __FILE__, __LINE__, "Could not find optimized link.");
 			}
 			node->m_owner = this;
 			m_path = node->prependToList(m_path);
@@ -318,7 +319,7 @@ void Path::appendNode( const Coord3D *pos, PathfindLayerEnum layer )
 	{
 		/* Check for duplicates. */
 		if (pos->x == m_pathTail->getPosition()->x && pos->y == m_pathTail->getPosition()->y) {
-			DEBUG_LOG(("Warning - Path Seg length == 0, ignoring. john a."));
+			engine::debug::log_info("Warning - Path Seg length == 0, ignoring. john a.");
 			return;
 		}
 	}

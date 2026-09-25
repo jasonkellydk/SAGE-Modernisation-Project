@@ -41,6 +41,7 @@
 #include "StdDevice/Common/StdBIGFile.h"
 #include "StdDevice/Common/StdBIGFileSystem.h"
 #include "Utility/endian_compat.h"
+import engine.debug;
 
 static const char *BIGFileIdentifier = "BIGF";
 
@@ -51,7 +52,7 @@ StdBIGFileSystem::~StdBIGFileSystem() {
 }
 
 void StdBIGFileSystem::init() {
-	DEBUG_ASSERTCRASH(TheLocalFileSystem != nullptr, ("TheLocalFileSystem must be initialized before TheArchiveFileSystem."));
+	engine::debug::invariant((TheLocalFileSystem != nullptr), "TheLocalFileSystem != nullptr", __FILE__, __LINE__, "TheLocalFileSystem must be initialized before TheArchiveFileSystem.");
 	if (TheLocalFileSystem == nullptr) {
 		return;
 	}
@@ -63,7 +64,7 @@ void StdBIGFileSystem::init() {
     AsciiString installPath;
     GetStringFromGeneralsRegistry("", "InstallPath", installPath );
     //@todo this will need to be ramped up to a crash for release
-    DEBUG_ASSERTCRASH(!installPath.isEmpty(), ("Be 1337! Go install Generals!"));
+    engine::debug::invariant((!installPath.isEmpty()), "!installPath.isEmpty()", __FILE__, __LINE__, "Be 1337! Go install Generals!");
     if (!installPath.isEmpty())
       loadBigFilesFromDirectory(installPath, "*.big");
 #endif
@@ -86,10 +87,10 @@ ArchiveFile * StdBIGFileSystem::openArchiveFile(const Char *filename) {
 	Int archiveFileSize = 0;
 	Int numLittleFiles = 0;
 
-	DEBUG_LOG(("StdBIGFileSystem::openArchiveFile - opening BIG file %s", filename));
+	engine::debug::log_info("StdBIGFileSystem::openArchiveFile - opening BIG file %s", filename);
 
 	if (fp == nullptr) {
-		DEBUG_CRASH(("Could not open archive file %s for parsing", filename));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Could not open archive file %s for parsing", filename);
 		return nullptr;
 	}
 
@@ -98,7 +99,7 @@ ArchiveFile * StdBIGFileSystem::openArchiveFile(const Char *filename) {
 	fp->read(buffer, 4); // read the "BIG" at the beginning of the file.
 	buffer[4] = 0;
 	if (strcmp(buffer, BIGFileIdentifier) != 0) {
-		DEBUG_CRASH(("Error reading BIG file identifier in file %s", filename));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Error reading BIG file identifier in file %s", filename);
 		fp->close();
 		fp = nullptr;
 		return nullptr;
@@ -107,7 +108,7 @@ ArchiveFile * StdBIGFileSystem::openArchiveFile(const Char *filename) {
 	// read in the file size.
 	fp->read(&archiveFileSize, 4);
 
-	DEBUG_LOG(("StdBIGFileSystem::openArchiveFile - size of archive file is %d bytes", archiveFileSize));
+	engine::debug::log_info("StdBIGFileSystem::openArchiveFile - size of archive file is %d bytes", archiveFileSize);
 
 //	char t;
 
@@ -116,7 +117,7 @@ ArchiveFile * StdBIGFileSystem::openArchiveFile(const Char *filename) {
 	fp->read(&numLittleFiles, 4);
 	numLittleFiles = betoh(numLittleFiles);
 
-	DEBUG_LOG(("StdBIGFileSystem::openArchiveFile - %d are contained in archive", numLittleFiles));
+	engine::debug::log_info("StdBIGFileSystem::openArchiveFile - %d are contained in archive", numLittleFiles);
 //	for (Int i = 0; i < 2; ++i) {
 //		t = buffer[i];
 //		buffer[i] = buffer[(4-i)-1];
@@ -164,7 +165,7 @@ ArchiveFile * StdBIGFileSystem::openArchiveFile(const Char *filename) {
 		AsciiString debugpath;
 		debugpath = path;
 		debugpath.concat(fileInfo->m_filename);
-//		DEBUG_LOG(("StdBIGFileSystem::openArchiveFile - adding file %s to archive file %s, file number %d", debugpath.str(), fileInfo->m_archiveFilename.str(), i));
+//		engine::debug::log_info("StdBIGFileSystem::openArchiveFile - adding file %s to archive file %s, file number %d", debugpath.str(), fileInfo->m_archiveFilename.str(), i);
 
 		archiveFile->addFile(path, fileInfo);
 	}
@@ -192,7 +193,7 @@ void StdBIGFileSystem::closeArchiveFile(const Char *filename) {
 
 		// No need to turn off other audio, as the lookups will just fail.
 	}
-	DEBUG_ASSERTCRASH(stricmp(filename, MUSIC_BIG) == 0, ("Attempting to close Archive file '%s', need to add code to handle its shutdown correctly.", filename));
+	engine::debug::invariant((stricmp(filename, MUSIC_BIG) == 0), "stricmp(filename, MUSIC_BIG) == 0", __FILE__, __LINE__, "Attempting to close Archive file '%s', need to add code to handle its shutdown correctly.", filename);
 
 	// may need to do some other processing here first.
 
@@ -227,10 +228,10 @@ Bool StdBIGFileSystem::loadBigFilesFromDirectory(AsciiString dir, AsciiString fi
 		ArchiveFile *archiveFile = openArchiveFile((*it).str());
 
 		if (archiveFile != nullptr) {
-			DEBUG_LOG(("StdBIGFileSystem::loadBigFilesFromDirectory - loading %s into the directory tree.", (*it).str()));
+			engine::debug::log_info("StdBIGFileSystem::loadBigFilesFromDirectory - loading %s into the directory tree.", (*it).str());
 			loadIntoDirectoryTree(archiveFile, overwrite);
 			m_archiveFileMap[(*it)] = archiveFile;
-			DEBUG_LOG(("StdBIGFileSystem::loadBigFilesFromDirectory - %s inserted into the archive file map.", (*it).str()));
+			engine::debug::log_info("StdBIGFileSystem::loadBigFilesFromDirectory - %s inserted into the archive file map.", (*it).str());
 			actuallyAdded = TRUE;
 		}
 

@@ -37,6 +37,8 @@
 
 #pragma once
 
+
+#include <cassert>
 #include "always.h"
 #include "bittype.h"
 #include "WWFILE.h"
@@ -330,7 +332,7 @@ private:
 	}
 
 #define READ_MICRO_CHUNK_STRING(cload,id,var,size)		\
-	case (id):	WWASSERT(cload.Cur_Micro_Chunk_Length() <= size); cload.Read(var,cload.Cur_Micro_Chunk_Length()); break;	\
+	case (id):	assert((cload.Cur_Micro_Chunk_Length() <= size)); cload.Read(var,cload.Cur_Micro_Chunk_Length()); break;	\
 
 #define READ_MICRO_CHUNK_WWSTRING(cload,id,var)		\
 	case (id):	cload.Read(var.Get_Buffer(cload.Cur_Micro_Chunk_Length()),cload.Cur_Micro_Chunk_Length()); break;	\

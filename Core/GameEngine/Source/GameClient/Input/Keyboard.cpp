@@ -27,7 +27,8 @@
 // Desc:       Basic keyboard
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/Language.h"
 #include "Common/GameEngine.h"
@@ -64,20 +65,20 @@ void Keyboard::createStreamMessages()
 		{
 
 			msg = TheMessageStream->appendMessage( GameMessage::MSG_RAW_KEY_DOWN );
-			DEBUG_ASSERTCRASH( msg, ("Unable to append key down message to stream") );
+			engine::debug::invariant((msg), "msg", __FILE__, __LINE__, "Unable to append key down message to stream");
 
 		}
 		else if( BitIsSet( key->state, KEY_STATE_UP ) )
 		{
 
 			msg = TheMessageStream->appendMessage( GameMessage::MSG_RAW_KEY_UP );
-			DEBUG_ASSERTCRASH( msg, ("Unable to append key up message to stream") );
+			engine::debug::invariant((msg), "msg", __FILE__, __LINE__, "Unable to append key up message to stream");
 
 		}
 		else
 		{
 
-			DEBUG_CRASH(( "Unknown key state when creating msg stream" ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Unknown key state when creating msg stream" );
 
 		}
 

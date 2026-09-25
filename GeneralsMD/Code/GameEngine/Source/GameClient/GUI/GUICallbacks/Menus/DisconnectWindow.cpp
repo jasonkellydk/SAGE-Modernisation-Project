@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "GameClient/GameWindow.h"
 #include "GameClient/GameText.h"
@@ -231,7 +232,7 @@ WindowMsgHandledType DisconnectControlSystem( GameWindow *window, UnsignedInt ms
 
 		case GEM_EDIT_DONE:
 		{
-//			DEBUG_LOG(("DisconnectControlSystem - got GEM_EDIT_DONE."));
+//			engine::debug::log_info("DisconnectControlSystem - got GEM_EDIT_DONE.");
 			GameWindow *control = (GameWindow *)mData1;
 			Int controlID = control->winGetWindowId();
 
@@ -241,7 +242,7 @@ WindowMsgHandledType DisconnectControlSystem( GameWindow *window, UnsignedInt ms
 			{
 				UnicodeString txtInput;
 
-//				DEBUG_LOG(("DisconnectControlSystem - GEM_EDIT_DONE was from the text entry control."));
+//				engine::debug::log_info("DisconnectControlSystem - GEM_EDIT_DONE was from the text entry control.");
 
 				// read the user's input
 				txtInput.set(GadgetTextEntryGetText( textEntryWindow ));
@@ -251,7 +252,7 @@ WindowMsgHandledType DisconnectControlSystem( GameWindow *window, UnsignedInt ms
 				txtInput.trim();
 				// Echo the user's input to the chat window
 				if (!txtInput.isEmpty()) {
-//					DEBUG_LOG(("DisconnectControlSystem - sending string %ls", txtInput.str()));
+//					engine::debug::log_info("DisconnectControlSystem - sending string %ls", txtInput.str());
 					TheDisconnectMenu->sendChat(txtInput);
 				}
 

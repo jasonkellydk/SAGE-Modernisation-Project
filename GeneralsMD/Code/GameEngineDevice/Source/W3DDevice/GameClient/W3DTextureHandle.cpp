@@ -382,7 +382,7 @@ void W3DTextureHandle::Apply_New_Surface(Graphics::TextureResource* texture,
     m_depth = description.depth;
 }
 
-void W3DTextureHandle::Set_HSV_Shift(const Vector3& hsv_shift) noexcept
+void W3DTextureHandle::Set_HSV_Shift(const Engine::Math::Vector3& hsv_shift) noexcept
 {
     Invalidate();
     m_hsv_shift = hsv_shift;
@@ -467,7 +467,7 @@ std::unique_ptr<Graphics::ResourceLoadJob> W3DTextureHandle::Make_Load_Job(
         static_cast<unsigned>((std::max)(1, quality.minimum_dimension)), m_reducible};
     request.allow_compression = m_allow_compression;
     request.prefer_16_bits = quality.prefer_16_bits;
-    request.hsv_shift = {m_hsv_shift.X, m_hsv_shift.Y, m_hsv_shift.Z};
+    request.hsv_shift = {m_hsv_shift.x, m_hsv_shift.y, m_hsv_shift.z};
 
     std::string path = To_String(Get_Full_Path());
     request.read_tga = Make_Archive_Reader(path);

@@ -19,6 +19,8 @@
 // RingSizePropPage.cpp : implementation file
 //
 
+import Engine.Core.Math.Scalar;
+#include <cmath>
 #include "StdAfx.h"
 #include "W3DView.h"
 #include "RingSizePropPage.h"
@@ -735,5 +737,5 @@ Is_LERP
 {
 	float percent					= (curr_time - last_time) / (next_time - last_time);
 	float interpolated_value	= last_value + ((next_value-last_value) * percent);
-	return bool(WWMath::Fabs (interpolated_value - curr_value) < WWMATH_EPSILON);
+	return bool(std::fabs (interpolated_value - curr_value) < Engine::Math::DefaultTolerance);
 }

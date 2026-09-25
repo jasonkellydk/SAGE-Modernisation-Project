@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/CustomMatchPreferences.h"
 #include "Common/GameEngine.h"
@@ -171,7 +172,7 @@ void WOLMapSelectMenuInit( WindowLayout *layout, void *userData )
 		tmpString.format("WOLMapSelectMenu.wnd:ButtonMapStartPosition%d", i);
 		buttonMapStartPositionID[i] = TheNameKeyGenerator->nameToKey( tmpString );
 		buttonMapStartPosition[i] = TheWindowManager->winGetWindowFromId( winMapPreview, buttonMapStartPositionID[i] );
-		DEBUG_ASSERTCRASH(buttonMapStartPosition[i], ("Could not find the ButtonMapStartPosition[%d]",i ));
+		engine::debug::invariant((buttonMapStartPosition[i]), "buttonMapStartPosition[i]", __FILE__, __LINE__, "Could not find the ButtonMapStartPosition[%d]",i );
 		buttonMapStartPosition[i]->winHide(TRUE);
 		buttonMapStartPosition[i]->winEnable(FALSE);
 	}
@@ -358,7 +359,7 @@ WindowMsgHandledType WOLMapSelectMenuSystem( GameWindow *window, UnsignedInt msg
 					// set the map name in the global data map name
 					AsciiString asciiMap;
 					const char *mapFname = (const char *)GadgetListBoxGetItemData( winMapWindow, rowSelected );
-					DEBUG_ASSERTCRASH(mapFname, ("No map item data"));
+					engine::debug::invariant((mapFname), "mapFname", __FILE__, __LINE__, "No map item data");
 					if (mapFname)
 						asciiMap = mapFname;
 					else
@@ -433,7 +434,7 @@ WindowMsgHandledType WOLMapSelectMenuSystem( GameWindow *window, UnsignedInt msg
 					// set the map name in the global data map name
 					AsciiString asciiMap;
 					const char *mapFname = (const char *)GadgetListBoxGetItemData( winMapWindow, selected );
-					DEBUG_ASSERTCRASH(mapFname, ("No map item data"));
+					engine::debug::invariant((mapFname), "mapFname", __FILE__, __LINE__, "No map item data");
 					if (mapFname)
 						asciiMap = mapFname;
 					else

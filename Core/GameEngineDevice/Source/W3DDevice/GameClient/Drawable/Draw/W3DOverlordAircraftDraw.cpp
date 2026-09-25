@@ -41,6 +41,7 @@
 #include "GameLogic/Object.h"
 #include "GameLogic/Module/ContainModule.h"
 #include "W3DDevice/GameClient/Module/W3DOverlordAircraftDraw.h"
+import engine.debug;
 
 
 
@@ -81,9 +82,9 @@ W3DOverlordAircraftDraw::~W3DOverlordAircraftDraw()
 }
 
 //-------------------------------------------------------------------------------------------------
-void W3DOverlordAircraftDraw::doDrawModule(const Matrix3D* transformMtx)
+void W3DOverlordAircraftDraw::doDrawModule(const Engine::Math::AffineTransform3* transform)
 {
-	W3DModelDraw::doDrawModule(transformMtx);
+	W3DModelDraw::doDrawModule(transform);
 
 	// Our big thing is that we get our specific passenger (the turret thing) and then wake it up and make it draw
 	// It depends on us because our renderObject is only made correct in the act of drawing.
@@ -104,7 +105,7 @@ void W3DOverlordAircraftDraw::doDrawModule(const Matrix3D* transformMtx)
       riderDraw->notifyDrawableDependencyCleared();
       riderDraw->draw();
     }
-    DEBUG_ASSERTCRASH( riderDraw, ("OverlordAircraftDraw finds no rider's drawable") );
+    engine::debug::invariant((riderDraw), "riderDraw", __FILE__, __LINE__, "OverlordAircraftDraw finds no rider's drawable");
 
 	}
 }

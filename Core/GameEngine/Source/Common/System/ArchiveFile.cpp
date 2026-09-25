@@ -31,7 +31,7 @@
 #include "Common/ArchiveFile.h"
 #include "Common/ArchiveFileSystem.h"
 #include "Common/file.h"
-#include "Common/PerfTimer.h"
+
 
 
 // checks to see if str matches searchString.  Search string is done in the

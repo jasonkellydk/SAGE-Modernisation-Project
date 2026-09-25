@@ -28,6 +28,9 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 #include <stdlib.h>
+import Engine.Core.Math.Sphere3;
+import Engine.Core.Math.AffineTransform3;
+import Engine.Core.Math.Vector3;
 
 #include "Common/GlobalData.h"
 #include "Common/ThingTemplate.h"
@@ -55,6 +58,7 @@
 
 
 #include "W3DDevice/GameClient/W3DGraphicsResources.h"
+import engine.debug;
 import Graphics.Frame.Runtime;
 import Graphics.Scene.Debug.Renderer;
 import Graphics.Diagnostics.Render;
@@ -78,8 +82,8 @@ public:
 	virtual void					Render(W3DRenderContext & rinfo);
 	virtual Bool					Cast_Ray(W3DRayCastQuery & raytest);
 
-	virtual void					Get_Obj_Space_Bounding_Sphere(SphereClass & sphere) const;
-  virtual void					Get_Obj_Space_Bounding_Box(AABoxClass & aabox) const;
+	virtual void					Get_Local_Bounding_Sphere(Engine::Math::Sphere3 & sphere) const;
+  virtual void					Get_Local_Bounds(Engine::Math::AxisAlignedBox3 & aabox) const;
 
 	int updateBlock();
 	void freeMapResources();
@@ -113,22 +117,23 @@ DebugHintObject::DebugHintObject(const DebugHintObject & src)
 
 DebugHintObject & DebugHintObject::operator = (const DebugHintObject & that)
 {
-	DEBUG_CRASH(("oops"));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "oops");
 	return *this;
 }
 
-void DebugHintObject::Get_Obj_Space_Bounding_Sphere(SphereClass & sphere) const
+void DebugHintObject::Get_Local_Bounding_Sphere(Engine::Math::Sphere3 & sphere) const
 {
-	Vector3	ObjSpaceCenter((float)1000*0.5f,(float)1000*0.5f,(float)0);
+	const Engine::Math::Vector3 ObjSpaceCenter((float)1000*0.5f,(float)1000*0.5f,(float)0);
 	float length = ObjSpaceCenter.Length();
-	sphere.Init(ObjSpaceCenter, length);
+	sphere = {ObjSpaceCenter, length};
 }
 
-void DebugHintObject::Get_Obj_Space_Bounding_Box(AABoxClass & box) const
+void DebugHintObject::Get_Local_Bounds(Engine::Math::AxisAlignedBox3 & box) const
 {
-	Vector3	minPt(0,0,0);
-	Vector3	maxPt((float)1000,(float)1000,(float)1000);
-	box.Init(minPt,maxPt);
+	// Legacy AABoxClass::Init(center, extent): center (0,0,0), extent (1000,1000,1000).
+	const Engine::Math::Vector3 center(0,0,0);
+	const Engine::Math::Vector3 extent((float)1000,(float)1000,(float)1000);
+	box = {center - extent, center + extent};
 }
 
 Int DebugHintObject::Class_ID() const
@@ -138,7 +143,7 @@ Int DebugHintObject::Class_ID() const
 
 W3DRenderObject * DebugHintObject::Clone() const
 {
-	DEBUG_CRASH(("oops"));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "oops");
 	return NEW DebugHintObject(*this);
 }
 
@@ -158,16 +163,18 @@ void DebugHintObject::setLocAndColorAndSize(const Coord3D *loc, Int argb, Int si
 
 void DebugHintObject::Render(W3DRenderContext& info)
 {
-    const SphereClass bounds(Vector3(m_myLoc.x,m_myLoc.y,m_myLoc.z),m_mySize);
+    const Engine::Math::Sphere3 bounds{{m_myLoc.x,m_myLoc.y,m_myLoc.z}, static_cast<float>(m_mySize)};
     auto* device=Graphics::Shared_Frame_Device();
     if (!device || info.Camera.Cull_Sphere(bounds)) return;
     const float x=m_mySize*0.866f, y=m_mySize*0.5f;
-    const std::array<Vector3,3> positions{Vector3(0,float(m_mySize),0),Vector3(-x,-y,0),Vector3(x,-y,0)};
-    Matrix3D transform(Get_Transform()); transform.Set_Translation(Vector3(m_myLoc.x,m_myLoc.y,m_myLoc.z));
+    const std::array<Engine::Math::Vector3,3> positions{{
+        {0,float(m_mySize),0},{-x,-y,0},{x,-y,0}}};
+    auto transform = Get_Transform();
+    transform.Set_Translation({m_myLoc.x,m_myLoc.y,m_myLoc.z});
     std::array<Graphics::SurfaceVertex,3> vertices{};
     for (unsigned i=0;i<3;++i) {
-        Vector3 point; Matrix3D::Transform_Vector(transform,positions[i],&point);
-        vertices[i].position={point.X,point.Y,point.Z};
+        const auto point = transform.Transform_Point(positions[i]);
+        vertices[i].position={point.x,point.y,point.z};
         const unsigned color=static_cast<unsigned>(m_myColor);
         vertices[i].color={float((color>>16)&255)/255,float((color>>8)&255)/255,float(color&255)/255,float(color>>24)/255};
     }
@@ -184,7 +191,8 @@ void DebugHintObject::Render(W3DRenderContext& info)
 
 //-------------------------------------------------------------------------------------------------
 //-------------------------------------------------------------------------------------------------
-W3DInGameUI::W3DInGameUI()
+W3DInGameUI::W3DInGameUI(engine::platform::IClockService& clock)
+	: InGameUI(clock)
 {
 	Int i;
 
@@ -420,7 +428,7 @@ void W3DInGameUI::drawMoveHints( View *view )
 				if( hint == nullptr )
 				{
 
-					DEBUG_CRASH(("unable to create hint"));
+					engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "unable to create hint");
 					return;
 
 				}
@@ -445,7 +453,7 @@ void W3DInGameUI::drawMoveHints( View *view )
 			}
 
 			// move this hint render object to the position and align with terrain
-			Matrix3D transform;
+			Engine::Math::AffineTransform3 transform;
 			PathfindLayerEnum layer = TheTerrainLogic->alignOnTerrain( 0, m_moveHint[ i ].pos, true, transform );
 
 			Real waterZ;
@@ -457,10 +465,10 @@ void W3DInGameUI::drawMoveHints( View *view )
 				normal.x = 0;
 				normal.y = 0;
 				normal.z = 1;
-				makeAlignToNormalMatrix(0, tmp, normal, transform);
+				makeAlignToNormalTransform(0, tmp, normal, transform);
 			}
 
-			m_moveHintRenderObj[ i ]->Set_Transform( transform );
+			m_moveHintRenderObj[ i ]->Set_Transform(transform);
 
 #if 0
 			// if there is a source then draw line from source to destination
@@ -527,7 +535,7 @@ void W3DInGameUI::drawPlaceAngle( View *view )
 		// sanity
 		if( !m_buildingPlacementAnchor )
 		{
-			DEBUG_CRASH( ("Unable to create BuildingPlacementAnchor (Locator01.w3d) -- cursor for placing buildings") );
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unable to create BuildingPlacementAnchor (Locator01.w3d) -- cursor for placing buildings");
 			return;
 		}
 	}
@@ -538,7 +546,7 @@ void W3DInGameUI::drawPlaceAngle( View *view )
 		// sanity
 		if( !m_buildingPlacementArrow )
 		{
-			DEBUG_CRASH( ("Unable to create BuildingPlacementArrow (Locator02.w3d) -- cursor for placing buildings") );
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unable to create BuildingPlacementArrow (Locator02.w3d) -- cursor for placing buildings");
 			return;
 		}
 	}
@@ -608,12 +616,12 @@ void W3DInGameUI::drawPlaceAngle( View *view )
 	if( anchorInScene )
 	{
 		if ( m_placeIcon[ 0 ] )
-			m_buildingPlacementAnchor->Set_Transform( *m_placeIcon[ 0 ]->getTransformMatrix() );
+			m_buildingPlacementAnchor->Set_Transform(m_placeIcon[ 0 ]->worldTransform());
 	}
 	else if( arrowInScene )
 	{
 		if ( m_placeIcon[ 0 ] )
-			m_buildingPlacementArrow->Set_Transform( *m_placeIcon[ 0 ]->getTransformMatrix() );
+			m_buildingPlacementArrow->Set_Transform(m_placeIcon[ 0 ]->worldTransform());
 	}
 
 

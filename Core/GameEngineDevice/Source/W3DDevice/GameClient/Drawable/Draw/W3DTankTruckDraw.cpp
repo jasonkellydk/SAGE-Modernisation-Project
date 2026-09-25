@@ -1,3 +1,4 @@
+import Engine.Core.Math.Scalar;
 import Graphics.Frame.RenderClock;
 /*
 **	Command & Conquer Generals Zero Hour(tm)
@@ -27,6 +28,7 @@ import Graphics.Frame.RenderClock;
 // Draw TankTrucks.  Actually, this draws quad cannon which has both treads and wheels.
 // Author: Mark Wilczynski, August 2002
 
+#include <cmath>
 #include <stdlib.h>
 #include <math.h>
 #include <cstring>
@@ -49,6 +51,7 @@ import Graphics.Materials.MeshMaterial;
 #include "GameClient/ParticleSys.h"
 #include "W3DDevice/GameClient/W3DGameClient.h"
 #include "W3DDevice/GameClient/Module/W3DTankTruckDraw.h"
+import engine.debug;
 
 // TheSuperHackers @info Is disabled by default and therefore compatible with the Retail INI setups.
 #define SHOW_DEFAULT_TANK_DEBRIS (0)
@@ -262,8 +265,8 @@ void W3DTankTruckDraw::createWheelEmitters()
 				else
 				{
 					if (!effectNames[i]->isEmpty()) {
-						DEBUG_LOG(("*** ERROR - Missing particle system '%s' in thing '%s'",
-							effectNames[i]->str(), getDrawable()->getObject()->getTemplate()->getName().str()));
+						engine::debug::log_info("*** ERROR - Missing particle system '%s' in thing '%s'",
+							effectNames[i]->str(), getDrawable()->getObject()->getTemplate()->getName().str());
 					}
 				}
 			}
@@ -313,10 +316,10 @@ void W3DTankTruckDraw::updateBones() {
 		if( !getW3DTankTruckDrawModuleData()->m_frontLeftTireBoneName.isEmpty() )
 		{
 			m_frontLeftTireBone = getRenderObject()->Get_Bone_Index(getW3DTankTruckDrawModuleData()->m_frontLeftTireBoneName.str());
-			DEBUG_ASSERTCRASH(m_frontLeftTireBone, ("Missing front-left tire bone %s in model %s", getW3DTankTruckDrawModuleData()->m_frontLeftTireBoneName.str(), getRenderObject()->Get_Name()));
+			engine::debug::invariant((m_frontLeftTireBone), "m_frontLeftTireBone", __FILE__, __LINE__, "Missing front-left tire bone %s in model %s", getW3DTankTruckDrawModuleData()->m_frontLeftTireBoneName.str(), getRenderObject()->Get_Name());
 
 			m_frontRightTireBone = getRenderObject()->Get_Bone_Index(getW3DTankTruckDrawModuleData()->m_frontRightTireBoneName.str());
-			DEBUG_ASSERTCRASH(m_frontRightTireBone, ("Missing front-right tire bone %s in model %s", getW3DTankTruckDrawModuleData()->m_frontRightTireBoneName.str(), getRenderObject()->Get_Name()));
+			engine::debug::invariant((m_frontRightTireBone), "m_frontRightTireBone", __FILE__, __LINE__, "Missing front-right tire bone %s in model %s", getW3DTankTruckDrawModuleData()->m_frontRightTireBoneName.str(), getRenderObject()->Get_Name());
 
 			if (!m_frontRightTireBone )
 			{
@@ -327,10 +330,10 @@ void W3DTankTruckDraw::updateBones() {
 		if( !getW3DTankTruckDrawModuleData()->m_rearLeftTireBoneName.isEmpty() )
 		{
 			m_rearLeftTireBone = getRenderObject()->Get_Bone_Index(getW3DTankTruckDrawModuleData()->m_rearLeftTireBoneName.str());
-			DEBUG_ASSERTCRASH(m_rearLeftTireBone, ("Missing rear-left tire bone %s in model %s", getW3DTankTruckDrawModuleData()->m_rearLeftTireBoneName.str(), getRenderObject()->Get_Name()));
+			engine::debug::invariant((m_rearLeftTireBone), "m_rearLeftTireBone", __FILE__, __LINE__, "Missing rear-left tire bone %s in model %s", getW3DTankTruckDrawModuleData()->m_rearLeftTireBoneName.str(), getRenderObject()->Get_Name());
 
 			m_rearRightTireBone = getRenderObject()->Get_Bone_Index(getW3DTankTruckDrawModuleData()->m_rearRightTireBoneName.str());
-			DEBUG_ASSERTCRASH(m_rearRightTireBone, ("Missing rear-left tire bone %s in model %s", getW3DTankTruckDrawModuleData()->m_rearRightTireBoneName.str(), getRenderObject()->Get_Name()));
+			engine::debug::invariant((m_rearRightTireBone), "m_rearRightTireBone", __FILE__, __LINE__, "Missing rear-left tire bone %s in model %s", getW3DTankTruckDrawModuleData()->m_rearRightTireBoneName.str(), getRenderObject()->Get_Name());
 
 			if (!m_rearRightTireBone)
 			{
@@ -342,10 +345,10 @@ void W3DTankTruckDraw::updateBones() {
 		if( !getW3DTankTruckDrawModuleData()->m_midFrontLeftTireBoneName.isEmpty() )
 		{
 			m_midFrontLeftTireBone = getRenderObject()->Get_Bone_Index(getW3DTankTruckDrawModuleData()->m_midFrontLeftTireBoneName.str());
-			DEBUG_ASSERTCRASH(m_midFrontLeftTireBone, ("Missing mid-front-left tire bone %s in model %s", getW3DTankTruckDrawModuleData()->m_midFrontLeftTireBoneName.str(), getRenderObject()->Get_Name()));
+			engine::debug::invariant((m_midFrontLeftTireBone), "m_midFrontLeftTireBone", __FILE__, __LINE__, "Missing mid-front-left tire bone %s in model %s", getW3DTankTruckDrawModuleData()->m_midFrontLeftTireBoneName.str(), getRenderObject()->Get_Name());
 
 			m_midFrontRightTireBone = getRenderObject()->Get_Bone_Index(getW3DTankTruckDrawModuleData()->m_midFrontRightTireBoneName.str());
-			DEBUG_ASSERTCRASH(m_midFrontRightTireBone, ("Missing mid-front-right tire bone %s in model %s", getW3DTankTruckDrawModuleData()->m_midFrontRightTireBoneName.str(), getRenderObject()->Get_Name()));
+			engine::debug::invariant((m_midFrontRightTireBone), "m_midFrontRightTireBone", __FILE__, __LINE__, "Missing mid-front-right tire bone %s in model %s", getW3DTankTruckDrawModuleData()->m_midFrontRightTireBoneName.str(), getRenderObject()->Get_Name());
 
 			if (!m_midFrontRightTireBone )
 			{
@@ -357,10 +360,10 @@ void W3DTankTruckDraw::updateBones() {
 		if( !getW3DTankTruckDrawModuleData()->m_midRearLeftTireBoneName.isEmpty() )
 		{
 			m_midRearLeftTireBone = getRenderObject()->Get_Bone_Index(getW3DTankTruckDrawModuleData()->m_midRearLeftTireBoneName.str());
-			DEBUG_ASSERTCRASH(m_midRearLeftTireBone, ("Missing mid-rear-left tire bone %s in model %s", getW3DTankTruckDrawModuleData()->m_midRearLeftTireBoneName.str(), getRenderObject()->Get_Name()));
+			engine::debug::invariant((m_midRearLeftTireBone), "m_midRearLeftTireBone", __FILE__, __LINE__, "Missing mid-rear-left tire bone %s in model %s", getW3DTankTruckDrawModuleData()->m_midRearLeftTireBoneName.str(), getRenderObject()->Get_Name());
 
 			m_midRearRightTireBone = getRenderObject()->Get_Bone_Index(getW3DTankTruckDrawModuleData()->m_midRearRightTireBoneName.str());
-			DEBUG_ASSERTCRASH(m_midRearRightTireBone, ("Missing mid-rear-right tire bone %s in model %s", getW3DTankTruckDrawModuleData()->m_midRearRightTireBoneName.str(), getRenderObject()->Get_Name()));
+			engine::debug::invariant((m_midRearRightTireBone), "m_midRearRightTireBone", __FILE__, __LINE__, "Missing mid-rear-right tire bone %s in model %s", getW3DTankTruckDrawModuleData()->m_midRearRightTireBoneName.str(), getRenderObject()->Get_Name());
 
 			if (!m_midRearRightTireBone)
 			{
@@ -392,22 +395,22 @@ void W3DTankTruckDraw::updateTreadPositions(Real uvDelta)
 	for (Int i=0; i<m_treadCount; i++)
 	{
 		if (pTread->m_type == TREAD_MIDDLE)	//this tread needs to scroll backwards
-			offset_u = pTread->m_materialSettings.customUVOffset.X + uvDelta;
+			offset_u = pTread->m_materialSettings.customUVOffset.x + uvDelta;
 		else
 		if (pTread->m_type == TREAD_LEFT)	//this tread needs to scroll forwards
-			offset_u = pTread->m_materialSettings.customUVOffset.X + uvDelta;
+			offset_u = pTread->m_materialSettings.customUVOffset.x + uvDelta;
 		else
 		if (pTread->m_type == TREAD_RIGHT)	//this tread needs to scroll backwards
-			offset_u = pTread->m_materialSettings.customUVOffset.X - uvDelta;
+			offset_u = pTread->m_materialSettings.customUVOffset.x - uvDelta;
 		else
 		{
-			DEBUG_CRASH(("Unhandled case in W3DTankTruckDraw::updateTreadPositions"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unhandled case in W3DTankTruckDraw::updateTreadPositions");
 			offset_u = 0.0f;
 		}
 
 		// ensure coordinates of offset are in [0, 1] range:
-		offset_u = offset_u - WWMath::Floor(offset_u);
-		pTread->m_materialSettings.customUVOffset.Set(offset_u,0);
+		offset_u = offset_u - std::floor(offset_u);
+		pTread->m_materialSettings.customUVOffset = {offset_u, 0};
 		pTread++;
 	}
 }
@@ -446,7 +449,7 @@ void W3DTankTruckDraw::updateTreadObjects()
 							m_treads[m_treadCount].m_robj=subObj;
 							m_treads[m_treadCount].m_type = TREAD_MIDDLE;	//default type
 							subObj->Set_User_Data(&m_treads[m_treadCount].m_materialSettings);	//tell W3D about custom material settings
-							m_treads[m_treadCount].m_materialSettings.customUVOffset=Vector2(0,0);
+							m_treads[m_treadCount].m_materialSettings.customUVOffset={0,0};
 							//Commented out since on vehicles with wheels, it makes no sense to turn with treads.
 /*							switch (meshName[6])	//check next character after 'TREADS'
 							{
@@ -473,9 +476,9 @@ void W3DTankTruckDraw::updateTreadObjects()
 //-------------------------------------------------------------------------------------------------
 void W3DTankTruckDraw::onRenderObjRecreated()
 {
-	//DEBUG_LOG(("Old obj %x, newObj %x, new bones %d, old bones %d",
+	//engine::debug::log_info("Old obj %x, newObj %x, new bones %d, old bones %d",
 	//	m_prevRenderObj, getRenderObject(), getRenderObject()->Get_Num_Bones(),
-	//	m_prevNumBones));
+	//	m_prevNumBones);
 	m_prevRenderObj = nullptr;
 	m_frontLeftTireBone = 0;
 	m_frontRightTireBone = 0;
@@ -492,10 +495,10 @@ void W3DTankTruckDraw::onRenderObjRecreated()
 //-------------------------------------------------------------------------------------------------
 /** Map behavior states into W3D animations. */
 //-------------------------------------------------------------------------------------------------
-void W3DTankTruckDraw::doDrawModule(const Matrix3D* transformMtx)
+void W3DTankTruckDraw::doDrawModule(const Engine::Math::AffineTransform3* transform)
 {
 
-	W3DModelDraw::doDrawModule(transformMtx);
+	W3DModelDraw::doDrawModule(transform);
 
 	if (!TheGlobalData->m_showClientPhysics)
 		return;
@@ -534,65 +537,65 @@ void W3DTankTruckDraw::doDrawModule(const Matrix3D* transformMtx)
 
 		m_frontWheelRotation += rotationFactor*speed;
 		m_rearWheelRotation += rotationFactor*(speed+powerslideRotationAddition);
-		m_frontWheelRotation = WWMath::Normalize_Angle(m_frontWheelRotation);
-		m_rearWheelRotation = WWMath::Normalize_Angle(m_rearWheelRotation);
+		m_frontWheelRotation = m_frontWheelRotation - (Engine::Math::Tau * floorf((m_frontWheelRotation + Engine::Math::Pi) / Engine::Math::Tau));	// legacy WWMath::Normalize_Angle, [-PI, PI)
+		m_rearWheelRotation = m_rearWheelRotation - (Engine::Math::Tau * floorf((m_rearWheelRotation + Engine::Math::Pi) / Engine::Math::Tau));	// legacy WWMath::Normalize_Angle, [-PI, PI)
 
-		Matrix3D wheelXfrm(1);
+		Engine::Math::AffineTransform3 wheelXfrm = Engine::Math::AffineTransform3::Identity();
 		if (m_frontLeftTireBone)
 		{
-			wheelXfrm.Adjust_Z_Translation(wheelInfo->m_frontLeftHeightOffset);
-			wheelXfrm.Rotate_Z(wheelInfo->m_wheelAngle);
-			wheelXfrm.Rotate_Y(m_frontWheelRotation);
+			wheelXfrm.Adjust_Translation({0.0f, 0.0f, wheelInfo->m_frontLeftHeightOffset});
+			wheelXfrm.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Z(wheelInfo->m_wheelAngle));
+			wheelXfrm.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Y(m_frontWheelRotation));
 			getRenderObject()->Capture_Bone( m_frontLeftTireBone );
 			getRenderObject()->Control_Bone( m_frontLeftTireBone, wheelXfrm );
 
-			wheelXfrm.Make_Identity();
-			wheelXfrm.Adjust_Z_Translation(wheelInfo->m_frontRightHeightOffset);
-			wheelXfrm.Rotate_Z(wheelInfo->m_wheelAngle);
-			wheelXfrm.Rotate_Y(m_frontWheelRotation);
+			wheelXfrm = Engine::Math::AffineTransform3::Identity();
+			wheelXfrm.Adjust_Translation({0.0f, 0.0f, wheelInfo->m_frontRightHeightOffset});
+			wheelXfrm.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Z(wheelInfo->m_wheelAngle));
+			wheelXfrm.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Y(m_frontWheelRotation));
 			getRenderObject()->Capture_Bone( m_frontRightTireBone );
 			getRenderObject()->Control_Bone( m_frontRightTireBone, wheelXfrm );
 		}
 		if (m_rearLeftTireBone)
 		{
-			wheelXfrm.Make_Identity();
-			wheelXfrm.Rotate_Y(m_rearWheelRotation);
-			wheelXfrm.Adjust_Z_Translation(wheelInfo->m_rearLeftHeightOffset);
+			wheelXfrm = Engine::Math::AffineTransform3::Identity();
+			wheelXfrm.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Y(m_rearWheelRotation));
+			wheelXfrm.Adjust_Translation({0.0f, 0.0f, wheelInfo->m_rearLeftHeightOffset});
 			getRenderObject()->Capture_Bone( m_rearLeftTireBone );
 			getRenderObject()->Control_Bone( m_rearLeftTireBone, wheelXfrm );
 
-			wheelXfrm.Make_Identity();
-			wheelXfrm.Rotate_Y(m_rearWheelRotation);
-			wheelXfrm.Adjust_Z_Translation(wheelInfo->m_rearRightHeightOffset);
+			wheelXfrm = Engine::Math::AffineTransform3::Identity();
+			wheelXfrm.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Y(m_rearWheelRotation));
+			wheelXfrm.Adjust_Translation({0.0f, 0.0f, wheelInfo->m_rearRightHeightOffset});
 			getRenderObject()->Capture_Bone( m_rearRightTireBone );
 			getRenderObject()->Control_Bone( m_rearRightTireBone, wheelXfrm );
 		}
 		if (m_midFrontLeftTireBone)
 		{
-			wheelXfrm.Adjust_Z_Translation(wheelInfo->m_frontLeftHeightOffset);
-			wheelXfrm.Rotate_Z(wheelInfo->m_wheelAngle);
-			wheelXfrm.Rotate_Y(m_midFrontWheelRotation);
+			wheelXfrm.Adjust_Translation({0.0f, 0.0f, wheelInfo->m_frontLeftHeightOffset});
+			wheelXfrm.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Z(wheelInfo->m_wheelAngle));
+			wheelXfrm.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Y(m_midFrontWheelRotation));
 			getRenderObject()->Capture_Bone( m_midFrontLeftTireBone );
 			getRenderObject()->Control_Bone( m_midFrontLeftTireBone, wheelXfrm );
 
-			wheelXfrm.Make_Identity();
-			wheelXfrm.Adjust_Z_Translation(wheelInfo->m_frontRightHeightOffset);
-			wheelXfrm.Rotate_Z(wheelInfo->m_wheelAngle);
-			wheelXfrm.Rotate_Y(m_midFrontWheelRotation);
+			wheelXfrm = Engine::Math::AffineTransform3::Identity();
+			wheelXfrm.Adjust_Translation({0.0f, 0.0f, wheelInfo->m_frontRightHeightOffset});
+			wheelXfrm.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Z(wheelInfo->m_wheelAngle));
+			wheelXfrm.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Y(m_midFrontWheelRotation));
 			getRenderObject()->Capture_Bone( m_midFrontRightTireBone );
 			getRenderObject()->Control_Bone( m_midFrontRightTireBone, wheelXfrm );
 		}
 		if (m_midRearLeftTireBone)
 		{
-			wheelXfrm.Make_Identity();
-			wheelXfrm.Rotate_Y(m_midRearWheelRotation);
-			wheelXfrm.Adjust_Z_Translation(wheelInfo->m_rearLeftHeightOffset);
+			wheelXfrm = Engine::Math::AffineTransform3::Identity();
+			wheelXfrm.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Y(m_midRearWheelRotation));
+			wheelXfrm.Adjust_Translation({0.0f, 0.0f, wheelInfo->m_rearLeftHeightOffset});
 			getRenderObject()->Capture_Bone( m_midRearLeftTireBone );
 			getRenderObject()->Control_Bone( m_midRearLeftTireBone, wheelXfrm );
 
-			wheelXfrm.Make_Identity();
-			wheelXfrm.Rotate_Y(m_midRearWheelRotation);
-			wheelXfrm.Adjust_Z_Translation(wheelInfo->m_rearRightHeightOffset);
+			wheelXfrm = Engine::Math::AffineTransform3::Identity();
+			wheelXfrm.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Y(m_midRearWheelRotation));
+			wheelXfrm.Adjust_Translation({0.0f, 0.0f, wheelInfo->m_rearRightHeightOffset});
 			getRenderObject()->Capture_Bone( m_midRearRightTireBone );
 			getRenderObject()->Control_Bone( m_midRearRightTireBone, wheelXfrm );
 		}
@@ -605,7 +608,7 @@ void W3DTankTruckDraw::doDrawModule(const Matrix3D* transformMtx)
 		Coord3D accel = *physics->getAcceleration();
 		accel.z = 0; // ignore gravitational force.
 		Bool accelerating = accel.length()>ACCEL_THRESHOLD;
-		//DEBUG_LOG(("Accel %f, speed %f", accel.length(), speed));
+		//engine::debug::log_info("Accel %f, speed %f", accel.length(), speed);
 		if (accelerating)	{
 			Real dot = accel.x*vel->x + accel.y*vel->y;
 			if (dot<0) {
@@ -721,10 +724,10 @@ void W3DTankTruckDraw::doDrawModule(const Matrix3D* transformMtx)
 			//under certain situations when tank moved sideways.
 			for (Int i=0; i<m_treadCount; i++)
 			{
-				offset_u = pTread->m_materialSettings.customUVOffset.X - treadScrollSpeed;
+				offset_u = pTread->m_materialSettings.customUVOffset.x - treadScrollSpeed;
 				// ensure coordinates of offset are in [0, 1] range:
-				offset_u = offset_u - WWMath::Floor(offset_u);
-				pTread->m_materialSettings.customUVOffset.Set(offset_u,0);
+				offset_u = offset_u - std::floor(offset_u);
+				pTread->m_materialSettings.customUVOffset = {offset_u, 0};
 				pTread++;
 			}
 		}

@@ -7,14 +7,14 @@
 
 #include "W3DDevice/GameClient/W3DRenderObject.h"
 #include "W3DDevice/GameClient/W3DSceneClass.h"
-#include "WWMath/matrix4.h"
 #include <algorithm>
+import Engine.Core.Math.Matrix4;
 import Graphics.Scene.Views.CameraMatrices;
 import Graphics.Scene.DrawParameters;
 import Graphics.Frame.Runtime;
 
 namespace {
-std::array<float,4> Copy_Vector(const Vector4& value) { return {value.X,value.Y,value.Z,value.W}; }
+std::array<float,4> Copy_Vector(const Engine::Math::Vector4& value) { return {value.x,value.y,value.z,value.w}; }
 }
 WaterMaterialClass::WaterMaterialClass() = default;
 WaterMaterialClass::~WaterMaterialClass() = default;
@@ -31,11 +31,12 @@ void WaterMaterialClass::Set_Common_Constants(const WaterMaterialParameters& par
 void WaterMaterialClass::Set_Frame_Lighting(W3DScene* scene)
 {
     const auto& camera = Graphics::Get_Camera_Matrices();
-    Matrix4x4 view, projection;
-    std::copy_n(camera.view.values.data(),16,&view[0][0]);
-    std::copy_n(camera.projection.values.data(),16,&projection[0][0]);
-    const Matrix4x4 inverse = (projection * view).Inverse();
-    std::copy_n(&inverse[0][0],16,m_parameters.inverse_view_projection.data());
+    Engine::Math::Matrix4 view, projection;
+    view.elements = camera.view.values;
+    projection.elements = camera.projection.values;
+    const auto inverse = Compose(projection, view).Inverse();
+    m_parameters.inverse_view_projection = inverse
+        ? inverse->elements : Engine::Math::Matrix4::Identity().elements;
     if (TheGlobalData) {
         const auto& color = TheGlobalData->m_terrainDiffuse[0];
         const auto& direction = TheGlobalData->m_terrainLightPos[0];
@@ -47,7 +48,7 @@ void WaterMaterialClass::Set_Frame_Lighting(W3DScene* scene)
     scene->Get_Fog_Range(&m_parameters.fog_state[0],&m_parameters.fog_state[1]);
     m_parameters.fog_state[2] = Graphics::Get_Scene_Draw_Parameters().fog.enabled ? 1.0f : 0.0f;
     const auto& color = scene->Get_Fog_Color();
-    m_parameters.fog_color = {color.X,color.Y,color.Z,1};
+    m_parameters.fog_color = {color.x,color.y,color.z,1};
 }
 bool WaterMaterialClass::Apply_Underwater(Graphics::RHITextureHandle scene_texture,
     Graphics::RHITextureHandle depth_texture, W3DTextureHandle *caustics_texture,
@@ -168,11 +169,11 @@ bool WaterMaterialClass::Apply_Sky(W3DTextureHandle *texture, bool alpha_blend,
 void WaterMaterialClass::Shutdown() { m_textures = {}; }
 bool WaterMaterialClass::ReacquireResources() { return Graphics::Shared_Frame_Device() != nullptr; }
 
-bool WaterMaterialClass::Draw(Graphics::WaterMeshHandle mesh, const Matrix4x4& world, bool wireframe)
+bool WaterMaterialClass::Draw(Graphics::WaterMeshHandle mesh, const Engine::Math::Matrix4& world, bool wireframe)
 {
     auto* device = Graphics::Shared_Frame_Device();
     if (!device) return false;
-    std::copy_n(&world[0][0], 16, m_parameters.world.data());
+    m_parameters.world = world.elements;
     m_parameters.view = Graphics::Get_Camera_Matrices().view.values;
     m_parameters.projection = Graphics::Get_Camera_Matrices().projection.values;
     auto style = m_style;
@@ -212,4 +213,3 @@ bool Upload_Water_Geometry(Graphics::WaterMeshHandle& mesh,
     mesh = renderer.Create_Mesh(vertices,indices);
     return mesh.Is_Valid();
 }
-

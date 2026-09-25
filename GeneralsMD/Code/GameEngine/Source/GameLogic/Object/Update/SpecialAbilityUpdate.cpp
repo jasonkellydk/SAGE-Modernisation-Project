@@ -27,7 +27,8 @@
 // Desc:   Handles processing of unit special abilities.
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h" // This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug; // This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/GameAudio.h"
 #include "Common/GlobalData.h"
@@ -1350,11 +1351,10 @@ void SpecialAbilityUpdate::triggerAbilityEffect()
         StickyBombUpdate *update = (StickyBombUpdate*)charge->findUpdateModule( key_StickyBombUpdate );
         if( !update )
         {
-          DEBUG_CRASH( 
-            ("Unit '%s' attempted to place %s on %s but the bomb requires a StickyBombUpdate module.",
+          engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unit '%s' attempted to place %s on %s but the bomb requires a StickyBombUpdate module.",
             object->getTemplate()->getName().str(),
             charge->getTemplate()->getName().str(),
-            target->getTemplate()->getName().str() ) );
+            target->getTemplate()->getName().str() );
           killSpecialObjects();
           return;
         }
@@ -1584,10 +1584,9 @@ void SpecialAbilityUpdate::triggerAbilityEffect()
           StickyBombUpdate *update = (StickyBombUpdate*)charge->findUpdateModule( key_StickyBombUpdate );
           if( !update )
           {
-            DEBUG_CRASH( 
-              ("Unit '%s' attempted to place remote charge but the charge '%s' requires a StickyBombUpdate module.",
+            engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unit '%s' attempted to place remote charge but the charge '%s' requires a StickyBombUpdate module.",
               object->getTemplate()->getName().str(),
-              charge->getTemplate()->getName().str() ) );
+              charge->getTemplate()->getName().str() );
             killSpecialObjects();
             return;
           }

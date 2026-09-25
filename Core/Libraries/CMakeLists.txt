@@ -2,9 +2,7 @@
 add_subdirectory(Source/WWVegas)
 
 # profiling library
-add_subdirectory(Source/profile)
-
 # debugging library
-add_subdirectory(Source/debug)
+
 
 add_subdirectory(Source/Compression)

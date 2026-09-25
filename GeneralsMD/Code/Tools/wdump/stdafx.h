@@ -35,7 +35,6 @@
 #include <afxdlgs.h> // FileDialog class
 
 #include "WWLib/chunkio.h"
-#include "WWMath/Vector3i.h"
 #include "WW3D2/W3DFile.h"
 
 

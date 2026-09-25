@@ -29,6 +29,7 @@
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 #include "PreRTS.h"
+import engine.debug;
 #include "Common/Upgrade.h"
 #include "Common/Player.h"
 #include "Common/Xfer.h"
@@ -138,9 +139,9 @@ UpdateSleepTime BunkerBusterBehavior::update()
       Object *victim = ai->getCurrentVictim();
       if ( victim )
         m_victimID = victim->getID();
-      DEBUG_ASSERTCRASH( victim, ("BunkerBusterBehavior::update... AIUpdateInterface reports no victim." ) );
+      engine::debug::invariant((victim), "victim", __FILE__, __LINE__, "BunkerBusterBehavior::update... AIUpdateInterface reports no victim." );
     }
-    DEBUG_ASSERTCRASH( ai, ("BunkerBusterBehavior::update could not find an AIUpdateInterface." ) );
+    engine::debug::invariant((ai), "ai", __FILE__, __LINE__, "BunkerBusterBehavior::update could not find an AIUpdateInterface." );
 
 
     if ( TheGameLogic->getFrame()%modData->m_crashThroughBunkerFXFrequency == 1 )// not too much

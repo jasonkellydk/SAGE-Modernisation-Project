@@ -48,10 +48,18 @@ import Assets.Math;
 //-----------------------------------------------------------------------------
 
 import Assets.Images.PixelEncoding;
+#include <algorithm>
+#include <cmath>
+#include <optional>
+#include <utility>
 #include "W3DDevice/GameClient/W3DRoadBuffer.h"
 #include "W3DDevice/GameClient/W3DGraphicsResources.h"
 import Graphics.Frame.Runtime;
 import Graphics.Scene.Roads.Renderer;
+import Engine.Core.Math.LineGeometry3;
+import Engine.Core.Math.Sphere3;
+import Engine.Core.Math.Vector2;
+import Engine.Core.Math.Vector3;
 
 #include "W3DDevice/GameClient/W3DAssetCatalog.h"
 #include <W3DDevice/GameClient/W3DTextureHandle.h>
@@ -73,6 +81,7 @@ import Graphics.Scene.Surfaces.Geometry;
 
 #include "W3DDevice/GameClient/W3DMeshRenderObject.h"
 #include "W3DDevice/GameClient/W3DMeshResource.h"
+import engine.debug;
 
 static const Real TEE_WIDTH_ADJUSTMENT = 1.03f;
 
@@ -86,11 +95,35 @@ static const Real CORNER_RADIUS = 1.5f;
 static const Real TIGHT_CORNER_RADIUS = 0.5f;
 
 /** Sign of the 2D cross product: negative is right, positive is left. */
-static Int xpSign(const Vector2 &v1, const Vector2 &v2) {
-	Real xpdct = v1.X*v2.Y - v1.Y*v2.X;
+static Int xpSign(const Engine::Math::Vector2 &v1, const Engine::Math::Vector2 &v2) {
+	Real xpdct = v1.x*v2.y - v1.y*v2.x;
 	if (xpdct<0) return -1;
 	if (xpdct>0) return 1;
 	return 0;
+}
+
+static Real Cross2D(Engine::Math::Vector2 first, Engine::Math::Vector2 second)
+{
+	return first.x * second.y - first.y * second.x;
+}
+
+namespace
+{
+std::optional<std::pair<Engine::Math::Vector3, Engine::Math::Vector3>> Closest_Points_On_Lines(
+	Engine::Math::Vector3 first_start, Engine::Math::Vector3 first_end,
+	Engine::Math::Vector3 second_start, Engine::Math::Vector3 second_end)
+{
+	const auto points = Engine::Math::LineGeometry3::Closest_Points_On_Lines(
+		first_start, first_end, second_start, second_end);
+	if (!points) return std::nullopt;
+	return std::pair{points->first, points->second};
+}
+
+Engine::Math::Vector3 Closest_Point_On_Segment(Engine::Math::Vector3 start,
+	Engine::Math::Vector3 end, Engine::Math::Vector3 point)
+{
+	return Engine::Math::LineGeometry3::Closest_Point_On_Segment(start, end, point);
+}
 }
 
 
@@ -209,7 +242,7 @@ m_numVertex(0),
 m_vb(nullptr),
 m_numIndex(0),
 m_ib(nullptr),
-m_bounds(Vector3(0.0f, 0.0f, 0.0f), 1.0f)
+m_bounds(Engine::Math::Vector3{0.0f, 0.0f, 0.0f}, 1.0f)
 {
 }
 
@@ -242,7 +275,8 @@ void RoadSegment::SetVertexBuffer(Graphics::SurfaceVertex *vb, Int numVertex)
 	m_vb = nullptr;
 	m_numVertex = 0;
 
-	Vector3 verts[MAX_SEG_VERTEX];
+	std::vector<Engine::Math::Vector3> points;
+	points.reserve(static_cast<std::size_t>(numVertex));
 	if (numVertex<1 || numVertex > MAX_SEG_VERTEX)
 		return;
 
@@ -254,12 +288,9 @@ void RoadSegment::SetVertexBuffer(Graphics::SurfaceVertex *vb, Int numVertex)
 	memcpy(m_vb, vb, numVertex*sizeof(Graphics::SurfaceVertex));
 	Int i;
 	for (i=0; i<numVertex; i++) {
-		verts[i].X = m_vb[i].position[0];
-		verts[i].Y = m_vb[i].position[1];
-		verts[i].Z = m_vb[i].position[2];
+		points.push_back({m_vb[i].position[0], m_vb[i].position[1], m_vb[i].position[2]});
 	}
-	SphereClass bounds(verts, numVertex);
-	m_bounds = bounds;
+	m_bounds = Engine::Math::Try_Enclosing_Sphere(points).value_or(Engine::Math::Sphere3{});
 }
 
 //=============================================================================
@@ -340,18 +371,18 @@ void RoadSegment::updateSegLighting()
 //=============================================================================
 /** Loads a tee into the vertex buffer for a road join. */
 //=============================================================================
-void W3DRoadBuffer::loadTee(RoadSegment *pRoad, Vector2 loc1,
-														Vector2 loc2, Bool is4Way, Real scale)
+void W3DRoadBuffer::loadTee(RoadSegment *pRoad, Engine::Math::Vector2 loc1,
+														Engine::Math::Vector2 loc2, Bool is4Way, Real scale)
 {
-	Vector2 roadVector(loc2.X-loc1.X, loc2.Y-loc1.Y);
-	Vector2 roadNormal(-roadVector.Y, roadVector.X);
+	Engine::Math::Vector2 roadVector(loc2.x-loc1.x, loc2.y-loc1.y);
+	Engine::Math::Vector2 roadNormal(-roadVector.y, roadVector.x);
 //	Real roadLen = scale;
-	if (abs(roadVector.X) < MIN_ROAD_SEGMENT && abs(roadVector.Y) < MIN_ROAD_SEGMENT) {
-		roadVector.Set(1.0f, 0.0f);
-		roadNormal.Set(0.0f, 1.0f);
+	if (abs(roadVector.x) < MIN_ROAD_SEGMENT && abs(roadVector.y) < MIN_ROAD_SEGMENT) {
+		roadVector= {1.0f, 0.0f};
+		roadNormal= {0.0f, 1.0f};
 	} else {
-		roadVector.Normalize();
-		roadNormal.Normalize();
+		roadVector = roadVector.Normalized_Legacy();
+		roadNormal = roadNormal.Normalized_Legacy();
 	}
 
 	Real uOffset = (425.0f/512.0f);
@@ -370,19 +401,19 @@ void W3DRoadBuffer::loadTee(RoadSegment *pRoad, Vector2 loc1,
 //=============================================================================
 /** Loads an alpha join into the vertex buffer for a road join. */
 //=============================================================================
-void W3DRoadBuffer::loadAlphaJoin(RoadSegment *pRoad, Vector2 loc1,
-														Vector2 loc2,Real scale)
+void W3DRoadBuffer::loadAlphaJoin(RoadSegment *pRoad, Engine::Math::Vector2 loc1,
+														Engine::Math::Vector2 loc2,Real scale)
 {
 
-	Vector2 roadVector(loc2.X-loc1.X, loc2.Y-loc1.Y);
-	Vector2 roadNormal(-roadVector.Y, roadVector.X);
+	Engine::Math::Vector2 roadVector(loc2.x-loc1.x, loc2.y-loc1.y);
+	Engine::Math::Vector2 roadNormal(-roadVector.y, roadVector.x);
 //	Real roadLen = scale;
-	if (abs(roadVector.X) < MIN_ROAD_SEGMENT && abs(roadVector.Y) < MIN_ROAD_SEGMENT) {
-		roadVector.Set(1.0f, 0.0f);
-		roadNormal.Set(0.0f, 1.0f);
+	if (abs(roadVector.x) < MIN_ROAD_SEGMENT && abs(roadVector.y) < MIN_ROAD_SEGMENT) {
+		roadVector= {1.0f, 0.0f};
+		roadNormal= {0.0f, 1.0f};
 	} else {
-		roadVector.Normalize();
-		roadNormal.Normalize();
+		roadVector = roadVector.Normalized_Legacy();
+		roadNormal = roadNormal.Normalized_Legacy();
 	}
 
 	Real uOffset = (106.0f/512.0f);
@@ -395,7 +426,7 @@ void W3DRoadBuffer::loadAlphaJoin(RoadSegment *pRoad, Vector2 loc1,
 	roadNormal *= uScale*(1+8.0f/128); // we want 8 extra pixels.
 
 
-	Vector2	corners[NUM_CORNERS];
+	Engine::Math::Vector2	corners[NUM_CORNERS];
 
 	corners[topLeft] =  loc1 + roadNormal*0.5f - roadVector*0.65f ;
 	corners[bottomLeft] = corners[topLeft] - roadNormal;
@@ -409,19 +440,19 @@ void W3DRoadBuffer::loadAlphaJoin(RoadSegment *pRoad, Vector2 loc1,
 //=============================================================================
 /** Loads a Y into the vertex buffer for a road join. */
 //=============================================================================
-void W3DRoadBuffer::loadY(RoadSegment *pRoad, Vector2 loc1,
-														Vector2 loc2,Real scale)
+void W3DRoadBuffer::loadY(RoadSegment *pRoad, Engine::Math::Vector2 loc1,
+														Engine::Math::Vector2 loc2,Real scale)
 {
 
-	Vector2 roadVector(loc2.X-loc1.X, loc2.Y-loc1.Y);
-	Vector2 roadNormal(-roadVector.Y, roadVector.X);
+	Engine::Math::Vector2 roadVector(loc2.x-loc1.x, loc2.y-loc1.y);
+	Engine::Math::Vector2 roadNormal(-roadVector.y, roadVector.x);
 //	Real roadLen = scale;
-	if (abs(roadVector.X) < MIN_ROAD_SEGMENT && abs(roadVector.Y) < MIN_ROAD_SEGMENT) {
-		roadVector.Set(1.0f, 0.0f);
-		roadNormal.Set(0.0f, 1.0f);
+	if (abs(roadVector.x) < MIN_ROAD_SEGMENT && abs(roadVector.y) < MIN_ROAD_SEGMENT) {
+		roadVector= {1.0f, 0.0f};
+		roadNormal= {0.0f, 1.0f};
 	} else {
-		roadVector.Normalize();
-		roadNormal.Normalize();
+		roadVector = roadVector.Normalized_Legacy();
+		roadNormal = roadNormal.Normalized_Legacy();
 	}
 
 	Real uOffset = (255.0f/512.0f);
@@ -433,7 +464,7 @@ void W3DRoadBuffer::loadY(RoadSegment *pRoad, Vector2 loc1,
 	roadNormal *= roadwidth;
 
 
-	Vector2	corners[NUM_CORNERS];
+	Engine::Math::Vector2	corners[NUM_CORNERS];
 
 	roadVector *= 1.59f;
 	corners[topLeft] =  loc1 + roadNormal*0.29f - roadVector*0.5f ;
@@ -448,19 +479,19 @@ void W3DRoadBuffer::loadY(RoadSegment *pRoad, Vector2 loc1,
 //=============================================================================
 /** Loads a h shaped tee into the vertex buffer for a road join. */
 //=============================================================================
-void W3DRoadBuffer::loadH(RoadSegment *pRoad, Vector2 loc1,
-														Vector2 loc2, Bool flip, Real scale)
+void W3DRoadBuffer::loadH(RoadSegment *pRoad, Engine::Math::Vector2 loc1,
+														Engine::Math::Vector2 loc2, Bool flip, Real scale)
 {
 
-	Vector2 roadVector(loc2.X-loc1.X, loc2.Y-loc1.Y);
-	Vector2 roadNormal(-roadVector.Y, roadVector.X);
+	Engine::Math::Vector2 roadVector(loc2.x-loc1.x, loc2.y-loc1.y);
+	Engine::Math::Vector2 roadNormal(-roadVector.y, roadVector.x);
 //	Real roadLen = scale;
-	if (abs(roadVector.X) < MIN_ROAD_SEGMENT && abs(roadVector.Y) < MIN_ROAD_SEGMENT) {
-		roadVector.Set(1.0f, 0.0f);
-		roadNormal.Set(0.0f, 1.0f);
+	if (abs(roadVector.x) < MIN_ROAD_SEGMENT && abs(roadVector.y) < MIN_ROAD_SEGMENT) {
+		roadVector= {1.0f, 0.0f};
+		roadNormal= {0.0f, 1.0f};
 	} else {
-		roadVector.Normalize();
-		roadNormal.Normalize();
+		roadVector = roadVector.Normalized_Legacy();
+		roadNormal = roadNormal.Normalized_Legacy();
 	}
 
 	Real uOffset = (202.0f/512.0f);
@@ -472,7 +503,7 @@ void W3DRoadBuffer::loadH(RoadSegment *pRoad, Vector2 loc1,
 	roadNormal *= roadwidth;
 
 
-	Vector2	corners[NUM_CORNERS];
+	Engine::Math::Vector2	corners[NUM_CORNERS];
 
 	roadNormal *= 1.35f;
 	if (flip) {
@@ -480,7 +511,7 @@ void W3DRoadBuffer::loadH(RoadSegment *pRoad, Vector2 loc1,
 	}	else {
 		corners[bottomLeft] = loc1 - roadNormal*0.8f - roadVector*pRoad->m_widthInTexture/2;
 	}
-	Vector2 width = roadVector*pRoad->m_widthInTexture/2;
+	Engine::Math::Vector2 width = roadVector*pRoad->m_widthInTexture/2;
 	width = width + roadVector * 1.2f;
 	corners[bottomRight] = corners[bottomLeft] + width;
 	corners[topRight] = corners[bottomRight] + roadNormal;
@@ -495,30 +526,30 @@ void W3DRoadBuffer::loadH(RoadSegment *pRoad, Vector2 loc1,
 /** Loads a section of road using a mesh that floats a little above the
 terrain. */
 //=============================================================================
-void W3DRoadBuffer::loadFloatSection(RoadSegment *pRoad, Vector2 loc,
-														Vector2 roadVector, Real halfHeight, Real left, Real right,
+void W3DRoadBuffer::loadFloatSection(RoadSegment *pRoad, Engine::Math::Vector2 loc,
+														Engine::Math::Vector2 roadVector, Real halfHeight, Real left, Real right,
 														Real uOffset, Real vOffset, Real scale)
 {
 	if (m_map==nullptr) {
 		return;
 	}
 
-	Vector2 roadNormal(-roadVector.Y, roadVector.X);
-	roadVector.Normalize();
+	Engine::Math::Vector2 roadNormal(-roadVector.y, roadVector.x);
+	roadVector = roadVector.Normalized_Legacy();
 	roadVector *= right;
 
-	roadNormal.Normalize();
+	roadNormal = roadNormal.Normalized_Legacy();
 	if (halfHeight<0) halfHeight = -halfHeight;
 	roadNormal *= halfHeight;
 
-	Vector2 roadLeft = roadVector;
-	roadLeft.Normalize();
+	Engine::Math::Vector2 roadLeft = roadVector;
+	roadLeft = roadLeft.Normalized_Legacy();
 	roadLeft *= left;
 	roadVector += roadLeft;
-	Vector2 leftCenter = loc;
+	Engine::Math::Vector2 leftCenter = loc;
 	leftCenter -= roadLeft;
 
-	Vector2	corners[NUM_CORNERS];
+	Engine::Math::Vector2	corners[NUM_CORNERS];
 
 	corners[bottomLeft] = leftCenter - roadNormal;
 	corners[bottomRight] = corners[bottomLeft];
@@ -541,9 +572,9 @@ terrain.  The road is loaded into the quadrilateral defined by the
 the road vector gives the direction of the road, and the road normal is perpendicular
 to the road normal.  */
 //=============================================================================
-void W3DRoadBuffer::loadFloat4PtSection(RoadSegment *pRoad, Vector2 loc,
-														Vector2 roadNormal, Vector2 roadVector,
-														Vector2 *cornersP,
+void W3DRoadBuffer::loadFloat4PtSection(RoadSegment *pRoad, Engine::Math::Vector2 loc,
+														Engine::Math::Vector2 roadNormal, Engine::Math::Vector2 roadVector,
+														Engine::Math::Vector2 *cornersP,
 														Real uOffset, Real vOffset, Real uScale, Real vScale)
 {
 
@@ -571,9 +602,9 @@ void W3DRoadBuffer::loadFloat4PtSection(RoadSegment *pRoad, Vector2 loc,
 
 	Real roadLen = roadVector.Length();
 	Real halfHeight = roadNormal.Length();
-	roadNormal.Normalize();
-	roadVector.Normalize();
-	Vector2 curVector;
+	roadNormal = roadNormal.Normalized_Legacy();
+	roadVector = roadVector.Normalized_Legacy();
+	Engine::Math::Vector2 curVector;
 	Int uCount = (roadLen/MAP_XY_FACTOR)+1;
 	if (uCount<2) uCount = 2;
 	Int vCount = (2*halfHeight/MAP_XY_FACTOR)+1;
@@ -584,7 +615,7 @@ void W3DRoadBuffer::loadFloat4PtSection(RoadSegment *pRoad, Vector2 loc,
 	typedef struct {
 		Bool collapsed;
 		Bool deleted;
-		Vector3 vtx[maxRows];
+		Engine::Math::Vector3 vtx[maxRows];
 		Int diffuseRed;
 		Bool lightGradient;
 		Int vertexIndex[maxRows];
@@ -598,18 +629,18 @@ void W3DRoadBuffer::loadFloat4PtSection(RoadSegment *pRoad, Vector2 loc,
 	prevColumn.deleted = true;
 	curColumn.deleted = true;
 	Int i, j, k;
-	Vector2 v2 = cornersP[bottomLeft];
-	Vector3 origin(v2.X, v2.Y, 0);
+	Engine::Math::Vector2 v2 = cornersP[bottomLeft];
+	Engine::Math::Vector3 origin(v2.x, v2.y, 0);
 	v2 = cornersP[bottomRight] - cornersP[bottomLeft];
-	Vector3 uVector1(v2.X, v2.Y, 0);
+	Engine::Math::Vector3 uVector1(v2.x, v2.y, 0);
 	v2 = cornersP[topRight] - cornersP[topLeft];
-	Vector3 uVector2(v2.X, v2.Y, 0);
+	Engine::Math::Vector3 uVector2(v2.x, v2.y, 0);
 	v2 = cornersP[topLeft];
-	Vector3 origin2(v2.X, v2.Y, 0);
+	Engine::Math::Vector3 origin2(v2.x, v2.y, 0);
 	v2 = cornersP[topLeft] - cornersP[bottomLeft];
-	Vector3 vVector1(v2.X, v2.Y, 0);
+	Engine::Math::Vector3 vVector1(v2.x, v2.y, 0);
 	v2 = cornersP[topRight] - cornersP[bottomRight];
-	Vector3 vVector2(v2.X, v2.Y, 0);
+	Engine::Math::Vector3 vVector2(v2.x, v2.y, 0);
 	uVector2 += (vVector1 - vVector2);
 	for (i=0; i<=uCount; i++) {
 		Real iFactor = ((Real)i / (uCount-1));
@@ -627,11 +658,11 @@ void W3DRoadBuffer::loadFloat4PtSection(RoadSegment *pRoad, Vector2 loc,
 				Real jBarFactor = 1.0f-jFactor;
 				nextColumn.vtx[j] = origin +  (uVector1 * jBarFactor * iFactor) + (uVector2 * jFactor * iFactor) +
 													(vVector1 * iBarFactor * jFactor) + (vVector2 * iFactor * jFactor) ;
-				Real z = TheTerrainRenderObject->getMaxCellHeight(nextColumn.vtx[j].X, nextColumn.vtx[j].Y);
+				Real z = TheTerrainRenderObject->getMaxCellHeight(nextColumn.vtx[j].x, nextColumn.vtx[j].y);
 				if (z<minHeight) minHeight = z;
 				if (z>maxHeight) maxHeight = z;
 				nextColumn.vertexIndex[j] = -1;
-				nextColumn.vtx[j].Z = z;
+				nextColumn.vtx[j].z = z;
 				Int diffuse = 0;
 				if (j==0) {
 					nextColumn.diffuseRed = (diffuse & 0x00ff);
@@ -645,12 +676,12 @@ void W3DRoadBuffer::loadFloat4PtSection(RoadSegment *pRoad, Vector2 loc,
 
 			if (true) { // !nextColumn.lightGradient) {
 				nextColumn.collapsed = true;
-				nextColumn.vtx[0].Z = maxHeight;
+				nextColumn.vtx[0].z = maxHeight;
 				nextColumn.vtx[1] = nextColumn.vtx[vCount-1];
-				nextColumn.vtx[1].Z = maxHeight;
+				nextColumn.vtx[1].z = maxHeight;
 			}	else {
 				for (j=0; j<vCount; j++) {
-					nextColumn.vtx[j].Z = maxHeight;
+					nextColumn.vtx[j].z = maxHeight;
 				}
 			}
 			if (i<2) {
@@ -659,14 +690,14 @@ void W3DRoadBuffer::loadFloat4PtSection(RoadSegment *pRoad, Vector2 loc,
 				if (prevColumn.collapsed && curColumn.collapsed && nextColumn.collapsed) {
 					Bool okToDelete = false;
 
-					Real theZ = prevColumn.vtx[0].Z * (curColumn.uIndex-prevColumn.uIndex) +
-										nextColumn.vtx[0].Z * (nextColumn.uIndex-curColumn.uIndex);
+					Real theZ = prevColumn.vtx[0].z * (curColumn.uIndex-prevColumn.uIndex) +
+										nextColumn.vtx[0].z * (nextColumn.uIndex-curColumn.uIndex);
 					theZ /= nextColumn.uIndex-prevColumn.uIndex;
-					if (theZ >= curColumn.vtx[0].Z && theZ < curColumn.vtx[0].Z + MAX_ERROR) {
-						theZ = prevColumn.vtx[1].Z * (curColumn.uIndex-prevColumn.uIndex) +
-											nextColumn.vtx[1].Z * (nextColumn.uIndex-curColumn.uIndex);
+					if (theZ >= curColumn.vtx[0].z && theZ < curColumn.vtx[0].z + MAX_ERROR) {
+						theZ = prevColumn.vtx[1].z * (curColumn.uIndex-prevColumn.uIndex) +
+											nextColumn.vtx[1].z * (nextColumn.uIndex-curColumn.uIndex);
 						theZ /= nextColumn.uIndex-prevColumn.uIndex;
-						if (theZ >= curColumn.vtx[1].Z && theZ < curColumn.vtx[1].Z + MAX_ERROR) {
+						if (theZ >= curColumn.vtx[1].z && theZ < curColumn.vtx[1].z + MAX_ERROR) {
 							okToDelete = true;
 						}
 					}
@@ -683,18 +714,18 @@ void W3DRoadBuffer::loadFloat4PtSection(RoadSegment *pRoad, Vector2 loc,
 				if (numRoadVertices >= MAX_SEG_INDEX) {
 					break;
 				}
-				curVector.Set(curColumn.vtx[j].X - loc.X, curColumn.vtx[j].Y - loc.Y);
-				V = Vector2::Dot_Product(roadNormal, curVector);
-				U = Vector2::Dot_Product(roadVector, curVector);
+				curVector= {curColumn.vtx[j].x - loc.x, curColumn.vtx[j].y - loc.y};
+				V = (roadNormal).Dot(curVector);
+				U = (roadVector).Dot(curVector);
 				Int diffuse = 0;
 			#ifdef RTS_DEBUG
 				//diffuse &= 0xFFFF00FF; // strip out green.
 			#endif
 				vb[numRoadVertices].uv[0] = uOffset+U/(uScale*4);
 				vb[numRoadVertices].uv[1] = vOffset-V/(vScale*4);	// Road is 1/16 texture height.
-				vb[numRoadVertices].position[0] = curColumn.vtx[j].X;
-				vb[numRoadVertices].position[1] = curColumn.vtx[j].Y;
-				vb[numRoadVertices].position[2] = curColumn.vtx[j].Z+FLOAT_AMOUNT;
+				vb[numRoadVertices].position[0] = curColumn.vtx[j].x;
+				vb[numRoadVertices].position[1] = curColumn.vtx[j].y;
+				vb[numRoadVertices].position[2] = curColumn.vtx[j].z+FLOAT_AMOUNT;
 				vb[numRoadVertices].color = Assets::Color_From_ARGB(diffuse).To_Array();
 				curColumn.vertexIndex[j] = numRoadVertices;
 				numRoadVertices++;
@@ -782,8 +813,8 @@ void W3DRoadBuffer::loadLit4PtSection(RoadSegment *pRoad, UnsignedShort *ib, Gra
 
 	for (pDynamicLightsIterator->First(); !pDynamicLightsIterator->Is_Done(); pDynamicLightsIterator->Next()) {
 			W3DLight *pLight = (W3DLight*)pDynamicLightsIterator->Peek_Obj();
-			SphereClass bounds = pLight->Get_Bounding_Sphere();
-			if (Spheres_Intersect(pRoad->getBounds(), bounds)) {
+			const auto world_bounds = pLight->Get_Bounding_Sphere();
+			if (pRoad->getBounds().Intersects(world_bounds)) {
 				lights[numLights] = pLight;
 				numLights++;
 				if (numLights == maxLights) break;
@@ -796,9 +827,9 @@ void W3DRoadBuffer::loadLit4PtSection(RoadSegment *pRoad, UnsignedShort *ib, Gra
 	pRoad->GetRoadSegInfo(&info);
 	Real roadLen = info.roadVector.Length();
 	Real halfHeight = info.roadNormal.Length();
-	info.roadNormal.Normalize();
-	info.roadVector.Normalize();
-	Vector2 curVector;
+	info.roadNormal = info.roadNormal.Normalized_Legacy();
+	info.roadVector = info.roadVector.Normalized_Legacy();
+	Engine::Math::Vector2 curVector;
 	Int uCount = (roadLen/MAP_XY_FACTOR)+1;
 	Int vCount = (2*halfHeight/MAP_XY_FACTOR)+1;
 
@@ -807,7 +838,7 @@ void W3DRoadBuffer::loadLit4PtSection(RoadSegment *pRoad, UnsignedShort *ib, Gra
 	typedef struct {
 		Bool collapsed;
 		Bool deleted;
-		Vector3 vtx[maxRows];
+		Engine::Math::Vector3 vtx[maxRows];
 		Int diffuseRed;
 		Bool lightGradient;
 		Int vertexIndex[maxRows];
@@ -821,18 +852,18 @@ void W3DRoadBuffer::loadLit4PtSection(RoadSegment *pRoad, UnsignedShort *ib, Gra
 	prevColumn.deleted = true;
 	curColumn.deleted = true;
 	Int i, j, k;
-	Vector2 v2 = info.corners[bottomLeft];
-	Vector3 origin(v2.X, v2.Y, 0);
+	Engine::Math::Vector2 v2 = info.corners[bottomLeft];
+	Engine::Math::Vector3 origin(v2.x, v2.y, 0);
 	v2 = info.corners[bottomRight] - info.corners[bottomLeft];
-	Vector3 uVector1(v2.X, v2.Y, 0);
+	Engine::Math::Vector3 uVector1(v2.x, v2.y, 0);
 	v2 = info.corners[topRight] - info.corners[topLeft];
-	Vector3 uVector2(v2.X, v2.Y, 0);
+	Engine::Math::Vector3 uVector2(v2.x, v2.y, 0);
 	v2 = info.corners[topLeft];
-	Vector3 origin2(v2.X, v2.Y, 0);
+	Engine::Math::Vector3 origin2(v2.x, v2.y, 0);
 	v2 = info.corners[topLeft] - info.corners[bottomLeft];
-	Vector3 vVector1(v2.X, v2.Y, 0);
+	Engine::Math::Vector3 vVector1(v2.x, v2.y, 0);
 	v2 = info.corners[topRight] - info.corners[bottomRight];
-	Vector3 vVector2(v2.X, v2.Y, 0);
+	Engine::Math::Vector3 vVector2(v2.x, v2.y, 0);
 	uVector2 += (vVector1 - vVector2);
 	for (i=0; i<=uCount; i++) {
 		Real iFactor = ((Real)i / (uCount-1));
@@ -850,30 +881,31 @@ void W3DRoadBuffer::loadLit4PtSection(RoadSegment *pRoad, UnsignedShort *ib, Gra
 				Real jBarFactor = 1.0f-jFactor;
 				nextColumn.vtx[j] = origin +  (uVector1 * jBarFactor * iFactor) + (uVector2 * jFactor * iFactor) +
 													(vVector1 * iBarFactor * jFactor) + (vVector2 * iFactor * jFactor) ;
-				Real z = TheTerrainRenderObject->getMaxCellHeight(nextColumn.vtx[j].X, nextColumn.vtx[j].Y);
+				Real z = TheTerrainRenderObject->getMaxCellHeight(nextColumn.vtx[j].x, nextColumn.vtx[j].y);
 				if (z<minHeight) minHeight = z;
 				if (z>maxHeight) maxHeight = z;
 				nextColumn.vertexIndex[j] = -1;
-				nextColumn.vtx[j].Z = z;
+				nextColumn.vtx[j].z = z;
 				Int k;
 				for (k=0; k<numLights; k++) {
-					Vector3 offset = nextColumn.vtx[j] - lights[k]->Get_Position();
+					const auto engine_position = lights[k]->Get_Position();
+					Engine::Math::Vector3 offset = nextColumn.vtx[j] - Engine::Math::Vector3{engine_position.x, engine_position.y, engine_position.z};
 					Real range = lights[k]->Get_Attenuation_Range();
 					// for culling, expand one cell radius.
 					range += MAP_XY_FACTOR;
-					if (offset.Length2() < range*range) {
+					if (offset.Length_Squared() < range*range) {
 						nextColumn.lightGradient = true;
 					}
 				}
 			}
 			if (!nextColumn.lightGradient) {
 				nextColumn.collapsed = true;
-				nextColumn.vtx[0].Z = maxHeight;
+				nextColumn.vtx[0].z = maxHeight;
 				nextColumn.vtx[1] = nextColumn.vtx[vCount-1];
-				nextColumn.vtx[1].Z = maxHeight;
+				nextColumn.vtx[1].z = maxHeight;
 			}	else {
 				for (j=0; j<vCount; j++) {
-					nextColumn.vtx[j].Z = maxHeight;
+					nextColumn.vtx[j].z = maxHeight;
 				}
 			}
 			if (i<2) {
@@ -882,14 +914,14 @@ void W3DRoadBuffer::loadLit4PtSection(RoadSegment *pRoad, UnsignedShort *ib, Gra
 				if (prevColumn.collapsed && curColumn.collapsed && nextColumn.collapsed) {
 					Bool okToDelete = false;
 
-					Real theZ = prevColumn.vtx[0].Z * (curColumn.uIndex-prevColumn.uIndex) +
-										nextColumn.vtx[0].Z * (nextColumn.uIndex-curColumn.uIndex);
+					Real theZ = prevColumn.vtx[0].z * (curColumn.uIndex-prevColumn.uIndex) +
+										nextColumn.vtx[0].z * (nextColumn.uIndex-curColumn.uIndex);
 					theZ /= nextColumn.uIndex-prevColumn.uIndex;
-					if (theZ >= curColumn.vtx[0].Z && theZ < curColumn.vtx[0].Z + MAX_ERROR) {
-						theZ = prevColumn.vtx[1].Z * (curColumn.uIndex-prevColumn.uIndex) +
-											nextColumn.vtx[1].Z * (nextColumn.uIndex-curColumn.uIndex);
+					if (theZ >= curColumn.vtx[0].z && theZ < curColumn.vtx[0].z + MAX_ERROR) {
+						theZ = prevColumn.vtx[1].z * (curColumn.uIndex-prevColumn.uIndex) +
+											nextColumn.vtx[1].z * (nextColumn.uIndex-curColumn.uIndex);
 						theZ /= nextColumn.uIndex-prevColumn.uIndex;
-						if (theZ >= curColumn.vtx[1].Z && theZ < curColumn.vtx[1].Z + MAX_ERROR) {
+						if (theZ >= curColumn.vtx[1].z && theZ < curColumn.vtx[1].z + MAX_ERROR) {
 							okToDelete = true;
 						}
 					}
@@ -906,10 +938,10 @@ void W3DRoadBuffer::loadLit4PtSection(RoadSegment *pRoad, UnsignedShort *ib, Gra
 				if (m_curNumRoadVertices >= m_maxRoadVertex) {
 					break;
 				}
-				curVector.Set(curColumn.vtx[j].X - info.loc.X, curColumn.vtx[j].Y - info.loc.Y);
-				V = Vector2::Dot_Product(info.roadNormal, curVector);
-				U = Vector2::Dot_Product(info.roadVector, curVector);
-				Int diffuse = (255<<24)|TheTerrainRenderObject->getStaticDiffuse(curColumn.vtx[j].X/MAP_XY_FACTOR+0.5, curColumn.vtx[j].Y/MAP_XY_FACTOR+0.5);
+				curVector= {curColumn.vtx[j].x - info.loc.x, curColumn.vtx[j].y - info.loc.y};
+				V = (info.roadNormal).Dot(curVector);
+				U = (info.roadVector).Dot(curVector);
+				Int diffuse = (255<<24)|TheTerrainRenderObject->getStaticDiffuse(curColumn.vtx[j].x/MAP_XY_FACTOR+0.5, curColumn.vtx[j].y/MAP_XY_FACTOR+0.5);
 				Real shadeR, shadeG, shadeB;
 				shadeB = (diffuse & 0xFF)/255.0;
 				shadeG = ((diffuse>>8) & 0xFF)/255.0;
@@ -918,15 +950,16 @@ void W3DRoadBuffer::loadLit4PtSection(RoadSegment *pRoad, UnsignedShort *ib, Gra
 				for (k=0; k<numLights; k++) {
 					Real factor;
 					if (lights[k]->Get_Type() == W3DLight::POINT) {
-						Vector3 lightLoc = lights[k]->Get_Position();
-						Vector3 vtx = curColumn.vtx[j];
-						Vector3 offset = vtx - lightLoc;
+						const auto engine_position = lights[k]->Get_Position();
+						Engine::Math::Vector3 lightLoc{engine_position.x, engine_position.y, engine_position.z};
+						Engine::Math::Vector3 vtx = curColumn.vtx[j];
+						Engine::Math::Vector3 offset = vtx - lightLoc;
 						double range, midRange;
 						lights[k]->Get_Far_Attenuation_Range(midRange, range);
-						if (vtx.X < lightLoc.X-range) continue;
-						if (vtx.X > lightLoc.X+range) continue;
-						if (vtx.Y < lightLoc.Y-range) continue;
-						if (vtx.Y > lightLoc.Y+range) continue;
+						if (vtx.x < lightLoc.x-range) continue;
+						if (vtx.x > lightLoc.x+range) continue;
+						if (vtx.y < lightLoc.y-range) continue;
+						if (vtx.y > lightLoc.y+range) continue;
 						Real dist = offset.Length();
 						if (dist >= range) continue;
 						if (midRange < 0.1) continue;
@@ -941,21 +974,19 @@ void W3DRoadBuffer::loadLit4PtSection(RoadSegment *pRoad, UnsignedShort *ib, Gra
 							factor = 1.0f/(0.1+dist/midRange + 5.0f*dist*dist/(range*range));
 						}
 	#endif
-						factor = WWMath::Clamp(factor,0.0f,1.0f);
+						factor = std::clamp<float>(factor,0.0f,1.0f);
 						Real shade = 0.5f;
 						shade *= factor;
-						Vector3 diffuse;
-						lights[k]->Get_Diffuse(&diffuse);
-						Vector3 ambient;
-						lights[k]->Get_Ambient(&ambient);
+						const Engine::Math::Vector3 diffuse = lights[k]->Get_Diffuse();
+						const Engine::Math::Vector3 ambient = lights[k]->Get_Ambient();
 						if (shade > 1.0) shade = 1.0;
 						if(shade < 0.0f) shade = 0.0f;
-						shadeR += shade*diffuse.X;
-						shadeG += shade*diffuse.Y;
-						shadeB += shade*diffuse.Z;
-						shadeR += factor*ambient.X;
-						shadeG += factor*ambient.Y;
-						shadeB += factor*ambient.Z;
+						shadeR += shade*diffuse.x;
+						shadeG += shade*diffuse.y;
+						shadeB += shade*diffuse.z;
+						shadeR += factor*ambient.x;
+						shadeG += factor*ambient.y;
+						shadeB += factor*ambient.z;
 					}
 				}
  				if (shadeR > 1.0) shadeR = 1.0;
@@ -974,9 +1005,9 @@ void W3DRoadBuffer::loadLit4PtSection(RoadSegment *pRoad, UnsignedShort *ib, Gra
 			#endif
 				vb[m_curNumRoadVertices].uv[0] = info.uOffset+U/(info.scale*4);
 				vb[m_curNumRoadVertices].uv[1] = info.vOffset-V/(info.scale*4);	// Road is 1/16 texture height.
-				vb[m_curNumRoadVertices].position[0] = curColumn.vtx[j].X;
-				vb[m_curNumRoadVertices].position[1] = curColumn.vtx[j].Y;
-				vb[m_curNumRoadVertices].position[2] = curColumn.vtx[j].Z+FLOAT_AMOUNT;
+				vb[m_curNumRoadVertices].position[0] = curColumn.vtx[j].x;
+				vb[m_curNumRoadVertices].position[1] = curColumn.vtx[j].y;
+				vb[m_curNumRoadVertices].position[2] = curColumn.vtx[j].z+FLOAT_AMOUNT;
 				vb[m_curNumRoadVertices].color = Assets::Color_From_ARGB(diffuse).To_Array();
 				curColumn.vertexIndex[j] = m_curNumRoadVertices;
 				m_curNumRoadVertices++;
@@ -1039,7 +1070,7 @@ void W3DRoadBuffer::loadLit4PtSection(RoadSegment *pRoad, UnsignedShort *ib, Gra
 //=============================================================================
 /** Loads a curve segment into the vertex buffer for a road end cap or join. */
 //=============================================================================
-void W3DRoadBuffer::loadCurve(RoadSegment *pRoad, Vector2 loc1, Vector2 loc2, Real scale)
+void W3DRoadBuffer::loadCurve(RoadSegment *pRoad, Engine::Math::Vector2 loc1, Engine::Math::Vector2 loc2, Real scale)
 {
 
 	Real uOffset = (4.0f/512.0f);
@@ -1048,19 +1079,19 @@ void W3DRoadBuffer::loadCurve(RoadSegment *pRoad, Vector2 loc1, Vector2 loc2, Re
 		vOffset = (425.0f/512.0f);
 	}
 
-	Vector2 roadVector(loc2.X-loc1.X, loc2.Y-loc1.Y);
-	Vector2 roadNormal(-roadVector.Y, roadVector.X);
+	Engine::Math::Vector2 roadVector(loc2.x-loc1.x, loc2.y-loc1.y);
+	Engine::Math::Vector2 roadNormal(-roadVector.y, roadVector.x);
 	Real roadLen = scale;
 
 	Real curveHeight = pRoad->m_widthInTexture*scale/2.0f;
 
-	roadVector.Normalize();
+	roadVector = roadVector.Normalized_Legacy();
 	roadVector *= roadLen;
 
-	roadNormal.Normalize();
+	roadNormal = roadNormal.Normalized_Legacy();
 	roadNormal *= abs(curveHeight);
 
-	Vector2	corners[NUM_CORNERS];
+	Engine::Math::Vector2	corners[NUM_CORNERS];
 
 	corners[bottomLeft] = loc1 - roadNormal;
 	corners[bottomRight] = corners[bottomLeft];
@@ -1119,18 +1150,18 @@ void W3DRoadBuffer::loadCurve(RoadSegment *pRoad, Vector2 loc1, Vector2 loc2, Re
 void W3DRoadBuffer::preloadRoadSegment(RoadSegment *pRoad)
 {
 
-	Vector2 roadVector = pRoad->m_pt2.loc-pRoad->m_pt1.loc;
-	Vector2 roadNormal(-roadVector.Y, roadVector.X);
+	Engine::Math::Vector2 roadVector = pRoad->m_pt2.loc-pRoad->m_pt1.loc;
+	Engine::Math::Vector2 roadNormal(-roadVector.y, roadVector.x);
 //	Real roadLen = roadVector.Length();
 
 	Real uOffset = 0.0f;
 	Real vOffset = (85.0f/512.0f);
 
 	Real roadHeight = pRoad->m_widthInTexture*pRoad->m_scale/2.0f;
-	roadNormal.Normalize();
+	roadNormal = roadNormal.Normalized_Legacy();
 	roadNormal *= roadHeight;
 
-	Vector2 corners[NUM_CORNERS];
+	Engine::Math::Vector2 corners[NUM_CORNERS];
 	corners[bottomLeft] = pRoad->m_pt1.bottom;
 	corners[topLeft] = pRoad->m_pt1.top;
 	corners[bottomRight] = pRoad->m_pt2.bottom;
@@ -1225,7 +1256,7 @@ void W3DRoadBuffer::loadRoadsInVertexAndIndexBuffers()
 	this->m_roadTypes[m_curRoadType].setNumIndices(m_curNumRoadIndices);
     if (!m_roadTypes[m_curRoadType].uploadGeometry()) {
         m_roadTypes[m_curRoadType].setNumIndices(0);
-        DEBUG_LOG(("Road geometry upload failed.\n"));
+        engine::debug::log_info("Road geometry upload failed.\n");
     }
 }
 
@@ -1247,21 +1278,21 @@ Bool W3DRoadBuffer::visibilityChanged(const IRegion2D &bounds)
 		Bool newVis = true;
 		Real halfScale = m_roads[curRoad].m_scale/2;
 		// Throw out segs out of view.
-		if (m_roads[curRoad].m_pt1.loc.X + halfScale < bounds.lo.x &&
-			m_roads[curRoad].m_pt2.loc.X + halfScale < bounds.lo.x) {
+		if (m_roads[curRoad].m_pt1.loc.x + halfScale < bounds.lo.x &&
+			m_roads[curRoad].m_pt2.loc.x + halfScale < bounds.lo.x) {
 			newVis = false;
 		}
-		if (m_roads[curRoad].m_pt1.loc.X - halfScale > bounds.hi.x &&
-			m_roads[curRoad].m_pt2.loc.X - halfScale > bounds.hi.x) {
+		if (m_roads[curRoad].m_pt1.loc.x - halfScale > bounds.hi.x &&
+			m_roads[curRoad].m_pt2.loc.x - halfScale > bounds.hi.x) {
 			newVis = false;
 		}
 		// Throw out segs out of view.
-		if (m_roads[curRoad].m_pt1.loc.Y + halfScale < bounds.lo.y &&
-			m_roads[curRoad].m_pt2.loc.Y + halfScale < bounds.lo.y) {
+		if (m_roads[curRoad].m_pt1.loc.y + halfScale < bounds.lo.y &&
+			m_roads[curRoad].m_pt2.loc.y + halfScale < bounds.lo.y) {
 			newVis = false;
 		}
-		if (m_roads[curRoad].m_pt1.loc.Y - halfScale > bounds.hi.y &&
-			m_roads[curRoad].m_pt2.loc.Y - halfScale > bounds.hi.y) {
+		if (m_roads[curRoad].m_pt1.loc.y - halfScale > bounds.hi.y &&
+			m_roads[curRoad].m_pt2.loc.y - halfScale > bounds.hi.y) {
 			newVis = false;
 		}
 		if (newVis != curVis) {
@@ -1310,7 +1341,7 @@ void W3DRoadBuffer::moveRoadSegTo(Int fromNdx, Int toNdx)
 {
 	if (fromNdx<0 || fromNdx>=m_numRoads || toNdx<0 || toNdx>=m_numRoads) {
 #ifdef RTS_DEBUG
-		DEBUG_LOG(("bad moveRoadSegTo"));
+		engine::debug::log_info("bad moveRoadSegTo");
 #endif
 		return;
 	}
@@ -1341,11 +1372,11 @@ void W3DRoadBuffer::checkLinkBefore(Int ndx)
 		return;
 	}
 
-	Vector2 loc2 = m_roads[ndx].m_pt2.loc;
+	Engine::Math::Vector2 loc2 = m_roads[ndx].m_pt2.loc;
 #ifdef RTS_DEBUG
-	DEBUG_ASSERTLOG(m_roads[ndx].m_pt1.loc == m_roads[ndx+1].m_pt2.loc, ("Bad link"));
+	if (!(m_roads[ndx].m_pt1.loc == m_roads[ndx+1].m_pt2.loc)) engine::debug::log_error("Bad link");
 	if (ndx>0) {
-		DEBUG_ASSERTLOG(m_roads[ndx].m_pt2.loc != m_roads[ndx-1].m_pt1.loc, ("Bad Link"));
+		if (!(m_roads[ndx].m_pt2.loc != m_roads[ndx-1].m_pt1.loc)) engine::debug::log_error("Bad Link");
 	}
 #endif
 
@@ -1360,7 +1391,7 @@ void W3DRoadBuffer::checkLinkBefore(Int ndx)
 	while (checkNdx < m_numRoads) {
 		if (m_roads[checkNdx].m_pt1.loc == loc2) {
 #ifdef RTS_DEBUG
-			DEBUG_ASSERTLOG(m_roads[checkNdx].m_pt1.count==1, ("Bad count"));
+			if (!(m_roads[checkNdx].m_pt1.count==1)) engine::debug::log_error("Bad count");
 #endif
 			moveRoadSegTo(checkNdx, ndx);
 			loc2 = m_roads[ndx].m_pt2.loc;
@@ -1368,7 +1399,7 @@ void W3DRoadBuffer::checkLinkBefore(Int ndx)
 			endOfCurSeg++;
 		} else if (m_roads[checkNdx].m_pt2.loc == loc2) {
 #ifdef RTS_DEBUG
-			DEBUG_ASSERTLOG(m_roads[checkNdx].m_pt2.count==1, ("Bad count"));
+			if (!(m_roads[checkNdx].m_pt2.count==1)) engine::debug::log_error("Bad count");
 #endif
 			flipTheRoad(&m_roads[checkNdx]);
 			moveRoadSegTo(checkNdx, ndx);
@@ -1400,16 +1431,16 @@ void W3DRoadBuffer::checkLinkAfter(Int ndx)
 		return;
 	}
 
-	Vector2 loc1 = m_roads[ndx].m_pt1.loc;
+	Engine::Math::Vector2 loc1 = m_roads[ndx].m_pt1.loc;
 #ifdef RTS_DEBUG
-	DEBUG_ASSERTLOG(m_roads[ndx].m_pt2.loc == m_roads[ndx-1].m_pt1.loc, ("Bad link"));
+	if (!(m_roads[ndx].m_pt2.loc == m_roads[ndx-1].m_pt1.loc)) engine::debug::log_error("Bad link");
 #endif
 
 	Int checkNdx = ndx+1;
 	while (checkNdx < m_numRoads && ndx < m_numRoads-1) {
 		if (m_roads[checkNdx].m_pt2.loc == loc1) {
 #ifdef RTS_DEBUG
-			DEBUG_ASSERTLOG(m_roads[checkNdx].m_pt2.count==1, ("Bad count"));
+			if (!(m_roads[checkNdx].m_pt2.count==1)) engine::debug::log_error("Bad count");
 #endif
 			ndx++;
 			moveRoadSegTo(checkNdx, ndx);
@@ -1417,7 +1448,7 @@ void W3DRoadBuffer::checkLinkAfter(Int ndx)
 			if (m_roads[ndx].m_pt1.count != 1) return;
 		} else if (m_roads[checkNdx].m_pt1.loc == loc1) {
 #ifdef RTS_DEBUG
-			DEBUG_ASSERTLOG(m_roads[checkNdx].m_pt1.count==1, ("Wrong m_pt1.count."));
+			if (!(m_roads[checkNdx].m_pt1.count==1)) engine::debug::log_error("Wrong m_pt1.count.");
 #endif
 			flipTheRoad(&m_roads[checkNdx]);
 			ndx++;
@@ -1432,7 +1463,7 @@ void W3DRoadBuffer::checkLinkAfter(Int ndx)
 }
 
 static Bool warnSegments = true;
-#define CHECK_SEGMENTS {if (m_numRoads >= m_maxRoadSegments) { if (warnSegments) DEBUG_LOG(("****** Too many road segments.  Need to increase ini values.  See john a.")); warnSegments = false; return;}}
+#define CHECK_SEGMENTS {if (m_numRoads >= m_maxRoadSegments) { if (warnSegments) engine::debug::log_info("****** Too many road segments.  Need to increase ini values.  See john a."); warnSegments = false; return;}}
 
 //=============================================================================
 // W3DRoadBuffer::addMapObject
@@ -1443,12 +1474,12 @@ void W3DRoadBuffer::addMapObject(RoadSegment *pRoad, Bool updateTheCounts)
 {
 
 	RoadSegment cur = *pRoad;
-	Vector2 loc1, loc2;
+	Engine::Math::Vector2 loc1, loc2;
 	loc1 = cur.m_pt1.loc;
 	loc2 = cur.m_pt2.loc;
- 	Vector2 roadVector(loc2.X-loc1.X, loc2.Y-loc1.Y);
-	Vector2 roadNormal(-roadVector.Y, roadVector.X);
-	roadNormal.Normalize();
+	Engine::Math::Vector2 roadVector(loc2.x-loc1.x, loc2.y-loc1.y);
+	Engine::Math::Vector2 roadNormal(-roadVector.y, roadVector.x);
+	roadNormal = roadNormal.Normalized_Legacy();
 	roadNormal *= (cur.m_scale*cur.m_widthInTexture/2.0f);
 	cur.m_pt1.top = loc1+roadNormal;
 	cur.m_pt1.bottom = loc1 - roadNormal;
@@ -1537,15 +1568,15 @@ void W3DRoadBuffer::addMapObjects()
 		if (pMapObj->getFlag(FLAG_ROAD_POINT1)) {
 			pMapObj2 = pMapObj->getNext();
 #ifdef RTS_DEBUG
-			DEBUG_ASSERTLOG(pMapObj2 && pMapObj2->getFlag(FLAG_ROAD_POINT2), ("Bad Flag"));
+			if (!(pMapObj2 && pMapObj2->getFlag(FLAG_ROAD_POINT2))) engine::debug::log_error("Bad Flag");
 #endif
 			if (pMapObj2==nullptr) break;
 			if (!pMapObj2->getFlag(FLAG_ROAD_POINT2)) continue;
-			Vector2 loc1, loc2;
-			loc1.Set(pMapObj->getLocation()->x, pMapObj->getLocation()->y);
-			loc2.Set(pMapObj2->getLocation()->x, pMapObj2->getLocation()->y);
-			if (loc1.X==loc2.X && loc1.Y==loc2.Y) {
-				loc2.X += 0.25;
+			Engine::Math::Vector2 loc1, loc2;
+			loc1= {pMapObj->getLocation()->x, pMapObj->getLocation()->y};
+			loc2= {pMapObj2->getLocation()->x, pMapObj2->getLocation()->y};
+			if (loc1.x==loc2.x && loc1.y==loc2.y) {
+				loc2.x += 0.25;
 			}
 			RoadSegment	curRoad;
 			curRoad.m_scale = DEFAULT_ROAD_SCALE;
@@ -1616,7 +1647,7 @@ void W3DRoadBuffer::updateCounts(RoadSegment *pRoad)
 	pRoad->m_pt2.multi = false;
 	pRoad->m_pt1.count = 0;
 	pRoad->m_pt2.count = 0;
-	Vector2 loc1, loc2;
+	Engine::Math::Vector2 loc1, loc2;
 	loc1 = pRoad->m_pt1.loc;
 	loc2 = pRoad->m_pt2.loc;
 	Int i;
@@ -1663,7 +1694,7 @@ void W3DRoadBuffer::updateCountsAndFlags()
 		m_roads[i].m_pt2.count = 0;
 	}
 	for (j=m_numRoads-1; j>0; j--) {
-		Vector2 loc1, loc2;
+		Engine::Math::Vector2 loc1, loc2;
 		loc1 = m_roads[j].m_pt1.loc;
 		loc2 = m_roads[j].m_pt2.loc;
 		for (i=0; i<j; i++) {
@@ -1700,7 +1731,7 @@ void W3DRoadBuffer::updateCountsAndFlags()
 //=============================================================================
 /** Inserts a Tee intersection. */
 //=============================================================================
-void W3DRoadBuffer::insertTee(Vector2 loc, Int index1, Real scale)
+void W3DRoadBuffer::insertTee(Engine::Math::Vector2 loc, Int index1, Real scale)
 {
 
 	if (insertY(loc,index1, scale)) {
@@ -1759,15 +1790,15 @@ void W3DRoadBuffer::insertTee(Vector2 loc, Int index1, Real scale)
 		return;
 	}
 
-	Vector2 v1 = pr1->loc - loc;
-	v1.Normalize();
-	Vector2 v2 = pr2->loc - loc;
-	v2.Normalize();
-	Vector2 v3 = pr3->loc - loc;
-	v3.Normalize();
-	Real dot12 = v1.Dot_Product(v1, v2);
-	Real dot13 = v1.Dot_Product(v1, v3);
-	Real dot32 = v1.Dot_Product(v3, v2);
+	Engine::Math::Vector2 v1 = pr1->loc - loc;
+	v1 = v1.Normalized_Legacy();
+	Engine::Math::Vector2 v2 = pr2->loc - loc;
+	v2 = v2.Normalized_Legacy();
+	Engine::Math::Vector2 v3 = pr3->loc - loc;
+	v3 = v3.Normalized_Legacy();
+	Real dot12 = v1.Dot(v2);
+	Real dot13 = v1.Dot(v3);
+	Real dot32 = v3.Dot(v2);
 	// The greatest negative dot product is the pair that is heading most opposite each other.
 	Bool do12 = false;
 	Bool do13 = false;
@@ -1787,8 +1818,8 @@ void W3DRoadBuffer::insertTee(Vector2 loc, Int index1, Real scale)
 		}
 	}
 
-	Vector2 upVector;
-	Vector2 decider;
+	Engine::Math::Vector2 upVector;
+	Engine::Math::Vector2 decider;
 	if (do12) {
 		upVector = v2-v1;
 		decider = v3;
@@ -1801,25 +1832,25 @@ void W3DRoadBuffer::insertTee(Vector2 loc, Int index1, Real scale)
 		upVector = v2-v3;
 		decider = v1;
 	}
-	upVector.Normalize();
+	upVector = upVector.Normalized_Legacy();
 
 
 	// Check to see if the Tee side is slanted.
 	const Real cos60 = 0.5f;
-	Real dot = fabs(Vector2::Dot_Product(upVector, decider));
+	Real dot = fabs((upVector).Dot(decider));
 	if (dot > cos60) {
 		// The arm of the tee is slanted, so do a slant tee.
 		Real angle = (PI/2); // 90 degrees.
-		Real xpdct = Vector3::Cross_Product_Z(Vector3(upVector.X,upVector.Y,0), Vector3(decider.X, decider.Y,0));
+		Real xpdct = upVector.x * decider.y - upVector.y * decider.x;
 		Bool mirror = false;
 		if (xpdct<0) {
 			angle = -angle;
 			mirror = true;
 		}
-		upVector.Normalize();
+		upVector = upVector.Normalized_Legacy();
 		upVector *= 0.5*scale; // we are offseting one half road width.
-		Vector2 teeVector(upVector);
-		teeVector.Rotate(angle);
+		Engine::Math::Vector2 teeVector(upVector);
+		teeVector = teeVector.Rotated(angle);
 
 		Bool flip;
 		if (do12) {
@@ -1844,8 +1875,8 @@ void W3DRoadBuffer::insertTee(Vector2 loc, Int index1, Real scale)
 		pc3->count = 0;
 
 		CHECK_SEGMENTS;
-		m_roads[m_numRoads].m_pt1.loc.Set(loc);
-		m_roads[m_numRoads].m_pt2.loc.Set(loc+teeVector);
+		m_roads[m_numRoads].m_pt1.loc= loc;
+		m_roads[m_numRoads].m_pt2.loc= loc+teeVector;
 		m_roads[m_numRoads].m_pt1.last = true; // if not, that one will clear flag in prior loop.
 		m_roads[m_numRoads].m_pt2.last = true; // if not, that one will clear flag in prior loop.
 		m_roads[m_numRoads].m_scale = m_roads[index1].m_scale;
@@ -1857,12 +1888,12 @@ void W3DRoadBuffer::insertTee(Vector2 loc, Int index1, Real scale)
 	} else {
 		// Do a not slanted tee.
 		Real angle = (PI/2); // 90 degrees.
-		Real xpdct = Vector3::Cross_Product_Z(Vector3(upVector.X,upVector.Y,0), Vector3(decider.X, decider.Y,0));
+		Real xpdct = Cross2D(upVector, decider);
 		if (xpdct<0) angle = -angle;
-		upVector.Normalize();
+		upVector = upVector.Normalized_Legacy();
 		upVector *= 0.5*scale; // we are offseting one half road width.
-		Vector2 teeVector(upVector);
-		teeVector.Rotate(angle);
+		Engine::Math::Vector2 teeVector(upVector);
+		teeVector = teeVector.Rotated(angle);
 
 		if (do12) {
 			offset3Way(pc1, pc2, pc3, loc, upVector, teeVector, m_roads[index1].m_widthInTexture);
@@ -1881,8 +1912,8 @@ void W3DRoadBuffer::insertTee(Vector2 loc, Int index1, Real scale)
 		pc3->count = 0;
 
 		CHECK_SEGMENTS;
-		m_roads[m_numRoads].m_pt1.loc.Set(loc);
-		m_roads[m_numRoads].m_pt2.loc.Set(loc+teeVector);
+		m_roads[m_numRoads].m_pt1.loc= loc;
+		m_roads[m_numRoads].m_pt2.loc= loc+teeVector;
 		m_roads[m_numRoads].m_pt1.last = true; // if not, that one will clear flag in prior loop.
 		m_roads[m_numRoads].m_pt2.last = true; // if not, that one will clear flag in prior loop.
 		m_roads[m_numRoads].m_scale = m_roads[index1].m_scale;
@@ -1899,7 +1930,7 @@ void W3DRoadBuffer::insertTee(Vector2 loc, Int index1, Real scale)
 //=============================================================================
 /** Inserts a Y intersection if the corner meets "Y" criteria. */
 //=============================================================================
-Bool W3DRoadBuffer::insertY(Vector2 loc, Int index1, Real scale)
+Bool W3DRoadBuffer::insertY(Engine::Math::Vector2 loc, Int index1, Real scale)
 {
 	// pr1-3 point to the points on the segments that form the tee.
 	// They are the points on the segments that are != loc.
@@ -1953,20 +1984,20 @@ Bool W3DRoadBuffer::insertY(Vector2 loc, Int index1, Real scale)
 		return false;
 	}
 
-	Vector2 v1 = pr1->loc - loc;
-	v1.Normalize();
-	Vector2 v2 = pr2->loc - loc;
-	v2.Normalize();
-	Vector2 v3 = pr3->loc - loc;
-	v3.Normalize();
+	Engine::Math::Vector2 v1 = pr1->loc - loc;
+	v1 = v1.Normalized_Legacy();
+	Engine::Math::Vector2 v2 = pr2->loc - loc;
+	v2 = v2.Normalized_Legacy();
+	Engine::Math::Vector2 v3 = pr3->loc - loc;
+	v3 = v3.Normalized_Legacy();
 
 	Bool do12 = false;
 	Bool do13 = false;
 	Bool do32 = false;
 
-	Real dot12 = v1.Dot_Product(v1, v2);
-	Real dot13 = v1.Dot_Product(v1, v3);
-	Real dot32 = v1.Dot_Product(v3, v2);
+	Real dot12 = v1.Dot(v2);
+	Real dot13 = v1.Dot(v3);
+	Real dot32 = v3.Dot(v2);
 	Real score12 = 2.0f;
 	Real score13 = 2.0f;
 	Real score32 = 2.0f;
@@ -1986,7 +2017,7 @@ Bool W3DRoadBuffer::insertY(Vector2 loc, Int index1, Real scale)
 	Int s3 = xpSign(v1, v3);
 
 	if (s2!=s3 && (s2+s3==0)) {
-		Vector2 v1_90(-v1.Y, v1.X);
+		Engine::Math::Vector2 v1_90(-v1.y, v1.x);
 		if (xpSign(v1_90, v2) == 1 && xpSign(v1_90, v3) == 1) {
 			// s2 & s3 could be Y legs.
 			do32 = true;
@@ -1998,7 +2029,7 @@ Bool W3DRoadBuffer::insertY(Vector2 loc, Int index1, Real scale)
 	s2 = xpSign(v3, v2);
 	if (s2!=s1 && (s2+s1==0)) {
 		// s2 & s3 could be Y legs.
-		Vector2 v3_90(-v3.Y, v3.X);
+		Engine::Math::Vector2 v3_90(-v3.y, v3.x);
 		if (xpSign(v3_90, v2) == 1 && xpSign(v3_90, v1) == 1) {
 			do12 = true;
 			score12 = fabs(dot13+cos45) + fabs(dot32+cos45);
@@ -2009,7 +2040,7 @@ Bool W3DRoadBuffer::insertY(Vector2 loc, Int index1, Real scale)
 	s3 = xpSign(v2, v3);
 	if (s3!=s1 && (s3+s1==0)) {
 		// s2 & s3 could be Y legs.
-		Vector2 v2_90(-v2.Y, v2.X);
+		Engine::Math::Vector2 v2_90(-v2.y, v2.x);
 		if (xpSign(v2_90, v3) == 1 && xpSign(v2_90, v1) == 1) {
 			do13 = true;
 			score13 = fabs(dot12+cos45) + fabs(dot32+cos45);
@@ -2033,7 +2064,7 @@ Bool W3DRoadBuffer::insertY(Vector2 loc, Int index1, Real scale)
 	}
 
 
-	Vector2 upVector;
+	Engine::Math::Vector2 upVector;
 	if (do12) {
 		upVector = v3;
 	} else if (do13) {
@@ -2045,10 +2076,10 @@ Bool W3DRoadBuffer::insertY(Vector2 loc, Int index1, Real scale)
 	}
 
 	Real angle = -(PI/2); // -90 degrees.
-	upVector.Normalize();
+	upVector = upVector.Normalized_Legacy();
 	upVector *= 0.5*scale; // we are offseting one half road width.
-	Vector2 teeVector(upVector);
-	teeVector.Rotate(angle);
+	Engine::Math::Vector2 teeVector(upVector);
+	teeVector = teeVector.Rotated(angle);
 
 	// Offset the ends of the road to meet the stumps of the y.
 	if (do12) {
@@ -2081,8 +2112,8 @@ Bool W3DRoadBuffer::insertY(Vector2 loc, Int index1, Real scale)
 	pc3->count = 0;
 
 	if (m_numRoads >= m_maxRoadSegments) return false;
-	m_roads[m_numRoads].m_pt1.loc.Set(loc);
-	m_roads[m_numRoads].m_pt2.loc.Set(loc+teeVector);
+	m_roads[m_numRoads].m_pt1.loc= loc;
+	m_roads[m_numRoads].m_pt2.loc= loc+teeVector;
 	m_roads[m_numRoads].m_pt1.last = true; // if not, that one will clear flag in prior loop.
 	m_roads[m_numRoads].m_pt2.last = true; // if not, that one will clear flag in prior loop.
 	m_roads[m_numRoads].m_scale = m_roads[index1].m_scale;
@@ -2104,8 +2135,8 @@ Bool W3DRoadBuffer::insertY(Vector2 loc, Int index1, Real scale)
 /** Offsets the points coming into a 3 way intersection so that they move to
 the join points of the 3 way intersection. */
 //=============================================================================
-void W3DRoadBuffer::offset3Way(TRoadPt *pc1, TRoadPt *pc2, TRoadPt *pc3, Vector2 loc, Vector2 upVector,
-															 Vector2 teeVector, Real widthInTexture)
+void W3DRoadBuffer::offset3Way(TRoadPt *pc1, TRoadPt *pc2, TRoadPt *pc3, Engine::Math::Vector2 loc, Engine::Math::Vector2 upVector,
+															 Engine::Math::Vector2 teeVector, Real widthInTexture)
 {
 	pc1->loc = loc - upVector;
 	pc2->loc = loc + upVector;
@@ -2114,15 +2145,15 @@ void W3DRoadBuffer::offset3Way(TRoadPt *pc1, TRoadPt *pc2, TRoadPt *pc3, Vector2
 	// Adjust the top & bottoms, so they merge smoothly into the tee.
 
 	// Make sure the t vector goes right with respect to the up vector.
-	Real xpdct = Vector3::Cross_Product_Z(Vector3(upVector.X,upVector.Y,0), Vector3(teeVector.X, teeVector.Y,0));
-	Vector2 rightTee = teeVector;
+	Real xpdct = Cross2D(upVector, teeVector);
+	Engine::Math::Vector2 rightTee = teeVector;
 	if (xpdct<0) {
-		rightTee.X = -teeVector.X;
-		rightTee.Y = -teeVector.Y;
+		rightTee.x = -teeVector.x;
+		rightTee.y = -teeVector.y;
 	}
 	rightTee *= (widthInTexture);
 
-	xpdct = Vector3::Cross_Product_Z(Vector3(upVector.X, upVector.Y, 0), Vector3(pc1->top.X-pc1->loc.X, pc1->top.Y-pc1->loc.Y,0));
+	xpdct = Cross2D(upVector, pc1->top - pc1->loc);
 	if (xpdct>0) {
 		pc1->bottom = pc1->loc - rightTee;
 		pc1->top = pc1->loc + rightTee;
@@ -2130,7 +2161,7 @@ void W3DRoadBuffer::offset3Way(TRoadPt *pc1, TRoadPt *pc2, TRoadPt *pc3, Vector2
 		pc1->bottom = pc1->loc + rightTee;
 		pc1->top = pc1->loc - rightTee;
 	}
-	xpdct = Vector3::Cross_Product_Z(Vector3(upVector.X, upVector.Y, 0), Vector3(pc2->top.X-pc2->loc.X, pc2->top.Y-pc2->loc.Y,0));
+	xpdct = Cross2D(upVector, pc2->top - pc2->loc);
 	if (xpdct>0) {
 		pc2->bottom = pc2->loc - rightTee;
 		pc2->top = pc2->loc + rightTee;
@@ -2139,7 +2170,7 @@ void W3DRoadBuffer::offset3Way(TRoadPt *pc1, TRoadPt *pc2, TRoadPt *pc3, Vector2
 		pc2->top = pc2->loc - rightTee;
 	}
 	upVector *= (widthInTexture);
-	xpdct = Vector3::Cross_Product_Z(Vector3(rightTee.X, rightTee.Y, 0), Vector3(pc3->top.X-pc3->loc.X, pc3->top.Y-pc3->loc.Y,0));
+	xpdct = Cross2D(rightTee, pc3->top - pc3->loc);
 	if (xpdct<0) {
 		pc3->bottom = pc3->loc - upVector;
 		pc3->top = pc3->loc + upVector;
@@ -2155,8 +2186,8 @@ void W3DRoadBuffer::offset3Way(TRoadPt *pc1, TRoadPt *pc2, TRoadPt *pc3, Vector2
 /** Offsets the points coming into a 3 way intersection so that they move to
 the join points of the 3 way intersection. */
 //=============================================================================
-void W3DRoadBuffer::offsetH(TRoadPt *pc1, TRoadPt *pc2, TRoadPt *pc3, Vector2 loc,
-														Vector2 upVector, Vector2 teeVector,
+void W3DRoadBuffer::offsetH(TRoadPt *pc1, TRoadPt *pc2, TRoadPt *pc3, Engine::Math::Vector2 loc,
+														Engine::Math::Vector2 upVector, Engine::Math::Vector2 teeVector,
 														Bool flip, Bool mirror, Real widthInTexture)
 {
 
@@ -2172,15 +2203,15 @@ void W3DRoadBuffer::offsetH(TRoadPt *pc1, TRoadPt *pc2, TRoadPt *pc3, Vector2 lo
 	// Adjust the top & bottoms, so they merge smoothly into the tee.
 
 	// Make sure the t vector goes right with respect to the up vector.
-	Real xpdct = Vector3::Cross_Product_Z(Vector3(upVector.X,upVector.Y,0), Vector3(teeVector.X, teeVector.Y,0));
-	Vector2 rightTee = teeVector;
+	Real xpdct = Cross2D(upVector, teeVector);
+	Engine::Math::Vector2 rightTee = teeVector;
 	if (xpdct<0) {
-		rightTee.X = -teeVector.X;
-		rightTee.Y = -teeVector.Y;
+		rightTee.x = -teeVector.x;
+		rightTee.y = -teeVector.y;
 	}
 	rightTee *= (widthInTexture);
 
-	xpdct = Vector3::Cross_Product_Z(Vector3(upVector.X, upVector.Y, 0), Vector3(pc1->top.X-pc1->loc.X, pc1->top.Y-pc1->loc.Y,0));
+	xpdct = Cross2D(upVector, pc1->top - pc1->loc);
 	if (xpdct>0) {
 		pc1->bottom = pc1->loc - rightTee;
 		pc1->top = pc1->loc + rightTee;
@@ -2188,7 +2219,7 @@ void W3DRoadBuffer::offsetH(TRoadPt *pc1, TRoadPt *pc2, TRoadPt *pc3, Vector2 lo
 		pc1->bottom = pc1->loc + rightTee;
 		pc1->top = pc1->loc - rightTee;
 	}
-	xpdct = Vector3::Cross_Product_Z(Vector3(upVector.X, upVector.Y, 0), Vector3(pc2->top.X-pc2->loc.X, pc2->top.Y-pc2->loc.Y,0));
+	xpdct = Cross2D(upVector, pc2->top - pc2->loc);
 	if (xpdct>0) {
 		pc2->bottom = pc2->loc - rightTee;
 		pc2->top = pc2->loc + rightTee;
@@ -2198,13 +2229,13 @@ void W3DRoadBuffer::offsetH(TRoadPt *pc1, TRoadPt *pc2, TRoadPt *pc3, Vector2 lo
 	}
 
 
-	Vector2 arm = teeVector;
+	Engine::Math::Vector2 arm = teeVector;
 	if (flip) {
-		arm.Rotate(PI/4);
+		arm = arm.Rotated(PI/4);
 	} else {
-		arm.Rotate(-PI/4);
+		arm = arm.Rotated(-PI/4);
 	}
-	Vector2 armNormal(-arm.Y, arm.X);
+	Engine::Math::Vector2 armNormal(-arm.y, arm.x);
 	armNormal *= widthInTexture;
 
 	pc3->loc += arm*2.10f;
@@ -2227,7 +2258,7 @@ void W3DRoadBuffer::offsetH(TRoadPt *pc1, TRoadPt *pc2, TRoadPt *pc3, Vector2 lo
 /** Offsets the points coming into a 3 way intersection so that they move to
 the join points of the 3 way intersection. */
 //=============================================================================
-void W3DRoadBuffer::offsetY(TRoadPt *pc1, TRoadPt *pc2, TRoadPt *pc3, Vector2 loc, Vector2 upVector,
+void W3DRoadBuffer::offsetY(TRoadPt *pc1, TRoadPt *pc2, TRoadPt *pc3, Engine::Math::Vector2 loc, Engine::Math::Vector2 upVector,
 															 Real widthInTexture)
 {
 	pc3->loc += upVector*0.55f;
@@ -2237,9 +2268,9 @@ void W3DRoadBuffer::offsetY(TRoadPt *pc1, TRoadPt *pc2, TRoadPt *pc3, Vector2 lo
 	// Adjust the bottom, so they merge smoothly into the tee.
 
 	// Make sure the t vector goes right with respect to the up vector.
-	Vector2 arm = upVector;
-	arm.Rotate(3*PI/4);
-	Vector2 armNormal(-arm.Y, arm.X);
+	Engine::Math::Vector2 arm = upVector;
+	arm = arm.Rotated(3*PI/4);
+	Engine::Math::Vector2 armNormal(-arm.y, arm.x);
 	armNormal *= widthInTexture;
 	pc2->loc += arm*1.1f;
 	Int xpdct = xpSign(arm, pc2->top-loc);
@@ -2252,8 +2283,8 @@ void W3DRoadBuffer::offsetY(TRoadPt *pc1, TRoadPt *pc2, TRoadPt *pc3, Vector2 lo
 	}
 
 	arm = upVector;
-	arm.Rotate(-3*PI/4);
-	armNormal.Set(-arm.Y, arm.X);
+	arm = arm.Rotated(-3*PI/4);
+	armNormal= {-arm.y, arm.x};
 	armNormal *= widthInTexture;
 
 	pc1->loc += arm*1.1f;
@@ -2274,28 +2305,28 @@ void W3DRoadBuffer::offsetY(TRoadPt *pc1, TRoadPt *pc2, TRoadPt *pc3, Vector2 lo
 the join points of the 4 way intersection. */
 //=============================================================================
 void W3DRoadBuffer::offset4Way(TRoadPt *pc1, TRoadPt *pc2, TRoadPt *pc3, TRoadPt *pr3,
-															 TRoadPt *pc4, Vector2 loc, Vector2 alignVector, Real widthInTexture)
+															 TRoadPt *pc4, Engine::Math::Vector2 loc, Engine::Math::Vector2 alignVector, Real widthInTexture)
 {
 	pc1->loc = loc - alignVector;
 	pc2->loc = loc + alignVector;
 
-	Vector2 v3 = pr3->loc - loc;
+	Engine::Math::Vector2 v3 = pr3->loc - loc;
 	Real angle = (PI/2); // 90 degrees.
-	Real xpdct = Vector3::Cross_Product_Z(Vector3(alignVector.X,alignVector.Y,0), Vector3(v3.X, v3.Y,0));
+	Real xpdct = Cross2D(alignVector, v3);
 	if (xpdct<0) angle = -angle;
-	Vector2 teeVector(alignVector);
-	teeVector.Rotate(angle);
+	Engine::Math::Vector2 teeVector(alignVector);
+	teeVector = teeVector.Rotated(angle);
 	pc3->loc = loc + teeVector;
 	pc4->loc = loc - teeVector;
 
-	Vector2 realTee(alignVector);
-	realTee.Rotate(PI/2);
+	Engine::Math::Vector2 realTee(alignVector);
+	realTee = realTee.Rotated(PI/2);
 	realTee *= widthInTexture;
 
 	// Fix up the top & bottom points.
-	Vector3 align3(alignVector.X,alignVector.Y,0);
+	Engine::Math::Vector3 align3(alignVector.x,alignVector.y,0);
 
-	xpdct = Vector3::Cross_Product_Z(align3, Vector3(pc1->top.X-pc1->loc.X, pc1->top.Y-pc1->loc.Y,0));
+	xpdct = Cross2D({align3.x, align3.y}, pc1->top - pc1->loc);
 	if (xpdct>0) {
 		pc1->bottom = pc1->loc - realTee;
 		pc1->top = pc1->loc + realTee;
@@ -2303,7 +2334,7 @@ void W3DRoadBuffer::offset4Way(TRoadPt *pc1, TRoadPt *pc2, TRoadPt *pc3, TRoadPt
 		pc1->bottom = pc1->loc + realTee;
 		pc1->top = pc1->loc - realTee;
 	}
-	xpdct = Vector3::Cross_Product_Z(align3, Vector3(pc2->top.X-pc2->loc.X, pc2->top.Y-pc2->loc.Y,0));
+	xpdct = Cross2D({align3.x, align3.y}, pc2->top - pc2->loc);
 	if (xpdct>0) {
 		pc2->bottom = pc2->loc - realTee;
 		pc2->top = pc2->loc + realTee;
@@ -2313,8 +2344,8 @@ void W3DRoadBuffer::offset4Way(TRoadPt *pc1, TRoadPt *pc2, TRoadPt *pc3, TRoadPt
 	}
 	alignVector *= widthInTexture;
 
-	Vector3 tee3(realTee.X,realTee.Y,0);
-	xpdct = Vector3::Cross_Product_Z(tee3, Vector3(pc3->top.X-pc3->loc.X, pc3->top.Y-pc3->loc.Y,0));
+	Engine::Math::Vector3 tee3(realTee.x,realTee.y,0);
+	xpdct = Cross2D({tee3.x, tee3.y}, pc3->top - pc3->loc);
 	if (xpdct<0) {
 		pc3->bottom = pc3->loc - alignVector;
 		pc3->top = pc3->loc + alignVector;
@@ -2322,7 +2353,7 @@ void W3DRoadBuffer::offset4Way(TRoadPt *pc1, TRoadPt *pc2, TRoadPt *pc3, TRoadPt
 		pc3->bottom = pc3->loc + alignVector;
 		pc3->top = pc3->loc - alignVector;
 	}
-	xpdct = Vector3::Cross_Product_Z(tee3, Vector3(pc4->top.X-pc4->loc.X, pc4->top.Y-pc4->loc.Y,0));
+	xpdct = Cross2D({tee3.x, tee3.y}, pc4->top - pc4->loc);
 	if (xpdct<0) {
 		pc4->bottom = pc4->loc - alignVector;
 		pc4->top = pc4->loc + alignVector;
@@ -2347,7 +2378,7 @@ void W3DRoadBuffer::offset4Way(TRoadPt *pc1, TRoadPt *pc2, TRoadPt *pc3, TRoadPt
 //=============================================================================
 /** Inserts a 4 way intersection. */
 //=============================================================================
-void W3DRoadBuffer::insert4Way(Vector2 loc, Int index1, Real scale)
+void W3DRoadBuffer::insert4Way(Engine::Math::Vector2 loc, Int index1, Real scale)
 {
 	// pr1-4 point to the points on the segments that form the tee.
 	// They are the points on the segments that are != loc.
@@ -2403,21 +2434,21 @@ void W3DRoadBuffer::insert4Way(Vector2 loc, Int index1, Real scale)
 		return;
 	}
 
-	Vector2 v1 = pr1->loc - loc;
-	v1.Normalize();
-	Vector2 v2 = pr2->loc - loc;
-	v2.Normalize();
-	Vector2 v3 = pr3->loc - loc;
-	v3.Normalize();
-	Vector2 v4 = pr4->loc - loc;
-	v4.Normalize();
+	Engine::Math::Vector2 v1 = pr1->loc - loc;
+	v1 = v1.Normalized_Legacy();
+	Engine::Math::Vector2 v2 = pr2->loc - loc;
+	v2 = v2.Normalized_Legacy();
+	Engine::Math::Vector2 v3 = pr3->loc - loc;
+	v3 = v3.Normalized_Legacy();
+	Engine::Math::Vector2 v4 = pr4->loc - loc;
+	v4 = v4.Normalized_Legacy();
 
-	Real dot12 = v1.Dot_Product(v1, v2);
-	Real dot13 = v1.Dot_Product(v1, v3);
-	Real dot14 = v1.Dot_Product(v1, v4);
-	Real dot23 = v1.Dot_Product(v2, v3);
-	Real dot24 = v1.Dot_Product(v2, v4);
-	Real dot34 = v1.Dot_Product(v3, v4);
+	Real dot12 = v1.Dot(v2);
+	Real dot13 = v1.Dot(v3);
+	Real dot14 = v1.Dot(v4);
+	Real dot23 = v2.Dot(v3);
+	Real dot24 = v2.Dot(v4);
+	Real dot34 = v3.Dot(v4);
 	// The most negative dot product is the pair that is heading most opposite each other.
 
 	Int curPair = 12;
@@ -2449,7 +2480,7 @@ void W3DRoadBuffer::insert4Way(Vector2 loc, Int index1, Real scale)
 	Bool do24 = (curPair==24);
 	Bool do34 = (curPair==34);
 
-	Vector2 alignVector;
+	Engine::Math::Vector2 alignVector;
 	if (do12) {
 		alignVector = v2-v1;
 	}
@@ -2468,7 +2499,7 @@ void W3DRoadBuffer::insert4Way(Vector2 loc, Int index1, Real scale)
 	if (do34) {
 		alignVector = v4-v3;
 	}
-	alignVector.Normalize();
+	alignVector = alignVector.Normalized_Legacy();
 	alignVector *= 0.5*scale; // we are offseting one half road width.
 
 
@@ -2490,14 +2521,14 @@ void W3DRoadBuffer::insert4Way(Vector2 loc, Int index1, Real scale)
 	if (do34) {
 		offset4Way(pc3, pc4, pc1, pr1, pc2, loc, alignVector, m_roads[index1].m_widthInTexture);
 	}
-	if (alignVector.X<0) {
+	if (alignVector.x<0) {
 		// Since the 4 way intersection is symmetrical, make it go right (pos x)
-		alignVector.X = -alignVector.X;
-		alignVector.Y = -alignVector.Y;
+		alignVector.x = -alignVector.x;
+		alignVector.y = -alignVector.y;
 	}
 	CHECK_SEGMENTS;
-	m_roads[m_numRoads].m_pt1.loc.Set(loc);
-	m_roads[m_numRoads].m_pt2.loc.Set(loc+alignVector);
+	m_roads[m_numRoads].m_pt1.loc= loc;
+	m_roads[m_numRoads].m_pt2.loc= loc+alignVector;
 	m_roads[m_numRoads].m_pt1.last = true; // if not, that one will clear flag in prior loop.
 	m_roads[m_numRoads].m_pt2.last = true; // if not, that one will clear flag in prior loop.
 	m_roads[m_numRoads].m_scale = m_roads[index1].m_scale;
@@ -2576,9 +2607,9 @@ void W3DRoadBuffer::insertCurveSegments()
 //=============================================================================
 /** Finds a road segment of different type && sets the join vector. */
 //=============================================================================
-Int W3DRoadBuffer::findCrossTypeJoinVector(Vector2 loc, Vector2 *joinVector, Int uniqueID)
+Int W3DRoadBuffer::findCrossTypeJoinVector(Engine::Math::Vector2 loc, Engine::Math::Vector2 *joinVector, Int uniqueID)
 {
-	Vector2 newVector = *joinVector;
+	Engine::Math::Vector2 newVector = *joinVector;
 	// Insert the curve segments.
 	Int numRoadSegments = m_numRoads;
 	Int i;
@@ -2587,34 +2618,33 @@ Int W3DRoadBuffer::findCrossTypeJoinVector(Vector2 loc, Vector2 *joinVector, Int
 		if (m_roads[i].m_uniqueID == uniqueID) continue;
 		// Only join to straight line segments.
 		if (m_roads[i].m_type != SEGMENT) continue;
-		Vector2 loc1, loc2;
+		Engine::Math::Vector2 loc1, loc2;
 		loc1 = m_roads[i].m_pt1.loc;
 		loc2 = m_roads[i].m_pt2.loc;
 		Region2D bounds;
-		bounds.lo.x = loc1.X;
-		bounds.lo.y = loc1.Y;
+		bounds.lo.x = loc1.x;
+		bounds.lo.y = loc1.y;
 		bounds.hi = bounds.lo;
-		if (bounds.lo.x > loc2.X) bounds.lo.x = loc2.X;
-		if (bounds.lo.y > loc2.Y) bounds.lo.y = loc2.Y;
-		if (bounds.hi.x < loc2.X) bounds.hi.x = loc2.X;
-		if (bounds.hi.y < loc2.Y) bounds.hi.y = loc2.Y;
+		if (bounds.lo.x > loc2.x) bounds.lo.x = loc2.x;
+		if (bounds.lo.y > loc2.y) bounds.lo.y = loc2.y;
+		if (bounds.hi.x < loc2.x) bounds.hi.x = loc2.x;
+		if (bounds.hi.y < loc2.y) bounds.hi.y = loc2.y;
 		bounds.lo.x -= m_roads[i].m_scale/2;
 		bounds.lo.y -= m_roads[i].m_scale/2;
 		bounds.hi.x += m_roads[i].m_scale/2;
 		bounds.hi.y += m_roads[i].m_scale/2;
-		if (loc.X >= bounds.lo.x && loc.Y >= bounds.lo.y && loc.X <= bounds.hi.x && loc.Y <= bounds.hi.y) {
-			Vector3 v1 = Vector3(loc1.X, loc1.Y, 0);
-			Vector3 v2 = Vector3(loc2.X, loc2.Y, 0);
-			LineSegClass roadLine(v1,v2);
-			Vector3 vLoc(loc.X, loc.Y, 0);
-			Vector3 ptOnLine = roadLine.Find_Point_Closest_To(vLoc);
-			Real dist = Vector3::Distance(ptOnLine, vLoc);
+		if (loc.x >= bounds.lo.x && loc.y >= bounds.lo.y && loc.x <= bounds.hi.x && loc.y <= bounds.hi.y) {
+			Engine::Math::Vector3 v1 = Engine::Math::Vector3(loc1.x, loc1.y, 0);
+			Engine::Math::Vector3 v2 = Engine::Math::Vector3(loc2.x, loc2.y, 0);
+			Engine::Math::Vector3 vLoc(loc.x, loc.y, 0);
+			Engine::Math::Vector3 ptOnLine = Closest_Point_On_Segment(v1, v2, vLoc);
+			Real dist = (ptOnLine - vLoc).Length();
 			if (dist < m_roads[i].m_scale*0.55f) {
-				Vector2 roadVec = loc2-loc1;
+				Engine::Math::Vector2 roadVec = loc2-loc1;
 				if (xpSign(roadVec, *joinVector) == 1) {
-					roadVec.Rotate(PI/2);
+					roadVec = roadVec.Rotated(PI/2);
 				} else {
-					roadVec.Rotate(-PI/2);
+					roadVec = roadVec.Rotated(-PI/2);
 				}
 				newVector = roadVec;
 				*joinVector = newVector;
@@ -2638,13 +2668,13 @@ void W3DRoadBuffer::adjustStacking(Int topUniqueID, Int bottomUniqueID)
 	for (i=0; i<m_maxRoadTypes; i++) {
 		if (m_roadTypes[i].getUniqueID() == topUniqueID) break;
 	}
-	DEBUG_ASSERTLOG(i<m_maxRoadTypes, ("***** Wrong unique id- john a should fix."));
+	if (!(i<m_maxRoadTypes)) engine::debug::log_error("***** Wrong unique id- john a should fix.");
 	if (i>=m_maxRoadTypes) return;
 
 	for (j=0; j<m_maxRoadTypes; j++) {
 		if (m_roadTypes[j].getUniqueID() == bottomUniqueID) break;
 	}
-	DEBUG_ASSERTLOG(j<m_maxRoadTypes, ("***** Wrong unique id- john a should fix."));
+	if (!(j<m_maxRoadTypes)) engine::debug::log_error("***** Wrong unique id- john a should fix.");
 	if (j>=m_maxRoadTypes) return;
 
 	if (m_roadTypes[i].getStacking() > m_roadTypes[j].getStacking()) {
@@ -2672,7 +2702,7 @@ void W3DRoadBuffer::insertCrossTypeJoins()
 	Int numRoadSegments = m_numRoads;
 	Int i;
 	for (i=0; i<numRoadSegments; i++) {
-		Vector2 loc1, loc2;
+		Engine::Math::Vector2 loc1, loc2;
 		Bool isPt1 = false;
 		if ((m_roads[i].m_pt2.count==0 && m_roads[i].m_pt2.isJoin)) {
 			loc1 = m_roads[i].m_pt2.loc;
@@ -2685,57 +2715,60 @@ void W3DRoadBuffer::insertCrossTypeJoins()
 		}	else {
 			continue;
 		}
-		Vector2 joinVector(1, 0);
+		Engine::Math::Vector2 joinVector(1, 0);
 
 
-		Vector2 roadVector(loc2.X-loc1.X, loc2.Y-loc1.Y);
-		roadVector.Normalize();
+		Engine::Math::Vector2 roadVector(loc2.x-loc1.x, loc2.y-loc1.y);
+		roadVector = roadVector.Normalized_Legacy();
 		joinVector = roadVector;
 		Int otherID = findCrossTypeJoinVector(loc1, &joinVector, m_roads[i].m_uniqueID);
 		if (!otherID ) {
 			joinVector*=100;
 		}
-		Vector2 roadNormal(-roadVector.Y, roadVector.X);
-		Vector2 joinNormal(-joinVector.Y, joinVector.X);
+		Engine::Math::Vector2 roadNormal(-roadVector.y, roadVector.x);
+		Engine::Math::Vector2 joinNormal(-joinVector.y, joinVector.x);
 
 
-		Vector2 p1 = loc1 + roadNormal * m_roads[i].m_scale * m_roads[i].m_widthInTexture / 2;
-		Vector2 p2 = loc2 + roadNormal * m_roads[i].m_scale * m_roads[i].m_widthInTexture / 2;
+		Engine::Math::Vector2 p1 = loc1 + roadNormal * m_roads[i].m_scale * m_roads[i].m_widthInTexture / 2;
+		Engine::Math::Vector2 p2 = loc2 + roadNormal * m_roads[i].m_scale * m_roads[i].m_widthInTexture / 2;
 
-		Vector3 v1 = Vector3(p1.X, p1.Y, 0);
-		Vector3 v2 = Vector3(p2.X, p2.Y, 0);
-		LineSegClass roadLine(v1,v2);
-		Vector3 vLoc1(loc1.X, loc1.Y, 0);
-		v1 = Vector3(joinNormal.X, joinNormal.Y, 0)+vLoc1;
-		LineSegClass joinLine(vLoc1,v1);
-		Vector3 pInt1, pInt2;
-		//Vector3 pInt3, pInt4;
+	Engine::Math::Vector3 v1 = Engine::Math::Vector3(p1.x, p1.y, 0);
+	Engine::Math::Vector3 v2 = Engine::Math::Vector3(p2.x, p2.y, 0);
+	Engine::Math::Vector3 roadLineStart = v1;
+	Engine::Math::Vector3 roadLineEnd = v2;
+	Engine::Math::Vector3 vLoc1(loc1.x, loc1.y, 0);
+		v1 = Engine::Math::Vector3(joinNormal.x, joinNormal.y, 0)+vLoc1;
+		const Engine::Math::Vector3 joinLineStart = vLoc1;
+		const Engine::Math::Vector3 joinLineEnd = v1;
+		Engine::Math::Vector3 pInt1;
 
 
 
-		Real nu; // not used.
-		Vector2 top = m_roads[i].m_pt1.top;
-		if (joinLine.Find_Intersection(roadLine, &pInt1, &nu, &pInt2, &nu) ) {
+		Engine::Math::Vector2 top = m_roads[i].m_pt1.top;
+		if (const auto points = Closest_Points_On_Lines(joinLineStart, joinLineEnd, roadLineStart, roadLineEnd)) {
+			pInt1 = points->first;
 			if (isPt1) {
-				m_roads[i].m_pt1.top.Set(pInt1.X, pInt1.Y);
+				m_roads[i].m_pt1.top= {pInt1.x, pInt1.y};
 				top = m_roads[i].m_pt1.top;
 			}	else {
-				m_roads[i].m_pt2.bottom.Set(pInt1.X, pInt1.Y);
+				m_roads[i].m_pt2.bottom= {pInt1.x, pInt1.y};
 				top = m_roads[i].m_pt2.bottom;
 			}
 		}
 		p1 = loc1 - roadNormal * m_roads[i].m_scale * m_roads[i].m_widthInTexture / 2;
 		p2 = loc2 - roadNormal * m_roads[i].m_scale * m_roads[i].m_widthInTexture / 2;
-		v1.Set(p1.X, p1.Y, 0);
-		v2.Set(p2.X, p2.Y, 0);
-		roadLine.Set(v1,v2);
-		Vector2 bottom = m_roads[i].m_pt1.bottom;
-		if (joinLine.Find_Intersection(roadLine, &pInt1, &nu, &pInt2, &nu) ) {
+		v1= {p1.x, p1.y, 0};
+		v2= {p2.x, p2.y, 0};
+		roadLineStart = v1;
+		roadLineEnd = v2;
+		Engine::Math::Vector2 bottom = m_roads[i].m_pt1.bottom;
+		if (const auto points = Closest_Points_On_Lines(joinLineStart, joinLineEnd, roadLineStart, roadLineEnd)) {
+			pInt1 = points->first;
 			if (isPt1) {
-				m_roads[i].m_pt1.bottom.Set(pInt1.X, pInt1.Y);
+				m_roads[i].m_pt1.bottom= {pInt1.x, pInt1.y};
 				bottom = m_roads[i].m_pt1.bottom;
 			}	else {
-				m_roads[i].m_pt2.top.Set(pInt1.X, pInt1.Y);
+				m_roads[i].m_pt2.top= {pInt1.x, pInt1.y};
 				bottom = m_roads[i].m_pt2.top;
 			}
 		}
@@ -2746,8 +2779,8 @@ void W3DRoadBuffer::insertCrossTypeJoins()
 			adjustStacking(m_roads[i].m_uniqueID, otherID);
 		}
 		CHECK_SEGMENTS;
-		m_roads[m_numRoads].m_pt1.loc.Set(loc1);
-		m_roads[m_numRoads].m_pt2.loc.Set(loc1+joinVector);
+		m_roads[m_numRoads].m_pt1.loc = loc1;
+		m_roads[m_numRoads].m_pt2.loc= loc1+joinVector;
 		m_roads[m_numRoads].m_pt1.last = true; // if not, that one will clear flag in prior loop.
 		m_roads[m_numRoads].m_pt2.last = true; // if not, that one will clear flag in prior loop.
 		m_roads[m_numRoads].m_scale = m_roads[i].m_scale;
@@ -2768,31 +2801,36 @@ void W3DRoadBuffer::insertCrossTypeJoins()
 void W3DRoadBuffer::miter(Int ndx1, Int ndx2)
 {
 	// adjust a mitered join.  jba.
-	Vector3 p1 = Vector3(m_roads[ndx1].m_pt1.top.X, m_roads[ndx1].m_pt1.top.Y, 0);
-	Vector3 p2 = Vector3(m_roads[ndx1].m_pt2.top.X, m_roads[ndx1].m_pt2.top.Y, 0);
-	LineSegClass offsetLine1(p1, p2);
-	p1 = Vector3(m_roads[ndx2].m_pt1.top.X, m_roads[ndx2].m_pt1.top.Y, 0);
-	p2 = Vector3(m_roads[ndx2].m_pt2.top.X, m_roads[ndx2].m_pt2.top.Y, 0);
-	LineSegClass offsetLine2(p1,p2);
-	Vector3 pInt1, pInt2;
-	Real nu; // not used.
-	if (offsetLine1.Find_Intersection(offsetLine2, &pInt1, &nu, &pInt2, &nu) ) {
-		m_roads[ndx2].m_pt2.top.X = pInt1.X;
-		m_roads[ndx2].m_pt2.top.Y = pInt1.Y;
-		m_roads[ndx1].m_pt1.top.X = pInt1.X;
-		m_roads[ndx1].m_pt1.top.Y = pInt1.Y;
+	Engine::Math::Vector3 p1 = Engine::Math::Vector3(m_roads[ndx1].m_pt1.top.x, m_roads[ndx1].m_pt1.top.y, 0);
+	Engine::Math::Vector3 p2 = Engine::Math::Vector3(m_roads[ndx1].m_pt2.top.x, m_roads[ndx1].m_pt2.top.y, 0);
+	Engine::Math::Vector3 offsetLine1Start = p1;
+	Engine::Math::Vector3 offsetLine1End = p2;
+	p1 = Engine::Math::Vector3(m_roads[ndx2].m_pt1.top.x, m_roads[ndx2].m_pt1.top.y, 0);
+	p2 = Engine::Math::Vector3(m_roads[ndx2].m_pt2.top.x, m_roads[ndx2].m_pt2.top.y, 0);
+	Engine::Math::Vector3 offsetLine2Start = p1;
+	Engine::Math::Vector3 offsetLine2End = p2;
+	Engine::Math::Vector3 pInt1;
+	if (const auto points = Closest_Points_On_Lines(offsetLine1Start, offsetLine1End, offsetLine2Start, offsetLine2End)) {
+		pInt1 = points->first;
+		m_roads[ndx2].m_pt2.top.x = pInt1.x;
+		m_roads[ndx2].m_pt2.top.y = pInt1.y;
+		m_roads[ndx1].m_pt1.top.x = pInt1.x;
+		m_roads[ndx1].m_pt1.top.y = pInt1.y;
 	}
-	p1 = Vector3(m_roads[ndx1].m_pt1.bottom.X, m_roads[ndx1].m_pt1.bottom.Y, 0);
-	p2 = Vector3(m_roads[ndx1].m_pt2.bottom.X, m_roads[ndx1].m_pt2.bottom.Y, 0);
-	offsetLine1=LineSegClass (p1,p2);
-	p1 = Vector3(m_roads[ndx2].m_pt1.bottom.X, m_roads[ndx2].m_pt1.bottom.Y, 0);
-	p2 = Vector3(m_roads[ndx2].m_pt2.bottom.X, m_roads[ndx2].m_pt2.bottom.Y, 0);
-	offsetLine2 = LineSegClass(p1,p2);
-	if (offsetLine1.Find_Intersection(offsetLine2, &pInt1, &nu, &pInt2, &nu) ) {
-		m_roads[ndx2].m_pt2.bottom.X = pInt1.X;
-		m_roads[ndx2].m_pt2.bottom.Y = pInt1.Y;
-		m_roads[ndx1].m_pt1.bottom.X = pInt1.X;
-		m_roads[ndx1].m_pt1.bottom.Y = pInt1.Y;
+	p1 = Engine::Math::Vector3(m_roads[ndx1].m_pt1.bottom.x, m_roads[ndx1].m_pt1.bottom.y, 0);
+	p2 = Engine::Math::Vector3(m_roads[ndx1].m_pt2.bottom.x, m_roads[ndx1].m_pt2.bottom.y, 0);
+	offsetLine1Start = p1;
+	offsetLine1End = p2;
+	p1 = Engine::Math::Vector3(m_roads[ndx2].m_pt1.bottom.x, m_roads[ndx2].m_pt1.bottom.y, 0);
+	p2 = Engine::Math::Vector3(m_roads[ndx2].m_pt2.bottom.x, m_roads[ndx2].m_pt2.bottom.y, 0);
+	offsetLine2Start = p1;
+	offsetLine2End = p2;
+	if (const auto points = Closest_Points_On_Lines(offsetLine1Start, offsetLine1End, offsetLine2Start, offsetLine2End)) {
+		pInt1 = points->first;
+		m_roads[ndx2].m_pt2.bottom.x = pInt1.x;
+		m_roads[ndx2].m_pt2.bottom.y = pInt1.y;
+		m_roads[ndx1].m_pt1.bottom.x = pInt1.x;
+		m_roads[ndx1].m_pt1.bottom.y = pInt1.y;
 	}
 }
 
@@ -2805,17 +2843,23 @@ void W3DRoadBuffer::insertCurveSegmentAt(Int ndx1, Int ndx2)
 {
 	const Real DOT_LIMIT = 0.5f;	// If the dot product of the new line is less than this, abort.
 	Real radius = m_roads[ndx1].m_curveRadius*m_roads[ndx1].m_scale;
-	Vector2 originalPt = m_roads[ndx1].m_pt1.loc;
+	Engine::Math::Vector2 originalPt = m_roads[ndx1].m_pt1.loc;
 	// we got a segment.
-	LineSegClass line1(Vector3(m_roads[ndx1].m_pt1.loc.X, m_roads[ndx1].m_pt1.loc.Y, 0), Vector3(m_roads[ndx1].m_pt2.loc.X, m_roads[ndx1].m_pt2.loc.Y, 0));
-	LineSegClass line2(Vector3(m_roads[ndx2].m_pt1.loc.X, m_roads[ndx2].m_pt1.loc.Y, 0), Vector3(m_roads[ndx2].m_pt2.loc.X, m_roads[ndx2].m_pt2.loc.Y, 0));
-	Vector2 *pr1, *pr2, *pr3, *pr4;
+	Engine::Math::Vector3 line1Start(m_roads[ndx1].m_pt1.loc.x, m_roads[ndx1].m_pt1.loc.y, 0);
+	Engine::Math::Vector3 line1End(m_roads[ndx1].m_pt2.loc.x, m_roads[ndx1].m_pt2.loc.y, 0);
+	Engine::Math::Vector3 line2Start(m_roads[ndx2].m_pt1.loc.x, m_roads[ndx2].m_pt1.loc.y, 0);
+	Engine::Math::Vector3 line2End(m_roads[ndx2].m_pt2.loc.x, m_roads[ndx2].m_pt2.loc.y, 0);
+	Engine::Math::Vector3 firstDirection = line1End - line1Start;
+	Engine::Math::Vector3 secondDirection = line2End - line2Start;
+	firstDirection = firstDirection.Normalized_Legacy();
+	secondDirection = secondDirection.Normalized_Legacy();
+	Engine::Math::Vector2 *pr1, *pr2, *pr3, *pr4;
 
 	if (m_roads[ndx1].m_uniqueID != m_roads[ndx2].m_uniqueID) {
 		return;
 	}
-	Real curSin = Vector3::Dot_Product(line1.Get_Dir(), line2.Get_Dir());
-	Real xpdct = Vector3::Cross_Product_Z(line1.Get_Dir(), line2.Get_Dir());
+	Real curSin = (firstDirection).Dot(secondDirection);
+	Real xpdct = (firstDirection).Cross(secondDirection).z;
 	Bool turnRight;
 	if (xpdct > 0) {
 		pr1 = &m_roads[ndx1].m_pt1.loc;
@@ -2829,10 +2873,16 @@ void W3DRoadBuffer::insertCurveSegmentAt(Int ndx1, Int ndx2)
 		pr2 = &m_roads[ndx2].m_pt1.loc;
 		pr1 = &m_roads[ndx2].m_pt2.loc;
 		turnRight = false;
- 		line1.Set(Vector3(pr1->X, pr1->Y, 0), Vector3(pr2->X, pr2->Y, 0));
- 		line2.Set(Vector3(pr3->X, pr3->Y, 0), Vector3(pr4->X, pr4->Y, 0));
+		line1Start= {pr1->x, pr1->y, 0};
+		line1End= {pr2->x, pr2->y, 0};
+		line2Start= {pr3->x, pr3->y, 0};
+		line2End= {pr4->x, pr4->y, 0};
 	}
-	Real angle = WWMath::Acos(curSin);
+	firstDirection = line1End - line1Start;
+	secondDirection = line2End - line2Start;
+	firstDirection = firstDirection.Normalized_Legacy();
+	secondDirection = secondDirection.Normalized_Legacy();
+	Real angle = std::acos(curSin);
 	Real count = angle / (PI/6.0f); // number of 30 degree steps.
 	if (count<0.9 || m_roads[ndx1].m_pt1.isAngled) {
 		miter(ndx1, ndx2);
@@ -2840,54 +2890,62 @@ void W3DRoadBuffer::insertCurveSegmentAt(Int ndx1, Int ndx2)
 
 	}
 
-	Vector3 offset1(radius*line1.Get_Dir());
-	Vector3 offset2(radius*line2.Get_Dir());
-	offset1.Rotate_Z(-PI/2);
-	offset2.Rotate_Z(-PI/2);
+	Engine::Math::Vector3 offset1(radius*firstDirection);
+	Engine::Math::Vector3 offset2(radius*secondDirection);
+	offset1 = {offset1.y, -offset1.x, offset1.z};
+	offset2 = {offset2.y, -offset2.x, offset2.z};
 
-	Vector3 p1 = Vector3(pr1->X, pr1->Y, 0)+offset1;
-	Vector3 p2 = Vector3(pr2->X, pr2->Y, 0)+offset1;
-	LineSegClass offsetLine1(p1,p2);
-	p1 = Vector3(pr3->X, pr3->Y, 0)+offset2;
-	p2 = Vector3(pr4->X, pr4->Y, 0)+offset2;
-	LineSegClass offsetLine2(p1,p2);
-	Vector3 pInt1, pInt2;
-	Vector3 pInt3, pInt4;
-	Real nu; // not used.
-	if (offsetLine1.Find_Intersection(offsetLine2, &pInt1, &nu, &pInt2, &nu) ) {
+	Engine::Math::Vector3 p1 = Engine::Math::Vector3(pr1->x, pr1->y, 0)+offset1;
+	Engine::Math::Vector3 p2 = Engine::Math::Vector3(pr2->x, pr2->y, 0)+offset1;
+	Engine::Math::Vector3 offsetLine1Start = p1;
+	Engine::Math::Vector3 offsetLine1End = p2;
+	p1 = Engine::Math::Vector3(pr3->x, pr3->y, 0)+offset2;
+	p2 = Engine::Math::Vector3(pr4->x, pr4->y, 0)+offset2;
+	Engine::Math::Vector3 offsetLine2Start = p1;
+	Engine::Math::Vector3 offsetLine2End = p2;
+	Engine::Math::Vector3 pInt1, pInt3;
+	if (const auto points = Closest_Points_On_Lines(offsetLine1Start, offsetLine1End, offsetLine2Start, offsetLine2End)) {
+		pInt1 = points->first;
 		m_roads[ndx2].m_pt2.last = true;
-		LineSegClass cross1(pInt1, pInt1-offset2);
-		LineSegClass cross2(pInt1, pInt1-offset1);
-		cross1.Find_Intersection(line2, &pInt1, &nu, &pInt2, &nu);
-		cross2.Find_Intersection(line1, &pInt3, &nu, &pInt4, &nu);
+		const Engine::Math::Vector3 miterPoint = pInt1;
+		const auto line2Intersection = Closest_Points_On_Lines(miterPoint, miterPoint-offset2, line2Start, line2End);
+		const auto line1Intersection = Closest_Points_On_Lines(miterPoint, miterPoint-offset1, line1Start, line1End);
+		if (!line1Intersection || !line2Intersection) {
+			*pr1 = originalPt;
+			*pr4 = originalPt;
+			miter(ndx1, ndx2);
+			return;
+		}
+		pInt1 = line2Intersection->first;
+		pInt3 = line1Intersection->first;
 		// Make sure the lines didn't clip out of existence.
-		Real theDot = Vector3::Dot_Product(line2.Get_Dir(), pInt1-Vector3(pr3->X, pr3->Y, 0));
+		Real theDot = (secondDirection).Dot(pInt1-Engine::Math::Vector3(pr3->x, pr3->y, 0));
 		if (theDot < DOT_LIMIT) {
 			*pr1 = originalPt;
 			*pr4 = originalPt;
 			miter(ndx1, ndx2);
 			return;
 		}
-		theDot = Vector3::Dot_Product(line1.Get_Dir(), Vector3(pr2->X, pr2->Y, 0)-pInt3);
+		theDot = (firstDirection).Dot(Engine::Math::Vector3(pr2->x, pr2->y, 0)-pInt3);
 		if (theDot < DOT_LIMIT) {
 			*pr1 = originalPt;
 			*pr4 = originalPt;
 			miter(ndx1, ndx2);
 			return;
 		}
-		*pr4 = Vector2(pInt1.X, pInt1.Y);
+		*pr4 = Engine::Math::Vector2(pInt1.x, pInt1.y);
 		Real angle = -PI/6.0f; // -30 degrees.
-		Vector2 pt2 = *pr4;
-		Vector2 pt1 = *pr3;
-		Vector2 direction(pt1.X-pt2.X, pt1.Y-pt2.Y);
+		Engine::Math::Vector2 pt2 = *pr4;
+		Engine::Math::Vector2 pt1 = *pr3;
+		Engine::Math::Vector2 direction(pt1.x-pt2.x, pt1.y-pt2.y);
 		// offset = normal of the vector from pt1 to pt2.
-		Vector2 centerOfCurve(-direction.Y,  direction.X);
-		centerOfCurve.Normalize();
+		Engine::Math::Vector2 centerOfCurve(-direction.y,  direction.x);
+		centerOfCurve = centerOfCurve.Normalized_Legacy();
 		centerOfCurve *= m_roads[ndx1].m_curveRadius*m_roads[ndx1].m_scale;
 		centerOfCurve += pt2;
 
 		rotateAbout(&pt2, centerOfCurve, angle);
-		direction.Rotate(angle);
+		direction = direction.Rotated(angle);
 		pt1 = pt2+direction;
 
 		m_roads[m_numRoads].m_pt1.loc=pt2;
@@ -2906,12 +2964,12 @@ void W3DRoadBuffer::insertCurveSegmentAt(Int ndx1, Int ndx2)
 			Int i;
 			for (i=2; i<count; i++) {
 				// offset = normal of the vector from pt1 to pt2.
-				direction.Rotate(angle);
+				direction = direction.Rotated(angle);
 				rotateAbout(&pt2, centerOfCurve, angle);
 				pt1 = pt2+direction;
 				CHECK_SEGMENTS;
-				m_roads[m_numRoads].m_pt1.loc.Set(pt2);
-				m_roads[m_numRoads].m_pt2.loc.Set(pt1);
+				m_roads[m_numRoads].m_pt1.loc= pt2;
+				m_roads[m_numRoads].m_pt2.loc= pt1;
 				m_roads[m_numRoads].m_pt1.last = true; // if not, that one will clear flag in prior loop.
 				m_roads[m_numRoads].m_pt2.last = true; // if not, that one will clear flag in prior loop.
 				m_roads[m_numRoads].m_scale = m_roads[ndx1].m_scale;
@@ -2923,17 +2981,17 @@ void W3DRoadBuffer::insertCurveSegmentAt(Int ndx1, Int ndx2)
 			}
 		}
 
-		*pr1 = Vector2(pInt3.X, pInt3.Y);
+		*pr1 = Engine::Math::Vector2(pInt3.x, pInt3.y);
 
 		m_roads[ndx1].m_pt1.last = true;
 		if (count > 1.0) {
 			pt2 = *pr1;
 			pt1 = *pr1+*pr1-*pr2;
-			direction.Set(pt1.X-pt2.X, pt1.Y-pt2.Y);
+			direction= {pt1.x-pt2.x, pt1.y-pt2.y};
 			pt1 = pt2+direction;
 			CHECK_SEGMENTS;
-			m_roads[m_numRoads].m_pt1.loc.Set(pt2);
-			m_roads[m_numRoads].m_pt2.loc.Set(pt1);
+			m_roads[m_numRoads].m_pt1.loc= pt2;
+			m_roads[m_numRoads].m_pt2.loc= pt1;
 			m_roads[m_numRoads].m_pt1.last = true; // if not, that one will clear flag in prior loop.
 			m_roads[m_numRoads].m_pt2.last = true; // if not, that one will clear flag in prior loop.
 			m_roads[m_numRoads].m_scale = m_roads[ndx1].m_scale;
@@ -2945,16 +3003,16 @@ void W3DRoadBuffer::insertCurveSegmentAt(Int ndx1, Int ndx2)
 		}
 
 		// Recalculate top & bottom.
- 		Vector2 roadVector = m_roads[ndx1].m_pt2.loc - m_roads[ndx1].m_pt1.loc;
-		Vector2 roadNormal(-roadVector.Y, roadVector.X);
-		roadNormal.Normalize();
+		Engine::Math::Vector2 roadVector = m_roads[ndx1].m_pt2.loc - m_roads[ndx1].m_pt1.loc;
+		Engine::Math::Vector2 roadNormal(-roadVector.y, roadVector.x);
+		roadNormal = roadNormal.Normalized_Legacy();
 		roadNormal *= (m_roads[ndx1].m_scale*m_roads[ndx1].m_widthInTexture/2.0f);
 		m_roads[ndx1].m_pt1.top = m_roads[ndx1].m_pt1.loc+roadNormal;
 		m_roads[ndx1].m_pt1.bottom = m_roads[ndx1].m_pt1.loc - roadNormal;
 
  		roadVector = m_roads[ndx2].m_pt2.loc - m_roads[ndx2].m_pt1.loc;
-		roadNormal = Vector2(-roadVector.Y, roadVector.X);
-		roadNormal.Normalize();
+		roadNormal = Engine::Math::Vector2(-roadVector.y, roadVector.x);
+		roadNormal = roadNormal.Normalized_Legacy();
 		roadNormal *= (m_roads[ndx2].m_scale*m_roads[ndx2].m_widthInTexture/2.0f);
 		m_roads[ndx2].m_pt2.top = m_roads[ndx2].m_pt2.loc+roadNormal;
 		m_roads[ndx2].m_pt2.bottom = m_roads[ndx2].m_pt2.loc - roadNormal;
@@ -2969,15 +3027,15 @@ void W3DRoadBuffer::insertCurveSegmentAt(Int ndx1, Int ndx2)
 //=============================================================================
 /** Rotates ptP about center. */
 //=============================================================================
-void W3DRoadBuffer::rotateAbout(Vector2 *ptP, Vector2 center, Real angle)
+void W3DRoadBuffer::rotateAbout(Engine::Math::Vector2 *ptP, Engine::Math::Vector2 center, Real angle)
 {
-	Vector2 offset;
-	offset.X = ptP->X - center.X;
-	offset.Y = ptP->Y - center.Y;
-	Vector2 orgOffset = offset;
-	offset.Rotate(angle);
-	offset.Y -= orgOffset.Y;
-	offset.X -= orgOffset.X;
+	Engine::Math::Vector2 offset;
+	offset.x = ptP->x - center.x;
+	offset.y = ptP->y - center.y;
+	Engine::Math::Vector2 orgOffset = offset;
+	offset = offset.Rotated(angle);
+	offset.y -= orgOffset.y;
+	offset.x -= orgOffset.x;
 	*ptP += offset;
 }
 
@@ -3246,7 +3304,7 @@ void W3DRoadBuffer::drawRoads(W3DCamera *camera, W3DTextureHandle *cloudTexture,
             if (road.getNumIndices() == 0) continue;
             textures[0] = Resolve_Graphics_Texture(road.getTexture());
             const bool drawn = Graphics::Draw_Road(renderer, commands, road.getMesh(), parameters, textures, filtered);
-            if (!drawn) DEBUG_LOG(("Road graphics submission failed.\n"));
+            if (!drawn) engine::debug::log_info("Road graphics submission failed.\n");
         }
     }
     m_curRoadType = 0;

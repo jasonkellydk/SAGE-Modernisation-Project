@@ -28,8 +28,13 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.profiling;
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
+import Engine.Core.Math.AffineTransform3;
+import Engine.Core.Math.Vector3;
 #define DEFINE_WEAPONCONDITIONMAP
+#include "Common/LegacyTransformMath.h"
 #include "Common/BitFlagsIO.h"
 #include "Common/BuildAssistant.h"
 #include "Common/Dict.h"
@@ -48,7 +53,7 @@
 #include "Common/WellKnownKeys.h"
 #include "Common/Xfer.h"
 #include "Common/XferCRC.h"
-#include "Common/PerfTimer.h"
+
 
 #include "GameClient/Anim2D.h"
 #include "GameClient/ControlBar.h"
@@ -412,21 +417,21 @@ Object::Object( const ThingTemplate *tt, const ObjectStatusMaskType &objectStatu
 		BodyModuleInterface* body = newMod->getBody();
 		if (body)
 		{
-			DEBUG_ASSERTCRASH(m_body == nullptr, ("Duplicate bodies"));
+			engine::debug::invariant((m_body == nullptr), "m_body == nullptr", __FILE__, __LINE__, "Duplicate bodies");
 			m_body = body;
 		}
 
 		ContainModuleInterface* contain = newMod->getContain();
 		if (contain)
 		{
-			DEBUG_ASSERTCRASH(m_contain == nullptr, ("Duplicate containers"));
+			engine::debug::invariant((m_contain == nullptr), "m_contain == nullptr", __FILE__, __LINE__, "Duplicate containers");
 			m_contain = contain;
 		}
 
     StealthUpdate* stealth = (StealthUpdate*)newMod->getStealth();
     if ( stealth )
     {
-      DEBUG_ASSERTCRASH( m_stealth == nullptr, ("DuplicateStealthUpdates!") );
+      engine::debug::invariant((m_stealth == nullptr), "m_stealth == nullptr", __FILE__, __LINE__, "DuplicateStealthUpdates!");
       m_stealth = stealth;
     }
 
@@ -436,7 +441,7 @@ Object::Object( const ThingTemplate *tt, const ObjectStatusMaskType &objectStatu
 		{
 			if( m_ai )
 			{
-				DEBUG_ASSERTCRASH( m_ai == nullptr, ("%s has more than one AI module. This is illegal!", getTemplate()->getName().str()) );
+				engine::debug::invariant((m_ai == nullptr), "m_ai == nullptr", __FILE__, __LINE__, "%s has more than one AI module. This is illegal!", getTemplate()->getName().str());
 			}
 			m_ai = ai;
 		}
@@ -444,7 +449,7 @@ Object::Object( const ThingTemplate *tt, const ObjectStatusMaskType &objectStatu
 		static NameKeyType key_PhysicsUpdate = NAMEKEY("PhysicsBehavior");
 		if (newMod->getModuleNameKey() == key_PhysicsUpdate)
 		{
-			DEBUG_ASSERTCRASH(m_physics == nullptr, ("You should never have more than one Physics module (%s)",getTemplate()->getName().str()));
+			engine::debug::invariant((m_physics == nullptr), "m_physics == nullptr", __FILE__, __LINE__, "You should never have more than one Physics module (%s)",getTemplate()->getName().str());
 			m_physics = (PhysicsBehavior*)newMod;
 		}
 	}
@@ -569,7 +574,7 @@ void Object::initObject()
 		if( isKindOf( KINDOF_SMALL_MISSILE ) || isKindOf( KINDOF_BALLISTIC_MISSILE ) )
 		{
 			//Warning only...
-			DEBUG_CRASH( ("Missile %s must also be a KindOf = PROJECTILE in addition to being either a SMALL_MISSILE or PROJECTILE_MISSILE -- call Kris (36844) for questions!", getTemplate()->getName().str() ) );
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Missile %s must also be a KindOf = PROJECTILE in addition to being either a SMALL_MISSILE or PROJECTILE_MISSILE -- call Kris (36844) for questions!", getTemplate()->getName().str() );
 		}
 	}
 #endif
@@ -703,8 +708,7 @@ void Object::onContainedBy( Object *containedBy )
 		m_containedByID = INVALID_ID;
 	}
 #else
-	DEBUG_ASSERTCRASH(containedBy == nullptr || !containedBy->isDestroyed(),
-		("Object::onContainedBy - Adding into a destroyed container"));
+	engine::debug::invariant((containedBy == nullptr || !containedBy->isDestroyed()), "containedBy == nullptr || !containedBy->isDestroyed()", __FILE__, __LINE__, "Object::onContainedBy - Adding into a destroyed container");
 #endif
 
   handlePartitionCellMaintenance(); // which should unlook me now that I am contained
@@ -794,12 +798,11 @@ void Object::onDestroy()
 			// with retail compatibility, the 'contained by' pointer of this object may point to an already destroyed object.
 			// Avoid removing this object from the contain list, because it could crash the game,
 			// as the begin / end iterator for STLPort and MSVC std::list implementations depends on dynamically allocated memory.
-			DEBUG_CRASH(("container object must be valid; this looks like use-after-free"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "container object must be valid; this looks like use-after-free");
 		}
 		else
 		{
-			DEBUG_ASSERTCRASH(TheGameLogic->findObjectByID(m_containedByID) == m_containedBy,
-				("contained by pointer is out of sync with contained by ID"));
+			engine::debug::invariant((TheGameLogic->findObjectByID(m_containedByID) == m_containedBy), "TheGameLogic->findObjectByID(m_containedByID) == m_containedBy", __FILE__, __LINE__, "contained by pointer is out of sync with contained by ID");
 
 			if (ContainModuleInterface* contain = m_containedBy->getContain())
 			{
@@ -874,13 +877,13 @@ void Object::restoreOriginalTeam()
 	Team* origTeam = TheTeamFactory->findTeam(m_originalTeamName);
 	if (origTeam == nullptr)
 	{
-		DEBUG_CRASH(("Object original team (%s) could not be found or created! (srj)",m_originalTeamName.str()));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Object original team (%s) could not be found or created! (srj)",m_originalTeamName.str());
 		return;
 	}
 
 	if (m_team == origTeam)
 	{
-		DEBUG_CRASH(("Object appears to still be on its original team, so why are we attempting to restore it? (srj)"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Object appears to still be on its original team, so why are we attempting to restore it? (srj)");
 		return;
 	}
 
@@ -1161,7 +1164,7 @@ void Object::setScriptStatus( ObjectScriptStatusBit bit, Bool set )
 //=============================================================================
 Bool Object::canCrushOrSquish(Object *otherObj, CrushSquishTestType testType ) const
 {
-	DEBUG_ASSERTCRASH(this, ("null this in canCrushOrSquish"));
+	engine::debug::invariant((this), "this", __FILE__, __LINE__, "null this in canCrushOrSquish");
 
 	if( !otherObj )
 	{
@@ -1449,7 +1452,7 @@ void Object::clearSpecialModelConditionStates()
 //	}
 //	else
 //	{
-//		DEBUG_CRASH(("null Drawable at this point, you can't get modelconditionflags now."));
+//		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "null Drawable at this point, you can't get modelconditionflags now.");
 //		static ModelConditionFlags noFlags;
 //		return noFlags;
 //	}
@@ -1532,11 +1535,10 @@ Bool Object::chooseBestWeaponForTarget(const Object* target, WeaponChoiceCriteri
 	return m_weaponSet.chooseBestWeaponForTarget(this, target, criteria, cmdSource );
 }
 
-//DECLARE_PERF_TIMER(fireCurrentWeapon)
-//=============================================================================
+////=============================================================================
 void Object::fireCurrentWeapon(Object *target)
 {
-	//USE_PERF_TIMER(fireCurrentWeapon)
+	//engine::profiling::Scope profile_scope_1536("fireCurrentWeapon")
 
 	// victim may have already been destroyed
 	if (target == nullptr)
@@ -1546,7 +1548,7 @@ void Object::fireCurrentWeapon(Object *target)
 	if (weapon && (weapon->getStatus() == READY_TO_FIRE))
 	{
 		Bool reloaded = weapon->fireWeapon(this, target);
-		DEBUG_ASSERTCRASH(m_firingTracker, ("hey, we are firing but have no firing tracker. this is wrong."));
+		engine::debug::invariant((m_firingTracker), "m_firingTracker", __FILE__, __LINE__, "hey, we are firing but have no firing tracker. this is wrong.");
 		if (m_firingTracker)
 			m_firingTracker->shotFired(weapon, target->getID());
 		if (reloaded)
@@ -1559,7 +1561,7 @@ void Object::fireCurrentWeapon(Object *target)
 //=============================================================================
 void Object::fireCurrentWeapon(const Coord3D* pos)
 {
-	//USE_PERF_TIMER(fireCurrentWeapon)
+	//engine::profiling::Scope profile_scope_1559("fireCurrentWeapon")
 
 	if (pos == nullptr)
 		return;
@@ -1568,7 +1570,7 @@ void Object::fireCurrentWeapon(const Coord3D* pos)
 	if (weapon && (weapon->getStatus() == READY_TO_FIRE))
 	{
 		Bool reloaded = weapon->fireWeapon(this, pos);
-		DEBUG_ASSERTCRASH(m_firingTracker, ("hey, we are firing but have no firing tracker. this is wrong."));
+		engine::debug::invariant((m_firingTracker), "m_firingTracker", __FILE__, __LINE__, "hey, we are firing but have no firing tracker. this is wrong.");
 		if (m_firingTracker)
 			m_firingTracker->shotFired(weapon, INVALID_ID);
 		if (reloaded)
@@ -1855,17 +1857,16 @@ void Object::reactToTurretChange( WhichTurretType turret, Real oldRotation, Real
 }
 
 //-------------------------------------------------------------------------------------------------
-//DECLARE_PERF_TIMER(Object_reactToTransformChange)
-void Object::reactToTransformChange(const Matrix3D* oldMtx, const Coord3D* oldPos, Real oldAngle)
+void Object::reactToTransformChange(const Coord3D* oldPos, Real oldAngle)
 {
-	//USE_PERF_TIMER(Object_reactToTransformChange)
+	//engine::profiling::Scope profile_scope_1857("Object_reactToTransformChange")
 	if(_isnan(getPosition()->x) || _isnan(getPosition()->y) || _isnan(getPosition()->z)) {
-		DEBUG_CRASH(("Object pos is nan."));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Object pos is nan.");
 		TheGameLogic->destroyObject(this);
 	}
 	if (m_drawable)
 	{
-  	m_drawable->setTransformMatrix( this->getTransformMatrix() );
+		m_drawable->setWorldTransform(this->worldTransform());
 	}
 
 	Bool posDiff = isPosDifferent(oldPos, getPosition());
@@ -2059,7 +2060,7 @@ void Object::kill( DamageType damageType, DeathType deathType )
 	damageInfo.in.m_kill = TRUE; // Triggers object to die no matter what.
 	attemptDamage( &damageInfo );
 
-	DEBUG_ASSERTCRASH(!damageInfo.out.m_noEffect, ("Attempting to kill an unKillable object (InactiveBody?)"));
+	engine::debug::invariant((!damageInfo.out.m_noEffect), "!damageInfo.out.m_noEffect", __FILE__, __LINE__, "Attempting to kill an unKillable object (InactiveBody?)");
 
 }
 
@@ -2094,7 +2095,7 @@ void Object::setCaptured(Bool isCaptured)
 		BitSet(m_privateStatus, CAPTURED);
 	else
 	{
-		DEBUG_LOG(("Clearing Captured Status. This should never happen. jkmcd"));
+		engine::debug::log_info("Clearing Captured Status. This should never happen. jkmcd");
 		BitClear(m_privateStatus, CAPTURED);
 	}
 
@@ -2162,7 +2163,7 @@ void Object::setDisabledUntil( DisabledType type, UnsignedInt frame )
 
 	if( type < 0 || type >= DISABLED_COUNT )
 	{
-		DEBUG_CRASH( ("Invalid disabled type value %d specified -- doesn't not exist!", type ) );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Invalid disabled type value %d specified -- doesn't not exist!", type );
 		return;
 	}
 
@@ -2326,7 +2327,7 @@ Bool Object::clearDisabled( DisabledType type )
 {
 	if( type < 0 || type >= DISABLED_COUNT )
 	{
-		DEBUG_CRASH( ("Invalid disabled type value %d specified -- doesn't not exist!", type ) );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Invalid disabled type value %d specified -- doesn't not exist!", type );
 		return FALSE;
 	}
 
@@ -2487,12 +2488,12 @@ void Object::onCollide( Object *other, const Coord3D *loc, const Coord3D *normal
 		if( getStatusBits().test( OBJECT_STATUS_NO_COLLISIONS ) )
 		{
 #ifdef DEBUG_CRC
-			//DEBUG_LOG(("Object::onCollide() - OBJECT_STATUS_NO_COLLISIONS set"));
+			//engine::debug::log_info("Object::onCollide() - OBJECT_STATUS_NO_COLLISIONS set");
 #endif
 			break;
 		}
 #ifdef DEBUG_CRC
-		//DEBUG_LOG(("Object::onCollide() - calling collide module"));
+		//engine::debug::log_info("Object::onCollide() - calling collide module");
 #endif
 		collide->onCollide(other, loc, normal);
 	}
@@ -2596,7 +2597,7 @@ Bool Object::didEnter(const PolygonTrigger *pTrigger) const
 	if (!didEnterOrExit())
 		return false;
 
-	DEBUG_ASSERTCRASH(!isKindOf(KINDOF_INERT), ("Asking whether an inert object entered or exited. This is invalid."));
+	engine::debug::invariant((!isKindOf(KINDOF_INERT)), "!isKindOf(KINDOF_INERT)", __FILE__, __LINE__, "Asking whether an inert object entered or exited. This is invalid.");
 
 	for (Int i=0; i<m_numTriggerAreasActive; i++)
 	{
@@ -2614,7 +2615,7 @@ Bool Object::didExit(const PolygonTrigger *pTrigger) const
 	if (!didEnterOrExit())
 		return false;
 
-	DEBUG_ASSERTCRASH(!isKindOf(KINDOF_INERT), ("Asking whether an inert object entered or exited. This is invalid."));
+	engine::debug::invariant((!isKindOf(KINDOF_INERT)), "!isKindOf(KINDOF_INERT)", __FILE__, __LINE__, "Asking whether an inert object entered or exited. This is invalid.");
 	for (Int i=0; i<m_numTriggerAreasActive; i++)
 	{
 		if (m_triggerInfo[i].exited && m_triggerInfo[i].pTrigger == pTrigger)
@@ -2628,7 +2629,7 @@ Bool Object::didExit(const PolygonTrigger *pTrigger) const
 //-------------------------------------------------------------------------------------------------
 Bool Object::isInside(const PolygonTrigger *pTrigger) const
 {
-	DEBUG_ASSERTCRASH(!isKindOf(KINDOF_INERT), ("Asking whether an inert is inside a trigger area. This is invalid."));
+	engine::debug::invariant((!isKindOf(KINDOF_INERT)), "!isKindOf(KINDOF_INERT)", __FILE__, __LINE__, "Asking whether an inert is inside a trigger area. This is invalid.");
 
 	for (Int i=0; i<m_numTriggerAreasActive; i++)
 	{
@@ -2785,7 +2786,7 @@ Bool Object::isInList(Object **pListHead) const
 			break;
 		}
 	}
-	DEBUG_ASSERTCRASH(found==result,("inconsistent links in Object::isInList"));
+	engine::debug::invariant((found==result), "found==result", __FILE__, __LINE__, "inconsistent links in Object::isInList");
 #endif
 	return result;
 }
@@ -2794,7 +2795,7 @@ Bool Object::isInList(Object **pListHead) const
 //-------------------------------------------------------------------------------------------------
 void Object::prependToList(Object **pListHead)
 {
-	DEBUG_ASSERTCRASH(!isInList(pListHead), ("obj is already in a list"));
+	engine::debug::invariant((!isInList(pListHead)), "!isInList(pListHead)", __FILE__, __LINE__, "obj is already in a list");
 
 	m_prev = nullptr;
 	m_next = *pListHead;
@@ -2810,10 +2811,10 @@ void Object::setLayer(PathfindLayerEnum layer)
 	if (layer!=m_layer) {
 #define no_SET_LAYER_INTENSE_DEBUG
 #ifdef SET_LAYER_INTENSE_DEBUG
-		DEBUG_LOG(("Changing layer from %d to %d", m_layer, layer));
+		engine::debug::log_info("Changing layer from %d to %d", m_layer, layer);
 		if (m_layer != LAYER_GROUND) {
 			if (TheTerrainLogic->objectInteractsWithBridgeLayer(this, m_layer)) {
-				DEBUG_CRASH(("Probably shouldn't be changing layer. jba."));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Probably shouldn't be changing layer. jba.");
 			}
 		}
 #endif
@@ -2839,7 +2840,7 @@ void Object::setID( ObjectID id )
 {
 
 	// sanity
-	DEBUG_ASSERTCRASH( id != INVALID_ID, ("Object::setID - Invalid id") );
+	engine::debug::invariant((id != INVALID_ID), "id != INVALID_ID", __FILE__, __LINE__, "Object::setID - Invalid id");
 
 	// if id hasn't changed do nothing
 	if( m_id == id )
@@ -2927,8 +2928,7 @@ void Object::friend_notifyOfNewMapBoundary()
 //-------------------------------------------------------------------------------------------------
 void Object::calcNaturalRallyPoint(Coord2D *pt)
 {
-	const Matrix3D *transform = getTransformMatrix();
-	Vector3 v;
+	Engine::Math::Vector3 point{};
 
 	//
 	// get the natural rally point from the template, this coord is in model space relative
@@ -2941,14 +2941,11 @@ void Object::calcNaturalRallyPoint(Coord2D *pt)
 	v.Y = naturalRallyPoint->y;
 	v.Z = naturalRallyPoint->z;
 */
-	v.Set( 0, 0, 0 );
-
-	// transform the point into world space
-	transform->Transform_Vector( *transform, v, &v );
+	point = worldTransform().Transform_Point(point);
 
 	// we're only concerned with the 2D elements for now
-	pt->x = v.X;
-	pt->y = v.Y;
+	pt->x = point.x;
+	pt->y = point.y;
 
 }
 
@@ -2968,7 +2965,7 @@ Module* Object::findModule(NameKeyType key) const
 			}
 			else
 			{
-				DEBUG_CRASH(("Duplicate modules found for name %s!",TheNameKeyGenerator->keyToName(key).str()));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Duplicate modules found for name %s!",TheNameKeyGenerator->keyToName(key).str());
 			}
 #else
 			m = *b;
@@ -3281,7 +3278,7 @@ Bool Object::isAbleToAttack() const
 
 	// if we're contained within a transport we cannot attack unless it specifically allows us
 	const Object *containedBy = getContainedBy();
-	DEBUG_ASSERTCRASH( (containedBy == nullptr) || (containedBy->getContain() != nullptr), ("A %s thinks they are contained by something with no contain module!", getTemplate()->getName().str() ) );
+	engine::debug::invariant(((containedBy == nullptr) || (containedBy->getContain() != nullptr)), "(containedBy == nullptr) || (containedBy->getContain() != nullptr)", __FILE__, __LINE__, "A %s thinks they are contained by something with no contain module!", getTemplate()->getName().str() );
 	if( containedBy && containedBy->getContain() && !containedBy->getContain()->isPassengerAllowedToFire( getID() ) )
 		return false;
 
@@ -3744,7 +3741,7 @@ void Object::updateObjValuesFromMapProperties(Dict* properties)
       else
       {
         const AudioEventInfo * baseInfo = TheAudio->findAudioEventInfo( valStr );
-        DEBUG_ASSERTCRASH( baseInfo != nullptr, ("Cannot find customized ambient sound '%s'", valStr.str() ) );
+        engine::debug::invariant((baseInfo != nullptr), "baseInfo != nullptr", __FILE__, __LINE__, "Cannot find customized ambient sound '%s'", valStr.str() );
         if ( baseInfo != nullptr )
         {
           audioToModify = newInstance( DynamicAudioEventInfo )( *baseInfo );
@@ -3762,7 +3759,7 @@ void Object::updateObjValuesFromMapProperties(Dict* properties)
         if ( audioToModify == nullptr )
         {
           const AudioEventInfo * baseInfo = drawable->getBaseSoundAmbientInfo();
-          DEBUG_ASSERTCRASH( baseInfo != nullptr, ("getBaseSoundAmbientInfo() return null" ) );
+          engine::debug::invariant((baseInfo != nullptr), "baseInfo != nullptr", __FILE__, __LINE__, "getBaseSoundAmbientInfo() return null" );
           if ( baseInfo != nullptr )
           {
             audioToModify = newInstance( DynamicAudioEventInfo )( *baseInfo );
@@ -4012,17 +4009,17 @@ void Object::crc( Xfer *xfer )
 	}
 #endif // DEBUG_CRC
 
-	// This is evil - we cast the const Matrix3D * to a Matrix3D * because the XferCRC class must use
-	// the same interface as the XferLoad class for save game restore.  This only works because
-	// XferCRC does not modify its data.
-	xfer->xferUser((Matrix3D *)getTransformMatrix(),	sizeof(Matrix3D));
+	static_assert(sizeof(Engine::Math::AffineTransform3) == 12 * sizeof(Real));
+	// The transform keeps the existing twelve-float save representation.
+	auto& transform = const_cast<Engine::Math::AffineTransform3&>(worldTransform());
+	xfer->xferUser(transform.elements.data(), static_cast<Int>(sizeof(transform.elements)));
 #ifdef DEBUG_CRC
 	if (doLogging)
 	{
 		XferCRC tmpXfer;
 		tmpXfer.open("tmp");
-		tmpXfer.xferUser((Matrix3D *)getTransformMatrix(),	sizeof(Matrix3D));
-		tmp.format("getTransformMatrix(): %8.8X, ", tmpXfer.getCRC());
+		tmpXfer.xferUser(transform.elements.data(), static_cast<Int>(sizeof(transform.elements)));
+		tmp.format("worldTransform(): %8.8X, ", tmpXfer.getCRC());
 		tmpXfer.close();
 		logString.concat(tmp);
 	}
@@ -4094,7 +4091,7 @@ void Object::crc( Xfer *xfer )
 		tmp.format("damage scalar: %g/%8.8X", scalar, AS_INT(scalar));
 		logString.concat(tmp);
 
-		CRCDEBUG_LOG(("%s", logString.str()));
+		engine::debug::log_trace("%s", logString.str());
 	}
 #endif // DEBUG_CRC
 
@@ -4136,13 +4133,13 @@ void Object::xfer( Xfer *xfer )
 	xfer->xferObjectID( &id );
 	setID( id );
 
-	DEBUG_LOG(("Xfer Object %s id=%d",getTemplate()->getName().str(),id));
+	engine::debug::log_info("Xfer Object %s id=%d",getTemplate()->getName().str(),id);
 
 	if (version >= 7)
 	{
-		Matrix3D mtx = *getTransformMatrix();
-		xfer->xferMatrix3D(&mtx);
-		setTransformMatrix(&mtx);
+		Engine::Math::AffineTransform3 world = worldTransform();
+		xfer->xferAffineTransform3(&world);
+		setWorldTransform(world);
 	}
 	else
 	{
@@ -4272,7 +4269,7 @@ void Object::xfer( Xfer *xfer )
 		Team *team = TheTeamFactory->findTeamByID( teamID );
 		if( team == nullptr )
 		{
-			DEBUG_CRASH(( "Object::xfer - Unable to load team" ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Object::xfer - Unable to load team" );
 			throw SC_INVALID_DATA;
 		}
 		const Bool restoring = true;
@@ -4341,8 +4338,8 @@ void Object::xfer( Xfer *xfer )
 	xfer->xferUnsignedInt(&m_enteredOrExitedFrame);
 	xfer->xferICoord3D(&m_iPos);
 	if (m_numTriggerAreasActive<0 || m_numTriggerAreasActive>MAX_TRIGGER_AREA_INFOS) {
-		DEBUG_CRASH(("Invalid m_numTriggerAreasActive = %d, max is %d", m_numTriggerAreasActive,
-			MAX_TRIGGER_AREA_INFOS));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Invalid m_numTriggerAreasActive = %d, max is %d", m_numTriggerAreasActive,
+			MAX_TRIGGER_AREA_INFOS);
 		throw SC_INVALID_DATA;
 	}
 	for (i=0; i<m_numTriggerAreasActive; i++) {
@@ -4401,8 +4398,7 @@ void Object::xfer( Xfer *xfer )
 
 			// write module identifier
 			moduleIdentifier = TheNameKeyGenerator->keyToName( module->getModuleTagNameKey() );
-			DEBUG_ASSERTCRASH( moduleIdentifier != AsciiString::TheEmptyString,
-												 ("Object::xfer - Module tag key does not translate to a string!\n") );
+			engine::debug::invariant((moduleIdentifier != AsciiString::TheEmptyString), "moduleIdentifier != AsciiString::TheEmptyString", __FILE__, __LINE__, "Object::xfer - Module tag key does not translate to a string!\n");
 			xfer->xferAsciiString( &moduleIdentifier );
 
 			// begin a data block
@@ -4454,8 +4450,8 @@ void Object::xfer( Xfer *xfer )
 			{
 
 				// for testing purposes, this module better be found
-//				DEBUG_CRASH(( "Object::xfer - Module '%s' was indicated in file, but not found on object '%s'(%d)",
-//											moduleIdentifier.str(), getTemplate()->getName().str(), getID() ));
+//				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Object::xfer - Module '%s' was indicated in file, but not found on object '%s'(%d)",
+//											moduleIdentifier.str(), getTemplate()->getName().str(), getID() );
 
 				// skip this data in the file
 				xfer->skip( dataSize );
@@ -4492,7 +4488,7 @@ void Object::xfer( Xfer *xfer )
 	//m_group;
 
 	// don't need to save m_partitionData.
-	DEBUG_ASSERTCRASH(!(xfer->getXferMode() == XFER_LOAD && m_partitionData == nullptr), ("should not be in partitionmgr yet"));
+	engine::debug::invariant((!(xfer->getXferMode() == XFER_LOAD && m_partitionData == nullptr)), "!(xfer->getXferMode() == XFER_LOAD && m_partitionData == nullptr)", __FILE__, __LINE__, "should not be in partitionmgr yet");
 
 	// don't need to be saved or loaded; are inited & cached for runtime only by our ctor (srj)
 	//m_repulsorHelper;
@@ -4687,7 +4683,7 @@ void Object::onDie( DamageInfo *damageInfo )
 	checkAndDetonateBoobyTrap(nullptr);// Already dying, so no need to handle death case of explosion
 
 #if defined(RTS_DEBUG)
-	DEBUG_ASSERTCRASH(m_hasDiedAlready == false, ("Object::onDie has been called multiple times. This is invalid. jkmcd"));
+	engine::debug::invariant((m_hasDiedAlready == false), "m_hasDiedAlready == false", __FILE__, __LINE__, "Object::onDie has been called multiple times. This is invalid. jkmcd");
 	m_hasDiedAlready = true;
 #endif
 
@@ -4760,7 +4756,7 @@ void Object::onDie( DamageInfo *damageInfo )
 			RebuildHoleBehaviorInterface *rhbi = RebuildHoleBehavior::getRebuildHoleBehaviorInterfaceFromObject( hole );
 
 			// sanity
-			DEBUG_ASSERTCRASH( rhbi, ("Object::onDie() -  No Rebuild Hole Behavior interface on hole") );
+			engine::debug::invariant((rhbi), "rhbi", __FILE__, __LINE__, "Object::onDie() -  No Rebuild Hole Behavior interface on hole");
 
 			// start the rebuild process
 			if( rhbi )
@@ -4953,7 +4949,7 @@ void Object::addValue()
 {
 	if( !m_partitionLastValue->isInvalid() )
 	{
-		DEBUG_CRASH( ("An Object is adding value, but hasn't removed his previous value.") );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "An Object is adding value, but hasn't removed his previous value.");
 		return;
 	}
 
@@ -5003,7 +4999,7 @@ void Object::addThreat()
 {
 	if( !m_partitionLastThreat->isInvalid() )
 	{
-		DEBUG_CRASH( ("An Object is adding threat, but hasn't removed his previous threat. (He hasn't finished the threat?)") );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "An Object is adding threat, but hasn't removed his previous threat. (He hasn't finished the threat?)");
 		return;
 	}
 
@@ -5055,7 +5051,7 @@ void Object::look()
 {
 	if( ! m_partitionLastLook->isInvalid() )
 	{
-		DEBUG_CRASH( ("An Object is looking, but hasn't unlooked the last one.") );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "An Object is looking, but hasn't unlooked the last one.");
 		return;
 	}
 
@@ -5114,13 +5110,13 @@ void Object::look()
 				m_partitionLastLook->m_forWhom = lookingMask;
 				m_partitionLastLook->m_howFar = getShroudClearingRange();
 
-	//			DEBUG_LOG(( "A %s looks at %f, %f for %x at range %f",
+	//			engine::debug::log_info( "A %s looks at %f, %f for %x at range %f",
 	//									getTemplate()->getName().str(),
 	//									pos.x,
 	//									pos.y,
 	//									lookingMask,
 	//									getShroudClearingRange()
-	//									));
+	//									);
 			}
 
 			//Now reveal to everyone if we're special. Note this works differently than KINDOF_REVEAL_TO_ALL because
@@ -5164,13 +5160,13 @@ void Object::unlook()
 																				m_partitionLastLook->m_forWhom
 																				);
 
-//			DEBUG_LOG(( "A %s queues an unlook at %f, %f for %x at range %f",
+//			engine::debug::log_info( "A %s queues an unlook at %f, %f for %x at range %f",
 //									getTemplate()->getName().str(),
 //									m_partitionLastLook.m_where.x,
 //									m_partitionLastLook.m_where.y,
 //									m_partitionLastLook.m_forWhom,
 //									m_partitionLastLook.m_howFar
-//									));
+//									);
 
 	m_partitionLastLook->reset();
 
@@ -5191,7 +5187,7 @@ void Object::shroud()
 {
 	if( ! m_partitionLastShroud->isInvalid() )
 	{
-		DEBUG_CRASH( ("An Object is shrouding, but hasn't unshrouded the last one.") );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "An Object is shrouding, but hasn't unshrouded the last one.");
 		return;
 	}
 
@@ -5248,11 +5244,11 @@ Real Object::getVisionRange() const
 #if defined(RTS_DEBUG)
 	if (TheGlobalData->m_debugVisibility)
 	{
-		Vector3 pos(m_visionRange, 0, 0);
+		Engine::Math::Vector3 pos{m_visionRange, 0, 0};
 		for (int i = 0; i < TheGlobalData->m_debugVisibilityTileCount; ++i)
 		{
-			pos.Rotate_Z(1.0f * i / TheGlobalData->m_debugVisibilityTileCount * 2 * PI);
-			Coord3D coord = { pos.X + getPosition()->x, pos.Y + getPosition()->y, pos.Z + getPosition()->z };
+			pos = Legacy_Vector_Rotate_Z(pos, 1.0f * i / TheGlobalData->m_debugVisibilityTileCount * 2 * PI);
+			Coord3D coord = { pos.x + getPosition()->x, pos.y + getPosition()->y, pos.z + getPosition()->z };
 
 			addIcon(&coord, TheGlobalData->m_debugVisibilityTileWidth,
 											TheGlobalData->m_debugVisibilityTileDuration,
@@ -5284,11 +5280,11 @@ Real Object::getShroudClearingRange() const
 #if defined(RTS_DEBUG)
 	if (TheGlobalData->m_debugVisibility)
 	{
-		Vector3 pos(shroudClearingRange, 0, 0);
+		Engine::Math::Vector3 pos{shroudClearingRange, 0, 0};
 		for (int i = 0; i < TheGlobalData->m_debugVisibilityTileCount; ++i)
 		{
-			pos.Rotate_Z(1.0f * i / TheGlobalData->m_debugVisibilityTileCount * 2 * PI);
-			Coord3D coord = { pos.X + getPosition()->x, pos.Y + getPosition()->y, pos.Z + getPosition()->z };
+			pos = Legacy_Vector_Rotate_Z(pos, 1.0f * i / TheGlobalData->m_debugVisibilityTileCount * 2 * PI);
+			Coord3D coord = { pos.x + getPosition()->x, pos.y + getPosition()->y, pos.z + getPosition()->z };
 
 			addIcon(&coord, TheGlobalData->m_debugVisibilityTileWidth,
 											TheGlobalData->m_debugVisibilityTileDuration,
@@ -5341,11 +5337,11 @@ Real Object::getShroudRange() const
 #if defined(RTS_DEBUG)
 	if (TheGlobalData->m_debugVisibility)
 	{
-		Vector3 pos(m_shroudRange, 0, 0);
+		Engine::Math::Vector3 pos{m_shroudRange, 0, 0};
 		for (int i = 0; i < TheGlobalData->m_debugVisibilityTileCount; ++i)
 		{
-			pos.Rotate_Z(1.0f * i / TheGlobalData->m_debugVisibilityTileCount * 2 * PI);
-			Coord3D coord = { pos.X + getPosition()->x, pos.Y + getPosition()->y, pos.Z + getPosition()->z };
+			pos = Legacy_Vector_Rotate_Z(pos, 1.0f * i / TheGlobalData->m_debugVisibilityTileCount * 2 * PI);
+			Coord3D coord = { pos.x + getPosition()->x, pos.y + getPosition()->y, pos.z + getPosition()->z };
 
 			addIcon(&coord, TheGlobalData->m_debugVisibilityTileWidth,
 											TheGlobalData->m_debugVisibilityTileDuration,
@@ -5583,7 +5579,7 @@ void Object::doCommandButton( const CommandButton *commandButton, CommandSourceT
 					}
 					else
 					{
-						DEBUG_CRASH( ("WARNING: Script doCommandButton for button %s cannot fire weapon with NO POSITION. Skipping.", commandButton->getName().str()) );
+						engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "WARNING: Script doCommandButton for button %s cannot fire weapon with NO POSITION. Skipping.", commandButton->getName().str());
 					}
 					return;
 				}
@@ -5593,7 +5589,7 @@ void Object::doCommandButton( const CommandButton *commandButton, CommandSourceT
 			case GUI_COMMAND_PLAYER_UPGRADE:
 				{
 					const UpgradeTemplate *upgradeT = commandButton->getUpgradeTemplate();
-					DEBUG_ASSERTCRASH( upgradeT, ("Undefined upgrade '%s' in player upgrade command", "UNKNOWN") );
+					engine::debug::invariant((upgradeT), "upgradeT", __FILE__, __LINE__, "Undefined upgrade '%s' in player upgrade command", "UNKNOWN");
 					// sanity
 					if( upgradeT == nullptr )
 						break;
@@ -5660,7 +5656,7 @@ void Object::doCommandButton( const CommandButton *commandButton, CommandSourceT
 			default:
 				break;
 		}
-		DEBUG_CRASH( ("WARNING: Script doCommandButton for button %s not implemented. Doing nothing.", commandButton->getName().str()) );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "WARNING: Script doCommandButton for button %s not implemented. Doing nothing.", commandButton->getName().str());
 	}
 }
 
@@ -5740,7 +5736,7 @@ void Object::doCommandButtonAtObject( const CommandButton *commandButton, Object
 					}
 					else
 					{
-						DEBUG_CRASH( ("WARNING: Script doCommandButtonAtObject for button %s cannot fire weapon at AN OBJECT. Skipping.", commandButton->getName().str()) );
+						engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "WARNING: Script doCommandButtonAtObject for button %s cannot fire weapon at AN OBJECT. Skipping.", commandButton->getName().str());
 					}
 					return;
 				}
@@ -5785,7 +5781,7 @@ void Object::doCommandButtonAtObject( const CommandButton *commandButton, Object
 			default:
 				break;
 		}
-		DEBUG_CRASH( ("WARNING: Script doCommandButtonAtObject for button %s not implemented. Doing nothing.", commandButton->getName().str()) );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "WARNING: Script doCommandButtonAtObject for button %s not implemented. Doing nothing.", commandButton->getName().str());
 	}
 }
 
@@ -5846,7 +5842,7 @@ void Object::doCommandButtonAtPosition( const CommandButton *commandButton, cons
 					}
 					else
 					{
-						DEBUG_CRASH( ("WARNING: Script doCommandButtonAtPosition for button %s cannot fire weapon at A POSITION. Skipping.", commandButton->getName().str()) );
+						engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "WARNING: Script doCommandButtonAtPosition for button %s cannot fire weapon at A POSITION. Skipping.", commandButton->getName().str());
 					}
 					return;
 				}
@@ -5883,7 +5879,7 @@ void Object::doCommandButtonAtPosition( const CommandButton *commandButton, cons
 			default:
 				break;
 		}
-		DEBUG_CRASH( ("WARNING: Script doCommandButtonAtPosition for button %s not implemented. Doing nothing.", commandButton->getName().str()) );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "WARNING: Script doCommandButtonAtPosition for button %s not implemented. Doing nothing.", commandButton->getName().str());
 	}
 }
 
@@ -5900,7 +5896,7 @@ void Object::doCommandButtonUsingWaypoints( const CommandButton *commandButton, 
 		if( !BitIsSet( commandButton->getOptions(), CAN_USE_WAYPOINTS ) )
 		{
 			//Our button doesn't support waypoints.
-			DEBUG_CRASH( ("WARNING: Script doCommandButtonUsingWaypoints for button %s lacks CAN_USE_WAYPOINTS option. Doing nothing.", commandButton->getName().str()) );
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "WARNING: Script doCommandButtonUsingWaypoints for button %s lacks CAN_USE_WAYPOINTS option. Doing nothing.", commandButton->getName().str());
 			return;
 		}
 		switch( commandButton->getCommandType() )
@@ -5950,7 +5946,7 @@ void Object::doCommandButtonUsingWaypoints( const CommandButton *commandButton, 
 			default:
 				break;
 		}
-		DEBUG_CRASH( ("WARNING: Script doCommandButtonUsingWaypoints for button %s not implemented. Doing nothing.", commandButton->getName().str()) );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "WARNING: Script doCommandButtonUsingWaypoints for button %s not implemented. Doing nothing.", commandButton->getName().str());
 	}
 }
 
@@ -6148,11 +6144,12 @@ Int Object::getNumConsecutiveShotsFiredAtTarget( const Object *victim ) const
 
 // ------------------------------------------------------------------------------------------------
 // ------------------------------------------------------------------------------------------------
-Bool Object::getSingleLogicalBonePosition(const char* boneName, Coord3D* position, Matrix3D* transform) const
+Bool Object::getSingleLogicalBonePosition(const char* boneName, Coord3D* position,
+	Engine::Math::AffineTransform3* transform) const
 {
-	if (m_drawable && m_drawable->getPristineBonePositions( boneName, 0, position, transform, 1 ) == 1 )
+	if (m_drawable && m_drawable->getPristineBoneData( boneName, 0, position, transform, 1 ) == 1 )
 	{
-		m_drawable->convertBonePosToWorldPos( position, transform, position, transform );
+		m_drawable->transformBoneToWorld( position, transform, position, transform );
 		return true;
 	}
 	else
@@ -6160,14 +6157,15 @@ Bool Object::getSingleLogicalBonePosition(const char* boneName, Coord3D* positio
 		if (position)
 			*position = *getPosition();
 		if (transform)
-			*transform = *getTransformMatrix();
+			*transform = worldTransform();
 		return false;
 	}
 }
 
 // ------------------------------------------------------------------------------------------------
 // ------------------------------------------------------------------------------------------------
-Bool Object::getSingleLogicalBonePositionOnTurret( WhichTurretType whichTurret, const char* boneName, Coord3D* position, Matrix3D* transform ) const
+Bool Object::getSingleLogicalBonePositionOnTurret(WhichTurretType whichTurret, const char* boneName,
+	Coord3D* position, Engine::Math::AffineTransform3* transform) const
 {
 	Coord3D turretPosition;
 	Coord3D bonePosition;
@@ -6175,45 +6173,41 @@ Bool Object::getSingleLogicalBonePositionOnTurret( WhichTurretType whichTurret, 
 		return FALSE;
 
 	// We need to find the TurretBone's pristine position.
-	getDrawable()->getProjectileLaunchOffset( PRIMARY_WEAPON, 1, nullptr, whichTurret, &turretPosition, nullptr );
+	getDrawable()->getProjectileLaunchTransform(PRIMARY_WEAPON, 1, nullptr, whichTurret, &turretPosition, nullptr);
 	// And the required bone's pristine position
-	if( getDrawable()->getPristineBonePositions(boneName, 0, &bonePosition, nullptr, 1) != 1 )
+	if( getDrawable()->getPristineBonePositions(boneName, 0, &bonePosition, 1) != 1 )
 		return FALSE;
 	//Then we mojo the Logic position of the required bone like Missile firing does.  Using the logic twist of the turret
 	Real turretRotation;
 	getAI()->getTurretRotAndPitch( whichTurret, &turretRotation, nullptr );
 
-	Matrix3D boneOffset(TRUE);// This will be from the turret to the requested bone
+	Engine::Math::AffineTransform3 boneOffset = Engine::Math::AffineTransform3::Identity();// This will be from the turret to the requested bone
 
 //	Vector3 bonePositionVector(	bonePosition.x - turretPosition.x,
 //															bonePosition.y - turretPosition.y,
 //															bonePosition.z - turretPosition.z );
-	Vector3 bonePositionVector(	bonePosition.x,
-															bonePosition.y,
-															bonePosition.z );
-	boneOffset.Translate(bonePositionVector);
+	Legacy_Translate(boneOffset, bonePosition.x, bonePosition.y, bonePosition.z);
 
-	Matrix3D turnAdjustment(TRUE);// this is the turret twist to be applied to the final answer
+	Engine::Math::AffineTransform3 turnAdjustment = Engine::Math::AffineTransform3::Identity();// this is the turret twist to be applied to the final answer
 
-	turnAdjustment.Translate( turretPosition.x, turretPosition.y, turretPosition.z );
-	turnAdjustment.In_Place_Pre_Rotate_Z(turretRotation);
-	turnAdjustment.Translate( -turretPosition.x, -turretPosition.y, -turretPosition.z );
+	Legacy_Translate(turnAdjustment, turretPosition.x, turretPosition.y, turretPosition.z);
+	Legacy_In_Place_Pre_Rotate_Z(turnAdjustment, turretRotation);
+	Legacy_Translate(turnAdjustment, -turretPosition.x, -turretPosition.y, -turretPosition.z);
 
-	Matrix3D boneLogicTransform;
-	boneLogicTransform.mul( turnAdjustment, boneOffset );
+	const Engine::Math::AffineTransform3 boneLogicTransform = Compose(turnAdjustment, boneOffset);
 
-	Matrix3D worldTransform;
-	convertBonePosToWorldPos(nullptr, &boneLogicTransform, nullptr, &worldTransform);
+	Engine::Math::AffineTransform3 worldTransform;
+	transformBoneToWorld(nullptr, &boneLogicTransform, nullptr, &worldTransform);
 
-	Vector3 tmp = worldTransform.Get_Translation();
+	const Engine::Math::Vector3 positionInWorld = worldTransform.Translation();
 	Coord3D worldPos;
-	worldPos.x = tmp.X;
-	worldPos.y = tmp.Y;
-	worldPos.z = tmp.Z;
+	worldPos.x = positionInWorld.x;
+	worldPos.y = positionInWorld.y;
+	worldPos.z = positionInWorld.z;
 
 	if( position )
 		*position = worldPos;
-	if( transform )
+	if (transform)
 		*transform = worldTransform;
 
 	return TRUE;
@@ -6222,16 +6216,16 @@ Bool Object::getSingleLogicalBonePositionOnTurret( WhichTurretType whichTurret, 
 // ------------------------------------------------------------------------------------------------
 // ------------------------------------------------------------------------------------------------
 Int Object::getMultiLogicalBonePosition(const char* boneNamePrefix, Int maxBones,
-																				Coord3D* positions, Matrix3D* transforms,
-																				Bool convertToWorld ) const
+																									Coord3D* positions, Engine::Math::AffineTransform3* transforms,
+																											Bool convertToWorld ) const
 {
 	Int count;
-	if (m_drawable && (count = m_drawable->getPristineBonePositions( boneNamePrefix, 1, positions, transforms, maxBones )) > 0 )
+	if (m_drawable && (count = m_drawable->getPristineBoneData( boneNamePrefix, 1, positions, transforms, maxBones )) > 0 )
 	{
 		if( convertToWorld )
 		{
 			for (Int i = 0; i < count; ++i)
-				m_drawable->convertBonePosToWorldPos( positions ? &positions[i] : nullptr, transforms ? &transforms[i] : nullptr, positions ? &positions[i] : nullptr, transforms ? &transforms[i] : nullptr );
+				m_drawable->transformBoneToWorld( positions ? &positions[i] : nullptr, transforms ? &transforms[i] : nullptr, positions ? &positions[i] : nullptr, transforms ? &transforms[i] : nullptr );
 		}
 		return count;
 	}
@@ -6451,7 +6445,7 @@ AIGroup *Object::getGroup()
 //-------------------------------------------------------------------------------------------------
 void Object::enterGroup( AIGroup *group )
 {
-//	DEBUG_LOG(("***AIGROUP %x involved in enterGroup on %x", group, this));
+//	engine::debug::log_info("***AIGROUP %x involved in enterGroup on %x", group, this);
 	// if we are in another group, remove ourselves from it first
 	leaveGroup();
 
@@ -6465,7 +6459,7 @@ void Object::enterGroup( AIGroup *group )
 //-------------------------------------------------------------------------------------------------
 void Object::leaveGroup()
 {
-//	DEBUG_LOG(("***AIGROUP %x involved in leaveGroup on %x", m_group, this));
+//	engine::debug::log_info("***AIGROUP %x involved in leaveGroup on %x", m_group, this);
 	// if we are in a group, remove ourselves from it
 	if (m_group)
 	{

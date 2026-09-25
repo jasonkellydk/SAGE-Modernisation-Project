@@ -22,10 +22,13 @@ import Graphics.Frame.RenderSettings;
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <climits>
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 
+import Engine.Core.Math.RandomStream;
+import Engine.Core.Math.Matrix4;
+import Engine.Core.Math.LineGeometry3;
 import Graphics.Materials.Ordering;
 import Graphics.Frame.Runtime;
 import Graphics.Scene.Beams.RibbonSubdivision;
@@ -43,19 +46,13 @@ import Graphics.Scene.Views.CameraMatrices;
 #include "W3DDevice/GameClient/W3DRenderContext.h"
 #include "W3DDevice/GameClient/W3DTextureHandle.h"
 
-#include "WWLib/RANDOM.h"
-#include "WWMath/matrix4.h"
-#include "WWMath/v3_rnd.h"
-
 namespace {
-
-template <typename Matrix>
-std::array<float, 16> Copy_Matrix(const Matrix &matrix) noexcept
+Engine::Math::Matrix4 To_Engine_Matrix(const Engine::Math::AffineTransform3 &matrix) noexcept
 {
-	std::array<float, 16> result{};
-	for (std::size_t row = 0; row < 4; ++row)
-		for (std::size_t column = 0; column < 4; ++column)
-			result[row * 4 + column] = matrix[row][column];
+	auto result = Engine::Math::Matrix4::Identity();
+	for (unsigned row = 0; row < 3; ++row)
+		for (unsigned column = 0; column < 4; ++column)
+			result(row, column) = matrix[row][column];
 	return result;
 }
 
@@ -65,33 +62,39 @@ Graphics::SegmentedLineBuildInput Make_Build_Input(
 	const auto &camera = Graphics::Get_Camera_Matrices();
 	Graphics::SegmentedLineBuildInput input;
 	input.view = camera.view.values;
-	input.world = Copy_Matrix(Matrix4x4(line.Get_Transform()));
+	input.world = To_Engine_Matrix(line.Get_Transform()).elements;
 	input.time_milliseconds = Graphics::Get_Render_Clock().Logic_Time_Milliseconds();
 	return input;
 }
 
+// Seed of the frozen noise sequence. Like the original fresh Random3Class, the
+// same sequence restarts for every chunk so frozen lines never change.
+constexpr std::uint64_t Frozen_Line_Noise_Seed = 0;
+
+// Non-frozen noise draws from one persistent stream that advances on every
+// build, matching the original shared Vector3Randomizer generator.
+Engine::Math::RandomStream &Shared_Line_Noise_Stream() noexcept
+{
+	static Engine::Math::RandomStream stream(0x5e61eed5ull);
+	return stream;
+}
+
 struct RandomState final {
-	std::optional<Random3Class> frozen;
-	std::optional<Vector3SolidBoxRandomizer> randomizer;
+	std::optional<Engine::Math::RandomStream> frozen;
 
 	void Reset(std::size_t)
 	{
-		frozen.emplace();
-		randomizer.emplace(Vector3(1, 1, 1));
+		frozen.emplace(Frozen_Line_Noise_Seed);
 	}
 
 	std::array<float, 3> Next(bool freeze)
 	{
-		Vector3 value;
-		if (freeze) {
-			// Keep the legacy evaluation count and axis order.  SegLineRenderer
-			// converted Random3Class independently for all three components.
-			const float oo_int_max = 1.0f / static_cast<float>(INT_MAX);
-			value.Set(*frozen * oo_int_max, *frozen * oo_int_max, *frozen * oo_int_max);
-		} else {
-			randomizer->Get_Vector(value);
-		}
-		return {value.X, value.Y, value.Z};
+		// Keep the legacy evaluation count and axis order (X, Y, Z).
+		auto &stream = freeze ? *frozen : Shared_Line_Noise_Stream();
+		const float x = stream.NextFloat(-1.0f, 1.0f);
+		const float y = stream.NextFloat(-1.0f, 1.0f);
+		const float z = stream.NextFloat(-1.0f, 1.0f);
+		return {x, y, z};
 	}
 };
 
@@ -159,22 +162,29 @@ bool W3DSegmentedLineRenderObject::Cast_Ray(W3DRayCastQuery &raytest)
 	if ((Get_Collision_Type() & raytest.CollisionType) == 0)
 		return false;
 
+	const auto to_math_vector = [](Engine::Math::Vector3 point) noexcept { return point; };
+	const Engine::Math::Vector3 ray_start = raytest.Ray.start;
+	const Engine::Math::Vector3 ray_end = raytest.Ray.end;
+	const Engine::Math::Vector3 ray_delta = ray_end - ray_start;
+	const float ray_length_squared = ray_delta.Dot(ray_delta);
+	if (!(ray_length_squared > 0.0f) || !std::isfinite(ray_length_squared))
+		return false;
+
 	bool hit = false;
 	float fraction = 1.0f;
 	for (std::size_t index = 1; index < m_points.size(); ++index) {
-		Vector3 transformed_points[2];
-		Get_Transform().mulVector3Array(&m_points[index - 1], transformed_points, 2);
-		const LineSegClass line_segment(transformed_points[0], transformed_points[1]);
-
-		Vector3 ray_point;
-		Vector3 line_point;
-		if (!raytest.Ray.Find_Intersection(line_segment, &ray_point, &fraction,
-			&line_point, nullptr))
+		const auto &transform = Get_Transform();
+		const auto transformed_first = transform.Transform_Point(to_math_vector(m_points[index - 1]));
+		const auto transformed_second = transform.Transform_Point(to_math_vector(m_points[index]));
+		const auto closest_points = Engine::Math::LineGeometry3::Closest_Points_On_Lines(
+			ray_start, ray_end, transformed_first, transformed_second);
+		if (!closest_points)
 			continue;
 
-		const float distance = (ray_point - line_point).Length();
+		fraction = (closest_points->first - ray_start).Dot(ray_delta) / ray_length_squared;
+		const float distance = (closest_points->first - closest_points->second).Length();
 		if (distance <= m_renderer.Get_Width() && fraction >= 0.0f
-			&& fraction < raytest.Result->Fraction) {
+			&& fraction < raytest.Result->fraction) {
 			hit = true;
 			break;
 		}
@@ -183,10 +193,10 @@ bool W3DSegmentedLineRenderObject::Cast_Ray(W3DRayCastQuery &raytest)
 	if (!hit)
 		return false;
 
-	raytest.Result->Fraction = fraction;
+	raytest.Result->fraction = fraction;
 	// Picking reports the format's default surface value for procedural lines.
 	constexpr std::uint32_t default_surface_type = 13;
-	raytest.Result->SurfaceType = default_surface_type;
+	raytest.Result->surface_type = default_surface_type;
 	raytest.CollidedRenderObj = this;
 	return true;
 }
@@ -200,9 +210,7 @@ void W3DSegmentedLineRenderObject::Submit(W3DRenderContext &rinfo)
 	Graphics::SegmentedLineDrawInput input;
 	input.build = Make_Build_Input(*this);
 	input.material_time_milliseconds = Graphics::Get_Render_Clock().Sync_Time();
-	Matrix4x4 projection;
-	rinfo.Camera.Get_Backend_Projection_Matrix(&projection);
-	input.projection = Copy_Matrix(projection);
+	input.projection = rinfo.Camera.Build_Render_Matrices().projection;
 	input.scene = Graphics::Get_Scene_Draw_Parameters();
 	input.reflection = Get_W3D_Render_Services().Is_Reflection_Render_Pass();
 	const auto shader = m_renderer.Get_Shader();
@@ -213,8 +221,8 @@ void W3DSegmentedLineRenderObject::Submit(W3DRenderContext &rinfo)
 
 	RandomState random;
 	const auto read_point = [&](std::size_t index) {
-		const Vector3 &point = m_points[index];
-		return Graphics::RibbonPoint{{point.X, point.Y, point.Z}, {1, 1, 1, 1}, 0.0f};
+		const Engine::Math::Vector3 &point = m_points[index];
+		return Graphics::RibbonPoint{{point.x, point.y, point.z}, {1, 1, 1, 1}, 0.0f};
 	};
 	const auto resolve = [](W3DTextureHandle *source, bool load)
 		-> std::optional<Graphics::PropMaterialTexture> {
@@ -228,7 +236,7 @@ void W3DSegmentedLineRenderObject::Submit(W3DRenderContext &rinfo)
 		[&](std::size_t chunk) { random.Reset(chunk); });
 }
 
-void W3DSegmentedLineRenderObject::Set_Points(unsigned int count, const Vector3 *points)
+void W3DSegmentedLineRenderObject::Set_Points(unsigned int count, const Engine::Math::Vector3 *points)
 {
 	if (count < 2 || points == nullptr)
 		return;
@@ -241,19 +249,19 @@ int W3DSegmentedLineRenderObject::Get_Num_Points() const noexcept
 	return static_cast<int>(m_points.size());
 }
 
-void W3DSegmentedLineRenderObject::Set_Point_Location(unsigned int index, const Vector3 &point)
+void W3DSegmentedLineRenderObject::Set_Point_Location(unsigned int index, const Engine::Math::Vector3 &point)
 {
 	if (index < m_points.size())
 		m_points[index] = point;
 	Invalidate_Cached_Bounding_Volumes();
 }
 
-void W3DSegmentedLineRenderObject::Get_Point_Location(unsigned int index, Vector3 &point) const
+void W3DSegmentedLineRenderObject::Get_Point_Location(unsigned int index, Engine::Math::Vector3 &point) const
 {
-	point = index < m_points.size() ? m_points[index] : Vector3(0, 0, 0);
+	point = index < m_points.size() ? m_points[index] : Engine::Math::Vector3{};
 }
 
-void W3DSegmentedLineRenderObject::Add_Point(const Vector3 &point)
+void W3DSegmentedLineRenderObject::Add_Point(const Engine::Math::Vector3 &point)
 {
 	m_points.push_back(point);
 	Invalidate_Cached_Bounding_Volumes();
@@ -296,15 +304,15 @@ void W3DSegmentedLineRenderObject::Set_Width(float width) noexcept
 	Invalidate_Cached_Bounding_Volumes();
 }
 
-void W3DSegmentedLineRenderObject::Get_Color(Vector3 &color) const
+void W3DSegmentedLineRenderObject::Get_Color(Engine::Math::Vector3 &color) const
 {
 	const auto value = m_renderer.Get_Color();
-	color.Set(value[0], value[1], value[2]);
+	color = {value[0], value[1], value[2]};
 }
 
-void W3DSegmentedLineRenderObject::Set_Color(const Vector3 &color) noexcept
+void W3DSegmentedLineRenderObject::Set_Color(const Engine::Math::Vector3 &color) noexcept
 {
-	m_renderer.Set_Color({color.X, color.Y, color.Z});
+	m_renderer.Set_Color({color.x, color.y, color.z});
 }
 
 float W3DSegmentedLineRenderObject::Get_Opacity() const noexcept { return m_renderer.Get_Opacity(); }
@@ -355,14 +363,14 @@ void W3DSegmentedLineRenderObject::Set_Texture_Tile_Factor(float factor) noexcep
 {
 	m_renderer.Set_Texture_Tile_Factor(factor);
 }
-Vector2 W3DSegmentedLineRenderObject::Get_UV_Offset_Rate() const
+Engine::Math::Vector2 W3DSegmentedLineRenderObject::Get_UV_Offset_Rate() const
 {
 	const auto rate = m_renderer.Get_UV_Offset_Rate();
-	return Vector2(rate[0], rate[1]);
+	return {rate[0], rate[1]};
 }
-void W3DSegmentedLineRenderObject::Set_UV_Offset_Rate(const Vector2 &rate) noexcept
+void W3DSegmentedLineRenderObject::Set_UV_Offset_Rate(const Engine::Math::Vector2 &rate) noexcept
 {
-	m_renderer.Set_UV_Offset_Rate({rate.X, rate.Y});
+	m_renderer.Set_UV_Offset_Rate({rate.x, rate.y});
 }
 int W3DSegmentedLineRenderObject::Is_Merge_Intersections() const noexcept
 {
@@ -410,8 +418,8 @@ void W3DSegmentedLineRenderObject::Extract_Geometry(
 	Graphics::SegmentedLineBuildInput input = Make_Build_Input(*this);
 	RandomState random;
 	const auto read_point = [&](std::size_t index) {
-		const Vector3 &point = m_points[index];
-		return Graphics::RibbonPoint{{point.X, point.Y, point.Z}, {1, 1, 1, 1}, 0.0f};
+		const Engine::Math::Vector3 &point = m_points[index];
+		return Graphics::RibbonPoint{{point.x, point.y, point.z}, {1, 1, 1, 1}, 0.0f};
 	};
 	m_renderer.Extract_Geometry(input, m_points.size(), read_point,
 		[&] { return random.Next(m_renderer.Is_Freeze_Random()); },
@@ -480,25 +488,24 @@ int W3DSegmentedLineRenderObject::Get_LOD_Count() const
 	return static_cast<int>(m_max_subdivision_levels);
 }
 
-void W3DSegmentedLineRenderObject::Get_Obj_Space_Bounding_Sphere(SphereClass &sphere) const
+void W3DSegmentedLineRenderObject::Get_Local_Bounding_Sphere(Engine::Math::Sphere3 &sphere) const
 {
-	AABoxClass box;
-	Get_Obj_Space_Bounding_Box(box);
-	sphere.Center = box.Center;
-	sphere.Radius = box.Extent.Length();
+	Engine::Math::AxisAlignedBox3 box;
+	Get_Local_Bounds(box);
+	sphere = {box.Center(), box.Extent().Length()};
 }
 
-void W3DSegmentedLineRenderObject::Get_Obj_Space_Bounding_Box(AABoxClass &box) const
+void W3DSegmentedLineRenderObject::Get_Local_Bounds(Engine::Math::AxisAlignedBox3 &box) const
 {
 	const auto bounds = m_renderer.Get_Bounds(m_points.size(), m_max_subdivision_levels,
 		[&](std::size_t index) {
-			const Vector3 &point = m_points[index];
-			return std::array<float, 3>{point.X, point.Y, point.Z};
+			const Engine::Math::Vector3 &point = m_points[index];
+			return std::array<float, 3>{point.x, point.y, point.z};
 		});
 	if (!bounds.valid) {
-		box.Init(Vector3(0, 0, 0), Vector3(1, 1, 1));
+		box = {{-1, -1, -1}, {1, 1, 1}};
 		return;
 	}
-	box.Init_Min_Max(Vector3(bounds.minimum[0], bounds.minimum[1], bounds.minimum[2]),
-		Vector3(bounds.maximum[0], bounds.maximum[1], bounds.maximum[2]));
+	box = {{bounds.minimum[0], bounds.minimum[1], bounds.minimum[2]},
+		{bounds.maximum[0], bounds.maximum[1], bounds.maximum[2]}};
 }

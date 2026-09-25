@@ -25,7 +25,9 @@
 // AIStates.cpp
 // Implementation of AI behavior states
 // Author: Michael S. Booth, January 2002
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.profiling;
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 
 #include "Common/ActionManager.h"
@@ -34,7 +36,7 @@
 #include "Common/GameAudio.h"
 #include "Common/GlobalData.h"
 #include "Common/Money.h"
-#include "Common/PerfTimer.h"
+
 #include "Common/Player.h"
 #include "Common/PlayerList.h"
 #include "Common/RandomValue.h"
@@ -416,7 +418,7 @@ static Object* findEnemyInContainer(Object* killer, Object* bldg)
 		{
 			if ((*it)->isEffectivelyDead())
 			{
-				DEBUG_CRASH(("why is there a dead thing in this container?"));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "why is there a dead thing in this container?");
 				continue;
 			}
 
@@ -571,7 +573,7 @@ StateReturnType AIRappelState::update()
 
 		if (m_targetIsBldg)
 		{
-			DEBUG_ASSERTCRASH(TheActionManager->canEnterObject(obj, bldg, obj->getAI()->getLastCommandSource(), COMBATDROP_INTO), ("Hmm, this seems unlikely"));
+			engine::debug::invariant((TheActionManager->canEnterObject(obj, bldg, obj->getAI()->getLastCommandSource(), COMBATDROP_INTO)), "TheActionManager->canEnterObject(obj, bldg, obj->getAI()->getLastCommandSource(), COMBATDROP_INTO)", __FILE__, __LINE__, "Hmm, this seems unlikely");
 			// if there are enemies... kill up to two. if we kill two, then we die ourselves,
 			// otherwise we enter the bldg.
 			const Int MAX_TO_KILL = 2;
@@ -581,13 +583,13 @@ StateReturnType AIRappelState::update()
 			{
 				const FXList* fx = obj->getTemplate()->getPerUnitFX("CombatDropKillFX");
 				FXList::doFXObj(fx, bldg, nullptr);
-				DEBUG_LOG(("Killing %d enemies in combat drop!",numKilled));
+				engine::debug::log_info("Killing %d enemies in combat drop!",numKilled);
 			}
 
 			if (numKilled == MAX_TO_KILL)
 			{
 				obj->kill();
-				DEBUG_LOG(("Killing SELF in combat drop!"));
+				engine::debug::log_info("Killing SELF in combat drop!");
 			}
 			else
 			{
@@ -671,8 +673,8 @@ void AIRappelState::onExit( StateExitType status )
 */
 AIStateMachine::AIStateMachine( Object *obj, AsciiString name ) : StateMachine( obj, name )
 {
-	DEBUG_ASSERTCRASH(getOwner(), ("An AI State Machine '%s' was constructed without an owner, please tell JKMCD", name.str()));
-	DEBUG_ASSERTCRASH(getOwner()->getAI(), ("An AI State Machine '%s' was constructed without an AIUpdateInterface, please tell JKMCD", name.str()));
+	engine::debug::invariant((getOwner()), "getOwner()", __FILE__, __LINE__, "An AI State Machine '%s' was constructed without an owner, please tell JKMCD", name.str());
+	engine::debug::invariant((getOwner()->getAI()), "getOwner()->getAI()", __FILE__, __LINE__, "An AI State Machine '%s' was constructed without an AIUpdateInterface, please tell JKMCD", name.str());
 
 	m_goalPath.clear();
 	m_goalWaypoint = nullptr;
@@ -796,7 +798,7 @@ void AIStateMachine::xfer( Xfer *xfer )
 	StateID id = INVALID_STATE_ID;
 	if (m_temporaryState) {
 		id = m_temporaryState->getID();
-		DEBUG_ASSERTCRASH(id!=INVALID_STATE_ID, ("State has invalid state id, no really. jba."));
+		engine::debug::invariant((id!=INVALID_STATE_ID), "id!=INVALID_STATE_ID", __FILE__, __LINE__, "State has invalid state id, no really. jba.");
 	}
 	xfer->xferUnsignedInt(&id);
 	if (xfer->getXferMode() == XFER_LOAD && id != INVALID_STATE_ID) {
@@ -853,7 +855,7 @@ StateReturnType AIStateMachine::updateStateMachine()
 	#if defined(RTS_DEBUG)
 		Bool idle = getOwner()->getAI()->isIdle();
 		if( !idle && TheGlobalData->m_extraLogging )
-			DEBUG_LOG( ("%d - %s::update() start - %s", TheGameLogic->getFrame(), getCurrentStateName().str(), getOwner()->getTemplate()->getName().str() ) );
+			engine::debug::log_info("%d - %s::update() start - %s", TheGameLogic->getFrame(), getCurrentStateName().str(), getOwner()->getTemplate()->getName().str() );
 	#endif
 	//end -extraLogging
 
@@ -872,7 +874,7 @@ StateReturnType AIStateMachine::updateStateMachine()
 			//-extraLogging
 			#if defined(RTS_DEBUG)
 				if( !idle && TheGlobalData->m_extraLogging )
-					DEBUG_LOG( (" - RETURN EARLY STATE_CONTINUE") );
+					engine::debug::log_info(" - RETURN EARLY STATE_CONTINUE");
 			#endif
 			//end -extraLogging
 
@@ -904,7 +906,7 @@ StateReturnType AIStateMachine::updateStateMachine()
 					break;
 			}
 			if( !idle )
-				DEBUG_LOG( (" - RETURNING %s", result.str() ) );
+				engine::debug::log_info(" - RETURNING %s", result.str() );
 		}
 	#endif
 	//end -extraLogging
@@ -928,16 +930,16 @@ StateReturnType AIStateMachine::setTemporaryState( StateID newStateID, Int frame
 		if (m_temporaryState) {
 			curState = m_temporaryState->getID();
 		}
-		DEBUG_LOG_RAW(("%d '%s' -(TEMP)- '%s' %x exit ", TheGameLogic->getFrame(), getOwner()->getTemplate()->getName().str(), getName().str(), this));
+		engine::debug::log_info("%d '%s' -(TEMP)- '%s' %x exit ", TheGameLogic->getFrame(), getOwner()->getTemplate()->getName().str(), getName().str(), this);
 		if (m_temporaryState) {
-			DEBUG_LOG_RAW((" '%s' ", m_temporaryState->getName().str()));
+			engine::debug::log_info(" '%s' ", m_temporaryState->getName().str());
 		} else {
-			DEBUG_LOG_RAW((" INVALID_STATE_ID "));
+			engine::debug::log_info(" INVALID_STATE_ID ");
 		}
 		if (newState) {
-			DEBUG_LOG(("enter '%s'", newState->getName().str()));
+			engine::debug::log_info("enter '%s'", newState->getName().str());
 		} else {
-			DEBUG_LOG(("to INVALID_STATE"));
+			engine::debug::log_info("to INVALID_STATE");
 		}
 	}
 #endif
@@ -955,7 +957,7 @@ StateReturnType AIStateMachine::setTemporaryState( StateID newStateID, Int frame
 		}
 		enum {FRAME_COUNT_MAX = 60*LOGICFRAMES_PER_SECOND};
 		// If you need to up this check, ok, but 1 minute seems overly long for a temporary state override.  jba.
-		DEBUG_ASSERTCRASH(frameLimitCoount<=FRAME_COUNT_MAX, ("Unusually long time to set temporary state."));
+		engine::debug::invariant((frameLimitCoount<=FRAME_COUNT_MAX), "frameLimitCoount<=FRAME_COUNT_MAX", __FILE__, __LINE__, "Unusually long time to set temporary state.");
 		if (frameLimitCoount>FRAME_COUNT_MAX) {
 			frameLimitCoount = FRAME_COUNT_MAX;
 		}
@@ -1105,7 +1107,7 @@ Bool outOfWeaponRangeObject( State *thisState, void* userData )
 	Object *victim = thisState->getMachineGoalObject();
 	Weapon *weapon = obj->getCurrentWeapon();
 
-	CRCDEBUG_LOG(("outOfWeaponRangeObject()"));
+	engine::debug::log_trace("outOfWeaponRangeObject()");
 	if (victim && weapon)
 	{
 		Bool viewBlocked = false;
@@ -1309,10 +1311,9 @@ void AIIdleState::loadPostProcess()
 /**
  * Stake out our space.
  */
-DECLARE_PERF_TIMER(AIIdleState)
 StateReturnType AIIdleState::onEnter()
 {
-	USE_PERF_TIMER(AIIdleState)
+	engine::profiling::Scope profile_scope_1314("AIIdleState");
 	Object *obj = getMachineOwner();
 	AIUpdateInterface *ai = obj->getAI();
 
@@ -1391,7 +1392,7 @@ void AIIdleState::doInitIdleState()
  */
 StateReturnType AIIdleState::update()
 {
-	USE_PERF_TIMER(AIIdleState)
+	engine::profiling::Scope profile_scope_1393("AIIdleState");
 
 	doInitIdleState();
 
@@ -1751,7 +1752,7 @@ void AIInternalMoveToState::onExit( StateExitType status )
 	// (This is why destructors should not do game logic)
 	if (ai) {
 		ai->friend_endingMove();
-		DEBUG_ASSERTLOG(obj->getTeam(), ("AIInternalMoveToState::onExit obj has null team."));
+		if (!(obj->getTeam())) engine::debug::log_error("AIInternalMoveToState::onExit obj has null team.");
 		if (obj->getTeam() && ai->isDoingGroundMovement() && ai->getCurLocomotor() &&
 								ai->getCurLocomotor()->isUltraAccurate()) {
 			Real dx = m_goalPosition.x-obj->getPosition()->x;
@@ -1834,7 +1835,7 @@ StateReturnType AIInternalMoveToState::update()
 		blocked = true;
 		m_blockedRepathTimestamp = TheGameLogic->getFrame();
 		// Intense debug logging jba.
-		//DEBUG_LOG(("Info - Blocked - recomputing."));
+		//engine::debug::log_info("Info - Blocked - recomputing.");
 	}
 
 	//Determine if we are on a cliff cell... if so, use the climbing model condition
@@ -1918,7 +1919,7 @@ StateReturnType AIInternalMoveToState::update()
 	// Check if we have reached our destination
 	//
 	Real onPathDistToGoal = ai->getLocomotorDistanceToGoal();
-	//DEBUG_LOG(("onPathDistToGoal = %f %s",onPathDistToGoal, obj->getTemplate()->getName().str()));
+	//engine::debug::log_info("onPathDistToGoal = %f %s",onPathDistToGoal, obj->getTemplate()->getName().str());
 	if (ai->getCurLocomotor() && (onPathDistToGoal < ai->getCurLocomotor()->getCloseEnoughDist()))
 	{
 		if (ai->isDoingGroundMovement()) {
@@ -1932,7 +1933,7 @@ StateReturnType AIInternalMoveToState::update()
 			delta.y = obj->getPosition()->y - goalPos.y;
 			delta.z = 0;
 			if (delta.length() > 4*PATHFIND_CELL_SIZE_F) {
-				//DEBUG_LOG(("AIInternalMoveToState Trying to finish early.  Continuing..."));
+				//engine::debug::log_info("AIInternalMoveToState Trying to finish early.  Continuing...");
 				onPathDistToGoal = ai->getLocomotorDistanceToGoal();
 				return STATE_CONTINUE;
 			}
@@ -1954,7 +1955,7 @@ StateReturnType AIInternalMoveToState::update()
 		{
 			ai->setLocomotorGoalNone();
 		}
-		DEBUG_ASSERTLOG(!getMachine()->getWantsDebugOutput(), ("AIInternalMoveToState::update: reached end of path, exiting state with success"));
+		if (!(!getMachine()->getWantsDebugOutput())) engine::debug::log_error("AIInternalMoveToState::update: reached end of path, exiting state with success");
 		//Kris: 7/01/03 (Temporary debug hook for units not being able to leave maps)
 		if( blah )
 		{
@@ -2146,7 +2147,7 @@ StateReturnType AIMoveToState::update()
 			m_goalPosition.y += dir.y*leadDistance;
 			m_goalPosition.z += dir.z*leadDistance;
 		}
-		//DEBUG_LOG(("update goal pos to %f %f %f",m_goalPosition.x,m_goalPosition.y,m_goalPosition.z));
+		//engine::debug::log_info("update goal pos to %f %f %f",m_goalPosition.x,m_goalPosition.y,m_goalPosition.z);
 	} else {
 		Bool isMissile = obj->isKindOf(KINDOF_PROJECTILE);
 		if (isMissile) {
@@ -2299,7 +2300,7 @@ Bool AIMoveAndTightenState::computePath()
 			ai->requestPath(&m_goalPosition, true);
 			return true;
 		}
-		//DEBUG_LOG(("AIMoveAndTightenState::computePath - stuck, failing."));
+		//engine::debug::log_info("AIMoveAndTightenState::computePath - stuck, failing.");
 		return false;		 // don't repath for now.  jba.
 	}
 	return true; // just use the existing path.  See above.
@@ -2477,14 +2478,14 @@ Bool AIAttackApproachTargetState::computePath()
 		// if our victim's position hasn't changed, don't re-path
 		if (!forceRepath && isSamePosition(source->getPosition(), &m_prevVictimPos, getMachineGoalObject()->getPosition() ))
 		{
-			CRCDEBUG_LOG(("AIAttackApproachTargetState::computePath - bailing because victim in same place for object %d", getMachineOwner()->getID()));
+			engine::debug::log_trace("AIAttackApproachTargetState::computePath - bailing because victim in same place for object %d", getMachineOwner()->getID());
 			return true;
 		}
 
 		Weapon* weapon = source->getCurrentWeapon();
 		if (!weapon)
 		{
-			CRCDEBUG_LOG(("AIAttackApproachTargetState::computePath - bailing because of no weapon for object %d", getMachineOwner()->getID()));
+			engine::debug::log_trace("AIAttackApproachTargetState::computePath - bailing because of no weapon for object %d", getMachineOwner()->getID());
 			return false;
 		}
 
@@ -2510,11 +2511,11 @@ Bool AIAttackApproachTargetState::computePath()
 		Coord3D pos;
 		victim->getGeometryInfo().getCenterPosition( *victim->getPosition(), pos );
 
-		CRCDEBUG_LOG(("AIAttackApproachTargetState::computePath - requestAttackPath() for object %d", getMachineOwner()->getID()));
+		engine::debug::log_trace("AIAttackApproachTargetState::computePath - requestAttackPath() for object %d", getMachineOwner()->getID());
 		ai->requestAttackPath(victim->getID(), &pos );
 		m_stopIfInRange = false; // we have calculated a position to shoot from, so go there.
 
-		CRCDEBUG_LOG(("AIAttackApproachTargetState::computePath - bailing after repathing for object %d", getMachineOwner()->getID()));
+		engine::debug::log_trace("AIAttackApproachTargetState::computePath - bailing after repathing for object %d", getMachineOwner()->getID());
 		return true;
 	}
 	else
@@ -2525,18 +2526,18 @@ Bool AIAttackApproachTargetState::computePath()
 		m_goalPosition = *getMachineGoalPosition();
 		if (!forceRepath)
 		{
-			CRCDEBUG_LOG(("AIAttackApproachTargetState::computePath - bailing because we're aiming for a fixed position for object %d", getMachineOwner()->getID()));
+			engine::debug::log_trace("AIAttackApproachTargetState::computePath - bailing because we're aiming for a fixed position for object %d", getMachineOwner()->getID());
 			return true; // fixed positions don't move.
 		}
 		// must use computeAttackPath so that min ranges are considered.
 		m_waitingForPath = true;
 		ai->requestAttackPath(INVALID_ID, &m_goalPosition);
-		CRCDEBUG_LOG(("AIAttackApproachTargetState::computePath - bailing after repathing at a fixed position for object %d", getMachineOwner()->getID()));
+		engine::debug::log_trace("AIAttackApproachTargetState::computePath - bailing after repathing at a fixed position for object %d", getMachineOwner()->getID());
 		return true;
 	}
 
 
-	CRCDEBUG_LOG(("AIAttackApproachTargetState::computePath - bailing at end of function for object %d", getMachineOwner()->getID()));
+	engine::debug::log_trace("AIAttackApproachTargetState::computePath - bailing at end of function for object %d", getMachineOwner()->getID());
 	return true;
 }
 
@@ -2903,7 +2904,7 @@ Bool AIAttackPursueTargetState::computePath()
 
 	m_approachTimestamp = TheGameLogic->getFrame();
 
-	DEBUG_ASSERTLOG(getMachineGoalObject(), ("***************************Should only be pursuing objects.  jba"));
+	if (!(getMachineGoalObject())) engine::debug::log_error("***************************Should only be pursuing objects.  jba");
 	// if we have a goal object, move to it, otherwise fail & continue to AIAttackApproachTargetState
 	if (getMachineGoalObject())
 	{
@@ -3121,7 +3122,7 @@ StateReturnType AIAttackPursueTargetState::updateInternal()
 			}
 			ai->setDesiredSpeed(victimSpeed);
 			// Really intense debug info.  jba.
-			// DEBUG_LOG(("VS %f, OS %f, goal %f", victim->getPhysics()->getForwardSpeed2D(), source->getPhysics()->getForwardSpeed2D(), victimSpeed));
+			// engine::debug::log_info("VS %f, OS %f, goal %f", victim->getPhysics()->getForwardSpeed2D(), source->getPhysics()->getForwardSpeed2D(), victimSpeed);
 		}	else {
 			ai->setDesiredSpeed(FAST_AS_POSSIBLE);
 		}
@@ -3709,7 +3710,7 @@ StateReturnType AIAttackMoveToState::update()
 		if (distSqr < sqr(ATTACK_CLOSE_ENOUGH_CELLS*PATHFIND_CELL_SIZE_F)) {
 			return ret;
 		}
-		DEBUG_LOG(("AIAttackMoveToState::update Distance from goal %f, retrying.", sqrt(distSqr)));
+		engine::debug::log_info("AIAttackMoveToState::update Distance from goal %f, retrying.", sqrt(distSqr));
 
 		ret = STATE_CONTINUE;
 		m_retryCount--;
@@ -4115,7 +4116,7 @@ StateReturnType AIFollowWaypointPathState::onEnter()
 		setAdjustsDestination(ai->isDoingGroundMovement());
 		if (getAdjustsDestination()) {
 			if (!TheAI->pathfinder()->adjustDestination(getMachineOwner(), ai->getLocomotorSet(), &m_goalPosition)) {
-				DEBUG_LOG(("Breaking out of follow waypoint path"));
+				engine::debug::log_info("Breaking out of follow waypoint path");
 				return STATE_FAILURE;
 			}
 			TheAI->pathfinder()->updateGoal(getMachineOwner(), &m_goalPosition, m_goalLayer);
@@ -4128,7 +4129,7 @@ StateReturnType AIFollowWaypointPathState::onEnter()
 		}
 	}
 	if (ret != STATE_CONTINUE) {
-		DEBUG_LOG(("Breaking out of follow waypoint path"));
+		engine::debug::log_info("Breaking out of follow waypoint path");
 	}
 	return ret;
 }
@@ -4188,8 +4189,8 @@ StateReturnType AIFollowWaypointPathState::update()
 				if (m_currentWaypoint) {
 // TheSuperHackers @info helmutbuhler 05/05/2025 This debug mutates the code to become CRC incompatible
 #if defined(RTS_DEBUG) || !RETAIL_COMPATIBLE_CRC
-					DEBUG_LOG(("Breaking out of follow waypoint path %s of %s",
-					m_currentWaypoint->getName().str(), m_currentWaypoint->getPathLabel1().str()));
+					engine::debug::log_info("Breaking out of follow waypoint path %s of %s",
+					m_currentWaypoint->getName().str(), m_currentWaypoint->getPathLabel1().str());
 #endif
 				}
 				return STATE_FAILURE;
@@ -4265,8 +4266,8 @@ StateReturnType AIFollowWaypointPathState::update()
 				if (m_currentWaypoint) {
 // TheSuperHackers @info helmutbuhler 05/05/2025 This debug mutates the code to become CRC incompatible
 #if defined(RTS_DEBUG) || !RETAIL_COMPATIBLE_CRC
-					DEBUG_LOG(("Breaking out of follow waypoint path %s of %s",
-					m_currentWaypoint->getName().str(), m_currentWaypoint->getPathLabel1().str()));
+					engine::debug::log_info("Breaking out of follow waypoint path %s of %s",
+					m_currentWaypoint->getName().str(), m_currentWaypoint->getPathLabel1().str());
 #endif
 				}
 				return STATE_FAILURE;
@@ -4281,7 +4282,7 @@ StateReturnType AIFollowWaypointPathState::update()
 		return STATE_CONTINUE;
 	}
 	if (status != STATE_CONTINUE) {
-		DEBUG_LOG(("Breaking out of follow waypoint path"));
+		engine::debug::log_info("Breaking out of follow waypoint path");
 	}
 	return status;
 }
@@ -5110,7 +5111,7 @@ StateReturnType AIAttackAimAtTargetState::update()
 			aimDelta = REL_THRESH;
 		}
 
-		//DEBUG_LOG(("AIM: desired %f, actual %f, delta %f, aimDelta %f, goalpos %f %f",rad2deg(obj->getOrientation() + relAngle),rad2deg(obj->getOrientation()),rad2deg(relAngle),rad2deg(aimDelta),victim->getPosition()->x,victim->getPosition()->y));
+		//engine::debug::log_info("AIM: desired %f, actual %f, delta %f, aimDelta %f, goalpos %f %f",rad2deg(obj->getOrientation() + relAngle),rad2deg(obj->getOrientation()),rad2deg(relAngle),rad2deg(aimDelta),victim->getPosition()->x,victim->getPosition()->y);
 		if (m_canTurnInPlace)
 		{
 			if (fabs(relAngle) > aimDelta)
@@ -5208,7 +5209,7 @@ void AIAttackAimAtTargetState::onExit( StateExitType status )
 StateReturnType AIAttackFireWeaponState::onEnter()
 {
 	// contained by AIAttackState, so no separate timer
-	DEBUG_ASSERTCRASH(m_att != nullptr, ("m_att may not be null"));
+	engine::debug::invariant((m_att != nullptr), "m_att != nullptr", __FILE__, __LINE__, "m_att may not be null");
 
 	Object *obj = getMachineOwner();
 	AIUpdateInterface *ai = obj->getAI();
@@ -5415,8 +5416,8 @@ AIAttackState::AIAttackState( StateMachine *machine, Bool follow, Bool attacking
 	m_originalVictimPos.zero();
 #ifdef STATE_MACHINE_DEBUG
 	if (machine->getWantsDebugOutput()) {
-		DEBUG_LOG(("Creating attack state follow %d, attacking object %d, force attacking %d",
-			follow, attackingObject, forceAttacking));
+		engine::debug::log_info("Creating attack state follow %d, attacking object %d, force attacking %d",
+			follow, attackingObject, forceAttacking);
 	}
 #endif
 }
@@ -5513,7 +5514,7 @@ Bool AIAttackState::chooseWeapon()
 //	if (victim) // Pardon?  We still need to pick a weapon if we are attacking the ground.
 //	{
 		found = source->chooseBestWeaponForTarget(victim, PREFER_MOST_DAMAGE, ai->getLastCommandSource());
-		//DEBUG_ASSERTLOG(found, ("unable to autochoose any weapon for %s",source->getTemplate()->getName().str()));
+		//if (!(found)) engine::debug::log_error("unable to autochoose any weapon for %s",source->getTemplate()->getName().str());
 //	}
 
 	// Check if we need to update because of the weapon choice switch.
@@ -5537,10 +5538,9 @@ void AIAttackState::notifyNewVictimChosen(Object* victim)
  * To do this complex behavior, instantiate another state machine as a "sub-machine" of
  * the attack state.
  */
-DECLARE_PERF_TIMER(AIAttackState)
 StateReturnType AIAttackState::onEnter()
 {
-	USE_PERF_TIMER(AIAttackState)
+	engine::profiling::Scope profile_scope_5541("AIAttackState");
 	//CRCDEBUG_LOG(("AIAttackState::onEnter() - start for object %d", getMachineOwner()->getID()));
 	Object* source = getMachineOwner();
 	AIUpdateInterface *ai = source->getAI();
@@ -5624,7 +5624,7 @@ StateReturnType AIAttackState::onEnter()
 
 StateReturnType AIAttackState::update()
 {
-	USE_PERF_TIMER(AIAttackState)
+	engine::profiling::Scope profile_scope_5625("AIAttackState");
 	// if we've met the conditions specified by m_attackParameters, we consider ourselves "successful."
 	if (m_attackParameters && m_attackParameters->shouldExit(getMachine()))
 	{
@@ -5738,7 +5738,7 @@ StateReturnType AIAttackState::update()
 //----------------------------------------------------------------------------------------------------------
 void AIAttackState::onExit( StateExitType status )
 {
-	USE_PERF_TIMER(AIAttackState)
+	engine::profiling::Scope profile_scope_5739("AIAttackState");
 	// nope, don't do this, since we may well still have it targeted
 	// even though we're leaving this state. turn it off when we
 	// turn it off when we do setCurrentVictim(nullptr).
@@ -6139,7 +6139,7 @@ StateReturnType AIDockState::onEnter()
 	if (dockWithMe == nullptr)
 	{
 		// we have nothing to dock with!
-		DEBUG_LOG(("No goal in AIDockState::onEnter - exiting."));
+		engine::debug::log_info("No goal in AIDockState::onEnter - exiting.");
 		return STATE_FAILURE;
 	}
   DockUpdateInterface *dock = nullptr;
@@ -6147,7 +6147,7 @@ StateReturnType AIDockState::onEnter()
 
 	// if we have nothing to dock with, fail
 	if (dock == nullptr)	{
-		DEBUG_LOG(("Goal is not a dock in AIDockState::onEnter - exiting."));
+		engine::debug::log_info("Goal is not a dock in AIDockState::onEnter - exiting.");
 		return STATE_FAILURE;
 	}
 
@@ -6179,7 +6179,7 @@ void AIDockState::onExit( StateExitType status )
 		deleteInstance(m_dockMachine);
 		m_dockMachine = nullptr;
 	}	else {
-		DEBUG_LOG(("Dock exited immediately"));
+		engine::debug::log_info("Dock exited immediately");
 	}
 
 	// stop ignoring our goal object
@@ -6210,10 +6210,10 @@ StateReturnType AIDockState::update()
 	{
 		ai->setCanPathThroughUnits(true);
 		//if (ai->isBlockedAndStuck()) {
-			//DEBUG_LOG(("Blocked and stuck."));
+			//engine::debug::log_info("Blocked and stuck.");
 		//}
 		//if (ai->getNumFramesBlocked()>5) {
-			//DEBUG_LOG(("Blocked %d frames", ai->getNumFramesBlocked()));
+			//engine::debug::log_info("Blocked %d frames", ai->getNumFramesBlocked());
 		//}
 	}
 	/*
@@ -6514,7 +6514,7 @@ StateReturnType AIExitState::update()
 		if (goalAI && goalAI->getAiFreeToExit(obj) == WAIT_TO_EXIT)
 			return STATE_CONTINUE;
 
-		DEBUG_ASSERTCRASH(obj, ("obj must not be null here"));
+		engine::debug::invariant((obj), "obj", __FILE__, __LINE__, "obj must not be null here");
 
 		//GS.  The goal of unified ExitInterfaces dies a horrible death.  I can't ask Object for the exit,
 		// as removeFromContain is only in the Contain type.  I'm splitting the names in shame.
@@ -6615,7 +6615,7 @@ StateReturnType AIExitInstantlyState::onEnter()
 			m_entryToClear = goal->getID();
 		}
 
-		DEBUG_ASSERTCRASH(obj, ("obj must not be null here"));
+		engine::debug::invariant((obj), "obj", __FILE__, __LINE__, "obj must not be null here");
 
 		//GS.  The goal of unified ExitInterfaces dies a horrible death.  I can't ask Object for the exit,
 		// as removeFromContain is only in the Contain type.  I'm splitting the names in shame.
@@ -6793,7 +6793,7 @@ void AIGuardState::onExit( StateExitType status )
 //----------------------------------------------------------------------------------------------------------
 StateReturnType AIGuardState::update()
 {
-	//DEBUG_LOG(("AIGuardState frame %d: %08lx",TheGameLogic->getFrame(),getMachineOwner()));
+	//engine::debug::log_info("AIGuardState frame %d: %08lx",TheGameLogic->getFrame(),getMachineOwner());
 
 	if (m_guardMachine == nullptr)
 	{
@@ -6805,7 +6805,7 @@ StateReturnType AIGuardState::update()
 	Object* owner = getMachineOwner();
 	if( owner->getAI()->getJetAIUpdate() && owner->isOutOfAmmo() && !owner->isKindOf(KINDOF_PROJECTILE) && !owner->getTemplate()->isEnterGuard())
 	{
-		DEBUG_CRASH(("Hmm, this should probably never happen, since this case should be intercepted by JetAIUpdate"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Hmm, this should probably never happen, since this case should be intercepted by JetAIUpdate");
 		return STATE_FAILURE;
 	}
 
@@ -6940,7 +6940,7 @@ void AIGuardRetaliateState::onExit( StateExitType status )
 //----------------------------------------------------------------------------------------------------------
 StateReturnType AIGuardRetaliateState::update()
 {
-	//DEBUG_LOG(("AIGuardRetaliateState frame %d: %08lx",TheGameLogic->getFrame(),getMachineOwner()));
+	//engine::debug::log_info("AIGuardRetaliateState frame %d: %08lx",TheGameLogic->getFrame(),getMachineOwner());
 
 	if (m_guardRetaliateMachine == nullptr)
 	{
@@ -6952,7 +6952,7 @@ StateReturnType AIGuardRetaliateState::update()
 	Object* owner = getMachineOwner();
 	if( owner->getAI()->getJetAIUpdate() && owner->isOutOfAmmo() && !owner->isKindOf(KINDOF_PROJECTILE) && !owner->getTemplate()->isEnterGuard())
 	{
-		DEBUG_CRASH(("Hmm, this should probably never happen, since this case should be intercepted by JetAIUpdate"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Hmm, this should probably never happen, since this case should be intercepted by JetAIUpdate");
 		return STATE_FAILURE;
 	}
 
@@ -7071,7 +7071,7 @@ void AITunnelNetworkGuardState::onExit( StateExitType status )
 //----------------------------------------------------------------------------------------------------------
 StateReturnType AITunnelNetworkGuardState::update()
 {
-	//DEBUG_LOG(("AITunnelNetworkGuardState frame %d: %08lx",TheGameLogic->getFrame(),getMachineOwner()));
+	//engine::debug::log_info("AITunnelNetworkGuardState frame %d: %08lx",TheGameLogic->getFrame(),getMachineOwner());
 
 	if (m_guardMachine == nullptr)
 	{
@@ -7083,7 +7083,7 @@ StateReturnType AITunnelNetworkGuardState::update()
 	Object* owner = getMachineOwner();
 	if (owner->isOutOfAmmo() && !owner->isKindOf(KINDOF_PROJECTILE))
 	{
-		DEBUG_CRASH(("Hmm, this should probably never happen, since this case should be intercepted by JetAIUpdate"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Hmm, this should probably never happen, since this case should be intercepted by JetAIUpdate");
 		return STATE_FAILURE;
 	}
 
@@ -7261,7 +7261,7 @@ StateReturnType AIHuntState::update()
 				// Check priorities.
 				if (teamVictim && info) {
 					if (victim==nullptr) {
-						DEBUG_LOG(("Couldnt' find victim. hmm."));
+						engine::debug::log_info("Couldnt' find victim. hmm.");
 						victim = teamVictim;
 					}
 					Int teamVictimPriority = info->getPriority(teamVictim->getTemplate());

@@ -42,12 +42,12 @@ public:
     W3DRenderObject* Clone() const override;
     int Class_ID() const override { return CLASSID_DAZZLE; }
     void Render(W3DRenderContext& info) override;
-    void Set_Transform(const Matrix3D& transform) override;
-    void Get_Obj_Space_Bounding_Sphere(SphereClass& sphere) const override;
-    void Get_Obj_Space_Bounding_Box(AABoxClass& box) const override;
+    void Set_Transform(const Engine::Math::AffineTransform3& transform) override;
+    void Get_Local_Bounding_Sphere(Engine::Math::Sphere3& sphere) const override;
+    void Get_Local_Bounds(Engine::Math::AxisAlignedBox3& box) const override;
     void Scale(float scale) override { m_state.scale *= scale; }
-    void Set_Dazzle_Color(const Vector3& color) { m_state.color = {color.X, color.Y, color.Z}; }
-    void Set_Halo_Color(const Vector3& color) { m_state.halo_color = {color.X, color.Y, color.Z}; }
+    void Set_Dazzle_Color(const Engine::Math::Vector3& color) { m_state.color = {color.x, color.y, color.z}; }
+    void Set_Halo_Color(const Engine::Math::Vector3& color) { m_state.halo_color = {color.x, color.y, color.z}; }
     void Set_Lensflare_Intensity(float intensity) { m_state.lens_flare_intensity = intensity; }
     unsigned Get_Dazzle_Type() const { return m_type; }
     void Set_Layer(W3DDazzleLayer* layer);
@@ -80,6 +80,6 @@ private:
 class W3DDazzleVisibility {
 public:
     virtual ~W3DDazzleVisibility() = default;
-    virtual float Compute_Dazzle_Visibility(W3DRenderContext& info, W3DDazzleRenderObject* dazzle, const Vector3& point) const;
+    virtual float Compute_Dazzle_Visibility(W3DRenderContext& info, W3DDazzleRenderObject* dazzle, const Engine::Math::Vector3& point) const;
 };
 Graphics::ModelFactory<W3DRenderObject>* Load_Dazzle_Factory(ChunkLoadClass& chunks);

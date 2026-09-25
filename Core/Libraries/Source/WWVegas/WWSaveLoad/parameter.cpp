@@ -75,15 +75,15 @@ ParameterClass::Construct (Type type, void *data, const char *name)
 			break;
 
 		case TYPE_RECT:
-			new_param = W3DNEW RectParameterClass (data, name);
+			new_param = W3DNEW RectangleParameterClass (data, name);
 			break;
 
 		case TYPE_COLOR:
 			new_param = W3DNEW ColorParameterClass (data, name);
 			break;
 
-		case TYPE_MATRIX3D:
-			new_param = W3DNEW Matrix3DParameterClass (data, name);
+		case TYPE_AFFINE_TRANSFORM3:
+			new_param = W3DNEW AffineTransform3ParameterClass (data, name);
 			break;
 
 		case TYPE_BOOL:
@@ -167,11 +167,6 @@ ParameterClass::Construct (Type type, void *data, const char *name)
 			new_param = W3DNEW DefIDListParameterClass ((DynamicVectorClass<int> *)data);
 			new_param->Set_Name (name);
 			((DefIDListParameterClass *)new_param)->Set_Class_ID (CLASSID_GAME_OBJECTS);
-			break;
-
-		case TYPE_ZONE:
-			new_param = W3DNEW ZoneParameterClass ((OBBoxClass  *)data);
-			new_param->Set_Name (name);
 			break;
 
 		case TYPE_FILENAMELIST:
@@ -1755,109 +1750,6 @@ DefIDListParameterClass::Copy_Value (const ParameterClass &src)
 }
 
 
-//*******************************************************************************************//
-//
-//	Start of ZoneParameterClass
-//
-//*******************************************************************************************//
-
-
-/////////////////////////////////////////////////////////////////////
-//
-//	ZoneParameterClass
-//
-/////////////////////////////////////////////////////////////////////
-ZoneParameterClass::ZoneParameterClass (OBBoxClass *box)
-	:	m_OBBox (box)
-{
-}
-
-
-/////////////////////////////////////////////////////////////////////
-//
-//	ZoneParameterClass
-//
-/////////////////////////////////////////////////////////////////////
-ZoneParameterClass::ZoneParameterClass (const ZoneParameterClass &src)
-	:	m_OBBox (nullptr)
-{
-	(*this) = src;
-}
-
-
-/////////////////////////////////////////////////////////////////////
-//
-//	operator=
-//
-/////////////////////////////////////////////////////////////////////
-const ZoneParameterClass &
-ZoneParameterClass::operator= (const ZoneParameterClass &src)
-{
-	m_OBBox = src.m_OBBox;
-
-	ParameterClass::operator= (src);
-	return *this;
-}
-
-
-/////////////////////////////////////////////////////////////////////
-//
-//	operator==
-//
-/////////////////////////////////////////////////////////////////////
-bool
-ZoneParameterClass::operator== (const ZoneParameterClass &src)
-{
-	bool retval = false;
-
-	//
-	//	Are the OBBoxes the same?
-	//
-	if ((m_OBBox != nullptr) && (src.m_OBBox != nullptr)) {
-		retval = (*m_OBBox) == (*src.m_OBBox);
-	}
-
-	return retval;
-}
-
-
-/////////////////////////////////////////////////////////////////////
-//
-//	operator==
-//
-/////////////////////////////////////////////////////////////////////
-bool
-ZoneParameterClass::operator== (const ParameterClass &src)
-{
-	bool retval = false;
-
-	if (src.Get_Type () == Get_Type ()) {
-		retval = ZoneParameterClass::operator== ((const ZoneParameterClass &)src);
-	}
-
-	return retval;
-}
-
-
-/////////////////////////////////////////////////////////////////////
-//
-//	Copy_Value
-//
-/////////////////////////////////////////////////////////////////////
-void
-ZoneParameterClass::Copy_Value (const ParameterClass &src)
-{
-	if (src.Is_Type (ParameterClass::TYPE_ZONE)) {
-		ZoneParameterClass real_src = (ZoneParameterClass &)src;
-
-		(*m_OBBox)	= (*real_src.m_OBBox);
-	}
-
-	ParameterClass::Copy_Value (src);
-}
-
-
-//*******************************************************************************************//
 //
 //	Start of FilenameListParameterClass
 //

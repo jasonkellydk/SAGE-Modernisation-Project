@@ -29,8 +29,11 @@
 
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
+import Engine.Core.Math.AffineTransform3;
 #define DEFINE_SLOWDEATHPHASE_NAMES
+#include "Common/LegacyTransformMath.h"
 #include "Common/GameLOD.h"
 #include "Common/INI.h"
 #include "Common/RandomValue.h"
@@ -158,7 +161,7 @@ SlowDeathBehavior::SlowDeathBehavior( Thing *thing, const ModuleData* moduleData
 
 	if (getSlowDeathBehaviorModuleData()->m_probabilityModifier < 1)
 	{
-		DEBUG_CRASH(("ProbabilityModifier must be >= 1."));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "ProbabilityModifier must be >= 1.");
 		throw INI_INVALID_DATA;
 	}
 
@@ -192,16 +195,15 @@ static void calcRandomForce(Real minMag, Real maxMag, Real minPitch, Real maxPit
 	Real pitch = GameLogicRandomValueReal(minPitch, maxPitch);
 	Real mag = GameLogicRandomValueReal(minMag, maxMag);
 
-	Matrix3D mtx(1);
-	mtx.Scale(mag);
-	mtx.Rotate_Z(angle);
-	mtx.Rotate_Y(-pitch);
+	Engine::Math::AffineTransform3 transform = Engine::Math::AffineTransform3::Identity();
+	Legacy_Scale(transform, mag);
+	Legacy_Rotate_Z(transform, angle);
+	Legacy_Rotate_Y(transform, -pitch);
 
-	Vector3 v = mtx.Get_X_Vector();
-
-	force.x = v.X;
-	force.y = v.Y;
-	force.z = v.Z;
+	const Engine::Math::Vector3 forceVector = transform.Basis_X();
+	force.x = forceVector.x;
+	force.y = forceVector.y;
+	force.z = forceVector.z;
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -343,7 +345,7 @@ void SlowDeathBehavior::doPhaseStuff(SlowDeathPhaseType sdphase)
 	{
 		idx = GameLogicRandomValue(0, listSize-1);
 		const FXListVec& v = d->m_fx[sdphase];
-		DEBUG_ASSERTCRASH(idx>=0&&idx<v.size(),("bad idx"));
+		engine::debug::invariant((idx>=0&&idx<v.size()), "idx>=0&&idx<v.size()", __FILE__, __LINE__, "bad idx");
 		const FXList* fxl = v[idx];
 		FXList::doFXObj(fxl, getObject(), nullptr);
 	}
@@ -353,7 +355,7 @@ void SlowDeathBehavior::doPhaseStuff(SlowDeathPhaseType sdphase)
 	{
 		idx = GameLogicRandomValue(0, listSize-1);
 		const OCLVec& v = d->m_ocls[sdphase];
-		DEBUG_ASSERTCRASH(idx>=0&&idx<v.size(),("bad idx"));
+		engine::debug::invariant((idx>=0&&idx<v.size()), "idx>=0&&idx<v.size()", __FILE__, __LINE__, "bad idx");
 		const ObjectCreationList* ocl = v[idx];
 		ObjectCreationList::create(ocl, getObject(), nullptr);
 	}
@@ -363,7 +365,7 @@ void SlowDeathBehavior::doPhaseStuff(SlowDeathPhaseType sdphase)
 	{
 		idx = GameLogicRandomValue(0, listSize-1);
 		const WeaponTemplateVec& v = d->m_weapons[sdphase];
-		DEBUG_ASSERTCRASH(idx>=0&&idx<v.size(),("bad idx"));
+		engine::debug::invariant((idx>=0&&idx<v.size()), "idx>=0&&idx<v.size()", __FILE__, __LINE__, "bad idx");
 		const WeaponTemplate* wt = v[idx];
 		if (wt)
 		{
@@ -376,8 +378,8 @@ void SlowDeathBehavior::doPhaseStuff(SlowDeathPhaseType sdphase)
 //-------------------------------------------------------------------------------------------------
 UpdateSleepTime SlowDeathBehavior::update()
 {
-	//DEBUG_LOG(("updating SlowDeathBehavior %08lx",this));
-	DEBUG_ASSERTCRASH(isSlowDeathActivated(), ("hmm, this should not be possible"));
+	//engine::debug::log_info("updating SlowDeathBehavior %08lx",this);
+	engine::debug::invariant((isSlowDeathActivated()), "isSlowDeathActivated()", __FILE__, __LINE__, "hmm, this should not be possible");
 
 	const SlowDeathBehaviorModuleData* d = getSlowDeathBehaviorModuleData();
 	Object* obj = getObject();
@@ -500,7 +502,7 @@ void SlowDeathBehavior::onDie( const DamageInfo *damageInfo )
 			total += sdu->getProbabilityModifier( damageInfo );
 		}
 	}
-	DEBUG_ASSERTCRASH(total > 0, ("Hmm, this is wrong"));
+	engine::debug::invariant((total > 0), "total > 0", __FILE__, __LINE__, "Hmm, this is wrong");
 
 
 	// this returns a value from 1...total, inclusive
@@ -520,7 +522,7 @@ void SlowDeathBehavior::onDie( const DamageInfo *damageInfo )
 		}
 	}
 
-	DEBUG_CRASH(("We should never get here"));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "We should never get here");
 }
 
 // ------------------------------------------------------------------------------------------------

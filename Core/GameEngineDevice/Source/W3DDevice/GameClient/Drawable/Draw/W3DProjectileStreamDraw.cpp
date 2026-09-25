@@ -28,6 +28,7 @@
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 import Graphics.Materials.State;
+import Engine.Core.Math.Vector2;
 #include "Common/Xfer.h"
 #include "GameClient/Drawable.h"
 #include "GameLogic/Object.h"
@@ -36,7 +37,6 @@ import Graphics.Materials.State;
 #include "W3DDevice/GameClient/W3DScene.h"
 #include "W3DDevice/GameClient/W3DAssetCatalog.h"
 #include "W3DDevice/GameClient/W3DSegmentedLineRenderObject.h"
-#include "WWMath/vector3.h"
 
 //-------------------------------------------------------------------------------------------------
 W3DProjectileStreamDrawModuleData::W3DProjectileStreamDrawModuleData()
@@ -129,7 +129,7 @@ void W3DProjectileStreamDraw::setFullyObscuredByShroud(Bool fullyObscured)
 //-------------------------------------------------------------------------------------------------
 /** Map behavior states into W3D animations. */
 //-------------------------------------------------------------------------------------------------
-void W3DProjectileStreamDraw::doDrawModule(const Matrix3D* )
+void W3DProjectileStreamDraw::doDrawModule(const Engine::Math::AffineTransform3*)
 {
 	// get object from logic
 	Object *me = getDrawable()->getObject();
@@ -141,13 +141,13 @@ void W3DProjectileStreamDraw::doDrawModule(const Matrix3D* )
 
 	const W3DProjectileStreamDrawModuleData *data = getW3DProjectileStreamDrawModuleData();
 
-	Vector3 allPoints[MAX_PROJECTILE_STREAM];
+	Engine::Math::Vector3 allPoints[MAX_PROJECTILE_STREAM];
 	Int pointsUsed;
 
 	update->getAllPoints( allPoints, &pointsUsed );
 
-	Vector3 stagingPoints[MAX_PROJECTILE_STREAM];
-	Vector3 zeroVector(0, 0, 0);
+	Engine::Math::Vector3 stagingPoints[MAX_PROJECTILE_STREAM];
+	const Engine::Math::Vector3 zero_vector{};
 
 	Int linesMade = 0;
 	Int currentMasterPoint = 0;
@@ -166,7 +166,7 @@ void W3DProjectileStreamDraw::doDrawModule(const Matrix3D* )
 	// I'll keep doing this until I run out of valid points.
 	while( currentMasterPoint < pointsUsed )
 	{
-		while( currentMasterPoint < pointsUsed  &&  allPoints[currentMasterPoint] != zeroVector )
+		while( currentMasterPoint < pointsUsed  &&  allPoints[currentMasterPoint] != zero_vector )
 		{
 			// While I am not looking at a bad point (off edge or zero)
 			stagingPoints[currentStagingPoint] = allPoints[currentMasterPoint];// copy to the staging
@@ -191,7 +191,8 @@ void W3DProjectileStreamDraw::doDrawModule(const Matrix3D* )
 
 
 
-void W3DProjectileStreamDraw::makeOrUpdateLine( Vector3 *points, UnsignedInt pointCount, Int lineIndex )
+void W3DProjectileStreamDraw::makeOrUpdateLine(
+	Engine::Math::Vector3 *points, UnsignedInt pointCount, Int lineIndex)
 {
 	Bool newLine = FALSE;
 
@@ -216,7 +217,7 @@ void W3DProjectileStreamDraw::makeOrUpdateLine( Vector3 *points, UnsignedInt poi
 		line->Set_Width(data->m_width);	//set line width in world units
 		line->Set_Texture_Mapping_Mode(Graphics::RibbonTextureMapping::Tiled);	//this tiles the texture across the line
 		line->Set_Texture_Tile_Factor(data->m_tileFactor);	//number of times to tile texture across each segment
-		line->Set_UV_Offset_Rate(Vector2(0.0f,data->m_scrollRate));	//amount to scroll texture on each draw
+		line->Set_UV_Offset_Rate(Engine::Math::Vector2{0.0f, data->m_scrollRate});	//amount to scroll texture on each draw
 		if (!m_obscured)
 			W3DDisplay::m_3DScene->Add_Render_Object( line);	//add it to our scene so it gets rendered with other objects.
 	}

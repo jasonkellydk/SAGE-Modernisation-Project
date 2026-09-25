@@ -25,10 +25,11 @@
 #include <windows.h>
 #include <assert.h>
 
-#include "Common/Debug.h"
+
 #include "GameClient/Display.h"
 #include "Win32Device/GameClient/Win32DIMouse.h"
 #include "WinMain.h"
+import engine.debug;
 
 // DEFINES ////////////////////////////////////////////////////////////////////////////////////////
 enum { MOUSE_BUFFER_SIZE = 256, };
@@ -54,7 +55,7 @@ void DirectInputMouse::openMouse()
 	if( FAILED( hr ) )
 	{
 
-		DEBUG_LOG(( "ERROR - openMouse: Unable to create direct input interface" ));
+		engine::debug::log_info( "ERROR - openMouse: Unable to create direct input interface" );
 		assert( 0 );
 		closeMouse();
 		return;
@@ -66,7 +67,7 @@ void DirectInputMouse::openMouse()
 	if( FAILED( hr ) )
 	{
 
-			DEBUG_LOG(( "ERROR - openMouse: Unable to create mouse device" ));
+			engine::debug::log_info( "ERROR - openMouse: Unable to create mouse device" );
 			assert( 0 );
 			closeMouse();
 			return;
@@ -78,7 +79,7 @@ void DirectInputMouse::openMouse()
 	if( FAILED( hr ) )
 	{
 
-		DEBUG_LOG(( "ERROR - openMouse: Unable to set mouse data format" ));
+		engine::debug::log_info( "ERROR - openMouse: Unable to set mouse data format" );
 		assert( 0 );
 		closeMouse();
 		return;
@@ -92,7 +93,7 @@ void DirectInputMouse::openMouse()
 	if( FAILED( hr ) )
 	{
 
-		DEBUG_LOG(( "ERROR - openMouse: Unable to set coop level" ));
+		engine::debug::log_info( "ERROR - openMouse: Unable to set coop level" );
 		assert( 0 );
 		closeMouse();
 		return;
@@ -110,7 +111,7 @@ void DirectInputMouse::openMouse()
 	if( FAILED( hr ) )
 	{
 
-		DEBUG_LOG(( "ERROR - openMouse: Unable to set buffer property" ));
+		engine::debug::log_info( "ERROR - openMouse: Unable to set buffer property" );
 		assert( 0 );
 		closeMouse();
 		return;
@@ -122,7 +123,7 @@ void DirectInputMouse::openMouse()
 	if( FAILED( hr ) )
 	{
 
-		DEBUG_LOG(( "ERROR - openMouse: Unable to acquire mouse" ));
+		engine::debug::log_info( "ERROR - openMouse: Unable to acquire mouse" );
 		assert( 0 );
 		closeMouse();
 		return;
@@ -137,7 +138,7 @@ void DirectInputMouse::openMouse()
 	if( FAILED( hr ) )
 	{
 
-		DEBUG_LOG(( "WARNING - openMouse: Can't get capabilities of mouse for button setup" ));
+		engine::debug::log_info( "WARNING - openMouse: Can't get capabilities of mouse for button setup" );
 
 	}
 	else
@@ -148,12 +149,12 @@ void DirectInputMouse::openMouse()
 		m_numAxes = (UnsignedByte)diDevCaps.dwAxes;
 		m_forceFeedback = BitIsSet( diDevCaps.dwFlags, DIDC_FORCEFEEDBACK );
 
-		DEBUG_LOG(( "OK - Mouse info: Buttons = '%d', Force Feedback = '%s', Axes = '%d'",
-						 m_numButtons, m_forceFeedback ? "Yes" : "No", m_numAxes ));
+		engine::debug::log_info( "OK - Mouse info: Buttons = '%d', Force Feedback = '%s', Axes = '%d'",
+						 m_numButtons, m_forceFeedback ? "Yes" : "No", m_numAxes );
 
 	}
 
-	DEBUG_LOG(( "OK - Mouse initialized successfully" ));
+	engine::debug::log_info( "OK - Mouse initialized successfully" );
 
 }
 
@@ -170,7 +171,7 @@ void DirectInputMouse::closeMouse()
 		m_pMouseDevice->Unacquire();
 		m_pMouseDevice->Release();
 		m_pMouseDevice = nullptr;
-		DEBUG_LOG(( "OK - Mouse device closed" ));
+		engine::debug::log_info( "OK - Mouse device closed" );
 
 	}
 
@@ -180,11 +181,11 @@ void DirectInputMouse::closeMouse()
 
 		m_pDirectInput->Release();
 		m_pDirectInput = nullptr;
-		DEBUG_LOG(( "OK - Mouse direct input interface closed" ));
+		engine::debug::log_info( "OK - Mouse direct input interface closed" );
 
 	}
 
-	DEBUG_LOG(( "OK - Mouse shutdown complete" ));
+	engine::debug::log_info( "OK - Mouse shutdown complete" );
 
 }
 

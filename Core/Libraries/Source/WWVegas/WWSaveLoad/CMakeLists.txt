@@ -44,3 +44,4 @@ target_link_libraries(core_wwsaveload PRIVATE
     core_wwcommon
     corei_always
 )
+target_link_libraries(core_wwsaveload PUBLIC engine_core_math)

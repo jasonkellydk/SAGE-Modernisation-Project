@@ -19,16 +19,16 @@
 #include "W3DDevice/GameClient/W3DMeshRenderObject.h"
 #include "W3DDevice/GameClient/W3DMeshDrawing.h"
 #include <assert.h>
+#include <cmath>
 #include "W3DDevice/GameClient/W3DAssetCatalog.h"
-#include "WWDebug/wwdebug.h"
+
 import Graphics.Materials.MeshMaterial;
+import Engine.Core.Math.AffineTransform3;
 import Graphics.Scene.OrderedDraws;
 import Graphics.Scene.Props.Material;
 import Graphics.Materials.State;
 import Graphics.Scene.Models.Hierarchy;
 import Assets.Adapters.W3D.Geometry;
-#include "WWMath/tri.h"
-#include "WWMath/aaplane.h"
 #include "WWLib/chunkio.h"
 #include "W3DDevice/GameClient/W3DMeshResource.h"
 #include "W3DDevice/GameClient/W3DMeshGeometry.h"
@@ -37,7 +37,9 @@ import Assets.Adapters.W3D.Geometry;
 #include "W3DDevice/GameClient/W3DRenderContext.h"
 #include "W3DDevice/GameClient/W3DCastQuery.h"
 #include "W3DDevice/GameClient/W3DIntersectionQuery.h"
-#include <WWDebug/wwprofile.h>
+import engine.profiling;
+import engine.debug;
+
 
 
 
@@ -91,12 +93,18 @@ W3DMeshRenderObject::~W3DMeshRenderObject()
 }
 
 
-bool W3DMeshRenderObject::Contains(const Vector3 &point)
+bool W3DMeshRenderObject::Contains(const Engine::Math::Vector3 &point)
 {
-	// Transform point to object space and pass on to model
-	Vector3 obj_point;
-	Matrix3D::Inverse_Transform_Vector(Get_Transform_No_Validity_Check(), point, &obj_point);
-	return Model->Contains(obj_point);
+	// Transform point to object space (orthogonal inverse: transposed rotation
+	// applied to the translated point) and pass on to model
+	const auto transform = Get_Transform_No_Validity_Check();
+	const auto &m = transform.elements;
+	const Engine::Math::Vector3 diff{point.x - m[3], point.y - m[7], point.z - m[11]};
+	const Engine::Math::Vector3 object_point{
+		m[0] * diff.x + m[4] * diff.y + m[8] * diff.z,
+		m[1] * diff.x + m[5] * diff.y + m[9] * diff.z,
+		m[2] * diff.x + m[6] * diff.y + m[10] * diff.z};
+	return Model->Contains(object_point);
 }
 
 
@@ -160,8 +168,8 @@ void W3DMeshRenderObject::Scale(float scale)
 {
 	if (scale==1.0f) return;
 
-	Vector3 sc;
-	sc.X = sc.Y = sc.Z = scale;
+	Engine::Math::Vector3 sc;
+	sc.x = sc.y = sc.z = scale;
 	Make_Unique();
 	Model->Make_Geometry_Unique();
 	Model->Scale(sc);
@@ -177,10 +185,10 @@ void W3DMeshRenderObject::Scale(float scale)
 void W3DMeshRenderObject::Scale(float scalex, float scaley, float scalez)
 {
 	// scale the surrender mesh model
-	Vector3 sc;
-	sc.X = scalex;
-	sc.Y = scaley;
-	sc.Z = scalez;
+	Engine::Math::Vector3 sc;
+	sc.x = scalex;
+	sc.y = scaley;
+	sc.z = scalez;
 	Make_Unique();
 	Model->Make_Geometry_Unique();
 	Model->Scale(sc);
@@ -193,18 +201,18 @@ void W3DMeshRenderObject::Scale(float scalex, float scaley, float scalez)
 }
 
 
-void	W3DMeshRenderObject::Get_Deformed_Vertices(Vector3 *dst_vert, Vector3 *dst_norm)
+void W3DMeshRenderObject::Get_Deformed_Vertices(Engine::Math::Vector3 *dst_vert, Engine::Math::Vector3 *dst_norm)
 {
-	WWASSERT(Model->Get_Flag(W3DMeshGeometry::SKIN));
+	engine::debug::assert_condition((Model->Get_Flag(W3DMeshGeometry::SKIN)), "Model->Get_Flag(W3DMeshGeometry::SKIN)", __FILE__, __LINE__, "assertion failed");
 	Model->get_deformed_vertices(dst_vert,dst_norm,Container->Get_Model_Hierarchy());
 }
 
 
-void W3DMeshRenderObject::Get_Deformed_Vertices(Vector3 *dst_vert)
+void W3DMeshRenderObject::Get_Deformed_Vertices(Engine::Math::Vector3 *dst_vert)
 {
-	WWASSERT(Model->Get_Flag(W3DMeshGeometry::SKIN));
-	WWASSERT(Container != nullptr);
-	WWASSERT(Container->Get_Model_Hierarchy() != nullptr);
+	engine::debug::assert_condition((Model->Get_Flag(W3DMeshGeometry::SKIN)), "Model->Get_Flag(W3DMeshGeometry::SKIN)", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((Container != nullptr), "Container != nullptr", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((Container->Get_Model_Hierarchy() != nullptr), "Container->Get_Model_Hierarchy() != nullptr", __FILE__, __LINE__, "assertion failed");
 
 	Model->get_deformed_vertices(dst_vert,Container->Get_Model_Hierarchy());
 }
@@ -213,7 +221,7 @@ int W3DMeshRenderObject::Get_Num_Polys() const
 {
 	if (Model) {
 		int num_passes=Model->Get_Pass_Count();
-		WWASSERT(num_passes>0);
+		engine::debug::assert_condition((num_passes>0), "num_passes>0", __FILE__, __LINE__, "assertion failed");
 		int poly_count=Model->Get_Polygon_Count();
 		return num_passes*poly_count;
 	} else {
@@ -224,7 +232,7 @@ int W3DMeshRenderObject::Get_Num_Polys() const
 
 void W3DMeshRenderObject::Render(W3DRenderContext & rinfo)
 {
-    WWPROFILE("Mesh::Render");
+    engine::profiling::Scope profile_scope_227("Mesh::Render");
     if (!Is_Not_Hidden_At_All()) return;
     const unsigned sort_level=static_cast<unsigned>(Model->Get_Sort_Level());
     if (Graphics::Get_Scene_Draw_Queue().Is_Enabled()
@@ -236,8 +244,15 @@ void W3DMeshRenderObject::Render(W3DRenderContext & rinfo)
         Graphics::Get_Scene_Draw_Queue().Enqueue<Extract_Ordered_Draw>(sort_level, *this);
         return;
     }
-    if (!Model->Get_Flag(W3DMeshGeometry::SKIN)
-        && CollisionMath::Overlap_Test(rinfo.Camera.Get_Frustum(),Get_Bounding_Box())==CollisionMath::OUTSIDE) return;
+	if (!Model->Get_Flag(W3DMeshGeometry::SKIN)) {
+		const auto bounds = Get_Bounding_Box();
+		const auto center = bounds.Center();
+		const auto extent = bounds.Extent();
+		if (rinfo.Camera.Get_Frustum().Cull_Box({
+			{center.x, center.y, center.z},
+			{extent.x, extent.y, extent.z}}))
+			return;
+	}
     if (sort_level == static_cast<unsigned>(Assets::W3D::W3DMeshSortLevelNone)) {
         Set_Lighting_Environment(rinfo.light_environment);
         m_alphaOverride=rinfo.alpha_override;
@@ -246,7 +261,7 @@ void W3DMeshRenderObject::Render(W3DRenderContext & rinfo)
     }
     [[maybe_unused]] const bool drawn=Draw_W3D_Mesh(*this,rinfo,
         {m_alphaOverride,m_materialPassAlphaOverride,m_materialPassEmissiveOverride});
-    WWASSERT(drawn);
+    engine::debug::assert_condition((drawn), "drawn", __FILE__, __LINE__, "assertion failed");
 
 }
 
@@ -278,8 +293,6 @@ void W3DMeshRenderObject::Make_Unique(bool force_meshmdl_clone)
 
 bool W3DMeshRenderObject::Load_W3D(ChunkLoadClass & cload)
 {
-	Vector3 boxmin,boxmax;
-
 	/*
 	** Make sure this mesh is "empty"
 	*/
@@ -290,7 +303,7 @@ bool W3DMeshRenderObject::Load_W3D(ChunkLoadClass & cload)
 	*/
 	Model = NEW_REF(W3DMeshResource,());
 	if (Model == nullptr) {
-		WWDEBUG_SAY(("W3DMeshRenderObject::Load - Failed to allocate model"));
+		engine::debug::log_info("W3DMeshRenderObject::Load - Failed to allocate model");
 		return false;
 	}
 
@@ -353,35 +366,35 @@ bool W3DMeshRenderObject::Cast_Ray(W3DRayCastQuery & raytest)
 		return false;
 	if (Is_Hidden() && !raytest.CheckHidden) return false;
 	if (Is_Animation_Hidden()) return false;
-	if (raytest.Result->StartBad) return false;
+	if (raytest.Result->starts_overlapping) return false;
 
-	Matrix3D world_to_obj;
-	Matrix3D world=Get_Transform();
+	auto world = Get_Transform();
 
 	// if aligned or oriented rotate the mesh so that it's aligned to the ray
 	if (Model->Get_Flag(W3DMeshResource::ALIGNED)) {
-			Vector3 mesh_position;
-			world.Get_Translation(&mesh_position);
-			world.Obj_Look_At(mesh_position,mesh_position - raytest.Ray.Get_Dir(),0.0f);
+			const auto mesh_position = world.Translation();
+			const auto ray_direction = raytest.Ray.Direction();
+			world = Engine::Math::AffineTransform3::From_Forward_Direction(mesh_position, ray_direction * -1.0f);
 	} else if (Model->Get_Flag(W3DMeshResource::ORIENTED)) {
-			Vector3 mesh_position;
-			world.Get_Translation(&mesh_position);
-			world.Obj_Look_At(mesh_position,raytest.Ray.Get_P0(),0.0f);
+			const auto mesh_position = world.Translation();
+			const auto &ray_start = raytest.Ray.start;
+			world = Engine::Math::AffineTransform3::From_Forward_Direction(mesh_position, ray_start - mesh_position);
 	}
 
-	world.Get_Inverse(world_to_obj);
-	W3DRayCastQuery objray(raytest,world_to_obj);
+	const auto world_to_obj = world.Inverse();
+	if (!world_to_obj) return false;
+	W3DRayCastQuery objray(raytest, *world_to_obj);
 
-	WWASSERT(Model);
+	engine::debug::assert_condition((Model), "Model", __FILE__, __LINE__, "assertion failed");
 
 	bool hit = Model->Cast_Ray(objray);
 
 	// transform result back into original coordinate system
 	if (hit) {
 		raytest.CollidedRenderObj = this;
-		Matrix3D::Rotate_Vector(world,raytest.Result->Normal, &(raytest.Result->Normal));
-		if (raytest.Result->ComputeContactPoint) {
-			Matrix3D::Transform_Vector(world,raytest.Result->ContactPoint, &(raytest.Result->ContactPoint));
+		raytest.Result->normal = world.Transform_Vector(raytest.Result->normal);
+		if (raytest.Result->compute_contact_point) {
+			raytest.Result->contact_point = world.Transform_Point(raytest.Result->contact_point);
 		}
 	}
 
@@ -392,12 +405,13 @@ bool W3DMeshRenderObject::Cast_Ray(W3DRayCastQuery & raytest)
 bool W3DMeshRenderObject::Cast_AABox(W3DBoxCastQuery & boxtest)
 {
 	if ((Get_Collision_Type() & boxtest.CollisionType) == 0) return false;
-	if (boxtest.Result->StartBad) return false;
+	if (boxtest.Result->starts_overlapping) return false;
 
-	WWASSERT(Model);
+	engine::debug::assert_condition((Model), "Model", __FILE__, __LINE__, "assertion failed");
 
 	// This function analyses the transform to call optimized functions in certain cases
-	bool hit = Model->Cast_World_Space_AABox(boxtest, Get_Transform());
+	bool hit = Model->Cast_World_Space_AABox(boxtest,
+		Get_Transform());
 
 	if (hit) {
 		boxtest.CollidedRenderObj = this;
@@ -410,17 +424,17 @@ bool W3DMeshRenderObject::Cast_AABox(W3DBoxCastQuery & boxtest)
 bool W3DMeshRenderObject::Cast_OBBox(W3DOrientedBoxCastQuery & boxtest)
 {
 	if ((Get_Collision_Type() & boxtest.CollisionType) == 0) return false;
-	if (boxtest.Result->StartBad) return false;
+	if (boxtest.Result->starts_overlapping) return false;
 
 	/*
 	** transform into the local coordinate system of the mesh.
 	*/
-	const Matrix3D & tm = Get_Transform();
-	Matrix3D world_to_obj;
-	tm.Get_Orthogonal_Inverse(world_to_obj);
-	W3DOrientedBoxCastQuery localtest(boxtest,world_to_obj);
+	const auto tm = Get_Transform();
+	const auto world_to_obj = tm.Orthogonal_Inverse();
+	W3DOrientedBoxCastQuery localtest(boxtest,
+		world_to_obj);
 
-	WWASSERT(Model);
+	engine::debug::assert_condition((Model), "Model", __FILE__, __LINE__, "assertion failed");
 
 	bool hit = Model->Cast_OBBox(localtest);
 
@@ -429,9 +443,9 @@ bool W3DMeshRenderObject::Cast_OBBox(W3DOrientedBoxCastQuery & boxtest)
 	*/
 	if (hit) {
 		boxtest.CollidedRenderObj = this;
-		Matrix3D::Rotate_Vector(tm,boxtest.Result->Normal, &(boxtest.Result->Normal));
-		if (boxtest.Result->ComputeContactPoint) {
-			Matrix3D::Transform_Vector(tm,boxtest.Result->ContactPoint, &(boxtest.Result->ContactPoint));
+		boxtest.Result->normal = tm.Transform_Vector(boxtest.Result->normal);
+		if (boxtest.Result->compute_contact_point) {
+			boxtest.Result->contact_point = tm.Transform_Point(boxtest.Result->contact_point);
 		}
 	}
 
@@ -443,10 +457,10 @@ bool W3DMeshRenderObject::Intersect_AABox(W3DBoxIntersectionQuery & boxtest)
 {
 	if ((Get_Collision_Type() & boxtest.CollisionType) == 0) return false;
 
-	Matrix3D inv_tm;
-	Get_Transform().Get_Orthogonal_Inverse(inv_tm);
-	W3DOrientedBoxIntersectionQuery local_test(boxtest,inv_tm);
-	WWASSERT(Model);
+	const auto inv_tm = Get_Transform().Orthogonal_Inverse();
+	W3DOrientedBoxIntersectionQuery local_test(boxtest,
+		inv_tm);
+	engine::debug::assert_condition((Model), "Model", __FILE__, __LINE__, "assertion failed");
 	return Model->Intersect_OBBox(local_test);
 }
 
@@ -455,31 +469,32 @@ bool W3DMeshRenderObject::Intersect_OBBox(W3DOrientedBoxIntersectionQuery & boxt
 {
 	if ((Get_Collision_Type() & boxtest.CollisionType) == 0) return false;
 
-	Matrix3D inv_tm;
-	Get_Transform().Get_Orthogonal_Inverse(inv_tm);
-	W3DOrientedBoxIntersectionQuery local_test(boxtest,inv_tm);
-	WWASSERT(Model);
+	const auto inv_tm = Get_Transform().Orthogonal_Inverse();
+	W3DOrientedBoxIntersectionQuery local_test(boxtest,
+		inv_tm);
+	engine::debug::assert_condition((Model), "Model", __FILE__, __LINE__, "assertion failed");
 	return Model->Intersect_OBBox(local_test);
 }
 
 
-void W3DMeshRenderObject::Get_Obj_Space_Bounding_Sphere(SphereClass & sphere) const
+void W3DMeshRenderObject::Get_Local_Bounding_Sphere(Engine::Math::Sphere3 & sphere) const
 {
 	if (Model) {
-		Model->Get_Bounding_Sphere(&sphere);
+		const auto bounds = Model->Get_Bounding_Sphere();
+		sphere = bounds;
 	} else {
-		sphere.Center.Set(0,0,0);
-		sphere.Radius = 1.0f;
+		sphere = {{0, 0, 0}, 1.0f};
 	}
 }
 
 
-void W3DMeshRenderObject::Get_Obj_Space_Bounding_Box(AABoxClass & box) const
+void W3DMeshRenderObject::Get_Local_Bounds(Engine::Math::AxisAlignedBox3 & box) const
 {
 	if (Model) {
-		Model->Get_Bounding_Box(&box);
+		const auto bounds = Model->Get_Bounding_Box();
+		box = bounds;
 	} else {
-		box.Init(Vector3(0,0,0),Vector3(1,1,1));
+		box = {{-1, -1, -1}, {1, 1, 1}};
 	}
 }
 
@@ -528,22 +543,30 @@ void W3DMeshRenderObject::Add_Dependencies_To_List
 
 void W3DMeshRenderObject::Update_Cached_Bounding_Volumes() const
 {
-	Get_Obj_Space_Bounding_Sphere(CachedBoundingSphere);
-
-#ifdef ALLOW_TEMPORARIES
-	CachedBoundingSphere.Center = Get_Transform() * CachedBoundingSphere.Center;
-#else
-	Get_Transform().mulVector3(CachedBoundingSphere.Center);
-#endif
+	Engine::Math::Sphere3 sphere;
+	Get_Local_Bounding_Sphere(sphere);
+	const auto &transform = Get_Transform();
+	const auto world_center = transform.Transform_Point(sphere.center);
+	CachedBoundingSphere = {world_center, sphere.radius};
 
 	// If we are camera-aligned or -oriented, we don't know which way we are facing at this point,
 	// so the box we return needs to contain the sphere. Otherwise do the normal computation.
 	if (Model->Get_Flag(W3DMeshResource::ALIGNED) || Model->Get_Flag(W3DMeshResource::ORIENTED)) {
-		CachedBoundingBox.Center = CachedBoundingSphere.Center;
-		CachedBoundingBox.Extent.Set(CachedBoundingSphere.Radius, CachedBoundingSphere.Radius, CachedBoundingSphere.Radius);
+		const Engine::Math::Vector3 extent{CachedBoundingSphere.radius, CachedBoundingSphere.radius,
+			CachedBoundingSphere.radius};
+		CachedBoundingBox = {CachedBoundingSphere.center - extent,
+			CachedBoundingSphere.center + extent};
 	} else {
-		Get_Obj_Space_Bounding_Box(CachedBoundingBox);
-		CachedBoundingBox.Transform(Get_Transform());
+		Engine::Math::AxisAlignedBox3 object_box;
+		Get_Local_Bounds(object_box);
+		const auto object_center = object_box.Center();
+		const auto object_extent = object_box.Extent();
+		const auto center = transform.Transform_Point(object_center);
+		const auto extent = Engine::Math::Vector3{
+			std::abs(transform[0][0]) * object_extent.x + std::abs(transform[0][1]) * object_extent.y + std::abs(transform[0][2]) * object_extent.z,
+			std::abs(transform[1][0]) * object_extent.x + std::abs(transform[1][1]) * object_extent.y + std::abs(transform[1][2]) * object_extent.z,
+			std::abs(transform[2][0]) * object_extent.x + std::abs(transform[2][1]) * object_extent.y + std::abs(transform[2][2]) * object_extent.z};
+		CachedBoundingBox = {center - extent, center + extent};
 	}
 
 	Validate_Cached_Bounding_Volumes();

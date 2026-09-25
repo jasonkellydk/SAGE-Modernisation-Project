@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "gamespy/ghttp/ghttp.h"
 
@@ -92,7 +93,7 @@ enum
 
 static Bool raiseMessageBoxes = TRUE;
 static Bool campaignSelected = FALSE;
-#if defined(RTS_DEBUG) || defined RTS_PROFILE_LEGACY
+#if defined(RTS_DEBUG) || defined(RTS_PROFILE_TRACY)
 static NameKeyType campaignID = NAMEKEY_INVALID;
 static GameWindow *buttonCampaign = nullptr;
 #ifdef TEST_COMPRESSION
@@ -529,7 +530,7 @@ void MainMenuInit( WindowLayout *layout, void *userData )
 
 	showSelectiveButtons(SHOW_NONE);
 	// Set up the version number
-#if defined(RTS_DEBUG) || defined RTS_PROFILE_LEGACY
+#if defined(RTS_DEBUG) || defined(RTS_PROFILE_TRACY)
 	WinInstanceData instData;
 #ifdef TEST_COMPRESSION
 	instData.init();
@@ -575,8 +576,8 @@ void MainMenuInit( WindowLayout *layout, void *userData )
 		{
 			// wohoo - we're connected!  fire off a check for updates
 			checkedForUpdate = TRUE;
-			DEBUG_LOG(("Looking for a patch for productID=%d, versionStr=%s, distribution=%d",
-				gameProductID, gameVersionUniqueIDStr, gameDistributionID));
+			engine::debug::log_info("Looking for a patch for productID=%d, versionStr=%s, distribution=%d",
+				gameProductID, gameVersionUniqueIDStr, gameDistributionID);
 			ptCheckForPatch( gameProductID, gameVersionUniqueIDStr, gameDistributionID, patchAvailableCallback, PTFalse, nullptr );
 			//ptCheckForPatch( productID, versionUniqueIDStr, distributionID, mapPackAvailableCallback, PTFalse, nullptr );
 		}
@@ -590,7 +591,7 @@ void MainMenuInit( WindowLayout *layout, void *userData )
 
 	if (TheGameSpyPeerMessageQueue && !TheGameSpyPeerMessageQueue->isConnected())
 	{
-		DEBUG_LOG(("Tearing down GameSpy from MainMenuInit()"));
+		engine::debug::log_info("Tearing down GameSpy from MainMenuInit()");
 		TearDownGameSpy();
 	}
 	if (TheMapCache)
@@ -774,8 +775,8 @@ void ResolutionDialogUpdate()
 	//------------------------------------------------------------------------------------------------------
 	// Used for debugging purposes
 	//------------------------------------------------------------------------------------------------------
-	DEBUG_LOG(("Resolution Timer :  started at %d,  current time at %d, frameTicker is %d", timeStarted,
-							time(nullptr) , currentTime));
+	engine::debug::log_info("Resolution Timer :  started at %d,  current time at %d, frameTicker is %d", timeStarted,
+							time(nullptr) , currentTime);
 }
 */
 
@@ -1009,7 +1010,7 @@ WindowMsgHandledType MainMenuSystem( GameWindow *window, UnsignedInt msg,
 		case GWM_DESTROY:
 		{
 			ghttpCleanup();
-			DEBUG_LOG(("Tearing down GameSpy from MainMenuSystem(GWM_DESTROY)"));
+			engine::debug::log_info("Tearing down GameSpy from MainMenuSystem(GWM_DESTROY)");
 			TearDownGameSpy();
 			StopAsyncDNSCheck(); // kill off the async DNS check thread in case it is still running
 			break;
@@ -1255,7 +1256,7 @@ WindowMsgHandledType MainMenuSystem( GameWindow *window, UnsignedInt msg,
 
 			if(buttonPushed)
 				break;
-#if defined(RTS_DEBUG) || defined RTS_PROFILE_LEGACY
+#if defined(RTS_DEBUG) || defined(RTS_PROFILE_TRACY)
 			if( control == buttonCampaign )
 			{
 				buttonPushed = TRUE;
@@ -1368,7 +1369,7 @@ WindowMsgHandledType MainMenuSystem( GameWindow *window, UnsignedInt msg,
 				dontAllowTransitions = TRUE;
 //				SaveLoadLayoutType layoutType = SLLT_LOAD_ONLY;
 //        WindowLayout *saveLoadMenuLayout = TheShell->getSaveLoadMenuLayout();
-//				DEBUG_ASSERTCRASH( saveLoadMenuLayout, ("Unable to get save load menu layout.") );
+//				engine::debug::invariant((saveLoadMenuLayout), "saveLoadMenuLayout", __FILE__, __LINE__, "Unable to get save load menu layout.");
 //				saveLoadMenuLayout->runInit( &layoutType );
 //				saveLoadMenuLayout->hide( FALSE );
 //				saveLoadMenuLayout->bringForward();
@@ -1448,7 +1449,7 @@ WindowMsgHandledType MainMenuSystem( GameWindow *window, UnsignedInt msg,
 
 				// load the options menu
 				WindowLayout *optLayout = TheShell->getOptionsLayout(TRUE);
-				DEBUG_ASSERTCRASH(optLayout != nullptr, ("unable to get options menu layout"));
+				engine::debug::invariant((optLayout != nullptr), "optLayout != nullptr", __FILE__, __LINE__, "unable to get options menu layout");
 				optLayout->runInit();
 				optLayout->hide(FALSE);
 				optLayout->bringForward();

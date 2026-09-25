@@ -42,8 +42,8 @@
 
 //#include <malloc.h>
 #include "WWLib/always.h"
-#include "WWMath/vector3.h"
-#include "WWMath/matrix3d.h"
+import Engine.Core.Math.AffineTransform3;
+import Engine.Core.Math.Vector3;
 #include "WWLib/RAWFILE.h"
 #include "SoundSceneObj.h"
 #include "WWLib/Vector.h"
@@ -235,12 +235,12 @@ class AudibleSoundClass : public SoundSceneObjClass
 		//////////////////////////////////////////////////////////////////////
 		//	Position/direction methods
 		//////////////////////////////////////////////////////////////////////
-		virtual void			Set_Position (const Vector3 &position) override;
-		virtual Vector3		Get_Position () const override { return m_Transform.Get_Translation (); }
+		virtual void Set_Position (Engine::Math::Vector3 position) override;
+		virtual Engine::Math::Vector3 Get_Position () const override { return m_Transform.Translation(); }
 
-		virtual void			Set_Listener_Transform (const Matrix3D &tm) override { m_ListenerTransform = tm; }
-		virtual void			Set_Transform (const Matrix3D &transform) override;
-		virtual Matrix3D		Get_Transform () const override { return m_Transform; }
+		virtual void Set_Listener_Transform (const Engine::Math::AffineTransform3 &transform) override { m_ListenerTransform = transform; }
+		virtual void Set_Transform (const Engine::Math::AffineTransform3 &transform) override;
+		virtual Engine::Math::AffineTransform3 Get_Transform () const override { return m_Transform; }
 
 		//////////////////////////////////////////////////////////////////////
 		//	Culling methods
@@ -351,9 +351,9 @@ class AudibleSoundClass : public SoundSceneObjClass
 		float						m_PitchFactor;
 
 		// 3D scene information
-		Matrix3D					m_ListenerTransform;
-		Matrix3D					m_Transform;
-		Matrix3D					m_PrevTransform;
+		Engine::Math::AffineTransform3 m_ListenerTransform;
+		Engine::Math::AffineTransform3 m_Transform;
+		Engine::Math::AffineTransform3 m_PrevTransform;
 		bool						m_IsCulled;
 		bool						m_bDirty;
 		float						m_DropOffRadius;
@@ -408,7 +408,7 @@ public:
 	virtual const StringClass &			Get_Display_Text () const		{ return m_DisplayText; }
 	virtual float								Get_Max_Vol_Radius () const	{ return m_MaxVolRadius; }
 	virtual float								Get_DropOff_Radius () const	{ return m_DropOffRadius; }
-	virtual const Vector3 &					Get_Sphere_Color () const		{ return m_AttenuationSphereColor; }
+	virtual const Engine::Math::Vector3 &				Get_Sphere_Color () const		{ return m_AttenuationSphereColor; }
 	virtual float								Get_Volume () const				{ return m_Volume; }
 	virtual float								Get_Start_Offset () const		{ return m_StartOffset; }
 	virtual float								Get_Pitch_Factor () const		{ return m_PitchFactor; }
@@ -452,5 +452,5 @@ protected:
 	bool					m_CreateLogical;
 
 	// Misc UI info
-	Vector3				m_AttenuationSphereColor;
+	Engine::Math::Vector3 m_AttenuationSphereColor;
 };

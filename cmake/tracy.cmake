@@ -26,4 +26,4 @@ target_compile_definitions(TracyClient INTERFACE
     RTS_PROFILE_TRACY
 )
 
-add_library(core_profile_tracy ALIAS TracyClient)
+add_library(tracy_runtime ALIAS TracyClient)

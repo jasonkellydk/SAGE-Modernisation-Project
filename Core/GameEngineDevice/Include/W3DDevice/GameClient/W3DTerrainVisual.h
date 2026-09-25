@@ -34,10 +34,10 @@
 #include "W3DDevice/GameClient/WaterGridSimulation.h"
 
 // FORWARD REFERENCES /////////////////////////////////////////////////////////////////////////////
-class Matrix3D;
 class WaterHandle;
 class BaseHeightMapRenderObjClass;
 class WorldHeightMap;
+import engine.platform.time;
 
 //-------------------------------------------------------------------------------------------------
 /** W3D implementation of visual terrain details singleton */
@@ -47,7 +47,7 @@ class W3DTerrainVisual : public TerrainVisual
 
 public:
 
-	W3DTerrainVisual();
+	explicit W3DTerrainVisual(engine::platform::IClockService& clock);
 	virtual ~W3DTerrainVisual() override;
 
 	virtual void init() override;
@@ -78,8 +78,8 @@ public:
 	/// set the water table position and orientation in world space
 	virtual void setWaterTransform( const WaterHandle *waterTable,
 																	Real angle, Real x, Real y, Real z ) override;
-	virtual void setWaterTransform( const Matrix3D *transform ) override;
-	virtual void getWaterTransform( const WaterHandle *waterTable, Matrix3D *transform ) override;
+	virtual void setWaterTransform( const Engine::Math::AffineTransform3 *transform ) override;
+	virtual void getWaterTransform( const WaterHandle *waterTable, Engine::Math::AffineTransform3 *transform ) override;
 	/// water grid resolution spacing
 	virtual void setWaterGridResolution( const WaterHandle *waterTable,
 																			 Real gridCellsX, Real gridCellsY, Real cellSize ) override;
@@ -170,6 +170,7 @@ protected:
 #endif
 
 	BaseHeightMapRenderObjClass *m_terrainRenderObject;  ///< W3D render object for terrain
+	engine::platform::IClockService& m_clock;
 	WaterRenderSystem	*m_waterRenderSystem;	///< modern water render system
 	WaterGridSimulation m_waterGridSimulation;	///< gameplay-owned water grid state
 

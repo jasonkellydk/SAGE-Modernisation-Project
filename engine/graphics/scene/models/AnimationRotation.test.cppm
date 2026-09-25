@@ -7,9 +7,7 @@ module;
 #include <cstdint>
 #include <cstddef>
 #include <vector>
-#if GRAPHICS_COMPARE_GAME_MATH
-#include "AnimationRotation.test-reference.h"
-#endif
+#include "../../tests/LegacyMathReference.h"
 export module Graphics.Scene.Models.AnimationRotation.Tests;
 import Graphics.Scene.Models.AnimationRotation;
 import Graphics.Scene.AffineTransform;
@@ -64,22 +62,28 @@ BOOST_AUTO_TEST_CASE(sampled_rotation_draws_at_expected_positions_after_resize_a
         renderer.Shutdown();
     }
 }
-#if GRAPHICS_COMPARE_GAME_MATH
+// Bit-exact comparison against a standalone port of the retired WWMath
+// Fast_Slerp (table based acos/sin), which model animation used.
 BOOST_AUTO_TEST_CASE(rendering_rotation_retains_existing_sampler_bits) {
     for(unsigned sample=0;sample<512;++sample) {
         const float angle=float(sample)*.0061f;
         std::array<float,4> first{std::sin(angle),0,0,std::cos(angle)};
         std::array<float,4> second{0,std::sin(angle*.7f),0,std::cos(angle*.7f)};
         if(sample%3==0)for(auto& value:second)value=-value;
+        const PreparedAnimationRotation prepared(first,second);
         for(float weight:{-.5f,0.f,.125f,.5f,.999f,1.f,1.25f}) {
             BOOST_TEST_CONTEXT("sample="<<sample<<", weight="<<weight) {
-            std::array<float,4> expected;
-            Reference_Animation_Rotation(first.data(),second.data(),weight,expected.data());
+            const LegacyMathReference::Quaternion a{first[0],first[1],first[2],first[3]};
+            const LegacyMathReference::Quaternion b{second[0],second[1],second[2],second[3]};
+            const auto reference=LegacyMathReference::Fast_Slerp(a,b,weight);
+            const std::array<float,4> expected{reference.X,reference.Y,reference.Z,reference.W};
             const auto actual=Interpolate_Animation_Rotation(first,second,weight);
-            for(unsigned i=0;i<4;++i)
+            const auto prepared_actual=prepared.Sample(weight);
+            for(unsigned i=0;i<4;++i) {
                 BOOST_CHECK_EQUAL(std::bit_cast<std::uint32_t>(actual[i]),std::bit_cast<std::uint32_t>(expected[i]));
+                BOOST_CHECK_EQUAL(std::bit_cast<std::uint32_t>(prepared_actual[i]),std::bit_cast<std::uint32_t>(expected[i]));
+            }
             }
         }
     }
 }
-#endif

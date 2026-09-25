@@ -29,7 +29,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/PlayerTemplate.h"
 #include "Common/BattleHonors.h"
@@ -125,7 +126,7 @@ static const Image* lookupRankImage(AsciiString side, Int rank)
 	if(strcmp(fullImageName.str(),"Rank_PrivateElite") == 0)
 		fullImageName = "Rank";//_Private_Elite";
 	const Image *img = TheMappedImageCollection->findImageByName(fullImageName);
-	DEBUG_ASSERTCRASH( img, ("Could not load rank image: %s", fullImageName.str()));
+	engine::debug::invariant((img), "img", __FILE__, __LINE__, "Could not load rank image: %s", fullImageName.str());
 	return img;
 }
 
@@ -141,7 +142,7 @@ static Int getTotalDisconnectsFromFile(Int playerID)
 	UserPreferences pref;
 	AsciiString userPrefFilename;
 	userPrefFilename.format("GeneralsOnline\\MiscPref%d.ini", playerID);
-	DEBUG_LOG(("getTotalDisconnectsFromFile - reading stats from file %s", userPrefFilename.str()));
+	engine::debug::log_info("getTotalDisconnectsFromFile - reading stats from file %s", userPrefFilename.str());
 	pref.load(userPrefFilename);
 
 	// if there is a file override, use that data instead.
@@ -177,7 +178,7 @@ Int GetAdditionalDisconnectsFromUserFile(Int playerID)
 
 	if (TheGameSpyInfo->getAdditionalDisconnects() > 0 && !retval)
 	{
-		DEBUG_LOG(("Clearing additional disconnects"));
+		engine::debug::log_info("Clearing additional disconnects");
 		TheGameSpyInfo->clearAdditionalDisconnects();
 	}
 
@@ -197,7 +198,7 @@ void GetAdditionalDisconnectsFromUserFile(PSPlayerStats *stats)
 
 	if (TheGameSpyInfo->getAdditionalDisconnects() > 0 && !getTotalDisconnectsFromFile(stats->id))
 	{
-		DEBUG_LOG(("Clearing additional disconnects"));
+		engine::debug::log_info("Clearing additional disconnects");
 		TheGameSpyInfo->clearAdditionalDisconnects();
 	}
 
@@ -209,7 +210,7 @@ void GetAdditionalDisconnectsFromUserFile(PSPlayerStats *stats)
 	UserPreferences pref;
 	AsciiString userPrefFilename;
 	userPrefFilename.format("GeneralsOnline\\MiscPref%d.ini", stats->id);
-	DEBUG_LOG(("GetAdditionalDisconnectsFromUserFile - reading stats from file %s", userPrefFilename.str()));
+	engine::debug::log_info("GetAdditionalDisconnectsFromUserFile - reading stats from file %s", userPrefFilename.str());
 	pref.load(userPrefFilename);
 
 	// if there is a file override, use that data instead.
@@ -309,7 +310,7 @@ void BattleHonorTooltip(GameWindow *window,
 	Int extraValue = (Int)GadgetListBoxGetItemData( window, row - 1, col );
 	if (battleHonor == 0)
 	{
-		//DEBUG_CRASH(("No Battle Honor in listbox row %d, col %d!", row, col));
+		//engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "No Battle Honor in listbox row %d, col %d!", row, col);
 		TheMouse->setCursorTooltip( TheGameText->fetch("TOOLTIP:BattleHonors") );
 		return;
 	}
@@ -798,7 +799,7 @@ static GameWindow* findWindow(GameWindow *parent, AsciiString baseWindow, AsciiS
 	AsciiString fullPath;
 	fullPath.format("%s:%s", baseWindow.str(), gadgetName.str());
 	GameWindow *res = TheWindowManager->winGetWindowFromId(parent, NAMEKEY(fullPath));
-	DEBUG_ASSERTLOG(res, ("Cannot find window %s", fullPath.str()));
+	if (!(res)) engine::debug::log_error("Cannot find window %s", fullPath.str());
 	return res;
 }
 
@@ -1117,7 +1118,7 @@ void HandlePersistentStorageResponses()
 				break;
 			case PSResponse::PSRESPONSE_PLAYERSTATS:
 				{
-					DEBUG_LOG(("LocalProfileID %d, resp.player.id %d, resp.player.locale %d", TheGameSpyInfo->getLocalProfileID(), resp.player.id, resp.player.locale));
+					engine::debug::log_info("LocalProfileID %d, resp.player.id %d, resp.player.locale %d", TheGameSpyInfo->getLocalProfileID(), resp.player.id, resp.player.locale);
 					/*
 					if(resp.player.id == TheGameSpyInfo->getLocalProfileID() && resp.player.locale < LOC_MIN)
 					{
@@ -1166,8 +1167,8 @@ void HandlePersistentStorageResponses()
 						Bool isPreorder = TheGameSpyInfo->didPlayerPreorder( TheGameSpyInfo->getLocalProfileID() );
 						req.statsToPush.preorder = isPreorder;
 
-						DEBUG_LOG(("PEERREQUEST_PUSHSTATS: stats will be %d,%d,%d,%d,%d,%d",
-							req.statsToPush.locale, req.statsToPush.wins, req.statsToPush.losses, req.statsToPush.rankPoints, req.statsToPush.side, req.statsToPush.preorder));
+						engine::debug::log_info("PEERREQUEST_PUSHSTATS: stats will be %d,%d,%d,%d,%d,%d",
+							req.statsToPush.locale, req.statsToPush.wins, req.statsToPush.losses, req.statsToPush.rankPoints, req.statsToPush.side, req.statsToPush.preorder);
 						TheGameSpyPeerMessageQueue->addRequest(req);
 					}
 					TheGameSpyPSMessageQueue->trackPlayerStats(resp.player);
@@ -1175,7 +1176,7 @@ void HandlePersistentStorageResponses()
 					{
 						UpdateLocalPlayerStats();
 					}
-					DEBUG_LOG(("PopulatePlayerInfoWindows() - lookAtPlayerID is %d, got %d", lookAtPlayerID, resp.player.id));
+					engine::debug::log_info("PopulatePlayerInfoWindows() - lookAtPlayerID is %d, got %d", lookAtPlayerID, resp.player.id);
 					PopulatePlayerInfoWindows("PopupPlayerInfo.wnd");
 					//GadgetListBoxAddEntryText(listboxInfo, L"Got info!", GameSpyColor[GSCOLOR_DEFAULT], -1);
 

@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/Xfer.h"
 #include "GameClient/Drawable.h"
@@ -102,7 +103,7 @@ static void parseFXLocInfo( INI *ini, void *instance, FXLocInfo *locInfo )
 		if( stricmp( token, "randombone" ) != 0 )
 		{
 
-			DEBUG_CRASH(( "parseFXLocInfo: Bone name not followed by RandomBone specifier\nPress IGNORE to see which INI file and line # is incorrect." ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "parseFXLocInfo: Bone name not followed by RandomBone specifier\nPress IGNORE to see which INI file and line # is incorrect." );
 			throw INI_INVALID_DATA;
 
 		}
@@ -256,7 +257,7 @@ void TransitionDamageFX::onDelete()
 static Coord3D getLocalEffectPos( const FXLocInfo *locInfo, Drawable *draw, const RandomValueClass &random = LogicRandomValueClass() )
 {
 
-	DEBUG_ASSERTCRASH( locInfo, ("getLocalEffectPos: locInfo is null") );
+	engine::debug::invariant((locInfo), "locInfo", __FILE__, __LINE__, "getLocalEffectPos: locInfo is null");
 
 	if( locInfo->locType == FX_DAMAGE_LOC_TYPE_BONE && draw )
 	{
@@ -266,7 +267,7 @@ static Coord3D getLocalEffectPos( const FXLocInfo *locInfo, Drawable *draw, cons
 			Coord3D pos;
 
 			// get the bone position
-			Int count = draw->getPristineBonePositions( locInfo->boneName.str(), 0, &pos, nullptr, 1 );
+			Int count = draw->getPristineBonePositions( locInfo->boneName.str(), 0, &pos, 1 );
 
 			// sanity, if bone not found revert back to location defined in struct (which is 0,0,0)
 			if( count == 0 )
@@ -283,7 +284,7 @@ static Coord3D getLocalEffectPos( const FXLocInfo *locInfo, Drawable *draw, cons
 
 			// get the bone positions
 			Int boneCount;
-			boneCount = draw->getPristineBonePositions( locInfo->boneName.str(), 1, positions, nullptr, MAX_BONES );
+			boneCount = draw->getPristineBonePositions( locInfo->boneName.str(), 1, positions, MAX_BONES );
 
 			// sanity, if bone not found revert back to location defined in struct (which is 0,0,0)
 			if( boneCount == 0 )
@@ -355,7 +356,7 @@ void TransitionDamageFX::onBodyDamageStateChange( const DamageInfo* damageInfo,
 				{
 
 					pos = getLocalEffectPos( &modData->m_fxList[ newState ][ i ].locInfo, draw );
-					getObject()->convertBonePosToWorldPos( &pos, nullptr, &pos, nullptr );
+					getObject()->transformBoneToWorld( &pos, nullptr, &pos, nullptr );
 					FXList::doFXPos( modData->m_fxList[ newState ][ i ].fx, &pos );
 
 				}
@@ -371,7 +372,7 @@ void TransitionDamageFX::onBodyDamageStateChange( const DamageInfo* damageInfo,
 				{
 
 					pos = getLocalEffectPos( &modData->m_OCL[ newState ][ i ].locInfo, draw );
-					getObject()->convertBonePosToWorldPos( &pos, nullptr, &pos, nullptr );
+					getObject()->transformBoneToWorld( &pos, nullptr, &pos, nullptr );
 					ObjectCreationList::create( modData->m_OCL[ newState ][ i ].ocl,
 																			getObject(), &pos, damageSource->getPosition(), INVALID_ANGLE );
 

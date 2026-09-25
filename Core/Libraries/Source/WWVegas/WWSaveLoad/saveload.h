@@ -159,7 +159,7 @@ public:
 	*/
 	static void		Register_Pointer (void *old_pointer, void *new_pointer);
 
-#ifdef WWDEBUG
+#ifdef RTS_DEBUG
 	static void		Request_Pointer_Remap (void **pointer_to_convert,const char * file = nullptr,int line = 0);
 	static void		Request_Ref_Counted_Pointer_Remap (RefCountClass **pointer_to_convert,const char * file = nullptr,int line = 0);
 #else
@@ -203,7 +203,7 @@ protected:
 ** Use the following macros to automatically enable pointer-remap DEBUG code.  Remember that
 ** in all cases you submit a pointer to the pointer you want re-mapped.
 */
-#ifdef WWDEBUG
+#ifdef RTS_DEBUG
 #define REQUEST_POINTER_REMAP(pp)					SaveLoadSystemClass::Request_Pointer_Remap(pp,__FILE__,__LINE__)
 #define REQUEST_REF_COUNTED_POINTER_REMAP(pp)	SaveLoadSystemClass::Request_Ref_Counted_Pointer_Remap(pp,__FILE__,__LINE__)
 #else

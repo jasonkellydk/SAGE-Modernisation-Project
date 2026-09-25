@@ -33,7 +33,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/ActionManager.h"
 #include "Common/BuildAssistant.h"
@@ -495,12 +496,12 @@ Bool ActionManager::canResumeConstructionOf( const Object *obj,
 #endif
 	{
 		AIUpdateInterface *ai = builder->getAI();
-		DEBUG_ASSERTCRASH( ai, ("Builder object does not have an AI interface!") );
+		engine::debug::invariant((ai), "ai", __FILE__, __LINE__, "Builder object does not have an AI interface!");
 
 		if( ai )
 		{
 			DozerAIInterface *dozerAI = ai->getDozerAIInterface();
-			DEBUG_ASSERTCRASH( dozerAI, ("Builder object doest not have a DozerAI interface!") );
+			engine::debug::invariant((dozerAI), "dozerAI", __FILE__, __LINE__, "Builder object doest not have a DozerAI interface!");
 
 			if( dozerAI )
 			{

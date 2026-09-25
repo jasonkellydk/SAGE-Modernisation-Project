@@ -39,6 +39,8 @@
 
 #pragma once
 
+import Engine.Core.Math.AffineTransform3;
+
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 #include "Common/Science.h"
 #include "Common/Upgrade.h"
@@ -50,7 +52,6 @@ enum ObjectID CPP_11(: Int);
 enum DrawableID CPP_11(: Int);
 enum KindOfType CPP_11(: Int);
 enum ScienceType CPP_11(: Int);
-class Matrix3D;
 
 // ------------------------------------------------------------------------------------------------
 typedef UnsignedByte XferVersion;
@@ -175,7 +176,7 @@ public:
 	virtual void xferKindOf( KindOfType *kindOfData );
 	virtual void xferUpgradeMask( UpgradeMaskType *upgradeMaskData );
 	virtual void xferUser( void *data, Int dataSize );
-	virtual void xferMatrix3D( Matrix3D* mtx );
+	virtual void xferAffineTransform3( Engine::Math::AffineTransform3* transform );
 	virtual void xferMapName( AsciiString *mapNameData );
 
 protected:

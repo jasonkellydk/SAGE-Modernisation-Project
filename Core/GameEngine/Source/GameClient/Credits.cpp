@@ -46,7 +46,8 @@
 //-----------------------------------------------------------------------------
 // SYSTEM INCLUDES ////////////////////////////////////////////////////////////
 //-----------------------------------------------------------------------------
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 //-----------------------------------------------------------------------------
 // USER INCLUDES //////////////////////////////////////////////////////////////
 //-----------------------------------------------------------------------------
@@ -87,7 +88,7 @@ const FieldParse CreditsManager::m_creditsFieldParseTable[] =
 void INI::parseCredits( INI *ini )
 {
 	// find existing item if present
-	DEBUG_ASSERTCRASH( TheCredits, ("parseCredits: TheCredits has not been ininialized yet.") );
+	engine::debug::invariant((TheCredits), "TheCredits", __FILE__, __LINE__, "parseCredits: TheCredits has not been ininialized yet.");
 	if( !TheCredits )
 		return;
 
@@ -460,7 +461,7 @@ void CreditsManager::addText( AsciiString text )
 			}
 			break;
 		default:
-			DEBUG_CRASH( ("CreditsManager::addText we tried to add a credit text with the wrong style before it.  Style is %d", m_currentStyle) );
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "CreditsManager::addText we tried to add a credit text with the wrong style before it.  Style is %d", m_currentStyle);
 			delete cLine;
 	}
 

@@ -1,3 +1,4 @@
+import Engine.Core.Math.Vector3;
 /*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -31,7 +32,7 @@
 
 #include "Common/GameState.h"
 #include "Common/GlobalData.h"
-#include "Common/PerfTimer.h"
+
 #include "Common/MapReaderWriterInfo.h"
 #include "Common/ThingTemplate.h"
 #include "Common/WellKnownKeys.h"
@@ -63,8 +64,8 @@
 #include "W3DDevice/GameClient/W3DSceneQueryMask.h"
 #include "W3DDevice/GameClient/W3DCastQuery.h"
 #include "W3DDevice/GameClient/W3DAssetCatalog.h"
-
-
+import Engine.Core.Math.AffineTransform3;
+import engine.debug;
 
 class TestSeismicFilter : public SeismicSimulationFilterBase
 {
@@ -156,7 +157,8 @@ static TestSeismicFilter testSeismicFilter;
 
 //-------------------------------------------------------------------------------------------------
 //-------------------------------------------------------------------------------------------------
-W3DTerrainVisual::W3DTerrainVisual()
+W3DTerrainVisual::W3DTerrainVisual(engine::platform::IClockService& clock)
+	: m_clock(clock)
 {
 
 	m_terrainRenderObject = nullptr;
@@ -209,7 +211,7 @@ void W3DTerrainVisual::init()
 	// extend
 	TerrainVisual::init();
 	// create a new render object for W3D
-	m_terrainRenderObject = NEW_REF(W3DTerrainGraphics, ());
+	m_terrainRenderObject = NEW_REF(W3DTerrainGraphics, (m_clock));
 	m_terrainRenderObject->Set_Collision_Type( PICK_TYPE_TERRAIN );
 	TheTerrainRenderObject = m_terrainRenderObject;
 
@@ -376,7 +378,7 @@ void W3DTerrainVisual::handleSeismicSimulations()
       if ( ssn )
       {
         SeismicSimulationFilterBase::SeismicSimStatusCode code = ssn->handleFilterCallback( m_clientHeightMap );
-        DEBUG_ASSERTCRASH( code != SeismicSimulationFilterBase::SEISMIC_STATUS_INVALID, ("Trouble in the Seismic simulator.") );
+        engine::debug::invariant((code != SeismicSimulationFilterBase::SEISMIC_STATUS_INVALID), "code != SeismicSimulationFilterBase::SEISMIC_STATUS_INVALID", __FILE__, __LINE__, "Trouble in the Seismic simulator.");
 
         switch ( code )
         {
@@ -610,7 +612,7 @@ Bool W3DTerrainVisual::load( AsciiString filename )
 		{
 			Coord3D loc = *pMapObj->getLocation();
 			if (loc.z < 0) {
-				Vector3 vec;
+				Engine::Math::Vector3 vec;
 				loc.z = m_terrainRenderObject->getHeightMapHeight(loc.x, loc.y, nullptr);
 				loc.z += d->getReal(TheKey_lightHeightAboveTerrain);
 			}
@@ -619,12 +621,12 @@ Bool W3DTerrainVisual::load( AsciiString filename )
 
 			RGBColor c;
 			c.setFromInt(d->getInt(TheKey_lightAmbientColor));
-			lightP->Set_Ambient( Vector3( c.red, c.green, c.blue ) );
+			lightP->Set_Ambient({c.red, c.green, c.blue});
 
 			c.setFromInt(d->getInt(TheKey_lightDiffuseColor));
-			lightP->Set_Diffuse( Vector3(  c.red, c.green, c.blue) );
+			lightP->Set_Diffuse({c.red, c.green, c.blue});
 
-			lightP->Set_Position(Vector3(loc.x, loc.y, loc.z));
+			lightP->Set_Position({loc.x, loc.y, loc.z});
 
 			lightP->Set_Far_Attenuation_Range(d->getReal(TheKey_lightInnerRadius), d->getReal(TheKey_lightOuterRadius));
  			W3DDisplay::m_3DScene->Add_Render_Object(lightP);
@@ -691,7 +693,7 @@ Bool W3DTerrainVisual::load( AsciiString filename )
 		Dict *d = pMapObj->getProperties();
 		if (pMapObj->isScorch()) {
 			const Coord3D *pos = pMapObj->getLocation();
-			Vector3 loc(pos->x, pos->y, pos->z);
+			Engine::Math::Vector3 loc(pos->x, pos->y, pos->z);
 			Real radius = d->getReal(TheKey_objectRadius);
 			Scorches type = (Scorches)d->getInt(TheKey_scorchType);
 			m_terrainRenderObject->addStaticScorch(loc, radius, type);
@@ -739,19 +741,20 @@ Bool W3DTerrainVisual::intersectTerrain( Coord3D *rayStart,
 
 	if( m_terrainRenderObject )
 	{
-		CastResultStruct res;
-		LineSegClass lineSeg( Vector3( rayStart->x, rayStart->y, rayStart->z ),
-													Vector3( rayEnd->x, rayEnd->y, rayEnd->z ) );
+		Engine::Math::CollisionResult3 res;
+		const Engine::Math::LineSegment3 lineSeg{
+			{rayStart->x, rayStart->y, rayStart->z}, {rayEnd->x, rayEnd->y, rayEnd->z}};
 		W3DRayCastQuery rayTest( lineSeg, &res );
 
 		hit = m_terrainRenderObject->Cast_Ray( rayTest );
 		if( hit && result )
 		{
-			Vector3 point = rayTest.Result->ContactPoint;
+			const auto &contact = rayTest.Result->contact_point;
+			Engine::Math::Vector3 point(contact.x, contact.y, contact.z);
 
-			result->x = point.X;
-			result->y = point.Y;
-			result->z = point.Z;
+			result->x = point.x;
+			result->y = point.y;
+			result->z = point.z;
 
 		}
 
@@ -839,7 +842,7 @@ void W3DTerrainVisual::setWaterTransform( const WaterHandle *waterTable,
 // ------------------------------------------------------------------------------------------------
 /** set water table transform by matrix */
 // ------------------------------------------------------------------------------------------------
-void W3DTerrainVisual::setWaterTransform( const Matrix3D *transform )
+void W3DTerrainVisual::setWaterTransform( const Engine::Math::AffineTransform3 *transform )
 {
 
 	if (transform)
@@ -853,7 +856,7 @@ void W3DTerrainVisual::setWaterTransform( const Matrix3D *transform )
 // ------------------------------------------------------------------------------------------------
 /** get the water transform matrix */
 // ------------------------------------------------------------------------------------------------
-void W3DTerrainVisual::getWaterTransform( const WaterHandle *waterTable, Matrix3D *transform )
+void W3DTerrainVisual::getWaterTransform( const WaterHandle *waterTable, Engine::Math::AffineTransform3 *transform )
 {
 
 	if (transform)
@@ -980,8 +983,8 @@ void W3DTerrainVisual::addFactionBibDrawable(Drawable *factionBuilding, Bool hig
 	if (m_logicHeightMap)
 #endif
   {
-		const Matrix3D * mtx = factionBuilding->getTransformMatrix();
-		Vector3 corners[4];
+		const auto &transform = factionBuilding->worldTransform();
+		Engine::Math::Vector3 corners[4];
 		Coord3D pos;
 		pos.set(0,0,0);
 		Real exitWidth = factionBuilding->getTemplate()->getFactoryExitWidth();
@@ -992,22 +995,22 @@ void W3DTerrainVisual::addFactionBibDrawable(Drawable *factionBuilding, Bool hig
 		if (info.getGeomType() != GEOMETRY_BOX) {
 			sizeY = sizeX;
 		}
-		corners[0].Set(pos.x, pos.y, pos.z);
-		corners[0].X -= sizeX+extraWidth;
-		corners[0].Y -= sizeY+extraWidth;
-		corners[1].Set(pos.x, pos.y, pos.z);
-		corners[1].X += sizeX+exitWidth+extraWidth;
-		corners[1].Y -= sizeY+extraWidth;
-		corners[2].Set(pos.x, pos.y, pos.z);
-		corners[2].X += sizeX+exitWidth+extraWidth;
-		corners[2].Y += sizeY+extraWidth;
-		corners[3].Set(pos.x, pos.y, pos.z);
-		corners[3].X -= sizeX+extraWidth;
-		corners[3].Y += sizeY+extraWidth;
-		mtx->Transform_Vector(*mtx, corners[0], &corners[0]);
-		mtx->Transform_Vector(*mtx, corners[1], &corners[1]);
-		mtx->Transform_Vector(*mtx, corners[2], &corners[2]);
-		mtx->Transform_Vector(*mtx, corners[3], &corners[3]);
+		corners[0] = {pos.x, pos.y, pos.z};
+		corners[0].x -= sizeX+extraWidth;
+		corners[0].y -= sizeY+extraWidth;
+		corners[1] = {pos.x, pos.y, pos.z};
+		corners[1].x += sizeX+exitWidth+extraWidth;
+		corners[1].y -= sizeY+extraWidth;
+		corners[2] = {pos.x, pos.y, pos.z};
+		corners[2].x += sizeX+exitWidth+extraWidth;
+		corners[2].y += sizeY+extraWidth;
+		corners[3] = {pos.x, pos.y, pos.z};
+		corners[3].x -= sizeX+extraWidth;
+		corners[3].y += sizeY+extraWidth;
+		for (auto &corner : corners) {
+			const auto transformed = transform.Transform_Point({corner.x, corner.y, corner.z});
+			corner = {transformed.x, transformed.y, transformed.z};
+		}
 		m_terrainRenderObject->addTerrainBibDrawable(corners, factionBuilding->getID(), highlight);
 	}
 }
@@ -1022,8 +1025,8 @@ void W3DTerrainVisual::addFactionBib(Object *factionBuilding, Bool highlight, Re
 	if (m_logicHeightMap)
 #endif
   {
-		const Matrix3D * mtx = factionBuilding->getTransformMatrix();
-		Vector3 corners[4];
+		const auto &transform = factionBuilding->worldTransform();
+		Engine::Math::Vector3 corners[4];
 		Coord3D pos;
 		pos.set(0,0,0);
 		Real exitWidth = factionBuilding->getTemplate()->getFactoryExitWidth();
@@ -1034,22 +1037,22 @@ void W3DTerrainVisual::addFactionBib(Object *factionBuilding, Bool highlight, Re
 		if (info.getGeomType() != GEOMETRY_BOX) {
 			sizeY = sizeX;
 		}
-		corners[0].Set(pos.x, pos.y, pos.z);
-		corners[0].X -= sizeX+extraWidth;
-		corners[0].Y -= sizeY+extraWidth;
-		corners[1].Set(pos.x, pos.y, pos.z);
-		corners[1].X += sizeX+exitWidth+extraWidth;
-		corners[1].Y -= sizeY+extraWidth;
-		corners[2].Set(pos.x, pos.y, pos.z);
-		corners[2].X += sizeX+exitWidth+extraWidth;
-		corners[2].Y += sizeY+extraWidth;
-		corners[3].Set(pos.x, pos.y, pos.z);
-		corners[3].X -= sizeX+extraWidth;
-		corners[3].Y += sizeY+extraWidth;
-		mtx->Transform_Vector(*mtx, corners[0], &corners[0]);
-		mtx->Transform_Vector(*mtx, corners[1], &corners[1]);
-		mtx->Transform_Vector(*mtx, corners[2], &corners[2]);
-		mtx->Transform_Vector(*mtx, corners[3], &corners[3]);
+		corners[0] = {pos.x, pos.y, pos.z};
+		corners[0].x -= sizeX+extraWidth;
+		corners[0].y -= sizeY+extraWidth;
+		corners[1] = {pos.x, pos.y, pos.z};
+		corners[1].x += sizeX+exitWidth+extraWidth;
+		corners[1].y -= sizeY+extraWidth;
+		corners[2] = {pos.x, pos.y, pos.z};
+		corners[2].x += sizeX+exitWidth+extraWidth;
+		corners[2].y += sizeY+extraWidth;
+		corners[3] = {pos.x, pos.y, pos.z};
+		corners[3].x -= sizeX+extraWidth;
+		corners[3].y += sizeY+extraWidth;
+		for (auto &corner : corners) {
+			const auto transformed = transform.Transform_Point({corner.x, corner.y, corner.z});
+			corner = {transformed.x, transformed.y, transformed.z};
+		}
 		m_terrainRenderObject->addTerrainBib(corners, factionBuilding->getID(), highlight);
 	}
 }
@@ -1220,7 +1223,7 @@ void W3DTerrainVisual::xfer( Xfer *xfer )
 	if( gridEnabled != m_isWaterGridRenderingEnabled )
 	{
 
-		DEBUG_CRASH(( "W3DTerrainVisual::xfer - m_isWaterGridRenderingEnabled mismatch" ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "W3DTerrainVisual::xfer - m_isWaterGridRenderingEnabled mismatch" );
 		throw SC_INVALID_DATA;
 
 	}
@@ -1241,16 +1244,16 @@ void W3DTerrainVisual::xfer( Xfer *xfer )
 		if( width != getGridWidth() )
 		{
 
-			DEBUG_CRASH(( "W3DTerrainVisual::xfer - grid width mismatch '%d' should be '%d'",
-										width, getGridWidth() ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "W3DTerrainVisual::xfer - grid width mismatch '%d' should be '%d'",
+										width, getGridWidth() );
 			throw SC_INVALID_DATA;
 
 		}
 		if( height != getGridHeight() )
 		{
 
-			DEBUG_CRASH(( "W3DTerrainVisual::xfer - grid height mismatch '%d' should be '%d'",
-										height, getGridHeight() ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "W3DTerrainVisual::xfer - grid height mismatch '%d' should be '%d'",
+										height, getGridHeight() );
 			throw SC_INVALID_DATA;
 
 		}
@@ -1267,7 +1270,7 @@ void W3DTerrainVisual::xfer( Xfer *xfer )
 		Int xferLen = len;
 		xfer->xferInt(&xferLen);
 		if (len!=xferLen) {
-			DEBUG_CRASH(("Bad height map length."));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Bad height map length.");
 			if (len>xferLen) {
 				len = xferLen;
 			}
@@ -1310,4 +1313,3 @@ void W3DTerrainVisual::loadPostProcess()
 	TerrainVisual::loadPostProcess();
 
 }
-

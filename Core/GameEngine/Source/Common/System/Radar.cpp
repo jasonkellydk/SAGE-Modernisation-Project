@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/GameAudio.h"
 #include "Common/GameState.h"
@@ -85,8 +86,7 @@ void Radar::deleteListResources()
 #ifdef DEBUG_CRASHING
 	for( Object *obj = TheGameLogic->getFirstObject(); obj; obj = obj->getNextObject() )
 	{
-		DEBUG_ASSERTCRASH( obj->friend_getRadarData() == nullptr,
-			("Radar::deleteListResources: Unexpectedly an object still has radar data assigned") );
+		engine::debug::invariant((obj->friend_getRadarData() == nullptr), "obj->friend_getRadarData() == nullptr", __FILE__, __LINE__, "Radar::deleteListResources: Unexpectedly an object still has radar data assigned");
 	}
 #endif
 }
@@ -154,7 +154,7 @@ void RadarObject::xfer( Xfer *xfer )
 		if( m_object == nullptr )
 		{
 
-			DEBUG_CRASH(( "RadarObject::xfer - Unable to find object for radar data" ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "RadarObject::xfer - Unable to find object for radar data" );
 			throw SC_INVALID_DATA;
 
 		}
@@ -313,7 +313,7 @@ void Radar::newMap( TerrainLogic *terrain )
 	// keep a pointer for our radar window
 	Int id = NAMEKEY( "ControlBar.wnd:LeftHUD" );
 	m_radarWindow = TheWindowManager->winGetWindowFromId( nullptr, id );
-	DEBUG_ASSERTCRASH( m_radarWindow, ("Radar::newMap - Unable to find radar game window") );
+	engine::debug::invariant((m_radarWindow), "m_radarWindow", __FILE__, __LINE__, "Radar::newMap - Unable to find radar game window");
 
 	// reset all the data in the radar
 	reset();
@@ -386,9 +386,8 @@ Bool Radar::addObject( Object *obj )
 	RadarObject *newObj;
 
 	// sanity
-	DEBUG_ASSERTCRASH( obj->friend_getRadarData() == nullptr,
-										 ("Radar: addObject - non null radar data for '%s'",
-										 obj->getTemplate()->getName().str()) );
+	engine::debug::invariant((obj->friend_getRadarData() == nullptr), "obj->friend_getRadarData() == nullptr", __FILE__, __LINE__, "Radar: addObject - non null radar data for '%s'",
+										 obj->getTemplate()->getName().str());
 
 	// allocate a new object
 	newObj = newInstance(RadarObject);
@@ -478,8 +477,8 @@ Bool Radar::removeObject( Object *obj )
 		return TRUE;
 	else
 	{
-		DEBUG_CRASH( ("Radar: Tried to remove object '%s' which was not found",
-											 obj->getTemplate()->getName().str()) );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Radar: Tried to remove object '%s' which was not found",
+											 obj->getTemplate()->getName().str());
 		return FALSE;
 	}
 
@@ -740,7 +739,7 @@ Object *Radar::searchListForRadarLocationMatch( RadarObject *listHead, ICoord2D 
 		if( obj == nullptr )
 		{
 
-			DEBUG_CRASH(( "Radar::searchListForRadarLocationMatch - null object encountered in list" ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Radar::searchListForRadarLocationMatch - null object encountered in list" );
 			continue;
 
 		}
@@ -916,7 +915,7 @@ void Radar::createEvent( const Coord3D *world, RadarEventType type, Real seconds
 		static RGBAColorInt color1 = { 255, 255, 255, 255 };
 		static RGBAColorInt color2 = { 255, 255, 255, 255 };
 
-		DEBUG_CRASH(( "Radar::createEvent - Event not found in color table, using default colors" ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Radar::createEvent - Event not found in color table, using default colors" );
 		color[ 0 ] = color1;
 		color[ 1 ] = color2;
 
@@ -1266,7 +1265,7 @@ static void xferRadarObjectList( Xfer *xfer, RadarObject **head )
 	RadarObject *radarObject;
 
 	// sanity
-	DEBUG_ASSERTCRASH( head != nullptr, ("xferRadarObjectList - Invalid parameters" ));
+	engine::debug::invariant((head != nullptr), "head != nullptr", __FILE__, __LINE__, "xferRadarObjectList - Invalid parameters" );
 
 	// version
 	XferVersion currentVersion = 1;
@@ -1307,12 +1306,12 @@ static void xferRadarObjectList( Xfer *xfer, RadarObject **head )
 			{
 				if (!radarObject->friend_getObject()->isDestroyed())
 				{
-					DEBUG_CRASH(( "xferRadarObjectList - List head should be null, or contain only destroyed objects" ));
+					engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "xferRadarObjectList - List head should be null, or contain only destroyed objects" );
 					throw SC_INVALID_DATA;
 				}
 			}
 #else
-			DEBUG_CRASH(( "xferRadarObjectList - List head should be null, but isn't" ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "xferRadarObjectList - List head should be null, but isn't" );
 			throw SC_INVALID_DATA;
 #endif
 		}
@@ -1406,8 +1405,8 @@ void Radar::xfer( Xfer *xfer )
 	if( eventCount != eventCountVerify )
 	{
 
-		DEBUG_CRASH(( "Radar::xfer - size of MAX_RADAR_EVENTS has changed, you must version this xfer method to accommodate the new array size.  Was '%d' and is now '%d'",
-									eventCount, eventCountVerify ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Radar::xfer - size of MAX_RADAR_EVENTS has changed, you must version this xfer method to accommodate the new array size.  Was '%d' and is now '%d'",
+									eventCount, eventCountVerify );
 		throw SC_INVALID_DATA;
 
 	}
@@ -1488,7 +1487,7 @@ void Radar::linkRadarObject( RadarObject *newObj, RadarObject **list )
 	RadarObject *prevObject;
 	RadarObject *nextObject;
 
-	DEBUG_ASSERTCRASH(newObj->friend_getNext() == nullptr, ("newObj->friend_getNext is not null"));
+	engine::debug::invariant((newObj->friend_getNext() == nullptr), "newObj->friend_getNext() == nullptr", __FILE__, __LINE__, "newObj->friend_getNext is not null");
 
 	prevObject = nullptr;
 	prevPriority = RADAR_PRIORITY_INVALID;

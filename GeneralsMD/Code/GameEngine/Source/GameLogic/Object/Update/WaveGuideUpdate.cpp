@@ -28,7 +28,9 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
+import Engine.Core.Math.AffineTransform3;
 
 #include "Common/Radar.h"
 #include "Common/ThingFactory.h"
@@ -176,7 +178,7 @@ Bool WaveGuideUpdate::startMoving()
 			if( verify->getNumLinks() > 1 )
 			{
 
-				DEBUG_CRASH(( "WaveGuideUpdate::startMoving - The waypoint path cannot have multiple link choices at any node" ));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "WaveGuideUpdate::startMoving - The waypoint path cannot have multiple link choices at any node" );
 				return FALSE;
 
 			}
@@ -194,7 +196,7 @@ Bool WaveGuideUpdate::startMoving()
 		if( next == nullptr )
 		{
 
-			DEBUG_CRASH(( "WaveGuideUpdate:startMoving - There must be a linked waypoint path to follow" ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "WaveGuideUpdate:startMoving - There must be a linked waypoint path to follow" );
 			return FALSE;
 
 		}
@@ -425,7 +427,7 @@ void WaveGuideUpdate::doWaterMotion()
 
 	// iterate the waveguide shape points ... at certain points we will create water "up force"
 	Int i;
-//	const Matrix3D *transform = waveGuide->getTransformMatrix();
+//	const Matrix3D *transform = waveGuide->worldTransform();
 	for( i = 0; i < m_shapePointCount; i++ )
 	{
 
@@ -707,29 +709,22 @@ void WaveGuideUpdate::doDamage()
 							ParticleSystem *particleSystem = TheParticleSystemManager->createParticleSystem( modData->m_bridgeParticle );
 							if( particleSystem )
 							{
-								Coord3D u, x, y, z;
-								Matrix3D transform;
-
-								z.x = 0.0f;
-								z.y = 0.0f;
-								z.z = 1.0f;
+								const Engine::Math::Vector3 z{0.0f, 0.0f, 1.0f};
 
 								//
 								// angle is rotated, because we computed from 'from' and 'to' points of
 								// the bridge going *across* the valley, not pointing *down* it
 								//
-								u.x = Cos( angle + modData->m_bridgeParticleAngleFudge );
-								u.y = Sin( angle + modData->m_bridgeParticleAngleFudge );
-								u.z = 0.0f;
+								const Engine::Math::Vector3 u{
+									Cos(angle + modData->m_bridgeParticleAngleFudge),
+									Sin(angle + modData->m_bridgeParticleAngleFudge), 0.0f};
+								const Engine::Math::Vector3 y = z.Cross(u);
+								const Engine::Math::Vector3 x = y.Cross(z);
+								const Engine::Math::AffineTransform3 transform = Engine::Math::AffineTransform3::From_Basis(
+									x, y, z,
+									{obj->getPosition()->x, obj->getPosition()->y, obj->getPosition()->z});
 
-								y.crossProduct( z, u, y );
-								x.crossProduct( y, z, x );
-
-								transform.Set(  x.x, y.x, z.x, obj->getPosition()->x,
-																x.y, y.y, z.y, obj->getPosition()->y,
-																x.z, y.z, z.z, obj->getPosition()->z );
-
-								particleSystem->setLocalTransform( &transform );
+								particleSystem->setLocalTransform(transform);
 
 							}
 
@@ -837,7 +832,8 @@ UpdateSleepTime WaveGuideUpdate::update()
 		// create splash effect
 		particleSys = TheParticleSystemManager->createParticleSystem( waveSplash );
 		if( particleSys )
-			particleSys->setLocalTransform( waveGuide->getTransformMatrix() );
+			particleSys->setLocalTransform(
+				waveGuide->worldTransform());
 
 		// destroy object
 		TheGameLogic->destroyObject( waveGuide );

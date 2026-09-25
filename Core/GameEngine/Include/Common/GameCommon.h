@@ -47,6 +47,8 @@
 
 #pragma once
 
+
+#include <cassert>
 //#define _CAMPEA_DEMO
 
 // ----------------------------------------------------------------------------------------------
@@ -55,11 +57,8 @@
 #include "Common/GameDefines.h"
 
 // ----------------------------------------------------------------------------------------------
-#if defined(RTS_DEBUG)
-	#define DUMP_PERF_STATS
-#else
-	#define NO_DUMP_PERF_STATS
-#endif
+// Detailed runtime timing now comes from Tracy zones; the old CSV/graph
+// performance timer path has been removed.
 
 // ----------------------------------------------------------------------------------------------
 enum
@@ -310,28 +309,28 @@ inline VeterancyLevelFlags clearVeterancyLevelFlag(VeterancyLevelFlags flags, Ve
 public:																																								\
 	inline DLINK_ITERATOR<OBJCLASS> iterate_##LISTNAME() const													\
 	{																																										\
-		DEBUG_ASSERTCRASH(!BOGUSPTR(m_dlinkhead_##LISTNAME.m_head), ("bogus head ptr"));	\
+		assert((!BOGUSPTR(m_dlinkhead_##LISTNAME.m_head)));	\
 		return DLINK_ITERATOR<OBJCLASS>(m_dlinkhead_##LISTNAME.m_head, &OBJCLASS::dlink_next_##LISTNAME);	\
 	}																																										\
 	inline OBJCLASS *getFirstItemIn_##LISTNAME() const																	\
 	{																																										\
-		DEBUG_ASSERTCRASH(!BOGUSPTR(m_dlinkhead_##LISTNAME.m_head), ("bogus head ptr"));	\
+		assert((!BOGUSPTR(m_dlinkhead_##LISTNAME.m_head)));	\
 		return m_dlinkhead_##LISTNAME.m_head;																							\
 	}																																										\
 	inline Bool isInList_##LISTNAME(OBJCLASS* o) const																	\
 	{																																										\
-		DEBUG_ASSERTCRASH(!BOGUSPTR(m_dlinkhead_##LISTNAME.m_head), ("bogus head ptr"));	\
+		assert((!BOGUSPTR(m_dlinkhead_##LISTNAME.m_head)));	\
 		return o->dlink_isInList_##LISTNAME(&m_dlinkhead_##LISTNAME.m_head);							\
 	}																																										\
 	inline void prependTo_##LISTNAME(OBJCLASS* o)																				\
 	{																																										\
-		DEBUG_ASSERTCRASH(!BOGUSPTR(m_dlinkhead_##LISTNAME.m_head), ("bogus head ptr"));	\
+		assert((!BOGUSPTR(m_dlinkhead_##LISTNAME.m_head)));	\
 		if (!isInList_##LISTNAME(o))																											\
 			o->dlink_prependTo_##LISTNAME(&m_dlinkhead_##LISTNAME.m_head);									\
 	}																																										\
 	inline void removeFrom_##LISTNAME(OBJCLASS* o)																			\
 	{																																										\
-		DEBUG_ASSERTCRASH(!BOGUSPTR(m_dlinkhead_##LISTNAME.m_head), ("bogus head ptr"));	\
+		assert((!BOGUSPTR(m_dlinkhead_##LISTNAME.m_head)));	\
 		if (isInList_##LISTNAME(o))																												\
 			o->dlink_removeFrom_##LISTNAME(&m_dlinkhead_##LISTNAME.m_head);									\
 	}																																										\
@@ -340,7 +339,7 @@ public:																																								\
 	{																																										\
 		while (m_dlinkhead_##LISTNAME.m_head)																							\
 		{																																									\
-			DEBUG_ASSERTCRASH(!BOGUSPTR(m_dlinkhead_##LISTNAME.m_head), ("bogus head ptr"));\
+			assert((!BOGUSPTR(m_dlinkhead_##LISTNAME.m_head)));\
 			OBJCLASS *tmp = m_dlinkhead_##LISTNAME.m_head;																	\
 			removeFrom_##LISTNAME(tmp);																											\
 			if (p) (*p)(tmp);																																\
@@ -368,7 +367,7 @@ private:																																							\
 		inline DLINKHEAD_##LISTNAME() :																										\
 			m_head(0) { }																																		\
 		inline ~DLINKHEAD_##LISTNAME()																										\
-			{ DEBUG_ASSERTCRASH(!m_head,("destroying dlinkhead still in a list " #LISTNAME)); }				\
+			{ assert((!m_head)); }				\
 	};																																									\
 	DLINKHEAD_##LISTNAME m_dlinkhead_##LISTNAME;
 
@@ -385,23 +384,23 @@ public:																	\
 	}																																													\
 	Bool dlink_isInList_##LISTNAME(OBJCLASS* const* pListHead) const										\
 	{																																													\
-		DEBUG_ASSERTCRASH(!BOGUSPTR(*pListHead) && !BOGUSPTR(m_dlink_##LISTNAME.m_next) && !BOGUSPTR(m_dlink_##LISTNAME.m_prev), ("bogus ptrs")); \
+		assert((!BOGUSPTR(*pListHead) && !BOGUSPTR(m_dlink_##LISTNAME.m_next) && !BOGUSPTR(m_dlink_##LISTNAME.m_prev))); \
 		return *pListHead == this || m_dlink_##LISTNAME.m_prev || m_dlink_##LISTNAME.m_next;		\
 	}																																													\
 	void dlink_prependTo_##LISTNAME(OBJCLASS** pListHead)															\
 	{																																													\
-		DEBUG_ASSERTCRASH(!dlink_isInList_##LISTNAME(pListHead), ("already in list " #LISTNAME));					\
-		DEBUG_ASSERTCRASH(!BOGUSPTR(*pListHead) && !BOGUSPTR(m_dlink_##LISTNAME.m_next) && !BOGUSPTR(m_dlink_##LISTNAME.m_prev), ("bogus ptrs")); \
+		assert((!dlink_isInList_##LISTNAME(pListHead)));					\
+		assert((!BOGUSPTR(*pListHead) && !BOGUSPTR(m_dlink_##LISTNAME.m_next) && !BOGUSPTR(m_dlink_##LISTNAME.m_prev))); \
 		m_dlink_##LISTNAME.m_next = *pListHead;																									\
 		if (*pListHead)																																					\
 			(*pListHead)->m_dlink_##LISTNAME.m_prev = this;																				\
 		*pListHead = this;																																			\
-		DEBUG_ASSERTCRASH(!BOGUSPTR(*pListHead) && !BOGUSPTR(m_dlink_##LISTNAME.m_next) && !BOGUSPTR(m_dlink_##LISTNAME.m_prev), ("bogus ptrs")); \
+		assert((!BOGUSPTR(*pListHead) && !BOGUSPTR(m_dlink_##LISTNAME.m_next) && !BOGUSPTR(m_dlink_##LISTNAME.m_prev))); \
 	}																																													\
 	void dlink_removeFrom_##LISTNAME(OBJCLASS** pListHead)															\
 	{																																													\
-		DEBUG_ASSERTCRASH(dlink_isInList_##LISTNAME(pListHead), ("not in list" #LISTNAME));			\
-		DEBUG_ASSERTCRASH(!BOGUSPTR(*pListHead) && !BOGUSPTR(m_dlink_##LISTNAME.m_next) && !BOGUSPTR(m_dlink_##LISTNAME.m_prev), ("bogus ptrs")); \
+		assert((dlink_isInList_##LISTNAME(pListHead)));			\
+		assert((!BOGUSPTR(*pListHead) && !BOGUSPTR(m_dlink_##LISTNAME.m_next) && !BOGUSPTR(m_dlink_##LISTNAME.m_prev))); \
 		if (m_dlink_##LISTNAME.m_next)																													\
 			m_dlink_##LISTNAME.m_next->m_dlink_##LISTNAME.m_prev = m_dlink_##LISTNAME.m_prev;			\
 		if (m_dlink_##LISTNAME.m_prev)																													\
@@ -410,7 +409,7 @@ public:																	\
 			*pListHead = m_dlink_##LISTNAME.m_next;																								\
 		m_dlink_##LISTNAME.m_prev = 0;																													\
 		m_dlink_##LISTNAME.m_next = 0;																													\
-		DEBUG_ASSERTCRASH(!BOGUSPTR(*pListHead) && !BOGUSPTR(m_dlink_##LISTNAME.m_next) && !BOGUSPTR(m_dlink_##LISTNAME.m_prev), ("bogus ptrs")); \
+		assert((!BOGUSPTR(*pListHead) && !BOGUSPTR(m_dlink_##LISTNAME.m_next) && !BOGUSPTR(m_dlink_##LISTNAME.m_prev))); \
 	}																																													\
 private:																\
 	/* a trick: init links to zero */			\
@@ -422,7 +421,7 @@ private:																\
 		inline DLINK_##LISTNAME() :					\
 			m_prev(0), m_next(0) { }					\
 		inline ~DLINK_##LISTNAME()					\
-			{ DEBUG_ASSERTCRASH(!m_prev && !m_next,("destroying dlink still in a list "  #LISTNAME)); } \
+			{ assert((!m_prev && !m_next)); } \
 	};																		\
 	DLINK_##LISTNAME m_dlink_##LISTNAME;
 
@@ -477,7 +476,7 @@ enum WhichTurretType CPP_11(: Int)
 
 // ------------------------------------------------------------------------
 // this normalizes an angle to the range -PI...PI.
-// TheSuperHackers @todo DO NOT USE THIS FUNCTION! Use WWMath::Normalize_Angle instead. Delete this.
+// TheSuperHackers @todo DO NOT USE THIS FUNCTION! Use Engine::Math::WrapRadians instead. Delete this.
 extern Real normalizeAngle(Real angle);
 
 // ------------------------------------------------------------------------

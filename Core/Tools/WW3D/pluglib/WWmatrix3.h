@@ -55,6 +55,7 @@
 
 #pragma once
 
+#include <cmath>
 #include "always.h"
 #include "vector3.h"
 //#include "wwdebug.h"
@@ -360,7 +361,7 @@ inline void Matrix3::Set(const Vector3 & axis,float angle)
 
 inline void Matrix3::Set(const Vector3 & axis,float s,float c)
 {
-	assert(WWMath::Fabs(axis.Length2() - 1.0f) < 0.001f);
+	assert(std::fabs(axis.Length2() - 1.0f) < 0.001f);
 
 	Row[0].Set(
 		(float)(axis[0]*axis[0] + c*(1.0f - axis[0]*axis[0])),
@@ -431,7 +432,7 @@ inline Matrix3 Matrix3::Inverse() const    // Gauss-Jordan elimination with part
 		// Find largest pivot in column j among rows j..3
 		i1 = j;
 		for (i=j+1; i<3; i++) {
-			if (WWMath::Fabs(a[i][j]) > WWMath::Fabs(a[i1][j])) {
+			if (std::fabs(a[i][j]) > std::fabs(a[i1][j])) {
 				i1 = i;
 			}
 		}

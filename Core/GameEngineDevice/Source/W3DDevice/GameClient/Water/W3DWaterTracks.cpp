@@ -63,10 +63,10 @@ import Graphics.Frame.Runtime;
 #include "Common/file.h"
 #include "Common/FileSystem.h"
 #include "W3DDevice/GameClient/W3DTextureHandle.h"
-#include "WWMath/colmath.h"
 #include "W3DDevice/GameClient/W3DCastQuery.h"
 #include "W3DDevice/GameClient/W3DRenderContext.h"
 #include "W3DDevice/GameClient/W3DCamera.h"
+import Engine.Core.Math.Matrix4;
 
 //number of vertex pages allocated - allows double buffering of vertex updates.
 //while one is being rendered, another is being updated.  Improves HW parallelism.
@@ -160,7 +160,7 @@ Int WaterTracksObj::freeWaterTracksResources()
 *	the specified texture.
  */
 //=============================================================================
-void WaterTracksObj::init( Real width, Real length, const Vector2 &start, const Vector2 &end, const Char *texturename, Int waveTimeOffset)
+void WaterTracksObj::init( Real width, Real length, const Engine::Math::Vector2 &start, const Engine::Math::Vector2 &end, const Char *texturename, Int waveTimeOffset)
 {
 	freeWaterTracksResources();	//free old resources used by this track
 
@@ -174,18 +174,18 @@ void WaterTracksObj::init( Real width, Real length, const Vector2 &start, const 
 	m_elapsedMs=m_initTimeOffset;
 	m_startPos=start;
 	m_perpDir=m_waveDir=end-start;
-	m_perpDir.Rotate(-1.57079632679f);	//get vector perpendicular to wave motion.
-	m_perpDir.Normalize();
+	m_perpDir = m_perpDir.Rotated(-1.57079632679f);	//get vector perpendicular to wave motion.
+	m_perpDir = m_perpDir.Normalized();
 
 	m_waveDir=m_perpDir;
-	m_waveDir.Rotate(PI/2);	//get vector along wave travel direction.
+	m_waveDir = m_waveDir.Rotated(PI/2);	//get vector along wave travel direction.
 	//move back by width of wave so start point turns into maximum reach of wave.
 	//m_startPos -= m_waveDir*m_width;
 	//move back initial tip off of wave a couple units off the final position
 	//to give it some room to travel. Travel vector is stored in m_waveDir.
 	m_waveDistance = waveTypeInfo[m_type].m_waveDistance;	//total distance traveled by wave front
 
-	m_waveDir *= m_waveDistance;
+	m_waveDir = m_waveDir * m_waveDistance;
 	m_startPos -= m_waveDir;	//move start point down away from shoreline
 
 	m_initialVelocity=waveTypeInfo[m_type].m_initialVelocity;			//velocity per ms
@@ -229,17 +229,17 @@ void WaterTracksObj::init( Real width, Real length, const Vector2 &start, const 
 *	defines the maximum distance the wave will reach.
  */
 //=============================================================================
-void WaterTracksObj::init( Real width, const Vector2 &start, const Vector2 &end, const Char *texturename)
+void WaterTracksObj::init( Real width, const Engine::Math::Vector2 &start, const Engine::Math::Vector2 &end, const Char *texturename)
 {
 	freeWaterTracksResources();	//free old resources used by this track
 	m_perpDir=end-start;
 	m_startPos=start + m_perpDir*0.5f;	//move start point to middle
 	Real length=m_perpDir.Length();
-	m_perpDir *= 1.0f/length;	//normalize it.
+	m_perpDir = m_perpDir / length;	//normalize it.
 	m_waveDir=m_perpDir;
-	m_waveDir.Rotate(PI/2);	//get vector along wave travel direction.
+	m_waveDir = m_waveDir.Rotated(PI/2);	//get vector along wave travel direction.
 	m_startPos -= m_waveDir*width;	//move back by width of wave
-	m_waveDir *= 1.3f*MAP_XY_FACTOR;	//travel 4 units
+	m_waveDir = m_waveDir * (1.3f*MAP_XY_FACTOR);	//travel 4 units
 	m_startPos -= m_waveDir;	//move start point down away from shoreline
 	m_x=WATER_STRIP_X;
 	m_y=WATER_STRIP_Y;
@@ -278,7 +278,7 @@ void WaterTracksObj::Append_Vertices(std::vector<WaterSurfaceVertex>& vertices)
 	m_elapsedMs += TheFramePacer->getLogicTimeStepMilliseconds();
 
 	WaterSurfaceVertex *vb;
-	Vector2	waveTailOrigin,waveFrontOrigin;
+	Engine::Math::Vector2	waveTailOrigin,waveFrontOrigin;
 	Real	ooWaveDirLen=1.0f/m_waveDir.Length();	//one over length
 	Real	waterHeight;
 	Real	waveAlpha;
@@ -401,10 +401,10 @@ void WaterTracksObj::Append_Vertices(std::vector<WaterSurfaceVertex>& vertices)
 	}
 
 	//First insert tail of wave:
-	Vector2 testPoint(waveTailOrigin);
-	TheTerrainLogic->isUnderwater(testPoint.X,testPoint.Y,&waterHeight);
-	vb->x=	testPoint.X;
-	vb->y=	testPoint.Y;
+	Engine::Math::Vector2 testPoint(waveTailOrigin);
+	TheTerrainLogic->isUnderwater(testPoint.x,testPoint.y,&waterHeight);
+	vb->x=	testPoint.x;
+	vb->y=	testPoint.y;
 	vb->z=waterHeight+1.5f;
 	vb->diffuse=(REAL_TO_INT(waveAlpha*255.0f)<<24) |0xffffff;
 	if (m_flipU)
@@ -413,9 +413,9 @@ void WaterTracksObj::Append_Vertices(std::vector<WaterSurfaceVertex>& vertices)
 		vb->u1=0;
 	vb->v1=0;
 	vb++;
-	testPoint.Set(waveTailOrigin + m_perpDir*m_waveFinalWidth*widthFrac);
-	vb->x=	testPoint.X;
-	vb->y=	testPoint.Y;
+	testPoint = waveTailOrigin + m_perpDir*m_waveFinalWidth*widthFrac;
+	vb->x=	testPoint.x;
+	vb->y=	testPoint.y;
 	vb->z=waterHeight+1.5f;
 	vb->diffuse=(REAL_TO_INT(waveAlpha*255.0f)<<24) |0xffffff;
 	if (m_flipU)
@@ -425,9 +425,9 @@ void WaterTracksObj::Append_Vertices(std::vector<WaterSurfaceVertex>& vertices)
 	vb->v1=0;
 	vb++;
 	//insert front of wave
-	testPoint.Set(waveFrontOrigin);
-	vb->x=	testPoint.X;
-	vb->y=	testPoint.Y;
+	testPoint = waveFrontOrigin;
+	vb->x=	testPoint.x;
+	vb->y=	testPoint.y;
 	vb->z=waterHeight+1.5f;
 	vb->diffuse=(REAL_TO_INT(waveAlpha*255.0f)<<24) |0xffffff;
 	if (m_flipU)
@@ -436,9 +436,9 @@ void WaterTracksObj::Append_Vertices(std::vector<WaterSurfaceVertex>& vertices)
 		vb->u1=0;
 	vb->v1=1.0f;
 	vb++;
-	testPoint.Set(waveFrontOrigin + m_perpDir*m_waveFinalWidth*widthFrac);
-	vb->x=	testPoint.X;
-	vb->y=	testPoint.Y;
+	testPoint = waveFrontOrigin + m_perpDir*m_waveFinalWidth*widthFrac;
+	vb->x=	testPoint.x;
+	vb->y=	testPoint.y;
 	vb->z=waterHeight+1.5f;
 	vb->diffuse=(REAL_TO_INT(waveAlpha*255.0f)<<24) |0xffffff;
 	if (m_flipU)
@@ -812,11 +812,11 @@ Try improving the fit to vertical surfaces like cliffs.
 
 
 	WaterMaterialParameters parameters = {};
-	parameters.animation = Vector4(0.0f, 0.0f, 0.0f, m_level);
-	parameters.tint = Vector4(1.0f, 1.0f, 1.0f, 1.0f);
-	const Vector3 camera_position = rinfo.Camera.Get_Position();
-	parameters.camera_position = Vector4(camera_position.X, camera_position.Y,
-		camera_position.Z, 1.0f);
+	parameters.animation = {0.0f, 0.0f, 0.0f, m_level};
+	parameters.tint = {1.0f, 1.0f, 1.0f, 1.0f};
+	const Engine::Math::Vector3 camera_position = rinfo.Camera.Get_Position();
+	parameters.camera_position = {camera_position.x, camera_position.y,
+		camera_position.z, 1.0f};
 
 
     // The list already groups wave textures. Keep its blend order while sharing
@@ -828,7 +828,7 @@ Try improving the fit to vertical surfaces like cliffs.
     const auto flush_batch = [&] {
         if (!m_batchIndices.empty()
             && Upload_Water_Geometry(m_graphicsMesh,m_vertices,m_batchIndices,false))
-            m_material.Draw(m_graphicsMesh,Matrix4x4(true));
+            m_material.Draw(m_graphicsMesh,Engine::Math::Matrix4::Identity());
         m_vertices.clear();
         m_batchIndices.clear();
     };
@@ -858,7 +858,7 @@ Try improving the fit to vertical surfaces like cliffs.
     flush_batch();
 }
 
-WaterTracksObj *WaterTracksRenderSystem::findTrack(Vector2 &start, Vector2 &end, waveType type)
+WaterTracksObj *WaterTracksRenderSystem::findTrack(const Engine::Math::Vector2 &start, const Engine::Math::Vector2 &end, waveType type)
 {
 	WaterTracksObj *mod=m_usedModules;
 
@@ -920,7 +920,7 @@ void WaterTracksRenderSystem::loadTracks()
 	WaterTracksObj *umod;
 	Int trackCount=0;
 	Int flipU=0;
-	Vector2 startPos,endPos;
+	Engine::Math::Vector2 startPos,endPos;
 	waveType wtype;
 
 	if (file)
@@ -942,7 +942,7 @@ void WaterTracksRenderSystem::loadTracks()
 
 			umod=bindTrack(wtype);
 			if (umod)
-			{	//umod->init(1.5f*MAP_XY_FACTOR,Vector2(0,0),Vector2(1,1),"wave256.tga");
+			{	//umod->init(1.5f*MAP_XY_FACTOR,Engine::Math::Vector2(0,0),Engine::Math::Vector2(1,1),"wave256.tga");
 				flipU ^= 1;	//toggle flip state
 				umod->init(waveTypeInfo[wtype].m_finalHeight,waveTypeInfo[wtype].m_finalWidth,startPos,endPos,waveTypeInfo[wtype].m_textureName,0);
 				umod->m_flipU=flipU;
@@ -975,14 +975,14 @@ void WaterTracksRenderSystem::loadTracks()
 			WaterTracksObj *umod=TheWaterTracksRenderSystem->bindTrack(1);
 			if (umod)
 			{
-				umod->init(DEFAULT_FINAL_WAVE_HEIGHT,DEFAULT_FINAL_WAVE_WIDTH,Vector2(startPos.x,startPos.y),Vector2(endPos.x,endPos.y),"wave1.tga",0);
+				umod->init(DEFAULT_FINAL_WAVE_HEIGHT,DEFAULT_FINAL_WAVE_WIDTH,Engine::Math::Vector2(startPos.x,startPos.y),Engine::Math::Vector2(endPos.x,endPos.y),"wave1.tga",0);
 			}
 /*
 			//initialize foam layer (0)
 			umod=TheWaterTracksRenderSystem->bindTrack(0);
 			if (umod)
 			{
-				umod->init(2.5f*MAP_XY_FACTOR,5.0f*MAP_XY_FACTOR,Vector2(startPos.x,startPos.y),Vector2(endPos.x,endPos.y),"wave2.tga");
+				umod->init(2.5f*MAP_XY_FACTOR,5.0f*MAP_XY_FACTOR,Engine::Math::Vector2(startPos.x,startPos.y),Engine::Math::Vector2(endPos.x,endPos.y),"wave2.tga");
 //				umod->m_fadeMs += 1500;	//take extra 500 ms to fade out wave.
 //				umod->m_retreatFrac = 1.0f;	//don't move wave back after it hits final position.
 			}*/
@@ -1028,9 +1028,9 @@ void TestWaterUpdate()
 //		TheWaterTracksRenderSystem->init();
 
 		//create a dummy track
-//		track->init(1.5f,8.0f,Vector2(147.0f,67.0f),Vector2(146.9f,68.6f),"wave2.tga");
+//		track->init(1.5f,8.0f,Engine::Math::Vector2(147.0f,67.0f),Engine::Math::Vector2(146.9f,68.6f),"wave2.tga");
 
-//		track->init(1.5f,8.0f,Vector2(139.0f,66.0f),Vector2(138.8f,67.6f),"wave2.tga");
+//		track->init(1.5f,8.0f,Engine::Math::Vector2(139.0f,66.0f),Engine::Math::Vector2(138.8f,67.6f),"wave2.tga");
 	}
 
 	const bool *keyboardState = SDL_GetKeyboardState(nullptr);
@@ -1100,18 +1100,18 @@ void TestWaterUpdate()
 							//Have enough info to add a wave now
 							track=TheWaterTracksRenderSystem->bindTrack(currentWaveType);
 							if (track)
-							{//	track->init(1.5f*MAP_XY_FACTOR,Vector2(terrainPointStart.x,terrainPointStart.y),Vector2(terrainPointEnd.x,terrainPointEnd.y),"wave256.tga");
+							{//	track->init(1.5f*MAP_XY_FACTOR,Engine::Math::Vector2(terrainPointStart.x,terrainPointStart.y),Engine::Math::Vector2(terrainPointEnd.x,terrainPointEnd.y),"wave256.tga");
 								//Generate valid input for the 2 points
-								Vector2 startPoint(terrainPointStart.x,terrainPointStart.y);
-								Vector2 endPoint(terrainPointEnd.x,terrainPointEnd.y);
-								Vector2 midPoint = endPoint - startPoint;
-								Vector2 m_perpDir = midPoint;
-								m_perpDir.Rotate(1.57079632679f);	//get vector perpendicular to wave motion.
-								m_perpDir.Normalize();
+								Engine::Math::Vector2 startPoint(terrainPointStart.x,terrainPointStart.y);
+								Engine::Math::Vector2 endPoint(terrainPointEnd.x,terrainPointEnd.y);
+								Engine::Math::Vector2 midPoint = endPoint - startPoint;
+								Engine::Math::Vector2 m_perpDir = midPoint;
+				m_perpDir = m_perpDir.Rotated(1.57079632679f);	//get vector perpendicular to wave motion.
+				m_perpDir = m_perpDir.Normalized();
 								midPoint = startPoint + (midPoint)*0.5f;
-								Vector2 dirMidPoint = midPoint + m_perpDir;
+								Engine::Math::Vector2 dirMidPoint = midPoint + m_perpDir;
 
-								track->init(waveTypeInfo[currentWaveType].m_finalHeight,waveTypeInfo[currentWaveType].m_finalWidth,Vector2(midPoint.X,midPoint.Y),Vector2(dirMidPoint.X,dirMidPoint.Y),waveTypeInfo[currentWaveType].m_textureName,0);
+				track->init(waveTypeInfo[currentWaveType].m_finalHeight,waveTypeInfo[currentWaveType].m_finalWidth,midPoint,dirMidPoint,waveTypeInfo[currentWaveType].m_textureName,0);
 
 								if (waveTypeInfo[currentWaveType].m_secondWaveTimeOffset)
 								{
@@ -1119,7 +1119,7 @@ void TestWaterUpdate()
 									track2=TheWaterTracksRenderSystem->bindTrack(currentWaveType);
 									if (track2)
 									{
-										track2->init(waveTypeInfo[currentWaveType].m_finalHeight,waveTypeInfo[currentWaveType].m_finalWidth,Vector2(midPoint.X,midPoint.Y),Vector2(dirMidPoint.X,dirMidPoint.Y),waveTypeInfo[currentWaveType].m_textureName,waveTypeInfo[currentWaveType].m_secondWaveTimeOffset);
+						track2->init(waveTypeInfo[currentWaveType].m_finalHeight,waveTypeInfo[currentWaveType].m_finalWidth,midPoint,dirMidPoint,waveTypeInfo[currentWaveType].m_textureName,waveTypeInfo[currentWaveType].m_secondWaveTimeOffset);
 									}
 								}
 

@@ -29,6 +29,7 @@ import Graphics.Frame.RenderClock;
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
+#include <cmath>
 #include <stdlib.h>
 #include <math.h>
 #include <cstring>
@@ -50,9 +51,8 @@ import Graphics.Materials.MeshMaterial;
 #include "GameClient/ParticleSys.h"
 #include "W3DDevice/GameClient/W3DGameClient.h"
 #include "W3DDevice/GameClient/Module/W3DTankDraw.h"
+import engine.debug;
 
-
-class Matrix3D;
 
 // TheSuperHackers @info Is enabled by default and therefore compatible with the Retail INI setups.
 #define SHOW_DEFAULT_TANK_DEBRIS (1)
@@ -216,19 +216,19 @@ void W3DTankDraw::updateTreadPositions(Real uvDelta)
 	for (Int i=0; i<m_treadCount; i++)
 	{
 		if (pTread->m_type == TREAD_LEFT)	//this tread needs to scroll forwards
-			offset_u = pTread->m_materialSettings.customUVOffset.X + uvDelta;
+			offset_u = pTread->m_materialSettings.customUVOffset.x + uvDelta;
 		else
 		if (pTread->m_type == TREAD_RIGHT)	//this tread needs to scroll backwards
-			offset_u = pTread->m_materialSettings.customUVOffset.X - uvDelta;
+			offset_u = pTread->m_materialSettings.customUVOffset.x - uvDelta;
 		else
 		{
-			DEBUG_CRASH(("Unhandled case in W3DTankDraw::updateTreadPositions"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unhandled case in W3DTankDraw::updateTreadPositions");
 			offset_u = 0.0f;
 		}
 
 		// ensure coordinates of offset are in [0, 1] range:
-		offset_u = offset_u - WWMath::Floor(offset_u);
-		pTread->m_materialSettings.customUVOffset.Set(offset_u,0);
+		offset_u = offset_u - std::floor(offset_u);
+		pTread->m_materialSettings.customUVOffset = {offset_u, 0};
 		pTread++;
 	}
 }
@@ -267,7 +267,7 @@ void W3DTankDraw::updateTreadObjects()
 							m_treads[m_treadCount].m_robj=subObj;
 							m_treads[m_treadCount].m_type = TREAD_MIDDLE;	//default type
 							subObj->Set_User_Data(&m_treads[m_treadCount].m_materialSettings);	//tell W3D about custom material settings
-							m_treads[m_treadCount].m_materialSettings.customUVOffset=Vector2(0,0);
+							m_treads[m_treadCount].m_materialSettings.customUVOffset={0,0};
 							switch (meshName[6])	//check next character after 'TREADS'
 							{
 								case 'L':
@@ -299,9 +299,9 @@ void W3DTankDraw::onRenderObjRecreated()
 //-------------------------------------------------------------------------------------------------
 /** Map behavior states into W3D animations. */
 //-------------------------------------------------------------------------------------------------
-void W3DTankDraw::doDrawModule(const Matrix3D* transformMtx)
+void W3DTankDraw::doDrawModule(const Engine::Math::AffineTransform3* transform)
 {
-	W3DModelDraw::doDrawModule(transformMtx);
+	W3DModelDraw::doDrawModule(transform);
 
 	// TheSuperHackers @tweak Update the draw on every WW Sync only.
 	// All calculations are originally catered to a 30 fps logic step.
@@ -399,10 +399,10 @@ void W3DTankDraw::doDrawModule(const Matrix3D* transformMtx)
 			//under certain situations when tank moved sideways.
 			for (Int i=0; i<m_treadCount; i++)
 			{
-				offset_u = pTread->m_materialSettings.customUVOffset.X - treadScrollSpeed;
+				offset_u = pTread->m_materialSettings.customUVOffset.x - treadScrollSpeed;
 				// ensure coordinates of offset are in [0, 1] range:
-				offset_u = offset_u - WWMath::Floor(offset_u);
-				pTread->m_materialSettings.customUVOffset.Set(offset_u,0);
+				offset_u = offset_u - std::floor(offset_u);
+				pTread->m_materialSettings.customUVOffset = {offset_u, 0};
 				pTread++;
 			}
 		}

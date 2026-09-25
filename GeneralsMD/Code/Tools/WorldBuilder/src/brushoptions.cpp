@@ -25,6 +25,7 @@
 #include "brushoptions.h"
 #include "WorldBuilderView.h"
 #include "BrushTool.h"
+import engine.debug;
 
 BrushOptions *BrushOptions::m_staticThis = nullptr;
 Int BrushOptions::m_currentWidth = 0;
@@ -210,7 +211,7 @@ void BrushOptions::GetPopSliderInfo(const long sliderID, long *pMin, long *pMax,
 
 		default:
 			// uh-oh!
-			DEBUG_CRASH(("Slider message from unknown control"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Slider message from unknown control");
 			break;
 	}
 }
@@ -247,7 +248,7 @@ void BrushOptions::PopSliderChanged(const long sliderID, long theVal)
 
 		default:
 			// uh-oh!
-			DEBUG_CRASH(("Slider message from unknown control"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Slider message from unknown control");
 			break;
 	}
 }
@@ -264,7 +265,7 @@ void BrushOptions::PopSliderFinished(const long sliderID, long theVal)
 
 		default:
 			// uh-oh!
-			DEBUG_CRASH(("Slider message from unknown control"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Slider message from unknown control");
 			break;
 	}
 

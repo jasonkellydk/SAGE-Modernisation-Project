@@ -1,16 +1,54 @@
-#include <winsock2.h>
 #include <functional>
+import Engine.Core.Math.Scalar;
 import Graphics.Frame.RenderClock;
 import Graphics.Scene.OrderedDraws;
 import Graphics.Frame.RenderSettings;
-#include "W3DDevice/GameClient/W3DRenderServices.h"
-#include "W3DDevice/GameClient/W3DDazzleRenderObject.h"
-#include "W3DDevice/GameClient/W3DDazzleResources.h"
-#include <climits>
 import Graphics.Presentation.DisplayModes;
 import Graphics.Resources.Textures.Quality;
 import Graphics.Diagnostics.Render;
 import Graphics.Frame.SubmissionStatistics;
+import Graphics.Scene.Props.Submission;
+import Graphics.Scene.Debug.CollisionBox;
+import engine.platform.runtime;
+import engine.debug;
+import engine.profiling;
+import Graphics.Frame.Runtime;
+import Graphics.Renderer2D;
+import Graphics.Frame.SceneRenderers;
+import Graphics.Passes.Bloom;
+import Graphics.Passes.LightRays;
+import Graphics.Passes.SSAO;
+import Engine.UI.WND;
+import Graphics.Scene.Beams;
+import Graphics.Scene.Lighting.Renderer;
+import Graphics.Scene.Particles.Renderer;
+import Graphics.Scene.Screen.Distortion;
+import Graphics.Scene.Screen.FullscreenOverlay;
+import Graphics.Scene.Ring;
+import Graphics.Scene.WorldQuads;
+import Graphics.Scene.Trees.Renderer;
+import Graphics.Scene.Water.Renderer;
+import Graphics.Scene.Props.Renderer;
+import Graphics.Scene.Screen.Filters;
+import Engine.Core.Math.Vector3;
+import Assets.Images.PixelEncoding;
+import Assets.Adapters.W3D.Chunks;
+import Assets.Adapters.W3D.Aggregate;
+import Assets.Adapters.W3D.Assembly;
+import Assets.Adapters.W3D.Box;
+import Assets.Adapters.W3D.Collection;
+import Assets.Adapters.W3D.Dazzle;
+import Assets.Adapters.W3D.LevelSet;
+import Assets.Adapters.W3D.Null;
+import Assets.Adapters.W3D.Particles;
+import Assets.Adapters.W3D.Ring;
+import Assets.Adapters.W3D.Sphere;
+import Graphics.RHI;
+import engine.navigation.diagnostics.frame_capture;
+import Graphics.Scene.Shadows.DirectionalRenderer;
+import Graphics.Capture.MovieCapture;
+import Graphics.Capture.FramePreview;
+#include <climits>
 /*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -44,20 +82,16 @@ import Graphics.Frame.SubmissionStatistics;
 //
 ///////////////////////////////////////////////////////////////////////////////
 
-static void drawFramerateBar();
-
 // SYSTEM INCLUDES ////////////////////////////////////////////////////////////
-import Graphics.Scene.Props.Submission;
-import Graphics.Scene.Debug.CollisionBox;
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstddef>
 #include <cstring>
 #include <numeric>
+#include <optional>
 #include <stdlib.h>
-#include "Platform/SDLPlatformWindow.h"
-#include <SDL3/SDL.h>
+static void drawFramerateBar(engine::platform::IClockService& clock);
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -65,30 +99,28 @@ import Graphics.Scene.Debug.CollisionBox;
 #include <utility>
 #include <vector>
 
-import Graphics.Frame.Runtime;
-import Graphics.Renderer2D;
-import Graphics.Frame.SceneRenderers;
-import Graphics.Passes.Bloom;
-import Graphics.Passes.LightRays;
-import Graphics.Passes.SSAO;
-import Engine.UI.WND;
-import Graphics.Scene.Beams;
-import Graphics.Scene.Lighting.Renderer;
-import Graphics.Scene.Particles.Renderer;
-import Graphics.Scene.Screen.Distortion;
-import Graphics.Scene.Screen.FullscreenOverlay;
-import Graphics.Scene.Ring;
-import Graphics.Scene.WorldQuads;
-import Graphics.Scene.Trees.Renderer;
-import Graphics.Scene.Water.Renderer;
-import Graphics.Scene.Props.Renderer;
-import Graphics.Scene.Screen.Filters;
 
 // USER INCLUDES //////////////////////////////////////////////////////////////
+
+#include "W3DDevice/GameClient/W3DRenderServices.h"
+#include "W3DDevice/GameClient/W3DDazzleRenderObject.h"
+#include "W3DDevice/GameClient/W3DDazzleResources.h"
+#include "W3DDevice/GameClient/CollisionBoxRenderObject.h"
+#include "W3DDevice/GameClient/NullRenderObject.h"
+#include "W3DDevice/GameClient/W3DRingLoader.h"
+#include "W3DDevice/GameClient/W3DSphereLoader.h"
+#include "W3DDevice/GameClient/W3DGraphicsResources.h"
+#include "W3DDevice/GameClient/W3DGameClient.h"
+#include "W3DDevice/GameClient/BaseHeightMap.h"
+#include "W3DDevice/GameClient/W3DTerrainTracks.h"
+#include "W3DDevice/GameClient/W3DWater.h"
+#include "W3DDevice/GameClient/W3DScreenshot.h"
+#include "W3DDevice/GameClient/W3DEmitterLoader.h"
+#include "W3DDevice/GameClient/W3DCollectionRenderObject.h"
 #include "Common/FramePacer.h"
 #include "Common/ThingFactory.h"
 #include "Common/GlobalData.h"
-#include "Common/PerfTimer.h"
+
 #include "Common/FileSystem.h"
 #include "Common/LocalFileSystem.h"
 #include "Common/Player.h"
@@ -103,7 +135,6 @@ import Graphics.Scene.Screen.Filters;
 #include "GameClient/Drawable.h"
 #include "GameClient/GameText.h"
 #include "GameClient/GameWindowManager.h"
-#include "GameClient/GraphDraw.h"
 #include "GameClient/Line2D.h"
 #include "GameClient/Mouse.h"
 #include "GameClient/GlobalLanguage.h"
@@ -111,56 +142,26 @@ import Graphics.Scene.Screen.Filters;
 #include "GameClient/VideoRuntime.h"
 #include "GameClient/Water.h"
 
-#include "GameNetwork/NetworkInterface.h"
 #include "Common/ModelState.h"
 #include "Lib/BaseType.h"
 #include "W3DDevice/Common/W3DConvert.h"
 #include "W3DDevice/GameClient/W3DAssetManager.h"
-#include "W3DDevice/GameClient/CollisionBoxRenderObject.h"
-#include "W3DDevice/GameClient/NullRenderObject.h"
-#include "W3DDevice/GameClient/W3DRingLoader.h"
-#include "W3DDevice/GameClient/W3DSphereLoader.h"
 #include "W3DDevice/GameClient/W3DAssetRuntime.h"
+#include "W3DDevice/GameClient/W3DMeshRenderObject.h"
+#include "W3DDevice/GameClient/W3DHierarchyRenderObject.h"
 #include "W3DDevice/GameClient/W3DBibBuffer.h"
 #include "W3DDevice/GameClient/W3DTerrainGraphics.h"
-#include "W3DDevice/GameClient/W3DGraphicsResources.h"
-#include "W3DDevice/GameClient/W3DGameClient.h"
 #include "W3DDevice/GameClient/W3DFileSystem.h"
 #include "W3DDevice/GameClient/W3DDynamicLight.h"
 #include "W3DDevice/GameClient/W3DLight.h"
 #include "W3DDevice/GameClient/W3DParticleSys.h"
-#include "W3DDevice/GameClient/BaseHeightMap.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
-#include "W3DDevice/GameClient/W3DScene.h"
-#include "W3DDevice/GameClient/W3DTerrainTracks.h"
-#include "W3DDevice/GameClient/W3DWater.h"
 #include "W3DDevice/GameClient/W3DShaderManager.h"
 #include "W3DDevice/GameClient/W3DDebugDisplay.h"
 #include "W3DDevice/GameClient/W3DProjectedShadow.h"
-#include "W3DDevice/GameClient/W3DScreenshot.h"
 #include "W3DDevice/GameClient/W3DShroud.h"
-#include "WWMath/wwmath.h"
 
-#include "WWMath/matrix4.h"
-#include "W3DDevice/GameClient/W3DEmitterLoader.h"
-import Assets.Images.PixelEncoding;
-import Assets.Adapters.W3D.Chunks;
-import Assets.Adapters.W3D.Aggregate;
-import Assets.Adapters.W3D.Assembly;
-import Assets.Adapters.W3D.Box;
-import Assets.Adapters.W3D.Collection;
-import Assets.Adapters.W3D.Dazzle;
-import Assets.Adapters.W3D.LevelSet;
-import Assets.Adapters.W3D.Null;
-import Assets.Adapters.W3D.Particles;
-import Assets.Adapters.W3D.Ring;
-import Assets.Adapters.W3D.Sphere;
-import Graphics.RHI;
-#include "W3DDevice/GameClient/W3DMeshRenderObject.h"
-#include "W3DDevice/GameClient/W3DHierarchyRenderObject.h"
-#include "W3DDevice/GameClient/W3DCollectionRenderObject.h"
-#include "W3DDevice/GameClient/W3DMeshResource.h"
 
 extern "C" bool Graphics_Begin_Frame() noexcept;
 extern "C" bool Graphics_Execute_Queued_Draws() noexcept;
@@ -170,11 +171,8 @@ extern "C" void Graphics_Abort_Frame() noexcept;
 
 #include "GameLogic/ScriptEngine.h"		// For TheScriptEngine - jkmcd
 #include "GameLogic/GameLogic.h"
-import engine.navigation.diagnostics.frame_capture;
-import Graphics.Scene.Props.Renderer;
-import Graphics.Scene.Shadows.DirectionalRenderer;
 
-static bool presentMeasuredGraphicsFrame() noexcept
+bool presentMeasuredGraphicsFrame() noexcept
 {
     const bool presented=Graphics_Present();
     auto& capture=navigation::diagnostics::frameCapture();
@@ -194,33 +192,15 @@ static bool presentMeasuredGraphicsFrame() noexcept
     return presented;
 }
 
-#define GENERALS_CAPTURE_NAME_IMPL(a,b) a##b
-#define GENERALS_CAPTURE_NAME(a,b) GENERALS_CAPTURE_NAME_IMPL(a,b)
-#define GENERALS_CAPTURE_GRAPHICS_SCOPE(name) \
-    auto GENERALS_CAPTURE_NAME(graphicsCaptureScope_,__LINE__)= \
-        navigation::diagnostics::frameCapture().measure(name,TheGameLogic?TheGameLogic->getFrame():0)
-
-#if defined(RTS_PROFILE_TRACY)
-#include <tracy/Tracy.hpp>
-#define GENERALS_GRAPHICS_PROFILE_SCOPE(name) ZoneScopedN(name); GENERALS_CAPTURE_GRAPHICS_SCOPE(name)
-#else
-#define GENERALS_GRAPHICS_PROFILE_SCOPE(name) GENERALS_CAPTURE_GRAPHICS_SCOPE(name)
-#endif
-#ifdef DUMP_PERF_STATS
-#include "GameLogic/PartitionManager.h"
-
-#endif
 
 
 
 // DEFINE AND ENUMS ///////////////////////////////////////////////////////////
 
-import Graphics.Capture.MovieCapture;
-import Graphics.Capture.FramePreview;
 static Graphics::MovieCapture displayMovieCapture;
 
 #define no_SAMPLE_DYNAMIC_LIGHT	1
-static bool graphicsRendererAvailable = false;
+bool graphicsRendererAvailable = false;
 static bool uiFrameActive = false;
 static Graphics::BeamView graphicsBeamView;
 static Graphics::View graphicsParticleView;
@@ -336,9 +316,9 @@ static bool executeGraphicsFramePasses(Graphics::Device &device, Graphics::Comma
 		{0, 0, targets.backbuffer.width, targets.backbuffer.height, 0.0f, 1.0f}))
 		return false;
 
-	PROFILER_PLOT("Graphics.UI.Active", static_cast<int64_t>(uiFrameActive));
-	PROFILER_PLOT("Graphics.UI.Vertices", static_cast<int64_t>(Graphics::Get_Renderer2D().Vertex_Count()));
-	PROFILER_PLOT("Graphics.UI.Batches", static_cast<int64_t>(Graphics::Get_Renderer2D().Batch_Count()));
+	engine::profiling::plot("Graphics.UI.Active", static_cast<int64_t>(uiFrameActive));
+	engine::profiling::plot("Graphics.UI.Vertices", static_cast<int64_t>(Graphics::Get_Renderer2D().Vertex_Count()));
+	engine::profiling::plot("Graphics.UI.Batches", static_cast<int64_t>(Graphics::Get_Renderer2D().Batch_Count()));
 	return !uiFrameActive || Graphics::Get_Renderer2D().Execute(
 		device,
 		commands,
@@ -382,7 +362,8 @@ static void shutdownGraphicsRenderer() noexcept
 
 static bool beginGraphicsFrame()
 {
-	GENERALS_GRAPHICS_PROFILE_SCOPE("Graphics.Frame.Begin");
+	auto graphicsCaptureScope_371 = navigation::diagnostics::frameCapture().measure("Graphics.Frame.Begin", TheGameLogic ? TheGameLogic->getFrame() : 0);
+	engine::profiling::Scope graphicsProfileScope_371("Graphics.Frame.Begin");
     if (!Graphics_Begin_Frame()) {
         Graphics_Abort_Frame();
         return false;
@@ -400,44 +381,26 @@ static void updateGraphicsView(W3DCamera *camera)
 	if (camera == nullptr || Graphics::Shared_Frame_Device() == nullptr)
 		return;
 
-	Matrix3D camera_view;
-	Matrix4x4 projection;
-	camera->Get_View_Matrix(&camera_view);
-	camera->Get_Backend_Projection_Matrix(&projection);
-	const Matrix4x4 view(camera_view);
-	const Matrix4x4 viewProjection = projection * view;
-	const Matrix4x4 inverseViewProjection = viewProjection.Inverse();
-    const Matrix4x4 inverseProjection = projection.Inverse();
-	float viewProjectionElements[16] = {};
-	for (int row = 0; row < 4; ++row) {
-		for (int column = 0; column < 4; ++column) {
-			viewProjectionElements[row * 4 + column] = viewProjection[row][column];
-			graphicsLightRaysInput.inverse_view_projection[row * 4 + column] = inverseViewProjection[row][column];
-            graphicsSSAOInput.projection[row * 4 + column] = projection[row][column];
-            graphicsSSAOInput.inverse_projection[row * 4 + column] = inverseProjection[row][column];
-		}
-	}
+	const auto camera_matrices = camera->Build_Render_Matrices();
+	graphicsLightRaysInput.inverse_view_projection = camera_matrices.inverse_view_projection;
+	graphicsSSAOInput.projection = camera_matrices.projection;
+	graphicsSSAOInput.inverse_projection = camera_matrices.inverse_projection;
 
-	const Vector3 right = camera->Get_Right_Dir();
-	const Vector3 up = camera->Get_Up_Dir();
-	const Vector3 forward = camera->Get_Forward_Dir();
-	for (std::size_t index = 0; index < graphicsBeamView.view_projection.size(); ++index)
-		graphicsBeamView.view_projection[index] = viewProjectionElements[index];
-	graphicsBeamView.camera_right = {right.X, right.Y, right.Z};
-	graphicsBeamView.camera_up = {up.X, up.Y, up.Z};
-	graphicsBeamView.camera_forward = {forward.X, forward.Y, forward.Z};
+	const Engine::Math::Vector3 right = camera->Get_Right_Dir();
+	const Engine::Math::Vector3 up = camera->Get_Up_Dir();
+	const Engine::Math::Vector3 forward = camera->Get_Forward_Dir();
+	graphicsBeamView.view_projection = camera_matrices.view_projection;
+	graphicsBeamView.camera_right = {right.x, right.y, right.z};
+	graphicsBeamView.camera_up = {up.x, up.y, up.z};
+	graphicsBeamView.camera_forward = {forward.x, forward.y, forward.z};
 	Graphics::Matrix4x4 graphics_view_matrix;
 	Graphics::Matrix4x4 graphics_projection_matrix;
-	for (std::size_t row = 0; row < 4; ++row) {
-		for (std::size_t column = 0; column < 4; ++column) {
-			graphics_view_matrix.values[row * 4 + column] = view[row][column];
-			graphics_projection_matrix.values[row * 4 + column] = projection[row][column];
-		}
-	}
+	graphics_view_matrix.values = camera_matrices.view;
+	graphics_projection_matrix.values = camera_matrices.projection;
 	graphicsParticleView = Graphics::View(
 		graphics_view_matrix,
 		graphics_projection_matrix,
-		{camera->Get_Position().X, camera->Get_Position().Y, camera->Get_Position().Z},
+		{camera->Get_Position().x, camera->Get_Position().y, camera->Get_Position().z},
 		{0.0f, 0.0f, static_cast<float>(TheDisplay->getWidth()), static_cast<float>(TheDisplay->getHeight()), 0.0f, 1.0f});
 	Graphics::GetParticleRenderer().Set_View(graphicsParticleView);
 	Graphics::GetWorldQuadRenderer().Set_View(graphicsParticleView);
@@ -448,7 +411,8 @@ static void updateGraphicsView(W3DCamera *camera)
 
 static bool renderGraphicsScenePasses(W3DCamera *camera)
 {
-	GENERALS_GRAPHICS_PROFILE_SCOPE("W3DDisplay::renderGraphicsScenePasses");
+	auto graphicsCaptureScope_437 = navigation::diagnostics::frameCapture().measure("W3DDisplay::renderGraphicsScenePasses", TheGameLogic ? TheGameLogic->getFrame() : 0);
+	engine::profiling::Scope graphicsProfileScope_437("W3DDisplay::renderGraphicsScenePasses");
 	updateGraphicsView(camera);
 	if (!Graphics_Execute_Queued_Draws()) {
 		uiFrameActive = false;
@@ -468,7 +432,7 @@ static bool renderGraphicsScenePasses(W3DCamera *camera)
 		auto* device = Graphics::Shared_Frame_Device();
 		if (device == nullptr || !displayMovieCapture.Capture(*device, device->Get_Swap_Chain().Backbuffer(), Graphics::RHITextureFormat::BGRA8_UNorm)) {
 			displayMovieCapture.Stop();
-			DEBUG_LOG(("Movie capture stopped: frame readback or AVI write failed.\n"));
+			engine::debug::log_info("Movie capture stopped: frame readback or AVI write failed.\n");
 		}
 	}
 
@@ -492,206 +456,6 @@ static bool renderGraphicsScenePasses(W3DCamera *camera)
 //**** Start Statistical Dump *************************************************************
 //*****************************************************************************************
 
-#ifdef DUMP_PERF_STATS
-
-#include <cstdarg>
-
-class StatDumpClass
-{
-public:
-	StatDumpClass( const char *fname );
-	~StatDumpClass();
-	void dumpStats( Bool brief = FALSE, Bool flagSpikes = FALSE );
-
-protected:
-	FILE *m_fp;
-};
-
-//=============================================================================
-//Open the file once at the beginning of the game -- everything appends to it.
-//=============================================================================
-StatDumpClass::StatDumpClass( const char *fname )
-{
-	const char *basePath = SDL_GetBasePath();
-	const char *path = basePath != nullptr ? basePath : "";
-	// TheSuperHackers @fix Caball009 03/06/2025 Don't use AsciiString here anymore because its memory allocator may not have been initialized yet.
-	const std::string fullPath = std::string(path) + fname;
-	m_fp = fopen(fullPath.c_str(), "wt");
-}
-
-//=============================================================================
-//Close the file at the end of the application
-//=============================================================================
-StatDumpClass::~StatDumpClass()
-{
-	if( m_fp )
-	{
-		fclose( m_fp );
-	}
-}
-
-static const char *getCurrentTimeString()
-{
-	time_t aclock;
-	time(&aclock);
-	struct tm *newtime = localtime(&aclock);
-	return asctime(newtime);
-}
-
-//=============================================================================
-//Dump the stats
-//=============================================================================
-
-
-static Bool s_notFirstDump = FALSE;
-
-void StatDumpClass::dumpStats( Bool brief, Bool flagSpikes )
-{
-	if( !m_fp )
-	{
-		return;
-	}
-
-
-  Bool beBrief = brief & s_notFirstDump;
-  s_notFirstDump = TRUE;
-
-	fprintf( m_fp, "----------------------------------------------------------------\n" );
-	fprintf( m_fp, "Performance Statistical Dump -- Frame %d\n", TheGameLogic->getFrame() );
-  if ( ! beBrief )
-  {
-	  //static char buf[1024];
-	  fprintf( m_fp, "Time:\t%s", getCurrentTimeString() );
-	  fprintf( m_fp, "Map:\t%s\n", TheGlobalData->m_mapName.str());
-	  fprintf( m_fp, "Side:\t%s\n", ThePlayerList->getLocalPlayer()->getSide().str());
-	  fprintf( m_fp, "----------------------------------------------------------------\n" );
-  }
-
-	//FPS
-	Real fps = TheDisplay->getAverageFPS();
-	fprintf( m_fp, "Average FPS: %.1f (%.5f msec)\n", fps, 1000.0f / fps );
-  if ( flagSpikes && fps<20.0f )
-  	fprintf( m_fp, "                                                                      FPS OUT OF TOLERANCE\n" );
-
-
-	//Rendering stats
-	fprintf( m_fp, "Draws: %llu\n", static_cast<unsigned long long>(Graphics::Get_Frame_Submission_Statistics().Last_Frame().draw_calls));
-
-	Int onScreenParticleCount = TheParticleSystemManager->getOnScreenParticleCount();
-
-  if ( flagSpikes )
-  {
-    if ( Graphics::Get_Frame_Submission_Statistics().Last_Frame().draw_calls>2000 )
-  	  fprintf( m_fp, "                                                                      DRAWS OUT OF TOLERANCE(2000)\n" );
-  }
-
-
-	//Object stats
-	UnsignedInt objCount = TheGameLogic->getObjectCount();
-	UnsignedInt objScreenCount = TheGameClient->getRenderedObjectCount();
-	fprintf( m_fp, "Objects: %d in world (%d onscreen)\n", objCount, objScreenCount );
-  if ( flagSpikes && objCount > 800 )
-  	fprintf( m_fp, "                                                                      OBJS OUT OF TOLERANCE(800)\n" );
-
-	//AI stats
-	UnsignedInt numAI, numMoving, numAttacking, numWaitingForPath, overallFailedPathfinds;
-	TheGameLogic->getAIMetricsStatistics( &numAI, &numMoving, &numAttacking, &numWaitingForPath, &overallFailedPathfinds );
-	fprintf( m_fp, "\n" );
-	fprintf( m_fp, "AI Statistics:\n" );
-	fprintf( m_fp, "  Total AI Objects: %d\n", numAI );
-	fprintf( m_fp, "    -moving: %d\n", numMoving );
-	fprintf( m_fp, "    -attacking: %d\n", numAttacking );
-	fprintf( m_fp, "    -waiting for path: %d\n", numWaitingForPath );
-	fprintf( m_fp, "  Total failed pathfinds: %d\n", overallFailedPathfinds );
-  if ( flagSpikes && overallFailedPathfinds > 0 )
-  	fprintf( m_fp, "                                                                      FAILEDPATHFINDS OUT OF TOLERANCE(0)\n" );
-	fprintf( m_fp, "\n" );
-
-	// Script stats
-	Real timeLastFrame, slowScript1, slowScript2;
-	AsciiString slowScripts = TheScriptEngine->getStats(&timeLastFrame, &slowScript1, &slowScript2);
-	fprintf( m_fp, "\n" );
-	fprintf( m_fp, "Script Engine Statistics:\n" );
-	fprintf( m_fp, "  Total time last frame: %.5f msec\n", timeLastFrame*1000 );
-	fprintf( m_fp, "    -Slowest 2 scripts      %s\n", slowScripts.str() );
-	fprintf( m_fp, "    -Slowest 2 script times %.5f msec, %.5f msec \n", slowScript1*1000, slowScript2*1000 );
-  if ( flagSpikes && slowScript1*1000 > 0.2f || slowScript2*1000 > 0.2f )
-  	fprintf( m_fp, "                                                                      SLOW SCRIPT OUT OF TOLERANCE(0.2)\n" );
-	fprintf( m_fp, "\n" );
-
-
-
-	//PartitionMgr stats
-	double gcoTimeThisFrameTotal, gcoTimeThisFrameAvg;
-	ThePartitionManager->getPMStats(gcoTimeThisFrameTotal, gcoTimeThisFrameAvg);
-	fprintf(m_fp, "Partition Manager Statistics:\n");
-	fprintf(m_fp, "  Total time for object scans this frame is %.5f msec\n", gcoTimeThisFrameTotal);
-	fprintf(m_fp, "  Avg time per object scan this frame is %.5f msec\n", gcoTimeThisFrameAvg);
-	fprintf( m_fp, "\n" );
-
-	// setup texture stats
-
-	fprintf( m_fp, "Video Statistics:\n" );
-	//Particle system stats
-	fprintf( m_fp, "  Particle Systems: %d\n", TheParticleSystemManager->getParticleSystemCount() );
-	Int totalParticles = TheParticleSystemManager->getParticleCount();
-	fprintf( m_fp, "  Particles: %d in world (%d onscreen)\n", totalParticles, onScreenParticleCount );
-
-  if ( flagSpikes && totalParticles > TheGlobalData->m_maxParticleCount - 10 )
-  	fprintf( m_fp, "                                                                      PARTICLES OUT OF TOLERANCE(CAP-10)\n" );
-  if ( flagSpikes && onScreenParticleCount > TheGlobalData->m_maxParticleCount - 10 )
-  	fprintf( m_fp, "                                                                      ON_SCREEN_PARTICLES OUT OF TOLERANCE(CAP-10)\n" );
-
-
-	// polygons this frame
-	Int polyPerFrame = static_cast<Int>((std::min)(Graphics::Get_Frame_Submission_Statistics().Last_Frame().triangles, std::uint64_t{INT_MAX}));
-	Int polyPerSecond = (Int)(polyPerFrame * fps);
-	fprintf( m_fp, "  Polygons: %d per frame (%d per second)\n", polyPerFrame, polyPerSecond );
-
-	// vertices this frame
-	fprintf( m_fp, "  Submitted vertices/indices: %llu\n", static_cast<unsigned long long>(Graphics::Get_Frame_Submission_Statistics().Last_Frame().vertex_invocations) );
-
-
-	// terrain stats
-	fprintf( m_fp, "  3-Way Blends: %d/%d, \n Shoreline Blends: %d/%d\n", TheTerrainRenderObject->getNumExtraBlendTiles(TRUE),TheTerrainRenderObject->getNumExtraBlendTiles(FALSE), TheTerrainRenderObject->getNumShoreLineTiles(TRUE),TheTerrainRenderObject->getNumShoreLineTiles(FALSE));
-  if ( flagSpikes && TheTerrainRenderObject->getNumExtraBlendTiles(TRUE) > 2000 )
-  	fprintf( m_fp, "                                                                      3-WAYS OUT OF TOLERANCE(2000)\n" );
-  if ( flagSpikes && TheTerrainRenderObject->getNumShoreLineTiles(TRUE) > 2000 )
-  	fprintf( m_fp, "                                                                      SHORELINES OUT OF TOLERANCE(2000)\n" );
-
-	fprintf( m_fp, "\n" );
-
-#if defined(RTS_DEBUG)
-  if ( ! beBrief )
-  {
-    TheAudio->audioDebugDisplay( nullptr, nullptr, m_fp );
-	  fprintf( m_fp, "\n" );
-  }
-#endif
-
-#ifdef MEMORYPOOL_DEBUG
-	//Report memory usage.
-	TheMemoryPoolFactory->debugMemoryReport( REPORT_FACTORYINFO | REPORT_POOLINFO, 0, 0, m_fp );
-#else
-	fprintf( m_fp, "Memory Report -- unavailable \n(build doesn't have MEMORYPOOL_DEBUG defined)\n" );
-#endif
-	fprintf( m_fp, "\n" );
-
-	fprintf( m_fp, "%s", TheSubsystemList->dumpTimesForAll().str());
-
-  if ( ! beBrief )
-  {
-	  fprintf( m_fp, "----------------------------------------------------------------\n" );
-	  fprintf( m_fp, "END -- Frame %d\n", TheGameLogic->getFrame() );
-	  fprintf( m_fp, "----------------------------------------------------------------\n" );
-  }
-	fprintf( m_fp, "\n\n" );
-	fflush(m_fp);
-}
-
-StatDumpClass TheStatDump("StatisticsDump.txt");
-
-#endif //DUMP_PERF_STATS
 
 //*****************************************************************************************
 //**** End Statistical Dump ***************************************************************
@@ -705,40 +469,31 @@ StatDumpClass TheStatDump("StatisticsDump.txt");
 ///////////////////////////////////////////////////////////////////////////////
 
 //=============================================================================
-RTS3DScene *W3DDisplay::m_3DScene = nullptr;
-RTS2DScene *W3DDisplay::m_2DScene = nullptr;
-RTS3DInterfaceScene *W3DDisplay::m_3DInterfaceScene = nullptr;
 W3DAssetManager *W3DDisplay::m_assetManager = nullptr;
 
 //=============================================================================
 	// note, can't use the ones from PerfTimer.h 'cuz they are currently
 	// only valid when "-vtune" is used... (srj)
-inline Int64 getPerformanceCounter()
+Int64 getPerformanceCounter(engine::platform::IClockService& clock)
 {
-	Int64 tmp;
-	QueryPerformanceCounter((LARGE_INTEGER*)&tmp);
-	return tmp;
+	return static_cast<Int64>(clock.monotonic_nanoseconds());
 }
 
-inline Int64 getPerformanceCounterFrequency()
+Int64 getPerformanceCounterFrequency()
 {
-	Int64 tmp;
-	QueryPerformanceFrequency((LARGE_INTEGER*)&tmp);
-	return tmp;
+	return 1'000'000'000;
 }
 
 // W3DDisplay::W3DDisplay =====================================================
 /** */
 //=============================================================================
-W3DDisplay::W3DDisplay()
+W3DDisplay::W3DDisplay(engine::platform::IPlatform& platform, engine::platform::IWindow* mainWindow)
+	: m_platform(platform), m_mainWindow(mainWindow)
 {
 	Int i;
 
 	m_initialized = false;
 	m_assetManager = nullptr;
-	m_3DScene = nullptr;
-	m_2DScene = nullptr;
-	m_3DInterfaceScene = nullptr;
 	m_averageFPS = TheGlobalData->m_framesPerSecondLimit;
 #if defined(RTS_DEBUG)
 	m_timerAtCumuFPSStart = 0;
@@ -783,9 +538,7 @@ W3DDisplay::~W3DDisplay()
 	//
 	Display::deleteViews();
 
-	REF_PTR_RELEASE( m_3DScene );
-	REF_PTR_RELEASE( m_2DScene );
-	REF_PTR_RELEASE( m_3DInterfaceScene );
+	destroyScenes();
 	for (Int j=0; j<Graphics::Material_Light_Count; j++)
 		REF_PTR_RELEASE( m_myLight[j] );
 
@@ -803,7 +556,6 @@ W3DDisplay::~W3DDisplay()
 	if (!TheGlobalData->m_headless)
 		Get_W3D_Render_Services().Shutdown();
 		Graphics::Graphics_Shutdown_Shared_Frame();
-	WWMath::Shutdown();
 	if (!TheGlobalData->m_headless)
 	delete TheW3DFileSystem;
 	TheW3DFileSystem = nullptr;
@@ -813,7 +565,19 @@ W3DDisplay::~W3DDisplay()
 // TheSuperHackers @tweak valeronm 20/03/2025 No longer filters resolutions by a 4:3 aspect ratio.
 Int W3DDisplay::getDisplayModeCount()
 {
-    m_displayResolutions = Graphics::Enumerate_Display_Resolutions(SDLPlatformWindow::window());
+    m_displayResolutions.clear();
+    const auto display = m_platform.displays().primary_display();
+    for (const auto& mode : m_platform.displays().modes(display))
+        m_displayResolutions.push_back({mode.resolution.width, mode.resolution.height});
+    if (m_mainWindow != nullptr) {
+        const auto drawable = m_mainWindow->drawable_size();
+        if (drawable.width > 0 && drawable.height > 0)
+            m_displayResolutions.push_back({drawable.width, drawable.height});
+    }
+    std::sort(m_displayResolutions.begin(), m_displayResolutions.end(), [](const auto& left, const auto& right) {
+        return left.width < right.width || (left.width == right.width && left.height < right.height);
+    });
+    m_displayResolutions.erase(std::unique(m_displayResolutions.begin(), m_displayResolutions.end()), m_displayResolutions.end());
     std::erase_if(m_displayResolutions,[](const auto& resolution) {
         return resolution.width < DEFAULT_DISPLAY_WIDTH;
     });
@@ -836,41 +600,36 @@ void W3DDisplay::setGamma(Real gamma, Real bright, Real contrast, Bool calibrate
     // The removed backend hook was empty; keep the existing display contract.
 }
 
-static Bool setSDLWindowed(Bool windowed)
+static Bool setPlatformWindowMode(engine::platform::IWindow* window, Bool windowed)
 {
-	if (SDLPlatformWindow::window() == nullptr)
+	if (window == nullptr)
 		return TRUE;
-
-	return SDLPlatformWindow::setFullscreen(windowed ? false : true) ? TRUE : FALSE;
+	return window->set_mode(windowed ? engine::platform::WindowMode::windowed : engine::platform::WindowMode::fullscreen) ? TRUE : FALSE;
 }
 
-static void resizeSDLWindow(UnsignedInt xres, UnsignedInt yres, Bool windowed)
+static void resizePlatformWindow(engine::platform::IWindow* window, UnsignedInt xres, UnsignedInt yres, Bool windowed)
 {
-	SDL_Window *window = static_cast<SDL_Window *>(SDLPlatformWindow::window());
-	if (window == nullptr || !windowed ||
-		SDLPlatformWindow::isFullscreen())
+	if (window == nullptr || !windowed || window->mode() == engine::platform::WindowMode::fullscreen)
 		return;
 
-	int pixelWidth = 0;
-	int pixelHeight = 0;
-	if (!SDL_GetWindowSizeInPixels(window, &pixelWidth, &pixelHeight))
-		return;
+	const auto drawable = window->drawable_size();
+	const auto logical = window->size();
+	const int pixelWidth = drawable.width;
+	const int pixelHeight = drawable.height;
 
 	if (pixelWidth == static_cast<int>(xres) && pixelHeight == static_cast<int>(yres))
 		return;
 
 	// SDL window coordinates are logical points. The renderer resolution is in
 	// drawable pixels, so convert before asking SDL to resize a high-DPI window.
-	float pixelDensity = SDL_GetWindowPixelDensity(window);
-	if (pixelDensity <= 0.0f)
-		pixelDensity = 1.0f;
-	const int windowWidth = static_cast<int>(static_cast<float>(xres) / pixelDensity + 0.5f);
-	const int windowHeight = static_cast<int>(static_cast<float>(yres) / pixelDensity + 0.5f);
+	const float scaleX = logical.width > 0 ? static_cast<float>(pixelWidth) / logical.width : 1.0f;
+	const float scaleY = logical.height > 0 ? static_cast<float>(pixelHeight) / logical.height : 1.0f;
+	const int windowWidth = static_cast<int>(static_cast<float>(xres) / scaleX + 0.5f);
+	const int windowHeight = static_cast<int>(static_cast<float>(yres) / scaleY + 0.5f);
 	if (windowWidth <= 0 || windowHeight <= 0)
 		return;
 
-	if (SDL_SetWindowSize(window, windowWidth, windowHeight))
-		SDL_SyncWindow(window);
+	window->set_size({windowWidth, windowHeight});
 }
 
 /** Set resolution of display */
@@ -883,9 +642,9 @@ Bool W3DDisplay::setDisplayMode( UnsignedInt xres, UnsignedInt yres, UnsignedInt
 	const Bool oldWindowed = getWindowed();
 
 	// SDL owns window styles and logical size; graphics owns the swap chain.
-	if (!setSDLWindowed(windowed))
+	if (!setPlatformWindowMode(m_mainWindow, windowed))
 		return FALSE;
-	resizeSDLWindow(xres, yres, windowed);
+	resizePlatformWindow(m_mainWindow, xres, yres, windowed);
 	graphicsRendererAvailable = false;
 	shutdownGraphicsRenderer();
 	if (Graphics::Resize_Frame_Device(xres, yres, false))
@@ -898,8 +657,8 @@ Bool W3DDisplay::setDisplayMode( UnsignedInt xres, UnsignedInt yres, UnsignedInt
 	}
 
 	//set back to the original mode.
-	setSDLWindowed(oldWindowed);
-	resizeSDLWindow(oldWidth, oldHeight, oldWindowed);
+	setPlatformWindowMode(m_mainWindow, oldWindowed);
+	resizePlatformWindow(m_mainWindow, oldWidth, oldHeight, oldWindowed);
 	Graphics::Resize_Frame_Device(oldWidth, oldHeight, false);
 	graphicsRendererAvailable = initializeGraphicsRenderer();
 	Display::setDisplayMode(oldWidth, oldHeight, oldBitDepth, oldWindowed);
@@ -982,57 +741,7 @@ void W3DDisplay::init()
 	// Override the W3D File system
 	TheW3DFileSystem = NEW W3DFileSystem;
 
-	// init the Westwood math library
-	WWMath::Init();
-
-	if (!TheGlobalData->m_headless)
-	{
-
-		// create our 3D interface scene
-		m_3DInterfaceScene = NEW_REF( RTS3DInterfaceScene, () );
-		m_3DInterfaceScene->Set_Ambient_Light( Vector3( 1, 1, 1 ) );
-
-		// create our 2D scene
-		m_2DScene = NEW_REF( RTS2DScene, () );
-		m_2DScene->Set_Ambient_Light( Vector3( 1, 1, 1 ) );
-
-		// create our 3D scene
-		m_3DScene =NEW_REF( RTS3DScene, () );
-	#if defined(RTS_DEBUG)
-		if( TheGlobalData->m_wireframe )
-			m_3DScene->Set_Polygon_Mode( W3DScene::LINE );
-	#endif
-	//============================================================================
-		// m_myLight = NEW_REF
-	//============================================================================
-		Int lindex;
-		for (lindex=0; lindex<TheGlobalData->m_numGlobalLights; lindex++)
-		{	m_myLight[lindex] = NEW_REF( W3DLight, (W3DLight::DIRECTIONAL) );
-		}
-
-		setTimeOfDay( TheGlobalData->m_timeOfDay );	//set each light to correct values for given time
-
-		for (lindex=0; lindex<TheGlobalData->m_numGlobalLights; lindex++)
-		{	m_3DScene->setGlobalLight( m_myLight[lindex], lindex );
-		}
-
-	#ifdef SAMPLE_DYNAMIC_LIGHT
-		theDynamicLight = NEW_REF(W3DDynamicLight, ());
-		Real red = 1;
-		Real green = 1;
-		Real blue = 0;
-		if(red==0 && blue==0 && green==0) {
-			red = green = blue = 1;
-		}
-		theDynamicLight->Set_Ambient( Vector3( red, green, blue ) );
-		theDynamicLight->Set_Diffuse( Vector3( red, green, blue) );
-		theDynamicLight->Set_Position(Vector3(0, 0, 4));
-		theDynamicLight->Set_Far_Attenuation_Range(1, 8);
-		// Note: Don't Add_Render_Object dynamic lights.
-		m_3DScene->addDynamicLight( theDynamicLight );
-	#endif
-
-	}
+	createScenes();
 
 	// create a new asset manager
 	m_assetManager = NEW W3DAssetManager;
@@ -1091,9 +800,11 @@ void W3DDisplay::init()
                 TheWritableGlobalData->m_xResolution = width;
                 TheWritableGlobalData->m_yResolution = height;
             }
-            resizeSDLWindow(getWidth(),getHeight(),getWindowed());
+            resizePlatformWindow(m_mainWindow,getWidth(),getHeight(),getWindowed());
             Graphics::FrameDeviceOptions options;
-            options.window = SDLPlatformWindow::nativeHandle();
+            const auto nativeWindow = m_mainWindow != nullptr ?
+                m_mainWindow->native_handle(engine::platform::NativeWindowSystem::win32) : std::nullopt;
+            options.window = nativeWindow ? nativeWindow->window : nullptr;
             options.width = getWidth(); options.height = getHeight();
             options.backbuffer_format = Graphics::RHITextureFormat::BGRA8_UNorm;
             device_ready = Graphics::Initialize_Frame_Device(options);
@@ -1101,7 +812,6 @@ void W3DDisplay::init()
         if (!device_ready) {
             Get_W3D_Render_Services().Shutdown();
             Graphics::Graphics_Shutdown_Shared_Frame();
-            WWMath::Shutdown();
             throw ERROR_INVALID_D3D;
         }
         // Preserve the serialized preference; the frame targets currently use one sample.
@@ -1116,7 +826,6 @@ void W3DDisplay::init()
 		if (!graphicsRendererAvailable) {
 			Get_W3D_Render_Services().Shutdown();
 			Graphics::Graphics_Shutdown_Shared_Frame();
-			WWMath::Shutdown();
 			throw ERROR_INVALID_D3D;
 		}
 
@@ -1186,21 +895,7 @@ void W3DDisplay::reset()
 
 	Display::reset();
 
-	// Remove all render objects.
-
-	if (m_3DScene != nullptr)
-	{
-		W3DSceneIterator *sceneIter = m_3DScene->Create_Iterator();
-		sceneIter->First();
-		while(!sceneIter->Is_Done()) {
-			W3DRenderObject * robj = sceneIter->Current_Item();
-			robj->Add_Ref();
-			m_3DScene->Remove_Render_Object(robj);
-			robj->Release_Ref();
-			sceneIter->Next();
-		}
-		m_3DScene->Destroy_Iterator(sceneIter);
-	}
+	removeSceneObjects();
 
 	m_isClippedEnabled = FALSE;
 
@@ -1229,7 +924,7 @@ void W3DDisplay::updateAverageFPS()
 	static Real fpsHistory[FPS_HISTORY_SIZE] = {0};
 
 	const Int64 freq64 = getPerformanceCounterFrequency();
-	const Int64 time64 = getPerformanceCounter();
+	const Int64 time64 = getPerformanceCounter(m_platform.clock());
 
 #if defined(RTS_DEBUG)
 	if (TheGameLogic->getFrame() == START_CUMU_FRAME)
@@ -1289,7 +984,7 @@ void W3DDisplay::gatherDebugStats()
 			if (m_displayStrings[i] == nullptr)
 			{
 				m_displayStrings[i] = TheDisplayStringManager->newDisplayString();
-				DEBUG_ASSERTCRASH( m_displayStrings[i], ("Failed to create DisplayString") );
+				engine::debug::invariant((m_displayStrings[i]), "m_displayStrings[i]", __FILE__, __LINE__, "Failed to create DisplayString");
 				m_displayStrings[i]->setFont( font );
 			}
 		}
@@ -1300,14 +995,14 @@ void W3DDisplay::gatherDebugStats()
 	{
 		GameFont *thisFont = TheFontLibrary->getFont( "FixedSys", 8, FALSE );
 		m_benchmarkDisplayString = TheDisplayStringManager->newDisplayString();
-		DEBUG_ASSERTCRASH( m_benchmarkDisplayString, ("Failed to create DisplayString") );
+		engine::debug::invariant((m_benchmarkDisplayString), "m_benchmarkDisplayString", __FILE__, __LINE__, "Failed to create DisplayString");
 		m_benchmarkDisplayString->setFont( thisFont );
 	}
 
 	++s_framesRenderedSinceLastUpdate;
 
 	Int64 freq64 = getPerformanceCounterFrequency();
-	Int64 time64 = getPerformanceCounter();
+	Int64 time64 = getPerformanceCounter(m_platform.clock());
 
 	s_timeSinceLastUpdateInSecs = ((double)(time64 - s_lastUpdateTime64) / (double)(freq64));
 
@@ -1467,13 +1162,13 @@ void W3DDisplay::gatherDebugStats()
 				char bufferA[ 256 ];
 				sprintf( bufferA, "FPS: %.2f, %.2fms - OH %.2fms, Console %.2fms, 3D OH %.2fms, Terrain %.2fms, Obs %.2fms, CPU %.2fms\n",
 					fps, ms, gameOverheadMS, consoleMS, threeDOverheadMS, terrainMS, objectMS, overlapMS);
-				SDL_Log("%s", bufferA);
+				engine::debug::log_info("%s", bufferA);
 				if (pListFile) {
 					fprintf(pListFile, "\n%s", bufferA);
 				}
 				sprintf( bufferA, "Polygons: per frame %d, per second %d\n", polyPerFrame,
 						(Int)(polyPerFrame*fps));
-				SDL_Log("%s", bufferA);
+				engine::debug::log_info("%s", bufferA);
 				if (pListFile) {
 					fprintf(pListFile, "%s", bufferA);
 					fflush(pListFile);
@@ -1538,11 +1233,11 @@ void W3DDisplay::gatherDebugStats()
 			L"Camera zoom: %.3f, pitch: %.2f, FXpitch: %.2f, yaw: %.2f, pos: (%.2f, %.2f, %.2f), FOV: %.2f\n"
 			L"Height above ground: %.2f, Terrain height at camera pivot: %.2f",
 			zoom,
-			RAD_TO_DEGF(pitch),
-			RAD_TO_DEGF(FXPitch),
-			RAD_TO_DEGF(angle),
+			Engine::Math::RadiansToDegrees(pitch),
+			Engine::Math::RadiansToDegrees(FXPitch),
+			Engine::Math::RadiansToDegrees(angle),
 			camPos.x, camPos.y, camPos.z,
-			RAD_TO_DEGF(FOV),
+			Engine::Math::RadiansToDegrees(FOV),
 			actualHeightAboveGround, terrainHeight );
 
 		m_displayStrings[DebugInfo]->setText( unibuffer );
@@ -1652,45 +1347,13 @@ void W3DDisplay::gatherDebugStats()
 		unibuffer.format(L"Objects: %d in world, %d being displayed", objCount, objScreenCount );
 		m_displayStrings[Objects]->setText( unibuffer );
 
-		// Network incoming bandwidth stats
-		if (TheNetwork != nullptr) {
-			unibuffer.format(L"IN: %.2f bytes/sec, %.2f packets/sec",
-				TheNetwork->getIncomingBytesPerSecond(), TheNetwork->getIncomingPacketsPerSecond());
-			m_displayStrings[NetIncoming]->setText( unibuffer );
-
-			// Network outgoing bandwidth stats
-			unibuffer.format(L"OUT: %.2f bytes/sec, %.2f packets/sec",
-				TheNetwork->getOutgoingBytesPerSecond(), TheNetwork->getOutgoingPacketsPerSecond());
-			m_displayStrings[NetOutgoing]->setText( unibuffer );
-
-			// Network performance stats
-			unibuffer.format(L"Run Ahead: %d, Net FPS: %d, Packet arrival cushion: %d",
-				TheNetwork->getRunAhead(), TheNetwork->getFrameRate(), TheNetwork->getPacketArrivalCushion());
-			m_displayStrings[NetStats]->setText( unibuffer );
-
-			// Client frame rate averages for all players in the game.  This only works right for the packet router.
-			unibuffer.clear();
-			Int numPlayers = TheNetwork->getNumPlayers();
-			for (Int i = 0; i < numPlayers; ++i) {
-				UnicodeString tempstr;
-				tempstr.format(L"%s: %d ", TheNetwork->getPlayerName(i).str(), TheNetwork->getSlotAverageFPS(i));
-				unibuffer.concat(tempstr);
-			}
-			m_displayStrings[NetFPSAverages]->setText( unibuffer );
-		} else {
-//			unibuffer.format(L"IN: 0.0 bytes/sec, 0.0 packets/sec");
-//			m_displayStrings[NetIncoming]->setText( unibuffer );
-
-			// Network outgoing bandwidth stats
-//			unibuffer.format(L"OUT: 0.0 bytes/sec, 0.0 packets/sec");
-//			m_displayStrings[NetOutgoing]->setText( unibuffer );
-			unibuffer.clear();
-//			unibuffer.format(L"Network not present");
-			m_displayStrings[NetOutgoing]->setText(unibuffer);
-			m_displayStrings[NetIncoming]->setText(unibuffer);
-			m_displayStrings[NetStats]->setText(unibuffer);
-			m_displayStrings[NetFPSAverages]->setText( unibuffer );
-		}
+		// Network diagnostics are supplied by the network service HUD.
+		// Keep these display slots empty when the service is not injected.
+		unibuffer.clear();
+		m_displayStrings[NetIncoming]->setText(unibuffer);
+		m_displayStrings[NetOutgoing]->setText(unibuffer);
+		m_displayStrings[NetStats]->setText(unibuffer);
+		m_displayStrings[NetFPSAverages]->setText(unibuffer);
 
 		// selected object info stats
 		unibuffer.format( L"Select Info: '%d' drawables selected", TheInGameUI->getSelectCount() );
@@ -1834,7 +1497,7 @@ void W3DDisplay::drawFPSStats()
 //=============================================================================
 void StatDebugDisplay( DebugDisplayInterface *, void *, FILE *fp )
 {
-	DEBUG_CRASH(("This should never be called directly, but is just a placeholder for drawDebugStats()"));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "This should never be called directly, but is just a placeholder for drawDebugStats()");
 }
 
 // W3DDisplay::drawCurrentDebugDisplay =================================================
@@ -1855,90 +1518,6 @@ void W3DDisplay::drawCurrentDebugDisplay()
 		}
 	}
 }
-
-// W3DDisplay::calculateTerrainLOD =================================================
-/** Calculates an adequately speedy terrain Level Of Detail. */
-//=============================================================================
-void W3DDisplay::calculateTerrainLOD()
-{
-	const Int NUM_SAMPLES=20;
-	const Int NUM_TO_DISCARD=5;
-
-	Int64 freq64 = getPerformanceCounterFrequency();
-
-	float frameTime = 0;
-	float maxTimeLimit = TheGlobalData->m_terrainLODTargetTimeMS/1000.0f;
-	TerrainLOD goodLOD = TERRAIN_LOD_MIN;
-	TerrainLOD curLOD = TERRAIN_LOD_AUTOMATIC;
-	Int count = 0;
-#ifdef RTS_DEBUG
-	// just go to TERRAIN_LOD_NO_WATER, mirror off.
-	TheWritableGlobalData->m_terrainLOD = TERRAIN_LOD_NO_WATER;
-	m_3DScene->drawTerrainOnly(false);
-	TheTerrainRenderObject->adjustTerrainLOD(0);
-	return;
-#endif
-	do {
-		Int i;
-		float timeForFrame=0;
-		frameTime = 0;
-		switch(curLOD) {
-			default: curLOD = TERRAIN_LOD_DISABLE; break;
-			case TERRAIN_LOD_AUTOMATIC: curLOD = TERRAIN_LOD_MAX; break;
-			case TERRAIN_LOD_MAX: curLOD = TERRAIN_LOD_NO_WATER; break;
-			case TERRAIN_LOD_NO_WATER: curLOD = TERRAIN_LOD_DISABLE; break;
-		}
-		if (curLOD == TERRAIN_LOD_DISABLE) {
-			break;
-		}
-		TheWritableGlobalData->m_terrainLOD = curLOD;
-		m_3DScene->drawTerrainOnly(true);
-		TheTerrainRenderObject->adjustTerrainLOD(0);
-		for (i=0; i<NUM_SAMPLES; i++) {
-			Int64 startTime64 = getPerformanceCounter();
-			// start render block
-			updateViews();
-            if (!graphicsRendererAvailable || !Graphics_Begin_Frame()) {
-                Graphics_Abort_Frame();
-                m_3DScene->drawTerrainOnly(false);
-                return;
-            }
-            if (Get_W3D_Render_Services().Begin_Render(true, true, Vector3(0.0f, 0.0f, 0.0f))) {
-                drawViews();
-                Get_W3D_Render_Services().End_Render();
-                if (!Graphics_End_Frame() || !presentMeasuredGraphicsFrame())
-                    Graphics_Abort_Frame();
-            } else {
-                Graphics_Abort_Frame();
-            }
-			Int64 time64 = getPerformanceCounter();
-			timeForFrame = (float)((double)(time64-startTime64) / (double)(freq64));
-			if (i>=NUM_TO_DISCARD) {
-				frameTime += timeForFrame;
-				if (i>NUM_TO_DISCARD+1 &&
-					(timeForFrame / ((i+1)-NUM_TO_DISCARD)) > 2*maxTimeLimit) {
-					i++;
-					break;
-				}
-			}
-		}
-		frameTime /= ((i)-NUM_TO_DISCARD);
-		count++;
-		if (frameTime<maxTimeLimit && goodLOD<curLOD) {
-			goodLOD = curLOD;
-		}
-		if (frameTime < maxTimeLimit) break;
-	} while (count<10);
-
-	TheWritableGlobalData->m_terrainLOD = goodLOD;
-	m_3DScene->drawTerrainOnly(false);
-	TheTerrainRenderObject->adjustTerrainLOD(0);
-#ifdef RTS_DEBUG
-	DEBUG_ASSERTCRASH(count<10, ("calculateTerrainLOD") );
-#endif
-
-}
-
 
 Real W3DDisplay::getAverageFPS()
 {
@@ -1961,21 +1540,18 @@ void W3DDisplay::step()
 	stepViews();
 }
 
-//DECLARE_PERF_TIMER(BigAssRenderLoop)
-
-// W3DDisplay::draw ===========================================================
+//// W3DDisplay::draw ===========================================================
 /** Draw the entire W3D Display */
 //=============================================================================
-//DECLARE_PERF_TIMER(W3DDisplay_draw)
 void W3DDisplay::draw()
 {
-    GENERALS_GRAPHICS_PROFILE_SCOPE("Graphics.Display.Draw");
-    PROFILER_PLOT("Graphics.LogicRate", static_cast<int64_t>(TheFramePacer->getActualLogicTimeScaleFps()));
-    PROFILER_PLOT("Graphics.RenderLimit", static_cast<int64_t>(TheFramePacer->getActualFramesPerSecondLimit()));
-    PROFILER_PLOT("Graphics.LogicFrame", static_cast<int64_t>(TheGameLogic->getFrame()));
-	//USE_PERF_TIMER(W3DDisplay_draw)
+    auto graphicsCaptureScope_1962 = navigation::diagnostics::frameCapture().measure("Graphics.Display.Draw", TheGameLogic ? TheGameLogic->getFrame() : 0);
+	engine::profiling::Scope graphicsProfileScope_1962("Graphics.Display.Draw");
+    engine::profiling::plot("Graphics.LogicRate", static_cast<int64_t>(TheFramePacer->getActualLogicTimeScaleFps()));
+    engine::profiling::plot("Graphics.RenderLimit", static_cast<int64_t>(TheFramePacer->getActualFramesPerSecondLimit()));
+    engine::profiling::plot("Graphics.LogicFrame", static_cast<int64_t>(TheGameLogic->getFrame()));
 
-	if (SDLPlatformWindow::isMinimized()) {
+	if (m_mainWindow != nullptr && m_mainWindow->is_minimized()) {
 		return;
 	}
 
@@ -2004,23 +1580,6 @@ void W3DDisplay::draw()
 AGAIN:
 #endif
 
-#ifdef DUMP_PERF_STATS
-	if( TheGlobalData->m_dumpPerformanceStatistics )
-	{
-		TheStatDump.dumpStats( FALSE, TRUE );
-		TheWritableGlobalData->m_dumpPerformanceStatistics = FALSE;
-	}
-  //The <= GAME_REPLAY essentially means, GAME_SINGLE_PLAYER || GAME_LAN || GAME_SKIRMISH || GAME_REPLAY
-  else if ( TheGlobalData->m_dumpStatsAtInterval && TheGameLogic->getGameMode() <= GAME_REPLAY )
-  {
-    Int interval = TheGlobalData->m_statsInterval;
-    if ( TheGameLogic->getFrame() > 0 && (TheGameLogic->getFrame() % interval) == 0 )
-    {
-  	  TheStatDump.dumpStats( TRUE, TRUE );
-    	TheInGameUI->message( L"-stats is running, at interval: %d.", TheGlobalData->m_statsInterval );
-    }
-  }
-#endif
 
 	// compute debug statistics for display later
 	if ( m_debugDisplayCallback == StatDebugDisplay
@@ -2088,7 +1647,8 @@ AGAIN:
 			{
 				if (TheTerrainRenderObject->getShroud())
 				{
-					GENERALS_GRAPHICS_PROFILE_SCOPE("Graphics.Shroud.Update");
+					auto graphicsCaptureScope_2081 = navigation::diagnostics::frameCapture().measure("Graphics.Shroud.Update", TheGameLogic ? TheGameLogic->getFrame() : 0);
+	engine::profiling::Scope graphicsProfileScope_2081("Graphics.Shroud.Update");
 					TheTerrainRenderObject->getShroud()->render(primaryW3DView->get3DCamera());
 				}
 			}
@@ -2099,12 +1659,13 @@ AGAIN:
 
 	// TheSuperHackers @info This binds the WW3D update to the logic update.
 	{
-		GENERALS_GRAPHICS_PROFILE_SCOPE("Graphics.Scene.Sync");
+		auto graphicsCaptureScope_2092 = navigation::diagnostics::frameCapture().measure("Graphics.Scene.Sync", TheGameLogic ? TheGameLogic->getFrame() : 0);
+	engine::profiling::Scope graphicsProfileScope_2092("Graphics.Scene.Sync");
 		Graphics::Get_Render_Clock().Sync(TheGameLogic->hasUpdated());
 	}
 
 	static Int now;
-	now=SDL_GetTicks();
+	now=static_cast<UnsignedInt>(m_platform.clock().monotonic_nanoseconds() / 1000000u);
 
 	if (TheTacticalView->getTimeMultiplier()>1)
 	{
@@ -2130,11 +1691,13 @@ AGAIN:
 			//trying to refresh the visible terrain geometry.
 //			if(TheGlobalData->m_loadScreenRender != TRUE)
 			{
-				GENERALS_GRAPHICS_PROFILE_SCOPE("Graphics.Views.Update");
+				auto graphicsCaptureScope_2123 = navigation::diagnostics::frameCapture().measure("Graphics.Views.Update", TheGameLogic ? TheGameLogic->getFrame() : 0);
+	engine::profiling::Scope graphicsProfileScope_2123("Graphics.Views.Update");
 				updateViews();
 			}
 			{
-				GENERALS_GRAPHICS_PROFILE_SCOPE("Graphics.Particles.Update");
+				auto graphicsCaptureScope_2127 = navigation::diagnostics::frameCapture().measure("Graphics.Particles.Update", TheGameLogic ? TheGameLogic->getFrame() : 0);
+	engine::profiling::Scope graphicsProfileScope_2127("Graphics.Particles.Update");
      		TheParticleSystemManager->update();//LORENZEN AND WILCZYNSKI MOVED THIS FROM ITS NATIVE POSITION, ABOVE
                                            //FOR THE PURPOSE OF LETTING THE PARTICLE SYSTEM LOOK UP THE RENDER OBJECT"S
                                            //TRANSFORM MATRIX, WHILE IT IS STILL VALID (HAVING DONE ITS CLIENT TRANSFORMS
@@ -2153,7 +1716,8 @@ AGAIN:
 			//before we enter main rendering loop.
 			if (TheW3DProjectedShadowManager)
 			{
-				GENERALS_GRAPHICS_PROFILE_SCOPE("Graphics.ProjectedShadows.Update");
+				auto graphicsCaptureScope_2146 = navigation::diagnostics::frameCapture().measure("Graphics.ProjectedShadows.Update", TheGameLogic ? TheGameLogic->getFrame() : 0);
+	engine::profiling::Scope graphicsProfileScope_2146("Graphics.ProjectedShadows.Update");
 				TheW3DProjectedShadowManager->updateRenderTargetTextures();
 			}
 		}
@@ -2167,7 +1731,6 @@ AGAIN:
 	    if ( (TheGameLogic->getFrame() % 30 == 1) || ( ! (!TheGameLogic->isGamePaused() && TheGlobalData->m_TiVOFastMode && TheGameLogic->isInReplayGame())) )
     #endif
 		{
-			//USE_PERF_TIMER(BigAssRenderLoop)
 			static Bool couldRender = true;
 			bool graphicsFrame = false;
 			if (graphicsRendererAvailable) {
@@ -2175,7 +1738,7 @@ AGAIN:
 				if (!graphicsFrame)
 					Graphics_Abort_Frame();
 			}
-			if (graphicsFrame && (TheGlobalData->m_breakTheMovie == FALSE) && (TheGlobalData->m_disableRender == false) && Get_W3D_Render_Services().Begin_Render( true, true, Vector3( 0.0f, 0.0f, 0.0f ), TheWaterTransparency->m_minWaterOpacity ))
+			if (graphicsFrame && (TheGlobalData->m_breakTheMovie == FALSE) && (TheGlobalData->m_disableRender == false) && Get_W3D_Render_Services().Begin_Render( true, true, Engine::Math::Vector3{0.0f, 0.0f, 0.0f}, TheWaterTransparency->m_minWaterOpacity ))
 			{
 
 				if(TheGlobalData->m_loadScreenRender == TRUE)
@@ -2194,20 +1757,22 @@ AGAIN:
 
 				// draw all views of the world
 				{
-					GENERALS_GRAPHICS_PROFILE_SCOPE("Graphics.Views.Draw");
+					auto graphicsCaptureScope_2187 = navigation::diagnostics::frameCapture().measure("Graphics.Views.Draw", TheGameLogic ? TheGameLogic->getFrame() : 0);
+	engine::profiling::Scope graphicsProfileScope_2187("Graphics.Views.Draw");
 					drawViews();
 				}
 
 				// draw the user interface
 				{
-				GENERALS_GRAPHICS_PROFILE_SCOPE("Graphics.UI.Draw");
-				TheInGameUI->DRAW();
+				auto graphicsCaptureScope_2193 = navigation::diagnostics::frameCapture().measure("Graphics.UI.Draw", TheGameLogic ? TheGameLogic->getFrame() : 0);
+	engine::profiling::Scope graphicsProfileScope_2193("Graphics.UI.Draw");
+				TheInGameUI->draw();
 
-				TheGameClient->DRAW();
+				TheGameClient->draw();
 
 				// draw the mouse
 				if( TheMouse )
-					TheMouse->DRAW();
+					TheMouse->draw();
 				}
 
 				if (graphicsFrame)
@@ -2262,26 +1827,23 @@ AGAIN:
 #if defined(RTS_DEBUG)
 				if (TheGlobalData->m_debugShowGraphicalFramerate)
 				{
-					drawFramerateBar();
+					drawFramerateBar(m_platform.clock());
 				}
 #endif
 
-#ifdef PERF_TIMERS
-				TheGraphDraw->render();
-				TheGraphDraw->clear();
-#endif
 
-#ifdef PROFILER_ENABLED
-                if (PROFILER_IS_CONNECTED && !TheGlobalData->m_headless) {
-                    GENERALS_GRAPHICS_PROFILE_SCOPE("Graphics.Profiler.FrameCapture");
+#ifdef true
+                if (engine::profiling::connected() && !TheGlobalData->m_headless) {
+                    auto graphicsCaptureScope_2266 = navigation::diagnostics::frameCapture().measure("Graphics.Profiler.FrameCapture", TheGameLogic ? TheGameLogic->getFrame() : 0);
+	engine::profiling::Scope graphicsProfileScope_2266("Graphics.Profiler.FrameCapture");
                     auto* device = Graphics::Shared_Frame_Device();
                     if (device) {
                         const auto frame = Graphics::Get_Frame_Preview().Read(
                             Graphics::Shared_Frame_Targets(),
-                            Graphics::RHITextureFormat::BGRA8_UNorm, PROFILER_FRAME_IMAGE_SIZE,
-                            Graphics::Get_Render_Clock().Logic_Time_Milliseconds(), PROFILER_FRAME_IMAGE_INTERVAL_MS);
+                            Graphics::RHITextureFormat::BGRA8_UNorm, engine::profiling::frame_capture_size,
+                            Graphics::Get_Render_Clock().Logic_Time_Milliseconds(), engine::profiling::frame_capture_interval_ms);
                         if (frame.Is_Valid())
-                            PROFILER_FRAME_IMAGE(frame.pixels.data(), frame.width, frame.height, 0, false);
+                            engine::profiling::capture_frame(frame.pixels.data(), frame.width, frame.height, 0, false);
                     }
                 }
 #endif
@@ -2297,7 +1859,7 @@ AGAIN:
 				if (couldRender)
 				{
 					couldRender = false;
-					DEBUG_LOG(("Could not prepare RenderServices::Begin_Render()!  Are we ALT-Tabbed out?"));
+					engine::debug::log_info("Could not prepare RenderServices::Begin_Render()!  Are we ALT-Tabbed out?");
 				}
 			}
 		}
@@ -2385,41 +1947,10 @@ Bool W3DDisplay::isLetterBoxed()
 	return (m_letterBoxEnabled);
 }
 
-// W3DDisplay::createLightPulse ===============================================
-/** Create a "light pulse" which is a dynamic light that grows, decays
-	* and vanishes over several frames */
-//=============================================================================
-void W3DDisplay::createLightPulse( const Coord3D *pos, const RGBColor *color,
-																	 Real innerRadius, Real attenuationWidth,
-																	 UnsignedInt increaseFrameTime,
-																	 UnsignedInt decayFrameTime//, Bool donut
-																	 )
-{
-	if (m_3DScene == nullptr)
-		return;
-	if (innerRadius+attenuationWidth<2.0*PATHFIND_CELL_SIZE_F + 1.0f) {
-		return; // it basically won't make any visual difference.  jba.
-	}
-	W3DDynamicLight * theDynamicLight = m_3DScene->getADynamicLight();
-	// turn it on.
-	theDynamicLight->setEnabled(true);
-
-	theDynamicLight->Set_Ambient( Vector3( color->red, color->green, color->blue ) );
-	theDynamicLight->Set_Diffuse( Vector3( color->red, color->green, color->blue) );
-	theDynamicLight->Set_Position(Vector3(pos->x, pos->y, pos->z));
-	theDynamicLight->Set_Far_Attenuation_Range(innerRadius, innerRadius + attenuationWidth);
-	theDynamicLight->setFrameFade(increaseFrameTime, decayFrameTime);
-	theDynamicLight->setDecayRange();
-	theDynamicLight->setDecayColor();
-	//theDynamicLight->setDonut(donut);
-	// (gth) CNC3 enable far attenuation.  C&C3 defaults to disabled.  Must enable to match Generals. MW 8-06-03
-	theDynamicLight->Set_Flag(W3DLight::FAR_ATTENUATION,true);
-}
-
 void W3DDisplay::toggleLetterBox()
 {
 	m_letterBoxEnabled = !m_letterBoxEnabled;
-	m_letterBoxFadeStartTime = SDL_GetTicks();
+	m_letterBoxFadeStartTime = static_cast<UnsignedInt>(m_platform.clock().monotonic_nanoseconds() / 1000000u);
 
 	//WST  9/18/2002 This is not a script api to prevent cheat. JSC Integrated 5/20/03
 	if( TheTacticalView )
@@ -2435,7 +1966,7 @@ void W3DDisplay::enableLetterBox(Bool enable)
 		if (!m_letterBoxEnabled)
 		{	//letterbox mode not previously enabled
 			m_letterBoxEnabled = TRUE;
-			m_letterBoxFadeStartTime = SDL_GetTicks();
+			m_letterBoxFadeStartTime = static_cast<UnsignedInt>(m_platform.clock().monotonic_nanoseconds() / 1000000u);
 
 			//WST  9/18/2002 - This is not a script api to prevent cheat.  JSC Integrated 5/20/03
 			if( TheTacticalView )
@@ -2449,7 +1980,7 @@ void W3DDisplay::enableLetterBox(Bool enable)
 		if (m_letterBoxEnabled)
 		{	//letterbox mode no previously disabled
 			m_letterBoxEnabled = FALSE;
-			m_letterBoxFadeStartTime = SDL_GetTicks();
+			m_letterBoxFadeStartTime = static_cast<UnsignedInt>(m_platform.clock().monotonic_nanoseconds() / 1000000u);
 
 			//WST  9/18/2002. JSC Integrated 5/20/03
 			if( TheTacticalView )
@@ -2457,38 +1988,6 @@ void W3DDisplay::enableLetterBox(Bool enable)
 				TheTacticalView->setZoomLimited( 1 );
 			}
 		}
-	}
-}
-
-// W3DDisplay::setTimeOfDay ===================================================
-/** */
-//=============================================================================
-void W3DDisplay::setTimeOfDay( TimeOfDay tod )
-{
-	const GlobalData::TerrainLighting *ol=&TheGlobalData->m_terrainObjectsLighting[tod][0];
-
-	if( m_3DScene )
-	{
-		m_3DScene->Set_Ambient_Light( Vector3(ol->ambient.red, ol->ambient.green, ol->ambient.blue) );
-	}
-
-	for (Int i=0; i<Graphics::Material_Light_Count; i++)
-	{
-		if( m_myLight[i] )
-		{
-			ol=&TheGlobalData->m_terrainObjectsLighting[tod][i];
-
-			m_myLight[i]->Set_Ambient( Vector3( 0.0f, 0.0f, 0.0f ) );
-			m_myLight[i]->Set_Diffuse( Vector3(ol->diffuse.red, ol->diffuse.green, ol->diffuse.blue ) );
-			m_myLight[i]->Set_Specular( Vector3(0,0,0) );
-			Matrix3D mtx;
-			mtx.Set(Vector3(1,0,0), Vector3(0,1,0), Vector3(ol->lightPos.x, ol->lightPos.y, ol->lightPos.z), Vector3(0,0,0));
-			m_myLight[i]->Set_Transform(mtx);
-		}
-	}
-	if(TheTerrainRenderObject) {
-		TheTerrainRenderObject->setTimeOfDay(tod);
-		TheTacticalView->forceRedraw();
 	}
 }
 
@@ -2763,92 +2262,6 @@ void W3DDisplay::takeScreenShot(ScreenshotFormat format, Int jpegQuality)
 }
 
 
-#if defined(RTS_DEBUG)
-
-static FILE *AssetDumpFile=nullptr;
-
-void dumpMeshAssets(W3DMeshRenderObject *mesh)
-{
-	if (mesh)
-	{
-		W3DTextureHandle *texture;
-		W3DMeshResource *model=mesh->Get_Model();
-		for (int stage=0;stage<W3DMeshResource::MaterialDescription::MAX_TEX_STAGES;++stage)
-		{
-			for (int pass=0;pass<model->Get_Pass_Count();++pass)
-			{
-				if (model->Has_Texture_Array(pass,stage))
-				{
-					for (int i=0;i<model->Get_Polygon_Count();++i)
-					{
-						if ((texture=model->Peek_Texture(i,pass,stage)) != nullptr)
-						{
-							fprintf(AssetDumpFile,"\t%s\n",texture->Get_Texture_Name().str());
-						}
-					}
-				}
-				else
-				{
-					if ((texture=model->Peek_Single_Texture(pass,stage)) != nullptr)
-					{
-						fprintf(AssetDumpFile,"\t%s\n",texture->Get_Texture_Name().str());
-					}
-				}
-			}
-		}
-	}
-}
-
-void dumpHLODAssets(W3DHierarchyRenderObject *hlod)
-{
-	if (hlod)
-	{
-		//model composed of multiple meshes.
-		for (Int i=0; i<hlod->Get_Num_Sub_Objects(); i++)
-		{
-			W3DRenderObject *subObj=hlod->Get_Sub_Object(i);
-			if (subObj->Class_ID() == W3DRenderObject::CLASSID_HLOD)
-				dumpHLODAssets((W3DHierarchyRenderObject *)subObj);
-			else
-			if (subObj->Class_ID() == W3DRenderObject::CLASSID_MESH)
-				dumpMeshAssets((W3DMeshRenderObject *)subObj);
-		}
-	}
-}
-
-//-------------------------------------------------------------------------------------------------
-/**  dump all used models/textures to a file.*/
-//-------------------------------------------------------------------------------------------------
-void W3DDisplay::dumpModelAssets(const char *path)
-{
-	if (m_3DScene)
-	{
-		AssetDumpFile=fopen(path,"w");
-		if (AssetDumpFile)
-		{
-			fprintf(AssetDumpFile,"Models and Textures used on %s:\n\n",TheGlobalData->m_mapName.str());
-			W3DSceneIterator *sceneIter = m_3DScene->Create_Iterator();
-			sceneIter->First();
-			while(!sceneIter->Is_Done())
-			{
-				W3DRenderObject * robj = sceneIter->Current_Item();
-				if (robj->Class_ID() == W3DRenderObject::CLASSID_HLOD)
-				{	fprintf(AssetDumpFile,"%s.W3D:\n",robj->Get_Name());
-					dumpHLODAssets((W3DHierarchyRenderObject *)robj);
-				}
-				else
-				if (robj->Class_ID() == W3DRenderObject::CLASSID_MESH)
-				{	fprintf(AssetDumpFile,"%s.W3D:\n",robj->Get_Name());
-					dumpMeshAssets((W3DMeshRenderObject *)robj);
-				}
-				sceneIter->Next();
-			}
-			m_3DScene->Destroy_Iterator(sceneIter);
-			fclose(AssetDumpFile);
-		}
-	}
-}
-#endif	//only include above code in debug and internal
 //-------------------------------------------------------------------------------------------------
 /** Preload using the W3D asset manager the model referenced by the string parameter */
 //-------------------------------------------------------------------------------------------------
@@ -2953,10 +2366,10 @@ void W3DDisplay::dumpAssetUsage(const char* mapname)
 #endif
 
 //-------------------------------------------------------------------------------------------------
-static void drawFramerateBar()
+static void drawFramerateBar(engine::platform::IClockService& clock)
 {
-	static unsigned int prevTime = SDL_GetTicks();
-	unsigned int now = SDL_GetTicks();
+	static unsigned int prevTime = static_cast<UnsignedInt>(clock.monotonic_nanoseconds() / 1000000u);
+	unsigned int now = static_cast<UnsignedInt>(clock.monotonic_nanoseconds() / 1000000u);
 	Real percTime = (1000.0f / (now - prevTime) ) / (1000.0f / TheGlobalData->m_framesPerSecondLimit);
 
 	if (percTime > 1.0f)

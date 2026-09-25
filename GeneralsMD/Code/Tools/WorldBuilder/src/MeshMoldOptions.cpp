@@ -24,6 +24,7 @@
 #include "WorldBuilderDoc.h"
 #include "MeshMoldOptions.h"
 #include "Common/FileSystem.h"
+import engine.debug;
 
 /////////////////////////////////////////////////////////////////////////////
 // MeshMoldOptions dialog
@@ -197,7 +198,7 @@ void MeshMoldOptions::GetPopSliderInfo(const long sliderID, long *pMin, long *pM
 
 		default:
 			// uh-oh!
-			DEBUG_CRASH(("Missing ID."));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Missing ID.");
 			break;
 	}
 }
@@ -232,7 +233,7 @@ void MeshMoldOptions::PopSliderChanged(const long sliderID, long theVal)
 			break;
 
 		default:
-			DEBUG_CRASH(("Missing ID."));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Missing ID.");
 			break;
 	}
 }
@@ -248,7 +249,7 @@ void MeshMoldOptions::PopSliderFinished(const long sliderID, long theVal)
 			break;
 
 		default:
-			DEBUG_CRASH(("Missing ID."));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Missing ID.");
 			break;
 	}
 

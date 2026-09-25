@@ -30,6 +30,8 @@
 
 #include "Common/SubsystemInterface.h"
 #include "Common/GameType.h"
+#include <memory>
+import engine.platform;
 
 // forward declarations
 class AudioManager;
@@ -53,8 +55,11 @@ class GameEngine : public SubsystemInterface
 {
 public:
 
-	GameEngine();
+	explicit GameEngine(std::unique_ptr<engine::platform::IPlatform> platform);
 	virtual ~GameEngine() override;
+	[[nodiscard]] engine::platform::IPlatform& platform() noexcept;
+	[[nodiscard]] engine::platform::IWindow& createMainWindow(const engine::platform::WindowConfig& config);
+	[[nodiscard]] engine::platform::IWindow* mainWindow() noexcept;
 
 	virtual void init() override;								///< Init engine by creating client and logic
 	virtual void reset() override;								///< reset system to starting state
@@ -85,8 +90,9 @@ protected:
 	virtual FileSystem *createFileSystem();								///< Factory for FileSystem classes
 	virtual LocalFileSystem *createLocalFileSystem() = 0;	///< Factory for LocalFileSystem classes
 	virtual ArchiveFileSystem *createArchiveFileSystem() = 0;	///< Factory for ArchiveFileSystem classes
-	virtual GameLogic *createGameLogic() = 0;							///< Factory for GameLogic classes.
-	virtual GameClient *createGameClient() = 0;						///< Factory for GameClient classes.
+	virtual GameLogic *createGameLogic(engine::platform::IPlatform& platform) = 0;	///< Factory for GameLogic classes.
+	virtual GameClient *createGameClient(engine::platform::IPlatform& platform,
+		engine::platform::IWindow* mainWindow) = 0;		///< Factory for GameClient classes.
 	virtual MessageStream *createMessageStream();					///< Factory for the message stream
 	virtual ModuleFactory *createModuleFactory() = 0;			///< Factory for modules
 	virtual ThingFactory *createThingFactory() = 0;				///< Factory for the thing factory
@@ -99,6 +105,8 @@ protected:
 
 	Bool m_quitting; ///< true when we need to quit the game
 	Bool m_isActive; ///< app has OS focus.
+	std::unique_ptr<engine::platform::IPlatform> m_platform;
+	std::unique_ptr<engine::platform::IWindow> m_mainWindow;
 };
 
 inline void GameEngine::setQuitting( Bool quitting ) { m_quitting = quitting; }
@@ -111,4 +119,4 @@ extern GameEngine *TheGameEngine;
 extern GameEngine *CreateGameEngine();
 
 /// The entry point for the game system
-extern Int GameMain();
+extern Int GameMain(GameEngine& gameEngine);

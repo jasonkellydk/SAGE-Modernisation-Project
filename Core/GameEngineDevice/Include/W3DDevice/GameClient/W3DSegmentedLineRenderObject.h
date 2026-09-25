@@ -28,8 +28,9 @@ import Graphics.Scene.Beams.SegmentedLine;
 #include "WWLib/ref_ptr.h"
 #include "W3DDevice/GameClient/W3DRenderObject.h"
 #include "W3DDevice/GameClient/W3DCastQuery.h"
-#include "WWMath/vector2.h"
-#include "WWMath/vector3.h"
+
+import Engine.Core.Math.Vector2;
+import Engine.Core.Math.Vector3;
 
 class W3DCamera;
 class W3DRenderContext;
@@ -57,11 +58,11 @@ public:
 	void Render(W3DRenderContext &rinfo) override;
 	bool Cast_Ray(W3DRayCastQuery &raytest) override;
 
-	void Set_Points(unsigned int count, const Vector3 *points);
+	void Set_Points(unsigned int count, const Engine::Math::Vector3 *points);
 	int Get_Num_Points() const noexcept;
-	void Set_Point_Location(unsigned int index, const Vector3 &point);
-	void Get_Point_Location(unsigned int index, Vector3 &point) const;
-	void Add_Point(const Vector3 &point);
+	void Set_Point_Location(unsigned int index, const Engine::Math::Vector3 &point);
+	void Get_Point_Location(unsigned int index, Engine::Math::Vector3 &point) const;
+	void Add_Point(const Engine::Math::Vector3 &point);
 	void Delete_Point(unsigned int index);
 
 	W3DTextureHandle *Get_Texture() const;
@@ -70,8 +71,8 @@ public:
 	void Set_Shader(Graphics::MaterialState shader) noexcept;
 	float Get_Width() const noexcept;
 	void Set_Width(float width) noexcept;
-	void Get_Color(Vector3 &color) const;
-	void Set_Color(const Vector3 &color) noexcept;
+	void Get_Color(Engine::Math::Vector3 &color) const;
+	void Set_Color(const Engine::Math::Vector3 &color) noexcept;
 	float Get_Opacity() const noexcept;
 	void Set_Opacity(float opacity) noexcept;
 	float Get_Noise_Amplitude() const noexcept;
@@ -84,8 +85,8 @@ public:
 	void Set_Texture_Mapping_Mode(Graphics::RibbonTextureMapping mapping) noexcept;
 	float Get_Texture_Tile_Factor() const noexcept;
 	void Set_Texture_Tile_Factor(float factor) noexcept;
-	Vector2 Get_UV_Offset_Rate() const;
-	void Set_UV_Offset_Rate(const Vector2 &rate) noexcept;
+	Engine::Math::Vector2 Get_UV_Offset_Rate() const;
+	void Set_UV_Offset_Rate(const Engine::Math::Vector2 &rate) noexcept;
 	int Is_Merge_Intersections() const noexcept;
 	void Set_Merge_Intersections(int enabled) noexcept;
 	int Is_Freeze_Random() const noexcept;
@@ -109,16 +110,15 @@ public:
 	int Get_LOD_Level() const override;
 	int Get_LOD_Count() const override;
 
-	void Get_Obj_Space_Bounding_Sphere(SphereClass &sphere) const override;
-	void Get_Obj_Space_Bounding_Box(AABoxClass &box) const override;
+	void Get_Local_Bounding_Sphere(Engine::Math::Sphere3 &sphere) const override;
+	void Get_Local_Bounds(Engine::Math::AxisAlignedBox3 &box) const override;
 
 private:
 	void Submit(W3DRenderContext &rinfo);
 
 	Graphics::SegmentedLineRenderer m_renderer;
-	std::vector<Vector3> m_points;
+	std::vector<Engine::Math::Vector3> m_points;
 	RefCountPtr<W3DTextureHandle> m_texture;
 	unsigned m_max_subdivision_levels = 0;
 	float m_normalized_screen_area = 0.0f;
 };
-

@@ -36,11 +36,12 @@
 
 #include "definitionfactorymgr.h"
 #include "definitionfactory.h"
-#include "WWDebug/wwdebug.h"
+
 
 #ifdef _UNIX
 #include "osdep.h"
 #endif
+import engine.debug;
 
 ////////////////////////////////////////////////////////////////////////////
 //	Static member initialization
@@ -211,8 +212,8 @@ DefinitionFactoryMgrClass::Get_Next (DefinitionFactoryClass *curr_factory)
 void
 DefinitionFactoryMgrClass::Register_Factory (DefinitionFactoryClass *factory)
 {
-	WWASSERT (factory->m_NextFactory == 0);
-	WWASSERT (factory->m_PrevFactory == 0);
+	engine::debug::assert_condition((factory->m_NextFactory == 0), "factory->m_NextFactory == 0", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((factory->m_PrevFactory == 0), "factory->m_PrevFactory == 0", __FILE__, __LINE__, "assertion failed");
 	Link_Factory (factory);
 }
 
@@ -225,7 +226,7 @@ DefinitionFactoryMgrClass::Register_Factory (DefinitionFactoryClass *factory)
 void
 DefinitionFactoryMgrClass::Unregister_Factory (DefinitionFactoryClass *factory)
 {
-	WWASSERT (factory != 0);
+	engine::debug::assert_condition((factory != 0), "factory != 0", __FILE__, __LINE__, "assertion failed");
 	Unlink_Factory (factory);
 }
 
@@ -238,8 +239,8 @@ DefinitionFactoryMgrClass::Unregister_Factory (DefinitionFactoryClass *factory)
 void
 DefinitionFactoryMgrClass::Link_Factory (DefinitionFactoryClass *factory)
 {
-	WWASSERT (factory->m_NextFactory == 0);
-	WWASSERT (factory->m_PrevFactory == 0);
+	engine::debug::assert_condition((factory->m_NextFactory == 0), "factory->m_NextFactory == 0", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((factory->m_PrevFactory == 0), "factory->m_PrevFactory == 0", __FILE__, __LINE__, "assertion failed");
 
 	// Adding this factory in front of the current head of the list
 	factory->m_NextFactory = _FactoryListHead;
@@ -262,13 +263,13 @@ DefinitionFactoryMgrClass::Link_Factory (DefinitionFactoryClass *factory)
 void
 DefinitionFactoryMgrClass::Unlink_Factory (DefinitionFactoryClass *factory)
 {
-	WWASSERT(factory != 0);
+	engine::debug::assert_condition((factory != 0), "factory != 0", __FILE__, __LINE__, "assertion failed");
 
 	// Handle the factory's prev pointer:
 	if (factory->m_PrevFactory == nullptr) {
 
 		// this factory is the head
-		WWASSERT (_FactoryListHead == factory);
+		engine::debug::assert_condition((_FactoryListHead == factory), "_FactoryListHead == factory", __FILE__, __LINE__, "assertion failed");
 		_FactoryListHead = factory->m_NextFactory;
 
 	} else {

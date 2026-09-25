@@ -30,11 +30,11 @@ public:
 	void Set_Name(const char *name) override;
 	int Get_Num_Polys() const override { return static_cast<int>(m_runtime.Num_Polys()); }
 	void Render(W3DRenderContext &rinfo) override;
-	void Set_Transform(const Matrix3D &transform) override;
-	void Set_Position(const Vector3 &position) override;
+	void Set_Transform(const Engine::Math::AffineTransform3 &transform) override;
+	void Set_Position(Engine::Math::Vector3 position) override;
 
-	void Get_Obj_Space_Bounding_Sphere(SphereClass &sphere) const override;
-	void Get_Obj_Space_Bounding_Box(AABoxClass &box) const override;
+	void Get_Local_Bounding_Sphere(Engine::Math::Sphere3 &sphere) const override;
+	void Get_Local_Bounds(Engine::Math::AxisAlignedBox3 &box) const override;
 
 	void Prepare_LOD(W3DCamera &camera) override;
 	void Increment_LOD() override;

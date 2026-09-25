@@ -30,6 +30,7 @@
 #include "WorldBuilderDoc.h"
 #include "Common/ThingFactory.h"
 #include "Common/ThingSort.h"
+import engine.debug;
 
 /////////////////////////////////////////////////////////////////////////////
 // PickUnitDialog dialog
@@ -307,7 +308,7 @@ void PickUnitDialog::addObject( MapObject *mapObject, const char *pPath, Int ind
 
 		// first sort by side, either create or find the tree item with matching side name
 		AsciiString side = thingTemplate->getDefaultOwningSide();
-		DEBUG_ASSERTCRASH( !side.isEmpty(), ("null default side in template") );
+		engine::debug::invariant((!side.isEmpty()), "!side.isEmpty()", __FILE__, __LINE__, "null default side in template");
 		parent = findOrAdd( parent, side.str());
 
 		// next tier uses the editor sorting that design can specify in the INI

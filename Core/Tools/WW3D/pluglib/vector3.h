@@ -65,8 +65,9 @@
 
 #pragma once
 
+#include <cmath>
 #include "always.h"
-#include "wwmath.h"
+
 #include <assert.h>
 #ifdef _UNIX
 #include "osdep.h"
@@ -333,9 +334,9 @@ WWINLINE bool operator != (const Vector3 &a,const Vector3 &b)
  *========================================================================*/
 WWINLINE bool Equal_Within_Epsilon(const Vector3 &a,const Vector3 &b,float epsilon)
 {
-   return(	(WWMath::Fabs(a.X - b.X) < epsilon) &&
-				(WWMath::Fabs(a.Y - b.Y) < epsilon) &&
-				(WWMath::Fabs(a.Z - b.Z) < epsilon)	);
+   return(	(std::fabs(a.X - b.X) < epsilon) &&
+				(std::fabs(a.Y - b.Y) < epsilon) &&
+				(std::fabs(a.Z - b.Z) < epsilon)	);
 }
 
 
@@ -398,7 +399,7 @@ WWINLINE void Vector3::Normalize()
 	float len2 = Length2();
 	if (len2 != 0.0f)
 	{
-		float oolen = WWMath::Inv_Sqrt(len2);
+		float oolen = (1.0f / std::sqrt(len2));
 		X *= oolen;
 		Y *= oolen;
 		Z *= oolen;
@@ -411,7 +412,7 @@ WWINLINE Vector3 Normalize(const Vector3 & vec)
 	float len2 = vec.Length2();
 	if (len2 != 0.0f)
 	{
-		float oolen = WWMath::Inv_Sqrt(len2);
+		float oolen = (1.0f / std::sqrt(len2));
 		return vec * oolen;
 	}
 	return vec;
@@ -431,7 +432,7 @@ WWINLINE Vector3 Normalize(const Vector3 & vec)
  *========================================================================*/
 WWINLINE float Vector3::Length() const
 {
-	return WWMath::Sqrt(Length2());
+	return std::sqrt(Length2());
 }
 
 /**************************************************************************
@@ -467,9 +468,9 @@ WWINLINE float Vector3::Quick_Length() const
 {
 	// this method of approximating the length comes from Graphics Gems 1 and
 	// supposedly gives an error of +/- 8%
-	float max = WWMath::Fabs(X);
-	float mid = WWMath::Fabs(Y);
-	float min = WWMath::Fabs(Z);
+	float max = std::fabs(X);
+	float mid = std::fabs(Y);
+	float min = std::fabs(Z);
 	float tmp;
 
 	if (max < mid) { tmp = max; max = mid; mid = tmp; }
@@ -827,7 +828,7 @@ WWINLINE void Vector3::Rotate_Z(float s_angle,float c_angle)
  *=============================================================================================*/
 WWINLINE bool Vector3::Is_Valid() const
 {
-	return (WWMath::Is_Valid_Float(X) && WWMath::Is_Valid_Float(Y) && WWMath::Is_Valid_Float(Z));
+	return (std::isfinite(X) && std::isfinite(Y) && std::isfinite(Z));
 }
 
 WWINLINE float Vector3::Find_X_At_Y(float y, const Vector3 &p1, const Vector3 &p2)

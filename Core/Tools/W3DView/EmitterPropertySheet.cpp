@@ -31,6 +31,8 @@
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 import Graphics.Materials.State;
+import Engine.Core.Math.Vector3;
+import Engine.Core.Math.RandomVector3Generator;
 #include "StdAfx.h"
 #include "W3DView.h"
 #include "EmitterPropertySheet.h"
@@ -343,8 +345,10 @@ EmitterPropertySheetClass::Create_Emitter ()
 	//
 	//	Read the physics settings
 	//
-	Vector3 velocity		= m_PhysicsPage.Get_Velocity ();
-	Vector3 acceleration	= m_PhysicsPage.Get_Acceleration ();
+	const Engine::Math::Vector3 page_velocity = m_PhysicsPage.Get_Velocity ();
+	const Engine::Math::Vector3 page_acceleration = m_PhysicsPage.Get_Acceleration ();
+	Vector3 velocity{page_velocity.x, page_velocity.y, page_velocity.z};
+	Vector3 acceleration{page_acceleration.x, page_acceleration.y, page_acceleration.z};
 	float out_factor		= m_PhysicsPage.Get_Out_Factor ();
 	float inherit_factor	= m_PhysicsPage.Get_Inheritance_Factor ();
 
@@ -369,8 +373,8 @@ EmitterPropertySheetClass::Create_Emitter ()
 	//
 	//	Read the randomizers
 	//
-	Vector3Randomizer *creation_vol	= m_ParticlePage.Get_Creation_Volume ();
-	Vector3Randomizer *vel_random		= m_PhysicsPage.Get_Velocity_Random ();
+	Engine::Math::RandomVector3Generator *creation_vol	= m_ParticlePage.Get_Creation_Volume ();
+	Engine::Math::RandomVector3Generator *vel_random		= m_PhysicsPage.Get_Velocity_Random ();
 
 	//
 	//	Load the texture
@@ -465,9 +469,9 @@ EmitterPropertySheetClass::Create_New_Emitter ()
 	ParticleEmitterClass *emitter = nullptr;
 	emitter = new ParticleEmitterClass (10,
 													1,
-													new Vector3SolidBoxRandomizer(Vector3(0.1F, 0.1F, 0.1F)),
+													new Engine::Math::RandomVector3Generator(Engine::Math::Vector3Distribution::Box, {0.1F, 0.1F, 0.1F}, 0),
 													Vector3 (0, 0, 1),
-													new Vector3SolidBoxRandomizer(Vector3(0, 0, 0.1F)),
+													new Engine::Math::RandomVector3Generator(Engine::Math::Vector3Distribution::Box, {0, 0, 0.1F}, 1),
 													0,
 													0,
 													color,
@@ -511,4 +515,3 @@ EmitterPropertySheetClass::Notify_Render_Mode_Changed(int new_mode)
 	bool enable_line_page = (new_mode == W3D_EMITTER_RENDER_MODE_LINE);
 	::Enable_Dialog_Controls(m_LinePage,enable_line_page);
 }
-

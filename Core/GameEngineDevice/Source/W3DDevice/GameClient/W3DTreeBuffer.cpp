@@ -1,4 +1,5 @@
 import Graphics.Frame.RenderSettings;
+#include <cmath>
 #include "W3DDevice/GameClient/W3DRenderServices.h"
 import Assets.Math;
 import Assets.Images.PixelEncoding;
@@ -69,6 +70,7 @@ enum
 //-----------------------------------------------------------------------------
 
 #include "W3DDevice/GameClient/W3DTreeBuffer.h"
+import engine.profiling;
 
 #include "W3DDevice/GameClient/W3DAssetCatalog.h"
 #include <W3DDevice/GameClient/W3DTextureHandle.h>
@@ -77,7 +79,7 @@ enum
 #include "Common/MapReaderWriterInfo.h"
 #include "Common/FileSystem.h"
 #include "Common/file.h"
-#include "Common/PerfTimer.h"
+
 #include "Common/Player.h"
 #include "Common/PlayerList.h"
 #include "GameLogic/ScriptEngine.h"
@@ -96,9 +98,12 @@ enum
 #include "W3DDevice/GameClient/W3DMeshRenderObject.h"
 #include "W3DDevice/GameClient/W3DMeshResource.h"
 import Graphics.Scene.Trees.Geometry;
+import Engine.Core.Math.Vector3;
+import Engine.Core.Math.Vector2;
 
 #include <string>
 #include <vector>
+import engine.debug;
 
 
 #define USE_STATIC 1
@@ -109,37 +114,128 @@ import Graphics.Scene.Trees.Geometry;
 
 namespace
 {
-	Vector3 Transform_Tree_Vertex(const TTree &tree, const TTreeType &tree_type,
-		const Vector3 &source_vertex, const Vector3 &sway)
+	// Port of the original SphereClass(const Vector3 *, int) constructor
+	// (Graphics Gems I, p. 301 / Ritter). Keeps the original float/double mix so
+	// the tree bounds match the legacy result exactly.
+	Engine::Math::Sphere3 Legacy_Vertex_Bounding_Sphere(const Engine::Math::Vector3 *position, int vert_count)
 	{
-		Real x = source_vertex.X + tree_type.m_offset.X;
-		Real y = source_vertex.Y + tree_type.m_offset.Y;
-		Vector3 vertex;
-		vertex.X = x * tree.scale * tree.cos - y * tree.scale * tree.sin;
-		vertex.Y = y * tree.scale * tree.cos + x * tree.scale * tree.sin;
-		vertex.Z = source_vertex.Z * tree.scale + tree_type.m_offset.Z;
+		int i;
+		double dx, dy, dz;
+
+		Engine::Math::Vector3 xmin = position[0];
+		Engine::Math::Vector3 xmax = position[0];
+		Engine::Math::Vector3 ymin = position[0];
+		Engine::Math::Vector3 ymax = position[0];
+		Engine::Math::Vector3 zmin = position[0];
+		Engine::Math::Vector3 zmax = position[0];
+
+		// FIRST PASS: find the 6 minima and maxima points.
+		for (i = 1; i < vert_count; i++) {
+			if (position[i].x < xmin.x) xmin = position[i];
+			if (position[i].x > xmax.x) xmax = position[i];
+			if (position[i].y < ymin.y) ymin = position[i];
+			if (position[i].y > ymax.y) ymax = position[i];
+			if (position[i].z < zmin.z) zmin = position[i];
+			if (position[i].z > zmax.z) zmax = position[i];
+		}
+
+		dx = xmax.x - xmin.x;
+		dy = xmax.y - xmin.y;
+		dz = xmax.z - xmin.z;
+		double xspan = dx*dx + dy*dy + dz*dz;
+
+		dx = ymax.x - ymin.x;
+		dy = ymax.y - ymin.y;
+		dz = ymax.z - ymin.z;
+		double yspan = dx*dx + dy*dy + dz*dz;
+
+		dx = zmax.x - zmin.x;
+		dy = zmax.y - zmin.y;
+		dz = zmax.z - zmin.z;
+		double zspan = dx*dx + dy*dy + dz*dz;
+
+		// The maximally separated pair is the diameter of the initial sphere.
+		Engine::Math::Vector3 dia1 = xmin;
+		Engine::Math::Vector3 dia2 = xmax;
+		double maxspan = xspan;
+		if (yspan > maxspan) {
+			maxspan = yspan;
+			dia1 = ymin;
+			dia2 = ymax;
+		}
+		if (zspan > maxspan) {
+			maxspan = zspan;
+			dia1 = zmin;
+			dia2 = zmax;
+		}
+
+		Engine::Math::Vector3 center;
+		center.x = (dia1.x + dia2.x) / 2.0f;
+		center.y = (dia1.y + dia2.y) / 2.0f;
+		center.z = (dia1.z + dia2.z) / 2.0f;
+
+		dx = dia2.x - center.x;
+		dy = dia2.y - center.y;
+		dz = dia2.z - center.z;
+
+		double radsqr = dx*dx + dy*dy + dz*dz;
+		double radius = std::sqrt(radsqr);
+
+		// SECOND PASS: grow the sphere for any points that fall outside it.
+		for (i = 0; i < vert_count; i++) {
+			dx = position[i].x - center.x;
+			dy = position[i].y - center.y;
+			dz = position[i].z - center.z;
+
+			double testrad2 = dx*dx + dy*dy + dz*dz;
+			if (testrad2 > radsqr) {
+				double testrad = std::sqrt(testrad2);
+
+				radius = (radius + testrad) / 2.0;
+				radsqr = radius * radius;
+
+				double oldtonew = testrad - radius;
+				center.x = static_cast<float>((radius * center.x + oldtonew * position[i].x) / testrad);
+				center.y = static_cast<float>((radius * center.y + oldtonew * position[i].y) / testrad);
+				center.z = static_cast<float>((radius * center.z + oldtonew * position[i].z) / testrad);
+			}
+		}
+
+		return {center, static_cast<float>(radius)};
+	}
+
+	Engine::Math::Vector3 Transform_Tree_Vertex(const TTree &tree, const TTreeType &tree_type,
+		const Engine::Math::Vector3 &source_vertex, const Engine::Math::Vector3 &sway)
+	{
+		Real x = source_vertex.x + tree_type.m_offset.x;
+		Real y = source_vertex.y + tree_type.m_offset.y;
+		Engine::Math::Vector3 vertex;
+		vertex.x = x * tree.scale * tree.cos - y * tree.scale * tree.sin;
+		vertex.y = y * tree.scale * tree.cos + x * tree.scale * tree.sin;
+		vertex.z = source_vertex.z * tree.scale + tree_type.m_offset.z;
 
 		if (tree.m_toppleState != TOPPLE_UPRIGHT)
 		{
-			Matrix3D::Transform_Vector(tree.m_mtx, vertex, &vertex);
+			const auto transformed = tree.m_mtx.Transform_Point({vertex.x, vertex.y, vertex.z});
+			vertex = {transformed.x, transformed.y, transformed.z};
 		}
 		else
 		{
 			if (tree.pushAside > 0.0f)
 			{
-				vertex.X += source_vertex.Z * tree.pushAside * tree.pushAsideCos *
+				vertex.x += source_vertex.z * tree.pushAside * tree.pushAsideCos *
 					tree_type.m_data->m_maxOutwardMovement;
-				vertex.Y += source_vertex.Z * tree.pushAside * tree.pushAsideSin *
+				vertex.y += source_vertex.z * tree.pushAside * tree.pushAsideSin *
 					tree_type.m_data->m_maxOutwardMovement;
 			}
-			vertex.X += tree.location.X;
-			vertex.Y += tree.location.Y;
-			vertex.Z += tree.location.Z;
+			vertex.x += tree.location.x;
+			vertex.y += tree.location.y;
+			vertex.z += tree.location.z;
 		}
 
 		// The visible tree shader applies breeze around the tree base. Mirror
 		// that operation so a moving tree's real shadow follows its geometry.
-		vertex += sway * (vertex.Z - tree.location.Z);
+		vertex += sway * (vertex.z - tree.location.z);
 		return vertex;
 	}
 
@@ -213,16 +309,17 @@ void W3DTreeBuffer::cull(const W3DCamera * camera)
 	Int curTree;
 
 	// Calculate the vector direction that the camera is looking at.
-	Matrix3D camera_matrix = camera->Get_Transform();
+	const auto &camera_matrix = camera->Get_Transform();
 	float zmod = -1;
 	float x = zmod * camera_matrix[0][2] ;
 	float y = zmod * camera_matrix[1][2] ;
 	float z = zmod * camera_matrix[2][2] ;
-	m_cameraLookAtVector.Set(x,y,z);
+	m_cameraLookAtVector = {x,y,z};
 
 	for (curTree=0; curTree<m_numTrees; curTree++) {
 		Bool doKey = false;	// We calculate the key when a tree becomes visible.
-		Bool visible = !camera->Cull_Sphere(m_trees[curTree].bounds);
+		const auto &tree_bounds = m_trees[curTree].bounds;
+		Bool visible = !camera->Cull_Sphere(tree_bounds);
 		if (visible != m_trees[curTree].visible) {
 			m_trees[curTree].visible=visible;
 			m_anythingChanged = true;
@@ -234,7 +331,7 @@ void W3DTreeBuffer::cull(const W3DCamera * camera)
 		if (doKey || (visible&&m_updateAllKeys)) {
 			// The sort key is essentially the distance of location in the direction of the
 			// camera look at.
-			m_trees[curTree].sortKey = Vector3::Dot_Product(m_trees[curTree].location, m_cameraLookAtVector);
+			m_trees[curTree].sortKey = m_trees[curTree].location.Dot(m_cameraLookAtVector);
 		}
 	}
 	m_updateAllKeys = false;
@@ -254,7 +351,7 @@ Int W3DTreeBuffer::getPartitionBucket(const Coord3D &pos) const
 	if (y>m_bounds.hi.y) y = m_bounds.hi.y;
 	Int xIndex = REAL_TO_INT_FLOOR ( (x/(m_bounds.hi.x-m_bounds.lo.x)) * (PARTITION_WIDTH_HEIGHT-0.1f) );
 	Int yIndex = REAL_TO_INT_FLOOR ( (y/(m_bounds.hi.y-m_bounds.lo.y)) * (PARTITION_WIDTH_HEIGHT-0.1f) );
-	DEBUG_ASSERTCRASH(xIndex>=0 && yIndex>=0 && xIndex<PARTITION_WIDTH_HEIGHT && yIndex<PARTITION_WIDTH_HEIGHT, ("Invalid range."));
+	engine::debug::invariant((xIndex>=0 && yIndex>=0 && xIndex<PARTITION_WIDTH_HEIGHT && yIndex<PARTITION_WIDTH_HEIGHT), "xIndex>=0 && yIndex>=0 && xIndex<PARTITION_WIDTH_HEIGHT && yIndex<PARTITION_WIDTH_HEIGHT", __FILE__, __LINE__, "Invalid range.");
 	return yIndex*PARTITION_WIDTH_HEIGHT + xIndex;
 }
 
@@ -269,9 +366,9 @@ void W3DTreeBuffer::updateSway(const BreezeInfo& info)
 		Real angle = info.m_lean + (info.m_intensity  * factor);
 		Real S = Sin(angle);
 		Real C = Cos(angle);
-		m_swayOffsets[i].X = info.m_directionVec.x * S;
-		m_swayOffsets[i].Y = info.m_directionVec.y * S;
-		m_swayOffsets[i].Z = C - 1.0f;
+		m_swayOffsets[i].x = info.m_directionVec.x * S;
+		m_swayOffsets[i].y = info.m_directionVec.y * S;
+		m_swayOffsets[i].z = C - 1.0f;
 	}
 
 	Real delta = info.m_randomness * 0.5f;
@@ -419,7 +516,7 @@ void W3DTreeBuffer::updateTexture()
 			}
 			theFile->close();
 		} else {
-			DEBUG_CRASH(("Could not find texture %s", m_treeTypes[i].m_data->m_textureName.str()));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Could not find texture %s", m_treeTypes[i].m_data->m_textureName.str());
 			m_treeTypes[i].m_firstTile = 0;
 			m_treeTypes[i].m_tileWidth = 0;
 			m_treeTypes[i].m_numTiles = 0;
@@ -439,7 +536,7 @@ void W3DTreeBuffer::updateTexture()
 		if (m_treeTexture==nullptr) {
 			m_treeTexture = new W3DTextureHandle("missing.tga");
 		}
-		DEBUG_CRASH(("Too many trees in a scene."));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Too many trees in a scene.");
 		return;
 	}
 
@@ -514,7 +611,7 @@ void W3DTreeBuffer::updateTexture()
 			}
 		}
 	}
-	DEBUG_ASSERTCRASH(maxHeight<=m_textureWidth, ("Bad max height."));
+	engine::debug::invariant((maxHeight<=m_textureWidth), "maxHeight<=m_textureWidth", __FILE__, __LINE__, "Bad max height.");
 	W3DTreeTextureClass *tex = new W3DTreeTextureClass(static_cast<unsigned>(m_textureWidth), static_cast<unsigned>(m_textureWidth));
 	m_textureHeight = tex->update(this);
 
@@ -534,20 +631,20 @@ void W3DTreeBuffer::updateTexture()
 //=============================================================================
 /** Calculates the diffuse lighting as affected by dynamic lighting. */
 //=============================================================================
-UnsignedInt W3DTreeBuffer::doLighting(const Vector3 *normal,
-															const GlobalData::TerrainLighting	*objectLighting, const Vector3* lightRays,
-															const Vector3 *emissive, UnsignedInt vertDiffuse, Real scale) const
+UnsignedInt W3DTreeBuffer::doLighting(const Engine::Math::Vector3 *normal,
+															const GlobalData::TerrainLighting	*objectLighting, const Engine::Math::Vector3* lightRays,
+															const Engine::Math::Vector3 *emissive, UnsignedInt vertDiffuse, Real scale) const
 {
 
 	Real shadeR, shadeG, shadeB;
 	Real shade;
-	shadeR = objectLighting[0].ambient.red+emissive->X;	//only the first light contributes to ambient
-	shadeG = objectLighting[0].ambient.green+emissive->Y;
-	shadeB = objectLighting[0].ambient.blue+emissive->Z;
+	shadeR = objectLighting[0].ambient.red + emissive->x;	//only the first light contributes to ambient
+	shadeG = objectLighting[0].ambient.green + emissive->y;
+	shadeB = objectLighting[0].ambient.blue + emissive->z;
 
 	Int i;
 	for	(i=0; i<MAX_GLOBAL_LIGHTS; i++) {
-		shade = Vector3::Dot_Product(lightRays[i], *normal);
+		shade = lightRays[i].Dot(*normal);
 
 		if (shade > 1.0) shade = 1.0;
 		if(shade < 0.0f) shade = 0.0f;
@@ -607,12 +704,12 @@ void W3DTreeBuffer::loadTreesInVertexAndIndexBuffers(Graphics::SceneObjectList<W
 	Int curTree=0;
 	Int bNdx;
 	const GlobalData::TerrainLighting *objectLighting = TheGlobalData->m_terrainObjectsLighting[TheGlobalData->m_timeOfDay];
-    std::array<Vector3,MAX_GLOBAL_LIGHTS> lightRays;
+    std::array<Engine::Math::Vector3,MAX_GLOBAL_LIGHTS> lightRays;
     for (Int light=0;light<MAX_GLOBAL_LIGHTS;++light) {
         const auto& position=objectLighting[light].lightPos;
-        Vector3 direction(position.x,position.y,position.z);
-        direction.Normalize();
-        lightRays[light]=Vector3(-direction.X,-direction.Y,-direction.Z);
+        Engine::Math::Vector3 direction(position.x,position.y,position.z);
+        direction = direction.Normalized_Legacy();
+        lightRays[light] = {-direction.x, -direction.y, -direction.z};
     }
 	for (bNdx=0; bNdx<MAX_BUFFERS; bNdx++) {
 		m_curNumTreeVertices[bNdx] = 0;
@@ -625,8 +722,8 @@ void W3DTreeBuffer::loadTreesInVertexAndIndexBuffers(Graphics::SceneObjectList<W
         vb = m_vertexTree[bNdx].data();
         ib = m_indexTree[bNdx].data();
 		// Add to the index buffer & vertex buffer.
-		Vector2 lookAtVector(m_cameraLookAtVector.X, m_cameraLookAtVector.Y);
-		lookAtVector.Normalize();
+		Engine::Math::Vector2 lookAtVector{m_cameraLookAtVector.x, m_cameraLookAtVector.y};
+		lookAtVector = lookAtVector.Normalized_Legacy();
 		// We draw from back to front, so we put the indexes in the buffer
 		// from back to front.
 		UnsignedShort *curIb = ib;
@@ -643,31 +740,18 @@ void W3DTreeBuffer::loadTreesInVertexAndIndexBuffers(Graphics::SceneObjectList<W
 			}
 			if (!m_trees[curTree].visible) continue;
 			Real scale = m_trees[curTree].scale;
-			Vector3 loc = m_trees[curTree].location;
+			Engine::Math::Vector3 loc = m_trees[curTree].location;
 			Real theSin = m_trees[curTree].sin;
 			Real theCos = m_trees[curTree].cos;
 
 			Bool doVertexLighting = true;
 
-	#if 0 // no dynamic lighting.
-			for (pDynamicLightsIterator->First(); !pDynamicLightsIterator->Is_Done(); pDynamicLightsIterator->Next())
-			{
-				W3DDynamicLight *pLight = (W3DDynamicLight*)pDynamicLightsIterator->Peek_Obj();
-				if (!pLight->isEnabled()) {
-					continue; // he is turned off.
-				}
-				if (CollisionMath::Overlap_Test(m_trees[curTree].bounds, pLight->Get_Bounding_Sphere()) == CollisionMath::OUTSIDE) {
-					continue; // this tree is outside of the light's influence.
-				}
-				doVertexLighting = true;
-			}
-	#endif
-			Vector3 emissive(0.0f,0.0f,0.0f);
+			Engine::Math::Vector3 emissive(0.0f,0.0f,0.0f);
 			auto matInfo = m_treeTypes[type].m_mesh->Get_Material_Info();
 			if (matInfo) {
 				Graphics::MeshMaterial *vertMat = matInfo->materials[0].get();
 				if (vertMat) {
-					emissive.Set(vertMat->parameters.emissive[0],vertMat->parameters.emissive[1],vertMat->parameters.emissive[2]);
+					emissive = {vertMat->parameters.emissive[0], vertMat->parameters.emissive[1], vertMat->parameters.emissive[2]};
 				}
 			}
 			matInfo.reset();
@@ -678,7 +762,7 @@ void W3DTreeBuffer::loadTreesInVertexAndIndexBuffers(Graphics::SceneObjectList<W
 			m_trees[curTree].bufferNdx = bNdx;
 			Int i;
 			Int numVertex = m_treeTypes[type].m_mesh->Peek_Model()->Get_Vertex_Count();
-			const Vector3 *pVert = m_treeTypes[type].m_mesh->Peek_Model()->Peek_Vertex_Array();
+			const Engine::Math::Vector3 *pVert = m_treeTypes[type].m_mesh->Peek_Model()->Peek_Vertex_Array();
 
 
 
@@ -692,15 +776,15 @@ void W3DTreeBuffer::loadTreesInVertexAndIndexBuffers(Graphics::SceneObjectList<W
 				break;
 			}
 
-			const Vector2*uvs=m_treeTypes[type].m_mesh->Peek_Model()->Get_UV_Array_By_Index(0);
+			const Engine::Math::Vector2*uvs=m_treeTypes[type].m_mesh->Peek_Model()->Get_UV_Array_By_Index(0);
 
-			const Vector3*normals = m_treeTypes[type].m_mesh->Peek_Model()->Get_Vertex_Normal_Array();
+			const Engine::Math::Vector3 *normals = m_treeTypes[type].m_mesh->Peek_Model()->Get_Vertex_Normal_Array();
 			const unsigned *vecDiffuse = m_treeTypes[type].m_mesh->Peek_Model()->Get_Color_Array(0, false);
 
 			Int diffuse = 0;
 			if (normals == nullptr) {
 				doVertexLighting = false;
-				Vector3 normal(0.0f,0.0f,1.0f);
+				Engine::Math::Vector3 normal(0.0f,0.0f,1.0f);
 				diffuse = doLighting(&normal, objectLighting, lightRays.data(), &emissive, 0xFFFFFFFF, 1.0f);
 			}
 
@@ -721,8 +805,8 @@ void W3DTreeBuffer::loadTreesInVertexAndIndexBuffers(Graphics::SceneObjectList<W
 				// we use one texture with all images in one, so we have to change the uvs to
 				// match.
 				Real U, V;
-				U = uvs[i].U;
-				V = uvs[i].V;
+				U = uvs[i].x;
+				V = uvs[i].y;
 
 				if (U>1.0f) U=1.0f;
 				if (U<0.0f) U=0.0f;
@@ -731,43 +815,44 @@ void W3DTreeBuffer::loadTreesInVertexAndIndexBuffers(Graphics::SceneObjectList<W
 
 				curVb->uv[0] = U*Uscale + UOffset;
 				curVb->uv[1] = V*Vscale + VOffset;
-				Real x = pVert[i].X;
-				Real y = pVert[i].Y;
+				Real x = pVert[i].x;
+				Real y = pVert[i].y;
 
 
-				Vector3 vLoc;
-				x += m_treeTypes[type].m_offset.X;
-				y += m_treeTypes[type].m_offset.Y;
-				vLoc.X = x*scale*theCos - y*scale*theSin;
-				vLoc.Y = y*scale*theCos + x*scale*theSin;
-				vLoc.Z = pVert[i].Z*scale;
-				vLoc.Z += m_treeTypes[type].m_offset.Z;
+				Engine::Math::Vector3 vLoc;
+				x += m_treeTypes[type].m_offset.x;
+				y += m_treeTypes[type].m_offset.y;
+				vLoc.x = x*scale*theCos - y*scale*theSin;
+				vLoc.y = y*scale*theCos + x*scale*theSin;
+				vLoc.z = pVert[i].z*scale;
+				vLoc.z += m_treeTypes[type].m_offset.z;
 
 				if (m_trees[curTree].m_toppleState != TOPPLE_UPRIGHT) {
-					Matrix3D::Transform_Vector(m_trees[curTree].m_mtx, vLoc, &vLoc);
+					const auto transformed = m_trees[curTree].m_mtx.Transform_Point({vLoc.x, vLoc.y, vLoc.z});
+					vLoc = {transformed.x, transformed.y, transformed.z};
 				} else {
 					if (m_trees[curTree].pushAside>0.0f) {
-						vLoc.X += pVert[i].Z * m_trees[curTree].pushAside * m_trees[curTree].pushAsideCos * m_treeTypes[type].m_data->m_maxOutwardMovement;
-						vLoc.Y += pVert[i].Z * m_trees[curTree].pushAside * m_trees[curTree].pushAsideSin* m_treeTypes[type].m_data->m_maxOutwardMovement;
+						vLoc.x += pVert[i].z * m_trees[curTree].pushAside * m_trees[curTree].pushAsideCos * m_treeTypes[type].m_data->m_maxOutwardMovement;
+						vLoc.y += pVert[i].z * m_trees[curTree].pushAside * m_trees[curTree].pushAsideSin* m_treeTypes[type].m_data->m_maxOutwardMovement;
 					}
-					vLoc.X += loc.X;
-					vLoc.Y += loc.Y;
-					vLoc.Z += loc.Z;
+					vLoc.x += loc.x;
+					vLoc.y += loc.y;
+					vLoc.z += loc.z;
 				}
 
 
-				curVb->position[0] = vLoc.X;
-				curVb->position[1] = vLoc.Y;
-				curVb->position[2] = vLoc.Z;
+				curVb->position[0] = vLoc.x;
+				curVb->position[1] = vLoc.y;
+				curVb->position[2] = vLoc.z;
 				curVb->sway[0] = m_trees[curTree].swayType;
 				curVb->sway[1] = 1.0f - m_treeTypes[type].m_data->m_darkening*m_trees[curTree].pushAside;
-				curVb->sway[2] = loc.Z;
+				curVb->sway[2] = loc.z;
 				if (doVertexLighting) {
-					Vector3 normal(0.0f, 0.0f, 1.0f);
+					Engine::Math::Vector3 normal(0.0f, 0.0f, 1.0f);
 					if (normals) {
-						normal.X = normals[i].X*theCos - normals[i].Y*theSin;
-						normal.Y = normals[i].Y*theCos + normals[i].X*theSin;
-						normal.Z = normals[i].Z;
+						normal.x = normals[i].x*theCos - normals[i].y*theSin;
+						normal.y = normals[i].y*theCos + normals[i].x*theSin;
+						normal.z = normals[i].z;
 					}
 					UnsignedInt vertexDiffuse;
 					if (vecDiffuse) {
@@ -787,9 +872,9 @@ void W3DTreeBuffer::loadTreesInVertexAndIndexBuffers(Graphics::SceneObjectList<W
 			for (i=0; i<numIndex; i++) {
 				if (m_curNumTreeIndices[bNdx]+4 > MAX_TREE_INDEX)
 					break;
-				*curIb++ = startVertex + pPoly[i].I;
-				*curIb++ = startVertex + pPoly[i].J;
-				*curIb++ = startVertex + pPoly[i].K;
+				*curIb++ = startVertex + pPoly[i][0];
+				*curIb++ = startVertex + pPoly[i][1];
+				*curIb++ = startVertex + pPoly[i][2];
 				m_curNumTreeIndices[bNdx]+=3;
 			}
 		}
@@ -832,45 +917,46 @@ void W3DTreeBuffer::updateVertexBuffer()
 			m_anyPushChanged = true;
 			if (!m_trees[curTree].visible) continue;
 			Real scale = m_trees[curTree].scale;
-			Vector3 loc = m_trees[curTree].location;
+			Engine::Math::Vector3 loc = m_trees[curTree].location;
 			Real theSin = m_trees[curTree].sin;
 			Real theCos = m_trees[curTree].cos;
-			DEBUG_ASSERTCRASH(type>=0 && m_treeTypes[type].m_mesh!=nullptr, ("Invalid tree type or mesh."));
+			engine::debug::invariant((type>=0 && m_treeTypes[type].m_mesh!=nullptr), "type>=0 && m_treeTypes[type].m_mesh!=nullptr", __FILE__, __LINE__, "Invalid tree type or mesh.");
 
 			Int startVertex = m_trees[curTree].firstIndex;
 			curVb = vb+startVertex;
 			Int i;
 			Int numVertex = m_treeTypes[type].m_mesh->Peek_Model()->Get_Vertex_Count();
-			const Vector3 *pVert = m_treeTypes[type].m_mesh->Peek_Model()->Peek_Vertex_Array();
+			const Engine::Math::Vector3 *pVert = m_treeTypes[type].m_mesh->Peek_Model()->Peek_Vertex_Array();
 
 			for (i=0; i<numVertex; i++) {
-				Real x = pVert[i].X;
-				Real y = pVert[i].Y;
+				Real x = pVert[i].x;
+				Real y = pVert[i].y;
 
 
-				Vector3 vLoc;
-				x += m_treeTypes[type].m_offset.X;
-				y += m_treeTypes[type].m_offset.Y;
-				vLoc.X = x*scale*theCos - y*scale*theSin;
-				vLoc.Y = y*scale*theCos + x*scale*theSin;
-				vLoc.Z = pVert[i].Z*scale;
-				vLoc.Z += m_treeTypes[type].m_offset.Z;
+				Engine::Math::Vector3 vLoc;
+				x += m_treeTypes[type].m_offset.x;
+				y += m_treeTypes[type].m_offset.y;
+				vLoc.x = x*scale*theCos - y*scale*theSin;
+				vLoc.y = y*scale*theCos + x*scale*theSin;
+				vLoc.z = pVert[i].z*scale;
+				vLoc.z += m_treeTypes[type].m_offset.z;
 
 				if (m_trees[curTree].m_toppleState != TOPPLE_UPRIGHT) {
-					m_trees[curTree].m_mtx.Transform_Vector(m_trees[curTree].m_mtx, vLoc, &vLoc);
+					const auto transformed = m_trees[curTree].m_mtx.Transform_Point({vLoc.x, vLoc.y, vLoc.z});
+					vLoc = {transformed.x, transformed.y, transformed.z};
 				} else {
 					if (m_trees[curTree].pushAside>0.0f) {
-						vLoc.X += pVert[i].Z * m_trees[curTree].pushAside * m_trees[curTree].pushAsideCos * m_treeTypes[type].m_data->m_maxOutwardMovement;
-						vLoc.Y += pVert[i].Z * m_trees[curTree].pushAside * m_trees[curTree].pushAsideSin* m_treeTypes[type].m_data->m_maxOutwardMovement;
+						vLoc.x += pVert[i].z * m_trees[curTree].pushAside * m_trees[curTree].pushAsideCos * m_treeTypes[type].m_data->m_maxOutwardMovement;
+						vLoc.y += pVert[i].z * m_trees[curTree].pushAside * m_trees[curTree].pushAsideSin* m_treeTypes[type].m_data->m_maxOutwardMovement;
 					}
-					vLoc.X += loc.X;
-					vLoc.Y += loc.Y;
-					vLoc.Z += loc.Z;
+					vLoc.x += loc.x;
+					vLoc.y += loc.y;
+					vLoc.z += loc.z;
 				}
 
-				curVb->position[0] = vLoc.X;
-				curVb->position[1] = vLoc.Y;
-				curVb->position[2] = vLoc.Z;
+				curVb->position[0] = vLoc.x;
+				curVb->position[1] = vLoc.y;
+				curVb->position[2] = vLoc.z;
 				curVb->sway[1] = 1.0f - m_treeTypes[type].m_data->m_darkening*m_trees[curTree].pushAside;
 				curVb++;
 			}
@@ -919,7 +1005,7 @@ W3DTreeBuffer::W3DTreeBuffer()
 	m_curSwayVersion = -1;
 	for (i = 0; i < MAX_SWAY_TYPES; ++i)
 	{
-		m_currentSwayFactor[i] = Vector3(0.0f, 0.0f, 0.0f);
+		m_currentSwayFactor[i] = Engine::Math::Vector3(0.0f, 0.0f, 0.0f);
 	}
 
 }
@@ -974,7 +1060,7 @@ void W3DTreeBuffer::unitMoved(Object *unit)
 	if (y>m_bounds.hi.y) y = m_bounds.hi.y;
 	Int xIndex = REAL_TO_INT_FLOOR ( (x/(m_bounds.hi.x-m_bounds.lo.x)) * (PARTITION_WIDTH_HEIGHT-0.1f) );
 	Int yIndex = REAL_TO_INT_FLOOR ( (y/(m_bounds.hi.y-m_bounds.lo.y)) * (PARTITION_WIDTH_HEIGHT-0.1f) );
-	DEBUG_ASSERTCRASH(xIndex>=0 && yIndex>=0 && xIndex<PARTITION_WIDTH_HEIGHT && yIndex<PARTITION_WIDTH_HEIGHT, ("Invalid range."));
+	engine::debug::invariant((xIndex>=0 && yIndex>=0 && xIndex<PARTITION_WIDTH_HEIGHT && yIndex<PARTITION_WIDTH_HEIGHT), "xIndex>=0 && yIndex>=0 && xIndex<PARTITION_WIDTH_HEIGHT && yIndex<PARTITION_WIDTH_HEIGHT", __FILE__, __LINE__, "Invalid range.");
 
 	x = pos.x+radius;
 	y = pos.y+radius;
@@ -984,7 +1070,7 @@ void W3DTreeBuffer::unitMoved(Object *unit)
 	if (y>m_bounds.hi.y) y = m_bounds.hi.y;
 	Int xMax = REAL_TO_INT_CEIL ( (x/(m_bounds.hi.x-m_bounds.lo.x)) * (PARTITION_WIDTH_HEIGHT-0.1f) );
 	Int yMax = REAL_TO_INT_CEIL ( (y/(m_bounds.hi.y-m_bounds.lo.y)) * (PARTITION_WIDTH_HEIGHT-0.1f) );
-	DEBUG_ASSERTCRASH(xMax>=0 && yMax>=0 && xMax<=PARTITION_WIDTH_HEIGHT && yMax<=PARTITION_WIDTH_HEIGHT, ("Invalid range."));
+	engine::debug::invariant((xMax>=0 && yMax>=0 && xMax<=PARTITION_WIDTH_HEIGHT && yMax<=PARTITION_WIDTH_HEIGHT), "xMax>=0 && yMax>=0 && xMax<=PARTITION_WIDTH_HEIGHT && yMax<=PARTITION_WIDTH_HEIGHT", __FILE__, __LINE__, "Invalid range.");
 	Int i, j;
 	for (i=xIndex; i<xMax; i++) {
 		for (j=yIndex; j<yMax; j++) {
@@ -992,7 +1078,7 @@ void W3DTreeBuffer::unitMoved(Object *unit)
 			while (treeNdx != END_OF_PARTITION) {
 				// paranoia [7/7/2003]
 				if (treeNdx<0 || treeNdx>=m_numTrees) {
-					DEBUG_CRASH(("Invalid index."));
+					engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Invalid index.");
 					break;
 				}
 				if (m_trees[treeNdx].treeType<0) {
@@ -1000,14 +1086,14 @@ void W3DTreeBuffer::unitMoved(Object *unit)
 					continue;	//  Tree is deleted. [7/11/2003]
 				}
 				Coord3D delta;
-				delta.set(m_trees[treeNdx].location.X, m_trees[treeNdx].location.Y, m_trees[treeNdx].location.Z );
+				delta.set(m_trees[treeNdx].location.x, m_trees[treeNdx].location.y, m_trees[treeNdx].location.z );
 				delta.sub(pos);
 				if (radius*radius>delta.lengthSqr()) {
 					bool canTopple = unit->getCrusherLevel() > 1;
 					if (canTopple && m_treeTypes[m_trees[treeNdx].treeType].m_data->m_doTopple) {
 						// Give a vector with direction to thing.
 						Coord3D toppleVector;
-						toppleVector.set(m_trees[treeNdx].location.X, m_trees[treeNdx].location.Y, 0);
+						toppleVector.set(m_trees[treeNdx].location.x, m_trees[treeNdx].location.y, 0);
 						toppleVector.x -= unit->getPosition()->x;
 						toppleVector.y -= unit->getPosition()->y;
 						applyTopplingForce(m_trees+treeNdx, &toppleVector, 0, TreeToppleOptionsNone);
@@ -1073,11 +1159,11 @@ void W3DTreeBuffer::removeTree(DrawableID id)
 	Int i;
 	for (i=0; i<m_numTrees; i++) {
 		if (m_trees[i].drawableID == id) {
-			m_trees[i].location = Vector3(0,0,0);
+			m_trees[i].location = Engine::Math::Vector3(0,0,0);
 			m_trees[i].treeType = DELETED_TREE_TYPE;
 			// Translate the bounding sphere of the model.
-			m_trees[i].bounds.Center = Vector3(0,0,0);
-			m_trees[i].bounds.Radius = 1;
+			m_trees[i].bounds = {};
+			m_trees[i].bounds.radius = 1;
 			m_anythingChanged = true;
 		}
 	}
@@ -1098,7 +1184,7 @@ void W3DTreeBuffer::removeTreesForConstruction(const Coord3D* pos, const Geometr
 		}
 		GeometryInfo info(GEOMETRY_CYLINDER, false, 5*TREE_RADIUS_APPROX, 2*TREE_RADIUS_APPROX, 2*TREE_RADIUS_APPROX);
 		Coord3D treePos;
-		treePos.set(m_trees[i].location.X, m_trees[i].location.Y, m_trees[i].location.Z);
+		treePos.set(m_trees[i].location.x, m_trees[i].location.y, m_trees[i].location.z);
 		if (ThePartitionManager->geomCollidesWithGeom( pos, geom, angle, &treePos, info, 0.0f)) {
 			// remove it [7/11/2003]
 			m_trees[i].treeType = DELETED_TREE_TYPE;
@@ -1116,7 +1202,7 @@ void W3DTreeBuffer::removeTreesForConstruction(const Coord3D* pos, const Geometr
 Int W3DTreeBuffer::addTreeType(const W3DTreeDrawModuleData *data)
 {
 	if (m_numTreeTypes>=MAX_TYPES) {
-		DEBUG_CRASH(("Too many kinds of trees in map.  Reduce kinds of trees, or raise tree limit. jba."));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Too many kinds of trees in map.  Reduce kinds of trees, or raise tree limit. jba.");
 		return 0;
 	}
 	m_needToUpdateTexture = true;
@@ -1126,15 +1212,16 @@ Int W3DTreeBuffer::addTreeType(const W3DTreeDrawModuleData *data)
 	W3DRenderObject *robj=W3DAssetCatalog::Get_Instance()->Create_Render_Obj(data->m_modelName.str());
 
 	if (robj==nullptr) {
-		DEBUG_CRASH(("Unable to find model for tree %s", data->m_modelName.str()));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unable to find model for tree %s", data->m_modelName.str());
 		return 0;
 	}
-	Vector3 offset(0,0,0);
+	Engine::Math::Vector3 offset(0,0,0);
 	if (robj->Class_ID() == W3DRenderObject::CLASSID_HLOD) {
 		W3DRenderObject *hlod = robj;
 		robj = hlod->Get_Sub_Object(0);
-		const Matrix3D xfm = robj->Get_Bone_Transform(0);
-		xfm.Get_Translation(&offset);
+		const auto transform = Engine::Math::AffineTransform3::From_Row_Matrix(robj->Get_Bone_Transform(0));
+		const auto translation = transform.Translation();
+		offset = {translation.x, translation.y, translation.z};
 		REF_PTR_RELEASE(hlod);
 	}
 
@@ -1142,15 +1229,15 @@ Int W3DTreeBuffer::addTreeType(const W3DTreeDrawModuleData *data)
 		m_treeTypes[m_numTreeTypes].m_mesh = (W3DMeshRenderObject*)robj;
 
 	if (m_treeTypes[m_numTreeTypes].m_mesh==nullptr) {
-		DEBUG_CRASH(("Tree %s is not simple mesh. Tell artist to re-export. Don't Ignore!!!", data->m_modelName.str()));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Tree %s is not simple mesh. Tell artist to re-export. Don't Ignore!!!", data->m_modelName.str());
 		return 0;
 	}
 
 	Int numVertex = m_treeTypes[m_numTreeTypes].m_mesh->Peek_Model()->Get_Vertex_Count();
-	const Vector3 *pVert = m_treeTypes[m_numTreeTypes].m_mesh->Peek_Model()->Peek_Vertex_Array();
+	const Engine::Math::Vector3 *pVert = m_treeTypes[m_numTreeTypes].m_mesh->Peek_Model()->Peek_Vertex_Array();
 
-	SphereClass bounds(pVert, numVertex);
-	bounds.Center += offset;
+	Engine::Math::Sphere3 bounds = Legacy_Vertex_Bounding_Sphere(pVert, numVertex);
+	bounds.center = bounds.center + offset;
 	m_treeTypes[m_numTreeTypes].m_bounds = bounds;
 	m_treeTypes[m_numTreeTypes].m_textureOrigin.x = 0;
 	m_treeTypes[m_numTreeTypes].m_textureOrigin.y = 0;
@@ -1202,8 +1289,8 @@ void W3DTreeBuffer::addTree(DrawableID id, Coord3D location, Real scale, Real an
 	}
 
 	Real randomScale = GameClientRandomValueReal( 1.0f - randomScaleAmount, 1.0f+ randomScaleAmount );
-	m_trees[m_numTrees].sin = WWMath::Sin(angle);
-	m_trees[m_numTrees].cos = WWMath::Cos(angle);
+	m_trees[m_numTrees].sin = std::sin(angle);
+	m_trees[m_numTrees].cos = std::cos(angle);
 	if (randomScaleAmount>0.0f) {
 		// Randomizes the scale and orientation of trees.
 		m_trees[m_numTrees].scale = scale*randomScale;
@@ -1211,13 +1298,14 @@ void W3DTreeBuffer::addTree(DrawableID id, Coord3D location, Real scale, Real an
 		// Don't randomly scale & orient
 		m_trees[m_numTrees].scale = scale;
 	}
-	m_trees[m_numTrees].location = Vector3(location.x, location.y, location.z);
+	m_trees[m_numTrees].location = Engine::Math::Vector3(location.x, location.y, location.z);
 	m_trees[m_numTrees].treeType = treeType;
 	// Translate the bounding sphere of the model.
 	m_trees[m_numTrees].bounds = m_treeTypes[treeType].m_bounds;
-	m_trees[m_numTrees].bounds.Center *= m_trees[m_numTrees].scale;
-	m_trees[m_numTrees].bounds.Radius *= m_trees[m_numTrees].scale;
-	m_trees[m_numTrees].bounds.Center += m_trees[m_numTrees].location;
+	m_trees[m_numTrees].bounds = m_trees[m_numTrees].bounds
+		.Scaled(m_trees[m_numTrees].scale)
+		.Translated({m_trees[m_numTrees].location.x, m_trees[m_numTrees].location.y,
+			m_trees[m_numTrees].location.z});
 	// Initially set it invisible.  cull will update it's visibility flag.
 	m_trees[m_numTrees].visible = false;
 	m_trees[m_numTrees].drawableID = id;
@@ -1246,14 +1334,14 @@ Bool W3DTreeBuffer::updateTreePosition(DrawableID id, Coord3D location, Real ang
 	Int i;
 	for (i=0; i<m_numTrees; i++) {
 		if (m_trees[i].drawableID == id) {
-			m_trees[i].location = Vector3(location.x, location.y, location.z);
-			m_trees[i].sin = WWMath::Sin(angle);
-			m_trees[i].cos = WWMath::Cos(angle);
+			m_trees[i].location = Engine::Math::Vector3(location.x, location.y, location.z);
+			m_trees[i].sin = std::sin(angle);
+			m_trees[i].cos = std::cos(angle);
 			// Translate the bounding sphere of the model.
 			m_trees[i].bounds = m_treeTypes[m_trees[i].treeType].m_bounds;
-			m_trees[i].bounds.Center *= m_trees[i].scale;
-			m_trees[i].bounds.Radius *= m_trees[i].scale;
-			m_trees[i].bounds.Center += m_trees[i].location;
+			m_trees[i].bounds = m_trees[i].bounds.Scaled(m_trees[i].scale)
+				.Translated({m_trees[i].location.x, m_trees[i].location.y,
+					m_trees[i].location.z});
 			m_anythingChanged = true;
 			return true;
 		}
@@ -1284,7 +1372,7 @@ void W3DTreeBuffer::pushAsideTree(DrawableID id, const Coord3D *pusherPos,
 			}
 			m_trees[i].pushAsideSource = pusherID;
 			Coord3D delta;
-			delta.set(m_trees[i].location.X, m_trees[i].location.Y, m_trees[i].location.Z);
+			delta.set(m_trees[i].location.x, m_trees[i].location.y, m_trees[i].location.z);
 			delta.sub(*pusherPos);
 
 			if (pusherDirection->x*delta.y - pusherDirection->y*delta.x > 0.0f) {
@@ -1299,8 +1387,6 @@ void W3DTreeBuffer::pushAsideTree(DrawableID id, const Coord3D *pusherPos,
 		}
 	}
 }
-
-DECLARE_PERF_TIMER(Tree_Render)
 
 //=============================================================================
 // W3DTreeBuffer::drawTrees
@@ -1322,7 +1408,7 @@ void W3DTreeBuffer::prepareFrame()
 
 	// TheSuperHackers @tweak The tree sway, topple and sink time steps are now decoupled from the render update.
 	const Real timeScale = TheFramePacer->getActualLogicTimeScaleOverFpsRatio();
-	Vector3 swayFactor[MAX_SWAY_TYPES] = {};
+	Engine::Math::Vector3 swayFactor[MAX_SWAY_TYPES] = {};
 	Int i;
 	for (i=0; i<MAX_SWAY_TYPES; i++)
 	{
@@ -1371,8 +1457,9 @@ void W3DTreeBuffer::prepareFrame()
 				}
 				const Real sinkDistancePerFrame = moduleData->m_sinkDistance / moduleData->m_sinkFrames;
 				m_trees[curTree].m_sinkFramesLeft -= timeScale;
-				m_trees[curTree].location.Z -= sinkDistancePerFrame * timeScale;
-				m_trees[curTree].m_mtx.Set_Translation(m_trees[curTree].location);
+				m_trees[curTree].location.z -= sinkDistancePerFrame * timeScale;
+				m_trees[curTree].m_mtx.Set_Translation({m_trees[curTree].location.x,
+					m_trees[curTree].location.y, m_trees[curTree].location.z});
 			}
 		} else if (m_trees[curTree].pushAsideDelta!=0.0f) {
 			m_trees[curTree].pushAside += m_trees[curTree].pushAsideDelta;
@@ -1389,7 +1476,7 @@ void W3DTreeBuffer::prepareFrame()
 
 void W3DTreeBuffer::drawTrees(W3DCamera * camera, Graphics::SceneObjectList<W3DRenderObject>::Cursor *pDynamicLightsIterator)
 {
-	USE_PERF_TIMER(Tree_Render)
+	engine::profiling::Scope tree_render_scope{"Graphics.Trees.Render"};
 	if (!m_isTerrainPass) {
 		return;
 	}
@@ -1443,7 +1530,7 @@ void W3DTreeBuffer::drawTrees(W3DCamera * camera, Graphics::SceneObjectList<W3DR
     parameters.options = {shroud.Is_Valid() ? 1.0f : 0.0f,0.5f,
         Graphics::Get_Render_Settings().Is_Overbright_Modify_On_Load_Enabled() ? 2.0f : 1.0f,0};
     for (Int i=0;i<MAX_SWAY_TYPES;++i)
-        parameters.sway[i] = {m_currentSwayFactor[i].X,m_currentSwayFactor[i].Y,m_currentSwayFactor[i].Z,0};
+        parameters.sway[i] = {m_currentSwayFactor[i].x,m_currentSwayFactor[i].y,m_currentSwayFactor[i].z,0};
     const std::array<Graphics::RHITextureHandle,2> textures{Resolve_Graphics_Texture(m_treeTexture),shroud};
     for (Int batch=0;batch<MAX_BUFFERS && m_curNumTreeIndices[batch]!=0;++batch)
         renderer.Draw(device->Immediate_Command_List(),meshes[batch],parameters,textures);
@@ -1525,18 +1612,19 @@ Bool W3DTreeBuffer::collectShadowCasters()
             }
             const auto first = static_cast<std::uint32_t>(vertices.size());
             for (Int index=0;index<model->Get_Vertex_Count();++index) {
-                const auto position = Transform_Tree_Vertex(tree,type,positions[index],Vector3(0,0,0));
+				const auto position = Transform_Tree_Vertex(tree,type,
+					Engine::Math::Vector3(positions[index].x, positions[index].y, positions[index].z),Engine::Math::Vector3(0,0,0));
                 Graphics::TreeVertex vertex;
-                vertex.position = {position.X,position.Y,position.Z};
-                vertex.uv = {std::clamp(uvs[index].U,0.0f,1.0f)*u_scale+u_offset,
-                    std::clamp(uvs[index].V,0.0f,1.0f)*v_scale+v_offset};
-                vertex.sway = {Real(tree.swayType),1,tree.location.Z};
+                vertex.position = {position.x,position.y,position.z};
+                vertex.uv = {std::clamp(uvs[index].x,0.0f,1.0f)*u_scale+u_offset,
+                    std::clamp(uvs[index].y,0.0f,1.0f)*v_scale+v_offset};
+                vertex.sway = {Real(tree.swayType),1,tree.location.z};
                 vertices.push_back(vertex);
             }
             for (Int index=0;index<model->Get_Polygon_Count();++index) {
-                indices.push_back(first+triangles[index].I);
-                indices.push_back(first+triangles[index].J);
-                indices.push_back(first+triangles[index].K);
+                indices.push_back(first + triangles[index][0]);
+                indices.push_back(first + triangles[index][1]);
+                indices.push_back(first + triangles[index][2]);
             }
         }
         m_shadowInputs.swap(m_shadowInputScratch);
@@ -1544,7 +1632,7 @@ Bool W3DTreeBuffer::collectShadowCasters()
     Graphics::TreeParameters parameters;
     for (Int index=0;index<MAX_SWAY_TYPES;++index) {
         const auto& sway = m_currentSwayFactor[index];
-        parameters.sway[index] = {sway.X,sway.Y,sway.Z,0};
+        parameters.sway[index] = {sway.x,sway.y,sway.z,0};
     }
     return Graphics::Get_Tree_Renderer().Add_Shadow_Caster(
         Graphics::Get_Directional_Shadow_Renderer(),vertices,indices,parameters,
@@ -1584,11 +1672,11 @@ void W3DTreeBuffer::applyTopplingForce( TTree *tree, const Coord3D* toppleDirect
 	tree->m_toppleState = TOPPLE_FALLING;
 	tree->m_options = options;
 	Coord3D pos;
-	pos.set(tree->location.X, tree->location.Y, tree->location.Z);
+	pos.set(tree->location.x, tree->location.y, tree->location.z);
 	FXList::doFXPos(d->m_toppleFX, &pos);
 	m_anyPushChanged = true;
-	tree->m_mtx.Make_Identity();
-	tree->m_mtx.Set_Translation(tree->location);
+	tree->m_mtx = Engine::Math::AffineTransform3::Identity();
+	tree->m_mtx.Set_Translation({tree->location.x, tree->location.y, tree->location.z});
 
 }
 
@@ -1601,14 +1689,14 @@ static const Real ANGULAR_LIMIT = PI/2 - PI/64;
 void W3DTreeBuffer::updateTopplingTree(TTree *tree, Real timeScale)
 {
 	//DLOG(Debug::Format("updating W3DTreeBuffer %08lx\n",this));
-	DEBUG_ASSERTCRASH(tree->m_toppleState != TOPPLE_UPRIGHT, ("hmm, we should be sleeping here"));
+	engine::debug::invariant((tree->m_toppleState != TOPPLE_UPRIGHT), "tree->m_toppleState != TOPPLE_UPRIGHT", __FILE__, __LINE__, "hmm, we should be sleeping here");
 	if ( (tree->m_toppleState == TOPPLE_UPRIGHT)  ||  (tree->m_toppleState == TOPPLE_DOWN) )
 		return;
 
 	const W3DTreeDrawModuleData* d = m_treeTypes[tree->treeType].m_data;
 	const Int localPlayerIndex = rts::getObservedOrLocalPlayerIndex_Safe();
 	Coord3D pos;
-	pos.set(tree->location.X, tree->location.Y, tree->location.Z);
+	pos.set(tree->location.x, tree->location.y, tree->location.z);
 	ObjectShroudStatus ss = ThePartitionManager->getPropShroudStatusForPlayer(localPlayerIndex, &pos);
 	if (ss==OBJECTSHROUD_FOGGED) {
 		// Don't update fogged trees. [8/11/2003]
@@ -1618,8 +1706,8 @@ void W3DTreeBuffer::updateTopplingTree(TTree *tree, Real timeScale)
 		// was fogged, now isn't.
 		tree->m_angularVelocity = 0;
 		tree->m_toppleState = TOPPLE_DOWN;
-		tree->m_mtx.In_Place_Pre_Rotate_X(-ANGULAR_LIMIT * tree->m_toppleDirection.y);
-		tree->m_mtx.In_Place_Pre_Rotate_Y(ANGULAR_LIMIT * tree->m_toppleDirection.x);
+		tree->m_mtx.Pre_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_X(-ANGULAR_LIMIT * tree->m_toppleDirection.y));
+		tree->m_mtx.Pre_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Y(ANGULAR_LIMIT * tree->m_toppleDirection.x));
 		if (d->m_killWhenToppled) {
 			// If got killed in the fog, just remove. jba [8/11/2003]
 			tree->m_sinkFramesLeft = 0.0f;
@@ -1633,8 +1721,8 @@ void W3DTreeBuffer::updateTopplingTree(TTree *tree, Real timeScale)
 	if (tree->m_angularAccumulation + curVelToUse > ANGULAR_LIMIT)
 		curVelToUse = ANGULAR_LIMIT - tree->m_angularAccumulation;
 
-	tree->m_mtx.In_Place_Pre_Rotate_X(-curVelToUse * tree->m_toppleDirection.y);
-	tree->m_mtx.In_Place_Pre_Rotate_Y(curVelToUse * tree->m_toppleDirection.x);
+	tree->m_mtx.Pre_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_X(-curVelToUse * tree->m_toppleDirection.y));
+	tree->m_mtx.Pre_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Y(curVelToUse * tree->m_toppleDirection.x));
 
 	tree->m_angularAccumulation += curVelToUse;
 	if ((tree->m_angularAccumulation >= ANGULAR_LIMIT) && (tree->m_angularVelocity > 0))
@@ -1656,11 +1744,12 @@ void W3DTreeBuffer::updateTopplingTree(TTree *tree, Real timeScale)
 		{
 			// fast enough bounce to warrant the bounce fx
 			if( BitIsSet( tree->m_options, TreeToppleOptionsNoFx ) == FALSE ) {
-				Vector3 loc(0, 0, 3*TREE_RADIUS_APPROX); // Kinda towards the top of the tree. jba. [7/11/2003]
-				Vector3 xloc;
-				tree->m_mtx.Transform_Vector(tree->m_mtx, loc, &xloc);
+				Engine::Math::Vector3 loc(0, 0, 3*TREE_RADIUS_APPROX); // Kinda towards the top of the tree. jba. [7/11/2003]
+				Engine::Math::Vector3 xloc;
+				const auto transformed = tree->m_mtx.Transform_Point({loc.x, loc.y, loc.z});
+				xloc = {transformed.x, transformed.y, transformed.z};
 				Coord3D pos;
-				pos.set(xloc.X, xloc.Y, xloc.Z);
+				pos.set(xloc.x, xloc.y, xloc.z);
 				FXList::doFXPos(d->m_bounceFX, &pos);
 			}
 		}
@@ -1737,9 +1826,9 @@ void W3DTreeBuffer::xfer( Xfer *xfer )
 			}
 		}
 
-		xfer->xferReal(&tree.location.X);
-		xfer->xferReal(&tree.location.Y);
-		xfer->xferReal(&tree.location.Z);
+		xfer->xferReal(&tree.location.x);
+		xfer->xferReal(&tree.location.y);
+		xfer->xferReal(&tree.location.z);
 
 		xfer->xferReal(&tree.scale);	///< Scale at location.
 		xfer->xferReal(&tree.sin);	///< Sine of the rotation angle at location.
@@ -1754,7 +1843,9 @@ void W3DTreeBuffer::xfer( Xfer *xfer )
 		xfer->xferUser(&tree.m_toppleState, sizeof(tree.m_toppleState));	///< Stage this module is in.
 		xfer->xferReal(&tree.m_angularAccumulation);	///< How much have I rotated so I know when to bounce.
 		xfer->xferUnsignedInt(&tree.m_options);	///< topple options
-		xfer->xferMatrix3D(&tree.m_mtx);
+		Engine::Math::AffineTransform3 transform = tree.m_mtx;
+		xfer->xferAffineTransform3(&transform);
+		tree.m_mtx = transform;
 
 		if (version <= 1)
 		{
@@ -1769,7 +1860,7 @@ void W3DTreeBuffer::xfer( Xfer *xfer )
 
 		if (xfer->getXferMode() == XFER_LOAD && treeType != DELETED_TREE_TYPE && treeType < m_numTreeTypes) {
 			Coord3D pos;
-			pos.set(tree.location.X, tree.location.Y, tree.location.Z);
+			pos.set(tree.location.x, tree.location.y, tree.location.z);
 			Real angle = 0;
 			addTree(tree.drawableID, pos, tree.scale, angle, 0, m_treeTypes[treeType].m_data);
 			if (m_numTrees) {

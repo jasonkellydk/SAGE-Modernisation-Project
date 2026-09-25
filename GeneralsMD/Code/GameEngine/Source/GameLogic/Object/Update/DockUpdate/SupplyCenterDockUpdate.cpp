@@ -27,7 +27,8 @@
 // Desc:   The action of this dock update is taking boxes and turning them into money for my ownerplayer
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/Player.h"
 #include "Common/Xfer.h"
@@ -107,7 +108,7 @@ Bool SupplyCenterDockUpdate::action( Object* docker, Object *drone )
 
 	supplyTruckAI = docker->getAIUpdateInterface()->getSupplyTruckAIInterface();
 
-	DEBUG_ASSERTCRASH( supplyTruckAI != nullptr, ("Something Docking with a Supply Center must have a Supply-truck like AIUpdate") );
+	engine::debug::invariant((supplyTruckAI != nullptr), "supplyTruckAI != nullptr", __FILE__, __LINE__, "Something Docking with a Supply Center must have a Supply-truck like AIUpdate");
 	if( supplyTruckAI == nullptr )
 		return FALSE;
 
@@ -136,7 +137,7 @@ Bool SupplyCenterDockUpdate::action( Object* docker, Object *drone )
 			{
 				if( !stealth )
 				{
-					DEBUG_CRASH( ("SupplyCenterDockUpdate::action() -- It shouldn't be possible for a unit to be OBJECT_STATUS_STEALTHED without a StealthUpdate module!") );
+					engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "SupplyCenterDockUpdate::action() -- It shouldn't be possible for a unit to be OBJECT_STATUS_STEALTHED without a StealthUpdate module!");
 				}
 				else if( stealth->isTemporaryGrant() || !docker->testStatus( OBJECT_STATUS_CAN_STEALTH ) )
 				{
@@ -177,7 +178,7 @@ UpdateSleepTime SupplyCenterDockUpdate::update()
 #ifdef _DEBUG_ECONOMY
 	static const NameKeyType key_SupplyCenterCreate = NAMEKEY("SupplyCenterCreate");
 	SupplyCenterCreate* create = (SupplyCenterCreate*)getObject()->findCreateModule(key_SupplyCenterCreate);
-	DEBUG_ASSERTCRASH( create && ! create->shouldDoOnBuildComplete(), ("A Supply center did not call onBuildComplete.") );
+	engine::debug::invariant((create && ! create->shouldDoOnBuildComplete()), "create && ! create->shouldDoOnBuildComplete()", __FILE__, __LINE__, "A Supply center did not call onBuildComplete.");
 #endif
 
 	return result;

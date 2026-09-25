@@ -46,6 +46,7 @@
 #include <array>
 #include <span>
 #include <vector>
+import Engine.Core.Math.Sphere3;
 import Graphics.Scene.Surfaces.Renderer;
 
 //-----------------------------------------------------------------------------
@@ -78,9 +79,9 @@ enum {bottomLeft=0, bottomRight=1, topLeft=2, topRight=3, NUM_CORNERS=4};
 
 struct TRoadPt
 {
-	Vector2 loc;
-	Vector2 top;
-	Vector2 bottom;
+	Engine::Math::Vector2 loc;
+	Engine::Math::Vector2 top;
+	Engine::Math::Vector2 bottom;
 	Int			count;
 	Bool		last;
 	Bool		multi;
@@ -90,10 +91,10 @@ struct TRoadPt
 
 struct TRoadSegInfo
 {
-	Vector2 loc;
-	Vector2 roadNormal;
-	Vector2 roadVector;
-	Vector2 corners[NUM_CORNERS];
+	Engine::Math::Vector2 loc;
+	Engine::Math::Vector2 roadNormal;
+	Engine::Math::Vector2 roadVector;
+	Engine::Math::Vector2 corners[NUM_CORNERS];
 	Real uOffset;
 	Real vOffset;
 	Real scale;
@@ -131,7 +132,7 @@ protected:
 	Int										m_numIndex;
 	UnsignedShort*				m_ib;
 	TRoadSegInfo					m_info;
-	SphereClass						m_bounds;
+	Engine::Math::Sphere3				m_bounds;
 public:
 	RoadSegment();
 	~RoadSegment();
@@ -140,7 +141,7 @@ public:
 	void SetIndexBuffer(UnsignedShort *ib, Int numIndex);
 	void SetRoadSegInfo(TRoadSegInfo *pInfo) {m_info = *pInfo;};
 	void GetRoadSegInfo(TRoadSegInfo *pInfo) {*pInfo = m_info;};
-	const SphereClass &getBounds() {return m_bounds;};
+	const Engine::Math::Sphere3 &getBounds() const noexcept {return m_bounds;}
 	Int GetNumVertex() {return m_numVertex;};
 	Int GetNumIndex() {return m_numIndex;};
 	Int GetVertices(Graphics::SurfaceVertex *destination_vb, Int numToCopy);
@@ -240,7 +241,7 @@ protected:
 	void addMapObjects();
 	void addMapObject(RoadSegment *pRoad, Bool updateTheCounts);
 	void adjustStacking(Int topUniqueID, Int bottomUniqueID);
-	Int findCrossTypeJoinVector(Vector2 loc, Vector2 *joinVector, Int uniqueID);
+	Int findCrossTypeJoinVector(Engine::Math::Vector2 loc, Engine::Math::Vector2 *joinVector, Int uniqueID);
 	void flipTheRoad(RoadSegment *pRoad) {TRoadPt tmp=pRoad->m_pt1; pRoad->m_pt1 = pRoad->m_pt2; pRoad->m_pt2 = tmp;}; ///< Flips the loc1 and loc2 info.
 	void insertCurveSegmentAt(Int ndx1, Int ndx2);
 	void insertCrossTypeJoins();
@@ -253,25 +254,25 @@ protected:
 	void updateCountsAndFlags();
 	void insertCurveSegments();
 	void insertTeeIntersections();
-	void insertTee(Vector2 loc, Int index1, Real scale);
-	Bool insertY(Vector2 loc, Int index1, Real scale);
-	void insert4Way(Vector2 loc, Int index1, Real scale);
-	void offset4Way(TRoadPt *pc1, TRoadPt *pc2, TRoadPt *pc3, TRoadPt *pr3, TRoadPt *pc4, Vector2 loc, Vector2 alignVector, Real widthInTexture);
-	void offset3Way(TRoadPt *pc1, TRoadPt *pc2, TRoadPt *pc3, Vector2 loc, Vector2 upVector, Vector2 teeVector, Real widthInTexture);
-	void offsetY(TRoadPt *pc1, TRoadPt *pc2, TRoadPt *pc3, Vector2 loc, Vector2 upVector, Real widthInTexture);
-	void offsetH(TRoadPt *pc1, TRoadPt *pc2, TRoadPt *pc3, Vector2 loc, Vector2 upVector, Vector2 teeVector, Bool flip, Bool mirror, Real widthInTexture);
+	void insertTee(Engine::Math::Vector2 loc, Int index1, Real scale);
+	Bool insertY(Engine::Math::Vector2 loc, Int index1, Real scale);
+	void insert4Way(Engine::Math::Vector2 loc, Int index1, Real scale);
+	void offset4Way(TRoadPt *pc1, TRoadPt *pc2, TRoadPt *pc3, TRoadPt *pr3, TRoadPt *pc4, Engine::Math::Vector2 loc, Engine::Math::Vector2 alignVector, Real widthInTexture);
+	void offset3Way(TRoadPt *pc1, TRoadPt *pc2, TRoadPt *pc3, Engine::Math::Vector2 loc, Engine::Math::Vector2 upVector, Engine::Math::Vector2 teeVector, Real widthInTexture);
+	void offsetY(TRoadPt *pc1, TRoadPt *pc2, TRoadPt *pc3, Engine::Math::Vector2 loc, Engine::Math::Vector2 upVector, Real widthInTexture);
+	void offsetH(TRoadPt *pc1, TRoadPt *pc2, TRoadPt *pc3, Engine::Math::Vector2 loc, Engine::Math::Vector2 upVector, Engine::Math::Vector2 teeVector, Bool flip, Bool mirror, Real widthInTexture);
 	void preloadRoadsInVertexAndIndexBuffers(); ///< Fills the index and vertex buffers for drawing.
 	void preloadRoadSegment(RoadSegment *pRoad); ///< Fills the index and vertex buffers for drawing 1 segment.
-	void loadCurve(RoadSegment *pRoad, Vector2 loc1, Vector2 loc2, Real scale); ///< Fills the index and vertex buffers for drawing 1 fade.
-	void loadTee(RoadSegment *pRoad, Vector2 loc1, Vector2 loc2, Bool is4way, Real scale); ///< Fills the index and vertex buffers for drawing 1 tee intersection.
-	void loadY(RoadSegment *pRoad, Vector2 loc1, Vector2 loc2, Real scale); ///< Fills the index and vertex buffers for drawing 1 Y intersection.
-	void loadAlphaJoin(RoadSegment *pRoad, Vector2 loc1, Vector2 loc2, Real scale); ///< Fills the index and vertex buffers for drawing 1 alpha blend cap.
-	void loadH(RoadSegment *pRoad, Vector2 loc1, Vector2 loc2, Bool flip, Real scale); ///< Fills the index and vertex buffers for drawing 1 h tee intersection.
-	void loadFloatSection(RoadSegment *pRoad, Vector2 loc,
-														Vector2 roadVector, Real height, Real left, Real right, Real uOffset, Real vOffset, Real scale);
-	void loadFloat4PtSection(RoadSegment *pRoad, Vector2 loc,
-														Vector2 roadNormal, Vector2 roadVector,
-														Vector2 *cornersP,
+	void loadCurve(RoadSegment *pRoad, Engine::Math::Vector2 loc1, Engine::Math::Vector2 loc2, Real scale); ///< Fills the index and vertex buffers for drawing 1 fade.
+	void loadTee(RoadSegment *pRoad, Engine::Math::Vector2 loc1, Engine::Math::Vector2 loc2, Bool is4way, Real scale); ///< Fills the index and vertex buffers for drawing 1 tee intersection.
+	void loadY(RoadSegment *pRoad, Engine::Math::Vector2 loc1, Engine::Math::Vector2 loc2, Real scale); ///< Fills the index and vertex buffers for drawing 1 Y intersection.
+	void loadAlphaJoin(RoadSegment *pRoad, Engine::Math::Vector2 loc1, Engine::Math::Vector2 loc2, Real scale); ///< Fills the index and vertex buffers for drawing 1 alpha blend cap.
+	void loadH(RoadSegment *pRoad, Engine::Math::Vector2 loc1, Engine::Math::Vector2 loc2, Bool flip, Real scale); ///< Fills the index and vertex buffers for drawing 1 h tee intersection.
+	void loadFloatSection(RoadSegment *pRoad, Engine::Math::Vector2 loc,
+														Engine::Math::Vector2 roadVector, Real height, Real left, Real right, Real uOffset, Real vOffset, Real scale);
+	void loadFloat4PtSection(RoadSegment *pRoad, Engine::Math::Vector2 loc,
+														Engine::Math::Vector2 roadNormal, Engine::Math::Vector2 roadVector,
+														Engine::Math::Vector2 *cornersP,
 														Real uOffset, Real vOffset, Real uScale, Real vScale);
 	void loadLit4PtSection(RoadSegment *pRoad, UnsignedShort *ib, Graphics::SurfaceVertex *vb, Graphics::SceneObjectList<W3DRenderObject>::Cursor *pDynamicLightsIterator);
 	void loadRoadsInVertexAndIndexBuffers(); ///< Fills the index and vertex buffers for drawing.
@@ -279,5 +280,5 @@ protected:
 	void allocateRoadBuffers();							 ///< Allocates the buffers.
 	void freeRoadBuffers();									 ///< Frees the index and vertex buffers.
 	Bool visibilityChanged(const IRegion2D &bounds);								///< Returns true if some roads are now visible that weren't, or vice versa.
-	void rotateAbout(Vector2 *ptP, Vector2 center, Real angle);
+	void rotateAbout(Engine::Math::Vector2 *ptP, Engine::Math::Vector2 center, Real angle);
 };

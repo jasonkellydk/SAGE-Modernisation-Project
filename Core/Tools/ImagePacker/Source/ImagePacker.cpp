@@ -46,12 +46,13 @@
 #include <WWLib/WWCommon.h>
 
 // USER INCLUDES //////////////////////////////////////////////////////////////
-#include "Common/Debug.h"
+
 #include "WWLib/TARGA.h"
 #include "Resource.h"
 #include "ImagePacker.h"
 #include "WinMain.h"
 #include "WindowProc.h"
+import engine.debug;
 
 // DEFINES ////////////////////////////////////////////////////////////////////
 const char *gAppPrefix = "ip_";	// So IP can have a different debug log file name if we need it.
@@ -83,7 +84,7 @@ TexturePage *ImagePacker::createNewTexturePage()
 	if( page == nullptr )
 	{
 
-		DEBUG_ASSERTCRASH( page, ("Unable to allocate new texture page.") );
+		engine::debug::invariant((page), "page", __FILE__, __LINE__, "Unable to allocate new texture page.");
 		return nullptr;
 
 	}
@@ -137,7 +138,7 @@ Bool ImagePacker::validateImages()
 		if( image == nullptr )
 		{
 
-			DEBUG_ASSERTCRASH( image, ("Image in imagelist is null") );
+			engine::debug::invariant((image), "image", __FILE__, __LINE__, "Image in imagelist is null");
 			continue;  // should never happen
 
 		}
@@ -251,7 +252,7 @@ Bool ImagePacker::packImages()
 				char buffer[ _MAX_PATH ];
 
 				sprintf( buffer, "Unable to add image '%s' to a brand new page!\n", image->m_path );
-				DEBUG_CRASH( (buffer) );
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, buffer);
 				MessageBox( nullptr, buffer, "Internal Error", MB_OK | MB_ICONERROR );
 				return FALSE;
 
@@ -1151,7 +1152,7 @@ Bool ImagePacker::init()
 	if( m_targa == nullptr )
 	{
 
-		DEBUG_ASSERTCRASH( m_targa, ("Unable to allocate targa header during init") );
+		engine::debug::invariant((m_targa), "m_targa", __FILE__, __LINE__, "Unable to allocate targa header during init");
 		MessageBox( nullptr, "ImagePacker can't init, unable to create targa",
 								"Internal Error", MB_OK | MB_ICONERROR );
 		return FALSE;

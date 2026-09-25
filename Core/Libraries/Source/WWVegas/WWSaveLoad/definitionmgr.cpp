@@ -41,10 +41,11 @@
 #include "definitionclassids.h"
 #include "WWLib/chunkio.h"
 #include "persistfactory.h"
-#include "WWDebug/wwdebug.h"
-#include "WWDebug/wwmemlog.h"
+
+
 #include "twiddler.h"
-#include "WWDebug/wwprofile.h"
+
+import engine.debug;
 
 
 //////////////////////////////////////////////////////////////////////////////////
@@ -119,7 +120,7 @@ DefinitionMgrClass::Find_Definition (uint32 id, bool twiddle)
 	while (keep_going) {
 
 		DefinitionClass *curr_def = _SortedDefinitionArray[index];
-		WWASSERT (curr_def != nullptr);
+		engine::debug::assert_condition((curr_def != nullptr), "curr_def != nullptr", __FILE__, __LINE__, "assertion failed");
 
 		//
 		//	Is this the definition we are looking for?
@@ -224,7 +225,7 @@ DefinitionMgrClass::Find_Typed_Definition (const char *name, uint32 class_id, bo
 	//	Sanity check
 	//
 	if (DefinitionHash == nullptr) {
-		WWDEBUG_SAY (("DefinitionMgrClass::Find_Typed_Definition () failed due to a null DefinitionHash."));
+		engine::debug::log_info("DefinitionMgrClass::Find_Typed_Definition () failed due to a null DefinitionHash.");
 		return nullptr;
 	}
 
@@ -236,7 +237,7 @@ DefinitionMgrClass::Find_Typed_Definition (const char *name, uint32 class_id, bo
 	//
 	// TSS null deref on this sucker 08/03/01
 	//
-	WWASSERT(DefinitionHash != nullptr);
+	engine::debug::assert_condition((DefinitionHash != nullptr), "DefinitionHash != nullptr", __FILE__, __LINE__, "assertion failed");
 
 	StringClass lower_case_name(name,true);
 	_strlwr(lower_case_name.Peek_Buffer());
@@ -245,7 +246,7 @@ DefinitionMgrClass::Find_Typed_Definition (const char *name, uint32 class_id, bo
 	if (defs) {
 		for (int i=0;i<defs->Length();++i) {
 			DefinitionClass* curr_def=(*defs)[i];
-			WWASSERT(curr_def);
+			engine::debug::assert_condition((curr_def), "curr_def", __FILE__, __LINE__, "assertion failed");
 			uint32 curr_class_id = curr_def->Get_Class_ID ();
 			if (	(curr_class_id == class_id) ||
 					(::SuperClassID_From_ClassID (curr_class_id) == class_id) ||
@@ -318,11 +319,11 @@ DefinitionMgrClass::List_Available_Definitions ()
 	//
 	//	Loop through all the definitions and print the definition name
 	//
-	WWDEBUG_SAY(("Available definitions:"));
+	engine::debug::log_info("Available definitions:");
 	for (int index = 0; index < _DefinitionCount; index ++) {
 		DefinitionClass *curr_def = _SortedDefinitionArray[index];
 		if (curr_def != nullptr) {
-			WWDEBUG_SAY(("  >%s<", curr_def->Get_Name ()));
+			engine::debug::log_info("  >%s<", curr_def->Get_Name ());
 		}
 	}
 }
@@ -339,13 +340,13 @@ DefinitionMgrClass::List_Available_Definitions (int superclass_id)
 	//
 	//	Loop through all the definitions and print the definition name
 	//
-	WWDEBUG_SAY(("Available superclass definitions for 0x%8X:", superclass_id));
+	engine::debug::log_info("Available superclass definitions for 0x%8X:", superclass_id);
 	DefinitionClass *definition = nullptr;
 	for (	definition = Get_First (superclass_id, DefinitionMgrClass::ID_SUPERCLASS);
 			definition != nullptr;
 			definition = Get_Next (definition, superclass_id, DefinitionMgrClass::ID_SUPERCLASS))
 	{
-		WWDEBUG_SAY(("  >%s<", definition->Get_Name ()));
+		engine::debug::log_info("  >%s<", definition->Get_Name ());
 	}
 }
 
@@ -439,7 +440,7 @@ DefinitionMgrClass::Get_Next
 DefinitionClass *
 DefinitionMgrClass::Get_Next (DefinitionClass *curr_def)
 {
-	WWASSERT (curr_def != nullptr);
+	engine::debug::assert_condition((curr_def != nullptr), "curr_def != nullptr", __FILE__, __LINE__, "assertion failed");
 	DefinitionClass *definition = nullptr;
 
 	int index = curr_def->m_DefinitionMgrLink + 1;
@@ -530,7 +531,7 @@ DefinitionMgrClass::Prepare_Definition_Array ()
 void
 DefinitionMgrClass::Register_Definition (DefinitionClass *definition)
 {
-	WWASSERT (definition != nullptr);
+	engine::debug::assert_condition((definition != nullptr), "definition != nullptr", __FILE__, __LINE__, "assertion failed");
 	if (definition != nullptr && definition->m_DefinitionMgrLink == -1 && definition->Get_ID () != 0) {
 		//
 		//	Make sure the definition array is large enough
@@ -551,7 +552,7 @@ DefinitionMgrClass::Register_Definition (DefinitionClass *definition)
 		while (keep_going) {
 
 			DefinitionClass *curr_def = _SortedDefinitionArray[index];
-			WWASSERT (curr_def != nullptr);
+			engine::debug::assert_condition((curr_def != nullptr), "curr_def != nullptr", __FILE__, __LINE__, "assertion failed");
 
 			//
 			//	Check to make sure we aren't trying to register a definition
@@ -591,7 +592,7 @@ DefinitionMgrClass::Register_Definition (DefinitionClass *definition)
 			}
 		}
 
-		//WWASSERT (is_valid);
+		//engine::debug::assert_condition((is_valid), "is_valid", __FILE__, __LINE__, "assertion failed");
 		if (is_valid) {
 
 			//
@@ -621,8 +622,8 @@ DefinitionMgrClass::Register_Definition (DefinitionClass *definition)
 void
 DefinitionMgrClass::Unregister_Definition (DefinitionClass *definition)
 {
-	WWASSERT (definition != 0);
-	//WWASSERT (definition->m_DefinitionMgrLink >= 0 && definition->m_DefinitionMgrLink < _DefinitionCount);
+	engine::debug::assert_condition((definition != 0), "definition != 0", __FILE__, __LINE__, "assertion failed");
+	//engine::debug::assert_condition((definition->m_DefinitionMgrLink >= 0 && definition->m_DefinitionMgrLink < _DefinitionCount), "definition->m_DefinitionMgrLink >= 0 && definition->m_DefinitionMgrLink < _DefinitionCount", __FILE__, __LINE__, "assertion failed");
 
 	if (definition != nullptr && definition->m_DefinitionMgrLink != -1) {
 
@@ -652,7 +653,6 @@ DefinitionMgrClass::Save
 	ChunkSaveClass &	csave
 )
 {
-	WWMEMLOG(MEM_GAMEDATA);
 
 	bool retval = true;
 
@@ -682,7 +682,7 @@ DefinitionMgrClass::Save
 bool
 DefinitionMgrClass::Load (ChunkLoadClass &cload)
 {
-	WWMEMLOG(MEM_GAMEDATA);
+
 	bool retval = true;
 
 	while (cload.Open_Chunk ()) {
@@ -911,8 +911,8 @@ DefinitionMgrClass::fnCompareDefinitionsCallback
 	const void *elem2
 )
 {
-   WWASSERT (elem1 != nullptr);
-   WWASSERT (elem2 != nullptr);
+   engine::debug::assert_condition((elem1 != nullptr), "elem1 != nullptr", __FILE__, __LINE__, "assertion failed");
+   engine::debug::assert_condition((elem2 != nullptr), "elem2 != nullptr", __FILE__, __LINE__, "assertion failed");
    DefinitionClass *definition1 = *((DefinitionClass **)elem1);
    DefinitionClass *definition2 = *((DefinitionClass **)elem2);
 

@@ -29,6 +29,8 @@
 
 #pragma once
 
+
+#include <cassert>
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 #include "Lib/BaseType.h"
 
@@ -345,7 +347,7 @@ private:
 #if defined(_MSC_VER) && _MSC_VER < 1300
 	ThingTemplate(const ThingTemplate& that) : m_geometryInfo(that.m_geometryInfo)
 	{
-		DEBUG_CRASH(("This should never be called"));
+		assert(false);
 	}
 #else
 	ThingTemplate(const ThingTemplate& that) = delete;
@@ -595,7 +597,7 @@ public:
 
 	void setCopiedFromDefault();
 
-	void setReskinnedFrom(const ThingTemplate* tt) { DEBUG_ASSERTCRASH(m_reskinnedFrom == nullptr, ("should be null")); m_reskinnedFrom = tt; }
+	void setReskinnedFrom(const ThingTemplate* tt) { assert((m_reskinnedFrom == nullptr)); m_reskinnedFrom = tt; }
 
 	Bool isPrerequisite() const { return m_isPrerequisite; }
 

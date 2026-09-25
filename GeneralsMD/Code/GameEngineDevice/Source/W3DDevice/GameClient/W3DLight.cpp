@@ -16,6 +16,8 @@
 **	along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+#include <cmath>
+#include <array>
 #include "W3DDevice/GameClient/W3DLight.h"
 
 #include <cstddef>
@@ -26,14 +28,14 @@
 
 #include "W3DDevice/GameClient/W3DSceneClass.h"
 #include "WWLib/chunkio.h"
-#include "WWMath/matrix3d.h"
-#include "WWMath/wwmath.h"
 #include "WWSaveLoad/persistfactory.h"
 #include "WWSaveLoad/saveloadids.h"
+import engine.debug;
 
 import Assets.Adapters.W3D.Light;
 import Assets.Adapters.W3D.Chunks;
 import Graphics.Scene.AffineTransform;
+import Engine.Core.Math.AffineTransform3;
 
 namespace
 {
@@ -42,6 +44,17 @@ constexpr std::uint32_t Light_Chunk_W3D_File = 0x02157100;
 constexpr std::uint32_t Light_Chunk_Variables = Light_Chunk_W3D_File + 1;
 constexpr std::uint32_t Light_Variable_Transform = 0x00;
 constexpr std::uint32_t Light_Persist_Chunk_Id = CHUNKID_WW3D_BEGIN + 1;
+
+static_assert(sizeof(std::array<float, 12>) == 48);
+
+Graphics::RenderTransform To_Graphics_Transform(const Engine::Math::AffineTransform3 &transform)
+{
+	auto result = Graphics::Affine_Identity();
+	for (std::size_t row = 0; row < 3; ++row)
+		for (std::size_t column = 0; column < 4; ++column)
+			result.matrix[row * 4 + column] = transform.elements[row * 4 + column];
+	return result;
+}
 
 SimplePersistFactoryClass<W3DLight, Light_Persist_Chunk_Id> Light_Factory;
 
@@ -143,53 +156,45 @@ void W3DLight::Notify_Removed(W3DScene *scene)
 	W3DRenderObject::Notify_Removed(scene);
 }
 
-void W3DLight::Get_Obj_Space_Bounding_Sphere(SphereClass &sphere) const
+void W3DLight::Get_Local_Bounding_Sphere(Engine::Math::Sphere3 &sphere) const
 {
-	sphere.Center.Set(0, 0, 0);
-	sphere.Radius = Get_Attenuation_Range();
+	sphere = {{0, 0, 0}, Get_Attenuation_Range()};
 }
 
-void W3DLight::Get_Obj_Space_Bounding_Box(AABoxClass &box) const
+void W3DLight::Get_Local_Bounds(Engine::Math::AxisAlignedBox3 &box) const
 {
 	const float range = Get_Attenuation_Range();
-	box.Center.Set(0, 0, 0);
-	box.Extent.Set(range, range, range);
+	box = {{-range, -range, -range}, {range, range, range}};
 }
 
-void W3DLight::Set_Ambient(const Vector3 &color) noexcept
+void W3DLight::Set_Ambient(Engine::Math::Vector3 color) noexcept
 {
-	m_state.authored.ambient = {color.X, color.Y, color.Z};
+	m_state.authored.ambient = {color.x, color.y, color.z};
 }
 
-void W3DLight::Get_Ambient(Vector3 *color) const noexcept
+Engine::Math::Vector3 W3DLight::Get_Ambient() const noexcept
 {
-	if (color != nullptr)
-		color->Set(m_state.authored.ambient.x, m_state.authored.ambient.y,
-			m_state.authored.ambient.z);
+	return {m_state.authored.ambient.x, m_state.authored.ambient.y, m_state.authored.ambient.z};
 }
 
-void W3DLight::Set_Diffuse(const Vector3 &color) noexcept
+void W3DLight::Set_Diffuse(Engine::Math::Vector3 color) noexcept
 {
-	m_state.authored.diffuse = {color.X, color.Y, color.Z};
+	m_state.authored.diffuse = {color.x, color.y, color.z};
 }
 
-void W3DLight::Get_Diffuse(Vector3 *color) const noexcept
+Engine::Math::Vector3 W3DLight::Get_Diffuse() const noexcept
 {
-	if (color != nullptr)
-		color->Set(m_state.authored.diffuse.x, m_state.authored.diffuse.y,
-			m_state.authored.diffuse.z);
+	return {m_state.authored.diffuse.x, m_state.authored.diffuse.y, m_state.authored.diffuse.z};
 }
 
-void W3DLight::Set_Specular(const Vector3 &color) noexcept
+void W3DLight::Set_Specular(Engine::Math::Vector3 color) noexcept
 {
-	m_state.authored.specular = {color.X, color.Y, color.Z};
+	m_state.authored.specular = {color.x, color.y, color.z};
 }
 
-void W3DLight::Get_Specular(Vector3 *color) const noexcept
+Engine::Math::Vector3 W3DLight::Get_Specular() const noexcept
 {
-	if (color != nullptr)
-		color->Set(m_state.authored.specular.x, m_state.authored.specular.y,
-			m_state.authored.specular.z);
+	return {m_state.authored.specular.x, m_state.authored.specular.y, m_state.authored.specular.z};
 }
 
 void W3DLight::Set_Far_Attenuation_Range(double start, double end) noexcept
@@ -247,24 +252,24 @@ int W3DLight::Get_Flag(FlagsType flag) const noexcept
 void W3DLight::Set_Spot_Angle(float angle) noexcept
 {
 	m_state.authored.spot_angle = angle;
-	m_state.spot_angle_cosine = WWMath::Fast_Cos(angle);
+	m_state.spot_angle_cosine = std::cos(angle);
 }
 
-void W3DLight::Set_Spot_Direction(const Vector3 &direction) noexcept
+void W3DLight::Set_Spot_Direction(Engine::Math::Vector3 direction) noexcept
 {
-	m_state.authored.spot_direction = {direction.X, direction.Y, direction.Z};
+	m_state.authored.spot_direction = {direction.x, direction.y, direction.z};
 }
 
-void W3DLight::Get_Spot_Direction(Vector3 &direction) const noexcept
+Engine::Math::Vector3 W3DLight::Get_Spot_Direction() const noexcept
 {
-	direction.Set(m_state.authored.spot_direction.x, m_state.authored.spot_direction.y,
-		m_state.authored.spot_direction.z);
+	return {m_state.authored.spot_direction.x, m_state.authored.spot_direction.y,
+		m_state.authored.spot_direction.z};
 }
 
 bool W3DLight::Get_Light_Description(Graphics::MaterialLightSource &result) const
 {
 	const Graphics::RenderTransform transform =
-		Graphics::Import_Affine_Transform(Get_Transform());
+		To_Graphics_Transform(Get_Transform());
 	result = Graphics::Make_Material_Light(m_state, transform);
 	return true;
 }
@@ -287,7 +292,7 @@ bool W3DLight::Load_W3D(ChunkLoadClass &load)
 	decoded.near_attenuation_enabled = false;
 	m_state.authored = decoded;
 	if (metadata.spot_info_present)
-		m_state.spot_angle_cosine = WWMath::Fast_Cos(m_state.authored.spot_angle);
+		m_state.spot_angle_cosine = std::cos(m_state.authored.spot_angle);
 	return true;
 }
 
@@ -325,7 +330,7 @@ bool W3DLight::Save(ChunkSaveClass &save)
 	if (!success)
 		return false;
 
-	const Matrix3D transform = Get_Transform();
+	const std::array<float, 12> transform = Get_Transform().elements;
 	const int variables_depth = save.Cur_Chunk_Depth();
 	if (!save.Begin_Chunk(Light_Chunk_Variables)) {
 		while (save.Cur_Chunk_Depth() > variables_depth)
@@ -341,7 +346,10 @@ bool W3DLight::Save(ChunkSaveClass &save)
 
 bool W3DLight::Load(ChunkLoadClass &load)
 {
-	Matrix3D transform(1);
+	std::array<float, 12> transform{
+		1, 0, 0, 0,
+		0, 1, 0, 0,
+		0, 0, 1, 0};
 	while (load.Open_Chunk()) {
 		switch (load.Cur_Chunk_ID()) {
 		case Light_Chunk_W3D_File:
@@ -359,11 +367,11 @@ bool W3DLight::Load(ChunkLoadClass &load)
 			}
 			break;
 		default:
-			WWDEBUG_SAY(("Unhandled Chunk: 0x%X File: %s Line: %d", __FILE__, __LINE__));
+			engine::debug::log_info("Unhandled Chunk: 0x%X File: %s Line: %d", __FILE__, __LINE__);
 			break;
 		}
 		load.Close_Chunk();
 	}
-	Set_Transform(transform);
+	Set_Transform(Engine::Math::AffineTransform3{transform});
 	return true;
 }

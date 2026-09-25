@@ -26,7 +26,7 @@
 #include <windows.h>
 #include <process.h>
 
-#include "Common/Debug.h"
+
 #include "Common/DataChunk.h"
 #include "Common/PlayerTemplate.h"
 #include "Common/MapReaderWriterInfo.h"
@@ -58,6 +58,7 @@
 #include "WorldBuilderDoc.h"
 #include "WorldBuilderView.h"
 #include "MapPreview.h"
+import engine.debug;
 
 
 // Can't currently have multiple open... jba.
@@ -191,7 +192,7 @@ public:
 		c.pData = tmp;
 		c.size = numBytes;
 		m_cachedChunks.push_back(c);
-		DEBUG_LOG(("Caching %d bytes in chunk %d", numBytes, m_cachedChunks.size()));
+		engine::debug::log_info("Caching %d bytes in chunk %d", numBytes, m_cachedChunks.size());
 		m_totalBytes += numBytes;
 		return(numBytes);
 	};
@@ -201,7 +202,7 @@ public:
 			CachedChunk c = m_cachedChunks.front();
 			m_cachedChunks.pop_front();
 			try {
-				DEBUG_LOG(("Flushing %d bytes", c.size));
+				engine::debug::log_info("Flushing %d bytes", c.size);
 				m_file->Write(c.pData, c.size);
 			} catch(...) {}
 			delete[] c.pData;
@@ -225,7 +226,7 @@ public:
 		c.pData = tmp;
 		c.size = numBytes;
 		m_cachedChunks.push_back(c);
-		//DEBUG_LOG(("Caching %d bytes in chunk %d", numBytes, m_cachedChunks.size()));
+		//engine::debug::log_info("Caching %d bytes in chunk %d", numBytes, m_cachedChunks.size());
 		m_totalBytes += numBytes;
 		return(numBytes);
 	};
@@ -239,7 +240,7 @@ public:
 			CachedChunk c = m_cachedChunks.front();
 			m_cachedChunks.pop_front();
 			try {
-				//DEBUG_LOG(("Flushing %d bytes", c.size));
+				//engine::debug::log_info("Flushing %d bytes", c.size);
 				memcpy(insertPos, c.pData, c.size);
 				insertPos += c.size;
 			} catch(...) {}
@@ -258,9 +259,9 @@ public:
 		Int compressedLen = CompressionManager::getMaxCompressedSize( m_totalBytes, compressionToUse );
 		UnsignedByte *destBuffer = NEW UnsignedByte[compressedLen];
 		compressedLen = CompressionManager::compressData( compressionToUse, srcBuffer, m_totalBytes, destBuffer, compressedLen );
-		DEBUG_LOG(("Compressed %d bytes to %d bytes - compression of %g%%", m_totalBytes, compressedLen,
-			compressedLen/(Real)m_totalBytes*100.0f));
-		DEBUG_ASSERTCRASH(compressedLen, ("Failed to compress!"));
+		engine::debug::log_info("Compressed %d bytes to %d bytes - compression of %g%%", m_totalBytes, compressedLen,
+			compressedLen/(Real)m_totalBytes*100.0f);
+		engine::debug::invariant((compressedLen), "compressedLen", __FILE__, __LINE__, "Failed to compress!");
 		if (compressedLen)
 		{
 			m_file->Write(destBuffer, compressedLen);
@@ -485,7 +486,7 @@ AsciiString ConvertFaction(AsciiString name)
 
 void CWorldBuilderDoc::validate()
 {
-	DEBUG_LOG(("Validating"));
+	engine::debug::log_info("Validating");
 
 	Dict swapDict;
 	Bool changed = false;
@@ -504,11 +505,11 @@ void CWorldBuilderDoc::validate()
 		}
 		const PlayerTemplate* pt = ThePlayerTemplateStore->findPlayerTemplate(NAMEKEY(tmplname));
 		if (!pt) {
-			DEBUG_LOG(("Player '%s' Faction '%s' could not be found in sides list!", playername.str(), tmplname.str()));
+			engine::debug::log_info("Player '%s' Faction '%s' could not be found in sides list!", playername.str(), tmplname.str());
 			if (tmplname.startsWith("FactionFundamentalist")) {
 				swapName = ConvertFaction(tmplname);
 				if (swapName != AsciiString::TheEmptyString) {
-					DEBUG_LOG(("Changing Faction from %s to %s", tmplname.str(), swapName.str()));
+					engine::debug::log_info("Changing Faction from %s to %s", tmplname.str(), swapName.str());
 					pSide->getDict()->setAsciiString(TheKey_playerFaction, swapName);
 				}
 			}
@@ -520,7 +521,7 @@ void CWorldBuilderDoc::validate()
 			if (name.startsWith("Fundamentalist")) {
 				swapName = ConvertName(name);
 				if (swapName != AsciiString::TheEmptyString) {
-					DEBUG_LOG(("Changing BuildList from %s to %s", name.str(), swapName.str()));
+					engine::debug::log_info("Changing BuildList from %s to %s", name.str(), swapName.str());
 					pBuild->setTemplateName(swapName);
 				}
 			}
@@ -535,7 +536,7 @@ void CWorldBuilderDoc::validate()
 		if (type.startsWith("Fundamentalist")) {					\
 			swapName = ConvertName(type);										\
 			if (swapName != AsciiString::TheEmptyString) {	\
-				DEBUG_LOG(("Changing Team Ref from %s to %s", type.str(), swapName.str())); \
+				engine::debug::log_info("Changing Team Ref from %s to %s", type.str(), swapName.str()); \
 				teamDict->setAsciiString(key, swapName);			\
 			}																								\
 		}																									\
@@ -619,7 +620,7 @@ void CWorldBuilderDoc::validate()
 					changed = true;
 					pMapObj->setName(swapName);
 					pMapObj->setThingTemplate(tt);
-					DEBUG_LOG(("Changing Map Object from %s to %s", name.str(), swapName.str()));
+					engine::debug::log_info("Changing Map Object from %s to %s", name.str(), swapName.str());
 				}
 			}
 		}
@@ -642,26 +643,26 @@ void CWorldBuilderDoc::validate()
 					}
 					const PlayerTemplate* pt = ThePlayerTemplateStore->findPlayerTemplate(NAMEKEY(tmplname));
 					if (!pt) {
-						DEBUG_LOG(("Player '%s' Faction '%s' could not be found in sides list!", playername.str(), tmplname.str()));
+						engine::debug::log_info("Player '%s' Faction '%s' could not be found in sides list!", playername.str(), tmplname.str());
 						if (tmplname.startsWith("FactionFundamentalist")) {
 							swapName = ConvertFaction(tmplname);
 							if (swapName != AsciiString::TheEmptyString) {
-								DEBUG_LOG(("Changing Faction from %s to %s", tmplname.str(), swapName.str()));
+								engine::debug::log_info("Changing Faction from %s to %s", tmplname.str(), swapName.str());
 								pSide->getDict()->setAsciiString(TheKey_playerFaction, swapName);
 							}
 						}
 					}
 				} else {
 					needToFixTeams = true;
-					DEBUG_LOG(("Side '%s' could not be found in sides list!", teamOwner.str()));
+					engine::debug::log_info("Side '%s' could not be found in sides list!", teamOwner.str());
 				}
 			} else {
 				needToFixTeams = true;
-				DEBUG_LOG(("Team '%s' could not be found in sides list!", teamName.str()));
+				engine::debug::log_info("Team '%s' could not be found in sides list!", teamName.str());
 			}
 		} else {
 			needToFixTeams = true;
-			DEBUG_LOG(("Object '%s' does not have a team at all!", name.str()));
+			engine::debug::log_info("Object '%s' does not have a team at all!", name.str());
 		}
 	}
 	if (needToFixTeams) {
@@ -674,7 +675,7 @@ void CWorldBuilderDoc::OnJumpToGame()
 	try {
 		DoFileSave();
 		CString filename;
-		DEBUG_LOG(("strTitle=%s strPathName=%s", m_strTitle, m_strPathName));
+		engine::debug::log_info("strTitle=%s strPathName=%s", m_strTitle, m_strPathName);
 		if (strstr(m_strPathName, TheGlobalData->getPath_UserData().str()) != nullptr)
 			filename.Format("%sMaps\\%s", TheGlobalData->getPath_UserData().str(), static_cast<const char*>(m_strTitle));
 		else
@@ -843,9 +844,9 @@ Bool CWorldBuilderDoc::ParseWaypointData(DataChunkInput &file, DataChunkInfo *in
 	for (i=0; i<m_numWaypointLinks; i++) {
 		this->m_waypointLinks[i].waypoint1 = file.readInt();
 		this->m_waypointLinks[i].waypoint2 = file.readInt();
-		//DEBUG_LOG(("Waypoint link from %d to %d", m_waypointLinks[i].waypoint1, m_waypointLinks[i].waypoint2));
+		//engine::debug::log_info("Waypoint link from %d to %d", m_waypointLinks[i].waypoint1, m_waypointLinks[i].waypoint2);
 	}
-	DEBUG_ASSERTCRASH(file.atEndOfChunk(), ("Unexpected data left over."));
+	engine::debug::invariant((file.atEndOfChunk()), "file.atEndOfChunk()", __FILE__, __LINE__, "Unexpected data left over.");
 	return true;
 }
 
@@ -975,7 +976,7 @@ void CWorldBuilderDoc::OnEditRedo()
 			count--;
 			pUndo = pUndo->GetNext();
 		}
-		DEBUG_ASSERTCRASH((pUndo != nullptr),("oops"));
+		engine::debug::invariant(((pUndo != nullptr)), "(pUndo != nullptr)", __FILE__, __LINE__, "oops");
 		if (pUndo) {
 			pUndo->Redo();
 			SetModifiedFlag();
@@ -1133,7 +1134,7 @@ void CWorldBuilderDoc::OnTsRemap()
 #ifdef MDI
 	CMDIFrameWnd *pFrame = (CMDIFrameWnd*)AfxGetApp()->m_pMainWnd;
 	if (pFrame) {
-		DEBUG_ASSERTCRASH((pFrame == CMainFrame::GetMainFrame()),("oops"));
+		engine::debug::invariant(((pFrame == CMainFrame::GetMainFrame())), "(pFrame == CMainFrame::GetMainFrame())", __FILE__, __LINE__, "oops");
 		// Get the active MDI child window.
 		CMDIChildWnd *pChild = (CMDIChildWnd *) pFrame->GetActiveFrame();
 		if (pChild) {
@@ -1411,7 +1412,7 @@ BOOL CWorldBuilderDoc::OnOpenDocument(LPCTSTR lpszPathName)
 		s.truncateTo(lastSep - s.str() + 1);
 	}
 	s.concat("map.str");
-	DEBUG_LOG(("Looking for map-specific text in [%s]", s.str()));
+	engine::debug::log_info("Looking for map-specific text in [%s]", s.str());
 	TheGameText->initMapStringFile(s);
 
 	WbApp()->setCurrentDirectory(AsciiString(buf));
@@ -1674,14 +1675,14 @@ void CWorldBuilderDoc::compressWaypointIds()
 	for (i=0; i<m_numWaypointLinks; i++) {
 		MapObject *pWay1 = getWaypointByID(m_waypointLinks[i].waypoint1);
 		MapObject *pWay2 = getWaypointByID(m_waypointLinks[i].waypoint2);
-		DEBUG_ASSERTCRASH(pWay1 && pWay1->getWaypointID() == m_waypointLinks[i].waypoint1, ("Bad waypoint."));
-		DEBUG_ASSERTCRASH(pWay2 && pWay2->getWaypointID() == m_waypointLinks[i].waypoint2, ("Bad waypoint."));
+		engine::debug::invariant((pWay1 && pWay1->getWaypointID() == m_waypointLinks[i].waypoint1), "pWay1 && pWay1->getWaypointID() == m_waypointLinks[i].waypoint1", __FILE__, __LINE__, "Bad waypoint.");
+		engine::debug::invariant((pWay2 && pWay2->getWaypointID() == m_waypointLinks[i].waypoint2), "pWay2 && pWay2->getWaypointID() == m_waypointLinks[i].waypoint2", __FILE__, __LINE__, "Bad waypoint.");
 	}
 	int count = 1;
 	for (pMapObj = MapObject::getFirstMapObject(); pMapObj; pMapObj = pMapObj->getNext()) {
 		if (pMapObj->isWaypoint()) {
-			DEBUG_ASSERTCRASH(pMapObj->getWaypointID()==count, ("Bad waypoint"));
-			DEBUG_ASSERTCRASH(pMapObj==getWaypointByID(count), ("Bad waypoint"));
+			engine::debug::invariant((pMapObj->getWaypointID()==count), "pMapObj->getWaypointID()==count", __FILE__, __LINE__, "Bad waypoint");
+			engine::debug::invariant((pMapObj==getWaypointByID(count)), "pMapObj==getWaypointByID(count)", __FILE__, __LINE__, "Bad waypoint");
 			count++;
 		}
 	}
@@ -1708,9 +1709,9 @@ void CWorldBuilderDoc::updateWaypointTable()
 		for (pMapObj = MapObject::getFirstMapObject(); pMapObj; pMapObj = pMapObj->getNext()) {
 			if (pMapObj->isWaypoint()) {
 				Int id = pMapObj->getWaypointID();
-				DEBUG_ASSERTCRASH(id>0 && id<MAX_WAYPOINTS, ("Bad waypoint id."));
+				engine::debug::invariant((id>0 && id<MAX_WAYPOINTS), "id>0 && id<MAX_WAYPOINTS", __FILE__, __LINE__, "Bad waypoint id.");
 				if (id>0 && id<MAX_WAYPOINTS) {
-					if (m_waypointTable[id] != nullptr) DEBUG_LOG(("Duplicate waypoint id."));
+					if (m_waypointTable[id] != nullptr) engine::debug::log_info("Duplicate waypoint id.");
 					if (m_waypointTable[id] != nullptr) {
 						pMapObj->setWaypointID(getNextWaypointID());
 						m_waypointTableNeedsUpdate=true;
@@ -1737,7 +1738,7 @@ void CWorldBuilderDoc::addWaypointLink(Int waypointID1, Int waypointID2)
 			return; // already linked.
 		}
 	}
-	DEBUG_ASSERTCRASH(m_numWaypointLinks<MAX_WAYPOINTS-1, ("Too many links."));
+	engine::debug::invariant((m_numWaypointLinks<MAX_WAYPOINTS-1), "m_numWaypointLinks<MAX_WAYPOINTS-1", __FILE__, __LINE__, "Too many links.");
 	if (m_numWaypointLinks<MAX_WAYPOINTS) {
 		m_waypointLinks[m_numWaypointLinks].waypoint1 = waypointID1;
 		m_waypointLinks[m_numWaypointLinks].waypoint2 = waypointID2;
@@ -1773,13 +1774,13 @@ void CWorldBuilderDoc::removeWaypointLink(Int waypointID1, Int waypointID2)
 MapObject *CWorldBuilderDoc::getWaypointByID(Int waypointID)
 {
 	updateWaypointTable();
-	DEBUG_ASSERTCRASH(waypointID>=0 && waypointID<MAX_WAYPOINTS, ("Invalid id."));
+	engine::debug::invariant((waypointID>=0 && waypointID<MAX_WAYPOINTS), "waypointID>=0 && waypointID<MAX_WAYPOINTS", __FILE__, __LINE__, "Invalid id.");
 	if (waypointID>0 && waypointID<MAX_WAYPOINTS) {
 		MapObject *pObj = m_waypointTable[waypointID];
 		if (pObj && pObj->isWaypoint()) {
 			return pObj;
 		}
-		DEBUG_ASSERTCRASH(pObj==nullptr, ("Waypoint links to an obj that isn't a waypoint."));
+		engine::debug::invariant((pObj==nullptr), "pObj==nullptr", __FILE__, __LINE__, "Waypoint links to an obj that isn't a waypoint.");
 	}
 	return nullptr;
 }
@@ -1795,13 +1796,13 @@ Bool CWorldBuilderDoc::isWaypointLinked(MapObject *pWay)
 	Int i;
 	for (i=0; i<m_numWaypointLinks; i++) {
 		Int waypointID = m_waypointLinks[i].waypoint1;
-		DEBUG_ASSERTCRASH(waypointID>=0 && waypointID<MAX_WAYPOINTS, ("Invalid id."));
+		engine::debug::invariant((waypointID>=0 && waypointID<MAX_WAYPOINTS), "waypointID>=0 && waypointID<MAX_WAYPOINTS", __FILE__, __LINE__, "Invalid id.");
 		if (waypointID>0 && waypointID<MAX_WAYPOINTS) {
 			MapObject *pObj = m_waypointTable[waypointID];
 			if (pObj == pWay) return true;
 		}
 		waypointID = m_waypointLinks[i].waypoint2;
-		DEBUG_ASSERTCRASH(waypointID>=0 && waypointID<MAX_WAYPOINTS, ("Invalid id."));
+		engine::debug::invariant((waypointID>=0 && waypointID<MAX_WAYPOINTS), "waypointID>=0 && waypointID<MAX_WAYPOINTS", __FILE__, __LINE__, "Invalid id.");
 		if (waypointID>0 && waypointID<MAX_WAYPOINTS) {
 			MapObject *pObj = m_waypointTable[waypointID];
 			if (pObj == pWay) return true;
@@ -1871,8 +1872,8 @@ void CWorldBuilderDoc::updateLWL(MapObject *pWay, MapObject *pSrcWay)
 			MapObject *pNewWay = nullptr;
 			Int waypointID1 = m_waypointLinks[i].waypoint1;
 			Int waypointID2 = m_waypointLinks[i].waypoint2;
-			DEBUG_ASSERTCRASH(waypointID1>=0 && waypointID1<MAX_WAYPOINTS, ("Invalid id."));
-			DEBUG_ASSERTCRASH(waypointID2>=0 && waypointID2<MAX_WAYPOINTS, ("Invalid id."));
+			engine::debug::invariant((waypointID1>=0 && waypointID1<MAX_WAYPOINTS), "waypointID1>=0 && waypointID1<MAX_WAYPOINTS", __FILE__, __LINE__, "Invalid id.");
+			engine::debug::invariant((waypointID2>=0 && waypointID2<MAX_WAYPOINTS), "waypointID2>=0 && waypointID2<MAX_WAYPOINTS", __FILE__, __LINE__, "Invalid id.");
 			if (waypointID1>0 && waypointID1<MAX_WAYPOINTS && waypointID2>0 && waypointID2<MAX_WAYPOINTS ) {
 				MapObject *pObj = m_waypointTable[waypointID1];
 				if (pObj == pCurWay) {
@@ -2125,7 +2126,7 @@ static void writeRawDict( FILE *theLogFile, const char* nm, const Dict* d )
 				fprintf(theLogFile,"%ls\n",d->getNthUnicodeString(i).str());
 				break;
 			default:
-				DEBUG_CRASH(("impossible"));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "impossible");
 				break;
 		}
 	}

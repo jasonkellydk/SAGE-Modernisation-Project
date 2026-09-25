@@ -120,8 +120,8 @@ public:
 	/////////////////////////////////////////////////////////////////////////////
 	// Render Object Interface - "Scene Graph"
 	/////////////////////////////////////////////////////////////////////////////
-	virtual void 					Set_Transform(const Matrix3D &m) override;
-	virtual void 					Set_Position(const Vector3 &v) override;
+	virtual void 					Set_Transform(const Engine::Math::AffineTransform3 &m) override;
+	virtual void 					Set_Position(Engine::Math::Vector3 v) override;
 
 	virtual void					Notify_Added(W3DScene * scene) override;
 	virtual void					Notify_Removed(W3DScene * scene) override;
@@ -178,10 +178,10 @@ public:
 	///////////////////////////////////////////////////////////////////////////////////////////////////////////////
 	// Render Object Interface - Bounding Volumes
 	///////////////////////////////////////////////////////////////////////////////////////////////////////////////
-	virtual const SphereClass &	Get_Bounding_Sphere() const override;
-	virtual const AABoxClass &		Get_Bounding_Box() const override;
-	virtual void						Get_Obj_Space_Bounding_Sphere(SphereClass & sphere) const override;
-	virtual void						Get_Obj_Space_Bounding_Box(AABoxClass & box) const override;
+	Engine::Math::Sphere3 Get_Bounding_Sphere() const override;
+	Engine::Math::AxisAlignedBox3 Get_Bounding_Box() const override;
+	virtual void						Get_Local_Bounding_Sphere(Engine::Math::Sphere3 & sphere) const override;
+	virtual void						Get_Local_Bounds(Engine::Math::AxisAlignedBox3 & box) const override;
 
 	/////////////////////////////////////////////////////////////////////////////
 	// Render Object Interface - Attributes, Options, Properties, etc
@@ -190,7 +190,7 @@ public:
 	virtual void					Scale(float scale) override;
 	virtual void					Scale(float scalex, float scaley, float scalez) override { }
 	virtual int						Get_Num_Snap_Points() override;
-	virtual void					Get_Snap_Point(int index,Vector3 * set) override;
+	virtual void					Get_Snap_Point(int index,Engine::Math::Vector3 * set) override;
 	virtual void					Set_Hidden(int onoff) override;
 
 	// (gth) TESTING DYNAMICALLY SWAPPING SKELETONS!

@@ -40,6 +40,8 @@
 #include "WWSaveLoad/persist.h"
 #include "WWLib/multilist.h"
 #include "WWLib/mutex.h"
+import Engine.Core.Math.AffineTransform3;
+import Engine.Core.Math.Vector3;
 
 /////////////////////////////////////////////////////////////////////////////////
 // Forward declarations
@@ -47,8 +49,6 @@
 class SoundCullObjClass;
 class SoundSceneClass;
 class RenderObjClass;
-class Vector3;
-class Matrix3D;
 class LogicalListenerClass;
 class LogicalSoundClass;
 class Sound3DClass;
@@ -129,12 +129,12 @@ class SoundSceneObjClass : public MultiListObjectClass, public PersistClass, pub
 		//////////////////////////////////////////////////////////////////////
 		//	Position/direction methods
 		//////////////////////////////////////////////////////////////////////
-		virtual void			Set_Position (const Vector3 &position)	= 0;
-		virtual Vector3		Get_Position () const = 0;
+		virtual void Set_Position (Engine::Math::Vector3 position) = 0;
+		virtual Engine::Math::Vector3 Get_Position () const = 0;
 
-		virtual void			Set_Listener_Transform (const Matrix3D &tm) {};
-		virtual void			Set_Transform (const Matrix3D &transform) = 0;
-		virtual Matrix3D		Get_Transform () const = 0;
+		virtual void Set_Listener_Transform (const Engine::Math::AffineTransform3 &transform) {}
+		virtual void Set_Transform (const Engine::Math::AffineTransform3 &transform) = 0;
+		virtual Engine::Math::AffineTransform3 Get_Transform () const = 0;
 
 		//////////////////////////////////////////////////////////////////////
 		//	Culling methods

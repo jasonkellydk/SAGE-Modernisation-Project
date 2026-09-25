@@ -12,7 +12,7 @@
 
 #include <vector>
 
-#include "WWMath/matrix3d.h"
+import Engine.Core.Math.AffineTransform3;
 
 // Neutral water geometry supplied by the game-world layer to the renderer.
 // This deliberately contains no scene, resource, or PolygonTrigger types.
@@ -44,6 +44,6 @@ struct WaterGridRenderData
 	int cells_x = 0;
 	int cells_y = 0;
 	float cell_size = 0.0f;
-	Matrix3D transform;
+	Engine::Math::AffineTransform3 transform;
 	std::vector<float> heights;
 };

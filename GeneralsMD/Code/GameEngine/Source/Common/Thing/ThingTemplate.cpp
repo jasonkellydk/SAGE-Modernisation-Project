@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #define DEFINE_POWER_NAMES								// for PowerNames[]
 #define DEFINE_SHADOW_NAMES								// for TheShadowNames[]
@@ -334,14 +335,13 @@ void ModuleInfo::addModuleInfo(ThingTemplate *thingTemplate,
 	{
 
 		// compare this nugget tag against the tag for the new data we're going to submit
-		DEBUG_ASSERTCRASH( nugget->m_moduleTag != moduleTag,
-											 ("addModuleInfo - ERROR defining module '%s' on thing template '%s'.  The module '%s' has the tag '%s' which must be unique among all modules for this object, but the tag '%s' is also already on module '%s' within this object.\n\nPlease make unique tag names within an object definition",
+		engine::debug::invariant((nugget->m_moduleTag != moduleTag), "nugget->m_moduleTag != moduleTag", __FILE__, __LINE__, "addModuleInfo - ERROR defining module '%s' on thing template '%s'.  The module '%s' has the tag '%s' which must be unique among all modules for this object, but the tag '%s' is also already on module '%s' within this object.\n\nPlease make unique tag names within an object definition",
 												name.str(),
 												thingTemplate->getName().str(),
 												name.str(),
 												moduleTag.str(),
 												moduleTag.str(),
-												nugget->first.str()) );
+												nugget->first.str());
 
 		// srj sez: prevent people from ignoring this.
 		throw INI_INVALID_DATA;
@@ -352,14 +352,13 @@ void ModuleInfo::addModuleInfo(ThingTemplate *thingTemplate,
 	{
 
 		// compare this nugget tag against the tag for the new data we're going to submit
-		DEBUG_ASSERTCRASH( nugget->m_moduleTag != moduleTag,
-											 ("addModuleInfo - ERROR defining module '%s' on thing template '%s'.  The module '%s' has the tag '%s' which must be unique among all modules for this object, but the tag '%s' is also already on module '%s' within this object.\n\nPlease make unique tag names within an object definition",
+		engine::debug::invariant((nugget->m_moduleTag != moduleTag), "nugget->m_moduleTag != moduleTag", __FILE__, __LINE__, "addModuleInfo - ERROR defining module '%s' on thing template '%s'.  The module '%s' has the tag '%s' which must be unique among all modules for this object, but the tag '%s' is also already on module '%s' within this object.\n\nPlease make unique tag names within an object definition",
 												name.str(),
 												thingTemplate->getName().str(),
 												name.str(),
 												moduleTag.str(),
 												moduleTag.str(),
-												nugget->first.str()) );
+												nugget->first.str());
 
 		// srj sez: prevent people from ignoring this.
 		throw INI_INVALID_DATA;
@@ -370,14 +369,13 @@ void ModuleInfo::addModuleInfo(ThingTemplate *thingTemplate,
 	{
 
 		// compare this nugget tag against the tag for the new data we're going to submit
-		DEBUG_ASSERTCRASH( nugget->m_moduleTag != moduleTag,
-											 ("addModuleInfo - ERROR defining module '%s' on thing template '%s'.  The module '%s' has the tag '%s' which must be unique among all modules for this object, but the tag '%s' is also already on module '%s' within this object.\n\nPlease make unique tag names within an object definition",
+		engine::debug::invariant((nugget->m_moduleTag != moduleTag), "nugget->m_moduleTag != moduleTag", __FILE__, __LINE__, "addModuleInfo - ERROR defining module '%s' on thing template '%s'.  The module '%s' has the tag '%s' which must be unique among all modules for this object, but the tag '%s' is also already on module '%s' within this object.\n\nPlease make unique tag names within an object definition",
 												name.str(),
 												thingTemplate->getName().str(),
 												name.str(),
 												moduleTag.str(),
 												moduleTag.str(),
-												nugget->first.str()) );
+												nugget->first.str());
 		// srj sez: prevent people from ignoring this.
 		throw INI_INVALID_DATA;
 	}
@@ -401,7 +399,7 @@ Bool ModuleInfo::clearModuleDataWithTag(const AsciiString& tagToClear, AsciiStri
 	{
 		if (it->m_moduleTag == tagToClear)
 		{
-			DEBUG_ASSERTCRASH(!cleared, ("Hmm, multiple clears in ModuleInfo::clearModuleDataWithTag, should this be possible?"));
+			engine::debug::invariant((!cleared), "!cleared", __FILE__, __LINE__, "Hmm, multiple clears in ModuleInfo::clearModuleDataWithTag, should this be possible?");
 			clearedModuleNameOut = it->first;
 			it = m_info.erase(it);
 			cleared = true;
@@ -540,9 +538,9 @@ void ThingTemplate::parseModuleName(INI* ini, void *instance, void* store, const
 	catch( ... )
 	{
 
-		DEBUG_CRASH(( "[LINE: %d - FILE: '%s'] Module tag not found for module '%s' on thing template '%s'.  Module tags are required and must be unique for all modules within an object definition",
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "[LINE: %d - FILE: '%s'] Module tag not found for module '%s' on thing template '%s'.  Module tags are required and must be unique for all modules within an object definition",
 									ini->getLineNum(), ini->getFilename().str(),
-									tokenStr.str(), self->getName().str() ));
+									tokenStr.str(), self->getName().str() );
 		throw;
 
 	}
@@ -557,7 +555,7 @@ void ThingTemplate::parseModuleName(INI* ini, void *instance, void* store, const
 		interfaceMask = TheModuleFactory->findModuleInterfaceMask(tokenStr, type);
 		if ((interfaceMask & (MODULEINTERFACE_BODY)) == 0)
 		{
-			DEBUG_CRASH(("Only Body allowed here"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Only Body allowed here");
 			throw INI_INVALID_DATA;
 		}
 	}
@@ -566,7 +564,7 @@ void ThingTemplate::parseModuleName(INI* ini, void *instance, void* store, const
 		interfaceMask = TheModuleFactory->findModuleInterfaceMask(tokenStr, type);
 		if ((interfaceMask & (MODULEINTERFACE_BODY)) != 0)
 		{
-			DEBUG_CRASH(("No Body allowed here"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "No Body allowed here");
 			throw INI_INVALID_DATA;
 		}
 	}
@@ -580,8 +578,8 @@ void ThingTemplate::parseModuleName(INI* ini, void *instance, void* store, const
 		}
 		else
 		{
-			DEBUG_CRASH(("[LINE: %d - FILE: '%s'] You must use AddModule to add modules in override INI files.",
-				ini->getLineNum(), ini->getFilename().str(), self->getName().str()));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "[LINE: %d - FILE: '%s'] You must use AddModule to add modules in override INI files.",
+				ini->getLineNum(), ini->getFilename().str(), self->getName().str());
 			throw INI_INVALID_DATA;
 		}
 	}
@@ -589,7 +587,7 @@ void ThingTemplate::parseModuleName(INI* ini, void *instance, void* store, const
 	{
 
 //    if (self->getName().compare("GLAVehicleQuadCannon"))
-//      DEBUG_CRASH( ("WE ARE CLEARING DEFAULT MODULES FROM A QUAD CANNON.") );
+//      engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "WE ARE CLEARING DEFAULT MODULES FROM A QUAD CANNON.");
 
 		self->m_behaviorModuleInfo.clearCopiedFromDefaultEntries(interfaceMask, tokenStr, self );
 		self->m_drawModuleInfo.clearCopiedFromDefaultEntries(interfaceMask, tokenStr, self );
@@ -600,8 +598,8 @@ void ThingTemplate::parseModuleName(INI* ini, void *instance, void* store, const
 			&& self->m_moduleBeingReplacedName.isNotEmpty()
 			&& self->m_moduleBeingReplacedName != tokenStr)
 	{
-		DEBUG_CRASH(("[LINE: %d - FILE: '%s'] ReplaceModule must replace modules with another module of the same type, but you are attempting to replace a %s with a %s for Object %s.",
-			ini->getLineNum(), ini->getFilename().str(), self->m_moduleBeingReplacedName.str(), tokenStr.str(), self->getName().str()));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "[LINE: %d - FILE: '%s'] ReplaceModule must replace modules with another module of the same type, but you are attempting to replace a %s with a %s for Object %s.",
+			ini->getLineNum(), ini->getFilename().str(), self->m_moduleBeingReplacedName.str(), tokenStr.str(), self->getName().str());
 		throw INI_INVALID_DATA;
 	}
 
@@ -609,8 +607,8 @@ void ThingTemplate::parseModuleName(INI* ini, void *instance, void* store, const
 			&& self->m_moduleBeingReplacedTag.isNotEmpty()
 			&& self->m_moduleBeingReplacedTag == moduleTagStr)
 	{
-		DEBUG_CRASH(("[LINE: %d - FILE: '%s'] ReplaceModule must specify a new, unique tag for the replaced module, but you are not doing so for %s (%s) for Object %s.",
-			ini->getLineNum(), ini->getFilename().str(), moduleTagStr.str(), self->m_moduleBeingReplacedName.str(), self->getName().str()));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "[LINE: %d - FILE: '%s'] ReplaceModule must specify a new, unique tag for the replaced module, but you are not doing so for %s (%s) for Object %s.",
+			ini->getLineNum(), ini->getFilename().str(), moduleTagStr.str(), self->m_moduleBeingReplacedName.str(), self->getName().str());
 		throw INI_INVALID_DATA;
 	}
 
@@ -622,7 +620,7 @@ void ThingTemplate::parseModuleName(INI* ini, void *instance, void* store, const
 		if (replaced)
 		{
 			//Kris: Commented this out for SPAM reasons. Do we really need this?
-			//DEBUG_LOG(("replaced an AI for %s!",self->getName().str()));
+			//engine::debug::log_info("replaced an AI for %s!",self->getName().str());
 		}
 	}
 
@@ -698,7 +696,7 @@ static void parseArbitraryFXIntoMap( INI* ini, void *instance, void* /* store */
 	const char* name = (const char*)userData;
 	const char* token = ini->getNextToken();
 	const FXList* fxl = TheFXListStore->findFXList(token);	// could be null!
-	DEBUG_ASSERTCRASH(fxl != nullptr || stricmp(token, "None") == 0, ("FXList %s not found!",token));
+	engine::debug::invariant((fxl != nullptr || stricmp(token, "None") == 0), "fxl != nullptr || stricmp(token, \"None\") == 0", __FILE__, __LINE__, "FXList %s not found!",token);
 	mapFX->insert(std::make_pair(AsciiString(name), fxl));
 }
 
@@ -786,7 +784,7 @@ void ThingTemplate::parseRemoveModule(INI *ini, void *instance, void *store, con
 	Bool removed = self->removeModuleInfo(modToRemove, removedModuleName);
 	if (!removed)
 	{
-		DEBUG_ASSERTCRASH(removed, ("RemoveModule %s was not found for %s. The game will crash now!",modToRemove, self->getName().str()));
+		engine::debug::invariant((removed), "removed", __FILE__, __LINE__, "RemoveModule %s was not found for %s. The game will crash now!",modToRemove, self->getName().str());
 		throw INI_INVALID_DATA;
 	}
 
@@ -811,8 +809,8 @@ void ThingTemplate::parseReplaceModule(INI *ini, void *instance, void *store, co
 	Bool removed = self->removeModuleInfo(modToRemove, removedModuleName);
 	if (!removed)
 	{
-		DEBUG_CRASH(("[LINE: %d - FILE: '%s'] ReplaceModule %s was not found for %s; cannot continue.",
-															ini->getLineNum(), ini->getFilename().str(), modToRemove, self->getName().str()));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "[LINE: %d - FILE: '%s'] ReplaceModule %s was not found for %s; cannot continue.",
+															ini->getLineNum(), ini->getFilename().str(), modToRemove, self->getName().str());
 		throw INI_INVALID_DATA;
 	}
 
@@ -880,17 +878,17 @@ Bool ThingTemplate::removeModuleInfo(const AsciiString& moduleToRemove, AsciiStr
 
 	if (m_behaviorModuleInfo.clearModuleDataWithTag(moduleToRemove, clearedModuleNameOut))
 	{
-		DEBUG_ASSERTCRASH(!removed, ("Hmm, multiple removed in ThingTemplate::removeModuleInfo, should this be possible?"));
+		engine::debug::invariant((!removed), "!removed", __FILE__, __LINE__, "Hmm, multiple removed in ThingTemplate::removeModuleInfo, should this be possible?");
 		removed = true;
 	}
 	if (m_drawModuleInfo.clearModuleDataWithTag(moduleToRemove, clearedModuleNameOut))
 	{
-		DEBUG_ASSERTCRASH(!removed, ("Hmm, multiple removed in ThingTemplate::removeModuleInfo, should this be possible?"));
+		engine::debug::invariant((!removed), "!removed", __FILE__, __LINE__, "Hmm, multiple removed in ThingTemplate::removeModuleInfo, should this be possible?");
 		removed = true;
 	}
 	if (m_clientUpdateModuleInfo.clearModuleDataWithTag(moduleToRemove, clearedModuleNameOut))
 	{
-		DEBUG_ASSERTCRASH(!removed, ("Hmm, multiple removed in ThingTemplate::removeModuleInfo, should this be possible?"));
+		engine::debug::invariant((!removed), "!removed", __FILE__, __LINE__, "Hmm, multiple removed in ThingTemplate::removeModuleInfo, should this be possible?");
 		removed = true;
 	}
 
@@ -931,7 +929,7 @@ void ThingTemplate::parseArmorTemplateSet( INI* ini, void *instance, void * /*st
 		{
 			if (it->getNthConditionsYes(0) == ws.getNthConditionsYes(0))
 			{
-				DEBUG_CRASH(("dup armorset condition in %s",self->getName().str()));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "dup armorset condition in %s",self->getName().str());
 			}
 		}
 	}
@@ -959,7 +957,7 @@ void ThingTemplate::parseWeaponTemplateSet( INI* ini, void *instance, void * /*s
 		{
 			if (it->getNthConditionsYes(0) == ws.getNthConditionsYes(0))
 			{
-				DEBUG_CRASH(("dup weaponset condition in %s",self->getName().str()));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "dup weaponset condition in %s",self->getName().str());
 			}
 		}
 	}
@@ -977,7 +975,7 @@ void ThingTemplate::parseMaxSimultaneous(INI *ini, void *instance, void *store, 
   const char DETERMINED_BY_SUPERWEAPON_KEYWORD[] = "DeterminedBySuperweaponRestriction";
 
   ThingTemplate *myTemplate = (ThingTemplate *)instance;
-  DEBUG_ASSERTCRASH ( &myTemplate->m_maxSimultaneousOfType == store, ("Bad store passed to parseMaxSimultaneous" ) );
+  engine::debug::invariant((&myTemplate->m_maxSimultaneousOfType == store), "&myTemplate->m_maxSimultaneousOfType == store", __FILE__, __LINE__, "Bad store passed to parseMaxSimultaneous" );
 
   const char * token = ini->getNextToken();
   if ( stricmp( token, DETERMINED_BY_SUPERWEAPON_KEYWORD ) == 0 )
@@ -991,7 +989,7 @@ void ThingTemplate::parseMaxSimultaneous(INI *ini, void *instance, void *store, 
     Int value = INI::scanInt(token);
     if (value < 0 || value > 65535)
     {
-      DEBUG_CRASH(("Bad value parseMaxSimultaneous"));
+      engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Bad value parseMaxSimultaneous");
       throw ERROR_BUG;
     }
     *(UnsignedShort *)store = (UnsignedShort)value;
@@ -1088,7 +1086,7 @@ void ThingTemplate::validateAudio()
 
 	#define AUDIO_TEST(y) \
 		if (!get##y()->getEventName().isEmpty() && get##y()->getEventName().compareNoCase("NoSound") != 0) { \
-			DEBUG_ASSERTLOG(TheAudio->isValidAudioEvent(get##y()), ("Invalid Sound '%s' in Object '%s'. (%s?)", #y, getName().str(), get##y()->getEventName().str())); \
+			if (!(TheAudio->isValidAudioEvent(get##y()))) engine::debug::log_error("Invalid Sound '%s' in Object '%s'. (%s?)", #y, getName().str(), get##y()->getEventName().str()); \
 		}
 
 	AUDIO_TEST(VoiceSelect)
@@ -1144,11 +1142,10 @@ void ThingTemplate::validateAudio()
 	{
 		if (!it->second.getEventName().isEmpty() && it->second.getEventName().compareNoCase("NoSound") != 0)
 		{
-			DEBUG_ASSERTCRASH(TheAudio->isValidAudioEvent(&it->second),
-												("Invalid UnitSpecificSound '%s' in Object '%s'. (%s?)",
+			engine::debug::invariant((TheAudio->isValidAudioEvent(&it->second)), "TheAudio->isValidAudioEvent(&it->second)", __FILE__, __LINE__, "Invalid UnitSpecificSound '%s' in Object '%s'. (%s?)",
 												it->first.str(),
 												getName().str(),
-												it->second.getEventName().str()));
+												it->second.getEventName().str());
 		}
 	}
 #endif
@@ -1199,30 +1196,30 @@ void ThingTemplate::validate()
 
 	if (isKindOf(KINDOF_SHRUBBERY) && !isImmobile)
 	{
-		DEBUG_CRASH(("SHRUBBERY %s must be marked IMMOBILE!",getName().str()));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "SHRUBBERY %s must be marked IMMOBILE!",getName().str());
 	}
 
 	if (isKindOf(KINDOF_STRUCTURE) && !isImmobile)
 	{
-		DEBUG_CRASH(("Structure %s is not marked immobile, but probably should be -- please fix it. (If we ever add mobile structures, this debug sniffer will need to be revised.)",getName().str()));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Structure %s is not marked immobile, but probably should be -- please fix it. (If we ever add mobile structures, this debug sniffer will need to be revised.)",getName().str());
 	}
 
 	if (isKindOf(KINDOF_STICK_TO_TERRAIN_SLOPE) && !isImmobile)
 	{
-		DEBUG_CRASH(("item %s is marked STICK_TO_TERRAIN_SLOPE but not IMMOBILE -- please fix it.",getName().str()));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "item %s is marked STICK_TO_TERRAIN_SLOPE but not IMMOBILE -- please fix it.",getName().str());
 	}
 
 	if (isKindOf(KINDOF_STRUCTURE))
 	{
 		if (m_armorTemplateSets.empty() || (m_armorTemplateSets.size() == 1 && m_armorTemplateSets[0].getArmorTemplate() == nullptr))
 		{
-			DEBUG_CRASH(("Structure %s has no armor, but probably should (StructureArmor) -- please fix it.)",getName().str()));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Structure %s has no armor, but probably should (StructureArmor) -- please fix it.)",getName().str());
 		}
 		for (ArmorTemplateSetVector::const_iterator it = m_armorTemplateSets.begin(); it != m_armorTemplateSets.end(); ++it)
 		{
 			if (it->getDamageFX() == nullptr)
 			{
-				DEBUG_CRASH(("Structure %s has no ArmorDamageFX, and really should.",getName().str()));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Structure %s has no ArmorDamageFX, and really should.",getName().str());
 			}
 		}
 	}
@@ -1302,7 +1299,7 @@ void ThingTemplate::resolveNames()
 			// but ThingTemplate can muck with stuff with gleeful abandon. (srj)
 			if( tmpls[ j ] )
 				const_cast<ThingTemplate*>(tmpls[j])->m_isBuildFacility = true;
-			// DEBUG_LOG(("BF: %s is a buildfacility for %s",tmpls[j]->m_nameString.str(),this->m_nameString.str()));
+			// engine::debug::log_info("BF: %s is a buildfacility for %s",tmpls[j]->m_nameString.str(),this->m_nameString.str());
 		}
 	}
 
@@ -1317,13 +1314,13 @@ void ThingTemplate::resolveNames()
 		if( m_selectedPortraitImageName.isNotEmpty() )
 		{
 			m_selectedPortraitImage = TheMappedImageCollection->findImageByName( m_selectedPortraitImageName );
-			DEBUG_ASSERTCRASH( m_selectedPortraitImage, ("%s is looking for Portrait %s but can't find it. Skipping...", getName().str(), m_buttonImageName.str() ) );
+			engine::debug::invariant((m_selectedPortraitImage), "m_selectedPortraitImage", __FILE__, __LINE__, "%s is looking for Portrait %s but can't find it. Skipping...", getName().str(), m_buttonImageName.str() );
 			m_selectedPortraitImageName.clear();	// we're done with this, so nuke it
 		}
 		if( m_buttonImageName.isNotEmpty() )
 		{
 			m_buttonImage = TheMappedImageCollection->findImageByName( m_buttonImageName );
-			DEBUG_ASSERTCRASH( m_buttonImage, ("%s is looking for ButtonImage %s but can't find it. Skipping...", getName().str(), m_buttonImageName.str() ) );
+			engine::debug::invariant((m_buttonImage), "m_buttonImage", __FILE__, __LINE__, "%s is looking for ButtonImage %s but can't find it. Skipping...", getName().str(), m_buttonImageName.str() );
 			m_buttonImageName.clear();	// we're done with this, so nuke it
 		}
 	}
@@ -1450,7 +1447,7 @@ const FXList *ThingTemplate::getPerUnitFX(const AsciiString& fxName) const
 	PerUnitFXMap::const_iterator it = m_perUnitFX.find(fxName);
 	if (it == m_perUnitFX.end())
 	{
-		DEBUG_CRASH(("Unknown FX name (%s) asked for in ThingTemplate (%s)", fxName.str(), m_nameString.str()));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unknown FX name (%s) asked for in ThingTemplate (%s)", fxName.str(), m_nameString.str());
 		return nullptr;
 	}
 
@@ -1469,7 +1466,7 @@ const AudioEventRTS *ThingTemplate::getPerUnitSound(const AsciiString& soundName
 	if (it == m_perUnitSounds.end())
 	{
 #ifndef DO_UNIT_TIMINGS
-    DEBUG_LOG(("Unknown Audio name (%s) asked for in ThingTemplate (%s).", soundName.str(), m_nameString.str()));
+    engine::debug::log_info("Unknown Audio name (%s) asked for in ThingTemplate (%s).", soundName.str(), m_nameString.str());
 #endif
     return &s_audioEventNoSound;
 	}

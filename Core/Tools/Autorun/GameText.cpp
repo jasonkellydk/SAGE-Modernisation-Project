@@ -47,9 +47,6 @@
 #include <Lib/BaseType.h>
 #include "GameText.h"
 
-#define DEBUG_LOG(x)
-#define DEBUG_ASSERTCRASH(x, y)
-
 //#include <Common/Language.h>
 //#include <Common/Debug.h>
 //#include <Common/std::wstring.h>
@@ -57,6 +54,7 @@
 //#include <Common/GlobalData.h>
 #include "WSYS_file.h"
 #include "WSYS_RAMFile.h"
+import engine.debug;
 
 
 
@@ -350,17 +348,17 @@ void GameTextManager::deinit()
 
 	NoString *noString = m_noStringList;
 
-	DEBUG_LOG((""));
-	DEBUG_LOG(("*** Missing strings ***"));
+	engine::debug::log_info("");
+	engine::debug::log_info("*** Missing strings ***");
 	while ( noString )
 	{
-		DEBUG_LOG(("*** %ls ***", noString->text.str()));
+		engine::debug::log_info("*** %ls ***", noString->text.str());
 		NoString *next = noString->next;
 		delete noString;
 		noString = next;
 	}
-	DEBUG_LOG(("*** End missing strings ***"));
-	DEBUG_LOG((""));
+	engine::debug::log_info("*** End missing strings ***");
+	engine::debug::log_info("");
 
 	m_noStringList = nullptr;
 
@@ -976,7 +974,7 @@ Bool GameTextManager::parseStringFile( char *filename )
 		{
 			if ( stricmp ( m_stringInfo[i].label.c_str(), m_buffer ) == 0 )
 			{
-				DEBUG_ASSERTCRASH ( FALSE, ("String label '%s' multiply defined!", m_buffer ));
+				engine::debug::invariant((FALSE), "FALSE", __FILE__, __LINE__, "String label '%s' multiply defined!", m_buffer );
 			}
 		}
 
@@ -994,7 +992,7 @@ Bool GameTextManager::parseStringFile( char *filename )
 		{
 			if (!readLine ( m_buffer, sizeof(m_buffer)-1, &file ))
 			{
-				DEBUG_ASSERTCRASH (FALSE, ("Unexpected end of string file"));
+				engine::debug::invariant((FALSE), "FALSE", __FILE__, __LINE__, "Unexpected end of string file");
 				ok = FALSE;
 				goto quit;
 			}
@@ -1012,7 +1010,7 @@ Bool GameTextManager::parseStringFile( char *filename )
 				if ( readString )
 				{
 					// only one string per label allows
-						DEBUG_ASSERTCRASH ( FALSE, ("String label '%s' has more than one string defined!", m_stringInfo[listCount].label.str()));
+						engine::debug::invariant((FALSE), "FALSE", __FILE__, __LINE__, "String label '%s' has more than one string defined!", m_stringInfo[listCount].label.str());
 				}
 				else
 				{
@@ -1047,7 +1045,7 @@ quit:
 
 const wchar_t * GameTextManager::fetch( const Char *label )
 {
-	DEBUG_ASSERTCRASH ( m_initialized, ("String Manager has not been m_initialized") );
+	engine::debug::invariant((m_initialized), "m_initialized", __FILE__, __LINE__, "String Manager has not been m_initialized");
 
 	if( m_stringInfo == nullptr )
 	{
@@ -1080,7 +1078,7 @@ const wchar_t * GameTextManager::fetch( const Char *label )
 			noString = noString->next;
 		}
 
-		//DEBUG_LOG(("*** MISSING:'%s' ***", label));
+		//engine::debug::log_info("*** MISSING:'%s' ***", label);
 		// Remember file could have been altered at this point.
 		noString = new NoString;
 		noString->text = missingString;

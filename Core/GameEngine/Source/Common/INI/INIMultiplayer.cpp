@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/INI.h"
 #include "Common/MultiplayerSettings.h"
@@ -43,7 +44,7 @@ void INI::parseMultiplayerSettingsDefinition( INI* ini )
 		//
 		if( ini->getLoadType() == INI_LOAD_CREATE_OVERRIDES )
 		{
-			DEBUG_CRASH(("Creating an override of MultiplayerSettings!"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Creating an override of MultiplayerSettings!");
 		}
 	}
 	else
@@ -97,7 +98,7 @@ namespace
 
 void INI::parseMultiplayerStartingMoneyChoiceDefinition( INI* ini )
 {
-  DEBUG_ASSERTCRASH( ini->getLoadType() != INI_LOAD_CREATE_OVERRIDES, ("Overrides not supported for MultiplayerStartingMoneyChoice") );
+  engine::debug::invariant((ini->getLoadType() != INI_LOAD_CREATE_OVERRIDES), "ini->getLoadType() != INI_LOAD_CREATE_OVERRIDES", __FILE__, __LINE__, "Overrides not supported for MultiplayerStartingMoneyChoice");
 
   // Temporary data store
   MultiplayerStartingMoneySettings settings;

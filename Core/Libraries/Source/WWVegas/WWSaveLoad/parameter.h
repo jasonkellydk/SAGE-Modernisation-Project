@@ -44,7 +44,6 @@
 #include "WWLib/Vector.h"
 #include "WWLib/wwstring.h"
 #include "WWLib/bittype.h"
-#include "WWMath/obbox.h"
 
 
 //////////////////////////////////////////////////////////////////////////////////
@@ -68,7 +67,7 @@ public:
 		TYPE_FLOAT,
 		TYPE_STRING,
 		TYPE_VECTOR3,
-		TYPE_MATRIX3D,
+		TYPE_AFFINE_TRANSFORM3,
 		TYPE_BOOL,
 		TYPE_TRANSITION,
 		TYPE_MODELDEFINITIONID,
@@ -85,8 +84,7 @@ public:
 		TYPE_PHYSDEFINITIONID,
 		TYPE_EXPLOSIONDEFINITIONID,
 		TYPE_DEFINITIONIDLIST,
-		TYPE_ZONE,
-		TYPE_FILENAMELIST,
+		TYPE_FILENAMELIST			= 22,
 		TYPE_SEPARATOR,
 		TYPE_GENERICDEFINITIONID,
 		TYPE_SCRIPTLIST,
@@ -960,55 +958,6 @@ protected:
 };
 
 
-//////////////////////////////////////////////////////////////////////////////////
-//
-//	ZoneParameterClass
-//
-//////////////////////////////////////////////////////////////////////////////////
-class ZoneParameterClass : public ParameterClass
-{
-public:
-
-	//////////////////////////////////////////////////////////////////////////////
-	//	Public constructors/destructors
-	//////////////////////////////////////////////////////////////////////////////
-	ZoneParameterClass (OBBoxClass *box);
-	ZoneParameterClass (const ZoneParameterClass &src);
-	virtual ~ZoneParameterClass () override {}
-
-	//////////////////////////////////////////////////////////////////////////////
-	//	Public operators
-	//////////////////////////////////////////////////////////////////////////////
-	const ZoneParameterClass &		operator= (const ZoneParameterClass &src);
-	bool									operator== (const ZoneParameterClass &src);
-	virtual bool									operator== (const ParameterClass &src) override;
-
-	//////////////////////////////////////////////////////////////////////////////
-	//	Public methods
-	//////////////////////////////////////////////////////////////////////////////
-
-	// Type identification
-	virtual Type				Get_Type () const override { return TYPE_ZONE; }
-	virtual bool				Is_Type (Type type) const override { return (type == TYPE_ZONE) || ParameterClass::Is_Type (type); }
-
-	// Data manipulation
-	virtual void					Set_Zone (const OBBoxClass &box)	{ (*m_OBBox) = box; Set_Modified (); }
-	virtual const OBBoxClass &	Get_Zone () const				{ return (*m_OBBox); }
-
-
-	// Copy methods
-	virtual void				Copy_Value (const ParameterClass &src) override;
-
-protected:
-
-	//////////////////////////////////////////////////////////////////////////////
-	//	Private member data
-	//////////////////////////////////////////////////////////////////////////////
-	OBBoxClass		*m_OBBox;
-};
-
-
-//////////////////////////////////////////////////////////////////////////////////
 //
 //	FilenameListParameterClass
 //

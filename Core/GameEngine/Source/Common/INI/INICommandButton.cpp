@@ -29,7 +29,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // USER INCLUDES //////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/INI.h"
 #include "Common/SpecialPower.h"
@@ -64,7 +65,7 @@ void ControlBar::parseCommandButtonDefinition( INI *ini )
 	}
 	else if( ini->getLoadType() != INI_LOAD_CREATE_OVERRIDES )
 	{
-		DEBUG_CRASH(( "[LINE: %d in '%s'] Duplicate commandbutton %s found!", ini->getLineNum(), ini->getFilename().str(), name.str() ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "[LINE: %d in '%s'] Duplicate commandbutton %s found!", ini->getLineNum(), ini->getFilename().str(), name.str() );
 	}
 	else
 	{
@@ -84,9 +85,8 @@ void ControlBar::parseCommandButtonDefinition( INI *ini )
 	case GUI_COMMAND_SPECIAL_POWER_CONSTRUCT:
 	case GUI_COMMAND_SPECIAL_POWER_CONSTRUCT_FROM_SHORTCUT:
 	{
-		DEBUG_ASSERTCRASH(spTemplate != nullptr,
-			("[LINE: %d in '%s'] CommandButton %s is a SPECIAL_POWER but is missing a SpecialPower field",
-				ini->getLineNum(), ini->getFilename().str(), name.str()));
+		engine::debug::invariant((spTemplate != nullptr), "spTemplate != nullptr", __FILE__, __LINE__, "[LINE: %d in '%s'] CommandButton %s is a SPECIAL_POWER but is missing a SpecialPower field",
+				ini->getLineNum(), ini->getFilename().str(), name.str());
 		break;
 	}
 	}
@@ -95,13 +95,13 @@ void ControlBar::parseCommandButtonDefinition( INI *ini )
 	Bool needsTemplate = BitIsSet( button->getOptions(), NEED_SPECIAL_POWER_SCIENCE );
 	if( spTemplate && !needsTemplate )
 	{
-		DEBUG_CRASH( ("[LINE: %d in '%s'] CommandButton %s has SpecialPower = %s but the button also requires Options = NEED_SPECIAL_POWER_SCIENCE. Failure to do so will cause bugs such as invisible side shortcut buttons",
-			ini->getLineNum(), ini->getFilename().str(), name.str(), spTemplate->getName().str() ) );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "[LINE: %d in '%s'] CommandButton %s has SpecialPower = %s but the button also requires Options = NEED_SPECIAL_POWER_SCIENCE. Failure to do so will cause bugs such as invisible side shortcut buttons",
+			ini->getLineNum(), ini->getFilename().str(), name.str(), spTemplate->getName().str() );
 	}
 	else if( !spTemplate && needsTemplate )
 	{
-		DEBUG_CRASH( ("[LINE: %d in '%s'] CommandButton %s has Options = NEED_SPECIAL_POWER_SCIENCE but doesn't specify a SpecialPower = xxxx. Please evaluate INI.",
-			ini->getLineNum(), ini->getFilename().str(), name.str() ) );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "[LINE: %d in '%s'] CommandButton %s has Options = NEED_SPECIAL_POWER_SCIENCE but doesn't specify a SpecialPower = xxxx. Please evaluate INI.",
+			ini->getLineNum(), ini->getFilename().str(), name.str() );
 	}
 
 }

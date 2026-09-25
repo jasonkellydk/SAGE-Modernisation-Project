@@ -42,7 +42,9 @@
 //         Includes
 //----------------------------------------------------------------------------
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
+#include <cmath>
 #include "Common/GameAudio.h"
 
 #include "Common/AudioAffect.h"
@@ -67,8 +69,6 @@
 
 #include "GameLogic/GameLogic.h"
 #include "GameLogic/TerrainLogic.h"
-
-#include "WWMath/matrix3d.h"
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -284,17 +284,15 @@ void AudioManager::update()
 {
 	Coord3D cameraPivot = TheTacticalView->getPosition();
 	Real angle = TheTacticalView->getAngle();
-	Matrix3D rot = Matrix3D::Identity;
-	rot.Rotate_Z( angle );
-	Vector3 forward( 0, 1, 0 );
-	rot.mulVector3( forward );
+	const Real forwardX = -std::sin(angle);
+	const Real forwardY = std::cos(angle);
 
 	const Real desiredHeightRel = m_audioSettings->m_microphoneDesiredHeightAboveTerrain;
 	const Real desiredHeightAbs = desiredHeightRel + cameraPivot.z;
 	const Real maxPercentage = m_audioSettings->m_microphoneMaxPercentageBetweenGroundAndCamera;
 
 	Coord3D lookTo;
-	lookTo.set(forward.X, forward.Y, forward.Z);
+	lookTo.set(forwardX, forwardY, 0.0f);
 
 	//Kris: At this point, the microphone is calculated to be at the ground position where the camera is looking at.
 	//Instead we want to move the microphone towards the camera. Hopefully, it'll be a desired altitude, but if it
@@ -392,12 +390,12 @@ AudioHandle AudioManager::addAudioEvent(const AudioEventRTS *eventToAdd)
 	}
 
 #ifdef INTENSIVE_AUDIO_DEBUG
-	DEBUG_LOG(("AUDIO (%d): Received addAudioEvent('%s')", TheGameLogic->getFrame(), eventToAdd->getEventName().str()));
+	engine::debug::log_info("AUDIO (%d): Received addAudioEvent('%s')", TheGameLogic->getFrame(), eventToAdd->getEventName().str());
 #endif
 	if (!eventToAdd->getAudioEventInfo()) {
 		getInfoForAudioEvent(eventToAdd);
 		if (!eventToAdd->getAudioEventInfo()) {
-			DEBUG_CRASH(("No info for requested audio event '%s'", eventToAdd->getEventName().str()));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "No info for requested audio event '%s'", eventToAdd->getEventName().str());
 			return AHSV_Error;
 		}
 	}
@@ -466,7 +464,7 @@ AudioHandle AudioManager::addAudioEvent(const AudioEventRTS *eventToAdd)
 	// cull muted audio
 	if (audioEvent->getVolume() < m_audioSettings->m_minVolume) {
 #ifdef INTENSIVE_AUDIO_DEBUG
-		DEBUG_LOG((" - culled due to muting (%d).", audioEvent->getVolume()));
+		engine::debug::log_info(" - culled due to muting (%d).", audioEvent->getVolume());
 #endif
 		return AHSV_Muted;
 	}
@@ -832,7 +830,7 @@ AudioEventInfo *AudioManager::newAudioEventInfo( AsciiString audioName )
 {
 	AudioEventInfo *eventInfo = findAudioEventInfo(audioName);
 	if (eventInfo) {
-		DEBUG_CRASH(("Requested add of '%s' multiple times. Is this intentional? - jkmcd", audioName.str()));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Requested add of '%s' multiple times. Is this intentional? - jkmcd", audioName.str());
 		return eventInfo;
 	}
 
@@ -848,7 +846,7 @@ void AudioManager::addAudioEventInfo( AudioEventInfo * newEvent )
   AudioEventInfo *eventInfo = findAudioEventInfo( newEvent->m_audioName );
   if (eventInfo)
   {
-    DEBUG_CRASH(("Requested add of '%s' multiple times. Is this intentional? - jkmcd", newEvent->m_audioName.str()));
+    engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Requested add of '%s' multiple times. Is this intentional? - jkmcd", newEvent->m_audioName.str());
     *eventInfo = *newEvent;
   }
   else
@@ -996,7 +994,7 @@ Bool AudioManager::shouldPlayLocally(const AudioEventRTS *audioEvent)
 	}
 
 	if (!BitIsSet(ei->m_type, (ST_PLAYER | ST_ALLIES | ST_ENEMIES | ST_EVERYONE))) {
-		DEBUG_CRASH(("No player restrictions specified for '%s'. Using Everyone.", ei->m_audioName.str()));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "No player restrictions specified for '%s'. Using Everyone.", ei->m_audioName.str());
 		return TRUE;
 	}
 
@@ -1007,12 +1005,12 @@ Bool AudioManager::shouldPlayLocally(const AudioEventRTS *audioEvent)
 	Player *owningPlayer = ThePlayerList->getNthPlayer(audioEvent->getPlayerIndex());
 
 	if (BitIsSet(ei->m_type, ST_PLAYER) && BitIsSet(ei->m_type, ST_UI) && owningPlayer == nullptr) {
-		DEBUG_ASSERTCRASH(!TheGameLogic->isInGameLogicUpdate(), ("Playing %s sound -- player-based UI sound without specifying a player.", ei->m_audioName.str()));
+		engine::debug::invariant((!TheGameLogic->isInGameLogicUpdate()), "!TheGameLogic->isInGameLogicUpdate()", __FILE__, __LINE__, "Playing %s sound -- player-based UI sound without specifying a player.", ei->m_audioName.str());
 		return TRUE;
 	}
 
 	if (owningPlayer == nullptr) {
-		DEBUG_CRASH(("Sound '%s' expects an owning player, but the audio event that created it didn't specify one.", ei->m_audioName.str()));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Sound '%s' expects an owning player, but the audio event that created it didn't specify one.", ei->m_audioName.str());
 		return FALSE;
 	}
 
@@ -1055,8 +1053,8 @@ void AudioManager::muteAudio( MuteAudioReason reason )
 {
 	m_muteReasonBits |= 1u << reason;
 
-	DEBUG_LOG(("AudioManager::muteAudio(%s): m_muteReason=%u muted=%d",
-		MuteAudioReasonNames[reason], m_muteReasonBits, (int)(m_muteReasonBits != 0)));
+	engine::debug::log_info("AudioManager::muteAudio(%s): m_muteReason=%u muted=%d",
+		MuteAudioReasonNames[reason], m_muteReasonBits, (int)(m_muteReasonBits != 0));
 
 	if (m_muteReasonBits == 0 || m_savedValues)
 		return;
@@ -1077,8 +1075,8 @@ void AudioManager::unmuteAudio( MuteAudioReason reason )
 {
 	m_muteReasonBits &= ~(1u << reason);
 
-	DEBUG_LOG(("AudioManager::unmuteAudio(%s): m_muteReason=%u muted=%d",
-		MuteAudioReasonNames[reason], m_muteReasonBits, (int)(m_muteReasonBits != 0)));
+	engine::debug::log_info("AudioManager::unmuteAudio(%s): m_muteReason=%u muted=%d",
+		MuteAudioReasonNames[reason], m_muteReasonBits, (int)(m_muteReasonBits != 0));
 
 	if (m_muteReasonBits != 0 || !m_savedValues)
 		return;
@@ -1130,4 +1128,3 @@ void parseSpeakerType( INI *ini, void *instance, void *store, const void* userDa
 
 	(*(UnsignedInt*)store) = TheAudio->translateSpeakerTypeToUnsignedInt(str);
 }
-

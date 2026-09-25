@@ -26,7 +26,8 @@
 // Generals download manager code
 // Author: Matthew D. Campbell, July 2002
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "GameClient/GameText.h"
 #include "GameNetwork/DownloadManager.h"
@@ -116,7 +117,7 @@ HRESULT DownloadManager::downloadNextQueuedFile()
 	}
 	else
 	{
-		DEBUG_CRASH(("Starting non-existent download!"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Starting non-existent download!");
 		return S_OK;
 	}
 }
@@ -157,27 +158,27 @@ HRESULT DownloadManager::OnError( Int error )
 			break;
 	}
 	m_errorString = TheGameText->fetch(s);
-	DEBUG_LOG(("DownloadManager::OnError(): %s(%d)", s.str(), error));
+	engine::debug::log_info("DownloadManager::OnError(): %s(%d)", s.str(), error);
 	return S_OK;
 }
 
 HRESULT DownloadManager::OnEnd()
 {
 	m_sawEnd = true;
-	DEBUG_LOG(("DownloadManager::OnEnd()"));
+	engine::debug::log_info("DownloadManager::OnEnd()");
 	return S_OK;
 }
 
 HRESULT DownloadManager::OnQueryResume()
 {
-	DEBUG_LOG(("DownloadManager::OnQueryResume()"));
+	engine::debug::log_info("DownloadManager::OnQueryResume()");
 	//return DOWNLOADEVENT_DONOTRESUME;
 	return DOWNLOADEVENT_RESUME;
 }
 
 HRESULT DownloadManager::OnProgressUpdate( Int bytesread, Int totalsize, Int timetaken, Int timeleft )
 {
-	DEBUG_LOG(("DownloadManager::OnProgressUpdate(): %d/%d %d/%d", bytesread, totalsize, timetaken, timeleft));
+	engine::debug::log_info("DownloadManager::OnProgressUpdate(): %d/%d %d/%d", bytesread, totalsize, timetaken, timeleft);
 	return S_OK;
 }
 
@@ -212,6 +213,6 @@ HRESULT DownloadManager::OnStatusUpdate( Int status )
 			break;
 	}
 	m_statusString = TheGameText->fetch(s);
-	DEBUG_LOG(("DownloadManager::OnStatusUpdate(): %s(%d)", s.str(), status));
+	engine::debug::log_info("DownloadManager::OnStatusUpdate(): %s(%d)", s.str(), status);
 	return S_OK;
 }

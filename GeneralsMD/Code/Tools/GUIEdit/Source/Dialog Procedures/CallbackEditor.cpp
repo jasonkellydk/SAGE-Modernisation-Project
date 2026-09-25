@@ -48,13 +48,14 @@
 #include <windows.h>
 
 // USER INCLUDES //////////////////////////////////////////////////////////////
-#include "Common/Debug.h"
+
 #include "Common/FunctionLexicon.h"
 #include "GameClient/Gadget.h"
 #include "GameClient/GameWindowManager.h"
 #include "GUIEdit.h"
 #include "resource.h"
 #include "Properties.h"
+import engine.debug;
 
 // DEFINES ////////////////////////////////////////////////////////////////////
 
@@ -85,7 +86,7 @@ void SaveCallbacks( GameWindow *window, HWND dialog )
 
 	// get edit data for window
 	GameWindowEditData *editData = window->winGetEditData();
-	DEBUG_ASSERTCRASH( editData, ("No edit data for window saving callbacks!") );
+	engine::debug::invariant((editData), "editData", __FILE__, __LINE__, "No edit data for window saving callbacks!");
 
 	// get the currently selected item from each of the combos and save
 	Int index;
@@ -337,7 +338,7 @@ INT_PTR CALLBACK CallbackEditorDialogProc( HWND hWndDialog, UINT message,
 
 
 							// sanity
-							DEBUG_ASSERTCRASH( win, ("null window set in listbox item data") );
+							engine::debug::invariant((win), "win", __FILE__, __LINE__, "null window set in listbox item data");
 
 							// save the callbacks for the curent window selected
 							SaveCallbacks( currentWindow, hWndDialog );

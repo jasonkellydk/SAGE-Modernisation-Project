@@ -30,6 +30,7 @@
 
 #include "WaypointOptions.h" //WST 10/7/2002
 #include "CUndoable.h" //WST 10/7/2002
+import engine.debug;
 
 /////////////////////////////////////////////////////////////////////////////
 // CameraOptions dialog
@@ -260,7 +261,7 @@ void CameraOptions::GetPopSliderInfo(const long sliderID, long *pMin, long *pMax
 
 		default:
 			// uh-oh!
-			DEBUG_CRASH(("Slider message from unknown control"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Slider message from unknown control");
 			break;
 	}
 }
@@ -276,7 +277,7 @@ void CameraOptions::PopSliderChanged(const long sliderID, long theVal)
 
 		default:
 			// uh-oh!
-			DEBUG_CRASH(("Slider message from unknown control"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Slider message from unknown control");
 			break;
 	}
 }
@@ -289,7 +290,7 @@ void CameraOptions::PopSliderFinished(const long sliderID, long theVal)
 
 		default:
 			// uh-oh!
-			DEBUG_CRASH(("Slider message from unknown control"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Slider message from unknown control");
 			break;
 	}
 

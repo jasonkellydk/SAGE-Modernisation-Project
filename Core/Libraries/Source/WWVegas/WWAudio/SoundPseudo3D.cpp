@@ -35,6 +35,7 @@
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 
+#include <cmath>
 #include "SoundPseudo3D.h"
 #include "WWAudio.h"
 #include "SoundScene.h"
@@ -177,8 +178,8 @@ SoundPseudo3DClass::Update_Pseudo_Volume ()
 		//
 		// Find the difference in the sound position and its listener's position
 		//
-		Vector3 sound_pos = m_ListenerTransform.Get_Translation () - m_Transform.Get_Translation ();
-		float distance = sound_pos.Quick_Length ();
+		const Engine::Math::Vector3 sound_pos = m_ListenerTransform.Translation() - m_Transform.Translation();
+		const float distance = sound_pos.Length();
 
 		//
 		// Determine a normalized volume from the position
@@ -206,15 +207,16 @@ SoundPseudo3DClass::Update_Pseudo_Pan ()
 		//
 		//	Transform the sound's position into 'listener-space'
 		//
-		Vector3 sound_pos	= m_Transform.Get_Translation ();
-		Vector3 rel_sound_pos;
-		Matrix3D::Inverse_Transform_Vector (m_ListenerTransform, sound_pos, &rel_sound_pos);
+		const auto inverse = m_ListenerTransform.Inverse();
+		if (!inverse)
+			return;
+		const Engine::Math::Vector3 rel_sound_pos = inverse->Transform_Point(m_Transform.Translation());
 
 		//
 		//	Calculate a normalized pan from 0 (hard left) to 1.0F (hard right)
 		//
-		float angle	= WWMath::Atan2 (rel_sound_pos.Y, rel_sound_pos.X);
-		float pan	= -WWMath::Fast_Sin (angle);
+		float angle	= std::atan2 (rel_sound_pos.y, rel_sound_pos.x);
+		float pan	= -std::sin (angle);
 		pan			= (pan / 2.0F) + 0.5F;
 
 		//

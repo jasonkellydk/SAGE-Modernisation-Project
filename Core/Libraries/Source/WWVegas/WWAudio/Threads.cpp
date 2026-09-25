@@ -34,6 +34,7 @@
 #include "Threads.h"
 #include "Utils.h"
 #include <process.h>
+import engine.debug;
 
 
 ///////////////////////////////////////////////////////////////////////////////////////////
@@ -265,7 +266,7 @@ WWAudioThreadsClass::Begin_Modify_List ()
 	//
 	if (m_ListMutex != nullptr) {
 		retval = (::WaitForSingleObject (m_ListMutex, 1000) == WAIT_OBJECT_0);
-		WWASSERT (retval);
+		engine::debug::assert_condition((retval), "retval", __FILE__, __LINE__, "assertion failed");
 	}
 
 	return retval;

@@ -26,7 +26,8 @@
 // Computerized opponent
 // Author: Michael S. Booth, January 2002
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 
 #include "Common/GameMemory.h"
@@ -113,7 +114,7 @@ void AISkirmishPlayer::processBaseBuilding()
 			if (name.isEmpty()) continue;
 			const ThingTemplate *curPlan = TheThingFactory->findTemplate( name );
 			if (!curPlan) {
-				DEBUG_LOG(("*** ERROR - Build list building '%s' doesn't exist.", name.str()));
+				engine::debug::log_info("*** ERROR - Build list building '%s' doesn't exist.", name.str());
 				continue;
 			}
 			bldg = TheGameLogic->findObjectByID( info->getObjectID() );
@@ -135,7 +136,7 @@ void AISkirmishPlayer::processBaseBuilding()
 						if( rhbi ) {
 							ObjectID spawnerID = rhbi->getSpawnerID();
 							if (priorID == spawnerID) {
-								DEBUG_LOG(("AI Found hole to rebuild %s", curPlan->getName().str()));
+								engine::debug::log_info("AI Found hole to rebuild %s", curPlan->getName().str());
 								info->setObjectID(obj->getID());
 							}
 						}
@@ -160,7 +161,7 @@ void AISkirmishPlayer::processBaseBuilding()
               }
 
 							if (myDozer==nullptr) {
-								DEBUG_LOG(("AI's Dozer got killed (or captured).  Find another dozer."));
+								engine::debug::log_info("AI's Dozer got killed (or captured).  Find another dozer.");
 								queueDozer();
  								myDozer = findDozer(bldg->getPosition());
 								if (myDozer==nullptr || myDozer->getAI()==nullptr) {
@@ -185,7 +186,7 @@ void AISkirmishPlayer::processBaseBuilding()
 				if (info->getObjectTimestamp()+TheAI->getAiData()->m_rebuildDelaySeconds*LOGICFRAMES_PER_SECOND > TheGameLogic->getFrame()) {
 					continue;
 				}	else {
-					DEBUG_LOG(("Enabling rebuild for %s", info->getTemplateName().str()));
+					engine::debug::log_info("Enabling rebuild for %s", info->getTemplateName().str());
 					info->setObjectTimestamp(0); // ready to build.
 				}
 			}
@@ -243,7 +244,7 @@ void AISkirmishPlayer::processBaseBuilding()
 			if (!powerUnderConstruction) {
 				bldgPlan = powerPlan;
 				bldgInfo = powerInfo;
-				DEBUG_LOG(("Forcing build of power plant."));
+				engine::debug::log_info("Forcing build of power plant.");
 			}
 		}
 		if (bldgPlan && bldgInfo) {
@@ -419,7 +420,7 @@ void AISkirmishPlayer::buildSpecificAIBuilding(const AsciiString &thingName)
 			if (name.isEmpty()) continue;
 			const ThingTemplate *bldgPlan = TheThingFactory->findTemplate( name );
 			if (!bldgPlan) {
-				DEBUG_LOG(("*** ERROR - Build list building '%s' doesn't exist.", name.str()));
+				engine::debug::log_info("*** ERROR - Build list building '%s' doesn't exist.", name.str());
 				continue;
 			}
 			Object *bldg = TheGameLogic->findObjectByID( info->getObjectID() );
@@ -599,7 +600,7 @@ void AISkirmishPlayer::buildAIBaseDefenseStructure(const AsciiString &thingName,
 {
 	const ThingTemplate *tTemplate = TheThingFactory->findTemplate(thingName);
 	if (tTemplate==nullptr) {
-		DEBUG_CRASH(("Couldn't find base defense structure '%s' for side %s", thingName.str(), m_player->getSide().str()));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Couldn't find base defense structure '%s' for side %s", thingName.str(), m_player->getSide().str());
 		return;
 	}
 	do {
@@ -677,12 +678,12 @@ void AISkirmishPlayer::buildAIBaseDefenseStructure(const AsciiString &thingName,
 
 // TheSuperHackers @info helmutbuhler 21/04/2025 This debug mutates the code to become CRC incompatible
 #if defined(RTS_DEBUG) || !RETAIL_COMPATIBLE_CRC
-		DEBUG_LOG(("buildAIBaseDefenseStructure -- Angle is %f sin %f, cos %f", 180*angle/PI, s, c));
-		DEBUG_LOG(("buildAIBaseDefenseStructure -- Offset is %f  %f, Final Position is %f, %f",
+		engine::debug::log_info("buildAIBaseDefenseStructure -- Angle is %f sin %f, cos %f", 180*angle/PI, s, c);
+		engine::debug::log_info("buildAIBaseDefenseStructure -- Offset is %f  %f, Final Position is %f, %f",
 			offset.x, offset.y,
 			offset.x*c - offset.y*s,
 			offset.y*c + offset.x*s
-			));
+			);
 #endif
 		Coord3D buildPos = m_baseCenter;
 		buildPos.x += offset.x*c - offset.y*s;
@@ -807,11 +808,9 @@ void AISkirmishPlayer::recruitSpecificAITeam(TeamPrototype *teamProto, Real recr
 						AIUpdateInterface *ai = unit->getAIUpdateInterface();
 						if (ai)
 						{
-#ifdef DEBUG_LOGGING
 							Coord3D pos = *unit->getPosition();
 							Coord3D to = teamProto->getTemplateInfo()->m_homeLocation;
-							DEBUG_LOG(("Moving unit from %f,%f to %f,%f", pos.x, pos.y , to.x, to.y ));
-#endif
+							engine::debug::log_info("Moving unit from %f,%f to %f,%f", pos.x, pos.y , to.x, to.y );
 							ai->aiMoveToPosition( &teamProto->getTemplateInfo()->m_homeLocation, CMD_FROM_AI);
 						}
 					} else {
@@ -983,7 +982,7 @@ void AISkirmishPlayer::adjustBuildList(BuildListInfo *list)
 		}
 	}
 	if (!foundStart) {
-		DEBUG_LOG(("Couldn't find starting command center for ai player."));
+		engine::debug::log_info("Couldn't find starting command center for ai player.");
 		return;
 	}
 	// Find the location of the command center in the build list.
@@ -1074,7 +1073,7 @@ void AISkirmishPlayer::newMap()
 
 	/* Get our proper build list. */
 	AsciiString mySide = m_player->getSide();
-	DEBUG_LOG(("AI Player side is %s", mySide.str()));
+	engine::debug::log_info("AI Player side is %s", mySide.str());
 	const AISideBuildList *build = TheAI->getAiData()->m_sideBuildLists;
 	while (build) {
 		if (build->m_side == mySide) {
@@ -1086,7 +1085,7 @@ void AISkirmishPlayer::newMap()
 		}
 		build = build->m_next;
 	}
-	DEBUG_ASSERTLOG(build!=nullptr, ("Couldn't find build list for skirmish player."));
+	if (!(build!=nullptr)) engine::debug::log_error("Couldn't find build list for skirmish player.");
 
 	// Build any with the initially built flag.
 	for( BuildListInfo *info = m_player->getBuildList(); info; info = info->getNext() )
@@ -1095,7 +1094,7 @@ void AISkirmishPlayer::newMap()
 		if (name.isEmpty()) continue;
 		const ThingTemplate *bldgPlan = TheThingFactory->findTemplate( name );
 		if (!bldgPlan) {
-			DEBUG_LOG(("*** ERROR - Build list building '%s' doesn't exist.", name.str()));
+			engine::debug::log_info("*** ERROR - Build list building '%s' doesn't exist.", name.str());
 			continue;
 		}
 		if (info->isInitiallyBuilt()) {

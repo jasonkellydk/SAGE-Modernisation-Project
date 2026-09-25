@@ -39,7 +39,7 @@
 #include "Common/FileSystem.h"
 #include "Common/ArchiveFileSystem.h"
 #include "Common/LocalFileSystem.h"
-#include "Common/Debug.h"
+
 #include "Common/StackDump.h"
 #include "Common/GameMemory.h"
 #include "Common/Science.h"
@@ -80,6 +80,7 @@
 #include "Win32Device/GameClient/Win32Mouse.h"
 #include "SDL3Device/Common/SDL3LocalFileSystem.h"
 #include "SDL3Device/Common/SDL3BIGFileSystem.h"
+import engine.debug;
 
 
 static SubsystemInterfaceList TheSubsystemListRecord;
@@ -283,13 +284,13 @@ BOOL CWorldBuilderApp::InitInstance()
 
 #ifdef DEBUG_LOGGING
 	// Turn on console output jba [3/20/2003]
-	DebugSetFlags(DebugGetFlags() | DEBUG_FLAG_LOG_TO_CONSOLE);
+	
 #endif
 
-	DEBUG_LOG(("starting Worldbuilder."));
+	engine::debug::log_info("starting Worldbuilder.");
 
 #ifdef RTS_DEBUG
-	DEBUG_LOG(("RTS_DEBUG defined."));
+	engine::debug::log_info("RTS_DEBUG defined.");
 #endif
 #ifdef MEMORYPOOL_CHECKPOINTING
 	gFirstCP = TheMemoryPoolFactory->debugSetCheckpoint();
@@ -346,7 +347,7 @@ BOOL CWorldBuilderApp::InitInstance()
 	TheWritableGlobalData->m_debugIgnoreAsserts = false;
 #endif
 
-	DEBUG_LOG(("TheWritableGlobalData %x", TheWritableGlobalData));
+	engine::debug::log_info("TheWritableGlobalData %x", TheWritableGlobalData);
 #if 1
 	// srj sez: put INI into our user data folder, not the ap dir
 	free((void*)m_pszProfileName);
@@ -412,7 +413,7 @@ BOOL CWorldBuilderApp::InitInstance()
 	}
 
 	// Just to be sure - wb doesn't do well with half res terrain.
-	DEBUG_ASSERTCRASH(!TheGlobalData->m_useHalfHeightMap, ("TheGlobalData->m_useHalfHeightMap : Don't use this setting in WB."));
+	engine::debug::invariant((!TheGlobalData->m_useHalfHeightMap), "!TheGlobalData->m_useHalfHeightMap", __FILE__, __LINE__, "TheGlobalData->m_useHalfHeightMap : Don't use this setting in WB.");
 	TheWritableGlobalData->m_useHalfHeightMap = false;
 
 #if ENABLE_CONFIGURABLE_SHROUD
@@ -552,7 +553,7 @@ selects the appropriate tool, else uses the normal tool. */
 void CWorldBuilderApp::updateCurTool(Bool forceHand)
 {
 	Tool *curTool = m_curTool;
-	DEBUG_ASSERTCRASH((m_lockCurTool>=0),("oops"));
+	engine::debug::invariant(((m_lockCurTool>=0)), "(m_lockCurTool>=0)", __FILE__, __LINE__, "oops");
 	if (!m_lockCurTool) {	 // don't change tools that are doing something.
 		if (forceHand || (0x8000 & ::GetAsyncKeyState(VK_SPACE))) {
 			// Space bar gives scroll hand.

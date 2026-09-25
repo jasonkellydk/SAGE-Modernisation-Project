@@ -1,5 +1,4 @@
 module;
-#include "../../profiling/Tracy.h"
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -8,6 +7,7 @@ module;
 #include <vector>
 #include <utility>
 export module Graphics.Scene.Props.MaterialSubmission;
+import engine.profiling;
 import Graphics.RHI;
 import Graphics.Materials.State;
 import Graphics.Resources.Textures.Sampling;
@@ -92,7 +92,7 @@ public:
             || m_force_multiply != overrides.force_multiply
             || m_settings.mode != settings.mode || m_settings.anisotropy != settings.anisotropy
             || !Same_Sampling(m_sampling[0], sampling[0]) || !Same_Sampling(m_sampling[1], sampling[1])) {
-            GRAPHICS_PROFILE_SCOPE("Graphics.Mesh.PrepareMaterialState");
+            engine::profiling::Scope profile_scope_94("Graphics.Mesh.PrepareMaterialState");
             m_style = MaterialSubmissionDetail::Prepare_Style(shader, context, overrides, sampling, settings, parameters);
             m_constants = {parameters.primary_gradient, parameters.secondary_gradient,
                 parameters.detail_color, parameters.detail_alpha, parameters.alpha_cutoff};
@@ -147,7 +147,7 @@ bool Submit_Prop_Material_In_Place(Device& device, PropRenderer& renderer, PropS
     PropParameters& parameters, const PropMaterialDrawContext& context,
     PropMaterialDrawOverrides overrides = {})
 {
-    GRAPHICS_PROFILE_SCOPE("Graphics.Mesh.SubmitMaterial");
+    engine::profiling::Scope profile_scope_149("Graphics.Mesh.SubmitMaterial");
     if (vertices.empty() || indices.empty()) return false;
     const bool textured = shader.Get_Texturing() != MaterialState::TEXTURING_DISABLE;
     const bool muzzle = overrides.muzzle_flash != MuzzleFlashDesignation::None && sources[0] && textured;

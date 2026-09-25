@@ -45,6 +45,8 @@
 
 #pragma once
 
+
+#include <cassert>
 // Turn off memory pool checkpointing for now.
 #ifndef DISABLE_MEMORYPOOL_CHECKPOINTING
 	#define DISABLE_MEMORYPOOL_CHECKPOINTING 1
@@ -70,7 +72,7 @@
 // USER INCLUDES //////////////////////////////////////////////////////////////
 
 #include "Lib/BaseType.h"
-#include "Common/Debug.h"
+
 #include "Common/Errors.h"
 
 // MACROS //////////////////////////////////////////////////////////////////
@@ -589,11 +591,11 @@ private: \
 			order-of-execution problem for static variables, ensuring this is not executed \
 			prior to the initialization of TheMemoryPoolFactory. \
 		*/ \
-		DEBUG_ASSERTCRASH(TheMemoryPoolFactory, ("TheMemoryPoolFactory is null")); \
+		assert((TheMemoryPoolFactory)); \
 		static MemoryPool *The##ARGCLASS##Pool = TheMemoryPoolFactory->findMemoryPool(ARGPOOLNAME); \
-		DEBUG_ASSERTCRASH(The##ARGCLASS##Pool, ("Pool \"%s\" not found (did you set it up in initMemoryPools?)", ARGPOOLNAME)); \
-		DEBUG_ASSERTCRASH(The##ARGCLASS##Pool->getAllocationSize() >= sizeof(ARGCLASS), ("Pool \"%s\" is too small for this class (currently %d, need %d)", ARGPOOLNAME, The##ARGCLASS##Pool->getAllocationSize(), sizeof(ARGCLASS))); \
-		DEBUG_ASSERTCRASH(The##ARGCLASS##Pool->getAllocationSize() <= sizeof(ARGCLASS)+MEMORY_POOL_OBJECT_ALLOCATION_SLOP, ("Pool \"%s\" is too large for this class (currently %d, need %d)", ARGPOOLNAME, The##ARGCLASS##Pool->getAllocationSize(), sizeof(ARGCLASS))); \
+		assert((The##ARGCLASS##Pool)); \
+		assert((The##ARGCLASS##Pool->getAllocationSize() >= sizeof(ARGCLASS))); \
+		assert((The##ARGCLASS##Pool->getAllocationSize() <= sizeof(ARGCLASS)+MEMORY_POOL_OBJECT_ALLOCATION_SLOP)); \
 		return The##ARGCLASS##Pool; \
 	}
 
@@ -608,11 +610,11 @@ private: \
 			order-of-execution problem for static variables, ensuring this is not executed \
 			prior to the initialization of TheMemoryPoolFactory. \
 		*/ \
-		DEBUG_ASSERTCRASH(TheMemoryPoolFactory, ("TheMemoryPoolFactory is null")); \
+		assert((TheMemoryPoolFactory)); \
 		static MemoryPool *The##ARGCLASS##Pool = TheMemoryPoolFactory->createMemoryPool(ARGPOOLNAME, sizeof(ARGCLASS), ARGINITIAL, ARGOVERFLOW); \
-		DEBUG_ASSERTCRASH(The##ARGCLASS##Pool, ("Pool \"%s\" not found (did you set it up in initMemoryPools?)", ARGPOOLNAME)); \
-		DEBUG_ASSERTCRASH(The##ARGCLASS##Pool->getAllocationSize() >= sizeof(ARGCLASS), ("Pool \"%s\" is too small for this class (currently %d, need %d)", ARGPOOLNAME, The##ARGCLASS##Pool->getAllocationSize(), sizeof(ARGCLASS))); \
-		DEBUG_ASSERTCRASH(The##ARGCLASS##Pool->getAllocationSize() <= sizeof(ARGCLASS)+MEMORY_POOL_OBJECT_ALLOCATION_SLOP, ("Pool \"%s\" is too large for this class (currently %d, need %d)", ARGPOOLNAME, The##ARGCLASS##Pool->getAllocationSize(), sizeof(ARGCLASS))); \
+		assert((The##ARGCLASS##Pool)); \
+		assert((The##ARGCLASS##Pool->getAllocationSize() >= sizeof(ARGCLASS))); \
+		assert((The##ARGCLASS##Pool->getAllocationSize() <= sizeof(ARGCLASS)+MEMORY_POOL_OBJECT_ALLOCATION_SLOP)); \
 		return The##ARGCLASS##Pool; \
 	}
 
@@ -625,7 +627,7 @@ public: \
 public: \
 	inline void *operator new(size_t s, ARGCLASS##MagicEnum e DECLARE_LITERALSTRING_ARG2) \
 	{ \
-		DEBUG_ASSERTCRASH(s == sizeof(ARGCLASS), ("The wrong operator new is being called; ensure all objects in the hierarchy have MemoryPoolGlue set up correctly")); \
+		assert((s == sizeof(ARGCLASS))); \
 		return ARGCLASS::getClassMemoryPool()->allocateBlockImplementation(PASS_LITERALSTRING_ARG1); \
 	} \
 public: \
@@ -654,14 +656,14 @@ protected: \
 	*/ \
 	inline void *operator new(size_t s) \
 	{ \
-		DEBUG_CRASH(("This operator new should normally never be called... please use new(char*) instead.")); \
-		DEBUG_ASSERTCRASH(s == sizeof(ARGCLASS), ("The wrong operator new is being called; ensure all objects in the hierarchy have MemoryPoolGlue set up correctly")); \
+		assert(false); \
+		assert((s == sizeof(ARGCLASS))); \
 		throw ERROR_BUG; \
 		return 0; \
 	} \
 	inline void operator delete(void *p) \
 	{ \
-		DEBUG_CRASH(("Please call deleteInstance instead of delete.")); \
+		assert(false); \
 		ARGCLASS::getClassMemoryPool()->freeBlock(p); \
 	} \
 private: \
@@ -696,27 +698,27 @@ public: \
 protected: \
 	inline void *operator new(size_t s, ARGCLASS##MagicEnum e DECLARE_LITERALSTRING_ARG2) \
 	{ \
-		DEBUG_CRASH(("this should be impossible to call (abstract base class)")); \
-		DEBUG_ASSERTCRASH(s == sizeof(ARGCLASS), ("The wrong operator new is being called; ensure all objects in the hierarchy have MemoryPoolGlue set up correctly")); \
+		assert(false); \
+		assert((s == sizeof(ARGCLASS))); \
 		throw ERROR_BUG; \
 		return 0; \
 	} \
 protected: \
 	inline void operator delete(void *p, ARGCLASS##MagicEnum e DECLARE_LITERALSTRING_ARG2) \
 	{ \
-		DEBUG_CRASH(("this should be impossible to call (abstract base class)")); \
+		assert(false); \
 	} \
 protected: \
 	inline void *operator new(size_t s) \
 	{ \
-		DEBUG_CRASH(("this should be impossible to call (abstract base class)")); \
-		DEBUG_ASSERTCRASH(s == sizeof(ARGCLASS), ("The wrong operator new is being called; ensure all objects in the hierarchy have MemoryPoolGlue set up correctly")); \
+		assert(false); \
+		assert((s == sizeof(ARGCLASS))); \
 		throw ERROR_BUG; \
 		return 0; \
 	} \
 	inline void operator delete(void *p) \
 	{ \
-		DEBUG_CRASH(("this should be impossible to call (abstract base class)")); \
+		assert(false); \
 	} \
 private: \
 	virtual MemoryPool *getObjectMemoryPool() override \
@@ -743,8 +745,8 @@ protected:
 	virtual ~MemoryPoolObject() { }
 
 protected:
-	void *operator new(size_t s) { DEBUG_CRASH(("This should be impossible")); return 0; }
-	void operator delete(void *p) { DEBUG_CRASH(("This should be impossible")); }
+	void *operator new(size_t s) { assert(false); return 0; }
+	void operator delete(void *p) { assert(false); }
 
 protected:
 
@@ -903,7 +905,7 @@ private:
 	MemoryPoolObject *m_mpo;
 public:
 	MemoryPoolObjectHolder(MemoryPoolObject *mpo = nullptr) : m_mpo(mpo) { }
-	void hold(MemoryPoolObject *mpo) { DEBUG_ASSERTCRASH(!m_mpo, ("already holding")); m_mpo = mpo; }
+	void hold(MemoryPoolObject *mpo) { assert((!m_mpo)); m_mpo = mpo; }
 	void release() { m_mpo = nullptr; }
 	~MemoryPoolObjectHolder() { deleteInstance(m_mpo); }
 };

@@ -5,6 +5,7 @@
 import Graphics.Frame.AttachmentBindings;
 import Graphics.Frame.Runtime;
 import Graphics.Scene.Screen.Filters;
+import Engine.Core.Math.Vector4;
 
 // Translate the existing viewport quad and texture ownership into graphics data.
 template<typename QuadVertex>
@@ -19,8 +20,8 @@ bool Draw_Screen_Filter_Quad(const QuadVertex* source, W3DTextureHandle* texture
     std::array<Graphics::ScreenFilterVertex,4> vertices{};
     for (unsigned i=0;i<4;++i) {
         const auto& src=source[i]; auto& dst=vertices[i];
-        dst.position={2*(src.p.X+0.5f-viewport.x)/viewport.width-1,
-            1-2*(src.p.Y+0.5f-viewport.y)/viewport.height,src.p.Z};
+        dst.position={2*(src.p.x+0.5f-viewport.x)/viewport.width-1,
+            1-2*(src.p.y+0.5f-viewport.y)/viewport.height,src.p.z};
         dst.color={float((src.color>>16)&255)/255,float((src.color>>8)&255)/255,
             float(src.color&255)/255,float(src.color>>24)/255};
         dst.uv={src.u,src.v};
@@ -30,5 +31,3 @@ bool Draw_Screen_Filter_Quad(const QuadVertex* source, W3DTextureHandle* texture
         vertices,parameters,style,Resolve_Graphics_Texture(texture),Resolve_Graphics_Texture(mask));
     return drawn;
 }
-
-

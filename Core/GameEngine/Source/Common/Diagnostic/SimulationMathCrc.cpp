@@ -16,44 +16,48 @@
 **	along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+#include <cmath>
 #include "PreRTS.h"
 
 #include "Common/Diagnostic/SimulationMathCrc.h"
 #include "Common/XferCRC.h"
-#include "WWMath/matrix3d.h"
-#include "WWMath/wwmath.h"
 #include "GameLogic/FPUControl.h"
 
-#include <math.h>
+import Engine.Core.Math.AffineTransform3;
 
 static void appendSimulationMathCrc(XferCRC &xfer)
 {
-    Matrix3D matrix;
-    Matrix3D factorsMatrix;
+    Engine::Math::AffineTransform3 matrix;
+    Engine::Math::AffineTransform3 factors_matrix;
 
-    matrix.Set(
+    matrix.elements = {
         4.1f, 1.2f, 0.3f, 0.4f,
         0.5f, 3.6f, 0.7f, 0.8f,
-        0.9f, 1.0f, 2.1f, 1.2f);
+        0.9f, 1.0f, 2.1f, 1.2f};
 
-    factorsMatrix.Set(
-        WWMath::Sin(0.7f) * log10f(2.3f),
-        WWMath::Cos(1.1f) * powf(1.1f, 2.0f),
-        tanf(0.3f),
-        asinf(0.967302263f),
-        acosf(0.967302263f),
-        atanf(0.967302263f) * powf(1.1f, 2.0f),
-        atan2f(0.4f, 1.3f),
-        sinhf(0.2f),
-        coshf(0.4f) * tanhf(0.5f),
-        sqrtf(55788.84375f),
-        expf(0.1f) * log10f(2.3f),
-        logf(1.4f));
+    factors_matrix.elements = {
+        std::sin(0.7f) * std::log10(2.3f),
+        std::cos(1.1f) * std::pow(1.1f, 2.0f),
+        std::tan(0.3f),
+        std::asin(0.967302263f),
+        std::acos(0.967302263f),
+        std::atan(0.967302263f) * std::pow(1.1f, 2.0f),
+        std::atan2(0.4f, 1.3f),
+        std::sinh(0.2f),
+        std::cosh(0.4f) * std::tanh(0.5f),
+        std::sqrt(55788.84375f),
+        std::exp(0.1f) * std::log10(2.3f),
+        std::log(1.4f)};
 
-    Matrix3D::Multiply(matrix, factorsMatrix, &matrix);
-    matrix.Get_Inverse(matrix);
+    matrix = Compose(matrix, factors_matrix);
+    if (const auto inverse = matrix.Inverse())
+        matrix = *inverse;
 
-    xfer.xferMatrix3D(&matrix);
+    // Match the legacy matrix transfer record: version followed by 12 row-major reals.
+    XferVersion version = 1;
+    xfer.xferVersion(&version, version);
+    for (float &element : matrix.elements)
+        xfer.xferReal(&element);
 }
 
 UnsignedInt SimulationMathCrc::calculate()

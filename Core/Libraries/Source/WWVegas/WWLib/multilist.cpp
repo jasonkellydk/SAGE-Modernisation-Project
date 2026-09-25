@@ -37,7 +37,7 @@
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 #include "multilist.h"
-#include "WWDebug/wwmemlog.h"
+
 
 /*
 ** Declare the pool for ListNodes
@@ -96,7 +96,7 @@ int GenericMultiListClass::Count()
 
 bool GenericMultiListClass::Internal_Add(MultiListObjectClass *obj, bool onlyonce)
 {
-	WWMEMLOG(MEM_GAMEDATA);
+
 	assert(obj);
 
 	if (onlyonce && Is_In_List(obj)) {
@@ -125,7 +125,7 @@ bool GenericMultiListClass::Internal_Add(MultiListObjectClass *obj, bool onlyonc
 
 bool GenericMultiListClass::Internal_Add_Tail(MultiListObjectClass * obj,bool onlyonce)
 {
-	WWMEMLOG(MEM_GAMEDATA);
+
 	assert(obj);
 
 	if (onlyonce && Is_In_List(obj)) {
@@ -154,7 +154,7 @@ bool GenericMultiListClass::Internal_Add_Tail(MultiListObjectClass * obj,bool on
 
 bool GenericMultiListClass::Internal_Add_After(MultiListObjectClass * obj,const MultiListObjectClass * existing_list_member,bool onlyonce)
 {
-	WWMEMLOG(MEM_GAMEDATA);
+
 	assert(obj);
 	assert(existing_list_member);
 

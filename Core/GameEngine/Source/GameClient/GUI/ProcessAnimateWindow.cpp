@@ -50,7 +50,8 @@
 //-----------------------------------------------------------------------------
 // USER INCLUDES //////////////////////////////////////////////////////////////
 //-----------------------------------------------------------------------------
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "GameClient/ProcessAnimateWindow.h"
 #include "GameClient/AnimateWindowManager.h"
@@ -107,7 +108,7 @@ void ProcessAnimateWindowSlideFromRight::initReverseAnimateWindow( wnd::AnimateW
 {
 	if(!animWin)
 	{
-		DEBUG_ASSERTCRASH( animWin, ("animWin was passed into initAnimateWindow as a null... bad bad bad!"));
+		engine::debug::invariant((animWin), "animWin", __FILE__, __LINE__, "animWin was passed into initAnimateWindow as a null... bad bad bad!");
 		return;
 	}
 	if(animWin->getDelay() > 0)
@@ -131,7 +132,7 @@ void ProcessAnimateWindowSlideFromRight::initAnimateWindow( wnd::AnimateWindow *
 
 	if(!animWin)
 	{
-		DEBUG_ASSERTCRASH( animWin, ("animWin was passed into initAnimateWindow as a null... bad bad bad!"));
+		engine::debug::invariant((animWin), "animWin", __FILE__, __LINE__, "animWin was passed into initAnimateWindow as a null... bad bad bad!");
 		return;
 	}
 	animWin->setFinished( FALSE );
@@ -141,7 +142,7 @@ void ProcessAnimateWindowSlideFromRight::initAnimateWindow( wnd::AnimateWindow *
 	GameWindow *win = animWin->getGameWindow();
 	if(!win)
 	{
-		DEBUG_ASSERTCRASH( win, ("animWin contains a null for it's GameWindow... Whatup wit dat?"));
+		engine::debug::invariant((win), "win", __FILE__, __LINE__, "animWin contains a null for it's GameWindow... Whatup wit dat?");
 		return;
 	}
 	win->winGetPosition(&restPos.x, &restPos.y);
@@ -179,7 +180,7 @@ Bool ProcessAnimateWindowSlideFromRight::updateAnimateWindow( wnd::AnimateWindow
 
 	if(!animWin)
 	{
-		DEBUG_ASSERTCRASH( animWin, ("animWin was passed into updateAnimateWindow as a null... bad bad bad!"));
+		engine::debug::invariant((animWin), "animWin", __FILE__, __LINE__, "animWin was passed into updateAnimateWindow as a null... bad bad bad!");
 		return TRUE;
 	}
 
@@ -195,7 +196,7 @@ Bool ProcessAnimateWindowSlideFromRight::updateAnimateWindow( wnd::AnimateWindow
 	GameWindow *win = animWin->getGameWindow();
 	if(!win)
 	{
-		DEBUG_ASSERTCRASH( win, ("animWin contains a null for it's GameWindow... Whatup wit dat?"));
+		engine::debug::invariant((win), "win", __FILE__, __LINE__, "animWin contains a null for it's GameWindow... Whatup wit dat?");
 		return TRUE;
 	}
 
@@ -229,7 +230,7 @@ Bool ProcessAnimateWindowSlideFromRight::reverseAnimateWindow( wnd::AnimateWindo
 
 	if(!animWin)
 	{
-		DEBUG_ASSERTCRASH( animWin, ("animWin was passed into updateAnimateWindow as a null... bad bad bad!"));
+		engine::debug::invariant((animWin), "animWin", __FILE__, __LINE__, "animWin was passed into updateAnimateWindow as a null... bad bad bad!");
 		return TRUE;
 	}
 
@@ -246,7 +247,7 @@ Bool ProcessAnimateWindowSlideFromRight::reverseAnimateWindow( wnd::AnimateWindo
 	GameWindow *win = animWin->getGameWindow();
 	if(!win)
 	{
-		DEBUG_ASSERTCRASH( win, ("animWin contains a null for it's GameWindow... Whatup wit dat?"));
+		engine::debug::invariant((win), "win", __FILE__, __LINE__, "animWin contains a null for it's GameWindow... Whatup wit dat?");
 		return TRUE;
 	}
 
@@ -300,7 +301,7 @@ void ProcessAnimateWindowSlideFromLeft::initReverseAnimateWindow( wnd::AnimateWi
 {
 	if(!animWin)
 	{
-		DEBUG_ASSERTCRASH( animWin, ("animWin was passed into initAnimateWindow as a null... bad bad bad!"));
+		engine::debug::invariant((animWin), "animWin", __FILE__, __LINE__, "animWin was passed into initAnimateWindow as a null... bad bad bad!");
 		return;
 	}
 	if(animWin->getDelay() > 0)
@@ -322,7 +323,7 @@ void ProcessAnimateWindowSlideFromLeft::initAnimateWindow( wnd::AnimateWindow *a
 
 	if(!animWin)
 	{
-		DEBUG_ASSERTCRASH( animWin, ("animWin was passed into initAnimateWindow as a null... bad bad bad!"));
+		engine::debug::invariant((animWin), "animWin", __FILE__, __LINE__, "animWin was passed into initAnimateWindow as a null... bad bad bad!");
 		return;
 	}
 
@@ -331,7 +332,7 @@ void ProcessAnimateWindowSlideFromLeft::initAnimateWindow( wnd::AnimateWindow *a
 	GameWindow *win = animWin->getGameWindow();
 	if(!win)
 	{
-		DEBUG_ASSERTCRASH( win, ("animWin contains a null for it's GameWindow... Whatup wit dat?"));
+		engine::debug::invariant((win), "win", __FILE__, __LINE__, "animWin contains a null for it's GameWindow... Whatup wit dat?");
 		return;
 	}
 	win->winGetPosition(&restPos.x, &restPos.y);
@@ -365,7 +366,7 @@ Bool ProcessAnimateWindowSlideFromLeft::updateAnimateWindow( wnd::AnimateWindow 
 
 	if(!animWin)
 	{
-		DEBUG_ASSERTCRASH( animWin, ("animWin was passed into updateAnimateWindow as a null... bad bad bad!"));
+		engine::debug::invariant((animWin), "animWin", __FILE__, __LINE__, "animWin was passed into updateAnimateWindow as a null... bad bad bad!");
 		return TRUE;
 	}
 
@@ -382,7 +383,7 @@ Bool ProcessAnimateWindowSlideFromLeft::updateAnimateWindow( wnd::AnimateWindow 
 	GameWindow *win = animWin->getGameWindow();
 	if(!win)
 	{
-		DEBUG_ASSERTCRASH( win, ("animWin contains a null for it's GameWindow... Whatup wit dat?"));
+		engine::debug::invariant((win), "win", __FILE__, __LINE__, "animWin contains a null for it's GameWindow... Whatup wit dat?");
 		return TRUE;
 	}
 
@@ -416,7 +417,7 @@ Bool ProcessAnimateWindowSlideFromLeft::reverseAnimateWindow( wnd::AnimateWindow
 
 	if(!animWin)
 	{
-		DEBUG_ASSERTCRASH( animWin, ("animWin was passed into updateAnimateWindow as a null... bad bad bad!"));
+		engine::debug::invariant((animWin), "animWin", __FILE__, __LINE__, "animWin was passed into updateAnimateWindow as a null... bad bad bad!");
 		return TRUE;
 	}
 
@@ -433,7 +434,7 @@ Bool ProcessAnimateWindowSlideFromLeft::reverseAnimateWindow( wnd::AnimateWindow
 	GameWindow *win = animWin->getGameWindow();
 	if(!win)
 	{
-		DEBUG_ASSERTCRASH( win, ("animWin contains a null for it's GameWindow... Whatup wit dat?"));
+		engine::debug::invariant((win), "win", __FILE__, __LINE__, "animWin contains a null for it's GameWindow... Whatup wit dat?");
 		return TRUE;
 	}
 
@@ -487,7 +488,7 @@ void ProcessAnimateWindowSlideFromTop::initReverseAnimateWindow( wnd::AnimateWin
 {
 	if(!animWin)
 	{
-		DEBUG_ASSERTCRASH( animWin, ("animWin was passed into initAnimateWindow as a null... bad bad bad!"));
+		engine::debug::invariant((animWin), "animWin", __FILE__, __LINE__, "animWin was passed into initAnimateWindow as a null... bad bad bad!");
 		return;
 	}
 	if(animWin->getDelay() > 0)
@@ -509,7 +510,7 @@ void ProcessAnimateWindowSlideFromTop::initAnimateWindow( wnd::AnimateWindow *an
 
 	if(!animWin)
 	{
-		DEBUG_ASSERTCRASH( animWin, ("animWin was passed into initAnimateWindow as a null... bad bad bad!"));
+		engine::debug::invariant((animWin), "animWin", __FILE__, __LINE__, "animWin was passed into initAnimateWindow as a null... bad bad bad!");
 		return;
 	}
 
@@ -518,7 +519,7 @@ void ProcessAnimateWindowSlideFromTop::initAnimateWindow( wnd::AnimateWindow *an
 	GameWindow *win = animWin->getGameWindow();
 	if(!win)
 	{
-		DEBUG_ASSERTCRASH( win, ("animWin contains a null for it's GameWindow... Whatup wit dat?"));
+		engine::debug::invariant((win), "win", __FILE__, __LINE__, "animWin contains a null for it's GameWindow... Whatup wit dat?");
 		return;
 	}
 	win->winGetPosition(&restPos.x, &restPos.y);
@@ -552,7 +553,7 @@ Bool ProcessAnimateWindowSlideFromTop::updateAnimateWindow( wnd::AnimateWindow *
 
 	if(!animWin)
 	{
-		DEBUG_ASSERTCRASH( animWin, ("animWin was passed into updateAnimateWindow as a null... bad bad bad!"));
+		engine::debug::invariant((animWin), "animWin", __FILE__, __LINE__, "animWin was passed into updateAnimateWindow as a null... bad bad bad!");
 		return TRUE;
 	}
 
@@ -569,7 +570,7 @@ Bool ProcessAnimateWindowSlideFromTop::updateAnimateWindow( wnd::AnimateWindow *
 	GameWindow *win = animWin->getGameWindow();
 	if(!win)
 	{
-		DEBUG_ASSERTCRASH( win, ("animWin contains a null for it's GameWindow... Whatup wit dat?"));
+		engine::debug::invariant((win), "win", __FILE__, __LINE__, "animWin contains a null for it's GameWindow... Whatup wit dat?");
 		return TRUE;
 	}
 
@@ -602,7 +603,7 @@ Bool ProcessAnimateWindowSlideFromTop::reverseAnimateWindow( wnd::AnimateWindow 
 
 	if(!animWin)
 	{
-		DEBUG_ASSERTCRASH( animWin, ("animWin was passed into updateAnimateWindow as a null... bad bad bad!"));
+		engine::debug::invariant((animWin), "animWin", __FILE__, __LINE__, "animWin was passed into updateAnimateWindow as a null... bad bad bad!");
 		return TRUE;
 	}
 
@@ -619,7 +620,7 @@ Bool ProcessAnimateWindowSlideFromTop::reverseAnimateWindow( wnd::AnimateWindow 
 	GameWindow *win = animWin->getGameWindow();
 	if(!win)
 	{
-		DEBUG_ASSERTCRASH( win, ("animWin contains a null for it's GameWindow... Whatup wit dat?"));
+		engine::debug::invariant((win), "win", __FILE__, __LINE__, "animWin contains a null for it's GameWindow... Whatup wit dat?");
 		return TRUE;
 	}
 
@@ -673,7 +674,7 @@ void ProcessAnimateWindowSlideFromBottom::initReverseAnimateWindow( wnd::Animate
 {
 	if(!animWin)
 	{
-		DEBUG_ASSERTCRASH( animWin, ("animWin was passed into initAnimateWindow as a null... bad bad bad!"));
+		engine::debug::invariant((animWin), "animWin", __FILE__, __LINE__, "animWin was passed into initAnimateWindow as a null... bad bad bad!");
 		return;
 	}
 	if(animWin->getDelay() > 0)
@@ -696,7 +697,7 @@ void ProcessAnimateWindowSlideFromBottom::initAnimateWindow( wnd::AnimateWindow 
 
 	if(!animWin)
 	{
-		DEBUG_ASSERTCRASH( animWin, ("animWin was passed into initAnimateWindow as a null... bad bad bad!"));
+		engine::debug::invariant((animWin), "animWin", __FILE__, __LINE__, "animWin was passed into initAnimateWindow as a null... bad bad bad!");
 		return;
 	}
 
@@ -705,7 +706,7 @@ void ProcessAnimateWindowSlideFromBottom::initAnimateWindow( wnd::AnimateWindow 
 	GameWindow *win = animWin->getGameWindow();
 	if(!win)
 	{
-		DEBUG_ASSERTCRASH( win, ("animWin contains a null for it's GameWindow... Whatup wit dat?"));
+		engine::debug::invariant((win), "win", __FILE__, __LINE__, "animWin contains a null for it's GameWindow... Whatup wit dat?");
 		return;
 	}
 	win->winGetPosition(&restPos.x, &restPos.y);
@@ -739,7 +740,7 @@ Bool ProcessAnimateWindowSlideFromBottom::updateAnimateWindow( wnd::AnimateWindo
 
 	if(!animWin)
 	{
-		DEBUG_ASSERTCRASH( animWin, ("animWin was passed into updateAnimateWindow as a null... bad bad bad!"));
+		engine::debug::invariant((animWin), "animWin", __FILE__, __LINE__, "animWin was passed into updateAnimateWindow as a null... bad bad bad!");
 		return TRUE;
 	}
 
@@ -756,7 +757,7 @@ Bool ProcessAnimateWindowSlideFromBottom::updateAnimateWindow( wnd::AnimateWindo
 	GameWindow *win = animWin->getGameWindow();
 	if(!win)
 	{
-		DEBUG_ASSERTCRASH( win, ("animWin contains a null for it's GameWindow... Whatup wit dat?"));
+		engine::debug::invariant((win), "win", __FILE__, __LINE__, "animWin contains a null for it's GameWindow... Whatup wit dat?");
 		return TRUE;
 	}
 
@@ -789,7 +790,7 @@ Bool ProcessAnimateWindowSlideFromBottom::reverseAnimateWindow( wnd::AnimateWind
 
 	if(!animWin)
 	{
-		DEBUG_ASSERTCRASH( animWin, ("animWin was passed into updateAnimateWindow as a null... bad bad bad!"));
+		engine::debug::invariant((animWin), "animWin", __FILE__, __LINE__, "animWin was passed into updateAnimateWindow as a null... bad bad bad!");
 		return TRUE;
 	}
 
@@ -806,7 +807,7 @@ Bool ProcessAnimateWindowSlideFromBottom::reverseAnimateWindow( wnd::AnimateWind
 	GameWindow *win = animWin->getGameWindow();
 	if(!win)
 	{
-		DEBUG_ASSERTCRASH( win, ("animWin contains a null for it's GameWindow... Whatup wit dat?"));
+		engine::debug::invariant((win), "win", __FILE__, __LINE__, "animWin contains a null for it's GameWindow... Whatup wit dat?");
 		return TRUE;
 	}
 
@@ -862,7 +863,7 @@ void ProcessAnimateWindowSlideFromBottomTimed::initReverseAnimateWindow( wnd::An
 
 	if(!animWin)
 	{
-		DEBUG_ASSERTCRASH( animWin, ("animWin was passed into initAnimateWindow as a null... bad bad bad!"));
+		engine::debug::invariant((animWin), "animWin", __FILE__, __LINE__, "animWin was passed into initAnimateWindow as a null... bad bad bad!");
 		return;
 	}
 
@@ -871,7 +872,7 @@ void ProcessAnimateWindowSlideFromBottomTimed::initReverseAnimateWindow( wnd::An
 	GameWindow *win = animWin->getGameWindow();
 	if(!win)
 	{
-		DEBUG_ASSERTCRASH( win, ("animWin contains a null for it's GameWindow... Whatup wit dat?"));
+		engine::debug::invariant((win), "win", __FILE__, __LINE__, "animWin contains a null for it's GameWindow... Whatup wit dat?");
 		return;
 	}
 	restPos = animWin->getRestPos();
@@ -890,7 +891,7 @@ void ProcessAnimateWindowSlideFromBottomTimed::initReverseAnimateWindow( wnd::An
 
 	UnsignedInt now = timeGetTime();
 
-	DEBUG_LOG(("initReverseAnimateWindow at %d (%d->%d)", now, now, now + m_maxDuration));
+	engine::debug::log_info("initReverseAnimateWindow at %d (%d->%d)", now, now, now + m_maxDuration);
 	animWin->setAnimData(startPos, endPos, curPos, restPos, vel, now, now + m_maxDuration);
 }
 
@@ -905,7 +906,7 @@ void ProcessAnimateWindowSlideFromBottomTimed::initAnimateWindow( wnd::AnimateWi
 
 	if(!animWin)
 	{
-		DEBUG_ASSERTCRASH( animWin, ("animWin was passed into initAnimateWindow as a null... bad bad bad!"));
+		engine::debug::invariant((animWin), "animWin", __FILE__, __LINE__, "animWin was passed into initAnimateWindow as a null... bad bad bad!");
 		return;
 	}
 
@@ -914,7 +915,7 @@ void ProcessAnimateWindowSlideFromBottomTimed::initAnimateWindow( wnd::AnimateWi
 	GameWindow *win = animWin->getGameWindow();
 	if(!win)
 	{
-		DEBUG_ASSERTCRASH( win, ("animWin contains a null for it's GameWindow... Whatup wit dat?"));
+		engine::debug::invariant((win), "win", __FILE__, __LINE__, "animWin contains a null for it's GameWindow... Whatup wit dat?");
 		return;
 	}
 	win->winGetPosition(&restPos.x, &restPos.y);
@@ -934,7 +935,7 @@ void ProcessAnimateWindowSlideFromBottomTimed::initAnimateWindow( wnd::AnimateWi
 	UnsignedInt now = timeGetTime();
 	UnsignedInt delay = animWin->getDelay();
 
-	DEBUG_LOG(("initAnimateWindow at %d (%d->%d)", now, now + delay, now + m_maxDuration + delay));
+	engine::debug::log_info("initAnimateWindow at %d (%d->%d)", now, now + delay, now + m_maxDuration + delay);
 	animWin->setAnimData(startPos, endPos, curPos, restPos, vel, now + delay, now + m_maxDuration + delay);
 }
 
@@ -943,7 +944,7 @@ Bool ProcessAnimateWindowSlideFromBottomTimed::updateAnimateWindow( wnd::Animate
 
 	if(!animWin)
 	{
-		DEBUG_ASSERTCRASH( animWin, ("animWin was passed into updateAnimateWindow as a null... bad bad bad!"));
+		engine::debug::invariant((animWin), "animWin", __FILE__, __LINE__, "animWin was passed into updateAnimateWindow as a null... bad bad bad!");
 		return TRUE;
 	}
 
@@ -960,7 +961,7 @@ Bool ProcessAnimateWindowSlideFromBottomTimed::updateAnimateWindow( wnd::Animate
 	GameWindow *win = animWin->getGameWindow();
 	if(!win)
 	{
-		DEBUG_ASSERTCRASH( win, ("animWin contains a null for it's GameWindow... Whatup wit dat?"));
+		engine::debug::invariant((win), "win", __FILE__, __LINE__, "animWin contains a null for it's GameWindow... Whatup wit dat?");
 		return TRUE;
 	}
 
@@ -981,13 +982,13 @@ Bool ProcessAnimateWindowSlideFromBottomTimed::updateAnimateWindow( wnd::Animate
 		curPos.y = (Real)endPos.y;
 		animWin->setFinished( TRUE );
 		setWindowPosition(win, curPos);
-		DEBUG_LOG(("window finished animating at %d (%d->%d)", now, startTime, endTime));
+		engine::debug::log_info("window finished animating at %d (%d->%d)", now, startTime, endTime);
 		return TRUE;
 	}
 
 	curPos.y = startPos.y + percentDone*(endPos.y - startPos.y);
-	DEBUG_LOG(("(%d,%d) -> (%g,%g) -> (%d,%d) at %g",
-		startPos.x, startPos.y, curPos.x, curPos.y, endPos.x, endPos.y, percentDone));
+	engine::debug::log_info("(%d,%d) -> (%g,%g) -> (%d,%d) at %g",
+		startPos.x, startPos.y, curPos.x, curPos.y, endPos.x, endPos.y, percentDone);
 
 	setWindowPosition(win, curPos);
 	animWin->setCurPos(curPos);
@@ -1018,7 +1019,7 @@ void ProcessAnimateWindowSpiral::initReverseAnimateWindow( wnd::AnimateWindow *a
 {
 	if(!animWin)
 	{
-		DEBUG_ASSERTCRASH( animWin, ("animWin was passed into initAnimateWindow as a null... bad bad bad!"));
+		engine::debug::invariant((animWin), "animWin", __FILE__, __LINE__, "animWin was passed into initAnimateWindow as a null... bad bad bad!");
 		return;
 	}
 	if(animWin->getDelay() > 0)
@@ -1042,7 +1043,7 @@ void ProcessAnimateWindowSpiral::initAnimateWindow( wnd::AnimateWindow *animWin 
 
 	if(!animWin)
 	{
-		DEBUG_ASSERTCRASH( animWin, ("animWin was passed into initAnimateWindow as a null... bad bad bad!"));
+		engine::debug::invariant((animWin), "animWin", __FILE__, __LINE__, "animWin was passed into initAnimateWindow as a null... bad bad bad!");
 		return;
 	}
 
@@ -1051,7 +1052,7 @@ void ProcessAnimateWindowSpiral::initAnimateWindow( wnd::AnimateWindow *animWin 
 	GameWindow *win = animWin->getGameWindow();
 	if(!win)
 	{
-		DEBUG_ASSERTCRASH( win, ("animWin contains a null for it's GameWindow... Whatup wit dat?"));
+		engine::debug::invariant((win), "win", __FILE__, __LINE__, "animWin contains a null for it's GameWindow... Whatup wit dat?");
 		return;
 	}
 	win->winGetPosition(&restPos.x, &restPos.y);
@@ -1079,7 +1080,7 @@ Bool ProcessAnimateWindowSpiral::updateAnimateWindow( wnd::AnimateWindow *animWi
 
 	if(!animWin)
 	{
-		DEBUG_ASSERTCRASH( animWin, ("animWin was passed into updateAnimateWindow as a null... bad bad bad!"));
+		engine::debug::invariant((animWin), "animWin", __FILE__, __LINE__, "animWin was passed into updateAnimateWindow as a null... bad bad bad!");
 		return TRUE;
 	}
 
@@ -1096,7 +1097,7 @@ Bool ProcessAnimateWindowSpiral::updateAnimateWindow( wnd::AnimateWindow *animWi
 	GameWindow *win = animWin->getGameWindow();
 	if(!win)
 	{
-		DEBUG_ASSERTCRASH( win, ("animWin contains a null for it's GameWindow... Whatup wit dat?"));
+		engine::debug::invariant((win), "win", __FILE__, __LINE__, "animWin contains a null for it's GameWindow... Whatup wit dat?");
 		return TRUE;
 	}
 
@@ -1133,7 +1134,7 @@ Bool ProcessAnimateWindowSpiral::reverseAnimateWindow( wnd::AnimateWindow *animW
 
 	if(!animWin)
 	{
-		DEBUG_ASSERTCRASH( animWin, ("animWin was passed into updateAnimateWindow as a null... bad bad bad!"));
+		engine::debug::invariant((animWin), "animWin", __FILE__, __LINE__, "animWin was passed into updateAnimateWindow as a null... bad bad bad!");
 		return TRUE;
 	}
 
@@ -1148,7 +1149,7 @@ Bool ProcessAnimateWindowSpiral::reverseAnimateWindow( wnd::AnimateWindow *animW
 	GameWindow *win = animWin->getGameWindow();
 	if(!win)
 	{
-		DEBUG_ASSERTCRASH( win, ("animWin contains a null for it's GameWindow... Whatup wit dat?"));
+		engine::debug::invariant((win), "win", __FILE__, __LINE__, "animWin contains a null for it's GameWindow... Whatup wit dat?");
 		return TRUE;
 	}
 
@@ -1201,7 +1202,7 @@ void ProcessAnimateWindowSlideFromTopFast::initReverseAnimateWindow( wnd::Animat
 {
 	if(!animWin)
 	{
-		DEBUG_ASSERTCRASH( animWin, ("animWin was passed into initAnimateWindow as a null... bad bad bad!"));
+		engine::debug::invariant((animWin), "animWin", __FILE__, __LINE__, "animWin was passed into initAnimateWindow as a null... bad bad bad!");
 		return;
 	}
 	if(animWin->getDelay() > 0)
@@ -1224,7 +1225,7 @@ void ProcessAnimateWindowSlideFromTopFast::initAnimateWindow( wnd::AnimateWindow
 
 	if(!animWin)
 	{
-		DEBUG_ASSERTCRASH( animWin, ("animWin was passed into initAnimateWindow as a null... bad bad bad!"));
+		engine::debug::invariant((animWin), "animWin", __FILE__, __LINE__, "animWin was passed into initAnimateWindow as a null... bad bad bad!");
 		return;
 	}
 
@@ -1233,7 +1234,7 @@ void ProcessAnimateWindowSlideFromTopFast::initAnimateWindow( wnd::AnimateWindow
 	GameWindow *win = animWin->getGameWindow();
 	if(!win)
 	{
-		DEBUG_ASSERTCRASH( win, ("animWin contains a null for it's GameWindow... Whatup wit dat?"));
+		engine::debug::invariant((win), "win", __FILE__, __LINE__, "animWin contains a null for it's GameWindow... Whatup wit dat?");
 		return;
 	}
 	win->winGetPosition(&restPos.x, &restPos.y);
@@ -1263,7 +1264,7 @@ Bool ProcessAnimateWindowSlideFromTopFast::updateAnimateWindow( wnd::AnimateWind
 
 	if(!animWin)
 	{
-		DEBUG_ASSERTCRASH( animWin, ("animWin was passed into updateAnimateWindow as a null... bad bad bad!"));
+		engine::debug::invariant((animWin), "animWin", __FILE__, __LINE__, "animWin was passed into updateAnimateWindow as a null... bad bad bad!");
 		return TRUE;
 	}
 
@@ -1280,7 +1281,7 @@ Bool ProcessAnimateWindowSlideFromTopFast::updateAnimateWindow( wnd::AnimateWind
 	GameWindow *win = animWin->getGameWindow();
 	if(!win)
 	{
-		DEBUG_ASSERTCRASH( win, ("animWin contains a null for it's GameWindow... Whatup wit dat?"));
+		engine::debug::invariant((win), "win", __FILE__, __LINE__, "animWin contains a null for it's GameWindow... Whatup wit dat?");
 		return TRUE;
 	}
 
@@ -1313,7 +1314,7 @@ Bool ProcessAnimateWindowSlideFromTopFast::reverseAnimateWindow( wnd::AnimateWin
 
 	if(!animWin)
 	{
-		DEBUG_ASSERTCRASH( animWin, ("animWin was passed into updateAnimateWindow as a null... bad bad bad!"));
+		engine::debug::invariant((animWin), "animWin", __FILE__, __LINE__, "animWin was passed into updateAnimateWindow as a null... bad bad bad!");
 		return TRUE;
 	}
 
@@ -1330,7 +1331,7 @@ Bool ProcessAnimateWindowSlideFromTopFast::reverseAnimateWindow( wnd::AnimateWin
 	GameWindow *win = animWin->getGameWindow();
 	if(!win)
 	{
-		DEBUG_ASSERTCRASH( win, ("animWin contains a null for it's GameWindow... Whatup wit dat?"));
+		engine::debug::invariant((win), "win", __FILE__, __LINE__, "animWin contains a null for it's GameWindow... Whatup wit dat?");
 		return TRUE;
 	}
 
@@ -1388,7 +1389,7 @@ void ProcessAnimateWindowSlideFromRightFast::initReverseAnimateWindow( wnd::Anim
 {
 	if(!animWin)
 	{
-		DEBUG_ASSERTCRASH( animWin, ("animWin was passed into initAnimateWindow as a null... bad bad bad!"));
+		engine::debug::invariant((animWin), "animWin", __FILE__, __LINE__, "animWin was passed into initAnimateWindow as a null... bad bad bad!");
 		return;
 	}
 	if(animWin->getDelay() > 0)
@@ -1430,7 +1431,7 @@ void ProcessAnimateWindowSlideFromRightFast::initAnimateWindow( wnd::AnimateWind
 
 	if(!animWin)
 	{
-		DEBUG_ASSERTCRASH( animWin, ("animWin was passed into initAnimateWindow as a null... bad bad bad!"));
+		engine::debug::invariant((animWin), "animWin", __FILE__, __LINE__, "animWin was passed into initAnimateWindow as a null... bad bad bad!");
 		return;
 	}
 	animWin->setFinished( FALSE );
@@ -1440,7 +1441,7 @@ void ProcessAnimateWindowSlideFromRightFast::initAnimateWindow( wnd::AnimateWind
 	GameWindow *win = animWin->getGameWindow();
 	if(!win)
 	{
-		DEBUG_ASSERTCRASH( win, ("animWin contains a null for it's GameWindow... Whatup wit dat?"));
+		engine::debug::invariant((win), "win", __FILE__, __LINE__, "animWin contains a null for it's GameWindow... Whatup wit dat?");
 		return;
 	}
 	win->winGetPosition(&restPos.x, &restPos.y);
@@ -1473,7 +1474,7 @@ Bool ProcessAnimateWindowSlideFromRightFast::updateAnimateWindow( wnd::AnimateWi
 
 	if(!animWin)
 	{
-		DEBUG_ASSERTCRASH( animWin, ("animWin was passed into updateAnimateWindow as a null... bad bad bad!"));
+		engine::debug::invariant((animWin), "animWin", __FILE__, __LINE__, "animWin was passed into updateAnimateWindow as a null... bad bad bad!");
 		return TRUE;
 	}
 
@@ -1489,7 +1490,7 @@ Bool ProcessAnimateWindowSlideFromRightFast::updateAnimateWindow( wnd::AnimateWi
 	GameWindow *win = animWin->getGameWindow();
 	if(!win)
 	{
-		DEBUG_ASSERTCRASH( win, ("animWin contains a null for it's GameWindow... Whatup wit dat?"));
+		engine::debug::invariant((win), "win", __FILE__, __LINE__, "animWin contains a null for it's GameWindow... Whatup wit dat?");
 		return TRUE;
 	}
 
@@ -1523,7 +1524,7 @@ Bool ProcessAnimateWindowSlideFromRightFast::reverseAnimateWindow( wnd::AnimateW
 
 	if(!animWin)
 	{
-		DEBUG_ASSERTCRASH( animWin, ("animWin was passed into updateAnimateWindow as a null... bad bad bad!"));
+		engine::debug::invariant((animWin), "animWin", __FILE__, __LINE__, "animWin was passed into updateAnimateWindow as a null... bad bad bad!");
 		return TRUE;
 	}
 
@@ -1540,7 +1541,7 @@ Bool ProcessAnimateWindowSlideFromRightFast::reverseAnimateWindow( wnd::AnimateW
 	GameWindow *win = animWin->getGameWindow();
 	if(!win)
 	{
-		DEBUG_ASSERTCRASH( win, ("animWin contains a null for it's GameWindow... Whatup wit dat?"));
+		engine::debug::invariant((win), "win", __FILE__, __LINE__, "animWin contains a null for it's GameWindow... Whatup wit dat?");
 		return TRUE;
 	}
 

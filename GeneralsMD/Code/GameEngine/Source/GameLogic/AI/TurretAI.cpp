@@ -26,12 +26,14 @@
 // Turret behavior implementation
 // Author: Steven Johnson, April 2002
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.profiling;
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #define DEFINE_WEAPONSLOTTYPE_NAMES
 
 #include "Common/GameAudio.h"
-#include "Common/PerfTimer.h"
+
 #include "Common/RandomValue.h"
 #include "Common/ThingTemplate.h"
 #include "Common/Xfer.h"
@@ -298,13 +300,13 @@ TurretAI::TurretAI(Object* owner, const TurretAIData* data, WhichTurretType tur)
 	m_continuousFireExpirationFrame = -1;
 	if (!m_data)
 	{
-		DEBUG_CRASH(("TurretAI MUST have ModuleData"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "TurretAI MUST have ModuleData");
 		throw INI_INVALID_DATA;
 	}
 
 	if (m_data->m_turretWeaponSlots == 0)
 	{
-		DEBUG_CRASH(("TurretAI MUST specify controlled weapon slots!"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "TurretAI MUST specify controlled weapon slots!");
 		throw INI_INVALID_DATA;
 	}
 	m_angle = getNaturalTurretAngle();
@@ -685,15 +687,16 @@ void TurretAI::friend_notifyStateMachineChanged()
 	this information so that its AIUpdate owner can decide how long it (the AIUpdate) should sleep.
 	So it behooves you to maximize "sleep" potential here! (srj)
 */
-DECLARE_PERF_TIMER(TurretAI)
 UpdateSleepTime TurretAI::updateTurretAI()
 {
-	USE_PERF_TIMER(TurretAI)
+	engine::profiling::Scope profile_scope_690("TurretAI");
 
 #if defined(RTS_DEBUG)
-	DEBUG_ASSERTCRASH(!m_enabled ||
+	engine::debug::invariant((!m_enabled ||
 							m_turretStateMachine->peekSleepTill() == 0 ||
-							m_turretStateMachine->peekSleepTill() >= m_sleepUntil, ("Turret Machine is less sleepy than turret"));
+							m_turretStateMachine->peekSleepTill() >= m_sleepUntil), "!m_enabled ||
+							m_turretStateMachine->peekSleepTill() == 0 ||
+							m_turretStateMachine->peekSleepTill() >= m_sleepUntil", __FILE__, __LINE__, "Turret Machine is less sleepy than turret");
 #endif
 
 	UnsignedInt now = TheGameLogic->getFrame();
@@ -702,7 +705,7 @@ UpdateSleepTime TurretAI::updateTurretAI()
 		return UPDATE_SLEEP(m_sleepUntil - now);
 	}
 
-	//DEBUG_LOG(("updateTurretAI frame %d: %08lx",TheGameLogic->getFrame(),getOwner()));
+	//engine::debug::log_info("updateTurretAI frame %d: %08lx",TheGameLogic->getFrame(),getOwner());
 	UpdateSleepTime subMachineSleep = UPDATE_SLEEP_FOREVER;	// assume the best!
 
 	// either we don't care about continuous fire stuff, or we care, but time has elapsed
@@ -750,9 +753,11 @@ UpdateSleepTime TurretAI::updateTurretAI()
 	m_sleepUntil = now + subMachineSleep;
 
 #if defined(RTS_DEBUG)
-	DEBUG_ASSERTCRASH(!m_enabled ||
+	engine::debug::invariant((!m_enabled ||
 							m_turretStateMachine->peekSleepTill() == 0 ||
-							m_turretStateMachine->peekSleepTill() >= m_sleepUntil, ("Turret Machine is less sleepy than turret"));
+							m_turretStateMachine->peekSleepTill() >= m_sleepUntil), "!m_enabled ||
+							m_turretStateMachine->peekSleepTill() == 0 ||
+							m_turretStateMachine->peekSleepTill() >= m_sleepUntil", __FILE__, __LINE__, "Turret Machine is less sleepy than turret");
 #endif
 
 	return subMachineSleep;
@@ -968,7 +973,7 @@ StateReturnType TurretAIAimTurretState::onEnter()
  */
 StateReturnType TurretAIAimTurretState::update()
 {
-	//DEBUG_LOG(("TurretAIAimTurretState frame %d: %08lx",TheGameLogic->getFrame(),getTurretAI()->getOwner()));
+	//engine::debug::log_info("TurretAIAimTurretState frame %d: %08lx",TheGameLogic->getFrame(),getTurretAI()->getOwner());
 
 	TurretAI* turret = getTurretAI();
 	Object* obj = turret->getOwner();
@@ -1071,7 +1076,7 @@ StateReturnType TurretAIAimTurretState::update()
 	Weapon *curWeapon = obj->getCurrentWeapon( &slot );
 	if (!curWeapon)
 	{
-		DEBUG_CRASH(("TurretAIAimTurretState::update - curWeapon is null."));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "TurretAIAimTurretState::update - curWeapon is null.");
 		return STATE_FAILURE;
 	}
 
@@ -1226,7 +1231,7 @@ StateReturnType TurretAIRecenterTurretState::onEnter()
 
 StateReturnType TurretAIRecenterTurretState::update()
 {
-	//DEBUG_LOG(("TurretAIRecenterTurretState frame %d: %08lx",TheGameLogic->getFrame(),getTurretAI()->getOwner()));
+	//engine::debug::log_info("TurretAIRecenterTurretState frame %d: %08lx",TheGameLogic->getFrame(),getTurretAI()->getOwner());
 
 
   if( getMachineOwner()->testStatus( OBJECT_STATUS_UNDER_CONSTRUCTION))
@@ -1310,7 +1315,7 @@ StateReturnType TurretAIIdleState::onEnter()
 //----------------------------------------------------------------------------------------------------------
 StateReturnType TurretAIIdleState::update()
 {
-	//DEBUG_LOG(("TurretAIIdleState frame %d: %08lx",TheGameLogic->getFrame(),getTurretAI()->getOwner()));
+	//engine::debug::log_info("TurretAIIdleState frame %d: %08lx",TheGameLogic->getFrame(),getTurretAI()->getOwner());
 
 	UnsignedInt now = TheGameLogic->getFrame();
 	if (now >= m_nextIdleScan)
@@ -1381,7 +1386,7 @@ StateReturnType TurretAIIdleScanState::onEnter()
 
 StateReturnType TurretAIIdleScanState::update()
 {
-	//DEBUG_LOG(("TurretAIIdleScanState frame %d: %08lx",TheGameLogic->getFrame(),getTurretAI()->getOwner()));
+	//engine::debug::log_info("TurretAIIdleScanState frame %d: %08lx",TheGameLogic->getFrame(),getTurretAI()->getOwner());
 
   if( getMachineOwner()->testStatus( OBJECT_STATUS_UNDER_CONSTRUCTION))
     return STATE_CONTINUE;//ML so that under-construction base-defenses do not idle-scan while under construction
@@ -1455,7 +1460,7 @@ void TurretAIHoldTurretState::onExit( StateExitType status )
 
 StateReturnType TurretAIHoldTurretState::update()
 {
-	//DEBUG_LOG(("TurretAIHoldTurretState frame %d: %08lx",TheGameLogic->getFrame(),getTurretAI()->getOwner()));
+	//engine::debug::log_info("TurretAIHoldTurretState frame %d: %08lx",TheGameLogic->getFrame(),getTurretAI()->getOwner());
 
 	if (TheGameLogic->getFrame() >= m_timestamp)
 		return STATE_SUCCESS;

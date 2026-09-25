@@ -24,18 +24,32 @@
 #include "W3DDevice/GameClient/W3DAssetCatalog.h"
 #include "WWLib/chunkio.h"
 #include <limits>
+#include <vector>
 #include "W3DDevice/GameClient/W3DRenderContext.h"
-#include "WWMath/sphere.h"
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
+import engine.debug;
 import Assets.Adapters.W3D.Assembly;
 import Assets.Adapters.W3D.LevelSet;
 import Assets.Adapters.W3D.Aggregate;
 import Assets.Cache.Animations;
+import Engine.Core.Math.AxisAlignedBox3;
+import Engine.Core.Math.AffineTransform3;
+import Engine.Core.Math.BoundsQueries3;
+import Engine.Core.Math.Sphere3;
 
 namespace
 {
+	Engine::Math::AffineTransform3 To_Affine(const Graphics::RenderTransform &transform)
+	{
+		Engine::Math::AffineTransform3 result;
+		for (std::size_t row = 0; row < 3; ++row)
+			for (std::size_t column = 0; column < 4; ++column)
+				result.elements[row * 4 + column] = transform.matrix[row * 4 + column];
+		return result;
+	}
+
 	bool equal_case_insensitive(const char *left, const char *right)
 	{
 		if (left == nullptr || right == nullptr)
@@ -89,9 +103,9 @@ W3DHierarchyRenderObject::W3DHierarchyRenderObject(const char * name,W3DRenderOb
 	Proxies()
 {
 	// enforce parameters
-	WWASSERT(name != nullptr);
-	WWASSERT(lods != nullptr);
-	WWASSERT(count > 0);
+	engine::debug::assert_condition((name != nullptr), "name != nullptr", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((lods != nullptr), "lods != nullptr", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((count > 0), "count > 0", __FILE__, __LINE__, "assertion failed");
 
 	// Set the name
 	Set_Name(name);
@@ -112,7 +126,7 @@ W3DHierarchyRenderObject::W3DHierarchyRenderObject(const char * name,W3DRenderOb
 	// Ok, now suck the sub-objects out of each LOD model and place them into this HLOD.
 	for (int lod_index=0; lod_index < m_children.Level_Count(); lod_index++) {
 		W3DRenderObject * lod_obj = lods[lod_index];
-		WWASSERT(lod_obj);
+		engine::debug::assert_condition((lod_obj), "lod_obj", __FILE__, __LINE__, "assertion failed");
 
 		if (	(lod_obj->Class_ID() == W3DRenderObject::CLASSID_HMODEL) ||
 				(lod_obj->Class_ID() == W3DRenderObject::CLASSID_HLOD) ||
@@ -261,7 +275,7 @@ W3DRenderObject * W3DHierarchyRenderObject::Clone() const
 	return W3DNEW W3DHierarchyRenderObject(*this);
 }
 
-void W3DHierarchyRenderObject::Get_Obj_Space_Bounding_Box(AABoxClass & box) const
+void W3DHierarchyRenderObject::Get_Local_Bounds(Engine::Math::AxisAlignedBox3 & box) const
 {
 	//
 	//	Do we have a bounding box mesh?
@@ -270,90 +284,78 @@ void W3DHierarchyRenderObject::Get_Obj_Space_Bounding_Box(AABoxClass & box) cons
 	if (BoundingBoxIndex >= 0 && BoundingBoxIndex < count) {
 
 		W3DRenderObject *mesh = m_children.Level(m_children.Level_Count() - 1)[BoundingBoxIndex].model.Peek();
-		AABoxClass box_query;
+		Engine::Math::AxisAlignedBox3 box_query;
 		if (mesh != nullptr && mesh->Class_ID() == W3DRenderObject::CLASSID_OBBOX) {
-			mesh->Get_Obj_Space_Bounding_Box(box_query);
+			mesh->Get_Local_Bounds(box_query);
 
 			//
 			//	Determine what the box's transform 'should' be this frame.
 			// Note:  We do this because some animation types don't update
 			// unless they are visible.
 			//
-			Matrix3D box_tm;
+			Engine::Math::AffineTransform3 box_tm;
 			Simple_Evaluate_Bone (m_children.Level(m_children.Level_Count() - 1)[BoundingBoxIndex].bone, &box_tm);
 
 			//
 			//	Convert the OBBox from its coordinate system to the coordinate
 			// system of the HLOD.
 			//
-			Matrix3D world_to_hlod_tm;
-			Matrix3D box_to_hlod_tm;
+			const auto world_to_hlod = Get_Transform().Orthogonal_Inverse();
+			const auto box_to_hlod = Compose(world_to_hlod, box_tm);
 
-			Get_Transform ().Get_Orthogonal_Inverse (world_to_hlod_tm);
-			Matrix3D::Multiply(world_to_hlod_tm,box_tm,&box_to_hlod_tm);
-
-			box_to_hlod_tm.Transform_Center_Extent_AABox(	box_query.Center,
-																																																		box_query.Extent,
-																																																		&box.Center,&box.Extent);
+			const auto transformed = Engine::Math::TransformBoundsCorners(box_query,
+				box_to_hlod.elements);
+		box = transformed;
 		}
 
 	} else {
-		W3DAnimatedModelRenderObject::Get_Obj_Space_Bounding_Box (box);
+		W3DAnimatedModelRenderObject::Get_Local_Bounds (box);
 	}
 }
 
-void W3DHierarchyRenderObject::Get_Obj_Space_Bounding_Sphere(SphereClass & sphere) const
+void W3DHierarchyRenderObject::Get_Local_Bounding_Sphere(Engine::Math::Sphere3 & sphere) const
 {
-	AABoxClass box;
-	Get_Obj_Space_Bounding_Box(box);
-	sphere.Center = box.Center;
-	sphere.Radius = box.Extent.Length();
+	Engine::Math::AxisAlignedBox3 box;
+	Get_Local_Bounds(box);
+	sphere = {box.Center(), box.Extent().Length()};
 }
 
-const SphereClass &W3DHierarchyRenderObject::Get_Bounding_Sphere() const
+Engine::Math::Sphere3 W3DHierarchyRenderObject::Get_Bounding_Sphere() const
 {
 	if (BoundingBoxIndex >= 0) {
 		//
 		//	Get the bounding sphere in local coordinates
 		//
-		SphereClass sphere;
-		Get_Obj_Space_Bounding_Sphere (sphere);
+		Engine::Math::Sphere3 sphere;
+		Get_Local_Bounding_Sphere (sphere);
 
 		//
 		//	Transform the sphere into world coords and return the sphere
 		//
-#ifdef ALLOW_TEMPORARIES
-		CachedBoundingSphere.Center = Get_Transform () * sphere.Center;
-#else
-		Get_Transform().mulVector3(sphere.Center, CachedBoundingSphere.Center);
-#endif
-		CachedBoundingSphere.Radius = sphere.Radius;
+		const auto transform = Get_Transform();
+		return {transform.Transform_Point(sphere.center), sphere.radius};
 	} else {
-		W3DAnimatedModelRenderObject::Get_Bounding_Sphere ();
+		return W3DAnimatedModelRenderObject::Get_Bounding_Sphere();
 	}
-
-	return CachedBoundingSphere;
 }
 
-const AABoxClass &W3DHierarchyRenderObject::Get_Bounding_Box() const
+Engine::Math::AxisAlignedBox3 W3DHierarchyRenderObject::Get_Bounding_Box() const
 {
 	if (BoundingBoxIndex >= 0) {
 
 		//
 		//	Get the bounding box in local coordinates
 		//
-		AABoxClass box;
-		Get_Obj_Space_Bounding_Box (box);
+		Engine::Math::AxisAlignedBox3 box;
+		Get_Local_Bounds (box);
 
 		//
 		//	Transform the bounding box to world coordinates
 		//
-		Get_Transform().Transform_Center_Extent_AABox(	box.Center,
-																		box.Extent,
-																		&CachedBoundingBox.Center,
-																		&CachedBoundingBox.Extent	);
+		const auto transform = Get_Transform();
+		CachedBoundingBox = Engine::Math::TransformBoundsCorners(box, transform.elements);
 	} else {
-		W3DAnimatedModelRenderObject::Get_Bounding_Box ();
+		return W3DAnimatedModelRenderObject::Get_Bounding_Box();
 	}
 
 	return CachedBoundingBox;
@@ -361,7 +363,7 @@ const AABoxClass &W3DHierarchyRenderObject::Get_Bounding_Box() const
 
 void W3DHierarchyRenderObject::Set_Max_Screen_Size(int lod_index, float size)
 {
-    WWASSERT(lod_index >= 0 && lod_index < m_children.Level_Count());
+    engine::debug::assert_condition((lod_index >= 0 && lod_index < m_children.Level_Count()), "lod_index >= 0 && lod_index < m_children.Level_Count()", __FILE__, __LINE__, "assertion failed");
     if (lod_index < 0 || lod_index >= m_children.Level_Count()) return;
     m_detail_levels.Set_Maximum_Area(lod_index, size);
     Recalculate_Static_LOD_Factors();
@@ -371,7 +373,7 @@ void W3DHierarchyRenderObject::Set_Max_Screen_Size(int lod_index, float size)
 
 float W3DHierarchyRenderObject::Get_Max_Screen_Size(int lod_index) const
 {
-    WWASSERT(lod_index >= 0 && lod_index < m_children.Level_Count());
+    engine::debug::assert_condition((lod_index >= 0 && lod_index < m_children.Level_Count()), "lod_index >= 0 && lod_index < m_children.Level_Count()", __FILE__, __LINE__, "assertion failed");
     return lod_index >= 0 && lod_index < m_children.Level_Count()
         ? m_detail_levels.Maximum_Area(lod_index) : (std::numeric_limits<float>::max)();
 }
@@ -394,8 +396,8 @@ int W3DHierarchyRenderObject::Get_Lod_Model_Count(int lod_index) const
 	int count = 0;
 
 	// Params valid?
-	WWASSERT(lod_index >= 0);
-	WWASSERT(lod_index < m_children.Level_Count());
+	engine::debug::assert_condition((lod_index >= 0), "lod_index >= 0", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((lod_index < m_children.Level_Count()), "lod_index < m_children.Level_Count()", __FILE__, __LINE__, "assertion failed");
 	if ((lod_index >= 0) && (lod_index < m_children.Level_Count())) {
 
 		// Get the number of models in this Lod
@@ -411,8 +413,8 @@ W3DRenderObject *W3DHierarchyRenderObject::Peek_Lod_Model(int lod_index, int mod
 	W3DRenderObject *pmodel = nullptr;
 
 	// Params valid?
-	WWASSERT(lod_index >= 0);
-	WWASSERT(lod_index < m_children.Level_Count());
+	engine::debug::assert_condition((lod_index >= 0), "lod_index >= 0", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((lod_index < m_children.Level_Count()), "lod_index < m_children.Level_Count()", __FILE__, __LINE__, "assertion failed");
 	if ((lod_index >= 0) &&
 		 (lod_index < m_children.Level_Count()) &&
 		 (model_index < static_cast<int>(m_children.Level(lod_index).size()))) {
@@ -430,8 +432,8 @@ W3DRenderObject *W3DHierarchyRenderObject::Get_Lod_Model(int lod_index, int mode
 	W3DRenderObject *pmodel = nullptr;
 
 	// Params valid?
-	WWASSERT(lod_index >= 0);
-	WWASSERT(lod_index < m_children.Level_Count());
+	engine::debug::assert_condition((lod_index >= 0), "lod_index >= 0", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((lod_index < m_children.Level_Count()), "lod_index < m_children.Level_Count()", __FILE__, __LINE__, "assertion failed");
 	if ((lod_index >= 0) &&
 		 (lod_index < m_children.Level_Count()) &&
 		 (model_index < static_cast<int>(m_children.Level(lod_index).size()))) {
@@ -452,8 +454,8 @@ int W3DHierarchyRenderObject::Get_Lod_Model_Bone(int lod_index, int model_index)
 	int bone_index = 0;
 
 	// Params valid?
-	WWASSERT(lod_index >= 0);
-	WWASSERT(lod_index < m_children.Level_Count());
+	engine::debug::assert_condition((lod_index >= 0), "lod_index >= 0", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((lod_index < m_children.Level_Count()), "lod_index < m_children.Level_Count()", __FILE__, __LINE__, "assertion failed");
 	if ((lod_index >= 0) &&
 		 (lod_index < m_children.Level_Count()) &&
 		 (model_index < static_cast<int>(m_children.Level(lod_index).size()))) {
@@ -476,8 +478,8 @@ W3DRenderObject * W3DHierarchyRenderObject::Peek_Additional_Model (int model_ind
 	W3DRenderObject *pmodel = nullptr;
 
 	// Param valid?
-	WWASSERT(model_index >= 0);
-	WWASSERT(model_index < static_cast<int>(m_children.Additional().size()));
+	engine::debug::assert_condition((model_index >= 0), "model_index >= 0", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((model_index < static_cast<int>(m_children.Additional().size())), "model_index < static_cast<int>(m_children.Additional().size())", __FILE__, __LINE__, "assertion failed");
 	if ((model_index >= 0) &&
 		 (model_index < static_cast<int>(m_children.Additional().size()))) {
 
@@ -494,8 +496,8 @@ W3DRenderObject * W3DHierarchyRenderObject::Get_Additional_Model (int model_inde
 	W3DRenderObject *pmodel = nullptr;
 
 	// Param valid?
-	WWASSERT(model_index >= 0);
-	WWASSERT(model_index < static_cast<int>(m_children.Additional().size()));
+	engine::debug::assert_condition((model_index >= 0), "model_index >= 0", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((model_index < static_cast<int>(m_children.Additional().size())), "model_index < static_cast<int>(m_children.Additional().size())", __FILE__, __LINE__, "assertion failed");
 	if ((model_index >= 0) &&
 		 (model_index < static_cast<int>(m_children.Additional().size()))) {
 
@@ -515,8 +517,8 @@ int W3DHierarchyRenderObject::Get_Additional_Model_Bone (int model_index) const
 	int bone_index = 0;
 
 	// Params valid?
-	WWASSERT(model_index >= 0);
-	WWASSERT(model_index < static_cast<int>(m_children.Additional().size()));
+	engine::debug::assert_condition((model_index >= 0), "model_index >= 0", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((model_index < static_cast<int>(m_children.Additional().size())), "model_index < static_cast<int>(m_children.Additional().size())", __FILE__, __LINE__, "assertion failed");
 	if ((model_index >= 0) &&
 		 (model_index < static_cast<int>(m_children.Additional().size()))) {
 
@@ -548,13 +550,13 @@ void W3DHierarchyRenderObject::Render(W3DRenderContext & rinfo)
     });
 }
 
-void W3DHierarchyRenderObject::Set_Transform(const Matrix3D &m)
+void W3DHierarchyRenderObject::Set_Transform(const Engine::Math::AffineTransform3 &m)
 {
 	W3DAnimatedModelRenderObject::Set_Transform(m);
 	Set_Sub_Object_Transforms_Dirty(true);
 }
 
-void W3DHierarchyRenderObject::Set_Position(const Vector3 &v)
+void W3DHierarchyRenderObject::Set_Position(Engine::Math::Vector3 v)
 {
 	W3DAnimatedModelRenderObject::Set_Position(v);
 	Set_Sub_Object_Transforms_Dirty(true);
@@ -584,7 +586,7 @@ int W3DHierarchyRenderObject::Get_Num_Sub_Objects() const
 W3DRenderObject * W3DHierarchyRenderObject::Get_Sub_Object(int index) const
 {
     const auto* child = index >= 0 ? m_children.At(index) : nullptr;
-    WWASSERT(child);
+    engine::debug::assert_condition((child), "child", __FILE__, __LINE__, "assertion failed");
     if (!child) return nullptr;
     auto retained = child->model;
     return retained.Release();
@@ -636,7 +638,7 @@ int W3DHierarchyRenderObject::Get_Sub_Object_Bone_Index(int LodIndex, int ModelI
 
 int W3DHierarchyRenderObject::Add_Sub_Object_To_Bone(W3DRenderObject * subobj,int boneindex)
 {
-    WWASSERT(subobj);
+    engine::debug::assert_condition((subobj), "subobj", __FILE__, __LINE__, "assertion failed");
     if (boneindex < 0 || boneindex >= Hierarchy->Bone_Count()) return 0;
     subobj->Set_LOD_Bias(m_detail_levels.Bias());
     auto owner = ChildOwner::Create_Add_Ref(subobj);
@@ -815,14 +817,14 @@ int W3DHierarchyRenderObject::Get_Num_Snap_Points()
 	}
 }
 
-void W3DHierarchyRenderObject::Get_Snap_Point(int index,Vector3 * set)
+void W3DHierarchyRenderObject::Get_Snap_Point(int index,Engine::Math::Vector3 * set)
 {
-	WWASSERT(set != nullptr);
+	engine::debug::assert_condition((set != nullptr), "set != nullptr", __FILE__, __LINE__, "assertion failed");
 	if (index>=0 && static_cast<std::size_t>(index)<SnapPoints.size()) {
 		const auto& point=SnapPoints[index];
-		set->Set(point.x,point.y,point.z);
+		*set = {point.x, point.y, point.z};
 	} else {
-		set->X = set->Y = set->Z = 0;
+		*set = {};
 	}
 }
 
@@ -830,7 +832,7 @@ void W3DHierarchyRenderObject::Update_Sub_Object_Transforms()
 {
     W3DAnimatedModelRenderObject::Update_Sub_Object_Transforms();
     m_children.Visit_All([&](const ChildAttachment& child, int) {
-        child.model->Set_Transform(Graphics::Export_Affine_Transform<Matrix3D>(Hierarchy->World_Transform(child.bone)));
+        child.model->Set_Transform(To_Affine(Hierarchy->World_Transform(child.bone)));
         child.model->Set_Animation_Hidden(!Hierarchy->Visible(child.bone));
         child.model->Update_Sub_Object_Transforms();
     });
@@ -883,48 +885,50 @@ void W3DHierarchyRenderObject::Update_Obj_Space_Bounding_Volumes()
 
 	// if we don't have any sub objects, just set default bounds
 	if (Get_Num_Sub_Objects() <= 0) {
-		ObjSphere.Init(Vector3(0,0,0),0);
-		ObjBox.Center.Set(0,0,0);
-		ObjBox.Extent.Set(0,0,0);
+		ObjSphere = {};
+		ObjBox = {};
 		return;
 	}
 
 	// loop through all sub-objects, combining their object-space bounding spheres and boxes.
 	// Put our Hierarchy in its base pose at the origin.
-	SphereClass sphere;
-	AABoxClass obj_aabox;
-	MinMaxAABoxClass box;
+	Engine::Math::Sphere3 sphere;
+	Engine::Math::AxisAlignedBox3 box;
 
-	Hierarchy->Evaluate_Rest(Graphics::Import_Affine_Transform(Matrix3D(true)));
+	Hierarchy->Evaluate_Rest(Graphics::Import_Affine_Transform(Engine::Math::AffineTransform3::Identity()));
 
 	robj = Get_Sub_Object(0);
-	WWASSERT(robj);
+	engine::debug::assert_condition((robj), "robj", __FILE__, __LINE__, "assertion failed");
 
-	const Matrix3D & bonetm = Graphics::Export_Affine_Transform<Matrix3D>(Hierarchy->World_Transform(Get_Sub_Object_Bone_Index(robj)));
-	robj->Get_Obj_Space_Bounding_Sphere(sphere);
-	sphere.Transform(bonetm);
-	robj->Get_Obj_Space_Bounding_Box(obj_aabox);
-
-	box.Init(obj_aabox);
-	box.Transform(bonetm);
+	const auto bone_transform = To_Affine(Hierarchy->World_Transform(Get_Sub_Object_Bone_Index(robj)));
+	robj->Get_Local_Bounding_Sphere(sphere);
+	sphere.center = bone_transform.Transform_Point(sphere.center);
+	robj->Get_Local_Bounds(box);
+	box = Engine::Math::TransformBoundsCorners(box, bone_transform.elements);
 
 	robj->Release_Ref();
 
 	for (i=1; i<Get_Num_Sub_Objects(); i++) {
 		robj = Get_Sub_Object(i);
-		WWASSERT(robj);
+		engine::debug::assert_condition((robj), "robj", __FILE__, __LINE__, "assertion failed");
 
-		const Matrix3D & bonetm = Graphics::Export_Affine_Transform<Matrix3D>(Hierarchy->World_Transform(Get_Sub_Object_Bone_Index(robj)));
+		const auto bone_transform = To_Affine(Hierarchy->World_Transform(Get_Sub_Object_Bone_Index(robj)));
+		Engine::Math::Sphere3 child_sphere;
+		robj->Get_Local_Bounding_Sphere(child_sphere);
+		child_sphere.center = bone_transform.Transform_Point(child_sphere.center);
+		// Empty (radius <= 0) spheres never contributed to the merged bounds.
+		if (child_sphere.radius > 0.0f)
+			sphere.Include(child_sphere);
 
-		SphereClass tmpsphere;
-		robj->Get_Obj_Space_Bounding_Sphere(tmpsphere);
-		tmpsphere.Transform(bonetm);
-		sphere.Add_Sphere(tmpsphere);
-
-		AABoxClass tmpbox;
-		robj->Get_Obj_Space_Bounding_Box(tmpbox);
-		tmpbox.Transform(bonetm);
-		box.Add_Box(tmpbox);
+		Engine::Math::AxisAlignedBox3 child_bounds;
+		robj->Get_Local_Bounds(child_bounds);
+		const Engine::Math::AxisAlignedBox3 transformed_bounds =
+			Engine::Math::TransformBoundsCorners(child_bounds, bone_transform.elements);
+		// Zero-extent boxes never contributed to the merged bounds.
+		if (!(transformed_bounds.minimum == transformed_bounds.maximum)) {
+			box.Include(transformed_bounds.minimum);
+			box.Include(transformed_bounds.maximum);
+		}
 
 		robj->Release_Ref();
 	}
@@ -942,14 +946,14 @@ void W3DHierarchyRenderObject::Update_Obj_Space_Bounding_Volumes()
 
 void W3DHierarchyRenderObject::Add_Lod_Model(int lod, W3DRenderObject * robj, int boneindex)
 {
-    WWASSERT(robj);
+    engine::debug::assert_condition((robj), "robj", __FILE__, __LINE__, "assertion failed");
     if (boneindex >= Hierarchy->Bone_Count()) {
-        WWDEBUG_SAY(("ERROR: Model %s tried to use bone %d in skeleton %s. Please re-export!", Get_Name(), boneindex, Hierarchy->Name()));
+        engine::debug::log_info("ERROR: Model %s tried to use bone %d in skeleton %s. Please re-export!", Get_Name(), boneindex, Hierarchy->Name());
         boneindex = 0;
     }
     auto owner = ChildOwner::Create_Add_Ref(robj);
     robj->Set_Container(this);
-    robj->Set_Transform(Graphics::Export_Affine_Transform<Matrix3D>(Hierarchy->World_Transform(boneindex)));
+    robj->Set_Transform(To_Affine(Hierarchy->World_Transform(boneindex)));
     if (Is_In_Scene() && lod == m_children.Current_Level()) robj->Notify_Added(Scene);
     m_children.Add(lod, std::move(owner), boneindex);
 }
@@ -1063,4 +1067,3 @@ Graphics::ModelFactory<W3DRenderObject> * Load_HModel_Factory(ChunkLoadClass& cl
     auto data=std::make_shared<const Assets::ModelAssemblyDesc>(std::move(description));
     return new Graphics::ModelFactory<W3DRenderObject>(data->name,W3DRenderObject::CLASSID_HLOD,[data] { return NEW_REF(W3DHierarchyRenderObject,(*data)); });
 }
-

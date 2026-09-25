@@ -29,6 +29,8 @@
 
 #pragma once
 
+
+#include <cassert>
 #include "Common/Terrain.h"
 #include "Common/Snapshot.h"
 #include "Common/MapObject.h"
@@ -36,7 +38,7 @@
 // FORWARD REFERENCES /////////////////////////////////////////////////////////////////////////////
 class TerrainType;
 class WaterHandle;
-class Matrix3D;
+import Engine.Core.Math.AffineTransform3;
 class Object;
 class Drawable;
 class GeometryInfo;
@@ -124,7 +126,7 @@ struct SeismicSimulationNode
 
   Real applyGravity( Real velocityIn )
   {
-    DEBUG_ASSERTCRASH( callbackFilter, ("SeismicSimulationNode::applyGravity() has no callback filter!") );
+    assert((callbackFilter));
 
     if ( callbackFilter == nullptr )
       return velocityIn;//oops, we have no callback!
@@ -227,9 +229,9 @@ public:
 	virtual void setWaterAttenuationFactors( const WaterHandle *waterTable, Real a, Real b, Real c, Real range ) = 0;
 	/// set the water table position and orientation in world space
 	virtual void setWaterTransform( const WaterHandle *waterTable, Real angle, Real x, Real y, Real z ) = 0;
-	virtual void setWaterTransform( const Matrix3D *transform ) = 0;
+	virtual void setWaterTransform( const Engine::Math::AffineTransform3 *transform ) = 0;
 	/// get water transform parameters
-	virtual void getWaterTransform( const WaterHandle *waterTable, Matrix3D *transform ) = 0;
+	virtual void getWaterTransform( const WaterHandle *waterTable, Engine::Math::AffineTransform3 *transform ) = 0;
 	/// water grid resolution spacing
 	virtual void setWaterGridResolution( const WaterHandle *waterTable, Real gridCellsX, Real gridCellsY, Real cellSize ) = 0;
 	virtual void getWaterGridResolution( const WaterHandle *waterTable, Real *gridCellsX, Real *gridCellsY, Real *cellSize ) = 0;

@@ -1,3 +1,4 @@
+import Engine.Core.Math.Vector3;
 #include <algorithm>
 /*
 **	Command & Conquer Generals Zero Hour(tm)
@@ -134,11 +135,11 @@ void W3DBibBuffer::clearAllBibs()
 	m_numBibs=0;
 	m_anythingChanged = true;
 /* test bib
-	Vector3 corners[4];
-	corners[0].Set(0, 0, 20);
-	corners[1].Set(100, 0, 20);
-	corners[2].Set(100,100,20);
-	corners[3].Set(0,100,20);
+	Engine::Math::Vector3 corners[4];
+	corners[0] = {0, 0, 20};
+	corners[1] = {100, 0, 20};
+	corners[2] = {100,100,20};
+	corners[3] = {0,100,20};
 	addBib(corners, 1, false);
 */
 }
@@ -161,7 +162,7 @@ void W3DBibBuffer::removeHighlighting()
 //=============================================================================
 /** Adds a bib.   */
 //=============================================================================
-void W3DBibBuffer::addBib(Vector3 corners[4], ObjectID id, Bool highlight)
+void W3DBibBuffer::addBib(Engine::Math::Vector3 corners[4], ObjectID id, Bool highlight)
 {
 	Int bibIndex;
 	for (bibIndex=0; bibIndex<m_numBibs; bibIndex++) {
@@ -199,7 +200,7 @@ void W3DBibBuffer::addBib(Vector3 corners[4], ObjectID id, Bool highlight)
 //=============================================================================
 /** Adds a bib.   */
 //=============================================================================
-void W3DBibBuffer::addBibDrawable(Vector3 corners[4], DrawableID id, Bool highlight)
+void W3DBibBuffer::addBibDrawable(Engine::Math::Vector3 corners[4], DrawableID id, Bool highlight)
 {
 	Int bibIndex;
 	for (bibIndex=0; bibIndex<m_numBibs; bibIndex++) {
@@ -292,7 +293,7 @@ void W3DBibBuffer::renderBibs(W3DCamera& camera)
             Graphics::BibQuad quad;
             for (unsigned corner=0;corner<4;++corner) {
                 const auto& position=bib.m_corners[corner];
-                quad.corners[corner]={position.X,position.Y,position.Z};
+                quad.corners[corner]={position.x,position.y,position.z};
             }
             quads.push_back(quad);
         }

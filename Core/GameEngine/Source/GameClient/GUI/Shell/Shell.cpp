@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/RandomValue.h"
 #include "GameClient/Shell.h"
@@ -212,7 +213,7 @@ void Shell::update()
 		for( Int i = m_screenCount - 1; i >= 0; i-- )
 		{
 
-			DEBUG_ASSERTCRASH( m_screenStack[ i ], ("Top of shell stack is null!") );
+			engine::debug::invariant((m_screenStack[ i ]), "m_screenStack[ i ]", __FILE__, __LINE__, "Top of shell stack is null!");
 			m_screenStack[ i ]->runUpdate( nullptr );
 
 		}
@@ -346,20 +347,18 @@ void Shell::push( AsciiString filename, Bool shutdownImmediate )
 			GameSpyCloseAllOverlays();
 
 
-#ifdef DEBUG_LOGGING
-	DEBUG_LOG(("Shell:push(%s) - stack was", filename.str()));
+	engine::debug::log_info("Shell:push(%s) - stack was", filename.str());
 	for (Int i=0; i<m_screenCount; ++i)
 	{
-		DEBUG_LOG(("\t\t%s", m_screenStack[i]->getFilename().str()));
+		engine::debug::log_info("\t\t%s", m_screenStack[i]->getFilename().str());
 	}
-#endif
 
 	// make sure we have an available spot for another screen
 	if( m_screenCount >= MAX_SHELL_STACK )
 	{
 
-		DEBUG_LOG(( "Unable to load screen '%s', max '%d' reached",
-								filename.str(), MAX_SHELL_STACK ));
+		engine::debug::log_info( "Unable to load screen '%s', max '%d' reached",
+								filename.str(), MAX_SHELL_STACK );
 		return;
 
 	}
@@ -413,13 +412,11 @@ void Shell::pop()
 	if( screen == nullptr )
 		return;
 
-#ifdef DEBUG_LOGGING
-	DEBUG_LOG(("Shell:pop() - stack was"));
+	engine::debug::log_info("Shell:pop() - stack was");
 	for (Int i=0; i<m_screenCount; ++i)
 	{
-		DEBUG_LOG(("\t\t%s", m_screenStack[i]->getFilename().str()));
+		engine::debug::log_info("\t\t%s", m_screenStack[i]->getFilename().str());
 	}
-#endif
 
 	// set a pop as pending
 	m_pendingPop = TRUE;
@@ -452,13 +449,11 @@ void Shell::popImmediate()
 	if( screen == nullptr )
 		return;
 
-#ifdef DEBUG_LOGGING
-	DEBUG_LOG(("Shell:popImmediate() - stack was"));
+	engine::debug::log_info("Shell:popImmediate() - stack was");
 	for (Int i=0; i<m_screenCount; ++i)
 	{
-		DEBUG_LOG(("\t\t%s", m_screenStack[i]->getFilename().str()));
+		engine::debug::log_info("\t\t%s", m_screenStack[i]->getFilename().str());
 	}
-#endif
 
 	// do NOT set pending pop, we are going to force a pop after the shutdown is run
 	m_pendingPop = FALSE;
@@ -483,7 +478,7 @@ void Shell::popImmediate()
 //-------------------------------------------------------------------------------------------------
 void Shell::showShell( Bool runInit )
 {
-	DEBUG_LOG(("Shell:showShell() - %s (%s)", TheGlobalData->m_initialFile.str(), (top())?top()->getFilename().str():"no top screen"));
+	engine::debug::log_info("Shell:showShell() - %s (%s)", TheGlobalData->m_initialFile.str(), (top())?top()->getFilename().str():"no top screen");
 
 	if(!TheGlobalData->m_initialFile.isEmpty() || !TheGlobalData->m_simulateReplays.empty())
 	{
@@ -510,7 +505,7 @@ void Shell::showShell( Bool runInit )
 	//		if( top() )
 	//			top()->hide(TRUE);
 	//		m_background = TheWindowManager->winCreateLayout("Menus/BlankWindow.wnd");
-	//		DEBUG_ASSERTCRASH(m_background,("We Couldn't Load Menus/BlankWindow.wnd"));
+	//		engine::debug::invariant((m_background), "m_background", __FILE__, __LINE__, "We Couldn't Load Menus/BlankWindow.wnd");
 	//		m_background->hide(FALSE);
 	//		m_background->bringForward();
 	//		if (TheGameLogic->isInGame())
@@ -525,7 +520,7 @@ void Shell::showShell( Bool runInit )
 	//
 	//		m_background = TheWindowManager->winCreateLayout("Menus/BlankWindow.wnd");
 	//
-	//		DEBUG_ASSERTCRASH(m_background,("We Couldn't Load Menus/BlankWindow.wnd"));
+	//		engine::debug::invariant((m_background), "m_background", __FILE__, __LINE__, "We Couldn't Load Menus/BlankWindow.wnd");
 	//		m_background->hide(FALSE);
 	//		if (top())
 	//			top()->bringForward();
@@ -535,9 +530,6 @@ void Shell::showShell( Bool runInit )
 
 	if (!TheGlobalData->m_shellMapOn && m_screenCount == 0)
   {
-#ifdef RTS_PROFILE_LEGACY
-    Profile::StopRange("init");
-#endif
 	//else
 		push( "Menus/MainMenu.wnd" );
   }
@@ -576,7 +568,7 @@ void Shell::showShellMap(Bool useShellMap )
 		if(!m_background)
 			m_background = TheWindowManager->winCreateLayout("Menus/BlankWindow.wnd");
 
-		DEBUG_ASSERTCRASH(m_background,("We Couldn't Load Menus/BlankWindow.wnd"));
+		engine::debug::invariant((m_background), "m_background", __FILE__, __LINE__, "We Couldn't Load Menus/BlankWindow.wnd");
 		m_background->getFirstWindow()->winSetStatus(WIN_STATUS_IMAGE);
 		m_background->hide(FALSE);
 		if (top())
@@ -597,7 +589,7 @@ void Shell::hideShell()
 	// If we have the 3d background running, mark it to close
 	m_clearBackground = TRUE;
 
-	DEBUG_LOG(("Shell:hideShell() - %s", (top())?top()->getFilename().str():"no top screen"));
+	engine::debug::log_info("Shell:hideShell() - %s", (top())?top()->getFilename().str():"no top screen");
 
 	WindowLayout *layout = top();
 
@@ -647,7 +639,7 @@ void Shell::linkScreen( WindowLayout *screen )
 	if( m_screenCount == MAX_SHELL_STACK )
 	{
 
-		DEBUG_CRASH(( "No room in shell stack for screen" ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "No room in shell stack for screen" );
 		return;
 
 	}
@@ -667,8 +659,7 @@ void Shell::unlinkScreen( WindowLayout *screen )
 	if( screen == nullptr )
 		return;
 
-	DEBUG_ASSERTCRASH( m_screenStack[ m_screenCount - 1 ] == screen,
-										 ("Screen not on top of stack") );
+	engine::debug::invariant((m_screenStack[ m_screenCount - 1 ] == screen), "m_screenStack[ m_screenCount - 1 ] == screen", __FILE__, __LINE__, "Screen not on top of stack");
 
 	// remove reference to screen and decrease count
 	if( m_screenStack[ m_screenCount - 1 ] == screen )
@@ -687,7 +678,7 @@ void Shell::doPush( AsciiString layoutFile )
 
 	// create new layout and load from window manager
 	newScreen = TheWindowManager->winCreateLayout( layoutFile );
-	DEBUG_ASSERTCRASH( newScreen != nullptr, ("Shell unable to load pending push layout") );
+	engine::debug::invariant((newScreen != nullptr), "newScreen != nullptr", __FILE__, __LINE__, "Shell unable to load pending push layout");
 
 	// link screen to the top
 	linkScreen( newScreen );
@@ -710,7 +701,7 @@ void Shell::doPop( Bool impendingPush )
 	WindowLayout *currentTop = top();
 
 	// there better be a top of the stack since we're popping
-	DEBUG_ASSERTCRASH( currentTop, ("Shell: No top of stack and we want to pop!") );
+	engine::debug::invariant((currentTop), "currentTop", __FILE__, __LINE__, "Shell: No top of stack and we want to pop!");
 
 	if (currentTop)
 	{
@@ -751,8 +742,7 @@ void Shell::shutdownComplete( WindowLayout *screen, Bool impendingPush )
 {
 
 	// there should never be a pending push AND pop operation
-	DEBUG_ASSERTCRASH( m_pendingPush == FALSE || m_pendingPop == FALSE,
-										 ("There is a pending push AND pop in the shell.  Not allowed!") );
+	engine::debug::invariant((m_pendingPush == FALSE || m_pendingPop == FALSE), "m_pendingPush == FALSE || m_pendingPop == FALSE", __FILE__, __LINE__, "There is a pending push AND pop in the shell.  Not allowed!");
 
 	// Reset the AnimateWindowManager
 	m_animateWindowManager->reset();
@@ -799,7 +789,7 @@ void Shell::registerWithAnimateManager( GameWindow *win, AnimTypes animType, Boo
 {
 	if(!m_animateWindowManager)
 	{
-		DEBUG_CRASH(("We called registerWithAnimateManager and we don't have an Animate Manager created"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "We called registerWithAnimateManager and we don't have an Animate Manager created");
 		return;
 	}
 	if (TheGlobalData->m_animateWindows)
@@ -814,7 +804,7 @@ Bool Shell::isAnimFinished()
 
 	if(!m_animateWindowManager)
 	{
-		DEBUG_CRASH(("We called registerWithAnimateManager and we don't have an Animate Manager created"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "We called registerWithAnimateManager and we don't have an Animate Manager created");
 		return TRUE;
 	}
 	if (TheGlobalData->m_animateWindows)
@@ -827,7 +817,7 @@ void Shell::reverseAnimatewindow()
 {
 	if(!m_animateWindowManager)
 	{
-		DEBUG_CRASH(("We called registerWithAnimateManager and we don't have an Animate Manager created"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "We called registerWithAnimateManager and we don't have an Animate Manager created");
 		return;
 	}
 	if (TheGlobalData->m_animateWindows)
@@ -838,7 +828,7 @@ Bool Shell::isAnimReversed()
 {
 	if(!m_animateWindowManager)
 	{
-		DEBUG_CRASH(("We called registerWithAnimateManager and we don't have an Animate Manager created"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "We called registerWithAnimateManager and we don't have an Animate Manager created");
 		return TRUE;
 	}
 	if (TheGlobalData->m_animateWindows)
@@ -866,7 +856,7 @@ WindowLayout *Shell::getSaveLoadMenuLayout()
    m_saveLoadMenuLayout = TheWindowManager->winCreateLayout( "Menus/PopupSaveLoad.wnd" );
 
 	// sanity
-	DEBUG_ASSERTCRASH( m_saveLoadMenuLayout, ("Unable to create save/load menu layout") );
+	engine::debug::invariant((m_saveLoadMenuLayout), "m_saveLoadMenuLayout", __FILE__, __LINE__, "Unable to create save/load menu layout");
 
 	// return the layout
 	return m_saveLoadMenuLayout;
@@ -883,7 +873,7 @@ WindowLayout *Shell::getPopupReplayLayout()
    m_popupReplayLayout = TheWindowManager->winCreateLayout( "Menus/PopupReplay.wnd" );
 
 	// sanity
-	DEBUG_ASSERTCRASH( m_popupReplayLayout, ("Unable to create replay save menu layout") );
+	engine::debug::invariant((m_popupReplayLayout), "m_popupReplayLayout", __FILE__, __LINE__, "Unable to create replay save menu layout");
 
 	// return the layout
 	return m_popupReplayLayout;
@@ -900,7 +890,7 @@ WindowLayout *Shell::getOptionsLayout( Bool create )
 		m_optionsLayout = TheWindowManager->winCreateLayout( "Menus/OptionsMenu.wnd" );
 
 		// sanity
-		DEBUG_ASSERTCRASH( m_optionsLayout, ("Unable to create options menu layout") );
+		engine::debug::invariant((m_optionsLayout), "m_optionsLayout", __FILE__, __LINE__, "Unable to create options menu layout");
 	}
 
 	// return the layout

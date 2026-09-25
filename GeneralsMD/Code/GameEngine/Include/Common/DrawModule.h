@@ -34,11 +34,11 @@
 #include "Common/Module.h"
 #include "Common/ModelState.h"
 #include "GameClient/Color.h"
+import Engine.Core.Math.OrientedBox3;
+import Engine.Core.Math.AffineTransform3;
 
 // FORWARD REFERENCES /////////////////////////////////////////////////////////////////////////////
-class Matrix3D;
 class RenderCost;
-class OBBoxClass;
 
 // TYPES //////////////////////////////////////////////////////////////////////////////////////////
 
@@ -69,7 +69,7 @@ public:
 	static ModuleType getModuleType() { return MODULETYPE_DRAW; }
 	static Int getInterfaceMask() { return MODULEINTERFACE_DRAW; }
 
-	virtual void doDrawModule(const Matrix3D* transformMtx) = 0;
+	virtual void doDrawModule(const Engine::Math::AffineTransform3* transform) = 0;
 
 	virtual void setShadowsEnabled(Bool enable) = 0;
 	virtual void releaseShadows() = 0;	///< frees all shadow resources used by this module - used by Options screen.
@@ -87,7 +87,7 @@ public:
 
 	virtual Bool isVisible() const { return true; }	///< for limiting tree sway, etc to visible objects
 
-	virtual void reactToTransformChange(const Matrix3D* oldMtx, const Coord3D* oldPos, Real oldAngle) = 0;
+	virtual void reactToTransformChange(const Coord3D* oldPos, Real oldAngle) = 0;
 	virtual void reactToGeometryChange() = 0;
 
 	virtual Bool isLaser() const { return false; }
@@ -154,11 +154,13 @@ class ObjectDrawInterface
 public:
 
 	// this method must ONLY be called from the client, NEVER From the logic, not even indirectly.
-	virtual Bool clientOnly_getRenderObjInfo(Coord3D* pos, Real* boundingSphereRadius, Matrix3D* transform) const = 0;
+	virtual Bool getRenderObjectInfo(
+		Coord3D* position, Real* boundingSphereRadius,
+		Engine::Math::AffineTransform3* transform) const = 0;
 
-	// (gth) C&C3 adding these accessors to render object properties
-	virtual Bool clientOnly_getRenderObjBoundBox(OBBoxClass * boundbox) const = 0;
-	virtual Bool clientOnly_getRenderObjBoneTransform(const AsciiString & boneName,Matrix3D * set_tm) const = 0;
+	virtual Bool clientOnly_getRenderObjBoundBox(Engine::Math::OrientedBox3 * boundbox) const = 0;
+	virtual Bool getRenderObjectBoneTransform(
+		const AsciiString& boneName, Engine::Math::AffineTransform3& transform) const = 0;
 	/**
 		Find the bone(s) with the given name and return their positions and/or transforms in the given arrays.
 		We look for a bone named "boneNamePrefixQQ", where QQ is 01, 02, 03, etc, starting at the
@@ -172,10 +174,14 @@ public:
 
 		NOTE: this isn't very fast. Please call it sparingly and cache the result.
 	*/
-	virtual Int getPristineBonePositionsForConditionState(const ModelConditionFlags& condition, const char* boneNamePrefix, Int startIndex, Coord3D* positions, Matrix3D* transforms, Int maxBones) const = 0;
-	virtual Int getCurrentBonePositions(const char* boneNamePrefix, Int startIndex, Coord3D* positions, Matrix3D* transforms, Int maxBones) const = 0;
-	virtual Bool getCurrentWorldspaceClientBonePositions(const char* boneName, Matrix3D& transform) const = 0;
-	virtual Bool getProjectileLaunchOffset(const ModelConditionFlags& condition, WeaponSlotType wslot, Int specificBarrelToUse, Matrix3D* launchPos, WhichTurretType tur, Coord3D* turretRotPos, Coord3D* turretPitchPos) const = 0;
+	virtual Int getPristineBoneTransforms(const ModelConditionFlags& condition,
+		const char* boneNamePrefix, Int startIndex, Coord3D* positions,
+		Engine::Math::AffineTransform3* transforms, Int maxBones) const = 0;
+	virtual Int getCurrentBoneTransforms(const char* boneNamePrefix, Int startIndex,
+		Coord3D* positions, Engine::Math::AffineTransform3* transforms, Int maxBones) const = 0;
+	virtual Bool getCurrentWorldBoneTransform(
+		const char* boneName, Engine::Math::AffineTransform3& transform) const = 0;
+	virtual Bool getProjectileLaunchTransform(const ModelConditionFlags& condition, WeaponSlotType wslot, Int specificBarrelToUse, Engine::Math::AffineTransform3* launchTransform, WhichTurretType tur, Coord3D* turretRotPos, Coord3D* turretPitchPos) const = 0;
 	virtual void updateProjectileClipStatus( UnsignedInt shotsRemaining, UnsignedInt maxShots, WeaponSlotType slot ) = 0; ///< This will do the show/hide work if ProjectileBoneFeedbackEnabled is set.
 	virtual void updateDrawModuleSupplyStatus( Int maxSupply, Int currentSupply ) = 0; ///< This will do visual feedback on Supplies carried
 	virtual void notifyDrawModuleDependencyCleared() = 0; ///< if you were waiting for something before you drew, it's ready now

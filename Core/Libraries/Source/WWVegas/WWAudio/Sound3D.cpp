@@ -44,6 +44,7 @@
 #include "WWSaveLoad/persistfactory.h"
 #include "WWLib/chunkio.h"
 #include "sound3dhandle.h"
+import engine.debug;
 
 
 //////////////////////////////////////////////////////////////////////////////////
@@ -163,7 +164,7 @@ Sound3DClass::Play (bool alloc_handle)
 bool
 Sound3DClass::On_Frame_Update (unsigned int milliseconds)
 {
-	Matrix3D prev_tm = m_PrevTransform;
+	Engine::Math::AffineTransform3 prev_tm = m_PrevTransform;
 
 	if (m_bDirty && (m_PhysWrapper != nullptr)) {
 		m_Scene->Update_Sound (m_PhysWrapper);
@@ -186,15 +187,15 @@ Sound3DClass::On_Frame_Update (unsigned int milliseconds)
 	// Update the current velocity if we are 'auto-calcing'.
 	//
 	if (m_bAutoCalcVel && Get_Class_ID () != CLASSID_LISTENER) {
-		Vector3 last_pos = prev_tm.Get_Translation ();
-		Vector3 curr_pos = m_Transform.Get_Translation ();
+		Engine::Math::Vector3 last_pos = prev_tm.Translation();
+		Engine::Math::Vector3 curr_pos = m_Transform.Translation();
 
 		//
 		//	Don't update the velocity if we haven't moved (optimization -- Miles calls
 		// can be really slow)
 		//
 		if (last_pos != curr_pos) {
-			Vector3 curr_vel;
+			Engine::Math::Vector3 curr_vel{};
 
 			//
 			//	Extrapolate our current velocity given the last time slice and the distance
@@ -204,7 +205,7 @@ Sound3DClass::On_Frame_Update (unsigned int milliseconds)
 			if (secs_since_last_update > 0) {
 				curr_vel = ((curr_pos - last_pos) / secs_since_last_update);
 			} else {
-				curr_vel.Set (0, 0, 0);
+				curr_vel = {};
 			}
 
 			Set_Velocity (curr_vel);
@@ -227,7 +228,7 @@ Sound3DClass::On_Frame_Update (unsigned int milliseconds)
 //
 ////////////////////////////////////////////////////////////////////////////////////////////////
 void
-Sound3DClass::Set_Transform (const Matrix3D &transform)
+Sound3DClass::Set_Transform (const Engine::Math::AffineTransform3 &transform)
 {
 	if (transform == m_Transform) {
 		return ;
@@ -254,7 +255,7 @@ Sound3DClass::Set_Transform (const Matrix3D &transform)
 //
 ////////////////////////////////////////////////////////////////////////////////////////////////
 void
-Sound3DClass::Set_Listener_Transform (const Matrix3D &tm)
+Sound3DClass::Set_Listener_Transform (const Engine::Math::AffineTransform3 &tm)
 {
 	//
 	//	If the transform has changed, then cache the new transform
@@ -284,38 +285,35 @@ Sound3DClass::Update_Miles_Transform ()
 		//
 		//	Build a matrix to transform coordinates from world-space to listener-space
 		//
-		Matrix3D world_to_listener_tm;
-		m_ListenerTransform.Get_Orthogonal_Inverse (world_to_listener_tm);
+		const auto world_to_listener_tm = m_ListenerTransform.Inverse();
+		if (!world_to_listener_tm)
+			return;
 
 		//
 		//	Transform the object's TM into "listener-space"
 		//
-#ifdef ALLOW_TEMPORARIES
-		Matrix3D listener_space_tm = world_to_listener_tm * m_Transform;
-#else
-		Matrix3D listener_space_tm;
-		listener_space_tm.mul(world_to_listener_tm, m_Transform);
-#endif
+		const Engine::Math::AffineTransform3 listener_space_tm =
+			Engine::Math::Compose(*world_to_listener_tm, m_Transform);
 
 		//
 		// Pass the sound's position onto miles
 		//
-		Vector3 position = listener_space_tm.Get_Translation ();
-		::AIL_set_3D_position (m_SoundHandle->Get_H3DSAMPLE (), -position.Y, position.Z, position.X);
+		const Engine::Math::Vector3 position = listener_space_tm.Translation();
+		::AIL_set_3D_position (m_SoundHandle->Get_H3DSAMPLE (), -position.y, position.z, position.x);
 
 		//
 		// Pass the sound's orientation (facing) onto miles
 		//
-		Vector3 facing	= listener_space_tm.Get_X_Vector ();
-		Vector3 up		= listener_space_tm.Get_Z_Vector ();
+		const Engine::Math::Vector3 facing = listener_space_tm.Transform_Vector({1, 0, 0});
+		const Engine::Math::Vector3 up = listener_space_tm.Transform_Vector({0, 0, 1});
 
 		::AIL_set_3D_orientation (m_SoundHandle->Get_H3DSAMPLE (),
-										  -facing.Y,
-										  facing.Z,
-										  facing.X,
-										  -up.Y,
-										  up.Z,
-										  up.X);
+													  -facing.y,
+													  facing.z,
+													  facing.x,
+													  -up.y,
+													  up.z,
+													  up.x);
 	}
 }
 
@@ -326,12 +324,12 @@ Sound3DClass::Update_Miles_Transform ()
 //
 ////////////////////////////////////////////////////////////////////////////////////////////////
 void
-Sound3DClass::Set_Position (const Vector3 &position)
+Sound3DClass::Set_Position (Engine::Math::Vector3 position)
 {
 	//
 	// Pass the sound's position onto miles
 	//
-	if (m_Transform.Get_Translation () != position)  {
+	if (m_Transform.Translation() != position)  {
 		// Update our internal transform
 		//
 		// SKB: 4/13/01 - Confirmed to be OK by Pat Smith.
@@ -340,7 +338,9 @@ Sound3DClass::Set_Position (const Vector3 &position)
 		//  I had a problem that sounds would never be added to the scene because
 		//  their positions stayed at 0,0,0 even after this Set_Postion() call.
 		m_PrevTransform = m_Transform;
-		m_Transform.Set_Translation (position);
+		m_Transform.elements[3] = position.x;
+		m_Transform.elements[7] = position.y;
+		m_Transform.elements[11] = position.z;
 		Set_Dirty ();
 
 		if (m_IsTransformInitted == false) {
@@ -353,15 +353,16 @@ Sound3DClass::Set_Position (const Vector3 &position)
 			//
 			//	Transform the sound's position into 'listener-space'
 			//
-			Vector3 sound_pos	= position;
-			Vector3 listener_space_pos;
-			Matrix3D::Inverse_Transform_Vector (m_ListenerTransform, sound_pos, &listener_space_pos);
+			const auto inverse = m_ListenerTransform.Inverse();
+			if (!inverse)
+				return;
+			const Engine::Math::Vector3 listener_space_pos = inverse->Transform_Point(position);
 
 			//
 			//	Update the object's position inside of Miles
 			//
-			::AIL_set_3D_position (m_SoundHandle->Get_H3DSAMPLE (), -listener_space_pos.Y,
-					listener_space_pos.Z, listener_space_pos.X);
+			::AIL_set_3D_position (m_SoundHandle->Get_H3DSAMPLE (), -listener_space_pos.y,
+					listener_space_pos.z, listener_space_pos.x);
 		}
 	}
 }
@@ -373,7 +374,7 @@ Sound3DClass::Set_Position (const Vector3 &position)
 //
 ////////////////////////////////////////////////////////////////////////////////////////////////
 void
-Sound3DClass::Set_Velocity (const Vector3 &velocity)
+Sound3DClass::Set_Velocity (Engine::Math::Vector3 velocity)
 {
 	MMSLockClass lock;
 
@@ -385,11 +386,11 @@ Sound3DClass::Set_Velocity (const Vector3 &velocity)
 	//
 	if (m_SoundHandle != nullptr) {
 
-		//WWDEBUG_SAY (("Current Velocity: %.2f %.2f %.2f", m_CurrentVelocity.X, m_CurrentVelocity.Y, m_CurrentVelocity.Z));
+		//engine::debug::log_info("Current Velocity: %.2f %.2f %.2f", m_CurrentVelocity.X, m_CurrentVelocity.Y, m_CurrentVelocity.Z);
 		::AIL_set_3D_velocity_vector (m_SoundHandle->Get_H3DSAMPLE (),
-												-m_CurrentVelocity.Y,
-												m_CurrentVelocity.Z,
-												m_CurrentVelocity.X);
+													-m_CurrentVelocity.y,
+													m_CurrentVelocity.z,
+													m_CurrentVelocity.x);
 	}
 }
 

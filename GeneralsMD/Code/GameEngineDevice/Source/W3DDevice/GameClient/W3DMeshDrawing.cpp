@@ -10,11 +10,12 @@ import Graphics.Scene.Props.MaterialSubmission;
 #include <memory>
 #include <span>
 #include <vector>
-#include "rts/profile.h"
+
 #include "W3DDevice/GameClient/W3DMeshDrawing.h"
 #include "W3DDevice/GameClient/W3DTextureHandle.h"
 #include "W3DDevice/GameClient/W3DMeshRenderObject.h"
 #include "W3DDevice/GameClient/W3DMeshResource.h"
+#include "W3DDevice/GameClient/W3DMeshQueries.h"
 #include "W3DDevice/GameClient/W3DCamera.h"
 #include "W3DDevice/GameClient/W3DRenderContext.h"
 
@@ -25,19 +26,24 @@ import Graphics.Scene.Props.Extraction;
 import Graphics.Scene.Props.Renderer;
 import Graphics.Scene.Props.SkinPalettes;
 import Graphics.Scene.Props.LightingParameters;
+import Engine.Core.Math.AffineTransform3;
+import Engine.Core.Math.BoundsQueries3;
+import Engine.Core.Math.OrientedBox3;
 import engine.navigation.diagnostics.frame_capture;
 #include "GameLogic/GameLogic.h"
+import engine.profiling;
+import engine.debug;
 
 bool Draw_W3D_Mesh(W3DMeshRenderObject& mesh, W3DRenderContext& info, const Graphics::ModelMeshDrawOverrides& overrides)
 {
-    PROFILER_SECTION_NAME("Graphics.Mesh.ExtractDraw");
+    engine::profiling::Scope profile_scope_33("Graphics.Mesh.ExtractDraw");
     auto& capture=navigation::diagnostics::frameCapture();
     auto mesh_timing=capture.accumulate(overrides.shadow_capture ? "Graphics.Mesh.ShadowTotal" : "Graphics.Mesh.ColorTotal");
     if (mesh.Get_Muzzle_Flash_Designation() != Graphics::MuzzleFlashDesignation::None && overrides.shadow_capture) return true;
     auto* model = mesh.Peek_Model();
     if (!model || model->Get_Vertex_Count() == 0 || model->Get_Polygon_Count() == 0) return true;
     mesh.Validate_Transform();
-    Matrix3D world = mesh.Get_Transform();
+    auto world = mesh.Get_Transform();
     const auto* positions = model->Peek_Vertex_Array();
     const auto* normals = model->Get_Vertex_Normal_Array();
     const auto source_revision = model->Geometry_Revision();
@@ -46,25 +52,25 @@ bool Draw_W3D_Mesh(W3DMeshRenderObject& mesh, W3DRenderContext& info, const Grap
     std::span<const std::uint16_t> bone_links;
     const bool skin = model->Get_Flag(W3DMeshGeometry::SKIN) != 0;
     if (model->Get_Flag(W3DMeshGeometry::ALIGNED)) {
-        Vector3 direction;
-        info.Camera.Get_Transform().Get_Z_Vector(&direction);
-        const auto position = world.Get_Translation();
-        world.Obj_Look_At(position, position + direction, 0);
+        const auto direction = info.Camera.Get_Transform().Basis_Z();
+        world = Engine::Math::AffineTransform3::From_Forward_Direction(world.Translation(), direction);
     } else if (model->Get_Flag(W3DMeshGeometry::ORIENTED)) {
-        const auto position = world.Get_Translation();
-        world.Obj_Look_At(position, info.Camera.Get_Position(), 0);
+        const auto position = world.Translation();
+        const auto camera_position = info.Camera.Get_Position();
+        world = Engine::Math::AffineTransform3::From_Forward_Direction(
+            position, Engine::Math::Vector3{camera_position.x, camera_position.y, camera_position.z} - position);
     } else if (skin) {
-        PROFILER_SECTION_NAME("Graphics.Mesh.SkinPalette");
+        engine::profiling::Scope profile_scope_57("Graphics.Mesh.SkinPalette");
         auto skin_timing=capture.accumulate(overrides.shadow_capture ? "Graphics.Mesh.ShadowSkin" : "Graphics.Mesh.ColorSkin");
         const auto vertex_count = static_cast<std::size_t>(model->Get_Vertex_Count());
         auto* container = mesh.Get_Container();
-        WWASSERT(container && container->Get_Model_Hierarchy());
+        engine::debug::assert_condition((container && container->Get_Model_Hierarchy()), "container && container->Get_Model_Hierarchy()", __FILE__, __LINE__, "assertion failed");
         const auto& hierarchy=*container->Get_Model_Hierarchy();
         bone_links=std::span(model->Get_Vertex_Bone_Links(),vertex_count);
         skin_palette=mesh.Graphics_Skin().Update(Graphics::Get_Prop_Renderer().Instances().Palettes(),
             static_cast<std::size_t>(hierarchy.Bone_Count()),
             [&](std::size_t bone) -> const auto& { return hierarchy.World_Transform(static_cast<int>(bone)).matrix; }, hierarchy.Revision());
-        world.Make_Identity();
+        world = Engine::Math::AffineTransform3::Identity();
     }
     const Graphics::PropSkinLease skin_lease(Graphics::Get_Prop_Renderer().Instances().Palettes(),skin_palette);
     const auto& camera = Graphics::Get_Camera_Matrices();
@@ -73,11 +79,11 @@ bool Draw_W3D_Mesh(W3DMeshRenderObject& mesh, W3DRenderContext& info, const Grap
     context.parameters.normal_in_world_space = normals ? 0.0f : 1.0f;
     for (unsigned row = 0; row < 3; ++row)
         for (unsigned column = 0; column < 4; ++column)
-            context.parameters.world[row * 4 + column] = world[row][column];
+            context.parameters.world[row * 4 + column] = world.elements[row * 4 + column];
     context.parameters.view = camera.view.values;
     context.parameters.view_projection = view_projection.values;
     const auto camera_position = info.Camera.Get_Position();
-    context.parameters.camera_position = {camera_position.X, camera_position.Y, camera_position.Z, 1};
+    context.parameters.camera_position = {camera_position.x, camera_position.y, camera_position.z, 1};
     {
         auto lighting_timing=capture.accumulate("Graphics.Mesh.Lighting");
         Graphics::Set_Prop_Lighting(context.parameters, mesh.Get_Lighting_Environment());
@@ -96,7 +102,7 @@ bool Draw_W3D_Mesh(W3DMeshRenderObject& mesh, W3DRenderContext& info, const Grap
     const auto* user_data = mesh.Get_User_Data();
     if (user_data && *static_cast<const int*>(user_data) == W3DRenderObject::USER_DATA_MATERIAL_OVERRIDE) {
         const auto& offset = static_cast<const W3DRenderObject::Material_Override*>(user_data)->customUVOffset;
-        context.uv_offset = {offset.X, offset.Y};
+        context.uv_offset = {offset.x, offset.y};
     }
     auto& state = model->Graphics_Mesh_State();
     if (!state) state = std::make_unique<Graphics::ModelMeshState<RefCountPtr<W3DTextureHandle>>>();
@@ -141,18 +147,21 @@ bool Draw_W3D_Mesh(W3DMeshRenderObject& mesh, W3DRenderContext& info, const Grap
         NativeMaterialPass::Description description;
         if (!pass->Describe(description)) { success = false; continue; }
         if (!skin && pass->cull_bounds) {
-            SimpleDynVecClass<uint32> selected;
-            Matrix3D inverse;
-            mesh.Get_Transform().Get_Orthogonal_Inverse(inverse);
-            OBBoxClass local_box;
-            OBBoxClass::Transform(inverse, *pass->cull_bounds, &local_box);
-            Vector3 direction;
-            local_box.Basis.Get_Z_Vector(&direction);
-            direction = -direction;
-            if (model->Has_Cull_Tree()) model->Generate_Rigid_APT(local_box, direction, selected);
-            else model->Generate_Rigid_APT(direction, selected);
+            std::vector<std::uint32_t> selected;
+            const auto inverse = mesh.Get_Transform().Inverse();
+            const auto local_box = inverse
+                ? Engine::Math::TransformOrientedBox(*pass->cull_bounds, *inverse)
+                : std::optional<Engine::Math::OrientedBox3>{};
+            if (local_box) {
+                const auto engine_direction = local_box->axes[2] * -1.0f;
+                if (model->Has_Cull_Tree()) model->Collect_Visible_Polygons(*local_box, engine_direction, selected);
+                else model->Collect_Visible_Polygons(engine_direction, selected);
+            } else {
+                const auto polygons = state->Complete_Polygons(static_cast<std::size_t>(model->Get_Polygon_Count()));
+                selected.assign(polygons.begin(), polygons.end());
+            }
             if (!drawing.Draw_Additional(description,
-                std::span<const uint32>(selected.Count() ? &selected[0] : nullptr, static_cast<std::size_t>(selected.Count())),
+                std::span<const std::uint32_t>(selected),
                 pass_index, submit)) success = false;
         } else {
             const auto polygons = state->Complete_Polygons(static_cast<std::size_t>(model->Get_Polygon_Count()));

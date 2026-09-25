@@ -46,6 +46,8 @@
 #include "AudioEvents.h"
 #include "WWLib/wwstring.h"
 
+import Engine.Core.Math.AffineTransform3;
+
 /////////////////////////////////////////////////////////////////////////////////
 // Forward declaration
 /////////////////////////////////////////////////////////////////////////////////
@@ -59,7 +61,6 @@ class FileFactoryClass;
 class SoundSceneObjClass;
 class LogicalListenerClass;
 class LogicalSoundClass;
-class Matrix3D;
 
 
 /////////////////////////////////////////////////////////////////////////////////
@@ -356,8 +357,8 @@ public:
 	//
 	//	Sound creation methods
 	//
-	int						Create_Instant_Sound (int definition_id, const Matrix3D &tm, RefCountClass *user_obj = nullptr, uint32 user_data = 0, int classid_hint = CLASSID_3D);
-	int						Create_Instant_Sound (const char *def_name, const Matrix3D &tm, RefCountClass *user_obj = nullptr, uint32 user_data = 0, int classid_hint = CLASSID_3D);
+	int						Create_Instant_Sound (int definition_id, const Engine::Math::AffineTransform3 &transform, RefCountClass *user_obj = nullptr, uint32 user_data = 0, int classid_hint = CLASSID_3D);
+	int						Create_Instant_Sound (const char *def_name, const Engine::Math::AffineTransform3 &transform, RefCountClass *user_obj = nullptr, uint32 user_data = 0, int classid_hint = CLASSID_3D);
 	AudibleSoundClass *	Create_Continuous_Sound (int definition_id, RefCountClass *user_obj = nullptr, uint32 user_data = 0, int classid_hint = CLASSID_3D);
 	AudibleSoundClass *	Create_Continuous_Sound (const char *def_name, RefCountClass *user_obj = nullptr, uint32 user_data = 0, int classid_hint = CLASSID_3D);
 	AudibleSoundClass *	Create_Sound (int definition_id, RefCountClass *user_obj = nullptr, uint32 user_data = 0, int classid_hint = CLASSID_3D);

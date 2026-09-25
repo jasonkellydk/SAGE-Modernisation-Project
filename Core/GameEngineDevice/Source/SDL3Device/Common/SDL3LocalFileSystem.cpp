@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <string>
 #include <system_error>
+import engine.debug;
 
 namespace
 {
@@ -246,7 +247,7 @@ void SDL3LocalFileSystem::init()
 	if (!m_basePath.empty())
 		m_basePath = m_basePath.lexically_normal();
 
-	DEBUG_LOG(("SDL3LocalFileSystem::init - base path is %s", m_basePath.string().c_str()));
+	engine::debug::log_info("SDL3LocalFileSystem::init - base path is %s", m_basePath.string().c_str());
 }
 
 void SDL3LocalFileSystem::reset()

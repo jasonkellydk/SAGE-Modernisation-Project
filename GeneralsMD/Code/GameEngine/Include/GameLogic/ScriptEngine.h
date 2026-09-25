@@ -47,7 +47,7 @@ class Player;
 class PolygonTrigger;
 class ObjectTypes;
 
-#ifdef RTS_PROFILE_LEGACY
+#if defined(RTS_PROFILE_TRACY)
 #define SPECIAL_SCRIPT_PROFILING
 #endif
 
@@ -484,12 +484,10 @@ protected:
 	Bool							m_shownMPLocalDefeatWindow;
 
 #ifdef SPECIAL_SCRIPT_PROFILING
-#ifdef DEBUG_LOGGING
 	double						m_numFrames;
 	double						m_totalUpdateTime;
 	double						m_maxUpdateTime;
 	double						m_curUpdateTime;
-#endif
 #endif
 
 };

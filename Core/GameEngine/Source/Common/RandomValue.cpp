@@ -26,12 +26,13 @@
 // Pseudo-random number generators
 // Author: Michael S. Booth, January 1998
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Lib/BaseType.h"
 #include "Common/RandomValue.h"
 #include "Common/crc.h"
-#include "Common/Debug.h"
+
 #include "GameLogic/GameLogic.h"
 
 #undef DEBUG_RANDOM_AUDIO
@@ -125,7 +126,7 @@ void InitRandom( UnsignedInt seed )
 	theGameLogicBaseSeed = seed;
 
 #ifdef DEBUG_RANDOM_LOGIC
-	DEBUG_LOG(("InitRandom %08lx", seed));
+	engine::debug::log_info("InitRandom %08lx", seed);
 #endif
 }
 
@@ -194,11 +195,11 @@ Int GetGameAudioRandomValue( int lo, int hi, const char *file, int line )
 	const Int rval = ((Int)(randomValue(theGameAudioSeed) % delta)) + lo;
 
 #ifdef DEBUG_RANDOM_AUDIO
-	DEBUG_LOG(( "%d: GetGameAudioRandomValue = %d (%d - %d), %s line %d",
-		TheGameLogic->getFrame(), rval, lo, hi, file, line ));
+	engine::debug::log_info( "%d: GetGameAudioRandomValue = %d (%d - %d), %s line %d",
+		TheGameLogic->getFrame(), rval, lo, hi, file, line );
 #endif
 
-	DEBUG_ASSERTCRASH(rval >= lo && rval <= hi, ("Bad random val"));
+	engine::debug::invariant((rval >= lo && rval <= hi), "rval >= lo && rval <= hi", __FILE__, __LINE__, "Bad random val");
 	return rval;
 }
 
@@ -214,11 +215,11 @@ Real GetGameAudioRandomValueReal( Real lo, Real hi, const char *file, int line )
 	const Real rval = ((Real)(randomValue(theGameAudioSeed)) * theMultFactor) * delta + lo;
 
 #ifdef DEBUG_RANDOM_AUDIO
-	DEBUG_LOG(( "%d: GetGameAudioRandomValueReal = %f, %s line %d",
-		TheGameLogic->getFrame(), rval, file, line ));
+	engine::debug::log_info( "%d: GetGameAudioRandomValueReal = %f, %s line %d",
+		TheGameLogic->getFrame(), rval, file, line );
 #endif
 
-	DEBUG_ASSERTCRASH(rval >= lo && rval <= hi, ("Bad random val"));
+	engine::debug::invariant((rval >= lo && rval <= hi), "rval >= lo && rval <= hi", __FILE__, __LINE__, "Bad random val");
 	return rval;
 }
 
@@ -234,11 +235,11 @@ Int GetGameClientRandomValue( int lo, int hi, const char *file, int line )
 	const Int rval = ((Int)(randomValue(theGameClientSeed) % delta)) + lo;
 
 #ifdef DEBUG_RANDOM_CLIENT
-	DEBUG_LOG(( "%d: GetGameClientRandomValue = %d (%d - %d), %s line %d",
-		TheGameLogic ? TheGameLogic->getFrame() : -1, rval, lo, hi, file, line ));
+	engine::debug::log_info( "%d: GetGameClientRandomValue = %d (%d - %d), %s line %d",
+		TheGameLogic ? TheGameLogic->getFrame() : -1, rval, lo, hi, file, line );
 #endif
 
-	DEBUG_ASSERTCRASH(rval >= lo && rval <= hi, ("Bad random val"));
+	engine::debug::invariant((rval >= lo && rval <= hi), "rval >= lo && rval <= hi", __FILE__, __LINE__, "Bad random val");
 	return rval;
 }
 
@@ -254,11 +255,11 @@ Real GetGameClientRandomValueReal( Real lo, Real hi, const char *file, int line 
 	const Real rval = ((Real)(randomValue(theGameClientSeed)) * theMultFactor) * delta + lo;
 
 #ifdef DEBUG_RANDOM_CLIENT
-	DEBUG_LOG(( "%d: GetGameClientRandomValueReal = %f, %s line %d",
-		TheGameLogic->getFrame(), rval, file, line ));
+	engine::debug::log_info( "%d: GetGameClientRandomValueReal = %f, %s line %d",
+		TheGameLogic->getFrame(), rval, file, line );
 #endif
 
-	DEBUG_ASSERTCRASH(rval >= lo && rval <= hi, ("Bad random val"));
+	engine::debug::invariant((rval >= lo && rval <= hi), "rval >= lo && rval <= hi", __FILE__, __LINE__, "Bad random val");
 	return rval;
 }
 
@@ -281,11 +282,11 @@ Int GetGameLogicRandomValue( int lo, int hi, const char *file, int line )
 	const Int rval = ((Int)(randomValue(theGameLogicSeed) % delta)) + lo;
 
 #ifdef DEBUG_RANDOM_LOGIC
-	DEBUG_LOG(( "%d: GetGameLogicRandomValue = %d (%d - %d), %s line %d",
-		TheGameLogic->getFrame(), rval, lo, hi, file, line ));
+	engine::debug::log_info( "%d: GetGameLogicRandomValue = %d (%d - %d), %s line %d",
+		TheGameLogic->getFrame(), rval, lo, hi, file, line );
 #endif
 
-	DEBUG_ASSERTCRASH(rval >= lo && rval <= hi, ("Bad random val"));
+	engine::debug::invariant((rval >= lo && rval <= hi), "rval >= lo && rval <= hi", __FILE__, __LINE__, "Bad random val");
 	return rval;
 }
 
@@ -308,11 +309,11 @@ Real GetGameLogicRandomValueReal( Real lo, Real hi, const char *file, int line )
 	const Real rval = ((Real)(randomValue(theGameLogicSeed)) * theMultFactor) * delta + lo;
 
 #ifdef DEBUG_RANDOM_LOGIC
-	DEBUG_LOG(( "%d: GetGameLogicRandomValueReal = %f, %s line %d",
-		TheGameLogic->getFrame(), rval, file, line ));
+	engine::debug::log_info( "%d: GetGameLogicRandomValueReal = %f, %s line %d",
+		TheGameLogic->getFrame(), rval, file, line );
 #endif
 
-	DEBUG_ASSERTCRASH(rval >= lo && rval <= hi, ("Bad random val"));
+	engine::debug::invariant((rval >= lo && rval <= hi), "rval >= lo && rval <= hi", __FILE__, __LINE__, "Bad random val");
 	return rval;
 }
 
@@ -338,11 +339,11 @@ Int GetGameLogicRandomValueUnchanged( int lo, int hi, const char *file, int line
 	const Int rval = ((Int)(randomValue(seed) % delta)) + lo;
 
 #ifdef DEBUG_RANDOM_LOGIC
-	DEBUG_LOG(( "%d: GetGameLogicRandomValueUnchanged = %d (%d - %d), %s line %d",
-		TheGameLogic->getFrame(), rval, lo, hi, file, line ));
+	engine::debug::log_info( "%d: GetGameLogicRandomValueUnchanged = %d (%d - %d), %s line %d",
+		TheGameLogic->getFrame(), rval, lo, hi, file, line );
 #endif
 
-	DEBUG_ASSERTCRASH(rval >= lo && rval <= hi, ("Bad random val"));
+	engine::debug::invariant((rval >= lo && rval <= hi), "rval >= lo && rval <= hi", __FILE__, __LINE__, "Bad random val");
 	return rval;
 }
 
@@ -368,11 +369,11 @@ Real GetGameLogicRandomValueRealUnchanged( Real lo, Real hi, const char *file, i
 	const Real rval = ((Real)(randomValue(seed)) * theMultFactor) * delta + lo;
 
 #ifdef DEBUG_RANDOM_LOGIC
-	DEBUG_LOG(( "%d: GetGameLogicRandomValueRealUnchanged = %f, %s line %d",
-		TheGameLogic->getFrame(), rval, file, line ));
+	engine::debug::log_info( "%d: GetGameLogicRandomValueRealUnchanged = %f, %s line %d",
+		TheGameLogic->getFrame(), rval, file, line );
 #endif
 
-	DEBUG_ASSERTCRASH(rval >= lo && rval <= hi, ("Bad random val"));
+	engine::debug::invariant((rval >= lo && rval <= hi), "rval >= lo && rval <= hi", __FILE__, __LINE__, "Bad random val");
 	return rval;
 }
 
@@ -391,7 +392,7 @@ static_assert(ARRAY_SIZE(GameClientRandomVariable::DistributionTypeNames) == Gam
 */
 void GameClientRandomVariable::setRange( Real low, Real high, DistributionType type )
 {
-	DEBUG_ASSERTCRASH(!(m_type == CONSTANT && m_low != m_high), ("CONSTANT GameClientRandomVariables should have low == high"));
+	engine::debug::invariant((!(m_type == CONSTANT && m_low != m_high)), "!(m_type == CONSTANT && m_low != m_high)", __FILE__, __LINE__, "CONSTANT GameClientRandomVariables should have low == high");
 	m_low = low;
 	m_high = high;
 	m_type = type;
@@ -405,7 +406,7 @@ Real GameClientRandomVariable::getValue() const
 	switch( m_type )
 	{
 		case CONSTANT:
-			DEBUG_ASSERTLOG(m_low == m_high, ("m_low != m_high for a CONSTANT GameClientRandomVariable"));
+			if (!(m_low == m_high)) engine::debug::log_error("m_low != m_high for a CONSTANT GameClientRandomVariable");
 			if (m_low == m_high) {
 				return m_low;
 			}
@@ -416,7 +417,7 @@ Real GameClientRandomVariable::getValue() const
 
 		default:
 			/// @todo fill in support for nonuniform GameClientRandomVariables.
-			DEBUG_CRASH(("unsupported DistributionType in GameClientRandomVariable::getValue"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "unsupported DistributionType in GameClientRandomVariable::getValue");
 			return 0.0f;
 	}
 }
@@ -436,7 +437,7 @@ static_assert(ARRAY_SIZE(GameLogicRandomVariable::DistributionTypeNames) == Game
 */
 void GameLogicRandomVariable::setRange( Real low, Real high, DistributionType type )
 {
-	DEBUG_ASSERTCRASH(!(m_type == CONSTANT && m_low != m_high), ("CONSTANT GameLogicRandomVariables should have low == high"));
+	engine::debug::invariant((!(m_type == CONSTANT && m_low != m_high)), "!(m_type == CONSTANT && m_low != m_high)", __FILE__, __LINE__, "CONSTANT GameLogicRandomVariables should have low == high");
 	m_low = low;
 	m_high = high;
 	m_type = type;
@@ -450,7 +451,7 @@ Real GameLogicRandomVariable::getValue() const
 	switch( m_type )
 	{
 		case CONSTANT:
-			DEBUG_ASSERTLOG(m_low == m_high, ("m_low != m_high for a CONSTANT GameLogicRandomVariable"));
+			if (!(m_low == m_high)) engine::debug::log_error("m_low != m_high for a CONSTANT GameLogicRandomVariable");
 			if (m_low == m_high) {
 				return m_low;
 			}
@@ -461,7 +462,7 @@ Real GameLogicRandomVariable::getValue() const
 
 		default:
 			/// @todo fill in support for nonuniform GameLogicRandomVariables.
-			DEBUG_CRASH(("unsupported DistributionType in GameLogicRandomVariable::getValue"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "unsupported DistributionType in GameLogicRandomVariable::getValue");
 			return 0.0f;
 	}
 }

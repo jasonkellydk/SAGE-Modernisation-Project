@@ -30,12 +30,13 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
-#include "Common/Debug.h"
+
 #include "Common/GlobalData.h"
 #include "Common/LocalFileSystem.h"
 #include "GameClient/GameClient.h"
 #include "Win32Device/GameClient/Win32Mouse.h"
 #include "WinMain.h"
+import engine.debug;
 
 
 // EXTERN /////////////////////////////////////////////////////////////////////////////////////////
@@ -227,8 +228,8 @@ void Win32Mouse::translateEvent( UnsignedInt eventIndex, MouseIO *result )
 		default:
 		{
 
-			DEBUG_CRASH(( "translateEvent: Unknown Win32 mouse event [%d,%d,%d]",
-							 msg, wParam, lParam ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "translateEvent: Unknown Win32 mouse event [%d,%d,%d]",
+							 msg, wParam, lParam );
 			return;
 
 		}
@@ -398,7 +399,7 @@ void Win32Mouse::initCursorResources()
 
 				if (!loaded)
 					cursorResources[cursor][direction]=LoadCursorFromFile(resourcePath);
-				DEBUG_ASSERTCRASH(cursorResources[cursor][direction], ("MissingCursor %s",resourcePath));
+				engine::debug::invariant((cursorResources[cursor][direction]), "cursorResources[cursor][direction]", __FILE__, __LINE__, "MissingCursor %s",resourcePath);
 			}
 		}
 //		SetCursor(cursorResources[cursor][m_directionFrame]);

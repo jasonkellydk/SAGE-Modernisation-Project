@@ -36,8 +36,10 @@
 
 #pragma once
 
+
+#include <cassert>
 #include "always.h"
-#include "WWDebug/wwdebug.h"
+
 
 /*
 	RefCountPtr<T> is a smart pointer for reference counted objects.
@@ -220,7 +222,7 @@ class RefCountPtr
 		// Prefer using Assign_No_Add_Ref.
 		static RefCountPtr<T> Create_No_Add_Ref(T *t)
 		{
-			WWASSERT(t == nullptr || t->Num_Refs() >= 1);
+			assert((t == nullptr || t->Num_Refs() >= 1));
 			return RefCountPtr<T>(t, RefCountPtr<T>::GET);
 		}
 
@@ -251,7 +253,7 @@ class RefCountPtr
 		RefCountPtr(DummyPtrType * dummy)
 			: Referent(nullptr)
 		{
-			WWASSERT(dummy == nullptr);
+			assert((dummy == nullptr));
 		}
 #endif
 
@@ -305,7 +307,7 @@ class RefCountPtr
 		// Is generally used for objects returned by operator new and "Get" functions.
 		void Assign_No_Add_Ref(T *t)
 		{
-			WWASSERT(t == nullptr || t->Num_Refs() >= 1);
+			assert((t == nullptr || t->Num_Refs() >= 1));
 
 			if (Referent) {
 				Referent->Release_Ref();
@@ -394,7 +396,7 @@ class RefCountPtr
 
 		T & operator *() const
 		{
-			WWASSERT(0 != Referent);
+			assert((0 != Referent));
 			return *Referent;
 		}
 
@@ -448,7 +450,7 @@ template <class RHS>
 bool operator ==(DummyPtrType * dummy, const RefCountPtr<RHS> & rhs)
 {
 	if (nullptr != dummy) {
-		WWASSERT(0);
+		assert((0));
 		return false;
 	}
 
@@ -461,7 +463,7 @@ template <class RHS>
 bool operator !=(DummyPtrType * dummy, const RefCountPtr<RHS> & rhs)
 {
 	if (nullptr != dummy) {
-		WWASSERT(0);
+		assert((0));
 		return true;
 	}
 

@@ -28,7 +28,8 @@
 //					This instance puts guys at named bones.
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/Xfer.h"
 #include "GameClient/Drawable.h"
@@ -38,8 +39,9 @@
 #include "GameLogic/Object.h"
 #include "GameLogic/TerrainLogic.h"
 #include "GameLogic/Module/SpawnPointProductionExitUpdate.h"
-
-#include "WWMath/matrix3d.h"		///< @todo Replace with our own matrix library
+#include <array>
+#include <cmath>
+import Engine.Core.Math.AffineTransform3;
 
 //-------------------------------------------------------------------------------------------------
 SpawnPointProductionExitUpdate::SpawnPointProductionExitUpdate( Thing *thing, const ModuleData* moduleData ) : UpdateModule( thing, moduleData )
@@ -63,7 +65,7 @@ SpawnPointProductionExitUpdate::~SpawnPointProductionExitUpdate()
 //-------------------------------------------------------------------------------------------------
 void SpawnPointProductionExitUpdate::exitObjectViaDoor( Object *newObj, ExitDoorType exitDoor )
 {
-	DEBUG_ASSERTCRASH(exitDoor == DOOR_1, ("multiple exit doors not supported here"));
+	engine::debug::invariant((exitDoor == DOOR_1), "exitDoor == DOOR_1", __FILE__, __LINE__, "multiple exit doors not supported here");
 
 	if( !m_bonesInitialized )
 		initializeBonePositions();
@@ -79,7 +81,7 @@ void SpawnPointProductionExitUpdate::exitObjectViaDoor( Object *newObj, ExitDoor
 		}
 		if( positionIndex == m_spawnPointCount )
 		{
-			DEBUG_CRASH( ("A SpawnPoint exit thought it had room but then failed") );
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "A SpawnPoint exit thought it had room but then failed");
 			return;
 		}
 
@@ -149,27 +151,24 @@ void SpawnPointProductionExitUpdate::initializeBonePositions()
 	if( myDrawable == nullptr )
 		return;
 
-	Matrix3D boneTransforms[MAX_SPAWN_POINTS];
-	Int matrixIndex = 0;
-	for( ; matrixIndex < MAX_SPAWN_POINTS; matrixIndex++ )
-		boneTransforms[matrixIndex].Make_Identity();
+	std::array<Engine::Math::AffineTransform3, MAX_SPAWN_POINTS> boneTransforms{};
 
 	// Get all the bones of the right name
 	const SpawnPointProductionExitUpdateModuleData* md = getSpawnPointProductionExitUpdateModuleData();
-	m_spawnPointCount = myDrawable->getPristineBonePositions( md->m_spawnPointBoneNameData.str(), 1, nullptr, boneTransforms, MAX_SPAWN_POINTS );
+	m_spawnPointCount = myDrawable->getPristineBoneTransforms(
+		md->m_spawnPointBoneNameData.str(), 1, boneTransforms.data(), MAX_SPAWN_POINTS);
 
-	for( matrixIndex = 0; matrixIndex < m_spawnPointCount; matrixIndex++ )
+	for(Int matrixIndex = 0; matrixIndex < m_spawnPointCount; matrixIndex++ )
 	{
-		Matrix3D *currentTransform = &(boneTransforms[matrixIndex]);
-		// Convert their matrix one by one
-		me->convertBonePosToWorldPos( nullptr, currentTransform, nullptr, currentTransform );
+		const Engine::Math::AffineTransform3 currentTransform = me->toWorldTransform(boneTransforms[matrixIndex]);
 
 		// Then save the world coord and angle
-		m_worldCoordSpawnPoints[matrixIndex].x = currentTransform->Get_X_Translation();
-		m_worldCoordSpawnPoints[matrixIndex].y = currentTransform->Get_Y_Translation();
+		const Engine::Math::Vector3 position = currentTransform.Translation();
+		m_worldCoordSpawnPoints[matrixIndex].x = position.x;
+		m_worldCoordSpawnPoints[matrixIndex].y = position.y;
 		m_worldCoordSpawnPoints[matrixIndex].z = 0; //set at creation time
 
-		m_worldAngleSpawnPoints[matrixIndex] = currentTransform->Get_Z_Rotation();
+		m_worldAngleSpawnPoints[matrixIndex] = currentTransform.Z_Rotation_Legacy();
 	}
 
 	m_bonesInitialized = TRUE;

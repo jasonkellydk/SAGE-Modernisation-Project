@@ -32,6 +32,7 @@
 #include "GameLogic/SidesList.h"
 #include "GameClient/GameText.h"
 #include "Common/UnicodeString.h"
+import engine.debug;
 
 static const char* NEUTRAL_NAME_STR = "(neutral)";
 
@@ -53,13 +54,13 @@ static void fixDefaultTeamName(SidesList& sides, AsciiString oldpname, AsciiStri
 	{
 		tname.set("team");
 		tname.concat(newpname);
-		DEBUG_LOG(("rename team %s -> %s",ti->getDict()->getAsciiString(TheKey_teamName).str(),tname.str()));
+		engine::debug::log_info("rename team %s -> %s",ti->getDict()->getAsciiString(TheKey_teamName).str(),tname.str());
 		ti->getDict()->setAsciiString(TheKey_teamName, tname);
 		ti->getDict()->setAsciiString(TheKey_teamOwner, newpname);
 	}
 	else
 	{
-		DEBUG_CRASH(("team not found"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "team not found");
 	}
 }
 
@@ -111,7 +112,7 @@ static AsciiString UIToInternal(SidesList& sides, const AsciiString& n)
 			return sides.getSideInfo(i)->getDict()->getAsciiString(TheKey_playerName);
 	}
 
-	DEBUG_CRASH(("ui name not found"));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "ui name not found");
 	return AsciiString::TheEmptyString;
 }
 
@@ -159,7 +160,7 @@ static AsciiString extractFromAlliesList(CListBox *alliesList, SidesList& sides)
 			allies.concat(UIToInternal(sides, nm));
 		}
 	}
-//DEBUG_LOG(("a/e is (%s)",allies.str()));
+//engine::debug::log_info("a/e is (%s)",allies.str());
 	return allies;
 }
 
@@ -195,14 +196,14 @@ static void selectAlliesList(CListBox *alliesList, SidesList& sides, const Ascii
 		SidesInfo *si = sides.findSideInfo(token, &i);
 		if (!si)
 		{
-			DEBUG_CRASH(("player %s not found",token.str()));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "player %s not found",token.str());
 			continue;
 		}
 		// must re-find, since list is sorted
 		oindex_in_list = alliesList->FindStringExact(-1, playerNameForUI(sides, i).str());
 		if (oindex_in_list == -1)
 		{
-			DEBUG_CRASH(("hmm, should not happen"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "hmm, should not happen");
 			continue;
 		}
 		alliesList->SetSel(oindex_in_list, true);
@@ -325,7 +326,7 @@ void PlayerListDlg::OnNewplayer()
 
 			Bool modified = m_sides.validateSides();
 			(void)modified;
-			DEBUG_ASSERTLOG(!modified,("had to clean up sides in PlayerListDlg::OnNewplayer"));
+			if (!(!modified)) engine::debug::log_error("had to clean up sides in PlayerListDlg::OnNewplayer");
 			m_curPlayerIdx = m_sides.getNumSides()-1;
 			updateTheUI();
 		}
@@ -373,7 +374,7 @@ void PlayerListDlg::OnEditplayer()
 		fixDefaultTeamName(m_sides, pnameold, pnamenew);
 
 		Bool modified = m_sides.validateSides();
-		DEBUG_ASSERTLOG(!modified,("had to clean up sides in PlayerListDlg::OnEditplayer"));
+		if (!(!modified)) engine::debug::log_error("had to clean up sides in PlayerListDlg::OnEditplayer");
 
 		updateTheUI();
 	}
@@ -424,7 +425,7 @@ try_again:
 
 	Bool modified = m_sides.validateSides();
 	(void)modified;
-	DEBUG_ASSERTLOG(!modified,("had to clean up sides in PlayerListDlg::OnRemoveplayer"));
+	if (!(!modified)) engine::debug::log_error("had to clean up sides in PlayerListDlg::OnRemoveplayer");
 	updateTheUI();
 }
 
@@ -447,7 +448,7 @@ void PlayerListDlg::updateTheUI()
 	// make sure everything is canonical.
 	Bool modified = m_sides.validateSides();
 	(void)modified;
-	DEBUG_ASSERTLOG(!modified,("had to clean up sides in PlayerListDlg::updateTheUI! (caller should do this)"));
+	if (!(!modified)) engine::debug::log_error("had to clean up sides in PlayerListDlg::updateTheUI! (caller should do this)");
 
 	if (m_curPlayerIdx < 0) m_curPlayerIdx = 0;
 	if (m_curPlayerIdx >= m_sides.getNumSides())
@@ -747,7 +748,7 @@ void PlayerListDlg::OnOK()
 {
 	Bool modified = m_sides.validateSides();
 	(void)modified;
-	DEBUG_ASSERTLOG(!modified,("had to clean up sides in CTeamsDialog::OnOK"));
+	if (!(!modified)) engine::debug::log_error("had to clean up sides in CTeamsDialog::OnOK");
 
 	CWorldBuilderDoc* pDoc = CWorldBuilderDoc::GetActiveDoc();
 	SidesListUndoable *pUndo = new SidesListUndoable(m_sides, pDoc);
@@ -864,7 +865,7 @@ static void addSide(SidesList *sides, AsciiString faction,
 
 		Bool modified = sides->validateSides();
 		(void)modified;
-		DEBUG_ASSERTLOG(!modified,("had to clean up sides in PlayerListDlg::OnNewplayer"));
+		if (!(!modified)) engine::debug::log_error("had to clean up sides in PlayerListDlg::OnNewplayer");
 	}
 }
 

@@ -23,7 +23,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "GameNetwork/FrameDataManager.h"
 #include "GameNetwork/networkutil.h"
@@ -86,7 +87,7 @@ void FrameDataManager::update() {
 void FrameDataManager::addNetCommandMsg(NetCommandMsg *msg) {
 	UnsignedInt frame = msg->getExecutionFrame();
 	UnsignedInt frameindex = frame % FRAME_DATA_LENGTH;
-	DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("FrameDataManager::addNetCommandMsg - about to add a command of type %s for frame %d, frame index %d", GetNetCommandTypeAsString(msg->getNetCommandType()), frame, frameindex));
+	engine::debug::log_info("FrameDataManager::addNetCommandMsg - about to add a command of type %s for frame %d, frame index %d", GetNetCommandTypeAsString(msg->getNetCommandType()), frame, frameindex);
 	m_frameData[frameindex].addCommand(msg);
 
 	if (m_isLocal) {
@@ -100,7 +101,7 @@ void FrameDataManager::addNetCommandMsg(NetCommandMsg *msg) {
  */
 FrameDataReturnType FrameDataManager::allCommandsReady(UnsignedInt frame, Bool debugSpewage) {
 	UnsignedInt frameindex = frame % FRAME_DATA_LENGTH;
-	//DEBUG_ASSERTCRASH(m_frameData[frameindex].getFrame() == frame || frame == 256, ("Looking at old commands!"));
+	//engine::debug::invariant((m_frameData[frameindex].getFrame() == frame || frame == 256), "m_frameData[frameindex].getFrame() == frame || frame == 256", __FILE__, __LINE__, "Looking at old commands!");
 	return m_frameData[frameindex].allCommandsReady(debugSpewage);
 }
 
@@ -128,7 +129,7 @@ void FrameDataManager::resetFrame(UnsignedInt frame, Bool isAdvancing) {
 		m_frameData[frameindex].setFrameCommandCount(m_frameData[frameindex].getCommandCount());
 	}
 
-	DEBUG_ASSERTCRASH(m_frameData[frameindex].getCommandCount() == 0, ("we just reset the frame data and the command count is not zero, huh?"));
+	engine::debug::invariant((m_frameData[frameindex].getCommandCount() == 0), "m_frameData[frameindex].getCommandCount() == 0", __FILE__, __LINE__, "we just reset the frame data and the command count is not zero, huh?");
 }
 
 /**
@@ -164,7 +165,7 @@ UnsignedInt FrameDataManager::getFrameCommandCount(UnsignedInt frame) {
 void FrameDataManager::zeroFrames(UnsignedInt startingFrame, UnsignedInt numFrames) {
 	UnsignedInt frameIndex = startingFrame % FRAME_DATA_LENGTH;
 	for (UnsignedInt i = 0; i < numFrames; ++i) {
-		//DEBUG_LOG(("Calling zeroFrame for frame index %d", frameIndex));
+		//engine::debug::log_info("Calling zeroFrame for frame index %d", frameIndex);
 		m_frameData[frameIndex].zeroFrame();
 		++frameIndex;
 		frameIndex = frameIndex % FRAME_DATA_LENGTH;

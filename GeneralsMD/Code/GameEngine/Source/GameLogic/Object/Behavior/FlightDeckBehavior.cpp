@@ -28,7 +28,9 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
+import Engine.Core.Math.AffineTransform3;
 
 #include "Common/CRCDebug.h"
 #include "Common/Player.h"
@@ -196,11 +198,11 @@ void FlightDeckBehavior::buildInfo(Bool createUnits)
 			}
 
 			AsciiString tmp;
-			Matrix3D mtx;
+			Engine::Math::AffineTransform3 transform;
 
 			//Convert the module data bone names into coordinates that we can use
-			getObject()->getSingleLogicalBonePosition( it->str(), &flightDeckInfo.m_prep, &mtx );
-			flightDeckInfo.m_orientation = mtx.Get_Z_Rotation();
+			getObject()->getSingleLogicalBonePosition(it->str(), &flightDeckInfo.m_prep, &transform);
+			flightDeckInfo.m_orientation = transform.Z_Rotation_Legacy();
 
 			//Init basic runway stuff
 			flightDeckInfo.m_runway = col;
@@ -252,10 +254,10 @@ void FlightDeckBehavior::buildInfo(Bool createUnits)
 		for( it = locations.begin(); it != locations.end(); it++ )
 		{
 			Coord3D taxiPos;
-			Matrix3D mtx;
+			Engine::Math::AffineTransform3 transform;
 
 			//Get the position of the taxi bone.
-			getObject()->getSingleLogicalBonePosition( it->str(), &taxiPos, &mtx );
+			getObject()->getSingleLogicalBonePosition(it->str(), &taxiPos, &transform);
 
 			//Add it to the taxi vector
 			info.m_taxi.push_back( taxiPos );
@@ -268,16 +270,16 @@ void FlightDeckBehavior::buildInfo(Bool createUnits)
 		for( it = locations.begin(); it != locations.end(); it++ )
 		{
 			Coord3D pos;
-			Matrix3D mtx;
+			Engine::Math::AffineTransform3 transform;
 
 			//Get the position of the creation bone.
-			getObject()->getSingleLogicalBonePosition( it->str(), &pos, &mtx );
+			getObject()->getSingleLogicalBonePosition(it->str(), &pos, &transform);
 
 			if( firstTime )
 			{
 				firstTime = FALSE;
-				info.m_startOrient = mtx.Get_Z_Rotation();
-				info.m_startTransform = mtx;
+				info.m_startOrient = transform.Z_Rotation_Legacy();
+				info.m_startTransform = transform;
 			}
 
 			//Add it to the taxi vector
@@ -392,7 +394,7 @@ Int FlightDeckBehavior::getSpaceIndex( ObjectID id ) const
 //-------------------------------------------------------------------------------------------------
 FlightDeckBehavior::FlightDeckInfo* FlightDeckBehavior::findPPI(ObjectID id)
 {
-	DEBUG_ASSERTCRASH(id != INVALID_ID, ("call findEmptyPPI instead"));
+	engine::debug::invariant((id != INVALID_ID), "id != INVALID_ID", __FILE__, __LINE__, "call findEmptyPPI instead");
 
 	if (!m_gotInfo || id == INVALID_ID)
 		return nullptr;
@@ -472,7 +474,7 @@ Bool FlightDeckBehavior::reserveSpace(ObjectID id, Real parkingOffset, ParkingPl
 		ppi = findEmptyPPI();
 		if (ppi == nullptr)
 		{
-			DEBUG_CRASH(("No parking places!"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "No parking places!");
 			return false;	// nothing available
 		}
 	}
@@ -520,7 +522,7 @@ void FlightDeckBehavior::validateAssignments()
 				ObjectID id2 = it2->m_objectInSpace;
 				if( id == id2 )
 				{
-					DEBUG_CRASH( ("Aircraft %d assigned to multiple spaces %d and %d", id, index, index2 ) );
+					engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Aircraft %d assigned to multiple spaces %d and %d", id, index, index2 );
 				}
 			}
 		}
@@ -673,7 +675,7 @@ Bool FlightDeckBehavior::reserveRunway(ObjectID id, Bool forLanding)
 	{
 		if( forLanding )
 		{
-			DEBUG_CRASH(("only planes with reserved spaces can reserve runways"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "only planes with reserved spaces can reserve runways");
 		}
 		return false;
 	}
@@ -736,7 +738,7 @@ const std::vector<Coord3D>* FlightDeckBehavior::getTaxiLocations( ObjectID id ) 
 
 	if( runway == -1 )
 	{
-		DEBUG_CRASH(("only planes with reserved spaces can reserve runways"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "only planes with reserved spaces can reserve runways");
 		return nullptr;
 	}
 
@@ -760,7 +762,7 @@ const std::vector<Coord3D>* FlightDeckBehavior::getCreationLocations( ObjectID i
 
 	if( runway == -1 )
 	{
-		DEBUG_CRASH(("only planes with reserved spaces can reserve runways"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "only planes with reserved spaces can reserve runways");
 		return nullptr;
 	}
 
@@ -1217,10 +1219,10 @@ UpdateSleepTime FlightDeckBehavior::update()
 			if( pu == nullptr )
 			{
 
-				DEBUG_CRASH( ("MSG_QUEUE_UNIT_CREATE: Producer '%s' doesn't have a unit production interface", getObject()->getTemplate()->getName().str()) );
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "MSG_QUEUE_UNIT_CREATE: Producer '%s' doesn't have a unit production interface", getObject()->getTemplate()->getName().str());
 				break;
 			}
-			DEBUG_ASSERTCRASH( m_thingTemplate != nullptr, ("flightdeck has a null thingtemplate... no jets for you!") );
+			engine::debug::invariant((m_thingTemplate != nullptr), "m_thingTemplate != nullptr", __FILE__, __LINE__, "flightdeck has a null thingtemplate... no jets for you!");
 			if( !pu->getProductionCount() && now >= m_nextAllowedProductionFrame && m_thingTemplate != nullptr )
 			{
 				//Queue the build
@@ -1290,7 +1292,7 @@ UpdateSleepTime FlightDeckBehavior::update()
 			m_catapultSystemFrame[ i ] = FOREVER;
 			if( ps )
 			{
-				ps->setLocalTransform( &m_runways[ i ].m_startTransform );
+				ps->setLocalTransform(m_runways[i].m_startTransform);
 				ps->setPosition( &m_runways[ i ].m_start );
 			}
 		}
@@ -1334,7 +1336,7 @@ void FlightDeckBehavior::exitObjectViaDoor( Object *newObj, ExitDoorType exitDoo
 
 	if (!ppi)
 	{
-		DEBUG_CRASH(("could not find the space. what?"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "could not find the space. what?");
 		return;
 	}
 
@@ -1347,15 +1349,13 @@ void FlightDeckBehavior::exitObjectViaDoor( Object *newObj, ExitDoorType exitDoo
 	Real parkingOffset = ju ? ju->friend_getParkingOffset() : 0.0f;
 
 	PPInfo ppinfo;
-	Matrix3D mtx;
-
-	DUMPMATRIX3D(getObject()->getTransformMatrix());
+	DUMPTRANSFORM(getObject()->worldTransform());
 	DUMPCOORD3D(getObject()->getPosition());
-	CRCDEBUG_LOG(("Produced at hangar (door = %d)", exitDoor));
-	DEBUG_ASSERTCRASH(exitDoor != DOOR_NONE_NEEDED, ("Hmm, unlikely"));
+	engine::debug::log_trace("Produced at hangar (door = %d)", exitDoor);
+	engine::debug::invariant((exitDoor != DOOR_NONE_NEEDED), "exitDoor != DOOR_NONE_NEEDED", __FILE__, __LINE__, "Hmm, unlikely");
 	if (!reserveSpace(newObj->getID(), parkingOffset, &ppinfo)) //&loc, &orient, nullptr, nullptr, nullptr, nullptr, &hangarInternal, &hangOrient))
 	{
-		DEBUG_CRASH(("no spaces available, how did we get here?"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "no spaces available, how did we get here?");
 		ppinfo.parkingSpace = *getObject()->getPosition();
 		ppinfo.parkingOrientation = getObject()->getOrientation();
 	}
@@ -1363,7 +1363,7 @@ void FlightDeckBehavior::exitObjectViaDoor( Object *newObj, ExitDoorType exitDoo
 	const std::vector<Coord3D> *pCreationLocations = getCreationLocations( newObj->getID() );
 	if( !pCreationLocations )
 	{
-		DEBUG_CRASH( ("No creation locations specified for runway for FlightDeckBehavior (Kris).") );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "No creation locations specified for runway for FlightDeckBehavior (Kris).");
 		return;
 	}
 
@@ -1738,4 +1738,3 @@ void FlightDeckBehavior::loadPostProcess()
 	//setWakeFrame(getObject(), UPDATE_SLEEP_NONE);
 
 }
-

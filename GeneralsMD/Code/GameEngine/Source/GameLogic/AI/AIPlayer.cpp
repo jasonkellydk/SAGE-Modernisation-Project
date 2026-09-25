@@ -28,11 +28,13 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.profiling;
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 #include "Common/GameMemory.h"
 #include "Common/GameState.h"
 #include "Common/GlobalData.h"
-#include "Common/PerfTimer.h"
+
 #include "Common/Player.h"
 #include "Common/SpecialPower.h"
 #include "Common/Team.h"
@@ -167,7 +169,7 @@ void AIPlayer::onStructureProduced( Object *factory, Object *bldg )
 					if( rhbi ) {
 						ObjectID spawnedID = rhbi->getReconstructedBuildingID();
 						if (bldg->getID() == spawnedID) {
-							DEBUG_LOG(("AI got rebuilt %s", bldgPlan->getName().str()));
+							engine::debug::log_info("AI got rebuilt %s", bldgPlan->getName().str());
 							info->setObjectID(bldg->getID());
 							return;
 						}
@@ -178,7 +180,7 @@ void AIPlayer::onStructureProduced( Object *factory, Object *bldg )
 	}
 
 	if (TheGameLogic->getFrame()>0) {
-		DEBUG_LOG(("***AI PLAYER-Structure not found in production queue."));
+		engine::debug::log_info("***AI PLAYER-Structure not found in production queue.");
 	}
 }
 
@@ -338,8 +340,8 @@ void AIPlayer::queueSupplyTruck()
 						}
 					}
 				}
-				//DEBUG_LOG(("Expected %d harvesters, found %d, need %d", info->getDesiredGatherers(),
-				//	curGatherers, info->getDesiredGatherers()-curGatherers) );
+				//engine::debug::log_info("Expected %d harvesters, found %d, need %d", info->getDesiredGatherers(),
+				//	curGatherers, info->getDesiredGatherers()-curGatherers);
 				info->setCurrentGatherers(curGatherers);
 			}
 		} else {
@@ -370,7 +372,7 @@ void AIPlayer::queueSupplyTruck()
 									// The supply truck ai issues dock commands, and they become confused.
 									// Thus, player.  jba.  ;(
 									obj->getAI()->aiDock(center, CMD_FROM_PLAYER);
-									DEBUG_LOG(("Re-attaching supply truck to supply center."));
+									engine::debug::log_info("Re-attaching supply truck to supply center.");
 									return;
 								}
 							}
@@ -719,7 +721,7 @@ void AIPlayer::processBaseBuilding()
 			if (name.isEmpty()) continue;
 			const ThingTemplate *bldgPlan = TheThingFactory->findTemplate( name );
 			if (!bldgPlan) {
-				DEBUG_LOG(("*** ERROR - Build list building '%s' doesn't exist.", name.str()));
+				engine::debug::log_info("*** ERROR - Build list building '%s' doesn't exist.", name.str());
 				continue;
 			}
 			// check for hole.
@@ -740,7 +742,7 @@ void AIPlayer::processBaseBuilding()
 						if( rhbi ) {
 							ObjectID spawnerID = rhbi->getSpawnerID();
 							if (priorID == spawnerID) {
-								DEBUG_LOG(("AI Found hole to rebuild %s", bldgPlan->getName().str()));
+								engine::debug::log_info("AI Found hole to rebuild %s", bldgPlan->getName().str());
 								info->setObjectID(obj->getID());
 							}
 						}
@@ -754,7 +756,7 @@ void AIPlayer::processBaseBuilding()
 							ObjectID builder = bldg->getBuilderID();
 							Object* myDozer = TheGameLogic->findObjectByID(builder);
 							if (myDozer==nullptr) {
-								DEBUG_LOG(("AI's Dozer got killed.  Find another dozer."));
+								engine::debug::log_info("AI's Dozer got killed.  Find another dozer.");
  								myDozer = findDozer(bldg->getPosition());
 								if (myDozer==nullptr || myDozer->getAI()==nullptr) {
 									continue;
@@ -778,7 +780,7 @@ void AIPlayer::processBaseBuilding()
 				if (info->getObjectTimestamp()+TheAI->getAiData()->m_rebuildDelaySeconds*LOGICFRAMES_PER_SECOND > TheGameLogic->getFrame()) {
 					continue;
 				}	else {
-					DEBUG_LOG(("Enabling rebuild for %s", info->getTemplateName().str()));
+					engine::debug::log_info("Enabling rebuild for %s", info->getTemplateName().str());
 					info->setObjectTimestamp(0); // ready to build.
 				}
 			}
@@ -1143,7 +1145,7 @@ void AIPlayer::onUnitProduced( Object *factory, Object *unit )
 		}
 	}
 	if (!found) {
-		DEBUG_LOG(("***AI PLAYER-Unit not found in production queue."));
+		engine::debug::log_info("***AI PLAYER-Unit not found in production queue.");
 	}
 
 	m_teamDelay = 0; // Cause the update queues & selection to happen immediately.
@@ -1867,7 +1869,7 @@ void AIPlayer::buildBySupplies(Int minimumCash, const AsciiString& thingName)
 	const ThingTemplate* tTemplate = TheThingFactory->findTemplate(thingName);
 	if (!tTemplate)
 	{
-		DEBUG_CRASH(("Template %s should exist; check ini and script files.", thingName.str()));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Template %s should exist; check ini and script files.", thingName.str());
 		return;
 	}
 
@@ -1921,7 +1923,7 @@ void AIPlayer::buildBySupplies(Int minimumCash, const AsciiString& thingName)
 													);
 			TheScriptEngine->AppendDebugMessage(debugMessage, false);
 			if( TheGlobalData->m_debugSupplyCenterPlacement )
-				DEBUG_LOG(("%s", debugMessage.str()));
+				engine::debug::log_info("%s", debugMessage.str());
 			// try to fix.
 			Real posOffset;
 			// Wiggle it a little :)
@@ -1939,7 +1941,7 @@ void AIPlayer::buildBySupplies(Int minimumCash, const AsciiString& thingName)
 																							 nullptr, m_player ) == LBC_OK;
 					if (valid) break;
 					if( TheGlobalData->m_debugSupplyCenterPlacement )
-						DEBUG_LOG(("buildBySupplies -- Fail at (%.2f,%.2f)", newPos.x, newPos.y));
+						engine::debug::log_info("buildBySupplies -- Fail at (%.2f,%.2f)", newPos.x, newPos.y);
 					newPos.y = yPos+posOffset;
 					valid = TheBuildAssistant->isLocationLegalToBuild( &newPos, tTemplate, angle,
 																							 BuildAssistant::CLEAR_PATH |
@@ -1948,7 +1950,7 @@ void AIPlayer::buildBySupplies(Int minimumCash, const AsciiString& thingName)
 																							 nullptr, m_player ) == LBC_OK;
 					if (valid) break;
 					if( TheGlobalData->m_debugSupplyCenterPlacement )
-						DEBUG_LOG(("buildBySupplies -- Fail at (%.2f,%.2f)", newPos.x, newPos.y));
+						engine::debug::log_info("buildBySupplies -- Fail at (%.2f,%.2f)", newPos.x, newPos.y);
 				}
 				if (valid) break;
 				xPos = location.x-offset;
@@ -1962,7 +1964,7 @@ void AIPlayer::buildBySupplies(Int minimumCash, const AsciiString& thingName)
 																							 nullptr, m_player ) == LBC_OK;
 					if (valid) break;
 					if( TheGlobalData->m_debugSupplyCenterPlacement )
-						DEBUG_LOG(("buildBySupplies -- Fail at (%.2f,%.2f)", newPos.x, newPos.y));
+						engine::debug::log_info("buildBySupplies -- Fail at (%.2f,%.2f)", newPos.x, newPos.y);
 					newPos.x = xPos+posOffset;
 					valid = TheBuildAssistant->isLocationLegalToBuild( &newPos, tTemplate, angle,
 																							 BuildAssistant::CLEAR_PATH |
@@ -1971,7 +1973,7 @@ void AIPlayer::buildBySupplies(Int minimumCash, const AsciiString& thingName)
 																							 nullptr, m_player ) == LBC_OK;
 					if (valid) break;
 					if( TheGlobalData->m_debugSupplyCenterPlacement )
-						DEBUG_LOG(("buildBySupplies -- Fail at (%.2f,%.2f)", newPos.x, newPos.y));
+						engine::debug::log_info("buildBySupplies -- Fail at (%.2f,%.2f)", newPos.x, newPos.y);
 				}
 				if (valid) break;
 			}
@@ -1979,7 +1981,7 @@ void AIPlayer::buildBySupplies(Int minimumCash, const AsciiString& thingName)
 		if (valid)
 		{
 			if( TheGlobalData->m_debugSupplyCenterPlacement )
-				DEBUG_LOG(("buildAISupplyCenter -- SUCCESS at (%.2f,%.2f)", newPos.x, newPos.y));
+				engine::debug::log_info("buildAISupplyCenter -- SUCCESS at (%.2f,%.2f)", newPos.x, newPos.y);
 			location = newPos;
 		}
 		TheTerrainVisual->removeAllBibs();	// isLocationLegalToBuild adds bib feedback, turn it off.  jba.
@@ -2313,12 +2315,12 @@ void AIPlayer::repairStructure(ObjectID structure)
 	Int i;
 	for (i=0; i<m_structuresInQueue; i++) {
 		if (m_structuresToRepair[i] == structureObj->getID()) {
-			DEBUG_LOG(("info - Bridge already queued for repair."));
+			engine::debug::log_info("info - Bridge already queued for repair.");
 			return;
 		}
 	}
 	if (m_structuresInQueue>=MAX_STRUCTURES_TO_REPAIR) {
-		DEBUG_LOG(("Structure repair queue is full, ignoring repair request. JBA"));
+		engine::debug::log_info("Structure repair queue is full, ignoring repair request. JBA");
 		return;
 	}
 	m_structuresToRepair[m_structuresInQueue] = structureObj->getID();
@@ -2330,8 +2332,7 @@ void AIPlayer::repairStructure(ObjectID structure)
 // ------------------------------------------------------------------------------------------------
 void AIPlayer::selectSkillset(Int skillset)
 {
-	DEBUG_ASSERTCRASH(m_skillsetSelector == INVALID_SKILLSET_SELECTION,
-		("Selecting a skill set (%d) after one has already been chosen (%d) means some points have been incorrectly spent.", skillset + 1, m_skillsetSelector + 1));
+	engine::debug::invariant((m_skillsetSelector == INVALID_SKILLSET_SELECTION), "m_skillsetSelector == INVALID_SKILLSET_SELECTION", __FILE__, __LINE__, "Selecting a skill set (%d) after one has already been chosen (%d) means some points have been incorrectly spent.", skillset + 1, m_skillsetSelector + 1);
 
 	m_skillsetSelector = skillset;
 }
@@ -2374,7 +2375,7 @@ void AIPlayer::updateBridgeRepair()
 			m_repairDozer = dozer->getID();
 			m_repairDozerOrigin = *dozer->getPosition();
 			dozer->getAI()->aiRepair(bridgeObj, CMD_FROM_AI);
-			DEBUG_LOG(("Telling dozer to repair"));
+			engine::debug::log_info("Telling dozer to repair");
 			m_dozerIsRepairing = true;
 			return;
 		}
@@ -2392,14 +2393,14 @@ void AIPlayer::updateBridgeRepair()
 
 	DozerAIInterface* dozerAI = dozer->getAI()->getDozerAIInterface();
 	if (dozerAI==nullptr) {
-		DEBUG_CRASH(("Unexpected - dozer doesn't have dozer interface."));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unexpected - dozer doesn't have dozer interface.");
 		return;
 	}
 	if (m_dozerIsRepairing) {
 		if (!dozerAI->isAnyTaskPending())	{
 			// should be done repairing.
 			if (bridgeState==BODY_PRISTINE) {
-				DEBUG_LOG(("Dozer finished repairing structure."));
+				engine::debug::log_info("Dozer finished repairing structure.");
 				// we're done.
 				Int i;
 				for (i=0; i<m_structuresInQueue-1; i++) {
@@ -2426,7 +2427,7 @@ void AIPlayer::updateBridgeRepair()
 	}
 	dozer->getAI()->aiRepair(bridgeObj, CMD_FROM_AI);
 	m_dozerIsRepairing = true;
-	DEBUG_LOG(("Telling dozer to repair"));
+	engine::debug::log_info("Telling dozer to repair");
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -2620,11 +2621,9 @@ void AIPlayer::recruitSpecificAITeam(TeamPrototype *teamProto, Real recruitRadiu
 						AIUpdateInterface *ai = unit->getAIUpdateInterface();
 						if (ai)
 						{
-#ifdef DEBUG_LOGGING
 							Coord3D pos = *unit->getPosition();
 							Coord3D to = teamProto->getTemplateInfo()->m_homeLocation;
-							DEBUG_LOG(("Moving unit from %f,%f to %f,%f", pos.x, pos.y , to.x, to.y ));
-#endif
+							engine::debug::log_info("Moving unit from %f,%f to %f,%f", pos.x, pos.y , to.x, to.y );
 							ai->aiMoveToPosition( &teamProto->getTemplateInfo()->m_homeLocation, CMD_FROM_AI);
 						}
 					} else {
@@ -3029,10 +3028,8 @@ void AIPlayer::doUpgradesAndSkills()
 /**
  * Perform computer-controlled player AI
  */
-//DECLARE_PERF_TIMER(AIPlayer_update)
 void AIPlayer::update()
 {
-	//USE_PERF_TIMER(AIPlayer_update)
 
 	doBaseBuilding();		// See if it's time to build another building.
 
@@ -3080,7 +3077,7 @@ void AIPlayer::newMap()
 		if (name.isEmpty()) continue;
 		const ThingTemplate *bldgPlan = TheThingFactory->findTemplate( name );
 		if (!bldgPlan) {
-			DEBUG_LOG(("*** ERROR - Build list building '%s' doesn't exist.", name.str()));
+			engine::debug::log_info("*** ERROR - Build list building '%s' doesn't exist.", name.str());
 			continue;
 		}
 		if (info->isInitiallyBuilt()) {
@@ -3363,7 +3360,7 @@ void AIPlayer::xfer( Xfer *xfer )
 		if( getFirstItemIn_TeamBuildQueue() != nullptr )
 		{
 
-			DEBUG_CRASH(( "AIPlayer::xfer - TeamBuildQueue head is not null, you should delete it or something before loading a new list" ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "AIPlayer::xfer - TeamBuildQueue head is not null, you should delete it or something before loading a new list" );
 			throw SC_INVALID_DATA;
 
 		}
@@ -3422,7 +3419,7 @@ void AIPlayer::xfer( Xfer *xfer )
 		if( getFirstItemIn_TeamReadyQueue() != nullptr )
 		{
 
-			DEBUG_CRASH(( "AIPlayer::xfer - TeamReadyQueue head is not null, you should delete it or something before loading a new list" ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "AIPlayer::xfer - TeamReadyQueue head is not null, you should delete it or something before loading a new list" );
 			throw SC_INVALID_DATA;
 
 		}
@@ -3453,7 +3450,7 @@ void AIPlayer::xfer( Xfer *xfer )
 	if( playerIndex != m_player->getPlayerIndex() )
 	{
 
-		DEBUG_CRASH(( "AIPlayer::xfer - player index mismatch" ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "AIPlayer::xfer - player index mismatch" );
 		throw SC_INVALID_DATA;
 
 	}
@@ -3661,7 +3658,7 @@ void TeamInQueue::xfer( Xfer *xfer )
 		if( m_workOrders != nullptr )
 		{
 
-			DEBUG_CRASH(( "TeamInQueue::xfer - m_workOrders should be null but isn't.  Perhaps you should blow it away before loading" ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "TeamInQueue::xfer - m_workOrders should be null but isn't.  Perhaps you should blow it away before loading" );
 			throw SC_INVALID_DATA;
 
 		}

@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 #include "Common/GameState.h"
 #include "Common/ThingFactory.h"
 #include "Common/ThingTemplate.h"
@@ -119,7 +120,7 @@ void RebuildHoleBehavior::newWorkerRespawnProcess( Object *existingWorker )
 	// if we have an existing worker, get rid of it
 	if( existingWorker )
 	{
-		DEBUG_ASSERTCRASH(existingWorker->getID() == m_workerID, ("m_workerID mismatch in RebuildHole"));
+		engine::debug::invariant((existingWorker->getID() == m_workerID), "existingWorker->getID() == m_workerID", __FILE__, __LINE__, "m_workerID mismatch in RebuildHole");
 		TheGameLogic->destroyObject( existingWorker );
 	}
 	m_workerID = INVALID_ID;
@@ -435,8 +436,8 @@ void RebuildHoleBehavior::xfer( Xfer *xfer )
 			if( m_workerTemplate == nullptr )
 			{
 
-				DEBUG_CRASH(( "RebuildHoleBehavior::xfer - Unable to find template '%s'",
-											workerName.str() ));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "RebuildHoleBehavior::xfer - Unable to find template '%s'",
+											workerName.str() );
 				throw SC_INVALID_DATA;
 
 			}
@@ -460,8 +461,8 @@ void RebuildHoleBehavior::xfer( Xfer *xfer )
 			if( m_rebuildTemplate == nullptr )
 			{
 
-				DEBUG_CRASH(( "RebuildHoleBehavior::xfer - Unable to find template '%s'",
-											rebuildName.str() ));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "RebuildHoleBehavior::xfer - Unable to find template '%s'",
+											rebuildName.str() );
 				throw SC_INVALID_DATA;
 
 			}

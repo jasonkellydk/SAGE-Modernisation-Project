@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #define DEFINE_HORDEACTION_NAMES
 #include "Common/Player.h"
@@ -205,8 +206,8 @@ void HordeUpdate::joinOrLeaveHorde(SimpleObjectIterator *iter, Bool join)
 		}
 		else
 		{
-			DEBUG_CRASH(( "HordeUpdate::joinOrLeaveHorde - We (%s) must have an AI to benefit from horde",
-										getObject()->getTemplate()->getName().str() ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "HordeUpdate::joinOrLeaveHorde - We (%s) must have an AI to benefit from horde",
+										getObject()->getTemplate()->getName().str() );
 		}
 	}
 }

@@ -25,7 +25,8 @@
 // FILE: PlaceEventTranslator.cpp ///////////////////////////////////////////////////////////
 // Author: Steven Johnson, Dec 2001
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/BuildAssistant.h"
 #include "Common/GameAudio.h"
@@ -221,7 +222,7 @@ GameMessageDisposition PlaceEventTranslator::translateGameMessage(const GameMess
 					break;
 				}
 
-				DEBUG_ASSERTCRASH(builderObj != nullptr, ("builderObj is null"));
+				engine::debug::invariant((builderObj != nullptr), "builderObj != nullptr", __FILE__, __LINE__, "builderObj is null");
 
 				// check to see if this is a legal location to build something at
 				LegalBuildCode lbc;

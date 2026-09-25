@@ -27,6 +27,7 @@
 #include <fstream>
 #include <span>
 #include <vector>
+import engine.debug;
 
 import Graphics.Frame.Runtime;
 import Graphics.Capture.FrameCapture;
@@ -78,7 +79,7 @@ static int SDLCALL screenshotThreadFunc(void *param)
 	}
 	else
 	{
-		DEBUG_LOG(("Failed to write screenshot %s", pathname.c_str()));
+		engine::debug::log_info("Failed to write screenshot %s", pathname.c_str());
 	}
 
 	delete data;

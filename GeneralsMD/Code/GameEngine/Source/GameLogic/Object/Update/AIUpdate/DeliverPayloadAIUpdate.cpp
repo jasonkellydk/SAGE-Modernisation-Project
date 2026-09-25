@@ -25,7 +25,8 @@
 // DeliverPayloadAIUpdate.cpp ////////////
 // Author: Graham Smallwood, March 2002
 // Desc:   State machine that controls the approach and deployment of airborne cargo
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #define DEFINE_WEAPONSLOTTYPE_NAMES
 
@@ -368,7 +369,7 @@ Bool DeliverPayloadAIUpdate::isCloseEnoughToTarget()
 	if ( inBound )
 		allowedDistanceSqr = sqr(getAllowedDistanceToTarget() + getPreOpenDistance());
 
-	//DEBUG_LOG(("Dist to target is %f (allowed %f)",sqrt(currentDistanceSqr),sqrt(allowedDistanceSqr)));
+	//engine::debug::log_info("Dist to target is %f (allowed %f)",sqrt(currentDistanceSqr),sqrt(allowedDistanceSqr));
 
 
 	if ( allowedDistanceSqr > currentDistanceSqr )
@@ -613,7 +614,7 @@ StateReturnType ApproachState::update()
       return STATE_FAILURE;
     else
     {
-		  DEBUG_CRASH(("hmm, bailed from moveto state early... should this be possible?"));
+		  engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "hmm, bailed from moveto state early... should this be possible?");
 		  ai->aiMoveToPosition( ai->getMoveToPos(), CMD_FROM_AI );
     }
 
@@ -811,9 +812,9 @@ StateReturnType DeliveringState::update() // Kick a dude out every so often
 							Coord3D pos;
 							AsciiString bone;
 							bone.format( "%s%02d", ai->getData()->m_visibleDropBoneName.str(), ai->getVisibleItemsDelivered() + 1 );
-							if( draw->getPristineBonePositions( ai->getData()->m_visibleDropBoneName.str(), ai->getVisibleItemsDelivered() + 1, &pos, nullptr, 1 ) > 0 )
+							if( draw->getPristineBonePositions( ai->getData()->m_visibleDropBoneName.str(), ai->getVisibleItemsDelivered() + 1, &pos, 1 ) > 0 )
 							{
-								draw->convertBonePosToWorldPos( &pos, nullptr, &pos, nullptr );
+								draw->transformBoneToWorld( &pos, nullptr, &pos, nullptr );
 								payload->setPosition( &pos );
 							}
 							else
@@ -851,8 +852,8 @@ StateReturnType DeliveringState::update() // Kick a dude out every so often
 								const WeaponTemplate *weaponTemplate = ai->getData()->m_visiblePayloadWeaponTemplate;
 								if( !weaponTemplate )
 								{
-									DEBUG_CRASH( ("%s tried to fire missile %s via DeliverPayload, and is missing required weapon template in ObjectCreationList.ini entry.",
-																				owner->getTemplate()->getName().str(), payload->getTemplate()->getName().str() ) );
+									engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "%s tried to fire missile %s via DeliverPayload, and is missing required weapon template in ObjectCreationList.ini entry.",
+																				owner->getTemplate()->getName().str(), payload->getTemplate()->getName().str() );
 									break;
 								}
 								VeterancyLevel v = owner->getVeterancyLevel();
@@ -907,7 +908,7 @@ void DeliveringState::onExit( StateExitType ) // Close the doors
 	if (ai)
 		ai->friend_setFreeToExit(false);
 
-	DEBUG_ASSERTCRASH(m_didOpen, ("Not enough time for the doors to open to drop anything!"));
+	engine::debug::invariant((m_didOpen), "m_didOpen", __FILE__, __LINE__, "Not enough time for the doors to open to drop anything!");
 				/// @todo srj -- for now, this assumes at most one door
 	owner->clearAndSetModelConditionState( MODELCONDITION_DOOR_1_OPENING, MODELCONDITION_DOOR_1_CLOSING );
 }
@@ -956,10 +957,10 @@ StateReturnType ConsiderNewApproachState::onEnter() // Increment local counter o
 
 	++m_numberEntriesToState;
 
-	DEBUG_LOG(("Considering approach #%d...",m_numberEntriesToState));
+	engine::debug::log_info("Considering approach #%d...",m_numberEntriesToState);
 	if( m_numberEntriesToState > ai->getMaxNumberAttempts() )
 	{
-		DEBUG_LOG(("Too many approaches! Time to give up."));
+		engine::debug::log_info("Too many approaches! Time to give up.");
 		return STATE_FAILURE;
 	}
 
@@ -1220,7 +1221,7 @@ StateReturnType CleanUpState::onEnter() // Delete my successful butt
 {
 	if( getMachineOwner()->getContain() )
 	{
-		DEBUG_ASSERTCRASH(getMachineOwner()->getContain()->getContainCount() == 0, ("did not drop all items!"));
+		engine::debug::invariant((getMachineOwner()->getContain()->getContainCount() == 0), "getMachineOwner()->getContain()->getContainCount() == 0", __FILE__, __LINE__, "did not drop all items!");
 	}
 
 	Object *owner = getMachineOwner();

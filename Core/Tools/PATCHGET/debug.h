@@ -22,17 +22,16 @@
 
 #pragma once
 
+
+#include <cassert>
 namespace patchget
 {
 
 #if defined(DEBUG) || defined(DEBUG_LOGGING)
 
 void DebugLog( const char *fmt, ... );
-#define DEBUG_LOG(x) DebugLog x
 
 #else // DEBUG
-
-#define DEBUG_LOG(x)
 
 #endif // DEBUG
 
@@ -48,7 +47,7 @@ void DebugLog( const char *fmt, ... );
 	*/
 	extern char* TheCurrentIgnoreCrashPtr;
 
-	#define DEBUG_CRASH(m)	\
+	#define assert(false)	\
 		do { \
 			{ \
 				static char ignoreCrash = 0; \
@@ -60,12 +59,12 @@ void DebugLog( const char *fmt, ... );
 			} \
 		} while (0)
 
-	#define DEBUG_ASSERTCRASH(c, m)		do { { if (!(c)) DEBUG_CRASH(m); } } while (0)
+	#define assert((c))		do { { if (!(c)) assert(false); } } while (0)
 
 #else
 
-	#define DEBUG_CRASH(m)					((void)0)
-	#define DEBUG_ASSERTCRASH(c, m)	((void)0)
+	#define assert(false)					((void)0)
+	#define assert((c))	((void)0)
 
 #endif
 

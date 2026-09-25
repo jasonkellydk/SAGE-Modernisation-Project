@@ -29,7 +29,10 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // USER INCLUDES //////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
+import Engine.Core.Math.AffineTransform3;
+#include "Common/LegacyTransformMath.h"
 
 #include "Common/BuildAssistant.h"
 #include "Common/GlobalData.h"
@@ -310,7 +313,7 @@ void BuildAssistant::xferTheSellList( Xfer *xfer )
 			xfer->xferUnsignedInt(&sellInfo->m_sellFrame);
 			count--;
 		}
-		DEBUG_ASSERTCRASH(count==0, ("Inconsistent list size counts."));
+		engine::debug::invariant((count==0), "count==0", __FILE__, __LINE__, "Inconsistent list size counts.");
 	}
 
 }
@@ -332,8 +335,7 @@ Object *BuildAssistant::buildObjectNow( Object *constructorObject, const ThingTe
 	// sanity
 	if( constructorObject )
 	{
-		DEBUG_ASSERTCRASH( constructorObject->getControllingPlayer() == owningPlayer,
-											 ("buildObjectNow: Constructor object player is not the same as the controlling player passed in\n") );
+		engine::debug::invariant((constructorObject->getControllingPlayer() == owningPlayer), "constructorObject->getControllingPlayer() == owningPlayer", __FILE__, __LINE__, "buildObjectNow: Constructor object player is not the same as the controlling player passed in\n");
 
 	}
 
@@ -557,10 +559,9 @@ void BuildAssistant::iterateFootprint( const ThingTemplate *build,
 	// points using this matrix into the world coords for the object at the real
 	// location and specified angle
 	//
-	Matrix3D transform;
-	transform.Make_Identity();
-	transform.Adjust_Translation( Vector3( worldPos->x, worldPos->y, worldPos->z ) );
-	transform.Rotate_Z( buildOrientation );
+	Engine::Math::AffineTransform3 transform = Engine::Math::AffineTransform3::Identity();
+	Legacy_Adjust_Translation(transform, worldPos->x, worldPos->y, worldPos->z);
+	Legacy_Rotate_Z(transform, buildOrientation);
 
 	// get the bounding footprint rectangle for the geometry we're looking at
 	Real halfFootprintHeight,
@@ -583,8 +584,8 @@ void BuildAssistant::iterateFootprint( const ThingTemplate *build,
 	else
 	{
 
-		DEBUG_CRASH( ("iterateFootprint: Undefined geometry '%d' for '%s'",
-											     build->getTemplateGeometryInfo().getGeomType(), build->getName().str()) );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "iterateFootprint: Undefined geometry '%d' for '%s'",
+											     build->getTemplateGeometryInfo().getGeomType(), build->getName().str());
 		return;
 
 	}
@@ -598,7 +599,7 @@ void BuildAssistant::iterateFootprint( const ThingTemplate *build,
 	// area because of this we snap it back to sample on the exact edge
 	//
 	Real x, y;
-	Vector3 v;
+	Engine::Math::Vector3 worldPoint;
 	for( y = -halfFootprintHeight;
 			 y < halfFootprintHeight + sampleResolution;
 			 y += sampleResolution )
@@ -618,8 +619,8 @@ void BuildAssistant::iterateFootprint( const ThingTemplate *build,
 				x = halfFootprintWidth;
 
 			// transform to world
-			v.Set( x, y, TheTerrainLogic->getGroundHeight( x, y ) );
-			transform.Transform_Vector( transform, v, &v );
+			worldPoint = transform.Transform_Point(
+				{x, y, TheTerrainLogic->getGroundHeight(x, y)});
 
 			// for circular geometries we must actually be within the circle
 			if( build->getTemplateGeometryInfo().getGeomType() == GEOMETRY_SPHERE ||
@@ -627,8 +628,8 @@ void BuildAssistant::iterateFootprint( const ThingTemplate *build,
 			{
 				Coord2D vector;
 
-				vector.x = v.X - worldPos->x;
-				vector.y = v.Y - worldPos->y;
+				vector.x = worldPoint.x - worldPos->x;
+				vector.y = worldPoint.y - worldPos->y;
 				if( vector.length() > halfFootprintWidth )  // could be height too, radius is all the same for circles
 					continue;  // ignore this point
 
@@ -636,8 +637,8 @@ void BuildAssistant::iterateFootprint( const ThingTemplate *build,
 
 			// call the user callback
 			Coord3D pos;
-			pos.x = v.X;
-			pos.y = v.Y;
+			pos.x = worldPoint.x;
+			pos.y = worldPoint.y;
 			pos.z = TheTerrainLogic->getGroundHeight( pos.x, pos.y );
 			func( &pos, funcUserData );
 
@@ -936,7 +937,7 @@ LegalBuildCode BuildAssistant::isLocationLegalToBuild( const Coord3D *worldPos,
 			Int playerIndex = -1;
 			if (builderObject && builderObject->getControllingPlayer())
 				playerIndex = builderObject->getControllingPlayer()->getPlayerIndex();
-			DEBUG_ASSERTCRASH(playerIndex >= 0, ("isLocationLegalToBuild() needs a builderObject with a team to check for shroud"));
+			engine::debug::invariant((playerIndex >= 0), "playerIndex >= 0", __FILE__, __LINE__, "isLocationLegalToBuild() needs a builderObject with a team to check for shroud");
 			if( ThePartitionManager->getShroudStatusForPlayer(playerIndex, x, y) != CELLSHROUD_CLEAR )
 			{
 				return LBC_SHROUD;
@@ -1148,7 +1149,7 @@ BuildAssistant::TileBuildInfo *BuildAssistant::buildTiledLocations( const ThingT
 		// lets try to at least keep sanity here so that we don't have a completely unbounded
 		// allocation spot in the code here
 		//
-		DEBUG_ASSERTCRASH( m_buildPositionSize < 200, ("Do you really need to tile this many objects!!!") );
+		engine::debug::invariant((m_buildPositionSize < 200), "m_buildPositionSize < 200", __FILE__, __LINE__, "Do you really need to tile this many objects!!!");
 
 	}
 	Coord3D *positions = m_buildPositions;
@@ -1260,10 +1261,10 @@ Bool BuildAssistant::isPossibleToMakeUnit( Object *builder, const ThingTemplate 
 	if( commandSet == nullptr )
 	{
 
-		DEBUG_ASSERTLOG( 0, ("Can't build a '%s' from the builder '%s' because '%s' doesn't have any command set defined",
+		if (!(0)) engine::debug::log_error("Can't build a '%s' from the builder '%s' because '%s' doesn't have any command set defined",
 													whatToBuild->getName().str(),
 													builder->getTemplate()->getName().str(),
-													builder->getTemplate()->getName().str()) );
+													builder->getTemplate()->getName().str());
 		return FALSE;
 
 	}
@@ -1366,7 +1367,7 @@ Bool BuildAssistant::isRemovableForConstruction( Object *obj )
 
 	if (obj->isKindOf(KINDOF_INERT))
 	{
-		DEBUG_CRASH(("should not have gotten here."));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "should not have gotten here.");
 		return FALSE;
 	}
 
@@ -1470,12 +1471,11 @@ Bool BuildAssistant::moveObjectsForConstruction( const ThingTemplate *whatToBuil
 
 					Coord3D destPos;
 					Real dir = GameLogicRandomValueReal(-PI, PI);
-					Vector3 vec(variedRadius, 0, 0);
-					vec.Rotate_Z(dir);
+					const Engine::Math::Vector3 vec = Legacy_Vector_Rotate_Z({variedRadius, 0, 0}, dir);
 
-					destPos.x = pos->x + vec.X;
-					destPos.y = pos->y + vec.Y;
-					destPos.z = pos->z + vec.Z;
+					destPos.x = pos->x + vec.x;
+					destPos.y = pos->y + vec.y;
+					destPos.z = pos->z + vec.z;
 
 					// note that this is an extra-special case... even if the unit's mood is "sleep"
 					// it still needs to move here. (units with an ai mood of "sleep" won't respond to
@@ -1618,4 +1618,3 @@ void BuildAssistant::sellObject( Object *obj )
 	}
 
 }
-

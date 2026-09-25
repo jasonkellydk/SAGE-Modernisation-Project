@@ -47,8 +47,8 @@
 #pragma once
 
 #include "always.h"
-#include "wwmath.h"
-#include <math.h>
+
+#include <cmath>
 
 /*
 ** Vector4 - 4 dimensional vectors
@@ -268,7 +268,7 @@ inline void Vector4::Normalize()
 {
 	float len2 = Length2();
 	if (len2 != 0.0f) {
-		float oolen = WWMath::Inv_Sqrt(len2);
+		float oolen = (1.0f / std::sqrt(len2));
 		X *= oolen;
 		Y *= oolen;
 		Z *= oolen;
@@ -280,7 +280,7 @@ inline Vector4 Normalize(const Vector4 & vec)
 {
 	float len2 = vec.Length2();
 	if (len2 != 0.0f) {
-		float oolen = WWMath::Inv_Sqrt(len2);
+		float oolen = (1.0f / std::sqrt(len2));
 		return vec * oolen;
 	}
 }
@@ -298,7 +298,7 @@ inline Vector4 Normalize(const Vector4 & vec)
  *========================================================================*/
 inline float Vector4::Length() const
 {
-	return WWMath::Sqrt(Length2());
+	return std::sqrt(Length2());
 }
 
 /**************************************************************************
@@ -377,5 +377,5 @@ inline Vector4 Lerp(const Vector4 & a, const Vector4 & b, float alpha)
  *=============================================================================================*/
 inline bool Vector4::Is_Valid() const
 {
-	return (WWMath::Is_Valid_Float(X) && WWMath::Is_Valid_Float(Y) && WWMath::Is_Valid_Float(Z) && WWMath::Is_Valid_Float(W));
+	return (std::isfinite(X) && std::isfinite(Y) && std::isfinite(Z) && std::isfinite(W));
 }

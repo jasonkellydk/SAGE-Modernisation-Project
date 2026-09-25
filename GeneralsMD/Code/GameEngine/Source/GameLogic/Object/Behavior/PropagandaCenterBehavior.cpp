@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 #include "Common/Player.h"
 #include "Common/ThingTemplate.h"
 #include "Common/Xfer.h"
@@ -157,7 +158,7 @@ UpdateSleepTime PropagandaCenterBehavior::update()
 
 					// place this object under the control of the player
 					Player *player = us->getControllingPlayer();
-					DEBUG_ASSERTCRASH( player, ("Brainwashing: No controlling player for '%s'", us->getTemplate()->getName().str()) );
+					engine::debug::invariant((player), "player", __FILE__, __LINE__, "Brainwashing: No controlling player for '%s'", us->getTemplate()->getName().str());
 					if( player )
 						brainwashingSubject->setTemporaryTeam( player->getDefaultTeam() );
 

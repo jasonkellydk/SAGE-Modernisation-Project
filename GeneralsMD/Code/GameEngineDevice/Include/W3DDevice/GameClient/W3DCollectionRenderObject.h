@@ -43,6 +43,7 @@
 #include <utility>
 #include <vector>
 import Graphics.Scene.Models.Factory;
+import Engine.Core.Math.Sphere3;
 
 #include <memory>
 #include <span>
@@ -90,8 +91,8 @@ public:
 	/////////////////////////////////////////////////////////////////////////////
 	// Render Object Interface - "Scene Graph"
 	/////////////////////////////////////////////////////////////////////////////
-	virtual void 					Set_Transform(const Matrix3D &m) override;
-	virtual void 					Set_Position(const Vector3 &v) override;
+	virtual void 					Set_Transform(const Engine::Math::AffineTransform3 &m) override;
+	virtual void 					Set_Position(Engine::Math::Vector3 v) override;
 	virtual int						Get_Num_Sub_Objects() const override;
 	virtual W3DRenderObject *	Get_Sub_Object(int index) const override;
 	virtual int						Add_Sub_Object(W3DRenderObject * subobj) override;
@@ -109,15 +110,15 @@ public:
 	/////////////////////////////////////////////////////////////////////////////
 	// Render Object Interface - Bounding Volumes
 	/////////////////////////////////////////////////////////////////////////////
-	virtual void		 			Get_Obj_Space_Bounding_Sphere(SphereClass & sphere) const override;
-	virtual void					Get_Obj_Space_Bounding_Box(AABoxClass & box) const override;
+	virtual void		 			Get_Local_Bounding_Sphere(Engine::Math::Sphere3 & sphere) const override;
+	virtual void					Get_Local_Bounds(Engine::Math::AxisAlignedBox3 & box) const override;
 
 
 	/////////////////////////////////////////////////////////////////////////////
 	// Render Object Interface - Attributes, Options, Properties, etc
 	/////////////////////////////////////////////////////////////////////////////
 	virtual int						Snap_Point_Count();
-	virtual void					Get_Snap_Point(int index,Vector3 * set) override;
+	virtual void					Get_Snap_Point(int index,Engine::Math::Vector3 * set) override;
 	virtual void					Scale(float scale) override;
 	virtual void					Scale(float scalex, float scaley, float scalez) override;
    virtual void               Update_Obj_Space_Bounding_Volumes() override;
@@ -133,8 +134,8 @@ protected:
     Graphics::ModelChildren<ChildOwner> m_children;
 	std::vector<Assets::Vector3f> SnapPoints;
 
-	SphereClass										BoundSphere;
-	AABoxClass										BoundBox;
+	Engine::Math::Sphere3								BoundSphere;
+	Engine::Math::AxisAlignedBox3					BoundBox;
 };
 
 

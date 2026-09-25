@@ -80,7 +80,7 @@ enum
 LogicalListenerClass::LogicalListenerClass ()
 	:	m_Scale (1),
 		m_TypeMask (0),
-		m_Position (0, 0, 0),
+		m_Position {},
 		m_Timestamp (0)
 {
 }
@@ -156,6 +156,7 @@ LogicalListenerClass::Get_Factory () const
 bool
 LogicalListenerClass::Save (ChunkSaveClass &csave)
 {
+	const float position[3] = {m_Position.x, m_Position.y, m_Position.z};
 	csave.Begin_Chunk (CHUNKID_BASE_CLASS);
 		SoundSceneObjClass::Save (csave);
 	csave.End_Chunk ();
@@ -164,7 +165,7 @@ LogicalListenerClass::Save (ChunkSaveClass &csave)
 
 		WRITE_MICRO_CHUNK (csave, VARID_SCALE, m_Scale);
 		WRITE_MICRO_CHUNK (csave, VARID_TYPE_MASK, m_TypeMask);
-		WRITE_MICRO_CHUNK (csave, VARID_POSITION, m_Position);
+		WRITE_MICRO_CHUNK (csave, VARID_POSITION, position);
 
 	csave.End_Chunk ();
 	return true;
@@ -179,6 +180,7 @@ LogicalListenerClass::Save (ChunkSaveClass &csave)
 bool
 LogicalListenerClass::Load (ChunkLoadClass &cload)
 {
+	float position[3]{};
 	while (cload.Open_Chunk ()) {
 		switch (cload.Cur_Chunk_ID ()) {
 
@@ -196,7 +198,7 @@ LogicalListenerClass::Load (ChunkLoadClass &cload)
 
 						READ_MICRO_CHUNK (cload, VARID_SCALE, m_Scale);
 						READ_MICRO_CHUNK (cload, VARID_TYPE_MASK, m_TypeMask);
-						READ_MICRO_CHUNK (cload, VARID_POSITION, m_Position);
+						READ_MICRO_CHUNK (cload, VARID_POSITION, position);
 					}
 
 					cload.Close_Micro_Chunk ();
@@ -207,7 +209,7 @@ LogicalListenerClass::Load (ChunkLoadClass &cload)
 
 		cload.Close_Chunk ();
 	}
+	m_Position = {position[0], position[1], position[2]};
 
 	return true;
 }
-

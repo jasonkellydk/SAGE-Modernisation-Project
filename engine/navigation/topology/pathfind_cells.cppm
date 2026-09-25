@@ -83,23 +83,23 @@ void PathfindCell::setGoalUnit(ObjectID unitID, const ICoord2D &pos )
 			s_search.goalUnit[m_searchIndex] = INVALID_ID;
 			if (s_search.positionUnit[m_searchIndex] == INVALID_ID) {
 				// No units here.
-				DEBUG_ASSERTCRASH(m_flags==UNIT_GOAL, ("Bad flags."));
+				engine::debug::invariant((m_flags==UNIT_GOAL), "m_flags==UNIT_GOAL", __FILE__, __LINE__, "Bad flags.");
 				m_flags = NO_UNITS;
 				releaseInfo();
 			} else{
 				m_flags = UNIT_PRESENT_MOVING;
 			}
 		}	else {
-			DEBUG_ASSERTCRASH(m_flags == NO_UNITS, ("Bad flags."));
+			engine::debug::invariant((m_flags == NO_UNITS), "m_flags == NO_UNITS", __FILE__, __LINE__, "Bad flags.");
 		}
 	} else {
 		// adding goal.
 		if (!hasInfo()) {
-			DEBUG_ASSERTCRASH(m_flags == NO_UNITS, ("Bad flags."));
+			engine::debug::invariant((m_flags == NO_UNITS), "m_flags == NO_UNITS", __FILE__, __LINE__, "Bad flags.");
 			allocateInfo(pos);
 		}
 		if (!hasInfo()) {
-			DEBUG_CRASH(("Ran out of pathfind cells - fatal error!!!!! jba."));
+			engine::debug::invariant(false, "debug invariant", __FILE__, __LINE__, "Ran out of pathfind cells - fatal error!!!!! jba.");
 			return;
 		}
 		s_search.goalUnit[m_searchIndex] = unitID;
@@ -128,16 +128,16 @@ void PathfindCell::setGoalAircraft(ObjectID unitID, const ICoord2D &pos )
 			m_aircraftGoal = false;
 			releaseInfo();
 		}	else {
-			DEBUG_ASSERTCRASH(m_aircraftGoal==false, ("Bad flags."));
+			engine::debug::invariant((m_aircraftGoal==false), "m_aircraftGoal==false", __FILE__, __LINE__, "Bad flags.");
 		}
 	} else {
 		// adding goal.
 		if (!hasInfo()) {
-			DEBUG_ASSERTCRASH(m_aircraftGoal==false, ("Bad flags."));
+			engine::debug::invariant((m_aircraftGoal==false), "m_aircraftGoal==false", __FILE__, __LINE__, "Bad flags.");
 			allocateInfo(pos);
 		}
 		if (!hasInfo()) {
-			DEBUG_CRASH(("Ran out of pathfind cells - fatal error!!!!! jba."));
+			engine::debug::invariant(false, "debug invariant", __FILE__, __LINE__, "Ran out of pathfind cells - fatal error!!!!! jba.");
 			return;
 		}
 		s_search.goalAircraft[m_searchIndex] = unitID;
@@ -159,23 +159,23 @@ void PathfindCell::setPosUnit(ObjectID unitID, const ICoord2D &pos )
 			s_search.positionUnit[m_searchIndex] = INVALID_ID;
 			if (s_search.goalUnit[m_searchIndex] == INVALID_ID) {
 				// No units here.
-				DEBUG_ASSERTCRASH(m_flags==UNIT_PRESENT_MOVING, ("Bad flags."));
+				engine::debug::invariant((m_flags==UNIT_PRESENT_MOVING), "m_flags==UNIT_PRESENT_MOVING", __FILE__, __LINE__, "Bad flags.");
 				m_flags = NO_UNITS;
 				releaseInfo();
 			}	else {
 				m_flags = UNIT_GOAL;
 			}
 		}	else {
-			DEBUG_ASSERTCRASH(m_flags == NO_UNITS, ("Bad flags."));
+			engine::debug::invariant((m_flags == NO_UNITS), "m_flags == NO_UNITS", __FILE__, __LINE__, "Bad flags.");
 		}
 	} else {
 		// adding goal.
 		if (!hasInfo()) {
-			DEBUG_ASSERTCRASH(m_flags == NO_UNITS, ("Bad flags."));
+			engine::debug::invariant((m_flags == NO_UNITS), "m_flags == NO_UNITS", __FILE__, __LINE__, "Bad flags.");
 			allocateInfo(pos);
 		}
 		if (!hasInfo()) {
-			DEBUG_CRASH(("Ran out of pathfind cells - fatal error!!!!! jba."));
+			engine::debug::invariant(false, "debug invariant", __FILE__, __LINE__, "Ran out of pathfind cells - fatal error!!!!! jba.");
 			return;
 		}
 		if (s_search.goalUnit[m_searchIndex]!=INVALID_ID && (s_search.goalUnit[m_searchIndex]==s_search.positionUnit[m_searchIndex])) {
@@ -240,7 +240,7 @@ Bool PathfindCell::setTypeAsObstacle( Object *obstacle, Bool isFence, const ICoo
 void PathfindCell::setType( CellType type )
 {
 	if (m_obstacleID != INVALID_ID) {
-		DEBUG_ASSERTCRASH(type == PathfindCell::CELL_OBSTACLE, ("Wrong type."));
+		engine::debug::invariant((type == PathfindCell::CELL_OBSTACLE), "type == PathfindCell::CELL_OBSTACLE", __FILE__, __LINE__, "Wrong type.");
 		m_type = PathfindCell::CELL_OBSTACLE;
 		return;
 	}

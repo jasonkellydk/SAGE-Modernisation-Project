@@ -26,7 +26,9 @@
 // Author: Steven Johnson, July 2002
 // Desc:
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
+import Engine.Core.Math.AffineTransform3;
 
 #include "Common/BezierSegment.h"
 #include "Common/GameCommon.h"
@@ -163,7 +165,7 @@ static Bool calcTrajectory(
 
 	if (velocity <= 0.0f)
 	{
-		DEBUG_CRASH(("cant get there from here (1)"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "cant get there from here (1)");
 		return false;
 	}
 
@@ -222,8 +224,8 @@ static Bool calcTrajectory(
 		pitches[0] = theta;	// shallower angle
 		pitches[1] = (theta >= 0.0) ? (PI/2 - theta) : (-PI/2 - theta);	// steeper angle
 
-		DEBUG_ASSERTCRASH(pitches[0]<=PI/2&&pitches[0]>=-PI/2,("bad pitches[0] %f",rad2deg(pitches[0])));
-		DEBUG_ASSERTCRASH(pitches[1]<=PI/2&&pitches[1]>=-PI/2,("bad pitches[1] %f",rad2deg(pitches[1])));
+		engine::debug::invariant((pitches[0]<=PI/2&&pitches[0]>=-PI/2), "pitches[0]<=PI/2&&pitches[0]>=-PI/2", __FILE__, __LINE__, "bad pitches[0] %f",rad2deg(pitches[0]));
+		engine::debug::invariant((pitches[1]<=PI/2&&pitches[1]>=-PI/2), "pitches[1]<=PI/2&&pitches[1]>=-PI/2", __FILE__, __LINE__, "bad pitches[1] %f",rad2deg(pitches[1]));
 
 		// calc the horiz-speed & time for each.
 		// note that time can only be negative for 90<angle<270, and since we
@@ -239,7 +241,7 @@ static Bool calcTrajectory(
 		t1 = MAX(0,t1);
 
 
-		DEBUG_ASSERTCRASH(t0>=0&&t1>=0,("neg time"));
+		engine::debug::invariant((t0>=0&&t1>=0), "t0>=0&&t1>=0", __FILE__, __LINE__, "neg time");
 
 		Int preferred = ((t0 < t1) == (preferShortPitch)) ? 0 : 1;
 
@@ -262,7 +264,7 @@ static Bool calcTrajectory(
 			root = sqr(vz) - gravityTwoDZ;
 			if (root < 0.0f)
 			{
-				DEBUG_CRASH(("cant get there from here (2)"));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "cant get there from here (2)");
 				return false;
 			}
 		}
@@ -308,7 +310,7 @@ static Bool calcTrajectory(
 		}
 	}
 
-//DEBUG_LOG(("took %d loops to find a match",numLoops));
+//engine::debug::log_info("took %d loops to find a match",numLoops);
 	if (exactTarget)
 		return true;
 
@@ -332,7 +334,7 @@ void DumbProjectileBehavior::projectileLaunchAtObjectOrPosition(
 {
 	const DumbProjectileBehaviorModuleData* d = getDumbProjectileBehaviorModuleData();
 
-	DEBUG_ASSERTCRASH(specificBarrelToUse>=0, ("specificBarrelToUse must now be explicit"));
+	engine::debug::invariant((specificBarrelToUse>=0), "specificBarrelToUse>=0", __FILE__, __LINE__, "specificBarrelToUse must now be explicit");
 
 	m_launcherID = launcher ? launcher->getID() : INVALID_ID;
 	m_extraBonusFlags = launcher ? launcher->getWeaponBonusCondition() : 0;
@@ -417,20 +419,20 @@ Bool DumbProjectileBehavior::calcFlightPath(Bool recalcNumSegments)
 
 	// X and Y for inner points are along the line between us, so normalize and scale a vector between us, but
 	// only use the x and y of the result
-	Vector3 targetVector;// 0 origin vector between me and him
-	targetVector.X = controlPoints[3].x - controlPoints[0].x;
-	targetVector.Y = controlPoints[3].y - controlPoints[0].y;
-	targetVector.Z = controlPoints[3].z - controlPoints[0].z;
+	Engine::Math::Vector3 targetVector{
+		controlPoints[3].x - controlPoints[0].x,
+		controlPoints[3].y - controlPoints[0].y,
+		controlPoints[3].z - controlPoints[0].z};
 
-	Real targetDistance = targetVector.Length();
-	targetVector.Normalize();
-	Vector3 firstPointAlongLine = targetVector * (targetDistance * d->m_firstPercentIndent );
-	Vector3 secondPointAlongLine = targetVector * (targetDistance * d->m_secondPercentIndent );
+	const Real targetDistance = targetVector.Length();
+	targetVector = targetVector.Normalized_Legacy();
+	const Engine::Math::Vector3 firstPointAlongLine = targetVector * (targetDistance * d->m_firstPercentIndent);
+	const Engine::Math::Vector3 secondPointAlongLine = targetVector * (targetDistance * d->m_secondPercentIndent);
 
-	controlPoints[1].x = firstPointAlongLine.X + controlPoints[0].x;// add world start to offset along the origin based vector
-	controlPoints[1].y = firstPointAlongLine.Y + controlPoints[0].y;
-	controlPoints[2].x = secondPointAlongLine.X + controlPoints[0].x;
-	controlPoints[2].y = secondPointAlongLine.Y + controlPoints[0].y;
+	controlPoints[1].x = firstPointAlongLine.x + controlPoints[0].x;// add world start to offset along the origin based vector
+	controlPoints[1].y = firstPointAlongLine.y + controlPoints[0].y;
+	controlPoints[2].x = secondPointAlongLine.x + controlPoints[0].x;
+	controlPoints[2].y = secondPointAlongLine.y + controlPoints[0].y;
 
 	// Z's are determined using the highest intervening height so they won't hit hills, low end bounded by current Zs
 	highestInterveningTerrain = max( highestInterveningTerrain, controlPoints[0].z );
@@ -450,7 +452,7 @@ Bool DumbProjectileBehavior::calcFlightPath(Bool recalcNumSegments)
 	// TheSuperHackers @info The way flight paths are used requires at least two curve points.
 	// DumbProjectileBehavior::update has been modified to handle cases where the flight path consists of one or zero curve points.
 	flightCurve.getSegmentPoints(m_flightPathSegments, &m_flightPath);
-	DEBUG_ASSERTCRASH(m_flightPathSegments == m_flightPath.size(), ("m_flightPathSegments mismatch"));
+	engine::debug::invariant((m_flightPathSegments == m_flightPath.size()), "m_flightPathSegments == m_flightPath.size()", __FILE__, __LINE__, "m_flightPathSegments mismatch");
 
 #if defined(RTS_DEBUG)
 	if( TheGlobalData->m_debugProjectilePath )
@@ -473,7 +475,7 @@ Bool DumbProjectileBehavior::projectileHandleCollision( Object *other )
 			// if it's not the specific thing we were targeting, see if we should incidentally collide...
 		if (!m_detonationWeaponTmpl->shouldProjectileCollideWith(projectileLauncher, getObject(), other, m_victimID))
 		{
-			//DEBUG_LOG(("ignoring projectile collision with %s at frame %d",other->getTemplate()->getName().str(),TheGameLogic->getFrame()));
+			//engine::debug::log_info("ignoring projectile collision with %s at frame %d",other->getTemplate()->getName().str(),TheGameLogic->getFrame());
 			return true;
 		}
 
@@ -493,7 +495,7 @@ Bool DumbProjectileBehavior::projectileHandleCollision( Object *other )
 						Object* thingToKill = *it++;
 						if (!thingToKill->isEffectivelyDead() && thingToKill->isKindOfMulti(d->m_garrisonHitKillKindof, d->m_garrisonHitKillKindofNot))
 						{
-							//DEBUG_LOG(("Killed a garrisoned unit (%08lx %s) via Flash-Bang!",thingToKill,thingToKill->getTemplate()->getName().str()));
+							//engine::debug::log_info("Killed a garrisoned unit (%08lx %s) via Flash-Bang!",thingToKill,thingToKill->getTemplate()->getName().str());
 							if (projectileLauncher)
 								projectileLauncher->scoreTheKill( thingToKill );
 							thingToKill->kill();
@@ -620,7 +622,7 @@ UpdateSleepTime DumbProjectileBehavior::update()
 				m_flightPathEnd.z += distVictimMoved * delta.z;
 				if (!calcFlightPath(false))
 				{
-					DEBUG_CRASH(("Hmm, recalc of flight path returned false... should this happen?"));
+					engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Hmm, recalc of flight path returned false... should this happen?");
 					detonate();
 					return UPDATE_SLEEP_NONE;
 				}
@@ -642,11 +644,10 @@ UpdateSleepTime DumbProjectileBehavior::update()
 
 		  Coord3D prevPos = m_flightPath[m_currentFlightPathStep - 1];
 
-		  Vector3 curDir(flightStep.x - prevPos.x, flightStep.y - prevPos.y, flightStep.z - prevPos.z);
-		  curDir.Normalize();	// buildTransformMatrix wants it this way
-      Matrix3D orientMtx;
-		  orientMtx.buildTransformMatrix(Vector3(flightStep.x, flightStep.y, flightStep.z), curDir);
-		  getObject()->setTransformMatrix(&orientMtx);
+		  const Engine::Math::Vector3 direction = Engine::Math::Vector3{
+			  flightStep.x - prevPos.x, flightStep.y - prevPos.y, flightStep.z - prevPos.z}.Normalized_Legacy();	// From_Unit_Forward_Direction wants it this way
+		  getObject()->setWorldTransform(Engine::Math::AffineTransform3::From_Unit_Forward_Direction(
+			  {flightStep.x, flightStep.y, flightStep.z}, direction));
     }
     else // oops! how do we orient the projectile on the zeroeth frame? This didn't matter until we started using the
       //long, blurry projectile graphics which look badly oriented on step 0 of the flight path
@@ -666,8 +667,8 @@ UpdateSleepTime DumbProjectileBehavior::update()
 			else
 			{
 #if RETAIL_COMPATIBLE_CRC
-				DEBUG_CRASH(("A mismatch is likely to happen if this code path is used in a match with unpatched clients."
-					" Vector is expected to contain two or more elements; check the weapon speed value."));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "A mismatch is likely to happen if this code path is used in a match with unpatched clients."
+					" Vector is expected to contain two or more elements; check the weapon speed value.");
 #endif
 
 				prevPos = m_flightPathStart;
@@ -675,11 +676,10 @@ UpdateSleepTime DumbProjectileBehavior::update()
 				flightStep = m_flightPathEnd;
 			}
 
-		  Vector3 curDir(curPos.x - prevPos.x, curPos.y - prevPos.y, curPos.z - prevPos.z);
-		  curDir.Normalize();	// buildTransformMatrix wants it this way
-      Matrix3D orientMtx;
-		  orientMtx.buildTransformMatrix(Vector3(flightStep.x, flightStep.y, flightStep.z), curDir);
-		  getObject()->setTransformMatrix(&orientMtx);
+		  const Engine::Math::Vector3 direction = Engine::Math::Vector3{
+			  curPos.x - prevPos.x, curPos.y - prevPos.y, curPos.z - prevPos.z}.Normalized_Legacy();	// From_Unit_Forward_Direction wants it this way
+		  getObject()->setWorldTransform(Engine::Math::AffineTransform3::From_Unit_Forward_Direction(
+			  {flightStep.x, flightStep.y, flightStep.z}, direction));
     }
 
 	}
@@ -797,8 +797,8 @@ void DumbProjectileBehavior::xfer( Xfer *xfer )
 			if( m_detonationWeaponTmpl == nullptr )
 			{
 
-				DEBUG_CRASH(( "DumbProjectileBehavior::xfer - Unknown weapon template '%s'",
-											weaponTemplateName.str() ));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "DumbProjectileBehavior::xfer - Unknown weapon template '%s'",
+											weaponTemplateName.str() );
 				throw SC_INVALID_DATA;
 
 			}

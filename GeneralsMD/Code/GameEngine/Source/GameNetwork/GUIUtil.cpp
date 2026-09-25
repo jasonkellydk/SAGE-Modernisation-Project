@@ -25,7 +25,8 @@
 // FILE: GUIUtil.cpp //////////////////////////////////////////////////////
 // Author: Matthew D. Campbell, Sept 2002
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "GameNetwork/GUIUtil.h"
 #include "GameNetwork/NetworkDefs.h"
@@ -137,7 +138,7 @@ void ShowUnderlyingGUIElements( Bool show, const char *layoutFilename, const cha
 	GameWindow *parent = TheWindowManager->winGetWindowFromId( nullptr, parentID );
 	if (!parent)
 	{
-		DEBUG_CRASH(("Window %s not found", parentNameStr.str()));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Window %s not found", parentNameStr.str());
 		return;
 	}
 
@@ -153,7 +154,7 @@ void ShowUnderlyingGUIElements( Bool show, const char *layoutFilename, const cha
 		AsciiString gadgetName;
 		gadgetName.format("%s:%s", layoutFilename, *text);
 		win	= TheWindowManager->winGetWindowFromId( parent, NAMEKEY(gadgetName) );
-		//DEBUG_ASSERTCRASH(win, ("Cannot find %s to show/hide it", gadgetName.str()));
+		//engine::debug::invariant((win), "win", __FILE__, __LINE__, "Cannot find %s to show/hide it", gadgetName.str());
 		if (win)
 		{
 			win->winHide( !show );
@@ -169,7 +170,7 @@ void ShowUnderlyingGUIElements( Bool show, const char *layoutFilename, const cha
 			AsciiString gadgetName;
 			gadgetName.format("%s:%s%d", layoutFilename, *text, player);
 			win	= TheWindowManager->winGetWindowFromId( parent, NAMEKEY(gadgetName) );
-			//DEBUG_ASSERTCRASH(win, ("Cannot find %s to show/hide it", gadgetName.str()));
+			//engine::debug::invariant((win), "win", __FILE__, __LINE__, "Cannot find %s to show/hide it", gadgetName.str());
 			if (win)
 			{
 				win->winHide( !show );
@@ -196,7 +197,7 @@ void PopulateColorComboBox(Int comboBox, GameWindow *comboArray[], GameInfo *myG
 		GameSlot *slot = myGame->getSlot(i);
 		if( slot && (i != comboBox) && (slot->getColor() >= 0 )&& (slot->getColor() < numColors))
 		{
-			DEBUG_ASSERTCRASH(slot->getColor() >= 0,("We've tried to access array %d and that ain't good",slot->getColor()));
+			engine::debug::invariant((slot->getColor() >= 0), "slot->getColor() >= 0", __FILE__, __LINE__, "We've tried to access array %d and that ain't good",slot->getColor());
 			availableColors[slot->getColor()] = false;
 		}
 	}
@@ -348,7 +349,7 @@ void PopulateStartingCashComboBox(GameWindow *comboBox, GameInfo *myGame)
 
   if ( currentSelectionIndex == -1 )
   {
-    DEBUG_CRASH( ("Current selection for starting cash not found in list") );
+    engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Current selection for starting cash not found in list");
     currentSelectionIndex = GadgetComboBoxAddEntry(comboBox, formatMoneyForStartingCashComboBox( myGame->getStartingCash() ),
                                           comboBox->winGetEnabled() ? comboBox->winGetEnabledTextColor() : comboBox->winGetDisabledTextColor());
     GadgetComboBoxSetItemData(comboBox, currentSelectionIndex, (void *)myGame->getStartingCash().countMoney() );

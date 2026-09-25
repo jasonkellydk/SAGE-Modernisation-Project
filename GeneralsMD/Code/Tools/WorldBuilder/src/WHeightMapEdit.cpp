@@ -27,7 +27,7 @@
 #include "W3DDevice/GameClient/TileData.h"
 #include "W3DDevice/GameClient/TerrainTex.h"
 #include "TerrainModal.h"
-#include "Common/Debug.h"
+
 #include "Common/GlobalData.h"
 #include "Common/MapReaderWriterInfo.h"
 #include "Common/FileSystem.h"
@@ -42,6 +42,7 @@
 #include "LayersList.h"
 
 #include "Common/DataChunk.h"
+import engine.debug;
 
 
 int WorldHeightMapEdit::m_numGlobalTextureClasses=0;
@@ -266,7 +267,7 @@ WorldHeightMapEdit::WorldHeightMapEdit(ChunkInputStream *pStrm):
 	for (i=0; i<m_numGlobalTextureClasses; i++) {
 		for (j=0; j<m_numTextureClasses; j++) {
 			if (m_globalTextureClasses[i].name == m_textureClasses[j].name) {
-				DEBUG_ASSERTCRASH(m_textureClasses[j].globalTextureClass == -1, ("oops")); // should be uninitialized at this point.
+				engine::debug::invariant((m_textureClasses[j].globalTextureClass == -1), "m_textureClasses[j].globalTextureClass == -1", __FILE__, __LINE__, "oops"); // should be uninitialized at this point.
 				if (m_globalTextureClasses[i].width != m_textureClasses[i].width) {
 					didMajorRemap = true;	// This will handle the differing tile widths in setBlendUsingCanonicalTile
 				}
@@ -305,14 +306,14 @@ WorldHeightMapEdit::WorldHeightMapEdit(ChunkInputStream *pStrm):
 	}
 //	Int curTile = 0;
 	for (i=0; i<m_numTextureClasses; i++) {
-		DEBUG_ASSERTCRASH(m_textureClasses[i].globalTextureClass >= 0, ("oops"));
+		engine::debug::invariant((m_textureClasses[i].globalTextureClass >= 0), "m_textureClasses[i].globalTextureClass >= 0", __FILE__, __LINE__, "oops");
 	}
 
 	for (i=0; i<m_dataSize; i++) {
 		Int texNdx = this->m_tileNdxes[i];
-		DEBUG_ASSERTCRASH( (texNdx>>2) < m_numBitmapTiles,("oops"));
+		engine::debug::invariant(((texNdx>>2) < m_numBitmapTiles), "(texNdx>>2) < m_numBitmapTiles", __FILE__, __LINE__, "oops");
 		Int texClass = getTextureClassFromNdx(texNdx);
-		DEBUG_ASSERTCRASH(texClass>=0,("oops"));
+		engine::debug::invariant((texClass>=0), "texClass>=0", __FILE__, __LINE__, "oops");
 	}
 #endif
 }
@@ -777,9 +778,9 @@ void WorldHeightMapEdit::saveToFile(DataChunkOutput &chunkWriter)
 #ifdef DEBUG_CRASHING
 	for (i=0; i<m_dataSize; i++) {
 		Int texNdx = this->m_tileNdxes[i];
-		DEBUG_ASSERTCRASH((texNdx>>2) < m_numBitmapTiles,("oops"));
+		engine::debug::invariant(((texNdx>>2) < m_numBitmapTiles), "(texNdx>>2) < m_numBitmapTiles", __FILE__, __LINE__, "oops");
 		Int texClass = getTextureClassFromNdx(texNdx);
-		DEBUG_ASSERTCRASH(texClass>=0,("oops"));
+		engine::debug::invariant((texClass>=0), "texClass>=0", __FILE__, __LINE__, "oops");
 	}
 #endif
 
@@ -805,10 +806,10 @@ Bool WorldHeightMapEdit::setTileNdx(Int xIndex, Int yIndex, Int textureClass, Bo
 {
 	Int ndx = (yIndex*m_width)+xIndex;
 	Int numClasses = m_numTextureClasses;
-	DEBUG_ASSERTCRASH(ndx>=0 && ndx<this->m_dataSize,("oops"));
+	engine::debug::invariant((ndx>=0 && ndx<this->m_dataSize), "ndx>=0 && ndx<this->m_dataSize", __FILE__, __LINE__, "oops");
 	if (ndx<0 || ndx >= this->m_dataSize) return false;
 	Int texNdx = getTileNdxForClass(xIndex, yIndex, textureClass);
-	DEBUG_ASSERTCRASH((texNdx>>2)<m_numBitmapTiles,("oops"));
+	engine::debug::invariant(((texNdx>>2)<m_numBitmapTiles), "(texNdx>>2)<m_numBitmapTiles", __FILE__, __LINE__, "oops");
 	m_tileNdxes[ndx] = texNdx;
 	m_blendTileNdxes[ndx] = 0;  // opaque.
 	m_extraBlendTileNdxes[ndx] = 0;	//opaque.
@@ -839,7 +840,7 @@ Int WorldHeightMapEdit::getTextureClassFromNdx(Int tileNdx)
 Int WorldHeightMapEdit::getTextureClass(Int xIndex, Int yIndex, Bool baseClass)
 {
 	Int ndx = (yIndex*m_width)+xIndex;
-	DEBUG_ASSERTCRASH((ndx>=0 && ndx<this->m_dataSize),("oops"));
+	engine::debug::invariant(((ndx>=0 && ndx<this->m_dataSize)), "(ndx>=0 && ndx<this->m_dataSize)", __FILE__, __LINE__, "oops");
 	if (ndx<0 || ndx >= this->m_dataSize) return(-1);
 	Int textureNdx = m_tileNdxes[ndx];
 	if (!baseClass && (m_blendTileNdxes[ndx] != 0 || m_extraBlendTileNdxes[ndx] != 0)) {
@@ -923,7 +924,7 @@ Int WorldHeightMapEdit::allocateEdgeTiles(Int globalTextureClass)
 				return localClass;
 			}
 		}
-		DEBUG_ASSERTCRASH(m_globalTextureClasses[globalTextureClass].isBlendEdgeTile, ("Shouldn't use this for edge tiles."));
+		engine::debug::invariant((m_globalTextureClasses[globalTextureClass].isBlendEdgeTile), "m_globalTextureClasses[globalTextureClass].isBlendEdgeTile", __FILE__, __LINE__, "Shouldn't use this for edge tiles.");
 		// hasn't been copied into m_sourceTiles yet.
 		if (m_numEdgeTiles + m_globalTextureClasses[globalTextureClass].numTiles>NUM_SOURCE_TILES) {
 			m_warnTooManyTex = true;
@@ -967,7 +968,7 @@ Int WorldHeightMapEdit::getTileNdxForClass(Int xIndex, Int yIndex, Int textureCl
 	int tileNdx = 0;
 	if (textureClass >= 0 && textureClass <m_numGlobalTextureClasses) {
 		Int firstTile = getFirstTile(textureClass); //search used TextureClasses for one with the same globalTextureIndex
-		DEBUG_ASSERTCRASH(!m_globalTextureClasses[textureClass].isBlendEdgeTile, ("Shouldn't use blend edge tiles for tiling."));
+		engine::debug::invariant((!m_globalTextureClasses[textureClass].isBlendEdgeTile), "!m_globalTextureClasses[textureClass].isBlendEdgeTile", __FILE__, __LINE__, "Shouldn't use blend edge tiles for tiling.");
 		if (firstTile == -1) {
 			firstTile = allocateTiles(textureClass);
 		}
@@ -1034,7 +1035,7 @@ void WorldHeightMapEdit::blendTile(Int xIndex, Int yIndex, Int srcXIndex, Int sr
 	}
 	if (textureClass >= 0) {	//get index of sub-tile that would show up here if we continued tiling src.
 		blendTileNdx = getBlendTileNdxForClass(xIndex, yIndex, textureClass);
-		DEBUG_ASSERTCRASH((blendTileNdx/4 < m_numBitmapTiles),("oops"));	//check it falls into one of the 64x64 tiles of textures used on map.
+		engine::debug::invariant(((blendTileNdx/4 < m_numBitmapTiles)), "(blendTileNdx/4 < m_numBitmapTiles)", __FILE__, __LINE__, "oops");	//check it falls into one of the 64x64 tiles of textures used on map.
 	}
 
 	if (curTileNdx == blendTileNdx) {//destination already contains continuation of source tile so no blend needed.
@@ -1330,8 +1331,8 @@ void WorldHeightMapEdit::blendToThisClass(Int xIndex, Int yIndex,
 {
 	Int sides, total;
 	getTexClassNeighbors(xIndex, yIndex, textureClass, &sides, &total);
-	DEBUG_ASSERTCRASH((total>0),("oops"));  // if no neighbors, should not happen.
-	DEBUG_ASSERTCRASH((sides<3),("oops"));  // Should have been squished out earlier.
+	engine::debug::invariant(((total>0)), "(total>0)", __FILE__, __LINE__, "oops");  // if no neighbors, should not happen.
+	engine::debug::invariant(((sides<3)), "(sides<3)", __FILE__, __LINE__, "oops");  // Should have been squished out earlier.
 	if (total<1) return;
 	Int i,j;
 //	Bool longDiagonal = false;
@@ -1649,7 +1650,7 @@ Bool WorldHeightMapEdit::optimizeTiles()
 	for (i=0; i<m_dataSize; i++) {
 		Int texNdx = this->m_tileNdxes[i];
 		Int texClass = getTextureClassFromNdx(texNdx);
-		DEBUG_ASSERTCRASH((texClass>=0),("oops"));
+		engine::debug::invariant(((texClass>=0)), "(texClass>=0)", __FILE__, __LINE__, "oops");
 		if (texClass<0) texClass=0;
 		m_tileNdxes[i] = texClass;
 	}
@@ -1659,7 +1660,7 @@ Bool WorldHeightMapEdit::optimizeTiles()
 	for (i=1; i<m_numBlendedTiles; i++) {
 		blendInfo[i] = m_blendedTiles[i];
 		blendInfo[i].blendNdx = getTextureClassFromNdx(blendInfo[i].blendNdx);
-		DEBUG_ASSERTCRASH((blendInfo[i].blendNdx>=0),("oops"));
+		engine::debug::invariant(((blendInfo[i].blendNdx>=0)), "(blendInfo[i].blendNdx>=0)", __FILE__, __LINE__, "oops");
 		if (blendInfo[i].blendNdx<0) blendInfo[i].blendNdx=0;
 	}
 
@@ -1709,7 +1710,7 @@ Bool WorldHeightMapEdit::optimizeTiles()
 				else
 				{	newBlendNdx = findOrCreateBlendTile(&curBlendInfo);
 					if (m_numBlendedTiles < NUM_BLEND_TILES) {
-						DEBUG_ASSERTCRASH((newBlendNdx>0),("oops"));
+						engine::debug::invariant(((newBlendNdx>0)), "(newBlendNdx>0)", __FILE__, __LINE__, "oops");
 					}
 					if (newBlendNdx < 0) newBlendNdx = 0;
 				}
@@ -1730,7 +1731,7 @@ Bool WorldHeightMapEdit::optimizeTiles()
 				else
 				{	newBlendNdx = findOrCreateBlendTile(&curBlendInfo);
 					if (m_numBlendedTiles < NUM_BLEND_TILES) {
-						DEBUG_ASSERTCRASH((newBlendNdx>0),("oops"));
+						engine::debug::invariant(((newBlendNdx>0)), "(newBlendNdx>0)", __FILE__, __LINE__, "oops");
 					}
 					if (newBlendNdx < 0) newBlendNdx = 0;
 				}
@@ -1925,48 +1926,48 @@ void WorldHeightMapEdit::dbgVerifyAfterUndo()
 	}
 	for (j=0; j<m_numTextureClasses; j++) {
 		Int globalClass = m_textureClasses[j].globalTextureClass;
-		DEBUG_ASSERTCRASH((globalClass >= 0),("oops"));
-		DEBUG_ASSERTCRASH((globalClass < m_numGlobalTextureClasses),("oops"));
+		engine::debug::invariant(((globalClass >= 0)), "(globalClass >= 0)", __FILE__, __LINE__, "oops");
+		engine::debug::invariant(((globalClass < m_numGlobalTextureClasses)), "(globalClass < m_numGlobalTextureClasses)", __FILE__, __LINE__, "oops");
 		if (m_globalTextureClasses[globalClass].forDebugOnly_fileTextureClass != j) {
-			DEBUG_ASSERTCRASH((m_globalTextureClasses[globalClass].forDebugOnly_fileTextureClass == -1),("oops"));
+			engine::debug::invariant(((m_globalTextureClasses[globalClass].forDebugOnly_fileTextureClass == -1)), "(m_globalTextureClasses[globalClass].forDebugOnly_fileTextureClass == -1)", __FILE__, __LINE__, "oops");
 			m_globalTextureClasses[globalClass].forDebugOnly_fileTextureClass = j;
 		}
-		DEBUG_ASSERTCRASH((m_textureClasses[j].width == m_globalTextureClasses[globalClass].width),("oops"));
-		DEBUG_ASSERTCRASH((m_textureClasses[j].numTiles == m_globalTextureClasses[globalClass].numTiles),("oops"));
+		engine::debug::invariant(((m_textureClasses[j].width == m_globalTextureClasses[globalClass].width)), "(m_textureClasses[j].width == m_globalTextureClasses[globalClass].width)", __FILE__, __LINE__, "oops");
+		engine::debug::invariant(((m_textureClasses[j].numTiles == m_globalTextureClasses[globalClass].numTiles)), "(m_textureClasses[j].numTiles == m_globalTextureClasses[globalClass].numTiles)", __FILE__, __LINE__, "oops");
 		TileData *pTile = m_sourceTiles[m_textureClasses[j].firstTile];
-		DEBUG_ASSERTCRASH((pTile == m_globalTextureClasses[globalClass].tiles[0]),("oops"));
-		DEBUG_ASSERTCRASH((j == m_globalTextureClasses[globalClass].forDebugOnly_fileTextureClass),("oops"));
+		engine::debug::invariant(((pTile == m_globalTextureClasses[globalClass].tiles[0])), "(pTile == m_globalTextureClasses[globalClass].tiles[0])", __FILE__, __LINE__, "oops");
+		engine::debug::invariant(((j == m_globalTextureClasses[globalClass].forDebugOnly_fileTextureClass)), "(j == m_globalTextureClasses[globalClass].forDebugOnly_fileTextureClass)", __FILE__, __LINE__, "oops");
 	}
 
 	for (i=0; i<m_numGlobalTextureClasses; i++) {
 		Int localClass = m_globalTextureClasses[i].forDebugOnly_fileTextureClass;
-		DEBUG_ASSERTCRASH((localClass < NUM_TEXTURE_CLASSES),("oops"));
+		engine::debug::invariant(((localClass < NUM_TEXTURE_CLASSES)), "(localClass < NUM_TEXTURE_CLASSES)", __FILE__, __LINE__, "oops");
 		if (localClass >= 0) {
-			DEBUG_ASSERTCRASH((localClass < m_numTextureClasses),("oops"));
-			DEBUG_ASSERTCRASH((m_textureClasses[localClass].globalTextureClass == i),("oops"));
-			DEBUG_ASSERTCRASH((m_textureClasses[localClass].width == m_globalTextureClasses[i].width),("oops"));
-			DEBUG_ASSERTCRASH((m_textureClasses[localClass].numTiles == m_globalTextureClasses[i].numTiles),("oops"));
+			engine::debug::invariant(((localClass < m_numTextureClasses)), "(localClass < m_numTextureClasses)", __FILE__, __LINE__, "oops");
+			engine::debug::invariant(((m_textureClasses[localClass].globalTextureClass == i)), "(m_textureClasses[localClass].globalTextureClass == i)", __FILE__, __LINE__, "oops");
+			engine::debug::invariant(((m_textureClasses[localClass].width == m_globalTextureClasses[i].width)), "(m_textureClasses[localClass].width == m_globalTextureClasses[i].width)", __FILE__, __LINE__, "oops");
+			engine::debug::invariant(((m_textureClasses[localClass].numTiles == m_globalTextureClasses[i].numTiles)), "(m_textureClasses[localClass].numTiles == m_globalTextureClasses[i].numTiles)", __FILE__, __LINE__, "oops");
 			TileData *pTile = m_sourceTiles[m_textureClasses[localClass].firstTile];
-			DEBUG_ASSERTCRASH((pTile == m_globalTextureClasses[i].tiles[0]),("oops"));
-			DEBUG_ASSERTCRASH((m_textureClasses[localClass].numTiles == m_globalTextureClasses[i].numTiles),("oops"));
+			engine::debug::invariant(((pTile == m_globalTextureClasses[i].tiles[0])), "(pTile == m_globalTextureClasses[i].tiles[0])", __FILE__, __LINE__, "oops");
+			engine::debug::invariant(((m_textureClasses[localClass].numTiles == m_globalTextureClasses[i].numTiles)), "(m_textureClasses[localClass].numTiles == m_globalTextureClasses[i].numTiles)", __FILE__, __LINE__, "oops");
 		}
 	}
 
 	for (i=0; i<m_numTextureClasses; i++) {
-		DEBUG_ASSERTCRASH((m_textureClasses[i].globalTextureClass >= 0),("oops"));
+		engine::debug::invariant(((m_textureClasses[i].globalTextureClass >= 0)), "(m_textureClasses[i].globalTextureClass >= 0)", __FILE__, __LINE__, "oops");
 		if (m_textureClasses[i].globalTextureClass >= 0) {
 			AsciiString path1 = m_globalTextureClasses[m_textureClasses[i].globalTextureClass].name;
 			AsciiString path2 = m_textureClasses[i].name;
-			DEBUG_ASSERTCRASH(path1==path2,("oops"));
-			DEBUG_ASSERTCRASH((m_globalTextureClasses[m_textureClasses[i].globalTextureClass].forDebugOnly_fileTextureClass==i),("oops"));
+			engine::debug::invariant((path1==path2), "path1==path2", __FILE__, __LINE__, "oops");
+			engine::debug::invariant(((m_globalTextureClasses[m_textureClasses[i].globalTextureClass].forDebugOnly_fileTextureClass==i)), "(m_globalTextureClasses[m_textureClasses[i].globalTextureClass].forDebugOnly_fileTextureClass==i)", __FILE__, __LINE__, "oops");
 		}
 	}
 
 	for (i=0; i<m_dataSize; i++) {
 		Int texNdx = this->m_tileNdxes[i];
-		DEBUG_ASSERTCRASH(( (texNdx>>2) < m_numBitmapTiles),("oops"));
+		engine::debug::invariant((( (texNdx>>2) < m_numBitmapTiles)), "( (texNdx>>2) < m_numBitmapTiles)", __FILE__, __LINE__, "oops");
 		Int texClass = getTextureClassFromNdx(texNdx);
-		DEBUG_ASSERTCRASH((texClass>=0),("oops"));
+		engine::debug::invariant(((texClass>=0)), "(texClass>=0)", __FILE__, __LINE__, "oops");
 	}
 #endif
 }
@@ -2177,7 +2178,7 @@ Bool WorldHeightMapEdit::selectInvalidTeam()
 
 	if (anySelected)
 	{
-		DEBUG_LOG(("%s", report.str()));
+		engine::debug::log_info("%s", report.str());
 		MessageBox(nullptr, report.str(), "Missing team report", MB_OK);
 	}
 
@@ -2441,7 +2442,7 @@ Bool WorldHeightMapEdit::doCliffAdjustment(Int xIndex, Int yIndex)
  					ndx = (j*m_width)+i;
 					if (pProcessed[ndx]) continue;
 					CProcessNode *pNewNode = new CProcessNode(i,j);
-					DEBUG_LOG(("Adding node %d, %d", i, j));
+					engine::debug::log_info("Adding node %d, %d", i, j);
 					pNodes[k++]	= pNewNode;
 					Real dx, dy;
 					if (i<pCurNode->m_x) {
@@ -2634,7 +2635,7 @@ Bool WorldHeightMapEdit::adjustForTiling( TCliffInfo &cliffInfo, Real textureWid
 //	Bool doOffset = false;
 	Real offset;
 
-	DEBUG_ASSERTLOG(minU<-delta && maxU > delta, ("Oops, wrong.")) ;
+	if (!(minU<-delta && maxU > delta)) engine::debug::log_error("Oops, wrong.") ;
 
 	// Straddles the 0 line.
 	if (maxU > -minU) {
@@ -2758,7 +2759,7 @@ void WorldHeightMapEdit::updateForAdjacentCliffs(Int xIndex, Int yIndex,
 					if (i==xIndex){
 						if (j<yIndex) {
 							// below
-							DEBUG_ASSERTCRASH(!lock1, ("Shouldn't happen."));
+							engine::debug::invariant((!lock1), "!lock1", __FILE__, __LINE__, "Shouldn't happen.");
 							if (lock0 && !usMatch(tmpCliff.u0, info.u3)) {
 								shifted = true;
 							}
@@ -2772,7 +2773,7 @@ void WorldHeightMapEdit::updateForAdjacentCliffs(Int xIndex, Int yIndex,
 							}
 						} else {
 							// above
-							DEBUG_ASSERTCRASH(!lock2, ("Shouldn't happen."));
+							engine::debug::invariant((!lock2), "!lock2", __FILE__, __LINE__, "Shouldn't happen.");
 							if (lock3 && !usMatch(tmpCliff.u3, info.u0)) {
 								shifted = true;
 							}
@@ -2787,7 +2788,7 @@ void WorldHeightMapEdit::updateForAdjacentCliffs(Int xIndex, Int yIndex,
 					}	else if (j==yIndex) {
 						if (i<xIndex) {
 							// left
-							DEBUG_ASSERTCRASH(!lock0 && !lock3, ("Shouldn't happen."));
+							engine::debug::invariant((!lock0 && !lock3), "!lock0 && !lock3", __FILE__, __LINE__, "Shouldn't happen.");
 							tmpCliff.u0 = info.u1;
 							tmpCliff.u3 = info.u2;
 							tmpCliff.v0 = info.v1;
@@ -3092,7 +3093,7 @@ void WorldHeightMapEdit::updateFlatCellForAdjacentCliffs(Int xIndex, Int yIndex,
 	Bool lock2 = false;
 	Bool lock3 = false;
 	Int ndx = (yIndex*m_width)+xIndex;
-	DEBUG_ASSERTCRASH((ndx>=0 && ndx<this->m_dataSize),("oops"));
+	engine::debug::invariant(((ndx>=0 && ndx<this->m_dataSize)), "(ndx>=0 && ndx<this->m_dataSize)", __FILE__, __LINE__, "oops");
 	if (ndx<0 || ndx >= this->m_dataSize) return;
 	Bool okToProcess = true;
 	if (pProcessed && pProcessed[ndx]) okToProcess = false;
@@ -3129,7 +3130,7 @@ void WorldHeightMapEdit::updateFlatCellForAdjacentCliffs(Int xIndex, Int yIndex,
 				if (i==xIndex){
 					if (j<yIndex) {
 						// below
-						DEBUG_ASSERTCRASH(!lock1, ("Shouldn't happen."));
+						engine::debug::invariant((!lock1), "!lock1", __FILE__, __LINE__, "Shouldn't happen.");
 						if (lock0 && !usMatch(tmpCliff.u0, info.u3)) {
 							shifted = true;
 						}
@@ -3143,7 +3144,7 @@ void WorldHeightMapEdit::updateFlatCellForAdjacentCliffs(Int xIndex, Int yIndex,
 						}
 					} else {
 						// above
-						DEBUG_ASSERTCRASH(!lock2, ("Shouldn't happen."));
+						engine::debug::invariant((!lock2), "!lock2", __FILE__, __LINE__, "Shouldn't happen.");
 						if (lock3 && !usMatch(tmpCliff.u3, info.u0)) {
 							shifted = true;
 						}
@@ -3158,7 +3159,7 @@ void WorldHeightMapEdit::updateFlatCellForAdjacentCliffs(Int xIndex, Int yIndex,
 				}	else if (j==yIndex) {
 					if (i<xIndex) {
 						// left
-						DEBUG_ASSERTCRASH(!lock0 && !lock3, ("Shouldn't happen."));
+						engine::debug::invariant((!lock0 && !lock3), "!lock0 && !lock3", __FILE__, __LINE__, "Shouldn't happen.");
 						tmpCliff.u0 = info.u1;
 						tmpCliff.u3 = info.u2;
 						tmpCliff.v0 = info.v1;
@@ -3242,7 +3243,7 @@ void WorldHeightMapEdit::updateFlatCellForAdjacentCliffs(Int xIndex, Int yIndex,
 	}
 
 	if (!gotXVec && !gotYVec) {
-		DEBUG_LOG(("Unexpected.  jba"));
+		engine::debug::log_info("Unexpected.  jba");
 		return;
 	}
 	if (gotXVec && !gotYVec) {
@@ -3321,7 +3322,7 @@ Int WorldHeightMapEdit::getNumBoundaries() const
 void WorldHeightMapEdit::getBoundary(Int ndx, ICoord2D* border) const
 {
 	if (!border || ndx < 0 || ndx >= m_boundaries.size()) {
-		DEBUG_CRASH(("Invalid border request. jkmcd"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Invalid border request. jkmcd");
 		return;
 	}
 
@@ -3331,7 +3332,7 @@ void WorldHeightMapEdit::getBoundary(Int ndx, ICoord2D* border) const
 void WorldHeightMapEdit::addBoundary(ICoord2D* boundaryToAdd)
 {
 	if (!boundaryToAdd) {
-		DEBUG_CRASH(("Invalid border addition. jkmcd"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Invalid border addition. jkmcd");
 		return;
 	}
 
@@ -3341,7 +3342,7 @@ void WorldHeightMapEdit::addBoundary(ICoord2D* boundaryToAdd)
 void WorldHeightMapEdit::changeBoundary(Int ndx, ICoord2D *border)
 {
 	if (!border || ndx < 0 || ndx >= m_boundaries.size()) {
-		DEBUG_CRASH(("Invalid border change request. jkmcd"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Invalid border change request. jkmcd");
 		return;
 	}
 
@@ -3351,7 +3352,7 @@ void WorldHeightMapEdit::changeBoundary(Int ndx, ICoord2D *border)
 void WorldHeightMapEdit::removeLastBoundary()
 {
 	if (m_boundaries.empty()) {
-		DEBUG_CRASH(("Invalid border remove request. jkmcd"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Invalid border remove request. jkmcd");
 		return;
 	}
 

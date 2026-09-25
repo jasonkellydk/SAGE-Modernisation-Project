@@ -28,13 +28,13 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/Xfer.h"
 #include "GameLogic/GameLogic.h"
 #include "GameLogic/Object.h"
 #include "GameLogic/Module/ProjectileStreamUpdate.h"
-#include "WWMath/vector3.h"
 
 
 //-------------------------------------------------------------------------------------------------
@@ -74,7 +74,7 @@ UpdateSleepTime ProjectileStreamUpdate::update()
 
 void ProjectileStreamUpdate::addProjectile( ObjectID sourceID, ObjectID newID, ObjectID victimID, const Coord3D *victimPos )
 {
-	DEBUG_ASSERTCRASH( m_owningObject == INVALID_ID  ||  m_owningObject == sourceID, ("Two objects are trying to use the same Projectile stream.") );//Don't cross the streams!
+	engine::debug::invariant((m_owningObject == INVALID_ID  ||  m_owningObject == sourceID), "m_owningObject == INVALID_ID  ||  m_owningObject == sourceID", __FILE__, __LINE__, "Two objects are trying to use the same Projectile stream.");//Don't cross the streams!
 	if( m_owningObject == INVALID_ID )
 		m_owningObject = sourceID;
 
@@ -112,13 +112,13 @@ void ProjectileStreamUpdate::addProjectile( ObjectID sourceID, ObjectID newID, O
 	}
 	else
 	{
-		DEBUG_CRASH(("A projectile stream was fired at neither an object nor a position.  Probably bad."));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "A projectile stream was fired at neither an object nor a position.  Probably bad.");
 	}
 
 	// Keep track of the id in a circular array
 	m_projectileIDs[ m_nextFreeIndex ] = newID;
 	m_nextFreeIndex = (m_nextFreeIndex + 1) % MAX_PROJECTILE_STREAM;
-	DEBUG_ASSERTCRASH( m_nextFreeIndex != m_firstValidIndex, ("Need to increase the allowed number of simultaneous particles in ProjectileStreamUpdate.") );
+	engine::debug::invariant((m_nextFreeIndex != m_firstValidIndex), "m_nextFreeIndex != m_firstValidIndex", __FILE__, __LINE__, "Need to increase the allowed number of simultaneous particles in ProjectileStreamUpdate.");
 }
 
 void ProjectileStreamUpdate::cullFrontOfList()
@@ -142,7 +142,7 @@ Bool ProjectileStreamUpdate::considerDying()
 	return FALSE;
 }
 
-void ProjectileStreamUpdate::getAllPoints( Vector3 *points, Int *count )
+void ProjectileStreamUpdate::getAllPoints( Engine::Math::Vector3 *points, Int *count )
 {
 	Int pointCount = 0;
 	Int pointIndex = m_firstValidIndex;
@@ -161,9 +161,7 @@ void ProjectileStreamUpdate::getAllPoints( Vector3 *points, Int *count )
 		if( projectile )
 		{
 			Coord3D thisPoint = *projectile->getPosition();
-			points[pointCount].X = thisPoint.x;
-			points[pointCount].Y = thisPoint.y;
-			points[pointCount].Z = thisPoint.z;
+			points[pointCount] = {thisPoint.x, thisPoint.y, thisPoint.z};
 
 
 			if ( obj && obj->isKindOf( KINDOF_VEHICLE ) )				// this makes the stream skim along my roof, if I have a roof
@@ -171,11 +169,11 @@ void ProjectileStreamUpdate::getAllPoints( Vector3 *points, Int *count )
 				const Coord3D *pos = obj->getPosition();
 				Real myTop = obj->getGeometryInfo().getMaxHeightAbovePosition() + pos->z + 0.5f;
 				Coord3D delta;
-				delta.x = pos->x - points[pointCount].X;
-				delta.y = pos->y - points[pointCount].Y;
+				delta.x = pos->x - points[pointCount].x;
+				delta.y = pos->y - points[pointCount].y;
 				delta.z = 0.0f;
 				if( delta.length() <= obj->getGeometryInfo().getMajorRadius() * 1.5f )
-					points[pointCount].Z = MAX( points[pointCount].Z, myTop );
+					points[pointCount].z = MAX( points[pointCount].z, myTop );
 			}
 
 
@@ -184,9 +182,7 @@ void ProjectileStreamUpdate::getAllPoints( Vector3 *points, Int *count )
 		}
 		else
 		{
-			points[pointCount].X = 0;
-			points[pointCount].Y = 0;
-			points[pointCount].Z = 0;
+			points[pointCount] = {};
 		}
 
 		pointIndex = (pointIndex + 1) % MAX_PROJECTILE_STREAM;

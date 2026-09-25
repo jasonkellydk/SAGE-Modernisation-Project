@@ -22,7 +22,8 @@
 //																																						//
 ////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "GameNetwork/IPEnumeration.h"
 #include "GameNetwork/networkutil.h"
@@ -77,23 +78,23 @@ EnumeratedIP * IPEnumeration::getAddresses()
 	char hostname[256];
 	if (gethostname(hostname, sizeof(hostname)))
 	{
-		DEBUG_LOG(("Failed call to gethostname; WSAGetLastError returned %d", WSAGetLastError()));
+		engine::debug::log_info("Failed call to gethostname; WSAGetLastError returned %d", WSAGetLastError());
 		return nullptr;
 	}
-	DEBUG_LOG(("Hostname is '%s'", hostname));
+	engine::debug::log_info("Hostname is '%s'", hostname);
 
 	// get host information from the host name
 	HOSTENT* hostEnt = gethostbyname(hostname);
 	if (hostEnt == nullptr)
 	{
-		DEBUG_LOG(("Failed call to gethostbyname; WSAGetLastError returned %d", WSAGetLastError()));
+		engine::debug::log_info("Failed call to gethostbyname; WSAGetLastError returned %d", WSAGetLastError());
 		return nullptr;
 	}
 
 	// sanity-check the length of the IP adress
 	if (hostEnt->h_length != 4)
 	{
-		DEBUG_LOG(("gethostbyname returns oddly-sized IP addresses!"));
+		engine::debug::log_info("gethostbyname returns oddly-sized IP addresses!");
 		return nullptr;
 	}
 
@@ -135,7 +136,7 @@ void IPEnumeration::addNewIP( UnsignedByte a, UnsignedByte b, UnsignedByte c, Un
 	newIP->setIPstring(str);
 	newIP->setIP(ip);
 
-	DEBUG_LOG(("IP: 0x%8.8X (%s)", ip, str.str()));
+	engine::debug::log_info("IP: 0x%8.8X (%s)", ip, str.str());
 
 	// Add the IP to the list in ascending order
 	if (!m_IPlist)
@@ -186,7 +187,7 @@ AsciiString IPEnumeration::getMachineName()
 	char hostname[256];
 	if (gethostname(hostname, sizeof(hostname)))
 	{
-		DEBUG_LOG(("Failed call to gethostname; WSAGetLastError returned %d", WSAGetLastError()));
+		engine::debug::log_info("Failed call to gethostname; WSAGetLastError returned %d", WSAGetLastError());
 		return "";
 	}
 

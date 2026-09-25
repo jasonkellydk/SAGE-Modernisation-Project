@@ -42,7 +42,8 @@
 //
 //-----------------------------------------------------------------------------
 ///////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/CriticalSection.h"
 #include "WWLib/utf8.h"
@@ -57,9 +58,9 @@
 void UnicodeString::validate() const
 {
 	if (!m_data) return;
-	DEBUG_ASSERTCRASH(m_data->m_refCount > 0, ("m_refCount is zero"));
-	DEBUG_ASSERTCRASH(m_data->m_numCharsAllocated > 0, ("m_numCharsAllocated is zero"));
-	DEBUG_ASSERTCRASH(wcslen(m_data->peek())+1 <= m_data->m_numCharsAllocated,("str is too long for storage"));
+	engine::debug::invariant((m_data->m_refCount > 0), "m_data->m_refCount > 0", __FILE__, __LINE__, "m_refCount is zero");
+	engine::debug::invariant((m_data->m_numCharsAllocated > 0), "m_data->m_numCharsAllocated > 0", __FILE__, __LINE__, "m_numCharsAllocated is zero");
+	engine::debug::invariant((wcslen(m_data->peek())+1 <= m_data->m_numCharsAllocated), "wcslen(m_data->peek())+1 <= m_data->m_numCharsAllocated", __FILE__, __LINE__, "str is too long for storage");
 }
 #endif
 
@@ -87,7 +88,7 @@ void UnicodeString::ensureUniqueBufferOfSize(int numCharsNeeded, Bool preserveDa
 		if (strToCopy)
 		{
 			// TheSuperHackers @fix Mauller 04/04/2025 Replace wcscpy with safer memmove as memory regions can overlap when part of string is copied to itself
-			DEBUG_ASSERTCRASH(usableNumChars <= wcslen(strToCopy), ("strToCopy is too small"));
+			engine::debug::invariant((usableNumChars <= wcslen(strToCopy)), "usableNumChars <= wcslen(strToCopy)", __FILE__, __LINE__, "strToCopy is too small");
 			memmove(m_data->peek(), strToCopy, usableNumChars * sizeof(WideChar));
 			m_data->peek()[usableNumChars] = 0;
 		}
@@ -96,8 +97,8 @@ void UnicodeString::ensureUniqueBufferOfSize(int numCharsNeeded, Bool preserveDa
 		return;
 	}
 
-	DEBUG_ASSERTCRASH(TheDynamicMemoryAllocator != nullptr, ("Cannot use dynamic memory allocator before its initialization. Check static initialization order."));
-	DEBUG_ASSERTCRASH(numCharsNeeded <= MAX_LEN, ("UnicodeString::ensureUniqueBufferOfSize exceeds max string length %d with requested length %d", MAX_LEN, numCharsNeeded));
+	engine::debug::invariant((TheDynamicMemoryAllocator != nullptr), "TheDynamicMemoryAllocator != nullptr", __FILE__, __LINE__, "Cannot use dynamic memory allocator before its initialization. Check static initialization order.");
+	engine::debug::invariant((numCharsNeeded <= MAX_LEN), "numCharsNeeded <= MAX_LEN", __FILE__, __LINE__, "UnicodeString::ensureUniqueBufferOfSize exceeds max string length %d with requested length %d", MAX_LEN, numCharsNeeded);
 	int minBytes = sizeof(UnicodeStringData) + numCharsNeeded*sizeof(WideChar);
 	int actualBytes = TheDynamicMemoryAllocator->getActualAllocationSize(minBytes);
 	UnicodeStringData* newData = (UnicodeStringData*)TheDynamicMemoryAllocator->allocateBytesDoNotZero(actualBytes, "STR_UnicodeString::ensureUniqueBufferOfSize");
@@ -116,7 +117,7 @@ void UnicodeString::ensureUniqueBufferOfSize(int numCharsNeeded, Bool preserveDa
 	// or self-cats will work correctly.
 	if (strToCopy)
 	{
-		DEBUG_ASSERTCRASH(usableNumChars <= wcslen(strToCopy), ("strToCopy is too small"));
+		engine::debug::invariant((usableNumChars <= wcslen(strToCopy)), "usableNumChars <= wcslen(strToCopy)", __FILE__, __LINE__, "strToCopy is too small");
 		wcsncpy(newData->peek(), strToCopy, usableNumChars);
 		newData->peek()[usableNumChars] = 0;
 	}
@@ -212,7 +213,7 @@ void UnicodeString::set(const WideChar* s, int len)
 WideChar* UnicodeString::getBufferForRead(Int len)
 {
 	validate();
-	DEBUG_ASSERTCRASH(len>0, ("No need to allocate 0 len strings."));
+	engine::debug::invariant((len>0), "len>0", __FILE__, __LINE__, "No need to allocate 0 len strings.");
 	ensureUniqueBufferOfSize(len + 1, false, nullptr, nullptr);
 	validate();
 	return peek();
@@ -426,7 +427,7 @@ void UnicodeString::format_va(const WideChar* format, va_list args)
 	}
 	else
 	{
-		DEBUG_CRASH(("UnicodeString::format_va failed with code:%d", result));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "UnicodeString::format_va failed with code:%d", result);
 	}
 }
 

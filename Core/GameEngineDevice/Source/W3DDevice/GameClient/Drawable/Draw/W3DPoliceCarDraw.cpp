@@ -56,12 +56,12 @@ W3DDynamicLight *W3DPoliceCarDraw::createDynamicLight()
 	{
 
 		light->setEnabled( TRUE );
-		light->Set_Ambient( Vector3( 0.0f, 0.0f, 0.0f ) );
+		light->Set_Ambient({0.0f, 0.0f, 0.0f});
 		// Use all ambient, and no diffuse.  This produces a circle of light on
 		// even and uneven ground.  Diffuse lighting shows up ground unevenness, which looks
 		// funny on a searchlight.  So  no diffuse.  jba.
-		light->Set_Diffuse( Vector3( 0.0f, 0.0f, 0.0f ) );
-		light->Set_Position( Vector3( 0.0f, 0.0f, 0.0f ) );
+		light->Set_Diffuse({0.0f, 0.0f, 0.0f});
+		light->Set_Position({0.0f, 0.0f, 0.0f});
 		light->Set_Far_Attenuation_Range( 5, 15 );
 
 	}
@@ -100,7 +100,7 @@ W3DPoliceCarDraw::~W3DPoliceCarDraw()
 
 //-------------------------------------------------------------------------------------------------
 //-------------------------------------------------------------------------------------------------
-void W3DPoliceCarDraw::doDrawModule(const Matrix3D* transformMtx)
+void W3DPoliceCarDraw::doDrawModule(const Engine::Math::AffineTransform3* transform)
 {
 	const Real floatAmt = 8.0f;
 
@@ -151,12 +151,12 @@ void W3DPoliceCarDraw::doDrawModule(const Matrix3D* transformMtx)
 	if( m_light )
 	{
 		Coord3D pos = *getDrawable()->getPosition();
-		m_light->Set_Diffuse( Vector3( red, green, blue) );
-		m_light->Set_Ambient( Vector3( red/2, green/2, blue/2) );
+		m_light->Set_Diffuse({red, green, blue});
+		m_light->Set_Ambient({red/2, green/2, blue/2});
 		m_light->Set_Far_Attenuation_Range( 3, 20 );
-		m_light->Set_Position( Vector3( pos.x,pos.y,pos.z+floatAmt ) );
+		m_light->Set_Position({pos.x, pos.y, pos.z + floatAmt});
 	}
-	W3DTruckDraw::doDrawModule(transformMtx);
+	W3DTruckDraw::doDrawModule(transform);
 }
 
 

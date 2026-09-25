@@ -27,7 +27,8 @@
 // Desc:   Update module to handle demo trap proximity triggering.
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #define DEFINE_WEAPONSLOTTYPE_NAMES
 
@@ -109,7 +110,7 @@ void DemoTrapUpdate::onObjectCreated()
 			data->m_detonationWeaponSlot == data->m_manualModeWeaponSlot ||
 			data->m_proximityModeWeaponSlot == data->m_manualModeWeaponSlot )
 	{
-		DEBUG_CRASH( ("The demo trap requires three weaponslots: One for each of the detonation mode, proximity mode, and manual mode.") );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "The demo trap requires three weaponslots: One for each of the detonation mode, proximity mode, and manual mode.");
 	}
 
 	getObject()->setWeaponSetFlag( WEAPONSET_VETERAN );

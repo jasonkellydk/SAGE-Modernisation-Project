@@ -16,7 +16,8 @@
 **	along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/ReplaySimulation.h"
 
@@ -96,7 +97,7 @@ int ReplaySimulation::simulateReplaysInThisProcess(const std::vector<AsciiString
 							realTimeSec/60, realTimeSec%60, gameTimeSec/60, gameTimeSec%60, totalTimeSec/60, totalTimeSec%60);
 					fflush(stdout);
 				}
-				TheGameLogic->UPDATE();
+				TheGameLogic->update();
 				if (TheRecorder->sawCRCMismatch())
 				{
 					numErrors++;
@@ -189,8 +190,8 @@ int ReplaySimulation::simulateReplaysInWorkerProcesses(const std::vector<AsciiSt
 		Sleep(100);
 	}
 
-	DEBUG_ASSERTCRASH(filenamePositionStarted == filenames.size(), ("inconsistent file position 1"));
-	DEBUG_ASSERTCRASH(filenamePositionDone == filenames.size(), ("inconsistent file position 2"));
+	engine::debug::invariant((filenamePositionStarted == filenames.size()), "filenamePositionStarted == filenames.size()", __FILE__, __LINE__, "inconsistent file position 1");
+	engine::debug::invariant((filenamePositionDone == filenames.size()), "filenamePositionDone == filenames.size()", __FILE__, __LINE__, "inconsistent file position 2");
 
 	printf("Simulation of all replays completed. Errors occurred: %d\n", numErrors);
 

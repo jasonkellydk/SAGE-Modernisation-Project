@@ -37,6 +37,8 @@
 
 #pragma once
 
+#include <float.h>
+
 #include "always.h"
 #include "BITTYPE.h"
 #include "iostruct.h"
@@ -372,7 +374,7 @@ enum {
 				W3D_CHUNK_TEXTURE_STAGE					=0x00000048,	// wrapper around a texture stage.
 					W3D_CHUNK_TEXTURE_IDS				=0x00000049,	// single or per-tri array of uint32 texture indices (check chunk size)
 					W3D_CHUNK_STAGE_TEXCOORDS			=0x0000004A,	// per-vertex texture coordinates (array of W3dTexCoordStruct's)
-					W3D_CHUNK_PER_FACE_TEXCOORD_IDS	=0x0000004B,	// indices to W3D_CHUNK_STAGE_TEXCOORDS, (array of Vector3i)
+					W3D_CHUNK_PER_FACE_TEXCOORD_IDS	=0x0000004B,	// indices to W3D_CHUNK_STAGE_TEXCOORDS, three indices per face
 
 
 		W3D_CHUNK_DEFORM									=0x00000058,	// mesh deform or 'damage' information.
@@ -1939,7 +1941,7 @@ struct W3dAggregateMiscInfo
 ********************************************************************************/
 
 #define W3D_CURRENT_HLOD_VERSION			W3D_MAKE_VERSION(1,0)
-#define NO_MAX_SCREEN_SIZE					WWMATH_FLOAT_MAX
+#define NO_MAX_SCREEN_SIZE					FLT_MAX
 
 struct W3dHLodHeaderStruct
 {

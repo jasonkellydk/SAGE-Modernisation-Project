@@ -34,6 +34,7 @@
 #include "Common/Science.h"
 #include "GameLogic/Module/LaserUpdate.h"
 #include "GameLogic/Module/SpecialPowerUpdateModule.h"
+import Engine.Core.Math.AffineTransform3;
 
 // FORWARD REFERENCES /////////////////////////////////////////////////////////////////////////////
 class SpecialPowerModule;
@@ -200,7 +201,7 @@ protected:
 	AudioEventRTS		m_firingToIdleSound;
 	AudioEventRTS		m_annihilationSound;
 
-	Matrix3D				m_outerNodeOrientations[ MAX_OUTER_NODES ];
+	Engine::Math::AffineTransform3 m_outerNodeOrientations[MAX_OUTER_NODES];
 
 	Coord3D					m_outerNodePositions[ MAX_OUTER_NODES ];
 	Coord3D					m_connectorNodePosition;

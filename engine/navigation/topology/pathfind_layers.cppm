@@ -207,7 +207,7 @@ void PathfindLayer::allocateCells(const IRegion2D *extent)
  */
 void PathfindLayer::allocateCellsForWallLayer(const IRegion2D *extent, ObjectID *wallPieces, Int numPieces)
 {
-	DEBUG_ASSERTCRASH(m_layer==LAYER_WALL, ("Wrong layer for wall."));
+	engine::debug::invariant((m_layer==LAYER_WALL), "m_layer==LAYER_WALL", __FILE__, __LINE__, "Wrong layer for wall.");
 	if (m_layer != LAYER_WALL) return;
 	Region2D bridgeBounds;
 
@@ -300,9 +300,9 @@ void PathfindLayer::classifyCells()
 				PathfindCell *cell = &m_layerCells[i][j];
 				if (cell->getConnectLayer() == LAYER_GROUND) {
 					PathfindCell *groundCell = TheAI->pathfinder()->getCell(LAYER_GROUND, i+m_xOrigin, j+m_yOrigin);
-					DEBUG_ASSERTCRASH(groundCell, ("Should have cell."));
+					engine::debug::invariant((groundCell), "groundCell", __FILE__, __LINE__, "Should have cell.");
 					if (groundCell) {
-						DEBUG_ASSERTCRASH(groundCell->getConnectLayer()==m_layer, ("Should connect to this layer.jba."));
+						engine::debug::invariant((groundCell->getConnectLayer()==m_layer), "groundCell->getConnectLayer()==m_layer", __FILE__, __LINE__, "Should connect to this layer.jba.");
 						groundCell->setConnectLayer(LAYER_INVALID); // disconnect it.
 					}
 				}
@@ -317,7 +317,7 @@ void PathfindLayer::classifyCells()
  */
 void PathfindLayer::classifyWallCells(ObjectID *wallPieces, Int numPieces)
 {
-	DEBUG_ASSERTCRASH(m_layer==LAYER_WALL, ("Wrong layer for wall."));
+	engine::debug::invariant((m_layer==LAYER_WALL), "m_layer==LAYER_WALL", __FILE__, __LINE__, "Wrong layer for wall.");
 	if (m_layer != LAYER_WALL) return;
 	if (m_layerCells == nullptr) return;
 
@@ -338,9 +338,9 @@ void PathfindLayer::classifyWallCells(ObjectID *wallPieces, Int numPieces)
 				PathfindCell *cell = &m_layerCells[i][j];
 				if (cell->getConnectLayer() == LAYER_GROUND) {
 					PathfindCell *groundCell = TheAI->pathfinder()->getCell(LAYER_GROUND, i+m_xOrigin, j+m_yOrigin);
-					DEBUG_ASSERTCRASH(groundCell, ("Should have cell."));
+					engine::debug::invariant((groundCell), "groundCell", __FILE__, __LINE__, "Should have cell.");
 					if (groundCell) {
-						DEBUG_ASSERTCRASH(groundCell->getConnectLayer()==m_layer, ("Should connect to this layer.jba."));
+						engine::debug::invariant((groundCell->getConnectLayer()==m_layer), "groundCell->getConnectLayer()==m_layer", __FILE__, __LINE__, "Should connect to this layer.jba.");
 						groundCell->setConnectLayer(LAYER_INVALID); // disconnect it.
 					}
 				}
@@ -403,7 +403,7 @@ ObjectID PathfindLayer::getBridgeID()
  */
 PathfindCell *PathfindLayer::getCell(Int x, Int y)
 {
-	DEBUG_ASSERTCRASH(m_layerCells, ("no data in layer, why get cells?"));
+	engine::debug::invariant((m_layerCells), "m_layerCells", __FILE__, __LINE__, "no data in layer, why get cells?");
 	if (m_layerCells==nullptr) {
 		return nullptr;
 	}

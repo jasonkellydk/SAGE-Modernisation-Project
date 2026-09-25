@@ -31,7 +31,8 @@
 //
 ///////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/GameLOD.h"
 #include "GameClient/TerrainVisual.h"
@@ -281,7 +282,7 @@ BenchProfile *GameLODManager::newBenchProfile()
 		return &m_benchProfiles[m_numBenchProfiles-1];
 	}
 
-	DEBUG_CRASH(( "GameLODManager::newBenchProfile - Too many profiles defined"));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "GameLODManager::newBenchProfile - Too many profiles defined");
 	return nullptr;
 }
 
@@ -295,7 +296,7 @@ LODPresetInfo *GameLODManager::newLODPreset(StaticGameLODLevel index)
 			return &m_lodPresets[index][m_numLevelPresets[index]-1];
 		}
 
-		DEBUG_CRASH(( "GameLODManager::newLODPreset - Too many presets defined for '%s'", TheGameLODManager->getStaticGameLODLevelName(index)));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "GameLODManager::newLODPreset - Too many presets defined for '%s'", TheGameLODManager->getStaticGameLODLevelName(index));
 	}
 
 	return nullptr;
@@ -430,7 +431,7 @@ Int GameLODManager::getStaticGameLODIndex(AsciiString name)
 			return i;
 	}
 
-	DEBUG_CRASH(( "GameLODManager::getGameLODIndex - Invalid LOD name '%s'", name.str() ));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "GameLODManager::getGameLODIndex - Invalid LOD name '%s'", name.str() );
 	return STATIC_GAME_LOD_UNKNOWN;
 }
 
@@ -467,7 +468,7 @@ void INI::parseStaticGameLODLevel( INI* ini, void * , void *store, const void*)
 			return;
 		}
 
-	DEBUG_CRASH(("invalid GameLODLevel token %s -- expected LOW/MEDIUM/HIGH",tok));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "invalid GameLODLevel token %s -- expected LOW/MEDIUM/HIGH",tok);
 	throw INI_INVALID_DATA;
 }
 
@@ -674,7 +675,7 @@ void INI::parseDynamicGameLODLevel( INI* ini, void * , void *store, const void*)
 			return;
 		}
 
-	DEBUG_CRASH(("invalid GameLODLevel token %s -- expected LOW/MEDIUM/HIGH",tok));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "invalid GameLODLevel token %s -- expected LOW/MEDIUM/HIGH",tok);
 	throw INI_INVALID_DATA;
 }
 
@@ -687,7 +688,7 @@ Int GameLODManager::getDynamicGameLODIndex(AsciiString name)
 			return i;
 	}
 
-	DEBUG_CRASH(( "GameLODManager::getGameLODIndex - Invalid LOD name '%s'", name.str() ));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "GameLODManager::getGameLODIndex - Invalid LOD name '%s'", name.str() );
 	return STATIC_GAME_LOD_UNKNOWN;
 }
 

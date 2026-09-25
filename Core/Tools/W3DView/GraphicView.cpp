@@ -24,13 +24,14 @@ import Graphics.Frame.Runtime;
 #include "W3DView.h"
 #include "GraphicView.h"
 #include "WW3D2/WW3D.h"
+import Engine.Core.Math.Quaternion;
+import Engine.Core.Math.AffineTransform3;
 #ifdef RTS_ZEROHOUR
 import Graphics.Frame.ToolFrame;
 #endif
 #include "Globals.h"
 #include "W3DViewDoc.h"
 #include <process.h>
-#include "WWMath/quat.h"
 #include "MainFrm.h"
 #include "Utils.h"
 #include "mmsystem.h"
@@ -49,7 +50,10 @@ import Graphics.Frame.ToolFrame;
 #include "WWAudio/SoundScene.h"
 #include "WWAudio/WWAudio.h"
 #include "WW3D2/MetalMap.h"
-#include "WWMath/matrix3.h"
+import engine.debug;
+
+#include <algorithm>
+#include <cmath>
 
 #ifdef RTS_DEBUG
 #define new DEBUG_NEW
@@ -62,6 +66,168 @@ static char THIS_FILE[] = __FILE__;
 //  Local Prototypes
 /////////////////////////////////////////////////////////////////////////
 void CALLBACK fnTimerCallback (UINT, UINT, DWORD_PTR, DWORD_PTR, DWORD_PTR);
+
+namespace
+{
+Engine::Math::Vector3 To_Core_Math(const Vector3 &value) noexcept
+{
+	return {value.X, value.Y, value.Z};
+}
+
+Engine::Math::AffineTransform3 To_Core_Math(const Matrix3D &value) noexcept
+{
+	Engine::Math::AffineTransform3 result;
+	for (unsigned row = 0; row < 3; ++row)
+		for (unsigned column = 0; column < 4; ++column)
+			result.elements[row * 4 + column] = value[row][column];
+	return result;
+}
+
+Engine::Math::Quaternion Quaternion_From_W3D(const Matrix3D &value) noexcept
+{
+	return Engine::Math::Quaternion::From_Rotation(To_Core_Math(value));
+}
+
+Matrix3D To_W3D(const Engine::Math::AffineTransform3 &value) noexcept
+{
+	Matrix3D result(1);
+	for (unsigned row = 0; row < 3; ++row)
+		for (unsigned column = 0; column < 4; ++column)
+			result[row][column] = value.elements[row * 4 + column];
+	return result;
+}
+
+// Row post-rotations of the legacy Matrix3D (Rotate_X/Y/Z(sin, cos)).
+void Legacy_Rotate_X(Engine::Math::AffineTransform3 &m, float s, float c) noexcept
+{
+	for (unsigned row = 0; row < 3; ++row) {
+		float *r = m[row];
+		const float tmp1 = r[1];
+		const float tmp2 = r[2];
+		r[1] = c * tmp1 + s * tmp2;
+		r[2] = -s * tmp1 + c * tmp2;
+	}
+}
+
+void Legacy_Rotate_Y(Engine::Math::AffineTransform3 &m, float s, float c) noexcept
+{
+	for (unsigned row = 0; row < 3; ++row) {
+		float *r = m[row];
+		const float tmp1 = r[0];
+		const float tmp2 = r[2];
+		r[0] = c * tmp1 - s * tmp2;
+		r[2] = s * tmp1 + c * tmp2;
+	}
+}
+
+void Legacy_Rotate_Z(Engine::Math::AffineTransform3 &m, float s, float c) noexcept
+{
+	for (unsigned row = 0; row < 3; ++row) {
+		float *r = m[row];
+		const float tmp1 = r[0];
+		const float tmp2 = r[1];
+		r[0] = c * tmp1 + s * tmp2;
+		r[1] = -s * tmp1 + c * tmp2;
+	}
+}
+
+// Legacy Matrix3D::Look_At: origin at 'position', -Z towards 'target', rolled
+// about the local Z axis by 'roll_radians'.
+Engine::Math::AffineTransform3 Camera_Look_At(Engine::Math::Vector3 position,
+	Engine::Math::Vector3 target, float roll_radians = 0.0F) noexcept
+{
+	const Engine::Math::Vector3 dir = (target - position).Normalized_Legacy();
+
+	const float len2 = std::sqrt(dir.x * dir.x + dir.y * dir.y);
+	const float sinp = dir.z;
+	const float cosp = len2;
+	float siny;
+	float cosy;
+	if (len2 != 0.0F) {
+		siny = dir.y / len2;
+		cosy = dir.x / len2;
+	} else {
+		siny = 0.0F;
+		cosy = 1.0F;
+	}
+
+	Engine::Math::AffineTransform3 transform;
+	transform.elements = {
+		0.0F, 0.0F, -1.0F, position.x,
+		-1.0F, 0.0F, 0.0F, position.y,
+		0.0F, 1.0F, 0.0F, position.z};
+
+	Legacy_Rotate_Y(transform, siny, cosy);
+	Legacy_Rotate_X(transform, sinp, cosp);
+	Legacy_Rotate_Z(transform, std::sin(-roll_radians), std::cos(-roll_radians));
+	return transform;
+}
+
+// Legacy axis lock: Build_Matrix3D(rotation), Get_X/Y/Z_Rotation (atan2 of the
+// matrix terms), Rotate_X/Y/Z of an identity matrix, Build_Quaternion.
+Engine::Math::Quaternion Lock_Rotation_To_Axis(const Engine::Math::Quaternion &rotation, int axis) noexcept
+{
+	const Engine::Math::AffineTransform3 matrix = rotation.To_Rotation_Transform();
+	Engine::Math::AffineTransform3 locked;
+	if (axis == 0) {
+		const float angle = static_cast<float>(std::atan2(matrix[2][1], matrix[1][1]));
+		Legacy_Rotate_X(locked, std::sin(angle), std::cos(angle));
+	} else if (axis == 1) {
+		const float angle = static_cast<float>(std::atan2(matrix[0][2], matrix[2][2]));
+		Legacy_Rotate_Y(locked, std::sin(angle), std::cos(angle));
+	} else {
+		const float angle = static_cast<float>(std::atan2(matrix[1][0], matrix[0][0]));
+		Legacy_Rotate_Z(locked, std::sin(angle), std::cos(angle));
+	}
+	return Engine::Math::Quaternion::From_Rotation(locked);
+}
+
+// Legacy Matrix3D::Is_Orthogonal.
+bool Is_Orthogonal(const Engine::Math::AffineTransform3 &m) noexcept
+{
+	constexpr float epsilon = 0.0001F;
+	const Engine::Math::Vector3 x{m[0][0], m[0][1], m[0][2]};
+	const Engine::Math::Vector3 y{m[1][0], m[1][1], m[1][2]};
+	const Engine::Math::Vector3 z{m[2][0], m[2][1], m[2][2]};
+
+	if (x.Dot(y) > epsilon) return false;
+	if (y.Dot(z) > epsilon) return false;
+	if (z.Dot(x) > epsilon) return false;
+
+	if (std::fabs(x.Length_Squared() - 1.0F) > epsilon) return false;
+	if (std::fabs(y.Length_Squared() - 1.0F) > epsilon) return false;
+	if (std::fabs(z.Length_Squared() - 1.0F) > epsilon) return false;
+
+	return true;
+}
+
+// Legacy Matrix3D::Re_Orthogonalize (the translation is kept unless the basis
+// degenerates, in which case the whole matrix becomes identity).
+void Re_Orthogonalize(Engine::Math::AffineTransform3 &m) noexcept
+{
+	constexpr float epsilon = 0.0001F;
+	Engine::Math::Vector3 x{m[0][0], m[0][1], m[0][2]};
+	Engine::Math::Vector3 y{m[1][0], m[1][1], m[1][2]};
+	Engine::Math::Vector3 z = x.Cross(y);
+	y = z.Cross(x);
+
+	float len = x.Length();
+	if (len < epsilon) { m = Engine::Math::AffineTransform3::Identity(); return; }
+	x *= 1.0F / len;
+
+	len = y.Length();
+	if (len < epsilon) { m = Engine::Math::AffineTransform3::Identity(); return; }
+	y *= 1.0F / len;
+
+	len = z.Length();
+	if (len < epsilon) { m = Engine::Math::AffineTransform3::Identity(); return; }
+	z *= 1.0F / len;
+
+	m[0][0] = x.x; m[0][1] = x.y; m[0][2] = x.z;
+	m[1][0] = y.x; m[1][1] = y.y; m[1][2] = y.z;
+	m[2][0] = z.x; m[2][1] = z.y; m[2][2] = z.z;
+}
+}
 
 
 IMPLEMENT_DYNCREATE(CGraphicView, CView)
@@ -89,7 +255,7 @@ CGraphicView::CGraphicView ()
 		m_CameraBonePosX (false),
 		m_UpdateCounter (0),
       m_allowedCameraRotation (FreeRotation),
-		m_ObjectCenter (0.0f, 0.0f, 0.0f)
+		m_ObjectCenter {0.0f, 0.0f, 0.0f}
 {
     // Get the windowed mode from the registry
     CString string_windowed = theApp.GetProfileString ("Config", "Windowed", "1");
@@ -224,11 +390,10 @@ CGraphicView::InitializeGraphicView ()
         if (m_pCamera)
         {
             // Create a transformation matrix
-            Matrix3D transform (1);
-	        transform.Translate (Vector3 (0.0F, 0.0F, 35.0F));
+            const auto transform = Engine::Math::AffineTransform3::From_Translation({0.0F, 0.0F, 35.0F});
 
 	        // Point the camera in this direction (I think)
-            m_pCamera->Set_Transform (transform);
+            m_pCamera->Set_Transform (To_W3D(transform));
         }
 
 		  //
@@ -493,7 +658,8 @@ CGraphicView::RepaintView
 		{
 			LightClass *pscene_light = doc->GetSceneLight();
 			Vector3 ambient,diffuse,l,v;
-			ambient=doc->GetScene()->Get_Ambient_Light();
+			const auto &scene_ambient = doc->GetScene()->Get_Ambient_Light();
+			ambient.Set(scene_ambient.x, scene_ambient.y, scene_ambient.z);
 			pscene_light->Get_Diffuse(&diffuse);
 			l=pscene_light->Get_Position();
 			l.Normalize();
@@ -544,7 +710,7 @@ CGraphicView::RepaintView
 
         // Finish out the rendering process
         WW3D::End_Render();
-        if (!Graphics::End_Tool_Frame()) DEBUG_LOG(("Viewer frame submission failed.\n"));
+        if (!Graphics::End_Tool_Frame()) engine::debug::log_info("Viewer frame submission failed.\n");
 
 
 		//
@@ -772,8 +938,8 @@ CGraphicView::OnLButtonUp
 }
 
 float minZoomAdjust = 0.0F;
-Vector3 sphereCenter;
-Quaternion rotation;
+Engine::Math::Vector3 sphereCenter;
+Engine::Math::Quaternion rotation;
 
 
 ////////////////////////////////////////////////////////////////////////////
@@ -806,7 +972,7 @@ CGraphicView::OnMouseMove
 	if (m_bMouseDown && m_bRMouseDown)
 	{
 		// Get the transformation matrix for the camera and its inverse
-		Matrix3D transform = m_pCamera->Get_Transform ();
+		Engine::Math::AffineTransform3 transform = To_Core_Math(m_pCamera->Get_Transform());
 
 		RECT rect;
 		GetClientRect (&rect);
@@ -821,16 +987,16 @@ CGraphicView::OnMouseMove
 		float pointY = (midPointY - (float)point.y) / midPointY;
 
 
-		Vector3 cameraPan = Vector3(-1.00F*m_CameraDistance*(pointX - lastPointX), -1.00F*m_CameraDistance*(pointY - lastPointY), 0.00F);
+		Engine::Math::Vector3 cameraPan{-m_CameraDistance * (pointX - lastPointX),
+			-m_CameraDistance * (pointY - lastPointY), 0.0F};
 
-		transform.Translate (cameraPan);
+		transform.Adjust_Translation(transform.Transform_Vector(cameraPan));
 
-		Matrix3x3 view = Build_Matrix3 (rotation);
-		Vector3 move = view * cameraPan;
+		Engine::Math::Vector3 move = rotation.Rotate_Vector(cameraPan);
 		sphereCenter += move;
 
 		// Move the camera back to get a good view of the object
-		m_pCamera->Set_Transform (transform);
+		m_pCamera->Set_Transform (To_W3D(transform));
 
 		m_lastPoint = point;
 	}
@@ -843,9 +1009,6 @@ CGraphicView::OnMouseMove
 			RECT rect;
 			GetClientRect (&rect);
 
-			Vector3 point_in_view;
-			Vector3 lastpoint_in_view;
-
 			float midPointX = float(rect.right >> 1);
 			float midPointY = float(rect.bottom >> 1);
 
@@ -855,26 +1018,29 @@ CGraphicView::OnMouseMove
 			float pointX = ((float)point.x - midPointX) / midPointX;
 			float pointY = (midPointY - (float)point.y) / midPointY;
 
-			Quaternion mouse_motion = Inverse(::Trackball(lastPointX, lastPointY, pointX, pointY, 0.8F));
-			Quaternion light_orientation;
-			Quaternion camera = Build_Quaternion(m_pCamera->Get_Transform());
-			Quaternion cur_light = Build_Quaternion(pSceneLight->Get_Transform());
+			Engine::Math::Quaternion mouse_motion = Engine::Math::Quaternion::Trackball_Drag(
+				{lastPointX, lastPointY}, {pointX, pointY}, 0.8F).Conjugate();
+			Engine::Math::Quaternion light_orientation;
+			Engine::Math::Quaternion camera = Quaternion_From_W3D(m_pCamera->Get_Transform());
+			Engine::Math::Quaternion cur_light = Quaternion_From_W3D(pSceneLight->Get_Transform());
 
 			light_orientation = camera;
 			light_orientation = light_orientation * mouse_motion;
-			light_orientation = light_orientation * Inverse(camera);
+			light_orientation = light_orientation * camera.Conjugate();
 			light_orientation = light_orientation * cur_light;
-			light_orientation.Normalize();
+			light_orientation = light_orientation.Normalized();
 
-			Vector3 to_center;
-			Matrix3D matrix = pSceneLight->Get_Transform();
-			Matrix3D::Inverse_Transform_Vector(matrix,sphereCenter,&to_center);
+			// Matrix3D::Inverse_Transform_Vector (orthogonal inverse)
+			const Engine::Math::AffineTransform3 light_transform = To_Core_Math(pSceneLight->Get_Transform());
+			const Engine::Math::Vector3 to_center =
+				light_transform.Orthogonal_Inverse().Transform_Point(sphereCenter);
 
-			Matrix3D light_tm(light_orientation, sphereCenter);
-			light_tm.Translate(-to_center);
+			Engine::Math::AffineTransform3 light_tm = light_orientation.To_Rotation_Transform();
+			light_tm.Set_Translation(sphereCenter);
+			light_tm.Adjust_Translation(light_tm.Transform_Vector(-to_center));
 
-			m_pLightMesh->Set_Transform(light_tm);
-			pSceneLight->Set_Transform(light_tm);
+			m_pLightMesh->Set_Transform(To_W3D(light_tm));
+			pSceneLight->Set_Transform(To_W3D(light_tm));
 		}
 
 		m_lastPoint = point;
@@ -892,22 +1058,22 @@ CGraphicView::OnMouseMove
 			CRect rect;
 			GetClientRect (&rect);
 			float deltay = (float(iDeltaY))/(float(rect.bottom - rect.top));
-			float adjustment = deltay * (m_ViewedSphere.Radius * 3.0F);
+	float adjustment = deltay * (m_ViewedSphere.radius * 3.0F);
 
 			// Determine the light's new position based on this factor
-			Matrix3D transform = pscene_light->Get_Transform ();
-			transform.Translate (Vector3 (0, 0, adjustment));
+			Engine::Math::AffineTransform3 transform = To_Core_Math(pscene_light->Get_Transform());
+			transform.Adjust_Translation(transform.Transform_Vector({0, 0, adjustment}));
 
 			// Determine what the distance from the light to the object
 			// would be with this new position
-			Vector3 light_pos = transform.Get_Translation ();
-			Vector3 obj_pos = prender_obj->Get_Position ();
+			const Engine::Math::Vector3 light_pos = transform.Translation();
+			const Engine::Math::Vector3 obj_pos = To_Core_Math(prender_obj->Get_Position());
 			float distance = (light_pos - obj_pos).Length ();
 
 			// If the new position is acceptable, move the light
-			if (distance > m_ViewedSphere.Radius) {
-				m_pLightMesh->Set_Transform (transform);
-				pscene_light->Set_Transform (transform);
+			if (distance > m_ViewedSphere.radius) {
+				m_pLightMesh->Set_Transform (To_W3D(transform));
+				pscene_light->Set_Transform (To_W3D(transform));
 			}
 		}
 
@@ -939,84 +1105,38 @@ CGraphicView::OnMouseMove
 
 				// Rotate around the object (orbit) using a 0.00F - 1.00F percentage of
 				// the mouse coordinates
-				rotation = ::Trackball (lastPointX, lastPointY, pointX, pointY, 0.8F);
+				rotation = Engine::Math::Quaternion::Trackball_Drag(
+					{lastPointX, lastPointY}, {pointX, pointY}, 0.8F);
 
 				// Do we want to 'lock-out' all rotation except X?
 				if (m_allowedCameraRotation == OnlyRotateX)
 				{
-#ifdef ALLOW_TEMPORARIES
-					Matrix3D tempMatrix = Build_Matrix3D (rotation);
-#else
-					Matrix3D tempMatrix;
-					Build_Matrix3D (rotation, tempMatrix);
-#endif
-					Matrix3D tempMatrix2 (1);
-
-					tempMatrix2.Rotate_X (tempMatrix.Get_X_Rotation ());
-					tempMatrix2.Set_Translation (tempMatrix.Get_Translation ());
-
-					rotation = Build_Quaternion (tempMatrix2);
+					rotation = Lock_Rotation_To_Axis(rotation, 0);
 				}
 				// Do we want to 'lock-out' all rotation except Y?
 				else if (m_allowedCameraRotation == OnlyRotateY)
 				{
-#ifdef ALLOW_TEMPORARIES
-					Matrix3D tempMatrix = Build_Matrix3D (rotation);
-#else
-					Matrix3D tempMatrix;
-					Build_Matrix3D (rotation, tempMatrix);
-#endif
-					Matrix3D tempMatrix2 (1);
-
-					tempMatrix2.Rotate_Y (tempMatrix.Get_Y_Rotation ());
-					tempMatrix2.Set_Translation (tempMatrix.Get_Translation ());
-
-					rotation = Build_Quaternion (tempMatrix2);
+					rotation = Lock_Rotation_To_Axis(rotation, 1);
 				}
 				// Do we want to 'lock-out' all rotation except Z?
 				else if (m_allowedCameraRotation == OnlyRotateZ)
 				{
-#ifdef ALLOW_TEMPORARIES
-					Matrix3D tempMatrix = Build_Matrix3D (rotation);
-#else
-					Matrix3D tempMatrix;
-					Build_Matrix3D (rotation, tempMatrix);
-#endif
-					Matrix3D tempMatrix2 (1);
-
-					tempMatrix2.Rotate_Z (tempMatrix.Get_Z_Rotation ());
-					tempMatrix2.Set_Translation (tempMatrix.Get_Translation ());
-
-					rotation = Build_Quaternion (tempMatrix2);
+					rotation = Lock_Rotation_To_Axis(rotation, 2);
 				}
 
 				// Get the transformation matrix for the camera and its inverse
-				Matrix3D transform = m_pCamera->Get_Transform ();
-				Matrix3D inverseMatrix;
-				transform.Get_Orthogonal_Inverse (inverseMatrix);
+				Engine::Math::AffineTransform3 transform = To_Core_Math(m_pCamera->Get_Transform());
+				const Engine::Math::AffineTransform3 inverseMatrix = transform.Orthogonal_Inverse();
+				const Engine::Math::Vector3 to_object = inverseMatrix.Transform_Point(sphereCenter);
 
-#ifdef ALLOW_TEMPORARIES
-				Vector3 to_object = inverseMatrix * sphereCenter;
-#else
-				Vector3 to_object;
-				inverseMatrix.mulVector3 (sphereCenter, to_object);
-#endif
-
-				transform.Translate (to_object);
-
-#ifdef ALLOW_TEMPORARIES
-				Matrix3D::Multiply (transform, Build_Matrix3D (rotation), &transform);
-#else
-				Matrix3D rotationMatrix;
-				Matrix3D::Multiply (transform, Build_Matrix3D (rotation, rotationMatrix), &transform);
-#endif
-
-				transform.Translate (-to_object);
+				transform.Adjust_Translation(transform.Transform_Vector(to_object));
+				transform.Post_Apply_Rotation(rotation.To_Rotation_Transform());
+				transform.Adjust_Translation(transform.Transform_Vector(-to_object));
 
 				// Rotate and translate the camera
-				m_pCamera->Set_Transform (transform);
+				m_pCamera->Set_Transform (To_W3D(transform));
 
-				doc->GetBackObjectCamera ()->Set_Transform (transform);
+				doc->GetBackObjectCamera ()->Set_Transform (To_W3D(transform));
 				doc->GetBackObjectCamera ()->Set_Position (Vector3 (0.00F, 0.00F, 0.00F));
 			}
 		}
@@ -1028,9 +1148,7 @@ CGraphicView::OnMouseMove
 		m_lastPoint = point;
 
 		// Get the transformation matrix for the camera and its inverse
-		Matrix3D transform = m_pCamera->Get_Transform ();
-
-		Vector3 distanceVectorZ = transform.Get_Z_Vector ();
+		Engine::Math::AffineTransform3 transform = To_Core_Math(m_pCamera->Get_Transform());
 		if (iDeltaY != 0)
 		{
 
@@ -1054,10 +1172,10 @@ CGraphicView::OnMouseMove
 			if ((m_CameraDistance + adjustment) > 0.00F)
 			{
 				m_CameraDistance += adjustment;
-				transform.Translate (Vector3 (0.0F, 0.0F, adjustment));
+				transform.Adjust_Translation(transform.Transform_Vector({0.0F, 0.0F, adjustment}));
 
 				// Move the camera back to get a good view of the object
-				m_pCamera->Set_Transform (transform);
+				m_pCamera->Set_Transform (To_W3D(transform));
 
 				// Get the main window of our app
 				CMainFrame *pCMainWnd = (CMainFrame *)::AfxGetMainWnd ();
@@ -1065,7 +1183,7 @@ CGraphicView::OnMouseMove
 				{
 					// Ensure the background camera matches the main camera
 					CW3DViewDoc *doc = (CW3DViewDoc *)GetDocument();
-					doc->GetBackObjectCamera ()->Set_Transform (transform);
+					doc->GetBackObjectCamera ()->Set_Transform (To_W3D(transform));
 					doc->GetBackObjectCamera ()->Set_Position (Vector3 (0.00F, 0.00F, 0.00F));
 
 					// Update the current object if necessary
@@ -1100,74 +1218,63 @@ void
 CGraphicView::Reset_Camera_To_Display_Emitter (ParticleEmitterClass &emitter)
 {
 	// Get some of the emitter settings
-	Vector3 velocity = emitter.Get_Start_Velocity ();
-	const Vector3 &acceleration = emitter.Get_Acceleration ();
+	const Engine::Math::Vector3 velocity = To_Core_Math(emitter.Get_Start_Velocity());
+	const Engine::Math::Vector3 acceleration = To_Core_Math(emitter.Get_Acceleration());
 	float lifetime = emitter.Get_Lifetime ();
 
-	// If the velocity is 0, then use the randomizer as the default velocity
-	bool use_vel_rand = false;
-	if ((velocity.X == 0) && (velocity.Y == 0) && (velocity.Z == 0)) {
-		//velocity.Set (emitter.Get_Velocity_Random (), emitter.Get_Velocity_Random (), emitter.Get_Velocity_Random ());
-		//use_vel_rand = true;
-	}
-
 	// Determine what the max extent covered by a particle will be.
-	Vector3 distance = (velocity * lifetime) + ((acceleration * (lifetime * lifetime)) / 2.0F);
+	Engine::Math::Vector3 distance = (velocity * lifetime) + ((acceleration * (lifetime * lifetime)) / 2.0F);
 
 	// Do we need to take into account acceleration?
-	Vector3 distance_maxima (0, 0, 0);
-	if ((acceleration.X != 0) || (acceleration.Y != 0) || (acceleration.Z != 0)) {
+	Engine::Math::Vector3 distance_maxima{};
+	if ((acceleration.x != 0) || (acceleration.y != 0) || (acceleration.z != 0)) {
 
 		// Determine at what time (for each x,y,z) a maxima will occur.
-		Vector3 time_max (0, 0, 0);
-		time_max.X = (acceleration.X != 0) ? ((-velocity.X) / acceleration.X) : 0.00F;
-		time_max.Y = (acceleration.Y != 0) ? ((-velocity.Y) / acceleration.Y) : 0.00F;
-		time_max.Z = (acceleration.Z != 0) ? ((-velocity.Z) / acceleration.Z) : 0.00F;
+		Engine::Math::Vector3 time_max{};
+		time_max.x = (acceleration.x != 0) ? ((-velocity.x) / acceleration.x) : 0.00F;
+		time_max.y = (acceleration.y != 0) ? ((-velocity.y) / acceleration.y) : 0.00F;
+		time_max.z = (acceleration.z != 0) ? ((-velocity.z) / acceleration.z) : 0.00F;
 
 		// Is there a maxima for the X direction?
-		if ((time_max.X >= 0.0F) && (time_max.X < lifetime)) {
-			distance_maxima.X = (velocity.X * time_max.X) + ((acceleration.X * (time_max.X * time_max.X)) / 2.0F);
-			distance_maxima.X = fabs (distance_maxima.X);
+		if ((time_max.x >= 0.0F) && (time_max.x < lifetime)) {
+			distance_maxima.x = (velocity.x * time_max.x) + ((acceleration.x * (time_max.x * time_max.x)) / 2.0F);
+			distance_maxima.x = std::abs(distance_maxima.x);
 		}
 
 		// Is there a maxima for the Y direction?
-		if ((time_max.Y >= 0.0F) && (time_max.Y < lifetime)) {
-			distance_maxima.Y = (velocity.Y * time_max.Y) + ((acceleration.Y * (time_max.Y * time_max.Y)) / 2.0F);
-			distance_maxima.Y = fabs (distance_maxima.Y);
+		if ((time_max.y >= 0.0F) && (time_max.y < lifetime)) {
+			distance_maxima.y = (velocity.y * time_max.y) + ((acceleration.y * (time_max.y * time_max.y)) / 2.0F);
+			distance_maxima.y = std::abs(distance_maxima.y);
 		}
 
 		// Is there a maxima for the Z direction?
-		if ((time_max.Z >= 0.0F) && (time_max.Z < lifetime)) {
-			distance_maxima.Z = (velocity.Z * time_max.Z) + ((acceleration.Z * (time_max.Z * time_max.Z)) / 2.0F);
-			distance_maxima.Z = fabs (distance_maxima.Z);
+		if ((time_max.z >= 0.0F) && (time_max.z < lifetime)) {
+			distance_maxima.z = (velocity.z * time_max.z) + ((acceleration.z * (time_max.z * time_max.z)) / 2.0F);
+			distance_maxima.z = std::abs(distance_maxima.z);
 		}
 	}
 
-	distance.X = fabs (distance.X);
-	distance.Y = fabs (distance.Y);
-	distance.Z = fabs (distance.Z);
+	distance.x = std::abs(distance.x);
+	distance.y = std::abs(distance.y);
+	distance.z = std::abs(distance.z);
 
 	// Determine what the maximum distance convered in a single direction is
-	float max_dist = max (distance.X, distance.Y);
-	max_dist = max (max_dist, distance.Z);
-	max_dist = max (max_dist, distance_maxima.X);
-	max_dist = max (max_dist, distance_maxima.Y);
-	max_dist = max (max_dist, distance_maxima.Z);
+	float max_dist = (std::max)(distance.x, distance.y);
+	max_dist = (std::max)(max_dist, distance.z);
+	max_dist = (std::max)(max_dist, distance_maxima.x);
+	max_dist = (std::max)(max_dist, distance_maxima.y);
+	max_dist = (std::max)(max_dist, distance_maxima.z);
 
-	Vector3 center = distance / 2.00F;
-	center.X = max (center.X, distance_maxima.X / 2.00F);
-	center.Y = max (center.Y, distance_maxima.Y / 2.00F);
-	center.Z = max (center.Z, distance_maxima.Z / 2.00F);
-
-	if (use_vel_rand) {
-		center.Set (0, 0, 0);
-	}
+	Engine::Math::Vector3 center = distance / 2.00F;
+	center.x = (std::max)(center.x, distance_maxima.x / 2.00F);
+	center.y = (std::max)(center.y, distance_maxima.y / 2.00F);
+	center.z = (std::max)(center.z, distance_maxima.z / 2.00F);
 
 	// Build a logical sphere from the emitters settings
 	// that should provide a good viewing distance for the emitter.
-	SphereClass sphere;
-	sphere.Center = center;
-	sphere.Radius = max (emitter.Get_Particle_Size () * 5, (max_dist * 3.0F) / 5.0F);
+	Engine::Math::Sphere3 sphere;
+	sphere.center = center;
+	sphere.radius = (std::max)(emitter.Get_Particle_Size () * 5, (max_dist * 3.0F) / 5.0F);
 
 	// View this sphere
 	Reset_Camera_To_Display_Sphere (sphere);
@@ -1180,25 +1287,25 @@ CGraphicView::Reset_Camera_To_Display_Emitter (ParticleEmitterClass &emitter)
 //
 ////////////////////////////////////////////////////////////////////////////
 void
-CGraphicView::Reset_Camera_To_Display_Sphere (SphereClass &sphere)
+CGraphicView::Reset_Camera_To_Display_Sphere (const Engine::Math::Sphere3 &sphere)
 {
 	// Calculate a default camera distance to view this sphere
-	m_CameraDistance = sphere.Radius * 3.00F;
+	m_CameraDistance = sphere.radius * 3.00F;
 	m_CameraDistance = (m_CameraDistance < 1.0F) ? 1.0F : m_CameraDistance;
 
 	// Calculate a transform that is the appropriate distance
 	// from the sphere center and is looking at the center
-	Matrix3D transform (1);
-	transform.Look_At (sphere.Center + Vector3 (m_CameraDistance, 0, 0), sphere.Center, 0);
+	Engine::Math::AffineTransform3 transform = Camera_Look_At(
+		sphere.center + Engine::Math::Vector3{m_CameraDistance, 0, 0}, sphere.center);
 
 	// Record some variables for later use
-	sphereCenter	= sphere.Center;
+	sphereCenter	= sphere.center;
 	m_ObjectCenter	= sphereCenter;
 	minZoomAdjust	= m_CameraDistance / 190.0F;
-	rotation			= Build_Quaternion (transform);
+	rotation			= Engine::Math::Quaternion::From_Rotation(transform);
 
 	// Move the camera back to get a good view of the object
-	m_pCamera->Set_Transform (transform);
+	m_pCamera->Set_Transform (To_W3D(transform));
 
 	// Make the same adjustment for the scene light
 	CW3DViewDoc* doc = (CW3DViewDoc *)GetDocument();
@@ -1206,11 +1313,10 @@ CGraphicView::Reset_Camera_To_Display_Sphere (SphereClass &sphere)
 	if ((m_pLightMesh != nullptr) && (pSceneLight != nullptr)) {
 
 		// Reposition the light and its 'mesh' as appropriate
-		transform.Make_Identity ();
-		transform.Set_Translation (sphereCenter);
-		transform.Translate (0, 0, 0.7F * m_CameraDistance);
-		pSceneLight->Set_Transform (transform);
-		m_pLightMesh->Set_Transform (transform);
+		Engine::Math::AffineTransform3 light_transform = Engine::Math::AffineTransform3::From_Translation(sphereCenter);
+		light_transform.Adjust_Translation({0, 0, 0.7F * m_CameraDistance});
+		pSceneLight->Set_Transform (To_W3D(light_transform));
+		m_pLightMesh->Set_Transform (To_W3D(light_transform));
 
 		// Scale the light's mesh appropriately
 		static float last_scale = 1.0F;
@@ -1236,7 +1342,7 @@ CGraphicView::Reset_Camera_To_Display_Sphere (SphereClass &sphere)
 	}
 
 	// Reset the background camera to match the main camera
-	doc->GetBackObjectCamera ()->Set_Transform (transform);
+	doc->GetBackObjectCamera ()->Set_Transform (To_W3D(transform));
 	doc->GetBackObjectCamera ()->Set_Position (Vector3 (0.00F, 0.00F, 0.00F));
 
 	// Update the camera distance in the status bar
@@ -1260,7 +1366,8 @@ void
 CGraphicView::Reset_Camera_To_Display_Object (RenderObjClass &render_object)
 {
 	// Reset the camera to get a good look at this object's bounding sphere
-	SphereClass sp = render_object.Get_Bounding_Sphere ();
+	const auto render_sphere = render_object.Get_Bounding_Sphere ();
+	Engine::Math::Sphere3 sp{To_Core_Math(render_sphere.Center), render_sphere.Radius};
 	Reset_Camera_To_Display_Sphere (sp);
 
 	// Should we update the camera's position as well?
@@ -1268,20 +1375,16 @@ CGraphicView::Reset_Camera_To_Display_Object (RenderObjClass &render_object)
 	if (index > 0) {
 
 		// Convert the bone's transform into a camera transform
-		Matrix3D	transform = render_object.Get_Bone_Transform (index);
+		Engine::Math::AffineTransform3 transform = To_Core_Math(render_object.Get_Bone_Transform (index));
 		if (m_CameraBonePosX) {
-			Matrix3D tmp = transform;
-			Matrix3D cam_transform (Vector3 (0, -1, 0), Vector3 (0, 0, 1), Vector3 (-1, 0, 0), Vector3 (0, 0, 0));
-#ifdef ALLOW_TEMPORARIES
-			transform = tmp * cam_transform;
-#else
-			transform.mul(tmp, cam_transform);
-#endif
+			const Engine::Math::AffineTransform3 camera_transform = Engine::Math::AffineTransform3::From_Basis(
+				{0, -1, 0}, {0, 0, 1}, {-1, 0, 0});
+			transform = Compose(transform, camera_transform);
 		}
 
 		// Pass the new transform onto the camera
 		CameraClass *camera = GetCamera ();
-		camera->Set_Transform (transform);
+		camera->Set_Transform (To_W3D(transform));
 	}
 
 	// Update the polygon count in the main window
@@ -1459,55 +1562,61 @@ CGraphicView::SetCameraPos (CAMERA_POS cameraPos)
     RenderObjClass *pCRenderObj = doc->GetDisplayedObject ();
     if (pCRenderObj)
     {
-        SphereClass sphere = m_ViewedSphere;
+        Engine::Math::Sphere3 sphere = m_ViewedSphere;
 
-        m_CameraDistance = sphere.Radius * 3.00F;
+        m_CameraDistance = sphere.radius * 3.00F;
         m_CameraDistance = (m_CameraDistance < 1.0F) ? 1.0F : m_CameraDistance;
         m_CameraDistance = (m_CameraDistance > 400.0F) ? 400.0F : m_CameraDistance;
 
-        Matrix3D transform (1);
+		Engine::Math::AffineTransform3 transform;
 
         switch (cameraPos)
         {
             case CameraFront:
             {
-                transform.Look_At (sphere.Center + Vector3 (m_CameraDistance, 0.00F, 0.00F), sphere.Center, 0);
+				transform = Camera_Look_At(sphere.center + Engine::Math::Vector3{m_CameraDistance, 0, 0},
+					sphere.center);
             }
             break;
 
             case CameraBack:
             {
-                transform.Look_At (sphere.Center + Vector3 (-m_CameraDistance, 0.00F, 0.00F), sphere.Center, 0);
+				transform = Camera_Look_At(sphere.center + Engine::Math::Vector3{-m_CameraDistance, 0, 0},
+					sphere.center);
             }
             break;
 
             case CameraLeft:
             {
-                transform.Look_At (sphere.Center + Vector3 (0.00F, -m_CameraDistance, 0.00F), sphere.Center, 0);
+				transform = Camera_Look_At(sphere.center + Engine::Math::Vector3{0, -m_CameraDistance, 0},
+					sphere.center);
             }
             break;
 
             case CameraRight:
             {
-                transform.Look_At (sphere.Center + Vector3 (0.00F, m_CameraDistance, 0.00F), sphere.Center, 0);
+				transform = Camera_Look_At(sphere.center + Engine::Math::Vector3{0, m_CameraDistance, 0},
+					sphere.center);
             }
             break;
 
             case CameraTop:
             {
-                transform.Look_At (sphere.Center + Vector3 (0.00F, 0.00F, m_CameraDistance), sphere.Center, 3.1415926535F);
+				transform = Camera_Look_At(sphere.center + Engine::Math::Vector3{0, 0, m_CameraDistance},
+					sphere.center, 3.1415926535F);
             }
             break;
 
             case CameraBottom:
             {
-                transform.Look_At (sphere.Center + Vector3 (0.00F, 0.00F, -m_CameraDistance), sphere.Center, 3.1415926535F);
+				transform = Camera_Look_At(sphere.center + Engine::Math::Vector3{0, 0, -m_CameraDistance},
+					sphere.center, 3.1415926535F);
             }
             break;
         }
 
 	    // Move the camera back to get a good view of the object
-        m_pCamera->Set_Transform (transform);
+	    m_pCamera->Set_Transform (To_W3D(transform));
 
         // Get the main window of our app
         CMainFrame *pCMainWnd = (CMainFrame *)::AfxGetMainWnd ();
@@ -1515,7 +1624,7 @@ CGraphicView::SetCameraPos (CAMERA_POS cameraPos)
         {
             CW3DViewDoc* doc = (CW3DViewDoc *)GetDocument();
 
-            doc->GetBackObjectCamera ()->Set_Transform (transform);
+	    doc->GetBackObjectCamera ()->Set_Transform (To_W3D(transform));
             doc->GetBackObjectCamera ()->Set_Position (Vector3 (0.00F, 0.00F, 0.00F));
 
             RenderObjClass *pCRenderObj = doc->GetDisplayedObject ();
@@ -1579,7 +1688,7 @@ CGraphicView::ResetObject ()
         if (pCRenderObj)
         {
             // Reset the rotation of the object
-            pCRenderObj->Set_Transform (Matrix3D(true));
+            pCRenderObj->Set_Transform (To_W3D(Engine::Math::AffineTransform3::Identity()));
         }
     }
 }
@@ -1613,32 +1722,32 @@ CGraphicView::Rotate_Object ()
 	if (prender_obj != nullptr)
 	{
 		// Get the current transform for the object
-		Matrix3D transform = prender_obj->Get_Transform ();
+	Engine::Math::AffineTransform3 transform = To_Core_Math(prender_obj->Get_Transform());
 
 		if ((m_objectRotation & RotateX) == RotateX) {
-			transform.Rotate_X (0.05F);
+			transform.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_X(0.05F));
 		} else if ((m_objectRotation & RotateXBack) == RotateXBack) {
-			transform.Rotate_X (-0.05F);
+			transform.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_X(-0.05F));
 		}
 
 		if ((m_objectRotation & RotateY) == RotateY) {
-			transform.Rotate_Y (-0.05F);
+			transform.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Y(-0.05F));
 		} else if ((m_objectRotation & RotateYBack) == RotateYBack) {
-			transform.Rotate_Y (0.05F);
+			transform.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Y(0.05F));
 		}
 
 		if ((m_objectRotation & RotateZ) == RotateZ) {
-			transform.Rotate_Z (0.05F);
+			transform.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Z(0.05F));
 		} else if ((m_objectRotation & RotateZBack) == RotateZBack) {
-			transform.Rotate_Z (-0.05F);
+			transform.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Z(-0.05F));
 		}
 
-		if (!transform.Is_Orthogonal()) {
-			transform.Re_Orthogonalize();
+		if (!Is_Orthogonal(transform)) {
+			Re_Orthogonalize(transform);
 		}
 
 		// Set the new transform for the object
-		prender_obj->Set_Transform (transform);
+		prender_obj->Set_Transform (To_W3D(transform));
 	}
 }
 
@@ -1658,51 +1767,48 @@ CGraphicView::Rotate_Light ()
 	LightClass *pscene_light = doc->GetSceneLight ();
 	RenderObjClass *prender_obj = doc->GetDisplayedObject ();
 	if ((pscene_light != nullptr) && (prender_obj != nullptr)) {
-		Matrix3D rotation_matrix (1);
+		Engine::Math::AffineTransform3 rotation_matrix;
 
 		// Build a rotation matrix that contains the x,y,z
 		// rotations we want to apply to the light
 		if ((m_LightRotation & RotateX) == RotateX) {
-			rotation_matrix.Rotate_X (0.05F);
+			rotation_matrix.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_X(0.05F));
 		} else if ((m_LightRotation & RotateXBack) == RotateXBack) {
-			rotation_matrix.Rotate_X (-0.05F);
+			rotation_matrix.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_X(-0.05F));
 		}
 
 		if ((m_LightRotation & RotateY) == RotateY) {
-			rotation_matrix.Rotate_Y (-0.05F);
+			rotation_matrix.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Y(-0.05F));
 		} else if ((m_LightRotation & RotateYBack) == RotateYBack) {
-			rotation_matrix.Rotate_Y (0.05F);
+			rotation_matrix.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Y(0.05F));
 		}
 
 		if ((m_LightRotation & RotateZ) == RotateZ) {
-			rotation_matrix.Rotate_Z (0.05F);
+			rotation_matrix.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Z(0.05F));
 		} else if ((m_LightRotation & RotateZBack) == RotateZBack) {
-			rotation_matrix.Rotate_Z (-0.05F);
+			rotation_matrix.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Z(-0.05F));
 		}
 
 		//
 		//	Now, use the rotation matrix to rotate the
 		// light 'around' the displayed object (in its coordinate system)
 		//
-		Matrix3D coord_inv;
-		Matrix3D coord_to_obj;
-		Matrix3D coord_system = prender_obj->Get_Transform ();
-		coord_system.Get_Orthogonal_Inverse (coord_inv);
+		const Engine::Math::AffineTransform3 coord_system = To_Core_Math(prender_obj->Get_Transform());
+		const Engine::Math::AffineTransform3 coord_inv = coord_system.Orthogonal_Inverse();
 
-		Matrix3D transform = pscene_light->Get_Transform ();
-		Matrix3D::Multiply (coord_inv, transform, &coord_to_obj);
-
-		Matrix3D::Multiply (coord_system, rotation_matrix, &transform);
-		Matrix3D::Multiply (transform, coord_to_obj, &transform);
+		const Engine::Math::AffineTransform3 light_transform = To_Core_Math(pscene_light->Get_Transform());
+		const Engine::Math::AffineTransform3 coord_to_obj = Compose(coord_inv, light_transform);
+		Engine::Math::AffineTransform3 transform = Compose(
+			Compose(coord_system, rotation_matrix), coord_to_obj);
 
 		// Ensure the matrix hasn't degenerated
-		if (!transform.Is_Orthogonal ()) {
-			transform.Re_Orthogonalize ();
+		if (!Is_Orthogonal(transform)) {
+			Re_Orthogonalize(transform);
 		}
 
 		// Pass the new transform onto the light
-		m_pLightMesh->Set_Transform (transform);
-		pscene_light->Set_Transform (transform);
+		m_pLightMesh->Set_Transform (To_W3D(transform));
+		pscene_light->Set_Transform (To_W3D(transform));
 	}
 }
 
@@ -1751,10 +1857,10 @@ CGraphicView::Reset_FOV ()
 	double hfov,vfov;
 	if (cy > cx) {
 
-		vfov = (float)DEG_TO_RAD(45.0f);
+		vfov = (float)(((double)45.0f) * 3.141592654f / 180.0);	// legacy DEG_TO_RAD
 		hfov = (double)cx / (double)cy * vfov;
 	} else  {
-		hfov = (float)DEG_TO_RAD(45.0f);
+		hfov = (float)(((double)45.0f) * 3.141592654f / 180.0);	// legacy DEG_TO_RAD
 		vfov = (double)cy / (double)cx * hfov;
 	}
 
@@ -1776,9 +1882,9 @@ CGraphicView::Set_Camera_Distance (float dist)
 	//
 	//	Reposition the camera
 	//
-	Matrix3D new_tm(1);
-	new_tm.Look_At (m_ViewedSphere.Center + Vector3 (m_CameraDistance, 0.00F, 0.00F), m_ViewedSphere.Center, 0);
-	m_pCamera->Set_Transform (new_tm);
+	const Engine::Math::AffineTransform3 new_transform = Camera_Look_At(
+		m_ViewedSphere.center + Engine::Math::Vector3{m_CameraDistance, 0, 0}, m_ViewedSphere.center);
+	m_pCamera->Set_Transform (To_W3D(new_transform));
 
 	//
 	// Update the status bar
@@ -1788,5 +1894,3 @@ CGraphicView::Set_Camera_Distance (float dist)
 		main_wnd->UpdateCameraDistance (m_CameraDistance);
 	}
 }
-
-

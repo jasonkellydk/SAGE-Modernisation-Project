@@ -25,6 +25,7 @@
 #include "GameLogic/Scripts.h"
 #include "EditAction.h"
 #include "ScriptDialog.h"
+import engine.debug;
 
 /////////////////////////////////////////////////////////////////////////////
 // ScriptActionsFalse property page
@@ -225,14 +226,14 @@ Bool ScriptActionsFalse::doMoveDown()
 			pPrev = pCur;
 			pCur = pCur->getNext();
 		}
-		DEBUG_ASSERTCRASH(pCur, ("Didn't find action in list."));
+		engine::debug::invariant((pCur), "pCur", __FILE__, __LINE__, "Didn't find action in list.");
 		if (!pCur) return false;
 		if (pPrev) {
 			pPrev->setNextAction(pNext);
 			pCur->setNextAction(pNext->getNext());
 			pNext->setNextAction(pCur);
 		} else {
-			DEBUG_ASSERTCRASH(m_falseAction == m_script->getFalseAction(), ("Logic error."));
+			engine::debug::invariant((m_falseAction == m_script->getFalseAction()), "m_falseAction == m_script->getFalseAction()", __FILE__, __LINE__, "Logic error.");
 			pCur->setNextAction(pNext->getNext());
 			pNext->setNextAction(pCur);
 			m_script->setFalseAction(pNext);

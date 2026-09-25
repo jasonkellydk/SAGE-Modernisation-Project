@@ -27,7 +27,8 @@
 // Desc:   Update module to handle building states and battle plan execution & changes
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #define DEFINE_MAXHEALTHCHANGETYPE_NAMES						// for TheMaxHealthChangeTypeNames[]
 
@@ -191,7 +192,7 @@ void BattlePlanUpdate::onDelete()
 	Player* player = getObject()->getControllingPlayer();
 	// however, player CAN legitimately be null during game reset cycles
 	// (and which point it doesn't really matter if we can remove the bonus or not)
-	//DEBUG_ASSERTCRASH(player != nullptr, ("Hmm, controller is null"));
+	//engine::debug::invariant((player != nullptr), "player != nullptr", __FILE__, __LINE__, "Hmm, controller is null");
 	if( player && m_planAffectingArmy != PLANSTATUS_NONE )
 	{
 		player->changeBattlePlan( m_planAffectingArmy, -1, m_bonuses );
@@ -209,7 +210,7 @@ void BattlePlanUpdate::onObjectCreated()
 
 	if( !data->m_specialPowerTemplate )
 	{
-		DEBUG_CRASH( ("%s object's BattlePlanUpdate lacks access to the SpecialPowerTemplate. Needs to be specified in ini.", obj->getTemplate()->getName().str() ) );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "%s object's BattlePlanUpdate lacks access to the SpecialPowerTemplate. Needs to be specified in ini.", obj->getTemplate()->getName().str() );
 		m_invalidSettings = true;
 		return;
 	}
@@ -282,7 +283,7 @@ Bool BattlePlanUpdate::initiateIntentToDoSpecialPower(const SpecialPowerTemplate
 	}
 	else
 	{
-		DEBUG_CRASH( ("Selected an unsupported strategy for strategy center.") );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Selected an unsupported strategy for strategy center.");
 		return FALSE;
 	}
 
@@ -414,8 +415,8 @@ void BattlePlanUpdate::createVisionObject()
 
 	// get template of object to create
 	const ThingTemplate *tt = TheThingFactory->findTemplate( data->m_visionObjectName );
-	DEBUG_ASSERTCRASH( tt, ("BattlePlanUpdate::setStatus - Invalid vision object name '%s'",
-													data->m_visionObjectName.str()) );
+	engine::debug::invariant((tt), "tt", __FILE__, __LINE__, "BattlePlanUpdate::setStatus - Invalid vision object name '%s'",
+													data->m_visionObjectName.str());
 
 	if (!tt)
 		return;

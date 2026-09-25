@@ -45,9 +45,11 @@
 
 #pragma once
 
+
+#include <cassert>
 #include <stdarg.h>
 #include "Lib/BaseType.h"
-#include "Common/Debug.h"
+
 #include "Common/Errors.h"
 
 class AsciiString;
@@ -368,7 +370,7 @@ public:
 // -----------------------------------------------------
 inline WideChar* UnicodeString::peek() const
 {
-	DEBUG_ASSERTCRASH(m_data, ("null string ptr"));
+	assert((m_data));
 	validate();
 	return m_data->peek();
 }
@@ -418,7 +420,7 @@ inline void UnicodeString::clear()
 // -----------------------------------------------------
 inline WideChar UnicodeString::getCharAt(int index) const
 {
-	DEBUG_ASSERTCRASH(index >= 0 && index < getLength(), ("bad index in getCharAt"));
+	assert((index >= 0 && index < getLength()));
 	validate();
 	return m_data ? peek()[index] : 0;
 }

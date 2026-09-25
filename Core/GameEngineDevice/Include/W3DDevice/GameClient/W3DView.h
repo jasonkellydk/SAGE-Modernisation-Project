@@ -34,6 +34,9 @@
 
 #pragma once
 
+import Engine.Core.Math.AffineTransform3;
+import Engine.Core.Math.Vector3;
+
 // SYSTEM INCLUDES ////////////////////////////////////////////////////////////////////////////////
 
 // USER INCLUDES //////////////////////////////////////////////////////////////////////////////////
@@ -221,7 +224,7 @@ public:
 
   virtual WorldToScreenReturn worldToScreenTriReturn( const Coord3D *w, ICoord2D *s ) override;	///< Transform world coordinate "w" into screen coordinate "s"
 	virtual Bool screenToTerrain( const ICoord2D *screen, Coord3D *world ) override;
-	virtual PlaneClass::IntersectionResType screenToWorldAtZ( const ICoord2D *screen, Coord3D *world, Real z ) override;
+	virtual Engine::Math::SegmentPlaneHit screenToWorldAtZ( const ICoord2D *screen, Coord3D *world, Real z ) override;
 
 	W3DCamera *get3DCamera() const { return m_3DCamera; }
 
@@ -264,7 +267,7 @@ private:
 	Real m_shakeAngleCos;														///< the cosine of the orientation of the oscillation
 	Real m_shakeAngleSin;														///< the sine of the orientation of the oscillation
 	Real m_shakeIntensity;													///< the intensity of the oscillation
-	Vector3 m_shakerAngles;													//WST 11/12/2002 new multiple instance camera shaker system
+	Engine::Math::Vector3 m_shakerAngles;													//WST 11/12/2002 new multiple instance camera shaker system
 
 	ScriptedState m_scriptedState; ///< Flags for scripted camera movements. Use functions addScriptedState, removeScriptedState for write.
 
@@ -306,10 +309,10 @@ private:
 	Real getMaxHeight(Real x, Real y) const;
 	Real getMaxZoom(Real x, Real y) const;
 	void updateCameraTransform(); ///< update the transform matrix of m_3DCamera, based on m_pos & m_angle
-	void updateCameraClipPlanes(const Matrix3D &transform);
-	void setCameraTransform(const Matrix3D &transform);
-	void buildCameraPosition(Vector3 &sourcePos, Vector3 &targetPos);
-	void buildCameraTransform(Matrix3D *transform, const Vector3 &sourcePos, const Vector3 &targetPos); ///< calculate (but do not set) the transform matrix of m_3DCamera, based on m_pos & m_angle
+	void updateCameraClipPlanes(const Engine::Math::AffineTransform3 &transform);
+	void setCameraTransform(const Engine::Math::AffineTransform3 &transform);
+	void buildCameraPosition(Engine::Math::Vector3 &sourcePos, Engine::Math::Vector3 &targetPos);
+	Engine::Math::AffineTransform3 buildCameraTransform(const Engine::Math::Vector3 &sourcePos, const Engine::Math::Vector3 &targetPos); ///< calculate (but do not set) the transform matrix of m_3DCamera, based on m_pos & m_angle
 	Bool zoomCameraToDesiredHeight();
 	Bool movePivotToGround();
 	void updateCameraAreaConstraints();
@@ -323,7 +326,7 @@ private:
 	void addScriptedState(ScriptedState state);
 	void removeScriptedState(ScriptedState state);
 	void moveAlongWaypointPath(Real milliseconds); ///< Move camera along path.
-	void getPickRay(const ICoord2D *screen, Vector3 *rayStart, Vector3 *rayEnd);	///<returns a line segment (ray) originating at the given screen position
+	void getPickRay(const ICoord2D *screen, Engine::Math::Vector3 *rayStart, Engine::Math::Vector3 *rayEnd);	///<returns a line segment (ray) originating at the given screen position
 	void setupWaypointPath(Bool orient);					///< Calculates distances & angles for moving along a waypoint path.
 	void rotateCameraOneFrame();							///< Do one frame of a rotate camera movement.
 	void zoomCameraOneFrame();							///< Do one frame of a zoom camera movement.

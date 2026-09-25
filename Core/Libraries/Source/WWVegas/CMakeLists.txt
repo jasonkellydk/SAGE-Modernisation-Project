@@ -8,16 +8,16 @@ target_compile_definitions(core_wwcommon INTERFACE
 
 target_link_libraries(core_wwcommon INTERFACE
     milesstub
+    engine_debug
+    engine_profiling
 )
 
 target_include_directories(core_wwcommon INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
-add_subdirectory(WWDebug)
 add_subdirectory(WWDownload)
 add_subdirectory(WWLib)
-add_subdirectory(WWMath)
 add_subdirectory(WWSaveLoad)
 add_subdirectory(WWStub)
 
@@ -30,9 +30,7 @@ target_include_directories(core_wwvegas INTERFACE
 
 target_link_libraries(core_wwvegas INTERFACE
     # core_wwaudio
-    core_wwdebug
     # core_wwdownload
     core_wwlib
-    core_wwmath
     core_wwsaveload
 )

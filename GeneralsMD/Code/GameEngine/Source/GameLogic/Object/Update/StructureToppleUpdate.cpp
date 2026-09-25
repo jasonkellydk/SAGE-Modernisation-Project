@@ -28,7 +28,10 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
+import Engine.Core.Math.AffineTransform3;
+#include "Common/LegacyTransformMath.h"
 
 #include "Common/Thing.h"
 #include "Common/ThingTemplate.h"
@@ -206,7 +209,7 @@ UpdateSleepTime StructureToppleUpdate::update()
 
 	if (m_toppleState == TOPPLESTATE_STANDING)
 	{
-		DEBUG_CRASH(("hmm, what?"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "hmm, what?");
 		return UPDATE_SLEEP_FOREVER;
 	}
 
@@ -232,9 +235,9 @@ UpdateSleepTime StructureToppleUpdate::update()
 	if (m_toppleState == TOPPLESTATE_TOPPLING) {
 		UnsignedInt now = TheGameLogic->getFrame();
 		Real toppleAcceleration = TOPPLE_ACCELERATION_FACTOR * (Sin(m_accumulatedAngle) * (1.0 - m_structuralIntegrity));
-//		DEBUG_LOG(("toppleAcceleration = %f", toppleAcceleration));
+//		engine::debug::log_info("toppleAcceleration = %f", toppleAcceleration);
 		m_toppleVelocity += toppleAcceleration;
-//		DEBUG_LOG(("m_toppleVelocity = %f", m_toppleVelocity));
+//		engine::debug::log_info("m_toppleVelocity = %f", m_toppleVelocity);
 
 		// doesn't make sense to have a structural integrity less than zero.
 		if (m_structuralIntegrity > 0.0f) {
@@ -243,7 +246,7 @@ UpdateSleepTime StructureToppleUpdate::update()
 				m_structuralIntegrity = 0.0f;
 			}
 		}
-//		DEBUG_LOG(("m_structuralIntegrity = %f", m_structuralIntegrity));
+//		engine::debug::log_info("m_structuralIntegrity = %f", m_structuralIntegrity);
 
 		doAngleFX(m_accumulatedAngle, m_accumulatedAngle + m_toppleVelocity);
 
@@ -272,10 +275,10 @@ UpdateSleepTime StructureToppleUpdate::update()
 		}
 
 		Object *building = getObject();
-		Matrix3D xfrm = *building->getTransformMatrix();
-		xfrm.In_Place_Pre_Rotate_X(-m_toppleVelocity * m_toppleDirection.y);
-		xfrm.In_Place_Pre_Rotate_Y(m_toppleVelocity * m_toppleDirection.x);
-		building->setTransformMatrix(&xfrm);
+		Engine::Math::AffineTransform3 transform = building->worldTransform();
+		Legacy_In_Place_Pre_Rotate_X(transform, -m_toppleVelocity * m_toppleDirection.y);
+		Legacy_In_Place_Pre_Rotate_Y(transform, m_toppleVelocity * m_toppleDirection.x);
+		building->setWorldTransform(transform);
 	}
 
 	// The building is now flat on the ground and done with all the crushing and all that.
@@ -321,9 +324,9 @@ void StructureToppleUpdate::doToppleDoneStuff()
 
 	Real toppleAngle = m_toppleDirection.toAngle();
 
-	Matrix3D xfrm = *building->getTransformMatrix();
-	xfrm.In_Place_Pre_Rotate_Z(toppleAngle-origAngle);
-	building->setTransformMatrix(&xfrm);
+	Engine::Math::AffineTransform3 transform = building->worldTransform();
+	Legacy_In_Place_Pre_Rotate_Z(transform, toppleAngle-origAngle);
+	building->setWorldTransform(transform);
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -474,7 +477,7 @@ void StructureToppleUpdate::doToppleDelayBurstFX()
 	const StructureToppleUpdateModuleData *d = getStructureToppleUpdateModuleData();
 	const DamageInfo *lastDamageInfo = getObject()->getBodyModule()->getLastDamageInfo();
 
-	DEBUG_LOG(("Doing topple delay burst on frame %d", TheGameLogic->getFrame()));
+	engine::debug::log_info("Doing topple delay burst on frame %d", TheGameLogic->getFrame());
 	if( lastDamageInfo == nullptr || getDamageTypeFlag( d->m_damageFXTypes, lastDamageInfo->in.m_damageType ) )
 		FXList::doFXPos(d->m_toppleDelayFXList, &m_delayBurstLocation);
 
@@ -490,7 +493,7 @@ void StructureToppleUpdate::doToppleDelayBurstFX()
 			if (sys != nullptr)
 			{
 				Coord3D pos;
-				if (drawable->getPristineBonePositions(it->boneName.str(), 0, &pos, nullptr, 1) == 1)
+				if (drawable->getPristineBonePositions(it->boneName.str(), 0, &pos, 1) == 1)
 				{
 					// got the bone position...
 					sys->setPosition(&pos);
@@ -551,7 +554,7 @@ void StructureToppleUpdate::doPhaseStuff(StructureTopplePhaseType stphase, const
 		{
 			idx = idxList[i];
 			const OCLVec& v = d->m_ocls[stphase];
-			DEBUG_ASSERTCRASH(idx>=0&&idx<v.size(),("bad idx"));
+			engine::debug::invariant((idx>=0&&idx<v.size()), "idx>=0&&idx<v.size()", __FILE__, __LINE__, "bad idx");
 			const ObjectCreationList* ocl = v[idx];
 			ObjectCreationList::create(ocl, getObject(), target, nullptr, INVALID_ANGLE );
 		}

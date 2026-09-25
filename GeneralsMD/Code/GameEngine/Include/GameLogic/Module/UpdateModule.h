@@ -29,6 +29,8 @@
 
 #pragma once
 
+
+#include <cassert>
 #include "Common/Module.h"
 #include "Common/GameType.h"
 #include "Common/DisabledTypes.h"
@@ -230,7 +232,7 @@ inline UpdateModule::UpdateModule( Thing *thing, const ModuleData* moduleData ) 
 }
 inline UpdateModule::~UpdateModule()
 {
-	DEBUG_ASSERTCRASH(m_indexInLogic == -1, ("destroying an updatemodule still in the logic list"));
+	assert((m_indexInLogic == -1));
 }
 
 //-------------------------------------------------------------------------------------------------

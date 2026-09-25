@@ -29,7 +29,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include <fcntl.h>
 
@@ -98,7 +99,7 @@ void StartDownloadingPatches()
 	layout->hide( FALSE );
 	layout->bringForward();
 	HandleCanceledDownload(FALSE);
-	DEBUG_ASSERTCRASH(TheDownloadManager, ("No download manager!"));
+	engine::debug::invariant((TheDownloadManager), "TheDownloadManager", __FILE__, __LINE__, "No download manager!");
 	if (TheDownloadManager)
 	{
 		std::list<QueuedDownload>::iterator it = queuedDownloads.begin();
@@ -164,7 +165,7 @@ static void startOnline()
 {
 	checkingForPatchBeforeGameSpy = FALSE;
 
-	DEBUG_ASSERTCRASH(checksLeftBeforeOnline==0, ("starting online with pending callbacks"));
+	engine::debug::invariant((checksLeftBeforeOnline==0), "checksLeftBeforeOnline==0", __FILE__, __LINE__, "starting online with pending callbacks");
 	if (onlineCancelWindow)
 	{
 		TheWindowManager->winDestroy(onlineCancelWindow);
@@ -203,9 +204,9 @@ static void startOnline()
 
 	TheScriptEngine->signalUIInteract(TheShellHookNames[SHELL_SCRIPT_HOOK_MAIN_MENU_ONLINE_SELECTED]);
 
-	DEBUG_ASSERTCRASH( !TheGameSpyBuddyMessageQueue, ("TheGameSpyBuddyMessageQueue exists!") );
-	DEBUG_ASSERTCRASH( !TheGameSpyPeerMessageQueue, ("TheGameSpyPeerMessageQueue exists!") );
-	DEBUG_ASSERTCRASH( !TheGameSpyInfo, ("TheGameSpyInfo exists!") );
+	engine::debug::invariant((!TheGameSpyBuddyMessageQueue), "!TheGameSpyBuddyMessageQueue", __FILE__, __LINE__, "TheGameSpyBuddyMessageQueue exists!");
+	engine::debug::invariant((!TheGameSpyPeerMessageQueue), "!TheGameSpyPeerMessageQueue", __FILE__, __LINE__, "TheGameSpyPeerMessageQueue exists!");
+	engine::debug::invariant((!TheGameSpyInfo), "!TheGameSpyInfo", __FILE__, __LINE__, "TheGameSpyInfo exists!");
 	SetUpGameSpy(MOTDBuffer, configBuffer);
 
 	delete[] MOTDBuffer;
@@ -265,9 +266,9 @@ static void queuePatch(Bool mandatory, AsciiString downloadURL)
 	AsciiString fileName = "patches\\";
 	fileName.concat(fileStr);
 
-	DEBUG_LOG(("download URL split: %d [%s] [%s] [%s] [%s] [%s] [%s]",
+	engine::debug::log_info("download URL split: %d [%s] [%s] [%s] [%s] [%s] [%s]",
 		success, connectionType.str(), server.str(), user.str(), pass.str(),
-		filePath.str(), fileName.str()));
+		filePath.str(), fileName.str());
 
 	if (!success)
 		return;
@@ -299,7 +300,7 @@ static GHTTPBool motdCallback( GHTTPRequest request, GHTTPResult result,
 	Int run = (Int)param;
 	if (run != timeThroughOnline)
 	{
-		DEBUG_CRASH(("Old callback being called!"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Old callback being called!");
 		return GHTTPTrue;
 	}
 
@@ -309,16 +310,16 @@ static GHTTPBool motdCallback( GHTTPRequest request, GHTTPResult result,
 	MOTDBuffer[bufferLen-1] = 0;
 
 	--checksLeftBeforeOnline;
-	DEBUG_ASSERTCRASH(checksLeftBeforeOnline>=0, ("Too many callbacks"));
+	engine::debug::invariant((checksLeftBeforeOnline>=0), "checksLeftBeforeOnline>=0", __FILE__, __LINE__, "Too many callbacks");
 	if (onlineCancelWindow && !checksLeftBeforeOnline)
 	{
 		TheWindowManager->winDestroy(onlineCancelWindow);
 		onlineCancelWindow = nullptr;
 	}
 
-	DEBUG_LOG(("------- Got MOTD before going online -------"));
-	DEBUG_LOG(("%s", (MOTDBuffer)?MOTDBuffer:""));
-	DEBUG_LOG(("--------------------------------------------"));
+	engine::debug::log_info("------- Got MOTD before going online -------");
+	engine::debug::log_info("%s", (MOTDBuffer)?MOTDBuffer:"");
+	engine::debug::log_info("--------------------------------------------");
 
 	if (!checksLeftBeforeOnline)
 		startOnline();
@@ -334,7 +335,7 @@ static GHTTPBool configCallback( GHTTPRequest request, GHTTPResult result,
 	Int run = (Int)param;
 	if (run != timeThroughOnline)
 	{
-		DEBUG_CRASH(("Old callback being called!"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Old callback being called!");
 		return GHTTPTrue;
 	}
 
@@ -373,14 +374,14 @@ static GHTTPBool configCallback( GHTTPRequest request, GHTTPResult result,
 	}
 
 	--checksLeftBeforeOnline;
-	DEBUG_ASSERTCRASH(checksLeftBeforeOnline>=0, ("Too many callbacks"));
+	engine::debug::invariant((checksLeftBeforeOnline>=0), "checksLeftBeforeOnline>=0", __FILE__, __LINE__, "Too many callbacks");
 	if (onlineCancelWindow && !checksLeftBeforeOnline)
 	{
 		TheWindowManager->winDestroy(onlineCancelWindow);
 		onlineCancelWindow = nullptr;
 	}
 
-	DEBUG_LOG(("Got Config before going online"));
+	engine::debug::log_info("Got Config before going online");
 
 	if (!checksLeftBeforeOnline)
 		startOnline();
@@ -396,15 +397,15 @@ static GHTTPBool configHeadCallback( GHTTPRequest request, GHTTPResult result,
 	Int run = (Int)param;
 	if (run != timeThroughOnline)
 	{
-		DEBUG_CRASH(("Old callback being called!"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Old callback being called!");
 		return GHTTPTrue;
 	}
 
-	DEBUG_LOG(("HTTP head resp: res=%d, len=%d, buf=[%s]", result, bufferLen, buffer));
+	engine::debug::log_info("HTTP head resp: res=%d, len=%d, buf=[%s]", result, bufferLen, buffer);
 
 	if (result == GHTTPSuccess)
 	{
-		DEBUG_LOG(("Headers are [%s]", ghttpGetHeaders( request )));
+		engine::debug::log_info("Headers are [%s]", ghttpGetHeaders( request ));
 
 		AsciiString headers(ghttpGetHeaders( request ));
 		AsciiString line;
@@ -432,7 +433,7 @@ static GHTTPBool configHeadCallback( GHTTPRequest request, GHTTPResult result,
 				{
 					// we don't need to download the MOTD again
 					--checksLeftBeforeOnline;
-					DEBUG_ASSERTCRASH(checksLeftBeforeOnline>=0, ("Too many callbacks"));
+					engine::debug::invariant((checksLeftBeforeOnline>=0), "checksLeftBeforeOnline>=0", __FILE__, __LINE__, "Too many callbacks");
 					if (onlineCancelWindow && !checksLeftBeforeOnline)
 					{
 						TheWindowManager->winDestroy(onlineCancelWindow);
@@ -452,7 +453,7 @@ static GHTTPBool configHeadCallback( GHTTPRequest request, GHTTPResult result,
 						configBuffer[fileLen-1] = 0;
 						fclose(fp);
 
-						DEBUG_LOG(("Got Config before going online"));
+						engine::debug::log_info("Got Config before going online");
 
 						if (!checksLeftBeforeOnline)
 							startOnline();
@@ -480,14 +481,14 @@ static GHTTPBool gamePatchCheckCallback( GHTTPRequest request, GHTTPResult resul
 	Int run = (Int)param;
 	if (run != timeThroughOnline)
 	{
-		DEBUG_CRASH(("Old callback being called!"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Old callback being called!");
 		return GHTTPTrue;
 	}
 
 	--checksLeftBeforeOnline;
-	DEBUG_ASSERTCRASH(checksLeftBeforeOnline>=0, ("Too many callbacks"));
+	engine::debug::invariant((checksLeftBeforeOnline>=0), "checksLeftBeforeOnline>=0", __FILE__, __LINE__, "Too many callbacks");
 
-	DEBUG_LOG(("Result=%d, buffer=[%s], len=%d", result, buffer, bufferLen));
+	engine::debug::log_info("Result=%d, buffer=[%s], len=%d", result, buffer, bufferLen);
 	if (result != GHTTPSuccess)
 	{
 		if (!checkingForPatchBeforeGameSpy)
@@ -511,7 +512,7 @@ static GHTTPBool gamePatchCheckCallback( GHTTPRequest request, GHTTPResult resul
 		ok &= line.nextToken(&url, " ");
 		if (ok && type == "patch")
 		{
-			DEBUG_LOG(("Saw a patch: %d/[%s]", atoi(req.str()), url.str()));
+			engine::debug::log_info("Saw a patch: %d/[%s]", atoi(req.str()), url.str());
 			queuePatch( atoi(req.str()), url );
 			if (atoi(req.str()))
 			{
@@ -563,7 +564,7 @@ void CancelPatchCheckCallback()
 
 static GHTTPBool overallStatsCallback( GHTTPRequest request, GHTTPResult result, char * buffer, GHTTPByteCount bufferLen, void * param )
 {
-	DEBUG_LOG(("overallStatsCallback() - Result=%d, len=%d", result, bufferLen));
+	engine::debug::log_info("overallStatsCallback() - Result=%d, len=%d", result, bufferLen);
 	if (result != GHTTPSuccess)
 	{
 		return GHTTPTrue;
@@ -649,7 +650,7 @@ static GHTTPBool overallStatsCallback( GHTTPRequest request, GHTTPResult result,
 
 static GHTTPBool numPlayersOnlineCallback( GHTTPRequest request, GHTTPResult result, char * buffer, GHTTPByteCount bufferLen, void * param )
 {
-	DEBUG_LOG(("numPlayersOnlineCallback() - Result=%d, buffer=[%s], len=%d", result, buffer, bufferLen));
+	engine::debug::log_info("numPlayersOnlineCallback() - Result=%d, buffer=[%s], len=%d", result, buffer, bufferLen);
 	if (result != GHTTPSuccess)
 	{
 		return GHTTPTrue;
@@ -666,7 +667,7 @@ static GHTTPBool numPlayersOnlineCallback( GHTTPRequest request, GHTTPResult res
 	if (*s == '\\')
 		++s;
 
-	DEBUG_LOG(("Message was '%s', trimmed to '%s'=%d", buffer, s, atoi(s)));
+	engine::debug::log_info("Message was '%s', trimmed to '%s'=%d", buffer, s, atoi(s));
 	HandleNumPlayersOnline(atoi(s));
 
 	return GHTTPTrue;
@@ -797,7 +798,7 @@ void StopAsyncDNSCheck()
 	{
 		MAYBE_UNUSED Int res = TerminateThread(s_asyncDNSThreadHandle, 0);
 		(void)res;
-		DEBUG_ASSERTCRASH(res, ("Could not terminate the Async DNS Lookup thread!"));	// Thread still not killed!
+		engine::debug::invariant((res), "res", __FILE__, __LINE__, "Could not terminate the Async DNS Lookup thread!");	// Thread still not killed!
 	}
 	s_asyncDNSThreadHandle = nullptr;
 	s_asyncDNSLookupInProgress = FALSE;
@@ -842,10 +843,10 @@ static void reallyStartPatchCheck()
 	FormatURL(gameURL, mapURL, configURL, motdURL);
 
 	// check for a patch first
-	DEBUG_LOG(("Game patch check: [%s]", gameURL.c_str()));
-	DEBUG_LOG(("Map patch check: [%s]", mapURL.c_str()));
-	DEBUG_LOG(("Config: [%s]", configURL.c_str()));
-	DEBUG_LOG(("MOTD: [%s]", motdURL.c_str()));
+	engine::debug::log_info("Game patch check: [%s]", gameURL.c_str());
+	engine::debug::log_info("Map patch check: [%s]", mapURL.c_str());
+	engine::debug::log_info("Config: [%s]", configURL.c_str());
+	engine::debug::log_info("MOTD: [%s]", motdURL.c_str());
 	ghttpGet(gameURL.c_str(), GHTTPFalse, gamePatchCheckCallback, (void *)timeThroughOnline);
 	ghttpGet(mapURL.c_str(), GHTTPFalse, gamePatchCheckCallback, (void *)timeThroughOnline);
 	ghttpHead(configURL.c_str(), GHTTPFalse, configHeadCallback, (void *)timeThroughOnline);

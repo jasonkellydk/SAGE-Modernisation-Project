@@ -26,7 +26,8 @@
 // Implementation of the message stream
 // Author: Michael S. Booth, February 2001
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/MessageStream.h"
 #include "Common/Player.h"
@@ -83,7 +84,7 @@ const GameMessageArgumentType *GameMessage::getArgument( Int argIndex ) const
 	if (static_cast<size_t>(argIndex) < m_argList.size())
 		return &m_argList[argIndex]->m_data;
 
-	DEBUG_CRASH(("argument not found"));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "argument not found");
 	static const GameMessageArgumentType zero = { 0 };
 	return &zero;
 }
@@ -108,10 +109,7 @@ GameMessageArgument *GameMessage::allocArg()
 	GameMessageArgument *arg = newInstance(GameMessageArgument);
 	m_argList.push_back(arg);
 
-	DEBUG_ASSERTCRASH(
-		m_argList.size() <= 255,
-		("If a GameMessage needs more than 255 arguments, it needs to be split up into multiple GameMessage's.")
-	); 
+	engine::debug::invariant((m_argList.size() <= 255), "m_argList.size() <= 255", __FILE__, __LINE__, "If a GameMessage needs more than 255 arguments, it needs to be split up into multiple GameMessage's."); 
 	return arg;
 }
 
@@ -505,9 +503,6 @@ const char *GameMessage::getCommandTypeAsString(GameMessage::Type t)
 	CASE_LABEL(MSG_META_DEMO_TOGGLE_AUDIODEBUG)
 #endif
 
-#ifdef DUMP_PERF_STATS
-	CASE_LABEL(MSG_META_DEMO_PERFORM_STATISTICAL_DUMP)
-#endif
 
 	CASE_LABEL(MSG_META_PLACE_BEACON)
 	CASE_LABEL(MSG_META_REMOVE_BEACON)

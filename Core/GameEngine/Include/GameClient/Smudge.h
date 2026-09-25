@@ -21,11 +21,10 @@
 #pragma once
 
 #include <Utility/hash_map_adapter.h>
-#include "WWMath/vector2.h"
-#include "WWMath/vector3.h"
 #include <deque>
 
-#define SET_SMUDGE_PARAMETERS(smudge,pos,offset,size,opacity) (smudge->m_pos=pos;smudge->m_offset=offset;smudge->m_size=size;smudge->m_opacity=opacity;)
+import Engine.Core.Math.Vector2;
+import Engine.Core.Math.Vector3;
 
 struct Smudge
 {
@@ -34,16 +33,16 @@ struct Smudge
 	W3DMPO_CODE(Smudge)
 
 	Identifier m_identifier;	//a number or pointer to identify this smudge
-	Vector3 m_pos;	//position of smudge center
-	Vector2 m_offset; // difference in position between "texture" extraction and re-insertion for center vertex
+	Engine::Math::Vector3 m_pos;	//position of smudge center
+	Engine::Math::Vector2 m_offset; // difference in position between "texture" extraction and re-insertion for center vertex
 	Real m_size;		//size of smudge in world space.
 	Real m_opacity;	//alpha of center vertex, corners are assumed at 0
 	Bool m_draw;	//whether this smudge needs to be drawn
 
 	struct smudgeVertex
 	{
-		Vector3 pos;	//world-space position of vertex
-		Vector2 uv;	//uv coordinates of vertex
+		Engine::Math::Vector3 pos;	//world-space position of vertex
+		Engine::Math::Vector2 uv;	//uv coordinates of vertex
 	};
 	smudgeVertex m_verts[5];	//5 vertices of this smudge (in counter-clockwise order, starting at top-left, ending in center.)
 };

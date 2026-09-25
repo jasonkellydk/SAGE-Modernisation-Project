@@ -73,7 +73,7 @@ enum
 LogicalSoundClass::LogicalSoundClass ()
 	:	m_DropOffRadius (1),
 		m_TypeMask (0),
-		m_Position (0, 0, 0),
+		m_Position {},
 		m_IsSingleShot (false),
 		m_OldestListenerTimestamp (0),
 		m_MaxListeners (0),
@@ -189,6 +189,7 @@ LogicalSoundClass::Get_Factory () const
 bool
 LogicalSoundClass::Save (ChunkSaveClass &csave)
 {
+	const float position[3] = {m_Position.x, m_Position.y, m_Position.z};
 	csave.Begin_Chunk (CHUNKID_BASE_CLASS);
 		SoundSceneObjClass::Save (csave);
 	csave.End_Chunk ();
@@ -198,7 +199,7 @@ LogicalSoundClass::Save (ChunkSaveClass &csave)
 		WRITE_MICRO_CHUNK (csave, VARID_DROP_OFF_RADIUS, m_DropOffRadius);
 		WRITE_MICRO_CHUNK (csave, VARID_IS_SINGLE_SHOT, m_IsSingleShot);
 		WRITE_MICRO_CHUNK (csave, VARID_TYPE_MASK, m_TypeMask);
-		WRITE_MICRO_CHUNK (csave, VARID_POSITION, m_Position);
+		WRITE_MICRO_CHUNK (csave, VARID_POSITION, position);
 		WRITE_MICRO_CHUNK (csave, VARID_MAX_LISTENERS, m_MaxListeners);
 		WRITE_MICRO_CHUNK (csave, VARID_NOTIFY_DELAY, m_NotifyDelayInMS);
 		WRITE_MICRO_CHUNK (csave, VARID_LAST_NOTIFY, m_LastNotification);
@@ -216,6 +217,7 @@ LogicalSoundClass::Save (ChunkSaveClass &csave)
 bool
 LogicalSoundClass::Load (ChunkLoadClass &cload)
 {
+	float position[3]{};
 	while (cload.Open_Chunk ()) {
 		switch (cload.Cur_Chunk_ID ()) {
 
@@ -234,7 +236,7 @@ LogicalSoundClass::Load (ChunkLoadClass &cload)
 						READ_MICRO_CHUNK (cload, VARID_DROP_OFF_RADIUS, m_DropOffRadius);
 						READ_MICRO_CHUNK (cload, VARID_IS_SINGLE_SHOT, m_IsSingleShot);
 						READ_MICRO_CHUNK (cload, VARID_TYPE_MASK, m_TypeMask);
-						READ_MICRO_CHUNK (cload, VARID_POSITION, m_Position);
+						READ_MICRO_CHUNK (cload, VARID_POSITION, position);
 						READ_MICRO_CHUNK (cload, VARID_MAX_LISTENERS, m_MaxListeners);
 						READ_MICRO_CHUNK (cload, VARID_NOTIFY_DELAY, m_NotifyDelayInMS);
 						READ_MICRO_CHUNK (cload, VARID_LAST_NOTIFY, m_LastNotification);
@@ -248,7 +250,7 @@ LogicalSoundClass::Load (ChunkLoadClass &cload)
 
 		cload.Close_Chunk ();
 	}
+	m_Position = {position[0], position[1], position[2]};
 
 	return true;
 }
-

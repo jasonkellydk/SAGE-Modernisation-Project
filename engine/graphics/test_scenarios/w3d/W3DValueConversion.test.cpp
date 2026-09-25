@@ -4,7 +4,6 @@
 
 #include <array>
 #include <bit>
-#include <climits>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -15,6 +14,16 @@
 #include <string_view>
 #include <vector>
 
+#include "../../tests/LegacyMathReference.h"
+
+import Engine.Core.Math.RandomVector3Generator;
+import Engine.Core.Math.Vector3;
+import Engine.Core.Math.Vector2;
+import Engine.Core.Math.LineSegment3;
+import Engine.Core.Math.AffineTransform3;
+import Engine.Core.Math.AxisAlignedBox3;
+import Engine.Core.Math.OrientedBox3;
+import Engine.Core.Math.Sphere3;
 import Graphics.Tests.Device;
 import Graphics.Frame.RenderClock;
 import Graphics.RHI;
@@ -47,8 +56,6 @@ import Assets.Adapters.W3D.TextureMapping;
 #include "W3DDevice/GameClient/W3DProjectedShadow.h"
 #include "W3DDevice/GameClient/W3DSceneClass.h"
 #include "WWLib/ref_ptr.h"
-#include "WWMath/v3_rnd.h"
-#include "WWMath/quat.h"
 #include "WWLib/RANDOM.h"
 #include "W3DDevice/GameClient/W3DSegmentedLineRenderObject.h"
 #include "W3DDevice/GameClient/W3DCastQuery.h"
@@ -64,7 +71,7 @@ import Assets.Adapters.W3D.TextureMapping;
 #endif
 
 extern void DoShadows(W3DRenderContext& context, Bool stencilPass);
-extern const FrustumClass* shadowCameraFrustum;
+extern const Graphics::CameraFrustum* shadowCameraFrustum;
 // Application-owned localization paths required by the linked scene code.
 const char* g_csfFile = "data\\generals.csf";
 const char* g_strFile = "data\\Generals.str";
@@ -113,7 +120,7 @@ BOOST_AUTO_TEST_CASE(guard_ground_marker_is_submitted_by_the_non_stencil_scene_p
     } manager(renderer,commands,mesh,parameters,texture);
     struct ManagerScope {
         W3DProjectedShadowManager* previous=TheW3DProjectedShadowManager;
-        const FrustumClass* previousFrustum=shadowCameraFrustum;
+        const Graphics::CameraFrustum* previousFrustum=shadowCameraFrustum;
         ~ManagerScope(){TheW3DProjectedShadowManager=previous; shadowCameraFrustum=previousFrustum;}
     } scope;
     TheW3DProjectedShadowManager=&manager;
@@ -142,7 +149,7 @@ BOOST_AUTO_TEST_CASE(guard_ground_marker_is_submitted_by_the_non_stencil_scene_p
 
 BOOST_AUTO_TEST_CASE(cloned_model_resources_remap_single_and_vertex_materials_without_mutating_source)
 {
-    using MaterialBindings = Graphics::MeshMaterialBindings<RefCountPtr<W3DTextureHandle>, Vector2>;
+    using MaterialBindings = Graphics::MeshMaterialBindings<RefCountPtr<W3DTextureHandle>, Engine::Math::Vector2>;
     MaterialBindings destination;
     std::weak_ptr<Graphics::MeshMaterial> original;
     std::weak_ptr<Graphics::MeshMaterial> cloned;
@@ -272,7 +279,7 @@ BOOST_AUTO_TEST_CASE(material_identity_and_mesh_owners_preserve_contents_and_lif
     equivalent->Make_Unique();
     BOOST_CHECK(!(source->Content_Key()==equivalent->Content_Key()));
     std::weak_ptr<Graphics::MeshMaterial> weak=source;
-    using MaterialBindings = Graphics::MeshMaterialBindings<RefCountPtr<W3DTextureHandle>, Vector2>;
+    using MaterialBindings = Graphics::MeshMaterialBindings<RefCountPtr<W3DTextureHandle>, Engine::Math::Vector2>;
     MaterialBindings mesh;
     mesh.Reset(2,3,1);
     mesh.Set_Single_Material(source);
@@ -405,11 +412,11 @@ float Byte_Product(std::uint8_t color, std::uint8_t coefficient) noexcept
 	return Byte_To_Float(color) * Byte_To_Float(coefficient);
 }
 
-void Check_Vector(const Vector3 &actual, const Vector3 &expected)
+void Check_Vector(const Engine::Math::Vector3 &actual, const Engine::Math::Vector3 &expected)
 {
-	BOOST_CHECK_SMALL(actual.X - expected.X, kFloatTolerance);
-	BOOST_CHECK_SMALL(actual.Y - expected.Y, kFloatTolerance);
-	BOOST_CHECK_SMALL(actual.Z - expected.Z, kFloatTolerance);
+	BOOST_CHECK_SMALL(actual.x - expected.x, kFloatTolerance);
+	BOOST_CHECK_SMALL(actual.y - expected.y, kFloatTolerance);
+	BOOST_CHECK_SMALL(actual.z - expected.z, kFloatTolerance);
 }
 
 RefCountPtr<W3DEmitterRenderObject> Make_Name_Test_Emitter()
@@ -421,8 +428,8 @@ RefCountPtr<W3DEmitterRenderObject> Make_Name_Test_Emitter()
     description.color.start = {1, 1, 1, 1};
     description.opacity.start = 1;
     description.size.start = 1;
-    auto position = std::make_unique<Vector3SolidBoxRandomizer>(Vector3(0, 0, 0));
-    auto velocity = std::make_unique<Vector3SolidBoxRandomizer>(Vector3(0, 0, 0));
+    Engine::Math::RandomVector3Generator position{Engine::Math::Vector3Distribution::Box, {}, 0};
+    Engine::Math::RandomVector3Generator velocity{Engine::Math::Vector3Distribution::Box, {}, 1};
     return RefCountPtr<W3DEmitterRenderObject>::Create_No_Add_Ref(new W3DEmitterRenderObject(
         description, nullptr, Graphics::MaterialState::AdditiveSprite(), std::move(position), std::move(velocity)));
 }
@@ -534,11 +541,11 @@ std::vector<std::byte> Make_Converter_Material3_Container()
 void Configure_Test_Light(W3DLight &light)
 {
 	light.Set_Intensity(1.0f);
-	light.Set_Ambient(Vector3(0.5f, 0.25f, 0.75f));
-	light.Set_Diffuse(Vector3(0.25f, 0.5f, 0.75f));
-	light.Set_Specular(Vector3(0.75f, 0.5f, 0.25f));
+	light.Set_Ambient(Engine::Math::Vector3{0.5f, 0.25f, 0.75f});
+	light.Set_Diffuse(Engine::Math::Vector3{0.25f, 0.5f, 0.75f});
+	light.Set_Specular(Engine::Math::Vector3{0.75f, 0.5f, 0.25f});
 	light.Enable_Shadows(true);
-	light.Set_Spot_Direction(Vector3(0.0f, 0.0f, -1.0f));
+	light.Set_Spot_Direction(Engine::Math::Vector3{0.0f, 0.0f, -1.0f});
 	light.Set_Spot_Angle(0.75f);
 	light.Set_Spot_Exponent(2.5f);
 	light.Set_Near_Attenuation_Range(2.0, 5.0);
@@ -632,18 +639,32 @@ bool Load_Light(SerializedW3D &serialized, W3DLight &light)
 	return loaded;
 }
 
-void Check_Light_Color(const W3DLight &light, const Vector3 &expected_ambient,
-	const Vector3 &expected_diffuse, const Vector3 &expected_specular)
+void Check_Light_Color(const W3DLight &light, const Engine::Math::Vector3 &expected_ambient,
+	const Engine::Math::Vector3 &expected_diffuse, const Engine::Math::Vector3 &expected_specular)
 {
-	Vector3 ambient;
-	Vector3 diffuse;
-	Vector3 specular;
-	light.Get_Ambient(&ambient);
-	light.Get_Diffuse(&diffuse);
-	light.Get_Specular(&specular);
-	Check_Vector(ambient, expected_ambient);
-	Check_Vector(diffuse, expected_diffuse);
-	Check_Vector(specular, expected_specular);
+	Check_Vector(light.Get_Ambient(), expected_ambient);
+	Check_Vector(light.Get_Diffuse(), expected_diffuse);
+	Check_Vector(light.Get_Specular(), expected_specular);
+}
+
+// Matrix3D::RotateZ90 with the given translation.
+Engine::Math::AffineTransform3 Rotate_Z90_Transform(const Engine::Math::Vector3 &translation)
+{
+	Engine::Math::AffineTransform3 transform;
+	transform.elements = {
+		0.0f, -1.0f, 0.0f, translation.x,
+		1.0f, 0.0f, 0.0f, translation.y,
+		0.0f, 0.0f, 1.0f, translation.z};
+	return transform;
+}
+
+LegacyMathReference::Matrix3D To_Reference_Matrix(const Engine::Math::AffineTransform3 &transform)
+{
+	LegacyMathReference::Matrix3D result;
+	for (std::size_t row = 0; row < 3; ++row)
+		for (std::size_t column = 0; column < 4; ++column)
+			result[row][column] = transform.elements[row * 4 + column];
+	return result;
 }
 
 class RecordingScene final : public W3DSimpleScene
@@ -680,8 +701,8 @@ BOOST_AUTO_TEST_CASE(w3d_camera_assignment_preserves_destination_transform_aspec
 	source.Set_View_Plane({-4.0f, -2.0f}, {4.0f, 2.0f});
 	source.Set_Viewport({0.1f, 0.2f}, {0.8f, 0.9f});
 	source.Set_Zbuffer_Range(0.15f, 0.85f);
-	Matrix3D source_transform = Matrix3D::RotateZ90;
-	source_transform.Set_Translation(Vector3(10.0f, 20.0f, 30.0f));
+	const Engine::Math::AffineTransform3 source_transform =
+		Rotate_Z90_Transform({10.0f, 20.0f, 30.0f});
 	source.Set_Transform(source_transform);
 
 	W3DCamera destination;
@@ -691,8 +712,8 @@ BOOST_AUTO_TEST_CASE(w3d_camera_assignment_preserves_destination_transform_aspec
 	destination.Set_Aspect_Ratio(1.75f);
 	destination.Set_Viewport({0.0f, 0.0f}, {1.0f, 1.0f});
 	destination.Set_Zbuffer_Range(0.35f, 0.65f);
-	Matrix3D destination_transform = Matrix3D::RotateZ90;
-	destination_transform.Set_Translation(Vector3(-6.0f, -7.0f, -8.0f));
+	const Engine::Math::AffineTransform3 destination_transform =
+		Rotate_Z90_Transform({-6.0f, -7.0f, -8.0f});
 	destination.Set_Transform(destination_transform);
 
 	destination = source;
@@ -709,39 +730,51 @@ BOOST_AUTO_TEST_CASE(w3d_camera_assignment_preserves_destination_transform_aspec
 	destination.Get_Zbuffer_Range(near_depth, far_depth);
 	BOOST_CHECK_CLOSE_FRACTION(near_depth, 0.35f, kFloatTolerance);
 	BOOST_CHECK_CLOSE_FRACTION(far_depth, 0.65f, kFloatTolerance);
-	Vector2 minimum;
-	Vector2 maximum;
+	Engine::Math::Vector2 minimum;
+	Engine::Math::Vector2 maximum;
 	destination.Get_View_Plane(minimum, maximum);
-	BOOST_CHECK_CLOSE_FRACTION(minimum.X, -4.0f, kFloatTolerance);
-	BOOST_CHECK_CLOSE_FRACTION(minimum.Y, -2.0f, kFloatTolerance);
-	BOOST_CHECK_CLOSE_FRACTION(maximum.X, 4.0f, kFloatTolerance);
-	BOOST_CHECK_CLOSE_FRACTION(maximum.Y, 2.0f, kFloatTolerance);
+	BOOST_CHECK_CLOSE_FRACTION(minimum.x, -4.0f, kFloatTolerance);
+	BOOST_CHECK_CLOSE_FRACTION(minimum.y, -2.0f, kFloatTolerance);
+	BOOST_CHECK_CLOSE_FRACTION(maximum.x, 4.0f, kFloatTolerance);
+	BOOST_CHECK_CLOSE_FRACTION(maximum.y, 2.0f, kFloatTolerance);
 	BOOST_CHECK(destination.Get_Viewport().Min == source.Get_Viewport().Min);
 	BOOST_CHECK(destination.Get_Viewport().Max == source.Get_Viewport().Max);
 
-	Matrix4x4 source_projection;
-	Matrix4x4 destination_projection;
-	source.Get_Projection_Matrix(&source_projection);
-	destination.Get_Projection_Matrix(&destination_projection);
-	for (int row = 0; row < 4; ++row)
-		for (int column = 0; column < 4; ++column)
-			BOOST_CHECK_CLOSE_FRACTION(destination_projection[row][column],
-				source_projection[row][column], kFloatTolerance);
+	const auto source_projection = source.Build_Render_Matrices().projection;
+	const auto destination_projection = destination.Build_Render_Matrices().projection;
+	for (std::size_t index = 0; index < source_projection.size(); ++index)
+		BOOST_CHECK_CLOSE_FRACTION(destination_projection[index],
+			source_projection[index], kFloatTolerance);
 
-	Vector3 view_space;
-	destination.Transform_To_View_Space(view_space, destination_transform.Get_Translation());
-	Check_Vector(view_space, Vector3(0.0f, 0.0f, 0.0f));
-	BOOST_CHECK(destination.Get_Frustum().CameraTransform == destination_transform);
-	const Vector3 visible_center = destination_transform.Get_Translation()
+	Engine::Math::Vector3 view_space;
+	destination.Transform_To_View_Space(view_space, destination_transform.Translation());
+	Check_Vector(view_space, Engine::Math::Vector3{0.0f, 0.0f, 0.0f});
+	// The world frustum must still be built from the retained destination
+	// transform (the legacy FrustumClass::CameraTransform). Reference: the
+	// retired Matrix3D::Transform_Vector applied to the view-space corners.
+	const auto reference_transform = To_Reference_Matrix(destination_transform);
+	for (std::size_t corner = 0; corner < 8; ++corner) {
+		const auto &view_frustum_corner = destination.Get_View_Space_Frustum().Corner(corner);
+		const auto expected_frustum_corner = LegacyMathReference::Matrix3D::Transform_Vector(
+			reference_transform,
+			{view_frustum_corner.x, view_frustum_corner.y, view_frustum_corner.z});
+		const auto &frustum_corner = destination.Get_Frustum().Corner(corner);
+		BOOST_TEST_CONTEXT("corner=" << corner) {
+			BOOST_CHECK_SMALL(frustum_corner.x - expected_frustum_corner.X, kFloatTolerance);
+			BOOST_CHECK_SMALL(frustum_corner.y - expected_frustum_corner.Y, kFloatTolerance);
+			BOOST_CHECK_SMALL(frustum_corner.z - expected_frustum_corner.Z, kFloatTolerance);
+		}
+	}
+	const Engine::Math::Vector3 visible_center = destination_transform.Translation()
 		+ destination.Get_Forward_Dir() * 10.0f;
-	BOOST_CHECK(!destination.Cull_Sphere(SphereClass(visible_center, 0.1f)));
+	BOOST_CHECK(!destination.Cull_Sphere({visible_center, 0.1f}));
 }
 
 BOOST_AUTO_TEST_CASE(w3d_render_object_copy_preserves_state_but_resets_object_scale)
 {
 	W3DCamera source;
-	Matrix3D source_transform = Matrix3D::RotateZ90;
-	source_transform.Set_Translation(Vector3(10.0f, 20.0f, 30.0f));
+	const Engine::Math::AffineTransform3 source_transform =
+		Rotate_Z90_Transform({10.0f, 20.0f, 30.0f});
 	source.Set_Transform(source_transform);
 	source.Set_Visible(1);
 	source.Set_Hidden(1);
@@ -770,66 +803,63 @@ BOOST_AUTO_TEST_CASE(w3d_render_object_copy_preserves_state_but_resets_object_sc
 
 BOOST_AUTO_TEST_CASE(w3d_queries_preserve_bounds_touching_and_transformed_ownership)
 {
-	CastResultStruct result;
+	Engine::Math::CollisionResult3 result;
 	W3DLight hit_object(W3DLight::POINT);
 	W3DRenderObject *const hit = &hit_object;
 
-	const LineSegClass source_ray(Vector3(1, 2, 3), Vector3(5, -1, 7));
+	const Engine::Math::LineSegment3 source_ray{{1, 2, 3}, {5, -1, 7}};
 	W3DRayCastQuery ray(source_ray, &result, SCENE_QUERY_PROJECTILE, true, true);
 	ray.CollidedRenderObj = hit;
-	const Matrix3D rotate_translate(
-		0, -1, 0, 10,
-		1, 0, 0, -20,
-		0, 0, 1, 30);
-	W3DRayCastQuery transformed_ray(ray, rotate_translate);
+	Engine::Math::AffineTransform3 query_transform;
+	query_transform.elements = {0, -1, 0, 10, 1, 0, 0, -20, 0, 0, 1, 30};
+	W3DRayCastQuery transformed_ray(ray, query_transform);
 	BOOST_CHECK(transformed_ray.Result == &result);
 	BOOST_CHECK(transformed_ray.CollidedRenderObj == hit);
 	BOOST_CHECK_EQUAL(transformed_ray.CollisionType, SCENE_QUERY_PROJECTILE);
 	BOOST_CHECK(transformed_ray.CheckTranslucent);
 	BOOST_CHECK(transformed_ray.CheckHidden);
-	Check_Vector(transformed_ray.Ray.Get_P0(), Vector3(8, -19, 33));
-	Check_Vector(transformed_ray.Ray.Get_P1(), Vector3(11, -15, 37));
+	Check_Vector(transformed_ray.Ray.start, Engine::Math::Vector3{8, -19, 33});
+	Check_Vector(transformed_ray.Ray.end, Engine::Math::Vector3{11, -15, 37});
 
-	const AABoxClass moving_box(Vector3(1, -2, 3), Vector3(2, 3, 4));
-	const Vector3 movement(4, 5, 6);
+	const Engine::Math::AxisAlignedBox3 moving_box{{-1, -5, -1}, {3, 1, 7}};
+	const Engine::Math::Vector3 movement{4, 5, 6};
 	W3DBoxCastQuery axis_box(moving_box, movement, &result, SCENE_QUERY_PHYSICAL);
 	axis_box.CollidedRenderObj = hit;
-	Check_Vector(axis_box.SweepMin, Vector3(-1, -5, -1));
-	Check_Vector(axis_box.SweepMax, Vector3(7, 6, 13));
-	BOOST_CHECK(!axis_box.Cull(AABoxClass(Vector3(8, 0, 0), Vector3(1, 1, 1))));
-	BOOST_CHECK(axis_box.Cull(AABoxClass(Vector3(8.01f, 0, 0), Vector3(1, 1, 1))));
+	Check_Vector(axis_box.Sweep_Bounds.minimum, Engine::Math::Vector3{-1, -5, -1});
+	Check_Vector(axis_box.Sweep_Bounds.maximum, Engine::Math::Vector3{7, 6, 13});
+	BOOST_CHECK(!axis_box.Cull({{7, -1, -1}, {9, 1, 1}}));
+	BOOST_CHECK(axis_box.Cull({{7.01f, -1, -1}, {9.01f, 1, 1}}));
 	W3DBoxCastQuery copied_axis_box(axis_box);
 	BOOST_CHECK(copied_axis_box.Result == &result);
 	BOOST_CHECK(copied_axis_box.CollidedRenderObj == hit);
 
-	const OBBoxClass oriented_box(Vector3(1, -2, 3), Vector3(2, 3, 4), Matrix3x3::RotateZ90);
+	const Engine::Math::OrientedBox3 oriented_box{{1, -2, 3}, {2, 3, 4},
+		{{{0, 1, 0}, {-1, 0, 0}, {0, 0, 1}}}};
 	W3DOrientedBoxCastQuery oriented(oriented_box, movement, &result, SCENE_QUERY_VEHICLE);
 	oriented.CollidedRenderObj = hit;
-	// The source basis rotates unequal extents into (3, 2, 4), and the
-	// conservative cast padding is part of the retained W3D query contract.
-	Check_Vector(oriented.SweepMin, Vector3(-2.01f, -4.01f, -1.01f));
-	Check_Vector(oriented.SweepMax, Vector3(8.01f, 5.01f, 13.01f));
-	W3DOrientedBoxCastQuery transformed_oriented(oriented, rotate_translate);
+	Check_Vector(oriented.Sweep_Bounds.minimum, Engine::Math::Vector3{-2.01f, -4.01f, -1.01f});
+	Check_Vector(oriented.Sweep_Bounds.maximum, Engine::Math::Vector3{8.01f, 5.01f, 13.01f});
+	W3DOrientedBoxCastQuery transformed_oriented(oriented, query_transform);
 	BOOST_CHECK(transformed_oriented.Result == &result);
 	BOOST_CHECK(transformed_oriented.CollidedRenderObj == hit);
 	BOOST_CHECK_EQUAL(transformed_oriented.CollisionType, SCENE_QUERY_VEHICLE);
-	Check_Vector(transformed_oriented.Box.Center, Vector3(12, -19, 33));
-	Check_Vector(transformed_oriented.Box.Extent, Vector3(2, 3, 4));
-	Check_Vector(transformed_oriented.Move, Vector3(-5, 4, 6));
+	Check_Vector(transformed_oriented.Box.center, Engine::Math::Vector3{12, -19, 33});
+	Check_Vector(transformed_oriented.Box.half_extent, Engine::Math::Vector3{2, 3, 4});
+	Check_Vector(transformed_oriented.Move, Engine::Math::Vector3{-5, 4, 6});
 	// These extrema are calculated from the source sweep bounds and the
 	// explicit rotate-plus-translate matrix above.
-	Check_Vector(transformed_oriented.SweepMin, Vector3(4.99f, -22.01f, 28.99f));
-	Check_Vector(transformed_oriented.SweepMax, Vector3(14.01f, -11.99f, 43.01f));
+	Check_Vector(transformed_oriented.Sweep_Bounds.minimum, Engine::Math::Vector3{4.99f, -22.01f, 28.99f});
+	Check_Vector(transformed_oriented.Sweep_Bounds.maximum, Engine::Math::Vector3{14.01f, -11.99f, 43.01f});
 
 	W3DBoxIntersectionQuery axis_intersection(
-		AABoxClass(Vector3(7, 0, 0), Vector3(1, 1, 1)), SCENE_QUERY_CAMERA);
-	BOOST_CHECK(!axis_intersection.Cull(AABoxClass(Vector3(9, 0, 0), Vector3(1, 1, 1))));
-	BOOST_CHECK(axis_intersection.Cull(AABoxClass(Vector3(9.01f, 0, 0), Vector3(1, 1, 1))));
-	W3DOrientedBoxIntersectionQuery transformed_intersection(axis_intersection, rotate_translate);
+		Engine::Math::AxisAlignedBox3{{6, -1, -1}, {8, 1, 1}}, SCENE_QUERY_CAMERA);
+	BOOST_CHECK(!axis_intersection.Cull({{8, -1, -1}, {10, 1, 1}}));
+	BOOST_CHECK(axis_intersection.Cull({{8.01f, -1, -1}, {10.01f, 1, 1}}));
+	W3DOrientedBoxIntersectionQuery transformed_intersection(axis_intersection, query_transform);
 	BOOST_CHECK_EQUAL(transformed_intersection.CollisionType, SCENE_QUERY_CAMERA);
-	Check_Vector(transformed_intersection.Box.Center, Vector3(10, -13, 30));
-	Check_Vector(transformed_intersection.BoundingBox.Center, Vector3(10, -13, 30));
-	Check_Vector(transformed_intersection.BoundingBox.Extent, Vector3(1, 1, 1));
+	Check_Vector(transformed_intersection.Box.center, Engine::Math::Vector3{10, -13, 30});
+	Check_Vector(transformed_intersection.BoundingBox.minimum, Engine::Math::Vector3{9, -14, 29});
+	Check_Vector(transformed_intersection.BoundingBox.maximum, Engine::Math::Vector3{11, -12, 31});
 }
 
 BOOST_AUTO_TEST_CASE(particle_emitter_names_own_storage_across_copy_clone_and_source_release)
@@ -888,22 +918,22 @@ BOOST_AUTO_TEST_CASE(material3_conversion_preserves_channel_products_and_scalar_
 	Graphics::MeshMaterial material;
 	BOOST_REQUIRE(Load_Test_Material(material));
 
-	Vector3 diffuse;
-	Vector3 specular;
-	Vector3 emissive;
-	Vector3 ambient;
-	diffuse.Set(material.parameters.diffuse[0],material.parameters.diffuse[1],material.parameters.diffuse[2]);
-	specular.Set(material.parameters.specular[0],material.parameters.specular[1],material.parameters.specular[2]);
-	emissive.Set(material.parameters.emissive[0],material.parameters.emissive[1],material.parameters.emissive[2]);
-	ambient.Set(material.parameters.ambient[0],material.parameters.ambient[1],material.parameters.ambient[2]);
-	Check_Vector(diffuse, Vector3(
-		Byte_Product(128, 128), Byte_Product(127, 127), Byte_Product(254, 0)));
-	Check_Vector(specular, Vector3(
-		Byte_Product(255, 1), Byte_Product(254, 0), Byte_Product(0, 255)));
-	Check_Vector(emissive, Vector3(
-		Byte_To_Float(1), Byte_To_Float(0), Byte_To_Float(127)));
-	Check_Vector(ambient, Vector3(
-		Byte_To_Float(128), Byte_To_Float(1), Byte_To_Float(0)));
+	const Engine::Math::Vector3 diffuse{
+		material.parameters.diffuse[0],material.parameters.diffuse[1],material.parameters.diffuse[2]};
+	const Engine::Math::Vector3 specular{
+		material.parameters.specular[0],material.parameters.specular[1],material.parameters.specular[2]};
+	const Engine::Math::Vector3 emissive{
+		material.parameters.emissive[0],material.parameters.emissive[1],material.parameters.emissive[2]};
+	const Engine::Math::Vector3 ambient{
+		material.parameters.ambient[0],material.parameters.ambient[1],material.parameters.ambient[2]};
+	Check_Vector(diffuse, Engine::Math::Vector3{
+		Byte_Product(128, 128), Byte_Product(127, 127), Byte_Product(254, 0)});
+	Check_Vector(specular, Engine::Math::Vector3{
+		Byte_Product(255, 1), Byte_Product(254, 0), Byte_Product(0, 255)});
+	Check_Vector(emissive, Engine::Math::Vector3{
+		Byte_To_Float(1), Byte_To_Float(0), Byte_To_Float(127)});
+	Check_Vector(ambient, Engine::Math::Vector3{
+		Byte_To_Float(128), Byte_To_Float(1), Byte_To_Float(0)});
 	BOOST_CHECK_SMALL(material.parameters.shininess - 17.0f, kFloatTolerance);
 	BOOST_CHECK_SMALL(material.parameters.opacity - 0.625f, kFloatTolerance);
 
@@ -1054,12 +1084,10 @@ BOOST_AUTO_TEST_CASE(light_w3d_roundtrip_preserves_encoded_colors_and_authored_p
 	BOOST_CHECK(loaded.Are_Shadows_Enabled());
 	BOOST_CHECK_SMALL(loaded.Get_Intensity() - 1.0f, kFloatTolerance);
 	Check_Light_Color(loaded,
-		Vector3(Byte_To_Float(127), Byte_To_Float(63), Byte_To_Float(191)),
-		Vector3(Byte_To_Float(63), Byte_To_Float(127), Byte_To_Float(191)),
-		Vector3(Byte_To_Float(191), Byte_To_Float(127), Byte_To_Float(63)));
-	Vector3 direction;
-	loaded.Get_Spot_Direction(direction);
-	Check_Vector(direction, Vector3(0.0f, 0.0f, -1.0f));
+		Engine::Math::Vector3{Byte_To_Float(127), Byte_To_Float(63), Byte_To_Float(191)},
+		Engine::Math::Vector3{Byte_To_Float(63), Byte_To_Float(127), Byte_To_Float(191)},
+		Engine::Math::Vector3{Byte_To_Float(191), Byte_To_Float(127), Byte_To_Float(63)});
+	Check_Vector(loaded.Get_Spot_Direction(), Engine::Math::Vector3{0.0f, 0.0f, -1.0f});
 	BOOST_CHECK_SMALL(loaded.Get_Spot_Angle() - 0.75f, kFloatTolerance);
 	BOOST_CHECK_SMALL(loaded.Get_Spot_Exponent() - 2.5f, kFloatTolerance);
 	BOOST_CHECK(loaded.Get_Flag(W3DLight::FAR_ATTENUATION));
@@ -1119,21 +1147,24 @@ BOOST_AUTO_TEST_CASE(w3d_light_copy_clone_and_assignment_preserve_independent_st
 {
 	W3DLight source(W3DLight::SPOT);
 	Configure_Test_Light(source);
-	Matrix3D source_transform(1);
-	source_transform.Rotate_Z(0.5f);
-	source_transform.Set_Translation(Vector3(3.0f, 4.0f, 5.0f));
+	LegacyMathReference::Matrix3D reference_source_transform;
+	reference_source_transform.Rotate_Z(0.5f);
+	reference_source_transform.Set_Translation({3.0f, 4.0f, 5.0f});
+	const auto source_transform =
+		Engine::Math::AffineTransform3::From_Row_Matrix(reference_source_transform);
 	source.Set_Transform(source_transform);
 	const float copied_spot_cosine = source.Get_Spot_Angle_Cos();
 
 	std::unique_ptr<W3DRenderObject> cloned_object(source.Clone());
 	W3DLight *cloned = static_cast<W3DLight *>(cloned_object.get());
 	BOOST_REQUIRE(cloned != nullptr);
-	const Matrix3D identity_transform(1);
+	const Engine::Math::AffineTransform3 identity_transform = Engine::Math::AffineTransform3::Identity();
 	BOOST_CHECK(cloned->Get_Transform() == identity_transform);
 	BOOST_CHECK(source.Get_Transform() == source_transform);
 
 	W3DLight assigned(W3DLight::POINT);
-	const Matrix3D assigned_transform(Vector3(-6.0f, -7.0f, -8.0f));
+	const Engine::Math::AffineTransform3 assigned_transform =
+		Engine::Math::AffineTransform3::From_Translation({-6.0f, -7.0f, -8.0f});
 	assigned.Set_Transform(assigned_transform);
 	assigned = source;
 	// W3DRenderObject assignment deliberately copies render flags but retains
@@ -1146,9 +1177,9 @@ BOOST_AUTO_TEST_CASE(w3d_light_copy_clone_and_assignment_preserve_independent_st
 		BOOST_CHECK_EQUAL(light.Get_Flag(W3DLight::FAR_ATTENUATION), 1);
 		BOOST_CHECK_SMALL(light.Get_Intensity() - 1.0f, kFloatTolerance);
 		Check_Light_Color(light,
-			Vector3(0.5f, 0.25f, 0.75f),
-			Vector3(0.25f, 0.5f, 0.75f),
-			Vector3(0.75f, 0.5f, 0.25f));
+			Engine::Math::Vector3{0.5f, 0.25f, 0.75f},
+			Engine::Math::Vector3{0.25f, 0.5f, 0.75f},
+			Engine::Math::Vector3{0.75f, 0.5f, 0.25f});
 		BOOST_CHECK_SMALL(light.Get_Spot_Angle() - 0.75f, kFloatTolerance);
 		BOOST_CHECK_SMALL(light.Get_Spot_Exponent() - 2.5f, kFloatTolerance);
 	};
@@ -1164,7 +1195,7 @@ BOOST_AUTO_TEST_CASE(w3d_light_copy_clone_and_assignment_preserve_independent_st
 	BOOST_CHECK_EQUAL(source.Get_Flag(W3DLight::FAR_ATTENUATION), 1);
 
 	source.Set_Intensity(3.0f);
-	source.Set_Ambient(Vector3(0.1f, 0.2f, 0.3f));
+	source.Set_Ambient(Engine::Math::Vector3{0.1f, 0.2f, 0.3f});
 	source.Set_Spot_Angle(0.25f);
 	source.Set_Flag(W3DLight::FAR_ATTENUATION, false);
 	BOOST_CHECK_SMALL(cloned->Get_Intensity() - 1.0f, kFloatTolerance);
@@ -1174,9 +1205,9 @@ BOOST_AUTO_TEST_CASE(w3d_light_copy_clone_and_assignment_preserve_independent_st
 	BOOST_CHECK_EQUAL(cloned->Get_Flag(W3DLight::FAR_ATTENUATION), 1);
 	BOOST_CHECK_EQUAL(assigned.Get_Flag(W3DLight::FAR_ATTENUATION), 1);
 	Check_Light_Color(*cloned,
-		Vector3(0.5f, 0.25f, 0.75f),
-		Vector3(0.25f, 0.5f, 0.75f),
-		Vector3(0.75f, 0.5f, 0.25f));
+		Engine::Math::Vector3{0.5f, 0.25f, 0.75f},
+		Engine::Math::Vector3{0.25f, 0.5f, 0.75f},
+		Engine::Math::Vector3{0.75f, 0.5f, 0.25f});
 }
 
 BOOST_AUTO_TEST_CASE(w3d_light_registers_and_unregisters_with_scene)
@@ -1277,14 +1308,10 @@ BOOST_AUTO_TEST_CASE(converted_w3d_material_and_light_values_reach_prop_pixels)
 	W3DLight loaded_light(W3DLight::POINT);
 	BOOST_REQUIRE(Load_Light(saved_light, loaded_light));
 
-	Vector3 ambient;
-	Vector3 diffuse;
-	Vector3 specular;
-	Vector3 direction;
-	loaded_light.Get_Ambient(&ambient);
-	loaded_light.Get_Diffuse(&diffuse);
-	loaded_light.Get_Specular(&specular);
-	loaded_light.Get_Spot_Direction(direction);
+	const Engine::Math::Vector3 ambient = loaded_light.Get_Ambient();
+	const Engine::Math::Vector3 diffuse = loaded_light.Get_Diffuse();
+	const Engine::Math::Vector3 specular = loaded_light.Get_Specular();
+	const Engine::Math::Vector3 direction = loaded_light.Get_Spot_Direction();
 	double attenuation_start = 0.0;
 	double attenuation_end = 0.0;
 	loaded_light.Get_Far_Attenuation_Range(attenuation_start, attenuation_end);
@@ -1321,10 +1348,10 @@ BOOST_AUTO_TEST_CASE(converted_w3d_material_and_light_values_reach_prop_pixels)
 	parameters.camera_position = {0.0f, 0.0f, 5.0f, 1.0f};
 	parameters.textured = 0.0f;
 	parameters.secondary_gradient = 1.0f;
-	parameters.light_direction[0] = {direction.X, direction.Y, direction.Z, 1.0f};
-	parameters.light_diffuse[0] = {diffuse.X, diffuse.Y, diffuse.Z, 0.0f};
-	parameters.light_specular[0] = {specular.X, specular.Y, specular.Z, 0.0f};
-	parameters.light_ambient[0] = {ambient.X, ambient.Y, ambient.Z, 0.0f};
+	parameters.light_direction[0] = {direction.x, direction.y, direction.z, 1.0f};
+	parameters.light_diffuse[0] = {diffuse.x, diffuse.y, diffuse.z, 0.0f};
+	parameters.light_specular[0] = {specular.x, specular.y, specular.z, 0.0f};
+	parameters.light_ambient[0] = {ambient.x, ambient.y, ambient.z, 0.0f};
 	parameters.light_position[0] = {0.0f, 0.0f, 10.0f,
 		loaded_light.Get_Type() == W3DLight::SPOT ? 2.0f : 0.0f};
 	parameters.light_attenuation[0] = {
@@ -1455,19 +1482,17 @@ BOOST_AUTO_TEST_CASE(segmented_line_cloning_resets_scene_transform_and_assignmen
 {
     RefCountPtr<W3DSegmentedLineRenderObject> source =
         Create_No_Add_Ref(new W3DSegmentedLineRenderObject);
-    const Vector3 points[]{Vector3(-1, 0, -5), Vector3(1, 0, -5)};
+    const Engine::Math::Vector3 points[]{{-1, 0, -5}, {1, 0, -5}};
     source->Set_Points(2, points);
     source->Set_Width(2);
     source->Set_Subdivision_Levels(3);
     source->Set_LOD_Level(2);
     source->Set_Hidden(true);
-    Matrix3D transform = Matrix3D::RotateZ90;
-    transform.Set_Translation(Vector3(3, 4, 5));
-    source->Set_Transform(transform);
+    source->Set_Transform(Rotate_Z90_Transform({3, 4, 5}));
 
     RefCountPtr<W3DSegmentedLineRenderObject> clone = Create_No_Add_Ref(
         static_cast<W3DSegmentedLineRenderObject *>(source->Clone()));
-    const Matrix3D identity(1);
+    const Engine::Math::AffineTransform3 identity = Engine::Math::AffineTransform3::Identity();
     for (unsigned row = 0; row < 3; ++row)
         for (unsigned column = 0; column < 4; ++column)
             BOOST_CHECK_EQUAL(clone->Get_Transform()[row][column], identity[row][column]);
@@ -1479,14 +1504,14 @@ BOOST_AUTO_TEST_CASE(segmented_line_cloning_resets_scene_transform_and_assignmen
     BOOST_CHECK(clone->Peek_Scene() == nullptr);
     BOOST_CHECK(clone->Get_Container() == nullptr);
 
-    clone->Set_Position(Vector3(8, 9, 10));
+    clone->Set_Position(Engine::Math::Vector3{8, 9, 10});
     *clone = *source;
-    Check_Vector(clone->Get_Position(), Vector3(8, 9, 10));
+    Check_Vector(clone->Get_Position(), Engine::Math::Vector3{8, 9, 10});
     BOOST_CHECK(clone->Is_Hidden());
-    clone->Set_Point_Location(0, Vector3(7, 8, 9));
-    Vector3 original_point;
+    clone->Set_Point_Location(0, Engine::Math::Vector3{7, 8, 9});
+    Engine::Math::Vector3 original_point;
     source->Get_Point_Location(0, original_point);
-    Check_Vector(original_point, points[0]);
+    BOOST_CHECK(original_point == points[0]);
 }
 
 BOOST_AUTO_TEST_CASE(segmented_line_frozen_noise_retains_three_rng_samples_and_chunk_restarts)
@@ -1500,7 +1525,7 @@ BOOST_AUTO_TEST_CASE(segmented_line_frozen_noise_retains_three_rng_samples_and_c
     W3DRenderContext info(camera);
     RefCountPtr<W3DSegmentedLineRenderObject> line =
         Create_No_Add_Ref(new W3DSegmentedLineRenderObject);
-    std::vector<Vector3> points;
+    std::vector<Engine::Math::Vector3> points;
     for (unsigned index = 0; index < 70; ++index)
         points.emplace_back(static_cast<float>(index) * 0.1f - 3.5f, 0, -5);
     line->Set_Points(static_cast<unsigned>(points.size()), points.data());
@@ -1514,84 +1539,112 @@ BOOST_AUTO_TEST_CASE(segmented_line_frozen_noise_retains_three_rng_samples_and_c
     struct CapturedGeometry {
         std::vector<std::vector<Graphics::PropVertex>> vertices;
         std::vector<std::vector<std::uint32_t>> indices;
-    } actual, expected;
-    W3DSegmentedLineGeometrySink sink;
-    sink.context = &actual;
-    sink.submit = [](void *context, const Graphics::PropVertex *vertices, unsigned vertex_count,
-        const std::uint32_t *indices, unsigned index_count) {
-        auto &capture = *static_cast<CapturedGeometry *>(context);
-        capture.vertices.emplace_back(vertices, vertices + vertex_count);
-        capture.indices.emplace_back(indices, indices + index_count);
     };
-    line->Extract_Geometry(info, sink);
+    const auto extract = [&] {
+        CapturedGeometry captured;
+        W3DSegmentedLineGeometrySink sink;
+        sink.context = &captured;
+        sink.submit = [](void *context, const Graphics::PropVertex *vertices, unsigned vertex_count,
+            const std::uint32_t *indices, unsigned index_count) {
+            auto &capture = *static_cast<CapturedGeometry *>(context);
+            capture.vertices.emplace_back(vertices, vertices + vertex_count);
+            capture.indices.emplace_back(indices, indices + index_count);
+        };
+        line->Extract_Geometry(info, sink);
+        return captured;
+    };
+    const auto same_positions = [](const CapturedGeometry &left, const CapturedGeometry &right) {
+        if (left.vertices.size() != right.vertices.size())
+            return false;
+        for (std::size_t chunk = 0; chunk < left.vertices.size(); ++chunk) {
+            if (left.vertices[chunk].size() != right.vertices[chunk].size())
+                return false;
+            for (std::size_t vertex = 0; vertex < left.vertices[chunk].size(); ++vertex)
+                for (unsigned axis = 0; axis < 3; ++axis)
+                    if (std::bit_cast<std::uint32_t>(left.vertices[chunk][vertex].position[axis])
+                        != std::bit_cast<std::uint32_t>(right.vertices[chunk][vertex].position[axis]))
+                        return false;
+        }
+        return true;
+    };
 
+    const CapturedGeometry actual = extract();
+
+    // Pipeline contract: one noise request (three random components) per
+    // subdivided segment and a generator restart at every chunk boundary. The
+    // noiseless build supplies the structural reference for the line.
     Graphics::RibbonPipeline pipeline;
     Graphics::RibbonPipelineSettings settings;
     settings.width = 0.25f;
     settings.subdivision_level = 1;
     settings.noise_amplitude = 0.125f;
     settings.merge_intersections = false;
-    std::optional<Random3Class> random;
+    CapturedGeometry noiseless;
     std::vector<std::size_t> chunk_starts;
     unsigned samples = 0;
     BOOST_REQUIRE(pipeline.Build(points.size(), settings,
         [&](std::size_t index) {
             const auto &point = points[index];
-            return Graphics::RibbonPoint{{point.X, point.Y, point.Z}, {1, 1, 1, 1}, 0};
+            return Graphics::RibbonPoint{{point.x, point.y, point.z}, {1, 1, 1, 1}, 0};
         },
         [&] {
-            Vector3 offset;
-            const float inverse_max = 1.0f / static_cast<float>(INT_MAX);
-            // This original expression is intentional: three conversions of
-            // Random3Class, with the active compiler's argument evaluation order.
-            offset.Set(*random * inverse_max, *random * inverse_max, *random * inverse_max);
             ++samples;
-            return std::array<float, 3>{offset.X, offset.Y, offset.Z};
+            return std::array<float, 3>{0.0f, 0.0f, 0.0f};
         },
-        [&](std::size_t first_point) {
-            chunk_starts.push_back(first_point);
-            random.emplace();
-        },
+        [&](std::size_t first_point) { chunk_starts.push_back(first_point); },
         [&](const Graphics::RibbonPipelineChunk &chunk) {
-            expected.vertices.emplace_back(chunk.vertices.begin(), chunk.vertices.end());
-            expected.indices.emplace_back(chunk.indices.begin(), chunk.indices.end());
+            noiseless.vertices.emplace_back(chunk.vertices.begin(), chunk.vertices.end());
+            noiseless.indices.emplace_back(chunk.indices.begin(), chunk.indices.end());
         }));
     BOOST_REQUIRE(chunk_starts == (std::vector<std::size_t>{0, 64}));
     BOOST_CHECK_EQUAL(samples, 69u);
-    BOOST_REQUIRE_EQUAL(actual.vertices.size(), expected.vertices.size());
-    BOOST_CHECK(actual.indices == expected.indices);
-    for (std::size_t chunk = 0; chunk < expected.vertices.size(); ++chunk) {
-        BOOST_REQUIRE_EQUAL(actual.vertices[chunk].size(), expected.vertices[chunk].size());
-        for (std::size_t vertex = 0; vertex < expected.vertices[chunk].size(); ++vertex) {
-            const auto &value = actual.vertices[chunk][vertex];
-            const auto &reference = expected.vertices[chunk][vertex];
-            for (unsigned axis = 0; axis < 3; ++axis)
-                BOOST_CHECK_SMALL(value.position[axis] - reference.position[axis], 0.00001f);
-            BOOST_CHECK(value.color == reference.color);
-            BOOST_CHECK(value.uv == reference.uv);
+    BOOST_REQUIRE_EQUAL(actual.vertices.size(), noiseless.vertices.size());
+    BOOST_CHECK(actual.indices == noiseless.indices);
+    for (std::size_t chunk = 0; chunk < noiseless.vertices.size(); ++chunk) {
+        BOOST_REQUIRE_EQUAL(actual.vertices[chunk].size(), noiseless.vertices[chunk].size());
+        for (std::size_t vertex = 0; vertex < noiseless.vertices[chunk].size(); ++vertex) {
+            BOOST_CHECK(actual.vertices[chunk][vertex].color == noiseless.vertices[chunk][vertex].color);
+            BOOST_CHECK(actual.vertices[chunk][vertex].uv == noiseless.vertices[chunk][vertex].uv);
         }
     }
+    // The noise is actually applied.
+    BOOST_CHECK(!same_positions(actual, noiseless));
+
+    // Original temporal behaviour: frozen noise restarts its own generator for
+    // every build, so repeated extractions are bit-identical, even after
+    // unfrozen builds have advanced the shared noise generator. Unfrozen noise
+    // keeps drawing from the shared generator and changes from build to build.
+    BOOST_CHECK(same_positions(extract(), actual));
+    line->Set_Freeze_Random(0);
+    const CapturedGeometry first_unfrozen = extract();
+    const CapturedGeometry second_unfrozen = extract();
+    BOOST_CHECK(!same_positions(first_unfrozen, second_unfrozen));
+    BOOST_CHECK(first_unfrozen.indices == noiseless.indices);
+    line->Set_Freeze_Random(1);
+    BOOST_CHECK(same_positions(extract(), actual));
 }
 
+// Emission orientation uses the cached slerp of the original particle
+// emitter; compare against a standalone port of the retired WWMath
+// Slerp_Setup / Cached_Slerp / Quaternion::Rotate_Vector.
 BOOST_AUTO_TEST_CASE(emitter_rotation_matches_game_cached_slerp_and_nonunit_vector_rotation)
 {
+    using LegacyMathReference::Quaternion;
     const std::array<Quaternion, 4> rotations{
-        Quaternion(0, 0, 0, 1), Quaternion(.2f, .3f, .4f, .5f),
-        Quaternion(0, 0, -.70710677f, -.70710677f), Quaternion(0, 0, .0001f, 1)};
+        Quaternion{0, 0, 0, 1}, Quaternion{.2f, .3f, .4f, .5f},
+        Quaternion{0, 0, -.70710677f, -.70710677f}, Quaternion{0, 0, .0001f, 1}};
     for (const auto &first : rotations) for (const auto &second : rotations) {
-        SlerpInfoStruct setup;
-        Slerp_Setup(first, second, &setup);
+        const LegacyMathReference::SlerpInfo setup = LegacyMathReference::Slerp_Setup(first, second);
         const Graphics::EmitterRotationInterval interval(
             {first.X, first.Y, first.Z, first.W}, {second.X, second.Y, second.Z, second.W});
         for (const float fraction : {0.0f, .125f, .5f, .875f, 1.0f}) {
-            const Quaternion expected = Cached_Slerp(first, second, fraction, &setup);
+            const Quaternion expected = LegacyMathReference::Cached_Slerp(first, second, fraction, setup);
             const auto actual = interval.Sample(fraction);
             const std::array expected_values{expected.X, expected.Y, expected.Z, expected.W};
             for (unsigned axis = 0; axis < 4; ++axis)
                 BOOST_CHECK_EQUAL(std::bit_cast<std::uint32_t>(actual[axis]),
                     std::bit_cast<std::uint32_t>(expected_values[axis]));
-            const Vector3 vector(2, -3, 7);
-            const Vector3 rotated = expected.Rotate_Vector(vector);
+            const LegacyMathReference::Vector3 rotated = expected.Rotate_Vector({2, -3, 7});
             const auto result = Graphics::Rotate_Emitter_Vector(actual, {2, -3, 7});
             const std::array expected_vector{rotated.X, rotated.Y, rotated.Z};
             for (unsigned axis = 0; axis < 3; ++axis)
@@ -1632,17 +1685,17 @@ BOOST_AUTO_TEST_CASE(emitted_particles_keep_scene_membership_until_their_lifetim
     Graphics::Get_Render_Clock().Sync(true);
     particles->On_Frame_Update();
     BOOST_CHECK(source->Is_Complete());
-    AABoxClass bounds;
-    particles->Get_Obj_Space_Bounding_Box(bounds);
-    BOOST_CHECK_EQUAL(bounds.Extent.X, .25f);
+    Engine::Math::AxisAlignedBox3 bounds;
+    particles->Get_Local_Bounds(bounds);
+    BOOST_CHECK_EQUAL((bounds.maximum.x - bounds.minimum.x) * 0.5f, .25f);
     source->Remove();
     source.Clear();
     BOOST_CHECK(particles->Is_In_Scene());
     BOOST_CHECK(!particles->Is_Complete());
     Graphics::Get_Render_Clock().Update_Logic_Frame_Time(100);
     Graphics::Get_Render_Clock().Sync(true);
-    particles->Get_Obj_Space_Bounding_Box(bounds);
-    BOOST_CHECK_EQUAL(bounds.Extent.X, 0);
+    particles->Get_Local_Bounds(bounds);
+    BOOST_CHECK_EQUAL((bounds.maximum.x - bounds.minimum.x) * 0.5f, 0.0f);
     BOOST_CHECK(particles->Is_Complete());
     particles->On_Frame_Update();
     BOOST_CHECK_EQUAL(scene.release_register_count, 1);

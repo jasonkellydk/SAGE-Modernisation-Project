@@ -20,6 +20,7 @@
 
 #include "W3DDevice/GameClient/W3DRenderObject.h"
 
+import Engine.Core.Math.Vector3;
 import Graphics.Scene.Lighting.Local;
 import Graphics.Scene.Lighting.State;
 
@@ -60,20 +61,20 @@ public:
 	void Notify_Added(W3DScene *scene) override;
 	void Notify_Removed(W3DScene *scene) override;
 
-	void Get_Obj_Space_Bounding_Sphere(SphereClass &sphere) const override;
-	void Get_Obj_Space_Bounding_Box(AABoxClass &box) const override;
+	void Get_Local_Bounding_Sphere(Engine::Math::Sphere3 &sphere) const override;
+	void Get_Local_Bounds(Engine::Math::AxisAlignedBox3 &box) const override;
 
 	LightType Get_Type() const noexcept;
 
 	void Set_Intensity(float intensity) noexcept { m_state.authored.intensity = intensity; }
 	float Get_Intensity() const noexcept { return m_state.authored.intensity; }
 
-	void Set_Ambient(const Vector3 &color) noexcept;
-	void Get_Ambient(Vector3 *color) const noexcept;
-	void Set_Diffuse(const Vector3 &color) noexcept;
-	void Get_Diffuse(Vector3 *color) const noexcept;
-	void Set_Specular(const Vector3 &color) noexcept;
-	void Get_Specular(Vector3 *color) const noexcept;
+	void Set_Ambient(Engine::Math::Vector3 color) noexcept;
+	Engine::Math::Vector3 Get_Ambient() const noexcept;
+	void Set_Diffuse(Engine::Math::Vector3 color) noexcept;
+	Engine::Math::Vector3 Get_Diffuse() const noexcept;
+	void Set_Specular(Engine::Math::Vector3 color) noexcept;
+	Engine::Math::Vector3 Get_Specular() const noexcept;
 
 	void Set_Far_Attenuation_Range(double start, double end) noexcept;
 	void Get_Far_Attenuation_Range(double &start, double &end) const noexcept;
@@ -90,8 +91,8 @@ public:
 	void Set_Spot_Angle(float angle) noexcept;
 	float Get_Spot_Angle() const noexcept { return m_state.authored.spot_angle; }
 	float Get_Spot_Angle_Cos() const noexcept { return m_state.spot_angle_cosine; }
-	void Set_Spot_Direction(const Vector3 &direction) noexcept;
-	void Get_Spot_Direction(Vector3 &direction) const noexcept;
+	void Set_Spot_Direction(Engine::Math::Vector3 direction) noexcept;
+	Engine::Math::Vector3 Get_Spot_Direction() const noexcept;
 	void Set_Spot_Exponent(float exponent) noexcept { m_state.authored.spot_exponent = exponent; }
 	float Get_Spot_Exponent() const noexcept { return m_state.authored.spot_exponent; }
 

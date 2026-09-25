@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/INI.h"
 #include "Common/TerrainTypes.h"
@@ -51,7 +52,7 @@ void INI::parseTerrainDefinition( INI* ini )
 		terrainType = TheTerrainTypes->newTerrain( name );
 
 	// sanity
-	DEBUG_ASSERTCRASH( terrainType, ("Unable to allocate terrain type '%s'", name.str()) );
+	engine::debug::invariant((terrainType), "terrainType", __FILE__, __LINE__, "Unable to allocate terrain type '%s'", name.str());
 
 	// parse the ini definition
 	ini->initFromINI( terrainType, terrainType->getFieldParse() );

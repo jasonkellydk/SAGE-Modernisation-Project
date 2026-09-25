@@ -62,7 +62,7 @@ public:
 	// virtual destructor prototype provided by memory pool declaration
 
  	virtual void setHidden(Bool h) override;
-	virtual void doDrawModule(const Matrix3D* transformMtx) override;
+	virtual void doDrawModule(const Engine::Math::AffineTransform3* transform) override;
 
 protected:
 

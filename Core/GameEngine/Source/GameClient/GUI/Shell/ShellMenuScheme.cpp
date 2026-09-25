@@ -50,7 +50,8 @@
 //-----------------------------------------------------------------------------
 // USER INCLUDES //////////////////////////////////////////////////////////////
 //-----------------------------------------------------------------------------
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/INI.h"
 #include "GameClient/ShellMenuScheme.h"
@@ -83,7 +84,7 @@ void INI::parseShellMenuSchemeDefinition( INI *ini )
 
 	// find existing item if present
 	SMSchemeManager = TheShell->getShellMenuSchemeManager();
-	DEBUG_ASSERTCRASH( SMSchemeManager, ("parseShellMenuSchemeDefinition: Unable to Get SMSchemeManager") );
+	engine::debug::invariant((SMSchemeManager), "SMSchemeManager", __FILE__, __LINE__, "parseShellMenuSchemeDefinition: Unable to Get SMSchemeManager");
 	if( !SMSchemeManager )
 		return;
 
@@ -92,7 +93,7 @@ void INI::parseShellMenuSchemeDefinition( INI *ini )
 	SMScheme = SMSchemeManager->newShellMenuScheme( name );
 
 	// sanity
-	DEBUG_ASSERTCRASH( SMScheme, ("parseControlBarSchemeDefinition: Unable to allocate Scheme '%s'", name.str()) );
+	engine::debug::invariant((SMScheme), "SMScheme", __FILE__, __LINE__, "parseControlBarSchemeDefinition: Unable to allocate Scheme '%s'", name.str());
 
 	// parse the ini definition
 	ini->initFromINI( SMScheme, SMSchemeManager->getFieldParse() );

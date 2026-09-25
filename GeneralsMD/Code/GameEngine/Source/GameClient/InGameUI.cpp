@@ -27,9 +27,12 @@
 // Author: Michael S. Booth, March 2001
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import Engine.Core.Math.Scalar;
+import engine.profiling;
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 #include "Common/GameDateTime.h"
-#include <SDL3/SDL.h>
+import engine.platform;
 
 #define DEFINE_SHADOW_NAMES
 
@@ -40,7 +43,7 @@
 #include "Common/GameUtility.h"
 #include "Common/MessageStream.h"
 #include "Common/NameKeyGenerator.h"
-#include "Common/PerfTimer.h"
+
 #include "Common/Player.h"
 #include "Common/PlayerList.h"
 #include "Common/Radar.h"
@@ -132,7 +135,8 @@ void InGameUI::updateFormationPlacement()
 		handleFormationMouse(refresh);
 		deleteInstance(refresh);
 	} else if (m_formationPlacement->fadeStarted) {
-		const float alpha=0.35f*(1.0f-float(SDL_GetTicks()-m_formationPlacement->fadeStarted)/500.0f);
+		const auto nowMs = static_cast<UnsignedInt>(m_clock.monotonic_nanoseconds() / 1'000'000);
+		const float alpha=0.35f*(1.0f-float(nowMs-m_formationPlacement->fadeStarted)/500.0f);
 		if (alpha<=0) m_formationPlacement->clear();
 		else for (const auto& [object,id] : m_formationPlacement->previews)
 			if (Drawable* draw=TheGameClient->findDrawableByID(id)) draw->setDrawableOpacity(alpha);
@@ -204,7 +208,8 @@ Bool InGameUI::handleFormationMouse(const GameMessage* message)
 		for (const auto& [id,obj] : objects) { x+=obj->getPosition()->x; y+=obj->getPosition()->y; }
 		facing=std::atan2(world.y-float(y/units.size()), world.x-float(x/units.size()));
 	}
-	const auto event = placement.gesture.update(input, world.x, world.y, canBegin, facing, SDL_GetTicks());
+	const auto nowMs = static_cast<UnsignedInt>(m_clock.monotonic_nanoseconds() / 1'000'000);
+	const auto event = placement.gesture.update(input, world.x, world.y, canBegin, facing, nowMs);
 	m_formationInputCaptured=event.capture;
 	if (event.began) { placement.clear(); placement.anchor=world; }
 	if (event.changed && placement.gesture.visible()) {
@@ -244,7 +249,7 @@ Bool InGameUI::handleFormationMouse(const GameMessage* message)
 		move->appendRealArgument(placement.gesture.facing());
 		move->appendRealArgument(22.0f);
 		move->appendIntegerArgument(placement.columns);
-		placement.fadeStarted=SDL_GetTicks();
+		placement.fadeStarted=static_cast<UnsignedInt>(m_clock.monotonic_nanoseconds() / 1'000'000);
 	}
 	return event.capture;
 }
@@ -644,7 +649,7 @@ void InGameUI::xfer( Xfer *xfer )
 			}
 			else if (playerIndex < 0 || playerIndex >= MAX_PLAYER_COUNT)
 			{
-				DEBUG_CRASH(("SWInfo bad plyrindex"));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "SWInfo bad plyrindex");
 				throw INI_INVALID_DATA;
 			}
 
@@ -653,7 +658,7 @@ void InGameUI::xfer( Xfer *xfer )
 			const SpecialPowerTemplate* powerTemplate = TheSpecialPowerStore->findSpecialPowerTemplate(templateName);
 			if (powerTemplate == nullptr)
 			{
-				DEBUG_CRASH(("power %s not found",templateName.str()));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "power %s not found",templateName.str());
 				throw INI_INVALID_DATA;
 			}
 
@@ -769,7 +774,7 @@ void InGameUI::addSuperweapon(Int playerIndex, const AsciiString& powerName, Obj
 	Bool hiddenByScience = (powerTemplate->getRequiredScience() != SCIENCE_INVALID) && (player->hasScience(powerTemplate->getRequiredScience()) == false);
 
 #ifndef DO_UNIT_TIMINGS
-  DEBUG_LOG(("Adding superweapon UI timer"));
+  engine::debug::log_info("Adding superweapon UI timer");
 #endif
 	SuperweaponInfo *info = newInstance(SuperweaponInfo)(
 					id,
@@ -793,7 +798,7 @@ void InGameUI::addSuperweapon(Int playerIndex, const AsciiString& powerName, Obj
 // ------------------------------------------------------------------------------------------------
 Bool InGameUI::removeSuperweapon(Int playerIndex, const AsciiString& powerName, ObjectID id, const SpecialPowerTemplate *powerTemplate)
 {
-	DEBUG_LOG(("Removing superweapon UI timer"));
+	engine::debug::log_info("Removing superweapon UI timer");
 	SuperweaponMap::iterator mapIt = m_superweapons[playerIndex].find(powerName);
 	if (mapIt != m_superweapons[playerIndex].end())
 	{
@@ -1214,7 +1219,8 @@ InGameUI::PlayerInfoList::LastValues::LastValues()
 
 //-------------------------------------------------------------------------------------------------
 //-------------------------------------------------------------------------------------------------
-InGameUI::InGameUI()
+InGameUI::InGameUI(engine::platform::IClockService& clock)
+	: m_clock(clock)
 {
 	Int i;
 
@@ -1543,8 +1549,8 @@ void InGameUI::init()
 		TheTacticalView->setWidth( TheDisplay->getWidth() );
 		TheTacticalView->setHeight( TheDisplay->getHeight() );
 		TheTacticalView->setDefaultView(
-			DEG_TO_RADF(TheGlobalData->m_cameraPitch),
-			DEG_TO_RADF(TheGlobalData->m_cameraYaw),
+			(TheGlobalData->m_cameraPitch * Engine::Math::Pi) / 180.0f,
+			(TheGlobalData->m_cameraYaw * Engine::Math::Pi) / 180.0f,
 			getWidescreenCameraHeightFactor());
 	}
 
@@ -1828,8 +1834,8 @@ void InGameUI::handleBuildPlacements()
 					// while using force attack mode for convenience.
 					if (isInForceAttackMode())
 					{
-						const Real snapRadians = DEG_TO_RADF(45);
-						angle = WWMath::Round(angle / snapRadians) * snapRadians;
+						const Real snapRadians = (45.0f * Engine::Math::Pi) / 180.0f;
+						angle = floorf(angle / snapRadians + 0.5f) * snapRadians;
 					}
 				}
 			}
@@ -2005,11 +2011,9 @@ void InGameUI::preDraw()
 //-------------------------------------------------------------------------------------------------
 /** Update the in game user interface */
 //-------------------------------------------------------------------------------------------------
-//DECLARE_PERF_TIMER(InGameUI_update)
 void InGameUI::update()
 {
 	updateFormationPlacement();
-	//USE_PERF_TIMER(InGameUI_update)
 	Int i;
 
 	//
@@ -2116,7 +2120,7 @@ void InGameUI::update()
 					{
 						// if we've exceeded the allocated number of display strings, this will force us to essentially truncate the remaining text
 						m_militarySubtitle->index = m_militarySubtitle->subtitle.getLength();
-						DEBUG_CRASH(("You're Only Allowed to use %d lines of subtitle text",MAX_SUBTITLE_LINES));
+						engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "You're Only Allowed to use %d lines of subtitle text",MAX_SUBTITLE_LINES);
 					}
 				}
 				else
@@ -2303,8 +2307,8 @@ void InGameUI::reset()
 	TheControlBar->reset();
 
 	TheTacticalView->setDefaultView(
-		DEG_TO_RADF(TheGlobalData->m_cameraPitch),
-		DEG_TO_RADF(TheGlobalData->m_cameraYaw),
+		(TheGlobalData->m_cameraPitch * Engine::Math::Pi) / 180.0f,
+		(TheGlobalData->m_cameraYaw * Engine::Math::Pi) / 180.0f,
 		getWidescreenCameraHeightFactor());
 
 	ResetInGameChat();
@@ -2464,7 +2468,7 @@ void InGameUI::message( AsciiString stringManagerLabel, ... )
 	}
 	else
 	{
-		DEBUG_CRASH(("InGameUI::message failed with code:%d", result));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "InGameUI::message failed with code:%d", result);
 	}
 }
 
@@ -2505,7 +2509,7 @@ void InGameUI::message( UnicodeString format, ... )
 	}
 	else
 	{
-		DEBUG_CRASH(("InGameUI::message failed with code:%d", result));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "InGameUI::message failed with code:%d", result);
 	}
 }
 
@@ -2532,7 +2536,7 @@ void InGameUI::messageColor( const RGBColor *rgbColor, UnicodeString format, ...
 	}
 	else
 	{
-		DEBUG_CRASH(("InGameUI::messageColor failed with code:%d", result));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "InGameUI::messageColor failed with code:%d", result);
 	}
 }
 
@@ -2935,7 +2939,7 @@ void InGameUI::createMouseoverHint( const GameMessage *msg )
 
 	if (oldID != m_mousedOverDrawableID)
 	{
-		//DEBUG_LOG(("Resetting tooltip delay"));
+		//engine::debug::log_info("Resetting tooltip delay");
 		TheMouse->resetTooltipDelay();
 	}
 
@@ -3350,8 +3354,8 @@ void InGameUI::setGUICommand( const CommandButton *command )
 		if( BitIsSet( command->getOptions(), COMMAND_OPTION_NEED_TARGET ) == FALSE )
 		{
 
-			DEBUG_CRASH( ("setGUICommand: Command '%s' does not need additional user interaction",
-														command->getName().str()) );
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "setGUICommand: Command '%s' does not need additional user interaction",
+														command->getName().str());
 			m_pendingGUICommand = nullptr;
 			m_mouseMode = MOUSEMODE_DEFAULT;
 			return;
@@ -3499,8 +3503,8 @@ void InGameUI::placeBuildAvailable( const ThingTemplate *build, Drawable *buildD
 				else
 					draw->setIndicatorColor(sourceObject->getControllingPlayer()->getPlayerColor());
 			}
-			DEBUG_ASSERTCRASH( draw, ("Unable to create icon at cursor for placement '%s'",
-												 build->getName().str()) );
+			engine::debug::invariant((draw), "draw", __FILE__, __LINE__, "Unable to create icon at cursor for placement '%s'",
+												 build->getName().str());
 
 			//
 			// set the initial angle of the free floating building to the property from INI
@@ -3516,7 +3520,7 @@ void InGameUI::placeBuildAvailable( const ThingTemplate *build, Drawable *buildD
 			draw->setDrawableOpacity( TheGlobalData->m_objectPlacementOpacity );
 
 			// set the "icon" in the icon array at the first index
-			DEBUG_ASSERTCRASH( m_placeIcon[ 0 ] == nullptr, ("placeBuildAvailable, build icon array is not empty!") );
+			engine::debug::invariant((m_placeIcon[ 0 ] == nullptr), "m_placeIcon[ 0 ] == nullptr", __FILE__, __LINE__, "placeBuildAvailable, build icon array is not empty!");
 			m_placeIcon[ 0 ] = draw;
 
 		}
@@ -3684,9 +3688,8 @@ void InGameUI::deselectDrawable( Drawable *draw )
 																			 draw );
 
 		// sanity
-		DEBUG_ASSERTCRASH( findIt != m_selectedDrawables.end(),
-											 ("deselectDrawable: Drawable not found in the selected drawable list '%s'",
-											 draw->getTemplate()->getName().str()) );
+		engine::debug::invariant((findIt != m_selectedDrawables.end()), "findIt != m_selectedDrawables.end()", __FILE__, __LINE__, "deselectDrawable: Drawable not found in the selected drawable list '%s'",
+											 draw->getTemplate()->getName().str());
 
 		// remove it from the selected drawable list
 		m_selectedDrawables.erase( findIt );
@@ -4028,7 +4031,7 @@ void InGameUI::postDraw()
 				for (SuperweaponList::iterator listIt = mapIt->second.begin(); listIt != mapIt->second.end(); ++listIt)
 				{
 					SuperweaponInfo *info = *listIt;
-					DEBUG_ASSERTCRASH(info, ("No superweapon info!"));
+					engine::debug::invariant((info), "info", __FILE__, __LINE__, "No superweapon info!");
 					if (info && !info->m_hiddenByScript && !info->m_hiddenByScience)
 					{
 						//enforce bottom margin of tactical view
@@ -4227,7 +4230,7 @@ void InGameUI::postDraw()
 		{
 			AsciiString timerName = mapIt->first;
 			NamedTimerInfo *info = mapIt->second;
-			DEBUG_ASSERTCRASH(info, ("No namedTimer info!"));
+			engine::debug::invariant((info), "info", __FILE__, __LINE__, "No namedTimer info!");
 			if (info)
 			{
 				// found one - draw it
@@ -4346,7 +4349,7 @@ void InGameUI::expireHint( HintType type, UnsignedInt hintIndex )
 	{
 
 		// undefined hint type
-		DEBUG_CRASH(("undefined hint type"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "undefined hint type");
 		return;
 
 	}
@@ -4504,7 +4507,7 @@ void InGameUI::militarySubtitle( const AsciiString& label, Int duration )
 	// make sure we actually will be displaying something
 	if( title.isEmpty() || duration <= 0)
 	{
-		DEBUG_CRASH(("Trying to create a military subtitle but either title is empty (%ls) or duration is <= 0 (%d)",title.str(), duration));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Trying to create a military subtitle but either title is empty (%ls) or duration is <= 0 (%d)",title.str(), duration);
 		return;
 	}
 
@@ -4691,7 +4694,7 @@ CanAttackResult InGameUI::getCanSelectedObjectsAttack( ActionType action, const 
 			case ACTIONTYPE_MAKE_DEFECTOR:
 			case ACTIONTYPE_SET_RALLY_POINT:
 			default:
-				DEBUG_CRASH( ("Called InGameUI::getCanSelectedObjectsAttack() with actiontype %d. Only accepts attack types! Should you be calling InGameUI::canSelectedObjectsDoAction() instead?", action) );
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Called InGameUI::getCanSelectedObjectsAttack() with actiontype %d. Only accepts attack types! Should you be calling InGameUI::canSelectedObjectsDoAction() instead?", action);
 				return ATTACKRESULT_INVALID_SHOT;
 
 		}
@@ -4795,7 +4798,7 @@ Bool InGameUI::canSelectedObjectsDoAction( ActionType action, const Object *obje
 				success = TheActionManager->canEnterObject( other->getObject(), objectToInteractWith, CMD_FROM_PLAYER, additionalChecking ? CHECK_CAPACITY : DONT_CHECK_CAPACITY );
 				break;
 			case ACTIONTYPE_ATTACK_OBJECT:
-				DEBUG_CRASH( ("Called InGameUI::canSelectedObjectsDoAction() with ACTIONTYPE_ATTACK_OBJECT. You must use InGameUI::getCanSelectedObjectsAttack() instead.") );
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Called InGameUI::canSelectedObjectsDoAction() with ACTIONTYPE_ATTACK_OBJECT. You must use InGameUI::getCanSelectedObjectsAttack() instead.");
 				return FALSE;
 			case ACTIONTYPE_HIJACK_VEHICLE:
 				success = TheActionManager->canHijackVehicle( other->getObject(), objectToInteractWith, CMD_FROM_PLAYER );
@@ -5476,7 +5479,7 @@ try_again:
 
 	m_floatingTextList.push_front( newFTD ); // add to the list
 
-	//DEBUG_LOG(("%s",text.str()));
+	//engine::debug::log_info("%s",text.str());
 }
 #endif
 
@@ -5930,7 +5933,7 @@ void InGameUI::selectNextIdleWorker()
 
 	if(m_idleWorkers[index].empty())
 	{
-		DEBUG_CRASH(("InGameUI::selectNextIdleWorker We're trying to select a worker when our list is empty for player %ls", player->getPlayerDisplayName().str()));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "InGameUI::selectNextIdleWorker We're trying to select a worker when our list is empty for player %ls", player->getPlayerDisplayName().str());
 		return;
 	}
 	Object *selectThisObject = nullptr;
@@ -5969,10 +5972,10 @@ void InGameUI::selectNextIdleWorker()
 		if (!selectThisObject)
 			selectThisObject = uniqueIdleWorkers.front();
 	}
-	DEBUG_ASSERTCRASH(selectThisObject, ("InGameUI::selectNextIdleWorker Could not select the next IDLE worker"));
+	engine::debug::invariant((selectThisObject), "selectThisObject", __FILE__, __LINE__, "InGameUI::selectNextIdleWorker Could not select the next IDLE worker");
 	if(selectThisObject)
 	{
-		DEBUG_ASSERTCRASH(selectThisObject->getContainedBy() == nullptr, ("InGameUI::selectNextIdleWorker Selected idle object should not be contained"));
+		engine::debug::invariant((selectThisObject->getContainedBy() == nullptr), "selectThisObject->getContainedBy() == nullptr", __FILE__, __LINE__, "InGameUI::selectNextIdleWorker Selected idle object should not be contained");
 		deselectAllDrawables();
 		GameMessage *teamMsg = TheMessageStream->appendMessage( GameMessage::MSG_CREATE_SELECTED_GROUP );
 
@@ -6027,7 +6030,7 @@ void InGameUI::showIdleWorkerLayout()
 	if (!m_idleWorkerWin)
 	{
 		m_idleWorkerWin = TheWindowManager->winGetWindowFromId(nullptr, TheNameKeyGenerator->nameToKey("ControlBar.wnd:ButtonIdleWorker"));
-		DEBUG_ASSERTCRASH(m_idleWorkerWin, ("InGameUI::showIdleWorkerLayout could not find IdleWorker.wnd to load"));
+		engine::debug::invariant((m_idleWorkerWin), "m_idleWorkerWin", __FILE__, __LINE__, "InGameUI::showIdleWorkerLayout could not find IdleWorker.wnd to load");
 		return;
 	}
 
@@ -6276,7 +6279,7 @@ void InGameUI::drawRenderFps(Int &x, Int &y)
 {
 	if (m_renderFpsRefreshMs > 0u)
 	{
-		const UnsignedInt nowMs = static_cast<UnsignedInt>(SDL_GetTicks());
+		const UnsignedInt nowMs = static_cast<UnsignedInt>(m_clock.monotonic_nanoseconds() / 1'000'000);
 		const UnsignedInt deltaMs = nowMs - m_lastRenderFpsUpdateMs;
 		if (deltaMs >= m_renderFpsRefreshMs)
 		{

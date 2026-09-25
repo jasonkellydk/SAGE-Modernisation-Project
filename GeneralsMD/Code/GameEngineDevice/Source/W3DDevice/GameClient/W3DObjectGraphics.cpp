@@ -6,7 +6,7 @@ import Graphics.Scene.Models.ObjectDrawing;
 import Graphics.Materials.MeshTextureMapping;
 import Graphics.Materials.State;
 #include <array>
-#include "rts/profile.h"
+
 #include <span>
 #include <vector>
 #include <cstring>
@@ -26,6 +26,7 @@ import Graphics.Scene.Props.Material;
 #include "W3DDevice/GameClient/W3DSceneClass.h"
 
 #include <algorithm>
+import engine.profiling;
 import Graphics.Scene.Views.CameraMatrices;
 import Graphics.Scene.DrawParameters;
 import Graphics.Frame.Runtime;
@@ -37,8 +38,7 @@ struct W3DObjectGraphics::State
     bool dirty = true;
     bool animated = false;
     bool background = false;
-    Matrix3D transform{true};
-    Vector3 camera{0,0,0};
+    Engine::Math::AffineTransform3 transform{};
     Graphics::PropLighting lighting{};
     int lod = -1;
 
@@ -46,7 +46,7 @@ struct W3DObjectGraphics::State
 
     bool Extract(W3DRenderObject& object, W3DRenderContext& info)
     {
-        PROFILER_SECTION_NAME("Graphics.Objects.Extract");
+        engine::profiling::Scope profile_scope_49("Graphics.Objects.Extract");
         if (object.Is_Hidden()) return true;
         object.Validate_Transform();
         if (object.Class_ID() == W3DRenderObject::CLASSID_HLOD) {
@@ -75,19 +75,18 @@ struct W3DObjectGraphics::State
         const auto* positions = model->Peek_Vertex_Array();
         const auto* normals = model->Get_Vertex_Normal_Array();
         const auto* polygons = model->Get_Polygon_Array();
-        Matrix3D world = object.Get_Transform();
-        std::vector<Vector3> deformed_positions;
-        std::vector<Vector3> deformed_normals;
+        auto world = object.Get_Transform();
+        std::vector<Engine::Math::Vector3> deformed_positions;
+        std::vector<Engine::Math::Vector3> deformed_normals;
         if (model->Get_Flag(W3DMeshGeometry::ALIGNED)) {
             animated = true;
-            Vector3 direction;
-            info.Camera.Get_Transform().Get_Z_Vector(&direction);
-            const Vector3 position=world.Get_Translation();
-            world.Obj_Look_At(position,position+direction,0.0f);
+            const auto direction = info.Camera.Get_Transform().Basis_Z();
+            world = Engine::Math::AffineTransform3::From_Forward_Direction(world.Translation(), direction);
         } else if (model->Get_Flag(W3DMeshGeometry::ORIENTED)) {
             animated = true;
-            const Vector3 position=world.Get_Translation();
-            world.Obj_Look_At(position,info.Camera.Get_Position(),0.0f);
+            const auto position=world.Translation();
+            const auto camera_position = info.Camera.Get_Position();
+            world = Engine::Math::AffineTransform3::From_Forward_Direction(position, camera_position - position);
         } else if (model->Get_Flag(W3DMeshGeometry::SKIN)) {
             animated = true;
             deformed_positions.resize(model->Get_Vertex_Count());
@@ -95,7 +94,7 @@ struct W3DObjectGraphics::State
             mesh.Get_Deformed_Vertices(deformed_positions.data(),deformed_normals.data());
             positions = deformed_positions.data();
             normals = deformed_normals.data();
-            world.Make_Identity();
+            world = Engine::Math::AffineTransform3::Identity();
         }
         return drawing.Append(std::span(positions,static_cast<std::size_t>(model->Get_Vertex_Count())),
             std::span(normals,normals ? static_cast<std::size_t>(model->Get_Vertex_Count()) : 0),
@@ -131,9 +130,9 @@ bool W3DObjectGraphics::Render(W3DRenderObject& object, W3DRenderContext& info,
     const auto camera = info.Camera.Get_Position();
     if (m_state->dirty || m_state->animated || !m_state->drawing.Valid() || m_state->background!=background
         || m_state->lod!=object.Get_LOD_Level()
-        || std::memcmp(&m_state->transform,&transform,sizeof(transform))!=0) {
+        || m_state->transform != transform) {
         m_state->Clear();
-        m_state->transform = transform; m_state->camera = camera; m_state->lighting = lighting;
+        m_state->transform = transform; m_state->lighting = lighting;
         m_state->background = background; m_state->lod = object.Get_LOD_Level();
         m_state->animated = false;
         if (!m_state->Extract(object,info)) { m_state->dirty=true; return false; }
@@ -144,7 +143,7 @@ bool W3DObjectGraphics::Render(W3DRenderObject& object, W3DRenderContext& info,
     Graphics::ModelObjectDrawContext context;
     context.view_projection = surface.view_projection;
     context.shroud_projection = surface.shroud_projection;
-    context.camera = {camera.X,camera.Y,camera.Z};
+    context.camera = {camera.x,camera.y,camera.z};
     context.view = Graphics::Get_Camera_Matrices().view.values;
     context.projection = Graphics::Get_Camera_Matrices().projection.values;
     context.lighting = lighting;
@@ -159,7 +158,7 @@ bool W3DObjectGraphics::Render(W3DRenderObject& object, W3DRenderContext& info,
             scene->Get_Fog_Range(&context.fog.start,&context.fog.end);
             context.fog.enabled = true;
             const auto& fog = scene->Get_Fog_Color();
-            context.fog.color = {fog.X,fog.Y,fog.Z,1};
+            context.fog.color = {fog.x,fog.y,fog.z,1};
         }
     }
     return m_state->drawing.Draw(device->Immediate_Command_List(),context,[](W3DTextureHandle* texture) {

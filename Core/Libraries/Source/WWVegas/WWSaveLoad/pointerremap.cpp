@@ -36,7 +36,8 @@
 
 
 #include "pointerremap.h"
-#include "WWDebug/wwdebug.h"
+
+import engine.debug;
 
 
 const int POINTER_TABLES_GROWTH_STEP = 4096;
@@ -67,14 +68,14 @@ void PointerRemapClass::Process()
 	}
 
 	if ( PointerRequestTable.Count() > 0 ) {
-		WWASSERT( PointerPairTable.Count() > 0 );
+		engine::debug::assert_condition((PointerPairTable.Count() > 0), "PointerPairTable.Count() > 0", __FILE__, __LINE__, "assertion failed");
 		qsort(&PointerRequestTable[0],PointerRequestTable.Count(), sizeof(PointerRequestTable[0]), ptr_request_compare_function);
 		Process_Request_Table(PointerRequestTable,false);
 	}
 
 	// remap the ref-counted pointers
 	if ( RefCountRequestTable.Count() > 0 ) {
-		WWASSERT( PointerPairTable.Count() > 0 );
+		engine::debug::assert_condition((PointerPairTable.Count() > 0), "PointerPairTable.Count() > 0", __FILE__, __LINE__, "assertion failed");
 		qsort(&RefCountRequestTable[0],RefCountRequestTable.Count(), sizeof(RefCountRequestTable[0]), ptr_request_compare_function);
 		Process_Request_Table(RefCountRequestTable,true);
 	}
@@ -115,11 +116,11 @@ void PointerRemapClass::Process_Request_Table(DynamicVectorClass<PtrRemapStruct>
 			// If this happens, things could be going very wrong.  (find out why its happening!)
 			pair_index = pre_search_index;
 			*request_table[pointer_index].PointerToRemap = nullptr;
-#ifdef WWDEBUG
+#ifdef RTS_DEBUG
 			const char * file = request_table[pointer_index].File;
 			int line = request_table[pointer_index].Line;
-			WWDEBUG_SAY(("Warning! Failed to re-map pointer! old_ptr = 0x%X  file = %s  line = %d",(unsigned int)pointer_to_remap,file,line));
-			WWASSERT( 0 );
+			engine::debug::log_info("Warning! Failed to re-map pointer! old_ptr = 0x%X  file = %s  line = %d",(unsigned int)pointer_to_remap,file,line);
+			engine::debug::assert_condition((0), "0", __FILE__, __LINE__, "assertion failed");
 #endif
 		}
 	}
@@ -130,7 +131,7 @@ void PointerRemapClass::Register_Pointer (void *old_pointer, void *new_pointer)
 	PointerPairTable.Add(PtrPairStruct(old_pointer,new_pointer));
 }
 
-#ifdef WWDEBUG
+#ifdef RTS_DEBUG
 void PointerRemapClass::Request_Pointer_Remap(void **pointer_to_convert,const char * file,int line)
 {
 	PtrRemapStruct remap;

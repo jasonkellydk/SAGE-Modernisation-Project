@@ -48,7 +48,6 @@
 #include "errclass.h"
 #include "util.h"
 #include "w3dappdata.h"
-#include "wwmath.h"	// NO_MAX_SCREEN_SIZE
 #include "exportlog.h"
 
 
@@ -422,5 +421,4 @@ bool HLodSaveClass::save_sub_object_array(ChunkSaveClass &csave, const HLodArray
 
 	return true;
 }
-
 

@@ -294,9 +294,9 @@ void ChunkTableClass::AddItem(CListCtrl *list, int &Counter, const char *name, W
 }
 
 
-void ChunkTableClass::AddItem(CListCtrl *list, int &Counter, const char *Name, Vector3i *Value) {
+void ChunkTableClass::AddItem(CListCtrl *list, int &Counter, const char *Name, std::array<int, 3> *Value) {
 	char buf[256];
-	sprintf(buf, "%d %d %d", Value->I, Value->J, Value->K);
+	sprintf(buf, "%d %d %d", (*Value)[0], (*Value)[1], (*Value)[2]);
 	AddItem(list, Counter, Name, buf, "IJK");
 }
 
@@ -1329,9 +1329,9 @@ void ChunkTableClass::List_W3D_CHUNK_PER_FACE_TEXCOORD_IDS(ChunkItem * Item,CLis
 {
 	int Counter = 0;
 	int counter = 0;
-	Vector3i *data = (Vector3i *)Item->Data;
+	auto *data = static_cast<std::array<int, 3> *>(Item->Data);
 	void *max = (char *) Item->Data + Item->Length;
-	assert(Item->Length % sizeof(Vector3i) == 0);
+	assert(Item->Length % sizeof(std::array<int, 3>) == 0);
 	char buf[256];
 
 	while(data < max) {
@@ -2436,4 +2436,3 @@ void Set_Bit(void * array, int bit, int value)
 		*((unsigned char *)array + (bit/8)) &= (unsigned char)~mask;
 	}
 }
-

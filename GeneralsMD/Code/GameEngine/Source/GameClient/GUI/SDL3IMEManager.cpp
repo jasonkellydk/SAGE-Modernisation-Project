@@ -3,12 +3,10 @@
 #include <codecvt>
 #include <locale>
 
-#include <SDL3/SDL.h>
-
 #include "GameClient/GameWindow.h"
 #include "GameClient/GameWindowManager.h"
 #include "GameClient/IMEManager.h"
-#include "Platform/SDLPlatformWindow.h"
+import engine.platform;
 
 namespace
 {
@@ -24,11 +22,13 @@ UnicodeString decodeText(const char *text)
 class SDL3IMEManager final : public IMEManagerInterface
 {
 public:
-	void init() override { startTextInput(); }
+	SDL3IMEManager(engine::platform::ITextInputService& textInput, std::uint32_t windowId)
+		: m_textInput(textInput), m_windowId(windowId) {}
+	void init() override { if (m_windowId != 0) m_textInput.start(m_windowId); }
 	void reset() override { detach(); m_composition.clear(); m_result.clear(); m_compositionCursor = 0; }
 	void update() override {}
-	void attach(GameWindow *window) override { m_window = window; startTextInput(); }
-	void detach() override { m_window = nullptr; m_composition.clear(); m_compositionCursor = 0; stopTextInput(); }
+	void attach(GameWindow *window) override { m_window = window; if (m_windowId != 0) m_textInput.start(m_windowId); }
+	void detach() override { m_window = nullptr; m_composition.clear(); m_compositionCursor = 0; if (m_windowId != 0) m_textInput.stop(m_windowId); }
 	void enable() override { m_enabled = true; }
 	void disable() override { m_enabled = false; }
 	Bool isEnabled() override { return m_enabled; }
@@ -43,12 +43,12 @@ public:
 	Int getSelectedCandidateIndex() override { return 0; }
 	Int getCandidatePageSize() override { return 0; }
 	Int getCandidatePageStart() override { return 0; }
-	Bool serviceIMEMessage(void *eventData, UnsignedInt message, Int, Int) override
+	Bool serviceIMEMessage(void*, UnsignedInt, Int, Int) override { return false; }
+	Bool servicePlatformEvent(const engine::platform::PlatformEvent& event) override
 	{
-		if (eventData == nullptr || !m_enabled)
+		if (!m_enabled)
 			return false;
-		const SDL_Event *event = static_cast<const SDL_Event *>(eventData);
-		if (message == SDL_EVENT_TEXT_INPUT)
+		if (event.type == engine::platform::EventType::text_input)
 		{
 			if (m_window == nullptr || TheWindowManager == nullptr)
 				return false;
@@ -57,7 +57,7 @@ public:
 			// dispatching it, otherwise GadgetTextEntryInput deliberately ignores
 			// committed characters while it believes an IME composition is active.
 			m_composition.clear();
-			m_result = decodeText(event->text.text);
+			m_result = decodeText(event.text);
 			for (Int i = 0; i < m_result.getLength(); ++i)
 			{
 				TheWindowManager->winSendInputMsg(
@@ -65,12 +65,12 @@ public:
 			}
 			return true;
 		}
-		if (message == SDL_EVENT_TEXT_EDITING)
+		if (event.type == engine::platform::EventType::text_editing)
 		{
 			if (m_window == nullptr)
 				return false;
-			m_composition = decodeText(event->edit.text);
-			m_compositionCursor = event->edit.start;
+			m_composition = decodeText(event.text);
+			m_compositionCursor = event.text_start;
 			return true;
 		}
 		return false;
@@ -83,23 +83,8 @@ public:
 	}
 
 private:
-	static SDL_Window *getSDLWindow()
-	{
-		return static_cast<SDL_Window *>(SDLPlatformWindow::window());
-	}
-
-	static void startTextInput()
-	{
-		if (SDL_Window *window = getSDLWindow(); window != nullptr)
-			SDL_StartTextInput(window);
-	}
-
-	static void stopTextInput()
-	{
-		if (SDL_Window *window = getSDLWindow(); window != nullptr)
-			SDL_StopTextInput(window);
-	}
-
+	engine::platform::ITextInputService& m_textInput;
+	std::uint32_t m_windowId{};
 	GameWindow *m_window = nullptr;
 	Bool m_enabled = true;
 	UnicodeString m_composition;
@@ -109,7 +94,8 @@ private:
 
 IMEManagerInterface *TheIMEManager = nullptr;
 
-IMEManagerInterface *CreateIMEManagerInterface()
+IMEManagerInterface *CreateIMEManagerInterface(engine::platform::ITextInputService& textInput,
+	std::uint32_t mainWindowId)
 {
-	return NEW SDL3IMEManager;
+	return NEW SDL3IMEManager(textInput, mainWindowId);
 }

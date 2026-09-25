@@ -24,7 +24,8 @@
 
 ////////// NetPacket.cpp ///////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "GameNetwork/NetPacket.h"
 #include "GameNetwork/NetCommandMsg.h"
@@ -40,7 +41,7 @@ static size_t constructNetCommandRef(NetCommandRef *&ref, SmallNetPacketCommandB
 
 	if (ref != nullptr)
 	{
-		DEBUG_ASSERTCRASH(ref->getCommand() != nullptr, ("constructNetCommandRef: ref->getCommand() is null"));
+		engine::debug::invariant((ref->getCommand() != nullptr), "ref->getCommand() != nullptr", __FILE__, __LINE__, "constructNetCommandRef: ref->getCommand() is null");
 		size += ref->getCommand()->readMessageData(*ref, buf.offset(size));
 	}
 
@@ -63,8 +64,8 @@ NetCommandRef *NetPacket::ConstructNetCommandMsgFromRawData(const UnsignedByte *
 
 	if (ref == nullptr)
 	{
-		DEBUG_CRASH(("Unrecognized packet entry, ignoring."));
-		DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("NetPacket::ConstructNetCommandMsgFromRawData - Unrecognized packet"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unrecognized packet entry, ignoring.");
+		engine::debug::log_info("NetPacket::ConstructNetCommandMsgFromRawData - Unrecognized packet");
 		dumpPacketToLog(data, dataLength);
 	}
 
@@ -79,7 +80,7 @@ NetCommandList *NetPacket::ConstructBigCommandList(NetCommandRef *ref)
 	NetCommandMsg *msg = ref->getCommand();
 
 	if (!DoesCommandRequireACommandID(msg->getNetCommandType())) {
-		DEBUG_CRASH(("Trying to wrap a command that doesn't have a unique command ID"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Trying to wrap a command that doesn't have a unique command ID");
 		return nullptr;
 	}
 
@@ -105,7 +106,7 @@ NetCommandList *NetPacket::ConstructBigCommandList(NetCommandRef *ref)
 	UnsignedInt currentChunk = 0;
 	UnsignedInt bigPacketCurrentOffset = 0;
 
-	DEBUG_ASSERTCRASH(bufferSize > 0 && numChunks > 0, ("buffer size for command must be bigger than 0"));
+	engine::debug::invariant((bufferSize > 0 && numChunks > 0), "bufferSize > 0 && numChunks > 0", __FILE__, __LINE__, "buffer size for command must be bigger than 0");
 
 	while (true) {
 		UnsignedInt dataSizeThisChunk = maxDataSizePerPacket;
@@ -426,8 +427,8 @@ NetCommandList * NetPacket::getCommandList() {
 			if (ref == nullptr)
 			{
 				// we don't recognize this command, but we have to increment i so we don't fall into an infinite loop.
-				DEBUG_CRASH(("Unrecognized packet entry, ignoring."));
-				DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("NetPacket::getCommandList - Unrecognized packet entry at index %d", i));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unrecognized packet entry, ignoring.");
+				engine::debug::log_info("NetPacket::getCommandList - Unrecognized packet entry at index %d", i);
 				dumpPacketToLog(m_packet, m_packetLen);
 				continue;
 			}
@@ -453,7 +454,7 @@ NetCommandList * NetPacket::getCommandList() {
 
 			// Repeat the last command, doing some funky cool byte-saving stuff
 			if (lastCommand == nullptr) {
-				DEBUG_CRASH(("Got a repeat command with no command to repeat."));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Got a repeat command with no command to repeat.");
 			}
 
 			NetCommandMsg *msg = nullptr;
@@ -485,12 +486,12 @@ NetCommandList * NetPacket::getCommandList() {
 				msg = newInstance(NetFrameCommandMsg)();
 				++commandBase.frame.frame; // this is set below.
 				((NetFrameCommandMsg*)msg)->setCommandCount(0);
-				DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("Read a repeated frame command, frame = %d, playerId = %d, commandId = %d",
-					commandBase.frame.frame, commandBase.playerId.playerId, commandBase.commandId.commandId));
+				engine::debug::log_info("Read a repeated frame command, frame = %d, playerId = %d, commandId = %d",
+					commandBase.frame.frame, commandBase.playerId.playerId, commandBase.commandId.commandId);
 				break;
 			}
 			default:
-				DEBUG_CRASH(("Trying to repeat a command that shouldn't be repeated."));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Trying to repeat a command that shouldn't be repeated.");
 				continue;
 			}
 
@@ -560,17 +561,17 @@ Int NetPacket::getLength() {
  * Dumps the packet to the debug log file
  */
 void NetPacket::dumpPacketToLog(const UnsignedByte *packet, Int packetLen) {
-	DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("NetPacket::dumpPacketToLog() - packet is %d bytes", packetLen));
+	engine::debug::log_info("NetPacket::dumpPacketToLog() - packet is %d bytes", packetLen);
 	Int numLines = packetLen / 8;
 	if ((packetLen % 8) != 0) {
 		++numLines;
 	}
 	for (Int dumpindex = 0; dumpindex < numLines; ++dumpindex) {
-		DEBUG_LOG_LEVEL_RAW(DEBUG_LEVEL_NET, ("\t%d\t", dumpindex*8));
+		engine::debug::log_info("\t%d\t", dumpindex*8);
 		for (Int dumpindex2 = 0; (dumpindex2 < 8) && ((dumpindex*8 + dumpindex2) < packetLen); ++dumpindex2) {
-			DEBUG_LOG_LEVEL_RAW(DEBUG_LEVEL_NET, ("%02x '%c' ", packet[dumpindex*8 + dumpindex2], packet[dumpindex*8 + dumpindex2]));
+			engine::debug::log_info("%02x '%c' ", packet[dumpindex*8 + dumpindex2], packet[dumpindex*8 + dumpindex2]);
 		}
-		DEBUG_LOG_LEVEL_RAW(DEBUG_LEVEL_NET, ("\n"));
+		engine::debug::log_info("\n");
 	}
-	DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("End of packet dump"));
+	engine::debug::log_info("End of packet dump");
 }

@@ -40,10 +40,11 @@
 
 #include "always.h"
 #include "vector3.h"
-#include "vector3i.h"
-#include "aaplane.h"
 #include "BITTYPE.h"
 #include <float.h>
+import Engine.Core.Math.Index3;
+import Engine.Core.Math.Plane3;
+import Engine.Core.Math.RandomStream;
 
 class AABTreeClass;
 class ChunkSaveClass;
@@ -62,7 +63,7 @@ public:
 	AABTreeBuilderClass();
 	~AABTreeBuilderClass();
 
-	void					Build_AABTree(int polycount,Vector3i * polys,int vertcount,Vector3 * verts);
+	void					Build_AABTree(int polycount,Engine::Math::Index3i * polys,int vertcount,Vector3 * verts);
 	void					Export(ChunkSaveClass & csave);
 
 	int					Node_Count();
@@ -114,7 +115,7 @@ private:
 			BMax(SMALL_VERTEX,SMALL_VERTEX,SMALL_VERTEX),
 			FMin(BIG_VERTEX,BIG_VERTEX,BIG_VERTEX),
 			FMax(SMALL_VERTEX,SMALL_VERTEX,SMALL_VERTEX),
-			Plane(AAPlaneClass::XNORMAL,0)
+			Plane{{1.0f, 0.0f, 0.0f}, 0.0f}
 		{
 		}
 
@@ -125,7 +126,7 @@ private:
 		Vector3					BMax;				// max of the bounding box of the "back" child
 		Vector3					FMin;				// min of the bounding box of the "front" child
 		Vector3					FMax;				// max of the bounding box of the "front" child
-		AAPlaneClass			Plane;			// partitioning plane
+		Engine::Math::Plane3	Plane;			// partitioning plane
 	};
 
 	struct SplitArraysStruct
@@ -164,9 +165,9 @@ private:
 	void								Reset();
 	void								Build_Tree(CullNodeStruct * node,int polycount,int * polyindices);
 	SplitChoiceStruct				Select_Splitting_Plane(int polycount,int * polyindices);
-	SplitChoiceStruct				Compute_Plane_Score(int polycont,int * polyindices,const AAPlaneClass & plane);
+	SplitChoiceStruct				Compute_Plane_Score(int polycont,int * polyindices,const Engine::Math::Plane3 & plane);
 	void								Split_Polys(int polycount,int * polyindices,const SplitChoiceStruct & sc,SplitArraysStruct *	arrays);
-	OverlapType						Which_Side(const AAPlaneClass & plane,int poly_index);
+	OverlapType						Which_Side(const Engine::Math::Plane3 & plane,int poly_index);
 	void								Compute_Bounding_Box(CullNodeStruct * node);
 	int								Assign_Index(CullNodeStruct * node,int index);
 	int								Node_Count_Recursive(CullNodeStruct * node,int curcount);
@@ -189,9 +190,17 @@ private:
 	** Mesh data
 	*/
 	int								PolyCount;
-	Vector3i *						Polys;
+	Engine::Math::Index3i *		Polys;
 	int								VertCount;
 	Vector3 *						Verts;
+
+	/*
+	** Splitting-plane sampler. Re-seeded once at the start of every build so
+	** the exported tree layout is repeatable; it advances across all the
+	** Select_Splitting_Plane calls of that build.
+	*/
+	static constexpr unsigned long long SPLIT_SAMPLING_SEED = 0x4141425452454542ull;
+	Engine::Math::RandomStream			SplitSampling{SPLIT_SAMPLING_SEED};
 
 	friend class AABTreeClass;
 };

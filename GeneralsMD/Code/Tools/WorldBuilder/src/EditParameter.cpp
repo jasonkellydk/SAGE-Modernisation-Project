@@ -63,6 +63,7 @@
 
 #include "W3DDevice/GameClient/W3DGameFont.h"
 #include "W3DDevice/GameClient/BaseHeightMap.h"
+import engine.debug;
 
 
 // TYPE DEFINES ///////////////////////////////////////////////////////////////////////////////////
@@ -164,7 +165,7 @@ AsciiString EditParameter::getWarningText(Parameter *pParm, Bool isAction)
 		uiString = "???";
 	switch (pParm->getParameterType()) {
 		default:
-			DEBUG_CRASH(("Unknown parameter type."));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unknown parameter type.");
 			break;
 		case Parameter::SCRIPT:
 			if (!loadScripts(nullptr, false, uiString)) {
@@ -404,7 +405,7 @@ AsciiString EditParameter::getInfoText(Parameter *pParm)
 	switch (pParm->getParameterType())
 	{
 		default:
-			DEBUG_CRASH(("Unknown parameter type."));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unknown parameter type.");
 			break;
 		case Parameter::SCRIPT:
 		case Parameter::SCRIPT_SUBROUTINE:
@@ -1233,7 +1234,7 @@ Bool EditParameter::loadCommandButtons(CComboBox *pCombo, AsciiString match)
 	// gets the list of command buttons
 	File *fp = TheFileSystem->openFile("Data\\INI\\CommandButton.ini", File::READ | File::TEXT);
 	//sanity
-	DEBUG_ASSERTCRASH( fp, ("Cannot find file CommandButton.ini"));
+	engine::debug::invariant((fp), "fp", __FILE__, __LINE__, "Cannot find file CommandButton.ini");
 
 	char buf[1024];
 	char *string;
@@ -1524,7 +1525,7 @@ Bool EditParameter::loadTeams(CComboBox *pCombo, AsciiString match)
 	{
 		Dict *d = sidesListP->getTeamInfo(i)->getDict();
 		AsciiString name = d->getAsciiString(TheKey_teamName);
-		DEBUG_ASSERTCRASH(!name.isEmpty(),("bad"));
+		engine::debug::invariant((!name.isEmpty()), "!name.isEmpty()", __FILE__, __LINE__, "bad");
 
 		if (name == "team") {
 			// Neutral team.
@@ -1549,7 +1550,7 @@ Bool EditParameter::loadTeamOrUnit(CComboBox *pCombo, AsciiString match)
 	{
 		Dict *d = sidesListP->getTeamInfo(i)->getDict();
 		AsciiString name = d->getAsciiString(TheKey_teamName);
-		DEBUG_ASSERTCRASH(!name.isEmpty(),("bad"));
+		engine::debug::invariant((!name.isEmpty()), "!name.isEmpty()", __FILE__, __LINE__, "bad");
 
 		if (name == "team") {
 			// Neutral team.
@@ -1730,7 +1731,7 @@ BOOL EditParameter::OnInitDialog()
 
 	switch (m_parameter->getParameterType()) {
 		default:
-			DEBUG_CRASH(("Unknown parameter type."));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unknown parameter type.");
 			break;
 		case Parameter::SCRIPT:
 			captionText = "Script named:";
@@ -1824,7 +1825,7 @@ BOOL EditParameter::OnInitDialog()
 			showCombo = false;
 			break;
 		case Parameter::COLOR:
-			DEBUG_CRASH(("should never get here for this data type"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "should never get here for this data type");
 			captionText = "Color:";
 			editText.Format("%08lx", m_parameter->getInt());
 			showCombo = false;
@@ -2158,7 +2159,7 @@ void EditParameter::OnOK()
 	AsciiString comboText;
 	switch (m_parameter->getParameterType()) {
 		default:
-			DEBUG_CRASH(("Unknown parameter type."));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unknown parameter type.");
 			break;
 		case Parameter::UNIT:
 		case Parameter::SCRIPT:
@@ -2211,7 +2212,7 @@ void EditParameter::OnOK()
 			break;
 
 		case Parameter::COLOR:
-			DEBUG_CRASH(("should never get here for this data type"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "should never get here for this data type");
 			pEdit->GetWindowText(txt);
 			if (1==sscanf(txt, "%08lx", &theInt)) {
 				m_parameter->friend_setInt(theInt);

@@ -25,16 +25,9 @@ void Release_Graphics_Textures() noexcept
 
 Graphics::SurfaceParameters Make_Surface_Parameters(W3DCamera &camera)
 {
-    Matrix3D view;
-    Matrix4x4 projection;
-    camera.Get_View_Matrix(&view);
-    camera.Get_Backend_Projection_Matrix(&projection);
-    const Matrix4x4 transform = projection * Matrix4x4(view);
-    Graphics::SurfaceParameters parameters;
-    for (int row = 0; row < 4; ++row)
-        for (int column = 0; column < 4; ++column)
-            parameters.view_projection[row * 4 + column] = transform[row][column];
-    return parameters;
+	Graphics::SurfaceParameters parameters;
+	parameters.view_projection = camera.Build_Render_Matrices().view_projection;
+	return parameters;
 }
 
 Graphics::RHITextureHandle Set_Surface_Shroud(Graphics::SurfaceParameters &parameters, W3DShroud *shroud)

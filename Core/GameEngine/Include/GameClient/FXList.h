@@ -33,6 +33,7 @@
 #include "Common/GameMemory.h"
 #include "Common/NameKeyGenerator.h"
 #include "Common/STLTypedefs.h"
+import Engine.Core.Math.AffineTransform3;
 
 // FORWARD REFERENCES /////////////////////////////////////////////////////////////////////////////
 class FXNugget;
@@ -40,7 +41,6 @@ class FXList;
 class FXListStore;
 class INI;
 class Object;
-class Matrix3D;
 
 //-------------------------------------------------------------------------------------------------
 /**
@@ -79,7 +79,7 @@ public:
 		The main guts of the system: actually perform the sound and/or video effects
 		needed. Note that primary and/or secondary can be null, so you must check for this.
 	*/
-	virtual void doFXPos(const Coord3D *primary, const Matrix3D* primaryMtx = nullptr, const Real primarySpeed = 0.0f, const Coord3D *secondary = nullptr, const Real overrideRadius = 0.0f) const = 0;
+	virtual void doFXPos(const Coord3D *primary, const Engine::Math::AffineTransform3* primaryTransform = nullptr, const Real primarySpeed = 0.0f, const Coord3D *secondary = nullptr, const Real overrideRadius = 0.0f) const = 0;
 
 	/**
 		the object-based version... by default, just call the location-based implementation.
@@ -139,9 +139,9 @@ public:
 	}
 
 	/// inline convenience method to avoid having to check for null.
-	inline static void doFXPos(const FXList* fx, const Coord3D *primary, const Matrix3D* primaryMtx = nullptr, const Real primarySpeed = 0.0f, const Coord3D *secondary = nullptr, const Real overrideRadius = 0.0f)
+	inline static void doFXPos(const FXList* fx, const Coord3D *primary, const Engine::Math::AffineTransform3* primaryTransform = nullptr, const Real primarySpeed = 0.0f, const Coord3D *secondary = nullptr, const Real overrideRadius = 0.0f)
 	{
-		if (fx) fx->doFXPos(primary, primaryMtx, primarySpeed, secondary, overrideRadius);
+		if (fx) fx->doFXPos(primary, primaryTransform, primarySpeed, secondary, overrideRadius);
 	}
 
 	/// inline convenience method to avoid having to check for null.
@@ -166,7 +166,7 @@ protected:
 		The main guts of the system: actually perform the sound and/or video effects
 		needed. Note that primary and/or secondary can be null, so you must check for this.
 	*/
-	void doFXPos(const Coord3D *primary, const Matrix3D* primaryMtx = nullptr, const Real primarySpeed = 0.0f, const Coord3D *secondary = nullptr, const Real overrideRadius = 0.0f) const;
+	void doFXPos(const Coord3D *primary, const Engine::Math::AffineTransform3* primaryTransform = nullptr, const Real primarySpeed = 0.0f, const Coord3D *secondary = nullptr, const Real overrideRadius = 0.0f) const;
 
 	/**
 		the object-based version... by default, just call the location-based implementation.

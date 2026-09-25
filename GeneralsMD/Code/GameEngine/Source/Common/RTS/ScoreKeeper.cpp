@@ -53,7 +53,8 @@
 //-----------------------------------------------------------------------------
 // USER INCLUDES //////////////////////////////////////////////////////////////
 //-----------------------------------------------------------------------------
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/GameState.h"
 #include "Common/KindOf.h"
@@ -410,7 +411,7 @@ void ScoreKeeper::xferObjectCountMap( Xfer *xfer, ObjectCountMap *map )
 	if( map == nullptr )
 	{
 
-		DEBUG_CRASH(( "xferObjectCountMap - Invalid map parameter" ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "xferObjectCountMap - Invalid map parameter" );
 		throw SC_INVALID_DATA;
 
 	}
@@ -461,7 +462,7 @@ void ScoreKeeper::xferObjectCountMap( Xfer *xfer, ObjectCountMap *map )
 			if( thingTemplate == nullptr )
 			{
 
-				DEBUG_CRASH(( "xferObjectCountMap - Unknown thing template '%s'", thingTemplateName.str() ));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "xferObjectCountMap - Unknown thing template '%s'", thingTemplateName.str() );
 				throw SC_INVALID_DATA;
 
 			}
@@ -536,7 +537,7 @@ void ScoreKeeper::xfer( Xfer *xfer )
 	if( destroyedArraySize != MAX_PLAYER_COUNT )
 	{
 
-		DEBUG_CRASH(( "ScoreKeeper::xfer - size of objects destroyed array has changed" ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "ScoreKeeper::xfer - size of objects destroyed array has changed" );
 		throw SC_INVALID_DATA;
 
 	}

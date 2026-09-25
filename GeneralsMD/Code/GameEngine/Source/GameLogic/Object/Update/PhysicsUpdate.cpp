@@ -26,12 +26,16 @@
 // Simple rigid body physics
 // Author: Michael S. Booth, November 2001
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.profiling;
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
+import Engine.Core.Math.AffineTransform3;
+import Engine.Core.Math.Vector3;
 
 // please talk to MDC (x36804) before taking this out
 #define NO_DEBUG_CRC
 
-#include "Common/PerfTimer.h"
+
 #include "Common/Player.h"
 #include "Common/ThingTemplate.h"
 #include "Common/Xfer.h"
@@ -45,6 +49,21 @@
 #include "GameLogic/Object.h"
 #include "GameLogic/ScriptEngine.h"
 #include "GameLogic/TerrainLogic.h"
+
+#include "Common/LegacyTransformMath.h"
+
+namespace
+{
+const Engine::Math::AffineTransform3 &World_Transform(const Object *object)
+{
+	return object->worldTransform();
+}
+
+Real Transform_Yaw(const Engine::Math::AffineTransform3 &transform)
+{
+	return transform.Z_Rotation_Legacy();
+}
+}
 #include "GameLogic/Weapon.h"
 #include "GameLogic/LogicRandomValue.h"
 
@@ -77,20 +96,11 @@ const Int MOTIVE_FRAMES = LOGICFRAMES_PER_SECOND / 3;
 //-------------------------------------------------------------------------------------------------
 static Real angleBetweenVectors(const Coord3D& inCurDir, const Coord3D& inGoalDir)
 {
-	Vector3 curDir;
-	curDir.X = inCurDir.x;
-	curDir.Y = inCurDir.y;
-	curDir.Z = inCurDir.z;
-	curDir.Normalize();
-
-	Vector3 goalDir;
-	goalDir.X = inGoalDir.x;
-	goalDir.Y = inGoalDir.y;
-	goalDir.Z = inGoalDir.z;
-	goalDir.Normalize();
+	const Engine::Math::Vector3 curDir = Engine::Math::Vector3{inCurDir.x, inCurDir.y, inCurDir.z}.Normalized_Legacy();
+	const Engine::Math::Vector3 goalDir = Engine::Math::Vector3{inGoalDir.x, inGoalDir.y, inGoalDir.z}.Normalized_Legacy();
 
 	// dot of two unit vectors is cos of angle between them.
-	Real cosine = Vector3::Dot_Product(curDir, goalDir);
+	Real cosine = curDir.Dot(goalDir);
 
 	// bound it in case of numerical error
 	Real angleBetween = (Real)ACos(clamp(-1.0f, cosine, 1.0f));
@@ -315,7 +325,7 @@ void PhysicsBehavior::applyForce( const Coord3D *force )
 {
 // TheSuperHackers @info helmutbuhler 06/05/2025 This debug mutates the code to become CRC incompatible
 #if defined(RTS_DEBUG) || !RETAIL_COMPATIBLE_CRC
-	DEBUG_ASSERTCRASH(!(_isnan(force->x) || _isnan(force->y) || _isnan(force->z)), ("PhysicsBehavior::applyForce force NAN!"));
+	engine::debug::invariant((!(_isnan(force->x) || _isnan(force->y) || _isnan(force->z))), "!(_isnan(force->x) || _isnan(force->y) || _isnan(force->z))", __FILE__, __LINE__, "PhysicsBehavior::applyForce force NAN!");
 #endif
 	if (_isnan(force->x) || _isnan(force->y) || _isnan(force->z)) {
 		return;
@@ -337,9 +347,9 @@ void PhysicsBehavior::applyForce( const Coord3D *force )
 	m_accel.y += modForce.y * massInv;
 	m_accel.z += modForce.z * massInv;
 
-	//DEBUG_ASSERTCRASH(!(_isnan(m_accel.x) || _isnan(m_accel.y) || _isnan(m_accel.z)), ("PhysicsBehavior::applyForce accel NAN!"));
-	//DEBUG_ASSERTCRASH(!(_isnan(m_vel.x) || _isnan(m_vel.y) || _isnan(m_vel.z)), ("PhysicsBehavior::applyForce vel NAN!"));
-	//DEBUG_ASSERTCRASH(fabs(force->z) < 3, ("unlikely z-force"));
+	//engine::debug::invariant((!(_isnan(m_accel.x) || _isnan(m_accel.y) || _isnan(m_accel.z))), "!(_isnan(m_accel.x) || _isnan(m_accel.y) || _isnan(m_accel.z))", __FILE__, __LINE__, "PhysicsBehavior::applyForce accel NAN!");
+	//engine::debug::invariant((!(_isnan(m_vel.x) || _isnan(m_vel.y) || _isnan(m_vel.z))), "!(_isnan(m_vel.x) || _isnan(m_vel.y) || _isnan(m_vel.z))", __FILE__, __LINE__, "PhysicsBehavior::applyForce vel NAN!");
+	//engine::debug::invariant((fabs(force->z) < 3), "fabs(force->z) < 3", __FILE__, __LINE__, "unlikely z-force");
 #ifdef SLEEPY_PHYSICS
 	if (getFlag(IS_IN_UPDATE))
 	{
@@ -431,7 +441,7 @@ void PhysicsBehavior::resetDynamicPhysics()
 	m_pitchRate = 0;
 	setFlag(HAS_PITCHROLLYAW, false);
 #ifdef SLEEPY_PHYSICS
-	DEBUG_ASSERTCRASH(!getFlag(IS_IN_UPDATE), ("hmm, should not happen, may not work"));
+	engine::debug::invariant((!getFlag(IS_IN_UPDATE)), "!getFlag(IS_IN_UPDATE)", __FILE__, __LINE__, "hmm, should not happen, may not work");
 	setWakeFrame(getObject(), calcSleepTime());
 #endif
 }
@@ -523,11 +533,11 @@ Bool PhysicsBehavior::handleBounce(Real oldZ, Real newZ, Real groundZ, Coord3D* 
 
 		if (vz < 0.0f)
 		{
-			Vector3 zvec = getObject()->getTransformMatrix()->Get_Z_Vector();
-			const Real rollAngle = (zvec.Z > 0) ? 0 : PI;
+			const auto z_axis = World_Transform(getObject()).Basis_Z();
+			const Real rollAngle = (z_axis.z > 0) ? 0 : PI;
 			// don't flip both pitch and roll... we'll "flip" twice.
 			const Real pitchAngle = 0;
-			Real yawAngle = getObject()->getTransformMatrix()->Get_Z_Rotation();
+			Real yawAngle = Transform_Yaw(World_Transform(getObject()));
 			setAngles(yawAngle, pitchAngle, rollAngle);
 		}
 
@@ -614,10 +624,9 @@ void PhysicsBehavior::setBounceSound(const AudioEventRTS* bounceSound)
  * @todo Currently, only translations are integrated. Rotations should also be integrated. (MSB)
  */
 
-DECLARE_PERF_TIMER(PhysicsBehavior)
 UpdateSleepTime PhysicsBehavior::update()
 {
-	USE_PERF_TIMER(PhysicsBehavior)
+	engine::profiling::Scope profile_scope_619("PhysicsBehavior");
 
 	Object*														obj = getObject();
 	const PhysicsBehaviorModuleData*	d = getPhysicsBehaviorModuleData();
@@ -626,7 +635,7 @@ UpdateSleepTime PhysicsBehavior::update()
 	Coord3D														bounceForce;
 	Bool															gotBounceForce = false;
 
-	DEBUG_ASSERTCRASH(!getFlag(IS_IN_UPDATE), ("impossible"));
+	engine::debug::invariant((!getFlag(IS_IN_UPDATE)), "!getFlag(IS_IN_UPDATE)", __FILE__, __LINE__, "impossible");
 	setFlag(IS_IN_UPDATE, true);
 
 	if (!getFlag(UPDATE_EVER_RUN))
@@ -640,7 +649,7 @@ UpdateSleepTime PhysicsBehavior::update()
 
 	if (!obj->isDisabledByType(DISABLED_HELD))
 	{
-		Matrix3D mtx = *obj->getTransformMatrix();
+		Engine::Math::AffineTransform3 mtx = World_Transform(obj);
 
 		applyGravitationalForces();
 		applyFrictionalForces();
@@ -658,7 +667,7 @@ UpdateSleepTime PhysicsBehavior::update()
 
 		m_velMag = INVALID_VEL_MAG;
 
-		Real oldPosZ = mtx.Get_Z_Translation();
+		Real oldPosZ = mtx.Translation().z;
 
 		// integrate velocity into position
 		if (obj->testStatus(OBJECT_STATUS_BRAKING))
@@ -667,19 +676,19 @@ UpdateSleepTime PhysicsBehavior::update()
 			if (!obj->isKindOf(KINDOF_PROJECTILE))
 			{
 				// Things other than projectiles don't cheat in z.  jba.
-				mtx.Adjust_Z_Translation(m_vel.z);
+				mtx[2][3] += m_vel.z;
 			}
 		}
 		else
 		{
-			mtx.Adjust_X_Translation(m_vel.x);
-			mtx.Adjust_Y_Translation(m_vel.y);
-			mtx.Adjust_Z_Translation(m_vel.z);
+			mtx[0][3] += m_vel.x;
+			mtx[1][3] += m_vel.y;
+			mtx[2][3] += m_vel.z;
 		}
 
-		if (_isnan(mtx.Get_X_Translation()) || _isnan(mtx.Get_Y_Translation()) ||
-			_isnan(mtx.Get_Z_Translation())) {
-			DEBUG_CRASH(("Object position is NAN, deleting."));
+		const auto position = mtx.Translation();
+		if (_isnan(position.x) || _isnan(position.y) || _isnan(position.z)) {
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Object position is NAN, deleting.");
 			TheGameLogic->destroyObject(obj);
 		}
 
@@ -702,23 +711,10 @@ UpdateSleepTime PhysicsBehavior::update()
 		{
 
 			/*
-				You may be tempted to do something like this:
-
-					Real rollAngle = -mtx.Get_X_Rotation();
-					Real pitchAngle = mtx.Get_Y_Rotation();
-					Real yawAngle = mtx.Get_Z_Rotation();
-					// do stuff to angles, then rebuild the mtx with 'em
-
-				You must resist this temptation, because your code will be wrong!
-
-				The problem is that you can't use these calls to later reconstruct
-				the matrix... because doing such a thing is highly order-dependent,
-				and furthermore, you'd have to use Euler angles (Not the Get_?_Rotation
-				calls) to be able to reconstruct 'em, and that's too slow to do for
-				every object every frame.
-
-				The one exception is that it is OK to use Get_Z_Rotation() to get
-				the yaw angle.
+				Do not decompose and rebuild all three Euler angles here. That loses
+				order-dependent orientation information. Integrate the angular rates
+				directly into the existing basis below. Yaw extraction is used only
+				when a collision response needs to restore an upright orientation.
 			*/
 
 			// only update the position if we are not HELD
@@ -733,9 +729,9 @@ UpdateSleepTime PhysicsBehavior::update()
 			// Magnitude sets initial rate, here we care about sign
 			if (offset != 0.0f)
 			{
-				Vector3 xvec = mtx.Get_X_Vector();
-				Real xy = sqrtf(sqr(xvec.X) + sqr(xvec.Y));
-				Real pitchAngle = atan2(xvec.Z, xy);
+				const auto x_axis = mtx.Basis_X();
+				Real xy = sqrtf(sqr(x_axis.x) + sqr(x_axis.y));
+				Real pitchAngle = atan2(x_axis.z, xy);
 				Real remainingAngle = (offset > 0) ? ((PI/2) - pitchAngle) : (-(PI/2) + pitchAngle);
 				Real s = Sin(remainingAngle);
 				pitchRateToUse *= s;
@@ -745,34 +741,35 @@ UpdateSleepTime PhysicsBehavior::update()
 			/// @todo Rotation should use torques, and integrate just like forces (MSB)
 			// note, we DON'T want to Pre-rotate (either inplace or not),
 			// since we want to add our mods to the existing matrix.
-			mtx.Rotate_X(rollRateToUse);
-			mtx.Rotate_Y(pitchRateToUse);
-			mtx.Rotate_Z(yawRateToUse);
+			Legacy_Rotate_X(mtx, rollRateToUse);
+			Legacy_Rotate_Y(mtx, pitchRateToUse);
+			Legacy_Rotate_Z(mtx, yawRateToUse);
 		}
 
 		// do not allow object to pass through the ground
-		Real groundZ = TheTerrainLogic->getLayerHeight(mtx.Get_X_Translation(), mtx.Get_Y_Translation(), obj->getLayer());
+		const auto integratedPosition = mtx.Translation();
+		Real groundZ = TheTerrainLogic->getLayerHeight(integratedPosition.x, integratedPosition.y, obj->getLayer());
 		if( obj->getStatusBits().test( OBJECT_STATUS_DECK_HEIGHT_OFFSET ) )
 		{
 			groundZ += obj->getCarrierDeckHeight();
 		}
-		gotBounceForce = handleBounce(oldPosZ, mtx.Get_Z_Translation(), groundZ, &bounceForce);
+		gotBounceForce = handleBounce(oldPosZ, mtx.Translation().z, groundZ, &bounceForce);
 
 		// remember our z-vel prior to doing ground-slam adjustment
 		activeVelZ = m_vel.z;
-		if (mtx.Get_Z_Translation() <= groundZ)
+		if (mtx.Translation().z <= groundZ)
 		{
 			// Note - when vehicles are going down a slope, they will maintain a small negative
 			// z velocity as they go down.  So don't slam it to 0 if they aren't slamming into the
 			// ground.
-			Real dz = groundZ - mtx.Get_Z_Translation();  // Our excess z velocity.
+			Real dz = groundZ - mtx.Translation().z;  // Our excess z velocity.
 			m_vel.z += dz;							// Remove the excess z velocity.
 			if (m_vel.z > 0.0f)
 				m_vel.z = 0.0f;
 
 			m_velMag = INVALID_VEL_MAG;
 
-			mtx.Set_Z_Translation(groundZ);
+			mtx[2][3] = groundZ;
 
 			// this flag is ALWAYS cleared once we hit the ground.
 			setFlag(ALLOW_TO_FALL, false);
@@ -784,7 +781,7 @@ UpdateSleepTime PhysicsBehavior::update()
 				obj->setModelConditionState(MODELCONDITION_STUNNED);
 			}
 		}
-		else if (mtx.Get_Z_Translation() > groundZ)
+		else if (mtx.Translation().z > groundZ)
 		{
 			if (getFlag(IS_IN_FREEFALL))
 			{
@@ -793,26 +790,25 @@ UpdateSleepTime PhysicsBehavior::update()
 			}
 			else if (getFlag(STICK_TO_GROUND) && !getFlag(ALLOW_TO_FALL))
 			{
-				mtx.Set_Z_Translation(groundZ);
+				mtx[2][3] = groundZ;
 			}
 		}
 
 		if (gotBounceForce)
 		{
 			// Right the object after the bounce since the pitch and roll may have been affected
-			Real yawAngle = getObject()->getTransformMatrix()->Get_Z_Rotation();
+			Real yawAngle = Transform_Yaw(World_Transform(getObject()));
 			setAngles(yawAngle, 0.0f, 0.0f);
 
-			// Set the translation of the after bounce matrix to the one calculated above
-			Matrix3D afterBounceMatrix = *getObject()->getTransformMatrix();
-			afterBounceMatrix.Set_Translation(mtx.Get_Translation());
+			// Keep the righted orientation and apply the integrated translation.
+			Engine::Math::AffineTransform3 afterBounceTransform = World_Transform(getObject());
+			afterBounceTransform.Set_Translation(mtx.Translation());
 
-			// Set the result of the after bounce matrix as the object's final matrix
-			obj->setTransformMatrix(&afterBounceMatrix);
+			obj->setWorldTransform(afterBounceTransform);
 		}
 		else
 		{
-			obj->setTransformMatrix(&mtx);
+			obj->setWorldTransform(mtx);
 		}
 	}
 
@@ -873,7 +869,7 @@ UpdateSleepTime PhysicsBehavior::update()
 				damageInfo.in.m_amount = damageAmt;
         damageInfo.in.m_shockWaveAmount = 0.0f;
 				obj->attemptDamage( &damageInfo );
-				//DEBUG_LOG(("Dealing %f (%f %f) points of falling damage to %s!",damageAmt,damageInfo.out.m_actualDamageDealt, damageInfo.out.m_actualDamageClipped,obj->getTemplate()->getName().str()));
+				//engine::debug::log_info("Dealing %f (%f %f) points of falling damage to %s!",damageAmt,damageInfo.out.m_actualDamageDealt, damageInfo.out.m_actualDamageClipped,obj->getTemplate()->getName().str());
 
 				// if this killed us, add SPLATTED to get a cool death.
 				if (obj->isEffectivelyDead())
@@ -961,7 +957,7 @@ Real PhysicsBehavior::getForwardSpeed2D() const
 	Real dot = vx + vy;
 
 	Real speedSquared = vx*vx + vy*vy;
-//	DEBUG_ASSERTCRASH( speedSquared != 0, ("zero speedSquared will overflow sqrtf()!") );// lorenzen... sanity check
+//	engine::debug::invariant((speedSquared != 0), "speedSquared != 0", __FILE__, __LINE__, "zero speedSquared will overflow sqrtf()!");// lorenzen... sanity check
 
 	Real speed = (Real)sqrtf( speedSquared );
 
@@ -978,11 +974,12 @@ Real PhysicsBehavior::getForwardSpeed2D() const
  */
 Real PhysicsBehavior::getForwardSpeed3D() const
 {
-	Vector3 dir = getObject()->getTransformMatrix()->Get_X_Vector();
+	const auto forward = World_Transform(getObject()).Basis_X();
+	const Engine::Math::Vector3 dir{forward.x, forward.y, forward.z};
 
-	Real vx = m_vel.x * dir.X;
-	Real vy = m_vel.y * dir.Y;
-	Real vz = m_vel.z * dir.Z;
+	Real vx = m_vel.x * dir.x;
+	Real vy = m_vel.y * dir.y;
+	Real vz = m_vel.z * dir.z;
 
 	Real dot = vx + vy + vz;
 
@@ -1076,14 +1073,13 @@ void PhysicsBehavior::setAngles( Real yaw, Real pitch, Real roll )
 {
 	const Coord3D* pos = getObject()->getPosition();
 
-	Matrix3D xfrm;
-	xfrm.Make_Identity();
-	xfrm.Translate( pos->x, pos->y, pos->z );
+	Engine::Math::AffineTransform3 transform = Engine::Math::AffineTransform3::Identity();
+	Legacy_Translate(transform, pos->x, pos->y, pos->z);
 	// here we DO want to use in-place-etc, cuz we're not adding to any existing rot/etc
-	xfrm.In_Place_Pre_Rotate_X( -roll );
-	xfrm.In_Place_Pre_Rotate_Y( pitch );
-	xfrm.In_Place_Pre_Rotate_Z( yaw );
-	getObject()->setTransformMatrix( &xfrm );
+	Legacy_In_Place_Pre_Rotate_X(transform, -roll);
+	Legacy_In_Place_Pre_Rotate_Y(transform, pitch);
+	Legacy_In_Place_Pre_Rotate_Z(transform, yaw);
+	getObject()->setWorldTransform(transform);
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -1154,10 +1150,9 @@ void PhysicsBehavior::doBounceSound(const Coord3D& prevPos)
  * @todo Make this work properly for non-cylindrical objects (MSB)
  * @todo Physics collision resolution is 2D - should it be 3D? (MSB)
  */
-//DECLARE_PERF_TIMER(PhysicsBehavioronCollide)
 void PhysicsBehavior::onCollide( Object *other, const Coord3D *loc, const Coord3D *normal )
 {
-	//USE_PERF_TIMER(PhysicsBehavioronCollide)
+	
 	if (m_pui != nullptr)
 	{
 		// projectiles always get a chance to handle their own collisions, and not go thru here
@@ -1448,7 +1443,7 @@ void PhysicsBehavior::onCollide( Object *other, const Coord3D *loc, const Coord3
 		force.x = factor * delta.x / dist;
 		force.y = factor * delta.y / dist;
 		force.z = factor * delta.z / dist;	// will be zero for 2d case.
-		DEBUG_ASSERTCRASH(!(_isnan(force.x) || _isnan(force.y) || _isnan(force.z)), ("PhysicsBehavior::onCollide force NAN!"));
+		engine::debug::invariant((!(_isnan(force.x) || _isnan(force.y) || _isnan(force.z))), "!(_isnan(force.x) || _isnan(force.y) || _isnan(force.z))", __FILE__, __LINE__, "PhysicsBehavior::onCollide force NAN!");
 
 		applyForce( &force );
 	}
@@ -1493,9 +1488,9 @@ Bool PhysicsBehavior::checkForOverlapCollision(Object *other)
 	if( selfCrushingOther && selfBeingCrushed )
 	{
 		//Is it possible to crush and be crushed at the same time?
-		DEBUG_CRASH( ("%s (Crusher:%d, Crushable:%d) is attempting to crush %s (Crusher:%d, Crushable:%d) but it is reciprocating -- shouldn't be possible!",
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "%s (Crusher:%d, Crushable:%d) is attempting to crush %s (Crusher:%d, Crushable:%d) but it is reciprocating -- shouldn't be possible!",
 			crusherMe->getTemplate()->getName().str(), crusherMe->getCrusherLevel(), crusherMe->getCrushableLevel(),
-			crusheeOther->getTemplate()->getName().str(), crusheeOther->getCrusherLevel(), crusheeOther->getCrushableLevel() ) );
+			crusheeOther->getTemplate()->getName().str(), crusheeOther->getCrusherLevel(), crusheeOther->getCrushableLevel() );
 		return false;
 	}
 
@@ -1816,7 +1811,7 @@ void PhysicsBehavior::testStunnedUnitForDestruction()
 	const Coord3D *pos = obj->getPosition();
 
 	// If a stunned object is upside down when it hits the ground, kill it
-	if(obj->getTransformMatrix()->Get_Z_Vector().Z < 0.0f)
+	if(World_Transform(obj).Basis_Z().z < 0.0f)
 	{
 		obj->kill();
 		return;

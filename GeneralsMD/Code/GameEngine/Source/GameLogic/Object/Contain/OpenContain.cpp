@@ -31,7 +31,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/BitFlagsIO.h"
 #include "Common/GameAudio.h"
@@ -147,7 +148,7 @@ OpenContain::OpenContain( Thing *thing, const ModuleData* moduleData ) : UpdateM
 
 	for( Int i = 0; i < MAX_FIRE_POINTS; i++ )
 	{
-		m_firePoints[ i ].Make_Identity();
+		m_firePoints[i] = Engine::Math::AffineTransform3::Identity();
 	}
 
 }
@@ -168,14 +169,12 @@ OpenContain::~OpenContain()
 {
 
 	// sanity, the system should be cleaning these up itself if all is going well
-	DEBUG_ASSERTCRASH( m_containList.empty(),
-										 ("OpenContain %s: destroying a container that still has items in it!",
-										  getObject()->getTemplate()->getName().str() ) );
+	engine::debug::invariant((m_containList.empty()), "m_containList.empty()", __FILE__, __LINE__, "OpenContain %s: destroying a container that still has items in it!",
+										  getObject()->getTemplate()->getName().str() );
 
 	// sanity
-	DEBUG_ASSERTCRASH( m_xferContainIDList.empty(),
-										 ("OpenContain %s: m_xferContainIDList is not empty but should be",
-											getObject()->getTemplate()->getName().str() ) );
+	engine::debug::invariant((m_xferContainIDList.empty()), "m_xferContainIDList.empty()", __FILE__, __LINE__, "OpenContain %s: m_xferContainIDList is not empty but should be",
+											getObject()->getTemplate()->getName().str() );
 
 }
 
@@ -222,8 +221,8 @@ void OpenContain::addOrRemoveObjFromWorld(Object* obj, Bool add)
 	// check for it here and print a warning
 	//
 	if( obj->isKindOf( KINDOF_STRUCTURE ) )
-		DEBUG_LOG(( "WARNING: Containing/Removing structures like '%s' is potentially a very expensive and slow operation",
-								obj->getTemplate()->getName().str() ));
+		engine::debug::log_info( "WARNING: Containing/Removing structures like '%s' is potentially a very expensive and slow operation",
+								obj->getTemplate()->getName().str() );
 
 
 	if (add)
@@ -241,8 +240,7 @@ void OpenContain::addOrRemoveObjFromWorld(Object* obj, Bool add)
 	}
 	else
 	{
-		DEBUG_ASSERTCRASH(!getObject()->isEffectivelyDead() && !getObject()->isDestroyed(),
-			("object shouldn't become an occupant of a dead or destroyed container object"));
+		engine::debug::invariant((!getObject()->isEffectivelyDead() && !getObject()->isDestroyed()), "!getObject()->isEffectivelyDead() && !getObject()->isDestroyed()", __FILE__, __LINE__, "object shouldn't become an occupant of a dead or destroyed container object");
 
 		// remove object from its group (if any)
 		obj->leaveGroup();
@@ -300,8 +298,8 @@ void OpenContain::addToContain( Object *rider )
 	// container to avoid an invalid state and use-after-free bugs when accessing the contained by pointer.
 	if (getObject()->isDestroyed())
 	{
-		DEBUG_CRASH(("'%s' is about to be added to '%s', which is destroyed",
-			rider->getTemplate()->getName().str(), getObject()->getTemplate()->getName().str()));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "'%s' is about to be added to '%s', which is destroyed",
+			rider->getTemplate()->getName().str(), getObject()->getTemplate()->getName().str());
 		return;
 	}
 #endif
@@ -311,8 +309,8 @@ void OpenContain::addToContain( Object *rider )
 	// client present in a match, the game has a small chance to mismatch.
 	if (rider->isDestroyed())
 	{
-		DEBUG_CRASH(("'%s', which is destroyed, is about to be added to '%s'",
-			rider->getTemplate()->getName().str(), getObject()->getTemplate()->getName().str()));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "'%s', which is destroyed, is about to be added to '%s'",
+			rider->getTemplate()->getName().str(), getObject()->getTemplate()->getName().str());
 		return;
 	}
 
@@ -336,7 +334,7 @@ void OpenContain::addToContain( Object *rider )
 				reportObject = *items->begin();
 			}
 		}
-		DEBUG_CRASH( ("OpenContain::addToContain() - Object %s not valid for container %s!", reportObject?reportObject->getTemplate()->getName().str():"null", getObject()->getTemplate()->getName().str() ) );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "OpenContain::addToContain() - Object %s not valid for container %s!", reportObject?reportObject->getTemplate()->getName().str():"null", getObject()->getTemplate()->getName().str() );
 	}
 #endif
 
@@ -344,11 +342,11 @@ void OpenContain::addToContain( Object *rider )
 	if( rider->getContainedBy() != nullptr )
 	{
 
-		DEBUG_LOG(( "'%s' is trying to contain '%s', but '%s' is already contained by '%s'",
+		engine::debug::log_info( "'%s' is trying to contain '%s', but '%s' is already contained by '%s'",
 								getObject()->getTemplate()->getName().str(),
 								rider->getTemplate()->getName().str(),
 								rider->getTemplate()->getName().str(),
-								rider->getContainedBy()->getTemplate()->getName().str() ));
+								rider->getContainedBy()->getTemplate()->getName().str() );
 		return;
 
 	}
@@ -430,11 +428,11 @@ void OpenContain::removeFromContain( Object *rider, Bool exposeStealthUnits )
 	if( containedBy != getObject() )
 	{
 
-		DEBUG_LOG(( "'%s' is trying to un-contain '%s', but '%s' is really contained by '%s'",
+		engine::debug::log_info( "'%s' is trying to un-contain '%s', but '%s' is really contained by '%s'",
 								getObject()->getTemplate()->getName().str(),
 								rider->getTemplate()->getName().str(),
 								rider->getTemplate()->getName().str(),
-								containedBy ? containedBy->getTemplate()->getName().str() : "Nothing" ));
+								containedBy ? containedBy->getTemplate()->getName().str() : "Nothing" );
 		return;
 
 	}
@@ -478,7 +476,7 @@ void OpenContain::killAllContained()
 	{
 		Object *rider = *it;
 
-		DEBUG_ASSERTCRASH( rider, ("Contain list must not contain null element"));
+		engine::debug::invariant((rider), "rider", __FILE__, __LINE__, "Contain list must not contain null element");
 		if ( rider )
 		{
 			m_containList.erase(it);
@@ -498,7 +496,7 @@ void OpenContain::killAllContained()
 		}
 	}
 
-	DEBUG_ASSERTCRASH(m_containList.empty(), ("killAllContained should have emptied the contain list"));
+	engine::debug::invariant((m_containList.empty()), "m_containList.empty()", __FILE__, __LINE__, "killAllContained should have emptied the contain list");
 
 	m_containList.clear();
 	m_containListSize = 0;
@@ -515,7 +513,7 @@ void OpenContain::harmAndForceExitAllContained( DamageInfo *info )
 	{
 		Object *rider = *it;
 
-		DEBUG_ASSERTCRASH( rider, ("Contain list must not contain null element"));
+		engine::debug::invariant((rider), "rider", __FILE__, __LINE__, "Contain list must not contain null element");
 		if ( rider )
 		{
 		  removeFromContain( rider, true );
@@ -532,7 +530,7 @@ void OpenContain::harmAndForceExitAllContained( DamageInfo *info )
 	}
 
 
-  DEBUG_ASSERTCRASH( m_containListSize == 0, ("harmAndForceExitAllContained just made a booboo, list size != zero.") );
+  engine::debug::invariant((m_containListSize == 0), "m_containListSize == 0", __FILE__, __LINE__, "harmAndForceExitAllContained just made a booboo, list size != zero.");
 
 }
 
@@ -690,7 +688,7 @@ void OpenContain::removeFromContainViaIterator( ContainedItemsList::iterator it,
 	m_containListSize--;
 	if( rider->isKindOf( KINDOF_STEALTH_GARRISON ) )
 	{
-		DEBUG_ASSERTCRASH( m_stealthUnitsContained > 0, ("OpenContain::removeFromContainViaIterator - Removing stealth unit but stealth count is %d", m_stealthUnitsContained) );
+		engine::debug::invariant((m_stealthUnitsContained > 0), "m_stealthUnitsContained > 0", __FILE__, __LINE__, "OpenContain::removeFromContainViaIterator - Removing stealth unit but stealth count is %d", m_stealthUnitsContained);
 		m_stealthUnitsContained--;
 		if( exposeStealthUnits )
 		{
@@ -703,7 +701,7 @@ void OpenContain::removeFromContainViaIterator( ContainedItemsList::iterator it,
 	}
 	if( rider->isKindOf( KINDOF_HERO ) )
 	{
-		DEBUG_ASSERTCRASH( m_heroUnitsContained > 0, ("OpenContain::removeFromContainViaIterator - Removing hero but hero count is %d", m_heroUnitsContained) );
+		engine::debug::invariant((m_heroUnitsContained > 0), "m_heroUnitsContained > 0", __FILE__, __LINE__, "OpenContain::removeFromContainViaIterator - Removing hero but hero count is %d", m_heroUnitsContained);
 		m_heroUnitsContained--;
 	}
 
@@ -722,14 +720,14 @@ void OpenContain::removeFromContainViaIterator( ContainedItemsList::iterator it,
 	doUnloadSound();
 
 	// trigger an onRemoving event for 'm_object' no longer containing 'itemToRemove->m_object'
-	DEBUG_ASSERTCRASH(getObject()->getContain() == this, ("hmm, wrong container"));
+	engine::debug::invariant((getObject()->getContain() == this), "getObject()->getContain() == this", __FILE__, __LINE__, "hmm, wrong container");
 	if( getObject()->getContain() )
 	{
 		getObject()->getContain()->onRemoving( rider );
 	}
 
 	// trigger an onRemovedFrom event for 'remove'
-	DEBUG_ASSERTCRASH(getObject()->getContain() == this, ("hmm, wrong container 2"));
+	engine::debug::invariant((getObject()->getContain() == this), "getObject()->getContain() == this", __FILE__, __LINE__, "hmm, wrong container 2");
 	rider->onRemovedFrom( getObject() );
 
 }
@@ -972,9 +970,9 @@ Bool OpenContain::isValidContainerFor(const Object* obj, Bool checkCapacity) con
  			break;
 
  		default:
- 			DEBUG_CRASH(( "isValidContainerFor: Undefined relationship (%d) between '%s' and '%s'",
+ 			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "isValidContainerFor: Undefined relationship (%d) between '%s' and '%s'",
  										r, getObject()->getTemplate()->getName().str(),
- 										obj->getTemplate()->getName().str() ));
+ 										obj->getTemplate()->getName().str() );
  			return FALSE;
 
  	}
@@ -997,7 +995,7 @@ Bool OpenContain::isValidContainerFor(const Object* obj, Bool checkCapacity) con
 */
 void OpenContain::exitObjectViaDoor( Object *exitObj, ExitDoorType exitDoor )
 {
-	DEBUG_ASSERTCRASH(exitDoor == DOOR_1, ("multiple exit doors not supported here"));
+	engine::debug::invariant((exitDoor == DOOR_1), "exitDoor == DOOR_1", __FILE__, __LINE__, "multiple exit doors not supported here");
 
 	removeFromContain( exitObj );
 
@@ -1319,7 +1317,7 @@ void OpenContain::putObjAtNextFirePoint( Object *obj )
 	}
 
 	// get the position
-	Matrix3D matrix;
+	Engine::Math::AffineTransform3 transform;
 	if( getOpenContainModuleData()->m_passengersInTurret )
 	{
 		// If our passengers are in our turret, we need to recompute the Matrix.
@@ -1332,22 +1330,22 @@ void OpenContain::putObjAtNextFirePoint( Object *obj )
 		}
 		firepoint.concat(suffix);
 
-		getObject()->getSingleLogicalBonePositionOnTurret(TURRET_MAIN, firepoint.str(), nullptr, &matrix );
+		getObject()->getSingleLogicalBonePositionOnTurret(TURRET_MAIN, firepoint.str(), nullptr, &transform);
 	}
 	else
 	{
-		matrix = m_firePoints[ m_firePointNext ];
+		transform = m_firePoints[m_firePointNext];
 	}
 
-	Vector3 vectorPos = matrix.Get_Translation();
+	const Engine::Math::Vector3 vectorPos = transform.Translation();
 	Coord3D pos;
-	pos.set( vectorPos.X, vectorPos.Y, vectorPos.Z );
+	pos.set(vectorPos.x, vectorPos.y, vectorPos.z);
 
 	// set the object position
 	if( isEnclosingContainerFor( obj ) )
 		obj->setPosition( &pos );
 	else
-		obj->setTransformMatrix( &matrix );//Only do everything if it matters
+		obj->setWorldTransform(transform);//Only do everything if it matters
 
 	// increment the next firepoint to use ... make sure to wrap if we need to
 	m_firePointNext++;
@@ -1534,7 +1532,7 @@ void OpenContain::processDamageToContained(Real percentDamage)
 {
 #if RETAIL_COMPATIBLE_CRC
 
-	DEBUG_ASSERTCRASH(m_containListSize == m_containList.size(), ("contain list size doesn't match size of container"));
+	engine::debug::invariant((m_containListSize == m_containList.size()), "m_containListSize == m_containList.size()", __FILE__, __LINE__, "contain list size doesn't match size of container");
 
 	// TheSuperHackers @bugfix Caball009 11/03/2026 Use a temporary copy of the contain list to iterate over,
 	// because causing damage to the occupants may remove some or all elements from the list
@@ -1578,7 +1576,7 @@ void OpenContain::processDamageToContained(Real percentDamage)
 	{
 		Object *object = *it;
 
-		DEBUG_ASSERTCRASH( object, ("Contain list must not contain null element") );
+		engine::debug::invariant((object), "object", __FILE__, __LINE__, "Contain list must not contain null element");
 
 		// Calculate the damage to be inflicted on each unit.
 		Real damage = object->getBodyModule()->getMaxHealth() * percentDamage;
@@ -1795,7 +1793,7 @@ void OpenContain::xfer( Xfer *xfer )
 			}
 			m_containList.clear();
 #else
-			DEBUG_CRASH(( "OpenContain::xfer - Contain list should be empty before load but is not" ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "OpenContain::xfer - Contain list should be empty before load but is not" );
 			throw SC_INVALID_DATA;
 #endif
 
@@ -1837,7 +1835,7 @@ void OpenContain::xfer( Xfer *xfer )
 	m_conditionState.xfer( xfer );
 
 	// fire points
-	xfer->xferUser( &m_firePoints, sizeof( Matrix3D ) * MAX_FIRE_POINTS );
+	xfer->xferUser(&m_firePoints, sizeof(m_firePoints));
 
 	// fire point start
 	xfer->xferInt( &m_firePointStart );
@@ -1886,7 +1884,7 @@ void OpenContain::xfer( Xfer *xfer )
 		if( m_objectEnterExitInfo.empty() == FALSE )
 		{
 
-			DEBUG_CRASH(( "OpenContain::xfer - m_objectEnterExitInfo should be empty, but is not" ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "OpenContain::xfer - m_objectEnterExitInfo should be empty, but is not" );
 			throw SC_INVALID_DATA;
 
 		}
@@ -1934,7 +1932,7 @@ void OpenContain::loadPostProcess()
 	if( m_containList.empty() == FALSE )
 	{
 
-		DEBUG_CRASH(( "OpenContain::loadPostProcess - Contain list should be empty before load but is not" ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "OpenContain::loadPostProcess - Contain list should be empty before load but is not" );
 		throw SC_INVALID_DATA;
 
 	}
@@ -1955,7 +1953,7 @@ void OpenContain::loadPostProcess()
 		if( obj == nullptr )
 		{
 
-			DEBUG_CRASH(( "OpenContain::loadPostProcess - Unable to find object to put on contain list" ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "OpenContain::loadPostProcess - Unable to find object to put on contain list" );
 			throw SC_INVALID_DATA;
 
 		}
@@ -1973,8 +1971,7 @@ void OpenContain::loadPostProcess()
 	}
 
 	// sanity
-	DEBUG_ASSERTCRASH( m_containListSize == m_containList.size(),
-										 ("OpenContain::loadPostProcess - contain list count mismatch") );
+	engine::debug::invariant((m_containListSize == m_containList.size()), "m_containListSize == m_containList.size()", __FILE__, __LINE__, "OpenContain::loadPostProcess - contain list count mismatch");
 
 	// clear the list as we don't need it anymore
 	m_xferContainIDList.clear();

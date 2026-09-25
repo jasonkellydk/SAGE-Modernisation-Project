@@ -27,7 +27,8 @@
 // Author: Michael S. Booth, October 2000
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/Xfer.h"
 #include "GameLogic/GameLogic.h"
@@ -90,7 +91,7 @@ void GhostObject::xfer( Xfer *xfer )
 		// sanity
 		if( parentObjectID != INVALID_ID && m_parentObject == nullptr )
 		{
-			DEBUG_CRASH(( "GhostObject::xfer - Unable to connect m_parentObject" ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "GhostObject::xfer - Unable to connect m_parentObject" );
 			throw INI_INVALID_DATA;
 		}
 	}

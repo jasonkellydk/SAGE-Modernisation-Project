@@ -41,7 +41,8 @@
 // Desc:      Memory manager
 //
 // ----------------------------------------------------------------------------
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 // SYSTEM INCLUDES
 
@@ -87,7 +88,7 @@ void userMemoryAdjustPoolSize(const char *poolName, Int& initialAllocationCount,
 		}
 	}
 
-	DEBUG_CRASH(("Initial size for pool %s not found -- you should add it to MemoryInit.cpp",poolName));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Initial size for pool %s not found -- you should add it to MemoryInit.cpp",poolName);
 }
 
 //-----------------------------------------------------------------------------

@@ -29,9 +29,8 @@
 #include <vector>
 #include "Lib/BaseType.h"
 #include "W3DDevice/GameClient/WaterMaterial.h"
-#include "WWMath/aabox.h"
-#include "WWMath/sphere.h"
-#include "WWMath/vector2.h"
+
+import Engine.Core.Math.Vector2;
 
 enum waveType CPP_11(: Int);	//forward reference
 
@@ -50,8 +49,8 @@ public:
 	~WaterTracksObj();
 
 	Int freeWaterTracksResources();	///<free W3D assets used for this track
-	void init( Real width, Real length, const Vector2 &start, const Vector2 &end, const Char *texturename, Int waveTimeOffset);	///<allocate W3D resources and set size
-	void init( Real width, const Vector2 &start, const Vector2 &end, const Char *texturename);	///<allocate W3D resources and set size
+	void init( Real width, Real length, const Engine::Math::Vector2 &start, const Engine::Math::Vector2 &end, const Char *texturename, Int waveTimeOffset);	///<allocate W3D resources and set size
+	void init( Real width, const Engine::Math::Vector2 &start, const Engine::Math::Vector2 &end, const Char *texturename);	///<allocate W3D resources and set size
 	Int	update(Int msElapsed);	///< update animation state
 	void Append_Vertices(std::vector<WaterSurfaceVertex>& vertices);
 
@@ -61,12 +60,12 @@ protected:
 	Int			m_x;					///<vertex count
 	Int			m_y;					///<vertex count
 	Bool		m_bound;				///<object is bound to owner and accepts new edges
-	Vector2		m_startPos;				///<starting position of wave
-//	Vector2		m_endPos;				///<ending position of wave
-	Vector2		m_waveDir;				///<direction of wave travel
-	Vector2		m_perpDir;				///<direction perpendicular to wave travel
-	Vector2		m_initStartPos;			///<original settings used to create wave
-	Vector2		m_initEndPos;			///<original settings used to create wave
+	Engine::Math::Vector2	m_startPos;				///<starting position of wave
+//	Engine::Math::Vector2	m_endPos;				///<ending position of wave
+	Engine::Math::Vector2	m_waveDir;				///<direction of wave travel
+	Engine::Math::Vector2	m_perpDir;				///<direction perpendicular to wave travel
+	Engine::Math::Vector2	m_initStartPos;			///<original settings used to create wave
+	Engine::Math::Vector2	m_initEndPos;			///<original settings used to create wave
 	Int			m_initTimeOffset;		///<time offset when wave is added into the system
 	Int		m_fadeMs;				///<time for wave to fade out after it stops moving
 	Int		m_totalMs;				///<amount of time to complete full motion
@@ -123,7 +122,7 @@ public:
 	void unbindTrack( WaterTracksObj *mod );	///<releases control of track object
 	void saveTracks();									///<save all used tracks to disk
 	void loadTracks();									///<load tracks from disk
-	WaterTracksObj *findTrack(Vector2 &start, Vector2 &end, waveType type);
+	WaterTracksObj *findTrack(const Engine::Math::Vector2 &start, const Engine::Math::Vector2 &end, waveType type);
 
 protected:
     std::vector<WaterSurfaceVertex> m_vertices;

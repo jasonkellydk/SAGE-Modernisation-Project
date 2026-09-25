@@ -17,7 +17,7 @@
 class SDL3GameEngine : public GameEngine
 {
 public:
-	SDL3GameEngine() = default;
+	SDL3GameEngine();
 	~SDL3GameEngine() override = default;
 	void init() override { GameEngine::init(); }
 	void reset() override { GameEngine::reset(); }
@@ -36,8 +36,12 @@ protected:
 		(void)newHeight;
 	}
 
-	GameLogic *createGameLogic() override { return NEW W3DGameLogic; }
-	GameClient *createGameClient() override { return NEW W3DGameClient; }
+	GameLogic *createGameLogic(engine::platform::IPlatform& platform) override
+	{
+		return NEW W3DGameLogic(platform.clock(), platform.threading());
+	}
+	GameClient *createGameClient(engine::platform::IPlatform& platform,
+		engine::platform::IWindow* mainWindow) override { return NEW W3DGameClient(platform, mainWindow); }
 	ModuleFactory *createModuleFactory() override { return NEW W3DModuleFactory; }
 	ThingFactory *createThingFactory() override { return NEW W3DThingFactory; }
 	FunctionLexicon *createFunctionLexicon() override { return NEW W3DFunctionLexicon; }

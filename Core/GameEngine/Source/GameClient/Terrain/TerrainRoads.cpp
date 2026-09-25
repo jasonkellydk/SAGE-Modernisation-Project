@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLDUES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #define DEFINE_BODYDAMAGETYPE_NAMES
 #include "Common/INI.h"
@@ -112,7 +113,7 @@ const FieldParse TerrainRoadType::m_terrainBridgeFieldParseTable[] =
 	else
 	{
 
-		DEBUG_CRASH(( "Expected Damage/Repair transition keyword" ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Expected Damage/Repair transition keyword" );
 		throw INI_INVALID_DATA;
 
 	}
@@ -132,7 +133,7 @@ const FieldParse TerrainRoadType::m_terrainBridgeFieldParseTable[] =
 	if( effectNum < 0 || effectNum >= MAX_BRIDGE_BODY_FX )
 	{
 
-		DEBUG_CRASH(( "Effect number max on bridge transitions is '%d'", MAX_BRIDGE_BODY_FX ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Effect number max on bridge transitions is '%d'", MAX_BRIDGE_BODY_FX );
 		throw INI_INVALID_DATA;
 
 	}
@@ -168,7 +169,7 @@ const FieldParse TerrainRoadType::m_terrainBridgeFieldParseTable[] =
 	else
 	{
 
-		DEBUG_CRASH(( "Expected Damage/Repair transition keyword" ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Expected Damage/Repair transition keyword" );
 		throw INI_INVALID_DATA;
 
 	}
@@ -188,7 +189,7 @@ const FieldParse TerrainRoadType::m_terrainBridgeFieldParseTable[] =
 	if( effectNum < 0 || effectNum >= MAX_BRIDGE_BODY_FX )
 	{
 
-		DEBUG_CRASH(( "Effect number max on bridge transitions is '%d'", MAX_BRIDGE_BODY_FX ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Effect number max on bridge transitions is '%d'", MAX_BRIDGE_BODY_FX );
 		throw INI_INVALID_DATA;
 
 	}
@@ -440,7 +441,7 @@ TerrainRoadType *TerrainRoadCollection::newBridge( AsciiString name )
 TerrainRoadType *TerrainRoadCollection::nextRoad( TerrainRoadType *road )
 {
 
-	DEBUG_ASSERTCRASH( road->isBridge() == FALSE, ("nextRoad: road not a road") );
+	engine::debug::invariant((road->isBridge() == FALSE), "road->isBridge() == FALSE", __FILE__, __LINE__, "nextRoad: road not a road");
 	return road->friend_getNext();
 
 }
@@ -451,7 +452,7 @@ TerrainRoadType *TerrainRoadCollection::nextRoad( TerrainRoadType *road )
 TerrainRoadType *TerrainRoadCollection::nextBridge( TerrainRoadType *bridge )
 {
 
-	DEBUG_ASSERTCRASH( bridge->isBridge() == TRUE, ("nextBridge, bridge is not a bridge") );
+	engine::debug::invariant((bridge->isBridge() == TRUE), "bridge->isBridge() == TRUE", __FILE__, __LINE__, "nextBridge, bridge is not a bridge");
 	return bridge->friend_getNext();
 
 }

@@ -32,7 +32,8 @@
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 // USER INCLUDES //////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/Player.h"
 #include "Common/ThingFactory.h"
@@ -128,7 +129,7 @@ UpdateSleepTime HijackerUpdate::update()
 				if (m_wasTargetAirborne)
 				{
 					const ThingTemplate* putInContainerTmpl = TheThingFactory->findTemplate(getHijackerUpdateModuleData()->m_parachuteName);
-					DEBUG_ASSERTCRASH(putInContainerTmpl,("DeliverPayload: PutInContainer %s not found!",getHijackerUpdateModuleData()->m_parachuteName.str()));
+					engine::debug::invariant((putInContainerTmpl), "putInContainerTmpl", __FILE__, __LINE__, "DeliverPayload: PutInContainer %s not found!",getHijackerUpdateModuleData()->m_parachuteName.str());
 					if (putInContainerTmpl)
 					{
 						Object* container = TheThingFactory->newObject( putInContainerTmpl, obj->getTeam() );
@@ -139,7 +140,7 @@ UpdateSleepTime HijackerUpdate::update()
 						}
 						else
 						{
-							DEBUG_CRASH(("DeliverPayload: PutInContainer %s is full, or not valid for the payload!",getHijackerUpdateModuleData()->m_parachuteName.str()));
+							engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "DeliverPayload: PutInContainer %s is full, or not valid for the payload!",getHijackerUpdateModuleData()->m_parachuteName.str());
 						}
 					}
 

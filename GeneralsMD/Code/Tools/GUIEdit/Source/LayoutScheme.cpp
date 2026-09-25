@@ -48,7 +48,7 @@
 #include <assert.h>
 
 // USER INCLUDES //////////////////////////////////////////////////////////////
-#include "Common/Debug.h"
+
 #include "GameClient/Gadget.h"
 #include "GameClient/GameWindowManager.h"
 #include "GameClient/GadgetPushButton.h"
@@ -67,6 +67,7 @@
 #include "resource.h"
 #include "Properties.h"
 #include "LayoutScheme.h"
+import engine.debug;
 
 // DEFINES ////////////////////////////////////////////////////////////////////
 
@@ -2177,7 +2178,7 @@ ImageAndColorInfo *LayoutScheme::findEntry( StateIdentifier id )
 	if( id < 0 || id >= NUM_STATE_IDENTIFIERS )
 	{
 
-		DEBUG_LOG(( "Illegal state to to layout 'findEntry' '%d'", id ));
+		engine::debug::log_info( "Illegal state to to layout 'findEntry' '%d'", id );
 		assert( 0 );
 		return nullptr;
 
@@ -2206,7 +2207,7 @@ ImageAndColorInfo *LayoutScheme::getImageAndColor( StateIdentifier id )
 	if( id < 0 || id >= NUM_STATE_IDENTIFIERS )
 	{
 
-		DEBUG_LOG(( "getImageAndColor: Illegal state '%d'", id ));
+		engine::debug::log_info( "getImageAndColor: Illegal state '%d'", id );
 		assert( 0 );
 		return nullptr;
 
@@ -2228,7 +2229,7 @@ void LayoutScheme::storeImageAndColor( StateIdentifier id, const Image *image,
 	if( id < 0 || id >= NUM_STATE_IDENTIFIERS )
 	{
 
-		DEBUG_LOG(( "Illegal state identifier in layout scheme store image and color '%d'", id ));
+		engine::debug::log_info( "Illegal state identifier in layout scheme store image and color '%d'", id );
 		assert( 0 );
 		return;
 
@@ -2261,7 +2262,7 @@ Bool LayoutScheme::saveScheme( char *filename )
 	if( fp == nullptr )
 	{
 
-		DEBUG_LOG(( "saveScheme: Unable to open file '%s'", filename ));
+		engine::debug::log_info( "saveScheme: Unable to open file '%s'", filename );
 		MessageBox( TheEditor->getWindowHandle(),
 								"Unable to open scheme for for saving.  Read only?", "Save Error", MB_OK );
 		return FALSE;
@@ -2353,7 +2354,7 @@ Bool LayoutScheme::loadScheme( char *filename )
 		if( version != SCHEME_VERSION )
 		{
 
-			DEBUG_LOG(( "loadScheme: Old layout file version '%d'", version ));
+			engine::debug::log_info( "loadScheme: Old layout file version '%d'", version );
 			MessageBox( TheEditor->getWindowHandle(),
 									"Old layout version, cannot open.", "Old File", MB_OK );
 			return FALSE;

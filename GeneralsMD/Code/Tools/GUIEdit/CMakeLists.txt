@@ -55,7 +55,7 @@ target_link_libraries(z_guiedit PRIVATE
     generals_graphics
     SDL3::SDL3
     comctl32
-    core_debug
+    engine_debug
     d3d9lib
     imm32
     vfw32

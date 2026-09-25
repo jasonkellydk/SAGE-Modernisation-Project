@@ -52,7 +52,7 @@ import Graphics.Diagnostics.Render;
 #include <stdlib.h>
 
 // USER INCLUDES //////////////////////////////////////////////////////////////
-#include "Common/Debug.h"
+
 #include "Common/FramePacer.h"
 #include "GameClient/Display.h"
 #include "GameClient/GameWindowManager.h"
@@ -64,6 +64,7 @@ import Graphics.Diagnostics.Render;
 #include "HierarchyView.h"
 #include "Properties.h"
 #include "WW3D2/WW3D.h"
+import engine.debug;
 import Graphics.Frame.ToolFrame;
 
 // DEFINES ////////////////////////////////////////////////////////////////////
@@ -460,7 +461,6 @@ void EditWindow::init( UnsignedInt clientWidth, UnsignedInt clientHeight )
 	TheW3DFileSystem = new W3DFileSystem;  // our own file system for asset locations
 
 	// initialize W3D
-	WWMath::Init();
 	Graphics::Get_Render_Diagnostics() = {};
 	Graphics::Get_Texture_Quality_Settings().prefer_16_bits = true;
 	WW3D::Init();
@@ -503,8 +503,6 @@ void EditWindow::shutdown()
 	Graphics::Shutdown_Tool_Frame();
 	WW3D::Shutdown();
 	Graphics::Graphics_Shutdown_Shared_Frame();
-	WWMath::Shutdown();
-
 	// delete the w3d file system
 	delete TheW3DFileSystem;
 	TheW3DFileSystem = nullptr;
@@ -809,7 +807,7 @@ void EditWindow::mouseEvent( UnsignedInt windowsMessage,
 			else if( m_resizingWindow )
 			{
 				GameWindow *window = TheEditor->getFirstSelected();
-				DEBUG_ASSERTCRASH(window, ("No window selected for resize!"));
+				engine::debug::invariant((window), "window", __FILE__, __LINE__, "No window selected for resize!");
 
 				if (window)
 				{

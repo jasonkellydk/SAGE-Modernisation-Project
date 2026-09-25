@@ -58,6 +58,7 @@ module;
 
 export module Engine.UI.WND.Runtime.Gadget.PushButton;
 
+import engine.debug;
 #include "GameClient/Gadget.h"
 
 // DEFINES ////////////////////////////////////////////////////////////////////
@@ -518,7 +519,7 @@ void GadgetCheckLikeButtonSetVisualCheck( GameWindow *g, Bool checked )
 	if( BitIsSet( g->winGetStatus(), WIN_STATUS_CHECK_LIKE ) == FALSE )
 	{
 
-		DEBUG_CRASH(( "GadgetCheckLikeButtonSetVisualCheck: Window is not 'CHECK-LIKE'" ));
+		engine::debug::invariant(false, "debug invariant", __FILE__, __LINE__,  "GadgetCheckLikeButtonSetVisualCheck: Window is not 'CHECK-LIKE'" );
 		return;
 
 	}

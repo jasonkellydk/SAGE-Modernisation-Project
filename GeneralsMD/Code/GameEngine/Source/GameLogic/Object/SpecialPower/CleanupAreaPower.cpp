@@ -42,7 +42,8 @@
 ///////////////////////////////////////////////////////////////////////////////
 
 //-----------------------------------------------------------------------------
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/Player.h"
 #include "Common/ThingTemplate.h"
@@ -101,7 +102,7 @@ void CleanupAreaPower::doSpecialPowerAtLocation( const Coord3D *loc, Real angle,
 	else
 	{
 		//This case will only happen should the ambulance not have a cleanuphazard update module.
-		DEBUG_CRASH( ("%s is attempting to use CleanupAreaPower, but requires a CleanupHazardUpdate module to work!", obj->getTemplate()->getName().str() ) );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "%s is attempting to use CleanupAreaPower, but requires a CleanupHazardUpdate module to work!", obj->getTemplate()->getName().str() );
 	}
 }
 

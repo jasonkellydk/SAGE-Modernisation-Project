@@ -1,5 +1,4 @@
 module;
-#include "../../profiling/Tracy.h"
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -15,6 +14,7 @@ module;
 #include <utility>
 #include <vector>
 export module Graphics.Scene.Models.MeshDrawing;
+import engine.profiling;
 import Graphics.Materials.State;
 import Graphics.Materials.MeshMaterial;
 import Graphics.Materials.MeshTextureMapping;
@@ -297,7 +297,7 @@ public:
                     return vertex;
                 };
                 if (!mesh.Is_Valid()) {
-                    GRAPHICS_PROFILE_SCOPE("Graphics.Mesh.BuildMaterialBatch");
+                    engine::profiling::Scope profile_scope_299("Graphics.Mesh.BuildMaterialBatch");
                     Prepare_Source();
                     auto& batch = m_workspace->Workspace().Batch();
                     if (!batch.Begin(m_source.size(), (end - first) * 3)) return false;
@@ -423,7 +423,7 @@ public:
 private:
     void Prepare_Source() {
         if (!m_source.empty()) return;
-        GRAPHICS_PROFILE_SCOPE("Graphics.Mesh.TransformVertices");
+        engine::profiling::Scope profile_scope_425("Graphics.Mesh.TransformVertices");
         if (!m_workspace) m_workspace.emplace(m_cache.Acquire());
         assert(m_normals.empty() || m_normals.size() == m_positions.size());
         const auto prepare = [&]<bool HasNormals>() {

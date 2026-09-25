@@ -29,7 +29,9 @@
 
 #pragma once
 
-#include "Common/GameCommon.h"	// ensure we get DUMP_PERF_STATS, or not
+
+#include <cassert>
+#include "Common/GameCommon.h"
 #include "Common/AsciiString.h"
 #include "Common/GameType.h"
 #include "Common/GameMemory.h"
@@ -287,11 +289,6 @@ public:
 	Bool m_constantDebugUpdate;		///< should we update the debug stats constantly, vs every 2 seconds?
 	Bool m_showTeamDot;						///< Shows the little colored team dot representing which team you are controlling.
 
-#ifdef DUMP_PERF_STATS
-	Bool m_dumpPerformanceStatistics;
-  Bool  m_dumpStatsAtInterval;///< should I automatically dump stats every N frames
-  Int   m_statsInterval;       ///< if so, how many is N?
-#endif
 
 	Bool m_forceBenchmark;	///<forces running of CPU detection benchmark, even on known cpu's.
 
@@ -593,8 +590,8 @@ private:
 																			override, and return it */
 
 #if defined(_MSC_VER) && _MSC_VER < 1300
-	GlobalData(const GlobalData& that) { DEBUG_CRASH(("unimplemented")); }
-	GlobalData& operator=(const GlobalData& that) { DEBUG_CRASH(("unimplemented")); return *this; }
+	GlobalData(const GlobalData& that) { assert(false); }
+	GlobalData& operator=(const GlobalData& that) { assert(false); return *this; }
 #else
 	GlobalData(const GlobalData& that) = delete;
 	GlobalData& operator=(const GlobalData& that) = default;

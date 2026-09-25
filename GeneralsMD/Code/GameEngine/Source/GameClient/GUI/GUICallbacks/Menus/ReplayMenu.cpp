@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 
 #include "Lib/BaseType.h"
@@ -353,7 +354,7 @@ void PopulateReplayFileListbox(GameWindow *listbox)
 			}
 
 			const Int insertionIndex = GadgetListBoxAddEntryText(listbox, replayNameToShow, color, -1, 0);
-			DEBUG_ASSERTCRASH(insertionIndex >= 0, ("Expects valid index"));
+			engine::debug::invariant((insertionIndex >= 0), "insertionIndex >= 0", __FILE__, __LINE__, "Expects valid index");
 
 			// TheSuperHackers @info Caball009 09/02/2026 Original replay menu has 4 columns; the code now supports a future 5-column layout.
 			// If there aren't two columns for time and date, concatenate them for a single column.
@@ -375,7 +376,7 @@ void PopulateReplayFileListbox(GameWindow *listbox)
 			}
 			else
 			{
-				DEBUG_CRASH(("Replay menu uses %d columns; expected either 4 or 5", columns));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Replay menu uses %d columns; expected either 4 or 5", columns);
 			}
 
 			// TheSuperHackers @performance Now stops processing when the list is full.

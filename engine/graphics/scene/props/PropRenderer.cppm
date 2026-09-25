@@ -1,5 +1,4 @@
 module;
-#include "../../profiling/Tracy.h"
 #include <array>
 #include <bit>
 #include <cstddef>
@@ -12,6 +11,7 @@ module;
 #include <vector>
 
 export module Graphics.Scene.Props.Renderer;
+import engine.profiling;
 export import Graphics.Scene.Props.Geometry;
 export import Graphics.Scene.Props.Constants;
 export import Graphics.Scene.Props.Instances;
@@ -258,7 +258,7 @@ private:
         std::span<const std::array<float,16>> worlds,
         std::span<const std::uint32_t> records)
     {
-        GRAPHICS_PROFILE_SCOPE("Graphics.Props.Draw");
+        engine::profiling::Scope profile_scope_260("Graphics.Props.Draw");
         PropMesh *mesh = m_meshes.Resolve(handle);
         if (m_device == nullptr || mesh == nullptr || textures.size() > PropTextureCount) return false;
         if ((!worlds.empty() && !records.empty())
@@ -299,7 +299,7 @@ private:
         const RHIPipelineHandle pipeline = Pipeline(style, instanced, !records.empty(),shared_lighting);
         if (!pipeline.Is_Valid()) return false;
         {
-            GRAPHICS_PROFILE_SCOPE("Graphics.Props.BindResources");
+            engine::profiling::Scope profile_scope_301("Graphics.Props.BindResources");
             // Reuse the preceding owner's identical material block across
             // meshes. Resolve its full generation each time; mesh destruction
             // or replacement must never leave a borrowed binding dangling.
@@ -409,7 +409,7 @@ private:
 
     bool Upload(PropMesh &mesh)
     {
-        GRAPHICS_PROFILE_SCOPE("Graphics.Props.Upload");
+        engine::profiling::Scope profile_scope_411("Graphics.Props.Upload");
         if (mesh.vertices.Is_Valid() && mesh.indices.Is_Valid()) return true;
         const auto vertices = std::as_bytes(mesh.geometry.Vertices());
         const auto indices = std::as_bytes(mesh.geometry.Indices());
@@ -427,7 +427,7 @@ private:
 
     RHIPipelineHandle Pipeline(const PropStyle &style, bool instanced, bool records, bool shared_lighting)
     {
-        GRAPHICS_PROFILE_SCOPE("Graphics.Props.Pipeline");
+        engine::profiling::Scope profile_scope_429("Graphics.Props.Pipeline");
         for (const auto &entry : m_pipelines) if (entry.style == style && entry.instanced == instanced
             && entry.records == records && entry.shared_lighting == shared_lighting) return entry.handle;
         RHIPipeline description;

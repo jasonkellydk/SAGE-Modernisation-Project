@@ -42,7 +42,8 @@
 //
 //-----------------------------------------------------------------------------
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/Energy.h"
 #include "Common/Player.h"
@@ -77,7 +78,7 @@ Int Energy::getProduction() const
 //-----------------------------------------------------------------------------
 Real Energy::getEnergySupplyRatio() const
 {
-	DEBUG_ASSERTCRASH(m_energyProduction >= 0 && m_energyConsumption >= 0, ("neg Energy numbers"));
+	engine::debug::invariant((m_energyProduction >= 0 && m_energyConsumption >= 0), "m_energyProduction >= 0 && m_energyConsumption >= 0", __FILE__, __LINE__, "neg Energy numbers");
 
 	if( TheGameLogic->getFrame() < m_powerSabotagedTillFrame )
 	{
@@ -145,9 +146,8 @@ void Energy::objectEnteringInfluence( Object *obj )
 		addProduction( energy );
 
 	// sanity
-	DEBUG_ASSERTCRASH( m_energyProduction >= 0 && m_energyConsumption >= 0,
-										 ("Energy - Negative Energy numbers, Produce=%d Consume=%d\n",
-										 m_energyProduction, m_energyConsumption) );
+	engine::debug::invariant((m_energyProduction >= 0 && m_energyConsumption >= 0), "m_energyProduction >= 0 && m_energyConsumption >= 0", __FILE__, __LINE__, "Energy - Negative Energy numbers, Produce=%d Consume=%d\n",
+										 m_energyProduction, m_energyConsumption);
 
 }
 
@@ -171,9 +171,8 @@ void Energy::objectLeavingInfluence( Object *obj )
 		addProduction( -energy );
 
 	// sanity
-	DEBUG_ASSERTCRASH( m_energyProduction >= 0 && m_energyConsumption >= 0,
-										 ("Energy - Negative Energy numbers, Produce=%d Consume=%d\n",
-										 m_energyProduction, m_energyConsumption) );
+	engine::debug::invariant((m_energyProduction >= 0 && m_energyConsumption >= 0), "m_energyProduction >= 0 && m_energyConsumption >= 0", __FILE__, __LINE__, "Energy - Negative Energy numbers, Produce=%d Consume=%d\n",
+										 m_energyProduction, m_energyConsumption);
 
 }
 
@@ -188,14 +187,13 @@ void Energy::addPowerBonus( Object *obj )
 	if( obj == nullptr )
 		return;
 
-	DEBUG_ASSERTCRASH(!obj->isDisabled(), ("power bonus should not be added to disabled power plant"));
+	engine::debug::invariant((!obj->isDisabled()), "!obj->isDisabled()", __FILE__, __LINE__, "power bonus should not be added to disabled power plant");
 
 	addProduction(obj->getTemplate()->getEnergyBonus());
 
 	// sanity
-	DEBUG_ASSERTCRASH( m_energyProduction >= 0 && m_energyConsumption >= 0,
-										 ("Energy - Negative Energy numbers, Produce=%d Consume=%d\n",
-										 m_energyProduction, m_energyConsumption) );
+	engine::debug::invariant((m_energyProduction >= 0 && m_energyConsumption >= 0), "m_energyProduction >= 0 && m_energyConsumption >= 0", __FILE__, __LINE__, "Energy - Negative Energy numbers, Produce=%d Consume=%d\n",
+										 m_energyProduction, m_energyConsumption);
 
 }
 
@@ -218,9 +216,8 @@ void Energy::removePowerBonus( Object *obj )
 	addProduction( -obj->getTemplate()->getEnergyBonus() );
 
 	// sanity
-	DEBUG_ASSERTCRASH( m_energyProduction >= 0 && m_energyConsumption >= 0,
-										 ("Energy - Negative Energy numbers, Produce=%d Consume=%d\n",
-										 m_energyProduction, m_energyConsumption) );
+	engine::debug::invariant((m_energyProduction >= 0 && m_energyConsumption >= 0), "m_energyProduction >= 0 && m_energyConsumption >= 0", __FILE__, __LINE__, "Energy - Negative Energy numbers, Produce=%d Consume=%d\n",
+										 m_energyProduction, m_energyConsumption);
 
 }
 

@@ -36,10 +36,12 @@
 
 #pragma once
 
+
+#include <cassert>
 #include "WWLib/always.h"
 #include "WWLib/bittype.h"
 #include "WWLib/chunkio.h"
-#include "WWDebug/wwdebug.h"
+
 #include "saveload.h"
 #include "persist.h"
 
@@ -103,12 +105,12 @@ SimplePersistFactoryClass<T,CHUNKID>::Load(ChunkLoadClass & cload) const
 	T * old_obj = nullptr;
 
 	cload.Open_Chunk();
-	WWASSERT(cload.Cur_Chunk_ID() == SIMPLEFACTORY_CHUNKID_OBJPOINTER);
+	assert((cload.Cur_Chunk_ID() == SIMPLEFACTORY_CHUNKID_OBJPOINTER));
 	cload.Read(&old_obj,sizeof(T *));
 	cload.Close_Chunk();
 
 	cload.Open_Chunk();
-	WWASSERT(cload.Cur_Chunk_ID() == SIMPLEFACTORY_CHUNKID_OBJDATA);
+	assert((cload.Cur_Chunk_ID() == SIMPLEFACTORY_CHUNKID_OBJDATA));
 	new_obj->Load(cload);
 	cload.Close_Chunk();
 

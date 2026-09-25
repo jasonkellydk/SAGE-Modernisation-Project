@@ -27,9 +27,11 @@
 // Desc:   Behavior common to all DockUpdates is here.  Everything but action()
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
+import Engine.Core.Math.Vector3;
 #include <algorithm>
-#include "Common/Debug.h"
+
 #include "Common/Xfer.h"
 #include "GameClient/Drawable.h"
 #include "GameLogic/GameLogic.h"
@@ -277,7 +279,7 @@ void DockUpdate::getEnterPosition( Object* docker, Coord3D *position )
 	}
 
 	// take local space position and convert to world space
-	getObject()->convertBonePosToWorldPos( &m_enterPosition, nullptr, position, nullptr );
+	getObject()->transformBoneToWorld( &m_enterPosition, nullptr, position, nullptr );
 
 }
 
@@ -302,7 +304,7 @@ void DockUpdate::getDockPosition( Object* docker, Coord3D *position )
 	}
 
 	// take local space position and convert to world space
-	getObject()->convertBonePosToWorldPos( &m_dockPosition, nullptr, position, nullptr );
+	getObject()->transformBoneToWorld( &m_dockPosition, nullptr, position, nullptr );
 
 }
 
@@ -327,7 +329,7 @@ void DockUpdate::getExitPosition( Object* docker, Coord3D *position )
 	}
 
 	// take local space position and convert to world space
-	getObject()->convertBonePosToWorldPos( &m_exitPosition, nullptr, position, nullptr );
+	getObject()->transformBoneToWorld( &m_exitPosition, nullptr, position, nullptr );
 
 }
 
@@ -395,7 +397,7 @@ void DockUpdate::onExitReached( Object* docker )
 		// to continue moving to the exit position cause they are leaving after all
 		//
 		if( isDockOpen() )
-			DEBUG_CRASH( ("Fiddle.  Someone said goodbye to a dock when the dock didn't think it was talking to that someone."));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Fiddle.  Someone said goodbye to a dock when the dock didn't think it was talking to that someone.");
 
 	}
 }
@@ -485,20 +487,21 @@ Coord3D DockUpdate::computeApproachPosition( Int positionIndex, Object *forWhom 
 	// Start with the pristine bone, then convert it to the world, then find a clean spot around it.
 
 	Object *us = getObject();
-	us->convertBonePosToWorldPos( &m_approachPositions[positionIndex], nullptr, &workingPosition, nullptr );
+	us->transformBoneToWorld( &m_approachPositions[positionIndex], nullptr, &workingPosition, nullptr );
 
 	if( m_numberApproachPositionBones == 0 )
 	{
 		Coord3D ourPosition = *us->getPosition();
 		Coord3D theirPosition = *forWhom->getPosition();
 		// A Boneless building wants to bias towards the caller for the arbitrary position
-		Vector3 offset( theirPosition.x - ourPosition.x, theirPosition.y - ourPosition.y, theirPosition.z - ourPosition.z );
-		offset.Normalize();
+		Engine::Math::Vector3 offset{
+			theirPosition.x - ourPosition.x, theirPosition.y - ourPosition.y, theirPosition.z - ourPosition.z};
+		offset = offset.Normalized_Legacy();
 		offset = offset * (us->getGeometryInfo().getMajorRadius() / 2);
 
-		workingPosition.x += offset.X;
-		workingPosition.y += offset.Y;
-		workingPosition.z += offset.Z;
+		workingPosition.x += offset.x;
+		workingPosition.y += offset.y;
+		workingPosition.z += offset.z;
 	}
 
 	fpOptions.minRadius = 0.0f;
@@ -532,9 +535,9 @@ void DockUpdate::loadDockPositions()
 		if( !obj->isKindOf( KINDOF_IGNORE_DOCKING_BONES ) )
 		{
 
-			myDrawable->getPristineBonePositions( "DockStart", 0, &m_enterPosition, nullptr, 1);
-			myDrawable->getPristineBonePositions( "DockAction", 0, &m_dockPosition, nullptr, 1);
-			myDrawable->getPristineBonePositions( "DockEnd", 0, &m_exitPosition, nullptr, 1);
+			myDrawable->getPristineBonePositions( "DockStart", 0, &m_enterPosition, 1);
+			myDrawable->getPristineBonePositions( "DockAction", 0, &m_dockPosition, 1);
+			myDrawable->getPristineBonePositions( "DockEnd", 0, &m_exitPosition, 1);
 			if( m_numberApproachPositions != DYNAMIC_APPROACH_VECTOR_FLAG )
 			{
 				// Dynamic means no bones
@@ -545,7 +548,7 @@ void DockUpdate::loadDockPositions()
 				// TheSuperHackers @fix helmutbuhler 19/04/2025 Zero initialize array to prevent uninitialized memory reads.
 				// Important: the entire target vector is used for serialization and crc and must not contain random data.
 				Coord3D approachBones[DEFAULT_APPROACH_VECTOR_SIZE] = {0};
-				m_numberApproachPositionBones = myDrawable->getPristineBonePositions( "DockWaiting", 1, approachBones, nullptr, m_numberApproachPositions);
+				m_numberApproachPositionBones = myDrawable->getPristineBonePositions( "DockWaiting", 1, approachBones, m_numberApproachPositions);
 				if( m_numberApproachPositions == m_approachPositions.size() )//safeguard: will always be true
 				{
 					for( Int copyIndex = 0; copyIndex < m_numberApproachPositions; ++copyIndex )
@@ -687,4 +690,3 @@ void DockUpdate::loadPostProcess()
 	UpdateModule::loadPostProcess();
 
 }
-

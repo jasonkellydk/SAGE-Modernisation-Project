@@ -26,7 +26,11 @@
 // Author: Michael S. Booth, December 2001
 // Desc:   Implementation of missile behavior
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import Engine.Core.Math.AffineTransform3;
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
+
+#include "Common/LegacyTransformMath.h"
 
 #include "Common/GameState.h"
 #include "Common/Thing.h"
@@ -144,7 +148,7 @@ void NeutronMissileUpdate::onDelete()
 //-------------------------------------------------------------------------------------------------
 void NeutronMissileUpdate::projectileLaunchAtObjectOrPosition(const Object *victim, const Coord3D* victimPos, const Object *launcher, WeaponSlotType wslot, Int specificBarrelToUse, const WeaponTemplate* detWeap, const ParticleSystemTemplate* exhaustSysOverride)
 {
-	DEBUG_ASSERTCRASH(specificBarrelToUse>=0, ("specificBarrelToUse must now be explicit"));
+	engine::debug::invariant((specificBarrelToUse>=0), "specificBarrelToUse>=0", __FILE__, __LINE__, "specificBarrelToUse must now be explicit");
 
 	m_launcherID = launcher ? launcher->getID() : INVALID_ID;
 	m_attach_wslot = wslot;
@@ -211,22 +215,21 @@ void NeutronMissileUpdate::doLaunch()
 			return;
 		}
 
-		Matrix3D attachTransform;
+		Engine::Math::AffineTransform3 attachTransform = Engine::Math::AffineTransform3::Identity();
 		if (!launcher->getDrawable() ||
-			!launcher->getDrawable()->getProjectileLaunchOffset(m_attach_wslot, m_attach_specificBarrelToUse, &attachTransform, TURRET_INVALID, nullptr))
+			!launcher->getDrawable()->getProjectileLaunchTransform(m_attach_wslot, m_attach_specificBarrelToUse, &attachTransform, TURRET_INVALID, nullptr))
 		{
-			DEBUG_CRASH(("ProjectileLaunchPos %d %d not found!",m_attach_wslot, m_attach_specificBarrelToUse));
-			attachTransform.Make_Identity();
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "ProjectileLaunchPos %d %d not found!",m_attach_wslot, m_attach_specificBarrelToUse);
+			attachTransform = Engine::Math::AffineTransform3::Identity();
 		}
 
-		Matrix3D worldTransform;
-		launcher->convertBonePosToWorldPos(nullptr, &attachTransform, nullptr, &worldTransform);
+		Engine::Math::AffineTransform3 worldTransform = launcher->toWorldTransform(attachTransform);
 
-		Vector3 tmp = worldTransform.Get_Translation();
+		const Engine::Math::Vector3 position = worldTransform.Translation();
 		Coord3D worldPos;
-		worldPos.x = tmp.X;
-		worldPos.y = tmp.Y;
-		worldPos.z = tmp.Z;
+		worldPos.x = position.x;
+		worldPos.y = position.y;
+		worldPos.z = position.z;
 
 		//
 		// the missile on the raising up launch platform is actually 45 degrees from the missile
@@ -234,10 +237,10 @@ void NeutronMissileUpdate::doLaunch()
 		// that we don't see any decals on the side of the missile 'pop' to the new angle
 		/// @todo, this should not be a hard coded value ... I love demos!!!
 		//
-		worldTransform.Rotate_X( (PI / 2.0f) );
+		Legacy_Rotate_X(worldTransform, (PI / 2.0f));
 
 		getObject()->getDrawable()->setDrawableHidden(false);
-		getObject()->setTransformMatrix(&worldTransform);
+		getObject()->setWorldTransform(worldTransform);
 		getObject()->setPosition(&worldPos);
 
 		getObject()->getExperienceTracker()->setExperienceSink( m_launcherID );
@@ -276,18 +279,22 @@ void NeutronMissileUpdate::doLaunch()
 
 //-----------------------------------------------------------------------------
 // return the angle (in 3-space) we actually turned.
-static Real calcTransform(const Object* obj, const Coord3D *pos, Real maxTurnRate, Matrix3D* newTransform )
+static Real calcTransform(
+	const Object* obj,
+	const Coord3D* pos,
+	Real maxTurnRate,
+	Engine::Math::AffineTransform3* newTransform)
 {
 	// convert to Vector3, to use all its handy stuff
-	Vector3 objPos(obj->getPosition()->x, obj->getPosition()->y, obj->getPosition()->z);
-	Vector3 otherPos(pos->x, pos->y, pos->z);
+	const Engine::Math::Vector3 objPos{obj->getPosition()->x, obj->getPosition()->y, obj->getPosition()->z};
+	const Engine::Math::Vector3 otherPos{pos->x, pos->y, pos->z};
 
-	Vector3 objDir = obj->getTransformMatrix()->Rotate_Vector(Vector3(1.0f, 0.0f, 0.0f));
-	Vector3 otherDir = otherPos - objPos;
-	otherDir.Normalize();
+	// note: deliberately not normalized (matches the original behaviour)
+	const Engine::Math::Vector3 objDir = obj->worldTransform().Transform_Vector({1.0f, 0.0f, 0.0f});
+	const Engine::Math::Vector3 otherDir = (otherPos - objPos).Normalized_Legacy();
 
 	// dot of two unit vectors is cos of angle between them
-	Real c = Vector3::Dot_Product(objDir, otherDir);
+	Real c = objDir.Dot(otherDir);
 	// bound it in case of numerical error
 	if (c < -1.0)
 		c = -1.0;
@@ -296,7 +303,7 @@ static Real calcTransform(const Object* obj, const Coord3D *pos, Real maxTurnRat
 
 	Real angle = (Real)ACos( c );
 
-	Vector3 newDir;
+	Engine::Math::Vector3 newDir;
 	if (fabs(angle) < maxTurnRate)
 	{
 		// close enough -- point exactly in the right dir
@@ -309,20 +316,13 @@ static Real calcTransform(const Object* obj, const Coord3D *pos, Real maxTurnRat
 		angle = maxTurnRate;
 
 		// cross of two vectors is the perpendicular axis
-#ifdef ALLOW_TEMPORARIES
-		Vector3 objCrossOther = Vector3::Cross_Product(objDir, otherDir);
-		objCrossOther.Normalize();
-#else
-		Vector3 objCrossOther;
-		Vector3::Normalized_Cross_Product(objDir, otherDir, &objCrossOther);
-#endif
+		const Engine::Math::Vector3 objCrossOther = objDir.Cross(otherDir).Normalized_Legacy();
 
-		Matrix3D rotMtx(objCrossOther, angle);
-		newDir = rotMtx.Rotate_Vector(objDir);
+		newDir = Engine::Math::AffineTransform3::From_Axis_Angle_Legacy(objCrossOther, angle).Transform_Vector(objDir);
 
 	}
 
-	newTransform->buildTransformMatrix( objPos, newDir );
+	*newTransform = Engine::Math::AffineTransform3::From_Unit_Forward_Direction(objPos, newDir);
 
 	return angle;
 }
@@ -333,7 +333,7 @@ static Real calcTransform(const Object* obj, const Coord3D *pos, Real maxTurnRat
  */
 void NeutronMissileUpdate::doAttack()
 {
-	Matrix3D mx;
+	Engine::Math::AffineTransform3 mx = Engine::Math::AffineTransform3::Identity();
 	Real speed = getNeutronMissileUpdateModuleData()->m_relativeSpeed;
 
 	if (getNeutronMissileUpdateModuleData()->m_targetFromDirectlyAbove && m_reachedIntermediatePos)
@@ -342,7 +342,7 @@ void NeutronMissileUpdate::doAttack()
 	// if we're still in the no-turning-time, OR if we're out of fuel
 	if (m_noTurnDistLeft > 0.0f)
 	{
-		mx = *getObject()->getTransformMatrix();
+		mx = getObject()->worldTransform();
 	}
 	else
 	{
@@ -362,16 +362,15 @@ void NeutronMissileUpdate::doAttack()
 	}
 
 	// get true forward direction of missile
-	Vector3 trueDir = mx.Get_X_Vector();
-	trueDir.Normalize();
+	const Engine::Math::Vector3 trueDir = mx.Basis_X().Normalized_Legacy();
 
 	//
 	// Move forward along forward direction
 	//
 	Real damping = getNeutronMissileUpdateModuleData()->m_forwardDamping;
-	m_accel.x = speed * trueDir.X - damping * m_vel.x;
-	m_accel.y = speed * trueDir.Y - damping * m_vel.y;
-	m_accel.z = speed * trueDir.Z - damping * m_vel.z;
+	m_accel.x = speed * trueDir.x - damping * m_vel.x;
+	m_accel.y = speed * trueDir.y - damping * m_vel.y;
+	m_accel.z = speed * trueDir.z - damping * m_vel.z;
 
 	m_vel.x += m_accel.x;
 	m_vel.y += m_accel.y;
@@ -383,7 +382,7 @@ void NeutronMissileUpdate::doAttack()
 	UnsignedInt now = TheGameLogic->getFrame();
 	if (d->m_specialSpeedTime > 0 && now <= m_frameAtLaunch + d->m_specialSpeedTime)
 	{
-		getObject()->getDrawable()->setInstanceMatrix(nullptr);
+		getObject()->getDrawable()->setInstanceTransform(nullptr);
 		UnsignedInt elapsed = now - m_frameAtLaunch;
 		if (elapsed < d->m_specialSpeedTime)
 		{
@@ -400,15 +399,15 @@ void NeutronMissileUpdate::doAttack()
 			if (d->m_specialJitterDistance > 0.0f)
 			{
 				Real amplitude = (1.0f - timeFrac) * d->m_specialJitterDistance;
-				Vector3 vectmp;
-				vectmp.X = 0;
+				Engine::Math::Vector3 vectmp;
+				vectmp.x = 0;
 				// MDC: moving to GameLogicRandomValue.  This does not need to be synced, but having it so makes searches *so* much nicer.
-				vectmp.Y = GameLogicRandomValueReal(-1.0, 1.0) * amplitude;
-				vectmp.Z = GameLogicRandomValueReal(-1.0, 1.0) * amplitude;
-				vectmp = mx.Rotate_Vector(vectmp);
-				Matrix3D mtxtmp(1);
-				mtxtmp.Translate(vectmp);
-				getObject()->getDrawable()->setInstanceMatrix( &mtxtmp );
+				vectmp.y = GameLogicRandomValueReal(-1.0, 1.0) * amplitude;
+				vectmp.z = GameLogicRandomValueReal(-1.0, 1.0) * amplitude;
+				vectmp = mx.Transform_Vector(vectmp);
+				Engine::Math::AffineTransform3 instanceTransform = Engine::Math::AffineTransform3::Identity();
+				Legacy_Translate(instanceTransform, vectmp.x, vectmp.y, vectmp.z);
+				getObject()->getDrawable()->setInstanceTransform(&instanceTransform);
 			}
 		}
 	}
@@ -417,10 +416,10 @@ void NeutronMissileUpdate::doAttack()
 	pos.y += m_vel.y;
 	pos.z += m_vel.z;
 
-//DEBUG_LOG(("vel %f accel %f z %f",m_vel.length(),m_accel.length(), pos.z));
+//engine::debug::log_info("vel %f accel %f z %f",m_vel.length(),m_accel.length(), pos.z);
 //Real vm = sqrt(m_vel.x*m_vel.x+m_vel.y*m_vel.y+m_vel.z*m_vel.z);
-//DEBUG_LOG(("vel is %f %f %f (%f)",m_vel.x,m_vel.y,m_vel.z,vm));
-	getObject()->setTransformMatrix( &mx );
+//engine::debug::log_info("vel is %f %f %f (%f)",m_vel.x,m_vel.y,m_vel.z,vm);
+	getObject()->setWorldTransform(mx);
 	getObject()->setPosition( &pos );
 
 }
@@ -513,7 +512,7 @@ UpdateSleepTime NeutronMissileUpdate::update()
 	{
 		Coord3D newPos = *getObject()->getPosition();
 		Real distThisTurn = sqrt(sqr(newPos.x-oldPos.x) + sqr(newPos.y-oldPos.y) + sqr(newPos.z-oldPos.z));
-		//DEBUG_LOG(("noTurnDist goes from %f to %f",m_noTurnDistLeft,m_noTurnDistLeft-distThisTurn));
+		//engine::debug::log_info("noTurnDist goes from %f to %f",m_noTurnDistLeft,m_noTurnDistLeft-distThisTurn);
 		m_noTurnDistLeft -= distThisTurn;
 	}
 
@@ -619,7 +618,7 @@ void NeutronMissileUpdate::xfer( Xfer *xfer )
 			if( m_exhaustSysTmpl == nullptr )
 			{
 
-				DEBUG_CRASH(( "NeutronMissileUpdate::xfer - Unable to find particle system '%s'", name.str() ));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "NeutronMissileUpdate::xfer - Unable to find particle system '%s'", name.str() );
 				throw SC_INVALID_DATA;
 
 			}

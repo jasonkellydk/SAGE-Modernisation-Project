@@ -29,7 +29,8 @@
 
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 #define DEFINE_SLOWDEATHPHASE_NAMES
 
 #include "Common/GlobalData.h"
@@ -52,6 +53,7 @@
 #include "GameLogic/ObjectCreationList.h"
 #include "GameLogic/PartitionManager.h"
 #include "GameLogic/Weapon.h"
+import Engine.Core.Math.AffineTransform3;
 
 
 //-------------------------------------------------------------------------------------------------
@@ -269,16 +271,13 @@ void GenerateMinefieldBehavior::placeMinesAlongLine(const Coord3D& posStart, con
 
 //-------------------------------------------------------------------------------------------------
 //-------------------------------------------------------------------------------------------------
-static void makeCorner(const Coord3D& pos, Real majorRadius, Real minorRadius, const Matrix3D& mtx, Coord3D& corner)
+static void makeCorner(const Coord3D& pos, Real majorRadius, Real minorRadius,
+	const Engine::Math::AffineTransform3& transform, Coord3D& corner)
 {
-	Vector3 tmp;
-	tmp.X = majorRadius;
-	tmp.Y = minorRadius;
-	tmp.Z = 0;
-	Matrix3D::Transform_Vector(mtx, tmp, &tmp);
-	corner.x = tmp.X;
-	corner.y = tmp.Y;
-	corner.z = tmp.Z;
+	const Engine::Math::Vector3 offset = transform.Transform_Point({majorRadius, minorRadius, 0.0f});
+	corner.x = offset.x;
+	corner.y = offset.y;
+	corner.z = offset.z;
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -286,13 +285,14 @@ static void makeCorner(const Coord3D& pos, Real majorRadius, Real minorRadius, c
 void GenerateMinefieldBehavior::placeMinesAroundRect(const Coord3D& pos, Real majorRadius, Real minorRadius, const ThingTemplate* mineTemplate)
 {
 	const Object* obj = getObject();
-	const Matrix3D* mtx = obj->getTransformMatrix();
+	const Engine::Math::AffineTransform3 transform =
+		obj->worldTransform();
 
 	Coord3D pt[4];
-	makeCorner(pos,  majorRadius,  minorRadius, *mtx, pt[0]);
-	makeCorner(pos, -majorRadius,  minorRadius, *mtx, pt[1]);
-	makeCorner(pos, -majorRadius, -minorRadius, *mtx, pt[2]);
-	makeCorner(pos,  majorRadius, -minorRadius, *mtx, pt[3]);
+	makeCorner(pos,  majorRadius,  minorRadius, transform, pt[0]);
+	makeCorner(pos, -majorRadius,  minorRadius, transform, pt[1]);
+	makeCorner(pos, -majorRadius, -minorRadius, transform, pt[2]);
+	makeCorner(pos,  majorRadius, -minorRadius, transform, pt[3]);
 
 	placeMinesAlongLine(pt[0], pt[1], mineTemplate, true);
 	placeMinesAlongLine(pt[1], pt[2], mineTemplate, true);
@@ -356,7 +356,7 @@ void GenerateMinefieldBehavior::placeMinesInFootprint(const GeometryInfo& geom, 
 			pt.z += target->z;
 			--maxRetry;
 		} while (isAnythingTooClose2D(minesCreatedSoFar, pt, minDistSqr) && maxRetry > 0);
-		DEBUG_ASSERTCRASH(maxRetry>0,("ran out of retries %f",minDistSqr));
+		engine::debug::invariant((maxRetry>0), "maxRetry>0", __FILE__, __LINE__, "ran out of retries %f",minDistSqr);
 
 		if (getObject()->getGeometryInfo().isPointInFootprint(*target, pt))
 			continue;
@@ -387,7 +387,7 @@ void GenerateMinefieldBehavior::placeMines()
 
 	if (!mineTemplate)
 	{
-		DEBUG_CRASH(("mine %s not found",d->m_mineName.str()));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "mine %s not found",d->m_mineName.str());
 		return;
 	}
 

@@ -23,6 +23,7 @@
 #include "WorldBuilder.h"
 #include "SaveMap.h"
 #include "Common/GlobalData.h"
+import engine.debug;
 
 /////////////////////////////////////////////////////////////////////////////
 // SaveMap dialog
@@ -75,7 +76,7 @@ void SaveMap::OnOK()
 {
 	CWnd *pEdit = GetDlgItem(IDC_SAVE_MAP_EDIT);
 	if (pEdit == nullptr) {
-		DEBUG_CRASH(("Bad resources."));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Bad resources.");
 		OnCancel();
 		return;
 	}

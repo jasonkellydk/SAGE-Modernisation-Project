@@ -27,14 +27,14 @@ import Graphics.Scene.DrawParameters;
 
 #include "DrawObject.h"
 #include <span>
-#include "WWMath/matrix4.h"
+import Engine.Core.Math.Matrix4;
+import Engine.Core.Math.AffineTransform3;
+import Engine.Core.Math.Sphere3;
 import Graphics.Scene.Surfaces.Geometry;
 
 #include <stdlib.h>
 #include <WW3D2/AssetMgr.h>
 #include <WW3D2/Texture.h>
-#include <WWMath/tri.h>
-#include <WWMath/colmath.h>
 #include <WW3D2/ColTest.h>
 #include <WW3D2/RInfo.h>
 #include <WW3D2/Camera.h>
@@ -65,6 +65,7 @@ import Graphics.Materials.State;
 #include "W3DDevice/Common/W3DConvert.h"
 #include "GameLogic/Weapon.h"
 #include "Common/AudioEventInfo.h"
+import engine.debug;
 
 #ifdef RTS_DEBUG
 #define NO_INTENSE_DEBUG 1
@@ -72,6 +73,18 @@ import Graphics.Materials.State;
 
 const Real LINE_THICKNESS = 2.0f;
 const Real HANDLE_SIZE = (2.0f) * LINE_THICKNESS;
+
+namespace
+{
+Engine::Math::Matrix4 to_engine_matrix4(const Engine::Math::AffineTransform3 &source) noexcept
+{
+	Engine::Math::Matrix4 result = Engine::Math::Matrix4::Identity();
+	for (unsigned row = 0; row < 3; ++row)
+		for (unsigned column = 0; column < 4; ++column)
+			result(row, column) = source.elements[row * 4 + column];
+	return result;
+}
+}
 
 
 // Texturing, no zbuffer, disabled zbuffer write, primary gradient, alpha blending
@@ -182,7 +195,7 @@ DrawObject::DrawObject(const DrawObject & src)
 
 DrawObject & DrawObject::operator = (const DrawObject & that)
 {
-	DEBUG_CRASH(("oops"));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "oops");
 	return *this;
 }
 
@@ -1825,7 +1838,7 @@ void DrawObject::updateVBWithSoundRanges(MapObject *pMapObj, CameraClass* camera
     {
       if ( TheAudio == nullptr )
       {
-        DEBUG_CRASH( ("TheAudio is null! Can't draw sound circles") );
+        engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "TheAudio is null! Can't draw sound circles");
         return;
       }
 
@@ -1833,7 +1846,7 @@ void DrawObject::updateVBWithSoundRanges(MapObject *pMapObj, CameraClass* camera
 
       if ( audioInfo == nullptr )
       {
-        DEBUG_CRASH( ("Override audio named %s is missing; Can't draw sound circles", ambientName.str() ) );
+        engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Override audio named %s is missing; Can't draw sound circles", ambientName.str() );
         return;
       }
     }
@@ -1866,7 +1879,7 @@ void DrawObject::updateVBWithSoundRanges(MapObject *pMapObj, CameraClass* camera
       // May just not be set up yet
       if ( TheAudio == nullptr )
       {
-        DEBUG_CRASH( ("TheAudio is null! Can't draw sound circles") );
+        engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "TheAudio is null! Can't draw sound circles");
         return;
       }
 
@@ -1874,14 +1887,14 @@ void DrawObject::updateVBWithSoundRanges(MapObject *pMapObj, CameraClass* camera
 
       if ( audioInfo == nullptr )
       {
-        DEBUG_CRASH( ("Default ambient sound %s has no info; Can't draw sound circles", event->getEventName().str() ) );
+        engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Default ambient sound %s has no info; Can't draw sound circles", event->getEventName().str() );
         return;
       }
     }
   }
 
   // Should have set up audioInfo or returned by now
-  DEBUG_ASSERTCRASH( audioInfo != nullptr, ("Managed to finish setting up audio info without setting it?!?" ) );
+  engine::debug::invariant((audioInfo != nullptr), "audioInfo != nullptr", __FILE__, __LINE__, "Managed to finish setting up audio info without setting it?!?" );
   if ( audioInfo == nullptr )
   {
     return;
@@ -2019,7 +2032,7 @@ void DrawObject::setFeedbackPos(Coord3D pos)
 
 void DrawObject::setRampFeedbackParms(const Coord3D *start, const Coord3D *end, Real rampWidth)
 {
-	DEBUG_ASSERTCRASH(start && end, ("Parameter passed into setRampFeedbackParms was null. Not allowed"));
+	engine::debug::invariant((start && end), "start && end", __FILE__, __LINE__, "Parameter passed into setRampFeedbackParms was null. Not allowed");
 	if (!(start && end)) {
 		return;
 	}
@@ -2051,18 +2064,20 @@ if (_skip_drawobject_render) {
 	std::span<const Graphics::SurfaceVertex> vertices;
     std::span<const unsigned> indices;
     Graphics::MaterialState shader = m_shaderClass;
-    Matrix4x4 world(Transform), view, projection;
-    std::copy_n(Graphics::Get_Camera_Matrices().view.values.data(), 16, &view[0][0]);
-    std::copy_n(Graphics::Get_Camera_Matrices().projection.values.data(), 16, &projection[0][0]);
+	Engine::Math::Matrix4 world = to_engine_matrix4(Engine::Math::AffineTransform3::From_Row_Matrix(Transform));
+	Engine::Math::Matrix4 view, projection;
+	std::copy_n(Graphics::Get_Camera_Matrices().view.values.data(), 16, view.elements.begin());
+	std::copy_n(Graphics::Get_Camera_Matrices().projection.values.data(), 16, projection.elements.begin());
     const auto draw = [&](unsigned vertex_count, unsigned first_index, unsigned triangle_count) {
         if (vertex_count > vertices.size() || first_index > indices.size()
             || triangle_count > (indices.size() - first_index) / 3) {
-            DEBUG_CRASH(("Editor overlay geometry exceeds its CPU batch."));
+            engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Editor overlay geometry exceeds its CPU batch.");
             return;
         }
         if (!Draw_Graphics_Prelit_Geometry(vertices.first(vertex_count),
-            indices.subspan(first_index, triangle_count * 3), projection * view * world, shader, nullptr))
-            DEBUG_LOG(("Editor overlay graphics submission failed.\n"));
+		    indices.subspan(first_index, triangle_count * 3),
+		    Compose(Compose(projection, view), world), shader, nullptr))
+            engine::debug::log_info("Editor overlay graphics submission failed.\n");
     };
 	shader = Graphics::MaterialState(m_shaderClass);
 	indices = m_indexBuffer;
@@ -2180,19 +2195,17 @@ if (pMapObj->isSelected()) {
 			///@todo - remove the istree stuff, or get the info from the thing template.  jba.
 			Bool isTree = false;
 
-			Vector3 vec(loc.x, loc.y, loc.z);
-			Matrix3D tm(Transform);
-			Matrix3x3 rot(true);
-			rot.Rotate_Z(pMapObj->getAngle());
-
-			tm.Set_Translation(vec);
-			tm.Set_Rotation(rot);
+			Engine::Math::AffineTransform3 transform =
+				Engine::Math::AffineTransform3::Rotation_Z(pMapObj->getAngle());
+			transform.elements[3] = loc.x;
+			transform.elements[7] = loc.y;
+			transform.elements[11] = loc.z;
 			int polyCount = NUM_TRI;
 			if (!pMapObj->isSelected()) {
 				polyCount -= NUM_ARROW_TRI+NUM_SELECT_TRI;
 			}
 
-			world = Matrix4x4(tm);
+			world = to_engine_matrix4(transform);
 			if (isTree) {
 				draw(m_numTriangles * 3, NUM_TRI * 3, polyCount);
 			} else {
@@ -2219,7 +2232,7 @@ if (pMapObj->isSelected()) {
 					loc.x = iLoc.x;
 					loc.y = iLoc.y;
 					loc.z = TheTerrainRenderObject->getHeightMapHeight(loc.x, loc.y, nullptr);
-					SphereClass bounds(Vector3(loc.x, loc.y, loc.z), THE_RADIUS);
+					const Engine::Math::Sphere3 bounds{{loc.x, loc.y, loc.z}, THE_RADIUS};
 					if (rinfo.Camera.Cull_Sphere(bounds)) {
 						continue;
 					}
@@ -2240,9 +2253,8 @@ if (pMapObj->isSelected()) {
 					}
 					count++;
 
-					Vector3 vec(loc.x, loc.y, loc.z);
-					Matrix3D tm(Transform);
-					tm.Set_Translation(vec);
+					Engine::Math::AffineTransform3 tm = Engine::Math::AffineTransform3::From_Row_Matrix(Transform);
+					tm.Set_Translation({loc.x, loc.y, loc.z});
 
 					int polyCount = NUM_TRI;
 					if (!pointSelected) {
@@ -2250,11 +2262,11 @@ if (pMapObj->isSelected()) {
 					}
 
 					indices = m_indexBuffer;
-					world = Matrix4x4(tm);
+				world = to_engine_matrix4(tm);
 					draw(m_numTriangles * 3, 0, polyCount);
 				}
-				Matrix3D tmReset(Transform);
-				world = Matrix4x4(tmReset);
+				const Engine::Math::AffineTransform3 tmReset = Engine::Math::AffineTransform3::From_Row_Matrix(Transform);
+			world = to_engine_matrix4(tmReset);
 				vertices = m_vertexBufferTile1;
 				updatePolygonVB(pTrig, polySelected, polySelected && PolygonTool::isSelectedOpen());
 				vertices = m_vertexFeedback;
@@ -2276,7 +2288,7 @@ if (pMapObj->isSelected()) {
 				loc.z += TheTerrainRenderObject->getHeightMapHeight(loc.x, loc.y, nullptr);
 			}
 			// Cull.
-			SphereClass bounds(Vector3(loc.x, loc.y, loc.z), THE_RADIUS);
+			const Engine::Math::Sphere3 bounds{{loc.x, loc.y, loc.z}, THE_RADIUS};
 			if (rinfo.Camera.Cull_Sphere(bounds)) {
 				continue;
 			}
@@ -2293,20 +2305,18 @@ if (pMapObj->isSelected()) {
 			}
 			count++;
 // ok to here.
-			Vector3 vec(loc.x, loc.y, loc.z);
-			Matrix3D tmXX(Transform);
-			Matrix3x3 rot(true);
-			rot.Rotate_Z(pBuild->getAngle());
-
-			tmXX.Set_Translation(vec);
-			tmXX.Set_Rotation(rot);
+			Engine::Math::AffineTransform3 transform =
+				Engine::Math::AffineTransform3::Rotation_Z(pBuild->getAngle());
+			transform.elements[3] = loc.x;
+			transform.elements[7] = loc.y;
+			transform.elements[11] = loc.z;
 			int polyCountA = NUM_TRI;
 			if (!pBuild->isSelected()) {
 				polyCountA -= NUM_ARROW_TRI+NUM_SELECT_TRI;
 			}
 
 #if 1
-			world = Matrix4x4(tmXX);
+			world = to_engine_matrix4(transform);
 			draw(m_numTriangles * 3, 0, polyCountA);
 #endif
 
@@ -2315,8 +2325,8 @@ if (pMapObj->isSelected()) {
 
 	indices = m_indexBuffer;
 	vertices = {};
-	Matrix3D tmReset(Transform);
-	world = Matrix4x4(tmReset);
+	const Engine::Math::AffineTransform3 tmReset = Engine::Math::AffineTransform3::From_Row_Matrix(Transform);
+	world = to_engine_matrix4(tmReset);
 
 	if (m_drawWaypoints) {
 		updateWaypointVB();

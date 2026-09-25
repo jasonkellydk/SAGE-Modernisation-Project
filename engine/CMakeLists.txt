@@ -33,6 +33,8 @@ option(ENGINE_TIME_BUILD_TESTS "Build headless simulation-time tests" ${BUILD_TE
 option(ENGINE_ECS_BUILD_TESTS "Build headless ECS tests" ${BUILD_TESTING})
 option(ENGINE_GAMEPLAY_BUILD_TESTS "Build headless gameplay tests" ${BUILD_TESTING})
 
+add_subdirectory(platform)
+add_subdirectory(core/math)
 add_subdirectory(jobs)
 add_subdirectory(events)
 add_subdirectory(time)

@@ -16,6 +16,7 @@
 **	along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 #include "PreRTS.h"
+import engine.debug;
 
 #include "Common/FramePacer.h"
 
@@ -66,7 +67,7 @@ void FramePacer::reset()
 
 void FramePacer::setFramesPerSecondLimit( Int fps )
 {
-	DEBUG_LOG(("FramePacer::setFramesPerSecondLimit() - setting max fps to %d (TheGlobalData->m_useFpsLimit == %d)", fps, TheGlobalData->m_useFpsLimit));
+	engine::debug::log_info("FramePacer::setFramesPerSecondLimit() - setting max fps to %d (TheGlobalData->m_useFpsLimit == %d)", fps, TheGlobalData->m_useFpsLimit);
 	m_maxFPS = fps;
 }
 

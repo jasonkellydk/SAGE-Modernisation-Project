@@ -68,6 +68,45 @@ BOOST_AUTO_TEST_CASE(coplanar_triangles_and_invalid_sources_do_not_change_sampli
 	BOOST_CHECK_EQUAL(calls,21);
 }
 
+BOOST_AUTO_TEST_CASE(identical_seed_and_geometry_produce_identical_tree_layout)
+{
+	std::vector<Vector3f> vertices;
+	std::vector<std::array<std::uint32_t,3>> triangles;
+	for (unsigned i = 0; i < 32; ++i) {
+		const float x = static_cast<float>(i % 8);
+		const float y = static_cast<float>(i / 8);
+		vertices.insert(vertices.end(), {{x, y, 0}, {x + 0.25f, y, 0}, {x, y + 0.25f, 1}});
+		triangles.push_back({i * 3, i * 3 + 1, i * 3 + 2});
+	}
+	const auto build = [&](MeshBoundsTree &tree) {
+		std::uint32_t state = 0x71c3a55du;
+		return Build_Mesh_Bounds_Tree(vertices, triangles, [&] {
+			state = state * 1664525u + 1013904223u;
+			return state;
+		}, tree);
+	};
+	MeshBoundsTree first;
+	MeshBoundsTree second;
+	BOOST_REQUIRE(build(first));
+	BOOST_REQUIRE(build(second));
+	BOOST_CHECK_EQUAL_COLLECTIONS(first.polygon_indices.begin(), first.polygon_indices.end(),
+		second.polygon_indices.begin(), second.polygon_indices.end());
+	BOOST_REQUIRE_EQUAL(first.nodes.size(), second.nodes.size());
+	for (std::size_t i = 0; i < first.nodes.size(); ++i) {
+		const auto &left = first.nodes[i];
+		const auto &right = second.nodes[i];
+		BOOST_CHECK_EQUAL(left.first, right.first);
+		BOOST_CHECK_EQUAL(left.second, right.second);
+		BOOST_CHECK_EQUAL(left.leaf, right.leaf);
+		BOOST_CHECK_EQUAL(left.bounds.minimum.x, right.bounds.minimum.x);
+		BOOST_CHECK_EQUAL(left.bounds.minimum.y, right.bounds.minimum.y);
+		BOOST_CHECK_EQUAL(left.bounds.minimum.z, right.bounds.minimum.z);
+		BOOST_CHECK_EQUAL(left.bounds.maximum.x, right.bounds.maximum.x);
+		BOOST_CHECK_EQUAL(left.bounds.maximum.y, right.bounds.maximum.y);
+		BOOST_CHECK_EQUAL(left.bounds.maximum.z, right.bounds.maximum.z);
+	}
+}
+
 BOOST_AUTO_TEST_CASE(large_tree_retains_every_polygon_and_bounds_each_subtree)
 {
 	std::vector<Vector3f> vertices;

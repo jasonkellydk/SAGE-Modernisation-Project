@@ -29,7 +29,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // USER INCLUDES //////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/ThingTemplate.h"
 #include "GameClient/ControlBar.h"
@@ -224,15 +225,14 @@ void ControlBar::populateMultiSelect()
 	}
 
 	// sanity
-	DEBUG_ASSERTCRASH( TheInGameUI->getSelectCount() > 1,
-										 ("populateMultiSelect: Can't populate multiselect context cause there are only '%d' things selected",
-										  TheInGameUI->getSelectCount()) );
+	engine::debug::invariant((TheInGameUI->getSelectCount() > 1), "TheInGameUI->getSelectCount() > 1", __FILE__, __LINE__, "populateMultiSelect: Can't populate multiselect context cause there are only '%d' things selected",
+										  TheInGameUI->getSelectCount());
 
 	// get the list of drawable IDs from the in game UI
 	const DrawableList *selectedDrawables = TheInGameUI->getAllSelectedDrawables();
 
 	// sanity
-	DEBUG_ASSERTCRASH( selectedDrawables->empty() == FALSE, ("populateMultiSelect: Drawable list is empty") );
+	engine::debug::invariant((selectedDrawables->empty() == FALSE), "selectedDrawables->empty() == FALSE", __FILE__, __LINE__, "populateMultiSelect: Drawable list is empty");
 
 	// loop through all the selected drawables
 	for( DrawableListCIt it = selectedDrawables->begin();
@@ -305,15 +305,14 @@ void ControlBar::updateContextMultiSelect()
 	memset( objectsThatCanDoCommand, 0, sizeof( objectsThatCanDoCommand ) );
 
 	// sanity
-	DEBUG_ASSERTCRASH( TheInGameUI->getSelectCount() > 1,
-										 ("updateContextMultiSelect: TheInGameUI only has '%d' things selected",
-										  TheInGameUI->getSelectCount()) );
+	engine::debug::invariant((TheInGameUI->getSelectCount() > 1), "TheInGameUI->getSelectCount() > 1", __FILE__, __LINE__, "updateContextMultiSelect: TheInGameUI only has '%d' things selected",
+										  TheInGameUI->getSelectCount());
 
 	// get the list of drawable IDs from the in game UI
 	const DrawableList *selectedDrawables = TheInGameUI->getAllSelectedDrawables();
 
 	// sanity
-	DEBUG_ASSERTCRASH( selectedDrawables->empty() == FALSE, ("populateMultiSelect: Drawable list is empty") );
+	engine::debug::invariant((selectedDrawables->empty() == FALSE), "selectedDrawables->empty() == FALSE", __FILE__, __LINE__, "populateMultiSelect: Drawable list is empty");
 
 	// loop through all the selected drawable IDs
 	for( DrawableListCIt it = selectedDrawables->begin();

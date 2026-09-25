@@ -17,22 +17,23 @@
 */
 
 #include <array>
+#include <bit>
 #include <ranges>
 #include <limits>
-#include <cstdlib>
 #include <vector>
 #include "W3DDevice/GameClient/W3DMeshGeometry.h"
 #include "W3DDevice/GameClient/W3DMeshQueries.h"
 #include "W3DDevice/GameClient/W3DCastQuery.h"
 #include "W3DDevice/GameClient/W3DIntersectionQuery.h"
 #include "WWLib/chunkio.h"
-#include "WWMath/aabox.h"
-#include "WWMath/obbox.h"
-#include "WWMath/sphere.h"
-#include "WWMath/plane.h"
-#include "WWDebug/wwdebug.h"
-#include "WWDebug/wwmemlog.h"
-#include "WWMath/vp.h"
+
+
+import Engine.Core.Math.Scalar;
+import Engine.Core.Math.AxisAlignedBox3;
+import Engine.Core.Math.Sphere3;
+import Engine.Core.Math.RandomStream;
+import Engine.Core.Math.AffineTransform3;
+import engine.debug;
 import Assets.Adapters.W3D.Chunks;
 import Graphics.Scene.Models.Hierarchy;
 import Graphics.Scene.Models.GeometryMath;
@@ -100,71 +101,62 @@ void W3DMeshGeometry::Set_User_Text(char * usertext)
 }
 
 
-void W3DMeshGeometry::Get_Bounding_Box(AABoxClass * set_box)
+Engine::Math::AxisAlignedBox3 W3DMeshGeometry::Get_Bounding_Box() const noexcept
 {
-	WWASSERT(set_box != nullptr);
-	set_box->Center = (Geometry.maximum + Geometry.minimum) * 0.5f;
-	set_box->Extent = (Geometry.maximum - Geometry.minimum) * 0.5f;
+	return {Geometry.minimum, Geometry.maximum};
 }
 
 
-void W3DMeshGeometry::Get_Bounding_Sphere(SphereClass * set_sphere)
+Engine::Math::Sphere3 W3DMeshGeometry::Get_Bounding_Sphere() const noexcept
 {
-	WWASSERT(set_sphere != nullptr);
-	set_sphere->Center = Geometry.sphere_center;
-	set_sphere->Radius = Geometry.sphere_radius;
+	return {Geometry.sphere_center, Geometry.sphere_radius};
 }
 
 
-void W3DMeshGeometry::Generate_Rigid_APT(const Vector3 & view_dir, SimpleDynVecClass<uint32> & apt)
+void W3DMeshGeometry::Collect_Visible_Polygons(Engine::Math::Vector3 view_direction,
+    std::vector<std::uint32_t> &polygons)
 {
     const MeshQueryAdapter::Triangles triangles(*this);
     Graphics::Collect_Model_Polygons(std::views::iota(std::uint32_t{0}, static_cast<std::uint32_t>(Get_Polygon_Count())),
-        [&](std::uint32_t polygon) { return triangles.Test(polygon, [&](const TriClass& triangle) {
-            return Vector3::Dot_Product(*triangle.N, view_dir) < 0.0f;
-        }); }, [&](std::uint32_t polygon) { apt.Add(polygon); });
+        [&](std::uint32_t polygon) { return triangles.Test(polygon, [&](const Engine::Math::Triangle3& triangle) {
+            return triangle.Normal().Dot(view_direction) < 0.0f;
+        }); }, [&](std::uint32_t polygon) { polygons.push_back(polygon); });
 }
 
 
-void W3DMeshGeometry::Generate_Rigid_APT(const OBBoxClass & local_box, SimpleDynVecClass<uint32> & apt)
+void W3DMeshGeometry::Collect_Visible_Polygons(const Engine::Math::OrientedBox3 &local_bounds,
+    std::vector<std::uint32_t> &polygons)
 {
-    if (CullTree) { MeshQueryAdapter::Collect(*CullTree, *this, local_box, apt); return; }
+    if (CullTree) { MeshQueryAdapter::Collect(*CullTree, *this, local_bounds, polygons); return; }
     const MeshQueryAdapter::Triangles triangles(*this);
     Graphics::Collect_Model_Polygons(std::views::iota(std::uint32_t{0}, static_cast<std::uint32_t>(Get_Polygon_Count())),
-        [&](std::uint32_t polygon) { return triangles.Test(polygon, [&](const TriClass& triangle) {
-            return CollisionMath::Intersection_Test(local_box, triangle);
-        }); }, [&](std::uint32_t polygon) { apt.Add(polygon); });
+        [&](std::uint32_t polygon) { return triangles.Test(polygon, [&](const Engine::Math::Triangle3& triangle) {
+            return triangle.Intersects(local_bounds);
+        }); }, [&](std::uint32_t polygon) { polygons.push_back(polygon); });
 }
 
 
-void W3DMeshGeometry::Generate_Rigid_APT(const OBBoxClass & local_box,const Vector3 & viewdir,SimpleDynVecClass<uint32> & apt)
+void W3DMeshGeometry::Collect_Visible_Polygons(const Engine::Math::OrientedBox3 &local_bounds,
+    Engine::Math::Vector3 view_direction, std::vector<std::uint32_t> &polygons)
 {
-    if (CullTree) { MeshQueryAdapter::Collect(*CullTree, *this, local_box, apt, &viewdir); return; }
+    if (CullTree) { MeshQueryAdapter::Collect(*CullTree, *this, local_bounds, polygons, &view_direction); return; }
     const MeshQueryAdapter::Triangles triangles(*this);
     Graphics::Collect_Model_Polygons(std::views::iota(std::uint32_t{0}, static_cast<std::uint32_t>(Get_Polygon_Count())),
-        [&](std::uint32_t polygon) { return triangles.Test(polygon, [&](const TriClass& triangle) {
-            return Vector3::Dot_Product(*triangle.N, viewdir) < 0.0f && CollisionMath::Intersection_Test(local_box, triangle);
-        }); }, [&](std::uint32_t polygon) { apt.Add(polygon); });
-}
-
-void W3DMeshGeometry::Generate_Skin_APT(const OBBoxClass & world_box, SimpleDynVecClass<uint32> & apt, const Vector3 *world_vertex_locs)
-{
-    WWASSERT(world_vertex_locs);
-    const MeshQueryAdapter::Triangles triangles(*this, world_vertex_locs);
-    Graphics::Collect_Model_Polygons(std::views::iota(std::uint32_t{0}, static_cast<std::uint32_t>(Get_Polygon_Count())),
-        [&](std::uint32_t polygon) { return triangles.Test(polygon, [&](const TriClass& triangle) {
-            return CollisionMath::Intersection_Test(world_box, triangle);
-        }); }, [&](std::uint32_t polygon) { apt.Add(polygon); });
+        [&](std::uint32_t polygon) { return triangles.Test(polygon, [&](const Engine::Math::Triangle3& triangle) {
+            return triangle.Normal().Dot(view_direction) < 0.0f
+                && triangle.Intersects(local_bounds);
+        }); }, [&](std::uint32_t polygon) { polygons.push_back(polygon); });
 }
 
 
-bool W3DMeshGeometry::Contains(const Vector3 &point)
+bool W3DMeshGeometry::Contains(const Engine::Math::Vector3 &point)
 {
     return Graphics::Model_Contains_Point([&](int axis) {
-        unsigned char flags = TRI_RAYCAST_FLAG_NONE;
+        unsigned char flags = 0;
         const auto count = cast_semi_infinite_axis_aligned_ray(point, axis, flags);
         return Graphics::ModelAxisRayVote{static_cast<unsigned>(count),
-            (flags & TRI_RAYCAST_FLAG_HIT_EDGE) != 0, (flags & TRI_RAYCAST_FLAG_START_IN_TRI) != 0};
+            (flags & static_cast<unsigned char>(Engine::Math::Triangle3::AxisRayFlag::TouchesEdge)) != 0,
+            (flags & static_cast<unsigned char>(Engine::Math::Triangle3::AxisRayFlag::StartsInside)) != 0};
     });
 }
 
@@ -225,7 +217,8 @@ bool W3DMeshGeometry::Intersect_OBBox(W3DOrientedBoxIntersectionQuery & boxtest)
 }
 
 
-bool W3DMeshGeometry::Cast_World_Space_AABox(W3DBoxCastQuery & boxtest, const Matrix3D &transform)
+bool W3DMeshGeometry::Cast_World_Space_AABox(W3DBoxCastQuery & boxtest,
+	const Engine::Math::AffineTransform3 &transform)
 {
 	/*
 	** Attempt to classify the transform:
@@ -238,24 +231,24 @@ bool W3DMeshGeometry::Cast_World_Space_AABox(W3DBoxCastQuery & boxtest, const Ma
 	*/
 	bool hit = false;
 
-	if ((transform[0][0] == 1.0f) && (transform[1][1] == 1.0f)) {
+	if ((transform.elements[0] == 1.0f) && (transform.elements[5] == 1.0f)) {
 
-		hit = cast_aabox_identity(boxtest,-transform.Get_Translation());
+		hit = cast_aabox_identity(boxtest, transform.Translation() * -1.0f);
 
-	} else if ((transform[0][1] == -1.0f) && (transform[1][0] == 1.0f)) {
+	} else if ((transform.elements[1] == -1.0f) && (transform.elements[4] == 1.0f)) {
 
 		// this mesh has been rotated 90 degrees about z
-		hit = cast_aabox_z90(boxtest,-transform.Get_Translation());
+		hit = cast_aabox_z90(boxtest, transform.Translation() * -1.0f);
 
-	} else if ((transform[0][0] == -1.0f) && (transform[1][1] == -1.0f)) {
+	} else if ((transform.elements[0] == -1.0f) && (transform.elements[5] == -1.0f)) {
 
 		// this mesh has been rotated 180
-		hit = cast_aabox_z180(boxtest,-transform.Get_Translation());
+		hit = cast_aabox_z180(boxtest, transform.Translation() * -1.0f);
 
-	} else if ((transform[0][1] == 1.0f) && (transform[1][0] == -1.0f)) {
+	} else if ((transform.elements[1] == 1.0f) && (transform.elements[4] == -1.0f)) {
 
 		// this mesh has been rotated 270
-		hit = cast_aabox_z270(boxtest,-transform.Get_Translation());
+		hit = cast_aabox_z270(boxtest, transform.Translation() * -1.0f);
 
 	} else {
 
@@ -264,9 +257,10 @@ bool W3DMeshGeometry::Cast_World_Space_AABox(W3DBoxCastQuery & boxtest, const Ma
 		** transform on this mesh.  In this case, I create a new test which
 		** is an oriented box test in the coordinate system of the mesh and cast it.
 		*/
-		Matrix3D world_to_obj;
-		transform.Get_Orthogonal_Inverse(world_to_obj);
-		W3DOrientedBoxCastQuery obbox(boxtest, world_to_obj);
+		const auto world_to_obj = transform.Inverse();
+		if (!world_to_obj)
+			return false;
+		W3DOrientedBoxCastQuery obbox(boxtest, *world_to_obj);
 
 		if (CullTree) {
 			hit = MeshQueryAdapter::Cast(*CullTree,*this,obbox);
@@ -279,9 +273,9 @@ bool W3DMeshGeometry::Cast_World_Space_AABox(W3DBoxCastQuery & boxtest, const Ma
 		** coordinate system.
 		*/
 		if (hit) {
-			Matrix3D::Rotate_Vector(transform, obbox.Result->Normal, &(obbox.Result->Normal));
-			if (boxtest.Result->ComputeContactPoint) {
-				Matrix3D::Transform_Vector(transform, obbox.Result->ContactPoint, &(obbox.Result->ContactPoint));
+			obbox.Result->normal = transform.Transform_Vector(obbox.Result->normal);
+			if (boxtest.Result->compute_contact_point) {
+				obbox.Result->contact_point = transform.Transform_Point(obbox.Result->contact_point);
 			}
 		}
 	}
@@ -290,26 +284,33 @@ bool W3DMeshGeometry::Cast_World_Space_AABox(W3DBoxCastQuery & boxtest, const Ma
 }
 
 
-int W3DMeshGeometry::cast_semi_infinite_axis_aligned_ray(const Vector3 & start_point, int axis_dir,
+int W3DMeshGeometry::cast_semi_infinite_axis_aligned_ray(const Engine::Math::Vector3 &start_point, int axis_dir,
 	unsigned char & flags)
 {
     if (CullTree) return MeshQueryAdapter::Count_Axis_Ray(*CullTree, *this, start_point, axis_dir, flags);
-    WWASSERT(axis_dir >= 0 && axis_dir < 6);
+    engine::debug::assert_condition((axis_dir >= 0 && axis_dir < 6), "axis_dir >= 0 && axis_dir < 6", __FILE__, __LINE__, "assertion failed");
     const int axis = axis_dir / 2, first = (axis + 1) % 3, second = (axis + 2) % 3;
     const int direction = (axis_dir & 1) == 0;
     const auto* vertices = Peek_Vertex_Array();
     const auto* triangles = Get_Polygon_Array();
     const auto* planes = Get_Plane_Array();
-    flags = TRI_RAYCAST_FLAG_NONE;
+    flags = 0;
     return Graphics::Count_Model_Axis_Intersections(std::views::iota(std::uint32_t{0}, static_cast<std::uint32_t>(Get_Polygon_Count())), [&](std::uint32_t polygon) {
         const auto& indices = triangles[polygon];
-        return Cast_Semi_Infinite_Axis_Aligned_Ray_To_Triangle(vertices[indices[0]], vertices[indices[1]],
-            vertices[indices[2]], planes[polygon], start_point, axis, first, second, direction, flags);
+        const auto hit = Engine::Math::Triangle3::Intersect_Semi_Infinite_Axis_Ray(
+            vertices[indices[0]], vertices[indices[1]],
+            vertices[indices[2]], planes[polygon], start_point,
+            axis, first, second, direction != 0);
+        if (hit.touches_edge)
+            flags |= static_cast<unsigned char>(Engine::Math::Triangle3::AxisRayFlag::TouchesEdge);
+        if (hit.starts_inside)
+            flags |= static_cast<unsigned char>(Engine::Math::Triangle3::AxisRayFlag::StartsInside);
+        return hit.intersects;
     });
 }
 
 
-bool W3DMeshGeometry::cast_aabox_identity(W3DBoxCastQuery & boxtest, const Vector3 & translation)
+bool W3DMeshGeometry::cast_aabox_identity(W3DBoxCastQuery &boxtest, const Engine::Math::Vector3 &translation)
 {
 	// transform the test into the mesh's coordinate system
 	W3DBoxCastQuery newbox(boxtest);
@@ -324,7 +325,7 @@ bool W3DMeshGeometry::cast_aabox_identity(W3DBoxCastQuery & boxtest, const Vecto
 }
 
 
-bool W3DMeshGeometry::cast_aabox_z90(W3DBoxCastQuery & boxtest, const Vector3 & translation)
+bool W3DMeshGeometry::cast_aabox_z90(W3DBoxCastQuery &boxtest, const Engine::Math::Vector3 &translation)
 {
 	// transform the test into the mesh's coordinate system
 	W3DBoxCastQuery newbox(boxtest);
@@ -342,16 +343,16 @@ bool W3DMeshGeometry::cast_aabox_z90(W3DBoxCastQuery & boxtest, const Vector3 & 
 	// if we hit something, we need to rotate the normal back out of the mesh coordinate system
 	if (hit) {
 		// rotating the normal by 90 degrees about Z
-		float tmp = boxtest.Result->Normal.X;
-		boxtest.Result->Normal.X = -boxtest.Result->Normal.Y;
-		boxtest.Result->Normal.Y = tmp;
+		const float tmp = boxtest.Result->normal.x;
+		boxtest.Result->normal.x = -boxtest.Result->normal.y;
+		boxtest.Result->normal.y = tmp;
 	}
 
 	return hit;
 }
 
 
-bool W3DMeshGeometry::cast_aabox_z180(W3DBoxCastQuery & boxtest, const Vector3 & translation)
+bool W3DMeshGeometry::cast_aabox_z180(W3DBoxCastQuery &boxtest, const Engine::Math::Vector3 &translation)
 {
 	// transform the test into the meshes coordinate system
 	W3DBoxCastQuery newbox(boxtest);
@@ -369,15 +370,15 @@ bool W3DMeshGeometry::cast_aabox_z180(W3DBoxCastQuery & boxtest, const Vector3 &
 	// if we hit something, we need to rotate the normal back out of the mesh coordinate system
 	if (hit) {
 		// rotating the normal by 180 degrees about Z
-		boxtest.Result->Normal.X = -boxtest.Result->Normal.X;
-		boxtest.Result->Normal.Y = -boxtest.Result->Normal.Y;
+		boxtest.Result->normal.x = -boxtest.Result->normal.x;
+		boxtest.Result->normal.y = -boxtest.Result->normal.y;
 	}
 
 	return hit;
 }
 
 
-bool W3DMeshGeometry::cast_aabox_z270(W3DBoxCastQuery & boxtest, const Vector3 & translation)
+bool W3DMeshGeometry::cast_aabox_z270(W3DBoxCastQuery &boxtest, const Engine::Math::Vector3 &translation)
 {
 	// transform the test into the mesh's coordinate system
 	W3DBoxCastQuery newbox(boxtest);
@@ -395,9 +396,9 @@ bool W3DMeshGeometry::cast_aabox_z270(W3DBoxCastQuery & boxtest, const Vector3 &
 	// if we hit something, we need to rotate the normal back out of the mesh coordinate system
 	if (hit) {
 		// rotating the normal by 270 degrees about Z
-		float tmp = boxtest.Result->Normal.X;
-		boxtest.Result->Normal.X = boxtest.Result->Normal.Y;
-		boxtest.Result->Normal.Y = -tmp;
+		const float tmp = boxtest.Result->normal.x;
+		boxtest.Result->normal.x = boxtest.Result->normal.y;
+		boxtest.Result->normal.y = -tmp;
 	}
 
 	return hit;
@@ -408,8 +409,8 @@ bool W3DMeshGeometry::intersect_obbox_brute_force(W3DOrientedBoxIntersectionQuer
 {
     const MeshQueryAdapter::Triangles triangles(*this);
     return Graphics::Intersect_Model_Polygons(std::views::iota(std::uint32_t{0}, static_cast<std::uint32_t>(Get_Polygon_Count())),
-        [&](std::uint32_t polygon) { return triangles.Test(polygon, [&](const TriClass& triangle) {
-            return CollisionMath::Intersection_Test(localtest.Box, triangle);
+        [&](std::uint32_t polygon) { return triangles.Test(polygon, [&](const Engine::Math::Triangle3& triangle) {
+			return triangle.Intersects(localtest.Box);
         }); });
 }
 
@@ -418,10 +419,10 @@ bool W3DMeshGeometry::cast_ray_brute_force(W3DRayCastQuery & raytest)
 {
     const MeshQueryAdapter::Triangles triangles(*this);
     return Graphics::Cast_Model_Ray(std::views::iota(std::uint32_t{0}, static_cast<std::uint32_t>(Get_Polygon_Count())),
-        [&](std::uint32_t polygon) { return triangles.Test(polygon, [&](const TriClass& triangle) {
+        [&](std::uint32_t polygon) { return triangles.Test(polygon, [&](const Engine::Math::Triangle3& triangle) {
             return MeshQueryAdapter::Collide(raytest, triangle);
-        }); }, [&] { return raytest.Result->StartBad; },
-        [&](std::uint32_t polygon) { raytest.Result->SurfaceType = Get_Poly_Surface_Type(polygon); });
+        }); }, [&] { return raytest.Result->starts_overlapping; },
+        [&](std::uint32_t polygon) { raytest.Result->surface_type = Get_Poly_Surface_Type(polygon); });
 }
 
 
@@ -429,10 +430,10 @@ bool W3DMeshGeometry::cast_aabox_brute_force(W3DBoxCastQuery & boxtest)
 {
     const MeshQueryAdapter::Triangles triangles(*this);
     return Graphics::Cast_Model_Volume(std::views::iota(std::uint32_t{0}, static_cast<std::uint32_t>(Get_Polygon_Count())),
-        [&](std::uint32_t polygon) { return triangles.Test(polygon, [&](const TriClass& triangle) {
+        [&](std::uint32_t polygon) { return triangles.Test(polygon, [&](const Engine::Math::Triangle3& triangle) {
             return MeshQueryAdapter::Collide(boxtest, triangle);
-        }); }, [&] { return boxtest.Result->StartBad; },
-        [&](std::uint32_t polygon) { boxtest.Result->SurfaceType = Get_Poly_Surface_Type(polygon); });
+        }); }, [&] { return boxtest.Result->starts_overlapping; },
+        [&](std::uint32_t polygon) { boxtest.Result->surface_type = Get_Poly_Surface_Type(polygon); });
 }
 
 
@@ -440,25 +441,25 @@ bool W3DMeshGeometry::cast_obbox_brute_force(W3DOrientedBoxCastQuery & boxtest)
 {
     const MeshQueryAdapter::Triangles triangles(*this);
     return Graphics::Cast_Model_Volume(std::views::iota(std::uint32_t{0}, static_cast<std::uint32_t>(Get_Polygon_Count())),
-        [&](std::uint32_t polygon) { return triangles.Test(polygon, [&](const TriClass& triangle) {
+        [&](std::uint32_t polygon) { return triangles.Test(polygon, [&](const Engine::Math::Triangle3& triangle) {
             return MeshQueryAdapter::Collide(boxtest, triangle);
-        }); }, [&] { return boxtest.Result->StartBad; },
-        [&](std::uint32_t polygon) { boxtest.Result->SurfaceType = Get_Poly_Surface_Type(polygon); });
+        }); }, [&] { return boxtest.Result->starts_overlapping; },
+        [&](std::uint32_t polygon) { boxtest.Result->surface_type = Get_Poly_Surface_Type(polygon); });
 }
 
 
-void W3DMeshGeometry::Compute_Plane_Equations(Vector4 * peq)
+void W3DMeshGeometry::Compute_Plane_Equations(Engine::Math::Vector4 * peq)
 {
-    Graphics::Compute_Model_Planes(std::span<const Vector3>(*Geometry.positions),
+    Graphics::Compute_Model_Planes(std::span<const Engine::Math::Vector3>(*Geometry.positions),
         std::span<const TriIndex>(*Geometry.triangles), std::span(peq, static_cast<std::size_t>(Geometry.polygon_count)));
     Set_Flag(DIRTY_PLANES, false);
 }
 
 
-void W3DMeshGeometry::Compute_Vertex_Normals(Vector3 * vnorm)
+void W3DMeshGeometry::Compute_Vertex_Normals(Engine::Math::Vector3 *vnorm)
 {
     Geometry.revision.Invalidate();
-    WWASSERT(vnorm);
+    engine::debug::assert_condition((vnorm), "vnorm", __FILE__, __LINE__, "assertion failed");
     if (Geometry.polygon_count == 0 || Geometry.vertex_count == 0) return;
     const auto* planes = Get_Plane_Array();
     const auto* shade_indices = Get_Vertex_Shade_Index_Array(false);
@@ -470,72 +471,79 @@ void W3DMeshGeometry::Compute_Vertex_Normals(Vector3 * vnorm)
 }
 
 
-void W3DMeshGeometry::Compute_Bounds(Vector3 * verts)
+void W3DMeshGeometry::Compute_Bounds(Engine::Math::Vector3 *verts)
 {
     if (!verts && Geometry.positions) verts = Geometry.positions->data();
-    if (Graphics::Compute_Model_Bounds(std::span<const Vector3>(verts, static_cast<std::size_t>(Geometry.vertex_count)),
+    if (Graphics::Compute_Model_Bounds(std::span<const Engine::Math::Vector3>(verts, static_cast<std::size_t>(Geometry.vertex_count)),
         Geometry.minimum, Geometry.maximum, Geometry.sphere_center, Geometry.sphere_radius))
         Set_Flag(DIRTY_BOUNDS, false);
 }
 
 
-Vector3 * W3DMeshGeometry::get_vert_normals()
+Engine::Math::Vector3 *W3DMeshGeometry::get_vert_normals()
 {
-    WWASSERT(Geometry.normals);
+	engine::debug::assert_condition((Geometry.normals != nullptr), "Geometry.normals != nullptr", __FILE__, __LINE__, "assertion failed");
     return Geometry.normals->data();
 }
 
 
-const Vector3 * W3DMeshGeometry::Get_Vertex_Normal_Array()
+const Engine::Math::Vector3 *W3DMeshGeometry::Get_Vertex_Normal_Array()
 {
     if (Get_Flag(DIRTY_VNORMALS)) Compute_Vertex_Normals(get_vert_normals());
     return get_vert_normals();
 }
 
 
-Vector4 * W3DMeshGeometry::get_planes(bool create)
+Engine::Math::Vector4 * W3DMeshGeometry::get_planes(bool create)
 {
     return Geometry.Planes();
 }
 
 
-const Vector4 * W3DMeshGeometry::Get_Plane_Array(bool create)
+const Engine::Math::Vector4 * W3DMeshGeometry::Get_Plane_Array(bool create)
 {
     auto* planes = get_planes(create);
     Compute_Plane_Equations(planes);
     return planes;
 }
 
-void W3DMeshGeometry::Compute_Plane(int pidx,PlaneClass * set_plane) const
-{
-	WWASSERT(pidx >= 0);
-	WWASSERT(pidx < Geometry.polygon_count);
-	TriIndex & poly = Geometry.triangles->data()[pidx];
-	Vector3 * verts = Geometry.positions->data();
-
-	set_plane->Set(verts[poly.I],verts[poly.J],verts[poly.K]);
-}
-
-
 void W3DMeshGeometry::Generate_Culling_Tree()
 {
- WWMEMLOG(MEM_CULLINGDATA);
+
  std::vector<Assets::Vector3f> vertices(Geometry.vertex_count);
  for (int i = 0; i < Geometry.vertex_count; ++i) {
   const auto& source = Geometry.positions->data()[i];
-  vertices[i] = {source.X, source.Y, source.Z};
+  vertices[i] = {source.x, source.y, source.z};
  }
  std::vector<std::array<std::uint32_t,3>> triangles(Geometry.polygon_count);
  for (int i = 0; i < Geometry.polygon_count; ++i) {
   const auto& source = Geometry.triangles->data()[i];
   triangles[i] = {source[0], source[1], source[2]};
  }
+ // Seed split selection from the geometry itself. The builder consumes this
+ // stream in a fixed traversal order, so equivalent mesh data produces the
+ // same tree independent of process-global RNG state or load order.
+ std::uint64_t seed = 14695981039346656037ull;
+ const auto mix = [&seed](std::uint32_t value) {
+  for (unsigned byte = 0; byte < 4; ++byte) {
+   seed ^= (value >> (byte * 8)) & 0xffu;
+   seed *= 1099511628211ull;
+  }
+ };
+ for (const auto& vertex : vertices) {
+  mix(std::bit_cast<std::uint32_t>(vertex.x));
+  mix(std::bit_cast<std::uint32_t>(vertex.y));
+  mix(std::bit_cast<std::uint32_t>(vertex.z));
+ }
+ for (const auto& triangle : triangles)
+  for (const auto index : triangle) mix(index);
+ Engine::Math::RandomStream split_samples(seed);
  Assets::MeshBoundsTree tree;
  const bool built = Assets::Build_Mesh_Bounds_Tree(vertices, triangles,
-  [] { return static_cast<unsigned>(rand()); }, tree);
- WWASSERT(built);
+  [&split_samples] { return split_samples.NextUInt32(); }, tree);
+ engine::debug::assert_condition((built), "built", __FILE__, __LINE__, "assertion failed");
  if (!built) return;
- DEBUG_ASSERTCRASH(CullTree == nullptr, ("W3DMeshGeometry::Generate_Culling_Tree: Leaking CullTree"));
+ engine::debug::invariant((CullTree == nullptr), "CullTree == nullptr", __FILE__, __LINE__, "W3DMeshGeometry::Generate_Culling_Tree: Leaking CullTree");
  CullTree = std::make_unique<Graphics::ModelBoundsTree>(std::move(tree));
 }
 
@@ -612,17 +620,17 @@ bool W3DMeshGeometry::Load_W3D(ChunkLoadClass& cload) {
     return true;
 }
 
-void W3DMeshGeometry::Scale(const Vector3 &sc)
+void W3DMeshGeometry::Scale(const Engine::Math::Vector3 &sc)
 {
     Geometry.revision.Invalidate();
-    WWASSERT(Geometry.positions);
-    if (Graphics::Scale_Model_Geometry(std::span<Vector3>(*Geometry.positions), Geometry.minimum, Geometry.maximum,
+	engine::debug::assert_condition((Geometry.positions != nullptr), "Geometry.positions != nullptr", __FILE__, __LINE__, "assertion failed");
+    if (Graphics::Scale_Model_Geometry(std::span<Engine::Math::Vector3>(*Geometry.positions), Geometry.minimum, Geometry.maximum,
         Geometry.sphere_center, Geometry.sphere_radius, sc)) Set_Flag(DIRTY_VNORMALS, true);
     Set_Flag(DIRTY_PLANES, true);
 	// the cull tree is invalid, release it and make a new one
 	if (CullTree) {
 		// If the scale is uniform, we can scale the cull tree, which is a lot faster than creating a new one
-		if (fabs(sc[0]-sc[1])<WWMATH_EPSILON && fabs(sc[0]-sc[2])<WWMATH_EPSILON) {
+		if (fabs(sc[0]-sc[1])<Engine::Math::DefaultTolerance && fabs(sc[0]-sc[2])<Engine::Math::DefaultTolerance) {
 			// create a copy of the old culltree
 			CullTree = std::make_unique<Graphics::ModelBoundsTree>(*CullTree);
 			CullTree->Scale(sc[0]);
@@ -636,22 +644,21 @@ void W3DMeshGeometry::Scale(const Vector3 &sc)
 
 
 // Destination pointers MUST point to arrays large enough to hold all vertices
-void W3DMeshGeometry::get_deformed_vertices(Vector3 *dst_vert,const Graphics::ModelHierarchy * htree)
+void W3DMeshGeometry::get_deformed_vertices(Engine::Math::Vector3 *dst_vert,const Graphics::ModelHierarchy * htree)
 {
-    WWASSERT(htree && Geometry.positions && Geometry.bone_indices);
-    Graphics::Deform_Model_Geometry(std::span<const Vector3>(*Geometry.positions), std::span<const Vector3>{},
+    engine::debug::assert_condition((htree && Geometry.positions && Geometry.bone_indices), "htree && Geometry.positions && Geometry.bone_indices", __FILE__, __LINE__, "assertion failed");
+    Graphics::Deform_Model_Geometry(std::span<const Engine::Math::Vector3>(*Geometry.positions), std::span<const Engine::Math::Vector3>{},
         std::span<const std::uint16_t>(*Geometry.bone_indices), *htree,
         std::span(dst_vert, static_cast<std::size_t>(Geometry.vertex_count)));
 }
 
 
 // Destination pointers MUST point to arrays large enough to hold all vertices
-void W3DMeshGeometry::get_deformed_vertices(Vector3 *dst_vert, Vector3 *dst_norm,const Graphics::ModelHierarchy * htree)
+void W3DMeshGeometry::get_deformed_vertices(Engine::Math::Vector3 *dst_vert, Engine::Math::Vector3 *dst_norm,const Graphics::ModelHierarchy * htree)
 {
-    WWASSERT(htree && Geometry.positions && Geometry.normals && Geometry.bone_indices);
-    Graphics::Deform_Model_Geometry(std::span<const Vector3>(*Geometry.positions), std::span<const Vector3>(*Geometry.normals),
+    engine::debug::assert_condition((htree && Geometry.positions && Geometry.normals && Geometry.bone_indices), "htree && Geometry.positions && Geometry.normals && Geometry.bone_indices", __FILE__, __LINE__, "assertion failed");
+    Graphics::Deform_Model_Geometry(std::span<const Engine::Math::Vector3>(*Geometry.positions), std::span<const Engine::Math::Vector3>(*Geometry.normals),
         std::span<const std::uint16_t>(*Geometry.bone_indices), *htree,
         std::span(dst_vert, static_cast<std::size_t>(Geometry.vertex_count)),
         std::span(dst_norm, static_cast<std::size_t>(Geometry.vertex_count)));
 }
-

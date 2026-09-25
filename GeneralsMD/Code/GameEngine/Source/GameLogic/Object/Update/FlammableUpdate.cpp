@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/AudioEventRTS.h"
 #include "Common/GameAudio.h"
@@ -133,7 +134,7 @@ void FlammableUpdate::onDamage( DamageInfo *damageInfo )
 UpdateSleepTime FlammableUpdate::update()
 {
 	Object *me = getObject();
-	DEBUG_ASSERTCRASH(m_status == FS_AFLAME, ("hmm, should be aflame"));
+	engine::debug::invariant((m_status == FS_AFLAME), "m_status == FS_AFLAME", __FILE__, __LINE__, "hmm, should be aflame");
 
 	UnsignedInt now = TheGameLogic->getFrame();
 	const FlammableUpdateModuleData *data = getFlammableUpdateModuleData();
@@ -183,7 +184,7 @@ UpdateSleepTime FlammableUpdate::calcSleepTime()
 		UnsignedInt soonest = m_aflameEndFrame;
 		if (m_burnedEndFrame != 0 && m_burnedEndFrame < soonest && m_burnedEndFrame > now) soonest = m_burnedEndFrame;
 		if (m_damageEndFrame != 0 && m_damageEndFrame < soonest && m_damageEndFrame > now) soonest = m_damageEndFrame;
-		DEBUG_ASSERTCRASH(soonest - now > 0, ("hmm"));
+		engine::debug::invariant((soonest - now > 0), "soonest - now > 0", __FILE__, __LINE__, "hmm");
 		// UPDATE_SLEEP requires a count-of-frames, not an absolute-frame, so subtract 'now'
 		return UPDATE_SLEEP(soonest - now);
 	}

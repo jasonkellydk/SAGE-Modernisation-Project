@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 #include "Common/GameState.h"
 #include "Common/Player.h"
 #include "Common/RandomValue.h"
@@ -437,7 +438,7 @@ void PrisonBehavior::xfer( Xfer *xfer )
 		if( m_visualList != nullptr )
 		{
 
-			DEBUG_CRASH(( "PrisonBehavior::xfer - the visual list should be empty but is not" ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "PrisonBehavior::xfer - the visual list should be empty but is not" );
 			throw SC_INVALID_DATA;
 
 		}

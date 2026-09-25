@@ -27,7 +27,6 @@ set(GAMEENGINE_SRC
 #    Include/Common/CustomMatchPreferences.h
     Include/Common/DamageFX.h
 #    Include/Common/DataChunk.h
-    Include/Common/Debug.h
     Include/Common/Diagnostic/SimulationMathCrc.h
     Include/Common/Dict.h
 #    Include/Common/Directory.h
@@ -72,8 +71,6 @@ set(GAMEENGINE_SRC
     Include/Common/MapObject.h
 #    Include/Common/MapReaderWriterInfo.h
     Include/Common/MessageStream.h
-    Include/Common/MiniDumper.h
-    Include/Common/MiniLog.h
     Include/Common/MiscAudio.h
 #    Include/Common/MissionStats.h
 #    Include/Common/ModelState.h
@@ -89,7 +86,6 @@ set(GAMEENGINE_SRC
 #    Include/Common/Override.h
 #    Include/Common/PartitionSolver.h
 #    Include/Common/PerfMetrics.h
-    Include/Common/PerfTimer.h
 #    Include/Common/Player.h
 #    Include/Common/PlayerList.h
 #    Include/Common/PlayerTemplate.h
@@ -187,7 +183,6 @@ set(GAMEENGINE_SRC
 #    Include/GameClient/GameWindowManager.h
     ${PROJECT_SOURCE_DIR}/engine/gui/wnd/runtime/include/GameClient/GameWindowTransitions.h
     Include/GameClient/GlobalLanguage.h
-    Include/GameClient/GraphDraw.h
 #    Include/GameClient/GUICallbacks.h
     Include/GameClient/GUICommandTranslator.h
     Include/GameClient/HeaderTemplate.h
@@ -610,12 +605,10 @@ set(GAMEENGINE_SRC
     Source/Common/INI/INIWeapon.cpp
     Source/Common/Language.cpp
     Source/Common/MessageStream.cpp
-    Source/Common/MiniLog.cpp
 #    Source/Common/MultiplayerSettings.cpp
 #    Source/Common/NameKeyGenerator.cpp
     Source/Common/OptionPreferences.cpp
 #    Source/Common/PartitionSolver.cpp
-    Source/Common/PerfTimer.cpp
     Source/Common/RandomValue.cpp
 #    Source/Common/Recorder.cpp
     Source/Common/ReplaySimulation.cpp
@@ -644,7 +637,6 @@ set(GAMEENGINE_SRC
 #    Source/Common/System/BuildAssistant.cpp
 #    Source/Common/System/CriticalSection.cpp
 #    Source/Common/System/DataChunk.cpp
-    Source/Common/System/Debug.cpp
 #    Source/Common/System/Directory.cpp
 #    Source/Common/System/DisabledTypes.cpp
 #    Source/Common/System/encrypt.cpp
@@ -660,7 +652,6 @@ set(GAMEENGINE_SRC
 #    Source/Common/System/List.cpp
     Source/Common/System/LocalFile.cpp
     Source/Common/System/LocalFileSystem.cpp
-    Source/Common/System/MiniDumper.cpp
     Source/Common/System/ObjectStatusTypes.cpp
 #    Source/Common/System/QuotedPrintable.cpp
     Source/Common/System/Radar.cpp
@@ -705,7 +696,6 @@ set(GAMEENGINE_SRC
     Source/GameClient/GameClientDispatch.cpp
     Source/GameClient/GameText.cpp
     Source/GameClient/GlobalLanguage.cpp
-    Source/GameClient/GraphDraw.cpp
 #    Source/GameClient/GUI/AnimateWindowManager.cpp
     Source/GameClient/GUI/ChallengeGenerals.cpp
     Source/GameClient/GUI/ControlBar/ControlBar.cpp
@@ -778,7 +768,7 @@ set(GAMEENGINE_SRC
     Source/GameClient/GUI/GUICallbacks/ReplayControls.cpp
     Source/GameClient/GUI/GUICallbacks/SaveLoadFeedback.cpp
     Source/GameClient/GUI/HeaderTemplate.cpp
-    Source/GameClient/GUI/IMEManager.cpp
+    # The SDL3 build provides the platform-backed IME implementation from GeneralsMD.
     Source/GameClient/GUI/LoadScreen.cpp
     Source/GameClient/GUI/ProcessAnimateWindow.cpp
     Source/GameClient/GUI/Shell/Shell.cpp
@@ -1157,7 +1147,6 @@ target_include_directories(corei_gameengine_private INTERFACE
 
 target_link_libraries(corei_gameengine_private INTERFACE
     corei_always
-    core_profile_legacy
 )
 
 target_compile_definitions(corei_gameengine_private INTERFACE

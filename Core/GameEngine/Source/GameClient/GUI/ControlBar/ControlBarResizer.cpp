@@ -46,7 +46,8 @@
 //-----------------------------------------------------------------------------
 // SYSTEM INCLUDES ////////////////////////////////////////////////////////////
 //-----------------------------------------------------------------------------
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 //-----------------------------------------------------------------------------
 // USER INCLUDES //////////////////////////////////////////////////////////////
 //-----------------------------------------------------------------------------
@@ -117,7 +118,7 @@ ResizerWindow *ControlBarResizer::findResizerWindow( AsciiString name )
 		ResizerWindow *rWin = *it;
 		if( !rWin )
 		{
-			DEBUG_CRASH(("There's no resizerWindow in ControlBarResizer::findResizerWindow"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "There's no resizerWindow in ControlBarResizer::findResizerWindow");
 			it++;
 			continue;
 		}
@@ -142,7 +143,7 @@ ResizerWindow *ControlBarResizer::newResizerWindow( AsciiString name )
 	win = TheWindowManager->winGetWindowFromId(nullptr, TheNameKeyGenerator->nameToKey(name));
 	if( !win )
 	{
-		DEBUG_ASSERTCRASH(win,("ControlBarResizer::newResizerWindow could not find window %s Are you sure that window is loaded yet?", name.str()) );
+		engine::debug::invariant((win), "win", __FILE__, __LINE__, "ControlBarResizer::newResizerWindow could not find window %s Are you sure that window is loaded yet?", name.str());
 		delete newRwin;
 		return nullptr;
 	}
@@ -160,7 +161,7 @@ void ControlBarResizer::sizeWindowsDefault()
 		ResizerWindow *rWin = *it;
 		if( !rWin )
 		{
-			DEBUG_CRASH(("There's no resizerWindow in ControlBarResizer::sizeWindowsDefault"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "There's no resizerWindow in ControlBarResizer::sizeWindowsDefault");
 			it++;
 			continue;
 		}
@@ -172,7 +173,7 @@ void ControlBarResizer::sizeWindowsDefault()
 		}
 		win->winSetPosition(rWin->m_defaultPos.x, rWin->m_defaultPos.y);
 		win->winSetSize(rWin->m_defaultSize.x, rWin->m_defaultSize.y);
-		DEBUG_LOG(("sizeWindowsDefault:%s pos X:%d pos Y: %d size X:%d sizeY: %d",rWin->m_name.str(),rWin->m_defaultPos.x, rWin->m_defaultPos.y,rWin->m_defaultSize.x, rWin->m_defaultSize.y ));
+		engine::debug::log_info("sizeWindowsDefault:%s pos X:%d pos Y: %d size X:%d sizeY: %d",rWin->m_name.str(),rWin->m_defaultPos.x, rWin->m_defaultPos.y,rWin->m_defaultSize.x, rWin->m_defaultSize.y );
 		it ++;
 	}
 }
@@ -187,7 +188,7 @@ void ControlBarResizer::sizeWindowsAlt()
 		ResizerWindow *rWin = *it;
 		if( !rWin )
 		{
-			DEBUG_CRASH(("There's no resizerWindow in ControlBarResizer::sizeWindowsDefault"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "There's no resizerWindow in ControlBarResizer::sizeWindowsDefault");
 			it++;
 			continue;
 		}
@@ -201,7 +202,7 @@ void ControlBarResizer::sizeWindowsAlt()
 		win->winSetPosition(rWin->m_altPos.x * x, rWin->m_altPos.y * y);
 		if(rWin->m_altSize.x >0 || rWin->m_altSize.y > 0)
 			win->winSetSize(rWin->m_altSize.x *x, rWin->m_altSize.y *y);
-		DEBUG_LOG(("sizeWindowsAlt:%s pos X:%d pos Y: %d size X:%d sizeY: %d",rWin->m_name.str(), rWin->m_altPos.x*x, rWin->m_altPos.y*y,rWin->m_altSize.x*x, rWin->m_altSize.y *y));
+		engine::debug::log_info("sizeWindowsAlt:%s pos X:%d pos Y: %d size X:%d sizeY: %d",rWin->m_name.str(), rWin->m_altPos.x*x, rWin->m_altPos.y*y,rWin->m_altSize.x*x, rWin->m_altSize.y *y);
 		it ++;
 	}
 }
@@ -228,8 +229,8 @@ void INI::parseControlBarResizerDefinition( INI* ini )
 //
 //		// image not found, create a new one
 //		rWin = resizer->newResizerWindow(name);
-//		DEBUG_ASSERTCRASH( rWin, ("parseControlBarResizerDefinition: unable to allocate ResizerWindow for '%s'",
-//															name.str()) );
+//		engine::debug::invariant((rWin), "rWin", __FILE__, __LINE__, "parseControlBarResizerDefinition: unable to allocate ResizerWindow for '%s'",
+//															name.str());
 //
 //	}  // end if
 //

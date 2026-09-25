@@ -22,12 +22,11 @@
 //
 
 #include "resource.h"
-#include "WWMath/vector3.h"
-#include "WWMath/v3_rnd.h"
+
+import Engine.Core.Math.RandomVector3Generator;
 
 // Forward delcarations
 class EmitterInstanceListClass;
-//class Vector3Randomizer;
 
 /////////////////////////////////////////////////////////////////////////////
 // EmitterParticlePropPageClass dialog
@@ -89,7 +88,7 @@ protected:
 		float								Get_Rate () const				{ return m_Rate; }
 		int								Get_Burst_Size () const		{ return m_BurstSize; }
 		int								Get_Max_Particles () const	{ return m_MaxParticles; }
-		Vector3Randomizer *			Get_Creation_Volume () const	{ return m_Randomizer->Clone (); }
+		Engine::Math::RandomVector3Generator *	Get_Creation_Volume () const	{ return new Engine::Math::RandomVector3Generator (*m_Randomizer); }
 
 	protected:
 
@@ -110,7 +109,7 @@ protected:
 		float								m_Rate;
 		int								m_BurstSize;
 		int								m_MaxParticles;
-		Vector3Randomizer *			m_Randomizer;
+		Engine::Math::RandomVector3Generator *	m_Randomizer;
 };
 
 //{{AFX_INSERT_LOCATION}}

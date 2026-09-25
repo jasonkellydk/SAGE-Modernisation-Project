@@ -35,8 +35,9 @@
 #include "Common/Thing.h"
 #include "Common/Geometry.h"
 #include "GameClient/Color.h"
-#include "WWMath/matrix3d.h"
 #include "GameClient/DrawableInfo.h"
+import Engine.Core.Math.AffineTransform3;
+import Engine.Core.Math.Vector3;
 
 // FORWARD REFERENCES /////////////////////////////////////////////////////////////////////////////
 class PositionalSound;
@@ -176,7 +177,7 @@ public:
 	void release() { m_envState = ENVELOPE_STATE_DECAY; }
 	void rest()    { m_envState = ENVELOPE_STATE_REST; } // goes away now!
 	Bool isEffective() const { return m_affect; }
-	const Vector3* getColor() const { return &m_currentColor; }
+	const Engine::Math::Vector3* getColor() const { return &m_currentColor; }
 
 protected:
 
@@ -189,8 +190,8 @@ private:
 
 	void setAttackFrames(UnsignedInt frames);
 	void setDecayFrames( UnsignedInt frames);
-	void setPeakColor( const RGBColor *peak) {m_peakColor = Vector3( peak->red, peak->green, peak->blue );};
-	void setPeakColor( Real r, Real g, Real b ) {m_peakColor.Set( r, g, b );};
+	void setPeakColor( const RGBColor *peak) {m_peakColor = {peak->red, peak->green, peak->blue};};
+	void setPeakColor( Real r, Real g, Real b ) {m_peakColor = {r, g, b};};
 
 	enum EnvelopeStatesEnum
 	{
@@ -200,10 +201,10 @@ private:
 		ENVELOPE_STATE_SUSTAIN ///< RELEASE IS THE LOGICAL COMPLIMENT TO SUSTAIN
 	};
 
-	Vector3							m_attackRate;		 	///< step amount to make tint turn on slow or fast
-	Vector3							m_decayRate;			///< step amount to make tint turn off slow or fast
-	Vector3							m_peakColor;			///< um, the peak color, what color we are headed toward during attack
-	Vector3							m_currentColor;		///< um, the current color, how we are colored, now
+	Engine::Math::Vector3		m_attackRate;		 	///< step amount to make tint turn on slow or fast
+	Engine::Math::Vector3		m_decayRate;			///< step amount to make tint turn off slow or fast
+	Engine::Math::Vector3		m_peakColor;			///< um, the peak color, what color we are headed toward during attack
+	Engine::Math::Vector3		m_currentColor;	///< um, the current color, how we are colored, now
 	Real								m_sustainCounter;
 	Byte								m_envState;				///< a randomly switchable SUSTAIN state, release is compliment
 	Bool								m_affect;         ///< set TRUE if this has any effect (has a non 0,0,0 color).
@@ -402,14 +403,14 @@ public:
 	//---------------------------------------------------------------------------
 
 	// an "instance" matrix defines the local transform of the Drawable, and is concatenated with the global transform
-	void setInstanceMatrix( const Matrix3D *instance );									///< set the Drawable's instance transform
-	const Matrix3D *getInstanceMatrix() const { return &m_instance; }		///< get drawable instance transform
+	void setInstanceTransform(const Engine::Math::AffineTransform3* instance);
+	const Engine::Math::AffineTransform3* instanceTransform() const { return &m_instance; }
 	Bool isInstanceIdentity() const { return m_instanceIsIdentity; }
 
 	Real getInstanceScale() const { return m_instanceScale; }		///< get scale that will be applied to instance matrix
 	void setInstanceScale(Real value) { m_instanceScale = value;}	///< set scale that will be applied to instance matrix before rendering.
 
-	const Matrix3D *getTransformMatrix() const;	///< return the world transform
+	const Engine::Math::AffineTransform3& worldTransform() const noexcept;	///< return the world transform
 
 	void draw();													///< render the drawable to the given view
 	void updateDrawable();														///< update the drawable
@@ -466,7 +467,8 @@ public:
 	const DrawableLocoInfo *getLocoInfo() const { return m_locoInfo; }
 
 	// this method must ONLY be called from the client, NEVER From the logic, not even indirectly.
-	Bool clientOnly_getFirstRenderObjInfo(Coord3D* pos, Real* boundingSphereRadius, Matrix3D* transform);
+	Bool getRenderObjectInfo(Coord3D* position, Real* boundingSphereRadius,
+		Engine::Math::AffineTransform3* transform) const;
 
 	/**
 		Find the bone(s) with the given name and return their positions and/or transforms in the given arrays.
@@ -481,13 +483,19 @@ public:
 
 		NOTE: this isn't very fast. Please call it sparingly and cache the result.
 	*/
-	Int getPristineBonePositions(const char* boneNamePrefix, Int startIndex, Coord3D* positions, Matrix3D* transforms, Int maxBones) const;
-	Int getCurrentClientBonePositions(const char* boneNamePrefix, Int startIndex, Coord3D* positions, Matrix3D* transforms, Int maxBones) const;
+	Int getPristineBonePositions(const char* boneNamePrefix, Int startIndex, Coord3D* positions, Int maxBones) const;
+	Int getPristineBoneTransforms(const char* boneNamePrefix, Int startIndex, Engine::Math::AffineTransform3* transforms, Int maxBones) const;
+	/// Positions and transforms may each be null; returns the bone count either way.
+	Int getPristineBoneData(const char* boneNamePrefix, Int startIndex,
+		Coord3D* positions, Engine::Math::AffineTransform3* transforms, Int maxBones) const;
+	Int getCurrentClientBoneTransforms(const char* boneNamePrefix, Int startIndex,
+		Coord3D* positions, Engine::Math::AffineTransform3* transforms, Int maxBones) const;
 
 	// this is a special-purpose call for W3DModelDraw. (srj)
-	Bool getCurrentWorldspaceClientBonePositions(const char* boneName, Matrix3D& transform) const;
+	Bool getCurrentWorldBoneTransform(
+		const char* boneName, Engine::Math::AffineTransform3& transform) const;
 
-	Bool getProjectileLaunchOffset(WeaponSlotType wslot, Int specificBarrelToUse, Matrix3D* launchPos, WhichTurretType tur, Coord3D* turretRotPos, Coord3D* turretPitchPos = nullptr) const;
+	Bool getProjectileLaunchTransform(WeaponSlotType wslot, Int specificBarrelToUse, Engine::Math::AffineTransform3* launchTransform, WhichTurretType tur, Coord3D* turretRotPos, Coord3D* turretPitchPos = nullptr) const;
 
 	/**
 		This call says, "I want the current animation (if any) to take n frames to complete a single cycle".
@@ -523,11 +531,11 @@ public:
 	void friend_setSelected();							///< mark drawable as "selected"
 	void friend_clearSelected();						///< clear drawable's "selected"
 
-	Vector3 * getAmbientLight();					///< get color value to add to ambient light when drawing
-	void setAmbientLight( Vector3 *ambient );		///< set color value to add to ambient light when drawing
+	Engine::Math::Vector3 * getAmbientLight();					///< get color value to add to ambient light when drawing
+	void setAmbientLight( Engine::Math::Vector3 *ambient );	///< set color value to add to ambient light when drawing
 
-	const Vector3 * getTintColor() const;					///< get FX color value to add to ALL LIGHTS when drawing
-	const Vector3 * getSelectionColor() const;					///< get FX color value to add to ALL LIGHTS when drawing
+	const Engine::Math::Vector3 * getTintColor() const;					///< get FX color value to add to ALL LIGHTS when drawing
+	const Engine::Math::Vector3 * getSelectionColor() const;					///< get FX color value to add to ALL LIGHTS when drawing
 
 	TerrainDecalType getTerrainDecalType() const { return m_terrainDecalType; }
 
@@ -613,7 +621,7 @@ protected:
 		return m;
 	}
 
-	void applyPhysicsXform(Matrix3D* mtx);
+	void applyPhysicsXform(Engine::Math::AffineTransform3* transform);
 
 	struct PhysicsXformInfo
 	{
@@ -640,7 +648,7 @@ protected:
 	void validatePos() const;
 #endif
 
-	virtual void reactToTransformChange(const Matrix3D* oldMtx, const Coord3D* oldPos, Real oldAngle) override;
+	virtual void reactToTransformChange(const Coord3D* oldPos, Real oldAngle) override;
 	void updateHiddenStatus();
 
 	void replaceModelConditionStateInDrawable();
@@ -705,7 +713,7 @@ private:
 	Int m_flashCount;           ///< number of times to flash the drawable
 	Color m_flashColor;					///< color to flash the drawable
 
-	Matrix3D m_instance;				///< The instance matrix that holds the initial/default position & orientation
+	Engine::Math::AffineTransform3 m_instance;	///< Per-drawable local transform.
 	Real m_instanceScale;				///< the uniform scale factor applied to the instance matrix before it is sent to W3D.
 
 	DrawableInfo				m_drawableInfo;		///< structure pointed to by W3D render objects so they know which drawable they belong to.

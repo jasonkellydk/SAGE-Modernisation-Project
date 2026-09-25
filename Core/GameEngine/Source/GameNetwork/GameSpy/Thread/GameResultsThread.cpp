@@ -26,7 +26,8 @@
 // Ping thread
 // Author: Matthew D. Campbell, August 2002
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include <winsock2.h>
 
@@ -227,7 +228,7 @@ void GameResultsThreadClass::Thread_Function()
 				IP = inet_addr(hostnameBuffer);
 				in_addr hostNode;
 				hostNode.s_addr = IP;
-				DEBUG_LOG(("sending game results to %s - IP = %s", hostnameBuffer, inet_ntoa(hostNode) ));
+				engine::debug::log_info("sending game results to %s - IP = %s", hostnameBuffer, inet_ntoa(hostNode) );
 			}
 			else
 			{
@@ -236,7 +237,7 @@ void GameResultsThreadClass::Thread_Function()
 				hostStruct = gethostbyname(hostnameBuffer);
 				if (hostStruct == nullptr)
 				{
-					DEBUG_LOG(("sending game results to %s - host lookup failed", hostnameBuffer));
+					engine::debug::log_info("sending game results to %s - host lookup failed", hostnameBuffer);
 
 					// Even though this failed to resolve IP, still need to send a
 					//   callback.
@@ -246,7 +247,7 @@ void GameResultsThreadClass::Thread_Function()
 				{
 					hostNode = (in_addr *) hostStruct->h_addr;
 					IP = hostNode->s_addr;
-					DEBUG_LOG(("sending game results to %s IP = %s", hostnameBuffer, inet_ntoa(*hostNode) ));
+					engine::debug::log_info("sending game results to %s IP = %s", hostnameBuffer, inet_ntoa(*hostNode) );
 				}
 			}
 
@@ -264,13 +265,12 @@ void GameResultsThreadClass::Thread_Function()
 
 	WSACleanup();
 	} catch ( ... ) {
-		DEBUG_CRASH(("Exception in results thread!"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Exception in results thread!");
 	}
 }
 
 //-------------------------------------------------------------------------
 
-#ifdef DEBUG_LOGGING
 #define CASE(x) case (x): return #x;
 
 static const char *getWSAErrorString( Int error )
@@ -336,7 +336,6 @@ static const char *getWSAErrorString( Int error )
 
 #undef CASE
 
-#endif
 //-------------------------------------------------------------------------
 
 Int GameResultsThreadClass::sendGameResults( UnsignedInt IP, UnsignedShort port, const std::string& results )
@@ -347,7 +346,7 @@ Int GameResultsThreadClass::sendGameResults( UnsignedInt IP, UnsignedShort port,
 	Int sock = socket( AF_INET, SOCK_STREAM, 0 );
 	if (sock < 0)
 	{
-		DEBUG_LOG(("GameResultsThreadClass::sendGameResults() - socket() returned %d(%s)", sock, getWSAErrorString(sock)));
+		engine::debug::log_info("GameResultsThreadClass::sendGameResults() - socket() returned %d(%s)", sock, getWSAErrorString(sock));
 		return sock;
 	}
 
@@ -362,7 +361,7 @@ Int GameResultsThreadClass::sendGameResults( UnsignedInt IP, UnsignedShort port,
 	if( connect( sock, (struct sockaddr *)&sockAddr, sizeof( sockAddr ) ) == -1 )
 	{
 		error = WSAGetLastError();
-		DEBUG_LOG(("GameResultsThreadClass::sendGameResults() - connect() returned %d(%s)", error, getWSAErrorString(error)));
+		engine::debug::log_info("GameResultsThreadClass::sendGameResults() - connect() returned %d(%s)", error, getWSAErrorString(error));
 		if( ( error == WSAEWOULDBLOCK ) || ( error == WSAEINVAL ) || ( error == WSAEALREADY ) )
 		{
 			return( -1 );
@@ -378,7 +377,7 @@ Int GameResultsThreadClass::sendGameResults( UnsignedInt IP, UnsignedShort port,
 	if (send( sock, results.c_str(), results.length(), 0 ) == SOCKET_ERROR)
 	{
 		error = WSAGetLastError();
-		DEBUG_LOG(("GameResultsThreadClass::sendGameResults() - send() returned %d(%s)", error, getWSAErrorString(error)));
+		engine::debug::log_info("GameResultsThreadClass::sendGameResults() - send() returned %d(%s)", error, getWSAErrorString(error));
 		closesocket(sock);
 		return WSAGetLastError();
 	}

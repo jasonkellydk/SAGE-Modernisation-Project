@@ -12,8 +12,10 @@ target_link_libraries(z_generals PRIVATE
     comctl32
     imm32
     SDL3::SDL3
+    engine_platform_sdl3
     vfw32
     winmm
+    ws2_32
     z_gameengine
     z_gameenginedevice
     zi_always
@@ -72,6 +74,14 @@ add_custom_command(TARGET z_generals POST_BUILD
         "$<TARGET_FILE:SDL3::SDL3>"
         "$<TARGET_FILE_DIR:z_generals>"
 )
+add_custom_command(TARGET z_generals POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "$<TARGET_FILE:gamespy::gamespy>"
+        "$<TARGET_FILE_DIR:z_generals>"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "$<TARGET_FILE:SDL3_net::SDL3_net>"
+        "$<TARGET_FILE_DIR:z_generals>"
+)
 
 if(EXISTS "${RTS_FFMPEG_DEBUG_RUNTIME_DIRECTORY}" OR EXISTS "${RTS_FFMPEG_RUNTIME_DIRECTORY}")
     add_custom_command(TARGET z_generals POST_BUILD
@@ -100,7 +110,6 @@ target_include_directories(z_generals PRIVATE
 target_sources(z_generals PRIVATE
     SDL3Main.cpp
     SDL3Main.h
-    Platform/SDLPlatformWindow.h
 )
 
 # The legacy engine interface publishes a PCH containing Windows/intrinsic

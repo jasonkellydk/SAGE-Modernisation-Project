@@ -38,7 +38,7 @@ static char THIS_FILE[] = __FILE__;
 //
 ColorSelectionDialogClass::ColorSelectionDialogClass
 (
-	const Vector3 &def_color,
+	const Engine::Math::Vector3 &def_color,
 	CWnd *pParent
 )
 	: m_Color (def_color),
@@ -102,9 +102,9 @@ ColorSelectionDialogClass::OnInitDialog ()
 	m_BlueSpin.SetRange (0, 255);
 
 	// Determine the initial settings (in integers)
-	int red_value = int(m_Color.X * 255.00F);
-	int green_value = int(m_Color.Y * 255.00F);
-	int blue_value = int(m_Color.Z * 255.00F);
+	int red_value = int(m_Color.x * 255.00F);
+	int green_value = int(m_Color.y * 255.00F);
+	int blue_value = int(m_Color.z * 255.00F);
 
 	if ((red_value == green_value) &&
 	    (red_value == blue_value)) {
@@ -193,7 +193,7 @@ ColorSelectionDialogClass::Paint_Color_Window ()
 	CDC *pdc = m_ColorWindow.GetDC ();
 	::FrameRect (*pdc, &rect, (HBRUSH)::GetStockObject (BLACK_BRUSH));
 	rect.DeflateRect (1, 1);
-	pdc->FillSolidRect (&rect, RGB (int(m_PaintColor.X * 255), int(m_PaintColor.Y * 255), int(m_PaintColor.Z * 255)));
+	pdc->FillSolidRect (&rect, RGB (int(m_PaintColor.x * 255), int(m_PaintColor.y * 255), int(m_PaintColor.z * 255)));
 	m_ColorWindow.ReleaseDC (pdc);
 
 	// Let the window know it doesn't need to be repainted
@@ -215,9 +215,9 @@ ColorSelectionDialogClass::OnGrayscaleCheck ()
 		m_GreenSlider.SetPos (m_RedSlider.GetPos ());
 		m_BlueSlider.SetPos (m_RedSlider.GetPos ());
 
-		m_PaintColor.X = float(m_RedSlider.GetPos ()) / 255.00F;
-		m_PaintColor.Y = float(m_GreenSlider.GetPos ()) / 255.00F;
-		m_PaintColor.Z = float(m_BlueSlider.GetPos ()) / 255.00F;
+		m_PaintColor.x = float(m_RedSlider.GetPos ()) / 255.00F;
+		m_PaintColor.y = float(m_GreenSlider.GetPos ()) / 255.00F;
+		m_PaintColor.z = float(m_BlueSlider.GetPos ()) / 255.00F;
 
 		// Update the window that displays the color the user has selected
 		Paint_Color_Window ();
@@ -321,9 +321,9 @@ ColorSelectionDialogClass::Update_Sliders (int slider_id)
 	m_BlueSpin.SetPos (blue_val);
 
 	// Record the selected color for later use
-	m_PaintColor.X = red_val / 255.00F;
-	m_PaintColor.Y = green_val / 255.00F;
-	m_PaintColor.Z = blue_val / 255.00F;
+	m_PaintColor.x = red_val / 255.00F;
+	m_PaintColor.y = green_val / 255.00F;
+	m_PaintColor.z = blue_val / 255.00F;
 
 	// Update the window that displays the color the user has selected
 	Paint_Color_Window ();

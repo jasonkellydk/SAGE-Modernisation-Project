@@ -47,6 +47,7 @@
 #include <span>
 #include <vector>
 import Graphics.Scene.Surfaces.Renderer;
+import Engine.Core.Math.AffineTransform3;
 
 //-----------------------------------------------------------------------------
 //           Includes
@@ -83,25 +84,24 @@ class BridgeInfo;
 class W3DBridge
 {
 protected:
-	Vector3 m_start;						///< Drawing location
-	Vector3 m_end;							///< Drawing location
+	Engine::Math::Vector3 m_start;						///< Drawing location
+	Engine::Math::Vector3 m_end;							///< Drawing location
 	Real		m_scale;						///< Width scale.
 	Real		m_length;
 	TBridgeType	m_bridgeType;		///< Type of bridge.  Currently only 2 supported.
-	SphereClass m_bounds;				///< Bounding sphere for culling to set the visible flag.
 	W3DTextureHandle *m_bridgeTexture;
 	W3DMeshRenderObject *m_leftMesh;			///< W3D mesh models for the bridges.
-	Matrix3D	m_leftMtx;				///< Transform for the left mesh.
+	Engine::Math::AffineTransform3 m_leftMtx;		///< Transform for the left mesh.
 	Real			m_minY;						///< min y vertex.
 	Real			m_maxY;						///< max y vertex.
 	Real			m_leftMinX;				///< m_leftMesh min x vertex.
 	Real			m_leftMaxX;				///< m_leftMesh max x vertex.
 	W3DMeshRenderObject *m_sectionMesh;		///< W3D mesh models for the bridges.
-	Matrix3D	m_sectionMtx;			///< Transform for the section mesh.
+	Engine::Math::AffineTransform3 m_sectionMtx;	///< Transform for the section mesh.
 	Real			m_sectionMinX;		///< m_sectionMesh min x vertex.
 	Real			m_sectionMaxX;		///< m_sectionMesh max x vertex.
 	W3DMeshRenderObject *m_rightMesh;			///< W3D mesh models for the bridges.
-	Matrix3D	m_rightMtx;				///< Transform for the right mesh.
+	Engine::Math::AffineTransform3 m_rightMtx;		///< Transform for the right mesh.
 	Real			m_rightMinX;			///< m_rightMesh min x vertex.
 	Real			m_rightMaxX;			///< m_rightMesh max x vertex.
 	Int				m_firstIndex;			///< Starting index buffer.
@@ -115,21 +115,21 @@ protected:
     Graphics::SurfaceMeshHandle m_graphicsMesh;
 
 protected:
-	Int getModelVerticesFixed(Graphics::SurfaceVertex *destination_vb, Int curVertex, const Matrix3D &mtx, W3DMeshRenderObject *pMesh, Graphics::SceneObjectList<W3DRenderObject>::Cursor *pLightsIterator);
+	Int getModelVerticesFixed(Graphics::SurfaceVertex *destination_vb, Int curVertex, const Engine::Math::AffineTransform3 &mtx, W3DMeshRenderObject *pMesh, Graphics::SceneObjectList<W3DRenderObject>::Cursor *pLightsIterator);
 	Int getModelIndices(UnsignedShort *destination_ib, Int curIndex, Int vertexOffset, W3DMeshRenderObject *pMesh);
 	Int getModelVertices(Graphics::SurfaceVertex *destination_vb, Int curVertex,  Real xOffset,
-																Vector3 &vec, Vector3 &vecNormal, Vector3 &vecZ, Vector3 &offset,
-																const Matrix3D &mtx,
+																Engine::Math::Vector3 &vec, Engine::Math::Vector3 &vecNormal, Engine::Math::Vector3 &vecZ, Engine::Math::Vector3 &offset,
+																		const Engine::Math::AffineTransform3 &mtx,
 																W3DMeshRenderObject *pMesh, Graphics::SceneObjectList<W3DRenderObject>::Cursor *pLightsIterator);
 
 public:
 	W3DBridge();
 	~W3DBridge();
 
-	void init(Vector3 fromLoc, Vector3 toLoc, AsciiString name);
+	void init(Engine::Math::Vector3 fromLoc, Engine::Math::Vector3 toLoc, AsciiString name);
 	AsciiString getTemplateName() {return m_templateName;}
-	const Vector3* getStart() const {return &m_start;}
-	const Vector3* getEnd() const { return &m_end;}
+	const Engine::Math::Vector3* getStart() const {return &m_start;}
+	const Engine::Math::Vector3* getEnd() const { return &m_end;}
 	Bool load(BodyDamageType curDamageState);
 	BodyDamageType getDamageState() {return m_curDamageState;};
 	void setDamageState(BodyDamageType state) { m_curDamageState = state;};
@@ -182,7 +182,7 @@ protected:
 	Bool		m_updateVis;			///< True if the camera moved, and we need to recalculate visibility.
 	Bool		m_anythingChanged;	///< Set to true if visibility changed.
 	/// Add a bridge at location.  Name is the gdf item name.
-	void addBridge(Vector3 fromLoc, Vector3 toLoc, AsciiString name, W3DTerrainLogic *pTerrainLogic, Dict *props);
+	void addBridge(Engine::Math::Vector3 fromLoc, Engine::Math::Vector3 toLoc, AsciiString name, W3DTerrainLogic *pTerrainLogic, Dict *props);
 	void loadBridgesInVertexAndIndexBuffers(Graphics::SceneObjectList<W3DRenderObject>::Cursor *pLightsIterator); ///< Fills the index and vertex buffers for drawing.
 	void allocateBridgeBuffers();							 ///< Allocates the buffers.
 	void cull(W3DCamera * camera);						 ///< Culls the bridges.

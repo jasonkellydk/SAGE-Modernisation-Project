@@ -26,6 +26,7 @@ import Graphics.Frame.RenderClock;
 #include "W3DDevice/GameClient/W3DTerrainTracks.h"
 #include "W3DDevice/GameClient/W3DWaypointBuffer.h"
 #include "W3DDevice/GameClient/W3DBibBuffer.h"
+import engine.debug;
 
 import Graphics.Scene.DrawParameters;
 import Graphics.Frame.Runtime;
@@ -35,7 +36,11 @@ import Graphics.Materials.ProceduralPass;
 
 W3DTerrainGraphics *W3DTerrainGraphics::s_active = nullptr;
 
-W3DTerrainGraphics::W3DTerrainGraphics() { s_active = this; }
+W3DTerrainGraphics::W3DTerrainGraphics(engine::platform::IClockService& clock)
+    : BaseHeightMapRenderObjClass(clock)
+{
+    s_active = this;
+}
 W3DTerrainGraphics::~W3DTerrainGraphics()
 {
     freeMapResources();
@@ -130,15 +135,15 @@ int W3DTerrainGraphics::updateBlock(Int x0, Int y0, Int x1, Int y1, WorldHeightM
     return 0;
 }
 
-void W3DTerrainGraphics::updateCenter(W3DCamera *camera, const Vector3 *pivot, Graphics::SceneObjectList<W3DRenderObject>::Cursor *lights)
+void W3DTerrainGraphics::updateCenter(W3DCamera *camera, const Engine::Math::Vector3 *pivot, Graphics::SceneObjectList<W3DRenderObject>::Cursor *lights)
 {
     if (m_map == nullptr || m_updating) return;
     // This window belongs to the remaining scene consumers (roads and
     // shroud). The graphics terrain surface covers the complete map.
     if (pivot != nullptr) {
         const int border = m_map->getBorderSizeInline();
-        m_map->setDrawOrg(static_cast<int>(std::floor(pivot->X / MAP_XY_FACTOR)) + border - m_x / 2,
-            static_cast<int>(std::floor(pivot->Y / MAP_XY_FACTOR)) + border - m_y / 2);
+        m_map->setDrawOrg(static_cast<int>(std::floor(pivot->x / MAP_XY_FACTOR)) + border - m_x / 2,
+            static_cast<int>(std::floor(pivot->y / MAP_XY_FACTOR)) + border - m_y / 2);
     }
     BaseHeightMapRenderObjClass::updateCenter(camera, pivot, lights);
 }
@@ -317,11 +322,7 @@ float W3DTerrainGraphics::Get_Surface_Height(int x, int y) const
 Bool W3DTerrainGraphics::collectShadowCasters()
 {
     if (!Update_Textures() || !Update_Surface()) return FALSE;
-    const Matrix4x4 transform(Transform);
-    std::array<float,16> world;
-    for (unsigned row=0;row<4;++row)
-        for (unsigned column=0;column<4;++column)
-            world[row*4+column] = transform[row][column];
+    const auto world = W3DCamera::Build_World_Matrix(Get_Transform());
     return Graphics::Get_Terrain_Renderer().Add_Shadow_Caster(
         Graphics::Get_Directional_Shadow_Renderer(),world)
         && BaseHeightMapRenderObjClass::collectShadowCasters();
@@ -331,14 +332,7 @@ bool W3DTerrainGraphics::Draw_Surface(W3DRenderContext &info)
 {
     if (!Update_Textures() || !Update_Surface()) return false;
     Graphics::TerrainDrawParameters parameters;
-    Matrix3D camera_view;
-    Matrix4x4 projection;
-    info.Camera.Get_View_Matrix(&camera_view);
-    info.Camera.Get_Backend_Projection_Matrix(&projection);
-    const Matrix4x4 transform = projection * Matrix4x4(camera_view) * Matrix4x4(Transform);
-    for (int row = 0; row < 4; ++row)
-        for (int column = 0; column < 4; ++column)
-            parameters.view_projection[row * 4 + column] = transform[row][column];
+    parameters.view_projection = info.Camera.Build_Object_View_Projection(Get_Transform());
     const bool cloud = useCloud() && m_textures[2].Is_Valid();
     const float stretch = 1.0f / (63.0f * MAP_XY_FACTOR / 2.0f);
     parameters.cloud_projection = {stretch, stretch, cloud ? m_stageTwoTexture->Get_X_Offset() : 0.0f,
@@ -378,23 +372,22 @@ bool W3DTerrainGraphics::Draw_Surface(W3DRenderContext &info)
         for (lights.First(); !lights.Is_Done() && count < parameters.lights.size(); lights.Next()) {
             W3DDynamicLight *light = static_cast<W3DDynamicLight *>(lights.Peek_Obj());
             if (!light->isEnabled()) continue;
-            const Vector3 position = light->Get_Position();
+            const Engine::Math::Vector3 position = light->Get_Position();
             double inner, outer;
             light->Get_Far_Attenuation_Range(inner, outer);
             const float min_x = (m_map->getDrawOrgX() - m_map->getBorderSizeInline()) * MAP_XY_FACTOR;
             const float min_y = (m_map->getDrawOrgY() - m_map->getBorderSizeInline()) * MAP_XY_FACTOR;
             if (light->Get_Type() != W3DLight::DIRECTIONAL &&
-                (position.X + outer < min_x || position.Y + outer < min_y ||
-                 position.X - outer > min_x + m_x * MAP_XY_FACTOR || position.Y - outer > min_y + m_y * MAP_XY_FACTOR)) continue;
-            Vector3 diffuse, ambient, direction;
-            light->Get_Diffuse(&diffuse);
-            light->Get_Ambient(&ambient);
-            light->Get_Spot_Direction(direction);
+                (position.x + outer < min_x || position.y + outer < min_y ||
+                 position.x - outer > min_x + m_x * MAP_XY_FACTOR || position.y - outer > min_y + m_y * MAP_XY_FACTOR)) continue;
+			const Engine::Math::Vector3 diffuse = light->Get_Diffuse();
+			const Engine::Math::Vector3 ambient = light->Get_Ambient();
+			const Engine::Math::Vector3 direction = light->Get_Spot_Direction();
             Graphics::TerrainLight &output = parameters.lights[count++];
-            output.position_range = {position.X, position.Y, position.Z, static_cast<float>(outer)};
-            output.diffuse_inner = {diffuse.X, diffuse.Y, diffuse.Z, static_cast<float>(inner)};
-            output.ambient_kind = {ambient.X, ambient.Y, ambient.Z, light->Get_Type() == W3DLight::DIRECTIONAL ? 1.0f : 0.0f};
-            output.direction = {direction.X, direction.Y, direction.Z, 0};
+            output.position_range = {position.x, position.y, position.z, static_cast<float>(outer)};
+			output.diffuse_inner = {diffuse.x, diffuse.y, diffuse.z, static_cast<float>(inner)};
+			output.ambient_kind = {ambient.x, ambient.y, ambient.z, light->Get_Type() == W3DLight::DIRECTIONAL ? 1.0f : 0.0f};
+			output.direction = {direction.x, direction.y, direction.z, 0};
         }
         parameters.light_options[0] = static_cast<float>(count);
     }
@@ -464,7 +457,7 @@ void W3DTerrainGraphics::Render(W3DRenderContext &info)
     if (Graphics::Shared_Frame_Device() == nullptr) return;
     const bool rendered = Draw_Surface(info);
     if (!rendered) {
-        DEBUG_LOG(("Terrain graphics submission failed.\n"));
+        engine::debug::log_info("Terrain graphics submission failed.\n");
         return;
     }
     RTS3DScene *render_scene = static_cast<RTS3DScene *>(info.Camera.Get_User_Data());

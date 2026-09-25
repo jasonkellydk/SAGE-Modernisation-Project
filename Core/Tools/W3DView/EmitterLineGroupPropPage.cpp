@@ -19,6 +19,7 @@
 // EmitterLineGroupPropPage.cpp : implementation file
 //
 
+#include <algorithm>
 #include "StdAfx.h"
 #include "W3DView.h"
 #include "EmitterLineGroupPropPage.h"
@@ -96,8 +97,8 @@ EmitterLineGroupPropPageClass::Initialize ()
 		//
 		//	Determine what the min and max blur times are
 		//
-		m_MaxBlurTime = WWMath::Max(m_BlurTimes.Start,1.0f);
-		m_MinBlurTime = WWMath::Min(m_BlurTimes.Start,0.0f);
+		m_MaxBlurTime = std::max(m_BlurTimes.Start,1.0f);
+		m_MinBlurTime = std::min(m_BlurTimes.Start,0.0f);
 
 		for (UINT index = 0; index < m_BlurTimes.NumKeyFrames; index ++) {
 			if (m_BlurTimes.Values[index] > m_MaxBlurTime) {
@@ -283,8 +284,8 @@ BOOL EmitterLineGroupPropPageClass::OnNotify(WPARAM wParam, LPARAM lParam, LRESU
 					//
 					//	Determine if the user changed the 'max' or 'min' frame
 					//
-					float new_max = WWMath::Max(blur_time,1.0f);
-					float new_min = WWMath::Min(blur_time,0.0f);
+					float new_max = std::max(blur_time,1.0f);
+					float new_min = std::min(blur_time,0.0f);
 
 					int count = m_BlurTimeBar->Get_Point_Count ();
 					for (int index = 0; index < count; index ++) {

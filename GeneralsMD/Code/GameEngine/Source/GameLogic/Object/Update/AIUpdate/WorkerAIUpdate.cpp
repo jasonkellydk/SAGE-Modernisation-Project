@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // USER INCLUDES //////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/ActionManager.h"
 #include "Common/Team.h"
@@ -342,8 +343,7 @@ Object *WorkerAIUpdate::construct( const ThingTemplate *what,
 		return nullptr;
 
 	// sanity
-	DEBUG_ASSERTCRASH( getObject()->getControllingPlayer() == owningPlayer,
-										 ("Dozer::Construct - The controlling player of the Dozer is not the owning player passed in") );
+	engine::debug::invariant((getObject()->getControllingPlayer() == owningPlayer), "getObject()->getControllingPlayer() == owningPlayer", __FILE__, __LINE__, "Dozer::Construct - The controlling player of the Dozer is not the owning player passed in");
 
 	// if we're not rebuilding, we have a few checks to pass first for sanity
 	if( isRebuild == FALSE )
@@ -509,7 +509,7 @@ Bool WorkerAIUpdate::canAcceptNewRepair( Object *obj )
 			if( currentTowerInterface == nullptr || newTowerInterface == nullptr )
 			{
 
-				DEBUG_CRASH(( "Unable to find bridge tower interface on object" ));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Unable to find bridge tower interface on object" );
 				return FALSE;
 
 			}
@@ -608,7 +608,7 @@ void WorkerAIUpdate::newTask( DozerTask task, Object* target )
 {
 
 	// sanity
-	DEBUG_ASSERTCRASH( task >= 0 && task < DOZER_NUM_TASKS, ("Illegal dozer task '%d'", task) );
+	engine::debug::invariant((task >= 0 && task < DOZER_NUM_TASKS), "task >= 0 && task < DOZER_NUM_TASKS", __FILE__, __LINE__, "Illegal dozer task '%d'", task);
 
 	// sanity
 	if( target == nullptr )
@@ -724,7 +724,7 @@ Bool WorkerAIUpdate::isTaskPending( DozerTask task )
 {
 
 	// sanity
-	DEBUG_ASSERTCRASH( task >= 0 && task < DOZER_NUM_TASKS, ("Illegal dozer task '%d'", task) );
+	engine::debug::invariant((task >= 0 && task < DOZER_NUM_TASKS), "task >= 0 && task < DOZER_NUM_TASKS", __FILE__, __LINE__, "Illegal dozer task '%d'", task);
 
 	return m_task[ task ].m_targetObjectID != 0 ? TRUE : FALSE;
 
@@ -751,7 +751,7 @@ ObjectID WorkerAIUpdate::getTaskTarget( DozerTask task )
 {
 
 	// sanity
-	DEBUG_ASSERTCRASH( task >= 0 && task < DOZER_NUM_TASKS, ("Illegal dozer task '%d'", task) );
+	engine::debug::invariant((task >= 0 && task < DOZER_NUM_TASKS), "task >= 0 && task < DOZER_NUM_TASKS", __FILE__, __LINE__, "Illegal dozer task '%d'", task);
 
 	return m_task[ task ].m_targetObjectID;
 
@@ -764,7 +764,7 @@ void WorkerAIUpdate::internalTaskComplete( DozerTask task )
 {
 
 	// sanity
-	DEBUG_ASSERTCRASH( task >= 0 && task < DOZER_NUM_TASKS, ("Illegal dozer task '%d'", task) );
+	engine::debug::invariant((task >= 0 && task < DOZER_NUM_TASKS), "task >= 0 && task < DOZER_NUM_TASKS", __FILE__, __LINE__, "Illegal dozer task '%d'", task);
 
 	// call the single method that gets called for completing and canceling tasks
 	internalTaskCompleteOrCancelled( task );
@@ -790,7 +790,7 @@ void WorkerAIUpdate::internalCancelTask( DozerTask task )
 {
 
 	// sanity
-	DEBUG_ASSERTCRASH( task >= 0 && task < DOZER_NUM_TASKS, ("Illegal dozer task '%d'", task) );
+	engine::debug::invariant((task >= 0 && task < DOZER_NUM_TASKS), "task >= 0 && task < DOZER_NUM_TASKS", __FILE__, __LINE__, "Illegal dozer task '%d'", task);
 
 	if(task < 0 || task >= DOZER_NUM_TASKS)
 		return;  //DAMNIT!  You CANNOT assert and then not handle the damn error!  The.  Code.  Must.  Not.  Crash.
@@ -890,7 +890,7 @@ void WorkerAIUpdate::internalTaskCompleteOrCancelled( DozerTask task )
 		default:
 		{
 
-			DEBUG_CRASH(( "internalTaskCompleteOrCancelled: Unknown Dozer task '%d'", task ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "internalTaskCompleteOrCancelled: Unknown Dozer task '%d'", task );
 			break;
 
 		}
@@ -1464,7 +1464,7 @@ void WorkerAIUpdate::xfer( Xfer *xfer )
 	Int numTasks = DOZER_NUM_TASKS;
 	xfer->xferInt(&numTasks);
 	if (numTasks != DOZER_NUM_TASKS) {
-		DEBUG_CRASH(("DOZER_NUM_TASKS changed unexpectedly."));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "DOZER_NUM_TASKS changed unexpectedly.");
 		throw SC_INVALID_DATA;
 	}
 	Int i, j;
@@ -1484,7 +1484,7 @@ void WorkerAIUpdate::xfer( Xfer *xfer )
 	Int dockPoints = DOZER_NUM_DOCK_POINTS;
 	xfer->xferInt(&dockPoints);
 	if (dockPoints!=DOZER_NUM_DOCK_POINTS) {
-		DEBUG_CRASH(("DOZER_NUM_DOCK_POINTS changed unexpectedly."));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "DOZER_NUM_DOCK_POINTS changed unexpectedly.");
 		throw SC_INVALID_DATA;
 	}
 	for (i=0; i<DOZER_NUM_TASKS; i++) {

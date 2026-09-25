@@ -17,6 +17,7 @@
 */
 
 #include "PreRTS.h"
+import engine.debug;
 #include "GameNetwork/NetPacketStructs.h"
 
 #include "GameNetwork/GameMessageParser.h"
@@ -145,7 +146,7 @@ size_t SmallNetPacketCommandBase::readMessage(NetCommandRef *&ref, CommandBase &
 		}
 		case NetPacketFieldTypes::Repeat:
 		default:
-			DEBUG_CRASH(("SmallNetPacketCommandBase::readBytes: Unexpected field type '%c' encountered.", buf[size]));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "SmallNetPacketCommandBase::readBytes: Unexpected field type '%c' encountered.", buf[size]);
 			return size + 1;
 		}
 	}
@@ -242,12 +243,11 @@ NetCommandMsg *SmallNetPacketCommandBase::constructNetCommandMsg(const CommandBa
 		msg = newInstance(NetFrameResendRequestCommandMsg);
 		break;
 	default:
-		DEBUG_CRASH(("SmallNetPacketCommandBase::constructNetCommandMsg: Unexpected command type '%d' encountered.", commandType));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "SmallNetPacketCommandBase::constructNetCommandMsg: Unexpected command type '%d' encountered.", commandType);
 		return nullptr;
 	}
 
-	DEBUG_ASSERTCRASH(commandType == msg->getNetCommandType(),
-		("SmallNetPacketCommandBase::constructNetCommandMsg: Read command type '%d' does not match created command '%d'.", commandType, msg->getNetCommandType()));
+	engine::debug::invariant((commandType == msg->getNetCommandType()), "commandType == msg->getNetCommandType()", __FILE__, __LINE__, "SmallNetPacketCommandBase::constructNetCommandMsg: Read command type '%d' does not match created command '%d'.", commandType, msg->getNetCommandType());
 
 	msg->setNetCommandType(static_cast<NetCommandType>(base.commandType.commandType));
 	msg->setExecutionFrame(base.frame.frame);
@@ -983,7 +983,7 @@ size_t NetPacketGameCommandData::readMessage(NetCommandRef &ref, NetPacketBuf bu
 		{
 			if (parserArgType == nullptr)
 			{
-				DEBUG_CRASH(("parserArgType was null when it shouldn't have been."));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "parserArgType was null when it shouldn't have been.");
 				break;
 			}
 

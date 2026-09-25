@@ -26,7 +26,8 @@
 // The part of a Player's brain that holds the communal Passenger list of all tunnels.
 // Author: Graham Smallwood, March, 2002
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/GameState.h"
 #include "Common/GlobalData.h"
@@ -208,7 +209,7 @@ void TunnelTracker::removeFromContain( Object *obj, Bool exposeStealthUnits )
 
 		if (obj->isKindOf(KINDOF_HERO))
 		{
-			DEBUG_ASSERTCRASH(m_heroUnitsContained > 0, ("TunnelTracker::removeFromContain - Removing hero but hero count is %d", m_heroUnitsContained));
+			engine::debug::invariant((m_heroUnitsContained > 0), "m_heroUnitsContained > 0", __FILE__, __LINE__, "TunnelTracker::removeFromContain - Removing hero but hero count is %d", m_heroUnitsContained);
 			--m_heroUnitsContained;
 		}
 	}
@@ -236,7 +237,7 @@ void TunnelTracker::onTunnelDestroyed( const Object *deadTunnel )
 		std::list<ObjectID>::iterator it = std::find(m_tunnelIDs.begin(), m_tunnelIDs.end(), deadTunnel->getID());
 		if (it == m_tunnelIDs.end())
 		{
-			DEBUG_CRASH(("TunnelTracker::onTunnelDestroyed - Attempting to remove object '%s' that has never been tracked as a tunnel", deadTunnel->getName().str()));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "TunnelTracker::onTunnelDestroyed - Attempting to remove object '%s' that has never been tracked as a tunnel", deadTunnel->getName().str());
 			return;
 		}
 
@@ -354,7 +355,7 @@ void TunnelTracker::updateFullHealTime()
 			continue;
 
 		const ContainModuleInterface* contain = tunnelObj->getContain();
-		DEBUG_ASSERTCRASH(contain != nullptr, ("Contain module is null"));
+		engine::debug::invariant((contain != nullptr), "contain != nullptr", __FILE__, __LINE__, "Contain module is null");
 
 		if (!contain->isTunnelContain())
 			continue;
@@ -439,7 +440,7 @@ void TunnelTracker::loadPostProcess()
 	if( !m_containList.empty() )
 	{
 
-		DEBUG_CRASH(( "TunnelTracker::loadPostProcess - m_containList should be empty but is not" ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "TunnelTracker::loadPostProcess - m_containList should be empty but is not" );
 		throw SC_INVALID_DATA;
 
 	}
@@ -456,7 +457,7 @@ void TunnelTracker::loadPostProcess()
 		if( obj == nullptr )
 		{
 
-			DEBUG_CRASH(( "TunnelTracker::loadPostProcess - Unable to find object ID '%d'", *it ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "TunnelTracker::loadPostProcess - Unable to find object ID '%d'", *it );
 			throw SC_INVALID_DATA;
 
 		}

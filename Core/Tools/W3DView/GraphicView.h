@@ -18,6 +18,9 @@
 
 #pragma once
 
+import Engine.Core.Math.Sphere3;
+import Engine.Core.Math.Vector3;
+
 // GraphicView.h : header file
 //
 
@@ -141,7 +144,7 @@ protected:
         //
 		  //	Initial display methods
 		  //
-		  void			Reset_Camera_To_Display_Sphere (SphereClass &sphere);
+		  void			Reset_Camera_To_Display_Sphere (const Engine::Math::Sphere3 &sphere);
 		  void			Reset_Camera_To_Display_Object (RenderObjClass &physObject);
 		  void			Reset_Camera_To_Display_Emitter (ParticleEmitterClass &emitter);
 		  void			Load_Default_Dat ();
@@ -201,7 +204,7 @@ protected:
 			//	Misc
 			//
 			RenderObjClass *	Get_Light_Mesh () const					{ return m_pLightMesh.Peek(); }
-			Vector3 &			Get_Object_Center ()						{ return m_ObjectCenter; }
+			Engine::Math::Vector3 &Get_Object_Center () { return m_ObjectCenter; }
 
 			//
 			//	FOV methods
@@ -230,8 +233,8 @@ protected:
         RefCountPtr<CameraClass>	m_pCamera;
 		  RefCountPtr<RenderObjClass>	m_pLightMesh;
 		  bool					m_bLightMeshInScene;
-		  Vector3				m_ObjectCenter;
-		  SphereClass			m_ViewedSphere;
+		  Engine::Math::Vector3 m_ObjectCenter;
+		  Engine::Math::Sphere3	m_ViewedSphere;
 
         BOOL					m_bMouseDown;
         BOOL					m_bRMouseDown;

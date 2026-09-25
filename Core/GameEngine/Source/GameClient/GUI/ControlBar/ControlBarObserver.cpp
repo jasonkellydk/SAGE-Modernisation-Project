@@ -50,7 +50,8 @@
 //-----------------------------------------------------------------------------
 // USER INCLUDES //////////////////////////////////////////////////////////////
 //-----------------------------------------------------------------------------
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/GameUtility.h"
 #include "Common/NameKeyGenerator.h"
@@ -260,7 +261,7 @@ void ControlBar::populateObserverList()
 			{
 				if(p->isPlayerObserver())
 					continue;
-				DEBUG_ASSERTCRASH(currentButton < MAX_BUTTONS, ("ControlBar::populateObserverList trying to populate more buttons then we have"));
+				engine::debug::invariant((currentButton < MAX_BUTTONS), "currentButton < MAX_BUTTONS", __FILE__, __LINE__, "ControlBar::populateObserverList trying to populate more buttons then we have");
 				GadgetButtonSetData(buttonPlayer[currentButton], (void *)p);
 				GadgetButtonSetEnabledImage( buttonPlayer[currentButton], p->getPlayerTemplate()->getEnabledImage() );
 				//GadgetButtonSetHiliteImage( buttonPlayer[currentButton], p->getPlayerTemplate()->getHiliteImage() );
@@ -302,7 +303,7 @@ void ControlBar::populateObserverList()
 			Player *p = ThePlayerList->getNthPlayer(i);
 			if(p && !p->isPlayerObserver() && p->getPlayerType() == PLAYER_HUMAN)
 			{
-				DEBUG_ASSERTCRASH(currentButton < MAX_BUTTONS, ("ControlBar::populateObserverList trying to populate more buttons then we have"));
+				engine::debug::invariant((currentButton < MAX_BUTTONS), "currentButton < MAX_BUTTONS", __FILE__, __LINE__, "ControlBar::populateObserverList trying to populate more buttons then we have");
 				GadgetButtonSetData(buttonPlayer[currentButton], (void *)p);
 				GadgetButtonSetEnabledImage( buttonPlayer[currentButton], p->getPlayerTemplate()->getEnabledImage() );
 				//GadgetButtonSetHiliteImage( buttonPlayer[currentButton], p->getPlayerTemplate()->getHiliteImage() );

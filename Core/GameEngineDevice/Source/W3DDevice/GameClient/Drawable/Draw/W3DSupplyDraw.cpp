@@ -75,7 +75,7 @@ void W3DSupplyDraw::updateDrawModuleSupplyStatus( Int maxSupply, Int currentSupp
 	AsciiString boneName = getW3DSupplyDrawModuleData()->m_supplyBonePrefix;
 	if( m_totalBones == -1 )
 	{
-		m_totalBones = getDrawable()->getPristineBonePositions( boneName.str(), 1, nullptr, nullptr, INT_MAX );// The last arg is to guard the size of the arrays.  I am not passing any in, I am just counting bones.
+		m_totalBones = getDrawable()->getPristineBonePositions( boneName.str(), 1, nullptr, INT_MAX );// The last arg is to guard the size of the arrays.  I am not passing any in, I am just counting bones.
 		m_lastNumberShown = m_totalBones;
 	}
 

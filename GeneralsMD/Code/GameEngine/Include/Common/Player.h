@@ -44,8 +44,10 @@
 
 #pragma once
 
+
+#include <cassert>
 #include "Common/AcademyStats.h"
-#include "Common/Debug.h"
+
 #include "Common/Energy.h"
 #include "Common/GameType.h"
 #include "Common/Handicap.h"
@@ -532,8 +534,8 @@ public:
 	/**
 		return this player's "default" team.
 	*/
-	Team *getDefaultTeam() { DEBUG_ASSERTCRASH(m_defaultTeam!=nullptr,("default team is null")); return m_defaultTeam; }
-	const Team *getDefaultTeam() const { DEBUG_ASSERTCRASH(m_defaultTeam!=nullptr,("default team is null")); return m_defaultTeam; }
+	Team *getDefaultTeam() { assert((m_defaultTeam!=nullptr)); return m_defaultTeam; }
+	const Team *getDefaultTeam() const { assert((m_defaultTeam!=nullptr)); return m_defaultTeam; }
 
 	void setBuildList(BuildListInfo *pBuildList);			///< sets the build list.
 	BuildListInfo *getBuildList() { return m_pBuildList; }		///< returns the build list. (build list might be modified by the solo AI)

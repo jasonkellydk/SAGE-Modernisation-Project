@@ -24,13 +24,13 @@
 #include "Lib/BaseTypeCore.h"
 #include "NoxCompress.h"
 #include "CompLibHeader/lzhl.h"
+import engine.debug;
 
 
 #define BLOCKSIZE 500000
 #define NoxRead fread
 #define DbgMalloc malloc
 #define DbgFree free
-#define DEBUG_LOG(x)
 
 Bool DecompressFile		(char *infile, char *outfile)
 {
@@ -98,7 +98,7 @@ Bool DecompressFile		(char *infile, char *outfile)
 				break;
 		}
 
-		DEBUG_LOG(("Decompressed %s to %s, output size = %d", infile, outfile, rawSize));
+		engine::debug::log_info("Decompressed %s to %s, output size = %d", infile, outfile, rawSize);
 
 		Bool success = FALSE;
 		LZHLDestroyDecompressor(decompress);

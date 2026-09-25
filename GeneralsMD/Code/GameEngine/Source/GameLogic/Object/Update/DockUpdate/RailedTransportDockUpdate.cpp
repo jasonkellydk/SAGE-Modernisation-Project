@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/ThingTemplate.h"
 #include "Common/Xfer.h"
@@ -413,8 +414,8 @@ void RailedTransportDockUpdate::doPushOutDocking()
 				{
 					Coord3D finalPos;
 
-					draw->getPristineBonePositions( "DOCKWAITING07", 0, &finalPos, nullptr, 1 );
-					us->convertBonePosToWorldPos( &finalPos, nullptr, &finalPos, nullptr );
+					draw->getPristineBonePositions( "DOCKWAITING07", 0, &finalPos, 1 );
+					us->transformBoneToWorld( &finalPos, nullptr, &finalPos, nullptr );
 					unloaderAI->aiMoveToPosition( &finalPos, CMD_FROM_AI );
 
 				}
@@ -466,8 +467,8 @@ void RailedTransportDockUpdate::unloadNext()
 	// better be an open container
 	ContainModuleInterface *contain = us->getContain();
 	OpenContain *openContain = contain ? contain->asOpenContain() : nullptr;
-	DEBUG_ASSERTCRASH( openContain, ("Unloading next from railed transport, but '%s' has no open container",
-										 us->getTemplate()->getName().str()) );
+	engine::debug::invariant((openContain), "openContain", __FILE__, __LINE__, "Unloading next from railed transport, but '%s' has no open container",
+										 us->getTemplate()->getName().str());
 
 	// get the first contained object
 	Object *unloader = nullptr;

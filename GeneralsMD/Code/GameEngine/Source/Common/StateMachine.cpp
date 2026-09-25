@@ -26,7 +26,8 @@
 // Implementation of basic state machine
 // Author: Michael S. Booth, January 2002
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/Errors.h"
 #include "Common/StateMachine.h"
@@ -40,7 +41,7 @@
 
 //------------------------------------------------------------------------------ Performance Timers
 //#include "Common/PerfMetrics.h"
-//#include "Common/PerfTimer.h"
+//
 
 //static PerfTimer s_stateMachineTimer("StateMachine::update", false, PERFMETRICS_LOGIC_STARTFRAME, PERFMETRICS_LOGIC_STOPFRAME);
 //-------------------------------------------------------------------------------------------------
@@ -114,11 +115,11 @@ StateReturnType State::friend_checkForTransitions( StateReturnType status )
 	StIncrementer inc(checkfortransitionsnum);
 	if (checkfortransitionsnum >= 20)
 	{
-		DEBUG_CRASH(("checkfortransitionsnum is > 20"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "checkfortransitionsnum is > 20");
 		return STATE_FAILURE;
 	}
 
-	DEBUG_ASSERTCRASH(!IS_STATE_SLEEP(status), ("Please handle sleep states prior to this"));
+	engine::debug::invariant((!IS_STATE_SLEEP(status)), "!IS_STATE_SLEEP(status)", __FILE__, __LINE__, "Please handle sleep states prior to this");
 
 	// handle transitions
 	switch( status )
@@ -169,8 +170,8 @@ StateReturnType State::friend_checkForTransitions( StateReturnType status )
 	#ifdef STATE_MACHINE_DEBUG
 						if (getMachine()->getWantsDebugOutput())
 						{
-							DEBUG_LOG(("%d '%s' -- '%s' condition '%s' returned true!", TheGameLogic->getFrame(), getMachineOwner()->getTemplate()->getName().str(),
-											getMachine()->getName().str(), it->description ? it->description : "[no description]"));
+							engine::debug::log_info("%d '%s' -- '%s' condition '%s' returned true!", TheGameLogic->getFrame(), getMachineOwner()->getTemplate()->getName().str(),
+											getMachine()->getName().str(), it->description ? it->description : "[no description]");
 						}
 	#endif
 
@@ -207,11 +208,11 @@ StateReturnType State::friend_checkForSleepTransitions( StateReturnType status )
 	StIncrementer inc(checkfortransitionsnum);
 	if (checkfortransitionsnum >= 20)
 	{
-		DEBUG_CRASH(("checkforsleeptransitionsnum is > 20"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "checkforsleeptransitionsnum is > 20");
 		return STATE_FAILURE;
 	}
 
-	DEBUG_ASSERTCRASH(IS_STATE_SLEEP(status), ("Please only pass sleep states here"));
+	engine::debug::invariant((IS_STATE_SLEEP(status)), "IS_STATE_SLEEP(status)", __FILE__, __LINE__, "Please only pass sleep states here");
 
 	// check transition condition list
 	if (m_transitions.empty())
@@ -227,8 +228,8 @@ StateReturnType State::friend_checkForSleepTransitions( StateReturnType status )
 #ifdef STATE_MACHINE_DEBUG
 		if (getMachine()->getWantsDebugOutput())
 		{
-			DEBUG_LOG(("%d '%s' -- '%s' condition '%s' returned true!", TheGameLogic->getFrame(), getMachineOwner()->getTemplate()->getName().str(),
-							getMachine()->getName().str(), it->description ? it->description : "[no description]"));
+			engine::debug::log_info("%d '%s' -- '%s' condition '%s' returned true!", TheGameLogic->getFrame(), getMachineOwner()->getTemplate()->getName().str(),
+							getMachine()->getName().str(), it->description ? it->description : "[no description]");
 		}
 #endif
 
@@ -332,7 +333,7 @@ void StateMachine::internalClear()
 #ifdef STATE_MACHINE_DEBUG
 	if (getWantsDebugOutput())
 	{
-		DEBUG_LOG(("%d '%s'%x -- '%s' %x internalClear()", TheGameLogic->getFrame(), m_owner->getTemplate()->getName().str(), m_owner, m_name.str(), this));
+		engine::debug::log_info("%d '%s'%x -- '%s' %x internalClear()", TheGameLogic->getFrame(), m_owner->getTemplate()->getName().str(), m_owner, m_name.str(), this);
 	}
 #endif
 }
@@ -347,8 +348,8 @@ void StateMachine::clear()
 	if (m_locked)
 	{
 #ifdef STATE_MACHINE_DEBUG
-		if (m_currentState) DEBUG_LOG((" cur state '%s'", m_currentState->getName().str()));
-		DEBUG_LOG(("machine is locked (by %s), cannot be cleared (Please don't ignore; this generally indicates a potential logic flaw)",m_lockedby));
+		if (m_currentState) engine::debug::log_info(" cur state '%s'", m_currentState->getName().str());
+		engine::debug::log_info("machine is locked (by %s), cannot be cleared (Please don't ignore; this generally indicates a potential logic flaw)",m_lockedby);
 #endif
 		return;
 	}
@@ -372,15 +373,15 @@ StateReturnType StateMachine::resetToDefaultState()
 	if (m_locked)
 	{
 #ifdef STATE_MACHINE_DEBUG
-		if (m_currentState) DEBUG_LOG((" cur state '%s'", m_currentState->getName().str()));
-		DEBUG_LOG(("machine is locked (by %s), cannot be cleared (Please don't ignore; this generally indicates a potential logic flaw)",m_lockedby));
+		if (m_currentState) engine::debug::log_info(" cur state '%s'", m_currentState->getName().str());
+		engine::debug::log_info("machine is locked (by %s), cannot be cleared (Please don't ignore; this generally indicates a potential logic flaw)",m_lockedby);
 #endif
 		return STATE_FAILURE;
 	}
 
 	if (!m_defaultStateInited)
 	{
-		DEBUG_CRASH(("you may not call resetToDefaultState before initDefaultState"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "you may not call resetToDefaultState before initDefaultState");
 		return STATE_FAILURE;
 	}
 
@@ -399,7 +400,7 @@ StateReturnType StateMachine::resetToDefaultState()
 	// change to the default state
 	StateReturnType status = internalSetState( m_defaultStateID );
 
-	DEBUG_ASSERTCRASH( status != STATE_FAILURE, ( "StateMachine::resetToDefaultState() Error setting default state" ) );
+	engine::debug::invariant((status != STATE_FAILURE), "status != STATE_FAILURE", __FILE__, __LINE__,  "StateMachine::resetToDefaultState() Error setting default state" );
 
 	return status;
 
@@ -468,7 +469,7 @@ StateReturnType StateMachine::updateStateMachine()
 	}
 	else
 	{
-		DEBUG_CRASH(("State machine has no current state -- did you remember to call initDefaultState?"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "State machine has no current state -- did you remember to call initDefaultState?");
 		return STATE_FAILURE;
 	}
 }
@@ -483,7 +484,7 @@ StateReturnType StateMachine::updateStateMachine()
 void StateMachine::defineState( StateID id, State *state, StateID successID, StateID failureID, const StateConditionInfo* conditions )
 {
 #ifdef STATE_MACHINE_DEBUG
-	DEBUG_ASSERTCRASH(m_stateMap.find( id ) == m_stateMap.end(), ("duplicate state ID in statemachine %s",m_name.str()));
+	engine::debug::invariant((m_stateMap.find( id ) == m_stateMap.end()), "m_stateMap.find( id ) == m_stateMap.end()", __FILE__, __LINE__, "duplicate state ID in statemachine %s",m_name.str());
 #endif
 
 	// map the ID to the state
@@ -517,15 +518,15 @@ State *StateMachine::internalGetState( StateID id )
 
 	if (i == m_stateMap.end())
 	{
-		DEBUG_CRASH( ("StateMachine::internalGetState(): Invalid state for object %s using state %d", m_owner->getTemplate()->getName().str(), id) );
-		DEBUG_LOG(("Transitioning to state %d", (Int)id));
-		DEBUG_LOG(("Attempting to recover - locating default state..."));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "StateMachine::internalGetState(): Invalid state for object %s using state %d", m_owner->getTemplate()->getName().str(), id);
+		engine::debug::log_info("Transitioning to state %d", (Int)id);
+		engine::debug::log_info("Attempting to recover - locating default state...");
 		i = m_stateMap.find(m_defaultStateID);
 		if (i == m_stateMap.end()) {
-			DEBUG_LOG(("Failed to located default state.  Aborting..."));
+			engine::debug::log_info("Failed to located default state.  Aborting...");
 			throw ERROR_BAD_ARG;
 		} else {
-			DEBUG_LOG(("Located default state to recover."));
+			engine::debug::log_info("Located default state to recover.");
 		}
 	}
 
@@ -544,8 +545,8 @@ StateReturnType StateMachine::setState( StateID newStateID )
 	if (m_locked)
 	{
 #ifdef STATE_MACHINE_DEBUG
-		if (m_currentState) DEBUG_LOG((" cur state '%s'", m_currentState->getName().str()));
-		DEBUG_LOG(("machine is locked (by %s), cannot be cleared (Please don't ignore; this generally indicates a potential logic flaw)",m_lockedby));
+		if (m_currentState) engine::debug::log_info(" cur state '%s'", m_currentState->getName().str());
+		engine::debug::log_info("machine is locked (by %s), cannot be cleared (Please don't ignore; this generally indicates a potential logic flaw)",m_lockedby);
 #endif
 		return STATE_CONTINUE;
 	}
@@ -576,7 +577,7 @@ StateReturnType StateMachine::internalSetState( StateID newStateID )
 			newStateID = m_defaultStateID;
 			if (newStateID == INVALID_STATE_ID)
 			{
-				DEBUG_CRASH(("you may NEVER set the current state to an invalid state id."));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "you may NEVER set the current state to an invalid state id.");
 				return STATE_FAILURE;
 			}
 		}
@@ -590,16 +591,16 @@ StateReturnType StateMachine::internalSetState( StateID newStateID )
 			if (m_currentState) {
 				curState = m_currentState->getID();
 			}
-			DEBUG_LOG_RAW(("%d '%s'%x -- '%s' %x exit ", TheGameLogic->getFrame(), m_owner->getTemplate()->getName().str(), m_owner, m_name.str(), this));
+			engine::debug::log_info("%d '%s'%x -- '%s' %x exit ", TheGameLogic->getFrame(), m_owner->getTemplate()->getName().str(), m_owner, m_name.str(), this);
 			if (m_currentState) {
-				DEBUG_LOG_RAW((" '%s' ", m_currentState->getName().str()));
+				engine::debug::log_info(" '%s' ", m_currentState->getName().str());
 			} else {
-				DEBUG_LOG_RAW((" INVALID_STATE_ID "));
+				engine::debug::log_info(" INVALID_STATE_ID ");
 			}
 			if (newState) {
-				DEBUG_LOG(("enter '%s'", newState->getName().str()));
+				engine::debug::log_info("enter '%s'", newState->getName().str());
 			} else {
-				DEBUG_LOG(("to INVALID_STATE"));
+				engine::debug::log_info("to INVALID_STATE");
 			}
 		}
 #endif
@@ -663,9 +664,8 @@ StateReturnType StateMachine::internalSetState( StateID newStateID )
  */
 StateReturnType StateMachine::initDefaultState()
 {
-#ifdef DEBUG_LOGGING
 #ifdef STATE_MACHINE_DEBUG
-#define REALLY_VERBOSE_LOG(x) /* DEBUG_LOG_RAW(x) */
+#define REALLY_VERBOSE_LOG(x) /* engine::debug::log_info(x) */
 	// Run through all the transitions and make sure there aren't any transitions to undefined states. jba. [8/18/2003]
 	std::map<StateID, State *>::iterator i;
 	REALLY_VERBOSE_LOG(("SM_BEGIN\n"));
@@ -699,9 +699,9 @@ StateReturnType StateMachine::initDefaultState()
 				i = m_stateMap.find( curID );
 
 				if (i == m_stateMap.end()) {
-					DEBUG_LOG(("\nState %s(%d) : Transition %d not found", state->getName().str(), id, curID));
-					DEBUG_LOG(("This MUST BE FIXED!!!jba"));
-					DEBUG_CRASH(("Invalid transition."));
+					engine::debug::log_info("\nState %s(%d) : Transition %d not found", state->getName().str(), id, curID);
+					engine::debug::log_info("This MUST BE FIXED!!!jba");
+					engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Invalid transition.");
 				} else {
 					State *st = (*i).second;
 					if (st->getName().isNotEmpty()) {
@@ -716,11 +716,10 @@ StateReturnType StateMachine::initDefaultState()
 	}
 	REALLY_VERBOSE_LOG(("SM_END\n\n"));
 #endif
-#endif
-	DEBUG_ASSERTCRASH(!m_locked, ("Machine is locked here, but probably should not be"));
+	engine::debug::invariant((!m_locked), "!m_locked", __FILE__, __LINE__, "Machine is locked here, but probably should not be");
 	if (m_defaultStateInited)
 	{
-		DEBUG_CRASH(("you may not call initDefaultState twice for the same StateMachine"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "you may not call initDefaultState twice for the same StateMachine");
 		return STATE_FAILURE;
 	}
 	else
@@ -757,7 +756,7 @@ void StateMachine::halt()
 #ifdef STATE_MACHINE_DEBUG
 	if (getWantsDebugOutput())
 	{
-		DEBUG_LOG(("%d '%s' -- '%s' %x halt()", TheGameLogic->getFrame(), m_owner->getTemplate()->getName().str(), m_name.str(), this));
+		engine::debug::log_info("%d '%s' -- '%s' %x halt()", TheGameLogic->getFrame(), m_owner->getTemplate()->getName().str(), m_name.str(), this);
 	}
 #endif
 }
@@ -850,7 +849,7 @@ void StateMachine::xfer( Xfer *xfer )
 		Int saveCount = count;
 		xfer->xferInt(&saveCount);
 		if (saveCount!=count) {
-			DEBUG_CRASH(("State count mismatch - %d expected, %d read", count, saveCount));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "State count mismatch - %d expected, %d read", count, saveCount);
 			throw SC_INVALID_DATA;
 		}
 		for( i = m_stateMap.begin(); i != m_stateMap.end(); ++i ) {
@@ -860,13 +859,13 @@ void StateMachine::xfer( Xfer *xfer )
 				StateID id = state->getID();
 				xfer->xferUnsignedInt(&id);
 				if (id!=state->getID()) {
-					DEBUG_CRASH(("State ID mismatch - %d expected, %d read", state->getID(), id));
+					engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "State ID mismatch - %d expected, %d read", state->getID(), id);
 					throw SC_INVALID_DATA;
 				}
 			}
 			else
 			{
-				DEBUG_CRASH(("state was null on xfer, trying to heal..."));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "state was null on xfer, trying to heal...");
 				// Hmm... too late to find out why we are getting nullptr in our state, but if we let it go, we will Throw in xferSnapshot.
 				state = internalGetState(m_defaultStateID);
 				StateID id = state->getID();
@@ -879,7 +878,7 @@ void StateMachine::xfer( Xfer *xfer )
 	}	else {
 		if( m_currentState == nullptr )
 		{
-			DEBUG_ASSERTCRASH(m_currentState != nullptr, ("currentState was null on xfer, trying to heal..."));
+			engine::debug::invariant((m_currentState != nullptr), "m_currentState != nullptr", __FILE__, __LINE__, "currentState was null on xfer, trying to heal...");
 			// Hmm... too late to find out why we are getting nullptr in our state, but if we let it go, we will Throw in xferSnapshot.
 			m_currentState = internalGetState(m_defaultStateID);
 		}

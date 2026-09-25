@@ -37,6 +37,7 @@
 #include "GameLogic/Object.h"
 #include "GameLogic/Module/ContainModule.h"
 #include "W3DDevice/GameClient/Module/W3DDependencyModelDraw.h"
+import engine.debug;
 
 
 
@@ -80,12 +81,12 @@ W3DDependencyModelDraw::~W3DDependencyModelDraw()
 
 //-------------------------------------------------------------------------------------------------
 // All this does is stop the call path if we haven't been cleared to draw yet
-void W3DDependencyModelDraw::doDrawModule(const Matrix3D* transformMtx)
+void W3DDependencyModelDraw::doDrawModule(const Engine::Math::AffineTransform3* transform)
 {
 	if( m_dependencyCleared )
 	{
 		// We've been cleared by the thing we were waiting to draw, so we can draw.
-		W3DModelDraw::doDrawModule( transformMtx );
+		W3DModelDraw::doDrawModule( transform );
 		m_dependencyCleared = FALSE;
 
 
@@ -118,9 +119,9 @@ void W3DDependencyModelDraw::notifyDrawModuleDependencyCleared()
 }
 
 // ------------------------------------------------------------------------------------------------
-void W3DDependencyModelDraw::adjustTransformMtx(Matrix3D& mtx) const
+void W3DDependencyModelDraw::adjustTransform(Engine::Math::AffineTransform3& transform) const
 {
-	W3DModelDraw::adjustTransformMtx(mtx);
+	W3DModelDraw::adjustTransform(transform);
 
 	// We have an additional adjustment to make, we want to use a bone in our container if there is one
 	const Object *me = getDrawable()->getObject();
@@ -137,15 +138,18 @@ void W3DDependencyModelDraw::adjustTransformMtx(Matrix3D& mtx) const
 		const Drawable *theirDrawable = me->getContainedBy()->getDrawable();
 		if( theirDrawable )
 		{
-			Matrix3D theirBoneMtx;
-			if( theirDrawable->getCurrentWorldspaceClientBonePositions( md->m_attachToDrawableBoneInContainer.str(), theirBoneMtx ) )
+			Engine::Math::AffineTransform3 theirBoneTransform;
+			if( theirDrawable->getCurrentWorldBoneTransform(
+				md->m_attachToDrawableBoneInContainer.str(), theirBoneTransform ) )
 			{
-				mtx = theirBoneMtx;
+				for (unsigned row = 0; row < 3; ++row)
+					for (unsigned column = 0; column < 4; ++column)
+					transform.elements[row * 4 + column] = theirBoneTransform.elements[row * 4 + column];
 			}
 			else
 			{
-        mtx = *theirDrawable->getTransformMatrix();//TransformMatrix();
-				DEBUG_LOG(("m_attachToDrawableBoneInContainer %s not found",getW3DDependencyModelDrawModuleData()->m_attachToDrawableBoneInContainer.str()));
+				transform = theirDrawable->worldTransform();
+				engine::debug::log_info("m_attachToDrawableBoneInContainer %s not found",getW3DDependencyModelDrawModuleData()->m_attachToDrawableBoneInContainer.str());
 			}
 		}
 	}
@@ -193,5 +197,3 @@ void W3DDependencyModelDraw::loadPostProcess()
 	W3DModelDraw::loadPostProcess();
 
 }
-
-

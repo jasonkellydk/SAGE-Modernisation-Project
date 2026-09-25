@@ -24,7 +24,8 @@
 
 // JetAIUpdate.cpp //////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #define DEFINE_LOCOMOTORSET_NAMES
 
@@ -40,6 +41,7 @@
 #include "GameLogic/Module/BodyModule.h"
 #include "GameLogic/Module/CountermeasuresBehavior.h"
 #include "GameLogic/Module/JetAIUpdate.h"
+import Engine.Core.Math.AffineTransform3;
 #include "GameLogic/Module/ParkingPlaceBehavior.h"
 #include "GameLogic/Module/PhysicsUpdate.h"
 #include "GameLogic/Object.h"
@@ -243,7 +245,7 @@ public:
 		// gotta reserve a space in order to reserve a runway
 		if (!pp->reserveSpace(jet->getID(), jetAI->friend_getParkingOffset(), nullptr))
 		{
-			DEBUG_ASSERTCRASH(m_landing, ("hmm, this should never happen for taking-off things"));
+			engine::debug::invariant((m_landing), "m_landing", __FILE__, __LINE__, "hmm, this should never happen for taking-off things");
 			return STATE_FAILURE;
 		}
 
@@ -275,7 +277,7 @@ public:
 				TheAI->pathfinder()->setDebugPath(movePath);
 
 				jetAI->friend_setPath( movePath );
-				DEBUG_ASSERTCRASH(jetAI->getCurLocomotor(), ("no loco"));
+				engine::debug::invariant((jetAI->getCurLocomotor()), "jetAI->getCurLocomotor()", __FILE__, __LINE__, "no loco");
 				jetAI->getCurLocomotor()->setUsePreciseZPos(true);
 				jetAI->getCurLocomotor()->setUltraAccurate(true);
 				jetAI->getCurLocomotor()->setAllowInvalidPosition(true);
@@ -504,7 +506,7 @@ public:
 
 		jetAI->friend_setAllowAirLoco(false);
 		jetAI->chooseLocomotorSet(LOCOMOTORSET_TAXIING);
-		DEBUG_ASSERTCRASH(jetAI->getCurLocomotor(), ("no loco"));
+		engine::debug::invariant((jetAI->getCurLocomotor()), "jetAI->getCurLocomotor()", __FILE__, __LINE__, "no loco");
 
 		ParkingPlaceBehaviorInterface* pp = getPP(jet->getProducerID());
 		if (pp == nullptr)
@@ -603,7 +605,7 @@ public:
 					const std::vector<Coord3D> *pCreationLocations = pp->getCreationLocations( jet->getID() );
 					if( !pCreationLocations )
 					{
-						DEBUG_CRASH( ("No creation locations specified for runway for JetAIBehavior -- taxiing from hanger (Kris).") );
+						engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "No creation locations specified for runway for JetAIBehavior -- taxiing from hanger (Kris).");
 						return STATE_FAILURE;
 					}
 					std::vector<Coord3D>::const_iterator it;
@@ -634,7 +636,7 @@ public:
 		setAdjustsDestination(false);	// precision is necessary
 
 		jetAI->friend_setPath( movePath );
-		DEBUG_ASSERTCRASH(jetAI->getCurLocomotor(), ("no loco"));
+		engine::debug::invariant((jetAI->getCurLocomotor()), "jetAI->getCurLocomotor()", __FILE__, __LINE__, "no loco");
 		jetAI->getCurLocomotor()->setUsePreciseZPos(true);
 		jetAI->getCurLocomotor()->setUltraAccurate(true);
 		jetAI->getCurLocomotor()->setAllowInvalidPosition(true);
@@ -731,7 +733,7 @@ public:
 		jetAI->friend_setAllowAirLoco(true);
 		jetAI->chooseLocomotorSet(LOCOMOTORSET_NORMAL);
 		Locomotor* loco = jetAI->getCurLocomotor();
-		DEBUG_ASSERTCRASH(loco, ("no loco"));
+		engine::debug::invariant((loco), "loco", __FILE__, __LINE__, "no loco");
 		loco->setMaxLift(BIGNUM);
 		BodyDamageType bdt = jet->getBodyModule()->getDamageState();
 		m_maxLift = loco->getMaxLift(bdt);
@@ -769,7 +771,7 @@ public:
 		{
 			if (!pp->reserveRunway(jet->getID(), m_landing))
 			{
-				DEBUG_CRASH(("we should never get to this state unless we have a runway available"));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "we should never get to this state unless we have a runway available");
 				return STATE_FAILURE;
 			}
 		}
@@ -998,7 +1000,7 @@ public:
 		jetAI->chooseLocomotorSet(LOCOMOTORSET_NORMAL);
 
 		Locomotor* loco = jetAI->getCurLocomotor();
-		DEBUG_ASSERTCRASH(loco, ("no loco"));
+		engine::debug::invariant((loco), "loco", __FILE__, __LINE__, "no loco");
 		loco->setUsePreciseZPos(true);
 		loco->setUltraAccurate(true);
 		jetAI->ignoreObstacleID(jet->getProducerID());
@@ -1448,8 +1450,8 @@ public:
 			m_afterburners = true;
 		}
 
-		DEBUG_ASSERTCRASH(m_whenTakeoff != 0, ("hmm"));
-		DEBUG_ASSERTCRASH(m_whenTransfer != 0, ("hmm"));
+		engine::debug::invariant((m_whenTakeoff != 0), "m_whenTakeoff != 0", __FILE__, __LINE__, "hmm");
+		engine::debug::invariant((m_whenTransfer != 0), "m_whenTransfer != 0", __FILE__, __LINE__, "hmm");
 
 			// once we start the final wait, release the runways for guys behind us, so they can start taxiing
 		ParkingPlaceBehaviorInterface* pp = getPP(jet->getProducerID());
@@ -2069,7 +2071,7 @@ UpdateSleepTime JetAIUpdate::update()
 		else if (m_returnToBaseFrame != 0 && now >= m_returnToBaseFrame && getFlag(ALLOW_AIR_LOCO))
 		{
 			m_returnToBaseFrame = 0;
-			DEBUG_ASSERTCRASH(isOutOfSpecialReloadAmmo() == false, ("Hmm, this seems unlikely -- isOutOfSpecialReloadAmmo()==false"));
+			engine::debug::invariant((isOutOfSpecialReloadAmmo() == false), "isOutOfSpecialReloadAmmo() == false", __FILE__, __LINE__, "Hmm, this seems unlikely -- isOutOfSpecialReloadAmmo()==false");
 			setFlag(USE_SPECIAL_RETURN_LOCO, false);
 			setLastCommandSource( CMD_FROM_AI );
 			getStateMachine()->setState(RETURNING_FOR_LANDING);
@@ -2115,18 +2117,18 @@ UpdateSleepTime JetAIUpdate::update()
 			Real ht = jet->isAboveTerrain() ? jet->getHeightAboveTerrain() : 0;
 			if (ht < minHeight)
 			{
-				Matrix3D tmp(1);
-				tmp.Set_Z_Translation(minHeight - ht);
-				draw->setInstanceMatrix(&tmp);
+				Engine::Math::AffineTransform3 transform =
+					Engine::Math::AffineTransform3::From_Translation({0.0f, 0.0f, minHeight - ht});
+				draw->setInstanceTransform(&transform);
 			}
 			else
 			{
-				draw->setInstanceMatrix(nullptr);
+				draw->setInstanceTransform(nullptr);
 			}
 		}
 		else
 		{
-			draw->setInstanceMatrix(nullptr);
+			draw->setInstanceTransform(nullptr);
 		}
 	}
 
@@ -2498,7 +2500,7 @@ void JetAIUpdate::doLandingCommand(Object *airfield, CommandSourceType cmdSource
 			}
 
 			getObject()->setProducer(airfield);
-			DEBUG_ASSERTCRASH(isOutOfSpecialReloadAmmo() == false, ("Hmm, this seems unlikely -- isOutOfSpecialReloadAmmo()==false"));
+			engine::debug::invariant((isOutOfSpecialReloadAmmo() == false), "isOutOfSpecialReloadAmmo() == false", __FILE__, __LINE__, "Hmm, this seems unlikely -- isOutOfSpecialReloadAmmo()==false");
 			setFlag(USE_SPECIAL_RETURN_LOCO, false);
 			setFlag(ALLOW_INTERRUPT_AND_RESUME_OF_CUR_STATE_FOR_RELOAD, false);
 			setLastCommandSource( cmdSource );

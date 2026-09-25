@@ -44,7 +44,8 @@
 ///////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/GameEngine.h"
 #include "Common/NameKeyGenerator.h"
@@ -78,7 +79,7 @@ static GameWindow *parent = nullptr;
 
 static void closeDownloadWindow()
 {
-	DEBUG_ASSERTCRASH(parent, ("No Parent"));
+	engine::debug::invariant((parent), "parent", __FILE__, __LINE__, "No Parent");
 	if (!parent)
 		return;
 
@@ -207,7 +208,7 @@ HRESULT DownloadManagerMunkee::OnProgressUpdate( Int bytesread, Int totalsize, I
 		UnicodeString timeString;
 		if (timeleft)
 		{
-			DEBUG_ASSERTCRASH(timeleft > 0, ("Time left is negative!"));
+			engine::debug::invariant((timeleft > 0), "timeleft > 0", __FILE__, __LINE__, "Time left is negative!");
 			timeleft = max(1, timeleft);
 			Int takenHour, takenMin, takenSec;
 			takenHour = timeleft / 60 / 60;
@@ -261,7 +262,7 @@ void DownloadMenuInit( WindowLayout *layout, void *userData )
 	staticTextStatus = TheWindowManager->winGetWindowFromId( parent, staticTextStatusID );
 	progressBarMunkee = TheWindowManager->winGetWindowFromId( parent, progressBarMunkeeID );
 
-	DEBUG_ASSERTCRASH(!TheDownloadManager, ("Download manager already exists"));
+	engine::debug::invariant((!TheDownloadManager), "!TheDownloadManager", __FILE__, __LINE__, "Download manager already exists");
 
 	delete TheDownloadManager;
 	TheDownloadManager = NEW DownloadManagerMunkee;
@@ -273,7 +274,7 @@ void DownloadMenuInit( WindowLayout *layout, void *userData )
 //-------------------------------------------------------------------------------------------------
 void DownloadMenuShutdown( WindowLayout *layout, void *userData )
 {
-	DEBUG_ASSERTCRASH(TheDownloadManager, ("No download manager"));
+	engine::debug::invariant((TheDownloadManager), "TheDownloadManager", __FILE__, __LINE__, "No download manager");
 
 	delete TheDownloadManager;
 	TheDownloadManager = nullptr;
@@ -303,7 +304,7 @@ void DownloadMenuUpdate( WindowLayout *layout, void *userData )
 		UnicodeString timeString;
 		if (timeLeft)
 		{
-			DEBUG_ASSERTCRASH(timeLeft > 0, ("Time left is negative!"));
+			engine::debug::invariant((timeLeft > 0), "timeLeft > 0", __FILE__, __LINE__, "Time left is negative!");
 			timeLeft = max(1, timeLeft);
 			Int takenHour, takenMin, takenSec;
 			takenHour = timeLeft / 60 / 60;

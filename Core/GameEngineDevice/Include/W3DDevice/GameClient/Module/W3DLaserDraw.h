@@ -76,12 +76,12 @@ public:
 	W3DLaserDraw( Thing *thing, const ModuleData* moduleData );
 	// virtual destructor prototype provided by memory pool declaration
 
-	virtual void doDrawModule(const Matrix3D* transformMtx) override;
+	virtual void doDrawModule(const Engine::Math::AffineTransform3* transform) override;
 	virtual void releaseShadows() override {};	///< we don't care about preserving temporary shadows.
 	virtual void allocateShadows() override {};	///< we don't care about preserving temporary shadows.
 	virtual void setShadowsEnabled(Bool enable) override { }
 	virtual void setFullyObscuredByShroud(Bool fullyObscured) override { };
-	virtual void reactToTransformChange(const Matrix3D* oldMtx, const Coord3D* oldPos, Real oldAngle) override { }
+	virtual void reactToTransformChange(const Coord3D* oldPos, Real oldAngle) override { }
 	virtual void reactToGeometryChange() override { }
 	virtual Bool isLaser() const override { return true; }
 	virtual Real getLaserTemplateWidth() const override;

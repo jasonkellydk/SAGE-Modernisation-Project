@@ -1,8 +1,6 @@
 #define BOOST_TEST_MODULE EngineJobsTests
 #include <boost/test/included/unit_test.hpp>
 
-#include <SDL3/SDL.h>
-
 #include <atomic>
 #include <barrier>
 #include <chrono>
@@ -151,10 +149,10 @@ BOOST_AUTO_TEST_CASE(submit_does_not_block_the_calling_thread)
 	BOOST_TEST(context.finished.load(std::memory_order_acquire));
 }
 
-BOOST_AUTO_TEST_CASE(default_workers_use_half_of_sdl_logical_cores_and_idle_cleanly)
+BOOST_AUTO_TEST_CASE(default_workers_use_half_of_logical_cores_and_idle_cleanly)
 {
 	engine::jobs::JobSystem jobs;
-	const auto logicalCores=SDL_GetNumLogicalCPUCores();
+	const auto logicalCores=std::thread::hardware_concurrency();
 	const auto expected=logicalCores>1 ? static_cast<std::size_t>(logicalCores/2) : 1U;
 	BOOST_TEST(jobs.WorkerCount() == expected);
 

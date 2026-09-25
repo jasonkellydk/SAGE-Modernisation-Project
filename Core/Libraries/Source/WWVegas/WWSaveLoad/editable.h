@@ -43,12 +43,14 @@
 
 #pragma once
 
+
+#include <cassert>
 #include "WWLib/always.h"
 #include "persist.h"
 #include "parameter.h"
 #include "simpleparameter.h"
 #include "parameterlist.h"
-#include "WWDebug/wwdebug.h"
+
 
 //////////////////////////////////////////////////////////////////////////////////
 //
@@ -86,7 +88,7 @@ EditableClass::Get_Parameter_Count () const
 inline ParameterClass *
 EditableClass::Lock_Parameter (int i)
 {
-	WWASSERT (0);
+	assert((0));
 	return nullptr;
 }
 
@@ -275,11 +277,6 @@ EditableClass::Unlock_Parameter (int i)
 		param->Set_Selected_Class_ID (&class_id);											\
 		plist_##_class.Add (param); }
 
-	#define ZONE_PARAM(_class, data, name) {											\
-		ZoneParameterClass *param = W3DNEW ZoneParameterClass (&data);				\
-		param->Set_Name (name);																\
-		GENERIC_EDITABLE_PARAM(_class, param); }
-
 	#define PARAM_SEPARATOR(_class, name) {											\
 		SeparatorParameterClass *param = W3DNEW SeparatorParameterClass;			\
 		param->Set_Name (name);																\
@@ -317,7 +314,6 @@ EditableClass::Unlock_Parameter (int i)
 	#define NAMED_TEXTURE_FILENAME_PARAM(_class, data, name, desc, extension)
 	#define DEFIDLIST_PARAM(_class, data, root_class_id)
 	#define CLASSID_DEFIDLIST_PARAM(_class, data, root_class_id, class_id, name)
-	#define ZONE_PARAM(_class, data, name)
 	#define PARAM_SEPARATOR(_class, name)
 	#define GENERIC_DEFID_PARAM(_class, data, root_class_id)
 

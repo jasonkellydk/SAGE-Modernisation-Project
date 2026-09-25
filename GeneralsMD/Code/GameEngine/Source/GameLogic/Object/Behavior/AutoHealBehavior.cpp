@@ -29,7 +29,8 @@
 
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 #include "Common/Thing.h"
 #include "Common/ThingTemplate.h"
 #include "Common/INI.h"
@@ -175,7 +176,7 @@ UpdateSleepTime AutoHealBehavior::update()
 	// do not heal if our status is effectively dead.  There ain't no coming back, man!
 	if (!isUpgradeActive() || obj->isEffectivelyDead())
 	{
-		DEBUG_ASSERTCRASH(isUpgradeActive(), ("hmm, this should not be possible"));
+		engine::debug::invariant((isUpgradeActive()), "isUpgradeActive()", __FILE__, __LINE__, "hmm, this should not be possible");
 		return UPDATE_SLEEP_FOREVER;
 	}
 
@@ -183,7 +184,7 @@ UpdateSleepTime AutoHealBehavior::update()
 	// systems are not created before ParticleManager has xfer-loaded.
 	createEmitters();
 
-//DEBUG_LOG(("doing auto heal %d",TheGameLogic->getFrame()));
+//engine::debug::log_info("doing auto heal %d",TheGameLogic->getFrame());
 
 	if( d->m_affectsWholePlayer )
 	{

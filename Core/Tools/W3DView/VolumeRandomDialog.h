@@ -21,8 +21,7 @@
 // VolumeRandomDialog.h : header file
 //
 
-// Forward declarations
-class Vector3Randomizer;
+import Engine.Core.Math.RandomVector3Generator;
 
 /////////////////////////////////////////////////////////////////////////////
 //
@@ -33,7 +32,7 @@ class VolumeRandomDialogClass : public CDialog
 {
 // Construction
 public:
-	VolumeRandomDialogClass (Vector3Randomizer *randomizer, CWnd *pParent = nullptr);   // standard constructor
+	VolumeRandomDialogClass (Engine::Math::RandomVector3Generator *randomizer, CWnd *pParent = nullptr);   // standard constructor
 
 // Dialog Data
 	//{{AFX_DATA(VolumeRandomDialogClass)
@@ -73,7 +72,7 @@ protected:
 		//////////////////////////////////////////////////////////////////////////////
 		//	Public methods
 		//////////////////////////////////////////////////////////////////////////////
-		Vector3Randomizer *	Get_Randomizer () const { return m_Randomizer; }
+		Engine::Math::RandomVector3Generator *	Get_Randomizer () const { return m_Randomizer; }
 
 	protected:
 
@@ -87,7 +86,7 @@ protected:
 		//////////////////////////////////////////////////////////////////////////////
 		//	Private member data
 		//////////////////////////////////////////////////////////////////////////////
-		Vector3Randomizer *	m_Randomizer;
+		Engine::Math::RandomVector3Generator *	m_Randomizer;
 };
 
 //{{AFX_INSERT_LOCATION}}

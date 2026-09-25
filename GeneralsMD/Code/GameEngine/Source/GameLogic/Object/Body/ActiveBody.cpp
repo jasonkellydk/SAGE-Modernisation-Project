@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 #include "Common/BitFlagsIO.h"
 #include "Common/CRCDebug.h"
 #include "Common/DamageFX.h"
@@ -262,7 +263,7 @@ void ActiveBody::setDamageState( BodyDamageType newState )
 void ActiveBody::validateArmorAndDamageFX() const
 {
 	const ArmorTemplateSet* set = getObject()->getTemplate()->findArmorTemplateSet(m_curArmorSetFlags);
-	DEBUG_ASSERTCRASH(set, ("findArmorSet should never return null"));
+	engine::debug::invariant((set), "set", __FILE__, __LINE__, "findArmorSet should never return null");
 	if (set && set != m_curArmorSet)
 	{
 		if (set->getArmorTemplate())
@@ -1055,8 +1056,7 @@ void ActiveBody::createParticleSystems( const AsciiString &boneBaseName,
 		}
 
 		// sanity
-		DEBUG_ASSERTCRASH( j != numBones,
-											 ("ActiveBody::createParticleSystems, Unable to select particle system index") );
+		engine::debug::invariant((j != numBones), "j != numBones", __FILE__, __LINE__, "ActiveBody::createParticleSystems, Unable to select particle system index");
 
 		// create particle system here
 		ParticleSystem *particleSystem = TheParticleSystemManager->createParticleSystem( systemTemplate );
@@ -1634,7 +1634,7 @@ void ActiveBody::xfer( Xfer *xfer )
 		if( m_particleSystems != nullptr )
 		{
 
-			DEBUG_CRASH(( "ActiveBody::xfer - m_particleSystems should be empty, but is not" ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "ActiveBody::xfer - m_particleSystems should be empty, but is not" );
 			throw SC_INVALID_DATA;
 
 		}

@@ -44,6 +44,8 @@
 
 #pragma once
 
+
+#include <cassert>
 #include "Common/SubsystemInterface.h"
 #include "Common/GameCommon.h"
 #include "Common/NameKeyGenerator.h"
@@ -108,7 +110,7 @@ public:
 		all other players (this is so that everything can be associated with a nonnull
 		Player, to simplify the universe). This will never return null.
 	*/
-	Player *getNeutralPlayer() { DEBUG_ASSERTCRASH(m_players[0] != nullptr, ("null neutral")); return m_players[0]; }
+	Player *getNeutralPlayer() { assert((m_players[0] != nullptr)); return m_players[0]; }
 
 	/**
 		return the Player with the given internal name, or null if none found.
@@ -119,7 +121,7 @@ public:
 		Return the "local" player (ie, the human playing the game).
 		This will never return null.
 	*/
-	inline Player *getLocalPlayer() { DEBUG_ASSERTCRASH(m_local != nullptr, ("null m_local")); return m_local; }
+	inline Player *getLocalPlayer() { assert((m_local != nullptr)); return m_local; }
 
 	/**
 		Set the local player. You cannot set it to null; if you pass null, you'll

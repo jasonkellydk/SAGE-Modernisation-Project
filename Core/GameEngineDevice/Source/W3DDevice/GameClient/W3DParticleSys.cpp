@@ -17,13 +17,8 @@
 #include <limits>
 #include <string_view>
 #include <vector>
-
-#if defined(RTS_PROFILE_TRACY)
-#include <tracy/Tracy.hpp>
-#define GENERALS_GRAPHICS_PROFILE_SCOPE(name) ZoneScopedN(name)
-#else
-#define GENERALS_GRAPHICS_PROFILE_SCOPE(name) ((void)0)
-#endif
+import engine.profiling;
+import Engine.Core.Math.AxisAlignedBox3;
 
 import Graphics.Scene.Particles.Renderer;
 import Assets.Runtime;
@@ -38,7 +33,7 @@ namespace
 
 bool Build_Graphics_Particle_Texture(const char *texture_name, Graphics::Texture &description, std::vector<std::byte> &pixels)
 {
-    GENERALS_GRAPHICS_PROFILE_SCOPE("Build_Graphics_Particle_Texture");
+    engine::profiling::Scope particle_profile_33("Build_Graphics_Particle_Texture");
     if (texture_name==nullptr || *texture_name=='\0') return false;
     const auto frame=TheGameLogic?TheGameLogic->getFrame():0;
     auto& capture=navigation::diagnostics::frameCapture();
@@ -116,7 +111,7 @@ void DoParticles(W3DRenderContext &rinfo)
 
 void W3DParticleSystemManager::doParticles(W3DRenderContext &rinfo)
 {
-	GENERALS_GRAPHICS_PROFILE_SCOPE("W3DParticleSystemManager::doParticles");
+	engine::profiling::Scope particle_profile_111("W3DParticleSystemManager::doParticles");
 	if (!m_readyToRender)
 		return;
 
@@ -125,33 +120,28 @@ void W3DParticleSystemManager::doParticles(W3DRenderContext &rinfo)
 	m_fieldParticleCount = 0;
 	m_terrainBoundsValid = false;
 	m_weatherParticlesReady = false;
-	Matrix3D legacy_view;
-	Matrix4x4 legacy_projection;
-	rinfo.Camera.Get_View_Matrix(&legacy_view);
-	rinfo.Camera.Get_Backend_Projection_Matrix(&legacy_projection);
+	const auto camera_matrices = rinfo.Camera.Build_Render_Matrices();
 	Graphics::Matrix4x4 graphics_view;
 	Graphics::Matrix4x4 graphics_projection;
-	for (std::size_t row = 0; row < 4; ++row) {
-		for (std::size_t column = 0; column < 4; ++column) {
-			graphics_view.values[row * 4 + column] = (row < 3 ? legacy_view[row][column] : (column == 3 ? 1.0f : 0.0f));
-			graphics_projection.values[row * 4 + column] = legacy_projection[row][column];
-		}
-	}
-	const Vector3 camera_position = rinfo.Camera.Get_Position();
+	graphics_view.values = camera_matrices.view;
+	graphics_projection.values = camera_matrices.projection;
+	const Engine::Math::Vector3 camera_position = rinfo.Camera.Get_Position();
 	Set_Graphics_Particle_View(Graphics::View(
 		graphics_view,
 		graphics_projection,
-		{camera_position.X, camera_position.Y, camera_position.Z},
+		{camera_position.x, camera_position.y, camera_position.z},
 		m_graphicsView.viewport));
 	if (TheTerrainRenderObject != nullptr) {
-		AABoxClass bounds;
+		Engine::Math::AxisAlignedBox3 bounds;
 		TheTerrainRenderObject->getMaximumVisibleBox(rinfo.Camera.Get_Frustum(), &bounds, TRUE);
-		m_terrainCenterX = bounds.Center.X;
-		m_terrainCenterY = bounds.Center.Y;
-		m_terrainCenterZ = bounds.Center.Z;
-		m_terrainExtentX = bounds.Extent.X;
-		m_terrainExtentY = bounds.Extent.Y;
-		m_terrainExtentZ = bounds.Extent.Z;
+		const auto center = bounds.Center();
+		const auto extent = bounds.Extent();
+		m_terrainCenterX = center.x;
+		m_terrainCenterY = center.y;
+		m_terrainCenterZ = center.z;
+		m_terrainExtentX = extent.x;
+		m_terrainExtentY = extent.y;
+		m_terrainExtentZ = extent.z;
 		m_terrainBoundsValid = true;
 	}
 	Prepare_Graphics_Particles();
@@ -230,7 +220,7 @@ bool W3DParticleSystemManager::Render_Graphics_Particles(Graphics::CommandList &
 
 void W3DParticleSystemManager::Prepare_Graphics_Particles()
 {
-	GENERALS_GRAPHICS_PROFILE_SCOPE("W3DParticleSystemManager::Prepare_Graphics_Particles");
+	engine::profiling::Scope particle_profile_225("W3DParticleSystemManager::Prepare_Graphics_Particles");
 	Graphics::ParticleRenderer &renderer = Graphics::GetParticleRenderer();
 	m_graphicsParticlesPrepared = renderer.Is_Initialized();
 	if (!m_graphicsParticlesPrepared)
@@ -240,12 +230,12 @@ void W3DParticleSystemManager::Prepare_Graphics_Particles()
 	if (m_graphicsSyncStamp == 0)
 		m_graphicsSyncStamp = 1;
 	{
-		GENERALS_GRAPHICS_PROFILE_SCOPE("W3DParticleSystemManager::Reset_Graphics_Particles");
+		engine::profiling::Scope particle_profile_235("W3DParticleSystemManager::Reset_Graphics_Particles");
 		renderer.Reset_Particles();
 	}
 	m_graphicsSmudgeCount = 0;
 	{
-		GENERALS_GRAPHICS_PROFILE_SCOPE("W3DParticleSystemManager::Prepare_Weather_Snow");
+		engine::profiling::Scope particle_profile_240("W3DParticleSystemManager::Prepare_Weather_Snow");
 		m_weatherParticlesReady = Prepare_Weather_Snow();
 	}
 	if (TheSmudgeManager != nullptr && TheGlobalData != nullptr && TheGlobalData->m_useHeatEffects) {
@@ -254,7 +244,7 @@ void W3DParticleSystemManager::Prepare_Graphics_Particles()
 
 	ParticleSystemManager::ParticleSystemList &systems = TheParticleSystemManager->getAllParticleSystems();
 	for (ParticleSystem *system : systems) {
-		GENERALS_GRAPHICS_PROFILE_SCOPE("W3DParticleSystemManager::Prepare_Graphics_System");
+		engine::profiling::Scope particle_profile_249("W3DParticleSystemManager::Prepare_Graphics_System");
 		if (system == nullptr || system->isUsingDrawables())
 			continue;
 		if (system->isUsingSmudge()) {
@@ -311,7 +301,7 @@ void W3DParticleSystemManager::Prepare_Graphics_Particles()
 		std::size_t source_count = 0;
 		std::size_t count = 0;
 		{
-			GENERALS_GRAPHICS_PROFILE_SCOPE("W3DParticleSystemManager::Prepare_Graphics_Particle_Data");
+			engine::profiling::Scope particle_profile_306("W3DParticleSystemManager::Prepare_Graphics_Particle_Data");
 			for (Particle *particle = system->getFirstParticle(); particle != nullptr && source_count < MAX_PARTICLES_PER_SYSTEM; particle = particle->m_systemNext) {
 			const Coord3D *position = particle->getPosition();
 			const RGBColor *color = particle->getColor();
@@ -379,7 +369,7 @@ void W3DParticleSystemManager::Prepare_Graphics_Particles()
 			m_onScreenParticleCount += static_cast<Int>(source_count);
 	}
 	{
-		GENERALS_GRAPHICS_PROFILE_SCOPE("W3DParticleSystemManager::Prepare_Graphics_Smudges");
+		engine::profiling::Scope particle_profile_374("W3DParticleSystemManager::Prepare_Graphics_Smudges");
 		Prepare_Graphics_Smudges();
 	}
 
@@ -454,7 +444,7 @@ bool W3DParticleSystemManager::Is_Graphics_Particle_System(const ParticleSystem 
 
 W3DParticleSystemManager::GraphicsEmitterBinding* W3DParticleSystemManager::Ensure_Graphics_Emitter(ParticleSystem &system)
 {
-	GENERALS_GRAPHICS_PROFILE_SCOPE("W3DParticleSystemManager::Ensure_Graphics_Emitter");
+	engine::profiling::Scope particle_profile_449("W3DParticleSystemManager::Ensure_Graphics_Emitter");
     if (const auto existing=m_graphicsEmitterSlots.find(&system);existing!=m_graphicsEmitterSlots.end())
         return &m_graphicsEmitters[existing->second];
     auto timing=navigation::diagnostics::frameCapture().measure("Graphics.Particles.NewEmitter",TheGameLogic?TheGameLogic->getFrame():0);
@@ -481,7 +471,7 @@ W3DParticleSystemManager::GraphicsEmitterBinding* W3DParticleSystemManager::Ensu
 
 Graphics::MaterialHandle W3DParticleSystemManager::Ensure_Graphics_Material(const char *texture_name)
 {
-	GENERALS_GRAPHICS_PROFILE_SCOPE("W3DParticleSystemManager::Ensure_Graphics_Material");
+	engine::profiling::Scope particle_profile_476("W3DParticleSystemManager::Ensure_Graphics_Material");
 	if (texture_name == nullptr || *texture_name == '\0')
 		return Graphics::GetParticleRenderer().Default_Material();
 
@@ -549,7 +539,7 @@ Graphics::ParticleEmitterFlags W3DParticleSystemManager::Graphics_Particle_Flags
 
 W3DParticleSystemManager::GraphicsStreakBinding *W3DParticleSystemManager::Find_Graphics_Streak(ParticleSystem *system) noexcept
 {
-	GENERALS_GRAPHICS_PROFILE_SCOPE("W3DParticleSystemManager::Find_Graphics_Streak");
+	engine::profiling::Scope particle_profile_544("W3DParticleSystemManager::Find_Graphics_Streak");
 	for (GraphicsStreakBinding &binding : m_graphicsStreaks)
 		if (binding.legacy_system == system)
 			return &binding;
@@ -558,7 +548,7 @@ W3DParticleSystemManager::GraphicsStreakBinding *W3DParticleSystemManager::Find_
 
 W3DParticleSystemManager::GraphicsStreakBinding *W3DParticleSystemManager::Ensure_Graphics_Streak(ParticleSystem &system)
 {
-	GENERALS_GRAPHICS_PROFILE_SCOPE("W3DParticleSystemManager::Ensure_Graphics_Streak");
+	engine::profiling::Scope particle_profile_553("W3DParticleSystemManager::Ensure_Graphics_Streak");
 	if (GraphicsStreakBinding *existing = Find_Graphics_Streak(&system))
 		return existing;
     auto timing=navigation::diagnostics::frameCapture().measure("Graphics.Particles.NewStreak",TheGameLogic?TheGameLogic->getFrame():0);
@@ -628,7 +618,7 @@ Graphics::BeamFlags W3DParticleSystemManager::Graphics_Streak_Flags(const Partic
 
 void W3DParticleSystemManager::Update_Graphics_Streak(ParticleSystem &system, GraphicsStreakBinding &binding) noexcept
 {
-	GENERALS_GRAPHICS_PROFILE_SCOPE("W3DParticleSystemManager::Update_Graphics_Streak");
+	engine::profiling::Scope particle_profile_623("W3DParticleSystemManager::Update_Graphics_Streak");
 	Graphics::BeamRenderer &renderer = Graphics::GetBeamRenderer();
 	std::array<Particle *, MAX_PARTICLES_PER_SYSTEM> points{};
 	std::size_t point_count = 0;

@@ -20,7 +20,8 @@
 // Generals GameSpy Peer (chat) definitions
 // Author: Matthew D. Campbell, June 2002
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 #include <set>
 
 #include "Common/GameState.h"
@@ -124,12 +125,12 @@ void GameSpyInfo::setLocalIPs(UnsignedInt internalIP, UnsignedInt externalIP)
 void GameSpyInfo::readAdditionalDisconnects()
 {
 	m_additionalDisconnects = GetAdditionalDisconnectsFromUserFile(m_localProfileID);
-	DEBUG_LOG(("GameSpyInfo::readAdditionalDisconnects() found %d disconnects.", m_additionalDisconnects));
+	engine::debug::log_info("GameSpyInfo::readAdditionalDisconnects() found %d disconnects.", m_additionalDisconnects);
 }
 
 Int GameSpyInfo::getAdditionalDisconnects()
 {
-	DEBUG_LOG(("GameSpyInfo::getAdditionalDisconnects() would have returned %d.  Returning 0 instead.", m_additionalDisconnects));
+	engine::debug::log_info("GameSpyInfo::getAdditionalDisconnects() would have returned %d.  Returning 0 instead.", m_additionalDisconnects);
 	return 0;
 }
 
@@ -335,14 +336,14 @@ void GameSpyInfo::addGroupRoom( GameSpyGroupRoom room )
 	}
 	else
 	{
-		DEBUG_LOG(("Adding group room %d (%s)", room.m_groupID, room.m_name.str()));
+		engine::debug::log_info("Adding group room %d (%s)", room.m_groupID, room.m_name.str());
 		AsciiString groupLabel;
 		groupLabel.format("GUI:%s", room.m_name.str());
 		room.m_translatedName = TheGameText->fetch(groupLabel);
 		m_groupRooms[room.m_groupID] = room;
 		if ( stricmp("quickmatch", room.m_name.str()) == 0 )
 		{
-			DEBUG_LOG(("Group room %d (%s) is the QuickMatch room", room.m_groupID, room.m_name.str()));
+			engine::debug::log_info("Group room %d (%s) is the QuickMatch room", room.m_groupID, room.m_name.str());
 			TheGameSpyConfig->setQMChannel(room.m_groupID);
 		}
 	}
@@ -373,7 +374,7 @@ void GameSpyInfo::joinBestGroupRoom()
 {
 	if (m_currentGroupRoomID)
 	{
-		DEBUG_LOG(("Bailing from GameSpyInfo::joinBestGroupRoom() - we were already in a room"));
+		engine::debug::log_info("Bailing from GameSpyInfo::joinBestGroupRoom() - we were already in a room");
 		m_currentGroupRoomID = 0;
 		return;
 	}
@@ -386,8 +387,8 @@ void GameSpyInfo::joinBestGroupRoom()
 		while (iter != m_groupRooms.end())
 		{
 			GameSpyGroupRoom room = iter->second;
-			DEBUG_LOG(("Group room %d: %s (%d, %d, %d, %d)", room.m_groupID, room.m_name.str(), room.m_numWaiting, room.m_maxWaiting,
-				room.m_numGames, room.m_numPlaying));
+			engine::debug::log_info("Group room %d: %s (%d, %d, %d, %d)", room.m_groupID, room.m_name.str(), room.m_numWaiting, room.m_maxWaiting,
+				room.m_numGames, room.m_numPlaying);
 
 			if (TheGameSpyConfig->getQMChannel() != room.m_groupID && minPlayers > 25 && room.m_numWaiting < minPlayers)
 			{
@@ -561,7 +562,7 @@ void GameSpyInfo::markAsStagingRoomJoiner( Int game )
 		AsciiString options = GameInfoToAsciiString(info);
 		MAYBE_UNUSED Bool res = ParseAsciiStringToGameInfo(&m_localStagingRoom, options);
 		(void)res;
-		DEBUG_ASSERTCRASH(res, ("Could not parse game info \"%s\"", options.str()));
+		engine::debug::invariant((res), "res", __FILE__, __LINE__, "Could not parse game info \"%s\"", options.str());
 		m_localStagingRoom.setInGame();
 		m_localStagingRoom.setLocalName(m_localName);
 		m_localStagingRoom.setExeCRC(info->getExeCRC());
@@ -569,7 +570,7 @@ void GameSpyInfo::markAsStagingRoomJoiner( Int game )
 		m_localStagingRoom.setAllowObservers(info->getAllowObservers());
 		m_localStagingRoom.setHasPassword(info->getHasPassword());
 		m_localStagingRoom.setGameName(info->getGameName());
-		DEBUG_LOG(("Joining game: host is %ls", m_localStagingRoom.getConstSlot(0)->getName().str()));
+		engine::debug::log_info("Joining game: host is %ls", m_localStagingRoom.getConstSlot(0)->getName().str());
 	}
 }
 
@@ -847,11 +848,11 @@ void GameSpyInfo::updateAdditionalGameSpyDisconnections(Int count)
 
 		Int ptIdx;
 		const PlayerTemplate *myTemplate = player->getPlayerTemplate();
-		DEBUG_LOG(("myTemplate = %X(%s)", myTemplate, myTemplate->getName().str()));
+		engine::debug::log_info("myTemplate = %X(%s)", myTemplate, myTemplate->getName().str());
 		for (ptIdx = 0; ptIdx < ThePlayerTemplateStore->getPlayerTemplateCount(); ++ptIdx)
 		{
 			const PlayerTemplate *nthTemplate = ThePlayerTemplateStore->getNthPlayerTemplate(ptIdx);
-			DEBUG_LOG(("nthTemplate = %X(%s)", nthTemplate, nthTemplate->getName().str()));
+			engine::debug::log_info("nthTemplate = %X(%s)", nthTemplate, nthTemplate->getName().str());
 			if (nthTemplate == myTemplate)
 			{
 					break;
@@ -876,7 +877,7 @@ void GameSpyInfo::updateAdditionalGameSpyDisconnections(Int count)
 		Int disCons=stats.discons[ptIdx];
 		disCons += count;
 		if (disCons < 0)
-		{	DEBUG_LOG(("updateAdditionalGameSpyDisconnections() - disconnection count below zero"));
+		{	engine::debug::log_info("updateAdditionalGameSpyDisconnections() - disconnection count below zero");
 			return;	//something is wrong here
 		}
 		stats.discons[ptIdx] = disCons;	//add an additional disconnection to their stats.

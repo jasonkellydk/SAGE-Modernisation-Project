@@ -469,7 +469,7 @@ bool W3DAssetCatalog::Has_Loaded_File_Prototype(std::string_view filename) const
 
 void W3DAssetCatalog::Write_Report() const noexcept
 {
-#ifdef WWDEBUG
+#ifdef RTS_DEBUG
 	if (!m_report.Reporting_Enabled())
 		return;
 

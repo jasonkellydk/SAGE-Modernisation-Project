@@ -167,6 +167,7 @@ target_link_libraries(core_max2w3d PRIVATE
     maxsdk
     winmm
     core_pluglib
+    engine_core_math
 )
 
 set_target_properties(core_max2w3d PROPERTIES LINK_FLAGS "/DEF:max2w3d.def")

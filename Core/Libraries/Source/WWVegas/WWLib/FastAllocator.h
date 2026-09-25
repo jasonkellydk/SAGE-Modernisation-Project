@@ -29,6 +29,8 @@
 
 #pragma once
 
+
+#include <cassert>
 //#define MEMORY_OVERWRITE_TEST
 
 
@@ -37,7 +39,7 @@
 // Include files
 //
 #include "always.h"
-#include "WWDebug/wwdebug.h"
+
 #include "mutex.h"
 #include <malloc.h>
 #include <stddef.h> //size_t & ptrdiff_t definition
@@ -472,7 +474,7 @@ WWINLINE void FastAllocatorGeneral::Free(void* pAlloc)
       unsigned int* n = ((unsigned int*)pAlloc)-1; //Subtract four bytes and the count is stored there.
 
 #ifdef MEMORY_OVERWRITE_TEST
-		WWASSERT(*((unsigned int*)((char*)n+*n)-1)==0xabbac0de);
+		assert((*((unsigned int*)((char*)n+*n)-1)==0xabbac0de));
 #endif
 
 		unsigned size=*n;

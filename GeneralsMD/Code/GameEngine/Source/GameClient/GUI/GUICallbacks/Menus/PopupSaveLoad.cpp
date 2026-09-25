@@ -45,7 +45,8 @@
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/GameEngine.h"
 #include "Common/GameState.h"
@@ -103,7 +104,7 @@ static void updateMenuActions()
 
 	// for loading only, disable the save button, otherwise enable it
 	GameWindow *saveButton = TheWindowManager->winGetWindowFromId( nullptr, buttonSaveKey );
-	DEBUG_ASSERTCRASH( saveButton, ("SaveLoadMenuInit: Unable to find save button") );
+	engine::debug::invariant((saveButton), "saveButton", __FILE__, __LINE__, "SaveLoadMenuInit: Unable to find save button");
 	if( currentLayoutType == SLLT_LOAD_ONLY )
 		saveButton->winEnable( FALSE );
 	else
@@ -173,7 +174,7 @@ void SaveLoadMenuInit( WindowLayout *layout, void *userData )
 	editDesc = TheWindowManager->winGetWindowFromId( parent, NAMEKEY( "PopupSaveLoad.wnd:EntryDesc" ) );
 	// get the listbox that will have the save games in it
 	listboxGames = TheWindowManager->winGetWindowFromId( nullptr, listboxGamesKey );
-	DEBUG_ASSERTCRASH( listboxGames != nullptr, ("SaveLoadMenuInit - Unable to find games listbox") );
+	engine::debug::invariant((listboxGames != nullptr), "listboxGames != nullptr", __FILE__, __LINE__, "SaveLoadMenuInit - Unable to find games listbox");
 
 	// populate the listbox with the save games on disk
 	TheGameState->populateSaveGameListbox( listboxGames, currentLayoutType );
@@ -236,7 +237,7 @@ void SaveLoadMenuFullScreenInit( WindowLayout *layout, void *userData )
 	deleteConfirm = TheWindowManager->winGetWindowFromId( parent, NAMEKEY( "SaveLoad.wnd:DeleteConfirmParent" ) );
 	// get the listbox that will have the save games in it
 	listboxGames = TheWindowManager->winGetWindowFromId( nullptr, listboxGamesKey );
-	DEBUG_ASSERTCRASH( listboxGames != nullptr, ("SaveLoadMenuInit - Unable to find games listbox") );
+	engine::debug::invariant((listboxGames != nullptr), "listboxGames != nullptr", __FILE__, __LINE__, "SaveLoadMenuInit - Unable to find games listbox");
 
 	// populate the listbox with the save games on disk
 	TheGameState->populateSaveGameListbox( listboxGames, currentLayoutType );
@@ -368,7 +369,7 @@ static AvailableGameInfo *getSelectedSaveFileInfo( GameWindow *window )
 
 	// get the listbox
 	//GameWindow *listboxGames = TheWindowManager->winGetWindowFromId( window, listboxGamesKey );
-	DEBUG_ASSERTCRASH( listboxGames != nullptr, ("SaveLoadMenuInit - Unable to find games listbox") );
+	engine::debug::invariant((listboxGames != nullptr), "listboxGames != nullptr", __FILE__, __LINE__, "SaveLoadMenuInit - Unable to find games listbox");
 
 	// which item is selected
 	Int selected;
@@ -389,14 +390,14 @@ static void doLoadGame()
 
 	// get listbox of games
 	//GameWindow *listboxGames = TheWindowManager->winGetWindowFromId( parent, NAMEKEY( "PopupSaveLoad.wnd:ListboxGames" ) );
-	DEBUG_ASSERTCRASH( listboxGames, ("doLoadGame: Unable to find game listbox") );
+	engine::debug::invariant((listboxGames), "listboxGames", __FILE__, __LINE__, "doLoadGame: Unable to find game listbox");
 
 	AsciiString filename;
 	SaveCode result = SC_INVALID;
 	{
 		// get selected game info
 		AvailableGameInfo *selectedGameInfo = getSelectedSaveFileInfo( listboxGames );
-		DEBUG_ASSERTCRASH( selectedGameInfo, ("doLoadGame: No selected game info found") );
+		engine::debug::invariant((selectedGameInfo), "selectedGameInfo", __FILE__, __LINE__, "doLoadGame: No selected game info found");
 
 		// when loading a game we also close the quit/esc menu for the user when in-game
 		if( TheShell->isShellActive() == FALSE )
@@ -569,7 +570,7 @@ WindowMsgHandledType SaveLoadMenuSystem( GameWindow *window, UnsignedInt msg,
 			{
 				GameWindow *control = (GameWindow *)mData1;
 				GameWindow *listboxGames = TheWindowManager->winGetWindowFromId( window, listboxGamesKey );
-				DEBUG_ASSERTCRASH( listboxGames != nullptr, ("SaveLoadMenuInit - Unable to find games listbox") );
+				engine::debug::invariant((listboxGames != nullptr), "listboxGames != nullptr", __FILE__, __LINE__, "SaveLoadMenuInit - Unable to find games listbox");
 
 				if (listboxGames != nullptr) {
 					int rowSelected = mData2;
@@ -589,7 +590,7 @@ WindowMsgHandledType SaveLoadMenuSystem( GameWindow *window, UnsignedInt msg,
 			GameWindow *control = (GameWindow *)mData1;
 
 			GameWindow *listboxGames = TheWindowManager->winGetWindowFromId( window, listboxGamesKey );
-			DEBUG_ASSERTCRASH( listboxGames != nullptr, ("SaveLoadMenuInit - Unable to find games listbox") );
+			engine::debug::invariant((listboxGames != nullptr), "listboxGames != nullptr", __FILE__, __LINE__, "SaveLoadMenuInit - Unable to find games listbox");
 
 			//
 			// handle games listbox, when certain items are selected in the listbox only some
@@ -616,10 +617,9 @@ WindowMsgHandledType SaveLoadMenuSystem( GameWindow *window, UnsignedInt msg,
       {
 
 				// sanity
-				DEBUG_ASSERTCRASH( currentLayoutType == SLLT_SAVE_AND_LOAD ||
-													 currentLayoutType == SLLT_SAVE_ONLY,
-													 ("SaveLoadMenuSystem - layout type '%d' does not allow saving",
-													 currentLayoutType) );
+				engine::debug::invariant((currentLayoutType == SLLT_SAVE_AND_LOAD ||
+								 currentLayoutType == SLLT_SAVE_ONLY), "save layout type", __FILE__, __LINE__, "SaveLoadMenuSystem - layout type '%d' does not allow saving",
+													 currentLayoutType);
 
 				// get save file info
 				AvailableGameInfo *selectedGameInfo = getSelectedSaveFileInfo( window );
@@ -767,7 +767,7 @@ WindowMsgHandledType SaveLoadMenuSystem( GameWindow *window, UnsignedInt msg,
 					// get the item data of the selection
 					AvailableGameInfo *selectedGameInfo;
 					selectedGameInfo = (AvailableGameInfo *)GadgetListBoxGetItemData( listboxGames, selected );
-					DEBUG_ASSERTCRASH( selectedGameInfo, ("SaveLoadMenuSystem: Internal error, listbox entry to overwrite game has no item data set into listbox element") );
+					engine::debug::invariant((selectedGameInfo), "selectedGameInfo", __FILE__, __LINE__, "SaveLoadMenuSystem: Internal error, listbox entry to overwrite game has no item data set into listbox element");
 
 					// enable the listbox of games
 					//GameWindow *listboxGames = TheWindowManager->winGetWindowFromId( parent, NAMEKEY( "PopupSaveLoad.wnd:ListboxGames" ) );

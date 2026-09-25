@@ -362,7 +362,7 @@ UpdateSleepTime StealthDetectorUpdate::update()
 		  Drawable *myDraw = self->getDrawable();
 		  Coord3D bonePosition = {-1.66f,5.5f,15};
 		  if (myDraw)
-			  myDraw->getPristineBonePositions( data->m_IRParticleSysBone.str(), 0, &bonePosition, nullptr, 1);
+			  myDraw->getPristineBonePositions( data->m_IRParticleSysBone.str(), 0, &bonePosition, 1);
 
 		  const ParticleSystemTemplate *pingTemplate;
 		  if ( foundSomeone )

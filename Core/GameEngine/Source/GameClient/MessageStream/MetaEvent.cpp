@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/GameUtility.h"
 #include "Common/INI.h"
@@ -348,9 +349,6 @@ static const LookupListRec GameMessageMetaTypeNames[] =
 #if defined(RTS_DEBUG)
 	{ "DEMO_TOGGLE_AUDIODEBUG",										GameMessage::MSG_META_DEMO_TOGGLE_AUDIODEBUG },
 #endif//defined(RTS_DEBUG)
-#ifdef DUMP_PERF_STATS
-	{ "DEMO_PERFORM_STATISTICAL_DUMP",						GameMessage::MSG_META_DEMO_PERFORM_STATISTICAL_DUMP },
-#endif//DUMP_PERF_STATS
 
 
 	{ nullptr, 0	}
@@ -399,7 +397,7 @@ static const char * findGameMessageNameByType(GameMessage::Type type)
 		if (metaNames->value == (Int)type)
 			return metaNames->name;
 
-	DEBUG_CRASH(("MetaTypeName %d not found -- did you remember to add it to GameMessageMetaTypeNames[] ?", (Int)type));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "MetaTypeName %d not found -- did you remember to add it to GameMessageMetaTypeNames[] ?", (Int)type);
 	return "???";
 }
 
@@ -629,7 +627,7 @@ void MetaEventTranslator::onKeyPressed(GameMessageDisposition &disp, Int systemK
 			{
 				// if it's an autorepeat of a "known" key, don't generate the meta-event,
 				// but DO eat the keystroke so no one else can mess with it
-				//DEBUG_LOG(("Frame %d: MetaEventTranslator::translateGameMessage() auto-repeat: %s", TheGameLogic->getFrame(), findGameMessageNameByType(map->m_meta)));
+				//engine::debug::log_info("Frame %d: MetaEventTranslator::translateGameMessage() auto-repeat: %s", TheGameLogic->getFrame(), findGameMessageNameByType(map->m_meta));
 			}
 			else
 			{
@@ -656,7 +654,7 @@ void MetaEventTranslator::onKeyPressed(GameMessageDisposition &disp, Int systemK
 				}
 
 				/*GameMessage *metaMsg =*/ TheMessageStream->appendMessage(map->m_meta);
-				//DEBUG_LOG(("Frame %d: MetaEventTranslator::translateGameMessage() normal: %s", TheGameLogic->getFrame(), findGameMessageNameByType(map->m_meta)));
+				//engine::debug::log_info("Frame %d: MetaEventTranslator::translateGameMessage() normal: %s", TheGameLogic->getFrame(), findGameMessageNameByType(map->m_meta));
 			}
 
 			disp = DESTROY_MESSAGE;
@@ -672,7 +670,7 @@ void MetaEventTranslator::onKeyPressed(GameMessageDisposition &disp, Int systemK
 		uKey.set(&Wkey);
 		AsciiString aKey;
 		aKey.translate(uKey);
-		DEBUG_LOG(("^%s ", aKey.str()));
+		engine::debug::log_info("^%s ", aKey.str());
 #endif
 
 		if (keyModState != NONE)
@@ -685,7 +683,7 @@ void MetaEventTranslator::onKeyPressed(GameMessageDisposition &disp, Int systemK
 	{
 		if (keyModState != NONE)
 		{
-			DEBUG_ASSERTCRASH(keyType != MK_NONE, ("Key is expected to be not MK_NONE"));
+			engine::debug::invariant((keyType != MK_NONE), "keyType != MK_NONE", __FILE__, __LINE__, "Key is expected to be not MK_NONE");
 
 			// Forget that this key and mod state are pressed.
 			m_keyDownInfos[keyType].clearKeyModState(keyModState);
@@ -763,7 +761,7 @@ GameMessage::Type MetaMap::findGameMessageMetaType(const char* name)
 		if (stricmp(metaNames->name, name) == 0)
 			return (GameMessage::Type)metaNames->value;
 
-	DEBUG_CRASH(("MetaTypeName %s not found -- did you remember to add it to GameMessageMetaTypeNames[] ?", name));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "MetaTypeName %s not found -- did you remember to add it to GameMessageMetaTypeNames[] ?", name);
 	return GameMessage::MSG_INVALID;
 }
 
@@ -1031,10 +1029,9 @@ void MetaMap::verifyMetaMap()
 #ifdef DEBUG_CRASHING
 	for (const MetaMapRec *map = getFirstMetaMapRec(); map; map = map->m_next)
 	{
-		DEBUG_ASSERTCRASH(
-			map->m_meta > GameMessage::MSG_BEGIN_META_MESSAGES &&
-			map->m_meta < GameMessage::MSG_END_META_MESSAGES,
-			("hmm, expected only meta-msgs here"));
+		engine::debug::invariant((map->m_meta > GameMessage::MSG_BEGIN_META_MESSAGES &&
+			map->m_meta < GameMessage::MSG_END_META_MESSAGES), "map->m_meta > GameMessage::MSG_BEGIN_META_MESSAGES &&
+			map->m_meta < GameMessage::MSG_END_META_MESSAGES", __FILE__, __LINE__, "hmm, expected only meta-msgs here");
 	}
 #endif
 }

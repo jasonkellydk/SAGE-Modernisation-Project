@@ -23,6 +23,9 @@
 
 #include "W3DView.h"
 #include "W3DViewDoc.h"
+import Engine.Core.Math.Vector3;
+import Engine.Core.Math.Quaternion;
+import Engine.Core.Math.AffineTransform3;
 #include "WWLib/ffactory.h"
 #include "Globals.h"
 #include "ViewerAssetMgr.h"
@@ -71,6 +74,43 @@ import Graphics.Frame.Runtime;
 #undef THIS_FILE
 static char THIS_FILE[] = __FILE__;
 #endif
+
+namespace
+{
+// Conversions at the WW3D2 render-object boundary.
+Engine::Math::Vector3 To_Core_Math(const Vector3 &value) noexcept
+{
+	return {value.X, value.Y, value.Z};
+}
+
+Engine::Math::AffineTransform3 To_Core_Math(const Matrix3D &value) noexcept
+{
+	return Engine::Math::AffineTransform3::From_Row_Matrix(value);
+}
+
+Vector3 To_W3D(const Engine::Math::Vector3 &value) noexcept
+{
+	return Vector3(value.x, value.y, value.z);
+}
+
+Matrix3D To_W3D(const Engine::Math::AffineTransform3 &value) noexcept
+{
+	Matrix3D result(1);
+	for (unsigned row = 0; row < 3; ++row)
+		for (unsigned column = 0; column < 4; ++column)
+			result[row][column] = value.elements[row * 4 + column];
+	return result;
+}
+
+// Converts a "CAMERA" bone transform into a camera transform
+// (legacy: bone * Matrix3D(Vector3(0,-1,0), Vector3(0,0,1), Vector3(-1,0,0), Vector3(0,0,0))).
+Engine::Math::AffineTransform3 Bone_To_Camera_Transform(const Engine::Math::AffineTransform3 &bone) noexcept
+{
+	const Engine::Math::AffineTransform3 cam_transform = Engine::Math::AffineTransform3::From_Basis(
+		{0, -1, 0}, {0, 0, 1}, {-1, 0, 0}, {0, 0, 0});
+	return Compose(bone, cam_transform);
+}
+}
 
 /////////////////////////////////////////////////////////////////////////////
 // CW3DViewDoc
@@ -233,7 +273,7 @@ CW3DViewDoc::OnNewDocument ()
 		 m_pCScene->Clear_Lineup();
 
 		 // Update the fog color.
-		 m_pCScene->Set_Fog_Color(m_backgroundColor);
+		 m_pCScene->Set_Fog_Color({m_backgroundColor.X, m_backgroundColor.Y, m_backgroundColor.Z});
 	 }
 
 	// Free the currently displayed object
@@ -316,10 +356,11 @@ CW3DViewDoc::InitScene ()
 		if (m_pCScene != nullptr) {
 
 			// Set some default ambient lighting
-			m_pCScene->Set_Ambient_Light (Vector3 (0.5F, 0.5F, 0.5F));
+			m_pCScene->Set_Ambient_Light (Engine::Math::Vector3 {0.5F, 0.5F, 0.5F});
 
 			// Set up the correct fog color.
-			m_pCScene->Set_Fog_Color(GetBackgroundColor());
+			const Vector3 background = GetBackgroundColor();
+			m_pCScene->Set_Fog_Color({background.X, background.Y, background.Z});
 
 			// Create a new scene light
 			m_pCSceneLight.Assign_No_Add_Ref (new LightClass);
@@ -571,7 +612,7 @@ CW3DViewDoc::Display_Emitter
 		if (pemitter != nullptr) {
 
 			// Add the emitter to the scene
-			pemitter->Set_Transform (Matrix3D (1));
+			pemitter->Set_Transform (To_W3D (Engine::Math::AffineTransform3::Identity ()));
 			m_pCRenderObj.Assign_Add_Ref (pemitter);
 			m_pCScene->Add_Render_Object (m_pCRenderObj.Peek());
 			pemitter->Start ();
@@ -633,7 +674,7 @@ CW3DViewDoc::DisplayObject
             pCModel->Set_Animation ();
 
             m_pCRenderObj.Assign_Add_Ref (pCModel);
-            m_pCRenderObj->Set_Transform (Matrix3D (1));
+            m_pCRenderObj->Set_Transform (To_W3D (Engine::Math::AffineTransform3::Identity ()));
 
             // Add this object to the scene
 				if (m_pCRenderObj->Class_ID () == RenderObjClass::CLASSID_BITMAP2D) {
@@ -669,7 +710,7 @@ CW3DViewDoc::DisplayObject
 
             m_pCRenderObj = pCModel;
             m_pCRenderObj->Add_Ref ();
-            m_pCRenderObj->Set_Transform (Matrix3D (1));
+            m_pCRenderObj->Set_Transform (To_W3D (Engine::Math::AffineTransform3::Identity ()));
 
             // Add this object to the scene
 				if (m_pCRenderObj->Class_ID () == RenderObjClass::CLASSID_BITMAP2D) {
@@ -944,7 +985,7 @@ CW3DViewDoc::PlayAnimation
 //
 ////////////////////////////////////////////////////////////////////////////
 bool
-Get_Camera_Transform (RenderObjClass *render_obj, Matrix3D &tm)
+Get_Camera_Transform (RenderObjClass *render_obj, Engine::Math::AffineTransform3 &tm)
 {
 	bool retval = false;
 
@@ -960,7 +1001,7 @@ Get_Camera_Transform (RenderObjClass *render_obj, Matrix3D &tm)
 		if (!retval) {
 			int index = render_obj->Get_Bone_Index ("CAMERA");
 			if (index > 0) {
-				tm = render_obj->Get_Bone_Transform (index);
+				tm = To_Core_Math (render_obj->Get_Bone_Transform (index));
 				retval = true;
 			}
 		}
@@ -981,22 +1022,15 @@ CW3DViewDoc::Update_Camera ()
 	// Should we update the camera's position as well?
 	if (m_bAnimateCamera && m_pCRenderObj != nullptr) {
 
-		Matrix3D transform (1);
+		Engine::Math::AffineTransform3 transform;
 		if (Get_Camera_Transform (m_pCRenderObj.Peek(), transform)) {
 
 			// Convert the bone's transform into a camera transform
-			//Matrix3D	transform = m_pCRenderObj->Get_Bone_Transform (index);
-			Matrix3D cam_transform (Vector3 (0, -1, 0), Vector3 (0, 0, 1), Vector3 (-1, 0, 0), Vector3 (0, 0, 0));
-#ifdef ALLOW_TEMPORARIES
-			Matrix3D new_transform = transform * cam_transform;
-#else
-			Matrix3D new_transform;
-			new_transform.mul(transform, cam_transform);
-#endif
+			const Engine::Math::AffineTransform3 new_transform = Bone_To_Camera_Transform (transform);
 
 			// Pass the new transform onto the camera
 			CameraClass *pcamera = GetGraphicView()->GetCamera ();
-			pcamera->Set_Transform (new_transform);
+			pcamera->Set_Transform (To_W3D (new_transform));
 		}
 	}
 }
@@ -1268,7 +1302,7 @@ CW3DViewDoc::LoadSettings (LPCTSTR filename)
 			color.Z = ini_obj.Get_Float ("Settings", "AmbientLightB");
 
 			// Pass the ambient light color onto the scene
-			m_pCScene->Set_Ambient_Light (color);
+			m_pCScene->Set_Ambient_Light ({color.X, color.Y, color.Z});
 		}
 
 		//
@@ -1297,33 +1331,26 @@ CW3DViewDoc::LoadSettings (LPCTSTR filename)
 			 ini_obj.Is_Present ("Settings", "SceneLightW")) {
 
 			// Read the settings from,the INI file
-			Quaternion orientation;
-			orientation.X = ini_obj.Get_Float ("Settings", "SceneLightX");
-			orientation.Y = ini_obj.Get_Float ("Settings", "SceneLightY");
-			orientation.Z = ini_obj.Get_Float ("Settings", "SceneLightZ");
-			orientation.W = ini_obj.Get_Float ("Settings", "SceneLightW");
+            Engine::Math::Quaternion orientation;
+            orientation.x = ini_obj.Get_Float ("Settings", "SceneLightX");
+            orientation.y = ini_obj.Get_Float ("Settings", "SceneLightY");
+            orientation.z = ini_obj.Get_Float ("Settings", "SceneLightZ");
+            orientation.w = ini_obj.Get_Float ("Settings", "SceneLightW");
 
 			// Get the light's transform and inverse transform
-			Vector3 obj_pos = graphic_view->Get_Object_Center ();
-			Vector3 light_pos = m_pCSceneLight->Get_Position ();
+			const Engine::Math::Vector3 obj_pos = graphic_view->Get_Object_Center ();
+			const Engine::Math::Vector3 light_pos = To_Core_Math (m_pCSceneLight->Get_Position ());
 			float distance = (light_pos - obj_pos).Length ();
 
 			// Move the light to the object's center, perform the rotation, and
-			Matrix3D light_tm (1);
-			light_tm.Set_Translation (obj_pos);
-
-#ifdef ALLOW_TEMPORARIES
-			Matrix3D::Multiply (light_tm, Build_Matrix3D (orientation), &light_tm);
-#else
-			Matrix3D orientation_matrix;
-			Matrix3D::Multiply (light_tm, Build_Matrix3D (orientation, orientation_matrix), &light_tm);
-#endif
-			light_tm.Translate (Vector3 (0, 0, distance));
+			Engine::Math::AffineTransform3 light_tm = Engine::Math::AffineTransform3::From_Translation (obj_pos);
+			light_tm = Compose (light_tm, orientation.To_Rotation_Transform ());
+			light_tm.Adjust_Translation (light_tm.Transform_Vector ({0, 0, distance}));
 
 			// Pass the new transform onto the light
 			RenderObjClass *pLightMesh = graphic_view->Get_Light_Mesh ();
-			pLightMesh->Set_Transform (light_tm);
-			m_pCSceneLight->Set_Transform (light_tm);
+			pLightMesh->Set_Transform (To_W3D (light_tm));
+			m_pCSceneLight->Set_Transform (To_W3D (light_tm));
 		}
 
 		//
@@ -1348,16 +1375,15 @@ CW3DViewDoc::LoadSettings (LPCTSTR filename)
 			m_pCSceneLight->Set_Flag (LightClass::FAR_ATTENUATION, (atten_on == 1));
 
 			// Get the position of the light and the displayed object
-			Vector3 obj_pos = graphic_view->Get_Object_Center ();
-			Vector3 light_pos = m_pCSceneLight->Get_Position ();
-			Vector3 new_pos = (light_pos - obj_pos);
-			new_pos.Normalize ();
+			const Engine::Math::Vector3 obj_pos = graphic_view->Get_Object_Center ();
+			const Engine::Math::Vector3 light_pos = To_Core_Math (m_pCSceneLight->Get_Position ());
+			Engine::Math::Vector3 new_pos = (light_pos - obj_pos).Normalized_Legacy ();
 			new_pos = new_pos * distance;
 
 			// Pass the new position onto the light
 			RenderObjClass *pLightMesh = graphic_view->Get_Light_Mesh ();
-			pLightMesh->Set_Position (new_pos);
-			m_pCSceneLight->Set_Position (new_pos);
+			pLightMesh->Set_Position (To_W3D (new_pos));
+			m_pCSceneLight->Set_Position (To_W3D (new_pos));
 		}
 
 		//
@@ -1463,25 +1489,25 @@ CW3DViewDoc::SaveSettings
         // Should we save light settings?
         if (dwSettingsMask & SAVE_SETTINGS_LIGHT)
         {
-            Vector3 colorSettings = m_pCScene->Get_Ambient_Light ();
+            Engine::Math::Vector3 colorSettings = m_pCScene->Get_Ambient_Light ();
 
             // Write the 'Red' component out to the file
             CString stringValue;
-            stringValue.Format ("%f", colorSettings.X);
+            stringValue.Format ("%f", colorSettings.x);
             ::WritePrivateProfileString ("Settings",
                                          "AmbientLightR",
                                          stringValue,
                                          (LPCTSTR)stringCompleteFilename);
 
             // Write the 'Green' component out to the file
-            stringValue.Format ("%f", colorSettings.Y);
+            stringValue.Format ("%f", colorSettings.y);
             ::WritePrivateProfileString ("Settings",
                                          "AmbientLightG",
                                          stringValue,
                                          (LPCTSTR)stringCompleteFilename);
 
             // Write the 'Blue' component out to the file
-            stringValue.Format ("%f", colorSettings.Z);
+            stringValue.Format ("%f", colorSettings.z);
             ::WritePrivateProfileString ("Settings",
                                          "AmbientLightB",
                                          stringValue,
@@ -1510,32 +1536,32 @@ CW3DViewDoc::SaveSettings
                                          stringValue,
                                          (LPCTSTR)stringCompleteFilename);
 
-				Matrix3D transform = m_pCSceneLight->Get_Transform ();
-				Quaternion orientation = ::Build_Quaternion (transform);
+				const Engine::Math::AffineTransform3 transform = To_Core_Math (m_pCSceneLight->Get_Transform ());
+                const Engine::Math::Quaternion orientation = Engine::Math::Quaternion::From_Rotation(transform);
 
             // Write the x-position out to the file
-            stringValue.Format ("%f", orientation.X);
+            stringValue.Format ("%f", orientation.x);
             ::WritePrivateProfileString ("Settings",
                                          "SceneLightX",
                                          stringValue,
                                          (LPCTSTR)stringCompleteFilename);
 
             // Write the y-position out to the file
-            stringValue.Format ("%f", orientation.Y);
+            stringValue.Format ("%f", orientation.y);
             ::WritePrivateProfileString ("Settings",
                                          "SceneLightY",
                                          stringValue,
                                          (LPCTSTR)stringCompleteFilename);
 
             // Write the z-position out to the file
-            stringValue.Format ("%f", orientation.Z);
+            stringValue.Format ("%f", orientation.z);
             ::WritePrivateProfileString ("Settings",
                                          "SceneLightZ",
                                          stringValue,
                                          (LPCTSTR)stringCompleteFilename);
 
             // Write the w-position out to the file
-            stringValue.Format ("%f", orientation.W);
+            stringValue.Format ("%f", orientation.w);
             ::WritePrivateProfileString ("Settings",
                                          "SceneLightW",
                                          stringValue,
@@ -1543,8 +1569,8 @@ CW3DViewDoc::SaveSettings
 
 				// Get the light's transform and inverse transform
 				CGraphicView *pCGraphicView = GetGraphicView ();
-				Vector3 obj_pos = pCGraphicView->Get_Object_Center ();
-				Vector3 light_pos = m_pCSceneLight->Get_Position ();
+				const Engine::Math::Vector3 obj_pos = pCGraphicView->Get_Object_Center ();
+				const Engine::Math::Vector3 light_pos = To_Core_Math (m_pCSceneLight->Get_Position ());
 				float distance = (light_pos - obj_pos).Length ();
 
             // Write the distance out to the file
@@ -1762,7 +1788,7 @@ CW3DViewDoc::SetBackgroundObject (LPCTSTR pszBackgroundObjectName)
                 m_pCBackgroundObject->Set_Position (Vector3 (0.00F, 0.00F, 0.00F));
 
                 // Calculate the depth the camera should be at by the objects bouding sphere
-                float cameraDepth = m_pCBackgroundObject->Get_Bounding_Sphere ().Radius * 4.0F;
+                float cameraDepth = m_pCBackgroundObject->Get_Bounding_Sphere ().radius * 4.0F;
 
                 CGraphicView *pCGraphicView = GetGraphicView ();
                 if (pCGraphicView)
@@ -2383,18 +2409,12 @@ CW3DViewDoc::Make_Movie ()
 				if (index != -1) {
 
 					// Convert the bone's transform into a camera transform
-					Matrix3D	transform = m_pCRenderObj->Get_Bone_Transform (index);
-					Matrix3D cam_transform (Vector3 (0, -1, 0), Vector3 (0, 0, 1), Vector3 (-1, 0, 0), Vector3 (0, 0, 0));
-#ifdef ALLOW_TEMPORARIES
-					Matrix3D new_transform = transform * cam_transform;
-#else
-					Matrix3D new_transform;
-					new_transform.mul(transform, cam_transform);
-#endif
+					const Engine::Math::AffineTransform3 new_transform = Bone_To_Camera_Transform (
+						To_Core_Math (m_pCRenderObj->Get_Bone_Transform (index)));
 
 					// Pass the new transform onto the camera
 					CameraClass *pcamera = GetGraphicView()->GetCamera ();
-					pcamera->Set_Transform (new_transform);
+					pcamera->Set_Transform (To_W3D (new_transform));
 				}
 			}
 
@@ -3001,7 +3021,7 @@ CW3DViewDoc::SetBackgroundColor (const Vector3 &backgroundColor)
 	// and the fog color out of sync. That would look funky.
 	ASSERT(m_pCScene);
 	if (m_pCScene)
-		m_pCScene->Set_Fog_Color(backgroundColor);
+		m_pCScene->Set_Fog_Color({backgroundColor.X, backgroundColor.Y, backgroundColor.Z});
 }
 
 

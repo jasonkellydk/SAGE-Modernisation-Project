@@ -1,11 +1,11 @@
 module;
-#include "../../profiling/Tracy.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
 
 export module Graphics.Scene.Lighting.Local;
+import engine.profiling;
 import Graphics.Scene.Lighting;
 
 namespace Graphics
@@ -57,7 +57,7 @@ public:
 
     void Add(const MaterialLightSource& source)
     {
-        GRAPHICS_PROFILE_SCOPE("Graphics.Lighting.Add");
+        engine::profiling::Scope profile_scope_59("Graphics.Lighting.Add");
         // Preserve the authored near-black rejection before intensity scaling.
         if (source.diffuse[0]<0.05f && source.diffuse[1]<0.05f && source.diffuse[2]<0.05f)
             return;

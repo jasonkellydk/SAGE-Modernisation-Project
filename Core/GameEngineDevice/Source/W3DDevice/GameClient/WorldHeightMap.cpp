@@ -58,6 +58,7 @@ import Graphics.Resources.Textures.Quality;
 #include "W3DDevice/GameClient/W3DShadow.h"
 
 #include "Common/file.h"
+import engine.debug;
 
 
 #define K_OBSOLETE_HEIGHT_MAP_VERSION 8
@@ -826,7 +827,7 @@ Bool WorldHeightMap::ParseLightingDataChunk(DataChunkInput &file, DataChunkInfo 
 				TheW3DShadowManager->setShadowColor(shadowColor);
 			}
 		}
-	DEBUG_ASSERTCRASH(file.atEndOfChunk(), ("Unexpected data left over."));
+	engine::debug::invariant((file.atEndOfChunk()), "file.atEndOfChunk()", __FILE__, __LINE__, "Unexpected data left over.");
 	return true;
 }
 
@@ -914,7 +915,7 @@ Bool WorldHeightMap::ParseHeightMapData(DataChunkInput &file, DataChunkInfo *inf
 			}
 		}
 	}
-	DEBUG_ASSERTCRASH(file.atEndOfChunk(), ("Unexpected data left over."));
+	engine::debug::invariant((file.atEndOfChunk()), "file.atEndOfChunk()", __FILE__, __LINE__, "Unexpected data left over.");
 	return true;
 }
 
@@ -1103,9 +1104,9 @@ Bool WorldHeightMap::ParseBlendTileData(DataChunkInput &file, DataChunkInfo *inf
 		initCliffFlagsFromHeights();
 	}
 	m_numBitmapTiles = file.readInt();
-	DEBUG_ASSERTCRASH(m_numBitmapTiles>0 && m_numBitmapTiles<2048, ("Unlikely numBitmapTiles."));
+	engine::debug::invariant((m_numBitmapTiles>0 && m_numBitmapTiles<2048), "m_numBitmapTiles>0 && m_numBitmapTiles<2048", __FILE__, __LINE__, "Unlikely numBitmapTiles.");
 	m_numBlendedTiles = file.readInt();
-	DEBUG_ASSERTCRASH(m_numBlendedTiles>0 && m_numBlendedTiles<NUM_BLEND_TILES+1, ("Unlikely numBlendedTiles."));
+	engine::debug::invariant((m_numBlendedTiles>0 && m_numBlendedTiles<NUM_BLEND_TILES+1), "m_numBlendedTiles>0 && m_numBlendedTiles<NUM_BLEND_TILES+1", __FILE__, __LINE__, "Unlikely numBlendedTiles.");
 	if (info->version >= K_BLEND_TILE_VERSION_5) {
 		m_numCliffInfo = file.readInt();
 	} else {
@@ -1113,7 +1114,7 @@ Bool WorldHeightMap::ParseBlendTileData(DataChunkInput &file, DataChunkInfo *inf
 	}
 // --> file loading here
 	m_numTextureClasses	= file.readInt();
-	DEBUG_ASSERTCRASH(m_numTextureClasses>0 && m_numTextureClasses<200, ("Unlikely m_numTextureClasses."));
+	engine::debug::invariant((m_numTextureClasses>0 && m_numTextureClasses<200), "m_numTextureClasses>0 && m_numTextureClasses<200", __FILE__, __LINE__, "Unlikely m_numTextureClasses.");
 	for (i=0; i<m_numTextureClasses; i++) {
 		m_textureClasses[i].globalTextureClass = -1;
 		m_textureClasses[i].firstTile = file.readInt();
@@ -1166,7 +1167,7 @@ Bool WorldHeightMap::ParseBlendTileData(DataChunkInput &file, DataChunkInfo *inf
 		}
 
 		flag = file.readInt();
-		DEBUG_ASSERTCRASH(flag==FLAG_VAL, ("Invalid format."));
+		engine::debug::invariant((flag==FLAG_VAL), "flag==FLAG_VAL", __FILE__, __LINE__, "Invalid format.");
 		if (flag != FLAG_VAL) {
 			throw ERROR_CORRUPT_FILE_FORMAT;
 		}
@@ -1205,7 +1206,7 @@ Bool WorldHeightMap::ParseBlendTileData(DataChunkInput &file, DataChunkInfo *inf
 		m_height = newHeight;
 		m_dataSize = m_width*m_height;
 	}
-	DEBUG_ASSERTCRASH(file.atEndOfChunk(), ("Unexpected data left over."));
+	engine::debug::invariant((file.atEndOfChunk()), "file.atEndOfChunk()", __FILE__, __LINE__, "Unexpected data left over.");
 	return true;
 }
 
@@ -1256,7 +1257,7 @@ Bool WorldHeightMap::ParseObjectData(DataChunkInput &file, DataChunkInfo *info, 
 	}
 
 	if (loc.z<minZ || loc.z>maxZ) {
-		DEBUG_LOG(("Removing object at z height %f", loc.z));
+		engine::debug::log_info("Removing object at z height %f", loc.z);
 		return true;
 	}
 
@@ -1266,7 +1267,7 @@ Bool WorldHeightMap::ParseObjectData(DataChunkInput &file, DataChunkInfo *info, 
 	pThisOne = newInstance( MapObject )( loc, name, angle, flags, &d,
 														TheThingFactory->findTemplate( name, FALSE ) );
 
-//DEBUG_LOG(("obj %s owner %s",name.str(),d.getAsciiString(TheKey_originalOwner).str()));
+//engine::debug::log_info("obj %s owner %s",name.str(),d.getAsciiString(TheKey_originalOwner).str());
 
 	if (pThisOne->getProperties()->getType(TheKey_waypointID) == Dict::DICT_INT)
 		pThisOne->setIsWaypoint();
@@ -1279,10 +1280,10 @@ Bool WorldHeightMap::ParseObjectData(DataChunkInput &file, DataChunkInfo *info, 
 
 
 	if (pPrevious) {
-		DEBUG_ASSERTCRASH(MapObject::TheMapObjectListPtr != nullptr && pPrevious->getNext() == nullptr, ("Bad linkage."));
+		engine::debug::invariant((MapObject::TheMapObjectListPtr != nullptr && pPrevious->getNext() == nullptr), "MapObject::TheMapObjectListPtr != nullptr && pPrevious->getNext() == nullptr", __FILE__, __LINE__, "Bad linkage.");
 		pPrevious->setNextMap(pThisOne);
 	}	else {
-		DEBUG_ASSERTCRASH(MapObject::TheMapObjectListPtr == nullptr, ("Bad linkage."));
+		engine::debug::invariant((MapObject::TheMapObjectListPtr == nullptr), "MapObject::TheMapObjectListPtr == nullptr", __FILE__, __LINE__, "Bad linkage.");
 		MapObject::TheMapObjectListPtr = pThisOne;
 	}
 	file.m_currentObject = pThisOne;
@@ -2269,7 +2270,7 @@ W3DTextureHandle *WorldHeightMap::getTerrainTexture()
 				getAlphaUVData(x, y, UA, VA, alpha, &flipForBlend);
 
 				m_cellFlipState[y*m_flipStateWidth+(x>>3)] |= flipForBlend << (x & 0x7);
-				DEBUG_ASSERTCRASH ((y*m_flipStateWidth+(x>>3)) < (m_flipStateWidth * m_height), ("Bad range"));
+				engine::debug::invariant(((y*m_flipStateWidth+(x>>3)) < (m_flipStateWidth * m_height)), "(y*m_flipStateWidth+(x>>3)) < (m_flipStateWidth * m_height)", __FILE__, __LINE__, "Bad range");
 		}
 	}
 	else {
@@ -2392,7 +2393,7 @@ Bool WorldHeightMap::setDrawOrg(Int xOrg, Int yOrg)
 Int WorldHeightMap::getTextureClass(Int xIndex, Int yIndex, Bool baseClass)
 {
 	Int ndx = (yIndex*m_width)+xIndex;
-	DEBUG_ASSERTCRASH((ndx>=0 && ndx<this->m_dataSize),("oops"));
+	engine::debug::invariant(((ndx>=0 && ndx<this->m_dataSize)), "(ndx>=0 && ndx<this->m_dataSize)", __FILE__, __LINE__, "oops");
 	if (ndx<0 || ndx >= this->m_dataSize) return(-1);
 	Int textureNdx = m_tileNdxes[ndx];
 	if (!baseClass && (m_blendTileNdxes[ndx] != 0 || m_extraBlendTileNdxes[ndx] != 0)) {

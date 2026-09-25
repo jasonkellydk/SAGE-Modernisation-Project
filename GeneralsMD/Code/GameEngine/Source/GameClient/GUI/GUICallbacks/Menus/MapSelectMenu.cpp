@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/GameEngine.h"
 #include "Common/MessageStream.h"
@@ -139,7 +140,7 @@ void SetDifficultyRadioButton()
 
 		default:
 			{
-				DEBUG_CRASH(("unrecognized difficulty level in the script engine"));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "unrecognized difficulty level in the script engine");
 			}
 
 		}
@@ -410,7 +411,7 @@ WindowMsgHandledType MapSelectMenuSystem( GameWindow *window, UnsignedInt msg,
 					  TheCampaignManager->setCampaign( "" );
 					// get text of the map to load
 					const char *mapFname = (const char *)GadgetListBoxGetItemData( mapWindow, selected );
-					DEBUG_ASSERTCRASH(mapFname, ("No map item data"));
+					engine::debug::invariant((mapFname), "mapFname", __FILE__, __LINE__, "No map item data");
 					if (mapFname)
 						setupGameStart(mapFname);
 				}

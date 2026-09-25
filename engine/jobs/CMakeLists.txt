@@ -6,8 +6,7 @@ add_library(engine_jobs STATIC)
 
 set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(Threads REQUIRED)
-find_package(SDL3 CONFIG REQUIRED)
-target_link_libraries(engine_jobs PUBLIC Threads::Threads SDL3::SDL3)
+target_link_libraries(engine_jobs PUBLIC Threads::Threads)
 
 target_sources(engine_jobs PUBLIC
 	FILE_SET cxx_modules

@@ -1,3 +1,4 @@
+import Engine.Core.Math.Scalar;
 /*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -35,6 +36,7 @@
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 
+#include <cmath>
 #include "WWmatrix3.h"
 #include "matrix3d.h"
 #include "matrix4.h"
@@ -331,13 +333,13 @@ int Matrix3::Is_Orthogonal() const
 	Vector3 y(Row[1].X,Row[1].Y,Row[1].Z);
 	Vector3 z(Row[2].X,Row[2].Y,Row[2].Z);
 
-	if (Vector3::Dot_Product(x,y) > WWMATH_EPSILON) return 0;
-	if (Vector3::Dot_Product(y,z) > WWMATH_EPSILON) return 0;
-	if (Vector3::Dot_Product(z,x) > WWMATH_EPSILON) return 0;
+	if (Vector3::Dot_Product(x,y) > Engine::Math::DefaultTolerance) return 0;
+	if (Vector3::Dot_Product(y,z) > Engine::Math::DefaultTolerance) return 0;
+	if (Vector3::Dot_Product(z,x) > Engine::Math::DefaultTolerance) return 0;
 
-	if (WWMath::Fabs(x.Length() - 1.0f) > WWMATH_EPSILON) return 0;
-	if (WWMath::Fabs(y.Length() - 1.0f) > WWMATH_EPSILON) return 0;
-	if (WWMath::Fabs(z.Length() - 1.0f) > WWMATH_EPSILON) return 0;
+	if (std::fabs(x.Length() - 1.0f) > Engine::Math::DefaultTolerance) return 0;
+	if (std::fabs(y.Length() - 1.0f) > Engine::Math::DefaultTolerance) return 0;
+	if (std::fabs(z.Length() - 1.0f) > Engine::Math::DefaultTolerance) return 0;
 
 	return 1;
 }
@@ -352,7 +354,7 @@ void Matrix3::Re_Orthogonalize()
 	Vector3::Cross_Product(z,x,&y);
 
 	float len = x.Length();
-	if (len < WWMATH_EPSILON) {
+	if (len < Engine::Math::DefaultTolerance) {
 		Make_Identity();
 		return;
 	} else {
@@ -360,7 +362,7 @@ void Matrix3::Re_Orthogonalize()
 	}
 
 	len = y.Length();
-	if (len < WWMATH_EPSILON) {
+	if (len < Engine::Math::DefaultTolerance) {
 		Make_Identity();
 		return;
 	} else {
@@ -368,7 +370,7 @@ void Matrix3::Re_Orthogonalize()
 	}
 
 	len = z.Length();
-	if (len < WWMATH_EPSILON) {
+	if (len < Engine::Math::DefaultTolerance) {
 		Make_Identity();
 		return;
 	} else {
@@ -398,7 +400,7 @@ void Matrix3::Rotate_AABox_Extent(const Vector3 & extent,Vector3 * set_extent)
 		(*set_extent)[i] = 0.0f;
 
 		for (int j=0; j<3; j++) {
-			(*set_extent)[i] += WWMath::Fabs(Row[i][j] * extent[j]);
+			(*set_extent)[i] += std::fabs(Row[i][j] * extent[j]);
 		}
 	}
 }

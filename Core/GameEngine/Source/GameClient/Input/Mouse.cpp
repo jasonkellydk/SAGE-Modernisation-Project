@@ -27,10 +27,11 @@
 // Desc:      Basic mouse interactions
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
-#include <SDL3/SDL.h>
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
+import engine.platform;
 
-#include "Common/Debug.h"
+
 #include "Common/MessageStream.h"
 #include "Common/GameEngine.h"
 #include "Common/GlobalData.h"
@@ -46,6 +47,7 @@
 #include "GameClient/Keyboard.h"
 #include "GameClient/Mouse.h"
 #include "GameClient/GlobalLanguage.h"
+#include <chrono>
 
 #include "GameLogic/GameLogic.h"
 #include "GameLogic/ScriptEngine.h"
@@ -317,7 +319,7 @@ void Mouse::processMouseEvent( Int index )
 
 	m_currMouse.deltaPos.x = m_currMouse.pos.x - m_prevMouse.pos.x;
 	m_currMouse.deltaPos.y = m_currMouse.pos.y - m_prevMouse.pos.y;
-//	DEBUG_LOG(("Mouse dx %d, dy %d, index %d", m_currMouse.deltaPos.x, m_currMouse.deltaPos.y, index));
+//	engine::debug::log_info("Mouse dx %d, dy %d, index %d", m_currMouse.deltaPos.x, m_currMouse.deltaPos.y, index);
 //	// check if mouse is still and flag tooltip
 //	if( ((dx*dx) + (dy*dy)) < CURSOR_MOVE_TOL_SQ )
 //	{
@@ -461,6 +463,17 @@ CursorInfo::CursorInfo()
 //-------------------------------------------------------------------------------------------------
 //-------------------------------------------------------------------------------------------------
 Mouse::Mouse()
+	: Mouse(nullptr)
+{
+}
+
+Mouse::Mouse(engine::platform::IClockService& clock)
+	: Mouse(&clock)
+{
+}
+
+Mouse::Mouse(engine::platform::IClockService* clock)
+	: m_clock(clock)
 {
 	static_assert(ARRAY_SIZE(CursorCaptureBlockReasonNames) == CursorCaptureBlockReason_Count, "Incorrect array size");
 	static_assert(ARRAY_SIZE(RedrawModeName) == RM_MAX, "Incorrect array size");
@@ -549,8 +562,16 @@ Mouse::Mouse()
 	m_cursorCaptureMode = 0;
 
 	m_captureBlockReasonBits = (1 << CursorCaptureBlockReason_NoInit);
-	DEBUG_LOG(("Mouse::Mouse: m_blockCaptureReason=CursorCaptureBlockReason_NoInit"));
+	engine::debug::log_info("Mouse::Mouse: m_blockCaptureReason=CursorCaptureBlockReason_NoInit");
 
+}
+
+UnsignedInt Mouse::currentMilliseconds() const
+{
+	if (m_clock != nullptr)
+		return static_cast<UnsignedInt>(m_clock->monotonic_nanoseconds() / 1'000'000);
+	return static_cast<UnsignedInt>(std::chrono::duration_cast<std::chrono::milliseconds>(
+		std::chrono::steady_clock::now().time_since_epoch()).count());
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -700,7 +721,7 @@ void Mouse::createStreamMessages()
 		return;  // no place to put messages
 
 	GameMessage *msg = nullptr;
-	UnsignedInt now = SDL_GetTicks();
+	UnsignedInt now = currentMilliseconds();
 
 	// basic position messages are always created
 	msg = TheMessageStream->appendMessage( GameMessage::MSG_RAW_MOUSE_POSITION );
@@ -721,7 +742,7 @@ void Mouse::createStreamMessages()
 		if (!m_displayTooltip)
 		{
 			m_highlightPos = 0;
-			m_highlightUpdateStart = SDL_GetTicks();
+			m_highlightUpdateStart = currentMilliseconds();
 		}
 
 		// display tooltip for current window
@@ -729,7 +750,7 @@ void Mouse::createStreamMessages()
 	}
 	else
 	{
-		//DEBUG_LOG(("%d %d %d %d", TheGameClient->getFrame(), delay, now, m_stillTime));
+		//engine::debug::log_info("%d %d %d %d", TheGameClient->getFrame(), delay, now, m_stillTime);
 		m_displayTooltip = FALSE;
 	}
 
@@ -864,7 +885,7 @@ void Mouse::createStreamMessages()
 void Mouse::setCursorTooltip( UnicodeString tooltip, Int delay, const RGBColor *color, Real width )
 {
 
-	//DEBUG_LOG(("%d Tooltip: %ls", TheGameClient->getFrame(), tooltip.str()));
+	//engine::debug::log_info("%d Tooltip: %ls", TheGameClient->getFrame(), tooltip.str());
 
 	m_isTooltipEmpty = tooltip.isEmpty();
   m_tooltipDelay = delay;
@@ -882,7 +903,7 @@ void Mouse::setCursorTooltip( UnicodeString tooltip, Int delay, const RGBColor *
 		{
 			widthInPixels = TheDisplay->getWidth();
 		}
-		//DEBUG_LOG(("Setting tooltip width to %d pixels (%g%% of the normal tooltip width)", widthInPixels, width*100));
+		//engine::debug::log_info("Setting tooltip width to %d pixels (%g%% of the normal tooltip width)", widthInPixels, width*100);
 		m_tooltipDisplayString->setWordWrap( widthInPixels );
 		m_lastTooltipWidth = width;
 	}
@@ -890,7 +911,7 @@ void Mouse::setCursorTooltip( UnicodeString tooltip, Int delay, const RGBColor *
 	if (forceRecalc || (!m_isTooltipEmpty && tooltip.compare(m_tooltipDisplayString->getText())))
 	{
 		m_tooltipDisplayString->setText(tooltip);
-		//DEBUG_LOG(("Tooltip: %ls", tooltip.str()));
+		//engine::debug::log_info("Tooltip: %ls", tooltip.str());
 	}
 	if (color)
 	{
@@ -1071,7 +1092,7 @@ Bool Mouse::canCapture() const
 	if (m_captureBlockReasonBits != 0)
 		return false;
 
-	DEBUG_ASSERTCRASH(TheDisplay != nullptr, ("The Display is null"));
+	engine::debug::invariant((TheDisplay != nullptr), "TheDisplay != nullptr", __FILE__, __LINE__, "The Display is null");
 	const Bool inInteractiveGame = TheGameLogic && TheGameLogic->isInInteractiveGame();
 
 	if (TheDisplay->getWindowed())
@@ -1113,12 +1134,12 @@ void Mouse::unblockCapture(CursorCaptureBlockReason reason)
 
 	if (canCaptureNow != canCaptureBefore)
 	{
-		DEBUG_ASSERTCRASH(canCaptureNow, ("Mouse::unblockCapture(%s): Unexpected logic", CursorCaptureBlockReasonNames[reason]));
+		engine::debug::invariant((canCaptureNow), "canCaptureNow", __FILE__, __LINE__, "Mouse::unblockCapture(%s): Unexpected logic", CursorCaptureBlockReasonNames[reason]);
 		capture();
 	}
 
-	DEBUG_LOG(("Mouse::unblockCapture(%s): m_captureBlockReason=%u canCapture=%d",
-		CursorCaptureBlockReasonNames[reason], m_captureBlockReasonBits, (Int)canCapture()));
+	engine::debug::log_info("Mouse::unblockCapture(%s): m_captureBlockReason=%u canCapture=%d",
+		CursorCaptureBlockReasonNames[reason], m_captureBlockReasonBits, (Int)canCapture());
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -1130,12 +1151,12 @@ void Mouse::blockCapture(CursorCaptureBlockReason reason)
 
 	if (canCaptureNow != canCaptureBefore)
 	{
-		DEBUG_ASSERTCRASH(!canCaptureNow, ("Mouse::blockCapture(%s): Unexpected logic", CursorCaptureBlockReasonNames[reason]));
+		engine::debug::invariant((!canCaptureNow), "!canCaptureNow", __FILE__, __LINE__, "Mouse::blockCapture(%s): Unexpected logic", CursorCaptureBlockReasonNames[reason]);
 		releaseCapture();
 	}
 
-	DEBUG_LOG(("Mouse::blockCapture(%s): m_captureBlockReason=%u canCapture=%d",
-		CursorCaptureBlockReasonNames[reason], m_captureBlockReasonBits, (Int)canCapture()));
+	engine::debug::log_info("Mouse::blockCapture(%s): m_captureBlockReason=%u canCapture=%d",
+		CursorCaptureBlockReasonNames[reason], m_captureBlockReasonBits, (Int)canCapture());
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -1156,7 +1177,7 @@ void Mouse::draw()
 // ------------------------------------------------------------------------------------------------
 void Mouse::resetTooltipDelay()
 {
-	m_stillTime = SDL_GetTicks();
+	m_stillTime = currentMilliseconds();
 	m_displayTooltip = FALSE;
 }
 
@@ -1217,7 +1238,7 @@ void Mouse::drawTooltip()
 		// get ready for the next part of the anim
 		if (m_highlightPos < width + HIGHLIGHT_WIDTH)
 		{
-			UnsignedInt now = SDL_GetTicks();
+			UnsignedInt now = currentMilliseconds();
 			m_highlightPos = (width*(now-m_highlightUpdateStart))/m_tooltipFillTime;
 		}
 	}
@@ -1331,7 +1352,7 @@ Int Mouse::getCursorIndex(const AsciiString& name)
 			return i;
 	}
 
-	DEBUG_CRASH(( "Mouse::getCursorIndex - Invalid cursor name '%s'", name.str() ));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Mouse::getCursorIndex - Invalid cursor name '%s'", name.str() );
 	return INVALID_MOUSE_CURSOR;
 
 }

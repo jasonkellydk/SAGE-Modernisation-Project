@@ -53,6 +53,7 @@
 // USER INCLUDES //////////////////////////////////////////////////////////////
 //-----------------------------------------------------------------------------
 #include "PreRTS.h"
+import engine.debug;
 
 #include "Common/INI.h"
 #include "Common/FileSystem.h"
@@ -95,7 +96,7 @@ void INI::parseHeaderTemplateDefinition( INI *ini )
 	}
 	else
 	{
-		DEBUG_CRASH(( "[LINE: %d in '%s'] Duplicate header Template %s found!", ini->getLineNum(), ini->getFilename().str(), name.str() ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "[LINE: %d in '%s'] Duplicate header Template %s found!", ini->getLineNum(), ini->getFilename().str(), name.str() );
 	}
 	// parse the ini definition
 	ini->initFromINI( hTemplate, TheHeaderTemplateManager->getFieldParse() );
@@ -157,7 +158,7 @@ HeaderTemplate *HeaderTemplateManager::findHeaderTemplate( AsciiString name )
 HeaderTemplate *HeaderTemplateManager::newHeaderTemplate( AsciiString name )
 {
 	HeaderTemplate *newHTemplate = NEW HeaderTemplate;
-	DEBUG_ASSERTCRASH(newHTemplate, ("Unable to create a new Header Template in HeaderTemplateManager::newHeaderTemplate"));
+	engine::debug::invariant((newHTemplate), "newHTemplate", __FILE__, __LINE__, "Unable to create a new Header Template in HeaderTemplateManager::newHeaderTemplate");
 	if(!newHTemplate)
 		return nullptr;
 
@@ -172,7 +173,7 @@ GameFont *HeaderTemplateManager::getFontFromTemplate( AsciiString name )
 	HeaderTemplate *ht = findHeaderTemplate( name );
 	if(!ht)
 	{
-		//DEBUG_LOG(("HeaderTemplateManager::getFontFromTemplate - Could not find header %s", name.str()));
+		//engine::debug::log_info("HeaderTemplateManager::getFontFromTemplate - Could not find header %s", name.str());
 		return nullptr;
 	}
 
@@ -222,7 +223,7 @@ void HeaderTemplateManager::populateGameFonts()
 		HeaderTemplate *hTemplate = *it;
 		Real pointSize = TheGlobalLanguageData->adjustFontSize(hTemplate->m_point);
 		GameFont *font = TheFontLibrary->getFont(hTemplate->m_fontName, pointSize,hTemplate->m_bold);
-		DEBUG_ASSERTCRASH(font,("HeaderTemplateManager::populateGameFonts - Could not find font %s %d",hTemplate->m_fontName.str(), hTemplate->m_point));
+		engine::debug::invariant((font), "font", __FILE__, __LINE__, "HeaderTemplateManager::populateGameFonts - Could not find font %s %d",hTemplate->m_fontName.str(), hTemplate->m_point);
 
 		hTemplate->m_font = font;
 

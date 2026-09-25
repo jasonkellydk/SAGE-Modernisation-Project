@@ -11,15 +11,9 @@ module;
 #include <utility>
 #include <vector>
 
-#if defined(RTS_PROFILE_TRACY)
-#include <tracy/Tracy.hpp>
-#define GRAPHICS_PROFILE_SCOPE(name) ZoneScopedN(name)
-#else
-#define GRAPHICS_PROFILE_SCOPE(name) ((void)0)
-#endif
-
 export module Graphics.Scene.Particles;
 
+import engine.profiling;
 export import Graphics.Resources.Handles.ResourceHandle;
 export import Graphics.Shaders.Pipeline;
 export import Graphics.Scene.Views.View;
@@ -431,7 +425,7 @@ public:
 
 	bool Update(float delta_seconds) noexcept
 	{
-		GRAPHICS_PROFILE_SCOPE("Graphics::ParticleSystem::Update");
+		engine::profiling::Scope profile_scope_426("Graphics::ParticleSystem::Update");
 		if (!(delta_seconds >= 0.0f) || !std::isfinite(delta_seconds))
 			return false;
 

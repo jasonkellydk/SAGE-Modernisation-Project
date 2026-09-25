@@ -66,8 +66,8 @@ import Graphics.Materials.State;
 #include "Common/GlobalData.h"
 #include "Common/GameLOD.h"
 #include "WWLib/cpudetect.h"
-#include "WWMath/matrix4.h"
 #include <cstdint>
+import engine.debug;
 import Graphics.RHI;
 import Graphics.Frame.Runtime;
 
@@ -151,13 +151,13 @@ Bool ScreenDefaultFilter::postRender(FilterModes mode, Coord2D &scrollDelta,Bool
 {
 
 	W3DTextureHandle * tex =	W3DShaderManager::endRenderToTexture();
-	DEBUG_ASSERTCRASH(tex, ("Require rendered texture."));
+	engine::debug::invariant((tex), "tex", __FILE__, __LINE__, "Require rendered texture.");
 	if (!tex) return false;
 	if (!set(mode)) return false;
 
 	
 	struct _TRANS_LIT_TEX_VERTEX {
-		Vector4 p;
+		Engine::Math::Vector4 p;
 		std::uint32_t color;   // diffuse color
 		float	u;
 		float	v;
@@ -171,16 +171,16 @@ Bool ScreenDefaultFilter::postRender(FilterModes mode, Coord2D &scrollDelta,Bool
 	height=TheTacticalView->getHeight();
 
 	//bottom right
-	v[0].p = Vector4( xpos+width-0.5f, ypos+height-0.5f, 0.0f, 1.0f );
+	v[0].p = Engine::Math::Vector4{xpos+width-0.5f, ypos+height-0.5f, 0.0f, 1.0f};
 	v[0].u = (Real)(xpos+width)/(Real)TheDisplay->getWidth();	v[0].v = (Real)(ypos+height)/(Real)TheDisplay->getHeight();
 	//top right
-	v[1].p = Vector4( xpos+width-0.5f, ypos-0.5f, 0.0f, 1.0f );
+	v[1].p = Engine::Math::Vector4{xpos+width-0.5f, ypos-0.5f, 0.0f, 1.0f};
 	v[1].u = (Real)(xpos+width)/(Real)TheDisplay->getWidth();	v[1].v = (Real)(ypos)/(Real)TheDisplay->getHeight();
 	//bottom left
-	v[2].p = Vector4(  xpos-0.5f, ypos+height-0.5f, 0.0f, 1.0f );
+	v[2].p = Engine::Math::Vector4{xpos-0.5f, ypos+height-0.5f, 0.0f, 1.0f};
 	v[2].u = (Real)(xpos)/(Real)TheDisplay->getWidth();	v[2].v = (Real)(ypos+height)/(Real)TheDisplay->getHeight();
 	//top left
-	v[3].p = Vector4(  xpos-0.5f,  ypos-0.5f, 0.0f, 1.0f );
+	v[3].p = Engine::Math::Vector4{xpos-0.5f,  ypos-0.5f, 0.0f, 1.0f};
 	v[3].u = (Real)(xpos)/(Real)TheDisplay->getWidth();	v[3].v = (Real)(ypos)/(Real)TheDisplay->getHeight();
 	v[0].color = 0xffffffff;
 	v[1].color = 0xffffffff;
@@ -242,13 +242,13 @@ Bool ScreenBWFilter::postRender(FilterModes mode, Coord2D &scrollDelta,Bool &doE
 {
 
 	W3DTextureHandle * tex =	W3DShaderManager::endRenderToTexture();
-	DEBUG_ASSERTCRASH(tex, ("Require rendered texture."));
+	engine::debug::invariant((tex), "tex", __FILE__, __LINE__, "Require rendered texture.");
 	if (!tex) return false;
 	if (!set(mode)) return false;
 
 	
 	struct _TRANS_LIT_TEX_VERTEX {
-		Vector4 p;
+		Engine::Math::Vector4 p;
 		std::uint32_t color;   // diffuse color
 		float	u;
 		float	v;
@@ -262,16 +262,16 @@ Bool ScreenBWFilter::postRender(FilterModes mode, Coord2D &scrollDelta,Bool &doE
 	height=TheTacticalView->getHeight();
 
 	//bottom right
-	v[0].p = Vector4( xpos+width-0.5f, ypos+height-0.5f, 0.0f, 1.0f );
+	v[0].p = Engine::Math::Vector4{xpos+width-0.5f, ypos+height-0.5f, 0.0f, 1.0f};
 	v[0].u = (Real)(xpos+width)/(Real)TheDisplay->getWidth();	v[0].v = (Real)(ypos+height)/(Real)TheDisplay->getHeight();
 	//top right
-	v[1].p = Vector4( xpos+width-0.5f, ypos-0.5f, 0.0f, 1.0f );
+	v[1].p = Engine::Math::Vector4{xpos+width-0.5f, ypos-0.5f, 0.0f, 1.0f};
 	v[1].u = (Real)(xpos+width)/(Real)TheDisplay->getWidth();	v[1].v = (Real)(ypos)/(Real)TheDisplay->getHeight();
 	//bottom left
-	v[2].p = Vector4(  xpos-0.5f, ypos+height-0.5f, 0.0f, 1.0f );
+	v[2].p = Engine::Math::Vector4{xpos-0.5f, ypos+height-0.5f, 0.0f, 1.0f};
 	v[2].u = (Real)(xpos)/(Real)TheDisplay->getWidth();	v[2].v = (Real)(ypos+height)/(Real)TheDisplay->getHeight();
 	//top left
-	v[3].p = Vector4(  xpos-0.5f,  ypos-0.5f, 0.0f, 1.0f );
+	v[3].p = Engine::Math::Vector4{xpos-0.5f,  ypos-0.5f, 0.0f, 1.0f};
 	v[3].u = (Real)(xpos)/(Real)TheDisplay->getWidth();	v[3].v = (Real)(ypos)/(Real)TheDisplay->getHeight();
 	v[0].color = 0xffffffff;
 	v[1].color = 0xffffffff;
@@ -472,13 +472,13 @@ Bool ScreenCrossFadeFilter::postRender(FilterModes mode, Coord2D &scrollDelta,Bo
 
 	tex=W3DShaderManager::getRenderTexture();
 
-	DEBUG_ASSERTCRASH(tex, ("Require last rendered texture."));
+	engine::debug::invariant((tex), "tex", __FILE__, __LINE__, "Require last rendered texture.");
 	if (!tex) return false;
 	if (!set(mode)) return false;
 
 	
 	struct _TRANS_LIT_TEX_VERTEX {
-		Vector4 p;
+		Engine::Math::Vector4 p;
 		std::uint32_t color;   // diffuse color
 		float	u;
 		float	v;
@@ -511,19 +511,19 @@ Bool ScreenCrossFadeFilter::postRender(FilterModes mode, Coord2D &scrollDelta,Bo
 	radius = 25.0f-radius*24.75f;
 */
 	//bottom right
-	v[0].p = Vector4( xpos+width-0.5f, ypos+height-0.5f, 0.0f, 1.0f );
+	v[0].p = Engine::Math::Vector4{xpos+width-0.5f, ypos+height-0.5f, 0.0f, 1.0f};
 	v[0].u = (Real)(xpos+width)/(Real)TheDisplay->getWidth();	v[0].v = (Real)(ypos+height)/(Real)TheDisplay->getHeight();
 	v[0].u1 = 0.5f+radius;	v[0].v1 = 0.5f+radius;
 	//top right
-	v[1].p = Vector4( xpos+width-0.5f, ypos-0.5f, 0.0f, 1.0f );
+	v[1].p = Engine::Math::Vector4{xpos+width-0.5f, ypos-0.5f, 0.0f, 1.0f};
 	v[1].u = (Real)(xpos+width)/(Real)TheDisplay->getWidth();	v[1].v = (Real)(ypos)/(Real)TheDisplay->getHeight();
 	v[1].u1 = 0.5f+radius;	v[1].v1 = 0.5f-radius;
 	//bottom left
-	v[2].p = Vector4(  xpos-0.5f, ypos+height-0.5f, 0.0f, 1.0f );
+	v[2].p = Engine::Math::Vector4{xpos-0.5f, ypos+height-0.5f, 0.0f, 1.0f};
 	v[2].u = (Real)(xpos)/(Real)TheDisplay->getWidth();	v[2].v = (Real)(ypos+height)/(Real)TheDisplay->getHeight();
 	v[2].u1 = 0.5f-radius;	v[2].v1 = 0.5f+radius;
 	//top left
-	v[3].p = Vector4(  xpos-0.5f,  ypos-0.5f, 0.0f, 1.0f );
+	v[3].p = Engine::Math::Vector4{xpos-0.5f,  ypos-0.5f, 0.0f, 1.0f};
 	v[3].u = (Real)(xpos)/(Real)TheDisplay->getWidth();	v[3].v = (Real)(ypos)/(Real)TheDisplay->getHeight();
 	v[3].u1 = 0.5f-radius;	v[3].v1 = 0.5f-radius;
 
@@ -612,14 +612,14 @@ Bool ScreenMotionBlurFilter::postRender(FilterModes mode, Coord2D &scrollDelta,B
 {
 
 	W3DTextureHandle * tex =	W3DShaderManager::endRenderToTexture();
-	DEBUG_ASSERTCRASH(tex, ("Require rendered texture."));
+	engine::debug::invariant((tex), "tex", __FILE__, __LINE__, "Require rendered texture.");
 	if (!tex) return false;
 	if (!set(mode)) return false;
 
 	
 	Bool continueEffect = true;
 	struct _TRANS_LIT_TEX_VERTEX {
-		Vector4 p;
+		Engine::Math::Vector4 p;
 		std::uint32_t color;   // diffuse color
 		float	u;
 		float	v;
@@ -633,16 +633,16 @@ Bool ScreenMotionBlurFilter::postRender(FilterModes mode, Coord2D &scrollDelta,B
 	height=TheTacticalView->getHeight();
 
 	//bottom right
-	v[0].p = Vector4( xpos+width-0.5f, ypos+height-0.5f, 0.0f, 1.0f );
+	v[0].p = Engine::Math::Vector4{xpos+width-0.5f, ypos+height-0.5f, 0.0f, 1.0f};
 	v[0].u = (Real)(xpos+width)/(Real)TheDisplay->getWidth();	v[0].v = (Real)(ypos+height)/(Real)TheDisplay->getHeight();
 	//top right
-	v[1].p = Vector4( xpos+width-0.5f, ypos-0.5f, 0.0f, 1.0f );
+	v[1].p = Engine::Math::Vector4{xpos+width-0.5f, ypos-0.5f, 0.0f, 1.0f};
 	v[1].u = (Real)(xpos+width)/(Real)TheDisplay->getWidth();	v[1].v = (Real)(ypos)/(Real)TheDisplay->getHeight();
 	//bottom left
-	v[2].p = Vector4(  xpos-0.5f, ypos+height-0.5f, 0.0f, 1.0f );
+	v[2].p = Engine::Math::Vector4{xpos-0.5f, ypos+height-0.5f, 0.0f, 1.0f};
 	v[2].u = (Real)(xpos)/(Real)TheDisplay->getWidth();	v[2].v = (Real)(ypos+height)/(Real)TheDisplay->getHeight();
 	//top left
-	v[3].p = Vector4(  xpos-0.5f,  ypos-0.5f, 0.0f, 1.0f );
+	v[3].p = Engine::Math::Vector4{xpos-0.5f,  ypos-0.5f, 0.0f, 1.0f};
 	v[3].u = (Real)(xpos)/(Real)TheDisplay->getWidth();	v[3].v = (Real)(ypos)/(Real)TheDisplay->getHeight();
 	v[0].color = 0xffffffff;
 	v[1].color = 0xffffffff;
@@ -872,7 +872,7 @@ void W3DShaderManager::init()
 		}
 	}
 
-	DEBUG_LOG(("ShaderManager ChipsetID %d", W3DShaderManager::getChipset()));
+	engine::debug::log_info("ShaderManager ChipsetID %d", W3DShaderManager::getChipset());
 }
 
 // W3DShaderManager::shutdown =======================================================
@@ -938,7 +938,7 @@ void W3DShaderManager::drawViewport(Int color)
 
 	
 	struct _TRANS_LIT_TEX_VERTEX {
-		Vector4 p;
+		Engine::Math::Vector4 p;
 		std::uint32_t color;   // diffuse color
 		float	u;
 		float	v;
@@ -951,16 +951,16 @@ void W3DShaderManager::drawViewport(Int color)
 	height=TheTacticalView->getHeight();
 
 	//bottom right
-	v[0].p = Vector4( xpos+width-0.5f, ypos+height-0.5f, 0.0f, 1.0f );
+	v[0].p = Engine::Math::Vector4{xpos+width-0.5f, ypos+height-0.5f, 0.0f, 1.0f};
 	v[0].u = (Real)(xpos+width)/(Real)TheDisplay->getWidth();	v[0].v = (Real)(ypos+height)/(Real)TheDisplay->getHeight();
 	//top right
-	v[1].p = Vector4( xpos+width-0.5f, ypos-0.5f, 0.0f, 1.0f );
+	v[1].p = Engine::Math::Vector4{xpos+width-0.5f, ypos-0.5f, 0.0f, 1.0f};
 	v[1].u = (Real)(xpos+width)/(Real)TheDisplay->getWidth();	v[1].v = (Real)(ypos)/(Real)TheDisplay->getHeight();
 	//bottom left
-	v[2].p = Vector4(  xpos-0.5f, ypos+height-0.5f, 0.0f, 1.0f );
+	v[2].p = Engine::Math::Vector4{xpos-0.5f, ypos+height-0.5f, 0.0f, 1.0f};
 	v[2].u = (Real)(xpos)/(Real)TheDisplay->getWidth();	v[2].v = (Real)(ypos+height)/(Real)TheDisplay->getHeight();
 	//top left
-	v[3].p = Vector4(  xpos-0.5f,  ypos-0.5f, 0.0f, 1.0f );
+	v[3].p = Engine::Math::Vector4{xpos-0.5f,  ypos-0.5f, 0.0f, 1.0f};
 	v[3].u = (Real)(xpos)/(Real)TheDisplay->getWidth();	v[3].v = (Real)(ypos)/(Real)TheDisplay->getHeight();
 	v[0].color = color;
 	v[1].color = color;
@@ -981,7 +981,7 @@ void W3DShaderManager::drawViewport(Int color)
 //=============================================================================
 void W3DShaderManager::startRenderToTexture()
 {
-	DEBUG_ASSERTCRASH(!m_renderingToTexture, ("Already rendering to texture - cannot nest calls."));
+	engine::debug::invariant((!m_renderingToTexture), "!m_renderingToTexture", __FILE__, __LINE__, "Already rendering to texture - cannot nest calls.");
 
 	if (m_renderingToTexture || m_renderTexture == nullptr) return;
 	if (!m_renderTexture->Ensure_Render_Backend_Texture()
@@ -1012,7 +1012,7 @@ void W3DShaderManager::startRenderToTexture()
 //=============================================================================
 W3DTextureHandle *W3DShaderManager::endRenderToTexture(void)
 {
-	DEBUG_ASSERTCRASH(m_renderingToTexture, ("Not rendering to texture."));
+	engine::debug::invariant((m_renderingToTexture), "m_renderingToTexture", __FILE__, __LINE__, "Not rendering to texture.");
 	if (!m_renderingToTexture) return nullptr;
 	Graphics::Get_Attachment_Bindings().Restore_Default();
 	m_renderingToTexture = false;

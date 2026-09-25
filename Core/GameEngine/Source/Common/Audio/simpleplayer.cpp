@@ -19,6 +19,7 @@
 
 #include "Common/simpleplayer.h"
 #include "Common/urllaunch.h"
+import engine.debug;
 
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -60,7 +61,7 @@ CSimplePlayer::CSimplePlayer( HRESULT* phr )
 ///////////////////////////////////////////////////////////////////////////////
 CSimplePlayer::~CSimplePlayer()
 {
-    DEBUG_ASSERTCRASH( 0 == m_cBuffersOutstanding,("CSimplePlayer destructor m_cBuffersOutstanding != 0") );
+    engine::debug::invariant((0 == m_cBuffersOutstanding), "0 == m_cBuffersOutstanding", __FILE__, __LINE__, "CSimplePlayer destructor m_cBuffersOutstanding != 0");
 
     Close();
 
@@ -159,14 +160,14 @@ HRESULT STDMETHODCALLTYPE CSimplePlayer::OnSample(
         return( E_UNEXPECTED );
     }
 
-    DEBUG_LOG(( " New Sample of length %d and PS time %d ms",
-              cbData, ( DWORD ) ( cnsSampleTime / 10000 ) ));
+    engine::debug::log_info( " New Sample of length %d and PS time %d ms",
+              cbData, ( DWORD ) ( cnsSampleTime / 10000 ) );
 
     LPWAVEHDR pwh = (LPWAVEHDR) new BYTE[ sizeof( WAVEHDR ) + cbData ];
 
     if( nullptr == pwh )
     {
-        DEBUG_LOG(( "OnSample OUT OF MEMORY! "));
+        engine::debug::log_info( "OnSample OUT OF MEMORY! ");
 
         *m_phrCompletion = E_OUTOFMEMORY;
         SetEvent( m_hCompletionEvent );
@@ -189,7 +190,7 @@ HRESULT STDMETHODCALLTYPE CSimplePlayer::OnSample(
 
     if( mmr != MMSYSERR_NOERROR )
     {
-        DEBUG_LOG(( "failed to prepare wave buffer, error=%lu" , mmr ));
+        engine::debug::log_info( "failed to prepare wave buffer, error=%lu" , mmr );
         *m_phrCompletion = E_UNEXPECTED;
         SetEvent( m_hCompletionEvent );
         return( E_UNEXPECTED );
@@ -202,7 +203,7 @@ HRESULT STDMETHODCALLTYPE CSimplePlayer::OnSample(
     {
         delete pwh;
 
-        DEBUG_LOG(( "failed to write wave sample, error=%lu" , mmr ));
+        engine::debug::log_info( "failed to write wave sample, error=%lu" , mmr );
         *m_phrCompletion = E_UNEXPECTED;
         SetEvent( m_hCompletionEvent );
         return( E_UNEXPECTED );
@@ -235,7 +236,7 @@ HRESULT CSimplePlayer::Play( LPCWSTR pszUrl, DWORD dwSecDuration, HANDLE hComple
 
         if( nullptr == pszCheck )
         {
-           DEBUG_LOG(( "internal error %lu" , GetLastError() ));
+           engine::debug::log_info( "internal error %lu" , GetLastError() );
            return E_UNEXPECTED ;
         }
 
@@ -251,7 +252,7 @@ HRESULT CSimplePlayer::Play( LPCWSTR pszUrl, DWORD dwSecDuration, HANDLE hComple
 
     if( nullptr == m_pszUrl )
     {
-        DEBUG_LOG(( "insufficient Memory"  )) ;
+        engine::debug::log_info( "insufficient Memory"  ) ;
         return( E_OUTOFMEMORY );
     }
 
@@ -276,7 +277,7 @@ HRESULT CSimplePlayer::Play( LPCWSTR pszUrl, DWORD dwSecDuration, HANDLE hComple
 
     if( FAILED( hr ) )
     {
-        DEBUG_LOG(( "failed to create audio reader (hr=0x%08x)" , hr ));
+        engine::debug::log_info( "failed to create audio reader (hr=0x%08x)" , hr );
         return( hr );
     }
 
@@ -291,13 +292,13 @@ HRESULT CSimplePlayer::Play( LPCWSTR pszUrl, DWORD dwSecDuration, HANDLE hComple
     }
     if ( NS_E_NO_STREAM == hr )
     {
-        DEBUG_LOG(( "Waiting for transmission to begin..." ));
+        engine::debug::log_info( "Waiting for transmission to begin..." );
         WaitForSingleObject( m_hOpenEvent, INFINITE );
         hr = m_hrOpen;
     }
     if ( FAILED( hr ) )
     {
-        DEBUG_LOG(( "failed to open (hr=0x%08x)", hr ));
+        engine::debug::log_info( "failed to open (hr=0x%08x)", hr );
         return( hr );
     }
 
@@ -308,7 +309,7 @@ HRESULT CSimplePlayer::Play( LPCWSTR pszUrl, DWORD dwSecDuration, HANDLE hComple
     hr = m_pReader->QueryInterface( IID_IWMHeaderInfo, ( VOID ** )&m_pHeader );
     if ( FAILED( hr ) )
     {
-        DEBUG_LOG(( "failed to qi for header interface (hr=0x%08x)" , hr ));
+        engine::debug::log_info( "failed to qi for header interface (hr=0x%08x)" , hr );
         return( hr );
     }
 
@@ -317,7 +318,7 @@ HRESULT CSimplePlayer::Play( LPCWSTR pszUrl, DWORD dwSecDuration, HANDLE hComple
     hr = m_pHeader->GetAttributeCount( 0, &wAttrCnt );
     if ( FAILED( hr ) )
     {
-        DEBUG_LOG(( "GetAttributeCount Failed (hr=0x%08x)" , hr ));
+        engine::debug::log_info( "GetAttributeCount Failed (hr=0x%08x)" , hr );
         return( hr );
     }
 
@@ -334,7 +335,7 @@ HRESULT CSimplePlayer::Play( LPCWSTR pszUrl, DWORD dwSecDuration, HANDLE hComple
         hr = m_pHeader->GetAttributeByIndex( i, &wStream, nullptr, &cchNamelen, &type, nullptr, &cbLength );
         if ( FAILED( hr ) )
         {
-            DEBUG_LOG(( "GetAttributeByIndex Failed (hr=0x%08x)" , hr ));
+            engine::debug::log_info( "GetAttributeByIndex Failed (hr=0x%08x)" , hr );
             break;
         }
 
@@ -350,35 +351,35 @@ HRESULT CSimplePlayer::Play( LPCWSTR pszUrl, DWORD dwSecDuration, HANDLE hComple
         hr = m_pHeader->GetAttributeByIndex( i, &wStream, pwszName, &cchNamelen, &type, pValue, &cbLength );
         if ( FAILED( hr ) )
         {
-            DEBUG_LOG(( "GetAttributeByIndex Failed (hr=0x%08x)" , hr ));
+            engine::debug::log_info( "GetAttributeByIndex Failed (hr=0x%08x)" , hr );
             break;
         }
 
         switch ( type )
         {
         case WMT_TYPE_DWORD:
-            DEBUG_LOG(("%ws:  %u" , pwszName, *((DWORD *) pValue) ));
+            engine::debug::log_info("%ws:  %u" , pwszName, *((DWORD *) pValue) );
             break;
         case WMT_TYPE_STRING:
-            DEBUG_LOG(("%ws:   %ws" , pwszName, (WCHAR *) pValue ));
+            engine::debug::log_info("%ws:   %ws" , pwszName, (WCHAR *) pValue );
             break;
         case WMT_TYPE_BINARY:
-            DEBUG_LOG(("%ws:   Type = Binary of Length %u" , pwszName, cbLength ));
+            engine::debug::log_info("%ws:   Type = Binary of Length %u" , pwszName, cbLength );
             break;
         case WMT_TYPE_BOOL:
-            DEBUG_LOG(("%ws:   %s" , pwszName, ( * ( ( BOOL * ) pValue) ? _T( "true" ) : _T( "false" ) ) ));
+            engine::debug::log_info("%ws:   %s" , pwszName, ( * ( ( BOOL * ) pValue) ? _T( "true" ) : _T( "false" ) ) );
             break;
         case WMT_TYPE_WORD:
-            DEBUG_LOG(("%ws:  %hu" , pwszName, *((WORD *) pValue) ));
+            engine::debug::log_info("%ws:  %hu" , pwszName, *((WORD *) pValue) );
             break;
         case WMT_TYPE_QWORD:
-            DEBUG_LOG(("%ws:  %I64u" , pwszName, *((QWORD *) pValue) ));
+            engine::debug::log_info("%ws:  %I64u" , pwszName, *((QWORD *) pValue) );
             break;
         case WMT_TYPE_GUID:
-            DEBUG_LOG(("%ws:  %I64x%I64x" , pwszName, *((QWORD *) pValue), *((QWORD *) pValue + 1) ));
+            engine::debug::log_info("%ws:  %I64x%I64x" , pwszName, *((QWORD *) pValue), *((QWORD *) pValue + 1) );
             break;
         default:
-            DEBUG_LOG(("%ws:   Type = %d, Length %u" , pwszName, type, cbLength ));
+            engine::debug::log_info("%ws:   Type = %d, Length %u" , pwszName, type, cbLength );
             break;
         }
 
@@ -408,13 +409,13 @@ HRESULT CSimplePlayer::Play( LPCWSTR pszUrl, DWORD dwSecDuration, HANDLE hComple
     hr = m_pReader->GetOutputCount( &cOutputs );
     if ( FAILED( hr ) )
     {
-        DEBUG_LOG(( "failed GetOutputCount(), (hr=0x%08x)" , hr ));
+        engine::debug::log_info( "failed GetOutputCount(), (hr=0x%08x)" , hr );
         return( hr );
     }
 
     if ( cOutputs != 1 )
     {
-        DEBUG_LOG(( "Not audio only (cOutputs = %d)." , cOutputs ));
+        engine::debug::log_info( "Not audio only (cOutputs = %d)." , cOutputs );
         // return( E_UNEXPECTED );
     }
 
@@ -422,7 +423,7 @@ HRESULT CSimplePlayer::Play( LPCWSTR pszUrl, DWORD dwSecDuration, HANDLE hComple
     hr = m_pReader->GetOutputProps( 0, &pProps );
     if ( FAILED( hr ) )
     {
-        DEBUG_LOG(( "failed GetOutputProps(), (hr=0x%08x)" , hr ));
+        engine::debug::log_info( "failed GetOutputProps(), (hr=0x%08x)" , hr );
         return( hr );
     }
 
@@ -432,7 +433,7 @@ HRESULT CSimplePlayer::Play( LPCWSTR pszUrl, DWORD dwSecDuration, HANDLE hComple
     if ( FAILED( hr ) )
     {
         pProps->Release( );
-        DEBUG_LOG(( "GetMediaType failed (hr=0x%08x)" , hr ));
+        engine::debug::log_info( "GetMediaType failed (hr=0x%08x)" , hr );
         return( hr );
     }
 
@@ -442,7 +443,7 @@ HRESULT CSimplePlayer::Play( LPCWSTR pszUrl, DWORD dwSecDuration, HANDLE hComple
     if ( FAILED( hr ) )
     {
         pProps->Release( );
-        DEBUG_LOG(( "GetMediaType failed (hr=0x%08x)" , hr ));
+        engine::debug::log_info( "GetMediaType failed (hr=0x%08x)" , hr );
         return( hr );
     }
 
@@ -451,7 +452,7 @@ HRESULT CSimplePlayer::Play( LPCWSTR pszUrl, DWORD dwSecDuration, HANDLE hComple
     if ( pMediaType->majortype != WMMEDIATYPE_Audio )
     {
 		delete[] (BYTE *) pMediaType ;
-        DEBUG_LOG(( "Not audio only (major type mismatch)."  ));
+        engine::debug::log_info( "Not audio only (major type mismatch)."  );
         return( E_UNEXPECTED );
     }
 
@@ -477,7 +478,7 @@ HRESULT CSimplePlayer::Play( LPCWSTR pszUrl, DWORD dwSecDuration, HANDLE hComple
     if( mmr != MMSYSERR_NOERROR  )
     {
 
-        DEBUG_LOG(( "failed to open wav output device, error=%lu" , mmr ));
+        engine::debug::log_info( "failed to open wav output device, error=%lu" , mmr );
         return( E_UNEXPECTED );
     }
 
@@ -489,7 +490,7 @@ HRESULT CSimplePlayer::Play( LPCWSTR pszUrl, DWORD dwSecDuration, HANDLE hComple
 
     if( FAILED( hr ) )
     {
-        DEBUG_LOG(( "failed Start(), (hr=0x%08x)" , hr ));
+        engine::debug::log_info( "failed Start(), (hr=0x%08x)" , hr );
         return( hr );
     }
 
@@ -508,39 +509,39 @@ HRESULT STDMETHODCALLTYPE CSimplePlayer::OnStatus(
     switch( Status )
     {
     case WMT_OPENED:
-        DEBUG_LOG(( "OnStatus( WMT_OPENED )"  ));
+        engine::debug::log_info( "OnStatus( WMT_OPENED )"  );
         m_hrOpen = hr;
         SetEvent( m_hOpenEvent );
         break;
 
     case WMT_SOURCE_SWITCH:
-        DEBUG_LOG(( "OnStatus( WMT_SOURCE_SWITCH )"  ));
+        engine::debug::log_info( "OnStatus( WMT_SOURCE_SWITCH )"  );
         m_hrOpen = hr;
         SetEvent( m_hOpenEvent );
         break;
 
     case WMT_ERROR:
-        DEBUG_LOG(( "OnStatus( WMT_ERROR )"  ));
+        engine::debug::log_info( "OnStatus( WMT_ERROR )"  );
         break;
 
     case WMT_STARTED:
-        DEBUG_LOG(( "OnStatus( WMT_STARTED )"  ));
+        engine::debug::log_info( "OnStatus( WMT_STARTED )"  );
         break;
 
     case WMT_STOPPED:
-        DEBUG_LOG(( "OnStatus( WMT_STOPPED )"  ));
+        engine::debug::log_info( "OnStatus( WMT_STOPPED )"  );
         break;
 
     case WMT_BUFFERING_START:
-        DEBUG_LOG(( "OnStatus( WMT_BUFFERING START)"  ));
+        engine::debug::log_info( "OnStatus( WMT_BUFFERING START)"  );
         break;
 
     case WMT_BUFFERING_STOP:
-        DEBUG_LOG(( "OnStatus( WMT_BUFFERING STOP)"  ));
+        engine::debug::log_info( "OnStatus( WMT_BUFFERING STOP)"  );
         break;
 
     case WMT_EOF:
-        DEBUG_LOG(( "OnStatus( WMT_EOF )"  ));
+        engine::debug::log_info( "OnStatus( WMT_EOF )"  );
 
         //
         // cleanup and exit
@@ -556,7 +557,7 @@ HRESULT STDMETHODCALLTYPE CSimplePlayer::OnStatus(
         break;
 
     case WMT_END_OF_SEGMENT:
-        DEBUG_LOG(( "OnStatus( WMT_END_OF_SEGMENT )"  ));
+        engine::debug::log_info( "OnStatus( WMT_END_OF_SEGMENT )"  );
 
         //
         // cleanup and exit
@@ -572,11 +573,11 @@ HRESULT STDMETHODCALLTYPE CSimplePlayer::OnStatus(
         break;
 
     case WMT_LOCATING:
-        DEBUG_LOG(( "OnStatus( WMT_LOCATING )"  ));
+        engine::debug::log_info( "OnStatus( WMT_LOCATING )"  );
         break;
 
     case WMT_CONNECTING:
-        DEBUG_LOG(( "OnStatus( WMT_CONNECTING )"  ));
+        engine::debug::log_info( "OnStatus( WMT_CONNECTING )"  );
         break;
 
     case WMT_NO_RIGHTS:
@@ -595,7 +596,7 @@ HRESULT STDMETHODCALLTYPE CSimplePlayer::OnStatus(
 
                 if( FAILED( hr ) )
                 {
-                    DEBUG_LOG(( "Unable to launch web browser to retrieve playback license (hr=0x%08x)" , hr ));
+                    engine::debug::log_info( "Unable to launch web browser to retrieve playback license (hr=0x%08x)" , hr );
                 }
 
                 delete [] pwszEscapedURL;
@@ -606,7 +607,7 @@ HRESULT STDMETHODCALLTYPE CSimplePlayer::OnStatus(
 
     case WMT_MISSING_CODEC:
 		{
-			DEBUG_LOG(( "Missing codec: (hr=0x%08x)" , hr ));
+			engine::debug::log_info( "Missing codec: (hr=0x%08x)" , hr );
 			break;
 		}
 
@@ -698,7 +699,7 @@ void CSimplePlayer::RemoveWaveHeaders( )
     while( nullptr != m_whdrHead )
     {
         tmp = m_whdrHead->next;
-        DEBUG_ASSERTCRASH( m_whdrHead->pwh->dwFlags & WHDR_DONE, ("RemoveWaveHeaders!") );
+        engine::debug::invariant((m_whdrHead->pwh->dwFlags & WHDR_DONE), "m_whdrHead->pwh->dwFlags & WHDR_DONE", __FILE__, __LINE__, "RemoveWaveHeaders!");
         waveOutUnprepareHeader( m_hwo, m_whdrHead->pwh, sizeof( WAVEHDR ) );
         delete m_whdrHead->pwh;
         delete m_whdrHead;

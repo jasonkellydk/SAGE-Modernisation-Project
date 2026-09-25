@@ -36,8 +36,10 @@
 
 #pragma once
 
+
+#include <cassert>
 #include "LISTNODE.h"
-#include "WWDebug/wwdebug.h"
+
 
 
 class RefCountClass;
@@ -138,7 +140,7 @@ public:
 		Dec_Total_Refs(this);
 #endif
 		NumRefs--;
-		WWASSERT(NumRefs >= 0);
+		assert((NumRefs >= 0));
 		if (NumRefs == 0)
 			const_cast<RefCountClass*>(this)->Delete_This();
 	}
@@ -173,7 +175,7 @@ protected:
 #ifdef RTS_DEBUG
 		Remove_Active_Ref(this);
 #endif
-		WWASSERT(NumRefs == 0);
+		assert((NumRefs == 0));
 	}
 
 private:
@@ -262,7 +264,7 @@ public:
 
 	~RefCountValue()
 	{
-		WWASSERT(NumRefs == IntegerType(0));
+		assert((NumRefs == IntegerType(0)));
 	}
 
 	/*
@@ -276,7 +278,7 @@ public:
 	*/
 	void Add_Ref() const
 	{
-		WWASSERT(NumRefs != ~IntegerType(0));
+		assert((NumRefs != ~IntegerType(0)));
 		++NumRefs;
 	}
 
@@ -290,7 +292,7 @@ public:
 	template <typename DeleteFunction, typename ObjectType>
 	void Release_Ref(DeleteFunction deleteFunction, const ObjectType* objectToDelete) const
 	{
-		WWASSERT(NumRefs != IntegerType(0));
+		assert((NumRefs != IntegerType(0)));
 		if (--NumRefs == IntegerType(0))
 		{
 			deleteFunction(const_cast<ObjectType*>(objectToDelete));

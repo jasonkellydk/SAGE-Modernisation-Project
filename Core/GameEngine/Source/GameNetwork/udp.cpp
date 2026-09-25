@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////
 
 // SYSTEM INCLUDES ////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 // USER INCLUDES //////////////////////////////////////////////////////////////
 #include "Common/GameEngine.h"
@@ -37,8 +38,6 @@
 
 
 //-------------------------------------------------------------------------
-
-#ifdef DEBUG_LOGGING
 
 #define CASE(x) case (x): return #x;
 
@@ -109,8 +108,6 @@ AsciiString GetWSAErrorString( Int error )
 }
 
 #undef CASE
-
-#endif // defined(RTS_DEBUG)
 
 //-------------------------------------------------------------------------
 
@@ -249,10 +246,8 @@ Int UDP::Write(const unsigned char *msg,UnsignedInt len,UnsignedInt IP,UnsignedS
 	{
     retval=-1;
 		m_lastError = WSAGetLastError();
-#ifdef DEBUG_LOGGING
 		static Int errCount = 0;
-#endif
-		DEBUG_ASSERTLOG(errCount++ > 100, ("UDP::Write() - WSA error is %s", GetWSAErrorString(WSAGetLastError()).str()));
+		if (!(errCount++ > 100)) engine::debug::log_error("UDP::Write() - WSA error is %s", GetWSAErrorString(WSAGetLastError()).str());
 	}
   #endif
 
@@ -274,10 +269,8 @@ Int UDP::Read(unsigned char *msg,UnsignedInt len,sockaddr_in *from)
 			{
 				// failing because of a blocking error isn't really such a bad thing.
 				m_lastError = WSAGetLastError();
-#ifdef DEBUG_LOGGING
 				static Int errCount = 0;
-#endif
-				DEBUG_ASSERTLOG(errCount++ > 100, ("UDP::Read() - WSA error is %s", GetWSAErrorString(WSAGetLastError()).str()));
+				if (!(errCount++ > 100)) engine::debug::log_error("UDP::Read() - WSA error is %s", GetWSAErrorString(WSAGetLastError()).str());
 				retval = -1;
 			} else {
 				retval = 0;
@@ -295,10 +288,8 @@ Int UDP::Read(unsigned char *msg,UnsignedInt len,sockaddr_in *from)
 			{
 				// failing because of a blocking error isn't really such a bad thing.
 				m_lastError = WSAGetLastError();
-#ifdef DEBUG_LOGGING
 				static Int errCount = 0;
-#endif
-				DEBUG_ASSERTLOG(errCount++ > 100, ("UDP::Read() - WSA error is %s", GetWSAErrorString(WSAGetLastError()).str()));
+				if (!(errCount++ > 100)) engine::debug::log_error("UDP::Read() - WSA error is %s", GetWSAErrorString(WSAGetLastError()).str());
 				retval = -1;
 			} else {
 				retval = 0;

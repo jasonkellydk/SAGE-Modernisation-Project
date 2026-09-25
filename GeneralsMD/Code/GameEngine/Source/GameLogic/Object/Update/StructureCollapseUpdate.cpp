@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/Thing.h"
 #include "Common/ThingTemplate.h"
@@ -45,8 +46,18 @@
 #include "GameLogic/ObjectCreationList.h"
 #include "GameClient/Drawable.h"
 #include "GameClient/InGameUI.h"
+import Engine.Core.Math.AffineTransform3;
+import Engine.Core.Math.Vector3;
 
 const Int MAX_IDX = 32;
+
+// Builds the vector through a function call (rather than a braced initializer) so that the
+// client random values are drawn in the same (compiler-defined) argument order as the original
+// Vector3::Set call.
+static Engine::Math::Vector3 makeShudderVector(Real x, Real y, Real z)
+{
+	return Engine::Math::Vector3{x, y, z};
+}
 
 //-------------------------------------------------------------------------------------------------
 //-------------------------------------------------------------------------------------------------
@@ -172,7 +183,7 @@ UpdateSleepTime StructureCollapseUpdate::update()
 
 	if (m_collapseState == COLLAPSESTATE_STANDING)
 	{
-		DEBUG_CRASH(("hmm, what?"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "hmm, what?");
 		return UPDATE_SLEEP_FOREVER;
 	}
 
@@ -184,15 +195,12 @@ UpdateSleepTime StructureCollapseUpdate::update()
 		Object *building = getObject();
 
 		const Coord3D *currentPosition = building->getPosition();
-		Vector3 shudder;
-		shudder.Set(GameClientRandomValueReal(-(d->m_maxShudder), d->m_maxShudder), GameClientRandomValueReal(-(d->m_maxShudder), d->m_maxShudder), 0);
+		Engine::Math::Vector3 shudder = makeShudderVector(GameClientRandomValueReal(-(d->m_maxShudder), d->m_maxShudder), GameClientRandomValueReal(-(d->m_maxShudder), d->m_maxShudder), 0);
 
-		const Matrix3D *instMatrix = building->getDrawable()->getInstanceMatrix();
-		Matrix3D newInstMatrix;
-		newInstMatrix = *instMatrix;
-		newInstMatrix.Set_Translation(shudder);
+		Engine::Math::AffineTransform3 newInstTransform = *building->getDrawable()->instanceTransform();
+		newInstTransform.Set_Translation(shudder);
 
-		building->getDrawable()->setInstanceMatrix(&newInstMatrix);
+		building->getDrawable()->setInstanceTransform(&newInstTransform);
 
 		if (now >= m_collapseFrame)
 		{
@@ -212,14 +220,11 @@ UpdateSleepTime StructureCollapseUpdate::update()
 		m_collapseVelocity -= TheGlobalData->m_gravity * (1.0 - d->m_collapseDamping);
 
 		const Coord3D *currentPosition = building->getPosition();
-		Vector3 shudder;
-		shudder.Set(GameClientRandomValueReal(-(d->m_maxShudder), d->m_maxShudder), GameClientRandomValueReal(-(d->m_maxShudder), d->m_maxShudder), m_currentHeight);
-		const Matrix3D *instMatrix = building->getDrawable()->getInstanceMatrix();
-		Matrix3D newInstMatrix;
-		newInstMatrix = *instMatrix;
-		newInstMatrix.Set_Translation(shudder);
+		Engine::Math::Vector3 shudder = makeShudderVector(GameClientRandomValueReal(-(d->m_maxShudder), d->m_maxShudder), GameClientRandomValueReal(-(d->m_maxShudder), d->m_maxShudder), m_currentHeight);
+		Engine::Math::AffineTransform3 newInstTransform = *building->getDrawable()->instanceTransform();
+		newInstTransform.Set_Translation(shudder);
 
-		building->getDrawable()->setInstanceMatrix(&newInstMatrix);
+		building->getDrawable()->setInstanceTransform(&newInstTransform);
 
 		if (now >= m_burstFrame)
 		{
@@ -254,13 +259,9 @@ UpdateSleepTime StructureCollapseUpdate::update()
 			body->updateBodyParticleSystems();
 
 
-			Vector3 shudder;
-			shudder.Set(0, 0, 0);
-			const Matrix3D *instMatrix = building->getDrawable()->getInstanceMatrix();
-			Matrix3D newInstMatrix;
-			newInstMatrix = *instMatrix;
-			newInstMatrix.Set_Translation(shudder);
-			building->getDrawable()->setInstanceMatrix(&newInstMatrix);
+			Engine::Math::AffineTransform3 newInstTransform = *building->getDrawable()->instanceTransform();
+			newInstTransform.Set_Translation({});
+			building->getDrawable()->setInstanceTransform(&newInstTransform);
 
 			return UPDATE_SLEEP_FOREVER;
 		}
@@ -301,7 +302,7 @@ static void buildNonDupRandomIndexList(Int range, Int count, Int idxList[])
 //-------------------------------------------------------------------------------------------------
 void StructureCollapseUpdate::doPhaseStuff(StructureCollapsePhaseType scphase, const Coord3D *target)
 {
-	DEBUG_LOG(("Firing phase %d on frame %d", scphase, TheGameLogic->getFrame()));
+	engine::debug::log_info("Firing phase %d on frame %d", scphase, TheGameLogic->getFrame());
 
 	const StructureCollapseUpdateModuleData* d = getStructureCollapseUpdateModuleData();
 	Int i, idx, count, listSize;
@@ -316,7 +317,7 @@ void StructureCollapseUpdate::doPhaseStuff(StructureCollapsePhaseType scphase, c
 		{
 			idx = idxList[i];
 			const FXVec& v = d->m_fxs[scphase];
-			DEBUG_ASSERTCRASH(idx>=0&&idx<v.size(),("bad idx"));
+			engine::debug::invariant((idx>=0&&idx<v.size()), "idx>=0&&idx<v.size()", __FILE__, __LINE__, "bad idx");
 			const FXList* fxl = v[idx];
 			FXList::doFXPos(fxl, target);
 		}
@@ -331,7 +332,7 @@ void StructureCollapseUpdate::doPhaseStuff(StructureCollapsePhaseType scphase, c
 		{
 			idx = idxList[i];
 			const OCLVec& v = d->m_ocls[scphase];
-			DEBUG_ASSERTCRASH(idx>=0&&idx<v.size(),("bad idx"));
+			engine::debug::invariant((idx>=0&&idx<v.size()), "idx>=0&&idx<v.size()", __FILE__, __LINE__, "bad idx");
 			const ObjectCreationList* ocl = v[idx];
 			ObjectCreationList::create(ocl, getObject(), target, nullptr, getObject()->getOrientation() );
 		}

@@ -1,10 +1,14 @@
+#include <cmath>
 import Graphics.Frame.RenderClock;
 import Graphics.Frame.RenderSettings;
 #include "W3DDevice/GameClient/W3DRenderServices.h"
 #include <array>
-#include <climits>
+#include <cstdint>
 #include <optional>
 #include <span>
+import Engine.Core.Math.RandomStream;
+import Engine.Core.Math.Matrix4;
+import Engine.Core.Math.Vector3;
 import Graphics.Frame.Runtime;
 import Graphics.Materials.Ordering;
 import Graphics.Scene.DrawParameters;
@@ -21,8 +25,6 @@ import Graphics.Scene.Views.CameraMatrices;
 #include "W3DDevice/GameClient/W3DTextureHandle.h"
 
 #include "WWLib/RANDOM.h"
-#include "WWMath/matrix4.h"
-
 namespace {
 
 Random4Class visual_random;
@@ -34,15 +36,15 @@ std::array<float, 1> Sample_Scalar(std::array<float, 1> scale)
 
 std::array<float, 3> Sample_Color(std::array<float, 3> scale)
 {
-    const Vector3 value(visual_random * scale[0], visual_random * scale[1], visual_random * scale[2]);
-    return {value.X, value.Y, value.Z};
+    const Engine::Math::Vector3 value(visual_random * scale[0], visual_random * scale[1], visual_random * scale[2]);
+    return {value.x, value.y, value.z};
 }
 
 std::array<float, 3> Acceleration(const Assets::EmitterAssetDesc &description)
 {
-    const Vector3 value = Vector3(description.acceleration.x, description.acceleration.y,
+    const Engine::Math::Vector3 value = Engine::Math::Vector3(description.acceleration.x, description.acceleration.y,
         description.acceleration.z) / 1000000.0f;
-    return {value.X, value.Y, value.Z};
+    return {value.x, value.y, value.z};
 }
 
 std::uint32_t Lifetime(const Assets::EmitterAssetDesc &description)
@@ -50,33 +52,31 @@ std::uint32_t Lifetime(const Assets::EmitterAssetDesc &description)
     return static_cast<std::uint32_t>(1000 * (description.lifetime > 0 ? description.lifetime : 1.0f));
 }
 
-template<class Matrix>
-Graphics::Matrix4x4 Copy_Matrix(const Matrix &source)
+// Seed of the frozen noise sequence. Like the original fresh Random3Class, the
+// same sequence restarts for every chunk so frozen lines never change.
+constexpr std::uint64_t Frozen_Line_Noise_Seed = 0;
+
+// Non-frozen noise draws from one persistent stream that advances every
+// submit, matching the original shared Vector3Randomizer generator.
+Engine::Math::RandomStream &Shared_Line_Noise_Stream() noexcept
 {
-    Graphics::Matrix4x4 matrix;
-    for (unsigned row = 0; row < 4; ++row)
-        for (unsigned column = 0; column < 4; ++column)
-            matrix.values[row * 4 + column] = source[row][column];
-    return matrix;
+    static Engine::Math::RandomStream stream(0x11e5eed5ull);
+    return stream;
 }
 
 struct LineRandom final {
-    std::optional<Random3Class> frozen;
-    std::optional<Vector3SolidBoxRandomizer> randomizer;
+    std::optional<Engine::Math::RandomStream> frozen;
     void Reset(std::size_t)
     {
-        frozen.emplace();
-        randomizer.emplace(Vector3(1, 1, 1));
+        frozen.emplace(Frozen_Line_Noise_Seed);
     }
     std::array<float, 3> Next(bool freeze)
     {
-        Vector3 value;
-        if (freeze) {
-            const float inverse = 1.0f / static_cast<float>(INT_MAX);
-            value.Set(*frozen * inverse, *frozen * inverse, *frozen * inverse);
-        } else
-            randomizer->Get_Vector(value);
-        return {value.X, value.Y, value.Z};
+        auto &stream = freeze ? *frozen : Shared_Line_Noise_Stream();
+        const float x = stream.NextFloat(-1.0f, 1.0f);
+        const float y = stream.NextFloat(-1.0f, 1.0f);
+        const float z = stream.NextFloat(-1.0f, 1.0f);
+        return {x, y, z};
     }
 };
 
@@ -150,17 +150,21 @@ void W3DEmitterParticles::Submit(W3DRenderContext &info)
     if (!device)
         return;
     Graphics::EmitterDrawInput input;
-    Matrix4x4 projection;
-    info.Camera.Get_Backend_Projection_Matrix(&projection);
-    input.projection = Copy_Matrix(projection);
+    input.projection.values = info.Camera.Build_Render_Matrices().projection;
     input.view = Graphics::Get_Camera_Matrices().view;
-    input.world = Copy_Matrix(Matrix4x4(Get_Transform()));
-    Matrix3D rotation = info.Camera.Get_Transform();
-    rotation.Set_Translation(Vector3(0, 0, 0));
-    rotation.Get_Orthogonal_Inverse(rotation);
-    for (unsigned row = 0; row < 3; ++row)
-        for (unsigned column = 0; column < 3; ++column)
-            input.line_rotation[row * 3 + column] = rotation[row][column];
+    input.world.values = Graphics::Import_Affine_Transform(Get_Transform()).matrix;
+    // The original called Matrix3D::Get_Orthogonal_Inverse in place on the
+    // camera rotation. Because source and destination aliased, the transpose
+    // copied the already-overwritten upper triangle back, leaving a symmetric
+    // matrix built from the lower triangle. Reproduce that result exactly.
+    const auto camera_transform = info.Camera.Get_Transform();
+    const auto &camera = camera_transform.elements;
+    const float r00 = camera[0], r10 = camera[4], r11 = camera[5];
+    const float r20 = camera[8], r21 = camera[9], r22 = camera[10];
+    input.line_rotation = {
+        r00, r10, r20,
+        r10, r11, r21,
+        r20, r21, r22};
     input.scene = Graphics::Get_Scene_Draw_Parameters();
     input.rendered_frame = Get_W3D_Render_Services().Frame_Count();
     input.sync_time = Graphics::Get_Render_Clock().Sync_Time();
@@ -168,8 +172,8 @@ void W3DEmitterParticles::Submit(W3DRenderContext &info)
     input.reflection = Get_W3D_Render_Services().Is_Reflection_Render_Pass();
     input.sorting_enabled = Graphics::Get_Render_Settings().Is_Sorting_Enabled();
     if (m_emitter) {
-        const Vector3 position = m_emitter->Get_Position();
-        input.source_position = {position.X, position.Y, position.Z};
+        const Engine::Math::Vector3 position = m_emitter->Get_Position();
+        input.source_position = {position.x, position.y, position.z};
         input.source_group = m_emitter->Group();
         input.source_active = !m_emitter->Is_Stopped();
     }
@@ -200,18 +204,18 @@ void W3DEmitterParticles::Update_Bounds()
     if (!m_bounds_dirty)
         return;
     const auto bounds = m_kinematics.Bounds(m_visuals.Max_Size(), Get_W3D_Render_Services().Frame_Count());
-    m_bounds.Init(MinMaxAABoxClass(Vector3(bounds.minimum.x, bounds.minimum.y, bounds.minimum.z),
-        Vector3(bounds.maximum.x, bounds.maximum.y, bounds.maximum.z)));
+    m_bounds = {{bounds.minimum.x, bounds.minimum.y, bounds.minimum.z},
+        {bounds.maximum.x, bounds.maximum.y, bounds.maximum.z}};
     m_bounds_dirty = false;
 }
 
-void W3DEmitterParticles::Get_Obj_Space_Bounding_Sphere(SphereClass &sphere) const
+void W3DEmitterParticles::Get_Local_Bounding_Sphere(Engine::Math::Sphere3 &sphere) const
 {
     const_cast<W3DEmitterParticles *>(this)->Update_Bounds();
-    sphere.Init(m_bounds.Center, m_bounds.Extent.Length());
+    sphere = {m_bounds.Center(), m_bounds.Extent().Length()};
 }
 
-void W3DEmitterParticles::Get_Obj_Space_Bounding_Box(AABoxClass &box) const
+void W3DEmitterParticles::Get_Local_Bounds(Engine::Math::AxisAlignedBox3 &box) const
 {
     const_cast<W3DEmitterParticles *>(this)->Update_Bounds();
     box = m_bounds;
@@ -220,8 +224,10 @@ void W3DEmitterParticles::Get_Obj_Space_Bounding_Box(AABoxClass &box) const
 void W3DEmitterParticles::Update_Cached_Bounding_Volumes() const
 {
     const_cast<W3DEmitterParticles *>(this)->Update_Bounds();
-    CachedBoundingSphere.Init(m_bounds.Center, m_bounds.Extent.Length());
-    CachedBoundingBox = m_bounds;
+    const Engine::Math::Vector3 center = m_bounds.Center();
+    const Engine::Math::Vector3 extent = m_bounds.Extent();
+    CachedBoundingSphere = {center, extent.Length()};
+    CachedBoundingBox = {center - extent, center + extent};
     Validate_Cached_Bounding_Volumes();
 }
 
@@ -229,12 +235,17 @@ void W3DEmitterParticles::Prepare_LOD(W3DCamera &camera)
 {
     if (!Is_Not_Hidden_At_All())
         return;
-    Vector2 minimum, maximum;
+    Engine::Math::Vector2 minimum, maximum;
     camera.Get_View_Plane(minimum, maximum);
     const auto viewport = camera.Get_Viewport();
-    const auto &sphere = Get_Bounding_Sphere();
-    m_detail.Prepare((sphere.Center - camera.Get_Position()).Length(), sphere.Radius, m_visuals.Max_Size(),
-        viewport.Width() / (maximum.X - minimum.X), viewport.Height() / (maximum.Y - minimum.Y));
+    const auto sphere = Get_Bounding_Sphere();
+    const auto camera_position = camera.Get_Position();
+    const Engine::Math::Vector3 center_offset{sphere.center.x - camera_position.x,
+        sphere.center.y - camera_position.y, sphere.center.z - camera_position.z};
+    const float distance = std::sqrt(center_offset.x * center_offset.x
+        + center_offset.y * center_offset.y + center_offset.z * center_offset.z);
+    m_detail.Prepare(distance, sphere.radius, m_visuals.Max_Size(),
+        viewport.Width() / (maximum.x - minimum.x), viewport.Height() / (maximum.y - minimum.y));
 }
 
 int W3DEmitterParticles::Calculate_Cost_Value_Arrays(float area, float *values, float *costs) const

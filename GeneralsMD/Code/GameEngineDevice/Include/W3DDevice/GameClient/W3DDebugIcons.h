@@ -55,8 +55,8 @@ public:
 
 	virtual bool					Cast_Ray(W3DRayCastQuery & raytest);
 
-	virtual void					Get_Obj_Space_Bounding_Sphere(SphereClass & sphere) const;
-  virtual void					Get_Obj_Space_Bounding_Box(AABoxClass & aabox) const;
+	virtual void					Get_Local_Bounding_Sphere(Engine::Math::Sphere3 & sphere) const;
+  virtual void					Get_Local_Bounds(Engine::Math::AxisAlignedBox3 & aabox) const;
 
 protected:
 	Graphics::SurfaceMeshHandle m_mesh;

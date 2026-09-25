@@ -1,6 +1,7 @@
 #include "W3DDevice/GameClient/W3DRenderObject.h"
 
 #include <cstring>
+#include <type_traits>
 
 #include "WWLib/chunkio.h"
 #include "WWSaveLoad/persistfactory.h"
@@ -9,6 +10,9 @@
 
 namespace
 {
+
+static_assert(sizeof(Engine::Math::AffineTransform3) == 12 * sizeof(float));
+static_assert(std::is_trivially_copyable_v<Engine::Math::AffineTransform3>);
 
 constexpr std::uint32_t Render_Object_Persist_Chunk = 0x00010000;
 constexpr std::uint32_t Render_Object_Variables_Chunk = 0x00555040;
@@ -29,7 +33,7 @@ W3DRenderObjectPersistFactory g_w3d_render_object_persist_factory;
 PersistClass *W3DRenderObjectPersistFactory::Load(ChunkLoadClass &load) const
 {
     W3DRenderObject *old_object = nullptr;
-    Matrix3D transform(true);
+    Engine::Math::AffineTransform3 transform = Engine::Math::AffineTransform3::Identity();
     char name[256]{};
 
     while (load.Open_Chunk()) {
@@ -48,7 +52,7 @@ PersistClass *W3DRenderObjectPersistFactory::Load(ChunkLoadClass &load) const
                     name[sizeof(name) - 1] = '\0';
                     break;
                 case Render_Object_Variable_Transform:
-                    load.Read(&transform, sizeof(transform));
+                    load.Read(transform.elements.data(), sizeof(transform.elements));
                     break;
                 default:
                     load.Seek(load.Cur_Micro_Chunk_Length());
@@ -86,7 +90,7 @@ void W3DRenderObjectPersistFactory::Save(ChunkSaveClass &save, PersistClass *obj
     const char *name = render_object->Get_Name();
     if (name == nullptr)
         name = "";
-    const Matrix3D transform = render_object->Get_Transform();
+    const Engine::Math::AffineTransform3 transform = render_object->Get_Transform();
 
     save.Begin_Chunk(Render_Object_Variables_Chunk);
     save.Begin_Micro_Chunk(Render_Object_Variable_Pointer);
@@ -96,7 +100,7 @@ void W3DRenderObjectPersistFactory::Save(ChunkSaveClass &save, PersistClass *obj
     save.Write(name, static_cast<std::uint32_t>(std::strlen(name) + 1));
     save.End_Micro_Chunk();
     save.Begin_Micro_Chunk(Render_Object_Variable_Transform);
-    save.Write(&transform, sizeof(transform));
+    save.Write(transform.elements.data(), sizeof(transform.elements));
     save.End_Micro_Chunk();
     save.End_Chunk();
 }

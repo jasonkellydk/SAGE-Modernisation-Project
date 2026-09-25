@@ -29,6 +29,8 @@
 
 #pragma once
 
+
+#include <cassert>
 #include "GameClient/Color.h"
 #include "Common/Money.h"
 
@@ -111,7 +113,7 @@ public:
 
   const Money & getDefaultStartingMoney() const
   {
-    DEBUG_ASSERTCRASH( m_gotDefaultStartingMoney, ("You must specify a default starting money amount in multiplayer.ini") );
+    assert((m_gotDefaultStartingMoney));
     return m_defaultStartingMoney;
   }
 

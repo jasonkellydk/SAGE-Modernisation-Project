@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/BitFlagsIO.h"
 #include "Common/RandomValue.h"
@@ -101,8 +102,8 @@ void PointDefenseLaserUpdate::onObjectCreated()
 	//Make sure we have a weapon template
 	if( !data->m_weaponTemplate )
 	{
-		DEBUG_CRASH( ("PointDefenseLaserUpdate for %s doesn't have a valid weapon template",
-			getObject()->getTemplate()->getName().str() ) );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "PointDefenseLaserUpdate for %s doesn't have a valid weapon template",
+			getObject()->getTemplate()->getName().str() );
 		return;
 	}
 
@@ -112,8 +113,8 @@ void PointDefenseLaserUpdate::onObjectCreated()
 	Real attackRange = data->m_weaponTemplate->getAttackRange( bonus );
 	if( data->m_scanRange <= attackRange )
 	{
-		DEBUG_CRASH( ("PointDefenseLaserUpdate for %s requires the scan range (%.1f) being larger than the firing range (%.1f)",
-			getObject()->getTemplate()->getName().str(), data->m_scanRange, attackRange ) );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "PointDefenseLaserUpdate for %s requires the scan range (%.1f) being larger than the firing range (%.1f)",
+			getObject()->getTemplate()->getName().str(), data->m_scanRange, attackRange );
 	}
 }
 

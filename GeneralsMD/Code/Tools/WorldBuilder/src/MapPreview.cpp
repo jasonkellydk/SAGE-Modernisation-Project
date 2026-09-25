@@ -57,6 +57,7 @@
 #include "Common/FileSystem.h"
 #include "WWLib/TARGA.h"
 #include "Common/DataChunk.h"
+import engine.debug;
 //-----------------------------------------------------------------------------
 // DEFINES ////////////////////////////////////////////////////////////////////
 //-----------------------------------------------------------------------------
@@ -82,17 +83,17 @@ void MapPreview::save( CString mapName )
 	chunkWriter.openDataChunk("MapPreview", K_MAPPREVIEW_VERSION_1);
 	chunkWriter.writeInt(MAP_PREVIEW_WIDTH);
 	chunkWriter.writeInt(MAP_PREVIEW_HEIGHT);
-	DEBUG_LOG(("BeginMapPreviewInfo"));
+	engine::debug::log_info("BeginMapPreviewInfo");
 	for(Int i = 0; i < MAP_PREVIEW_HEIGHT; ++i)
 	{
 		for(Int j = 0; j < MAP_PREVIEW_WIDTH; ++j)
 		{
 			chunkWriter.writeInt(m_pixelBuffer[i][j]);
-			DEBUG_LOG(("x:%d, y:%d, %X", j, i, m_pixelBuffer[i][j]));
+			engine::debug::log_info("x:%d, y:%d, %X", j, i, m_pixelBuffer[i][j]);
 		}
 	}
 	chunkWriter.closeDataChunk();
-	DEBUG_LOG(("EndMapPreviewInfo"));
+	engine::debug::log_info("EndMapPreviewInfo");
 */
 }
 

@@ -30,16 +30,6 @@ import Graphics.Scene.Views.View;
 namespace
 {
 
-template <typename Matrix>
-std::array<float, 16> Copy_Matrix(const Matrix &matrix) noexcept
-{
-	std::array<float, 16> result{};
-	for (std::size_t row = 0; row < 4; ++row)
-		for (std::size_t column = 0; column < 4; ++column)
-			result[row * 4 + column] = matrix[row][column];
-	return result;
-}
-
 Assets::SphereAssetDesc Default_Sphere_Description()
 {
 	Assets::SphereAssetDesc description;
@@ -153,9 +143,9 @@ void W3DSphereRenderObject::Render(W3DRenderContext &rinfo)
 	input.view_projection = Graphics::Compose_Matrices(camera.projection, camera.view).values;
 	input.projection = camera.projection.values;
 	input.view = camera.view.values;
-	input.world = Copy_Matrix(Matrix4x4(Get_Transform()));
-	const Vector3 camera_position = rinfo.Camera.Get_Transform().Get_Translation();
-	input.camera_position = {camera_position.X, camera_position.Y, camera_position.Z, 1.0f};
+	input.world = W3DCamera::Build_World_Matrix(Get_Transform());
+	const auto camera_position = rinfo.Camera.Get_Transform().Translation();
+	input.camera_position = {camera_position.x, camera_position.y, camera_position.z, 1.0f};
 	input.scene = Graphics::Get_Scene_Draw_Parameters();
 	input.sorting_enabled = Graphics::Get_Render_Settings().Is_Sorting_Enabled();
 	input.front_counter_clockwise = !Get_W3D_Render_Services().Is_Reflection_Render_Pass();
@@ -184,39 +174,41 @@ void W3DSphereRenderObject::Render(W3DRenderContext &rinfo)
 		device->Destroy_Texture(texture);
 }
 
-void W3DSphereRenderObject::Set_Transform(const Matrix3D &transform)
+void W3DSphereRenderObject::Set_Transform(const Engine::Math::AffineTransform3 &transform)
 {
 	W3DRenderObject::Set_Transform(transform);
 }
 
-void W3DSphereRenderObject::Set_Position(const Vector3 &position)
+void W3DSphereRenderObject::Set_Position(Engine::Math::Vector3 position)
 {
 	W3DRenderObject::Set_Position(position);
 }
 
-void W3DSphereRenderObject::Get_Obj_Space_Bounding_Sphere(SphereClass &sphere) const
+void W3DSphereRenderObject::Get_Local_Bounding_Sphere(Engine::Math::Sphere3 &sphere) const
 {
 	const auto &asset = m_sphere.Asset();
-	sphere.Init(Vector3(asset.center.x, asset.center.y, asset.center.z),
-		Vector3(asset.extent.x, asset.extent.y, asset.extent.z).Length());
+	sphere = {{asset.center.x, asset.center.y, asset.center.z},
+		Engine::Math::Vector3{asset.extent.x, asset.extent.y, asset.extent.z}.Length()};
 }
 
-void W3DSphereRenderObject::Get_Obj_Space_Bounding_Box(AABoxClass &box) const
+void W3DSphereRenderObject::Get_Local_Bounds(Engine::Math::AxisAlignedBox3 &box) const
 {
 	const auto &asset = m_sphere.Asset();
-	box.Init(Vector3(asset.center.x, asset.center.y, asset.center.z),
-		Vector3(asset.extent.x, asset.extent.y, asset.extent.z));
+	const Engine::Math::Vector3 center{asset.center.x, asset.center.y, asset.center.z};
+	const Engine::Math::Vector3 extent{asset.extent.x, asset.extent.y, asset.extent.z};
+	box = {center - extent, center + extent};
 }
 
 void W3DSphereRenderObject::Update_Cached_Bounding_Volumes() const
 {
 	const auto &asset = m_sphere.Asset();
 	const auto &scale = m_sphere.State().scale;
-	CachedBoundingBox.Extent.Set(asset.extent.x * scale.x,
-		asset.extent.y * scale.y, asset.extent.z * scale.z);
-	CachedBoundingSphere.Center = CachedBoundingBox.Center = Get_Position() +
-		Vector3(asset.center.x, asset.center.y, asset.center.z);
-	CachedBoundingSphere.Radius = CachedBoundingBox.Extent.Length();
+	const Engine::Math::Vector3 center = Get_Position() +
+		Engine::Math::Vector3{asset.center.x, asset.center.y, asset.center.z};
+	const Engine::Math::Vector3 extent{asset.extent.x * scale.x,
+		asset.extent.y * scale.y, asset.extent.z * scale.z};
+	CachedBoundingBox = {center - extent, center + extent};
+	CachedBoundingSphere = {center, extent.Length()};
 	Validate_Cached_Bounding_Volumes();
 }
 

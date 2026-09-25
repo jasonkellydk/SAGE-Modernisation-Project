@@ -1,5 +1,4 @@
 module;
-#include "../../profiling/Tracy.h"
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -7,6 +6,7 @@ module;
 #include <utility>
 #include <vector>
 export module Graphics.Scene.Props.MeshSet;
+import engine.profiling;
 export import Graphics.Scene.Props.Renderer;
 
 namespace Graphics {
@@ -39,7 +39,7 @@ public:
     PropMeshHandle Find_Prepared(const PropRenderer& renderer, std::size_t batch,
         std::span<const std::span<const std::byte>> sources) const noexcept
     {
-        GRAPHICS_PROFILE_SCOPE("Graphics.Props.FindPrepared");
+        engine::profiling::Scope profile_scope_41("Graphics.Props.FindPrepared");
         if (m_renderer != &renderer || sources.empty() || batch >= m_sources.size()
             || batch >= m_meshes.size()) return {};
         const auto& saved = m_sources[batch];
@@ -58,7 +58,7 @@ public:
         std::span<const std::span<const std::byte>> sources,
         std::span<const PropVertex> vertices, std::span<const std::uint32_t> indices)
     {
-        GRAPHICS_PROFILE_SCOPE("Graphics.Props.PublishPrepared");
+        engine::profiling::Scope profile_scope_60("Graphics.Props.PublishPrepared");
         // Allocate the snapshot before replacing geometry. Rejected geometry or
         // allocation failure leaves the previously published version intact.
         PreparedSources saved;
@@ -81,7 +81,7 @@ public:
     PropMeshHandle Find_Versioned(const PropRenderer& renderer, std::size_t batch,
         std::span<const PropPreparationInput> sources) const noexcept
     {
-        GRAPHICS_PROFILE_SCOPE("Graphics.Props.FindPrepared");
+        engine::profiling::Scope profile_scope_83("Graphics.Props.FindPrepared");
         if (m_renderer != &renderer || sources.empty() || batch >= m_sources.size()
             || batch >= m_meshes.size()) return {};
         const auto& saved = m_sources[batch];
@@ -106,7 +106,7 @@ public:
         std::span<const PropPreparationInput> sources,
         std::span<const PropVertex> vertices, std::span<const std::uint32_t> indices)
     {
-        GRAPHICS_PROFILE_SCOPE("Graphics.Props.PublishPrepared");
+        engine::profiling::Scope profile_scope_108("Graphics.Props.PublishPrepared");
         PreparedSources saved;
         saved.sizes.reserve(sources.size());
         saved.revisions.reserve(sources.size());

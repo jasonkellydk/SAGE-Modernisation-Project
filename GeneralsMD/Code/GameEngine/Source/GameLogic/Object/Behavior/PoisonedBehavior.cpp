@@ -29,7 +29,8 @@
 
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 #include "Common/Xfer.h"
 #include "GameClient/Drawable.h"
 #include "GameLogic/Module/PoisonedBehavior.h"
@@ -108,7 +109,7 @@ UpdateSleepTime PoisonedBehavior::update()
 
 	if( m_poisonOverallStopFrame == 0 )
 	{
-		DEBUG_CRASH(("hmm, this should not happen"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "hmm, this should not happen");
 		return UPDATE_SLEEP_FOREVER;
 		//we aren't poisoned, so nevermind
 	}

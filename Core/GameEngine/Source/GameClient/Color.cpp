@@ -46,7 +46,8 @@
 // SYSTEM INCLUDES ////////////////////////////////////////////////////////////
 
 // USER INCLUDES //////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "GameClient/Color.h"
 
@@ -140,7 +141,7 @@ Color GameDarkenColor( Color color, Int percent )
 
 // Put on ice until later M Lorenzen
 //  TheWritableGlobalData->m_cheaterHasBeenSpiedIfMyLowestBitIsTrue = (r<<24) | (g<<16) | (b<<8) | s_cheaterHasBeenSpied;
-//  DEBUG_ASSERTCRASH( TheWritableGlobalData->m_cheaterHasBeenSpiedIfMyLowestBitIsTrue == FALSE, ("DIRTY ROTTEN CHEATER"));
+//  engine::debug::invariant((TheWritableGlobalData->m_cheaterHasBeenSpiedIfMyLowestBitIsTrue == FALSE), "TheWritableGlobalData->m_cheaterHasBeenSpiedIfMyLowestBitIsTrue == FALSE", __FILE__, __LINE__, "DIRTY ROTTEN CHEATER");
 //  //my, but this looks like we just stored an alpha value along with rgb into the global data
 
 

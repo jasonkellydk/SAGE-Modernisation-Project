@@ -27,7 +27,8 @@
 // Author: Mark Wilczynski, June 2003
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the Game
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the Game
 #include "GameClient/Smudge.h"
 
 
@@ -138,8 +139,7 @@ void SmudgeSet::resetDraw()
 
 Smudge *SmudgeSet::addSmudgeToSet(Smudge::Identifier identifier)
 {
-	DEBUG_ASSERTCRASH(m_usedSmudgeMap.find(identifier) == m_usedSmudgeMap.end(),
-		("SmudgeSet::addSmudgeToSet: identifier already present"));
+	engine::debug::invariant((m_usedSmudgeMap.find(identifier) == m_usedSmudgeMap.end()), "m_usedSmudgeMap.find(identifier) == m_usedSmudgeMap.end()", __FILE__, __LINE__, "SmudgeSet::addSmudgeToSet: identifier already present");
 
 	Smudge* smudge;
 	if (!m_freeSmudgeList.empty()) {

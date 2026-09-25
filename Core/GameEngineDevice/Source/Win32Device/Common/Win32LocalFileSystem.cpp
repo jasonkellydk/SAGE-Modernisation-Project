@@ -29,10 +29,11 @@
 #include <windows.h>
 #include "Common/AsciiString.h"
 #include "Common/GameMemory.h"
-#include "Common/PerfTimer.h"
+
 #include "Win32Device/Common/Win32LocalFileSystem.h"
 #include "Win32Device/Common/Win32LocalFile.h"
 #include <io.h>
+import engine.debug;
 
 Win32LocalFileSystem::Win32LocalFileSystem() : LocalFileSystem()
 {
@@ -41,10 +42,8 @@ Win32LocalFileSystem::Win32LocalFileSystem() : LocalFileSystem()
 Win32LocalFileSystem::~Win32LocalFileSystem() {
 }
 
-//DECLARE_PERF_TIMER(Win32LocalFileSystem_openFile)
 File * Win32LocalFileSystem::openFile(const Char *filename, Int access, size_t bufferSize)
 {
-	//USE_PERF_TIMER(Win32LocalFileSystem_openFile)
 
 	// sanity check
 	if (strlen(filename) <= 0) {
@@ -112,10 +111,8 @@ void Win32LocalFileSystem::reset()
 {
 }
 
-//DECLARE_PERF_TIMER(Win32LocalFileSystem_doesFileExist)
 Bool Win32LocalFileSystem::doesFileExist(const Char *filename) const
 {
-	//USE_PERF_TIMER(Win32LocalFileSystem_doesFileExist)
 	if (_access(filename, 0) == 0) {
 		return TRUE;
 	}
@@ -217,7 +214,7 @@ AsciiString Win32LocalFileSystem::normalizePath(const AsciiString& filePath) con
 	DWORD retval = GetFullPathNameA(filePath.str(), 0, nullptr, nullptr);
 	if (retval == 0)
 	{
-		DEBUG_LOG(("Unable to determine buffer size for normalized file path. Error=(%u).", GetLastError()));
+		engine::debug::log_info("Unable to determine buffer size for normalized file path. Error=(%u).", GetLastError());
 		return AsciiString::TheEmptyString;
 	}
 
@@ -225,7 +222,7 @@ AsciiString Win32LocalFileSystem::normalizePath(const AsciiString& filePath) con
 	retval = GetFullPathNameA(filePath.str(), retval, normalizedFilePath.getBufferForRead(retval - 1), nullptr);
 	if (retval == 0)
 	{
-		DEBUG_LOG(("Unable to normalize file path '%s'. Error=(%u).", filePath.str(), GetLastError()));
+		engine::debug::log_info("Unable to normalize file path '%s'. Error=(%u).", filePath.str(), GetLastError());
 		return AsciiString::TheEmptyString;
 	}
 

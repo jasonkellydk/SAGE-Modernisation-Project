@@ -23,7 +23,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "GameNetwork/NetCommandList.h"
 #include "GameNetwork/networkutil.h"
@@ -167,7 +168,7 @@ static bool isCommandNewerInSamePlayerGroup(const NetCommandMsg* newCommand, con
  */
 NetCommandRef * NetCommandList::addMessage(NetCommandMsg *cmdMsg) {
 	if (cmdMsg == nullptr) {
-		DEBUG_CRASH(("NetCommandList::addMessage - command message was null"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "NetCommandList::addMessage - command message was null");
 		return nullptr;
 	}
 
@@ -177,7 +178,7 @@ NetCommandRef * NetCommandList::addMessage(NetCommandMsg *cmdMsg) {
 
 NetCommandRef * NetCommandList::addMessage(NetCommandRef *&msg) {
 	if (msg == nullptr) {
-		DEBUG_CRASH(("NetCommandList::addMessage - command ref was null"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "NetCommandList::addMessage - command ref was null");
 		return nullptr;
 	}
 

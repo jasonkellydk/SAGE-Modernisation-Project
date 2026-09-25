@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // USER INCLUDES //////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 #include "Common/Player.h"
 #include "Common/ThingTemplate.h"
 #include "Common/ThingFactory.h"
@@ -206,9 +207,9 @@ void MobNexusContain::onContaining( Object *rider, Bool wasSelected )
 
 	Int mobNexusSlotCount = rider->getTransportSlotCount();
 
-	DEBUG_ASSERTCRASH(mobNexusSlotCount > 0, ("Hmm, this object isnt MobNexusable"));
+	engine::debug::invariant((mobNexusSlotCount > 0), "mobNexusSlotCount > 0", __FILE__, __LINE__, "Hmm, this object isnt MobNexusable");
 	m_extraSlotsInUse += mobNexusSlotCount - 1;
-	DEBUG_ASSERTCRASH(m_extraSlotsInUse >= 0 && m_extraSlotsInUse + getContainCount() <= getContainMax(), ("Hmm, bad slot count"));
+	engine::debug::invariant((m_extraSlotsInUse >= 0 && m_extraSlotsInUse + getContainCount() <= getContainMax()), "m_extraSlotsInUse >= 0 && m_extraSlotsInUse + getContainCount() <= getContainMax()", __FILE__, __LINE__, "Hmm, bad slot count");
 
 	//
 	// when we go from holding nothing to holding something we have a model condition
@@ -242,9 +243,9 @@ void MobNexusContain::onRemoving( Object *rider )
 		if (draw)
 		{
 			Coord3D bonePos, worldPos;
-			if (draw->getPristineBonePositions(d->m_exitBone.str(), 0, &bonePos, nullptr, 1) == 1)
+			if (draw->getPristineBonePositions(d->m_exitBone.str(), 0, &bonePos, 1) == 1)
 			{
-				getObject()->convertBonePosToWorldPos(&bonePos, nullptr, &worldPos, nullptr);
+				getObject()->transformBoneToWorld(&bonePos, nullptr, &worldPos, nullptr);
 				rider->setPosition(&worldPos);
 			}
 		}
@@ -277,9 +278,9 @@ void MobNexusContain::onRemoving( Object *rider )
 		scatterToNearbyPosition(rider);
 
 	Int mobNexusSlotCount = rider->getTransportSlotCount();
-	DEBUG_ASSERTCRASH(mobNexusSlotCount > 0, ("This object isnt MobNexusable"));
+	engine::debug::invariant((mobNexusSlotCount > 0), "mobNexusSlotCount > 0", __FILE__, __LINE__, "This object isnt MobNexusable");
 	m_extraSlotsInUse -= mobNexusSlotCount - 1;
-	DEBUG_ASSERTCRASH(m_extraSlotsInUse >= 0 && m_extraSlotsInUse + getContainCount() <= getContainMax(), ("Bad slot count, MobNexus"));
+	engine::debug::invariant((m_extraSlotsInUse >= 0 && m_extraSlotsInUse + getContainCount() <= getContainMax()), "m_extraSlotsInUse >= 0 && m_extraSlotsInUse + getContainCount() <= getContainMax()", __FILE__, __LINE__, "Bad slot count, MobNexus");
 
 	// when we are empty again, clear the model condition for loaded
 	if( getContainCount() == 0 )
@@ -324,7 +325,7 @@ void MobNexusContain::onObjectCreated()
 		}
 		else
 		{
-			DEBUG_CRASH( ( "DeliverPayload: PutInContainer %s is full, or not valid for the payload %s!", object->getName().str(), self->m_initialPayload.name.str() ) );
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "DeliverPayload: PutInContainer %s is full, or not valid for the payload %s!", object->getName().str(), self->m_initialPayload.name.str() );
 		}
 	}
 }

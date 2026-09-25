@@ -46,7 +46,8 @@
 //-----------------------------------------------------------------------------
 // SYSTEM INCLUDES ////////////////////////////////////////////////////////////
 //-----------------------------------------------------------------------------
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 //-----------------------------------------------------------------------------
 // USER INCLUDES //////////////////////////////////////////////////////////////
@@ -219,7 +220,7 @@ void StatsCollector::writeFileEnd()
 	FILE *f = fopen(m_statsFileName.str(), "a");
 	if(!f)
 	{
-		DEBUG_ASSERTCRASH(f, ("Unable to open file %s to write", m_statsFileName.str()));
+		engine::debug::invariant((f), "f", __FILE__, __LINE__, "Unable to open file %s to write", m_statsFileName.str());
 		return;
 	}
 
@@ -363,7 +364,7 @@ void StatsCollector::writeInitialFileInfo()
 	FILE *f = fopen(m_statsFileName.str(), "w");
 	if(!f)
 	{
-		DEBUG_ASSERTCRASH(f, ("Unable to open file %s to write", m_statsFileName.str()));
+		engine::debug::invariant((f), "f", __FILE__, __LINE__, "Unable to open file %s to write", m_statsFileName.str());
 		return;
 	}
 
@@ -401,7 +402,7 @@ void StatsCollector::writeStatInfo()
 	FILE *f = fopen(m_statsFileName.str(), "a");
 	if(!f)
 	{
-		DEBUG_ASSERTCRASH(f, ("Unable to open file %s to write", m_statsFileName.str()));
+		engine::debug::invariant((f), "f", __FILE__, __LINE__, "Unable to open file %s to write", m_statsFileName.str());
 		return;
 	}
 	Money *m = ThePlayerList->getLocalPlayer()->getMoney();

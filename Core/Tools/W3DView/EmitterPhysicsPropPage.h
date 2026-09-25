@@ -22,11 +22,11 @@
 //
 
 #include "resource.h"
-#include "WWMath/vector3.h"
+import Engine.Core.Math.Vector3;
+import Engine.Core.Math.RandomVector3Generator;
 
 // Forward delcarations
 class EmitterInstanceListClass;
-class Vector3Randomizer;
 
 /////////////////////////////////////////////////////////////////////////////
 // EmitterPhysicsPropPageClass dialog
@@ -88,9 +88,9 @@ protected:
 		void								Set_Emitter (EmitterInstanceListClass *pemitter_list) { m_pEmitterList = pemitter_list; Initialize (); }
 		bool								Is_Data_Valid () const { return m_bValid; }
 
-		Vector3Randomizer *			Get_Velocity_Random () const	{ return m_Randomizer; }
-		const Vector3 &				Get_Velocity () const			{ return m_Velocity; }
-		const Vector3 &				Get_Acceleration () const		{ return m_Acceleration; }
+		Engine::Math::RandomVector3Generator *	Get_Velocity_Random () const	{ return m_Randomizer; }
+		const Engine::Math::Vector3 &Get_Velocity () const			{ return m_Velocity; }
+		const Engine::Math::Vector3 &Get_Acceleration () const		{ return m_Acceleration; }
 		float								Get_Out_Factor () const		{ return m_OutFactor; }
 		float								Get_Inheritance_Factor () const	{ return m_InheritanceFactor; }
 
@@ -112,11 +112,11 @@ protected:
 		EmitterInstanceListClass *	m_pEmitterList;
 		bool								m_bValid;
 
-		Vector3							m_Velocity;
-		Vector3							m_Acceleration;
+		Engine::Math::Vector3		m_Velocity;
+		Engine::Math::Vector3		m_Acceleration;
 		float								m_OutFactor;
 		float								m_InheritanceFactor;
-		Vector3Randomizer *			m_Randomizer;
+		Engine::Math::RandomVector3Generator *	m_Randomizer;
 };
 
 //{{AFX_INSERT_LOCATION}}

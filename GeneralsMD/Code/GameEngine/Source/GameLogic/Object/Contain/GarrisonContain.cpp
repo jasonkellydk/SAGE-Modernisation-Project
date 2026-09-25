@@ -28,10 +28,12 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // USER INCLUDES //////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
+import Engine.Core.Math.AffineTransform3;
 
 #include "Common/GameState.h"
-#include "Common/PerfTimer.h"
+
 #include "Common/Player.h"
 #include "Common/PlayerList.h"
 #include "Common/RandomValue.h"
@@ -92,7 +94,7 @@ Int GarrisonContain::findClosestFreeGarrisonPointIndex( Int conditionIndex,
 {
 // TheSuperHackers @info helmutbuhler 05/05/2025 This debug mutates the code to become CRC incompatible
 #if defined(RTS_DEBUG) || !RETAIL_COMPATIBLE_CRC
-	DEBUG_ASSERTCRASH(m_garrisonPointsInitialized, ("garrisonPoints are not inited"));
+	engine::debug::invariant((m_garrisonPointsInitialized), "m_garrisonPointsInitialized", __FILE__, __LINE__, "garrisonPoints are not inited");
 #endif
 
 	// sanity
@@ -154,14 +156,14 @@ void GarrisonContain::putObjectAtGarrisonPoint( Object *obj,
 																								Int conditionIndex,
 																								Int pointIndex )
 {
-	DEBUG_ASSERTCRASH(m_garrisonPointsInitialized, ("garrisonPoints are not inited"));
+	engine::debug::invariant((m_garrisonPointsInitialized), "m_garrisonPointsInitialized", __FILE__, __LINE__, "garrisonPoints are not inited");
 
 	// sanity
 	if( obj == nullptr || pointIndex < 0 || pointIndex >= MAX_GARRISON_POINTS ||
 			conditionIndex < 0 || conditionIndex >= MAX_GARRISON_POINT_CONDITIONS )
 	{
 
-		DEBUG_CRASH(( "GarrisionContain::putObjectAtGarrisionPoint - Invalid arguments" ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "GarrisionContain::putObjectAtGarrisionPoint - Invalid arguments" );
 		return;
 
 	}
@@ -170,8 +172,8 @@ void GarrisonContain::putObjectAtGarrisonPoint( Object *obj,
 	if( m_garrisonPointData[ pointIndex ].object != nullptr )
 	{
 
-		DEBUG_CRASH(( "GarrisonContain::putObjectAtGarrisonPoint - Garrison Point '%d' is not empty",
-									pointIndex ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "GarrisonContain::putObjectAtGarrisonPoint - Garrison Point '%d' is not empty",
+									pointIndex );
 		return;
 
 	}
@@ -193,7 +195,7 @@ void GarrisonContain::putObjectAtGarrisonPoint( Object *obj,
 	// garrison point ready to shoot
 	//
 	static const ThingTemplate *muzzle = TheThingFactory->findTemplate( "GarrisonGun" );
-	DEBUG_ASSERTCRASH( muzzle, ("Warning, Object 'GarrisonGun' not found and is need for Garrison gun effects") );
+	engine::debug::invariant((muzzle), "muzzle", __FILE__, __LINE__, "Warning, Object 'GarrisonGun' not found and is need for Garrison gun effects");
 	if( muzzle && isEnclosingContainerFor( obj ) )// If we are showing the contained, we need no gun barrel drawable added
 	{
 		Drawable *draw = TheThingFactory->newDrawable( muzzle );
@@ -262,8 +264,8 @@ Int GarrisonContain::findConditionIndex()
 		// --------------------------------------------------------------------------------------------
 		default:
 
-			DEBUG_CRASH(( "GarrisonContain::findConditionIndex - Unknown body damage type '%d'",
-										bodyDamage ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "GarrisonContain::findConditionIndex - Unknown body damage type '%d'",
+										bodyDamage );
 			break;
 
 	}
@@ -284,7 +286,7 @@ Bool GarrisonContain::calcBestGarrisonPosition( Coord3D *sourcePos, const Coord3
 
 #ifdef DEBUG_CRASHING
   const GarrisonContainModuleData *modData = getGarrisonContainModuleData();
-  DEBUG_ASSERTCRASH(modData->m_isEnclosingContainer, ("calcBestGarrisonPosition... SHOULD NOT GET HERE, since this container is non-enclosing") );
+  engine::debug::invariant((modData->m_isEnclosingContainer), "modData->m_isEnclosingContainer", __FILE__, __LINE__, "calcBestGarrisonPosition... SHOULD NOT GET HERE, since this container is non-enclosing");
 #endif
 
 
@@ -296,7 +298,7 @@ Bool GarrisonContain::calcBestGarrisonPosition( Coord3D *sourcePos, const Coord3
 	Int placeIndex = findClosestFreeGarrisonPointIndex( conditionIndex, targetPos );
 	if( placeIndex == GARRISON_INDEX_INVALID )
 	{
-		DEBUG_CRASH( ("GarrisonContain::calcBestGarrisonPosition - Unable to find suitable garrison point.") );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "GarrisonContain::calcBestGarrisonPosition - Unable to find suitable garrison point.");
 		return FALSE;
 	}
 
@@ -318,7 +320,7 @@ Bool GarrisonContain::attemptBestFirePointPosition( Object *source, Weapon *weap
 
 #ifdef DEBUG_CRASHING
   const GarrisonContainModuleData *modData = getGarrisonContainModuleData();
-  DEBUG_ASSERTCRASH(modData->m_isEnclosingContainer, ("calcBestGarrisonPosition... SHOULD NOT GET HERE, since this container is non-enclosing") );
+  engine::debug::invariant((modData->m_isEnclosingContainer), "modData->m_isEnclosingContainer", __FILE__, __LINE__, "calcBestGarrisonPosition... SHOULD NOT GET HERE, since this container is non-enclosing");
 #endif
 	//If this object is already at a garrison point, remove him.
 	Int existingIndex = getObjectGarrisonPointIndex( source );
@@ -358,7 +360,7 @@ Bool GarrisonContain::attemptBestFirePointPosition( Object *source, Weapon *weap
 	}
 #ifdef DEBUG_CRASHING
   const GarrisonContainModuleData *modData = getGarrisonContainModuleData();
-  DEBUG_ASSERTCRASH(modData->m_isEnclosingContainer, ("calcBestGarrisonPosition... SHOULD NOT GET HERE, since this container is non-enclosing") );
+  engine::debug::invariant((modData->m_isEnclosingContainer), "modData->m_isEnclosingContainer", __FILE__, __LINE__, "calcBestGarrisonPosition... SHOULD NOT GET HERE, since this container is non-enclosing");
 #endif
 
 	//If this object is already at a garrison point, remove him.
@@ -399,7 +401,7 @@ void GarrisonContain::putObjectAtBestGarrisonPoint( Object *obj, Object *target,
 
 #ifdef DEBUG_CRASHING
   const GarrisonContainModuleData *modData = getGarrisonContainModuleData();
-  DEBUG_ASSERTCRASH(modData->m_isEnclosingContainer, ("calcBestGarrisonPosition... SHOULD NOT GET HERE, since this container is non-enclosing") );
+  engine::debug::invariant((modData->m_isEnclosingContainer), "modData->m_isEnclosingContainer", __FILE__, __LINE__, "calcBestGarrisonPosition... SHOULD NOT GET HERE, since this container is non-enclosing");
 #endif
 	// if obj target, override pos
 	if (target != nullptr)
@@ -414,9 +416,8 @@ void GarrisonContain::putObjectAtBestGarrisonPoint( Object *obj, Object *target,
 
 	// get the index of the garrison point that is closest to the target position
 	Int placeIndex = findClosestFreeGarrisonPointIndex( conditionIndex, targetPos );
-	DEBUG_ASSERTCRASH( placeIndex != GARRISON_INDEX_INVALID,
-										 ("GarrisonContain::putObjectAtBestGarrisonPoint - Unable to find suitable garrison point for '%s'",
-										 obj->getTemplate()->getName().str()) );
+	engine::debug::invariant((placeIndex != GARRISON_INDEX_INVALID), "placeIndex != GARRISON_INDEX_INVALID", __FILE__, __LINE__, "GarrisonContain::putObjectAtBestGarrisonPoint - Unable to find suitable garrison point for '%s'",
+										 obj->getTemplate()->getName().str());
 
 	// put it here
 	putObjectAtGarrisonPoint( obj, target ? target->getID() : INVALID_ID, conditionIndex, placeIndex );
@@ -434,7 +435,7 @@ void GarrisonContain::removeObjectFromGarrisonPoint( Object *obj, Int index )
 
 #ifdef DEBUG_CRASHING
   const GarrisonContainModuleData *modData = getGarrisonContainModuleData();
-  DEBUG_ASSERTCRASH(modData->m_isEnclosingContainer, ("calcBestGarrisonPosition... SHOULD NOT GET HERE, since this container is non-enclosing") );
+  engine::debug::invariant((modData->m_isEnclosingContainer), "modData->m_isEnclosingContainer", __FILE__, __LINE__, "calcBestGarrisonPosition... SHOULD NOT GET HERE, since this container is non-enclosing");
 #endif
 
 	// sanity
@@ -588,7 +589,7 @@ void GarrisonContain::removeInvalidObjectsFromGarrisonPoints()
 {
 #ifdef DEBUG_CRASHING
   const GarrisonContainModuleData *modData = getGarrisonContainModuleData();
-  DEBUG_ASSERTCRASH(modData->m_isEnclosingContainer, ("removeinvalidobjFromGarrisonPoint... SHOULD NOT GET HERE, since this container is non-enclosing") );
+  engine::debug::invariant((modData->m_isEnclosingContainer), "modData->m_isEnclosingContainer", __FILE__, __LINE__, "removeinvalidobjFromGarrisonPoint... SHOULD NOT GET HERE, since this container is non-enclosing");
 #endif
 	Object *obj;
 
@@ -639,7 +640,7 @@ void GarrisonContain::addValidObjectsToGarrisonPoints()
 
 #ifdef DEBUG_CRASHING
   const GarrisonContainModuleData *modData = getGarrisonContainModuleData();
-  DEBUG_ASSERTCRASH(modData->m_isEnclosingContainer, ("addvalidobjtoGarrisonPoint... SHOULD NOT GET HERE, since this container is non-enclosing") );
+  engine::debug::invariant((modData->m_isEnclosingContainer), "modData->m_isEnclosingContainer", __FILE__, __LINE__, "addvalidobjtoGarrisonPoint... SHOULD NOT GET HERE, since this container is non-enclosing");
 #endif
 
 
@@ -692,7 +693,7 @@ void GarrisonContain::trackTargets()
 	AIUpdateInterface *ai;
 	Object *obj;
 
-	DEBUG_ASSERTCRASH(m_garrisonPointsInitialized || containList.empty(), ("garrisonPoints are not inited"));
+	engine::debug::invariant((m_garrisonPointsInitialized || containList.empty()), "m_garrisonPointsInitialized || containList.empty()", __FILE__, __LINE__, "garrisonPoints are not inited");
 
 	for( ContainedItemsList::const_iterator it = containList.begin(); it != containList.end(); ++it )
 	{
@@ -833,7 +834,7 @@ void GarrisonContain::updateEffects()
 
 #ifdef DEBUG_CRASHING
   const GarrisonContainModuleData *modData = getGarrisonContainModuleData();
-  DEBUG_ASSERTCRASH(modData->m_isEnclosingContainer, ("updateeffects... SHOULD NOT GET HERE, since this container is non-enclosing") );
+  engine::debug::invariant((modData->m_isEnclosingContainer), "modData->m_isEnclosingContainer", __FILE__, __LINE__, "updateeffects... SHOULD NOT GET HERE, since this container is non-enclosing");
 #endif
 
 
@@ -959,8 +960,7 @@ UpdateSleepTime GarrisonContain::update()
 	else
 	{
 		// sanity information
-		DEBUG_ASSERTCRASH( getObject()->isMobile() == FALSE,
-		 ("GarrisonContain::update - Objects with garrison contain can be spec'd as 'mobile' in the INI. Do you really want to do this?") );
+		engine::debug::invariant((getObject()->isMobile() == FALSE), "getObject()->isMobile() == FALSE", __FILE__, __LINE__, "GarrisonContain::update - Objects with garrison contain can be spec'd as 'mobile' in the INI. Do you really want to do this?");
 	}
 
 	return UPDATE_SLEEP_NONE;
@@ -1034,7 +1034,7 @@ void GarrisonContain::positionObjectsAtStationGarrisonPoints()
 
     if ( ! foundHisSpot && ! pickAStationForMe( contained ))
     {
-      DEBUG_ASSERTCRASH( foundHisSpot, ("GarrisonContain::positionObjectsAtStationGarrisonPoints found something terribly wrong... \nthere is either a station point shortage, or some other bug."));
+      engine::debug::invariant((foundHisSpot), "foundHisSpot", __FILE__, __LINE__, "GarrisonContain::positionObjectsAtStationGarrisonPoints found something terribly wrong... \nthere is either a station point shortage, or some other bug.");
     }
 
 	}
@@ -1060,7 +1060,7 @@ Bool GarrisonContain::pickAStationForMe( const Object *obj )
     }
   }
 
-  DEBUG_ASSERTCRASH(foundVacancy, ("GarrisonContain::pickAStationForMe is all kinds of bad... \n there was no vacancy found for a newly contained object."));
+  engine::debug::invariant((foundVacancy), "foundVacancy", __FILE__, __LINE__, "GarrisonContain::pickAStationForMe is all kinds of bad... \n there was no vacancy found for a newly contained object.");
 
   return FALSE;
 
@@ -1086,7 +1086,7 @@ void GarrisonContain::removeObjectFromStationPoint( const Object *obj )
   }
 
 
-  DEBUG_ASSERTCRASH(foundOccupant, ("GarrisonContain::removeObjectFromStationPoint is all kinds of bad... \n the contained object was not found in station point list."));
+  engine::debug::invariant((foundOccupant), "foundOccupant", __FILE__, __LINE__, "GarrisonContain::removeObjectFromStationPoint is all kinds of bad... \n the contained object was not found in station point list.");
 
 
 }
@@ -1308,7 +1308,7 @@ void GarrisonContain::loadGarrisonPoints()
 
 	const GarrisonContainModuleData *modData = getGarrisonContainModuleData();
 
-  DEBUG_ASSERTCRASH(modData->m_isEnclosingContainer, ("loadGarrisonPoints... SHOULD NOT GET HERE, since this container is non-enclosing") );
+  engine::debug::invariant((modData->m_isEnclosingContainer), "modData->m_isEnclosingContainer", __FILE__, __LINE__, "loadGarrisonPoints... SHOULD NOT GET HERE, since this container is non-enclosing");
 
   Object *structure = getObject();
 	Int i, j;
@@ -1395,8 +1395,7 @@ void GarrisonContain::loadGarrisonPoints()
 
 	if (gBonesFound && modData->m_mobileGarrison && (getObject()->isMobile() == TRUE) )
 	{
-		DEBUG_ASSERTCRASH( getObject()->isMobile() == FALSE,
-		 ("GarrisonContain::update - You have specified this garrisonContain as mobile,\n yet you want garrison point placement bones... \n what are you thinking?") );
+		engine::debug::invariant((getObject()->isMobile() == FALSE), "getObject()->isMobile() == FALSE", __FILE__, __LINE__, "GarrisonContain::update - You have specified this garrisonContain as mobile,\n yet you want garrison point placement bones... \n what are you thinking?");
 	}
 
 
@@ -1494,7 +1493,7 @@ void GarrisonContain::removeAllContained( Bool exposeStealthUnits )
 // ------------------------------------------------------------------------------------------------
 void GarrisonContain::exitObjectViaDoor( Object *exitObj, ExitDoorType exitDoor )
 {
-	DEBUG_ASSERTCRASH(exitDoor == DOOR_1, ("multiple exit doors not supported here"));
+	engine::debug::invariant((exitDoor == DOOR_1), "exitDoor == DOOR_1", __FILE__, __LINE__, "multiple exit doors not supported here");
 
 	// We don't use the ExitPath system of the general OpenContain, we just send people out.  The
 	// direction of outing has been picked by Design to be the Screen Down at the default camera angle.
@@ -1539,25 +1538,25 @@ void GarrisonContain::exitObjectViaDoor( Object *exitObj, ExitDoorType exitDoor 
     Real containerHalfLength = getObject()->getGeometryInfo().getMajorRadius() ;
     Real containerHalfWidth = getObject()->getGeometryInfo().getMinorRadius() ;
 
-    Vector3 doorPosition;
-    doorPosition.X = GameLogicRandomValueReal( -containerHalfLength/4, containerHalfLength/4 );// a rectangular pocket to act as the "doorway"
-    doorPosition.Y = GameLogicRandomValueReal( containerHalfWidth/2, containerHalfWidth * 2) * EVAC__SCALAR;
-    doorPosition.Z = 0;
-    Vector3 walkToPosition;
-    walkToPosition.X = GameLogicRandomValueReal( -containerHalfLength, containerHalfLength );
-    walkToPosition.Y = containerHalfWidth * 10 * EVAC__SCALAR;// spread-out!
-    walkToPosition.Z = 0;
+    const Engine::Math::Vector3 doorPosition{
+        GameLogicRandomValueReal(-containerHalfLength / 4, containerHalfLength / 4),
+        GameLogicRandomValueReal(containerHalfWidth / 2, containerHalfWidth * 2) * EVAC__SCALAR,
+        0.0f};
+    const Engine::Math::Vector3 walkToPosition{
+        GameLogicRandomValueReal(-containerHalfLength, containerHalfLength),
+        containerHalfWidth * 10 * EVAC__SCALAR,
+        0.0f};
 
-    const Matrix3D *mtx = getObject()->getTransformMatrix();
-    mtx->Transform_Vector( *mtx, doorPosition, &doorPosition );
-    startPosition.x = doorPosition.X;
-    startPosition.y = doorPosition.Y;
-    startPosition.z = doorPosition.Z;
+    const auto transform = getObject()->worldTransform();
+    const auto doorWorldPosition = transform.Transform_Point(doorPosition);
+    startPosition.x = doorWorldPosition.x;
+    startPosition.y = doorWorldPosition.y;
+    startPosition.z = doorWorldPosition.z;
 
-    mtx->Transform_Vector( *mtx, walkToPosition, &walkToPosition );
-    endPosition.x = walkToPosition.X;
-    endPosition.y = walkToPosition.Y;
-    endPosition.z = walkToPosition.Z;
+    const auto walkToWorldPosition = transform.Transform_Point(walkToPosition);
+    endPosition.x = walkToWorldPosition.x;
+    endPosition.y = walkToWorldPosition.y;
+    endPosition.z = walkToWorldPosition.z;
 
 	  exitObj->setPosition( &startPosition );
 	  exitObj->setOrientation( exitAngle );
@@ -1774,8 +1773,8 @@ void GarrisonContain::onObjectCreated()
 		}
 		else
 		{
-			DEBUG_CRASH( ( "DeliverPayload: PutInContainer %s is full, or not valid for the payload %s!",
-				object->getName().str(), self->m_initialRoster.templateName.str() ) );
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "DeliverPayload: PutInContainer %s is full, or not valid for the payload %s!",
+				object->getName().str(), self->m_initialRoster.templateName.str() );
 		}
 	}
 }
@@ -1821,7 +1820,7 @@ void GarrisonContain::xfer( Xfer *xfer )
 			if( m_originalTeam == nullptr )
 			{
 
-				DEBUG_CRASH(( "GarrisonContain::xfer - Unable to find original team by id" ));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "GarrisonContain::xfer - Unable to find original team by id" );
 				throw SC_INVALID_DATA;
 
 			}
@@ -1940,7 +1939,7 @@ void GarrisonContain::loadPostProcess()
 			if( m_garrisonPointData[ i ].object == nullptr )
 			{
 
-				DEBUG_CRASH(( "GarrisonContain::loadPostProcess - Unable to find object for point data" ));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "GarrisonContain::loadPostProcess - Unable to find object for point data" );
 				throw SC_INVALID_DATA;
 
 			}
@@ -1957,7 +1956,7 @@ void GarrisonContain::loadPostProcess()
 			if( m_garrisonPointData[ i ].effect == nullptr )
 			{
 
-				DEBUG_CRASH(( "GarrisonContain::loadPostProcess - Unable to find effect for point data" ));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "GarrisonContain::loadPostProcess - Unable to find effect for point data" );
 				throw SC_INVALID_DATA;
 
 			}
@@ -2042,12 +2041,10 @@ void GarrisonContain::loadStationGarrisonPoints()
 
 	if (stationBonesFound && modData->m_mobileGarrison && (getObject()->isMobile() == TRUE) )
 	{
-		DEBUG_ASSERTCRASH( getObject()->isMobile() == FALSE,
-		 ("GarrisonContain::update - You have specified this garrisonContain as mobile,\n yet you want station garrison point placement bones... \n what are you thinking?") );
+		engine::debug::invariant((getObject()->isMobile() == FALSE), "getObject()->isMobile() == FALSE", __FILE__, __LINE__, "GarrisonContain::update - You have specified this garrisonContain as mobile,\n yet you want station garrison point placement bones... \n what are you thinking?");
 	}
 
 }
-
 
 
 

@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Lib/BaseType.h"
 #include "Common/INI.h"
@@ -197,7 +198,7 @@ void INI::parseMapCacheDefinition( INI* ini )
 		AsciiString lowerName = name;
 		lowerName.toLower();
 		md.m_fileName = lowerName;
-//		DEBUG_LOG(("INI::parseMapCacheDefinition - adding %s to map cache", lowerName.str()));
+//		engine::debug::log_info("INI::parseMapCacheDefinition - adding %s to map cache", lowerName.str());
 		(*TheMapCache)[lowerName] = md;
 	}
 }

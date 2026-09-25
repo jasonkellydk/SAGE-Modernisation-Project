@@ -50,7 +50,8 @@
 #include "GameClient/WinInstanceData.h"
 #include "GameClient/GameWindow.h"
 #include "GameClient/DisplayStringManager.h"
-#include "Common/Debug.h"
+import engine.debug;
+
 
 
 // DEFINES ////////////////////////////////////////////////////////////////////
@@ -169,7 +170,7 @@ void WinInstanceData::setTooltipText( UnicodeString tip )
 	// allocate a text tooltip string if needed
 	if( m_tooltip == nullptr )
 		m_tooltip = TheDisplayStringManager->newDisplayString();
-	DEBUG_ASSERTCRASH( m_tooltip, ("no tooltip") );
+	engine::debug::invariant((m_tooltip), "m_tooltip", __FILE__, __LINE__, "no tooltip");
 
 	// set text
 	m_tooltip->setText( tip );
@@ -185,7 +186,7 @@ void WinInstanceData::setText( UnicodeString text )
 	// allocate a text instance if needed
 	if( m_text == nullptr )
 		m_text = TheDisplayStringManager->newDisplayString();
-	DEBUG_ASSERTCRASH( m_text, ("no text") );
+	engine::debug::invariant((m_text), "m_text", __FILE__, __LINE__, "no text");
 
 	// set the text
 	m_text->setText( text );

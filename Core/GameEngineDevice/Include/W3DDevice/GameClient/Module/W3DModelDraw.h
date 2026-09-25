@@ -28,12 +28,15 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 #pragma once
+
+#include <cassert>
 #include <memory>
 #include <span>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+import Engine.Core.Math.AffineTransform3;
 import Assets.Cache.Animations;
 
 
@@ -140,7 +143,7 @@ typedef std::vector<ParticleSysBoneInfo> ParticleSysBoneInfoVector;
 //-------------------------------------------------------------------------------------------------
 struct PristineBoneInfo
 {
-	Matrix3D mtx;
+	Engine::Math::AffineTransform3 transform;
 	Int boneIndex;
 };
 //typedef std::hash_map< NameKeyType, PristineBoneInfo, rts::hash<NameKeyType>, rts::equal_to<NameKeyType> > PristineBoneInfoMap;
@@ -183,7 +186,7 @@ struct ModelConditionInfo
 		Int							m_recoilBone;									///< the W3D bone for this barrel (zero == no bone)
 		Int							m_fxBone;											///< the FX bone for this barrel (zero == no bone)
 		Int							m_muzzleFlashBone;						///< the muzzle-flash subobj bone for this barrel (zero == none)
-		Matrix3D				m_projectileOffsetMtx;				///< where the projectile fires from
+		Engine::Math::AffineTransform3 projectile_offset_transform;		///< where the projectile fires from
 #if defined(RTS_DEBUG) || defined(DEBUG_CRASHING)
 		AsciiString			m_muzzleFlashBoneName;
 #endif
@@ -198,7 +201,7 @@ struct ModelConditionInfo
 			m_recoilBone = 0;
 			m_fxBone = 0;
 			m_muzzleFlashBone = 0;
-			m_projectileOffsetMtx.Make_Identity();
+			projectile_offset_transform = Engine::Math::AffineTransform3::Identity();
 #if defined(RTS_DEBUG) || defined(DEBUG_CRASHING)
 			m_muzzleFlashBoneName.clear();
 #endif
@@ -255,13 +258,13 @@ struct ModelConditionInfo
 	void loadAnimations() const;
 	void preloadAssets( TimeOfDay timeOfDay, Real scale );			///< preload any assets for time of day
 
-	Int getConditionsYesCount() const { DEBUG_ASSERTCRASH(!m_conditionsYesVec.empty(), ("empty m_conditionsYesVec.size(), see srj")); return m_conditionsYesVec.size(); }
+	Int getConditionsYesCount() const { assert((!m_conditionsYesVec.empty())); return m_conditionsYesVec.size(); }
 	const ModelConditionFlags& getNthConditionsYes(Int i) const { return m_conditionsYesVec[i]; }
 #if defined(RTS_DEBUG)
 	inline AsciiString getDescription() const { return m_description; }
 #endif
 
-	const Matrix3D* findPristineBone(NameKeyType boneName, Int* boneIndex) const;
+	const Engine::Math::AffineTransform3* findPristineBone(NameKeyType boneName, Int* boneIndex) const;
 	Bool findPristineBonePos(NameKeyType boneName, Coord3D& pos) const;
 	void addPublicBone(const AsciiString& boneName) const;
 	Bool matchesMode(Bool night, Bool snowy) const;
@@ -298,7 +301,7 @@ public:
 	AsciiString												m_trackFile;						///< if present, leaves tracks using this texture
 	AsciiString												m_attachToDrawableBone;
 #ifdef CACHE_ATTACH_BONE
-	mutable Vector3										m_attachToDrawableBoneOffset;
+	mutable Engine::Math::Vector3										m_attachToDrawableBoneOffset;
 #endif
 	Int																m_defaultState;
 	Int																m_projectileBoneFeedbackEnabledSlots;	///< Hide and show the launch bone geometries according to clip status adjustments.
@@ -328,7 +331,7 @@ public:
 	const ModelConditionInfo* findBestInfo(const ModelConditionFlags& c) const;
 	void preloadAssets( TimeOfDay timeOfDay, Real scale ) const;
 #ifdef CACHE_ATTACH_BONE
-	const Vector3* getAttachToDrawableBoneOffset(const Drawable* draw) const;
+	const Engine::Math::Vector3* getAttachToDrawableBoneOffset(const Drawable* draw) const;
 #endif
 
 	// ugh, hack
@@ -360,7 +363,7 @@ public:
 	virtual void preloadAssets( TimeOfDay timeOfDay ) override;
 
 	/// the draw method
-	virtual void doDrawModule(const Matrix3D* transformMtx) override;
+	virtual void doDrawModule(const Engine::Math::AffineTransform3* transform) override;
 	virtual void setShadowsEnabled(Bool enable) override;
 	virtual void releaseShadows() override;	///< frees all shadow resources used by this module - used by Options screen.
 	virtual void allocateShadows() override; ///< create shadow resources if not already present. Used by Options screen.
@@ -374,17 +377,23 @@ public:
 	virtual void setTerrainDecal(TerrainDecalType type) override;
 
 	virtual Bool isVisible() const override;
-	virtual void reactToTransformChange(const Matrix3D* oldMtx, const Coord3D* oldPos, Real oldAngle) override;
+	virtual void reactToTransformChange(const Coord3D* oldPos, Real oldAngle) override;
 	virtual void reactToGeometryChange() override { }
 
 	// this method must ONLY be called from the client, NEVER From the logic, not even indirectly.
-	virtual Bool clientOnly_getRenderObjInfo(Coord3D* pos, Real* boundingSphereRadius, Matrix3D* transform) const override;
-	virtual Bool clientOnly_getRenderObjBoundBox(OBBoxClass * boundbox) const override;
-	virtual Bool clientOnly_getRenderObjBoneTransform(const AsciiString & boneName,Matrix3D * set_tm) const override;
-	virtual Int getPristineBonePositionsForConditionState(const ModelConditionFlags& condition, const char* boneNamePrefix, Int startIndex, Coord3D* positions, Matrix3D* transforms, Int maxBones) const override;
-	virtual Int getCurrentBonePositions(const char* boneNamePrefix, Int startIndex, Coord3D* positions, Matrix3D* transforms, Int maxBones) const override;
-	virtual Bool getCurrentWorldspaceClientBonePositions(const char* boneName, Matrix3D& transform) const override;
-	virtual Bool getProjectileLaunchOffset(const ModelConditionFlags& condition, WeaponSlotType wslot, Int specificBarrelToUse, Matrix3D* launchPos, WhichTurretType tur, Coord3D* turretRotPos, Coord3D* turretPitchPos = nullptr) const override;
+	virtual Bool getRenderObjectInfo(Coord3D* position, Real* boundingSphereRadius,
+		Engine::Math::AffineTransform3* transform) const override;
+	virtual Bool clientOnly_getRenderObjBoundBox(Engine::Math::OrientedBox3 * boundbox) const override;
+	virtual Bool getRenderObjectBoneTransform(
+		const AsciiString& boneName, Engine::Math::AffineTransform3& transform) const override;
+	virtual Int getPristineBoneTransforms(const ModelConditionFlags& condition,
+		const char* boneNamePrefix, Int startIndex, Coord3D* positions,
+		Engine::Math::AffineTransform3* transforms, Int maxBones) const override;
+	virtual Int getCurrentBoneTransforms(const char* boneNamePrefix, Int startIndex,
+		Coord3D* positions, Engine::Math::AffineTransform3* transforms, Int maxBones) const override;
+	virtual Bool getCurrentWorldBoneTransform(
+		const char* boneName, Engine::Math::AffineTransform3& transform) const override;
+	virtual Bool getProjectileLaunchTransform(const ModelConditionFlags& condition, WeaponSlotType wslot, Int specificBarrelToUse, Engine::Math::AffineTransform3* launchTransform, WhichTurretType tur, Coord3D* turretRotPos, Coord3D* turretPitchPos = nullptr) const override;
 	virtual void updateProjectileClipStatus( UnsignedInt shotsRemaining, UnsignedInt maxShots, WeaponSlotType slot ) override; ///< This will do the show/hide work if ProjectileBoneFeedbackEnabled is set.
 	virtual void updateDrawModuleSupplyStatus( Int maxSupply, Int currentSupply ) override; ///< This will do visual feedback on Supplies carried
 	virtual void notifyDrawModuleDependencyCleared() override {}///< if you were waiting for something before you drew, it's ready now
@@ -451,7 +460,7 @@ protected:
 	void recalcBonesForClientParticleSystems();
 	void stopClientParticleSystems();
 	void doHideShowSubObjs(const std::vector<ModelConditionInfo::HideShowSubObjInfo>* vec);
-	virtual void adjustTransformMtx(Matrix3D& mtx) const;
+	virtual void adjustTransform(Engine::Math::AffineTransform3& transform) const;
 
 	Real getCurAnimDistanceCovered() const;
 	Bool setCurAnimDurationInMsec(Real duration);
@@ -527,7 +536,7 @@ private:
 	const ModelConditionInfo* findTransitionForSig(TransitionSig sig) const;
 	void rebuildWeaponRecoilInfo(const ModelConditionInfo* state);
 	void doHideShowProjectileObjects( UnsignedInt showCount, UnsignedInt maxCount, WeaponSlotType slot );///< Means effectively, show m of n.
-	void nukeCurrentRender(Matrix3D* xform);
+	void nukeCurrentRender(Engine::Math::AffineTransform3* transform);
 	void doStartOrStopParticleSys();
 	void adjustAnimSpeedToMovementSpeed();
 	static void hideAllMuzzleFlashes(const ModelConditionInfo* state, W3DRenderObject* renderObject);

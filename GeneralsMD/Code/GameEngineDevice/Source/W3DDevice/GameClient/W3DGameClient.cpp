@@ -1,5 +1,7 @@
+import Engine.Core.Math.Vector3;
 #include "W3DDevice/GameClient/W3DRenderServices.h"
 import Graphics.Resources.Textures.Quality;
+import engine.platform;
 /*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -61,7 +63,8 @@ import Graphics.Resources.Textures.Quality;
 
 //-------------------------------------------------------------------------------------------------
 //-------------------------------------------------------------------------------------------------
-W3DGameClient::W3DGameClient()
+W3DGameClient::W3DGameClient(engine::platform::IPlatform& platform, engine::platform::IWindow* mainWindow)
+	: GameClient(platform, mainWindow ? mainWindow->id() : 0), m_platform(platform), m_mainWindow(mainWindow)
 {
 
 }
@@ -135,7 +138,7 @@ void W3DGameClient::addScorch(const Coord3D *pos, Real radius, Scorches type)
 {
 	if (TheTerrainRenderObject)
 	{
-		Vector3 loc(pos->x, pos->y, pos->z);
+		Engine::Math::Vector3 loc(pos->x, pos->y, pos->z);
 		TheTerrainRenderObject->addScorch(loc, radius, type);
 	}
 }

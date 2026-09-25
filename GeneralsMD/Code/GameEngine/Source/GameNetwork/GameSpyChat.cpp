@@ -26,7 +26,8 @@
 // GameSpy chat handlers
 // Author: Matthew D. Campbell, February 2002
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "GameClient/GameText.h"
 #include "GameClient/GadgetListBox.h"
@@ -375,7 +376,7 @@ void RoomMessageCallback(PEER peer, RoomType roomType,
 												 const char * nick, const char * message,
 												 MessageType messageType, void * param)
 {
-	DEBUG_LOG(("RoomMessageCallback"));
+	engine::debug::log_info("RoomMessageCallback");
 	handleUnicodeMessage(nick, QuotedPrintableToUnicodeString(message), true, (messageType == ActionMessage));
 }
 
@@ -383,7 +384,7 @@ void PlayerMessageCallback(PEER peer,
 												 const char * nick, const char * message,
 												 MessageType messageType, void * param)
 {
-	DEBUG_LOG(("PlayerMessageCallback"));
+	engine::debug::log_info("PlayerMessageCallback");
 	handleUnicodeMessage(nick, QuotedPrintableToUnicodeString(message), false, (messageType == ActionMessage));
 }
 

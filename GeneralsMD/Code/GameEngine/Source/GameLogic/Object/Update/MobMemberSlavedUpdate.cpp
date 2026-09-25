@@ -29,7 +29,8 @@
 // Desc:  Slaved unit(s) remain close to their master. Used by angry Mob members (various)
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "GameClient/InGameUI.h"// selection logic
 #include "GameClient/Drawable.h"
@@ -339,7 +340,7 @@ UpdateSleepTime MobMemberSlavedUpdate::update()
 		}
 		else
 		{
-			DEBUG_ASSERTCRASH(( spawnerBehavior != nullptr ),("Hey!, why for this mob member got no spawner? MLorenzen"));
+			engine::debug::invariant((( spawnerBehavior != nullptr )), "( spawnerBehavior != nullptr )", __FILE__, __LINE__, "Hey!, why for this mob member got no spawner? MLorenzen");
 		}
 	}
 

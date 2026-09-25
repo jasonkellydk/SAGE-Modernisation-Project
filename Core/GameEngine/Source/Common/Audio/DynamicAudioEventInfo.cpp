@@ -26,7 +26,8 @@
 // Derivation of AudioEventInfo structure, for customized sounds
 // Author: Ian Barkley-Yeung, June 2003
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/DynamicAudioEventInfo.h"
 #include "Common/Xfer.h"
@@ -162,7 +163,7 @@ void DynamicAudioEventInfo::xferNoName( Xfer * xfer )
   if ( xfer->getXferMode() == XFER_LOAD )
   {
     UnsignedByte overriddenFlags;
-    DEBUG_ASSERTCRASH( OVERRIDE_COUNT <= sizeof( overriddenFlags ) * 8, ("Save/load code assumes override flags can fit into UnsignedByte, but it doesn't work anymore! Move up to larger integer type") );
+    engine::debug::invariant((OVERRIDE_COUNT <= sizeof( overriddenFlags ) * 8), "OVERRIDE_COUNT <= sizeof( overriddenFlags ) * 8", __FILE__, __LINE__, "Save/load code assumes override flags can fit into UnsignedByte, but it doesn't work anymore! Move up to larger integer type");
     xfer->xferUnsignedByte( &overriddenFlags );
     Int field;
     for ( field = 0; field < OVERRIDE_COUNT; field++ )
@@ -173,7 +174,7 @@ void DynamicAudioEventInfo::xferNoName( Xfer * xfer )
   else
   {
     UnsignedByte overriddenFlags = 0;
-    DEBUG_ASSERTCRASH( OVERRIDE_COUNT <= sizeof( overriddenFlags ) * 8, ("Save/load code assumes override flags can fit into UnsignedByte, but it doesn't work anymore! Move up to larger integer type") );
+    engine::debug::invariant((OVERRIDE_COUNT <= sizeof( overriddenFlags ) * 8), "OVERRIDE_COUNT <= sizeof( overriddenFlags ) * 8", __FILE__, __LINE__, "Save/load code assumes override flags can fit into UnsignedByte, but it doesn't work anymore! Move up to larger integer type");
     Int field;
     for ( field = 0; field < OVERRIDE_COUNT; field++ )
     {

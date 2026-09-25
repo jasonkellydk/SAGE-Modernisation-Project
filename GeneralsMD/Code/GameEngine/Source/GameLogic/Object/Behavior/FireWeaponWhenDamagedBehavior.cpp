@@ -29,7 +29,8 @@
 
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 #define DEFINE_SLOWDEATHPHASE_NAMES
 
 #include "Common/Thing.h"
@@ -216,7 +217,7 @@ UpdateSleepTime FireWeaponWhenDamagedBehavior::update()
 {
 	if (!isUpgradeActive())
 	{
-		DEBUG_ASSERTCRASH(isUpgradeActive(), ("hmm, this should not be possible"));
+		engine::debug::invariant((isUpgradeActive()), "isUpgradeActive()", __FILE__, __LINE__, "hmm, this should not be possible");
 		return UPDATE_SLEEP_FOREVER;
 	}
 

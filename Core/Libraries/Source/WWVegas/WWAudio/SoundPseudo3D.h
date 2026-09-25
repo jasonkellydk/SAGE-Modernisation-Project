@@ -82,9 +82,10 @@ class SoundPseudo3DClass : public Sound3DClass
 		//////////////////////////////////////////////////////////////////////
 		//	Position/direction methods
 		//////////////////////////////////////////////////////////////////////
-		virtual void			Set_Listener_Transform (const Matrix3D &tm) override	{ m_ListenerTransform = tm; }
-		virtual void			Set_Position (const Vector3 &position) override			{ Set_Dirty (); m_Transform.Set_Translation (position); }
-		virtual void			Set_Transform (const Matrix3D &transform) override		{ Set_Dirty (); m_Transform = transform; }
+		virtual void Set_Listener_Transform (const Engine::Math::AffineTransform3 &transform) override { m_ListenerTransform = transform; }
+		virtual void Set_Position (Engine::Math::Vector3 position) override
+			{ Set_Dirty(); m_Transform.elements[3] = position.x; m_Transform.elements[7] = position.y; m_Transform.elements[11] = position.z; }
+		virtual void Set_Transform (const Engine::Math::AffineTransform3 &transform) override { Set_Dirty(); m_Transform = transform; }
 
 		//////////////////////////////////////////////////////////////////////
 		//	Velocity methods
@@ -93,7 +94,7 @@ class SoundPseudo3DClass : public Sound3DClass
 		//
 		// The velocity settings are in meters per millisecond.
 		//
-		virtual void			Set_Velocity (const Vector3 &velocity) override			{ }
+		virtual void Set_Velocity (Engine::Math::Vector3 velocity) override { (void)velocity; }
 
 		//////////////////////////////////////////////////////////////////////
 		//	Attenuation settings

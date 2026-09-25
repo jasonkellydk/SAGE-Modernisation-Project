@@ -35,7 +35,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/Module.h"
 #include "Common/ModuleFactory.h"
@@ -613,7 +614,7 @@ const ModuleFactory::ModuleTemplate* ModuleFactory::findModuleTemplate(const Asc
   ModuleTemplateMap::const_iterator it = m_moduleTemplateMap.find(namekey);
   if (it == m_moduleTemplateMap.end())
 	{
-		DEBUG_CRASH(( "Module name '%s' not found", name.str() ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Module name '%s' not found", name.str() );
 		return nullptr;
 	}
 	else
@@ -630,7 +631,7 @@ Module *ModuleFactory::newModule( Thing *thing, const AsciiString& name, const M
 	// sanity
 	if( name.isEmpty() )
 	{
-		DEBUG_CRASH(("attempting to create module with empty name"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "attempting to create module with empty name");
 		return nullptr;
 	}
 	const ModuleTemplate* mt = findModuleTemplate(name, type);
@@ -643,36 +644,16 @@ Module *ModuleFactory::newModule( Thing *thing, const AsciiString& name, const M
 		{
 			BehaviorModule* bm = (BehaviorModule*)mod;
 
-			DEBUG_ASSERTCRASH(
-				((mt->m_whichInterfaces & (MODULEINTERFACE_BODY)) != 0) == (bm->getBody() != nullptr),
-				("getInterfaceMask bad for MODULE_BODY (%s)",name.str()));
-			DEBUG_ASSERTCRASH(
-				((mt->m_whichInterfaces & (MODULEINTERFACE_COLLIDE)) != 0) == (bm->getCollide() != nullptr),
-				("getInterfaceMask bad for MODULE_COLLIDE (%s)",name.str()));
-			DEBUG_ASSERTCRASH(
-				((mt->m_whichInterfaces & (MODULEINTERFACE_CONTAIN)) != 0) == (bm->getContain() != nullptr),
-				("getInterfaceMask bad for MODULE_CONTAIN (%s)",name.str()));
-			DEBUG_ASSERTCRASH(
-				((mt->m_whichInterfaces & (MODULEINTERFACE_CREATE)) != 0) == (bm->getCreate() != nullptr),
-				("getInterfaceMask bad for MODULE_CREATE (%s)",name.str()));
-			DEBUG_ASSERTCRASH(
-				((mt->m_whichInterfaces & (MODULEINTERFACE_DAMAGE)) != 0) == (bm->getDamage() != nullptr),
-				("getInterfaceMask bad for MODULE_DAMAGE (%s)",name.str()));
-			DEBUG_ASSERTCRASH(
-				((mt->m_whichInterfaces & (MODULEINTERFACE_DESTROY)) != 0) == (bm->getDestroy() != nullptr),
-				("getInterfaceMask bad for MODULE_DESTROY (%s)",name.str()));
-			DEBUG_ASSERTCRASH(
-				((mt->m_whichInterfaces & (MODULEINTERFACE_DIE)) != 0) == (bm->getDie() != nullptr),
-				("getInterfaceMask bad for MODULE_DIE (%s)",name.str()));
-			DEBUG_ASSERTCRASH(
-				((mt->m_whichInterfaces & (MODULEINTERFACE_SPECIAL_POWER)) != 0) == (bm->getSpecialPower() != nullptr),
-				("getInterfaceMask bad for MODULE_SPECIAL_POWER (%s)",name.str()));
-			DEBUG_ASSERTCRASH(
-				((mt->m_whichInterfaces & (MODULEINTERFACE_UPDATE)) != 0) == (bm->getUpdate() != nullptr),
-				("getInterfaceMask bad for MODULE_UPDATE (%s)",name.str()));
-			DEBUG_ASSERTCRASH(
-				((mt->m_whichInterfaces & (MODULEINTERFACE_UPGRADE)) != 0) == (bm->getUpgrade() != nullptr),
-				("getInterfaceMask bad for MODULE_UPGRADE (%s)",name.str()));
+			engine::debug::invariant((((mt->m_whichInterfaces & (MODULEINTERFACE_BODY)) != 0) == (bm->getBody() != nullptr)), "((mt->m_whichInterfaces & (MODULEINTERFACE_BODY)) != 0) == (bm->getBody() != nullptr)", __FILE__, __LINE__, "getInterfaceMask bad for MODULE_BODY (%s)",name.str());
+			engine::debug::invariant((((mt->m_whichInterfaces & (MODULEINTERFACE_COLLIDE)) != 0) == (bm->getCollide() != nullptr)), "((mt->m_whichInterfaces & (MODULEINTERFACE_COLLIDE)) != 0) == (bm->getCollide() != nullptr)", __FILE__, __LINE__, "getInterfaceMask bad for MODULE_COLLIDE (%s)",name.str());
+			engine::debug::invariant((((mt->m_whichInterfaces & (MODULEINTERFACE_CONTAIN)) != 0) == (bm->getContain() != nullptr)), "((mt->m_whichInterfaces & (MODULEINTERFACE_CONTAIN)) != 0) == (bm->getContain() != nullptr)", __FILE__, __LINE__, "getInterfaceMask bad for MODULE_CONTAIN (%s)",name.str());
+			engine::debug::invariant((((mt->m_whichInterfaces & (MODULEINTERFACE_CREATE)) != 0) == (bm->getCreate() != nullptr)), "((mt->m_whichInterfaces & (MODULEINTERFACE_CREATE)) != 0) == (bm->getCreate() != nullptr)", __FILE__, __LINE__, "getInterfaceMask bad for MODULE_CREATE (%s)",name.str());
+			engine::debug::invariant((((mt->m_whichInterfaces & (MODULEINTERFACE_DAMAGE)) != 0) == (bm->getDamage() != nullptr)), "((mt->m_whichInterfaces & (MODULEINTERFACE_DAMAGE)) != 0) == (bm->getDamage() != nullptr)", __FILE__, __LINE__, "getInterfaceMask bad for MODULE_DAMAGE (%s)",name.str());
+			engine::debug::invariant((((mt->m_whichInterfaces & (MODULEINTERFACE_DESTROY)) != 0) == (bm->getDestroy() != nullptr)), "((mt->m_whichInterfaces & (MODULEINTERFACE_DESTROY)) != 0) == (bm->getDestroy() != nullptr)", __FILE__, __LINE__, "getInterfaceMask bad for MODULE_DESTROY (%s)",name.str());
+			engine::debug::invariant((((mt->m_whichInterfaces & (MODULEINTERFACE_DIE)) != 0) == (bm->getDie() != nullptr)), "((mt->m_whichInterfaces & (MODULEINTERFACE_DIE)) != 0) == (bm->getDie() != nullptr)", __FILE__, __LINE__, "getInterfaceMask bad for MODULE_DIE (%s)",name.str());
+			engine::debug::invariant((((mt->m_whichInterfaces & (MODULEINTERFACE_SPECIAL_POWER)) != 0) == (bm->getSpecialPower() != nullptr)), "((mt->m_whichInterfaces & (MODULEINTERFACE_SPECIAL_POWER)) != 0) == (bm->getSpecialPower() != nullptr)", __FILE__, __LINE__, "getInterfaceMask bad for MODULE_SPECIAL_POWER (%s)",name.str());
+			engine::debug::invariant((((mt->m_whichInterfaces & (MODULEINTERFACE_UPDATE)) != 0) == (bm->getUpdate() != nullptr)), "((mt->m_whichInterfaces & (MODULEINTERFACE_UPDATE)) != 0) == (bm->getUpdate() != nullptr)", __FILE__, __LINE__, "getInterfaceMask bad for MODULE_UPDATE (%s)",name.str());
+			engine::debug::invariant((((mt->m_whichInterfaces & (MODULEINTERFACE_UPGRADE)) != 0) == (bm->getUpgrade() != nullptr)), "((mt->m_whichInterfaces & (MODULEINTERFACE_UPGRADE)) != 0) == (bm->getUpgrade() != nullptr)", __FILE__, __LINE__, "getInterfaceMask bad for MODULE_UPGRADE (%s)",name.str());
 		}
 #endif
 

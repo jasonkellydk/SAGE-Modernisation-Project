@@ -27,7 +27,9 @@
 // Author: Colin Day, April 2001
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+#include <cmath>
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 
 #include "Common/DataChunk.h"
@@ -38,6 +40,10 @@
 #include "Common/ThingTemplate.h"
 #include "Common/WellKnownKeys.h"
 #include "Common/Xfer.h"
+
+import Engine.Core.Math.AffineTransform3;
+import Engine.Core.Math.Vector2;
+import Engine.Core.Math.Vector3;
 
 #include "GameClient/TerrainVisual.h"
 #include "GameClient/View.h"
@@ -57,12 +63,135 @@
 #include "GameLogic/Module/BridgeTowerBehavior.h"
 #include "GameLogic/GhostObject.h"
 
-#include "WWMath/plane.h"
-#include "WWMath/tri.h"
-
-
 // GLOBALS ////////////////////////////////////////////////////////////////////////////////////////
 TerrainLogic *TheTerrainLogic = nullptr;
+
+// LEGACY MATH ////////////////////////////////////////////////////////////////////////////////////
+// These reproduce the former WWMath PlaneClass / Point_In_Triangle_2D operation-for-operation so
+// that bridge heights and terrain flattening stay bit-identical.
+
+namespace
+{
+struct LegacyPlane
+{
+	Engine::Math::Vector3 N;
+	Real D;
+};
+
+// Former PlaneClass(point1, point2, point3).
+LegacyPlane makeLegacyPlane(const Engine::Math::Vector3 &point1, const Engine::Math::Vector3 &point2,
+	const Engine::Math::Vector3 &point3)
+{
+	LegacyPlane plane;
+	plane.N = (point2 - point1).Cross(point3 - point1);
+	if (plane.N != Engine::Math::Vector3{0.0f, 0.0f, 0.0f}) {
+		// Points are not colinear. Normalize N and calculate D.
+		plane.N = plane.N.Normalized_Legacy();
+		plane.D = plane.N.Dot(point1);
+	} else {
+		// They are colinear - return default plane.
+		plane.N = Engine::Math::Vector3{0.0f, 0.0f, 1.0f};
+		plane.D = 0.0f;
+	}
+	return plane;
+}
+
+// Former PlaneClass::Compute_Intersection. Returns false when the line is parallel to the plane
+// (in which case set_t is left untouched).
+Bool computeLegacyPlaneIntersection(const LegacyPlane &plane, const Engine::Math::Vector3 &p0,
+	const Engine::Math::Vector3 &p1, Real *set_t)
+{
+	const Real den = plane.N.Dot(p1 - p0);
+	if (den == 0.0f) {
+		return false;
+	}
+	const Real num = -(plane.N.Dot(p0) - plane.D);
+	*set_t = num / den;
+	return true;
+}
+
+// Former Vector2::Perp_Dot_Product.
+Real legacyPerpDotProduct(const Engine::Math::Vector2 &a, const Engine::Math::Vector2 &b)
+{
+	return a.x * -b.y + a.y * b.x;
+}
+
+Real legacyLength2(const Engine::Math::Vector2 &a)
+{
+	return (a.x*a.x + a.y*a.y);
+}
+
+// Former Point_In_Triangle_2D (the hit-edge flag output is dropped; no caller here used it).
+Bool legacyPointInTriangle2D(const Engine::Math::Vector3 &tri_point0, const Engine::Math::Vector3 &tri_point1,
+	const Engine::Math::Vector3 &tri_point2, const Engine::Math::Vector3 &test_point, int axis_1, int axis_2)
+{
+	const Engine::Math::Vector2 p0p1{tri_point1[axis_1] - tri_point0[axis_1], tri_point1[axis_2] - tri_point0[axis_2]};
+	const Engine::Math::Vector2 p1p2{tri_point2[axis_1] - tri_point1[axis_1], tri_point2[axis_2] - tri_point1[axis_2]};
+	const Engine::Math::Vector2 p2p0{tri_point0[axis_1] - tri_point2[axis_1], tri_point0[axis_2] - tri_point2[axis_2]};
+
+	const Engine::Math::Vector2 p0p2{tri_point2[axis_1] - tri_point0[axis_1], tri_point2[axis_2] - tri_point0[axis_2]};
+	const Real p0p1p2 = legacyPerpDotProduct(p0p1, p0p2);
+	if (p0p1p2 != 0.0f) {
+		// The triangle is not degenerate - test three sides
+		const Real side_factor = p0p1p2 > 0.0f ? 1.0f : -1.0f;
+
+		const Engine::Math::Vector2 p0pT{test_point[axis_1] - tri_point0[axis_1], test_point[axis_2] - tri_point0[axis_2]};
+		if (legacyPerpDotProduct(p0p1, p0pT) * side_factor < 0.0f) {
+			return false;
+		}
+		const Engine::Math::Vector2 p1pT{test_point[axis_1] - tri_point1[axis_1], test_point[axis_2] - tri_point1[axis_2]};
+		if (legacyPerpDotProduct(p1p2, p1pT) * side_factor < 0.0f) {
+			return false;
+		}
+		const Engine::Math::Vector2 p2pT{test_point[axis_1] - tri_point2[axis_1], test_point[axis_2] - tri_point2[axis_2]};
+		if (legacyPerpDotProduct(p2p0, p2pT) * side_factor < 0.0f) {
+			return false;
+		}
+		return true;
+	}
+
+	// The triangle is degenerate.
+	// Find the two outer points along the triangle's line ('start' and 'end' points)
+	const Real p0p1dist2 = legacyLength2(p0p1);
+	const Real p1p2dist2 = legacyLength2(p1p2);
+	const Real p2p0dist2 = legacyLength2(p1p2);	// (sic) matches the original implementation
+	Real max_dist2;
+	Engine::Math::Vector2 pSpE, pSpT;
+	if (p0p1dist2 > p1p2dist2) {
+		if (p0p1dist2 > p2p0dist2) {
+			pSpE = p0p1;
+			pSpT = {test_point[axis_1] - tri_point0[axis_1], test_point[axis_2] - tri_point0[axis_2]};
+			max_dist2 = p0p1dist2;
+		} else {
+			pSpE = p2p0;
+			pSpT = {test_point[axis_1] - tri_point2[axis_1], test_point[axis_2] - tri_point2[axis_2]};
+			max_dist2 = p2p0dist2;
+		}
+	} else {
+		if (p1p2dist2 > p2p0dist2) {
+			pSpE = p1p2;
+			pSpT = {test_point[axis_1] - tri_point1[axis_1], test_point[axis_2] - tri_point1[axis_2]};
+			max_dist2 = p1p2dist2;
+		} else {
+			pSpE = p2p0;
+			pSpT = {test_point[axis_1] - tri_point2[axis_1], test_point[axis_2] - tri_point2[axis_2]};
+			max_dist2 = p2p0dist2;
+		}
+	}
+
+	if (max_dist2 != 0.0f) {
+		// Triangle is line segment, check if test point is colinear with it
+		if (legacyPerpDotProduct(pSpE, pSpT)) {
+			return false;
+		}
+		const Engine::Math::Vector2 pEpT = pSpT - pSpE;
+		return legacyLength2(pSpT) <= max_dist2 && legacyLength2(pEpT) <= max_dist2;
+	}
+
+	// All triangle points coincide, check if test point coincides with them
+	return legacyLength2(pSpT) == 0.0f;
+}
+}
 
 // STATIC /////////////////////////////////////////////////////////////////////////////////////////
 WaterHandle TerrainLogic::m_gridWaterHandle;
@@ -132,7 +261,7 @@ Object *Bridge::createTower( Coord3D *worldPos,
 	if( towerTemplate == nullptr || bridge == nullptr )
 	{
 
-		DEBUG_CRASH(( "Bridge::createTower(): Invalid params" ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Bridge::createTower(): Invalid params" );
 		return nullptr;
 
 	}
@@ -167,7 +296,7 @@ Object *Bridge::createTower( Coord3D *worldPos,
 
 		// --------------------------------------------------------------------------------------------
 		default:
-			DEBUG_CRASH(( "Bridge::createTower - Unknown bridge tower type '%d'", towerType ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Bridge::createTower - Unknown bridge tower type '%d'", towerType );
 			return nullptr;
 
 	}
@@ -178,13 +307,13 @@ Object *Bridge::createTower( Coord3D *worldPos,
 
 	// tie it to the bridge
 	BridgeBehaviorInterface *bridgeInterface = BridgeBehavior::getBridgeBehaviorInterfaceFromObject( bridge );
-	DEBUG_ASSERTCRASH( bridgeInterface != nullptr, ("Bridge::createTower - no 'BridgeBehaviorInterface' found") );
+	engine::debug::invariant((bridgeInterface != nullptr), "bridgeInterface != nullptr", __FILE__, __LINE__, "Bridge::createTower - no 'BridgeBehaviorInterface' found");
 	if( bridgeInterface )
 		bridgeInterface->setTower( towerType, tower );
 
 	// tie the bridge to us
 	BridgeTowerBehaviorInterface *bridgeTowerInterface = BridgeTowerBehavior::getBridgeTowerBehaviorInterfaceFromObject( tower );
-	DEBUG_ASSERTCRASH( bridgeTowerInterface != nullptr, ("Bridge::createTower - no 'BridgeTowerBehaviorInterface' found") );
+	engine::debug::invariant((bridgeTowerInterface != nullptr), "bridgeTowerInterface != nullptr", __FILE__, __LINE__, "Bridge::createTower - no 'BridgeTowerBehaviorInterface' found");
 	if( bridgeTowerInterface )
 	{
 
@@ -242,7 +371,7 @@ m_bridgeInfo(theInfo)
 
 	static const ThingTemplate* genericBridgeTemplate = TheThingFactory->findTemplate("GenericBridge");
 	if (!genericBridgeTemplate) {
-		DEBUG_LOG(("*** GenericBridge template not found."));
+		engine::debug::log_info("*** GenericBridge template not found.");
 		return;
 	}
 	Object *bridge = TheThingFactory->newObject(genericBridgeTemplate, nullptr);
@@ -270,7 +399,7 @@ m_bridgeInfo(theInfo)
 	// get the template of the bridge
 	TerrainRoadType *bridgeTemplate = TheTerrainRoads->findBridge( bridgeTemplateName );
 	if( bridgeTemplate == nullptr ) {
-		DEBUG_LOG(( "*** Bridge Template Not Found '%s'.", bridgeTemplateName.str() ));
+		engine::debug::log_info( "*** Bridge Template Not Found '%s'.", bridgeTemplateName.str() );
 		return;
 	}
 
@@ -331,7 +460,7 @@ Bridge::Bridge(Object *bridgeObj)
 	// save the template name
 	m_templateName = bridgeObj->getTemplate()->getName();
 
-	DEBUG_ASSERTLOG( bridgeObj->getGeometryInfo().getGeomType()==GEOMETRY_BOX, ("Bridges need to be rectangles."));
+	if (!(bridgeObj->getGeometryInfo().getGeomType()==GEOMETRY_BOX)) engine::debug::log_error("Bridges need to be rectangles.");
 
 	const Coord3D *pos = bridgeObj->getPosition();
 	Real angle = bridgeObj->getOrientation();
@@ -381,7 +510,7 @@ Bridge::Bridge(Object *bridgeObj)
 	AsciiString bridgeTemplateName = bridgeObj->getTemplate()->getName();
 	TerrainRoadType *bridgeTemplate = TheTerrainRoads->findBridge( bridgeTemplateName );
 	if( bridgeTemplate == nullptr ) {
-		DEBUG_LOG(( "*** Bridge Template Not Found '%s'.", bridgeTemplateName.str() ));
+		engine::debug::log_info( "*** Bridge Template Not Found '%s'.", bridgeTemplateName.str() );
 		return;
 	}
 
@@ -455,18 +584,16 @@ Bool Bridge::isPointOnBridge(const Coord3D *pLoc)
 	if (pLoc->y < m_bounds.lo.y) return(false);
 	if (pLoc->y > m_bounds.hi.y) return(false);
 
-	Vector3 testPt(pLoc->x, pLoc->y, pLoc->z);
-	Vector3 left1(m_bridgeInfo.fromLeft.x, m_bridgeInfo.fromLeft.y, m_bridgeInfo.fromLeft.z);
-	Vector3 right1(m_bridgeInfo.fromRight.x, m_bridgeInfo.fromRight.y, m_bridgeInfo.fromRight.z);
-	Vector3 left2(m_bridgeInfo.toLeft.x, m_bridgeInfo.toLeft.y, m_bridgeInfo.toLeft.z);
-	Vector3 right2(m_bridgeInfo.toRight.x, m_bridgeInfo.toRight.y, m_bridgeInfo.toRight.z);
+	const Engine::Math::Vector3 testPt{pLoc->x, pLoc->y, pLoc->z};
+	const Engine::Math::Vector3 left1{m_bridgeInfo.fromLeft.x, m_bridgeInfo.fromLeft.y, m_bridgeInfo.fromLeft.z};
+	const Engine::Math::Vector3 right1{m_bridgeInfo.fromRight.x, m_bridgeInfo.fromRight.y, m_bridgeInfo.fromRight.z};
+	const Engine::Math::Vector3 left2{m_bridgeInfo.toLeft.x, m_bridgeInfo.toLeft.y, m_bridgeInfo.toLeft.z};
+	const Engine::Math::Vector3 right2{m_bridgeInfo.toRight.x, m_bridgeInfo.toRight.y, m_bridgeInfo.toRight.z};
 
-	unsigned char flags;
-
-	if (Point_In_Triangle_2D(left1, right1, left2, testPt, 0, 1, flags)) {
+	if (legacyPointInTriangle2D(left1, right1, left2, testPt, 0, 1)) {
 		return true;
 	}
-	if (Point_In_Triangle_2D(right1, left2, right2, testPt, 0, 1, flags)) {
+	if (legacyPointInTriangle2D(right1, left2, right2, testPt, 0, 1)) {
 		return true;
 	}
 	return(false);
@@ -837,27 +964,25 @@ Bool Bridge::isCellEntryPoint(const Region2D *cell)
 //-------------------------------------------------------------------------------------------------
 /** pickBridge - see if point is on bridge. */
 //-------------------------------------------------------------------------------------------------
-Drawable *Bridge::pickBridge(const Vector3 &from, const Vector3 &to, Vector3 *pos)
+Drawable *Bridge::pickBridge(Engine::Math::Vector3 from, Engine::Math::Vector3 to, Engine::Math::Vector3 *position)
 {
 
-	Vector3 left1(m_bridgeInfo.fromLeft.x, m_bridgeInfo.fromLeft.y, m_bridgeInfo.fromLeft.z);
-	Vector3 right1(m_bridgeInfo.fromRight.x, m_bridgeInfo.fromRight.y, m_bridgeInfo.fromRight.z);
-	Vector3 left2(m_bridgeInfo.toLeft.x, m_bridgeInfo.toLeft.y, m_bridgeInfo.toLeft.z);
+	const Engine::Math::Vector3 left1{m_bridgeInfo.fromLeft.x, m_bridgeInfo.fromLeft.y, m_bridgeInfo.fromLeft.z};
+	const Engine::Math::Vector3 right1{m_bridgeInfo.fromRight.x, m_bridgeInfo.fromRight.y, m_bridgeInfo.fromRight.z};
+	const Engine::Math::Vector3 left2{m_bridgeInfo.toLeft.x, m_bridgeInfo.toLeft.y, m_bridgeInfo.toLeft.z};
 
-	PlaneClass plane(left1, right1, left2);
+	const LegacyPlane plane = makeLegacyPlane(left1, right1, left2);
 	Real t;
-	plane.Compute_Intersection(from, to, &t);
-	Vector3 intersectPos;
-	intersectPos = from + (to-from) * t;
+	if (!computeLegacyPlaneIntersection(plane, from, to, &t)) return nullptr;
+	const Engine::Math::Vector3 intersectPos = from + (to - from) * t;
 
 	Coord3D loc;
-	loc.x = intersectPos.X;
-	loc.y = intersectPos.Y;
-	loc.z = intersectPos.Z;
+	loc.x = intersectPos.x;
+	loc.y = intersectPos.y;
+	loc.z = intersectPos.z;
 
 	if (isPointOnBridge(&loc)) {
-		*pos = intersectPos;
-		//DEBUG_LOG(("Picked bridge %.2f, %.2f, %.2f", intersectPos.X, intersectPos.Y, intersectPos.Z));
+		*position = intersectPos;
 		Object *bridge = TheGameLogic->findObjectByID(m_bridgeInfo.bridgeObjectID);
 		if (bridge) {
 			return bridge->getDrawable();
@@ -925,7 +1050,7 @@ void Bridge::updateDamageState()
 		}
 	}	else {
 		m_bridgeInfo.bridgeObjectID = INVALID_ID;
-		DEBUG_CRASH(("Bridge object disappeared - unexpected. jba."));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Bridge object disappeared - unexpected. jba.");
 	}
 
 }
@@ -936,19 +1061,19 @@ void Bridge::updateDamageState()
 //-------------------------------------------------------------------------------------------------
 Real Bridge::getBridgeHeight(const Coord3D *pLoc, Coord3D* normal)
 {
-	Vector3 left1(m_bridgeInfo.fromLeft.x, m_bridgeInfo.fromLeft.y, m_bridgeInfo.fromLeft.z);
-	Vector3 right1(m_bridgeInfo.fromRight.x, m_bridgeInfo.fromRight.y, m_bridgeInfo.fromRight.z);
-	Vector3 left2(m_bridgeInfo.toLeft.x, m_bridgeInfo.toLeft.y, m_bridgeInfo.toLeft.z);
-	PlaneClass plane(left1, right1, left2);
+	const Engine::Math::Vector3 left1{m_bridgeInfo.fromLeft.x, m_bridgeInfo.fromLeft.y, m_bridgeInfo.fromLeft.z};
+	const Engine::Math::Vector3 right1{m_bridgeInfo.fromRight.x, m_bridgeInfo.fromRight.y, m_bridgeInfo.fromRight.z};
+	const Engine::Math::Vector3 left2{m_bridgeInfo.toLeft.x, m_bridgeInfo.toLeft.y, m_bridgeInfo.toLeft.z};
+	const LegacyPlane plane = makeLegacyPlane(left1, right1, left2);
 	const Real factor = 1000.0f;
-	Vector3 bottom(pLoc->x, pLoc->y, 0);
-	Vector3 top(pLoc->x, pLoc->y, factor);
-	Real t;
-	plane.Compute_Intersection(bottom, top, &t);
+	const Engine::Math::Vector3 bottom{pLoc->x, pLoc->y, 0};
+	const Engine::Math::Vector3 top{pLoc->x, pLoc->y, factor};
+	Real t = 0.0f;
+	computeLegacyPlaneIntersection(plane, bottom, top, &t);
 	if (normal) {
-		normal->x = plane.N.X;
-		normal->y = plane.N.Y;
-		normal->z = plane.N.Z;
+		normal->x = plane.N.x;
+		normal->y = plane.N.y;
+		normal->z = plane.N.z;
 	}
 
 	return t*factor;
@@ -1209,8 +1334,8 @@ void TerrainLogic::enableWaterGrid( Bool enable )
 		if( waterSettingIndex == -1 )
 		{
 
-			DEBUG_CRASH(( "!!!!!! Deformable water won't work because there was no group of vertex water data defined in GameData.INI for this map name '%s' !!!!!! (C. Day)",
-										TheGlobalData->m_mapName.str() ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "!!!!!! Deformable water won't work because there was no group of vertex water data defined in GameData.INI for this map name '%s' !!!!!! (C. Day)",
+										TheGlobalData->m_mapName.str() );
 			return;
 
 		}
@@ -1272,40 +1397,37 @@ Bool TerrainLogic::loadMap( AsciiString filename, Bool query )
 			// Read the waypoints.
 			file.registerParser( "WaypointsList", AsciiString::TheEmptyString, parseWaypointDataChunk );
 			if (!file.parse(this)) {
-				DEBUG_CRASH(("Unable to read waypoint info."));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unable to read waypoint info.");
 				return false;
 			}
 		}
 		theInputStream.close();
 	} catch (...) {
 		// Eat the error - legacy files are not valid chunk format (and don't have waypoint info.)
-		DEBUG_LOG(("Unable to read waypoint info."));
+		engine::debug::log_info("Unable to read waypoint info.");
 	}
-#if 0 //def DEBUG_LOGGING
 	// Dump out the waypoint links.
 	Waypoint *pWay;
 	// Traverse all waypoints.
 	int count = 0;
 	for (pWay = getFirstWaypoint(); pWay; pWay = pWay->getNext()) {
 		count++;
-		Coord3D loc;
-		pWay->getLocation(&loc);
-		DEBUG_LOG_RAW(("Waypoint %d - '%s' id=%d ", count, pWay->getName().str(), pWay->getID()));
-		DEBUG_LOG_RAW(("{%.2f, %.2f, %.2f} ", loc.x, loc.y, loc.z));
+		Coord3D loc = *pWay->getLocation();
+		engine::debug::log_info("Waypoint %d - '%s' id=%d ", count, pWay->getName().str(), pWay->getID());
+		engine::debug::log_info("{%.2f, %.2f, %.2f} ", loc.x, loc.y, loc.z);
 		Int i;
 		if (pWay->getNumLinks()) {
-			DEBUG_LOG_RAW(("Links to: "));
+			engine::debug::log_info("Links to: ");
 			for (i=0; i<pWay->getNumLinks(); i++) {
 				Waypoint *pLink = pWay->getLink(i);
-				DEBUG_LOG_RAW(("'%s' id=%d ", pLink->getName().str(), pLink->getID()));
+				engine::debug::log_info("'%s' id=%d ", pLink->getName().str(), pLink->getID());
 			}
 		} else {
-			DEBUG_LOG_RAW(("No links."));
+			engine::debug::log_info("No links.");
 		}
-		DEBUG_LOG_RAW(("\n"));
+		engine::debug::log_info("\n");
 	}
-	DEBUG_LOG(("Total of %d waypoints.", count));
-#endif
+	engine::debug::log_info("Total of %d waypoints.", count);
 
 	if (!query) {
 		// tell the game interface a new terrain file has been loaded up
@@ -1337,7 +1459,7 @@ Bool TerrainLogic::parseWaypointData(DataChunkInput &file, DataChunkInfo *info, 
 		Int waypoint2 = file.readInt();
 		addWaypointLink(waypoint1, waypoint2);
 	}
-	DEBUG_ASSERTCRASH(file.atEndOfChunk(), ("Unexpected data left over."));
+	engine::debug::invariant((file.atEndOfChunk()), "file.atEndOfChunk()", __FILE__, __LINE__, "Unexpected data left over.");
 	return true;
 }
 
@@ -1356,7 +1478,7 @@ void TerrainLogic::addWaypoint(MapObject *pMapObj)
 	label3 = pMapObj->getProperties()->getAsciiString(TheKey_waypointPathLabel3, &exists);
 	Bool biDirectional;
 	biDirectional = pMapObj->getProperties()->getBool(TheKey_waypointPathBiDirectional, &exists);
-	DEBUG_ASSERTCRASH(pMapObj->isWaypoint(), ("not a waypoint"));
+	engine::debug::invariant((pMapObj->isWaypoint()), "pMapObj->isWaypoint()", __FILE__, __LINE__, "not a waypoint");
 	Waypoint *pWay = newInstance(Waypoint)(pMapObj->getWaypointID(), pMapObj->getWaypointName(),
 																&loc, label1, label2, label3, biDirectional);
 	pWay->setNext(m_waypointListHead);
@@ -1421,7 +1543,7 @@ void TerrainLogic::deleteWaypoints()
 //-------------------------------------------------------------------------------------------------
 Bool TerrainLogic::isClearLineOfSight(const Coord3D& pos, const Coord3D& posOther) const
 {
-	DEBUG_CRASH(("implement ME"));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "implement ME");
 	return false;
 }
 
@@ -1460,7 +1582,7 @@ Bool TerrainLogic::isCliffCell( Real x, Real y) const
 }
 
 //-------------------------------------------------------------------------------------------------
-void makeAlignToNormalMatrix( Real angle, const Coord3D& pos, const Coord3D& normal, Matrix3D& mtx)
+void makeAlignToNormalTransform( Real angle, const Coord3D& pos, const Coord3D& normal, Engine::Math::AffineTransform3& transform)
 {
 	Coord3D x, y, z;
 
@@ -1490,22 +1612,21 @@ void makeAlignToNormalMatrix( Real angle, const Coord3D& pos, const Coord3D& nor
 		x.normalize();
 	}
 
-	DEBUG_ASSERTCRASH(fabs(x.x*z.x + x.y*z.y + x.z*z.z)<0.0001,("dot is not zero (%f)",fabs(x.x*z.x + x.y*z.y + x.z*z.z)));
+	engine::debug::invariant((fabs(x.x*z.x + x.y*z.y + x.z*z.z)<0.0001), "fabs(x.x*z.x + x.y*z.y + x.z*z.z)<0.0001", __FILE__, __LINE__, "dot is not zero (%f)",fabs(x.x*z.x + x.y*z.y + x.z*z.z));
 
 	// now computing the y vector is trivial.
 	y.crossProduct( z, x, y );
 	y.normalize();
 
-	mtx.Set(  x.x, y.x, z.x, pos.x,
-							x.y, y.y, z.y, pos.y,
-							x.z, y.z, z.z, pos.z );
+	transform = Engine::Math::AffineTransform3::From_Basis(
+		{x.x, x.y, x.z}, {y.x, y.y, y.z}, {z.x, z.y, z.z}, {pos.x, pos.y, pos.z});
 }
 
 //-------------------------------------------------------------------------------------------------
 /** given angle and position, return the matrix aligning this
 	* position with the ground */
 //-------------------------------------------------------------------------------------------------
-PathfindLayerEnum TerrainLogic::alignOnTerrain( Real angle, const Coord3D& pos, Bool stickToGround, Matrix3D& mtx)
+PathfindLayerEnum TerrainLogic::alignOnTerrain( Real angle, const Coord3D& pos, Bool stickToGround, Engine::Math::AffineTransform3& transform)
 {
 	Coord3D terrainNormal;
 	PathfindLayerEnum layer;
@@ -1518,9 +1639,9 @@ PathfindLayerEnum TerrainLogic::alignOnTerrain( Real angle, const Coord3D& pos, 
 		/// @todo - fix brutal hack for bridges that are too high. jba
 		terrainAtPos += 2.5f;
 	}
-	makeAlignToNormalMatrix(angle, pos, terrainNormal, mtx);
+	makeAlignToNormalTransform(angle, pos, terrainNormal, transform);
 	if (stickToGround)
-		mtx.Set_Z_Translation(terrainAtPos);
+		transform[2][3] = terrainAtPos;
 
 	return layer;
 }
@@ -1589,7 +1710,7 @@ Waypoint *TerrainLogic::getClosestWaypointOnPath( const Coord3D *pos, AsciiStrin
 	Real distSqr = 0;
 	Waypoint *pClosestWay = nullptr;
 	if (label.isEmpty()) {
-		DEBUG_LOG(("***Warning - asking for empty path label."));
+		engine::debug::log_info("***Warning - asking for empty path label.");
 		return nullptr;
 	}
 
@@ -1620,7 +1741,7 @@ Waypoint *TerrainLogic::getClosestWaypointOnPath( const Coord3D *pos, AsciiStrin
 Bool TerrainLogic::isPurposeOfPath( Waypoint *pWay, AsciiString label )
 {
 	if (label.isEmpty() || pWay==nullptr) {
-		DEBUG_LOG(("***Warning - asking for empth path label."));
+		engine::debug::log_info("***Warning - asking for empth path label.");
 		return false;
 	}
 
@@ -1965,14 +2086,14 @@ void TerrainLogic::getBridgeAttackPoints(const Object *bridge, TBridgeAttackInfo
 //-------------------------------------------------------------------------------------------------
 /** Picks a bridge, and returns it's drawable. */
 //-------------------------------------------------------------------------------------------------
-Drawable *TerrainLogic::pickBridge(const Vector3 &from, const Vector3 &to, Vector3 *pos)
+Drawable *TerrainLogic::pickBridge(Engine::Math::Vector3 from, Engine::Math::Vector3 to, Engine::Math::Vector3 *position)
 {
 	Drawable *curDraw = nullptr;
-	Vector3 curPos(0,0,0);
+	Engine::Math::Vector3 curPos{};
 
 	Bridge *pBridge = getFirstBridge();
 	while (pBridge) {
-		Vector3 thisPos;
+		Engine::Math::Vector3 thisPos;
 		Drawable *thisDraw = pBridge->pickBridge(from, to , &thisPos);
 		if (!curDraw) {
 			curDraw = thisDraw;
@@ -1980,7 +2101,7 @@ Drawable *TerrainLogic::pickBridge(const Vector3 &from, const Vector3 &to, Vecto
 		}
 		pBridge = pBridge->getNext();
 	}
-	*pos = curPos;
+	*position = curPos;
 	return(curDraw);
 }
 
@@ -2288,13 +2409,13 @@ Real TerrainLogic::getWaterHeight( const WaterHandle *water )
 	if( water == &m_gridWaterHandle )
 	{
 
-		DEBUG_CRASH(( "TerrainLogic::getWaterHeight( WaterHandle *water ) - water is a grid handle, cannot make this query" ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "TerrainLogic::getWaterHeight( WaterHandle *water ) - water is a grid handle, cannot make this query" );
 		return 0.0f;
 
 	}
 
 	// sanity
-	DEBUG_ASSERTCRASH( water->m_polygon != nullptr, ("getWaterHeight: polygon trigger in water handle is null") );
+	engine::debug::invariant((water->m_polygon != nullptr), "water->m_polygon != nullptr", __FILE__, __LINE__, "getWaterHeight: polygon trigger in water handle is null");
 
 	// return the height of the water using the polygon trigger
 	return water->m_polygon->getPoint( 0 )->z;
@@ -2324,14 +2445,16 @@ void TerrainLogic::setWaterHeight( const WaterHandle *water, Real height, Real d
 	{
 
 		// get transform information
-		Matrix3D transform;
+		Engine::Math::AffineTransform3 transform;
 		TheTerrainVisual->getWaterTransform( water, &transform );
 
 		// save the old height
-		previousHeight = transform.Get_Z_Translation();
+		previousHeight = transform.Translation().z;
 
 		// set the new height
-		transform.Set_Z_Translation( height );
+		Engine::Math::Vector3 translation = transform.Translation();
+		translation.z = height;
+		transform.Set_Translation(translation);
 		TheTerrainVisual->setWaterTransform( &transform );
 
 	}
@@ -2437,7 +2560,7 @@ void TerrainLogic::changeWaterHeightOverTime( const WaterHandle *water,
 	if( m_numWaterToUpdate >= MAX_DYNAMIC_WATER )
 	{
 
-		DEBUG_CRASH(( "Only '%d' simultaneous water table changes are supported", MAX_DYNAMIC_WATER ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Only '%d' simultaneous water table changes are supported", MAX_DYNAMIC_WATER );
 		return;
 
 	}
@@ -2522,24 +2645,23 @@ void TerrainLogic::findAxisAlignedBoundingRect( const WaterHandle *water, Region
 		p[ 3 ].y = gridY * cellSize;
 
 		// transform the 4 points using the transform matrix of the water
-		Vector3 v;
-		Matrix3D transform;
-		TheTerrainVisual->getWaterTransform( water, &transform );
+		Engine::Math::AffineTransform3 rendererTransform;
+		TheTerrainVisual->getWaterTransform(water, &rendererTransform);
 		for( i = 0; i < 4; i++ )
 		{
 
-			v.Set( p[ i ].x, p[ i ].y, p[ i ].z );
-			transform.Transform_Vector( transform, v, &v );
+			const Engine::Math::Vector3 point = rendererTransform.Transform_Point(
+				{static_cast<float>(p[i].x), static_cast<float>(p[i].y), static_cast<float>(p[i].z)});
 
 			// do the region compares
-			if( v.X < region->lo.x )
-				region->lo.x = v.X;
-			if( v.X > region->hi.x )
-				region->hi.x = v.X;
-			if( v.Y < region->lo.y )
-				region->lo.y = v.Y;
-			if( v.Y > region->hi.y )
-				region->hi.y = v.Y;
+			if( point.x < region->lo.x )
+				region->lo.x = point.x;
+			if( point.x > region->hi.x )
+				region->hi.x = point.x;
+			if( point.y < region->lo.y )
+				region->lo.y = point.y;
+			if( point.y > region->hi.y )
+				region->hi.y = point.y;
 
 		}
 
@@ -2673,28 +2795,28 @@ void TerrainLogic::flattenTerrain(Object *obj)
 			Real c = (Real)Cos(angle);
 			Real s = (Real)Sin(angle);
 
-			Vector3 topLeft(pos->x-halfsizeX*c-halfsizeY*s, pos->y + halfsizeY*c - halfsizeX*s, 0);
-			Vector3 topRight(pos->x+halfsizeX*c-halfsizeY*s, pos->y + halfsizeY*c + halfsizeX*s, 0);
-			Vector3 bottomRight(pos->x+halfsizeX*c+halfsizeY*s, pos->y - halfsizeY*c + halfsizeX*s, 0);
-			Vector3 bottomLeft(pos->x-halfsizeX*c+halfsizeY*s, pos->y - halfsizeY*c - halfsizeX*s, 0);
+			const Engine::Math::Vector3 topLeft{pos->x-halfsizeX*c-halfsizeY*s, pos->y + halfsizeY*c - halfsizeX*s, 0};
+			const Engine::Math::Vector3 topRight{pos->x+halfsizeX*c-halfsizeY*s, pos->y + halfsizeY*c + halfsizeX*s, 0};
+			const Engine::Math::Vector3 bottomRight{pos->x+halfsizeX*c+halfsizeY*s, pos->y - halfsizeY*c + halfsizeX*s, 0};
+			const Engine::Math::Vector3 bottomLeft{pos->x-halfsizeX*c+halfsizeY*s, pos->y - halfsizeY*c - halfsizeX*s, 0};
 
-			Real minX = topLeft.X;
-			if (minX>topRight.X) minX = topRight.X;
-			if (minX>bottomRight.X) minX = bottomRight.X;
-			if (minX>bottomLeft.X) minX = bottomLeft.X;
-			Real maxX = topLeft.X;
-			if (maxX<topRight.X) maxX = topRight.X;
-			if (maxX<bottomRight.X) maxX = bottomRight.X;
-			if (maxX<bottomLeft.X) maxX = bottomLeft.X;
+			Real minX = topLeft.x;
+			if (minX>topRight.x) minX = topRight.x;
+			if (minX>bottomRight.x) minX = bottomRight.x;
+			if (minX>bottomLeft.x) minX = bottomLeft.x;
+			Real maxX = topLeft.x;
+			if (maxX<topRight.x) maxX = topRight.x;
+			if (maxX<bottomRight.x) maxX = bottomRight.x;
+			if (maxX<bottomLeft.x) maxX = bottomLeft.x;
 
-			Real minY = topLeft.Y;
-			if (minY>topRight.Y) minY = topRight.Y;
-			if (minY>bottomRight.Y) minY = bottomRight.Y;
-			if (minY>bottomLeft.Y) minY = bottomLeft.Y;
-			Real maxY = topLeft.Y;
-			if (maxY<topRight.Y) maxY = topRight.Y;
-			if (maxY<bottomRight.Y) maxY = bottomRight.Y;
-			if (maxY<bottomLeft.Y) maxY = bottomLeft.Y;
+			Real minY = topLeft.y;
+			if (minY>topRight.y) minY = topRight.y;
+			if (minY>bottomRight.y) minY = bottomRight.y;
+			if (minY>bottomLeft.y) minY = bottomLeft.y;
+			Real maxY = topLeft.y;
+			if (maxY<topRight.y) maxY = topRight.y;
+			if (maxY<bottomRight.y) maxY = bottomRight.y;
+			if (maxY<bottomLeft.y) maxY = bottomLeft.y;
 
 			ICoord2D iMin, iMax;
 			iMin.x = REAL_TO_INT_FLOOR(minX/MAP_XY_FACTOR);
@@ -2707,17 +2829,16 @@ void TerrainLogic::flattenTerrain(Object *obj)
 			Int numSamples = 0;
 			for (i=iMin.x; i<=iMax.x; i++) {
 				for (j=0; j<=iMax.y; j++) {
-					Vector3	testPt(i*MAP_XY_FACTOR, j*MAP_XY_FACTOR, 0);
+					const Engine::Math::Vector3 testPt{i*MAP_XY_FACTOR, j*MAP_XY_FACTOR, 0};
 					Bool match = false;
-					unsigned char flags;
-					if (Point_In_Triangle_2D(topLeft, topRight, bottomLeft, testPt, 0, 1, flags)) {
+					if (legacyPointInTriangle2D(topLeft, topRight, bottomLeft, testPt, 0, 1)) {
 						match = true;
 					}
-					if (Point_In_Triangle_2D(topRight, bottomRight, bottomLeft, testPt, 0, 1, flags)) {
+					if (legacyPointInTriangle2D(topRight, bottomRight, bottomLeft, testPt, 0, 1)) {
 						match = true;
 					}
 					if (match) {
-						totalHeight += getGroundHeight(testPt.X, testPt.Y);
+						totalHeight += getGroundHeight(testPt.x, testPt.y);
 						numSamples++;
 					}
 				}
@@ -2733,13 +2854,12 @@ void TerrainLogic::flattenTerrain(Object *obj)
 
 			for (i=iMin.x; i<=iMax.x; i++) {
 				for (j=0; j<=iMax.y; j++) {
-					Vector3	testPt(i*MAP_XY_FACTOR, j*MAP_XY_FACTOR, 0);
+					const Engine::Math::Vector3 testPt{i*MAP_XY_FACTOR, j*MAP_XY_FACTOR, 0};
 					Bool match = false;
-					unsigned char flags;
-					if (Point_In_Triangle_2D(topLeft, topRight, bottomLeft, testPt, 0, 1, flags)) {
+					if (legacyPointInTriangle2D(topLeft, topRight, bottomLeft, testPt, 0, 1)) {
 						match = true;
 					}
-					if (Point_In_Triangle_2D(topRight, bottomRight, bottomLeft, testPt, 0, 1, flags)) {
+					if (legacyPointInTriangle2D(topRight, bottomRight, bottomLeft, testPt, 0, 1)) {
 						match = true;
 					}
 					if (match) {
@@ -2798,15 +2918,15 @@ void TerrainLogic::flattenTerrain(Object *obj)
 			Int numSamples = 0;
 			for (i=iMin.x; i<=iMax.x; i++) {
 				for (j=0; j<=iMax.y; j++) {
-					Vector3	testPt(i*MAP_XY_FACTOR, j*MAP_XY_FACTOR, 0);
+					const Engine::Math::Vector3 testPt{i*MAP_XY_FACTOR, j*MAP_XY_FACTOR, 0};
 					Bool match = false;
-					Real dx = testPt.X - pos->x;
-					Real dy = testPt.Y - pos->y;
+					Real dx = testPt.x - pos->x;
+					Real dy = testPt.y - pos->y;
 					if ( dx*dx+dy*dy<radiusSqr) {
 						match = true;
 					}
 					if (match) {
-						totalHeight += getGroundHeight(testPt.X, testPt.Y);
+							totalHeight += getGroundHeight(testPt.x, testPt.y);
 						numSamples++;
 					}
 				}
@@ -2816,10 +2936,10 @@ void TerrainLogic::flattenTerrain(Object *obj)
 			Int rawDataHeight = REAL_TO_INT_FLOOR(0.5f + avgHeight/MAP_HEIGHT_SCALE);
 			for (i=iMin.x; i<=iMax.x; i++) {
 				for (j=0; j<=iMax.y; j++) {
-					Vector3	testPt(i*MAP_XY_FACTOR, j*MAP_XY_FACTOR, 0);
+					const Engine::Math::Vector3 testPt{i*MAP_XY_FACTOR, j*MAP_XY_FACTOR, 0};
 					Bool match = false;
-					Real dx = testPt.X - pos->x;
-					Real dy = testPt.Y - pos->y;
+					Real dx = testPt.x - pos->x;
+					Real dy = testPt.y - pos->y;
 					if ( dx*dx+dy*dy<radiusSqr) {
 						match = true;
 					}
@@ -2986,8 +3106,8 @@ void TerrainLogic::xfer( Xfer *xfer )
 				if( poly == nullptr )
 				{
 
-					DEBUG_CRASH(( "TerrainLogic::xfer - Unable to find polygon trigger for water table with trigger ID '%d'",
-												triggerID ));
+					engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "TerrainLogic::xfer - Unable to find polygon trigger for water table with trigger ID '%d'",
+												triggerID );
 					throw SC_INVALID_DATA;
 
 				}
@@ -2999,7 +3119,7 @@ void TerrainLogic::xfer( Xfer *xfer )
 				if( m_waterToUpdate[ i ].waterTable == nullptr )
 				{
 
-					DEBUG_CRASH(( "TerrainLogic::xfer - Polygon trigger to use for water handle has no water handle!" ));
+					engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "TerrainLogic::xfer - Polygon trigger to use for water handle has no water handle!" );
 					throw SC_INVALID_DATA;
 
 				}
@@ -3043,4 +3163,3 @@ void TerrainLogic::loadPostProcess()
 	}
 
 }
-

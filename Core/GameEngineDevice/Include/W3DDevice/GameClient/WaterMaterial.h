@@ -11,11 +11,10 @@
 #include <span>
 #include <cstdint>
 import Graphics.Scene.Water.Renderer;
-
-#include "WWMath/Vector4.h"
+import Engine.Core.Math.Vector4;
 class W3DTextureHandle;
 class W3DScene;
-class Matrix4x4;
+namespace Engine::Math { struct Matrix4; }
 
 // Water draw input retains packed color until graphics extraction.
 struct WaterSurfaceVertex
@@ -35,13 +34,13 @@ struct WaterSurfaceVertex
 
 struct WaterMaterialParameters
 {
-	Vector4 shroud_projection;
-	Vector4 animation;
-	Vector4 camera_position;
-	Vector4 displacement_domain;
-	Vector4 tint;
-	Vector4 effects;
-	Vector4 surface_options;
+	Engine::Math::Vector4 shroud_projection;
+	Engine::Math::Vector4 animation;
+	Engine::Math::Vector4 camera_position;
+	Engine::Math::Vector4 displacement_domain;
+	Engine::Math::Vector4 tint;
+	Engine::Math::Vector4 effects;
+	Engine::Math::Vector4 surface_options;
 };
 
 class WaterMaterialClass
@@ -77,7 +76,7 @@ public:
 	void Shutdown();
 	bool ReacquireResources();
 
-    bool Draw(Graphics::WaterMeshHandle mesh, const Matrix4x4& world, bool wireframe = false);
+    bool Draw(Graphics::WaterMeshHandle mesh, const Engine::Math::Matrix4& world, bool wireframe = false);
     bool Draw_Patches(Graphics::WaterMeshHandle mesh, const Graphics::OceanPatchGrid& grid);
     void Set_Frame_Lighting(W3DScene* scene);
 

@@ -17,10 +17,12 @@
 */
 #include "W3DDevice/GameClient/W3DDazzleRenderObject.h"
 #include "W3DDevice/GameClient/W3DAssetCatalog.h"
+import Engine.Core.Math.AffineTransform3;
 #include "WWLib/chunkio.h"
 #include "WWSaveLoad/persistfactory.h"
 #include "WWSaveLoad/saveloadids.h"
 #include "WWSaveLoad/saveload.h"
+import engine.debug;
 namespace
 {
 
@@ -54,7 +56,7 @@ uint32 DazzlePersistFactory::Chunk_ID() const
 PersistClass *	DazzlePersistFactory::Load(ChunkLoadClass & cload) const
 {
 	W3DDazzleRenderObject * old_obj = nullptr;
-	Matrix3D tm(1);
+	Engine::Math::AffineTransform3 tm = Engine::Math::AffineTransform3::Identity();
 	char dazzle_type[256];
 	dazzle_type[0] = 0;
 
@@ -75,7 +77,7 @@ PersistClass *	DazzlePersistFactory::Load(ChunkLoadClass & cload) const
 				break;
 
 			default:
-				WWDEBUG_SAY(("Unhandled Chunk: 0x%X File: %s Line: %d",__FILE__,__LINE__));
+				engine::debug::log_info("Unhandled Chunk: 0x%X File: %s Line: %d",__FILE__,__LINE__);
 				break;
 		};
 		cload.Close_Chunk();
@@ -88,13 +90,13 @@ PersistClass *	DazzlePersistFactory::Load(ChunkLoadClass & cload) const
 	if (new_obj == nullptr) {
 		static int count = 0;
 		if ( count++ < 10 ) {
-			WWDEBUG_SAY(("DazzlePersistFactory failed to create dazzle of type: %s!!",dazzle_type));
-			WWDEBUG_SAY(("Replacing it with a null render object!"));
+			engine::debug::log_info("DazzlePersistFactory failed to create dazzle of type: %s!!",dazzle_type);
+			engine::debug::log_info("Replacing it with a null render object!");
 		}
 		new_obj = W3DAssetCatalog::Get_Instance()->Create_Render_Obj("NULL");
 	}
 
-	WWASSERT(new_obj != nullptr);
+	engine::debug::assert_condition((new_obj != nullptr), "new_obj != nullptr", __FILE__, __LINE__, "assertion failed");
 	if (new_obj) {
 		new_obj->Set_Transform(tm);
 	}
@@ -109,7 +111,7 @@ void DazzlePersistFactory::Save(ChunkSaveClass & csave,PersistClass * obj)	const
 	W3DDazzleRenderObject * robj = (W3DDazzleRenderObject *)obj;
 	unsigned int dazzle_type = robj->Get_Dazzle_Type();
 	const char * dazzle_type_name = W3DDazzleRenderObject::Get_Type_Name(dazzle_type);
-	Matrix3D tm = robj->Get_Transform();
+	Engine::Math::AffineTransform3 tm = robj->Get_Transform();
 
 	csave.Begin_Chunk(DAZZLEFACTORY_CHUNKID_VARIABLES);
 	WRITE_MICRO_CHUNK(csave,DAZZLEFACTORY_VARIABLE_OBJPOINTER,robj);
@@ -123,4 +125,3 @@ const PersistFactoryClass & W3DDazzleRenderObject::Get_Factory () const
 {
 	return _DazzleFactory;
 }
-

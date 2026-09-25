@@ -17,9 +17,10 @@
 */
 
 #include "mutex.h"
-#include "WWDebug/wwdebug.h"
+
 #ifdef _WIN32
 #include <windows.h>
+import engine.debug;
 #endif
 
 // ----------------------------------------------------------------------------
@@ -30,7 +31,7 @@ MutexClass::MutexClass(const char* name) : handle(nullptr), locked(false)
 		//assert(0);
 	#else
 		handle=CreateMutex(nullptr,false,name);
-		WWASSERT(handle);
+		engine::debug::assert_condition((handle), "handle", __FILE__, __LINE__, "assertion failed");
 	#endif
 }
 
@@ -39,7 +40,7 @@ MutexClass::~MutexClass()
 	#ifdef _UNIX
 		//assert(0);
 	#else
-		WWASSERT(!locked); // Can't delete locked mutex!
+		engine::debug::assert_condition((!locked), "!locked", __FILE__, __LINE__, "assertion failed"); // Can't delete locked mutex!
 		CloseHandle(handle);
 	#endif
 }
@@ -62,11 +63,11 @@ void MutexClass::Unlock()
 	#ifdef _UNIX
 		//assert(0);
 	#else
-		WWASSERT(locked);
+		engine::debug::assert_condition((locked), "locked", __FILE__, __LINE__, "assertion failed");
 		locked--;
 		int res=ReleaseMutex(handle);
 		res;	// silence compiler warnings
-		WWASSERT(res);
+		engine::debug::assert_condition((res), "res", __FILE__, __LINE__, "assertion failed");
 	#endif
 }
 
@@ -105,7 +106,7 @@ CriticalSectionClass::~CriticalSectionClass()
 	#ifdef _UNIX
 		//assert(0);
 	#else
-		WWASSERT(!locked); // Can't delete locked mutex!
+		engine::debug::assert_condition((!locked), "!locked", __FILE__, __LINE__, "assertion failed"); // Can't delete locked mutex!
 		DeleteCriticalSection((CRITICAL_SECTION*)handle);
 		delete[] handle;
 	#endif
@@ -126,7 +127,7 @@ void CriticalSectionClass::Unlock()
 	#ifdef _UNIX
 		//assert(0);
 	#else
-		WWASSERT(locked);
+		engine::debug::assert_condition((locked), "locked", __FILE__, __LINE__, "assertion failed");
 		locked--;
 		LeaveCriticalSection((CRITICAL_SECTION*)handle);
 	#endif

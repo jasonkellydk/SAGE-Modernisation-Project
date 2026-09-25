@@ -28,12 +28,10 @@
 
 #pragma once
 
-#include "Common/Debug.h"
+
 
 #ifndef NO_DEBUG_CRC
-	#ifdef DEBUG_LOGGING
 		#define DEBUG_CRC
-	#endif
 #endif
 
 #ifdef DEBUG_CRC
@@ -41,27 +39,23 @@
 #include "Common/AsciiString.h"
 #include "GameLogic/GameLogic.h"
 #include "Lib/BaseType.h"
-#include "WWMath/vector3.h"
-#include "WWMath/matrix3d.h"
+import Engine.Core.Math.AffineTransform3;
 
 	#define AS_INT(x) (*(Int *)(&x))
 	#define DUMPVEL DUMPCOORD3DNAMED(&m_vel, "m_vel")
 	#define DUMPACCEL DUMPCOORD3DNAMED(&m_accel, "m_accel")
-	#define DUMPVECTOR3(x) DUMPVECTOR3NAMED(x, #x)
-	#define DUMPVECTOR3NAMED(x, y) dumpVector3(x, y, __FILE__, __LINE__)
 	#define DUMPCOORD3D(x) DUMPCOORD3DNAMED(x, #x)
 	#define DUMPCOORD3DNAMED(x, y) dumpCoord3D(x, y, __FILE__, __LINE__)
-	#define DUMPMATRIX3D(x) DUMPMATRIX3DNAMED(x, #x)
-	#define DUMPMATRIX3DNAMED(x, y) dumpMatrix3D(x, y, __FILE__, __LINE__)
+	#define DUMPTRANSFORM(x) DUMPTRANSFORMNAMED(x, #x)
+	#define DUMPTRANSFORMNAMED(x, y) dumpTransform(x, y, __FILE__, __LINE__)
 	#define DUMPREAL(x) DUMPREALNAMED(x, #x)
 	#define DUMPREALNAMED(x, y) dumpReal(x, y, __FILE__, __LINE__)
 
 	extern Int TheCRCFirstFrameToLog;
 	extern UnsignedInt TheCRCLastFrameToLog;
 
-	void dumpVector3(const Vector3 *v, AsciiString name, AsciiString fname, Int line);
 	void dumpCoord3D(const Coord3D *c, AsciiString name, AsciiString fname, Int line);
-	void dumpMatrix3D(const Matrix3D *m, AsciiString name, AsciiString fname, Int line);
+	void dumpTransform(const Engine::Math::AffineTransform3 &transform, AsciiString name, AsciiString fname, Int line);
 	void dumpReal(Real r, AsciiString name, AsciiString fname, Int line);
 
 	void outputCRCDebugLines();
@@ -105,12 +99,10 @@
 
 	#define DUMPVEL
 	#define DUMPACCEL
-	#define DUMPVECTOR3(x)
-	#define DUMPVECTOR3NAMED(x, y)
 	#define DUMPCOORD3D(x)
 	#define DUMPCOORD3DNAMED(x, y)
-	#define DUMPMATRIX3D(x)
-	#define DUMPMATRIX3DNAMED(x, y)
+	#define DUMPTRANSFORM(x)
+	#define DUMPTRANSFORMNAMED(x, y)
 
 	#define DUMPREAL(x)
 	#define DUMPREALNAMED(x, y)

@@ -27,7 +27,8 @@
 // Desc:	 An update that checks for a status bit to stealth the owning object
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #define DEFINE_STEALTHLEVEL_NAMES
 #define DEFINE_OBJECT_STATUS_NAMES
@@ -1176,7 +1177,7 @@ void StealthUpdate::xfer( Xfer *xfer )
 			if( m_disguiseAsTemplate == nullptr )
 			{
 
-				DEBUG_CRASH(( "StealthUpdate::xfer - Unknown template '%s'", name.str() ));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "StealthUpdate::xfer - Unknown template '%s'", name.str() );
 				throw SC_INVALID_DATA;
 
 			}

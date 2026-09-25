@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/Radar.h"
 #include "Common/ThingFactory.h"
@@ -109,7 +110,7 @@ static void parseTimeAndLocationInfo( INI *ini, void *instance,
 	if( stricmp( token, "Delay" ) != 0 )
 	{
 
-		DEBUG_CRASH(( "Expected 'Delay' token, found '%s'", token ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Expected 'Delay' token, found '%s'", token );
 		throw INI_INVALID_DATA;
 
 	}
@@ -126,7 +127,7 @@ static void parseTimeAndLocationInfo( INI *ini, void *instance,
 		if( stricmp( token, "Bone" ) != 0 )
 		{
 
-			DEBUG_CRASH(( "Expected 'Bone' token, found '%s'", token ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Expected 'Bone' token, found '%s'", token );
 			throw INI_INVALID_DATA;
 
 		}
@@ -159,7 +160,7 @@ static void parseTimeAndLocationInfo( INI *ini, void *instance,
 	if( stricmp( token, "FX" ) != 0 )
 	{
 
-		DEBUG_CRASH(( "Expected 'FX' token, found '%s'", token ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Expected 'FX' token, found '%s'", token );
 		throw INI_INVALID_DATA;
 
 	}
@@ -200,7 +201,7 @@ static void parseTimeAndLocationInfo( INI *ini, void *instance,
 	if( stricmp( token, "OCL" ) != 0 )
 	{
 
-		DEBUG_CRASH(( "Expected 'OCL' token, found '%s'", token ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Expected 'OCL' token, found '%s'", token );
 		throw INI_INVALID_DATA;
 
 	}
@@ -352,22 +353,22 @@ void BridgeBehavior::resolveFX()
 			name = bridgeTemplate->getDamageToOCLString( (BodyDamageType)bodyState, i );
 			m_damageToOCL[ bodyState ][ i ] = TheObjectCreationListStore->findObjectCreationList( name.str() );
 			if( name.isEmpty() == FALSE && m_damageToOCL[ bodyState ][ i ] == nullptr )
-				DEBUG_CRASH(( "OCL list '%s' not found", name.str() ));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "OCL list '%s' not found", name.str() );
 
 			name = bridgeTemplate->getDamageToFXString( (BodyDamageType)bodyState, i );
 			m_damageToFX[ bodyState ][ i ] = TheFXListStore->findFXList( name.str() );
 			if( name.isEmpty() == FALSE && m_damageToFX[ bodyState ][ i ] == nullptr )
-				DEBUG_CRASH(( "FX list '%s' not found", name.str() ));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "FX list '%s' not found", name.str() );
 
 			name = bridgeTemplate->getRepairedToOCLString( (BodyDamageType)bodyState, i );
 			m_repairToOCL[ bodyState ][ i ] = TheObjectCreationListStore->findObjectCreationList( name.str() );
 			if( name.isEmpty() == FALSE && m_repairToOCL[ bodyState ][ i ] == nullptr )
-				DEBUG_CRASH(( "OCL list '%s' not found", name.str() ));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "OCL list '%s' not found", name.str() );
 
 			name = bridgeTemplate->getRepairedToFXString( (BodyDamageType)bodyState, i );
 			m_repairToFX[ bodyState ][ i ] = TheFXListStore->findFXList( name.str() );
 			if( name.isEmpty() == FALSE && m_repairToFX[ bodyState ][ i ] == nullptr )
-				DEBUG_CRASH(( "FX list '%s' not found", name.str() ));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "FX list '%s' not found", name.str() );
 
 		}
 
@@ -396,7 +397,7 @@ void BridgeBehavior::setTower( BridgeTowerType towerType, Object *tower )
 	if( towerType < 0 || towerType >= BRIDGE_MAX_TOWERS )
 	{
 
-		DEBUG_CRASH(( "BridgeBehavior::setTower - Invalid tower type index '%d'", towerType ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "BridgeBehavior::setTower - Invalid tower type index '%d'", towerType );
 		return;
 
 	}
@@ -418,7 +419,7 @@ ObjectID BridgeBehavior::getTowerID( BridgeTowerType towerType )
 	if( towerType < 0 || towerType >= BRIDGE_MAX_TOWERS )
 	{
 
-		DEBUG_CRASH(( "BridgeBehavior::setTower - Invalid tower type index '%d'", towerType ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "BridgeBehavior::setTower - Invalid tower type index '%d'", towerType );
 		return INVALID_ID;
 
 	}
@@ -629,7 +630,7 @@ void BridgeBehavior::onBodyDamageStateChange( const DamageInfo* damageInfo,
 		return;
 
 	// sanity
-	DEBUG_ASSERTCRASH( oldState != newState, ("BridgeBehavior::onBodyDamageStateChange - oldState and newState should be different if this is getting called") );
+	engine::debug::invariant((oldState != newState), "oldState != newState", __FILE__, __LINE__, "BridgeBehavior::onBodyDamageStateChange - oldState and newState should be different if this is getting called");
 
 	Object *us = getObject();
 	Bridge *bridge = TheTerrainLogic->findBridgeAt( us->getPosition() );
@@ -638,7 +639,7 @@ void BridgeBehavior::onBodyDamageStateChange( const DamageInfo* damageInfo,
 	if( bridge == nullptr )
 	{
 
-		DEBUG_CRASH(( "BridgeBehavior - Unable to find bridge" ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "BridgeBehavior - Unable to find bridge" );
 		return;
 
 	}
@@ -650,9 +651,9 @@ void BridgeBehavior::onBodyDamageStateChange( const DamageInfo* damageInfo,
 	TerrainRoadType *bridgeTemplate = TheTerrainRoads->findBridge( bridgeTemplateName );
 
 	// sanity
-	DEBUG_ASSERTCRASH( bridgeTemplate, ("BridgeBehavior: Unable to find bridge template '%s' in bridge object '%s'",
+	engine::debug::invariant((bridgeTemplate), "bridgeTemplate", __FILE__, __LINE__, "BridgeBehavior: Unable to find bridge template '%s' in bridge object '%s'",
 																		 bridgeTemplateName.str(),
-																		 us->getTemplate()->getName().str()) );
+																		 us->getTemplate()->getName().str());
 
 	//
 	// given the old state and the new state, did we get worse (damaged) or did
@@ -723,7 +724,7 @@ UpdateSleepTime BridgeBehavior::update()
 		TerrainRoadType *bridgeTemplate = nullptr;
 		if ( bridge )
 		{
-			DEBUG_ASSERTCRASH( bridge, ("BridgeBehavior::update - Unable to find bridge") );
+			engine::debug::invariant((bridge), "bridge", __FILE__, __LINE__, "BridgeBehavior::update - Unable to find bridge");
 
 			// get bridge info
 			bridgeInfo = bridge->peekBridgeInfo();
@@ -731,7 +732,7 @@ UpdateSleepTime BridgeBehavior::update()
 			// get the bridge template info
 			AsciiString bridgeTemplateName = bridge->getBridgeTemplateName();
 			bridgeTemplate = TheTerrainRoads->findBridge( bridgeTemplateName );
-			DEBUG_ASSERTCRASH( bridgeTemplate, ("BridgeBehavior::getRandomSurfacePosition - Encountered a bridge with no template!") );
+			engine::debug::invariant((bridgeTemplate), "bridgeTemplate", __FILE__, __LINE__, "BridgeBehavior::getRandomSurfacePosition - Encountered a bridge with no template!");
 		}
 
 		// how much time has passed between now and our destruction frame
@@ -973,7 +974,7 @@ void BridgeBehavior::setScaffoldData( Object *obj,
 	// get the scaffold behavior interface
 	BridgeScaffoldBehaviorInterface *scaffoldBehavior;
 	scaffoldBehavior = BridgeScaffoldBehavior::getBridgeScaffoldBehaviorInterfaceFromObject( obj );
-	DEBUG_ASSERTCRASH( scaffoldBehavior, ("Unable to find bridge scaffold behavior interface") );
+	engine::debug::invariant((scaffoldBehavior), "scaffoldBehavior", __FILE__, __LINE__, "Unable to find bridge scaffold behavior interface");
 
 	// compute the sunken position that the object will initially start at
 	Real fudge = 8.0f;
@@ -1036,7 +1037,7 @@ void BridgeBehavior::createScaffolding()
 	// get the bridge template
 	AsciiString bridgeTemplateName = bridge->getBridgeTemplateName();
 	TerrainRoadType *bridgeTemplate = TheTerrainRoads->findBridge( bridgeTemplateName );
-	DEBUG_ASSERTCRASH( bridgeTemplate, ("Unable to find bridge template to create scaffolding") );
+	engine::debug::invariant((bridgeTemplate), "bridgeTemplate", __FILE__, __LINE__, "Unable to find bridge template to create scaffolding");
 
 	// get the thing template for the scaffold object we're going to use
 	AsciiString scaffoldObjectName = bridgeTemplate->getScaffoldObjectName();
@@ -1044,7 +1045,7 @@ void BridgeBehavior::createScaffolding()
 	if( scaffoldTemplate == nullptr )
 	{
 
-		DEBUG_CRASH(( "Unable to find bridge scaffold template" ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Unable to find bridge scaffold template" );
 		return;
 
 	}
@@ -1055,7 +1056,7 @@ void BridgeBehavior::createScaffolding()
 	if( scaffoldSupportTemplate == nullptr )
 	{
 
-		DEBUG_CRASH(( "Unable to find bridge support scaffold template" ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Unable to find bridge support scaffold template" );
 		return;
 
 	}
@@ -1144,8 +1145,7 @@ void BridgeBehavior::createScaffolding()
 	{
 
 		// sanity
-		DEBUG_ASSERTCRASH( scaffoldObjectsCreated < numObjects,
-											 ("Creating too many scaffold objects") );
+		engine::debug::invariant((scaffoldObjectsCreated < numObjects), "scaffoldObjectsCreated < numObjects", __FILE__, __LINE__, "Creating too many scaffold objects");
 
 		// create object
 		obj = TheThingFactory->newObject( scaffoldTemplate, us->getTeam() );
@@ -1212,8 +1212,7 @@ void BridgeBehavior::createScaffolding()
 		{
 
 			// sanity
-			DEBUG_ASSERTCRASH( scaffoldObjectsCreated < numObjects,
-												 ("Creating too many scaffold objects") );
+			engine::debug::invariant((scaffoldObjectsCreated < numObjects), "scaffoldObjectsCreated < numObjects", __FILE__, __LINE__, "Creating too many scaffold objects");
 
 			// create new object
 			obj = TheThingFactory->newObject( scaffoldTemplate, us->getTeam() );
@@ -1304,7 +1303,7 @@ void BridgeBehavior::removeScaffolding()
 
 		// get the scaffold behavior
 		scaffoldBehavior = BridgeScaffoldBehavior::getBridgeScaffoldBehaviorInterfaceFromObject( obj );
-		DEBUG_ASSERTCRASH( scaffoldBehavior, ("Unable to find bridge scaffold behavior interface") );
+		engine::debug::invariant((scaffoldBehavior), "scaffoldBehavior", __FILE__, __LINE__, "Unable to find bridge scaffold behavior interface");
 
 		// reverse the motion
 		scaffoldBehavior->reverseMotion();
@@ -1399,7 +1398,7 @@ void BridgeBehavior::xfer( Xfer *xfer )
 		Bridge *bridge = TheTerrainLogic->findBridgeAt( us->getPosition() );
 
 		// sanity
-		DEBUG_ASSERTCRASH( bridge, ("BridgeBehavior::xfer - Unable to find bridge" ));
+		engine::debug::invariant((bridge), "bridge", __FILE__, __LINE__, "BridgeBehavior::xfer - Unable to find bridge" );
 
 		// set new object ID in bridge info to us
 		bridge->setBridgeObjectID( us->getID() );
@@ -1417,7 +1416,7 @@ void BridgeBehavior::xfer( Xfer *xfer )
 		Bridge *bridge = TheTerrainLogic->findBridgeAt( us->getPosition() );
 
 		// sanity
-		DEBUG_ASSERTCRASH( bridge, ("BridgeBehavior::xfer - Unable to find bridge" ));
+		engine::debug::invariant((bridge), "bridge", __FILE__, __LINE__, "BridgeBehavior::xfer - Unable to find bridge" );
 
 		// set new object ID in bridge info to us
 		for( Int i = 0; i < BRIDGE_MAX_TOWERS; ++i )
@@ -1451,8 +1450,7 @@ void BridgeBehavior::xfer( Xfer *xfer )
 	{
 
 		// read all object IDs
-		DEBUG_ASSERTCRASH( m_scaffoldObjectIDList.empty(),
-											 ("BridgeBehavior::xfer - scaffold object list should be empty") );
+		engine::debug::invariant((m_scaffoldObjectIDList.empty()), "m_scaffoldObjectIDList.empty()", __FILE__, __LINE__, "BridgeBehavior::xfer - scaffold object list should be empty");
 		for( Int i = 0; i < scaffoldObjectCount; ++i )
 		{
 

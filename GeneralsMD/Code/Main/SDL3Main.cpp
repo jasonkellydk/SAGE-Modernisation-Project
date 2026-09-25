@@ -42,7 +42,8 @@
 #include "Common/GlobalData.h"
 #include "Common/GameEngine.h"
 #include "Common/GameSounds.h"
-#include "Common/Debug.h"
+
+
 #include "Common/GameMemory.h"
 #include "Common/MessageStream.h"
 #include "Common/PlayerList.h"
@@ -56,15 +57,16 @@
 #include "GameClient/Mouse.h"
 #include "GameClient/IMEManager.h"
 #include "SDL3Device/Common/SDL3GameEngine.h"
-#include "Platform/SDLPlatformWindow.h"
 #include "Common/version.h"
 #include "BuildVersion.h"
 #include "GeneratedVersion.h"
 #include "resource.h"
 
-#ifdef RTS_ENABLE_CRASHDUMP
-#include "Common/MiniDumper.h"
-#endif
+#include <filesystem>
+#include <memory>
+#include <system_error>
+import engine.debug;
+import engine.platform;
 
 
 // GLOBALS ////////////////////////////////////////////////////////////////////
@@ -76,8 +78,6 @@ const char *gAppPrefix = ""; /// So WB can have a different debug log file name.
 static Bool gInitializing = false;
 static Bool gDoPaint = true;
 static Bool isSDL3Active = false;
-
-static SDLPlatformWindow gPlatformWindow;
 
 class GeneralsMDSDL3GameEngine final : public SDL3GameEngine
 {
@@ -112,14 +112,19 @@ protected:
 // initializeAppWindows =======================================================
 /** Create the SDL3 application window. */
 //=============================================================================
-static Bool initializeAppWindows( Bool runWindowed )
+static Bool initializeAppWindows(GameEngine& engine, Bool runWindowed)
 {
-	const Int startWidth = DEFAULT_DISPLAY_WIDTH;
-	const Int startHeight = DEFAULT_DISPLAY_HEIGHT;
-	if (!gPlatformWindow.initialize(startWidth, startHeight, !runWindowed))
-		return false;
-	gPlatformWindow.show();
-	isSDL3Active = true;
+	engine::platform::WindowConfig config{};
+	config.title = "Command and Conquer Generals";
+	config.size = {DEFAULT_DISPLAY_WIDTH, DEFAULT_DISPLAY_HEIGHT};
+	config.minimum_size = {640, 480};
+	config.resizable = true;
+	config.highDpi = true;
+	config.hidden = true;
+	config.mode = runWindowed ? engine::platform::WindowMode::windowed : engine::platform::WindowMode::fullscreen;
+	auto& window = engine.createMainWindow(config);
+	window.show();
+	isSDL3Active = window.has_focus();
 	gInitializing = false;
 	if (!runWindowed)
 		gDoPaint = false;
@@ -142,14 +147,17 @@ int main( int argc, char **argv )
 	(void)argc;
 	(void)argv;
 	Int exitcode = 1;
+	std::unique_ptr<GameEngine> engine;
 
-#ifdef RTS_PROFILE_LEGACY
-  Profile::StartRange("init");
+#if defined(RTS_PROFILE_TRACY)
+  
 #endif
 
 	try {
-
-		SDLPlatformWindow::installCrashHandler();
+		engine.reset(CreateGameEngine());
+		if (!engine)
+			return exitcode;
+		auto& platform = engine->platform();
 		//
 		// there is something about checkin in and out the .dsp and .dsw files
 		// that blows the working directory information away on each of the
@@ -167,7 +175,8 @@ int main( int argc, char **argv )
 		// initialize the memory manager early
 		initMemoryManager();
 
-		SDLPlatformWindow::setWorkingDirectoryToExecutable();
+		std::error_code workingDirectoryError;
+		std::filesystem::current_path(platform.application().executable_directory(), workingDirectoryError);
 
 
 		#ifdef RTS_DEBUG
@@ -181,21 +190,16 @@ int main( int argc, char **argv )
 
 
 		// install debug callbacks
-	//	WWDebug_Install_Message_Handler(WWDebug_Message_Callback);
-	//	WWDebug_Install_Assert_Handler(WWAssert_Callback);
 
 
 		CommandLine::parseCommandLineForStartup();
-#ifdef RTS_ENABLE_CRASHDUMP
-		// Initialize minidump facilities - requires TheGlobalData so performed after parseCommandLineForStartup
-		MiniDumper::initMiniDumper(TheGlobalData->getPath_UserData());
-#endif
 
 		// register windows class and create application window
-		if(!TheGlobalData->m_headless && initializeAppWindows(TheGlobalData->m_windowed) == false)
+		if(!TheGlobalData->m_headless && initializeAppWindows(*engine, TheGlobalData->m_windowed) == false)
 		{
 			return exitcode;
 		}
+		engine::debug::initialize((platform.application().executable_directory() / "GeneralsMD.log").string());
 
 		// save our application instance for future use
 
@@ -212,22 +216,22 @@ int main( int argc, char **argv )
 
 		// TheSuperHackers @refactor The instance mutex now lives in its own class.
 
-		if (!rts::ClientInstance::initialize())
+		if (!rts::ClientInstance::initialize(platform.application()))
 		{
-			SDLPlatformWindow::restoreExistingInstance(rts::ClientInstance::getFirstInstanceName());
+			platform.application().send_activation_request(rts::ClientInstance::getFirstInstanceName());
 
-			DEBUG_LOG(("Generals is already running...Bail!"));
+			engine::debug::log_info("Generals is already running...Bail!");
 			delete TheVersion;
 			TheVersion = nullptr;
 			shutdownMemoryManager();
 			return exitcode;
 		}
-		DEBUG_LOG(("Create Generals Mutex okay."));
+		engine::debug::log_info("Create Generals Mutex okay.");
 
-		DEBUG_LOG(("CRC message is %d", GameMessage::MSG_LOGIC_CRC));
+		engine::debug::log_info("CRC message is %d", GameMessage::MSG_LOGIC_CRC);
 
 		// run the game main loop
-		exitcode = GameMain();
+		exitcode = GameMain(*engine);
 
 		delete TheVersion;
 		TheVersion = nullptr;
@@ -249,9 +253,6 @@ int main( int argc, char **argv )
 
 	}
 
-#ifdef RTS_ENABLE_CRASHDUMP
-	MiniDumper::shutdownMiniDumper();
-#endif
 	TheUnicodeStringCriticalSection = nullptr;
 	TheDmaCriticalSection = nullptr;
 	TheMemoryPoolCriticalSection = nullptr;

@@ -41,6 +41,7 @@
 #include "Common/ThingFactory.h"
 #include "WaypointOptions.h"
 #include "Common/UnicodeString.h"
+import engine.debug;
 
 
 static const Int K_LOCAL_TEAMS_VERSION_1 = 1;
@@ -210,8 +211,8 @@ void ScriptDialog::OnSelchangedScriptTree(NMHDR* pNMHDR, LRESULT* pResult)
 		m_curSelection.m_objType = ListType::PLAYER_TYPE;
 	} else {
 		m_curSelection.IntToList(pNMTreeView->itemNew.lParam);
-		DEBUG_ASSERTCRASH(m_curSelection.m_playerIndex <m_sides.getNumSides(),(""));
-		DEBUG_ASSERTCRASH(m_curSelection.m_objType != ListType::BOGUS_TYPE, (""));
+		engine::debug::invariant((m_curSelection.m_playerIndex <m_sides.getNumSides()), "m_curSelection.m_playerIndex <m_sides.getNumSides()", __FILE__, __LINE__, "");
+		engine::debug::invariant((m_curSelection.m_objType != ListType::BOGUS_TYPE), "m_curSelection.m_objType != ListType::BOGUS_TYPE", __FILE__, __LINE__, "");
 	}
 	if (!this->m_draggingTreeView) {
 		pTree->SelectDropTarget(pNMTreeView->itemNew.hItem);
@@ -664,7 +665,7 @@ Bool ScriptDialog::updateIcons(HTREEITEM hItem)
 		{
 			m_curSelection = lt;
 			Script *pScr = getCurScript();
-			DEBUG_ASSERTCRASH(pScr, ("Unexpected."));
+			engine::debug::invariant((pScr), "pScr", __FILE__, __LINE__, "Unexpected.");
 			if (pScr) {
 				if (pScr->hasWarnings()) {
 					pTree->SetItemState(child, INDEXTOSTATEIMAGEMASK(4), TVIS_STATEIMAGEMASK);
@@ -798,7 +799,7 @@ void ScriptDialog::reloadPlayer(Int playerIndex, ScriptList *pSL)
 		}
 		player = pTree->GetNextSiblingItem(player);
 	}
-	DEBUG_ASSERTCRASH(player, ("Couldn't find player."));
+	engine::debug::invariant((player), "player", __FILE__, __LINE__, "Couldn't find player.");
 	if (!player) return;
 	HTREEITEM child;
 	ListType currentSel = m_curSelection;
@@ -843,7 +844,7 @@ HTREEITEM ScriptDialog::findItem(ListType sel, Bool failSafe)
 		}
 		player = pTree->GetNextSiblingItem(player);
 	}
-	DEBUG_ASSERTCRASH(player, ("Couldn't find player."));
+	engine::debug::invariant((player), "player", __FILE__, __LINE__, "Couldn't find player.");
 	if (!player) return nullptr;
 	if (sel.m_objType == ListType::PLAYER_TYPE) {
 		return player;
@@ -864,11 +865,11 @@ HTREEITEM ScriptDialog::findItem(ListType sel, Bool failSafe)
 			if (lt.m_groupIndex==sel.m_groupIndex) {
 				break;
 			}
-			DEBUG_ASSERTCRASH(lt.m_objType == ListType::GROUP_TYPE, ("Not group"));
+			engine::debug::invariant((lt.m_objType == ListType::GROUP_TYPE), "lt.m_objType == ListType::GROUP_TYPE", __FILE__, __LINE__, "Not group");
 			group = pTree->GetNextSiblingItem(group);
 		}
 	}
-	DEBUG_ASSERTCRASH(group, ("Couldn't find group."));
+	engine::debug::invariant((group), "group", __FILE__, __LINE__, "Couldn't find group.");
 	if (!group) return nullptr;
 	if (sel.m_objType == ListType::GROUP_TYPE) {
 		return group;
@@ -885,14 +886,14 @@ HTREEITEM ScriptDialog::findItem(ListType sel, Bool failSafe)
 		if (sel.m_objType == ListType::SCRIPT_IN_PLAYER_TYPE && lt.m_objType == ListType::GROUP_TYPE) {
 			continue;
 		}
-		DEBUG_ASSERTCRASH(lt.m_objType == ListType::SCRIPT_IN_PLAYER_TYPE || lt.m_objType == ListType::SCRIPT_IN_GROUP_TYPE, ("Not script"));
+		engine::debug::invariant((lt.m_objType == ListType::SCRIPT_IN_PLAYER_TYPE || lt.m_objType == ListType::SCRIPT_IN_GROUP_TYPE), "lt.m_objType == ListType::SCRIPT_IN_PLAYER_TYPE || lt.m_objType == ListType::SCRIPT_IN_GROUP_TYPE", __FILE__, __LINE__, "Not script");
 		if (lt.m_scriptIndex==sel.m_scriptIndex) {
 			break;
 		}
 	}
 
 	if (script || !failSafe) {
-		DEBUG_ASSERTCRASH(script, ("Couldn't find script."));
+		engine::debug::invariant((script), "script", __FILE__, __LINE__, "Couldn't find script.");
 		return script;
 	}
 
@@ -1011,7 +1012,7 @@ void ScriptDialog::OnEditScript()
 {
 	Script *pScript = getCurScript();
 	ScriptGroup *pGroup = getCurGroup();
-	DEBUG_ASSERTCRASH(pScript || pGroup, ("Null script."));
+	engine::debug::invariant((pScript || pGroup), "pScript || pGroup", __FILE__, __LINE__, "Null script.");
 	if (pScript == nullptr) {
 		CTreeCtrl *pTree = (CTreeCtrl*)GetDlgItem(IDC_SCRIPT_TREE);
 		HTREEITEM item = findItem(m_curSelection);
@@ -1066,7 +1067,7 @@ void ScriptDialog::OnEditScript()
 void ScriptDialog::OnCopyScript()
 {
 	Script *pScript = getCurScript();
-	DEBUG_ASSERTCRASH(pScript, ("Null script."));
+	engine::debug::invariant((pScript), "pScript", __FILE__, __LINE__, "Null script.");
 	if (pScript == nullptr) return;
 	Script *pDup = pScript->duplicate();
 	AsciiString newName = pDup->getName();
@@ -1123,7 +1124,7 @@ public:
 			m_file->Write(pData, numBytes);
 			numBytesWritten = numBytes;
 		} catch(...) {
-			DEBUG_CRASH(("threw exception in LocalMFCFileOutputStream"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "threw exception in LocalMFCFileOutputStream");
 		}
 		return(numBytesWritten);
 	};
@@ -1491,7 +1492,7 @@ void ScriptDialog::OnSave()
 		chunkWriter.closeDataChunk();
 
 	} catch(...) {
-			DEBUG_CRASH(("threw exception in ScriptDialog::OnSave"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "threw exception in ScriptDialog::OnSave");
 	}
 	if (!doAllScripts) {
 		deleteInstance(scripts[0]);
@@ -1634,7 +1635,7 @@ void ScriptDialog::OnLoad()
 
 
 	} catch(...) {
-   	  	DEBUG_CRASH(("threw exception in ScriptDialog::OnLoad"));
+   	  	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "threw exception in ScriptDialog::OnLoad");
 	}
 }
 
@@ -1684,7 +1685,7 @@ Bool ScriptDialog::ParseObjectDataChunk(DataChunkInput &file, DataChunkInfo *inf
 		if (pThis->m_maxWaypoint < pThisOne->getWaypointID()) pThis->m_maxWaypoint = pThisOne->getWaypointID();
 	}
 
-	DEBUG_LOG(("Adding object %s (%s)", name.str(), pThisOne->getProperties()->getAsciiString(TheKey_originalOwner).str()));
+	engine::debug::log_info("Adding object %s (%s)", name.str(), pThisOne->getProperties()->getAsciiString(TheKey_originalOwner).str());
 	// Check for duplicates.
 
 	MapObject *pObj;
@@ -1716,10 +1717,10 @@ Bool ScriptDialog::ParseObjectDataChunk(DataChunkInput &file, DataChunkInfo *inf
 	}
 
 	if (pPrevious) {
-		DEBUG_ASSERTCRASH(pThis->m_firstReadObject != nullptr && pPrevious->getNext() == nullptr, ("Bad linkage."));
+		engine::debug::invariant((pThis->m_firstReadObject != nullptr && pPrevious->getNext() == nullptr), "pThis->m_firstReadObject != nullptr && pPrevious->getNext() == nullptr", __FILE__, __LINE__, "Bad linkage.");
 		pPrevious->setNextMap(pThisOne);
 	}	else {
-		DEBUG_ASSERTCRASH(pThis->m_firstReadObject == nullptr, ("Bad linkage."));
+		engine::debug::invariant((pThis->m_firstReadObject == nullptr), "pThis->m_firstReadObject == nullptr", __FILE__, __LINE__, "Bad linkage.");
 		pThis->m_firstReadObject = pThisOne;
 	}
 	file.m_currentObject = pThisOne;
@@ -1745,7 +1746,7 @@ Bool ScriptDialog::ParseWaypointDataChunk(DataChunkInput &file, DataChunkInfo *i
 		if (pThis->m_maxWaypoint < waypoint1+pThis->m_waypointBase) pThis->m_maxWaypoint = waypoint1+pThis->m_waypointBase;
 		if (pThis->m_maxWaypoint < waypoint2+pThis->m_waypointBase) pThis->m_maxWaypoint = waypoint1+pThis->m_waypointBase;
 	}
-	DEBUG_ASSERTCRASH(file.atEndOfChunk(), ("Unexpected data left over."));
+	engine::debug::invariant((file.atEndOfChunk()), "file.atEndOfChunk()", __FILE__, __LINE__, "Unexpected data left over.");
 	return true;
 }
 
@@ -1764,7 +1765,7 @@ Bool ScriptDialog::ParseTeamsDataChunk(DataChunkInput &file, DataChunkInfo *info
 		if (pThis->m_sides.findTeamInfo(teamName)) {
 			continue;
 		}
-		DEBUG_LOG(("Adding team %s", teamName.str()));
+		engine::debug::log_info("Adding team %s", teamName.str());
 		AsciiString player = teamDict.getAsciiString(TheKey_teamOwner);
 		if (pThis->m_sides.findSideInfo(player)) {
 			// player exists, so just add it.
@@ -1794,7 +1795,7 @@ Bool ScriptDialog::ParseTeamsDataChunk(DataChunkInput &file, DataChunkInfo *info
 			pThis->m_sides.addTeam(&teamDict);
 		}
 	}
-	DEBUG_ASSERTCRASH(file.atEndOfChunk(), ("Unexpected data left over."));
+	engine::debug::invariant((file.atEndOfChunk()), "file.atEndOfChunk()", __FILE__, __LINE__, "Unexpected data left over.");
 	return true;
 }
 
@@ -1840,7 +1841,7 @@ Bool ScriptDialog::ParsePlayersDataChunk(DataChunkInput &file, DataChunkInfo *in
 			}
 		}
 	}
-	DEBUG_ASSERTCRASH(file.atEndOfChunk(), ("Unexpected data left over."));
+	engine::debug::invariant((file.atEndOfChunk()), "file.atEndOfChunk()", __FILE__, __LINE__, "Unexpected data left over.");
 	return true;
 }
 
@@ -1916,7 +1917,7 @@ Bool ScriptDialog::ParsePolygonTriggersDataChunk(DataChunkInput &file, DataChunk
 			pPrevTrig = pTrig;
 		}
 	}
-	DEBUG_ASSERTCRASH(file.atEndOfChunk(), ("Incorrect data file length."));
+	engine::debug::invariant((file.atEndOfChunk()), "file.atEndOfChunk()", __FILE__, __LINE__, "Incorrect data file length.");
 	return true;
 }
 
@@ -2044,7 +2045,7 @@ void ScriptDialog::doDropOn(HTREEITEM hDrag, HTREEITEM hTarget)
 	pScript = getCurScript();
 	pSL = m_sides.getSideInfo(m_curSelection.m_playerIndex)->getScriptList();
 	pGroup = getCurGroup();
-	DEBUG_ASSERTCRASH((pSL), ("Hmm - bad data. jba."));
+	engine::debug::invariant(((pSL)), "(pSL)", __FILE__, __LINE__, "Hmm - bad data. jba.");
 	if (pSL == nullptr) return;
 
 	// If we are dragging a group onto a script, adjust the group index so we add after.

@@ -26,7 +26,8 @@
 // Author: Steven Johnson, Aug 2002
 // Desc:
 ///////////////////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #define DEFINE_GEOMETRY_NAMES
 
@@ -139,7 +140,7 @@ static Real calcPointToLineDistSquared(const Coord3D& pt, const Coord3D& lineSta
 	}
 
 	Real lineLenSqr = calcDistSquared(lineStart, lineEnd);
-	DEBUG_ASSERTCRASH(lineLenSqr==calcDotProduct(line,line),("hmm"));
+	engine::debug::invariant((lineLenSqr==calcDotProduct(line,line)), "lineLenSqr==calcDotProduct(line,line)", __FILE__, __LINE__, "hmm");
 	if (lineLenSqr <= dot)
 	{
 		return calcDistSquared(pt, lineEnd);
@@ -157,7 +158,7 @@ static Real calcPointToLineDistSquared(const Coord3D& pt, const Coord3D& lineSta
 //=============================================================================
 Bool GeometryInfo::isIntersectedByLineSegment(const Coord3D& loc, const Coord3D& from, const Coord3D& to) const
 {
-	DEBUG_CRASH(("this call does not work properly for nonspheres yet. use with caution."));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "this call does not work properly for nonspheres yet. use with caution.");
 
 	/// @todo srj -- treats everything as a sphere for now. fix.
 	Real distSquared = calcPointToLineDistSquared(loc, from, to);
@@ -423,7 +424,7 @@ void GeometryInfo::makeRandomOffsetOnPerimeter(Coord3D& pt) const
 		case GEOMETRY_SPHERE:
 		case GEOMETRY_CYLINDER:
 		{
-			DEBUG_CRASH( ("GeometryInfo::makeRandomOffsetOnPerimeter() not implemented for SPHERE or CYLINDER extents. Using position.") );
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "GeometryInfo::makeRandomOffsetOnPerimeter() not implemented for SPHERE or CYLINDER extents. Using position.");
 
 			//Kris: Did not have time nor need to support non-box extents. I added this feature for script placement
 			//      of boobytraps.
@@ -479,7 +480,7 @@ Real GeometryInfo::getFootprintArea() const
 		}
 	};
 
-	DEBUG_CRASH(("should never get here"));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "should never get here");
 	return 0.0f;
 }
 

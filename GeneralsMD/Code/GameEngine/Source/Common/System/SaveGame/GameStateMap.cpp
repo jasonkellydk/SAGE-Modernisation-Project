@@ -29,6 +29,7 @@
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 #include "PreRTS.h"
+import engine.debug;
 
 #include "Common/file.h"
 #include "Common/FileSystem.h"
@@ -79,7 +80,7 @@ static void embedPristineMap( AsciiString map, Xfer *xfer )
 	if( file == nullptr )
 	{
 
-		DEBUG_CRASH(( "embedPristineMap - Error opening source file '%s'", map.str() ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "embedPristineMap - Error opening source file '%s'", map.str() );
 		throw SC_INVALID_DATA;
 
 	}
@@ -95,7 +96,7 @@ static void embedPristineMap( AsciiString map, Xfer *xfer )
 	if( buffer == nullptr )
 	{
 
-		DEBUG_CRASH(( "embedPristineMap - Unable to allocate buffer for file '%s'", map.str() ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "embedPristineMap - Unable to allocate buffer for file '%s'", map.str() );
 		throw SC_INVALID_DATA;
 
 	}
@@ -106,7 +107,7 @@ static void embedPristineMap( AsciiString map, Xfer *xfer )
 
 		delete[] buffer;
 
-		DEBUG_CRASH(( "embedPristineMap - Error reading from file '%s'", map.str() ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "embedPristineMap - Error reading from file '%s'", map.str() );
 		throw SC_INVALID_DATA;
 
 	}
@@ -115,7 +116,7 @@ static void embedPristineMap( AsciiString map, Xfer *xfer )
 	file->close();
 
 	// write the contents to the save file
-	DEBUG_ASSERTCRASH( xfer->getXferMode() == XFER_SAVE, ("embedPristineMap - Unsupported xfer mode") );
+	engine::debug::invariant((xfer->getXferMode() == XFER_SAVE), "xfer->getXferMode() == XFER_SAVE", __FILE__, __LINE__, "embedPristineMap - Unsupported xfer mode");
 	xfer->beginBlock();
 	xfer->xferUser( buffer, fileSize );
 	xfer->endBlock();
@@ -137,7 +138,7 @@ static void embedInUseMap( AsciiString map, Xfer *xfer )
 	if( fp == nullptr )
 	{
 
-		DEBUG_CRASH(( "embedInUseMap - Unable to open file '%s'", map.str() ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "embedInUseMap - Unable to open file '%s'", map.str() );
 		throw SC_INVALID_DATA;
 
 	}
@@ -154,7 +155,7 @@ static void embedInUseMap( AsciiString map, Xfer *xfer )
 	if( buffer == nullptr )
 	{
 
-		DEBUG_CRASH(( "embedInUseMap - Unable to allocate buffer for file '%s'", map.str() ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "embedInUseMap - Unable to allocate buffer for file '%s'", map.str() );
 		throw SC_INVALID_DATA;
 
 	}
@@ -165,7 +166,7 @@ static void embedInUseMap( AsciiString map, Xfer *xfer )
 
 		delete[] buffer;
 
-		DEBUG_CRASH(( "embedInUseMap - Error reading from file '%s'", map.str() ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "embedInUseMap - Error reading from file '%s'", map.str() );
 		throw SC_INVALID_DATA;
 
 	}
@@ -195,7 +196,7 @@ static void extractAndSaveMap( AsciiString mapToSave, Xfer *xfer )
 	if( fp == nullptr )
 	{
 
-		DEBUG_CRASH(( "extractAndSaveMap - Unable to open file '%s'", mapToSave.str() ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "extractAndSaveMap - Unable to open file '%s'", mapToSave.str() );
 		throw SC_INVALID_DATA;
 
 	}
@@ -208,7 +209,7 @@ static void extractAndSaveMap( AsciiString mapToSave, Xfer *xfer )
 	if( buffer == nullptr )
 	{
 
-		DEBUG_CRASH(( "extractAndSaveMap - Unable to allocate buffer for file '%s'", mapToSave.str() ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "extractAndSaveMap - Unable to allocate buffer for file '%s'", mapToSave.str() );
 		throw SC_INVALID_DATA;
 
 	}
@@ -222,7 +223,7 @@ static void extractAndSaveMap( AsciiString mapToSave, Xfer *xfer )
 
 		delete[] buffer;
 
-		DEBUG_CRASH(( "extractAndSaveMap - Error writing to file '%s'", mapToSave.str() ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "extractAndSaveMap - Error writing to file '%s'", mapToSave.str() );
 		throw SC_INVALID_DATA;
 
 	}
@@ -334,8 +335,8 @@ void GameStateMap::xfer( Xfer *xfer )
 
 		if (!TheGameState->isInSaveDirectory(saveGameInfo->saveGameMapName))
 		{
-			DEBUG_CRASH(("GameState::xfer - The map filename read from the file '%s' is not in the SAVE directory, but should be",
-												 saveGameInfo->saveGameMapName.str()) );
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "GameState::xfer - The map filename read from the file '%s' is not in the SAVE directory, but should be",
+												 saveGameInfo->saveGameMapName.str());
 			throw SC_INVALID_DATA;
 		}
 

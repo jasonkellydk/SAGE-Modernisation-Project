@@ -30,7 +30,7 @@
 #pragma once
 #include <memory>
 
-#include "Common/GameCommon.h"	// ensure we get DUMP_PERF_STATS, or not
+#include "Common/GameCommon.h"
 #include "Common/GameType.h"
 #include "Common/Snapshot.h"
 #include "Common/STLTypedefs.h"
@@ -38,6 +38,8 @@
 #include "GameNetwork/NetworkDefs.h"
 #include "GameLogic/AI.h"
 #include "GameLogic/Module/UpdateModule.h"	// needed for DIRECT_UPDATEMODULE_ACCESS
+
+import engine.platform;
 
 /*
 	At one time, we distinguished between sleepy and nonsleepy
@@ -106,7 +108,7 @@ class GameLogic : public SubsystemInterface, public Snapshot
 
 public:
 
-	GameLogic();
+	GameLogic(engine::platform::IClockService& clock, engine::platform::IThreadingService& threading);
 	virtual ~GameLogic() override;
 
 	// subsystem methods
@@ -115,6 +117,12 @@ public:
 	virtual void update() override;														///< update the world
 
 	void preUpdate();
+
+protected:
+	engine::platform::IClockService& m_clock;
+	engine::platform::IThreadingService& m_threading;
+
+public:
 
 #if defined(RTS_DEBUG)
 	Int getNumberSleepyUpdates() const;
@@ -139,7 +147,9 @@ public:
 
 	Bool isInGameLogicUpdate() const { return m_isInUpdate; }
 	Bool hasUpdated() const { return m_hasUpdated; } ///< Returns true if the logic frame has advanced in the current client/render update
+	public:
 	UnsignedInt getFrame();										///< Returns the current simulation frame number
+	public:
 	UnsignedInt getCRC( Int mode = CRC_CACHED, AsciiString deepCRCFileName = AsciiString::TheEmptyString );		///< Returns the CRC
 
 	void setObjectIDCounter( ObjectID nextObjID ) { m_nextObjID = nextObjID; }
@@ -250,12 +260,6 @@ public:
   UnsignedShort getSuperweaponRestriction() const; ///< Get any optional limits on superweapons
   void setSuperweaponRestriction();
 
-#ifdef DUMP_PERF_STATS
-	void getAIMetricsStatistics( UnsignedInt *numAI, UnsignedInt *numMoving, UnsignedInt *numAttacking, UnsignedInt *numWaitingForPath, UnsignedInt *overallFailedPathfinds );
-	void resetOverallFailedPathfinds() { m_overallFailedPathfinds = 0; }
-	void incrementOverallFailedPathfinds() { m_overallFailedPathfinds++; }
-	UnsignedInt getOverallFailedPathfinds() const { return m_overallFailedPathfinds; }
-#endif
 
 	// NOTE: selectObject and deselectObject should be called *only* by logical things, NEVER by the
 	// client. These will cause the client to select or deselect the object, if affectClient is true.
@@ -460,9 +464,6 @@ private:
 	void lastHeardFrom( Int playerId );
 	Bool m_forceGameStartByTimeOut;													///< If we timeout someone we're waiting to load, set this flag to start the game
 
-#ifdef DUMP_PERF_STATS
-	UnsignedInt m_overallFailedPathfinds;
-#endif
 
 	UnsignedInt m_frameObjectsChangedTriggerAreas;					///< Last frame objects moved into/outof trigger areas, or were created/destroyed. jba.
 

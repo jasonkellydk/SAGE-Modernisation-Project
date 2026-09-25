@@ -1,4 +1,5 @@
-#include <functional>
+import Engine.Core.Math.Vector2;
+import Engine.Core.Math.Vector3;
 #include <functional>
 import Graphics.Frame.RenderClock;
 import Graphics.Frame.AttachmentBindings;
@@ -7,9 +8,9 @@ import Graphics.Materials.MeshTextureMapping;
 import Graphics.Materials.TextureCoordinates;
 import Graphics.Scene.Shadows.ProjectedCapture;
 import Assets.Images.PixelEncoding;
-#include "WWMath/matrix4.h"
 import Graphics.Scene.Props.Renderer;
 import Assets.Adapters.W3D.Chunks;
+import Engine.Core.Math.Matrix4;
 /*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -58,8 +59,10 @@ import Assets.Adapters.W3D.Chunks;
 #include "W3DDevice/GameClient/BaseHeightMap.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
 #include "Common/GlobalData.h"
+
+import Engine.Core.Math.AffineTransform3;
 #include "W3DDevice/GameClient/W3DProjectedShadow.h"
-#include "Common/Debug.h"
+
 #include "GameLogic/Object.h"
 #include "GameLogic/PartitionManager.h"
 #include "GameLogic/TerrainLogic.h"
@@ -71,6 +74,7 @@ import Assets.Adapters.W3D.Chunks;
 #include <array>
 #include <cstdint>
 #include <cstring>
+import engine.debug;
 import Graphics.Scene.Shadows.Projected;
 import Graphics.Scene.Shadows.ProjectedCapture;
 import Graphics.Materials.TextureProjector;
@@ -97,45 +101,63 @@ Maybe project onto a deformed terrain patch that molds to trays/bibs.
 
 namespace
 {
-Graphics::TextureProjectorFit Build_Shadow_Fit(W3DRenderObject &object, const Vector3 &light_position)
+Graphics::TextureProjectorFit Build_Shadow_Fit(W3DRenderObject &object, const Engine::Math::Vector3 &light_position)
 {
-	AABoxClass object_box;
-	object.Get_Obj_Space_Bounding_Box(object_box);
+	Engine::Math::AxisAlignedBox3 object_box;
+	object.Get_Local_Bounds(object_box);
+	const auto center = object_box.Center();
+	const auto extent = object_box.Extent();
 	Graphics::TextureProjectorBounds bounds;
-	bounds.center = {object_box.Center.X, object_box.Center.Y, object_box.Center.Z};
-	bounds.extent = {object_box.Extent.X, object_box.Extent.Y, object_box.Extent.Z};
+	bounds.center = {center.x, center.y, center.z};
+	bounds.extent = {extent.x, extent.y, extent.z};
 	Graphics::Matrix4x4 object_transform = Graphics::Matrix4x4::Identity();
-	const Matrix3D &transform = object.Get_Transform();
+	const auto &transform = object.Get_Transform();
 	for (unsigned row = 0; row < 3; ++row)
 		for (unsigned column = 0; column < 4; ++column)
 			object_transform.values[row * 4 + column] = transform[row][column];
 	return Graphics::Fit_Perspective_Texture_Projector(bounds, object_transform,
-		{light_position.X, light_position.Y, light_position.Z});
+		{light_position.x, light_position.y, light_position.z});
 }
 
 void Configure_Shadow_Camera(W3DCamera &camera, const Graphics::TextureProjectorFit &fit,
 	unsigned texture_width, unsigned texture_height)
 {
-	Matrix3D transform;
+	Engine::Math::AffineTransform3 transform;
 	for (unsigned row = 0; row < 3; ++row)
 		for (unsigned column = 0; column < 4; ++column)
-			transform[row][column] = fit.camera_transform.values[row * 4 + column];
+			transform.elements[row * 4 + column] = fit.camera_transform.values[row * 4 + column];
 	camera.Set_Transform(transform);
 	camera.Set_Projection_Type(W3DCamera::PERSPECTIVE);
 	camera.Set_View_Plane(fit.horizontal_fov, fit.vertical_fov);
 	camera.Set_Clip_Planes(0.01f, fit.fitting_clip_end);
-	const Vector2 viewport_min(1.0f / static_cast<float>(texture_width),
-		1.0f / static_cast<float>(texture_height));
-	const Vector2 viewport_max((static_cast<float>(texture_width) - 1.0f)
+	const Engine::Math::Vector2 viewport_min{1.0f / static_cast<float>(texture_width),
+		1.0f / static_cast<float>(texture_height)};
+	const Engine::Math::Vector2 viewport_max{(static_cast<float>(texture_width) - 1.0f)
 		/ static_cast<float>(texture_width),
-		(static_cast<float>(texture_height) - 1.0f) / static_cast<float>(texture_height));
+		(static_cast<float>(texture_height) - 1.0f) / static_cast<float>(texture_height)};
 	camera.Set_Viewport(viewport_min, viewport_max);
 }
 }
 
 W3DProjectedShadowManager *TheW3DProjectedShadowManager=nullptr;	//global singleton
 ProjectedShadowManager	*TheProjectedShadowManager;				//global singleton with simpler interface.
-extern const FrustumClass *shadowCameraFrustum;	//defined in W3DShadow.
+extern const Graphics::CameraFrustum *shadowCameraFrustum;	//defined in W3DShadow.
+
+namespace
+{
+// True when the sphere is entirely behind every frustum plane (the original
+// CollisionMath::Overlap_Test(FrustumClass, SphereClass) INSIDE result).
+bool Sphere_Inside_Frustum(const Graphics::CameraFrustum &frustum, const Engine::Math::Sphere3 &sphere)
+{
+	for (const Graphics::CameraFrustumPlane &plane : frustum.planes) {
+		const float dist = sphere.center.x * plane.normal.x + sphere.center.y * plane.normal.y
+			+ sphere.center.z * plane.normal.z - plane.distance;
+		if (!(dist < -sphere.radius))
+			return false;
+	}
+	return true;
+}
+}
 struct SHADOW_DECAL_VERTEX
 {
     float x,y,z;
@@ -200,9 +222,9 @@ class W3DShadowTexture : public RefCountClass, public	HashableClass
 	public:
 
 		W3DShadowTexture()
-		{	m_lastLightPosition.Set(0,0,0); m_lastObjectOrientation.Make_Identity();
-			m_shadowUV[0].Set(1.0f,0.0f,0.0f);	//u runs along world x axis
-			m_shadowUV[1].Set(0.0f,-1.0f,0.0f);	//v runs along world -y axis
+		{	m_lastLightPosition = {0, 0, 0};
+			m_shadowUV[0] = {1.0f, 0.0f, 0.0f};	//u runs along world x axis
+			m_shadowUV[1] = {0.0f, -1.0f, 0.0f};	//v runs along world -y axis
 		}
 		virtual ~W3DShadowTexture() override { REF_PTR_RELEASE(m_texture);}
 
@@ -217,28 +239,25 @@ class W3DShadowTexture : public RefCountClass, public	HashableClass
 		}
 		W3DTextureHandle	*getTexture()	{ return m_texture;}
 		void					 setTexture(W3DTextureHandle *texture)	{m_texture = texture;}
-		void					 setLightPosHistory(Vector3 &pos) {m_lastLightPosition=pos;}	///<updates the last position of light
-		Vector3&			 getLightPosHistory() {return m_lastLightPosition;}
-		void					 setObjectOrientationHistory(Matrix3x3 &mat) {m_lastObjectOrientation=mat;}	///<updates the last position of light
-		Matrix3x3&			 getObjectOrientationHistory() {return m_lastObjectOrientation;}
-		SphereClass&	 getBoundingSphere()	{return m_areaEffectSphere;}
-		AABoxClass&		 getBoundingBox()		{return m_areaEffectBox;}
-		void	 setBoundingSphere(SphereClass &sphere)	{m_areaEffectSphere=sphere;}
-		void	 setBoundingBox(AABoxClass &box)		{m_areaEffectBox=box;}
-		void	 updateBounds(Vector3 &lightPos, W3DRenderObject *robj);	///<update extent of shadow
-		void	 setDecalUVAxis(Vector3 &u, Vector3 &v)	{ m_shadowUV[0]=u; m_shadowUV[1]=v;}
-		void	 getDecalUVAxis(Vector3 *u, Vector3 *v)	{ *u=m_shadowUV[0]; *v=m_shadowUV[1];}
+		void					 setLightPosHistory(Engine::Math::Vector3 &pos) {m_lastLightPosition=pos;}	///<updates the last position of light
+		Engine::Math::Vector3&			 getLightPosHistory() {return m_lastLightPosition;}
+		Engine::Math::Sphere3& getBoundingSphere() { return m_areaEffectSphere; }
+		Engine::Math::AxisAlignedBox3& getBoundingBox() { return m_areaEffectBox; }
+		void setBoundingSphere(const Engine::Math::Sphere3 &sphere) { m_areaEffectSphere = sphere; }
+		void setBoundingBox(const Engine::Math::AxisAlignedBox3 &box) { m_areaEffectBox = box; }
+		void	 updateBounds(Engine::Math::Vector3 &lightPos, W3DRenderObject *robj);	///<update extent of shadow
+		void	 setDecalUVAxis(Engine::Math::Vector3 &u, Engine::Math::Vector3 &v)	{ m_shadowUV[0]=u; m_shadowUV[1]=v;}
+		void	 getDecalUVAxis(Engine::Math::Vector3 *u, Engine::Math::Vector3 *v)	{ *u=m_shadowUV[0]; *v=m_shadowUV[1];}
 
 	private:
 
 		char m_namebuf[2*Assets::W3D::W3DNameLength];	///<name of model hierarchy
 
 		W3DTextureHandle *m_texture; ///<texture holding the shadow for this renderobject
-		Vector3		m_lastLightPosition;		///<position of light source at time of last texture update.
-		Matrix3x3	m_lastObjectOrientation;	///<orientation of shadow casting object when texture was generated.
-		AABoxClass	m_areaEffectBox;			///<boundary defining object-space volume affected by shadow.
-		SphereClass	m_areaEffectSphere;			///<boundary defining object-space volume affected by shadow.
-		Vector3		m_shadowUV[2];		///world-space vectors defining the u and v texture coordinate axis.
+		Engine::Math::Vector3		m_lastLightPosition;		///<position of light source at time of last texture update.
+		Engine::Math::AxisAlignedBox3 m_areaEffectBox;		///<boundary defining object-space volume affected by shadow.
+		Engine::Math::Sphere3 m_areaEffectSphere;		///<boundary defining object-space volume affected by shadow.
+		Engine::Math::Vector3		m_shadowUV[2];		///world-space vectors defining the u and v texture coordinate axis.
 };
 
 /*
@@ -283,15 +302,15 @@ W3DProjectedShadowManager::~W3DProjectedShadowManager()
 	m_W3DShadowTextureManager = nullptr;
 
 	//all shadows should be freed up at this point but check anyway
-	DEBUG_ASSERTCRASH(m_shadowList == nullptr, ("Destroy of non-empty projected shadow list"));
-	DEBUG_ASSERTCRASH(m_decalList == nullptr, ("Destroy of non-empty projected decal list"));
+	engine::debug::invariant((m_shadowList == nullptr), "m_shadowList == nullptr", __FILE__, __LINE__, "Destroy of non-empty projected shadow list");
+	engine::debug::invariant((m_decalList == nullptr), "m_decalList == nullptr", __FILE__, __LINE__, "Destroy of non-empty projected decal list");
 }
 
 void W3DProjectedShadowManager::reset()
 {
 
-	DEBUG_ASSERTCRASH(m_shadowList == nullptr, ("Reset of non-empty projected shadow list"));
-	DEBUG_ASSERTCRASH(m_decalList == nullptr, ("Reset of non-empty projected decal list"));
+	engine::debug::invariant((m_shadowList == nullptr), "m_shadowList == nullptr", __FILE__, __LINE__, "Reset of non-empty projected shadow list");
+	engine::debug::invariant((m_decalList == nullptr), "m_decalList == nullptr", __FILE__, __LINE__, "Reset of non-empty projected decal list");
 
 	m_W3DShadowTextureManager->freeAllTextures();
 
@@ -315,7 +334,7 @@ Bool W3DProjectedShadowManager::ReAcquireResources()
 
 	///@todo: We should allocate our render target pool here.
 
-	DEBUG_ASSERTCRASH(m_dynamicRenderTarget == nullptr, ("Acquire of existing shadow render target"));
+	engine::debug::invariant((m_dynamicRenderTarget == nullptr), "m_dynamicRenderTarget == nullptr", __FILE__, __LINE__, "Acquire of existing shadow render target");
 
 	m_renderTargetHasAlpha=TRUE;
     m_dynamicRenderTarget=new W3DTextureHandle(DEFAULT_RENDER_TARGET_WIDTH,DEFAULT_RENDER_TARGET_HEIGHT,
@@ -358,7 +377,8 @@ void W3DProjectedShadowManager::updateRenderTargetTextures()
 }
 
 ///Renders shadow on part of terrain covered by world-space bounding box.
-Int W3DProjectedShadowManager::renderProjectedTerrainShadow(W3DProjectedShadow *shadow, AABoxClass &box)
+Int W3DProjectedShadowManager::renderProjectedTerrainShadow(W3DProjectedShadow *shadow,
+	const Engine::Math::AxisAlignedBox3 &box)
 {
     auto *device = Graphics::Shared_Frame_Device();
     if (!device || !TheTerrainRenderObject || !m_graphics->camera || shadow == nullptr) return 0;
@@ -369,10 +389,12 @@ Int W3DProjectedShadowManager::renderProjectedTerrainShadow(W3DProjectedShadow *
     if (mapping == nullptr || material == nullptr || shadow_texture == nullptr
         || !shadow_texture->Ensure_Render_Backend_Texture()) return 0;
     auto* hmap = TheTerrainRenderObject->getMap();
-    const int startX = __max(0, REAL_TO_INT_FLOOR((box.Center.X-box.Extent.X)/MAP_XY_FACTOR));
-    const int startY = __max(0, REAL_TO_INT_FLOOR((box.Center.Y-box.Extent.Y)/MAP_XY_FACTOR));
-    const int endX = __min(hmap->getXExtent()-1, REAL_TO_INT_CEIL((box.Center.X+box.Extent.X)/MAP_XY_FACTOR));
-    const int endY = __min(hmap->getYExtent()-1, REAL_TO_INT_CEIL((box.Center.Y+box.Extent.Y)/MAP_XY_FACTOR));
+    const auto center = box.Center();
+    const auto extent = box.Extent();
+    const int startX = __max(0, REAL_TO_INT_FLOOR((center.x-extent.x)/MAP_XY_FACTOR));
+    const int startY = __max(0, REAL_TO_INT_FLOOR((center.y-extent.y)/MAP_XY_FACTOR));
+    const int endX = __min(hmap->getXExtent()-1, REAL_TO_INT_CEIL((center.x+extent.x)/MAP_XY_FACTOR));
+    const int endY = __min(hmap->getYExtent()-1, REAL_TO_INT_CEIL((center.y+extent.y)/MAP_XY_FACTOR));
     if (endX <= startX || endY <= startY) return 0;
     const int width = endX-startX+1;
     std::vector<Graphics::PropVertex> vertices(width*(endY-startY+1));
@@ -395,9 +417,7 @@ Int W3DProjectedShadowManager::renderProjectedTerrainShadow(W3DProjectedShadow *
     else if (!renderer.Update_Mesh(mesh,vertices,indices)) return 0;
     Graphics::PropParameters parameters;
     parameters.view_projection = Make_Surface_Parameters(*m_graphics->camera).view_projection;
-    Matrix3D view; m_graphics->camera->Get_View_Matrix(&view);
-    const Matrix4x4 view4(view);
-    std::memcpy(parameters.view.data(),&view4,sizeof(view4));
+    parameters.view = m_graphics->camera->Build_Render_Matrices().view;
     parameters.primary_gradient = 1.0f;
     parameters.alpha_cutoff = 96.0f/255.0f;
     const std::array<Graphics::RHITextureHandle,2> textures{
@@ -444,13 +464,12 @@ is an optimized system that only uses the render objects bounding box to determi
 void W3DProjectedShadowManager::queueDecal(W3DProjectedShadow *shadow)
 {
 	int i,j,k;
-	Vector3 hmapVertex,objPos;
-	AABoxClass box;
-	Matrix3D   objXform(1);
-	Real cx,cy,dx,dy;
+	Engine::Math::Vector3 hmapVertex,objPos;
+	Engine::Math::AffineTransform3 object_transform = Engine::Math::AffineTransform3::Identity();
+	Real dx,dy;
 	Real mapScaleInv=1.0f/MAP_XY_FACTOR;
-	static Vector3 objCenter(0,0,0);
-	Vector3 uVector,vVector;
+	static Engine::Math::Vector3 objCenter(0,0,0);
+	Engine::Math::Vector3 uVector,vVector;
 	Real uOffset,vOffset,vecLength;
 	Int borderSize;
 	W3DRenderObject *robj=shadow->m_robj;
@@ -466,8 +485,9 @@ void W3DProjectedShadowManager::queueDecal(W3DProjectedShadow *shadow)
 		borderSize=hmap->getBorderSizeInline();
 		if (robj)
 		{
-			objPos=robj->Get_Position();
-			objXform=robj->Get_Transform();
+			const auto engine_position = robj->Get_Position();
+			objPos = {engine_position.x, engine_position.y, engine_position.z};
+			object_transform = robj->Get_Transform();
 			if (robj->Get_User_Data())
 			{
 				Drawable *draw=((DrawableInfo *)robj->Get_User_Data())->m_drawable;
@@ -475,52 +495,54 @@ void W3DProjectedShadowManager::queueDecal(W3DProjectedShadow *shadow)
 				PathfindLayerEnum objectLayer;
 				if (object && (objectLayer=object->getLayer()) != LAYER_GROUND)
 				{	//check if object that this decal belongs to is not on the ground (bridge?)
-					layerHeight=BRIDGE_OFFSET_FACTOR+TheTerrainLogic->getLayerHeight(objPos.X,objPos.Y,objectLayer);
+					layerHeight=BRIDGE_OFFSET_FACTOR+TheTerrainLogic->getLayerHeight(objPos.x,objPos.y,objectLayer);
 				}
 			}
 		}
 		else
 		{	//no render object so use shadow's local position and default orientation
-			objPos.Set(shadow->m_x,shadow->m_y,shadow->m_z);
-			objXform.Rotate_Z(shadow->m_localAngle);
+			objPos = {shadow->m_x, shadow->m_y, shadow->m_z};
+			object_transform = Engine::Math::AffineTransform3::Rotation_Z(shadow->m_localAngle);
 		}
 
 		//Find size of heightmap sub-rectangle affected by shadow
 		//If user supplied size values, ignore bounding box
 
-		objPos.Z=0.0f;	//we don't care about object height since shadows project top-down
+		objPos.z=0.0f;	//we don't care about object height since shadows project top-down
 
-		uVector=objXform.Get_X_Vector();
+		const auto x_axis = object_transform.Basis_X();
+		uVector = {x_axis.x, x_axis.y, x_axis.z};
 
-		uVector.Z=0.0f;
+		uVector.z=0.0f;
 		vecLength=uVector.Length();
 		if (vecLength != 0.0f)	//prevent divide by zero
 		{	uVector *= 1.0f/vecLength;
 			vVector = uVector;
-			vVector.Rotate_Z(-1.0f,0.0f);	//rotate u vector by -90 degrees to get v vector.
+			vVector = {uVector.y, -uVector.x, 0.0f};	//rotate u vector by -90 degrees to get v vector.
 		}
 		else
 		{
-			vVector=objXform.Get_Y_Vector();
-			vVector.Z=0.0f;
+			const auto y_axis = object_transform.Basis_Y();
+			vVector = {y_axis.x, y_axis.y, y_axis.z};
+			vVector.z=0.0f;
 			vecLength=vVector.Length();
 			if (vecLength != 0.0f)	//prevent divide by zero
 				vVector *= 1.0f/vecLength;
 			else
-				vVector.Set(0.0f,-1.0f,0.0f); //Point uvector in default direction
+				vVector = {0.0f, -1.0f, 0.0f}; //Point uvector in default direction
 
 			uVector = vVector;
-			uVector.Rotate_Z(1.0f,0.0f);	//rotate v vector by 90 degrees to get u vector.
+			uVector = {-vVector.y, vVector.x, 0.0f};	//rotate v vector by 90 degrees to get u vector.
 		}
 
 		//Compute bounding box of projection
-		Vector3 boxCorners[4];	//top-left, top-right, bottom-right, bottom-left
+		Engine::Math::Vector3 boxCorners[4];	//top-left, top-right, bottom-right, bottom-left
 		dx = shadow->m_decalSizeX;
 		dy = shadow->m_decalSizeY;
-		Vector3 left_x=-dx * (uVector * (0.5f + shadow->m_decalOffsetU));
-		Vector3 right_x = dx * (uVector * (0.5f - shadow->m_decalOffsetU));
-		Vector3 top_y = -dy * (vVector * (0.5f + shadow->m_decalOffsetV));
-		Vector3 bottom_y = dy * (vVector * (0.5f - shadow->m_decalOffsetV));
+		Engine::Math::Vector3 left_x=-dx * (uVector * (0.5f + shadow->m_decalOffsetU));
+		Engine::Math::Vector3 right_x = dx * (uVector * (0.5f - shadow->m_decalOffsetU));
+		Engine::Math::Vector3 top_y = -dy * (vVector * (0.5f + shadow->m_decalOffsetV));
+		Engine::Math::Vector3 bottom_y = dy * (vVector * (0.5f - shadow->m_decalOffsetV));
 		///@todo: Optimize this bounding box calculation to use transformed extents
 		//Also skip bounding box calculation if object has not moved.
 		boxCorners[0] = left_x + top_y;
@@ -529,14 +551,14 @@ void W3DProjectedShadowManager::queueDecal(W3DProjectedShadow *shadow)
 		boxCorners[3] = left_x + bottom_y;
 
 		Real min_x,max_x,min_y,max_y;
-		max_x=min_x=boxCorners[0].X;
-		max_y=min_y=boxCorners[0].Y;
+		max_x=min_x=boxCorners[0].x;
+		max_y=min_y=boxCorners[0].y;
 
 		for (Int bi=1; bi<4; bi++)
-		{	max_x = __max(max_x,boxCorners[bi].X);
-			min_x = __min(min_x,boxCorners[bi].X);
-			max_y = __max(max_y,boxCorners[bi].Y);
-			min_y = __min(min_y,boxCorners[bi].Y);
+		{	max_x = __max(max_x,boxCorners[bi].x);
+			min_x = __min(min_x,boxCorners[bi].x);
+			max_y = __max(max_y,boxCorners[bi].y);
+			min_y = __min(min_y,boxCorners[bi].y);
 		}
 
 		uVector *= shadow->m_oowDecalSizeX;
@@ -546,15 +568,16 @@ void W3DProjectedShadowManager::queueDecal(W3DProjectedShadow *shadow)
 
 /*		{	//This version will stretch to fit orientation of object
 			///@todo: Most of the values below can be cached in shadow object
-			shadow->m_robj->Get_Obj_Space_Bounding_Box(box);
-			decalSizeX=box.Extent.X*2.0f;	//use local space bounding box to determine shadow size
-			decalSizeY=box.Extent.Y*2.0f;
+			shadow->m_robj->Get_Local_Bounds(box);
+			decalSizeX=box.Extent.x*2.0f;	//use local space bounding box to determine shadow size
+			decalSizeY=box.Extent.y*2.0f;
 //			box=shadow->m_robj->Get_Bounding_Box();	//get world-space bounding box
 			objPos = box.Center;
-			box.Init(objCenter,Vector3(decalSizeX*0.5f,decalSizeY*0.5f,1.0f));
+			box.Init(objCenter,Engine::Math::Vector3(decalSizeX*0.5f,decalSizeY*0.5f,1.0f));
 			box.Transform(objXform);	//transform box from object space to world space
 			box.Translate(objPos=objXform.Rotate_Vector(objPos));
-			objPos += shadow->m_robj->Get_Position();
+			const auto object_position = shadow->m_robj->Get_Position();
+			objPos += Engine::Math::Vector3{object_position.x, object_position.y, object_position.z};
 		}
 		*/
 //	  Experimental code to try and get a better fitting bounding box around shadow
@@ -562,41 +585,36 @@ void W3DProjectedShadowManager::queueDecal(W3DProjectedShadow *shadow)
 	{	//use the object's bounding box to determine shadow extent
 		///@todo: Most of the values below can be cached in shadow object
 		uVector=objXform.Get_X_Vector();
-		uVector.Z=0;
-		uVector.Normalize();
+		uVector.z=0;
+		uVector = uVector.Normalized();
 
 		vVector=objXform.Get_Y_Vector();	//invert direction since v axis runs right relative to u.
-		vVector.Z=0;
-		vVector.Normalize();
+		vVector.z=0;
+		vVector = vVector.Normalized();
 
-		shadow->m_robj->Get_Obj_Space_Bounding_Box(box);
-		decalSizeX = box.Extent.X * 2.0f;
-		decalSizeY = box.Extent.Y * 2.0f;
+		shadow->m_robj->Get_Local_Bounds(box);
+		decalSizeX = box.Extent.x * 2.0f;
+		decalSizeY = box.Extent.y * 2.0f;
 
 		Real newExtentX = fabs(uVector * box.Extent) + fabs(uVector * box.Center);	//get new extent for object orientation
 		Real newExtentY = fabs(vVector * box.Extent) + fabs(vVector * box.Center);  //get new extent for object orientation
 
-		objPos += uVector * box.Center.X;
-		objPos += vVector * box.Center.Y;
-//			objPos.Y = objPos.Y + vVector * box.Center;
-		objPos.Z = 0.0f;
+		objPos += uVector * box.Center.x;
+		objPos += vVector * box.Center.y;
+//			objPos.y = objPos.y + vVector * box.Center;
+		objPos.z = 0.0f;
 
 		//set new oriented bounding box extents
-		box.Extent.Set(newExtentX, newExtentY, 0);
-		box.Center.Set(objPos.X,objPos.Y,objPos.Z);
+		box.Extent = {newExtentX, newExtentY, 0};
+		box.Center = {objPos.x, objPos.y, objPos.z};
 	}
 	*/
 
-		cx=box.Center.X;
-		cy=box.Center.Y;
-		dx=box.Extent.X;
-		dy=box.Extent.Y;
-
 		//Get terrain cell index for area with shadow
-		Int startX=REAL_TO_INT_FLOOR(((objPos.X+min_x)*mapScaleInv)) + borderSize;
-		Int endX=REAL_TO_INT_CEIL(((objPos.X+max_x)*mapScaleInv)) + borderSize;
-		Int	startY=REAL_TO_INT_FLOOR(((objPos.Y+min_y)*mapScaleInv)) + borderSize;
-		Int endY=REAL_TO_INT_CEIL(((objPos.Y+max_y)*mapScaleInv)) + borderSize;
+		Int startX=REAL_TO_INT_FLOOR(((objPos.x+min_x)*mapScaleInv)) + borderSize;
+		Int endX=REAL_TO_INT_CEIL(((objPos.x+max_x)*mapScaleInv)) + borderSize;
+		Int	startY=REAL_TO_INT_FLOOR(((objPos.y+min_y)*mapScaleInv)) + borderSize;
+		Int endY=REAL_TO_INT_CEIL(((objPos.y+max_y)*mapScaleInv)) + borderSize;
 
 		startX = __max(startX,m_drawStartX);
 		startX = __min(startX,m_drawEdgeX);
@@ -652,31 +670,31 @@ void W3DProjectedShadowManager::queueDecal(W3DProjectedShadow *shadow)
 		//uVector *= 20.0f/dx;//shadow->m_decalRadius;	//scale texture to fit object
 		//vVector *= 20.0f/dy;//1.2f;//shadow->m_decalRadius;	//scale texture to fit object
 /*		uVector=objXform.Get_X_Vector();
-		uVector.Normalize();
+		uVector = uVector.Normalized();
 		uVector /= decalSizeX + (1.0f+4.0f/64.0f);	//texture has 1 pixel transparent border so we strtech up to make sure solid pixels reach extent..
 		vVector=objXform.Get_Y_Vector() * -1.0f;	//invert direction since v axis runs right relative to u.
-		vVector.Normalize();
+		vVector = vVector.Normalized();
 		vVector /= decalSizeY + (1.0f+4.0f/64.0f);
 		*/
-		DEBUG_ASSERTCRASH(numVerts == ((endY-startY+1)*(endX-startX+1)), ("queueDecal VB size mismatch"));
+		engine::debug::invariant((numVerts == ((endY-startY+1)*(endX-startX+1))), "numVerts == ((endY-startY+1)*(endX-startX+1))", __FILE__, __LINE__, "queueDecal VB size mismatch");
 
 		if(pvVertices)
 		{
 			if (layerHeight)
 				for (j=startY; j <= endY; j++)
 				{
-					hmapVertex.Y=(float)(j-borderSize) * MAP_XY_FACTOR;
+					hmapVertex.y=(float)(j-borderSize) * MAP_XY_FACTOR;
 
 					for (i=startX; i <= endX; i++)
 					{
-						hmapVertex.X=(float)(i-borderSize)*MAP_XY_FACTOR;
-						hmapVertex.Z=__max((float)hmap->getHeight(i,j)*MAP_HEIGHT_SCALE,layerHeight);
-						pvVertices->x=hmapVertex.X;
-						pvVertices->y=hmapVertex.Y;
-						pvVertices->z=hmapVertex.Z;
+						hmapVertex.x=(float)(i-borderSize)*MAP_XY_FACTOR;
+						hmapVertex.z=__max((float)hmap->getHeight(i,j)*MAP_HEIGHT_SCALE,layerHeight);
+						pvVertices->x=hmapVertex.x;
+						pvVertices->y=hmapVertex.y;
+						pvVertices->z=hmapVertex.z;
 						pvVertices->diffuse=shadow->m_diffuse;
-						pvVertices->u=Vector3::Dot_Product(uVector, (hmapVertex-objPos))+uOffset;
-						pvVertices->v=Vector3::Dot_Product(vVector, (hmapVertex-objPos))+vOffset;
+						pvVertices->u=(uVector).Dot((hmapVertex-objPos))+uOffset;
+						pvVertices->v=(vVector).Dot((hmapVertex-objPos))+vOffset;
 						pvVertices++;
 					}
 				}
@@ -684,18 +702,18 @@ void W3DProjectedShadowManager::queueDecal(W3DProjectedShadow *shadow)
 			//insert each cell's bottom/left edge vertex
 			for (j=startY; j <= endY; j++)
 			{
-				hmapVertex.Y=(float)(j-borderSize) * MAP_XY_FACTOR;
+				hmapVertex.y=(float)(j-borderSize) * MAP_XY_FACTOR;
 
 				for (i=startX; i <= endX; i++)
 				{
-					hmapVertex.X=(float)(i-borderSize)*MAP_XY_FACTOR;
-					hmapVertex.Z=(float)hmap->getHeight(i,j)*MAP_HEIGHT_SCALE+0.01f * MAP_XY_FACTOR;
-					pvVertices->x=hmapVertex.X;
-					pvVertices->y=hmapVertex.Y;
-					pvVertices->z=hmapVertex.Z;
+					hmapVertex.x=(float)(i-borderSize)*MAP_XY_FACTOR;
+					hmapVertex.z=(float)hmap->getHeight(i,j)*MAP_HEIGHT_SCALE+0.01f * MAP_XY_FACTOR;
+					pvVertices->x=hmapVertex.x;
+					pvVertices->y=hmapVertex.y;
+					pvVertices->z=hmapVertex.z;
 					pvVertices->diffuse=shadow->m_diffuse;
-					pvVertices->u=Vector3::Dot_Product(uVector, (hmapVertex-objPos))+uOffset;
-					pvVertices->v=Vector3::Dot_Product(vVector, (hmapVertex-objPos))+vOffset;
+					pvVertices->u=(uVector).Dot((hmapVertex-objPos))+uOffset;
+					pvVertices->v=(vVector).Dot((hmapVertex-objPos))+vOffset;
 					pvVertices++;
 				}
 			}
@@ -773,8 +791,8 @@ Int W3DProjectedShadowManager::renderShadows(W3DRenderContext & rinfo)
 		return	projectionCount;	//there are no shadows to render.
 
 	W3DProjectedShadow *shadow;
-	static AABoxClass aaBox;
-	static SphereClass sphere;
+	static Engine::Math::AxisAlignedBox3 aaBox;
+	static Engine::Math::Sphere3 sphere;
 
     m_graphics->camera = &rinfo.Camera;
     m_graphics->vertices.clear(); m_graphics->indices.clear();
@@ -821,28 +839,25 @@ Int W3DProjectedShadowManager::renderShadows(W3DRenderContext & rinfo)
 				}
 
 				//First test if shadow is visible on screen
-				sphere=shadow->m_shadowTexture[0]->getBoundingSphere();
-				sphere.Center += shadow->m_robj->Get_Position();
-
-				CollisionMath::OverlapType result=CollisionMath::Overlap_Test(*shadowCameraFrustum,sphere);
-				if (result == CollisionMath::OVERLAPPED)
-				{	//do a more accurate test against bounding box.
-					aaBox=shadow->m_shadowTexture[0]->getBoundingBox();
-					aaBox.Translate(shadow->m_robj->Get_Position());	//translate bounding box to world space.
-					if (CollisionMath::Overlap_Test(*shadowCameraFrustum,aaBox) == CollisionMath::OUTSIDE)
-						continue;
-				}
-				else
-				if (result == CollisionMath::OUTSIDE)
-					continue;
+								sphere=shadow->m_shadowTexture[0]->getBoundingSphere();
+								const Engine::Math::Vector3 position = shadow->m_robj->Get_Position();
+								sphere.center = sphere.center + position;
+								if (shadowCameraFrustum->Cull_Sphere({
+									{sphere.center.x, sphere.center.y, sphere.center.z}, sphere.radius}))
+									continue;
+								aaBox=shadow->m_shadowTexture[0]->getBoundingBox();
+								aaBox = {aaBox.minimum + position, aaBox.maximum + position};
+								// Only the partially overlapping case needs the more accurate box test.
+								if (!Sphere_Inside_Frustum(*shadowCameraFrustum, sphere)) {
+									const auto box_center = aaBox.Center();
+									const auto box_extent = aaBox.Extent();
+									if (shadowCameraFrustum->Cull_Box({
+										{box_center.x, box_center.y, box_center.z},
+										{box_extent.x, box_extent.y, box_extent.z}}))
+										continue;
+								}
 
 				//Shadow is visible on screen.  Figure out which visible objects it may affect.
-
-				//Check if bounding sphere was inside so bounding box never initialized
-				if (result == CollisionMath::INSIDE)
-				{		aaBox=shadow->m_shadowTexture[0]->getBoundingBox();
-						aaBox.Translate(shadow->m_robj->Get_Position());	//translate bounding box to world space.
-				}
 
 				if (shadow->m_type == SHADOW_PROJECTION)
 				{
@@ -933,7 +948,7 @@ Shadow* W3DProjectedShadowManager::addDecal(Shadow::ShadowTypeInfo *shadowInfo)
 	{
 		//Adding a new decal texture
 		W3DTextureHandle *w3dTexture=W3DAssetCatalog::Get_Instance()->Get_Texture(texture_name);
-		DEBUG_ASSERTCRASH(w3dTexture != nullptr, ("Could not load decal texture: %s",texture_name));
+		engine::debug::invariant((w3dTexture != nullptr), "w3dTexture != nullptr", __FILE__, __LINE__, "Could not load decal texture: %s",texture_name);
 		if (!w3dTexture)
 			return nullptr;
 
@@ -1037,7 +1052,7 @@ Shadow* W3DProjectedShadowManager::addDecal(W3DRenderObject *robj, Shadow::Shado
 	{
 		//Adding a new decal texture
 		W3DTextureHandle *w3dTexture=W3DAssetCatalog::Get_Instance()->Get_Texture(texture_name);
-		DEBUG_ASSERTCRASH(w3dTexture != nullptr, ("Could not load decal texture: %s",texture_name));
+		engine::debug::invariant((w3dTexture != nullptr), "w3dTexture != nullptr", __FILE__, __LINE__, "Could not load decal texture: %s",texture_name);
 		if (!w3dTexture)
 			return nullptr;
 
@@ -1071,17 +1086,18 @@ Shadow* W3DProjectedShadowManager::addDecal(W3DRenderObject *robj, Shadow::Shado
 	shadow->m_type = shadowType;		/// type of projection
 	shadow->m_allowWorldAlign=allowWorldAlign;	/// wrap shadow around world geometry - else align perpendicular to local z-axis.
 
-	AABoxClass box;
+	Engine::Math::AxisAlignedBox3 box;
 
-	robj->Get_Obj_Space_Bounding_Box(box);
+	robj->Get_Local_Bounds(box);
+	const auto extent = box.Extent();
 
 	//Check if app is overriding any of the default texture stretch factors.
 	if (!decalSizeX)
-		decalSizeX=box.Extent.X*2.0f;//use bounding box to determine size
+		decalSizeX=extent.x*2.0f;//use bounding box to determine size
 	shadow->m_oowDecalSizeX = 1.0f/decalSizeX;	//one over width
 
 	if (!decalSizeY)
-		decalSizeY=box.Extent.Y*2.0f;//world space distance to stretch full texture
+		decalSizeY=extent.y*2.0f;//world space distance to stretch full texture
 	shadow->m_oowDecalSizeY = 1.0f/decalSizeY;	//one over height
 
 	if (decalOffsetX)
@@ -1171,7 +1187,7 @@ W3DProjectedShadow* W3DProjectedShadowManager::addShadow(W3DRenderObject *robj, 
 				{
 					//need to add this texture without creating it from a real renderobject
 					W3DTextureHandle *w3dTexture=W3DAssetCatalog::Get_Instance()->Get_Texture(texture_name);
-					DEBUG_ASSERTCRASH(w3dTexture != nullptr, ("Could not load decal texture"));
+					engine::debug::invariant((w3dTexture != nullptr), "w3dTexture != nullptr", __FILE__, __LINE__, "Could not load decal texture");
 					if (!w3dTexture)
 						return nullptr;
 
@@ -1215,7 +1231,7 @@ W3DProjectedShadow* W3DProjectedShadowManager::addShadow(W3DRenderObject *robj, 
 					//try loading again
 					st=m_W3DShadowTextureManager->getTexture(texture_name);
 
-					DEBUG_ASSERTCRASH(st != nullptr, ("Could not create shadow texture"));
+					engine::debug::invariant((st != nullptr), "st != nullptr", __FILE__, __LINE__, "Could not create shadow texture");
 
 					if (st==nullptr)
 						return nullptr;	//could not create the shadow texture
@@ -1251,30 +1267,32 @@ W3DProjectedShadow* W3DProjectedShadowManager::addShadow(W3DRenderObject *robj, 
 	shadow->m_type = shadowType;		/// type of projection
 	shadow->m_allowWorldAlign=allowWorldAlign;	/// wrap shadow around world geometry - else align perpendicular to local z-axis.
 
-	AABoxClass box;
+	Engine::Math::AxisAlignedBox3 box;
 
-	robj->Get_Obj_Space_Bounding_Box(box);
+	robj->Get_Local_Bounds(box);
+	const auto center = box.Center();
+	const auto extent = box.Extent();
 
 	//Check if app is overriding any of the default texture stretch factors.
 	if (decalSizeX)
 		decalSizeX=1.0f/decalSizeX; //world space distance to stretch full texture scale
 	else
-		decalSizeX=1.0f/(box.Extent.X*2.0f);//use bounding box to determine size
+		decalSizeX=1.0f/(extent.x*2.0f);//use bounding box to determine size
 
 	if (decalSizeY)
 		decalSizeY=-1.0f/decalSizeY;
 	else
-		decalSizeY=-1.0f/(box.Extent.Y*2.0f);//world space distance to stretch full texture
+		decalSizeY=-1.0f/(extent.y*2.0f);//world space distance to stretch full texture
 
 	if (decalOffsetX)
 		decalOffsetX=-decalOffsetX*decalSizeX;
 	else
-		decalOffsetX=0.0f;//-box.Center.X*decalSizeX;
+		decalOffsetX=0.0f;//-center.x*decalSizeX;
 
 	if (decalOffsetY)
 		decalOffsetY=-decalOffsetY*decalSizeY;
 	else
-		decalOffsetY=0.0f;//-box.Center.Y*decalSizeY;
+		decalOffsetY=0.0f;//-center.y*decalSizeY;
 
 	//Prestore some values used during projection to optimize out division.
 	shadow->m_oowDecalSizeX = decalSizeX;	//one over width
@@ -1349,7 +1367,7 @@ W3DProjectedShadow* W3DProjectedShadowManager::createDecalShadow(Shadow::ShadowT
 	{
 		//need to add this texture without creating it from a real renderobject
 		W3DTextureHandle *w3dTexture=W3DAssetCatalog::Get_Instance()->Get_Texture(texture_name);
-		DEBUG_ASSERTCRASH(w3dTexture != nullptr, ("Could not load decal texture"));
+		engine::debug::invariant((w3dTexture != nullptr), "w3dTexture != nullptr", __FILE__, __LINE__, "Could not load decal texture");
 		if (!w3dTexture)
 			return nullptr;
 
@@ -1394,12 +1412,12 @@ W3DProjectedShadow* W3DProjectedShadowManager::createDecalShadow(Shadow::ShadowT
 	if (decalOffsetX)
 		decalOffsetX=-decalOffsetX*decalSizeX;
 	else
-		decalOffsetX=0.0f;//-box.Center.X*decalSizeX;
+		decalOffsetX=0.0f;//-box.Center.x*decalSizeX;
 
 	if (decalOffsetY)
 		decalOffsetY=-decalOffsetY*decalSizeY;
 	else
-		decalOffsetY=0.0f;//-box.Center.Y*decalSizeY;
+		decalOffsetY=0.0f;//-box.Center.y*decalSizeY;
 
 	//Prestore some values used during projection to optimize out division.
 	shadow->m_oowDecalSizeX = decalSizeX;	//one over width
@@ -1513,7 +1531,7 @@ void W3DProjectedShadow::getRenderCost(RenderCost & rc) const
 W3DProjectedShadow::W3DProjectedShadow()
 {
 	m_diffuse=0xffffffff;
-	m_lastObjPosition.Set(0,0,0);
+	m_lastObjPosition = {0, 0, 0};
 	m_type = SHADOW_NONE;		/// type of projection
 	m_allowWorldAlign = FALSE;	/// wrap shadow around world geometry - else align perpendicular to local z-axis.
 	m_isEnabled = TRUE;
@@ -1553,7 +1571,7 @@ void W3DProjectedShadow::init()
 
 #define DECAL_TEXELS_PER_WORLD_UNIT	(64.0f/20.0f)	//64 texels per 2 terrain cells (20 units)
 
-void W3DProjectedShadow::updateTexture(Vector3 &lightPos)
+void W3DProjectedShadow::updateTexture(Engine::Math::Vector3 &lightPos)
 {
 	W3DRenderContext *context;
 	if (m_shadowTexture[0] == nullptr || m_shadowTexture[0]->getTexture() == nullptr)
@@ -1562,7 +1580,7 @@ void W3DProjectedShadow::updateTexture(Vector3 &lightPos)
 	}
 
 	//default uv coordinates before rotation starting at top/left going clockwise
-	static Vector2 uvData[4]={Vector2(-0.5,-0.5f),Vector2(-0.5,0.5f),Vector2(0.5f,0.5f),Vector2(-0.5f,0.5f)};
+	static Engine::Math::Vector2 uvData[4]={Engine::Math::Vector2(-0.5,-0.5f),Engine::Math::Vector2(-0.5,0.5f),Engine::Math::Vector2(0.5f,0.5f),Engine::Math::Vector2(-0.5f,0.5f)};
 
 	//force light always 2000 units from object - for some reason projection fails if
 	//light is too far.
@@ -1580,11 +1598,12 @@ void W3DProjectedShadow::updateTexture(Vector3 &lightPos)
 			return;
 		}
 
-		Vector3 objPos=m_robj->Get_Position();
-		if (objPos == Vector3(0,0,0))
+		const auto engine_position = m_robj->Get_Position();
+		Engine::Math::Vector3 objPos{engine_position.x, engine_position.y, engine_position.z};
+		if (objPos == Engine::Math::Vector3(0,0,0))
 			return; //render object does not have a valid position (never rendered).
-		Vector3 objToLight=lightPos - objPos;
-		objToLight.Normalize();
+		Engine::Math::Vector3 objToLight=lightPos - objPos;
+		objToLight = objToLight.Normalized_Legacy();
 		objToLight =  objPos + objToLight * 2000.0f;
 
 		m_shadowFit = Build_Shadow_Fit(*m_robj, objToLight);
@@ -1603,7 +1622,8 @@ void W3DProjectedShadow::updateTexture(Vector3 &lightPos)
 		Configure_Shadow_Camera(context->Camera, m_shadowFit,
 			static_cast<unsigned>(target_description.width), static_cast<unsigned>(target_description.height));
 
-		context->light_environment->Reset({(m_robj->Get_Position()).X,(m_robj->Get_Position()).Y,(m_robj->Get_Position()).Z}, {0,0,0});
+		const auto object_position = m_robj->Get_Position();
+		context->light_environment->Reset({object_position.x, object_position.y, object_position.z}, {0,0,0});
 
 		const bool captured = Graphics::Capture_Projected_Texture(
 			Graphics::Get_Attachment_Bindings(), render_target->Peek_Render_Backend_Texture(), *context,
@@ -1651,16 +1671,17 @@ void W3DProjectedShadow::updateTexture(Vector3 &lightPos)
 			return;
 		}
 
-		Vector3 objPos=m_robj->Get_Position();
-		Vector3 objectToLight;
+		const auto engine_position = m_robj->Get_Position();
+		Engine::Math::Vector3 objPos{engine_position.x, engine_position.y, engine_position.z};
+		Engine::Math::Vector3 objectToLight;
 		if (m_flags & SHADOW_DIRECTIONAL_PROJECTION)
 		{	objectToLight=lightPos-objPos;
 			//we're ignoring sun's distance from horizon, so drop vertical component
-			objectToLight.Z=0;
-			objectToLight.Normalize();
+			objectToLight.z=0;
+			objectToLight = objectToLight.Normalized_Legacy();
 		}
 		else
-			objectToLight.Set(1.0f,0.0f,0.0f);
+			objectToLight = {1.0f, 0.0f, 0.0f};
 
 		Assets::ImageDescription surface_desc;
 		m_shadowTexture[0]->getTexture()->Get_Level_Description(surface_desc);
@@ -1669,17 +1690,17 @@ void W3DProjectedShadow::updateTexture(Vector3 &lightPos)
 			return;
 		}
 		//default shadow texture points along world -x axis (west).  Rotate uv coordinates to fit actual light direction
-		Vector3 uVec = objectToLight * DECAL_TEXELS_PER_WORLD_UNIT / (float)surface_desc.width;
-		objectToLight.Rotate_Z(-1.0f,0.0f);	//rotate u vector by -90 degrees to get v vector.
-		Vector3 vVec = objectToLight * DECAL_TEXELS_PER_WORLD_UNIT / (float)surface_desc.height;
+		Engine::Math::Vector3 uVec = objectToLight * DECAL_TEXELS_PER_WORLD_UNIT / (float)surface_desc.width;
+		objectToLight = {objectToLight.y, -objectToLight.x, 0.0f};	//rotate u vector by -90 degrees to get v vector.
+		Engine::Math::Vector3 vVec = objectToLight * DECAL_TEXELS_PER_WORLD_UNIT / (float)surface_desc.height;
 
 		m_shadowTexture[0]->setDecalUVAxis(uVec, vVec);
 
 		///@todo: tweak decal bounding volumes to something sensible
-		AABoxClass	box;
-		SphereClass	sphere;
-		m_robj->Get_Obj_Space_Bounding_Box(box);	//shadow uses same bounding box as object
-		m_robj->Get_Obj_Space_Bounding_Sphere(sphere);
+		Engine::Math::AxisAlignedBox3 box;
+		Engine::Math::Sphere3 sphere;
+		m_robj->Get_Local_Bounds(box);	//shadow uses same bounding box as object
+		m_robj->Get_Local_Bounding_Sphere(sphere);
 
 		m_shadowTexture[0]->setBoundingSphere(sphere);
 		m_shadowTexture[0]->setBoundingBox(box);
@@ -1690,14 +1711,14 @@ void W3DProjectedShadow::updateTexture(Vector3 &lightPos)
 }
 
 
-void W3DProjectedShadow::updateProjectionParameters(const Matrix3D &cameraXform)
+void W3DProjectedShadow::updateProjectionParameters(const Engine::Math::AffineTransform3 &cameraTransform)
 {
 	if (m_type != SHADOW_PROJECTION || m_shadowMapping == nullptr || !m_shadowFit.valid)
 		return;
 	Graphics::Matrix4x4 camera_transform = Graphics::Matrix4x4::Identity();
 	for (unsigned row = 0; row < 3; ++row)
 		for (unsigned column = 0; column < 4; ++column)
-			camera_transform.values[row * 4 + column] = cameraXform[row][column];
+			camera_transform.values[row * 4 + column] = cameraTransform[row][column];
 	const auto view_to_texture = Graphics::Make_Texture_Projector_View_Transform(
 		m_shadowFit, camera_transform);
 	Assets::ImageDescription texture_description;
@@ -1721,20 +1742,21 @@ void W3DProjectedShadow::update()
 	{	//light has moved since last time this shadow was calculated. Need update
 		updateTexture(TheW3DShadowManager->getLightPosWorld(0));
 	}
-	if (m_robj != nullptr && m_lastObjPosition != m_robj->Get_Position())
+	const auto engine_position = m_robj != nullptr ? m_robj->Get_Position() : Engine::Math::Vector3{};
+	const Engine::Math::Vector3 object_position{engine_position.x, engine_position.y, engine_position.z};
+	if (m_robj != nullptr && m_lastObjPosition != object_position)
 	{	//object has moved.  Texture stays the same but projection matrix needs updating.
 		//force light always 2000 units from object - for some reason projection fails if
 		//light is too far.
 		///@todo: See why infinite light sources don't project shadows correctly.
 		if (m_type == SHADOW_PROJECTION)
 		{
-			Vector3 object_to_light = TheW3DShadowManager->getLightPosWorld(0)
-				- m_robj->Get_Position();
-			object_to_light.Normalize();
-			object_to_light = m_robj->Get_Position() + object_to_light * 2000.0f;
+			Engine::Math::Vector3 object_to_light = TheW3DShadowManager->getLightPosWorld(0) - object_position;
+			object_to_light = object_to_light.Normalized_Legacy();
+			object_to_light = object_position + object_to_light * 2000.0f;
 			m_shadowFit = Build_Shadow_Fit(*m_robj, object_to_light);
 		}
-		setObjPosHistory(m_robj->Get_Position());
+		setObjPosHistory(object_position);
 	}
 }
 
@@ -1773,42 +1795,47 @@ Int W3DShadowTexture::init(W3DRenderObject *robj)
 	return TRUE;
 }
 
-void W3DShadowTexture::updateBounds(Vector3 &lightPos, W3DRenderObject *robj)
+void W3DShadowTexture::updateBounds(Engine::Math::Vector3 &lightPos, W3DRenderObject *robj)
 {
-		AABoxClass	&box=m_areaEffectBox;	///@todo: fix for multiple lights
-		Vector3			objPos;
-		Vector3 Corners[8];
-		Vector3 lightRay;
+		Engine::Math::AxisAlignedBox3	&box=m_areaEffectBox;	///@todo: fix for multiple lights
+		Engine::Math::Vector3			objPos;
+		Engine::Math::Vector3 Corners[8];
+		Engine::Math::Vector3 lightRay;
 		Real floorZ;
 		Real vectorScale,vectorScaleTemp, vectorScaleMax,length;
 
 		//calculate local bounding box of shadow projection
-		objPos=robj->Get_Position();
-		box=robj->Get_Bounding_Box();
-		floorZ = objPos.Z - 2.0f;	//lower slightly so shadows go under ground.
+		const auto engine_position = robj->Get_Position();
+		objPos = {engine_position.x, engine_position.y, engine_position.z};
+		box = robj->Get_Bounding_Box();
+		const auto center = box.Center();
+		const auto extent = box.Extent();
+		const Engine::Math::Vector3 legacy_center{center.x, center.y, center.z};
+		const Engine::Math::Vector3 legacy_extent{extent.x, extent.y, extent.z};
+		floorZ = objPos.z - 2.0f;	//lower slightly so shadows go under ground.
 
 		//project each box corner to base of object to determine rough extent of shadow
 		//Get vertices of top of bounding box
-		Corners[0]=box.Center+box.Extent;	//top right corner
+		Corners[0]=legacy_center+legacy_extent;	//top right corner
 		Corners[1]=Corners[0];
-		Corners[1].X -= 2.0f*box.Extent.X;		//top left corner
+		Corners[1].x -= 2.0f*legacy_extent.x;		//top left corner
 		Corners[2]=Corners[1];
-		Corners[2].Y -= 2.0f*box.Extent.Y;		//bottom left corner
+		Corners[2].y -= 2.0f*legacy_extent.y;		//bottom left corner
 		Corners[3]=Corners[2];
-		Corners[3].X += 2.0f*box.Extent.X;		//bottom right corner
+		Corners[3].x += 2.0f*legacy_extent.x;		//bottom right corner
 
 		//Project top volume corners onto ground plane
 		lightRay = Corners[0] - lightPos;	//vector light to corner
 		length= 1.0f/lightRay.Length();
 		lightRay *= length;
-		vectorScaleMax=vectorScale=(Real)fabs((Corners[0].Z-floorZ)/lightRay.Z);	//length of vector from top corner to ground.
+		vectorScaleMax=vectorScale=(Real)fabs((Corners[0].z-floorZ)/lightRay.z);	//length of vector from top corner to ground.
 		Corners[4]=Corners[0]+lightRay*vectorScale;
 		vectorScaleMax *= length;
 
 		lightRay = Corners[1] - lightPos;	//vector light to corner
 		length= 1.0f/lightRay.Length();
 		lightRay *= length;
-		vectorScaleTemp=(Real)fabs((Corners[1].Z-floorZ)/lightRay.Z);	//length of vector from top corner to ground.
+		vectorScaleTemp=(Real)fabs((Corners[1].z-floorZ)/lightRay.z);	//length of vector from top corner to ground.
 		Corners[5]=Corners[1]+lightRay*vectorScaleTemp;
 		vectorScaleTemp *= length;
 
@@ -1818,7 +1845,7 @@ void W3DShadowTexture::updateBounds(Vector3 &lightPos, W3DRenderObject *robj)
 		lightRay = Corners[2] - lightPos;	//vector light to corner
 		length= 1.0f/lightRay.Length();
 		lightRay *= length;
-		vectorScale=(Real)fabs((Corners[2].Z-floorZ)/lightRay.Z);	//length of vector from top corner to ground.
+		vectorScale=(Real)fabs((Corners[2].z-floorZ)/lightRay.z);	//length of vector from top corner to ground.
 		Corners[6]=Corners[2]+lightRay*vectorScale;
 		vectorScale *= length;
 
@@ -1828,18 +1855,21 @@ void W3DShadowTexture::updateBounds(Vector3 &lightPos, W3DRenderObject *robj)
 		lightRay = Corners[3] - lightPos;	//vector light to corner
 		length= 1.0f/lightRay.Length();
 		lightRay *= length;
-		vectorScaleTemp=(Real)fabs((Corners[3].Z-floorZ)/lightRay.Z);	//length of vector from top corner to ground.
+		vectorScaleTemp=(Real)fabs((Corners[3].z-floorZ)/lightRay.z);	//length of vector from top corner to ground.
 		Corners[7]=Corners[3]+lightRay*vectorScaleTemp;
 		vectorScaleTemp *= length;
 
 		if (vectorScaleTemp > vectorScaleMax)
 			vectorScaleMax=vectorScaleTemp;	//keep track of maximum required extrusion length.
 
-		box.Init(Corners, 8);	//generate a new bounding box to fit the shadow projection
-		m_areaEffectSphere.Init(box.Center,box.Extent.Length());
-
-		m_areaEffectSphere.Center -= objPos;	//translate sphere to object space.
-		box.Translate(-objPos);	//translate box to object space.
+		const Engine::Math::Vector3 first{Corners[0].x, Corners[0].y, Corners[0].z};
+		Engine::Math::AxisAlignedBox3 projected{first, first};
+		for (std::size_t index = 1; index < 8; ++index)
+			projected.Include({Corners[index].x, Corners[index].y, Corners[index].z});
+		m_areaEffectSphere = {projected.Center(), projected.Extent().Length()};
+		const Engine::Math::Vector3 displacement{-objPos.x, -objPos.y, -objPos.z};
+		m_areaEffectSphere.center = m_areaEffectSphere.center + displacement;
+		box = {projected.minimum + displacement, projected.maximum + displacement};
 }
 
 W3DShadowTextureManager::W3DShadowTextureManager()
@@ -1893,7 +1923,7 @@ W3DShadowTexture * W3DShadowTextureManager::getTexture(const char * name)
 /** Add texture to cache */
 Bool W3DShadowTextureManager::addTexture(W3DShadowTexture *newTexture)
 {
-	WWASSERT (newTexture != nullptr);
+	engine::debug::assert_condition((newTexture != nullptr), "newTexture != nullptr", __FILE__, __LINE__, "assertion failed");
 
 	// Increment the refcount on the new texture and add it to our table.
 	newTexture->Add_Ref ();
@@ -1905,7 +1935,7 @@ Bool W3DShadowTextureManager::addTexture(W3DShadowTexture *newTexture)
 void W3DShadowTextureManager::invalidateCachedLightPositions()
 {
 	// step through each of our shadow textures and update previous light position.
-	Vector3 idVec(0,0,0);
+	Engine::Math::Vector3 idVec(0,0,0);
 
 	W3DShadowTextureManagerIterator it( *this );
 	for( it.First(); !it.Is_Done(); it.Next() )

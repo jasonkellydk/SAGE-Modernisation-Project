@@ -27,7 +27,8 @@
 // Author: John Ahlquist, Nov. 2001
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/GameEngine.h"
 #include "Common/MapObject.h"
@@ -169,7 +170,7 @@ parameter so we don't have to do a name search.  May return null if the player d
 //-------------------------------------------------------------------------------------------------
 Player *ScriptConditions::playerFromParam(Parameter *pSideParm)
 {
-	DEBUG_ASSERTCRASH(Parameter::SIDE == pSideParm->getParameterType(), ("Wrong parameter type."));
+	engine::debug::invariant((Parameter::SIDE == pSideParm->getParameterType()), "Parameter::SIDE == pSideParm->getParameterType()", __FILE__, __LINE__, "Wrong parameter type.");
 	Player *pPlayer=nullptr;
 	UnsignedInt mask = (UnsignedInt)pSideParm->getInt();
 	if (mask) {
@@ -186,7 +187,7 @@ Player *ScriptConditions::playerFromParam(Parameter *pSideParm)
 		}
 		pSideParm->friend_setInt((Int)mask);
 	}
-	DEBUG_ASSERTCRASH(pPlayer, ("Couldn't find player %s", pSideParm->getString().str()));
+	engine::debug::invariant((pPlayer), "pPlayer", __FILE__, __LINE__, "Couldn't find player %s", pSideParm->getString().str());
 	return pPlayer;
 }
 
@@ -1000,7 +1001,7 @@ Bool ScriptConditions::evaluateBuildingEntered( Parameter *pPlayerParm, Paramete
 	ContainModuleInterface *contain = theObj->getContain();
 	if( !contain )
 	{
-		DEBUG_CRASH( ("evaluateBuildingEntered script condition -- building doesn't have a container.") );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "evaluateBuildingEntered script condition -- building doesn't have a container.");
 		return false;
 	}
 	PlayerMaskType playerMask = theObj->getContain()->getPlayerWhoEntered();
@@ -1068,7 +1069,7 @@ Bool ScriptConditions::evaluateEnemySighted(Parameter *pItemParm, Parameter *pAl
 			relationDescriber = PartitionFilterRelationship::ALLOW_ENEMIES;
 			break;
 		default:
-			DEBUG_CRASH(("Unhandled case in ScriptConditions::evaluateEnemySighted()"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unhandled case in ScriptConditions::evaluateEnemySighted()");
 			relationDescriber = 0;
 			break;
 	}
@@ -1835,7 +1836,7 @@ Bool ScriptConditions::evaluatePlayerUnitCondition(Condition *pCondition, Parame
 			comparison = (count != pCountParm->getInt());
 			break;
 		default:
-			DEBUG_CRASH(("ScriptConditions::evaluatePlayerUnitCondition: Invalid comparison type. (jkmcd)"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "ScriptConditions::evaluatePlayerUnitCondition: Invalid comparison type. (jkmcd)");
 			break;
 	}
 	pCondition->setCustomData(-1); // false.
@@ -2179,7 +2180,7 @@ Bool ScriptConditions::evaluateSkirmishValueInArea(Condition *pCondition, Parame
 		case Parameter::GREATER :				comparison = (totalCost > pMoneyParm->getInt()); break;
 		case Parameter::NOT_EQUAL :			comparison = (totalCost != pMoneyParm->getInt()); break;
 		default:
-			DEBUG_CRASH(("ScriptConditions::evaluateSkirmishValueInArea: Invalid comparison type. (jkmcd)"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "ScriptConditions::evaluateSkirmishValueInArea: Invalid comparison type. (jkmcd)");
 			break;
 	}
 	pCondition->setCustomData(-1); // false.
@@ -2366,7 +2367,7 @@ Bool ScriptConditions::evaluateSkirmishUnownedFactionUnitComparison( Parameter *
 		case Parameter::NOT_EQUAL			:	return numFactionUnits != pCountParm->getInt();	break;
 	}
 
-	DEBUG_CRASH(("ScriptConditions::evaluateSkirmishUnownedFactionUnitComparison: Invalid comparison type. (jkmcd)"));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "ScriptConditions::evaluateSkirmishUnownedFactionUnitComparison: Invalid comparison type. (jkmcd)");
 	return FALSE;
 }
 
@@ -2431,7 +2432,7 @@ Bool ScriptConditions::evaluateSkirmishPlayerHasComparisonGarrisoned(Parameter *
 		case Parameter::NOT_EQUAL			:	return numGarrisonedBuildings != pCountParm->getInt();	break;
 	}
 
-	DEBUG_CRASH(("ScriptConditions::evaluateSkirmishPlayerHasComparisonGarrisoned: Invalid comparison type. (jkmcd)"));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "ScriptConditions::evaluateSkirmishPlayerHasComparisonGarrisoned: Invalid comparison type. (jkmcd)");
 	return FALSE;
 }
 
@@ -2477,7 +2478,7 @@ Bool ScriptConditions::evaluateSkirmishPlayerHasComparisonCapturedUnits(Paramete
 		case Parameter::NOT_EQUAL			:	return numCapturedUnits != pCountParm->getInt();	break;
 	}
 
-	DEBUG_CRASH(("ScriptConditions::evaluateSkirmishPlayerHasComparisonCapturedUnits: Invalid comparison type. (jkmcd)"));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "ScriptConditions::evaluateSkirmishPlayerHasComparisonCapturedUnits: Invalid comparison type. (jkmcd)");
 	return FALSE;
 }
 
@@ -2725,7 +2726,7 @@ Bool ScriptConditions::evaluateCondition( Condition *pCondition )
 {
 	switch (pCondition->getConditionType()) {
 		default:
-			DEBUG_CRASH(("Unknown ScriptCondition type %d", pCondition->getConditionType()));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unknown ScriptCondition type %d", pCondition->getConditionType());
 			return false;
 		case Condition::PLAYER_ALL_DESTROYED:
 			return evaluateAllDestroyed(pCondition->getParameter(0));
@@ -2788,7 +2789,7 @@ Bool ScriptConditions::evaluateCondition( Condition *pCondition )
 		case Condition::ENEMY_SIGHTED:
 		{
 			Int numParameters = pCondition->getNumParameters();
-			DEBUG_ASSERTCRASH(numParameters == 3, ("'Condition: [Unit] Unit has sighted a(n) friendly/neutral/enemy unit belonging to a side.' has too few parameters. Please fix in WB. (jkmcd)"));
+			engine::debug::invariant((numParameters == 3), "numParameters == 3", __FILE__, __LINE__, "'Condition: [Unit] Unit has sighted a(n) friendly/neutral/enemy unit belonging to a side.' has too few parameters. Please fix in WB. (jkmcd)");
 
 			if (numParameters < 3) {
 				return false;
@@ -2868,7 +2869,7 @@ Bool ScriptConditions::evaluateCondition( Condition *pCondition )
 			return evaluateNamedHasFreeContainerSlots(pCondition->getParameter(0));
 		case Condition::DEFUNCT_PLAYER_SELECTED_GENERAL:
 		case Condition::DEFUNCT_PLAYER_SELECTED_GENERAL_FROM_NAMED:
-			DEBUG_CRASH(("PLAYER_SELECTED_GENERAL script conditions are no longer in use"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "PLAYER_SELECTED_GENERAL script conditions are no longer in use");
 			return false;
 		case Condition::PLAYER_BUILT_UPGRADE:
 			return evaluateUpgradeFromUnitComplete(pCondition->getParameter(0), pCondition->getParameter(1), nullptr);
@@ -2881,7 +2882,7 @@ Bool ScriptConditions::evaluateCondition( Condition *pCondition )
 		case Condition::PLAYER_HAS_COMPARISON_UNIT_TYPE_IN_TRIGGER_AREA:
 		{
 			Int numParameters = pCondition->getNumParameters();
-			DEBUG_ASSERTCRASH(numParameters == 5, ("'Condition: [Player] has (comparison) unit type in an area' has too few parameters. Please fix in WB. (jkmcd)"));
+			engine::debug::invariant((numParameters == 5), "numParameters == 5", __FILE__, __LINE__, "'Condition: [Player] has (comparison) unit type in an area' has too few parameters. Please fix in WB. (jkmcd)");
 
 			if (numParameters < 5) {
 				return false;
@@ -2892,7 +2893,7 @@ Bool ScriptConditions::evaluateCondition( Condition *pCondition )
 		case Condition::PLAYER_HAS_COMPARISON_UNIT_KIND_IN_TRIGGER_AREA:
 		{
 			Int numParameters = pCondition->getNumParameters();
-			DEBUG_ASSERTCRASH(numParameters == 5, ("'Condition: [Player] has (comparison) kind of unit or structure in an area' has too few parameters. Please fix in WB. (jkmcd)"));
+			engine::debug::invariant((numParameters == 5), "numParameters == 5", __FILE__, __LINE__, "'Condition: [Player] has (comparison) kind of unit or structure in an area' has too few parameters. Please fix in WB. (jkmcd)");
 
 			if (numParameters < 5) {
 				return false;

@@ -23,6 +23,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 
 #include "PreRTS.h"
+import engine.debug;
 
 #include "GameLogic/Damage.h"
 #include "GameLogic/Module/ContainModule.h"
@@ -169,9 +170,9 @@ extern Bool contextCommandForNewSelection(const DrawableList *currentlySelectedD
 		}
 	}
 
-	DEBUG_ASSERTCRASH(outSelectionInfo->currentCountEnemies <= 1, ("Selection bug. jkmcd"));
-	DEBUG_ASSERTCRASH(outSelectionInfo->currentCountFriends <= 1, ("Selection bug. jkmcd"));
-	DEBUG_ASSERTCRASH(outSelectionInfo->currentCountCivilians <= 1, ("Selection bug. jkmcd"));
+	engine::debug::invariant((outSelectionInfo->currentCountEnemies <= 1), "outSelectionInfo->currentCountEnemies <= 1", __FILE__, __LINE__, "Selection bug. jkmcd");
+	engine::debug::invariant((outSelectionInfo->currentCountFriends <= 1), "outSelectionInfo->currentCountFriends <= 1", __FILE__, __LINE__, "Selection bug. jkmcd");
+	engine::debug::invariant((outSelectionInfo->currentCountCivilians <= 1), "outSelectionInfo->currentCountCivilians <= 1", __FILE__, __LINE__, "Selection bug. jkmcd");
 
 	if (outSelectionInfo->currentCountEnemies > 0) {
 		// If we have an enemy selected, there are no context sensitive commands

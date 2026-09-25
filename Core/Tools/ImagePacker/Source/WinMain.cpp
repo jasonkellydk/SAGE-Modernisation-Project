@@ -44,7 +44,7 @@
 // USER INCLUDES //////////////////////////////////////////////////////////////
 #include "Lib/BaseType.h"
 #include "Common/GameMemory.h"
-#include "Common/Debug.h"
+
 #include "ImagePacker.h"
 #include "Resource.h"
 #include "WindowProc.h"

@@ -28,7 +28,10 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // USER INCLUDES //////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
+import Engine.Core.Math.AffineTransform3;
+#include "Common/LegacyTransformMath.h"
 
 #include "Common/GameAudio.h"
 #include "Common/GlobalData.h"
@@ -242,7 +245,7 @@ void HelicopterSlowDeathBehavior::beginSlowDeath( const DamageInfo *damageInfo )
 			{
 				Coord3D pos;
 
-				if( draw->getPristineBonePositions( modData->m_attachParticleBone.str(), 0, &pos, nullptr, 1 ) )
+				if( draw->getPristineBonePositions( modData->m_attachParticleBone.str(), 0, &pos, 1 ) )
 					pSys->setPosition( &pos );
 
 			}
@@ -297,9 +300,9 @@ UpdateSleepTime HelicopterSlowDeathBehavior::update()
 
 		//copter->setOrientation( copter->getOrientation() + m_selfSpin * m_orbitDirection );
 
-		Matrix3D xfrm = *copter->getTransformMatrix();
-		xfrm.In_Place_Pre_Rotate_Z(m_selfSpin * m_orbitDirection);
-		copter->setTransformMatrix( &xfrm );
+		Engine::Math::AffineTransform3 transform = copter->worldTransform();
+		Legacy_In_Place_Pre_Rotate_Z(transform, m_selfSpin * m_orbitDirection);
+		copter->setWorldTransform(transform);
 
 		//
 		// over time we change the rate at which we self spin around our center of gravity ... we
@@ -346,8 +349,8 @@ UpdateSleepTime HelicopterSlowDeathBehavior::update()
 
 		// get the physics update module
 		PhysicsBehavior *physics = copter->getPhysics();
-		DEBUG_ASSERTCRASH( physics, ("HelicopterSlowDeathBehavior: object '%s' does not have a physics module",
-																 copter->getTemplate()->getName().str()) );
+		engine::debug::invariant((physics), "physics", __FILE__, __LINE__, "HelicopterSlowDeathBehavior: object '%s' does not have a physics module",
+																 copter->getTemplate()->getName().str());
 
 		//
 		// apply a force to the helicopter pushing it in a forward motion	according to the
@@ -380,8 +383,8 @@ UpdateSleepTime HelicopterSlowDeathBehavior::update()
 				if( draw )
 				{
 
-					draw->getPristineBonePositions( modData->m_bladeBone.str(), 0, &bladePos, nullptr, 1 );
-					draw->convertBonePosToWorldPos( &bladePos, nullptr, &bladePos, nullptr );
+					draw->getPristineBonePositions( modData->m_bladeBone.str(), 0, &bladePos, 1 );
+					draw->transformBoneToWorld( &bladePos, nullptr, &bladePos, nullptr );
 
 				}
 
@@ -476,7 +479,7 @@ UpdateSleepTime HelicopterSlowDeathBehavior::update()
 		if( rubble )
 		{
 
-			rubble->setTransformMatrix( copter->getTransformMatrix() );
+			rubble->setWorldTransform(copter->worldTransform());
 
 		}
 

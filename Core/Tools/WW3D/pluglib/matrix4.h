@@ -54,6 +54,7 @@
 
 #pragma once
 
+#include <cmath>
 #include "always.h"
 #include "vector4.h"
 #include "matrix3d.h"
@@ -469,7 +470,7 @@ inline Matrix4 Matrix4::Inverse() const    // Gauss-Jordan elimination with part
 		// Find largest pivot in column j among rows j..3
 		i1 = j;
 		for (i=j+1; i<4; i++) {
-			if (WWMath::Fabs(a[i][j]) > WWMath::Fabs(a[i1][j])) {
+			if (std::fabs(a[i][j]) > std::fabs(a[i1][j])) {
 				i1 = i;
 			}
 		}

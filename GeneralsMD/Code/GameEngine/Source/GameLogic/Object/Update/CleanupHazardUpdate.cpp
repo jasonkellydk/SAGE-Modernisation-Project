@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #define DEFINE_WEAPONSLOTTYPE_NAMES
 
@@ -103,8 +104,8 @@ void CleanupHazardUpdate::onObjectCreated()
 	Weapon *weapon = self->getWeaponInWeaponSlot( data->m_weaponSlot );
 	if( !weapon )
 	{
-		DEBUG_CRASH( ("CleanupHazardUpdate for %s doesn't have a valid weapon template",
-			getObject()->getTemplate()->getName().str() ) );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "CleanupHazardUpdate for %s doesn't have a valid weapon template",
+			getObject()->getTemplate()->getName().str() );
 		return;
 	}
 	m_weaponTemplate = weapon->getTemplate();
@@ -115,8 +116,8 @@ void CleanupHazardUpdate::onObjectCreated()
 	Real attackRange = m_weaponTemplate->getAttackRange( bonus );
 	if( data->m_scanRange <= attackRange )
 	{
-		DEBUG_CRASH( ("CleanupHazardUpdate for %s requires the scan range (%.1f) being larger than the firing range (%.1f)",
-			getObject()->getTemplate()->getName().str(), data->m_scanRange, attackRange ) );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "CleanupHazardUpdate for %s requires the scan range (%.1f) being larger than the firing range (%.1f)",
+			getObject()->getTemplate()->getName().str(), data->m_scanRange, attackRange );
 	}
 }
 

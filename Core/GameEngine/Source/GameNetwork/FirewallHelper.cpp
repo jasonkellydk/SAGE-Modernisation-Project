@@ -46,7 +46,8 @@
  * Functions:                                                                                  *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/crc.h"
 #include "Common/OptionPreferences.h"
@@ -191,7 +192,7 @@ Bool FirewallHelperClass::detectFirewall()
 
 		return FALSE;
 	} else {
-		DEBUG_LOG(("FirewallHelperClass::detectFirewall - firewall behavior already specified as %d, port allocation delta is %d, skipping detection.", TheWritableGlobalData->m_firewallBehavior, TheWritableGlobalData->m_firewallPortAllocationDelta));
+		engine::debug::log_info("FirewallHelperClass::detectFirewall - firewall behavior already specified as %d, port allocation delta is %d, skipping detection.", TheWritableGlobalData->m_firewallBehavior, TheWritableGlobalData->m_firewallPortAllocationDelta);
 	}
 
 	return TRUE;
@@ -280,7 +281,7 @@ UnsignedShort FirewallHelperClass::getNextTemporarySourcePort(Int skip)
 			closeSpareSocket(return_port);
 			return(return_port);
 		} else {
-			DEBUG_LOG(("FirewallHelperClass::getNextTemporarySourcePort - failed to open socket on port %d", return_port));
+			engine::debug::log_info("FirewallHelperClass::getNextTemporarySourcePort - failed to open socket on port %d", return_port);
 		}
 	}
 
@@ -309,8 +310,8 @@ UnsignedShort FirewallHelperClass::getNextTemporarySourcePort(Int skip)
  *=============================================================================================*/
 Bool FirewallHelperClass::sendToManglerFromPort(UnsignedInt address, UnsignedShort port, UnsignedShort packetID, Bool blitzme)
 {
-	DEBUG_LOG(("sizeof(ManglerMessage) == %d, sizeof(ManglerData) == %d",
-		sizeof(ManglerMessage), sizeof(ManglerData)));
+	engine::debug::log_info("sizeof(ManglerMessage) == %d, sizeof(ManglerData) == %d",
+		sizeof(ManglerMessage), sizeof(ManglerData));
 
 	/*
 	** Build the packet to send out.
@@ -327,19 +328,19 @@ Bool FirewallHelperClass::sendToManglerFromPort(UnsignedInt address, UnsignedSho
 	packet.data.magic = GENERALS_MAGIC_NUMBER;
 	packet.data.OriginalPortNumber = port;
 /*
-	DEBUG_LOG_RAW(("Pre-Adjust Buffer = "));
+	engine::debug::log_info("Pre-Adjust Buffer = ");
 	for (Int i = 0; i < sizeof(ManglerData); ++i) {
-		DEBUG_LOG_RAW(("%02x", *(((unsigned char *)(&(packet.data))) + i)));
+		engine::debug::log_info("%02x", *(((unsigned char *)(&(packet.data))) + i));
 	}
-	DEBUG_LOG_RAW(("\n"));
+	engine::debug::log_info("\n");
 */
 	byteAdjust(&(packet.data));
 /*
-	DEBUG_LOG_RAW(("Pre-CRC Buffer = "));
+	engine::debug::log_info("Pre-CRC Buffer = ");
 	for (i = 0; i < sizeof(ManglerData); ++i) {
-		DEBUG_LOG_RAW(("%02x", *(((unsigned char *)(&(packet.data))) + i)));
+		engine::debug::log_info("%02x", *(((unsigned char *)(&(packet.data))) + i));
 	}
-	DEBUG_LOG_RAW(("\n"));
+	engine::debug::log_info("\n");
 */
 	CRC crc;
 	crc.computeCRC((unsigned char *)(&(packet.data.magic)), sizeof(ManglerData) - sizeof(unsigned int));
@@ -347,22 +348,22 @@ Bool FirewallHelperClass::sendToManglerFromPort(UnsignedInt address, UnsignedSho
 
 	packet.length = sizeof(ManglerData);
 
-	DEBUG_LOG(("FirewallHelperClass::sendToManglerFromPort - Sending from port %d to %d.%d.%d.%d:%d", (UnsignedInt)port,
-		PRINTF_IP_AS_4_INTS(address), MANGLER_PORT));
+	engine::debug::log_info("FirewallHelperClass::sendToManglerFromPort - Sending from port %d to %d.%d.%d.%d:%d", (UnsignedInt)port,
+		PRINTF_IP_AS_4_INTS(address), MANGLER_PORT);
 /*
-	DEBUG_LOG_RAW(("Buffer = "));
+	engine::debug::log_info("Buffer = ");
 	for (i = 0; i < sizeof(ManglerData); ++i) {
-		DEBUG_LOG_RAW(("%02x", *(((unsigned char *)(&(packet.data))) + i)));
+		engine::debug::log_info("%02x", *(((unsigned char *)(&(packet.data))) + i));
 	}
-	DEBUG_LOG_RAW(("\n"));
+	engine::debug::log_info("\n");
 */
 	SpareSocketStruct *spareSocket = findSpareSocketByPort(port);
-//	DEBUG_LOG(("PacketID = %u", packetID));
-//	DEBUG_LOG(("OriginalPortNumber = %u", port));
+//	engine::debug::log_info("PacketID = %u", packetID);
+//	engine::debug::log_info("OriginalPortNumber = %u", port);
 
 	if (spareSocket == nullptr) {
-		DEBUG_ASSERTCRASH(spareSocket != nullptr, ("Could not find spare socket for send."));
-		DEBUG_LOG(("FirewallHelperClass::sendToManglerFromPort - failed to find the spare socket for port %d", port));
+		engine::debug::invariant((spareSocket != nullptr), "spareSocket != nullptr", __FILE__, __LINE__, "Could not find spare socket for send.");
+		engine::debug::log_info("FirewallHelperClass::sendToManglerFromPort - failed to find the spare socket for port %d", port);
 		return FALSE;
 	}
 
@@ -373,15 +374,15 @@ Bool FirewallHelperClass::sendToManglerFromPort(UnsignedInt address, UnsignedSho
 
 
 SpareSocketStruct * FirewallHelperClass::findSpareSocketByPort(UnsignedShort port) {
-	DEBUG_LOG(("FirewallHelperClass::findSpareSocketByPort - trying to find spare socket with port %d", port));
+	engine::debug::log_info("FirewallHelperClass::findSpareSocketByPort - trying to find spare socket with port %d", port);
 	for (Int i = 0; i < MAX_SPARE_SOCKETS; ++i) {
 		if (m_spareSockets[i].port == port) {
-			DEBUG_LOG(("FirewallHelperClass::findSpareSocketByPort - found it!"));
+			engine::debug::log_info("FirewallHelperClass::findSpareSocketByPort - found it!");
 			return &(m_spareSockets[i]);
 		}
 	}
 
-	DEBUG_LOG(("FirewallHelperClass::findSpareSocketByPort - didn't find it"));
+	engine::debug::log_info("FirewallHelperClass::findSpareSocketByPort - didn't find it");
 	return nullptr;
 }
 
@@ -440,20 +441,20 @@ UnsignedShort FirewallHelperClass::getManglerResponse(UnsignedShort packetID, In
 				CRC crc;
 				crc.computeCRC((unsigned char *)(&(message->data.magic)), sizeof(ManglerData) - sizeof(unsigned int));
 				if (crc.get() != htonl(message->data.CRC)) {
-					DEBUG_LOG(("FirewallHelperClass::getManglerResponse - Saw message, CRC mismatch.  Expected CRC %u, computed CRC %u", message->data.CRC, crc.get()));
+					engine::debug::log_info("FirewallHelperClass::getManglerResponse - Saw message, CRC mismatch.  Expected CRC %u, computed CRC %u", message->data.CRC, crc.get());
 					continue;
 				}
 				byteAdjust(&(message->data));
 				message->length = retval;
-				DEBUG_LOG(("FirewallHelperClass::getManglerResponse - Saw message of %d bytes from mangler %d on port %u", retval, i, m_spareSockets[i].port));
-				DEBUG_LOG(("FirewallHelperClass::getManglerResponse - Message has packet ID %d 0x%08X, looking for packet id %d 0x%08X", message->data.PacketID, message->data.PacketID, packetID, packetID));
+				engine::debug::log_info("FirewallHelperClass::getManglerResponse - Saw message of %d bytes from mangler %d on port %u", retval, i, m_spareSockets[i].port);
+				engine::debug::log_info("FirewallHelperClass::getManglerResponse - Message has packet ID %d 0x%08X, looking for packet id %d 0x%08X", message->data.PacketID, message->data.PacketID, packetID, packetID);
 				if (message->data.PacketID == packetID) {
-					DEBUG_LOG(("FirewallHelperClass::getManglerResponse - packet ID's match, returning message"));
+					engine::debug::log_info("FirewallHelperClass::getManglerResponse - packet ID's match, returning message");
 					msg = message;
 					message->length = 0;
 				}
 				if (ntohs(message->data.PacketID) == packetID) {
-					DEBUG_LOG(("FirewallHelperClass::getManglerResponse - NETWORK BYTE ORDER packet ID's match, returning message"));
+					engine::debug::log_info("FirewallHelperClass::getManglerResponse - NETWORK BYTE ORDER packet ID's match, returning message");
 					msg = message;
 					message->length = 0;
 				}
@@ -476,7 +477,7 @@ UnsignedShort FirewallHelperClass::getManglerResponse(UnsignedShort packetID, In
 	}
 
 	UnsignedShort mangled_port = msg->data.MyMangledPortNumber;
-	DEBUG_LOG(("Mangler is seeing packets from port %d as coming from port %d", (UnsignedInt)msg->data.OriginalPortNumber, (UnsignedInt)mangled_port));
+	engine::debug::log_info("Mangler is seeing packets from port %d as coming from port %d", (UnsignedInt)msg->data.OriginalPortNumber, (UnsignedInt)mangled_port);
 	return mangled_port;
 }
 
@@ -624,7 +625,7 @@ Bool FirewallHelperClass::detectionBeginUpdate() {
 	*/
 	if (TheWritableGlobalData->m_firewallPortOverride != 0) {
 		m_behavior = FIREWALL_TYPE_SIMPLE;
-		DEBUG_LOG(("Source port %d specified by user", TheGlobalData->m_firewallPortOverride));
+		engine::debug::log_info("Source port %d specified by user", TheGlobalData->m_firewallPortOverride);
 
 		m_currentState = DETECTIONSTATE_DONE;
 		return TRUE;
@@ -634,7 +635,7 @@ Bool FirewallHelperClass::detectionBeginUpdate() {
 
 	m_timeoutStart = timeGetTime();
 	m_timeoutLength = 5000;
-	DEBUG_LOG(("About to call gethostbyname for the mangler address"));
+	engine::debug::log_info("About to call gethostbyname for the mangler address");
 	int namenum = 0;
 
 	do {
@@ -642,7 +643,7 @@ Bool FirewallHelperClass::detectionBeginUpdate() {
 		UnsignedShort port;
 		TheGameSpyConfig->getManglerLocation(namenum, host, port);
 		const char *mangler_name_ptr = host.str();
-		DEBUG_LOG(("Looking at %s:%d", host.str(), port));
+		engine::debug::log_info("Looking at %s:%d", host.str(), port);
 
 		/*
 		** Use the wolapi supplied mangler info if available.
@@ -651,7 +652,7 @@ Bool FirewallHelperClass::detectionBeginUpdate() {
 //			mangler_name_ptr = &ManglerServerAddress[namenum][0];
 //			mangler_port = ManglerServerPort[namenum];
 			//current_mangler = CurrentManglerServer;
-//			DEBUG_LOG(("Using mangler from servserv"));
+//			engine::debug::log_info("Using mangler from servserv");
 //		}
 		namenum++;
 
@@ -665,7 +666,7 @@ Bool FirewallHelperClass::detectionBeginUpdate() {
 		struct hostent *host_info = gethostbyname(mangler_name_ptr);
 
 		if (!host_info) {
-			DEBUG_LOG(("gethostbyname failed! Error code %d", WSAGetLastError()));
+			engine::debug::log_info("gethostbyname failed! Error code %d", WSAGetLastError());
 			break;
 		}
 
@@ -686,13 +687,13 @@ Bool FirewallHelperClass::detectionBeginUpdate() {
 			Int m = m_numManglers++;
 			memcpy(&mangler_addresses[m][0], &host_info->h_addr_list[0][0], 4);
 			ntohl((UnsignedInt)mangler_addresses[m]);
-			DEBUG_LOG(("Found mangler address at %d.%d.%d.%d", mangler_addresses[m][0], mangler_addresses[m][1], mangler_addresses[m][2], mangler_addresses[m][3]));
+			engine::debug::log_info("Found mangler address at %d.%d.%d.%d", mangler_addresses[m][0], mangler_addresses[m][1], mangler_addresses[m][2], mangler_addresses[m][3]);
 		}
 
 	} while ((m_numManglers < MAX_NUM_MANGLERS) && ((timeGetTime() - m_timeoutStart) < m_timeoutLength));
 
 
-	DEBUG_ASSERTCRASH(m_numManglers > 2, ("not enough mangler addresses found."));
+	engine::debug::invariant((m_numManglers > 2), "m_numManglers > 2", __FILE__, __LINE__, "not enough mangler addresses found.");
 	if (m_numManglers < 3) {
 		m_currentState = DETECTIONSTATE_DONE;
 		return TRUE;
@@ -717,7 +718,7 @@ Bool FirewallHelperClass::detectionBeginUpdate() {
 	**
 	*/
 
-	DEBUG_LOG(("About to start mangler test 1"));
+	engine::debug::log_info("About to start mangler test 1");
 	/*
 	** Get a spare port number and create a new socket to bind it to.
 	*/
@@ -749,16 +750,16 @@ Bool FirewallHelperClass::detectionTest1Update() {
 	if (m_mangledPorts[0] == 0 || m_mangledPorts[0] == m_sparePorts[0]) {
 		if (m_mangledPorts[0] == m_sparePorts[0]) {
 			m_sourcePortAllocationDelta = 0;
-			DEBUG_LOG(("FirewallHelperClass::detectionTest1Update - Non-mangled response from mangler, quitting test."));
+			engine::debug::log_info("FirewallHelperClass::detectionTest1Update - Non-mangled response from mangler, quitting test.");
 		}
 		if ((m_mangledPorts[0] == 0) && ((timeGetTime() - m_timeoutStart) < m_timeoutLength)) {
 			// we are still waiting for a response and haven't timed out yet.
-			DEBUG_LOG(("FirewallHelperClass::detectionTest1Update - waiting for response from mangler."));
+			engine::debug::log_info("FirewallHelperClass::detectionTest1Update - waiting for response from mangler.");
 			return FALSE;
 		}
 		if ((m_mangledPorts[0] == 0) && ((timeGetTime() - m_timeoutStart) >= m_timeoutLength)) {
 			// we are still waiting for a response and we timed out.
-			DEBUG_LOG(("FirewallHelperClass::detectionTest1Update - timed out waiting for response from mangler."));
+			engine::debug::log_info("FirewallHelperClass::detectionTest1Update - timed out waiting for response from mangler.");
 		}
 		// either we have received a non-mangled response or we timed out waiting for a response.
 		closeSpareSocket(m_sparePorts[0]);
@@ -767,7 +768,7 @@ Bool FirewallHelperClass::detectionTest1Update() {
 		return TRUE;
 	}
 
-	DEBUG_LOG(("FirewallHelperClass::detectionTest1Update - test 1 complete"));
+	engine::debug::log_info("FirewallHelperClass::detectionTest1Update - test 1 complete");
 	/*
 	** Test one completed, time to start up the second test.
 	**
@@ -797,7 +798,7 @@ Bool FirewallHelperClass::detectionTest2Update() {
 		if ((timeGetTime() - m_timeoutStart) <= m_timeoutLength) {
 			return FALSE;
 		}
-		DEBUG_LOG(("FirewallHelperClass::detectionTest2Update - timed out waiting for mangler response"));
+		engine::debug::log_info("FirewallHelperClass::detectionTest2Update - timed out waiting for mangler response");
 		m_currentState = DETECTIONSTATE_DONE;
 		return TRUE;
 	}
@@ -817,21 +818,21 @@ Bool FirewallHelperClass::detectionTest2Update() {
 		m_behavior = (FirewallBehaviorType)addBehavior;
 
 		if (m_mangledPorts[1] == 0) {
-			DEBUG_LOG(("FirewallHelperClass::detectionTest2Update - got no response from mangler"));
+			engine::debug::log_info("FirewallHelperClass::detectionTest2Update - got no response from mangler");
 		} else {
-			DEBUG_LOG(("FirewallHelperClass::detectionTest2Update - got a mangler response, no port mangling"));
+			engine::debug::log_info("FirewallHelperClass::detectionTest2Update - got a mangler response, no port mangling");
 		}
-		DEBUG_LOG(("FirewallHelperClass::detectionTest2Update - Setting behavior to SIMPLE, done testing"));
+		engine::debug::log_info("FirewallHelperClass::detectionTest2Update - Setting behavior to SIMPLE, done testing");
 		return TRUE;
 	}
 
 	if (m_mangledPorts[0] == m_mangledPorts[1]) {
-		DEBUG_LOG(("FirewallHelperClass::detectionTest2Update - port mangling doesn't depend on destination IP, setting to DUMB_MANGLING"));
+		engine::debug::log_info("FirewallHelperClass::detectionTest2Update - port mangling doesn't depend on destination IP, setting to DUMB_MANGLING");
 		UnsignedInt addBehavior = (UnsignedInt)FIREWALL_TYPE_DUMB_MANGLING;
 		addBehavior |= (UnsignedInt)m_behavior;
 		m_behavior = (FirewallBehaviorType)addBehavior;
 	} else {
-		DEBUG_LOG(("FirewallHelperClass::detectionTest2Update - port mangling depends on destination IP, setting to SMART_MANGLING"));
+		engine::debug::log_info("FirewallHelperClass::detectionTest2Update - port mangling depends on destination IP, setting to SMART_MANGLING");
 		UnsignedInt addBehavior = (UnsignedInt)FIREWALL_TYPE_SMART_MANGLING;
 		addBehavior |= (UnsignedInt)m_behavior;
 		m_behavior = (FirewallBehaviorType)addBehavior;
@@ -851,7 +852,7 @@ Bool FirewallHelperClass::detectionTest2Update() {
 	m_currentTry = 0;
 	m_packetID = m_packetID + 10;
 
-	DEBUG_LOG(("FirewallHelperClass::detectionTest2Update - moving on to 3rd test"));
+	engine::debug::log_info("FirewallHelperClass::detectionTest2Update - moving on to 3rd test");
 
 	m_currentState = DETECTIONSTATE_TEST3;
 	return FALSE;
@@ -883,7 +884,7 @@ Bool FirewallHelperClass::detectionTest3Update() {
 						closeSpareSocket(m_sparePorts[j]);
 					}
 				}
-				DEBUG_LOG(("FirewallHelperClass::detectionTest3Update - Failed to open all the spare sockets, bailing test"));
+				engine::debug::log_info("FirewallHelperClass::detectionTest3Update - Failed to open all the spare sockets, bailing test");
 				m_currentState = DETECTIONSTATE_DONE;
 				return TRUE;
 			}
@@ -898,7 +899,7 @@ Bool FirewallHelperClass::detectionTest3Update() {
 		m_timeoutStart = timeGetTime();
 		m_timeoutLength = 12000;
 
-		DEBUG_LOG(("FirewallHelperClass::detectionTest3Update - Sending to %d manglers", NUM_TEST_PORTS));
+		engine::debug::log_info("FirewallHelperClass::detectionTest3Update - Sending to %d manglers", NUM_TEST_PORTS);
 		for (i=0 ; i<NUM_TEST_PORTS ; i++) {
 			if (m_mangledPorts[i] == 0) {
 				sendToManglerFromPort(m_manglers[0], m_sparePorts[i], m_packetID+i);
@@ -908,11 +909,11 @@ Bool FirewallHelperClass::detectionTest3Update() {
 		m_numResponses = 0;
 
 		m_currentState = DETECTIONSTATE_TEST3_WAITFORRESPONSES;
-		DEBUG_LOG(("FirewallHelperClass::detectionTest3Update - Waiting for mangler responses"));
+		engine::debug::log_info("FirewallHelperClass::detectionTest3Update - Waiting for mangler responses");
 		return FALSE;
 	}
 
-	DEBUG_LOG(("FirewallHelperClass::detectionTest3Update - Failed to complete test, quitting"));
+	engine::debug::log_info("FirewallHelperClass::detectionTest3Update - Failed to complete test, quitting");
 	m_currentState = DETECTIONSTATE_DONE;
 	return TRUE;
 }
@@ -938,7 +939,7 @@ Bool FirewallHelperClass::detectionTest3WaitForResponsesUpdate() {
 					closeSpareSocket(m_spareSockets[j].port);
 				}
 			}
-			DEBUG_LOG(("FirewallHelperClass::detectionTest3WaitForResponsesUpdate - timed out waiting, bailing test"));
+			engine::debug::log_info("FirewallHelperClass::detectionTest3WaitForResponsesUpdate - timed out waiting, bailing test");
 			m_currentState = DETECTIONSTATE_DONE;
 			return TRUE;
 		}
@@ -964,7 +965,7 @@ Bool FirewallHelperClass::detectionTest3WaitForResponsesUpdate() {
 			*/
 			m_sourcePortAllocationDelta = m_lastSourcePortAllocationDelta;
 		}
-		DEBUG_LOG(("FirewallHelperClass::detectionTest3WaitForResponsesUpdate - didn't get enough responses, using %d as the source port allocation delta, finished test", m_sourcePortAllocationDelta));
+		engine::debug::log_info("FirewallHelperClass::detectionTest3WaitForResponsesUpdate - didn't get enough responses, using %d as the source port allocation delta, finished test", m_sourcePortAllocationDelta);
 		m_currentState = DETECTIONSTATE_DONE;
 		return TRUE;
 	}
@@ -973,7 +974,7 @@ Bool FirewallHelperClass::detectionTest3WaitForResponsesUpdate() {
 	Bool relative_delta = FALSE;
 	Bool looks_good = FALSE;
 	Int delta = getNATPortAllocationScheme(m_numResponses, m_sparePorts, m_mangledPorts, relative_delta, looks_good);
-	DEBUG_LOG(("FirewallHelperClass::detectionTest3WaitForResponsesUpdate - getNATPortAllocationScheme returned %d", delta));
+	engine::debug::log_info("FirewallHelperClass::detectionTest3WaitForResponsesUpdate - getNATPortAllocationScheme returned %d", delta);
 
 	if (delta) {
 
@@ -982,24 +983,24 @@ Bool FirewallHelperClass::detectionTest3WaitForResponsesUpdate() {
 		*/
 		UnsignedInt addbehavior = 0;
 		if (relative_delta) {
-			DEBUG_LOG(("FirewallHelperClass::detectionTest3WaitForResponsesUpdate - detected RELATIVE PORT ALLOCATION"));
+			engine::debug::log_info("FirewallHelperClass::detectionTest3WaitForResponsesUpdate - detected RELATIVE PORT ALLOCATION");
 			addbehavior = (UnsignedInt)FIREWALL_TYPE_RELATIVE_PORT_ALLOCATION;
 		} else {
-			DEBUG_LOG(("FirewallHelperClass::detectionTest3WaitForResponsesUpdate - detected SIMPLE PORT ALLOCATION"));
+			engine::debug::log_info("FirewallHelperClass::detectionTest3WaitForResponsesUpdate - detected SIMPLE PORT ALLOCATION");
 			addbehavior = (UnsignedInt)FIREWALL_TYPE_SIMPLE_PORT_ALLOCATION;
 		}
 		addbehavior |= (UnsignedInt)m_behavior;
 		m_behavior = (FirewallBehaviorType) addbehavior;
 
 		m_sourcePortAllocationDelta = delta;
-		DEBUG_LOG(("FirewallHelperClass::detectionTest3WaitForResponsesUpdate - setting source port delta to %d", delta));
+		engine::debug::log_info("FirewallHelperClass::detectionTest3WaitForResponsesUpdate - setting source port delta to %d", delta);
 	} else {
-		DEBUG_LOG(("FirewallHelperClass::detectionTest3WaitForResponsesUpdate - didn't get a delta value"));
+		engine::debug::log_info("FirewallHelperClass::detectionTest3WaitForResponsesUpdate - didn't get a delta value");
 		if (m_lastSourcePortAllocationDelta != 0 && (Int)m_lastBehavior > (Int)FIREWALL_TYPE_SIMPLE) {
 			/*
 			** If the delta we got last time we played looks good then use that.
 			*/
-			DEBUG_LOG(("FirewallHelperClass::detectionTest3WaitForResponsesUpdate - using the port allocation delta we have from before which is %d", m_lastSourcePortAllocationDelta));
+			engine::debug::log_info("FirewallHelperClass::detectionTest3WaitForResponsesUpdate - using the port allocation delta we have from before which is %d", m_lastSourcePortAllocationDelta);
 			m_sourcePortAllocationDelta = m_lastSourcePortAllocationDelta;
 		}
 		++m_currentTry;
@@ -1007,7 +1008,7 @@ Bool FirewallHelperClass::detectionTest3WaitForResponsesUpdate() {
 		return FALSE;
 	}
 
-	DEBUG_LOG(("FirewallHelperClass::detectionTest3WaitForResponsesUpdate - starting 4th test"));
+	engine::debug::log_info("FirewallHelperClass::detectionTest3WaitForResponsesUpdate - starting 4th test");
 	/*
 	** Fourth test.
 	**
@@ -1017,7 +1018,7 @@ Bool FirewallHelperClass::detectionTest3WaitForResponsesUpdate() {
 
 		if ((m_behavior & FIREWALL_TYPE_SIMPLE_PORT_ALLOCATION) != 0) {
 
-			DEBUG_LOG(("FirewallHelperClass::detectionTest3WaitForResponsesUpdate - simple port allocation, Testing to see if the NAT mangles differently per destination port at the same IP"));
+			engine::debug::log_info("FirewallHelperClass::detectionTest3WaitForResponsesUpdate - simple port allocation, Testing to see if the NAT mangles differently per destination port at the same IP");
 
 			/*
 			** We need 2 source ports for this.
@@ -1025,7 +1026,7 @@ Bool FirewallHelperClass::detectionTest3WaitForResponsesUpdate() {
 			m_sparePorts[0] = getNextTemporarySourcePort(0);
 			if (!openSpareSocket(m_sparePorts[0])) {
 				m_currentState = DETECTIONSTATE_DONE;
-				DEBUG_LOG(("FirewallHelperClass::detectionTest3WaitForResponsesUpdate - Failed to open first spare port, bailing"));
+				engine::debug::log_info("FirewallHelperClass::detectionTest3WaitForResponsesUpdate - Failed to open first spare port, bailing");
 				return TRUE;
 			}
 
@@ -1033,7 +1034,7 @@ Bool FirewallHelperClass::detectionTest3WaitForResponsesUpdate() {
 			if (!openSpareSocket(m_sparePorts[1])) {
 				closeSpareSocket(m_sparePorts[0]);
 				m_currentState = DETECTIONSTATE_DONE;
-				DEBUG_LOG(("FirewallHelperClass::detectionTest3WaitForResponsesUpdate - Failed to open second spare port, bailing"));
+				engine::debug::log_info("FirewallHelperClass::detectionTest3WaitForResponsesUpdate - Failed to open second spare port, bailing");
 				return TRUE;
 			}
 
@@ -1056,18 +1057,18 @@ Bool FirewallHelperClass::detectionTest3WaitForResponsesUpdate() {
 			/*
 			** NAT32 uses different mangled source ports for different destination ports.
 			*/
-			DEBUG_LOG(("FirewallHelperClass::detectionTest3WaitForResponsesUpdate - relative port allocation, NAT32 right?"));
+			engine::debug::log_info("FirewallHelperClass::detectionTest3WaitForResponsesUpdate - relative port allocation, NAT32 right?");
 			UnsignedInt addbehavior = 0;
 			addbehavior = (UnsignedInt)FIREWALL_TYPE_DESTINATION_PORT_DELTA;
-			DEBUG_LOG(("FirewallHelperClass::detectionTest3WaitForResponsesUpdate - adding DESTINATION PORT DELTA to behavior"));
+			engine::debug::log_info("FirewallHelperClass::detectionTest3WaitForResponsesUpdate - adding DESTINATION PORT DELTA to behavior");
 			addbehavior |= (UnsignedInt)m_behavior;
 			m_behavior = (FirewallBehaviorType) addbehavior;
 		}
 	} else {
-		DEBUG_LOG(("FirewallHelperClass::detectionTest3WaitForResponsesUpdate - We don't have smart mangling, skipping test 4, entering test 5"));
+		engine::debug::log_info("FirewallHelperClass::detectionTest3WaitForResponsesUpdate - We don't have smart mangling, skipping test 4, entering test 5");
 	}
 
-	DEBUG_LOG(("FirewallHelperClass::detectionTest3WaitForResponsesUpdate - entering test 5"));
+	engine::debug::log_info("FirewallHelperClass::detectionTest3WaitForResponsesUpdate - entering test 5");
 
 	m_currentState = DETECTIONSTATE_TEST5;
 	return FALSE;
@@ -1083,7 +1084,7 @@ Bool FirewallHelperClass::detectionTest4Stage1Update() {
 			closeSpareSocket(m_sparePorts[0]);
 			closeSpareSocket(m_sparePorts[1]);
 			m_currentState = DETECTIONSTATE_DONE;
-			DEBUG_LOG(("FirewallHelperClass::detectionTest4Stage1Update - timed out waiting for mangler response, quitting"));
+			engine::debug::log_info("FirewallHelperClass::detectionTest4Stage1Update - timed out waiting for mangler response, quitting");
 			return TRUE;
 		}
 		return FALSE;
@@ -1122,26 +1123,26 @@ Bool FirewallHelperClass::detectionTest4Stage2Update() {
 			closeSpareSocket(m_sparePorts[0]);
 			closeSpareSocket(m_sparePorts[1]);
 			m_currentState = DETECTIONSTATE_DONE;
-			DEBUG_LOG(("FirewallHelperClass::detectionTest4Stage2Update - timed out waiting for the second mangler response, quitting"));
+			engine::debug::log_info("FirewallHelperClass::detectionTest4Stage2Update - timed out waiting for the second mangler response, quitting");
 			return TRUE;
 		}
 		return FALSE;
 	}
 
 	if (m_mangledPorts[1] != m_mangledPorts[0] + m_sourcePortAllocationDelta) {
-		DEBUG_LOG(("FirewallHelperClass::detectionTest4Stage2Update - NAT uses different source ports for different destination ports"));
+		engine::debug::log_info("FirewallHelperClass::detectionTest4Stage2Update - NAT uses different source ports for different destination ports");
 
 		UnsignedInt addbehavior = 0;
 		addbehavior = (UnsignedInt)FIREWALL_TYPE_DESTINATION_PORT_DELTA;
 		addbehavior |= (UnsignedInt)m_behavior;
 		m_behavior = (FirewallBehaviorType) addbehavior;
 	} else {
-		DEBUG_ASSERTCRASH(m_mangledPorts[1] == m_mangledPorts[0] + m_sourcePortAllocationDelta, ("Problem getting the source port deltas."));
+		engine::debug::invariant((m_mangledPorts[1] == m_mangledPorts[0] + m_sourcePortAllocationDelta), "m_mangledPorts[1] == m_mangledPorts[0] + m_sourcePortAllocationDelta", __FILE__, __LINE__, "Problem getting the source port deltas.");
 		if (m_mangledPorts[1] == m_mangledPorts[0] + m_sourcePortAllocationDelta) {
-			DEBUG_LOG(("FirewallHelperClass::detectionTest4Stage2Update - NAT uses the same source port for different destination ports"));
+			engine::debug::log_info("FirewallHelperClass::detectionTest4Stage2Update - NAT uses the same source port for different destination ports");
 		} else {
-			DEBUG_LOG(("FirewallHelperClass::detectionTest4Stage2Update - Unable to complete destination port mangling test"));
-			DEBUG_CRASH(("Unable to complete destination port mangling test"));
+			engine::debug::log_info("FirewallHelperClass::detectionTest4Stage2Update - Unable to complete destination port mangling test");
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unable to complete destination port mangling test");
 		}
 	}
 
@@ -1155,28 +1156,28 @@ Bool FirewallHelperClass::detectionTest5Update() {
 	** We have done all the tests we *have* to. There's other info that it would be nice to know though.
 	*/
 
-	DEBUG_LOG_RAW(("FirewallHelperClass::detectionTest5Update - All done, behavior is: "));
+	engine::debug::log_info("FirewallHelperClass::detectionTest5Update - All done, behavior is: ");
 
 	if ((m_behavior & FIREWALL_TYPE_SIMPLE) != 0) {
-		DEBUG_LOG_RAW((" FIREWALL_TYPE_SIMPLE "));
+		engine::debug::log_info(" FIREWALL_TYPE_SIMPLE ");
 	}
 	if ((m_behavior & FIREWALL_TYPE_DUMB_MANGLING) != 0) {
-		DEBUG_LOG_RAW((" FIREWALL_TYPE_DUMB_MANGLING "));
+		engine::debug::log_info(" FIREWALL_TYPE_DUMB_MANGLING ");
 	}
 	if ((m_behavior & FIREWALL_TYPE_SMART_MANGLING) != 0) {
-		DEBUG_LOG_RAW((" FIREWALL_TYPE_SMART_MANGLING "));
+		engine::debug::log_info(" FIREWALL_TYPE_SMART_MANGLING ");
 	}
 	if ((m_behavior & FIREWALL_TYPE_SIMPLE_PORT_ALLOCATION) != 0) {
-		DEBUG_LOG_RAW((" FIREWALL_TYPE_SIMPLE_PORT_ALLOCATION "));
+		engine::debug::log_info(" FIREWALL_TYPE_SIMPLE_PORT_ALLOCATION ");
 	}
 	if ((m_behavior & FIREWALL_TYPE_RELATIVE_PORT_ALLOCATION) != 0) {
-		DEBUG_LOG_RAW((" FIREWALL_TYPE_RELATIVE_PORT_ALLOCATION "));
+		engine::debug::log_info(" FIREWALL_TYPE_RELATIVE_PORT_ALLOCATION ");
 	}
 	if ((m_behavior & FIREWALL_TYPE_DESTINATION_PORT_DELTA) != 0) {
-		DEBUG_LOG_RAW((" FIREWALL_TYPE_DESTINATION_PORT_DELTA "));
+		engine::debug::log_info(" FIREWALL_TYPE_DESTINATION_PORT_DELTA ");
 	}
 
-	DEBUG_LOG_RAW(("\n"));
+	engine::debug::log_info("\n");
 
 	m_currentState = DETECTIONSTATE_DONE;
 	return TRUE;
@@ -1203,9 +1204,9 @@ Bool FirewallHelperClass::detectionTest5Update() {
  *=============================================================================================*/
 Int FirewallHelperClass::getNATPortAllocationScheme(Int numPorts, UnsignedShort *originalPorts, UnsignedShort *mangledPorts, Bool &relativeDelta, Bool &looksGood)
 {
-	DEBUG_ASSERTCRASH(numPorts > 3, ("numPorts too small"));
+	engine::debug::invariant((numPorts > 3), "numPorts > 3", __FILE__, __LINE__, "numPorts too small");
 
-	DEBUG_LOG(("Looking for port allocation pattern in originalPorts %d, %d, %d, %d", originalPorts[0], originalPorts[1], originalPorts[2], originalPorts[3]));
+	engine::debug::log_info("Looking for port allocation pattern in originalPorts %d, %d, %d, %d", originalPorts[0], originalPorts[1], originalPorts[2], originalPorts[3]);
 
 	/*
 	** Sort the mangled ports into order - should be easier to detect patterns.
@@ -1239,7 +1240,7 @@ Int FirewallHelperClass::getNATPortAllocationScheme(Int numPorts, UnsignedShort 
 	if (mangledPorts[1] - mangledPorts[0] == 1) {
 		if (mangledPorts[2] - mangledPorts[1] == 1) {
 			if (mangledPorts[3] - mangledPorts[2] == 1) {
-				DEBUG_LOG(("Incremental port allocation detected"));
+				engine::debug::log_info("Incremental port allocation detected");
 				relativeDelta = FALSE;
 				looksGood = TRUE;
 				return(1);
@@ -1253,7 +1254,7 @@ Int FirewallHelperClass::getNATPortAllocationScheme(Int numPorts, UnsignedShort 
 	if (mangledPorts[1] - mangledPorts[0] == 2) {
 		if (mangledPorts[2] - mangledPorts[1] == 2) {
 			if (mangledPorts[3] - mangledPorts[2] == 2) {
-				DEBUG_LOG(("Semi-incremental port allocation detected"));
+				engine::debug::log_info("Semi-incremental port allocation detected");
 				relativeDelta = FALSE;
 				looksGood = TRUE;
 				return(2);
@@ -1270,21 +1271,21 @@ Int FirewallHelperClass::getNATPortAllocationScheme(Int numPorts, UnsignedShort 
 	** 3. Check for absolute scheme skipping 'n' ports.
 	*/
 	if (diff1 == diff2 && diff2 == diff3) {
-		DEBUG_LOG(("Looks good for absolute allocation sequence delta of %d", diff1));
+		engine::debug::log_info("Looks good for absolute allocation sequence delta of %d", diff1);
 		relativeDelta = FALSE;
 		looksGood = TRUE;
 		return(diff1);
 	}
 
 	if (diff1 == diff2) {
-		DEBUG_LOG(("Probable absolute allocation sequence delta of %d", diff1));
+		engine::debug::log_info("Probable absolute allocation sequence delta of %d", diff1);
 		relativeDelta = FALSE;
 		looksGood = FALSE;
 		return(diff1);
 	}
 
 	if (diff2 == diff3) {
-		DEBUG_LOG(("Probable absolute allocation sequence delta of %d", diff2));
+		engine::debug::log_info("Probable absolute allocation sequence delta of %d", diff2);
 		relativeDelta = FALSE;
 		looksGood = FALSE;
 		return(diff2);
@@ -1318,7 +1319,7 @@ Int FirewallHelperClass::getNATPortAllocationScheme(Int numPorts, UnsignedShort 
 		/*
 		** Return a -ve result to indicate that port mangling is relative.
 		*/
-		DEBUG_LOG(("Looks good for a relative port range delta of %d", diff1));
+		engine::debug::log_info("Looks good for a relative port range delta of %d", diff1);
 		relativeDelta = TRUE;
 		looksGood = TRUE;
 		return(diff1);
@@ -1328,14 +1329,14 @@ Int FirewallHelperClass::getNATPortAllocationScheme(Int numPorts, UnsignedShort 
 	** Look for a broken pattern. Maybe the NAT skipped a whole range.
 	*/
 	if (diff1 == diff2 || diff1 == diff3) {
-		DEBUG_LOG(("Detected probable broken relative port range delta of %d", diff1));
+		engine::debug::log_info("Detected probable broken relative port range delta of %d", diff1);
 		relativeDelta = TRUE;
 		looksGood = FALSE;
 		return(diff1);
 	}
 
 	if (diff2 == diff3) {
-		DEBUG_LOG(("Detected probable broken relative port range delta of %d", diff2));
+		engine::debug::log_info("Detected probable broken relative port range delta of %d", diff2);
 		relativeDelta = TRUE;
 		looksGood = FALSE;
 		return(diff2);
@@ -1465,23 +1466,23 @@ Bool FirewallHelperClass::openSpareSocket(UnsignedShort port) {
 
 	// don't have room for any more spare sockets.  Fail.
 	if (i == MAX_SPARE_SOCKETS) {
-		DEBUG_ASSERTCRASH(i < MAX_SPARE_SOCKETS, ("Ran out of spare sockets."));
+		engine::debug::invariant((i < MAX_SPARE_SOCKETS), "i < MAX_SPARE_SOCKETS", __FILE__, __LINE__, "Ran out of spare sockets.");
 		return FALSE;
 	}
 
 	m_spareSockets[i].udp = NEW UDP();
 	if (m_spareSockets[i].udp == nullptr) {
-		DEBUG_LOG(("FirewallHelperClass::openSpareSocket - failed to create UDP object"));
+		engine::debug::log_info("FirewallHelperClass::openSpareSocket - failed to create UDP object");
 		return FALSE;
 	}
 
 	if (m_spareSockets[i].udp->Bind((UnsignedInt)0, port) != 0) {
-		DEBUG_CRASH(("FirewallHelperClass::openSpareSocket - Failed to init spare socket"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "FirewallHelperClass::openSpareSocket - Failed to init spare socket");
 		return FALSE;
 	}
 
 	m_spareSockets[i].port = port;
-	DEBUG_LOG(("FirewallHelperClass::openSpareSocket - port %d is open for send", port));
+	engine::debug::log_info("FirewallHelperClass::openSpareSocket - port %d is open for send", port);
 	return TRUE;
 }
 

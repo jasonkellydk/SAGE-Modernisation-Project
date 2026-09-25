@@ -52,8 +52,8 @@
 #pragma once
 
 #include "always.h"
-#include "wwmath.h"
-#include <math.h>
+
+#include <cmath>
 
 
 /*
@@ -298,7 +298,7 @@ inline bool operator != (const Vector2 &a,const Vector2 &b)
  *========================================================================*/
 inline bool Equal_Within_Epsilon(const Vector2 &a,const Vector2 &b,float epsilon)
 {
-   return( (WWMath::Fabs(a.X - b.X) < epsilon) && (WWMath::Fabs(a.Y - b.Y) < epsilon) );
+   return( (std::fabs(a.X - b.X) < epsilon) && (std::fabs(a.Y - b.Y) < epsilon) );
 }
 
 /**************************************************************************
@@ -316,7 +316,7 @@ inline void Vector2::Normalize()
 {
 	float len2 = Length2();
 	if (len2 != 0.0f) {
-		float oolen = WWMath::Inv_Sqrt(len2);
+		float oolen = (1.0f / std::sqrt(len2));
 		X *= oolen;
 		Y *= oolen;
 	}
@@ -326,7 +326,7 @@ inline Vector2 Normalize(const Vector2 & vec)
 {
 	float len2 = vec.Length2();
 	if (len2 != 0.0f) {
-		float oolen = WWMath::Inv_Sqrt(len2);
+		float oolen = (1.0f / std::sqrt(len2));
 		return vec / oolen;
 	}
 }
@@ -344,7 +344,7 @@ inline Vector2 Normalize(const Vector2 & vec)
  *========================================================================*/
 inline float Vector2::Length() const
 {
-	return (float)WWMath::Sqrt(Length2());
+	return (float)std::sqrt(Length2());
 }
 
 /**************************************************************************
@@ -490,7 +490,7 @@ inline void Swap(Vector2 & a,Vector2 & b)
  *=============================================================================================*/
 inline bool Vector2::Is_Valid() const
 {
-	return (WWMath::Is_Valid_Float(X) && WWMath::Is_Valid_Float(Y));
+	return (std::isfinite(X) && std::isfinite(Y));
 }
 
 
@@ -566,8 +566,8 @@ inline float Quick_Distance(float x1, float y1, float x2, float y2)
 	float x_diff = x1 - x2;
 	float y_diff = y1 - y2;
 
-	WWMath::Fabs(x_diff);
-	WWMath::Fabs(y_diff);
+	std::fabs(x_diff);
+	std::fabs(y_diff);
 
 	if (x_diff > y_diff)
 	{
@@ -607,7 +607,7 @@ inline float Distance(float x1, float y1, float x2, float y2)
 	float x_diff = x1 - x2;
 	float y_diff = y1 - y2;
 
-	return (WWMath::Sqrt((x_diff * x_diff) + (y_diff * y_diff)));
+	return (std::sqrt((x_diff * x_diff) + (y_diff * y_diff)));
 }
 
 

@@ -31,7 +31,6 @@
 //#define DO_8STAGE_TERRAIN_PASS		//optimized terrain rendering for Nvidia based cards
 
 #include "W3DDevice/GameClient/W3DTextureHandle.h"
-#include "WWMath/matrix3d.h"
 #include "Common/AsciiString.h"
 #include "W3DDevice/GameClient/TileData.h"
 

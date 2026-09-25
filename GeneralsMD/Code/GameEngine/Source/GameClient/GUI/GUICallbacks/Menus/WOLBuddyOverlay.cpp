@@ -29,7 +29,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/AudioEventRTS.h"
 #include "Common/PlayerList.h"
@@ -188,7 +189,7 @@ void InitBuddyControls(Int type)
 	case BUDDY_WINDOW_WELCOME_SCREEN:
 		break;
 	default:
-		DEBUG_CRASH(("Well, you really shouldn't have gotten here, if you really care about GUI Bugs, search for this string, you you don't care, call chris (who probably doesn't care either"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Well, you really shouldn't have gotten here, if you really care about GUI Bugs, search for this string, you you don't care, call chris (who probably doesn't care either");
 	}
 
 }
@@ -273,14 +274,14 @@ WindowMsgHandledType BuddyControlSystem( GameWindow *window, UnsignedInt msg,
 					if (recipIt == m->end())
 						break;
 
-					DEBUG_LOG(("Trying to send a buddy message to %d.", selectedProfile));
+					engine::debug::log_info("Trying to send a buddy message to %d.", selectedProfile);
 					if (TheGameSpyGame && TheGameSpyGame->isInGame() && TheGameSpyGame->isGameInProgress() &&
 						!ThePlayerList->getLocalPlayer()->isPlayerActive())
 					{
-						DEBUG_LOG(("I'm dead - gotta look for cheats."));
+						engine::debug::log_info("I'm dead - gotta look for cheats.");
 						for (Int i=0; i<MAX_SLOTS; ++i)
 						{
-							DEBUG_LOG(("Slot[%d] profile is %d", i, TheGameSpyGame->getGameSpySlot(i)->getProfileID()));
+							engine::debug::log_info("Slot[%d] profile is %d", i, TheGameSpyGame->getGameSpySlot(i)->getProfileID());
 							if (TheGameSpyGame->getGameSpySlot(i)->getProfileID() == selectedProfile)
 							{
 								// can't send to someone in our game if we're dead/observing.  security breach and all that.  no seances for you.
@@ -513,7 +514,7 @@ void HandleBuddyResponses()
 
 					if (TheGameSpyInfo->isSavedIgnored(resp.profile))
 					{
-						//DEBUG_CRASH(("Player is ignored!"));
+						//engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Player is ignored!");
 						break; // no buddy messages from ignored people
 					}
 
@@ -536,7 +537,7 @@ void HandleBuddyResponses()
 					message.m_senderNick = nick;
 					messages->push_back(message);
 
-					DEBUG_LOG(("Inserting buddy chat from '%s'/'%s'", nick.str(), resp.arg.message.nick));
+					engine::debug::log_info("Inserting buddy chat from '%s'/'%s'", nick.str(), resp.arg.message.nick);
 
 					// put message on screen
 					insertChat(message);
@@ -634,7 +635,7 @@ void HandleBuddyResponses()
 	}
 	else
 	{
-		DEBUG_CRASH(("No buddy message queue!"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "No buddy message queue!");
 	}
 	if(noticeLayout && timeGetTime() > noticeExpires)
 	{
@@ -1079,7 +1080,7 @@ WindowMsgHandledType WOLBuddyOverlaySystem( GameWindow *window, UnsignedInt msg,
 						}
 						else
 						{
-							DEBUG_CRASH(("No buddy associated with that ProfileID"));
+							engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "No buddy associated with that ProfileID");
 							GameSpyUpdateBuddyOverlay();
 						}
 					}
@@ -1209,7 +1210,7 @@ void RequestBuddyAdd(Int profileID, AsciiString nick)
 	// insert status into box
 	messages->push_back(message);
 
-	DEBUG_LOG(("Inserting buddy add request"));
+	engine::debug::log_info("Inserting buddy add request");
 
 	// put message on screen
 	insertChat(message);
@@ -1259,7 +1260,7 @@ WindowMsgHandledType WOLBuddyOverlayRCMenuSystem( GameWindow *window, UnsignedIn
 				GameSpyRCMenuData *rcData = (GameSpyRCMenuData*)window->winGetUserData();
 				if(!rcData)
 					break;
-				DEBUG_ASSERTCRASH(rcData, ("WOLBuddyOverlayRCMenuSystem GBM_SELECTED:: we're attempting to read the GameSpyRCMenuData from the window, but the data's not there"));
+				engine::debug::invariant((rcData), "rcData", __FILE__, __LINE__, "WOLBuddyOverlayRCMenuSystem GBM_SELECTED:: we're attempting to read the GameSpyRCMenuData from the window, but the data's not there");
 				GPProfile profileID = rcData->m_id;
 				AsciiString nick = rcData->m_nick;
 
@@ -1274,13 +1275,13 @@ WindowMsgHandledType WOLBuddyOverlayRCMenuSystem( GameWindow *window, UnsignedIn
 				rcData = nullptr;
 
 				window->winSetUserData(nullptr);
-				//DEBUG_ASSERTCRASH(profileID > 0, ("Bad profile ID in user data!"));
+				//engine::debug::invariant((profileID > 0), "profileID > 0", __FILE__, __LINE__, "Bad profile ID in user data!");
 
 				if( controlID == buttonAddID )
 				{
 					if(!isGameSpyUser)
 						break;
-					DEBUG_LOG(("ButtonAdd was pushed"));
+					engine::debug::log_info("ButtonAdd was pushed");
 					if (isRequest)
 					{
 						// ok the request
@@ -1329,16 +1330,16 @@ WindowMsgHandledType WOLBuddyOverlayRCMenuSystem( GameWindow *window, UnsignedIn
 					BuddyInfoMap *buddies = (isBuddy)?TheGameSpyInfo->getBuddyMap():TheGameSpyInfo->getBuddyRequestMap();
 					buddies->erase(profileID);
 					updateBuddyInfo();
-					DEBUG_LOG(("ButtonDelete was pushed"));
+					engine::debug::log_info("ButtonDelete was pushed");
 					PopulateLobbyPlayerListbox();
 				}
 				else if( controlID == buttonPlayID )
 				{
-					DEBUG_LOG(("buttonPlayID was pushed"));
+					engine::debug::log_info("buttonPlayID was pushed");
 				}
 				else if( controlID == buttonIgnoreID )
 				{
-					DEBUG_LOG(("%s is isGameSpyUser %d", nick.str(), isGameSpyUser));
+					engine::debug::log_info("%s is isGameSpyUser %d", nick.str(), isGameSpyUser);
 					if( isGameSpyUser )
 					{
 						if(TheGameSpyInfo->isSavedIgnored(profileID))
@@ -1368,7 +1369,7 @@ WindowMsgHandledType WOLBuddyOverlayRCMenuSystem( GameWindow *window, UnsignedIn
 				}
 				else if( controlID == buttonStatsID )
 				{
-					DEBUG_LOG(("buttonStatsID was pushed"));
+					engine::debug::log_info("buttonStatsID was pushed");
 					GameSpyCloseOverlay(GSOVERLAY_PLAYERINFO);
 					SetLookAtPlayer(profileID,nick );
 					GameSpyOpenOverlay(GSOVERLAY_PLAYERINFO);

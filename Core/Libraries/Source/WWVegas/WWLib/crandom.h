@@ -36,6 +36,8 @@
 
 #pragma once
 
+
+#include <cassert>
 #ifndef	ALWAYS_H
 	#include "always.h"
 #endif
@@ -45,7 +47,7 @@
 #endif
 
 #ifndef	WWDEBUG_H
-	#include "WWDebug/wwdebug.h"
+	
 #endif
 
 #define	CRANDOM_FLOAT_RANGE			0x1000
@@ -63,7 +65,7 @@ public:
 	inline int Get_Int()		{ return Generator(); }
 
 	// Get a random 32 bit long integer less than max
-	inline int Get_Int( int max )	{	WWASSERT( max > 0 );	return (Generator() & 0x7FFFFFFF) % max;	}
+	inline int Get_Int( int max )	{	assert((max > 0));	return (Generator() & 0x7FFFFFFF) % max;	}
 
 	// Get a random 32 bit long between min and max (both inclusive)
 	inline int Get_Int( int min, int max );

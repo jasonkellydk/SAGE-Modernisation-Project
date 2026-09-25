@@ -26,7 +26,9 @@
 // Author: Michael S. Booth, December 2001
 // Desc:   Implementation of missile behavior
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
+import Engine.Core.Math.AffineTransform3;
 
 #include "Common/Thing.h"
 #include "Common/ThingTemplate.h"
@@ -190,7 +192,7 @@ void MissileAIUpdate::projectileLaunchAtObjectOrPosition(
 	const ParticleSystemTemplate* exhaustSysOverride
 )
 {
-	DEBUG_ASSERTCRASH(specificBarrelToUse>=0, ("specificBarrelToUse must now be explicit"));
+	engine::debug::invariant((specificBarrelToUse>=0), "specificBarrelToUse>=0", __FILE__, __LINE__, "specificBarrelToUse must now be explicit");
 
 	m_launcherID = launcher ? launcher->getID() : INVALID_ID;
 	m_detonationWeaponTmpl = detWeap;
@@ -240,28 +242,25 @@ void MissileAIUpdate::projectileFireAtObjectOrPosition( const Object *victim, co
 	}
 
 
-	Vector3 dir = getObject()->getTransformMatrix()->Get_X_Vector();
-	dir.Normalize();
-	dir.Z += 2*zFactor;
-	dir.Normalize();
+	Engine::Math::Vector3 dir = getObject()->worldTransform().Basis_X().Normalized_Legacy();
+	dir.z += 2*zFactor;
+	dir = dir.Normalized_Legacy();
 	PhysicsBehavior* physics = getObject()->getPhysics();
 	if (physics && initialVelToUse > 0)
 	{
 		Real forceMag = physics->getMass() * initialVelToUse;
 
 		Coord3D force;
-		force.x = forceMag * dir.X;
-		force.y = forceMag * dir.Y;
-		force.z = forceMag * dir.Z;
+		force.x = forceMag * dir.x;
+		force.y = forceMag * dir.y;
+		force.z = forceMag * dir.z;
 
 		physics->applyMotiveForce( &force );
 	}
 
-	Vector3 objPos(obj->getPosition()->x, obj->getPosition()->y, obj->getPosition()->z);
-
-	Matrix3D newXform;
-	newXform.buildTransformMatrix( objPos, dir );
-	obj->setTransformMatrix( &newXform );
+	const Coord3D *position = obj->getPosition();
+	obj->setWorldTransform(Engine::Math::AffineTransform3::From_Unit_Forward_Direction(
+		{position->x, position->y, position->z}, dir));
 
 	switchToState(LAUNCH);
 	m_isTrackingTarget = false;
@@ -328,7 +327,7 @@ Bool MissileAIUpdate::projectileHandleCollision( Object *other )
  		// if it's not the specific thing we were targeting, see if we should incidentally collide...
  		if (!m_detonationWeaponTmpl->shouldProjectileCollideWith(projectileLauncher, obj, other, m_victimID))
 		{
-			//DEBUG_LOG(("ignoring projectile collision with %s at frame %d",other->getTemplate()->getName().str(),TheGameLogic->getFrame()));
+			//engine::debug::log_info("ignoring projectile collision with %s at frame %d",other->getTemplate()->getName().str(),TheGameLogic->getFrame());
 			return true;
 		}
 
@@ -348,7 +347,7 @@ Bool MissileAIUpdate::projectileHandleCollision( Object *other )
 						Object* thingToKill = *it++;
 						if (!thingToKill->isEffectivelyDead() && thingToKill->isKindOfMulti(d->m_garrisonHitKillKindof, d->m_garrisonHitKillKindofNot))
 						{
-							//DEBUG_LOG(("Killed a garrisoned unit (%08lx %s) via Flash-Bang!",thingToKill,thingToKill->getTemplate()->getName().str()));
+							//engine::debug::log_info("Killed a garrisoned unit (%08lx %s) via Flash-Bang!",thingToKill,thingToKill->getTemplate()->getName().str());
 							if (projectileLauncher)
 								projectileLauncher->scoreTheKill( thingToKill );
 							thingToKill->kill();
@@ -624,7 +623,7 @@ void MissileAIUpdate::doKillState()
 				closeEnough = curLoco->getMaxSpeedForCondition(BODY_PRISTINE);
 			}
 			Real distanceToTargetSq = ThePartitionManager->getDistanceSquared( getObject(), getGoalObject(), FROM_BOUNDINGSPHERE_3D);
-			//DEBUG_LOG(("Distance to target %f, closeEnough %f", sqrt(distanceToTargetSq), closeEnough));
+			//engine::debug::log_info("Distance to target %f, closeEnough %f", sqrt(distanceToTargetSq), closeEnough);
 			if (distanceToTargetSq < closeEnough*closeEnough) {
 				Coord3D pos = *getGoalObject()->getPosition();
 				getObject()->setPosition(&pos);

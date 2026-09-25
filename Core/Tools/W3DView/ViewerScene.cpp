@@ -46,6 +46,31 @@
 import Graphics.Scene.Lighting.Local;
 #include "WW3D2/Light.h"
 
+import Engine.Core.Math.AxisAlignedBox3;
+import Engine.Core.Math.Sphere3;
+import Engine.Core.Math.Vector3;
+
+namespace
+{
+Engine::Math::Vector3 To_Engine_Vector(const Vector3 &value)
+{
+	return {value.X, value.Y, value.Z};
+}
+
+Vector3 To_Render_Vector(Engine::Math::Vector3 value)
+{
+	return {value.x, value.y, value.z};
+}
+
+Engine::Math::AxisAlignedBox3 To_Engine_Bounds(const AABoxClass &bounds)
+{
+	const Engine::Math::Vector3 center = To_Engine_Vector(bounds.Center);
+	const Engine::Math::Vector3 extent = To_Engine_Vector(bounds.Extent);
+	return {center - extent, center + extent};
+}
+
+}
+
 /*
 ** ViewerSceneIterator
 ** This iterator is used by the ViewerSceneClass to allow
@@ -166,13 +191,14 @@ ViewerSceneClass::Add_To_Lineup (RenderObjClass *obj)
 
 	// Figure out how 'wide' the object is (width assuming it
 	// it facing along the +X axis).
-	AABoxClass obj_box;
-	obj->Get_Obj_Space_Bounding_Box(obj_box);
-	float obj_width = obj_box.Extent.Y * 2.0f;
+	AABoxClass render_obj_box;
+	obj->Get_Obj_Space_Bounding_Box(render_obj_box);
+	const Engine::Math::AxisAlignedBox3 obj_box = To_Engine_Bounds(render_obj_box);
+	float obj_width = obj_box.Extent().y * 2.0f;
 
 	// Figure out the bounding box for the objects in the lineup.
-	AABoxClass scene_box = Get_Line_Up_Bounding_Box();
-	float scene_width = scene_box.Extent.Y * 2.0f;
+	const Engine::Math::AxisAlignedBox3 scene_box = Get_Line_Up_Bounding_Box();
+	float scene_width = scene_box.Extent().y * 2.0f;
 
 	// How much do we have to move the existing objects by?
 	float new_scene_width = scene_width + obj_width + obj_width/3;
@@ -188,9 +214,9 @@ ViewerSceneClass::Add_To_Lineup (RenderObjClass *obj)
 		assert(current_obj);
 		if (Can_Line_Up(current_obj))
 		{
-			Vector3 pos = current_obj->Get_Position();
-			pos.Y -= delta;
-			current_obj->Set_Position(pos);
+			Engine::Math::Vector3 position = To_Engine_Vector(current_obj->Get_Position());
+			position.y -= delta;
+			current_obj->Set_Position(To_Render_Vector(position));
 
 			++num_existing_objects;
 		}
@@ -200,9 +226,9 @@ ViewerSceneClass::Add_To_Lineup (RenderObjClass *obj)
 	// Move the new object so that it will be in line
 	// with the existing objects.
 	if (num_existing_objects > 0)
-		obj->Set_Position(Vector3(0,new_scene_width/2 - obj_box.Extent.Y, 0));
+		obj->Set_Position(To_Render_Vector({0, new_scene_width / 2 - obj_box.Extent().y, 0}));
 	else
-		obj->Set_Position(Vector3(0,0,0));
+		obj->Set_Position(To_Render_Vector({0, 0, 0}));
 
 	// Add the object to the scene.
 	Add_Render_Object(obj);
@@ -221,13 +247,13 @@ ViewerSceneClass::Clear_Lineup ()
 		Remove_Render_Object(obj);
 }
 
-SphereClass
+Engine::Math::Sphere3
 ViewerSceneClass::Get_Bounding_Sphere ()
 {
 	// Iterate through every object in the scene, adding its
 	// bounding sphere to the current bounding sphere. The sum of
 	// the bounding spheres will be the scene's bounding sphere.
-	SphereClass bounding_sphere;
+	Engine::Math::Sphere3 bounding_sphere;
 	SceneIterator *it = Create_Iterator();
 	assert(it);
 	for (; !it->Is_Done(); it->Next())
@@ -236,20 +262,20 @@ ViewerSceneClass::Get_Bounding_Sphere ()
 		assert(rend_obj);
 		// Omit lights in the bounding sphere calculations.
 		if (rend_obj->Class_ID() != RenderObjClass::CLASSID_LIGHT)
-			bounding_sphere.Add_Sphere(rend_obj->Get_Bounding_Sphere());
+			bounding_sphere.Include(rend_obj->Get_Bounding_Sphere());
 	}
 	Destroy_Iterator(it);
 
 	return bounding_sphere;
 }
 
-AABoxClass
+Engine::Math::AxisAlignedBox3
 ViewerSceneClass::Get_Line_Up_Bounding_Box ()
 {
 	// Iterate through each object in the lineup, adding its
 	// bounding box to the current bounding box. The sum
 	// of the bounding boxes will be the lineup's bounding box.
-	AABoxClass sum_of_boxes(Vector3(0,0,0), Vector3(0,0,0));
+	Engine::Math::AxisAlignedBox3 sum_of_boxes{{0, 0, 0}, {0, 0, 0}};
 	SceneIterator *it = Create_Iterator();
 	assert(it);
 	for (; !it->Is_Done(); it->Next())
@@ -257,7 +283,11 @@ ViewerSceneClass::Get_Line_Up_Bounding_Box ()
 		RenderObjClass *rend_obj = it->Current_Item();
 		assert(rend_obj);
 		if (Can_Line_Up(rend_obj))
-			sum_of_boxes.Add_Box(rend_obj->Get_Bounding_Box());
+		{
+			const Engine::Math::AxisAlignedBox3 bounds = rend_obj->Get_Bounding_Box();
+			sum_of_boxes.Include(bounds.minimum);
+			sum_of_boxes.Include(bounds.maximum);
+		}
 	}
 	Destroy_Iterator(it);
 
@@ -313,11 +343,11 @@ void	ViewerSceneClass::Recalculate_Fog_Planes ()
 	// the scene's bounding box.
 	float fog_near=0, fog_far=0;
 	Get_Fog_Range(&fog_near, &fog_far);
-	SphereClass sphere = Get_Bounding_Sphere();
+	const Engine::Math::Sphere3 sphere = Get_Bounding_Sphere();
 
 	// Calculate the fog far plane. If it is too close to the
 	// near plane, use the camera's far clip plane setting.
-	fog_far = sphere.Radius * FOG_OPAQUE_MULTIPLE;
+	fog_far = sphere.radius * FOG_OPAQUE_MULTIPLE;
 	if (fog_far < fog_near + FOG_MINIMUM_DEPTH)
 		fog_far = fog_near + FOG_MINIMUM_DEPTH;
 	Set_Fog_Range(fog_near, fog_far);

@@ -31,6 +31,7 @@
 
 // USER INCLUDES //////////////////////////////////////////////////////////////////////////////////
 #include "GameLogic/Module/OpenContain.h"
+import Engine.Core.Math.AffineTransform3;
 
 //-------------------------------------------------------------------------------------------------
 class ParachuteContainModuleData : public OpenContainModuleData
@@ -88,7 +89,7 @@ private:
 	void positionRider(Object* obj);
 	void updateBonePositions();
 	void updateOffsetsFromBones();
-	void calcSwayMtx(const Coord3D* offset, Matrix3D* mtx);
+	void calcSwayTransform(const Coord3D* offset, Engine::Math::AffineTransform3* transform);
 	void setSwayMatrices();
 
 	Real m_pitch;

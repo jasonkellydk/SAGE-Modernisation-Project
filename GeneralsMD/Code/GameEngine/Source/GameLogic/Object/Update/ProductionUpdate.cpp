@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // USER INCLUDES //////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 import engine.navigation.diagnostics.frame_capture;
 
 #include "Common/BitFlagsIO.h"
@@ -292,7 +293,7 @@ Bool ProductionUpdate::queueUpgrade( const UpgradeTemplate *upgrade )
 
 	if (m_productionCount >= getProductionUpdateModuleData()->m_maxQueueEntries)
 	{
-		DEBUG_CRASH(("Production Queue is full... how did we get here?"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Production Queue is full... how did we get here?");
 		return FALSE;
 	}
 
@@ -415,7 +416,7 @@ Bool ProductionUpdate::queueCreateUnit( const ThingTemplate *unitType, Productio
 
 	if (m_productionCount >= getProductionUpdateModuleData()->m_maxQueueEntries)
 	{
-		DEBUG_CRASH(("Production Queue is full... how did we get here?"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Production Queue is full... how did we get here?");
 		return FALSE;
 	}
 
@@ -885,9 +886,9 @@ UpdateSleepTime ProductionUpdate::update()
 			{
 
 				// there is no exit interface, this is an error
-				DEBUG_CRASH( ("Cannot create '%s', there is no ExitUpdate interface defined for producer object '%s'",
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Cannot create '%s', there is no ExitUpdate interface defined for producer object '%s'",
 															production->m_objectToProduce->getName().str(),
-															creationBuilding->getTemplate()->getName().str()) );
+															creationBuilding->getTemplate()->getName().str());
 
 				// remove this item from the production queue
 				removeFromProductionQueue( production );
@@ -1160,7 +1161,7 @@ void ProductionUpdate::cancelAndRefundAllProduction()
 			else
 			{
 				// unknown production type
-				DEBUG_CRASH(( "ProductionUpdate::cancelAndRefundAllProduction - Unknown production type '%d'", m_productionQueue->getProductionType() ));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "ProductionUpdate::cancelAndRefundAllProduction - Unknown production type '%d'", m_productionQueue->getProductionType() );
 				return;
 			}
 		}
@@ -1293,7 +1294,7 @@ void ProductionUpdate::xfer( Xfer *xfer )
 		if( m_productionQueue != nullptr )
 		{
 
-			DEBUG_CRASH(( "ProductionUpdate::xfer - m_productionQueue is not empty, but should be" ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "ProductionUpdate::xfer - m_productionQueue is not empty, but should be" );
 			throw SC_INVALID_DATA;
 
 		}
@@ -1333,7 +1334,7 @@ void ProductionUpdate::xfer( Xfer *xfer )
 				if( production->m_objectToProduce == nullptr )
 				{
 
-					DEBUG_CRASH(( "ProductionUpdate::xfer - Cannot find template '%s'", name.str() ));
+					engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "ProductionUpdate::xfer - Cannot find template '%s'", name.str() );
 					throw SC_INVALID_DATA;
 
 				}
@@ -1346,7 +1347,7 @@ void ProductionUpdate::xfer( Xfer *xfer )
 				if( production->m_upgradeToResearch == nullptr )
 				{
 
-					DEBUG_CRASH(( "ProductionUpdate::xfer - Cannot find upgrade '%s'", name.str() ));
+					engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "ProductionUpdate::xfer - Cannot find upgrade '%s'", name.str() );
 					throw SC_INVALID_DATA;
 
 				}

@@ -49,7 +49,7 @@
 
 
 #include "vxlLayer.h"
-#include "plane.h"
+import Engine.Core.Math.Plane3;
 
 
 /***************************************************************************************
@@ -95,7 +95,7 @@ static void clip_poly(
 						int						innum,
 						vertexstruct *			outverts,
 						int *						outnum,
-						const PlaneClass &	clipplane);
+						const Engine::Math::Plane3 & clipplane);
 
 static void output(
 						const vertexstruct &	outvert,
@@ -104,12 +104,12 @@ static void output(
 
 static int inside(
 						const vertexstruct &	p,
-						const PlaneClass &	plane);
+						const Engine::Math::Plane3 & plane);
 
 static vertexstruct intersect(
 						const vertexstruct &	p0,
 						const vertexstruct &	p1,
-						const PlaneClass &	plane);
+						const Engine::Math::Plane3 & plane);
 
 static void clear_scan_table();
 
@@ -485,10 +485,10 @@ static void clip_tri_to_slab
 	outverts[2].Bary = Point3(0.0f,0.0f,1.0f);
 
 	// clip from the out buffer to the tmp buffer against bottom of slab:
-	clip_poly(outverts,3,tmpverts,setnum,PlaneClass(Vector3(0.0f,0.0f,1.0f),-z0));
+	clip_poly(outverts,3,tmpverts,setnum,Engine::Math::Plane3{{0.0f,0.0f,1.0f}, z0});
 
 	// clip from the tmp buffer to the out buffer against top of slab:
-	clip_poly(tmpverts,*setnum,outverts,setnum,PlaneClass(Vector3(0.0f,0.0f,-1.0f),z1));
+	clip_poly(tmpverts,*setnum,outverts,setnum,Engine::Math::Plane3{{0.0f,0.0f,-1.0f}, -z1});
 }
 
 
@@ -510,7 +510,7 @@ static void clip_poly
 	int						innum,
 	vertexstruct *			outverts,
 	int *						outnum,
-	const PlaneClass &	clipplane
+	const Engine::Math::Plane3 & clipplane
 )
 {
 	vertexstruct p0,p1;	// start and end of current edge
@@ -582,10 +582,10 @@ static void output
 static int inside
 (
 	const vertexstruct &		p,
-	const PlaneClass &		plane
+	const Engine::Math::Plane3 & plane
 )
 {
-	float dist = p.Pos.x * plane.N[0] + p.Pos.y * plane.N[1] + p.Pos.z * plane.N[2] + plane.D;
+	const float dist = plane.Signed_Distance({p.Pos.x, p.Pos.y, p.Pos.z});
 	if (dist >= 0.0f) {
 		return 1;
 	} else {
@@ -610,26 +610,11 @@ static vertexstruct intersect
 (
 	const vertexstruct &		p0,
 	const vertexstruct &		p1,
-	const PlaneClass &		plane
+	const Engine::Math::Plane3 & plane
 )
 {
-	float t;
-
-	Point3 delta = p1.Pos - p0.Pos;
-
-	float num = -( plane.N[0] * p0.Pos.x +
-					   plane.N[1] * p0.Pos.y +
-					   plane.N[2] * p0.Pos.z + plane.D );
-
-	float den = plane.N[0] * delta.x +
-					plane.N[1] * delta.y +
-					plane.N[2] * delta.z;
-
-	if (den != 0.0f) {
-		t = num / den;
-	} else {
-		t = 0.0f;
-	}
+	const float t = plane.Intersect_Line(
+		{p0.Pos.x, p0.Pos.y, p0.Pos.z}, {p1.Pos.x, p1.Pos.y, p1.Pos.z}).value_or(0.0f);
 
 	vertexstruct i;
 	i.Pos =  (1.0f - t) * p0.Pos  + t*p1.Pos;

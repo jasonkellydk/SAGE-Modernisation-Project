@@ -55,11 +55,14 @@ import Assets.Cache.Animations;
 
 #include "WWLib/always.h"
 #include "W3DDevice/GameClient/W3DModelGroupRenderObject.h"
-import Graphics.Scene.Models.Hierarchy;
-import Graphics.Scene.Models.Playback;
 
 class SkinClass;
 class W3DRenderContext;
+
+namespace Graphics
+{
+class ModelPlayback;
+}
 
 
 
@@ -85,8 +88,8 @@ public:
 	/////////////////////////////////////////////////////////////////////////////
 	// Render Object Interface - "Scene Graph"
 	/////////////////////////////////////////////////////////////////////////////
-	virtual void 					Set_Transform(const Matrix3D &m) override;
-	virtual void 					Set_Position(const Vector3 &v) override;
+	virtual void 					Set_Transform(const Engine::Math::AffineTransform3 &m) override;
+	virtual void 					Set_Position(Engine::Math::Vector3 v) override;
 
 	/////////////////////////////////////////////////////////////////////////////
 	// Render Object Interface - Hierarchical Animation
@@ -109,12 +112,12 @@ public:
 	virtual int						Get_Num_Bones() override;
 	virtual const char *			Get_Bone_Name(int bone_index) override;
 	virtual int						Get_Bone_Index(const char * bonename) override;
-	virtual Matrix3D 	Get_Bone_Transform(const char * bonename) override;
-	virtual Matrix3D 	Get_Bone_Transform(int boneindex) override;
+	virtual Engine::Math::AffineTransform3 Get_Bone_Transform(const char * bonename) override;
+	virtual Engine::Math::AffineTransform3 Get_Bone_Transform(int boneindex) override;
 	virtual void					Capture_Bone(int boneindex) override;
 	virtual void					Release_Bone(int boneindex) override;
 	virtual bool					Is_Bone_Captured(int boneindex) const override;
-	virtual void					Control_Bone(int bindex,const Matrix3D & objtm,bool world_space_translation = false) override;
+	virtual void					Control_Bone(int bindex,const Engine::Math::AffineTransform3 & objtm,bool world_space_translation = false) override;
 	virtual const Graphics::ModelHierarchy *	Get_Model_Hierarchy() const override { return Hierarchy.get(); }
 
 	//
@@ -122,8 +125,8 @@ public:
 	// to update the hierarchy, but needs to know the transform of
 	// a bone at a given frame.
 	//
-	virtual bool					Simple_Evaluate_Bone(int boneindex, Matrix3D *tm) const;
-	virtual bool					Simple_Evaluate_Bone(int boneindex, float frame, Matrix3D *tm) const;
+	virtual bool					Simple_Evaluate_Bone(int boneindex, Engine::Math::AffineTransform3 *tm) const;
+	virtual bool					Simple_Evaluate_Bone(int boneindex, float frame, Engine::Math::AffineTransform3 *tm) const;
 
 	// (gth) TESTING DYNAMICALLY SWAPPING SKELETONS!
 	///Generals change so we can set sub-object transforms directly without having them revert to base pose
@@ -146,5 +149,5 @@ protected:
 	// Hierarchy Tree
 	std::unique_ptr<Graphics::ModelHierarchy> Hierarchy;
 
-    Graphics::ModelPlayback Playback;
+    std::unique_ptr<Graphics::ModelPlayback> Playback;
 };

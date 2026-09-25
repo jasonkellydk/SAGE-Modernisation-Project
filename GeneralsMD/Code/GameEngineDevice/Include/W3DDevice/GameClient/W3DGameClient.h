@@ -50,6 +50,7 @@
 #include "SDL3Device/GameClient/SDL3Mouse.h"
 #include "W3DDevice/GameClient/W3DMouse.h"
 #include "W3DDevice/GameClient/W3DSnow.h"
+import engine.platform;
 
 class ThingTemplate;
 
@@ -66,7 +67,7 @@ class W3DGameClient : public GameClient
 
 public:
 
-	W3DGameClient();
+	W3DGameClient(engine::platform::IPlatform& platform, engine::platform::IWindow* mainWindow);
 	virtual ~W3DGameClient() override;
 
 	/// given a type, create a drawable
@@ -93,10 +94,10 @@ protected:
 	virtual Mouse *createMouse() override;											///< factory for the mouse
 
 	/// factory for creating TheDisplay
-	virtual Display *createGameDisplay() override { return NEW W3DDisplay; }
+	virtual Display *createGameDisplay() override { return NEW W3DDisplay(m_platform, m_mainWindow); }
 
 	/// factory for creating TheInGameUI
-	virtual InGameUI *createInGameUI() override { return NEW W3DInGameUI; }
+	virtual InGameUI *createInGameUI() override { return NEW W3DInGameUI(m_platform.clock()); }
 
 	/// factory for creating the window manager
 	virtual GameWindowManager *createWindowManager() override { return NEW W3DGameWindowManager; }
@@ -108,18 +109,22 @@ protected:
 	virtual DisplayStringManager *createDisplayStringManager() override { return NEW W3DDisplayStringManager; }
 	virtual VideoPlayerInterface *createVideoPlayer() { return NEW VideoPlayer; }
 	/// factory for creating the TerrainVisual
-	virtual TerrainVisual *createTerrainVisual() override { return NEW W3DTerrainVisual; }
+	virtual TerrainVisual *createTerrainVisual() override { return NEW W3DTerrainVisual(m_platform.clock()); }
 
 	/// factory for creating the snow manager
 	virtual SnowManager *createSnowManager() override { return NEW W3DSnowManager; }
 
 	virtual void setFrameRate(Real msecsPerFrame) override { TheW3DFrameLengthInMsec = msecsPerFrame; }
 
+private:
+	engine::platform::IPlatform& m_platform;
+	engine::platform::IWindow* m_mainWindow{};
+
 };
 
-inline Keyboard *W3DGameClient::createKeyboard() { return NEW SDL3Keyboard; }
+inline Keyboard *W3DGameClient::createKeyboard() { return NEW SDL3Keyboard(m_platform.input(), m_platform.clock()); }
 inline Mouse *W3DGameClient::createMouse()
 {
 	//return new DirectInputMouse;
-	return NEW W3DMouse;
+	return NEW W3DMouse(m_platform.clock());
 }

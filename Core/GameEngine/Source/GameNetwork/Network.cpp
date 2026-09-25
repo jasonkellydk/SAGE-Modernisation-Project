@@ -30,7 +30,8 @@
 // SYSTEM INCLUDES ////////////////////////////////////////////////////////////
 
 // USER INCLUDES //////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/GameEngine.h"
 #include "Common/MessageStream.h"
@@ -319,7 +320,7 @@ void Network::init()
 {
 	if (!deinit())
 	{
-		DEBUG_LOG(("Could not deinit network prior to init!"));
+		engine::debug::log_info("Could not deinit network prior to init!");
 		return;
 	}
 
@@ -342,19 +343,19 @@ void Network::init()
 	m_sawCRCMismatch = FALSE;
 	m_checkCRCsThisFrame = FALSE;
 
-	DEBUG_LOG(("Network timing values:"));
-	DEBUG_LOG(("NetworkFPSHistoryLength: %d", TheGlobalData->m_networkFPSHistoryLength));
-	DEBUG_LOG(("NetworkLatencyHistoryLength: %d", TheGlobalData->m_networkLatencyHistoryLength));
-	DEBUG_LOG(("NetworkRunAheadMetricsTime: %d", TheGlobalData->m_networkRunAheadMetricsTime));
-	DEBUG_LOG(("NetworkCushionHistoryLength: %d", TheGlobalData->m_networkCushionHistoryLength));
-	DEBUG_LOG(("NetworkRunAheadSlack: %d", TheGlobalData->m_networkRunAheadSlack));
-	DEBUG_LOG(("NetworkKeepAliveDelay: %d", TheGlobalData->m_networkKeepAliveDelay));
-	DEBUG_LOG(("NetworkDisconnectTime: %d", TheGlobalData->m_networkDisconnectTime));
-	DEBUG_LOG(("NetworkPlayerTimeoutTime: %d", TheGlobalData->m_networkPlayerTimeoutTime));
-	DEBUG_LOG(("NetworkDisconnectScreenNotifyTime: %d", TheGlobalData->m_networkDisconnectScreenNotifyTime));
-	DEBUG_LOG(("Other network stuff:"));
-	DEBUG_LOG(("FRAME_DATA_LENGTH = %d", FRAME_DATA_LENGTH));
-	DEBUG_LOG(("FRAMES_TO_KEEP = %d", FRAMES_TO_KEEP));
+	engine::debug::log_info("Network timing values:");
+	engine::debug::log_info("NetworkFPSHistoryLength: %d", TheGlobalData->m_networkFPSHistoryLength);
+	engine::debug::log_info("NetworkLatencyHistoryLength: %d", TheGlobalData->m_networkLatencyHistoryLength);
+	engine::debug::log_info("NetworkRunAheadMetricsTime: %d", TheGlobalData->m_networkRunAheadMetricsTime);
+	engine::debug::log_info("NetworkCushionHistoryLength: %d", TheGlobalData->m_networkCushionHistoryLength);
+	engine::debug::log_info("NetworkRunAheadSlack: %d", TheGlobalData->m_networkRunAheadSlack);
+	engine::debug::log_info("NetworkKeepAliveDelay: %d", TheGlobalData->m_networkKeepAliveDelay);
+	engine::debug::log_info("NetworkDisconnectTime: %d", TheGlobalData->m_networkDisconnectTime);
+	engine::debug::log_info("NetworkPlayerTimeoutTime: %d", TheGlobalData->m_networkPlayerTimeoutTime);
+	engine::debug::log_info("NetworkDisconnectScreenNotifyTime: %d", TheGlobalData->m_networkDisconnectScreenNotifyTime);
+	engine::debug::log_info("Other network stuff:");
+	engine::debug::log_info("FRAME_DATA_LENGTH = %d", FRAME_DATA_LENGTH);
+	engine::debug::log_info("FRAMES_TO_KEEP = %d", FRAMES_TO_KEEP);
 
 
 #if defined(RTS_DEBUG)
@@ -373,24 +374,18 @@ void Network::setSawCRCMismatch()
 	TheRecorder->logCRCMismatch();
 
 	// dump GameLogic random seed
-	DEBUG_LOG(("Latest frame for mismatch = %d GameLogic frame = %d",
-		TheGameLogic->getFrame()-m_runAhead-1, TheGameLogic->getFrame()));
-	DEBUG_LOG(("GetGameLogicRandomSeedCRC() = %d", GetGameLogicRandomSeedCRC()));
+	engine::debug::log_info("Latest frame for mismatch = %d GameLogic frame = %d",
+		TheGameLogic->getFrame()-m_runAhead-1, TheGameLogic->getFrame());
+	engine::debug::log_info("GetGameLogicRandomSeedCRC() = %d", GetGameLogicRandomSeedCRC());
 
 	// dump CRCs
 	{
-		DEBUG_LOG(("--- GameState Dump ---"));
-#ifdef DEBUG_CRC
-		outputCRCDumpLines();
-#endif
-		DEBUG_LOG(("------ End Dump ------"));
+		engine::debug::log_info("--- GameState Dump ---");
+		engine::debug::log_info("------ End Dump ------");
 	}
 	{
-		DEBUG_LOG(("--- DebugInfo Dump ---"));
-#ifdef DEBUG_CRC
-		outputCRCDebugLines();
-#endif
-		DEBUG_LOG(("------ End Dump ------"));
+		engine::debug::log_info("--- DebugInfo Dump ---");
+		engine::debug::log_info("------ End Dump ------");
 	}
 }
 
@@ -401,7 +396,7 @@ void Network::parseUserList( const GameInfo *game )
 {
 	if (!game)
 	{
-		DEBUG_LOG(("FAILED parseUserList with a null game"));
+		engine::debug::log_info("FAILED parseUserList with a null game");
 		return;
 	}
 
@@ -423,7 +418,7 @@ void Network::startGame() {
  * it explicitly, but regardless, this is the one we're going to use.
  */
 void Network::setLocalAddress(UnsignedInt ip, UnsignedInt port) {
-	DEBUG_ASSERTCRASH(m_conMgr != nullptr, ("Connection manager does not exist."));
+	engine::debug::invariant((m_conMgr != nullptr), "m_conMgr != nullptr", __FILE__, __LINE__, "Connection manager does not exist.");
 	if (m_conMgr != nullptr) {
 		m_conMgr->setLocalAddress(ip, port);
 	}
@@ -433,14 +428,14 @@ void Network::setLocalAddress(UnsignedInt ip, UnsignedInt port) {
  * Tell the network to initialize the transport object
  */
 void Network::initTransport() {
-	DEBUG_ASSERTCRASH(m_conMgr != nullptr, ("Connection manager does not exist."));
+	engine::debug::invariant((m_conMgr != nullptr), "m_conMgr != nullptr", __FILE__, __LINE__, "Connection manager does not exist.");
 	if (m_conMgr != nullptr) {
 		m_conMgr->initTransport();
 	}
 }
 
 void Network::attachTransport(Transport *transport) {
-	DEBUG_ASSERTCRASH(m_conMgr != nullptr, ("Connection manager does not exist."));
+	engine::debug::invariant((m_conMgr != nullptr), "m_conMgr != nullptr", __FILE__, __LINE__, "Connection manager does not exist.");
 	if (m_conMgr != nullptr) {
 		m_conMgr->attachTransport(transport);
 	}
@@ -516,12 +511,12 @@ Bool Network::processCommand(GameMessage *msg)
 			// Send command counts for all the frames we can.
 			for (Int i = m_lastFrameCompleted + 1; i < executionFrame; ++i) {
 				m_conMgr->processFrameTick(i);
-				//DEBUG_LOG(("Network::processCommand - calling processFrameTick for frame %d", i));
+				//engine::debug::log_info("Network::processCommand - calling processFrameTick for frame %d", i);
 				m_lastFrameCompleted = i;
 			}
 		}
 
-		//DEBUG_LOG(("Next Execution Frame - %d, last frame completed - %d", getExecutionFrame(), m_lastFrameCompleted));
+		//engine::debug::log_info("Next Execution Frame - %d, last frame completed - %d", getExecutionFrame(), m_lastFrameCompleted);
 		m_lastFrame = TheGameLogic->getFrame();
 	}
 
@@ -531,7 +526,7 @@ Bool Network::processCommand(GameMessage *msg)
 	// frame where everyone else is going to see that we left.
 	if ((msg->getType() == GameMessage::MSG_CLEAR_GAME_DATA) && (m_localStatus == NETLOCALSTATUS_INGAME)) {
 		Int executionFrame = getExecutionFrame();
-		DEBUG_LOG(("Network::processCommand - local player leaving, executionFrame = %d, player leaving on frame %d", executionFrame, executionFrame+1));
+		engine::debug::log_info("Network::processCommand - local player leaving, executionFrame = %d, player leaving on frame %d", executionFrame, executionFrame+1);
 
 		m_conMgr->handleLocalPlayerLeaving(executionFrame+1);
 		m_conMgr->processFrameTick(executionFrame); // This is the last command we will execute, so send the command count.
@@ -540,7 +535,7 @@ Bool Network::processCommand(GameMessage *msg)
 																								// worry about messing up the other players.
 		m_conMgr->processFrameTick(executionFrame+1); // since we send it for executionFrame+1, we need to process both ticks
 		m_lastFrameCompleted = executionFrame;
-		DEBUG_LOG(("Network::processCommand - player leaving on frame %d", executionFrame));
+		engine::debug::log_info("Network::processCommand - player leaving on frame %d", executionFrame);
 		m_localStatus = NETLOCALSTATUS_LEAVING;
 		return TRUE;
 	}
@@ -586,11 +581,11 @@ void Network::RelayCommandsToCommandList(UnsignedInt frame) {
 #else
 			// TheSuperHackers @fix stephanmeesters 14/05/2026 Verify accepted type of incoming game messages
 			if (isMessageTypeWithinNetworkRange(gmsg->getGameMessageType())) {
-				//DEBUG_LOG(("Network::RelayCommandsToCommandList - appending command %d of type %s to command list on frame %d", msg->getCommand()->getID(), gmsg->getCommandAsString(), TheGameLogic->getFrame()));
+				//engine::debug::log_info("Network::RelayCommandsToCommandList - appending command %d of type %s to command list on frame %d", msg->getCommand()->getID(), gmsg->getCommandAsString(), TheGameLogic->getFrame());
 				TheCommandList->appendMessage(gmsg->constructGameMessage());
 			} else {
-				DEBUG_LOG(("Network::RelayCommandsToCommandList - rejecting game message from player %d of type %s, which is not a network type.",
-					gmsg->getPlayerID(), GameMessage::getCommandTypeAsString(gmsg->getGameMessageType())));
+				engine::debug::log_info("Network::RelayCommandsToCommandList - rejecting game message from player %d of type %s, which is not a network type.",
+					gmsg->getPlayerID(), GameMessage::getCommandTypeAsString(gmsg->getGameMessageType()));
 			}
 #endif
 		} else {
@@ -620,23 +615,23 @@ void Network::processFrameSynchronizedNetCommand(NetCommandRef *msg) {
 	if (cmdMsg->getNetCommandType() == NETCOMMANDTYPE_PLAYERLEAVE) {
 		PlayerLeaveCode retval = m_conMgr->processPlayerLeave((NetPlayerLeaveCommandMsg *)cmdMsg);
 		if (retval == PLAYERLEAVECODE_LOCAL) {
-			DEBUG_LOG(("Network::processFrameSynchronizedNetCommand - Local player left the game on frame %d.", TheGameLogic->getFrame()));
+			engine::debug::log_info("Network::processFrameSynchronizedNetCommand - Local player left the game on frame %d.", TheGameLogic->getFrame());
 			m_localStatus = NETLOCALSTATUS_LEFT;
 		} else if (retval == PLAYERLEAVECODE_PACKETROUTER) {
-			DEBUG_LOG(("Network::processFrameSynchronizedNetCommand - Packet router left the game on frame %d", TheGameLogic->getFrame()));
+			engine::debug::log_info("Network::processFrameSynchronizedNetCommand - Packet router left the game on frame %d", TheGameLogic->getFrame());
 		} else {
-			DEBUG_LOG(("Network::processFrameSynchronizedNetCommand - Client left the game on frame %d", TheGameLogic->getFrame()));
+			engine::debug::log_info("Network::processFrameSynchronizedNetCommand - Client left the game on frame %d", TheGameLogic->getFrame());
 		}
 	}
 	else if (cmdMsg->getNetCommandType() == NETCOMMANDTYPE_RUNAHEAD) {
 		NetRunAheadCommandMsg *netmsg = (NetRunAheadCommandMsg *)cmdMsg;
 		processRunAheadCommand(netmsg);
-		DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("command to set run ahead to %d and frame rate to %d on frame %d actually executed on frame %d", netmsg->getRunAhead(), netmsg->getFrameRate(), netmsg->getExecutionFrame(), TheGameLogic->getFrame()));
+		engine::debug::log_info("command to set run ahead to %d and frame rate to %d on frame %d actually executed on frame %d", netmsg->getRunAhead(), netmsg->getFrameRate(), netmsg->getExecutionFrame(), TheGameLogic->getFrame());
 	}
 	else if (cmdMsg->getNetCommandType() == NETCOMMANDTYPE_DESTROYPLAYER) {
 		NetDestroyPlayerCommandMsg *netmsg = (NetDestroyPlayerCommandMsg *)cmdMsg;
 		processDestroyPlayerCommand(netmsg);
-		//DEBUG_LOG(("CRC command (%8.8X) on frame %d actually executed on frame %d", netmsg->getCRC(), netmsg->getExecutionFrame(), TheGameLogic->getFrame()));
+		//engine::debug::log_info("CRC command (%8.8X) on frame %d actually executed on frame %d", netmsg->getCRC(), netmsg->getExecutionFrame(), TheGameLogic->getFrame());
 	}
 }
 
@@ -645,7 +640,7 @@ void Network::processRunAheadCommand(NetRunAheadCommandMsg *msg) {
 	m_frameRate = msg->getFrameRate();
 	time_t frameGrouping = (1000 * m_runAhead) / m_frameRate; // number of miliseconds between packet sends
 	frameGrouping = frameGrouping / 2; // since we only want the latency for one way to be a factor.
-//	DEBUG_LOG(("Network::processRunAheadCommand - trying to set frame grouping to %d.  run ahead = %d, m_frameRate = %d", frameGrouping, m_runAhead, m_frameRate));
+//	engine::debug::log_info("Network::processRunAheadCommand - trying to set frame grouping to %d.  run ahead = %d, m_frameRate = %d", frameGrouping, m_runAhead, m_frameRate);
 	if (frameGrouping < 1) {
 		frameGrouping = 1; // Having a value less than 1 doesn't make sense.
 	}
@@ -658,7 +653,7 @@ void Network::processRunAheadCommand(NetRunAheadCommandMsg *msg) {
 void Network::processDestroyPlayerCommand(NetDestroyPlayerCommandMsg *msg)
 {
 	UnsignedInt slotIndex = msg->getPlayerIndex();
-	DEBUG_ASSERTCRASH(slotIndex < MAX_SLOTS, ("Bad slot index"));
+	engine::debug::invariant((slotIndex < MAX_SLOTS), "slotIndex < MAX_SLOTS", __FILE__, __LINE__, "Bad slot index");
 	if (slotIndex >= MAX_SLOTS)
 		return;
 
@@ -676,8 +671,8 @@ void Network::processDestroyPlayerCommand(NetDestroyPlayerCommandMsg *msg)
 		TheCommandList->appendMessage(msg);
 	}
 
-	DEBUG_LOG(("Saw DestroyPlayer from %d about %d for frame %d on frame %d", msg->getPlayerID(), msg->getPlayerIndex(),
-		msg->getExecutionFrame(), TheGameLogic->getFrame()));
+	engine::debug::log_info("Saw DestroyPlayer from %d about %d for frame %d on frame %d", msg->getPlayerID(), msg->getPlayerIndex(),
+		msg->getExecutionFrame(), TheGameLogic->getFrame());
 }
 
 /**
@@ -718,7 +713,7 @@ void Network::update()
 
 	if (AllCommandsReady(TheGameLogic->getFrame())) { // If all the commands are ready for the next frame...
 		m_conMgr->handleAllCommandsReady();
-//		DEBUG_LOG(("Network::update - frame %d is ready", TheGameLogic->getFrame()));
+//		engine::debug::log_info("Network::update - frame %d is ready", TheGameLogic->getFrame());
 		if (timeForNewFrame()) { // This needs to come after any other pre-frame execution checks as this changes the timing variables.
 			RelayCommandsToCommandList(TheGameLogic->getFrame());	// Put the commands for the next frame on TheCommandList.
 			m_frameDataReady = TRUE; // Tell the GameEngine to run the commands for the new frame.
@@ -755,7 +750,7 @@ void Network::endOfGameCheck() {
 			TheGameLogic->exitGame();
 			m_localStatus = NETLOCALSTATUS_POSTGAME;
 
-			DEBUG_LOG(("Network::endOfGameCheck - about to show the shell"));
+			engine::debug::log_info("Network::endOfGameCheck - about to show the shell");
 		}
 #if defined(RTS_DEBUG)
 		else {
@@ -781,31 +776,31 @@ Bool Network::timeForNewFrame() {
 		if (cushion < runAheadPercentage) {
 			__int64 oldFrameDelay = frameDelay;
 			frameDelay += oldFrameDelay / 10; // temporarily decrease the frame rate by 20%.
-//			DEBUG_LOG(("Average cushion = %f, run ahead percentage = %f.  Adjusting frameDelay from %I64d to %I64d", cushion, runAheadPercentage, oldFrameDelay, frameDelay));
+//			engine::debug::log_info("Average cushion = %f, run ahead percentage = %f.  Adjusting frameDelay from %I64d to %I64d", cushion, runAheadPercentage, oldFrameDelay, frameDelay);
 			m_didSelfSlug = TRUE;
 //		} else {
-//			DEBUG_LOG(("Average cushion = %f, run ahead percentage = %f", cushion, runAheadPercentage));
+//			engine::debug::log_info("Average cushion = %f, run ahead percentage = %f", cushion, runAheadPercentage);
 		}
 	}
 
 	// Check to see if we can run another frame.
 	if (curTime >= m_nextFrameTime) {
-//		DEBUG_LOG(("Allowing a new frame, frameDelay = %I64d, curTime - m_nextFrameTime = %I64d", frameDelay, curTime - m_nextFrameTime));
+//		engine::debug::log_info("Allowing a new frame, frameDelay = %I64d, curTime - m_nextFrameTime = %I64d", frameDelay, curTime - m_nextFrameTime);
 
 //		if (m_nextFrameTime + frameDelay < curTime) {
 		if ((m_nextFrameTime + (2 * frameDelay)) < curTime) {
 			// If we get too far behind on our framerate we need to reset the nextFrameTime thing.
 			m_nextFrameTime = curTime;
-//			DEBUG_LOG(("Initializing m_nextFrameTime to %I64d", m_nextFrameTime));
+//			engine::debug::log_info("Initializing m_nextFrameTime to %I64d", m_nextFrameTime);
 		} else {
 			// Set the soonest possible starting time for the next frame.
 			m_nextFrameTime += frameDelay;
-//			DEBUG_LOG(("m_nextFrameTime = %I64d", m_nextFrameTime));
+//			engine::debug::log_info("m_nextFrameTime = %I64d", m_nextFrameTime);
 		}
 
 		return TRUE;
 	}
-//	DEBUG_LOG(("Slowing down frame rate. frame rate = %d, frame delay = %I64d, curTime - m_nextFrameTime = %I64d", m_frameRate, frameDelay, curTime - m_nextFrameTime));
+//	engine::debug::log_info("Slowing down frame rate. frame rate = %d, frame delay = %I64d, curTime - m_nextFrameTime = %I64d", m_frameRate, frameDelay, curTime - m_nextFrameTime);
 	return FALSE;
 }
 
@@ -951,7 +946,7 @@ void Network::quitGame() {
 
 	TheGameLogic->exitGame();
 	m_localStatus = NETLOCALSTATUS_POSTGAME;
-	DEBUG_LOG(("Network::quitGame - quitting game..."));
+	engine::debug::log_info("Network::quitGame - quitting game...");
 }
 
 void Network::selfDestructPlayer(Int index)

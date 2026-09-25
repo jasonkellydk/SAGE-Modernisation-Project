@@ -7,6 +7,7 @@ module;
 #endif
 export module Graphics.Scene.AffineTransform;
 export import Graphics.Scene.RenderScene;
+import Engine.Core.Math.AffineTransform3;
 
 namespace Graphics {
 export RenderTransform Affine_Identity() noexcept {
@@ -21,6 +22,14 @@ RenderTransform Import_Affine_Transform(const Matrix& source) noexcept {
     for(unsigned row=0;row<3;++row)
         for(unsigned column=0;column<4;++column)
             result.matrix[row*4+column]=source[row][column];
+    return result;
+}
+
+export RenderTransform Import_Affine_Transform(const Engine::Math::AffineTransform3& source) noexcept {
+    auto result=Affine_Identity();
+    for(unsigned row=0;row<3;++row)
+        for(unsigned column=0;column<4;++column)
+            result.matrix[row*4+column]=source.elements[row*4+column];
     return result;
 }
 

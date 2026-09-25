@@ -4,10 +4,7 @@ module;
 #include <cmath>
 #include <cstddef>
 
-#if GRAPHICS_COMPARE_GAME_MATH
-#include "Utility/CppMacros.h"
-#include "WWMath/matrix3d.h"
-#endif
+#include "../tests/LegacyMathReference.h"
 
 export module Graphics.Materials.TextureProjector.Tests;
 import Graphics.Materials.TextureProjector;
@@ -48,11 +45,11 @@ BOOST_AUTO_TEST_CASE(perspective_fit_uses_the_game_look_at_basis)
 	const auto fit = Graphics::Fit_Perspective_Texture_Projector(bounds, object_transform, light_position);
 	BOOST_REQUIRE(fit.valid);
 
-#if GRAPHICS_COMPARE_GAME_MATH
-	::Matrix3D expected;
+	// Reference: standalone port of the retired Matrix3D::Look_At.
+	LegacyMathReference::Matrix3D expected;
 	expected.Look_At(
-		::Vector3(light_position.x, light_position.y, light_position.z),
-		::Vector3(world_center.x, world_center.y, world_center.z), 0.0f);
+		{light_position.x, light_position.y, light_position.z},
+		{world_center.x, world_center.y, world_center.z}, 0.0f);
 	for (std::size_t row = 0; row < 3; ++row) {
 		for (std::size_t column = 0; column < 4; ++column) {
 			BOOST_CHECK(Nearly_Equal(
@@ -60,7 +57,6 @@ BOOST_AUTO_TEST_CASE(perspective_fit_uses_the_game_look_at_basis)
 				expected[row][column], 2.0e-5f));
 		}
 	}
-#endif
 
 	BOOST_CHECK(fit.horizontal_fov > 0.0f);
 	BOOST_CHECK(fit.vertical_fov > 0.0f);

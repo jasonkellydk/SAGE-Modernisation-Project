@@ -28,7 +28,10 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import Engine.Core.Math.Scalar;
+import engine.profiling;
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #define DEFINE_DEATH_NAMES
 #define DEFINE_WEAPONBONUSCONDITION_NAMES
@@ -43,7 +46,7 @@
 #include "Common/GameAudio.h"
 #include "Common/GameState.h"
 #include "Common/INI.h"
-#include "Common/PerfTimer.h"
+
 #include "Common/Player.h"
 #include "Common/ThingFactory.h"
 #include "Common/ThingTemplate.h"
@@ -53,6 +56,8 @@
 #include "GameClient/FXList.h"
 #include "GameClient/InGameUI.h"
 #include "GameClient/ParticleSys.h"
+import Engine.Core.Math.AffineTransform3;
+#include "Common/LegacyTransformMath.h"
 
 #include "GameLogic/Damage.h"
 #include "GameLogic/ExperienceTracker.h"
@@ -408,7 +413,7 @@ void WeaponTemplate::postProcessLoad()
 {
 	if (!TheThingFactory)
 	{
-		DEBUG_CRASH(("you must call this after TheThingFactory is inited"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "you must call this after TheThingFactory is inited");
 		return;
 	}
 
@@ -419,7 +424,7 @@ void WeaponTemplate::postProcessLoad()
 	else
 	{
 		m_projectileTmpl = TheThingFactory->findTemplate(m_projectileName);
-		DEBUG_ASSERTCRASH(m_projectileTmpl, ("projectile %s not found!",m_projectileName.str()));
+		engine::debug::invariant((m_projectileTmpl), "m_projectileTmpl", __FILE__, __LINE__, "projectile %s not found!",m_projectileName.str());
 	}
 
 	for (Int i = LEVEL_FIRST; i <= LEVEL_LAST; ++i)
@@ -432,7 +437,7 @@ void WeaponTemplate::postProcessLoad()
 		else
 		{
 			m_fireOCLs[i] = TheObjectCreationListStore->findObjectCreationList(m_fireOCLNames[i].str() );
-			DEBUG_ASSERTCRASH(m_fireOCLs[i], ("OCL %s not found in a weapon!",m_fireOCLNames[i].str()));
+			engine::debug::invariant((m_fireOCLs[i]), "m_fireOCLs[i]", __FILE__, __LINE__, "OCL %s not found in a weapon!",m_fireOCLNames[i].str());
 		}
 		m_fireOCLNames[i].clear();
 
@@ -444,7 +449,7 @@ void WeaponTemplate::postProcessLoad()
 		else
 		{
 			m_projectileDetonationOCLs[i] = TheObjectCreationListStore->findObjectCreationList(m_projectileDetonationOCLNames[i].str() );
-			DEBUG_ASSERTCRASH(m_projectileDetonationOCLs[i], ("OCL %s not found in a weapon!",m_projectileDetonationOCLNames[i].str()));
+			engine::debug::invariant((m_projectileDetonationOCLs[i]), "m_projectileDetonationOCLs[i]", __FILE__, __LINE__, "OCL %s not found in a weapon!",m_projectileDetonationOCLNames[i].str());
 		}
 		m_projectileDetonationOCLNames[i].clear();
 	}
@@ -570,7 +575,7 @@ Real WeaponTemplate::estimateWeaponTemplateDamage(
 {
 	if (sourceObj == nullptr || (victimObj == nullptr && victimPos == nullptr))
 	{
-		DEBUG_CRASH(("bad args to estimate"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "bad args to estimate");
 		return 0.0f;
 	}
 
@@ -747,7 +752,7 @@ Bool WeaponTemplate::shouldProjectileCollideWith(
 	if ((getProjectileCollideMask() & requiredMask) != 0)
 		return true;
 
-	//DEBUG_LOG(("Rejecting projectile collision between %s and %s!",projectile->getTemplate()->getName().str(),thingWeCollidedWith->getTemplate()->getName().str()));
+	//engine::debug::log_info("Rejecting projectile collision between %s and %s!",projectile->getTemplate()->getName().str(),thingWeCollidedWith->getTemplate()->getName().str());
 	return false;
 }
 
@@ -780,28 +785,28 @@ UnsignedInt WeaponTemplate::fireWeaponTemplate
 			else
 				targetStr.format( "SELF." );
 
-			DEBUG_LOG( ("%d - WeaponTemplate::fireWeaponTemplate() begin - %s attacking %s",
-				TheGameLogic->getFrame(), sourceObj->getTemplate()->getName().str(), targetStr.str() ) );
+			engine::debug::log_info("%d - WeaponTemplate::fireWeaponTemplate() begin - %s attacking %s",
+				TheGameLogic->getFrame(), sourceObj->getTemplate()->getName().str(), targetStr.str() );
 		}
 	#endif
 	//end -extraLogging
 
 	//CRCDEBUG_LOG(("WeaponTemplate::fireWeaponTemplate() from %s", DescribeObject(sourceObj).str()));
-	DEBUG_ASSERTCRASH(specificBarrelToUse >= 0, ("specificBarrelToUse should no longer be -1"));
+	engine::debug::invariant((specificBarrelToUse >= 0), "specificBarrelToUse >= 0", __FILE__, __LINE__, "specificBarrelToUse should no longer be -1");
 
 	if (sourceObj == nullptr || (victimObj == nullptr && victimPos == nullptr))
 	{
 		//-extraLogging
 		#if defined(RTS_DEBUG)
 			if( TheGlobalData->m_extraLogging )
-				DEBUG_LOG( ("FAIL 1 (sourceObj %d == nullptr || (victimObj %d == nullptr && victimPos %d == nullptr)", sourceObj != 0, victimObj != 0, victimPos != 0) );
+				engine::debug::log_info("FAIL 1 (sourceObj %d == nullptr || (victimObj %d == nullptr && victimPos %d == nullptr)", sourceObj != 0, victimObj != 0, victimPos != 0);
 		#endif
 		//end -extraLogging
 
 		return 0;
 	}
 
-	DEBUG_ASSERTCRASH((m_primaryDamage > 0)  ||  (victimObj == nullptr), ("You can't really shoot a zero damage weapon at an Object.") );
+	engine::debug::invariant(((m_primaryDamage > 0)  ||  (victimObj == nullptr)), "(m_primaryDamage > 0)  ||  (victimObj == nullptr)", __FILE__, __LINE__, "You can't really shoot a zero damage weapon at an Object.");
 
 	ObjectID sourceID = sourceObj->getID();
 	const Coord3D* sourcePos = sourceObj->getPosition();
@@ -812,7 +817,7 @@ UnsignedInt WeaponTemplate::fireWeaponTemplate
 	Coord3D victimPosStorage;
 	if (victimObj)
 	{
-		DEBUG_ASSERTLOG(sourceObj != victimObj, ("*** firing weapon at self -- is this really what you want?"));
+		if (!(sourceObj != victimObj)) engine::debug::log_error("*** firing weapon at self -- is this really what you want?");
 		victimPos = victimObj->getPosition();
 		victimID = victimObj->getID();
 
@@ -859,8 +864,8 @@ UnsignedInt WeaponTemplate::fireWeaponTemplate
 		distSqr = ThePartitionManager->getDistanceSquared(sourceObj, victimPos, ATTACK_RANGE_CALC_TYPE);
 	}
 
-//	DEBUG_LOG(("WeaponTemplate::fireWeaponTemplate: firing weapon %s (source=%s, victim=%s)",
-//		m_name.str(),sourceObj->getTemplate()->getName().str(),victimObj?victimObj->getTemplate()->getName().str():"null"));
+//	engine::debug::log_info("WeaponTemplate::fireWeaponTemplate: firing weapon %s (source=%s, victim=%s)",
+//		m_name.str(),sourceObj->getTemplate()->getName().str(),victimObj?victimObj->getTemplate()->getName().str():"null");
 
 	//Only perform this check if the weapon isn't a leech range weapon (which can have unlimited range!)
 	if( !ignoreRanges && !isLeechRangeWeapon() )
@@ -868,12 +873,12 @@ UnsignedInt WeaponTemplate::fireWeaponTemplate
 		Real attackRangeSqr = sqr(getAttackRange(bonus));
 		if (distSqr > attackRangeSqr)
 		{
-			//DEBUG_ASSERTCRASH(distSqr < 5*5 || distSqr < attackRangeSqr*1.2f, ("*** victim is out of range (%f vs %f) of this weapon -- why did we attempt to fire?",sqrtf(distSqr),sqrtf(attackRangeSqr)));
+			//engine::debug::invariant((distSqr < 5*5 || distSqr < attackRangeSqr*1.2f), "distSqr < 5*5 || distSqr < attackRangeSqr*1.2f", __FILE__, __LINE__, "*** victim is out of range (%f vs %f) of this weapon -- why did we attempt to fire?",sqrtf(distSqr),sqrtf(attackRangeSqr));
 
 			//-extraLogging
 			#if defined(RTS_DEBUG)
 				if( TheGlobalData->m_extraLogging )
-					DEBUG_LOG( ("FAIL 2 (distSqr %.2f > attackRangeSqr %.2f)", distSqr, attackRangeSqr ) );
+					engine::debug::log_info("FAIL 2 (distSqr %.2f > attackRangeSqr %.2f)", distSqr, attackRangeSqr );
 			#endif
 			//end -extraLogging
 
@@ -890,12 +895,12 @@ UnsignedInt WeaponTemplate::fireWeaponTemplate
 		if (distSqr < minAttackRangeSqr-0.5f && !isProjectileDetonation)
 #endif
 		{
-			DEBUG_ASSERTCRASH(distSqr > minAttackRangeSqr*0.8f, ("*** victim is closer than min attack range (%f vs %f) of this weapon -- why did we attempt to fire?",sqrtf(distSqr),sqrtf(minAttackRangeSqr)));
+			engine::debug::invariant((distSqr > minAttackRangeSqr*0.8f), "distSqr > minAttackRangeSqr*0.8f", __FILE__, __LINE__, "*** victim is closer than min attack range (%f vs %f) of this weapon -- why did we attempt to fire?",sqrtf(distSqr),sqrtf(minAttackRangeSqr));
 
 			//-extraLogging
 			#if defined(RTS_DEBUG)
 				if( TheGlobalData->m_extraLogging )
-					DEBUG_LOG( ("FAIL 3 (distSqr %.2f< minAttackRangeSqr %.2f - 0.5f && !isProjectileDetonation %d)", distSqr, minAttackRangeSqr, isProjectileDetonation ) );
+					engine::debug::log_info("FAIL 3 (distSqr %.2f< minAttackRangeSqr %.2f - 0.5f && !isProjectileDetonation %d)", distSqr, minAttackRangeSqr, isProjectileDetonation );
 			#endif
 			//end -extraLogging
 
@@ -950,9 +955,9 @@ UnsignedInt WeaponTemplate::fireWeaponTemplate
 		if (handled == false && fx != nullptr)
 		{
 			// bah. just play it at the drawable's pos.
-			//DEBUG_LOG(("*** WeaponFireFX not fully handled by the client"));
+			//engine::debug::log_info("*** WeaponFireFX not fully handled by the client");
 			const Coord3D* where = isContactWeapon() ? &targetPos : sourceObj->getDrawable()->getPosition();
-			FXList::doFXPos(fx, where, sourceObj->getDrawable()->getTransformMatrix(), getWeaponSpeed(), &targetPos, getPrimaryDamageRadius(bonus));
+			FXList::doFXPos(fx, where, &sourceObj->getDrawable()->worldTransform(), getWeaponSpeed(), &targetPos, getPrimaryDamageRadius(bonus));
 		}
 	}
 
@@ -1052,7 +1057,7 @@ UnsignedInt WeaponTemplate::fireWeaponTemplate
 		if (delayInFrames < 1.0f)
 		{
 			// go ahead and do it now
-			//DEBUG_LOG(("WeaponTemplate::fireWeaponTemplate: firing weapon immediately!"));
+			//engine::debug::log_info("WeaponTemplate::fireWeaponTemplate: firing weapon immediately!");
 			if( inflictDamage )
 			{
 				dealDamageInternal(sourceID, damageID, damagePos, bonus, isProjectileDetonation);
@@ -1061,7 +1066,7 @@ UnsignedInt WeaponTemplate::fireWeaponTemplate
 			//-extraLogging
 			#if defined(RTS_DEBUG)
 				if( TheGlobalData->m_extraLogging )
-					DEBUG_LOG( ("EARLY 4 (delayed damage applied now)") );
+					engine::debug::log_info("EARLY 4 (delayed damage applied now)");
 			#endif
 			//end -extraLogging
 
@@ -1075,14 +1080,14 @@ UnsignedInt WeaponTemplate::fireWeaponTemplate
 			{
 				UnsignedInt delayInWholeFrames = REAL_TO_INT_CEIL(delayInFrames);
 				when = TheGameLogic->getFrame() + delayInWholeFrames;
-				//DEBUG_LOG(("WeaponTemplate::fireWeaponTemplate: firing weapon in %d frames (= %d)!", delayInWholeFrames,when));
+				//engine::debug::log_info("WeaponTemplate::fireWeaponTemplate: firing weapon in %d frames (= %d)!", delayInWholeFrames,when);
 				TheWeaponStore->setDelayedDamage(this, damagePos, when, sourceID, damageID, bonus);
 			}
 
 			//-extraLogging
 			#if defined(RTS_DEBUG)
 				if( TheGlobalData->m_extraLogging )
-					DEBUG_LOG( ("EARLY 5 (delaying damage applied until frame %d)", when ) );
+					engine::debug::log_info("EARLY 5 (delaying damage applied until frame %d)", when );
 			#endif
 			//end -extraLogging
 
@@ -1152,7 +1157,7 @@ UnsignedInt WeaponTemplate::fireWeaponTemplate
 		}
 		else
 		{
-			//DEBUG_CRASH(("Projectiles should implement ProjectileUpdateInterface!"));
+			//engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Projectiles should implement ProjectileUpdateInterface!");
 			// actually, this is ok, for things like Firestorm.... (srj)
 			projectile->setPosition(&projectileDestination);
 		}
@@ -1173,7 +1178,7 @@ UnsignedInt WeaponTemplate::fireWeaponTemplate
 		//-extraLogging
 		#if defined(RTS_DEBUG)
 			if( TheGlobalData->m_extraLogging )
-				DEBUG_LOG( ("DONE") );
+				engine::debug::log_info("DONE");
 		#endif
 		//end -extraLogging
 
@@ -1346,7 +1351,7 @@ void WeaponTemplate::dealDamageInternal(ObjectID sourceID, ObjectID victimID, co
 
 	processHistoricDamage(source, pos);
 
-//DEBUG_LOG(("WeaponTemplate::dealDamageInternal: dealing damage %s at frame %d",m_name.str(),TheGameLogic->getFrame()));
+//engine::debug::log_info("WeaponTemplate::dealDamageInternal: dealing damage %s at frame %d",m_name.str(),TheGameLogic->getFrame());
 
 	// if there's a specific victim, use it's pos (overriding the value passed in)
 	Object *primaryVictim = victimID ? TheGameLogic->findObjectByID(victimID) : nullptr;	// might be null...
@@ -1370,7 +1375,7 @@ void WeaponTemplate::dealDamageInternal(ObjectID sourceID, ObjectID victimID, co
 		Real secondaryDamage = getSecondaryDamage(bonus);
 		Int affects = getAffectsMask();
 
-		DEBUG_ASSERTCRASH(secondaryRadius >= primaryRadius || secondaryRadius == 0.0f, ("secondary radius should be >= primary radius (or zero)"));
+		engine::debug::invariant((secondaryRadius >= primaryRadius || secondaryRadius == 0.0f), "secondaryRadius >= primaryRadius || secondaryRadius == 0.0f", __FILE__, __LINE__, "secondary radius should be >= primary radius (or zero)");
 
 		Real primaryRadiusSqr = sqr(primaryRadius);
 		Real radius = max(primaryRadius, secondaryRadius);
@@ -1381,10 +1386,10 @@ void WeaponTemplate::dealDamageInternal(ObjectID sourceID, ObjectID victimID, co
 		}
 		else
 		{
-			//DEBUG_ASSERTCRASH(primaryVictim != nullptr, ("weapons without radii should always pass in specific victims"));
+			//engine::debug::invariant((primaryVictim != nullptr), "primaryVictim != nullptr", __FILE__, __LINE__, "weapons without radii should always pass in specific victims");
 			// check against victimID rather than primaryVictim, since we may have targeted a legitimate victim
 			// that got killed before the damage was dealt... (srj)
-			//DEBUG_ASSERTCRASH(victimID != 0, ("weapons without radii should always pass in specific victims"));
+			//engine::debug::invariant((victimID != 0), "victimID != 0", __FILE__, __LINE__, "weapons without radii should always pass in specific victims");
 			iter = nullptr;
 			curVictim = primaryVictim;
 			curVictimDistSqr = 0.0f;
@@ -1428,7 +1433,7 @@ void WeaponTemplate::dealDamageInternal(ObjectID sourceID, ObjectID victimID, co
 							// Remember that source is a missile for some units, and they don't want to injure them'selves' either
 							if( source == curVictim || source->getProducerID() == curVictim->getID() )
 							{
-								//DEBUG_LOG(("skipping damage done to SELF..."));
+								//engine::debug::log_info("skipping damage done to SELF...");
 								continue;
 							}
 						}
@@ -1493,14 +1498,13 @@ void WeaponTemplate::dealDamageInternal(ObjectID sourceID, ObjectID victimID, co
 					continue; // We are directional damage, but can't figure out our direction.  Just bail.
 
 				// People can only be hit in a cone oriented as the firer is oriented
-				Vector3 sourceVector = source->getTransformMatrix()->Get_X_Vector();
-				Vector3 damageVector(damageDirection.x, damageDirection.y, damageDirection.z);
-				sourceVector.Normalize();
-				damageVector.Normalize();
+				const Engine::Math::Vector3 sourceVector = source->worldTransform().Basis_X().Normalized_Legacy();
+				const Engine::Math::Vector3 damageVector =
+					Engine::Math::Vector3{damageDirection.x, damageDirection.y, damageDirection.z}.Normalized_Legacy();
 
 				// These are now normalized, so the dot productis actually the Cos of the angle they form
 				// A smaller Cos would mean a more obtuse angle
-				if( Vector3::Dot_Product(sourceVector, damageVector) < Cos(allowedAngle) )
+				if (sourceVector.Dot(damageVector) < Cos(allowedAngle))
 					continue;// Too far to the side, can't hurt them.
 			}
 
@@ -1513,9 +1517,9 @@ void WeaponTemplate::dealDamageInternal(ObjectID sourceID, ObjectID victimID, co
 				Coord3D shockWaveVector = damageDirection;
 
 				// Guard against zero vector. Make vector straight up if that is the case
-				if (fabs(shockWaveVector.x) < WWMATH_EPSILON &&
-						fabs(shockWaveVector.y) < WWMATH_EPSILON &&
-						fabs(shockWaveVector.z) < WWMATH_EPSILON)
+				if (fabs(shockWaveVector.x) < Engine::Math::DefaultTolerance &&
+						fabs(shockWaveVector.y) < Engine::Math::DefaultTolerance &&
+						fabs(shockWaveVector.z) < Engine::Math::DefaultTolerance)
 				{
 					shockWaveVector.z = 1.0f;
 				}
@@ -1564,14 +1568,14 @@ void WeaponTemplate::dealDamageInternal(ObjectID sourceID, ObjectID victimID, co
 			}
 
 			curVictim->attemptDamage(&damageInfo);
-			//DEBUG_ASSERTLOG(damageInfo.out.m_noEffect, ("WeaponTemplate::dealDamageInternal: dealt to %s %08lx: attempted %f, actual %f (%f)",
+			//if (!(damageInfo.out.m_noEffect)) engine::debug::log_error("WeaponTemplate::dealDamageInternal: dealt to %s %08lx: attempted %f, actual %f (%f)",
 			//	curVictim->getTemplate()->getName().str(),curVictim,
-			//	damageInfo.in.m_amount, damageInfo.out.m_actualDamageDealt, damageInfo.out.m_actualDamageClipped));
+			//	damageInfo.in.m_amount, damageInfo.out.m_actualDamageDealt, damageInfo.out.m_actualDamageClipped);
 		}
 	}
 	else
 	{
-		DEBUG_CRASH(("projectile weapons should never get dealDamage called directly"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "projectile weapons should never get dealDamage called directly");
 	}
 }
 
@@ -1634,7 +1638,7 @@ const WeaponTemplate *WeaponStore::findWeaponTemplate( const AsciiString& name )
 	if (name.compareNoCase("None") == 0)
 		return nullptr;
 	const WeaponTemplate * wt = findWeaponTemplatePrivate( TheNameKeyGenerator->nameToKey( name ) );
-	DEBUG_ASSERTCRASH(wt != nullptr, ("Weapon %s not found!", name.str()));
+	engine::debug::invariant((wt != nullptr), "wt != nullptr", __FILE__, __LINE__, "Weapon %s not found!", name.str());
 	return wt;
 }
 
@@ -1644,7 +1648,7 @@ const WeaponTemplate *WeaponStore::findWeaponTemplate( const char* name ) const
 	if (stricmp(name, "None") == 0)
 		return nullptr;
 	const WeaponTemplate * wt = findWeaponTemplatePrivate( TheNameKeyGenerator->nameToKey( name ) );
-	DEBUG_ASSERTCRASH(wt != nullptr, ("Weapon %s not found!",name));
+	engine::debug::invariant((wt != nullptr), "wt != nullptr", __FILE__, __LINE__, "Weapon %s not found!",name);
 	return wt;
 }
 
@@ -1767,7 +1771,7 @@ void WeaponStore::postProcessLoad()
 {
 	if (!TheThingFactory)
 	{
-		DEBUG_CRASH(("you must call this after TheThingFactory is inited"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "you must call this after TheThingFactory is inited");
 		return;
 	}
 
@@ -1797,7 +1801,7 @@ void WeaponStore::postProcessLoad()
 			weapon = TheWeaponStore->newOverride(weapon);
 		else
 		{
-			DEBUG_CRASH(("Weapon '%s' already exists, but OVERRIDE not specified", c));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Weapon '%s' already exists, but OVERRIDE not specified", c);
 			return;
 		}
 
@@ -1817,7 +1821,7 @@ void WeaponStore::postProcessLoad()
 #if defined(RTS_DEBUG)
 	if (!weapon->getFireSound().getEventName().isEmpty() && weapon->getFireSound().getEventName().compareNoCase("NoSound") != 0)
 	{
-		DEBUG_ASSERTCRASH(TheAudio->isValidAudioEvent(&weapon->getFireSound()), ("Invalid FireSound %s in Weapon '%s'.", weapon->getFireSound().getEventName().str(), weapon->getName().str()));
+		engine::debug::invariant((TheAudio->isValidAudioEvent(&weapon->getFireSound())), "TheAudio->isValidAudioEvent(&weapon->getFireSound())", __FILE__, __LINE__, "Invalid FireSound %s in Weapon '%s'.", weapon->getFireSound().getEventName().str(), weapon->getName().str());
 	}
 #endif
 
@@ -2102,7 +2106,7 @@ Bool Weapon::computeApproachTarget(const Object *source, const Object *target, c
 	}
 	else
 	{
-		DEBUG_CRASH(("error"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "error");
 		approachTargetPos.zero();
 		return false;
 	}
@@ -2112,7 +2116,7 @@ Bool Weapon::computeApproachTarget(const Object *source, const Object *target, c
 	if (minAttackRange > PATHFIND_CELL_SIZE_F && dist < minAttackRange)
 	{
 		// We aret too close, so move away from the target.
-		DEBUG_ASSERTCRASH((minAttackRange<0.9f*getAttackRange(source)), ("Min attack range is too near attack range."));
+		engine::debug::invariant(((minAttackRange<0.9f*getAttackRange(source))), "(minAttackRange<0.9f*getAttackRange(source))", __FILE__, __LINE__, "Min attack range is too near attack range.");
 		// Recompute dir, cause if the bounding spheres touch, it will be 0.
 		Coord3D srcPos = *source->getPosition();
 		dir.x = srcPos.x-targetPos->x;
@@ -2411,11 +2415,11 @@ Real Weapon::getPercentReadyToFire() const
 		{
 			UnsignedInt now = TheGameLogic->getFrame();
 			UnsignedInt nextShot = getPossibleNextShotFrame();
-			DEBUG_ASSERTCRASH(now >= m_whenLastReloadStarted, ("now >= m_whenLastReloadStarted"));
+			engine::debug::invariant((now >= m_whenLastReloadStarted), "now >= m_whenLastReloadStarted", __FILE__, __LINE__, "now >= m_whenLastReloadStarted");
 			if (now >= nextShot)
 				return 1.0f;
 
-			DEBUG_ASSERTCRASH(nextShot >= m_whenLastReloadStarted, ("nextShot >= m_whenLastReloadStarted"));
+			engine::debug::invariant((nextShot >= m_whenLastReloadStarted), "nextShot >= m_whenLastReloadStarted", __FILE__, __LINE__, "nextShot >= m_whenLastReloadStarted");
 			UnsignedInt totalTime = nextShot - m_whenLastReloadStarted;
 			if (totalTime == 0)
 			{
@@ -2423,7 +2427,7 @@ Real Weapon::getPercentReadyToFire() const
 			}
 
 			UnsignedInt timeLeft = nextShot - now;
-			DEBUG_ASSERTCRASH(timeLeft <= totalTime, ("timeLeft <= totalTime"));
+			engine::debug::invariant((timeLeft <= totalTime), "timeLeft <= totalTime", __FILE__, __LINE__, "timeLeft <= totalTime");
 			UnsignedInt timeSoFar = totalTime - timeLeft;
 			if (timeSoFar >= totalTime)
 			{
@@ -2435,7 +2439,7 @@ Real Weapon::getPercentReadyToFire() const
 			}
 		}
 	}
-	DEBUG_CRASH(("should not get here"));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "should not get here");
 	return 0.0f;
 }
 
@@ -2527,8 +2531,8 @@ void Weapon::createLaser( const Object *sourceObj, const Object *victimObj, cons
 	const ThingTemplate* pst = TheThingFactory->findTemplate(m_template->getLaserName());
 	if( !pst )
 	{
-		DEBUG_CRASH( ("Weapon::createLaser(). %s could not find template for its laser %s.",
-			sourceObj->getTemplate()->getName().str(), m_template->getLaserName().str() ) );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Weapon::createLaser(). %s could not find template for its laser %s.",
+			sourceObj->getTemplate()->getName().str(), m_template->getLaserName().str() );
 		return;
 	}
 	Object* laser = TheThingFactory->newObject( pst, sourceObj->getControllingPlayer()->getDefaultTeam() );
@@ -2560,7 +2564,6 @@ void Weapon::createLaser( const Object *sourceObj, const Object *victimObj, cons
 
 //-------------------------------------------------------------------------------------------------
 // return true if we auto-reloaded our clip after firing.
-//DECLARE_PERF_TIMER(fireWeapon)
 Bool Weapon::privateFireWeapon(
 	const Object *sourceObj,
 	Object *victimObj,
@@ -2573,7 +2576,7 @@ Bool Weapon::privateFireWeapon(
 )
 {
 	//CRCDEBUG_LOG(("Weapon::privateFireWeapon() for %s", DescribeObject(sourceObj).str()));
-	//USE_PERF_TIMER(fireWeapon)
+	//engine::profiling::Scope profile_scope_2575("fireWeapon")
 	if (projectileID)
 		*projectileID = INVALID_ID;
 
@@ -2624,7 +2627,7 @@ Bool Weapon::privateFireWeapon(
 					if (lmi)
 					{
 						VeterancyLevel v = sourceObj->getVeterancyLevel();
-						FXList::doFXPos(m_template->getFireFX(v), victimObj->getPosition(), victimObj->getTransformMatrix(), 0, victimObj->getPosition(), 0);
+						FXList::doFXPos(m_template->getFireFX(v), victimObj->getPosition(), &victimObj->worldTransform(), 0, victimObj->getPosition(), 0);
 						lmi->disarm();
 						found = true;
 						break;
@@ -2635,7 +2638,7 @@ Bool Weapon::privateFireWeapon(
 				if( (!found && victimObj->isKindOf( KINDOF_MINE )) || victimObj->isKindOf( KINDOF_BOOBY_TRAP ) || victimObj->isKindOf( KINDOF_DEMOTRAP ) )
 				{
 					VeterancyLevel v = sourceObj->getVeterancyLevel();
-					FXList::doFXPos(m_template->getFireFX(v), victimObj->getPosition(), victimObj->getTransformMatrix(), 0, victimObj->getPosition(), 0);
+					FXList::doFXPos(m_template->getFireFX(v), victimObj->getPosition(), &victimObj->worldTransform(), 0, victimObj->getPosition(), 0);
 					TheGameLogic->destroyObject( victimObj );// douse this thing before somebody gets hurt!
 					found = true;
 				}
@@ -2670,9 +2673,9 @@ Bool Weapon::privateFireWeapon(
 	WeaponBonus bonus;
 	computeBonus(sourceObj, extraBonusFlags, bonus);
 
-	DEBUG_ASSERTCRASH(getStatus() != OUT_OF_AMMO, ("Hmm, firing weapon that is OUT_OF_AMMO"));
-	DEBUG_ASSERTCRASH(getStatus() == READY_TO_FIRE, ("Hmm, Weapon is firing more often than should be possible"));
-	DEBUG_ASSERTCRASH(m_ammoInClip > 0, ("Hmm, firing an empty weapon"));
+	engine::debug::invariant((getStatus() != OUT_OF_AMMO), "getStatus() != OUT_OF_AMMO", __FILE__, __LINE__, "Hmm, firing weapon that is OUT_OF_AMMO");
+	engine::debug::invariant((getStatus() == READY_TO_FIRE), "getStatus() == READY_TO_FIRE", __FILE__, __LINE__, "Hmm, Weapon is firing more often than should be possible");
+	engine::debug::invariant((m_ammoInClip > 0), "m_ammoInClip > 0", __FILE__, __LINE__, "Hmm, firing an empty weapon");
 
 	if (getStatus() != READY_TO_FIRE)
 		return false;
@@ -2882,7 +2885,7 @@ Bool Weapon::isWithinTargetPitch(const Object *source, const Object *victim) con
 			(minPitch <= m_template->getMinTargetPitch() && maxPitch >= m_template->getMaxTargetPitch()))
 		return true;
 
-	//DEBUG_LOG(("pitch %f-%f is out of range",rad2deg(minPitch),rad2deg(maxPitch),rad2deg(m_template->getMinTargetPitch()),rad2deg(m_template->getMaxTargetPitch())));
+	//engine::debug::log_info("pitch %f-%f is out of range",rad2deg(minPitch),rad2deg(maxPitch),rad2deg(m_template->getMinTargetPitch()),rad2deg(m_template->getMaxTargetPitch()));
 	return false;
 }
 
@@ -3023,7 +3026,7 @@ void Weapon::processRequestAssistance( const Object *requestingObject, Object *v
 	const Object* launcher,
 	WeaponSlotType wslot,
 	Int specificBarrelToUse,
-	Matrix3D& worldTransform,
+	Engine::Math::AffineTransform3& worldTransform,
 	Coord3D& worldPos
 )
 {
@@ -3033,11 +3036,11 @@ void Weapon::processRequestAssistance( const Object *requestingObject, Object *v
 		// a minor case and an oft used function, but the major case is huge and full of math.
 		if(launcher->getContainedBy()->getContain()->isEnclosingContainerFor(launcher))
 		{
-			worldTransform = *launcher->getTransformMatrix();
-			Vector3 tmp = worldTransform.Get_Translation();
-			worldPos.x = tmp.X;
-			worldPos.y = tmp.Y;
-			worldPos.z = tmp.Z;
+			worldTransform = launcher->worldTransform();
+			const Engine::Math::Vector3 position = worldTransform.Translation();
+			worldPos.x = position.x;
+			worldPos.y = position.y;
+			worldPos.z = position.z;
 			return;
 		}
 	}
@@ -3048,16 +3051,16 @@ void Weapon::processRequestAssistance( const Object *requestingObject, Object *v
 	WhichTurretType tur = ai ? ai->getWhichTurretForWeaponSlot(wslot, &turretAngle, &turretPitch) : TURRET_INVALID;
 	//CRCDEBUG_LOG(("calcProjectileLaunchPosition(): Turret %d, slot %d, barrel %d for %s", tur, wslot, specificBarrelToUse, DescribeObject(launcher).str()));
 
-	Matrix3D attachTransform(true);
+	Engine::Math::AffineTransform3 attachTransform = Engine::Math::AffineTransform3::Identity();
 	Coord3D turretRotPos = {0.0f, 0.0f, 0.0f};
 	Coord3D turretPitchPos = {0.0f, 0.0f, 0.0f};
 	const Drawable* draw = launcher->getDrawable();
 	//CRCDEBUG_LOG(("Do we have a drawable? %d", (draw != nullptr)));
-	if (!draw || !draw->getProjectileLaunchOffset(wslot, specificBarrelToUse, &attachTransform, tur, &turretRotPos, &turretPitchPos))
+	if (!draw || !draw->getProjectileLaunchTransform(wslot, specificBarrelToUse, &attachTransform, tur, &turretRotPos, &turretPitchPos))
 	{
 		//CRCDEBUG_LOG(("ProjectileLaunchPos %d %d not found!",wslot, specificBarrelToUse));
-		DEBUG_CRASH(("ProjectileLaunchPos %d %d not found!",wslot, specificBarrelToUse));
-		attachTransform.Make_Identity();
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "ProjectileLaunchPos %d %d not found!",wslot, specificBarrelToUse);
+		attachTransform = Engine::Math::AffineTransform3::Identity();
 		turretRotPos.zero();
 		turretPitchPos.zero();
 	}
@@ -3066,39 +3069,33 @@ void Weapon::processRequestAssistance( const Object *requestingObject, Object *v
 		// The attach transform is the pristine front and center position of the fire point
 		// We can't read from the client, so we need to reproduce the actual point that
 		// takes turn and pitch into account.
-		Matrix3D turnAdjustment(1);
-		Matrix3D pitchAdjustment(1);
+		Engine::Math::AffineTransform3 turnAdjustment = Engine::Math::AffineTransform3::Identity();
+		Engine::Math::AffineTransform3 pitchAdjustment = Engine::Math::AffineTransform3::Identity();
 
 		// To rotate about a point, move that point to 0,0, rotate, then move it back.
 		// Pre rotate will keep the first twist from screwing the angle of the second pitch
-		pitchAdjustment.Translate( turretPitchPos.x, turretPitchPos.y, turretPitchPos.z );
-		pitchAdjustment.In_Place_Pre_Rotate_Y(-turretPitch);
-		pitchAdjustment.Translate( -turretPitchPos.x, -turretPitchPos.y, -turretPitchPos.z );
+		Legacy_Translate(pitchAdjustment, turretPitchPos.x, turretPitchPos.y, turretPitchPos.z);
+		Legacy_In_Place_Pre_Rotate_Y(pitchAdjustment, -turretPitch);
+		Legacy_Translate(pitchAdjustment, -turretPitchPos.x, -turretPitchPos.y, -turretPitchPos.z);
 
-		turnAdjustment.Translate( turretRotPos.x, turretRotPos.y, turretRotPos.z );
-		turnAdjustment.In_Place_Pre_Rotate_Z(turretAngle);
-		turnAdjustment.Translate( -turretRotPos.x, -turretRotPos.y, -turretRotPos.z );
+		Legacy_Translate(turnAdjustment, turretRotPos.x, turretRotPos.y, turretRotPos.z);
+		Legacy_In_Place_Pre_Rotate_Z(turnAdjustment, turretAngle);
+		Legacy_Translate(turnAdjustment, -turretRotPos.x, -turretRotPos.y, -turretRotPos.z);
 
-#ifdef ALLOW_TEMPORARIES
-		attachTransform = turnAdjustment * pitchAdjustment * attachTransform;
-#else
-		Matrix3D tmp = attachTransform;
-		attachTransform.mul(turnAdjustment, pitchAdjustment);
-		attachTransform.postMul(tmp);
-#endif
+		// (turn * pitch) * attach, in that association order.
+		attachTransform = Compose(Compose(turnAdjustment, pitchAdjustment), attachTransform);
 	}
 
 //#if defined(RTS_DEBUG)
 //  Real muzzleHeight = attachTransform.Get_Z_Translation();
-//  DEBUG_ASSERTCRASH( muzzleHeight > 0.001f, ("YOUR TURRET HAS A VERY LOW PROJECTILE LAUNCH POSITION, BUT FOUND A VALID BONE. DID YOU PICK THE WRONG ONE? %s", launcher->getTemplate()->getName().str()));
+//  engine::debug::invariant((muzzleHeight > 0.001f), "muzzleHeight > 0.001f", __FILE__, __LINE__, "YOUR TURRET HAS A VERY LOW PROJECTILE LAUNCH POSITION, BUT FOUND A VALID BONE. DID YOU PICK THE WRONG ONE? %s", launcher->getTemplate()->getName().str());
 //#endif
 
-  launcher->convertBonePosToWorldPos(nullptr, &attachTransform, nullptr, &worldTransform);
-
-	Vector3 tmp = worldTransform.Get_Translation();
-	worldPos.x = tmp.X;
-	worldPos.y = tmp.Y;
-	worldPos.z = tmp.Z;
+	worldTransform = launcher->toWorldTransform(attachTransform);
+	const Engine::Math::Vector3 position = worldTransform.Translation();
+	worldPos.x = position.x;
+	worldPos.y = position.y;
+	worldPos.z = position.z;
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -3119,13 +3116,13 @@ void Weapon::processRequestAssistance( const Object *requestingObject, Object *v
 		return;
 	}
 
-	Matrix3D worldTransform(true);
+	Engine::Math::AffineTransform3 worldTransform = Engine::Math::AffineTransform3::Identity();
 	Coord3D worldPos;
 
 	Weapon::calcProjectileLaunchPosition(launcher, wslot, specificBarrelToUse, worldTransform, worldPos);
 
 	projectile->getDrawable()->setDrawableHidden(false);
-	projectile->setTransformMatrix(&worldTransform);
+	projectile->setWorldTransform(worldTransform);
 	projectile->setPosition(&worldPos);
 	projectile->getExperienceTracker()->setExperienceSink( launcher->getID() );
 
@@ -3148,26 +3145,6 @@ void Weapon::getFiringLineOfSightOrigin(const Object* source, Coord3D& origin) c
 	// he clears this check and transitions to attacking.  This puts his gun at waist level and
 	// now he fails this check so he transitions back.  Our height won't change.
 	origin.z += source->getGeometryInfo().getMaxHeightAbovePosition();
-
-/*
-	if (m_template->getProjectileTemplate() == nullptr)
-	{
-		// note that we want to measure from the top of the collision
-		// shape, not the bottom! (most objects have eyes a lot closer
-		// to their head than their feet. if we have really odd critters
-		// with eye-feet, we'll need to change this assumption.)
-		origin.z += source->getGeometryInfo().getMaxHeightAbovePosition();
-	}
-	else
-	{
-		Matrix3D tmp(true);
-		Coord3D launchPos = {0.0f, 0.0f, 0.0f};
-		calcProjectileLaunchPosition(source, m_wslot, m_curBarrel, tmp, launchPos);
-		origin.x += launchPos.x - source->getPosition()->x;
-		origin.y += launchPos.y - source->getPosition()->y;
-		origin.z += launchPos.z - source->getPosition()->z;
-	}
-*/
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -3436,7 +3413,7 @@ void Weapon::crc( Xfer *xfer )
 #ifdef DEBUG_CRC
 	if (doLogging)
 	{
-		CRCDEBUG_LOG(("%s", logString.str()));
+		engine::debug::log_trace("%s", logString.str());
 	}
 #endif // DEBUG_CRC
 
@@ -3613,4 +3590,3 @@ void WeaponBonusSet::appendBonuses(WeaponBonusConditionFlags flags, WeaponBonus&
 		this->m_bonus[i].appendBonuses(bonus);
 	}
 }
-

@@ -25,7 +25,8 @@
 // RadiusDecal.cpp ///////////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #define DEFINE_SHADOW_NAMES
 
@@ -56,7 +57,7 @@ void RadiusDecalTemplate::createRadiusDecal(const Coord3D& pos, Real radius, con
 
 	if (owningPlayer == nullptr)
 	{
-		DEBUG_CRASH(("You MUST specify a non-null owningPlayer to createRadiusDecal. (srj)"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "You MUST specify a non-null owningPlayer to createRadiusDecal. (srj)");
 		return;
 	}
 
@@ -87,7 +88,7 @@ void RadiusDecalTemplate::createRadiusDecal(const Coord3D& pos, Real radius, con
 		}
 		else
 		{
-			DEBUG_CRASH(("Unable to add decal %s",decalInfo.m_ShadowName));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unable to add decal %s",decalInfo.m_ShadowName);
 		}
 	}
 }
@@ -141,7 +142,7 @@ RadiusDecal::RadiusDecal(const RadiusDecal& that) :
 	m_decal(nullptr),
 	m_empty(true)
 {
-	DEBUG_CRASH(("not fully implemented"));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "not fully implemented");
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -154,7 +155,7 @@ RadiusDecal& RadiusDecal::operator=(const RadiusDecal& that)
 			m_decal->release();
 		m_decal = nullptr;
 		m_empty = true;
-		DEBUG_CRASH(("not fully implemented"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "not fully implemented");
 	}
 	return *this;
 }

@@ -23,16 +23,16 @@
 ////////////////////////////////////////////////////////////////////////////////
 
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "GameNetwork/networkutil.h"
 
-#ifdef DEBUG_LOGGING
 
 void dumpBufferToLog(const void *vBuf, Int len, const char *fname, Int line)
 {
-	DEBUG_LOG(("======= dumpBufferToLog() %d bytes =======", len));
-	DEBUG_LOG(("Source: %s:%d", fname, line));
+	engine::debug::log_info("======= dumpBufferToLog() %d bytes =======", len);
+	engine::debug::log_info("Source: %s:%d", fname, line);
 	const char *buf = (const char *)vBuf;
 	Int numLines = len / 8;
 	if ((len % 8) != 0)
@@ -42,30 +42,29 @@ void dumpBufferToLog(const void *vBuf, Int len, const char *fname, Int line)
 	for (Int dumpindex = 0; dumpindex < numLines; ++dumpindex)
 	{
 		Int offset = dumpindex*8;
-		DEBUG_LOG_RAW(("\t%5.5d\t", offset));
+		engine::debug::log_info("\t%5.5d\t", offset);
 		Int dumpindex2;
 		Int numBytesThisLine = min(8, len - offset);
 		for (dumpindex2 = 0; dumpindex2 < numBytesThisLine; ++dumpindex2)
 		{
 			Int c = (buf[offset + dumpindex2] & 0xff);
-			DEBUG_LOG_RAW(("%02X ", c));
+			engine::debug::log_info("%02X ", c);
 		}
 		for (; dumpindex2 < 8; ++dumpindex2)
 		{
-			DEBUG_LOG_RAW(("   "));
+			engine::debug::log_info("   ");
 		}
-		DEBUG_LOG_RAW((" | "));
+		engine::debug::log_info(" | ");
 		for (dumpindex2 = 0; dumpindex2 < numBytesThisLine; ++dumpindex2)
 		{
 			char c = buf[offset + dumpindex2];
-			DEBUG_LOG_RAW(("%c", (isprint(c)?c:'.')));
+			engine::debug::log_info("%c", (isprint(c)?c:'.'));
 		}
-		DEBUG_LOG_RAW(("\n"));
+		engine::debug::log_info("\n");
 	}
-	DEBUG_LOG(("End of packet dump"));
+	engine::debug::log_info("End of packet dump");
 }
 
-#endif // DEBUG_LOGGING
 
 /**
  * ResolveIP turns a string ("games2.westwood.com", or "192.168.0.1") into
@@ -78,7 +77,7 @@ UnsignedInt ResolveIP(AsciiString host)
 
   if (host.isEmpty())
   {
-	  DEBUG_LOG(("ResolveIP(): Can't resolve null"));
+	  engine::debug::log_info("ResolveIP(): Can't resolve null");
 	  return 0;
   }
 
@@ -92,7 +91,7 @@ UnsignedInt ResolveIP(AsciiString host)
   hostStruct = gethostbyname(host.str());
   if (hostStruct == nullptr)
   {
-	  DEBUG_LOG(("ResolveIP(): Can't resolve %s", host.str()));
+	  engine::debug::log_info("ResolveIP(): Can't resolve %s", host.str());
 	  return 0;
   }
   hostNode = (struct in_addr *) hostStruct->h_addr;
@@ -222,7 +221,7 @@ const char* GetNetCommandTypeAsString(NetCommandType type)
 	CASE_LABEL(NETCOMMANDTYPE_DISCONNECTSCREENOFF)
 	CASE_LABEL(NETCOMMANDTYPE_DISCONNECTEND)
 	default:
-		DEBUG_CRASH(("Unhandled NetCommandType in GetNetCommandTypeAsString"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unhandled NetCommandType in GetNetCommandTypeAsString");
 		return "<NETCOMMANDTYPE_INVALID>";
 	}
 

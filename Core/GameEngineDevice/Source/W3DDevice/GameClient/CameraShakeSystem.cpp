@@ -36,15 +36,17 @@
  * Functions:                                                                                  *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
+#include <algorithm>
+#include <bit>
+#include <cmath>
 #include <stdlib.h>
+#include <cstdint>
 #include "W3DDevice/GameClient/W3DAssetCatalog.h"
 #include <W3DDevice/GameClient/W3DTextureHandle.h>
-#include <WWMath/tri.h>
-#include <WWMath/colmath.h>
 #include <W3DDevice/GameClient/W3DCastQuery.h>
 #include "W3DDevice/GameClient/W3DCamera.h"
 #include "Common/GlobalData.h"
-#include "Common/PerfTimer.h"
+
 
 #include "GameClient/TerrainVisual.h"
 #include "GameClient/View.h"
@@ -66,11 +68,13 @@
 #include "W3DDevice/GameClient/W3DShadow.h"
 #include "W3DDevice/GameClient/W3DWater.h"
 #include "W3DDevice/GameClient/W3DShroud.h"
-#include "W3DDevice/GameClient/W3DPoly.h"
 #include "W3DDevice/GameClient/W3DCustomScene.h"
 
 #include "W3DDevice/GameClient/CameraShakeSystem.h"
 #include "W3DDevice/GameClient/W3DCamera.h"
+import Engine.Core.Math.Scalar;
+import Engine.Core.Math.RandomStream;
+import engine.debug;
 
 //#include "W3DDevice/GameClient/camera.h"
 //#include "W3DDevice/GameClient/wwmemlog.h"
@@ -84,12 +88,24 @@
 */
 
 
-const float MIN_OMEGA			= DEG_TO_RADF(12.5f*360.0f);
-const float MAX_OMEGA			= DEG_TO_RADF(15.0f*360.0f);
-const float END_OMEGA			= DEG_TO_RADF(360.0f);
-const float MIN_PHI				= DEG_TO_RADF(0.0f);
-const float MAX_PHI				= DEG_TO_RADF(360.0f);
-const Vector3 AXIS_ROTATION	= Vector3(DEG_TO_RADF(7.5f),DEG_TO_RADF(15.0f),DEG_TO_RADF(5.0f));
+const float MIN_OMEGA			= ((12.5f*360.0f)*Engine::Math::Pi/180.0f);
+const float MAX_OMEGA			= ((15.0f*360.0f)*Engine::Math::Pi/180.0f);
+const float END_OMEGA			= ((360.0f)*Engine::Math::Pi/180.0f);
+const float MIN_PHI				= ((0.0f)*Engine::Math::Pi/180.0f);
+const float MAX_PHI				= ((360.0f)*Engine::Math::Pi/180.0f);
+const Engine::Math::Vector3 AXIS_ROTATION{
+	((7.5f)*Engine::Math::Pi/180.0f),
+	((15.0f)*Engine::Math::Pi/180.0f),
+	((5.0f)*Engine::Math::Pi/180.0f)};
+
+// The legacy shakers all drew from the single global WWMath::Random_Float
+// stream, so consecutive shakers were decorrelated. Keep one shared stream for
+// every shaker (client-side visual only; never feeds GameLogic).
+static Engine::Math::RandomStream &sharedShakeRandom()
+{
+	static Engine::Math::RandomStream random(0x43414D5348414B45ull);
+	return random;
+}
 
 
 /************************************************************************************************
@@ -99,7 +115,7 @@ const Vector3 AXIS_ROTATION	= Vector3(DEG_TO_RADF(7.5f),DEG_TO_RADF(15.0f),DEG_T
 ************************************************************************************************/
 CameraShakeSystemClass::CameraShakerClass::CameraShakerClass
 (
-	const Vector3 & position,
+	const Engine::Math::Vector3 & position,
 	float radius,
 	float duration,
 	float intensity
@@ -113,12 +129,12 @@ CameraShakeSystemClass::CameraShakerClass::CameraShakerClass
 	/*
 	** Initialize random sinusoid values
 	*/
-	Omega.X = WWMath::Random_Float(MIN_OMEGA,MAX_OMEGA);
-	Omega.Y = WWMath::Random_Float(MIN_OMEGA,MAX_OMEGA);
-	Omega.Z = WWMath::Random_Float(MIN_OMEGA,MAX_OMEGA);
-	Phi.X = WWMath::Random_Float(MIN_PHI,MAX_PHI);
-	Phi.Y = WWMath::Random_Float(MIN_PHI,MAX_PHI);
-	Phi.Z = WWMath::Random_Float(MIN_PHI,MAX_PHI);
+	Omega.x = sharedShakeRandom().NextFloat(MIN_OMEGA,MAX_OMEGA);
+	Omega.y = sharedShakeRandom().NextFloat(MIN_OMEGA,MAX_OMEGA);
+	Omega.z = sharedShakeRandom().NextFloat(MIN_OMEGA,MAX_OMEGA);
+	Phi.x = sharedShakeRandom().NextFloat(MIN_PHI,MAX_PHI);
+	Phi.y = sharedShakeRandom().NextFloat(MIN_PHI,MAX_PHI);
+	Phi.z = sharedShakeRandom().NextFloat(MIN_PHI,MAX_PHI);
 }
 
 CameraShakeSystemClass::CameraShakerClass::~CameraShakerClass()
@@ -126,9 +142,10 @@ CameraShakeSystemClass::CameraShakerClass::~CameraShakerClass()
 }
 
 
-void CameraShakeSystemClass::CameraShakerClass::Compute_Rotations(const Vector3 & camera_position, Vector3 * set_angles)
+void CameraShakeSystemClass::CameraShakerClass::Compute_Rotations(
+	const Engine::Math::Vector3 &camera_position, Engine::Math::Vector3 *set_angles)
 {
-	WWASSERT(set_angles != nullptr);
+	engine::debug::assert_condition((set_angles != nullptr), "set_angles != nullptr", __FILE__, __LINE__, "assertion failed");
 
 	/*
 	** We want several different sinusiods, each with a different phase shift and
@@ -139,7 +156,8 @@ void CameraShakeSystemClass::CameraShakerClass::Compute_Rotations(const Vector3 
 	** the horizontal axis.
 	*/
 
-	float len2 = (camera_position - Position).Length2();
+	const Engine::Math::Vector3 offset = camera_position - Position;
+	const float len2 = offset.Dot(offset);
 
 
 	if (len2 > Radius*Radius) {
@@ -153,18 +171,23 @@ void CameraShakeSystemClass::CameraShakerClass::Compute_Rotations(const Vector3 
 	** omega(t) = start_omega + (end_omega - start_omega) * t
 	** phi = random(0..start_omega)
 	*/
-	float intensity = Intensity * (1.0f - WWMath::Sqrt(len2) / Radius) * (1.0f - ElapsedTime / Duration);
+	float intensity = Intensity * (1.0f - std::sqrt(len2) / Radius) * (1.0f - ElapsedTime / Duration);
+	const float omega_values[] = {Omega.x, Omega.y, Omega.z};
+	const float phase_values[] = {Phi.x, Phi.y, Phi.z};
+	const float axis_rotation_values[] = {AXIS_ROTATION.x, AXIS_ROTATION.y, AXIS_ROTATION.z};
+	float *angle_components[] = {&set_angles->x, &set_angles->y, &set_angles->z};
 	for (int i=0; i<3; i++) {
-		float omega = Omega[i] + (END_OMEGA - Omega[i]) * ElapsedTime;
-		(*set_angles)[i] += AXIS_ROTATION[i] * intensity * WWMath::Sin(omega * ElapsedTime + Phi[i]);
+		const float omega = omega_values[i] + (END_OMEGA - omega_values[i]) * ElapsedTime;
+		*angle_components[i] += axis_rotation_values[i] * intensity
+			* std::sin(omega * ElapsedTime + phase_values[i]);
 
 		//WST 11/14/2002. Add in additional random fudge.  There seems to be a too mathematical pattern of shake with the above
-		Vector3 secondary_angles;
+		Engine::Math::Vector3 secondary_angles;
 		float minor_intensity = intensity * 0.5f;
-		secondary_angles.X = WWMath::Random_Float(-minor_intensity,minor_intensity);
-		secondary_angles.Y = WWMath::Random_Float(-minor_intensity,minor_intensity);
-		secondary_angles.Z = WWMath::Random_Float(-minor_intensity,minor_intensity);
-		(*set_angles) += secondary_angles;
+		secondary_angles.x = sharedShakeRandom().NextFloat(-minor_intensity,minor_intensity);
+		secondary_angles.y = sharedShakeRandom().NextFloat(-minor_intensity,minor_intensity);
+		secondary_angles.z = sharedShakeRandom().NextFloat(-minor_intensity,minor_intensity);
+		*set_angles = *set_angles + secondary_angles;
 	}
 }
 
@@ -192,7 +215,7 @@ CameraShakeSystemClass::~CameraShakeSystemClass()
 
 void CameraShakeSystemClass::Add_Camera_Shake
 (
-	const Vector3 & position,
+	const Engine::Math::Vector3 & position,
 	float radius,
 	float duration,
 	float power
@@ -252,12 +275,12 @@ void CameraShakeSystemClass::Timestep(float dt)
 	}
 }
 
-void CameraShakeSystemClass::Update_Camera_Shaker(Vector3 camera_position, Vector3 *shaker_angle)
+void CameraShakeSystemClass::Update_Camera_Shaker(
+	Engine::Math::Vector3 camera_position, Engine::Math::Vector3 *shaker_angle)
 {
 	Graphics::SceneObjectList<CameraShakerClass,false>::Cursor iterator(&CameraShakerList);
 
-	Vector3 angles(0,0,0);
-	Matrix3D camera_transform;
+	Engine::Math::Vector3 angles{};
 
 	//camera_transform = camera.Get_Transform();
 	//camera_transform.Get_Translation(&camera_position);
@@ -273,11 +296,8 @@ void CameraShakeSystemClass::Update_Camera_Shaker(Vector3 camera_position, Vecto
 	/*
 	** Clamp the result
 	*/
-	for (int i=0; i<3; i++) {
-		WWMath::Clamp(angles[i],-AXIS_ROTATION[i],AXIS_ROTATION[i]);
-	}
-
-	*shaker_angle = angles;
+	if (shaker_angle != nullptr)
+		*shaker_angle = angles;
 
 	/*
 	** Apply to the camera
@@ -292,4 +312,3 @@ void CameraShakeSystemClass::Update_Camera_Shaker(Vector3 camera_position, Vecto
 
 // The Instance of the system
 CameraShakeSystemClass CameraShakerSystem; //WST 11/12/2002 This is the new Camera Shaker system upgrade
-

@@ -1,5 +1,4 @@
 module;
-#include "../../profiling/Tracy.h"
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -15,6 +14,7 @@ module;
 #include <vector>
 
 export module Graphics.Scene.Shadows.DirectionalRenderer;
+import engine.profiling;
 export import Graphics.Scene.Shadows;
 export import Graphics.Scene.Props.Renderer;
 import Graphics.Scene.Lighting.Environment;
@@ -166,7 +166,7 @@ public:
         else if (!source.Instances().Retain(instance)) { source.Destroy_Mesh(mesh); return false; }
         caster.instance=instance;
         {
-            GRAPHICS_PROFILE_SCOPE("Graphics.Shadows.MeshBounds");
+            engine::profiling::Scope profile_scope_168("Graphics.Shadows.MeshBounds");
             if (!source.Mesh_Bounds(mesh,instance,caster.bounds.minimum,caster.bounds.maximum)) {
                 source.Instances().Release(instance); source.Destroy_Mesh(mesh); return false;
             }
@@ -180,7 +180,7 @@ public:
         const ShadowSettings& settings,RHITextureHandle color_target,
         RHITextureHandle depth_target,RHIViewport viewport)
     {
-        GRAPHICS_PROFILE_SCOPE("Graphics.Shadows.Render");
+        engine::profiling::Scope profile_scope_182("Graphics.Shadows.Render");
         if (m_device == nullptr || !color_target.Is_Valid() || !depth_target.Is_Valid()) return false;
         ShadowCascades cascades;
         if (!Build_Shadow_Cascades(view,LightHandle(0,1),light,settings,cascades)) return false;
@@ -272,7 +272,7 @@ private:
 
     std::array<bool,Max_Shadow_Cascades> Prepare_Cache(const ShadowCascades& cascades)
     {
-        GRAPHICS_PROFILE_SCOPE("Graphics.Shadows.CacheInputs");
+        engine::profiling::Scope profile_scope_274("Graphics.Shadows.CacheInputs");
         for (unsigned i=0;i<cascades.count;++i) {
             auto& key=m_current_keys[i]; key.data.clear(); key.styles.clear();
             key.Append(cascades.views[i].view_projection.values);

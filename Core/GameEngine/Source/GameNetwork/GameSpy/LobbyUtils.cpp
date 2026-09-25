@@ -29,7 +29,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/GameEngine.h"
 #include "Common/MultiplayerSettings.h"
@@ -219,16 +220,12 @@ static void gameTooltip(GameWindow *window,
 
 	if (col == COLUMN_PING)
 	{
-#if 0 //def DEBUG_LOGGING
 		UnicodeString s;
 		s.format(L"Ping is %d ms (cutoffs are %d ms and %d ms\n%hs local pings\n%hs remote pings",
 			room->getPingAsInt(), TheGameSpyConfig->getPingCutoffGood(), TheGameSpyConfig->getPingCutoffBad(),
 			TheGameSpyInfo->getPingString().str(), room->getPingString().str()
 		);
 		TheMouse->setCursorTooltip( s, 10, nullptr, 2.0f ); // the text and width are the only params used.  the others are the default values.
-#else
-		TheMouse->setCursorTooltip( TheGameText->fetch("TOOLTIP:PingInfo"), 10, nullptr, 2.0f ); // the text and width are the only params used.  the others are the default values.
-#endif
 		return;
 	}
 	if (col == COLUMN_NUMPLAYERS)
@@ -312,7 +309,7 @@ static void gameTooltip(GameWindow *window,
 		GameSpyGameSlot *slot = room->getGameSpySlot(i);
 		if (i == 0 && (!slot || !slot->isHuman()))
 		{
-			DEBUG_CRASH(("About to tooltip a non-hosted game!"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "About to tooltip a non-hosted game!");
 		}
 		if (slot && slot->isHuman())
 		{
@@ -340,7 +337,7 @@ static void gameTooltip(GameWindow *window,
 			}
 		}
 	}
-	DEBUG_ASSERTCRASH(numPlayers, ("Tooltipping a 0-player game!"));
+	engine::debug::invariant((numPlayers), "numPlayers", __FILE__, __LINE__, "Tooltipping a 0-player game!");
 
 	TheMouse->setCursorTooltip( tooltip, 10, nullptr, 2.0f ); // the text and width are the only params used.  the others are the default values.
 }
@@ -376,9 +373,9 @@ void GrabWindowInfo()
 	pingImages[0] = TheMappedImageCollection->findImageByName("Ping03");
 	pingImages[1] = TheMappedImageCollection->findImageByName("Ping02");
 	pingImages[2] = TheMappedImageCollection->findImageByName("Ping01");
-	DEBUG_ASSERTCRASH(pingImages[0], ("Can't find ping image!"));
-	DEBUG_ASSERTCRASH(pingImages[1], ("Can't find ping image!"));
-	DEBUG_ASSERTCRASH(pingImages[2], ("Can't find ping image!"));
+	engine::debug::invariant((pingImages[0]), "pingImages[0]", __FILE__, __LINE__, "Can't find ping image!");
+	engine::debug::invariant((pingImages[1]), "pingImages[1]", __FILE__, __LINE__, "Can't find ping image!");
+	engine::debug::invariant((pingImages[2]), "pingImages[2]", __FILE__, __LINE__, "Can't find ping image!");
 
 //	parentGameListSmallID = NAMEKEY( "WOLCustomLobby.wnd:ParentGameListSmall" );
 //	parentGameListSmall = TheWindowManager->winGetWindowFromId(nullptr, parentGameListSmallID);

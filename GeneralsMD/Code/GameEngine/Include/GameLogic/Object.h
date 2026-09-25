@@ -45,6 +45,7 @@
 #include "GameLogic/WeaponSet.h"
 #include "GameLogic/WeaponSetFlags.h"
 #include "GameLogic/Module/StealthUpdate.h"
+import Engine.Core.Math.AffineTransform3;
 
 //-----------------------------------------------------------------------------
 //           Forward References
@@ -572,9 +573,9 @@ public:
 	Bool testWeaponBonusCondition(WeaponBonusConditionType wst) const { return (m_weaponBonusCondition & (1 << wst)) != 0; }
 	inline WeaponBonusConditionFlags getWeaponBonusCondition() const { return m_weaponBonusCondition; }
 
-	Bool getSingleLogicalBonePosition(const char* boneName, Coord3D* position, Matrix3D* transform) const;
-	Bool getSingleLogicalBonePositionOnTurret(WhichTurretType whichTurret, const char* boneName, Coord3D* position, Matrix3D* transform) const;
-	Int getMultiLogicalBonePosition(const char* boneNamePrefix, Int maxBones, Coord3D* positions, Matrix3D* transforms, Bool convertToWorld = TRUE ) const;
+	Bool getSingleLogicalBonePosition(const char* boneName, Coord3D* position, Engine::Math::AffineTransform3* transform) const;
+	Bool getSingleLogicalBonePositionOnTurret(WhichTurretType whichTurret, const char* boneName, Coord3D* position, Engine::Math::AffineTransform3* transform) const;
+	Int getMultiLogicalBonePosition(const char* boneNamePrefix, Int maxBones, Coord3D* positions, Engine::Math::AffineTransform3* transforms, Bool convertToWorld = TRUE ) const;
 
 	// Entered & exited.
 	Bool didEnter(const PolygonTrigger *pTrigger) const;
@@ -686,7 +687,7 @@ protected:
 	void addThreat();
 	void removeThreat();
 
-	virtual void reactToTransformChange(const Matrix3D* oldMtx, const Coord3D* oldPos, Real oldAngle) override;
+	virtual void reactToTransformChange(const Coord3D* oldPos, Real oldAngle) override;
 
 private:
 

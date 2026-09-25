@@ -28,6 +28,8 @@
 #include "W3DDevice/GameClient/W3DRenderObject.h"
 #include "W3DDevice/GameClient/W3DCastQuery.h"
 import Graphics.Materials.State;
+import Engine.Core.Math.AxisAlignedBox3;
+import Engine.Core.Math.Vector3;
 #include "Lib/BaseType.h"
 #include "Common/GameType.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
@@ -45,6 +47,7 @@ class W3DScene;
 class W3DSimpleScene;
 class W3DScorchInterface;
 class W3DShroud;
+import engine.platform.time;
 class W3DPropDrawModuleData;
 class W3DPropBuffer;
 class W3DTreeDrawModuleData;
@@ -76,13 +79,14 @@ virtually everything to do with the terrain, including: drawing, lighting,
 scorchmarks and intersection tests.
 */
 import Graphics.Frame.ResourceLifecycle;
+import Graphics.Scene.Views.CameraFrustum;
 
 class BaseHeightMapRenderObjClass : public W3DRenderObject, public Snapshot
 {
     Graphics::FrameResourceRegistration m_resourceRegistration;
 public:
 
-	BaseHeightMapRenderObjClass();
+	explicit BaseHeightMapRenderObjClass(engine::platform::IClockService& clock);
 	virtual ~BaseHeightMapRenderObjClass() override;
 
 	virtual void ReleaseResources(); ///< Release render resources before device reset.
@@ -96,8 +100,8 @@ public:
 	virtual int						Class_ID() const override;
 	virtual void					Render(W3DRenderContext & rinfo) override = 0;
 	virtual bool					Cast_Ray(W3DRayCastQuery & raytest) override; // This CANNOT be Bool, as it will not inherit properly if you make Bool == Int
-	virtual void					Get_Obj_Space_Bounding_Sphere(SphereClass & sphere) const override;
-	virtual void					Get_Obj_Space_Bounding_Box(AABoxClass & aabox) const override;
+	virtual void					Get_Local_Bounding_Sphere(Engine::Math::Sphere3 & sphere) const override;
+	virtual void					Get_Local_Bounds(Engine::Math::AxisAlignedBox3 & aabox) const override;
 
 
 	virtual void					On_Frame_Update() override;
@@ -108,7 +112,7 @@ public:
 	///allocate resources needed to render heightmap
 	virtual int initHeightData(Int width, Int height, WorldHeightMap *pMap, Graphics::SceneObjectList<W3DRenderObject>::Cursor *pLightsIterator, Bool updateExtraPassTiles=TRUE);
 	virtual Int freeMapResources();	///< free resources used to render heightmap
-	virtual void updateCenter(W3DCamera *camera, const Vector3 *cameraPivot, Graphics::SceneObjectList<W3DRenderObject>::Cursor *pLightsIterator);
+	virtual void updateCenter(W3DCamera *camera, const Engine::Math::Vector3 *cameraPivot, Graphics::SceneObjectList<W3DRenderObject>::Cursor *pLightsIterator);
  	virtual void adjustTerrainLOD(Int adj);
 	virtual void doPartialUpdate(const IRegion2D &partialRange, WorldHeightMap *htMap, Graphics::SceneObjectList<W3DRenderObject>::Cursor *pLightsIterator) = 0;
 	virtual void staticLightingChanged();
@@ -146,9 +150,9 @@ public:
 	void updateMacroTexture(AsciiString textureName);
 	void doTextures(Bool flag) {m_disableTextures = !flag;};
 	/// Update the diffuse value from static light info for one vertex.
-	UnsignedInt computeVertexLighting(const Vector3& position, const Vector3*light, const Vector3*normal, Graphics::SceneObjectList<W3DRenderObject>::Cursor *pLightsIterator, UnsignedByte alpha);
-	void addScorch(Vector3 location, Real radius, Scorches type);
-	void addStaticScorch(Vector3 location, Real radius, Scorches type);
+	UnsignedInt computeVertexLighting(const Engine::Math::Vector3& position, const Engine::Math::Vector3*light, const Engine::Math::Vector3*normal, Graphics::SceneObjectList<W3DRenderObject>::Cursor *pLightsIterator, UnsignedByte alpha);
+	void addScorch(Engine::Math::Vector3 location, Real radius, Scorches type);
+	void addStaticScorch(Engine::Math::Vector3 location, Real radius, Scorches type);
 	void addTree(DrawableID id, Coord3D location, Real scale, Real angle,
 								Real randomScaleAmount,  const W3DTreeDrawModuleData *data);
 	void removeAllTrees();
@@ -170,8 +174,8 @@ public:
 	);
 
 	/// Add a bib at location.
-	void addTerrainBib(Vector3 corners[4], ObjectID id, Bool highlight);
-	void addTerrainBibDrawable(Vector3 corners[4], DrawableID id, Bool highlight);
+	void addTerrainBib(Engine::Math::Vector3 corners[4], ObjectID id, Bool highlight);
+	void addTerrainBibDrawable(Engine::Math::Vector3 corners[4], DrawableID id, Bool highlight);
 	/// Remove a bib.
 	void removeTerrainBib(ObjectID id);
 	void removeTerrainBibDrawable(DrawableID id);
@@ -196,7 +200,8 @@ public:
 	virtual Int	getNumExtraBlendTiles(Bool visible) { return 0;}
 	Int getNumShoreLineTiles(Bool visible)	{ return visible?m_numVisibleShoreLineTiles:m_numShoreLineTiles;}
 	void setShoreLineDetail();	///<update shoreline tiles in case the feature was toggled by user.
-	Bool getMaximumVisibleBox(const FrustumClass &frustum,  AABoxClass *box, Bool ignoreMaxHeight);	///<3d extent of visible terrain.
+	Bool getMaximumVisibleBox(const Graphics::CameraFrustum &frustum,
+		Engine::Math::AxisAlignedBox3 *box, Bool ignoreMaxHeight);	///<3d extent of visible terrain.
 	Real getHeightMapHeight(Real x, Real y, Coord3D* normal) const;	///<return height and normal at given point
 	Bool isCliffCell(Real x, Real y);	///<return height and normal at given point
 	Real getMinHeight() const {return m_minHeight;}	///<return minimum height of entire terrain
@@ -236,7 +241,7 @@ protected:
 	WorldHeightMap *m_map;
 	Bool m_useDepthFade;	///<fade terrain lighting under water
 	Bool m_updating;
-	Vector3 m_depthFade;	///<depth based fall off values for r,g,b
+	Engine::Math::Vector3 m_depthFade;	///<depth based fall off values for r,g,b
 	Bool m_disableTextures;
 	Bool m_needFullUpdate; ///< True if lighting changed, and we need to update all instead of what moved.
 	Bool m_doXNextTime; ///< True if we updated y scroll, and need to do x scroll next frame.

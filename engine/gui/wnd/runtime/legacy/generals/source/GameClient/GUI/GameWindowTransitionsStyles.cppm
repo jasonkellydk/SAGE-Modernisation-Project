@@ -61,6 +61,7 @@
 #include "GameClient/GadgetPushButton.h"
 #include "GameClient/GadgetStaticText.h"
 #include "GameClient/ControlBar.h"
+import engine.debug;
 
 //-----------------------------------------------------------------------------
 // DEFINES ////////////////////////////////////////////////////////////////////
@@ -113,7 +114,7 @@ void FlashTransition::update( Int frame )
 	m_drawState = -1;
 	if(frame < FLASHTRANSITION_START || frame > FLASHTRANSITION_END)
 	{
-		DEBUG_CRASH(("FlashTransition::update - Frame is out of the range the this update can handle %d", frame));
+		engine::debug::invariant(false, "debug invariant", __FILE__, __LINE__, "FlashTransition::update - Frame is out of the range the this update can handle %d", frame);
 		return;
 	}
 	switch (frame) {
@@ -269,7 +270,7 @@ void ButtonFlashTransition::update( Int frame )
 	m_drawState = -1;
 	if(frame < BUTTONFLASHTRANSITION_START || frame > BUTTONFLASHTRANSITION_END)
 	{
-		DEBUG_CRASH(("ButtonFlashTransition::update - Frame is out of the range the this update can handle %d", frame));
+		engine::debug::invariant(false, "debug invariant", __FILE__, __LINE__, "ButtonFlashTransition::update - Frame is out of the range the this update can handle %d", frame);
 		return;
 	}
 	switch (frame) {
@@ -642,7 +643,7 @@ void FadeTransition::update( Int frame )
 	m_drawState = -1;
 	if(frame < FADETRANSITION_START || frame > FADETRANSITION_END)
 	{
-		DEBUG_CRASH(("FadeTransition::update - Frame is out of the range the this update can handle %d", frame));
+		engine::debug::invariant(false, "debug invariant", __FILE__, __LINE__, "FadeTransition::update - Frame is out of the range the this update can handle %d", frame);
 		return;
 	}
 	switch (frame) {
@@ -785,7 +786,7 @@ void ScaleUpTransition::update( Int frame )
 	m_drawState = -1;
 	if(frame < SCALEUPTRANSITION_START || frame > SCALEUPTRANSITION_END)
 	{
-		DEBUG_CRASH(("ScaleUpTransition::update - Frame is out of the range the this update can handle %d", frame));
+		engine::debug::invariant(false, "debug invariant", __FILE__, __LINE__, "ScaleUpTransition::update - Frame is out of the range the this update can handle %d", frame);
 		return;
 	}
 	switch (frame) {
@@ -908,7 +909,7 @@ void ScoreScaleUpTransition::update( Int frame )
 	m_drawState = -1;
 	if(frame < SCORESCALEUPTRANSITION_START || frame > SCORESCALEUPTRANSITION_END)
 	{
-		DEBUG_CRASH(("ScoreScaleUpTransition::update - Frame is out of the range the this update can handle %d", frame));
+		engine::debug::invariant(false, "debug invariant", __FILE__, __LINE__, "ScoreScaleUpTransition::update - Frame is out of the range the this update can handle %d", frame);
 		return;
 	}
 	switch (frame) {
@@ -1039,7 +1040,7 @@ void MainMenuScaleUpTransition::update( Int frame )
 	m_drawState = -1;
 	if(frame < MAINMENUSCALEUPTRANSITION_START || frame > MAINMENUSCALEUPTRANSITION_END)
 	{
-		DEBUG_CRASH(("MainMenuScaleUpTransition::update - Frame is out of the range the this update can handle %d", frame));
+		engine::debug::invariant(false, "debug invariant", __FILE__, __LINE__, "MainMenuScaleUpTransition::update - Frame is out of the range the this update can handle %d", frame);
 		return;
 	}
 	switch (frame) {
@@ -1158,7 +1159,7 @@ void MainMenuMediumScaleUpTransition::update( Int frame )
 	m_drawState = -1;
 	if(frame < MAINMENUMEDIUMSCALEUPTRANSITION_START || frame > MAINMENUMEDIUMSCALEUPTRANSITION_END)
 	{
-		DEBUG_CRASH(("MainMenuMediumScaleUpTransition::update - Frame is out of the range the this update can handle %d", frame));
+		engine::debug::invariant(false, "debug invariant", __FILE__, __LINE__, "MainMenuMediumScaleUpTransition::update - Frame is out of the range the this update can handle %d", frame);
 		return;
 	}
 	switch (frame) {
@@ -1277,7 +1278,7 @@ void MainMenuSmallScaleDownTransition::update( Int frame )
 	m_drawState = -1;
 	if(frame < MAINMENUSMALLSCALEDOWNTRANSITION_START || frame > MAINMENUSMALLSCALEDOWNTRANSITION_END)
 	{
-		DEBUG_CRASH(("MainMenuSmallScaleDownTransition::update - Frame is out of the range the this update can handle %d", frame));
+		engine::debug::invariant(false, "debug invariant", __FILE__, __LINE__, "MainMenuSmallScaleDownTransition::update - Frame is out of the range the this update can handle %d", frame);
 		return;
 	}
 	switch (frame) {
@@ -1382,7 +1383,7 @@ void TextTypeTransition::update( Int frame )
 	m_drawState = -1;
 	if(frame < TEXTTYPETRANSITION_START || frame > TEXTTYPETRANSITION_END)
 	{
-		DEBUG_CRASH(("TextTypeTransition::update - Frame is out of the range the this update can handle %d", frame));
+		engine::debug::invariant(false, "debug invariant", __FILE__, __LINE__, "TextTypeTransition::update - Frame is out of the range the this update can handle %d", frame);
 		return;
 	}
 	switch (frame) {
@@ -1493,7 +1494,7 @@ void CountUpTransition::init( GameWindow *win )
 	AsciiString tempStr;
 	tempStr.translate(m_fullText);
 	m_intValue = atoi(tempStr.str());
-	DEBUG_LOG(("CountUpTransition::init %hs %s %d", m_fullText.str(), tempStr.str(), m_intValue));
+	engine::debug::log_info("CountUpTransition::init %hs %s %d", m_fullText.str(), tempStr.str(), m_intValue);
 	if(m_intValue < COUNTUPTRANSITION_END)
 	{
 		m_countState = COUNT_ONES;
@@ -1521,7 +1522,7 @@ void CountUpTransition::update( Int frame )
 	m_drawState = -1;
 	if(frame < COUNTUPTRANSITION_START || frame > COUNTUPTRANSITION_END)
 	{
-		DEBUG_CRASH(("CountUpTransition::update - Frame is out of the range the this update can handle %d", frame));
+		engine::debug::invariant(false, "debug invariant", __FILE__, __LINE__, "CountUpTransition::update - Frame is out of the range the this update can handle %d", frame);
 		return;
 	}
 	switch (frame) {
@@ -1638,7 +1639,7 @@ void ScreenFadeTransition::update( Int frame )
 	m_drawState = -1;
 	if(frame < SCREENFADETRANSITION_START || frame > SCREENFADETRANSITION_END)
 	{
-		DEBUG_CRASH(("ScreenFadeTransition::update - Frame is out of the range the this update can handle %d", frame));
+		engine::debug::invariant(false, "debug invariant", __FILE__, __LINE__, "ScreenFadeTransition::update - Frame is out of the range the this update can handle %d", frame);
 		return;
 	}
 	switch (frame) {
@@ -1731,7 +1732,7 @@ void ControlBarArrowTransition::update( Int frame )
 	m_drawState = -1;
 	if(frame < CONTROLBARARROWTRANSITION_START || frame > CONTROLBARARROWTRANSITION_END)
 	{
-		DEBUG_CRASH(("ControlBarArrowTransition::update - Frame is out of the range the this update can handle %d", frame));
+		engine::debug::invariant(false, "debug invariant", __FILE__, __LINE__, "ControlBarArrowTransition::update - Frame is out of the range the this update can handle %d", frame);
 		return;
 	}
 	switch (frame) {
@@ -1826,7 +1827,7 @@ void FullFadeTransition::update( Int frame )
 	m_drawState = -1;
 	if(frame < FULLFADETRANSITION_START || frame > FULLFADETRANSITION_END)
 	{
-		DEBUG_CRASH(("FullFadeTransition::update - Frame is out of the range the this update can handle %d", frame));
+		engine::debug::invariant(false, "debug invariant", __FILE__, __LINE__, "FullFadeTransition::update - Frame is out of the range the this update can handle %d", frame);
 		return;
 	}
 	switch (frame) {
@@ -1927,7 +1928,7 @@ void TextOnFrameTransition::update( Int frame )
 {
 	if(frame < TEXTONFRAMETRANSITION_START || frame > TEXTONFRAMETRANSITION_END)
 	{
-		DEBUG_CRASH(("TextOnFrameTransition::update - Frame is out of the range the this update can handle %d", frame));
+		engine::debug::invariant(false, "debug invariant", __FILE__, __LINE__, "TextOnFrameTransition::update - Frame is out of the range the this update can handle %d", frame);
 		return;
 	}
 	switch (frame) {
@@ -2001,7 +2002,7 @@ void ReverseSoundTransition::update( Int frame )
 {
 	if(frame < REVERSESOUNDTRANSITION_START || frame > REVERSESOUNDTRANSITION_END)
 	{
-		DEBUG_CRASH(("ReverseSoundTransition::update - Frame is out of the range the this update can handle %d", frame));
+		engine::debug::invariant(false, "debug invariant", __FILE__, __LINE__, "ReverseSoundTransition::update - Frame is out of the range the this update can handle %d", frame);
 		return;
 	}
 	switch (frame) {

@@ -2,18 +2,18 @@ import Graphics.Frame.AttachmentBindings;
 import Graphics.Scene.Models.MeshDrawing;
 import Graphics.Scene.Props.Submission;
 #include "W3DDevice/GameClient/W3DDirectionalShadows.h"
-#include "rts/profile.h"
+
 #include "Common/GlobalData.h"
 #include "Common/DrawModule.h"
 #include "GameClient/Shadow.h"
 #include "W3DDevice/GameClient/W3DCamera.h"
 #include "W3DDevice/GameClient/W3DMeshDrawing.h"
-#include "WWMath/matrix4.h"
 #include "W3DDevice/GameClient/W3DHierarchyRenderObject.h"
 #include "W3DDevice/GameClient/W3DMeshRenderObject.h"
 #include "W3DDevice/GameClient/W3DRenderContext.h"
 
 #include <algorithm>
+import engine.profiling;
 
 import Graphics.Frame.Runtime;
 import Graphics.Scene.Shadows.DirectionalRenderer;
@@ -93,16 +93,9 @@ bool Collect_Object(W3DRenderObject& object,W3DRenderContext& info,int& draw_cou
 void Prepare_Shadow_View(W3DRenderContext& info,Graphics::View& view,
     Graphics::ShadowSettings& settings,Graphics::RenderLight& light)
 {
-    Matrix3D view_matrix;
-    Matrix4x4 projection;
-    info.Camera.Get_View_Matrix(&view_matrix);
-    info.Camera.Get_Backend_Projection_Matrix(&projection);
-    view.view_matrix = Graphics::Matrix4x4::Identity();
-    for (int row=0;row<4;++row)
-        for (int column=0;column<4;++column) {
-            view.projection_matrix.values[row*4+column] = projection[row][column];
-            if (row<3) view.view_matrix.values[row*4+column] = view_matrix[row][column];
-        }
+    const auto camera_matrices = info.Camera.Build_Render_Matrices();
+    view.view_matrix.values = camera_matrices.view;
+    view.projection_matrix.values = camera_matrices.projection;
     settings.cache_maps=true;
     info.Camera.Get_Clip_Planes(settings.near_clip,settings.far_clip);
     settings.depth_padding = 400;
@@ -133,7 +126,7 @@ void Reset_Directional_Shadows()
 
 bool Collect_Directional_Shadow_Casters(W3DRenderContext& info)
 {
-    PROFILER_SECTION_NAME("Graphics.Shadows.Collect");
+    engine::profiling::Scope profile_scope_136("Graphics.Shadows.Collect");
     Graphics::Get_Prop_Submission().Clear_Shadows();
     Graphics::Get_Environment_Lighting().parameters.shadow_options[0] = 0;
     Graphics::View view;
@@ -147,9 +140,11 @@ bool Collect_Directional_Shadow_Casters(W3DRenderContext& info)
         shadow->draw_count = 0;
         if (!shadow->isRenderEnabled() || shadow->isInvisibleEnabled()) continue;
         shadow->object->Validate_Transform();
-        const auto& bounds=shadow->object->Get_Bounding_Box();
-        if (!volume.Intersects({bounds.Center.X,bounds.Center.Y,bounds.Center.Z},
-            {bounds.Extent.X,bounds.Extent.Y,bounds.Extent.Z})) continue;
+        const auto bounds=shadow->object->Get_Bounding_Box();
+        const auto center = bounds.Center();
+        const auto extent = bounds.Extent();
+        if (!volume.Intersects({center.x,center.y,center.z},
+            {extent.x,extent.y,extent.z})) continue;
         if (!Collect_Object(*shadow->object,info,shadow->draw_count)) return false;
         shadow->draw_count *= 4;
     }

@@ -24,7 +24,8 @@
 
 // GameClient/Eva.cpp /////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 #include "GameClient/ControlBar.h"
 #include "GameClient/Eva.h"
 
@@ -321,7 +322,7 @@ EvaMessage Eva::nameToMessage(const AsciiString& name)
 		}
 	}
 
-	DEBUG_CRASH(("Invalid requested Eva message translation :%s: jkmcd", name.str()));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Invalid requested Eva message translation :%s: jkmcd", name.str());
 	return EVA_Invalid;
 }
 
@@ -331,7 +332,7 @@ AsciiString Eva::messageToName(EvaMessage message)
   if (message >= EVA_FIRST && message < EVA_COUNT)
 		return TheEvaMessageNames[message];
 
-	DEBUG_CRASH(("Invalid requested Eva message translation. jkmcd"));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Invalid requested Eva message translation. jkmcd");
 	return AsciiString::TheEmptyString;
 }
 
@@ -373,7 +374,7 @@ void Eva::setShouldPlay(EvaMessage messageToPlay)
 {
 	m_shouldPlay[messageToPlay] = TRUE;
 
-  // DEBUG_LOG( ( "Eva message %s play requested", messageToName( messageToPlay).str() ) );
+  // engine::debug::log_info( "Eva message %s play requested", messageToName( messageToPlay).str() );
 }
 
 //-------------------------------------------------------------------------------------------------

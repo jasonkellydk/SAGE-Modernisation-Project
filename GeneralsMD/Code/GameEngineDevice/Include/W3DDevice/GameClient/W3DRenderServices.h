@@ -1,6 +1,6 @@
 #pragma once
 
-#include "WWMath/vector3.h"
+import Engine.Core.Math.Vector3;
 
 import Graphics.Frame.RenderServices;
 import Graphics.RHI;
@@ -24,12 +24,12 @@ public:
 	bool Shutdown(Graphics::RenderServiceCallback release_assets = nullptr);
 
 	bool Begin_Render(bool clear = false, bool clear_depth = true,
-		const Vector3 &color = Vector3(0.0f, 0.0f, 0.0f),
+		const Engine::Math::Vector3 &color = Engine::Math::Vector3{0.0f, 0.0f, 0.0f},
 		float destination_alpha = 0.0f,
 		Graphics::RenderServiceCallback resource_progress = nullptr,
 		Graphics::RenderServiceCallback evict_unused_textures = nullptr);
 	bool Render(W3DScene *scene, W3DCamera *camera, bool clear = false,
-		bool clear_depth = false, const Vector3 &color = Vector3(0.0f, 0.0f, 0.0f));
+		bool clear_depth = false, const Engine::Math::Vector3 &color = Engine::Math::Vector3{0.0f, 0.0f, 0.0f});
 	bool Render_Scene_Pass(W3DScene *scene, W3DCamera *camera,
 		const Graphics::RHIViewport *viewport_override = nullptr);
 	bool Render(W3DRenderObject &object, W3DRenderContext &context);

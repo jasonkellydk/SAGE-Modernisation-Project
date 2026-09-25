@@ -26,7 +26,9 @@
 // Translate raw input events into camera movement commands
 // Author: Michael S. Booth, April 2001
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import Engine.Core.Math.Scalar;
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/FramePacer.h"
 #include "Common/GameType.h"
@@ -150,7 +152,7 @@ LookAtTranslator::LookAtTranslator() :
 	OptionPreferences prefs;
 	m_screenEdgeScrollMode = prefs.getScreenEdgeScrollMode();
 
-	DEBUG_ASSERTCRASH(!TheLookAtTranslator, ("Already have a LookAtTranslator - why do you need two?"));
+	engine::debug::invariant((!TheLookAtTranslator), "!TheLookAtTranslator", __FILE__, __LINE__, "Already have a LookAtTranslator - why do you need two?");
 	TheLookAtTranslator = this;
 }
 
@@ -378,8 +380,8 @@ GameMessageDisposition LookAtTranslator::translateGameMessage(const GameMessage 
 				// while using force attack mode for convenience.
 				if (TheInGameUI->isInForceAttackMode())
 				{
-					const Real snapRadians = DEG_TO_RADF(45);
-					targetAngle = WWMath::Round(targetAngle / snapRadians) * snapRadians;
+					const Real snapRadians = (45.0f * Engine::Math::Pi) / 180.0f;
+					targetAngle = std::floor(targetAngle / snapRadians + 0.5f) * snapRadians;
 				}
 
 				TheTacticalView->userSetAngle(targetAngle);
@@ -566,7 +568,7 @@ GameMessageDisposition LookAtTranslator::translateGameMessage(const GameMessage 
 #if defined(RTS_DEBUG)
 		case GameMessage::MSG_META_DEMO_BEGIN_ADJUST_PITCH:
 		{
-			DEBUG_ASSERTCRASH(!m_isPitching, ("hmm, mismatched m_isPitching"));
+			engine::debug::invariant((!m_isPitching), "!m_isPitching", __FILE__, __LINE__, "hmm, mismatched m_isPitching");
 			m_isPitching = true;
 			m_anchor = m_currentPos;
 			disp = DESTROY_MESSAGE;
@@ -578,7 +580,7 @@ GameMessageDisposition LookAtTranslator::translateGameMessage(const GameMessage 
 #if defined(RTS_DEBUG)
 		case GameMessage::MSG_META_DEMO_END_ADJUST_PITCH:
 		{
-			DEBUG_ASSERTCRASH(m_isPitching, ("hmm, mismatched m_isPitching"));
+			engine::debug::invariant((m_isPitching), "m_isPitching", __FILE__, __LINE__, "hmm, mismatched m_isPitching");
 			m_isPitching = false;
 			disp = DESTROY_MESSAGE;
 			break;
@@ -589,7 +591,7 @@ GameMessageDisposition LookAtTranslator::translateGameMessage(const GameMessage 
 #if defined(RTS_DEBUG)
 		case GameMessage::MSG_META_DEMO_BEGIN_ADJUST_DEFAULTPITCH:
 		{
-			DEBUG_ASSERTCRASH(!m_isPitchingToDefault, ("hmm, mismatched m_isPitchingToDefault"));
+			engine::debug::invariant((!m_isPitchingToDefault), "!m_isPitchingToDefault", __FILE__, __LINE__, "hmm, mismatched m_isPitchingToDefault");
 			m_isPitchingToDefault = true;
 			m_anchor = m_currentPos;
 			disp = DESTROY_MESSAGE;
@@ -601,7 +603,7 @@ GameMessageDisposition LookAtTranslator::translateGameMessage(const GameMessage 
 #if defined(RTS_DEBUG)
 		case GameMessage::MSG_META_DEMO_END_ADJUST_DEFAULTPITCH:
 		{
-			DEBUG_ASSERTCRASH(m_isPitchingToDefault, ("hmm, mismatched m_isPitchingToDefault"));
+			engine::debug::invariant((m_isPitchingToDefault), "m_isPitchingToDefault", __FILE__, __LINE__, "hmm, mismatched m_isPitchingToDefault");
 			m_isPitchingToDefault = false;
 			disp = DESTROY_MESSAGE;
 			break;
@@ -644,7 +646,7 @@ GameMessageDisposition LookAtTranslator::translateGameMessage(const GameMessage 
 #if defined(RTS_DEBUG)
 		case GameMessage::MSG_META_DEMO_BEGIN_ADJUST_FOV:
 		{
-			//DEBUG_ASSERTCRASH(!m_isChangingFOV, ("hmm, mismatched m_isChangingFOV"));
+			//engine::debug::invariant((!m_isChangingFOV), "!m_isChangingFOV", __FILE__, __LINE__, "hmm, mismatched m_isChangingFOV");
 			m_isChangingFOV = true;
 			m_anchor = m_currentPos;
 			disp = DESTROY_MESSAGE;
@@ -656,7 +658,7 @@ GameMessageDisposition LookAtTranslator::translateGameMessage(const GameMessage 
 #if defined(RTS_DEBUG)
 		case GameMessage::MSG_META_DEMO_END_ADJUST_FOV:
 		{
-		//	DEBUG_ASSERTCRASH(m_isChangingFOV, ("hmm, mismatched m_isChangingFOV"));
+		//	engine::debug::invariant((m_isChangingFOV), "m_isChangingFOV", __FILE__, __LINE__, "hmm, mismatched m_isChangingFOV");
 			m_isChangingFOV = false;
 			disp = DESTROY_MESSAGE;
 			break;

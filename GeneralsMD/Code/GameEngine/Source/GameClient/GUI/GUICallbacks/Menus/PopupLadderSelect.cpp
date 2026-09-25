@@ -50,7 +50,8 @@
 //-----------------------------------------------------------------------------
 // USER INCLUDES //////////////////////////////////////////////////////////////
 //-----------------------------------------------------------------------------
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/GlobalData.h"
 #include "Common/encrypt.h"
@@ -408,8 +409,8 @@ WindowMsgHandledType PopupLadderSelectSystem( GameWindow *window, UnsignedInt ms
 				if ( pass.isNotEmpty() ) // password ok
 				{
 					AsciiString cryptPass = EncryptString(pass.str());
-					DEBUG_LOG(("pass is %s, crypted pass is %s, comparing to %s",
-						pass.str(), cryptPass.str(), li->cryptedPassword.str()));
+					engine::debug::log_info("pass is %s, crypted pass is %s, comparing to %s",
+						pass.str(), cryptPass.str(), li->cryptedPassword.str());
 					if (cryptPass == li->cryptedPassword)
 						ladderSelectedCallback();
 					else

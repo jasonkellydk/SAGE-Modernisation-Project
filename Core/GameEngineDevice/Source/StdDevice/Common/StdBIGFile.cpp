@@ -31,7 +31,7 @@
 #include "Common/RAMFile.h"
 #include "Common/StreamingArchiveFile.h"
 #include "Common/GameMemory.h"
-#include "Common/PerfTimer.h"
+
 #include "StdDevice/Common/StdBIGFile.h"
 
 //============================================================================

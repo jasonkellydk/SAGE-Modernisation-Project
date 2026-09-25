@@ -33,6 +33,7 @@
 #include "GameLogic/Module/BehaviorModule.h"
 #include "GameLogic/Module/DieModule.h"
 #include "GameLogic/Module/AIUpdate.h"
+import Engine.Core.Math.AffineTransform3;
 
 
 #define MAX_RUNWAYS			2 //***NOTE: If you change this, make sure you update the parsing section!
@@ -182,7 +183,7 @@ private:
 	struct RunwayInfo
 	{
 		Coord3D		m_start;
-		Matrix3D  m_startTransform;
+		Engine::Math::AffineTransform3 m_startTransform;
 		Coord3D		m_end;
 		Coord3D		m_landingStart;
 		Coord3D		m_landingEnd;

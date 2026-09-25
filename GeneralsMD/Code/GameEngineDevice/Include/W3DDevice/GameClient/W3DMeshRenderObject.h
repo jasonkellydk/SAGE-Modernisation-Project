@@ -85,8 +85,8 @@ public:
 	/////////////////////////////////////////////////////////////////////////////
 	// Render Object Interface - Bounding Volumes
 	/////////////////////////////////////////////////////////////////////////////
-	virtual void					Get_Obj_Space_Bounding_Sphere(SphereClass & sphere) const override;
-   virtual void					Get_Obj_Space_Bounding_Box(AABoxClass & box) const override;
+	virtual void					Get_Local_Bounding_Sphere(Engine::Math::Sphere3 & sphere) const override;
+   virtual void					Get_Local_Bounds(Engine::Math::AxisAlignedBox3 & box) const override;
 
 	/////////////////////////////////////////////////////////////////////////////
 	// Render Object Interface - Attributes, Options, Properties, etc
@@ -110,10 +110,10 @@ public:
 	const char *					Get_User_Text() const;
 	int								Get_Draw_Call_Count() const;
 
-	bool								Contains(const Vector3 &point);
+	bool								Contains(const Engine::Math::Vector3 &point);
 
-	void								Get_Deformed_Vertices(Vector3 *dst_vert, Vector3 *dst_norm);
-	void								Get_Deformed_Vertices(Vector3 *dst_vert);
+	void Get_Deformed_Vertices(Engine::Math::Vector3 *dst_vert, Engine::Math::Vector3 *dst_norm);
+	void Get_Deformed_Vertices(Engine::Math::Vector3 *dst_vert);
 
 	void								Set_Lighting_Environment(Graphics::LocalLighting * light_env) { if (light_env) {m_localLightEnv=*light_env;LightEnvironment = &m_localLightEnv;} else {LightEnvironment = nullptr;} }
 	Graphics::LocalLighting *		Get_Lighting_Environment() { return LightEnvironment; }

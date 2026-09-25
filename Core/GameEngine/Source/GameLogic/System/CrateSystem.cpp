@@ -27,7 +27,8 @@
 // Desc:   System responsible for Crates as code objects - ini, new/delete etc
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #define DEFINE_VETERANCY_NAMES				// for TheVeterancyNames[]
 
@@ -100,7 +101,7 @@ void CrateSystem::parseCrateTemplateDefinition(INI* ini)
 			crateTemplate->markAsOverride();
 		}
 	} else if( ini->getLoadType() != INI_LOAD_CREATE_OVERRIDES ) {
-			DEBUG_CRASH(( "[LINE: %d in '%s'] Duplicate crate %s found!", ini->getLineNum(), ini->getFilename().str(), name.str() ));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "[LINE: %d in '%s'] Duplicate crate %s found!", ini->getLineNum(), ini->getFilename().str(), name.str() );
 	} else {
 		crateTemplate = TheCrateSystem->newCrateTemplateOverride(crateTemplate);
 	}

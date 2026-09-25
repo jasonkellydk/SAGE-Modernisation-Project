@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 #include "Common/GameState.h"
 #include "Common/GlobalData.h"
 #include "Common/Player.h"
@@ -542,7 +543,7 @@ void NeutronMissileSlowDeathBehavior::xfer( Xfer *xfer )
 	if( maxNeutronBlasts != MAX_NEUTRON_BLASTS )
 	{
 
-		DEBUG_CRASH(( "NeutronMissileSlowDeathBehavior::xfer - Size of MAX_NEUTRON_BLASTS has changed, you must version this xfer code and then you can remove this error message" ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "NeutronMissileSlowDeathBehavior::xfer - Size of MAX_NEUTRON_BLASTS has changed, you must version this xfer code and then you can remove this error message" );
 		throw SC_INVALID_DATA;
 
 	}

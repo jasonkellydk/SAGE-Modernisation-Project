@@ -1,3 +1,5 @@
+import Engine.Core.Math.Vector2;
+import Engine.Core.Math.Vector3;
 import Graphics.Frame.RenderClock;
 #include "W3DDevice/GameClient/W3DRenderServices.h"
 /*
@@ -54,11 +56,10 @@ import Graphics.Frame.Runtime;
 #include "W3DDevice/GameClient/W3DTerrainTracks.h"
 #include "W3DDevice/GameClient/BaseHeightMap.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
-#include "Common/PerfTimer.h"
+
 #include "Common/GlobalData.h"
-#include "Common/Debug.h"
+
 #include "W3DDevice/GameClient/W3DTextureHandle.h"
-#include "WWMath/colmath.h"
 #include "W3DDevice/GameClient/W3DCastQuery.h"
 #include "W3DDevice/GameClient/W3DRenderContext.h"
 #include "W3DDevice/GameClient/W3DCamera.h"
@@ -68,6 +69,7 @@ import Graphics.Frame.Runtime;
 #include "GameLogic/TerrainLogic.h"
 #include "GameLogic/Object.h"
 #include "GameClient/Drawable.h"
+import engine.debug;
 
 
 #define BRIDGE_OFFSET_FACTOR	0.25f	//amount to raise tracks above bridges.
@@ -89,7 +91,7 @@ TerrainTracksRenderObjClass::~TerrainTracksRenderObjClass()
 TerrainTracksRenderObjClass::TerrainTracksRenderObjClass()
 {
 	m_stageZeroTexture=nullptr;
-	m_lastAnchor=Vector3(0,1,2.25);
+	m_lastAnchor=Engine::Math::Vector3(0,1,2.25);
 	m_haveAnchor=false;
 	m_haveCap=true;
 	m_topIndex=0;
@@ -101,23 +103,23 @@ TerrainTracksRenderObjClass::TerrainTracksRenderObjClass()
 }
 
 //=============================================================================
-// TerrainTracksRenderObjClass::Get_Obj_Space_Bounding_Sphere
+// TerrainTracksRenderObjClass::Get_Local_Bounding_Sphere
 //=============================================================================
 /** WW3D method that returns object bounding sphere used in frustum culling*/
 //=============================================================================
-void TerrainTracksRenderObjClass::Get_Obj_Space_Bounding_Sphere(SphereClass & sphere) const
+void TerrainTracksRenderObjClass::Get_Local_Bounding_Sphere(Engine::Math::Sphere3 & sphere) const
 {	/// @todo: Add code to cull track marks to screen by constantly updating bounding volumes
-	sphere=m_boundingSphere;
+	sphere = m_boundingSphere;
 }
 
 //=============================================================================
-// TerrainTracksRenderObjClass::Get_Obj_Space_Bounding_Box
+// TerrainTracksRenderObjClass::Get_Local_Bounds
 //=============================================================================
 /** WW3D method that returns object bounding box used in collision detection*/
 //=============================================================================
-void TerrainTracksRenderObjClass::Get_Obj_Space_Bounding_Box(AABoxClass & box) const
+void TerrainTracksRenderObjClass::Get_Local_Bounds(Engine::Math::AxisAlignedBox3 & box) const
 {
-	box=m_boundingBox;
+	box = m_boundingBox;
 }
 
 //=============================================================================
@@ -171,9 +173,9 @@ void TerrainTracksRenderObjClass::init( Real width, Real length, const Char *tex
 {
 	freeTerrainTracksResources();	//free old data and ib/vb
 
-	m_boundingSphere.Init(Vector3(0,0,0),400*MAP_XY_FACTOR);
-	m_boundingBox.Center.Set(0.0f, 0.0f, 0.0f);
-	m_boundingBox.Extent.Set(400.0f*MAP_XY_FACTOR, 400.0f*MAP_XY_FACTOR, 1.0f);
+	m_boundingSphere = {{0, 0, 0}, 400 * MAP_XY_FACTOR};
+	const Engine::Math::Vector3 extent{400.0f * MAP_XY_FACTOR, 400.0f * MAP_XY_FACTOR, 1.0f};
+	m_boundingBox = {extent * -1.0f, extent};
 	m_width=width;
 	m_length=length;
 	//no sense culling these things since they have very irregular shape and fade
@@ -209,7 +211,7 @@ void TerrainTracksRenderObjClass::addCapEdgeToTrack(Real x, Real y)
 		return;
 	}
 
-	Vector3	vPos,vZ;
+	Engine::Math::Vector3	vPos,vZ;
 	Coord3D vZTmp;
 	PathfindLayerEnum objectLayer;
 	Real eHeight;
@@ -219,19 +221,19 @@ void TerrainTracksRenderObjClass::addCapEdgeToTrack(Real x, Real y)
 	else
 		eHeight=TheTerrainLogic->getGroundHeight(x,y,&vZTmp);
 
-	vZ.X = vZTmp.x;
-	vZ.Y = vZTmp.y;
-	vZ.Z = vZTmp.z;
+	vZ.x = vZTmp.x;
+	vZ.y = vZTmp.y;
+	vZ.z = vZTmp.z;
 
-	vPos.X=x;
-	vPos.Y=y;
-	vPos.Z=eHeight;
+	vPos.x=x;
+	vPos.y=y;
+	vPos.z=eHeight;
 
-	Vector3	vDir=Vector3(x,y,eHeight)-m_lastAnchor;
+	Engine::Math::Vector3	vDir=Engine::Math::Vector3(x,y,eHeight)-m_lastAnchor;
 	Int maxEdgeCount=TheTerrainTracksRenderObjClassSystem->m_maxTankTrackEdges;
 
 	//avoid sqrt() by checking distance squared since last track mark
-	if (vDir.Length2() < sqr(m_length))
+	if (vDir.Length_Squared() < sqr(m_length))
 	{	//not far enough from anchor to add track
 		//since this is a  cap, we'll force the previous segment to transparent
 		Int lastAddedEdge=m_topIndex-1;
@@ -257,43 +259,43 @@ void TerrainTracksRenderObjClass::addCapEdgeToTrack(Real x, Real y)
 
 	//we traveled far enough from last point.
 	//accept new point
-	vDir.Z=0;	//ignore height
-	vDir.Normalize();
+	vDir.z=0;	//ignore height
+	vDir = vDir.Normalized();
 
-	Vector3	vX;
+	Engine::Math::Vector3	vX;
 
-	Vector3::Cross_Product(vDir,vZ,&vX);
+	(vX) = (vDir).Cross(vZ);
 
 	//calculate left end point
 	edgeInfo& topEdge = m_edges[m_topIndex];
 
 	topEdge.endPointPos[0]=vPos-(m_width*0.5f*vX);	///@todo: try getting height at endpoint
-	topEdge.endPointPos[0].Z += 0.2f * MAP_XY_FACTOR;	//raise above terrain slightly
+	topEdge.endPointPos[0].z += 0.2f * MAP_XY_FACTOR;	//raise above terrain slightly
 
 	if (m_totalEdgesAdded&1)	//every other edge has different set of UV's
 	{
-		topEdge.endPointUV[0].X=0.0f;
-		topEdge.endPointUV[0].Y=0.0f;
+		topEdge.endPointUV[0].x=0.0f;
+		topEdge.endPointUV[0].y=0.0f;
 	}
 	else
 	{
-		topEdge.endPointUV[0].X=0.0f;
-		topEdge.endPointUV[0].Y=1.0f;
+		topEdge.endPointUV[0].x=0.0f;
+		topEdge.endPointUV[0].y=1.0f;
 	}
 
 	//calculate right end point
 	topEdge.endPointPos[1]=vPos+(m_width*0.5f*vX);	///@todo: try getting height at endpoint
-	topEdge.endPointPos[1].Z += 0.2f * MAP_XY_FACTOR;	//raise above terrain slightly
+	topEdge.endPointPos[1].z += 0.2f * MAP_XY_FACTOR;	//raise above terrain slightly
 
 	if (m_totalEdgesAdded&1)	//every other edge has different set of UV's
 	{
-		topEdge.endPointUV[1].X=1.0f;
-		topEdge.endPointUV[1].Y=0.0f;
+		topEdge.endPointUV[1].x=1.0f;
+		topEdge.endPointUV[1].y=0.0f;
 	}
 	else
 	{
-		topEdge.endPointUV[1].X=1.0f;
-		topEdge.endPointUV[1].Y=1.0f;
+		topEdge.endPointUV[1].x=1.0f;
+		topEdge.endPointUV[1].y=1.0f;
 	}
 
 	topEdge.timeAdded=Graphics::Get_Render_Clock().Sync_Time();
@@ -324,9 +326,9 @@ void TerrainTracksRenderObjClass::addEdgeToTrack(Real x, Real y)
 	{	//no anchor yet, make this point an anchor.
 		PathfindLayerEnum objectLayer;
 		if (m_ownerDrawable && (objectLayer=m_ownerDrawable->getObject()->getLayer()) != LAYER_GROUND)
-			m_lastAnchor=Vector3(x,y,TheTerrainLogic->getLayerHeight(x,y,objectLayer)+BRIDGE_OFFSET_FACTOR);
+			m_lastAnchor=Engine::Math::Vector3(x,y,TheTerrainLogic->getLayerHeight(x,y,objectLayer)+BRIDGE_OFFSET_FACTOR);
 		else
-			m_lastAnchor=Vector3(x,y,TheTerrainLogic->getGroundHeight(x,y));
+			m_lastAnchor=Engine::Math::Vector3(x,y,TheTerrainLogic->getGroundHeight(x,y));
 
 		m_haveAnchor=true;
 		m_airborne = true;
@@ -336,7 +338,7 @@ void TerrainTracksRenderObjClass::addEdgeToTrack(Real x, Real y)
 
 	m_haveCap = false;	//have more than 1 segment now so will need to cap if it's interrupted.
 
-	Vector3	vPos,vZ;
+	Engine::Math::Vector3	vPos,vZ;
 	Coord3D vZTmp;
 	Real eHeight;
 	PathfindLayerEnum objectLayer;
@@ -346,18 +348,18 @@ void TerrainTracksRenderObjClass::addEdgeToTrack(Real x, Real y)
 	else
 		eHeight=TheTerrainLogic->getGroundHeight(x,y,&vZTmp);
 
-	vZ.X = vZTmp.x;
-	vZ.Y = vZTmp.y;
-	vZ.Z = vZTmp.z;
+	vZ.x = vZTmp.x;
+	vZ.y = vZTmp.y;
+	vZ.z = vZTmp.z;
 
-	vPos.X=x;
-	vPos.Y=y;
-	vPos.Z=eHeight;
+	vPos.x=x;
+	vPos.y=y;
+	vPos.z=eHeight;
 
-	Vector3	vDir=Vector3(x,y,eHeight)-m_lastAnchor;
+	Engine::Math::Vector3	vDir=Engine::Math::Vector3(x,y,eHeight)-m_lastAnchor;
 
 	//avoid sqrt() by checking distance squared since last track mark
-	if (vDir.Length2() < sqr(m_length))
+	if (vDir.Length_Squared() < sqr(m_length))
 		return;	//not far enough from anchor to add track
 
 	Int maxEdgeCount=TheTerrainTracksRenderObjClassSystem->m_maxTankTrackEdges;
@@ -376,43 +378,43 @@ void TerrainTracksRenderObjClass::addEdgeToTrack(Real x, Real y)
 
 	//we traveled far enough from last point.
 	//accept new point
-	vDir.Z=0;	//ignore height
-	vDir.Normalize();
+	vDir.z=0;	//ignore height
+	vDir = vDir.Normalized();
 
-	Vector3	vX;
+	Engine::Math::Vector3	vX;
 
-	Vector3::Cross_Product(vDir,vZ,&vX);
+	(vX) = (vDir).Cross(vZ);
 
 	edgeInfo& topEdge = m_edges[m_topIndex];
 
 	//calculate left end point
 	topEdge.endPointPos[0]=vPos-(m_width*0.5f*vX);	///@todo: try getting height at endpoint
-	topEdge.endPointPos[0].Z += 0.2f * MAP_XY_FACTOR;	//raise above terrain slightly
+	topEdge.endPointPos[0].z += 0.2f * MAP_XY_FACTOR;	//raise above terrain slightly
 
 	if (m_totalEdgesAdded&1)	//every other edge has different set of UV's
 	{
-		topEdge.endPointUV[0].X=0.0f;
-		topEdge.endPointUV[0].Y=0.0f;
+		topEdge.endPointUV[0].x=0.0f;
+		topEdge.endPointUV[0].y=0.0f;
 	}
 	else
 	{
-		topEdge.endPointUV[0].X=0.0f;
-		topEdge.endPointUV[0].Y=1.0f;
+		topEdge.endPointUV[0].x=0.0f;
+		topEdge.endPointUV[0].y=1.0f;
 	}
 
 	//calculate right end point
 	topEdge.endPointPos[1]=vPos+(m_width*0.5f*vX);	///@todo: try getting height at endpoint
-	topEdge.endPointPos[1].Z += 0.2f * MAP_XY_FACTOR;	//raise above terrain slightly
+	topEdge.endPointPos[1].z += 0.2f * MAP_XY_FACTOR;	//raise above terrain slightly
 
 	if (m_totalEdgesAdded&1)	//every other edge has different set of UV's
 	{
-		topEdge.endPointUV[1].X=1.0f;
-		topEdge.endPointUV[1].Y=0.0f;
+		topEdge.endPointUV[1].x=1.0f;
+		topEdge.endPointUV[1].y=0.0f;
 	}
 	else
 	{
-		topEdge.endPointUV[1].X=1.0f;
-		topEdge.endPointUV[1].Y=1.0f;
+		topEdge.endPointUV[1].x=1.0f;
+		topEdge.endPointUV[1].y=1.0f;
 	}
 
 	topEdge.timeAdded=Graphics::Get_Render_Clock().Sync_Time();
@@ -455,9 +457,11 @@ static Real computeTrackSpacing(W3DRenderObject *renderObj)
 
 	if ((leftTrack=renderObj->Get_Bone_Index( "TREADFX01" )) != 0 && (rightTrack=renderObj->Get_Bone_Index( "TREADFX02" )) != 0)
 	{	//both bones found, determine distance between them.
-		Vector3 leftPos,rightPos;
-		leftPos=renderObj->Get_Bone_Transform( leftTrack ).Get_Translation();
-		rightPos=renderObj->Get_Bone_Transform( rightTrack ).Get_Translation();
+		Engine::Math::Vector3 leftPos,rightPos;
+		const auto leftPosition = renderObj->Get_Bone_Transform(leftTrack).Translation();
+		const auto rightPosition = renderObj->Get_Bone_Transform(rightTrack).Translation();
+		leftPos = {leftPosition.x, leftPosition.y, leftPosition.z};
+		rightPos = {rightPosition.x, rightPosition.y, rightPosition.z};
 		rightPos -= leftPos;	//get distance between centers of tracks
 		trackSpacing = rightPos.Length() + DEFAULT_TRACK_WIDTH;	//add width of each track
 		///@todo: It's assumed that all tank treads have the same width.
@@ -537,7 +541,7 @@ void TerrainTracksRenderObjClassSystem::releaseTrack( TerrainTracksRenderObjClas
 	if (mod==nullptr)
 		return;
 
-	DEBUG_ASSERTCRASH(mod->m_bound == false, ("mod is bound."));
+	engine::debug::invariant((mod->m_bound == false), "mod->m_bound == false", __FILE__, __LINE__, "mod is bound.");
 
 	// remove module from used list
 	if( mod->m_nextSystem )
@@ -723,8 +727,8 @@ void TerrainTracksRenderObjClassSystem::update()
 	while( mod )
 	{
 		Int i,index;
-		Vector3 *endPoint;
-		Vector2 *endPointUV;
+		Engine::Math::Vector3 *endPoint;
+		Engine::Math::Vector2 *endPointUV;
 
 		nextMod = mod->m_nextSystem;
 
@@ -797,10 +801,11 @@ void TerrainTracksRenderObjClassSystem::flush(W3DCamera& camera)
             Graphics::TrackEdge edge;
             edge.alpha = source.alpha;
             for (unsigned side=0; side<2; ++side) {
-                Vector3 position;
-                Matrix3D::Transform_Vector(mod->Transform, source.endPointPos[side], &position);
-                edge.positions[side] = {position.X,position.Y,position.Z};
-                edge.uv[side] = {source.endPointUV[side].X,source.endPointUV[side].Y};
+                const auto& endpoint = source.endPointPos[side];
+                const auto position = mod->Get_Transform().Transform_Point(
+                    {endpoint.x, endpoint.y, endpoint.z});
+                edge.positions[side] = {position.x,position.y,position.z};
+                edge.uv[side] = {source.endPointUV[side].x,source.endPointUV[side].y};
             }
             edges.push_back(edge);
         }

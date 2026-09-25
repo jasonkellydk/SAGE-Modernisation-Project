@@ -65,7 +65,8 @@
 
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/GlobalData.h"
 #include "Common/BuildAssistant.h"
@@ -140,7 +141,7 @@ void ControlBar::showBuildTooltipLayout( GameWindow *cmdButton )
 		m_showBuildToolTipLayout = TRUE;
 		if(!isInitialized &&  beginWaitTime + cmdButton->getTooltipDelay() < timeGetTime())
 		{
-			//DEBUG_LOG(("%d beginwaittime, %d tooltipdelay, %dtimegettime", beginWaitTime, cmdButton->getTooltipDelay(), timeGetTime()));
+			//engine::debug::log_info("%d beginwaittime, %d tooltipdelay, %dtimegettime", beginWaitTime, cmdButton->getTooltipDelay(), timeGetTime());
 			passedWaitTime = TRUE;
 		}
 
@@ -593,7 +594,7 @@ void ControlBar::populateBuildTooltipLayout( const CommandButton *commandButton,
 		}
 		else
 		{
-			DEBUG_CRASH(("ControlBar::populateBuildTooltipLayout We attempted to call the popup tooltip on a game window that has yet to be hand coded in as this fuction was/is designed for only buttons but has been hacked to work with GameWindows."));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "ControlBar::populateBuildTooltipLayout We attempted to call the popup tooltip on a game window that has yet to be hand coded in as this fuction was/is designed for only buttons but has been hacked to work with GameWindows.");
 			return;
 		}
 

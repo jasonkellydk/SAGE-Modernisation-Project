@@ -52,12 +52,12 @@
 #include "w3dquat.h"
 #include "matrix3d.h"
 #include "matrix4.h"
-#include "wwmath.h"
+
 
 #include <stdio.h>
 //#include <iostream.h>
 #include <stdlib.h>
-#include <math.h>
+#include <cmath>
 #include <assert.h>
 
 #define SLERP_EPSILON		0.001
@@ -112,7 +112,7 @@ Quaternion::Quaternion(const Vector3 & axis,float angle)
  *=============================================================================================*/
 void Quaternion::Normalize()
 {
-	float mag = WWMath::Sqrt(X * X + Y * Y + Z * Z + W * W);
+	float mag = std::sqrt(X * X + Y * Y + Z * Z + W * W);
 
 	if (0.0f == mag) {
 		return;
@@ -683,10 +683,10 @@ float project_to_sphere(float r, float x, float y)
 {
 	const float SQRT2 = 1.41421356f;
 	float t, z;
-	float d = WWMath::Sqrt(x * x + y * y);
+	float d = std::sqrt(x * x + y * y);
 
 	if (d < r * (SQRT2/(2.0f)))			// inside sphere
-		z = WWMath::Sqrt(r * r - d * d);
+		z = std::sqrt(r * r - d * d);
 	else {								// on hyperbola
 		t = r / SQRT2;
 		z = t * t / d;

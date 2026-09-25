@@ -38,14 +38,16 @@
 #include "GameClient/GameClient.h"
 #include "GameLogic/GameLogic.h"
 #include "W3DDevice/GameClient/Module/W3DRopeDraw.h"
+import engine.debug;
+import Engine.Core.Math.Vector3;
 
 namespace
 {
-Graphics::BeamDescription Make_Graphics_Rope_Beam(const Vector3 &start, const Vector3 &end, Real width, Real opacity, const RGBColor &color) noexcept
+Graphics::BeamDescription Make_Graphics_Rope_Beam(const Engine::Math::Vector3 &start, const Engine::Math::Vector3 &end, Real width, Real opacity, const RGBColor &color) noexcept
 {
 	Graphics::BeamDescription description;
-	description.start = {start.X, start.Y, start.Z};
-	description.end = {end.X, end.Y, end.Z};
+	description.start = {start.x, start.y, start.z};
+	description.end = {end.x, end.y, end.z};
 	description.width = width;
 	description.color = {color.red, color.green, color.blue, 1.0f};
 	description.opacity = opacity;
@@ -85,7 +87,7 @@ W3DRopeDraw::W3DRopeDraw( Thing *thing, const ModuleData* moduleData ) : DrawMod
 //-------------------------------------------------------------------------------------------------
 void W3DRopeDraw::buildSegments()
 {
-	DEBUG_ASSERTCRASH(m_segments.empty(), ("Hmmn, not empty"));
+	engine::debug::invariant((m_segments.empty()), "m_segments.empty()", __FILE__, __LINE__, "Hmmn, not empty");
 	m_segments.clear();
 
 	Int numSegs = ceil(m_maxLen / m_wobbleLen);
@@ -128,8 +130,8 @@ bool W3DRopeDraw::createGraphicsSegments() noexcept
 	const Real eachLen = numSegs > 0 ? m_maxLen / static_cast<Real>(numSegs) : 0.0f;
 	for (SegInfo &segment : m_segments)
 	{
-		const Vector3 start(pos.x, pos.y, pos.z);
-		const Vector3 end(pos.x, pos.y, pos.z + eachLen);
+		const Engine::Math::Vector3 start{pos.x, pos.y, pos.z};
+		const Engine::Math::Vector3 end{pos.x, pos.y, pos.z + eachLen};
 		segment.graphicsLine = Graphics::CreateBeam(Make_Graphics_Rope_Beam(start, end, m_width * 0.5f, 1.0f, m_color));
 		segment.graphicsSoftLine = Graphics::CreateBeam(Make_Graphics_Rope_Beam(start, end, m_width, 0.5f, m_color));
 		if (!segment.graphicsLine.Is_Valid() || !segment.graphicsSoftLine.Is_Valid())
@@ -197,7 +199,7 @@ W3DRopeDraw::~W3DRopeDraw()
 
 //-------------------------------------------------------------------------------------------------
 //-------------------------------------------------------------------------------------------------
-void W3DRopeDraw::doDrawModule(const Matrix3D* transformMtx)
+void W3DRopeDraw::doDrawModule(const Engine::Math::AffineTransform3* transform)
 {
 	if (m_segments.empty())
 	{
@@ -216,11 +218,12 @@ void W3DRopeDraw::doDrawModule(const Matrix3D* transformMtx)
 	{
 		Real deflection = Sin(m_curWobblePhase) * m_wobbleAmp;
 		const Coord3D* pos = getDrawable()->getPosition();
-		Vector3 start(pos->x, pos->y, pos->z + m_curZOffset);
+		Engine::Math::Vector3 start{pos->x, pos->y, pos->z + m_curZOffset};
 		Real eachLen = m_curLen / m_segments.size();
 		for (std::vector<SegInfo>::iterator it = m_segments.begin(); it != m_segments.end(); ++it)
 		{
-			Vector3 end(pos->x + deflection*it->wobbleAxisX, pos->y + deflection*it->wobbleAxisY, start.Z - eachLen);
+			Engine::Math::Vector3 end{
+				pos->x + deflection*it->wobbleAxisX, pos->y + deflection*it->wobbleAxisY, start.z - eachLen};
 			if (m_graphicsEnabled)
 			{
 				if (!Graphics::UpdateBeam(it->graphicsLine, Make_Graphics_Rope_Beam(start, end, m_width * 0.5f, 1.0f, m_color))

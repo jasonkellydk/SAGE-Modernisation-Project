@@ -1,3 +1,4 @@
+import Engine.Core.Math.Scalar;
 /*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -33,6 +34,20 @@
 #include "GameClient/Drawable.h"
 #include "GameClient/GameClient.h"
 #include "GameClient/View.h"
+
+#include <cmath>
+
+// Legacy degree/radian conversion and angle normalization, kept bit-identical to the
+// former DEG_TO_RADF macro and WWMath::Normalize_Angle.
+static inline Real legacyDegreesToRadians(Real degrees)
+{
+	return (degrees * Engine::Math::Pi) / 180.0f;
+}
+
+static inline Real legacyNormalizeAngle(Real angle)
+{
+	return angle - (Engine::Math::Tau * std::floor((angle + Engine::Math::Pi) / Engine::Math::Tau));
+}
 
 UnsignedInt View::m_idNext = 1;
 
@@ -71,7 +86,7 @@ View::View()
 	m_id = m_idNext++;
 
 	// default field of view
-	m_FOV = DEG_TO_RADF(50.0f);
+	m_FOV = legacyDegreesToRadians(50.0f);
 
 	m_mouseLocked = FALSE;
 
@@ -100,8 +115,8 @@ void View::init()
 	m_minHeightAboveGround = TheGlobalData->m_minCameraHeight;
 	m_okToAdjustHeight = FALSE;
 
-	m_defaultAngle = DEG_TO_RADF(TheGlobalData->m_cameraYaw);
-	m_defaultPitch = DEG_TO_RADF(TheGlobalData->m_cameraPitch);
+	m_defaultAngle = legacyDegreesToRadians(TheGlobalData->m_cameraYaw);
+	m_defaultPitch = legacyDegreesToRadians(TheGlobalData->m_cameraPitch);
 	m_angle = m_defaultAngle;
 	m_pitch = m_defaultPitch;
 }
@@ -156,7 +171,7 @@ void View::scrollBy( const Coord2D *delta )
  */
 void View::setAngle( Real radians )
 {
-	m_angle = WWMath::Normalize_Angle(radians);
+	m_angle = legacyNormalizeAngle(radians);
 }
 
 #define CLAMP_VIEW_PITCH 1
@@ -166,18 +181,18 @@ void View::setAngle( Real radians )
 void View::setPitch( Real radians )
 {
 #if CLAMP_VIEW_PITCH
-	m_pitch = clamp(DEG_TO_RADF(0.1f), radians, DEG_TO_RADF(89.9f));
+	m_pitch = clamp(legacyDegreesToRadians(0.1f), radians, legacyDegreesToRadians(89.9f));
 #else
-	m_pitch = WWMath::Normalize_Angle(radians);
+	m_pitch = legacyNormalizeAngle(radians);
 #endif
 }
 
 void View::setDefaultPitch( Real radians )
 {
 #if CLAMP_VIEW_PITCH
-	m_defaultPitch = clamp(DEG_TO_RADF(0.1f), radians, DEG_TO_RADF(89.9f));
+	m_defaultPitch = clamp(legacyDegreesToRadians(0.1f), radians, legacyDegreesToRadians(89.9f));
 #else
-	m_defaultPitch = WWMath::Normalize_Angle(radians);
+	m_defaultPitch = legacyNormalizeAngle(radians);
 #endif
 }
 
@@ -243,12 +258,12 @@ Bool View::isUserControlLocked() const
 /** project the 4 corners of this view into the world and return each point as a parameter,
 		the world points are at the requested Z */
 //-------------------------------------------------------------------------------------------------
-PlaneClass::IntersectionResType View::getScreenCornerWorldPointsAtZ( Coord3D *topLeft, Coord3D *topRight,
+Engine::Math::SegmentPlaneHit View::getScreenCornerWorldPointsAtZ( Coord3D *topLeft, Coord3D *topRight,
 																																					Coord3D *bottomRight, Coord3D *bottomLeft,
 																																					Real z, Graphics::CameraViewport viewPort )
 {
 	if( topLeft == nullptr || topRight == nullptr || bottomRight == nullptr || bottomLeft == nullptr)
-		return PlaneClass::NO_INTERSECTION;
+		return Engine::Math::SegmentPlaneHit::Parallel;
 
 	ICoord2D screenTopLeft;
 	ICoord2D screenTopRight;
@@ -270,8 +285,8 @@ PlaneClass::IntersectionResType View::getScreenCornerWorldPointsAtZ( Coord3D *to
 	screenBottomLeft.x = origin.x + viewWidth * viewPort.min.x;
 	screenBottomLeft.y = origin.y + viewHeight * viewPort.max.y;
 
-	PlaneClass::IntersectionResType combinedResult = PlaneClass::INSIDE_SEGMENT;
-	PlaneClass::IntersectionResType individualResults[4];
+	Engine::Math::SegmentPlaneHit combinedResult = Engine::Math::SegmentPlaneHit::Within_Segment;
+	Engine::Math::SegmentPlaneHit individualResults[4];
 	individualResults[0] = screenToWorldAtZ( &screenTopLeft, topLeft, z );
 	individualResults[1] = screenToWorldAtZ( &screenTopRight, topRight, z );
 	individualResults[2] = screenToWorldAtZ( &screenBottomRight, bottomRight, z );
@@ -279,14 +294,14 @@ PlaneClass::IntersectionResType View::getScreenCornerWorldPointsAtZ( Coord3D *to
 
 	for( Int i = 0; i < 4; ++i )
 	{
-		if( individualResults[i] == PlaneClass::NO_INTERSECTION )
+		if( individualResults[i] == Engine::Math::SegmentPlaneHit::Parallel )
 		{
-			combinedResult = PlaneClass::NO_INTERSECTION;
+			combinedResult = Engine::Math::SegmentPlaneHit::Parallel;
 			break;
 		}
-		if( individualResults[i] == PlaneClass::OUTSIDE_LINE )
+		if( individualResults[i] == Engine::Math::SegmentPlaneHit::Outside_Segment )
 		{
-			combinedResult = PlaneClass::OUTSIDE_LINE;
+			combinedResult = Engine::Math::SegmentPlaneHit::Outside_Segment;
 		}
 	}
 

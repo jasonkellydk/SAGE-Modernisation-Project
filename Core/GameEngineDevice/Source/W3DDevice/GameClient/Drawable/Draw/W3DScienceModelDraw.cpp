@@ -34,6 +34,7 @@
 #include "Common/PlayerList.h"
 #include "Common/Science.h"
 #include "Common/Xfer.h"
+import engine.debug;
 
 //-------------------------------------------------------------------------------------------------
 W3DScienceModelDrawModuleData::W3DScienceModelDrawModuleData()
@@ -73,12 +74,12 @@ W3DScienceModelDraw::~W3DScienceModelDraw()
 
 //-------------------------------------------------------------------------------------------------
 // All this does is stop the call path if we haven't been cleared to draw yet
-void W3DScienceModelDraw::doDrawModule(const Matrix3D* transformMtx)
+void W3DScienceModelDraw::doDrawModule(const Engine::Math::AffineTransform3* transform)
 {
 	ScienceType science = getW3DScienceModelDrawModuleData()->m_requiredScience;
 	if( science == SCIENCE_INVALID )
 	{
-		DEBUG_ASSERTCRASH(science != SCIENCE_INVALID, ("ScienceModelDraw has invalid science as condition.") );
+		engine::debug::invariant((science != SCIENCE_INVALID), "science != SCIENCE_INVALID", __FILE__, __LINE__, "ScienceModelDraw has invalid science as condition.");
 		setHidden( TRUE );
 		return;
 	}
@@ -92,7 +93,7 @@ void W3DScienceModelDraw::doDrawModule(const Matrix3D* transformMtx)
 		return;
 	}
 
-	W3DModelDraw::doDrawModule(transformMtx);
+	W3DModelDraw::doDrawModule(transform);
 }
 
 // ------------------------------------------------------------------------------------------------

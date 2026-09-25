@@ -31,6 +31,7 @@
 import Graphics.Scene.Lighting.Renderer;
 
 #include "W3DDevice/GameClient/W3DLight.h"
+import Engine.Core.Math.Vector3;
 #include "Lib/BaseType.h"
 class HeightMapRenderObjClass;
 
@@ -58,8 +59,8 @@ protected:
 	UnsignedInt m_decayFrameCount;
 	UnsignedInt m_increaseFrameCount;
 	Real		m_targetRange;
-	Vector3 m_targetAmbient;
-	Vector3 m_targetDiffuse;
+	Engine::Math::Vector3 m_targetAmbient;
+	Engine::Math::Vector3 m_targetDiffuse;
 	Graphics::LightHandle m_graphicsLight;
 
 

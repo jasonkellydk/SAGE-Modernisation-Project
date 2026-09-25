@@ -30,7 +30,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 #include "Common/GameState.h"
 #include "Common/Player.h"
 #include "Common/PlayerList.h"
@@ -423,7 +424,7 @@ void CaveContain::xfer( Xfer *xfer )
 			if( m_originalTeam == nullptr )
 			{
 
-				DEBUG_CRASH(( "CaveContain::xfer - Unable to find original team by id" ));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "CaveContain::xfer - Unable to find original team by id" );
 				throw SC_INVALID_DATA;
 
 			}

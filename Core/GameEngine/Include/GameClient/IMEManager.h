@@ -50,6 +50,8 @@
 #include "Lib/BaseType.h"
 #include "Common/SubsystemInterface.h"
 #include "Common/UnicodeString.h"
+#include <cstdint>
+import engine.platform;
 
 //----------------------------------------------------------------------------
 //           Forward References
@@ -96,16 +98,15 @@ class IMEManagerInterface : public SubsystemInterface
 
 
 		/// Checks for and service IME messages. Returns TRUE if message serviced
-		virtual Bool serviceIMEMessage(	void *windowsHandle,
-												UnsignedInt message,
-												Int wParam,
-												Int lParam ) = 0;
+		virtual Bool serviceIMEMessage(void* windowsHandle, UnsignedInt message, Int wParam, Int lParam) = 0;
+		virtual Bool servicePlatformEvent(const engine::platform::PlatformEvent&) { return false; }
 		virtual Int result() = 0;							///< result return value of last serviced IME message
 };
 
 
 extern IMEManagerInterface *TheIMEManager;
-extern IMEManagerInterface *CreateIMEManagerInterface();
+extern IMEManagerInterface *CreateIMEManagerInterface(engine::platform::ITextInputService& textInput,
+	std::uint32_t mainWindowId);
 
 
 //----------------------------------------------------------------------------

@@ -50,12 +50,13 @@
 #include "W3DDevice/GameClient/W3DMeshRenderObject.h"
 #include "W3DDevice/GameClient/W3DMeshResource.h"
 #include "W3DDevice/GameClient/W3DRenderObject.h"
-#include "WWMath/sphere.h"
 #include "W3DDevice/GameClient/Module/W3DDefaultDraw.h"
 #include "W3DDevice/GameClient/W3DAssetManager.h"
 #include "W3DDevice/GameClient/W3DDisplay.h"
 #include "W3DDevice/GameClient/W3DScene.h"
 #include "W3DDevice/GameClient/W3DShadow.h"
+import engine.debug;
+import Engine.Core.Math.AffineTransform3;
 
 
 
@@ -76,7 +77,7 @@ W3DDefaultDraw::W3DDefaultDraw(Thing *thing, const ModuleData* moduleData) : Dra
   		m_shadow = TheW3DShadowManager->addShadow(m_renderObject, &shadowInfo);
 
 
-		DEBUG_ASSERTCRASH(m_renderObject, ("Test asset %s not found", getDrawable()->getTemplate()->getLTAName().str()));
+		engine::debug::invariant((m_renderObject), "m_renderObject", __FILE__, __LINE__, "Test asset %s not found", getDrawable()->getTemplate()->getLTAName().str());
 		if (m_renderObject)
 		{
 
@@ -84,12 +85,9 @@ W3DDefaultDraw::W3DDefaultDraw(Thing *thing, const ModuleData* moduleData) : Dra
 
 			m_renderObject->Set_User_Data(getDrawable()->getDrawableInfo());
 
-			Matrix3D transform;
 			///@todo: Change back to identity once we figure out why objects show up at 0,0,0
 			/// OBJECT_PILE
-//			transform.Set(Vector3(0,0,9999));
-			transform.Set(Vector3(0,0,0));
-			m_renderObject->Set_Transform(transform);
+			m_renderObject->Set_Transform(Engine::Math::AffineTransform3::Identity());
 		}
 	}
 #endif
@@ -97,13 +95,11 @@ W3DDefaultDraw::W3DDefaultDraw(Thing *thing, const ModuleData* moduleData) : Dra
 
 // ------------------------------------------------------------------------------------------------
 // ------------------------------------------------------------------------------------------------
-void W3DDefaultDraw::reactToTransformChange( const Matrix3D *oldMtx,
-																						 const Coord3D *oldPos,
-																						 Real oldAngle )
+void W3DDefaultDraw::reactToTransformChange(const Coord3D* oldPos, Real oldAngle)
 {
 #ifdef LOAD_TEST_ASSETS
 	if( m_renderObject )
-		m_renderObject->Set_Transform( *getDrawable()->getTransformMatrix() );
+		m_renderObject->Set_Transform(getDrawable()->worldTransform());
 #endif
 }
 
@@ -145,20 +141,23 @@ void W3DDefaultDraw::setFullyObscuredByShroud(Bool fullyObscured)
 }
 
 //-------------------------------------------------------------------------------------------------
-void W3DDefaultDraw::doDrawModule(const Matrix3D* transformMtx)
+void W3DDefaultDraw::doDrawModule(const Engine::Math::AffineTransform3* transform)
 {
 #ifdef LOAD_TEST_ASSETS
 	if(m_renderObject)
 	{
-		Matrix3D scaledTransform;
+		Engine::Math::AffineTransform3 scaledTransform;
+		const Engine::Math::AffineTransform3* drawTransform = transform;
 		if (getDrawable()->getInstanceScale() != 1.0f)
 		{	//do custom scaling of the W3D model.
-			scaledTransform=*transformMtx;
-			scaledTransform.Scale(getDrawable()->getInstanceScale());
-			transformMtx = &scaledTransform;
+			scaledTransform = *transform;
+			for (unsigned row = 0; row < 3; ++row)
+				for (unsigned column = 0; column < 3; ++column)
+					scaledTransform.elements[row * 4 + column] *= getDrawable()->getInstanceScale();
+			drawTransform = &scaledTransform;
 		}
 		m_renderObject->Set_ObjectScale(getDrawable()->getInstanceScale());
-		m_renderObject->Set_Transform(*transformMtx);
+		m_renderObject->Set_Transform(*drawTransform);
 	}
 #endif
 }

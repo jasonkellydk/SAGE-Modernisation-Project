@@ -26,7 +26,8 @@
 // Class to encapsulate polygon trigger areas.
 // Author: John Ahlquist, November 2001
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/DataChunk.h"
 #include "Common/MapObject.h"
@@ -91,10 +92,10 @@ PolygonTrigger::~PolygonTrigger()
 */
 void PolygonTrigger::reallocate()
 {
-	DEBUG_ASSERTCRASH(m_numPoints <= m_sizePoints, ("Invalid m_numPoints."));
+	engine::debug::invariant((m_numPoints <= m_sizePoints), "m_numPoints <= m_sizePoints", __FILE__, __LINE__, "Invalid m_numPoints.");
 	if (m_numPoints == m_sizePoints) {
 		if (m_sizePoints > INT_MAX / 2) {
-			DEBUG_CRASH(("Too many points to allocate."));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Too many points to allocate.");
 			return;
 		}
 		// Reallocate.
@@ -187,8 +188,8 @@ Bool PolygonTrigger::ParsePolygonTriggersDataChunk(DataChunkInput &file, DataChu
 			pTrig->addPoint(loc);
 		}
 		if (numPoints<2) {
-			DEBUG_LOG(("Deleting polygon trigger '%s' with %d points.",
-					pTrig->getTriggerName().str(), numPoints));
+			engine::debug::log_info("Deleting polygon trigger '%s' with %d points.",
+					pTrig->getTriggerName().str(), numPoints);
 			deleteInstance(pTrig);
 			continue;
 		}
@@ -226,7 +227,7 @@ Bool PolygonTrigger::ParsePolygonTriggersDataChunk(DataChunkInput &file, DataChu
 		pPrevTrig = pTrig;
 	}
 	s_currentID = maxTriggerId+1;
-	DEBUG_ASSERTCRASH(file.atEndOfChunk(), ("Incorrect data file length."));
+	engine::debug::invariant((file.atEndOfChunk()), "file.atEndOfChunk()", __FILE__, __LINE__, "Incorrect data file length.");
 	return true;
 }
 
@@ -296,7 +297,7 @@ void PolygonTrigger::updateBounds()	const
 void PolygonTrigger::addPolygonTrigger(PolygonTrigger *pTrigger)
 {
 	for (PolygonTrigger *pTrig=getFirstPolygonTrigger(); pTrig; pTrig = pTrig->getNext()) {
-		DEBUG_ASSERTCRASH(pTrig != pTrigger, ("Attempting to add trigger already in list."));
+		engine::debug::invariant((pTrig != pTrigger), "pTrig != pTrigger", __FILE__, __LINE__, "Attempting to add trigger already in list.");
 		if (pTrig==pTrigger) return;
 	}
 	pTrigger->m_nextPolygonTrigger = ThePolygonTriggerListPtr;
@@ -315,13 +316,13 @@ void PolygonTrigger::removePolygonTrigger(PolygonTrigger *pTrigger)
 		if (pTrig==pTrigger) break;
 		pPrev = pTrig;
 	}
-	DEBUG_ASSERTCRASH(pTrig, ("Attempting to remove a polygon not in the list."));
+	engine::debug::invariant((pTrig), "pTrig", __FILE__, __LINE__, "Attempting to remove a polygon not in the list.");
 	if (pTrig) {
 		if (pPrev) {
-			DEBUG_ASSERTCRASH(pTrigger==pPrev->m_nextPolygonTrigger, ("Logic error.  jba."));
+			engine::debug::invariant((pTrigger==pPrev->m_nextPolygonTrigger), "pTrigger==pPrev->m_nextPolygonTrigger", __FILE__, __LINE__, "Logic error.  jba.");
 			pPrev->m_nextPolygonTrigger = pTrig->m_nextPolygonTrigger;
 		} else {
-			DEBUG_ASSERTCRASH(pTrigger==ThePolygonTriggerListPtr, ("Logic error.  jba."));
+			engine::debug::invariant((pTrigger==ThePolygonTriggerListPtr), "pTrigger==ThePolygonTriggerListPtr", __FILE__, __LINE__, "Logic error.  jba.");
 			ThePolygonTriggerListPtr = pTrig->m_nextPolygonTrigger;
 		}
 	}
@@ -346,7 +347,7 @@ void PolygonTrigger::deleteTriggers()
 */
 void PolygonTrigger::addPoint(const ICoord3D &point)
 {
-	DEBUG_ASSERTCRASH(m_numPoints <= m_sizePoints, ("Invalid m_numPoints."));
+	engine::debug::invariant((m_numPoints <= m_sizePoints), "m_numPoints <= m_sizePoints", __FILE__, __LINE__, "Invalid m_numPoints.");
 	if (m_numPoints == m_sizePoints) {
 		reallocate();
 	}
@@ -362,7 +363,7 @@ void PolygonTrigger::addPoint(const ICoord3D &point)
 */
 void PolygonTrigger::setPoint(const ICoord3D &point, Int ndx)
 {
-	DEBUG_ASSERTCRASH(ndx>=0 && ndx <= m_numPoints, ("Invalid ndx."));
+	engine::debug::invariant((ndx>=0 && ndx <= m_numPoints), "ndx>=0 && ndx <= m_numPoints", __FILE__, __LINE__, "Invalid ndx.");
 	if (ndx<0) return;
 	if (ndx == m_numPoints) {	// we are setting first available unused point
 		addPoint(point);
@@ -382,7 +383,7 @@ void PolygonTrigger::setPoint(const ICoord3D &point, Int ndx)
 */
 void PolygonTrigger::insertPoint(const ICoord3D &point, Int ndx)
 {
-	DEBUG_ASSERTCRASH(ndx>=0 && ndx <= m_numPoints, ("Invalid ndx."));
+	engine::debug::invariant((ndx>=0 && ndx <= m_numPoints), "ndx>=0 && ndx <= m_numPoints", __FILE__, __LINE__, "Invalid ndx.");
 	if (ndx<0) return;
 	if (ndx == m_numPoints) {	// we are setting first available unused point
 		addPoint(point);
@@ -407,7 +408,7 @@ void PolygonTrigger::insertPoint(const ICoord3D &point, Int ndx)
 */
 void PolygonTrigger::deletePoint(Int ndx)
 {
-	DEBUG_ASSERTCRASH(ndx>=0 && ndx < m_numPoints, ("Invalid ndx."));
+	engine::debug::invariant((ndx>=0 && ndx < m_numPoints), "ndx>=0 && ndx < m_numPoints", __FILE__, __LINE__, "Invalid ndx.");
 	if (ndx<0 || ndx>=m_numPoints) return;
 	Int i;
 	for (i=ndx; i<m_numPoints-1; i++) {
@@ -419,7 +420,7 @@ void PolygonTrigger::deletePoint(Int ndx)
 
 void PolygonTrigger::getCenterPoint(Coord3D* pOutCoord)	const
 {
-	DEBUG_ASSERTCRASH(pOutCoord != nullptr, ("pOutCoord was null. Non-Fatal, but shouldn't happen."));
+	engine::debug::invariant((pOutCoord != nullptr), "pOutCoord != nullptr", __FILE__, __LINE__, "pOutCoord was null. Non-Fatal, but shouldn't happen.");
 	if (!pOutCoord) {
 		return;
 	}

@@ -29,9 +29,10 @@
 #include "WWSaveLoad/definitionmgr.h"
 #include "WWLib/WWFILE.h"
 #include "WWLib/chunkio.h"
-#include "WWDebug/wwdebug.h"
+
 #include "RestrictedFileDialog.h"
 #include "Utils.h"
+import engine.debug;
 
 
 #ifdef RTS_DEBUG
@@ -206,7 +207,7 @@ AnimatedSoundOptionsDialogClass::Load_Animated_Sound_Settings ()
 		file->Close ();
 		_TheFileFactory->Return_File (file);
 	} else {
-		WWDEBUG_SAY (("Failed to load file %s", sound_def_lib_path.str ()));
+		engine::debug::log_info("Failed to load file %s", sound_def_lib_path.str ());
 	}
 
 	//

@@ -29,6 +29,8 @@
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 #include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+import Engine.Core.Math.AffineTransform3;
+#include "Common/LegacyTransformMath.h"
 
 #include "Common/Xfer.h"
 #include "GameLogic/Object.h"
@@ -122,15 +124,15 @@ UpdateSleepTime FloatUpdate::update()
 		Real yaw = sin(angle * 0.0291f) * 0.05f;
 		Real pitch = sin(angle * 0.0515f) * 0.05f;
 
-		Matrix3D mx = *draw->getInstanceMatrix();
+		Engine::Math::AffineTransform3 transform = *draw->instanceTransform();
 
-		Real zRot = mx.Get_Z_Rotation();
-		mx.Make_Identity();
-		mx.Rotate_Z(zRot);
-		mx.Rotate_Y(yaw);
-		mx.Rotate_X(pitch);
+		Real zRot = transform.Z_Rotation_Legacy();
+		transform = Engine::Math::AffineTransform3::Identity();
+		Legacy_Rotate_Z(transform, zRot);
+		Legacy_Rotate_Y(transform, yaw);
+		Legacy_Rotate_X(transform, pitch);
 
-		draw->setInstanceMatrix(&mx);
+		draw->setInstanceTransform(&transform);
 	}
 
 	return UPDATE_SLEEP_NONE;

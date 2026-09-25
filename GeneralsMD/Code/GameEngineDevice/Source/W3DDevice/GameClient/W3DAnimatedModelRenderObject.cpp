@@ -17,11 +17,14 @@ import Graphics.Frame.RenderClock;
 **	along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+#include <cmath>
 #include "W3DDevice/GameClient/W3DAnimatedModelRenderObject.h"
 import Graphics.Scene.Models.Hierarchy;
+import Graphics.Scene.Models.Playback;
 #include "W3DDevice/GameClient/W3DAssetCatalog.h"
+import engine.debug;
 
-#include "WWDebug/wwmemlog.h"
+
 import Assets.Cache.Animations;
 
 static_assert(static_cast<int>(Graphics::ModelPlaybackMode::Manual) == W3DRenderObject::ANIM_MODE_MANUAL);
@@ -32,7 +35,7 @@ static_assert(static_cast<int>(Graphics::ModelPlaybackMode::LoopBackwards) == W3
 static_assert(static_cast<int>(Graphics::ModelPlaybackMode::OnceBackwards) == W3DRenderObject::ANIM_MODE_ONCE_BACKWARDS);
 
 W3DAnimatedModelRenderObject::W3DAnimatedModelRenderObject(const char * htree_name) :
-    IsTreeValid(false), Hierarchy(nullptr), Playback(Assets::Get_Animation_Cache())
+    IsTreeValid(false), Hierarchy(nullptr), Playback(std::make_unique<Graphics::ModelPlayback>(Assets::Get_Animation_Cache()))
 {
 	
     if (htree_name == nullptr) {
@@ -47,7 +50,7 @@ W3DAnimatedModelRenderObject::W3DAnimatedModelRenderObject(const char * htree_na
 		if (source != nullptr) {
 			Hierarchy.reset(W3DNEW Graphics::ModelHierarchy(*source));
 		} else {
-			WWDEBUG_SAY(("Unable to find Hierarchy: %s",htree_name));
+			engine::debug::log_info("Unable to find Hierarchy: %s",htree_name);
 			Hierarchy.reset(W3DNEW Graphics::ModelHierarchy);
 			Hierarchy->Initialize_Default();
 		}
@@ -57,7 +60,7 @@ W3DAnimatedModelRenderObject::W3DAnimatedModelRenderObject(const char * htree_na
 W3DAnimatedModelRenderObject::W3DAnimatedModelRenderObject(const W3DAnimatedModelRenderObject & src) :
     W3DModelGroupRenderObject(src), IsTreeValid(false),
     Hierarchy(src.Hierarchy ? W3DNEW Graphics::ModelHierarchy(*src.Hierarchy) : nullptr),
-    Playback(Assets::Get_Animation_Cache())
+    Playback(std::make_unique<Graphics::ModelPlayback>(Assets::Get_Animation_Cache()))
 {
 }
 
@@ -67,7 +70,7 @@ W3DAnimatedModelRenderObject & W3DAnimatedModelRenderObject::operator = (const W
 {
     if (&that != this) {
         W3DModelGroupRenderObject::operator=(that);
-        Playback.Reset();
+        Playback->Reset();
         IsTreeValid = false;
         Hierarchy.reset(that.Hierarchy ? W3DNEW Graphics::ModelHierarchy(*that.Hierarchy) : nullptr);
     }
@@ -85,20 +88,20 @@ void W3DAnimatedModelRenderObject::Render(W3DRenderContext & rinfo)
 	//
 	// Force the hierarchy to be recalculated for single animations.
 	//
-	const bool isSingleAnim = Playback.Is_Advancing();
+	const bool isSingleAnim = Playback->Is_Advancing();
 
 	if (isSingleAnim || !Is_Hierarchy_Valid() || Are_Sub_Object_Transforms_Dirty()) {
 		Update_Sub_Object_Transforms();
 	}
 }
 
-void W3DAnimatedModelRenderObject::Set_Transform(const Matrix3D &m)
+void W3DAnimatedModelRenderObject::Set_Transform(const Engine::Math::AffineTransform3 &m)
 {
 	W3DModelGroupRenderObject::Set_Transform(m);
 	Set_Hierarchy_Valid(false);
 }
 
-void W3DAnimatedModelRenderObject::Set_Position(const Vector3 &v)
+void W3DAnimatedModelRenderObject::Set_Position(Engine::Math::Vector3 v)
 {
 	W3DModelGroupRenderObject::Set_Position(v);
 	Set_Hierarchy_Valid(false);
@@ -133,13 +136,13 @@ int W3DAnimatedModelRenderObject::Get_Bone_Index(const char * bonename)
 
 void W3DAnimatedModelRenderObject::Set_Animation()
 {
-    Playback.Reset();
+    Playback->Reset();
     Set_Hierarchy_Valid(false);
 }
 
 void W3DAnimatedModelRenderObject::Set_Animation(Assets::AnimationAssetHandle motion, float frame, int mode)
 {
-    Playback.Set(motion, frame, static_cast<Graphics::ModelPlaybackMode>(mode),
+    Playback->Set(motion, frame, static_cast<Graphics::ModelPlaybackMode>(mode),
         Graphics::Get_Render_Clock().Logic_Time_Milliseconds());
     Set_Hierarchy_Valid(false);
 }
@@ -153,20 +156,20 @@ void W3DAnimatedModelRenderObject::Set_Animation
 	float percentage
 )
 {
-    Playback.Blend(motion0, frame0, motion1, frame1, percentage);
+    Playback->Blend(motion0, frame0, motion1, frame1, percentage);
     Set_Hierarchy_Valid(false);
 }
 
 Assets::AnimationAssetHandle W3DAnimatedModelRenderObject::Peek_Animation()
 {
-    return Playback.Clip();
+    return Playback->Clip();
 }
 
-Matrix3D 	W3DAnimatedModelRenderObject::Get_Bone_Transform(const char * bonename)
+Engine::Math::AffineTransform3 W3DAnimatedModelRenderObject::Get_Bone_Transform(const char * bonename)
 {
 	if (Hierarchy) {
-		WWASSERT(Hierarchy);
-		WWASSERT(bonename);
+		engine::debug::assert_condition((Hierarchy != nullptr), "Hierarchy != nullptr", __FILE__, __LINE__, "assertion failed");
+		engine::debug::assert_condition((bonename), "bonename", __FILE__, __LINE__, "assertion failed");
 
 		int idx = Hierarchy->Bone_Index(bonename);
 		return Get_Bone_Transform(idx);
@@ -175,7 +178,7 @@ Matrix3D 	W3DAnimatedModelRenderObject::Get_Bone_Transform(const char * bonename
 	}
 }
 
-Matrix3D 	W3DAnimatedModelRenderObject::Get_Bone_Transform(int boneindex)
+Engine::Math::AffineTransform3 W3DAnimatedModelRenderObject::Get_Bone_Transform(int boneindex)
 {
 	Validate_Transform();
 
@@ -185,7 +188,7 @@ Matrix3D 	W3DAnimatedModelRenderObject::Get_Bone_Transform(int boneindex)
 			Update_Sub_Object_Transforms();
 		}
 
-		return Graphics::Export_Affine_Transform<Matrix3D>(Hierarchy->World_Transform(boneindex));
+		return Graphics::Export_Affine_Transform<Engine::Math::AffineTransform3>(Hierarchy->World_Transform(boneindex));
 	} else {
 		return Get_Transform_No_Validity_Check();
 	}
@@ -214,12 +217,12 @@ bool W3DAnimatedModelRenderObject::Is_Bone_Captured(int boneindex) const
 	}
 }
 
-void W3DAnimatedModelRenderObject::Control_Bone(int bindex,const Matrix3D & objtm,bool world_space_translation)
+void W3DAnimatedModelRenderObject::Control_Bone(int bindex,const Engine::Math::AffineTransform3 & objtm,bool world_space_translation)
 {
-#ifdef WWDEBUG
+#ifdef RTS_DEBUG
 	for (int j=0; j<3; j++) {
 		for (int i=0; i<4; i++) {
-			WWASSERT(WWMath::Is_Valid_Float(objtm[j][i]));
+			engine::debug::assert_condition((std::isfinite(objtm[j][i])), "std::isfinite(objtm[j][i])", __FILE__, __LINE__, "assertion failed");
 		}
 	}
 #endif
@@ -233,59 +236,59 @@ void W3DAnimatedModelRenderObject::Control_Bone(int bindex,const Matrix3D & objt
 void W3DAnimatedModelRenderObject::Update_Sub_Object_Transforms()
 {
     W3DModelGroupRenderObject::Update_Sub_Object_Transforms();
-    if (Hierarchy) Playback.Evaluate(*Hierarchy, Graphics::Import_Affine_Transform(Get_Transform_No_Validity_Check()),
+    if (Hierarchy) Playback->Evaluate(*Hierarchy, Graphics::Import_Affine_Transform(Get_Transform_No_Validity_Check()),
         Graphics::Get_Render_Clock().Logic_Time_Milliseconds());
     Set_Hierarchy_Valid(true);
 }
 
-bool W3DAnimatedModelRenderObject::Simple_Evaluate_Bone(int boneindex, Matrix3D *tm) const
+bool W3DAnimatedModelRenderObject::Simple_Evaluate_Bone(int boneindex, Engine::Math::AffineTransform3 *tm) const
 {
     if (!tm) return false;
     if (!Hierarchy) {
-        *tm = Get_Transform_No_Validity_Check();
+		*tm = Get_Transform_No_Validity_Check();
         return false;
     }
-    if (!Playback.Is_Blended()) {
-        const float frame = Playback.Current_Frame(Graphics::Get_Render_Clock().Logic_Time_Milliseconds());
+    if (!Playback->Is_Blended()) {
+        const float frame = Playback->Current_Frame(Graphics::Get_Render_Clock().Logic_Time_Milliseconds());
         return Simple_Evaluate_Bone(boneindex,frame,tm);
     }
     const_cast<W3DAnimatedModelRenderObject*>(this)->Update_Sub_Object_Transforms();
-    *tm = Graphics::Export_Affine_Transform<Matrix3D>(Hierarchy->World_Transform(boneindex));
+	*tm = Graphics::Export_Affine_Transform<Engine::Math::AffineTransform3>(Hierarchy->World_Transform(boneindex));
     return false;
 }
 
 bool	W3DAnimatedModelRenderObject::Is_Animation_Complete() const
 {
-    return Playback.Is_Complete();
+    return Playback->Is_Complete();
 }
 
 Assets::AnimationAssetHandle W3DAnimatedModelRenderObject::Peek_Animation_And_Info(float& frame, int& numFrames, int& mode, float& mult)
 {
-    const auto clip = Playback.Clip();
+    const auto clip = Playback->Clip();
     if (clip) {
-        frame = Playback.Frame();
+        frame = Playback->Frame();
         numFrames = static_cast<int>(Assets::Get_Animation_Cache().Resolve(clip)->frame_count);
-        mode = static_cast<int>(Playback.Mode());
-        mult = Playback.Multiplier();
+        mode = static_cast<int>(Playback->Mode());
+        mult = Playback->Multiplier();
     }
     return clip;
 }
 
 void W3DAnimatedModelRenderObject::Set_Animation_Frame_Rate_Multiplier(float multiplier)
 {
-    Playback.Set_Multiplier(multiplier);
+    Playback->Set_Multiplier(multiplier);
 }
 
-bool W3DAnimatedModelRenderObject::Simple_Evaluate_Bone(int boneindex,float frame,Matrix3D * tm) const
+bool W3DAnimatedModelRenderObject::Simple_Evaluate_Bone(int boneindex,float frame,Engine::Math::AffineTransform3 * tm) const
 {
     if (!tm) return false;
-    if (!Hierarchy || Playback.Is_Blended()) {
-        *tm = Get_Transform_No_Validity_Check();
+    if (!Hierarchy || Playback->Is_Blended()) {
+		*tm = Get_Transform_No_Validity_Check();
         return false;
     }
     Graphics::RenderTransform result;
-    const bool valid = Playback.Evaluate_Bone(*Hierarchy, boneindex, frame,
+    const bool valid = Playback->Evaluate_Bone(*Hierarchy, boneindex, frame,
         Graphics::Import_Affine_Transform(Get_Transform()), result);
-    *tm = Graphics::Export_Affine_Transform<Matrix3D>(result);
+	*tm = Graphics::Export_Affine_Transform<Engine::Math::AffineTransform3>(result);
     return valid;
 }

@@ -46,7 +46,8 @@
 //-----------------------------------------------------------------------------
 // SYSTEM INCLUDES ////////////////////////////////////////////////////////////
 //-----------------------------------------------------------------------------
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 //-----------------------------------------------------------------------------
 // USER INCLUDES //////////////////////////////////////////////////////////////
@@ -114,7 +115,7 @@ static void SetDifficultyRadioButton()
 
 		default:
 			{
-				DEBUG_CRASH(("unrecognized difficulty level in the script engine"));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "unrecognized difficulty level in the script engine");
 			}
 
 		}

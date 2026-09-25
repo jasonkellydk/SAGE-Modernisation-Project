@@ -58,11 +58,13 @@
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 #include "AABTreeBuilder.h"
+import Engine.Core.Math.Scalar;
 #include "chunkio.h"
 #include "W3DFile.h"
-#include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+import engine.debug;
+import Engine.Core.Math.RandomStream;
 
 #define WWASSERT	assert					// can't use WWASSERT because we use this module in the MAX plugin...
 const float COINCIDENCE_EPSILON = 0.001f;
@@ -149,12 +151,12 @@ void AABTreeBuilderClass::Reset()
  * HISTORY:                                                                                    *
  *   6/19/98    GTH : Created.                                                                 *
  *=============================================================================================*/
-void AABTreeBuilderClass::Build_AABTree(int polycount,Vector3i * polys,int vertcount,Vector3 * verts)
+void AABTreeBuilderClass::Build_AABTree(int polycount,Engine::Math::Index3i * polys,int vertcount,Vector3 * verts)
 {
-	WWASSERT(polycount > 0);
-	WWASSERT(vertcount > 0);
-	WWASSERT(polys != nullptr);
-	WWASSERT(verts != nullptr);
+	engine::debug::assert_condition((polycount > 0), "polycount > 0", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((vertcount > 0), "vertcount > 0", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((polys != nullptr), "polys != nullptr", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((verts != nullptr), "verts != nullptr", __FILE__, __LINE__, "assertion failed");
 
 	/*
 	** If we already have allocated data, release it
@@ -162,12 +164,17 @@ void AABTreeBuilderClass::Build_AABTree(int polycount,Vector3i * polys,int vertc
 	Reset();
 
 	/*
+	** Seed the splitting-plane sampler once for this build
+	*/
+	SplitSampling = Engine::Math::RandomStream{SPLIT_SAMPLING_SEED};
+
+	/*
 	** Copy the mesh data
 	*/
 	VertCount = vertcount;
 	PolyCount = polycount;
 	Verts = new Vector3[VertCount];
-	Polys = new Vector3i[PolyCount];
+	Polys = new Engine::Math::Index3i[PolyCount];
 
 	for (int vi=0; vi<VertCount; vi++) {
 		Verts[vi] = verts[vi];
@@ -271,7 +278,7 @@ void AABTreeBuilderClass::Build_Tree(CullNodeStruct * node,int polycount,int * p
 	** deletes the poly array.
 	*/
 	if (arrays.FrontCount) {
-		WWASSERT(arrays.FrontPolys != nullptr);
+		engine::debug::assert_condition((arrays.FrontPolys != nullptr), "arrays.FrontPolys != nullptr", __FILE__, __LINE__, "assertion failed");
 		node->Front = new CullNodeStruct;
 		Build_Tree(node->Front,arrays.FrontCount,arrays.FrontPolys);
 		arrays.FrontPolys = nullptr;
@@ -282,7 +289,7 @@ void AABTreeBuilderClass::Build_Tree(CullNodeStruct * node,int polycount,int * p
 	** deletes the tile array.
 	*/
 	if (arrays.BackCount) {
-		WWASSERT(arrays.BackPolys != nullptr);
+		engine::debug::assert_condition((arrays.BackPolys != nullptr), "arrays.BackPolys != nullptr", __FILE__, __LINE__, "assertion failed");
 
 		node->Back = new CullNodeStruct;
 		Build_Tree(node->Back,arrays.BackCount,arrays.BackPolys);
@@ -307,7 +314,7 @@ void AABTreeBuilderClass::Build_Tree(CullNodeStruct * node,int polycount,int * p
 AABTreeBuilderClass::SplitChoiceStruct
 AABTreeBuilderClass::Select_Splitting_Plane(int polycount,int * polyindices)
 {
-	WWASSERT(polyindices != nullptr);
+	engine::debug::assert_condition((polyindices != nullptr), "polyindices != nullptr", __FILE__, __LINE__, "assertion failed");
 
 	const int NUM_TRIES = 50;
 
@@ -319,23 +326,23 @@ AABTreeBuilderClass::Select_Splitting_Plane(int polycount,int * polyindices)
 	*/
 	for (int tries = 0; tries < MIN(NUM_TRIES,polycount); tries++) {
 
-		AAPlaneClass plane;
+		Engine::Math::Plane3 plane{};
 
 		/*
 		** Select a random poly and vertex index;
 		*/
-		int poly_index = polyindices[rand() % polycount];
-		int vert_index = rand() % 3;
-		const Vector3i * polyverts = Polys + poly_index;
+		int poly_index = polyindices[SplitSampling.NextUInt32() % polycount];
+		int vert_index = SplitSampling.NextUInt32() % 3;
+		const Engine::Math::Index3i * polyverts = Polys + poly_index;
 		const Vector3 * vert = Verts + (*polyverts)[vert_index];
 
 		/*
 		** Select a random plane
 		*/
-		switch(rand() % 3) {
-			case 0:	plane.Set(AAPlaneClass::XNORMAL,vert->X);	break;
-			case 1:	plane.Set(AAPlaneClass::YNORMAL,vert->Y);	break;
-			case 2:	plane.Set(AAPlaneClass::ZNORMAL,vert->Z);	break;
+		switch(SplitSampling.NextUInt32() % 3) {
+			case 0: plane = Engine::Math::Plane3{{1.0f, 0.0f, 0.0f}, vert->X}; break;
+			case 1: plane = Engine::Math::Plane3{{0.0f, 1.0f, 0.0f}, vert->Y}; break;
+			case 2: plane = Engine::Math::Plane3{{0.0f, 0.0f, 1.0f}, vert->Z}; break;
 		};
 
 		/*
@@ -365,7 +372,7 @@ AABTreeBuilderClass::Select_Splitting_Plane(int polycount,int * polyindices)
  *   6/19/98    GTH : Created.                                                                 *
  *=============================================================================================*/
 AABTreeBuilderClass::SplitChoiceStruct
-AABTreeBuilderClass::Compute_Plane_Score(int polycount,int * polyindices,const AAPlaneClass & plane)
+AABTreeBuilderClass::Compute_Plane_Score(int polycount,int * polyindices,const Engine::Math::Plane3 & plane)
 {
 	/*
 	** The score of a splitting plane is based on the following factors:
@@ -401,8 +408,8 @@ AABTreeBuilderClass::Compute_Plane_Score(int polycount,int * polyindices,const A
 	** Inflate the box a tiny amount so that we never
 	** get volumes of zero!
 	*/
-	sc.BMin -= Vector3(WWMATH_EPSILON,WWMATH_EPSILON,WWMATH_EPSILON);
-	sc.BMax += Vector3(WWMATH_EPSILON,WWMATH_EPSILON,WWMATH_EPSILON);
+	sc.BMin -= Vector3(Engine::Math::DefaultTolerance,Engine::Math::DefaultTolerance,Engine::Math::DefaultTolerance);
+	sc.BMax += Vector3(Engine::Math::DefaultTolerance,Engine::Math::DefaultTolerance,Engine::Math::DefaultTolerance);
 
 	/*
 	** Compute the cost.
@@ -432,7 +439,7 @@ AABTreeBuilderClass::Compute_Plane_Score(int polycount,int * polyindices,const A
  *   6/19/98    GTH : Created.                                                                 *
  *=============================================================================================*/
 AABTreeBuilderClass::OverlapType
-AABTreeBuilderClass::Which_Side(const AAPlaneClass & plane,int poly_index)
+AABTreeBuilderClass::Which_Side(const Engine::Math::Plane3 & plane,int poly_index)
 {
 	/*
 	** Check each vertex to see if it is in front, behind or on the plane
@@ -441,7 +448,8 @@ AABTreeBuilderClass::Which_Side(const AAPlaneClass & plane,int poly_index)
 	for (int vi=0; vi<3; vi++) {
 
 		const Vector3 & point = Verts[ Polys[poly_index][vi] ];
-		float delta = point[plane.Normal] - plane.Dist;
+		const Engine::Math::Vector3 math_point{point.X, point.Y, point.Z};
+		const float delta = plane.Signed_Distance(math_point);
 
 		if (delta > COINCIDENCE_EPSILON) {
 			mask |= POS;
@@ -539,8 +547,8 @@ void AABTreeBuilderClass::Split_Polys
 	/*
 	** when we are all done, the counts should match.
 	*/
-	WWASSERT(arrays->FrontCount == sc.FrontCount);
-	WWASSERT(arrays->BackCount == sc.BackCount);
+	engine::debug::assert_condition((arrays->FrontCount == sc.FrontCount), "arrays->FrontCount == sc.FrontCount", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((arrays->BackCount == sc.BackCount), "arrays->BackCount == sc.BackCount", __FILE__, __LINE__, "assertion failed");
 }
 
 
@@ -607,12 +615,12 @@ void AABTreeBuilderClass::Compute_Bounding_Box(CullNodeStruct * node)
 		if (node->Back->Max.Z > node->Max.Z) node->Max.Z = node->Back->Max.Z;
 	}
 
-	WWASSERT(node->Min.X != 100000.0f);
-	WWASSERT(node->Min.Y != 100000.0f);
-	WWASSERT(node->Min.Z != 100000.0f);
-	WWASSERT(node->Max.X != -100000.0f);
-	WWASSERT(node->Max.Y != -100000.0f);
-	WWASSERT(node->Max.Z != -100000.0f);
+	engine::debug::assert_condition((node->Min.X != 100000.0f), "node->Min.X != 100000.0f", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((node->Min.Y != 100000.0f), "node->Min.Y != 100000.0f", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((node->Min.Z != 100000.0f), "node->Min.Z != 100000.0f", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((node->Max.X != -100000.0f), "node->Max.X != -100000.0f", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((node->Max.Y != -100000.0f), "node->Max.Y != -100000.0f", __FILE__, __LINE__, "assertion failed");
+	engine::debug::assert_condition((node->Max.Z != -100000.0f), "node->Max.Z != -100000.0f", __FILE__, __LINE__, "assertion failed");
 }
 
 
@@ -636,7 +644,7 @@ int AABTreeBuilderClass::Assign_Index(CullNodeStruct * node,int index)
 	** an array so this index is used to determine which slot
 	** in the array to put each node into.
 	*/
-	WWASSERT(node);
+	engine::debug::assert_condition((node), "node", __FILE__, __LINE__, "assertion failed");
 	node->Index = index;
 	index++;
 
@@ -732,7 +740,7 @@ void AABTreeBuilderClass::Update_Min(int poly_index,Vector3 & min)
 {
 	for (int vert_index = 0; vert_index < 3; vert_index++) {
 
-		const Vector3i * polyverts = Polys + poly_index;
+		const Engine::Math::Index3i * polyverts = Polys + poly_index;
 		const Vector3 * point = Verts + (*polyverts)[vert_index];
 
 		if (point->X  < min.X) min.X = point->X;
@@ -758,7 +766,7 @@ void AABTreeBuilderClass::Update_Max(int poly_index,Vector3 & max)
 {
 	for (int vert_index = 0; vert_index < 3; vert_index++) {
 
-		const Vector3i * polyverts = Polys + poly_index;
+		const Engine::Math::Index3i * polyverts = Polys + poly_index;
 		const Vector3 * point = Verts + (*polyverts)[vert_index];
 
 		if (point->X  > max.X) max.X = point->X;
@@ -784,7 +792,7 @@ void	AABTreeBuilderClass::Update_Min_Max(int poly_index, Vector3 & min, Vector3 
 {
 	for (int vert_index = 0; vert_index < 3; vert_index++) {
 
-		const Vector3i * polyverts = Polys + poly_index;
+		const Engine::Math::Index3i * polyverts = Polys + poly_index;
 		const Vector3 * point = Verts + (*polyverts)[vert_index];
 
 		if (point->X  < min.X) min.X = point->X;
@@ -896,7 +904,7 @@ void AABTreeBuilderClass::Build_W3D_AABTree_Recursive
 	*/
 	if (node->Front != nullptr) {
 
-		WWASSERT(node->Back != nullptr);		// if we have one child, we better have both!
+		engine::debug::assert_condition((node->Back != nullptr), "node->Back != nullptr", __FILE__, __LINE__, "assertion failed");		// if we have one child, we better have both!
 		newnode->FrontOrPoly0 = node->Front->Index;
 		newnode->BackOrPolyCount = node->Back->Index;
 
@@ -924,7 +932,3 @@ void AABTreeBuilderClass::Build_W3D_AABTree_Recursive
 		Build_W3D_AABTree_Recursive(node->Back,w3d_nodes,poly_indices,cur_node,cur_poly);
 	}
 }
-
-
-
-

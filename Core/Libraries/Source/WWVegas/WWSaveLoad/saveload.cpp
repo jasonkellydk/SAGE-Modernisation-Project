@@ -40,14 +40,16 @@
 #include "persist.h"
 #include "persistfactory.h"
 #include "WWLib/chunkio.h"
-#include "WWDebug/wwdebug.h"
+
 #include "saveloadstatus.h"
-#include "WWDebug/wwhack.h"
-#include "WWDebug/wwprofile.h"
+
+
 
 #pragma warning(disable:4201) // warning C4201: nonstandard extension used : nameless struct/union
 #include <windows.h>
 #include "WWLib/systimer.h"
+import engine.debug;
+import engine.profiling;
 
 
 SaveLoadSubSystemClass *		SaveLoadSystemClass::SubSystemListHead = nullptr;
@@ -72,36 +74,36 @@ bool SaveLoadSystemClass::Save (ChunkSaveClass &csave,SaveLoadSubSystemClass & s
 
 bool SaveLoadSystemClass::Load (ChunkLoadClass &cload,bool auto_post_load)
 {
-	WWLOG_PREPARE_TIME_AND_MEMORY("SaveLoadSystemClass::Load");
+	engine::profiling::Scope load_scope("SaveLoadSystemClass::Load");
 	PointerRemapper.Reset();
-	WWLOG_INTERMEDIATE("PointerRemapper.Reset()");
+	engine::profiling::message("PointerRemapper.Reset()");
 	bool ok = true;
 
 	// Load each chunk we encounter and link the manager into the PostLoad list
 	while (cload.Open_Chunk ()) {
 		SaveLoadStatus::Inc_Status_Count();		// Count the sub systems loaded
 		SaveLoadSubSystemClass *sys = Find_Sub_System(cload.Cur_Chunk_ID ());
-		WWLOG_INTERMEDIATE("Find_Sub_System");
+		engine::profiling::message("Find_Sub_System");
 		if (sys != nullptr) {
-//WWRELEASE_SAY(("			Name: %s",sys->Name()));
+//engine::debug::log_info("			Name: %s",sys->Name());
 			INIT_SUB_STATUS(sys->Name());
 			ok &= sys->Load(cload);
-			WWLOG_INTERMEDIATE(sys->Name());
+			engine::profiling::message(sys->Name());
 		}
 		cload.Close_Chunk();
 	}
 
 	// Process all of the pointer remap requests
 	PointerRemapper.Process();
-	WWLOG_INTERMEDIATE("PointerRemapper.Process()");
+	engine::profiling::message("PointerRemapper.Process()");
 	PointerRemapper.Reset();
-	WWLOG_INTERMEDIATE("PointerRemapper.Reset()");
+	engine::profiling::message("PointerRemapper.Reset()");
 
 	// Call PostLoad on each PersistClass that wanted post-load
 	if (auto_post_load) {
 		Post_Load_Processing(nullptr);
 	}
-	WWLOG_INTERMEDIATE("PostLoadProcessing");
+	engine::profiling::message("PostLoadProcessing");
 
 	return ok;
 }
@@ -134,14 +136,14 @@ bool SaveLoadSystemClass::Post_Load_Processing (void(*network_callback)())
 
 void SaveLoadSystemClass::Register_Sub_System (SaveLoadSubSystemClass * sys)
 {
-	WWASSERT(sys != nullptr);
+	engine::debug::assert_condition((sys != nullptr), "sys != nullptr", __FILE__, __LINE__, "assertion failed");
 	Link_Sub_System(sys);
 }
 
 
 void SaveLoadSystemClass::Unregister_Sub_System (SaveLoadSubSystemClass * sys)
 {
-	WWASSERT(sys != nullptr);
+	engine::debug::assert_condition((sys != nullptr), "sys != nullptr", __FILE__, __LINE__, "assertion failed");
 	Unlink_Sub_System(sys);
 }
 
@@ -160,13 +162,13 @@ SaveLoadSubSystemClass * SaveLoadSystemClass::Find_Sub_System (uint32 chunk_id)
 
 void SaveLoadSystemClass::Register_Persist_Factory(PersistFactoryClass * factory)
 {
-	WWASSERT(factory != nullptr);
+	engine::debug::assert_condition((factory != nullptr), "factory != nullptr", __FILE__, __LINE__, "assertion failed");
 	Link_Factory(factory);
 }
 
 void SaveLoadSystemClass::Unregister_Persist_Factory(PersistFactoryClass * factory)
 {
-	WWASSERT(factory != nullptr);
+	engine::debug::assert_condition((factory != nullptr), "factory != nullptr", __FILE__, __LINE__, "assertion failed");
 	Unlink_Factory(factory);
 }
 
@@ -200,7 +202,7 @@ bool SaveLoadSystemClass::Is_Post_Load_Callback_Registered(PostLoadableClass * o
 
 void SaveLoadSystemClass::Register_Post_Load_Callback(PostLoadableClass * obj)
 {
-	WWASSERT(obj != nullptr);
+	engine::debug::assert_condition((obj != nullptr), "obj != nullptr", __FILE__, __LINE__, "assertion failed");
 	if (!obj->Is_Post_Load_Registered()) {
 		obj->Set_Post_Load_Registered(true);
 		PostLoadList.Add_Head(obj);
@@ -212,7 +214,7 @@ void SaveLoadSystemClass::Register_Pointer (void *old_pointer, void *new_pointer
 	PointerRemapper.Register_Pointer(old_pointer,new_pointer);
 }
 
-#ifdef WWDEBUG
+#ifdef RTS_DEBUG
 
 void SaveLoadSystemClass::Request_Pointer_Remap (void **pointer_to_convert,const char * file,int line)
 {
@@ -240,9 +242,9 @@ void SaveLoadSystemClass::Request_Ref_Counted_Pointer_Remap (RefCountClass **poi
 
 void SaveLoadSystemClass::Link_Sub_System(SaveLoadSubSystemClass * sys)
 {
-	WWASSERT(sys != nullptr);
+	engine::debug::assert_condition((sys != nullptr), "sys != nullptr", __FILE__, __LINE__, "assertion failed");
 	if (sys != nullptr) {
-		WWASSERT(sys->NextSubSystem == nullptr);			// sys should never be registered twice!
+		engine::debug::assert_condition((sys->NextSubSystem == nullptr), "sys->NextSubSystem == nullptr", __FILE__, __LINE__, "assertion failed");			// sys should never be registered twice!
 		sys->NextSubSystem = SubSystemListHead;
 		SubSystemListHead = sys;
 	}
@@ -250,7 +252,7 @@ void SaveLoadSystemClass::Link_Sub_System(SaveLoadSubSystemClass * sys)
 
 void SaveLoadSystemClass::Unlink_Sub_System(SaveLoadSubSystemClass * sys)
 {
-	WWASSERT(sys != nullptr);
+	engine::debug::assert_condition((sys != nullptr), "sys != nullptr", __FILE__, __LINE__, "assertion failed");
 	SaveLoadSubSystemClass * cursys = SubSystemListHead;
 	SaveLoadSubSystemClass * prev = nullptr;
 
@@ -271,9 +273,9 @@ void SaveLoadSystemClass::Unlink_Sub_System(SaveLoadSubSystemClass * sys)
 
 void SaveLoadSystemClass::Link_Factory(PersistFactoryClass * fact)
 {
-	WWASSERT(fact != nullptr);
+	engine::debug::assert_condition((fact != nullptr), "fact != nullptr", __FILE__, __LINE__, "assertion failed");
 	if (fact != nullptr) {
-		WWASSERT(fact->NextFactory == nullptr);			// factories should never be registered twice!
+		engine::debug::assert_condition((fact->NextFactory == nullptr), "fact->NextFactory == nullptr", __FILE__, __LINE__, "assertion failed");			// factories should never be registered twice!
 		fact->NextFactory = FactoryListHead;
 		FactoryListHead = fact;
 	}
@@ -281,7 +283,7 @@ void SaveLoadSystemClass::Link_Factory(PersistFactoryClass * fact)
 
 void SaveLoadSystemClass::Unlink_Factory(PersistFactoryClass * fact)
 {
-	WWASSERT(fact != nullptr);
+	engine::debug::assert_condition((fact != nullptr), "fact != nullptr", __FILE__, __LINE__, "assertion failed");
 
 	PersistFactoryClass * curfact = FactoryListHead;
 	PersistFactoryClass * prev = nullptr;
@@ -298,9 +300,4 @@ void SaveLoadSystemClass::Unlink_Factory(PersistFactoryClass * fact)
 	}
 
 	fact->NextFactory = nullptr;
-}
-
-void Force_Link_WWSaveLoad ()
-{
-	FORCE_LINK( Twiddler );
 }

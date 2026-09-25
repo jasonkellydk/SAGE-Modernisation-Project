@@ -22,7 +22,8 @@
 //																																						//
 ////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 
 // NetMessageStream.cpp
@@ -71,7 +72,7 @@ static Bool AddToNetCommandList(GameMessage *msg, UnsignedInt timestamp, Command
 	CommandMsg *cmdMsg = NEW CommandMsg(timestamp, msg);
 	if (!cmdMsg)
 	{
-		DEBUG_LOG(("Alloc failed!"));
+		engine::debug::log_info("Alloc failed!");
 		return false;
 	}
 
@@ -98,7 +99,7 @@ Bool AddToNetCommandList(Int playerNum, GameMessage *msg, UnsignedInt timestamp)
 	if (playerNum < 0 || playerNum >= MAX_SLOTS)
 		return false;
 
-	DEBUG_LOG(("Adding msg to NetCommandList %d", playerNum));
+	engine::debug::log_info("Adding msg to NetCommandList %d", playerNum);
 	return AddToNetCommandList(msg, timestamp, CommandHead[playerNum], CommandTail[playerNum]);
 }
 
@@ -113,7 +114,7 @@ static GameMessage * GetCommandMsg(UnsignedInt timestamp, CommandMsg *& CommandH
 
 	if (CommandHead->GetTimestamp() < timestamp)
 	{
-		DEBUG_LOG(("Time is %d, yet message timestamp is %d!", timestamp, CommandHead->GetTimestamp()));
+		engine::debug::log_info("Time is %d, yet message timestamp is %d!", timestamp, CommandHead->GetTimestamp());
 		return nullptr;
 	}
 
@@ -145,7 +146,7 @@ GameMessage * GetCommandMsg(UnsignedInt timestamp, Int playerNum)
 	if (playerNum < 0 || playerNum >= MAX_SLOTS)
 		return nullptr;
 
-	//DEBUG_LOG(("Adding msg to NetCommandList %d", playerNum));
+	//engine::debug::log_info("Adding msg to NetCommandList %d", playerNum);
 	return GetCommandMsg(timestamp, CommandHead[playerNum], CommandTail[playerNum]);
 }
 
@@ -181,8 +182,8 @@ Bool AddCommandToPacket(const GameMessage *msg)
 		commandBuf[0] = MSGTYPE_PARTIALCOMMAND;
 		if (!TheNetwork->queueSend(BROADCAST_CON, commandBuf, bytesUsed + sizeof(CommandPacketHeader) + 1, MSG_NEEDACK | MSG_SEQUENCED))
 		{
-			//DEBUG_CRASH(("Too many commands in one frame!  Some will be dropped."));
-			DEBUG_LOG(("Too many commands in one frame!  Some will be dropped."));
+			//engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Too many commands in one frame!  Some will be dropped.");
+			engine::debug::log_info("Too many commands in one frame!  Some will be dropped.");
 			return false;
 		}
 		commandBuf[0] = MSGTYPE_COMMANDCOUNT;
@@ -192,8 +193,8 @@ Bool AddCommandToPacket(const GameMessage *msg)
 
 	if (bytesUsed + sizeof(CommandPacketHeader) + messageSize >= MAX_MESSAGE_LEN)
 	{
-		//DEBUG_CRASH(("Too many commands in one frame!  Some will be dropped."));
-		DEBUG_LOG(("Too many commands in one frame!  Some will be dropped."));
+		//engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Too many commands in one frame!  Some will be dropped.");
+		engine::debug::log_info("Too many commands in one frame!  Some will be dropped.");
 		return false;
 	}
 
@@ -208,8 +209,8 @@ Bool AddCommandToPacket(const GameMessage *msg)
 		bytesUsed += sizeofMessageArg;
 	}
 
-	//DEBUG_ASSERTCRASH(bytesUsed + sizeof(CommandPacketHeader) < MAX_MESSAGE_LEN, ("Memory overwrite constructing command packet!"));
-	//DEBUG_LOG(("Memory overwrite constructing command packet!"));
+	//engine::debug::invariant((bytesUsed + sizeof(CommandPacketHeader) < MAX_MESSAGE_LEN), "bytesUsed + sizeof(CommandPacketHeader) < MAX_MESSAGE_LEN", __FILE__, __LINE__, "Memory overwrite constructing command packet!");
+	//engine::debug::log_info("Memory overwrite constructing command packet!");
 	return true;
 }
 

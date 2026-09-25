@@ -1,15 +1,14 @@
 #pragma once
 
-#include <memory>
 #include <optional>
 #include <string>
 import Assets.Particles;
+import Engine.Core.Math.RandomVector3Generator;
 import Graphics.Materials.State;
 import Graphics.Scene.Particles.EmitterEmission;
 import Graphics.Scene.Particles.EmitterKinematics;
 #include "W3DDevice/GameClient/W3DRenderObject.h"
 #include "WWLib/ref_ptr.h"
-#include "WWMath/v3_rnd.h"
 
 class W3DTextureHandle;
 class W3DEmitterParticles;
@@ -19,8 +18,8 @@ class W3DEmitterRenderObject final : public W3DRenderObject
 {
 public:
     W3DEmitterRenderObject(const Assets::EmitterAssetDesc &description, W3DTextureHandle *texture,
-        Graphics::MaterialState shader, std::unique_ptr<Vector3Randomizer> position,
-        std::unique_ptr<Vector3Randomizer> velocity);
+        Graphics::MaterialState shader, Engine::Math::RandomVector3Generator position,
+        Engine::Math::RandomVector3Generator velocity);
     W3DEmitterRenderObject(const W3DEmitterRenderObject &source);
     ~W3DEmitterRenderObject() override;
     W3DRenderObject *Clone() const override;
@@ -33,8 +32,8 @@ public:
     void Restart() override { Start(); }
     void Scale(float scale) override;
     void On_Frame_Update() override;
-    void Get_Obj_Space_Bounding_Sphere(SphereClass &sphere) const override;
-    void Get_Obj_Space_Bounding_Box(AABoxClass &box) const override;
+    void Get_Local_Bounding_Sphere(Engine::Math::Sphere3 &sphere) const override;
+    void Get_Local_Bounds(Engine::Math::AxisAlignedBox3 &box) const override;
     void Set_Hidden(int value) override { W3DRenderObject::Set_Hidden(value); Update_Visibility(); }
     void Set_Visible(int value) override { W3DRenderObject::Set_Visible(value); Update_Visibility(); }
     void Set_Animation_Hidden(int value) override { W3DRenderObject::Set_Animation_Hidden(value); Update_Visibility(); }
@@ -57,8 +56,8 @@ private:
     Graphics::EmitterTransform Current_Transform() const;
     void Update_Visibility();
     Graphics::EmitterEmission m_emission;
-    std::unique_ptr<Vector3Randomizer> m_position_randomizer;
-    std::unique_ptr<Vector3Randomizer> m_velocity_randomizer;
+    Engine::Math::RandomVector3Generator m_position_generator;
+    Engine::Math::RandomVector3Generator m_velocity_generator;
     RefCountPtr<W3DEmitterParticles> m_particles;
     std::optional<std::string> m_name{"ParticleEmitter"};
     bool m_active = false;

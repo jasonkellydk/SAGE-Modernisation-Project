@@ -29,6 +29,8 @@
 
 #pragma once
 
+
+#include <cassert>
 #include "Common/Module.h"
 #include "GameLogic/Damage.h"
 #include "GameLogic/ArmorSet.h"
@@ -238,8 +240,8 @@ public:
 	virtual void setInitialHealth(Int initialPercent) override  {  } ///< Sets the initial load health %.
 	virtual void setMaxHealth(Real maxHealth, MaxHealthChangeType healthChangeType = SAME_CURRENTHEALTH ) override  {  } ///< Sets the max health.
 
-	virtual void setFrontCrushed(Bool v) override { DEBUG_CRASH(("you should never call this for generic Bodys")); }
-	virtual void setBackCrushed(Bool v) override { DEBUG_CRASH(("you should never call this for generic Bodys")); }
+	virtual void setFrontCrushed(Bool v) override { assert(false); }
+	virtual void setBackCrushed(Bool v) override { assert(false); }
 
 
 	virtual void setIndestructible( Bool indestructible ) override { }

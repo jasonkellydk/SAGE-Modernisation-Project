@@ -40,7 +40,7 @@
 #include "saveload.h"
 #include "saveloadsubsystem.h"
 #include "saveloadids.h"
-#include "WWDebug/wwdebug.h"
+
 #include "WWLib/wwstring.h"
 #include "WWLib/hashtemplate.h"
 #include "WWLib/Vector.h"

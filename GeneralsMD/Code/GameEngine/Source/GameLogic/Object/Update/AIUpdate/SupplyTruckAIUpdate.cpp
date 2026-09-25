@@ -26,7 +26,8 @@
 // Author: Graham Smallwood, February 2002
 // Desc:   State machine that controls when and with who a Truck docks
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/Player.h"
 #include "Common/ResourceGatheringManager.h"
@@ -519,7 +520,7 @@ StateReturnType SupplyTruckWantsToPickUpOrDeliverBoxesState::update()
 
 	if (!update->isAvailableForSupplying())
 	{
-		DEBUG_CRASH(("SupplyTruckWantsToPickUpOrDeliverBoxesState: isAvailableForSupplying==false; should not get here"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "SupplyTruckWantsToPickUpOrDeliverBoxesState: isAvailableForSupplying==false; should not get here");
 		return STATE_FAILURE;
 	}
 

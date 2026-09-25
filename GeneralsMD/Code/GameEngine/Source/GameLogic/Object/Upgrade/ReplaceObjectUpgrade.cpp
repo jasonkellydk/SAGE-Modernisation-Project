@@ -26,7 +26,8 @@
 // Author: Graham Smallwood, July 2003
 // Desc:	 UpgradeModule that creates a new Object in our exact location and then deletes our object
 ///////////////////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "GameLogic/Module/ReplaceObjectUpgrade.h"
 
@@ -75,18 +76,18 @@ void ReplaceObjectUpgrade::upgradeImplementation()
 
 	Bool oldObjectSelected;
 	Int oldObjectSquadNumber;
-	Matrix3D myMatrix;
+	Engine::Math::AffineTransform3 replacementTransform;
 	Team* myTeam;
 
 	{
 		Object* me = getObject();
 
-		myMatrix = *me->getTransformMatrix();
+		replacementTransform = me->worldTransform();
 		myTeam = me->getTeam();// Team implies player.  It is a subset.
 
 		if (replacementTemplate == nullptr)
 		{
-			DEBUG_ASSERTCRASH(replacementTemplate != nullptr, ("No such object '%s' in ReplaceObjectUpgrade.", data->m_replaceObjectName.str()));
+			engine::debug::invariant((replacementTemplate != nullptr), "replacementTemplate != nullptr", __FILE__, __LINE__, "No such object '%s' in ReplaceObjectUpgrade.", data->m_replaceObjectName.str());
 			return;
 		}
 
@@ -101,7 +102,7 @@ void ReplaceObjectUpgrade::upgradeImplementation()
 	}
 
 	Object *replacementObject = TheThingFactory->newObject(replacementTemplate, myTeam);
-	replacementObject->setTransformMatrix(&myMatrix);
+	replacementObject->setWorldTransform(replacementTransform);
 	TheAI->pathfinder()->addObjectToPathfindMap( replacementObject );
 
 	// Now onCreates were called at the constructor.  This magically created

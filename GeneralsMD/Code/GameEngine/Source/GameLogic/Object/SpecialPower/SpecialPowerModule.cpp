@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // USER INCLUDES //////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/GameAudio.h"
 #include "Common/GameUtility.h"
@@ -416,7 +417,7 @@ void SpecialPowerModule::startPowerRecharge()
 	// sanity
 	if( modData->m_specialPowerTemplate == nullptr )
 	{
-		DEBUG_CRASH(("special power not found"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "special power not found");
 		return;
 	}
 
@@ -476,7 +477,7 @@ Bool SpecialPowerModule::initiateIntentToDoSpecialPower( const Object *targetObj
 	// TheSuperHackers @info we need to leave early if we are in the MissileLauncherBuildingUpdate crash fix codepath
 	if (m_availableOnFrame == 0xFFFFFFFF)
 	{
-		DEBUG_ASSERTCRASH(!valid, ("Using MissileLauncherBuildingUpdate escape path when valid is set to true"));
+		engine::debug::invariant((!valid), "!valid", __FILE__, __LINE__, "Using MissileLauncherBuildingUpdate escape path when valid is set to true");
 		return false;
 	}
 #endif
@@ -487,9 +488,9 @@ Bool SpecialPowerModule::initiateIntentToDoSpecialPower( const Object *targetObj
 	//appropriate update module!
 	if( !valid && getSpecialPowerModuleData()->m_updateModuleStartsAttack )
 	{
-		DEBUG_CRASH( ("Object does not contain a special power module to execute.  Did you forget to add it to the object INI?"));
-		//DEBUG_CRASH(( "Object does not contain special power module (%s) to execute.  Did you forget to add it to the object INI?",
-		//							command->m_specialPower->getName().str() ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Object does not contain a special power module to execute.  Did you forget to add it to the object INI?");
+		//engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Object does not contain special power module (%s) to execute.  Did you forget to add it to the object INI?",
+		//							command->m_specialPower->getName().str() );
 	}
 
 	return valid;

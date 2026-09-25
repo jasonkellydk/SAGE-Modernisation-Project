@@ -44,8 +44,10 @@
 
 #pragma once
 
+
+#include <cassert>
 #include "bittype.h"
-#include "WWDebug/wwdebug.h"
+
 #include "mutex.h"
 #include <new>
 #include <stdlib.h>
@@ -200,7 +202,7 @@ template<class T,int BLOCK_SIZE>
 ObjectPoolClass<T,BLOCK_SIZE>::~ObjectPoolClass()
 {
 	// assert that the user gave back all of the memory he was using
-	WWASSERT(FreeObjectCount == TotalObjectCount);
+	assert((FreeObjectCount == TotalObjectCount));
 
 	// delete all of the blocks we allocated
 	int block_count = 0;
@@ -210,7 +212,7 @@ ObjectPoolClass<T,BLOCK_SIZE>::~ObjectPoolClass()
 		BlockListHead = next_block;
 		block_count++;
 	}
-	WWASSERT(block_count == TotalObjectCount / BLOCK_SIZE);
+	assert((block_count == TotalObjectCount / BLOCK_SIZE));
 }
 
 
@@ -322,7 +324,7 @@ void ObjectPoolClass<T,BLOCK_SIZE>::Free_Object_Memory(T * obj)
 {
 	FastCriticalSectionClass::LockClass lock(ObjectPoolCS);
 
-	WWASSERT(obj != nullptr);
+	assert((obj != nullptr));
 	*(T**)(obj) = FreeListHead;		// Link to the Head
 	FreeListHead = obj;					// Set the Head
 	FreeObjectCount++;
@@ -344,7 +346,7 @@ void ObjectPoolClass<T,BLOCK_SIZE>::Free_Object_Memory(T * obj)
 template<class T, int BLOCK_SIZE>
 void * AutoPoolClass<T,BLOCK_SIZE>::operator new( size_t size )
 {
-	WWASSERT(size == sizeof(T));
+	assert((size == sizeof(T)));
 	return (void *)(Allocator.Allocate_Object_Memory());
 }
 

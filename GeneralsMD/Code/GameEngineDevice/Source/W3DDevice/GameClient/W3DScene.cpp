@@ -39,9 +39,11 @@ import Graphics.Scene.OrderedDraws;
 import Graphics.Frame.AttachmentBindings;
 import Graphics.Scene.DrawParameters;
 import Graphics.Scene.Props.Submission;
+import Engine.Core.Math.Sphere3;
+import Engine.Core.Math.Vector3;
 #include <stdlib.h>
-#include "rts/profile.h"
-#include "../../../../../../engine/graphics/profiling/Tracy.h"
+#include <algorithm>
+
 #include "W3DDevice/GameClient/W3DObjectGraphics.h"
 import Assets.Math;
 import Graphics.Frame.Runtime;
@@ -51,7 +53,7 @@ import Graphics.Scene.Shadows.StencilVolumes;
 #include "Lib/BaseType.h"
 #include "Common/GameUtility.h"
 #include "Common/GlobalData.h"
-#include "Common/PerfTimer.h"
+
 #include "Common/Player.h"
 #include "Common/PlayerList.h"
 #include "GameLogic/Object.h"
@@ -75,6 +77,8 @@ import Graphics.Scene.Shadows.StencilVolumes;
 #include "W3DDevice/GameClient/W3DWater.h"
 #include "W3DDevice/GameClient/W3DCamera.h"
 #include "W3DDevice/GameClient/W3DTextureHandle.h"
+import engine.profiling;
+import engine.debug;
 
 
 import Graphics.Materials.MeshMaterial;
@@ -101,15 +105,17 @@ struct SceneSubmissionScope {
             TheGameLogic?TheGameLogic->getFrame():0,commands->Submission_Counts().draw_calls-before);
     }
 };
-}
 
-#define GENERALS_SCENE_CAPTURE_NAME_IMPL(a,b) a##b
-#define GENERALS_SCENE_CAPTURE_NAME(a,b) GENERALS_SCENE_CAPTURE_NAME_IMPL(a,b)
-#define GENERALS_SCENE_PROFILE_SCOPE(name) \
-    PROFILER_SECTION_NAME(name); \
-    auto GENERALS_SCENE_CAPTURE_NAME(sceneCaptureScope_,__LINE__)= \
-        navigation::diagnostics::frameCapture().measure(name,TheGameLogic?TheGameLogic->getFrame():0); \
-    SceneSubmissionScope GENERALS_SCENE_CAPTURE_NAME(sceneSubmissionScope_,__LINE__)(name ".draw_calls")
+struct SceneInstrumentationScope {
+    engine::profiling::Scope profile;
+    navigation::diagnostics::FrameCapture::StageScope capture;
+    SceneSubmissionScope submissions;
+    explicit SceneInstrumentationScope(const char* name)
+        : profile(name),
+          capture(navigation::diagnostics::frameCapture().measure(name, TheGameLogic ? TheGameLogic->getFrame() : 0)),
+          submissions(name) {}
+};
+}
 
 ///////////////////////////////////////////////////////////////////////////////
 // DEFINITIONS ////////////////////////////////////////////////////////////////
@@ -293,23 +299,24 @@ intersection tests.  Maybe truncate the ray to terrain length before using it?
 */
 void RTS3DScene::flagOccludedObjects(W3DCamera * camera)
 {
-	Vector3 camPosition=camera->Get_Position();
+	const Engine::Math::Vector3 camPosition=camera->Get_Position();
 
 	//Find which objects are actually occluded
 	W3DRenderObject **occludee=m_potentialOccludees;
-	LineSegClass lineseg;
-	CastResultStruct result;
+	Engine::Math::CollisionResult3 result;
 	Bool hit=FALSE;
-	Vector3 newEndPoint;
-	result.ComputeContactPoint=false;
-	W3DRayCastQuery raytest(lineseg,&result,SCENE_QUERY_ALL,false,false);
+	result.compute_contact_point=false;
+	W3DRayCastQuery raytest({},&result,SCENE_QUERY_ALL,false,false);
 	raytest.CollisionType=SCENE_QUERY_ALL;
 
 	m_occludedObjectsCount=0;
 
 	for (Int i=0; i<m_numPotentialOccludees; i++,occludee++)
 	{
-		raytest.Ray.Set(camPosition,(*occludee)->Get_Position());
+		const Engine::Math::Vector3 occludee_position = (*occludee)->Get_Position();
+		raytest.Ray = {
+			camPosition,
+			occludee_position};
 
 		W3DRenderObject **occluder=m_potentialOccluders;
 
@@ -319,15 +326,15 @@ void RTS3DScene::flagOccludedObjects(W3DCamera * camera)
 			// Do a quick ray-sphere test (Graphics Gems I,  p388)
 			W3DRenderObject *robj=*occluder;
 
-			const SphereClass *sphere = &robj->Get_Bounding_Sphere();
+			const Engine::Math::Sphere3 sphere = robj->Get_Bounding_Sphere();
 
 			// make a vector from the ray origin to the sphere center
-			Vector3 sphere_vector(sphere->Center - raytest.Ray.Get_P0());
+			const Engine::Math::Vector3 sphere_vector = sphere.center - raytest.Ray.start;
 
 			// get the dot product between the sphere_vector and the ray vector
-			Real Alpha = Vector3::Dot_Product(sphere_vector, raytest.Ray.Get_Dir());
+			const Real Alpha = sphere_vector.Dot(raytest.Ray.Direction());
 
-			Real Beta = sphere->Radius * sphere->Radius - (Vector3::Dot_Product(sphere_vector, sphere_vector) - Alpha * Alpha);
+			Real Beta = sphere.radius * sphere.radius - (sphere_vector.Dot(sphere_vector) - Alpha * Alpha);
 
 			if(Beta < 0.0f)
 				continue;	//no intersection
@@ -340,8 +347,8 @@ void RTS3DScene::flagOccludedObjects(W3DCamera * camera)
 				raytest.CollidedRenderObj = robj;
 				hit=TRUE;
 				//reset the result space for next test
-				result.StartBad = false;
-				result.Fraction = 1.0f;
+				result.starts_overlapping = false;
+				result.fraction = 1.0f;
 				break;
 			}
 		}
@@ -373,9 +380,9 @@ Bool RTS3DScene::castRay(W3DRayCastQuery & raytest, Bool testAll, Int collisionT
 //#endif
 
 	//temporary results for each object tested
-	CastResultStruct result;
+	Engine::Math::CollisionResult3 result;
 	W3DRayCastQuery tempRayTest(raytest.Ray,&result);
-	Vector3 newEndPoint;
+	Engine::Math::Vector3 newEndPoint;
 	Bool hit=FALSE;
 
 	tempRayTest.CollisionType = SCENE_QUERY_ALL;
@@ -397,15 +404,15 @@ Bool RTS3DScene::castRay(W3DRayCastQuery & raytest, Bool testAll, Int collisionT
 		if(robj->Get_Collision_Type() & collisionType && (testAll || robj->Is_Really_Visible()))
 		{
 			// Do a quick ray-sphere test (Graphics Gems I,  p388)
-			const SphereClass *sphere = &robj->Get_Bounding_Sphere();
+			const Engine::Math::Sphere3 sphere = robj->Get_Bounding_Sphere();
 
 			// make a vector from the ray origin to the sphere center
-			Vector3 sphere_vector(sphere->Center - tempRayTest.Ray.Get_P0());
+			const Engine::Math::Vector3 sphere_vector = sphere.center - tempRayTest.Ray.start;
 
 			// get the dot product between the sphere_vector and the ray vector
-			Real Alpha = Vector3::Dot_Product(sphere_vector, tempRayTest.Ray.Get_Dir());
+			const Real Alpha = sphere_vector.Dot(tempRayTest.Ray.Direction());
 
-			Real Beta = sphere->Radius * sphere->Radius - (Vector3::Dot_Product(sphere_vector, sphere_vector) - Alpha * Alpha);
+			Real Beta = sphere.radius * sphere.radius - (sphere_vector.Dot(sphere_vector) - Alpha * Alpha);
 
 			if(Beta < 0.0f)
 				continue;	//no intersection
@@ -418,10 +425,9 @@ Bool RTS3DScene::castRay(W3DRayCastQuery & raytest, Bool testAll, Int collisionT
 				raytest.CollidedRenderObj = robj;
 				hit=TRUE;
 				//Refine search by making ray shorter
-				tempRayTest.Ray.Compute_Point(tempRayTest.Result->Fraction,&newEndPoint);
-				tempRayTest.Ray.Set(raytest.Ray.Get_P0(),newEndPoint);
+				tempRayTest.Ray = {raytest.Ray.start, tempRayTest.Ray.Point_At(tempRayTest.Result->fraction)};
 				//intersection point is at the end of shortened ray, so adjust fraction to 1.0
-				tempRayTest.Result->Fraction=1.0f;
+				tempRayTest.Result->fraction=1.0f;
 			}
 		}
 	}
@@ -439,7 +445,7 @@ Bool RTS3DScene::castRay(W3DRayCastQuery & raytest, Bool testAll, Int collisionT
 //=============================================================================
 void RTS3DScene::Visibility_Check(W3DCamera * camera)
 {
-    GRAPHICS_PROFILE_FOCUS_SCOPE("Graphics.Scene.Visibility");
+    engine::profiling::Scope scene_profile_442("Graphics.Scene.Visibility");
 #ifdef DIRTY_CONDITION_FLAGS
 	StDrawableDirtyStuffLocker lockDirtyStuff;
 #endif
@@ -629,7 +635,7 @@ void RTS3DScene::renderSpecificDrawables(W3DRenderContext &rinfo, Int numDrawabl
 void RTS3DScene::renderOneObject(W3DRenderContext &rinfo, W3DRenderObject *robj, Int localPlayerIndex)
 {
     Flush_Before_W3D_Object_Draw(*robj);
-    GRAPHICS_PROFILE_FOCUS_SCOPE("Graphics.Scene.RenderObject");
+    engine::profiling::Scope scene_profile_632("Graphics.Scene.RenderObject");
 	Drawable *draw = nullptr;
 	DrawableInfo *drawInfo = nullptr;
 	Bool drawableHidden=FALSE;
@@ -646,7 +652,7 @@ void RTS3DScene::renderOneObject(W3DRenderContext &rinfo, W3DRenderObject *robj,
 	}
 
 	Graphics::LocalLighting lightEnv;
-	SphereClass sph = robj->Get_Bounding_Sphere();
+	const Engine::Math::Sphere3 sphere = robj->Get_Bounding_Sphere();
 	drawInfo = (DrawableInfo *)robj->Get_User_Data();
 	if (drawInfo)
 	{
@@ -661,11 +667,12 @@ void RTS3DScene::renderOneObject(W3DRenderContext &rinfo, W3DRenderObject *robj,
 	// but it does still light the drawable explicitly, and can be fudged like this
 	// infantry test does, here...
 	// the tint has been delegated to the getTint() stuff, below... MLorenzen
-	Vector3 ambient = Get_Ambient_Light();
+	const auto &scene_ambient = Get_Ambient_Light();
+	Engine::Math::Vector3 ambient(scene_ambient.x, scene_ambient.y, scene_ambient.z);
 	if (draw && (drawableHidden=draw->isDrawableEffectivelyHidden()) != TRUE)
 	{
 #ifdef NOT_IN_USE
-		const Vector3* drawAmbient = draw->getAmbientLight();
+		const Engine::Math::Vector3* drawAmbient = draw->getAmbientLight();
 		if (drawAmbient)
 			ambient.Add(ambient, *drawAmbient, &ambient);
 #endif
@@ -710,45 +717,39 @@ void RTS3DScene::renderOneObject(W3DRenderContext &rinfo, W3DRenderObject *robj,
 			sceneLights = m_infantryLight;
 		}
 
-		lightEnv.Reset({(sph.Center).X,(sph.Center).Y,(sph.Center).Z}, {(ambient).X,(ambient).Y,(ambient).Z});
+		lightEnv.Reset({sphere.center.x, sphere.center.y, sphere.center.z},
+			{ambient.x, ambient.y, ambient.z});
 
 
 		// HANDLE THE SPECIAL DRAWABLE-LEVEL COLORING SETTINGS FIRST
 
-		const Vector3 *tintColor = nullptr;
-		const Vector3 *selectionColor = nullptr;
+		const Engine::Math::Vector3 *tintColor = nullptr;
+		const Engine::Math::Vector3 *selectionColor = nullptr;
 
 		tintColor			 = draw->getTintColor();
 		selectionColor = draw->getSelectionColor();
 
 		if ( tintColor || selectionColor )
 		{
-			Vector3 sumTint, temp, restore;
-
-			sumTint.Set(0,0,0);
+			Engine::Math::Vector3 sumTint{};
 
 			if (tintColor)
-				Vector3::Add(sumTint, *tintColor, &sumTint);
+				sumTint = sumTint + *tintColor;
 			if (selectionColor)
-				Vector3::Add(sumTint, *selectionColor, &sumTint);
+				sumTint = sumTint + *selectionColor;
 
 			for (Int globalLightIndex = 0; globalLightIndex < m_numGlobalLights; globalLightIndex++)
 			{
-				sceneLights[globalLightIndex]->Get_Diffuse( &temp );
-				restore = temp;
-
-				Vector3::Add(temp, sumTint, &temp);
-
-				sceneLights[globalLightIndex]->Set_Diffuse( temp );
+				const Engine::Math::Vector3 restore = sceneLights[globalLightIndex]->Get_Diffuse();
+				sceneLights[globalLightIndex]->Set_Diffuse(restore + sumTint);
 				lightEnv.Add(Get_Light_Source(*sceneLights[globalLightIndex]));
-				sceneLights[globalLightIndex]->Set_Diffuse( restore );
+				sceneLights[globalLightIndex]->Set_Diffuse(restore);
 
 			}
 
-			temp.Set(lightEnv.ambient[0],lightEnv.ambient[1],lightEnv.ambient[2]);
-			Vector3::Add(sumTint, temp, &temp );
-
-			lightEnv.ambient = {temp.X,temp.Y,temp.Z};
+			const Engine::Math::Vector3 ambient{lightEnv.ambient[0], lightEnv.ambient[1], lightEnv.ambient[2]};
+			const Engine::Math::Vector3 tinted_ambient = sumTint + ambient;
+			lightEnv.ambient = {tinted_ambient.x, tinted_ambient.y, tinted_ambient.z};
 
 		}
 		else // no funny coloring going on, so just add the lights normally
@@ -805,7 +806,8 @@ void RTS3DScene::renderOneObject(W3DRenderContext &rinfo, W3DRenderObject *robj,
 		}
 		else
 		{
-			lightEnv.Reset({(sph.Center).X,(sph.Center).Y,(sph.Center).Z}, {(ambient).X,(ambient).Y,(ambient).Z});
+			lightEnv.Reset({sphere.center.x, sphere.center.y, sphere.center.z},
+				{ambient.x, ambient.y, ambient.z});
 			for (Int globalLightIndex = 0; globalLightIndex < m_numGlobalLights; globalLightIndex++)
 				lightEnv.Add(Get_Light_Source(*m_globalLight[globalLightIndex]));
 		}
@@ -818,8 +820,8 @@ void RTS3DScene::renderOneObject(W3DRenderContext &rinfo, W3DRenderObject *robj,
 		for (it2.First(); !it2.Is_Done(); it2.Next())
 		{
 			W3DLight *pLight = static_cast<W3DLight *>(it2.Peek_Obj());
-			SphereClass lSph = pLight->Get_Bounding_Sphere();
-			Bool cull = (pLight->Get_Type() == W3DLight::POINT && !Spheres_Intersect(sph, lSph));
+			const Engine::Math::Sphere3 light_sphere = pLight->Get_Bounding_Sphere();
+			Bool cull = (pLight->Get_Type() == W3DLight::POINT && !sphere.Intersects(light_sphere));
 			if (!cull) {
 				lightEnv.Add(Get_Light_Source(*pLight));
 			}
@@ -835,8 +837,8 @@ void RTS3DScene::renderOneObject(W3DRenderContext &rinfo, W3DRenderObject *robj,
 			  if (!pDyna->isEnabled()) {
 				  continue;
 			  }
-			  SphereClass lSph = pDyna->Get_Bounding_Sphere();
-			  if (pDyna->Get_Type() == W3DLight::POINT && !Spheres_Intersect(sph, lSph)) {
+			  const Engine::Math::Sphere3 light_sphere = pDyna->Get_Bounding_Sphere();
+			  if (pDyna->Get_Type() == W3DLight::POINT && !sphere.Intersects(light_sphere)) {
 				  continue;
 			  }
 			  lightEnv.Add(Get_Light_Source(*pDyna));
@@ -888,8 +890,6 @@ void RTS3DScene::renderOneObject(W3DRenderContext &rinfo, W3DRenderObject *robj,
 		rinfo.Pop_Override_Flags();	//flags used to disable base pass and only render custom heat vision pass.
 }
 
-//DECLARE_PERF_TIMER(translucentRender)
-
 void RTS3DScene::Render_Water_Reflection(W3DCamera *camera,
 	const Graphics::RHIViewport &viewport)
 {
@@ -907,29 +907,29 @@ void RTS3DScene::Render_Water_Reflection(W3DCamera *camera,
 /**Draw everything that was submitted from this scene*/
 void RTS3DScene::Flush(W3DRenderContext & rinfo)
 {
-    GENERALS_SCENE_PROFILE_SCOPE("Graphics.Scene.Flush");
+    SceneInstrumentationScope scene_instrumentation_911{"Graphics.Scene.Flush"};
 	// TheSuperHackers @bugfix Now always prepares shadows to guarantee correct state before doing any
 	// shadow draw calls. Originally just drawing shadows for trees would not properly prepare shadows.
 	{
-		GENERALS_SCENE_PROFILE_SCOPE("Graphics.Scene.PrepareShadows");
+		SceneInstrumentationScope scene_instrumentation_915{"Graphics.Scene.PrepareShadows"};
 		PrepareShadows();
 	}
 
 	//don't draw shadows in this mode because they interfere with destination alpha or are invisible (wireframe)
 	if (m_customPassMode == SCENE_PASS_DEFAULT && Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE)
 	{
-		GENERALS_SCENE_PROFILE_SCOPE("Graphics.Scene.DecalShadows");
+		SceneInstrumentationScope scene_instrumentation_922{"Graphics.Scene.DecalShadows"};
 		DoShadows(rinfo, false);	//draw all non-stencil shadows (decals) since they fall under other objects.
 	}
 
 	{
-		GENERALS_SCENE_PROFILE_SCOPE("Graphics.Scene.MaterialQueue");
+		SceneInstrumentationScope scene_instrumentation_927{"Graphics.Scene.MaterialQueue"};
 		Graphics::Get_Prop_Submission().Flush_Materials();	//draw all non-translucent objects.
 	}
 
 
     {
-    GENERALS_SCENE_PROFILE_SCOPE("Graphics.Scene.Occlusion");
+    SceneInstrumentationScope scene_instrumentation_933{"Graphics.Scene.Occlusion"};
     Graphics::PropBatchScope prop_batches(Graphics::Get_Prop_Submission(),Graphics::Get_Attachment_Bindings().Current().viewport);
 	//draw all non-translucent objects which were separated because they are hidden and need custom rendering.
 #ifdef USE_NON_STENCIL_OCCLUSION
@@ -945,14 +945,14 @@ void RTS3DScene::Flush(W3DRenderContext & rinfo)
 
 	// Draw the trees last so they alpha blend onto everything correctly.
 	{
-		GENERALS_SCENE_PROFILE_SCOPE("Graphics.Scene.Trees");
+		SceneInstrumentationScope scene_instrumentation_949{"Graphics.Scene.Trees"};
 		DoTrees(rinfo);
 	}
 
 	//don't draw shadows in this mode because they interfere with destination alpha
 	if (m_customPassMode == SCENE_PASS_DEFAULT && Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE)
 	{
-		GENERALS_SCENE_PROFILE_SCOPE("Graphics.Scene.StencilShadows");
+		SceneInstrumentationScope scene_instrumentation_956{"Graphics.Scene.StencilShadows"};
 		DoShadows(rinfo, true);	//draw all stencil shadows
 	}
 
@@ -960,34 +960,33 @@ void RTS3DScene::Flush(W3DRenderContext & rinfo)
 		m_customPassMode != SCENE_PASS_ALPHA_MASK &&
 		Get_Extra_Pass_Polygon_Mode() != EXTRA_PASS_CLEAR_LINE)
 	{
-		GENERALS_SCENE_PROFILE_SCOPE("Graphics.Scene.WaterDraw");
+		SceneInstrumentationScope scene_instrumentation_964{"Graphics.Scene.WaterDraw"};
 		TheWaterRenderSystem->Capture_Refraction_Texture();
 		TheWaterRenderSystem->Render(rinfo);
 	}
 
 	{
-		GENERALS_SCENE_PROFILE_SCOPE("Graphics.Scene.StaticQueue");
+		SceneInstrumentationScope scene_instrumentation_970{"Graphics.Scene.StaticQueue"};
 		Graphics::Get_Scene_Draw_Queue().Drain(&rinfo, [] { Graphics::Get_Prop_Submission().Flush_Materials(); });	//draw remaining static-sort submissions
 	}
 
 	if (m_customPassMode == SCENE_PASS_DEFAULT && Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE)
 	{
-		GENERALS_SCENE_PROFILE_SCOPE("Graphics.Scene.TransparentObjects");
+		SceneInstrumentationScope scene_instrumentation_976{"Graphics.Scene.TransparentObjects"};
 		flushTranslucentObjects(rinfo);	//draw all translucent meshes which don't need per-polygon sorting.
 	}
 
 	{
-		//USE_PERF_TIMER(translucentRender)
 
 		//don't draw transparent in this mode because they interfere with destination alpha
 		if (m_customPassMode == SCENE_PASS_DEFAULT && Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE
             && !Get_W3D_Render_Services().Is_Reflection_Render_Pass())
 		{
-			GENERALS_SCENE_PROFILE_SCOPE("Graphics.Scene.Particles");
+			SceneInstrumentationScope scene_instrumentation_987{"Graphics.Scene.Particles"};
 			DoParticles(rinfo);	//prepare the main frame's deferred particle pass.
 		}
 
-		GENERALS_SCENE_PROFILE_SCOPE("Graphics.Scene.TransparentSubmission");
+		SceneInstrumentationScope scene_instrumentation_990{"Graphics.Scene.TransparentSubmission"};
 		Graphics::Get_Prop_Submission().Flush_Transparent();	//draw sorted translucent polygons like particles.
 
 	}
@@ -1006,10 +1005,18 @@ void RTS3DScene::updateFixedLightEnvironments(W3DRenderContext & rinfo)
 		infantryLightScale = TheGlobalData->m_infantryLightScale[TheGlobalData->m_timeOfDay];
 
 	//Generate the default light environment
-	m_defaultLightEnv.Reset({0,0,0}, {(Get_Ambient_Light()).X,(Get_Ambient_Light()).Y,(Get_Ambient_Light()).Z});
-	m_foggedLightEnv.Reset({0,0,0}, {(Get_Ambient_Light()*foggedLightFrac).X,(Get_Ambient_Light()*foggedLightFrac).Y,(Get_Ambient_Light()*foggedLightFrac).Z});
+	const auto &scene_ambient = Get_Ambient_Light();
+	const auto fogged_ambient = scene_ambient * foggedLightFrac;
+	m_defaultLightEnv.Reset({0,0,0}, {scene_ambient.x, scene_ambient.y, scene_ambient.z});
+	m_foggedLightEnv.Reset({0,0,0}, {fogged_ambient.x, fogged_ambient.y, fogged_ambient.z});
 
-	Vector3 oldDiffuse, oldAmbient;
+	Engine::Math::Vector3 oldDiffuse, oldAmbient;
+	const auto clamp_color = [](Engine::Math::Vector3 color) {
+		color.x = std::clamp(color.x, -1.0f, 1.0f);
+		color.y = std::clamp(color.y, -1.0f, 1.0f);
+		color.z = std::clamp(color.z, -1.0f, 1.0f);
+		return color;
+	};
 	for (Int globalLightIndex = 0; globalLightIndex < m_numGlobalLights; globalLightIndex++)
 	{
 		m_defaultLightEnv.Add(Get_Light_Source(*m_globalLight[globalLightIndex]));
@@ -1017,22 +1024,17 @@ void RTS3DScene::updateFixedLightEnvironments(W3DRenderContext & rinfo)
 		*m_infantryLight[globalLightIndex]=*m_globalLight[globalLightIndex];
 		m_infantryLight[globalLightIndex]->Set_Transform(m_globalLight[globalLightIndex]->Get_Transform());
 
-		m_globalLight[globalLightIndex]->Get_Diffuse(&oldDiffuse);
-		m_globalLight[globalLightIndex]->Get_Ambient(&oldAmbient);
-    oldDiffuse *= infantryLightScale;
-    oldAmbient *= infantryLightScale;
-    static Vector3 id (1.0f, 1.0f, 1.0f);
-    oldDiffuse.Cap_Absolute_To(id);
-    oldAmbient.Cap_Absolute_To(id);
+		oldDiffuse = clamp_color(m_globalLight[globalLightIndex]->Get_Diffuse() * infantryLightScale);
+		oldAmbient = clamp_color(m_globalLight[globalLightIndex]->Get_Ambient() * infantryLightScale);
 		m_infantryLight[globalLightIndex]->Set_Ambient(oldAmbient);//CLAMPED
 		m_infantryLight[globalLightIndex]->Set_Diffuse(oldDiffuse);//CLAMPED
 
 		//copy the normal light for fog so we can modify it
 		m_scratchLight->Set_Transform(m_globalLight[globalLightIndex]->Get_Transform());
 		//modify light with attenuated value to adjust for fog.
-		m_globalLight[globalLightIndex]->Get_Diffuse(&oldDiffuse);
+		oldDiffuse = m_globalLight[globalLightIndex]->Get_Diffuse();
 		m_scratchLight->Set_Diffuse(oldDiffuse*foggedLightFrac);
-		m_globalLight[globalLightIndex]->Get_Ambient(&oldAmbient);
+		oldAmbient = m_globalLight[globalLightIndex]->Get_Ambient();
 		m_scratchLight->Set_Ambient(oldAmbient*foggedLightFrac);
 		m_foggedLightEnv.Add(Get_Light_Source(*m_scratchLight));
 	}
@@ -1040,7 +1042,7 @@ void RTS3DScene::updateFixedLightEnvironments(W3DRenderContext & rinfo)
 	m_defaultLightEnv.Finalize();
 	m_foggedLightEnv.Finalize();
 
-	m_infantryAmbient = Get_Ambient_Light();// * infantryLightScale;	//for now don't adjust ambient so that we don't lose directional lighting.
+	m_infantryAmbient = {scene_ambient.x, scene_ambient.y, scene_ambient.z};// * infantryLightScale; for now don't adjust ambient so that we don't lose directional lighting.
 }
 
 /**Generate custom rendering passes for each potential player color.  This is currently only used
@@ -1048,7 +1050,7 @@ to render occluded objects using the color of the player*/
 void RTS3DScene::updatePlayerColorPasses()
 {
 #ifdef USE_NON_STENCIL_OCCLUSION
-	Vector3 hsv,rgb;
+	Engine::Math::Vector3 hsv,rgb;
 
 	if (TheGlobalData->m_enableBehindBuildingMarkers && TheGameLogic->getShowBehindBuildingMarkers())
 	{
@@ -1060,12 +1062,12 @@ void RTS3DScene::updatePlayerColorPasses()
 			Real red,green,blue,alpha;
 			GameGetColorComponentsReal(player->getPlayerColor(),&red,&green,&blue,&alpha);
 			const auto source_hsv = Assets::RGB_To_HSV({red, green, blue});
-            hsv.Set(source_hsv.x, source_hsv.y, source_hsv.z);
-			hsv.Z*=TheGlobalData->m_occludedLuminanceScale;
-			const auto converted = Assets::HSV_To_RGB({hsv.X, hsv.Y, hsv.Z});
-                    rgb.Set(converted.x, converted.y, converted.z);
+			hsv = {source_hsv.x, source_hsv.y, source_hsv.z};
+			hsv.z *= TheGlobalData->m_occludedLuminanceScale;
+			const auto converted = Assets::HSV_To_RGB({hsv.x, hsv.y, hsv.z});
+					rgb = {converted.x, converted.y, converted.z};
 			Graphics::MeshMaterial *vmat=m_occludedMaterialPass[playerIndex]->material.get();
-			vmat->parameters.emissive = {rgb.X,rgb.Y,rgb.Z};
+			vmat->parameters.emissive = {rgb.x,rgb.y,rgb.z};
 		}
 	}
 #endif
@@ -1073,13 +1075,11 @@ void RTS3DScene::updatePlayerColorPasses()
 
 #define ZBias 0.0001f
 
-//DECLARE_PERF_TIMER(NonTerrainRender)
 void RTS3DScene::Render(W3DRenderContext & rinfo)
 {
-    GENERALS_SCENE_PROFILE_SCOPE("Graphics.Scene.Render");
+    SceneInstrumentationScope scene_instrumentation_1079{"Graphics.Scene.Render"};
     auto& draw_parameters = Graphics::Get_Scene_Draw_Parameters();
-	//USE_PERF_TIMER(NonTerrainRender)
-	draw_parameters.fog = {FogEnabled, FogStart, FogEnd, {FogColor.X, FogColor.Y, FogColor.Z, 1}};
+	draw_parameters.fog = {FogEnabled, FogStart, FogEnd, {FogColor.x, FogColor.y, FogColor.z, 1}};
 
 	//Override the behind building selection if it's not available on current hardware (needs stencil).
 	TheWritableGlobalData->m_enableBehindBuildingMarkers = TheWritableGlobalData->m_enableBehindBuildingMarkers &&
@@ -1200,7 +1200,7 @@ void RTS3DScene::Render(W3DRenderContext & rinfo)
 //=============================================================================
 void RTS3DScene::Customized_Render( W3DRenderContext &rinfo )
 {
-    GENERALS_SCENE_PROFILE_SCOPE("Graphics.Scene.Traverse");
+    SceneInstrumentationScope scene_instrumentation_1203{"Graphics.Scene.Traverse"};
 #ifdef DIRTY_CONDITION_FLAGS
 	StDrawableDirtyStuffLocker lockDirtyStuff;
 #endif
@@ -1226,7 +1226,7 @@ void RTS3DScene::Customized_Render( W3DRenderContext &rinfo )
 	Graphics::SceneObjectList<W3DRenderObject>::Cursor it(&UpdateList);
 	// allow all objects in the update list to do their "every frame" processing
 	{
-		GENERALS_SCENE_PROFILE_SCOPE("Graphics.Scene.FrameUpdates");
+		SceneInstrumentationScope scene_instrumentation_1229{"Graphics.Scene.FrameUpdates"};
 		for (it.First(); !it.Is_Done(); it.Next()) {
 			W3DRenderObject * robj = it.Peek_Obj();
 			if (robj->Class_ID() == W3DRenderObject::CLASSID_TILEMAP)
@@ -1264,22 +1264,22 @@ void RTS3DScene::Customized_Render( W3DRenderContext &rinfo )
         && Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE) {
         bool shadows_ready;
         {
-            GENERALS_SCENE_PROFILE_SCOPE("Graphics.Shadows.Collect");
+            SceneInstrumentationScope scene_instrumentation_1267{"Graphics.Shadows.Collect"};
             shadows_ready=Collect_Directional_Shadow_Casters(rinfo)
                 && static_cast<BaseHeightMapRenderObjClass*>(terrainObject)->collectShadowCasters();
         }
         if (shadows_ready) {
-            GENERALS_SCENE_PROFILE_SCOPE("Graphics.Shadows.Render");
+            SceneInstrumentationScope scene_instrumentation_1272{"Graphics.Shadows.Render"};
             shadows_ready=Render_Directional_Shadow_Maps(rinfo);
         }
         if (!shadows_ready) {
-            DEBUG_LOG(("Directional shadow submission failed.\n"));
+            engine::debug::log_info("Directional shadow submission failed.\n");
         }
     }
 	//terrain needs to be rendered first
 	if (terrainObject)	// Don't check visibility - terrain is always visible. jba.
 	{
-		GENERALS_SCENE_PROFILE_SCOPE("Graphics.Scene.TerrainDraw");
+		SceneInstrumentationScope scene_instrumentation_1282{"Graphics.Scene.TerrainDraw"};
 		robj=terrainObject;
 		rinfo.light_environment = nullptr;		// Terrain is self lit.
 		rinfo.Camera.Set_User_Data(this);	//pass the scene to terrain via user data.
@@ -1408,7 +1408,7 @@ void RTS3DScene::flushOccludedObjectsIntoStencil(W3DRenderContext & rinfo)
 	Int playerColorIndex[MAX_PLAYER_COUNT];
 	Int visiblePlayerColors[MAX_PLAYER_COUNT];	///<color assigned to each of the visible players
 	Int numObjects;
-	Vector3 hsv,rgb;
+	Engine::Math::Vector3 hsv,rgb;
 
 	Int usedPlayerColorIndex=1;
 	Int numVisiblePlayerColors=0;
@@ -1442,7 +1442,7 @@ void RTS3DScene::flushOccludedObjectsIntoStencil(W3DRenderContext & rinfo)
 
 			if ((lastPlayerObject[index]-&playerObjects[index][0]) >= MAX_VISIBLE_OCCLUDED_PLAYER_OBJECTS)
 			{
-				DEBUG_CRASH(("Exceeded Maximum Number of potentially occluded models"));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Exceeded Maximum Number of potentially occluded models");
 				continue;
 			}
 
@@ -1481,11 +1481,11 @@ void RTS3DScene::flushOccludedObjectsIntoStencil(W3DRenderContext & rinfo)
 					Int color=object->getControllingPlayer()->getPlayerColor();
 					const auto source_hsv = Assets::RGB_To_HSV({((color >> 16) & 255) / 255.0f,
                         ((color >> 8) & 255) / 255.0f, (color & 255) / 255.0f});
-                    hsv.Set(source_hsv.x, source_hsv.y, source_hsv.z);
-					hsv.Z*=TheGlobalData->m_occludedLuminanceScale;
-					const auto converted = Assets::HSV_To_RGB({hsv.X, hsv.Y, hsv.Z});
-                    rgb.Set(converted.x, converted.y, converted.z);
-					visiblePlayerColors[numVisiblePlayerColors++]=Assets::Color_To_ARGB({rgb.X,rgb.Y,rgb.Z,0.5f});
+					hsv = {source_hsv.x, source_hsv.y, source_hsv.z};
+					hsv.z *= TheGlobalData->m_occludedLuminanceScale;
+					const auto converted = Assets::HSV_To_RGB({hsv.x, hsv.y, hsv.z});
+					rgb = {converted.x, converted.y, converted.z};
+					visiblePlayerColors[numVisiblePlayerColors++]=Assets::Color_To_ARGB({rgb.x,rgb.y,rgb.z,0.5f});
 				}
 
 				Int thisPlayerColorIndex=playerColorIndex[k];
@@ -1800,7 +1800,7 @@ void RTS3DScene::removeDynamicLight(W3DDynamicLight * obj)
 void RTS3DScene::doRender( W3DCamera * cam )
 {
 	m_camera = cam;
-	DRAW();
+	draw();
 	m_camera = nullptr;
 
 }
@@ -1813,7 +1813,7 @@ void RTS3DScene::doRender( W3DCamera * cam )
 void RTS3DScene::draw()
 {
 	if (m_camera == nullptr) {
-		DEBUG_CRASH(("Null m_camera in RTS3DScene::draw"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Null m_camera in RTS3DScene::draw");
 		return;
 	}
 	Get_W3D_Render_Services().Render( this, m_camera );
@@ -1866,7 +1866,7 @@ void RTS2DScene::Customized_Render( W3DRenderContext &rinfo )
 void RTS2DScene::doRender( W3DCamera * cam )
 {
 	m_camera = cam;
-	DRAW();
+	draw();
 	m_camera = nullptr;
 }
 
@@ -1878,7 +1878,7 @@ void RTS2DScene::doRender( W3DCamera * cam )
 void RTS2DScene::draw()
 {
 	if (m_camera == nullptr) {
-		DEBUG_CRASH(("Null m_camera in RTS2DScene::draw"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Null m_camera in RTS2DScene::draw");
 		return;
 	}
 	Get_W3D_Render_Services().Render( this, m_camera );
@@ -1921,7 +1921,7 @@ void RTS3DInterfaceScene::Customized_Render( W3DRenderContext &rinfo )
     Graphics::SceneObjectList<W3DRenderObject>::Cursor it(&UpdateList);
     for (it.First(); !it.Is_Done(); it.Next()) it.Peek_Obj()->On_Frame_Update();
     Graphics::LocalLighting environment;
-    environment.Reset({0,0,0}, {(AmbientLight).X,(AmbientLight).Y,(AmbientLight).Z});
+    environment.Reset({0,0,0}, {AmbientLight.x, AmbientLight.y, AmbientLight.z});
     for (it.First(&LightList); !it.Is_Done(); it.Next())
         environment.Add(Get_Light_Source(*static_cast<W3DLight *>(it.Peek_Obj())));
     environment.Finalize();
@@ -1954,7 +1954,7 @@ void RTS3DInterfaceScene::Customized_Render( W3DRenderContext &rinfo )
 
 void RTS3DScene::Visibility_Check(W3DCamera * camera)
 {
-    GRAPHICS_PROFILE_FOCUS_SCOPE("Graphics.Scene.Visibility");
+    engine::profiling::Scope scene_profile_1954("Graphics.Scene.Visibility");
 #ifdef DIRTY_CONDITION_FLAGS
 	StDrawableDirtyStuffLocker lockDirtyStuff;
 #endif

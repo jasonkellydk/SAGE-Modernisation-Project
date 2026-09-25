@@ -28,9 +28,13 @@ import Graphics.Frame.RenderClock;
 // Author: Michael S. Booth, March 2001
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+#include <vector>
+import engine.profiling;
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/AudioEventInfo.h"
+#include "Common/LegacyTransformMath.h"
 #include "Common/DynamicAudioEventInfo.h"
 #include "Common/AudioSettings.h"
 #include "Common/BitFlagsIO.h"
@@ -44,7 +48,7 @@ import Graphics.Frame.RenderClock;
 #include "Common/GameUtility.h"
 #include "Common/GlobalData.h"
 #include "Common/ModuleFactory.h"
-#include "Common/PerfTimer.h"
+
 #include "Common/Player.h"
 #include "Common/PlayerList.h"
 #include "Common/ThingFactory.h"
@@ -210,8 +214,7 @@ DrawableLocoInfo::~DrawableLocoInfo()
 static const char *drawableIconIndexToName( DrawableIconType iconIndex )
 {
 
-	DEBUG_ASSERTCRASH( iconIndex >= ICON_FIRST && iconIndex < MAX_ICONS,
-										 ("drawableIconIndexToName - Illegal index '%d'", iconIndex) );
+	engine::debug::invariant((iconIndex >= ICON_FIRST && iconIndex < MAX_ICONS), "iconIndex >= ICON_FIRST && iconIndex < MAX_ICONS", __FILE__, __LINE__, "drawableIconIndexToName - Illegal index '%d'", iconIndex);
 
 	return TheDrawableIconNames[ iconIndex ];
 
@@ -222,7 +225,7 @@ static const char *drawableIconIndexToName( DrawableIconType iconIndex )
 static DrawableIconType drawableIconNameToIndex( const char *iconName )
 {
 
-	DEBUG_ASSERTCRASH( iconName != nullptr, ("drawableIconNameToIndex - Illegal name") );
+	engine::debug::invariant((iconName != nullptr), "iconName != nullptr", __FILE__, __LINE__, "drawableIconNameToIndex - Illegal name");
 
 	for( Int i = ICON_FIRST; i < MAX_ICONS; ++i )
 		if( stricmp( TheDrawableIconNames[ i ], iconName ) == 0 )
@@ -403,7 +406,7 @@ Drawable::Drawable( const ThingTemplate *thingTemplate, DrawableStatusBits statu
 
 	}
 
-	m_instance.Make_Identity();
+	m_instance = Engine::Math::AffineTransform3::Identity();
 	m_instanceIsIdentity = true;
 
 	//Real scaleFuzziness = thingTemplate->getInstanceScaleFuzziness();
@@ -648,24 +651,27 @@ Bool Drawable::getShouldAnimate( Bool considerPower ) const
 
 //-------------------------------------------------------------------------------------------------
 // this method must ONLY be called from the client, NEVER From the logic, not even indirectly.
-Bool Drawable::clientOnly_getFirstRenderObjInfo(Coord3D* pos, Real* boundingSphereRadius, Matrix3D* transform)
+Bool Drawable::getRenderObjectInfo(
+	Coord3D* position,
+	Real* boundingSphereRadius,
+	Engine::Math::AffineTransform3* transform) const
 {
-	DrawModule** dm = getDrawModules();
+	const DrawModule** dm = getDrawModules();
 	const ObjectDrawInterface* di = (dm && *dm) ? (*dm)->getObjectDrawInterface() : nullptr;
 	if (di)
 	{
-		return di->clientOnly_getRenderObjInfo(pos, boundingSphereRadius, transform);
+		return di->getRenderObjectInfo(position, boundingSphereRadius, transform);
 	}
 	return false;
 }
 
 //-------------------------------------------------------------------------------------------------
-Bool Drawable::getProjectileLaunchOffset(WeaponSlotType wslot, Int specificBarrelToUse, Matrix3D* launchPos, WhichTurretType tur, Coord3D* turretRotPos, Coord3D* turretPitchPos) const
+Bool Drawable::getProjectileLaunchTransform(WeaponSlotType wslot, Int specificBarrelToUse, Engine::Math::AffineTransform3* launchTransform, WhichTurretType tur, Coord3D* turretRotPos, Coord3D* turretPitchPos) const
 {
 	for (const DrawModule** dm = getDrawModules(); *dm; ++dm)
 	{
 		const ObjectDrawInterface* di = (*dm)->getObjectDrawInterface();
-		if (di && di->getProjectileLaunchOffset(m_conditionState, wslot, specificBarrelToUse, launchPos, tur, turretRotPos, turretPitchPos))
+		if (di && di->getProjectileLaunchTransform(m_conditionState, wslot, specificBarrelToUse, launchTransform, tur, turretRotPos, turretPitchPos))
 			return true;
 	}
 	return false;
@@ -752,7 +758,8 @@ Real Drawable::getAnimationScrubScalar() const // lorenzen
 #endif
 
 //-------------------------------------------------------------------------------------------------
-Int Drawable::getPristineBonePositions(const char* boneNamePrefix, Int startIndex, Coord3D* positions, Matrix3D* transforms, Int maxBones) const
+Int Drawable::getPristineBoneData(const char* boneNamePrefix, Int startIndex,
+	Coord3D* positions, Engine::Math::AffineTransform3* transforms, Int maxBones) const
 {
 	Int count = 0;
 	for (const DrawModule** dm = getDrawModules(); *dm; ++dm)
@@ -764,7 +771,62 @@ Int Drawable::getPristineBonePositions(const char* boneNamePrefix, Int startInde
 		if (di)
 		{
 			Int subcount =
-				di->getPristineBonePositionsForConditionState(m_conditionState, boneNamePrefix, startIndex, positions, transforms, maxBones);
+				di->getPristineBoneTransforms(m_conditionState, boneNamePrefix, startIndex, positions, transforms, maxBones);
+
+			if (subcount > 0)
+			{
+				count += subcount;
+				if (positions)
+					positions += subcount;
+				if (transforms)
+					transforms += subcount;
+				maxBones -= subcount;
+			}
+		}
+	}
+	return count;
+}
+
+Int Drawable::getPristineBonePositions(
+	const char* boneNamePrefix,
+	Int startIndex,
+	Coord3D* positions,
+	Int maxBones) const
+{
+	return getPristineBoneData(boneNamePrefix, startIndex, positions, nullptr, maxBones);
+}
+
+Int Drawable::getPristineBoneTransforms(
+	const char* boneNamePrefix,
+	Int startIndex,
+	Engine::Math::AffineTransform3* transforms,
+	Int maxBones) const
+{
+	if (transforms == nullptr || maxBones <= 0)
+		return 0;
+
+	return getPristineBoneData(boneNamePrefix, startIndex, nullptr, transforms, maxBones);
+}
+
+//-------------------------------------------------------------------------------------------------
+Int Drawable::getCurrentClientBoneTransforms(
+	const char* boneNamePrefix,
+	Int startIndex,
+	Coord3D* positions,
+	Engine::Math::AffineTransform3* transforms,
+	Int maxBones) const
+{
+	Int count = 0;
+	for (const DrawModule** dm = getDrawModules(); *dm; ++dm)
+	{
+		if (maxBones <= 0)
+			break;
+
+		const ObjectDrawInterface* di = (*dm)->getObjectDrawInterface();
+		if (di)
+		{
+			Int subcount = di->getCurrentBoneTransforms(
+				boneNamePrefix, startIndex, positions, transforms, maxBones);
 
 			if (subcount > 0)
 			{
@@ -781,41 +843,14 @@ Int Drawable::getPristineBonePositions(const char* boneNamePrefix, Int startInde
 }
 
 //-------------------------------------------------------------------------------------------------
-Int Drawable::getCurrentClientBonePositions(const char* boneNamePrefix, Int startIndex, Coord3D* positions, Matrix3D* transforms, Int maxBones) const
-{
-	Int count = 0;
-	for (const DrawModule** dm = getDrawModules(); *dm; ++dm)
-	{
-		if (maxBones <= 0)
-			break;
-
-		const ObjectDrawInterface* di = (*dm)->getObjectDrawInterface();
-		if (di)
-		{
-			Int subcount =
-				di->getCurrentBonePositions(boneNamePrefix, startIndex, positions, transforms, maxBones);
-
-			if (subcount > 0)
-			{
-				count += subcount;
-				if (positions)
-					positions += subcount;
-				if (transforms)
-					transforms += subcount;
-				maxBones -= subcount;
-			}
-		}
-	}
-	return count;
-}
-
-//-------------------------------------------------------------------------------------------------
-Bool Drawable::getCurrentWorldspaceClientBonePositions(const char* boneName, Matrix3D& transform) const
+Bool Drawable::getCurrentWorldBoneTransform(
+	const char* boneName,
+	Engine::Math::AffineTransform3& transform) const
 {
 	for (const DrawModule** dm = getDrawModules(); *dm; ++dm)
 	{
 		const ObjectDrawInterface* di = (*dm)->getObjectDrawInterface();
-		if (di && di->getCurrentWorldspaceClientBonePositions(boneName, transform))
+		if (di && di->getCurrentWorldBoneTransform(boneName, transform))
 			return true;
 	}
 	return false;
@@ -1008,7 +1043,7 @@ void Drawable::onUnselected()
 //-------------------------------------------------------------------------------------------------
 /** get FX color value to add to ALL LIGHTS when drawing */
 //-------------------------------------------------------------------------------------------------
-const Vector3 * Drawable::getTintColor() const
+const Engine::Math::Vector3 * Drawable::getTintColor() const
 {
 	if ( m_colorTintEnvelope )
 	{
@@ -1024,7 +1059,7 @@ const Vector3 * Drawable::getTintColor() const
 //-------------------------------------------------------------------------------------------------
 /** get SELECTION color value to add to ALL LIGHTS when drawing */
 //-------------------------------------------------------------------------------------------------
-const Vector3 * Drawable::getSelectionColor()	const
+const Engine::Math::Vector3 * Drawable::getSelectionColor()	const
 {
 	if (m_selectionFlashEnvelope)
 	{
@@ -1127,10 +1162,8 @@ void Drawable::imitateStealthLook( Drawable& otherDraw )
 //-------------------------------------------------------------------------------------------------
 /** update is called once per frame */
 //-------------------------------------------------------------------------------------------------
-//DECLARE_PERF_TIMER(updateDrawable)
 void Drawable::updateDrawable()
 {
-	//USE_PERF_TIMER(updateDrawable)
 
 	UnsignedInt now = TheGameLogic->getFrame();
 	Object *obj = getObject();
@@ -1195,7 +1228,7 @@ void Drawable::updateDrawable()
 
 		if (m_expirationDate != 0 && now >= m_expirationDate)
 		{
-			DEBUG_ASSERTCRASH(obj == nullptr, ("Drawables with Objects should not have expiration dates!"));
+			engine::debug::invariant((obj == nullptr), "obj == nullptr", __FILE__, __LINE__, "Drawables with Objects should not have expiration dates!");
 			TheGameClient->destroyDrawable(this);
 			return;
 		}
@@ -1348,7 +1381,7 @@ void Drawable::flashAsSelected( const RGBColor *color ) ///< drawable takes care
 }
 
 //-------------------------------------------------------------------------------------------------
-void Drawable::applyPhysicsXform(Matrix3D* mtx)
+void Drawable::applyPhysicsXform(Engine::Math::AffineTransform3* transform)
 {
 	if (m_physicsXform != nullptr)
 	{
@@ -1359,10 +1392,10 @@ void Drawable::applyPhysicsXform(Matrix3D* mtx)
 			calcPhysicsXform(*m_physicsXform);
 		}
 
-		mtx->Translate(0.0f, 0.0f, m_physicsXform->m_totalZ);
-		mtx->Rotate_Y( m_physicsXform->m_totalPitch );
-		mtx->Rotate_X( -m_physicsXform->m_totalRoll );
-		mtx->Rotate_Z( m_physicsXform->m_totalYaw );
+		Legacy_Translate(*transform, 0.0f, 0.0f, m_physicsXform->m_totalZ);
+		Legacy_Rotate_Y(*transform, m_physicsXform->m_totalPitch);
+		Legacy_Rotate_X(*transform, -m_physicsXform->m_totalRoll);
+		Legacy_Rotate_Z(*transform, m_physicsXform->m_totalYaw);
 	}
 }
 
@@ -2484,14 +2517,14 @@ void Drawable::validatePos() const
 	const Coord3D* ourPos = getPosition();
 	if (_isnan(ourPos->x) || _isnan(ourPos->y) || _isnan(ourPos->z))
 	{
-		DEBUG_CRASH(("Drawable/Object position NAN! '%s'", getTemplate()->getName().str()));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Drawable/Object position NAN! '%s'", getTemplate()->getName().str());
 	}
 	if (getObject())
 	{
 		const Coord3D* objPos = getObject()->getPosition();
 		if (ourPos->x != objPos->x || ourPos->y != objPos->y || ourPos->z != objPos->z)
 		{
-			DEBUG_CRASH(("Drawable/Object position mismatch! '%s'", getTemplate()->getName().str()));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Drawable/Object position mismatch! '%s'", getTemplate()->getName().str());
 		}
 	}
 }
@@ -2622,24 +2655,21 @@ void Drawable::draw()
 #endif
 
 	// call the database defined draw action method
-	Matrix3D transformMtx = *getTransformMatrix();
+	const Engine::Math::AffineTransform3 world = worldTransform();
+	Engine::Math::AffineTransform3 transform = world;
 	if (!isInstanceIdentity())
 	{
-#ifdef ALLOW_TEMPORARIES
-		transformMtx = transformMtx * (*getInstanceMatrix());
-#else
-		transformMtx.postMul(*getInstanceMatrix());
-#endif
+		transform = Compose(transform, m_instance);
 	}
 
 	if (TheGlobalData->m_showClientPhysics && getObject() && !getObject()->isDisabledByType( DISABLED_HELD ))
 	{
-		applyPhysicsXform(&transformMtx);
+		applyPhysicsXform(&transform);
 	}
 
 	for (DrawModule** dm = getDrawModules(); *dm; ++dm)
 	{
-		(*dm)->doDrawModule(&transformMtx);
+		(*dm)->doDrawModule(&transform);
 	}
 }
 
@@ -2798,7 +2828,7 @@ void Drawable::setEmoticon( const AsciiString &name, Int duration )
 	Anim2DTemplate *animTemplate = TheAnim2DCollection->findTemplate( name );
 	if( animTemplate )
 	{
-		DEBUG_ASSERTCRASH( getIconInfo()->m_icon[ ICON_EMOTICON ] == nullptr, ("Drawable::setEmoticon - Emoticon isn't empty, need to refuse to set or destroy the old one in favor of the new one") );
+		engine::debug::invariant((getIconInfo()->m_icon[ ICON_EMOTICON ] == nullptr), "getIconInfo()->m_icon[ ICON_EMOTICON ] == nullptr", __FILE__, __LINE__, "Drawable::setEmoticon - Emoticon isn't empty, need to refuse to set or destroy the old one in favor of the new one");
 		if( getIconInfo()->m_icon[ ICON_EMOTICON ] == nullptr )
 		{
 			getIconInfo()->m_icon[ ICON_EMOTICON ] = newInstance(Anim2D)( animTemplate, TheAnim2DCollection );
@@ -3900,7 +3930,7 @@ void Drawable::clearAndSetModelConditionState( ModelConditionFlagType clr, Model
 DrawModule** Drawable::getDrawModulesNonDirty()
 {
 	DrawModule** dm = (DrawModule**)getModuleList(MODULETYPE_DRAW);
-	DEBUG_ASSERTCRASH(dm != nullptr, ("Draw Module List is not expected null"));
+	engine::debug::invariant((dm != nullptr), "dm != nullptr", __FILE__, __LINE__, "Draw Module List is not expected null");
 	return dm;
 }
 
@@ -3914,7 +3944,7 @@ DrawModule** Drawable::getDrawModules()
 	{
 		if (s_modelLockCount > 0)
 		{
-			DEBUG_CRASH(("Should not need to update dirty stuff while locked-for-iteration. Ignoring."));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Should not need to update dirty stuff while locked-for-iteration. Ignoring.");
 			// this shouldn't happen, but if it does, just return the current (dirty) scenario.
 			// we must NOT update the condition state, as someone is relying on the current
 			// list of W3D render objects not being munged. (srj)
@@ -3926,7 +3956,7 @@ DrawModule** Drawable::getDrawModules()
 	}
 #endif
 
-	DEBUG_ASSERTCRASH(dm != nullptr, ("Draw Module List is not expected null"));
+	engine::debug::invariant((dm != nullptr), "dm != nullptr", __FILE__, __LINE__, "Draw Module List is not expected null");
 	return dm;
 }
 
@@ -3940,7 +3970,7 @@ DrawModule const** Drawable::getDrawModules() const
 	{
 		if (s_modelLockCount > 0)
 		{
-			DEBUG_CRASH(("Should not need to update dirty stuff while locked-for-iteration. Ignoring."));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Should not need to update dirty stuff while locked-for-iteration. Ignoring.");
 			// this shouldn't happen, but if it does, just return the current (dirty) scenario.
 			// we must NOT update the condition state, as someone is relying on the current
 			// list of W3D render objects not being munged. (srj)
@@ -3952,7 +3982,7 @@ DrawModule const** Drawable::getDrawModules() const
 	}
 #endif
 
-	DEBUG_ASSERTCRASH(dm != nullptr, ("Draw Module List is not expected null"));
+	engine::debug::invariant((dm != nullptr), "dm != nullptr", __FILE__, __LINE__, "Draw Module List is not expected null");
 	return dm;
 }
 
@@ -4076,7 +4106,7 @@ DrawableID Drawable::getID() const
 {
 
 	// we should never be getting the ID of a drawable who doesn't yet have and ID assigned to it
-	DEBUG_ASSERTCRASH( m_id != 0, ("Drawable::getID - Using ID before it was assigned!!!!") );
+	engine::debug::invariant((m_id != 0), "m_id != 0", __FILE__, __LINE__, "Drawable::getID - Using ID before it was assigned!!!!");
 
 	return m_id;
 
@@ -4111,7 +4141,7 @@ void Drawable::friend_bindToObject( Object *obj ) ///< bind this drawable to an 
 	PhysicsXformInfo physicsXform;
 	if (calcPhysicsXform(physicsXform))
 	{
-		DEBUG_ASSERTCRASH(m_physicsXform == nullptr, ("m_physicsXform is not null"));
+		engine::debug::invariant((m_physicsXform == nullptr), "m_physicsXform == nullptr", __FILE__, __LINE__, "m_physicsXform is not null");
 		m_physicsXform = new PhysicsXformInfo;
 		*m_physicsXform = physicsXform;
 	}
@@ -4151,11 +4181,11 @@ void Drawable::setPosition(const Coord3D *pos)
 }
 
 //-------------------------------------------------------------------------------------------------
-void Drawable::reactToTransformChange(const Matrix3D* oldMtx, const Coord3D* oldPos, Real oldAngle)
+void Drawable::reactToTransformChange(const Coord3D* oldPos, Real oldAngle)
 {
 	for (DrawModule** dm = getDrawModules(); *dm; ++dm)
 	{
-		(*dm)->reactToTransformChange(oldMtx, oldPos, oldAngle);
+		(*dm)->reactToTransformChange(oldPos, oldAngle);
 	}
 }
 
@@ -4210,18 +4240,17 @@ Int Drawable::getBarrelCount(WeaponSlotType wslot) const
 //-------------------------------------------------------------------------------------------------
 /** Set the Drawable's instance transform */
 //-------------------------------------------------------------------------------------------------
-void Drawable::setInstanceMatrix( const Matrix3D *instance )
+void Drawable::setInstanceTransform(const Engine::Math::AffineTransform3* instance)
 {
-	if (instance)
+	if (instance == nullptr)
 	{
-		m_instance = *instance;
-		m_instanceIsIdentity = false;
-	}
-	else
-	{
-		m_instance.Make_Identity();
+		m_instance = Engine::Math::AffineTransform3::Identity();
 		m_instanceIsIdentity = true;
+		return;
 	}
+
+	m_instance = *instance;
+	m_instanceIsIdentity = false;
 }
 
 
@@ -4231,14 +4260,14 @@ void Drawable::setInstanceMatrix( const Matrix3D *instance )
  * If this Drawable is attached to an Object, return the Object's transform instead.
  */
 //-------------------------------------------------------------------------------------------------
-const Matrix3D *Drawable::getTransformMatrix() const
+const Engine::Math::AffineTransform3& Drawable::worldTransform() const noexcept
 {
 	const Object *obj = getObject();
 
 	if (obj)
-		return obj->getTransformMatrix();
+		return obj->worldTransform();
 	else
-		return Thing::getTransformMatrix();
+		return Thing::worldTransform();
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -4355,7 +4384,7 @@ void Drawable::setCustomSoundAmbientInfo( DynamicAudioEventInfo * customAmbientI
 
   // This is mostly to make sure no one delete's the no sound marker, causing it to be
   // recycled as a new no sound marker
-  DEBUG_ASSERTCRASH( customAmbientInfo != getNoSoundMarker(), ("No sound marker passed as custom ambient") );
+  engine::debug::invariant((customAmbientInfo != getNoSoundMarker()), "customAmbientInfo != getNoSoundMarker()", __FILE__, __LINE__, "No sound marker passed as custom ambient");
 
   // Set name to something different so we don't get confused
 
@@ -4471,7 +4500,7 @@ void Drawable::startAmbientSound(BodyDamageType dt, TimeOfDay tod, Bool onlyIfPe
 		}
 		else
 		{
-			DEBUG_CRASH( ("Ambient sound %s missing! Skipping...", m_ambientSound->getEventName().str() ) );
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Ambient sound %s missing! Skipping...", m_ambientSound->getEventName().str() );
 			m_ambientSound.Clear();
 		}
 	}
@@ -4773,8 +4802,7 @@ void Drawable::xferDrawableModules( Xfer *xfer )
 
 				// write module identifier
 				moduleIdentifier = TheNameKeyGenerator->keyToName( (*m)->getModuleTagNameKey() );
-				DEBUG_ASSERTCRASH( moduleIdentifier != AsciiString::TheEmptyString,
-													 ("Drawable::xferDrawableModules - module name key does not translate to a string!") );
+				engine::debug::invariant((moduleIdentifier != AsciiString::TheEmptyString), "moduleIdentifier != AsciiString::TheEmptyString", __FILE__, __LINE__, "Drawable::xferDrawableModules - module name key does not translate to a string!");
 				xfer->xferAsciiString( &moduleIdentifier );
 
 				// begin data block
@@ -4825,8 +4853,8 @@ void Drawable::xferDrawableModules( Xfer *xfer )
 				{
 
 					// for testing purposes, this module better be found
-					DEBUG_CRASH(( "Drawable::xferDrawableModules - Module '%s' was indicated in file, but not found on Drawable %s %d",
-												moduleIdentifier.str(), getTemplate()->getName().str(),getID() ));
+					engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Drawable::xferDrawableModules - Module '%s' was indicated in file, but not found on Drawable %s %d",
+												moduleIdentifier.str(), getTemplate()->getName().str(),getID() );
 
 					// skip this data in the file
 					xfer->skip( dataSize );
@@ -4906,9 +4934,9 @@ void Drawable::xfer( Xfer *xfer )
 	{
 		if (version >= 5)
 		{
-			Matrix3D mtx = *getTransformMatrix();
-			xfer->xferMatrix3D(&mtx);
-			setTransformMatrix(&mtx);
+			Engine::Math::AffineTransform3 world = worldTransform();
+			xfer->xferAffineTransform3(&world);
+			setWorldTransform(world);
 		}
 		else
 		{
@@ -4991,8 +5019,8 @@ void Drawable::xfer( Xfer *xfer )
 			if( objectID != m_object->getID() )
 			{
 
-				DEBUG_CRASH(( "Drawable::xfer - Drawable '%s' is attached to wrong object '%s'",
-											getTemplate()->getName().str(), m_object->getTemplate()->getName().str() ));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Drawable::xfer - Drawable '%s' is attached to wrong object '%s'",
+											getTemplate()->getName().str(), m_object->getTemplate()->getName().str() );
 				throw SC_INVALID_DATA;
 
 			}
@@ -5007,10 +5035,10 @@ void Drawable::xfer( Xfer *xfer )
 #ifdef DEBUG_CRASHING
 				Object *obj = TheGameLogic->findObjectByID( objectID );
 
-				DEBUG_CRASH(( "Drawable::xfer - Drawable '%s' is not attached to an object but should be attached to object '%s' with id '%d'",
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Drawable::xfer - Drawable '%s' is not attached to an object but should be attached to object '%s' with id '%d'",
 											getTemplate()->getName().str(),
 											obj ? obj->getTemplate()->getName().str() : "Unknown",
-											objectID ));
+											objectID );
 #endif
 				throw SC_INVALID_DATA;
 
@@ -5131,7 +5159,7 @@ void Drawable::xfer( Xfer *xfer )
 	xfer->xferBool( &m_instanceIsIdentity );
 
 	// instance matrix
-	xfer->xferUser( &m_instance, sizeof( Matrix3D ) );
+	xfer->xferUser(&m_instance, sizeof(m_instance));
 
 	// instance scale
 	xfer->xferReal( &m_instanceScale );
@@ -5147,8 +5175,7 @@ void Drawable::xfer( Xfer *xfer )
 	{
 
 		// sanity, we don't write old versions we can only read them
-		DEBUG_ASSERTCRASH( xfer->getXferMode() == XFER_LOAD,
-											 ("Drawable::xfer - Writing an old format!!!") );
+		engine::debug::invariant((xfer->getXferMode() == XFER_LOAD), "xfer->getXferMode() == XFER_LOAD", __FILE__, __LINE__, "Drawable::xfer - Writing an old format!!!");
 
 		// condition state, note that when we're loading we need to force a replace of these flags
 		m_conditionState.xfer( xfer );
@@ -5230,7 +5257,7 @@ void Drawable::xfer( Xfer *xfer )
 			if( animTemplate == nullptr )
 			{
 
-				DEBUG_CRASH(( "Drawable::xfer - Unknown icon template '%s'", iconTemplateName.str() ));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Drawable::xfer - Unknown icon template '%s'", iconTemplateName.str() );
 				throw SC_INVALID_DATA;
 
 			}
@@ -5264,7 +5291,7 @@ void Drawable::xfer( Xfer *xfer )
 	//
 #ifdef DIRTY_CONDITION_FLAGS
 	if( xfer->getXferMode() == XFER_SAVE )
-		DEBUG_ASSERTCRASH( m_isModelDirty == FALSE, ("Drawable::xfer - m_isModelDirty is not FALSE!") );
+		engine::debug::invariant((m_isModelDirty == FALSE), "m_isModelDirty == FALSE", __FILE__, __LINE__, "Drawable::xfer - m_isModelDirty is not FALSE!");
 	else
 		m_isModelDirty = TRUE;
 #endif
@@ -5312,7 +5339,7 @@ void Drawable::xfer( Xfer *xfer )
 
           if ( baseInfo == nullptr )
           {
-            DEBUG_CRASH( ( "Load failed to load customized ambient sound because sound '%s' no longer exists", baseInfoName.str() ) );
+            engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "Load failed to load customized ambient sound because sound '%s' no longer exists", baseInfoName.str() );
 
             // Keep trying to load if we possibly can... Don't completely ruin save files just because an old sound
             // entry in the INI files was removed or renamed
@@ -5377,7 +5404,7 @@ void Drawable::loadPostProcess()
 		// if we don't, we'd better save it!
 	if (m_object != nullptr)
 	{
-		setTransformMatrix(m_object->getTransformMatrix());
+		setWorldTransform(m_object->worldTransform());
 	}
 
 	if( m_ambientSoundEnabled && m_ambientSoundEnabledFromScript )
@@ -5445,10 +5472,10 @@ const Locomotor* Drawable::getLocomotor() const
 //=================================================================================================
 TintEnvelope::TintEnvelope()
 {
-	m_attackRate.Set(0,0,0);
-	m_decayRate.Set(0,0,0);
-	m_peakColor.Set(0,0,0);
-	m_currentColor.Set(0,0,0);
+	m_attackRate = {};
+	m_decayRate = {};
+	m_peakColor = {};
+	m_currentColor = {};
 	m_envState = ENVELOPE_STATE_REST;
 	m_sustainCounter = 0;
 	m_affect = FALSE;
@@ -5469,8 +5496,7 @@ void TintEnvelope::play(const RGBColor *peak, UnsignedInt attackFrames, Unsigned
 	m_sustainCounter = sustainAtPeak;
 	m_affect = TRUE;
 
-	Vector3 delta;
-	Vector3::Subtract(m_currentColor, m_peakColor, &delta);
+	const Engine::Math::Vector3 delta = m_currentColor - m_peakColor;
 
 	if ( delta.Length() <= FADE_RATE_EPSILON ) // we are practically already at this color
 		m_envState = ENVELOPE_STATE_SUSTAIN;
@@ -5481,17 +5507,14 @@ void TintEnvelope::play(const RGBColor *peak, UnsignedInt attackFrames, Unsigned
 void TintEnvelope::setAttackFrames(UnsignedInt frames)
 {
 	Real recipFrames = 1.0f / (Real)MAX(1,frames);
-	m_attackRate.Set( m_currentColor );
-	Vector3::Subtract( m_peakColor, m_attackRate, &m_attackRate);
-	m_attackRate.Scale( Vector3(recipFrames, recipFrames, recipFrames) );
+	m_attackRate = (m_peakColor - m_currentColor) * recipFrames;
 }
 
 //-------------------------------------------------------------------------------------------------
 void TintEnvelope::setDecayFrames( UnsignedInt frames )
 {
 	Real recipFrames = ( -1.0f ) / (Real)MAX(1,frames);
-	m_decayRate.Set( m_peakColor );
-	m_decayRate.Scale( Vector3(recipFrames, recipFrames, recipFrames) );
+	m_decayRate = m_peakColor * recipFrames;
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -5504,13 +5527,13 @@ void TintEnvelope::update()
 	{
 		case ( ENVELOPE_STATE_REST ) : //most likely case
 		{
-			m_currentColor.Set(0,0,0);
+			m_currentColor = {};
 			m_affect = FALSE;
 			break;
 		}
 		case ( ENVELOPE_STATE_DECAY ) : // much more likely than attack
 		{
-			const Vector3 decayRate = m_decayRate * timeScale;
+			const Engine::Math::Vector3 decayRate = m_decayRate * timeScale;
 
 			if (decayRate.Length() > m_currentColor.Length() || m_currentColor.Length() <= FADE_RATE_EPSILON)
 			{
@@ -5521,16 +5544,15 @@ void TintEnvelope::update()
 			else
 			{
 				// Add the decayRate to the current color
-				Vector3::Add( decayRate, m_currentColor, &m_currentColor );
+				m_currentColor = decayRate + m_currentColor;
 				m_affect = TRUE;
 			}
 			break;
 		}
 		case ( ENVELOPE_STATE_ATTACK ) :
 		{
-			const Vector3 attackRate = m_attackRate * timeScale;
-			Vector3 delta;
-			Vector3::Subtract(m_currentColor, m_peakColor, &delta);
+			const Engine::Math::Vector3 attackRate = m_attackRate * timeScale;
+			const Engine::Math::Vector3 delta = m_currentColor - m_peakColor;
 
 			if (attackRate.Length() > delta.Length() || delta.Length() <= FADE_RATE_EPSILON)
 			{
@@ -5547,7 +5569,7 @@ void TintEnvelope::update()
 			else
 			{
 				// Add the attackRate to the current color
-				Vector3::Add( attackRate, m_currentColor, &m_currentColor );
+				m_currentColor = attackRate + m_currentColor;
 				m_affect = TRUE;
 			}
 
@@ -5600,16 +5622,16 @@ void TintEnvelope::xfer( Xfer *xfer )
 	xfer->xferVersion( &version, currentVersion );
 
 	// attack rate
-	xfer->xferUser( &m_attackRate, sizeof( Vector3 ) );
+	xfer->xferUser( &m_attackRate, sizeof( Engine::Math::Vector3 ) );
 
 	// decay rate
-	xfer->xferUser( &m_decayRate, sizeof( Vector3 ) );
+	xfer->xferUser( &m_decayRate, sizeof( Engine::Math::Vector3 ) );
 
 	// peak color
-	xfer->xferUser( &m_peakColor, sizeof( Vector3 ) );
+	xfer->xferUser( &m_peakColor, sizeof( Engine::Math::Vector3 ) );
 
 	// current color
-	xfer->xferUser( &m_currentColor, sizeof( Vector3 ) );
+	xfer->xferUser( &m_currentColor, sizeof( Engine::Math::Vector3 ) );
 
 	// sustain counter
 	if (version <= 1)
@@ -5638,4 +5660,3 @@ void TintEnvelope::loadPostProcess()
 {
 
 }
-

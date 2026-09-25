@@ -42,6 +42,8 @@
 #include "WWSaveLoad/persistfactory.h"
 #include "soundhandle.h"
 
+import Engine.Core.Math.Vector3;
+
 
 //////////////////////////////////////////////////////////////////////////////////
 //
@@ -154,11 +156,11 @@ FilteredSoundClass::Update_Volume ()
 		SoundSceneClass *scene = WWAudioClass::Get_Instance ()->Get_Sound_Scene ();
 		Listener3DClass *listener = scene->Peek_2nd_Listener ();
 		if (listener != nullptr) {
-			Vector3 listener_pos = listener->Get_Position ();
-			Vector3 sound_pos = m_Transform.Get_Translation ();
+			const Engine::Math::Vector3 listener_pos = listener->Get_Position ();
+			const Engine::Math::Vector3 sound_pos = m_Transform.Translation();
 
 			// Determine a normalized volume from the position
-			float distance = (sound_pos - listener_pos).Quick_Length ();
+			const float distance = (sound_pos - listener_pos).Length();
 			Update_Pseudo_Volume (distance);
 		}
 	}
@@ -175,4 +177,3 @@ FilteredSoundClass::Get_Factory () const
 {
 	return _FilteredSoundPersistFactory;
 }
-

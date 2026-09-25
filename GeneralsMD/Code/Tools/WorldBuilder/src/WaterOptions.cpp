@@ -33,6 +33,7 @@
 #include "GameLogic/PolygonTrigger.h"
 #include "Common/WellKnownKeys.h"
 #include "LayersList.h"
+import engine.debug;
 
 WaterOptions *WaterOptions::m_staticThis = nullptr;
 Int WaterOptions::m_waterHeight = 7;
@@ -358,7 +359,7 @@ void WaterOptions::GetPopSliderInfo(const long sliderID, long *pMin, long *pMax,
 
 		default:
 			// uh-oh!
-			DEBUG_CRASH(("Slider message from unknown control"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Slider message from unknown control");
 			break;
 	}
 }
@@ -384,7 +385,7 @@ void WaterOptions::PopSliderChanged(const long sliderID, long theVal)
 
 		default:
 			// uh-oh!
-			DEBUG_CRASH(("Slider message from unknown control"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Slider message from unknown control");
 			break;
 	}
 }
@@ -399,7 +400,7 @@ void WaterOptions::PopSliderFinished(const long sliderID, long theVal)
 
 		default:
 			// uh-oh!
-			DEBUG_CRASH(("Slider message from unknown control"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Slider message from unknown control");
 			break;
 	}
 

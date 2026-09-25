@@ -51,12 +51,13 @@
 #include <memory>
 #include <unordered_map>
 #include "W3DDevice/GameClient/W3DPropBuffer.h"
+import engine.profiling;
 #include "W3DDevice/GameClient/W3DLight.h"
 
 #include "W3DDevice/GameClient/W3DAssetCatalog.h"
 #include "Common/GameUtility.h"
 #include "Common/Geometry.h"
-#include "Common/PerfTimer.h"
+
 #include "Common/Player.h"
 #include "Common/PlayerList.h"
 #include "W3DDevice/GameClient/W3DCamera.h"
@@ -66,6 +67,9 @@ import Graphics.Scene.Lighting.Local;
 #include "W3DDevice/GameClient/W3DShroud.h"
 #include "W3DDevice/GameClient/BaseHeightMap.h"
 #include "GameLogic/PartitionManager.h"
+import engine.debug;
+import Engine.Core.Math.AffineTransform3;
+import Engine.Core.Math.Sphere3;
 
 
 
@@ -156,19 +160,18 @@ void W3DPropBuffer::clearAllProps()
 Int W3DPropBuffer::addPropType(const AsciiString &modelName)
 {
 	if (m_numPropTypes>=MAX_TYPES) {
-		DEBUG_CRASH(("Too many kinds of props in map.  Reduce kinds of props, or raise prop limit. jba."));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Too many kinds of props in map.  Reduce kinds of props, or raise prop limit. jba.");
 		return 0;
 	}
 
 	m_propTypes[m_numPropTypes].m_robj = W3DAssetCatalog::Get_Instance()->Create_Render_Obj(modelName.str());
 	if (m_propTypes[m_numPropTypes].m_robj==nullptr) {
-		DEBUG_CRASH(("Unable to find model for prop %s", modelName.str()));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unable to find model for prop %s", modelName.str());
 		return -1;
 	}
 	m_propTypes[m_numPropTypes].m_robjName = modelName;
 
-	SphereClass bounds = m_propTypes[m_numPropTypes].m_robj->Get_Bounding_Sphere();
-	m_propTypes[m_numPropTypes].m_bounds = bounds;
+	m_propTypes[m_numPropTypes].m_bounds = m_propTypes[m_numPropTypes].m_robj->Get_Bounding_Sphere();
 	m_numPropTypes++;
 	return m_numPropTypes-1;
 }
@@ -202,21 +205,23 @@ void W3DPropBuffer::addProp(Int id, Coord3D location, Real angle,Real scale, con
 		}
 	}
 
-	Matrix3D mtx(true);
-	mtx.Rotate_Z(angle);
-	mtx.Scale(scale);
-	mtx.Set_Translation(Vector3(location.x, location.y, location.z));
+	auto transform = Engine::Math::AffineTransform3::Rotation_Z(angle);
+	for (unsigned row = 0; row < 3; ++row)
+		for (unsigned column = 0; column < 3; ++column)
+			transform[row][column] *= scale;
+	transform.Set_Translation({location.x, location.y, location.z});
 
 	m_props[m_numProps].location = location;
 	m_props[m_numProps].id = id;
 	m_props[m_numProps].ss = OBJECTSHROUD_INVALID;
 	m_props[m_numProps].m_robj = m_propTypes[propType].m_robj->Clone();
-	m_props[m_numProps].m_robj->Set_Transform(mtx);
+	m_props[m_numProps].m_robj->Set_Transform(transform);
 	m_props[m_numProps].m_robj->Set_ObjectScale(scale);
 	m_props[m_numProps].propType = propType;
 	// Translate the bounding sphere of the model.
 	m_props[m_numProps].bounds = m_propTypes[propType].m_bounds;
-	m_props[m_numProps].bounds.Center += Vector3(location.x, location.y, location.z);
+	m_props[m_numProps].bounds.center = m_props[m_numProps].bounds.center
+		+ Engine::Math::Vector3{location.x, location.y, location.z};
 	// Initially set it invisible.  cull will update it's visiblity flag.
 	m_props[m_numProps].visible = false;
 
@@ -233,16 +238,18 @@ Bool W3DPropBuffer::updatePropPosition(Int id, const Coord3D &location, Real ang
 	Int i;
 	for (i=0; i<m_numProps; i++) {
 		if (m_props[i].id == id) {
-			Matrix3D mtx(true);
-			mtx.Rotate_Z(angle);
-			mtx.Scale(scale);
-			mtx.Set_Translation(Vector3(location.x, location.y, location.z));
+			auto transform = Engine::Math::AffineTransform3::Rotation_Z(angle);
+			for (unsigned row = 0; row < 3; ++row)
+				for (unsigned column = 0; column < 3; ++column)
+					transform[row][column] *= scale;
+			transform.Set_Translation({location.x, location.y, location.z});
 			m_props[i].location = location;
-			m_props[i].m_robj->Set_Transform(mtx);
+			m_props[i].m_robj->Set_Transform(transform);
 			m_props[i].m_robj->Set_ObjectScale(scale);
 			// Translate the bounding sphere of the model.
 			m_props[i].bounds = m_propTypes[m_props[i].propType].m_bounds;
-			m_props[i].bounds.Center += Vector3(location.x, location.y, location.z);
+			m_props[i].bounds.center = m_props[i].bounds.center
+				+ Engine::Math::Vector3{location.x, location.y, location.z};
 			m_anythingChanged = true;
 			return true;
 		}
@@ -265,8 +272,8 @@ void W3DPropBuffer::removeProp(Int id)
 			m_graphics.erase(m_props[i].m_robj);
         REF_PTR_RELEASE(m_props[i].m_robj);
 			// Translate the bounding sphere of the model.
-			m_props[i].bounds.Center = Vector3(0,0,0);
-			m_props[i].bounds.Radius = 1;
+			m_props[i].bounds.center = {};
+			m_props[i].bounds.radius = 1;
 			m_anythingChanged = true;
 		}
 	}
@@ -285,7 +292,7 @@ void W3DPropBuffer::removePropsForConstruction(const Coord3D* pos, const Geometr
 		if (m_props[i].m_robj == nullptr) {
 			continue; // already deleted.
 		}
-		Real radius = m_props[i].bounds.Radius;
+		Real radius = m_props[i].bounds.radius;
 		GeometryInfo info(GEOMETRY_CYLINDER, false, 5*radius, 2*radius, 2*radius);
 		if (ThePartitionManager->geomCollidesWithGeom( pos, geom, angle, &m_props[i].location, info, 0.0f)) {
 			// remove it [7/11/2003]
@@ -294,8 +301,8 @@ void W3DPropBuffer::removePropsForConstruction(const Coord3D* pos, const Geometr
 			m_graphics.erase(m_props[i].m_robj);
         REF_PTR_RELEASE(m_props[i].m_robj);
 			// Translate the bounding sphere of the model.
-			m_props[i].bounds.Center = Vector3(0,0,0);
-			m_props[i].bounds.Radius = 1;
+			m_props[i].bounds.center = {};
+			m_props[i].bounds.radius = 1;
 			m_anythingChanged = true;
 		}
 	}
@@ -317,8 +324,6 @@ void W3DPropBuffer::notifyShroudChanged()
 }
 
 
-DECLARE_PERF_TIMER(Prop_Render)
-
 //=============================================================================
 // W3DPropBuffer::drawProps
 //=============================================================================
@@ -326,7 +331,7 @@ DECLARE_PERF_TIMER(Prop_Render)
 //=============================================================================
 void W3DPropBuffer::drawProps(W3DRenderContext &rinfo)
 {
-	USE_PERF_TIMER(Prop_Render)
+	engine::profiling::Scope prop_render_scope{"Graphics.Props.Render"};
 
 	Int i;
 	if (m_doCull) {
@@ -335,24 +340,23 @@ void W3DPropBuffer::drawProps(W3DRenderContext &rinfo)
 	const GlobalData::TerrainLighting *objectLighting = TheGlobalData->m_terrainObjectsLighting[TheGlobalData->m_timeOfDay];
 
 	Graphics::LocalLighting lightEnv;
-	Vector3 center(0,0,0); // arbitrary center point. [6/6/2003]
-	Vector3 ambient(objectLighting[0].ambient.red, objectLighting[0].ambient.green, objectLighting[0].ambient.blue);
-	lightEnv.Reset({(center).X,(center).Y,(center).Z}, {(ambient).X,(ambient).Y,(ambient).Z});
+	Engine::Math::Vector3 center(0,0,0); // arbitrary center point. [6/6/2003]
+	Engine::Math::Vector3 ambient(objectLighting[0].ambient.red, objectLighting[0].ambient.green, objectLighting[0].ambient.blue);
+	lightEnv.Reset({center.x, center.y, center.z}, {ambient.x, ambient.y, ambient.z});
 
-	Matrix3D mtx;
-	const Vector3 zeroVector(0.0f, 0.0f, 0.0f);
-	const Vector3 xVector(1.0f, 0.0f, 0.0f);
-	const Vector3 yVector(0.0f, 1.0f, 0.0f);
+	const Engine::Math::Vector3 zeroVector{};
+	const Engine::Math::Vector3 zero_light_color{};
 
 	for (i = 0; i < MAX_GLOBAL_LIGHTS; ++i)
 	{
-			m_light->Set_Ambient(zeroVector);
-			m_light->Set_Diffuse(Vector3(objectLighting[i].diffuse.red,
-																		 objectLighting[i].diffuse.green,
-																		 objectLighting[i].diffuse.blue));
-			m_light->Set_Specular(zeroVector);
-			mtx.Set(xVector, yVector, Vector3(objectLighting[i].lightPos.x, objectLighting[i].lightPos.y, objectLighting[i].lightPos.z), zeroVector);
-			m_light->Set_Transform(mtx);
+			m_light->Set_Ambient(zero_light_color);
+			m_light->Set_Diffuse({objectLighting[i].diffuse.red,
+				objectLighting[i].diffuse.green, objectLighting[i].diffuse.blue});
+			m_light->Set_Specular(zero_light_color);
+			const auto transform = Engine::Math::AffineTransform3::From_Basis(
+				{1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f},
+				{objectLighting[i].lightPos.x, objectLighting[i].lightPos.y, objectLighting[i].lightPos.z}, zeroVector);
+			m_light->Set_Transform(transform);
 			Graphics::MaterialLightSource source;
 			m_light->Get_Light_Description(source);
 			lightEnv.Add(source);
@@ -433,4 +437,3 @@ void W3DPropBuffer::loadPostProcess()
 {
 	// empty. jba [8/11/2003]
 }
-

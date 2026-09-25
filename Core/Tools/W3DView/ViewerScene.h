@@ -37,8 +37,8 @@
 #pragma once
 
 #include "WW3D2/Scene.h"
-#include "WWMath/aabox.h"
-#include "WWMath/sphere.h"
+import Engine.Core.Math.AxisAlignedBox3;
+import Engine.Core.Math.Sphere3;
 
 
 class RenderObjIterator;
@@ -84,11 +84,11 @@ class ViewerSceneClass : public SimpleSceneClass
 		//
 		virtual void				Add_To_Lineup (RenderObjClass *obj);
 		virtual void				Clear_Lineup ();
-		virtual AABoxClass		Get_Line_Up_Bounding_Box ();
+		virtual Engine::Math::AxisAlignedBox3 Get_Line_Up_Bounding_Box ();
 		bool							Can_Line_Up (RenderObjClass *obj);
 		bool							Can_Line_Up (int class_id);
 		void							Recalculate_Fog_Planes ();
-		virtual SphereClass		Get_Bounding_Sphere ();
+		virtual Engine::Math::Sphere3 Get_Bounding_Sphere ();
 
 		//
 		// Line-Up list iteration

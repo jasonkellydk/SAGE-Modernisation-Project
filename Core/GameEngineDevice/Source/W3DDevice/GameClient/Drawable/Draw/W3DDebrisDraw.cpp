@@ -46,6 +46,8 @@
 #include "W3DDevice/GameClient/W3DDisplay.h"
 #include "W3DDevice/GameClient/W3DScene.h"
 #include "W3DDevice/GameClient/W3DShadow.h"
+import engine.debug;
+import Engine.Core.Math.AffineTransform3;
 import Assets.Identity;
 import Assets.Cache.Animations;
 
@@ -110,7 +112,7 @@ void W3DDebrisDraw::setModelName(AsciiString name, Color color, ShadowType t)
 		if (color != 0)
 			hexColor = color | 0xFF000000;
 		m_renderObject = W3DDisplay::m_assetManager->Create_Render_Obj(name.str(), getDrawable()->getScale(), hexColor);
-		DEBUG_ASSERTCRASH(m_renderObject, ("Debris model %s not found!",name.str()));
+		engine::debug::invariant((m_renderObject), "m_renderObject", __FILE__, __LINE__, "Debris model %s not found!",name.str());
 		if (m_renderObject)
 		{
 			if (W3DDisplay::m_3DScene != nullptr)
@@ -118,12 +120,9 @@ void W3DDebrisDraw::setModelName(AsciiString name, Color color, ShadowType t)
 
 			m_renderObject->Set_User_Data(getDrawable()->getDrawableInfo());
 
-			Matrix3D transform;
 			///@todo: Change back to identity once we figure out why objects show up at 0,0,0
 			/// OBJECT_PILE
-//			transform.Set(Vector3(0,0,9999));
-			transform.Set(Vector3(0,0,0));
-			m_renderObject->Set_Transform(transform);
+			m_renderObject->Set_Transform(Engine::Math::AffineTransform3::Identity());
 		}
 
 		if (t != SHADOW_NONE)
@@ -200,31 +199,32 @@ static Bool isNearlyZero(const Coord3D* vel)
 }
 
 // ------------------------------------------------------------------------------------------------
-void W3DDebrisDraw::reactToTransformChange( const Matrix3D *oldMtx,
-																						const Coord3D *oldPos,
-																						Real oldAngle )
+void W3DDebrisDraw::reactToTransformChange(const Coord3D* oldPos, Real oldAngle)
 {
 
 	if( m_renderObject )
-		m_renderObject->Set_Transform( *getDrawable()->getTransformMatrix() );
+		m_renderObject->Set_Transform(getDrawable()->worldTransform());
 
 }
 
 //-------------------------------------------------------------------------------------------------
-void W3DDebrisDraw::doDrawModule(const Matrix3D* transformMtx)
+void W3DDebrisDraw::doDrawModule(const Engine::Math::AffineTransform3* transform)
 {
 	if (m_renderObject)
 	{
 
-		Matrix3D scaledTransform;
+		Engine::Math::AffineTransform3 scaledTransform;
+		const Engine::Math::AffineTransform3* drawTransform = transform;
 		if (getDrawable()->getInstanceScale() != 1.0f)
 		{	//do custom scaling of the W3D model.
-			scaledTransform=*transformMtx;
-			scaledTransform.Scale(getDrawable()->getInstanceScale());
-			transformMtx = &scaledTransform;
+			scaledTransform = *transform;
+			for (unsigned row = 0; row < 3; ++row)
+				for (unsigned column = 0; column < 3; ++column)
+					scaledTransform.elements[row * 4 + column] *= getDrawable()->getInstanceScale();
+			drawTransform = &scaledTransform;
 			m_renderObject->Set_ObjectScale(getDrawable()->getInstanceScale());
 		}
-		m_renderObject->Set_Transform(*transformMtx);
+		m_renderObject->Set_Transform(*drawTransform);
 
 		static const W3DRenderObject::AnimMode TheAnimModes[STATECOUNT] =
 		{
@@ -250,7 +250,7 @@ void W3DDebrisDraw::doDrawModule(const Matrix3D* transformMtx)
 			W3DRenderObject::AnimMode m = TheAnimModes[m_state];
 			if (m_state == FINAL)
 			{
-				FXList::doFXPos(m_fxFinal, getDrawable()->getPosition(), getDrawable()->getTransformMatrix(), 0, nullptr, 0.0f);
+				FXList::doFXPos(m_fxFinal, getDrawable()->getPosition(), &getDrawable()->worldTransform(), 0, nullptr, 0.0f);
 				if (m_finalStop)
 					m = W3DRenderObject::ANIM_MODE_MANUAL;
 			}

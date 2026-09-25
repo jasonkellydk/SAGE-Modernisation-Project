@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 #define DEFINE_DEATH_NAMES
 
 #include "Common/INI.h"
@@ -278,7 +279,7 @@ void INI::prepFile( AsciiString filename, INILoadType loadType )
 	if( m_readBuffer != nullptr )
 	{
 
-		DEBUG_CRASH(( "INI::load, cannot open file '%s', file already open", filename.str() ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "INI::load, cannot open file '%s', file already open", filename.str() );
 		throw INI_FILE_ALREADY_OPEN;
 
 	}
@@ -288,7 +289,7 @@ void INI::prepFile( AsciiString filename, INILoadType loadType )
 	if( file == nullptr )
 	{
 
-		DEBUG_CRASH(( "INI::load, cannot open file '%s'", filename.str() ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "INI::load, cannot open file '%s'", filename.str() );
 		throw INI_CANT_OPEN_FILE;
 
 	}
@@ -375,7 +376,7 @@ UnsignedInt INI::load( AsciiString filename, INILoadType loadType, Xfer *pXfer )
 	{
 
 		// read all lines in the file
-		DEBUG_ASSERTCRASH( m_endOfFile == FALSE, ("INI::load, EOF at the beginning!") );
+		engine::debug::invariant((m_endOfFile == FALSE), "m_endOfFile == FALSE", __FILE__, __LINE__, "INI::load, EOF at the beginning!");
 		while( m_endOfFile == FALSE )
 		{
 			// read this line
@@ -398,7 +399,7 @@ UnsignedInt INI::load( AsciiString filename, INILoadType loadType, Xfer *pXfer )
 						(*parse)( this );
 
 					} catch (...) {
-						DEBUG_CRASH(("Error parsing block '%s' in INI file '%s'", token, m_filename.str()) );
+						engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Error parsing block '%s' in INI file '%s'", token, m_filename.str());
 						char buff[1024];
 						snprintf(buff, ARRAY_SIZE(buff), "Error parsing INI file '%s' (Line: '%s')\n",
 							m_filename.str(), currentLine.str());
@@ -411,8 +412,8 @@ UnsignedInt INI::load( AsciiString filename, INILoadType loadType, Xfer *pXfer )
 				}
 				else
 				{
-					DEBUG_CRASH( ("[LINE: %d - FILE: '%s'] Unknown block '%s'",
-														 getLineNum(), getFilename().str(), token ) );
+					engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "[LINE: %d - FILE: '%s'] Unknown block '%s'",
+														 getLineNum(), getFilename().str(), token );
 					throw INI_UNKNOWN_TOKEN;
 				}
 
@@ -444,7 +445,7 @@ UnsignedInt INI::load( AsciiString filename, INILoadType loadType, Xfer *pXfer )
 void INI::readLine()
 {
 	// sanity
-	DEBUG_ASSERTCRASH( m_readBuffer, ("readLine(), read buffer is null") );
+	engine::debug::invariant((m_readBuffer), "m_readBuffer", __FILE__, __LINE__, "readLine(), read buffer is null");
 
 	if (m_endOfFile)
 	{
@@ -474,7 +475,7 @@ void INI::readLine()
 				break;
 			}
 
-			DEBUG_ASSERTCRASH(*p != '\t', ("tab characters are not allowed in INI files (%s). please check your editor settings. Line Number %d", m_filename.str(), getLineNum()));
+			engine::debug::invariant((*p != '\t'), "*p != '\t'", __FILE__, __LINE__, "tab characters are not allowed in INI files (%s). please check your editor settings. Line Number %d", m_filename.str(), getLineNum());
 
 			// if this is a semicolon, that represents the start of a comment
 			if (*p == ';')
@@ -499,14 +500,14 @@ void INI::readLine()
 		// check for at the max
 		if ( p == m_buffer+INI_MAX_CHARS_PER_LINE )
 		{
-			DEBUG_CRASH( ("Buffer too small (%d) and was truncated, increase INI_MAX_CHARS_PER_LINE", INI_MAX_CHARS_PER_LINE) );
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Buffer too small (%d) and was truncated, increase INI_MAX_CHARS_PER_LINE", INI_MAX_CHARS_PER_LINE);
 		}
 	}
 
 	if (s_xfer)
 	{
 		s_xfer->xferUser( m_buffer, sizeof( char ) * strlen( m_buffer ) );
-		//DEBUG_LOG(("Xfer val is now 0x%8.8X in %s, line %s", ((XferCRC *)s_xfer)->getCRC(), m_filename.str(), m_buffer));
+		//engine::debug::log_info("Xfer val is now 0x%8.8X in %s, line %s", ((XferCRC *)s_xfer)->getCRC(), m_filename.str(), m_buffer);
 	}
 }
 
@@ -519,7 +520,7 @@ void INI::parseUnsignedByte( INI* ini, void * /*instance*/, void *store, const v
 	Int value = scanInt(token);
 	if (value < 0 || value > 255)
 	{
-		DEBUG_CRASH(("Bad value INI::parseUnsignedByte"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Bad value INI::parseUnsignedByte");
 		throw ERROR_BUG;
 	}
 	*(Byte *)store = (Byte)value;
@@ -534,7 +535,7 @@ void INI::parseShort( INI* ini, void * /*instance*/, void *store, const void* /*
 	Int value = scanInt(token);
 	if (value < -32768 || value > 32767)
 	{
-		DEBUG_CRASH(("Bad value INI::parseShort"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Bad value INI::parseShort");
 		throw ERROR_BUG;
 	}
 	*(Short *)store = (Short)value;
@@ -549,7 +550,7 @@ void INI::parseUnsignedShort( INI* ini, void * /*instance*/, void *store, const 
 	Int value = scanInt(token);
 	if (value < 0 || value > 65535)
 	{
-		DEBUG_CRASH(("Bad value INI::parseUnsignedShort"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Bad value INI::parseUnsignedShort");
 		throw ERROR_BUG;
 	}
 	*(UnsignedShort *)store = (UnsignedShort)value;
@@ -594,7 +595,7 @@ void INI::parsePositiveNonZeroReal( INI* ini, void * /*instance*/, void *store, 
 	*(Real *)store = scanReal(token);
 	if (*(Real *)store <= 0.0f)
 	{
-		DEBUG_CRASH(("invalid Real value %f -- expected > 0",*(Real*)store));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "invalid Real value %f -- expected > 0",*(Real*)store);
 		throw INI_INVALID_DATA;
 	}
 
@@ -663,7 +664,7 @@ void INI::parseBitInInt32( INI *ini, void *instance, void *store, const void* us
 		return FALSE;
 	else
 	{
-		DEBUG_CRASH(("invalid boolean token %s -- expected Yes or No",token));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "invalid boolean token %s -- expected Yes or No",token);
 		throw INI_INVALID_DATA;
 		return false;	// keep compiler happy
 	}
@@ -883,7 +884,7 @@ void INI::parseMappedImage( INI *ini, void * /*instance*/, void *store, const vo
 	else
 	{
 
-		DEBUG_CRASH(( "INI::parseAnim2DTemplate - TheAnim2DCollection is null" ));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__,  "INI::parseAnim2DTemplate - TheAnim2DCollection is null" );
 		throw INI_UNKNOWN_ERROR;
 
 	}
@@ -913,7 +914,7 @@ void INI::parseBitString8( INI* ini, void * /*instance*/, void *store, const voi
 	INI::parseBitString32(ini, nullptr, &tmp, userData);
 	if (tmp & 0xffffff00)
 	{
-		DEBUG_CRASH(("Bad bitstring list INI::parseBitString8"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Bad bitstring list INI::parseBitString8");
 		throw ERROR_BUG;
 	}
 	*(Byte*)store = (Byte)tmp;
@@ -931,7 +932,7 @@ void INI::parseBitString32( INI* ini, void * /*instance*/, void *store, const vo
 
 	if( flagList == nullptr || flagList[ 0 ] == nullptr)
 	{
-		DEBUG_ASSERTCRASH( flagList, ("INTERNAL ERROR! parseBitString32: No flag list provided!") );
+		engine::debug::invariant((flagList), "flagList", __FILE__, __LINE__, "INTERNAL ERROR! parseBitString32: No flag list provided!");
 		throw INI_INVALID_NAME_LIST;
 	}
 
@@ -945,7 +946,7 @@ void INI::parseBitString32( INI* ini, void * /*instance*/, void *store, const vo
 		{
 			if (foundNormal || foundAddOrSub)
 			{
-				DEBUG_CRASH(("you may not mix normal and +- ops in bitstring lists"));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "you may not mix normal and +- ops in bitstring lists");
 				throw INI_INVALID_NAME_LIST;
 			}
 			*bits = 0;
@@ -956,7 +957,7 @@ void INI::parseBitString32( INI* ini, void * /*instance*/, void *store, const vo
 		{
 			if (foundNormal)
 			{
-				DEBUG_CRASH(("you may not mix normal and +- ops in bitstring lists"));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "you may not mix normal and +- ops in bitstring lists");
 				throw INI_INVALID_NAME_LIST;
 			}
 			Int bitIndex = INI::scanIndexList(token+1, flagList);	// this throws if the token is not found
@@ -967,7 +968,7 @@ void INI::parseBitString32( INI* ini, void * /*instance*/, void *store, const vo
 		{
 			if (foundNormal)
 			{
-				DEBUG_CRASH(("you may not mix normal and +- ops in bitstring lists"));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "you may not mix normal and +- ops in bitstring lists");
 				throw INI_INVALID_NAME_LIST;
 			}
 			Int bitIndex = INI::scanIndexList(token+1, flagList);	// this throws if the token is not found
@@ -978,7 +979,7 @@ void INI::parseBitString32( INI* ini, void * /*instance*/, void *store, const vo
 		{
 			if (foundAddOrSub)
 			{
-				DEBUG_CRASH(("you may not mix normal and +- ops in bitstring lists"));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "you may not mix normal and +- ops in bitstring lists");
 				throw INI_INVALID_NAME_LIST;
 			}
 
@@ -1210,7 +1211,7 @@ void INI::parseThingTemplate( INI* ini, void * /*instance*/, void *store, const 
 
 	if (!TheThingFactory)
 	{
-		DEBUG_CRASH(("TheThingFactory not inited yet"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "TheThingFactory not inited yet");
 		throw ERROR_BUG;
 	}
 
@@ -1224,7 +1225,7 @@ void INI::parseThingTemplate( INI* ini, void * /*instance*/, void *store, const 
 	else
 	{
 		const ThingTemplate *tt = TheThingFactory->findTemplate(token);	// could be null!
-		DEBUG_ASSERTCRASH(tt, ("ThingTemplate %s not found!",token));
+		engine::debug::invariant((tt), "tt", __FILE__, __LINE__, "ThingTemplate %s not found!",token);
 		// assign it, even if null!
 		*theThingTemplate = tt;
 	}
@@ -1248,7 +1249,7 @@ void INI::parseArmorTemplate( INI* ini, void * /*instance*/, void *store, const 
 	else
 	{
 		const ArmorTemplate *tt = TheArmorStore->findArmorTemplate(token);	// could be null!
-		DEBUG_ASSERTCRASH(tt, ("ArmorTemplate %s not found!",token));
+		engine::debug::invariant((tt), "tt", __FILE__, __LINE__, "ArmorTemplate %s not found!",token);
 		// assign it, even if null!
 		*theArmorTemplate = tt;
 	}
@@ -1266,7 +1267,7 @@ void INI::parseWeaponTemplate( INI* ini, void * /*instance*/, void *store, const
 	ConstWeaponTemplatePtr* theWeaponTemplate = (ConstWeaponTemplatePtr*)store;
 
 	const WeaponTemplate *tt = TheWeaponStore->findWeaponTemplate(token);	// could be null!
-	DEBUG_ASSERTCRASH(tt || stricmp(token, "None") == 0, ("WeaponTemplate %s not found!",token));
+	engine::debug::invariant((tt || stricmp(token, "None") == 0), "tt || stricmp(token, \"None\") == 0", __FILE__, __LINE__, "WeaponTemplate %s not found!",token);
 	// assign it, even if null!
 	*theWeaponTemplate = tt;
 
@@ -1283,7 +1284,7 @@ void INI::parseFXList( INI* ini, void * /*instance*/, void *store, const void* /
 	ConstFXListPtr* theFXList = (ConstFXListPtr*)store;
 
 	const FXList *fxl = TheFXListStore->findFXList(token);	// could be null!
-	DEBUG_ASSERTCRASH(fxl != nullptr || stricmp(token, "None") == 0, ("FXList %s not found!",token));
+	engine::debug::invariant((fxl != nullptr || stricmp(token, "None") == 0), "fxl != nullptr || stricmp(token, \"None\") == 0", __FILE__, __LINE__, "FXList %s not found!",token);
 	// assign it, even if null!
 	*theFXList = fxl;
 
@@ -1297,7 +1298,7 @@ void INI::parseParticleSystemTemplate( INI *ini, void * /*instance*/, void *stor
 	const char *token = ini->getNextToken();
 
 	const ParticleSystemTemplate *pSystemT = TheParticleSystemManager->findTemplate( AsciiString( token ) );
-	DEBUG_ASSERTCRASH( pSystemT || stricmp( token, "None" ) == 0, ("ParticleSystem %s not found!",token) );
+	engine::debug::invariant((pSystemT || stricmp( token, "None" ) == 0), "pSystemT || stricmp( token, \"None\" ) == 0", __FILE__, __LINE__, "ParticleSystem %s not found!",token);
 
 	typedef const ParticleSystemTemplate* ConstParticleSystemTemplatePtr;
 	ConstParticleSystemTemplatePtr* theParticleSystemTemplate = (ConstParticleSystemTemplatePtr*)store;
@@ -1323,7 +1324,7 @@ void INI::parseDamageFX( INI* ini, void * /*instance*/, void *store, const void*
 	else
 	{
 		const DamageFX *fxl = TheDamageFXStore->findDamageFX(token);	// could be null!
-		DEBUG_ASSERTCRASH(fxl, ("DamageFX %s not found!",token));
+		engine::debug::invariant((fxl), "fxl", __FILE__, __LINE__, "DamageFX %s not found!",token);
 		// assign it, even if null!
 		*theDamageFX = fxl;
 	}
@@ -1341,7 +1342,7 @@ void INI::parseObjectCreationList( INI* ini, void * /*instance*/, void *store, c
 	ConstObjectCreationListPtr* theObjectCreationList = (ConstObjectCreationListPtr*)store;
 
 	const ObjectCreationList *ocl = TheObjectCreationListStore->findObjectCreationList(token);	// could be null!
-	DEBUG_ASSERTCRASH(ocl || stricmp(token, "None") == 0, ("ObjectCreationList %s not found!",token));
+	engine::debug::invariant((ocl || stricmp(token, "None") == 0), "ocl || stricmp(token, \"None\") == 0", __FILE__, __LINE__, "ObjectCreationList %s not found!",token);
 	// assign it, even if null!
 	*theObjectCreationList = ocl;
 
@@ -1356,12 +1357,12 @@ void INI::parseUpgradeTemplate( INI* ini, void * /*instance*/, void *store, cons
 
 	if (!TheUpgradeCenter)
 	{
-		DEBUG_CRASH(("TheUpgradeCenter not inited yet"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "TheUpgradeCenter not inited yet");
 		throw ERROR_BUG;
 	}
 
 	const UpgradeTemplate *uu = TheUpgradeCenter->findUpgrade( token );
-	DEBUG_ASSERTCRASH( uu || stricmp( token, "None" ) == 0, ("Upgrade %s not found!",token) );
+	engine::debug::invariant((uu || stricmp( token, "None" ) == 0), "uu || stricmp( token, \"None\" ) == 0", __FILE__, __LINE__, "Upgrade %s not found!",token);
 
 	typedef const UpgradeTemplate* ConstUpgradeTemplatePtr;
 	ConstUpgradeTemplatePtr* theUpgradeTemplate = (ConstUpgradeTemplatePtr *)store;
@@ -1377,14 +1378,14 @@ void INI::parseSpecialPowerTemplate( INI* ini, void * /*instance*/, void *store,
 
 	if (!TheSpecialPowerStore)
 	{
-		DEBUG_CRASH(("TheSpecialPowerStore not inited yet"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "TheSpecialPowerStore not inited yet");
 		throw ERROR_BUG;
 	}
 
 	const SpecialPowerTemplate *sPowerT = TheSpecialPowerStore->findSpecialPowerTemplate( AsciiString( token ) );
 	if( !sPowerT && stricmp( token, "None" ) != 0 )
 	{
-		DEBUG_CRASH( ("[LINE: %d in '%s'] Specialpower %s not found!", ini->getLineNum(), ini->getFilename().str(), token) );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "[LINE: %d in '%s'] Specialpower %s not found!", ini->getLineNum(), ini->getFilename().str(), token);
 	}
 
 	typedef const SpecialPowerTemplate* ConstSpecialPowerTemplatePtr;
@@ -1401,7 +1402,7 @@ void INI::parseSpecialPowerTemplate( INI* ini, void * /*instance*/, void *store,
 
 	if (!TheScienceStore)
 	{
-		DEBUG_CRASH(("TheScienceStore not inited yet"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "TheScienceStore not inited yet");
 		throw ERROR_BUG;
 	}
 
@@ -1435,7 +1436,7 @@ void INI::parseByteSizedIndexList( INI* ini, void * /*instance*/, void *store, c
 	Int value = scanIndexList(ini->getNextToken(), nameList);
 	if (value < 0 || value > 255)
 	{
-		DEBUG_CRASH(("Bad index list INI::parseByteSizedIndexList"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Bad index list INI::parseByteSizedIndexList");
 		throw ERROR_BUG;
 	}
 	*(Byte *)store = (Byte)value;
@@ -1470,7 +1471,7 @@ void MultiIniFieldParse::add(const FieldParse* f, UnsignedInt e)
 	}
 	else
 	{
-		DEBUG_CRASH(("too many multi-fields in INI::initFromINIMultiProc"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "too many multi-fields in INI::initFromINIMultiProc");
 		throw ERROR_BUG;
 	}
 }
@@ -1498,7 +1499,7 @@ void INI::initFromINIMulti( void *what, const MultiIniFieldParse& parseTableList
 
 	if( what == nullptr )
 	{
-		DEBUG_CRASH( ("INI::initFromINI - Invalid parameters supplied!") );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "INI::initFromINI - Invalid parameters supplied!");
 		throw INI_INVALID_PARAMS;
 	}
 
@@ -1534,8 +1535,10 @@ void INI::initFromINIMulti( void *what, const MultiIniFieldParse& parseTableList
 						(*parse)( this, what, (char *)what + offset + parseTableList.getNthExtraOffset(ptIdx), userData );
 
 						} catch (...) {
-							DEBUG_CRASH( ("[LINE: %d - FILE: '%s'] Error reading field '%s' of block '%s'",
-																 INI::getLineNum(), INI::getFilename().str(), field, m_curBlockStart) );
+							#ifdef DEBUG_CRASHING
+							engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "[LINE: %d - FILE: '%s'] Error reading field '%s' of block '%s'",
+															 INI::getLineNum(), INI::getFilename().str(), field, m_curBlockStart);
+							#endif
 
 
 							char buff[1024];
@@ -1552,8 +1555,10 @@ void INI::initFromINIMulti( void *what, const MultiIniFieldParse& parseTableList
 
 				if (!found)
 				{
-					DEBUG_CRASH( ("[LINE: %d - FILE: '%s'] Unknown field '%s' in block '%s'",
-														 INI::getLineNum(), INI::getFilename().str(), field, m_curBlockStart) );
+					#ifdef DEBUG_CRASHING
+					engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "[LINE: %d - FILE: '%s'] Unknown field '%s' in block '%s'",
+													 INI::getLineNum(), INI::getFilename().str(), field, m_curBlockStart);
+					#endif
 				}
 
 			}
@@ -1565,8 +1570,10 @@ void INI::initFromINIMulti( void *what, const MultiIniFieldParse& parseTableList
 		{
 
 			done = TRUE;
-			DEBUG_CRASH( ("Error parsing block '%s', in INI file '%s'.  Missing '%s' token",
-												 m_curBlockStart, getFilename().str(), getEndToken()) );
+			#ifdef DEBUG_CRASHING
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Error parsing block '%s', in INI file '%s'.  Missing '%s' token",
+												 m_curBlockStart, getFilename().str(), getEndToken());
+			#endif
 			throw INI_MISSING_END_TOKEN;
 
 		}
@@ -1602,7 +1609,7 @@ void INI::initFromINIMulti( void *what, const MultiIniFieldParse& parseTableList
 template <typename Type>
 Type scanType(std::string_view token)
 {
-	DEBUG_ASSERTCRASH(!token.empty(), ("token is not expected to be empty"));
+	engine::debug::invariant((!token.empty()), "!token.empty()", __FILE__, __LINE__, "token is not expected to be empty");
 
 	// Unlike sscanf, std::from_chars cannot parse "+".
 	// Consume the plus symbol to accommodate custom ini files that have numbers prefixed with a plus.
@@ -1694,7 +1701,7 @@ Type scanType(std::string_view token)
 	if( nameList == nullptr || nameList[ 0 ] == nullptr )
 	{
 
-		DEBUG_CRASH( ("INTERNAL ERROR! scanIndexList, invalid name list") );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "INTERNAL ERROR! scanIndexList, invalid name list");
 		throw INI_INVALID_NAME_LIST;
 
 	}
@@ -1709,7 +1716,7 @@ Type scanType(std::string_view token)
 		}
 	}
 
-	DEBUG_CRASH(("token %s is not a valid member of the index list",token));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "token %s is not a valid member of the index list",token);
 	throw INI_INVALID_DATA;
 	return 0;	// never executed, but keeps compiler happy
 
@@ -1719,7 +1726,7 @@ Type scanType(std::string_view token)
 {
 	if( lookupList == nullptr || lookupList[ 0 ].name == nullptr )
 	{
-		DEBUG_CRASH( ("INTERNAL ERROR! scanLookupList, invalid name list") );
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "INTERNAL ERROR! scanLookupList, invalid name list");
 		throw INI_INVALID_NAME_LIST;
 	}
 
@@ -1732,7 +1739,7 @@ Type scanType(std::string_view token)
 		}
 	}
 
-	DEBUG_CRASH(("token %s is not a valid member of the lookup list",token));
+	engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "token %s is not a valid member of the lookup list",token);
 	throw INI_INVALID_DATA;
 	return 0;	// never executed, but keeps compiler happy
 

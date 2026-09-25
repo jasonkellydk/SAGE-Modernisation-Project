@@ -31,7 +31,7 @@
 #include "GameLogic/PolygonTrigger.h"
 #include "GameLogic/SidesList.h"
 #include "W3DDevice/GameClient/BaseHeightMap.h"
-#include "Common/Debug.h"
+
 #include "mapobjectprops.h"
 #include "ObjectOptions.h"
 #include "BuildList.h"
@@ -40,6 +40,7 @@
 #include "Common/WellKnownKeys.h"
 #include "WorldBuilder.h"	// for MAX_OBJECTS_IN_MAP
 #include "Common/UnicodeString.h"
+import engine.debug;
 
 
 // base mostly virtual class.
@@ -294,8 +295,8 @@ void AddObjectUndoable::Do()
 void AddObjectUndoable::Undo()
 {
 //	WorldHeightMapEdit *pMap = m_pDoc->GetHeightMap();
-	DEBUG_ASSERTCRASH(m_addedToList,("oops"));
-	DEBUG_ASSERTCRASH(m_objectToAdd == MapObject::TheMapObjectListPtr,("oops"));
+	engine::debug::invariant((m_addedToList), "m_addedToList", __FILE__, __LINE__, "oops");
+	engine::debug::invariant((m_objectToAdd == MapObject::TheMapObjectListPtr), "m_objectToAdd == MapObject::TheMapObjectListPtr", __FILE__, __LINE__, "oops");
 	if (!m_addedToList || m_objectToAdd!=MapObject::TheMapObjectListPtr) {
 		return;
 	}
@@ -723,7 +724,7 @@ m_pDoc(pDoc)
 	// ensure the new setup is valid. (don't mess with the old one.)
 	Bool modified = m_new.validateSides();
 	(void)modified;
-	DEBUG_ASSERTLOG(!modified,("*** had to clean up sides in SidesListUndoable! (caller should do this)"));
+	if (!(!modified)) engine::debug::log_error("*** had to clean up sides in SidesListUndoable! (caller should do this)");
 }
 
 SidesListUndoable::~SidesListUndoable()
@@ -774,7 +775,7 @@ DictItemUndoable::DictItemUndoable(Dict **d, Dict data, NameKeyType key, Int dic
 			m_oldDictData[i] = *d[i];
 		else
 		{
-			DEBUG_ASSERTCRASH(data.getPairCount() <= 1, ("hmm"));
+			engine::debug::invariant((data.getPairCount() <= 1), "data.getPairCount() <= 1", __FILE__, __LINE__, "hmm");
 			m_oldDictData[i].copyPairFrom(*d[i], m_key);
 		}
 	}
@@ -845,7 +846,7 @@ void DictItemUndoable::Undo()
 			}
 			break;
 		default:
-			DEBUG_CRASH(("bug"));
+			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "bug");
 			break;
 	}
 	return d;
@@ -885,7 +886,7 @@ DeleteInfo::DeleteInfo( MapObject *pObjectToDelete):
 //
 void DeleteInfo::DoDelete(WorldHeightMapEdit *pMap)
 {
-	DEBUG_ASSERTCRASH(!m_didDelete,("oops"));
+	engine::debug::invariant((!m_didDelete), "!m_didDelete", __FILE__, __LINE__, "oops");
 	m_priorObject = nullptr;
 	MapObject *curMapObj = MapObject::getFirstMapObject();
 	Bool found = false;
@@ -897,7 +898,7 @@ void DeleteInfo::DoDelete(WorldHeightMapEdit *pMap)
 		m_priorObject = curMapObj;
 		curMapObj = curMapObj->getNext();
 	}
-	DEBUG_ASSERTCRASH(found,("not found"));
+	engine::debug::invariant((found), "found", __FILE__, __LINE__, "not found");
 	if (!found) {
 		m_objectToDelete = nullptr;
 		return;
@@ -905,7 +906,7 @@ void DeleteInfo::DoDelete(WorldHeightMapEdit *pMap)
 	if (m_priorObject) {
 		m_priorObject->setNextMap(m_objectToDelete->getNext());
 	} else {
-		DEBUG_ASSERTCRASH(MapObject::TheMapObjectListPtr == m_objectToDelete,("oops"));
+		engine::debug::invariant((MapObject::TheMapObjectListPtr == m_objectToDelete), "MapObject::TheMapObjectListPtr == m_objectToDelete", __FILE__, __LINE__, "oops");
 		MapObject::TheMapObjectListPtr = MapObject::TheMapObjectListPtr->getNext();
 	}
 	m_objectToDelete->setNextMap(nullptr);
@@ -914,7 +915,7 @@ void DeleteInfo::DoDelete(WorldHeightMapEdit *pMap)
 
 void DeleteInfo::UndoDelete(WorldHeightMapEdit *pMap)
 {
-	DEBUG_ASSERTCRASH(m_didDelete,("oops"));
+	engine::debug::invariant((m_didDelete), "m_didDelete", __FILE__, __LINE__, "oops");
 	if (!m_didDelete) return;
 	if (m_priorObject) {
 		m_objectToDelete->setNextMap(m_priorObject->getNext());
@@ -955,7 +956,7 @@ DeleteObjectUndoable::DeleteObjectUndoable(CWorldBuilderDoc *pDoc):
 	for (pMapObj = MapObject::getFirstMapObject(); pMapObj; pMapObj = pMapObj->getNext()) {
 		if (pMapObj->getFlag(FLAG_ROAD_POINT1)) {
 			pMapObj2 = pMapObj->getNext();
-			DEBUG_ASSERTCRASH(pMapObj2 && pMapObj2->getFlag(FLAG_ROAD_POINT2), ("oops"));
+			engine::debug::invariant((pMapObj2 && pMapObj2->getFlag(FLAG_ROAD_POINT2)), "pMapObj2 && pMapObj2->getFlag(FLAG_ROAD_POINT2)", __FILE__, __LINE__, "oops");
 			if (pMapObj2==nullptr) break;
 			if (!pMapObj2->getFlag(FLAG_ROAD_POINT2)) continue;
 			// If one end of a road segment is selected, both are.
@@ -1047,7 +1048,7 @@ void DeleteObjectUndoable::Undo()
 AddPolygonUndoable::~AddPolygonUndoable()
 {
 	if (m_trigger && !m_isTriggerInList) {
-		DEBUG_ASSERTCRASH(m_trigger->getNext()==nullptr, ("Logic error."));
+		engine::debug::invariant((m_trigger->getNext()==nullptr), "m_trigger->getNext()==nullptr", __FILE__, __LINE__, "Logic error.");
 		deleteInstance(m_trigger);
 	}
 	m_trigger=nullptr;
@@ -1319,7 +1320,7 @@ void DeletePolygonPointUndoable::Undo()
 DeletePolygonUndoable::~DeletePolygonUndoable()
 {
 	if (m_trigger && !m_isTriggerInList) {
-		DEBUG_ASSERTCRASH(m_trigger->getNext()==nullptr, ("Logic error."));
+		engine::debug::invariant((m_trigger->getNext()==nullptr), "m_trigger->getNext()==nullptr", __FILE__, __LINE__, "Logic error.");
 		deleteInstance(m_trigger);
 	}
 	m_trigger=nullptr;

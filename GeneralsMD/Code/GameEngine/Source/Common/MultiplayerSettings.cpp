@@ -28,7 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #define DEFINE_TERRAIN_LOD_NAMES
 #define DEFINE_TIME_OF_DAY_NAMES
@@ -144,7 +145,7 @@ void MultiplayerSettings::addStartingMoneyChoice( const Money & money, Bool isDe
   m_startingMoneyList.push_back( money );
   if ( isDefault )
   {
-    DEBUG_ASSERTCRASH( !m_gotDefaultStartingMoney, ("Cannot have more than one default MultiplayerStartingMoneyChoice") );
+    engine::debug::invariant((!m_gotDefaultStartingMoney), "!m_gotDefaultStartingMoney", __FILE__, __LINE__, "Cannot have more than one default MultiplayerStartingMoneyChoice");
     m_defaultStartingMoney = money;
     m_gotDefaultStartingMoney = true;
   }

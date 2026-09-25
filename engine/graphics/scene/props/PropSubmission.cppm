@@ -1,9 +1,9 @@
 module;
-#include "../../profiling/Tracy.h"
 #include <array>
 #include <span>
 #include <vector>
 export module Graphics.Scene.Props.Submission;
+import engine.profiling;
 export import Graphics.Scene.Props.Renderer;
 import Graphics.Scene.Props.MaterialPassQueue;
 import Graphics.Scene.Props.TransparentGeometry;
@@ -99,7 +99,7 @@ public:
         const std::array<float,4>& camera_depth = {}, PropInstanceHandle instance = {},
         bool transfer_textures = true)
     {
-        GRAPHICS_PROFILE_SCOPE("Graphics.Props.Submit");
+        engine::profiling::Scope profile_scope_101("Graphics.Props.Submit");
         if (m_device == nullptr || m_renderer == nullptr || textures.size() > PropTextureCount) return false;
         const bool batched = phase == PropDrawPhase::Batchable && m_batch_depth != 0
             && MaterialPassQueue::Can_Batch_Opaque(style);

@@ -56,7 +56,7 @@ public:
 
 	W3DScienceModelDraw( Thing *thing, const ModuleData* moduleData );
 	// virtual destructor prototype provided by memory pool declaration
-	virtual void doDrawModule(const Matrix3D* transformMtx) override;///< checks a property on the local player before passing this up
+	virtual void doDrawModule(const Engine::Math::AffineTransform3* transform) override;///< checks a property on the local player before passing this up
 
 protected:
 };

@@ -28,7 +28,8 @@
 // Description: Lan Game Options Menu
 ///////////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 
 #include "Common/BattleHonors.h"
@@ -422,7 +423,7 @@ void reallyDoStart()
 	//NameKeyType sliderGameSpeedID = TheNameKeyGenerator->nameToKey( "SkirmishGameOptionsMenu.wnd:SliderGameSpeed" );
 	GameWindow *sliderGameSpeed = TheWindowManager->winGetWindowFromId( parentSkirmishGameOptions, sliderGameSpeedID );
 	Int maxFPS = GadgetSliderGetPosition( sliderGameSpeed );
-	DEBUG_LOG(("GameSpeedSlider was at %d", maxFPS));
+	engine::debug::log_info("GameSpeedSlider was at %d", maxFPS);
 	if (maxFPS > GREATER_NO_FPS_LIMIT)
 		maxFPS = 1000;
 	if (maxFPS < 15)
@@ -559,7 +560,7 @@ void positionStartSpotControls( GameWindow *win, GameWindow *mapWindow, Coord3D 
 {
 	if(!win || !mmd || !mapWindow || !buttonMapStartPositions)
 		return;
-	DEBUG_ASSERTCRASH(win && mmd,("positionStartSpotControls:: we don't have a window to position or any mapmetadata"));
+	engine::debug::invariant((win && mmd), "win && mmd", __FILE__, __LINE__, "positionStartSpotControls:: we don't have a window to position or any mapmetadata");
 	ICoord2D winMapSize, winMapPos, gadgetPos, gadgetSize;
 	mapWindow->winGetSize(&winMapSize.x, &winMapSize.y);
 	mapWindow->winGetScreenPosition(&winMapPos.x, &winMapPos.y);
@@ -749,7 +750,7 @@ void positionStartSpots( AsciiString mapName, GameWindow *buttonMapStartPosition
 			}
 			else
 			{
-				DEBUG_CRASH(("positionStartSpots:: someone messed with the map cash.  We couldn't find waypoint <%s> in map <%s>", waypointName.str(),lowerMap.str()));
+				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "positionStartSpots:: someone messed with the map cash.  We couldn't find waypoint <%s> in map <%s>", waypointName.str(),lowerMap.str());
 			}
 		}
 		// hide the rest
@@ -1035,31 +1036,31 @@ void InitSkirmishGameGadgets()
 
 	// Initialize the pointers to our gadgets
 	parentSkirmishGameOptions = TheWindowManager->winGetWindowFromId( nullptr, parentSkirmishGameOptionsID );
-	DEBUG_ASSERTCRASH(parentSkirmishGameOptions, ("Could not find the parentSkirmishGameOptions" ));
+	engine::debug::invariant((parentSkirmishGameOptions), "parentSkirmishGameOptions", __FILE__, __LINE__, "Could not find the parentSkirmishGameOptions" );
 	buttonSelectMap = TheWindowManager->winGetWindowFromId( parentSkirmishGameOptions,buttonSelectMapID  );
-	DEBUG_ASSERTCRASH(buttonSelectMap, ("Could not find the buttonSelectMap"));
+	engine::debug::invariant((buttonSelectMap), "buttonSelectMap", __FILE__, __LINE__, "Could not find the buttonSelectMap");
 	buttonStart = TheWindowManager->winGetWindowFromId( parentSkirmishGameOptions,buttonStartID  );
-	DEBUG_ASSERTCRASH(buttonStart, ("Could not find the buttonStart"));
+	engine::debug::invariant((buttonStart), "buttonStart", __FILE__, __LINE__, "Could not find the buttonStart");
 	buttonExit = TheWindowManager->winGetWindowFromId( parentSkirmishGameOptions,  buttonExitID);
-	DEBUG_ASSERTCRASH(buttonExit, ("Could not find the buttonExit"));
+	engine::debug::invariant((buttonExit), "buttonExit", __FILE__, __LINE__, "Could not find the buttonExit");
 	textEntryMapDisplay = TheWindowManager->winGetWindowFromId( parentSkirmishGameOptions, textEntryMapDisplayID );
-	DEBUG_ASSERTCRASH(textEntryMapDisplay, ("Could not find the textEntryMapDisplay"));
+	engine::debug::invariant((textEntryMapDisplay), "textEntryMapDisplay", __FILE__, __LINE__, "Could not find the textEntryMapDisplay");
 	buttonReset = TheWindowManager->winGetWindowFromId( parentSkirmishGameOptions, buttonResetID );
-	DEBUG_ASSERTCRASH(buttonReset, ("Could not find the buttonReset"));
+	engine::debug::invariant((buttonReset), "buttonReset", __FILE__, __LINE__, "Could not find the buttonReset");
 	staticTextGameSpeed = TheWindowManager->winGetWindowFromId( parentSkirmishGameOptions, staticTextGameSpeedID );
-	DEBUG_ASSERTCRASH(staticTextGameSpeed, ("Could not find the staticTextGameSpeed"));
+	engine::debug::invariant((staticTextGameSpeed), "staticTextGameSpeed", __FILE__, __LINE__, "Could not find the staticTextGameSpeed");
   checkBoxLimitSuperweapons = TheWindowManager->winGetWindowFromId( parentSkirmishGameOptions, checkBoxLimitSuperweaponsID );
-  DEBUG_ASSERTCRASH(checkBoxLimitSuperweapons, ("Could not find the checkBoxLimitSuperweapons"));
+  engine::debug::invariant((checkBoxLimitSuperweapons), "checkBoxLimitSuperweapons", __FILE__, __LINE__, "Could not find the checkBoxLimitSuperweapons");
   comboBoxStartingCash = TheWindowManager->winGetWindowFromId( parentSkirmishGameOptions, comboBoxStartingCashID );
-  DEBUG_ASSERTCRASH(comboBoxStartingCash, ("Could not find the comboBoxStartingCash"));
+  engine::debug::invariant((comboBoxStartingCash), "comboBoxStartingCash", __FILE__, __LINE__, "Could not find the comboBoxStartingCash");
   PopulateStartingCashComboBox(comboBoxStartingCash, TheSkirmishGameInfo );
 
 	textEntryPlayerNameID = TheNameKeyGenerator->nameToKey( "SkirmishGameOptionsMenu.wnd:TextEntryPlayerName" );
   textEntryPlayerName = TheWindowManager->winGetWindowFromId( nullptr, textEntryPlayerNameID );
-	DEBUG_ASSERTCRASH(textEntryPlayerName, ("Could not find the textEntryPlayerName" ));
+	engine::debug::invariant((textEntryPlayerName), "textEntryPlayerName", __FILE__, __LINE__, "Could not find the textEntryPlayerName" );
 
 	windowMap = TheWindowManager->winGetWindowFromId( parentSkirmishGameOptions,windowMapID  );
-	DEBUG_ASSERTCRASH(windowMap, ("Could not find the SkirmishGameOptionsMenu.wnd:MapWindow" ));
+	engine::debug::invariant((windowMap), "windowMap", __FILE__, __LINE__, "Could not find the SkirmishGameOptionsMenu.wnd:MapWindow" );
 
 	windowMap->winSetTooltipFunc(MapSelectorTooltip);
 
@@ -1102,12 +1103,12 @@ void InitSkirmishGameGadgets()
 		tmpString.format("SkirmishGameOptionsMenu.wnd:ComboBoxColor%d", i);
 		comboBoxColorID[i] = TheNameKeyGenerator->nameToKey( tmpString );
 		comboBoxColor[i] = TheWindowManager->winGetWindowFromId( parentSkirmishGameOptions, comboBoxColorID[i] );
-		DEBUG_ASSERTCRASH(comboBoxColor[i], ("Could not find the comboBoxColor[%d]",i ));
+		engine::debug::invariant((comboBoxColor[i]), "comboBoxColor[i]", __FILE__, __LINE__, "Could not find the comboBoxColor[%d]",i );
 
 		tmpString.format("SkirmishGameOptionsMenu.wnd:ComboBoxPlayerTemplate%d", i);
 		comboBoxPlayerTemplateID[i] = TheNameKeyGenerator->nameToKey( tmpString );
 		comboBoxPlayerTemplate[i] = TheWindowManager->winGetWindowFromId( parentSkirmishGameOptions, comboBoxPlayerTemplateID[i] );
-		DEBUG_ASSERTCRASH(comboBoxPlayerTemplate[i], ("Could not find the comboBoxPlayerTemplate[%d]",i ));
+		engine::debug::invariant((comboBoxPlayerTemplate[i]), "comboBoxPlayerTemplate[i]", __FILE__, __LINE__, "Could not find the comboBoxPlayerTemplate[%d]",i );
 
 		// add tooltips to the player template combobox and listbox
 		comboBoxPlayerTemplate[i]->winSetTooltipFunc(playerTemplateComboBoxTooltip);
@@ -1116,18 +1117,18 @@ void InitSkirmishGameGadgets()
 		tmpString.format("SkirmishGameOptionsMenu.wnd:ComboBoxTeam%d", i);
 		comboBoxTeamID[i] = TheNameKeyGenerator->nameToKey( tmpString );
 		comboBoxTeam[i] = TheWindowManager->winGetWindowFromId( parentSkirmishGameOptions, comboBoxTeamID[i] );
-		DEBUG_ASSERTCRASH(comboBoxTeam[i], ("Could not find the comboBoxTeam[%d]",i ));
+		engine::debug::invariant((comboBoxTeam[i]), "comboBoxTeam[i]", __FILE__, __LINE__, "Could not find the comboBoxTeam[%d]",i );
 
 
 //		tmpString.format("SkirmishGameOptionsMenu.wnd:ButtonStartPosition%d", i);
 //		buttonStartPositionID[i] = TheNameKeyGenerator->nameToKey( tmpString );
 //		buttonStartPosition[i] = TheWindowManager->winGetWindowFromId( parentSkirmishGameOptions, buttonStartPositionID[i] );
-//		DEBUG_ASSERTCRASH(buttonStartPosition[i], ("Could not find the ButtonStartPosition[%d]",i ));
+//		engine::debug::invariant((buttonStartPosition[i]), "buttonStartPosition[i]", __FILE__, __LINE__, "Could not find the ButtonStartPosition[%d]",i );
 //
 		tmpString.format("SkirmishGameOptionsMenu.wnd:ButtonMapStartPosition%d", i);
 		buttonMapStartPositionID[i] = TheNameKeyGenerator->nameToKey( tmpString );
 		buttonMapStartPosition[i] = TheWindowManager->winGetWindowFromId( parentSkirmishGameOptions, buttonMapStartPositionID[i] );
-		DEBUG_ASSERTCRASH(buttonMapStartPosition[i], ("Could not find the ButtonMapStartPosition[%d]",i ));
+		engine::debug::invariant((buttonMapStartPosition[i]), "buttonMapStartPosition[i]", __FILE__, __LINE__, "Could not find the ButtonMapStartPosition[%d]",i );
 	}
 
 	for (i = 0; i < MAX_SLOTS; ++i)
@@ -1214,7 +1215,7 @@ void updateSkirmishGameOptions()
 	}
 	else
 	{
-		DEBUG_CRASH(("map not found, should not happen"));
+		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "map not found, should not happen");
 		UnicodeString mapDisplay;
 		mapDisplay.translate(AsciiString(TheSkirmishGameInfo->getMap().str()));
 		GadgetStaticTextSetText(textEntryMapDisplay, mapDisplay);
@@ -1245,7 +1246,7 @@ void updateSkirmishGameOptions()
     }
   }
 
-  DEBUG_ASSERTCRASH( index < itemCount, ("Could not find new starting cash amount %d in list", TheSkirmishGameInfo->getStartingCash().countMoney() ) );
+  engine::debug::invariant((index < itemCount), "index < itemCount", __FILE__, __LINE__, "Could not find new starting cash amount %d in list", TheSkirmishGameInfo->getStartingCash().countMoney() );
 }
 
 //-------------------------------------------------------------------------------------------------

@@ -29,7 +29,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "gamespy/peer/peer.h"
 
@@ -180,7 +181,7 @@ void UpdateRemoteIPList()
 void HostDirectConnectGame()
 {
 	// Init LAN API Singleton
-	DEBUG_ASSERTCRASH(TheLAN != nullptr, ("TheLAN is null!"));
+	engine::debug::invariant((TheLAN != nullptr), "TheLAN != nullptr", __FILE__, __LINE__, "TheLAN is null!");
 	if (!TheLAN)
 	{
 		TheLAN = NEW LANAPI();
@@ -221,9 +222,9 @@ void JoinDirectConnectGame()
 
 	Int ip1, ip2, ip3, ip4;
 	Int numFields = sscanf(ipstring.str(), "%d.%d.%d.%d", &ip1, &ip2, &ip3, &ip4);
-	(void)numFields; DEBUG_ASSERTCRASH(numFields == 4, ("JoinDirectConnectGame - invalid IP address format: %s", ipstring.str()));
+	(void)numFields; engine::debug::invariant((numFields == 4), "numFields == 4", __FILE__, __LINE__, "JoinDirectConnectGame - invalid IP address format: %s", ipstring.str());
 
-	DEBUG_LOG(("JoinDirectConnectGame - joining at %d.%d.%d.%d", ip1, ip2, ip3, ip4));
+	engine::debug::log_info("JoinDirectConnectGame - joining at %d.%d.%d.%d", ip1, ip2, ip3, ip4);
 
 	ipaddress = (ip1 << 24) + (ip2 << 16) + (ip3 << 8) + ip4;
 //	ipaddress = htonl(ipaddress);
@@ -300,7 +301,7 @@ void NetworkDirectConnectInit( WindowLayout *layout, void *userData )
 	TheLAN = nullptr;
 
 	if (TheLAN == nullptr) {
-//		DEBUG_ASSERTCRASH(TheLAN != nullptr, ("TheLAN is null initializing the direct connect screen."));
+//		engine::debug::invariant((TheLAN != nullptr), "TheLAN != nullptr", __FILE__, __LINE__, "TheLAN is null initializing the direct connect screen.");
 		TheLAN = NEW LANAPI();
 
 		OptionPreferences prefs;
@@ -311,7 +312,7 @@ void NetworkDirectConnectInit( WindowLayout *layout, void *userData )
 //		if (!IP)
 //		{
 			EnumeratedIP *IPlist = IPs.getAddresses();
-			DEBUG_ASSERTCRASH(IPlist, ("No IP addresses found!"));
+			engine::debug::invariant((IPlist), "IPlist", __FILE__, __LINE__, "No IP addresses found!");
 			if (!IPlist)
 			{
 				/// @todo: display error and exit lan lobby if no IPs are found

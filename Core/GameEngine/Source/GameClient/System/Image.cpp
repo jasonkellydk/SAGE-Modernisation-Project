@@ -35,7 +35,7 @@
 
 #define DEFINE_IMAGE_STATUS_NAMES
 #include "Lib/BaseType.h"
-#include "Common/Debug.h"
+
 #include "Common/INI.h"
 #include "Common/GlobalData.h"
 #include "GameClient/Image.h"

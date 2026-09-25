@@ -1,3 +1,4 @@
+#include <algorithm>
 #include "W3DDevice/GameClient/W3DRenderServices.h"
 import Graphics.Frame.Runtime;
 import Assets.Images.PixelEncoding;
@@ -53,14 +54,16 @@ import Assets.Images.PixelEncoding;
 #include <stdlib.h>
 #include "W3DDevice/GameClient/W3DAssetCatalog.h"
 #include <W3DDevice/GameClient/W3DTextureHandle.h>
-#include <WWMath/tri.h>
-#include <WWMath/colmath.h>
 #include <W3DDevice/GameClient/W3DCastQuery.h>
 #include "W3DDevice/GameClient/W3DRenderContext.h"
 #include "W3DDevice/GameClient/W3DCamera.h"
 
+import Engine.Core.Math.Plane3;
+import Engine.Core.Math.Triangle3;
+import Engine.Core.Math.OrientedBox3;
+
 #include "Common/GlobalData.h"
-#include "Common/PerfTimer.h"
+
 #include "Common/Xfer.h"
 
 #include "GameClient/TerrainVisual.h"
@@ -86,7 +89,6 @@ import Assets.Images.PixelEncoding;
 #include "W3DDevice/GameClient/W3DShadow.h"
 #include "W3DDevice/GameClient/W3DWater.h"
 #include "W3DDevice/GameClient/W3DShroud.h"
-#include "W3DDevice/GameClient/W3DPoly.h"
 #include "W3DDevice/GameClient/W3DCustomScene.h"
 
 #include "Common/UnitTimings.h" //Contains the DO_UNIT_TIMINGS define jba.
@@ -96,6 +98,7 @@ import Assets.Images.PixelEncoding;
 #include "W3DDevice/GameClient/WorldHeightMap.h"
 #include "W3DDevice/GameClient/W3DSmudge.h"
 #include "W3DDevice/GameClient/W3DSnow.h"
+import engine.debug;
 import Graphics.Diagnostics.Render;
 
 
@@ -221,7 +224,7 @@ BaseHeightMapRenderObjClass::~BaseHeightMapRenderObjClass()
 //=============================================================================
 /** Constructor. Mostly nulls out the member variables. */
 //=============================================================================
-BaseHeightMapRenderObjClass::BaseHeightMapRenderObjClass()
+BaseHeightMapRenderObjClass::BaseHeightMapRenderObjClass(engine::platform::IClockService& clock)
 {
 	m_x=0;
 	m_y=0;
@@ -249,9 +252,9 @@ BaseHeightMapRenderObjClass::BaseHeightMapRenderObjClass()
 	m_stageThreeTexture=nullptr;
 	m_destAlphaTexture=nullptr;
 	m_map=nullptr;
-	m_depthFade.X = 0.0f;
-	m_depthFade.Y = 0.0f;
-	m_depthFade.Z = 0.0f;
+	m_depthFade.x = 0.0f;
+	m_depthFade.y = 0.0f;
+	m_depthFade.z = 0.0f;
 	m_useDepthFade = false;
 	m_disableTextures = false;
 	TheTerrainRenderObject = this;
@@ -289,11 +292,11 @@ BaseHeightMapRenderObjClass::BaseHeightMapRenderObjClass()
 #endif
 #if ENABLE_CONFIGURABLE_SHROUD
 	if (TheGlobalData->m_shroudOn)
-		m_shroud = NEW W3DShroud;
+		m_shroud = NEW W3DShroud(clock);
 	else
 		m_shroud = nullptr;
 #else
-	m_shroud = NEW W3DShroud;
+	m_shroud = NEW W3DShroud(clock);
 #endif
     m_resourceRegistration = Graphics::Get_Frame_Resource_Lifecycle().Register(
         [this] { ReleaseResources(); },[this] { ReAcquireResources(); });
@@ -473,7 +476,7 @@ void BaseHeightMapRenderObjClass::ReAcquireResources()
 /** Calculates the diffuse lighting for a vertex in the terrain, taking all of the
 static lights into account as well. Returns the retained packed color value. */
 //=============================================================================
-UnsignedInt BaseHeightMapRenderObjClass::computeVertexLighting(const Vector3& position, const Vector3*light, const Vector3*normal, Graphics::SceneObjectList<W3DRenderObject>::Cursor *pLightsIterator, UnsignedByte alpha)
+UnsignedInt BaseHeightMapRenderObjClass::computeVertexLighting(const Engine::Math::Vector3& position, const Engine::Math::Vector3*light, const Engine::Math::Vector3*normal, Graphics::SceneObjectList<W3DRenderObject>::Cursor *pLightsIterator, UnsignedByte alpha)
 {
 	Real shadeR, shadeG, shadeB;
 	Real shade;
@@ -485,48 +488,50 @@ UnsignedInt BaseHeightMapRenderObjClass::computeVertexLighting(const Vector3& po
 		for (pLightsIterator->First(); !pLightsIterator->Is_Done(); pLightsIterator->Next())
 		{
 			W3DLight *pLight = (W3DLight*)pLightsIterator->Peek_Obj();
-			Vector3 lightDirection(position.X, position.Y, position.Z);
+			Engine::Math::Vector3 lightDirection(position.x, position.y, position.z);
 			Real factor = 1.0f;
 			switch(pLight->Get_Type()) {
 			case W3DLight::POINT:
 			case W3DLight::SPOT: {
-					Vector3 lightLoc = pLight->Get_Position();
+					const auto engine_light_position = pLight->Get_Position();
+					Engine::Math::Vector3 lightLoc{engine_light_position.x, engine_light_position.y, engine_light_position.z};
 					lightDirection -= lightLoc;
 					double range, midRange;
 					pLight->Get_Far_Attenuation_Range(midRange, range);
-					if (position.X < lightLoc.X-range) continue;
-					if (position.X > lightLoc.X+range) continue;
-					if (position.Y < lightLoc.Y-range) continue;
-					if (position.Y > lightLoc.Y+range) continue;
+					if (position.x < lightLoc.x-range) continue;
+					if (position.x > lightLoc.x+range) continue;
+					if (position.y < lightLoc.y-range) continue;
+					if (position.y > lightLoc.y+range) continue;
 					Real dist = lightDirection.Length();
 					if (dist >= range) continue;
 					if (midRange < 0.1) continue;
 					factor = 1.0f - (dist - midRange) / (range - midRange);
 
-					factor = WWMath::Clamp(factor,0.0f,1.0f);
+					factor = std::clamp<float>(factor,0.0f,1.0f);
 				}
 				break;
 			case W3DLight::DIRECTIONAL:
-				lightDirection = pLight->Get_Transform().Get_Z_Vector();
+				{
+					const auto direction = pLight->Get_Transform().Basis_Z();
+					lightDirection = {direction.x, direction.y, direction.z};
+				}
 				factor = 1.0;
 				break;
 			};
-			lightDirection.Normalize();
-			Vector3 lightRay(-lightDirection.X, -lightDirection.Y, -lightDirection.Z);
-			shade = Vector3::Dot_Product(lightRay, *normal);
+			lightDirection = lightDirection.Normalized_Legacy();
+			Engine::Math::Vector3 lightRay(-lightDirection.x, -lightDirection.y, -lightDirection.z);
+			shade = (lightRay).Dot(*normal);
 			shade *= factor;
-			Vector3 diffuse;
-			pLight->Get_Diffuse(&diffuse);
-			Vector3 ambient;
-			pLight->Get_Ambient(&ambient);
+			const Engine::Math::Vector3 diffuse = pLight->Get_Diffuse();
+			const Engine::Math::Vector3 ambient = pLight->Get_Ambient();
 			if (shade > 1.0) shade = 1.0;
 			if(shade < 0.0f) shade = 0.0f;
-			shadeR += shade*diffuse.X;
-			shadeG += shade*diffuse.Y;
-			shadeB += shade*diffuse.Z;
-			shadeR += factor*ambient.X;
-			shadeG += factor*ambient.Y;
-			shadeB += factor*ambient.Z;
+			shadeR += shade*diffuse.x;
+			shadeG += shade*diffuse.y;
+			shadeB += shade*diffuse.z;
+			shadeR += factor*ambient.x;
+			shadeG += factor*ambient.y;
+			shadeB += factor*ambient.z;
 
 		}
 	}
@@ -534,7 +539,7 @@ UnsignedInt BaseHeightMapRenderObjClass::computeVertexLighting(const Vector3& po
 	const RGBColor *terrainDiffuse;
 	for (Int lightIndex=0; lightIndex < TheGlobalData->m_numGlobalLights; lightIndex++)
 	{
-		shade = Vector3::Dot_Product(light[lightIndex], *normal);
+		shade = (light[lightIndex]).Dot(*normal);
 		if (shade > 1.0) shade = 1.0;
 		if(shade < 0.0f) shade = 0.0f;
 		terrainDiffuse=&TheGlobalData->m_terrainDiffuse[lightIndex];
@@ -550,13 +555,13 @@ UnsignedInt BaseHeightMapRenderObjClass::computeVertexLighting(const Vector3& po
 	if (shadeB > 1.0) shadeB = 1.0;
 	if(shadeB < 0.0f) shadeB = 0.0f;
 
-	if (m_useDepthFade && position.Z <= TheGlobalData->m_waterPositionZ)
+	if (m_useDepthFade && position.z <= TheGlobalData->m_waterPositionZ)
 	{	//height is below water level
 		//reduce lighting values based on light fall off as it travels through water.
-		float depthScale = (1.4f - position.Z)/TheGlobalData->m_waterPositionZ;
-		shadeR *= 1.0f - depthScale * (1.0f-m_depthFade.X);
-		shadeG *= 1.0f - depthScale * (1.0f-m_depthFade.Y);
-		shadeB *= 1.0f - depthScale * (1.0f-m_depthFade.Z);
+		float depthScale = (1.4f - position.z)/TheGlobalData->m_waterPositionZ;
+		shadeR *= 1.0f - depthScale * (1.0f-m_depthFade.x);
+		shadeG *= 1.0f - depthScale * (1.0f-m_depthFade.y);
+		shadeB *= 1.0f - depthScale * (1.0f-m_depthFade.z);
 	}
 
 	shadeR*=255.0f;
@@ -638,19 +643,18 @@ bool BaseHeightMapRenderObjClass::Cast_Ray(W3DRayCastQuery & raytest)
 	if (!m_map)
 		return false;	//need valid pointer to heightmap samples
 
-	TriClass tri;
 	Bool hit = false;
 	Int X,Y;
-	Vector3 normal,P0,P1,P2,P3;
-	P0.Set(FLT_MAX, FLT_MAX, FLT_MAX); // Set initial bogus value
-	P1.Set(FLT_MAX, FLT_MAX, FLT_MAX); // Set initial bogus value
+	Engine::Math::Vector3 P0,P1,P2,P3;
+	P0 = {FLT_MAX, FLT_MAX, FLT_MAX}; // Set initial bogus value
+	P1 = {FLT_MAX, FLT_MAX, FLT_MAX}; // Set initial bogus value
 	Int P0HitCount = 0;
 	Int P1HitCount = 0;
 
 	//Clip ray to extents of height map
-	AABoxClass hbox;
-	LineSegClass lineseg,lineseg2;
-	CastResultStruct	result;
+	Engine::Math::OrientedBox3 math_hbox;
+	Engine::Math::LineSegment3 lineseg,lineseg2;
+	Engine::Math::CollisionResult3	result;
 	Int startCellX = 0;
 	Int startCellY = 0;
 	Int endCellX = 0;
@@ -661,10 +665,19 @@ bool BaseHeightMapRenderObjClass::Cast_Ray(W3DRayCastQuery & raytest)
 	// The initial hit boxes are very rough and are only meant to narrow the search before the triangle intersection.
 	const Real mapMinHeight = MAP_HEIGHT_SCALE * m_map->getMinHeightValue();
 	const Real mapMaxHeight = MAP_HEIGHT_SCALE * m_map->getMaxHeightValue();
-	const Vector3 minPt(MAP_XY_FACTOR*(-overhang), MAP_XY_FACTOR*(-overhang), mapMinHeight);
-	const Vector3 maxPt(MAP_XY_FACTOR*(m_map->getXExtent()+overhang), MAP_XY_FACTOR*(m_map->getYExtent()+overhang), mapMaxHeight);
-	const MinMaxAABoxClass mmbox(minPt, maxPt);
-	hbox.Init(mmbox);
+	const Engine::Math::Vector3 min_point{MAP_XY_FACTOR*(-overhang), MAP_XY_FACTOR*(-overhang), mapMinHeight};
+	const Engine::Math::Vector3 max_point{MAP_XY_FACTOR*(m_map->getXExtent()+overhang),
+		MAP_XY_FACTOR*(m_map->getYExtent()+overhang), mapMaxHeight};
+	math_hbox = {(min_point + max_point) * 0.5f, (max_point - min_point) * 0.5f};
+	const auto clip_segment = [&](const Engine::Math::LineSegment3 &segment) {
+		const auto intersection = math_hbox.Intersect_Segment(segment.start, segment.end);
+		if (!intersection) return false;
+		result.starts_overlapping = math_hbox.Contains(segment.start);
+		result.fraction = intersection->fraction;
+		result.normal = intersection->normal;
+		result.contact_point = intersection->point;
+		return true;
+	};
 
 	lineseg=raytest.Ray;
 
@@ -672,24 +685,24 @@ bool BaseHeightMapRenderObjClass::Cast_Ray(W3DRayCastQuery & raytest)
 	for (; ; ++terrainIntersectionIteration) {
 		//find intersection point of ray and terrain bounding box
 		result.Reset();
-		result.ComputeContactPoint=true;
+		result.compute_contact_point=true;
 		Bool newP0 = false;
 		Bool newP1 = false;
 
-		if (CollisionMath::Collide(lineseg,hbox,&result))
+		if (clip_segment(lineseg))
 		{
-			newP0 = P0 != result.ContactPoint;
-			P0 = result.ContactPoint;	//make intersection point the new start of the ray.
+			newP0 = Engine::Math::Vector3{P0.x, P0.y, P0.z} != result.contact_point;
+			P0 = {result.contact_point.x, result.contact_point.y, result.contact_point.z};	//make intersection point the new start of the ray.
 			++P0HitCount;
 
 			//reverse direction of original ray and clip again to extent of heightmap
-			result.Fraction=1.0f;	//reset the result
-			result.StartBad=false;
-			lineseg2.Set(lineseg.Get_P1(),lineseg.Get_P0());	//reverse line segment
-			if (CollisionMath::Collide(lineseg2,hbox,&result))
+			result.fraction=1.0f;	//reset the result
+			result.starts_overlapping=false;
+			lineseg2 = {lineseg.end, lineseg.start};	//reverse line segment
+			if (clip_segment(lineseg2))
 			{
-				newP1 = P1 != result.ContactPoint;
-				P1 = result.ContactPoint;	//make intersection point the new end point of ray
+				newP1 = Engine::Math::Vector3{P1.x, P1.y, P1.z} != result.contact_point;
+				P1 = {result.contact_point.x, result.contact_point.y, result.contact_point.z};	//make intersection point the new end point of ray
 				++P1HitCount;
 			}
 		}
@@ -704,19 +717,19 @@ bool BaseHeightMapRenderObjClass::Cast_Ray(W3DRayCastQuery & raytest)
 
 		// Take the 2D bounding box of ray and check heights
 		// inside this box for intersection.
-		if (P0.X > P1.X) {	//flip start/end points
-			startCellX = REAL_TO_INT_FLOOR(P1.X/MAP_XY_FACTOR);
-			endCellX = REAL_TO_INT_CEIL(P0.X/MAP_XY_FACTOR);
+		if (P0.x > P1.x) {	//flip start/end points
+			startCellX = REAL_TO_INT_FLOOR(P1.x/MAP_XY_FACTOR);
+			endCellX = REAL_TO_INT_CEIL(P0.x/MAP_XY_FACTOR);
 		}	else {
-			startCellX = REAL_TO_INT_FLOOR(P0.X/MAP_XY_FACTOR);
-			endCellX = REAL_TO_INT_CEIL(P1.X/MAP_XY_FACTOR);
+			startCellX = REAL_TO_INT_FLOOR(P0.x/MAP_XY_FACTOR);
+			endCellX = REAL_TO_INT_CEIL(P1.x/MAP_XY_FACTOR);
 		}
-		if (P0.Y > P1.Y) {	//flip start/end points
-			startCellY = REAL_TO_INT_FLOOR(P1.Y/MAP_XY_FACTOR);
-			endCellY = REAL_TO_INT_CEIL(P0.Y/MAP_XY_FACTOR);
+		if (P0.y > P1.y) {	//flip start/end points
+			startCellY = REAL_TO_INT_FLOOR(P1.y/MAP_XY_FACTOR);
+			endCellY = REAL_TO_INT_CEIL(P0.y/MAP_XY_FACTOR);
 		}	else {
-			startCellY = REAL_TO_INT_FLOOR(P0.Y/MAP_XY_FACTOR);
-			endCellY = REAL_TO_INT_CEIL(P1.Y/MAP_XY_FACTOR);
+			startCellY = REAL_TO_INT_FLOOR(P0.y/MAP_XY_FACTOR);
+			endCellY = REAL_TO_INT_CEIL(P1.y/MAP_XY_FACTOR);
 		}
 
 		// Stop narrowing after the third iteration
@@ -735,13 +748,29 @@ bool BaseHeightMapRenderObjClass::Cast_Ray(W3DRayCastQuery & raytest)
 				if (maxHt<cur) maxHt = cur;
 			}
 		}
-		Vector3 minPt(MAP_XY_FACTOR*(startCellX-1), MAP_XY_FACTOR*(startCellY-1), MAP_HEIGHT_SCALE*(minHt-1));
-		Vector3 maxPt(MAP_XY_FACTOR*(endCellX+1), MAP_XY_FACTOR*(endCellY+1), MAP_HEIGHT_SCALE*(maxHt+1));
-		MinMaxAABoxClass mmbox(minPt, maxPt);
-		hbox.Init(mmbox);
+		const Engine::Math::Vector3 min_point{MAP_XY_FACTOR*(startCellX-1), MAP_XY_FACTOR*(startCellY-1), MAP_HEIGHT_SCALE*(minHt-1)};
+		const Engine::Math::Vector3 max_point{MAP_XY_FACTOR*(endCellX+1), MAP_XY_FACTOR*(endCellY+1), MAP_HEIGHT_SCALE*(maxHt+1)};
+		math_hbox = {(min_point + max_point) * 0.5f, (max_point - min_point) * 0.5f};
 	}
 
-	raytest.Result->ComputeContactPoint=true;	//tell CollisionMath that we need point.
+	raytest.Result->compute_contact_point=true;	// Request the contact point from the cast query.
+	const auto intersect_triangle = [&raytest](const Engine::Math::Vector3 &first,
+		const Engine::Math::Vector3 &second, const Engine::Math::Vector3 &third) {
+		const auto convert = [](const Engine::Math::Vector3 &point) {
+			return Engine::Math::Vector3{point.x, point.y, point.z};
+		};
+		const auto intersection = Engine::Math::Triangle3::Intersect_Segment(
+			raytest.Ray.start, raytest.Ray.end,
+			convert(first), convert(second), convert(third));
+		if (!intersection || intersection->fraction >= raytest.Result->fraction)
+			return false;
+		raytest.Result->fraction = intersection->fraction;
+		raytest.Result->normal = intersection->normal;
+		if (raytest.Result->compute_contact_point) {
+			raytest.Result->contact_point = intersection->point;
+		}
+		return true;
+	};
 
 	// Adjust indexes into the bordered height map.
 
@@ -762,49 +791,33 @@ bool BaseHeightMapRenderObjClass::Cast_Ray(W3DRayCastQuery & raytest)
 				//  0-----1
 
 				//bottom triangle first
-				P0.X=ADJUST_FROM_INDEX_TO_REAL(X);
-				P0.Y=ADJUST_FROM_INDEX_TO_REAL(Y);
-				P0.Z=MAP_HEIGHT_SCALE*(float)getClipHeight(X, Y);
+				P0.x=ADJUST_FROM_INDEX_TO_REAL(X);
+				P0.y=ADJUST_FROM_INDEX_TO_REAL(Y);
+				P0.z=MAP_HEIGHT_SCALE*(float)getClipHeight(X, Y);
 
-				P1.X=ADJUST_FROM_INDEX_TO_REAL(X+1);
-				P1.Y=ADJUST_FROM_INDEX_TO_REAL(Y);
-				P1.Z=MAP_HEIGHT_SCALE*(float)getClipHeight(X+1, Y);
+				P1.x=ADJUST_FROM_INDEX_TO_REAL(X+1);
+				P1.y=ADJUST_FROM_INDEX_TO_REAL(Y);
+				P1.z=MAP_HEIGHT_SCALE*(float)getClipHeight(X+1, Y);
 
-				P2.X=ADJUST_FROM_INDEX_TO_REAL(X+1);
-				P2.Y=ADJUST_FROM_INDEX_TO_REAL(Y+1);
-				P2.Z=MAP_HEIGHT_SCALE*(float)getClipHeight(X+1, Y+1);
+				P2.x=ADJUST_FROM_INDEX_TO_REAL(X+1);
+				P2.y=ADJUST_FROM_INDEX_TO_REAL(Y+1);
+				P2.z=MAP_HEIGHT_SCALE*(float)getClipHeight(X+1, Y+1);
 
-				P3.X=ADJUST_FROM_INDEX_TO_REAL(X);
-				P3.Y=ADJUST_FROM_INDEX_TO_REAL(Y+1);
-				P3.Z=MAP_HEIGHT_SCALE*(float)getClipHeight(X, Y+1);
+				P3.x=ADJUST_FROM_INDEX_TO_REAL(X);
+				P3.y=ADJUST_FROM_INDEX_TO_REAL(Y+1);
+				P3.z=MAP_HEIGHT_SCALE*(float)getClipHeight(X, Y+1);
 
 
-				tri.V[0] = &P0;
-				tri.V[1] = &P1;
-				tri.V[2] = &P2;
+				hit = hit || intersect_triangle(P0, P1, P2);
 
-				tri.N = &normal;
-
-				tri.Compute_Normal();
-
-				hit = hit || (Bool)CollisionMath::Collide(raytest.Ray, tri, raytest.Result);
-
-				if (raytest.Result->StartBad)
+				if (raytest.Result->starts_overlapping)
 					return true;
 
 				//top triangle
-				tri.V[0] = &P2;
-				tri.V[1] = &P3;
-				tri.V[2] = &P0;
-
-				tri.N = &normal;
-
-				tri.Compute_Normal();
-
-				hit = hit || (Bool)CollisionMath::Collide(raytest.Ray, tri, raytest.Result);
+				hit = hit || intersect_triangle(P2, P3, P0);
 
 				if (hit)
-					raytest.Result->SurfaceType = 0;	// Terrain uses the default collision surface.
+					raytest.Result->surface_type = 0;	// Terrain uses the default collision surface.
 			}
 			// Don't break.  It is possible to intersect 2 triangles, and the second is closer. if (hit) break;
 		}
@@ -902,7 +915,7 @@ Real BaseHeightMapRenderObjClass::getHeightMapHeight(Real x, Real y, Coord3D* no
 		height = (p1 + fy*(p2-p1) + (1.0f-fx)*(p0-p1)) * MAP_HEIGHT_SCALE;
 	}
 
-//  DEBUG_ASSERTCRASH( height < 30, ("SOMEBODY THINKS THE CLIENT HEIGHTMAP IS GOOD ENOUGH FOR LOGIC SAMPLING."));
+//  engine::debug::invariant((height < 30), "height < 30", __FILE__, __LINE__, "SOMEBODY THINKS THE CLIENT HEIGHTMAP IS GOOD ENOUGH FOR LOGIC SAMPLING.");
 
 	if (normal) {
 		//		9		  8
@@ -954,13 +967,13 @@ Real BaseHeightMapRenderObjClass::getHeightMapHeight(Real x, Real y, Coord3D* no
 
 
 
-			Vector3 l2r, n2f, normalAtTexel;
-			l2r.Set(2*MAP_XY_FACTOR/MAP_HEIGHT_SCALE, 0, deltaZ_X);
-			n2f.Set(0, 2*MAP_XY_FACTOR/MAP_HEIGHT_SCALE, deltaZ_Y);
-			Vector3::Normalized_Cross_Product(l2r,n2f, &normalAtTexel);
-			normal->x = normalAtTexel.X;
-			normal->y = normalAtTexel.Y;
-			normal->z = normalAtTexel.Z;
+			Engine::Math::Vector3 l2r, n2f, normalAtTexel;
+			l2r = {2*MAP_XY_FACTOR/MAP_HEIGHT_SCALE, 0, deltaZ_X};
+			n2f = {0, 2*MAP_XY_FACTOR/MAP_HEIGHT_SCALE, deltaZ_Y};
+			(normalAtTexel) = (l2r).Cross(n2f).Normalized_Legacy();
+			normal->x = normalAtTexel.x;
+			normal->y = normalAtTexel.y;
+			normal->z = normalAtTexel.z;
 
 	}
 
@@ -1296,44 +1309,43 @@ Bool BaseHeightMapRenderObjClass::evaluateAsVisibleCliff(Int xIndex, Int yIndex,
 }
 
 //=============================================================================
-// BaseHeightMapRenderObjClass::Get_Obj_Space_Bounding_Sphere
+// BaseHeightMapRenderObjClass::Get_Local_Bounding_Sphere
 //=============================================================================
 /** WW3D method that returns object bounding sphere used in frustum culling*/
 //=============================================================================
-void BaseHeightMapRenderObjClass::Get_Obj_Space_Bounding_Sphere(SphereClass & sphere) const
+void BaseHeightMapRenderObjClass::Get_Local_Bounding_Sphere(Engine::Math::Sphere3 & sphere) const
 {
 	Int x = 0; Int y = 0;
 	if (m_map) {
 		x = m_map->getXExtent();
 		y = m_map->getYExtent();
 	}
-	Vector3	ObjSpaceCenter((float)x*0.5f*MAP_XY_FACTOR,(float)y*0.5f*MAP_XY_FACTOR,(float)m_minHeight+(m_maxHeight-m_minHeight)*0.5f);
+	Engine::Math::Vector3 ObjSpaceCenter{static_cast<float>(x)*0.5f*MAP_XY_FACTOR,
+		static_cast<float>(y)*0.5f*MAP_XY_FACTOR, static_cast<float>(m_minHeight)+(m_maxHeight-m_minHeight)*0.5f};
 	float length = ObjSpaceCenter.Length();
 
 	if (m_map) {
-		ObjSpaceCenter.X += m_map->getDrawOrgX()*MAP_XY_FACTOR;
-		ObjSpaceCenter.Y += m_map->getDrawOrgY()*MAP_XY_FACTOR;
+		ObjSpaceCenter.x += m_map->getDrawOrgX()*MAP_XY_FACTOR;
+		ObjSpaceCenter.y += m_map->getDrawOrgY()*MAP_XY_FACTOR;
 	}
-	sphere.Init(ObjSpaceCenter, length);
+	sphere = {ObjSpaceCenter, length};
 }
 
 //=============================================================================
-// BaseHeightMapRenderObjClass::Get_Obj_Space_Bounding_Box
+// BaseHeightMapRenderObjClass::Get_Local_Bounds
 //=============================================================================
 /** WW3D method that returns object bounding box used in collision detection*/
 //=============================================================================
-void BaseHeightMapRenderObjClass::Get_Obj_Space_Bounding_Box(AABoxClass & box) const
+void BaseHeightMapRenderObjClass::Get_Local_Bounds(Engine::Math::AxisAlignedBox3 & box) const
 {
 	Int x = 0; Int y = 0;
 	if (m_map) {
 		x = m_map->getXExtent();
 		y = m_map->getYExtent();
 	}
-	Vector3	minPt(0,0,m_minHeight);
-	Vector3	maxPt((float)x*MAP_XY_FACTOR,(float)y*MAP_XY_FACTOR,(float)m_maxHeight);
-	MinMaxAABoxClass minMaxBox(minPt, maxPt);
-
-	box.Init(minMaxBox);
+	box = {{0, 0, static_cast<float>(m_minHeight)},
+		{static_cast<float>(x)*MAP_XY_FACTOR, static_cast<float>(y)*MAP_XY_FACTOR,
+			static_cast<float>(m_maxHeight)}};
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -1347,27 +1359,32 @@ void BaseHeightMapRenderObjClass::Get_Obj_Space_Bounding_Box(AABoxClass & box) c
 	a volume enclosing things that can float above terrain.
  */
 //-------------------------------------------------------------------------------------------------
-Bool BaseHeightMapRenderObjClass::getMaximumVisibleBox(const FrustumClass &frustum, AABoxClass *box, Bool ignoreMaxHeight)
+Bool BaseHeightMapRenderObjClass::getMaximumVisibleBox(
+	const Graphics::CameraFrustum &frustum, Engine::Math::AxisAlignedBox3 *box, Bool ignoreMaxHeight)
 {
 	//create a plane from the lowest point on the terrain
-	PlaneClass	groundPlane(Vector3(0,0,1), m_minHeight);
+	const auto groundPlane = Engine::Math::Plane3::From_Normal_Distance({0.0f, 0.0f, 1.0f}, m_minHeight);
+	if (!groundPlane) return FALSE;
 
 	//clip each side of the view frustum to ground plane
-	float clipFraction;
-	Vector3 ClippedCorners[8];
-	ClippedCorners[0]=frustum.Corners[0];
-	for (Int i=0; i<4; i++)
-	{	ClippedCorners[i]=frustum.Corners[i];
-		if (groundPlane.Compute_Intersection(frustum.Corners[i],frustum.Corners[i+4],&clipFraction) == PlaneClass::INSIDE_SEGMENT)
-		{	//edge intersects the terrain
-			ClippedCorners[i+4]=frustum.Corners[i]+(frustum.Corners[i+4]-frustum.Corners[i])*clipFraction;
-		}
-		else
-			ClippedCorners[i+4]=frustum.Corners[i+4];
+	std::array<Engine::Math::Vector3, 8> clipped_corners{};
+	for (std::size_t i = 0; i < 4; ++i) {
+		const auto &source_start = frustum.Corner(i);
+		const auto &source_end = frustum.Corner(i + 4);
+		const Engine::Math::Vector3 start{source_start.x, source_start.y, source_start.z};
+		const Engine::Math::Vector3 end{source_end.x, source_end.y, source_end.z};
+		clipped_corners[i] = start;
+		const auto fraction = groundPlane->Intersect_Segment(start, end);
+		const auto clipped = fraction ? start + (end - start) * *fraction : end;
+		clipped_corners[i + 4] = clipped;
 	}
 
-	if (box)
-		box->Init(ClippedCorners,8);
+	if (box) {
+		Engine::Math::AxisAlignedBox3 bounds{clipped_corners.front(), clipped_corners.front()};
+		for (std::size_t index = 1; index < clipped_corners.size(); ++index)
+			bounds.Include(clipped_corners[index]);
+		*box = bounds;
+	}
 
 	return TRUE;
 }
@@ -1834,9 +1851,9 @@ void BaseHeightMapRenderObjClass::clearAllScorches()
 //=============================================================================
 /** Adds a scorch mark. */
 //=============================================================================
-void BaseHeightMapRenderObjClass::addScorch(Vector3 location, Real radius, Scorches type)
+void BaseHeightMapRenderObjClass::addScorch(Engine::Math::Vector3 location, Real radius, Scorches type)
 {
-	m_scorches->addScorch(location, radius, type);
+	m_scorches->addScorch({location.x, location.y, location.z}, radius, type);
 }
 
 //=============================================================================
@@ -1845,9 +1862,9 @@ void BaseHeightMapRenderObjClass::addScorch(Vector3 location, Real radius, Scorc
 /** TheSuperHackers @feature stephanmeesters 13/08/2026 Adds a permanent scorch mark loaded from the map. Static
  * scorch marks are managed separately so adding gameplay scorch marks cannot evict them. */
 //=============================================================================
-void BaseHeightMapRenderObjClass::addStaticScorch(Vector3 location, Real radius, Scorches type)
+void BaseHeightMapRenderObjClass::addStaticScorch(Engine::Math::Vector3 location, Real radius, Scorches type)
 {
-	m_staticScorches->addScorch(location, radius, type);
+	m_staticScorches->addScorch({location.x, location.y, location.z}, radius, type);
 }
 
 //=============================================================================
@@ -1869,7 +1886,7 @@ Int BaseHeightMapRenderObjClass::getStaticDiffuse(Int x, Int y)
 		return(0);
 	}
 
-	Vector3 l2r,n2f,normalAtTexel;
+	Engine::Math::Vector3 l2r,n2f,normalAtTexel;
 	Int vn0,un0,vp1,up1;
 	constexpr const Int cellOffset = 1;
 
@@ -1885,22 +1902,22 @@ Int BaseHeightMapRenderObjClass::getStaticDiffuse(Int x, Int y)
 	if (up1 >= m_map->getXExtent())
 		up1=m_map->getXExtent()-1;
 
-	Vector3 lightRay[MAX_GLOBAL_LIGHTS];
+	Engine::Math::Vector3 lightRay[MAX_GLOBAL_LIGHTS];
 	const Coord3D *lightPos;
 
 	for (Int lightIndex=0; lightIndex < TheGlobalData->m_numGlobalLights; lightIndex++)
 	{
 		lightPos=&TheGlobalData->m_terrainLightPos[lightIndex];
-		lightRay[lightIndex].Set(-lightPos->x,-lightPos->y,	-lightPos->z);
+		lightRay[lightIndex] = {-lightPos->x,-lightPos->y,	-lightPos->z};
 	}
 
 	//top-left sample
-	l2r.Set(2*MAP_XY_FACTOR,0,MAP_HEIGHT_SCALE*(m_map->getHeight(up1, y) - m_map->getHeight(un0, y)));
-	n2f.Set(0,2*MAP_XY_FACTOR,MAP_HEIGHT_SCALE*(m_map->getHeight(x, vp1) - m_map->getHeight(x, vn0)));
+	l2r = {2*MAP_XY_FACTOR,0,MAP_HEIGHT_SCALE*(m_map->getHeight(up1, y) - m_map->getHeight(un0, y))};
+	n2f = {0,2*MAP_XY_FACTOR,MAP_HEIGHT_SCALE*(m_map->getHeight(x, vp1) - m_map->getHeight(x, vn0))};
 
-	Vector3::Normalized_Cross_Product(l2r,n2f, &normalAtTexel);
+	(normalAtTexel) = (l2r).Cross(n2f).Normalized_Legacy();
 
-    const Vector3 position(ADJUST_FROM_INDEX_TO_REAL(x),ADJUST_FROM_INDEX_TO_REAL(y),
+    const Engine::Math::Vector3 position(ADJUST_FROM_INDEX_TO_REAL(x),ADJUST_FROM_INDEX_TO_REAL(y),
         static_cast<float>(m_map->getHeight(x,y))*MAP_HEIGHT_SCALE);
     UnsignedInt diffuse;
 
@@ -2060,7 +2077,7 @@ void BaseHeightMapRenderObjClass::notifyShroudChanged()
 //=============================================================================
 /** Adds a terrainBib to the bib buffer.*/
 //=============================================================================
-void BaseHeightMapRenderObjClass::addTerrainBib(Vector3 corners[4],
+void BaseHeightMapRenderObjClass::addTerrainBib(Engine::Math::Vector3 corners[4],
 																						ObjectID id, Bool highlight)
 {
 	if (m_bibBuffer)
@@ -2072,7 +2089,7 @@ void BaseHeightMapRenderObjClass::addTerrainBib(Vector3 corners[4],
 //=============================================================================
 /** Adds a terrainBib to the bib buffer.*/
 //=============================================================================
-void BaseHeightMapRenderObjClass::addTerrainBibDrawable(Vector3 corners[4],
+void BaseHeightMapRenderObjClass::addTerrainBibDrawable(Engine::Math::Vector3 corners[4],
 																						DrawableID id, Bool highlight)
 {
 	if (m_bibBuffer)
@@ -2173,7 +2190,7 @@ rendered portion of the terrain.  Only a 96x96 section is rendered at any time,
 even though maps can be up to 1024x1024.  This function determines which subset
 is rendered. */
 //=============================================================================
-void BaseHeightMapRenderObjClass::updateCenter(W3DCamera *camera, const Vector3 *cameraPivot, Graphics::SceneObjectList<W3DRenderObject>::Cursor *pLightsIterator)
+void BaseHeightMapRenderObjClass::updateCenter(W3DCamera *camera, const Engine::Math::Vector3 *cameraPivot, Graphics::SceneObjectList<W3DRenderObject>::Cursor *pLightsIterator)
 {
 	if (m_map==nullptr) {
 		return;
@@ -2209,8 +2226,6 @@ void BaseHeightMapRenderObjClass::updateCenter(W3DCamera *camera, const Vector3 
 //=============================================================================
 /** Renders (draws) the terrain. */
 //=============================================================================
-//DECLARE_PERF_TIMER(Terrain_Render)
-
 void BaseHeightMapRenderObjClass::Render(W3DRenderContext & rinfo)
 {
 

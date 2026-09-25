@@ -31,7 +31,8 @@
 //-----------------------------------------------------------------------------
 // SYSTEM INCLUDES ////////////////////////////////////////////////////////////
 //-----------------------------------------------------------------------------
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 //-----------------------------------------------------------------------------
 // USER INCLUDES //////////////////////////////////////////////////////////////
@@ -892,10 +893,10 @@ Bool LadderPreferences::loadProfile( Int profileID )
 		AsciiString ladName = it->first;
 		AsciiString ladData = it->second;
 
-		DEBUG_LOG(("Looking at [%s] = [%s]", ladName.str(), ladData.str()));
+		engine::debug::log_info("Looking at [%s] = [%s]", ladName.str(), ladData.str());
 
 		const char *ptr = ladName.reverseFind(':');
-		DEBUG_ASSERTCRASH(ptr, ("Did not find ':' in ladder name - skipping"));
+		engine::debug::invariant((ptr), "ptr", __FILE__, __LINE__, "Did not find ':' in ladder name - skipping");
 		if (!ptr)
 			continue;
 
@@ -904,7 +905,7 @@ Bool LadderPreferences::loadProfile( Int profileID )
 		p.address = QuotedPrintableToAsciiString(ladName);
 
 		ptr = ladData.reverseFind(':');
-		DEBUG_ASSERTCRASH(ptr, ("Did not find ':' in ladder data - skipping"));
+		engine::debug::invariant((ptr), "ptr", __FILE__, __LINE__, "Did not find ':' in ladder data - skipping");
 		if (!ptr)
 			continue;
 
