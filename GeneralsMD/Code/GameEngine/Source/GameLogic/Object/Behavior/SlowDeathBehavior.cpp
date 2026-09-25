@@ -31,7 +31,9 @@
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 #include "PreRTS.h"
 import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
+import Engine.Core.Math.AffineTransform3;
 #define DEFINE_SLOWDEATHPHASE_NAMES
+#include "Common/LegacyTransformMath.h"
 #include "Common/GameLOD.h"
 #include "Common/INI.h"
 #include "Common/RandomValue.h"
@@ -193,16 +195,15 @@ static void calcRandomForce(Real minMag, Real maxMag, Real minPitch, Real maxPit
 	Real pitch = GameLogicRandomValueReal(minPitch, maxPitch);
 	Real mag = GameLogicRandomValueReal(minMag, maxMag);
 
-	Matrix3D mtx(1);
-	mtx.Scale(mag);
-	mtx.Rotate_Z(angle);
-	mtx.Rotate_Y(-pitch);
+	Engine::Math::AffineTransform3 transform = Engine::Math::AffineTransform3::Identity();
+	Legacy_Scale(transform, mag);
+	Legacy_Rotate_Z(transform, angle);
+	Legacy_Rotate_Y(transform, -pitch);
 
-	Vector3 v = mtx.Get_X_Vector();
-
-	force.x = v.X;
-	force.y = v.Y;
-	force.z = v.Z;
+	const Engine::Math::Vector3 forceVector = transform.Basis_X();
+	force.x = forceVector.x;
+	force.y = forceVector.y;
+	force.z = forceVector.z;
 }
 
 //-------------------------------------------------------------------------------------------------

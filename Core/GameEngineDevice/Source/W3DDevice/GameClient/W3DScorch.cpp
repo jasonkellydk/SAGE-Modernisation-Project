@@ -79,7 +79,7 @@ void W3DScorch::invalidateTexture()
 	}
 }
 
-void W3DScorch::addScorch(Vector3 location, Real radius, Scorches type)
+void W3DScorch::addScorch(Engine::Math::Vector3 location, Real radius, Scorches type)
 {
 	TScorch scorch;
 	scorch.location = location;
@@ -109,8 +109,8 @@ Bool W3DScorch::isDuplicate(const TScorch& scorch) const
 	for (std::deque<TScorch>::const_iterator it = m_scorches.begin(); it != m_scorches.end(); ++it)
 	{
 		if (it->scorchType == scorch.scorchType &&
-		    fabsf(scorch.location.X - it->location.X) < limit &&
-		    fabsf(scorch.location.Y - it->location.Y) < limit &&
+		    fabsf(scorch.location.x - it->location.x) < limit &&
+		    fabsf(scorch.location.y - it->location.y) < limit &&
 		    fabsf(scorch.radius - it->radius) < limit)
 		{
 			return true;
@@ -145,7 +145,7 @@ void W3DScorch::updateScorches(WorldHeightMap& map)
     const std::array<float, 4> color{((packed >> 16) & 255) / 255.0f,
         ((packed >> 8) & 255) / 255.0f, (packed & 255) / 255.0f, 1};
     for (auto it = m_scorches.rbegin(); it != m_scorches.rend(); ++it) {
-        if (!geometry.Append({{it->location.X, it->location.Y}, it->radius, unsigned(it->scorchType)}, grid, color,
+        if (!geometry.Append({{it->location.x, it->location.y}, it->radius, unsigned(it->scorchType)}, grid, color,
             [&](int x, int y) { return map.getDataPtr()[x + y * map.getXExtent()] * MAP_HEIGHT_SCALE; },
             [&](int x, int y) { return map.getFlipState(x, y); })) break;
     }
@@ -160,4 +160,3 @@ void W3DScorch::updateScorches(WorldHeightMap& map)
     m_curNumScorchIndices = static_cast<Int>(geometry.indices.size());
     m_needBufferRecompute = false;
 }
-

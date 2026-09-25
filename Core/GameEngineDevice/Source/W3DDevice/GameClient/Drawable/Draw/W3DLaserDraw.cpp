@@ -30,6 +30,8 @@
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 import Graphics.Materials.State;
+import Engine.Core.Math.Vector2;
+import Engine.Core.Math.Vector3;
 #include <stdlib.h>
 
 
@@ -50,7 +52,6 @@ import Graphics.Materials.State;
 #include "W3DDevice/GameClient/W3DRenderContext.h"
 #include "W3DDevice/GameClient/W3DCamera.h"
 #include "W3DDevice/GameClient/W3DSegmentedLineRenderObject.h"
-#include "WWMath/vector3.h"
 #include "W3DDevice/GameClient/W3DAssetCatalog.h"
 import engine.debug;
 
@@ -116,8 +117,6 @@ W3DLaserDraw::W3DLaserDraw( Thing *thing, const ModuleData* moduleData ) :
 	m_textureAspectRatio(1.0f),
 	m_selfDirty(TRUE)
 {
-	Vector3 dummyPos1( 0.0f, 0.0f, 0.0f );
-	Vector3 dummyPos2( 1.0f, 1.0f, 1.0f );
 	Int i;
 
 	const W3DLaserDrawModuleData *data = getW3DLaserDrawModuleData();
@@ -192,8 +191,8 @@ W3DLaserDraw::W3DLaserDraw( Thing *thing, const ModuleData* moduleData ) :
 				line->Set_Texture( m_texture );
 				line->Set_Shader( Graphics::MaterialState::Additive() );	//pick the alpha blending mode you want - see shader.h for others.
 				line->Set_Width( width );
-				line->Set_Color( Vector3( red, green, blue ) );
-				line->Set_UV_Offset_Rate( Vector2(0.0f, data->m_scrollRate) );	//amount to scroll texture on each draw
+				line->Set_Color( Engine::Math::Vector3{red, green, blue} );
+				line->Set_UV_Offset_Rate( Engine::Math::Vector2{0.0f, data->m_scrollRate} );	//amount to scroll texture on each draw
 				if( m_texture )
 				{
 					line->Set_Texture_Mapping_Mode(Graphics::RibbonTextureMapping::Tiled);	//this tiles the texture across the line
@@ -254,7 +253,7 @@ Real W3DLaserDraw::getLaserTemplateWidth() const
 
 //-------------------------------------------------------------------------------------------------
 //-------------------------------------------------------------------------------------------------
-void W3DLaserDraw::doDrawModule(const Matrix3D* transformMtx)
+void W3DLaserDraw::doDrawModule(const Engine::Math::AffineTransform3* transform)
 {
 	//UnsignedInt currentFrame = TheGameClient->getFrame();
 	const W3DLaserDrawModuleData *data = getW3DLaserDrawModuleData();
@@ -275,7 +274,7 @@ void W3DLaserDraw::doDrawModule(const Matrix3D* transformMtx)
 		update->setDirty(false);
 		m_selfDirty = false;
 
-		Vector3 laserPoints[ 2 ];
+		Engine::Math::Vector3 laserPoints[2];
 		Real innerRed, innerGreen, innerBlue, innerAlpha, outerRed, outerGreen, outerBlue, outerAlpha;
 		GameGetColorComponentsReal( data->m_innerColor, &innerRed, &innerGreen, &innerBlue, &innerAlpha );
 		GameGetColorComponentsReal( data->m_outerColor, &outerRed, &outerGreen, &outerBlue, &outerAlpha );
@@ -365,17 +364,17 @@ void W3DLaserDraw::doDrawModule(const Matrix3D* transformMtx)
 				segmentEnd.z += height;
 
 				//This makes the laser skim the ground rather than penetrate it!
-				laserPoints[ 0 ].Set( segmentStart.x, segmentStart.y,
-					MAX( segmentStart.z, 2.0f + TheTerrainLogic->getGroundHeight(segmentStart.x, segmentStart.y) ) );
-				laserPoints[ 1 ].Set( segmentEnd.x, segmentEnd.y,
-					MAX( segmentEnd.z, 2.0f + TheTerrainLogic->getGroundHeight(segmentEnd.x, segmentEnd.y) ) );
+				laserPoints[0] = {segmentStart.x, segmentStart.y,
+					MAX(segmentStart.z, 2.0f + TheTerrainLogic->getGroundHeight(segmentStart.x, segmentStart.y))};
+				laserPoints[1] = {segmentEnd.x, segmentEnd.y,
+					MAX(segmentEnd.z, 2.0f + TheTerrainLogic->getGroundHeight(segmentEnd.x, segmentEnd.y))};
 
 			}
 			else
 			{
 				//No arc -- way simpler!
-				laserPoints[ 0 ].Set( update->getStartPos()->x, update->getStartPos()->y, update->getStartPos()->z );
-				laserPoints[ 1 ].Set( update->getEndPos()->x, update->getEndPos()->y, update->getEndPos()->z );
+				laserPoints[0] = {update->getStartPos()->x, update->getStartPos()->y, update->getStartPos()->z};
+				laserPoints[1] = {update->getEndPos()->x, update->getEndPos()->y, update->getEndPos()->z};
 			}
 
 			for( Int i = data->m_numBeams - 1; i >= 0; i-- )
@@ -412,8 +411,7 @@ void W3DLaserDraw::doDrawModule(const Matrix3D* transformMtx)
 				if( m_texture && data->m_tile )
 				{
 					//Calculate the length of the line.
-					Vector3 lineVector;
-					Vector3::Subtract( laserPoints[1], laserPoints[0], &lineVector );
+					const Engine::Math::Vector3 lineVector = laserPoints[1] - laserPoints[0];
 					Real length = lineVector.Length();
 
 					//Adjust tile factor so texture is NOT stretched but tiled equally in both width and length.
@@ -424,9 +422,9 @@ void W3DLaserDraw::doDrawModule(const Matrix3D* transformMtx)
 				}
 
 				m_line3D[ index ]->Set_Width( width );
-				m_line3D[ index ]->Set_Points( 2, &laserPoints[0] );
+				m_line3D[index]->Set_Points(2, laserPoints);
 
-				m_line3D[index]->Set_Color(Vector3(red,green,blue));
+				m_line3D[index]->Set_Color(Engine::Math::Vector3{red, green, blue});
 				m_line3D[index]->Set_Visible(width > 0.0f && alpha > 0.0f);
 			}
 		}

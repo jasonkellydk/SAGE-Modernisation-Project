@@ -73,8 +73,7 @@ void WaterSkyboxSystem::Render(W3DRenderContext &rinfo, float x, float y,
 	if (m_state == nullptr || m_state->skybox == nullptr)
 		return;
 
-	Vector3 position(x, y, z);
-	m_state->skybox->Set_Position(position);
+	m_state->skybox->Set_Position({x, y, z});
 	m_state->graphics.Render(*m_state->skybox,rinfo,{},nullptr,true);
 }
 

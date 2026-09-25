@@ -36,6 +36,9 @@
 #include "WW3D2/PartLdr.h"
 #include "WW3D2/PartEmt.h"
 
+import Engine.Core.Math.Vector3;
+import Engine.Core.Math.RandomVector3Generator;
+
 
 /////////////////////////////////////////////////////////////////////
 //
@@ -80,19 +83,21 @@ class EmitterInstanceListClass : public ParticleEmitterDefClass
 		//
 		//	Randomizer accessors
 		//
-		virtual void			Set_Velocity_Random (Vector3Randomizer *randomizer);
+		virtual void			Set_Velocity_Random (Engine::Math::RandomVector3Generator *randomizer);
 
 		//
 		//	Keyframe accessors
 		//
-		virtual void			Set_Color_Keyframes (ParticlePropertyStruct<Vector3> &keyframes);
+		virtual void			Set_Color_Keyframes (ParticlePropertyStruct<Vector3> &keyframes) override;
+		void					Set_Color_Keyframes (ParticlePropertyStruct<Engine::Math::Vector3> &keyframes);
 		virtual void			Set_Opacity_Keyframes (ParticlePropertyStruct<float> &keyframes);
 		virtual void			Set_Size_Keyframes (ParticlePropertyStruct<float> &keyframes);
 		virtual void			Set_Rotation_Keyframes (ParticlePropertyStruct<float> &keyframes, float orient_rnd);
 		virtual void			Set_Frame_Keyframes (ParticlePropertyStruct<float> &keyframes);
 		virtual void			Set_Blur_Time_Keyframes (ParticlePropertyStruct<float> &keyframes);
 
-		virtual void			Get_Color_Keyframes (ParticlePropertyStruct<Vector3> &keyframes) const;
+		virtual void			Get_Color_Keyframes (ParticlePropertyStruct<Vector3> &keyframes) const override;
+		void					Get_Color_Keyframes (ParticlePropertyStruct<Engine::Math::Vector3> &keyframes) const;
 		virtual void			Get_Opacity_Keyframes (ParticlePropertyStruct<float> &keyframes) const;
 		virtual void			Get_Size_Keyframes (ParticlePropertyStruct<float> &keyframes) const;
 

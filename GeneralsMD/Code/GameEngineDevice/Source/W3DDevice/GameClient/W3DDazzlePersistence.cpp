@@ -17,6 +17,7 @@
 */
 #include "W3DDevice/GameClient/W3DDazzleRenderObject.h"
 #include "W3DDevice/GameClient/W3DAssetCatalog.h"
+import Engine.Core.Math.AffineTransform3;
 #include "WWLib/chunkio.h"
 #include "WWSaveLoad/persistfactory.h"
 #include "WWSaveLoad/saveloadids.h"
@@ -55,7 +56,7 @@ uint32 DazzlePersistFactory::Chunk_ID() const
 PersistClass *	DazzlePersistFactory::Load(ChunkLoadClass & cload) const
 {
 	W3DDazzleRenderObject * old_obj = nullptr;
-	Matrix3D tm(1);
+	Engine::Math::AffineTransform3 tm = Engine::Math::AffineTransform3::Identity();
 	char dazzle_type[256];
 	dazzle_type[0] = 0;
 
@@ -110,7 +111,7 @@ void DazzlePersistFactory::Save(ChunkSaveClass & csave,PersistClass * obj)	const
 	W3DDazzleRenderObject * robj = (W3DDazzleRenderObject *)obj;
 	unsigned int dazzle_type = robj->Get_Dazzle_Type();
 	const char * dazzle_type_name = W3DDazzleRenderObject::Get_Type_Name(dazzle_type);
-	Matrix3D tm = robj->Get_Transform();
+	Engine::Math::AffineTransform3 tm = robj->Get_Transform();
 
 	csave.Begin_Chunk(DAZZLEFACTORY_CHUNKID_VARIABLES);
 	WRITE_MICRO_CHUNK(csave,DAZZLEFACTORY_VARIABLE_OBJPOINTER,robj);
@@ -124,4 +125,3 @@ const PersistFactoryClass & W3DDazzleRenderObject::Get_Factory () const
 {
 	return _DazzleFactory;
 }
-

@@ -33,10 +33,10 @@
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 #include "Common/DrawModule.h"
 #include "GameLogic/Module/ProjectileStreamUpdate.h" // I am the draw module for this update.  Very tight.
+import Engine.Core.Math.Vector3;
 
 class W3DSegmentedLineRenderObject;
 class W3DTextureHandle;
-class Vector3;
 
 //-------------------------------------------------------------------------------------------------
 class W3DProjectileStreamDrawModuleData : public ModuleData
@@ -66,16 +66,16 @@ public:
 	W3DProjectileStreamDraw( Thing *thing, const ModuleData* moduleData );
 	// virtual destructor prototype provided by memory pool declaration
 
-	virtual void doDrawModule(const Matrix3D* transformMtx) override;
+	virtual void doDrawModule(const Engine::Math::AffineTransform3* transform) override;
 	virtual void releaseShadows() override {};	///< we don't care about preserving temporary shadows.
 	virtual void allocateShadows() override {};	///< we don't care about preserving temporary shadows.
 	virtual void setShadowsEnabled(Bool ) override { }
 	virtual void setFullyObscuredByShroud(Bool) override;
-	virtual void reactToTransformChange(const Matrix3D* oldMtx, const Coord3D* oldPos, Real oldAngle) override { }
+	virtual void reactToTransformChange(const Coord3D* oldPos, Real oldAngle) override { }
 	virtual void reactToGeometryChange() override { }
 
 protected:
-	void makeOrUpdateLine(Vector3 *points, UnsignedInt pointCount, Int lineIndex);
+	void makeOrUpdateLine(Engine::Math::Vector3 *points, UnsignedInt pointCount, Int lineIndex);
 	void removeLines(Int firstUnusedLine);
 
 	W3DTextureHandle *m_texture;

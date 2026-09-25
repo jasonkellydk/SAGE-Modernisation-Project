@@ -36,6 +36,7 @@
 #include "GameLogic/Module/BehaviorModule.h"
 #include "GameLogic/Module/CollideModule.h"
 #include "GameLogic/Module/ContainModule.h"
+import Engine.Core.Math.AffineTransform3;
 #include "GameLogic/Module/UpdateModule.h"
 #include "GameLogic/Module/DieModule.h"
 #include "GameLogic/Module/DamageModule.h"
@@ -276,7 +277,7 @@ private:
 /// @todo srj -- move this to a lazily-allocated subobject
 	enum { MAX_FIRE_POINTS = 32 };
 	ModelConditionFlags	m_conditionState;				///< The Drawables current behavior state
-	Matrix3D						m_firePoints[ MAX_FIRE_POINTS ];
+	Engine::Math::AffineTransform3 m_firePoints[MAX_FIRE_POINTS];
 	Int									m_firePointStart;												///< start firepoint index to use when building becomes occupied
 	Int									m_firePointNext;												///< next index to place objects at
 	Int									m_firePointSize;												///< how many entries in m_firePoint are valid

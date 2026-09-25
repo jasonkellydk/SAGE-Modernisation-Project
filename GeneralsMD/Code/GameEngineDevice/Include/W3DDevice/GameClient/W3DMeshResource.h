@@ -24,10 +24,7 @@ import Graphics.Scene.Models.Materials;
 
 import Graphics.Scene.Models.MeshDrawing;
 
-#include "WWMath/vector2.h"
-#include "WWMath/vector3.h"
-#include "WWMath/vector4.h"
-#include "WWMath/Vector3i.h"
+import Engine.Core.Math.Vector2;
 #include "WWLib/sharebuf.h"
 import Graphics.Materials.State;
 
@@ -35,7 +32,6 @@ import Graphics.Materials.MeshMaterial;
 import Graphics.Scene.Props.Material;
 #include "WWLib/ref_ptr.h"
 #include "WWLib/bittype.h"
-#include "WWMath/colmath.h"
 #include "WWLib/simplevec.h"
 #include "WWLib/wwstring.h"
 #include "W3DDevice/GameClient/W3DRenderContext.h"
@@ -45,10 +41,6 @@ import Graphics.Scene.Models.MeshMaterialBindings;
 import Graphics.Scene.Models.MaterialSlots;
 
 class W3DRenderContext;
-class AABoxClass;
-class OBBoxClass;
-class FrustumClass;
-class SphereClass;
 class ChunkLoadClass;
 class ChunkSaveClass;
 class W3DMeshRenderObject;
@@ -90,7 +82,7 @@ class W3DMeshResource : public W3DMeshGeometry
 	W3DMPO_CODE(W3DMeshResource)
 
 public:
-	using MaterialDescription = Graphics::MeshMaterialBindings<RefCountPtr<W3DTextureHandle>, Vector2>;
+	using MaterialDescription = Graphics::MeshMaterialBindings<RefCountPtr<W3DTextureHandle>, Engine::Math::Vector2>;
 	using TextureSlots = Graphics::MaterialSlots<RefCountPtr<W3DTextureHandle>>;
 	using MaterialSlots = Graphics::MaterialSlots<std::shared_ptr<Graphics::MeshMaterial>>;
 
@@ -112,9 +104,9 @@ public:
 	void							Set_Pass_Count(int passes)														{ CurMatDesc->Set_Pass_Count(passes); }
 	int							Get_Pass_Count() const														{ return CurMatDesc->Get_Pass_Count(); }
 
-	const Vector2 *			Get_UV_Array(int pass = 0, int stage = 0)									{ return CurMatDesc->Peek_UV_Array(pass,stage); }
+	const Engine::Math::Vector2 * Get_UV_Array(int pass = 0, int stage = 0) { return CurMatDesc->Peek_UV_Array(pass,stage); }
 	int							Get_UV_Array_Count()														{ return CurMatDesc->Get_UV_Array_Count(); }
-	const Vector2 *			Get_UV_Array_By_Index(int index)												{ return CurMatDesc->Peek_UV_Array_By_Index(index); }
+	const Engine::Math::Vector2 * Get_UV_Array_By_Index(int index) { return CurMatDesc->Peek_UV_Array_By_Index(index); }
 
 	unsigned *					Get_DCG_Array(int pass)															{ return CurMatDesc->Get_DCG_Array(pass); }
 	unsigned *					Get_DIG_Array(int pass)															{ return CurMatDesc->Get_DIG_Array(pass); }
@@ -240,4 +232,3 @@ protected:
 
 	friend class W3DMeshRenderObject;
 	};
-

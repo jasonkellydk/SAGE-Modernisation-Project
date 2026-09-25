@@ -204,9 +204,8 @@ void W3DRenderObjectSnapshot::xfer( Xfer *xfer )
 	engine::debug::invariant((m_robj), "m_robj", __FILE__, __LINE__, "W3DRenderObjectSnapshot::xfer - invalid m_robj");
 
 	// transform on the main render object
-	Matrix3D transform;
-	transform = m_robj->Get_Transform();
-	xfer->xferUser( &transform, sizeof( Matrix3D ) );
+	Engine::Math::AffineTransform3 transform = m_robj->Get_Transform();
+	xfer->xferUser(&transform, sizeof(transform));
 	if( xfer->getXferMode() == XFER_LOAD )
 		m_robj->Set_Transform( transform );
 
@@ -262,7 +261,7 @@ void W3DRenderObjectSnapshot::xfer( Xfer *xfer )
 		// transform of this sub object
 		if( subObject )
 			transform = subObject->Get_Transform();
-		xfer->xferUser( &transform, sizeof( Matrix3D ) );
+		xfer->xferUser(&transform, sizeof(transform));
 		if( subObject && xfer->getXferMode() == XFER_LOAD )
 			subObject->Set_Transform( transform );
 

@@ -11,10 +11,10 @@
 #include <vector>
 
 #include "WWLib/always.h"
-#include "WWMath/matrix3d.h"
-#include "WWMath/vector2.h"
 #include "Common/Snapshot.h"
 #include "W3DDevice/GameClient/WaterGeometry.h"
+
+import Engine.Core.Math.Vector2;
 
 class Xfer;
 
@@ -53,8 +53,8 @@ public:
 	void Change_Height(Real world_x, Real world_y, Real delta);
 
 	void Set_Transform(Real angle, Real x, Real y, Real z);
-	void Set_Transform(const Matrix3D &transform);
-	const Matrix3D &Get_Transform() const { return m_transform; }
+	void Set_Transform(const Engine::Math::AffineTransform3 &transform);
+	const Engine::Math::AffineTransform3 &Get_Transform() const { return m_transform; }
 
 	void Set_Resolution(Real cells_x, Real cells_y, Real cell_size);
 	void Get_Resolution(Real *cells_x, Real *cells_y, Real *cell_size) const;
@@ -87,10 +87,10 @@ private:
 	Bool m_enabled;
 	Bool m_surfaceOverride;
 	Bool m_inMotion;
-	Vector2 m_gridDirectionX;
-	Vector2 m_gridDirectionY;
-	Vector2 m_gridOrigin;
-	Matrix3D m_transform;
+	Engine::Math::Vector2 m_gridDirectionX;
+	Engine::Math::Vector2 m_gridDirectionY;
+	Engine::Math::Vector2 m_gridOrigin;
+	Engine::Math::AffineTransform3 m_transform;
 	Real m_minGridHeight;
 	Real m_maxGridHeight;
 	Real m_gridChangeMaxRange;

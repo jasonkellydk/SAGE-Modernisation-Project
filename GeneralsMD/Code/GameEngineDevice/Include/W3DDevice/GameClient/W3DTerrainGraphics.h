@@ -20,7 +20,7 @@ public:
     Int freeMapResources() override;
     void ReleaseResources() override;
     void ReAcquireResources() override;
-    void updateCenter(W3DCamera *camera, const Vector3 *pivot, Graphics::SceneObjectList<W3DRenderObject>::Cursor *lights) override;
+    void updateCenter(W3DCamera *camera, const Engine::Math::Vector3 *pivot, Graphics::SceneObjectList<W3DRenderObject>::Cursor *lights) override;
     void doPartialUpdate(const IRegion2D &range, WorldHeightMap *map, Graphics::SceneObjectList<W3DRenderObject>::Cursor *lights) override;
     int updateBlock(Int x0, Int y0, Int x1, Int y1, WorldHeightMap *map, Graphics::SceneObjectList<W3DRenderObject>::Cursor *lights) override;
     void oversizeTerrain(Int tiles) override;

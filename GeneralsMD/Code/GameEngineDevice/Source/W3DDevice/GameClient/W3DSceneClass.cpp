@@ -10,12 +10,12 @@ import Graphics.Frame.RenderSettings;
 
 
 #include "WWLib/chunkio.h"
-#include "WWMath/lineseg.h"
 import engine.debug;
 
 import Graphics.Frame.AttachmentBindings;
 import Graphics.Scene.DrawParameters;
 import Graphics.Scene.RenderObjectDrawing;
+import Engine.Core.Math.Sphere3;
 
 namespace
 {
@@ -192,7 +192,7 @@ void W3DScene::Apply_Extra_Pass_Settings() noexcept
 void W3DScene::Apply_Fog_Settings() noexcept
 {
 	Pass.Set_Fog({FogEnabled, FogStart, FogEnd,
-		{FogColor.X, FogColor.Y, FogColor.Z, 1.0f}});
+		{FogColor.x, FogColor.y, FogColor.z, 1.0f}});
 }
 
 void W3DScene::Render(W3DRenderContext &context)
@@ -342,10 +342,10 @@ void W3DSimpleScene::Unregister(W3DRenderObject *object, RegType registration)
 	}
 }
 
-void W3DSimpleScene::Set_Ambient_Light(const Vector3 &color)
+void W3DSimpleScene::Set_Ambient_Light(const Engine::Math::Vector3 &color)
 {
 	W3DScene::Set_Ambient_Light(color);
-	Traversal.Set_Ambient_Light({color.X, color.Y, color.Z});
+	Traversal.Set_Ambient_Light({color.x, color.y, color.z});
 }
 
 void W3DSimpleScene::Visibility_Check(W3DCamera *camera)
@@ -365,17 +365,19 @@ void W3DSimpleScene::Visibility_Check(W3DCamera *camera)
 }
 
 float W3DSimpleScene::Compute_Point_Visibility(
-	W3DRenderContext &context, const Vector3 &point)
+	W3DRenderContext &context, const Engine::Math::Vector3 &point)
 {
-	CastResultStruct result;
-	LineSegClass ray(context.Camera.Get_Position(), point);
+	Engine::Math::CollisionResult3 result;
+	const Engine::Math::Vector3 camera_position = context.Camera.Get_Position();
+	const Engine::Math::LineSegment3 ray{
+		{camera_position.x, camera_position.y, camera_position.z}, point};
 	W3DRayCastQuery query(ray, &result, SCENE_QUERY_PROJECTILE, false, false);
 
 	Graphics::SceneObjectList<W3DRenderObject>::Cursor iterator(&RenderList);
 	for (iterator.First(); !iterator.Is_Done(); iterator.Next())
 		iterator.Peek_Obj()->Cast_Ray(query);
 
-	return result.Fraction == 1.0f ? 1.0f : 0.0f;
+	return result.fraction == 1.0f ? 1.0f : 0.0f;
 }
 
 void W3DSimpleScene::Customized_Render(W3DRenderContext &context)
@@ -385,7 +387,7 @@ void W3DSimpleScene::Customized_Render(W3DRenderContext &context)
 		Visibility_Check(&context.Camera);
 	}
 
-	Traversal.Set_Ambient_Light({AmbientLight.X, AmbientLight.Y, AmbientLight.Z});
+	Traversal.Set_Ambient_Light({AmbientLight.x, AmbientLight.y, AmbientLight.z});
 
 	Graphics::SceneVisibilityCallbacks<W3DRenderObject, W3DCamera> visibility;
 	visibility.is_force_visible = &Is_Force_Visible;
@@ -422,4 +424,3 @@ void W3DSimpleScene::Destroy_Iterator(W3DSceneIterator *iterator)
 {
 	delete iterator;
 }
-

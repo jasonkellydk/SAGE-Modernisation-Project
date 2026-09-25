@@ -34,8 +34,9 @@
 #include "StdAfx.h"
 #include "W3DView.h"
 #include "VolumeRandomDialog.h"
-#include "WWMath/v3_rnd.h"
 #include "Utils.h"
+
+import Engine.Core.Math.Vector3;
 
 #ifdef RTS_DEBUG
 #define new DEBUG_NEW
@@ -49,7 +50,7 @@ static char THIS_FILE[] = __FILE__;
 //	VolumeRandomDialogClass
 //
 ////////////////////////////////////////////////////////////////////
-VolumeRandomDialogClass::VolumeRandomDialogClass (Vector3Randomizer *randomizer, CWnd *pParent)
+VolumeRandomDialogClass::VolumeRandomDialogClass (Engine::Math::RandomVector3Generator *randomizer, CWnd *pParent)
 	:	m_Randomizer (randomizer),
 		CDialog (VolumeRandomDialogClass::IDD, pParent)
 {
@@ -101,11 +102,12 @@ VolumeRandomDialogClass::OnOK ()
 		//
 		//	Create a box randomizer
 		//
-		Vector3 extents (0, 0, 0);
-		extents.X = ::GetDlgItemFloat (m_hWnd, IDC_BOX_X_EDIT);
-		extents.Y = ::GetDlgItemFloat (m_hWnd, IDC_BOX_Y_EDIT);
-		extents.Z = ::GetDlgItemFloat (m_hWnd, IDC_BOX_Z_EDIT);
-		m_Randomizer = new Vector3SolidBoxRandomizer (extents);
+		Engine::Math::Vector3 extents {0, 0, 0};
+		extents.x = ::GetDlgItemFloat (m_hWnd, IDC_BOX_X_EDIT);
+		extents.y = ::GetDlgItemFloat (m_hWnd, IDC_BOX_Y_EDIT);
+		extents.z = ::GetDlgItemFloat (m_hWnd, IDC_BOX_Z_EDIT);
+		m_Randomizer = new Engine::Math::RandomVector3Generator (
+			Engine::Math::Vector3Distribution::Box, extents, 0);
 	} else if (SendDlgItemMessage (IDC_SPHERE_RADIO, BM_GETCHECK) == 1) {
 
 		//
@@ -113,9 +115,11 @@ VolumeRandomDialogClass::OnOK ()
 		//
 		float radius = ::GetDlgItemFloat (m_hWnd, IDC_SPHERE_RADIUS_EDIT);
 		if (SendDlgItemMessage (IDC_SPHERE_HOLLOW_CHECK, BM_GETCHECK) == 1) {
-			m_Randomizer = new Vector3HollowSphereRandomizer (radius);
+			m_Randomizer = new Engine::Math::RandomVector3Generator (
+				Engine::Math::Vector3Distribution::SphereSurface, {radius, radius, radius}, 0);
 		} else {
-			m_Randomizer = new Vector3SolidSphereRandomizer (radius);
+			m_Randomizer = new Engine::Math::RandomVector3Generator (
+				Engine::Math::Vector3Distribution::SolidSphere, {radius, radius, radius}, 0);
 		}
 	} else if (SendDlgItemMessage (IDC_CYLINDER_RADIO, BM_GETCHECK) == 1) {
 
@@ -124,7 +128,9 @@ VolumeRandomDialogClass::OnOK ()
 		//
 		float radius = ::GetDlgItemFloat (m_hWnd, IDC_CYLINDER_RADIUS_EDIT);
 		float height = ::GetDlgItemFloat (m_hWnd, IDC_CYLINDER_HEIGHT_EDIT);
-		m_Randomizer = new Vector3SolidCylinderRandomizer (height, radius);
+		// Cylinder dimensions: x = extent along the axis (legacy "height"), y = radius
+		m_Randomizer = new Engine::Math::RandomVector3Generator (
+			Engine::Math::Vector3Distribution::Cylinder, {height, radius, radius}, 0);
 	}
 
 	CDialog::OnOK ();
@@ -144,7 +150,7 @@ VolumeRandomDialogClass::OnInitDialog ()
 	//
 	//	Start with some default values
 	//
-	Vector3 initial_box (1, 1, 1);
+	Engine::Math::Vector3 initial_box {1, 1, 1};
 	float initial_sphere_radius = 1.0F;
 	bool initial_sphere_hollow = false;
 	float initial_cylinder_radius = 1.0F;
@@ -157,29 +163,30 @@ VolumeRandomDialogClass::OnInitDialog ()
 	if (m_Randomizer != nullptr) {
 
 		// What type of randomizer is this?
-		switch (m_Randomizer->Class_ID ())
+		const Engine::Math::Vector3 dimensions = m_Randomizer->Dimensions ();
+		switch (m_Randomizer->Distribution ())
 		{
-			case Vector3Randomizer::CLASSID_SOLIDBOX:
+			case Engine::Math::Vector3Distribution::Box:
 				initial_type = IDC_BOX_RADIO;
-				initial_box = ((Vector3SolidBoxRandomizer *)m_Randomizer)->Get_Extents ();
+				initial_box = dimensions;
 				break;
 
-			case Vector3Randomizer::CLASSID_SOLIDSPHERE:
+			case Engine::Math::Vector3Distribution::SolidSphere:
 				initial_type = IDC_SPHERE_RADIO;
-				initial_sphere_radius = ((Vector3SolidSphereRandomizer *)m_Randomizer)->Get_Radius();
+				initial_sphere_radius = dimensions.x;
 				initial_sphere_hollow = false;
 				break;
 
-			case Vector3Randomizer::CLASSID_HOLLOWSPHERE:
+			case Engine::Math::Vector3Distribution::SphereSurface:
 				initial_type = IDC_SPHERE_RADIO;
-				initial_sphere_radius = ((Vector3HollowSphereRandomizer *)m_Randomizer)->Get_Radius ();
+				initial_sphere_radius = dimensions.x;
 				initial_sphere_hollow = true;
 				break;
 
-			case Vector3Randomizer::CLASSID_SOLIDCYLINDER:
+			case Engine::Math::Vector3Distribution::Cylinder:
 				initial_type = IDC_CYLINDER_RADIO;
-				initial_cylinder_radius = ((Vector3SolidCylinderRandomizer *)m_Randomizer)->Get_Radius ();
-				initial_cylinder_height = ((Vector3SolidCylinderRandomizer *)m_Randomizer)->Get_Height ();
+				initial_cylinder_radius = dimensions.y;
+				initial_cylinder_height = dimensions.x;
 				break;
 
 			default:
@@ -191,9 +198,9 @@ VolumeRandomDialogClass::OnInitDialog ()
 	//
 	//	Initialize the box controls
 	//
-	::Initialize_Spinner (m_BoxXSpin, initial_box.X, -10000, 10000);
-	::Initialize_Spinner (m_BoxYSpin, initial_box.Y, -10000, 10000);
-	::Initialize_Spinner (m_BoxZSpin, initial_box.Z, -10000, 10000);
+	::Initialize_Spinner (m_BoxXSpin, initial_box.x, -10000, 10000);
+	::Initialize_Spinner (m_BoxYSpin, initial_box.y, -10000, 10000);
+	::Initialize_Spinner (m_BoxZSpin, initial_box.z, -10000, 10000);
 
 	//
 	//	Initialize the sphere controls

@@ -30,14 +30,14 @@
 #pragma once
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
+#include <numbers>
 #include "Common/GameType.h"
 #include "Common/Snapshot.h"
 #include "Lib/BaseType.h"
 #include "W3DDevice/GameClient/W3DSceneQueryMask.h"			///< we don't generally do this, but we need the W3D collision types
-#include "WWMath/plane.h"
-#include "WWMath/wwmath.h"
 
 import Graphics.Scene.Views.CameraProjection;
+import Engine.Core.Math.Plane3;
 
 #define DEFAULT_VIEW_WIDTH 640
 #define DEFAULT_VIEW_HEIGHT 480
@@ -54,9 +54,9 @@ enum FilterTypes CPP_11(: Int);
 enum FilterModes CPP_11(: Int);
 
 // ------------------------------------------------------------------------------------------------
-constexpr const Real ViewDefaultPitchRadians = DEG_TO_RADF(37.5f);
-constexpr const Real ViewDefaultLowPitchRadians = DEG_TO_RADF(37.0f);
-constexpr const Real ViewDefaultYawRadians = DEG_TO_RADF(0.0f);
+constexpr const Real ViewDefaultPitchRadians = (37.5f * std::numbers::pi_v<Real>) / 180.0f;
+constexpr const Real ViewDefaultLowPitchRadians = (37.0f * std::numbers::pi_v<Real>) / 180.0f;
+constexpr const Real ViewDefaultYawRadians = 0.0f;
 constexpr const Real ViewDefaultMaxHeightAboveTerrain = 310.0f;
 
 // ------------------------------------------------------------------------------------------------
@@ -126,7 +126,7 @@ public:
 	/// Project the 4 corners of this view into the world and return each point as a parameter,
 	/// the world points are at the requested Z. Returns whether all corner view rays intersect
 	/// with the Z plane.
-	virtual PlaneClass::IntersectionResType getScreenCornerWorldPointsAtZ( Coord3D *topLeft, Coord3D *topRight,
+	virtual Engine::Math::SegmentPlaneHit getScreenCornerWorldPointsAtZ( Coord3D *topLeft, Coord3D *topRight,
 																																					Coord3D *bottomRight, Coord3D *bottomLeft,
 																																					Real z, Graphics::CameraViewport viewPort = Graphics::CameraViewport() );
 
@@ -249,7 +249,7 @@ public:
 	virtual Bool screenToTerrain( const ICoord2D *screen, Coord3D *world ) = 0;
 
 	/// Transform screen point to the viewed world position at the specified world Z height. Returns the type of the intersection.
-	virtual PlaneClass::IntersectionResType screenToWorldAtZ( const ICoord2D *screen, Coord3D *world, Real z ) = 0;
+	virtual Engine::Math::SegmentPlaneHit screenToWorldAtZ( const ICoord2D *screen, Coord3D *world, Real z ) = 0;
 
 	virtual void getLocation ( ViewLocation *location );								///< write the view's current location in to the view location object
 	virtual void setLocation ( const ViewLocation *location );					///< set the view's current location from to the view location object
@@ -414,7 +414,7 @@ public:
 		return WTS_INVALID;
 	}
 	virtual Bool screenToTerrain( const ICoord2D *screen, Coord3D *world ) override { return false; }
-	virtual PlaneClass::IntersectionResType screenToWorldAtZ( const ICoord2D *screen, Coord3D *world, Real z ) override { return PlaneClass::NO_INTERSECTION; }
+	virtual Engine::Math::SegmentPlaneHit screenToWorldAtZ( const ICoord2D *screen, Coord3D *world, Real z ) override { return Engine::Math::SegmentPlaneHit::Parallel; }
 	virtual void drawView() override {}
 	virtual void updateView() override {}
 	virtual void stepView() override {}

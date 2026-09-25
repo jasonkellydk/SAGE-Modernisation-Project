@@ -24,7 +24,6 @@
 
 #pragma once
 
-#include "WWMath/matrix4.h"
 #include "GameClient/Shadow.h"
 
 class Drawable;	//forward reference
@@ -50,7 +49,7 @@ public:
 	void setLightPosition(Int lightIndex, Real x, Real y, Real z);	///<sets the position of a specific light source.
 	void setTimeOfDay(TimeOfDay tod);
 	void invalidateCachedLightPositions();	///<forces shadow volumes to update regardless of last lightposition
-	Vector3 &getLightPosWorld(Int lightIndex);	///<returns the position of specified light source.
+	Engine::Math::Vector3 &getLightPosWorld(Int lightIndex);	///<returns the position of specified light source.
 	Bool	isShadowScene()	{return m_isShadowScene;}
 	void setStencilShadowMask(int mask) {m_stencilShadowMask=mask;}	///<mask used to mask out stencil bits used for storing occlusion/playerColor
 	Int getStencilShadowMask()	{return m_stencilShadowMask;}

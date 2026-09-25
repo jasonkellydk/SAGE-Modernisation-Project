@@ -33,7 +33,6 @@
 #include "GameLogic/Module/AIUpdate.h"
 #include "GameLogic/WeaponBonusConditionFlags.h"
 #include "Common/INI.h"
-#include "WWMath/matrix3d.h"
 
 enum ParticleSystemID CPP_11(: Int);
 class FXList;

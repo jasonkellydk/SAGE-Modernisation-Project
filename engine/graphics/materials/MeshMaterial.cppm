@@ -20,7 +20,18 @@ export struct MeshMaterialKey final {
     std::uint32_t flags=0;
     std::uint32_t unique_group=0;
     bool lighting=false;
-    bool operator==(const MeshMaterialKey&) const = default;
+    bool operator==(const MeshMaterialKey& other) const noexcept
+    {
+        for (std::size_t index = 0; index < colors.size(); ++index)
+            if (colors[index] != other.colors[index]) return false;
+        for (std::size_t index = 0; index < color_sources.size(); ++index)
+            if (color_sources[index] != other.color_sources[index]) return false;
+        for (std::size_t index = 0; index < uv_sources.size(); ++index)
+            if (uv_sources[index] != other.uv_sources[index]) return false;
+        for (std::size_t index = 0; index < mappings.size(); ++index)
+            if (mappings[index] != other.mappings[index]) return false;
+        return flags == other.flags && unique_group == other.unique_group && lighting == other.lighting;
+    }
 };
 
 // A mesh owns references to this material; extraction borrows its parameters.

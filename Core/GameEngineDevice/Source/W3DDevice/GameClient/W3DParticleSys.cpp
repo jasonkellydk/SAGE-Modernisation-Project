@@ -18,6 +18,7 @@
 #include <string_view>
 #include <vector>
 import engine.profiling;
+import Engine.Core.Math.AxisAlignedBox3;
 
 import Graphics.Scene.Particles.Renderer;
 import Assets.Runtime;
@@ -119,33 +120,28 @@ void W3DParticleSystemManager::doParticles(W3DRenderContext &rinfo)
 	m_fieldParticleCount = 0;
 	m_terrainBoundsValid = false;
 	m_weatherParticlesReady = false;
-	Matrix3D legacy_view;
-	Matrix4x4 legacy_projection;
-	rinfo.Camera.Get_View_Matrix(&legacy_view);
-	rinfo.Camera.Get_Backend_Projection_Matrix(&legacy_projection);
+	const auto camera_matrices = rinfo.Camera.Build_Render_Matrices();
 	Graphics::Matrix4x4 graphics_view;
 	Graphics::Matrix4x4 graphics_projection;
-	for (std::size_t row = 0; row < 4; ++row) {
-		for (std::size_t column = 0; column < 4; ++column) {
-			graphics_view.values[row * 4 + column] = (row < 3 ? legacy_view[row][column] : (column == 3 ? 1.0f : 0.0f));
-			graphics_projection.values[row * 4 + column] = legacy_projection[row][column];
-		}
-	}
-	const Vector3 camera_position = rinfo.Camera.Get_Position();
+	graphics_view.values = camera_matrices.view;
+	graphics_projection.values = camera_matrices.projection;
+	const Engine::Math::Vector3 camera_position = rinfo.Camera.Get_Position();
 	Set_Graphics_Particle_View(Graphics::View(
 		graphics_view,
 		graphics_projection,
-		{camera_position.X, camera_position.Y, camera_position.Z},
+		{camera_position.x, camera_position.y, camera_position.z},
 		m_graphicsView.viewport));
 	if (TheTerrainRenderObject != nullptr) {
-		AABoxClass bounds;
+		Engine::Math::AxisAlignedBox3 bounds;
 		TheTerrainRenderObject->getMaximumVisibleBox(rinfo.Camera.Get_Frustum(), &bounds, TRUE);
-		m_terrainCenterX = bounds.Center.X;
-		m_terrainCenterY = bounds.Center.Y;
-		m_terrainCenterZ = bounds.Center.Z;
-		m_terrainExtentX = bounds.Extent.X;
-		m_terrainExtentY = bounds.Extent.Y;
-		m_terrainExtentZ = bounds.Extent.Z;
+		const auto center = bounds.Center();
+		const auto extent = bounds.Extent();
+		m_terrainCenterX = center.x;
+		m_terrainCenterY = center.y;
+		m_terrainCenterZ = center.z;
+		m_terrainExtentX = extent.x;
+		m_terrainExtentY = extent.y;
+		m_terrainExtentZ = extent.z;
 		m_terrainBoundsValid = true;
 	}
 	Prepare_Graphics_Particles();

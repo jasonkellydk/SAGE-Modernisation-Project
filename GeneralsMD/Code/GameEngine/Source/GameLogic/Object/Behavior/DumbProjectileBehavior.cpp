@@ -28,6 +28,7 @@
 
 #include "PreRTS.h"
 import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
+import Engine.Core.Math.AffineTransform3;
 
 #include "Common/BezierSegment.h"
 #include "Common/GameCommon.h"
@@ -418,20 +419,20 @@ Bool DumbProjectileBehavior::calcFlightPath(Bool recalcNumSegments)
 
 	// X and Y for inner points are along the line between us, so normalize and scale a vector between us, but
 	// only use the x and y of the result
-	Vector3 targetVector;// 0 origin vector between me and him
-	targetVector.X = controlPoints[3].x - controlPoints[0].x;
-	targetVector.Y = controlPoints[3].y - controlPoints[0].y;
-	targetVector.Z = controlPoints[3].z - controlPoints[0].z;
+	Engine::Math::Vector3 targetVector{
+		controlPoints[3].x - controlPoints[0].x,
+		controlPoints[3].y - controlPoints[0].y,
+		controlPoints[3].z - controlPoints[0].z};
 
-	Real targetDistance = targetVector.Length();
-	targetVector.Normalize();
-	Vector3 firstPointAlongLine = targetVector * (targetDistance * d->m_firstPercentIndent );
-	Vector3 secondPointAlongLine = targetVector * (targetDistance * d->m_secondPercentIndent );
+	const Real targetDistance = targetVector.Length();
+	targetVector = targetVector.Normalized_Legacy();
+	const Engine::Math::Vector3 firstPointAlongLine = targetVector * (targetDistance * d->m_firstPercentIndent);
+	const Engine::Math::Vector3 secondPointAlongLine = targetVector * (targetDistance * d->m_secondPercentIndent);
 
-	controlPoints[1].x = firstPointAlongLine.X + controlPoints[0].x;// add world start to offset along the origin based vector
-	controlPoints[1].y = firstPointAlongLine.Y + controlPoints[0].y;
-	controlPoints[2].x = secondPointAlongLine.X + controlPoints[0].x;
-	controlPoints[2].y = secondPointAlongLine.Y + controlPoints[0].y;
+	controlPoints[1].x = firstPointAlongLine.x + controlPoints[0].x;// add world start to offset along the origin based vector
+	controlPoints[1].y = firstPointAlongLine.y + controlPoints[0].y;
+	controlPoints[2].x = secondPointAlongLine.x + controlPoints[0].x;
+	controlPoints[2].y = secondPointAlongLine.y + controlPoints[0].y;
 
 	// Z's are determined using the highest intervening height so they won't hit hills, low end bounded by current Zs
 	highestInterveningTerrain = max( highestInterveningTerrain, controlPoints[0].z );
@@ -643,11 +644,10 @@ UpdateSleepTime DumbProjectileBehavior::update()
 
 		  Coord3D prevPos = m_flightPath[m_currentFlightPathStep - 1];
 
-		  Vector3 curDir(flightStep.x - prevPos.x, flightStep.y - prevPos.y, flightStep.z - prevPos.z);
-		  curDir.Normalize();	// buildTransformMatrix wants it this way
-      Matrix3D orientMtx;
-		  orientMtx.buildTransformMatrix(Vector3(flightStep.x, flightStep.y, flightStep.z), curDir);
-		  getObject()->setTransformMatrix(&orientMtx);
+		  const Engine::Math::Vector3 direction = Engine::Math::Vector3{
+			  flightStep.x - prevPos.x, flightStep.y - prevPos.y, flightStep.z - prevPos.z}.Normalized_Legacy();	// From_Unit_Forward_Direction wants it this way
+		  getObject()->setWorldTransform(Engine::Math::AffineTransform3::From_Unit_Forward_Direction(
+			  {flightStep.x, flightStep.y, flightStep.z}, direction));
     }
     else // oops! how do we orient the projectile on the zeroeth frame? This didn't matter until we started using the
       //long, blurry projectile graphics which look badly oriented on step 0 of the flight path
@@ -676,11 +676,10 @@ UpdateSleepTime DumbProjectileBehavior::update()
 				flightStep = m_flightPathEnd;
 			}
 
-		  Vector3 curDir(curPos.x - prevPos.x, curPos.y - prevPos.y, curPos.z - prevPos.z);
-		  curDir.Normalize();	// buildTransformMatrix wants it this way
-      Matrix3D orientMtx;
-		  orientMtx.buildTransformMatrix(Vector3(flightStep.x, flightStep.y, flightStep.z), curDir);
-		  getObject()->setTransformMatrix(&orientMtx);
+		  const Engine::Math::Vector3 direction = Engine::Math::Vector3{
+			  curPos.x - prevPos.x, curPos.y - prevPos.y, curPos.z - prevPos.z}.Normalized_Legacy();	// From_Unit_Forward_Direction wants it this way
+		  getObject()->setWorldTransform(Engine::Math::AffineTransform3::From_Unit_Forward_Direction(
+			  {flightStep.x, flightStep.y, flightStep.z}, direction));
     }
 
 	}

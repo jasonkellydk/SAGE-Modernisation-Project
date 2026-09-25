@@ -37,6 +37,7 @@
 
 #include "WWLib/always.h"
 #include <windows.h>
+#include <algorithm>
 #include "WWAudio.h"
 
 #include "Utils.h"
@@ -988,7 +989,7 @@ int
 WWAudioClass::Create_Instant_Sound
 (
 	int					definition_id,
-	const Matrix3D &	tm,
+	const Engine::Math::AffineTransform3 &transform,
 	RefCountClass *	user_obj,
 	uint32				user_data,
 	int					classid_hint
@@ -1007,7 +1008,7 @@ WWAudioClass::Create_Instant_Sound
 		}
 
 		sound_id = sound->Get_ID ();
-		sound->Set_Transform (tm);
+		sound->Set_Transform (transform);
 		sound->Add_To_Scene ();
 		sound->Release_Ref ();
 	}
@@ -1055,7 +1056,7 @@ int
 WWAudioClass::Create_Instant_Sound
 (
 	const char *		def_name,
-	const Matrix3D &	tm,
+	const Engine::Math::AffineTransform3 &transform,
 	RefCountClass *	user_obj,
 	uint32				user_data,
 	int					classid_hint
@@ -1074,7 +1075,7 @@ WWAudioClass::Create_Instant_Sound
 		}
 
 		sound_id = sound->Get_ID ();
-		sound->Set_Transform (tm);
+		sound->Set_Transform (transform);
 		sound->Add_To_Scene ();
 		sound->Release_Ref ();
 	}
@@ -2593,8 +2594,8 @@ WWAudioClass::Load_From_Registry
 		//
 		music_volume	= registry.Get_Int (VALUE_NAME_MUSIC_VOL, 100) / 100.0F;
 		sound_volume	= registry.Get_Int (VALUE_NAME_SOUND_VOL, 100) / 100.0F;
-		music_volume	= WWMath::Clamp (music_volume, 0, 1.0F);
-		sound_volume	= WWMath::Clamp (sound_volume, 0, 1.0F);
+		music_volume	= std::clamp (music_volume, 0.0f, 1.0f);
+		sound_volume	= std::clamp (sound_volume, 0.0f, 1.0f);
 
 		retval		= true;
 	}

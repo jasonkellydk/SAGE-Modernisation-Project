@@ -36,14 +36,16 @@
 
 #pragma once
 
-#include "WWMath/aabtreecull.h"
-#include "WWMath/gridcull.h"
 #include "Listener.h"
 #include "WWLib/Vector.h"
 #include "PriorityVector.h"
 #include "SoundCullObj.h"
 #include "LogicalListener.h"
 #include "WWLib/multilist.h"
+
+import Engine.Core.Math.SpatialGrid3;
+import Engine.Core.Math.AffineTransform3;
+import Engine.Core.Math.Vector3;
 
 // Forward declarations
 class RenderObjClass;
@@ -56,8 +58,6 @@ class ChunkLoadClass;
 //	Typedefs
 //
 //////////////////////////////////////////////////////////////////////////////////
-typedef TypedGridCullSystemClass<SoundCullObjClass>		DynamicSoundCullClass;
-typedef TypedAABTreeCullSystemClass<SoundCullObjClass>	StaticSoundCullClass;
 typedef MultiListClass<AudibleSoundClass>						AUDIBLE_SOUND_LIST;
 typedef MultiListClass<SoundCullObjClass>						SOUND_LIST;
 typedef MultiListClass<LogicalSoundClass>						LOGICAL_SOUND_LIST;
@@ -90,7 +90,7 @@ class SoundSceneClass
 		//////////////////////////////////////////////////////////////////////
 		//	Partition methods
 		//////////////////////////////////////////////////////////////////////
-		virtual void			Re_Partition (const Vector3 &min_dimension, const Vector3 &max_dimension);
+		virtual void Re_Partition (Engine::Math::Vector3 min_dimension, Engine::Math::Vector3 max_dimension);
 
 		//////////////////////////////////////////////////////////////////////
 		//	Logical sound methods
@@ -102,11 +102,11 @@ class SoundSceneClass
 		//////////////////////////////////////////////////////////////////////
 		virtual void			Attach_Listener_To_Obj (RenderObjClass *render_obj, int bone_index = -1) { m_Listener->Attach_To_Object (render_obj, bone_index); }
 
-		virtual void			Set_Listener_Position (const Vector3 &pos)			{ m_Listener->Set_Position (pos); }
-		virtual Vector3		Get_Listener_Position () const						{ return m_Listener->Get_Position (); }
+		virtual void Set_Listener_Position (Engine::Math::Vector3 position) { m_Listener->Set_Position (position); }
+		virtual Engine::Math::Vector3 Get_Listener_Position () const { return m_Listener->Get_Position (); }
 
-		virtual void			Set_Listener_Transform (const Matrix3D &transform)	{ m_Listener->Set_Transform (transform); }
-		virtual Matrix3D		Get_Listener_Transform () const						{ return m_Listener->Get_Transform (); }
+		virtual void Set_Listener_Transform (const Engine::Math::AffineTransform3 &transform) { m_Listener->Set_Transform (transform); }
+		virtual Engine::Math::AffineTransform3 Get_Listener_Transform () const { return m_Listener->Get_Transform (); }
 
 		virtual Listener3DClass *Peek_2nd_Listener () const						{ return m_2ndListener; }
 		virtual void			Set_2nd_Listener (Listener3DClass *listener);
@@ -208,13 +208,12 @@ class SoundSceneClass
 		LOGICAL_SOUND_LIST			m_SingleShotLogicalSounds;
 		LOGICAL_LISTENER_LIST		m_LogicalListeners;
 
-		DynamicSoundCullClass		m_ListenerCullingSystem;
-		DynamicSoundCullClass		m_LogicalCullingSystem;
-		DynamicSoundCullClass		m_DynamicCullingSystem;
-		StaticSoundCullClass			m_StaticCullingSystem;
+		SoundSpatialIndex			m_LogicalSpatialIndex;
+		SoundSpatialIndex			m_DynamicSpatialIndex;
+		SoundSpatialIndex			m_StaticSpatialIndex;
 
-		Vector3							m_MinExtents;
-		Vector3							m_MaxExtents;
+		Engine::Math::Vector3 m_MinExtents;
+		Engine::Math::Vector3 m_MaxExtents;
 
 		bool								m_IsBatchMode;
 };

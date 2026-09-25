@@ -19,6 +19,7 @@
 // CameraSettingsDialog.cpp : implementation file
 //
 
+import Engine.Core.Math.Scalar;
 #include "StdAfx.h"
 #include "W3DView.h"
 #include "W3DViewDoc.h"
@@ -107,8 +108,8 @@ CameraSettingsDialogClass::OnInitDialog ()
 	//
 	//	Setup the FOV controls
 	//
-	int hfov_deg = (int)RAD_TO_DEG (camera->Get_Horizontal_FOV ());
-	int vfov_deg = (int)RAD_TO_DEG (camera->Get_Vertical_FOV ());
+	int hfov_deg = (int)Engine::Math::RadiansToDegrees(camera->Get_Horizontal_FOV ());
+	int vfov_deg = (int)Engine::Math::RadiansToDegrees(camera->Get_Vertical_FOV ());
 	::Initialize_Spinner (m_HFOVSpin, hfov_deg, 0.0F, 180.0F);
 	::Initialize_Spinner (m_VFOVSpin, vfov_deg, 0.0F, 180.0F);
 
@@ -152,7 +153,7 @@ CameraSettingsDialogClass::OnOK ()
 		//
 		float hfov_deg = ::GetDlgItemFloat (m_hWnd, IDC_HFOV_EDIT);
 		float vfov_deg = ::GetDlgItemFloat (m_hWnd, IDC_VFOV_EDIT);
-		camera->Set_View_Plane (DEG_TO_RAD (hfov_deg), DEG_TO_RAD (vfov_deg));
+		camera->Set_View_Plane (Engine::Math::DegreesToRadians(hfov_deg), Engine::Math::DegreesToRadians(vfov_deg));
 	}
 
 	//
@@ -252,8 +253,8 @@ CameraSettingsDialogClass::OnReset ()
 	//
 	//	Update the FOV controls
 	//
-	int hfov_deg = (int)RAD_TO_DEG (camera->Get_Horizontal_FOV ());
-	int vfov_deg = (int)RAD_TO_DEG (camera->Get_Vertical_FOV ());
+	int hfov_deg = (int)Engine::Math::RadiansToDegrees(camera->Get_Horizontal_FOV ());
+	int vfov_deg = (int)Engine::Math::RadiansToDegrees(camera->Get_Vertical_FOV ());
 	::SetDlgItemFloat (m_hWnd, IDC_HFOV_EDIT, hfov_deg);
 	::SetDlgItemFloat (m_hWnd, IDC_VFOV_EDIT, vfov_deg);
 
@@ -320,7 +321,7 @@ CameraSettingsDialogClass::Update_Camera_Lens ()
 	//
 	if (hfov > 0) {
 		const float constant	= (18.0F / 1000.0F);
-		float lens				= (constant / (::tan (DEG_TO_RAD (hfov) / 2))) * 1000.0F;
+		float lens				= (constant / (::tan (Engine::Math::DegreesToRadians(hfov) / 2))) * 1000.0F;
 		::SetDlgItemFloat (m_hWnd, IDC_LENS_EDIT, lens);
 	}
 }
@@ -350,8 +351,8 @@ CameraSettingsDialogClass::Update_FOV ()
 		//
 		//	Pass the new FOV settings onto the dialog
 		//
-		::SetDlgItemFloat (m_hWnd, IDC_HFOV_EDIT, RAD_TO_DEG (hfov));
-		::SetDlgItemFloat (m_hWnd, IDC_VFOV_EDIT, RAD_TO_DEG (vfov));
+		::SetDlgItemFloat (m_hWnd, IDC_HFOV_EDIT, Engine::Math::RadiansToDegrees(hfov));
+		::SetDlgItemFloat (m_hWnd, IDC_VFOV_EDIT, Engine::Math::RadiansToDegrees(vfov));
 	}
 }
 

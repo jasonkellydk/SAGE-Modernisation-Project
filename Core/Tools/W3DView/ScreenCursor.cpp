@@ -41,7 +41,7 @@ import Graphics.Materials.State;
 #include "WW3D2/RInfo.h"
 #include "WW3D2/Texture.h"
 #include <array>
-#include "WWMath/matrix4.h"
+import Engine.Core.Math.Matrix4;
 import engine.debug;
 import Graphics.Scene.Surfaces.Geometry;
 
@@ -97,12 +97,8 @@ ScreenCursorClass::Initialize ()
 {
 	// Create default vertex material
 
-	m_Triangles[0].I = 0;
-	m_Triangles[0].J = 1;
-	m_Triangles[0].K = 2;
-	m_Triangles[1].I = 1;
-	m_Triangles[1].J = 2;
-	m_Triangles[1].K = 3;
+	m_Triangles[0] = {0, 1, 2};
+	m_Triangles[1] = {1, 2, 3};
 
 	m_Normals[0].X = 0;
 	m_Normals[0].Y = 0;
@@ -248,7 +244,7 @@ ScreenCursorClass::Render (RenderInfoClass &rinfo)
     for (unsigned i = 0; i < 2; ++i)
         for (unsigned corner = 0; corner < 3; ++corner)
             indices[i * 3 + corner] = m_Triangles[i][corner];
-    if (!Draw_Graphics_Prelit_Geometry(vertices, indices, Matrix4x4(true),
+    if (!Draw_Graphics_Prelit_Geometry(vertices, indices, Engine::Math::Matrix4::Identity(),
         Graphics::MaterialState::ATestBlend2D(), m_pTexture.Peek()))
         engine::debug::log_info("Viewer cursor graphics submission failed.\n");
 

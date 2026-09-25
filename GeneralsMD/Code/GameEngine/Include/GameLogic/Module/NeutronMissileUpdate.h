@@ -34,7 +34,6 @@
 #include "GameLogic/Module/UpdateModule.h"
 #include "GameLogic/Module/DieModule.h"
 #include "Common/INI.h"
-#include "WWMath/matrix3d.h"
 
 enum ParticleSystemID CPP_11(: Int);
 class FXList;

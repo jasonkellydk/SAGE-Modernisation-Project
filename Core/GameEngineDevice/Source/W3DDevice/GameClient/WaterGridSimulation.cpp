@@ -20,7 +20,7 @@ WaterGridSimulation::WaterGridSimulation() :
 	m_gridDirectionX(1.0f, 0.0f),
 	m_gridDirectionY(1.0f, 0.0f),
 	m_gridOrigin(0.0f, 0.0f),
-	m_transform(1),
+	m_transform(),
 	m_minGridHeight(0.0f),
 	m_maxGridHeight(0.0f),
 	m_gridChangeMaxRange(0.0f),
@@ -131,13 +131,13 @@ Bool WaterGridSimulation::World_To_Grid(Real world_x, Real world_y,
 	if (m_gridCellSize == 0.0f)
 		return FALSE;
 
-	const Real dx = world_x - m_gridOrigin.X;
-	const Real dy = world_y - m_gridOrigin.Y;
+	const Real dx = world_x - m_gridOrigin.x;
+	const Real dy = world_y - m_gridOrigin.y;
 	const Real inverse_cell_size = 1.0f / m_gridCellSize;
 	grid_x = inverse_cell_size *
-		(dx * m_gridDirectionX.X + dy * m_gridDirectionX.Y);
+		(dx * m_gridDirectionX.x + dy * m_gridDirectionX.y);
 	grid_y = inverse_cell_size *
-		(dx * m_gridDirectionY.X + dy * m_gridDirectionY.Y);
+		(dx * m_gridDirectionY.x + dy * m_gridDirectionY.y);
 
 	return grid_x >= 0.0f && grid_x <= m_gridCellsX - 1 &&
 		grid_y >= 0.0f && grid_y <= m_gridCellsY - 1;
@@ -216,21 +216,28 @@ void WaterGridSimulation::Change_Height(Real world_x, Real world_y,
 
 void WaterGridSimulation::Set_Transform(Real angle, Real x, Real y, Real z)
 {
-	Matrix3D transform(1);
-	transform.Rotate_Z(angle);
-	transform.Set_Translation(Vector3(x, y, z));
+	const Real cosine = std::cos(angle);
+	const Real sine = std::sin(angle);
+	Engine::Math::AffineTransform3 transform;
+	transform.elements[0] = cosine;
+	transform.elements[1] = -sine;
+	transform.elements[4] = sine;
+	transform.elements[5] = cosine;
+	transform.elements[3] = x;
+	transform.elements[7] = y;
+	transform.elements[11] = z;
 	Set_Transform(transform);
 }
 
-void WaterGridSimulation::Set_Transform(const Matrix3D &transform)
+void WaterGridSimulation::Set_Transform(const Engine::Math::AffineTransform3 &transform)
 {
 	m_transform = transform;
-	m_gridOrigin.X = transform.Get_X_Translation();
-	m_gridOrigin.Y = transform.Get_Y_Translation();
-	m_gridDirectionX.X = transform.Get_X_Vector().X;
-	m_gridDirectionX.Y = transform.Get_X_Vector().Y;
-	m_gridDirectionY.X = transform.Get_Y_Vector().X;
-	m_gridDirectionY.Y = transform.Get_Y_Vector().Y;
+	m_gridOrigin.x = transform.elements[3];
+	m_gridOrigin.y = transform.elements[7];
+	m_gridDirectionX.x = transform.elements[0];
+	m_gridDirectionX.y = transform.elements[4];
+	m_gridDirectionY.x = transform.elements[1];
+	m_gridDirectionY.y = transform.elements[5];
 }
 
 void WaterGridSimulation::Set_Resolution(Real cells_x, Real cells_y,
@@ -292,7 +299,7 @@ Real WaterGridSimulation::Get_Vertex_Height(Int x, Int y) const
 		m_samples.empty())
 		return 0.0f;
 	return m_samples[sampleIndex(x, y)].height +
-		m_transform.Get_Z_Translation();
+		m_transform.elements[11];
 }
 
 void WaterGridSimulation::crc(Xfer *xfer)

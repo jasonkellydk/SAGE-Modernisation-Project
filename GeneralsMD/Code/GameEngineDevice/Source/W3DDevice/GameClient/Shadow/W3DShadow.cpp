@@ -1,3 +1,4 @@
+import Engine.Core.Math.Vector3;
 /*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -53,12 +54,12 @@ import engine.debug;
 
 // Global Variables and Functions /////////////////////////////////////////////
 W3DShadowManager *TheW3DShadowManager=nullptr;
-const FrustumClass *shadowCameraFrustum;
+const Graphics::CameraFrustum *shadowCameraFrustum;
 
-Vector3 LightPosWorld[ MAX_SHADOW_LIGHTS ] =
+Engine::Math::Vector3 LightPosWorld[ MAX_SHADOW_LIGHTS ] =
 {
 
-	Vector3( 94.0161f, 50.499f, 200.0f)
+	Engine::Math::Vector3( 94.0161f, 50.499f, 200.0f)
 };
 
 void PrepareShadows()
@@ -87,9 +88,9 @@ W3DShadowManager::W3DShadowManager()
 	m_isShadowScene = FALSE;
 	m_stencilShadowMask = 0;	//all bits can be used for storing shadows.
 
-	Vector3 lightRay(-TheGlobalData->m_terrainLightPos[0].x,
+	Engine::Math::Vector3 lightRay(-TheGlobalData->m_terrainLightPos[0].x,
 		-TheGlobalData->m_terrainLightPos[0].y, -TheGlobalData->m_terrainLightPos[0].z);
-	lightRay.Normalize();
+	lightRay = lightRay.Normalized();
 
 	LightPosWorld[0]=lightRay*SUN_DISTANCE_FROM_GROUND;
 
@@ -183,7 +184,7 @@ void W3DShadowManager::invalidateCachedLightPositions()
 		TheW3DProjectedShadowManager->invalidateCachedLightPositions();
 }
 
-Vector3 &W3DShadowManager::getLightPosWorld(Int lightIndex)
+Engine::Math::Vector3 &W3DShadowManager::getLightPosWorld(Int lightIndex)
 {
 	return LightPosWorld[lightIndex];
 }
@@ -193,7 +194,7 @@ void W3DShadowManager::setLightPosition(Int lightIndex, Real x, Real y, Real z)
 	if (lightIndex != 0)
 		return;	///@todo: Add support for multiple lights
 
-	LightPosWorld[lightIndex]=Vector3(x,y,z);
+	LightPosWorld[lightIndex]=Engine::Math::Vector3(x,y,z);
 }
 
 void W3DShadowManager::setTimeOfDay(TimeOfDay tod)
@@ -201,10 +202,10 @@ void W3DShadowManager::setTimeOfDay(TimeOfDay tod)
 	//Ray to light source
 	const GlobalData::TerrainLighting *ol=&TheGlobalData->m_terrainObjectsLighting[tod][0];
 
-	Vector3 lightRay(-ol->lightPos.x,-ol->lightPos.y,-ol->lightPos.z);
+	Engine::Math::Vector3 lightRay(-ol->lightPos.x,-ol->lightPos.y,-ol->lightPos.z);
 
-	lightRay.Normalize();
+	lightRay = lightRay.Normalized();
 	lightRay *= SUN_DISTANCE_FROM_GROUND;
 
-	setLightPosition(0, lightRay.X, lightRay.Y, lightRay.Z);
+	setLightPosition(0, lightRay.x, lightRay.y, lightRay.z);
 }

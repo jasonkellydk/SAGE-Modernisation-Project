@@ -1,3 +1,4 @@
+import Engine.Core.Math.Vector3;
 import Assets.Math;
 /*
 **	Command & Conquer Generals Zero Hour(tm)
@@ -71,6 +72,7 @@ import Graphics.Frame.Runtime;
 #include "W3DDevice/GameClient/W3DShroud.h"
 #include "W3DDevice/GameClient/W3DCamera.h"
 import Graphics.Scene.Surfaces.Geometry;
+import Engine.Core.Math.AffineTransform3;
 
 #include "W3DDevice/GameClient/W3DMeshRenderObject.h"
 #include "W3DDevice/GameClient/W3DMeshResource.h"
@@ -180,7 +182,7 @@ Bool W3DBridge::cullBridge(W3DCamera * camera)
 //=============================================================================
 /** Inits a bridges location & type so it can be load'ed.  */
 //=============================================================================
-void W3DBridge::init(Vector3 fromLoc, Vector3 toLoc, AsciiString bridgeTemplateName)
+void W3DBridge::init(Engine::Math::Vector3 fromLoc, Engine::Math::Vector3 toLoc, AsciiString bridgeTemplateName)
 {
 	m_start = fromLoc;
 	m_end = toLoc;
@@ -244,16 +246,16 @@ Bool W3DBridge::load(BodyDamageType curDamageState)
 	std::string right = modelName + ".BRIDGE_RIGHT";
 
 	m_bridgeTexture = catalog->Get_Texture(textureFile.c_str(), MIP_LEVELS_3);
-	m_leftMtx.Make_Identity();
-	m_rightMtx.Make_Identity();
-	m_sectionMtx.Make_Identity();
+	m_leftMtx = Engine::Math::AffineTransform3::Identity();
+	m_rightMtx = Engine::Math::AffineTransform3::Identity();
+	m_sectionMtx = Engine::Math::AffineTransform3::Identity();
 
 	W3DRenderObject *pObj = catalog->Create_Render_Obj(modelName.c_str());
 	if (!pObj) return false;
 	Int i;
 	for (i=0; i<pObj->Get_Num_Sub_Objects(); i++) {
 		W3DRenderObject *pSub = pObj->Get_Sub_Object(i);
-		Matrix3D mtx = pSub->Get_Transform();
+		const auto &mtx = pSub->Get_Transform();
 		if (Assets::Asset_Name_Prefix_Equals_No_Case(left.c_str(), pSub->Get_Name(), left.size())) {
 			m_leftMtx = mtx;
 			left = pSub->Get_Name();
@@ -289,18 +291,19 @@ Bool W3DBridge::load(BodyDamageType curDamageState)
 	}
 
 	Int numVertex = m_leftMesh->Peek_Model()->Get_Vertex_Count();
-	const Vector3 *pVert = m_leftMesh->Peek_Model()->Peek_Vertex_Array();
+	const Engine::Math::Vector3 *pVert = m_leftMesh->Peek_Model()->Peek_Vertex_Array();
 	m_leftMinX = FLT_MAX;
 	m_leftMaxX = -FLT_MAX;
 	m_minY = FLT_MAX;
 	m_maxY = -FLT_MAX;
 	for (i=0; i<numVertex; i++) {
-		Vector3 vert;
-		Matrix3D::Transform_Vector(m_leftMtx, pVert[i], &vert);
-		if (m_leftMinX > vert.X) m_leftMinX = vert.X;
-		if (m_minY > vert.Y) m_minY = vert.Y;
-		if (vert.X > m_leftMaxX) m_leftMaxX = vert.X;
-		if (vert.Y > m_maxY) m_maxY = vert.Y;	 // Note - we assume all sections are the same width, so we only do maxY for first section.
+		Engine::Math::Vector3 vert;
+		const auto transformed = m_leftMtx.Transform_Point(pVert[i]);
+		vert = {transformed.x, transformed.y, transformed.z};
+		if (m_leftMinX > vert.x) m_leftMinX = vert.x;
+		if (m_minY > vert.y) m_minY = vert.y;
+		if (vert.x > m_leftMaxX) m_leftMaxX = vert.x;
+		if (vert.y > m_maxY) m_maxY = vert.y;	 // Note - we assume all sections are the same width, so we only do maxY for first section.
 	}
 	if (m_bridgeType == SECTIONAL_BRIDGE) {
 		numVertex = m_sectionMesh->Peek_Model()->Get_Vertex_Count();
@@ -308,10 +311,11 @@ Bool W3DBridge::load(BodyDamageType curDamageState)
 		m_sectionMinX = FLT_MAX;
 		m_sectionMaxX = -FLT_MAX;
 		for (i=0; i<numVertex; i++) {
-			Vector3 vert;
-			Matrix3D::Transform_Vector(m_sectionMtx, pVert[i], &vert);
-			if (m_sectionMinX > vert.X) m_sectionMinX = vert.X;
-			if (vert.X > m_sectionMaxX) m_sectionMaxX = vert.X;
+			Engine::Math::Vector3 vert;
+			const auto transformed = m_sectionMtx.Transform_Point(pVert[i]);
+			vert = {transformed.x, transformed.y, transformed.z};
+			if (m_sectionMinX > vert.x) m_sectionMinX = vert.x;
+			if (vert.x > m_sectionMaxX) m_sectionMaxX = vert.x;
 		}
 
 		numVertex = m_rightMesh->Peek_Model()->Get_Vertex_Count();
@@ -319,10 +323,11 @@ Bool W3DBridge::load(BodyDamageType curDamageState)
 		m_rightMinX = FLT_MAX;
 		m_rightMaxX = -FLT_MAX;
 		for (i=0; i<numVertex; i++) {
-			Vector3 vert;
-			Matrix3D::Transform_Vector(m_rightMtx, pVert[i], &vert);
-			if (m_rightMinX > vert.X) m_rightMinX = vert.X;
-			if (vert.X > m_rightMaxX) m_rightMaxX = vert.X;
+			Engine::Math::Vector3 vert;
+			const auto transformed = m_rightMtx.Transform_Point(pVert[i]);
+			vert = {transformed.x, transformed.y, transformed.z};
+			if (m_rightMinX > vert.x) m_rightMinX = vert.x;
+			if (vert.x > m_rightMaxX) m_rightMaxX = vert.x;
 		}
 	} else {
 		m_sectionMinX = m_leftMaxX;
@@ -358,37 +363,37 @@ Bool W3DBridge::load(BodyDamageType curDamageState)
 void W3DBridge::getBridgeInfo(BridgeInfo *pInfo)
 {
 
-	pInfo->from.x = m_start.X;
-	pInfo->from.y = m_start.Y;
-	pInfo->from.z = m_start.Z;
-	pInfo->to.x = m_end.X;
-	pInfo->to.y = m_end.Y;
-	pInfo->to.z = m_end.Z;
+	pInfo->from.x = m_start.x;
+	pInfo->from.y = m_start.y;
+	pInfo->from.z = m_start.z;
+	pInfo->to.x = m_end.x;
+	pInfo->to.y = m_end.y;
+	pInfo->to.z = m_end.z;
 	pInfo->bridgeWidth = (m_maxY - m_minY) *m_scale;
 
-	Vector3 vec = 	m_end-m_start;
-	Vector3 vecNormal(-vec.Y, vec.X, 0);
-	vecNormal.Normalize();
+	Engine::Math::Vector3 vec = 	m_end-m_start;
+	Engine::Math::Vector3 vecNormal(-vec.y, vec.x, 0);
+	vecNormal = vecNormal.Normalized_Legacy();
 
 	// From left = from + vecNormal*maxY*scale
-	pInfo->fromLeft.x = m_start.X + vecNormal.X * m_maxY * m_scale;
-	pInfo->fromLeft.y = m_start.Y + vecNormal.Y * m_maxY * m_scale;
-	pInfo->fromLeft.z = m_start.Z + vecNormal.Z * m_maxY * m_scale;
+	pInfo->fromLeft.x = m_start.x + vecNormal.x * m_maxY * m_scale;
+	pInfo->fromLeft.y = m_start.y + vecNormal.y * m_maxY * m_scale;
+	pInfo->fromLeft.z = m_start.z + vecNormal.z * m_maxY * m_scale;
 
 	// From right = from + vecNormal*minY*scale
-	pInfo->fromRight.x = m_start.X + vecNormal.X * m_minY * m_scale;
-	pInfo->fromRight.y = m_start.Y + vecNormal.Y * m_minY * m_scale;
-	pInfo->fromRight.z = m_start.Z + vecNormal.Z * m_minY * m_scale;
+	pInfo->fromRight.x = m_start.x + vecNormal.x * m_minY * m_scale;
+	pInfo->fromRight.y = m_start.y + vecNormal.y * m_minY * m_scale;
+	pInfo->fromRight.z = m_start.z + vecNormal.z * m_minY * m_scale;
 
 	// to left = to + vecNormal*maxY*scale
-	pInfo->toLeft.x = m_end.X + vecNormal.X * m_maxY * m_scale;
-	pInfo->toLeft.y = m_end.Y + vecNormal.Y * m_maxY * m_scale;
-	pInfo->toLeft.z = m_end.Z + vecNormal.Z * m_maxY * m_scale;
+	pInfo->toLeft.x = m_end.x + vecNormal.x * m_maxY * m_scale;
+	pInfo->toLeft.y = m_end.y + vecNormal.y * m_maxY * m_scale;
+	pInfo->toLeft.z = m_end.z + vecNormal.z * m_maxY * m_scale;
 
 	// to right = to + vecNormal*minY*scale
-	pInfo->toRight.x = m_end.X + vecNormal.X * m_minY * m_scale;
-	pInfo->toRight.y = m_end.Y + vecNormal.Y * m_minY * m_scale;
-	pInfo->toRight.z = m_end.Z + vecNormal.Z * m_minY * m_scale;
+	pInfo->toRight.x = m_end.x + vecNormal.x * m_minY * m_scale;
+	pInfo->toRight.y = m_end.y + vecNormal.y * m_minY * m_scale;
+	pInfo->toRight.z = m_end.z + vecNormal.z * m_minY * m_scale;
 
 }
 
@@ -400,8 +405,8 @@ void W3DBridge::getBridgeInfo(BridgeInfo *pInfo)
 /** Gets the vertex values for a section of a bridge.  */
 //=============================================================================
 Int W3DBridge::getModelVertices(Graphics::SurfaceVertex *destination_vb, Int curVertex, Real xOffset,
-																Vector3 &vec, Vector3 &vecNormal, Vector3 &vecZ, Vector3 &offset,
-																const Matrix3D &mtx,
+																Engine::Math::Vector3 &vec, Engine::Math::Vector3 &vecNormal, Engine::Math::Vector3 &vecZ, Engine::Math::Vector3 &offset,
+																		const Engine::Math::AffineTransform3 &mtx,
 																W3DMeshRenderObject *pMesh, Graphics::SceneObjectList<W3DRenderObject>::Cursor *pLightsIterator)
 {
 	if (pMesh == nullptr)
@@ -409,53 +414,55 @@ Int W3DBridge::getModelVertices(Graphics::SurfaceVertex *destination_vb, Int cur
 
 	Int i;
 	Int numVertex = pMesh->Peek_Model()->Get_Vertex_Count();
-	const Vector3 *pVert = pMesh->Peek_Model()->Peek_Vertex_Array();
+	const Engine::Math::Vector3 *pVert = pMesh->Peek_Model()->Peek_Vertex_Array();
 
-	const Vector3 *pNormal = 	pMesh->Peek_Model()->Get_Vertex_Normal_Array();
+	const Engine::Math::Vector3 *pNormal = pMesh->Peek_Model()->Get_Vertex_Normal_Array();
 
 	// If we happen to have too many bridges, stop.
 	if (curVertex+numVertex+2>= W3DBridgeBuffer::MAX_BRIDGE_VERTEX) {
 		return(0);
 	}
 
-	Vector3 lightRay[MAX_GLOBAL_LIGHTS];
+	Engine::Math::Vector3 lightRay[MAX_GLOBAL_LIGHTS];
 	const Coord3D *lightPos;
 
 	for (Int lightIndex=0; lightIndex < TheGlobalData->m_numGlobalLights; lightIndex++)
 	{
 		lightPos=&TheGlobalData->m_terrainLightPos[lightIndex];
-		lightRay[lightIndex].Set(-lightPos->x,-lightPos->y,	-lightPos->z);
+		lightRay[lightIndex] = {-lightPos->x, -lightPos->y, -lightPos->z};
 //		__asm {int 3}; //see if it really needs normalization!!
-		lightRay[lightIndex].Normalize();
+		lightRay[lightIndex] = lightRay[lightIndex].Normalized_Legacy();
 	}
 
-	const Vector2*uvs=pMesh->Peek_Model()->Get_UV_Array_By_Index(0);
+	const Engine::Math::Vector2*uvs=pMesh->Peek_Model()->Get_UV_Array_By_Index(0);
 	Graphics::SurfaceVertex *curVb = destination_vb+curVertex;
 
 	for (i=0; i<numVertex; i++) {
-		Vector3 vLoc;
-		Vector3 vertex;
-		Matrix3D::Transform_Vector(mtx, pVert[i], &vertex);
-		vLoc = (vertex.X+xOffset) * vec + vertex.Y*vecNormal + vertex.Z*vecZ;
+		Engine::Math::Vector3 vLoc;
+		Engine::Math::Vector3 vertex;
+		const auto transformed_vertex = mtx.Transform_Point(pVert[i]);
+		vertex = {transformed_vertex.x, transformed_vertex.y, transformed_vertex.z};
+		vLoc = (vertex.x+xOffset) * vec + vertex.y*vecNormal + vertex.z*vecZ;
 
-		vLoc.X += m_start.X;
-		vLoc.Y += m_start.Y;
-		vLoc.Z += m_start.Z;
+		vLoc.x += m_start.x;
+		vLoc.y += m_start.y;
+		vLoc.z += m_start.z;
 
-		curVb->position[0] = vLoc.X;
-		curVb->position[1] = vLoc.Y;
-		curVb->position[2] = vLoc.Z;
+		curVb->position[0] = vLoc.x;
+		curVb->position[1] = vLoc.y;
+		curVb->position[2] = vLoc.z;
 
 
-		Vector3 normal;
-		Matrix3D::Rotate_Vector(mtx, pNormal[i], &normal);
-		normal = (normal.X) * vec + normal.Y*vecNormal + normal.Z*vecZ;
-		normal.Normalize();
+		Engine::Math::Vector3 normal;
+		const auto transformed_normal = mtx.Transform_Vector(pNormal[i]);
+		normal = {transformed_normal.x, transformed_normal.y, transformed_normal.z};
+		normal = (normal.x) * vec + normal.y*vecNormal + normal.z*vecZ;
+		normal = normal.Normalized_Legacy();
 		const auto diffuse = TheTerrainRenderObject->computeVertexLighting(vLoc, lightRay, &normal, nullptr, 1);
 		curVb->color = Assets::Color_From_ARGB(diffuse | 0xFF000000).To_Array();
 
-		curVb->uv[0] = uvs[i].U;
-		curVb->uv[1] = uvs[i].V;
+		curVb->uv[0] = uvs[i].x;
+		curVb->uv[1] = uvs[i].y;
 		curVb++;
 	}
 	return(numVertex);
@@ -467,22 +474,22 @@ Int W3DBridge::getModelVertices(Graphics::SurfaceVertex *destination_vb, Int cur
 /** Gets the vertex values for a section of a fixed bridge.  */
 //=============================================================================
 Int W3DBridge::getModelVerticesFixed(Graphics::SurfaceVertex *destination_vb, Int curVertex,
-																const Matrix3D &mtx, W3DMeshRenderObject *pMesh, Graphics::SceneObjectList<W3DRenderObject>::Cursor *pLightsIterator)
+																		const Engine::Math::AffineTransform3 &mtx, W3DMeshRenderObject *pMesh, Graphics::SceneObjectList<W3DRenderObject>::Cursor *pLightsIterator)
 {
 	if (pMesh == nullptr)
 		return(0);
 
-	Vector3 vec = m_end - m_start;
-	if (vec.Length2() < 1.0f) {
-		vec.Normalize();
+	Engine::Math::Vector3 vec = m_end - m_start;
+	if (vec.Length_Squared() < 1.0f) {
+		vec = vec.Normalized_Legacy();
 	}
-	Vector3 vecNormal(-vec.Y, vec.X, 0);
-	vecNormal.Normalize();
-	Real deltaZ = m_end.Z - m_start.Z;
+	Engine::Math::Vector3 vecNormal(-vec.y, vec.x, 0);
+	vecNormal = vecNormal.Normalized_Legacy();
+	Real deltaZ = m_end.z - m_start.z;
 	deltaZ /= vec.Length();
 	Real deltaX = sqrt(1.0 - deltaZ*deltaZ);
-	Vector3 vecZ(-deltaZ, 0, deltaX);
-	vec /= m_length;
+	Engine::Math::Vector3 vecZ(-deltaZ, 0, deltaX);
+	vec = vec / m_length;
 	vecNormal *= m_scale;
 	vecZ *= m_scale;
 	Real xOffset = -m_leftMinX;
@@ -523,21 +530,21 @@ void W3DBridge::getIndicesNVertices(UnsignedShort *destination_ib, Graphics::Sur
 		return;
 	}
 
-	Vector3 vec = m_end - m_start;
-	if (vec.Length2() < 1.0f) {
-		vec.Normalize();
+	Engine::Math::Vector3 vec = m_end - m_start;
+	if (vec.Length_Squared() < 1.0f) {
+		vec = vec.Normalized_Legacy();
 	}
 
-	Vector3 vecNormal(-vec.Y, vec.X, 0);
-	vecNormal.Normalize();
+	Engine::Math::Vector3 vecNormal(-vec.y, vec.x, 0);
+	vecNormal = vecNormal.Normalized_Legacy();
 	vecNormal *= m_scale;
 
 	// Rotate along the y axis to get the appropriate Z height adjustment.
-	Real deltaZ = m_end.Z - m_start.Z;
+	Real deltaZ = m_end.z - m_start.z;
 	Real desiredLength = vec.Length();
 	deltaZ /= desiredLength;
 	Real deltaX = sqrt(1.0 - deltaZ*deltaZ);
-	Vector3 vecZ(-deltaZ, 0, deltaX);
+	Engine::Math::Vector3 vecZ(-deltaZ, 0, deltaX);
 	vecZ *= m_scale;
 
 	Real spanLength = m_rightMinX - m_leftMaxX;
@@ -552,7 +559,7 @@ void W3DBridge::getIndicesNVertices(UnsignedShort *destination_ib, Graphics::Sur
 	Real xOffset = -m_leftMinX;
 
 	// Draw the left end.
-	vec /= bridgeLength;
+	vec = vec / bridgeLength;
 	numV = getModelVertices(destination_vb, *curVertexP, xOffset, vec, vecNormal, vecZ, m_start,
 		m_leftMtx, m_leftMesh, pLightsIterator);
 	if (!numV)
@@ -630,9 +637,9 @@ Int W3DBridge::getModelIndices(UnsignedShort *destination_ib, Int curIndex, Int 
 	UnsignedShort *curIb = destination_ib+curIndex;
 	Int i;
 	for (i=0; i<numPoly; i++) {
-		*curIb++ = vertexOffset + pPoly[i].I;
-		*curIb++ = vertexOffset + pPoly[i].J;
-		*curIb++ = vertexOffset + pPoly[i].K;
+		*curIb++ = vertexOffset + pPoly[i][0];
+		*curIb++ = vertexOffset + pPoly[i][1];
+		*curIb++ = vertexOffset + pPoly[i][2];
 	}
 	return(numPoly*3);
 }
@@ -781,11 +788,11 @@ void W3DBridgeBuffer::loadBridges(W3DTerrainLogic *pTerrainLogic, Bool saveGame)
 			}
 			if (pMapObj2==nullptr) break;
 			if (!pMapObj2->getFlag(FLAG_BRIDGE_POINT2)) continue;
-			Vector3 from, to;
-			from.Set(pMapObj->getLocation()->x, pMapObj->getLocation()->y, 0);
-			from.Z = TheTerrainRenderObject->getHeightMapHeight(from.X, from.Y, nullptr) + BRIDGE_FLOAT_AMT;
-			to.Set(pMapObj2->getLocation()->x, pMapObj2->getLocation()->y, 0);
-			to.Z = TheTerrainRenderObject->getHeightMapHeight(to.X, to.Y, nullptr) + BRIDGE_FLOAT_AMT;
+			Engine::Math::Vector3 from, to;
+			from = {pMapObj->getLocation()->x, pMapObj->getLocation()->y, 0};
+			from.z = TheTerrainRenderObject->getHeightMapHeight(from.x, from.y, nullptr) + BRIDGE_FLOAT_AMT;
+			to = {pMapObj2->getLocation()->x, pMapObj2->getLocation()->y, 0};
+			to.z = TheTerrainRenderObject->getHeightMapHeight(to.x, to.y, nullptr) + BRIDGE_FLOAT_AMT;
 			addBridge(from, to, pMapObj->getName(), pTerrainLogic, pMapObj->getProperties());
 			pMapObj = pMapObj2;
 		}
@@ -862,11 +869,8 @@ static W3DRenderObject* createTower( W3DSimpleScene *scene,
 	mapObject->setBridgeRenderObject( type, tower );
 
 	// set the position of the tower render object to the position in the world
-	Matrix3D transform;
-	transform.Make_Identity();
-	transform.Set_X_Translation( towerPos.x );
-	transform.Set_Y_Translation( towerPos.y );
-	transform.Set_Z_Translation( towerPos.z );
+	Engine::Math::AffineTransform3 transform = Engine::Math::AffineTransform3::From_Translation(
+		{towerPos.x, towerPos.y, towerPos.z});
 	tower->Set_Transform( transform );
 
 	// set the angle for the tower
@@ -918,12 +922,9 @@ static void updateTowerPos( W3DRenderObject* tower,
 	}
 
 	// set the position of the tower render object to the position in the world
-	Matrix3D transform;
-	transform.Make_Identity();
-	transform.Set_X_Translation( towerPos.x );
-	transform.Set_Y_Translation( towerPos.y );
-	transform.Set_Z_Translation( towerPos.z );
-	transform.Rotate_Z( angle );
+	Engine::Math::AffineTransform3 transform = Engine::Math::AffineTransform3::From_Translation(
+		{towerPos.x, towerPos.y, towerPos.z});
+	transform.Pre_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Z(angle));
 	tower->Set_Transform( transform );
 
 	// set the angle for the tower
@@ -971,10 +972,10 @@ void W3DBridgeBuffer::worldBuilderUpdateBridgeTowers( W3DAssetManager *assetMana
 				/// @todo integrate the editor with the game ... will never happen tho ...
 				//
 				if( m_bridges[ i ].getTemplateName() == pMapObj->getName() &&
-						m_bridges[ i ].getStart()->X == pMapObj->getLocation()->x &&
-						m_bridges[ i ].getStart()->Y == pMapObj->getLocation()->y &&
-						m_bridges[ i ].getEnd()->X == pMapObj2->getLocation()->x &&
-						m_bridges[ i ].getEnd()->Y == pMapObj2->getLocation()->y )
+					m_bridges[ i ].getStart()->x == pMapObj->getLocation()->x &&
+						m_bridges[ i ].getStart()->y == pMapObj->getLocation()->y &&
+						m_bridges[ i ].getEnd()->x == pMapObj2->getLocation()->x &&
+						m_bridges[ i ].getEnd()->y == pMapObj2->getLocation()->y )
 				{
 					W3DRenderObject *towerRenderObj;
 
@@ -1029,7 +1030,7 @@ void W3DBridgeBuffer::worldBuilderUpdateBridgeTowers( W3DAssetManager *assetMana
 //=============================================================================
 /** Adds a bridge.  Name is the GDF object name. */
 //=============================================================================
-void W3DBridgeBuffer::addBridge(Vector3 fromLoc, Vector3 toLoc, AsciiString name, W3DTerrainLogic *pTerrainLogic, Dict *props)
+void W3DBridgeBuffer::addBridge(Engine::Math::Vector3 fromLoc, Engine::Math::Vector3 toLoc, AsciiString name, W3DTerrainLogic *pTerrainLogic, Dict *props)
 {
 	if (m_numBridges >= MAX_BRIDGES) {
 		return;

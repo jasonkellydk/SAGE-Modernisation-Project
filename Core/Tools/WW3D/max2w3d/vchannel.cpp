@@ -37,11 +37,24 @@
 
 
 #include "vchannel.h"
+#include <cmath>
 #include <assert.h>
 #include <string.h>
 #include <stdlib.h>
 #include "W3DFile.h"
 #include "w3dquat.h"
+
+// Legacy DEG_TO_RAD: ((double)x) * WWMATH_PI / 180.0, with the float WWMATH_PI.
+static inline double Legacy_Deg_To_Rad(double degrees)
+{
+	return degrees * 3.141592654f / 180.0;
+}
+
+// Legacy WWMath::Lerp(float, float, float): a + (b - a) * t.
+static inline float Legacy_Lerp(float a, float b, float t)
+{
+	return (a + (b - a) * t);
+}
 #include "bchannel.h"
 #include "exportlog.h"
 
@@ -121,7 +134,7 @@ VectorChannelClass::VectorChannelClass
 			//ratio = ((ratio + 1.0f) / 128.0f);
 			ratio/=((float) FILTER_TABLE_GEN_SIZE);
 
-			filtertable[i + FILTER_TABLE_GEN_START] = 1.0f - sin( DEG_TO_RAD(90.0f * ratio));
+			filtertable[i + FILTER_TABLE_GEN_START] = 1.0f - sin( Legacy_Deg_To_Rad(90.0f * ratio));
 		}
 
 		table_valid = true;
@@ -673,7 +686,7 @@ void VectorChannelClass::SetSaveOptions(bool compress, int flavor, float Terr, f
 	CompressAnimation = compress;
 	CompressAnimationFlavor = flavor;
 	CompressAnimationTranslationError = Terr;
-	CompressAnimationRotationError = DEG_TO_RAD(Rerr);
+	CompressAnimationRotationError = Legacy_Deg_To_Rad(Rerr);
 
 }
 
@@ -992,7 +1005,7 @@ static  float32 tempvec[MAX_VECTOR_SIZE];
         uint32 idx=0;
         for (; idx < c->VectorLen; idx++)  {
 
-        	tempvec[ idx ] = WWMath::Lerp(pVecSrc[idx], pVecDst[idx], tRatio);
+		tempvec[ idx ] = Legacy_Lerp(pVecSrc[idx], pVecDst[idx], tRatio);
 
         }
 
@@ -1236,7 +1249,7 @@ static  float32 tempvec[MAX_VECTOR_SIZE];
 				uint32 idx=0;
 				for (; idx < c->VectorLen; idx++)  {
 
-        		 tempvec[ idx ] = WWMath::Lerp(pVecSrc[idx], pVecDst[idx], tRatio);
+			 tempvec[ idx ] = Legacy_Lerp(pVecSrc[idx], pVecDst[idx], tRatio);
 
 				}
 

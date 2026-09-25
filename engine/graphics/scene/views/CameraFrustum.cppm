@@ -173,8 +173,8 @@ CameraFrustumPlane Make_Plane(const Vector3 &first, const Vector3 &second,
 
 }
 
-// znear and zfar are positive distances in the camera API. Signed values are
-// also accepted so this remains directly compatible with FrustumClass::Init.
+// znear and zfar are positive distances in the camera API. Signed negative
+// values are also accepted for camera-space callers using a negative-Z view.
 export CameraFrustum Build_Camera_Frustum(const RenderTransform &camera_transform,
 	const CameraViewPlane &view_plane, float znear, float zfar) noexcept
 {

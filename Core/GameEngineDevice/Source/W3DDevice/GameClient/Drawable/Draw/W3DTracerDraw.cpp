@@ -107,39 +107,34 @@ public:
 	{
 		if (!m_graphics.Set_Description(Graphics::Get_Prop_Renderer(), m_description))
 			return false;
-		Matrix3D view;
-		Matrix4x4 projection;
-		rinfo.Camera.Get_View_Matrix(&view);
-		rinfo.Camera.Get_Backend_Projection_Matrix(&projection);
-		const Matrix4x4 view_matrix(view);
-		const Matrix4x4 view_projection = projection * view_matrix;
-		const Matrix4x4 world_matrix(Get_Transform());
+		const auto camera_matrices = rinfo.Camera.Build_Render_Matrices();
 
 		Graphics::TracerDrawData data;
-		Copy_Matrix(data.view_projection, view_projection);
-		Copy_Matrix(data.view, view_matrix);
-		Copy_Matrix(data.world, world_matrix);
-		const Vector3 camera = rinfo.Camera.Get_Position();
-		data.camera_position = {camera.X, camera.Y, camera.Z, 1.0f};
-		data.camera_depth = {view_matrix[2][0], view_matrix[2][1], view_matrix[2][2], view_matrix[2][3]};
+		data.view_projection = camera_matrices.view_projection;
+		data.view = camera_matrices.view;
+		data.world = W3DCamera::Build_World_Matrix(Get_Transform());
+		const Engine::Math::Vector3 camera = rinfo.Camera.Get_Position();
+		data.camera_position = {camera.x, camera.y, camera.z, 1.0f};
+		data.camera_depth = {camera_matrices.view[8], camera_matrices.view[9],
+			camera_matrices.view[10], camera_matrices.view[11]};
 		data.opacity = m_opacity;
 		data.front_counter_clockwise = !Get_W3D_Render_Services().Is_Reflection_Render_Pass();
 		return m_graphics.Submit(Graphics::Get_Prop_Renderer(), Graphics::Get_Prop_Submission(), data);
 	}
 
-	void Get_Obj_Space_Bounding_Sphere(SphereClass &sphere) const override
+	void Get_Local_Bounding_Sphere(Engine::Math::Sphere3 &sphere) const override
 	{
 		const float half_length = m_description.length * 0.5f;
 		const float half_width = m_description.width * 0.5f;
-		sphere.Center.Set(half_length, 0.0f, 0.0f);
-		sphere.Radius = std::sqrt(half_length * half_length + 2.0f * half_width * half_width);
+		sphere = {{half_length, 0.0f, 0.0f},
+			std::sqrt(half_length * half_length + 2.0f * half_width * half_width)};
 	}
 
-	void Get_Obj_Space_Bounding_Box(AABoxClass &box) const override
+	void Get_Local_Bounds(Engine::Math::AxisAlignedBox3 &box) const override
 	{
-		box.Center.Set(m_description.length * 0.5f, 0.0f, 0.0f);
-		box.Extent.Set(m_description.length * 0.5f, m_description.width * 0.5f,
-			m_description.width * 0.5f);
+		const float half_width = m_description.width * 0.5f;
+		box = {{0.0f, -half_width, -half_width},
+			{m_description.length, half_width, half_width}};
 	}
 
 	bool Set_Description(float length, float width, const RGBColor &color)
@@ -159,13 +154,6 @@ public:
 	}
 
 private:
-	static void Copy_Matrix(std::array<float, 16> &destination, const Matrix4x4 &source)
-	{
-		for (unsigned row = 0; row < 4; ++row)
-			for (unsigned column = 0; column < 4; ++column)
-				destination[row * 4 + column] = source[row][column];
-	}
-
 	Graphics::TracerRenderer m_graphics;
 	Graphics::TracerDescription m_description{};
 	float m_opacity = 1.0f;
@@ -193,7 +181,7 @@ W3DTracerDraw::W3DTracerDraw( Thing *thing, const ModuleData* moduleData ) : Dra
 
 }
 
-void W3DTracerDraw::createTracer(const Matrix3D& transform)
+void W3DTracerDraw::createTracer(const Engine::Math::AffineTransform3& transform)
 {
 	if (m_theTracer != nullptr)
 		return;
@@ -218,7 +206,7 @@ void W3DTracerDraw::setTracerParms(Real speed, Real length, Real width, const RG
 	{
 		m_theTracer->Set_Description(m_length, m_width, m_color);
 		m_theTracer->Set_Opacity( m_opacity );
-		m_theTracer->Set_Transform( *getDrawable()->getTransformMatrix() );
+		m_theTracer->Set_Transform(getDrawable()->worldTransform());
 	}
 }
 
@@ -236,19 +224,17 @@ W3DTracerDraw::~W3DTracerDraw()
 }
 
 //-------------------------------------------------------------------------------------------------
-void W3DTracerDraw::reactToTransformChange( const Matrix3D *oldMtx,
-																							 const Coord3D *oldPos,
-																							 Real oldAngle )
+void W3DTracerDraw::reactToTransformChange(const Coord3D* oldPos, Real oldAngle)
 {
 	if( m_theTracer )
-		m_theTracer->Set_Transform( *getDrawable()->getTransformMatrix() );
+		m_theTracer->Set_Transform(getDrawable()->worldTransform());
 }
 
 //-------------------------------------------------------------------------------------------------
 //-------------------------------------------------------------------------------------------------
-void W3DTracerDraw::doDrawModule(const Matrix3D* transformMtx)
+void W3DTracerDraw::doDrawModule(const Engine::Math::AffineTransform3* transform)
 {
-    if (!m_theTracer) createTracer(*transformMtx);
+    if (!m_theTracer) createTracer(*transform);
     const UnsignedInt expiration = getDrawable()->getExpirationDate();
     if (expiration != 0) {
         const UnsignedInt frame = TheGameLogic->getFrame();
@@ -256,9 +242,10 @@ void W3DTracerDraw::doDrawModule(const Matrix3D* transformMtx)
         m_theTracer->Set_Opacity(m_opacity);
     }
     if (m_speedInDistPerFrame != 0.0f) {
-        Matrix3D position = m_theTracer->Get_Transform();
-        position.Translate(Vector3(m_speedInDistPerFrame,0,0));
-        m_theTracer->Set_Transform(position);
+		Engine::Math::AffineTransform3 position = m_theTracer->Get_Transform();
+		position.Set_Translation(position.Translation()
+			+ position.Transform_Vector({m_speedInDistPerFrame, 0.0f, 0.0f}));
+		m_theTracer->Set_Transform(position);
     }
 }
 

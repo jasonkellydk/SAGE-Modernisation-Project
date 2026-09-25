@@ -347,7 +347,7 @@ private:
 	{
 		Drawable*								ropeDrawable;
 		DrawableID							ropeID;	// used only during save-load process
-		Matrix3D								dropStartMtx;
+		Engine::Math::AffineTransform3 dropStartTransform;
 		Real										ropeSpeed;
 		Real										ropeLen;
 		Real										ropeLenMax;
@@ -454,7 +454,7 @@ protected:
 					info.ropeID = info.ropeDrawable ? info.ropeDrawable->getID() : INVALID_DRAWABLE_ID;
 				}
 				xfer->xferDrawableID(&info.ropeID);
-				xfer->xferMatrix3D(&info.dropStartMtx);
+				xfer->xferAffineTransform3(&info.dropStartTransform);
 				xfer->xferReal(&info.ropeSpeed);
 				xfer->xferReal(&info.ropeLen);
 				xfer->xferReal(&info.ropeLenMax);
@@ -505,10 +505,10 @@ public:
 
 		const Int MAX_BONES = 32;
     Coord3D ropePos[MAX_BONES];
-    Matrix3D dropMtx[MAX_BONES];
+    Engine::Math::AffineTransform3 dropTransforms[MAX_BONES];
 
-		Int ropeCount = draw->getPristineBonePositions("RopeStart", 1, ropePos, nullptr, MAX_BONES);
-		Int dropCount = draw->getPristineBonePositions("RopeEnd", 1, nullptr, dropMtx, MAX_BONES);
+		Int ropeCount = draw->getPristineBonePositions("RopeStart", 1, ropePos, MAX_BONES);
+		Int dropCount = draw->getPristineBoneTransforms("RopeEnd", 1, dropTransforms, MAX_BONES);
 
 		Int numRopes = d->m_numRopes;
 		if (numRopes > ropeCount) numRopes = ropeCount;
@@ -521,12 +521,12 @@ public:
 		{
 			RopeInfo info;
 
-			obj->convertBonePosToWorldPos( nullptr, &dropMtx[i], nullptr, &info.dropStartMtx );
+			obj->transformBoneToWorld(nullptr, &dropTransforms[i], nullptr, &info.dropStartTransform);
 
 			info.ropeDrawable = ropeTmpl ? TheThingFactory->newDrawable(ropeTmpl) : nullptr;
 			if (info.ropeDrawable)
 			{
-				obj->convertBonePosToWorldPos( &ropePos[i], nullptr, &ropePos[i], nullptr );
+				obj->transformBoneToWorld( &ropePos[i], nullptr, &ropePos[i], nullptr );
 				info.ropeDrawable->setPosition(&ropePos[i]);
 				info.ropeSpeed = 0.0f;
 				info.ropeLen = 1.0f;
@@ -610,7 +610,7 @@ public:
 					}
 #endif
 
-					rappeller->setTransformMatrix(&it->dropStartMtx);
+					rappeller->setWorldTransform(it->dropStartTransform);
 
 					AIUpdateInterface* rappellerAI = rappeller ? rappeller->getAIUpdateInterface() : nullptr;
 					if (rappellerAI)

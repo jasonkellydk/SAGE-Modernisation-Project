@@ -23,6 +23,7 @@ import Graphics.Diagnostics.Render;
 
 #include "StdAfx.h"
 #include "W3DView.h"
+#include <algorithm>
 
 #include "MainFrm.h"
 #include "DataTreeView.h"
@@ -88,6 +89,7 @@ import Graphics.Diagnostics.Render;
 import Graphics.Frame.Runtime;
 import Graphics.Capture.FrameCapture;
 import Video.Capture.ImageWriter;
+import Engine.Core.Math.Vector3;
 
 
 #ifdef RTS_DEBUG
@@ -126,6 +128,13 @@ __inline void Adjust_Light_Intensity (Vector3 &color, float inc)
 	color.X = (color.X > 1.0F) ? 1.0F : color.X;
 	color.Y = (color.Y > 1.0F) ? 1.0F : color.Y;
 	color.Z = (color.Z > 1.0F) ? 1.0F : color.Z;
+}
+
+__inline void Adjust_Light_Intensity (Engine::Math::Vector3 &color, float inc)
+{
+	color.x = (std::clamp)(color.x + inc, 0.0f, 1.0f);
+	color.y = (std::clamp)(color.y + inc, 0.0f, 1.0f);
+	color.z = (std::clamp)(color.z + inc, 0.0f, 1.0f);
 }
 
 
@@ -2659,7 +2668,7 @@ CMainFrame::OnDecAmbientLight ()
 	if (pdoc->GetScene () != nullptr) {
 
 		// Get the current ambient light settings
-		Vector3 color = pdoc->GetScene ()->Get_Ambient_Light ();
+		Engine::Math::Vector3 color = pdoc->GetScene ()->Get_Ambient_Light ();
 
 		// Decrement the intensity and pass it back to the light
 		Adjust_Light_Intensity (color, -0.05F);
@@ -2680,7 +2689,7 @@ CMainFrame::OnIncAmbientLight ()
 	if (pdoc->GetScene () != nullptr) {
 
 		// Get the current ambient light settings
-		Vector3 color = pdoc->GetScene ()->Get_Ambient_Light ();
+		Engine::Math::Vector3 color = pdoc->GetScene ()->Get_Ambient_Light ();
 
 		// Increment the intensity and pass it back to the light
 		Adjust_Light_Intensity (color, 0.05F);

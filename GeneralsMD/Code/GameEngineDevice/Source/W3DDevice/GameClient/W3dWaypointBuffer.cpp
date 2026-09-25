@@ -84,6 +84,7 @@ import Graphics.Materials.State;
 import Graphics.Scene.Views.CameraMatrices;
 import Graphics.Scene.Lines.Drawing;
 import Graphics.Frame.Runtime;
+import Engine.Core.Math.Vector3;
 
 #include "W3DDevice/GameClient/W3DCamera.h"
 #include "W3DDevice/GameClient/W3DMeshRenderObject.h"
@@ -149,7 +150,7 @@ void W3DWaypointBuffer::setDefaultLineStyle()
 	lineShader.Set_Depth_Compare(Graphics::MaterialState::PASS_ALWAYS);
 	m_line->Set_Shader( lineShader );	//pick the alpha blending mode you want - see shader.h for others.
 	m_line->Set_Width( 1.5f );
-	m_line->Set_Color( Vector3( 0.25f, 0.5f, 1.0f ) );
+	m_line->Set_Color( Engine::Math::Vector3{0.25f, 0.5f, 1.0f} );
 	m_line->Set_Texture_Mapping_Mode( Graphics::RibbonTextureMapping::Tiled );	//this tiles the texture across the line
 }
 
@@ -179,7 +180,7 @@ void W3DWaypointBuffer::drawWaypoints(W3DRenderContext &rinfo)
 		lightEnv.Finalize();
 		W3DRenderContext localRinfo(rinfo.Camera);
 		localRinfo.light_environment=&lightEnv;
-		Vector3 points[ MAX_DISPLAY_NODES + 1 ]; //Lines have nodes + 1 points.
+		Engine::Math::Vector3 points[MAX_DISPLAY_NODES + 1]; //Lines have nodes + 1 points.
 
 		const DrawableList *selected = TheInGameUI->getAllSelectedDrawables();
 		Drawable *draw;
@@ -196,7 +197,7 @@ void W3DWaypointBuffer::drawWaypoints(W3DRenderContext &rinfo)
 				if( ai && gpIdx >= 0 && gpIdx < goalSize )
 				{
 					const Coord3D *pos = obj->getPosition();
-					points[ 0 ].Set( Vector3( pos->x, pos->y, pos->z ) );
+					points[0] = {pos->x, pos->y, pos->z};
 
 					for( int i = gpIdx; i < goalSize; i++ )
 					{
@@ -207,11 +208,11 @@ void W3DWaypointBuffer::drawWaypoints(W3DRenderContext &rinfo)
 
 							if( numPoints < MAX_DISPLAY_NODES + 1 )
 							{
-								points[ numPoints ].Set( Vector3( waypoint->x, waypoint->y, waypoint->z ) );
+								points[numPoints] = {waypoint->x, waypoint->y, waypoint->z};
 								numPoints++;
 							}
 
-							m_waypointNodeRobj->Set_Position(Vector3(waypoint->x,waypoint->y,waypoint->z));
+							m_waypointNodeRobj->Set_Position({waypoint->x,waypoint->y,waypoint->z});
 							m_nodeGraphics.Render(*m_waypointNodeRobj,localRinfo,Graphics::PropLighting{{1,1,1}},nullptr);
 						}
 					}
@@ -231,7 +232,7 @@ void W3DWaypointBuffer::drawWaypoints(W3DRenderContext &rinfo)
 		lightEnv.Finalize();
 		W3DRenderContext localRinfo(rinfo.Camera);
 		localRinfo.light_environment=&lightEnv;
-		Vector3 points[ MAX_DISPLAY_NODES + 1 ]; //Lines have nodes + 1 points.
+		Engine::Math::Vector3 points[MAX_DISPLAY_NODES + 1]; //Lines have nodes + 1 points.
 
 		const DrawableList *selected = TheInGameUI->getAllSelectedDrawables();
 		Drawable *draw;
@@ -278,7 +279,7 @@ void W3DWaypointBuffer::drawWaypoints(W3DRenderContext &rinfo)
                     Bool lineExists = FALSE;
 
 					          const Coord3D *pos = enemy->getPosition();
-					          points[ numPoints++ ].Set( Vector3( pos->x, pos->y, pos->z ) );
+					          points[numPoints++] = {pos->x, pos->y, pos->z};
 
                     if ( gpIdx >= 0 && gpIdx < goalSize )// Ooh, the enemy is in waypoint mode
 				            {
@@ -292,10 +293,10 @@ void W3DWaypointBuffer::drawWaypoints(W3DRenderContext &rinfo)
 
 							            if( numPoints < MAX_DISPLAY_NODES + 1 )
 							            {
-								            points[ numPoints++ ].Set( Vector3( waypoint->x, waypoint->y, waypoint->z ) );
+							            points[numPoints++] = {waypoint->x, waypoint->y, waypoint->z};
 							            }
 
-							            m_waypointNodeRobj->Set_Position(Vector3(waypoint->x,waypoint->y,waypoint->z));
+					            m_waypointNodeRobj->Set_Position({waypoint->x,waypoint->y,waypoint->z});
 							            m_nodeGraphics.Render(*m_waypointNodeRobj,localRinfo,Graphics::PropLighting{{1,1,1}},nullptr);
                           lineExists = TRUE;
 						            }
@@ -306,8 +307,8 @@ void W3DWaypointBuffer::drawWaypoints(W3DRenderContext &rinfo)
                       const Coord3D *destinationPoint = ai->getGoalPosition();
                       if ( destinationPoint->length() > 1.0f )
                       {
-								        points[ numPoints++ ].Set( Vector3( destinationPoint->x, destinationPoint->y, destinationPoint->z ) );
-							          m_waypointNodeRobj->Set_Position(Vector3(destinationPoint->x,destinationPoint->y,destinationPoint->z));
+							        points[numPoints++] = {destinationPoint->x, destinationPoint->y, destinationPoint->z};
+					          m_waypointNodeRobj->Set_Position({destinationPoint->x,destinationPoint->y,destinationPoint->z});
 							          m_nodeGraphics.Render(*m_waypointNodeRobj,localRinfo,Graphics::PropLighting{{1,1,1}},nullptr);
                         lineExists = TRUE;
                       }
@@ -317,7 +318,7 @@ void W3DWaypointBuffer::drawWaypoints(W3DRenderContext &rinfo)
                     {
 					            //Now render the lines in one pass!
 
-                      m_line->Set_Color( Vector3( 0.95f, 0.5f, 0.0f ) );
+	                      m_line->Set_Color( Engine::Math::Vector3{0.95f, 0.5f, 0.0f} );
                       m_line->Set_Width( 3.0f );
 
 					            m_line->Set_Points( numPoints, points );
@@ -348,7 +349,7 @@ void W3DWaypointBuffer::drawWaypoints(W3DRenderContext &rinfo)
 					if ( ! exitInterface->getExitPosition(exitPoint))
 						exitPoint = *obj->getPosition();
 
-					points[ numPoints ].Set( Vector3( exitPoint.x, exitPoint.y, exitPoint.z ) );
+					points[numPoints] = {exitPoint.x, exitPoint.y, exitPoint.z};
 					numPoints++;
 
 					Bool boxWrap = TRUE;
@@ -357,7 +358,7 @@ void W3DWaypointBuffer::drawWaypoints(W3DRenderContext &rinfo)
 					{
 						if( !naturalRallyPoint.equals( exitPoint ) )
 						{
-							points[ numPoints ].Set( Vector3( naturalRallyPoint.x, naturalRallyPoint.y, naturalRallyPoint.z ) );
+							points[numPoints] = {naturalRallyPoint.x, naturalRallyPoint.y, naturalRallyPoint.z};
 							numPoints++;
 						}
 						else
@@ -480,9 +481,9 @@ void W3DWaypointBuffer::drawWaypoints(W3DRenderContext &rinfo)
 
 									if (pNearElbow)//did we find a nearest corner?
 									{
-										m_waypointNodeRobj->Set_Position(Vector3(pNearElbow->x,pNearElbow->y,ctr->z));
+										m_waypointNodeRobj->Set_Position({pNearElbow->x,pNearElbow->y,ctr->z});
 										m_nodeGraphics.Render(*m_waypointNodeRobj,localRinfo,Graphics::PropLighting{{1,1,1}},nullptr); //The little hockey puck
-										points[ numPoints ].Set( Vector3( pNearElbow->x, pNearElbow->y, ctr->z ) );
+										points[numPoints] = {pNearElbow->x, pNearElbow->y, ctr->z};
 										numPoints++;
 
 
@@ -506,9 +507,9 @@ void W3DWaypointBuffer::drawWaypoints(W3DRenderContext &rinfo)
 											dot = firstToRPDelta.x * firstElbowDelta.x + firstToRPDelta.y * firstElbowDelta.y;
 											if (dot < 0)// we have a second elbow
 											{
-												m_waypointNodeRobj->Set_Position(Vector3(pFarElbow->x,pFarElbow->y,ctr->z));
+												m_waypointNodeRobj->Set_Position({pFarElbow->x,pFarElbow->y,ctr->z});
 												m_nodeGraphics.Render(*m_waypointNodeRobj,localRinfo,Graphics::PropLighting{{1,1,1}},nullptr); //The little hockey puck
-												points[ numPoints ].Set( Vector3( pFarElbow->x, pFarElbow->y, ctr->z ) );
+												points[numPoints] = {pFarElbow->x, pFarElbow->y, ctr->z};
 												numPoints++;
 											}
 										}
@@ -521,14 +522,14 @@ void W3DWaypointBuffer::drawWaypoints(W3DRenderContext &rinfo)
 						}
 
 						// Finally draw the line out to the RallyPoint
-						points[ numPoints ].Set( Vector3( rallyPoint->x, rallyPoint->y, rallyPoint->z ) );
+						points[numPoints] = {rallyPoint->x, rallyPoint->y, rallyPoint->z};
 						numPoints++;
 
 					}
 					else
 						continue;
 
-					m_waypointNodeRobj->Set_Position(Vector3(naturalRallyPoint.x,naturalRallyPoint.y,naturalRallyPoint.z));
+					m_waypointNodeRobj->Set_Position({naturalRallyPoint.x,naturalRallyPoint.y,naturalRallyPoint.z});
 					m_nodeGraphics.Render(*m_waypointNodeRobj,localRinfo,Graphics::PropLighting{{1,1,1}},nullptr); //The little hockey puck
 
 

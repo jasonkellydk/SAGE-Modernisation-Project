@@ -29,6 +29,10 @@
 
 #include "PreRTS.h"
 import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
+import Engine.Core.Math.AffineTransform3;
+import Engine.Core.Math.Vector2;
+
+#include "Common/LegacyTransformMath.h"
 
 #define DEFINE_DEATH_NAMES
 
@@ -201,7 +205,7 @@ ParticleUplinkCannonUpdate::ParticleUplinkCannonUpdate( Thing *thing, const Modu
 		m_laserBeamIDs[ i ] = INVALID_DRAWABLE_ID;
 		//Initializing (even though they will get cached properly).
 		m_outerNodePositions[ i ].zero();
-		m_outerNodeOrientations[ i ].Make_Identity();
+		m_outerNodeOrientations[i] = Engine::Math::AffineTransform3::Identity();
 	}
 }
 
@@ -548,28 +552,30 @@ UpdateSleepTime ParticleUplinkCannonUpdate::update()
 
 				//Now that we have our cartesian offset relative to the target coordinate, we need to rotate that offset
 				//so it's aligned to along the building -> target vector.
-				Vector2 buildingToTargetVector( m_initialTargetPosition.x - me->getPosition()->x, m_initialTargetPosition.y - me->getPosition()->y );
-				buildingToTargetVector.Normalize();
-				Vector2 cartesianTargetVector( m_currentTargetPosition.x, m_currentTargetPosition.y );
-				cartesianTargetVector.Normalize();
+				Engine::Math::Vector2 buildingToTargetVector{
+					m_initialTargetPosition.x - me->getPosition()->x,
+					m_initialTargetPosition.y - me->getPosition()->y};
+				buildingToTargetVector = buildingToTargetVector.Normalized_Legacy();
+				Engine::Math::Vector2 cartesianTargetVector{m_currentTargetPosition.x, m_currentTargetPosition.y};
+				cartesianTargetVector = cartesianTargetVector.Normalized_Legacy();
 
-				Real dotProduct = Vector2::Dot_Product( buildingToTargetVector, cartesianTargetVector );
+				Real dotProduct = buildingToTargetVector.Dot(cartesianTargetVector);
 				dotProduct = __min( 0.99999f, __max( -0.99999f, dotProduct ) ); //Account for numerical errors.  Also, acos(-1.00000) is coming out QNAN on the superweapon general map.  Heh.
 				Real angle = (Real)ACos( dotProduct );
 
-				if( buildingToTargetVector.Y >= 0 )
+				if( buildingToTargetVector.y >= 0 )
 				{
 					angle = -angle;
 				}
 
-				Matrix3D mtx( Vector3( 1.0f, 0.0f, 0.0f ) );
-				mtx.Scale( targetDistance );
-				mtx.Rotate_Z( -angle );
+				Engine::Math::AffineTransform3 transform = Engine::Math::AffineTransform3::From_Translation({1.0f, 0.0f, 0.0f});
+				Legacy_Scale(transform, targetDistance);
+				Legacy_Rotate_Z(transform, -angle);
 
-				Vector3 v = mtx.Get_X_Vector();
+				const Engine::Math::Vector3 v = transform.Basis_X();
 
-				m_currentTargetPosition.x = me->getPosition()->x + v.X;
-				m_currentTargetPosition.y = me->getPosition()->y + v.Y;
+				m_currentTargetPosition.x = me->getPosition()->x + v.x;
+				m_currentTargetPosition.y = me->getPosition()->y + v.y;
 			}
 			else
 			{
@@ -855,7 +861,7 @@ void ParticleUplinkCannonUpdate::createOuterNodeParticleSystems( IntensityTypes 
 				{
 					m_outerSystemIDs[ i ] = system->getSystemID();
 					system->setPosition( &m_outerNodePositions[ i ] );
-					system->setLocalTransform( &m_outerNodeOrientations[ i ] );
+					system->setLocalTransform(m_outerNodeOrientations[i]);
 				}
 			}
 		}
@@ -1115,8 +1121,9 @@ Bool ParticleUplinkCannonUpdate::calculateDefaultInformation()
 
 	//Get the local bone positions for each of the outer nodes.
 	Coord3D bonePositions[ MAX_OUTER_NODES ];
-	Matrix3D boneMatrices[ MAX_OUTER_NODES ];
-	int numBones = obj->getMultiLogicalBonePosition( data->m_outerEffectBaseBoneName.str(), data->m_outerEffectNumBones, bonePositions, boneMatrices, FALSE );
+	Engine::Math::AffineTransform3 boneTransforms[MAX_OUTER_NODES];
+	int numBones = obj->getMultiLogicalBonePosition(data->m_outerEffectBaseBoneName.str(),
+		data->m_outerEffectNumBones, bonePositions, boneTransforms, FALSE);
 
 	if( numBones != data->m_outerEffectNumBones )
 	{
@@ -1131,8 +1138,8 @@ Bool ParticleUplinkCannonUpdate::calculateDefaultInformation()
 		m_outerSystemIDs[ i ] = INVALID_PARTICLE_SYSTEM_ID;
 
 		//Convert the local bone position into world space.
-		Matrix3D nodeMatrix;
-		getObject()->convertBonePosToWorldPos( &bonePositions[i], &boneMatrices[i], &m_outerNodePositions[ i ], &m_outerNodeOrientations[ i ] );
+		getObject()->transformBoneToWorld(&bonePositions[i], &boneTransforms[i],
+			&m_outerNodePositions[i], &m_outerNodeOrientations[i]);
 	}
 
 	return TRUE;
@@ -1146,17 +1153,19 @@ Bool ParticleUplinkCannonUpdate::calculateUpBonePositions()
 	Object *obj = getObject();
 	//Due to instant special weapons (or scripting)... it's possible to be in many states that are ready to fire (or firing)
 	Drawable *draw = obj->getDrawable();
-	Matrix3D mtx;
+	Engine::Math::AffineTransform3 transform;
 	Coord3D pos;
 	if( draw )
 	{
-		if( data->m_connectorBoneName.isNotEmpty() && draw->getCurrentClientBonePositions( data->m_connectorBoneName.str(), 0, &pos, &mtx, 1 ) )
+		if (data->m_connectorBoneName.isNotEmpty()
+			&& draw->getCurrentClientBoneTransforms(data->m_connectorBoneName.str(), 0, &pos, &transform, 1))
 		{
-			obj->convertBonePosToWorldPos( &pos, &mtx, &m_connectorNodePosition, &mtx );
+			obj->transformBoneToWorld(&pos, &transform, &m_connectorNodePosition, &transform);
 		}
-		if( data->m_connectorBoneName.isNotEmpty() && draw->getCurrentClientBonePositions( data->m_fireBoneName.str(), 0, &pos, &mtx, 1 ) )
+		if (data->m_connectorBoneName.isNotEmpty()
+			&& draw->getCurrentClientBoneTransforms(data->m_fireBoneName.str(), 0, &pos, &transform, 1))
 		{
-			obj->convertBonePosToWorldPos( &pos, &mtx, &m_laserOriginPosition, &mtx );
+			obj->transformBoneToWorld(&pos, &transform, &m_laserOriginPosition, &transform);
 		}
 	}
 	return TRUE;
@@ -1454,7 +1463,7 @@ void ParticleUplinkCannonUpdate::xfer( Xfer *xfer )
 	xfer->xferUser( m_outerNodePositions, sizeof( Coord3D ) * MAX_OUTER_NODES );
 
 	// outer node orientations
-	xfer->xferUser( m_outerNodeOrientations, sizeof( Matrix3D ) * MAX_OUTER_NODES );
+	xfer->xferUser(m_outerNodeOrientations, sizeof(m_outerNodeOrientations));
 
 	// connector node position
 	xfer->xferCoord3D( &m_connectorNodePosition );

@@ -23,6 +23,7 @@ import Graphics.Resources.Textures.Resource;
 import Graphics.Scene.Props.Constants;
 import Graphics.Scene.Props.Geometry;
 import Graphics.Scene.Props.Renderer;
+import Engine.Core.Math.Vector3;
 import Graphics.Tests.Device;
 
 #include "W3DDevice/GameClient/NullRenderObject.h"
@@ -593,17 +594,17 @@ BOOST_AUTO_TEST_CASE(render_object_persistence_uses_named_and_reserved_catalog_f
 
 	RefCountPtr<W3DRenderObject> named_source =
 		Create_No_Add_Ref(new NullRenderObject("Saved.Null"));
-	named_source->Set_Position(Vector3(7, 8, 9));
+	named_source->Set_Position(Engine::Math::Vector3{7, 8, 9});
 	RefCountPtr<W3DRenderObject> named = Roundtrip_Render_Object(*named_source);
 	BOOST_REQUIRE(named != nullptr);
 	BOOST_CHECK_EQUAL(std::string(named->Get_Name()), "Saved.Null");
-	BOOST_CHECK(named->Get_Position() == Vector3(7, 8, 9));
+	BOOST_CHECK(named->Get_Position() == Engine::Math::Vector3{7, 8, 9});
 
 	RefCountPtr<W3DRenderObject> missing_source =
 		Create_No_Add_Ref(new NullRenderObject("Missing.Null"));
-	missing_source->Set_Position(Vector3(2, 4, 6));
+	missing_source->Set_Position(Engine::Math::Vector3{2, 4, 6});
 	RefCountPtr<W3DRenderObject> missing = Roundtrip_Render_Object(*missing_source);
 	BOOST_REQUIRE(missing != nullptr);
 	BOOST_CHECK_EQUAL(std::string(missing->Get_Name()), "NULL");
-	BOOST_CHECK(missing->Get_Position() == Vector3(2, 4, 6));
+	BOOST_CHECK(missing->Get_Position() == Engine::Math::Vector3{2, 4, 6});
 }

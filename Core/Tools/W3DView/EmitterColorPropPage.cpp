@@ -175,16 +175,16 @@ EmitterColorPropPageClass::OnInitDialog ()
 	m_BlueRandomSpin.SetRange (0, 255);
 
 	m_OpacityRandomSpin.SetPos (m_OrigOpacities.Rand * 100);
-	m_RedRandomSpin.SetPos (m_OrigColors.Rand.X * 255);
-	m_GreenRandomSpin.SetPos (m_OrigColors.Rand.Y * 255);
-	m_BlueRandomSpin.SetPos (m_OrigColors.Rand.Z * 255);
+	m_RedRandomSpin.SetPos (m_OrigColors.Rand.x * 255);
+	m_GreenRandomSpin.SetPos (m_OrigColors.Rand.y * 255);
+	m_BlueRandomSpin.SetPos (m_OrigColors.Rand.z * 255);
 
 	//
 	//	Reset the color bars
 	//
 	m_ColorBar->Clear_Points ();
 	m_OpacityBar->Clear_Points ();
-	m_ColorBar->Modify_Point (0, 0, m_OrigColors.Start.X * 255, m_OrigColors.Start.Y * 255, m_OrigColors.Start.Z * 255);
+	m_ColorBar->Modify_Point (0, 0, m_OrigColors.Start.x * 255, m_OrigColors.Start.y * 255, m_OrigColors.Start.z * 255);
 	m_OpacityBar->Modify_Point (0, 0, m_OrigOpacities.Start * 255, m_OrigOpacities.Start * 255, m_OrigOpacities.Start * 255);
 
 	//
@@ -200,9 +200,9 @@ EmitterColorPropPageClass::OnInitDialog ()
 	for (index = 0; index < m_OrigColors.NumKeyFrames; index ++) {
 		m_ColorBar->Modify_Point (index + 1,
 											m_OrigColors.KeyTimes[index] / m_Lifetime,
-											m_OrigColors.Values[index].X * 255,
-											m_OrigColors.Values[index].Y * 255,
-											m_OrigColors.Values[index].Z * 255);
+												m_OrigColors.Values[index].x * 255,
+												m_OrigColors.Values[index].y * 255,
+												m_OrigColors.Values[index].z * 255);
 	}
 
 	//
@@ -353,7 +353,7 @@ EmitterColorPropPageClass::OnNotify
 			NMUPDOWN *pudnotif = (NMUPDOWN *)lParam;
 			if (pudnotif->hdr.code == UDN_DELTAPOS) {
 				float pos = (pudnotif->iPos + pudnotif->iDelta);
-				m_CurrentColors.Rand.X = pos / 255.0F;
+				m_CurrentColors.Rand.x = pos / 255.0F;
 				m_pEmitterList->Set_Color_Keyframes (m_CurrentColors);
 				SetModified ();
 			}
@@ -366,7 +366,7 @@ EmitterColorPropPageClass::OnNotify
 			NMUPDOWN *pudnotif = (NMUPDOWN *)lParam;
 			if (pudnotif->hdr.code == UDN_DELTAPOS) {
 				float pos = (pudnotif->iPos + pudnotif->iDelta);
-				m_CurrentColors.Rand.Y = pos / 255.0F;
+				m_CurrentColors.Rand.y = pos / 255.0F;
 				m_pEmitterList->Set_Color_Keyframes (m_CurrentColors);
 				SetModified ();
 			}
@@ -379,7 +379,7 @@ EmitterColorPropPageClass::OnNotify
 			NMUPDOWN *pudnotif = (NMUPDOWN *)lParam;
 			if (pudnotif->hdr.code == UDN_DELTAPOS) {
 				float pos = (pudnotif->iPos + pudnotif->iDelta);
-				m_CurrentColors.Rand.Z = pos / 255.0F;
+				m_CurrentColors.Rand.z = pos / 255.0F;
 				m_pEmitterList->Set_Color_Keyframes (m_CurrentColors);
 				SetModified ();
 			}
@@ -485,9 +485,9 @@ EmitterColorPropPageClass::Update_Colors ()
 	//
 	//	Setup the initial or 'starting' color
 	//
-	m_CurrentColors.Start.X = red / 255;
-	m_CurrentColors.Start.Y = green / 255;
-	m_CurrentColors.Start.Z = blue / 255;
+	m_CurrentColors.Start.x = red / 255;
+	m_CurrentColors.Start.y = green / 255;
+	m_CurrentColors.Start.z = blue / 255;
 
 	//
 	// Free the current setting arrays
@@ -502,7 +502,7 @@ EmitterColorPropPageClass::Update_Colors ()
 	m_CurrentColors.NumKeyFrames = count - 1;
 	if (count > 1) {
 		m_CurrentColors.KeyTimes = new float[count - 1];
-		m_CurrentColors.Values = new Vector3[count - 1];
+		m_CurrentColors.Values = new Engine::Math::Vector3[count - 1];
 
 		//
 		//	Get all the color points and add them to our structure
@@ -510,9 +510,9 @@ EmitterColorPropPageClass::Update_Colors ()
 		for (int index = 1; index < count; index ++) {
 			m_ColorBar->Get_Point (index, &position, &red, &green, &blue);
 			m_CurrentColors.KeyTimes[index-1] = position * m_Lifetime;
-			m_CurrentColors.Values[index-1].X	= red / 255;
-			m_CurrentColors.Values[index-1].Y	= green / 255;
-			m_CurrentColors.Values[index-1].Z	= blue / 255;
+			m_CurrentColors.Values[index-1].x	= red / 255;
+			m_CurrentColors.Values[index-1].y	= green / 255;
+			m_CurrentColors.Values[index-1].z	= blue / 255;
 		}
 	}
 }
@@ -543,7 +543,7 @@ EmitterColorPropPageClass::OnCommand
 				 SendDlgItemMessage (LOWORD (wParam), EM_GETMODIFY)) {
 				SendDlgItemMessage (LOWORD (wParam), EM_SETMODIFY, (WPARAM)0);
 
-				m_CurrentColors.Rand.X = ((float)GetDlgItemInt (IDC_RED_RANDOM_EDIT)) / 255;
+				m_CurrentColors.Rand.x = ((float)GetDlgItemInt (IDC_RED_RANDOM_EDIT)) / 255;
 				m_pEmitterList->Set_Color_Keyframes (m_CurrentColors);
 				SetModified ();
 			}
@@ -561,7 +561,7 @@ EmitterColorPropPageClass::OnCommand
 				 SendDlgItemMessage (LOWORD (wParam), EM_GETMODIFY)) {
 				SendDlgItemMessage (LOWORD (wParam), EM_SETMODIFY, (WPARAM)0);
 
-				m_CurrentColors.Rand.Y = ((float)GetDlgItemInt (IDC_GREEN_RANDOM_EDIT)) / 255;
+				m_CurrentColors.Rand.y = ((float)GetDlgItemInt (IDC_GREEN_RANDOM_EDIT)) / 255;
 				m_pEmitterList->Set_Color_Keyframes (m_CurrentColors);
 				SetModified ();
 			}
@@ -579,7 +579,7 @@ EmitterColorPropPageClass::OnCommand
 				 SendDlgItemMessage (LOWORD (wParam), EM_GETMODIFY)) {
 				SendDlgItemMessage (LOWORD (wParam), EM_SETMODIFY, (WPARAM)0);
 
-				m_CurrentColors.Rand.Z = ((float)GetDlgItemInt (IDC_BLUE_RANDOM_EDIT)) / 255;
+				m_CurrentColors.Rand.z = ((float)GetDlgItemInt (IDC_BLUE_RANDOM_EDIT)) / 255;
 				m_pEmitterList->Set_Color_Keyframes (m_CurrentColors);
 				SetModified ();
 			}
@@ -656,5 +656,3 @@ EmitterColorPropPageClass::On_Lifetime_Changed (float lifetime)
 		}*/
 	}
 }
-
-

@@ -22,6 +22,8 @@
 
 #pragma once
 
+#include <array>
+
 class ChunkItem;
 
 class ChunkType {
@@ -57,7 +59,7 @@ protected:
 	static void AddItem(CListCtrl *List, int &Counter, const char *Name, W3dRGBAStruct *Value);
 	static void AddItem(CListCtrl *List, int &Counter, const char *Name, W3dTexCoordStruct *Value, int Count);
 	static void AddItem(CListCtrl *List, int &Counter, const char *Name, W3dTexCoordStruct *Value);
-	static void AddItem(CListCtrl *List, int &Counter, const char *Name, Vector3i *Value);
+	static void AddItem(CListCtrl *List, int &Counter, const char *Name, std::array<int, 3> *Value);
 	static void AddItem(CListCtrl *List, int &Counter, const char *name, W3dShaderStruct * shader);
 	static void AddItem(CListCtrl *List, int &Counter, const char *name, W3dPS2ShaderStruct * shader);
 

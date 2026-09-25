@@ -31,6 +31,11 @@
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 #include "PreRTS.h"
 import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
+import Engine.Core.Math.AffineTransform3;
+import Engine.Core.Math.Vector3;
+using MathVector3 = Engine::Math::Vector3;
+
+#include "Common/LegacyTransformMath.h"
 
 #define DEFINE_SURFACECATEGORY_NAMES
 #define DEFINE_LOCO_Z_NAMES
@@ -110,9 +115,9 @@ inline Bool isNearly(Real a, Real val)
 // return the angle delta (in 3-space) we turned.
 static Real tryToRotateVector3D(
 	Real maxAngle,						// if negative, it's a percent (0...1) of the dist to rotate 'em
-	const Vector3& inCurDir,
-	const Vector3& inGoalDir,
-	Vector3& actualDir
+	const MathVector3& inCurDir,
+	const MathVector3& inGoalDir,
+	MathVector3& actualDir
 )
 {
 	if (isNearlyZero(maxAngle))
@@ -121,14 +126,12 @@ static Real tryToRotateVector3D(
 		return 0.0f;
 	}
 
-	Vector3 curDir = inCurDir;
-	curDir.Normalize();
+	MathVector3 curDir = inCurDir.Normalized_Legacy();
 
-	Vector3 goalDir = inGoalDir;
-	goalDir.Normalize();
+	MathVector3 goalDir = inGoalDir.Normalized_Legacy();
 
 	// dot of two unit vectors is cos of angle between them.
-	Real cosine = Vector3::Dot_Product(curDir, goalDir);
+	Real cosine = curDir.Dot(goalDir);
 	// bound it in case of numerical error
 	Real angleBetween = (Real)ACos(clamp(-1.0f, cosine, 1.0f));
 
@@ -153,34 +156,37 @@ static Real tryToRotateVector3D(
 		// we need to rotate around the axis perpendicular to these two vecs.
 		// but: cross of two vectors is the perpendicular axis!
 #ifdef ALLOW_TEMPORARIES
-		Vector3 objCrossGoal = Vector3::Cross_Product(curDir, goalDir);
-		objCrossGoal.Normalize();
+		MathVector3 objCrossGoal = curDir.Cross(goalDir).Normalized_Legacy();
 #else
-		Vector3 objCrossGoal;
-		Vector3::Normalized_Cross_Product(curDir, goalDir, &objCrossGoal);
+		MathVector3 objCrossGoal = curDir.Cross(goalDir).Normalized_Legacy();
 #endif
 
 		angleBetween = maxAngle;
-		Matrix3D rotMtx(objCrossGoal, angleBetween);
-		actualDir = rotMtx.Rotate_Vector(curDir);
+		const auto rotation = Engine::Math::AffineTransform3::From_Axis_Angle_Legacy(objCrossGoal, angleBetween);
+		actualDir = rotation.Transform_Vector(curDir);
 	}
 
 	return angleBetween;
 }
 
-//-------------------------------------------------------------------------------------------------
-static Real tryToOrientInThisDirection3D(Object* obj, Real maxTurnRate, const Vector3& desiredDir)
+static MathVector3 WorldForwardDirection(const Object *object)
 {
-	Vector3 actualDir;
-	Real relAngle = tryToRotateVector3D(maxTurnRate, obj->getTransformMatrix()->Get_X_Vector(), desiredDir, actualDir);
+	const auto transform = object->worldTransform();
+	const auto direction = transform.Basis_X();
+	return {direction.x, direction.y, direction.z};
+}
+
+//-------------------------------------------------------------------------------------------------
+static Real tryToOrientInThisDirection3D(Object* obj, Real maxTurnRate, const MathVector3& desiredDir)
+{
+	MathVector3 actualDir;
+	Real relAngle = tryToRotateVector3D(maxTurnRate, WorldForwardDirection(obj), desiredDir, actualDir);
 	if (relAngle != 0.0f)
 	{
-		Vector3 objPos(obj->getPosition()->x, obj->getPosition()->y, obj->getPosition()->z);
-
-		Matrix3D newXform;
-		newXform.buildTransformMatrix( objPos, actualDir );
-
-		obj->setTransformMatrix( &newXform );
+		const auto position = obj->getPosition();
+		const auto transform = Engine::Math::AffineTransform3::From_Unit_Forward_Direction(
+			{position->x, position->y, position->z}, actualDir);
+		obj->setWorldTransform(transform);
 	}
 	return relAngle;
 }
@@ -188,7 +194,7 @@ static Real tryToOrientInThisDirection3D(Object* obj, Real maxTurnRate, const Ve
 //-------------------------------------------------------------------------------------------------
 inline Real tryToOrientInThisDirection3D(Object* obj, Real maxTurnRate, const Coord3D* dir)
 {
-	return tryToOrientInThisDirection3D(obj, maxTurnRate, Vector3(dir->x, dir->y, dir->z));
+	return tryToOrientInThisDirection3D(obj, maxTurnRate, MathVector3{dir->x, dir->y, dir->z});
 }
 
 //-----------------------------------------------------------------------------
@@ -197,7 +203,7 @@ static void calcDirectionToApplyThrust(
 	const PhysicsBehavior* physics,
 	const Coord3D& ingoalPos,
 	Real maxAccel,
-	Vector3& goalDir
+	MathVector3& goalDir
 )
 {
 	/*
@@ -211,29 +217,29 @@ static void calcDirectionToApplyThrust(
 	*/
 
 	// convert to Vector3, to use all its handy stuff
-	Vector3 objPos(obj->getPosition()->x, obj->getPosition()->y, obj->getPosition()->z);
-	Vector3 goalPos(ingoalPos.x, ingoalPos.y, ingoalPos.z);
+	MathVector3 objPos{obj->getPosition()->x, obj->getPosition()->y, obj->getPosition()->z};
+	MathVector3 goalPos{ingoalPos.x, ingoalPos.y, ingoalPos.z};
 
-	Vector3 vecToGoal = goalPos - objPos;
-	if (isNearlyZero(vecToGoal.Length2()))
+	MathVector3 vecToGoal = goalPos - objPos;
+	if (isNearlyZero(vecToGoal.Length_Squared()))
 	{
 		// goal pos is essentially same as current pos, so just stay the same & return
-		goalDir = obj->getTransformMatrix()->Get_X_Vector();
+		goalDir = WorldForwardDirection(obj);
 		return;
 	}
 
 	/*
 		get our cur vel into a useful Vector3 form
 	*/
-	Vector3 curVel(physics->getVelocity()->x, physics->getVelocity()->y, physics->getVelocity()->z);
+	MathVector3 curVel{physics->getVelocity()->x, physics->getVelocity()->y, physics->getVelocity()->z};
 
 	// add gravity to our vel so that we account for it in our calcs
-	curVel.Z += TheGlobalData->m_gravity;
+	curVel.z += TheGlobalData->m_gravity;
 
 	Bool foundSolution = false;
-	Real distToGoalSqr = vecToGoal.Length2();
+	Real distToGoalSqr = vecToGoal.Length_Squared();
 	Real distToGoal = sqrt(distToGoalSqr);
-	Real curVelMagSqr = curVel.Length2();
+	Real curVelMagSqr = curVel.Length_Squared();
 	Real curVelMag = sqrt(curVelMagSqr);
 	Real maxAccelSqr = sqr(maxAccel);
 
@@ -252,10 +258,10 @@ static void calcDirectionToApplyThrust(
 			// plug it in.
 			if (!isNearlyZero(t))
 			{
-				goalDir.X = (vecToGoal.X / t) - curVel.X;
-				goalDir.Y = (vecToGoal.Y / t) - curVel.Y;
-				goalDir.Z = (vecToGoal.Z / t) - curVel.Z;
-				goalDir.Normalize();
+				goalDir.x = (vecToGoal.x / t) - curVel.x;
+				goalDir.y = (vecToGoal.y / t) - curVel.y;
+				goalDir.z = (vecToGoal.z / t) - curVel.z;
+				goalDir = goalDir.Normalized_Legacy();
 				foundSolution = true;
 			}
 		}
@@ -264,7 +270,7 @@ static void calcDirectionToApplyThrust(
 	{
 		// Doh... no (useful) solution. revert to dumb.
 		goalDir = vecToGoal;
-		goalDir.Normalize();
+		goalDir = goalDir.Normalized_Legacy();
 	}
 
 }
@@ -1957,7 +1963,7 @@ void Locomotor::moveTowardsPositionThrust(Object* obj, PhysicsBehavior *physics,
 #endif
 	}
 
-	Vector3 forwardDir = obj->getTransformMatrix()->Get_X_Vector();
+	MathVector3 forwardDir = WorldForwardDirection(obj);
 
 	// Maintain goal speed
 	Real forwardSpeedDelta = desiredSpeed - actualForwardSpeed;
@@ -1965,26 +1971,26 @@ void Locomotor::moveTowardsPositionThrust(Object* obj, PhysicsBehavior *physics,
 	Real maxTurnRate = getMaxTurnRate(bdt);
 
 	// what direction do we need to thrust in, in order to reach the goalpos?
-	Vector3 desiredThrustDir;
+	MathVector3 desiredThrustDir;
 	calcDirectionToApplyThrust(obj, physics, localGoalPos, maxAccel, desiredThrustDir);
 
 	// we might not be able to thrust in that dir, so thrust as closely as we can
 	Real maxThrustAngle =	(maxTurnRate > 0) ? (m_template->m_maxThrustAngle) : 0;
-	Vector3 thrustDir;
+	MathVector3 thrustDir;
 	Real thrustAngle = tryToRotateVector3D(maxThrustAngle, forwardDir, desiredThrustDir, thrustDir);
 
 	// note that we are trying to orient in the direction of our vel, not the dir of our thrust.
 	if (!isNearlyZero(physics->getVelocityMagnitude()))
 	{
 		const Coord3D* veltmp = physics->getVelocity();
-		Vector3 vel(veltmp->x, veltmp->y, veltmp->z);
+		MathVector3 vel{veltmp->x, veltmp->y, veltmp->z};
 		Bool adjust = true;
 		if( obj->getStatusBits().test( OBJECT_STATUS_BRAKING ) )
 		{
 			// align to target, cause that's where we're going anyway.
 
-			vel.Set(goalPos.x - pos.x, goalPos.y-pos.y, goalPos.z-pos.z);
-			if (isNearlyZero(sqr(vel.X)+sqr(vel.Y)+sqr(vel.Z))) {
+			vel = {goalPos.x - pos.x, goalPos.y-pos.y, goalPos.z-pos.z};
+			if (isNearlyZero(sqr(vel.x)+sqr(vel.y)+sqr(vel.z))) {
 				// we are at target.
 				adjust = false;
 			}
@@ -1993,7 +1999,7 @@ void Locomotor::moveTowardsPositionThrust(Object* obj, PhysicsBehavior *physics,
 #ifdef USE_ZDIR_DAMPING
 		if (zDirDamping != 0.0f)
 		{
-			Vector3 vel2D(veltmp->x, veltmp->y, 0);
+			MathVector3 vel2D{veltmp->x, veltmp->y, 0};
 			// no need to normalize -- this call does that internally
 			tryToRotateVector3D(-zDirDamping, vel, vel2D, vel);
 		}
@@ -2010,17 +2016,17 @@ void Locomotor::moveTowardsPositionThrust(Object* obj, PhysicsBehavior *physics,
 			maxForwardSpeed = 0.01f; // In some cases, this is 0, hack for now.  jba.
 		}
 		Real damping = clamp(0.0f, maxAccel / maxForwardSpeed, 1.0f);
-		Vector3 curVel(physics->getVelocity()->x, physics->getVelocity()->y, physics->getVelocity()->z);
+		MathVector3 curVel{physics->getVelocity()->x, physics->getVelocity()->y, physics->getVelocity()->z};
 
-		Vector3 accelVec = thrustDir * maxAccel - curVel * damping;
+		MathVector3 accelVec = thrustDir * maxAccel - curVel * damping;
 		//engine::debug::log_info("accel %f (max %f) vel %f (max %f) damping %f",accelVec.Length(),maxAccel,curVel.Length(),maxForwardSpeed,damping);
 
 		Real mass = physics->getMass();
 
 		Coord3D force;
-		force.x = mass * accelVec.X;
-		force.y = mass * accelVec.Y;
-		force.z = mass * accelVec.Z;
+		force.x = mass * accelVec.x;
+		force.y = mass * accelVec.y;
+		force.z = mass * accelVec.z;
 
 		// apply forces to object
 		physics->applyMotiveForce( &force );
@@ -2183,15 +2189,14 @@ PhysicsTurningType Locomotor::rotateObjAroundLocoPivot(Object* obj, const Coord3
 		amount = angleDesiredForTurnPos - angle;
 #endif
 		/// @todo srj -- there's probably a more efficient & more direct way to do this. find it.
-		Matrix3D mtx;
-		Matrix3D tmp(1);
-		tmp.Translate(turnPos.x, turnPos.y, 0);
-		tmp.In_Place_Pre_Rotate_Z(amount);
-		tmp.Translate(-turnPos.x, -turnPos.y, 0);
+		Engine::Math::AffineTransform3 tmp = Engine::Math::AffineTransform3::Identity();
+		Legacy_Translate(tmp, turnPos.x, turnPos.y, 0);
+		Legacy_In_Place_Pre_Rotate_Z(tmp, amount);
+		Legacy_Translate(tmp, -turnPos.x, -turnPos.y, 0);
 
-		mtx.mul(tmp, *obj->getTransformMatrix());
+		const Engine::Math::AffineTransform3 transform = Compose(tmp, obj->worldTransform());
 
-		obj->setTransformMatrix(&mtx);
+		obj->setWorldTransform(transform);
 	}
 	else
 	{
@@ -2795,5 +2800,3 @@ Locomotor* LocomotorSet::findLocomotor(LocomotorSurfaceTypeMask t)
 	}
 	return nullptr;
 }
-
-

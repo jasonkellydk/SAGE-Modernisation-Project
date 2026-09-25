@@ -73,8 +73,8 @@ public:
 	virtual bool					Intersect_AABox(W3DBoxIntersectionQuery & boxtest) override;
 	virtual bool					Intersect_OBBox(W3DOrientedBoxIntersectionQuery & boxtest) override;
 
-	virtual void					Get_Obj_Space_Bounding_Sphere(SphereClass	& sphere) const override { sphere = ObjSphere; }
-   virtual void					Get_Obj_Space_Bounding_Box(AABoxClass & box) const override { box = ObjBox; }
+	virtual void					Get_Local_Bounding_Sphere(Engine::Math::Sphere3	& sphere) const override { sphere = ObjSphere; }
+   virtual void					Get_Local_Bounds(Engine::Math::AxisAlignedBox3 & box) const override { box = ObjBox; }
 	virtual void					Update_Obj_Space_Bounding_Volumes() override;
 
 	virtual void					Set_User_Data(void *value, bool recursive = false) override;
@@ -83,6 +83,6 @@ protected:
 
 	StringClass						Name;						// name of the render object
 	StringClass						BaseModelName;			// name of the original render obj (before aggregation)
-	SphereClass						ObjSphere;				// object-space bounding sphere
-	AABoxClass						ObjBox;					// object-space bounding box
+	Engine::Math::Sphere3						ObjSphere;				// object-space bounding sphere
+	Engine::Math::AxisAlignedBox3						ObjBox;					// object-space bounding box
 };

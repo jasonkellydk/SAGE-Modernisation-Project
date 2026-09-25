@@ -91,7 +91,6 @@ set(GAMEENGINEDEVICE_SRC
     Include/W3DDevice/GameClient/W3DInGameUI.h
 #    Include/W3DDevice/GameClient/W3DMouse.h
 #    Include/W3DDevice/GameClient/W3DParticleSys.h
-    Include/W3DDevice/GameClient/W3DPoly.h
     Include/W3DDevice/GameClient/W3DProjectedShadow.h
 #    Include/W3DDevice/GameClient/W3DPropBuffer.h
     Include/W3DDevice/GameClient/W3DRoadBuffer.h
@@ -169,6 +168,7 @@ set(GAMEENGINEDEVICE_SRC
     Source/W3DDevice/GameClient/W3DDebugDisplay.cpp
     Source/W3DDevice/GameClient/W3DDebugIcons.cpp
     Source/W3DDevice/GameClient/W3DDisplay.cpp
+    Source/W3DDevice/GameClient/W3DDisplayScene.cpp
     Source/W3DDevice/GameClient/W3DAssetRuntime.cpp
     Source/W3DDevice/GameClient/W3DEmitterLoader.cpp
     Source/W3DDevice/GameClient/W3DEmitterRenderObject.cpp
@@ -189,7 +189,6 @@ set(GAMEENGINEDEVICE_SRC
     Source/W3DDevice/GameClient/W3DInGameUI.cpp
 #    Source/W3DDevice/GameClient/W3DMouse.cpp
 #    Source/W3DDevice/GameClient/W3DParticleSys.cpp
-    Source/W3DDevice/GameClient/W3DPoly.cpp
 #    Source/W3DDevice/GameClient/W3DPropBuffer.cpp
     Source/W3DDevice/GameClient/W3DRoadBuffer.cpp
     Source/W3DDevice/GameClient/W3DScene.cpp
@@ -290,6 +289,7 @@ target_link_libraries(z_gameenginedevice PRIVATE
     stb
     SDL3::SDL3
     engine_platform_sdl3
+    engine_core_math
 )
 
 target_link_libraries(z_gameenginedevice PUBLIC

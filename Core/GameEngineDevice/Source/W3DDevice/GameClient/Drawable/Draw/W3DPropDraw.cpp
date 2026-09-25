@@ -82,9 +82,7 @@ W3DPropDraw::~W3DPropDraw()
 }
 
 //-------------------------------------------------------------------------------------------------
-void W3DPropDraw::reactToTransformChange( const Matrix3D *oldMtx,
-																							 const Coord3D *oldPos,
-																							 Real oldAngle )
+void W3DPropDraw::reactToTransformChange(const Coord3D* oldPos, Real oldAngle)
 {
 	Drawable *draw = getDrawable();
 	if (m_propAdded) {
@@ -106,7 +104,7 @@ void W3DPropDraw::reactToTransformChange( const Matrix3D *oldMtx,
 
 //-------------------------------------------------------------------------------------------------
 //-------------------------------------------------------------------------------------------------
-void W3DPropDraw::doDrawModule(const Matrix3D* transformMtx)
+void W3DPropDraw::doDrawModule(const Engine::Math::AffineTransform3* transform)
 {
 
 }

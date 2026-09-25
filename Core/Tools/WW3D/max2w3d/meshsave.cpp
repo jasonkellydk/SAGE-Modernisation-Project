@@ -1772,16 +1772,16 @@ int MeshSaveClass::write_aabtree(ChunkSaveClass & csave)
 		int vertcount = Builder.Get_Vertex_Count();
 		int polycount = Builder.Get_Face_Count();
 		Vector3 * verts = new Vector3[vertcount];
-		Vector3i * polys = new Vector3i[polycount];
+		Engine::Math::Index3i * polys = new Engine::Math::Index3i[polycount];
 
 		for (int vi=0; vi<vertcount; vi++) {
 			verts[vi] = Builder.Get_Vertex(vi).Position;
 		}
 
 		for (int pi=0; pi<polycount; pi++) {
-			polys[pi].I = Builder.Get_Face(pi).VertIdx[0];
-			polys[pi].J = Builder.Get_Face(pi).VertIdx[1];
-			polys[pi].K = Builder.Get_Face(pi).VertIdx[2];
+			polys[pi][0] = Builder.Get_Face(pi).VertIdx[0];
+			polys[pi][1] = Builder.Get_Face(pi).VertIdx[1];
+			polys[pi][2] = Builder.Get_Face(pi).VertIdx[2];
 		}
 
 		/*
@@ -2242,5 +2242,4 @@ void MeshSaveClass::prep_mesh(Mesh & mesh,Matrix3 & objoff)
 	// Re-Build the normals.
 	mesh.buildNormals();
 }
-
 

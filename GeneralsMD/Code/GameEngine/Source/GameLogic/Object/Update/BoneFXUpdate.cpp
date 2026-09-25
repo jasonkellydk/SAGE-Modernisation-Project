@@ -397,7 +397,7 @@ void BoneFXUpdate::doFXListAtBone(const FXList *fxList, const Coord3D *bonePosit
 	// Convert the bone's position relative to the origin of the building to the current
 	// bone position in the world.
 	Coord3D newPos;
-	building->convertBonePosToWorldPos(bonePosition, nullptr, &newPos, nullptr);
+	building->transformBoneToWorld(bonePosition, nullptr, &newPos, nullptr);
 
 	// execute the fx list at the calculated bone position.
 	FXList::doFXPos(fxList, &newPos, nullptr);
@@ -422,7 +422,7 @@ void BoneFXUpdate::doOCLAtBone(const ObjectCreationList *ocl, const Coord3D *bon
 	Object *building = getObject();
 
 	Coord3D newPos;
-	building->convertBonePosToWorldPos(bonePosition, nullptr, &newPos, nullptr);
+	building->transformBoneToWorld(bonePosition, nullptr, &newPos, nullptr);
 
 	ObjectCreationList::create( ocl, building, &newPos, nullptr, INVALID_ANGLE );
 
@@ -515,19 +515,19 @@ void BoneFXUpdate::resolveBoneLocations() {
 		if (d->m_fxList[m_curBodyState][i].locInfo.boneName.compare(AsciiString::TheEmptyString) != 0)
 		{
 			const BoneFXListInfo *info = &(d->m_fxList[m_curBodyState][i]);
-			drawable->getPristineBonePositions(info->locInfo.boneName.str(), 0, &m_FXBonePositions[m_curBodyState][i], nullptr, 1);
+			drawable->getPristineBonePositions(info->locInfo.boneName.str(), 0, &m_FXBonePositions[m_curBodyState][i], 1);
 		}
 
 		if (d->m_OCL[m_curBodyState][i].locInfo.boneName.compare(AsciiString::TheEmptyString) != 0)
 		{
 			const BoneOCLInfo *info = &(d->m_OCL[m_curBodyState][i]);
-			drawable->getPristineBonePositions(info->locInfo.boneName.str(), 0, &m_OCLBonePositions[m_curBodyState][i], nullptr, 1);
+			drawable->getPristineBonePositions(info->locInfo.boneName.str(), 0, &m_OCLBonePositions[m_curBodyState][i], 1);
 		}
 
 		if (d->m_particleSystem[m_curBodyState][i].locInfo.boneName.compare(AsciiString::TheEmptyString) != 0)
 		{
 			const BoneParticleSystemInfo *info = &(d->m_particleSystem[m_curBodyState][i]);
-			drawable->getPristineBonePositions(info->locInfo.boneName.str(), 0, &m_PSBonePositions[m_curBodyState][i], nullptr, 1);
+			drawable->getPristineBonePositions(info->locInfo.boneName.str(), 0, &m_PSBonePositions[m_curBodyState][i], 1);
 		}
 	}
 	m_bonesResolved[m_curBodyState] = TRUE;

@@ -30,6 +30,7 @@
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 #include "PreRTS.h"
 import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
+import Engine.Core.Math.AffineTransform3;
 #include "Common/CRCDebug.h"
 #include "Common/Xfer.h"
 #include "Common/ThingTemplate.h"
@@ -88,15 +89,15 @@ void ParkingPlaceBehavior::buildInfo()
 			for (Int col = 0; col < d->m_numCols; ++col)
 			{
 				AsciiString tmp;
-				Matrix3D mtx;
+				Engine::Math::AffineTransform3 transform;
 
 				tmp.format("Runway%dPark%dHan",col+1,row+1);
-				getObject()->getSingleLogicalBonePosition(tmp.str(), &info.m_hangarStart, &mtx);
-				info.m_hangarStartOrient = mtx.Get_Z_Rotation();
+				getObject()->getSingleLogicalBonePosition(tmp.str(), &info.m_hangarStart, &transform);
+				info.m_hangarStartOrient = transform.Z_Rotation_Legacy();
 
 				tmp.format("Runway%dParking%d",col+1,row+1);
-				getObject()->getSingleLogicalBonePosition(tmp.str(), &info.m_location, &mtx);
-				info.m_orientation = mtx.Get_Z_Rotation();
+				getObject()->getSingleLogicalBonePosition(tmp.str(), &info.m_location, &transform);
+				info.m_orientation = transform.Z_Rotation_Legacy();
 
 				tmp.format("Runway%dPrep%d",col+1,row+1);
 				getObject()->getSingleLogicalBonePosition(tmp.str(), &info.m_prep, nullptr);
@@ -814,18 +815,18 @@ void ParkingPlaceBehavior::exitObjectViaDoor( Object *newObj, ExitDoorType exitD
 	Bool producedAtHelipad = newObj->isKindOf(KINDOF_PRODUCED_AT_HELIPAD);
 
 	PPInfo ppinfo;
-	DUMPMATRIX3D(getObject()->getTransformMatrix());
+	DUMPTRANSFORM(getObject()->worldTransform());
 	DUMPCOORD3D(getObject()->getPosition());
 	if (producedAtHelipad)
 	{
 		engine::debug::log_trace("Produced at helipad (door = %d)", exitDoor);
 		engine::debug::invariant((exitDoor == DOOR_NONE_NEEDED), "exitDoor == DOOR_NONE_NEEDED", __FILE__, __LINE__, "Hmm, unlikely");
-		Matrix3D mtx;
-		MAYBE_UNUSED Bool boneOk = getObject()->getSingleLogicalBonePosition("HeliPark01", &ppinfo.hangarInternal, &mtx);
+		Engine::Math::AffineTransform3 transform;
+		MAYBE_UNUSED Bool boneOk = getObject()->getSingleLogicalBonePosition("HeliPark01", &ppinfo.hangarInternal, &transform);
 		(void)boneOk;
 
 		engine::debug::invariant((boneOk), "boneOk", __FILE__, __LINE__, "Could not get bone!");
-		ppinfo.hangarInternalOrient = mtx.Get_Z_Rotation();
+		ppinfo.hangarInternalOrient = transform.Z_Rotation_Legacy();
 		ppinfo.parkingSpace = ppinfo.hangarInternal;
 		ppinfo.parkingOrientation = ppinfo.hangarInternalOrient;
 	}
@@ -923,15 +924,15 @@ const Coord3D* ParkingPlaceBehavior::getRallyPoint() const
 //-------------------------------------------------------------------------------------------------
 Bool ParkingPlaceBehavior::getExitPosition( Coord3D& exitPosition ) const
 {
-	Matrix3D mtx;
-	return getObject()->getSingleLogicalBonePosition("HeliPark01", &exitPosition, &mtx );
+	Engine::Math::AffineTransform3 transform;
+	return getObject()->getSingleLogicalBonePosition("HeliPark01", &exitPosition, &transform);
 }
 
 //-------------------------------------------------------------------------------------------------
 Bool ParkingPlaceBehavior::getNaturalRallyPoint( Coord3D& rallyPoint, Bool offset ) const
 {
-	Matrix3D mtx;
-	return getObject()->getSingleLogicalBonePosition("HeliPark01", &rallyPoint, &mtx );
+	Engine::Math::AffineTransform3 transform;
+	return getObject()->getSingleLogicalBonePosition("HeliPark01", &rallyPoint, &transform);
 }
 
 // ------------------------------------------------------------------------------------------------

@@ -60,7 +60,6 @@ import Engine.UI.WND;
 #include "W3DDevice/GameClient/WorldHeightMap.h"
 #include "W3DDevice/GameClient/W3DShroud.h"
 #include "W3DDevice/GameClient/W3DTextureHandle.h"
-#include "WWMath/vector2i.h"
 import engine.debug;
 import Graphics.RHI;
 import Graphics.Resources.Textures.Storage;
@@ -250,7 +249,7 @@ void W3DRadar::reconstructViewBox()
 	//  1-------2
 	//   \     /
 	//    4---3
-	if( TheTacticalView->getScreenCornerWorldPointsAtZ(&world[0], &world[1], &world[2], &world[3], getTerrainAverageZ()) == PlaneClass::NO_INTERSECTION )
+	if( TheTacticalView->getScreenCornerWorldPointsAtZ(&world[0], &world[1], &world[2], &world[3], getTerrainAverageZ()) == Engine::Math::SegmentPlaneHit::Parallel )
 		return;
 
 	// convert each of the 4 points in the world to radar cell positions
@@ -363,7 +362,7 @@ void W3DRadar::drawViewBox(RadarDrawData &drawing, Int pixelX, Int pixelY, Int w
 
 	// convert top left of screen into world position
 	TheTacticalView->getOrigin( &ulScreen.x, &ulScreen.y );
-	if( TheTacticalView->screenToWorldAtZ( &ulScreen, &ulWorld, getTerrainAverageZ() ) == PlaneClass::NO_INTERSECTION )
+	if( TheTacticalView->screenToWorldAtZ( &ulScreen, &ulWorld, getTerrainAverageZ() ) == Engine::Math::SegmentPlaneHit::Parallel )
 		return;
 
 	// convert world to radar coords

@@ -1,3 +1,4 @@
+import Engine.Core.Math.Scalar;
 import Graphics.Frame.RenderClock;
 /*
 **	Command & Conquer Generals Zero Hour(tm)
@@ -349,10 +350,10 @@ void W3DTruckDraw::onRenderObjRecreated()
 //-------------------------------------------------------------------------------------------------
 /** Rotate and position wheels and other truck parts. */
 //-------------------------------------------------------------------------------------------------
-void W3DTruckDraw::doDrawModule(const Matrix3D* transformMtx)
+void W3DTruckDraw::doDrawModule(const Engine::Math::AffineTransform3* transform)
 {
 
-	W3DModelDraw::doDrawModule(transformMtx);
+	W3DModelDraw::doDrawModule(transform);
 
 	if (!TheGlobalData->m_showClientPhysics)
 		return;
@@ -390,8 +391,8 @@ void W3DTruckDraw::doDrawModule(const Matrix3D* transformMtx)
 	const TWheelInfo *wheelInfo = getDrawable()->getWheelInfo();	// note, can return null!
 	AIUpdateInterface *ai = obj->getAI();
 	if (m_cabBone && wheelInfo) {
-		Matrix3D cabXfrm(1);
-		cabXfrm.Make_Identity();
+		Engine::Math::AffineTransform3 cabXfrm = Engine::Math::AffineTransform3::Identity();
+		cabXfrm = Engine::Math::AffineTransform3::Identity();
 		Real desiredAngle = wheelInfo->m_wheelAngle*moduleData->m_cabRotationFactor;
 
 		// Check goal angle.
@@ -414,7 +415,7 @@ void W3DTruckDraw::doDrawModule(const Matrix3D* transformMtx)
 		Real deltaAngle = desiredAngle - m_curCabRotation;
 		deltaAngle *= moduleData->m_rotationDampingFactor;
 		m_curCabRotation += deltaAngle;
-		cabXfrm.Rotate_Z(m_curCabRotation);
+		cabXfrm.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Z(m_curCabRotation));
 		getRenderObject()->Capture_Bone( m_cabBone );
 		getRenderObject()->Control_Bone( m_cabBone, cabXfrm );
 		if (m_trailerBone && wheelInfo) {
@@ -422,8 +423,8 @@ void W3DTruckDraw::doDrawModule(const Matrix3D* transformMtx)
 			Real deltaAngle = desiredAngle - m_curTrailerRotation;
 			deltaAngle *= moduleData->m_rotationDampingFactor;
 			m_curTrailerRotation += deltaAngle;
-			cabXfrm.Make_Identity();
-			cabXfrm.Rotate_Z(m_curTrailerRotation);
+			cabXfrm = Engine::Math::AffineTransform3::Identity();
+			cabXfrm.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Z(m_curTrailerRotation));
 			getRenderObject()->Capture_Bone( m_trailerBone );
 			getRenderObject()->Control_Bone( m_trailerBone, cabXfrm );
 		}
@@ -446,45 +447,45 @@ void W3DTruckDraw::doDrawModule(const Matrix3D* transformMtx)
 
 		m_frontWheelRotation += rotationFactor*speed;
 		m_rearWheelRotation += rotationFactor*(speed + powerslideRotationAddition);
-		m_frontWheelRotation = WWMath::Normalize_Angle(m_frontWheelRotation);
-		m_rearWheelRotation = WWMath::Normalize_Angle(m_rearWheelRotation);
+		m_frontWheelRotation = m_frontWheelRotation - (Engine::Math::Tau * floorf((m_frontWheelRotation + Engine::Math::Pi) / Engine::Math::Tau));	// legacy WWMath::Normalize_Angle, [-PI, PI)
+		m_rearWheelRotation = m_rearWheelRotation - (Engine::Math::Tau * floorf((m_rearWheelRotation + Engine::Math::Pi) / Engine::Math::Tau));	// legacy WWMath::Normalize_Angle, [-PI, PI)
 
 		// For now, just use the same values for mid wheels -- may want to do independent calcs later...
 		m_midFrontWheelRotation = m_frontWheelRotation;
 		m_midRearWheelRotation = m_rearWheelRotation;
 
-		Matrix3D wheelXfrm(1);
+		Engine::Math::AffineTransform3 wheelXfrm = Engine::Math::AffineTransform3::Identity();
 
 
 
 		if (m_frontLeftTireBone && wheelInfo)
 		{
-			wheelXfrm.Make_Identity();
-			wheelXfrm.Adjust_Z_Translation(wheelInfo->m_frontLeftHeightOffset);
-			wheelXfrm.Rotate_Z(wheelInfo->m_wheelAngle);
-			wheelXfrm.Rotate_Y(m_frontWheelRotation);
+			wheelXfrm = Engine::Math::AffineTransform3::Identity();
+			wheelXfrm.Adjust_Translation({0.0f, 0.0f, wheelInfo->m_frontLeftHeightOffset});
+			wheelXfrm.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Z(wheelInfo->m_wheelAngle));
+			wheelXfrm.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Y(m_frontWheelRotation));
 			getRenderObject()->Capture_Bone( m_frontLeftTireBone );
 			getRenderObject()->Control_Bone( m_frontLeftTireBone, wheelXfrm );
 
 
-			wheelXfrm.Make_Identity();
-			wheelXfrm.Adjust_Z_Translation(wheelInfo->m_frontRightHeightOffset);
-			wheelXfrm.Rotate_Z(wheelInfo->m_wheelAngle);
-			wheelXfrm.Rotate_Y(m_frontWheelRotation);
+			wheelXfrm = Engine::Math::AffineTransform3::Identity();
+			wheelXfrm.Adjust_Translation({0.0f, 0.0f, wheelInfo->m_frontRightHeightOffset});
+			wheelXfrm.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Z(wheelInfo->m_wheelAngle));
+			wheelXfrm.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Y(m_frontWheelRotation));
 			getRenderObject()->Capture_Bone( m_frontRightTireBone );
 			getRenderObject()->Control_Bone( m_frontRightTireBone, wheelXfrm );
 		}
 		if (m_rearLeftTireBone && wheelInfo)
 		{
-			wheelXfrm.Make_Identity();
-			wheelXfrm.Rotate_Y(m_rearWheelRotation);
-			wheelXfrm.Adjust_Z_Translation(wheelInfo->m_rearLeftHeightOffset);
+			wheelXfrm = Engine::Math::AffineTransform3::Identity();
+			wheelXfrm.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Y(m_rearWheelRotation));
+			wheelXfrm.Adjust_Translation({0.0f, 0.0f, wheelInfo->m_rearLeftHeightOffset});
 			getRenderObject()->Capture_Bone( m_rearLeftTireBone );
 			getRenderObject()->Control_Bone( m_rearLeftTireBone, wheelXfrm );
 
-			wheelXfrm.Make_Identity();
-			wheelXfrm.Rotate_Y(m_rearWheelRotation);
-			wheelXfrm.Adjust_Z_Translation(wheelInfo->m_rearRightHeightOffset);
+			wheelXfrm = Engine::Math::AffineTransform3::Identity();
+			wheelXfrm.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Y(m_rearWheelRotation));
+			wheelXfrm.Adjust_Translation({0.0f, 0.0f, wheelInfo->m_rearRightHeightOffset});
 
 			//@todo TROUBLE HERE, THE BONE INDICES DO NOT MATCH THE RENDEROBJECTS BONES, SOMETIMES
 
@@ -493,45 +494,45 @@ void W3DTruckDraw::doDrawModule(const Matrix3D* transformMtx)
 		}
 		if (m_midFrontLeftTireBone && wheelInfo)
 		{
-			wheelXfrm.Make_Identity();
-			wheelXfrm.Adjust_Z_Translation(wheelInfo->m_frontLeftHeightOffset);
-			wheelXfrm.Rotate_Z(wheelInfo->m_wheelAngle);
-			wheelXfrm.Rotate_Y(m_midFrontWheelRotation);
+			wheelXfrm = Engine::Math::AffineTransform3::Identity();
+			wheelXfrm.Adjust_Translation({0.0f, 0.0f, wheelInfo->m_frontLeftHeightOffset});
+			wheelXfrm.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Z(wheelInfo->m_wheelAngle));
+			wheelXfrm.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Y(m_midFrontWheelRotation));
 			getRenderObject()->Capture_Bone( m_midFrontLeftTireBone );
 			getRenderObject()->Control_Bone( m_midFrontLeftTireBone, wheelXfrm );
 
-			wheelXfrm.Make_Identity();
-			wheelXfrm.Adjust_Z_Translation(wheelInfo->m_frontRightHeightOffset);
-			wheelXfrm.Rotate_Z(wheelInfo->m_wheelAngle);
-			wheelXfrm.Rotate_Y(m_midFrontWheelRotation);
+			wheelXfrm = Engine::Math::AffineTransform3::Identity();
+			wheelXfrm.Adjust_Translation({0.0f, 0.0f, wheelInfo->m_frontRightHeightOffset});
+			wheelXfrm.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Z(wheelInfo->m_wheelAngle));
+			wheelXfrm.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Y(m_midFrontWheelRotation));
 			getRenderObject()->Capture_Bone( m_midFrontRightTireBone );
 			getRenderObject()->Control_Bone( m_midFrontRightTireBone, wheelXfrm );
 		}
 		if (m_midRearLeftTireBone && wheelInfo)
 		{
-			wheelXfrm.Make_Identity();
-			wheelXfrm.Rotate_Y(m_midRearWheelRotation);
-			wheelXfrm.Adjust_Z_Translation(wheelInfo->m_rearLeftHeightOffset);
+			wheelXfrm = Engine::Math::AffineTransform3::Identity();
+			wheelXfrm.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Y(m_midRearWheelRotation));
+			wheelXfrm.Adjust_Translation({0.0f, 0.0f, wheelInfo->m_rearLeftHeightOffset});
 			getRenderObject()->Capture_Bone( m_midRearLeftTireBone );
 			getRenderObject()->Control_Bone( m_midRearLeftTireBone, wheelXfrm );
 
-			wheelXfrm.Make_Identity();
-			wheelXfrm.Rotate_Y(m_midRearWheelRotation);
-			wheelXfrm.Adjust_Z_Translation(wheelInfo->m_rearRightHeightOffset);
+			wheelXfrm = Engine::Math::AffineTransform3::Identity();
+			wheelXfrm.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Y(m_midRearWheelRotation));
+			wheelXfrm.Adjust_Translation({0.0f, 0.0f, wheelInfo->m_rearRightHeightOffset});
 			getRenderObject()->Capture_Bone( m_midRearRightTireBone );
 			getRenderObject()->Control_Bone( m_midRearRightTireBone, wheelXfrm );
 		}
 		if (m_midMidLeftTireBone && wheelInfo)
 		{
-			wheelXfrm.Make_Identity();
-			wheelXfrm.Rotate_Y(m_midRearWheelRotation);
-			wheelXfrm.Adjust_Z_Translation(wheelInfo->m_rearLeftHeightOffset);
+			wheelXfrm = Engine::Math::AffineTransform3::Identity();
+			wheelXfrm.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Y(m_midRearWheelRotation));
+			wheelXfrm.Adjust_Translation({0.0f, 0.0f, wheelInfo->m_rearLeftHeightOffset});
 			getRenderObject()->Capture_Bone( m_midMidLeftTireBone );
 			getRenderObject()->Control_Bone( m_midMidLeftTireBone, wheelXfrm );
 
-			wheelXfrm.Make_Identity();
-			wheelXfrm.Rotate_Y(m_midRearWheelRotation);
-			wheelXfrm.Adjust_Z_Translation(wheelInfo->m_rearRightHeightOffset);
+			wheelXfrm = Engine::Math::AffineTransform3::Identity();
+			wheelXfrm.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Y(m_midRearWheelRotation));
+			wheelXfrm.Adjust_Translation({0.0f, 0.0f, wheelInfo->m_rearRightHeightOffset});
 			getRenderObject()->Capture_Bone( m_midMidRightTireBone );
 			getRenderObject()->Control_Bone( m_midMidRightTireBone, wheelXfrm );
 		}

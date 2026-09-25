@@ -496,9 +496,8 @@ static Bool xy_collideTest_Rect_Circle(const CollideInfo *a, const CollideInfo *
 #else
 	// note, this actually tests the intersection of the the rect with the circle's
 	// bounding box. in practice, this is usually good enough, since most of
-	// our sphere/cyl shapes are small relative to boxes. (in fact, the WWMath
-	// library takes a similar shortcut when colliding spheres with boxes in 3d.
-	// so I figured it was probably good enough for us too.)
+	// our sphere/cylinder shapes are small relative to boxes. This bounding-box
+	// approximation keeps the broad-phase collision check inexpensive.
 
 	Real circ_l = b->position.x - b->geom.getMajorRadius();
 	Real circ_r = b->position.x + b->geom.getMajorRadius();
@@ -5365,14 +5364,13 @@ Bool PartitionFilterRejectBehind::allow( Object *other )
 
 //const Coord3D *pos = m_obj->getPosition();
 //const Coord3D *dir = m_obj->getUnitDirectionVector2D();
-	Vector3 dir = m_obj->getTransformMatrix()->Get_X_Vector();
-	dir.Normalize();
+	Engine::Math::Vector3 dir = m_obj->worldTransform().Basis_X().Normalized_Legacy();
 //const Coord3D *otherPos = other->getPosition();
 
 	Coord3D v;
 	ThePartitionManager->getVectorTo( m_obj, other, FROM_CENTER_3D, v );
 
-	Real dot = dir.X * v.x + dir.Y * v.y + dir.Z * v.z;
+	Real dot = dir.x * v.x + dir.y * v.y + dir.z * v.z;
 
 	if (dot > 0.0f)
 		return true;

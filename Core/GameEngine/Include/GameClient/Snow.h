@@ -24,8 +24,6 @@
 #include "Common/SubsystemInterface.h"
 #include "Common/Overridable.h"
 #include "Common/Override.h"
-#include "WWMath/vector3.h"
-#include "WWMath/vector4.h"
 
 //-------------------------------------------------------------------------------------------------
 /** This structure keeps the transparency and vertex settings, which are the same regardless of the

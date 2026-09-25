@@ -52,6 +52,17 @@ import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 #include "GameLogic/Object.h"
 #include "GameLogic/TerrainLogic.h"
 
+#include <type_traits>
+
+#include "Common/LegacyTransformMath.h"
+
+// Built through a function call (rather than a braced initializer) so that the client random
+// values are drawn in the same (compiler-defined) argument order as the original Vector2::Set call.
+static Engine::Math::Vector2 makeSmudgeOffset(Real x, Real y)
+{
+	return Engine::Math::Vector2{x, y};
+}
+
 
 //------------------------------------------------------------------------------ Performance Timers
 //#include "Common/PerfMetrics.h"
@@ -1083,10 +1094,10 @@ ParticleSystem::ParticleSystem( const ParticleSystemTemplate *sysTemplate,
 	m_attachedToObjectID = INVALID_ID;
 
 	m_isLocalIdentity = true;
-	m_localTransform.Make_Identity();
+	m_localTransform = Engine::Math::AffineTransform3::Identity();
 
 	m_isIdentity = true;
-	m_transform.Make_Identity();
+	m_transform = Engine::Math::AffineTransform3::Identity();
 	m_skipParentXfrm = false;
 
 	m_isStopped = false;
@@ -1335,12 +1346,10 @@ void ParticleSystem::destroy()
 // ------------------------------------------------------------------------------------------------
 void ParticleSystem::getPosition( Coord3D *pos )
 {
-	Vector3 vec;
-	m_localTransform.Get_Translation(&vec);
 	if (pos)
-	{	pos->x=vec.X;
-		pos->y=vec.Y;
-		pos->z=vec.Z;
+	{	pos->x=m_localTransform.elements[3];
+		pos->y=m_localTransform.elements[7];
+		pos->z=m_localTransform.elements[11];
 	}
 }
 
@@ -1349,18 +1358,18 @@ void ParticleSystem::getPosition( Coord3D *pos )
 // ------------------------------------------------------------------------------------------------
 void ParticleSystem::setPosition( const Coord3D *pos )
 {
-	m_localTransform.Set_X_Translation( pos->x );
-	m_localTransform.Set_Y_Translation( pos->y );
-	m_localTransform.Set_Z_Translation( pos->z );
+	m_localTransform.elements[3] = pos->x;
+	m_localTransform.elements[7] = pos->y;
+	m_localTransform.elements[11] = pos->z;
 	m_isLocalIdentity = false;
 }
 
 // ------------------------------------------------------------------------------------------------
 /** Set the system's local transform */
 // ------------------------------------------------------------------------------------------------
-void ParticleSystem::setLocalTransform( const Matrix3D *matrix )
+void ParticleSystem::setLocalTransform(const Engine::Math::AffineTransform3 &transform)
 {
-	m_localTransform = *matrix;
+	m_localTransform = transform;
 	m_isLocalIdentity = false;
 }
 
@@ -1369,7 +1378,7 @@ void ParticleSystem::setLocalTransform( const Matrix3D *matrix )
 // ------------------------------------------------------------------------------------------------
 void ParticleSystem::rotateLocalTransformX( Real x )
 {
-	m_localTransform.Rotate_X( x );
+	Legacy_Rotate_X(m_localTransform, x);
 	m_isLocalIdentity = false;
 }
 
@@ -1378,7 +1387,7 @@ void ParticleSystem::rotateLocalTransformX( Real x )
 // ------------------------------------------------------------------------------------------------
 void ParticleSystem::rotateLocalTransformY( Real y )
 {
-	m_localTransform.Rotate_Y( y );
+	Legacy_Rotate_Y(m_localTransform, y);
 	m_isLocalIdentity = false;
 }
 
@@ -1387,7 +1396,7 @@ void ParticleSystem::rotateLocalTransformY( Real y )
 // ------------------------------------------------------------------------------------------------
 void ParticleSystem::rotateLocalTransformZ( Real z )
 {
-	m_localTransform.Rotate_Z( z );
+	Legacy_Rotate_Z(m_localTransform, z);
 	m_isLocalIdentity = false;
 }
 
@@ -1470,9 +1479,9 @@ const Coord3D *ParticleSystem::computeParticleVelocity( const Coord3D *pos )
 			Coord3D sysPos;
 
 			/*
-			sysPos.x = m_localTransform.Get_X_Translation();
-			sysPos.y = m_localTransform.Get_Y_Translation();
-			sysPos.z = m_localTransform.Get_Z_Translation();
+			sysPos.x = m_localTransform.elements[3];
+			sysPos.y = m_localTransform.elements[7];
+			sysPos.z = m_localTransform.elements[11];
 			*/
 			sysPos.x = 0.0f;
 			sysPos.y = 0.0f;
@@ -1798,7 +1807,7 @@ const ParticleInfo *ParticleSystem::generateParticleInfo( Int particleNum, Int p
 	if (m_isIdentity == false)
 	{
 		// transform particle position to world coordinates
-		Vector3 p, pr;
+		Engine::Math::Vector3 p;
 
 		Coord3D emissionAdjustment;	// this is the adjustment for inter-frame emission
 		// @todo : This should work, if m_lastPos = m_pos is removed from here but it doesn't.
@@ -1812,32 +1821,18 @@ const ParticleInfo *ParticleSystem::generateParticleInfo( Int particleNum, Int p
 		emissionAdjustment.y = (1 - (INT_TO_REAL(particleNum) / particleCount)) * (m_pos.y - m_lastPos.y);
 		emissionAdjustment.z = (1 - (INT_TO_REAL(particleNum) / particleCount)) * (m_pos.z - m_lastPos.z);
 
-		p.X = info.m_pos.x;
-		p.Y = info.m_pos.y;
-		p.Z = info.m_pos.z;
-
-#ifdef ALLOW_TEMPORARIES
-		pr = m_transform * p;
-#else
-		m_transform.mulVector3(p, pr);
-#endif
-
-		info.m_pos.x = pr.X - emissionAdjustment.x;
-		info.m_pos.y = pr.Y - emissionAdjustment.y;
-		info.m_pos.z = pr.Z - emissionAdjustment.z;
+		p = {info.m_pos.x, info.m_pos.y, info.m_pos.z};
+		p = m_transform.Transform_Point(p);
+		info.m_pos.x = p.x - emissionAdjustment.x;
+		info.m_pos.y = p.y - emissionAdjustment.y;
+		info.m_pos.z = p.z - emissionAdjustment.z;
 
 		// transform particle velocity to world coordinates
-		Vector3 v, vr;
-
-		v.X = info.m_vel.x;
-		v.Y = info.m_vel.y;
-		v.Z = info.m_vel.z;
-
-		Matrix3D::Rotate_Vector( m_transform, v, &vr );
-
-		info.m_vel.x = vr.X;
-		info.m_vel.y = vr.Y;
-		info.m_vel.z = vr.Z;
+		Engine::Math::Vector3 velocity{info.m_vel.x, info.m_vel.y, info.m_vel.z};
+		velocity = m_transform.Transform_Vector(velocity);
+		info.m_vel.x = velocity.x;
+		info.m_vel.y = velocity.y;
+		info.m_vel.z = velocity.z;
 	}
 
 	info.m_velDamping = m_velDamping.getValue();
@@ -1880,15 +1875,10 @@ const ParticleInfo *ParticleSystem::generateParticleInfo( Int particleNum, Int p
 */
 
 	info.m_colorScale = m_colorScale.getValue();
-#ifdef ALLOW_TEMPORARIES
-	Vector3 pos = m_transform * Vector3(0, 0, 0);
-#else
-	Vector3 pos;
-	m_transform.mulVector3(Vector3(0, 0, 0), pos);
-#endif
-	info.m_emitterPos.x = pos.X;
-	info.m_emitterPos.y = pos.Y;
-	info.m_emitterPos.z = pos.Z;
+	const Engine::Math::Vector3 position = m_transform.Transform_Point({});
+	info.m_emitterPos.x = position.x;
+	info.m_emitterPos.y = position.y;
+	info.m_emitterPos.z = position.z;
 	info.m_particleUpTowardsEmitter = m_isParticleUpTowardsEmitter;
 
 	info.m_windRandomness = GameClientRandomValueReal( 0.7f, 1.3f );
@@ -1925,7 +1915,7 @@ Bool ParticleSystem::update( Int localPlayerIndex  )
 	// matrix so generated particles' are relative to the parent Drawable's
 	// position and orientation
 	Bool transformSet = false;
-	const Matrix3D *parentXfrm = nullptr;
+	const Engine::Math::AffineTransform3 *parentXfrm = nullptr;
 	Bool isShrouded = false;
 
 	if (m_attachedToDrawableID)
@@ -1937,7 +1927,7 @@ Bool ParticleSystem::update( Int localPlayerIndex  )
 			if (attachedTo->getFullyObscuredByShroud())
 				isShrouded = true;
 
-			parentXfrm = attachedTo->getTransformMatrix();
+			parentXfrm = &attachedTo->worldTransform();
 			m_lastPos = m_pos;
 			m_pos = *attachedTo->getPosition();
 		}
@@ -1961,9 +1951,9 @@ Bool ParticleSystem::update( Int localPlayerIndex  )
 
 			const Drawable * draw = objectAttachedTo->getDrawable();
 			if ( draw )
-				parentXfrm = draw->getTransformMatrix();
+				parentXfrm = &draw->worldTransform();
 			else
-				parentXfrm = objectAttachedTo->getTransformMatrix();
+				parentXfrm = &objectAttachedTo->worldTransform();
 
 			m_lastPos = m_pos;
 			m_pos = *objectAttachedTo->getPosition();
@@ -1989,11 +1979,7 @@ Bool ParticleSystem::update( Int localPlayerIndex  )
 		{
 			// if system has its own local transform, concatenate them
 			if (m_isLocalIdentity == false)
-	#ifdef ALLOW_TEMPORARIES
-				m_transform = (*parentXfrm) * m_localTransform;
-	#else
-				m_transform.mul(*parentXfrm, m_localTransform);
-	#endif
+				m_transform = Compose(*parentXfrm, m_localTransform);
 			else
 				m_transform = *parentXfrm;
 		}
@@ -2021,9 +2007,9 @@ Bool ParticleSystem::update( Int localPlayerIndex  )
 	{
 		const Coord3D *controlPos = m_controlParticle->getPosition();
 		/// @todo Concatenate this, instead of overriding (MSB)
-		m_transform.Set_X_Translation( controlPos->x );
-		m_transform.Set_Y_Translation( controlPos->y );
-		m_transform.Set_Z_Translation( controlPos->z );
+		m_transform.elements[3] = controlPos->x;
+		m_transform.elements[7] = controlPos->y;
+		m_transform.elements[11] = controlPos->z;
 		m_isIdentity = false;
 		m_lastPos = m_pos;
 		m_pos = *controlPos;
@@ -2477,13 +2463,15 @@ void ParticleSystem::xfer( Xfer *xfer )
 	xfer->xferBool( &m_isLocalIdentity );
 
 	// local transform
-	xfer->xferUser( &m_localTransform, sizeof( Matrix3D ) );
+	static_assert(sizeof(Engine::Math::AffineTransform3) == sizeof(float) * 12);
+	static_assert(std::is_trivially_copyable_v<Engine::Math::AffineTransform3>);
+	xfer->xferUser(&m_localTransform, sizeof(m_localTransform));
 
 	// is identity
 	xfer->xferBool( &m_isIdentity );
 
 	// transform
-	xfer->xferUser( &m_transform, sizeof( Matrix3D ) );
+	xfer->xferUser(&m_transform, sizeof(m_transform));
 
 	// burst delay left
 	xfer->xferUnsignedInt( &m_burstDelayLeft );
@@ -3059,8 +3047,8 @@ void ParticleSystemManager::update()
 				{
 					const Coord3D *pos = p->getPosition();
 					Smudge *smudge = set->addSmudgeToSet(p);
-					smudge->m_pos.Set(pos->x, pos->y, pos->z);
-					smudge->m_offset.Set(GameClientRandomValueReal(-0.06f,0.06f), GameClientRandomValueReal(-0.06f,0.06f));
+					smudge->m_pos = {pos->x, pos->y, pos->z};
+					smudge->m_offset = makeSmudgeOffset(GameClientRandomValueReal(-0.06f,0.06f), GameClientRandomValueReal(-0.06f,0.06f));
 					smudge->m_size = p->getSize();
 					smudge->m_opacity = p->getAlpha();
 					smudge->m_draw = false;

@@ -30,6 +30,9 @@
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 #include "PreRTS.h"
 import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
+import Engine.Core.Math.AffineTransform3;
+
+#include "Common/LegacyTransformMath.h"
 
 #define DEFINE_SHADOW_NAMES								// for TheShadowNames[]
 #define DEFINE_WEAPONSLOTTYPE_NAMES
@@ -82,18 +85,14 @@ import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 ObjectCreationListStore *TheObjectCreationListStore = nullptr;					///< the ObjectCreationList store definition
 
 //-------------------------------------------------------------------------------------------------
-static void adjustVector(Coord3D *vec, const Matrix3D* mtx)
+static void adjustVector(Coord3D *vec, const Engine::Math::AffineTransform3* transform)
 {
-	if (mtx)
+	if (transform)
 	{
-		Vector3 vectmp;
-		vectmp.X = vec->x;
-		vectmp.Y = vec->y;
-		vectmp.Z = vec->z;
-		vectmp = mtx->Rotate_Vector(vectmp);
-		vec->x = vectmp.X;
-		vec->y = vectmp.Y;
-		vec->z = vectmp.Z;
+		const Engine::Math::Vector3 direction = transform->Transform_Vector({vec->x, vec->y, vec->z});
+		vec->x = direction.x;
+		vec->y = direction.y;
+		vec->z = direction.z;
 	}
 }
 
@@ -592,16 +591,15 @@ static void calcRandomForce(Real minMag, Real maxMag, Real minPitch, Real maxPit
 	Real pitch = GameLogicRandomValueReal(minPitch, maxPitch);
 	Real mag = GameLogicRandomValueReal(minMag, maxMag);
 
-	Matrix3D mtx(1);
-	mtx.Scale(mag);
-	mtx.Rotate_Z(angle);
-	mtx.Rotate_Y(-pitch);
+	Engine::Math::AffineTransform3 transform = Engine::Math::AffineTransform3::Identity();
+	Legacy_Scale(transform, mag);
+	Legacy_Rotate_Z(transform, angle);
+	Legacy_Rotate_Y(transform, -pitch);
 
-	Vector3 v = mtx.Get_X_Vector();
-
-	force->x = v.X;
-	force->y = v.Y;
-	force->z = v.Z;
+	const Engine::Math::Vector3 forceVector = transform.Basis_X();
+	force->x = forceVector.x;
+	force->y = forceVector.y;
+	force->z = forceVector.z;
 }
 
 
@@ -783,7 +781,7 @@ public:
 			if (m_skipIfSignificantlyAirborne && primary->isSignificantlyAboveTerrain())
 				return nullptr;
 
-			return reallyCreate( primary->getPosition(), primary->getTransformMatrix(), primary->getOrientation(), primary, lifetimeFrames );
+			return reallyCreate(primary->getPosition(), &primary->worldTransform(), primary->getOrientation(), primary, lifetimeFrames);
 		}
 		else
 		{
@@ -796,7 +794,7 @@ public:
 	{
 		if (primary)
 		{
-			const Matrix3D *xfrm = nullptr;
+			const Engine::Math::AffineTransform3 *xfrm = nullptr;
 			if( angle == INVALID_ANGLE )
 			{
 				//Vast majority of OCL's don't care about the angle, so if it comes in invalid, default the angle to 0.
@@ -921,7 +919,7 @@ protected:
 		Object* obj,
 		const AsciiString& modelName,
 		const Coord3D *pos,
-		const Matrix3D *mtx,
+		const Engine::Math::AffineTransform3 *transform,
 		Real orientation,
 		const Object *sourceObj,
 		UnsignedInt lifetimeFrames
@@ -964,8 +962,8 @@ protected:
 		}
 
 		Coord3D offset = m_offset;
-		if (mtx)
-			adjustVector(&offset, mtx);
+		if (transform)
+			adjustVector(&offset, transform);
 
 		Coord3D chunkPos;
 		chunkPos.x = pos->x + offset.x;
@@ -1038,8 +1036,8 @@ protected:
 
 		if( BitIsSet( m_disposition, LIKE_EXISTING ) )
 		{
-			if (mtx)
-				obj->setTransformMatrix(mtx);
+			if (transform)
+				obj->setWorldTransform(*transform);
 			else
 				obj->setOrientation(orientation);
 			obj->setPosition(&chunkPos);
@@ -1116,10 +1114,10 @@ protected:
 
 		if( BitIsSet( m_disposition, SEND_IT_FLYING | SEND_IT_UP | RANDOM_FORCE ) )
 		{
-			if (mtx)
+			if (transform)
 			{
-				DUMPMATRIX3D(mtx);
-				obj->setTransformMatrix(mtx);
+				DUMPTRANSFORM(*transform);
+				obj->setWorldTransform(*transform);
 			}
 			obj->setPosition(&chunkPos);
 			DUMPCOORD3D(&chunkPos);
@@ -1206,7 +1204,7 @@ protected:
 				objUp->setPitchRate(pitch);
 				DUMPCOORD3D(objUp->getAcceleration());
 				DUMPCOORD3D(objUp->getVelocity());
-				DUMPMATRIX3D(obj->getTransformMatrix());
+				DUMPTRANSFORM(obj->worldTransform());
 
 			}
 		}
@@ -1304,7 +1302,7 @@ protected:
 
 	}
 
-	Object* reallyCreate(const Coord3D *pos, const Matrix3D *mtx, Real orientation, const Object *sourceObj, UnsignedInt lifetimeFrames ) const
+	Object* reallyCreate(const Coord3D *pos, const Engine::Math::AffineTransform3 *transform, Real orientation, const Object *sourceObj, UnsignedInt lifetimeFrames ) const
 	{
 		static const ThingTemplate* debrisTemplate = TheThingFactory->findTemplate("GenericDebris");
 
@@ -1404,12 +1402,12 @@ protected:
 					engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "A mismatch is likely to happen if this code path is used in a match with unpatched clients.");
 #endif
 				}
-				doStuffToObj( debris, m_names[pick], &resultPos, mtx, orientation, sourceObj, lifetimeFrames );
+				doStuffToObj( debris, m_names[pick], &resultPos, transform, orientation, sourceObj, lifetimeFrames );
 			}
 			else
 			{
 				// do stuff to contained objects too
-				doStuffToObj( debris, m_names[pick], pos, mtx, orientation, sourceObj, lifetimeFrames );
+				doStuffToObj( debris, m_names[pick], pos, transform, orientation, sourceObj, lifetimeFrames );
 			}
 
 			if (m_fadeIn)
@@ -1435,7 +1433,7 @@ protected:
 #endif
 
 		if (container)
-			doStuffToObj( container, AsciiString::TheEmptyString, pos, mtx, orientation, sourceObj, lifetimeFrames );
+			doStuffToObj( container, AsciiString::TheEmptyString, pos, transform, orientation, sourceObj, lifetimeFrames );
 
 		return firstObject;
 	}

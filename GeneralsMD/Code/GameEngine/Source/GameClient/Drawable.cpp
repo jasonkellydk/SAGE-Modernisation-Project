@@ -29,10 +29,12 @@ import Graphics.Frame.RenderClock;
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 #include "PreRTS.h"
+#include <vector>
 import engine.profiling;
 import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/AudioEventInfo.h"
+#include "Common/LegacyTransformMath.h"
 #include "Common/DynamicAudioEventInfo.h"
 #include "Common/AudioSettings.h"
 #include "Common/BitFlagsIO.h"
@@ -404,7 +406,7 @@ Drawable::Drawable( const ThingTemplate *thingTemplate, DrawableStatusBits statu
 
 	}
 
-	m_instance.Make_Identity();
+	m_instance = Engine::Math::AffineTransform3::Identity();
 	m_instanceIsIdentity = true;
 
 	//Real scaleFuzziness = thingTemplate->getInstanceScaleFuzziness();
@@ -649,24 +651,27 @@ Bool Drawable::getShouldAnimate( Bool considerPower ) const
 
 //-------------------------------------------------------------------------------------------------
 // this method must ONLY be called from the client, NEVER From the logic, not even indirectly.
-Bool Drawable::clientOnly_getFirstRenderObjInfo(Coord3D* pos, Real* boundingSphereRadius, Matrix3D* transform)
+Bool Drawable::getRenderObjectInfo(
+	Coord3D* position,
+	Real* boundingSphereRadius,
+	Engine::Math::AffineTransform3* transform) const
 {
-	DrawModule** dm = getDrawModules();
+	const DrawModule** dm = getDrawModules();
 	const ObjectDrawInterface* di = (dm && *dm) ? (*dm)->getObjectDrawInterface() : nullptr;
 	if (di)
 	{
-		return di->clientOnly_getRenderObjInfo(pos, boundingSphereRadius, transform);
+		return di->getRenderObjectInfo(position, boundingSphereRadius, transform);
 	}
 	return false;
 }
 
 //-------------------------------------------------------------------------------------------------
-Bool Drawable::getProjectileLaunchOffset(WeaponSlotType wslot, Int specificBarrelToUse, Matrix3D* launchPos, WhichTurretType tur, Coord3D* turretRotPos, Coord3D* turretPitchPos) const
+Bool Drawable::getProjectileLaunchTransform(WeaponSlotType wslot, Int specificBarrelToUse, Engine::Math::AffineTransform3* launchTransform, WhichTurretType tur, Coord3D* turretRotPos, Coord3D* turretPitchPos) const
 {
 	for (const DrawModule** dm = getDrawModules(); *dm; ++dm)
 	{
 		const ObjectDrawInterface* di = (*dm)->getObjectDrawInterface();
-		if (di && di->getProjectileLaunchOffset(m_conditionState, wslot, specificBarrelToUse, launchPos, tur, turretRotPos, turretPitchPos))
+		if (di && di->getProjectileLaunchTransform(m_conditionState, wslot, specificBarrelToUse, launchTransform, tur, turretRotPos, turretPitchPos))
 			return true;
 	}
 	return false;
@@ -753,7 +758,8 @@ Real Drawable::getAnimationScrubScalar() const // lorenzen
 #endif
 
 //-------------------------------------------------------------------------------------------------
-Int Drawable::getPristineBonePositions(const char* boneNamePrefix, Int startIndex, Coord3D* positions, Matrix3D* transforms, Int maxBones) const
+Int Drawable::getPristineBoneData(const char* boneNamePrefix, Int startIndex,
+	Coord3D* positions, Engine::Math::AffineTransform3* transforms, Int maxBones) const
 {
 	Int count = 0;
 	for (const DrawModule** dm = getDrawModules(); *dm; ++dm)
@@ -765,7 +771,62 @@ Int Drawable::getPristineBonePositions(const char* boneNamePrefix, Int startInde
 		if (di)
 		{
 			Int subcount =
-				di->getPristineBonePositionsForConditionState(m_conditionState, boneNamePrefix, startIndex, positions, transforms, maxBones);
+				di->getPristineBoneTransforms(m_conditionState, boneNamePrefix, startIndex, positions, transforms, maxBones);
+
+			if (subcount > 0)
+			{
+				count += subcount;
+				if (positions)
+					positions += subcount;
+				if (transforms)
+					transforms += subcount;
+				maxBones -= subcount;
+			}
+		}
+	}
+	return count;
+}
+
+Int Drawable::getPristineBonePositions(
+	const char* boneNamePrefix,
+	Int startIndex,
+	Coord3D* positions,
+	Int maxBones) const
+{
+	return getPristineBoneData(boneNamePrefix, startIndex, positions, nullptr, maxBones);
+}
+
+Int Drawable::getPristineBoneTransforms(
+	const char* boneNamePrefix,
+	Int startIndex,
+	Engine::Math::AffineTransform3* transforms,
+	Int maxBones) const
+{
+	if (transforms == nullptr || maxBones <= 0)
+		return 0;
+
+	return getPristineBoneData(boneNamePrefix, startIndex, nullptr, transforms, maxBones);
+}
+
+//-------------------------------------------------------------------------------------------------
+Int Drawable::getCurrentClientBoneTransforms(
+	const char* boneNamePrefix,
+	Int startIndex,
+	Coord3D* positions,
+	Engine::Math::AffineTransform3* transforms,
+	Int maxBones) const
+{
+	Int count = 0;
+	for (const DrawModule** dm = getDrawModules(); *dm; ++dm)
+	{
+		if (maxBones <= 0)
+			break;
+
+		const ObjectDrawInterface* di = (*dm)->getObjectDrawInterface();
+		if (di)
+		{
+			Int subcount = di->getCurrentBoneTransforms(
+				boneNamePrefix, startIndex, positions, transforms, maxBones);
 
 			if (subcount > 0)
 			{
@@ -782,41 +843,14 @@ Int Drawable::getPristineBonePositions(const char* boneNamePrefix, Int startInde
 }
 
 //-------------------------------------------------------------------------------------------------
-Int Drawable::getCurrentClientBonePositions(const char* boneNamePrefix, Int startIndex, Coord3D* positions, Matrix3D* transforms, Int maxBones) const
-{
-	Int count = 0;
-	for (const DrawModule** dm = getDrawModules(); *dm; ++dm)
-	{
-		if (maxBones <= 0)
-			break;
-
-		const ObjectDrawInterface* di = (*dm)->getObjectDrawInterface();
-		if (di)
-		{
-			Int subcount =
-				di->getCurrentBonePositions(boneNamePrefix, startIndex, positions, transforms, maxBones);
-
-			if (subcount > 0)
-			{
-				count += subcount;
-				if (positions)
-					positions += subcount;
-				if (transforms)
-					transforms += subcount;
-				maxBones -= subcount;
-			}
-		}
-	}
-	return count;
-}
-
-//-------------------------------------------------------------------------------------------------
-Bool Drawable::getCurrentWorldspaceClientBonePositions(const char* boneName, Matrix3D& transform) const
+Bool Drawable::getCurrentWorldBoneTransform(
+	const char* boneName,
+	Engine::Math::AffineTransform3& transform) const
 {
 	for (const DrawModule** dm = getDrawModules(); *dm; ++dm)
 	{
 		const ObjectDrawInterface* di = (*dm)->getObjectDrawInterface();
-		if (di && di->getCurrentWorldspaceClientBonePositions(boneName, transform))
+		if (di && di->getCurrentWorldBoneTransform(boneName, transform))
 			return true;
 	}
 	return false;
@@ -1009,7 +1043,7 @@ void Drawable::onUnselected()
 //-------------------------------------------------------------------------------------------------
 /** get FX color value to add to ALL LIGHTS when drawing */
 //-------------------------------------------------------------------------------------------------
-const Vector3 * Drawable::getTintColor() const
+const Engine::Math::Vector3 * Drawable::getTintColor() const
 {
 	if ( m_colorTintEnvelope )
 	{
@@ -1025,7 +1059,7 @@ const Vector3 * Drawable::getTintColor() const
 //-------------------------------------------------------------------------------------------------
 /** get SELECTION color value to add to ALL LIGHTS when drawing */
 //-------------------------------------------------------------------------------------------------
-const Vector3 * Drawable::getSelectionColor()	const
+const Engine::Math::Vector3 * Drawable::getSelectionColor()	const
 {
 	if (m_selectionFlashEnvelope)
 	{
@@ -1347,7 +1381,7 @@ void Drawable::flashAsSelected( const RGBColor *color ) ///< drawable takes care
 }
 
 //-------------------------------------------------------------------------------------------------
-void Drawable::applyPhysicsXform(Matrix3D* mtx)
+void Drawable::applyPhysicsXform(Engine::Math::AffineTransform3* transform)
 {
 	if (m_physicsXform != nullptr)
 	{
@@ -1358,10 +1392,10 @@ void Drawable::applyPhysicsXform(Matrix3D* mtx)
 			calcPhysicsXform(*m_physicsXform);
 		}
 
-		mtx->Translate(0.0f, 0.0f, m_physicsXform->m_totalZ);
-		mtx->Rotate_Y( m_physicsXform->m_totalPitch );
-		mtx->Rotate_X( -m_physicsXform->m_totalRoll );
-		mtx->Rotate_Z( m_physicsXform->m_totalYaw );
+		Legacy_Translate(*transform, 0.0f, 0.0f, m_physicsXform->m_totalZ);
+		Legacy_Rotate_Y(*transform, m_physicsXform->m_totalPitch);
+		Legacy_Rotate_X(*transform, -m_physicsXform->m_totalRoll);
+		Legacy_Rotate_Z(*transform, m_physicsXform->m_totalYaw);
 	}
 }
 
@@ -2621,24 +2655,21 @@ void Drawable::draw()
 #endif
 
 	// call the database defined draw action method
-	Matrix3D transformMtx = *getTransformMatrix();
+	const Engine::Math::AffineTransform3 world = worldTransform();
+	Engine::Math::AffineTransform3 transform = world;
 	if (!isInstanceIdentity())
 	{
-#ifdef ALLOW_TEMPORARIES
-		transformMtx = transformMtx * (*getInstanceMatrix());
-#else
-		transformMtx.postMul(*getInstanceMatrix());
-#endif
+		transform = Compose(transform, m_instance);
 	}
 
 	if (TheGlobalData->m_showClientPhysics && getObject() && !getObject()->isDisabledByType( DISABLED_HELD ))
 	{
-		applyPhysicsXform(&transformMtx);
+		applyPhysicsXform(&transform);
 	}
 
 	for (DrawModule** dm = getDrawModules(); *dm; ++dm)
 	{
-		(*dm)->doDrawModule(&transformMtx);
+		(*dm)->doDrawModule(&transform);
 	}
 }
 
@@ -4150,11 +4181,11 @@ void Drawable::setPosition(const Coord3D *pos)
 }
 
 //-------------------------------------------------------------------------------------------------
-void Drawable::reactToTransformChange(const Matrix3D* oldMtx, const Coord3D* oldPos, Real oldAngle)
+void Drawable::reactToTransformChange(const Coord3D* oldPos, Real oldAngle)
 {
 	for (DrawModule** dm = getDrawModules(); *dm; ++dm)
 	{
-		(*dm)->reactToTransformChange(oldMtx, oldPos, oldAngle);
+		(*dm)->reactToTransformChange(oldPos, oldAngle);
 	}
 }
 
@@ -4209,18 +4240,17 @@ Int Drawable::getBarrelCount(WeaponSlotType wslot) const
 //-------------------------------------------------------------------------------------------------
 /** Set the Drawable's instance transform */
 //-------------------------------------------------------------------------------------------------
-void Drawable::setInstanceMatrix( const Matrix3D *instance )
+void Drawable::setInstanceTransform(const Engine::Math::AffineTransform3* instance)
 {
-	if (instance)
+	if (instance == nullptr)
 	{
-		m_instance = *instance;
-		m_instanceIsIdentity = false;
-	}
-	else
-	{
-		m_instance.Make_Identity();
+		m_instance = Engine::Math::AffineTransform3::Identity();
 		m_instanceIsIdentity = true;
+		return;
 	}
+
+	m_instance = *instance;
+	m_instanceIsIdentity = false;
 }
 
 
@@ -4230,14 +4260,14 @@ void Drawable::setInstanceMatrix( const Matrix3D *instance )
  * If this Drawable is attached to an Object, return the Object's transform instead.
  */
 //-------------------------------------------------------------------------------------------------
-const Matrix3D *Drawable::getTransformMatrix() const
+const Engine::Math::AffineTransform3& Drawable::worldTransform() const noexcept
 {
 	const Object *obj = getObject();
 
 	if (obj)
-		return obj->getTransformMatrix();
+		return obj->worldTransform();
 	else
-		return Thing::getTransformMatrix();
+		return Thing::worldTransform();
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -4904,9 +4934,9 @@ void Drawable::xfer( Xfer *xfer )
 	{
 		if (version >= 5)
 		{
-			Matrix3D mtx = *getTransformMatrix();
-			xfer->xferMatrix3D(&mtx);
-			setTransformMatrix(&mtx);
+			Engine::Math::AffineTransform3 world = worldTransform();
+			xfer->xferAffineTransform3(&world);
+			setWorldTransform(world);
 		}
 		else
 		{
@@ -5129,7 +5159,7 @@ void Drawable::xfer( Xfer *xfer )
 	xfer->xferBool( &m_instanceIsIdentity );
 
 	// instance matrix
-	xfer->xferUser( &m_instance, sizeof( Matrix3D ) );
+	xfer->xferUser(&m_instance, sizeof(m_instance));
 
 	// instance scale
 	xfer->xferReal( &m_instanceScale );
@@ -5374,7 +5404,7 @@ void Drawable::loadPostProcess()
 		// if we don't, we'd better save it!
 	if (m_object != nullptr)
 	{
-		setTransformMatrix(m_object->getTransformMatrix());
+		setWorldTransform(m_object->worldTransform());
 	}
 
 	if( m_ambientSoundEnabled && m_ambientSoundEnabledFromScript )
@@ -5442,10 +5472,10 @@ const Locomotor* Drawable::getLocomotor() const
 //=================================================================================================
 TintEnvelope::TintEnvelope()
 {
-	m_attackRate.Set(0,0,0);
-	m_decayRate.Set(0,0,0);
-	m_peakColor.Set(0,0,0);
-	m_currentColor.Set(0,0,0);
+	m_attackRate = {};
+	m_decayRate = {};
+	m_peakColor = {};
+	m_currentColor = {};
 	m_envState = ENVELOPE_STATE_REST;
 	m_sustainCounter = 0;
 	m_affect = FALSE;
@@ -5466,8 +5496,7 @@ void TintEnvelope::play(const RGBColor *peak, UnsignedInt attackFrames, Unsigned
 	m_sustainCounter = sustainAtPeak;
 	m_affect = TRUE;
 
-	Vector3 delta;
-	Vector3::Subtract(m_currentColor, m_peakColor, &delta);
+	const Engine::Math::Vector3 delta = m_currentColor - m_peakColor;
 
 	if ( delta.Length() <= FADE_RATE_EPSILON ) // we are practically already at this color
 		m_envState = ENVELOPE_STATE_SUSTAIN;
@@ -5478,17 +5507,14 @@ void TintEnvelope::play(const RGBColor *peak, UnsignedInt attackFrames, Unsigned
 void TintEnvelope::setAttackFrames(UnsignedInt frames)
 {
 	Real recipFrames = 1.0f / (Real)MAX(1,frames);
-	m_attackRate.Set( m_currentColor );
-	Vector3::Subtract( m_peakColor, m_attackRate, &m_attackRate);
-	m_attackRate.Scale( Vector3(recipFrames, recipFrames, recipFrames) );
+	m_attackRate = (m_peakColor - m_currentColor) * recipFrames;
 }
 
 //-------------------------------------------------------------------------------------------------
 void TintEnvelope::setDecayFrames( UnsignedInt frames )
 {
 	Real recipFrames = ( -1.0f ) / (Real)MAX(1,frames);
-	m_decayRate.Set( m_peakColor );
-	m_decayRate.Scale( Vector3(recipFrames, recipFrames, recipFrames) );
+	m_decayRate = m_peakColor * recipFrames;
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -5501,13 +5527,13 @@ void TintEnvelope::update()
 	{
 		case ( ENVELOPE_STATE_REST ) : //most likely case
 		{
-			m_currentColor.Set(0,0,0);
+			m_currentColor = {};
 			m_affect = FALSE;
 			break;
 		}
 		case ( ENVELOPE_STATE_DECAY ) : // much more likely than attack
 		{
-			const Vector3 decayRate = m_decayRate * timeScale;
+			const Engine::Math::Vector3 decayRate = m_decayRate * timeScale;
 
 			if (decayRate.Length() > m_currentColor.Length() || m_currentColor.Length() <= FADE_RATE_EPSILON)
 			{
@@ -5518,16 +5544,15 @@ void TintEnvelope::update()
 			else
 			{
 				// Add the decayRate to the current color
-				Vector3::Add( decayRate, m_currentColor, &m_currentColor );
+				m_currentColor = decayRate + m_currentColor;
 				m_affect = TRUE;
 			}
 			break;
 		}
 		case ( ENVELOPE_STATE_ATTACK ) :
 		{
-			const Vector3 attackRate = m_attackRate * timeScale;
-			Vector3 delta;
-			Vector3::Subtract(m_currentColor, m_peakColor, &delta);
+			const Engine::Math::Vector3 attackRate = m_attackRate * timeScale;
+			const Engine::Math::Vector3 delta = m_currentColor - m_peakColor;
 
 			if (attackRate.Length() > delta.Length() || delta.Length() <= FADE_RATE_EPSILON)
 			{
@@ -5544,7 +5569,7 @@ void TintEnvelope::update()
 			else
 			{
 				// Add the attackRate to the current color
-				Vector3::Add( attackRate, m_currentColor, &m_currentColor );
+				m_currentColor = attackRate + m_currentColor;
 				m_affect = TRUE;
 			}
 
@@ -5597,16 +5622,16 @@ void TintEnvelope::xfer( Xfer *xfer )
 	xfer->xferVersion( &version, currentVersion );
 
 	// attack rate
-	xfer->xferUser( &m_attackRate, sizeof( Vector3 ) );
+	xfer->xferUser( &m_attackRate, sizeof( Engine::Math::Vector3 ) );
 
 	// decay rate
-	xfer->xferUser( &m_decayRate, sizeof( Vector3 ) );
+	xfer->xferUser( &m_decayRate, sizeof( Engine::Math::Vector3 ) );
 
 	// peak color
-	xfer->xferUser( &m_peakColor, sizeof( Vector3 ) );
+	xfer->xferUser( &m_peakColor, sizeof( Engine::Math::Vector3 ) );
 
 	// current color
-	xfer->xferUser( &m_currentColor, sizeof( Vector3 ) );
+	xfer->xferUser( &m_currentColor, sizeof( Engine::Math::Vector3 ) );
 
 	// sustain counter
 	if (version <= 1)

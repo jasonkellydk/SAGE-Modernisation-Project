@@ -27,8 +27,10 @@
 // Author: Michael S. Booth, November 2000
 #include "PreRTS.h"
 import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
+import Engine.Core.Math.Vector3;
 
 #include "Common/CRCDebug.h"
+#include "Common/LegacyTransformMath.h"
 #include "Common/GameState.h"
 
 #include "Common/Player.h"
@@ -903,11 +905,11 @@ Real AI::getAdjustedVisionRangeForObject(const Object *object, Int factorsToCons
 				1.0f)
 		};
 
-		Vector3 pos(originalRange, 0, 0);
+		Engine::Math::Vector3 pos{originalRange, 0, 0};
 		for (int i = 0; i < TheGlobalData->m_debugVisibilityTileCount; ++i)
 		{
-			pos.Rotate_Z(1.0f * i / TheGlobalData->m_debugVisibilityTileCount * 2 * PI);
-			Coord3D coord = { pos.X + object->getPosition()->x, pos.Y + object->getPosition()->y, pos.Z + object->getPosition()->z };
+			pos = Legacy_Vector_Rotate_Z(pos, 1.0f * i / TheGlobalData->m_debugVisibilityTileCount * 2 * PI);
+			Coord3D coord = { pos.x + object->getPosition()->x, pos.y + object->getPosition()->y, pos.z + object->getPosition()->z };
 
 			addIcon(&coord, TheGlobalData->m_debugVisibilityTileWidth,
 											TheGlobalData->m_debugVisibilityTileDuration,
@@ -1062,5 +1064,4 @@ void AI::loadPostProcess()
 {
 
 }
-
 

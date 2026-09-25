@@ -1,12 +1,54 @@
 #include <functional>
+import Engine.Core.Math.Scalar;
 import Graphics.Frame.RenderClock;
 import Graphics.Scene.OrderedDraws;
 import Graphics.Frame.RenderSettings;
-#include <climits>
 import Graphics.Presentation.DisplayModes;
 import Graphics.Resources.Textures.Quality;
 import Graphics.Diagnostics.Render;
 import Graphics.Frame.SubmissionStatistics;
+import Graphics.Scene.Props.Submission;
+import Graphics.Scene.Debug.CollisionBox;
+import engine.platform.runtime;
+import engine.debug;
+import engine.profiling;
+import Graphics.Frame.Runtime;
+import Graphics.Renderer2D;
+import Graphics.Frame.SceneRenderers;
+import Graphics.Passes.Bloom;
+import Graphics.Passes.LightRays;
+import Graphics.Passes.SSAO;
+import Engine.UI.WND;
+import Graphics.Scene.Beams;
+import Graphics.Scene.Lighting.Renderer;
+import Graphics.Scene.Particles.Renderer;
+import Graphics.Scene.Screen.Distortion;
+import Graphics.Scene.Screen.FullscreenOverlay;
+import Graphics.Scene.Ring;
+import Graphics.Scene.WorldQuads;
+import Graphics.Scene.Trees.Renderer;
+import Graphics.Scene.Water.Renderer;
+import Graphics.Scene.Props.Renderer;
+import Graphics.Scene.Screen.Filters;
+import Engine.Core.Math.Vector3;
+import Assets.Images.PixelEncoding;
+import Assets.Adapters.W3D.Chunks;
+import Assets.Adapters.W3D.Aggregate;
+import Assets.Adapters.W3D.Assembly;
+import Assets.Adapters.W3D.Box;
+import Assets.Adapters.W3D.Collection;
+import Assets.Adapters.W3D.Dazzle;
+import Assets.Adapters.W3D.LevelSet;
+import Assets.Adapters.W3D.Null;
+import Assets.Adapters.W3D.Particles;
+import Assets.Adapters.W3D.Ring;
+import Assets.Adapters.W3D.Sphere;
+import Graphics.RHI;
+import engine.navigation.diagnostics.frame_capture;
+import Graphics.Scene.Shadows.DirectionalRenderer;
+import Graphics.Capture.MovieCapture;
+import Graphics.Capture.FramePreview;
+#include <climits>
 /*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -41,8 +83,6 @@ import Graphics.Frame.SubmissionStatistics;
 ///////////////////////////////////////////////////////////////////////////////
 
 // SYSTEM INCLUDES ////////////////////////////////////////////////////////////
-import Graphics.Scene.Props.Submission;
-import Graphics.Scene.Debug.CollisionBox;
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -51,9 +91,6 @@ import Graphics.Scene.Debug.CollisionBox;
 #include <numeric>
 #include <optional>
 #include <stdlib.h>
-import engine.platform.runtime;
-import engine.debug;
-import engine.profiling;
 static void drawFramerateBar(engine::platform::IClockService& clock);
 #include <filesystem>
 #include <memory>
@@ -62,24 +99,6 @@ static void drawFramerateBar(engine::platform::IClockService& clock);
 #include <utility>
 #include <vector>
 
-import Graphics.Frame.Runtime;
-import Graphics.Renderer2D;
-import Graphics.Frame.SceneRenderers;
-import Graphics.Passes.Bloom;
-import Graphics.Passes.LightRays;
-import Graphics.Passes.SSAO;
-import Engine.UI.WND;
-import Graphics.Scene.Beams;
-import Graphics.Scene.Lighting.Renderer;
-import Graphics.Scene.Particles.Renderer;
-import Graphics.Scene.Screen.Distortion;
-import Graphics.Scene.Screen.FullscreenOverlay;
-import Graphics.Scene.Ring;
-import Graphics.Scene.WorldQuads;
-import Graphics.Scene.Trees.Renderer;
-import Graphics.Scene.Water.Renderer;
-import Graphics.Scene.Props.Renderer;
-import Graphics.Scene.Screen.Filters;
 
 // USER INCLUDES //////////////////////////////////////////////////////////////
 
@@ -138,27 +157,11 @@ import Graphics.Scene.Screen.Filters;
 #include "W3DDevice/GameClient/W3DParticleSys.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
-#include "W3DDevice/GameClient/W3DScene.h"
 #include "W3DDevice/GameClient/W3DShaderManager.h"
 #include "W3DDevice/GameClient/W3DDebugDisplay.h"
 #include "W3DDevice/GameClient/W3DProjectedShadow.h"
 #include "W3DDevice/GameClient/W3DShroud.h"
-#include "WWMath/wwmath.h"
 
-#include "WWMath/matrix4.h"
-import Assets.Images.PixelEncoding;
-import Assets.Adapters.W3D.Chunks;
-import Assets.Adapters.W3D.Aggregate;
-import Assets.Adapters.W3D.Assembly;
-import Assets.Adapters.W3D.Box;
-import Assets.Adapters.W3D.Collection;
-import Assets.Adapters.W3D.Dazzle;
-import Assets.Adapters.W3D.LevelSet;
-import Assets.Adapters.W3D.Null;
-import Assets.Adapters.W3D.Particles;
-import Assets.Adapters.W3D.Ring;
-import Assets.Adapters.W3D.Sphere;
-import Graphics.RHI;
 
 extern "C" bool Graphics_Begin_Frame() noexcept;
 extern "C" bool Graphics_Execute_Queued_Draws() noexcept;
@@ -168,11 +171,8 @@ extern "C" void Graphics_Abort_Frame() noexcept;
 
 #include "GameLogic/ScriptEngine.h"		// For TheScriptEngine - jkmcd
 #include "GameLogic/GameLogic.h"
-import engine.navigation.diagnostics.frame_capture;
-import Graphics.Scene.Props.Renderer;
-import Graphics.Scene.Shadows.DirectionalRenderer;
 
-static bool presentMeasuredGraphicsFrame() noexcept
+bool presentMeasuredGraphicsFrame() noexcept
 {
     const bool presented=Graphics_Present();
     auto& capture=navigation::diagnostics::frameCapture();
@@ -197,12 +197,10 @@ static bool presentMeasuredGraphicsFrame() noexcept
 
 // DEFINE AND ENUMS ///////////////////////////////////////////////////////////
 
-import Graphics.Capture.MovieCapture;
-import Graphics.Capture.FramePreview;
 static Graphics::MovieCapture displayMovieCapture;
 
 #define no_SAMPLE_DYNAMIC_LIGHT	1
-static bool graphicsRendererAvailable = false;
+bool graphicsRendererAvailable = false;
 static bool uiFrameActive = false;
 static Graphics::BeamView graphicsBeamView;
 static Graphics::View graphicsParticleView;
@@ -383,44 +381,26 @@ static void updateGraphicsView(W3DCamera *camera)
 	if (camera == nullptr || Graphics::Shared_Frame_Device() == nullptr)
 		return;
 
-	Matrix3D camera_view;
-	Matrix4x4 projection;
-	camera->Get_View_Matrix(&camera_view);
-	camera->Get_Backend_Projection_Matrix(&projection);
-	const Matrix4x4 view(camera_view);
-	const Matrix4x4 viewProjection = projection * view;
-	const Matrix4x4 inverseViewProjection = viewProjection.Inverse();
-    const Matrix4x4 inverseProjection = projection.Inverse();
-	float viewProjectionElements[16] = {};
-	for (int row = 0; row < 4; ++row) {
-		for (int column = 0; column < 4; ++column) {
-			viewProjectionElements[row * 4 + column] = viewProjection[row][column];
-			graphicsLightRaysInput.inverse_view_projection[row * 4 + column] = inverseViewProjection[row][column];
-            graphicsSSAOInput.projection[row * 4 + column] = projection[row][column];
-            graphicsSSAOInput.inverse_projection[row * 4 + column] = inverseProjection[row][column];
-		}
-	}
+	const auto camera_matrices = camera->Build_Render_Matrices();
+	graphicsLightRaysInput.inverse_view_projection = camera_matrices.inverse_view_projection;
+	graphicsSSAOInput.projection = camera_matrices.projection;
+	graphicsSSAOInput.inverse_projection = camera_matrices.inverse_projection;
 
-	const Vector3 right = camera->Get_Right_Dir();
-	const Vector3 up = camera->Get_Up_Dir();
-	const Vector3 forward = camera->Get_Forward_Dir();
-	for (std::size_t index = 0; index < graphicsBeamView.view_projection.size(); ++index)
-		graphicsBeamView.view_projection[index] = viewProjectionElements[index];
-	graphicsBeamView.camera_right = {right.X, right.Y, right.Z};
-	graphicsBeamView.camera_up = {up.X, up.Y, up.Z};
-	graphicsBeamView.camera_forward = {forward.X, forward.Y, forward.Z};
+	const Engine::Math::Vector3 right = camera->Get_Right_Dir();
+	const Engine::Math::Vector3 up = camera->Get_Up_Dir();
+	const Engine::Math::Vector3 forward = camera->Get_Forward_Dir();
+	graphicsBeamView.view_projection = camera_matrices.view_projection;
+	graphicsBeamView.camera_right = {right.x, right.y, right.z};
+	graphicsBeamView.camera_up = {up.x, up.y, up.z};
+	graphicsBeamView.camera_forward = {forward.x, forward.y, forward.z};
 	Graphics::Matrix4x4 graphics_view_matrix;
 	Graphics::Matrix4x4 graphics_projection_matrix;
-	for (std::size_t row = 0; row < 4; ++row) {
-		for (std::size_t column = 0; column < 4; ++column) {
-			graphics_view_matrix.values[row * 4 + column] = view[row][column];
-			graphics_projection_matrix.values[row * 4 + column] = projection[row][column];
-		}
-	}
+	graphics_view_matrix.values = camera_matrices.view;
+	graphics_projection_matrix.values = camera_matrices.projection;
 	graphicsParticleView = Graphics::View(
 		graphics_view_matrix,
 		graphics_projection_matrix,
-		{camera->Get_Position().X, camera->Get_Position().Y, camera->Get_Position().Z},
+		{camera->Get_Position().x, camera->Get_Position().y, camera->Get_Position().z},
 		{0.0f, 0.0f, static_cast<float>(TheDisplay->getWidth()), static_cast<float>(TheDisplay->getHeight()), 0.0f, 1.0f});
 	Graphics::GetParticleRenderer().Set_View(graphicsParticleView);
 	Graphics::GetWorldQuadRenderer().Set_View(graphicsParticleView);
@@ -489,20 +469,17 @@ static bool renderGraphicsScenePasses(W3DCamera *camera)
 ///////////////////////////////////////////////////////////////////////////////
 
 //=============================================================================
-RTS3DScene *W3DDisplay::m_3DScene = nullptr;
-RTS2DScene *W3DDisplay::m_2DScene = nullptr;
-RTS3DInterfaceScene *W3DDisplay::m_3DInterfaceScene = nullptr;
 W3DAssetManager *W3DDisplay::m_assetManager = nullptr;
 
 //=============================================================================
 	// note, can't use the ones from PerfTimer.h 'cuz they are currently
 	// only valid when "-vtune" is used... (srj)
-inline Int64 getPerformanceCounter(engine::platform::IClockService& clock)
+Int64 getPerformanceCounter(engine::platform::IClockService& clock)
 {
 	return static_cast<Int64>(clock.monotonic_nanoseconds());
 }
 
-inline Int64 getPerformanceCounterFrequency()
+Int64 getPerformanceCounterFrequency()
 {
 	return 1'000'000'000;
 }
@@ -517,9 +494,6 @@ W3DDisplay::W3DDisplay(engine::platform::IPlatform& platform, engine::platform::
 
 	m_initialized = false;
 	m_assetManager = nullptr;
-	m_3DScene = nullptr;
-	m_2DScene = nullptr;
-	m_3DInterfaceScene = nullptr;
 	m_averageFPS = TheGlobalData->m_framesPerSecondLimit;
 #if defined(RTS_DEBUG)
 	m_timerAtCumuFPSStart = 0;
@@ -564,9 +538,7 @@ W3DDisplay::~W3DDisplay()
 	//
 	Display::deleteViews();
 
-	REF_PTR_RELEASE( m_3DScene );
-	REF_PTR_RELEASE( m_2DScene );
-	REF_PTR_RELEASE( m_3DInterfaceScene );
+	destroyScenes();
 	for (Int j=0; j<Graphics::Material_Light_Count; j++)
 		REF_PTR_RELEASE( m_myLight[j] );
 
@@ -584,7 +556,6 @@ W3DDisplay::~W3DDisplay()
 	if (!TheGlobalData->m_headless)
 		Get_W3D_Render_Services().Shutdown();
 		Graphics::Graphics_Shutdown_Shared_Frame();
-	WWMath::Shutdown();
 	if (!TheGlobalData->m_headless)
 	delete TheW3DFileSystem;
 	TheW3DFileSystem = nullptr;
@@ -770,57 +741,7 @@ void W3DDisplay::init()
 	// Override the W3D File system
 	TheW3DFileSystem = NEW W3DFileSystem;
 
-	// init the Westwood math library
-	WWMath::Init();
-
-	if (!TheGlobalData->m_headless)
-	{
-
-		// create our 3D interface scene
-		m_3DInterfaceScene = NEW_REF( RTS3DInterfaceScene, () );
-		m_3DInterfaceScene->Set_Ambient_Light( Vector3( 1, 1, 1 ) );
-
-		// create our 2D scene
-		m_2DScene = NEW_REF( RTS2DScene, () );
-		m_2DScene->Set_Ambient_Light( Vector3( 1, 1, 1 ) );
-
-		// create our 3D scene
-		m_3DScene =NEW_REF( RTS3DScene, () );
-	#if defined(RTS_DEBUG)
-		if( TheGlobalData->m_wireframe )
-			m_3DScene->Set_Polygon_Mode( W3DScene::LINE );
-	#endif
-	//============================================================================
-		// m_myLight = NEW_REF
-	//============================================================================
-		Int lindex;
-		for (lindex=0; lindex<TheGlobalData->m_numGlobalLights; lindex++)
-		{	m_myLight[lindex] = NEW_REF( W3DLight, (W3DLight::DIRECTIONAL) );
-		}
-
-		setTimeOfDay( TheGlobalData->m_timeOfDay );	//set each light to correct values for given time
-
-		for (lindex=0; lindex<TheGlobalData->m_numGlobalLights; lindex++)
-		{	m_3DScene->setGlobalLight( m_myLight[lindex], lindex );
-		}
-
-	#ifdef SAMPLE_DYNAMIC_LIGHT
-		theDynamicLight = NEW_REF(W3DDynamicLight, ());
-		Real red = 1;
-		Real green = 1;
-		Real blue = 0;
-		if(red==0 && blue==0 && green==0) {
-			red = green = blue = 1;
-		}
-		theDynamicLight->Set_Ambient( Vector3( red, green, blue ) );
-		theDynamicLight->Set_Diffuse( Vector3( red, green, blue) );
-		theDynamicLight->Set_Position(Vector3(0, 0, 4));
-		theDynamicLight->Set_Far_Attenuation_Range(1, 8);
-		// Note: Don't Add_Render_Object dynamic lights.
-		m_3DScene->addDynamicLight( theDynamicLight );
-	#endif
-
-	}
+	createScenes();
 
 	// create a new asset manager
 	m_assetManager = NEW W3DAssetManager;
@@ -891,7 +812,6 @@ void W3DDisplay::init()
         if (!device_ready) {
             Get_W3D_Render_Services().Shutdown();
             Graphics::Graphics_Shutdown_Shared_Frame();
-            WWMath::Shutdown();
             throw ERROR_INVALID_D3D;
         }
         // Preserve the serialized preference; the frame targets currently use one sample.
@@ -906,7 +826,6 @@ void W3DDisplay::init()
 		if (!graphicsRendererAvailable) {
 			Get_W3D_Render_Services().Shutdown();
 			Graphics::Graphics_Shutdown_Shared_Frame();
-			WWMath::Shutdown();
 			throw ERROR_INVALID_D3D;
 		}
 
@@ -976,21 +895,7 @@ void W3DDisplay::reset()
 
 	Display::reset();
 
-	// Remove all render objects.
-
-	if (m_3DScene != nullptr)
-	{
-		W3DSceneIterator *sceneIter = m_3DScene->Create_Iterator();
-		sceneIter->First();
-		while(!sceneIter->Is_Done()) {
-			W3DRenderObject * robj = sceneIter->Current_Item();
-			robj->Add_Ref();
-			m_3DScene->Remove_Render_Object(robj);
-			robj->Release_Ref();
-			sceneIter->Next();
-		}
-		m_3DScene->Destroy_Iterator(sceneIter);
-	}
+	removeSceneObjects();
 
 	m_isClippedEnabled = FALSE;
 
@@ -1328,11 +1233,11 @@ void W3DDisplay::gatherDebugStats()
 			L"Camera zoom: %.3f, pitch: %.2f, FXpitch: %.2f, yaw: %.2f, pos: (%.2f, %.2f, %.2f), FOV: %.2f\n"
 			L"Height above ground: %.2f, Terrain height at camera pivot: %.2f",
 			zoom,
-			RAD_TO_DEGF(pitch),
-			RAD_TO_DEGF(FXPitch),
-			RAD_TO_DEGF(angle),
+			Engine::Math::RadiansToDegrees(pitch),
+			Engine::Math::RadiansToDegrees(FXPitch),
+			Engine::Math::RadiansToDegrees(angle),
 			camPos.x, camPos.y, camPos.z,
-			RAD_TO_DEGF(FOV),
+			Engine::Math::RadiansToDegrees(FOV),
 			actualHeightAboveGround, terrainHeight );
 
 		m_displayStrings[DebugInfo]->setText( unibuffer );
@@ -1614,90 +1519,6 @@ void W3DDisplay::drawCurrentDebugDisplay()
 	}
 }
 
-// W3DDisplay::calculateTerrainLOD =================================================
-/** Calculates an adequately speedy terrain Level Of Detail. */
-//=============================================================================
-void W3DDisplay::calculateTerrainLOD()
-{
-	const Int NUM_SAMPLES=20;
-	const Int NUM_TO_DISCARD=5;
-
-	Int64 freq64 = getPerformanceCounterFrequency();
-
-	float frameTime = 0;
-	float maxTimeLimit = TheGlobalData->m_terrainLODTargetTimeMS/1000.0f;
-	TerrainLOD goodLOD = TERRAIN_LOD_MIN;
-	TerrainLOD curLOD = TERRAIN_LOD_AUTOMATIC;
-	Int count = 0;
-#ifdef RTS_DEBUG
-	// just go to TERRAIN_LOD_NO_WATER, mirror off.
-	TheWritableGlobalData->m_terrainLOD = TERRAIN_LOD_NO_WATER;
-	m_3DScene->drawTerrainOnly(false);
-	TheTerrainRenderObject->adjustTerrainLOD(0);
-	return;
-#endif
-	do {
-		Int i;
-		float timeForFrame=0;
-		frameTime = 0;
-		switch(curLOD) {
-			default: curLOD = TERRAIN_LOD_DISABLE; break;
-			case TERRAIN_LOD_AUTOMATIC: curLOD = TERRAIN_LOD_MAX; break;
-			case TERRAIN_LOD_MAX: curLOD = TERRAIN_LOD_NO_WATER; break;
-			case TERRAIN_LOD_NO_WATER: curLOD = TERRAIN_LOD_DISABLE; break;
-		}
-		if (curLOD == TERRAIN_LOD_DISABLE) {
-			break;
-		}
-		TheWritableGlobalData->m_terrainLOD = curLOD;
-		m_3DScene->drawTerrainOnly(true);
-		TheTerrainRenderObject->adjustTerrainLOD(0);
-		for (i=0; i<NUM_SAMPLES; i++) {
-			Int64 startTime64 = getPerformanceCounter(m_platform.clock());
-			// start render block
-			updateViews();
-            if (!graphicsRendererAvailable || !Graphics_Begin_Frame()) {
-                Graphics_Abort_Frame();
-                m_3DScene->drawTerrainOnly(false);
-                return;
-            }
-            if (Get_W3D_Render_Services().Begin_Render(true, true, Vector3(0.0f, 0.0f, 0.0f))) {
-                drawViews();
-                Get_W3D_Render_Services().End_Render();
-                if (!Graphics_End_Frame() || !presentMeasuredGraphicsFrame())
-                    Graphics_Abort_Frame();
-            } else {
-                Graphics_Abort_Frame();
-            }
-			Int64 time64 = getPerformanceCounter(m_platform.clock());
-			timeForFrame = (float)((double)(time64-startTime64) / (double)(freq64));
-			if (i>=NUM_TO_DISCARD) {
-				frameTime += timeForFrame;
-				if (i>NUM_TO_DISCARD+1 &&
-					(timeForFrame / ((i+1)-NUM_TO_DISCARD)) > 2*maxTimeLimit) {
-					i++;
-					break;
-				}
-			}
-		}
-		frameTime /= ((i)-NUM_TO_DISCARD);
-		count++;
-		if (frameTime<maxTimeLimit && goodLOD<curLOD) {
-			goodLOD = curLOD;
-		}
-		if (frameTime < maxTimeLimit) break;
-	} while (count<10);
-
-	TheWritableGlobalData->m_terrainLOD = goodLOD;
-	m_3DScene->drawTerrainOnly(false);
-	TheTerrainRenderObject->adjustTerrainLOD(0);
-#ifdef RTS_DEBUG
-	engine::debug::invariant((count<10), "count<10", __FILE__, __LINE__, "calculateTerrainLOD");
-#endif
-
-}
-
-
 Real W3DDisplay::getAverageFPS()
 {
 	return m_averageFPS;
@@ -1917,7 +1738,7 @@ AGAIN:
 				if (!graphicsFrame)
 					Graphics_Abort_Frame();
 			}
-			if (graphicsFrame && (TheGlobalData->m_breakTheMovie == FALSE) && (TheGlobalData->m_disableRender == false) && Get_W3D_Render_Services().Begin_Render( true, true, Vector3( 0.0f, 0.0f, 0.0f ), TheWaterTransparency->m_minWaterOpacity ))
+			if (graphicsFrame && (TheGlobalData->m_breakTheMovie == FALSE) && (TheGlobalData->m_disableRender == false) && Get_W3D_Render_Services().Begin_Render( true, true, Engine::Math::Vector3{0.0f, 0.0f, 0.0f}, TheWaterTransparency->m_minWaterOpacity ))
 			{
 
 				if(TheGlobalData->m_loadScreenRender == TRUE)
@@ -2126,37 +1947,6 @@ Bool W3DDisplay::isLetterBoxed()
 	return (m_letterBoxEnabled);
 }
 
-// W3DDisplay::createLightPulse ===============================================
-/** Create a "light pulse" which is a dynamic light that grows, decays
-	* and vanishes over several frames */
-//=============================================================================
-void W3DDisplay::createLightPulse( const Coord3D *pos, const RGBColor *color,
-																	 Real innerRadius, Real attenuationWidth,
-																	 UnsignedInt increaseFrameTime,
-																	 UnsignedInt decayFrameTime//, Bool donut
-																	 )
-{
-	if (m_3DScene == nullptr)
-		return;
-	if (innerRadius+attenuationWidth<2.0*PATHFIND_CELL_SIZE_F + 1.0f) {
-		return; // it basically won't make any visual difference.  jba.
-	}
-	W3DDynamicLight * theDynamicLight = m_3DScene->getADynamicLight();
-	// turn it on.
-	theDynamicLight->setEnabled(true);
-
-	theDynamicLight->Set_Ambient( Vector3( color->red, color->green, color->blue ) );
-	theDynamicLight->Set_Diffuse( Vector3( color->red, color->green, color->blue) );
-	theDynamicLight->Set_Position(Vector3(pos->x, pos->y, pos->z));
-	theDynamicLight->Set_Far_Attenuation_Range(innerRadius, innerRadius + attenuationWidth);
-	theDynamicLight->setFrameFade(increaseFrameTime, decayFrameTime);
-	theDynamicLight->setDecayRange();
-	theDynamicLight->setDecayColor();
-	//theDynamicLight->setDonut(donut);
-	// (gth) CNC3 enable far attenuation.  C&C3 defaults to disabled.  Must enable to match Generals. MW 8-06-03
-	theDynamicLight->Set_Flag(W3DLight::FAR_ATTENUATION,true);
-}
-
 void W3DDisplay::toggleLetterBox()
 {
 	m_letterBoxEnabled = !m_letterBoxEnabled;
@@ -2198,38 +1988,6 @@ void W3DDisplay::enableLetterBox(Bool enable)
 				TheTacticalView->setZoomLimited( 1 );
 			}
 		}
-	}
-}
-
-// W3DDisplay::setTimeOfDay ===================================================
-/** */
-//=============================================================================
-void W3DDisplay::setTimeOfDay( TimeOfDay tod )
-{
-	const GlobalData::TerrainLighting *ol=&TheGlobalData->m_terrainObjectsLighting[tod][0];
-
-	if( m_3DScene )
-	{
-		m_3DScene->Set_Ambient_Light( Vector3(ol->ambient.red, ol->ambient.green, ol->ambient.blue) );
-	}
-
-	for (Int i=0; i<Graphics::Material_Light_Count; i++)
-	{
-		if( m_myLight[i] )
-		{
-			ol=&TheGlobalData->m_terrainObjectsLighting[tod][i];
-
-			m_myLight[i]->Set_Ambient( Vector3( 0.0f, 0.0f, 0.0f ) );
-			m_myLight[i]->Set_Diffuse( Vector3(ol->diffuse.red, ol->diffuse.green, ol->diffuse.blue ) );
-			m_myLight[i]->Set_Specular( Vector3(0,0,0) );
-			Matrix3D mtx;
-			mtx.Set(Vector3(1,0,0), Vector3(0,1,0), Vector3(ol->lightPos.x, ol->lightPos.y, ol->lightPos.z), Vector3(0,0,0));
-			m_myLight[i]->Set_Transform(mtx);
-		}
-	}
-	if(TheTerrainRenderObject) {
-		TheTerrainRenderObject->setTimeOfDay(tod);
-		TheTacticalView->forceRedraw();
 	}
 }
 

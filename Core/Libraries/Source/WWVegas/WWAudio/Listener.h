@@ -99,7 +99,7 @@ class Listener3DClass : public Sound3DClass
 		//////////////////////////////////////////////////////////////////////
 		//	Velocity methods
 		//////////////////////////////////////////////////////////////////////
-		virtual void			Set_Velocity (const Vector3 &velocity) override { }
+		virtual void Set_Velocity (Engine::Math::Vector3 velocity) override { (void)velocity; }
 
 
 	protected:

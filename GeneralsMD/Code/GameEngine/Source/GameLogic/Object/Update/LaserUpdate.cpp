@@ -43,7 +43,8 @@ import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 #include "GameLogic/Object.h"
 #include "GameLogic/GameLogic.h" // For frame number
 #include "GameLogic/Module/LaserUpdate.h"
-#include "WWMath/vector3.h"
+import Engine.Core.Math.Vector3;
+import Engine.Core.Math.AffineTransform3;
 
 
 //-------------------------------------------------------------------------------------------------
@@ -122,9 +123,9 @@ void LaserUpdate::updateStartPos()
 
 	if( m_parentBoneName.isNotEmpty() )
 	{
-		Matrix3D startPosMatrix;
+		Engine::Math::AffineTransform3 startTransform;
 
-		if( !parentDrawable->getCurrentWorldspaceClientBonePositions( m_parentBoneName.str(), startPosMatrix ) )
+		if( !parentDrawable->getCurrentWorldBoneTransform( m_parentBoneName.str(), startTransform ) )
 		{
 			// failed to find the required bone, so just die
 
@@ -141,9 +142,10 @@ void LaserUpdate::updateStartPos()
 
 
 
-		m_startPos.x = startPosMatrix.Get_X_Translation();
-		m_startPos.y = startPosMatrix.Get_Y_Translation();
-		m_startPos.z = startPosMatrix.Get_Z_Translation();
+		const Engine::Math::Vector3 position = startTransform.Translation();
+		m_startPos.x = position.x;
+		m_startPos.y = position.y;
+		m_startPos.z = position.z;
 	}
 	else
 	{
@@ -174,14 +176,13 @@ void LaserUpdate::updateEndPos()
 		// the old spot, and then stop trying to find a target Drawable
 		if( data->m_punchThroughScalar > 0 )
 		{
-			Vector3 laserVector;
-			laserVector.Set(m_endPos.x, m_endPos.y, m_endPos.z);
-			laserVector = laserVector - Vector3(m_startPos.x, m_startPos.y, m_startPos.z);
-			laserVector *= data->m_punchThroughScalar;
-			laserVector = laserVector + Vector3(m_startPos.x, m_startPos.y, m_startPos.z);
-			m_endPos.x = laserVector.X;
-			m_endPos.y = laserVector.Y;
-			m_endPos.z = laserVector.Z;
+			const Engine::Math::Vector3 start{m_startPos.x, m_startPos.y, m_startPos.z};
+			const Engine::Math::Vector3 end{m_endPos.x, m_endPos.y, m_endPos.z};
+			const Engine::Math::Vector3 laser_vector =
+				(end - start) * data->m_punchThroughScalar + start;
+			m_endPos.x = laser_vector.x;
+			m_endPos.y = laser_vector.y;
+			m_endPos.z = laser_vector.z;
 		}
 
 		m_targetID = INVALID_DRAWABLE_ID;

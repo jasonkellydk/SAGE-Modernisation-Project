@@ -1,4 +1,6 @@
+import Engine.Core.Math.Vector3;
 import Graphics.Frame.RenderClock;
+#include <cmath>
 #include <algorithm>
 import Graphics.Scene.Views.CameraMatrices;
 import Graphics.Frame.AttachmentBindings;
@@ -39,6 +41,7 @@ import Graphics.Frame.AttachmentBindings;
 import Assets.Images.PixelEncoding;
 import Graphics.RHI;
 #include "W3DDevice/GameClient/W3DWater.h"
+import Engine.Core.Math.Vector2;
 #include "W3DDevice/GameClient/BaseHeightMap.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
 #include "W3DDevice/GameClient/W3DShroud.h"
@@ -50,7 +53,6 @@ import Graphics.RHI;
 #include "W3DDevice/GameClient/W3DRenderContext.h"
 #include "W3DDevice/GameClient/W3DCamera.h"
 
-#include "WWMath/matrix4.h"
 #include "WWLib/simplevec.h"
 
 #include "Common/FramePacer.h"
@@ -65,7 +67,7 @@ import Graphics.RHI;
 #include "GameLogic/GameLogic.h"
 #include "GameLogic/ScriptEngine.h"
 #include "W3DDevice/GameClient/W3DDisplay.h"
-#include "W3DDevice/GameClient/W3DPoly.h"
+#include <array>
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -77,6 +79,9 @@ import engine.debug;
 import Graphics.Diagnostics.Render;
 import Graphics.Scene.Lighting.Environment;
 import Graphics.Frame.Runtime;
+import Engine.Core.Math.AxisAlignedBox3;
+import Engine.Core.Math.AffineTransform3;
+import Engine.Core.Math.Matrix4;
 
 
 
@@ -120,6 +125,58 @@ import Graphics.Frame.Runtime;
 /// @todo: Fix clipping of objects that intersect the mirror surface
 
 WaterRenderSystem *TheWaterRenderSystem=nullptr; ///<global water rendering system
+
+namespace {
+Engine::Math::Matrix4 To_Engine_Matrix(const Engine::Math::AffineTransform3 &transform) noexcept
+{
+	auto result = Engine::Math::Matrix4::Identity();
+	for (unsigned row = 0; row < 3; ++row)
+		for (unsigned column = 0; column < 4; ++column)
+			result(row, column) = transform.elements[row * 4 + column];
+	return result;
+}
+
+// Port of the original ClipPolyClass::Clip: keeps the part of the polygon that
+// is not in front of the (outward facing, unnormalized) plane. Planes with a
+// zero normal are applied as-is, like the original.
+void Clip_Polygon_Legacy(const std::vector<Engine::Math::Vector3> &source,
+	const Graphics::CameraFrustumPlane &plane, std::vector<Engine::Math::Vector3> &dest)
+{
+	dest.clear();
+	const std::size_t vcount = source.size();
+	if (vcount <= 2) return;
+
+	const Engine::Math::Vector3 normal{plane.normal.x, plane.normal.y, plane.normal.z};
+	const float plane_distance = plane.distance;
+	const auto in_front = [&](const Engine::Math::Vector3 &point) {
+		return point.Dot(normal) > plane_distance;
+	};
+	const auto intersect = [&](const Engine::Math::Vector3 &p0, const Engine::Math::Vector3 &p1) {
+		const float den = normal.Dot(p1 - p0);
+		const float num = -(normal.Dot(p0) - plane_distance);
+		const float alpha = num / den;
+		return Engine::Math::Vector3{p0.x + (p1.x - p0.x) * alpha,
+			p0.y + (p1.y - p0.y) * alpha, p0.z + (p1.z - p0.z) * alpha};
+	};
+
+	std::size_t iprev = vcount - 1;
+	bool prev_point_in_front = !in_front(source[iprev]);	// plane normal is outward, so invert
+	for (std::size_t i = 0; i < vcount; ++i) {
+		const bool cur_point_in_front = !in_front(source[i]);
+		if (prev_point_in_front) {
+			if (cur_point_in_front)
+				dest.push_back(source[i]);
+			else
+				dest.push_back(intersect(source[iprev], source[i]));
+		} else if (cur_point_in_front) {
+			dest.push_back(intersect(source[iprev], source[i]));
+			dest.push_back(source[i]);
+		}
+		prev_point_in_front = cur_point_in_front;
+		iprev = i;
+	}
+}
+}
 
 void doSkyBoxSet(Bool startDraw)
 {
@@ -230,34 +287,34 @@ WaterRenderSystem::WaterRenderSystem()
 void WaterRenderSystem::Set_Surface_Geometry(const WaterGeometry &geometry)
 {
 	m_surfaceGeometry = geometry;
-    m_surfaceDomain = Vector4(0,0,0,0);
+    m_surfaceDomain = {0,0,0,0};
     bool have_bounds = false;
     for (const auto& polygon : geometry.polygons) {
         if (polygon.river || polygon.points.size() < 3) continue;
         if (!have_bounds) {
             const auto& first = polygon.points.front();
-            m_surfaceDomain = Vector4(first.x,first.y,first.x,first.y);
+            m_surfaceDomain = {first.x,first.y,first.x,first.y};
             have_bounds = true;
         }
         for (const auto& point : polygon.points) {
-            m_surfaceDomain.X = (std::min)(m_surfaceDomain.X,point.x);
-            m_surfaceDomain.Y = (std::min)(m_surfaceDomain.Y,point.y);
-            m_surfaceDomain.Z = (std::max)(m_surfaceDomain.Z,point.x);
-            m_surfaceDomain.W = (std::max)(m_surfaceDomain.W,point.y);
+            m_surfaceDomain.x = (std::min)(m_surfaceDomain.x,point.x);
+            m_surfaceDomain.y = (std::min)(m_surfaceDomain.y,point.y);
+            m_surfaceDomain.z = (std::max)(m_surfaceDomain.z,point.x);
+            m_surfaceDomain.w = (std::max)(m_surfaceDomain.w,point.y);
         }
     }
-    m_surfaceDomain.Z -= m_surfaceDomain.X;
-    m_surfaceDomain.W -= m_surfaceDomain.Y;
+    m_surfaceDomain.z -= m_surfaceDomain.x;
+    m_surfaceDomain.w -= m_surfaceDomain.y;
     m_drawingRiver = std::any_of(m_surfaceGeometry.polygons.begin(),m_surfaceGeometry.polygons.end(),
         [](const auto& polygon) { return polygon.river; });
     rebuildSurfaceMeshes();
 }
 
-Vector4 WaterRenderSystem::getDisplacementDomain() const
+Engine::Math::Vector4 WaterRenderSystem::getDisplacementDomain() const
 {
-    if (m_waterType != WATER_TYPE_OCEAN && m_surfaceDomain.Z > 0 && m_surfaceDomain.W > 0)
+    if (m_waterType != WATER_TYPE_OCEAN && m_surfaceDomain.z > 0 && m_surfaceDomain.w > 0)
         return m_surfaceDomain;
-    return Vector4(m_worldPositionX,m_worldPositionY,m_dx,m_dy);
+    return {m_worldPositionX,m_worldPositionY,m_dx,m_dy};
 }
 
 void WaterRenderSystem::rebuildSurfaceMeshes()
@@ -712,11 +769,11 @@ bool WaterRenderSystem::updateDisplacementTexture()
     if (m_waterType != WATER_TYPE_OCEAN && m_surfaceGeometry.polygons.empty()) return true;
     auto* device = Graphics::Shared_Frame_Device();
     const auto domain = getDisplacementDomain();
-    if (!device || !m_waterOceanHeightTexture || domain.Z <= 0 || domain.W <= 0) return false;
+    if (!device || !m_waterOceanHeightTexture || domain.z <= 0 || domain.w <= 0) return false;
     return Graphics::Get_Water_Renderer().Displacement().Render(
         device->Immediate_Command_List(),Graphics::Get_Attachment_Bindings().Current(),
         Resolve_Graphics_Texture(m_waterOceanHeightTexture),
-        {domain.X,domain.Y,domain.Z,domain.W},m_waterTime,
+        {domain.x,domain.y,domain.z,domain.w},m_waterTime,
         Graphics::Get_Water_Renderer().Waves().Prepare(m_waterTime),1);
 }
 
@@ -753,15 +810,15 @@ void WaterRenderSystem::renderMirror(W3DCamera *cam)
 		m_pReflectionTexture == nullptr)
 		return;
 
-	const Matrix3D OldCameraMatrix = cam->Get_Transform();
-	const Matrix4x4 camera_world(OldCameraMatrix);
+	const auto original_camera_transform = cam->Get_Transform();
+	const Engine::Math::Matrix4 camera_world = To_Engine_Matrix(original_camera_transform);
 	const Graphics::WaterView water_view(
-		std::span<const float,16>(&camera_world[0][0],16),m_reflectionHeight);
+		std::span<const float,16>(camera_world.elements.data(),16),m_reflectionHeight);
 	const auto& reflected = water_view.reflected_camera;
-	Matrix3D reflectedTransform(
-		reflected[0],reflected[1],reflected[2],reflected[3],
-		reflected[4],reflected[5],reflected[6],reflected[7],
-		reflected[8],reflected[9],reflected[10],reflected[11]);
+	Engine::Math::AffineTransform3 reflected_transform;
+	for (unsigned row = 0; row < 3; ++row)
+		for (unsigned column = 0; column < 4; ++column)
+			reflected_transform[row][column] = reflected[row * 4 + column];
 
     if (!m_pReflectionTexture->Ensure_Render_Backend_Texture()) return;
     auto& attachments=Graphics::Get_Attachment_Bindings();
@@ -773,13 +830,13 @@ void WaterRenderSystem::renderMirror(W3DCamera *cam)
 
     attachments.Clear(true,true,{0,0,0,1});
 
-	cam->Set_Transform( reflectedTransform );
+	cam->Set_Transform(reflected_transform);
 
 	//Force reflected image to be drawn into full texture size - not a viewport inside texture.
-	Vector2 vMin,vMax,vOldMax,vOldMin;
+	Engine::Math::Vector2 vMin,vMax,vOldMax,vOldMin;
  	cam->Get_Viewport(vOldMin,vOldMax);
- 	vMax.X=vMax.Y=1.0f;
-	vMin.X=vMin.Y=0.0f;
+	 vMax.x=vMax.y=1.0f;
+	vMin.x=vMin.y=0.0f;
  	cam->Set_Viewport(vMin,vMax);
     const auto pass_viewport=attachments.Current().viewport;
 	// Projective sampling uses the main camera's normalized coordinates.
@@ -804,7 +861,7 @@ void WaterRenderSystem::renderMirror(W3DCamera *cam)
 	Graphics::Get_Environment_Lighting().parameters.clip_plane = saved_clip_plane;
 	m_renderingOffscreen = FALSE;
 
-	cam->Set_Transform(OldCameraMatrix);	//restore original non-reflected matrix
+	cam->Set_Transform(original_camera_transform);	//restore original non-reflected transform
  	cam->Set_Viewport(vOldMin,vOldMax);
 	reflection_pass.End();
 	cam->Apply();	//restore camera-dependent parameters for the main target
@@ -855,10 +912,10 @@ void WaterRenderSystem::Render(W3DRenderContext & rinfo)
 
 	if (TheGlobalData && TheGlobalData->m_drawSkyBox)
 	{	//center skybox around camera
-		Vector3 pos=rinfo.Camera.Get_Position();
-		pos.Z = TheGlobalData->m_skyBoxPositionZ;
+		const Engine::Math::Vector3 pos{rinfo.Camera.Get_Position().x,
+			rinfo.Camera.Get_Position().y, TheGlobalData->m_skyBoxPositionZ};
 		if (m_skyBox != nullptr)
-			m_skyBox->Render(rinfo, pos.X, pos.Y, pos.Z);
+			m_skyBox->Render(rinfo, pos.x, pos.y, pos.z);
 	}
 
 	//Clean up after any pixel shaders.
@@ -875,31 +932,35 @@ void WaterRenderSystem::Render(W3DRenderContext & rinfo)
 /** Clips the water plane to the current camera frustum and returns a bounding
 	* box enclosing the clipped plane.  Returns false if water plane is not visible. */
 //-------------------------------------------------------------------------------------------------
-Bool WaterRenderSystem::getClippedWaterPlane(W3DCamera *cam, AABoxClass *box)
+Bool WaterRenderSystem::getClippedWaterPlane(W3DCamera *cam, Engine::Math::AxisAlignedBox3 *box)
 {
-	const FrustumClass & frustum = cam->Get_Frustum();
-
-	ClipPolyClass	ClippedPoly0;
-	ClipPolyClass	ClippedPoly1;
+	const Graphics::CameraFrustum &frustum = cam->Get_Frustum();
+	std::vector<Engine::Math::Vector3> clipped_polygon;
+	std::vector<Engine::Math::Vector3> temporary_polygon;
 
 	const auto clip_plane = [&]() -> Bool {
-		ClippedPoly0.Clip(frustum.Planes[0],ClippedPoly1);
-		ClippedPoly1.Clip(frustum.Planes[1],ClippedPoly0);
-		ClippedPoly0.Clip(frustum.Planes[2],ClippedPoly1);
-		ClippedPoly1.Clip(frustum.Planes[3],ClippedPoly0);
-		ClippedPoly0.Clip(frustum.Planes[4],ClippedPoly1);
-		ClippedPoly1.Clip(frustum.Planes[5],ClippedPoly0);
-		const Int count = ClippedPoly0.Verts.Count();
+		Clip_Polygon_Legacy(clipped_polygon, frustum.planes[0], temporary_polygon);
+		Clip_Polygon_Legacy(temporary_polygon, frustum.planes[1], clipped_polygon);
+		Clip_Polygon_Legacy(clipped_polygon, frustum.planes[2], temporary_polygon);
+		Clip_Polygon_Legacy(temporary_polygon, frustum.planes[3], clipped_polygon);
+		Clip_Polygon_Legacy(clipped_polygon, frustum.planes[4], temporary_polygon);
+		Clip_Polygon_Legacy(temporary_polygon, frustum.planes[5], clipped_polygon);
+		const Int count = static_cast<Int>(clipped_polygon.size());
 		if (count < 3) return FALSE;
-		if (box) box->Init(&(ClippedPoly0.Verts[0]),count);
+		if (box) {
+			Engine::Math::AxisAlignedBox3 bounds{clipped_polygon.front(), clipped_polygon.front()};
+			for (std::size_t index = 1; index < clipped_polygon.size(); ++index)
+				bounds.Include(clipped_polygon[index]);
+			*box = bounds;
+		}
 		return TRUE;
 	};
 	if (m_waterType != WATER_TYPE_OCEAN && !m_surfaceGeometry.polygons.empty()) {
 		for (const auto& polygon : m_surfaceGeometry.polygons) {
 			if (polygon.points.size() < 3) continue;
-			ClippedPoly0.Reset();
+			clipped_polygon.clear();
 			for (const auto& point : polygon.points)
-				ClippedPoly0.Add_Vertex(Vector3(point.x,point.y,point.z));
+				clipped_polygon.push_back({point.x, point.y, point.z});
 			if (clip_plane()) {
 				m_reflectionHeight = polygon.points.front().z;
 				return TRUE;
@@ -908,11 +969,11 @@ Bool WaterRenderSystem::getClippedWaterPlane(W3DCamera *cam, AABoxClass *box)
 		return FALSE;
 	}
 	m_reflectionHeight = m_level;
-	ClippedPoly0.Reset();
-	ClippedPoly0.Add_Vertex(Vector3(m_worldPositionX,m_worldPositionY,m_level));
-	ClippedPoly0.Add_Vertex(Vector3(m_worldPositionX,m_worldPositionY+m_dy,m_level));
-	ClippedPoly0.Add_Vertex(Vector3(m_worldPositionX+m_dx,m_worldPositionY+m_dy,m_level));
-	ClippedPoly0.Add_Vertex(Vector3(m_worldPositionX+m_dx,m_worldPositionY,m_level));
+	clipped_polygon = {
+		{m_worldPositionX, m_worldPositionY, m_level},
+		{m_worldPositionX, m_worldPositionY + m_dy, m_level},
+		{m_worldPositionX + m_dx, m_worldPositionY + m_dy, m_level},
+		{m_worldPositionX + m_dx, m_worldPositionY, m_level}};
 
 	return clip_plane();
 }
@@ -922,32 +983,33 @@ WaterMaterialParameters WaterRenderSystem::makeWaterMaterialParameters(
 {
 	(void)river;
 	WaterMaterialParameters parameters = {
-		Vector4(0.0f, 0.0f, 0.0f, 0.0f),
-		Vector4(m_uOffset, m_vOffset, m_waterTime, m_level),
-		Vector4(0.0f, 0.0f, 1.0f, 1.0f),
+		Engine::Math::Vector4{0.0f, 0.0f, 0.0f, 0.0f},
+		Engine::Math::Vector4{m_uOffset, m_vOffset, m_waterTime, m_level},
+		Engine::Math::Vector4{0.0f, 0.0f, 1.0f, 1.0f},
 		getDisplacementDomain(),
-		Vector4(1.0f, 1.0f, 1.0f, 1.0f),
-		Vector4(reflection ? REFLECTION_FACTOR : 0.0f,
+		Engine::Math::Vector4{1.0f, 1.0f, 1.0f, 1.0f},
+		Engine::Math::Vector4{reflection ? REFLECTION_FACTOR : 0.0f,
 			0.0f, m_sceneColorTexture.Is_Valid() ? 1.0f : 0.0f,
-			underwater ? 1.0f : 0.0f),
-		Vector4(river ? 1.0f : 0.0f,
+			underwater ? 1.0f : 0.0f},
+		Engine::Math::Vector4{river ? 1.0f : 0.0f,
 			TheWaterTransparency != nullptr ?
 				TheWaterTransparency->m_transparentWaterDepth : 0.0f,
 			TheWaterTransparency != nullptr ?
 				TheWaterTransparency->m_minWaterOpacity : 1.0f,
-			m_sceneDepthTexture.Is_Valid() ? 1.0f : 0.0f)};
+			m_sceneDepthTexture.Is_Valid() ? 1.0f : 0.0f}};
 
 	if (Graphics::Shared_Frame_Device() != nullptr)
 	{
-		Matrix4x4 view;
-		std::copy_n(Graphics::Get_Camera_Matrices().view.values.data(), 16, &view[0][0]);
-		const Matrix4x4 camera_transform = view.Inverse();
+		Engine::Math::Matrix4 view;
+		view.elements = Graphics::Get_Camera_Matrices().view.values;
+		const Engine::Math::Matrix4 camera_transform =
+			view.Inverse().value_or(Engine::Math::Matrix4::Identity());
 		const Graphics::WaterView water_view(
-			std::span<const float,16>(&camera_transform[0][0],16),m_level);
+			std::span<const float,16>(camera_transform.elements.data(),16),m_level);
 		const auto& position = water_view.camera_position;
-		parameters.camera_position = Vector4(position[0],position[1],position[2],1);
+		parameters.camera_position = {position[0],position[1],position[2],1};
 		if (water_view.underwater)
-			parameters.effects[3] = 1.0f;
+			parameters.effects.w = 1.0f;
 	}
 
 	W3DShroud *shroud = TheTerrainRenderObject == nullptr ? nullptr :
@@ -962,12 +1024,12 @@ WaterMaterialParameters WaterRenderSystem::makeWaterMaterialParameters(
 		const float scale_y = 1.0f /
 			(static_cast<float>(shroud->getCellHeight()) *
 				static_cast<float>(shroud->getTextureHeight()));
-		parameters.shroud_projection = Vector4(scale_x, scale_y,
+		parameters.shroud_projection = {scale_x, scale_y,
 			(-static_cast<float>(shroud->getDrawOriginX()) +
 				static_cast<float>(shroud->getCellWidth())) * scale_x,
 			(-static_cast<float>(shroud->getDrawOriginY()) +
-				static_cast<float>(shroud->getCellHeight())) * scale_y);
-		parameters.effects[1] = 1.0f;
+				static_cast<float>(shroud->getCellHeight())) * scale_y};
+		parameters.effects.y = 1.0f;
 	}
 
 	return parameters;
@@ -979,7 +1041,7 @@ WaterMaterialParameters WaterRenderSystem::makeWaterMaterialParameters(
 //-------------------------------------------------------------------------------------------------
 void WaterRenderSystem::drawSea(W3DRenderContext & rinfo)
 {
-	AABoxClass sea_box;
+	Engine::Math::AxisAlignedBox3 sea_box;
 	if (!getClippedWaterPlane(&rinfo.Camera, &sea_box))
 	{
 		return;
@@ -995,10 +1057,10 @@ void WaterRenderSystem::drawSea(W3DRenderContext & rinfo)
 		makeWaterMaterialParameters(false, m_pReflectionTexture != nullptr, false);
 	W3DShroud *shroud = TheTerrainRenderObject == nullptr ? nullptr :
 		TheTerrainRenderObject->getShroud();
-	W3DTextureHandle *foam_or_caustics = parameters.effects[3] > 0.5f &&
+	W3DTextureHandle *foam_or_caustics = parameters.effects.w > 0.5f &&
 		m_waterCausticsTexture != nullptr ? m_waterCausticsTexture :
 		m_waterSparklesTexture;
-	W3DTextureHandle *environment_or_depth = parameters.effects[3] > 0.5f &&
+	W3DTextureHandle *environment_or_depth = parameters.effects.w > 0.5f &&
 		m_waterDepthLutTexture != nullptr ? m_waterDepthLutTexture :
 		m_waterEnvironmentTexture;
 	if (environment_or_depth == nullptr)
@@ -1013,8 +1075,8 @@ void WaterRenderSystem::drawSea(W3DRenderContext & rinfo)
 		TheWaterTransparency != nullptr && TheWaterTransparency->m_additiveBlend))
 	{
 		const Graphics::OceanPatchGrid grid{
-			{sea_box.Center.X - sea_box.Extent.X, sea_box.Center.Y - sea_box.Extent.Y},
-			{sea_box.Center.X + sea_box.Extent.X, sea_box.Center.Y + sea_box.Extent.Y},
+			{sea_box.minimum.x, sea_box.minimum.y},
+			{sea_box.maximum.x, sea_box.maximum.y},
 			{m_worldPositionX, m_worldPositionY, 0}, PATCH_WIDTH, PATCH_SCALE};
 		m_waterMaterial.Draw_Patches(m_gridMesh,grid);
 	}
@@ -1046,19 +1108,19 @@ void WaterRenderSystem::renderUnderwater(W3DRenderContext &rinfo, bool draw_grid
     if (!m_waterMaterial.Apply_Underwater(m_sceneColorTexture,m_sceneDepthTexture,
         m_waterCausticsTexture,m_waterDepthLutTexture,parameters)) return;
     if (m_waterType == WATER_TYPE_OCEAN) {
-        AABoxClass box;
+        Engine::Math::AxisAlignedBox3 box;
         if (!getClippedWaterPlane(&rinfo.Camera,&box)) return;
         const Graphics::OceanPatchGrid grid{
-            {box.Center.X-box.Extent.X,box.Center.Y-box.Extent.Y},
-            {box.Center.X+box.Extent.X,box.Center.Y+box.Extent.Y},
+            {box.minimum.x, box.minimum.y},
+            {box.maximum.x, box.maximum.y},
             {m_worldPositionX,m_worldPositionY,0},PATCH_WIDTH,PATCH_SCALE};
         m_waterMaterial.Draw_Patches(m_gridMesh,grid);
     } else {
         for (const auto& meshes : m_surfaceMeshes)
             for (const auto mesh : meshes)
-                if (mesh.Is_Valid()) m_waterMaterial.Draw(mesh,Matrix4x4(true));
+                if (mesh.Is_Valid()) m_waterMaterial.Draw(mesh,Engine::Math::Matrix4::Identity());
         if (draw_grid)
-            m_waterMaterial.Draw(m_gridMesh,Matrix4x4(m_gridRenderData.transform));
+            m_waterMaterial.Draw(m_gridMesh,To_Engine_Matrix(m_gridRenderData.transform));
     }
     m_sceneColorTexture = Graphics::Get_Water_Renderer().Capture_Color(
         device->Immediate_Command_List(),device->Get_Swap_Chain().Backbuffer(),
@@ -1110,9 +1172,9 @@ bool WaterRenderSystem::updateGridGeometry()
 	Real	uScale=setting->waterRepeatCount/(128.0f)*cellSizeX/10.0f*0.2f;
 	Real	vScale=setting->waterRepeatCount/(128.0f)*cellSizeY/10.0f*0.2f;
 
-	Vector3	nx(cellSizeX*2.0f,0,0);
-	Vector3 ny(0,cellSizeY*2.0f,0);
-	Vector3 C;
+	Engine::Math::Vector3	nx(cellSizeX*2.0f,0,0);
+	Engine::Math::Vector3 ny(0,cellSizeY*2.0f,0);
+	Engine::Math::Vector3 C;
 	const std::vector<float> &samples = m_gridRenderData.heights;
 	const std::size_t required_sample_count =
 		static_cast<std::size_t>(m_gridRenderData.cells_x + 3) *
@@ -1135,19 +1197,19 @@ bool WaterRenderSystem::updateGridGeometry()
 	for (j=0,pData=samples.data()+mx+2+1; j<my; j++,pData+=2)	//skip 2 horizontal border samples after each row
 	{
 		Real y=(float)j*cellSizeY;
-		Real v1Offset=m_riverVOrigin+(float)j*vScale + uvCosScale*WWMath::Fast_Sin(sinOffset+y*PI/(8*MAP_XY_FACTOR));
+		Real v1Offset=m_riverVOrigin+(float)j*vScale + uvCosScale*std::sin(sinOffset+y*PI/(8*MAP_XY_FACTOR));
 		Real v2Offset=((float)j+originScale)*bumpSizeDiv + (float)j*bumpSizeDiv2;
 
 		for (i=0; i<mx; i++)
 		{
 			//compute normal by looking at 4 vertex neightbors
-			nx.Z=pData[1] - pData[-1];
-			ny.Z=pData[mx+2] - pData[-(mx+2)];
-			Vector3::Cross_Product(nx,ny,&C);
-			C.Normalize();
-			vb->nx = C.X;
-			vb->ny = C.Y;
-			vb->nz = C.Z;
+			nx.z=pData[1] - pData[-1];
+			ny.z=pData[mx+2] - pData[-(mx+2)];
+			(C) = (nx).Cross(ny);
+			C = C.Normalized_Legacy();
+			vb->nx = C.x;
+			vb->ny = C.y;
+			vb->nz = C.z;
 			Real x = (float)i*cellSizeX;
 			vb->x=	x;
 			vb->y=	y;
@@ -1183,17 +1245,17 @@ bool WaterRenderSystem::updateGridGeometry()
 
 void WaterRenderSystem::renderWaterMesh()
 {
-	const Matrix4x4 world(m_gridRenderData.transform);
+	const Engine::Math::Matrix4 world = To_Engine_Matrix(m_gridRenderData.transform);
 	W3DShroud *shroud = TheTerrainRenderObject == nullptr ? nullptr :
 		TheTerrainRenderObject->getShroud();
 	const WaterMaterialParameters parameters =
 		makeWaterMaterialParameters(true, m_pReflectionTexture != nullptr, false);
 	W3DTextureHandle *normal_texture = m_waterOceanNormalTexture != nullptr ?
 		m_waterOceanNormalTexture : m_waterNoiseTexture;
-	W3DTextureHandle *foam_or_caustics = parameters.effects[3] > 0.5f &&
+	W3DTextureHandle *foam_or_caustics = parameters.effects.w > 0.5f &&
 		m_waterCausticsTexture != nullptr ? m_waterCausticsTexture :
 		m_waterSparklesTexture;
-	W3DTextureHandle *environment_or_depth = parameters.effects[3] > 0.5f &&
+	W3DTextureHandle *environment_or_depth = parameters.effects.w > 0.5f &&
 		m_waterDepthLutTexture != nullptr ? m_waterDepthLutTexture :
 		m_waterEnvironmentTexture;
 	if (environment_or_depth == nullptr)
@@ -1327,7 +1389,7 @@ void WaterRenderSystem::drawRiverWater(const WaterSurfacePolygon &polygon)
 		}
 
 		const Real wobbleConst=-m_riverVOrigin+vScale*(Real)i +
-			WWMath::Fast_Sin(2*PI*(vScale*(Real)i) - constA)/22.0f;
+			std::sin(2*PI*(vScale*(Real)i) - constA)/22.0f;
 
 		vb->x=innerPt.x;
 		vb->y=innerPt.y;
@@ -1362,8 +1424,6 @@ void WaterRenderSystem::drawRiverWater(const WaterSurfacePolygon &polygon)
 		return;
 	}
 
-	Matrix3D tm(1);
-
 	W3DShroud *shroud = TheTerrainRenderObject == nullptr ? nullptr :
 		TheTerrainRenderObject->getShroud();
 	const WaterMaterialParameters parameters =
@@ -1371,10 +1431,10 @@ void WaterRenderSystem::drawRiverWater(const WaterSurfacePolygon &polygon)
 			false);
 	W3DTextureHandle *normal_texture = m_waterOceanNormalTexture != nullptr ?
 		m_waterOceanNormalTexture : m_waterNoiseTexture;
-	W3DTextureHandle *foam_or_caustics = parameters.effects[3] > 0.5f &&
+	W3DTextureHandle *foam_or_caustics = parameters.effects.w > 0.5f &&
 		m_waterCausticsTexture != nullptr ? m_waterCausticsTexture :
 		m_waterSparklesTexture;
-	W3DTextureHandle *environment_or_depth = parameters.effects[3] > 0.5f &&
+	W3DTextureHandle *environment_or_depth = parameters.effects.w > 0.5f &&
 		m_waterDepthLutTexture != nullptr ? m_waterDepthLutTexture :
 		m_waterEnvironmentTexture;
 	if (environment_or_depth == nullptr)
@@ -1387,7 +1447,7 @@ void WaterRenderSystem::drawRiverWater(const WaterSurfacePolygon &polygon)
 		parameters, TheWaterTransparency != nullptr &&
 			TheWaterTransparency->m_additiveBlend))
 	{
-		m_waterMaterial.Draw(m_surfaceMesh,Matrix4x4(tm),wireframeForDebug);
+		m_waterMaterial.Draw(m_surfaceMesh,Engine::Math::Matrix4::Identity(),wireframeForDebug);
 	}
 }
 
@@ -1399,8 +1459,8 @@ void WaterRenderSystem::drawSurfaceMesh(Graphics::WaterMeshHandle mesh)
     if (!Graphics::Shared_Frame_Device()) return;
     auto parameters = makeWaterMaterialParameters(false,m_pReflectionTexture != nullptr,false);
     const std::uint32_t diffuse = getSurfaceDiffuse(false);
-    parameters.tint = Vector4(((diffuse >> 16)&255)/255.0f,((diffuse >> 8)&255)/255.0f,
-        (diffuse&255)/255.0f,(diffuse >> 24)/255.0f);
+    parameters.tint = {((diffuse >> 16)&255)/255.0f,((diffuse >> 8)&255)/255.0f,
+        (diffuse&255)/255.0f,(diffuse >> 24)/255.0f};
     W3DShroud* shroud = TheTerrainRenderObject ? TheTerrainRenderObject->getShroud() : nullptr;
     if (m_waterMaterial.Apply_Ocean(m_settings[m_tod].waterTexture,
         Graphics::Get_Water_Renderer().Displacement().Texture(),m_waterOceanNormalTexture,
@@ -1408,5 +1468,5 @@ void WaterRenderSystem::drawSurfaceMesh(Graphics::WaterMeshHandle mesh)
         shroud ? shroud->getShroudTexture() : nullptr,m_sceneDepthTexture,
         m_waterCausticsTexture,m_waterDepthLutTexture,parameters,
         TheWaterTransparency && TheWaterTransparency->m_additiveBlend))
-        m_waterMaterial.Draw(mesh,Matrix4x4(true));
+        m_waterMaterial.Draw(mesh,Engine::Math::Matrix4::Identity());
 }

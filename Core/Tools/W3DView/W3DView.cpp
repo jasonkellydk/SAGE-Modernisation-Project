@@ -29,7 +29,6 @@ import Graphics.Frame.Runtime;
 #include "Utils.h"
 #include "ColorUtils.h"
 #include "WWLib/verchk.h"
-#include "WWMath/wwmath.h"
 #include "WWAudio/WWAudio.h"
 #include "ViewerAssetMgr.h"
 #include "Globals.h"
@@ -208,7 +207,6 @@ BOOL CW3DViewApp::InitInstance ()
 		//
 		//	Initialize the libraries
 		//
-		WWMath::Init ();
 		AnimatedSoundOptionsDialogClass::Load_Animated_Sound_Settings ();
 
 		//
@@ -404,7 +402,6 @@ CW3DViewApp::ExitInstance()
 		//
 		//	Shutdown the libraries
 		//
-		WWMath::Shutdown ();
 		AnimatedSoundMgrClass::Shutdown ();
 
 		//
@@ -487,4 +484,3 @@ CAboutDlg::OnInitDialog ()
 	SetDlgItemText (IDC_VERSION, version_string);
 	return TRUE;
 }
-

@@ -1,8 +1,8 @@
 #pragma once
 
 #include "WWLib/refcount.h"
-#include "WWMath/vector3.h"
 
+import Engine.Core.Math.Vector3;
 import Graphics.Scene.ObjectList;
 import Graphics.Scene.Pass;
 import Graphics.Scene.Traversal;
@@ -54,13 +54,13 @@ public:
 	virtual W3DSceneIterator *Create_Iterator(bool only_visible = false) = 0;
 	virtual void Destroy_Iterator(W3DSceneIterator *iterator) = 0;
 
-	virtual void Set_Ambient_Light(const Vector3 &color) { AmbientLight = color; }
-	virtual const Vector3 &Get_Ambient_Light() { return AmbientLight; }
+	virtual void Set_Ambient_Light(const Engine::Math::Vector3 &color) { AmbientLight = color; }
+	virtual const Engine::Math::Vector3 &Get_Ambient_Light() { return AmbientLight; }
 
 	virtual void Set_Fog_Enable(bool enabled) { FogEnabled = enabled; }
 	virtual bool Get_Fog_Enable() { return FogEnabled; }
-	virtual void Set_Fog_Color(const Vector3 &color) { FogColor = color; }
-	virtual const Vector3 &Get_Fog_Color() { return FogColor; }
+	virtual void Set_Fog_Color(const Engine::Math::Vector3 &color) { FogColor = color; }
+	virtual const Engine::Math::Vector3 &Get_Fog_Color() { return FogColor; }
 	virtual void Set_Fog_Range(float start, float end) { FogStart = start; FogEnd = end; }
 	virtual void Get_Fog_Range(float *start, float *end) { *start = FogStart; *end = FogEnd; }
 
@@ -97,7 +97,7 @@ public:
 	virtual void Register(W3DRenderObject *object, RegType registration) = 0;
 	virtual void Unregister(W3DRenderObject *object, RegType registration) = 0;
 
-	virtual float Compute_Point_Visibility(W3DRenderContext &, const Vector3 &) { return 1.0f; }
+	virtual float Compute_Point_Visibility(W3DRenderContext &, const Engine::Math::Vector3 &) { return 1.0f; }
 
 	virtual void Save(ChunkSaveClass &save);
 	virtual void Load(ChunkLoadClass &load);
@@ -113,11 +113,11 @@ protected:
 
 	// The fields remain the serialized scene representation and are also read
 	// by the game scene implementation while its larger renderer is migrated.
-	Vector3 AmbientLight;
+	Engine::Math::Vector3 AmbientLight;
 	PolyRenderType PolyRenderMode;
 	ExtraPassPolyRenderType ExtraPassPolyRenderMode;
 	bool FogEnabled;
-	Vector3 FogColor;
+	Engine::Math::Vector3 FogColor;
 	float FogStart;
 	float FogEnd;
 
@@ -152,13 +152,13 @@ public:
 
 	void Register(W3DRenderObject *object, RegType registration) override;
 	void Unregister(W3DRenderObject *object, RegType registration) override;
-	void Set_Ambient_Light(const Vector3 &color) override;
+	void Set_Ambient_Light(const Engine::Math::Vector3 &color) override;
 
 	W3DSceneIterator *Create_Iterator(bool only_visible = false) override;
 	void Destroy_Iterator(W3DSceneIterator *iterator) override;
 
 	virtual void Visibility_Check(W3DCamera *camera);
-	float Compute_Point_Visibility(W3DRenderContext &context, const Vector3 &point) override;
+	float Compute_Point_Visibility(W3DRenderContext &context, const Engine::Math::Vector3 &point) override;
 
 protected:
 	void Customized_Render(W3DRenderContext &context) override;
@@ -170,4 +170,3 @@ protected:
 	Graphics::SceneObjectList<W3DRenderObject> &LightList;
 	Graphics::SceneObjectList<W3DRenderObject> &ReleaseList;
 };
-

@@ -1,4 +1,5 @@
 #include <functional>
+import Engine.Core.Math.Vector3;
 import Graphics.Frame.RenderClock;
 import Graphics.Frame.Runtime;
 import Graphics.Frame.RenderSettings;
@@ -60,14 +61,14 @@ bool W3DRenderServices::Shutdown(Graphics::RenderServiceCallback release_assets)
 }
 
 bool W3DRenderServices::Begin_Render(bool clear, bool clear_depth,
-	const Vector3 &color, float destination_alpha,
+	const Engine::Math::Vector3 &color, float destination_alpha,
 	Graphics::RenderServiceCallback resource_progress,
 	Graphics::RenderServiceCallback evict_unused_textures)
 {
 	Graphics::RenderBeginOptions options;
 	options.clear = clear;
 	options.clear_depth = clear_depth;
-	options.clear_value = {color.X, color.Y, color.Z, destination_alpha};
+	options.clear_value = {color.x, color.y, color.z, destination_alpha};
 	options.resource_progress = resource_progress;
 	options.evict_unused_textures = evict_unused_textures != nullptr
 		? evict_unused_textures : &Evict_Unused_Game_Textures;
@@ -75,7 +76,7 @@ bool W3DRenderServices::Begin_Render(bool clear, bool clear_depth,
 }
 
 bool W3DRenderServices::Render(W3DScene *scene, W3DCamera *camera,
-	bool clear, bool clear_depth, const Vector3 &color)
+	bool clear, bool clear_depth, const Engine::Math::Vector3 &color)
 {
 	auto &services = Graphics::Get_Render_Services();
 	if (!services.Is_Initialized())
@@ -86,7 +87,7 @@ bool W3DRenderServices::Render(W3DScene *scene, W3DCamera *camera,
 	if (clear || clear_depth)
 	{
 		services.Clear_Current_Attachments(clear, clear_depth,
-			{color.X, color.Y, color.Z, 0.0f});
+			{color.x, color.y, color.z, 0.0f});
 	}
 
 	return Render_Scene_Pass(scene, camera);

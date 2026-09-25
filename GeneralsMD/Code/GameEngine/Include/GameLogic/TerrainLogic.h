@@ -35,6 +35,8 @@
 #include "Common/Snapshot.h"
 #include "Common/STLTypedefs.h"
 #include "GameClient/TerrainRoads.h"
+import Engine.Core.Math.AffineTransform3;
+import Engine.Core.Math.Vector3;
 
 typedef std::vector<ICoord2D> VecICoord2D;
 
@@ -45,9 +47,7 @@ class Object;
 class Dict;
 class PolygonTrigger;
 class ThingTemplate;
-class Vector3;
 class Drawable;
-class Matrix3D;
 class WaterHandle;
 class Xfer;
 
@@ -194,7 +194,7 @@ public:
 	void getBridgeInfo(class BridgeInfo *pInfo) {*pInfo = m_bridgeInfo; }
 	/// See if the point is on the bridge.
 	Bool isPointOnBridge(const Coord3D *pLoc);
-	Drawable *pickBridge(const Vector3 &from, const Vector3 &to, Vector3 *pos);
+	Drawable *pickBridge(Engine::Math::Vector3 from, Engine::Math::Vector3 to, Engine::Math::Vector3 *position);
 	void updateDamageState(); ///< Updates a bridge's damage info.
 	const BridgeInfo *peekBridgeInfo() const {return &m_bridgeInfo;}
 	PathfindLayerEnum getLayer() const {return m_layer;}
@@ -240,7 +240,7 @@ public:
 
 	virtual AsciiString getSourceFilename() { return m_filenameString; }
 
-	virtual PathfindLayerEnum alignOnTerrain( Real angle, const Coord3D& pos, Bool stickToGround, Matrix3D& mtx);
+	virtual PathfindLayerEnum alignOnTerrain( Real angle, const Coord3D& pos, Bool stickToGround, Engine::Math::AffineTransform3& transform);
 
 	virtual Bool isUnderwater( Real x, Real y, Real *waterZ = nullptr, Real *terrainZ = nullptr );			///< is point under water
 	virtual Bool isCliffCell( Real x, Real y) const;			///< is point cliff cell
@@ -288,7 +288,7 @@ public:
 	///  Returns true if the object is close to one or the other end of the bridge.
 	virtual Bool objectInteractsWithBridgeEnd(Object *obj, Int layer) const;
 
-	virtual Drawable *pickBridge(const Vector3 &from, const Vector3 &to, Vector3 *pos);
+	virtual Drawable *pickBridge(Engine::Math::Vector3 from, Engine::Math::Vector3 to, Engine::Math::Vector3 *position);
 
 	virtual void addBridgeToLogic(BridgeInfo *pInfo, Dict *props, AsciiString bridgeTemplateName); ///< Adds a bridge's logical info.
 	virtual void addLandmarkBridgeToLogic(Object *bridgeObj); ///< Adds a bridge's logical info.
@@ -377,5 +377,5 @@ protected:
 // EXTERNALS //////////////////////////////////////////////////////////////////////////////////////
 extern TerrainLogic *TheTerrainLogic;   ///< singleton definition
 
-extern void makeAlignToNormalMatrix( Real angle, const Coord3D& pos, const Coord3D& normal, Matrix3D& mtx);
+extern void makeAlignToNormalTransform( Real angle, const Coord3D& pos, const Coord3D& normal, Engine::Math::AffineTransform3& transform);
 extern Bool LineInRegion( const Coord2D *p1, const Coord2D *p2, const Region2D *clipRegion );

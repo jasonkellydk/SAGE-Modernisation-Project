@@ -1,3 +1,4 @@
+import Engine.Core.Math.Scalar;
 import Graphics.Frame.RenderClock;
 /*
 **	Command & Conquer Generals Zero Hour(tm)
@@ -27,6 +28,7 @@ import Graphics.Frame.RenderClock;
 // Draw TankTrucks.  Actually, this draws quad cannon which has both treads and wheels.
 // Author: Mark Wilczynski, August 2002
 
+#include <cmath>
 #include <stdlib.h>
 #include <math.h>
 #include <cstring>
@@ -393,13 +395,13 @@ void W3DTankTruckDraw::updateTreadPositions(Real uvDelta)
 	for (Int i=0; i<m_treadCount; i++)
 	{
 		if (pTread->m_type == TREAD_MIDDLE)	//this tread needs to scroll backwards
-			offset_u = pTread->m_materialSettings.customUVOffset.X + uvDelta;
+			offset_u = pTread->m_materialSettings.customUVOffset.x + uvDelta;
 		else
 		if (pTread->m_type == TREAD_LEFT)	//this tread needs to scroll forwards
-			offset_u = pTread->m_materialSettings.customUVOffset.X + uvDelta;
+			offset_u = pTread->m_materialSettings.customUVOffset.x + uvDelta;
 		else
 		if (pTread->m_type == TREAD_RIGHT)	//this tread needs to scroll backwards
-			offset_u = pTread->m_materialSettings.customUVOffset.X - uvDelta;
+			offset_u = pTread->m_materialSettings.customUVOffset.x - uvDelta;
 		else
 		{
 			engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "Unhandled case in W3DTankTruckDraw::updateTreadPositions");
@@ -407,8 +409,8 @@ void W3DTankTruckDraw::updateTreadPositions(Real uvDelta)
 		}
 
 		// ensure coordinates of offset are in [0, 1] range:
-		offset_u = offset_u - WWMath::Floor(offset_u);
-		pTread->m_materialSettings.customUVOffset.Set(offset_u,0);
+		offset_u = offset_u - std::floor(offset_u);
+		pTread->m_materialSettings.customUVOffset = {offset_u, 0};
 		pTread++;
 	}
 }
@@ -447,7 +449,7 @@ void W3DTankTruckDraw::updateTreadObjects()
 							m_treads[m_treadCount].m_robj=subObj;
 							m_treads[m_treadCount].m_type = TREAD_MIDDLE;	//default type
 							subObj->Set_User_Data(&m_treads[m_treadCount].m_materialSettings);	//tell W3D about custom material settings
-							m_treads[m_treadCount].m_materialSettings.customUVOffset=Vector2(0,0);
+							m_treads[m_treadCount].m_materialSettings.customUVOffset={0,0};
 							//Commented out since on vehicles with wheels, it makes no sense to turn with treads.
 /*							switch (meshName[6])	//check next character after 'TREADS'
 							{
@@ -493,10 +495,10 @@ void W3DTankTruckDraw::onRenderObjRecreated()
 //-------------------------------------------------------------------------------------------------
 /** Map behavior states into W3D animations. */
 //-------------------------------------------------------------------------------------------------
-void W3DTankTruckDraw::doDrawModule(const Matrix3D* transformMtx)
+void W3DTankTruckDraw::doDrawModule(const Engine::Math::AffineTransform3* transform)
 {
 
-	W3DModelDraw::doDrawModule(transformMtx);
+	W3DModelDraw::doDrawModule(transform);
 
 	if (!TheGlobalData->m_showClientPhysics)
 		return;
@@ -535,65 +537,65 @@ void W3DTankTruckDraw::doDrawModule(const Matrix3D* transformMtx)
 
 		m_frontWheelRotation += rotationFactor*speed;
 		m_rearWheelRotation += rotationFactor*(speed+powerslideRotationAddition);
-		m_frontWheelRotation = WWMath::Normalize_Angle(m_frontWheelRotation);
-		m_rearWheelRotation = WWMath::Normalize_Angle(m_rearWheelRotation);
+		m_frontWheelRotation = m_frontWheelRotation - (Engine::Math::Tau * floorf((m_frontWheelRotation + Engine::Math::Pi) / Engine::Math::Tau));	// legacy WWMath::Normalize_Angle, [-PI, PI)
+		m_rearWheelRotation = m_rearWheelRotation - (Engine::Math::Tau * floorf((m_rearWheelRotation + Engine::Math::Pi) / Engine::Math::Tau));	// legacy WWMath::Normalize_Angle, [-PI, PI)
 
-		Matrix3D wheelXfrm(1);
+		Engine::Math::AffineTransform3 wheelXfrm = Engine::Math::AffineTransform3::Identity();
 		if (m_frontLeftTireBone)
 		{
-			wheelXfrm.Adjust_Z_Translation(wheelInfo->m_frontLeftHeightOffset);
-			wheelXfrm.Rotate_Z(wheelInfo->m_wheelAngle);
-			wheelXfrm.Rotate_Y(m_frontWheelRotation);
+			wheelXfrm.Adjust_Translation({0.0f, 0.0f, wheelInfo->m_frontLeftHeightOffset});
+			wheelXfrm.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Z(wheelInfo->m_wheelAngle));
+			wheelXfrm.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Y(m_frontWheelRotation));
 			getRenderObject()->Capture_Bone( m_frontLeftTireBone );
 			getRenderObject()->Control_Bone( m_frontLeftTireBone, wheelXfrm );
 
-			wheelXfrm.Make_Identity();
-			wheelXfrm.Adjust_Z_Translation(wheelInfo->m_frontRightHeightOffset);
-			wheelXfrm.Rotate_Z(wheelInfo->m_wheelAngle);
-			wheelXfrm.Rotate_Y(m_frontWheelRotation);
+			wheelXfrm = Engine::Math::AffineTransform3::Identity();
+			wheelXfrm.Adjust_Translation({0.0f, 0.0f, wheelInfo->m_frontRightHeightOffset});
+			wheelXfrm.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Z(wheelInfo->m_wheelAngle));
+			wheelXfrm.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Y(m_frontWheelRotation));
 			getRenderObject()->Capture_Bone( m_frontRightTireBone );
 			getRenderObject()->Control_Bone( m_frontRightTireBone, wheelXfrm );
 		}
 		if (m_rearLeftTireBone)
 		{
-			wheelXfrm.Make_Identity();
-			wheelXfrm.Rotate_Y(m_rearWheelRotation);
-			wheelXfrm.Adjust_Z_Translation(wheelInfo->m_rearLeftHeightOffset);
+			wheelXfrm = Engine::Math::AffineTransform3::Identity();
+			wheelXfrm.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Y(m_rearWheelRotation));
+			wheelXfrm.Adjust_Translation({0.0f, 0.0f, wheelInfo->m_rearLeftHeightOffset});
 			getRenderObject()->Capture_Bone( m_rearLeftTireBone );
 			getRenderObject()->Control_Bone( m_rearLeftTireBone, wheelXfrm );
 
-			wheelXfrm.Make_Identity();
-			wheelXfrm.Rotate_Y(m_rearWheelRotation);
-			wheelXfrm.Adjust_Z_Translation(wheelInfo->m_rearRightHeightOffset);
+			wheelXfrm = Engine::Math::AffineTransform3::Identity();
+			wheelXfrm.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Y(m_rearWheelRotation));
+			wheelXfrm.Adjust_Translation({0.0f, 0.0f, wheelInfo->m_rearRightHeightOffset});
 			getRenderObject()->Capture_Bone( m_rearRightTireBone );
 			getRenderObject()->Control_Bone( m_rearRightTireBone, wheelXfrm );
 		}
 		if (m_midFrontLeftTireBone)
 		{
-			wheelXfrm.Adjust_Z_Translation(wheelInfo->m_frontLeftHeightOffset);
-			wheelXfrm.Rotate_Z(wheelInfo->m_wheelAngle);
-			wheelXfrm.Rotate_Y(m_midFrontWheelRotation);
+			wheelXfrm.Adjust_Translation({0.0f, 0.0f, wheelInfo->m_frontLeftHeightOffset});
+			wheelXfrm.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Z(wheelInfo->m_wheelAngle));
+			wheelXfrm.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Y(m_midFrontWheelRotation));
 			getRenderObject()->Capture_Bone( m_midFrontLeftTireBone );
 			getRenderObject()->Control_Bone( m_midFrontLeftTireBone, wheelXfrm );
 
-			wheelXfrm.Make_Identity();
-			wheelXfrm.Adjust_Z_Translation(wheelInfo->m_frontRightHeightOffset);
-			wheelXfrm.Rotate_Z(wheelInfo->m_wheelAngle);
-			wheelXfrm.Rotate_Y(m_midFrontWheelRotation);
+			wheelXfrm = Engine::Math::AffineTransform3::Identity();
+			wheelXfrm.Adjust_Translation({0.0f, 0.0f, wheelInfo->m_frontRightHeightOffset});
+			wheelXfrm.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Z(wheelInfo->m_wheelAngle));
+			wheelXfrm.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Y(m_midFrontWheelRotation));
 			getRenderObject()->Capture_Bone( m_midFrontRightTireBone );
 			getRenderObject()->Control_Bone( m_midFrontRightTireBone, wheelXfrm );
 		}
 		if (m_midRearLeftTireBone)
 		{
-			wheelXfrm.Make_Identity();
-			wheelXfrm.Rotate_Y(m_midRearWheelRotation);
-			wheelXfrm.Adjust_Z_Translation(wheelInfo->m_rearLeftHeightOffset);
+			wheelXfrm = Engine::Math::AffineTransform3::Identity();
+			wheelXfrm.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Y(m_midRearWheelRotation));
+			wheelXfrm.Adjust_Translation({0.0f, 0.0f, wheelInfo->m_rearLeftHeightOffset});
 			getRenderObject()->Capture_Bone( m_midRearLeftTireBone );
 			getRenderObject()->Control_Bone( m_midRearLeftTireBone, wheelXfrm );
 
-			wheelXfrm.Make_Identity();
-			wheelXfrm.Rotate_Y(m_midRearWheelRotation);
-			wheelXfrm.Adjust_Z_Translation(wheelInfo->m_rearRightHeightOffset);
+			wheelXfrm = Engine::Math::AffineTransform3::Identity();
+			wheelXfrm.Post_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Y(m_midRearWheelRotation));
+			wheelXfrm.Adjust_Translation({0.0f, 0.0f, wheelInfo->m_rearRightHeightOffset});
 			getRenderObject()->Capture_Bone( m_midRearRightTireBone );
 			getRenderObject()->Control_Bone( m_midRearRightTireBone, wheelXfrm );
 		}
@@ -722,10 +724,10 @@ void W3DTankTruckDraw::doDrawModule(const Matrix3D* transformMtx)
 			//under certain situations when tank moved sideways.
 			for (Int i=0; i<m_treadCount; i++)
 			{
-				offset_u = pTread->m_materialSettings.customUVOffset.X - treadScrollSpeed;
+				offset_u = pTread->m_materialSettings.customUVOffset.x - treadScrollSpeed;
 				// ensure coordinates of offset are in [0, 1] range:
-				offset_u = offset_u - WWMath::Floor(offset_u);
-				pTread->m_materialSettings.customUVOffset.Set(offset_u,0);
+				offset_u = offset_u - std::floor(offset_u);
+				pTread->m_materialSettings.customUVOffset = {offset_u, 0};
 				pTread++;
 			}
 		}

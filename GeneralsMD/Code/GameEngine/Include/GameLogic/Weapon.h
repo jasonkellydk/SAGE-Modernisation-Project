@@ -35,7 +35,7 @@
 
 #include "GameLogic/Damage.h"
 
-#include "WWMath/matrix3d.h"
+import Engine.Core.Math.AffineTransform3;
 
 // FORWARD REFERENCES /////////////////////////////////////////////////////////////////////////////
 struct FieldParse;
@@ -747,7 +747,7 @@ public:
 		const Object* launcher,
 		WeaponSlotType wslot,
 		Int specificBarrelToUse,
-		Matrix3D& worldTransform,
+		Engine::Math::AffineTransform3& worldTransform,
 		Coord3D& worldPos
 	);
 

@@ -56,7 +56,7 @@
 #include "Common/GameMemory.h"
 #include "Common/KindOf.h"
 #include "Common/Override.h"
-#include "WWMath/matrix3d.h"							///< @todo Decide if we're keeping the WWMath libs (MSB)
+import Engine.Core.Math.AffineTransform3;
 
 //-----------------------------------------------------------------------------
 //           Forward References
@@ -111,7 +111,7 @@ public:
 
 	// note that calling this always orients the object straight up on the Z-axis,
 	// or aligned with the terrain if we have the magic flag set.
-	// don't want this behavior? then call setTransformMatrix instead.
+	// don't want this behavior? then call setWorldTransform instead.
 	void setOrientation( Real angle );
 
 	const Coord3D *getPosition() const { return &m_cachedPos; }
@@ -134,10 +134,11 @@ public:
 	they are high enough that we should let them act like they're flying. jba. */
 	Bool isSignificantlyAboveTerrain() const ;
 
-	void convertBonePosToWorldPos(const Coord3D* bonePos, const Matrix3D* boneTransform, Coord3D* worldPos, Matrix3D* worldTransform) const;
-
-	void setTransformMatrix( const Matrix3D *mx );												///< set the world transformation matrix
-	const Matrix3D* getTransformMatrix() const { return &m_transform; }		///< return the world transformation matrix
+	void transformBoneToWorld(const Coord3D* bonePosition, const Engine::Math::AffineTransform3* boneTransform,
+		Coord3D* worldPosition, Engine::Math::AffineTransform3* worldTransform) const;
+	void setWorldTransform(const Engine::Math::AffineTransform3& transform);
+	const Engine::Math::AffineTransform3& worldTransform() const noexcept { return m_transform; }
+	Engine::Math::AffineTransform3 toWorldTransform(const Engine::Math::AffineTransform3& localTransform) const;
 
 	void transformPoint( const Coord3D *in, Coord3D *out );								///< transform this point using the m_transform matrix of this thing
 
@@ -150,8 +151,7 @@ protected:
 	virtual Drawable *asDrawableMeth() { return nullptr; }
 	virtual const Object *asObjectMeth() const { return nullptr; }
 	virtual const Drawable *asDrawableMeth() const { return nullptr; }
-
-	virtual void reactToTransformChange(const Matrix3D* oldMtx, const Coord3D* oldPos, Real oldAngle) = 0;
+	virtual void reactToTransformChange(const Coord3D* oldPos, Real oldAngle) = 0;
 
 private:
 
@@ -170,7 +170,7 @@ private:
 		(pos, angle, etc) are all simply cached values used for efficiency and convenience.
 		you should NEVER modify them directly, because that won't change anything!
 	*/
-	Matrix3D m_transform;									///< the 3D orientation and position of this Thing
+	Engine::Math::AffineTransform3 m_transform;										///< the 3D orientation and position of this Thing
 
 	enum
 	{

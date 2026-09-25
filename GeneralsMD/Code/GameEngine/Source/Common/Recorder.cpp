@@ -279,7 +279,7 @@ void RecorderClass::cleanUpReplayFile()
 		debugFname.truncateBy(3);
 		debugFname.concat("txt");
 		UnsignedInt fileSize = 0;
-		FILE *fp = fopen(logFileName, "rb");
+		FILE *fp = fopen(logFileName.c_str(), "rb");
 		if (fp)
 		{
 			fseek(fp, 0, SEEK_END);
@@ -292,13 +292,13 @@ void RecorderClass::cleanUpReplayFile()
 		const int MAX_DEBUG_SIZE = 65536;
 		if (fileSize <= MAX_DEBUG_SIZE || TheGlobalData->m_saveAllStats)
 		{
-			engine::debug::log_info("Using CopyFile to copy %s", logFileName);
-			CopyFile(logFileName, debugFname.str(), TRUE);
+			engine::debug::log_info("Using CopyFile to copy %s", logFileName.c_str());
+			CopyFile(logFileName.c_str(), debugFname.str(), TRUE);
 		}
 		else
 		{
-			engine::debug::log_info("manual copy of %s", logFileName);
-			FILE *ifp = fopen(logFileName, "rb");
+			engine::debug::log_info("manual copy of %s", logFileName.c_str());
+			FILE *ifp = fopen(logFileName.c_str(), "rb");
 			FILE *ofp = fopen(debugFname.str(), "wb");
 			if (ifp && ofp)
 			{

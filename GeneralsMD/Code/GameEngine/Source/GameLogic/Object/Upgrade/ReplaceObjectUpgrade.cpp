@@ -76,13 +76,13 @@ void ReplaceObjectUpgrade::upgradeImplementation()
 
 	Bool oldObjectSelected;
 	Int oldObjectSquadNumber;
-	Matrix3D myMatrix;
+	Engine::Math::AffineTransform3 replacementTransform;
 	Team* myTeam;
 
 	{
 		Object* me = getObject();
 
-		myMatrix = *me->getTransformMatrix();
+		replacementTransform = me->worldTransform();
 		myTeam = me->getTeam();// Team implies player.  It is a subset.
 
 		if (replacementTemplate == nullptr)
@@ -102,7 +102,7 @@ void ReplaceObjectUpgrade::upgradeImplementation()
 	}
 
 	Object *replacementObject = TheThingFactory->newObject(replacementTemplate, myTeam);
-	replacementObject->setTransformMatrix(&myMatrix);
+	replacementObject->setWorldTransform(replacementTransform);
 	TheAI->pathfinder()->addObjectToPathfindMap( replacementObject );
 
 	// Now onCreates were called at the constructor.  This magically created

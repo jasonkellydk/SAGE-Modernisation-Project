@@ -2,14 +2,19 @@ import Graphics.Materials.State;
 #include <array>
 #include <bit>
 #include <cstddef>
-#include <memory>
+#include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 import Assets.Adapters.W3D.Particles;
 import Assets.Images.PixelEncoding;
+import Engine.Core.Math.RandomStream;
+import Engine.Core.Math.RandomVector3Generator;
+import Engine.Core.Math.Vector3;
 
 #include "W3DDevice/GameClient/W3DEmitterLoader.h"
 #include "W3DDevice/GameClient/W3DEmitterRenderObject.h"
@@ -21,19 +26,35 @@ import engine.debug;
 
 namespace {
 
-std::unique_ptr<Vector3Randomizer> Create_Randomizer(const Assets::EmitterRandomizerDesc& data)
+std::uint64_t Stable_Seed(std::string_view text) noexcept
+{
+	std::uint64_t hash = 14695981039346656037ull;
+	for (const unsigned char value : text) {
+		hash ^= value;
+		hash *= 1099511628211ull;
+	}
+	return hash;
+}
+
+std::optional<Engine::Math::RandomVector3Generator> Create_Randomizer(
+	const Assets::EmitterRandomizerDesc& data, std::uint64_t seed, std::uint64_t sequence)
 {
     const auto& d = data.dimensions;
+    const Engine::Math::Vector3 dimensions{d.x, d.y, d.z};
+    const auto make = [&](Engine::Math::Vector3Distribution distribution, Engine::Math::Vector3 values) {
+        return Engine::Math::RandomVector3Generator(distribution, values,
+            Engine::Math::RandomStream::Derive_Seed(seed, sequence));
+    };
     switch (data.kind) {
     case Assets::EmitterRandomizerKind::SolidBox:
-        return std::make_unique<Vector3SolidBoxRandomizer>(Vector3(d.x,d.y,d.z));
+        return make(Engine::Math::Vector3Distribution::Box, dimensions);
     case Assets::EmitterRandomizerKind::SolidSphere:
-        return std::make_unique<Vector3SolidSphereRandomizer>(d.x);
+        return make(Engine::Math::Vector3Distribution::SolidSphere, {d.x, 0, 0});
     case Assets::EmitterRandomizerKind::HollowSphere:
-        return std::make_unique<Vector3HollowSphereRandomizer>(d.x);
+        return make(Engine::Math::Vector3Distribution::SphereSurface, {d.x, 0, 0});
     case Assets::EmitterRandomizerKind::SolidCylinder:
-        return std::make_unique<Vector3SolidCylinderRandomizer>(d.x,d.y);
-    default: return {};
+        return make(Engine::Math::Vector3Distribution::Cylinder, {d.x, d.y, 0});
+    default: return std::nullopt;
     }
 }
 
@@ -64,8 +85,9 @@ Graphics::MaterialState Create_Shader(const Assets::EmitterShaderDesc& data)
 
 W3DEmitterRenderObject* Create_Emitter(const Assets::EmitterAssetDesc& data)
 {
-    auto position = Create_Randomizer(data.creation_volume);
-    auto velocity = Create_Randomizer(data.velocity_random);
+    const std::uint64_t seed = Stable_Seed(data.name);
+    auto position = Create_Randomizer(data.creation_volume, seed, 0);
+    auto velocity = Create_Randomizer(data.velocity_random, seed, 1);
     if (!position || !velocity) return nullptr;
 	    auto* catalog = W3DAssetCatalog::Get_Instance();
     RefCountPtr<W3DTextureHandle> texture;
@@ -80,7 +102,7 @@ W3DEmitterRenderObject* Create_Emitter(const Assets::EmitterAssetDesc& data)
     }
 	    if (catalog != nullptr && catalog->Get_Fog_On_Load()) shader.Enable_Fog_For_Blend();
     auto* emitter = new W3DEmitterRenderObject(data, texture.Peek(), shader,
-        std::move(position), std::move(velocity));
+        std::move(*position), std::move(*velocity));
     emitter->Set_Name(data.name.c_str());
     return emitter;
 }

@@ -843,31 +843,13 @@ void Xfer::xferUser( void *data, Int dataSize )
 
 // ------------------------------------------------------------------------------------------------
 // ------------------------------------------------------------------------------------------------
-void Xfer::xferMatrix3D( Matrix3D* mtx )
+void Xfer::xferAffineTransform3( Engine::Math::AffineTransform3* transform )
 {
 	// this deserves a version number
 	const XferVersion currentVersion = 1;
 	XferVersion version = currentVersion;
 	xferVersion( &version, currentVersion );
 
- 	Vector4& tmp0 = (*mtx)[0];
- 	Vector4& tmp1 = (*mtx)[1];
- 	Vector4& tmp2 = (*mtx)[2];
-
-	xferReal(&tmp0.X);
-	xferReal(&tmp0.Y);
-	xferReal(&tmp0.Z);
-	xferReal(&tmp0.W);
-
-	xferReal(&tmp1.X);
-	xferReal(&tmp1.Y);
-	xferReal(&tmp1.Z);
-	xferReal(&tmp1.W);
-
-	xferReal(&tmp2.X);
-	xferReal(&tmp2.Y);
-	xferReal(&tmp2.Z);
-	xferReal(&tmp2.W);
+	for (float& element : transform->elements)
+		xferReal(&element);
 }
-
-

@@ -43,6 +43,8 @@
 #include "GameLogic/Object.h"
 #include "GameLogic/ScriptEngine.h"
 #include "GameLogic/GameLogic.h"
+import Engine.Core.Math.AffineTransform3;
+#include "Common/LegacyTransformMath.h"
 
 
 //-------------------------------------------------------------------------------------------------
@@ -126,10 +128,10 @@ void SwayClientUpdate::clientUpdate()
 	Real targetAngle = cosine * m_curAngleLimit + m_leanAngle;
 	Real deltaAngle = targetAngle - m_curAngle;
 
-	Matrix3D xfrm = *draw->getInstanceMatrix();
-	xfrm.In_Place_Pre_Rotate_X(-deltaAngle * info.m_directionVec.x);
-	xfrm.In_Place_Pre_Rotate_Y(deltaAngle * info.m_directionVec.y);
-	draw->setInstanceMatrix(&xfrm);
+	Engine::Math::AffineTransform3 transform = *draw->instanceTransform();
+	Legacy_In_Place_Pre_Rotate_X(transform, -deltaAngle * info.m_directionVec.x);
+	Legacy_In_Place_Pre_Rotate_Y(transform, deltaAngle * info.m_directionVec.y);
+	draw->setInstanceTransform(&transform);
 
 	m_curAngle = targetAngle;
 

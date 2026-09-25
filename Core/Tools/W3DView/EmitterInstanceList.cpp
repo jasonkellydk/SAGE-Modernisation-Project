@@ -35,6 +35,8 @@
 #include "EmitterInstanceList.h"
 #include "Utils.h"
 
+#include <vector>
+
 /////////////////////////////////////////////////////////////////////
 //
 //	~EmitterInstanceListClass
@@ -199,7 +201,7 @@ EmitterInstanceListClass::Set_Vel_Inherit (float value)
 //
 /////////////////////////////////////////////////////////////////////
 void
-EmitterInstanceListClass::Set_Velocity_Random (Vector3Randomizer *randomizer)
+EmitterInstanceListClass::Set_Velocity_Random (Engine::Math::RandomVector3Generator *randomizer)
 {
 	ParticleEmitterDefClass::Set_Velocity_Random (randomizer);
 	if (randomizer != nullptr) {
@@ -208,7 +210,7 @@ EmitterInstanceListClass::Set_Velocity_Random (Vector3Randomizer *randomizer)
 		//	Pass this setting onto the emitters immediately
 		//
 		for (int index = 0; index < m_List.Count (); index ++) {
-			m_List[index]->Set_Velocity_Randomizer (randomizer->Clone ());
+			m_List[index]->Set_Velocity_Randomizer (new Engine::Math::RandomVector3Generator (*randomizer));
 		}
 	}
 }
@@ -249,6 +251,45 @@ EmitterInstanceListClass::Set_Color_Keyframes (ParticlePropertyStruct<Vector3> &
 	for (int index = 0; index < m_List.Count (); index ++) {
 		m_List[index]->Reset_Colors (keyframes);
 	}
+}
+
+
+/////////////////////////////////////////////////////////////////////
+//
+//	Set_Color_Keyframes (Engine::Math keyframes)
+//
+//	Converts the property-page keyframes to the emitter definition's
+// type and forwards them to the virtual override above. The in-place
+// normalization of the override is reflected back into 'keyframes'.
+//
+/////////////////////////////////////////////////////////////////////
+void
+EmitterInstanceListClass::Set_Color_Keyframes (ParticlePropertyStruct<Engine::Math::Vector3> &keyframes)
+{
+	ParticlePropertyStruct<Vector3> render_keyframes{};
+	render_keyframes.Start = Vector3(keyframes.Start.x, keyframes.Start.y, keyframes.Start.z);
+	render_keyframes.Rand = Vector3(keyframes.Rand.x, keyframes.Rand.y, keyframes.Rand.z);
+	render_keyframes.NumKeyFrames = keyframes.NumKeyFrames;
+	std::vector<float> render_key_times(keyframes.NumKeyFrames);
+	std::vector<Vector3> render_values(keyframes.NumKeyFrames);
+	render_keyframes.KeyTimes = render_key_times.data();
+	render_keyframes.Values = render_values.data();
+	for (UINT index = 0; index < keyframes.NumKeyFrames; ++index) {
+		render_keyframes.KeyTimes[index] = keyframes.KeyTimes[index];
+		render_keyframes.Values[index] = Vector3(
+			keyframes.Values[index].x,
+			keyframes.Values[index].y,
+			keyframes.Values[index].z);
+	}
+
+	Set_Color_Keyframes (render_keyframes);
+
+	for (UINT index = 0; index < keyframes.NumKeyFrames; ++index) {
+		keyframes.Values[index] = {render_keyframes.Values[index].X,
+			render_keyframes.Values[index].Y, render_keyframes.Values[index].Z};
+	}
+	render_keyframes.KeyTimes = nullptr;
+	render_keyframes.Values = nullptr;
 }
 
 
@@ -400,6 +441,33 @@ EmitterInstanceListClass::Get_Color_Keyframes (ParticlePropertyStruct<Vector3> &
 
 ///////////////////////////////////////////////////////////////////////////////////
 //
+//	Get_Color_Keyframes (Engine::Math keyframes)
+//
+//	Reads the (normalized) keyframes through the virtual override above and
+// converts them to the property-page type. The caller owns the returned arrays.
+//
+void
+EmitterInstanceListClass::Get_Color_Keyframes (ParticlePropertyStruct<Engine::Math::Vector3> &keyframes) const
+{
+	ParticlePropertyStruct<Vector3> render_keyframes{};
+	Get_Color_Keyframes (render_keyframes);
+	keyframes.Start = {render_keyframes.Start.X, render_keyframes.Start.Y, render_keyframes.Start.Z};
+	keyframes.Rand = {render_keyframes.Rand.X, render_keyframes.Rand.Y, render_keyframes.Rand.Z};
+	keyframes.NumKeyFrames = render_keyframes.NumKeyFrames;
+	keyframes.KeyTimes = keyframes.NumKeyFrames > 0 ? new float[keyframes.NumKeyFrames] : nullptr;
+	keyframes.Values = keyframes.NumKeyFrames > 0 ? new Engine::Math::Vector3[keyframes.NumKeyFrames] : nullptr;
+	for (UINT index = 0; index < keyframes.NumKeyFrames; index ++) {
+		keyframes.KeyTimes[index] = render_keyframes.KeyTimes[index];
+		keyframes.Values[index] = {render_keyframes.Values[index].X,
+			render_keyframes.Values[index].Y, render_keyframes.Values[index].Z};
+	}
+	SAFE_DELETE_ARRAY(render_keyframes.KeyTimes);
+	SAFE_DELETE_ARRAY(render_keyframes.Values);
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////
+//
 //	Get_Opacity_Keyframes
 //
 void
@@ -436,4 +504,3 @@ EmitterInstanceListClass::Get_Size_Keyframes (ParticlePropertyStruct<float> &key
 		}
 	}
 }
-

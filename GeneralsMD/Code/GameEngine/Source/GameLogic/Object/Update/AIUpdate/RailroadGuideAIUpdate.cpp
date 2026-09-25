@@ -29,6 +29,8 @@
 
 #include "PreRTS.h"
 import engine.debug;
+import Engine.Core.Math.AffineTransform3;
+#include "Common/LegacyTransformMath.h"
 
 #include "Common/Player.h"
 #include "Common/ThingFactory.h"
@@ -1216,33 +1218,6 @@ void RailroadBehavior::getPulled( PullInfo *info )
 
 // ------------------------------------------------------------------------------------------------
 
-void alignToTerrain( Real angle, const Coord3D& pos, const Coord3D& normal, Matrix3D& mtx)
-{
-	Coord3D x, y, z;
-
-	z = normal;
-
-	x.x = Cos( angle );
-	x.y = Sin( angle );
-	x.z = 0.0f;
-	if (z.z != 0.0f)
-	{
-		x.z = -(x.x*z.x + x.y*z.y) / z.z;
-		x.normalize();
-	}
-
-	engine::debug::invariant((fabs(x.x*z.x + x.y*z.y + x.z*z.z)<0.0001), "fabs(x.x*z.x + x.y*z.y + x.z*z.z)<0.0001", __FILE__, __LINE__, "dot is not zero");
-
-	// now computing the y vector is trivial.
-	y.crossProduct( z, x, y );
-	y.normalize();
-
-	mtx.Set(  x.x, y.x, z.x, pos.x,
-							x.y, y.y, z.y, pos.y,
-							x.z, y.z, z.z, pos.z );
-}
-
-
 // ------------------------------------------------------------------------------------------------
 // ------------------------------------------------------------------------------------------------
 void RailroadBehavior::updatePositionTrackDistance( PullInfo *pullerInfo, PullInfo *myInfo )
@@ -1300,19 +1275,18 @@ void RailroadBehavior::updatePositionTrackDistance( PullInfo *pullerInfo, PullIn
 	Real desiredAngle = atan2(dy, dx);
 
 
-	Real relAngle = stdAngleDiff(desiredAngle, obj->getTransformMatrix()->Get_Z_Rotation());
+	Real relAngle = stdAngleDiff(desiredAngle, obj->worldTransform().Z_Rotation_Legacy());
 
 
-	Matrix3D mtx;
-	Matrix3D tmp(1);
-	tmp.Translate(turnPos.x, turnPos.y, 0);
-	tmp.Translate(trackPosDelta.x, trackPosDelta.y, 0);
-	tmp.In_Place_Pre_Rotate_Z(relAngle );
+	Engine::Math::AffineTransform3 tmp = Engine::Math::AffineTransform3::Identity();
+	Legacy_Translate(tmp, turnPos.x, turnPos.y, 0);
+	Legacy_Translate(tmp, trackPosDelta.x, trackPosDelta.y, 0);
+	Legacy_In_Place_Pre_Rotate_Z(tmp, relAngle );
 
-	tmp.Translate(-turnPos.x, -turnPos.y, 0);
+	Legacy_Translate(tmp, -turnPos.x, -turnPos.y, 0);
 
 
-	mtx.mul(tmp, *obj->getTransformMatrix());
+	const Engine::Math::AffineTransform3 transform = Compose(tmp, obj->worldTransform());
 
 
 	//enforce ground elevation
@@ -1322,7 +1296,7 @@ void RailroadBehavior::updatePositionTrackDistance( PullInfo *pullerInfo, PullIn
 
 
 
-	obj->setTransformMatrix(&mtx);
+	obj->setWorldTransform(transform);
 
 	if (!m_inTunnel)
 		obj->setPositionZ( enforceElevation );
@@ -1639,7 +1613,4 @@ void RailroadBehavior::loadPostProcess()
 	m_clicketyClackSound.setObjectID( getObject()->getID() ) ;
 
 }
-
-
-
 

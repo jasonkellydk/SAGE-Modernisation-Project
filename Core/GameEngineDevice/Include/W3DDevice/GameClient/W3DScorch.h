@@ -23,7 +23,7 @@
 #include <deque>
 import Graphics.Scene.Surfaces.Renderer;
 
-#include "WWMath/vector3.h"
+import Engine.Core.Math.Vector3;
 #include "Common/GameType.h"
 #include "Lib/BaseTypeCore.h"
 
@@ -41,7 +41,7 @@ public:
 	virtual void clearAllScorches() = 0;
 	virtual void invalidateBuffers() = 0;
 	virtual void invalidateTexture() = 0;
-	virtual void addScorch(Vector3 location, Real radius, Scorches type) = 0;
+	virtual void addScorch(Engine::Math::Vector3 location, Real radius, Scorches type) = 0;
 	virtual void drawScorches(WorldHeightMap& map, W3DCamera& camera) = 0;
 };
 
@@ -56,13 +56,13 @@ public:
 	virtual void clearAllScorches() override;
 	virtual void invalidateBuffers() override;
 	virtual void invalidateTexture() override;
-	virtual void addScorch(Vector3 location, Real radius, Scorches type) override;
+	virtual void addScorch(Engine::Math::Vector3 location, Real radius, Scorches type) override;
 	virtual void drawScorches(WorldHeightMap& map, W3DCamera& camera) override;    ///< Draws the scorch mark polygons in m_vertexScorch.
 
 private:
 	typedef struct
 	{
-		Vector3 location;
+		Engine::Math::Vector3 location;
 		Real radius;
 		Int scorchType;
 	} TScorch;
@@ -95,6 +95,6 @@ public:
 	virtual void clearAllScorches() override {}
 	virtual void invalidateBuffers() override {}
 	virtual void invalidateTexture() override {}
-	virtual void addScorch(Vector3, Real, Scorches) override {}
+	virtual void addScorch(Engine::Math::Vector3, Real, Scorches) override {}
 	virtual void drawScorches(WorldHeightMap&, W3DCamera&) override {}
 };

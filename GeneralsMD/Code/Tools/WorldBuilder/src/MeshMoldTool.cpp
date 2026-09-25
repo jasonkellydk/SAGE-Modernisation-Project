@@ -33,6 +33,9 @@
 #include "WorldBuilder.h"
 #include "DrawObject.h"
 #include "wbview3d.h"
+import Engine.Core.Math.AffineTransform3;
+import Engine.Core.Math.Vector3;
+import Engine.Core.Math.LineSegment3;
 #include "W3DDevice/GameClient/W3DMeshRenderObject.h"
 #include "W3DDevice/GameClient/W3DMeshResource.h"
 #include "W3DDevice/GameClient/BaseHeightMap.h"
@@ -206,14 +209,13 @@ void MeshMoldTool::applyMesh(CWorldBuilderDoc *pDoc)
 		if (pDraw) {
 			W3DMeshRenderObject *pMesh = pDraw->peekMesh();
 			if (pMesh) {
-				SphereClass bounds;
-				pDraw->getMeshBounds(&bounds);
-				bounds.Center *= MeshMoldOptions::getScale();
-				bounds.Radius *= MeshMoldOptions::getScale();
-				Int minX = ceil((m_toolPos.x+bounds.Center.X-bounds.Radius)/MAP_XY_FACTOR);
-				Int minY = ceil((m_toolPos.y+bounds.Center.Y-bounds.Radius)/MAP_XY_FACTOR);
-				Int maxX = floor((m_toolPos.x+bounds.Center.X+bounds.Radius)/MAP_XY_FACTOR);
-				Int maxY = floor((m_toolPos.y+bounds.Center.Y+bounds.Radius)/MAP_XY_FACTOR);
+				const Engine::Math::Sphere3 bounds = pDraw->moldMeshBounds();
+				const Engine::Math::Vector3 center = bounds.center * MeshMoldOptions::getScale();
+				const Real radius = bounds.radius * MeshMoldOptions::getScale();
+				Int minX = ceil((m_toolPos.x+center.x-radius)/MAP_XY_FACTOR);
+				Int minY = ceil((m_toolPos.y+center.y-radius)/MAP_XY_FACTOR);
+				Int maxX = floor((m_toolPos.x+center.x+radius)/MAP_XY_FACTOR);
+				Int maxY = floor((m_toolPos.y+center.y+radius)/MAP_XY_FACTOR);
 				maxX++; maxY++;
 				if (minX<0) minX = 0;
 				if (minY<0) minY = 0;
@@ -233,19 +235,19 @@ void MeshMoldTool::applyMesh(CWorldBuilderDoc *pDoc)
 						Y -= m_toolPos.y;
 						X /= MeshMoldOptions::getScale();
 						Y /= MeshMoldOptions::getScale();
-						Vector3 vLoc(X, Y, 10000);
-						vLoc.Rotate_Z(-MeshMoldOptions::getAngle()*PI/180.0f);
+						const Engine::Math::Vector3 ray_start = Engine::Math::AffineTransform3::Rotation_Z(
+							-MeshMoldOptions::getAngle()*PI/180.0f).Transform_Point({X, Y, 10000});
 
-						LineSegClass ray(vLoc, Vector3(vLoc.X, vLoc.Y, -10000));
-						CastResultStruct castResult;
-						castResult.ComputeContactPoint = true;
+						const Engine::Math::LineSegment3 ray{ray_start, {ray_start.x, ray_start.y, -10000}};
+						Engine::Math::CollisionResult3 castResult;
+						castResult.compute_contact_point = true;
 						RayCollisionTestClass rayCollide(ray, &castResult) ;
 						rayCollide.CollisionType = 0xFFFFFFFF;
 						if (pMesh->Cast_Ray(rayCollide)) {
 							// get the point of intersection according to W3D
-							Vector3 intersection = castResult.ContactPoint;
-							intersection.Z *= MeshMoldOptions::getScale();
-							Int newHeight = floor( ((intersection.Z+MeshMoldOptions::getHeight())/MAP_HEIGHT_SCALE)+0.5);
+							const Engine::Math::Vector3 intersection = castResult.contact_point;
+							const Real scaledIntersectionZ = intersection.z * MeshMoldOptions::getScale();
+							Int newHeight = floor(((scaledIntersectionZ+MeshMoldOptions::getHeight())/MAP_HEIGHT_SCALE)+0.5);
 							// check boundary values
 							if (newHeight < m_htMapEditCopy->getMinHeightValue()) newHeight = m_htMapEditCopy->getMinHeightValue();
 							if (newHeight > m_htMapEditCopy->getMaxHeightValue()) newHeight = m_htMapEditCopy->getMaxHeightValue();

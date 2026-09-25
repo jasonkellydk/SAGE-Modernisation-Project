@@ -25,6 +25,7 @@ import Assets.Adapters.W3D.Collection;
 #include "W3DDevice/GameClient/W3DCamera.h"
 
 #include "W3DDevice/GameClient/W3DAssetCatalog.h"
+#include <limits>
 import engine.debug;
 
 //#include "sr.hpp"
@@ -115,13 +116,13 @@ void W3DCollectionRenderObject::Render(W3DRenderContext & rinfo)
     m_children.Visit_All([&](const ChildAttachment& child, int) { Flush_Before_W3D_Object_Draw(*child.model); child.model->Render(rinfo); });
 }
 
-void W3DCollectionRenderObject::Set_Transform(const Matrix3D &m)
+void W3DCollectionRenderObject::Set_Transform(const Engine::Math::AffineTransform3 &m)
 {
 	W3DRenderObject::Set_Transform(m);
 	Set_Sub_Object_Transforms_Dirty(true);
 }
 
-void W3DCollectionRenderObject::Set_Position(const Vector3 &v)
+void W3DCollectionRenderObject::Set_Position(Engine::Math::Vector3 v)
 {
 	W3DRenderObject::Set_Position(v);
 	Set_Sub_Object_Transforms_Dirty(true);
@@ -157,7 +158,7 @@ int W3DCollectionRenderObject::Add_Sub_Object(W3DRenderObject * subobj)
 int W3DCollectionRenderObject::Remove_Sub_Object(W3DRenderObject * robj)
 {
     if (!robj) return 0;
-    const Matrix3D transform = Get_Transform();
+    const Engine::Math::AffineTransform3 transform = Get_Transform();
     const auto matches = [&](const ChildAttachment& child) { return child.model.Peek() == robj; };
     if (!m_children.Find(matches)) return 0;
     // Collections notify while the child is still present, unlike animated hierarchies.
@@ -196,12 +197,12 @@ bool W3DCollectionRenderObject::Intersect_OBBox(W3DOrientedBoxIntersectionQuery 
     return m_children.Query_Level(0, [&](const ChildAttachment& child) { return child.model->Intersect_OBBox(boxtest); });
 }
 
-void W3DCollectionRenderObject::Get_Obj_Space_Bounding_Sphere(SphereClass & sphere) const
+void W3DCollectionRenderObject::Get_Local_Bounding_Sphere(Engine::Math::Sphere3 & sphere) const
 {
 	sphere = BoundSphere;
 }
 
-void W3DCollectionRenderObject::Get_Obj_Space_Bounding_Box(AABoxClass & box) const
+void W3DCollectionRenderObject::Get_Local_Bounds(Engine::Math::AxisAlignedBox3 & box) const
 {
 	box = BoundBox;
 }
@@ -215,14 +216,14 @@ int W3DCollectionRenderObject::Snap_Point_Count()
 	}
 }
 
-void W3DCollectionRenderObject::Get_Snap_Point(int index,Vector3 * set)
+void W3DCollectionRenderObject::Get_Snap_Point(int index,Engine::Math::Vector3 * set)
 {
 	engine::debug::assert_condition((set != nullptr), "set != nullptr", __FILE__, __LINE__, "assertion failed");
 	if (index >= 0 && static_cast<std::size_t>(index) < SnapPoints.size()) {
 		const auto& point = SnapPoints[index];
-		set->Set(point.x, point.y, point.z);
+		*set = {point.x, point.y, point.z};
 	} else {
-		set->X = set->Y = set->Z = 0;
+		*set = {};
 	}
 }
 
@@ -240,31 +241,36 @@ void W3DCollectionRenderObject::Update_Obj_Space_Bounding_Volumes()
 {
 	int i;
 	if (static_cast<int>(m_children.Count()) <= 0) {
-		BoundSphere = SphereClass();
-		BoundBox.Center.Set(0,0,0);
-		BoundBox.Extent.Set(0,0,0);
+		BoundSphere = {};
+		BoundBox = {};
 		return;
 	}
 
-	Matrix3D tm = Get_Transform();
-	Set_Transform(Matrix3D(true));
+	Engine::Math::AffineTransform3 tm = Get_Transform();
+	Set_Transform(Engine::Math::AffineTransform3::Identity());
 
 	// loop through all sub-objects, combining their bounding spheres.
 	BoundSphere = m_children.At(0)->model.Peek()->Get_Bounding_Sphere();
 	for (i=1; i < static_cast<int>(m_children.Count()); i++) {
-		BoundSphere.Add_Sphere(m_children.At(i)->model.Peek()->Get_Bounding_Sphere());
+		// Empty (radius <= 0) spheres never contributed to the merged bounds.
+		const auto child_sphere = m_children.At(i)->model.Peek()->Get_Bounding_Sphere();
+		if (child_sphere.radius > 0.0f)
+			BoundSphere.Include(child_sphere);
 	}
 
 	// loop through the sub-objects, computing a box in the root coordinate
 	// system which bounds all of the meshes.  Note that we've set the
 	// root coordinate system to identity for this.
-	MinMaxAABoxClass box(Vector3(FLT_MAX,FLT_MAX,FLT_MAX),Vector3(-FLT_MAX,-FLT_MAX,-FLT_MAX));
-
+	constexpr float max_float = std::numeric_limits<float>::max();
+	BoundBox = {{max_float, max_float, max_float}, {-max_float, -max_float, -max_float}};
 	for (i=0; i < static_cast<int>(m_children.Count()); i++) {
-		box.Add_Box(m_children.At(i)->model.Peek()->Get_Bounding_Box());
+		const auto world_box = m_children.At(i)->model.Peek()->Get_Bounding_Box();
+		// Zero-extent boxes never contributed to the merged bounds.
+		if (world_box.minimum == world_box.maximum)
+			continue;
+		BoundBox.Include(world_box.minimum);
+		BoundBox.Include(world_box.maximum);
 	}
-
-	BoundBox.Init(box);
 
    Invalidate_Cached_Bounding_Volumes();
 
@@ -295,4 +301,3 @@ Graphics::ModelFactory<W3DRenderObject> * Load_Collection_Factory(ChunkLoadClass
     auto data=std::make_shared<const Assets::ModelCollectionDesc>(std::move(description));
     return new Graphics::ModelFactory<W3DRenderObject>(data->name,W3DRenderObject::CLASSID_COLLECTION,[data] { return NEW_REF(W3DCollectionRenderObject,(*data)); });
 }
-

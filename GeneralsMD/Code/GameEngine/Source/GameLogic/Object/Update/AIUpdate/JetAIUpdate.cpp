@@ -41,6 +41,7 @@ import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 #include "GameLogic/Module/BodyModule.h"
 #include "GameLogic/Module/CountermeasuresBehavior.h"
 #include "GameLogic/Module/JetAIUpdate.h"
+import Engine.Core.Math.AffineTransform3;
 #include "GameLogic/Module/ParkingPlaceBehavior.h"
 #include "GameLogic/Module/PhysicsUpdate.h"
 #include "GameLogic/Object.h"
@@ -2116,18 +2117,18 @@ UpdateSleepTime JetAIUpdate::update()
 			Real ht = jet->isAboveTerrain() ? jet->getHeightAboveTerrain() : 0;
 			if (ht < minHeight)
 			{
-				Matrix3D tmp(1);
-				tmp.Set_Z_Translation(minHeight - ht);
-				draw->setInstanceMatrix(&tmp);
+				Engine::Math::AffineTransform3 transform =
+					Engine::Math::AffineTransform3::From_Translation({0.0f, 0.0f, minHeight - ht});
+				draw->setInstanceTransform(&transform);
 			}
 			else
 			{
-				draw->setInstanceMatrix(nullptr);
+				draw->setInstanceTransform(nullptr);
 			}
 		}
 		else
 		{
-			draw->setInstanceMatrix(nullptr);
+			draw->setInstanceTransform(nullptr);
 		}
 	}
 

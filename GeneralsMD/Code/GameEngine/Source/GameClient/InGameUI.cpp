@@ -28,6 +28,7 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 #include "PreRTS.h"
+import Engine.Core.Math.Scalar;
 import engine.profiling;
 import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 #include "Common/GameDateTime.h"
@@ -1548,8 +1549,8 @@ void InGameUI::init()
 		TheTacticalView->setWidth( TheDisplay->getWidth() );
 		TheTacticalView->setHeight( TheDisplay->getHeight() );
 		TheTacticalView->setDefaultView(
-			DEG_TO_RADF(TheGlobalData->m_cameraPitch),
-			DEG_TO_RADF(TheGlobalData->m_cameraYaw),
+			(TheGlobalData->m_cameraPitch * Engine::Math::Pi) / 180.0f,
+			(TheGlobalData->m_cameraYaw * Engine::Math::Pi) / 180.0f,
 			getWidescreenCameraHeightFactor());
 	}
 
@@ -1833,8 +1834,8 @@ void InGameUI::handleBuildPlacements()
 					// while using force attack mode for convenience.
 					if (isInForceAttackMode())
 					{
-						const Real snapRadians = DEG_TO_RADF(45);
-						angle = WWMath::Round(angle / snapRadians) * snapRadians;
+						const Real snapRadians = (45.0f * Engine::Math::Pi) / 180.0f;
+						angle = floorf(angle / snapRadians + 0.5f) * snapRadians;
 					}
 				}
 			}
@@ -2306,8 +2307,8 @@ void InGameUI::reset()
 	TheControlBar->reset();
 
 	TheTacticalView->setDefaultView(
-		DEG_TO_RADF(TheGlobalData->m_cameraPitch),
-		DEG_TO_RADF(TheGlobalData->m_cameraYaw),
+		(TheGlobalData->m_cameraPitch * Engine::Math::Pi) / 180.0f,
+		(TheGlobalData->m_cameraYaw * Engine::Math::Pi) / 180.0f,
 		getWidescreenCameraHeightFactor());
 
 	ResetInGameChat();

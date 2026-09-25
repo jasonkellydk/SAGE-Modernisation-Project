@@ -30,6 +30,8 @@
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 #include "PreRTS.h"
 import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
+import Engine.Core.Math.AffineTransform3;
+#include "Common/LegacyTransformMath.h"
 
 #include "GameClient/FXList.h"
 
@@ -60,18 +62,14 @@ import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 FXListStore *TheFXListStore = nullptr;					///< the FXList store definition
 
 //-------------------------------------------------------------------------------------------------
-static void adjustVector(Coord3D *vec, const Matrix3D* mtx)
+static void adjustVector(Coord3D *vec, const Engine::Math::AffineTransform3* transform)
 {
-	if (mtx)
+	if (transform)
 	{
-		Vector3 vectmp;
-		vectmp.X = vec->x;
-		vectmp.Y = vec->y;
-		vectmp.Z = vec->z;
-		vectmp = mtx->Rotate_Vector(vectmp);
-		vec->x = vectmp.X;
-		vec->y = vectmp.Y;
-		vec->z = vectmp.Z;
+		const Engine::Math::Vector3 result = transform->Transform_Vector({vec->x, vec->y, vec->z});
+		vec->x = result.x;
+		vec->y = result.y;
+		vec->z = result.z;
 	}
 }
 
@@ -83,10 +81,10 @@ static void adjustVector(Coord3D *vec, const Matrix3D* mtx)
 void FXNugget::doFXObj(const Object* primary, const Object* secondary) const
 {
 	const Coord3D* p = primary ? primary->getPosition() : nullptr;
-	const Matrix3D* mtx = primary ? primary->getTransformMatrix() : nullptr;
+	const Engine::Math::AffineTransform3* transform = primary ? &primary->worldTransform() : nullptr;
 	const Real speed = 0.0f;	// yes, that's right -- NOT the object's speed.
 	const Coord3D* s = secondary ? secondary->getPosition() : nullptr;
-	doFXPos(p, mtx, speed, s);
+	doFXPos(p, transform, speed, s);
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -96,7 +94,7 @@ class SoundFXNugget : public FXNugget
 
 public:
 
-	virtual void doFXPos(const Coord3D *primary, const Matrix3D* /*primaryMtx*/, const Real /*primarySpeed*/, const Coord3D * /*secondary*/, const Real /*overrideRadius*/ ) const override
+	virtual void doFXPos(const Coord3D *primary, const Engine::Math::AffineTransform3*  /*primaryMtx*/, const Real /*primarySpeed*/, const Coord3D * /*secondary*/, const Real /*overrideRadius*/ ) const override
 	{
 		AudioEventRTS sound(m_soundName);
 
@@ -166,7 +164,7 @@ public:
 		m_probability = 1.0f;
 	}
 
-	virtual void doFXPos(const Coord3D *primary, const Matrix3D* primaryMtx, const Real primarySpeed, const Coord3D *secondary, const Real /*overrideRadius*/ ) const override
+	virtual void doFXPos(const Coord3D *primary, const Engine::Math::AffineTransform3* primaryMtx, const Real primarySpeed, const Coord3D *secondary, const Real /*overrideRadius*/ ) const override
 	{
 		if (m_probability <= GameClientRandomValueReal(0, 1))
 			return;
@@ -183,13 +181,11 @@ public:
 			//sense that the old stuff made use of the muzzle fx bone orientation (because it's a
 			//subobject). It had other problems because of elevation variations the tracers would
 			//stay on the ground.
-			//tracer->setTransformMatrix(primaryMtx);
-			Matrix3D tracerMtx;
-			Vector3 pos( primary->x, primary->y, primary->z );
-			Vector3 dir( secondary->x - primary->x, secondary->y - primary->y, secondary->z - primary->z );
-			dir.Normalize(); //This is fantastically crucial for calling buildTransformMatrix!!!!!
-			tracerMtx.buildTransformMatrix( pos, dir );
-			tracer->setTransformMatrix( &tracerMtx );
+			//tracer->setWorldTransform(primaryMtx);
+			const Engine::Math::Vector3 position{primary->x, primary->y, primary->z};
+			const Engine::Math::Vector3 direction = Engine::Math::Vector3{
+				secondary->x - primary->x, secondary->y - primary->y, secondary->z - primary->z}.Normalized_Legacy(); //This is fantastically crucial for building the transform!!!!!
+			tracer->setWorldTransform(Engine::Math::AffineTransform3::From_Unit_Forward_Direction(position, direction));
 			tracer->setPosition(primary);
 
 			Real speed = m_speed;
@@ -264,7 +260,7 @@ public:
 		m_secondaryOffset.x = m_secondaryOffset.y = m_secondaryOffset.z = 0;
 	}
 
-	virtual void doFXPos(const Coord3D *primary, const Matrix3D* /*primaryMtx*/, const Real /*primarySpeed*/, const Coord3D * secondary, const Real /*overrideRadius*/ ) const override
+	virtual void doFXPos(const Coord3D *primary, const Engine::Math::AffineTransform3*  /*primaryMtx*/, const Real /*primarySpeed*/, const Coord3D * secondary, const Real /*overrideRadius*/ ) const override
 	{
 		const ThingTemplate* tmpl = TheThingFactory->findTemplate(m_templateName);
 		engine::debug::invariant((tmpl), "tmpl", __FILE__, __LINE__, "RayEffect %s not found",m_templateName.str());
@@ -338,7 +334,7 @@ public:
 		}
 	}
 
-	virtual void doFXPos(const Coord3D *primary, const Matrix3D* /*primaryMtx*/, const Real /*primarySpeed*/, const Coord3D * /*secondary*/, const Real /*overrideRadius*/ ) const override
+	virtual void doFXPos(const Coord3D *primary, const Engine::Math::AffineTransform3*  /*primaryMtx*/, const Real /*primarySpeed*/, const Coord3D * /*secondary*/, const Real /*overrideRadius*/ ) const override
 	{
 		if (primary)
 		{
@@ -386,7 +382,7 @@ public:
 	{
 	}
 
-	virtual void doFXPos(const Coord3D *primary, const Matrix3D* /*primaryMtx*/, const Real /*primarySpeed*/, const Coord3D * /*secondary*/, const Real /*overrideRadius*/ ) const override
+	virtual void doFXPos(const Coord3D *primary, const Engine::Math::AffineTransform3*  /*primaryMtx*/, const Real /*primarySpeed*/, const Coord3D * /*secondary*/, const Real /*overrideRadius*/ ) const override
 	{
 		if (primary)
 		{
@@ -446,7 +442,7 @@ public:
 	{
 	}
 
-	virtual void doFXPos(const Coord3D *primary, const Matrix3D* /*primaryMtx*/, const Real /*primarySpeed*/, const Coord3D * /*secondary*/, const Real /*overrideRadius*/ ) const override
+	virtual void doFXPos(const Coord3D *primary, const Engine::Math::AffineTransform3*  /*primaryMtx*/, const Real /*primarySpeed*/, const Coord3D * /*secondary*/, const Real /*overrideRadius*/ ) const override
 	{
 		if (primary)
 		{
@@ -524,7 +520,7 @@ public:
 		m_rotateX = m_rotateY = m_rotateZ = 0;
 	}
 
-	virtual void doFXPos(const Coord3D *primary, const Matrix3D* primaryMtx, const Real /*primarySpeed*/, const Coord3D * /*secondary*/, const Real overrideRadius ) const override
+	virtual void doFXPos(const Coord3D *primary, const Engine::Math::AffineTransform3* primaryMtx, const Real /*primarySpeed*/, const Coord3D * /*secondary*/, const Real overrideRadius ) const override
 	{
 		if (primary)
 		{
@@ -548,15 +544,15 @@ public:
 				Real deltaX = primary->getPosition()->x - secondary->getPosition()->x;
 				Real deltaY = primary->getPosition()->y - secondary->getPosition()->y;
 				Real aimingAngle = atan2(deltaY, deltaX);
-				Matrix3D aimingMatrix(1);
-				aimingMatrix.Rotate_Z( aimingAngle );
+				Engine::Math::AffineTransform3 aimingTransform = Engine::Math::AffineTransform3::Identity();
+				Legacy_Rotate_Z(aimingTransform, aimingAngle);
 
-				reallyDoFX(primary->getPosition(), &aimingMatrix, primary, 0.0f);
+				reallyDoFX(primary->getPosition(), &aimingTransform, primary, 0.0f);
 			}
 			else
 				// if we have an object, then adjust the offset and direction by the object's transformation
 				// matrix, so that (say) an offset of +10 in the z axis "follows" the orientation of the object.
-				reallyDoFX(primary->getPosition(), primary->getTransformMatrix(), primary, 0.0f);
+				reallyDoFX(primary->getPosition(), &primary->worldTransform(), primary, 0.0f);
 		}
 		else
 		{
@@ -592,12 +588,12 @@ public:
 
 protected:
 
-	void reallyDoFX(const Coord3D *primary, const Matrix3D* mtx, const Object* thingToAttachTo, Real overrideRadius ) const
+	void reallyDoFX(const Coord3D *primary, const Engine::Math::AffineTransform3* transform, const Object* thingToAttachTo, Real overrideRadius ) const
 	{
 		Coord3D offset = m_offset;
-		if (mtx)
+		if (transform)
 		{
-			adjustVector(&offset, mtx);
+			adjustVector(&offset, transform);
 		}
 
 		const ParticleSystemTemplate *tmp = TheParticleSystemManager->findTemplate(m_name);
@@ -629,9 +625,9 @@ protected:
 						newPos.z += m_height.getValue();
 
 
-					if (m_orientToObject && mtx)
+					if (m_orientToObject && transform)
 					{
-						sys->setLocalTransform(mtx);
+						sys->setLocalTransform(*transform);
 					}
 					if (m_rotateX != 0.0f)
 						sys->rotateLocalTransformX(m_rotateX);
@@ -696,7 +692,7 @@ public:
     m_orientToBone = true;
 	}
 
-	virtual void doFXPos(const Coord3D *primary, const Matrix3D* primaryMtx, const Real /*primarySpeed*/, const Coord3D * /*secondary*/, const Real /*overrideRadius*/ ) const override
+	virtual void doFXPos(const Coord3D *primary, const Engine::Math::AffineTransform3* primaryMtx, const Real /*primarySpeed*/, const Coord3D * /*secondary*/, const Real /*overrideRadius*/ ) const override
 	{
 		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "You must use the object form for this effect");
 	}
@@ -737,19 +733,20 @@ protected:
 	void doFxAtBones(const Object* obj, Int start) const
 	{
     Coord3D bonePos[MAX_BONE_POINTS];
-    Matrix3D boneMtx[MAX_BONE_POINTS];
+    Engine::Math::AffineTransform3 boneTransforms[MAX_BONE_POINTS];
 
     Drawable* draw = obj->getDrawable();
 		if (draw)
 		{
 			// yes, BONEPOS_CURRENT_CLIENT_ONLY -- this is client-only, so should be safe to do.
-			Int count = draw->getCurrentClientBonePositions(m_boneName.str(), start, bonePos, boneMtx, MAX_BONE_POINTS);
+			Int count = draw->getCurrentClientBoneTransforms(
+				m_boneName.str(), start, bonePos, boneTransforms, MAX_BONE_POINTS);
 			for (Int i = 0; i < count; ++i)
 			{
 				Coord3D p;
-				Matrix3D m;
-				obj->convertBonePosToWorldPos(&bonePos[i], &boneMtx[i], &p, &m);
-				FXList::doFXPos(m_fx, &p, &m, 0.0f, nullptr, 0.0f);
+				Engine::Math::AffineTransform3 transform = boneTransforms[i];
+				obj->transformBoneToWorld(&bonePos[i], &transform, &p, &transform);
+				FXList::doFXPos(m_fx, &p, &transform, 0.0f, nullptr, 0.0f);
 			}
 		}
 	}
@@ -804,7 +801,7 @@ void FXList::clear()
 }
 
 //-------------------------------------------------------------------------------------------------
-void FXList::doFXPos(const Coord3D *primary, const Matrix3D* primaryMtx, const Real primarySpeed, const Coord3D *secondary, const Real overrideRadius ) const
+void FXList::doFXPos(const Coord3D *primary, const Engine::Math::AffineTransform3* primaryMtx, const Real primarySpeed, const Coord3D *secondary, const Real overrideRadius ) const
 {
 	const Int playerIndex = rts::getObservedOrLocalPlayer()->getPlayerIndex();
 

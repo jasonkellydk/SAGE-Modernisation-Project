@@ -30,6 +30,8 @@
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 #include "PreRTS.h"
 import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
+import Engine.Core.Math.AffineTransform3;
+#include "Common/LegacyTransformMath.h"
 
 #include "Common/Thing.h"
 #include "Common/ThingTemplate.h"
@@ -273,10 +275,10 @@ UpdateSleepTime StructureToppleUpdate::update()
 		}
 
 		Object *building = getObject();
-		Matrix3D xfrm = *building->getTransformMatrix();
-		xfrm.In_Place_Pre_Rotate_X(-m_toppleVelocity * m_toppleDirection.y);
-		xfrm.In_Place_Pre_Rotate_Y(m_toppleVelocity * m_toppleDirection.x);
-		building->setTransformMatrix(&xfrm);
+		Engine::Math::AffineTransform3 transform = building->worldTransform();
+		Legacy_In_Place_Pre_Rotate_X(transform, -m_toppleVelocity * m_toppleDirection.y);
+		Legacy_In_Place_Pre_Rotate_Y(transform, m_toppleVelocity * m_toppleDirection.x);
+		building->setWorldTransform(transform);
 	}
 
 	// The building is now flat on the ground and done with all the crushing and all that.
@@ -322,9 +324,9 @@ void StructureToppleUpdate::doToppleDoneStuff()
 
 	Real toppleAngle = m_toppleDirection.toAngle();
 
-	Matrix3D xfrm = *building->getTransformMatrix();
-	xfrm.In_Place_Pre_Rotate_Z(toppleAngle-origAngle);
-	building->setTransformMatrix(&xfrm);
+	Engine::Math::AffineTransform3 transform = building->worldTransform();
+	Legacy_In_Place_Pre_Rotate_Z(transform, toppleAngle-origAngle);
+	building->setWorldTransform(transform);
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -491,7 +493,7 @@ void StructureToppleUpdate::doToppleDelayBurstFX()
 			if (sys != nullptr)
 			{
 				Coord3D pos;
-				if (drawable->getPristineBonePositions(it->boneName.str(), 0, &pos, nullptr, 1) == 1)
+				if (drawable->getPristineBonePositions(it->boneName.str(), 0, &pos, 1) == 1)
 				{
 					// got the bone position...
 					sys->setPosition(&pos);

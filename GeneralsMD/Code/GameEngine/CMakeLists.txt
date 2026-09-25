@@ -1209,6 +1209,7 @@ target_link_libraries(z_gameengine PRIVATE
     shell32
     SDL3::SDL3
     engine_platform_sdl3
+    engine_core_math
 )
 
 if(TARGET engine_ecs)
@@ -1216,6 +1217,7 @@ if(TARGET engine_ecs)
 endif()
 
 target_link_libraries(z_gameengine PUBLIC
+    engine_core_math
     engine_navigation
     corei_gameengine_public
     z_wwvegas

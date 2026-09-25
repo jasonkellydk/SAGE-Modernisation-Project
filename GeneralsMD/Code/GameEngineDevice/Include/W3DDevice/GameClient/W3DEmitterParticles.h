@@ -29,8 +29,8 @@ public:
     void On_Frame_Update() override;
     void Notify_Added(W3DScene *scene) override;
     void Notify_Removed(W3DScene *scene) override;
-    void Get_Obj_Space_Bounding_Sphere(SphereClass &sphere) const override;
-    void Get_Obj_Space_Bounding_Box(AABoxClass &box) const override;
+    void Get_Local_Bounding_Sphere(Engine::Math::Sphere3 &sphere) const override;
+    void Get_Local_Bounds(Engine::Math::AxisAlignedBox3 &box) const override;
     void Prepare_LOD(W3DCamera &camera) override;
     void Increment_LOD() override { m_detail.Increment(); }
     void Decrement_LOD() override { m_detail.Decrement(); }
@@ -58,6 +58,6 @@ private:
     Graphics::EmitterDetail m_detail;
     RefCountPtr<W3DTextureHandle> m_texture;
     W3DEmitterRenderObject *m_emitter;
-    AABoxClass m_bounds;
+    Engine::Math::AxisAlignedBox3 m_bounds;
     bool m_bounds_dirty = true;
 };

@@ -27,7 +27,6 @@
 
 class SmudgeGroupClass;	//forward reference.
 class Vector3;
-class Vector4;
 class W3DTextureHandle;
 class W3DRenderContext;
 

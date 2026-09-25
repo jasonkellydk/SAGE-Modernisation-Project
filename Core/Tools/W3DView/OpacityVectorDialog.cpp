@@ -19,22 +19,40 @@
 // OpacityVectorDialog.cpp : implementation file
 //
 
+#include <cmath>
+
+import Engine.Core.Math.EulerAngles3;
+import Engine.Core.Math.Quaternion;
 #include "StdAfx.h"
 #include "W3DView.h"
 #include "OpacityVectorDialog.h"
-#include "WWMath/wwmath.h"
-#include "WWMath/vector3.h"
 #include "WW3D2/SphereObj.h"
 #include "WW3D2/RingObj.h"
 #include "ColorBar.h"
-#include "WWMath/euler.h"
-#include "WWMath/matrix3.h"
 
 #ifdef RTS_DEBUG
 #define new DEBUG_NEW
 #undef THIS_FILE
 static char THIS_FILE[] = __FILE__;
 #endif
+
+namespace
+{
+// Legacy WWMath angle macros and WWMath::Wrap, kept with their original
+// precision and single-step wrap-then-clamp behaviour.
+double Legacy_Deg_To_Rad(double degrees) { return degrees * 3.141592654f / 180.0; }
+float Legacy_Deg_To_RadF(float degrees) { return degrees * 3.141592654f / 180.0f; }
+double Legacy_Rad_To_Deg(double radians) { return radians * 180.0 / 3.141592654f; }
+
+float Legacy_Wrap(float val, float min, float max)
+{
+	if (val >= max) val -= (max - min);
+	if (val < min) val += (max - min);
+	if (val < min) val = min;
+	if (val > max) val = max;
+	return val;
+}
+}
 
 
 /////////////////////////////////////////////////////////////////////////////
@@ -98,7 +116,7 @@ OpacityVectorDialogClass::OnInitDialog ()
 	m_OpacityBar->Modify_Point (0, 0, 255, 255, 255);
 	m_OpacityBar->Insert_Point (1, 10, 0, 0, 0);
 
-	float value =  ::atan (((m_Value.intensity / 10.0F) * 11.0F)) / DEG_TO_RAD (84.5) * 10.0F;
+	float value =  ::atan (((m_Value.intensity / 10.0F) * 11.0F)) / Legacy_Deg_To_Rad (84.5) * 10.0F;
 	m_OpacityBar->Set_Selection_Pos (value);
 
 	//
@@ -116,57 +134,16 @@ OpacityVectorDialogClass::OnInitDialog ()
 	//
 
 
-	/*Vector3 dir_vector (m_Value.X, m_Value.Y, m_Value.Z);
+	const Engine::Math::Quaternion rotation{
+		m_Value.angle.X, m_Value.angle.Y, m_Value.angle.Z, m_Value.angle.W};
+	const Engine::Math::AffineTransform3 rotation_basis = rotation.To_Rotation_Transform();
+	const Engine::Math::EulerAngles3 euler_angle =
+		Engine::Math::EulerAngles3::From_Rotation_XYZ_Rotating_Frame(rotation_basis);
+	float y_rot = Legacy_Rad_To_Deg (euler_angle.y);
+	float z_rot = Legacy_Rad_To_Deg (euler_angle.z);
 
-	float x_rot	= ::acos (dir_vector * Vector3 (1, 0, 0));
-	float y_rot	= ::acos (dir_vector * Vector3 (0, 1, 0));
-	float z_rot	= ::acos (dir_vector * Vector3 (0, 0, 1));
-	x_rot			= RAD_TO_DEG (x_rot);
-	y_rot			= RAD_TO_DEG (y_rot);
-	z_rot			= RAD_TO_DEG (z_rot);
-	x_rot			= WWMath::Wrap (x_rot, -180, 180);
-	y_rot			= WWMath::Wrap (y_rot, -180, 180);
-	z_rot			= WWMath::Wrap (z_rot, -180, 180);*/
-
-	/*Matrix3D rot_90 (1);
-	rot_90.Rotate_Z (DEG_TO_RADF (90));
-
-	Vector3 x_axis (m_Value.X, m_Value.Y, m_Value.Z);
-	x_axis.Normalize ();
-
-	Vector3 y_axis = rot_90 * x_axis;
-	Vector3 z_axis;
-	Vector3::Cross_Product (x_axis, y_axis, &z_axis);
-	Matrix3D orientation (x_axis, y_axis, z_axis, Vector3 (0, 0, 0));
-
-	EulerAnglesClass euler_angle (orientation, EulerOrderXYZr);
-	float x_rot = RAD_TO_DEG (euler_angle.Get_Angle (0));
-	float y_rot = RAD_TO_DEG (euler_angle.Get_Angle (1));
-	float z_rot = RAD_TO_DEG (euler_angle.Get_Angle (2));
-
-	x_rot = WWMath::Wrap (x_rot, 0, 360);
-	y_rot = WWMath::Wrap (y_rot, 0, 360);
-	z_rot = WWMath::Wrap (z_rot, 0, 360);*/
-
-
-#ifdef ALLOW_TEMPORARIES
-	Matrix3D rotation = Build_Matrix3D (m_Value.angle);
-#else
-	Matrix3D rotation;
-	Build_Matrix3D (m_Value.angle, rotation);
-#endif
-	//Vector3 point = m_Value.angle.Rotate_Vector (Vector3 (1, 0, 0));
-
-	EulerAnglesClass euler_angle (rotation, EulerOrderXYZr);
-	//float x_rot = RAD_TO_DEG (euler_angle.Get_Angle (0));
-	float y_rot = RAD_TO_DEG (euler_angle.Get_Angle (1));
-	float z_rot = RAD_TO_DEG (euler_angle.Get_Angle (2));
-
-	//float y_rot = RAD_TO_DEG (rotation.Get_Y_Rotation ());
-	//float z_rot = RAD_TO_DEG (rotation.Get_Z_Rotation ());
-
-	y_rot = WWMath::Wrap (y_rot, 0, 360);
-	z_rot = WWMath::Wrap (z_rot, 0, 360);
+	y_rot = Legacy_Wrap (y_rot, 0, 360);
+	z_rot = Legacy_Wrap (z_rot, 0, 360);
 
 	m_SliderY.SetPos ((int)y_rot);
 	m_SliderZ.SetPos ((int)z_rot);
@@ -212,18 +189,18 @@ OpacityVectorDialogClass::Update_Value ()
 	int y_pos = m_SliderY.GetPos ();
 	int z_pos = m_SliderZ.GetPos ();
 
-	//float x_rot = DEG_TO_RADF ((float)x_pos);
-	float y_rot = DEG_TO_RADF ((float)y_pos);
-	float z_rot = DEG_TO_RADF ((float)z_pos);
+	//float x_rot = Legacy_Deg_To_RadF ((float)x_pos);
+	float y_rot = Legacy_Deg_To_RadF ((float)y_pos);
+	float z_rot = Legacy_Deg_To_RadF ((float)z_pos);
 
-	Matrix3x3 rot_mat (true);
-	//rot_mat.Rotate_X (x_rot);
-	rot_mat.Rotate_Y (y_rot);
-	rot_mat.Rotate_Z (z_rot);
+	const Engine::Math::Quaternion y_rotation{
+		0.0f, std::sin(y_rot * 0.5f), 0.0f, std::cos(y_rot * 0.5f)};
+	const Engine::Math::Quaternion z_rotation{
+		0.0f, 0.0f, std::sin(z_rot * 0.5f), std::cos(z_rot * 0.5f)};
+	const Engine::Math::Quaternion rotation = y_rotation * z_rotation;
+	value.angle = Quaternion(rotation.x, rotation.y, rotation.z, rotation.w);
 
-	value.angle = ::Build_Quaternion (rot_mat);
-
-	float percent = ::tan ((m_OpacityBar->Get_Selection_Pos () / 10.0F) * DEG_TO_RAD (84.5)) / 11.0F;
+	float percent = ::tan ((m_OpacityBar->Get_Selection_Pos () / 10.0F) * Legacy_Deg_To_Rad (84.5)) / 11.0F;
 	percent = min (1.0F, percent);
 	percent = max (0.0F, percent);
 

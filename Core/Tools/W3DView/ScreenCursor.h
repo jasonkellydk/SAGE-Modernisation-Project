@@ -32,9 +32,9 @@
 
 #pragma once
 
+#include <array>
 #include "resource.h"
 #include "WW3D2/RendObj.h"
-#include "WWMath/Vector3i.h"
 
 // Forward declarations
 
@@ -96,7 +96,7 @@ class ScreenCursorClass : public RenderObjClass
 
 		Vector3					m_Verticies[4];
 		Vector3					m_Normals[4];
-		Vector3i					m_Triangles[2];
+		std::array<std::array<unsigned, 3>, 2> m_Triangles{};
 		Vector2					m_UVs[4];
 
 		int 						m_Width;

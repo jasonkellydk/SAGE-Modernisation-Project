@@ -39,7 +39,8 @@
 #pragma once
 
 #include "WWLib/always.h"
-#include "WWMath/vector3.h"
+import Engine.Core.Math.Vector3;
+import Engine.Core.Math.RandomStream;
 import Graphics.Scene.ObjectList;
 
 class W3DCamera;
@@ -62,13 +63,13 @@ public:
 		FLAGS_IGNOREPOSITION,
 	};
 
-	void		Add_Camera_Shake(		const Vector3 & position,
+	void		Add_Camera_Shake(		const Engine::Math::Vector3 & position,
 											float radius = 50.0f,
 											float duration = 1.5f,
 											float power = 1.0f	);
 	void		Timestep(float dt);
 	bool		IsCameraShaking();
-	void		Update_Camera_Shaker(Vector3 camera_position, Vector3 * shaker_angles);
+	void		Update_Camera_Shaker(Engine::Math::Vector3 camera_position, Engine::Math::Vector3 * shaker_angles);
 
 	/**
 	** CameraShakerClass
@@ -78,23 +79,23 @@ public:
 	class CameraShakerClass : public Graphics::SceneListMember
 	{
 	public:
-		CameraShakerClass(const Vector3 & position,float radius,float duration,float power);
+		CameraShakerClass(const Engine::Math::Vector3 & position,float radius,float duration,float power);
 		virtual ~CameraShakerClass() override;
 
 		void					Timestep(float dt)							{ ElapsedTime += dt; }
 		bool					Is_Expired()								{ return (ElapsedTime >= Duration); }
-		void					Compute_Rotations(const Vector3 & pos,Vector3 * set_angles);
+		void					Compute_Rotations(const Engine::Math::Vector3 & pos,Engine::Math::Vector3 * set_angles);
 
 	protected:
 
-		Vector3				Position;
+		Engine::Math::Vector3 Position;
 		float					Radius;
 		float					Duration;
 		float					Intensity;
 
 		float					ElapsedTime;
-		Vector3				Omega;
-		Vector3				Phi;
+		Engine::Math::Vector3 Omega;
+		Engine::Math::Vector3 Phi;
 	};
 
 protected:

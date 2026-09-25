@@ -51,7 +51,7 @@ const char *const TheRelationshipNames[] =
 static_assert(ARRAY_SIZE(TheRelationshipNames) == RELATIONSHIP_COUNT + 1, "Incorrect array size");
 
 //-------------------------------------------------------------------------------------------------
-// TheSuperHackers @todo DO NOT USE THIS FUNCTION! Use WWMath::Normalize_Angle instead. Delete this.
+// TheSuperHackers @todo DO NOT USE THIS FUNCTION! Use Engine::Math::WrapRadians instead. Delete this.
 Real normalizeAngle(Real angle)
 {
 	engine::debug::invariant((!_isnan(angle)), "!_isnan(angle)", __FILE__, __LINE__, "Angle is NAN in normalizeAngle!");

@@ -28,8 +28,8 @@ public:
 	const char *Get_Name() const override { return m_name.c_str(); }
 	void Render(W3DRenderContext &rinfo) override;
 
-	void Get_Obj_Space_Bounding_Sphere(SphereClass &sphere) const override;
-	void Get_Obj_Space_Bounding_Box(AABoxClass &box) const override;
+	void Get_Local_Bounding_Sphere(Engine::Math::Sphere3 &sphere) const override;
+	void Get_Local_Bounds(Engine::Math::AxisAlignedBox3 &box) const override;
 
 private:
 	std::string m_name;

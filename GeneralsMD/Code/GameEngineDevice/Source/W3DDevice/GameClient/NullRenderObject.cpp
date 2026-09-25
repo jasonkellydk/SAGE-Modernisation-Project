@@ -64,16 +64,14 @@ void NullRenderObject::Render(W3DRenderContext &rinfo)
 	(void)rinfo;
 }
 
-void NullRenderObject::Get_Obj_Space_Bounding_Sphere(SphereClass &sphere) const
+void NullRenderObject::Get_Local_Bounding_Sphere(Engine::Math::Sphere3 &sphere) const
 {
-	sphere.Center.Set(0, 0, 0);
-	sphere.Radius = 0.1f;
+	sphere = {{0, 0, 0}, 0.1f};
 }
 
-void NullRenderObject::Get_Obj_Space_Bounding_Box(AABoxClass &box) const
+void NullRenderObject::Get_Local_Bounds(Engine::Math::AxisAlignedBox3 &box) const
 {
-	box.Center.Set(0, 0, 0);
-	box.Extent.Set(0.1f, 0.1f, 0.1f);
+	box = {{-0.1f, -0.1f, -0.1f}, {0.1f, 0.1f, 0.1f}};
 }
 
 Graphics::ModelFactory<W3DRenderObject> *Load_Null_Factory(ChunkLoadClass &cload)

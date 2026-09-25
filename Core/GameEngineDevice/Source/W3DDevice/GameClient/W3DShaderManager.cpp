@@ -66,7 +66,6 @@ import Graphics.Materials.State;
 #include "Common/GlobalData.h"
 #include "Common/GameLOD.h"
 #include "WWLib/cpudetect.h"
-#include "WWMath/matrix4.h"
 #include <cstdint>
 import engine.debug;
 import Graphics.RHI;
@@ -158,7 +157,7 @@ Bool ScreenDefaultFilter::postRender(FilterModes mode, Coord2D &scrollDelta,Bool
 
 	
 	struct _TRANS_LIT_TEX_VERTEX {
-		Vector4 p;
+		Engine::Math::Vector4 p;
 		std::uint32_t color;   // diffuse color
 		float	u;
 		float	v;
@@ -172,16 +171,16 @@ Bool ScreenDefaultFilter::postRender(FilterModes mode, Coord2D &scrollDelta,Bool
 	height=TheTacticalView->getHeight();
 
 	//bottom right
-	v[0].p = Vector4( xpos+width-0.5f, ypos+height-0.5f, 0.0f, 1.0f );
+	v[0].p = Engine::Math::Vector4{xpos+width-0.5f, ypos+height-0.5f, 0.0f, 1.0f};
 	v[0].u = (Real)(xpos+width)/(Real)TheDisplay->getWidth();	v[0].v = (Real)(ypos+height)/(Real)TheDisplay->getHeight();
 	//top right
-	v[1].p = Vector4( xpos+width-0.5f, ypos-0.5f, 0.0f, 1.0f );
+	v[1].p = Engine::Math::Vector4{xpos+width-0.5f, ypos-0.5f, 0.0f, 1.0f};
 	v[1].u = (Real)(xpos+width)/(Real)TheDisplay->getWidth();	v[1].v = (Real)(ypos)/(Real)TheDisplay->getHeight();
 	//bottom left
-	v[2].p = Vector4(  xpos-0.5f, ypos+height-0.5f, 0.0f, 1.0f );
+	v[2].p = Engine::Math::Vector4{xpos-0.5f, ypos+height-0.5f, 0.0f, 1.0f};
 	v[2].u = (Real)(xpos)/(Real)TheDisplay->getWidth();	v[2].v = (Real)(ypos+height)/(Real)TheDisplay->getHeight();
 	//top left
-	v[3].p = Vector4(  xpos-0.5f,  ypos-0.5f, 0.0f, 1.0f );
+	v[3].p = Engine::Math::Vector4{xpos-0.5f,  ypos-0.5f, 0.0f, 1.0f};
 	v[3].u = (Real)(xpos)/(Real)TheDisplay->getWidth();	v[3].v = (Real)(ypos)/(Real)TheDisplay->getHeight();
 	v[0].color = 0xffffffff;
 	v[1].color = 0xffffffff;
@@ -249,7 +248,7 @@ Bool ScreenBWFilter::postRender(FilterModes mode, Coord2D &scrollDelta,Bool &doE
 
 	
 	struct _TRANS_LIT_TEX_VERTEX {
-		Vector4 p;
+		Engine::Math::Vector4 p;
 		std::uint32_t color;   // diffuse color
 		float	u;
 		float	v;
@@ -263,16 +262,16 @@ Bool ScreenBWFilter::postRender(FilterModes mode, Coord2D &scrollDelta,Bool &doE
 	height=TheTacticalView->getHeight();
 
 	//bottom right
-	v[0].p = Vector4( xpos+width-0.5f, ypos+height-0.5f, 0.0f, 1.0f );
+	v[0].p = Engine::Math::Vector4{xpos+width-0.5f, ypos+height-0.5f, 0.0f, 1.0f};
 	v[0].u = (Real)(xpos+width)/(Real)TheDisplay->getWidth();	v[0].v = (Real)(ypos+height)/(Real)TheDisplay->getHeight();
 	//top right
-	v[1].p = Vector4( xpos+width-0.5f, ypos-0.5f, 0.0f, 1.0f );
+	v[1].p = Engine::Math::Vector4{xpos+width-0.5f, ypos-0.5f, 0.0f, 1.0f};
 	v[1].u = (Real)(xpos+width)/(Real)TheDisplay->getWidth();	v[1].v = (Real)(ypos)/(Real)TheDisplay->getHeight();
 	//bottom left
-	v[2].p = Vector4(  xpos-0.5f, ypos+height-0.5f, 0.0f, 1.0f );
+	v[2].p = Engine::Math::Vector4{xpos-0.5f, ypos+height-0.5f, 0.0f, 1.0f};
 	v[2].u = (Real)(xpos)/(Real)TheDisplay->getWidth();	v[2].v = (Real)(ypos+height)/(Real)TheDisplay->getHeight();
 	//top left
-	v[3].p = Vector4(  xpos-0.5f,  ypos-0.5f, 0.0f, 1.0f );
+	v[3].p = Engine::Math::Vector4{xpos-0.5f,  ypos-0.5f, 0.0f, 1.0f};
 	v[3].u = (Real)(xpos)/(Real)TheDisplay->getWidth();	v[3].v = (Real)(ypos)/(Real)TheDisplay->getHeight();
 	v[0].color = 0xffffffff;
 	v[1].color = 0xffffffff;
@@ -479,7 +478,7 @@ Bool ScreenCrossFadeFilter::postRender(FilterModes mode, Coord2D &scrollDelta,Bo
 
 	
 	struct _TRANS_LIT_TEX_VERTEX {
-		Vector4 p;
+		Engine::Math::Vector4 p;
 		std::uint32_t color;   // diffuse color
 		float	u;
 		float	v;
@@ -512,19 +511,19 @@ Bool ScreenCrossFadeFilter::postRender(FilterModes mode, Coord2D &scrollDelta,Bo
 	radius = 25.0f-radius*24.75f;
 */
 	//bottom right
-	v[0].p = Vector4( xpos+width-0.5f, ypos+height-0.5f, 0.0f, 1.0f );
+	v[0].p = Engine::Math::Vector4{xpos+width-0.5f, ypos+height-0.5f, 0.0f, 1.0f};
 	v[0].u = (Real)(xpos+width)/(Real)TheDisplay->getWidth();	v[0].v = (Real)(ypos+height)/(Real)TheDisplay->getHeight();
 	v[0].u1 = 0.5f+radius;	v[0].v1 = 0.5f+radius;
 	//top right
-	v[1].p = Vector4( xpos+width-0.5f, ypos-0.5f, 0.0f, 1.0f );
+	v[1].p = Engine::Math::Vector4{xpos+width-0.5f, ypos-0.5f, 0.0f, 1.0f};
 	v[1].u = (Real)(xpos+width)/(Real)TheDisplay->getWidth();	v[1].v = (Real)(ypos)/(Real)TheDisplay->getHeight();
 	v[1].u1 = 0.5f+radius;	v[1].v1 = 0.5f-radius;
 	//bottom left
-	v[2].p = Vector4(  xpos-0.5f, ypos+height-0.5f, 0.0f, 1.0f );
+	v[2].p = Engine::Math::Vector4{xpos-0.5f, ypos+height-0.5f, 0.0f, 1.0f};
 	v[2].u = (Real)(xpos)/(Real)TheDisplay->getWidth();	v[2].v = (Real)(ypos+height)/(Real)TheDisplay->getHeight();
 	v[2].u1 = 0.5f-radius;	v[2].v1 = 0.5f+radius;
 	//top left
-	v[3].p = Vector4(  xpos-0.5f,  ypos-0.5f, 0.0f, 1.0f );
+	v[3].p = Engine::Math::Vector4{xpos-0.5f,  ypos-0.5f, 0.0f, 1.0f};
 	v[3].u = (Real)(xpos)/(Real)TheDisplay->getWidth();	v[3].v = (Real)(ypos)/(Real)TheDisplay->getHeight();
 	v[3].u1 = 0.5f-radius;	v[3].v1 = 0.5f-radius;
 
@@ -620,7 +619,7 @@ Bool ScreenMotionBlurFilter::postRender(FilterModes mode, Coord2D &scrollDelta,B
 	
 	Bool continueEffect = true;
 	struct _TRANS_LIT_TEX_VERTEX {
-		Vector4 p;
+		Engine::Math::Vector4 p;
 		std::uint32_t color;   // diffuse color
 		float	u;
 		float	v;
@@ -634,16 +633,16 @@ Bool ScreenMotionBlurFilter::postRender(FilterModes mode, Coord2D &scrollDelta,B
 	height=TheTacticalView->getHeight();
 
 	//bottom right
-	v[0].p = Vector4( xpos+width-0.5f, ypos+height-0.5f, 0.0f, 1.0f );
+	v[0].p = Engine::Math::Vector4{xpos+width-0.5f, ypos+height-0.5f, 0.0f, 1.0f};
 	v[0].u = (Real)(xpos+width)/(Real)TheDisplay->getWidth();	v[0].v = (Real)(ypos+height)/(Real)TheDisplay->getHeight();
 	//top right
-	v[1].p = Vector4( xpos+width-0.5f, ypos-0.5f, 0.0f, 1.0f );
+	v[1].p = Engine::Math::Vector4{xpos+width-0.5f, ypos-0.5f, 0.0f, 1.0f};
 	v[1].u = (Real)(xpos+width)/(Real)TheDisplay->getWidth();	v[1].v = (Real)(ypos)/(Real)TheDisplay->getHeight();
 	//bottom left
-	v[2].p = Vector4(  xpos-0.5f, ypos+height-0.5f, 0.0f, 1.0f );
+	v[2].p = Engine::Math::Vector4{xpos-0.5f, ypos+height-0.5f, 0.0f, 1.0f};
 	v[2].u = (Real)(xpos)/(Real)TheDisplay->getWidth();	v[2].v = (Real)(ypos+height)/(Real)TheDisplay->getHeight();
 	//top left
-	v[3].p = Vector4(  xpos-0.5f,  ypos-0.5f, 0.0f, 1.0f );
+	v[3].p = Engine::Math::Vector4{xpos-0.5f,  ypos-0.5f, 0.0f, 1.0f};
 	v[3].u = (Real)(xpos)/(Real)TheDisplay->getWidth();	v[3].v = (Real)(ypos)/(Real)TheDisplay->getHeight();
 	v[0].color = 0xffffffff;
 	v[1].color = 0xffffffff;
@@ -939,7 +938,7 @@ void W3DShaderManager::drawViewport(Int color)
 
 	
 	struct _TRANS_LIT_TEX_VERTEX {
-		Vector4 p;
+		Engine::Math::Vector4 p;
 		std::uint32_t color;   // diffuse color
 		float	u;
 		float	v;
@@ -952,16 +951,16 @@ void W3DShaderManager::drawViewport(Int color)
 	height=TheTacticalView->getHeight();
 
 	//bottom right
-	v[0].p = Vector4( xpos+width-0.5f, ypos+height-0.5f, 0.0f, 1.0f );
+	v[0].p = Engine::Math::Vector4{xpos+width-0.5f, ypos+height-0.5f, 0.0f, 1.0f};
 	v[0].u = (Real)(xpos+width)/(Real)TheDisplay->getWidth();	v[0].v = (Real)(ypos+height)/(Real)TheDisplay->getHeight();
 	//top right
-	v[1].p = Vector4( xpos+width-0.5f, ypos-0.5f, 0.0f, 1.0f );
+	v[1].p = Engine::Math::Vector4{xpos+width-0.5f, ypos-0.5f, 0.0f, 1.0f};
 	v[1].u = (Real)(xpos+width)/(Real)TheDisplay->getWidth();	v[1].v = (Real)(ypos)/(Real)TheDisplay->getHeight();
 	//bottom left
-	v[2].p = Vector4(  xpos-0.5f, ypos+height-0.5f, 0.0f, 1.0f );
+	v[2].p = Engine::Math::Vector4{xpos-0.5f, ypos+height-0.5f, 0.0f, 1.0f};
 	v[2].u = (Real)(xpos)/(Real)TheDisplay->getWidth();	v[2].v = (Real)(ypos+height)/(Real)TheDisplay->getHeight();
 	//top left
-	v[3].p = Vector4(  xpos-0.5f,  ypos-0.5f, 0.0f, 1.0f );
+	v[3].p = Engine::Math::Vector4{xpos-0.5f,  ypos-0.5f, 0.0f, 1.0f};
 	v[3].u = (Real)(xpos)/(Real)TheDisplay->getWidth();	v[3].v = (Real)(ypos)/(Real)TheDisplay->getHeight();
 	v[0].color = color;
 	v[1].color = color;

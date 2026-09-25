@@ -29,8 +29,6 @@
 #include <stdlib.h>
 #include "W3DDevice/GameClient/W3DAssetCatalog.h"
 #include <W3DDevice/GameClient/W3DTextureHandle.h>
-#include <WWMath/tri.h>
-#include <WWMath/colmath.h>
 #include <W3DDevice/GameClient/W3DCastQuery.h>
 #include "W3DDevice/GameClient/W3DCamera.h"
 
@@ -78,19 +76,16 @@ W3DStatusCircle & W3DStatusCircle::operator = (const W3DStatusCircle & that)
 	return *this;
 }
 
-void W3DStatusCircle::Get_Obj_Space_Bounding_Sphere(SphereClass & sphere) const
+void W3DStatusCircle::Get_Local_Bounding_Sphere(Engine::Math::Sphere3 & sphere) const
 {
-	Vector3	ObjSpaceCenter((float)1000*0.5f,(float)1000*0.5f,(float)0);
-	float length = ObjSpaceCenter.Length();
-
-	sphere.Init(ObjSpaceCenter, length);
+	const Engine::Math::Vector3 center{500.0f, 500.0f, 0.0f};
+	sphere = {center, center.Length()};
 }
 
-void W3DStatusCircle::Get_Obj_Space_Bounding_Box(AABoxClass & box) const
+void W3DStatusCircle::Get_Local_Bounds(Engine::Math::AxisAlignedBox3 & box) const
 {
-	Vector3	minPt(0,0,0);
-	Vector3	maxPt((float)1000,(float)1000,(float)1000);
-	box.Init(minPt,maxPt);
+	// Legacy AABoxClass::Init(center (0,0,0), extent (1000,1000,1000)).
+	box = {{-1000, -1000, -1000}, {1000, 1000, 1000}};
 }
 
 Int W3DStatusCircle::Class_ID() const

@@ -1,5 +1,4 @@
 set(PLUGLIB_SRC
-    "aaplane.h"
     "always.h"
     "BITTYPE.h"
     "bool.h"
@@ -25,7 +24,6 @@ set(PLUGLIB_SRC
     "noinit.h"
     "palette.cpp"
     "palette.h"
-    "plane.h"
     "PROGRESS.h"
     "rawfile.cpp"
     "rawfile.h"
@@ -38,7 +36,6 @@ set(PLUGLIB_SRC
     "Vector.h"
     "vector2.h"
     "vector3.h"
-    "vector3i.h"
     "vector4.h"
     "visualc.h"
     "w3d_file.h"
@@ -47,8 +44,6 @@ set(PLUGLIB_SRC
     "watcom.h"
     "win.h"
     "wwfile.h"
-    "wwmath.cpp"
-    "wwmath.h"
     "WWmatrix3.cpp"
     "WWmatrix3.h"
 )
@@ -60,6 +55,7 @@ target_sources(core_pluglib PRIVATE ${PLUGLIB_SRC})
 
 target_link_libraries(core_pluglib PUBLIC
     corei_always
+    engine_core_math
 )
 
 target_link_libraries(core_pluglib PRIVATE

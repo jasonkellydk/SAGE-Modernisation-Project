@@ -151,6 +151,9 @@ public:
 
 protected:
 
+	void createScenes();
+	void destroyScenes();
+	void removeSceneObjects();
 	void initAssets();									///< init assets for WW3D
 	void init3DScene();									///< init 3D scene for WW3D
 	void init2DScene();									///< init 2D scene for WW3D

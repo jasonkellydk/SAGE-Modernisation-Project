@@ -461,7 +461,6 @@ void EditWindow::init( UnsignedInt clientWidth, UnsignedInt clientHeight )
 	TheW3DFileSystem = new W3DFileSystem;  // our own file system for asset locations
 
 	// initialize W3D
-	WWMath::Init();
 	Graphics::Get_Render_Diagnostics() = {};
 	Graphics::Get_Texture_Quality_Settings().prefer_16_bits = true;
 	WW3D::Init();
@@ -504,8 +503,6 @@ void EditWindow::shutdown()
 	Graphics::Shutdown_Tool_Frame();
 	WW3D::Shutdown();
 	Graphics::Graphics_Shutdown_Shared_Frame();
-	WWMath::Shutdown();
-
 	// delete the w3d file system
 	delete TheW3DFileSystem;
 	TheW3DFileSystem = nullptr;

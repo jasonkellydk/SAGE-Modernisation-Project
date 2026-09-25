@@ -7,7 +7,7 @@
 #include "WWLib/refcount.h"
 #include "WWLib/ref_ptr.h"
 #include "WWLib/wwstring.h"
-#include "WWMath/vector3.h"
+import Engine.Core.Math.Vector3;
 import Assets.Images.Buffer;
 import Assets.Images.PixelEncoding;
 import Graphics.RHI;
@@ -171,8 +171,8 @@ public:
     void Set_Dirty() noexcept { m_dirty = true; }
     void Clean() noexcept { m_dirty = false; }
 
-    void Set_HSV_Shift(const Vector3& hsv_shift) noexcept;
-    const Vector3& Get_HSV_Shift() const noexcept { return m_hsv_shift; }
+    void Set_HSV_Shift(const Engine::Math::Vector3& hsv_shift) noexcept;
+    const Engine::Math::Vector3& Get_HSV_Shift() const noexcept { return m_hsv_shift; }
 
     const std::shared_ptr<const Graphics::ResourceLoadSource>& Loading_Source() const noexcept
     {
@@ -220,7 +220,7 @@ private:
     Graphics::TextureSampling m_sampling;
     Graphics::RHITexture m_texture_description{};
     Assets::PixelEncoding m_texture_format = Assets::PixelEncoding::Unknown;
-    Vector3 m_hsv_shift{};
+    Engine::Math::Vector3 m_hsv_shift{};
     StringClass m_name;
     StringClass m_full_path;
     std::shared_ptr<LoadState> m_load_state;

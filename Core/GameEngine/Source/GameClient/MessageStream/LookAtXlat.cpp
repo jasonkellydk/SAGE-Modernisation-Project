@@ -27,6 +27,7 @@
 // Author: Michael S. Booth, April 2001
 
 #include "PreRTS.h"
+import Engine.Core.Math.Scalar;
 import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/FramePacer.h"
@@ -379,8 +380,8 @@ GameMessageDisposition LookAtTranslator::translateGameMessage(const GameMessage 
 				// while using force attack mode for convenience.
 				if (TheInGameUI->isInForceAttackMode())
 				{
-					const Real snapRadians = DEG_TO_RADF(45);
-					targetAngle = WWMath::Round(targetAngle / snapRadians) * snapRadians;
+					const Real snapRadians = (45.0f * Engine::Math::Pi) / 180.0f;
+					targetAngle = std::floor(targetAngle / snapRadians + 0.5f) * snapRadians;
 				}
 
 				TheTacticalView->userSetAngle(targetAngle);

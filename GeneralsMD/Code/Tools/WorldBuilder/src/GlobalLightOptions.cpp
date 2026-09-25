@@ -19,6 +19,7 @@
 // GlobalLightOptions.cpp : implementation file
 //
 
+#include <cmath>
 #include "StdAfx.h"
 #include "resource.h"
 #include "Lib/BaseType.h"
@@ -55,8 +56,8 @@ static void calcNewLight(Int lr, Int fb, Vector3 *newLight)
 	newLight->Set(0,0,-1);
 	Real yAngle = PI*(lr-90)/180;
 	Real xAngle = PI*(fb-90)/180;
-	Real zAngle = xAngle * WWMath::Sin(yAngle);
-	xAngle *= WWMath::Cos(yAngle);
+	Real zAngle = xAngle * std::sin(yAngle);
+	xAngle *= std::cos(yAngle);
 	newLight->Rotate_Y(yAngle);
 	newLight->Rotate_X(xAngle);
 	newLight->Rotate_Z(zAngle);
@@ -95,8 +96,8 @@ void GlobalLightOptions::updateEditFields()
 void GlobalLightOptions::showLightFeedback(Int lightIndex)
 {
 	Vector3 light(0,0,0);
-	light.X = sin(PI/2.0f+m_angleElevation[lightIndex]/180.0f*PI)*cos(m_angleAzimuth[lightIndex]/180.0f*PI);// -WWMath::Sin(PI*(m_angleLR[lightIndex]-90)/180);
-	light.Y = sin(PI/2.0f+m_angleElevation[lightIndex]/180.0f*PI)*sin(m_angleAzimuth[lightIndex]/180.0f*PI);//-WWMath::Sin(PI*(m_angleFB[lightIndex]-90)/180);
+	light.X = sin(PI/2.0f+m_angleElevation[lightIndex]/180.0f*PI)*cos(m_angleAzimuth[lightIndex]/180.0f*PI);// -std::sin(PI*(m_angleLR[lightIndex]-90)/180);
+	light.Y = sin(PI/2.0f+m_angleElevation[lightIndex]/180.0f*PI)*sin(m_angleAzimuth[lightIndex]/180.0f*PI);//-std::sin(PI*(m_angleFB[lightIndex]-90)/180);
 	light.Z = cos (PI/2.0f+m_angleElevation[lightIndex]/180.0f*PI);
 
 	WbView3d * pView = CWorldBuilderDoc::GetActive3DView();
@@ -110,8 +111,8 @@ void GlobalLightOptions::showLightFeedback(Int lightIndex)
 void GlobalLightOptions::applyAngle(Int lightIndex)
 {
 	Vector3 light(0,0,0);
-	light.X = sin(PI/2.0f+m_angleElevation[lightIndex]/180.0f*PI)*cos(m_angleAzimuth[lightIndex]/180.0f*PI);// -WWMath::Sin(PI*(m_angleLR[lightIndex]-90)/180);
-	light.Y = sin(PI/2.0f+m_angleElevation[lightIndex]/180.0f*PI)*sin(m_angleAzimuth[lightIndex]/180.0f*PI);//-WWMath::Sin(PI*(m_angleFB[lightIndex]-90)/180);
+	light.X = sin(PI/2.0f+m_angleElevation[lightIndex]/180.0f*PI)*cos(m_angleAzimuth[lightIndex]/180.0f*PI);// -std::sin(PI*(m_angleLR[lightIndex]-90)/180);
+	light.Y = sin(PI/2.0f+m_angleElevation[lightIndex]/180.0f*PI)*sin(m_angleAzimuth[lightIndex]/180.0f*PI);//-std::sin(PI*(m_angleFB[lightIndex]-90)/180);
 	light.Z = cos (PI/2.0f+m_angleElevation[lightIndex]/180.0f*PI);
 
 	CString str;
@@ -553,12 +554,12 @@ void GlobalLightOptions::stuffValuesIntoFields(Int lightIndex)
 	light.Normalize();
 
 
-	Real angleAzimuth = atan2(light.Y,light.X);//WWMath::Asin(light.Y);
+	Real angleAzimuth = atan2(light.Y,light.X);//std::asin(light.Y);
 	azimuth = angleAzimuth*180.0f/PI;//90-(angleFB/PI)*180;
 	if (azimuth < 0) {
 		azimuth += 360;
 	}
- 	Real angleElevation = acos(light.Z);//WWMath::Asin(light.X);
+	Real angleElevation = acos(light.Z);//std::asin(light.X);
 	elevation = (angleElevation-PI/2.0f)*180.0f/PI;//90-(angleLR/PI)*180;
 
 	m_angleElevation[lightIndex] = elevation;

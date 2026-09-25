@@ -24,7 +24,6 @@
 #include "EmitterParticlePropPage.h"
 #include "WW3D2/PartEmt.h"
 #include "Utils.h"
-#include "Vector3RndCombo.h"
 #include "VolumeRandomDialog.h"
 #include "EmitterInstanceList.h"
 
@@ -171,7 +170,7 @@ EmitterParticlePropPageClass::OnApply ()
 	m_pEmitterList->Set_Emission_Rate (m_Rate);
 	m_pEmitterList->Set_Burst_Size (m_BurstSize);
 	m_pEmitterList->Set_Max_Emissions (m_MaxParticles);
-	m_pEmitterList->Set_Creation_Volume (m_Randomizer->Clone ());
+	m_pEmitterList->Set_Creation_Volume (new Engine::Math::RandomVector3Generator (*m_Randomizer));
 
 	// Allow the base class to process this message
 	return CPropertyPage::OnApply ();

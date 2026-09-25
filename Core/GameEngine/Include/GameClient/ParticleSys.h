@@ -36,8 +36,8 @@
 #include "Common/SubsystemInterface.h"
 #include "GameClient/ClientRandomValue.h"
 
-#include "WWMath/matrix3d.h"		///< @todo Replace with our own matrix library
 #include "Common/STLTypedefs.h"
+import Engine.Core.Math.AffineTransform3;
 
 
 /// @todo Once the client framerate is decoupled, the frame counters within will have to become time-based
@@ -575,7 +575,7 @@ public:
 
 	void setPosition( const Coord3D *pos );			///< set the position of the particle system
 	void getPosition( Coord3D *pos );				///< get the position of the particle system
-	void setLocalTransform( const Matrix3D *matrix );	///< set the system's local transform
+	void setLocalTransform(const Engine::Math::AffineTransform3 &transform);
 	void rotateLocalTransformX( Real x );				///< rotate local transform matrix
 	void rotateLocalTransformY( Real y );				///< rotate local transform matrix
 	void rotateLocalTransformZ( Real z );				///< rotate local transform matrix
@@ -697,8 +697,8 @@ protected:
 	DrawableID				m_attachedToDrawableID;					///< if non-zero, system is parented to this Drawable
 	ObjectID					m_attachedToObjectID;						///< if non-zero, system is parented to this Object
 
-	Matrix3D					m_localTransform;								///< local orientation & position of system
-	Matrix3D					m_transform;										///< composite transform of parent Drawable and local
+	Engine::Math::AffineTransform3 m_localTransform;	///< Local orientation and position.
+	Engine::Math::AffineTransform3 m_transform;		///< Composite parent and local transform.
 
 	UnsignedInt				m_burstDelayLeft;								///< when zero, emit a particle burst
 	UnsignedInt				m_delayLeft;										///< decremented until zero

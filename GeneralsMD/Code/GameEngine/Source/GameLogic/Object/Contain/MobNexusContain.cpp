@@ -243,9 +243,9 @@ void MobNexusContain::onRemoving( Object *rider )
 		if (draw)
 		{
 			Coord3D bonePos, worldPos;
-			if (draw->getPristineBonePositions(d->m_exitBone.str(), 0, &bonePos, nullptr, 1) == 1)
+			if (draw->getPristineBonePositions(d->m_exitBone.str(), 0, &bonePos, 1) == 1)
 			{
-				getObject()->convertBonePosToWorldPos(&bonePos, nullptr, &worldPos, nullptr);
+				getObject()->transformBoneToWorld(&bonePos, nullptr, &worldPos, nullptr);
 				rider->setPosition(&worldPos);
 			}
 		}

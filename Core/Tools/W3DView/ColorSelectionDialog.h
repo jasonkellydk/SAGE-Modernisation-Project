@@ -22,7 +22,7 @@
 //
 
 #include "resource.h"
-#include "WWMath/vector3.h"
+import Engine.Core.Math.Vector3;
 
 
 /////////////////////////////////////////////////////////////////////////////
@@ -33,7 +33,7 @@ class ColorSelectionDialogClass : public CDialog
 {
 // Construction
 public:
-	ColorSelectionDialogClass (const Vector3 &def_color, CWnd *pParent = nullptr);   // standard constructor
+	ColorSelectionDialogClass (const Engine::Math::Vector3 &def_color, CWnd *pParent = nullptr);   // standard constructor
 
 // Dialog Data
 	//{{AFX_DATA(ColorSelectionDialogClass)
@@ -77,8 +77,8 @@ protected:
 		//
 		//	Public methods
 		//
-		const Vector3 &		Get_Color () const				{ return m_Color; }
-		void						Set_Color (const Vector3 &color) { m_Color = color; }
+		const Engine::Math::Vector3 & Get_Color () const { return m_Color; }
+		void Set_Color (const Engine::Math::Vector3 &color) { m_Color = color; }
 
 	protected:
 
@@ -95,8 +95,8 @@ protected:
 		//
 		//	Private member data
 		//
-		Vector3					m_Color;
-		Vector3					m_PaintColor;
+		Engine::Math::Vector3 m_Color;
+		Engine::Math::Vector3 m_PaintColor;
 };
 
 //{{AFX_INSERT_LOCATION}}

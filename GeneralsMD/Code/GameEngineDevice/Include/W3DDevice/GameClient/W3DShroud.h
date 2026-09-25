@@ -32,7 +32,6 @@ import Graphics.Resources.Textures.Sampling;
 import Graphics.Resources.Textures.Edit;
 import Assets.Images.Buffer;
 
-class AABoxClass;
 class WorldHeightMap;
 import engine.platform.time;
 

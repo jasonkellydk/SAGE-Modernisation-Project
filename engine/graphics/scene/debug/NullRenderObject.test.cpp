@@ -16,6 +16,11 @@ import Assets.Adapters.W3D.Null;
 import Graphics.Tests.Device;
 import Graphics.RHI;
 import Graphics.Scene.Models.Factory;
+import Engine.Core.Math.LineSegment3;
+import Engine.Core.Math.AxisAlignedBox3;
+import Engine.Core.Math.OrientedBox3;
+import Engine.Core.Math.Vector3;
+import Engine.Core.Math.AffineTransform3;
 
 #include "W3DDevice/GameClient/NullRenderObject.h"
 #include "W3DDevice/GameClient/W3DAssetCatalog.h"
@@ -24,9 +29,6 @@ import Graphics.Scene.Models.Factory;
 #include "W3DDevice/GameClient/W3DSceneQueryMask.h"
 #include "W3DDevice/GameClient/W3DIntersectionQuery.h"
 #include "W3DDevice/GameClient/W3DRenderContext.h"
-#include "WWMath/aabox.h"
-#include "WWMath/lineseg.h"
-#include "WWMath/obbox.h"
 #include "WWLib/RAMFILE.h"
 #include "WWLib/chunkio.h"
 #include "WWLib/ref_ptr.h"
@@ -103,11 +105,11 @@ void Add_Dynamic_Null(W3DAssetCatalog &catalog, const char *name)
 		}));
 }
 
-void Check_Vector(const Vector3 &actual, const Vector3 &expected)
+void Check_Vector(const Engine::Math::Vector3 &actual, const Engine::Math::Vector3 &expected)
 {
-	BOOST_CHECK_EQUAL(actual.X, expected.X);
-	BOOST_CHECK_EQUAL(actual.Y, expected.Y);
-	BOOST_CHECK_EQUAL(actual.Z, expected.Z);
+	BOOST_CHECK_EQUAL(actual.x, expected.x);
+	BOOST_CHECK_EQUAL(actual.y, expected.y);
+	BOOST_CHECK_EQUAL(actual.z, expected.z);
 }
 
 }
@@ -121,23 +123,35 @@ BOOST_AUTO_TEST_CASE(null_object_preserves_class_identity_and_truncates_direct_n
 	BOOST_CHECK_EQUAL(object.Get_Num_Polys(), 0);
 	BOOST_CHECK_EQUAL(std::string(object.Get_Name()),
 		std::string(NullNameCapacity, 'N'));
+	const Engine::Math::Sphere3 world_sphere = object.Get_Bounding_Sphere();
+	BOOST_CHECK_EQUAL(world_sphere.center.x, 0.0f);
+	BOOST_CHECK_EQUAL(world_sphere.center.y, 0.0f);
+	BOOST_CHECK_EQUAL(world_sphere.center.z, 0.0f);
+	BOOST_CHECK_EQUAL(world_sphere.radius, 0.1f);
+	const Engine::Math::AxisAlignedBox3 world_box = object.Get_Bounding_Box();
+	BOOST_CHECK_EQUAL(world_box.minimum.x, -0.1f);
+	BOOST_CHECK_EQUAL(world_box.minimum.y, -0.1f);
+	BOOST_CHECK_EQUAL(world_box.minimum.z, -0.1f);
+	BOOST_CHECK_EQUAL(world_box.maximum.x, 0.1f);
+	BOOST_CHECK_EQUAL(world_box.maximum.y, 0.1f);
+	BOOST_CHECK_EQUAL(world_box.maximum.z, 0.1f);
 
-	SphereClass sphere(Vector3(4, 5, 6), 7.0f);
-	object.Get_Obj_Space_Bounding_Sphere(sphere);
-	Check_Vector(sphere.Center, Vector3(0, 0, 0));
-	BOOST_CHECK_EQUAL(sphere.Radius, 0.1f);
+	Engine::Math::Sphere3 sphere{{4, 5, 6}, 7.0f};
+	object.Get_Local_Bounding_Sphere(sphere);
+	BOOST_CHECK(sphere.center == (Engine::Math::Vector3{0, 0, 0}));
+	BOOST_CHECK_EQUAL(sphere.radius, 0.1f);
 
-	AABoxClass box(Vector3(4, 5, 6), Vector3(7, 8, 9));
-	object.Get_Obj_Space_Bounding_Box(box);
-	Check_Vector(box.Center, Vector3(0, 0, 0));
-	Check_Vector(box.Extent, Vector3(0.1f, 0.1f, 0.1f));
+	Engine::Math::AxisAlignedBox3 box{{-4, -3, -2}, {4, 3, 2}};
+	object.Get_Local_Bounds(box);
+	BOOST_CHECK(box.minimum == (Engine::Math::Vector3{-0.1f, -0.1f, -0.1f}));
+	BOOST_CHECK(box.maximum == (Engine::Math::Vector3{0.1f, 0.1f, 0.1f}));
 }
 
 BOOST_AUTO_TEST_CASE(null_clone_copies_name_but_starts_with_default_render_state)
 {
 	NullRenderObject source("source");
-	Matrix3D transform(true);
-	transform.Set_Translation(Vector3(10, 20, 30));
+	Engine::Math::AffineTransform3 transform = Engine::Math::AffineTransform3::Identity();
+	transform.Set_Translation(Engine::Math::Vector3{10, 20, 30});
 	source.Set_Transform(transform);
 	source.Set_Hidden(true);
 	source.Set_Animation_Hidden(true);
@@ -148,7 +162,7 @@ BOOST_AUTO_TEST_CASE(null_clone_copies_name_but_starts_with_default_render_state
 	RefCountPtr<W3DRenderObject> clone = Create_No_Add_Ref(source.Clone());
 	BOOST_REQUIRE(clone != nullptr);
 	BOOST_CHECK_EQUAL(std::string(clone->Get_Name()), "source");
-	Check_Vector(clone->Get_Position(), Vector3(0, 0, 0));
+	Check_Vector(clone->Get_Position(), Engine::Math::Vector3{0, 0, 0});
 	BOOST_CHECK(!clone->Is_Hidden());
 	BOOST_CHECK(!clone->Is_Animation_Hidden());
 	BOOST_CHECK(!clone->Is_Force_Visible());
@@ -167,11 +181,11 @@ BOOST_AUTO_TEST_CASE(null_assignment_copies_render_flags_without_replacing_trans
 	source.Set_Native_Screen_Size(3.5f);
 
 	NullRenderObject target("target");
-	target.Set_Position(Vector3(9, 8, 7));
+	target.Set_Position(Engine::Math::Vector3{9, 8, 7});
 	target = source;
 
 	BOOST_CHECK_EQUAL(std::string(target.Get_Name()), "source");
-	Check_Vector(target.Get_Position(), Vector3(9, 8, 7));
+	Check_Vector(target.Get_Position(), Engine::Math::Vector3{9, 8, 7});
 	BOOST_CHECK(target.Is_Hidden());
 	BOOST_CHECK(target.Is_Animation_Hidden());
 	BOOST_CHECK(target.Is_Force_Visible());
@@ -182,30 +196,30 @@ BOOST_AUTO_TEST_CASE(null_assignment_copies_render_flags_without_replacing_trans
 BOOST_AUTO_TEST_CASE(null_object_does_not_report_collision_queries)
 {
 	NullRenderObject object;
-	const LineSegClass line(Vector3(-1, 0, 0), Vector3(1, 0, 0));
+	const Engine::Math::LineSegment3 line{{-1, 0, 0}, {1, 0, 0}};
 
-	CastResultStruct ray_result;
+	Engine::Math::CollisionResult3 ray_result;
 	W3DRayCastQuery ray(line, &ray_result, SCENE_QUERY_ALL);
 	BOOST_CHECK(!object.Cast_Ray(ray));
 
-	CastResultStruct aa_cast_result;
+	Engine::Math::CollisionResult3 aa_cast_result;
 	W3DBoxCastQuery moving_aa(
-		AABoxClass(Vector3(-1, 0, 0), Vector3(0.25f, 0.25f, 0.25f)),
-		Vector3(2, 0, 0), &aa_cast_result, SCENE_QUERY_ALL);
+		Engine::Math::AxisAlignedBox3{{-1.25f, -0.25f, -0.25f}, {-0.75f, 0.25f, 0.25f}},
+		Engine::Math::Vector3{2, 0, 0}, &aa_cast_result, SCENE_QUERY_ALL);
 	BOOST_CHECK(!object.Cast_AABox(moving_aa));
 
-	CastResultStruct ob_cast_result;
+	Engine::Math::CollisionResult3 ob_cast_result;
 	W3DOrientedBoxCastQuery moving_ob(
-		OBBoxClass(Vector3(-1, 0, 0), Vector3(0.25f, 0.25f, 0.25f)),
-		Vector3(2, 0, 0), &ob_cast_result, SCENE_QUERY_ALL);
+		Engine::Math::OrientedBox3{{-1, 0, 0}, {0.25f, 0.25f, 0.25f}},
+		Engine::Math::Vector3{2, 0, 0}, &ob_cast_result, SCENE_QUERY_ALL);
 	BOOST_CHECK(!object.Cast_OBBox(moving_ob));
 
 	W3DBoxIntersectionQuery aa_intersection(
-		AABoxClass(Vector3(0, 0, 0), Vector3(1, 1, 1)), SCENE_QUERY_ALL);
+		Engine::Math::AxisAlignedBox3{{-1, -1, -1}, {1, 1, 1}}, SCENE_QUERY_ALL);
 	BOOST_CHECK(!object.Intersect_AABox(aa_intersection));
 
 	W3DOrientedBoxIntersectionQuery ob_intersection(
-		OBBoxClass(Vector3(0, 0, 0), Vector3(1, 1, 1)), SCENE_QUERY_ALL);
+		Engine::Math::OrientedBox3{{0, 0, 0}, {1, 1, 1}}, SCENE_QUERY_ALL);
 	BOOST_CHECK(!object.Intersect_OBBox(ob_intersection));
 }
 
@@ -243,9 +257,9 @@ BOOST_AUTO_TEST_CASE(null_reserved_factory_is_case_insensitive_and_instances_are
 	BOOST_CHECK_EQUAL(std::string(first->Get_Name()), "NULL");
 	BOOST_CHECK_EQUAL(std::string(second->Get_Name()), "NULL");
 
-	first->Set_Position(Vector3(4, 5, 6));
-	Check_Vector(first->Get_Position(), Vector3(4, 5, 6));
-	Check_Vector(second->Get_Position(), Vector3(0, 0, 0));
+	first->Set_Position(Engine::Math::Vector3{4, 5, 6});
+	Check_Vector(first->Get_Position(), Engine::Math::Vector3{4, 5, 6});
+	Check_Vector(second->Get_Position(), Engine::Math::Vector3{0, 0, 0});
 
 	// NULL inherits W3DRenderObject's deliberately empty Set_Name contract.
 	first->Set_Name("renamed");
@@ -407,7 +421,7 @@ BOOST_AUTO_TEST_CASE(null_render_object_persistence_falls_back_to_reserved_facto
 	BOOST_REQUIRE(reserved != nullptr);
 
 	NullRenderObject source("Saved.Null");
-	source.Set_Position(Vector3(7, 8, 9));
+	source.Set_Position(Engine::Math::Vector3{7, 8, 9});
 	RAMFileClass file(nullptr, 512);
 	BOOST_REQUIRE(file.Open(FileClass::WRITE));
 	ChunkSaveClass save(&file);
@@ -430,6 +444,6 @@ BOOST_AUTO_TEST_CASE(null_render_object_persistence_falls_back_to_reserved_facto
 		Create_No_Add_Ref(static_cast<W3DRenderObject *>(persisted));
 	BOOST_REQUIRE(loaded != nullptr);
 	BOOST_CHECK_EQUAL(std::string(loaded->Get_Name()), "NULL");
-	Check_Vector(loaded->Get_Position(), Vector3(7, 8, 9));
+	Check_Vector(loaded->Get_Position(), Engine::Math::Vector3{7, 8, 9});
 	BOOST_CHECK(catalog.Find_Prototype("NULL") == reserved);
 }

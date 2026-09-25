@@ -28,6 +28,7 @@
 
 #include "PreRTS.h"
 import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
+import Engine.Core.Math.AffineTransform3;
 
 #include "Common/Thing.h"
 #include "Common/ThingTemplate.h"
@@ -241,28 +242,25 @@ void MissileAIUpdate::projectileFireAtObjectOrPosition( const Object *victim, co
 	}
 
 
-	Vector3 dir = getObject()->getTransformMatrix()->Get_X_Vector();
-	dir.Normalize();
-	dir.Z += 2*zFactor;
-	dir.Normalize();
+	Engine::Math::Vector3 dir = getObject()->worldTransform().Basis_X().Normalized_Legacy();
+	dir.z += 2*zFactor;
+	dir = dir.Normalized_Legacy();
 	PhysicsBehavior* physics = getObject()->getPhysics();
 	if (physics && initialVelToUse > 0)
 	{
 		Real forceMag = physics->getMass() * initialVelToUse;
 
 		Coord3D force;
-		force.x = forceMag * dir.X;
-		force.y = forceMag * dir.Y;
-		force.z = forceMag * dir.Z;
+		force.x = forceMag * dir.x;
+		force.y = forceMag * dir.y;
+		force.z = forceMag * dir.z;
 
 		physics->applyMotiveForce( &force );
 	}
 
-	Vector3 objPos(obj->getPosition()->x, obj->getPosition()->y, obj->getPosition()->z);
-
-	Matrix3D newXform;
-	newXform.buildTransformMatrix( objPos, dir );
-	obj->setTransformMatrix( &newXform );
+	const Coord3D *position = obj->getPosition();
+	obj->setWorldTransform(Engine::Math::AffineTransform3::From_Unit_Forward_Direction(
+		{position->x, position->y, position->z}, dir));
 
 	switchToState(LAUNCH);
 	m_isTrackingTarget = false;

@@ -61,8 +61,8 @@ public:
 //	virtual Bool					Intersect_AABox(W3DBoxIntersectionQuery & boxtest);
 //	virtual Bool					Intersect_OBBox(W3DOrientedBoxIntersectionQuery & boxtest);
 
-	virtual void					Get_Obj_Space_Bounding_Sphere(SphereClass & sphere) const override;
-    virtual void					Get_Obj_Space_Bounding_Box(AABoxClass & aabox) const override;
+	virtual void					Get_Local_Bounding_Sphere(Engine::Math::Sphere3 & sphere) const override;
+    virtual void					Get_Local_Bounds(Engine::Math::AxisAlignedBox3 & aabox) const override;
 
 
 //	virtual int					 	Get_Num_Polys() const;

@@ -32,6 +32,7 @@
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 #include "PreRTS.h"
 import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
+import Engine.Core.Math.Vector2;
 #include "Common/Thing.h"
 #include "Common/ThingTemplate.h"
 #include "Common/INI.h"
@@ -324,14 +325,11 @@ void CountermeasuresBehavior::launchVolley()
 		//Calculate the angle to fire the flare by taking the facing angle and rotating it
 		//and then scaling it by it's velocity (if it's moving).
 		obj->getUnitDirectionVector3D( vel );
-		Vector2 flareVector;
-		flareVector.X = vel.x;
-		flareVector.Y = vel.y;
-		flareVector.Normalize();
-		flareVector.Rotate( angle );
+		const Engine::Math::Vector2 flareVector =
+			Engine::Math::Vector2{vel.x, vel.y}.Normalized_Legacy().Rotated(angle);
 		//Give it back to the Coord3D
-		vel.x = flareVector.X;
-		vel.y = flareVector.Y;
+		vel.x = flareVector.x;
+		vel.y = flareVector.y;
 		vel.z = 0.0f;
 
 		Real velocity = physics->getVelocityMagnitude();
@@ -416,5 +414,4 @@ void CountermeasuresBehavior::loadPostProcess()
 	UpgradeMux::upgradeMuxLoadPostProcess();
 
 }
-
 

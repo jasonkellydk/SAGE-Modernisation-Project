@@ -3734,8 +3734,9 @@ void ScriptActions::doNamedSetBoobytrapped( const AsciiString& thingTemplateName
 
 					//Get the angle and transform matrix from the obj... then transform the calculated
 					//position
-					const Matrix3D *transform = obj->getTransformMatrix();
-					transform->Transform_Vector( *transform, *(Vector3*)(&pos), (Vector3*)(&pos) );
+					const Engine::Math::Vector3 transformed = obj->worldTransform().Transform_Point(
+						{pos.x, pos.y, pos.z});
+					pos = {transformed.x, transformed.y, transformed.z};
 
 					update->initStickyBomb( obj, nullptr, &pos );
 				}
@@ -3773,8 +3774,9 @@ void ScriptActions::doTeamSetBoobytrapped( const AsciiString& thingTemplateName,
 
 					//Get the angle and transform matrix from the obj... then transform the calculated
 					//position
-					const Matrix3D *transform = obj->getTransformMatrix();
-					transform->Transform_Vector( *transform, *(Vector3*)(&pos), (Vector3*)(&pos) );
+					const Engine::Math::Vector3 transformed = obj->worldTransform().Transform_Point(
+						{pos.x, pos.y, pos.z});
+					pos = {transformed.x, transformed.y, transformed.z};
 
 					update->initStickyBomb( obj, nullptr, &pos );
 				}

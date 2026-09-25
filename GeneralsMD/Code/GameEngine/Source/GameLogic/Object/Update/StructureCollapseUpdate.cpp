@@ -46,8 +46,18 @@ import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 #include "GameLogic/ObjectCreationList.h"
 #include "GameClient/Drawable.h"
 #include "GameClient/InGameUI.h"
+import Engine.Core.Math.AffineTransform3;
+import Engine.Core.Math.Vector3;
 
 const Int MAX_IDX = 32;
+
+// Builds the vector through a function call (rather than a braced initializer) so that the
+// client random values are drawn in the same (compiler-defined) argument order as the original
+// Vector3::Set call.
+static Engine::Math::Vector3 makeShudderVector(Real x, Real y, Real z)
+{
+	return Engine::Math::Vector3{x, y, z};
+}
 
 //-------------------------------------------------------------------------------------------------
 //-------------------------------------------------------------------------------------------------
@@ -185,15 +195,12 @@ UpdateSleepTime StructureCollapseUpdate::update()
 		Object *building = getObject();
 
 		const Coord3D *currentPosition = building->getPosition();
-		Vector3 shudder;
-		shudder.Set(GameClientRandomValueReal(-(d->m_maxShudder), d->m_maxShudder), GameClientRandomValueReal(-(d->m_maxShudder), d->m_maxShudder), 0);
+		Engine::Math::Vector3 shudder = makeShudderVector(GameClientRandomValueReal(-(d->m_maxShudder), d->m_maxShudder), GameClientRandomValueReal(-(d->m_maxShudder), d->m_maxShudder), 0);
 
-		const Matrix3D *instMatrix = building->getDrawable()->getInstanceMatrix();
-		Matrix3D newInstMatrix;
-		newInstMatrix = *instMatrix;
-		newInstMatrix.Set_Translation(shudder);
+		Engine::Math::AffineTransform3 newInstTransform = *building->getDrawable()->instanceTransform();
+		newInstTransform.Set_Translation(shudder);
 
-		building->getDrawable()->setInstanceMatrix(&newInstMatrix);
+		building->getDrawable()->setInstanceTransform(&newInstTransform);
 
 		if (now >= m_collapseFrame)
 		{
@@ -213,14 +220,11 @@ UpdateSleepTime StructureCollapseUpdate::update()
 		m_collapseVelocity -= TheGlobalData->m_gravity * (1.0 - d->m_collapseDamping);
 
 		const Coord3D *currentPosition = building->getPosition();
-		Vector3 shudder;
-		shudder.Set(GameClientRandomValueReal(-(d->m_maxShudder), d->m_maxShudder), GameClientRandomValueReal(-(d->m_maxShudder), d->m_maxShudder), m_currentHeight);
-		const Matrix3D *instMatrix = building->getDrawable()->getInstanceMatrix();
-		Matrix3D newInstMatrix;
-		newInstMatrix = *instMatrix;
-		newInstMatrix.Set_Translation(shudder);
+		Engine::Math::Vector3 shudder = makeShudderVector(GameClientRandomValueReal(-(d->m_maxShudder), d->m_maxShudder), GameClientRandomValueReal(-(d->m_maxShudder), d->m_maxShudder), m_currentHeight);
+		Engine::Math::AffineTransform3 newInstTransform = *building->getDrawable()->instanceTransform();
+		newInstTransform.Set_Translation(shudder);
 
-		building->getDrawable()->setInstanceMatrix(&newInstMatrix);
+		building->getDrawable()->setInstanceTransform(&newInstTransform);
 
 		if (now >= m_burstFrame)
 		{
@@ -255,13 +259,9 @@ UpdateSleepTime StructureCollapseUpdate::update()
 			body->updateBodyParticleSystems();
 
 
-			Vector3 shudder;
-			shudder.Set(0, 0, 0);
-			const Matrix3D *instMatrix = building->getDrawable()->getInstanceMatrix();
-			Matrix3D newInstMatrix;
-			newInstMatrix = *instMatrix;
-			newInstMatrix.Set_Translation(shudder);
-			building->getDrawable()->setInstanceMatrix(&newInstMatrix);
+			Engine::Math::AffineTransform3 newInstTransform = *building->getDrawable()->instanceTransform();
+			newInstTransform.Set_Translation({});
+			building->getDrawable()->setInstanceTransform(&newInstTransform);
 
 			return UPDATE_SLEEP_FOREVER;
 		}

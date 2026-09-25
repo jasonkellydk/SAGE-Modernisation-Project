@@ -33,8 +33,12 @@
 //
 //-----------------------------------------------------------------------------
 #include "PreRTS.h"
+#include <cstddef>
+#include <cmath>
 import engine.profiling;
 import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
+import Engine.Core.Math.AffineTransform3;
+import Engine.Core.Math.Vector3;
 
 
 #include "Common/Thing.h"
@@ -71,7 +75,7 @@ Thing::Thing( const ThingTemplate *thingTemplate )
 #if defined(RTS_DEBUG)
 	m_templateName = thingTemplate->getName();
 #endif
-	m_transform.Make_Identity();
+	m_transform = Engine::Math::AffineTransform3::Identity();
 	m_cachedPos.x = InitialThingPosX;
 	m_cachedPos.y = InitialThingPosY;
 	m_cachedPos.z = 0.0f;
@@ -127,11 +131,10 @@ void Thing::getUnitDirectionVector2D(Coord3D& dir) const
 //=============================================================================
 void Thing::getUnitDirectionVector3D(Coord3D& dir) const
 {
-	Vector3 vdir = m_transform.Get_X_Vector();
-	vdir.Normalize();
-	dir.x = vdir.X;
-	dir.y = vdir.Y;
-	dir.z = vdir.Z;
+	const Engine::Math::Vector3 direction = m_transform.Basis_X().Normalized_Legacy();
+	dir.x = direction.x;
+	dir.y = direction.y;
+	dir.z = direction.z;
 }
 
 //=============================================================================
@@ -143,9 +146,9 @@ void Thing::setPositionZ( Real z )
 	{
 		Real oldAngle = m_cachedAngle;
 		Coord3D oldPos = m_cachedPos;
-		Matrix3D oldMtx = m_transform;
-
-		m_transform.Set_Z_Translation( z );
+		Engine::Math::Vector3 translation = m_transform.Translation();
+		translation.z = z;
+		m_transform.Set_Translation(translation);
 		m_cachedPos.z = z;
 
 		if (m_cacheFlags & VALID_ALTITUDE_TERRAIN)
@@ -157,16 +160,16 @@ void Thing::setPositionZ( Real z )
 			m_cachedAltitudeAboveTerrainOrWater += (z - oldPos.z);
 		}
 
-		reactToTransformChange(&oldMtx, &oldPos, oldAngle);
+		reactToTransformChange(&oldPos, oldAngle);
 	}
 	else
 	{
-		Matrix3D mtx;
+		Engine::Math::AffineTransform3 transform;
 		const Bool stickToGround = true;	// yes, set the "z" pos
 		Coord3D pos = m_cachedPos;
 		pos.z = z;
-		TheTerrainLogic->alignOnTerrain(getOrientation(), pos, stickToGround, mtx );
-		setTransformMatrix(&mtx);
+		TheTerrainLogic->alignOnTerrain(getOrientation(), pos, stickToGround, transform);
+		setWorldTransform(transform);
 	}
 	engine::debug::invariant((!(_isnan(getPosition()->x) || _isnan(getPosition()->y) || _isnan(getPosition()->z))), "!(_isnan(getPosition()->x) || _isnan(getPosition()->y) || _isnan(getPosition()->z))", __FILE__, __LINE__, "Drawable/Object position NAN! '%s'", m_template->getName().str() );
 }
@@ -179,23 +182,18 @@ void Thing::setPosition( const Coord3D *pos )
 	{
 		Real oldAngle = m_cachedAngle;
 		Coord3D oldPos = m_cachedPos;
-		Matrix3D oldMtx = m_transform;
-
-		//engine::debug::invariant((!(_isnan(pos->x) || _isnan(pos->y) || _isnan(pos->z))), "!(_isnan(pos->x) || _isnan(pos->y) || _isnan(pos->z))", __FILE__, __LINE__, "Drawable/Object position NAN! '%s'", m_template->getName().str() );
-		m_transform.Set_X_Translation( pos->x );
-		m_transform.Set_Y_Translation( pos->y );
-		m_transform.Set_Z_Translation( pos->z );
+		m_transform.Set_Translation({pos->x, pos->y, pos->z});
 		m_cachedPos = *pos;
 		m_cacheFlags &= ~(VALID_ALTITUDE_TERRAIN | VALID_ALTITUDE_SEALEVEL);	// but don't clear the dir flags.
 
-		reactToTransformChange(&oldMtx, &oldPos, oldAngle);
+		reactToTransformChange(&oldPos, oldAngle);
 	}
 	else
 	{
-		Matrix3D mtx;
+		Engine::Math::AffineTransform3 transform;
 		const Bool stickToGround = true;	// yes, set the "z" pos
-		TheTerrainLogic->alignOnTerrain(getOrientation(), *pos, stickToGround, mtx );
-		setTransformMatrix(&mtx);
+		TheTerrainLogic->alignOnTerrain(getOrientation(), *pos, stickToGround, transform);
+		setWorldTransform(transform);
 	}
 	engine::debug::invariant((!(_isnan(getPosition()->x) || _isnan(getPosition()->y) || _isnan(getPosition()->z))), "!(_isnan(getPosition()->x) || _isnan(getPosition()->y) || _isnan(getPosition()->z))", __FILE__, __LINE__, "Drawable/Object position NAN! '%s'", m_template->getName().str() );
 }
@@ -208,20 +206,18 @@ void Thing::setOrientation( Real angle )
 
 	// setOrientation always forces us straight up in the Z axis,
 	// or aligned with the terrain if we have the magic flag set.
-	// don't want this? call setTransformMatrix instead.
+	// don't want this? call setWorldTransform instead.
 
 	Real oldAngle = m_cachedAngle;
 	Coord3D oldPos = m_cachedPos;
-	Matrix3D oldMtx = m_transform;
-
-	pos.x = m_transform.Get_X_Translation();
-	pos.y = m_transform.Get_Y_Translation();
-	pos.z = m_transform.Get_Z_Translation();
+	const Engine::Math::Vector3 translation = m_transform.Translation();
+	pos.x = translation.x;
+	pos.y = translation.y;
+	pos.z = translation.z;
 	if( m_template->isKindOf( KINDOF_STICK_TO_TERRAIN_SLOPE) )
 	{
-		Matrix3D mtx;
 		const Bool stickToGround = true;	// yes, set the "z" pos
-		TheTerrainLogic->alignOnTerrain(angle, pos, stickToGround, m_transform );
+		TheTerrainLogic->alignOnTerrain(angle, pos, stickToGround, m_transform);
 	}
 	else
 	{
@@ -236,9 +232,8 @@ void Thing::setOrientation( Real angle )
 		y.crossProduct( z, u, y );
 		x.crossProduct( y, z, x );
 
-		m_transform.Set(  x.x, y.x, z.x, pos.x,
-											x.y, y.y, z.y, pos.y,
-											x.z, y.z, z.z, pos.z );
+		m_transform = Engine::Math::AffineTransform3::From_Basis(
+			{x.x, x.y, x.z}, {y.x, y.y, y.z}, {z.x, z.y, z.z}, {pos.x, pos.y, pos.z});
 	}
 
 	//engine::debug::invariant((-PI <= angle && angle <= PI), "-PI <= angle && angle <= PI", __FILE__, __LINE__, "Please pass only normalized (-PI..PI) angles to setOrientation (%f).", angle);
@@ -246,29 +241,34 @@ void Thing::setOrientation( Real angle )
 	m_cachedPos = pos;
 	m_cacheFlags &= ~VALID_DIRVECTOR;	// but don't clear the altitude flags.
 
-	reactToTransformChange(&oldMtx, &oldPos, oldAngle);
+	reactToTransformChange(&oldPos, oldAngle);
 	engine::debug::invariant((!(_isnan(getPosition()->x) || _isnan(getPosition()->y) || _isnan(getPosition()->z))), "!(_isnan(getPosition()->x) || _isnan(getPosition()->y) || _isnan(getPosition()->z))", __FILE__, __LINE__, "Drawable/Object position NAN! '%s'", m_template->getName().str() );
 }
 
 //=============================================================================
 /** Set the world transformation matrix */
 //=============================================================================
-void Thing::setTransformMatrix( const Matrix3D *mx )
+void Thing::setWorldTransform(const Engine::Math::AffineTransform3& transform)
 {
 	//engine::profiling::Scope profile_scope_256("ThingMatrixStuff")
 	Real oldAngle = m_cachedAngle;
 	Coord3D oldPos = m_cachedPos;
-	Matrix3D oldMtx = m_transform;
-
-	m_transform = *mx;
-	m_cachedPos.x = m_transform.Get_X_Translation();
-	m_cachedPos.y = m_transform.Get_Y_Translation();
-	m_cachedPos.z = m_transform.Get_Z_Translation();
-	m_cachedAngle = m_transform.Get_Z_Rotation();
+	m_transform = transform;
+	const Engine::Math::Vector3 translation = m_transform.Translation();
+	m_cachedPos.x = translation.x;
+	m_cachedPos.y = translation.y;
+	m_cachedPos.z = translation.z;
+	m_cachedAngle = m_transform.Z_Rotation_Legacy();
 	m_cacheFlags = 0;
 
-	reactToTransformChange(&oldMtx, &oldPos, oldAngle);
+	reactToTransformChange(&oldPos, oldAngle);
 	engine::debug::invariant((!(_isnan(getPosition()->x) || _isnan(getPosition()->y) || _isnan(getPosition()->z))), "!(_isnan(getPosition()->x) || _isnan(getPosition()->y) || _isnan(getPosition()->z))", __FILE__, __LINE__, "Drawable/Object position NAN! '%s'", m_template->getName().str() );
+}
+
+Engine::Math::AffineTransform3 Thing::toWorldTransform(
+	const Engine::Math::AffineTransform3& localTransform) const
+{
+	return Compose(m_transform, localTransform);
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -344,26 +344,19 @@ Bool Thing::isSignificantlyAboveTerrain() const
 
 
 //-------------------------------------------------------------------------------------------------
-void Thing::convertBonePosToWorldPos(const Coord3D* bonePos, const Matrix3D* boneTransform, Coord3D* worldPos, Matrix3D* worldTransform) const
+void Thing::transformBoneToWorld(const Coord3D* bonePosition,
+	const Engine::Math::AffineTransform3* boneTransform, Coord3D* worldPosition,
+	Engine::Math::AffineTransform3* worldTransform) const
 {
 	if (worldTransform)
+		*worldTransform = boneTransform ? Compose(m_transform, *boneTransform) : m_transform;
+	if (worldPosition && bonePosition)
 	{
-#ifdef ALLOW_TEMPORARIES
-		*worldTransform = m_transform * (*boneTransform);
-#else
-		worldTransform->mul(m_transform, *boneTransform);
-#endif
-	}
-	if (worldPos)
-	{
-		Vector3 vector;
-		vector.X = bonePos->x;
-		vector.Y = bonePos->y;
-		vector.Z = bonePos->z;
-		m_transform.Transform_Vector(m_transform, vector, &vector);
-		worldPos->x = vector.X;
-		worldPos->y = vector.Y;
-		worldPos->z = vector.Z;
+		const Engine::Math::Vector3 transformed = m_transform.Transform_Point(
+			{bonePosition->x, bonePosition->y, bonePosition->z});
+		worldPosition->x = transformed.x;
+		worldPosition->y = transformed.y;
+		worldPosition->z = transformed.z;
 	}
 }
 
@@ -377,22 +370,9 @@ void Thing::transformPoint( const Coord3D *in, Coord3D *out )
 	if( in == nullptr || out == nullptr )
 		return;
 
-	// for conversion
-	Vector3 vectorIn;
-	Vector3 vectorOut;
-
-	///@ todo this is dumb and we should not have to convert types
-	// convert to Vector3 datatypes
-	vectorIn.X = in->x;
-	vectorIn.Y = in->y;
-	vectorIn.Z = in->z;
-
-	// do the transform
-	m_transform.Transform_Vector( m_transform, vectorIn, &vectorOut );
-
-	// store converted vector in 'out'
-	out->x = vectorOut.X;
-	out->y = vectorOut.Y;
-	out->z = vectorOut.Z;
+	const Engine::Math::Vector3 transformed = m_transform.Transform_Point({in->x, in->y, in->z});
+	out->x = transformed.x;
+	out->y = transformed.y;
+	out->z = transformed.z;
 
 }

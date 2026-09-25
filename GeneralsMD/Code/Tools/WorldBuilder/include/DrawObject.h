@@ -23,6 +23,7 @@
 #include "WW3D2/W3DFile.h"
 #include <vector>
 import Graphics.Scene.Surfaces.Geometry;
+import Engine.Core.Math.Sphere3;
 
 import Graphics.Materials.State;
 #include "Lib/BaseType.h"
@@ -103,7 +104,7 @@ public:
 
 
 	W3DMeshRenderObject *peekMesh() {return m_moldMesh;};
-	void getMeshBounds(SphereClass *pSphere) {*pSphere = m_moldMeshBounds;};
+	Engine::Math::Sphere3 moldMeshBounds() const noexcept { return m_moldMeshBounds; }
 
 protected:
 	enum {MAX_RADIUS = 50, NUM_FEEDBACK_VERTEX = 201*201, NUM_FEEDBACK_INDEX = 101*101*6};
@@ -136,7 +137,7 @@ protected:
 	AsciiString								m_curMeshModelName;  ///< Model name of m_moldMesh.
 
 	W3DMeshRenderObject									*m_moldMesh;		///< W3D mesh model for the mold.
-	SphereClass								m_moldMeshBounds;				///< Bounding sphere for mold mesh.
+	Engine::Math::Sphere3 m_moldMeshBounds{};	///< Bounding sphere for mold mesh.
 	CPoint										m_winSize;				//< Holds the size of the window.
 
 protected: // static state vars.

@@ -1,26 +1,51 @@
 import Graphics.Frame.RenderClock;
+import Engine.Core.Math.AffineTransform3;
+import Engine.Core.Math.Quaternion;
 #include "W3DDevice/GameClient/W3DEmitterRenderObject.h"
 #include "W3DDevice/GameClient/W3DEmitterParticles.h"
 #include "W3DDevice/GameClient/W3DSceneClass.h"
 #include "W3DDevice/GameClient/W3DTextureHandle.h"
 
-#include "WWMath/quat.h"
+#include <cstdint>
+
+import Engine.Core.Math.RandomStream;
+
+namespace
+{
+// The original Vector3Randomizers all drew from one process-wide random
+// generator, so every emitter instance produced a different particle pattern.
+// Each clone therefore gets its own stream seeded from a single shared stream
+// (the prototypes keep their stable, name-derived seeds).
+Engine::Math::RandomStream &Shared_Emitter_Seed_Stream() noexcept
+{
+    static Engine::Math::RandomStream stream(0x5eed0e317e7ull);
+    return stream;
+}
+
+Engine::Math::RandomVector3Generator Reseeded_Generator(
+    const Engine::Math::RandomVector3Generator &source) noexcept
+{
+    auto &shared = Shared_Emitter_Seed_Stream();
+    const std::uint64_t high = shared.NextUInt32();
+    const std::uint64_t seed = (high << 32u) | shared.NextUInt32();
+    return {source.Distribution(), source.Dimensions(), seed};
+}
+}
 
 W3DEmitterRenderObject::W3DEmitterRenderObject(const Assets::EmitterAssetDesc &description,
     W3DTextureHandle *texture, Graphics::MaterialState shader,
-    std::unique_ptr<Vector3Randomizer> position, std::unique_ptr<Vector3Randomizer> velocity)
-    : m_emission(description), m_position_randomizer(std::move(position)),
-      m_velocity_randomizer(std::move(velocity))
+    Engine::Math::RandomVector3Generator position, Engine::Math::RandomVector3Generator velocity)
+    : m_emission(description), m_position_generator(std::move(position)),
+      m_velocity_generator(std::move(velocity))
 {
-    if (m_velocity_randomizer)
-        m_velocity_randomizer->Scale(0.001f);
+	m_velocity_generator.Scale(0.001f);
     m_particles.Assign_No_Add_Ref(new W3DEmitterParticles(description, texture, shader, this));
 }
 
 W3DEmitterRenderObject::W3DEmitterRenderObject(const W3DEmitterRenderObject &source)
     : W3DRenderObject(source), m_emission(source.m_emission),
-      m_position_randomizer(source.m_position_randomizer ? source.m_position_randomizer->Clone() : nullptr),
-      m_velocity_randomizer(source.m_velocity_randomizer ? source.m_velocity_randomizer->Clone() : nullptr),
+      m_position_generator(Reseeded_Generator(source.m_position_generator)),
+      m_velocity_generator(Reseeded_Generator(source.m_velocity_generator)),
       m_name(source.m_name), m_active(true), m_invisible(source.m_invisible)
 {
     m_emission.Prepare_Clone();
@@ -45,9 +70,13 @@ void W3DEmitterRenderObject::Set_Name(const char *name)
 Graphics::EmitterTransform W3DEmitterRenderObject::Current_Transform() const
 {
     const auto &transform = Get_Transform();
-    const Quaternion rotation = Build_Quaternion(transform);
-    const Vector3 origin = transform.Get_Translation();
-    return {{rotation.X, rotation.Y, rotation.Z, rotation.W}, {origin.X, origin.Y, origin.Z}};
+    Engine::Math::AffineTransform3 rotation_matrix;
+    for (unsigned row = 0; row < 3; ++row)
+        for (unsigned column = 0; column < 4; ++column)
+            rotation_matrix.elements[row * 4 + column] = transform[row][column];
+    const Engine::Math::Quaternion rotation = Engine::Math::Quaternion::From_Rotation(rotation_matrix);
+    const auto origin = transform.Translation();
+    return {{rotation.x, rotation.y, rotation.z, rotation.w}, {origin.x, origin.y, origin.z}};
 }
 
 void W3DEmitterRenderObject::Notify_Added(W3DScene *scene)
@@ -102,15 +131,13 @@ void W3DEmitterRenderObject::Emit(Graphics::EmitterKinematics &particles)
         m_emission.Set_Previous_Transform(current);
         return;
     }
-    const auto sample = [](Vector3Randomizer *randomizer) {
-        Vector3 value(0, 0, 0);
-        if (randomizer)
-            randomizer->Get_Vector(value);
-        return std::array{value.X, value.Y, value.Z};
+    const auto sample = [](Engine::Math::RandomVector3Generator &generator) {
+        const auto value = generator.Next();
+        return std::array{value.x, value.y, value.z};
     };
     m_emission.Emit(particles, Graphics::Get_Render_Clock().Sync_Delta(), Graphics::Get_Render_Clock().Sync_Time(), current,
-        [&] { return sample(m_position_randomizer.get()); },
-        [&] { return sample(m_velocity_randomizer.get()); });
+        [&] { return sample(m_position_generator); },
+        [&] { return sample(m_velocity_generator); });
 }
 
 void W3DEmitterRenderObject::Update_Visibility()
@@ -123,32 +150,29 @@ void W3DEmitterRenderObject::Update_Visibility()
 
 void W3DEmitterRenderObject::Scale(float scale)
 {
-    if (m_position_randomizer)
-        m_position_randomizer->Scale(scale);
-    if (m_velocity_randomizer)
-        m_velocity_randomizer->Scale(scale);
+	m_position_generator.Scale(scale);
+	m_velocity_generator.Scale(scale);
     m_emission.Scale(scale);
     m_particles->Scale(scale);
 }
 
 void W3DEmitterRenderObject::Set_LOD_Bias(float bias) { m_particles->Set_LOD_Bias(bias); }
 
-void W3DEmitterRenderObject::Get_Obj_Space_Bounding_Sphere(SphereClass &sphere) const
+void W3DEmitterRenderObject::Get_Local_Bounding_Sphere(Engine::Math::Sphere3 &sphere) const
 {
-    sphere.Init(Vector3(0, 0, 0), 0);
+    sphere = {{0, 0, 0}, 0.0f};
 }
 
-void W3DEmitterRenderObject::Get_Obj_Space_Bounding_Box(AABoxClass &box) const
+void W3DEmitterRenderObject::Get_Local_Bounds(Engine::Math::AxisAlignedBox3 &box) const
 {
-    box.Center.Set(0, 0, 0);
-    box.Extent.Set(0, 0, 0);
+    box = {{0, 0, 0}, {0, 0, 0}};
 }
 
 void W3DEmitterRenderObject::Update_Cached_Bounding_Volumes() const
 {
-    CachedBoundingSphere.Init(Get_Position(), 0);
-    CachedBoundingBox.Center = Get_Position();
-    CachedBoundingBox.Extent.Set(0, 0, 0);
+    const Engine::Math::Vector3 position = Get_Position();
+    CachedBoundingSphere = {position, 0.0f};
+    CachedBoundingBox = {position, position};
     Validate_Cached_Bounding_Volumes();
 }
 

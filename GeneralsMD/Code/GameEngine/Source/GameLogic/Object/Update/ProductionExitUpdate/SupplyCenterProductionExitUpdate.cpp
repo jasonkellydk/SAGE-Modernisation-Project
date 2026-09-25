@@ -30,6 +30,7 @@
 
 #include "PreRTS.h"
 import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
+import Engine.Core.Math.AffineTransform3;
 
 #include "Common/RandomValue.h"
 #include "Common/ThingTemplate.h"
@@ -68,8 +69,7 @@ void SupplyCenterProductionExitUpdate::exitObjectViaDoor( Object *newObj, ExitDo
 		const SupplyCenterProductionExitUpdateModuleData* md = getSupplyCenterProductionExitUpdateModuleData();
 
 		Real exitAngle = creationObject->getOrientation();
-		const Matrix3D *transform = creationObject->getTransformMatrix();
-		Vector3 loc;
+		const auto transform = creationObject->worldTransform();
 		Coord3D createPoint;
 
 		//
@@ -77,16 +77,16 @@ void SupplyCenterProductionExitUpdate::exitObjectViaDoor( Object *newObj, ExitDo
 		// in INI which is in model space, rotate it to match the building angle
 		// and translate for building location via a transform call
 		//
-		loc.Set( md->m_unitCreatePoint.x, md->m_unitCreatePoint.y, md->m_unitCreatePoint.z );
-		transform->Transform_Vector( *transform, loc, &loc );
+		Engine::Math::Vector3 loc = transform.Transform_Point(
+			{md->m_unitCreatePoint.x, md->m_unitCreatePoint.y, md->m_unitCreatePoint.z});
 
 		// make sure the point is on the terrain
-		loc.Z = TheTerrainLogic ? TheTerrainLogic->getGroundHeight( loc.X, loc.Y ) : 0.0f;
+		loc.z = TheTerrainLogic ? TheTerrainLogic->getGroundHeight( loc.x, loc.y ) : 0.0f;
 
 		// we need it in Coord3D form
-		createPoint.x = loc.X;
-		createPoint.y = loc.Y;
-		createPoint.z = loc.Z;
+		createPoint.x = loc.x;
+		createPoint.y = loc.y;
+		createPoint.z = loc.z;
 
 		newObj->setPosition( &createPoint );
 		newObj->setOrientation( exitAngle );
@@ -96,22 +96,20 @@ void SupplyCenterProductionExitUpdate::exitObjectViaDoor( Object *newObj, ExitDo
 		// tell the AI about it
 		TheAI->pathfinder()->addObjectToPathfindMap( newObj );
 
-		Vector3 p;
+		Engine::Math::Vector3 p;
 
 		//
 		// get the natural rally point from the INI definition, this coord is in model space relative
 		// to the model (0,0,0)
 		//
-		p.X = md->m_naturalRallyPoint.x;
-		p.Y = md->m_naturalRallyPoint.y;
-		p.Z = md->m_naturalRallyPoint.z;
+		p = {md->m_naturalRallyPoint.x, md->m_naturalRallyPoint.y, md->m_naturalRallyPoint.z};
 
 		// transform the point into world space
-		transform->Transform_Vector( *transform, p, &p );
+		p = transform.Transform_Point(p);
 
 		std::vector<Coord3D> exitPath;
 
-		Coord3D tmp; tmp.x = p.X; tmp.y = p.Y; tmp.z = p.Z;
+		Coord3D tmp; tmp.x = p.x; tmp.y = p.y; tmp.z = p.z;
 		exitPath.push_back(tmp);
 
 		if (m_rallyPointExists)
@@ -156,17 +154,16 @@ Bool SupplyCenterProductionExitUpdate::getExitPosition( Coord3D& exitPosition ) 
 	if (!obj)
 		return FALSE;
 
-	const Matrix3D *transform = obj->getTransformMatrix();
+	const auto transform = obj->worldTransform();
 
 	const SupplyCenterProductionExitUpdateModuleData *md = getSupplyCenterProductionExitUpdateModuleData();
 
-	Vector3 loc;
-	loc.Set( md->m_unitCreatePoint.x, md->m_unitCreatePoint.y, md->m_unitCreatePoint.z );
-	transform->Transform_Vector( *transform, loc, &loc );
+	const Engine::Math::Vector3 loc = transform.Transform_Point(
+		{md->m_unitCreatePoint.x, md->m_unitCreatePoint.y, md->m_unitCreatePoint.z});
 
-	exitPosition.x = loc.X;
-	exitPosition.y = loc.Y;
-	exitPosition.z = loc.Z;
+	exitPosition.x = loc.x;
+	exitPosition.y = loc.y;
+	exitPosition.z = loc.z;
 
 	return TRUE;
 
@@ -177,28 +174,22 @@ Bool SupplyCenterProductionExitUpdate::getExitPosition( Coord3D& exitPosition ) 
 Bool SupplyCenterProductionExitUpdate::getNaturalRallyPoint( Coord3D& rallyPoint, Bool offset ) const
 {
 	const SupplyCenterProductionExitUpdateModuleData *data = getSupplyCenterProductionExitUpdateModuleData();
-	Vector3 p;
+	Engine::Math::Vector3 p;
 
 	//
 	// get the natural rally point from the INI definition, this coord is in model space relative
 	// to the model (0,0,0)
 	//
-	p.X = data->m_naturalRallyPoint.x;
-	p.Y = data->m_naturalRallyPoint.y;
-	p.Z = data->m_naturalRallyPoint.z;
+	p = {data->m_naturalRallyPoint.x, data->m_naturalRallyPoint.y, data->m_naturalRallyPoint.z};
 
 	if ( offset )
 	{
-		Vector3 offset = p;
-		offset.Normalize();
-		offset *= (2*PATHFIND_CELL_SIZE_F);
-		p+=offset;
+		p = p + p.Normalized_Legacy() * (2*PATHFIND_CELL_SIZE_F);
 	}
 
 	// transform the point into world space
-	const Matrix3D *transform = getObject()->getTransformMatrix();
-	transform->Transform_Vector( *transform, p, &p );
-	rallyPoint.x = p.X; rallyPoint.y = p.Y; rallyPoint.z = p.Z;
+	p = getObject()->worldTransform().Transform_Point(p);
+	rallyPoint.x = p.x; rallyPoint.y = p.y; rallyPoint.z = p.z;
 	return TRUE;
 }
 

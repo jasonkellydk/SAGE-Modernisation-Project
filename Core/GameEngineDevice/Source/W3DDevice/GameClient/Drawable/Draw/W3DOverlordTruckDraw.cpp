@@ -72,9 +72,9 @@ W3DOverlordTruckDraw::~W3DOverlordTruckDraw()
 }
 
 //-------------------------------------------------------------------------------------------------
-void W3DOverlordTruckDraw::doDrawModule(const Matrix3D* transformMtx)
+void W3DOverlordTruckDraw::doDrawModule(const Engine::Math::AffineTransform3* transform)
 {
-	W3DTruckDraw::doDrawModule(transformMtx);
+	W3DTruckDraw::doDrawModule(transform);
 
 	// Our big thing is that we get our specific passenger (the turret thing) and then wake it up and make it draw
 	// It depends on us because our renderObject is only made correct in the act of drawing.

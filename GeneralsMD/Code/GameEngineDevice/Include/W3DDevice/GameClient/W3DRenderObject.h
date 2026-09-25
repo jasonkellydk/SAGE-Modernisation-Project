@@ -4,11 +4,11 @@
 #include <memory>
 
 #include "WWLib/ref_ptr.h"
-#include "WWMath/aabox.h"
-#include "WWMath/matrix3d.h"
-#include "WWMath/sphere.h"
-#include "WWMath/vector2.h"
-#include "WWMath/vector3.h"
+import Engine.Core.Math.Vector2;
+import Engine.Core.Math.AffineTransform3;
+import Engine.Core.Math.Vector3;
+import Engine.Core.Math.Sphere3;
+import Engine.Core.Math.AxisAlignedBox3;
 #include "W3DDevice/GameClient/W3DSceneQueryMask.h"
 #include "WWSaveLoad/persist.h"
 
@@ -64,9 +64,9 @@ public:
 
     struct Material_Override
     {
-        Material_Override() : Struct_ID(USER_DATA_MATERIAL_OVERRIDE), customUVOffset(0, 0) {}
+        Material_Override() : Struct_ID(USER_DATA_MATERIAL_OVERRIDE), customUVOffset{0, 0} {}
         int Struct_ID;
-        Vector2 customUVOffset;
+        Engine::Math::Vector2 customUVOffset;
     };
 
     enum
@@ -152,19 +152,19 @@ public:
     virtual void Validate_Transform() const;
     W3DRenderObject *Get_Container() const { return Container; }
 
-    virtual void Set_Transform(const Matrix3D &transform);
-    virtual void Set_Position(const Vector3 &position);
-    const Matrix3D &Get_Transform() const;
-    const Matrix3D &Get_Transform(bool &is_transform_identity) const;
-    const Matrix3D &Get_Transform_No_Validity_Check() const;
-    const Matrix3D &Get_Transform_No_Validity_Check(bool &is_transform_identity) const
+    virtual void Set_Transform(const Engine::Math::AffineTransform3 &transform);
+    virtual void Set_Position(Engine::Math::Vector3 position);
+    Engine::Math::AffineTransform3 Get_Transform() const;
+    Engine::Math::AffineTransform3 Get_Transform(bool &is_transform_identity) const;
+    Engine::Math::AffineTransform3 Get_Transform_No_Validity_Check() const;
+    Engine::Math::AffineTransform3 Get_Transform_No_Validity_Check(bool &is_transform_identity) const
     {
         is_transform_identity = NativeState.Is_Transform_Identity();
         return Get_Transform_No_Validity_Check();
     }
     bool Is_Transform_Identity() const;
     bool Is_Transform_Identity_No_Validity_Check() const { return NativeState.Is_Transform_Identity(); }
-    Vector3 Get_Position() const;
+    Engine::Math::Vector3 Get_Position() const;
 
     virtual void Notify_Added(W3DScene *scene);
     virtual void Notify_Removed(W3DScene *scene);
@@ -192,12 +192,12 @@ public:
     virtual int Get_Num_Bones() { return 0; }
     virtual const char *Get_Bone_Name(int) { return nullptr; }
     virtual int Get_Bone_Index(const char *) { return 0; }
-    virtual Matrix3D Get_Bone_Transform(const char *) { return Get_Transform(); }
-    virtual Matrix3D Get_Bone_Transform(int) { return Get_Transform(); }
+    virtual Engine::Math::AffineTransform3 Get_Bone_Transform(const char *) { return Get_Transform(); }
+    virtual Engine::Math::AffineTransform3 Get_Bone_Transform(int) { return Get_Transform(); }
     virtual void Capture_Bone(int) {}
     virtual void Release_Bone(int) {}
     virtual bool Is_Bone_Captured(int) const { return false; }
-    virtual void Control_Bone(int, const Matrix3D &, bool = false) {}
+    virtual void Control_Bone(int, const Engine::Math::AffineTransform3 &, bool = false) {}
     virtual const Graphics::ModelHierarchy *Get_Model_Hierarchy() const { return nullptr; }
 
     virtual bool Cast_Ray(W3DRayCastQuery &) { return false; }
@@ -206,10 +206,10 @@ public:
     virtual bool Intersect_AABox(W3DBoxIntersectionQuery &) { return false; }
     virtual bool Intersect_OBBox(W3DOrientedBoxIntersectionQuery &) { return false; }
 
-    virtual const SphereClass &Get_Bounding_Sphere() const;
-    virtual const AABoxClass &Get_Bounding_Box() const;
-    virtual void Get_Obj_Space_Bounding_Sphere(SphereClass &sphere) const;
-    virtual void Get_Obj_Space_Bounding_Box(AABoxClass &box) const;
+    virtual Engine::Math::Sphere3 Get_Bounding_Sphere() const;
+    virtual Engine::Math::AxisAlignedBox3 Get_Bounding_Box() const;
+    virtual void Get_Local_Bounding_Sphere(Engine::Math::Sphere3 &sphere) const;
+    virtual void Get_Local_Bounds(Engine::Math::AxisAlignedBox3 &box) const;
     virtual void Update_Obj_Space_Bounding_Volumes() {}
 
     virtual void Prepare_LOD(W3DCamera &) {}
@@ -238,7 +238,7 @@ public:
     virtual void Set_User_Data(void *value, bool recursive = false);
     virtual void *Get_User_Data() { return User_Data; }
     virtual int Get_Num_Snap_Points() { return 0; }
-    virtual void Get_Snap_Point(int, Vector3 *) {}
+    virtual void Get_Snap_Point(int, Engine::Math::Vector3 *) {}
     virtual float Get_Screen_Size(W3DCamera &camera);
     virtual void Scale(float) {}
     virtual void Scale(float, float, float) {}
@@ -308,9 +308,8 @@ protected:
     };
 
     unsigned int ObjectColor;
-    mutable SphereClass CachedBoundingSphere;
-    mutable AABoxClass CachedBoundingBox;
-    mutable Matrix3D Transform;
+    mutable Engine::Math::Sphere3 CachedBoundingSphere;
+    mutable Engine::Math::AxisAlignedBox3 CachedBoundingBox;
     mutable bool m_bounds_valid = false;
     int m_collision_type = SCENE_QUERY_ALL;
     W3DScene *Scene;

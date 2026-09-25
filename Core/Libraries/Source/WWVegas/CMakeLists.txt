@@ -18,7 +18,6 @@ target_include_directories(core_wwcommon INTERFACE
 
 add_subdirectory(WWDownload)
 add_subdirectory(WWLib)
-add_subdirectory(WWMath)
 add_subdirectory(WWSaveLoad)
 add_subdirectory(WWStub)
 
@@ -33,6 +32,5 @@ target_link_libraries(core_wwvegas INTERFACE
     # core_wwaudio
     # core_wwdownload
     core_wwlib
-    core_wwmath
     core_wwsaveload
 )

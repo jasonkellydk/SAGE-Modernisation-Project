@@ -1,4 +1,7 @@
 #include "W3DDevice/GameClient/W3DRenderServices.h"
+import Engine.Core.Math.Vector2;
+import Engine.Core.Math.Vector3;
+import Engine.Core.Math.AffineTransform3;
 /*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -153,7 +156,7 @@ void W3DMouse::initW3DAssets()
 					cursorModels[i] = W3DDisplay::m_assetManager->Create_Render_Obj(m_cursorInfo[i].W3DModelName.str(), m_cursorInfo[i].W3DScale, 0);
 				if (cursorModels[i])
 				{
-					cursorModels[i]->Set_Position(Vector3(0.0f, 0.0f, -1.0f));
+					cursorModels[i]->Set_Position({0.0f, 0.0f, -1.0f});
 					//W3DDisplay::m_3DInterfaceScene->Add_Render_Object(cursorModels[i]);
 				}
 			}
@@ -177,9 +180,9 @@ void W3DMouse::initW3DAssets()
 
 	// create the camera
 	m_camera = NEW_REF( W3DCamera, () );
-	m_camera->Set_Position( Vector3( 0, 1, 1 ) );
-	Vector2 min = Vector2( -1, -1 );
-	Vector2 max = Vector2( +1, +1 );
+	m_camera->Set_Position({0, 1, 1});
+	Engine::Math::Vector2 min{ -1, -1 };
+	Engine::Math::Vector2 max{ +1, +1 };
 	m_camera->Set_View_Plane( min, max );
 	m_camera->Set_Clip_Planes( 0.995f, 20.0f );
 	if (m_orthoCamera)
@@ -358,21 +361,22 @@ void W3DMouse::draw()
 					Real logX, logY;
 					PixelScreenToW3DLogicalScreen(m_currMouse.pos.x - 0, m_currMouse.pos.y - 0, &logX, &logY, TheDisplay->getWidth(), TheDisplay->getHeight());
 
-					Vector3 rayStart;
-					Vector3 rayEnd;
-					rayStart = m_camera->Get_Position();							//get camera location
-					m_camera->Un_Project(rayEnd,Vector2(logX,logY));	//get world space point
-					rayEnd -= rayStart;																//vector camera to world space point
-					rayEnd.Normalize();																//make unit vector
-					rayEnd *= m_camera->Get_Depth();									//adjust length to reach far clip plane
-					rayEnd += rayStart;																//get point on far clip plane along ray from camera.
+					Engine::Math::Vector3 rayStart;
+					Engine::Math::Vector3 rayEnd;
+					const auto camera_position = m_camera->Get_Position();
+					rayStart = camera_position;							//get camera location
+					m_camera->Un_Project(rayEnd,Engine::Math::Vector2{logX,logY});	//get world space point
+					rayEnd = rayEnd - rayStart;																//vector camera to world space point
+					rayEnd = rayEnd.Normalized();																//make unit vector
+					rayEnd = rayEnd * m_camera->Get_Depth();									//adjust length to reach far clip plane
+					rayEnd = rayEnd + rayStart;																//get point on far clip plane along ray from camera.
 
-					x = Vector3::Find_X_At_Z(z, rayStart, rayEnd);
-					y = Vector3::Find_Y_At_Z(z, rayStart, rayEnd);
+					const Real inverseDepth = 1.0f / (rayEnd.z - rayStart.z);
+					x = rayStart.x + (z - rayStart.z) * ((rayEnd.x - rayStart.x) * inverseDepth);
+					y = rayStart.y + (z - rayStart.z) * ((rayEnd.y - rayStart.y) * inverseDepth);
 				}
 
-				Matrix3D tm(1);
-				tm.Set_Translation(Vector3(x, y, z));
+				auto transform = Engine::Math::AffineTransform3::From_Translation({x, y, z});
 				Coord2D offset = {0, 0};
 				if (TheInGameUI && TheInGameUI->isScrolling())
 				{
@@ -380,9 +384,9 @@ void W3DMouse::draw()
 					offset.normalize();
 					Real theta = atan2(-offset.y, offset.x);
 					theta -= (Real)M_PI/2;
-					tm.Rotate_Z(theta);
+					transform.Pre_Apply_Rotation(Engine::Math::AffineTransform3::Rotation_Z(theta));
 				}
-				cursorModels[m_currentW3DCursor]->Set_Transform(tm);
+				cursorModels[m_currentW3DCursor]->Set_Transform(transform);
 
 				Get_W3D_Render_Services().Render( W3DDisplay::m_3DInterfaceScene, m_camera );
 			}

@@ -37,8 +37,9 @@
 
 #pragma once
 
+#include <cmath>
 #include "always.h"
-#include "wwmath.h"
+
 #include "WWmatrix3.h"
 #include "vector3.h"
 
@@ -86,7 +87,7 @@ public:
 	float Length2() const { return (X*X + Y*Y + Z*Z + W*W); }
 
 	// Magnitude of the quaternion
-	float Length() const { return WWMath::Sqrt(Length2()); }
+	float Length() const { return std::sqrt(Length2()); }
 
 	// Make the quaternion unit length
 	void Normalize();
@@ -245,8 +246,8 @@ inline void Quaternion::Rotate_Vector(const Vector3 & v,Vector3 * result) const
 
 inline bool Quaternion::Is_Valid() const
 {
-	return (	WWMath::Is_Valid_Float(X) &&
-				WWMath::Is_Valid_Float(Y) &&
-				WWMath::Is_Valid_Float(Z) &&
-				WWMath::Is_Valid_Float(W) );
+	return (	std::isfinite(X) &&
+				std::isfinite(Y) &&
+				std::isfinite(Z) &&
+				std::isfinite(W) );
 }

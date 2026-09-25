@@ -64,6 +64,9 @@ import Graphics.Scene.Surfaces.Renderer;
 #include "Common/AsciiString.h"
 #include "Common/GlobalData.h"
 import Graphics.Scene.Trees.Geometry;
+import Engine.Core.Math.Sphere3;
+import Engine.Core.Math.Vector3;
+import Engine.Core.Math.AffineTransform3;
 
 //-----------------------------------------------------------------------------
 //           Forward References
@@ -89,13 +92,13 @@ enum W3DToppleState CPP_11(: Int)
 };
 /// The individual data for a tree.
 typedef struct {
-	Vector3 location;					///< Drawing location
+	Engine::Math::Vector3 location;					///< Drawing location
 	Real		scale;						///< Scale at location.
 	Real		sin;							///< Sine of the rotation angle at location.
 	Real		cos;							///< Cosine of the rotation angle at location.
 	Int			treeType;					///< Type of tree.
 	Bool		visible;					///< Visible flag, updated each frame.
-	SphereClass bounds;				///< Bounding sphere for culling to set the visible flag.
+	Engine::Math::Sphere3 bounds;	///< Bounding sphere for culling to set the visible flag.
 	Real		sortKey;					///< Sort key, essentially the distance along the look at vector.
 	DrawableID		drawableID;	///< Drawable this tree corresponds to.
 
@@ -121,7 +124,7 @@ typedef struct {
 	W3DToppleState m_toppleState;						///< Stage this module is in.
 	Real					m_angularAccumulation;		///< How much have I rotated so I know when to bounce.
 	UnsignedInt		m_options;								///< topple options
-	Matrix3D			m_mtx;
+	Engine::Math::AffineTransform3 m_mtx;
 	Real					m_sinkFramesLeft;					///< Toppled trees sink into the terrain & disappear, how many frames left.
 
 } TTree;
@@ -129,14 +132,14 @@ typedef struct {
 /// The individual data for a tree type.
 typedef struct {
 	W3DMeshRenderObject * m_mesh;			///< Mesh for this kind of tree.
-	SphereClass m_bounds;		///< Bounding boxes for the base tree models.
+	Engine::Math::Sphere3 m_bounds;	///< Bounds for the base tree models.
 	const W3DTreeDrawModuleData *m_data;
 	ICoord2D		m_textureOrigin; ///< Texture origin in the mega texture.
 	Int					m_numTiles;	///< Number of tex tiles.
 	Int					m_firstTile;///< First texture tile.
 	Int					m_tileWidth;///< Width in tiles of texture;
 	Bool				m_halfTile; ///< Tiles are 64x64 pixels, half tile supports a 32x32 bit texture.  Have to adjust the uv values.
-	Vector3			m_offset;
+	Engine::Math::Vector3			m_offset;
 	Bool				m_doShadow; ///< Draw shadow.
 
 } TTreeType;
@@ -251,9 +254,9 @@ private:
 
 	Int			m_numTiles;
 	TileData			*m_sourceTiles[MAX_TILES];	///< Tiles for m_textureClasses
-	Vector3 m_cameraLookAtVector;
-	Vector3 m_swayOffsets[NUM_SWAY_ENTRIES];
-	Vector3 m_currentSwayFactor[MAX_SWAY_TYPES];
+	Engine::Math::Vector3 m_cameraLookAtVector;
+	Engine::Math::Vector3 m_swayOffsets[NUM_SWAY_ENTRIES];
+	Engine::Math::Vector3 m_currentSwayFactor[MAX_SWAY_TYPES];
 	Int			m_curSwayVersion;
 
 	Real		m_curSwayOffset[MAX_SWAY_TYPES];
@@ -273,9 +276,9 @@ protected:
 	void loadTreesInVertexAndIndexBuffers(Graphics::SceneObjectList<W3DRenderObject>::Cursor *pDynamicLightsIterator); ///< Fills the index and vertex buffers for drawing.
 	void updateVertexBuffer(); ///< Fills the index and vertex buffers for drawing.
 	void cull(const W3DCamera * camera);						 ///< Culls the trees.
-	UnsignedInt  doLighting(const Vector3 *normal,
-		const GlobalData::TerrainLighting	*objectLighting, const Vector3* lightRays,
-		const Vector3 *emissive, UnsignedInt vertexDiffuse, Real scale) const;
+	UnsignedInt  doLighting(const Engine::Math::Vector3 *normal,
+		const GlobalData::TerrainLighting	*objectLighting, const Engine::Math::Vector3* lightRays,
+		const Engine::Math::Vector3 *emissive, UnsignedInt vertexDiffuse, Real scale) const;
 #if 0 // sort is no longer used and messes up the order. jba [6/6/2003]
 	void sort( Int iterations );								 ///< Performs partial bubble sort.
 #endif

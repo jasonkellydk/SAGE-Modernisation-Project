@@ -30,8 +30,10 @@
 // USER INCLUDES //////////////////////////////////////////////////////////////////////////////////
 #include "PreRTS.h"
 import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
+import Engine.Core.Math.AffineTransform3;
 
 #include "Common/CRCDebug.h"
+#include "Common/LegacyTransformMath.h"
 #include "Common/Player.h"
 #include "Common/RandomValue.h"
 #include "Common/ThingTemplate.h"
@@ -140,13 +142,15 @@ void ParachuteContain::onDrawableBoundToObject()
 }
 
 //-------------------------------------------------------------------------------------------------
-void ParachuteContain::calcSwayMtx(const Coord3D* offset, Matrix3D* mtx)
+void ParachuteContain::calcSwayTransform(
+	const Coord3D* offset,
+	Engine::Math::AffineTransform3* transform)
 {
-	mtx->Make_Identity();
-	mtx->Translate(offset->x, offset->y, offset->z);
-	mtx->In_Place_Pre_Rotate_X(m_roll);
-	mtx->In_Place_Pre_Rotate_Y(m_pitch);
-	mtx->Translate(-offset->x, -offset->y, -offset->z);
+	*transform = Engine::Math::AffineTransform3::Identity();
+	Legacy_Translate(*transform, offset->x, offset->y, offset->z);
+	Legacy_In_Place_Pre_Rotate_X(*transform, m_roll);
+	Legacy_In_Place_Pre_Rotate_Y(*transform, m_pitch);
+	Legacy_Translate(*transform, -offset->x, -offset->y, -offset->z);
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -159,13 +163,13 @@ void ParachuteContain::updateBonePositions()
 		Drawable* parachuteDraw = getObject()->getDrawable();
 		if (parachuteDraw)
 		{
-			if (parachuteDraw->getPristineBonePositions( "PARA_COG", 0, &m_paraSwayBone, nullptr, 1) != 1)
+			if (parachuteDraw->getPristineBonePositions( "PARA_COG", 0, &m_paraSwayBone, 1) != 1)
 			{
 				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "PARA_COG not found");
 				m_paraSwayBone.zero();
 			}
 
-			if (parachuteDraw->getPristineBonePositions( "PARA_ATTCH", 0, &m_paraAttachBone, nullptr, 1 ) != 1)
+			if (parachuteDraw->getPristineBonePositions( "PARA_ATTCH", 0, &m_paraAttachBone, 1 ) != 1)
 			{
 				engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "PARA_ATTCH not found");
 				m_paraAttachBone.zero();
@@ -183,7 +187,7 @@ void ParachuteContain::updateBonePositions()
 		Drawable* riderDraw = rider ? rider->getDrawable() : nullptr;
 		if (riderDraw)
 		{
-			if (riderDraw->getPristineBonePositions( "PARA_MAN", 0, &m_riderAttachBone, nullptr, 1) != 1)
+			if (riderDraw->getPristineBonePositions( "PARA_MAN", 0, &m_riderAttachBone, 1) != 1)
 			{
 				//engine::debug::log_info("*** No parachute-attach bone... using object height!");
 				m_riderAttachBone.zero();
@@ -200,12 +204,12 @@ void ParachuteContain::updateOffsetsFromBones()
 {
 	const Coord3D* objPos = getObject()->getPosition();
 
-	getObject()->convertBonePosToWorldPos(&m_paraSwayBone, nullptr, &m_paraSwayOffset, nullptr);
+	getObject()->transformBoneToWorld(&m_paraSwayBone, nullptr, &m_paraSwayOffset, nullptr);
 	m_paraSwayOffset.x -= objPos->x;
 	m_paraSwayOffset.y -= objPos->y;
 	m_paraSwayOffset.z -= objPos->z;
 
-	getObject()->convertBonePosToWorldPos(&m_paraAttachBone, nullptr, &m_paraAttachOffset, nullptr);
+	getObject()->transformBoneToWorld(&m_paraAttachBone, nullptr, &m_paraAttachOffset, nullptr);
 	m_paraAttachOffset.x -= objPos->x;
 	m_paraAttachOffset.y -= objPos->y;
 	m_paraAttachOffset.z -= objPos->z;
@@ -215,7 +219,7 @@ void ParachuteContain::updateOffsetsFromBones()
 	{
 		const Coord3D* riderPos = rider->getPosition();
 
-		rider->convertBonePosToWorldPos(&m_riderAttachBone, nullptr, &m_riderAttachOffset, nullptr);
+		rider->transformBoneToWorld(&m_riderAttachBone, nullptr, &m_riderAttachOffset, nullptr);
 		m_riderAttachOffset.x -= riderPos->x;
 		m_riderAttachOffset.y -= riderPos->y;
 		m_riderAttachOffset.z -= riderPos->z;
@@ -409,9 +413,9 @@ UpdateSleepTime ParachuteContain::update()
 				updateBonePositions();
 				updateOffsetsFromBones();
 
-				Matrix3D tmp;
-				calcSwayMtx(&m_paraSwayOffset, &tmp);
-				draw->setInstanceMatrix(&tmp);
+				Engine::Math::AffineTransform3 transform;
+				calcSwayTransform(&m_paraSwayOffset, &transform);
+				draw->setInstanceTransform(&transform);
 			}
 
 			positionContainedObjectsRelativeToContainer();
@@ -603,13 +607,13 @@ void ParachuteContain::positionRider(Object* rider)
 	{
 		if( rider->isDisabledByType( DISABLED_HELD ) )
 		{
-			Matrix3D tmp;
-			calcSwayMtx(&m_riderSwayOffset, &tmp);
-			draw->setInstanceMatrix(&tmp);
+			Engine::Math::AffineTransform3 transform;
+			calcSwayTransform(&m_riderSwayOffset, &transform);
+			draw->setInstanceTransform(&transform);
 		}
 		else
 		{
-			draw->setInstanceMatrix(nullptr);
+			draw->setInstanceTransform(nullptr);
 		}
 	}
 }

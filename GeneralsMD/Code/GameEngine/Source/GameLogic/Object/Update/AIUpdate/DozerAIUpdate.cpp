@@ -30,6 +30,7 @@
 // USER INCLUDES //////////////////////////////////////////////////////////////////////////////////
 #include "PreRTS.h"
 import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
+import Engine.Core.Math.Vector3;
 
 #include "Common/ActionManager.h"
 #include "Common/Team.h"
@@ -1898,16 +1899,17 @@ void DozerAIUpdate::privateResumeConstruction( Object *obj, CommandSourceType cm
 	Coord3D bestPosition = theirPosition;// This answer is the best, as it includes findPositionAround
 	Coord3D workingPosition = theirPosition;// But if findPositionAround fails, we need to say something.
 
-	Vector3 offset( ourPosition.x - theirPosition.x,
-									ourPosition.y - theirPosition.y,
-									ourPosition.z - theirPosition.z );
-	offset.Normalize();
+	Engine::Math::Vector3 offset{
+		ourPosition.x - theirPosition.x,
+		ourPosition.y - theirPosition.y,
+		ourPosition.z - theirPosition.z};
+	offset = offset.Normalized_Legacy();
 	// This scaler makes FindPositionAround bias towards our side
 	offset = offset * (target->getGeometryInfo().getMajorRadius() / 2);
 
-	workingPosition.x += offset.X;
-	workingPosition.y += offset.Y;
-	workingPosition.z += offset.Z;
+	workingPosition.x += offset.x;
+	workingPosition.y += offset.y;
+	workingPosition.z += offset.z;
 
 	// this is a little cheesy... the idea is that we can only choose a location that is pretty close
 	// in z to the desired one. this prevents us from choosing a space at the bottom of a cliff when
@@ -2555,5 +2557,4 @@ void DozerAIUpdate::loadPostProcess()
  // extend base class
 	AIUpdateInterface::loadPostProcess();
 }
-
 

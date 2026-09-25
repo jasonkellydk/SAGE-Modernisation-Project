@@ -37,7 +37,6 @@
 class OpenContain;
 class Player;
 class ExitInterface;
-class Matrix3D;
 class Weapon;
 enum CommandSourceType CPP_11(: Int);
 

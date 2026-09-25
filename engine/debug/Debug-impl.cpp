@@ -78,7 +78,14 @@ struct FileLog::State { std::shared_ptr<spdlog::logger> logger; };
 void initialize(std::string_view file_path)
 {
     std::scoped_lock lock(logger_mutex);
-    if (spdlog::get("engine")) return;
+    if (auto existing = spdlog::get("engine")) {
+        // A message logged before startup created a console-only logger; attach the file sink now.
+        if (!file_path.empty() && current_log_path.empty()) {
+            current_log_path = std::string(file_path);
+            existing->sinks().emplace_back(std::make_shared<spdlog::sinks::basic_file_sink_mt>(current_log_path, true));
+        }
+        return;
+    }
     std::vector<spdlog::sink_ptr> sinks;
     sinks.emplace_back(std::make_shared<spdlog::sinks::stdout_color_sink_mt>());
     if (!file_path.empty()) {

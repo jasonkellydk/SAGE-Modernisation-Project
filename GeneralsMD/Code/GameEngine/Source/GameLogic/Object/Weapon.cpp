@@ -29,6 +29,7 @@
 
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 #include "PreRTS.h"
+import Engine.Core.Math.Scalar;
 import engine.profiling;
 import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
@@ -55,6 +56,8 @@ import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 #include "GameClient/FXList.h"
 #include "GameClient/InGameUI.h"
 #include "GameClient/ParticleSys.h"
+import Engine.Core.Math.AffineTransform3;
+#include "Common/LegacyTransformMath.h"
 
 #include "GameLogic/Damage.h"
 #include "GameLogic/ExperienceTracker.h"
@@ -954,7 +957,7 @@ UnsignedInt WeaponTemplate::fireWeaponTemplate
 			// bah. just play it at the drawable's pos.
 			//engine::debug::log_info("*** WeaponFireFX not fully handled by the client");
 			const Coord3D* where = isContactWeapon() ? &targetPos : sourceObj->getDrawable()->getPosition();
-			FXList::doFXPos(fx, where, sourceObj->getDrawable()->getTransformMatrix(), getWeaponSpeed(), &targetPos, getPrimaryDamageRadius(bonus));
+			FXList::doFXPos(fx, where, &sourceObj->getDrawable()->worldTransform(), getWeaponSpeed(), &targetPos, getPrimaryDamageRadius(bonus));
 		}
 	}
 
@@ -1495,14 +1498,13 @@ void WeaponTemplate::dealDamageInternal(ObjectID sourceID, ObjectID victimID, co
 					continue; // We are directional damage, but can't figure out our direction.  Just bail.
 
 				// People can only be hit in a cone oriented as the firer is oriented
-				Vector3 sourceVector = source->getTransformMatrix()->Get_X_Vector();
-				Vector3 damageVector(damageDirection.x, damageDirection.y, damageDirection.z);
-				sourceVector.Normalize();
-				damageVector.Normalize();
+				const Engine::Math::Vector3 sourceVector = source->worldTransform().Basis_X().Normalized_Legacy();
+				const Engine::Math::Vector3 damageVector =
+					Engine::Math::Vector3{damageDirection.x, damageDirection.y, damageDirection.z}.Normalized_Legacy();
 
 				// These are now normalized, so the dot productis actually the Cos of the angle they form
 				// A smaller Cos would mean a more obtuse angle
-				if( Vector3::Dot_Product(sourceVector, damageVector) < Cos(allowedAngle) )
+				if (sourceVector.Dot(damageVector) < Cos(allowedAngle))
 					continue;// Too far to the side, can't hurt them.
 			}
 
@@ -1515,9 +1517,9 @@ void WeaponTemplate::dealDamageInternal(ObjectID sourceID, ObjectID victimID, co
 				Coord3D shockWaveVector = damageDirection;
 
 				// Guard against zero vector. Make vector straight up if that is the case
-				if (fabs(shockWaveVector.x) < WWMATH_EPSILON &&
-						fabs(shockWaveVector.y) < WWMATH_EPSILON &&
-						fabs(shockWaveVector.z) < WWMATH_EPSILON)
+				if (fabs(shockWaveVector.x) < Engine::Math::DefaultTolerance &&
+						fabs(shockWaveVector.y) < Engine::Math::DefaultTolerance &&
+						fabs(shockWaveVector.z) < Engine::Math::DefaultTolerance)
 				{
 					shockWaveVector.z = 1.0f;
 				}
@@ -2625,7 +2627,7 @@ Bool Weapon::privateFireWeapon(
 					if (lmi)
 					{
 						VeterancyLevel v = sourceObj->getVeterancyLevel();
-						FXList::doFXPos(m_template->getFireFX(v), victimObj->getPosition(), victimObj->getTransformMatrix(), 0, victimObj->getPosition(), 0);
+						FXList::doFXPos(m_template->getFireFX(v), victimObj->getPosition(), &victimObj->worldTransform(), 0, victimObj->getPosition(), 0);
 						lmi->disarm();
 						found = true;
 						break;
@@ -2636,7 +2638,7 @@ Bool Weapon::privateFireWeapon(
 				if( (!found && victimObj->isKindOf( KINDOF_MINE )) || victimObj->isKindOf( KINDOF_BOOBY_TRAP ) || victimObj->isKindOf( KINDOF_DEMOTRAP ) )
 				{
 					VeterancyLevel v = sourceObj->getVeterancyLevel();
-					FXList::doFXPos(m_template->getFireFX(v), victimObj->getPosition(), victimObj->getTransformMatrix(), 0, victimObj->getPosition(), 0);
+					FXList::doFXPos(m_template->getFireFX(v), victimObj->getPosition(), &victimObj->worldTransform(), 0, victimObj->getPosition(), 0);
 					TheGameLogic->destroyObject( victimObj );// douse this thing before somebody gets hurt!
 					found = true;
 				}
@@ -3024,7 +3026,7 @@ void Weapon::processRequestAssistance( const Object *requestingObject, Object *v
 	const Object* launcher,
 	WeaponSlotType wslot,
 	Int specificBarrelToUse,
-	Matrix3D& worldTransform,
+	Engine::Math::AffineTransform3& worldTransform,
 	Coord3D& worldPos
 )
 {
@@ -3034,11 +3036,11 @@ void Weapon::processRequestAssistance( const Object *requestingObject, Object *v
 		// a minor case and an oft used function, but the major case is huge and full of math.
 		if(launcher->getContainedBy()->getContain()->isEnclosingContainerFor(launcher))
 		{
-			worldTransform = *launcher->getTransformMatrix();
-			Vector3 tmp = worldTransform.Get_Translation();
-			worldPos.x = tmp.X;
-			worldPos.y = tmp.Y;
-			worldPos.z = tmp.Z;
+			worldTransform = launcher->worldTransform();
+			const Engine::Math::Vector3 position = worldTransform.Translation();
+			worldPos.x = position.x;
+			worldPos.y = position.y;
+			worldPos.z = position.z;
 			return;
 		}
 	}
@@ -3049,16 +3051,16 @@ void Weapon::processRequestAssistance( const Object *requestingObject, Object *v
 	WhichTurretType tur = ai ? ai->getWhichTurretForWeaponSlot(wslot, &turretAngle, &turretPitch) : TURRET_INVALID;
 	//CRCDEBUG_LOG(("calcProjectileLaunchPosition(): Turret %d, slot %d, barrel %d for %s", tur, wslot, specificBarrelToUse, DescribeObject(launcher).str()));
 
-	Matrix3D attachTransform(true);
+	Engine::Math::AffineTransform3 attachTransform = Engine::Math::AffineTransform3::Identity();
 	Coord3D turretRotPos = {0.0f, 0.0f, 0.0f};
 	Coord3D turretPitchPos = {0.0f, 0.0f, 0.0f};
 	const Drawable* draw = launcher->getDrawable();
 	//CRCDEBUG_LOG(("Do we have a drawable? %d", (draw != nullptr)));
-	if (!draw || !draw->getProjectileLaunchOffset(wslot, specificBarrelToUse, &attachTransform, tur, &turretRotPos, &turretPitchPos))
+	if (!draw || !draw->getProjectileLaunchTransform(wslot, specificBarrelToUse, &attachTransform, tur, &turretRotPos, &turretPitchPos))
 	{
 		//CRCDEBUG_LOG(("ProjectileLaunchPos %d %d not found!",wslot, specificBarrelToUse));
 		engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "ProjectileLaunchPos %d %d not found!",wslot, specificBarrelToUse);
-		attachTransform.Make_Identity();
+		attachTransform = Engine::Math::AffineTransform3::Identity();
 		turretRotPos.zero();
 		turretPitchPos.zero();
 	}
@@ -3067,26 +3069,21 @@ void Weapon::processRequestAssistance( const Object *requestingObject, Object *v
 		// The attach transform is the pristine front and center position of the fire point
 		// We can't read from the client, so we need to reproduce the actual point that
 		// takes turn and pitch into account.
-		Matrix3D turnAdjustment(1);
-		Matrix3D pitchAdjustment(1);
+		Engine::Math::AffineTransform3 turnAdjustment = Engine::Math::AffineTransform3::Identity();
+		Engine::Math::AffineTransform3 pitchAdjustment = Engine::Math::AffineTransform3::Identity();
 
 		// To rotate about a point, move that point to 0,0, rotate, then move it back.
 		// Pre rotate will keep the first twist from screwing the angle of the second pitch
-		pitchAdjustment.Translate( turretPitchPos.x, turretPitchPos.y, turretPitchPos.z );
-		pitchAdjustment.In_Place_Pre_Rotate_Y(-turretPitch);
-		pitchAdjustment.Translate( -turretPitchPos.x, -turretPitchPos.y, -turretPitchPos.z );
+		Legacy_Translate(pitchAdjustment, turretPitchPos.x, turretPitchPos.y, turretPitchPos.z);
+		Legacy_In_Place_Pre_Rotate_Y(pitchAdjustment, -turretPitch);
+		Legacy_Translate(pitchAdjustment, -turretPitchPos.x, -turretPitchPos.y, -turretPitchPos.z);
 
-		turnAdjustment.Translate( turretRotPos.x, turretRotPos.y, turretRotPos.z );
-		turnAdjustment.In_Place_Pre_Rotate_Z(turretAngle);
-		turnAdjustment.Translate( -turretRotPos.x, -turretRotPos.y, -turretRotPos.z );
+		Legacy_Translate(turnAdjustment, turretRotPos.x, turretRotPos.y, turretRotPos.z);
+		Legacy_In_Place_Pre_Rotate_Z(turnAdjustment, turretAngle);
+		Legacy_Translate(turnAdjustment, -turretRotPos.x, -turretRotPos.y, -turretRotPos.z);
 
-#ifdef ALLOW_TEMPORARIES
-		attachTransform = turnAdjustment * pitchAdjustment * attachTransform;
-#else
-		Matrix3D tmp = attachTransform;
-		attachTransform.mul(turnAdjustment, pitchAdjustment);
-		attachTransform.postMul(tmp);
-#endif
+		// (turn * pitch) * attach, in that association order.
+		attachTransform = Compose(Compose(turnAdjustment, pitchAdjustment), attachTransform);
 	}
 
 //#if defined(RTS_DEBUG)
@@ -3094,12 +3091,11 @@ void Weapon::processRequestAssistance( const Object *requestingObject, Object *v
 //  engine::debug::invariant((muzzleHeight > 0.001f), "muzzleHeight > 0.001f", __FILE__, __LINE__, "YOUR TURRET HAS A VERY LOW PROJECTILE LAUNCH POSITION, BUT FOUND A VALID BONE. DID YOU PICK THE WRONG ONE? %s", launcher->getTemplate()->getName().str());
 //#endif
 
-  launcher->convertBonePosToWorldPos(nullptr, &attachTransform, nullptr, &worldTransform);
-
-	Vector3 tmp = worldTransform.Get_Translation();
-	worldPos.x = tmp.X;
-	worldPos.y = tmp.Y;
-	worldPos.z = tmp.Z;
+	worldTransform = launcher->toWorldTransform(attachTransform);
+	const Engine::Math::Vector3 position = worldTransform.Translation();
+	worldPos.x = position.x;
+	worldPos.y = position.y;
+	worldPos.z = position.z;
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -3120,13 +3116,13 @@ void Weapon::processRequestAssistance( const Object *requestingObject, Object *v
 		return;
 	}
 
-	Matrix3D worldTransform(true);
+	Engine::Math::AffineTransform3 worldTransform = Engine::Math::AffineTransform3::Identity();
 	Coord3D worldPos;
 
 	Weapon::calcProjectileLaunchPosition(launcher, wslot, specificBarrelToUse, worldTransform, worldPos);
 
 	projectile->getDrawable()->setDrawableHidden(false);
-	projectile->setTransformMatrix(&worldTransform);
+	projectile->setWorldTransform(worldTransform);
 	projectile->setPosition(&worldPos);
 	projectile->getExperienceTracker()->setExperienceSink( launcher->getID() );
 
@@ -3149,26 +3145,6 @@ void Weapon::getFiringLineOfSightOrigin(const Object* source, Coord3D& origin) c
 	// he clears this check and transitions to attacking.  This puts his gun at waist level and
 	// now he fails this check so he transitions back.  Our height won't change.
 	origin.z += source->getGeometryInfo().getMaxHeightAbovePosition();
-
-/*
-	if (m_template->getProjectileTemplate() == nullptr)
-	{
-		// note that we want to measure from the top of the collision
-		// shape, not the bottom! (most objects have eyes a lot closer
-		// to their head than their feet. if we have really odd critters
-		// with eye-feet, we'll need to change this assumption.)
-		origin.z += source->getGeometryInfo().getMaxHeightAbovePosition();
-	}
-	else
-	{
-		Matrix3D tmp(true);
-		Coord3D launchPos = {0.0f, 0.0f, 0.0f};
-		calcProjectileLaunchPosition(source, m_wslot, m_curBarrel, tmp, launchPos);
-		origin.x += launchPos.x - source->getPosition()->x;
-		origin.y += launchPos.y - source->getPosition()->y;
-		origin.z += launchPos.z - source->getPosition()->z;
-	}
-*/
 }
 
 //-------------------------------------------------------------------------------------------------

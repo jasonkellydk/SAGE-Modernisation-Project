@@ -59,6 +59,7 @@ import Graphics.Scene.Debug.Renderer;
 #include "Common/MapObject.h"
 import engine.debug;
 import Graphics.Materials.State;
+import Engine.Core.Math.Vector3;
 
 
 #if defined(RTS_DEBUG)
@@ -142,19 +143,21 @@ W3DDebugIcons & W3DDebugIcons::operator = (const W3DDebugIcons & that)
 	return *this;
 }
 
-void W3DDebugIcons::Get_Obj_Space_Bounding_Sphere(SphereClass & sphere) const
+void W3DDebugIcons::Get_Local_Bounding_Sphere(Engine::Math::Sphere3 & sphere) const
 {
-	Vector3	ObjSpaceCenter(TheGlobalData->m_waterExtentX,TheGlobalData->m_waterExtentY,50*MAP_XY_FACTOR);
+	const Engine::Math::Vector3 ObjSpaceCenter(TheGlobalData->m_waterExtentX,TheGlobalData->m_waterExtentY,50*MAP_XY_FACTOR);
 	float length = ObjSpaceCenter.Length();
 
-	sphere.Init(ObjSpaceCenter, length);
+	sphere = {ObjSpaceCenter, length};
 }
 
-void W3DDebugIcons::Get_Obj_Space_Bounding_Box(AABoxClass & box) const
+void W3DDebugIcons::Get_Local_Bounds(Engine::Math::AxisAlignedBox3 & box) const
 {
-	Vector3	minPt(-2*TheGlobalData->m_waterExtentX,-2*TheGlobalData->m_waterExtentY,0);
-	Vector3	maxPt(2*TheGlobalData->m_waterExtentX,2*TheGlobalData->m_waterExtentY,100*MAP_XY_FACTOR);
-	box.Init(minPt,maxPt);
+	// Legacy AABoxClass::Init(center, extent): the first vector is the center,
+	// the second the half-extent.
+	const Engine::Math::Vector3 center(-2*TheGlobalData->m_waterExtentX,-2*TheGlobalData->m_waterExtentY,0);
+	const Engine::Math::Vector3 extent(2*TheGlobalData->m_waterExtentX,2*TheGlobalData->m_waterExtentY,100*MAP_XY_FACTOR);
+	box = {center - extent, center + extent};
 }
 
 Int W3DDebugIcons::Class_ID() const
@@ -230,16 +233,16 @@ void W3DDebugIcons::Render(W3DRenderContext& info)
         const unsigned alpha=frames<100 ? static_cast<unsigned>(64.0f*frames/100) : 64;
         const unsigned color=icon.color.getAsInt() | (alpha<<24);
         const float width=icon.width*0.5f;
-        const std::array<Vector3,4> corners{
-            Vector3(icon.position.x-width,icon.position.y-width,icon.position.z),
-            Vector3(icon.position.x+width,icon.position.y-width,icon.position.z),
-            Vector3(icon.position.x+width,icon.position.y+width,icon.position.z),
-            Vector3(icon.position.x-width,icon.position.y+width,icon.position.z)};
+        const std::array<Engine::Math::Vector3,4> corners{{
+            {icon.position.x-width,icon.position.y-width,icon.position.z},
+            {icon.position.x+width,icon.position.y-width,icon.position.z},
+            {icon.position.x+width,icon.position.y+width,icon.position.z},
+            {icon.position.x-width,icon.position.y+width,icon.position.z}}};
         const auto base=static_cast<std::uint32_t>(vertices.size());
         for (const auto& corner : corners) {
-            Vector3 point; Matrix3D::Transform_Vector(Get_Transform(),corner,&point);
+            const auto point = Get_Transform().Transform_Point(corner);
             Graphics::SurfaceVertex vertex;
-            vertex.position={point.X,point.Y,point.Z};
+            vertex.position={point.x,point.y,point.z};
             vertex.color={float((color>>16)&255)/255,float((color>>8)&255)/255,float(color&255)/255,float(color>>24)/255};
             vertices.push_back(vertex);
         }

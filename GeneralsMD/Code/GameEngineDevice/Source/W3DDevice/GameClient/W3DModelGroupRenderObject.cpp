@@ -435,40 +435,42 @@ void W3DModelGroupRenderObject::Update_Obj_Space_Bounding_Volumes()
 
 	// if we don't have any sub objects, just set default bounds
 	if (Get_Num_Sub_Objects() <= 0) {
-		ObjSphere.Init(Vector3(0,0,0),0);
-		ObjBox.Center.Set(0,0,0);
-		ObjBox.Extent.Set(0,0,0);
+		ObjSphere = {};
+		ObjBox = {};
 		return;
 	}
 
 
-	AABoxClass obj_aabox;
-	MinMaxAABoxClass box;
-	SphereClass sphere;
+	Engine::Math::AxisAlignedBox3 box;
 
 	// loop through all sub-objects, combining their object-space bounding spheres and boxes.
 	robj = Get_Sub_Object(0);
 	engine::debug::assert_condition((robj), "robj", __FILE__, __LINE__, "assertion failed");
-	robj->Get_Obj_Space_Bounding_Sphere(ObjSphere);
-	robj->Get_Obj_Space_Bounding_Box(obj_aabox);
+	robj->Get_Local_Bounding_Sphere(ObjSphere);
+	robj->Get_Local_Bounds(box);
 	robj->Release_Ref();
-	box.Init(obj_aabox);
+	ObjBox = box;
 
 	for (i=1; i<Get_Num_Sub_Objects(); i++) {
 
 		robj = Get_Sub_Object(i);
 		engine::debug::assert_condition((robj), "robj", __FILE__, __LINE__, "assertion failed");
 
-		robj->Get_Obj_Space_Bounding_Sphere(sphere);
-		robj->Get_Obj_Space_Bounding_Box(obj_aabox);
+		Engine::Math::Sphere3 sphere;
+		robj->Get_Local_Bounding_Sphere(sphere);
+		robj->Get_Local_Bounds(box);
 
-		ObjSphere.Add_Sphere(sphere);
-		box.Add_Box(obj_aabox);
+		// Empty spheres (radius <= 0) and zero-extent boxes never contributed
+		// to the merged bounds.
+		if (sphere.radius > 0.0f)
+			ObjSphere.Include(sphere);
+		if (!(box.minimum == box.maximum)) {
+			ObjBox.Include(box.minimum);
+			ObjBox.Include(box.maximum);
+		}
 
 		robj->Release_Ref();
 	}
-
-	ObjBox.Init(box);
 
    Invalidate_Cached_Bounding_Volumes();
 
@@ -510,4 +512,3 @@ const char * W3DModelGroupRenderObject::Get_Base_Model_Name () const
 
 	return BaseModelName;
 }
-

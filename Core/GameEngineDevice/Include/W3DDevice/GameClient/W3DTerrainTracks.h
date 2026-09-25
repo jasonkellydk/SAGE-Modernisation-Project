@@ -60,8 +60,8 @@ public:
 	virtual W3DRenderObject *	Clone() const override;
 	virtual int						Class_ID() const override;
 	virtual void					Render(W3DRenderContext & rinfo) override;
-	virtual void					Get_Obj_Space_Bounding_Sphere(SphereClass & sphere) const override;
-    virtual void					Get_Obj_Space_Bounding_Box(AABoxClass & aabox) const override;
+	virtual void					Get_Local_Bounding_Sphere(Engine::Math::Sphere3 & sphere) const override;
+    virtual void					Get_Local_Bounds(Engine::Math::AxisAlignedBox3 & aabox) const override;
 
 	Int freeTerrainTracksResources();	///<free W3D assets used for this track
 	void init( Real width, Real length, const Char *texturename);	///<allocate W3D resources and set size
@@ -73,21 +73,21 @@ public:
 protected:
     Graphics::SurfaceMeshHandle m_graphicsMesh;
 	W3DTextureHandle *m_stageZeroTexture;	///<primary texture
-	SphereClass	m_boundingSphere;		///<bounding sphere of TerrainTracks
-	AABoxClass	m_boundingBox;			///<bounding box of TerrainTracks
+	Engine::Math::Sphere3	m_boundingSphere;		///<bounding sphere of TerrainTracks
+	Engine::Math::AxisAlignedBox3	m_boundingBox;			///<bounding box of TerrainTracks
 	Int			m_activeEdgeCount;			///<number of active edges in segment list
 	Int			m_totalEdgesAdded;		///<number of edges ever added to this track
 	const Drawable	*m_ownerDrawable;	///<logical object that's laying down tread marks.
 
 	struct edgeInfo{
-		Vector3	endPointPos[2];			///<the 2 endpoints on the edge
-		Vector2	endPointUV[2];			///< uv coordinates at each end point
+		Engine::Math::Vector3	endPointPos[2];			///<the 2 endpoints on the edge
+		Engine::Math::Vector2	endPointUV[2];			///< uv coordinates at each end point
 		Int		timeAdded;				///< time when edge was created.
 		Real	alpha;					///< current alpha value for rendering
 	};
 
 	edgeInfo	m_edges[MAX_TRACK_EDGE_COUNT];	///<edges at each segment break
-	Vector3		m_lastAnchor;						///<location of last edge center
+	Engine::Math::Vector3		m_lastAnchor;						///<location of last edge center
 	Int			m_bottomIndex;						///<points at oldest edge on track
 	Int			m_topIndex;						///<points to newest edge on track
 	Bool		m_haveAnchor;					///<set to false until first edge is added

@@ -22,6 +22,7 @@
 #include "StdAfx.h"
 
 #include "W3DView.h"
+import Engine.Core.Math.Vector3;
 #include "AmbientLightDialog.h"
 #include "MainFrm.h"
 #include "W3DViewDoc.h"
@@ -89,13 +90,13 @@ CAmbientLightDialog::OnInitDialog ()
     CW3DViewDoc *pCDoc = ::GetCurrentDocument ();
     if (pCDoc && pCDoc->GetScene ())
     {
-        Vector3 lightSettings = pCDoc->GetScene ()->Get_Ambient_Light ();
+        Engine::Math::Vector3 lightSettings = pCDoc->GetScene ()->Get_Ambient_Light ();
 
         // Remember these initial settings so we can restore them
         // if the user cancels
-        m_initialRed = int(lightSettings.X * 100.00F);
-        m_initialGreen = int(lightSettings.Y * 100.00F);
-        m_initialBlue = int(lightSettings.Z * 100.00F);
+        m_initialRed = int(lightSettings.x * 100.00F);
+        m_initialGreen = int(lightSettings.y * 100.00F);
+        m_initialBlue = int(lightSettings.z * 100.00F);
     }
 
     if ((m_initialRed == m_initialGreen) &&
@@ -146,10 +147,10 @@ CAmbientLightDialog::OnHScroll
         m_blueSlider.SetPos (iCurrentPos);
     }
 
-    Vector3 lightSettings;
-    lightSettings.X = float(m_redSlider.GetPos ()) / 100.00F;
-    lightSettings.Y = float(m_greenSlider.GetPos ()) / 100.00F;
-    lightSettings.Z = float(m_blueSlider.GetPos ()) / 100.00F;
+    Engine::Math::Vector3 lightSettings;
+    lightSettings.x = float(m_redSlider.GetPos ()) / 100.00F;
+    lightSettings.y = float(m_greenSlider.GetPos ()) / 100.00F;
+    lightSettings.z = float(m_blueSlider.GetPos ()) / 100.00F;
 
     // Get a pointer to the document so we can change the scene's light
     // settings
@@ -171,10 +172,10 @@ CAmbientLightDialog::OnHScroll
 void
 CAmbientLightDialog::OnCancel ()
 {
-    Vector3 lightSettings;
-    lightSettings.X = float(m_initialRed) / 100.00F;
-    lightSettings.Y = float(m_initialGreen) / 100.00F;
-    lightSettings.Z = float(m_initialBlue) / 100.00F;
+    Engine::Math::Vector3 lightSettings;
+    lightSettings.x = float(m_initialRed) / 100.00F;
+    lightSettings.y = float(m_initialGreen) / 100.00F;
+    lightSettings.z = float(m_initialBlue) / 100.00F;
 
     // Get a pointer to the document so we can change the scene's light
     // settings
@@ -226,10 +227,10 @@ CAmbientLightDialog::OnGrayscaleCheck ()
         m_greenSlider.SetPos (m_redSlider.GetPos ());
         m_blueSlider.SetPos (m_redSlider.GetPos ());
 
-        Vector3 lightSettings;
-        lightSettings.X = float(m_redSlider.GetPos ()) / 100.00F;
-        lightSettings.Y = float(m_greenSlider.GetPos ()) / 100.00F;
-        lightSettings.Z = float(m_blueSlider.GetPos ()) / 100.00F;
+        Engine::Math::Vector3 lightSettings;
+        lightSettings.x = float(m_redSlider.GetPos ()) / 100.00F;
+        lightSettings.y = float(m_greenSlider.GetPos ()) / 100.00F;
+        lightSettings.z = float(m_blueSlider.GetPos ()) / 100.00F;
 
         // Get a pointer to the document so we can change the scene's light
         // settings
@@ -241,4 +242,3 @@ CAmbientLightDialog::OnGrayscaleCheck ()
         }
     }
 }
-

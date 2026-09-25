@@ -148,7 +148,7 @@ OpenContain::OpenContain( Thing *thing, const ModuleData* moduleData ) : UpdateM
 
 	for( Int i = 0; i < MAX_FIRE_POINTS; i++ )
 	{
-		m_firePoints[ i ].Make_Identity();
+		m_firePoints[i] = Engine::Math::AffineTransform3::Identity();
 	}
 
 }
@@ -1317,7 +1317,7 @@ void OpenContain::putObjAtNextFirePoint( Object *obj )
 	}
 
 	// get the position
-	Matrix3D matrix;
+	Engine::Math::AffineTransform3 transform;
 	if( getOpenContainModuleData()->m_passengersInTurret )
 	{
 		// If our passengers are in our turret, we need to recompute the Matrix.
@@ -1330,22 +1330,22 @@ void OpenContain::putObjAtNextFirePoint( Object *obj )
 		}
 		firepoint.concat(suffix);
 
-		getObject()->getSingleLogicalBonePositionOnTurret(TURRET_MAIN, firepoint.str(), nullptr, &matrix );
+		getObject()->getSingleLogicalBonePositionOnTurret(TURRET_MAIN, firepoint.str(), nullptr, &transform);
 	}
 	else
 	{
-		matrix = m_firePoints[ m_firePointNext ];
+		transform = m_firePoints[m_firePointNext];
 	}
 
-	Vector3 vectorPos = matrix.Get_Translation();
+	const Engine::Math::Vector3 vectorPos = transform.Translation();
 	Coord3D pos;
-	pos.set( vectorPos.X, vectorPos.Y, vectorPos.Z );
+	pos.set(vectorPos.x, vectorPos.y, vectorPos.z);
 
 	// set the object position
 	if( isEnclosingContainerFor( obj ) )
 		obj->setPosition( &pos );
 	else
-		obj->setTransformMatrix( &matrix );//Only do everything if it matters
+		obj->setWorldTransform(transform);//Only do everything if it matters
 
 	// increment the next firepoint to use ... make sure to wrap if we need to
 	m_firePointNext++;
@@ -1835,7 +1835,7 @@ void OpenContain::xfer( Xfer *xfer )
 	m_conditionState.xfer( xfer );
 
 	// fire points
-	xfer->xferUser( &m_firePoints, sizeof( Matrix3D ) * MAX_FIRE_POINTS );
+	xfer->xferUser(&m_firePoints, sizeof(m_firePoints));
 
 	// fire point start
 	xfer->xferInt( &m_firePointStart );

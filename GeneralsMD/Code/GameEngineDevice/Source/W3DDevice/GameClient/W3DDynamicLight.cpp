@@ -33,15 +33,14 @@ namespace
 {
 Graphics::RenderLight Make_Graphics_Light(const W3DDynamicLight &light) noexcept
 {
-	const Vector3 position = light.Get_Position();
-	Vector3 diffuse;
-	light.Get_Diffuse(&diffuse);
+	const Engine::Math::Vector3 position = light.Get_Position();
+	const Engine::Math::Vector3 diffuse = light.Get_Diffuse();
 	return {
 		Graphics::RenderLightType::Point,
 		light.isEnabled() ? Graphics::RenderLightFlags::Enabled : Graphics::RenderLightFlags::None,
-		{position.X, position.Y, position.Z},
+		{position.x, position.y, position.z},
 		{0.0f, 0.0f, -1.0f},
-		{diffuse.X, diffuse.Y, diffuse.Z},
+		{diffuse.x, diffuse.y, diffuse.z},
 		light.Get_Intensity(),
 		light.Get_Attenuation_Range(),
 		0.0f,
@@ -137,8 +136,8 @@ void W3DDynamicLight::setFrameFade(UnsignedInt frameIncreaseTime, UnsignedInt de
 	m_curDecayFrameCount = decayFrameTime;
 	m_curIncreaseFrameCount = frameIncreaseTime;
 	m_increaseFrameCount = frameIncreaseTime;
-	Get_Ambient(&m_targetAmbient);
-	Get_Diffuse(&m_targetDiffuse);
+	m_targetAmbient = Get_Ambient();
+	m_targetDiffuse = Get_Diffuse();
 	m_targetRange = Get_Attenuation_Range();
 	Graphics::UpdatePointLight(m_graphicsLight, Make_Graphics_Light(*this));
 }

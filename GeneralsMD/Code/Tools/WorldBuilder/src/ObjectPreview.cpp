@@ -29,6 +29,9 @@ import Graphics.Frame.AttachmentBindings;
 #include "StdAfx.h"
 import Graphics.Scene.Lighting.Local;
 import Graphics.Frame.ToolFrame;
+import Engine.Core.Math.Sphere3;
+import Engine.Core.Math.Vector3;
+import Engine.Core.Math.AffineTransform3;
 #include "resource.h"
 
 #include "Lib/BaseType.h"
@@ -235,11 +238,9 @@ static UnsignedByte * generatePreview( const ThingTemplate *tt )
 		model = pMgr->Create_Render_Obj(modelName.str());
 		if (model)
 		{
-			const AABoxClass bbox = model->Get_Bounding_Box();
-//			Real height = bbox.Extent.Z;
-			const SphereClass sphere = model->Get_Bounding_Sphere();
-			Real dist = sphere.Radius*0.5;
-			model->Set_Position(Vector3(-sphere.Center.X, -sphere.Center.Y, -sphere.Center.Z));
+			const auto world_sphere = model->Get_Bounding_Sphere();
+			const Real dist = world_sphere.radius * 0.5f;
+			model->Set_Position(-world_sphere.center);
 
 			// Create reflection texture
 
@@ -269,9 +270,13 @@ static UnsignedByte * generatePreview( const ThingTemplate *tt )
 			// create the camera
 			Bool orthoCamera = false;
 			CameraClass *camera = NEW_REF( CameraClass, () );
-			Matrix3D camTran;
-			camTran.Look_At(Vector3(dist*2,dist*2,dist),Vector3(0.0f, 0.0f, 0.0f),0);
-			camera->Set_Transform( camTran);
+			// Matrix3D::Look_At: -Z towards the target, no roll
+			const Engine::Math::AffineTransform3 camTran = Engine::Math::AffineTransform3::Look_At(
+				{dist*2, dist*2, dist}, {0.0f, 0.0f, 0.0f});
+			float camElements[12];
+			for (int index = 0; index < 12; ++index)
+				camElements[index] = camTran.elements[index];
+			camera->Set_Transform( Matrix3D(camElements) );
 
 			Vector2 minVec = Vector2( -1, -1 );
 			Vector2 maxVec = Vector2( +1, +1 );
@@ -371,5 +376,3 @@ void ObjectPreview::DrawMyTexture(CDC *pDc, int top, int left, Int width, Int he
 		DIB_RGB_COLORS, SRCCOPY);
 	delete(pBI);
 }
-
-

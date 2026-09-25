@@ -42,6 +42,8 @@
 #include "WWLib/chunkio.h"
 #include "WWSaveLoad/persistfactory.h"
 
+import Engine.Core.Math.Vector3;
+
 #include "Threads.h"
 import engine.profiling;
 import engine.debug;
@@ -88,10 +90,9 @@ SoundSceneClass::SoundSceneClass ()
 {
 
 	m_Listener = W3DNEW Listener3DClass;
-	m_DynamicCullingSystem.Re_Partition (m_MinExtents, m_MaxExtents, 100.00F);
-	m_LogicalCullingSystem.Re_Partition (m_MinExtents, m_MaxExtents, 100.00F);
-	m_ListenerCullingSystem.Re_Partition (m_MinExtents, m_MaxExtents, 40.00F);
-	m_StaticCullingSystem.Re_Partition ();
+	m_DynamicSpatialIndex.Set_Cell_Size (100.0F);
+	m_LogicalSpatialIndex.Set_Cell_Size (100.0F);
+	m_StaticSpatialIndex.Set_Cell_Size (100.0F);
 }
 
 
@@ -115,15 +116,10 @@ SoundSceneClass::~SoundSceneClass ()
 void
 SoundSceneClass::Re_Partition
 (
-	const Vector3 &min_dimension,
-	const Vector3 &max_dimension
+	Engine::Math::Vector3 min_dimension,
+	Engine::Math::Vector3 max_dimension
 )
 {
-	m_DynamicCullingSystem.Re_Partition (min_dimension, max_dimension, 100.00F);
-	m_LogicalCullingSystem.Re_Partition (min_dimension, max_dimension, 100.00F);
-	m_ListenerCullingSystem.Re_Partition (min_dimension, max_dimension, 40.00F);
-	m_StaticCullingSystem.Re_Partition ();
-
 	m_MinExtents = min_dimension;
 	m_MaxExtents = max_dimension;
 }
@@ -168,19 +164,23 @@ SoundSceneClass::Collect_Logical_Sounds (unsigned int milliseconds, int listener
 		//
 		// Collect a list of the sounds this listener can hear.
 		//
-		Vector3 position = listener->Get_Position ();
-		m_LogicalCullingSystem.Reset_Collection ();
-		m_LogicalCullingSystem.Collect_Objects (position);
+		const Engine::Math::Vector3 position = listener->Get_Position ();
+		const auto logical_candidates = m_LogicalSpatialIndex.Query_Point(
+			{position.x, position.y, position.z});
 
 		//
 		//	Now loop through the list of sounds this listener can hear
 		// and notify their callback.
 		//
-		SoundCullObjClass * cull_obj;
-		for (	cull_obj = m_LogicalCullingSystem.Get_First_Collected_Object();
-				cull_obj != nullptr;
-				cull_obj = m_LogicalCullingSystem.Get_Next_Collected_Object (cull_obj))
+		for (SoundCullObjClass *cull_obj : logical_candidates)
 		{
+			// The spatial index returns every object in the listener's cell;
+			// keep only those whose cull box contains the listener (legacy
+			// grid-cull point collection).
+			if (!cull_obj->Cull_Box_Contains (position)) {
+				continue;
+			}
+
 			//
 			// Get a pointer to the current 'cull-sound' object.
 			//
@@ -190,12 +190,12 @@ SoundSceneClass::Collect_Logical_Sounds (unsigned int milliseconds, int listener
 			//	Test this sound against the scale associated with the current listener to
 			// see if the listener can really "hear" the sound.
 			//
-			const Vector3 &sound_pos	= cull_obj->Get_Bounding_Box ().Center;
-			Vector3 listener_pos			= listener->Get_Position ();
+			const Engine::Math::Vector3 sound_pos = sound_obj->Get_Position ();
+			const Engine::Math::Vector3 listener_pos = listener->Get_Position ();
 			float dropoff_radius			= sound_obj->Get_DropOff_Radius ();
 			float scale						= listener->Get_Effective_Scale ();
-			float test_radius2			= (dropoff_radius * scale) * (dropoff_radius * scale);
-			if ((listener_pos - sound_pos).Length2 () <= test_radius2) {
+			const float test_radius2 = (dropoff_radius * scale) * (dropoff_radius * scale);
+			if ((listener_pos - sound_pos).Length_Squared() <= test_radius2) {
 
 				//
 				//	Is the sound ready to notify?
@@ -244,35 +244,34 @@ SoundSceneClass::Collect_Audible_Sounds
 	//
 	// Collect a list of the audible dynamic sounds
 	//
-	Vector3 listener_pos = listener->Get_Position ();
-	m_DynamicCullingSystem.Reset_Collection ();
-	m_DynamicCullingSystem.Collect_Objects (listener_pos);
-
-	//
-	// Collect a list of the audible static sounds
-	//
-	m_StaticCullingSystem.Reset_Collection ();
-	m_StaticCullingSystem.Collect_Objects (listener_pos);
+	const Engine::Math::Vector3 listener_pos = listener->Get_Position ();
+	const auto dynamic_candidates = m_DynamicSpatialIndex.Query_Point(
+		{listener_pos.x, listener_pos.y, listener_pos.z});
+	const auto static_candidates = m_StaticSpatialIndex.Query_Point(
+		{listener_pos.x, listener_pos.y, listener_pos.z});
 
 	//
 	// Loop through all the dynamic sounds that are currently audible and make sure
 	// they are 'really' audible.  The culling systems just check bounding boxes
 	// but we need to be able to check attenuation spheres.
 	//
-	SoundCullObjClass * cull_obj = nullptr;
-	for (	cull_obj = m_DynamicCullingSystem.Get_First_Collected_Object();
-			cull_obj != nullptr;
-			cull_obj = m_DynamicCullingSystem.Get_Next_Collected_Object(cull_obj))
+	for (SoundCullObjClass *cull_obj : dynamic_candidates)
 	{
+		// Legacy grid-cull point collection: only objects whose cull box
+		// contains the listener are collected.
+		if (!cull_obj->Cull_Box_Contains (listener_pos)) {
+			continue;
+		}
+
 		// Get a pointer to the current 'cull-sound' object
 		AudibleSoundClass *sound_obj = (AudibleSoundClass *)cull_obj->Peek_Sound_Obj ();
 
 		// Perform a quick sphere-cull check to make sure this
 		// sound should really be audible
-		Vector3 pos = sound_obj->Get_Position ();
+		const Engine::Math::Vector3 pos = sound_obj->Get_Position ();
 		float radius = sound_obj->Get_DropOff_Radius ();
 		float radius2 = radius * radius;
-		float length2 = (pos - listener_pos).Length2 ();
+		const float length2 = (pos - listener_pos).Length_Squared();
 		if (length2 <= radius2) {
 
 			AudibleInfoClass *audible_info = new AudibleInfoClass (sound_obj, length2);
@@ -282,7 +281,7 @@ SoundSceneClass::Collect_Audible_Sounds
 			// Update this sound's runtime priority based on its distance
 			// from the sound emitter.
 			//
-			float length	= (pos - listener_pos).Quick_Length ();
+			const float length = (pos - listener_pos).Length();
 			float priority	= (length > 0) ? 1 - (length / radius) : 1.0F;
 			sound_obj->Set_Runtime_Priority (priority);
 		}
@@ -293,18 +292,22 @@ SoundSceneClass::Collect_Audible_Sounds
 	// they are 'really' audible.  The culling systems just check bounding boxes
 	// but we need to be able to check attenuation spheres.
 	//
-	for (	cull_obj = m_StaticCullingSystem.Get_First_Collected_Object();
-			cull_obj != nullptr;
-			cull_obj = m_StaticCullingSystem.Get_Next_Collected_Object(cull_obj))
+	for (SoundCullObjClass *cull_obj : static_candidates)
 	{
+		// Legacy AAB-tree point collection: only objects whose cull box
+		// contains the listener are collected.
+		if (!cull_obj->Cull_Box_Contains (listener_pos)) {
+			continue;
+		}
+
 		AudibleSoundClass *sound_obj = (AudibleSoundClass *)cull_obj->Peek_Sound_Obj ();
 
 		// Perform a quick sphere-cull check to make sure this
 		// sound should really be audible
-		Vector3 pos = sound_obj->Get_Position ();
+		const Engine::Math::Vector3 pos = sound_obj->Get_Position ();
 		float radius = sound_obj->Get_DropOff_Radius ();
 		float radius2 = radius * radius;
-		float length2 = (pos - listener_pos).Length2 ();
+		const float length2 = (pos - listener_pos).Length_Squared();
 		if (length2 <= radius2) {
 
 			AudibleInfoClass *audible_info = new AudibleInfoClass (sound_obj, length2);
@@ -314,7 +317,7 @@ SoundSceneClass::Collect_Audible_Sounds
 			// Update this sound's runtime priority based on its distance
 			// from the sound emitter.
 			//
-			float length	= (pos - listener_pos).Quick_Length ();
+			const float length = (pos - listener_pos).Length();
 			float priority	= (length > 0) ? 1 - (length / radius) : 1.0F;
 			sound_obj->Set_Runtime_Priority (priority);
 		}
@@ -533,7 +536,8 @@ SoundSceneClass::Add_Sound
 		//
 		// Add this object to the dynamic culling system
 		//
-		m_DynamicCullingSystem.Add_Object (cullable_sound);
+		cullable_sound->Set_Culling_System (&m_DynamicSpatialIndex);
+		m_DynamicSpatialIndex.Insert (cullable_sound, cullable_sound->Get_Spatial_Bounds ());
 		m_DynamicSounds.Add (cullable_sound);
 		Update_Sound (cullable_sound);
 
@@ -543,12 +547,12 @@ SoundSceneClass::Add_Sound
 		//
 		if (m_IsBatchMode == false) {
 
-			Vector3 listener_pos		= m_Listener->Get_Position ();
-			Vector3 sound_pos			= sound_obj->Get_Position ();
+			const Engine::Math::Vector3 listener_pos = m_Listener->Get_Position ();
+			const Engine::Math::Vector3 sound_pos = sound_obj->Get_Position ();
 			float radius				= sound_obj->Get_DropOff_Radius ();
 			float radius2				= radius * radius;
 
-			if (((listener_pos - sound_pos).Length2 ()) < radius2) {
+			if ((listener_pos - sound_pos).Length_Squared() < radius2) {
 				cull_sound = false;
 				m_LastSoundsAudible.Add (sound_obj);
 				start_playing = true;
@@ -620,7 +624,10 @@ SoundSceneClass::Remove_Sound
 		//
 		// Remove this sound from the dynamic culling system
 		//
-		m_DynamicCullingSystem.Remove_Object (cull_obj);
+		m_DynamicSpatialIndex.Remove (cull_obj);
+		if (cull_obj != nullptr) {
+			cull_obj->Set_Culling_System (nullptr);
+		}
 		m_DynamicSounds.Remove (cull_obj);
 
 		//
@@ -665,7 +672,8 @@ SoundSceneClass::Add_Static_Sound
 			//
 			// Add this object to the static culling system
 			//
-			m_StaticCullingSystem.Add_Object (cull_obj);
+			cull_obj->Set_Culling_System (&m_StaticSpatialIndex);
+			m_StaticSpatialIndex.Insert (cull_obj, cull_obj->Get_Spatial_Bounds ());
 			m_StaticSounds.Add (cull_obj);
 			Update_Sound (cull_obj);
 
@@ -676,12 +684,12 @@ SoundSceneClass::Add_Static_Sound
 			bool cull_sound = true;
 			if (m_IsBatchMode == false) {
 
-				Vector3 listener_pos		= m_Listener->Get_Position ();
-				Vector3 sound_pos			= sound_obj->Get_Position ();
+				const Engine::Math::Vector3 listener_pos = m_Listener->Get_Position ();
+				const Engine::Math::Vector3 sound_pos = sound_obj->Get_Position ();
 				float radius				= sound_obj->Get_DropOff_Radius ();
 				float radius2				= radius * radius;
 
-				if (((listener_pos - sound_pos).Length2 ()) < radius2) {
+				if ((listener_pos - sound_pos).Length_Squared() < radius2) {
 					cull_sound = false;
 					m_LastSoundsAudible.Add (sound_obj);
 					start_playing = true;
@@ -756,7 +764,10 @@ SoundSceneClass::Remove_Static_Sound
 		//
 		// Remove this sound from the static culling system
 		//
-		m_StaticCullingSystem.Remove_Object (cull_obj);
+		m_StaticSpatialIndex.Remove (cull_obj);
+		if (cull_obj != nullptr) {
+			cull_obj->Set_Culling_System (nullptr);
+		}
 		m_StaticSounds.Remove (cull_obj);
 
 		//
@@ -801,7 +812,8 @@ SoundSceneClass::Add_Logical_Sound
 			//
 			// Add this object to the logical culling system
 			//
-			m_LogicalCullingSystem.Add_Object (cullable_sound);
+			cullable_sound->Set_Culling_System (&m_LogicalSpatialIndex);
+			m_LogicalSpatialIndex.Insert (cullable_sound, cullable_sound->Get_Spatial_Bounds ());
 
 			//
 			//	Add this sound to our current sounds list
@@ -864,7 +876,10 @@ SoundSceneClass::Remove_Logical_Sound
 			// Remove this sound from the culling system
 			//
 			SoundCullObjClass *cull_obj = sound_obj->Peek_Cullable_Wrapper ();
-			m_LogicalCullingSystem.Remove_Object (cull_obj);
+			m_LogicalSpatialIndex.Remove (cull_obj);
+			if (cull_obj != nullptr) {
+				cull_obj->Set_Culling_System (nullptr);
+			}
 
 			//
 			// Remove this sound obj's wrapper
@@ -896,7 +911,10 @@ SoundSceneClass::Remove_Logical_Sound
 			// Remove this sound from the culling system
 			//
 			SoundCullObjClass *cull_obj = sound_obj->Peek_Cullable_Wrapper ();
-			m_LogicalCullingSystem.Remove_Object (cull_obj);
+			m_LogicalSpatialIndex.Remove (cull_obj);
+			if (cull_obj != nullptr) {
+				cull_obj->Set_Culling_System (nullptr);
+			}
 
 			//
 			// Remove this sound obj's wrapper
@@ -971,7 +989,7 @@ void
 SoundSceneClass::Update_Sound (SoundCullObjClass *sound_obj)
 {
 	if (sound_obj != nullptr) {
-		sound_obj->Set_Cull_Box(sound_obj->Get_Bounding_Box());
+		sound_obj->Update_Cull_Box ();
 	}
 }
 

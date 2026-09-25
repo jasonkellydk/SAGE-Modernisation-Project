@@ -64,6 +64,7 @@ class W3DRenderContext;
 class W3DLight;
 class W3DPropDrawModuleData;
 class GeometryInfo;
+import Engine.Core.Math.Sphere3;
 
 //-----------------------------------------------------------------------------
 //           Type Defines
@@ -77,14 +78,14 @@ typedef struct {
 	Int					propType;					///< Type of prop. Index into m_propTypes
 	ObjectShroudStatus ss;
 	Bool				visible;					///< Visible flag, updated each frame.
-	SphereClass bounds;				///< Bounding sphere for culling to set the visible flag.
+	Engine::Math::Sphere3 bounds;	///< Bounding sphere for culling to set the visible flag.
 } TProp;
 
 /// The individual data for a prop type.
 typedef struct {
 	W3DRenderObject *m_robj;			///< Render object for this kind of prop.
 	AsciiString			m_robjName;	///< Name of the render obj.
-	SphereClass			m_bounds;		///< Bounding boxes for the base prop models.
+	Engine::Math::Sphere3 m_bounds;	///< Bounds for the base prop models.
 } TPropType;
 
 //

@@ -812,9 +812,9 @@ StateReturnType DeliveringState::update() // Kick a dude out every so often
 							Coord3D pos;
 							AsciiString bone;
 							bone.format( "%s%02d", ai->getData()->m_visibleDropBoneName.str(), ai->getVisibleItemsDelivered() + 1 );
-							if( draw->getPristineBonePositions( ai->getData()->m_visibleDropBoneName.str(), ai->getVisibleItemsDelivered() + 1, &pos, nullptr, 1 ) > 0 )
+							if( draw->getPristineBonePositions( ai->getData()->m_visibleDropBoneName.str(), ai->getVisibleItemsDelivered() + 1, &pos, 1 ) > 0 )
 							{
-								draw->convertBonePosToWorldPos( &pos, nullptr, &pos, nullptr );
+								draw->transformBoneToWorld( &pos, nullptr, &pos, nullptr );
 								payload->setPosition( &pos );
 							}
 							else

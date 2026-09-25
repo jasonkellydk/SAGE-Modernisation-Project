@@ -33,7 +33,6 @@
 #include <cassert>
 #include "Lib/BaseType.h"
 #include "WWLib/refcount.h"
-#include "WWMath/vector3.h"
 #include "W3DDevice/GameClient/TileData.h"
 #include "Common/MapObject.h"
 

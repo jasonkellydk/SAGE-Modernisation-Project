@@ -267,7 +267,7 @@ static Coord3D getLocalEffectPos( const FXLocInfo *locInfo, Drawable *draw, cons
 			Coord3D pos;
 
 			// get the bone position
-			Int count = draw->getPristineBonePositions( locInfo->boneName.str(), 0, &pos, nullptr, 1 );
+			Int count = draw->getPristineBonePositions( locInfo->boneName.str(), 0, &pos, 1 );
 
 			// sanity, if bone not found revert back to location defined in struct (which is 0,0,0)
 			if( count == 0 )
@@ -284,7 +284,7 @@ static Coord3D getLocalEffectPos( const FXLocInfo *locInfo, Drawable *draw, cons
 
 			// get the bone positions
 			Int boneCount;
-			boneCount = draw->getPristineBonePositions( locInfo->boneName.str(), 1, positions, nullptr, MAX_BONES );
+			boneCount = draw->getPristineBonePositions( locInfo->boneName.str(), 1, positions, MAX_BONES );
 
 			// sanity, if bone not found revert back to location defined in struct (which is 0,0,0)
 			if( boneCount == 0 )
@@ -356,7 +356,7 @@ void TransitionDamageFX::onBodyDamageStateChange( const DamageInfo* damageInfo,
 				{
 
 					pos = getLocalEffectPos( &modData->m_fxList[ newState ][ i ].locInfo, draw );
-					getObject()->convertBonePosToWorldPos( &pos, nullptr, &pos, nullptr );
+					getObject()->transformBoneToWorld( &pos, nullptr, &pos, nullptr );
 					FXList::doFXPos( modData->m_fxList[ newState ][ i ].fx, &pos );
 
 				}
@@ -372,7 +372,7 @@ void TransitionDamageFX::onBodyDamageStateChange( const DamageInfo* damageInfo,
 				{
 
 					pos = getLocalEffectPos( &modData->m_OCL[ newState ][ i ].locInfo, draw );
-					getObject()->convertBonePosToWorldPos( &pos, nullptr, &pos, nullptr );
+					getObject()->transformBoneToWorld( &pos, nullptr, &pos, nullptr );
 					ObjectCreationList::create( modData->m_OCL[ newState ][ i ].ocl,
 																			getObject(), &pos, damageSource->getPosition(), INVALID_ANGLE );
 

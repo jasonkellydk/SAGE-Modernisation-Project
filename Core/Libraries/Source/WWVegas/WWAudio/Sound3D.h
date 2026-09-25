@@ -105,12 +105,12 @@ class Sound3DClass : public AudibleSoundClass
 		//////////////////////////////////////////////////////////////////////
 		//	Position/direction methods
 		//////////////////////////////////////////////////////////////////////
-		virtual void			Set_Position (const Vector3 &position) override;
-		virtual Vector3		Get_Position () const override { return m_Transform.Get_Translation (); }
+		virtual void Set_Position (Engine::Math::Vector3 position) override;
+		virtual Engine::Math::Vector3 Get_Position () const override { return m_Transform.Translation(); }
 
-		virtual void			Set_Listener_Transform (const Matrix3D &tm) override;
-		virtual void			Set_Transform (const Matrix3D &transform) override;
-		virtual Matrix3D		Get_Transform () const override { return m_Transform; }
+		virtual void Set_Listener_Transform (const Engine::Math::AffineTransform3 &transform) override;
+		virtual void Set_Transform (const Engine::Math::AffineTransform3 &transform) override;
+		virtual Engine::Math::AffineTransform3 Get_Transform () const override { return m_Transform; }
 		void						Update_Miles_Transform ();
 
 		//////////////////////////////////////////////////////////////////////
@@ -120,9 +120,9 @@ class Sound3DClass : public AudibleSoundClass
 		//
 		// The velocity settings are in meters per millisecond.
 		//
-		virtual void			Set_Velocity (const Vector3 &velocity);
-		virtual Vector3		Get_Velocity () const							{ return m_CurrentVelocity; }
-		virtual void			Get_Velocity (Vector3 &velocity) const			{ velocity = m_CurrentVelocity; }
+		virtual void Set_Velocity (Engine::Math::Vector3 velocity);
+		virtual Engine::Math::Vector3 Get_Velocity () const { return m_CurrentVelocity; }
+		virtual void Get_Velocity (Engine::Math::Vector3 &velocity) const { velocity = m_CurrentVelocity; }
 
 		virtual void			Auto_Calc_Velocity (bool autocalc = true)		{ m_bAutoCalcVel = autocalc; }
 		virtual bool			Is_Auto_Calc_Velocity_On () const			{ return m_bAutoCalcVel; }
@@ -186,7 +186,7 @@ class Sound3DClass : public AudibleSoundClass
 		//////////////////////////////////////////////////////////////////////
 		bool						m_IsTransformInitted;
 		bool						m_bAutoCalcVel;
-		Vector3					m_CurrentVelocity;
+		Engine::Math::Vector3 m_CurrentVelocity;
 		float						m_MaxVolRadius;
 		bool						m_IsStatic;
 		unsigned int			m_LastUpdate;

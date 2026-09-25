@@ -414,8 +414,8 @@ void RailedTransportDockUpdate::doPushOutDocking()
 				{
 					Coord3D finalPos;
 
-					draw->getPristineBonePositions( "DOCKWAITING07", 0, &finalPos, nullptr, 1 );
-					us->convertBonePosToWorldPos( &finalPos, nullptr, &finalPos, nullptr );
+					draw->getPristineBonePositions( "DOCKWAITING07", 0, &finalPos, 1 );
+					us->transformBoneToWorld( &finalPos, nullptr, &finalPos, nullptr );
 					unloaderAI->aiMoveToPosition( &finalPos, CMD_FROM_AI );
 
 				}

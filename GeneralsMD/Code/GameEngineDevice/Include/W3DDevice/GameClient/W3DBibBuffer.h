@@ -70,7 +70,7 @@ class W3DMeshRenderObject;
 
 /// The individual data for a Bib.
 typedef struct {
-	Vector3			m_corners[4];				///< Drawing location
+	Engine::Math::Vector3			m_corners[4];				///< Drawing location
 	Bool				m_highlight;				///< Use the highlight texture.
 	Int					m_color;						///< Tint perhaps.
 	ObjectID		m_objectID;					///< The object id this bib corresponds to.
@@ -90,8 +90,8 @@ public:
 	W3DBibBuffer();
 	~W3DBibBuffer();
 	/// Add a bib at location.  Name is the w3d model name.
-	void addBib(Vector3 corners[4], ObjectID id, Bool highlight);
-	void addBibDrawable(Vector3 corners[4], DrawableID id, Bool highlight);
+	void addBib(Engine::Math::Vector3 corners[4], ObjectID id, Bool highlight);
+	void addBibDrawable(Engine::Math::Vector3 corners[4], DrawableID id, Bool highlight);
 	/// Add a bib at location.  Name is the w3d model name.
 	void removeBib(ObjectID id);
 	void removeBibDrawable(DrawableID id);

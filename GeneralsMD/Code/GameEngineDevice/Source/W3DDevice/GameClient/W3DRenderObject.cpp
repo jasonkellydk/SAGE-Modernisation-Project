@@ -7,13 +7,13 @@
 
 #include "WWLib/Vector.h"
 #include "WWLib/wwstring.h"
-#include "WWMath/wwmath.h"
 #include "W3DDevice/GameClient/W3DCamera.h"
 #include "W3DDevice/GameClient/W3DRenderContext.h"
 #include "W3DDevice/GameClient/W3DSceneClass.h"
 import engine.debug;
 
 import Assets.Identity;
+import Graphics.Scene.AffineTransform;
 
 namespace
 {
@@ -35,9 +35,8 @@ StringClass Filename_From_Asset_Name(const char *asset_name)
 
 W3DRenderObject::W3DRenderObject()
     : ObjectColor(0),
-      CachedBoundingSphere(Vector3(0, 0, 0), 1.0f),
-      CachedBoundingBox(Vector3(0, 0, 0), Vector3(1, 1, 1)),
-      Transform(true),
+      CachedBoundingSphere{{0, 0, 0}, 1.0f},
+      CachedBoundingBox{{-1, -1, -1}, {1, 1, 1}},
       Scene(nullptr),
       Container(nullptr),
       User_Data(nullptr),
@@ -53,7 +52,6 @@ W3DRenderObject::W3DRenderObject(const W3DRenderObject &source)
       ObjectColor(0),
       CachedBoundingSphere(source.CachedBoundingSphere),
       CachedBoundingBox(source.CachedBoundingBox),
-      Transform(source.Get_Transform_No_Validity_Check()),
       m_bounds_valid(source.m_bounds_valid),
       m_collision_type(source.m_collision_type),
       Scene(nullptr),
@@ -120,45 +118,49 @@ void W3DRenderObject::Set_Container(W3DRenderObject *container)
     Container = container;
 }
 
-void W3DRenderObject::Set_Transform(const Matrix3D &transform)
+void W3DRenderObject::Set_Transform(const Engine::Math::AffineTransform3 &transform)
 {
-    Transform = transform;
-    NativeState.Set_Transform(Graphics::Import_Affine_Transform(transform));
+    auto native_transform = Graphics::Affine_Identity();
+    for (unsigned row = 0; row < 3; ++row)
+        for (unsigned column = 0; column < 4; ++column)
+            native_transform.matrix[row * 4 + column] = transform.elements[row * 4 + column];
+    NativeState.Set_Transform(native_transform);
     Invalidate_Cached_Bounding_Volumes();
 }
 
-void W3DRenderObject::Set_Position(const Vector3 &position)
+Engine::Math::AffineTransform3 W3DRenderObject::Get_Transform() const
 {
-    Transform.Set_Translation(position);
-    NativeState.Set_Position({position.X, position.Y, position.Z});
+    Validate_Transform();
+    return Get_Transform_No_Validity_Check();
+}
+
+Engine::Math::AffineTransform3 W3DRenderObject::Get_Transform_No_Validity_Check() const
+{
+    Engine::Math::AffineTransform3 transform;
+    const auto &native_transform = NativeState.Transform().matrix;
+    for (unsigned row = 0; row < 3; ++row)
+        for (unsigned column = 0; column < 4; ++column)
+            transform.elements[row * 4 + column] = native_transform[row * 4 + column];
+    return transform;
+}
+
+void W3DRenderObject::Set_Position(Engine::Math::Vector3 position)
+{
+	NativeState.Set_Position({position.x, position.y, position.z});
     Invalidate_Cached_Bounding_Volumes();
 }
 
-const Matrix3D &W3DRenderObject::Get_Transform() const
+Engine::Math::AffineTransform3 W3DRenderObject::Get_Transform(bool &is_transform_identity) const
 {
     Validate_Transform();
-    Transform = Graphics::Export_Affine_Transform<Matrix3D>(NativeState.Transform());
-    return Transform;
-}
-
-const Matrix3D &W3DRenderObject::Get_Transform(bool &is_transform_identity) const
-{
-    Validate_Transform();
-    Transform = Graphics::Export_Affine_Transform<Matrix3D>(NativeState.Transform());
     is_transform_identity = NativeState.Is_Transform_Identity();
-    return Transform;
+    return Get_Transform_No_Validity_Check();
 }
 
 bool W3DRenderObject::Is_Transform_Identity() const
 {
     Validate_Transform();
     return NativeState.Is_Transform_Identity();
-}
-
-const Matrix3D &W3DRenderObject::Get_Transform_No_Validity_Check() const
-{
-    Transform = Graphics::Export_Affine_Transform<Matrix3D>(NativeState.Transform());
-    return Transform;
 }
 
 void W3DRenderObject::Validate_Transform() const
@@ -175,15 +177,13 @@ void W3DRenderObject::Validate_Transform() const
             container->Update_Sub_Object_Transforms();
     }
 
-    if (dirty) {
-        Transform = Graphics::Export_Affine_Transform<Matrix3D>(NativeState.Transform());
-    }
 }
 
-Vector3 W3DRenderObject::Get_Position() const
+Engine::Math::Vector3 W3DRenderObject::Get_Position() const
 {
     Validate_Transform();
-    return Get_Transform_No_Validity_Check().Get_Translation();
+    const auto &transform = NativeState.Transform().matrix;
+    return {transform[3], transform[7], transform[11]};
 }
 
 void W3DRenderObject::Notify_Added(W3DScene *scene)
@@ -239,55 +239,56 @@ void W3DRenderObject::Update_Sub_Object_Transforms()
 {
 }
 
-const SphereClass &W3DRenderObject::Get_Bounding_Sphere() const
+Engine::Math::Sphere3 W3DRenderObject::Get_Bounding_Sphere() const
 {
     if (!Bounding_Volumes_Valid())
         Update_Cached_Bounding_Volumes();
     return CachedBoundingSphere;
 }
 
-const AABoxClass &W3DRenderObject::Get_Bounding_Box() const
+Engine::Math::AxisAlignedBox3 W3DRenderObject::Get_Bounding_Box() const
 {
     if (!Bounding_Volumes_Valid())
         Update_Cached_Bounding_Volumes();
     return CachedBoundingBox;
 }
 
-void W3DRenderObject::Get_Obj_Space_Bounding_Sphere(SphereClass &sphere) const
+void W3DRenderObject::Get_Local_Bounding_Sphere(Engine::Math::Sphere3 &sphere) const
 {
-    sphere.Center.Set(0, 0, 0);
-    sphere.Radius = 1.0f;
+    sphere = {{0, 0, 0}, 1.0f};
 }
 
-void W3DRenderObject::Get_Obj_Space_Bounding_Box(AABoxClass &box) const
+void W3DRenderObject::Get_Local_Bounds(Engine::Math::AxisAlignedBox3 &box) const
 {
-    box.Center.Set(0, 0, 0);
-    box.Extent.Set(0, 0, 0);
+    box = {{0, 0, 0}, {0, 0, 0}};
 }
 
 void W3DRenderObject::Update_Cached_Bounding_Volumes() const
 {
-    SphereClass local_sphere;
-    AABoxClass local_box;
-    Get_Obj_Space_Bounding_Sphere(local_sphere);
-    Get_Obj_Space_Bounding_Box(local_box);
+    Engine::Math::Sphere3 local_sphere;
+    Engine::Math::AxisAlignedBox3 local_box;
+    Get_Local_Bounding_Sphere(local_sphere);
+    Get_Local_Bounds(local_box);
 
+    const Engine::Math::Vector3 local_box_center = local_box.Center();
+    const Engine::Math::Vector3 local_box_extent = local_box.Extent();
     const Graphics::RenderObjectBounds local_bounds{
-        {{local_sphere.Center.X, local_sphere.Center.Y, local_sphere.Center.Z}, local_sphere.Radius},
-        {{local_box.Center.X, local_box.Center.Y, local_box.Center.Z},
-            {local_box.Extent.X, local_box.Extent.Y, local_box.Extent.Z}}
+        {{local_sphere.center.x, local_sphere.center.y, local_sphere.center.z}, local_sphere.radius},
+        {{local_box_center.x, local_box_center.y, local_box_center.z},
+            {local_box_extent.x, local_box_extent.y, local_box_extent.z}}
     };
     const Graphics::RenderObjectBounds world_bounds =
         Graphics::Transform_Render_Object_Bounds(
-            Graphics::Import_Affine_Transform(Get_Transform_No_Validity_Check()),
+			Graphics::Import_Affine_Transform(Get_Transform_No_Validity_Check()),
             local_bounds, NativeState.Object_Scale());
 
-    CachedBoundingSphere.Center.Set(
-        world_bounds.sphere.center[0], world_bounds.sphere.center[1], world_bounds.sphere.center[2]);
-    CachedBoundingSphere.Radius = world_bounds.sphere.radius;
-    CachedBoundingBox.Init(
-        Vector3(world_bounds.box.center[0], world_bounds.box.center[1], world_bounds.box.center[2]),
-        Vector3(world_bounds.box.extent[0], world_bounds.box.extent[1], world_bounds.box.extent[2]));
+    CachedBoundingSphere = {{world_bounds.sphere.center[0], world_bounds.sphere.center[1],
+        world_bounds.sphere.center[2]}, world_bounds.sphere.radius};
+    const Engine::Math::Vector3 box_center{world_bounds.box.center[0], world_bounds.box.center[1],
+        world_bounds.box.center[2]};
+    const Engine::Math::Vector3 box_extent{world_bounds.box.extent[0], world_bounds.box.extent[1],
+        world_bounds.box.extent[2]};
+    CachedBoundingBox = {box_center - box_extent, box_center + box_extent};
     Validate_Cached_Bounding_Volumes();
 }
 
@@ -374,15 +375,15 @@ void W3DRenderObject::Set_User_Data(void *value, bool recursive)
 
 float W3DRenderObject::Get_Screen_Size(W3DCamera &camera)
 {
-    const Vector3 camera_position = camera.Get_Position();
+    const Engine::Math::Vector3 camera_position = camera.Get_Position();
     const W3DViewport &viewport = camera.Get_Viewport();
-    Vector2 view_min, view_max;
+    Engine::Math::Vector2 view_min, view_max;
     camera.Get_View_Plane(view_min, view_max);
-    const SphereClass &sphere = Get_Bounding_Sphere();
+    const Engine::Math::Sphere3 sphere = Get_Bounding_Sphere();
     return Graphics::Project_Render_Object_Screen_Size(
-        {camera_position.X, camera_position.Y, camera_position.Z},
-        {sphere.Center.X, sphere.Center.Y, sphere.Center.Z}, sphere.Radius,
-        viewport.Width(), viewport.Height(), view_max.X - view_min.X, view_max.Y - view_min.Y);
+        {camera_position.x, camera_position.y, camera_position.z},
+        {sphere.center.x, sphere.center.y, sphere.center.z}, sphere.radius,
+        viewport.Width(), viewport.Height(), view_max.x - view_min.x, view_max.y - view_min.y);
 }
 
 void W3DRenderObject::Set_ObjectScale(float scale)

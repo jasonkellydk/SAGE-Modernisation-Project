@@ -10,10 +10,10 @@ module;
 #include <string>
 #include <unordered_map>
 #include <vector>
-#include <Utility/CppMacros.h>
-#include "WWMath/vector2.h"
 export module Graphics.Scene.Models.VertexChannels.Tests;
 import Graphics.Scene.Models.VertexChannels;
+import Engine.Core.Math.Vector2;
+using Engine::Math::Vector2;
 
 namespace {
 std::array<std::uint32_t, 2> Object_Bits(const Vector2& value)
@@ -44,8 +44,8 @@ BOOST_AUTO_TEST_CASE(vector2_installed_channels_compare_all_bytes_and_signed_zer
     const auto negative_index = channels.Install(negative);
     BOOST_CHECK_NE(positive_index, negative_index);
     BOOST_CHECK_EQUAL(channels.Install(positive), positive_index);
-    BOOST_CHECK_EQUAL(channels.Get(positive_index)[0].X, 0.0f);
-    BOOST_CHECK_EQUAL(channels.Get(negative_index)[0].X, -0.0f);
+    BOOST_CHECK_EQUAL(channels.Get(positive_index)[0].x, 0.0f);
+    BOOST_CHECK_EQUAL(channels.Get(negative_index)[0].x, -0.0f);
     BOOST_CHECK_EQUAL(Object_Bits(channels.Get(positive_index)[0])[0], positive_bits[0]);
     BOOST_CHECK_EQUAL(Object_Bits(channels.Get(negative_index)[0])[0], negative_bits[0]);
 }
@@ -68,9 +68,9 @@ BOOST_AUTO_TEST_CASE(default_and_alternate_channels_share_then_detach_and_surviv
     BOOST_CHECK(alternate.Get(alternate_secondary) == defaults.Get(secondary));
 
     alternate.Make_Unique(alternate_primary);
-    alternate.Get(alternate_primary)[0].X = 0.5f;
-    BOOST_CHECK_EQUAL(alternate.Get(alternate_primary)[0].X, 0.5f);
-    BOOST_CHECK_EQUAL(defaults.Get(primary)[0].X, 0.25f);
+    alternate.Get(alternate_primary)[0].x = 0.5f;
+    BOOST_CHECK_EQUAL(alternate.Get(alternate_primary)[0].x, 0.5f);
+    BOOST_CHECK_EQUAL(defaults.Get(primary)[0].x, 0.25f);
     BOOST_CHECK(alternate.Get(alternate_primary) != defaults.Get(primary));
     BOOST_CHECK(alternate.Get(alternate_secondary) == defaults.Get(secondary));
 
@@ -79,9 +79,9 @@ BOOST_AUTO_TEST_CASE(default_and_alternate_channels_share_then_detach_and_surviv
     BOOST_CHECK(alternate.Get(2) == defaults.Get(secondary));
     BOOST_CHECK_EQUAL(alternate.Count(), 3u);
     defaults.Clear();
-    BOOST_CHECK_EQUAL(alternate.Get(alternate_primary)[0].X, 0.5f);
-    BOOST_CHECK_EQUAL(alternate.Get(alternate_secondary)[1].X, 1.0f);
-    BOOST_CHECK_EQUAL(alternate.Get(2)[0].Y, 1.0f);
+    BOOST_CHECK_EQUAL(alternate.Get(alternate_primary)[0].x, 0.5f);
+    BOOST_CHECK_EQUAL(alternate.Get(alternate_secondary)[1].x, 1.0f);
+    BOOST_CHECK_EQUAL(alternate.Get(2)[0].y, 1.0f);
 }
 
 BOOST_AUTO_TEST_CASE(import_reuses_equal_content_but_preserves_unpublished_identity)
@@ -135,18 +135,18 @@ BOOST_AUTO_TEST_CASE(channel_revisions_follow_shared_origins_and_writable_escape
     BOOST_CHECK_NE(a_revision,b_revision);
     BOOST_CHECK_EQUAL(combined.Revision(0),a_revision);
     BOOST_CHECK_EQUAL(combined.Revision(imported),b_revision);
-    BOOST_CHECK_EQUAL(combined.Peek(0)[0].X,0.25f);
+    BOOST_CHECK_EQUAL(combined.Peek(0)[0].x,0.25f);
     BOOST_CHECK_EQUAL(first.Revision(a),a_revision);
     auto* retained=first.Get(a);
     BOOST_CHECK_EQUAL(combined.Revision(0),0u);
     BOOST_CHECK_EQUAL(combined.Revision(imported),b_revision);
-    retained[0].X=0.125f;
-    BOOST_CHECK_EQUAL(combined.Peek(0)[0].X,0.125f);
+    retained[0].x=0.125f;
+    BOOST_CHECK_EQUAL(combined.Peek(0)[0].x,0.125f);
     combined.Make_Unique(0);
-    combined.Get(0)[0].X=0.625f;
-    BOOST_CHECK_EQUAL(first.Peek(a)[0].X,0.125f);
+    combined.Get(0)[0].x=0.625f;
+    BOOST_CHECK_EQUAL(first.Peek(a)[0].x,0.125f);
     first.Clear(); second.Clear();
-    BOOST_CHECK_EQUAL(combined.Peek(imported)[0].X,0.75f);
+    BOOST_CHECK_EQUAL(combined.Peek(imported)[0].x,0.75f);
     BOOST_CHECK_EQUAL(combined.Revision(imported),b_revision);
     combined.Clear();
     combined.Install(first_values);

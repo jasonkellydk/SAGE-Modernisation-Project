@@ -38,9 +38,22 @@
 
 #include "WWLib/always.h"
 #include "SoundSceneObj.h"
-#include "WWMath/cullsys.h"
 #include "WWLib/mempool.h"
 #include "WWLib/multilist.h"
+#include "WWLib/refcount.h"
+
+import Engine.Core.Math.AxisAlignedBox3;
+import Engine.Core.Math.AffineTransform3;
+import Engine.Core.Math.SpatialGrid3;
+import Engine.Core.Math.Vector3;
+
+class SoundCullObjClass;
+
+//////////////////////////////////////////////////////////////////////////////////
+//	The spatial index a SoundCullObjClass is bucketed in (replaces the legacy
+// grid / AAB-tree culling systems).
+//////////////////////////////////////////////////////////////////////////////////
+using SoundSpatialIndex = Engine::Math::SpatialGrid3<SoundCullObjClass>;
 
 
 /////////////////////////////////////////////////////////////////////////////
@@ -50,7 +63,7 @@
 //	Simple 'sound physics' object that wraps a SoundClass object and is derived
 // from PhysClass so it can be used with the different culling systems.
 //
-class SoundCullObjClass : public MultiListObjectClass, public CullableClass
+class SoundCullObjClass : public MultiListObjectClass, public RefCountClass
 {
 	public:
 
@@ -59,20 +72,38 @@ class SoundCullObjClass : public MultiListObjectClass, public CullableClass
 		//////////////////////////////////////////////////////////////////////
 		SoundCullObjClass ()
 			: m_SoundObj (nullptr),
-			  m_Transform (1) {}
+			  m_Transform (Engine::Math::AffineTransform3::Identity()),
+			  m_CullingSystem (nullptr),
+			  m_CullCenter (),
+			  m_CullExtent () {}
 
 		virtual ~SoundCullObjClass () override { REF_PTR_RELEASE (m_SoundObj); }
 
 		//////////////////////////////////////////////////////////////////////
 		//	Get the 'bounds' of this sound
 		//////////////////////////////////////////////////////////////////////
-		virtual const AABoxClass & Get_Bounding_Box () const;
+		Engine::Math::AxisAlignedBox3 Get_Spatial_Bounds () const;
+
+		//////////////////////////////////////////////////////////////////////
+		//	Culling system linkage (mirrors the legacy CullableClass behaviour:
+		// the cull box is cached and the owning culling system is re-bucketed
+		// whenever the box is refreshed).
+		//////////////////////////////////////////////////////////////////////
+		void Set_Culling_System (SoundSpatialIndex *system) { m_CullingSystem = system; }
+		SoundSpatialIndex *Get_Culling_System () const { return m_CullingSystem; }
+
+		// Refresh the cached cull box from the current bounds and update the
+		// owning culling system (legacy Set_Cull_Box (Get_Bounding_Box ())).
+		void Update_Cull_Box ();
+
+		// Legacy AABoxClass::Contains (point) against the cached cull box.
+		bool Cull_Box_Contains (Engine::Math::Vector3 point) const;
 
 		//////////////////////////////////////////////////////////////////////
 		//	Access to the Position/Orientation state of the object
 		//////////////////////////////////////////////////////////////////////
-		virtual const Matrix3D &	Get_Transform () const;
-		virtual void					Set_Transform (const Matrix3D &transform);
+		virtual Engine::Math::AffineTransform3 Get_Transform () const;
+		virtual void Set_Transform (const Engine::Math::AffineTransform3 &transform);
 
 		//////////////////////////////////////////////////////////////////////
 		//	Timestep methods
@@ -82,7 +113,7 @@ class SoundCullObjClass : public MultiListObjectClass, public CullableClass
 		//////////////////////////////////////////////////////////////////////
 		//	Sound object wrapping
 		//////////////////////////////////////////////////////////////////////
-		virtual void						Set_Sound_Obj (SoundSceneObjClass *sound_obj);
+		virtual void Set_Sound_Obj (SoundSceneObjClass *sound_obj);
 		virtual SoundSceneObjClass *	Peek_Sound_Obj () const					{ return m_SoundObj; }
 
 	protected:
@@ -97,65 +128,8 @@ class SoundCullObjClass : public MultiListObjectClass, public CullableClass
 		//	Private member data
 		//////////////////////////////////////////////////////////////////////
 		SoundSceneObjClass *		m_SoundObj;
-		mutable Matrix3D			m_Transform;
-		mutable AABoxClass		m_AABox;
+		mutable Engine::Math::AffineTransform3 m_Transform;
+		SoundSpatialIndex *		m_CullingSystem;
+		Engine::Math::Vector3	m_CullCenter;
+		Engine::Math::Vector3	m_CullExtent;
 };
-
-
-__inline const Matrix3D &
-SoundCullObjClass::Get_Transform () const
-{
-	// Determine the transform to use
-	if (m_SoundObj != nullptr) {
-		m_Transform = m_SoundObj->Get_Transform ();
-	}
-
-	// Return a reference to the matrix
-	return m_Transform;
-}
-
-
-__inline void
-SoundCullObjClass::Set_Transform (const Matrix3D &transform)
-{
-	m_Transform = transform;
-
-	// Pass the tranform on
-	if (m_SoundObj != nullptr) {
-		m_SoundObj->Set_Transform (m_Transform);
-		Set_Cull_Box (Get_Bounding_Box ());
-	}
-}
-
-
-__inline void
-SoundCullObjClass::Set_Sound_Obj (SoundSceneObjClass *sound_obj)
-{
-	// Start using this sound object
-	REF_PTR_SET (m_SoundObj, sound_obj);
-	//m_SoundObj =  sound_obj;
-	if (m_SoundObj != nullptr) {
-		m_Transform = m_SoundObj->Get_Transform ();
-		Set_Cull_Box (Get_Bounding_Box ());
-	}
-}
-
-
-__inline const AABoxClass &
-SoundCullObjClass::Get_Bounding_Box () const
-{
-	// Get the 'real' values from the
-	if (m_SoundObj != nullptr) {
-		m_Transform = m_SoundObj->Get_Transform ();
-		m_AABox.Extent.X = m_SoundObj->Get_DropOff_Radius ();
-		m_AABox.Extent.Y = m_SoundObj->Get_DropOff_Radius ();
-		m_AABox.Extent.Z = m_SoundObj->Get_DropOff_Radius ();
-	} else {
-		m_AABox.Extent.X = 0;
-		m_AABox.Extent.Y = 0;
-		m_AABox.Extent.Z = 0;
-	}
-
-	m_AABox.Center = m_Transform.Get_Translation ();
-	return m_AABox;
-}

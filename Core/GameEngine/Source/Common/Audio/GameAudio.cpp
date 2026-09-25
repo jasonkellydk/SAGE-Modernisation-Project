@@ -44,6 +44,7 @@
 
 #include "PreRTS.h"
 import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
+#include <cmath>
 #include "Common/GameAudio.h"
 
 #include "Common/AudioAffect.h"
@@ -68,8 +69,6 @@ import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
 
 #include "GameLogic/GameLogic.h"
 #include "GameLogic/TerrainLogic.h"
-
-#include "WWMath/matrix3d.h"
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -285,17 +284,15 @@ void AudioManager::update()
 {
 	Coord3D cameraPivot = TheTacticalView->getPosition();
 	Real angle = TheTacticalView->getAngle();
-	Matrix3D rot = Matrix3D::Identity;
-	rot.Rotate_Z( angle );
-	Vector3 forward( 0, 1, 0 );
-	rot.mulVector3( forward );
+	const Real forwardX = -std::sin(angle);
+	const Real forwardY = std::cos(angle);
 
 	const Real desiredHeightRel = m_audioSettings->m_microphoneDesiredHeightAboveTerrain;
 	const Real desiredHeightAbs = desiredHeightRel + cameraPivot.z;
 	const Real maxPercentage = m_audioSettings->m_microphoneMaxPercentageBetweenGroundAndCamera;
 
 	Coord3D lookTo;
-	lookTo.set(forward.X, forward.Y, forward.Z);
+	lookTo.set(forwardX, forwardY, 0.0f);
 
 	//Kris: At this point, the microphone is calculated to be at the ground position where the camera is looking at.
 	//Instead we want to move the microphone towards the camera. Hopefully, it'll be a desired altitude, but if it
@@ -1131,4 +1128,3 @@ void parseSpeakerType( INI *ini, void *instance, void *store, const void* userDa
 
 	(*(UnsignedInt*)store) = TheAudio->translateSpeakerTypeToUnsignedInt(str);
 }
-

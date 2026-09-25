@@ -626,7 +626,7 @@ void SlavedUpdate::setRepairState( RepairStates repairState )
 					{
 						Coord3D pos;
 						//Get the bone position
-						if( draw->getPristineBonePositions( data->m_weldingFXBone.str(), 0, &pos, nullptr, 1 ) )
+						if( draw->getPristineBonePositions( data->m_weldingFXBone.str(), 0, &pos, 1 ) )
 						{
 							pos.add( *obj->getPosition() );
 						}

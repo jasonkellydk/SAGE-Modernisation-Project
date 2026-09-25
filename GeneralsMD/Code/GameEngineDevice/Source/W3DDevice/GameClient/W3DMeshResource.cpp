@@ -20,7 +20,6 @@ import Graphics.Frame.RenderSettings;
 #include "W3DDevice/GameClient/W3DMeshResource.h"
 #include "W3DDevice/GameClient/W3DMeshDrawing.h"
 #include "W3DDevice/GameClient/W3DTextureHandle.h"
-#include "WWMath/vp.h"
 #include "W3DDevice/GameClient/W3DCamera.h"
 import engine.debug;
 

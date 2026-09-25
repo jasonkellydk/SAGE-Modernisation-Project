@@ -45,7 +45,6 @@ import Graphics.Resources.Textures.Edit;
 
 #include "W3DDevice/GameClient/BaseHeightMap.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
-#include "W3DDevice/GameClient/W3DPoly.h"
 #include "W3DDevice/GameClient/W3DShaderManager.h"
 #include "W3DDevice/GameClient/W3DAssetCatalog.h"
 #include "W3DDevice/GameClient/W3DShroud.h"

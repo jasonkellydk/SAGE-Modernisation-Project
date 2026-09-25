@@ -1,3 +1,4 @@
+#include <cmath>
 #include <functional>
 import Graphics.Frame.RenderClock;
 import Graphics.Frame.RenderSettings;
@@ -43,8 +44,8 @@ import Graphics.Scene.Models.MeshMaterialPreparation;
 namespace {
 Random4Class texture_mapping_random;
 float Sample_Texture_Mapping() { return texture_mapping_random.Get_Float(); }
-float Texture_Bump_Sine(float angle) { return WWMath::Fast_Sin(angle); }
-float Texture_Bump_Cosine(float angle) { return WWMath::Fast_Cos(angle); }
+float Texture_Bump_Sine(float angle) { return std::sin(angle); }
+float Texture_Bump_Cosine(float angle) { return std::cos(angle); }
 RefCountPtr<W3DTextureHandle> Acquire_Texture(const Assets::W3D::W3DTextureData& decoded) {
     W3DTextureHandle *newtex = nullptr;
     if (decoded.has_info)

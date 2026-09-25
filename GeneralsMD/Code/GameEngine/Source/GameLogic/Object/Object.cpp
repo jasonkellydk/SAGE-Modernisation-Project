@@ -31,7 +31,10 @@
 #include "PreRTS.h"
 import engine.profiling;
 import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
+import Engine.Core.Math.AffineTransform3;
+import Engine.Core.Math.Vector3;
 #define DEFINE_WEAPONCONDITIONMAP
+#include "Common/LegacyTransformMath.h"
 #include "Common/BitFlagsIO.h"
 #include "Common/BuildAssistant.h"
 #include "Common/Dict.h"
@@ -1854,7 +1857,7 @@ void Object::reactToTurretChange( WhichTurretType turret, Real oldRotation, Real
 }
 
 //-------------------------------------------------------------------------------------------------
-void Object::reactToTransformChange(const Matrix3D* oldMtx, const Coord3D* oldPos, Real oldAngle)
+void Object::reactToTransformChange(const Coord3D* oldPos, Real oldAngle)
 {
 	//engine::profiling::Scope profile_scope_1857("Object_reactToTransformChange")
 	if(_isnan(getPosition()->x) || _isnan(getPosition()->y) || _isnan(getPosition()->z)) {
@@ -1863,7 +1866,7 @@ void Object::reactToTransformChange(const Matrix3D* oldMtx, const Coord3D* oldPo
 	}
 	if (m_drawable)
 	{
-  	m_drawable->setTransformMatrix( this->getTransformMatrix() );
+		m_drawable->setWorldTransform(this->worldTransform());
 	}
 
 	Bool posDiff = isPosDifferent(oldPos, getPosition());
@@ -2925,8 +2928,7 @@ void Object::friend_notifyOfNewMapBoundary()
 //-------------------------------------------------------------------------------------------------
 void Object::calcNaturalRallyPoint(Coord2D *pt)
 {
-	const Matrix3D *transform = getTransformMatrix();
-	Vector3 v;
+	Engine::Math::Vector3 point{};
 
 	//
 	// get the natural rally point from the template, this coord is in model space relative
@@ -2939,14 +2941,11 @@ void Object::calcNaturalRallyPoint(Coord2D *pt)
 	v.Y = naturalRallyPoint->y;
 	v.Z = naturalRallyPoint->z;
 */
-	v.Set( 0, 0, 0 );
-
-	// transform the point into world space
-	transform->Transform_Vector( *transform, v, &v );
+	point = worldTransform().Transform_Point(point);
 
 	// we're only concerned with the 2D elements for now
-	pt->x = v.X;
-	pt->y = v.Y;
+	pt->x = point.x;
+	pt->y = point.y;
 
 }
 
@@ -4010,17 +4009,17 @@ void Object::crc( Xfer *xfer )
 	}
 #endif // DEBUG_CRC
 
-	// This is evil - we cast the const Matrix3D * to a Matrix3D * because the XferCRC class must use
-	// the same interface as the XferLoad class for save game restore.  This only works because
-	// XferCRC does not modify its data.
-	xfer->xferUser((Matrix3D *)getTransformMatrix(),	sizeof(Matrix3D));
+	static_assert(sizeof(Engine::Math::AffineTransform3) == 12 * sizeof(Real));
+	// The transform keeps the existing twelve-float save representation.
+	auto& transform = const_cast<Engine::Math::AffineTransform3&>(worldTransform());
+	xfer->xferUser(transform.elements.data(), static_cast<Int>(sizeof(transform.elements)));
 #ifdef DEBUG_CRC
 	if (doLogging)
 	{
 		XferCRC tmpXfer;
 		tmpXfer.open("tmp");
-		tmpXfer.xferUser((Matrix3D *)getTransformMatrix(),	sizeof(Matrix3D));
-		tmp.format("getTransformMatrix(): %8.8X, ", tmpXfer.getCRC());
+		tmpXfer.xferUser(transform.elements.data(), static_cast<Int>(sizeof(transform.elements)));
+		tmp.format("worldTransform(): %8.8X, ", tmpXfer.getCRC());
 		tmpXfer.close();
 		logString.concat(tmp);
 	}
@@ -4138,9 +4137,9 @@ void Object::xfer( Xfer *xfer )
 
 	if (version >= 7)
 	{
-		Matrix3D mtx = *getTransformMatrix();
-		xfer->xferMatrix3D(&mtx);
-		setTransformMatrix(&mtx);
+		Engine::Math::AffineTransform3 world = worldTransform();
+		xfer->xferAffineTransform3(&world);
+		setWorldTransform(world);
 	}
 	else
 	{
@@ -5245,11 +5244,11 @@ Real Object::getVisionRange() const
 #if defined(RTS_DEBUG)
 	if (TheGlobalData->m_debugVisibility)
 	{
-		Vector3 pos(m_visionRange, 0, 0);
+		Engine::Math::Vector3 pos{m_visionRange, 0, 0};
 		for (int i = 0; i < TheGlobalData->m_debugVisibilityTileCount; ++i)
 		{
-			pos.Rotate_Z(1.0f * i / TheGlobalData->m_debugVisibilityTileCount * 2 * PI);
-			Coord3D coord = { pos.X + getPosition()->x, pos.Y + getPosition()->y, pos.Z + getPosition()->z };
+			pos = Legacy_Vector_Rotate_Z(pos, 1.0f * i / TheGlobalData->m_debugVisibilityTileCount * 2 * PI);
+			Coord3D coord = { pos.x + getPosition()->x, pos.y + getPosition()->y, pos.z + getPosition()->z };
 
 			addIcon(&coord, TheGlobalData->m_debugVisibilityTileWidth,
 											TheGlobalData->m_debugVisibilityTileDuration,
@@ -5281,11 +5280,11 @@ Real Object::getShroudClearingRange() const
 #if defined(RTS_DEBUG)
 	if (TheGlobalData->m_debugVisibility)
 	{
-		Vector3 pos(shroudClearingRange, 0, 0);
+		Engine::Math::Vector3 pos{shroudClearingRange, 0, 0};
 		for (int i = 0; i < TheGlobalData->m_debugVisibilityTileCount; ++i)
 		{
-			pos.Rotate_Z(1.0f * i / TheGlobalData->m_debugVisibilityTileCount * 2 * PI);
-			Coord3D coord = { pos.X + getPosition()->x, pos.Y + getPosition()->y, pos.Z + getPosition()->z };
+			pos = Legacy_Vector_Rotate_Z(pos, 1.0f * i / TheGlobalData->m_debugVisibilityTileCount * 2 * PI);
+			Coord3D coord = { pos.x + getPosition()->x, pos.y + getPosition()->y, pos.z + getPosition()->z };
 
 			addIcon(&coord, TheGlobalData->m_debugVisibilityTileWidth,
 											TheGlobalData->m_debugVisibilityTileDuration,
@@ -5338,11 +5337,11 @@ Real Object::getShroudRange() const
 #if defined(RTS_DEBUG)
 	if (TheGlobalData->m_debugVisibility)
 	{
-		Vector3 pos(m_shroudRange, 0, 0);
+		Engine::Math::Vector3 pos{m_shroudRange, 0, 0};
 		for (int i = 0; i < TheGlobalData->m_debugVisibilityTileCount; ++i)
 		{
-			pos.Rotate_Z(1.0f * i / TheGlobalData->m_debugVisibilityTileCount * 2 * PI);
-			Coord3D coord = { pos.X + getPosition()->x, pos.Y + getPosition()->y, pos.Z + getPosition()->z };
+			pos = Legacy_Vector_Rotate_Z(pos, 1.0f * i / TheGlobalData->m_debugVisibilityTileCount * 2 * PI);
+			Coord3D coord = { pos.x + getPosition()->x, pos.y + getPosition()->y, pos.z + getPosition()->z };
 
 			addIcon(&coord, TheGlobalData->m_debugVisibilityTileWidth,
 											TheGlobalData->m_debugVisibilityTileDuration,
@@ -6145,11 +6144,12 @@ Int Object::getNumConsecutiveShotsFiredAtTarget( const Object *victim ) const
 
 // ------------------------------------------------------------------------------------------------
 // ------------------------------------------------------------------------------------------------
-Bool Object::getSingleLogicalBonePosition(const char* boneName, Coord3D* position, Matrix3D* transform) const
+Bool Object::getSingleLogicalBonePosition(const char* boneName, Coord3D* position,
+	Engine::Math::AffineTransform3* transform) const
 {
-	if (m_drawable && m_drawable->getPristineBonePositions( boneName, 0, position, transform, 1 ) == 1 )
+	if (m_drawable && m_drawable->getPristineBoneData( boneName, 0, position, transform, 1 ) == 1 )
 	{
-		m_drawable->convertBonePosToWorldPos( position, transform, position, transform );
+		m_drawable->transformBoneToWorld( position, transform, position, transform );
 		return true;
 	}
 	else
@@ -6157,14 +6157,15 @@ Bool Object::getSingleLogicalBonePosition(const char* boneName, Coord3D* positio
 		if (position)
 			*position = *getPosition();
 		if (transform)
-			*transform = *getTransformMatrix();
+			*transform = worldTransform();
 		return false;
 	}
 }
 
 // ------------------------------------------------------------------------------------------------
 // ------------------------------------------------------------------------------------------------
-Bool Object::getSingleLogicalBonePositionOnTurret( WhichTurretType whichTurret, const char* boneName, Coord3D* position, Matrix3D* transform ) const
+Bool Object::getSingleLogicalBonePositionOnTurret(WhichTurretType whichTurret, const char* boneName,
+	Coord3D* position, Engine::Math::AffineTransform3* transform) const
 {
 	Coord3D turretPosition;
 	Coord3D bonePosition;
@@ -6172,45 +6173,41 @@ Bool Object::getSingleLogicalBonePositionOnTurret( WhichTurretType whichTurret, 
 		return FALSE;
 
 	// We need to find the TurretBone's pristine position.
-	getDrawable()->getProjectileLaunchOffset( PRIMARY_WEAPON, 1, nullptr, whichTurret, &turretPosition, nullptr );
+	getDrawable()->getProjectileLaunchTransform(PRIMARY_WEAPON, 1, nullptr, whichTurret, &turretPosition, nullptr);
 	// And the required bone's pristine position
-	if( getDrawable()->getPristineBonePositions(boneName, 0, &bonePosition, nullptr, 1) != 1 )
+	if( getDrawable()->getPristineBonePositions(boneName, 0, &bonePosition, 1) != 1 )
 		return FALSE;
 	//Then we mojo the Logic position of the required bone like Missile firing does.  Using the logic twist of the turret
 	Real turretRotation;
 	getAI()->getTurretRotAndPitch( whichTurret, &turretRotation, nullptr );
 
-	Matrix3D boneOffset(TRUE);// This will be from the turret to the requested bone
+	Engine::Math::AffineTransform3 boneOffset = Engine::Math::AffineTransform3::Identity();// This will be from the turret to the requested bone
 
 //	Vector3 bonePositionVector(	bonePosition.x - turretPosition.x,
 //															bonePosition.y - turretPosition.y,
 //															bonePosition.z - turretPosition.z );
-	Vector3 bonePositionVector(	bonePosition.x,
-															bonePosition.y,
-															bonePosition.z );
-	boneOffset.Translate(bonePositionVector);
+	Legacy_Translate(boneOffset, bonePosition.x, bonePosition.y, bonePosition.z);
 
-	Matrix3D turnAdjustment(TRUE);// this is the turret twist to be applied to the final answer
+	Engine::Math::AffineTransform3 turnAdjustment = Engine::Math::AffineTransform3::Identity();// this is the turret twist to be applied to the final answer
 
-	turnAdjustment.Translate( turretPosition.x, turretPosition.y, turretPosition.z );
-	turnAdjustment.In_Place_Pre_Rotate_Z(turretRotation);
-	turnAdjustment.Translate( -turretPosition.x, -turretPosition.y, -turretPosition.z );
+	Legacy_Translate(turnAdjustment, turretPosition.x, turretPosition.y, turretPosition.z);
+	Legacy_In_Place_Pre_Rotate_Z(turnAdjustment, turretRotation);
+	Legacy_Translate(turnAdjustment, -turretPosition.x, -turretPosition.y, -turretPosition.z);
 
-	Matrix3D boneLogicTransform;
-	boneLogicTransform.mul( turnAdjustment, boneOffset );
+	const Engine::Math::AffineTransform3 boneLogicTransform = Compose(turnAdjustment, boneOffset);
 
-	Matrix3D worldTransform;
-	convertBonePosToWorldPos(nullptr, &boneLogicTransform, nullptr, &worldTransform);
+	Engine::Math::AffineTransform3 worldTransform;
+	transformBoneToWorld(nullptr, &boneLogicTransform, nullptr, &worldTransform);
 
-	Vector3 tmp = worldTransform.Get_Translation();
+	const Engine::Math::Vector3 positionInWorld = worldTransform.Translation();
 	Coord3D worldPos;
-	worldPos.x = tmp.X;
-	worldPos.y = tmp.Y;
-	worldPos.z = tmp.Z;
+	worldPos.x = positionInWorld.x;
+	worldPos.y = positionInWorld.y;
+	worldPos.z = positionInWorld.z;
 
 	if( position )
 		*position = worldPos;
-	if( transform )
+	if (transform)
 		*transform = worldTransform;
 
 	return TRUE;
@@ -6219,16 +6216,16 @@ Bool Object::getSingleLogicalBonePositionOnTurret( WhichTurretType whichTurret, 
 // ------------------------------------------------------------------------------------------------
 // ------------------------------------------------------------------------------------------------
 Int Object::getMultiLogicalBonePosition(const char* boneNamePrefix, Int maxBones,
-																				Coord3D* positions, Matrix3D* transforms,
-																				Bool convertToWorld ) const
+																									Coord3D* positions, Engine::Math::AffineTransform3* transforms,
+																											Bool convertToWorld ) const
 {
 	Int count;
-	if (m_drawable && (count = m_drawable->getPristineBonePositions( boneNamePrefix, 1, positions, transforms, maxBones )) > 0 )
+	if (m_drawable && (count = m_drawable->getPristineBoneData( boneNamePrefix, 1, positions, transforms, maxBones )) > 0 )
 	{
 		if( convertToWorld )
 		{
 			for (Int i = 0; i < count; ++i)
-				m_drawable->convertBonePosToWorldPos( positions ? &positions[i] : nullptr, transforms ? &transforms[i] : nullptr, positions ? &positions[i] : nullptr, transforms ? &transforms[i] : nullptr );
+				m_drawable->transformBoneToWorld( positions ? &positions[i] : nullptr, transforms ? &transforms[i] : nullptr, positions ? &positions[i] : nullptr, transforms ? &transforms[i] : nullptr );
 		}
 		return count;
 	}

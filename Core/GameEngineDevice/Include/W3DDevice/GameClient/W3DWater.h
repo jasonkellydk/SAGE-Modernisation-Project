@@ -24,7 +24,7 @@
 #define INVALID_WATER_HEIGHT 0.0f
 
 class W3DCamera;
-class AABoxClass;
+import Engine.Core.Math.AxisAlignedBox3;
 class W3DRenderContext;
 class W3DTextureHandle;
 class WaterTracksRenderSystem;
@@ -116,7 +116,7 @@ protected:
 	Bool m_renderingOffscreen;
 	W3DTextureHandle *m_riverAlphaEdge;
 	WaterGeometry m_surfaceGeometry;
-    Vector4 m_surfaceDomain{0,0,0,0};
+    Engine::Math::Vector4 m_surfaceDomain{0,0,0,0};
     std::vector<std::vector<Graphics::WaterMeshHandle>> m_surfaceMeshes;
     std::vector<Graphics::WaterBodyMotion> m_waterBodies;
 	WaterGridRenderData m_gridRenderData;
@@ -143,7 +143,7 @@ protected:
 	Setting m_settings[TIME_OF_DAY_COUNT];
 	void drawRiverWater(const WaterSurfacePolygon &polygon);
     void rebuildSurfaceMeshes();
-    Vector4 getDisplacementDomain() const;
+    Engine::Math::Vector4 getDisplacementDomain() const;
     void updateWaterBodies();
     void drawSurfaceMesh(Graphics::WaterMeshHandle mesh);
 	void loadSetting(Setting *skySetting, TimeOfDay timeOfDay);
@@ -155,7 +155,7 @@ protected:
 	void renderMirror(W3DCamera *cam);
 	void drawSea(W3DRenderContext &rinfo);
 	bool updateDisplacementTexture();
-	Bool getClippedWaterPlane(W3DCamera *cam, AABoxClass *box);
+	Bool getClippedWaterPlane(W3DCamera *cam, Engine::Math::AxisAlignedBox3 *box);
 	WaterMaterialParameters makeWaterMaterialParameters(bool river,
 		bool reflection, bool underwater) const;
 

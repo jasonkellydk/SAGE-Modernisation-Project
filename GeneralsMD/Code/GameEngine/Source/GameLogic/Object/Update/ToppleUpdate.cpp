@@ -30,6 +30,8 @@
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 #include "PreRTS.h"
 import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
+import Engine.Core.Math.AffineTransform3;
+#include "Common/LegacyTransformMath.h"
 
 #include "Common/ThingTemplate.h"
 #include "Common/ThingFactory.h"
@@ -277,9 +279,9 @@ UpdateSleepTime ToppleUpdate::update()
 	Object* obj = getObject();
 	if (m_numAngleDeltaX)
 	{
-		Matrix3D xfrm = *obj->getTransformMatrix();
-		xfrm.In_Place_Pre_Rotate_Z(m_angleDeltaX);
-		obj->setTransformMatrix(&xfrm);
+		Engine::Math::AffineTransform3 transform = obj->worldTransform();
+		Legacy_In_Place_Pre_Rotate_Z(transform, m_angleDeltaX);
+		obj->setWorldTransform(transform);
 		--m_numAngleDeltaX;
 	}
 
@@ -287,10 +289,10 @@ UpdateSleepTime ToppleUpdate::update()
 	if (m_angularAccumulation + curVelToUse > ANGULAR_LIMIT)
 		curVelToUse = ANGULAR_LIMIT - m_angularAccumulation;
 
-	Matrix3D xfrm = *obj->getTransformMatrix();
-	xfrm.In_Place_Pre_Rotate_X(-curVelToUse * m_toppleDirection.y);
-	xfrm.In_Place_Pre_Rotate_Y(curVelToUse * m_toppleDirection.x);
-	obj->setTransformMatrix(&xfrm);
+	Engine::Math::AffineTransform3 transform = obj->worldTransform();
+	Legacy_In_Place_Pre_Rotate_X(transform, -curVelToUse * m_toppleDirection.y);
+	Legacy_In_Place_Pre_Rotate_Y(transform, curVelToUse * m_toppleDirection.x);
+	obj->setWorldTransform(transform);
 
 	m_angularAccumulation += curVelToUse;
 	if ((m_angularAccumulation >= ANGULAR_LIMIT) && (m_angularVelocity > 0))
@@ -312,16 +314,15 @@ UpdateSleepTime ToppleUpdate::update()
 				{
 					// we have a separate rubble state that needs to be upright, and centered
 					// on the new "center" pos...
-					Vector3 pos;
-					pos.X = 0;
-					pos.Y = 0;
-					pos.Z = obj->getGeometryInfo().getMaxHeightAbovePosition();
-					Matrix3D::Transform_Vector(*obj->getTransformMatrix(), pos, &pos);
+					Engine::Math::Vector3 pos{0.0f, 0.0f, obj->getGeometryInfo().getMaxHeightAbovePosition()};
+					const auto transform =
+						obj->worldTransform();
+					pos = transform.Transform_Point(pos);
 
 					Coord3D tmp;
-					tmp.x = pos.X;
-					tmp.y = pos.Y;
-					tmp.z = pos.Z;
+					tmp.x = pos.x;
+					tmp.y = pos.y;
+					tmp.z = pos.z;
 					obj->setPosition(&tmp);
 
 					// this relies on the fact that setOrientation always forces us straight up in the Z axis!

@@ -30,6 +30,7 @@
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 #include "PreRTS.h"
 import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
+import Engine.Core.Math.AffineTransform3;
 
 #include "Common/CRCDebug.h"
 #include "Common/Player.h"
@@ -197,11 +198,11 @@ void FlightDeckBehavior::buildInfo(Bool createUnits)
 			}
 
 			AsciiString tmp;
-			Matrix3D mtx;
+			Engine::Math::AffineTransform3 transform;
 
 			//Convert the module data bone names into coordinates that we can use
-			getObject()->getSingleLogicalBonePosition( it->str(), &flightDeckInfo.m_prep, &mtx );
-			flightDeckInfo.m_orientation = mtx.Get_Z_Rotation();
+			getObject()->getSingleLogicalBonePosition(it->str(), &flightDeckInfo.m_prep, &transform);
+			flightDeckInfo.m_orientation = transform.Z_Rotation_Legacy();
 
 			//Init basic runway stuff
 			flightDeckInfo.m_runway = col;
@@ -253,10 +254,10 @@ void FlightDeckBehavior::buildInfo(Bool createUnits)
 		for( it = locations.begin(); it != locations.end(); it++ )
 		{
 			Coord3D taxiPos;
-			Matrix3D mtx;
+			Engine::Math::AffineTransform3 transform;
 
 			//Get the position of the taxi bone.
-			getObject()->getSingleLogicalBonePosition( it->str(), &taxiPos, &mtx );
+			getObject()->getSingleLogicalBonePosition(it->str(), &taxiPos, &transform);
 
 			//Add it to the taxi vector
 			info.m_taxi.push_back( taxiPos );
@@ -269,16 +270,16 @@ void FlightDeckBehavior::buildInfo(Bool createUnits)
 		for( it = locations.begin(); it != locations.end(); it++ )
 		{
 			Coord3D pos;
-			Matrix3D mtx;
+			Engine::Math::AffineTransform3 transform;
 
 			//Get the position of the creation bone.
-			getObject()->getSingleLogicalBonePosition( it->str(), &pos, &mtx );
+			getObject()->getSingleLogicalBonePosition(it->str(), &pos, &transform);
 
 			if( firstTime )
 			{
 				firstTime = FALSE;
-				info.m_startOrient = mtx.Get_Z_Rotation();
-				info.m_startTransform = mtx;
+				info.m_startOrient = transform.Z_Rotation_Legacy();
+				info.m_startTransform = transform;
 			}
 
 			//Add it to the taxi vector
@@ -1291,7 +1292,7 @@ UpdateSleepTime FlightDeckBehavior::update()
 			m_catapultSystemFrame[ i ] = FOREVER;
 			if( ps )
 			{
-				ps->setLocalTransform( &m_runways[ i ].m_startTransform );
+				ps->setLocalTransform(m_runways[i].m_startTransform);
 				ps->setPosition( &m_runways[ i ].m_start );
 			}
 		}
@@ -1348,9 +1349,7 @@ void FlightDeckBehavior::exitObjectViaDoor( Object *newObj, ExitDoorType exitDoo
 	Real parkingOffset = ju ? ju->friend_getParkingOffset() : 0.0f;
 
 	PPInfo ppinfo;
-	Matrix3D mtx;
-
-	DUMPMATRIX3D(getObject()->getTransformMatrix());
+	DUMPTRANSFORM(getObject()->worldTransform());
 	DUMPCOORD3D(getObject()->getPosition());
 	engine::debug::log_trace("Produced at hangar (door = %d)", exitDoor);
 	engine::debug::invariant((exitDoor != DOOR_NONE_NEEDED), "exitDoor != DOOR_NONE_NEEDED", __FILE__, __LINE__, "Hmm, unlikely");
@@ -1739,4 +1738,3 @@ void FlightDeckBehavior::loadPostProcess()
 	//setWakeFrame(getObject(), UPDATE_SLEEP_NONE);
 
 }
-

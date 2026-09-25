@@ -1,5 +1,4 @@
 set(WWAUDIO_SRC
-    AABTreeSoundCullClass.h
     AudibleSound.cpp
     AudibleSound.h
     AudioEvents.h
@@ -26,6 +25,7 @@ set(WWAUDIO_SRC
     SoundBuffer.h
     SoundChunkIDs.h
     SoundCullObj.h
+    SoundCullObj.cpp
     soundhandle.cpp
     soundhandle.h
     SoundPseudo3D.cpp
@@ -52,4 +52,5 @@ target_sources(corei_wwaudio INTERFACE ${WWAUDIO_SRC})
 
 target_link_libraries(corei_wwaudio INTERFACE
     core_wwcommon
+    engine_core_math
 )

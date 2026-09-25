@@ -44,10 +44,10 @@ import Assets.Images.Color;
  * Functions:                                                                                  *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
+#include <cmath>
 #include <WWLib/always.h>
 #include "W3DDevice/GameClient/W3DAssetManager.h"
 #include "W3DDevice/GameClient/W3DRenderObject.h"
-#include <WWMath/vector3.h>
 #include "W3DDevice/GameClient/W3DMeshRenderObject.h"
 #include "W3DDevice/GameClient/W3DHierarchyRenderObject.h"
 #include "W3DDevice/GameClient/W3DMeshResource.h"
@@ -60,6 +60,7 @@ import Assets.Images.PixelEncoding;
 import Assets.Identity;
 import Graphics.RHI;
 import Assets.Math;
+import Engine.Core.Math.Vector3;
 
 
 #include "WWLib/ffactory.h"
@@ -82,7 +83,6 @@ import Assets.Cache.Animations;
 
 const float ident_scale(1.0f);
 const float scale_epsilon(0.01f);
-const Vector3 ident_HSV(0,0,0);
 const float H_epsilon(1.0f);
 const float S_epsilon(0.01f);
 const float V_epsilon(0.01f);
@@ -282,17 +282,17 @@ const UnsignedShort houseColorScale[TEAM_COLOR_PALETTE_SIZE] =
 static void remapPalette16Bit(Assets::ImageDescription *sd, UnsignedShort *palette, unsigned int color)
 {
 	UnsignedShort pal[TEAM_COLOR_PALETTE_SIZE];
-	Vector3 rgb,v_color((float)((color>>16)&0xff)/255.0f/255.0f,(float)((color>>8)&0xff)/255.0f/255.0f,(float)(color&0xff)/255.0f/255.0f);
+	Engine::Math::Vector3 rgb, v_color((float)((color>>16)&0xff)/255.0f/255.0f,(float)((color>>8)&0xff)/255.0f/255.0f,(float)(color&0xff)/255.0f/255.0f);
 
 	//Generate a new color gradient palette based on reference color
 	for (Int y=0; y<TEAM_COLOR_PALETTE_SIZE; y++)
 	{
-		rgb.X=(Real)houseColorScale[y]*v_color.X;
-		rgb.Y=(Real)houseColorScale[y]*v_color.Y;
-		rgb.Z=(Real)houseColorScale[y]*v_color.Z;
+		rgb.x=(Real)houseColorScale[y]*v_color.x;
+		rgb.y=(Real)houseColorScale[y]*v_color.y;
+		rgb.z=(Real)houseColorScale[y]*v_color.z;
 		pal[y]=0xffff;	//preset alpha to known value
 		Assets::Replace_Image_RGB({reinterpret_cast<std::byte*>(&pal[y]), sizeof(pal[y])},
-            sd->encoding, {rgb.X,rgb.Y,rgb.Z});
+            sd->encoding, {rgb.x,rgb.y,rgb.z});
 	}
 
 	//check if this pixel is part of team color palette
@@ -305,18 +305,18 @@ static void remapPalette16Bit(Assets::ImageDescription *sd, UnsignedShort *palet
 static void remapTexture16Bit(Int dx, Int dy, Int pitch, Assets::ImageDescription *sd, UnsignedShort *palette, UnsignedShort *data, unsigned int color)
 {
 	UnsignedShort pal[TEAM_COLOR_PALETTE_SIZE];
-	Vector3 rgb,v_color((float)((color>>16)&0xff)/255.0f/255.0f,(float)((color>>8)&0xff)/255.0f/255.0f,(float)(color&0xff)/255.0f/255.0f);
+	Engine::Math::Vector3 rgb, v_color((float)((color>>16)&0xff)/255.0f/255.0f,(float)((color>>8)&0xff)/255.0f/255.0f,(float)(color&0xff)/255.0f/255.0f);
 
 	//Generate a new color gradient palette based on reference color
 	Int y=0;
 	for (; y<TEAM_COLOR_PALETTE_SIZE; y++)
 	{
-		rgb.X=(Real)houseColorScale[y]*v_color.X;
-		rgb.Y=(Real)houseColorScale[y]*v_color.Y;
-		rgb.Z=(Real)houseColorScale[y]*v_color.Z;
+		rgb.x=(Real)houseColorScale[y]*v_color.x;
+		rgb.y=(Real)houseColorScale[y]*v_color.y;
+		rgb.z=(Real)houseColorScale[y]*v_color.z;
 		pal[y]=0xffff;	//preset alpha to known value
 		Assets::Replace_Image_RGB({reinterpret_cast<std::byte*>(&pal[y]), sizeof(pal[y])},
-            sd->encoding, {rgb.X,rgb.Y,rgb.Z});
+            sd->encoding, {rgb.x,rgb.y,rgb.z});
 	}
 
 	for (y=0; y<dy; y++)
@@ -346,12 +346,12 @@ static void remapAlphaTexture16Bit(Int dx, Int dy, Int pitch, Assets::ImageDescr
 #ifndef DO_HUE_SHIFT
 	float fpixelAlpha,fpixelAlphaInv;
 #endif
-	Vector3 rgb,v_color((float)((color>>16)&0xff)/255.0f,(float)((color>>8)&0xff)/255.0f,(float)(color&0xff)/255.0f);
+	Engine::Math::Vector3 rgb, v_color((float)((color>>16)&0xff)/255.0f,(float)((color>>8)&0xff)/255.0f,(float)(color&0xff)/255.0f);
 	Int x,y;
 
 #ifdef DO_HUE_SHIFT
 	Assets::Vector3f hsv;
-	const auto hsv_color = Assets::RGB_To_HSV({v_color.X, v_color.Y, v_color.Z});
+	const auto hsv_color = Assets::RGB_To_HSV({v_color.x, v_color.y, v_color.z});
 #endif
 
 	for (y=0; y<dy; y++)
@@ -368,15 +368,15 @@ static void remapAlphaTexture16Bit(Int dx, Int dy, Int pitch, Assets::ImageDescr
 				hsv.x=hsv_color.x;
 				hsv.y*=hsv_color.y;
 				const auto converted = Assets::HSV_To_RGB(hsv);
-                rgb.Set(converted.x, converted.y, converted.z);
+                rgb = {converted.x, converted.y, converted.z};
 #else
 				fpixelAlpha=pixelAlpha/15.0f;
 				fpixelAlphaInv=1.0f-fpixelAlpha;
-				rgb.X=fpixelAlpha * v_color.X + fpixelAlphaInv*(Real)((pixel>>8)&0xf)/15.0f;	//red
-				rgb.Y=fpixelAlpha * v_color.Y + fpixelAlphaInv*(Real)((pixel>>4)&0xf)/15.0f; //green
-				rgb.Z=fpixelAlpha * v_color.Z + fpixelAlphaInv*(Real)(pixel&0xf)/15.0f; //blue
+				rgb.x=fpixelAlpha * v_color.x + fpixelAlphaInv*(Real)((pixel>>8)&0xf)/15.0f;	//red
+				rgb.y=fpixelAlpha * v_color.y + fpixelAlphaInv*(Real)((pixel>>4)&0xf)/15.0f; //green
+				rgb.z=fpixelAlpha * v_color.z + fpixelAlphaInv*(Real)(pixel&0xf)/15.0f; //blue
 #endif
-				data[x] = REAL_TO_INT(rgb.X*15.0f)<<8 | REAL_TO_INT(rgb.Y*15.0f)<<4 | REAL_TO_INT(rgb.Z*15.0f);
+			data[x] = REAL_TO_INT(rgb.x*15.0f)<<8 | REAL_TO_INT(rgb.y*15.0f)<<4 | REAL_TO_INT(rgb.z*15.0f);
 			}
 			data[x] |= 0xf000;	//force alpha to opaque.
 		}
@@ -388,17 +388,17 @@ static void remapAlphaTexture16Bit(Int dx, Int dy, Int pitch, Assets::ImageDescr
 static void remapPalette32Bit(Assets::ImageDescription *sd, UnsignedInt *palette, unsigned int color)
 {
 	UnsignedInt pal[TEAM_COLOR_PALETTE_SIZE];
-	Vector3 rgb,v_color((float)((color>>16)&0xff)/255.0f/255.0f,(float)((color>>8)&0xff)/255.0f/255.0f,(float)(color&0xff)/255.0f/255.0f);
+	Engine::Math::Vector3 rgb, v_color((float)((color>>16)&0xff)/255.0f/255.0f,(float)((color>>8)&0xff)/255.0f/255.0f,(float)(color&0xff)/255.0f/255.0f);
 
 	//Generate a new color gradient palette based on reference color
 	for (Int y=0; y<TEAM_COLOR_PALETTE_SIZE; y++)
 	{
-		rgb.X=(Real)houseColorScale[y]*v_color.X;
-		rgb.Y=(Real)houseColorScale[y]*v_color.Y;
-		rgb.Z=(Real)houseColorScale[y]*v_color.Z;
+		rgb.x=(Real)houseColorScale[y]*v_color.x;
+		rgb.y=(Real)houseColorScale[y]*v_color.y;
+		rgb.z=(Real)houseColorScale[y]*v_color.z;
 		pal[y]=0xffffffff;	//preset alpha to known value
 		Assets::Replace_Image_RGB({reinterpret_cast<std::byte*>(&pal[y]), sizeof(pal[y])},
-            sd->encoding, {rgb.X,rgb.Y,rgb.Z});
+            sd->encoding, {rgb.x,rgb.y,rgb.z});
 	}
 
 	//check if this pixel is part of team color palette
@@ -411,18 +411,18 @@ static void remapPalette32Bit(Assets::ImageDescription *sd, UnsignedInt *palette
 static void remapTexture32Bit(Int dx, Int dy, Int pitch, Assets::ImageDescription *sd, UnsignedInt *palette, UnsignedInt *data, unsigned int color)
 {
 	UnsignedInt pal[TEAM_COLOR_PALETTE_SIZE];
-	Vector3 rgb,v_color((float)((color>>16)&0xff)/255.0f/255.0f,(float)((color>>8)&0xff)/255.0f/255.0f,(float)(color&0xff)/255.0f/255.0f);
+	Engine::Math::Vector3 rgb, v_color((float)((color>>16)&0xff)/255.0f/255.0f,(float)((color>>8)&0xff)/255.0f/255.0f,(float)(color&0xff)/255.0f/255.0f);
 
 	//Generate a new color gradient palette based on reference color
 	Int y=0;
 	for (; y<TEAM_COLOR_PALETTE_SIZE; y++)
 	{
-		rgb.X=(Real)houseColorScale[y]*v_color.X;
-		rgb.Y=(Real)houseColorScale[y]*v_color.Y;
-		rgb.Z=(Real)houseColorScale[y]*v_color.Z;
+		rgb.x=(Real)houseColorScale[y]*v_color.x;
+		rgb.y=(Real)houseColorScale[y]*v_color.y;
+		rgb.z=(Real)houseColorScale[y]*v_color.z;
 		pal[y]=0xffffffff;	//preset alpha to known value
 		Assets::Replace_Image_RGB({reinterpret_cast<std::byte*>(&pal[y]), sizeof(pal[y])},
-            sd->encoding, {rgb.X,rgb.Y,rgb.Z});
+            sd->encoding, {rgb.x,rgb.y,rgb.z});
 	}
 
 	for (y=0; y<dy; y++)
@@ -447,11 +447,11 @@ static void remapAlphaTexture32Bit(Int dx, Int dy, Int pitch, Assets::ImageDescr
 #ifndef DO_HUE_SHIFT
 	float fpixelAlpha,fpixelAlphaInv;
 #endif
-	Vector3 rgb,v_color((float)((color>>16)&0xff)/255.0f,(float)((color>>8)&0xff)/255.0f,(float)(color&0xff)/255.0f);
+	Engine::Math::Vector3 rgb, v_color((float)((color>>16)&0xff)/255.0f,(float)((color>>8)&0xff)/255.0f,(float)(color&0xff)/255.0f);
 	Int x,y;
 #ifdef DO_HUE_SHIFT
 	Assets::Vector3f hsv;
-	const auto hsv_color = Assets::RGB_To_HSV({v_color.X, v_color.Y, v_color.Z});
+	const auto hsv_color = Assets::RGB_To_HSV({v_color.x, v_color.y, v_color.z});
 #endif
 
 	for (y=0; y<dy; y++)
@@ -466,16 +466,16 @@ static void remapAlphaTexture32Bit(Int dx, Int dy, Int pitch, Assets::ImageDescr
 				hsv.x=hsv_color.x;
 				hsv.y*=hsv_color.y;
 				const auto converted = Assets::HSV_To_RGB(hsv);
-                rgb.Set(converted.x, converted.y, converted.z);
+                rgb = {converted.x, converted.y, converted.z};
 #else
 				///@todo: optimize this alpha blend to use fixed point math.
 				fpixelAlpha=pixelAlpha/255.0f;
 				fpixelAlphaInv=1.0f-fpixelAlpha;
-				rgb.X=fpixelAlpha * v_color.X + fpixelAlphaInv*(Real)((pixel>>16)&0xff)/255.0f;	//red
-				rgb.Y=fpixelAlpha * v_color.Y + fpixelAlphaInv*(Real)((pixel>>8)&0xff)/255.0f; //green
-				rgb.Z=fpixelAlpha * v_color.Z + fpixelAlphaInv*(Real)(pixel&0xff)/255.0f; //blue
+				rgb.x=fpixelAlpha * v_color.x + fpixelAlphaInv*(Real)((pixel>>16)&0xff)/255.0f;	//red
+				rgb.y=fpixelAlpha * v_color.y + fpixelAlphaInv*(Real)((pixel>>8)&0xff)/255.0f; //green
+				rgb.z=fpixelAlpha * v_color.z + fpixelAlphaInv*(Real)(pixel&0xff)/255.0f; //blue
 #endif
-				data[x] = REAL_TO_INT(rgb.X*255.0f)<<16 |	REAL_TO_INT(rgb.Y*255.0f)<<8 | REAL_TO_INT(rgb.Z*255.0f);
+			data[x] = REAL_TO_INT(rgb.x*255.0f)<<16 |	REAL_TO_INT(rgb.y*255.0f)<<8 | REAL_TO_INT(rgb.z*255.0f);
 			}
 			data[x] |= 0xff000000;	//force alpha to opaque.
 		}
@@ -600,7 +600,7 @@ W3DRenderObject * W3DAssetManager::Create_Render_Obj(
 	const char *newTexture
 )
 {
-	Bool reallyscale = (WWMath::Fabs(scale - ident_scale) > scale_epsilon);
+	Bool reallyscale = (std::fabs(scale - ident_scale) > scale_epsilon);
 	Bool reallycolor = (color & 0xFFFFFF) != 0;	//black is not a valid color and assumes no custom coloring.
 	Bool reallytexture = (oldTexture != nullptr && newTexture != nullptr);
 
@@ -797,26 +797,26 @@ int W3DAssetManager::Recolor_HLOD(W3DRenderObject *robj, const int color)
 */
 void W3DAssetManager::Recolor_Vertex_Material(Graphics::MeshMaterial *vmat, const int color)
 {
-	Vector3 rgb,rgb2;
+	Engine::Math::Vector3 rgb, rgb2;
 
-	rgb.X = (Real)((color >> 16) & 0xff )/255.0f;
-	rgb.Y = (Real)((color >> 8) & 0xff )/255.0f;
-	rgb.Z = (Real)(color & 0xff)/255.0f;
+	rgb.x = (Real)((color >> 16) & 0xff )/255.0f;
+	rgb.y = (Real)((color >> 8) & 0xff )/255.0f;
+	rgb.z = (Real)(color & 0xff)/255.0f;
 
 	//We ignore the existing ambinent/diffuse and assume they were 1.0.  We can change
 	//to scaling them if required.
 
 //	vmat->Get_Ambient(&rgb2);
-	rgb2.X = rgb.X;	//scale colors
-	rgb2.Y = rgb.Y;	//scale colors
-	rgb2.Z = rgb.Z;	//scale colors
-	vmat->parameters.ambient = {rgb2.X,rgb2.Y,rgb2.Z};
+	rgb2.x = rgb.x;	//scale colors
+	rgb2.y = rgb.y;	//scale colors
+	rgb2.z = rgb.z;	//scale colors
+	vmat->parameters.ambient = {rgb2.x,rgb2.y,rgb2.z};
 
 //	vmat->Get_Diffuse(&rgb2);
-	rgb2.X = rgb.X;	//scale colors
-	rgb2.Y = rgb.Y;	//scale colors
-	rgb2.Z = rgb.Z;	//scale colors
-	vmat->parameters.diffuse = {rgb2.X,rgb2.Y,rgb2.Z};
+	rgb2.x = rgb.x;	//scale colors
+	rgb2.y = rgb.y;	//scale colors
+	rgb2.z = rgb.z;	//scale colors
+	vmat->parameters.diffuse = {rgb2.x,rgb2.y,rgb2.z};
 }
 
 //---------------------------------------------------------------------

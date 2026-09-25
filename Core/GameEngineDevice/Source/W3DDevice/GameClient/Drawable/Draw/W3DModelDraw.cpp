@@ -1,3 +1,4 @@
+import Engine.Core.Math.Vector3;
 /*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
@@ -36,6 +37,7 @@
 #include <SDL3/SDL.h>
 
 #include <array>
+#include <bit>
 #include <cctype>
 #include <cmath>
 #include <cstddef>
@@ -79,7 +81,6 @@ import Graphics.Resources.Textures.Edit;
 import Assets.Identity;
 #include "W3DDevice/GameClient/W3DTextureHandle.h"
 #include "Common/BitFlagsIO.h"
-#include "WWMath/sphere.h"
 #ifdef RTS_ZEROHOUR
 #include "W3DDevice/GameClient/W3DObjectGraphics.h"
 #endif
@@ -112,6 +113,7 @@ import Assets.Models;
 import Assets.Cache;
 import Assets.Runtime;
 import engine.debug;
+import Engine.Core.Math.AffineTransform3;
 
 
 
@@ -136,7 +138,7 @@ public:
 	LogClass(const char *fname);
 	~LogClass();
 	void log(const char *fmt, ...);
-	void dumpMatrix3D(const Matrix3D *m, AsciiString name, AsciiString fname, Int line);
+	void dumpTransform(const Engine::Math::AffineTransform3 &transform, AsciiString name, AsciiString fname, Int line);
 	void dumpReal(Real r, AsciiString name, AsciiString fname, Int line);
 
 protected:
@@ -193,16 +195,20 @@ void LogClass::log(const char *fmt, ...)
 	fflush(m_fp);
 }
 
-void LogClass::dumpMatrix3D(const Matrix3D *m, AsciiString name, AsciiString fname, Int line)
+void LogClass::dumpTransform(const Engine::Math::AffineTransform3 &transform, AsciiString name, AsciiString fname, Int line)
 {
 	fname.toLower();
 	fname = fname.reverseFind('\\') + 1;
-	const Real *matrix = (const Real *)m;
-	log("dumpMatrix3D() %s:%d %s",
+	log("dumpTransform() %s:%d %s",
 		fname.str(), line, name.str());
-	for (Int i=0; i<3; ++i)
+	for (Int i = 0; i < 3; ++i) {
+		const Int row = i * 4;
 		log("      0x%08X 0x%08X 0x%08X 0x%08X",
-			AS_INT(matrix[(i<<2)+0]), AS_INT(matrix[(i<<2)+1]), AS_INT(matrix[(i<<2)+2]), AS_INT(matrix[(i<<2)+3]));
+			std::bit_cast<std::uint32_t>(transform.elements[row + 0]),
+			std::bit_cast<std::uint32_t>(transform.elements[row + 1]),
+			std::bit_cast<std::uint32_t>(transform.elements[row + 2]),
+			std::bit_cast<std::uint32_t>(transform.elements[row + 3]));
+	}
 }
 
 void LogClass::dumpReal(Real r, AsciiString name, AsciiString fname, Int line)
@@ -218,16 +224,16 @@ void LogClass::dumpReal(Real r, AsciiString name, AsciiString fname, Int line)
 LogClass BonePosLog("bonePositions.txt");
 
 #define BONEPOS_LOG(x) BonePosLog.log x
-#define BONEPOS_DUMPMATRIX3D(x) BONEPOS_DUMPMATRIX3DNAMED(x, #x)
-#define BONEPOS_DUMPMATRIX3DNAMED(x, y) BonePosLog.dumpMatrix3D(x, y, __FILE__, __LINE__)
+#define BONEPOS_DUMPTRANSFORM(x) BONEPOS_DUMPTRANSFORMNAMED(x, #x)
+#define BONEPOS_DUMPTRANSFORMNAMED(x, y) BonePosLog.dumpTransform(*(x), y, __FILE__, __LINE__)
 #define BONEPOS_DUMPREAL(x) BONEPOS_DUMPREALNAMED(x, #x)
 #define BONEPOS_DUMPREALNAMED(x, y) BonePosLog.dumpReal(x, y, __FILE__, __LINE__)
 
 #else // DEBUG_CRC
 
 #define BONEPOS_LOG(x)
-#define BONEPOS_DUMPMATRIX3D(x)
-#define BONEPOS_DUMPMATRIX3DNAMED(x, y)
+#define BONEPOS_DUMPTRANSFORM(x)
+#define BONEPOS_DUMPTRANSFORMNAMED(x, y)
 #define BONEPOS_DUMPREAL(x)
 #define BONEPOS_DUMPREALNAMED(x, y)
 
@@ -456,7 +462,7 @@ inline Bool testFlagBit(Int flags, Int bit)
 }
 
 //-------------------------------------------------------------------------------------------------
-static Bool findSingleBone(W3DRenderObject* robj, const AsciiString& boneName, Matrix3D& mtx, Int& boneIndex)
+static Bool findSingleBone(W3DRenderObject* robj, const AsciiString& boneName, Engine::Math::AffineTransform3& transform, Int& boneIndex)
 {
 	if (boneName.isNone() || boneName.isEmpty())
 		return false;
@@ -464,7 +470,7 @@ static Bool findSingleBone(W3DRenderObject* robj, const AsciiString& boneName, M
 	boneIndex = robj->Get_Bone_Index(boneName.str());
 	if (boneIndex != 0)
 	{
-		mtx = robj->Get_Bone_Transform(boneIndex);
+		transform = robj->Get_Bone_Transform(boneIndex);
 		return true;
 	}
 	else
@@ -474,7 +480,7 @@ static Bool findSingleBone(W3DRenderObject* robj, const AsciiString& boneName, M
 }
 
 //-------------------------------------------------------------------------------------------------
-static Bool findSingleSubObj(W3DRenderObject* robj, const AsciiString& boneName, Matrix3D& mtx, Int& boneIndex)
+static Bool findSingleSubObj(W3DRenderObject* robj, const AsciiString& boneName, Engine::Math::AffineTransform3& transform, Int& boneIndex)
 {
 	if (boneName.isNone() || boneName.isEmpty())
 		return false;
@@ -482,7 +488,7 @@ static Bool findSingleSubObj(W3DRenderObject* robj, const AsciiString& boneName,
 	W3DRenderObject* childObject = robj->Get_Sub_Object_By_Name(boneName.str());
 	if (childObject)
 	{
-		mtx = childObject->Get_Transform();
+		transform = childObject->Get_Transform();
 
 		// you'd think this would work, but, it does not. do it the hard way.
 		// boneIndex = childObject->Get_Sub_Object_Bone_Index(childObject);
@@ -526,11 +532,11 @@ static Bool doSingleBoneName(W3DRenderObject* robj, const AsciiString& boneName,
 
 	setFPMode();
 
-	if (findSingleBone(robj, boneNameTmp, info.mtx, info.boneIndex))
+	if (findSingleBone(robj, boneNameTmp, info.transform, info.boneIndex))
 	{
 //engine::debug::log_info("added bone %s",boneNameTmp.str());
 		BONEPOS_LOG(("Caching bone %s (index %d)", boneNameTmp.str(), info.boneIndex));
-		BONEPOS_DUMPMATRIX3D(&(info.mtx));
+		BONEPOS_DUMPTRANSFORM(&(info.transform));
 
 		map[NAMEKEY(boneNameTmp)] = info;
 		foundAsBone = true;
@@ -539,11 +545,11 @@ static Bool doSingleBoneName(W3DRenderObject* robj, const AsciiString& boneName,
 	for (Int i = 1; i <= 99; ++i)
 	{
 		tmp.format("%s%02d", boneNameTmp.str(), i);
-		if (findSingleBone(robj, tmp, info.mtx, info.boneIndex))
+		if (findSingleBone(robj, tmp, info.transform, info.boneIndex))
 		{
 //engine::debug::log_info("added bone %s",tmp.str());
 			BONEPOS_LOG(("Caching bone %s (index %d)", tmp.str(), info.boneIndex));
-			BONEPOS_DUMPMATRIX3D(&(info.mtx));
+			BONEPOS_DUMPTRANSFORM(&(info.transform));
 			map[NAMEKEY(tmp)] = info;
 			foundAsBone = true;
 		}
@@ -555,11 +561,11 @@ static Bool doSingleBoneName(W3DRenderObject* robj, const AsciiString& boneName,
 
 	if (!foundAsBone)
 	{
-		if (findSingleSubObj(robj, boneNameTmp, info.mtx, info.boneIndex))
+		if (findSingleSubObj(robj, boneNameTmp, info.transform, info.boneIndex))
 		{
 //engine::debug::log_info("added subobj %s",boneNameTmp.str());
 			BONEPOS_LOG(("Caching bone from subobject %s (index %d)", boneNameTmp.str(), info.boneIndex));
-			BONEPOS_DUMPMATRIX3D(&(info.mtx));
+			BONEPOS_DUMPTRANSFORM(&(info.transform));
 			map[NAMEKEY(boneNameTmp)] = info;
 			foundAsSubObj = true;
 		}
@@ -567,11 +573,11 @@ static Bool doSingleBoneName(W3DRenderObject* robj, const AsciiString& boneName,
 		for (Int i = 1; i <= 99; ++i)
 		{
 			tmp.format("%s%02d", boneNameTmp.str(), i);
-			if (findSingleSubObj(robj, tmp, info.mtx, info.boneIndex))
+			if (findSingleSubObj(robj, tmp, info.transform, info.boneIndex))
 			{
 //engine::debug::log_info("added subobj %s",tmp.str());
 				BONEPOS_LOG(("Caching bone from subobject %s (index %d)", tmp.str(), info.boneIndex));
-				BONEPOS_DUMPMATRIX3D(&(info.mtx));
+				BONEPOS_DUMPTRANSFORM(&(info.transform));
 				map[NAMEKEY(tmp)] = info;
 				foundAsSubObj = true;
 			}
@@ -652,7 +658,7 @@ void ModelConditionInfo::validateCachedBones(W3DRenderObject* robj, Real scale) 
 		tossRobj = true;
 	}
 
-	Matrix3D			originalTransform = robj->Get_Transform();	// save the transform
+	const auto originalTransform = robj->Get_Transform();	// save the transform
 	W3DHierarchyRenderObject*		hlod = nullptr;
 	Assets::AnimationAssetHandle curAnim = nullptr;
 	int						numFrames = 0;
@@ -689,9 +695,7 @@ void ModelConditionInfo::validateCachedBones(W3DRenderObject* robj, Real scale) 
 		animToUse = nullptr;
 	}
 
-	Matrix3D tmp(true);
-	tmp.Scale(scale);
-	robj->Set_Transform(tmp);					// set to identity transform
+	robj->Set_Transform(Engine::Math::AffineTransform3::From_Uniform_Scale(scale));					// set to scaled model space
 
 	if (TheGlobalData)
 	{
@@ -781,7 +785,7 @@ void ModelConditionInfo::validateWeaponBarrelInfo() const
 			for (Int i = 1; i <= 99; ++i)
 			{
 				WeaponBarrelInfo info;
-				info.m_projectileOffsetMtx.Make_Identity();
+				info.projectile_offset_transform = Engine::Math::AffineTransform3::Identity();
 
 				if (!recoilBoneName.isEmpty())
 				{
@@ -810,18 +814,18 @@ void ModelConditionInfo::validateWeaponBarrelInfo() const
 				if (!plbName.isEmpty())
 				{
 					snprintf(buffer, ARRAY_SIZE(buffer), "%s%02d", plbName.str(), i);
-					const Matrix3D* mtx = findPristineBone(NAMEKEY(buffer), &plbBoneIndex);
-					if (mtx != nullptr)
-						info.m_projectileOffsetMtx = *mtx;
+				const auto* transform = findPristineBone(NAMEKEY(buffer), &plbBoneIndex);
+				if (transform != nullptr)
+					info.projectile_offset_transform = *transform;
 				}
 
 				if (info.m_fxBone == 0 && info.m_recoilBone == 0 && info.m_muzzleFlashBone == 0 && plbBoneIndex == 0)
 					break;
 
 				engine::debug::log_trace("validateWeaponBarrelInfo() - model name %s wslot %d", m_modelName.str(), wslot);
-				DUMPMATRIX3D(&(info.m_projectileOffsetMtx));
+				DUMPTRANSFORM(info.projectile_offset_transform);
 				BONEPOS_LOG(("validateWeaponBarrelInfo() - model name %s wslot %d", m_modelName.str(), wslot));
-				BONEPOS_DUMPMATRIX3D(&(info.m_projectileOffsetMtx));
+				BONEPOS_DUMPTRANSFORM(&(info.projectile_offset_transform));
 				m_weaponBarrelInfoVec[wslot].push_back(info);
 
 				if (info.m_recoilBone != 0 || info.m_muzzleFlashBone != 0)
@@ -845,21 +849,21 @@ void ModelConditionInfo::validateWeaponBarrelInfo() const
 					info.m_muzzleFlashBoneName = mfName;
 #endif
 
-				const Matrix3D* plbMtx = plbName.isEmpty() ? nullptr : findPristineBone(NAMEKEY(plbName), nullptr);
-				if (plbMtx != nullptr)
-					info.m_projectileOffsetMtx = *plbMtx;
+				const auto* plbTransform = plbName.isEmpty() ? nullptr : findPristineBone(NAMEKEY(plbName), nullptr);
+				if (plbTransform != nullptr)
+					info.projectile_offset_transform = *plbTransform;
 				else
-					info.m_projectileOffsetMtx.Make_Identity();
+					info.projectile_offset_transform = Engine::Math::AffineTransform3::Identity();
 
 				if (!fxBoneName.isEmpty())
 					findPristineBone(NAMEKEY(fxBoneName), &info.m_fxBone);
 
-				if (info.m_fxBone != 0 || info.m_recoilBone != 0 || info.m_muzzleFlashBone != 0 || plbMtx != nullptr)
+				if (info.m_fxBone != 0 || info.m_recoilBone != 0 || info.m_muzzleFlashBone != 0 || plbTransform != nullptr)
 				{
 					engine::debug::log_trace("validateWeaponBarrelInfo() - model name %s (unadorned) wslot %d", m_modelName.str(), wslot);
-					DUMPMATRIX3D(&(info.m_projectileOffsetMtx));
+					DUMPTRANSFORM(info.projectile_offset_transform);
 					BONEPOS_LOG(("validateWeaponBarrelInfo() - model name %s (unadorned) wslot %d", m_modelName.str(), wslot));
-					BONEPOS_DUMPMATRIX3D(&(info.m_projectileOffsetMtx));
+					BONEPOS_DUMPTRANSFORM(&(info.projectile_offset_transform));
 					m_weaponBarrelInfoVec[wslot].push_back(info);
 					if (info.m_recoilBone != 0 || info.m_muzzleFlashBone != 0)
 						m_hasRecoilBonesOrMuzzleFlashes[wslot] = true;
@@ -930,7 +934,7 @@ void ModelConditionInfo::validateTurretInfo() const
 }
 
 //-------------------------------------------------------------------------------------------------
-const Matrix3D* ModelConditionInfo::findPristineBone(NameKeyType boneName, Int* boneIndex) const
+const Engine::Math::AffineTransform3* ModelConditionInfo::findPristineBone(NameKeyType boneName, Int* boneIndex) const
 {
 	engine::debug::invariant(((m_validStuff & PRISTINE_BONES_VALID)), "(m_validStuff & PRISTINE_BONES_VALID)", __FILE__, __LINE__, "*** ASSET ERROR: bones are not valid");
 	if (!(m_validStuff & PRISTINE_BONES_VALID))
@@ -954,7 +958,7 @@ const Matrix3D* ModelConditionInfo::findPristineBone(NameKeyType boneName, Int* 
 	{
 		if (boneIndex)
 			*boneIndex = it->second.boneIndex;
-		return &it->second.mtx;
+		return &it->second.transform;
 	}
 	else
 	{
@@ -968,13 +972,13 @@ const Matrix3D* ModelConditionInfo::findPristineBone(NameKeyType boneName, Int* 
 //-------------------------------------------------------------------------------------------------
 Bool ModelConditionInfo::findPristineBonePos(NameKeyType boneName, Coord3D& pos) const
 {
-	const Matrix3D* mtx = findPristineBone(boneName, nullptr);
-	if (mtx)
+	const auto* transform = findPristineBone(boneName, nullptr);
+	if (transform)
 	{
-		Vector3 v = mtx->Get_Translation();
-		pos.x = v.X;
-		pos.y = v.Y;
-		pos.z = v.Z;
+		const auto position = transform->Translation();
+		pos.x = position.x;
+		pos.y = position.y;
+		pos.z = position.z;
 		return true;
 	}
 	else
@@ -1168,7 +1172,7 @@ AsciiString W3DModelDrawModuleData::getBestModelNameForWB(const ModelConditionFl
 
 #ifdef CACHE_ATTACH_BONE
 //-------------------------------------------------------------------------------------------------
-const Vector3* W3DModelDrawModuleData::getAttachToDrawableBoneOffset(const Drawable* draw) const
+const Engine::Math::Vector3* W3DModelDrawModuleData::getAttachToDrawableBoneOffset(const Drawable* draw) const
 {
 	if (m_attachToDrawableBone.isEmpty())
 	{
@@ -1179,16 +1183,17 @@ const Vector3* W3DModelDrawModuleData::getAttachToDrawableBoneOffset(const Drawa
 		if (!m_attachToDrawableBoneOffsetValid)
 		{
 		// must use pristine bone here since the result is used by logic
-			Matrix3D boneMtx;
-			if (draw->getPristineBonePositions(m_attachToDrawableBone.str(), 0, nullptr, &boneMtx, 1) == 1)
+			Engine::Math::AffineTransform3 boneTransform;
+			if (draw->getPristineBoneTransforms(m_attachToDrawableBone.str(), 0, &boneTransform, 1) == 1)
 			{
-				m_attachToDrawableBoneOffset = boneMtx.Get_Translation();
+				const Engine::Math::Vector3 offset = boneTransform.Translation();
+				m_attachToDrawableBoneOffset = {offset.x, offset.y, offset.z};
 			}
 			else
 			{
-				m_attachToDrawableBoneOffset.X = 0;
-				m_attachToDrawableBoneOffset.Y = 0;
-				m_attachToDrawableBoneOffset.Z = 0;
+				m_attachToDrawableBoneOffset.x = 0;
+				m_attachToDrawableBoneOffset.y = 0;
+				m_attachToDrawableBoneOffset.z = 0;
 			}
 			m_attachToDrawableBoneOffsetValid = true;
 		}
@@ -2027,28 +2032,29 @@ void W3DModelDraw::adjustAnimSpeedToMovementSpeed()
 }
 
 //-------------------------------------------------------------------------------------------------
-void W3DModelDraw::adjustTransformMtx(Matrix3D& mtx) const
+void W3DModelDraw::adjustTransform(Engine::Math::AffineTransform3& transform) const
 {
 	const W3DModelDrawModuleData* d = getW3DModelDrawModuleData();
 
 #ifdef CACHE_ATTACH_BONE
-	const Vector3* offset = d->getAttachToDrawableBoneOffset(getDrawable());
+	const Engine::Math::Vector3* offset = d->getAttachToDrawableBoneOffset(getDrawable());
 	if (offset)
 	{
-		Vector3 tmp = mtx.Rotate_Vector(*offset);
-		mtx.Adjust_X_Translation(tmp.X);
-		mtx.Adjust_Y_Translation(tmp.Y);
-		mtx.Adjust_Z_Translation(tmp.Z);
+		const Engine::Math::Vector3 tmp = transform.Transform_Vector({offset->x, offset->y, offset->z});
+		transform.Set_Translation(transform.Translation() + tmp);
 	}
 #else
 	if (d->m_attachToDrawableBone.isNotEmpty())
 	{
 		// override the mtx in this case. yes, call drawable, since the bone in question is
 		// likely to be in another module!
-		Matrix3D boneMtx;
-		if (getDrawable()->getCurrentWorldspaceClientBonePositions(d->m_attachToDrawableBone.str(), boneMtx))
+		Engine::Math::AffineTransform3 boneTransform;
+		if (getDrawable()->getCurrentWorldBoneTransform(
+			d->m_attachToDrawableBone.str(), boneTransform))
 		{
-			mtx = boneMtx;
+			for (unsigned row = 0; row < 3; ++row)
+				for (unsigned column = 0; column < 4; ++column)
+					transform.elements[row * 4 + column] = boneTransform.elements[row * 4 + column];
 		}
 		else
 		{
@@ -2066,25 +2072,29 @@ void W3DModelDraw::adjustTransformMtx(Matrix3D& mtx) const
 			if (pct >= 0.0f)
 			{
 				Real height = obj->getGeometryInfo().getMaxHeightAbovePosition();
-				mtx.Translate_Z(-height + (height * pct / 100.0f));
+				transform.Set_Translation(transform.Translation()
+					+ transform.Transform_Vector({0.0f, 0.0f, -height + (height * pct / 100.0f)}));
 			}
 		}
 	}
 }
 
 //-------------------------------------------------------------------------------------------------
-void W3DModelDraw::doDrawModule(const Matrix3D* transformMtx)
+void W3DModelDraw::doDrawModule(const Engine::Math::AffineTransform3* transform)
 {
 	// update whether or not we should be animating.
 	setPauseAnimation( !getDrawable()->getShouldAnimate(getW3DModelDrawModuleData()->m_animationsRequirePower) );
 
-	Matrix3D scaledTransform;
+	Engine::Math::AffineTransform3 scaledTransform;
+	const Engine::Math::AffineTransform3* drawTransform = transform;
 	if (getDrawable()->getInstanceScale() != 1.0f)
 	{
 		// do custom scaling of the W3D model.
-		scaledTransform = *transformMtx;
-		scaledTransform.Scale(getDrawable()->getInstanceScale());
-		transformMtx = &scaledTransform;
+		scaledTransform = *transform;
+		for (unsigned row = 0; row < 3; ++row)
+			for (unsigned column = 0; column < 3; ++column)
+				scaledTransform.elements[row * 4 + column] *= getDrawable()->getInstanceScale();
+		drawTransform = &scaledTransform;
 		if (m_renderObject)
 			m_renderObject->Set_ObjectScale(getDrawable()->getInstanceScale());
 	}
@@ -2130,9 +2140,9 @@ void W3DModelDraw::doDrawModule(const Matrix3D* transformMtx)
 	// set our position in the render object to our position of the drawable
 	if (m_renderObject)
 	{
-		Matrix3D mtx = *transformMtx;
-		adjustTransformMtx(mtx);
-		m_renderObject->Set_Transform(mtx);
+		Engine::Math::AffineTransform3 adjustedTransform = *drawTransform;
+		adjustTransform(adjustedTransform);
+		m_renderObject->Set_Transform(adjustedTransform);
 	}
 
 	handleClientTurretPositioning();
@@ -2478,8 +2488,7 @@ void W3DModelDraw::handleClientTurretPositioning()
 			{
 				if (m_curState)
 					turretAngle += tur.m_turretArtAngle;
-				Matrix3D turretXfrm(1);
-				turretXfrm.Rotate_Z(turretAngle);
+				const auto turretXfrm = Engine::Math::AffineTransform3::Rotation_Z(turretAngle);
 				if (m_renderObject)
 				{
 					m_renderObject->Capture_Bone( tur.m_turretAngleBone );
@@ -2492,8 +2501,7 @@ void W3DModelDraw::handleClientTurretPositioning()
 			{
 				if (m_curState)
 					turretPitch += tur.m_turretArtPitch;
-				Matrix3D turretPitchXfrm(1);
-				turretPitchXfrm.Rotate_Y(-turretPitch);
+				const auto turretPitchXfrm = Engine::Math::AffineTransform3::Rotation_Y(-turretPitch);
 				if (m_renderObject)
 				{
 					m_renderObject->Capture_Bone( tur.m_turretPitchBone );
@@ -2511,7 +2519,7 @@ void W3DModelDraw::handleClientTurretPositioning()
 //	Real turretAngle = TheGlobalData->m_downwindAngle;
 //	if (tur.m_flagAngleBone )
 //	{
-//		Matrix3D turretXfrm(1);
+//		Engine::Math::AffineTransform3 turretXfrm(1);
 //		turretXfrm.Rotate_Z(turretAngle);
 //		if (m_renderObject)
 //		{
@@ -2592,9 +2600,8 @@ void W3DModelDraw::handleClientRecoil()
 						break;
 				}
 
-				Matrix3D gunXfrm;
-				gunXfrm.Make_Identity();
-				gunXfrm.Translate_X( -recoils[i].m_shift );
+				Engine::Math::AffineTransform3 gunXfrm = Engine::Math::AffineTransform3::Identity();
+				gunXfrm.Set_Translation({-recoils[i].m_shift, 0.0f, 0.0f});
 				//if (!(recoils[i].m_shift==0.0f)) engine::debug::log_error("adjust bone %d by %f",recoils[i].m_recoilBone,recoils[i].m_shift);
 
 				if (m_renderObject)
@@ -2650,20 +2657,18 @@ void W3DModelDraw::recalcBonesForClientParticleSystems()
 						if (boneIndex != 0)
 						{
 							// ugh... kill the mtx so we get it in modelspace, not world space
-							Matrix3D originalTransform = m_renderObject->Get_Transform();	// save the transform
-							Matrix3D tmp(true);
-							tmp.Scale(getDrawable()->getScale());
-							m_renderObject->Set_Transform(tmp);					// set to identity transform
+							const auto originalTransform = m_renderObject->Get_Transform();	// save the transform
+							m_renderObject->Set_Transform(Engine::Math::AffineTransform3::From_Uniform_Scale(getDrawable()->getScale()));						// set to scaled model space
 
-							const Matrix3D boneTransform = m_renderObject->Get_Bone_Transform(boneIndex);
-							Vector3 vpos = boneTransform.Get_Translation();
-							rotation = boneTransform.Get_Z_Rotation();
+							const Engine::Math::AffineTransform3 boneTransform = m_renderObject->Get_Bone_Transform(boneIndex);
+							const auto vpos = boneTransform.Translation();
+							rotation = boneTransform.Z_Rotation_Legacy();
 
-							m_renderObject->Set_Transform(originalTransform);					// restore it
+							m_renderObject->Set_Transform(originalTransform);						// restore it
 
-							pos.x = vpos.X;
-							pos.y = vpos.Y;
-							pos.z = vpos.Z;
+							pos.x = vpos.x;
+							pos.y = vpos.y;
+							pos.z = vpos.z;
 						}
 
 						// got the bone position...
@@ -2726,22 +2731,22 @@ Bool W3DModelDraw::updateBonesForClientParticleSystems()
 			Int boneIndex = (*it).boneIndex;
 			if ( (sys != nullptr) && (boneIndex != 0)  )
 			{
-			Matrix3D boneTransform;
+			Engine::Math::AffineTransform3 boneTransform;
 				boneTransform = m_renderObject->Get_Bone_Transform(boneIndex);// just a little worried about state changes
 
-        Vector3 vpos = boneTransform.Get_Translation();
+        const auto vpos = boneTransform.Translation();
 
         Coord3D pos;
-				pos.x = vpos.X;
-				pos.y = vpos.Y;
-				pos.z = vpos.Z;
+				pos.x = vpos.x;
+				pos.y = vpos.y;
+				pos.z = vpos.z;
 
 				sys->setPosition(&pos);
 
-        Real orientation = boneTransform.Get_Z_Rotation();
+        Real orientation = boneTransform.Z_Rotation_Legacy();
 				sys->rotateLocalTransformZ(orientation);
 
-        sys->setLocalTransform(&boneTransform);
+        sys->setLocalTransform(boneTransform);
         sys->setSkipParentXfrm(true);
 
 			}
@@ -2810,7 +2815,7 @@ void W3DModelDraw::setTerrainDecalOpacity(Real o)
 	}
 }
 //-------------------------------------------------------------------------------------------------
-void W3DModelDraw::nukeCurrentRender(Matrix3D* xform)
+void W3DModelDraw::nukeCurrentRender(Engine::Math::AffineTransform3* xform)
 {
 	// this needs to be "dirtied" so that the new pausing of the animation will be triggered.
 	m_pauseAnimation = false;
@@ -2841,7 +2846,7 @@ void W3DModelDraw::nukeCurrentRender(Matrix3D* xform)
 	{
 		if (xform)
 		{
-			*xform = *getDrawable()->getTransformMatrix();
+			*xform = getDrawable()->worldTransform();
 		}
 	}
 }
@@ -3053,7 +3058,7 @@ void W3DModelDraw::setModelState(const ModelConditionInfo* newState)
 			//|| (newState->m_validStuff & ModelConditionInfo::HAS_PROJECTILE_BONES)
 		)
 	{
-		Matrix3D transform;
+		Engine::Math::AffineTransform3 transform;
 		nukeCurrentRender(&transform);
 		Drawable* draw = getDrawable();
 
@@ -3258,31 +3263,33 @@ void W3DModelDraw::replaceIndicatorColor(Color color)
 }
 
 //-------------------------------------------------------------------------------------------------
-// this method must ONLY be called from the client, NEVER From the logic, not even indirectly.
-Bool W3DModelDraw::clientOnly_getRenderObjInfo(Coord3D* pos, Real* boundingSphereRadius, Matrix3D* transform) const
+// Render-object details are available only to client-side consumers.
+Bool W3DModelDraw::getRenderObjectInfo(
+	Coord3D* position,
+	Real* boundingSphereRadius,
+	Engine::Math::AffineTransform3* transform) const
 {
-	
-
 	if (!m_renderObject)
 		return false;
 
-	Vector3 objPos = m_renderObject->Get_Position();	//get position of object
-	pos->x = objPos.X;
-	pos->y = objPos.Y;
-	pos->z = objPos.Z;
-
-	*transform = m_renderObject->Get_Transform();
-	*boundingSphereRadius = m_renderObject->Get_Bounding_Sphere().Radius;
+	if (position) {
+		const Engine::Math::Vector3 objectPosition = m_renderObject->Get_Position();
+		position->set(objectPosition.x, objectPosition.y, objectPosition.z);
+	}
+	if (transform)
+		*transform = m_renderObject->Get_Transform();
+	if (boundingSphereRadius)
+		*boundingSphereRadius = m_renderObject->Get_Bounding_Sphere().radius;
 
 	return true;
 }
 
 //-------------------------------------------------------------------------------------------------
-Bool W3DModelDraw::getProjectileLaunchOffset(
+Bool W3DModelDraw::getProjectileLaunchTransform(
 	const ModelConditionFlags& condition,
 	WeaponSlotType wslot,
 	Int specificBarrelToUse,
-	Matrix3D* launchPos,
+	Engine::Math::AffineTransform3* launchTransform,
 	WhichTurretType tur,
 	Coord3D* turretRotPos,
 	Coord3D* turretPitchPos
@@ -3302,7 +3309,7 @@ Bool W3DModelDraw::getProjectileLaunchOffset(
 		return false;
 	}
 #if defined(RTS_DEBUG)
-	engine::debug::log_trace("W3DModelDraw::getProjectileLaunchOffset() for %s",
+	engine::debug::log_trace("W3DModelDraw::getProjectileLaunchTransform() for %s",
 		stateToUse->getDescription().str());
 #endif
 
@@ -3320,13 +3327,13 @@ Bool W3DModelDraw::getProjectileLaunchOffset(
 #endif // INTENSE_DEBUG
 
 	const W3DModelDrawModuleData* d = getW3DModelDrawModuleData();
-	//CRCDEBUG_LOG(("validateStuffs() from within W3DModelDraw::getProjectileLaunchOffset()"));
+	//CRCDEBUG_LOG(("validateStuffs() from within W3DModelDraw::getProjectileLaunchTransform()"));
 	//DUMPREAL(getDrawable()->getScale());
-	//BONEPOS_LOG(("validateStuffs() from within W3DModelDraw::getProjectileLaunchOffset()"));
+	//BONEPOS_LOG(("validateStuffs() from within W3DModelDraw::getProjectileLaunchTransform()"));
 	//BONEPOS_DUMPREAL(getDrawable()->getScale());
 	stateToUse->validateStuff(nullptr, getDrawable()->getScale(), d->m_extraPublicBones);
 
-	engine::debug::invariant((stateToUse->m_transitionSig == NO_TRANSITION), "stateToUse->m_transitionSig == NO_TRANSITION", __FILE__, __LINE__, "It is never legal to getProjectileLaunchOffset from a Transition state (they vary on a per-client basis)... however, we can fix this (see srj)\n");
+	engine::debug::invariant((stateToUse->m_transitionSig == NO_TRANSITION), "stateToUse->m_transitionSig == NO_TRANSITION", __FILE__, __LINE__, "It is never legal to getProjectileLaunchTransform from a Transition state (they vary on a per-client basis)... however, we can fix this (see srj)\n");
 
 	engine::debug::invariant((specificBarrelToUse >= 0), "specificBarrelToUse >= 0", __FILE__, __LINE__, "specificBarrelToUse should now always be explicit");
 
@@ -3335,14 +3342,15 @@ Bool W3DModelDraw::getProjectileLaunchOffset(
 	Coord3D techOffset;
 	techOffset.zero();
 	// must use pristine bone here since the result is used by logic
-	Matrix3D pivot;
+	Engine::Math::AffineTransform3 pivot;
 	if (d->m_attachToDrawableBone.isNotEmpty() &&
-			getDrawable()->getPristineBonePositions( d->m_attachToDrawableBone.str(), 0, nullptr, &pivot, 1 ) == 1)
+			getDrawable()->getPristineBoneTransforms(d->m_attachToDrawableBone.str(), 0, &pivot, 1) == 1)
 	{
-		pivot.Pre_Rotate_Z(getDrawable()->getOrientation());
-		techOffset.x = pivot.Get_X_Translation();
-		techOffset.y = pivot.Get_Y_Translation();
-		techOffset.z = pivot.Get_Z_Translation();
+		pivot = Compose(Engine::Math::AffineTransform3::Rotation_Z(getDrawable()->getOrientation()), pivot);
+		const Engine::Math::Vector3 position = pivot.Translation();
+		techOffset.x = position.x;
+		techOffset.y = position.y;
+		techOffset.z = position.z;
 	}
 #endif
 
@@ -3353,29 +3361,32 @@ Bool W3DModelDraw::getProjectileLaunchOffset(
 		// Can't find the launch pos, but they might still want the other info they asked for
 		engine::debug::log_trace("empty wbvec");
 		//BONEPOS_LOG(("empty wbvec"));
-		launchPos = nullptr;
+		launchTransform = nullptr;
 	}
 	else
 	{
 		if (specificBarrelToUse < 0 || specificBarrelToUse >= wbvec.size())
 			specificBarrelToUse = 0;
 
-		if (launchPos)
+		if (launchTransform)
 		{
 			engine::debug::log_trace("specificBarrelToUse = %d", specificBarrelToUse);
-			*launchPos = wbvec[specificBarrelToUse].m_projectileOffsetMtx;
+			*launchTransform = wbvec[specificBarrelToUse].projectile_offset_transform;
 
 			if (tur != TURRET_INVALID)
 			{
-				launchPos->Pre_Rotate_Z(stateToUse->m_turrets[tur].m_turretArtAngle);
-				launchPos->Pre_Rotate_Y(-stateToUse->m_turrets[tur].m_turretArtPitch);
+				*launchTransform = Compose(
+					Engine::Math::AffineTransform3::Rotation_Y(-stateToUse->m_turrets[tur].m_turretArtPitch),
+					Compose(Engine::Math::AffineTransform3::Rotation_Z(stateToUse->m_turrets[tur].m_turretArtAngle), *launchTransform));
 			}
 #ifdef CACHE_ATTACH_BONE
 #else
-			launchPos->Adjust_Translation( Vector3( techOffset.x, techOffset.y, techOffset.z ) );
+			launchTransform->elements[3] += techOffset.x;
+			launchTransform->elements[7] += techOffset.y;
+			launchTransform->elements[11] += techOffset.z;
 #endif
 
-			DUMPMATRIX3D(launchPos);
+			DUMPTRANSFORM(*launchTransform);
 		}
 	}
 
@@ -3387,7 +3398,7 @@ Bool W3DModelDraw::getProjectileLaunchOffset(
 	if (tur != TURRET_INVALID)
 	{
 #ifdef CACHE_ATTACH_BONE
-		const Vector3* offset = d->getAttachToDrawableBoneOffset(getDrawable());
+		const Engine::Math::Vector3* offset = d->getAttachToDrawableBoneOffset(getDrawable());
 #endif
 		const ModelConditionInfo::TurretInfo& turInfo = stateToUse->m_turrets[tur];
 		if (turretRotPos)
@@ -3400,9 +3411,9 @@ Bool W3DModelDraw::getProjectileLaunchOffset(
 #ifdef CACHE_ATTACH_BONE
 			if (offset)
 			{
-				turretRotPos->x += offset->X;
-				turretRotPos->y += offset->Y;
-				turretRotPos->z += offset->Z;
+				turretRotPos->x += offset->x;
+				turretRotPos->y += offset->y;
+				turretRotPos->z += offset->z;
 			}
 #endif
 		}
@@ -3416,23 +3427,23 @@ Bool W3DModelDraw::getProjectileLaunchOffset(
 #ifdef CACHE_ATTACH_BONE
 			if (offset)
 			{
-				turretPitchPos->x += offset->X;
-				turretPitchPos->y += offset->Y;
-				turretPitchPos->z += offset->Z;
+				turretPitchPos->x += offset->x;
+				turretPitchPos->y += offset->y;
+				turretPitchPos->z += offset->z;
 			}
 #endif
 		}
 	}
-	return launchPos != nullptr;// return if LaunchPos is valid or not
+	return launchTransform != nullptr;// return if the launch transform is valid or not
 }
 
 //-------------------------------------------------------------------------------------------------
-Int W3DModelDraw::getPristineBonePositionsForConditionState(
+Int W3DModelDraw::getPristineBoneTransforms(
 	const ModelConditionFlags& condition,
 	const char* boneNamePrefix,
 	Int startIndex,
 	Coord3D* positions,
-	Matrix3D* transforms,
+	Engine::Math::AffineTransform3* transforms,
 	Int maxBones
 ) const
 {
@@ -3448,12 +3459,12 @@ Int W3DModelDraw::getPristineBonePositionsForConditionState(
 
 //	if (isValidTimeToCalcLogicStuff())
 //	{
-//		CRCDEBUG_LOG(("W3DModelDraw::getPristineBonePositionsForConditionState() - state = '%s'",
+//		CRCDEBUG_LOG(("W3DModelDraw::getPristineBoneTransforms() - state = '%s'",
 //			stateToUse->getDescription().str()));
 //		//CRCDEBUG_LOG(("renderObject == nullptr: %d", (stateToUse==m_curState)?(m_renderObject == nullptr):1));
 //	}
 
-	//BONEPOS_LOG(("validateStuff() from within W3DModelDraw::getPristineBonePositionsForConditionState()"));
+	//BONEPOS_LOG(("validateStuff() from within W3DModelDraw::getPristineBoneTransforms()"));
 	//BONEPOS_DUMPREAL(getDrawable()->getScale());
 	// we must call this every time we set m_nextState, to ensure cached bones are happy
 	stateToUse->validateStuff(
@@ -3464,13 +3475,10 @@ Int W3DModelDraw::getPristineBonePositionsForConditionState(
 		getW3DModelDrawModuleData()->m_extraPublicBones);
 
 	const int MAX_BONE_GET = 64;
-	Matrix3D tmpMtx[MAX_BONE_GET];
+	Engine::Math::AffineTransform3 rendererTransforms[MAX_BONE_GET];
 
 	if (maxBones > MAX_BONE_GET)
 		maxBones = MAX_BONE_GET;
-
-	if (transforms == nullptr)
-		transforms = tmpMtx;
 
 	Int posCount = 0;
 	Int endIndex = (startIndex == 0) ? 0 : 99;
@@ -3489,13 +3497,15 @@ Int W3DModelDraw::getPristineBonePositionsForConditionState(
 			*c = tolower(*c);
 		}
 
-		const Matrix3D* mtx = stateToUse->findPristineBone(NAMEKEY(buffer), nullptr);
+		const Engine::Math::AffineTransform3* mtx = stateToUse->findPristineBone(NAMEKEY(buffer), nullptr);
 		if (mtx)
 		{
-			transforms[posCount] = *mtx;
+			rendererTransforms[posCount] = *mtx;
+			if (transforms)
+				transforms[posCount] = rendererTransforms[posCount];
 //			if (isValidTimeToCalcLogicStuff())
 //			{
-//				DUMPMATRIX3D(mtx);
+//				DUMPTRANSFORM(Engine::Math::AffineTransform3::From_Row_Matrix(*mtx));
 //			}
 		}
 		else
@@ -3503,9 +3513,11 @@ Int W3DModelDraw::getPristineBonePositionsForConditionState(
 			//engine::debug::invariant(false, "debug failure", __FILE__, __LINE__, "*** ASSET ERROR: Bone %s not found!",buffer);
 			const Object *obj = getDrawable()->getObject();
 			if (obj)
-				transforms[posCount] = *obj->getTransformMatrix();
+				rendererTransforms[posCount] = obj->worldTransform();
 			else
-				transforms[posCount].Make_Identity();
+				rendererTransforms[posCount] = Engine::Math::AffineTransform3::Identity();
+			if (transforms)
+				transforms[posCount] = rendererTransforms[posCount];
 			break;
 		}
 
@@ -3514,14 +3526,14 @@ Int W3DModelDraw::getPristineBonePositionsForConditionState(
 			break;
 	}
 
-	if (positions && transforms)
+	if (positions)
 	{
 		for (i = 0; i < posCount; ++i)
 		{
-			Vector3 pos = transforms[i].Get_Translation();
-			positions[i].x = pos.X;
-			positions[i].y = pos.Y;
-			positions[i].z = pos.Z;
+			const auto position = rendererTransforms[i].Translation();
+			positions[i].x = position.x;
+			positions[i].y = position.y;
+			positions[i].z = position.z;
 //			if (isValidTimeToCalcLogicStuff())
 //			{
 //				DUMPCOORD3D(&(positions[i]));
@@ -3531,7 +3543,7 @@ Int W3DModelDraw::getPristineBonePositionsForConditionState(
 
 //	if (isValidTimeToCalcLogicStuff())
 //	{
-//		CRCDEBUG_LOG(("end of W3DModelDraw::getPristineBonePositionsForConditionState()"));
+//		CRCDEBUG_LOG(("end of W3DModelDraw::getPristineBoneTransforms()"));
 //	}
 
 	return posCount;
@@ -3541,47 +3553,75 @@ Int W3DModelDraw::getPristineBonePositionsForConditionState(
 //-------------------------------------------------------------------------------------------------
 // (gth) C&C3 Added this accessor for the bounding box of a render object in a W3DModelDraw module
 // this method must ONLY be called from the client, NEVER From the logic, not even indirectly.
-Bool W3DModelDraw::clientOnly_getRenderObjBoundBox(OBBoxClass * boundbox) const
+Bool W3DModelDraw::clientOnly_getRenderObjBoundBox(Engine::Math::OrientedBox3 * boundbox) const
 {
 	if (!m_renderObject)
 		return false;
 
-	AABoxClass aabox;
-	m_renderObject->Get_Obj_Space_Bounding_Box(aabox);
-
-	Matrix3D tm = m_renderObject->Get_Transform();
-
-	// build an OBB for this AAB,transform
-	OBBoxClass box0(aabox.Center,aabox.Extent);
-	OBBoxClass::Transform(tm,box0,boundbox);
+	Engine::Math::AxisAlignedBox3 aabox;
+	m_renderObject->Get_Local_Bounds(aabox);
+	const auto transform = m_renderObject->Get_Transform();
+	const auto center = aabox.Center();
+	const auto extent = aabox.Extent();
+	boundbox->center = transform.Transform_Point(center);
+	// The legacy OBBoxClass::Transform kept the unscaled extent and used the raw
+	// (possibly scaled or zero) transform columns as the basis. OrientedBox3
+	// needs unit axes, so the column length moves into the half extent. A zero
+	// column collapsed the legacy box along that axis; keep that collapse (zero
+	// half extent) but give the axis a valid unit direction.
+	const std::array<Engine::Math::Vector3, 3> columns{{
+		{transform.elements[0], transform.elements[4], transform.elements[8]},
+		{transform.elements[1], transform.elements[5], transform.elements[9]},
+		{transform.elements[2], transform.elements[6], transform.elements[10]}}};
+	std::array<Engine::Math::Vector3, 3> axes;
+	std::array<bool, 3> degenerate{};
+	for (unsigned axis = 0; axis < 3; ++axis) {
+		axes[axis] = columns[axis].Normalized();
+		degenerate[axis] = axes[axis] == Engine::Math::Vector3{};
+	}
+	for (unsigned axis = 0; axis < 3; ++axis) {
+		if (!degenerate[axis])
+			continue;
+		const unsigned next = (axis + 1) % 3;
+		const unsigned previous = (axis + 2) % 3;
+		const Engine::Math::Vector3 candidate = (!degenerate[next] && !degenerate[previous])
+			? axes[next].Cross(axes[previous]).Normalized() : Engine::Math::Vector3{};
+		Engine::Math::Vector3 fallback{};
+		fallback[axis] = 1.0f;
+		axes[axis] = candidate == Engine::Math::Vector3{} ? fallback : candidate;
+	}
+	boundbox->axes = axes;
+	boundbox->half_extent = {
+		degenerate[0] ? 0.0f : extent.x * columns[0].Length(),
+		degenerate[1] ? 0.0f : extent.y * columns[1].Length(),
+		degenerate[2] ? 0.0f : extent.z * columns[2].Length()};
 
 	return true;
 }
 
 
 //-------------------------------------------------------------------------------------------------
-// (gth) C&C3 Added this accessor for a bone transform in the render object
-// this method must ONLY be called from the client, NEVER From the logic, not even indirectly.
-Bool W3DModelDraw::clientOnly_getRenderObjBoneTransform(const AsciiString & boneName,Matrix3D * set_tm) const
+Bool W3DModelDraw::getRenderObjectBoneTransform(
+	const AsciiString& boneName,
+	Engine::Math::AffineTransform3& transform) const
 {
-	if (!m_renderObject) {
+	if (!m_renderObject)
 		return false;
-	}
 
-	int idx = m_renderObject->Get_Bone_Index(boneName.str());
-	
-	if (idx == 0) {
-		set_tm->Make_Identity();
+	const int boneIndex = m_renderObject->Get_Bone_Index(boneName.str());
+	if (boneIndex == 0) {
+		transform = Engine::Math::AffineTransform3::Identity();
 		return false;
-	} else {
-		*set_tm = m_renderObject->Get_Bone_Transform(idx);
-		return true;
 	}
+	transform = m_renderObject->Get_Bone_Transform(boneIndex);
+	return true;
 }
 
 
 //-------------------------------------------------------------------------------------------------
-Bool W3DModelDraw::getCurrentWorldspaceClientBonePositions(const char* boneName, Matrix3D& transform) const
+Bool W3DModelDraw::getCurrentWorldBoneTransform(
+	const char* boneName,
+	Engine::Math::AffineTransform3& transform) const
 {
 	if (!m_renderObject)
 		return false;
@@ -3596,39 +3636,37 @@ Bool W3DModelDraw::getCurrentWorldspaceClientBonePositions(const char* boneName,
 }
 
 //-------------------------------------------------------------------------------------------------
-Int W3DModelDraw::getCurrentBonePositions(
+Int W3DModelDraw::getCurrentBoneTransforms(
 	const char* boneNamePrefix,
 	Int startIndex,
 	Coord3D* positions,
-	Matrix3D* transforms,
+	Engine::Math::AffineTransform3* transforms,
 	Int maxBones
 ) const
 {
 	const int MAX_BONE_GET = 64;
-	Matrix3D tmpMtx[MAX_BONE_GET];
+	Engine::Math::AffineTransform3 rendererTransforms[MAX_BONE_GET];
 
 	if (maxBones > MAX_BONE_GET)
 		maxBones = MAX_BONE_GET;
-
-	if (transforms == nullptr)
-		transforms = tmpMtx;
 
 	if( !m_renderObject )
 		return 0;
 
 	// ugh... kill the mtx so we get it in modelspace, not world space
-	Matrix3D originalTransform = m_renderObject->Get_Transform();	// save the transform
+	const auto originalTransform = m_renderObject->Get_Transform();	// save the transform
 // which is faster: slamming the xform (and invalidating the objects xforms)
 // or inverting it ourself? gotta profile to see. (srj)
 #define DO_INV
 #ifdef DO_INV
-	Matrix3D inverse;
-	originalTransform.Get_Orthogonal_Inverse(inverse);
-	inverse.Scale(getDrawable()->getScale());
+	// Legacy Get_Orthogonal_Inverse followed by Matrix3D::Scale, which scales
+	// only the 3x3 basis columns and leaves the translation untouched.
+	auto inverseWithModelScale = originalTransform.Orthogonal_Inverse();
+	for (unsigned row = 0; row < 3; ++row)
+		for (unsigned column = 0; column < 3; ++column)
+			inverseWithModelScale.elements[row * 4 + column] *= getDrawable()->getScale();
 #else
-	Matrix3D tmp(true);
-	tmp.Scale(getDrawable()->getScale());
-	m_renderObject->Set_Transform(tmp);					// set to identity transform
+	m_renderObject->Set_Transform(Engine::Math::AffineTransform3::From_Uniform_Scale(getDrawable()->getScale()));					// set to scaled model space
 #endif
 
 	Int posCount = 0;
@@ -3646,9 +3684,9 @@ Int W3DModelDraw::getCurrentBonePositions(
 		if (boneIndex == 0)
 			break;
 
-		transforms[posCount] = m_renderObject->Get_Bone_Transform(boneIndex);
+		rendererTransforms[posCount] = m_renderObject->Get_Bone_Transform(boneIndex);
 #ifdef DO_INV
-		transforms[posCount].preMul(inverse);
+		rendererTransforms[posCount] = Compose(inverseWithModelScale, rendererTransforms[posCount]);
 #endif
 		//engine::debug::invariant((!m_renderObject->Is_Bone_Captured(boneIndex)), "!m_renderObject->Is_Bone_Captured(boneIndex)", __FILE__, __LINE__, "bone is captured!");
 
@@ -3657,14 +3695,20 @@ Int W3DModelDraw::getCurrentBonePositions(
 			break;
 	}
 
-	if (positions && transforms)
+	if (transforms)
+	{
+		for (i = 0; i < posCount; ++i)
+			transforms[i] = rendererTransforms[i];
+	}
+
+	if (positions)
 	{
 		for (i = 0; i < posCount; ++i)
 		{
-			Vector3 pos = transforms[i].Get_Translation();
-			positions[i].x = pos.X;
-			positions[i].y = pos.Y;
-			positions[i].z = pos.Z;
+			const auto position = rendererTransforms[i].Translation();
+			positions[i].x = position.x;
+			positions[i].y = position.y;
+			positions[i].z = position.z;
 		}
 	}
 
@@ -3677,17 +3721,15 @@ Int W3DModelDraw::getCurrentBonePositions(
 }
 
 //-------------------------------------------------------------------------------------------------
-void W3DModelDraw::reactToTransformChange( const Matrix3D* oldMtx,
-																					 const Coord3D* oldPos,
-																					 Real oldAngle )
+void W3DModelDraw::reactToTransformChange(const Coord3D* oldPos, Real oldAngle)
 {
 
 	// set the position of our render object
 	if( m_renderObject )
 	{
-		Matrix3D mtx = *getDrawable()->getTransformMatrix();
-		adjustTransformMtx(mtx);
-		m_renderObject->Set_Transform(mtx);
+		Engine::Math::AffineTransform3 transform = getDrawable()->worldTransform();
+		adjustTransform(transform);
+		m_renderObject->Set_Transform(transform);
 	}
 
 	// Objectless previews move visually but must never leave terrain tracks.
@@ -3737,7 +3779,7 @@ Bool W3DModelDraw::handleWeaponFireFX(WeaponSlotType wslot, Int specificBarrelTo
 	{
 		// don't do this... some other module of our drawable may have handled it.
 		// just return false and let the caller sort it out.
-		// FXList::doFXPos(fxl, getDrawable()->getPosition(), getDrawable()->getTransformMatrix(), weaponSpeed, victimPos);
+		// FXList::doFXPos(fxl, getDrawable()->getPosition(), getDrawable()->worldTransform(), weaponSpeed, victimPos);
 		return false;
 	}
 
@@ -3756,21 +3798,23 @@ Bool W3DModelDraw::handleWeaponFireFX(WeaponSlotType wslot, Int specificBarrelTo
 			if (!m_renderObject->Is_Hidden() || logicObject == nullptr)
 			{
 				// I can ask the drawable's bone position if I am not hidden (if I have no object I have no choice)
-				Matrix3D mtx;
+				Engine::Math::AffineTransform3 mtx;
 					mtx = m_renderObject->Get_Bone_Transform(info.m_fxBone);
 				Coord3D pos;
-				pos.x = mtx.Get_X_Translation();
-				pos.y = mtx.Get_Y_Translation();
-				pos.z = mtx.Get_Z_Translation();
-				FXList::doFXPos(fxl, &pos, &mtx, weaponSpeed, victimPos, damageRadius);
+				const auto translation = mtx.Translation();
+				pos.x = translation.x;
+				pos.y = translation.y;
+				pos.z = translation.z;
+				const Engine::Math::AffineTransform3 transform = mtx;
+				FXList::doFXPos(fxl, &pos, &transform, weaponSpeed, victimPos, damageRadius);
 			}
 			else
 			{
 				// Else, I should just use my logic position for the effect placement.
 				// Things in transports regularly fire from inside (hidden), so this is not weird.
-				const Matrix3D *mtx;
+				const Engine::Math::AffineTransform3 *mtx;
 				Coord3D pos;
-				mtx = logicObject->getTransformMatrix();
+				mtx = &logicObject->worldTransform();
 				pos = *(logicObject->getPosition());
 				/** @todo Once Firepoint bones are actually implemented, this matrix will become correct.
 				// Unless of course they decide to not have the tracers come out of the windows, but rather go towards the target.
@@ -4334,7 +4378,7 @@ void W3DModelDrawModuleData::xfer( Xfer *x )
 			{
 				PristineBoneInfo *bone = &(bit->second);
 				x->xferInt(&(bone->boneIndex));
-				x->xferUser(&(bone->mtx), sizeof(Matrix3D));
+				x->xferUser(&(bone->transform), sizeof(Engine::Math::AffineTransform3));
 			}
 			Int i=0;
 			for (; i<MAX_TURRETS; ++i)
@@ -4346,7 +4390,7 @@ void W3DModelDrawModuleData::xfer( Xfer *x )
 			{
 				for (ModelConditionInfo::WeaponBarrelInfoVec::iterator wit = info->m_weaponBarrelInfoVec[i].begin(); wit != info->m_weaponBarrelInfoVec[i].end(); ++wit)
 				{
-					x->xferUser(&(wit->m_projectileOffsetMtx), sizeof(Matrix3D));
+					x->xferUser(&(wit->projectile_offset_transform), sizeof(Engine::Math::AffineTransform3));
 				}
 			}
 		}

@@ -1,3 +1,4 @@
+import Engine.Core.Math.Vector3;
 #include "W3DDevice/GameClient/W3DRenderServices.h"
 import Graphics.Resources.Textures.Quality;
 import engine.platform;
@@ -137,7 +138,7 @@ void W3DGameClient::addScorch(const Coord3D *pos, Real radius, Scorches type)
 {
 	if (TheTerrainRenderObject)
 	{
-		Vector3 loc(pos->x, pos->y, pos->z);
+		Engine::Math::Vector3 loc(pos->x, pos->y, pos->z);
 		TheTerrainRenderObject->addScorch(loc, radius, type);
 	}
 }

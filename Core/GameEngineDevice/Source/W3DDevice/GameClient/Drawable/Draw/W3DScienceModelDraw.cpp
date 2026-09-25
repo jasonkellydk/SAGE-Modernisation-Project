@@ -74,7 +74,7 @@ W3DScienceModelDraw::~W3DScienceModelDraw()
 
 //-------------------------------------------------------------------------------------------------
 // All this does is stop the call path if we haven't been cleared to draw yet
-void W3DScienceModelDraw::doDrawModule(const Matrix3D* transformMtx)
+void W3DScienceModelDraw::doDrawModule(const Engine::Math::AffineTransform3* transform)
 {
 	ScienceType science = getW3DScienceModelDrawModuleData()->m_requiredScience;
 	if( science == SCIENCE_INVALID )
@@ -93,7 +93,7 @@ void W3DScienceModelDraw::doDrawModule(const Matrix3D* transformMtx)
 		return;
 	}
 
-	W3DModelDraw::doDrawModule(transformMtx);
+	W3DModelDraw::doDrawModule(transform);
 }
 
 // ------------------------------------------------------------------------------------------------

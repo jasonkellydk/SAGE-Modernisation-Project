@@ -150,8 +150,6 @@ set(W3DVIEW_SRC
     "Toolbar.h"
     "Utils.cpp"
     "Utils.h"
-    "Vector3RndCombo.cpp"
-    "Vector3RndCombo.h"
     "ViewerAssetMgr.cpp"
     "ViewerAssetMgr.h"
     "ViewerScene.cpp"
@@ -169,6 +167,7 @@ set(W3DVIEW_SRC
 add_library(corei_w3dview INTERFACE)
 
 target_sources(corei_w3dview INTERFACE ${W3DVIEW_SRC})
+target_link_libraries(corei_w3dview INTERFACE engine_core_math)
 
 target_precompile_headers(corei_w3dview INTERFACE
     [["Utility/CppMacros.h"]] # Legacy source compatibility macros

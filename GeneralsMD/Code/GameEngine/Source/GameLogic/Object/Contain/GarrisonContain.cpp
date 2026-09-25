@@ -30,6 +30,7 @@
 // USER INCLUDES //////////////////////////////////////////////////////////////////////////////////
 #include "PreRTS.h"
 import engine.debug;	// This must go first in EVERY cpp file in the GameEngine
+import Engine.Core.Math.AffineTransform3;
 
 #include "Common/GameState.h"
 
@@ -1537,25 +1538,25 @@ void GarrisonContain::exitObjectViaDoor( Object *exitObj, ExitDoorType exitDoor 
     Real containerHalfLength = getObject()->getGeometryInfo().getMajorRadius() ;
     Real containerHalfWidth = getObject()->getGeometryInfo().getMinorRadius() ;
 
-    Vector3 doorPosition;
-    doorPosition.X = GameLogicRandomValueReal( -containerHalfLength/4, containerHalfLength/4 );// a rectangular pocket to act as the "doorway"
-    doorPosition.Y = GameLogicRandomValueReal( containerHalfWidth/2, containerHalfWidth * 2) * EVAC__SCALAR;
-    doorPosition.Z = 0;
-    Vector3 walkToPosition;
-    walkToPosition.X = GameLogicRandomValueReal( -containerHalfLength, containerHalfLength );
-    walkToPosition.Y = containerHalfWidth * 10 * EVAC__SCALAR;// spread-out!
-    walkToPosition.Z = 0;
+    const Engine::Math::Vector3 doorPosition{
+        GameLogicRandomValueReal(-containerHalfLength / 4, containerHalfLength / 4),
+        GameLogicRandomValueReal(containerHalfWidth / 2, containerHalfWidth * 2) * EVAC__SCALAR,
+        0.0f};
+    const Engine::Math::Vector3 walkToPosition{
+        GameLogicRandomValueReal(-containerHalfLength, containerHalfLength),
+        containerHalfWidth * 10 * EVAC__SCALAR,
+        0.0f};
 
-    const Matrix3D *mtx = getObject()->getTransformMatrix();
-    mtx->Transform_Vector( *mtx, doorPosition, &doorPosition );
-    startPosition.x = doorPosition.X;
-    startPosition.y = doorPosition.Y;
-    startPosition.z = doorPosition.Z;
+    const auto transform = getObject()->worldTransform();
+    const auto doorWorldPosition = transform.Transform_Point(doorPosition);
+    startPosition.x = doorWorldPosition.x;
+    startPosition.y = doorWorldPosition.y;
+    startPosition.z = doorWorldPosition.z;
 
-    mtx->Transform_Vector( *mtx, walkToPosition, &walkToPosition );
-    endPosition.x = walkToPosition.X;
-    endPosition.y = walkToPosition.Y;
-    endPosition.z = walkToPosition.Z;
+    const auto walkToWorldPosition = transform.Transform_Point(walkToPosition);
+    endPosition.x = walkToWorldPosition.x;
+    endPosition.y = walkToWorldPosition.y;
+    endPosition.z = walkToWorldPosition.z;
 
 	  exitObj->setPosition( &startPosition );
 	  exitObj->setOrientation( exitAngle );
@@ -2044,7 +2045,6 @@ void GarrisonContain::loadStationGarrisonPoints()
 	}
 
 }
-
 
 
 

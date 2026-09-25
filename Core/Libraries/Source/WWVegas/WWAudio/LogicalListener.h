@@ -36,8 +36,6 @@
 #include <cassert>
 #include "SoundSceneObj.h"
 #include "WWLib/bittype.h"
-#include "WWMath/vector3.h"
-#include "WWMath/matrix3d.h"
 
 /////////////////////////////////////////////////////////////////////////////////
 //
@@ -70,11 +68,12 @@ class LogicalListenerClass : public SoundSceneObjClass
 		//////////////////////////////////////////////////////////////////////
 		//	Position/direction methods
 		//////////////////////////////////////////////////////////////////////
-		virtual void			Set_Position (const Vector3 &position) override { m_Position = position; }
-		virtual Vector3			Get_Position () const override { return m_Position; }
+		virtual void Set_Position (Engine::Math::Vector3 position) override { m_Position = position; }
+		virtual Engine::Math::Vector3 Get_Position () const override { return m_Position; }
 
-		virtual void			Set_Transform (const Matrix3D &transform) override { m_Position = transform.Get_Translation (); }
-		virtual Matrix3D		Get_Transform () const override { Matrix3D tm(1); tm.Set_Translation (m_Position); return tm; }
+		virtual void Set_Transform (const Engine::Math::AffineTransform3 &transform) override { m_Position = transform.Translation(); }
+		virtual Engine::Math::AffineTransform3 Get_Transform () const override
+			{ return Engine::Math::AffineTransform3::From_Translation(m_Position); }
 
 		//////////////////////////////////////////////////////////////////////
 		//	Culling methods (not used for listeners)
@@ -139,7 +138,7 @@ class LogicalListenerClass : public SoundSceneObjClass
 		static float			m_GlobalScale;
 		float						m_Scale;
 		uint32					m_TypeMask;
-		Vector3					m_Position;
+		Engine::Math::Vector3 m_Position;
 		uint32					m_Timestamp;
 		static uint32			m_OldestTimestamp;
 		static uint32			m_NewestTimestamp;
