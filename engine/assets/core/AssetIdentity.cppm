@@ -1,13 +1,5 @@
-module;
-
-#include <cstdint>
-#include <cstddef>
-#include <cctype>
-#include <string>
-#include <string_view>
-#include <vector>
-
 export module Assets.Identity;
+import std;
 
 namespace Assets
 {

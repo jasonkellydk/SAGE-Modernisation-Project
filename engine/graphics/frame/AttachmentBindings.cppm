@@ -1,8 +1,5 @@
-module;
-#include <array>
-#include <cstdint>
-#include <utility>
 export module Graphics.Frame.AttachmentBindings;
+import std;
 export import Graphics.Resources.Textures.Resource;
 
 namespace Graphics

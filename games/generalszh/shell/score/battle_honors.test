@@ -1,0 +1,107 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <string>
+
+import games.generalszh.shell.score.battle_honors;
+
+// SkirmishStats.ini as the score screen keeps it (ScoreScreen.cpp populatePlayerInfo, updateSkirmishBattleHonors,
+// updateChallengeMedals, finishSinglePlayerInit; SkirmishBattleHonors' keys).
+using namespace generalszh::shell;
+namespace bh = generalszh::shell::battle_honor;
+
+BOOST_AUTO_TEST_SUITE(battle_honors)
+
+// A skirmish won against two brutal computers and an easy one in 4 minutes, as America, having built a Scud Storm and
+// a particle uplink before (PPC, SCUD kept) and a nuke now, 50 tanks and 20 aircraft: a win, a streak of 5 (Streak on
+// the fifth), Apocalypse, Battle Tank, Air Wing, Blitz 5 and 10, the endurance medals for the map (easy: all three
+// beaten; medium: the two brutal ones, none medium there so unchanged; brutal: 2), the two-brutal challenge medal;
+// LastHouse America and, the same side as last time, one more loyal game.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_skirmish_won_is_recorded_with_its_honours)
+{
+	engine::config::Preferences stats = engine::config::Preferences::Parse(
+		"Wins = 3\nWinStreak = 4\nBestWinStreak = 4\nSCUD = yes\nPPC = yes\nLastHouse = America\nLoyalGames = 19\nmaps\\md\\md.map_4 = 1\n");
+	SkirmishGameRecord game;
+	game.won = true;
+	game.side = "America";
+	game.map = "maps\\md\\md.map";
+	game.ticks = 4 * 60 * 30 + 29;
+	game.builtNuke = true;
+	game.vehiclesBuilt = 50;
+	game.aircraftBuilt = 20;
+	game.others = {{4, false}, {4, false}, {2, false}, {0, false}};
+	BOOST_TEST(RecordSkirmishGame(stats, game, false));
+	BOOST_TEST(stats.Number("Wins", 0) == 4);
+	BOOST_TEST(stats.Number("WinStreak", 0) == 5);
+	BOOST_TEST(stats.Number("BestWinStreak", 0) == 5);
+	const auto honors = static_cast<std::uint32_t>(stats.Number("Honors", 0));
+	BOOST_TEST((honors & bh::Streak) != 0u);
+	BOOST_TEST((honors & bh::Apocalypse) != 0u);
+	BOOST_TEST((honors & bh::BattleTank) != 0u);
+	BOOST_TEST((honors & bh::AirWing) != 0u);
+	BOOST_TEST((honors & bh::Blitz5) != 0u);
+	BOOST_TEST((honors & bh::Blitz10) != 0u);
+	BOOST_TEST((honors & bh::LoyaltyUsa) == 0u); // 19 loyal games before this one: not yet
+	BOOST_TEST(stats.Flag("Nuke", false));
+	BOOST_TEST(stats.Number("maps\\md\\md.map_2", 0) == 3);
+	BOOST_TEST(stats.Number("maps\\md\\md.map_3", -1) == -1);
+	BOOST_TEST(stats.Number("maps\\md\\md.map_4", 0) == 2);
+	BOOST_TEST(stats.Number("Challenge", 0) == 0x2);
+	BOOST_TEST(std::string(stats.Find("LastHouse").value_or("")) == "America");
+	BOOST_TEST(stats.Number("LoyalGames", 0) == 20);
+
+	// The next win on the same side: loyalty (20 games before it), the streak 6; ten minutes: no blitz (already had).
+	game.ticks = 10 * 60 * 30;
+	game.builtNuke = false;
+	RecordSkirmishGame(stats, game, false);
+	BOOST_TEST((static_cast<std::uint32_t>(stats.Number("Honors", 0)) & bh::LoyaltyUsa) != 0u);
+	BOOST_TEST(stats.Number("BestWinStreak", 0) == 6);
+}
+
+// A loss breaks the streak; a new side starts loyalty over. A computer on the local player's team: no challenge medal.
+// Quitting a game neither side has won while still in it records nothing, nor does a sandbox; defeated and watching
+// the others play on counts as a loss.
+BOOST_AUTO_TEST_CASE(legacy_parity_losses_quits_and_sandboxes_are_recorded_as_the_original_does)
+{
+	engine::config::Preferences stats = engine::config::Preferences::Parse("WinStreak = 3\nBestWinStreak = 7\nLastHouse = GLA\nLoyalGames = 5\n");
+	SkirmishGameRecord quit;
+	quit.side = "China";
+	BOOST_TEST(!RecordSkirmishGame(stats, quit, false));
+	SkirmishGameRecord sandboxed = quit;
+	sandboxed.won = true;
+	BOOST_TEST(!RecordSkirmishGame(stats, sandboxed, true));
+	BOOST_TEST(stats.Number("Wins", 0) == 0);
+
+	SkirmishGameRecord beaten = quit;
+	beaten.active = false; // defeated while its allies fight on
+	BOOST_TEST(RecordSkirmishGame(stats, beaten, false));
+	BOOST_TEST(stats.Number("Losses", 0) == 1);
+	BOOST_TEST(stats.Number("WinStreak", -1) == 0);
+	BOOST_TEST(stats.Number("BestWinStreak", 0) == 7);
+	BOOST_TEST(std::string(stats.Find("LastHouse").value_or("")) == "China");
+	BOOST_TEST(stats.Number("LoyalGames", -1) == 0);
+
+	SkirmishGameRecord helped;
+	helped.won = true;
+	helped.side = "China";
+	helped.ticks = 20 * 60 * 30;
+	helped.others = {{4, false}, {3, true}};
+	RecordSkirmishGame(stats, helped, false);
+	BOOST_TEST(stats.Number("Challenge", 0) == 0);
+	BOOST_TEST(stats.Number("_4", 0) == 1); // the map named "" here: the brutal enemy still counts for endurance
+}
+
+// finishSinglePlayerInit: the USA campaign won on hard, a challenge general's on normal.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_campaign_completed_is_recorded)
+{
+	engine::config::Preferences stats;
+	RecordCampaignComplete(stats, "usa", 2);
+	RecordCampaignComplete(stats, "CHALLENGE_3", 1);
+	RecordCampaignComplete(stats, "TRAINING", 0);
+	BOOST_TEST(stats.Number("USACampaign_2", 0) == 1);
+	BOOST_TEST(stats.Number("ChallengeCampaign3_1", 0) == 1);
+	const auto honors = static_cast<std::uint32_t>(stats.Number("Honors", 0));
+	BOOST_TEST(honors == (bh::CampaignUsa | bh::ChallengeMode));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

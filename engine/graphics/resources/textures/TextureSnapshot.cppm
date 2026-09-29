@@ -1,7 +1,5 @@
-module;
-#include <cstdint>
-
 export module Graphics.Resources.Textures.Snapshot;
+import std;
 import Graphics.RHI;
 
 namespace Graphics

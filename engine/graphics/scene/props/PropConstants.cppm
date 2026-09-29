@@ -1,14 +1,6 @@
-module;
-#include <array>
-#include <bit>
-#include <cassert>
-#include <cstddef>
-#include <cstdint>
-#include <cstring>
-#include <span>
-#include <limits>
-#include <vector>
 export module Graphics.Scene.Props.Constants;
+import std;
+import engine.core.contracts;
 export import Graphics.Scene.Props.Surface;
 import Graphics.RHI;
 
@@ -54,14 +46,18 @@ export struct PropParameters final
     // Opacity, emissive scale, additive RGB replacement, opacity override enabled.
     // Per-draw effects must not change immutable mesh geometry.
     std::array<float,4> vertex_material_override{1,1,0,0};
+    // A material pass's own material in place of the mesh's (emissive w set): lit with this diffuse and emissive
+    // colour, no ambient, no vertex colour (the emissive still scaled by the override's emissive scale).
+    std::array<float,4> material_diffuse_replacement{};
+    std::array<float,4> material_emissive_replacement{};
     // Object data is contiguous for direct comparison and upload.
     std::array<float,16> world{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
 };
-static_assert(sizeof(PropParameters) == 1024);
-static_assert(offsetof(PropParameters,view_projection)==0);
-static_assert(offsetof(PropParameters,scene_ambient)==192);
-static_assert(offsetof(PropParameters,textured)==656);
-static_assert(offsetof(PropParameters,world)==960);
+static_assert(sizeof(PropParameters) == 1056);
+static_assert(__builtin_offsetof(PropParameters,view_projection)==0);
+static_assert(__builtin_offsetof(PropParameters,scene_ambient)==192);
+static_assert(__builtin_offsetof(PropParameters,textured)==656);
+static_assert(__builtin_offsetof(PropParameters,world)==992);
 
 export struct PropViewConstants final {
     std::array<float,16> view_projection{};
@@ -100,13 +96,15 @@ export struct PropMaterialConstants final {
     PropSurfaceParameters surface{};
     std::array<float,4> muzzle_flash_state{};
     std::array<float,4> vertex_material_override{1,1,0,0};
+    std::array<float,4> material_diffuse_replacement{};
+    std::array<float,4> material_emissive_replacement{};
 };
 struct PropObjectConstants final {
     std::array<float,16> world{};
 };
 static_assert(sizeof(PropViewConstants)==192);
 static_assert(sizeof(PropLightingConstants)==464);
-static_assert(sizeof(PropMaterialConstants)==304);
+static_assert(sizeof(PropMaterialConstants)==336);
 static_assert(sizeof(PropObjectConstants)==64);
 
 export struct PropSharedParameters final {
@@ -121,7 +119,7 @@ export struct PropSharedParameters final {
             && std::memcmp(&material,&parameters.textured,sizeof(material))==0;
     }
 };
-static_assert(sizeof(PropSharedParameters)==496);
+static_assert(sizeof(PropSharedParameters)==528);
 
 // Each block owns its last successful upload. Command-list binding is still
 // performed on each draw, so other renderers cannot leave stale slots.
@@ -185,8 +183,8 @@ export template<class Value>
 class PropStorageBinding final {
 public:
     bool Prepare(Device& device, std::span<const Value> values) {
-        assert(!values.empty());
-        assert(values.size() <= (std::numeric_limits<std::uint32_t>::max)()/sizeof(Value));
+        engine::core::Assert(!values.empty());
+        engine::core::Assert(values.size() <= (std::numeric_limits<std::uint32_t>::max)()/sizeof(Value));
         const auto bytes = std::as_bytes(values);
         if (m_buffer.Is_Valid() && m_values.size() == values.size()
             && std::memcmp(m_values.data(),values.data(),bytes.size()) == 0) return true;
@@ -242,14 +240,14 @@ public:
         if (!m_view.Update(device, bytes.subspan<0,192>())
             || (lighting && !instance_records && !m_lighting.Update(device, bytes.subspan<192,464>()))
             || (!material_prepared && !material.Prepare(device, parameters))
-            || (!instance_records && !m_object.Update(device, bytes.subspan<offsetof(PropParameters,world),64>()))) return false;
+            || (!instance_records && !m_object.Update(device, bytes.subspan<__builtin_offsetof(PropParameters,world),64>()))) return false;
         Bind(material,resources);
         return true;
     }
     bool Prepare_Resources(Device& device, const PropSharedParameters& parameters,
         PropMaterialBinding& material, std::span<RHIBindlessResource,4> resources, bool instance_records,
         bool lighting = true, bool material_prepared = false) {
-        assert(instance_records);
+        engine::core::Assert(instance_records);
         if (!m_view.Update(device,std::as_bytes(std::span<const PropViewConstants,1>(&parameters.view,1)))
             || (!material_prepared && !material.Prepare(device,parameters.material))) return false;
         Bind(material,resources);

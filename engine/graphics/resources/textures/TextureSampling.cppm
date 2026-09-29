@@ -1,10 +1,5 @@
-module;
-#include <algorithm>
-#include <array>
-#include <cstdint>
-#include <string_view>
-
 export module Graphics.Resources.Textures.Sampling;
+import std;
 import Graphics.RHI;
 
 namespace Graphics

@@ -1,0 +1,57 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdlib>
+#include <filesystem>
+#include <string>
+
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.content_loader;
+import games.generalszh.content.ai.ai_data;
+import games.generalszh.content.install.install_mount;
+
+using namespace generalszh::content;
+using namespace engine::config;
+
+BOOST_AUTO_TEST_SUITE(ai_data)
+
+// AIData.ini on the installed data (Default/AIData.ini): a team every 10 s, a structure as soon as it can (0 s),
+// wealthy at 7000 and poor at 2000, bases not turned, lost buildings rebuilt after 30 s; the GLA keep 5 gatherers at
+// every level and defend with a Stinger site; America's skirmish base plan starts with its command centre at
+// (501.22, 546.25) facing -135 degrees, not standing from the start.
+BOOST_AUTO_TEST_CASE(the_shipped_ai_data_binds)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+		return;
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const Document &document = loader.Load({"Data/INI/Default/AIData", "Data/INI/AIData"});
+	BindContext context{loader.DiagnosticsFor(document), engine::time::FixedStep{30}};
+	const AiData data = BindAiData(document, context);
+	BOOST_TEST((data.teamSeconds == Engine::Math::Fixed::FromInt(10)));
+	BOOST_TEST((data.structureSeconds == Engine::Math::Fixed{}));
+	BOOST_TEST(data.wealthy == 7000);
+	BOOST_TEST(data.poor == 2000);
+	BOOST_TEST(!data.rotateSkirmishBases);
+	BOOST_TEST((data.rebuildDelaySeconds == Engine::Math::Fixed::FromInt(30)));
+	const AiSideInfo *gla = data.Side("GLA");
+	BOOST_TEST_REQUIRE(gla != nullptr);
+	BOOST_TEST(gla->resourceGatherers[2] == 5);
+	BOOST_TEST(gla->baseDefenseStructure == "GLAStingerSite");
+	BOOST_TEST(gla->skillSets.size() >= 2u);
+	const AiBuildList *america = data.BuildList("America");
+	BOOST_TEST_REQUIRE(america != nullptr);
+	BOOST_TEST_REQUIRE(!america->structures.empty());
+	const AiBuildListEntry &center = america->structures.front();
+	BOOST_TEST(center.structure == "AmericaCommandCenter");
+	BOOST_TEST((center.location.x == Engine::Math::Fixed::FromRatio(50122, 100)));
+	BOOST_TEST((center.location.y == Engine::Math::Fixed::FromRatio(54625, 100)));
+	BOOST_TEST((center.angleDegrees == Engine::Math::Fixed::FromInt(-135)));
+	BOOST_TEST(!center.initiallyBuilt);
+	BOOST_TEST(center.automaticallyBuild);
+	BOOST_TEST_MESSAGE("build lists: " << data.buildLists.size() << ", America's: " << america->structures.size() << " structures");
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -1,8 +1,5 @@
-module;
-#include <array>
-#include <span>
-#include <vector>
 export module Graphics.Scene.Props.Submission;
+import std;
 import engine.profiling;
 export import Graphics.Scene.Props.Renderer;
 import Graphics.Scene.Props.MaterialPassQueue;

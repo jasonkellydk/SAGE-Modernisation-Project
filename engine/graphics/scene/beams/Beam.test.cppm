@@ -4,13 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-#include <cstdint>
-#include <span>
-#include <type_traits>
-#include <utility>
-
 export module Graphics.Scene.Beams.Tests;
+import std;
 
 import Graphics.Scene.Beams;
 

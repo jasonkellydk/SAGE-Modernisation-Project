@@ -1,9 +1,8 @@
 module;
 #define BOOST_TEST_MODULE ModelRigTests
 #include <boost/test/included/unit_test.hpp>
-#include <limits>
-#include <string>
 export module Assets.ModelRig.Tests;
+import std;
 import Assets.ModelRig;
 using namespace Assets;
 BOOST_AUTO_TEST_CASE(validates_parent_order_attachments_and_external_skeletons) {

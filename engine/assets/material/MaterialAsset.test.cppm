@@ -3,9 +3,9 @@ module;
 #define BOOST_TEST_MODULE GeneralsAssetsMaterialTests
 
 #include <boost/test/included/unit_test.hpp>
-#include <limits>
 
 export module Assets.Tests.MaterialAsset;
+import std;
 
 import Assets.Handles;
 import Assets.Identity;

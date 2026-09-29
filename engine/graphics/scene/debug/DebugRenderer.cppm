@@ -1,7 +1,5 @@
-module;
-#include <span>
-#include <cstdint>
 export module Graphics.Scene.Debug.Renderer;
+import std;
 export import Graphics.Scene.Surfaces.Renderer;
 namespace Graphics
 {

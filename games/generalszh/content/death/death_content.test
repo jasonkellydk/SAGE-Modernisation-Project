@@ -1,0 +1,478 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdlib>
+#include <filesystem>
+#include <string>
+#include <utility>
+#include <vector>
+
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.content_loader;
+import games.generalszh.content.objects.object_catalog;
+import games.generalszh.content.death.death_content;
+import games.generalszh.content.creation.creation_lists;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.objects.object_status;
+import games.generalszh.content.topple.topple_content;
+import Engine.Core.Math.FixedAngle;
+
+using namespace generalszh::content;
+using namespace engine::config;
+namespace gameplay = engine::gameplay;
+
+BOOST_AUTO_TEST_SUITE(death_content)
+
+BOOST_AUTO_TEST_CASE(shipped_jets_and_helicopters_crash_as_authored)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const Document &document = loader.Load({"Data/INI/Default/Object", "Data/INI/Object"});
+	const engine::time::FixedStep step{30};
+	BindContext context{loader.DiagnosticsFor(document), step};
+	const auto objects = BuildObjectCatalog(document, context);
+	std::vector<std::pair<gameplay::DeathEffectKind, std::string>> names;
+	const auto intern = [&](gameplay::DeathEffectKind kind, std::string_view name) {
+		names.emplace_back(kind, std::string(name));
+		return static_cast<std::uint32_t>(names.size() - 1);
+	};
+	const auto named = [&](const std::vector<std::uint32_t> &ids) {
+		std::vector<std::string> out;
+		for (const std::uint32_t id : ids)
+			out.push_back(names.at(id).second);
+		return out;
+	};
+	const auto crashOf = [&](const char *object) -> const gameplay::SlowDeathDefinition * {
+		static std::vector<gameplay::DeathDefinition> kept;
+		kept.push_back(ReadObjectDeath(*objects.Find(object), step, intern));
+		for (const auto &slow : kept.back().slow)
+			if (slow.crash.kind != gameplay::CrashKind::None)
+				return &slow;
+		return nullptr;
+	};
+
+	// The MiG: rolls 0.2 rad a frame, falls at 110% of gravity, blows up 200 ms after hitting the ground.
+	const auto *mig = crashOf("ChinaJetMIG");
+	BOOST_TEST_REQUIRE(mig != nullptr);
+	BOOST_TEST((mig->crash.kind == gameplay::CrashKind::Jet));
+	BOOST_TEST(mig->crash.rollRate == static_cast<std::int32_t>(Engine::Math::TurnFromRadians(Engine::Math::Fixed::FromRatio(2, 10)).units));
+	BOOST_TEST((mig->crash.fallFactor == Engine::Math::Fixed::FromRatio(11, 10)));
+	BOOST_TEST(mig->crash.secondaryDelay == 15u);
+	BOOST_TEST(mig->crash.finalDelay == 6u);
+	BOOST_TEST((named(mig->effects.Of(gameplay::DeathPhase::OnGround, gameplay::DeathEffectKind::Objects)) == std::vector<std::string>{"OCL_MIGDeathFinalBlowUp"}));
+	BOOST_TEST((named(mig->effects.Of(gameplay::DeathPhase::HitGround, gameplay::DeathEffectKind::Effect)) == std::vector<std::string>{"FX_JetDeathHitGround"}));
+
+	// The Helix: spirals at 110 a second turning 80 degrees a second, spins 40..120, falls at 8%, leaves its hull.
+	const auto *helix = crashOf("ChinaVehicleHelix");
+	BOOST_TEST_REQUIRE(helix != nullptr);
+	BOOST_TEST((helix->crash.kind == gameplay::CrashKind::Helicopter));
+	BOOST_TEST(helix->crash.spiralSpeed.Floor() == 3); // 110 / 30
+	BOOST_TEST(helix->crash.spiralTurnRate == static_cast<std::int32_t>(Engine::Math::TurnFromDegrees(Engine::Math::Fixed::FromRatio(80, 30)).units));
+	BOOST_TEST(helix->crash.minSelfSpin < helix->crash.maxSelfSpin);
+	BOOST_TEST(helix->crash.spinDelay == 9u);
+	BOOST_TEST(helix->crash.bladeDelayMin == 30u);
+	BOOST_TEST((helix->crash.fallFactor == Engine::Math::Fixed::FromRatio(8, 100)));
+	BOOST_TEST((named(helix->effects.Of(gameplay::DeathPhase::FinalBlowUp, gameplay::DeathEffectKind::Spawn)) == std::vector<std::string>{"HelixRubbleHull"}));
+	BOOST_TEST(ReadCrashLoopSound(*objects.Find("ChinaVehicleHelix")) == "HelixDamagedLoop");
+	const auto trail = ReadCrashTrail(*objects.Find("ChinaVehicleHelix"));
+	BOOST_TEST_REQUIRE(trail.has_value());
+	BOOST_TEST(trail->system == "SootySmokeTrail");
+	BOOST_TEST(trail->bone == "Propeller02");
+	BOOST_TEST(!ReadCrashTrail(*objects.Find("ChinaJetMIG")).has_value());
+	BOOST_TEST((named(helix->effects.Of(gameplay::DeathPhase::Blade, gameplay::DeathEffectKind::Objects)) == std::vector<std::string>{"OCL_HelicopterBladeExplosion"}));
+	// The Comanche's veteran pilot bails out by parachute as its blades come off (OCLEjectPilot), saying PilotVoiceEject.
+	const auto *comanche = crashOf("AmericaVehicleComanche");
+	BOOST_TEST_REQUIRE(comanche != nullptr);
+	BOOST_TEST_REQUIRE(comanche->crash.ejectPilot != gameplay::CrashDefinition::NoEject);
+	BOOST_TEST(named({comanche->crash.ejectPilot}) == std::vector<std::string>{"OCL_EjectPilotViaParachute"});
+	BOOST_TEST(named({comanche->crash.ejectSounds[0]}) == std::vector<std::string>{"PilotVoiceEject"});
+	BOOST_TEST(named({comanche->crash.ejectSounds[1]}) == std::vector<std::string>{"PilotSoundEject"});
+	// MaxBraking 190: the braking its locomotor may use while it spirals (setMaxBraking), per tick squared.
+	BOOST_TEST((comanche->crash.maxBraking == Engine::Math::Fixed::FromInt(190) / Engine::Math::Fixed::FromInt(900)));
+}
+
+
+// FireWeaponWhenDeadBehavior::onDie (an UpgradeMux): a terrorist's dynamite (StartsActive) goes off when it dies
+// suicided, crushed, splatted, lasered, burned or exploded, not shot dead; a Demo general's rebel only blows up
+// once Demo_Upgrade_SuicideBomb is there (TriggeredBy), its suicide pack when suicided and its destroyed
+// weapon on any other death.
+// NeutronMissileSlowDeathBehaviorModuleData::buildFieldParse (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/
+// Update/NeutronMissileSlowDeathUpdate.cpp) over the shipped NeutronMissile: ScorchMarkSize 320, FXList FX_Nuke, nine
+// enabled blasts whose parseDurationReal delays (ms * 0.03 frames) go off on the first frame past them
+// (currFrame - m_activationFrame > delay): 580 ms (17.4) on the 18th, 1000 ms (exactly 30) on the 31st; blast 6 does
+// 3500 within 60, at least 300 out to 210, as EXPLOSION / EXPLODED.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_neutron_missile_reads_its_blasts)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const Document &document = loader.Load({"Data/INI/Default/Object", "Data/INI/Object"});
+	const engine::time::FixedStep step{30};
+	BindContext context{loader.DiagnosticsFor(document), step};
+	const auto objects = BuildObjectCatalog(document, context);
+	std::vector<std::string> names;
+	const auto intern = [&](gameplay::DeathEffectKind, std::string_view name) {
+		names.emplace_back(name);
+		return static_cast<std::uint32_t>(names.size() - 1);
+	};
+	const gameplay::DeathDefinition death = ReadObjectDeath(*objects.Find("NeutronMissile"), step, intern);
+	BOOST_TEST_REQUIRE(death.slow.size() == 1u);
+	const gameplay::BlastWaveDefinition &wave = death.slow[0].wave;
+	BOOST_TEST_REQUIRE(wave.effect != gameplay::BlastWaveDefinition::NoEffect);
+	BOOST_TEST(names.at(wave.effect) == "FX_Nuke");
+	BOOST_TEST((wave.scorchSize == Engine::Math::Fixed::FromInt(320)));
+	BOOST_TEST(wave.damageType == *DamageTypeIndex("EXPLOSION"));
+	BOOST_TEST(wave.deathType == *DeathTypeIndex("EXPLODED"));
+	BOOST_TEST_REQUIRE(wave.blasts.size() == 9u);
+	const std::vector<std::uint64_t> blastAfter{18, 20, 22, 26, 31, 36, 30000, 30000, 30000};
+	const std::vector<std::uint64_t> scorchAfter{4, 6, 8, 11, 13, 16, 19, 22, 25};
+	for (std::size_t index = 0; index < 9; ++index)
+	{
+		BOOST_TEST(wave.blasts[index].blastAfter == blastAfter[index]);
+		BOOST_TEST(wave.blasts[index].scorchAfter == scorchAfter[index]);
+	}
+	const gameplay::BlastDefinition &six = wave.blasts[5];
+	BOOST_TEST((six.innerRadius == Engine::Math::Fixed::FromInt(60)));
+	BOOST_TEST((six.outerRadius == Engine::Math::Fixed::FromInt(210)));
+	BOOST_TEST((six.maxDamage == Engine::Math::Fixed::FromInt(3500)));
+	BOOST_TEST((six.minDamage == Engine::Math::Fixed::FromInt(300)));
+	BOOST_TEST((wave.blasts[0].toppleSpeed == Engine::Math::Fixed::FromRatio(1, 2)));
+	BOOST_TEST((wave.blasts[6].outerRadius == Engine::Math::Fixed::FromInt(210)));
+}
+
+BOOST_AUTO_TEST_CASE(legacy_parity_death_weapons_by_death_type_and_upgrade)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const Document &document = loader.Load({"Data/INI/Default/Object", "Data/INI/Object"});
+	const engine::time::FixedStep step{30};
+	BindContext context{loader.DiagnosticsFor(document), step};
+	const auto objects = BuildObjectCatalog(document, context);
+	const auto upgrades = BuildUpgradeCatalog(loader.Load({"Data/INI/Default/Upgrade", "Data/INI/Upgrade"}), step.TicksPerSecond());
+	std::vector<std::string> names;
+	const auto intern = [&](gameplay::DeathEffectKind, std::string_view name) {
+		names.emplace_back(name);
+		return static_cast<std::uint32_t>(names.size() - 1);
+	};
+	const auto weapons = [&](const char *object, std::string_view deathType, const gameplay::UpgradeMask &have) {
+		const auto death = ReadObjectDeath(*objects.Find(object), step, intern, &upgrades);
+		const std::uint32_t type = *DeathTypeIndex(deathType);
+		std::vector<std::string> fired;
+		for (const auto &effect : death.atDeath)
+			if (effect.kind == gameplay::DeathEffectKind::Weapon && effect.filter.Applies(type, 0) && effect.gate.Active(have))
+				for (const std::uint32_t id : effect.candidates)
+					fired.push_back(names.at(id));
+		return fired;
+	};
+	const gameplay::UpgradeMask none;
+	BOOST_TEST((weapons("GLAInfantryTerrorist", "EXPLODED", none) == std::vector<std::string>{"SuicideDynamitePack"}));
+	BOOST_TEST((weapons("GLAInfantryTerrorist", "SUICIDED", none) == std::vector<std::string>{"SuicideDynamitePack"}));
+	BOOST_TEST(weapons("GLAInfantryTerrorist", "NORMAL", none).empty());
+	BOOST_TEST(weapons("Demo_GLAInfantryRebel", "NORMAL", none).empty());
+	const auto bomb = upgrades.Find("Demo_Upgrade_SuicideBomb");
+	BOOST_TEST_REQUIRE(bomb.has_value());
+	const auto have = gameplay::UpgradeMask::Of(*bomb);
+	BOOST_TEST((weapons("Demo_GLAInfantryRebel", "NORMAL", have) == std::vector<std::string>{"Demo_DestroyedWeapon"}));
+	BOOST_TEST((weapons("Demo_GLAInfantryRebel", "SUICIDED", have) == std::vector<std::string>{"Demo_SuicideDynamitePackPlusFire"}));
+	// FXListDie (an UpgradeMux: isUpgradeActive, and ConflictsWith checked in onDie): the Anthrax Bomb plays FX_AnthraxBomb
+	// (StartsActive) until Chem_Upgrade_GLAAnthraxGamma is there (ConflictsWith), then FX_AnthraxGammaBomb (TriggeredBy).
+	const auto effects = [&](const char *object, const gameplay::UpgradeMask &owned) {
+		const auto death = ReadObjectDeath(*objects.Find(object), step, intern, &upgrades);
+		std::vector<std::string> played;
+		for (const auto &effect : death.atDeath)
+			if (effect.kind == gameplay::DeathEffectKind::Effect && effect.filter.Applies(*DeathTypeIndex("NORMAL"), 0) && effect.gate.Active(owned))
+				for (const std::uint32_t id : effect.candidates)
+					played.push_back(names.at(id));
+		return played;
+	};
+	const auto gamma = upgrades.Find("Chem_Upgrade_GLAAnthraxGamma");
+	BOOST_TEST_REQUIRE(gamma.has_value());
+	const auto plain = effects("AnthraxBomb", none);
+	const auto upgraded = effects("AnthraxBomb", gameplay::UpgradeMask::Of(*gamma));
+	BOOST_TEST((plain == std::vector<std::string>{"FX_AnthraxBomb"}));
+	BOOST_TEST((upgraded == std::vector<std::string>{"FX_AnthraxGammaBomb"}));
+}
+
+// FXListDie OrientToObject (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Die/FXListDie.cpp, onDie: doFXObj facing
+// the object, or doFXPos unrotated when No): the oil depot's bomb-truck blast plays unrotated, a Humvee's crush FX on it.
+BOOST_AUTO_TEST_CASE(legacy_parity_death_fx_orient_to_the_object_unless_told_not_to)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const Document &document = loader.Load({"Data/INI/Default/Object", "Data/INI/Object"});
+	const engine::time::FixedStep step{30};
+	BindContext context{loader.DiagnosticsFor(document), step};
+	const auto objects = BuildObjectCatalog(document, context);
+	std::vector<std::string> names;
+	const auto intern = [&](gameplay::DeathEffectKind, std::string_view name) {
+		names.emplace_back(name);
+		return static_cast<std::uint32_t>(names.size() - 1);
+	};
+	const auto orientation = [&](const char *object, std::string_view fx) -> int {
+		const auto death = ReadObjectDeath(*objects.Find(object), step, intern);
+		for (const auto &effect : death.atDeath)
+			if (effect.kind == gameplay::DeathEffectKind::Effect)
+				for (const std::uint32_t id : effect.candidates)
+					if (names.at(id) == fx)
+						return effect.orient ? 1 : 0;
+		return -1;
+	};
+	BOOST_TEST(orientation("CivilianTEROilDepot", "WeaponFX_BombTruckHighExplosiveBombDetonation") == 0);
+	BOOST_TEST(orientation("AmericaVehicleHumvee", "FX_CarCrush") == 1);
+}
+
+
+// EjectPilotDie: a veteran (not regular) Humvee dying (not crushed or splatted) ejects its pilot:
+// OCL_EjectPilotOnGround on the ground, OCL_EjectPilotViaParachute in the air, with PilotVoiceEject and
+// PilotSoundEject; OCL_EjectPilotOnGround's pilot inherits the veterancy.
+BOOST_AUTO_TEST_CASE(legacy_parity_veteran_vehicles_eject_their_pilots)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const Document &document = loader.Load({"Data/INI/Default/Object", "Data/INI/Object"});
+	const engine::time::FixedStep step{30};
+	BindContext context{loader.DiagnosticsFor(document), step};
+	const auto objects = BuildObjectCatalog(document, context);
+	std::vector<std::string> names;
+	const auto intern = [&](gameplay::DeathEffectKind, std::string_view name) {
+		names.emplace_back(name);
+		return static_cast<std::uint32_t>(names.size() - 1);
+	};
+	const auto death = ReadObjectDeath(*objects.Find("AmericaVehicleHumvee"), step, intern);
+	const auto played = [&](std::string_view deathType, std::uint32_t level, gameplay::DieAltitude where) {
+		const std::uint32_t type = *DeathTypeIndex(deathType);
+		std::vector<std::string> out;
+		for (const auto &effect : death.atDeath)
+			if (effect.altitude != gameplay::DieAltitude::Any && effect.filter.Applies(type, level) && effect.altitude == where)
+				for (const std::uint32_t id : effect.candidates)
+					out.push_back(names.at(id));
+		return out;
+	};
+	BOOST_TEST(played("NORMAL", 0, gameplay::DieAltitude::Ground).empty());
+	BOOST_TEST((played("NORMAL", 1, gameplay::DieAltitude::Ground) ==
+		std::vector<std::string>{"OCL_EjectPilotOnGround", "PilotVoiceEject", "PilotSoundEject"}));
+	BOOST_TEST((played("EXPLODED", 3, gameplay::DieAltitude::Air) ==
+		std::vector<std::string>{"OCL_EjectPilotViaParachute", "PilotVoiceEject", "PilotSoundEject"}));
+	BOOST_TEST(played("CRUSHED", 2, gameplay::DieAltitude::Ground).empty());
+	const Document &lists = loader.Load({"Data/INI/ObjectCreationList"});
+	const auto creation = BindCreationLists(lists, step);
+	const auto ground = creation.find("OCL_EjectPilotOnGround");
+	BOOST_TEST_REQUIRE((ground != creation.end()));
+	BOOST_TEST(ground->second.nuggets.front().inheritsVeterancy);
+}
+
+// DieModule.cpp, DieMuxData (ExemptStatus / RequiredStatus, parsed as ObjectStatusMaskType names) and
+// DieMuxData::isDieApplicable. The combat bike (GLAVehicle.ini): DeathTag_04 is exempt from every rider status,
+// DeathTag_05..11 each require one rider's (and throw that rider off); its SuicideBikeBomb death weapon requires
+// STATUS_RIDER5; its toppled hulk (CreateObjectDie) requires no status.
+BOOST_AUTO_TEST_CASE(legacy_parity_die_modules_read_their_status_filters)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const Document &document = loader.Load({"Data/INI/Default/Object", "Data/INI/Object"});
+	const engine::time::FixedStep step{30};
+	BindContext context{loader.DiagnosticsFor(document), step};
+	const auto objects = BuildObjectCatalog(document, context);
+	std::vector<std::string> names;
+	const auto intern = [&](gameplay::DeathEffectKind, std::string_view name) {
+		names.emplace_back(name);
+		return static_cast<std::uint32_t>(names.size() - 1);
+	};
+	const auto bit = [](std::string_view status) { return std::uint64_t{1} << ObjectStatusBit(status); };
+	BOOST_TEST(ObjectStatusBit("STATUS_RIDER1") == 30u);
+	BOOST_TEST(ObjectStatusBit("UNDER_CONSTRUCTION") == 3u);
+	const auto death = ReadObjectDeath(*objects.Find("GLAVehicleCombatBike"), step, intern);
+	BOOST_TEST_REQUIRE(death.slow.size() == 8u);
+	std::uint64_t riders = 0;
+	for (std::uint32_t rider = 1; rider <= 7; ++rider)
+		riders |= bit("STATUS_RIDER" + std::to_string(rider));
+	BOOST_TEST(death.slow[0].filter.exemptStatus == riders);
+	BOOST_TEST(death.slow[0].filter.requiredStatus == 0u);
+	for (std::uint32_t rider = 1; rider <= 7; ++rider)
+	{
+		BOOST_TEST(death.slow[rider].filter.requiredStatus == bit("STATUS_RIDER" + std::to_string(rider)));
+		BOOST_TEST(death.slow[rider].filter.exemptStatus == 0u);
+	}
+	BOOST_TEST(names.at(death.slow[2].effects.Of(gameplay::DeathPhase::Initial, gameplay::DeathEffectKind::Objects).front()) ==
+		"OCL_RebelFlyingOffBikeDeathStart");
+	bool bomb = false;
+	for (const auto &effect : death.atDeath)
+		if (effect.kind == gameplay::DeathEffectKind::Weapon && names.at(effect.candidates.front()) == "SuicideBikeBomb")
+		{
+			bomb = true;
+			BOOST_TEST(effect.filter.requiredStatus == bit("STATUS_RIDER5"));
+		}
+	BOOST_TEST(bomb);
+	// A structure's CreateObjectDie exempt while it is being built.
+	const auto barracks = ReadObjectDeath(*objects.Find("AmericaBarracks"), step, intern);
+	bool exempt = false;
+	for (const auto &effect : barracks.atDeath)
+		exempt = exempt || effect.filter.exemptStatus == bit("UNDER_CONSTRUCTION");
+	BOOST_TEST(exempt);
+}
+
+// ObjectCreationList.cpp: ApplyRandomForceNugget (SpinRate parsed as an angular velocity, pitches as angles) and
+// GenericObjectCreationNugget's debris fields (AnimationSet: three names per set, FXFinal, OkToChangeModelColor,
+// IgnorePrimaryObstacle, ExtraBounciness, BounceSound), as OCL_RebelFlyingOffBikeDeathStart and OCL_CombatBikeAirDeath
+// author them.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_rider_thrown_off_his_bike_is_authored_debris)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const engine::time::FixedStep step{30};
+	const auto lists = BindCreationLists(loader.Load({"Data/INI/ObjectCreationList"}), step);
+	const auto rebel = lists.find("OCL_RebelFlyingOffBikeDeathStart");
+	BOOST_TEST_REQUIRE((rebel != lists.end()));
+	BOOST_TEST_REQUIRE(rebel->second.nuggets.size() == 2u);
+	const CreationNugget &force = rebel->second.nuggets[0];
+	BOOST_TEST((force.kind == CreationKind::ApplyRandomForce));
+	BOOST_TEST(force.minForce.Raw() == Engine::Math::Fixed::FromInt(60).Raw());
+	BOOST_TEST(force.maxForce.Raw() == Engine::Math::Fixed::FromInt(100).Raw());
+	BOOST_TEST(force.minPitch.units == Engine::Math::TurnFromDegrees(70).units);
+	BOOST_TEST(force.maxPitch.units == Engine::Math::TurnFromDegrees(90).units);
+	// 120 degrees a second: 4 a frame.
+	BOOST_TEST_REQUIRE(force.spinRate.has_value());
+	BOOST_TEST(std::abs(static_cast<std::int64_t>(*force.spinRate) - static_cast<std::int64_t>(Engine::Math::TurnFromDegrees(4).units)) <= 1);
+	const CreationNugget &rider = rebel->second.nuggets[1];
+	BOOST_TEST((rider.kind == CreationKind::CreateDebris));
+	BOOST_TEST_REQUIRE(rider.animationSets.size() == 3u);
+	BOOST_TEST(rider.animationSets[1][0] == "UITech_Man_SKL.UITech_Man_DTB1");
+	BOOST_TEST(rider.animationSets[1][1] == "UITech_Man_SKL.UITech_Man_DTB2");
+	BOOST_TEST(rider.animationSets[1][2] == "UITech_Man_SKL.UITech_Man_DTB3");
+	BOOST_TEST(rider.finalEffect == "FX_TechnicalGunnerHitsGround");
+	BOOST_TEST(rider.okToChangeModelColor);
+	BOOST_TEST(rider.ignorePrimaryObstacle);
+	BOOST_TEST(rider.extraBounciness.Raw() == (-Engine::Math::Fixed::One()).Raw());
+	BOOST_TEST(rider.disposition == (disposition::RandomForce | disposition::InheritVelocity));
+	BOOST_TEST(rider.orientInForceDirection);
+	BOOST_TEST(rider.bounceSound.empty());
+	const auto scrap = lists.find("OCL_CombatBikeAirDeath");
+	BOOST_TEST_REQUIRE((scrap != lists.end()));
+	BOOST_TEST_REQUIRE(scrap->second.nuggets.size() == 2u);
+	BOOST_TEST(scrap->second.nuggets[0].bounceSound.empty());
+	BOOST_TEST(scrap->second.nuggets[1].bounceSound == "VehicleDebris");
+	BOOST_TEST(!scrap->second.nuggets[1].okToChangeModelColor);
+}
+
+// W3DTreeDraw DoShadow (W3DTreeBuffer: only trees whose type says DoShadow cast shadows; the object's Shadow does not
+// count for them): the shell map's dogwood (a GenericOptTree reskin) does; a bush without DoShadow does not.
+BOOST_AUTO_TEST_CASE(legacy_parity_buffer_trees_cast_shadows_by_do_shadow)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const Document &document = loader.Load({"Data/INI/Default/Object", "Data/INI/Object"});
+	BindContext context{loader.DiagnosticsFor(document), engine::time::FixedStep{30}};
+	const auto objects = BuildObjectCatalog(document, context);
+	const auto dogwood = ReadTreeDraw(*objects.Find("TreeDogwood2"));
+	BOOST_TEST_REQUIRE(dogwood.has_value());
+	BOOST_TEST(dogwood->doShadow);
+	const auto bush = ReadTreeDraw(*objects.Find("Bush10"));
+	BOOST_TEST_REQUIRE(bush.has_value());
+	BOOST_TEST(!bush->doShadow);
+	// TextureName: the tree buffer's texture for it, in place of its model's own (the high-detail dogwood's model
+	// PTDogwodHI1 is authored with ptdogwod03, the buffer draws it with PTDogwod01); DarkeningFactor: none in the data.
+	const auto hiDogwood = ReadTreeDraw(*objects.Find("CINETreeDogwood1"));
+	BOOST_TEST_REQUIRE(hiDogwood.has_value());
+	BOOST_TEST(hiDogwood->texture == "PTDogwod01.tga");
+	BOOST_TEST(hiDogwood->darkening.Raw() == 0);
+}
+
+// HelicopterSlowDeathBehaviorModuleData AttachParticle / AttachParticleBone / AttachParticleLoc (INI::parseCoord3D):
+// the smoke trail at the bone when one is named, else at the location in the object's frame (none: its origin).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_crash_trail_sits_at_its_bone_or_location)
+{
+	Diagnostics diagnostics;
+	Diagnostics grammarDiagnostics;
+	Document document;
+	ini::Read(document, document.AddSource("Object.ini",
+		"Object Copter\n"
+		"  Behavior = HelicopterSlowDeathBehavior ModuleTag_01\n"
+		"    AttachParticle = SmokeTrail\n"
+		"    AttachParticleLoc = X:4 Y:-2.5 Z:10\n"
+		"  End\n"
+		"End\n"
+		"Object Boned\n"
+		"  Behavior = HelicopterSlowDeathBehavior ModuleTag_01\n"
+		"    AttachParticle = SmokeTrail\n"
+		"    AttachParticleBone = Engine01\n"
+		"  End\n"
+		"End\n"),
+		ZeroHourIniGrammar(grammarDiagnostics), diagnostics);
+	BindContext context{diagnostics, engine::time::FixedStep{30}};
+	const auto objects = BuildObjectCatalog(document, context);
+	const auto located = ReadCrashTrail(*objects.Find("Copter"));
+	BOOST_TEST_REQUIRE(located.has_value());
+	BOOST_TEST(located->system == "SmokeTrail");
+	BOOST_TEST(located->bone.empty());
+	BOOST_TEST((located->offset.x == Engine::Math::Fixed::FromInt(4)));
+	BOOST_TEST((located->offset.y == Engine::Math::Fixed::FromRatio(-5, 2)));
+	BOOST_TEST((located->offset.z == Engine::Math::Fixed::FromInt(10)));
+	const auto boned = ReadCrashTrail(*objects.Find("Boned"));
+	BOOST_TEST_REQUIRE(boned.has_value());
+	BOOST_TEST(boned->bone == "Engine01");
+	BOOST_TEST((boned->offset.x == Engine::Math::Fixed{}));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

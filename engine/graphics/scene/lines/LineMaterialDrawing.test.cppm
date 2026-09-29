@@ -1,12 +1,8 @@
 module;
 #define BOOST_TEST_MODULE LineMaterialDrawingTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <span>
 export module Graphics.Scene.Lines.MaterialDrawing.Tests;
+import std;
 import Graphics.Scene.Props.Renderer;
 import Graphics.Tests.Device;
 using namespace Graphics;

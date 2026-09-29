@@ -1,9 +1,8 @@
 module;
 #include <SDL3/SDL.h>
 #include <SDL3_net/SDL_net.h>
-#include <memory>
-#include <string>
 export module engine.platform.adapters.sdl3.network;
+import std;
 import engine.platform.network;
 import engine.platform.adapters.sdl3.network.socket;
 

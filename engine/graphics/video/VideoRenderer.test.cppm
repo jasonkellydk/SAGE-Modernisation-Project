@@ -4,12 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-
 export module Graphics.Video.Renderer.Tests;
+import std;
 
 import Graphics.Tests.Device;
 import Graphics.Testing.VisualRegression;

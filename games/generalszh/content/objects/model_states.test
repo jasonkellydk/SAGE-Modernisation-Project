@@ -1,0 +1,233 @@
+#include <boost/test/unit_test.hpp>
+
+#include <algorithm>
+
+#include <cstdlib>
+#include <filesystem>
+#include <string>
+
+import games.generalszh.content.objects.model_states;
+import games.generalszh.content.objects.model_conditions;
+import games.generalszh.content.objects.object_catalog;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.content_loader;
+import games.generalszh.content.install.install_mount;
+
+using namespace generalszh::content;
+using namespace engine::config;
+
+namespace
+{
+ConditionBits Bits(std::initializer_list<std::string_view> names)
+{
+	ConditionBits bits{};
+	for (const std::string_view name : names)
+	{
+		const std::uint32_t bit = ModelConditionBit(name);
+		bits[bit / 64] |= std::uint64_t{1} << (bit % 64);
+	}
+	return bits;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(model_states)
+
+BOOST_AUTO_TEST_CASE(states_copy_the_default_and_the_best_match_wins)
+{
+	Diagnostics diagnostics;
+	Diagnostics grammarDiagnostics;
+	Document document;
+	ini::Read(document, document.AddSource("Object.ini",
+		"Object Tank\n"
+		"  Draw = W3DTankDraw ModuleTag_01\n"
+		"    DefaultConditionState\n"
+		"      Model = Tank\n"
+		"      Animation = Tank.Idle\n"
+		"      HideSubObject = Muzzle\n"
+		"    End\n"
+		"    ConditionState = MOVING\n"
+		"      Animation = Tank.Drive\n"
+		"      AnimationMode = LOOP\n"
+		"    End\n"
+		"    ConditionState = REALLYDAMAGED\n"
+		"      Model = TankD\n"
+		"    End\n"
+		"    AliasConditionState = DAMAGED\n"
+		"    ConditionState = MOVING REALLYDAMAGED\n"
+		"      Model = TankD\n"
+		"      Animation = TankD.Drive\n"
+		"    End\n"
+		"    IgnoreConditionStates = PREORDER\n"
+		"  End\n"
+		"End\n"),
+		ZeroHourIniGrammar(grammarDiagnostics), diagnostics);
+	BindContext context{diagnostics, engine::time::FixedStep{30}};
+	const auto objects = BuildObjectCatalog(document, context);
+	const ModelStates states = ReadModelStates(*objects.Find("Tank"));
+	BOOST_TEST(states.drawType == "W3DTankDraw");
+	BOOST_TEST_REQUIRE(states.states.size() == 4u);
+	// Copies of the default keep what they do not change.
+	BOOST_TEST(states.states[1].model == "Tank");
+	BOOST_TEST(states.states[1].hiddenSubObjects.size() == 1u);
+	BOOST_TEST((states.states[2].animations == std::vector<std::string>{"Tank.Idle"}));
+	BOOST_TEST(states.states[1].animations.front() == "Tank.Drive");
+
+	BOOST_TEST(SelectModelState(states, {}) == 0u);
+	BOOST_TEST(SelectModelState(states, Bits({"MOVING"})) == 1u);
+	BOOST_TEST(SelectModelState(states, Bits({"DAMAGED"})) == 2u); // by the alias
+	BOOST_TEST(SelectModelState(states, Bits({"MOVING", "REALLYDAMAGED"})) == 3u);
+	// Conditions no state mentions change nothing; ignored ones never count.
+	BOOST_TEST(SelectModelState(states, Bits({"MOVING", "ATTACKING", "PREORDER"})) == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(shipped_infantry_run_and_shoot)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+		return;
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const Document &document = loader.Load({"Data\\INI\\Default\\Object", "Data\\INI\\Object"});
+	BindContext context{loader.DiagnosticsFor(document), engine::time::FixedStep{30}};
+	const auto objects = BuildObjectCatalog(document, context);
+	const ModelStates ranger = ReadModelStates(*objects.Find("AmericaInfantryRanger"));
+	BOOST_TEST_REQUIRE(ranger.states.size() > 5u);
+	const ModelState &rest = ranger.states[SelectModelState(ranger, {})];
+	// Tanks turn their turret bone and flash at the bone they name.
+	const ModelStates crusader = ReadModelStates(*objects.Find("AmericaTankCrusader"));
+	BOOST_TEST_REQUIRE(!crusader.states.empty());
+	const ModelState &tank = crusader.states[SelectModelState(crusader, {})];
+	BOOST_TEST(tank.turretBone == "Turret");
+	BOOST_TEST_REQUIRE(tank.muzzleFlashes.size() == 1u);
+	BOOST_TEST(tank.muzzleFlashes.front() == "TurretFX");
+	BOOST_TEST(tank.slotFireFxBones[0] == tank.fireFxBone);
+	// W3DModelDrawModuleData keeps each slot's bones (m_weaponFireFXBoneName[wslot] and the like):
+	// the battleship's SECONDARY gun flashes at its own bones on the alt turret, not the PRIMARY's.
+	const ModelStates ship = ReadModelStates(*objects.Find("AmericaVehicleBattleShip"));
+	BOOST_TEST_REQUIRE(!ship.states.empty());
+	const ModelState &shipRest = ship.states[SelectModelState(ship, {})];
+	BOOST_TEST_MESSAGE("battleship fire fx bones: " << shipRest.slotFireFxBones[0] << " / " << shipRest.slotFireFxBones[1] << " / "
+		<< shipRest.slotFireFxBones[2] << "; muzzles " << shipRest.slotMuzzleBones[0] << " / " << shipRest.slotMuzzleBones[1] << "; alt turret "
+		<< shipRest.altTurretBone);
+	BOOST_TEST(!shipRest.slotFireFxBones[1].empty());
+	BOOST_TEST(shipRest.slotFireFxBones[1] != shipRest.slotFireFxBones[0]);
+	BOOST_TEST(shipRest.slotFireFxBones[2].empty());
+	const ModelState &running = ranger.states[SelectModelState(ranger, Bits({"MOVING"}))];
+	const ModelState &firing = ranger.states[SelectModelState(ranger, Bits({"ATTACKING", "FIRING_A", "USING_WEAPON_A"}))];
+	BOOST_TEST_MESSAGE("ranger: " << ranger.states.size() << " states; rest " << rest.animations.front() << ", run "
+		<< running.animations.front() << ", fire " << firing.animations.front());
+	BOOST_TEST(running.animations != rest.animations);
+	// A rebel's idle picks among its IdleAnimations; an angry mob's rock thrower starts somewhere random (RANDOMSTART).
+	const ModelStates rebel = ReadModelStates(*objects.Find("GLAInfantryRebel"));
+	BOOST_TEST_REQUIRE(!rebel.states.empty());
+	BOOST_TEST(rebel.states[SelectModelState(rebel, {})].animations.size() >= 3u);
+	const ModelStates mob = ReadModelStates(*objects.Find("GLAInfantryAngryMobRock02"));
+	BOOST_TEST(std::any_of(mob.states.begin(), mob.states.end(), [](const ModelState &state) { return state.startFrame == ModelState::StartFrame::Random; }));
+	// A missile silo's door states start at their last frame (START_FRAME_LAST).
+	const ModelStates silo = ReadModelStates(*objects.Find("Tank_ChinaNuclearMissileLauncher"));
+	BOOST_TEST(std::any_of(silo.states.begin(), silo.states.end(), [](const ModelState &state) { return state.startFrame == ModelState::StartFrame::Last; }));
+	BOOST_TEST(firing.animations != rest.animations);
+	BOOST_TEST(firing.animations != running.animations);
+
+	// Condition states carry their particle systems: the fire field burns at its origin,
+	// the dozer smokes from its exhaust bone, more so when moving.
+	const ModelStates field = ReadModelStates(*objects.Find("FireFieldSmall"));
+	BOOST_TEST_REQUIRE(!field.states.empty());
+	const ModelState &burning = field.states[SelectModelState(field, {})];
+	BOOST_TEST(burning.particleBones.size() == 3u);
+	for (const auto &entry : burning.particleBones)
+		BOOST_TEST(entry.bone.empty());
+	const ModelStates dozer = ReadModelStates(*objects.Find("AmericaVehicleDozer"));
+	const ModelState &idle = dozer.states[SelectModelState(dozer, {})];
+	const ModelState &driving = dozer.states[SelectModelState(dozer, Bits({"MOVING"}))];
+	BOOST_TEST_REQUIRE(!idle.particleBones.empty());
+	BOOST_TEST(idle.particleBones.front().bone == "EXHAUSTFX01");
+	BOOST_TEST(driving.particleBones.size() >= idle.particleBones.size());
+}
+
+// W3DModelDrawModuleData's TransitionState, TransitionKey, WaitForStateToFinishIfPossible, Flags and parseAnimation on
+// Colonel Burton: his idle lists AIHERO_STA 25 times before his two fidgets (timesToRepeat: picked 25 times as often);
+// standing keyed trans_stand and hurt standing trans_standinjured (lowercase NameKeys) have the transition
+// AIHERO_ISTAHIT between them (played ONCE, from the default look, with no keys of its own and no conditions, so no
+// condition picks it); his firing state (trans_firinga) plays once and his between-shots state waits for it to finish.
+BOOST_AUTO_TEST_CASE(legacy_parity_burton_has_transitions_waits_and_weighted_idles)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+		return;
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const Document &document = loader.Load({"Data/INI/Default/Object", "Data/INI/Object"});
+	BindContext context{loader.DiagnosticsFor(document), engine::time::FixedStep{30}};
+	const auto objects = BuildObjectCatalog(document, context);
+	const ModelStates burton = ReadModelStates(*objects.Find("AmericaInfantryColonelBurton"));
+	const std::size_t standing = SelectModelState(burton, {});
+	const std::size_t hurt = SelectModelState(burton, Bits({"REALLYDAMAGED"}));
+	const ModelState &stand = burton.states[standing];
+	BOOST_TEST_REQUIRE(stand.animations.size() == 27u);
+	BOOST_TEST(std::count(stand.animations.begin(), stand.animations.end(), "AIHERO_SKL.AIHERO_STA") == 25);
+	BOOST_TEST(stand.idleAnimation);
+	BOOST_TEST(stand.transitionKey == "trans_stand");
+	BOOST_TEST(burton.states[hurt].transitionKey == "trans_standinjured");
+	const auto transition = FindTransition(burton, standing, hurt);
+	BOOST_TEST_REQUIRE(transition.has_value());
+	const ModelState &hit = burton.states[*transition];
+	BOOST_TEST(hit.IsTransition());
+	BOOST_TEST(hit.conditions.empty());
+	BOOST_TEST(hit.transitionKey.empty());
+	BOOST_TEST_REQUIRE(hit.animations.size() == 1u);
+	BOOST_TEST(hit.animations.front() == "AIHERO_SKL.AIHERO_ISTAHIT");
+	BOOST_TEST((hit.animationMode == ModelAnimationMode::Once));
+	BOOST_TEST(hit.model == stand.model);
+	BOOST_TEST(!FindTransition(burton, hurt, standing).has_value());
+	const std::size_t firing = SelectModelState(burton, Bits({"FIRING_A"}));
+	const std::size_t between = SelectModelState(burton, Bits({"BETWEEN_FIRING_SHOTS_A"}));
+	BOOST_TEST(burton.states[firing].transitionKey == "trans_firinga");
+	BOOST_TEST(burton.states[between].waitKey == "trans_firinga");
+	BOOST_TEST((burton.states[between].animationMode == ModelAnimationMode::Manual));
+	// No condition ever picks a transition state.
+	for (const char *condition : {"REALLYDAMAGED", "MOVING", "FIRING_A", "DYING"})
+		BOOST_TEST(!burton.states[SelectModelState(burton, Bits({condition}))].IsTransition());
+	// MAINTAIN_FRAME_ACROSS_STATES: the Spectre gunship's doors open (ONCE) and close (ONCE_BACKWARDS) from where they were.
+	const ModelStates spectre = ReadModelStates(*objects.Find("AmericaJetSpectreGunship"));
+	const ModelState &opening = spectre.states[SelectModelState(spectre, Bits({"DOOR_1_OPENING"}))];
+	const ModelState &closing = spectre.states[SelectModelState(spectre, Bits({"DOOR_1_CLOSING"}))];
+	BOOST_TEST(opening.maintainFrame == 1u);
+	BOOST_TEST(closing.maintainFrame == 1u);
+	BOOST_TEST((closing.animationMode == ModelAnimationMode::OnceBackwards));
+	BOOST_TEST(!opening.restartWhenComplete);
+}
+
+// W3DModelDraw ProjectileBoneFeedbackEnabledSlots and WeaponHideShowBone (doHideShowProjectileObjects): the shell map's
+// Tomahawk shows its loaded missile (its PRIMARY's one MISSILE sub-object, else the launch bone WeaponA's WEAPONA01...)
+// until it fires.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_tomahawk_shows_its_loaded_missile)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const Document &document = loader.Load({"Data/INI/Default/Object", "Data/INI/Object"});
+	BindContext context{loader.DiagnosticsFor(document), engine::time::FixedStep{30}};
+	const auto objects = BuildObjectCatalog(document, context);
+	const ModelStates tomahawk = ReadModelStates(*objects.Find("AmericaVehicleTomahawk"));
+	BOOST_TEST(tomahawk.projectileFeedbackSlots == 1u);
+	BOOST_TEST_REQUIRE(!tomahawk.states.empty());
+	BOOST_TEST(tomahawk.states.front().slotLaunchBones[0] == "WeaponA");
+	BOOST_TEST(tomahawk.states.front().slotHideShowBones[0] == "MISSILE");
+	const ModelStates scud = ReadModelStates(*objects.Find("GLAVehicleScudLauncher"));
+	BOOST_TEST(scud.projectileFeedbackSlots == 3u);
+	BOOST_TEST(ReadModelStates(*objects.Find("AmericaTankCrusader")).projectileFeedbackSlots == 0u);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

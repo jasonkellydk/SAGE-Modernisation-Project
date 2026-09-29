@@ -4,19 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <algorithm>
-#include <cstddef>
-#include <cmath>
-#include <cstdlib>
-#include <filesystem>
-#include <fstream>
-#include <iterator>
-#include <memory>
-#include <mutex>
-#include <string>
-#include <vector>
-
 export module Assets.Tests.W3DAdapter;
+import std;
 
 import Assets.Adapters.W3D;
 import Assets.Adapters.W3D.Chunks;

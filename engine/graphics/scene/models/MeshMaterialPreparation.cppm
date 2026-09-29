@@ -1,11 +1,5 @@
-module;
-
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <memory>
-
 export module Graphics.Scene.Models.MeshMaterialPreparation;
+import std;
 
 import Assets.Math;
 import Graphics.Materials.MeshMaterial;

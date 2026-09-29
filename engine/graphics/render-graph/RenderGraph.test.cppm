@@ -4,9 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-
 export module Graphics.RenderGraph.Tests;
+import std;
 
 import Graphics.RenderGraph;
 

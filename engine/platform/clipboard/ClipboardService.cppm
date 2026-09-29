@@ -1,7 +1,5 @@
-module;
-#include <optional>
-#include <string>
 export module engine.platform.clipboard;
+import std;
 
 export namespace engine::platform
 {

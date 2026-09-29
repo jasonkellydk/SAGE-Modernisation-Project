@@ -1,16 +1,6 @@
-module;
-
-#include <array>
-#include <cassert>
-#include <cstddef>
-#include <cstdint>
-#include <memory>
-#include <optional>
-#include <span>
-#include <utility>
-#include <vector>
-
 export module Graphics.Scene.Models.MeshMaterialBindings;
+import std;
+import engine.core.contracts;
 
 import Graphics.Materials.MeshMaterial;
 import Graphics.Materials.State;
@@ -141,7 +131,7 @@ public:
 
     UVValue* Get_UV_Array_By_Index(int index, bool create = true)
     {
-        assert(index >= 0);
+        engine::core::Assert(index >= 0);
         if (index < 0) {
             return nullptr;
         }
@@ -167,15 +157,15 @@ public:
 
     void Set_UV_Source(int pass, int stage, int source) noexcept
     {
-        assert(pass >= 0 && pass < MAX_PASSES);
-        assert(stage >= 0 && stage < MAX_TEX_STAGES);
+        engine::core::Assert(pass >= 0 && pass < MAX_PASSES);
+        engine::core::Assert(stage >= 0 && stage < MAX_TEX_STAGES);
         m_uv_sources[pass][stage] = source;
     }
 
     int Get_UV_Source(int pass, int stage) const noexcept
     {
-        assert(pass >= 0 && pass < MAX_PASSES);
-        assert(stage >= 0 && stage < MAX_TEX_STAGES);
+        engine::core::Assert(pass >= 0 && pass < MAX_PASSES);
+        engine::core::Assert(stage >= 0 && stage < MAX_TEX_STAGES);
         return m_uv_sources[pass][stage];
     }
 
@@ -240,13 +230,13 @@ public:
 
     void Allocate_Color_Array(int index)
     {
-        assert(index >= 0 && index < MAX_COLOR_ARRAYS);
+        engine::core::Assert(index >= 0 && index < MAX_COLOR_ARRAYS);
         m_colors.Allocate(static_cast<std::size_t>(index), m_vertex_count);
     }
 
     void Set_Color(int index, std::size_t vertex, unsigned value)
     {
-        assert(index >= 0 && index < MAX_COLOR_ARRAYS);
+        engine::core::Assert(index >= 0 && index < MAX_COLOR_ARRAYS);
         m_colors.Set(static_cast<std::size_t>(index), vertex, value);
     }
 
@@ -272,7 +262,7 @@ public:
 
     unsigned* Get_Color_Array(int index, bool create = true)
     {
-        assert(index >= 0 && index < MAX_COLOR_ARRAYS);
+        engine::core::Assert(index >= 0 && index < MAX_COLOR_ARRAYS);
         if (index < 0 || index >= MAX_COLOR_ARRAYS) {
             return nullptr;
         }

@@ -1,10 +1,5 @@
-module;
-
-#include <array>
-#include <cstddef>
-#include <cstdint>
-
 export module Engine.Core.Math.Index3;
+import std;
 
 export namespace Engine::Math
 {

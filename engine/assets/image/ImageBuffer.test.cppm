@@ -2,12 +2,8 @@ module;
 #define NOMINMAX
 #define BOOST_TEST_MODULE ImageBufferTests
 #include <boost/test/included/unit_test.hpp>
-#include <algorithm>
-#include <array>
-#include <cstddef>
-#include <limits>
-#include <vector>
 export module Assets.Images.Buffer.Tests;
+import std;
 import Assets.Images.Buffer;
 using namespace Assets;
 

@@ -1,0 +1,193 @@
+#define BOOST_TEST_MODULE EngineGameplayDocking
+#include <boost/test/included/unit_test.hpp>
+
+#include <cstdint>
+#include <memory>
+
+import engine.gameplay.rts.docking.systems.dock_system;
+import engine.gameplay.rts.movement.systems.movement_system;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+using namespace engine::gameplay;
+using Engine::Math::Fixed;
+using Engine::Math::FixedVector2;
+
+namespace
+{
+FixedVector2 At(int x, int y) { return {Fixed::FromInt(x), Fixed::FromInt(y)}; }
+
+struct Base
+{
+	Base()
+	{
+		world.RegisterComponent<Transform>();
+		world.RegisterComponent<Targetable>();
+		world.RegisterComponent<Locomotion>();
+		world.RegisterComponent<MoveOrder>();
+		world.RegisterComponent<PathCompleted>();
+		world.RegisterComponent<Docking>();
+		world.RegisterComponent<Dock>();
+		world.FinalizeComponents();
+		terrain.width = terrain.height = 2;
+		terrain.cellSize = Fixed::FromInt(4000);
+		terrain.heights.assign(4, Fixed{});
+		world.EmplaceResource<GroundHeight>(terrain);
+		world.EmplaceResource<DeckSurfaces>();
+		world.EmplaceResource<WaypointGraph>();
+		world.EmplaceResource<RandomSeed>();
+		world.EmplaceResource<NavigationGrid>();
+		registry.Register(docks);
+		registry.Register(movement);
+		registry.OrderBefore<DockSystem, MovementSystem>();
+		registry.Finalize(world.Components());
+		scheduler = std::make_unique<ecs::Scheduler>(world, registry, engine::jobs::JobSystemConfig{1});
+		scheduler->Finalize(engine::time::FixedStep{30});
+	}
+
+	// A dock with its own points (bones): two approach points west of it, entered from the west, left to the east.
+	ecs::Entity Boned()
+	{
+		const ecs::Entity entity = world.Create();
+		world.Add<Transform>(entity);
+		world.Add<Targetable>(entity);
+		world.Add<Dock>(entity);
+		world.Get<Transform>(entity)->position = {Fixed::FromInt(500), Fixed::FromInt(500), {}};
+		world.Get<Targetable>(entity)->radius = Fixed::FromInt(40);
+		Dock &dock = *world.Get<Dock>(entity);
+		dock.approachCount = 2;
+		dock.approachPoints = 2;
+		dock.approach[0] = At(420, 500);
+		dock.approach[1] = At(380, 500);
+		dock.enter = At(470, 500);
+		dock.action = At(500, 500);
+		dock.exit = At(540, 500);
+		dock.boneless = false;
+		dock.majorRadius = Fixed::FromInt(40);
+		return entity;
+	}
+
+	ecs::Entity Mover(FixedVector2 at, ecs::Entity dock)
+	{
+		const ecs::Entity entity = world.Create();
+		world.Add<Transform>(entity);
+		world.Add<Targetable>(entity);
+		world.Add<Locomotion>(entity);
+		world.Add<MoveOrder>(entity);
+		world.Add<Docking>(entity);
+		world.Get<Transform>(entity)->position = {at.x, at.y, {}};
+		world.Get<Targetable>(entity)->radius = Fixed::FromInt(10);
+		LocomotorDefinition wheels;
+		wheels.maxSpeed = Fixed::FromInt(3);
+		wheels.acceleration = Fixed::One();
+		wheels.braking = Fixed::One();
+		wheels.turnRate = Engine::Math::TurnFromDegrees(30);
+		*world.Get<Locomotion>(entity) = MakeLocomotion(wheels);
+		StartDocking(*world.Get<Docking>(entity), dock, 10);
+		return entity;
+	}
+
+	void Step() { scheduler->Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}}); }
+
+	template<typename Done>
+	std::uint64_t Until(Done &&done, int most = 3000)
+	{
+		for (int step = 0; step < most; ++step)
+		{
+			Step();
+			if (done())
+				return tick;
+		}
+		return 0;
+	}
+
+	const Docking &Of(ecs::Entity mover) { return *world.Get<Docking>(mover); }
+
+	engine::level::Heightfield terrain;
+	ecs::World world{ecs::WorldConfig{4}};
+	DockSystem docks;
+	MovementSystem movement;
+	ecs::SystemRegistry registry;
+	std::unique_ptr<ecs::Scheduler> scheduler;
+	std::uint64_t tick{0};
+};
+}
+
+BOOST_AUTO_TEST_SUITE(docking)
+
+// DockUpdate::reserveApproachPosition hands out the first free point; the turn goes to the first mover to reach
+// its point, whichever point that is (m_readyDockers); AIDockMachine::ableToAdvance moves a waiting mover up the
+// moment the point ahead is free (onEnterReached frees the entering mover's point); a dock that lets movers through
+// (AllowsPassthrough) has them drive straight between its points.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_first_to_arrive_docks_first)
+{
+	Base base;
+	const ecs::Entity dock = base.Boned();
+	const ecs::Entity front = base.Mover(At(200, 520), dock);
+	const ecs::Entity back = base.Mover(At(360, 480), dock);
+	base.Step();
+	BOOST_TEST(base.Of(front).slot == 0);
+	BOOST_TEST(base.Of(back).slot == 1);
+	BOOST_TEST(base.world.Get<MoveOrder>(front)->destination.x.Raw() == Fixed::FromInt(420).Raw());
+	BOOST_TEST(base.world.Get<MoveOrder>(back)->destination.x.Raw() == Fixed::FromInt(380).Raw());
+	const std::uint64_t entering = base.Until([&] { return base.Of(back).phase == DockPhase::MoveToEntry; });
+	BOOST_TEST_REQUIRE(entering != 0);
+	BOOST_TEST(base.Of(back).granted);
+	BOOST_TEST(!base.Of(front).granted);
+	BOOST_TEST((base.world.Get<MoveOrder>(back)->mode == MoveMode::Direct));
+	BOOST_TEST(base.world.Get<MoveOrder>(back)->destination.x.Raw() == Fixed::FromInt(470).Raw());
+}
+
+BOOST_AUTO_TEST_CASE(legacy_parity_waiting_movers_advance_and_pass_through)
+{
+	Base base;
+	const ecs::Entity dock = base.Boned();
+	const ecs::Entity first = base.Mover(At(300, 520), dock);
+	const ecs::Entity second = base.Mover(At(100, 480), dock);
+	base.Step();
+	BOOST_TEST(base.Of(first).slot == 0);
+	BOOST_TEST(base.Of(second).slot == 1);
+	BOOST_TEST_REQUIRE(base.Until([&] { return base.Of(first).phase == DockPhase::MoveToEntry; }) != 0);
+	BOOST_TEST(base.Of(first).granted);
+	const std::uint64_t inside = base.Until([&] { return base.Of(first).phase == DockPhase::MoveToDock; });
+	BOOST_TEST_REQUIRE(inside != 0);
+	BOOST_TEST(base.Of(first).slot == -1);
+	// The second reaches its point with the one ahead free: it moves up at once.
+	const std::uint64_t advancing = base.Until([&] { return base.Of(second).phase == DockPhase::Advance; });
+	BOOST_TEST_REQUIRE(advancing != 0);
+	BOOST_TEST(base.Of(second).slot == 0);
+	BOOST_TEST(!base.Of(second).reached);
+	BOOST_TEST(base.world.Get<MoveOrder>(second)->destination.x.Raw() == Fixed::FromInt(420).Raw());
+	BOOST_TEST_REQUIRE(base.Until([&] { return base.Of(second).phase == DockPhase::WaitForClearance; }) != 0);
+	// The business done, the first leaves by the exit point; the dock's turn passes on the frame after.
+	base.world.Get<Docking>(first)->finished = true;
+	base.Step();
+	BOOST_TEST((base.Of(first).phase == DockPhase::MoveToExit));
+	BOOST_TEST((base.world.Get<MoveOrder>(first)->mode == MoveMode::Direct));
+	BOOST_TEST(base.world.Get<MoveOrder>(first)->destination.x.Raw() == Fixed::FromInt(540).Raw());
+	const std::uint64_t out = base.Until([&] { return !IsDocking(base.Of(first)); });
+	BOOST_TEST_REQUIRE(out != 0);
+	BOOST_TEST((base.world.Get<MoveOrder>(first)->mode == MoveMode::Idle));
+	BOOST_TEST(!base.Of(second).granted);
+	base.Step();
+	BOOST_TEST(base.Of(second).granted);
+	BOOST_TEST((base.Of(second).phase == DockPhase::MoveToEntry));
+}
+
+// AIDockWaitForClearanceState: a mover that never gets the turn gives up after 30 seconds (and the docking ends).
+BOOST_AUTO_TEST_CASE(legacy_parity_waiting_gives_up_after_thirty_seconds)
+{
+	Base base;
+	const ecs::Entity dock = base.Boned();
+	base.world.Get<Dock>(dock)->crippled = true;
+	const ecs::Entity mover = base.Mover(At(300, 500), dock);
+	const std::uint64_t waiting = base.Until([&] { return base.Of(mover).phase == DockPhase::WaitForClearance; });
+	BOOST_TEST_REQUIRE(waiting != 0);
+	const std::uint64_t gave = base.Until([&] { return !IsDocking(base.Of(mover)); });
+	// m_enterFrame + 30 * LOGICFRAMES_PER_SECOND < frame: the frame after the thirty seconds are up.
+	BOOST_TEST(gave == waiting + DockClearanceTimeoutTicks + 1);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

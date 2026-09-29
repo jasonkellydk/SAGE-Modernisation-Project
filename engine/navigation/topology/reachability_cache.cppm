@@ -1,13 +1,5 @@
-module;
-#include <algorithm>
-#include <array>
-#include <cstdint>
-#include <cstdlib>
-#include <limits>
-#include <stdexcept>
-#include <vector>
-
 export module engine.navigation.topology.reachability_cache;
+import std;
 
 export namespace navigation {
 struct ReachabilityCell {

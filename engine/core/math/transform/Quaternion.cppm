@@ -1,9 +1,5 @@
-module;
-
-#include <algorithm>
-#include <cmath>
-
 export module Engine.Core.Math.Quaternion;
+import std;
 
 export import Engine.Core.Math.AffineTransform3;
 export import Engine.Core.Math.Vector2;

@@ -2,6 +2,7 @@ module;
 #define BOOST_TEST_MODULE TGAPixelEncodingTests
 #include <boost/test/included/unit_test.hpp>
 export module Assets.Adapters.TGA.PixelEncoding.Tests;
+import std;
 import Assets.Adapters.TGA.PixelEncoding;
 using namespace Assets;
 

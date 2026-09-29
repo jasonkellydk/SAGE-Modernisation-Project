@@ -1,13 +1,8 @@
 module;
 #define BOOST_TEST_MODULE ModelObjectDrawingTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <memory>
-#include <span>
-#include <vector>
 export module Graphics.Scene.Models.ObjectDrawing.Tests;
+import std;
 import Graphics.RHI;
 import Graphics.Tests.Device;
 import Graphics.Materials.State;

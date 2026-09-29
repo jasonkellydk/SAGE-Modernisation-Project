@@ -4,20 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <algorithm>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <cstring>
-#include <filesystem>
-#include <fstream>
-#include <sstream>
-#include <span>
-#include <string>
-#include <utility>
-#include <vector>
-
 export module Engine.UI.WND.Tests;
+import std;
 
 import Engine.UI.WND.Runtime;
 

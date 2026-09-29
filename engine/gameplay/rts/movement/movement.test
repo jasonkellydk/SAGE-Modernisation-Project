@@ -1,0 +1,480 @@
+#define BOOST_TEST_MODULE EngineGameplayMovement
+#include <boost/test/included/unit_test.hpp>
+
+#include <cstdint>
+#include <vector>
+
+import engine.gameplay.rts.movement.systems.movement_system;
+import engine.gameplay.rts.movement.systems.move_path_system;
+import engine.gameplay.rts.movement.algorithms.formation_layout;
+import engine.gameplay.common.spatial.systems.snapshot_system;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+using namespace engine::gameplay;
+using Engine::Math::Fixed;
+using Engine::Math::FixedVector2;
+using Engine::Math::FixedVector3;
+
+namespace
+{
+LocomotorDefinition Tank()
+{
+	LocomotorDefinition tank;
+	tank.maxSpeed = Fixed::FromInt(1);            // 30 units/s at 30 Hz
+	tank.acceleration = Fixed::FromRatio(1, 10);
+	tank.braking = Fixed::FromRatio(1, 10);
+	tank.turnRate = Engine::Math::TurnFromDegrees(6); // 180 deg/s
+	tank.appearance = LocomotorAppearance::Treads;
+	return tank;
+}
+
+std::vector<WaypointDescription> Square()
+{
+	// 1 -> 2 -> 3 -> 4 -> 1, a 200 unit square; 5 is a dead end off 4.
+	std::vector<WaypointDescription> points;
+	const int corners[4][2] = {{0, 0}, {200, 0}, {200, 200}, {0, 200}};
+	for (std::uint32_t id = 1; id <= 4; ++id)
+		points.push_back({id, "P" + std::to_string(id), {Fixed::FromInt(corners[id - 1][0]), Fixed::FromInt(corners[id - 1][1]), {}},
+			{id % 4 + 1}, {"Loop"}});
+	points[3].links.push_back(5);
+	points.push_back({5, "End", {Fixed::FromInt(-100), Fixed::FromInt(300), {}}, {}, {}});
+	return points;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(steering)
+
+BOOST_AUTO_TEST_CASE(turns_accelerates_and_stops_on_a_final_goal)
+{
+	Transform transform;
+	Locomotion motion = MakeLocomotion(Tank());
+	const FixedVector2 goal{Fixed::FromInt(0), Fixed::FromInt(100)}; // straight up: a quarter turn away
+	int ticks = 0;
+	while (!Steer(transform, motion, goal, true) && ticks < 1000)
+		++ticks;
+	BOOST_TEST(ticks < 200);
+	BOOST_TEST((Engine::Math::Distance(transform.position.XY(), goal) <= Fixed::One()));
+	// Turned to face up (a quarter turn) at 6 deg per tick: at least 15 ticks.
+	BOOST_TEST(ticks >= 15);
+	BOOST_TEST((motion.speed <= Fixed::One()));
+}
+
+// Locomotor::rotateObjAroundLocoPivot: TURN_POSITIVE while the wanted turn to the left is more than the turn rate
+// (6 degrees a tick), none once the rest of the turn fits in a tick; TURN_NEGATIVE turning right. (The goal's
+// bearing drifts as the tank moves, so the exact last full-rate tick depends on its speed.)
+BOOST_AUTO_TEST_CASE(legacy_parity_steering_says_when_it_turns_at_its_full_rate)
+{
+	Transform transform;
+	Locomotion motion = MakeLocomotion(Tank());
+	const FixedVector2 left{Fixed::FromInt(0), Fixed::FromInt(1000)}; // 90 degrees to the left
+	int full = 0;
+	while (full < 100)
+	{
+		Steer(transform, motion, left, false);
+		if (motion.turning != 1)
+			break;
+		++full;
+	}
+	// A quarter turn at 6 degrees a tick: 15 full-rate ticks, one more for the goal drifting as it moves.
+	BOOST_TEST(full >= 15);
+	BOOST_TEST(full <= 16);
+	BOOST_TEST(motion.turning == 0);
+	Steer(transform, motion, left, false);
+	BOOST_TEST(motion.turning == 0);
+	Transform other;
+	Locomotion right = MakeLocomotion(Tank());
+	Steer(other, right, FixedVector2{Fixed::FromInt(0), Fixed::FromInt(-1000)}, false);
+	BOOST_TEST(right.turning == -1);
+}
+
+// AIFaceState::update with a locomotor that may turn in place (MinSpeed 0): each tick it is done once within REL_THRESH
+// (0.035 radians) of facing the goal, else it turns by its turn rate where it stands. A quarter turn at 6 degrees a
+// tick: 15 turning ticks, done on the 16th. One that may not turn in place (a MinSpeed) heads for the goal instead.
+BOOST_AUTO_TEST_CASE(legacy_parity_facing_turns_in_place_then_idles)
+{
+	Transform transform;
+	Locomotion motion = MakeLocomotion(Tank());
+	const FixedVector2 up{Fixed::FromInt(0), Fixed::FromInt(100)};
+	int turning = 0;
+	while (!Face(transform, motion, up) && turning < 100)
+	{
+		++turning;
+		// 6 degrees is 71582788 turn units: after 14 turns 71582792 are left, still more than a tick's turn.
+		BOOST_TEST(motion.turning == 1);
+	}
+	BOOST_TEST(turning == 15);
+	BOOST_TEST((transform.position.XY() == FixedVector2{}));
+	BOOST_TEST(Face(transform, motion, up));
+	// Within 2 degrees counts as facing it already.
+	Transform almost;
+	almost.facing = Engine::Math::TurnFromDegrees(88);
+	BOOST_TEST(Face(almost, motion, up));
+	almost.facing = Engine::Math::TurnFromDegrees(87);
+	BOOST_TEST(!Face(almost, motion, up));
+	// A MinSpeed: it moves while it turns.
+	LocomotorDefinition wings = Tank();
+	wings.minSpeed = Fixed::FromRatio(1, 2);
+	Locomotion flying = MakeLocomotion(wings);
+	flying.speed = wings.minSpeed;
+	Transform plane;
+	BOOST_TEST(!Face(plane, flying, up));
+	BOOST_TEST((plane.position.XY() != FixedVector2{}));
+}
+
+// Locomotor::moveTowardsPositionTreads: a tank with its goal a quarter turn to its left turns at 6 degrees a tick
+// without rolling while the goal is pi/4 or more off before its turn (goal speed (1 - |rel| / (pi/4)) x speed: none):
+// 90, 84, ..., 48 degrees off, eight ticks standing; the ninth (42 degrees off) it starts to roll.
+BOOST_AUTO_TEST_CASE(legacy_parity_treads_turn_in_place_until_within_an_eighth_turn)
+{
+	Transform transform;
+	LocomotorDefinition tank = Tank();
+	tank.appearance = LocomotorAppearance::Treads;
+	Locomotion motion = MakeLocomotion(tank);
+	const FixedVector2 left{Fixed::FromInt(0), Fixed::FromInt(300)};
+	for (int tick = 1; tick <= 8; ++tick)
+	{
+		BOOST_TEST(!SteerGround(transform, motion, left, true, Fixed::FromInt(300), tick));
+		BOOST_TEST_REQUIRE((motion.speed == Fixed{}));
+		BOOST_TEST_REQUIRE((transform.position.XY() == FixedVector2{}));
+	}
+	SteerGround(transform, motion, left, true, Fixed::FromInt(300), 9);
+	BOOST_TEST((motion.speed > Fixed{}));
+}
+
+// Locomotor::moveTowardsPositionWheels' donut timer: a truck that cannot turn tightly enough to reach a goal inside its
+// turning circle drives round it; once it has been within DONUT_DISTANCE (four cells) of its goal for 2.5 seconds (75
+// frames past its last time farther) it brakes, and braking it no longer rolls along its facing but slides straight at
+// the goal (locoUpdate_moveTowardsPosition: OBJECT_STATUS_BRAKING) until there.
+BOOST_AUTO_TEST_CASE(legacy_parity_wheels_stop_driving_in_circles)
+{
+	LocomotorDefinition truck = Tank();
+	truck.appearance = LocomotorAppearance::FourWheels;
+	truck.turnRate = Engine::Math::TurnFromDegrees(2);
+	truck.braking = Fixed::FromRatio(1, 100);
+	Locomotion motion = MakeLocomotion(truck);
+	motion.speed = Fixed::One();
+	Transform transform;
+	const FixedVector2 goal{Fixed::FromInt(0), Fixed::FromInt(25)}; // square to its left, inside its turning circle
+	std::uint64_t tick = 1;
+	motion.donutTimer = tick + 75;
+	std::uint64_t braked = 0;
+	bool there = false;
+	for (; tick < 400 && !there; ++tick)
+	{
+		there = SteerGround(transform, motion, goal, true, Engine::Math::Distance(transform.position.XY(), goal), tick);
+		if (braked == 0 && motion.braking != 0)
+			braked = tick;
+	}
+	BOOST_TEST(there);
+	// Braking from the donut timer at the latest (the braking rules may catch it earlier as it nears).
+	BOOST_TEST(braked != 0u);
+	BOOST_TEST(braked <= 77u);
+	BOOST_TEST(tick < 400u);
+}
+
+// locoUpdate_moveTowardsPosition: a tick after it starts braking a mover slides straight at its goal by its speed (a
+// third of a cell a second at least), whatever way it faces.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_braking_mover_slides_straight_to_its_goal)
+{
+	LocomotorDefinition tank = Tank();
+	tank.appearance = LocomotorAppearance::Treads;
+	tank.braking = Fixed::FromRatio(1, 100); // it needs longer to stop than it has left: it keeps braking
+	Locomotion motion = MakeLocomotion(tank);
+	motion.speed = Fixed::FromRatio(1, 2);
+	motion.braking = 1;
+	motion.brakingStatus = 1;
+	Transform transform;
+	transform.facing = Engine::Math::TurnFromDegrees(180); // facing away
+	const FixedVector2 goal{Fixed::FromInt(0), Fixed::FromInt(-20)};
+	SteerGround(transform, motion, goal, true, Fixed::FromInt(20), 5);
+	BOOST_TEST((transform.position.x == Fixed{}));
+	BOOST_TEST((transform.position.y < Fixed{}));
+	BOOST_TEST((transform.position.y >= Fixed::FromInt(-1)));
+}
+
+BOOST_AUTO_TEST_CASE(airborne_units_ease_to_their_preferred_height)
+{
+	LocomotorDefinition copter = Tank();
+	copter.preferredHeight = Fixed::FromInt(100);
+	copter.preferredHeightDamping = Fixed::FromRatio(1, 4);
+	copter.height = HeightBehavior::SurfaceRelative;
+	const Locomotion motion = MakeLocomotion(copter);
+	Transform transform;
+	for (int tick = 0; tick < 60; ++tick)
+		HoldHeight(transform, motion, Fixed::FromInt(10), Fixed::FromInt(10));
+	BOOST_TEST((transform.position.z > Fixed::FromInt(109)));
+	BOOST_TEST((transform.position.z <= Fixed::FromInt(110)));
+	Transform grounded;
+	grounded.position.z = Fixed::FromInt(50);
+	HoldHeight(grounded, MakeLocomotion(Tank()), Fixed::FromInt(10), Fixed::FromInt(20));
+	BOOST_TEST(grounded.position.z.Raw() == Fixed::FromInt(10).Raw());
+	LocomotorDefinition boat = Tank();
+	boat.height = HeightBehavior::SeaLevel;
+	HoldHeight(grounded, MakeLocomotion(boat), Fixed::FromInt(10), Fixed::FromInt(20));
+	BOOST_TEST(grounded.position.z.Raw() == Fixed::FromInt(20).Raw());
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+BOOST_AUTO_TEST_SUITE(movement_system)
+
+namespace
+{
+struct Run
+{
+	ecs::StateHashValue hash{};
+	std::vector<FixedVector3> positions;
+};
+
+Run Simulate(std::size_t workers, std::size_t units, int ticks, bool exact = false)
+{
+	const auto waypoints = Square();
+	const WaypointGraph graph(waypoints);
+	engine::level::Heightfield field;
+	field.width = 2;
+	field.height = 2;
+	field.cellSize = Fixed::FromInt(1000);
+	field.heights.assign(4, Fixed::FromInt(5));
+	const GroundHeight ground(field);
+
+	ecs::World world(ecs::WorldConfig{16}); // small chunks: many parallel jobs
+	world.RegisterComponent<Transform>();
+	world.RegisterComponent<Locomotion>();
+	world.RegisterComponent<MoveOrder>();
+	world.RegisterComponent<PathCompleted>();
+	world.RegisterComponent<WanderAnchor>();
+	world.RegisterComponent<DefinitionRef>();
+	world.RegisterComponent<Descent>();
+	world.RegisterComponent<OffMap>();
+	world.FinalizeComponents();
+	std::vector<ecs::Entity> entities;
+	for (std::size_t index = 0; index < units; ++index)
+	{
+		const ecs::Entity entity = world.Create();
+		world.Add<Transform>(entity);
+		world.Add<Locomotion>(entity);
+		world.Add<MoveOrder>(entity);
+		world.Add<DefinitionRef>(entity);
+		world.Get<Transform>(entity)->position = {Fixed::FromInt(static_cast<std::int64_t>(index % 50) * 4), Fixed::FromInt(-50), {}};
+		*world.Get<Locomotion>(entity) = MakeLocomotion(Tank());
+		*world.Get<MoveOrder>(entity) = FollowPath(graph, graph.ClosestOnPath(world.Get<Transform>(entity)->position.XY(), "loop"), exact);
+		entities.push_back(entity);
+	}
+	world.EmplaceResource<WaypointGraph>(graph);
+	world.EmplaceResource<GroundHeight>(ground);
+	world.EmplaceResource<DeckSurfaces>();
+	world.EmplaceResource<RandomSeed>(RandomSeed{1234});
+	VisibleObjects &visible = world.EmplaceResource<VisibleObjects>();
+	MovementSystem movement;
+	SnapshotSystem snapshot;
+	ecs::SystemRegistry registry;
+	registry.Register(movement);
+	registry.Register(snapshot);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{workers});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	for (int tick = 1; tick <= ticks; ++tick)
+		scheduler.Execute(engine::time::SimulationTime{static_cast<std::uint64_t>(tick), engine::time::FixedStep{30}});
+	Run run;
+	run.hash = world.StateHash();
+	for (const ecs::Entity entity : entities)
+		run.positions.push_back(world.Get<Transform>(entity)->position);
+	BOOST_TEST(visible.Size() == units);
+	return run;
+}
+}
+
+BOOST_AUTO_TEST_CASE(units_follow_waypoint_paths_on_the_ground)
+{
+	const Run run = Simulate(1, 3, 30 * 30);
+	for (const FixedVector3 &position : run.positions)
+	{
+		BOOST_TEST(position.z.Raw() == Fixed::FromInt(5).Raw()); // held on the ground
+		// Somewhere on or near the square, or at the dead end.
+		BOOST_TEST((position.y > Fixed::FromInt(-60)));
+	}
+}
+
+// AIFollowWaypointPathExactState (setPathFromWaypoint: each waypoint's first link): round the square for good, never
+// off along P4's second link to the dead end, which the ordinary follow (a link at random) takes now and then.
+BOOST_AUTO_TEST_CASE(legacy_parity_an_exact_follow_takes_each_waypoints_first_link)
+{
+	const auto atEnd = [](const Run &run) {
+		std::size_t count = 0;
+		for (const FixedVector3 &position : run.positions)
+			if (Engine::Math::Distance(position.XY(), FixedVector2{Fixed::FromInt(-100), Fixed::FromInt(300)}) < Fixed::FromInt(5))
+				++count;
+		return count;
+	};
+	BOOST_TEST(atEnd(Simulate(1, 40, 60 * 30, true)) == 0u);
+	BOOST_TEST(atEnd(Simulate(1, 40, 60 * 30, false)) > 0u);
+}
+
+// AIWanderState / AIPanicState (computeGoal with m_groupOffset, rerolled at each waypoint): each waypoint's goal is off
+// it by a whole number of cells either way, up to floor(WanderWidthFactor + 0.5) (1 here); at the path's end it is done.
+// AIWanderInPlaceState: each goal about the anchor, up to floor(WanderAboutPointRadius / 10 + 0.5) cells (3 for 30),
+// for good.
+BOOST_AUTO_TEST_CASE(legacy_parity_wandering_goals_are_whole_cells_off)
+{
+	const auto waypoints = Square();
+	const WaypointGraph graph(waypoints);
+	LocomotorDefinition walker = Tank();
+	walker.appearance = LocomotorAppearance::TwoLegs;
+	walker.wanderWidth = Fixed::One();
+	walker.wanderAboutPointRadius = Fixed::FromInt(30);
+	BOOST_TEST(PathWanderCells(walker.wanderWidth) == 1);
+	BOOST_TEST(PathWanderCells(Fixed::FromRatio(125, 100)) == 1);
+	BOOST_TEST(PathWanderCells(Fixed::FromRatio(15, 10)) == 2);
+	BOOST_TEST(PathWanderCells(Fixed{}) == 0);
+	BOOST_TEST(PointWanderCells(walker.wanderAboutPointRadius, PathfindCellSize) == 3);
+	const auto whole = [](Fixed value, std::int64_t cells) {
+		return value.Raw() % Fixed::FromInt(PathfindCellSize).Raw() == 0 && value >= Fixed::FromInt(-cells * PathfindCellSize) &&
+			value <= Fixed::FromInt(cells * PathfindCellSize);
+	};
+
+	Transform transform{{Fixed::FromInt(0), Fixed::FromInt(-20), {}}, {}};
+	Locomotion motion = MakeLocomotion(walker);
+	MoveOrder order{graph.Position(1).XY(), 1, MoveMode::Wander};
+	std::uint32_t waypointsReached = 0;
+	for (std::uint64_t tick = 1; tick < 30 * 120 && waypointsReached < 12; ++tick)
+	{
+		const std::uint32_t before = order.waypoint;
+		MovementSystem::Step(graph, 99, transform, motion, order, ecs::Entity{3, 1}, tick);
+		if (order.waypoint != before)
+		{
+			++waypointsReached;
+			const FixedVector2 off = order.destination - graph.Position(order.waypoint).XY();
+			BOOST_TEST(whole(off.x, 1));
+			BOOST_TEST(whole(off.y, 1));
+			BOOST_TEST((order.mode == MoveMode::Wander));
+		}
+	}
+	BOOST_TEST(waypointsReached >= 4u);
+
+	const WanderAnchor anchor{{Fixed::FromInt(500), Fixed::FromInt(500)}};
+	Transform stand{{Fixed::FromInt(500), Fixed::FromInt(500), {}}, {}};
+	Locomotion idler = MakeLocomotion(walker);
+	MoveOrder about{anchor.origin + FixedVector2{Fixed::FromInt(20), Fixed::FromInt(-10)}, WaypointGraph::None, MoveMode::WanderInPlace};
+	std::uint32_t goals = 0;
+	for (std::uint64_t tick = 1; tick < 30 * 120; ++tick)
+	{
+		const FixedVector2 before = about.destination;
+		MovementSystem::Step(graph, 99, stand, idler, about, ecs::Entity{4, 1}, tick, &anchor);
+		BOOST_TEST_REQUIRE((about.mode == MoveMode::WanderInPlace));
+		if (about.destination != before)
+		{
+			++goals;
+			const FixedVector2 off = about.destination - anchor.origin;
+			BOOST_TEST(whole(off.x, 3));
+			BOOST_TEST(whole(off.y, 3));
+		}
+	}
+	BOOST_TEST(goals >= 5u);
+}
+
+BOOST_AUTO_TEST_CASE(results_do_not_depend_on_worker_count)
+{
+	const Run serial = Simulate(1, 400, 120);
+	const Run parallel = Simulate(8, 400, 120);
+	BOOST_TEST(serial.hash == parallel.hash);
+	BOOST_TEST((serial.positions == parallel.positions));
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+BOOST_AUTO_TEST_SUITE(move_paths)
+
+// AIUpdateInterface::aiFollowExitProductionPath: a unit on its way to the rally point goes on home once there; a new
+// order in between ends the path.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_produced_unit_follows_its_exit_path)
+{
+	using Engine::Math::Fixed;
+	ecs::World world{ecs::WorldConfig{1}};
+	world.RegisterComponent<MovePath>();
+	world.RegisterComponent<MoveOrder>();
+	world.RegisterComponent<PathCompleted>();
+	world.RegisterComponent<WanderAnchor>();
+	world.FinalizeComponents();
+	const Engine::Math::FixedVector2 rally{Fixed::FromInt(10), Fixed{}}, home{Fixed::FromInt(500), Fixed::FromInt(500)};
+	const auto make = [&] {
+		const ecs::Entity entity = world.Create();
+		world.Add<MovePath>(entity);
+		world.Add<MoveOrder>(entity);
+		*world.Get<MoveOrder>(entity) = MoveToPoint(rally);
+		MovePath &path = *world.Get<MovePath>(entity);
+		path.count = 2;
+		path.next = 1;
+		path.points[0] = rally;
+		path.points[1] = home;
+		return entity;
+	};
+	const ecs::Entity follower = make(), redirected = make();
+	MovePathSystem paths;
+	ecs::SystemRegistry registry;
+	registry.Register(paths);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	std::uint64_t tick = 0;
+	const auto step = [&] { scheduler.Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}}); };
+	step(); // still on the way
+	BOOST_TEST((world.Get<MoveOrder>(follower)->destination.x == rally.x));
+	world.Get<MoveOrder>(follower)->mode = MoveMode::Idle; // there
+	*world.Get<MoveOrder>(redirected) = MoveToPoint({Fixed::FromInt(-50), Fixed{}});
+	step();
+	BOOST_TEST((world.Get<MoveOrder>(follower)->destination.x == home.x));
+	BOOST_TEST(world.Get<MovePath>(redirected) == nullptr);
+	world.Get<MoveOrder>(follower)->mode = MoveMode::Idle;
+	step();
+	BOOST_TEST(world.Get<MovePath>(follower) == nullptr);
+	BOOST_TEST((world.Get<MoveOrder>(follower)->mode == MoveMode::Idle));
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+
+BOOST_AUTO_TEST_SUITE(formation_layout)
+
+// navigation::planFormation (AIGroup::groupMoveToPosition's layout): six units of one kind west of a target face east; the columns nearest a 1.5 ratio (3 x 2), 22 apart (radius 5: 2r + 2 = 12 is less); the
+// two furthest east take the front row, each row ordered left (north, +y) to right; slots centred on the target
+// (front row 11 ahead of it, back row 11 behind).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_group_forms_three_by_two_facing_its_move)
+{
+	std::vector<FormationUnit> units;
+	for (std::uint32_t id = 1; id <= 6; ++id)
+		units.push_back({id, {Fixed::FromInt(100 + static_cast<std::int64_t>(id) * 10), Fixed::FromInt(480 + static_cast<std::int64_t>(id % 3) * 20)}, Fixed::FromInt(5), 7, 100});
+	const FixedVector2 target{Fixed::FromInt(1000), Fixed::FromInt(500)};
+	const FormationPlan plan = PlanFormation(units, target, {Fixed{}, Fixed{}}, {Fixed::FromInt(2000), Fixed::FromInt(2000)});
+	BOOST_TEST(plan.columns == 3u);
+	BOOST_TEST(plan.rows == 2u);
+	BOOST_TEST((plan.spacing == Fixed::FromInt(22)));
+	BOOST_TEST_REQUIRE(plan.slots.size() == 6u);
+	const auto slotOf = [&](std::uint32_t id) {
+		for (const FormationSlot &slot : plan.slots)
+			if (slot.id == id)
+				return slot.position;
+		return FixedVector2{};
+	};
+	// Due east exactly: within a thousandth (fixed-point rounding of the normalised heading).
+	const auto close = [](FixedVector2 a, FixedVector2 b) { return Engine::Math::Distance(a, b) <= Fixed::FromRatio(1, 1000); };
+	// Front row: ids 6, 5, 4 (furthest east); left to right by y: 5 (y 520), 4 (y 500), 6 (y 480).
+	BOOST_TEST(close(slotOf(5), {Fixed::FromInt(1011), Fixed::FromInt(522)}));
+	BOOST_TEST(close(slotOf(4), {Fixed::FromInt(1011), Fixed::FromInt(500)}));
+	BOOST_TEST(close(slotOf(6), {Fixed::FromInt(1011), Fixed::FromInt(478)}));
+	// Back row: 2 (y 520), 1 (y 500), 3 (y 480).
+	BOOST_TEST(close(slotOf(2), {Fixed::FromInt(989), Fixed::FromInt(522)}));
+	BOOST_TEST(close(slotOf(1), {Fixed::FromInt(989), Fixed::FromInt(500)}));
+	BOOST_TEST(close(slotOf(3), {Fixed::FromInt(989), Fixed::FromInt(478)}));
+	// Against the map's edge the whole formation moves in, keeping its shape.
+	const FormationPlan edge = PlanFormation(units, {Fixed::FromInt(1995), Fixed::FromInt(500)}, {Fixed{}, Fixed{}}, {Fixed::FromInt(2000), Fixed::FromInt(2000)});
+	BOOST_TEST_REQUIRE(edge.slots.size() == 6u);
+	for (const FormationSlot &slot : edge.slots)
+		BOOST_TEST((slot.position.x <= Fixed::FromInt(1995)));
+	// No room at all: no formation.
+	BOOST_TEST(PlanFormation(units, target, {Fixed{}, Fixed{}}, {Fixed::FromInt(20), Fixed::FromInt(20)}).slots.empty());
+}
+
+BOOST_AUTO_TEST_SUITE_END()

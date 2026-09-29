@@ -1,8 +1,5 @@
-module;
-#include <array>
-#include <cstdint>
-
 export module engine.navigation.movement.occupancy_policy;
+import std;
 
 export namespace navigation {
 struct OccupancyCell {

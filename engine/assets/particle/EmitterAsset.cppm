@@ -1,11 +1,5 @@
-module;
-
-#include <cstdint>
-#include <string>
-#include <utility>
-#include <vector>
-
 export module Assets.Particles;
+import std;
 
 import Assets.Math;
 

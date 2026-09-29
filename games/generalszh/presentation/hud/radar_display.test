@@ -1,0 +1,53 @@
+#include <boost/test/unit_test.hpp>
+
+#include <array>
+#include <cstdint>
+
+import games.generalszh.presentation.hud.algorithms.radar_display;
+
+using namespace generalszh::presentation;
+
+BOOST_AUTO_TEST_SUITE(radar_display)
+
+// Radar::findDrawPositions / localPixelToRadar and W3DRadar::radarToPixel on a 1200 x 600 map in a 128 x 128 window:
+// the picture is 128 x 64, 32 down (bars above and below); cell (0, 0) is the bottom left pixel; the window's middle is
+// cell (64, 64); a pixel in the bar is no cell.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_radar_keeps_the_map_aspect)
+{
+	const auto [ul, lr] = FindDrawPositions(1200.0f, 600.0f, 10, 20, 128, 128);
+	BOOST_TEST((ul == RadarPoint{10, 52}));
+	BOOST_TEST((lr == RadarPoint{138, 116}));
+	BOOST_TEST((RadarToPixel({0, 0}, 0, 0, 128, 128) == RadarPoint{0, 127}));
+	BOOST_TEST((RadarToPixel({127, 127}, 0, 0, 128, 128) == RadarPoint{127, 0}));
+	const auto middle = LocalPixelToRadar({64, 64}, 1200.0f, 600.0f, 128, 128);
+	BOOST_TEST_REQUIRE(middle.has_value());
+	BOOST_TEST((*middle == RadarPoint{64, 64}));
+	BOOST_TEST(!LocalPixelToRadar({64, 10}, 1200.0f, 600.0f, 128, 128).has_value());
+}
+
+// W3DRadar::drawSingleGenericEvent: at its first frame the triangle is half the radar wide (64 of 128) around the
+// event, its first corner straight right (angle 0); 1.5 s on it is at its 6 pixel least; after its fade frame its
+// alpha falls with the time left. renderObjectList's stealth blink: 32 at 0 and at half a second, 106 at 20 frames,
+// and in the first half the retail formula wraps (5 frames: -116 as a byte, 140).
+BOOST_AUTO_TEST_CASE(legacy_parity_radar_events_spin_down_and_stealth_blinks)
+{
+	RadarEvent event;
+	event.createFrame = 100;
+	event.fadeFrame = 205;
+	event.dieFrame = 220;
+	event.color1 = {255, 0, 0, 255};
+	event.color2 = {255, 128, 128, 255};
+	const RadarTriangle first = EventTriangle(event, {64, 64}, 100, 0, 0, 128, 128);
+	BOOST_TEST((first.points[0] == RadarToPixel({128, 64}, 0, 0, 128, 128)));
+	BOOST_TEST(first.startColor[3] == 255);
+	const RadarTriangle late = EventTriangle(event, {64, 64}, 145, 0, 0, 128, 128);
+	BOOST_TEST((late.points[0] == RadarToPixel({70, 64}, 0, 0, 128, 128))); // a full turn: back to angle 0, 6 out
+	const RadarTriangle fading = EventTriangle(event, {64, 64}, 210, 0, 0, 128, 128);
+	BOOST_TEST(fading.startColor[3] == 169); // 255 x (1 - 5 / 15) in floats: 169.99999, truncated
+	BOOST_TEST(StealthBlinkAlpha(0) == 32);
+	BOOST_TEST(StealthBlinkAlpha(15) == 32);
+	BOOST_TEST(StealthBlinkAlpha(20) == 106);
+	BOOST_TEST(StealthBlinkAlpha(5) == 140);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

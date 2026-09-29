@@ -1,0 +1,71 @@
+#define BOOST_TEST_MODULE GeneralsZhInstallMount
+#include <boost/test/included/unit_test.hpp>
+
+#include <chrono>
+#include <cstdlib>
+#include <filesystem>
+#include <string>
+
+import games.generalszh.content.install.install_mount;
+import engine.config.adapters.ini.ini_reader;
+import engine.config.adapters.json.json_reader;
+
+namespace fs = std::filesystem;
+using namespace engine::config;
+
+namespace
+{
+// A real Zero Hour install is not part of the repository.
+const char *InstallDir() { return std::getenv("GENERALSZH_INSTALL_DIR"); }
+
+ini::Grammar LoadGrammar(Diagnostics &diagnostics)
+{
+	engine::filesystem::VirtualFileSystem source;
+	generalszh::content::MountInstall(source, fs::path(GENERALSZH_SOURCE_DIR) / "content/ini");
+	Document document;
+	json::Read(document, document.AddSource("grammar.json", *source.ReadText("grammar.json")), diagnostics);
+	return ini::GrammarFromDocument(document, diagnostics);
+}
+}
+
+BOOST_AUTO_TEST_SUITE(zero_hour_install)
+
+BOOST_AUTO_TEST_CASE(mounts_archives_and_parses_every_ini_from_them)
+{
+	if (InstallDir() == nullptr || !fs::exists(InstallDir()))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	const auto start = std::chrono::steady_clock::now();
+	const auto report = generalszh::content::MountInstall(files, InstallDir());
+	const auto mounted = std::chrono::steady_clock::now();
+	BOOST_TEST(report.errors.empty());
+	BOOST_TEST(report.archives.size() >= 20u);
+	BOOST_TEST_MESSAGE("mounted " << report.archives.size() << " archives, " << files.FileCount() << " files in "
+		<< std::chrono::duration_cast<std::chrono::milliseconds>(mounted - start).count() << " ms");
+	for (const std::string &skipped : report.skipped)
+		BOOST_TEST_MESSAGE("skipped " << skipped);
+
+	BOOST_TEST(files.Exists("Maps\\ShellMapMD\\ShellMapMD.map"));
+	BOOST_TEST(files.Exists("Data\\INI\\Object\\AmericaVehicle.ini"));
+	BOOST_TEST(files.Exists("Window\\Menus\\MainMenu.wnd"));
+	BOOST_TEST_MESSAGE("Data\\INI\\Weapon.ini comes from " << std::string(*files.Origin("data/ini/weapon.ini")));
+
+	Diagnostics grammarDiagnostics;
+	const ini::Grammar grammar = LoadGrammar(grammarDiagnostics);
+	BOOST_TEST(!grammarDiagnostics.HasErrors());
+
+	Document document;
+	Diagnostics diagnostics;
+	const auto paths = files.List("data/ini", ".ini");
+	for (const std::string &path : paths)
+		ini::Read(document, document.AddSource(path, *files.ReadText(path)), grammar, diagnostics);
+	BOOST_TEST_MESSAGE("parsed " << paths.size() << " INI files, " << document.Roots().size() << " top-level entries in "
+		<< std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - mounted).count() << " ms");
+	BOOST_TEST(paths.size() >= 150u);
+	BOOST_TEST(!diagnostics.HasErrors(), diagnostics.Format(document));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

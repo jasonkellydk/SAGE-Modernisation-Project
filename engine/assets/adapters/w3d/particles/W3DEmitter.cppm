@@ -1,14 +1,5 @@
-module;
-
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <span>
-#include <string>
-#include <string_view>
-#include <utility>
-
 export module Assets.Adapters.W3D.Particles;
+import std;
 
 import Assets.Adapters.W3D.Chunks;
 import Assets.Math;

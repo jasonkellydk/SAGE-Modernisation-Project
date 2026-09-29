@@ -1,0 +1,75 @@
+#include <boost/test/unit_test.hpp>
+
+#include <array>
+#include <cstdint>
+
+import Engine.Core.Math.Fixed;
+import Engine.Core.Math.FixedRandom;
+
+using namespace Engine::Math;
+using namespace Engine::Math::Literals;
+
+BOOST_AUTO_TEST_SUITE(fixed_random)
+
+BOOST_AUTO_TEST_CASE(sequence_matches_independent_reference)
+{
+	// Golden values from an independent Python implementation: any compiler or
+	// platform difference in the generator breaks lockstep and fails here.
+	RandomStream random{12345};
+	BOOST_TEST(NextUInt64(random) == 0x152ca78d1ff3190bull);
+	BOOST_TEST(NextUInt64(random) == 0xac1608e952ee718cull);
+	BOOST_TEST(NextUInt64(random) == 0xaea93ccff2226864ull);
+	RandomStream stream = Stream(7, {30, 2, 99});
+	BOOST_TEST(NextUInt64(stream) == 0xec6d07e5b7885ef8ull);
+	BOOST_TEST(NextUInt64(stream) == 0x3babe6c538bd73f1ull);
+}
+
+BOOST_AUTO_TEST_CASE(streams_are_independent_of_creation_order)
+{
+	RandomStream first = Stream(1, {5, 6});
+	RandomStream second = Stream(1, {5, 7});
+	RandomStream firstAgain = Stream(1, {5, 6});
+	RandomStream swapped = Stream(1, {6, 5});
+	const std::uint64_t value = NextUInt64(first);
+	BOOST_TEST(value == NextUInt64(firstAgain));
+	BOOST_TEST(value != NextUInt64(second));
+	BOOST_TEST(value != NextUInt64(swapped));
+}
+
+BOOST_AUTO_TEST_CASE(uniform_ranges_stay_inside_bounds_and_cover_them)
+{
+	RandomStream random{99};
+	std::array<int, 6> counts{};
+	for (int i = 0; i < 60000; ++i)
+	{
+		const auto value = UniformInt(random, -2, 3);
+		BOOST_REQUIRE(value >= -2);
+		BOOST_REQUIRE(value <= 3);
+		++counts[static_cast<std::size_t>(value + 2)];
+	}
+	for (const int count : counts)
+		BOOST_TEST((count > 9000 && count < 11000));
+	BOOST_TEST(UniformInt(random, 4, 4) == 4);
+	BOOST_TEST(UniformInt(random, 5, 1) == 5);
+	for (int i = 0; i < 1000; ++i)
+	{
+		const Fixed value = UniformFixed(random, -1.5_fx, 2.25_fx);
+		BOOST_REQUIRE((value >= -1.5_fx && value <= 2.25_fx));
+	}
+}
+
+BOOST_AUTO_TEST_CASE(chance_respects_probability_limits)
+{
+	RandomStream random{3};
+	int hits = 0;
+	for (int i = 0; i < 40000; ++i)
+		hits += Chance(random, 0.25_fx) ? 1 : 0;
+	BOOST_TEST((hits > 9400 && hits < 10600));
+	for (int i = 0; i < 100; ++i)
+	{
+		BOOST_TEST(!Chance(random, Fixed{}));
+		BOOST_TEST(Chance(random, 1_fx));
+	}
+}
+
+BOOST_AUTO_TEST_SUITE_END()

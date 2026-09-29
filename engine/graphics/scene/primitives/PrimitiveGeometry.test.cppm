@@ -1,15 +1,8 @@
 module;
 #define BOOST_TEST_MODULE PrimitiveGeometryTests
 #include <boost/test/included/unit_test.hpp>
-#include <algorithm>
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <limits>
-#include <span>
 export module Graphics.Scene.Primitives.Geometry.Tests;
+import std;
 import Graphics.Scene.Primitives.Geometry;
 import Graphics.Scene.Props.Renderer;
 import Graphics.Tests.Device;

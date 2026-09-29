@@ -1,0 +1,176 @@
+#include <boost/test/unit_test.hpp>
+
+#include <array>
+#include <bit>
+#include <cstdlib>
+#include <filesystem>
+
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.content_loader;
+import games.generalszh.content.global.game_data;
+import games.generalszh.content.global.language_fonts;
+import games.generalszh.content.global.in_game_ui;
+import games.generalszh.content.global.mouse;
+import games.generalszh.content.install.install_mount;
+
+using namespace generalszh::content;
+using namespace engine::config;
+
+BOOST_AUTO_TEST_SUITE(game_data)
+
+BOOST_AUTO_TEST_CASE(the_shipped_globals_bind)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const Document &document = loader.Load({"Data/INI/Default/GameData", "Data/INI/GameData"});
+	BindContext context{loader.DiagnosticsFor(document), engine::time::FixedStep{30}};
+	const GameData data = BindGameData(document, context);
+	BOOST_TEST((data.gravity == Engine::Math::Fixed::FromRatio(-64, 900)));
+	BOOST_TEST((data.unitDamaged == Engine::Math::Fixed::FromRatio(7, 10)));
+	BOOST_TEST((data.unitReallyDamaged == Engine::Math::Fixed::FromRatio(35, 100)));
+	BOOST_TEST(data.defaultStartingCash == 10000);
+	BOOST_TEST(data.shellMapName == "Maps\\ShellMapMD\\ShellMapMD.map");
+	BOOST_TEST((data.minLowEnergyProductionSpeed == Engine::Math::Fixed::FromRatio(1, 2)));
+	BOOST_TEST((data.maxLowEnergyProductionSpeed == Engine::Math::Fixed::FromRatio(8, 10)));
+	BOOST_TEST((data.shakeIntensity[2] == Engine::Math::Fixed::FromRatio(5, 2))); // strong
+	BOOST_TEST((data.shakeIntensity[5] == Engine::Math::Fixed::FromInt(10))); // cinematic insane
+	BOOST_TEST(data.forceModelsToFollowTimeOfDay);
+	BOOST_TEST(data.powerBarBase == 7);
+	BOOST_TEST((data.powerBarIntervals == Engine::Math::Fixed::FromInt(3)));
+	BOOST_TEST(data.powerBarYellowRange == 5);
+	BOOST_TEST((data.objectPlacementOpacity == Engine::Math::Fixed::FromRatio(45, 100))); // GlobalData's 0.45 (GameData.ini leaves it)
+	// The global weapon bonus table (GameData.ini's WeaponBonus lines).
+	using engine::gameplay::WeaponBonusField;
+	const auto row = [&](std::uint32_t bit) -> const engine::gameplay::WeaponBonus & {
+		return data.weaponBonus.byCondition[static_cast<std::size_t>(std::countr_zero(bit))];
+	};
+	namespace wbc = generalszh::content::weapon_bonus;
+	BOOST_TEST((row(wbc::Horde).Get(WeaponBonusField::RateOfFire) == Engine::Math::Fixed::FromRatio(3, 2)));
+	BOOST_TEST((row(wbc::Garrisoned).Get(WeaponBonusField::Range) == Engine::Math::Fixed::FromRatio(133, 100)));
+	BOOST_TEST((row(wbc::Garrisoned).Get(WeaponBonusField::Damage) == Engine::Math::Fixed::FromRatio(5, 4)));
+	BOOST_TEST((row(wbc::Elite).Get(WeaponBonusField::RateOfFire) == Engine::Math::Fixed::FromRatio(7, 5)));
+	BOOST_TEST((row(wbc::SoloAiEasy).Get(WeaponBonusField::RateOfFire) == Engine::Math::Fixed::FromRatio(4, 5)));
+	BOOST_TEST((row(wbc::DroneSpotting).Get(WeaponBonusField::Range) == Engine::Math::Fixed::One())); // weapons' own
+	// HealthBonus_Veteran / _Elite / _Heroic (regular is never read: 100%).
+	BOOST_TEST((data.healthBonus[0] == Engine::Math::Fixed::One()));
+	BOOST_TEST((data.healthBonus[1] == Engine::Math::Fixed::FromRatio(6, 5)));
+	BOOST_TEST((data.healthBonus[2] == Engine::Math::Fixed::FromRatio(13, 10)));
+	BOOST_TEST((data.healthBonus[3] == Engine::Math::Fixed::FromRatio(3, 2)));
+}
+
+// GlobalLanguage::parseFontDesc on the installed Language.ini: a quoted multi-word name, its point size and bold flag.
+// Stock Zero Hour names Times New Roman 12 for display strings and Arial 22 / 16 bold / 14 for the credits; the
+// 2160p control bar mod doubles them (23; 42 / 30 bold / 27). Either way the credits' minor title is bold and the
+// fonts grow at 70% of the resolution's rate.
+BOOST_AUTO_TEST_CASE(language_fonts_come_from_the_installed_language_ini)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+		return;
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const LanguageFonts fonts = ReadLanguageFonts(loader.Load({"Data/English/Language"}));
+	BOOST_TEST(fonts.displayString.name == "Times New Roman");
+	BOOST_TEST((fonts.displayString.size == 12 || fonts.displayString.size == 23));
+	BOOST_TEST(fonts.credits[0].name == "Arial");
+	BOOST_TEST((fonts.credits[2].size == 14 || fonts.credits[2].size == 27));
+	BOOST_TEST(fonts.credits[1].bold);
+	BOOST_TEST(!fonts.credits[2].bold);
+	BOOST_TEST(std::abs(fonts.resolutionAdjustment.Raw() - Engine::Math::Fixed::FromRatio(7, 10).Raw()) <= 1);
+}
+
+// InGameUI.ini's messages on the installed data: white and pale blue lines (MessageColor2 R:180 G:180 B:255), 75000 ms
+// before fading, Arial 10 bold at X:10 (Y:10, or 22 with the 2160p control bar mod); Language.ini names the message
+// font Arial, bold (10 stock, 19 with the mod).
+BOOST_AUTO_TEST_CASE(the_in_game_messages_bind)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+		return;
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const InGameUiContent ui = BindInGameUi(loader.Load({"Data/INI/Default/InGameUI", "Data/INI/InGameUI"}));
+	BOOST_TEST((ui.messageColor1 == std::array<std::uint8_t, 4>{255, 255, 255, 255}));
+	BOOST_TEST((ui.messageColor2 == std::array<std::uint8_t, 4>{180, 180, 255, 255}));
+	BOOST_TEST(ui.messagePosition[0] == 10);
+	BOOST_TEST((ui.messagePosition[1] == 10 || ui.messagePosition[1] == 22));
+	BOOST_TEST(ui.messageDelayMs == 75000);
+	BOOST_TEST(ui.messageFont == "Arial");
+	BOOST_TEST(ui.messageBold);
+	const LanguageFonts fonts = ReadLanguageFonts(loader.Load({"Data/English/Language"}));
+	BOOST_TEST(fonts.message.name == "Arial");
+	BOOST_TEST(fonts.message.bold);
+	BOOST_TEST((fonts.message.size == 10 || fonts.message.size == 19));
+	// The military caption: white at X:10 Y:340 in Courier New (bold titles), Language.ini's speed 1 and 750 ms delay
+	// (the 2160p mod doubles the font sizes).
+	BOOST_TEST((ui.militaryCaptionColor == std::array<std::uint8_t, 4>{255, 255, 255, 255}));
+	BOOST_TEST(ui.militaryCaptionPosition[0] == 10);
+	BOOST_TEST(ui.militaryCaptionPosition[1] == 340);
+	BOOST_TEST(ui.militaryCaptionTitleFont == "Courier New");
+	BOOST_TEST(ui.militaryCaptionTitleBold);
+	BOOST_TEST(!ui.militaryCaptionBold);
+	BOOST_TEST(fonts.militaryCaptionTitle.name == "Courier New");
+	BOOST_TEST(fonts.militaryCaptionTitle.bold);
+	BOOST_TEST((fonts.militaryCaptionTitle.size == 12 || fonts.militaryCaptionTitle.size == 23));
+	BOOST_TEST(fonts.militaryCaption.name == "Courier New");
+	BOOST_TEST(!fonts.militaryCaption.bold);
+	BOOST_TEST(fonts.militaryCaptionSpeed == 1);
+	// The named timers: from X:0.90 Y:0.666, white, flashing every 500 ms (15 frames), Arial 10 (not bold).
+	BOOST_TEST(ui.namedTimerPosition[0].Raw() == Engine::Math::Fixed::FromRatio(90, 100).Raw());
+	BOOST_TEST(ui.namedTimerFlashFrames.Raw() == Engine::Math::Fixed::FromInt(15).Raw());
+	BOOST_TEST((ui.namedTimerNormalColor == std::array<std::uint8_t, 4>{255, 255, 255, 255}));
+	BOOST_TEST(ui.namedTimerNormalFont == "Arial");
+	BOOST_TEST(!ui.namedTimerReadyBold);
+	BOOST_TEST(fonts.militaryCaptionDelayMs == 750);
+}
+
+// Legacy: Core/GameEngine/Source/GameClient/Input/Mouse.cpp (Mouse::parseIni loads Data\INI\Mouse;
+// TheMouseFieldParseTable, TheMouseCursorFieldParseTable, CursorInfo::CursorInfo's defaults, Mouse::getCursorIndex) and
+// Core/GameEngineDevice/Source/Win32Device/GameClient/Win32Mouse.cpp (Win32Mouse::initCursorResources' file names).
+BOOST_AUTO_TEST_CASE(legacy_parity_the_shipped_mouse_cursors_bind)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const MouseContent mouse = BindMouse(loader.Load({"Data/INI/Mouse"}));
+	BOOST_TEST(mouse.dragTolerance == 25u);
+	BOOST_TEST(mouse.dragTolerance3D == 25u);
+	BOOST_TEST(mouse.dragToleranceMs == 250u);
+	const MouseCursorDefinition &arrow = mouse.Cursor(MouseCursorKind::Arrow);
+	BOOST_TEST(arrow.texture == "SCCPointer");
+	BOOST_TEST(arrow.directions == 1);
+	BOOST_TEST(arrow.hotSpot[0] == 16); // CursorInfo's default
+	BOOST_TEST(MouseCursorFile(arrow, 0) == "Data/Cursors/SCCPointer.ANI");
+	BOOST_TEST(files.Read(MouseCursorFile(arrow, 0)).has_value());
+	const MouseCursorDefinition &scroll = mouse.Cursor(MouseCursorKind::Scroll);
+	BOOST_TEST(scroll.directions == 8);
+	BOOST_TEST(MouseCursorFile(scroll, 7) == "Data/Cursors/SCCScroll7.ANI");
+	BOOST_TEST(files.Read(MouseCursorFile(scroll, 7)).has_value());
+	BOOST_TEST(mouse.Cursor(MouseCursorKind::ParticleUplinkCannon).texture.empty() == false);
+	BOOST_TEST(mouse.Cursor(MouseCursorKind::None).texture.empty()); // never defined
+	// Every defined cursor's files are shipped.
+	for (const MouseCursorDefinition &cursor : mouse.cursors)
+		for (int direction = 0; direction < cursor.directions && !cursor.texture.empty(); ++direction)
+			BOOST_TEST(files.Read(MouseCursorFile(cursor, direction)).has_value(), MouseCursorFile(cursor, direction));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

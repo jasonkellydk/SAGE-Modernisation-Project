@@ -1,15 +1,5 @@
-module;
-
-#include <algorithm>
-#include <cstdint>
-#include <limits>
-#include <memory>
-#include <queue>
-#include <span>
-#include <functional>
-#include <vector>
-
 export module engine.navigation.search.hpa_route;
+import std;
 
 export namespace navigation {
 

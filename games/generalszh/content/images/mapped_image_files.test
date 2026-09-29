@@ -1,0 +1,55 @@
+#include <boost/test/unit_test.hpp>
+
+#include <memory>
+#include <string>
+#include <vector>
+
+import games.generalszh.content.images.mapped_image_files;
+
+namespace
+{
+// Paths only: the order test never reads contents.
+class Listing final : public engine::filesystem::FileSource
+{
+public:
+	explicit Listing(std::vector<std::string> paths) : m_paths(std::move(paths)) {}
+	std::string_view Name() const noexcept override { return "listing"; }
+	std::vector<std::string> Paths() const override
+	{
+		std::vector<std::string> normalized;
+		for (const auto &path : m_paths)
+			normalized.push_back(engine::filesystem::NormalizePath(path));
+		return normalized;
+	}
+	std::optional<std::vector<std::byte>> Read(std::string_view) const override { return std::nullopt; }
+
+private:
+	std::vector<std::string> m_paths;
+};
+}
+
+BOOST_AUTO_TEST_SUITE(mapped_image_files)
+
+BOOST_AUTO_TEST_CASE(texture_size_pack_then_hand_created_each_files_before_subdirectories)
+{
+	engine::filesystem::VirtualFileSystem files;
+	files.Mount(std::make_unique<Listing>(std::vector<std::string>{
+		"Data/INI/MappedImages/HandCreated/HandCreatedMappedImages.INI",
+		"Data/INI/MappedImages/HandCreated/ZH/Extra.ini",
+		"Data/INI/MappedImages/TextureSize_512/b_SAUserInterface512.ini",
+		"Data/INI/MappedImages/TextureSize_512/A_SCShellUserInterface512.ini",
+		"Data/INI/MappedImages/TextureSize_512/Nested/Deep.ini",
+		"Data/INI/MappedImages/TextureSize_256/SAUserInterface256.ini", // another size: not loaded
+		"Data/INI/MappedImages/TextureSize_512/readme.txt",
+	}));
+	const std::vector<std::string> expected{
+		"data/ini/mappedimages/texturesize_512/a_scshelluserinterface512.ini",
+		"data/ini/mappedimages/texturesize_512/b_sauserinterface512.ini",
+		"data/ini/mappedimages/texturesize_512/nested/deep.ini",
+		"data/ini/mappedimages/handcreated/handcreatedmappedimages.ini",
+		"data/ini/mappedimages/handcreated/zh/extra.ini",
+	};
+	BOOST_TEST(generalszh::content::MappedImageFiles(files) == expected, boost::test_tools::per_element());
+}
+
+BOOST_AUTO_TEST_SUITE_END()

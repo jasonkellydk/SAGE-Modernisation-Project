@@ -1,8 +1,5 @@
-module;
-
-#include <cstdint>
-
 export module Video.Presentation;
+import std;
 
 export import Video.Frame;
 

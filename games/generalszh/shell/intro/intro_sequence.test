@@ -1,0 +1,57 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+
+import games.generalszh.shell.intro.intro_sequence;
+
+// Intro.cpp (Intro::Intro / update / enterNextState / skipCurrentIntroStage), without TheSuperHackers' credit screen and
+// its wait (left out by the user's direction).
+using namespace generalszh::shell;
+
+BOOST_AUTO_TEST_SUITE(intro_sequence)
+
+// With PlayIntro and PlaySizzle: the EA logo movie at once; after it the 1 s wait, the sizzle movie, done; nothing
+// starts while a movie plays or a wait runs (a wait is not over at its very end: waitUntil >= now).
+BOOST_AUTO_TEST_CASE(legacy_parity_the_intro_plays_its_stages_in_order)
+{
+	IntroSequence intro = MakeIntro(true, true);
+	BOOST_TEST(UpdateIntro(intro, 1000, false).movie == "EALogoMovie");
+	BOOST_TEST(UpdateIntro(intro, 2000, true).movie.empty()); // the movie playing
+	BOOST_TEST((intro.stage == IntroStage::EALogoMovie));
+	UpdateIntro(intro, 4000, false); // the movie over: the wait
+	BOOST_TEST((intro.stage == IntroStage::SizzleMovieWait));
+	BOOST_TEST(intro.waitUntilMs == 5000u);
+	BOOST_TEST(UpdateIntro(intro, 5000, false).movie.empty());
+	BOOST_TEST(UpdateIntro(intro, 5001, false).movie == "Sizzle");
+	BOOST_TEST(UpdateIntro(intro, 9000, false).done);
+	BOOST_TEST(IntroDone(intro));
+}
+
+// PlayIntro off: the sizzle movie only, without its wait; neither (the -nologo switch): done at once.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_intros_parts_can_be_left_out)
+{
+	IntroSequence sizzleOnly = MakeIntro(false, true);
+	BOOST_TEST(UpdateIntro(sizzleOnly, 1, false).movie == "Sizzle");
+	IntroSequence none = MakeIntro(false, false);
+	BOOST_TEST(UpdateIntro(none, 1, false).done);
+}
+
+// Esc: a movie stopped and the next stage entered (it begins at the next update); a wait cut short; nothing to skip
+// once done.
+BOOST_AUTO_TEST_CASE(legacy_parity_esc_skips_the_intro_stage)
+{
+	IntroSequence intro = MakeIntro(true, true);
+	UpdateIntro(intro, 10, false);
+	bool stop = false;
+	BOOST_TEST(SkipIntroStage(intro, stop));
+	BOOST_TEST(stop);
+	BOOST_TEST((intro.stage == IntroStage::SizzleMovieWait));
+	BOOST_TEST(intro.waitUntilMs == 0u);
+	BOOST_TEST(UpdateIntro(intro, 20, false).movie == "Sizzle"); // the wait's own start skipped
+	BOOST_TEST(SkipIntroStage(intro, stop));
+	BOOST_TEST(stop);
+	BOOST_TEST(IntroDone(intro));
+	BOOST_TEST(!SkipIntroStage(intro, stop));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

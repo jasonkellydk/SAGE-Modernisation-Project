@@ -1,0 +1,55 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdlib>
+#include <filesystem>
+
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.content_loader;
+import games.generalszh.content.objects.object_catalog;
+import games.generalszh.content.healing.healing_content;
+import games.generalszh.content.install.install_mount;
+
+using namespace generalszh::content;
+using namespace engine::config;
+
+BOOST_AUTO_TEST_SUITE(healing_content)
+
+BOOST_AUTO_TEST_CASE(shipped_healers_bind_their_active_programs)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const Document &document = loader.Load({"Data/INI/Default/Object", "Data/INI/Object"});
+	BindContext context{loader.DiagnosticsFor(document), engine::time::FixedStep{30}};
+	const auto objects = BuildObjectCatalog(document, context);
+	namespace target = engine::gameplay::target_class;
+
+	// The ambulance: 4 to infantry and some to vehicles (not aircraft, not itself) within 100, every second.
+	const ObjectHealing ambulance = ReadObjectHealing(*objects.Find("AmericaVehicleMedic"), engine::time::FixedStep{30});
+	BOOST_TEST(!ambulance.self.has_value());
+	BOOST_TEST_REQUIRE(ambulance.area.count == 2u);
+	const auto &infantry = ambulance.area.programs[0];
+	BOOST_TEST(infantry.amount.Floor() == 4);
+	BOOST_TEST(infantry.radius.Floor() == 100);
+	BOOST_TEST(infantry.delay == 30u);
+	BOOST_TEST(infantry.classes == target::Infantry);
+	const auto &vehicles = ambulance.area.programs[1];
+	BOOST_TEST(vehicles.amount.Floor() > 0); // 5 in the shipped data (8 in some loose INI copies)
+	BOOST_TEST(vehicles.classes == target::Vehicle);
+	BOOST_TEST(vehicles.forbiddenClasses == target::Aircraft);
+	BOOST_TEST((vehicles.flags & engine::gameplay::area_healing::SkipSelf) != 0u);
+
+	// Junk repair waits for its upgrade.
+	const ObjectHealing buggy = ReadObjectHealing(*objects.Find("GLAVehicleRocketBuggy"), engine::time::FixedStep{30});
+	BOOST_TEST(!buggy.self.has_value());
+	BOOST_TEST(buggy.area.count == 0u);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

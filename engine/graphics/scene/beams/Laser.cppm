@@ -1,18 +1,5 @@
-module;
-
-#include <algorithm>
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <limits>
-#include <span>
-#include <type_traits>
-#include <utility>
-#include <vector>
-
 export module Graphics.Scene.Beams.Laser;
+import std;
 
 export import Graphics.Scene.Beams;
 export import Graphics.RHI;
@@ -254,17 +241,17 @@ public:
 		core_pipeline.vertex_format = RHIVertexFormat::Position3Color4UV2UV2Normal3;
 		core_pipeline.vertex_element_count = 6;
 		core_pipeline.vertex_elements[0] = {RHIVertexSemantic::Position, 0,
-			RHIVertexElementFormat::Float3, offsetof(LaserVertex, position)};
+			RHIVertexElementFormat::Float3, __builtin_offsetof(LaserVertex, position)};
 		core_pipeline.vertex_elements[1] = {RHIVertexSemantic::Color, 0,
-			RHIVertexElementFormat::Float4, offsetof(LaserVertex, color)};
+			RHIVertexElementFormat::Float4, __builtin_offsetof(LaserVertex, color)};
 		core_pipeline.vertex_elements[2] = {RHIVertexSemantic::TexCoord, 0,
-			RHIVertexElementFormat::Float2, offsetof(LaserVertex, uv)};
+			RHIVertexElementFormat::Float2, __builtin_offsetof(LaserVertex, uv)};
 		core_pipeline.vertex_elements[3] = {RHIVertexSemantic::TexCoord, 1,
-			RHIVertexElementFormat::Float2, offsetof(LaserVertex, detail_uv)};
+			RHIVertexElementFormat::Float2, __builtin_offsetof(LaserVertex, detail_uv)};
 		core_pipeline.vertex_elements[4] = {RHIVertexSemantic::Normal, 0,
-			RHIVertexElementFormat::Float3, offsetof(LaserVertex, normal)};
+			RHIVertexElementFormat::Float3, __builtin_offsetof(LaserVertex, normal)};
 		core_pipeline.vertex_elements[5] = {RHIVertexSemantic::TexCoord, 2,
-			RHIVertexElementFormat::Float2, offsetof(LaserVertex, distortion)};
+			RHIVertexElementFormat::Float2, __builtin_offsetof(LaserVertex, distortion)};
 		core_pipeline.depth_test = true;
 		core_pipeline.depth_write = false;
 		core_pipeline.blend_mode = RHIBlendMode::Additive;

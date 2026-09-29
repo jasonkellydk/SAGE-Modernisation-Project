@@ -1,0 +1,127 @@
+#define BOOST_TEST_MODULE EngineLocalization
+#include <boost/test/included/unit_test.hpp>
+
+#include <cstddef>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <string>
+#include <vector>
+
+import engine.localization.adapters.csf.csf_reader;
+import engine.filesystem.adapters.big.big_archive_source;
+
+using namespace engine::localization;
+
+namespace
+{
+class CsfWriter
+{
+public:
+	CsfWriter(std::uint32_t labels)
+	{
+		Tag("CSF ");
+		U32(3);
+		U32(labels);
+		U32(labels);
+		U32(0);
+		U32(0);
+	}
+	void Label(const std::string &name, std::uint32_t strings)
+	{
+		Tag("LBL ");
+		U32(strings);
+		U32(static_cast<std::uint32_t>(name.size()));
+		Raw(name);
+	}
+	void String(const std::u16string &text, const std::string *speech = nullptr)
+	{
+		Tag(speech ? "STRW" : "STR ");
+		U32(static_cast<std::uint32_t>(text.size()));
+		for (const char16_t unit : text)
+		{
+			const auto inverted = static_cast<std::uint16_t>(~unit);
+			m_bytes.push_back(static_cast<std::byte>(inverted & 0xFF));
+			m_bytes.push_back(static_cast<std::byte>(inverted >> 8));
+		}
+		if (speech)
+		{
+			U32(static_cast<std::uint32_t>(speech->size()));
+			Raw(*speech);
+		}
+	}
+	const std::vector<std::byte> &Bytes() const { return m_bytes; }
+
+private:
+	void Tag(const char (&tag)[5]) { U32((std::uint32_t(std::uint8_t(tag[0])) << 24) | (std::uint32_t(std::uint8_t(tag[1])) << 16) | (std::uint32_t(std::uint8_t(tag[2])) << 8) | std::uint8_t(tag[3])); }
+	void U32(std::uint32_t value)
+	{
+		for (int shift = 0; shift < 32; shift += 8)
+			m_bytes.push_back(static_cast<std::byte>(value >> shift));
+	}
+	void Raw(const std::string &text)
+	{
+		for (const char c : text)
+			m_bytes.push_back(static_cast<std::byte>(c));
+	}
+	std::vector<std::byte> m_bytes;
+};
+}
+
+BOOST_AUTO_TEST_SUITE(csf_reader)
+
+BOOST_AUTO_TEST_CASE(reads_labels_speech_and_normalises_whitespace)
+{
+	CsfWriter writer(3);
+	writer.Label("GUI:SinglePlayer", 1);
+	writer.String(u"  SOLO   PLAY ");
+	writer.Label("GUI:Multi", 2);
+	const std::string speech = "voice_multi";
+	writer.String(u"MULTIPLAYER \n  second line", &speech);
+	writer.String(u"ignored alternative");
+	writer.Label("GUI:Accent", 1);
+	writer.String(u"Généraux");
+
+	StringTable table;
+	const auto info = csf::Read(writer.Bytes(), table);
+	BOOST_TEST_REQUIRE(info.has_value(), (info ? "" : info.error()));
+	BOOST_TEST(info->labels == 3u);
+	BOOST_TEST(table.Text("gui:singleplayer") == "SOLO PLAY");
+	BOOST_TEST(table.Find("GUI:Multi")->text == "MULTIPLAYER\nsecond line");
+	BOOST_TEST(table.Find("GUI:Multi")->speech == "voice_multi");
+	BOOST_TEST(table.Text("GUI:Accent") == "G\xC3\xA9n\xC3\xA9raux");
+	BOOST_TEST(table.Text("GUI:Missing") == "GUI:Missing");
+}
+
+BOOST_AUTO_TEST_CASE(corrupt_tables_are_rejected)
+{
+	StringTable table;
+	BOOST_TEST(!csf::Read(std::vector<std::byte>(8), table).has_value());
+	CsfWriter writer(1);
+	writer.Label("GUI:Cut", 1);
+	auto bytes = writer.Bytes();
+	bytes.push_back(std::byte{'X'});
+	BOOST_TEST(!csf::Read(bytes, table).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(shipped_english_table_loads)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	auto archive = engine::filesystem::BigArchiveSource::Open(std::filesystem::path(install) / "EnglishZH.big");
+	BOOST_TEST_REQUIRE(archive.has_value());
+	const auto bytes = (*archive)->Read("data/english/generals.csf");
+	BOOST_TEST_REQUIRE(bytes.has_value());
+	StringTable table;
+	const auto info = csf::Read(*bytes, table);
+	BOOST_TEST_REQUIRE(info.has_value(), (info ? "" : info.error()));
+	BOOST_TEST_MESSAGE("Generals.csf: " << info->labels << " labels; GUI:SinglePlayer = '" << table.Text("GUI:SinglePlayer") << "'");
+	BOOST_TEST(info->labels > 5000u);
+	BOOST_TEST(table.Find("GUI:SinglePlayer") != nullptr);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

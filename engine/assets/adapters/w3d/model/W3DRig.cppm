@@ -1,12 +1,5 @@
-module;
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-#include <string>
-#include <utility>
-#include <vector>
 export module Assets.Adapters.W3D.Rig;
+import std;
 import Assets.Adapters.W3D.Assembly;
 import Assets.Adapters.W3D.Chunks;
 import Assets.ModelRig;

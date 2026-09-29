@@ -1,0 +1,61 @@
+#include <boost/test/unit_test.hpp>
+
+#include <array>
+#include <cstdint>
+#include <string>
+
+import games.generalszh.presentation.hud.algorithms.message_list;
+
+using namespace generalszh::presentation;
+
+BOOST_AUTO_TEST_SUITE(message_list)
+
+// legacy_parity: InGameUI::addMessageText: the newest message on top; the lines alternate MessageColor1 and
+// MessageColor2 (a new one takes the first unless the one under it has it); a seventh pushes the oldest off.
+BOOST_AUTO_TEST_CASE(legacy_parity_messages_stack_newest_first_alternating_colours)
+{
+	InGameMessages messages;
+	messages.color1 = {255, 255, 255, 255};
+	messages.color2 = {180, 180, 255, 255};
+	AddMessage(messages, u"one", 1);
+	BOOST_TEST((messages.slots[0].color == messages.color1));
+	AddMessage(messages, u"two", 2);
+	BOOST_TEST((messages.slots[0].text == u"two"));
+	BOOST_TEST((messages.slots[1].text == u"one"));
+	BOOST_TEST((messages.slots[0].color == messages.color2));
+	AddMessage(messages, u"three", 3);
+	BOOST_TEST((messages.slots[0].color == messages.color1));
+	for (int more = 4; more <= 7; ++more)
+		AddMessage(messages, u"more", static_cast<std::uint64_t>(more));
+	BOOST_TEST((messages.slots[5].text == u"two")); // "one" dropped off
+	AddMessage(messages, u"red", 8, std::array<std::uint8_t, 3>{255, 0, 0});
+	BOOST_TEST((messages.slots[0].color == std::array<std::uint8_t, 4>{255, 0, 0, 255}));
+	BOOST_TEST((FormatWithName(u"%ls has been defeated.", u"Hard Army") == u"Hard Army has been defeated."));
+}
+
+// legacy_parity: InGameUI::update's fading with the shipped MessageDelayMS 75000 (75000 / 30 / 1000 = 2 ticks, whole
+// numbers): past that, each tick the alpha drops by REAL_TO_INT(age x 0.01f): untouched until age 100 (254 then),
+// 155 at age 199, 153 at 200, and gone at age 277.
+BOOST_AUTO_TEST_CASE(legacy_parity_messages_fade_as_the_original)
+{
+	InGameMessages messages;
+	messages.timeoutTicks = 2;
+	AddMessage(messages, u"gone soon", 10);
+	for (std::uint64_t tick = 11; tick <= 10 + 99; ++tick)
+		StepMessages(messages, tick);
+	BOOST_TEST(messages.slots[0].color[3] == 255u);
+	StepMessages(messages, 110);
+	BOOST_TEST(messages.slots[0].color[3] == 254u);
+	for (std::uint64_t tick = 111; tick <= 209; ++tick)
+		StepMessages(messages, tick);
+	BOOST_TEST(messages.slots[0].color[3] == 155u);
+	StepMessages(messages, 210);
+	BOOST_TEST(messages.slots[0].color[3] == 153u);
+	for (std::uint64_t tick = 211; tick <= 286; ++tick)
+		StepMessages(messages, tick);
+	BOOST_TEST(messages.slots[0].shown);
+	StepMessages(messages, 287);
+	BOOST_TEST(!messages.slots[0].shown);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -1,0 +1,121 @@
+#define BOOST_TEST_MODULE EngineGameplayStatus
+#include <boost/test/included/unit_test.hpp>
+
+#include <cstdint>
+#include <memory>
+#include <vector>
+
+import engine.gameplay.common.status.systems.disable_systems;
+import engine.core.serialization.byte_stream;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+using namespace engine::gameplay;
+
+namespace
+{
+struct Units
+{
+	explicit Units(std::size_t workers)
+	{
+		world.RegisterComponent<Disabled>();
+		world.RegisterComponent<DisabledUntil>();
+		world.FinalizeComponents();
+		world.EmplaceResource<DisableRequests>();
+		registry.Register(expiry);
+		registry.Register(apply);
+		registry.Finalize(world.Components());
+		scheduler = std::make_unique<ecs::Scheduler>(world, registry, engine::jobs::JobSystemConfig{workers});
+		scheduler->Finalize(engine::time::FixedStep{30});
+	}
+
+	void Step() { scheduler->Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}}); }
+	std::uint32_t Mask(ecs::Entity entity) { return world.Get<Disabled>(entity) != nullptr ? world.Get<Disabled>(entity)->mask : 0u; }
+
+	ecs::World world{ecs::WorldConfig{4}};
+	DisableExpirySystem expiry;
+	DisableApplySystem apply;
+	ecs::SystemRegistry registry;
+	std::unique_ptr<ecs::Scheduler> scheduler;
+	std::uint64_t tick{0};
+};
+}
+
+BOOST_AUTO_TEST_SUITE(status)
+
+// Object::setDisabledUntil and checkDisabledStatus (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Object.cpp): EMP
+// given on tick 1 until tick 11 holds through tick 10 and is gone on tick 11 (now >= its end); a second EMP replaces the
+// first's end (it may shorten it); a disable set without an end (held) is left alone.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_timed_disable_ends_on_its_tick)
+{
+	Units units(2);
+	const ecs::Entity tank = units.world.Create();
+	const ecs::Entity other = units.world.Create();
+	units.world.Add<Disabled>(other);
+	units.world.Get<Disabled>(other)->mask = disabled_type::Held;
+	auto &requests = units.world.Resource<DisableRequests>().list;
+	requests.push_back({tank, disabled_type::Emp, 0, 11});
+	requests.push_back({other, disabled_type::Emp, 0, 6});
+	units.Step(); // tick 1
+	BOOST_TEST(units.Mask(tank) == disabled_type::Emp);
+	BOOST_TEST(units.Mask(other) == (disabled_type::Emp | disabled_type::Held));
+	while (units.tick < 10)
+		units.Step();
+	BOOST_TEST(units.Mask(tank) == disabled_type::Emp);
+	BOOST_TEST(units.Mask(other) == disabled_type::Held);
+	units.Step(); // tick 11
+	BOOST_TEST(units.Mask(tank) == 0u);
+	requests.push_back({tank, disabled_type::Emp, 0, 40});
+	requests.push_back({tank, disabled_type::Emp, 0, 15});
+	units.Step();
+	while (units.tick < 14)
+		units.Step();
+	BOOST_TEST(units.Mask(tank) == disabled_type::Emp);
+	units.Step(); // tick 15
+	BOOST_TEST(units.Mask(tank) == 0u);
+}
+
+// The same on one worker as on four, and after a checkpoint.
+BOOST_AUTO_TEST_CASE(timed_disables_are_the_same_on_any_number_of_workers_and_after_a_checkpoint)
+{
+	const auto run = [](std::size_t workers) {
+		Units units(workers);
+		std::vector<ecs::Entity> all;
+		for (int index = 0; index < 50; ++index)
+			all.push_back(units.world.Create());
+		std::vector<ecs::StateHashValue> hashes;
+		for (int step = 0; step < 30; ++step)
+		{
+			for (std::size_t index = 0; index < all.size(); index += 3)
+				units.world.Resource<DisableRequests>().list.push_back(
+					{all[(index + static_cast<std::size_t>(step)) % all.size()], disabled_type::Emp, 0, units.tick + 1 + index % 7});
+			units.Step();
+			hashes.push_back(units.world.StateHash());
+		}
+		return hashes;
+	};
+	BOOST_TEST((run(1) == run(4)));
+
+	Units saved(2);
+	const ecs::Entity tank = saved.world.Create();
+	saved.world.Resource<DisableRequests>().list.push_back({tank, disabled_type::Emp, 0, 8});
+	saved.Step();
+	engine::core::serialization::ByteWriter writer;
+	saved.world.SaveCheckpoint(writer);
+	const auto bytes = writer.Take();
+	Units loaded(3);
+	engine::core::serialization::ByteReader reader(bytes);
+	BOOST_TEST_REQUIRE(loaded.world.LoadCheckpoint(reader));
+	loaded.tick = saved.tick;
+	for (int step = 0; step < 10; ++step)
+	{
+		saved.Step();
+		loaded.Step();
+		BOOST_TEST_REQUIRE(loaded.world.StateHash() == saved.world.StateHash());
+	}
+	BOOST_TEST(loaded.Mask(tank) == 0u);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

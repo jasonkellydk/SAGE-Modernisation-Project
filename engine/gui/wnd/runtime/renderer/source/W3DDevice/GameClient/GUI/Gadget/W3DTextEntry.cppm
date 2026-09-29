@@ -12,8 +12,6 @@ module;
 #include "Precompiled/PreRTS.h"
 #define ENGINE_UI_WND_RUNTIME_MODULE 1
 
-#include <cstdint>
-
 #include <SDL3/SDL.h>
 
 #include "GameClient/GameWindowGlobal.h"
@@ -24,6 +22,7 @@ module;
 #include "W3DDevice/GameClient/W3DDisplayString.h"
 
 export module Engine.UI.WND.Runtime.Renderer.Gadget.TextEntry;
+import std;
 import Engine.UI.WND;
 
 namespace

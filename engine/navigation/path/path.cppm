@@ -1,8 +1,4 @@
 module;
-#include <algorithm>
-#include <cmath>
-#include <memory>
-#include <vector>
 #include "PreRTS.h"
 #include "engine/navigation/pathfinder_api.h"
 #include "GameLogic/AI.h"
@@ -18,6 +14,7 @@ module;
 static inline Int IABS(Int value) { return value < 0 ? -value : value; }
 
 export module engine.navigation.path;
+import std;
 import engine.debug;
 import engine.navigation.movement.following.route_target;
 import engine.navigation.path.smoothing;

@@ -1,13 +1,5 @@
-module;
-
-#include <cstddef>
-#include <functional>
-#include <memory>
-#include <span>
-#include <string>
-#include <vector>
-
 export module Assets.Importers.Models;
+import std;
 
 import Assets.Identity;
 import Assets.Models;
@@ -35,7 +27,18 @@ public:
 	virtual ~IModelAdapter() = default;
 	virtual bool Can_Import(const AssetIdentity &identity, std::span<const std::byte> source) const noexcept = 0;
 	virtual ModelImportResult Import(const AssetIdentity &identity, std::span<const std::byte> source) const = 0;
+	// Reads only the rig of a source: a separately stored skeleton hierarchy
+	// or a file of animation clips, neither of which carries geometry.
+	// Adapters without rig-only sources keep this default.
+	virtual bool Import_Rig(const AssetIdentity &identity, std::span<const std::byte> source, ModelRigDesc &result,
+		std::string &error) const;
 };
+
+bool IModelAdapter::Import_Rig(const AssetIdentity &, std::span<const std::byte>, ModelRigDesc &, std::string &error) const
+{
+	error = "model adapter does not import rig-only sources";
+	return false;
+}
 
 export using AssetSource = std::function<std::vector<std::byte>(const AssetIdentity &)>;
 

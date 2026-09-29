@@ -1,10 +1,5 @@
-module;
-
-#include <array>
-#include <cmath>
-#include <cstdint>
-
 export module Graphics.Scene.Views.CameraProjection;
+import std;
 
 export import Assets.Math;
 export import Graphics.Scene.Views.View;

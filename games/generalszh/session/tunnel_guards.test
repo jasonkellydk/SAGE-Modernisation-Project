@@ -1,0 +1,211 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <optional>
+#include <span>
+#include <memory>
+#include <string>
+#include <string_view>
+#include <vector>
+
+import games.generalszh.session.session;
+import games.generalszh.session.setup.skirmish_level;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import games.generalszh.content.combat.combat_catalog;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.common.identity.components.owner;
+import engine.gameplay.common.health.components.health;
+import engine.gameplay.common.health.components.pending_damage;
+import engine.gameplay.common.health.systems.health_system;
+import engine.gameplay.common.status.components.disabled;
+import engine.gameplay.rts.death.components.dying;
+import engine.gameplay.common.identity.components.team_member;
+import engine.gameplay.rts.movement.components.move_order;
+import engine.gameplay.rts.construction.components.under_construction;
+import engine.gameplay.rts.veterancy.components.experience;
+import games.generalszh.gameplay.veterancy.algorithms.veterancy_placement;
+import games.generalszh.gameplay.ai.algorithms.tunnel_guards;
+import engine.gameplay.common.weapons.components.armament;
+import games.generalszh.commands.game_commands;
+import engine.gameplay.common.spatial.components.off_map;
+import engine.gameplay.rts.teams.resources.team_roster;
+
+// Guarding a tunnel network (TEAM_GUARD_IN_TUNNEL_NETWORK: AITNGuardMachine) on a shipped skirmish map.
+using namespace generalszh;
+namespace gp = engine::gameplay;
+using Engine::Math::Fixed;
+
+namespace
+{
+struct Install
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	bool loaded{false};
+
+	Install()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		loaded = true;
+	}
+};
+
+Install &Data()
+{
+	static Install install;
+	return install;
+}
+
+// America (player0, start 0) against China (player1, start 2), both human seats with nobody at them.
+struct Match
+{
+	std::optional<engine::level::generals_map::ReadResult> read;
+	session::setup::SkirmishLevel skirmish;
+	Engine::Math::FixedVector2 start;
+
+	std::uint32_t Team(const session::Session &game, std::size_t player) const { return *game.Teams().FindTeam(skirmish.players[player].team); }
+	Engine::Math::FixedVector2 At(int dx, int dy) const { return {start.x + Fixed::FromInt(dx), start.y + Fixed::FromInt(dy)}; }
+
+	session::SessionOptions Options(std::size_t workers) const
+	{
+		session::SessionOptions options{11, workers, {}, {"player0", "player1"}};
+		for (const auto &player : skirmish.players)
+			options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+		return options;
+	}
+};
+
+std::optional<Match> Prepare(Install &shell)
+{
+	const auto bytes = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	if (!bytes)
+		return std::nullopt;
+	Match match;
+	auto read = engine::level::generals_map::Read(*bytes);
+	if (!read)
+		return std::nullopt;
+	match.read = std::move(*read);
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 7;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::Player, u"Other");
+	setup.slots[1].playerTemplate = templateOf("FactionChina");
+	setup.slots[1].startPos = 2;
+	match.skirmish = session::setup::PrepareSkirmishLevel(match.read->level, setup, shell.game.playerTemplates, 4);
+	for (const auto &marker : match.read->level.markers)
+		if (marker.name == "Player_1_Start")
+			match.start = marker.position.XY();
+	return match;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(tunnel_guards)
+
+// AITNGuardMachine: Rebels told to guard their player's tunnel network start at Return and walk into the tunnel
+// (AIEnterState), then Idle inside. An enemy Red Guard hitting the tunnel becomes the network's nemesis
+// (TunnelContain::update, within a second of the hit). At each guard's next look (GuardEnemyScanRate, 15 frames apart)
+// lookForInnerTarget finds it; inside, the guard leaves at once through the tunnel nearest it (exitObjectInAHurry) and
+// stays Idle; its next look (15 frames on), outside, goes to Inner and attacks it (AIAttackState, for
+// GuardChaseUnitsDuration: 300 frames). Guarding, it picks no targets of its own.
+// A direct order ends the guard. Identical on 1 and 4 workers, and after a checkpoint.
+BOOST_AUTO_TEST_CASE(legacy_parity_guards_leave_their_tunnels_for_the_networks_nemesis)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	const auto run = [&](std::size_t workers, bool checkpoint) {
+		auto game = std::make_unique<session::Session>(match->skirmish.level, shell.game, match->Options(workers));
+		game->Tick();
+		const std::uint32_t america = match->Team(*game, 0);
+		const ecs::Entity tunnel = game->Place("GLATunnelNetwork", match->At(0, -400), {}, america);
+		std::vector<ecs::Entity> rebels{game->Place("GLAInfantryRebel", match->At(-120, -300), {}, america),
+			game->Place("GLAInfantryRebel", match->At(-100, -300), {}, america)};
+		generalszh::gameplay::TeamGuardInTunnelNetwork(game->Game(), "#" + std::to_string(america));
+		for (const ecs::Entity rebel : rebels)
+			BOOST_TEST_REQUIRE(game->World().Get<generalszh::gameplay::TunnelGuard>(rebel) != nullptr);
+		const auto inside = [&](ecs::Entity rebel) { return game->World().Has<gp::OffMap>(rebel); };
+		int ticks = 0;
+		while (!(inside(rebels[0]) && inside(rebels[1])) && ticks < 900)
+		{
+			game->Tick();
+			++ticks;
+		}
+		BOOST_TEST_REQUIRE((inside(rebels[0]) && inside(rebels[1])));
+		game->Tick();
+		for (const ecs::Entity rebel : rebels)
+			BOOST_TEST((game->World().Get<generalszh::gameplay::TunnelGuard>(rebel)->state == generalszh::gameplay::TunnelGuardState::Idle));
+		if (checkpoint)
+		{
+			auto restored = session::Session::Restore(match->skirmish.level, shell.game, match->Options(workers), game->Checkpoint());
+			BOOST_TEST_REQUIRE(restored != nullptr);
+			BOOST_TEST(restored->StateHash() == game->StateHash());
+			game = std::move(restored);
+		}
+		auto &world = game->World();
+		const ecs::Entity redguard = game->Place("ChinaInfantryRedguard", match->At(250, -400), {}, match->Team(*game, 1));
+		world.Add<gp::PendingDamage>(tunnel);
+		*world.Get<gp::PendingDamage>(tunnel) = gp::PendingDamage{redguard, Fixed::FromInt(1), *content::DamageTypeIndex("SMALL_ARMS"), 0};
+		game->Tick();
+		const std::uint32_t player = world.Get<gp::Owner>(tunnel)->player;
+		BOOST_TEST((game->Teams().PlayerAt(player).tunnelNemesis == redguard));
+		// Each guard's next look finds it: out that tick; outside, its look after that (15 frames on) goes to Inner.
+		std::vector<std::uint64_t> looks;
+		for (const ecs::Entity rebel : rebels)
+			looks.push_back(world.Get<generalszh::gameplay::TunnelGuard>(rebel)->nextScan);
+		for (std::size_t index = 0; index < rebels.size(); ++index)
+			BOOST_TEST((looks[index] >= game->CurrentTick() + 1 && looks[index] <= game->CurrentTick() + 15));
+		std::vector<std::uint64_t> left(rebels.size(), 0), attacking(rebels.size(), 0);
+		for (int tick = 0; tick < 45; ++tick)
+		{
+			game->Tick();
+			for (std::size_t index = 0; index < rebels.size(); ++index)
+			{
+				if (left[index] == 0 && !inside(rebels[index]))
+					left[index] = game->CurrentTick();
+				if (attacking[index] == 0 && world.Get<gp::AttackTarget>(rebels[index])->target == redguard)
+					attacking[index] = game->CurrentTick();
+			}
+		}
+		for (std::size_t index = 0; index < rebels.size(); ++index)
+		{
+			BOOST_TEST(left[index] == looks[index]);
+			BOOST_TEST(attacking[index] == looks[index] + 15);
+			BOOST_TEST((world.Get<generalszh::gameplay::TunnelGuard>(rebels[index])->state == generalszh::gameplay::TunnelGuardState::Inner));
+		}
+		// A direct order ends it.
+		std::vector<engine::net::CommandEnvelope> orders{commands::Encode(commands::MoveTo{{rebels[0]}, match->At(-300, -300)})};
+		orders.front().player = 0;
+		game->Tick(std::span(orders));
+		BOOST_TEST(world.Get<generalszh::gameplay::TunnelGuard>(rebels[0]) == nullptr);
+		return game->StateHash();
+	};
+	const auto one = run(1, false);
+	BOOST_TEST(run(4, false) == one);
+	BOOST_TEST(run(1, true) == one);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

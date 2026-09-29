@@ -1,14 +1,5 @@
 module;
 
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <iterator>
-#include <new>
-#include <stdexcept>
-#include <type_traits>
-#include <vector>
-
 #include "Utility/CppMacros.h"
 #include "PreRTS.h"
 #include "GameLogic/PartitionManager.h"
@@ -122,6 +113,7 @@ public:
 };
 
 export module engine.navigation.partition_fixture;
+import std;
 
 export namespace navigation::testing {
 

@@ -1,8 +1,5 @@
-module;
-#include <algorithm>
-#include <cstdint>
-
 export module engine.navigation.movement.corridor.phase_line;
+import std;
 
 export namespace navigation {
 struct LineCell { std::int32_t x=0,y=0; };
@@ -54,7 +51,7 @@ public:
 // Crossing samples include the final phase, including the zero-length case;
 // movement, bridge and visibility callers depend on this sample sequence.
 // Return false immediately when the visitor rejects a cell. Wide arithmetic
-// keeps endpoint subtraction and a crossing beyond INT32_MAX well-defined.
+// keeps endpoint subtraction and a crossing beyond std::numeric_limits<std::int32_t>::max() well-defined.
 template<class Visit>
 bool visitPhaseLine(LineCell start,LineCell end,Visit visit) {
     const std::int64_t dx=std::int64_t(end.x)-start.x,dy=std::int64_t(end.y)-start.y;

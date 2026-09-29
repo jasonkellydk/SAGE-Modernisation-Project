@@ -1,8 +1,5 @@
-module;
-#include <array>
-#include <cmath>
-#include <cstddef>
 export module Graphics.Scene.Beams.RibbonMath;
+import std;
 
 export namespace Graphics::RibbonMath {
 template<std::size_t N> std::array<float,N> Add(std::array<float,N> a, std::array<float,N> b)

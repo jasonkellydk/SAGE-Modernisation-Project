@@ -1,0 +1,97 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdlib>
+#include <filesystem>
+#include <string>
+
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.content_loader;
+import games.generalszh.content.maps.map_cache;
+import games.generalszh.content.global.multiplayer_settings;
+import games.generalszh.content.global.player_templates;
+import games.generalszh.content.install.install_mount;
+
+using namespace generalszh::content;
+using namespace engine::config;
+
+namespace
+{
+const char *Install()
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	return install != nullptr && std::filesystem::exists(install) ? install : nullptr;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(game_setup_content)
+
+// The shipped Maps\MapCache.ini (INI::parseMapCacheDefinition). Tournament Continent's size and
+// CRC are those a real Skirmish.ini's options string carries (MC=7D024EDA;MS=639753).
+BOOST_AUTO_TEST_CASE(legacy_parity_the_shipped_map_cache_describes_each_map)
+{
+	if (Install() == nullptr)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, Install());
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const Document &document = loader.Load({"Maps/MapCache"});
+	BindContext context{loader.DiagnosticsFor(document), engine::time::FixedStep{30}};
+	const MapCache cache = BindMapCache(document, context);
+	BOOST_TEST_MESSAGE("MapCache.ini: " << cache.maps.size() << " maps");
+	BOOST_TEST(cache.maps.size() > 100u);
+	const MapMetaData *map = cache.Find("Maps\\Tournament Continent\\Tournament Continent.map");
+	BOOST_TEST_REQUIRE(map != nullptr);
+	BOOST_TEST(map->file == "maps\\tournament continent\\tournament continent.map");
+	BOOST_TEST(map->crc == 0x7D024EDAu);
+	BOOST_TEST(map->fileSize == 639753u);
+	BOOST_TEST(map->official);
+	BOOST_TEST(map->multiplayer);
+	BOOST_TEST(map->players == 4);
+	BOOST_TEST(map->starts.size() == 4u);
+	BOOST_TEST(map->nameLookupTag == "MAP:TournamentContinent");
+	BOOST_TEST(map->extentMax.x.Floor() == 3750);
+	BOOST_TEST(map->starts[0].x.Floor() == 2249);
+	BOOST_TEST((map->DisplayName([](const std::string &) { return std::u16string(u"Tournament Continent"); }) == u"Tournament Continent (4)"));
+}
+
+// Multiplayer.ini (MultiplayerSettings), PlayerTemplate.ini and ChallengeMode.ini as the setup screens index them.
+BOOST_AUTO_TEST_CASE(legacy_parity_colours_money_and_factions_in_the_originals_order)
+{
+	if (Install() == nullptr)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, Install());
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const Document &multiplayer = loader.Load({"Data/INI/Default/Multiplayer", "Data/INI/Multiplayer"});
+	BindContext context{loader.DiagnosticsFor(multiplayer), engine::time::FixedStep{30}};
+	const MultiplayerSettings settings = BindMultiplayerSettings(multiplayer, context);
+	BOOST_TEST_REQUIRE(settings.colors.size() == 8u);
+	BOOST_TEST(settings.colors[1].name == "ColorRed"); // a real Skirmish.ini's Color = 1
+	BOOST_TEST(settings.colors[1].tooltipName == "Color:Red");
+	BOOST_TEST(settings.colors[0].day.r == 221);
+	BOOST_TEST(settings.startingMoney.size() == 4u);
+	BOOST_TEST(settings.defaultStartingMoney == 10000u);
+
+	const Document &templates = loader.Load({"Data/INI/Default/PlayerTemplate", "Data/INI/PlayerTemplate"});
+	const Document &challenge = loader.Load({"Data/INI/ChallengeMode"});
+	BindContext templateContext{loader.DiagnosticsFor(templates), engine::time::FixedStep{30}};
+	const PlayerTemplates store = BindPlayerTemplates(templates, &challenge, templateContext);
+	BOOST_TEST_REQUIRE(store.templates.size() == 15u);
+	BOOST_TEST(store.At(13)->name == "FactionGLAStealthGeneral"); // a real Skirmish.ini's PlayerTemplate = 13
+	BOOST_TEST(store.At(3)->side == "China");
+	BOOST_TEST(store.At(1)->observer);
+	BOOST_TEST(store.At(0)->startingBuilding.empty()); // civilians cannot be picked
+	BOOST_TEST(store.At(14)->name == "FactionBossGeneral");
+	BOOST_TEST(store.At(14)->startsLocked); // StartsEnabled = no
+	BOOST_TEST(!store.At(13)->startsLocked);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

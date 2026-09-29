@@ -1,16 +1,5 @@
-module;
-
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <limits>
-#include <memory>
-#include <span>
-#include <vector>
-
 export module Graphics.Scene.Screen.Distortion;
+import std;
 
 export import Graphics.Resources.Bindless.BindlessResourceTable;
 export import Graphics.RenderGraph.Execution;

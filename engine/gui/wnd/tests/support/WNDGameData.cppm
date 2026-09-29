@@ -1,19 +1,5 @@
-module;
-
-#include <algorithm>
-#include <cctype>
-#include <cstddef>
-#include <cstdlib>
-#include <filesystem>
-#include <fstream>
-#include <memory>
-#include <string>
-#include <string_view>
-#include <unordered_map>
-#include <utility>
-#include <vector>
-
 export module Engine.UI.WND.Tests.Support.GameData;
+import std;
 
 import Assets.Identity;
 import Assets.Importers.Models;

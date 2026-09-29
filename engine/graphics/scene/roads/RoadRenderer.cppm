@@ -1,7 +1,5 @@
-module;
-#include <array>
-#include <span>
 export module Graphics.Scene.Roads.Renderer;
+import std;
 export import Graphics.Scene.Surfaces.Renderer;
 
 namespace Graphics

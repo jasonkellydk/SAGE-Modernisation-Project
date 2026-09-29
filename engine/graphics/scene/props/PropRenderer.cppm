@@ -1,16 +1,5 @@
-module;
-#include <array>
-#include <bit>
-#include <cstddef>
-#include <cstdint>
-#include <cstring>
-#include <filesystem>
-#include <limits>
-#include <span>
-#include <utility>
-#include <vector>
-
 export module Graphics.Scene.Props.Renderer;
+import std;
 import engine.profiling;
 export import Graphics.Scene.Props.Geometry;
 export import Graphics.Scene.Props.Constants;
@@ -285,7 +274,7 @@ private:
         const bool single_record=records.size()==1;
         if (!records.empty()) {
             if (!m_instances.Prepare(*m_device,record_lighting)
-                || !m_constants.Prepare_Record_Selection(*m_device,single_record ? records.front() : UINT32_MAX)) return false;
+                || !m_constants.Prepare_Record_Selection(*m_device,single_record ? records.front() : std::numeric_limits<std::uint32_t>::max())) return false;
             if (single_record) {
                 if (!m_single_record_indices.Is_Valid()) {
                     const std::uint32_t unused=0;
@@ -433,18 +422,18 @@ private:
         RHIPipeline description;
         description.vertex_format = RHIVertexFormat::Position3Color4UV2UV2Normal3;
         description.vertex_element_count = 12;
-        description.vertex_elements[0] = {RHIVertexSemantic::Position,0,RHIVertexElementFormat::Float3,offsetof(PropVertex,position)};
-        description.vertex_elements[1] = {RHIVertexSemantic::Color,0,RHIVertexElementFormat::Float4,offsetof(PropVertex,color)};
-        description.vertex_elements[2] = {RHIVertexSemantic::TexCoord,0,RHIVertexElementFormat::Float2,offsetof(PropVertex,uv)};
-        description.vertex_elements[3] = {RHIVertexSemantic::TexCoord,1,RHIVertexElementFormat::Float2,offsetof(PropVertex,secondary_uv)};
-        description.vertex_elements[4] = {RHIVertexSemantic::Normal,0,RHIVertexElementFormat::Float3,offsetof(PropVertex,normal)};
-        description.vertex_elements[5] = {RHIVertexSemantic::Color,1,RHIVertexElementFormat::Float4,offsetof(PropVertex,material_ambient)};
-        description.vertex_elements[6] = {RHIVertexSemantic::Color,2,RHIVertexElementFormat::Float4,offsetof(PropVertex,material_diffuse)};
-        description.vertex_elements[7] = {RHIVertexSemantic::Color,3,RHIVertexElementFormat::Float4,offsetof(PropVertex,material_emissive)};
-        description.vertex_elements[8] = {RHIVertexSemantic::Color,4,RHIVertexElementFormat::Float4,offsetof(PropVertex,material_specular)};
-        description.vertex_elements[9] = {RHIVertexSemantic::Color,5,RHIVertexElementFormat::Float4,offsetof(PropVertex,secondary_color)};
-        description.vertex_elements[10] = {RHIVertexSemantic::TexCoord,2,RHIVertexElementFormat::Float4,offsetof(PropVertex,tangent)};
-        description.vertex_elements[11] = {RHIVertexSemantic::TexCoord,3,RHIVertexElementFormat::Float1,offsetof(PropVertex,bone_index)};
+        description.vertex_elements[0] = {RHIVertexSemantic::Position,0,RHIVertexElementFormat::Float3,__builtin_offsetof(PropVertex,position)};
+        description.vertex_elements[1] = {RHIVertexSemantic::Color,0,RHIVertexElementFormat::Float4,__builtin_offsetof(PropVertex,color)};
+        description.vertex_elements[2] = {RHIVertexSemantic::TexCoord,0,RHIVertexElementFormat::Float2,__builtin_offsetof(PropVertex,uv)};
+        description.vertex_elements[3] = {RHIVertexSemantic::TexCoord,1,RHIVertexElementFormat::Float2,__builtin_offsetof(PropVertex,secondary_uv)};
+        description.vertex_elements[4] = {RHIVertexSemantic::Normal,0,RHIVertexElementFormat::Float3,__builtin_offsetof(PropVertex,normal)};
+        description.vertex_elements[5] = {RHIVertexSemantic::Color,1,RHIVertexElementFormat::Float4,__builtin_offsetof(PropVertex,material_ambient)};
+        description.vertex_elements[6] = {RHIVertexSemantic::Color,2,RHIVertexElementFormat::Float4,__builtin_offsetof(PropVertex,material_diffuse)};
+        description.vertex_elements[7] = {RHIVertexSemantic::Color,3,RHIVertexElementFormat::Float4,__builtin_offsetof(PropVertex,material_emissive)};
+        description.vertex_elements[8] = {RHIVertexSemantic::Color,4,RHIVertexElementFormat::Float4,__builtin_offsetof(PropVertex,material_specular)};
+        description.vertex_elements[9] = {RHIVertexSemantic::Color,5,RHIVertexElementFormat::Float4,__builtin_offsetof(PropVertex,secondary_color)};
+        description.vertex_elements[10] = {RHIVertexSemantic::TexCoord,2,RHIVertexElementFormat::Float4,__builtin_offsetof(PropVertex,tangent)};
+        description.vertex_elements[11] = {RHIVertexSemantic::TexCoord,3,RHIVertexElementFormat::Float1,__builtin_offsetof(PropVertex,bone_index)};
 
         description.blend_mode = style.blend;
         description.depth_write = style.depth_write;

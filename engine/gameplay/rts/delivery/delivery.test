@@ -1,0 +1,270 @@
+#define BOOST_TEST_MODULE EngineGameplayDelivery
+#include <boost/test/included/unit_test.hpp>
+
+#include <cstdint>
+#include <optional>
+#include <vector>
+
+import engine.gameplay.common.status.components.status_flags;
+import engine.gameplay.rts.delivery.systems.delivery_system;
+import engine.gameplay.rts.containment.systems.boarding_system;
+import engine.gameplay.rts.movement.systems.descent_system;
+import engine.gameplay.rts.containment.systems.cargo_transfer_system;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+using namespace engine::gameplay;
+using Engine::Math::Fixed;
+
+namespace
+{
+constexpr std::uint32_t Opening = 3, Closing = 4; // the game's DOOR_1_OPENING / DOOR_1_CLOSING bits, as a test gives them
+
+// A cargo plane crossing an 8000 square map (81 samples of 100) west to east at height 200, 8 a tick, over a target at (2000, 2000).
+struct Run
+{
+	engine::level::Heightfield field;
+	ecs::World world{ecs::WorldConfig{4}};
+	CargoManifest *manifest{nullptr};
+	DropExits *drops{nullptr};
+	DeliveriesDone *done{nullptr};
+	ecs::Entity plane;
+	std::vector<ecs::Entity> riders;
+	std::optional<ecs::Scheduler> scheduler;
+	DescentSystem descent;
+	CargoTransferSystem transfer;
+	SpatialIndexSystem index;
+	TargetingSystem targeting;
+	BoardingSystem boarding;
+	DeliverySystem flight;
+	UnloadingSystem unloading;
+	MovementSystem movement;
+	ecs::SystemRegistry registry;
+	std::uint64_t tick{0};
+
+	Run(Delivery delivery, int riderCount, std::size_t workers = 4)
+	{
+		field.width = 81;
+		field.height = 81;
+		field.cellSize = Fixed::FromInt(100);
+		field.heights.assign(81 * 81, Fixed{});
+		world.EmplaceResource<GroundHeight>(field);
+		world.EmplaceResource<DeckSurfaces>();
+		world.EmplaceResource<SpatialIndex>(Engine::Math::FixedVector2{Fixed::FromInt(8000), Fixed::FromInt(8000)}, Fixed::FromInt(100));
+		world.EmplaceResource<SpatialGather>();
+		world.EmplaceResource<WaypointGraph>();
+		manifest = &world.EmplaceResource<CargoManifest>();
+		world.EmplaceResource<BoardRequests>();
+		world.EmplaceResource<NavigationGrid>();
+		world.EmplaceResource<ExitRequests>();
+		drops = &world.EmplaceResource<DropExits>();
+		world.EmplaceResource<RiderExits>();
+		world.EmplaceResource<IntentExits>();
+		done = &world.EmplaceResource<DeliveriesDone>();
+		world.EmplaceResource<Relationships>(1u);
+		world.EmplaceResource<TeamRoster>();
+		world.EmplaceResource<WeaponCatalog>();
+		world.EmplaceResource<RandomSeed>(RandomSeed{5});
+		world.EmplaceResource<DropSettings>(DropSettings{Fixed::FromInt(2)});
+		world.RegisterComponent<Transform>();
+		world.RegisterComponent<Targetable>();
+		world.RegisterComponent<PhysicsBody>();
+		world.RegisterComponent<Owner>();
+		world.RegisterComponent<Locomotion>();
+		world.RegisterComponent<MoveOrder>();
+		world.RegisterComponent<PathCompleted>();
+		world.RegisterComponent<Transport>();
+		world.RegisterComponent<Passenger>();
+		world.RegisterComponent<Boarding>();
+		world.RegisterComponent<ExitIntent>();
+		world.RegisterComponent<OffMap>();
+		world.RegisterComponent<Delivery>();
+		world.RegisterComponent<Descent>();
+		world.RegisterComponent<Aggression>();
+		world.RegisterComponent<DefinitionRef>();
+		world.RegisterComponent<AttackTarget>();
+		world.RegisterComponent<Armament>();
+		world.RegisterComponent<StatusFlags>();
+		world.RegisterComponent<CargoSize>();
+		world.RegisterComponent<Appearance>();
+		world.FinalizeComponents();
+		LocomotorDefinition wings;
+		wings.maxSpeed = Fixed::FromInt(8);
+		wings.minSpeed = Fixed::FromInt(6);
+		wings.acceleration = Fixed::One();
+		wings.braking = Fixed::One();
+		wings.turnRate = Engine::Math::TurnFromDegrees(3);
+		wings.preferredHeight = Fixed::FromInt(200);
+		wings.height = HeightBehavior::SurfaceRelative;
+		wings.appearance = LocomotorAppearance::Wings;
+		plane = world.Create();
+		world.Add<Transform>(plane);
+		world.Add<Locomotion>(plane);
+		world.Add<MoveOrder>(plane);
+		world.Add<Transport>(plane);
+		world.Add<Delivery>(plane);
+		world.Add<Appearance>(plane);
+		*world.Get<Transform>(plane) = {{Fixed::FromInt(100), Fixed::FromInt(2000), Fixed::FromInt(200)}, {}};
+		Locomotion flying = MakeLocomotion(wings);
+		flying.speed = wings.maxSpeed;
+		*world.Get<Locomotion>(plane) = flying;
+		*world.Get<Transport>(plane) = {.definition = TransportDefinition{.slots = static_cast<std::uint32_t>(riderCount), .unloadInAir = true}, .cruiseHeight = wings.preferredHeight};
+		delivery.target = delivery.moveTo = {Fixed::FromInt(2000), Fixed::FromInt(2000)};
+		delivery.doorOpening = Opening;
+		delivery.doorClosing = Closing;
+		*world.Get<Delivery>(plane) = delivery;
+		for (int count = 0; count < riderCount; ++count)
+		{
+			const ecs::Entity rider = world.Create();
+			world.Add<Transform>(rider);
+			world.Add<Passenger>(rider);
+			world.Add<OffMap>(rider);
+			*world.Get<Passenger>(rider) = {plane, 1};
+			manifest->Board(plane, rider);
+			riders.push_back(rider);
+		}
+		registry.Register(descent);
+		registry.Register(index);
+		registry.Register(targeting);
+		registry.Register(boarding);
+		registry.Register(flight);
+		registry.Register(unloading);
+		registry.Register(movement);
+		registry.Register(transfer);
+		registry.Finalize(world.Components());
+		scheduler.emplace(world, registry, engine::jobs::JobSystemConfig{workers});
+		scheduler->Finalize(engine::time::FixedStep{30});
+	}
+
+	void Step() { scheduler->Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}}); }
+	const Delivery &State() { return *world.Get<Delivery>(plane); }
+};
+
+Delivery Paradrop()
+{
+	Delivery delivery;
+	delivery.distance = Fixed::FromInt(150);
+	delivery.preOpen = Fixed::FromInt(300);
+	delivery.doorDelay = 15;
+	delivery.dropDelay = 5;
+	delivery.maxAttempts = 4;
+	delivery.dropOffset = {Fixed{}, Fixed{}, Fixed::FromInt(-10)};
+	delivery.entered = 0;
+	return delivery;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(delivery)
+
+// DeliverPayloadAIUpdate's state machine (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Update/AIUpdate/
+// DeliverPayloadAIUpdate.cpp: ApproachState, DeliveringState, HeadOffMapState, CleanUpState; isCloseEnoughToTarget):
+// flying at 8 a tick from x 100 at a target at x 2000 (DeliveryDistance 150, PreOpenDistance 300: 450 while inbound),
+// it is close enough on the tick it starts at x 1556 (the 183rd; the first test, from a previous distance of 0, is
+// never inbound), opens its doors (DOOR_1_OPENING), waits its DoorDelay of 15 ticks and drops its first rider on the
+// 199th tick, 10 below it (DropOffset), then one every DropDelay 5 + 1 ticks (205, 211, 217); empty on the 223rd, it
+// closes its doors and heads straight off the map, and is done once past the field's edge.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_paradrop_opens_drops_and_heads_off)
+{
+	Run run(Paradrop(), 4);
+	std::optional<std::uint64_t> opened, headedOff, finished;
+	std::vector<std::uint64_t> dropped;
+	std::vector<Fixed> dropZ;
+	while (run.tick < 1500 && !finished)
+	{
+		run.Step();
+		const Appearance &look = *run.world.Get<Appearance>(run.plane);
+		if (!opened && look.Test(Opening))
+			opened = run.tick;
+		run.drops->ForEach([&](const DropExit &drop) {
+			dropped.push_back(run.tick);
+			dropZ.push_back(drop.offset.z);
+		});
+		if (!headedOff && run.State().phase == DeliveryPhase::HeadOffMap)
+		{
+			headedOff = run.tick;
+			BOOST_TEST(!look.Test(Opening));
+			BOOST_TEST(look.Test(Closing));
+		}
+		run.done->ForEach([&](const DeliveryDone &) { finished = run.tick; });
+	}
+	BOOST_TEST_REQUIRE(opened.has_value());
+	BOOST_TEST(*opened == 183u);
+	BOOST_TEST((dropped == std::vector<std::uint64_t>{199, 205, 211, 217}));
+	for (const Fixed z : dropZ)
+		BOOST_TEST((z == Fixed::FromInt(-10)));
+	BOOST_TEST_REQUIRE(headedOff.has_value());
+	BOOST_TEST(*headedOff == 223u);
+	BOOST_TEST_REQUIRE(finished.has_value());
+	BOOST_TEST((run.world.Get<Transform>(run.plane)->position.x > Fixed::FromInt(8100))); // off the field (its 81 samples)
+	for (const ecs::Entity rider : run.riders)
+		BOOST_TEST(run.world.Get<Passenger>(rider) == nullptr);
+}
+
+// ConsiderNewApproachState: with DeliveryDistance 0 it may drop only while inbound within its PreOpenDistance; past the
+// target with riders left it is no longer close enough, flies on past twice its turning circle and a bit, and comes
+// round again (each approach counted, at most MaxAttempts), dropping the rest on a later pass; the doors close as it
+// leaves each pass. Given a single attempt, it gives up with riders aboard and heads off with them.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_payload_left_aboard_is_brought_round_again)
+{
+	Delivery delivery = Paradrop();
+	delivery.distance = {};
+	Run run(delivery, 8);
+	std::size_t drops = 0;
+	bool reapproached = false, finished = false;
+	while (run.tick < 6000 && !finished)
+	{
+		run.Step();
+		run.drops->ForEach([&](const DropExit &) { ++drops; });
+		reapproached = reapproached || run.State().phase == DeliveryPhase::ConsiderNewApproach;
+		run.done->ForEach([&](const DeliveryDone &) { finished = true; });
+	}
+	BOOST_TEST(reapproached);
+	BOOST_TEST(run.State().attempts >= 1);
+	BOOST_TEST(run.State().attempts <= 4);
+	BOOST_TEST(drops == 8u);
+	BOOST_TEST(finished);
+
+	Delivery once = Paradrop();
+	once.distance = {};
+	once.maxAttempts = 0;
+	Run giving(once, 8);
+	std::size_t first = 0;
+	bool left = false;
+	while (giving.tick < 3000 && !left)
+	{
+		giving.Step();
+		giving.drops->ForEach([&](const DropExit &) { ++first; });
+		left = giving.State().phase == DeliveryPhase::HeadOffMap;
+	}
+	BOOST_TEST(left);
+	BOOST_TEST(first < 8u);
+	BOOST_TEST(giving.manifest->Count(giving.plane) == 8u - first);
+}
+
+// The run is the same on one worker as on four.
+BOOST_AUTO_TEST_CASE(a_delivery_does_not_depend_on_worker_count)
+{
+	const auto trace = [](std::size_t workers) {
+		Delivery delivery = Paradrop();
+		delivery.distance = {};
+		delivery.dropVariance = {Fixed::FromInt(20), Fixed::FromInt(20), Fixed{}};
+		Run run(delivery, 8, workers);
+		std::vector<std::int64_t> out;
+		for (int step = 0; step < 1500; ++step)
+		{
+			run.Step();
+			run.drops->ForEach([&](const DropExit &drop) {
+				out.push_back(static_cast<std::int64_t>(run.tick));
+				out.push_back(drop.offset.x.Raw());
+				out.push_back(drop.offset.y.Raw());
+			});
+		}
+		out.push_back(run.world.Get<Transform>(run.plane)->position.x.Raw());
+		return out;
+	};
+	BOOST_TEST((trace(1) == trace(4)));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

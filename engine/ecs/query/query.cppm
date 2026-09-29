@@ -1,19 +1,5 @@
-module;
-
-#include <array>
-#include <cassert>
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-#include <memory>
-#include <span>
-#include <stdexcept>
-#include <tuple>
-#include <type_traits>
-#include <utility>
-#include <vector>
-
 export module engine.ecs.query.query;
+import std;
 
 export import engine.ecs.query.access;
 export import engine.ecs.query.query_cache;
@@ -264,10 +250,16 @@ private:
 			throw std::logic_error("ECS component registry must be finalized before constructing or executing a query");
 
 		m_components = {m_world->Components().TryGet<typename Terms::ComponentType>()...};
-		for (const ComponentId component : m_components)
+		// Optional and excluded terms of components this world never registered
+		// are simply never present; required ones must exist.
+		constexpr std::array<bool, sizeof...(Terms)> required{(!Terms::IsOptional && !Terms::IsExcluded)...};
+		for (std::size_t index = 0; index < m_components.size(); ++index)
 		{
-			if (component == InvalidComponentId)
+			if (m_components[index] == InvalidComponentId && required[index])
 				throw std::logic_error("ECS query component was not registered before finalization");
+			if (m_components[index] != InvalidComponentId &&
+				m_world->Components().Get(m_components[index]).storage == ComponentStorage::SideTable)
+				throw std::logic_error("ECS queries match archetype components; reach side-table components through ecs::SideTables");
 		}
 	}
 
@@ -297,7 +289,7 @@ private:
 	static AccessDescriptor ResolveAccess(const ComponentRegistry &components)
 	{
 		const ComponentId component = components.TryGet<typename Term::ComponentType>();
-		if (component == InvalidComponentId)
+		if (component == InvalidComponentId && !Term::IsOptional && !Term::IsExcluded)
 			throw std::logic_error("ECS query component was not registered before finalization");
 		return AccessDescriptor{component, Term::Mode, Term::IsOptional, Term::IsExcluded};
 	}

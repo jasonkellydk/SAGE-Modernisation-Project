@@ -1,4 +1,5 @@
 export module engine.navigation;
+import std;
 
 export import engine.navigation.costs;
 export import engine.navigation.querymemo;

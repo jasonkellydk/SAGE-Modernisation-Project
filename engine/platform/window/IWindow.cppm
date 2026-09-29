@@ -1,7 +1,5 @@
-module;
-#include <optional>
-#include <string>
 export module engine.platform.window.interface;
+import std;
 import engine.platform.core.types;
 
 export namespace engine::platform

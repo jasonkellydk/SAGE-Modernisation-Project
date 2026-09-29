@@ -1,12 +1,5 @@
-module;
-
-#include <exception>
-#include <cstddef>
-#include <memory>
-#include <string>
-#include <utility>
-
 export module Assets.Cache.MaterialLoadTask;
+import std;
 
 import Assets.Handles;
 import Assets.Identity;

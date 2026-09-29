@@ -1,15 +1,5 @@
-module;
-#include <chrono>
-#include <condition_variable>
-#include <deque>
-#include <functional>
-#include <map>
-#include <memory>
-#include <mutex>
-#include <thread>
-#include <utility>
-
 export module Graphics.Resources.Loading.Queue;
+import std;
 
 namespace Graphics
 {

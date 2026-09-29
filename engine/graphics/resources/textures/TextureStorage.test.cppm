@@ -2,9 +2,8 @@ module;
 #define NOMINMAX
 #define BOOST_TEST_MODULE TextureStorageTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <limits>
 export module Graphics.Resources.Textures.Storage.Tests;
+import std;
 import Graphics.Resources.Textures.Storage;
 import Graphics.RHI;
 using namespace Graphics;

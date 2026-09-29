@@ -2,9 +2,9 @@ module;
 
 #define BOOST_TEST_MODULE SceneDrawContextTests
 #include <boost/test/included/unit_test.hpp>
-#include <memory>
 
 export module Graphics.Scene.DrawContext.Tests;
+import std;
 import Graphics.Scene.DrawContext;
 
 using namespace Graphics;

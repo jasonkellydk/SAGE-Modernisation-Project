@@ -4,15 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-#include <bit>
-#include <cstddef>
-#include <cstdint>
-#include <span>
-#include <string>
-#include <vector>
-
 export module Assets.Tests.Adapters.W3D.Sphere;
+import std;
 
 import Assets.Adapters.W3D.Chunks;
 import Assets.Math;

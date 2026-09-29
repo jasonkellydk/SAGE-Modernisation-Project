@@ -4,12 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-#include <cstdint>
-#include <cmath>
-#include <string>
-
 export module Assets.Tests.W3DModelBuilder;
+import std;
 
 import Assets.Adapters.W3D.Mesh;
 import Assets.Adapters.W3D.Model;

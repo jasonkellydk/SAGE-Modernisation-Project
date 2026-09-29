@@ -1,8 +1,5 @@
-module;
-
-#include <cstdint>
-
 export module Graphics.Frame.RenderSettings;
+import std;
 
 namespace Graphics
 {

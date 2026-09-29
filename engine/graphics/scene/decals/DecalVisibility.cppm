@@ -1,9 +1,5 @@
-module;
-
-#include <cstddef>
-#include <span>
-
 export module Graphics.Scene.DecalVisibility;
+import std;
 
 export import Graphics.Scene.Decals;
 export import Graphics.Scene.RenderScene;

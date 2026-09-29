@@ -4,11 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-#include <cstddef>
-#include <cstdint>
-
 export module Graphics.Scene.Lighting.State.Tests;
+import std;
 
 import Graphics.Scene.Lighting;
 import Graphics.Scene.Lighting.Local;

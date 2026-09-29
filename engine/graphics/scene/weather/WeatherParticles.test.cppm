@@ -4,11 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-#include <cstddef>
-#include <type_traits>
-
 export module Graphics.Scene.WeatherParticles.Tests;
+import std;
 
 import Graphics.Scene.WeatherParticles;
 

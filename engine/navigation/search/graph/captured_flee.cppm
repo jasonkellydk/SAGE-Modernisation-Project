@@ -1,10 +1,5 @@
-module;
-#include <algorithm>
-#include <cmath>
-#include <limits>
-#include <optional>
-
 export module engine.navigation.search.graph.captured_flee;
+import std;
 import engine.navigation.search.graph.captured_weighted;
 import engine.navigation.movement.destination.flee_goal;
 import engine.navigation.movement.destination.reservations;

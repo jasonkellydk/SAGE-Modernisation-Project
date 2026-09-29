@@ -1,9 +1,5 @@
-module;
-
-#include <cstddef>
-#include <span>
-
 export module Graphics.Scene.Visibility;
+import std;
 
 import engine.profiling;
 export import Graphics.Scene.RenderScene;

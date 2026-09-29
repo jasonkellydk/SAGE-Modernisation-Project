@@ -1,14 +1,5 @@
-module;
-#include <array>
-#include <cmath>
-#include <cstdint>
-#include <memory>
-#include <optional>
-#include <stdexcept>
-#include <type_traits>
-#include <utility>
-#include <variant>
 export module Graphics.Materials.TextureMapping;
+import std;
 import Assets.Math;
 import Assets.Materials.TextureMapping;
 import Graphics.Materials.TextureCoordinates;

@@ -1,8 +1,5 @@
-module;
-
-#include <type_traits>
-
 export module engine.ecs.query.access;
+import std;
 
 export import engine.ecs.core.component_registry;
 

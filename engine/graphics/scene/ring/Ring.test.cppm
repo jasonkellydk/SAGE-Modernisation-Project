@@ -4,12 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-#include <cstdint>
-#include <span>
-#include <type_traits>
-
 export module Graphics.Scene.Ring.Tests;
+import std;
 
 import Graphics.RHI;
 import Graphics.RenderGraph.Execution;

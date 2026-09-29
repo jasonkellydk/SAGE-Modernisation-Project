@@ -2,9 +2,8 @@ module;
 #define BOOST_TEST_MODULE W3DLevelSetTests
 #include <boost/test/included/unit_test.hpp>
 #include "W3DAssembly.test-data.h"
-#include <span>
-#include <string>
 export module Assets.Adapters.W3D.LevelSet.Tests;
+import std;
 import Assets.Adapters.W3D.LevelSet;
 using namespace Assets;
 using namespace AssemblyTestData;

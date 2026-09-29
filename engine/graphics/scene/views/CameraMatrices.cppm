@@ -1,6 +1,5 @@
-module;
-#include <cstddef>
 export module Graphics.Scene.Views.CameraMatrices;
+import std;
 export import Graphics.Scene.Views.View;
 
 namespace Graphics

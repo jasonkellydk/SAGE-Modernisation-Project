@@ -1,8 +1,5 @@
-module;
-#include <filesystem>
-#include <cstdint>
-#include <string>
 export module engine.platform.application;
+import std;
 export import engine.platform.core.types;
 
 export namespace engine::platform

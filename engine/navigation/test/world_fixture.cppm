@@ -1,21 +1,5 @@
 module;
 
-#include <string>
-#include <fstream>
-#include <bit>
-#include <cmath>
-#include <array>
-#include <vector>
-#include <span>
-#include <stdexcept>
-#include <sstream>
-#include <iomanip>
-#include <limits>
-#include <locale>
-#include <chrono>
-#include <cstdint>
-#include <functional>
-#include <memory>
 #include "Utility/CppMacros.h"
 #include "PreRTS.h"
 #include "engine/navigation/pathfinder_api.h"
@@ -29,6 +13,7 @@ module;
 #include "W3DDevice/GameLogic/W3DTerrainLogic.h"
 
 export module engine.navigation.world_fixture;
+import std;
 import engine.navigation.pathfinder;
 import engine.navigation.topology.terrain_slope;
 import engine.navigation.querymemo;

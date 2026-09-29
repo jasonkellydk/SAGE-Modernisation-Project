@@ -4,21 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <algorithm>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <cmath>
-#include <filesystem>
-#include <fstream>
-#include <iterator>
-#include <memory>
-#include <span>
-#include <string>
-#include <string_view>
-#include <vector>
-
 export module Graphics.TestScenarios.W3D.E2E.Tests;
+import std;
 
 import Assets.Adapters.W3D;
 import Assets.Adapters.W3D.Chunks;

@@ -1,14 +1,5 @@
-module;
-
-#include <algorithm>
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <optional>
-#include <utility>
-
 export module Graphics.Scene.Beams.SegmentedLine;
+import std;
 
 export import Graphics.Scene.Beams.RibbonPipeline;
 export import Graphics.Scene.Beams.RibbonTextureCoordinates;

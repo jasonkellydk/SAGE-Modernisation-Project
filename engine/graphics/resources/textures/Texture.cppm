@@ -1,10 +1,5 @@
-module;
-
-#include <cstddef>
-#include <cstdint>
-#include <span>
-
 export module Graphics.Resources.Textures.Texture;
+import std;
 
 export import Graphics.Resources.Handles.ResourceHandle;
 export import Graphics.Resources.Pools.ResourcePool;

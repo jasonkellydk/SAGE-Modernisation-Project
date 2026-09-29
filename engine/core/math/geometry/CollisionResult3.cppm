@@ -1,8 +1,5 @@
-module;
-
-#include <cstdint>
-
 export module Engine.Core.Math.CollisionResult3;
+import std;
 
 export import Engine.Core.Math.Vector3;
 

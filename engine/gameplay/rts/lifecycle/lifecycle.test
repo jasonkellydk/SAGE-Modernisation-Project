@@ -1,0 +1,122 @@
+#define BOOST_TEST_MODULE EngineGameplayLifecycle
+#include <boost/test/included/unit_test.hpp>
+
+#include <cstdint>
+#include <vector>
+
+import engine.gameplay.common.identity.components.owner;
+import engine.gameplay.rts.lifecycle.systems.removal_system;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+using namespace engine::gameplay;
+using Engine::Math::Fixed;
+
+BOOST_AUTO_TEST_SUITE(lifecycle)
+
+BOOST_AUTO_TEST_CASE(carriers_retire_with_their_riders_and_removals_are_only_destroyed)
+{
+	ecs::World world(ecs::WorldConfig{4});
+	world.RegisterComponent<Transform>();
+	world.RegisterComponent<DefinitionRef>();
+	world.RegisterComponent<TeamMember>();
+	world.RegisterComponent<Transport>();
+	world.RegisterComponent<Passenger>();
+	world.RegisterComponent<ExitIntent>();
+	world.RegisterComponent<CargoSize>();
+	world.RegisterComponent<OffMap>();
+	world.RegisterComponent<Targetable>();
+	world.RegisterComponent<Aggression>();
+	world.RegisterComponent<Owner>();
+	world.RegisterComponent<PhysicsBody>();
+	world.RegisterComponent<MoveOrder>();
+	world.RegisterComponent<AttackTarget>();
+	world.RegisterComponent<Descent>();
+	world.FinalizeComponents();
+
+	// The world owns the shared data; the test keeps handles to it.
+	TeamRoster &roster = world.EmplaceResource<TeamRoster>();
+	roster.AddPlayer({"America"});
+	const std::uint32_t team = roster.AddTeam({"Convoy", 0, false, false, {}});
+	NameRegistry &names = world.EmplaceResource<NameRegistry>();
+	CargoManifest &manifest = world.EmplaceResource<CargoManifest>();
+	Casualties &casualties = world.EmplaceResource<Casualties>();
+	const auto make = [&](std::uint32_t definition, const char *name) {
+		const ecs::Entity entity = world.Create();
+		world.Add<Transform>(entity);
+		world.Add<DefinitionRef>(entity);
+		world.Add<TeamMember>(entity);
+		*world.Get<DefinitionRef>(entity) = {definition};
+		*world.Get<TeamMember>(entity) = {team};
+		roster.Join(team, entity);
+		names.Assign(name, entity);
+		return entity;
+	};
+	const ecs::Entity truck = make(1, "Truck");
+	world.Add<Transport>(truck);
+	const ecs::Entity rider = make(2, "Rider");
+	world.Add<Passenger>(rider);
+	world.Add<OffMap>(rider);
+	manifest.Board(truck, rider);
+	const ecs::Entity bystander = make(3, "Bystander");
+	// A body whose books were settled when it died (it left its team then).
+	const ecs::Entity body = world.Create();
+	world.Add<Transform>(body);
+	world.Add<DefinitionRef>(body);
+
+	// This tick the truck finished its run, and the body's time is up.
+	DeliveriesDone &deliveries = world.EmplaceResource<DeliveriesDone>();
+	deliveries.Reset(1);
+	deliveries.SlotAt(0).push_back({truck});
+	Removals &removals = world.EmplaceResource<Removals>();
+	removals.Reset(1);
+	removals.SlotAt(0).push_back(body);
+	world.EmplaceResource<BoardRequests>();
+	world.EmplaceResource<ExitRequests>();
+	world.EmplaceResource<DropExits>();
+	world.EmplaceResource<RiderExits>();
+	world.EmplaceResource<IntentExits>();
+	world.EmplaceResource<DropSettings>();
+	world.EmplaceResource<Deletions>();
+	engine::level::Heightfield field;
+	field.width = field.height = 2;
+	field.cellSize = Fixed::FromInt(100);
+	field.heights.assign(4, Fixed{});
+	world.EmplaceResource<GroundHeight>(field);
+	CargoTransferSystem transfer;
+	RemovalSystem removal;
+	ecs::SystemRegistry registry;
+	registry.Register(transfer);
+	registry.Register(removal);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{2});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	scheduler.Execute(engine::time::SimulationTime{1, engine::time::FixedStep{30}});
+
+	BOOST_TEST(!world.IsAlive(truck));
+	BOOST_TEST(!world.IsAlive(rider)); // retired with the truck
+	BOOST_TEST(!world.IsAlive(body));
+	BOOST_TEST(world.IsAlive(bystander));
+	BOOST_TEST(roster.TeamAt(team).members.size() == 1u);
+	BOOST_TEST((names.Find("Truck") == ecs::Entity{}));
+	BOOST_TEST((names.Find("Rider") == ecs::Entity{}));
+	// Only the retirees are casualties; the body was counted when it died.
+	BOOST_TEST_REQUIRE(casualties.list.size() == 2u);
+	BOOST_TEST((casualties.list[0].departure == Departure::Removed));
+	BOOST_TEST(casualties.list[0].definition == 1u);
+
+	// Between ticks (a scripted delete), the same routine on the world directly.
+	Casualties scripted;
+	Retire({{bystander, {}, Departure::Removed}}, {roster, names, manifest},
+		[&](ecs::Entity entity) {
+			return RetireeState{world.IsAlive(entity), world.Get<TeamMember>(entity), world.Get<DefinitionRef>(entity), world.Get<Transform>(entity)};
+		},
+		[&](const engine::gameplay::Retiree &retiree) { world.Destroy(retiree.entity); }, scripted);
+	BOOST_TEST(!world.IsAlive(bystander));
+	BOOST_TEST(roster.TeamAt(team).members.empty());
+	BOOST_TEST(scripted.list.size() == 1u);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

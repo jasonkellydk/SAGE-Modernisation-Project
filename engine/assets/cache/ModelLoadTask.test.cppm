@@ -5,6 +5,7 @@ module;
 #include <boost/test/included/unit_test.hpp>
 
 export module Assets.Tests.ModelLoadTask;
+import std;
 
 import Assets.Cache.ModelLoadTask;
 import Assets.Identity;

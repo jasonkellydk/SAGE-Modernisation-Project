@@ -4,13 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <cstddef>
-#include <cstdint>
-#include <memory>
-#include <span>
-#include <string_view>
-
 export module Video.Runtime.Tests;
+import std;
 
 import Video.Runtime;
 

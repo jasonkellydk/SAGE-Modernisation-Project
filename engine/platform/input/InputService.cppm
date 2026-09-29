@@ -1,6 +1,5 @@
-module;
-#include <cstdint>
 export module engine.platform.input;
+import std;
 import engine.platform.core.types;
 
 export namespace engine::platform

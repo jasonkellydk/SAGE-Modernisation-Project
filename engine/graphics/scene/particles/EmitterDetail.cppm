@@ -1,12 +1,5 @@
-module;
-
-#include <algorithm>
-#include <array>
-#include <cstdint>
-#include <limits>
-#include <span>
-
 export module Graphics.Scene.Particles.EmitterDetail;
+import std;
 
 import Assets.Particles;
 

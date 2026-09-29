@@ -1,15 +1,5 @@
-module;
-
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <fstream>
-#include <span>
-#include <type_traits>
-#include <utility>
-#include <vector>
-
 export module Graphics.Shaders.Library;
+import std;
 
 export import Graphics.Resources.Materials.Material;
 export import Graphics.Resources.Pools.ResourcePool;

@@ -1,14 +1,5 @@
-module;
-
-#include <algorithm>
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-#include <vector>
-
 export module Graphics.Scene.Particles.EmitterVisualState;
+import std;
 
 import Assets.Math;
 import Assets.Particles;

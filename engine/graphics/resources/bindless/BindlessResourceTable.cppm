@@ -1,13 +1,5 @@
-module;
-
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-#include <span>
-#include <vector>
-#include <unordered_map>
-
 export module Graphics.Resources.Bindless.BindlessResourceTable;
+import std;
 
 export import Graphics.RHI;
 

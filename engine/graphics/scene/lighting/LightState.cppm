@@ -1,8 +1,5 @@
-module;
-
-#include <array>
-
 export module Graphics.Scene.Lighting.State;
+import std;
 
 export import Assets.Lights;
 export import Graphics.Scene.Lighting;

@@ -1,14 +1,5 @@
-module;
-
-#include <algorithm>
-#include <cmath>
-#include <cstddef>
-#include <string>
-#include <string_view>
-#include <utility>
-#include <vector>
-
 export module Assets.Adapters.W3D.SurfaceMaterial;
+import std;
 
 import Assets.Adapters.W3D.ShaderMaterials;
 import Assets.Materials;

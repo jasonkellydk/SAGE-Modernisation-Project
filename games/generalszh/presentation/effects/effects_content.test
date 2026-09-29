@@ -1,0 +1,305 @@
+#define BOOST_TEST_MODULE GeneralsZhEffects
+#include <boost/test/included/unit_test.hpp>
+
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <span>
+#include <cstdlib>
+#include <filesystem>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <random>
+#include <vector>
+
+import games.generalszh.presentation.effects.fx_playback;
+import games.generalszh.presentation.effects.damage_effects;
+import games.generalszh.content.death.death_content;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.objects.object_catalog;
+
+using namespace generalszh;
+
+namespace
+{
+struct Install
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	std::optional<presentation::EffectsContent> effects;
+
+	Install()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		effects = presentation::LoadEffectsContent(*loader);
+	}
+};
+
+Install &Data()
+{
+	static Install install;
+	return install;
+}
+}
+
+BOOST_AUTO_TEST_CASE(fx_lists_play_particle_systems_and_sounds)
+{
+	presentation::EffectsContent content;
+	engine::effects::ParticleSystemDefinition flash;
+	flash.name = "Flash";
+	flash.systemLifetime = 1;
+	flash.burstCount = {5, 5};
+	flash.lifetime = {3, 3};
+	flash.color[0] = {{1, 1, 1}, 0};
+	content.particles.Define("Flash") = flash;
+	presentation::FxList fx;
+	fx.name = "FX_Boom";
+	presentation::ParticleNugget burst;
+	burst.system = "Flash";
+	burst.count = 2;
+	fx.nuggets.push_back(burst);
+	fx.nuggets.push_back(presentation::SoundNugget{"ExplosionSmall"});
+	fx.nuggets.push_back(presentation::ViewShakeNugget{presentation::ShakeType::Strong});
+	content.fx.Define("FX_Boom") = fx;
+
+	engine::effects::ParticleWorld world([&](std::string_view name) { return content.particles.Find(name); });
+	std::vector<presentation::SoundRequest> sounds;
+	std::vector<presentation::ShakeRequest> shakes;
+	std::mt19937 random(0xF0F0);
+	BOOST_TEST(presentation::PlayFx(content, world, random, {}, {"FX_Boom", {10, 20, 0}}, sounds, shakes));
+	BOOST_TEST(!presentation::PlayFx(content, world, random, {}, {"FX_Nothing", {0, 0, 0}}, sounds, shakes));
+	world.Step();
+	BOOST_TEST(world.ParticleCount() == 10u); // two systems, five each
+	BOOST_TEST_REQUIRE(sounds.size() == 1u);
+	BOOST_TEST(sounds[0].sound == "ExplosionSmall");
+	BOOST_TEST(sounds[0].at[0] == 10.0f);
+	BOOST_TEST_REQUIRE(shakes.size() == 1u);
+	BOOST_TEST((shakes[0].type == presentation::ShakeType::Strong));
+	for (int frame = 0; frame < 5; ++frame)
+		world.Step();
+	BOOST_TEST(world.ParticleCount() == 0u);
+	BOOST_TEST(world.SystemCount() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(shipped_effects_bind_and_deaths_explode)
+{
+	Install &install = Data();
+	if (!install.effects)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto &effects = *install.effects;
+	BOOST_TEST_MESSAGE(effects.particles.Size() << " particle systems, " << effects.fx.Size() << " FX lists");
+	BOOST_TEST(effects.particles.Size() > 500u);
+	BOOST_TEST(effects.fx.Size() > 400u);
+
+	const engine::config::Document &objectsDocument = install.loader->Load({"Data\\INI\\Default\\Object", "Data\\INI\\Object"});
+	engine::config::BindContext context{install.loader->DiagnosticsFor(objectsDocument), engine::time::FixedStep{30}};
+	const auto objects = content::BuildObjectCatalog(objectsDocument, context);
+	// The Crusader's death effects, from its die modules.
+	std::vector<std::string> names;
+	const auto death = content::ReadObjectDeath(*objects.Find("AmericaTankCrusader"), engine::time::FixedStep{30},
+		[&](engine::gameplay::DeathEffectKind kind, std::string_view name) {
+			names.emplace_back(name);
+			return kind == engine::gameplay::DeathEffectKind::Effect ? static_cast<std::uint32_t>(names.size() - 1) : 0xFFFFFFFFu;
+		});
+	std::vector<std::string> deathFX;
+	for (const auto &effect : death.atDeath)
+		for (const std::uint32_t id : effect.candidates)
+			if (id < names.size())
+				deathFX.push_back(names[id]);
+	for (const auto &slow : death.slow)
+		for (const auto phase : {engine::gameplay::DeathPhase::Initial, engine::gameplay::DeathPhase::Final})
+			for (const std::uint32_t id : slow.effects.Of(phase, engine::gameplay::DeathEffectKind::Effect))
+				deathFX.push_back(names[id]);
+	BOOST_TEST_REQUIRE(!deathFX.empty());
+
+	engine::effects::ParticleWorld world([&](std::string_view name) { return effects.particles.Find(name); });
+	std::vector<presentation::SoundRequest> sounds;
+	std::vector<presentation::ShakeRequest> shakes;
+	std::mt19937 random(0xF0F0);
+	std::size_t played = 0;
+	for (const auto &fx : deathFX)
+		played += presentation::PlayFx(effects, world, random, {}, {fx, {100, 100, 10}}, sounds, shakes) ? 1 : 0;
+	BOOST_TEST(played > 0u);
+	std::size_t peak = 0;
+	for (int frame = 0; frame < 90; ++frame)
+	{
+		world.Step();
+		peak = (std::max)(peak, world.ParticleCount());
+	}
+	BOOST_TEST_MESSAGE("a Crusader's death: " << deathFX.size() << " FX lists, up to " << peak << " particles");
+	BOOST_TEST(peak > 20u);
+}
+
+BOOST_AUTO_TEST_CASE(shipped_damage_states_put_smoke_on_random_bones)
+{
+	Install &install = Data();
+	if (!install.effects)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const engine::config::Document &objectsDocument = install.loader->Load({"Data\\INI\\Default\\Object", "Data\\INI\\Object"});
+	engine::config::BindContext context{install.loader->DiagnosticsFor(objectsDocument), engine::time::FixedStep{30}};
+	const auto objects = content::BuildObjectCatalog(objectsDocument, context);
+	const content::ObjectDefinition &tank = *objects.Find("AmericaTankCrusader");
+	const presentation::DamageEffects effects = presentation::ReadDamageEffects(tank);
+	const auto &reallyDamaged = effects.At(presentation::DamageLevel::ReallyDamaged);
+	BOOST_TEST_REQUIRE(!reallyDamaged.empty());
+	bool smokeOnBones = false;
+	for (const auto &effect : reallyDamaged)
+		smokeOnBones = smokeOnBones || (effect.kind == presentation::DamageEffect::Kind::Particles && !effect.placement.bone.empty() && effect.placement.randomBone);
+	BOOST_TEST(smokeOnBones);
+	// TransitionDamageFX DamageFXTypes / DamageParticleTypes (INI::parseDamageTypeFlags): ALL unless given (no shipped
+	// TransitionDamageFX narrows them).
+	for (const auto &effect : reallyDamaged)
+		BOOST_TEST(effect.types == ~std::uint64_t{0});
+}
+
+// LightPulseFXNugget -> W3DDisplay::createLightPulse -> W3DDynamicLight::On_Frame_Update: FX_DamageTankStruck's pulse
+// (R:255 G:255 B:128, Radius 30, IncreaseTime 0, DecreaseTime 500 ms: 15 frames) lights from 1 out to 31 and each
+// frame keeps (15 - n) / 15 of its colour and range, out on the 15th. One that grows (3 frames up, 6 down) rises by
+// thirds first; one too small (1 + radius under 21) is never lit.
+BOOST_AUTO_TEST_CASE(legacy_parity_light_pulses_grow_and_fade_frame_by_frame)
+{
+	Install &install = Data();
+	if (!install.effects)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto &effects = *install.effects;
+	engine::effects::ParticleWorld world([&](std::string_view name) { return effects.particles.Find(name); });
+	std::vector<presentation::SoundRequest> sounds;
+	std::vector<presentation::ShakeRequest> shakes;
+	std::vector<presentation::LightPulse> lights;
+	std::mt19937 random(7);
+	BOOST_TEST(presentation::PlayFx(effects, world, random, {}, {"FX_DamageTankStruck", {100, 200, 5}}, sounds, shakes, nullptr, &lights));
+	BOOST_TEST_REQUIRE(lights.size() == 1u);
+	presentation::LightPulse pulse = lights.front();
+	BOOST_TEST(pulse.inner == 1.0f);
+	BOOST_TEST(pulse.outer == 31.0f);
+	BOOST_TEST(pulse.decayFrames == 15.0f);
+	BOOST_TEST(pulse.increaseFrames == 0.0f);
+	pulse.age = 1.0f;
+	auto shown = presentation::ShowPulse(pulse);
+	BOOST_TEST_REQUIRE(shown.has_value());
+	BOOST_TEST(shown->diffuse[0] == 14.0f / 15.0f, boost::test_tools::tolerance(1e-5f));
+	BOOST_TEST(shown->diffuse[2] == 128.0f / 255.0f * 14.0f / 15.0f, boost::test_tools::tolerance(1e-5f));
+	BOOST_TEST(shown->farRange == 31.0f * 14.0f / 15.0f, boost::test_tools::tolerance(1e-4f));
+	BOOST_TEST((shown->at == std::array<float, 3>{100, 200, 5}));
+	pulse.age = 14.0f;
+	shown = presentation::ShowPulse(pulse);
+	BOOST_TEST_REQUIRE(shown.has_value());
+	BOOST_TEST(shown->diffuse[0] == 1.0f / 15.0f, boost::test_tools::tolerance(1e-5f));
+	BOOST_TEST(shown->farRange == 2.0666666f, boost::test_tools::tolerance(1e-4f));
+	pulse.age = 15.0f;
+	BOOST_TEST(!presentation::ShowPulse(pulse).has_value());
+
+	presentation::LightPulse growing{{}, {1, 1, 1}, 1.0f, 40.0f, 3.0f, 6.0f, 1.0f};
+	BOOST_TEST(presentation::ShowPulse(growing)->diffuse[0] == 1.0f / 3.0f, boost::test_tools::tolerance(1e-5f));
+	growing.age = 3.0f;
+	BOOST_TEST(presentation::ShowPulse(growing)->farRange == 40.0f, boost::test_tools::tolerance(1e-5f));
+	growing.age = 4.0f;
+	BOOST_TEST(presentation::ShowPulse(growing)->diffuse[0] == 5.0f / 6.0f, boost::test_tools::tolerance(1e-5f));
+	growing.age = 9.0f;
+	BOOST_TEST(!presentation::ShowPulse(growing).has_value());
+
+	presentation::EffectsContent tiny;
+	presentation::FxList dim;
+	presentation::LightPulseNugget faint;
+	faint.radius = 19.0f;
+	faint.color = {1, 1, 1};
+	dim.nuggets.push_back(faint);
+	tiny.fx.Define("FX_Dim") = dim;
+	lights.clear();
+	BOOST_TEST(presentation::PlayFx(tiny, world, random, {}, {"FX_Dim", {}}, sounds, shakes, nullptr, &lights));
+	BOOST_TEST(lights.empty());
+}
+
+// W3DPoliceCarDraw::doDrawModule: the light bar 8 above the car, 3 .. 20 out, orange for its clip's first 3 frames,
+// red to 6, orange to 7, red fading as blue rises to 9, blue to 12, then towards white; its ambient half that.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_police_light_bar_cycles_its_colours)
+{
+	using presentation::PoliceLightColor;
+	const auto close = [](std::array<float, 3> got, std::array<float, 3> want) {
+		return std::abs(got[0] - want[0]) < 1e-5f && std::abs(got[1] - want[1]) < 1e-5f && std::abs(got[2] - want[2]) < 1e-5f;
+	};
+	BOOST_TEST(close(PoliceLightColor(0.0f), {1.0f, 0.5f, 0.0f}));
+	BOOST_TEST(close(PoliceLightColor(4.0f), {1.0f, 0.0f, 0.0f}));
+	BOOST_TEST(close(PoliceLightColor(6.5f), {1.0f, 0.5f, 0.0f}));
+	BOOST_TEST(close(PoliceLightColor(8.0f), {0.75f, 0.0f, 0.5f}));
+	BOOST_TEST(close(PoliceLightColor(10.0f), {0.0f, 0.0f, 1.0f}));
+	BOOST_TEST(close(PoliceLightColor(13.0f), {2.0f / 3.0f, 2.0f / 3.0f, 0.5f}));
+	const auto light = presentation::PoliceLight({10, 20, 30}, 4.0f);
+	BOOST_TEST((light.at == std::array<float, 3>{10, 20, 38}));
+	BOOST_TEST(close(light.ambient, {0.5f, 0.0f, 0.0f}));
+	BOOST_TEST(light.nearRange == 3.0f);
+	BOOST_TEST(light.farRange == 20.0f);
+}
+
+// W3DScene: a dynamic light reaches an object when their spheres meet (its far range plus the object's radius).
+BOOST_AUTO_TEST_CASE(legacy_parity_dynamic_lights_reach_objects_their_spheres_meet)
+{
+	const presentation::ShownLight light{{100, 0, 10}, {1, 1, 1}, {0.5f, 0.5f, 0.5f}, 3.0f, 20.0f};
+	BOOST_TEST(presentation::LightReaches(light, {70, 0, 10, 10})); // 30 apart, 20 + 10: touching
+	BOOST_TEST(!presentation::LightReaches(light, {69, 0, 10, 10}));
+	BOOST_TEST(presentation::LightReaches(light, {100, 0, 40, 15}));
+}
+
+// W3DScorch::addScorch / isDuplicate: marks keep in order, the oldest going past 500; one of the same type within a
+// quarter of its radius (position and size) of another is not added again; an unknown type is the first.
+BOOST_AUTO_TEST_CASE(legacy_parity_scorch_marks_keep_500_and_skip_near_duplicates)
+{
+	presentation::ScorchMarks scorches;
+	presentation::AddScorch(scorches, {{100, 100, 0}, 20, 2});
+	presentation::AddScorch(scorches, {{104, 100, 0}, 20, 2}); // within 5: a duplicate
+	BOOST_TEST(scorches.marks.size() == 1u);
+	presentation::AddScorch(scorches, {{104, 100, 0}, 20, 3}); // another type
+	presentation::AddScorch(scorches, {{106, 100, 0}, 20, 2}); // 6 away: not a duplicate
+	BOOST_TEST(scorches.marks.size() == 3u);
+	// The map's static list (W3DScorch(false)) keeps them all.
+	presentation::ScorchMarks map;
+	presentation::AddScorch(map, {{100, 100, 0}, 20, 2}, false);
+	presentation::AddScorch(map, {{104, 100, 0}, 20, 2}, false);
+	BOOST_TEST(map.marks.size() == 2u);
+	presentation::AddScorch(scorches, {{500, 500, 0}, 20, 42});
+	BOOST_TEST(scorches.marks.back().type == 0u);
+	for (int index = 0; index < 600; ++index)
+		presentation::AddScorch(scorches, {{static_cast<float>(1000 + index * 100), 0, 0}, 20, 1});
+	BOOST_TEST(scorches.marks.size() == presentation::MaxScorchMarks);
+	BOOST_TEST(scorches.marks.front().at[0] == 11000.0f); // 604 added: the oldest 104 went (the 4 first, then 100 more)
+}
+
+// TerrainScorchFXNugget on real data: WeaponFX_BattleshipTargetExplode's TerrainScorch (Type RANDOM, Radius 15) leaves a
+// mark of radius 15 where it plays, one of SCORCH_1..SCORCH_4.
+BOOST_AUTO_TEST_CASE(legacy_parity_fx_leave_scorch_marks)
+{
+	Install &install = Data();
+	if (!install.effects)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto &effects = *install.effects;
+	engine::effects::ParticleWorld world([&](std::string_view name) { return effects.particles.Find(name); });
+	std::vector<presentation::SoundRequest> sounds;
+	std::vector<presentation::ShakeRequest> shakes;
+	presentation::ScorchMarks scorches;
+	std::mt19937 random(3);
+	BOOST_TEST(presentation::PlayFx(effects, world, random, {}, {"WeaponFX_BattleshipTargetExplode", {300, 400, 7}}, sounds, shakes, nullptr, nullptr, 0,
+		&scorches));
+	BOOST_TEST_REQUIRE(scorches.marks.size() >= 1u);
+	BOOST_TEST(scorches.marks.front().radius == 15.0f);
+	BOOST_TEST(scorches.marks.front().type <= 3u);
+	BOOST_TEST((scorches.marks.front().at == std::array<float, 3>{300, 400, 7}));
+}

@@ -1,9 +1,5 @@
-module;
-
-#include <cmath>
-#include <cstdint>
-
 export module Assets.Lights;
+import std;
 
 import Assets.Math;
 

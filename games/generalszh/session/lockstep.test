@@ -1,0 +1,210 @@
+#include <boost/test/unit_test.hpp>
+
+#include <chrono>
+#include <cstdint>
+#include <memory>
+#include <thread>
+#include <cstdlib>
+#include <filesystem>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
+
+import games.generalszh.session.session;
+import games.generalszh.session.lockstep_session;
+import engine.net.lockstep.lockstep_server;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import engine.level.adapters.generals_map.map_reader;
+
+// Lockstep peers on the live shell map, apart from session.test (one
+// module set per translation unit keeps within the compiler's source-location limit).
+using namespace generalszh;
+
+namespace
+{
+struct ShellContent
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	std::optional<engine::level::generals_map::ReadResult> map;
+
+	bool Load()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return false;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		auto read = engine::level::generals_map::Read(*files.Read("Maps/ShellMapMD/ShellMapMD.map"));
+		if (!read)
+			return false;
+		map.emplace(std::move(*read));
+		return true;
+	}
+};
+
+ShellContent &Content()
+{
+	static ShellContent content;
+	static const bool loaded = content.Load();
+	(void)loaded;
+	return content;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(shell_map_lockstep)
+
+BOOST_AUTO_TEST_CASE(lockstep_peers_repair_a_desync_and_a_late_observer_catches_up)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	using namespace std::chrono_literals;
+	// Two players and a relay, all real sessions. The second peer has a bug:
+	// it maps the seats the wrong way round, so the first player's order is
+	// ignored there and the peers drift apart. The relay must notice, repair
+	// it from the first peer's checkpoint, and let an observer join later.
+	engine::net::ServerOptions options;
+	options.players = 2;
+	options.seed = 21;
+	options.inputDelay = 2;
+	options.hashInterval = 15;
+	options.adaptiveDelay = false;
+	engine::net::LockstepServer relay(options);
+	struct Peer
+	{
+		std::unique_ptr<engine::net::LockstepClient> client;
+		std::unique_ptr<engine::net::LockstepPeer> driver;
+		std::unique_ptr<session::LockstepSession> simulation;
+	};
+	const auto join = [&](engine::net::Hello hello, std::vector<std::string> seats) {
+		auto [client, host] = engine::net::MakeLoopback();
+		relay.Accept(std::move(host));
+		Peer peer;
+		peer.client = std::make_unique<engine::net::LockstepClient>(std::move(client), hello);
+		peer.driver = std::make_unique<engine::net::LockstepPeer>(*peer.client);
+		peer.simulation = std::make_unique<session::LockstepSession>(shell.map->level, shell.game, session::SessionOptions{21, 0, {}, std::move(seats)});
+		return peer;
+	};
+	std::vector<Peer> peers;
+	peers.push_back(join({}, {"PlyrAmerica", "PlyrGLA"}));
+	peers.push_back(join({}, {"PlyrGLA", "PlyrAmerica"}));
+	std::chrono::microseconds now{0};
+	const auto frame = [&] {
+		now += 33ms;
+		relay.Update(now);
+		for (Peer &peer : peers)
+			peer.driver->Advance(*peer.simulation, 8);
+		relay.Update(now);
+	};
+	for (int step = 0; step < 20; ++step)
+		frame();
+	const ecs::Entity launcher = peers[0].simulation->Game().Named("Tom1");
+	const auto start = peers[0].simulation->Game().TransformOf(launcher)->position.XY();
+	auto order = commands::Encode(commands::MoveTo{{launcher}, {start.x - Engine::Math::Fixed::FromInt(20), start.y + Engine::Math::Fixed::FromInt(30)}});
+	peers[0].client->Submit(order.type, order.payload);
+	for (int step = 0; step < 90; ++step)
+		frame();
+
+	BOOST_TEST(relay.Stats().desyncs >= 1u);
+	BOOST_TEST(relay.Stats().repairs >= 1u);
+	BOOST_TEST(peers[1].driver->Stats().restored >= 1u);
+	// Repaired: the second peer runs the first peer's world again.
+	BOOST_TEST_REQUIRE(peers[0].simulation->CurrentTick() == peers[1].simulation->CurrentTick());
+	BOOST_TEST(peers[0].simulation->StateHash() == peers[1].simulation->StateHash());
+	BOOST_TEST((peers[1].simulation->Game().TransformOf(launcher)->position.XY() == peers[0].simulation->Game().TransformOf(launcher)->position.XY()));
+	BOOST_TEST((Engine::Math::Distance(peers[1].simulation->Game().TransformOf(launcher)->position.XY(), start) > Engine::Math::Fixed::FromInt(15)));
+
+	// An observer joins the match under way and follows it exactly.
+	peers.push_back(join({engine::net::Role::Observer}, {"PlyrAmerica", "PlyrGLA"}));
+	for (int step = 0; step < 45; ++step)
+		frame();
+	BOOST_TEST(peers[2].driver->Stats().restored == 1u);
+	BOOST_TEST_REQUIRE(peers[2].simulation->CurrentTick() == peers[0].simulation->CurrentTick());
+	BOOST_TEST(peers[2].simulation->StateHash() == peers[0].simulation->StateHash());
+	BOOST_TEST(relay.Stats().desyncs == relay.Stats().repairs - 1); // only the observer's join was not a desync
+}
+
+// A saved game (ClientMatch::Checkpoint) resumes where it stopped: its relay goes on from the checkpoint's tick, and
+// the resumed match runs the same ticks as the one it was saved from (their states stay equal).
+BOOST_AUTO_TEST_CASE(a_saved_match_resumes_on_its_tick)
+{
+	auto &content = Content();
+	if (!content.map)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	session::SessionOptions options;
+	options.seed = 5;
+	options.workers = 1;
+	auto match = session::MakeClientMatch(content.map->level, content.game, options);
+	for (int tick = 0; tick < 90; ++tick)
+		BOOST_TEST_REQUIRE(match->Advance());
+	const std::vector<std::byte> saved = match->Checkpoint();
+	auto resumed = session::ResumeClientMatch(content.map->level, content.game, options, saved);
+	BOOST_TEST_REQUIRE(resumed != nullptr);
+	BOOST_TEST(resumed->View().CurrentTick() == 90u);
+	for (int tick = 0; tick < 60; ++tick)
+	{
+		BOOST_TEST_REQUIRE(match->Advance());
+		BOOST_TEST_REQUIRE(resumed->Advance());
+	}
+	BOOST_TEST(resumed->View().CurrentTick() == 150u);
+	BOOST_TEST((resumed->Checkpoint() == match->Checkpoint()));
+	const std::vector<std::byte> garbage(16, std::byte{7});
+	BOOST_TEST(session::ResumeClientMatch(content.map->level, content.game, options, garbage) == nullptr);
+}
+
+// A LAN game over real UDP on this machine: the hosting match runs the relay (its player over loopback) and the other
+// connects to it, each claiming its seat; neither runs a tick before both are seated, then both run the same ticks
+// (their checkpoints stay byte for byte equal, and equal to a local match's).
+BOOST_AUTO_TEST_CASE(a_lan_match_runs_over_udp)
+{
+	auto &content = Content();
+	if (!content.map)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	session::SessionOptions options;
+	options.seed = 21;
+	options.workers = 1;
+	session::NetworkMatchOptions hostSide{0, 2, std::nullopt, 18388, 1};
+	auto host = session::MakeNetworkMatch(content.map->level, content.game, options, hostSide);
+	BOOST_TEST_REQUIRE(host != nullptr);
+	for (int round = 0; round < 5; ++round)
+		BOOST_TEST(!host->Advance()); // waiting for the other seat
+	session::NetworkMatchOptions guestSide{1, 2, 0x7F000001u, 18388, 1};
+	options.localSeat = 1;
+	auto guest = session::MakeNetworkMatch(content.map->level, content.game, options, guestSide);
+	BOOST_TEST_REQUIRE(guest != nullptr);
+	int hostTicks = 0, guestTicks = 0;
+	for (int round = 0; round < 4000 && (hostTicks < 60 || guestTicks < 60); ++round)
+	{
+		if (hostTicks < 60 && host->Advance())
+			++hostTicks;
+		if (guestTicks < 60 && guest->Advance())
+			++guestTicks;
+		std::this_thread::sleep_for(std::chrono::microseconds(200));
+	}
+	BOOST_TEST(hostTicks == 60);
+	BOOST_TEST(guestTicks == 60);
+	BOOST_TEST(host->View().CurrentTick() == guest->View().CurrentTick());
+	BOOST_TEST((host->Checkpoint() == guest->Checkpoint()));
+	BOOST_TEST(guest->View().LocalSeat() == 1u);
+	options.localSeat = 0;
+	auto alone = session::MakeClientMatch(content.map->level, content.game, options);
+	for (int tick = 0; tick < 60; ++tick)
+		alone->Advance();
+	BOOST_TEST((alone->Checkpoint() == host->Checkpoint()));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

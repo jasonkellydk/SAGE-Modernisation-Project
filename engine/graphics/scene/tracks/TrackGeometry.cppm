@@ -1,10 +1,5 @@
-module;
-#include <algorithm>
-#include <array>
-#include <cstdint>
-#include <span>
-#include <vector>
 export module Graphics.Scene.Tracks.Geometry;
+import std;
 export import Graphics.Scene.Surfaces.Geometry;
 namespace Graphics
 {

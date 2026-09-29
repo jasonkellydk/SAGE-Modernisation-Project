@@ -1,0 +1,290 @@
+#define BOOST_TEST_MODULE EngineGameplayEconomy
+#include <boost/test/included/unit_test.hpp>
+
+#include <cmath>
+#include <cstdint>
+#include <optional>
+#include <vector>
+
+import engine.gameplay.rts.economy.systems.energy_system;
+import engine.gameplay.rts.economy.resources.player_bounties;
+import engine.gameplay.rts.economy.systems.overcharge_system;
+import engine.core.serialization.byte_stream;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+using namespace engine::gameplay;
+
+namespace
+{
+struct Base
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	std::uint64_t tick{0};
+
+	Base()
+	{
+		world.RegisterComponent<EnergySource>();
+		world.RegisterComponent<Powered>();
+		world.RegisterComponent<Owner>();
+		world.RegisterComponent<Disabled>();
+		world.FinalizeComponents();
+		world.EmplaceResource<EnergyShares>();
+		world.EmplaceResource<PlayerEnergy>();
+	}
+
+	ecs::Entity Building(std::int32_t energy, std::int32_t bonus = 0, std::uint8_t sources = 0, bool powered = false)
+	{
+		const ecs::Entity entity = world.Create();
+		world.Add<EnergySource>(entity);
+		world.Add<Owner>(entity);
+		*world.Get<EnergySource>(entity) = {energy, bonus, sources};
+		if (powered)
+			world.Add<Powered>(entity);
+		return entity;
+	}
+
+	void Run()
+	{
+		EnergySystem energy;
+		BrownOutSystem brownOut;
+		ecs::SystemRegistry registry;
+		registry.Register(energy);
+		registry.Register(brownOut);
+		registry.Finalize(world.Components());
+		ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+		scheduler.Finalize(engine::time::FixedStep{30});
+		scheduler.Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}});
+	}
+
+	bool Underpowered(ecs::Entity entity)
+	{
+		const Disabled *disabled = world.Get<Disabled>(entity);
+		return disabled != nullptr && (disabled->mask & disabled_type::Underpowered) != 0;
+	}
+};
+
+// A reactor's overcharge over the energy tally, its drain and its limit (the damage it deals is left in the tick's
+// incoming damage; the test takes it off).
+struct Reactor
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	std::uint64_t tick{0};
+	std::vector<ecs::Entity> plants;
+	ecs::Entity plant;
+	std::optional<ecs::Scheduler> scheduler;
+	EnergySystem energy;
+	OverchargeDrainSystem drain;
+	OverchargeLimitSystem limit;
+	ecs::SystemRegistry registry;
+
+	explicit Reactor(std::size_t workers = 1, int count = 1)
+	{
+		world.RegisterComponent<EnergySource>();
+		world.RegisterComponent<Owner>();
+		world.RegisterComponent<Disabled>();
+		world.RegisterComponent<Health>();
+		world.RegisterComponent<Overcharge>();
+		world.FinalizeComponents();
+		world.EmplaceResource<EnergyShares>();
+		world.EmplaceResource<PlayerEnergy>();
+		world.EmplaceResource<IncomingDamage>();
+		world.EmplaceResource<OverchargeEvents>();
+		world.EmplaceResource<OverchargeSettings>(OverchargeSettings{7, 0, 30});
+		for (int index = 0; index < count; ++index)
+		{
+			const ecs::Entity entity = world.Create();
+			world.Add<EnergySource>(entity);
+			world.Add<Owner>(entity);
+			world.Add<Health>(entity);
+			world.Add<Overcharge>(entity);
+			*world.Get<EnergySource>(entity) = {5, 5, 0};
+			*world.Get<Health>(entity) = {Engine::Math::Fixed::FromInt(2000 - index * 13), Engine::Math::Fixed::FromInt(2000), 0};
+			world.Get<Overcharge>(entity)->drain = Engine::Math::Fixed::FromInt(3);
+			plants.push_back(entity);
+		}
+		plant = plants.empty() ? ecs::Entity{} : plants.front();
+		registry.Register(energy);
+		registry.Register(drain);
+		registry.Register(limit);
+		registry.Finalize(world.Components());
+		scheduler.emplace(world, registry, engine::jobs::JobSystemConfig{workers});
+		scheduler->Finalize(engine::time::FixedStep{30});
+	}
+
+	void SwitchAll(bool on, Engine::Math::Fixed floor)
+	{
+		for (const ecs::Entity entity : plants)
+		{
+			world.Get<Overcharge>(entity)->floor = floor;
+			SetOvercharge(*world.Get<Overcharge>(entity), world.Get<EnergySource>(entity), on, tick + 1);
+		}
+	}
+
+	// One tick; the drain it dealt, taken off (as the health system would).
+	std::vector<DamageRecord> Step()
+	{
+		world.Resource<IncomingDamage>().Clear();
+		scheduler->Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}});
+		const auto all = world.Resource<IncomingDamage>().All();
+		std::vector<DamageRecord> dealt(all.begin(), all.end());
+		for (const DamageRecord &record : dealt)
+			world.Get<Health>(record.target)->current -= record.amount;
+		return dealt;
+	}
+};
+}
+
+BOOST_AUTO_TEST_SUITE(economy)
+
+// OverchargeBehavior::enable and update (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Behavior/
+// OverchargeBehavior.cpp): switched on as the tick's commands apply, the reactor's EnergyBonus counts at once
+// (Player::addPowerBonus: 5 + 5) and it first drains on the next tick (setWakeFrame(UPDATE_SLEEP_NONE)): its most
+// health times HealthPercentToDrainPerSecond over the second's 30 ticks (2000 * 3% / 30 = 2, as PENALTY from itself),
+// every tick. Switched off, the bonus goes (removePowerBonus) and its rods are to be drawn in.
+BOOST_AUTO_TEST_CASE(legacy_parity_an_overcharged_reactor_drains_itself_for_its_bonus)
+{
+	Reactor reactor;
+	const auto amount = [](const DamageRecord &record) { return static_cast<double>(record.amount.Raw()) / 65536.0; };
+	Overcharge &overcharge = *reactor.world.Get<Overcharge>(reactor.plant);
+	EnergySource *source = reactor.world.Get<EnergySource>(reactor.plant);
+	BOOST_TEST(SetOvercharge(overcharge, source, true, reactor.tick + 1));
+	BOOST_TEST(!SetOvercharge(overcharge, source, true, reactor.tick + 1));
+	BOOST_TEST(reactor.Step().empty()); // the tick it was switched on
+	BOOST_TEST(reactor.world.Resource<PlayerEnergy>().Production(0) == 10);
+	for (int step = 0; step < 30; ++step)
+	{
+		const auto dealt = reactor.Step();
+		BOOST_TEST_REQUIRE(dealt.size() == 1u);
+		BOOST_TEST((dealt[0].source == reactor.plant));
+		BOOST_TEST(dealt[0].damageType == 7u);
+		BOOST_TEST(amount(dealt[0]) == 2.0);
+	}
+	BOOST_TEST((reactor.world.Get<Health>(reactor.plant)->current == Engine::Math::Fixed::FromInt(1940)));
+	BOOST_TEST(SetOvercharge(*reactor.world.Get<Overcharge>(reactor.plant), reactor.world.Get<EnergySource>(reactor.plant), false, reactor.tick + 1));
+	BOOST_TEST(reactor.world.Get<Overcharge>(reactor.plant)->retract == 1u);
+	BOOST_TEST(reactor.Step().empty());
+	BOOST_TEST(reactor.world.Resource<PlayerEnergy>().Production(0) == 5);
+}
+
+// OverchargeBehavior::update: with its health under NotAllowedWhenHealthBelowPercent of its most after the tick's
+// drain, it switches itself off (enable(FALSE): no bonus, rods in) and says so (GUI:OverchargeExhausted). Here the
+// limit runs before the test takes the tick's drain off, so it sees the health the drain before left: 1003, 1001,
+// 999 (under 1000) after the second drain, seen on the third drain tick.
+BOOST_AUTO_TEST_CASE(legacy_parity_an_overcharge_switches_off_below_its_floor)
+{
+	Reactor reactor;
+	reactor.world.Get<Health>(reactor.plant)->current = Engine::Math::Fixed::FromInt(1003);
+	reactor.SwitchAll(true, Engine::Math::Fixed::FromRatio(1, 2));
+	reactor.Step();
+	std::vector<std::uint64_t> exhausted;
+	for (int step = 0; step < 10; ++step)
+	{
+		reactor.Step();
+		reactor.world.Resource<OverchargeEvents>().ForEach([&](const OverchargeExhausted &) { exhausted.push_back(reactor.tick); });
+	}
+	BOOST_TEST_REQUIRE(exhausted.size() == 1u);
+	BOOST_TEST(exhausted[0] == 4u);
+	BOOST_TEST(reactor.world.Get<Overcharge>(reactor.plant)->active == 0u);
+	BOOST_TEST(reactor.world.Get<EnergySource>(reactor.plant)->bonusSources == 0u);
+	reactor.Step();
+	BOOST_TEST(reactor.world.Resource<PlayerEnergy>().Production(0) == 5);
+}
+
+// The same on one worker as on four, and after a checkpoint.
+BOOST_AUTO_TEST_CASE(overcharges_are_the_same_on_any_number_of_workers_and_after_a_checkpoint)
+{
+	const auto run = [](std::size_t workers) {
+		Reactor reactor(workers, 40);
+		reactor.SwitchAll(true, Engine::Math::Fixed::FromRatio(97, 100));
+		std::vector<ecs::StateHashValue> hashes;
+		for (int step = 0; step < 60; ++step)
+		{
+			reactor.Step();
+			hashes.push_back(reactor.world.StateHash());
+		}
+		return hashes;
+	};
+	BOOST_TEST((run(1) == run(4)));
+
+	Reactor saved(2, 40);
+	saved.SwitchAll(true, Engine::Math::Fixed::FromRatio(97, 100));
+	for (int step = 0; step < 5; ++step)
+		saved.Step();
+	engine::core::serialization::ByteWriter writer;
+	saved.world.SaveCheckpoint(writer);
+	const auto bytes = writer.Take();
+	Reactor loaded(3, 0);
+	engine::core::serialization::ByteReader reader(bytes);
+	BOOST_TEST_REQUIRE(loaded.world.LoadCheckpoint(reader));
+	loaded.tick = saved.tick;
+	BOOST_TEST(loaded.world.StateHash() == saved.world.StateHash());
+	for (int step = 0; step < 40; ++step)
+	{
+		saved.Step();
+		loaded.Step();
+		BOOST_TEST_REQUIRE(loaded.world.StateHash() == saved.world.StateHash());
+	}
+}
+
+// Energy / Object::friend_adjustPowerForPlayer / onDisabledEdge: a producer adds its EnergyProduction and its
+// EnergyBonus per active bonus source (control rods) while not disabled; consumers always count. Player::
+// onPowerBrownOutChange: POWERED objects are DISABLED_UNDERPOWERED while production is below consumption.
+BOOST_AUTO_TEST_CASE(legacy_parity_disabled_power_plants_brown_out_powered_buildings)
+{
+	Base base;
+	const ecs::Entity plant = base.Building(5, 5, 1); // a cold fusion reactor with control rods: 10
+	const ecs::Entity defense = base.Building(-8, 0, 0, true);
+	base.Run();
+	const PlayerEnergy &energy = base.world.Resource<PlayerEnergy>();
+	BOOST_TEST(energy.Production(0) == 10);
+	BOOST_TEST(energy.Consumption(0) == 8);
+	BOOST_TEST(!base.Underpowered(defense));
+	// An EMP disables the plant: its power (with its bonus) is gone, the defense browns out.
+	base.world.Add<Disabled>(plant);
+	base.world.Get<Disabled>(plant)->mask = disabled_type::Emp;
+	base.Run();
+	BOOST_TEST(energy.Production(0) == 0);
+	BOOST_TEST(base.Underpowered(defense));
+	// A disabled consumer still consumes.
+	BOOST_TEST(energy.Consumption(0) == 8);
+	base.world.Get<Disabled>(plant)->mask = 0;
+	base.Run();
+	BOOST_TEST(!base.Underpowered(defense));
+	// Exactly enough is enough (production >= consumption).
+	base.world.Get<EnergySource>(plant)->bonusSources = 0;
+	base.Building(-2);
+	base.Run();
+	BOOST_TEST(energy.Production(0) == 5);
+	BOOST_TEST(energy.Consumption(0) == 10);
+	BOOST_TEST(base.Underpowered(defense));
+}
+
+// Player.cpp Player::doBountyForKill (RETAIL_COMPATIBLE_CRC): REAL_TO_INT_CEIL(costToBuild * m_cashBountyPercent), the
+// percent set by CashBountyPower::onSpecialPowerCreation only when larger. Exact in hundredths of a percent: the
+// original's float product of a whole cost and 5% / 10% / 20% rounds to the same whole numbers.
+BOOST_AUTO_TEST_CASE(legacy_parity_cash_bounty_rounds_up_and_only_rises)
+{
+	PlayerBounties bounties;
+	BOOST_TEST(bounties.BountyFor(1, 800) == 0); // none by default
+	bounties.Raise(1, 1000);                     // 10%
+	bounties.Raise(1, 500);                      // 5% after: kept at 10%
+	BOOST_TEST(bounties.Of(1) == 1000);
+	BOOST_TEST(bounties.BountyFor(1, 800) == 80);
+	BOOST_TEST(bounties.BountyFor(1, 225) == 23); // 22.5 rounds up
+	BOOST_TEST(bounties.BountyFor(1, 0) == 0);
+	bounties.Raise(1, 2000);
+	BOOST_TEST(bounties.BountyFor(1, 1) == 1); // 0.2 rounds up
+	BOOST_TEST(bounties.BountyFor(0, 1000) == 0);
+	engine::core::serialization::ByteWriter writer;
+	bounties.Save(writer);
+	const auto bytes = writer.Take();
+	engine::core::serialization::ByteReader reader(bytes);
+	PlayerBounties loaded;
+	BOOST_TEST(loaded.Load(reader));
+	BOOST_TEST(loaded.Of(1) == 2000);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

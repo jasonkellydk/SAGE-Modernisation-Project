@@ -1,9 +1,5 @@
-module;
-
-#include <cstdint>
-#include <string>
-
 export module engine.platform.core.types;
+import std;
 
 export namespace engine::platform
 {

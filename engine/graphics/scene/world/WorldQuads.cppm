@@ -1,17 +1,5 @@
-module;
-
-#include <algorithm>
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <limits>
-#include <memory>
-#include <span>
-#include <vector>
-
 export module Graphics.Scene.WorldQuads;
+import std;
 
 export import Graphics.Resources.Bindless.BindlessResourceTable;
 export import Graphics.Resources.Materials.Material;

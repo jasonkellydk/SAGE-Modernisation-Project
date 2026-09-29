@@ -17,6 +17,7 @@
 */
 
 export module engine.navigation.reference.search_lists;
+import std;
 
 // Global linkage keeps the legacy friend declaration source-compatible.
 export extern "C++" {

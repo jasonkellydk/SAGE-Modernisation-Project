@@ -1,0 +1,42 @@
+#define BOOST_TEST_MODULE GeneralsZhPresentationHud
+#include <boost/test/included/unit_test.hpp>
+
+import games.generalszh.presentation.hud.algorithms.power_bar;
+
+using namespace generalszh::presentation;
+
+BOOST_AUTO_TEST_SUITE(power_bar)
+
+// legacy_parity: W3DControlBar.cpp W3DPowerDraw (logN = log10(x) / log10(base)), GameData's PowerBarBase 7,
+// PowerBarIntervals 3, PowerBarYellowRange 5, in a 150 pixel window (50 a power of 7) with a 10 pixel slider.
+// 10 made: 59 long (1.1833 x 50); 5 used: the slider centred at 41 (0.8271 x 50), 36..46, green (5 is not over
+// 10 - 5); 6 used: yellow; 11 used: red. One used counts as 1.5 (at 10); none puts the slider at the left; 400
+// made fills the window (153 > 150) and 400 used keeps the slider inside its right edge. Nothing made: no bar.
+BOOST_AUTO_TEST_CASE(legacy_parity_power_bar_lengths_colours_and_slider)
+{
+	const PowerBarSettings settings;
+	const PowerBarLayout made10 = LayOutPowerBar(10, 5, 150, 10, settings);
+	BOOST_TEST(made10.shown);
+	BOOST_TEST(made10.range == 59);
+	BOOST_TEST(made10.needleLeft == 36);
+	BOOST_TEST(made10.needleRight == 46);
+	BOOST_TEST((made10.color == PowerBarColor::Green));
+	BOOST_TEST((LayOutPowerBar(10, 6, 150, 10, settings).color == PowerBarColor::Yellow));
+	BOOST_TEST((LayOutPowerBar(10, 10, 150, 10, settings).color == PowerBarColor::Yellow));
+	BOOST_TEST((LayOutPowerBar(10, 11, 150, 10, settings).color == PowerBarColor::Red));
+	const PowerBarLayout one = LayOutPowerBar(10, 1, 150, 10, settings);
+	BOOST_TEST(one.needleLeft == 5);
+	BOOST_TEST(one.needleRight == 15);
+	const PowerBarLayout none = LayOutPowerBar(10, 0, 150, 10, settings);
+	BOOST_TEST(none.needleLeft == 0);
+	BOOST_TEST(none.needleRight == 10);
+	const PowerBarLayout full = LayOutPowerBar(400, 400, 150, 10, settings);
+	BOOST_TEST(full.range == 150);
+	BOOST_TEST(full.needleLeft == 140);
+	BOOST_TEST(full.needleRight == 150);
+	const PowerBarLayout nothing = LayOutPowerBar(0, 3, 150, 10, settings);
+	BOOST_TEST(!nothing.shown);
+	BOOST_TEST((nothing.color == PowerBarColor::Red));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -1,12 +1,5 @@
-module;
-
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <optional>
-#include <utility>
-
 export module Engine.Core.Math.Matrix3;
+import std;
 
 export import Engine.Core.Math.AffineTransform3;
 

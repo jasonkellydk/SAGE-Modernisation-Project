@@ -1,11 +1,5 @@
-module;
-
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <optional>
-
 export module Engine.Core.Math.AffineTransform3;
+import std;
 
 export import Engine.Core.Math.Vector3;
 

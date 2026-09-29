@@ -4,9 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-
 export module Graphics.Scene.DecalVisibility.Tests;
+import std;
 
 import Graphics.Scene.DecalVisibility;
 

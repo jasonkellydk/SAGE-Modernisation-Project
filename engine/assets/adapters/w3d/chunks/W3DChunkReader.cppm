@@ -1,12 +1,5 @@
-module;
-
-#include <bit>
-#include <cstddef>
-#include <cstdint>
-#include <span>
-#include <string>
-
 export module Assets.Adapters.W3D.Chunks;
+import std;
 
 import Assets.Math;
 

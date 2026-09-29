@@ -5,6 +5,7 @@ module;
 #include <boost/test/included/unit_test.hpp>
 
 export module Assets.Tests.MaterialLoadTask;
+import std;
 
 import Assets.Cache.MaterialLoadTask;
 import Assets.Handles;

@@ -1,14 +1,5 @@
-module;
-
-#include <array>
-#include <algorithm>
-#include <cmath>
-#include <cstdint>
-#include <limits>
-#include <optional>
-#include <utility>
-
 export module Engine.Core.Math.Triangle3;
+import std;
 
 export import Engine.Core.Math.Vector3;
 export import Engine.Core.Math.Vector4;

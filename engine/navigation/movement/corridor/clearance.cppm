@@ -1,8 +1,5 @@
-module;
-#include <cstdint>
-#include <limits>
-
 export module engine.navigation.movement.corridor.clearance;
+import std;
 import engine.navigation.movement.terrain_policy;
 
 export namespace navigation {

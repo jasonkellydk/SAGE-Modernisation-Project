@@ -1,0 +1,245 @@
+#define BOOST_TEST_MODULE EngineScripting
+#include <boost/test/included/unit_test.hpp>
+
+#include <cstdint>
+#include <string>
+#include <vector>
+
+import engine.scripting.runtime.script_runtime;
+import engine.core.serialization.byte_stream;
+
+using namespace engine::scripting;
+namespace level = engine::level;
+
+namespace
+{
+level::ScriptCall Call(std::string name, std::vector<std::string> texts = {})
+{
+	level::ScriptCall call;
+	call.name = std::move(name);
+	for (std::string &text : texts)
+	{
+		level::ScriptParameter parameter;
+		parameter.text = std::move(text);
+		call.parameters.push_back(std::move(parameter));
+	}
+	return call;
+}
+
+level::Script MakeScript(std::string name, std::vector<std::vector<level::ScriptCall>> conditions, std::vector<level::ScriptCall> actions,
+	std::vector<level::ScriptCall> falseActions = {})
+{
+	level::Script script;
+	script.name = std::move(name);
+	script.oneShot = false;
+	script.conditions = std::move(conditions);
+	script.actions = std::move(actions);
+	script.falseActions = std::move(falseActions);
+	return script;
+}
+
+// A toy vocabulary: conditions/actions over the runtime's variables, with a
+// log of executed actions to observe ordering.
+struct TestVocabulary
+{
+	Vocabulary vocabulary;
+	std::vector<std::string> log;
+
+	TestVocabulary()
+	{
+		vocabulary.AddCondition("TRUE", [](ScriptCallContext &) { return true; });
+		vocabulary.AddCondition("FALSE", [](ScriptCallContext &) { return false; });
+		vocabulary.AddCondition("FLAG", [](ScriptCallContext &c) {
+			const auto &name = c.call.parameters[0].text;
+			return c.runtime.Flag(name) || c.runtime.Signalled(name);
+		});
+		vocabulary.AddCondition("TIMER_EXPIRED", [](ScriptCallContext &c) { return c.runtime.TimerExpired(c.call.parameters[0].text); });
+		vocabulary.AddAction("LOG", [this](ScriptCallContext &c) {
+			log.push_back(c.call.parameters[0].text + (c.subject == NoSubject ? "" : "@" + std::to_string(c.subject)));
+		});
+		vocabulary.AddAction("SET_FLAG", [](ScriptCallContext &c) { c.runtime.SetFlag(c.call.parameters[0].text, true); });
+		vocabulary.AddAction("TIMER", [](ScriptCallContext &c) { c.runtime.StartTimer(c.call.parameters[0].text, 3); });
+		vocabulary.AddAction("ENABLE", [](ScriptCallContext &c) { c.runtime.SetActive(c.call.parameters[0].text, true); });
+		vocabulary.AddAction("DISABLE", [](ScriptCallContext &c) { c.runtime.SetActive(c.call.parameters[0].text, false); });
+		vocabulary.AddAction("CALL", [](ScriptCallContext &c) { c.runtime.CallSubroutine(c.call.parameters[0].text); });
+	}
+};
+}
+
+BOOST_AUTO_TEST_SUITE(script_runtime)
+
+BOOST_AUTO_TEST_CASE(runs_participants_loose_scripts_then_groups_in_order)
+{
+	level::Scenario scenario;
+	auto &first = scenario.participants.emplace_back();
+	first.scripts.groups.push_back({"G1", true, false, {MakeScript("g1", {{Call("TRUE")}}, {Call("LOG", {"g1"})})}});
+	first.scripts.scripts.push_back(MakeScript("a", {{Call("TRUE")}}, {Call("LOG", {"a"})}));
+	first.scripts.groups.push_back({"Off", false, false, {MakeScript("off", {{Call("TRUE")}}, {Call("LOG", {"off"})})}});
+	auto &second = scenario.participants.emplace_back();
+	second.scripts.scripts.push_back(MakeScript("b", {{Call("TRUE")}}, {Call("LOG", {"b"})}));
+	TestVocabulary test;
+	ScriptRuntime runtime(scenario, test.vocabulary);
+	runtime.Tick(1);
+	BOOST_TEST((test.log == std::vector<std::string>{"a", "g1", "b"}));
+}
+
+BOOST_AUTO_TEST_CASE(conditions_are_an_or_of_and_clauses_with_false_actions)
+{
+	level::Scenario scenario;
+	auto &participant = scenario.participants.emplace_back();
+	participant.scripts.scripts.push_back(MakeScript("or", {{Call("TRUE"), Call("FALSE")}, {}, {Call("TRUE")}}, {Call("LOG", {"or"})}));
+	participant.scripts.scripts.push_back(MakeScript("none", {}, {Call("LOG", {"never"})}, {Call("LOG", {"else"})}));
+	participant.scripts.scripts.push_back(MakeScript("unknown", {{Call("MYSTERY")}}, {Call("LOG", {"x"}), Call("UNKNOWN_ACTION")}));
+	TestVocabulary test;
+	ScriptRuntime runtime(scenario, test.vocabulary);
+	runtime.Tick(1);
+	BOOST_TEST((test.log == std::vector<std::string>{"or", "else"}));
+	BOOST_TEST(runtime.UnknownConditions().contains("MYSTERY"));
+	BOOST_TEST(runtime.UnknownActions().contains("UNKNOWN_ACTION"));
+}
+
+BOOST_AUTO_TEST_CASE(one_shots_timers_flags_and_signals)
+{
+	level::Scenario scenario;
+	auto &participant = scenario.participants.emplace_back();
+	auto start = MakeScript("start", {{Call("TRUE")}}, {Call("TIMER", {"t"}), Call("LOG", {"start"})});
+	start.oneShot = true;
+	participant.scripts.scripts.push_back(start);
+	auto expired = MakeScript("expired", {{Call("TIMER_EXPIRED", {"t"})}}, {Call("LOG", {"expired"}), Call("SET_FLAG", {"done"})});
+	expired.oneShot = true;
+	participant.scripts.scripts.push_back(expired);
+	participant.scripts.scripts.push_back(MakeScript("clicked", {{Call("FLAG", {"button"})}}, {Call("LOG", {"clicked"})}));
+	TestVocabulary test;
+	ScriptRuntime runtime(scenario, test.vocabulary);
+	for (std::uint64_t tick = 1; tick <= 6; ++tick)
+	{
+		if (tick == 2)
+			runtime.Signal("button");
+		runtime.Tick(tick);
+	}
+	// Timer set on tick 1 to 3: ticks down on ticks 2, 3, 4 -> expires on tick 4.
+	BOOST_TEST((test.log == std::vector<std::string>{"start", "clicked", "expired"}));
+	BOOST_TEST(runtime.Flag("done"));
+	BOOST_TEST(!runtime.IsActive("start"));
+}
+
+BOOST_AUTO_TEST_CASE(enable_disable_and_subroutines)
+{
+	level::Scenario scenario;
+	auto &participant = scenario.participants.emplace_back();
+	auto sub = MakeScript("sub", {{Call("TRUE")}}, {Call("LOG", {"sub"})});
+	sub.subroutine = true;
+	participant.scripts.scripts.push_back(sub);
+	participant.scripts.groups.push_back({"SubGroup", true, true, {MakeScript("inGroup", {{Call("TRUE")}}, {Call("LOG", {"inGroup"})})}});
+	participant.scripts.scripts.push_back(MakeScript("caller", {{Call("TRUE")}},
+		{Call("CALL", {"sub"}), Call("CALL", {"SubGroup"}), Call("DISABLE", {"caller"}), Call("ENABLE", {"later"})}));
+	auto later = MakeScript("later", {{Call("TRUE")}}, {Call("LOG", {"later"})});
+	later.active = false;
+	participant.scripts.scripts.push_back(later);
+	TestVocabulary test;
+	ScriptRuntime runtime(scenario, test.vocabulary);
+	runtime.Tick(1);
+	runtime.Tick(2);
+	BOOST_TEST((test.log == std::vector<std::string>{"sub", "inGroup", "later", "later"}));
+}
+
+BOOST_AUTO_TEST_CASE(subjects_and_difficulty_and_delays)
+{
+	level::Scenario scenario;
+	auto &participant = scenario.participants.emplace_back();
+	participant.scripts.scripts.push_back(MakeScript("perTeam", {{Call("TRUE")}}, {Call("LOG", {"team"})}));
+	auto hardOnly = MakeScript("hardOnly", {{Call("TRUE")}}, {Call("LOG", {"hard"})});
+	hardOnly.difficulty = {false, false, true};
+	participant.scripts.scripts.push_back(hardOnly);
+	auto slow = MakeScript("slow", {{Call("TRUE")}}, {Call("LOG", {"slow"})});
+	slow.evaluationDelaySeconds = 1;
+	participant.scripts.scripts.push_back(slow);
+	TestVocabulary test;
+	ScriptHooks hooks;
+	hooks.subjects = [](const level::Script &script, std::size_t, std::vector<std::uint64_t> &subjects) {
+		if (script.name == "perTeam")
+			subjects = {7, 9};
+	};
+	ScriptRuntime runtime(scenario, test.vocabulary, hooks, {30, 42});
+	for (std::uint64_t tick = 0; tick < 120; ++tick)
+		runtime.Tick(tick);
+	std::size_t slowRuns = 0, teamRuns = 0;
+	for (const auto &entry : test.log)
+	{
+		slowRuns += entry == "slow";
+		teamRuns += entry == "team@7" || entry == "team@9";
+		BOOST_TEST(entry != "hard");
+	}
+	BOOST_TEST(teamRuns == 240u);
+	// One evaluation per second after a random start within the first 2 seconds.
+	BOOST_TEST((slowRuns >= 2 && slowRuns <= 4));
+
+	TestVocabulary again;
+	ScriptRuntime same(scenario, again.vocabulary, hooks, {30, 42});
+	for (std::uint64_t tick = 0; tick < 120; ++tick)
+		same.Tick(tick);
+	BOOST_TEST((again.log == test.log)); // deterministic for a seed
+}
+
+// ScriptEngine::evaluateAndProgressAllSequentialScripts (GeneralsMD/Code/GameEngine/Source/GameLogic/ScriptEngine/
+// ScriptEngine.cpp): a sequence on team 7 runs one action per idleness: busy, nothing; idle, the next action, and on
+// while it stays idle; WAIT sets a two-frame wait (not idleness); HOLD repeats until its flag is set; past the end it
+// runs once more (loops 1), then ends; a second sequence queued for the team starts after it; a dead subject ends its
+// chain; the whole state survives a save and load.
+BOOST_AUTO_TEST_CASE(legacy_parity_sequential_scripts_step_on_idleness)
+{
+	TestVocabulary v;
+	using State = ScriptHooks::SubjectState;
+	State state = State::Busy;
+	v.vocabulary.AddAction("WAIT", [](ScriptCallContext &c) { c.runtime.SetSequenceWait(c.subject, 2); });
+	v.vocabulary.AddAction("HOLD", [](ScriptCallContext &c) {
+		if (!c.runtime.Flag("go"))
+			c.runtime.HoldSequence();
+	});
+	level::Scenario scenario;
+	auto &participant = scenario.participants.emplace_back();
+	level::Script seq = MakeScript("Seq", {}, {Call("LOG", {"a"}), Call("WAIT"), Call("LOG", {"b"}), Call("HOLD"), Call("LOG", {"c"})});
+	seq.subroutine = true;
+	level::Script after = MakeScript("After", {}, {Call("LOG", {"z"})});
+	after.subroutine = true;
+	participant.scripts.scripts = {seq, after};
+	ScriptHooks hooks;
+	hooks.sequenceSubject = [&](std::uint64_t) { return state; };
+	ScriptRuntime runtime(scenario, v.vocabulary, hooks);
+	runtime.AppendSequence("Seq", 7, 1);
+	runtime.AppendSequence("After", 7, 0);
+	std::uint64_t tick = 0;
+	const auto step = [&] { runtime.Tick(++tick); };
+	step();
+	BOOST_TEST(v.log.empty()); // busy
+	state = State::Idle;
+	step(); // a, then WAIT (sets 2 frames)
+	BOOST_TEST((v.log == std::vector<std::string>{"a@7"}));
+	step(); // 2 -> 1
+	step(); // 1 -> 0
+	BOOST_TEST(v.log.size() == 1u);
+	step(); // b, HOLD (held)
+	BOOST_TEST((v.log == std::vector<std::string>{"a@7", "b@7"}));
+	step(); // HOLD again
+	BOOST_TEST(v.log.size() == 2u);
+	// Saved and loaded mid-sequence, it carries on the same.
+	engine::core::serialization::ByteWriter writer;
+	runtime.SaveState(writer);
+	const auto bytes = writer.Take();
+	ScriptRuntime loaded(scenario, v.vocabulary, hooks);
+	engine::core::serialization::ByteReader reader(bytes);
+	BOOST_TEST_REQUIRE(loaded.LoadState(reader));
+	BOOST_TEST(loaded.SequenceCount() == 1u);
+	runtime.SetFlag("go", true);
+	step(); // HOLD passes, c; past the end: again (loops 1 -> 0) behind After, and After starts: z
+	BOOST_TEST((v.log == std::vector<std::string>{"a@7", "b@7", "c@7", "z@7", "a@7"}));
+	runtime.StopSequences(7);
+	BOOST_TEST(runtime.SequenceCount() == 0u);
+	runtime.AppendSequence("After", 7, -1);
+	state = State::Dead;
+	step(); // z, then dead: the chain ends
+	BOOST_TEST(v.log.back() == "z@7");
+	BOOST_TEST(runtime.SequenceCount() == 0u);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

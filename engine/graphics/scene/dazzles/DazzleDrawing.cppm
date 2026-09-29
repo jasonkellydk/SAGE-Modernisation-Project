@@ -1,14 +1,6 @@
-module;
-#include <algorithm>
-#include <array>
-#include <cassert>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-#include <span>
-#include <vector>
 export module Graphics.Scene.Dazzles.Drawing;
+import std;
+import engine.core.contracts;
 import Assets.Dazzles;
 import Assets.Math;
 import Graphics.RHI;
@@ -39,7 +31,7 @@ public:
     void Prepare(const Assets::DazzleDefinition& definition, const DazzleState& state,
         std::span<const Assets::LensFlareSprite> flares, unsigned width, unsigned height)
     {
-        assert(width != 0 && height != 0);
+        engine::core::Assert(width != 0 && height != 0);
         m_vertices.clear();
         m_counts = {};
         const float x_scale = height > width ? float(height)/width : 1;
@@ -70,7 +62,7 @@ public:
             m_counts[2] = flares.size()*4;
         }
         const auto count = (std::max)({m_counts[0], m_counts[1], m_counts[2]});
-        assert(count <= (std::numeric_limits<std::uint32_t>::max)());
+        engine::core::Assert(count <= (std::numeric_limits<std::uint32_t>::max)());
         m_indices.resize(count/4*6);
         for (std::size_t i = 0; i < count/4; ++i) {
             const auto vertex = static_cast<std::uint32_t>(i*4);

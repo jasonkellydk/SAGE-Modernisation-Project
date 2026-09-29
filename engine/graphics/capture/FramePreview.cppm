@@ -1,10 +1,5 @@
-module;
-#include <algorithm>
-#include <array>
-#include <cstdint>
-#include <filesystem>
-
 export module Graphics.Capture.FramePreview;
+import std;
 export import Graphics.Capture.FrameCapture;
 import Graphics.FrameTargets;
 import Graphics.Resources.Textures.Snapshot;

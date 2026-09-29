@@ -1,7 +1,5 @@
-module;
-#include <cstdint>
-#include <optional>
 export module Graphics.Resources.Textures.CPUImage;
+import std;
 export import Assets.Images.Buffer;
 export import Graphics.Resources.Textures.Resource;
 

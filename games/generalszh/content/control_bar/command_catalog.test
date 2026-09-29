@@ -1,0 +1,78 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdlib>
+#include <filesystem>
+#include <string>
+
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.content_loader;
+import games.generalszh.content.control_bar.command_catalog;
+import games.generalszh.content.control_bar.control_bar_scheme;
+import games.generalszh.content.install.install_mount;
+
+using namespace generalszh::content;
+using namespace engine::config;
+
+BOOST_AUTO_TEST_SUITE(command_catalog)
+
+// ControlBar::parseCommandSetDefinition: a set's line N is its button in slot N - 1 (ButtonCommandNN); gaps stay empty.
+// The GLA command center (CommandSet.ini GLACommandCenterCommandSet): 1 the worker, 4-8 its powers, 13 the rally point,
+// 14 sell. The worker's button (CommandButton.ini Command_ConstructGLAWorker): UNIT_BUILD GLAInfantryWorker, art SUWorker.
+BOOST_AUTO_TEST_CASE(command_sets_keep_their_buttons_by_slot)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const CommandCatalog catalog = BindCommandCatalog(loader.Load({"Data/INI/CommandSet"}), loader.Load({"Data/INI/CommandButton"}));
+	const CommandSetContent *set = catalog.Set("GLACommandCenterCommandSet");
+	BOOST_TEST_REQUIRE(set != nullptr);
+	BOOST_TEST(set->buttons[0] == "Command_ConstructGLAWorker");
+	BOOST_TEST(set->buttons[1].empty());
+	BOOST_TEST(set->buttons[12] == "Command_SetRallyPoint");
+	BOOST_TEST(set->buttons[13] == "Command_Sell");
+	const CommandButtonContent *worker = catalog.Button("Command_ConstructGLAWorker");
+	BOOST_TEST_REQUIRE(worker != nullptr);
+	BOOST_TEST((worker->command == ButtonCommand::UnitBuild));
+	BOOST_TEST(worker->object == "GLAInfantryWorker");
+	BOOST_TEST(worker->buttonImage == "SUWorker");
+	BOOST_TEST((catalog.Button("Command_Sell")->command == ButtonCommand::Sell));
+}
+
+// ControlBarSchemeManager::setControlBarSchemeByPlayer: the GLA side's scheme (the largest laid out), its backdrop art
+// behind the bar (ImagePart), and the Observer's for no side.
+BOOST_AUTO_TEST_CASE(a_side_picks_its_control_bar_scheme)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const ControlBarSchemes schemes = BindControlBarSchemes(loader.Load({"Data/INI/Default/ControlBarScheme", "Data/INI/ControlBarScheme"}));
+	const ControlBarSchemeContent *gla = schemes.ForSide("GLA");
+	BOOST_TEST_REQUIRE(gla != nullptr);
+	BOOST_TEST_MESSAGE("GLA scheme " << gla->name << " " << gla->width << "x" << gla->height << ", " << gla->images.size() << " images");
+	BOOST_TEST_REQUIRE(!gla->images.empty());
+	BOOST_TEST(!gla->images.front().image.empty()); // InGameUIGLABase in retail; the installed mod may lay it out anew
+	BOOST_TEST_MESSAGE("its backdrop " << gla->images.front().image);
+	BOOST_TEST(gla->money.right > gla->money.left);
+	// BuildUpClockColor R:0 G:0 B:0 A:160
+	BOOST_TEST(gla->buildUpClockColor[0] == 0);
+	BOOST_TEST(gla->buildUpClockColor[2] == 0);
+	BOOST_TEST(gla->buildUpClockColor[3] == 160);
+	BOOST_TEST_REQUIRE(schemes.ForSide("") != nullptr);
+	BOOST_TEST(schemes.ForSide("")->side == "Observer");
+}
+
+BOOST_AUTO_TEST_SUITE_END()

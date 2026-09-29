@@ -1,0 +1,280 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+import games.generalszh.session.session;
+import games.generalszh.session.setup.skirmish_level;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import games.generalszh.content.combat.combat_catalog;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.common.identity.components.owner;
+import engine.gameplay.common.health.components.health;
+import engine.gameplay.common.health.components.pending_damage;
+import engine.gameplay.common.health.systems.health_system;
+import engine.gameplay.common.status.components.disabled;
+import engine.gameplay.rts.death.components.dying;
+import engine.gameplay.common.identity.components.team_member;
+import engine.gameplay.rts.movement.components.move_order;
+import engine.gameplay.rts.construction.components.under_construction;
+import engine.gameplay.rts.veterancy.components.experience;
+import games.generalszh.gameplay.veterancy.algorithms.veterancy_placement;
+import games.generalszh.gameplay.scripts.algorithms.object_status_queries;
+import engine.gameplay.common.weapons.components.armament;
+import engine.gameplay.common.spatial.components.object_shroud;
+import engine.gameplay.rts.navigation.resources.waypoint_graph;
+import engine.gameplay.rts.combat.components.aggression;
+import engine.gameplay.common.identity.components.definition_ref;
+import engine.gameplay.rts.containment.components.transport;
+import games.generalszh.gameplay.orders.algorithms.unit_orders;
+
+// The scripts' object status questions (UNIT_HAS_OBJECT_STATUS, TEAM_*_OBJECT_STATUS) on a shipped skirmish map.
+using namespace generalszh;
+namespace gp = engine::gameplay;
+using Engine::Math::Fixed;
+
+namespace
+{
+struct Install
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	bool loaded{false};
+
+	Install()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		loaded = true;
+	}
+};
+
+Install &Data()
+{
+	static Install install;
+	return install;
+}
+
+// America (player0, start 0) against China (player1, start 2), both human seats with nobody at them.
+struct Match
+{
+	std::optional<engine::level::generals_map::ReadResult> read;
+	session::setup::SkirmishLevel skirmish;
+	Engine::Math::FixedVector2 start;
+
+	std::uint32_t Team(const session::Session &game, std::size_t player) const { return *game.Teams().FindTeam(skirmish.players[player].team); }
+	Engine::Math::FixedVector2 At(int dx, int dy) const { return {start.x + Fixed::FromInt(dx), start.y + Fixed::FromInt(dy)}; }
+
+	session::SessionOptions Options(std::size_t workers) const
+	{
+		session::SessionOptions options{11, workers, {}, {"player0", "player1"}};
+		for (const auto &player : skirmish.players)
+			options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+		return options;
+	}
+};
+
+std::optional<Match> Prepare(Install &shell)
+{
+	const auto bytes = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	if (!bytes)
+		return std::nullopt;
+	Match match;
+	auto read = engine::level::generals_map::Read(*bytes);
+	if (!read)
+		return std::nullopt;
+	match.read = std::move(*read);
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 7;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::Player, u"Other");
+	setup.slots[1].playerTemplate = templateOf("FactionChina");
+	setup.slots[1].startPos = 2;
+	match.skirmish = session::setup::PrepareSkirmishLevel(match.read->level, setup, shell.game.playerTemplates, 4);
+	for (const auto &marker : match.read->level.markers)
+		if (marker.name == "Player_1_Start")
+			match.start = marker.position.XY();
+	return match;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(object_status)
+
+// Object::getStatusBits as the scripts ask: a Crusader ordered to attack a China barracks has IS_FIRING_WEAPON on the tick after
+// each shot only (AIAttackFireWeaponState holds it for its one frame, a tick earlier in the original: the port has no
+// attack state machine), never between shots; a barracks being built is UNDER_CONSTRUCTION; the team check is some /
+// all of its members (an empty team: all yes, some no); an unknown status name is nobody's.
+BOOST_AUTO_TEST_CASE(legacy_parity_object_status_as_the_scripts_see_it)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	auto &world = game.World();
+	const std::uint32_t america = match->Team(game, 0);
+	const ecs::Entity tank = game.Place("AmericaTankCrusader", match->At(0, -350), {}, america);
+	const ecs::Entity barracks = game.Place("ChinaBarracks", match->At(150, -350), {}, match->Team(game, 1));
+	const std::string team = "#" + std::to_string(america);
+	*world.Get<gp::AttackTarget>(tank) = gp::AttackTarget{barracks, true}; // ordered: a barracks is no automatic target
+	int shots = 0, firingTicks = 0;
+	for (int tick = 0; tick < 300 && world.IsAlive(barracks); ++tick)
+	{
+		const auto *armament = world.Get<gp::Armament>(tank);
+		const std::uint64_t fired = armament != nullptr ? armament->firedTick : 0;
+		// As the coming tick's scripts see it.
+		const std::uint64_t next = game.CurrentTick() + 1;
+		const bool firing = generalszh::gameplay::UnitHasObjectStatus(game.Game(), tank, "IS_FIRING_WEAPON", next);
+		BOOST_TEST(firing == (fired != 0 && fired + 1 == next));
+		firingTicks += firing ? 1 : 0;
+		BOOST_TEST(generalszh::gameplay::TeamHasObjectStatus(game.Game(), team, "IS_FIRING_WEAPON", false, next) == firing);
+		BOOST_TEST(!generalszh::gameplay::TeamHasObjectStatus(game.Game(), team, "IS_FIRING_WEAPON", true, next)); // its dozer never fires
+		game.Tick();
+		if (world.Get<gp::Armament>(tank)->firedTick == game.CurrentTick())
+			++shots;
+	}
+	BOOST_TEST(shots > 1);
+	// Each shot's status is seen by the tick after it (the last shot's too: the loop asks before each tick).
+	BOOST_TEST(firingTicks == shots - (world.Get<gp::Armament>(tank)->firedTick == game.CurrentTick() ? 1 : 0) + (0));
+	BOOST_TEST(!generalszh::gameplay::UnitHasObjectStatus(game.Game(), tank, "NO_SUCH_STATUS", game.CurrentTick() + 1));
+	const ecs::Entity site = game.Place("ChinaBarracks", match->At(-300, -350), {}, match->Team(game, 1));
+	game.Game().world.Add<gp::UnderConstruction>(site);
+	BOOST_TEST(generalszh::gameplay::UnitHasObjectStatus(game.Game(), site, "UNDER_CONSTRUCTION", game.CurrentTick() + 1));
+	BOOST_TEST(!generalszh::gameplay::UnitHasObjectStatus(game.Game(), tank, "UNDER_CONSTRUCTION", game.CurrentTick() + 1));
+}
+
+// getContainCount / getContainMax (evaluateIsBuildingEmpty, evaluateNamedHasFreeContainerSlots): a Humvee holds none of
+// its 5 until a Ranger boards; not a container: none. evaluateNamedDiscovered: shown to a player through the shroud
+// (clear or partly), not while held.
+BOOST_AUTO_TEST_CASE(legacy_parity_containers_and_discovery_as_the_scripts_see_them)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	auto &world = game.World();
+	const std::uint32_t america = match->Team(game, 0);
+	const ecs::Entity humvee = game.Place("AmericaVehicleHumvee", match->At(0, -350), {}, america);
+	const ecs::Entity ranger = game.Place("AmericaInfantryRanger", match->At(40, -350), {}, america);
+	auto contain = generalszh::gameplay::ContainOf(game.Game(), humvee);
+	BOOST_TEST_REQUIRE(contain.has_value());
+	BOOST_TEST(contain->count == 0u);
+	BOOST_TEST(contain->max == 5u);
+	BOOST_TEST(!generalszh::gameplay::ContainOf(game.Game(), ranger).has_value());
+	generalszh::gameplay::OrderBoard(game.Game(), ranger, humvee);
+	for (int tick = 0; tick < 300 && !world.Has<gp::Passenger>(ranger); ++tick)
+		game.Tick();
+	BOOST_TEST_REQUIRE(world.Has<gp::Passenger>(ranger));
+	BOOST_TEST(generalszh::gameplay::ContainOf(game.Game(), humvee)->count == 1u);
+	// OpenContain::m_playerEnteredMask: America's, seen by the next tick's scripts only.
+	const std::uint64_t in = game.CurrentTick();
+	const std::uint32_t player = world.Get<gp::Owner>(ranger)->player;
+	BOOST_TEST(generalszh::gameplay::EnteredBy(game.Game(), humvee, player, in + 1));
+	BOOST_TEST(!generalszh::gameplay::EnteredBy(game.Game(), humvee, player + 1, in + 1));
+	BOOST_TEST(!generalszh::gameplay::EnteredBy(game.Game(), humvee, player, in + 2));
+
+	const ecs::Entity scout = game.Place("AmericaInfantryRanger", match->At(-60, -350), {}, america);
+	if (!world.Has<gp::ObjectShroud>(scout))
+		world.Add<gp::ObjectShroud>(scout);
+	*world.Get<gp::ObjectShroud>(scout) = gp::ObjectShroud{0b01, 0b10, 0};
+	BOOST_TEST(generalszh::gameplay::DiscoveredBy(game.Game(), scout, 0));
+	BOOST_TEST(generalszh::gameplay::DiscoveredBy(game.Game(), scout, 1));
+	BOOST_TEST(!generalszh::gameplay::DiscoveredBy(game.Game(), scout, 2));
+	if (!world.Has<gp::Disabled>(scout))
+		world.Add<gp::Disabled>(scout);
+	world.Get<gp::Disabled>(scout)->mask |= gp::disabled_type::Held;
+	BOOST_TEST(!generalszh::gameplay::DiscoveredBy(game.Game(), scout, 0));
+}
+
+// AIFollowWaypointPathState's end (setCompletedWaypoint, cleared at the next AI update): a Crusader following the
+// "Center3" path to its last waypoint has reached the end of "Center3" as the next tick's scripts see it, not the tick
+// after, and never of another path.
+BOOST_AUTO_TEST_CASE(legacy_parity_reaching_a_paths_end_is_seen_the_next_tick)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	auto &world = game.World();
+	const auto &waypoints = game.Game().waypoints;
+	const std::uint32_t first = waypoints.ClosestOnPath(match->At(0, 0), "Center3");
+	BOOST_TEST_REQUIRE(first != gp::WaypointGraph::None);
+	const ecs::Entity tank = game.Place("AmericaTankCrusader", waypoints.Position(first).XY(), {}, match->Team(game, 0));
+	generalszh::gameplay::OrderFollowPath(game.Game(), tank, "Center3");
+	std::uint64_t done = 0;
+	for (int tick = 0; tick < 3000 && done == 0; ++tick)
+	{
+		game.Tick();
+		if (world.Get<gp::MoveOrder>(tank)->mode == gp::MoveMode::Idle)
+			done = game.CurrentTick();
+	}
+	BOOST_TEST_REQUIRE(done != 0u);
+	BOOST_TEST(generalszh::gameplay::ReachedWaypointsEnd(game.Game(), tank, "Center3", done + 1));
+	BOOST_TEST(generalszh::gameplay::ReachedWaypointsEnd(game.Game(), tank, "center3", done + 1));
+	BOOST_TEST(!generalszh::gameplay::ReachedWaypointsEnd(game.Game(), tank, "Center3", done + 2));
+	BOOST_TEST(!generalszh::gameplay::ReachedWaypointsEnd(game.Game(), tank, "Flank3", done + 1));
+}
+
+// evaluateEnemySighted / evaluateTypeSighted: a Ranger (vision 100 in the data) sights China's Red Guard 60 away as an
+// enemy of China's (not as a neutral or ally), and as that type; one 400 away, out of its sight, it does not; nor a
+// Red Guard stealthed out of sight.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_unit_sights_what_is_within_its_vision)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	auto &world = game.World();
+	const ecs::Entity ranger = game.Place("AmericaInfantryRanger", match->At(0, -350), {}, match->Team(game, 0));
+	world.Get<gp::Aggression>(ranger)->autoAcquire = false;
+	const ecs::Entity near = game.Place("ChinaInfantryRedguard", match->At(60, -350), {}, match->Team(game, 1));
+	world.Get<gp::Aggression>(near)->autoAcquire = false;
+	game.Tick();
+	const std::uint32_t china = world.Get<gp::Owner>(near)->player;
+	const Fixed vision = game.Game().templates.DefinitionAt(world.Get<gp::DefinitionRef>(ranger)->index).visionRange;
+	BOOST_TEST_REQUIRE((vision > Fixed::FromInt(60) && vision < Fixed::FromInt(400)));
+	BOOST_TEST(generalszh::gameplay::EnemySighted(game.Game(), ranger, 0, china));
+	BOOST_TEST(!generalszh::gameplay::EnemySighted(game.Game(), ranger, 1, china));
+	BOOST_TEST(!generalszh::gameplay::EnemySighted(game.Game(), ranger, 2, china));
+	BOOST_TEST(!generalszh::gameplay::EnemySighted(game.Game(), ranger, 0, world.Get<gp::Owner>(ranger)->player));
+	world.Get<gp::Transform>(near)->position = {match->At(400, -350).x, match->At(400, -350).y, world.Get<gp::Transform>(near)->position.z};
+	game.Tick();
+	BOOST_TEST(!generalszh::gameplay::EnemySighted(game.Game(), ranger, 0, china));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

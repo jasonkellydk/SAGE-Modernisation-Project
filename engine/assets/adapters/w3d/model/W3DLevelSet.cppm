@@ -1,9 +1,5 @@
-module;
-#include <cmath>
-#include <cstddef>
-#include <string>
-#include <utility>
 export module Assets.Adapters.W3D.LevelSet;
+import std;
 export import Assets.ModelAssembly;
 import Assets.Adapters.W3D.Chunks;
 

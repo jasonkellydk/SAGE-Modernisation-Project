@@ -30,7 +30,6 @@
 module;
 
 #include "Precompiled/PreRTS.h"
-#include <algorithm>
 
 #include "Common/GameUtility.h"
 #include "Common/GlobalData.h"
@@ -49,6 +48,7 @@ module;
 #include "Common/NameKeyGenerator.h"
 
 export module Engine.UI.WND.Runtime.Renderer.W3DControlBar;
+import std;
 
 import Engine.UI.WND;
 

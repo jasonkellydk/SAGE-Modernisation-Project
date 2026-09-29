@@ -1,0 +1,122 @@
+#define BOOST_TEST_MODULE EngineGameplayPowers
+#include <boost/test/included/unit_test.hpp>
+
+import engine.gameplay.rts.powers.algorithms.special_power_timing;
+import engine.gameplay.rts.powers.systems.special_power_pause_system;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+using namespace engine::gameplay;
+using Engine::Math::Fixed;
+
+namespace
+{
+// Power 0: a unit's own (reload 100 ticks); power 1: a general's power with a shared timer (reload 7200 ticks).
+SpecialPowerRules Rules()
+{
+	SpecialPowerRules rules;
+	rules.powers.push_back({100, SpecialPowerRule::NoScience, false});
+	rules.powers.push_back({7200, 3, true});
+	return rules;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(powers)
+
+// legacy_parity: SpecialPowerModule's constructor / startPowerRecharge / isReady / pauseCountdown. An object made at
+// tick 10 has its power at 110; paused at 60 (half ready) it holds its percentage, and unpaused at 90 it is due 30
+// ticks later, at 140. Fired at 140 (triggerSpecialPower), it is due again at 240.
+BOOST_AUTO_TEST_CASE(legacy_parity_an_objects_power_recharges_and_pauses)
+{
+	const SpecialPowerRules rules = Rules();
+	SharedPowerTimers shared;
+	SpecialPowerTimer timer{0};
+	StartSpecialPower(timer, false, {rules, shared, 0, 10});
+	BOOST_TEST(timer.availableOn == 110u);
+	BOOST_TEST(!IsReady(timer, {rules, shared, 0, 109}));
+	BOOST_TEST(IsReady(timer, {rules, shared, 0, 110}));
+	PauseCountdown(timer, true, {rules, shared, 0, 60});
+	BOOST_TEST(timer.pausedPercent == Fixed::FromRatio(1, 2).Raw());
+	BOOST_TEST(!IsReady(timer, {rules, shared, 0, 200}));
+	BOOST_TEST((PercentReady(timer, {rules, shared, 0, 80}) == Fixed::FromRatio(1, 2)));
+	BOOST_TEST(ReadyFrame(timer, false, {rules, shared, 0, 80}) == 130u);
+	PauseCountdown(timer, false, {rules, shared, 0, 90});
+	BOOST_TEST(timer.availableOn == 140u);
+	StartPowerRecharge(timer, {rules, shared, 0, 140});
+	BOOST_TEST(timer.availableOn == 240u);
+	// Still being built: no countdown yet (retail: available from tick 0), and StartsPaused holds it.
+	SpecialPowerTimer building{0, 0, 0, 0, 0, power_flag::StartsPaused};
+	StartSpecialPower(building, true, {rules, shared, 0, 10});
+	BOOST_TEST(building.availableOn == 0u);
+	BOOST_TEST(building.pausedCount == 1u);
+}
+
+// legacy_parity: SharedSyncedTimer (Player::getOrStart / resetOrStart / expressSpecialPowerReadyFrame,
+// onSpecialPowerCreation): a general's power is ready at once when learnt; fired from one command centre at 500, every
+// command centre of the player waits until 7700; another player's is its own.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_generals_power_shares_one_timer)
+{
+	const SpecialPowerRules rules = Rules();
+	SharedPowerTimers shared;
+	SpecialPowerTimer first{1}, second{1};
+	StartSpecialPower(first, false, {rules, shared, 0, 5});
+	BOOST_TEST(shared.timers.empty()); // shared powers wait for their science
+	OnSpecialPowerCreation(first, {rules, shared, 0, 400});
+	BOOST_TEST(IsReady(first, {rules, shared, 0, 400}));
+	BOOST_TEST(IsReady(second, {rules, shared, 0, 400}));
+	StartPowerRecharge(first, {rules, shared, 0, 500});
+	BOOST_TEST(!IsReady(second, {rules, shared, 0, 7699}));
+	BOOST_TEST(IsReady(second, {rules, shared, 0, 7700}));
+	BOOST_TEST(ReadyFrame(second, false, {rules, shared, 0, 600}) == 7700u);
+	BOOST_TEST(IsReady(first, {rules, shared, 1, 600})); // another player's: started now
+	BOOST_TEST(shared.timers.size() == 2u);
+	engine::core::serialization::ByteWriter writer;
+	shared.Save(writer);
+	SharedPowerTimers restored;
+	engine::core::serialization::ByteReader reader(writer.Bytes());
+	BOOST_TEST_REQUIRE(restored.Load(reader));
+	BOOST_TEST(restored.timers.size() == 2u);
+	BOOST_TEST(restored.timers[0].readyOn == 7700u);
+}
+
+// legacy_parity: Object::setDisabledUntil / clearDisabled -> pauseAllSpecialPowers. An EMP at tick 40 pauses the
+// power made at tick 10 (due 110); HELD never does; the EMP gone at tick 70 unpauses it, 30 ticks later: due 140.
+BOOST_AUTO_TEST_CASE(legacy_parity_disabling_pauses_an_objects_powers)
+{
+	ecs::World world{ecs::WorldConfig{1}};
+	world.RegisterComponent<SpecialPowerTimers>();
+	world.RegisterComponent<Disabled>();
+	world.RegisterComponent<Owner>();
+	world.FinalizeComponents();
+	world.EmplaceResource<SpecialPowerRules>() = Rules();
+	world.EmplaceResource<SharedPowerTimers>();
+	const ecs::Entity entity = world.Create();
+	world.Add<SpecialPowerTimers>(entity);
+	world.Add<Disabled>(entity);
+	world.Add<Owner>(entity);
+	SpecialPowerTimers &timers = *world.Get<SpecialPowerTimers>(entity);
+	timers.count = 1;
+	timers.timers[0].power = 0;
+	StartSpecialPower(timers.timers[0], false, {world.Resource<SpecialPowerRules>(), world.Resource<SharedPowerTimers>(), 0, 10});
+	SpecialPowerPauseSystem pauses;
+	ecs::SystemRegistry registry;
+	registry.Register(pauses);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	const auto tick = [&](std::uint64_t at) { scheduler.Execute(engine::time::SimulationTime{at, engine::time::FixedStep{30}}); };
+	world.Get<Disabled>(entity)->mask = disabled_type::Held;
+	tick(30);
+	BOOST_TEST(world.Get<SpecialPowerTimers>(entity)->timers[0].pausedCount == 0u);
+	world.Get<Disabled>(entity)->mask = disabled_type::Held | disabled_type::Emp;
+	tick(40);
+	BOOST_TEST(world.Get<SpecialPowerTimers>(entity)->timers[0].pausedCount == 1u);
+	world.Get<Disabled>(entity)->mask = 0;
+	tick(70);
+	BOOST_TEST(world.Get<SpecialPowerTimers>(entity)->timers[0].pausedCount == 0u);
+	BOOST_TEST(world.Get<SpecialPowerTimers>(entity)->timers[0].availableOn == 140u);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

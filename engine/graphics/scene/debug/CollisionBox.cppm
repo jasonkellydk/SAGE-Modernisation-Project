@@ -1,12 +1,5 @@
-module;
-
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <span>
-
 export module Graphics.Scene.Debug.CollisionBox;
+import std;
 
 import Assets.Math;
 import Graphics.RHI;

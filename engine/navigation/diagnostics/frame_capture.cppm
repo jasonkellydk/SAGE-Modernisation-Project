@@ -1,13 +1,5 @@
-module;
-#include <chrono>
-#include <cstdint>
-#include <cstdio>
-#include <cstdlib>
-#include <string>
-#include <vector>
-#include <map>
-
 export module engine.navigation.diagnostics.frame_capture;
+import std;
 
 export namespace navigation::diagnostics {
 // Opt-in rendered-game measurements. Rows stay in memory during the measured
@@ -160,7 +152,7 @@ public:
         if (!enabled()) return;
         finished_=true;
         auto* file=std::fopen(output_.c_str(),"wb");
-        if (!file) { std::fprintf(stderr,"Cannot write navigation frame capture: %s\n",output_.c_str());return; }
+        if (!file) { std::println(std::cerr, "Cannot write navigation frame capture: {}", output_);return; }
         std::fprintf(file,"render_frame,logic_before,logic_after,objects,width,height,windowed,gameplay,paused,frame_ms,client_ms,logic_ms,present_count,present_intervals,present_late_500_intervals,present_interval_max_ms\n");
         for (std::size_t i=0;i<rows_.size();++i) {
             const auto& r=rows_[i];

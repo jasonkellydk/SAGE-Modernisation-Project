@@ -1,14 +1,6 @@
-module;
-#include <algorithm>
-#include <array>
-#include <cassert>
-#include <cstddef>
-#include <cstdint>
-#include <string>
-#include <string_view>
-#include <utility>
-#include <vector>
 export module Graphics.Scene.Models.Hierarchy;
+import std;
+import engine.core.contracts;
 import engine.profiling;
 export import Graphics.Scene.Models.Animation;
 export import Graphics.Scene.AffineTransform;
@@ -48,7 +40,7 @@ public:
     explicit ModelHierarchy(const Assets::ModelRigDesc& rig) {
         std::string error;
         const bool initialized=Initialize(rig,error);
-        assert(initialized);
+        engine::core::Assert(initialized);
     }
 
     bool Initialize(const Assets::ModelRigDesc& rig,std::string& error) {
@@ -86,9 +78,9 @@ public:
 
     const char* Name() const noexcept { return m_name.c_str(); }
     int Bone_Count() const noexcept { return static_cast<int>(m_bones.size()); }
-    const char* Bone_Name(int bone) const { assert(Valid(bone));return m_names[bone].c_str(); }
+    const char* Bone_Name(int bone) const { engine::core::Assert(Valid(bone));return m_names[bone].c_str(); }
     int Parent_Index(int bone) const {
-        assert(Valid(bone));const auto parent=m_bones[bone].parent;
+        engine::core::Assert(Valid(bone));const auto parent=m_bones[bone].parent;
         return parent==Invalid_Bone_Index ? -1 : static_cast<int>(parent);
     }
     int Bone_Index(std::string_view name) const {
@@ -99,8 +91,8 @@ public:
         }
         return 0;
     }
-    const RenderTransform& World_Transform(int bone) const { assert(Valid(bone));return m_pose.World_Transforms()[bone]; }
-    bool Visible(int bone) const { assert(Valid(bone));return m_visible[bone]!=0; }
+    const RenderTransform& World_Transform(int bone) const { engine::core::Assert(Valid(bone));return m_pose.World_Transforms()[bone]; }
+    bool Visible(int bone) const { engine::core::Assert(Valid(bone));return m_visible[bone]!=0; }
     std::uint64_t Revision() const noexcept { return m_revision.Token(); }
 
     void Scale(float factor) {
@@ -110,16 +102,16 @@ public:
         m_revision.Invalidate();
     }
     void Capture(int bone) {
-        assert(Valid(bone));
+        engine::core::Assert(Valid(bone));
         if (!m_controls[bone].captured) { m_controls[bone].captured=true;m_revision.Invalidate(); }
     }
     void Release(int bone) {
-        assert(Valid(bone));
+        engine::core::Assert(Valid(bone));
         if (m_controls[bone].captured) { m_controls[bone].captured=false;m_revision.Invalidate(); }
     }
-    bool Is_Captured(int bone) const { assert(Valid(bone));return m_controls[bone].captured; }
+    bool Is_Captured(int bone) const { engine::core::Assert(Valid(bone));return m_controls[bone].captured; }
     void Control(int bone,const RenderTransform& delta,bool world_translation=false) {
-        assert(Valid(bone));assert(Is_Captured(bone));
+        engine::core::Assert(Valid(bone));engine::core::Assert(Is_Captured(bone));
         if (m_controls[bone].delta.matrix == delta.matrix && m_controls[bone].world_translation == world_translation) return;
         m_controls[bone].delta=delta;m_controls[bone].world_translation=world_translation;
         m_revision.Invalidate();

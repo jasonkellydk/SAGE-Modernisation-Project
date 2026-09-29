@@ -1,9 +1,5 @@
-module;
-
-#include <algorithm>
-#include <cmath>
-
 export module Engine.Core.Math.QuaternionInterpolator;
+import std;
 
 import Engine.Core.Math.Quaternion;
 

@@ -1,10 +1,5 @@
-module;
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-
 export module Graphics.Scene.Beams.RibbonTextureCoordinates;
+import std;
 
 export namespace Graphics {
 

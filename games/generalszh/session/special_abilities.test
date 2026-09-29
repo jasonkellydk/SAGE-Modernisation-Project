@@ -1,0 +1,1652 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <memory>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+import games.generalszh.session.session;
+import Engine.Core.Math.FixedPresentation;
+import engine.gameplay.rts.navigation.components.navigation;
+import engine.gameplay.rts.navigation.components.ignored_obstacle;
+import engine.gameplay.rts.movement.components.locomotion;
+import engine.ecs.query.query;
+import games.generalszh.session.setup.skirmish_level;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import games.generalszh.content.objects.model_conditions;
+import games.generalszh.commands.game_commands;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.common.identity.components.owner;
+import engine.gameplay.common.identity.components.definition_ref;
+import engine.gameplay.common.appearance.components.appearance;
+import engine.gameplay.common.status.components.ai_activity;
+import engine.gameplay.common.identity.components.team_member;
+import engine.gameplay.rts.movement.components.move_order;
+import engine.gameplay.rts.veterancy.components.experience;
+import engine.gameplay.rts.powers.components.special_power_timers;
+import engine.gameplay.rts.powers.resources.shared_power_timers;
+import engine.gameplay.rts.powers.algorithms.special_power_timing;
+import engine.gameplay.rts.stealth.components.undetected_defector;
+import engine.gameplay.rts.sciences.resources.player_ranks;
+import games.generalszh.gameplay.abilities.components.special_abilities;
+import games.generalszh.content.powers.special_ability_content;
+import games.generalszh.content.powers.special_powers;
+import games.generalszh.gameplay.powers.algorithms.special_power_launch;
+import games.generalszh.gameplay.eva.resources.eva_notices;
+import games.generalszh.gameplay.scripts.resources.script_records;
+import games.generalszh.gameplay.scripts.algorithms.command_button_targets;
+import games.generalszh.gameplay.abilities.algorithms.command_button_hunts;
+import games.generalszh.gameplay.teams.algorithms.team_actions;
+import games.generalszh.gameplay.abilities.algorithms.special_objects;
+import games.generalszh.gameplay.lifecycle.algorithms.retire_now;
+import games.generalszh.content.objects.object_status;
+import engine.gameplay.common.identity.components.producer;
+import engine.gameplay.common.lifetime.components.lifetime;
+import engine.gameplay.common.status.components.status_flags;
+import engine.gameplay.common.health.components.health;
+import engine.gameplay.common.spatial.components.transform;
+import engine.gameplay.rts.death.components.dying;
+import games.generalszh.gameplay.hacking.algorithms.hack_orders;
+import engine.gameplay.rts.economy.resources.player_money;
+import games.generalszh.gameplay.orders.algorithms.unit_orders;
+import engine.gameplay.rts.containment.components.transport;
+import engine.gameplay.common.weapons.components.armament;
+import engine.gameplay.rts.construction.components.builder;
+import games.generalszh.gameplay.battleplans.components.battle_plan;
+import games.generalszh.gameplay.battleplans.resources.battle_plan_players;
+import games.generalszh.content.control_bar.command_catalog;
+import games.generalszh.content.combat.weapon_bonus_content;
+import engine.gameplay.common.health.components.damage_scalar;
+import engine.gameplay.common.health.components.pending_damage;
+import engine.gameplay.common.weapons.components.weapon_bonus_conditions;
+import engine.gameplay.common.status.components.disabled_until;
+import engine.gameplay.rts.combat.components.turret;
+import engine.gameplay.rts.combat.components.aggression;
+import engine.gameplay.rts.vision.components.vision;
+import engine.gameplay.rts.stealth.components.stealth_detector;
+import games.generalszh.gameplay.economy.components.warehouse_crippling;
+import engine.gameplay.rts.docking.components.dock;
+import engine.gameplay.rts.docking.components.docking;
+import games.generalszh.gameplay.combat.components.battle_bus;
+import engine.gameplay.common.weapons.components.temp_weapon_bonus;
+import games.generalszh.gameplay.containment.algorithms.garrisons;
+import engine.gameplay.common.health.components.second_life;
+import engine.gameplay.rts.loadout.components.loadout;
+import games.generalszh.content.combat.loadout_content;
+
+// SpecialAbilityUpdate / SpecialAbility on a shipped skirmish map: the infantry capture of a building.
+using namespace generalszh;
+namespace gp = engine::gameplay;
+using Engine::Math::Fixed;
+
+namespace
+{
+struct Install
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	bool loaded{false};
+
+	Install()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		loaded = true;
+	}
+};
+
+Install &Data()
+{
+	static Install install;
+	return install;
+}
+
+// America (player0, start 0) against China (player1, start 2), both human seats with nobody at them.
+struct Match
+{
+	std::optional<engine::level::generals_map::ReadResult> read;
+	session::setup::SkirmishLevel skirmish;
+	Engine::Math::FixedVector2 start;
+
+	std::uint32_t Team(const session::Session &game, std::size_t player) const { return *game.Teams().FindTeam(skirmish.players[player].team); }
+	Engine::Math::FixedVector2 At(int dx, int dy) const { return {start.x + Fixed::FromInt(dx), start.y + Fixed::FromInt(dy)}; }
+
+	session::SessionOptions Options(std::size_t workers) const
+	{
+		session::SessionOptions options{11, workers, {}, {"player0", "player1"}};
+		for (const auto &player : skirmish.players)
+			options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+		return options;
+	}
+};
+
+std::optional<Match> Prepare(Install &shell)
+{
+	const auto bytes = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	if (!bytes)
+		return std::nullopt;
+	Match match;
+	auto read = engine::level::generals_map::Read(*bytes);
+	if (!read)
+		return std::nullopt;
+	match.read = std::move(*read);
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 7;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::Player, u"Other");
+	setup.slots[1].playerTemplate = templateOf("FactionChina");
+	setup.slots[1].startPos = 2;
+	match.skirmish = session::setup::PrepareSkirmishLevel(match.read->level, setup, shell.game.playerTemplates, 4);
+	for (const auto &marker : match.read->level.markers)
+		if (marker.name == "Player_1_Start")
+			match.start = marker.position.XY();
+	return match;
+}
+
+bool Shows(session::Session &game, ecs::Entity entity, std::string_view condition)
+{
+	const auto *look = game.World().Get<gp::Appearance>(entity);
+	return look != nullptr && look->Test(content::ModelConditionBit(condition));
+}
+
+// A Ranger of America's 150 west of a China barracks of China's, its capture unpaused (as Upgrade_InfantryCaptureBuilding
+// does: UnpauseSpecialPowerUpgrade).
+struct Capture
+{
+	std::unique_ptr<session::Session> game;
+	ecs::Entity ranger;
+	ecs::Entity barracks;
+	std::uint32_t power{0};
+};
+
+Capture Stage(Install &shell, const Match &match, std::size_t workers)
+{
+	Capture made;
+	made.game = std::make_unique<session::Session>(match.skirmish.level, shell.game, match.Options(workers));
+	made.game->Tick();
+	made.barracks = made.game->Place("ChinaBarracks", match.At(300, -350), {}, match.Team(*made.game, 1));
+	made.ranger = made.game->Place("AmericaInfantryRanger", match.At(150, -350), {}, match.Team(*made.game, 0));
+	made.power = *shell.game.powers.Template("SpecialAbilityRangerCaptureBuilding");
+	auto &timer = *made.game->World().Get<gp::SpecialPowerTimers>(made.ranger)->Find(made.power);
+	gp::ResumeCountdown(timer, made.game->CurrentTick());
+	return made;
+}
+
+const generalszh::gameplay::AbilitySlot &Slot(session::Session &game, ecs::Entity ranger)
+{
+	return game.World().Get<generalszh::gameplay::SpecialAbilities>(ranger)->slots[0];
+}
+}
+
+BOOST_AUTO_TEST_SUITE(special_abilities)
+
+// SpecialAbilityUpdateModuleData as the shipped data sets it (durations rounded up to ticks at 30 a second; unset
+// fields at the module's defaults): the Ranger's capture, and the Black Lotus' three abilities in module order.
+BOOST_AUTO_TEST_CASE(legacy_parity_special_ability_module_data)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const engine::time::FixedStep step{30};
+	const auto *ranger = shell.game.objects.Find("AmericaInfantryRanger");
+	BOOST_TEST_REQUIRE(ranger != nullptr);
+	const auto abilities = content::ReadSpecialAbilities(*ranger, step);
+	BOOST_TEST_REQUIRE(abilities.size() == 1u);
+	const auto &capture = abilities[0];
+	BOOST_TEST(capture.power == "SpecialAbilityRangerCaptureBuilding");
+	BOOST_TEST((capture.startRange == Fixed::FromInt(5)));
+	BOOST_TEST((capture.abortRange == Fixed::FromInt(content::SpecialAbilityContent::HugeDistance)));
+	BOOST_TEST(capture.unpackTicks == 90u);
+	BOOST_TEST(capture.preparationTicks == 600u);
+	BOOST_TEST(capture.packTicks == 60u);
+	BOOST_TEST(capture.persistentPrepTicks == 0u);
+	BOOST_TEST(capture.doCaptureFx);
+	BOOST_TEST(capture.awardXp == 15);
+	BOOST_TEST(capture.skillPoints == -1);
+	BOOST_TEST(capture.approachRequiresLos);
+	BOOST_TEST(capture.needToFaceTarget);
+	BOOST_TEST((capture.variation == Fixed{}));
+	bool found = false;
+	for (const auto &module : content::PowerModulesOf(*ranger))
+		if (module.type == "SpecialAbility")
+		{
+			found = true;
+			BOOST_TEST(module.power == "SpecialAbilityRangerCaptureBuilding");
+			BOOST_TEST(module.startsPaused);
+			BOOST_TEST(module.updateModuleStartsAttack);
+		}
+	BOOST_TEST(found);
+	const auto *lotus = shell.game.objects.Find("ChinaInfantryBlackLotus");
+	BOOST_TEST_REQUIRE(lotus != nullptr);
+	const auto hacks = content::ReadSpecialAbilities(*lotus, step);
+	BOOST_TEST_REQUIRE(hacks.size() == 3u);
+	// UnpackTime 6730 ms is 201.9 ticks: 202.
+	const std::string powers[] = {"SpecialAbilityBlackLotusCaptureBuilding", "SpecialAbilityBlackLotusDisableVehicleHack", "SpecialAbilityBlackLotusStealCashHack"};
+	const std::uint64_t prep[] = {180, 60, 180}, unpack[] = {202, 60, 202}, pack[] = {84, 30, 174};
+	for (std::size_t index = 0; index < 3; ++index)
+	{
+		BOOST_TEST(hacks[index].power == powers[index]);
+		BOOST_TEST((hacks[index].startRange == Fixed::FromInt(150)));
+		BOOST_TEST(hacks[index].preparationTicks == prep[index]);
+		BOOST_TEST(hacks[index].unpackTicks == unpack[index]);
+		BOOST_TEST(hacks[index].packTicks == pack[index]);
+	}
+}
+
+// SpecialAbilityUpdate::update with the Ranger's SpecialAbilityUpdate (StartAbilityRange 5, UnpackTime 3000 = 90 ticks,
+// PreparationTime 20000 = 600, PackTime 2000 = 60, AwardXPForTriggering 15) and SpecialAbility (UpdateModuleStartsAttack,
+// SpecialAbilityRangerCaptureBuilding: SPECIAL_INFANTRY_CAPTURE_BUILDING, ReloadTime 15000 = 450), fired by a script
+// (doNamedFireSpecialPowerAtNamed): it walks at the barracks until within 2.5 of it (the range less a quarter cell,
+// ApproachRequiresLOS), turns to face it (aiFaceObject), and the tick it faces it unpacks (UNPACKING, busy: not idle).
+// 90 ticks on it raises its flag (startPreparation: RAISING_FLAG, IS_USING_ABILITY, markSpecialPowerTriggered; EVA and
+// the radar warn China); 600 ticks on the barracks defects to America's default team (a tick undetected; EVA: building
+// stolen), the Ranger gains 15 experience and America 15 skill points, and it packs (PACKING); 60 ticks on it is done
+// and idle. Its power recharged from each preparing tick (continuePreparation: startPowerRecharge): the last is the tick
+// before the trigger, so it is ready 450 ticks after that. The capture runs the same on 1 and 4 workers and checkpoints
+// exactly in the middle of its preparation.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_ranger_captures_a_building)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	Capture one = Stage(shell, *match, 1);
+	Capture four = Stage(shell, *match, 4);
+	auto &game = *one.game;
+	auto &world = game.World();
+	const std::uint32_t america = world.Get<gp::Owner>(one.ranger)->player;
+	const std::uint32_t china = world.Get<gp::Owner>(one.barracks)->player;
+	BOOST_TEST_REQUIRE(america != china);
+	auto &records = world.Resource<generalszh::gameplay::ScriptRecords>();
+	const auto both = [&](auto &&action) {
+		action(one);
+		action(four);
+	};
+	both([](Capture &capture) {
+		generalszh::gameplay::FireSpecialPowerAtObject(capture.game->Game(), capture.ranger, "SpecialAbilityRangerCaptureBuilding", capture.barracks, true);
+	});
+	BOOST_TEST(Slot(game, one.ranger).Has(generalszh::gameplay::ability_flag::Active));
+	const auto tick = [&] { both([](Capture &capture) { capture.game->Tick(); }); };
+	// Asked of both games alike (asking takes it off the list).
+	const auto triggered = [&] {
+		const bool found = records.TakeTriggeredPower(america, "SpecialAbilityRangerCaptureBuilding", one.ranger);
+		four.game->World().Resource<generalszh::gameplay::ScriptRecords>().TakeTriggeredPower(america, "SpecialAbilityRangerCaptureBuilding", four.ranger);
+		return found;
+	};
+	BOOST_TEST(!triggered()); // the update fires it
+
+	// Approach, then face.
+	int ticks = 0;
+	while (world.Get<gp::MoveOrder>(one.ranger)->mode != gp::MoveMode::Face && !Shows(game, one.ranger, "UNPACKING") && ticks < 900)
+	{
+		tick();
+		++ticks;
+	}
+	BOOST_TEST_MESSAGE("in range after " << ticks << " ticks");
+	BOOST_TEST_REQUIRE(Slot(game, one.ranger).Has(generalszh::gameplay::ability_flag::WithinRange));
+	BOOST_TEST(Slot(game, one.ranger).Has(generalszh::gameplay::ability_flag::FacingInitiated));
+	while (!Shows(game, one.ranger, "UNPACKING") && ticks < 1200)
+	{
+		BOOST_TEST((world.Get<gp::MoveOrder>(one.ranger)->mode == gp::MoveMode::Face));
+		tick();
+		++ticks;
+	}
+	BOOST_TEST_REQUIRE(Shows(game, one.ranger, "UNPACKING"));
+	// The tick it faces the barracks (turning ends) it unpacks: busy.
+	BOOST_TEST((world.Get<gp::MoveOrder>(one.ranger)->mode == gp::MoveMode::Idle));
+	BOOST_TEST(world.Get<gp::AiActivity>(one.ranger)->busy == 1);
+	const std::uint64_t unpacked = game.CurrentTick();
+	BOOST_TEST(Slot(game, one.ranger).animTicks == 90u);
+
+	for (int step = 0; step < 89; ++step)
+		tick();
+	BOOST_TEST(Shows(game, one.ranger, "UNPACKING"));
+	BOOST_TEST(!Shows(game, one.ranger, "RAISING_FLAG"));
+	auto &eva = world.Resource<generalszh::gameplay::EvaNotices>().list;
+	auto &radar = world.Resource<generalszh::gameplay::InfiltrationNotices>().list;
+	tick(); // unpacked + 90: preparing
+	BOOST_TEST(game.CurrentTick() == unpacked + 90);
+	BOOST_TEST(!Shows(game, one.ranger, "UNPACKING"));
+	BOOST_TEST(Shows(game, one.ranger, "RAISING_FLAG"));
+	BOOST_TEST(world.Get<gp::AiActivity>(one.ranger)->busy == 0);
+	BOOST_TEST(world.Get<gp::AiActivity>(one.ranger)->usingAbility == 1);
+	BOOST_TEST(Slot(game, one.ranger).prepTicks == 600u);
+	BOOST_TEST(triggered());
+	BOOST_TEST_REQUIRE(eva.size() == 1u);
+	BOOST_TEST((eva[0].cue == generalszh::gameplay::EvaCue::BuildingBeingStolen));
+	BOOST_TEST(eva[0].player == china);
+	BOOST_TEST_REQUIRE(radar.size() == 1u);
+	BOOST_TEST(radar[0].player == china);
+
+	// Half way through: the same on 4 workers, and a checkpoint carries on exactly.
+	for (int step = 0; step < 300; ++step)
+		tick();
+	BOOST_TEST(game.StateHash() == four.game->StateHash());
+	auto restored = session::Session::Restore(match->skirmish.level, shell.game, match->Options(1), game.Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST(restored->StateHash() == game.StateHash());
+	const auto tickAll = [&] {
+		tick();
+		restored->Tick();
+	};
+
+	const std::int32_t experience = world.Get<gp::Experience>(one.ranger)->points;
+	const std::int32_t skill = world.Resource<gp::PlayerRanks>().Of(america).skillPoints;
+	for (int step = 0; step < 299; ++step)
+		tickAll();
+	BOOST_TEST(world.Get<gp::TeamMember>(one.barracks)->team == match->Team(game, 1));
+	tickAll(); // unpacked + 690: captured
+	BOOST_TEST(game.CurrentTick() == unpacked + 690);
+	BOOST_TEST(world.Get<gp::TeamMember>(one.barracks)->team == match->Team(game, 0));
+	BOOST_TEST(world.Get<gp::Owner>(one.barracks)->player == america);
+	BOOST_TEST_REQUIRE(world.Get<gp::UndetectedDefector>(one.barracks) != nullptr);
+	BOOST_TEST(world.Get<gp::UndetectedDefector>(one.barracks)->until == game.CurrentTick() + 1);
+	BOOST_TEST(world.Get<gp::Experience>(one.ranger)->points == experience + 15);
+	BOOST_TEST(world.Resource<gp::PlayerRanks>().Of(america).skillPoints == skill + 15);
+	BOOST_TEST_REQUIRE(eva.size() == 1u);
+	BOOST_TEST((eva[0].cue == generalszh::gameplay::EvaCue::BuildingStolen));
+	BOOST_TEST(eva[0].player == china);
+	BOOST_TEST_REQUIRE(radar.size() == 1u);
+	BOOST_TEST(radar[0].player == china);
+	BOOST_TEST(!Shows(game, one.ranger, "RAISING_FLAG"));
+	BOOST_TEST(Shows(game, one.ranger, "PACKING"));
+	BOOST_TEST(world.Get<gp::AiActivity>(one.ranger)->usingAbility == 0);
+	BOOST_TEST(world.Get<gp::AiActivity>(one.ranger)->busy == 1);
+	// Recharged from the tick before: ready 450 ticks after it.
+	const auto clock = [&](std::uint64_t at) { return gp::PowerClock{world.Resource<gp::SpecialPowerRules>(), world.Resource<gp::SharedPowerTimers>(), america, at}; };
+	const auto &timer = *world.Get<gp::SpecialPowerTimers>(one.ranger)->Find(one.power);
+	BOOST_TEST(!gp::IsReady(timer, clock(unpacked + 689 + 449)));
+	BOOST_TEST(gp::IsReady(timer, clock(unpacked + 689 + 450)));
+
+	for (int step = 0; step < 59; ++step)
+		tickAll();
+	BOOST_TEST(Shows(game, one.ranger, "PACKING"));
+	tickAll(); // unpacked + 750: packed and done
+	BOOST_TEST(!Shows(game, one.ranger, "PACKING"));
+	BOOST_TEST(!Slot(game, one.ranger).Has(generalszh::gameplay::ability_flag::Active));
+	BOOST_TEST(world.Get<gp::AiActivity>(one.ranger)->busy == 0);
+	BOOST_TEST((world.Get<gp::MoveOrder>(one.ranger)->mode == gp::MoveMode::Idle));
+	BOOST_TEST(game.StateHash() == four.game->StateHash());
+	BOOST_TEST(restored->StateHash() == game.StateHash());
+}
+
+// SpecialAbilityUpdate::update: an order from outside its AI (here a player's move) ends the capture at the Ranger's next
+// update (getLastCommandSource() != CMD_FROM_AI: onExit): its flag comes down, it is no longer using the ability, and
+// the barracks stays China's.
+BOOST_AUTO_TEST_CASE(legacy_parity_an_order_ends_a_capture)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	Capture one = Stage(shell, *match, 1);
+	auto &game = *one.game;
+	auto &world = game.World();
+	generalszh::gameplay::FireSpecialPowerAtObject(game.Game(), one.ranger, "SpecialAbilityRangerCaptureBuilding", one.barracks, true);
+	int ticks = 0;
+	while (!Shows(game, one.ranger, "RAISING_FLAG") && ticks < 1500)
+	{
+		game.Tick();
+		++ticks;
+	}
+	BOOST_TEST_REQUIRE(Shows(game, one.ranger, "RAISING_FLAG"));
+	for (int step = 0; step < 100; ++step)
+		game.Tick();
+	std::vector<engine::net::CommandEnvelope> orders{commands::Encode(commands::MoveTo{{one.ranger}, match->At(0, -350)})};
+	orders.front().player = 0;
+	game.Tick(std::span(orders));
+	BOOST_TEST(!Shows(game, one.ranger, "RAISING_FLAG"));
+	BOOST_TEST(!Slot(game, one.ranger).Has(generalszh::gameplay::ability_flag::Active));
+	BOOST_TEST(world.Get<gp::AiActivity>(one.ranger)->usingAbility == 0);
+	BOOST_TEST((world.Get<gp::MoveOrder>(one.ranger)->mode == gp::MoveMode::Point));
+	for (int step = 0; step < 600; ++step)
+		game.Tick();
+	BOOST_TEST(world.Get<gp::TeamMember>(one.barracks)->team == match->Team(game, 1));
+}
+
+// CommandButtonHuntUpdate (ScanRate unset: 30 ticks; ScanRange 9999) set by doTeamHuntWithCommandButton with
+// Command_AmericaRangerCaptureBuilding: setCommandButton idles the Ranger and it updates that tick: idle, its capture not
+// under way, it scans (scanClosestTarget: the default priority 1 everywhere, so the nearest valid target) and uses the
+// button there (CMD_FROM_AI), starting the capture of the nearer derrick. Then it updates the next tick and every 30
+// ticks from there; once the capture is done and its power recharged (450 ticks after the last preparing tick) the first scan
+// takes the China barracks (the derrick is its own now). Both are in its sight (a human player's unit uses its power
+// only on what its player sees). A player's order ends the hunt at its next update.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_command_button_hunt_captures_one_building_after_another)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	auto &world = game.World();
+	const std::uint32_t team = match->Team(game, 0);
+	const ecs::Entity derrick = game.Place("TechOilDerrick", match->At(150, -350), {}, *game.Teams().FindTeam("team"));
+	const ecs::Entity barracks = game.Place("ChinaBarracks", match->At(-200, -350), {}, match->Team(game, 1));
+	const ecs::Entity ranger = game.Place("AmericaInfantryRanger", match->At(0, -350), {}, team);
+	// A human player's unit may only use its power on what its player sees (isObjectShroudedForAction): the Ranger's
+	// look (ShroudClearingRange 400) takes a tick.
+	game.Tick();
+	game.Tick();
+	BOOST_TEST_REQUIRE(world.Get<generalszh::gameplay::CommandButtonHunt>(ranger) != nullptr);
+	BOOST_TEST(world.Get<generalszh::gameplay::CommandButtonHunt>(ranger)->scanTicks == 30u);
+	const auto power = *shell.game.powers.Template("SpecialAbilityRangerCaptureBuilding");
+	const std::uint32_t america = world.Get<gp::Owner>(ranger)->player;
+	const auto clock = [&](std::uint64_t at) { return gp::PowerClock{world.Resource<gp::SpecialPowerRules>(), world.Resource<gp::SharedPowerTimers>(), america, at}; };
+	{
+		auto &timer = *world.Get<gp::SpecialPowerTimers>(ranger)->Find(power);
+		gp::ResumeCountdown(timer, game.CurrentTick());
+		gp::SetReadyFrame(timer, game.CurrentTick(), clock(game.CurrentTick()));
+	}
+	const std::uint64_t started = game.CurrentTick();
+	generalszh::gameplay::TeamHuntWithCommandButton(game.Game(), "#" + std::to_string(team), "Command_AmericaRangerCaptureBuilding");
+	// Set between ticks (a script sets it within its tick): it updates the coming tick, and again the one after.
+	BOOST_TEST(world.Get<generalszh::gameplay::CommandButtonHunt>(ranger)->nextTick == started);
+	game.Tick();
+	BOOST_TEST(Slot(game, ranger).Has(generalszh::gameplay::ability_flag::Active));
+	BOOST_TEST((Slot(game, ranger).target == derrick));
+	BOOST_TEST(world.Get<generalszh::gameplay::CommandButtonHunt>(ranger)->nextTick == started + 2);
+	int ticks = 0;
+	while (!Shows(game, ranger, "UNPACKING") && ticks < 1500)
+	{
+		game.Tick();
+		++ticks;
+	}
+	BOOST_TEST_REQUIRE(Shows(game, ranger, "UNPACKING"));
+	const std::uint64_t unpacked = game.CurrentTick();
+	const std::uint64_t ready = unpacked + 689 + 450;
+	const std::uint64_t firstScan = started + 2;
+	const std::uint64_t due = firstScan + (ready - firstScan + 29) / 30 * 30;
+	while (game.CurrentTick() < due - 1)
+		game.Tick();
+	BOOST_TEST(world.Get<gp::Owner>(derrick)->player == america);
+	BOOST_TEST(!Slot(game, ranger).Has(generalszh::gameplay::ability_flag::Active));
+	game.Tick();
+	BOOST_TEST(game.CurrentTick() == due);
+	BOOST_TEST(Slot(game, ranger).Has(generalszh::gameplay::ability_flag::Active));
+	BOOST_TEST((Slot(game, ranger).target == barracks));
+	std::vector<engine::net::CommandEnvelope> orders{commands::Encode(commands::MoveTo{{ranger}, match->At(0, -350)})};
+	orders.front().player = 0;
+	game.Tick(std::span(orders));
+	BOOST_TEST(!Slot(game, ranger).Has(generalszh::gameplay::ability_flag::Active));
+	for (int step = 0; step < 31; ++step)
+		game.Tick();
+	BOOST_TEST(!world.Get<generalszh::gameplay::CommandButtonHunt>(ranger)->Hunting());
+}
+
+// ScriptActions::doTeamUseCommandButtonOnNearestObjectType as the skirmish AI's tech building captures use it
+// (TEAM_ALL_USE_COMMANDBUTTON_ON_NEAREST_OBJECTTYPE, Command_AmericaRangerCaptureBuilding, TechOilDerrick): of the
+// derricks (neutral, CAPTURABLE) the one nearest the team's centre that its first Ranger may capture
+// (isValidToUseOn -> canCaptureBuilding: the power fully ready); every member starts capturing it. With the power still
+// paused (no Upgrade_InfantryCaptureBuilding) nothing is valid. The button's Upgrade no longer makes it an upgrade
+// button that is never valid (a retail quirk fixed).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_team_captures_the_nearest_tech_building)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	auto &world = game.World();
+	const std::uint32_t team = match->Team(game, 0);
+	const auto neutral = game.Teams().FindTeam("team");
+	BOOST_TEST_REQUIRE(neutral.has_value());
+	const ecs::Entity nearer = game.Place("TechOilDerrick", match->At(250, -350), {}, *neutral);
+	const ecs::Entity farther = game.Place("TechOilDerrick", match->At(-350, -350), {}, *neutral);
+	const ecs::Entity first = game.Place("AmericaInfantryRanger", match->At(0, -350), {}, team);
+	const ecs::Entity second = game.Place("AmericaInfantryRanger", match->At(20, -350), {}, team);
+	BOOST_TEST_REQUIRE(world.IsAlive(nearer));
+	BOOST_TEST_REQUIRE(world.IsAlive(farther));
+	const std::string teamName = "#" + std::to_string(team);
+	const auto capture = [&] {
+		generalszh::gameplay::TeamAllUseCommandButtonOnNearest(game.Game(), teamName, "Command_AmericaRangerCaptureBuilding",
+			generalszh::gameplay::ButtonTarget::ObjectType, {}, "TechOilDerrick");
+	};
+	capture();
+	BOOST_TEST(!Slot(game, first).Has(generalszh::gameplay::ability_flag::Active));
+	const auto power = *shell.game.powers.Template("SpecialAbilityRangerCaptureBuilding");
+	const std::uint32_t america = world.Get<gp::Owner>(first)->player;
+	for (const ecs::Entity ranger : {first, second})
+	{
+		auto &timer = *world.Get<gp::SpecialPowerTimers>(ranger)->Find(power);
+		gp::ResumeCountdown(timer, game.CurrentTick());
+		gp::SetReadyFrame(timer, game.CurrentTick(),
+			{world.Resource<gp::SpecialPowerRules>(), world.Resource<gp::SharedPowerTimers>(), america, game.CurrentTick()});
+	}
+	capture();
+	for (const ecs::Entity ranger : {first, second})
+	{
+		BOOST_TEST(Slot(game, ranger).Has(generalszh::gameplay::ability_flag::Active));
+		BOOST_TEST((Slot(game, ranger).target == nearer));
+	}
+}
+
+// DefaultProductionExitUpdate::exitObjectViaDoor / aiFollowExitProductionPath: a Ranger trained at a barracks appears
+// at its UnitCreatePoint, inside the barracks' footprint, and walks out through it (ignoreObstacle: the barracks' cells
+// are open to it) to the natural rally point; there it has left the barracks (ignoreObstacleID(INVALID_ID)).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_trained_unit_walks_out_of_its_factory)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	auto &world = game.World();
+	const ecs::Entity barracks = game.Place("AmericaBarracks", match->At(200, -300), {}, match->Team(game, 0));
+	game.Tick();
+	std::vector<engine::net::CommandEnvelope> orders{commands::Encode(commands::QueueUnit{barracks, "AmericaInfantryRanger"})};
+	orders.front().player = 0;
+	game.Tick(std::span(orders));
+	ecs::Entity ranger;
+	for (int tick = 0; tick < 900 && ranger == ecs::Entity{}; ++tick)
+	{
+		game.Tick();
+		ecs::Query<ecs::Read<gp::DefinitionRef>> query(world);
+		query.ForEachChunk([&](auto chunk) {
+			const auto refs = chunk.template Get<gp::DefinitionRef>();
+			const auto entities = chunk.Entities();
+			for (std::size_t row = 0; row < refs.size(); ++row)
+				if (game.DefinitionName(refs[row].index) == "AmericaInfantryRanger")
+					ranger = entities[row];
+		});
+	}
+	BOOST_TEST_REQUIRE((ranger != ecs::Entity{}));
+	BOOST_TEST_REQUIRE(world.Get<gp::IgnoredObstacle>(ranger) != nullptr);
+	BOOST_TEST((world.Get<gp::IgnoredObstacle>(ranger)->obstacle == barracks));
+	const auto start = game.TransformOf(ranger)->position.XY();
+	const auto rally = world.Get<gp::MoveOrder>(ranger)->destination;
+	for (int tick = 0; tick < 300 && world.Get<gp::MoveOrder>(ranger)->mode != gp::MoveMode::Idle; ++tick)
+		game.Tick();
+	game.Tick();
+	BOOST_TEST((world.Get<gp::MoveOrder>(ranger)->mode == gp::MoveMode::Idle));
+	const auto end = game.TransformOf(ranger)->position.XY();
+	BOOST_TEST((Engine::Math::Distance(start, end) > Fixed::FromInt(30)));
+	BOOST_TEST((Engine::Math::Distance(end, rally) <= Fixed::FromInt(15))); // the nearest open cell to it
+	BOOST_TEST(world.Get<gp::IgnoredObstacle>(ranger) == nullptr);
+}
+
+// ScriptActions::doTeamFollowSkirmishApproachPath / doTeamMoveToSkirmishApproachPath on Tournament Continent: the path
+// label is the script's label with the skirmish enemy's getMpStartIndex()+1 (China, start 2: "Center3"); its waypoint
+// closest to the team's centre (getClosestWaypointOnPath) is the one every member takes (groupFollowWaypointPath), not
+// each member's own closest; move-to sends them all to that waypoint (groupMoveToPosition). A missing path orders nobody.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_team_takes_the_skirmish_approach_path_toward_its_enemy)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	auto &world = game.World();
+	const std::uint32_t team = match->Team(game, 0);
+	const std::string name = "#" + std::to_string(team);
+	// The starting worker stays out of it: a team of its own for the two tanks.
+	std::vector<ecs::Entity> tanks{game.Place("AmericaTankCrusader", match->At(-600, 0), {}, team),
+		game.Place("AmericaTankCrusader", match->At(600, 0), {}, team)};
+	const auto &waypoints = game.Game().waypoints;
+	const auto centre = generalszh::gameplay::TeamCentre(game.Game(), team);
+	BOOST_TEST_REQUIRE(centre.has_value());
+	const std::int64_t china = 2;
+	const std::uint32_t expected = waypoints.ClosestOnPath(*centre, "Center3");
+	BOOST_TEST_REQUIRE(expected != gp::WaypointGraph::None);
+	for (const ecs::Entity tank : tanks)
+		world.Get<gp::MoveOrder>(tank)->mode = gp::MoveMode::Idle;
+	generalszh::gameplay::TeamFollowApproachPath(game.Game(), name, "Center", china, false);
+	for (const ecs::Entity tank : tanks)
+	{
+		const auto &order = *world.Get<gp::MoveOrder>(tank);
+		BOOST_TEST((order.mode == gp::MoveMode::Path));
+		BOOST_TEST(order.waypoint == expected);
+	}
+	generalszh::gameplay::TeamMoveToApproachPath(game.Game(), name, "Center", china);
+	for (const ecs::Entity tank : tanks)
+	{
+		const auto &order = *world.Get<gp::MoveOrder>(tank);
+		BOOST_TEST((order.mode == gp::MoveMode::Point));
+		BOOST_TEST((order.destination == waypoints.Position(expected).XY()));
+	}
+	for (const ecs::Entity tank : tanks)
+		world.Get<gp::MoveOrder>(tank)->mode = gp::MoveMode::Idle;
+	generalszh::gameplay::TeamFollowApproachPath(game.Game(), name, "NoSuchPath", china, true);
+	generalszh::gameplay::TeamMoveToApproachPath(game.Game(), name, "NoSuchPath", china);
+	for (const ecs::Entity tank : tanks)
+		BOOST_TEST((world.Get<gp::MoveOrder>(tank)->mode == gp::MoveMode::Idle));
+}
+
+namespace
+{
+namespace ga = generalszh::gameplay;
+
+// The special objects of `type` in the world.
+std::vector<ecs::Entity> ObjectsOf(session::Session &game, std::string_view type)
+{
+	std::vector<ecs::Entity> found;
+	ecs::Query<ecs::Read<gp::DefinitionRef>> query(game.World());
+	query.ForEachChunk([&](auto chunk) {
+		const auto refs = chunk.template Get<gp::DefinitionRef>();
+		const auto entities = chunk.Entities();
+		for (std::size_t row = 0; row < refs.size(); ++row)
+			if (game.Game().templates.DefinitionAt(refs[row].index).name == type)
+				found.push_back(entities[row]);
+	});
+	return found;
+}
+
+bool Trapped(session::Session &game, ecs::Entity entity)
+{
+	const auto *flags = game.World().Get<gp::StatusFlags>(entity);
+	return flags != nullptr && (flags->bits & (std::uint64_t{1} << content::ObjectStatusBit("BOOBY_TRAPPED"))) != 0;
+}
+
+bool Dead(session::Session &game, ecs::Entity entity)
+{
+	return generalszh::gameplay::EffectivelyDead(game.Game(), entity);
+}
+
+// Colonel Burton of America's 60 west of a China Battlemaster.
+struct Charges
+{
+	std::unique_ptr<session::Session> game;
+	ecs::Entity burton;
+	ecs::Entity tank;
+};
+
+Charges StageCharges(Install &shell, const Match &match, std::size_t workers)
+{
+	Charges made;
+	made.game = std::make_unique<session::Session>(match.skirmish.level, shell.game, match.Options(workers));
+	made.game->Tick();
+	made.tank = made.game->Place("ChinaTankBattleMaster", match.At(100, 100), {}, match.Team(*made.game, 1));
+	made.burton = made.game->Place("AmericaInfantryColonelBurton", match.At(40, 100), {}, match.Team(*made.game, 0));
+	return made;
+}
+
+// Ticks both until a `type` special object is in the first; the tick it came.
+std::uint64_t TickUntilPlaced(Charges &one, Charges &four, std::string_view type)
+{
+	for (int ticks = 0; ticks < 900 && ObjectsOf(*one.game, type).empty(); ++ticks)
+	{
+		one.game->Tick();
+		four.game->Tick();
+	}
+	return one.game->CurrentTick();
+}
+}
+
+// SpecialAbilityUpdate::triggerAbilityEffect (SPECIAL_TIMED_CHARGES) with createSpecialObject, and StickyBombUpdate
+// (initStickyBomb, update), on the shipped AmericaInfantryColonelBurton and TimedC4Charge (LifetimeUpdate 20000 ms,
+// SlowDeathBehavior FINAL BurtonC4ChargeWeapon): the charge is made on Burton's team and stuck on the Battlemaster, its
+// producer the tank, OffsetZ (10) above it and riding it as it moves; it dies 600 ticks after it was placed, pinging on
+// each whole second before (m_nextPingFrame = die - pings * 30: the placing tick itself, the ping heard next tick, then
+// every 30); ActionManager::canDoSpecialPowerAtObject allows no second charge (timed or remote) on the tank; it dies at
+// placed + 600, its slow death's FINAL phase fires the charge weapon (2000 within 25) at + 601 and the tank dies of it
+// at + 602 (the port's shots land a tick after they are fired). Burton gets there by a contact approach (StartAbilityRange
+// 0: isWithinStartAbilityRange's iteratePotentialCollisions). The same on 4 workers, and a checkpoint taken while the
+// charge ticks carries on exactly.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_timed_charge_rides_its_target_and_goes_off)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	Charges one = StageCharges(shell, *match, 1);
+	Charges four = StageCharges(shell, *match, 4);
+	auto &game = *one.game;
+	auto &world = game.World();
+	for (Charges *charges : {&one, &four})
+		ga::FireSpecialPowerAtObject(charges->game->Game(), charges->burton, "SpecialAbilityColonelBurtonTimedCharges", charges->tank, true);
+	const std::uint64_t placed = TickUntilPlaced(one, four, "TimedC4Charge");
+	const auto charges = ObjectsOf(game, "TimedC4Charge");
+	BOOST_TEST_REQUIRE(charges.size() == 1u);
+	const ecs::Entity charge = charges[0];
+	BOOST_TEST(world.Get<gp::TeamMember>(charge)->team == match->Team(game, 0));
+	BOOST_TEST_REQUIRE(world.Get<ga::StickyBomb>(charge) != nullptr);
+	BOOST_TEST((world.Get<ga::StickyBomb>(charge)->target == one.tank));
+	BOOST_TEST((world.Get<gp::Producer>(charge)->entity == one.tank));
+	BOOST_TEST((world.Get<ga::SpecialObject>(charge)->owner == one.burton));
+	BOOST_TEST((world.Get<gp::Experience>(charge) == nullptr || world.Get<gp::Experience>(charge)->sink == one.burton));
+	const auto &tankAt = world.Get<gp::Transform>(one.tank)->position;
+	const auto &chargeAt = world.Get<gp::Transform>(charge)->position;
+	BOOST_TEST((chargeAt.x == tankAt.x));
+	BOOST_TEST((chargeAt.y == tankAt.y));
+	BOOST_TEST((chargeAt.z == tankAt.z + Fixed::FromInt(10)));
+	BOOST_TEST(world.Get<gp::Lifetime>(charge)->expiresTick == placed + 600);
+	BOOST_TEST(world.Get<ga::StickyBomb>(charge)->dieTick == placed + 600);
+	BOOST_TEST(world.Get<ga::StickyBomb>(charge)->nextPingTick == placed);
+	BOOST_TEST(ga::SpecialObjectCount(game.Game(), one.burton, 1) == 1u);
+	const std::uint32_t timed = *shell.game.powers.Template("SpecialAbilityColonelBurtonTimedCharges");
+	const std::uint32_t remote = *shell.game.powers.Template("SpecialAbilityColonelBurtonRemoteCharges");
+	BOOST_TEST(!ga::CanTargetWithPower(game.Game(), one.burton, timed, one.tank));
+	BOOST_TEST(!ga::CanTargetWithPower(game.Game(), one.burton, remote, one.tank));
+	const auto pings = [&] {
+		std::size_t count = 0;
+		for (const auto &cue : world.Resource<ga::StickyBombCues>().list)
+			count += cue.kind == ga::StickyBombCue::Kind::Ping ? 1u : 0u;
+		return count;
+	};
+	const auto tick = [&] {
+		game.Tick();
+		four.game->Tick();
+	};
+	tick(); // placed + 1: the first ping
+	BOOST_TEST(pings() == 1u);
+	BOOST_TEST(world.Get<ga::StickyBomb>(charge)->nextPingTick == placed + 30);
+	// It rides the tank.
+	world.Get<gp::Transform>(one.tank)->position.x += Fixed::FromInt(20);
+	four.game->World().Get<gp::Transform>(four.tank)->position.x += Fixed::FromInt(20);
+	for (int step = 0; step < 28; ++step)
+	{
+		tick();
+		BOOST_TEST(pings() == 0u);
+	}
+	BOOST_TEST((world.Get<gp::Transform>(charge)->position.x == world.Get<gp::Transform>(one.tank)->position.x));
+	tick(); // placed + 30
+	BOOST_TEST(pings() == 1u);
+	BOOST_TEST(game.StateHash() == four.game->StateHash());
+	auto restored = session::Session::Restore(match->skirmish.level, shell.game, match->Options(1), game.Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST(restored->StateHash() == game.StateHash());
+	while (game.CurrentTick() < placed + 599)
+	{
+		tick();
+		restored->Tick();
+	}
+	BOOST_TEST(!Dead(game, one.tank));
+	BOOST_TEST(!Dead(game, charge));
+	tick(); // placed + 600: the charge dies
+	restored->Tick();
+	BOOST_TEST(Dead(game, charge));
+	BOOST_TEST(!Dead(game, one.tank));
+	tick(); // placed + 601: the charge's slow death ends (FINAL): its weapon fired
+	restored->Tick();
+	BOOST_TEST(!Dead(game, one.tank));
+	tick(); // placed + 602: the weapon lands (the original's lands with the FINAL frame: the port's shots a tick on)
+	restored->Tick();
+	BOOST_TEST(Dead(game, one.tank));
+	BOOST_TEST(game.StateHash() == four.game->StateHash());
+	BOOST_TEST(restored->StateHash() == game.StateHash());
+}
+
+// SPECIAL_REMOTE_CHARGES: a RemoteC4Charge stuck on the tank (no LifetimeUpdate: pings from a second after it was
+// placed) waits; the power with no target (doSpecialPower: SkipPackingWithNoTarget, no unpacking) sets off every
+// charge placed (detonate: killed; SlowDeathBehavior FINAL BurtonC4ChargeWeapon), the tank dead of it the tick after.
+// A second charge placed, Burton dies: SpecialObjectsPersistWhenOwnerDies No, it is gone with him.
+BOOST_AUTO_TEST_CASE(legacy_parity_remote_charges_go_off_on_command_and_go_with_their_owner)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	Charges one = StageCharges(shell, *match, 1);
+	Charges four = StageCharges(shell, *match, 4);
+	auto &game = *one.game;
+	auto &world = game.World();
+	for (Charges *charges : {&one, &four})
+		ga::FireSpecialPowerAtObject(charges->game->Game(), charges->burton, "SpecialAbilityColonelBurtonRemoteCharges", charges->tank, true);
+	const std::uint64_t placed = TickUntilPlaced(one, four, "RemoteC4Charge");
+	const auto charges = ObjectsOf(game, "RemoteC4Charge");
+	BOOST_TEST_REQUIRE(charges.size() == 1u);
+	const ecs::Entity charge = charges[0];
+	BOOST_TEST(world.Get<ga::StickyBomb>(charge)->dieTick == 0u);
+	BOOST_TEST(world.Get<ga::StickyBomb>(charge)->nextPingTick == placed + 30);
+	const auto tick = [&] {
+		game.Tick();
+		four.game->Tick();
+	};
+	for (int step = 0; step < 60; ++step)
+		tick();
+	BOOST_TEST(!Dead(game, charge));
+	// Detonate: the power with no target.
+	for (Charges *charges : {&one, &four})
+		ga::FireSpecialPower(charges->game->Game(), charges->burton, "SpecialAbilityColonelBurtonRemoteCharges", {}, true, false);
+	const std::uint64_t ordered = game.CurrentTick();
+	int ticks = 0;
+	while (!Dead(game, charge) && ticks < 300)
+	{
+		tick();
+		++ticks;
+	}
+	BOOST_TEST_REQUIRE(Dead(game, charge));
+	// ordered + 1: facing (no target: no turn); + 2: faced, prepared (PreparationTime 0), triggered: detonate kills the
+	// charge; + 3: it dies.
+	BOOST_TEST(game.CurrentTick() - ordered == 3u);
+	BOOST_TEST(!Dead(game, one.tank));
+	tick();
+	tick();
+	BOOST_TEST(Dead(game, one.tank));
+	BOOST_TEST(game.StateHash() == four.game->StateHash());
+
+	// Another charge, on a fresh tank; Burton killed: it goes with him.
+	const ecs::Entity other = game.Place("ChinaTankBattleMaster", match->At(100, 160), {}, match->Team(game, 1));
+	const ecs::Entity otherFour = four.game->Place("ChinaTankBattleMaster", match->At(100, 160), {}, match->Team(*four.game, 1));
+	for (int step = 0; step < 300; ++step)
+		tick();
+	ga::FireSpecialPowerAtObject(game.Game(), one.burton, "SpecialAbilityColonelBurtonRemoteCharges", other, true);
+	ga::FireSpecialPowerAtObject(four.game->Game(), four.burton, "SpecialAbilityColonelBurtonRemoteCharges", otherFour, true);
+	for (int step = 0; step < 900 && ga::SpecialObjectCount(game.Game(), one.burton, 0) == 0; ++step)
+	{
+		tick();
+	}
+	const auto second = ga::SpecialObjectsOf(game.Game(), one.burton, 0);
+	BOOST_TEST_REQUIRE(second.size() == 1u);
+	ga::KillNow(game.Game(), one.burton);
+	ga::KillNow(four.game->Game(), four.burton);
+	tick();
+	tick();
+	BOOST_TEST(!world.IsAlive(second[0]));
+	BOOST_TEST(game.StateHash() == four.game->StateHash());
+}
+
+// Object::checkAndDetonateBoobyTrap and StickyBombUpdate::detonate with the shipped BoobyTrap
+// (GeometryBasedDamageWeapon BoobyTrapDetonationWeapon: 200 within 5 and 50 within 15 of the trapped thing's edge) put
+// on an American barracks by a script (doNamedSetBoobytrapped: a random point of the barracks' box edge, turned as it
+// is, on the ground): the barracks is BOOBY_TRAPPED; an ally's touch sets nothing off; a China Red Guard's does, once:
+// the barracks trapped no more, the trap killed, and the Red Guard (120) dead of the 200 on the next tick. A second
+// trap set off by the barracks' death (Object::onDie): killed with the tick after.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_booby_trap_goes_off_at_an_enemy_or_as_its_victim_dies)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	auto &world = game.World();
+	game.Tick();
+	const ecs::Entity barracks = game.Place("AmericaBarracks", match->At(300, -350), {}, match->Team(game, 0));
+	const auto &geometry = game.Game().templates.DefinitionAt(world.Get<gp::DefinitionRef>(barracks)->index).geometry;
+	BOOST_TEST_REQUIRE((geometry.shape == content::GeometryShape::Box));
+	const Fixed circle = content::BoundingCircleRadius(geometry);
+	// The Red Guard at the barracks' edge (within its bounding circle and the primary reach).
+	const ecs::Entity guard = game.Place("ChinaInfantryRedguard", match->At(300, -350 + (circle.Floor() + 2)), {}, match->Team(game, 1));
+	const ecs::Entity ranger = game.Place("AmericaInfantryRanger", match->At(250, -250), {}, match->Team(game, 0));
+	ga::SetBoobytrapped(game.Game(), "BoobyTrap", barracks);
+	auto traps = ObjectsOf(game, "BoobyTrap");
+	BOOST_TEST_REQUIRE(traps.size() == 1u);
+	const ecs::Entity trap = traps[0];
+	BOOST_TEST(Trapped(game, barracks));
+	BOOST_TEST((world.Get<gp::Producer>(trap)->entity == barracks));
+	// On the edge of its box, turned as it is (unturned here), on the ground.
+	const auto &at = world.Get<gp::Transform>(trap)->position;
+	const auto &middle = world.Get<gp::Transform>(barracks)->position;
+	const Fixed dx = Engine::Math::Abs(at.x - middle.x), dy = Engine::Math::Abs(at.y - middle.y);
+	BOOST_TEST(((dx == geometry.majorRadius && dy <= geometry.minorRadius) || (dy == geometry.minorRadius && dx <= geometry.majorRadius)));
+	BOOST_TEST((at.z == game.Game().ground.At(at.XY())));
+	BOOST_TEST(!ga::CheckAndDetonateBoobyTrap(game.Game(), barracks, ranger));
+	BOOST_TEST(Trapped(game, barracks));
+	const Fixed before = world.Get<gp::Health>(guard)->current;
+	BOOST_TEST(ga::CheckAndDetonateBoobyTrap(game.Game(), barracks, guard));
+	BOOST_TEST(!Trapped(game, barracks));
+	BOOST_TEST(!ga::CheckAndDetonateBoobyTrap(game.Game(), barracks, guard));
+	game.Tick();
+	BOOST_TEST(Dead(game, trap));
+	const Fixed after = world.Get<gp::Health>(guard)->current;
+	// 200 (primary) against its 120: dead.
+	BOOST_TEST(before.Floor() == 120);
+	BOOST_TEST(after.Floor() <= 0);
+	BOOST_TEST(Dead(game, guard));
+
+	// A second trap, set off as the barracks dies.
+	game.Tick();
+	ga::SetBoobytrapped(game.Game(), "BoobyTrap", barracks);
+	traps = ObjectsOf(game, "BoobyTrap");
+	ecs::Entity second;
+	for (const ecs::Entity found : traps)
+		if (world.IsAlive(found) && !Dead(game, found))
+			second = found;
+	BOOST_TEST_REQUIRE(world.IsAlive(second));
+	BOOST_TEST(Trapped(game, barracks));
+	ga::KillNow(game.Game(), barracks);
+	game.Tick(); // the barracks dies: its trap set off (killed with the next tick's)
+	BOOST_TEST(Dead(game, barracks));
+	BOOST_TEST(!Trapped(game, barracks));
+	BOOST_TEST(!Dead(game, second));
+	game.Tick();
+	BOOST_TEST((!world.IsAlive(second) || Dead(game, second)));
+}
+
+// HackInternetAIUpdate.cpp (HackInternetStateMachine: UnpackingState, HackInternetState, PackingState; aiDoCommand's
+// pending command) and InternetHackContain::onContaining on the shipped ChinaInfantryHacker (UnpackTime 7300 ms: 219
+// ticks, PackTime 5133: 154, CashUpdateDelay 2000: 60, CashUpdateDelayFast 1800: 54, 5/6/8/10 cash, 1 xp a pay,
+// PackUnpackVariationFactor 0.5) and ChinaInternetCenter. Told to hack it unpacks for its varied frames (the tick after
+// they run out it hacks), then is paid 5 every 61 ticks (60 counted down, the pay on the 61st) with an experience point
+// each; a move order while it hacks makes it pack (the move held) and go once packed; in an Internet Center it hacks at
+// as it goes in and, unpacked, counts the fast delay (54). The same on 4 workers, and a checkpoint taken while it hacks
+// carries on exactly.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_hacker_hacks_the_internet)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	namespace ga = generalszh::gameplay;
+	struct Game
+	{
+		std::unique_ptr<session::Session> game;
+		ecs::Entity hacker;
+	};
+	const auto stage = [&](std::size_t workers) {
+		Game made;
+		made.game = std::make_unique<session::Session>(match->skirmish.level, shell.game, match->Options(workers));
+		made.game->Tick();
+		made.hacker = made.game->Place("ChinaInfantryHacker", match->At(150, 150), {}, match->Team(*made.game, 1));
+		return made;
+	};
+	Game one = stage(1), four = stage(4);
+	auto &game = *one.game;
+	auto &world = game.World();
+	BOOST_TEST_REQUIRE(world.Get<ga::InternetHack>(one.hacker) != nullptr);
+	const std::uint32_t china = world.Get<gp::Owner>(one.hacker)->player;
+	const auto money = [&] { return world.Resource<gp::PlayerMoney>().Balance(china); };
+	const auto tick = [&] {
+		game.Tick();
+		four.game->Tick();
+	};
+	ga::HackInternet(game.Game(), one.hacker, true);
+	ga::HackInternet(four.game->Game(), four.hacker, true);
+	const auto *hack = world.Get<ga::InternetHack>(one.hacker);
+	BOOST_TEST((hack->stage == ga::HackStage::Unpacking));
+	const std::uint32_t unpack = hack->framesRemaining;
+	// 219 ticks times a factor in 0.5 .. 1.5 (this game's stream: 132), the fraction dropped.
+	BOOST_TEST(unpack == 132u);
+	BOOST_TEST(Shows(game, one.hacker, "UNPACKING"));
+	for (std::uint32_t step = 0; step < unpack; ++step)
+		tick();
+	BOOST_TEST((world.Get<ga::InternetHack>(one.hacker)->stage == ga::HackStage::Unpacking));
+	tick(); // its frames spent: it hacks
+	BOOST_TEST((world.Get<ga::InternetHack>(one.hacker)->stage == ga::HackStage::Hacking));
+	BOOST_TEST(world.Get<ga::InternetHack>(one.hacker)->framesRemaining == 60u);
+	BOOST_TEST(Shows(game, one.hacker, "FIRING_A"));
+	BOOST_TEST(!Shows(game, one.hacker, "UNPACKING"));
+	const std::int64_t before = money();
+	const std::int32_t xp = world.Get<gp::Experience>(one.hacker)->points;
+	for (int step = 0; step < 60; ++step)
+		tick();
+	BOOST_TEST(money() == before);
+	tick(); // the 61st: paid
+	BOOST_TEST(money() == before + 5);
+	BOOST_TEST(world.Get<gp::Experience>(one.hacker)->points == xp + 1);
+	for (int step = 0; step < 61; ++step)
+		tick();
+	BOOST_TEST(money() == before + 10);
+	BOOST_TEST(game.StateHash() == four.game->StateHash());
+	auto restored = session::Session::Restore(match->skirmish.level, shell.game, match->Options(1), game.Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST(restored->StateHash() == game.StateHash());
+
+	// Told to move: it packs (the move held) and then goes.
+	const auto goal = match->At(250, 150);
+	ga::OrderMove(game.Game(), one.hacker, goal, true);
+	ga::OrderMove(four.game->Game(), four.hacker, goal, true);
+	BOOST_TEST((world.Get<ga::InternetHack>(one.hacker)->stage == ga::HackStage::Packing));
+	const std::uint32_t pack = world.Get<ga::InternetHack>(one.hacker)->framesRemaining;
+	// 154 times its factor (this game's stream: 154).
+	BOOST_TEST(pack == 154u);
+	const auto start = world.Get<gp::Transform>(one.hacker)->position.XY();
+	for (std::uint32_t step = 0; step < pack; ++step)
+		tick();
+	BOOST_TEST((world.Get<gp::Transform>(one.hacker)->position.XY() == start));
+	tick(); // packed: its move goes on
+	BOOST_TEST((world.Get<ga::InternetHack>(one.hacker)->stage == ga::HackStage::Idle));
+	for (int step = 0; step < 30; ++step)
+		tick();
+	BOOST_TEST((world.Get<gp::Transform>(one.hacker)->position.XY() != start));
+
+	// Into an Internet Center: set hacking as it goes in (it unpacks, then is paid every 55 ticks).
+	const ecs::Entity center = game.Place("ChinaInternetCenter", match->At(300, 300), {}, match->Team(game, 1));
+	const ecs::Entity other = game.Place("ChinaInfantryHacker", match->At(300, 240), {}, match->Team(game, 1));
+	BOOST_TEST_REQUIRE(world.IsAlive(center));
+	ga::OrderBoard(game.Game(), other, center, true);
+	for (int step = 0; step < 600 && world.Get<gp::Passenger>(other) == nullptr; ++step)
+		game.Tick();
+	BOOST_TEST_REQUIRE(world.Get<gp::Passenger>(other) != nullptr);
+	BOOST_TEST((world.Get<ga::InternetHack>(other)->stage == ga::HackStage::Unpacking));
+	for (int step = 0; step < 400 && world.Get<ga::InternetHack>(other)->stage == ga::HackStage::Unpacking; ++step)
+		game.Tick();
+	BOOST_TEST((world.Get<ga::InternetHack>(other)->stage == ga::HackStage::Hacking));
+	BOOST_TEST(world.Get<ga::InternetHack>(other)->framesRemaining == 54u);
+}
+
+// BattlePlanUpdate.cpp (update, setStatus, setBattlePlan, paralyzeTroop, onObjectCreated, onDelete) and Player.cpp
+// (changeBattlePlan, applyBattlePlanBonusesForPlayerObjects with the fork's fix, localApplyBattlePlanBonusesToObject,
+// applyBattlePlanBonusesForObject) on the shipped AmericaStrategyCenter (each plan's animation time 7000 ms: 210 ticks;
+// TransitionIdleTime 0),
+// BattlePlanChangeParalyzeTime 5000 ms (150 ticks), HoldTheLinePlanArmorDamageScalar 0.9,
+// SearchAndDestroyPlanSightRangeScalar 1.2, the center's own sight 2.0 and maximum health 2.0 (PRESERVE_RATIO), its
+// stealth detector InitiallyDisabled, troops INFANTRY CAN_ATTACK VEHICLE but not DOZER STRUCTURE AIRCRAFT DRONE.
+// The tick a plan is chosen the center unpacks it (DOOR_n_OPENING); 210 ticks on it is active (DOOR_n_WAITING_TO_CLOSE)
+// and the army has it; another plan chosen: packing that tick (DOOR_n_CLOSING, the plan taken back, the troops
+// paralyzed for 150 ticks), idle 210 ticks on, unpacking the new plan the tick after and active 210 ticks after that.
+// Bombardment turns
+// the turret on; leaving it waits for the turret back at rest (packing the tick after it gets there). A troop made
+// while a plan is on gets it; the center gone takes it back. The same on 4 workers, and a checkpoint carries on exactly.
+// The sight scalars are Q16 fixed point: 1.2 then 1/1.2 lands within 1/1000 of the original range (the original's
+// floats land on it within their own rounding); the armor scalar 0.9 and back lands exactly on 1.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_strategy_center_changes_battle_plans)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	namespace ga = generalszh::gameplay;
+	namespace option = content::button_option;
+	struct Game
+	{
+		std::unique_ptr<session::Session> game;
+		ecs::Entity center, ranger, tank, dozer;
+	};
+	const auto stage = [&](std::size_t workers) {
+		Game made;
+		made.game = std::make_unique<session::Session>(match->skirmish.level, shell.game, match->Options(workers));
+		made.game->Tick();
+		const std::uint32_t team = match->Team(*made.game, 0);
+		made.game->Place("AmericaPowerPlant", match->At(-250, 250), {}, team);
+		made.center = made.game->Place("AmericaStrategyCenter", match->At(250, 250), {}, team);
+		made.ranger = made.game->Place("AmericaInfantryRanger", match->At(150, 350), {}, team);
+		made.tank = made.game->Place("AmericaTankCrusader", match->At(200, 380), {}, team);
+		made.dozer = made.game->Place("AmericaVehicleDozer", match->At(100, 380), {}, team);
+		made.game->Tick();
+		return made;
+	};
+	Game one = stage(1), four = stage(4);
+	auto &game = *one.game;
+	auto &world = game.World();
+	const auto tick = [&] {
+		game.Tick();
+		four.game->Tick();
+	};
+	const auto choose = [&](std::uint32_t which) {
+		ga::FireSpecialPower(game.Game(), one.center, "SpecialAbilityChangeBattlePlans", {}, false, false, which);
+		ga::FireSpecialPower(four.game->Game(), four.center, "SpecialAbilityChangeBattlePlans", {}, false, false, which);
+	};
+	const auto plan = [&] { return *world.Get<ga::BattlePlan>(one.center); };
+	// `count` ticks, each leaving it `status`.
+	const auto stay = [&](ga::PlanTransition status, int count) {
+		for (int step = 0; step < count; ++step)
+		{
+			tick();
+			BOOST_TEST_REQUIRE((plan().status == status));
+		}
+	};
+	const auto scalar = [&](ecs::Entity entity) {
+		const auto *body = world.Get<gp::DamageScalar>(entity);
+		return body != nullptr ? body->scalar : Fixed::One();
+	};
+	const auto bonus = [&](ecs::Entity entity, std::uint32_t bit) {
+		const auto *conditions = world.Get<gp::WeaponBonusConditions>(entity);
+		return conditions != nullptr && (conditions->flags & bit) != 0;
+	};
+	const auto paralyzed = [&](ecs::Entity entity) {
+		const auto *disabled = world.Get<gp::Disabled>(entity);
+		return disabled != nullptr && (disabled->mask & gp::disabled_type::Paralyzed) != 0;
+	};
+	namespace wb = content::weapon_bonus;
+	BOOST_TEST_REQUIRE(world.Get<ga::BattlePlan>(one.center) != nullptr);
+	BOOST_TEST_REQUIRE(world.Get<gp::Turret>(one.center) != nullptr);
+	// onObjectCreated: the turret off; the detector off till search and destroy.
+	BOOST_TEST(!world.Get<gp::Turret>(one.center)->enabled);
+	BOOST_TEST(!world.Get<gp::StealthDetector>(one.center)->Has(gp::stealth_detector_flag::Enabled));
+	BOOST_TEST((plan().status == ga::PlanTransition::Idle));
+	const Fixed centerHealth = world.Get<gp::Health>(one.center)->maximum;
+	BOOST_TEST((centerHealth == Fixed::FromInt(1500)));
+	const Fixed rangerVision = world.Get<gp::Aggression>(one.ranger)->vision;
+	const Fixed centerVision = world.Get<gp::Vision>(one.center)->clearingRange;
+
+	// A hit before any plan: what the tank loses to 100 explosion damage.
+	const std::uint32_t explosion = *content::DamageTypeIndex("EXPLOSION");
+	const std::uint32_t normal = *content::DeathTypeIndex("NORMAL");
+	const auto hit = [&]() {
+		const Fixed before = world.Get<gp::Health>(one.tank)->current;
+		for (auto [session, tank] : {std::pair{&game, one.tank}, std::pair{four.game.get(), four.tank}})
+		{
+			session->World().Add<gp::PendingDamage>(tank);
+			*session->World().Get<gp::PendingDamage>(tank) = gp::PendingDamage{{}, Fixed::FromInt(100), explosion, normal};
+		}
+		tick();
+		return before - world.Get<gp::Health>(one.tank)->current;
+	};
+	const Fixed plain = hit();
+	BOOST_TEST((plain > Fixed{}));
+
+	// Hold the line: unpacking the tick it is chosen, active 210 ticks on.
+	choose(option::OptionTwo);
+	BOOST_TEST((plan().desired == ga::PlanStatus::HoldTheLine));
+	tick();
+	BOOST_TEST((plan().status == ga::PlanTransition::Unpacking));
+	BOOST_TEST(Shows(game, one.center, "DOOR_2_OPENING"));
+	BOOST_TEST((scalar(one.ranger) == Fixed::One()));
+	stay(ga::PlanTransition::Unpacking, 209);
+	BOOST_TEST((plan().affecting == ga::PlanStatus::None));
+	tick();
+	BOOST_TEST((plan().status == ga::PlanTransition::Active));
+	BOOST_TEST((plan().affecting == ga::PlanStatus::HoldTheLine));
+	BOOST_TEST(!Shows(game, one.center, "DOOR_2_OPENING"));
+	BOOST_TEST(Shows(game, one.center, "DOOR_2_WAITING_TO_CLOSE"));
+	BOOST_TEST((world.Get<gp::Health>(one.center)->maximum == Fixed::FromInt(3000)));
+	BOOST_TEST((world.Get<gp::Health>(one.center)->current == Fixed::FromInt(3000)));
+	const Fixed held = Fixed::FromRaw(58982); // 0.9
+	BOOST_TEST((scalar(one.ranger) == held));
+	BOOST_TEST((scalar(one.tank) == held));
+	BOOST_TEST((scalar(one.dozer) == Fixed::One()));
+	BOOST_TEST((scalar(one.center) == Fixed::One()));
+	BOOST_TEST(bonus(one.ranger, wb::BattleplanHoldTheLine));
+	BOOST_TEST(!bonus(one.dozer, wb::BattleplanHoldTheLine));
+	BOOST_TEST((world.Resource<ga::BattlePlanPlayers>().players[world.Get<gp::Owner>(one.center)->player].counts[1] == 1));
+	// The tank takes 0.9 of the same hit.
+	const Fixed guarded = hit();
+	BOOST_TEST((guarded == plain * held));
+	// A troop made now gets the plan.
+	const ecs::Entity late = game.Place("AmericaInfantryRanger", match->At(120, 330), {}, match->Team(game, 0));
+	four.game->Place("AmericaInfantryRanger", match->At(120, 330), {}, match->Team(*four.game, 0));
+	BOOST_TEST((scalar(late) == held));
+	BOOST_TEST(bonus(late, wb::BattleplanHoldTheLine));
+
+	// Search and destroy: packing the tick it is chosen (the troops paralyzed for 150 ticks), idle 210 ticks on, then
+	// unpacking, active 210 ticks after.
+	choose(option::OptionThree);
+	tick();
+	BOOST_TEST((plan().status == ga::PlanTransition::Packing));
+	BOOST_TEST(Shows(game, one.center, "DOOR_2_CLOSING"));
+	BOOST_TEST(!Shows(game, one.center, "DOOR_2_WAITING_TO_CLOSE"));
+	BOOST_TEST((scalar(one.ranger) == Fixed::One()));
+	BOOST_TEST(!bonus(one.ranger, wb::BattleplanHoldTheLine));
+	BOOST_TEST((world.Get<gp::Health>(one.center)->maximum == Fixed::FromInt(1500)));
+	BOOST_TEST(paralyzed(one.ranger));
+	BOOST_TEST(paralyzed(one.tank));
+	BOOST_TEST(!paralyzed(one.dozer));
+	BOOST_TEST(!paralyzed(one.center));
+	int paralysis = 0;
+	while (paralyzed(one.ranger) && paralysis < 300)
+	{
+		BOOST_TEST_REQUIRE((plan().status == ga::PlanTransition::Packing));
+		tick();
+		++paralysis;
+	}
+	BOOST_TEST(paralysis == 150);
+	BOOST_TEST(!paralyzed(one.tank));
+	stay(ga::PlanTransition::Packing, 209 - 150);
+	tick();
+	BOOST_TEST((plan().status == ga::PlanTransition::Idle));
+	BOOST_TEST(!Shows(game, one.center, "DOOR_2_CLOSING"));
+	tick();
+	BOOST_TEST((plan().status == ga::PlanTransition::Unpacking));
+	BOOST_TEST(Shows(game, one.center, "DOOR_3_OPENING"));
+	stay(ga::PlanTransition::Unpacking, 209);
+	tick();
+	BOOST_TEST((plan().status == ga::PlanTransition::Active));
+	BOOST_TEST(Shows(game, one.center, "DOOR_3_WAITING_TO_CLOSE"));
+	BOOST_TEST((world.Get<gp::Aggression>(one.ranger)->vision == rangerVision * Fixed::FromRaw(78643))); // 1.2
+	BOOST_TEST((world.Get<gp::Vision>(one.center)->clearingRange == centerVision * Fixed::FromInt(2)));
+	BOOST_TEST(world.Get<gp::StealthDetector>(one.center)->Has(gp::stealth_detector_flag::Enabled));
+	BOOST_TEST(bonus(one.ranger, wb::BattleplanSearchAndDestroy));
+	BOOST_TEST(!bonus(one.dozer, wb::BattleplanSearchAndDestroy));
+	BOOST_TEST((game.StateHash() == four.game->StateHash()));
+	auto restored = session::Session::Restore(match->skirmish.level, shell.game, match->Options(1), game.Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST((restored->StateHash() == game.StateHash()));
+
+	// Bombardment: the turret on once active.
+	choose(option::OptionOne);
+	tick();
+	BOOST_TEST((plan().status == ga::PlanTransition::Packing));
+	stay(ga::PlanTransition::Packing, 209);
+	stay(ga::PlanTransition::Idle, 1);
+	stay(ga::PlanTransition::Unpacking, 1);
+	BOOST_TEST(!world.Get<gp::Turret>(one.center)->enabled);
+	stay(ga::PlanTransition::Unpacking, 209);
+	tick();
+	BOOST_TEST((plan().status == ga::PlanTransition::Active));
+	BOOST_TEST((plan().affecting == ga::PlanStatus::Bombardment));
+	BOOST_TEST(Shows(game, one.center, "DOOR_1_WAITING_TO_CLOSE"));
+	BOOST_TEST(world.Get<gp::Turret>(one.center)->enabled);
+	BOOST_TEST(bonus(one.ranger, wb::BattleplanBombardment));
+	BOOST_TEST(!bonus(one.ranger, wb::BattleplanSearchAndDestroy));
+	BOOST_TEST((world.Get<gp::StealthDetector>(one.center)->Has(gp::stealth_detector_flag::Enabled) == false));
+	const Fixed back = world.Get<gp::Aggression>(one.ranger)->vision;
+	BOOST_TEST(((back > rangerVision ? back - rangerVision : rangerVision - back) <= Fixed::FromRatio(1, 1000)));
+	BOOST_TEST((world.Get<gp::Vision>(one.center)->clearingRange == centerVision));
+
+	// Leaving bombardment with the turret turned away: it swings back to rest (the turret off), then packs.
+	auto *turret = world.Get<gp::Turret>(one.center);
+	turret->angle = turret->definition.naturalAngle + Engine::Math::TurnFromDegrees(30);
+	four.game->World().Get<gp::Turret>(four.center)->angle = turret->angle;
+	choose(option::OptionTwo);
+	tick();
+	BOOST_TEST((plan().status == ga::PlanTransition::Active));
+	BOOST_TEST((plan().centeringTurret == 1));
+	BOOST_TEST(!world.Get<gp::Turret>(one.center)->enabled);
+	int swing = 0;
+	while (!gp::TurretAtRest(*world.Get<gp::Turret>(one.center)) && swing < 300)
+	{
+		BOOST_TEST((plan().status == ga::PlanTransition::Active));
+		tick();
+		++swing;
+	}
+	BOOST_TEST_MESSAGE("the turret back at rest after " << swing << " more ticks");
+	BOOST_TEST((plan().status == ga::PlanTransition::Active));
+	tick(); // at rest: it packs
+	BOOST_TEST((plan().status == ga::PlanTransition::Packing));
+	BOOST_TEST((plan().centeringTurret == 0));
+	BOOST_TEST(!bonus(one.ranger, wb::BattleplanBombardment));
+	BOOST_TEST(!world.Get<gp::Turret>(one.center)->enabled);
+	stay(ga::PlanTransition::Packing, 209);
+	stay(ga::PlanTransition::Idle, 1);
+	stay(ga::PlanTransition::Unpacking, 210);
+	tick();
+	BOOST_TEST((plan().status == ga::PlanTransition::Active));
+	BOOST_TEST((plan().affecting == ga::PlanStatus::HoldTheLine));
+	BOOST_TEST((scalar(one.ranger) == held));
+
+	// The center destroyed: its plan leaves the army (onDelete) the tick it goes.
+	ga::KillNow(game.Game(), one.center);
+	ga::KillNow(four.game->Game(), four.center);
+	tick();
+	BOOST_TEST(!world.IsAlive(one.center));
+	BOOST_TEST((scalar(one.ranger) == Fixed::One()));
+	BOOST_TEST(!bonus(one.ranger, wb::BattleplanHoldTheLine));
+	BOOST_TEST((world.Resource<ga::BattlePlanPlayers>().players[world.Get<gp::Owner>(one.ranger)->player].Active() == 0));
+	BOOST_TEST((game.StateHash() == four.game->StateHash()));
+}
+
+// SupplyWarehouseCripplingBehavior.cpp (onDamage, onBodyDamageStateChange, update) and DockUpdate::setDockCrippled on the
+// shipped SupplyWarehouse (SelfHealSupression 3000 ms: 90 ticks, SelfHealDelay 500 ms: 15, SelfHealAmount 5) with
+// GameData's UnitReallyDamagedThreshold 0.35. It starts asleep. A hit that takes it to really damaged cripples its dock
+// that tick; it heals 5 on the 90th tick after the hit and every 15 ticks after; a hit meanwhile puts the next heal 90
+// ticks off again; healed above really damaged its dock is open again; whole, it sleeps. The same on 4 workers, and a
+// checkpoint carries on exactly.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_really_damaged_supply_warehouse_is_crippled_and_mends)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	namespace ga = generalszh::gameplay;
+	struct Game
+	{
+		std::unique_ptr<session::Session> game;
+		ecs::Entity warehouse;
+	};
+	const auto stage = [&](std::size_t workers) {
+		Game made;
+		made.game = std::make_unique<session::Session>(match->skirmish.level, shell.game, match->Options(workers));
+		made.game->Tick();
+		made.warehouse = made.game->Place("SupplyWarehouse", match->At(300, -300), {}, match->Team(*made.game, 1));
+		made.game->Tick();
+		return made;
+	};
+	Game one = stage(1), four = stage(4);
+	auto &game = *one.game;
+	auto &world = game.World();
+	const auto tick = [&] {
+		game.Tick();
+		four.game->Tick();
+	};
+	BOOST_TEST_REQUIRE(world.Get<ga::WarehouseCrippling>(one.warehouse) != nullptr);
+	BOOST_TEST_REQUIRE(world.Get<gp::Dock>(one.warehouse) != nullptr);
+	const auto state = [&] { return *world.Get<ga::WarehouseCrippling>(one.warehouse); };
+	const auto health = [&] { return world.Get<gp::Health>(one.warehouse)->current; };
+	const Fixed maximum = world.Get<gp::Health>(one.warehouse)->maximum;
+	BOOST_TEST((state().nextHeal == 0u));
+	BOOST_TEST(!world.Get<gp::Dock>(one.warehouse)->crippled);
+	// Down to 40%, then a hit of 10% (unresistable, through no armor) to 30%: really damaged.
+	const auto hit = [&](Fixed amount) {
+		ga::DamageNow(game.Game(), one.warehouse, amount);
+		ga::DamageNow(four.game->Game(), four.warehouse, amount);
+		tick();
+	};
+	for (auto *session : {&game, four.game.get()})
+	{
+		const ecs::Entity target = session == &game ? one.warehouse : four.warehouse;
+		session->World().Get<gp::Health>(target)->current = maximum * Fixed::FromRatio(40, 100);
+	}
+	// Its active docker inside (unloading): killed as the dock is crippled; a Chinook there (airborne) would be spared.
+	std::array<ecs::Entity, 2> trucks{};
+	for (auto *session : {&game, four.game.get()})
+	{
+		const ecs::Entity dock = session == &game ? one.warehouse : four.warehouse;
+		const ecs::Entity truck = session->Place("ChinaVehicleSupplyTruck", match->At(300, -200), {}, match->Team(*session, 1));
+		auto &sw = session->World();
+		if (!sw.Has<gp::Docking>(truck))
+			sw.Add<gp::Docking>(truck);
+		auto &docking = *sw.Get<gp::Docking>(truck);
+		gp::StartDocking(docking, dock, 15);
+		docking.phase = gp::DockPhase::Process;
+		docking.entering = false;
+		docking.granted = true;
+		trucks[session == &game ? 0 : 1] = truck;
+	}
+	hit(maximum * Fixed::FromRatio(10, 100));
+	BOOST_TEST((health() == maximum * Fixed::FromRatio(40, 100) - maximum * Fixed::FromRatio(10, 100)));
+	int since = 0; // ticks since the hit
+	for (; since < 3 && world.IsAlive(trucks[0]) && world.Get<gp::Dying>(trucks[0]) == nullptr; ++since)
+		tick();
+	BOOST_TEST((!world.IsAlive(trucks[0]) || world.Get<gp::Dying>(trucks[0]) != nullptr || gp::IsDead(*world.Get<gp::Health>(trucks[0]))));
+	BOOST_TEST(world.Get<gp::Dock>(one.warehouse)->crippled);
+	BOOST_TEST((state().bodyState == 2u));
+	BOOST_TEST((state().nextHeal == state().suppressedUntil));
+	// The first heal on the 90th tick after the hit.
+	const Fixed hurt = health();
+	int wait = since;
+	while (health() == hurt && wait < 200)
+	{
+		tick();
+		++wait;
+	}
+	BOOST_TEST(wait == 90);
+	BOOST_TEST((health() == hurt + Fixed::FromInt(5)));
+	for (int step = 0; step < 14; ++step)
+		tick();
+	BOOST_TEST((health() == hurt + Fixed::FromInt(5)));
+	tick();
+	BOOST_TEST((health() == hurt + Fixed::FromInt(10)));
+	// A hit meanwhile: 90 ticks off again.
+	hit(Fixed::FromInt(1));
+	const Fixed again = health();
+	wait = 0;
+	while (health() == again && wait < 200)
+	{
+		tick();
+		++wait;
+	}
+	BOOST_TEST(wait == 90);
+	BOOST_TEST((game.StateHash() == four.game->StateHash()));
+	auto restored = session::Session::Restore(match->skirmish.level, shell.game, match->Options(1), game.Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST((restored->StateHash() == game.StateHash()));
+	// Mended past 35%: open again; whole: asleep.
+	int mend = 0;
+	while (world.Get<gp::Dock>(one.warehouse)->crippled && mend < 20000)
+	{
+		tick();
+		++mend;
+	}
+	BOOST_TEST(!world.Get<gp::Dock>(one.warehouse)->crippled);
+	BOOST_TEST((health() > maximum * Fixed::FromRatio(35, 100)));
+	while (health() < maximum && mend < 40000)
+	{
+		tick();
+		++mend;
+	}
+	BOOST_TEST((health() == maximum));
+	BOOST_TEST((state().nextHeal == 0u));
+	BOOST_TEST((game.StateHash() == four.game->StateHash()));
+}
+
+// UndeadBody.cpp (attemptDamage with the fork's estimateDamage, startSecondLife) and BattleBusSlowDeathBehavior.cpp
+// (beginSlowDeath's first death, update) on the shipped GLAVehicleBattleBus (MaxHealth 400, SecondLifeMaxHealth 650,
+// ThrowForce 100, PercentDamageToPassengers 50%, EmptyHulkDestructionDelay 1000 ms: 30 ticks). A hit that would kill
+// it leaves it alive: its maximum 650 and fully healed, ARMORSET_SECOND_LIFE, thrown up (its riders hurt by half their
+// maximum); it lands the first tick past its ground check (10 ticks on) once back on the ground: SECOND_LIFE shown,
+// HELD. Empty, it checks the tick after landing (the count starts: 30 ticks), then every 15 ticks: killed with PENALTY,
+// EXTRA_4 at the third check (46 ticks after landing, past the count) and gone by its EXTRA_4 slow death. A second
+// deadly hit is its real death. The same on 4 workers, and a checkpoint carries on exactly.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_battle_bus_lives_again_as_a_bunker)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	namespace ga = generalszh::gameplay;
+	struct Game
+	{
+		std::unique_ptr<session::Session> game;
+		ecs::Entity bus, empty, rider;
+	};
+	const auto stage = [&](std::size_t workers) {
+		Game made;
+		made.game = std::make_unique<session::Session>(match->skirmish.level, shell.game, match->Options(workers));
+		made.game->Tick();
+		const std::uint32_t team = match->Team(*made.game, 1);
+		made.bus = made.game->Place("GLAVehicleBattleBus", match->At(300, -300), {}, team);
+		made.empty = made.game->Place("GLAVehicleBattleBus", match->At(300, -150), {}, team);
+		made.rider = made.game->Place("GLAInfantryRebel", match->At(260, -300), {}, team);
+		made.game->Tick();
+		ga::PutInside(made.game->Game(), made.bus, made.rider);
+		made.game->Tick();
+		return made;
+	};
+	Game one = stage(1), four = stage(4);
+	auto &game = *one.game;
+	auto &world = game.World();
+	const auto tick = [&] {
+		game.Tick();
+		four.game->Tick();
+	};
+	const std::uint32_t explosion = *content::DamageTypeIndex("EXPLOSION");
+	const std::uint32_t normal = *content::DeathTypeIndex("NORMAL");
+	const auto hit = [&](ecs::Entity Game::*which, Fixed amount) {
+		for (Game *g : {&one, &four})
+		{
+			auto &w = g->game->World();
+			const ecs::Entity target = (*g).*which;
+			w.Add<gp::PendingDamage>(target);
+			*w.Get<gp::PendingDamage>(target) = gp::PendingDamage{{}, amount, explosion, normal};
+		}
+	};
+	BOOST_TEST_REQUIRE(world.Get<gp::SecondLife>(one.bus) != nullptr);
+	BOOST_TEST_REQUIRE(world.Get<ga::BattleBus>(one.bus) != nullptr);
+	BOOST_TEST((world.Get<gp::Health>(one.bus)->maximum == Fixed::FromInt(400)));
+	const Fixed riderMax = world.Get<gp::Health>(one.rider)->maximum;
+	hit(&Game::bus, Fixed::FromInt(5000));
+	hit(&Game::empty, Fixed::FromInt(5000));
+	tick();
+	BOOST_TEST_REQUIRE(world.IsAlive(one.bus));
+	BOOST_TEST(world.Get<gp::Dying>(one.bus) == nullptr);
+	BOOST_TEST((world.Get<gp::Health>(one.bus)->maximum == Fixed::FromInt(650)));
+	BOOST_TEST((world.Get<gp::Health>(one.bus)->current == Fixed::FromInt(650)));
+	BOOST_TEST(world.Get<gp::SecondLife>(one.bus)->started == 1u);
+	BOOST_TEST((world.Get<gp::Loadout>(one.bus)->armorFlags & content::SetFlag(content::ArmorSetFlagNames, "SECOND_LIFE")) != 0u);
+	BOOST_TEST((world.Get<ga::BattleBus>(one.bus)->phase == ga::BusPhase::Thrown));
+	const std::uint64_t check = world.Get<ga::BattleBus>(one.bus)->groundCheckTick;
+	// Up it goes; the rider hurt by half its maximum.
+	const Fixed floor = world.Get<gp::Transform>(one.bus)->position.z;
+	tick();
+	tick();
+	BOOST_TEST((world.Get<gp::Transform>(one.bus)->position.z > floor));
+	BOOST_TEST((world.Get<gp::Health>(one.rider)->current == riderMax - riderMax * Fixed::FromRatio(1, 2)));
+	// Down again: landed the first tick past its ground check it is on the ground.
+	int ticks = 0;
+	while (world.Get<ga::BattleBus>(one.bus)->phase == ga::BusPhase::Thrown && ticks < 600)
+	{
+		tick();
+		++ticks;
+	}
+	BOOST_TEST_MESSAGE("landed after " << ticks << " more ticks; the ground check at " << check);
+	BOOST_TEST_REQUIRE((world.Get<ga::BattleBus>(one.bus)->phase == ga::BusPhase::Hulk));
+	BOOST_TEST(Shows(game, one.bus, "SECOND_LIFE"));
+	BOOST_TEST((world.Get<gp::Disabled>(one.bus)->mask & gp::disabled_type::Held) != 0u);
+	BOOST_TEST((game.StateHash() == four.game->StateHash()));
+	auto restored = session::Session::Restore(match->skirmish.level, shell.game, match->Options(1), game.Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST((restored->StateHash() == game.StateHash()));
+	// The empty one: killed on its third check after landing.
+	while (world.Get<ga::BattleBus>(one.empty)->phase == ga::BusPhase::Thrown)
+		tick();
+	int after = 0;
+	while (world.IsAlive(one.empty) && world.Get<gp::Dying>(one.empty) == nullptr && after < 300)
+	{
+		tick();
+		++after;
+	}
+	BOOST_TEST_MESSAGE("the empty hulk killed " << after << " ticks after landing");
+	BOOST_TEST(after == 46);
+	BOOST_TEST(world.IsAlive(one.bus));
+	BOOST_TEST(world.Get<gp::Dying>(one.bus) == nullptr);
+	// A second deadly hit is its real death.
+	hit(&Game::bus, Fixed::FromInt(50000));
+	tick();
+	BOOST_TEST((!world.IsAlive(one.bus) || world.Get<gp::Dying>(one.bus) != nullptr));
+	BOOST_TEST((game.StateHash() == four.game->StateHash()));
+}
+
+// WeaponBonusUpdate.cpp (update) and TempWeaponBonusHelper.cpp (doTempWeaponBonus, update) on the shipped Frenzy markers
+// (Frenzy_InvisibleMarker_Level1: CAN_ATTACK not STRUCTURE, BonusDuration 10000 ms: 300 ticks, BonusRange 200,
+// FRENZY_ONE; Level2 FRENZY_TWO for 600). The tick after it is placed it pulses: America's ranger and tank within 200
+// (centre to centre) and the ranger riding in a Humvee there get FRENZY_ONE for 300 ticks; China's tank, a unit 300 away
+// and a structure do not. Cleared on the 300th tick after; a Level2 pulse in the meantime replaces it with FRENZY_TWO.
+// The same on 4 workers.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_frenzy_pulse_gives_nearby_allies_a_weapon_bonus_for_a_while)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	namespace ga = generalszh::gameplay;
+	struct Game
+	{
+		std::unique_ptr<session::Session> game;
+		ecs::Entity ranger, tank, rider, enemy, far, structure;
+	};
+	const auto stage = [&](std::size_t workers) {
+		Game made;
+		made.game = std::make_unique<session::Session>(match->skirmish.level, shell.game, match->Options(workers));
+		made.game->Tick();
+		const std::uint32_t us = match->Team(*made.game, 0), them = match->Team(*made.game, 1);
+		made.ranger = made.game->Place("AmericaInfantryRanger", match->At(350, -300), {}, us);
+		made.tank = made.game->Place("AmericaTankCrusader", match->At(300, -200), {}, us);
+		const ecs::Entity humvee = made.game->Place("AmericaVehicleHumvee", match->At(250, -300), {}, us);
+		made.rider = made.game->Place("AmericaInfantryRanger", match->At(250, -260), {}, us);
+		made.enemy = made.game->Place("ChinaTankBattleMaster", match->At(300, -380), {}, them);
+		made.far = made.game->Place("AmericaInfantryRanger", match->At(600, -300), {}, us);
+		made.structure = made.game->Place("AmericaPowerPlant", match->At(300, -450), {}, us);
+		made.game->Tick();
+		ga::PutInside(made.game->Game(), humvee, made.rider);
+		made.game->Tick();
+		return made;
+	};
+	Game one = stage(1), four = stage(4);
+	auto &game = *one.game;
+	auto &world = game.World();
+	const auto tick = [&] {
+		game.Tick();
+		four.game->Tick();
+	};
+	const auto place = [&](const char *marker) {
+		game.Place(marker, match->At(300, -300), {}, match->Team(game, 0));
+		four.game->Place(marker, match->At(300, -300), {}, match->Team(*four.game, 0));
+	};
+	namespace wb = content::weapon_bonus;
+	const auto has = [&](ecs::Entity entity, std::uint32_t bit) {
+		const auto *conditions = world.Get<gp::WeaponBonusConditions>(entity);
+		return conditions != nullptr && (conditions->flags & bit) != 0;
+	};
+	place("Frenzy_InvisibleMarker_Level1");
+	tick();
+	BOOST_TEST(has(one.ranger, wb::FrenzyOne));
+	BOOST_TEST(has(one.tank, wb::FrenzyOne));
+	BOOST_TEST(has(one.rider, wb::FrenzyOne));
+	BOOST_TEST(!has(one.enemy, wb::FrenzyOne));
+	BOOST_TEST(!has(one.far, wb::FrenzyOne));
+	BOOST_TEST(!has(one.structure, wb::FrenzyOne));
+	int held = 0;
+	while (has(one.ranger, wb::FrenzyOne) && held < 400)
+	{
+		tick();
+		++held;
+	}
+	BOOST_TEST(held == 300);
+	BOOST_TEST(world.Get<gp::TempWeaponBonus>(one.ranger)->bit == 0u);
+	// A Level2 pulse replaces a Level1 bonus.
+	place("Frenzy_InvisibleMarker_Level1");
+	tick();
+	BOOST_TEST(has(one.ranger, wb::FrenzyOne));
+	for (int step = 0; step < 50; ++step)
+		tick();
+	place("Frenzy_InvisibleMarker_Level2");
+	tick();
+	BOOST_TEST(!has(one.ranger, wb::FrenzyOne));
+	BOOST_TEST(has(one.ranger, wb::FrenzyTwo));
+	held = 0;
+	while (has(one.ranger, wb::FrenzyTwo) && held < 800)
+	{
+		tick();
+		++held;
+	}
+	BOOST_TEST(held == 600);
+	BOOST_TEST((game.StateHash() == four.game->StateHash()));
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+

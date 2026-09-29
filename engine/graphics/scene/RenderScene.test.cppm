@@ -4,10 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <cstdint>
-#include <type_traits>
-
 export module Graphics.Scene.RenderScene.Tests;
+import std;
 
 import Graphics.Scene.RenderScene;
 

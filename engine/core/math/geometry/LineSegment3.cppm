@@ -1,11 +1,5 @@
-module;
-
-#include <algorithm>
-#include <cmath>
-#include <limits>
-#include <optional>
-
 export module Engine.Core.Math.LineSegment3;
+import std;
 
 export import Engine.Core.Math.Vector3;
 

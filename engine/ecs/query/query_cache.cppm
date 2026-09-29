@@ -1,10 +1,5 @@
-module;
-
-#include <cstdint>
-#include <utility>
-#include <vector>
-
 export module engine.ecs.query.query_cache;
+import std;
 
 export import engine.ecs.core.world;
 

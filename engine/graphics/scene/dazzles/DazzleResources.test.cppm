@@ -1,11 +1,8 @@
 module;
 #define BOOST_TEST_MODULE DazzleResourcesTests
 #include <boost/test/included/unit_test.hpp>
-#include <memory>
-#include <string>
-#include <utility>
-#include <vector>
 export module Graphics.Scene.Dazzles.Resources.Tests;
+import std;
 import Assets.Dazzles;
 import Graphics.Scene.Dazzles.Resources;
 BOOST_AUTO_TEST_CASE(catalog_owns_definitions_resolves_exact_names_and_shares_lazy_flare_resources) {

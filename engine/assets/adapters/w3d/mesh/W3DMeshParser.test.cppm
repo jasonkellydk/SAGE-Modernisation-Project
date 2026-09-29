@@ -4,15 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <bit>
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-#include <string>
-#include <string_view>
-#include <vector>
-
 export module Assets.Tests.W3DMeshParser;
+import std;
 
 import Assets.Adapters.W3D.Chunks;
 import Assets.Adapters.W3D.Mesh;

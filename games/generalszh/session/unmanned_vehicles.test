@@ -1,0 +1,470 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+import games.generalszh.session.session;
+import games.generalszh.gameplay.scripts.algorithms.object_counting;
+import engine.gameplay.common.identity.components.captured;
+import games.generalszh.session.setup.skirmish_level;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import games.generalszh.content.combat.combat_catalog;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.common.identity.components.owner;
+import engine.gameplay.common.health.components.health;
+import engine.gameplay.common.health.components.pending_damage;
+import engine.gameplay.common.health.systems.health_system;
+import engine.gameplay.common.status.components.disabled;
+import engine.gameplay.rts.death.components.dying;
+import engine.gameplay.common.identity.components.team_member;
+import engine.gameplay.rts.movement.components.move_order;
+import engine.gameplay.rts.containment.components.transport;
+import engine.gameplay.rts.veterancy.components.experience;
+import games.generalszh.gameplay.veterancy.algorithms.veterancy_placement;
+import games.generalszh.gameplay.combat.algorithms.unmanned_vehicles;
+import games.generalszh.gameplay.crates.algorithms.car_bombs;
+import games.generalszh.gameplay.crates.resources.crates;
+import games.generalszh.gameplay.abilities.algorithms.command_button_hunts;
+import games.generalszh.content.combat.loadout_content;
+import games.generalszh.content.objects.object_status;
+import engine.gameplay.common.identity.resources.relationships;
+import engine.gameplay.common.spatial.components.transform;
+import engine.gameplay.common.spatial.components.targetable;
+import engine.gameplay.common.status.components.status_flags;
+import engine.gameplay.rts.loadout.components.loadout;
+import engine.gameplay.rts.combat.components.aggression;
+import engine.gameplay.rts.vision.components.vision;
+import engine.gameplay.common.weapons.components.armament;
+import games.generalszh.gameplay.crates.algorithms.hijacking;
+import engine.gameplay.common.spatial.components.off_map;
+import games.generalszh.gameplay.lifecycle.algorithms.retire_now;
+import games.generalszh.gameplay.orders.algorithms.unit_orders;
+
+// Vehicles whose pilot Jarmen Kell snipes (DAMAGE_KILLPILOT), infantry taking them over, and terrorists making car
+// bombs of them, on a shipped skirmish map.
+using namespace generalszh;
+namespace gp = engine::gameplay;
+using Engine::Math::Fixed;
+
+namespace
+{
+struct Install
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	bool loaded{false};
+
+	Install()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		loaded = true;
+	}
+};
+
+Install &Data()
+{
+	static Install install;
+	return install;
+}
+
+// America (player0, start 0) against China (player1, start 2), both human seats with nobody at them.
+struct Match
+{
+	std::optional<engine::level::generals_map::ReadResult> read;
+	session::setup::SkirmishLevel skirmish;
+	Engine::Math::FixedVector2 start;
+
+	std::uint32_t Team(const session::Session &game, std::size_t player) const { return *game.Teams().FindTeam(skirmish.players[player].team); }
+	Engine::Math::FixedVector2 At(int dx, int dy) const { return {start.x + Fixed::FromInt(dx), start.y + Fixed::FromInt(dy)}; }
+
+	session::SessionOptions Options(std::size_t workers) const
+	{
+		session::SessionOptions options{11, workers, {}, {"player0", "player1"}};
+		for (const auto &player : skirmish.players)
+			options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+		return options;
+	}
+};
+
+std::optional<Match> Prepare(Install &shell)
+{
+	const auto bytes = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	if (!bytes)
+		return std::nullopt;
+	Match match;
+	auto read = engine::level::generals_map::Read(*bytes);
+	if (!read)
+		return std::nullopt;
+	match.read = std::move(*read);
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 7;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::Player, u"Other");
+	setup.slots[1].playerTemplate = templateOf("FactionChina");
+	setup.slots[1].startPos = 2;
+	match.skirmish = session::setup::PrepareSkirmishLevel(match.read->level, setup, shell.game.playerTemplates, 4);
+	for (const auto &marker : match.read->level.markers)
+		if (marker.name == "Player_1_Start")
+			match.start = marker.position.XY();
+	return match;
+}
+
+// The next tick's damage: one KILL_PILOT shot of Jarmen Kell's GLAJarmenKellVehiclePilotSniperRifle (PrimaryDamage 1).
+void Snipe(session::Session &game, ecs::Entity sniper, ecs::Entity target)
+{
+	auto &world = game.World();
+	if (!world.Has<gp::PendingDamage>(target))
+		world.Add<gp::PendingDamage>(target);
+	*world.Get<gp::PendingDamage>(target) =
+		gp::PendingDamage{sniper, Fixed::One(), *content::DamageTypeIndex("KILL_PILOT"), *content::DeathTypeIndex("NORMAL")};
+}
+
+bool Unmanned(session::Session &game, ecs::Entity entity)
+{
+	const auto *off = game.World().Get<gp::Disabled>(entity);
+	return off != nullptr && (off->mask & gp::disabled_type::Unmanned) != 0;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(unmanned_vehicles)
+
+// ActiveBody::attemptDamage, DAMAGE_KILLPILOT, and Object::setDisabledUntil(DISABLED_UNMANNED): the tick the shot lands,
+// a veteran China Battlemaster (TankArmor: KILL_PILOT 100%) keeps all its health, is unmanned, drops to no experience
+// (setExperienceAndLevel(0): level and points none, its health back to a regular's), idles and is the neutral player's
+// (setTeam); the hit is told (doDamageFX: amount 1). A civilian taxi (a CARBOMB weapon set) is killed outright on that
+// very tick. An infantry the same shot hits is not a VEHICLE: nothing happens to it, not even damage.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_pilot_kill_leaves_a_vehicle_unmanned)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	auto &world = game.World();
+	const std::uint32_t neutral = *game.Teams().FindTeam("team");
+	const ecs::Entity jarmen = game.Place("GLAInfantryJarmenKell", match->At(0, -300), {}, match->Team(game, 0));
+	const ecs::Entity tank = game.Place("ChinaTankBattleMaster", match->At(150, -300), {}, match->Team(game, 1));
+	const ecs::Entity taxi = game.Place("CarTaxiCab02", match->At(-150, -300), {}, neutral);
+	const ecs::Entity soldier = game.Place("ChinaInfantryRedguard", match->At(0, -450), {}, match->Team(game, 1));
+	generalszh::gameplay::PlaceAtVeterancy(game.Game(), tank, 1);
+	BOOST_TEST_REQUIRE(world.Get<gp::Experience>(tank)->level == 1);
+	const Fixed veteranHealth = world.Get<gp::Health>(tank)->current;
+	*world.Get<gp::MoveOrder>(tank) = gp::MoveToPoint(match->At(400, -300));
+	const Fixed soldierHealth = world.Get<gp::Health>(soldier)->current;
+	Snipe(game, jarmen, tank);
+	Snipe(game, jarmen, taxi);
+	Snipe(game, jarmen, soldier);
+	game.Tick();
+	BOOST_TEST(Unmanned(game, tank));
+	BOOST_TEST((world.Get<gp::Health>(tank)->current == world.Get<gp::Health>(tank)->maximum));
+	BOOST_TEST((world.Get<gp::Health>(tank)->current < veteranHealth)); // a regular's again
+	BOOST_TEST(world.Get<gp::Experience>(tank)->level == 0);
+	BOOST_TEST(world.Get<gp::Experience>(tank)->points == 0);
+	BOOST_TEST((world.Get<gp::MoveOrder>(tank)->mode == gp::MoveMode::Idle));
+	BOOST_TEST(world.Get<gp::TeamMember>(tank)->team == neutral);
+	BOOST_TEST(world.Get<gp::Owner>(tank)->player == game.Teams().TeamAt(neutral).owner);
+	bool told = false;
+	world.Resource<gp::Hits>().ForEach([&](const gp::Hit &hit) { told = told || (hit.target == tank && hit.handled && hit.amount == Fixed::One()); });
+	BOOST_TEST(told);
+	BOOST_TEST((!world.IsAlive(taxi) || world.Get<gp::Dying>(taxi) != nullptr));
+	BOOST_TEST(!Unmanned(game, soldier));
+	BOOST_TEST((world.Get<gp::Health>(soldier)->current == soldierHealth));
+}
+
+// doTeamCaptureNearestUnownedFactionUnit and the unmanned-vehicle case of ActionManager::canEnterObject /
+// PhysicsBehavior::onCollide: America's team is told to enter the unmanned Battlemaster nearest its centre (a farther
+// one is left); its Ranger walks to it and, the tick it gets there, the tank is manned, captured (setCaptured, counted
+// as America's one captured unit), America's (defect at once), its name the Ranger's, and the Ranger is gone; America's vehicles (not INFANTRY) are not sent. A second Ranger bound for a
+// tank already taken over gives up and idles (AIEnterState's STATE_FAILURE) the next tick.
+BOOST_AUTO_TEST_CASE(legacy_parity_infantry_take_over_the_nearest_unmanned_vehicle)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	auto &world = game.World();
+	const std::uint32_t america = match->Team(game, 0);
+	// The sniper stays out of it: the neutral player's.
+	const ecs::Entity jarmen = game.Place("GLAInfantryJarmenKell", match->At(0, -500), {}, *game.Teams().FindTeam("team"));
+	const ecs::Entity near = game.Place("ChinaTankBattleMaster", match->At(120, -300), {}, match->Team(game, 1));
+	const ecs::Entity far = game.Place("ChinaTankBattleMaster", match->At(900, -300), {}, match->Team(game, 1));
+	Snipe(game, jarmen, near);
+	Snipe(game, jarmen, far);
+	game.Tick();
+	BOOST_TEST_REQUIRE((Unmanned(game, near) && Unmanned(game, far)));
+	const ecs::Entity ranger = game.Place("AmericaInfantryRanger", match->At(0, -300), {}, america);
+	game.Game().names.Assign("Hero", ranger);
+	generalszh::gameplay::TeamCaptureNearestUnowned(game.Game(), "#" + std::to_string(america));
+	BOOST_TEST_REQUIRE(world.Get<gp::Boarding>(ranger) != nullptr);
+	BOOST_TEST((world.Get<gp::Boarding>(ranger)->transport == near));
+	// The team's dozer (a VEHICLE) is not sent.
+	for (const ecs::Entity member : game.Teams().TeamAt(america).members)
+		if (member != ranger)
+			BOOST_TEST(world.Get<gp::Boarding>(member) == nullptr);
+	int ticks = 0;
+	while (world.IsAlive(ranger) && ticks < 600)
+	{
+		BOOST_TEST_REQUIRE(Unmanned(game, near));
+		game.Tick();
+		++ticks;
+	}
+	BOOST_TEST_MESSAGE("taken over after " << ticks << " ticks");
+	BOOST_TEST_REQUIRE(!world.IsAlive(ranger));
+	BOOST_TEST(!Unmanned(game, near));
+	BOOST_TEST(world.Get<gp::TeamMember>(near)->team == america);
+	BOOST_TEST((game.Game().names.Find("Hero") == near));
+	BOOST_TEST(Unmanned(game, far));
+	// Object::setCaptured(true): the tank counts as a captured unit of America's
+	// (evaluateSkirmishPlayerHasComparisonCapturedUnits); the one left unmanned is not captured.
+	const std::uint32_t americanPlayer = game.Teams().TeamAt(america).owner;
+	BOOST_TEST(world.Has<gp::Captured>(near));
+	BOOST_TEST(!world.Has<gp::Captured>(far));
+	BOOST_TEST(generalszh::gameplay::CountCapturedObjects(game.Game(), americanPlayer) == 1);
+
+	// Bound for a tank no longer unmanned: it gives up the next tick.
+	const ecs::Entity late = game.Place("AmericaInfantryRanger", match->At(0, -300), {}, america);
+	world.Add<gp::Boarding>(late);
+	*world.Get<gp::Boarding>(late) = {near};
+	*world.Get<gp::MoveOrder>(late) = gp::MoveToPoint(match->At(120, -300));
+	game.Tick();
+	BOOST_TEST(world.Get<gp::Boarding>(late) == nullptr);
+	BOOST_TEST((world.Get<gp::MoveOrder>(late)->mode == gp::MoveMode::Idle));
+	BOOST_TEST(world.Get<gp::TeamMember>(near)->team == america);
+}
+
+// ConvertToCarBombCrateCollide through CommandButtonHuntUpdate::huntEnter (scanClosestTarget: the neutral only, near to
+// far; canConvertObjectToCarBomb) and aiEnter: a veteran terrorist of America's hunting with its Make Car Bomb button,
+// China neutral to it, picks China's Camaro (a Crusader nearer has no CARBOMB weapon set: passed over) at its first scan
+// and walks to it (CMD_FROM_AI); the tick it touches it (the boarding's arrival: within the car's bounding circle and
+// 20) the car takes its CARBOMB weapon set flag and IS_CARBOMB, defects to America's default team at once, takes the
+// terrorist's name, vision (150) and shroud clearing range (200) and veterancy, FX_MakeCarBombSuccess plays on it, and
+// the terrorist is gone. A car bomb is never made one again.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_hunting_terrorist_makes_a_car_bomb_of_a_neutral_car)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	auto &world = game.World();
+	const std::uint32_t america = match->Team(game, 0), china = match->Team(game, 1);
+	const ecs::Entity terrorist = game.Place("GLAInfantryTerrorist", match->At(0, -300), {}, america);
+	const ecs::Entity tank = game.Place("AmericaTankCrusader", match->At(-60, -300), {}, china);
+	const ecs::Entity car = game.Place("CarCamaro", match->At(140, -300), {}, china);
+	const std::uint32_t us = world.Get<gp::Owner>(terrorist)->player, them = world.Get<gp::Owner>(car)->player;
+	auto &relationships = world.Resource<gp::Relationships>();
+	relationships.Set(us, them, gp::Relationship::Neutral);
+	relationships.Set(them, us, gp::Relationship::Neutral);
+	game.Game().names.Assign("Bomber", terrorist);
+	gameplay::PlaceAtVeterancy(game.Game(), terrorist, 2, true);
+	game.Tick();
+	BOOST_TEST(!gameplay::CanConvertToCarBomb(game.Game(), terrorist, tank, false)); // no CARBOMB weapon set
+	BOOST_TEST_REQUIRE(gameplay::CanConvertToCarBomb(game.Game(), terrorist, car, false));
+	gameplay::StartCommandButtonHunt(game.Game(), terrorist, "Command_GLAInfantryTerroristMakeCarBomb");
+	game.Tick();
+	BOOST_TEST_REQUIRE(world.Get<gp::Boarding>(terrorist) != nullptr);
+	BOOST_TEST((world.Get<gp::Boarding>(terrorist)->transport == car));
+	const Fixed reach = world.Get<gp::Targetable>(car)->radius + Fixed::FromInt(20);
+	int ticks = 0, within = -1;
+	while (world.IsAlive(terrorist) && ticks < 600)
+	{
+		const auto apart = Engine::Math::Distance(world.Get<gp::Transform>(terrorist)->position.XY(), world.Get<gp::Transform>(car)->position.XY());
+		if (within < 0 && apart <= reach)
+			within = ticks;
+		BOOST_TEST_REQUIRE(world.Get<gp::TeamMember>(car)->team == china);
+		game.Tick();
+		++ticks;
+	}
+	BOOST_TEST_MESSAGE("converted after " << ticks << " ticks");
+	BOOST_TEST_REQUIRE(!world.IsAlive(terrorist));
+	// Converted the tick it begins within reach.
+	BOOST_TEST(within == ticks - 1);
+	BOOST_TEST(world.Get<gp::TeamMember>(car)->team == america);
+	BOOST_TEST(world.Get<gp::Owner>(car)->player == us);
+	BOOST_TEST((world.Get<gp::Loadout>(car)->weaponFlags & content::SetFlag(content::WeaponSetFlagNames, "CARBOMB")) != 0u);
+	BOOST_TEST((world.Get<gp::StatusFlags>(car)->bits & (std::uint64_t{1} << content::ObjectStatusBit("IS_CARBOMB"))) != 0u);
+	BOOST_TEST((world.Get<gp::Aggression>(car)->vision == Fixed::FromInt(150)));
+	BOOST_TEST((world.Get<gp::Vision>(car)->clearingRange == Fixed::FromInt(200)));
+	BOOST_TEST(world.Get<gp::Experience>(car)->level == 2u);
+	BOOST_TEST((game.Game().names.Find("Bomber") == car));
+	bool fx = false;
+	for (const auto &pickup : world.Resource<gameplay::CratePickups>().list)
+		fx = fx || (pickup.picker == car && pickup.fx == "FX_MakeCarBombSuccess");
+	BOOST_TEST(fx);
+	const ecs::Entity another = game.Place("GLAInfantryTerrorist", match->At(0, -300), {}, america);
+	game.Tick();
+	BOOST_TEST(!gameplay::CanConvertToCarBomb(game.Game(), another, car, false));
+	BOOST_TEST(world.Get<gp::TeamMember>(tank)->team == china);
+}
+
+// ConvertToHijackedVehicleCrateCollide (isValidToExecute, executeCrateBehavior), ActionManager::canHijackVehicle and
+// HijackerUpdate::update on the shipped GLAInfantryHijacker (VisionRange 100, ShroudClearingRange 200, ParachuteName
+// AmericaParachute). Told to hijack China's Crusader (an enemy VEHICLE with an EjectPilotDie) it walks to it and takes it
+// the tick it begins within reach (the car bomber's touch): the tank joins America's default team HIJACKED, takes the
+// hijacker's name, vision 100 and shroud clearing range 200 and the higher veterancy (the hijacker's veteran), and the
+// hijacker rides hidden (off the map, NO_COLLISIONS MASKED UNSELECTABLE) where the tank is, every tick after. A
+// hijacked vehicle is never hijacked again. The tank destroyed, the hijacker is out where it last was the tick after
+// (HijackerUpdate finds its target gone), back on the map and idle. A Technical (no EjectPilotDie) keeps no driver: its
+// hijacker is gone. The same on 4 workers, and a checkpoint taken while it rides carries on exactly.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_hijacker_takes_a_vehicle_and_leaves_it_when_it_dies)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	struct Game
+	{
+		std::unique_ptr<session::Session> game;
+		ecs::Entity hijacker, tank, technical, other;
+	};
+	const auto stage = [&](std::size_t workers) {
+		Game made;
+		made.game = std::make_unique<session::Session>(match->skirmish.level, shell.game, match->Options(workers));
+		made.game->Tick();
+		const std::uint32_t america = match->Team(*made.game, 0), china = match->Team(*made.game, 1);
+		made.hijacker = made.game->Place("GLAInfantryHijacker", match->At(0, -300), {}, america);
+		made.tank = made.game->Place("AmericaTankCrusader", match->At(160, -300), {}, china);
+		made.technical = made.game->Place("GLAVehicleTechnical", match->At(0, -150), {}, china);
+		made.other = made.game->Place("GLAInfantryHijacker", match->At(-40, -150), {}, america);
+		made.game->Game().names.Assign("Jacker", made.hijacker);
+		gameplay::PlaceAtVeterancy(made.game->Game(), made.hijacker, 1, true);
+		made.game->Tick();
+		return made;
+	};
+	Game one = stage(1), four = stage(4);
+	auto &game = *one.game;
+	auto &world = game.World();
+	const auto tick = [&] {
+		game.Tick();
+		four.game->Tick();
+	};
+	const std::uint32_t america = match->Team(game, 0), china = match->Team(game, 1);
+	const std::uint64_t hijacked = std::uint64_t{1} << content::ObjectStatusBit("HIJACKED");
+	const std::uint64_t hidden = (std::uint64_t{1} << content::ObjectStatusBit("NO_COLLISIONS")) | (std::uint64_t{1} << content::ObjectStatusBit("MASKED")) |
+		(std::uint64_t{1} << content::ObjectStatusBit("UNSELECTABLE"));
+	const auto status = [&](ecs::Entity entity) {
+		const auto *flags = world.Get<gp::StatusFlags>(entity);
+		return flags != nullptr ? flags->bits : std::uint64_t{0};
+	};
+	BOOST_TEST_REQUIRE(gameplay::IsHijacker(game.Game(), one.hijacker));
+	BOOST_TEST(gameplay::CanHijack(game.Game(), one.hijacker, one.tank, false));
+	BOOST_TEST(gameplay::CanHijack(game.Game(), one.hijacker, one.technical, false));
+	BOOST_TEST(!gameplay::CanHijack(game.Game(), one.hijacker, one.other, false)); // not a vehicle, nor an enemy
+
+	BOOST_TEST_REQUIRE(gameplay::OrderHijack(game.Game(), one.hijacker, one.tank, true, false));
+	gameplay::OrderHijack(four.game->Game(), four.hijacker, four.tank, true, false);
+	const Fixed reach = world.Get<gp::Targetable>(one.tank)->radius + Fixed::FromInt(20);
+	int ticks = 0, within = -1;
+	while (world.Get<gp::TeamMember>(one.tank)->team == china && ticks < 600)
+	{
+		const auto apart = Engine::Math::Distance(world.Get<gp::Transform>(one.hijacker)->position.XY(), world.Get<gp::Transform>(one.tank)->position.XY());
+		if (within < 0 && apart <= reach)
+			within = ticks;
+		tick();
+		++ticks;
+	}
+	BOOST_TEST_MESSAGE("hijacked after " << ticks << " ticks");
+	BOOST_TEST_REQUIRE(world.Get<gp::TeamMember>(one.tank)->team == america);
+	BOOST_TEST(within == ticks - 1);
+	BOOST_TEST(world.IsAlive(one.hijacker));
+	BOOST_TEST((status(one.tank) & hijacked) != 0u);
+	BOOST_TEST((status(one.hijacker) & hidden) == hidden);
+	BOOST_TEST(world.Get<gp::OffMap>(one.hijacker) != nullptr);
+	BOOST_TEST((world.Get<gp::Aggression>(one.tank)->vision == Fixed::FromInt(100)));
+	BOOST_TEST((world.Get<gp::Vision>(one.tank)->clearingRange == Fixed::FromInt(200)));
+	BOOST_TEST(world.Get<gp::Experience>(one.tank)->level == 1u);
+	BOOST_TEST((game.Game().names.Find("Jacker") == one.tank));
+	BOOST_TEST(!gameplay::CanHijack(game.Game(), one.other, one.tank, false));
+
+	// Riding: where the tank is, every tick.
+	gameplay::OrderMove(game.Game(), one.tank, match->At(160, -500), true);
+	gameplay::OrderMove(four.game->Game(), four.tank, match->At(160, -500), true);
+	for (int step = 0; step < 40; ++step)
+	{
+		tick();
+		BOOST_TEST_REQUIRE((world.Get<gp::Transform>(one.hijacker)->position == world.Get<gp::Transform>(one.tank)->position));
+	}
+	BOOST_TEST((game.StateHash() == four.game->StateHash()));
+	auto restored = session::Session::Restore(match->skirmish.level, shell.game, match->Options(1), game.Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST((restored->StateHash() == game.StateHash()));
+
+	// The tank killed: the hijacker rides on through its slow death; the tick after it is gone, it is out where the
+	// tank last was.
+	gameplay::KillNow(game.Game(), one.tank);
+	gameplay::KillNow(four.game->Game(), four.tank);
+	auto last = world.Get<gp::Transform>(one.tank)->position;
+	int dying = 0;
+	while (world.IsAlive(one.tank) && dying < 900)
+	{
+		last = world.Get<gp::Transform>(one.tank)->position;
+		BOOST_TEST_REQUIRE(world.Get<gp::OffMap>(one.hijacker) != nullptr);
+		tick();
+		++dying;
+	}
+	BOOST_TEST_MESSAGE("the tank gone after " << dying << " ticks");
+	BOOST_TEST_REQUIRE(!world.IsAlive(one.tank));
+	BOOST_TEST(world.Get<gp::OffMap>(one.hijacker) != nullptr);
+	tick();
+	BOOST_TEST(world.Get<gp::OffMap>(one.hijacker) == nullptr);
+	BOOST_TEST((status(one.hijacker) & hidden) == 0u);
+	BOOST_TEST((world.Get<gp::Transform>(one.hijacker)->position.XY() == last.XY()));
+	BOOST_TEST((world.Get<gp::MoveOrder>(one.hijacker)->mode == gp::MoveMode::Idle));
+
+	// A Technical keeps no driver.
+	BOOST_TEST_REQUIRE(gameplay::OrderHijack(game.Game(), one.other, one.technical, true, false));
+	gameplay::OrderHijack(four.game->Game(), four.other, four.technical, true, false);
+	int walk = 0;
+	while (world.IsAlive(one.other) && walk < 600)
+	{
+		tick();
+		++walk;
+	}
+	BOOST_TEST(!world.IsAlive(one.other));
+	BOOST_TEST(world.Get<gp::TeamMember>(one.technical)->team == america);
+	BOOST_TEST((game.StateHash() == four.game->StateHash()));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

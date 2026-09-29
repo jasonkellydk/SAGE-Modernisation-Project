@@ -1,7 +1,5 @@
-module;
-#include <array>
-#include <cstddef>
 export module Graphics.Scene.Terrain.Visibility;
+import std;
 export import Graphics.Scene.Terrain.Geometry;
 namespace Graphics
 {

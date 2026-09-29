@@ -1,15 +1,6 @@
-module;
-#include <algorithm>
-#include <array>
-#include <bit>
-#include <cassert>
-#include <cstddef>
-#include <cstdint>
-#include <cstring>
-#include <limits>
-#include <span>
-#include <vector>
 export module Graphics.Scene.Props.SkinPalettes;
+import std;
+import engine.core.contracts;
 import Graphics.RHI;
 import Graphics.Resources.Handles.ResourceHandle;
 import Graphics.Resources.Pools.ResourcePool;
@@ -39,14 +30,14 @@ public:
     PropSkinPaletteHandle Update(PropSkinPaletteHandle handle, std::size_t count,
         const ReadTransform& read_transform,std::uint64_t revision=0)
     {
-        assert(count != 0 && count <= 65536);
+        engine::core::Assert(count != 0 && count <= 65536);
         // Sibling meshes can retain one published hierarchy pose. This lookup
         // borrows a full generation; owners and queued consumers hold its leases.
         if (revision!=0 && revision==m_cached_revision) {
             if (auto* cached=m_entries.Resolve(m_cached_handle); cached && cached->count==count) {
                 const auto shared=m_cached_handle;
                 if (handle!=shared) {
-                    assert(cached->references!=(std::numeric_limits<std::size_t>::max)());
+                    engine::core::Assert(cached->references!=(std::numeric_limits<std::size_t>::max)());
                     ++cached->references;
                     Release(handle);
                 }
@@ -90,7 +81,7 @@ public:
     bool Retain(PropSkinPaletteHandle handle) noexcept {
         auto* entry=m_entries.Resolve(handle);
         if (!entry) return false;
-        assert(entry->references!=(std::numeric_limits<std::size_t>::max)());
+        engine::core::Assert(entry->references!=(std::numeric_limits<std::size_t>::max)());
         ++entry->references;
         return true;
     }
@@ -108,7 +99,7 @@ public:
     std::array<std::uint32_t,4> Address(PropSkinPaletteHandle handle) const noexcept {
         const auto* entry=m_entries.Resolve(handle);
         if (!entry) return {};
-        assert(entry->first+entry->count <= (std::numeric_limits<std::uint32_t>::max)()/sizeof(PropBoneTransform));
+        engine::core::Assert(entry->first+entry->count <= (std::numeric_limits<std::uint32_t>::max)()/sizeof(PropBoneTransform));
         return {static_cast<std::uint32_t>(entry->first),static_cast<std::uint32_t>(entry->count),0,0};
     }
     bool Prepare(Device& device) {
@@ -163,7 +154,7 @@ public:
         : m_palettes(palettes),m_handle(handle) {
         if (handle.Is_Valid()) {
             const bool retained=m_palettes.Retain(handle);
-            assert(retained);
+            engine::core::Assert(retained);
         }
     }
     ~PropSkinLease() { m_palettes.Release(m_handle); }

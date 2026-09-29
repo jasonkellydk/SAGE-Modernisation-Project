@@ -1,16 +1,8 @@
 module;
 #define BOOST_TEST_MODULE PropDrawingTests
 #include <boost/test/included/unit_test.hpp>
-#include <algorithm>
-#include <array>
-#include <bit>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <random>
-#include <span>
-#include <vector>
 export module Graphics.Scene.Props.Drawing.Tests;
+import std;
 import Graphics.Tests.Device;
 import Graphics.Scene.Props.Renderer;
 import Graphics.Scene.Props.SkinBounds;

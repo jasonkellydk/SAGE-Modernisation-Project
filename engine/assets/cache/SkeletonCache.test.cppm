@@ -1,10 +1,8 @@
 module;
 #define BOOST_TEST_MODULE SkeletonCacheTests
 #include <boost/test/included/unit_test.hpp>
-#include <string>
-#include <utility>
-#include <vector>
 export module Assets.Cache.Skeletons.Tests;
+import std;
 import Assets.Cache.Skeletons;
 
 namespace {

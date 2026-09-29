@@ -1,10 +1,7 @@
 module;
 #include <SDL3/SDL.h>
-#include <memory>
-#include <string>
-#include <utility>
-#include <vector>
 export module engine.platform.adapters.sdl3.dialogs;
+import std;
 import engine.platform;
 import engine.platform.adapters.sdl3.dialogs.context;
 

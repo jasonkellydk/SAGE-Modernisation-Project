@@ -1,0 +1,254 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstddef>
+#include <cstdint>
+#include <deque>
+#include <map>
+#include <memory>
+#include <optional>
+#include <span>
+#include <string>
+#include <utility>
+#include <vector>
+
+import games.generalszh.shell.lan.lan_game_options_view_model;
+import engine.core.text.quoted_printable;
+
+using namespace generalszh::shell;
+namespace lan = generalszh::network::lan;
+namespace setup = generalszh::session::setup;
+
+namespace
+{
+struct Network
+{
+	std::map<std::uint32_t, std::deque<std::pair<std::uint32_t, std::vector<std::byte>>>> inboxes;
+	lan::Link LinkFor(std::uint32_t ip)
+	{
+		inboxes[ip];
+		lan::Link link;
+		link.send = [this, ip](std::uint32_t to, std::span<const std::byte> datagram) {
+			for (auto &[address, inbox] : inboxes)
+				if ((to == lan::Broadcast && address != ip) || address == to)
+					inbox.emplace_back(ip, std::vector<std::byte>(datagram.begin(), datagram.end()));
+		};
+		link.receive = [this, ip]() -> std::optional<std::pair<std::uint32_t, std::vector<std::byte>>> {
+			auto &inbox = inboxes[ip];
+			if (inbox.empty())
+				return std::nullopt;
+			auto datagram = std::move(inbox.front());
+			inbox.pop_front();
+			return datagram;
+		};
+		return link;
+	}
+};
+
+SetupCatalog Catalog()
+{
+	SetupCatalog catalog;
+	for (const char16_t *name : {u"Gold", u"Red", u"Blue", u"Green", u"Orange", u"Sky Blue", u"Purple", u"Pink"})
+		catalog.colors.push_back({name, 0xFF0000FF});
+	catalog.factions = {{2, u"USA"}, {3, u"China"}, {4, u"GLA"}};
+	catalog.startingMoney = {5000, 10000, 20000, 50000};
+	SetupMap map;
+	map.file = "maps\\tournament continent\\tournament continent.map";
+	map.name = u"Tournament Continent (4)";
+	map.players = 4;
+	map.multiplayer = map.official = true;
+	map.crc = 0x7D024EDA;
+	map.size = 639753;
+	map.starts = {{6000, 8641}, {1819, 5804}, {8000, 2000}, {2000, 2000}};
+	catalog.maps = {map};
+	return catalog;
+}
+
+// One machine: its lobby, its screens and their shell model, wired as the host wires them.
+struct Machine
+{
+	ShellModel model;
+	MessageBoxViewModel messages;
+	engine::config::Preferences preferences;
+	std::unique_ptr<LanLobbyViewModel> lobbyScreen;
+	std::unique_ptr<LanGameOptionsViewModel> optionsScreen;
+	std::unique_ptr<lan::LanLobby> lobby;
+	// The game this machine started: its setup's seed, its slot, the host's address and whether it hosts.
+	struct Started
+	{
+		std::int32_t seed{0};
+		int slot{-1};
+		std::uint32_t host{0};
+		bool hosting{false};
+	};
+	std::optional<Started> started;
+
+	Machine(Network &network, std::uint32_t ip, const SetupCatalog &catalog, const char *name)
+	{
+		// Network.ini keeps the name quoted-printable (its UTF-16 bytes).
+		const std::string plain(name);
+		preferences.Set("UserName", engine::core::text::EncodeQuotedPrintable(std::u16string(plain.begin(), plain.end())));
+		lobbyScreen = std::make_unique<LanLobbyViewModel>(model, messages, catalog, preferences, LanServices{});
+		LanServices optionsServices;
+		optionsServices.start = [this](const generalszh::session::setup::GameSetup &setup, int slot, std::uint32_t host, bool hosting) {
+			started = Started{setup.seed, slot, host, hosting};
+		};
+		optionsScreen = std::make_unique<LanGameOptionsViewModel>(model, messages, catalog, preferences, std::move(optionsServices));
+		optionsScreen->m_lineFor = [this](const std::u16string &n, std::uint32_t i, const std::u16string &t, lan::ChatType c) { return lobbyScreen->Line(n, i, t, c); };
+		lan::LobbyServices services;
+		services.hasMap = [&catalog](const std::string &file, std::uint32_t crc) {
+			const SetupMap *map = catalog.Find(file);
+			return map != nullptr && (crc == 0 || crc == map->crc);
+		};
+		services.seed = [ip] { return ip; };
+		services.limits = {8, 15};
+		lan::LobbyEvents events;
+		events.playersChanged = [this] { lobbyScreen->PlayersChanged(); };
+		events.gamesChanged = [this] { lobbyScreen->GamesChanged(); };
+		events.gameCreated = [this](lan::Result result) { lobbyScreen->GameCreated(result); };
+		events.gameJoined = [this](lan::Result result) { lobbyScreen->GameJoined(result); };
+		events.slotsChanged = [this] { optionsScreen->SlotsChanged(); };
+		events.leftGame = [this] { optionsScreen->LeftGame(); };
+		events.chat = [this](std::u16string n, std::uint32_t i, std::u16string t, lan::ChatType c) {
+			if (lobby->InLobby())
+				lobbyScreen->Chat(n, i, t, c);
+			else
+				optionsScreen->Chat(n, i, t, c);
+		};
+		events.gameStarted = [this] { optionsScreen->GameStarted(); };
+		lobby = std::make_unique<lan::LanLobby>(network.LinkFor(ip), ip, services, events);
+		// The screens open as the shell model shows them.
+		model.requestedScreen.Subscribe([this](Screen screen) {
+			if (screen == Screen::NetworkLobby)
+				lobbyScreen->Open(*lobby);
+			else if (screen == Screen::LanGameOptions)
+				optionsScreen->Open(*lobby);
+		});
+		model.Push(Screen::NetworkLobby);
+	}
+};
+}
+
+BOOST_AUTO_TEST_SUITE(lan_view_model)
+
+// Legacy parity (LanLobbyMenu, LanGameOptionsMenu, UpdateSlotList, EnableAcceptControls, StartPressed):
+// the joiner sees the host's game, joins, asks for a colour, accepts; the host starts once all have.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_lan_game_through_its_screens)
+{
+	const SetupCatalog catalog = Catalog();
+	Network network;
+	Machine host(network, 0xC0A80102, catalog, "Host");
+	Machine guest(network, 0xC0A80103, catalog, "Guest");
+	std::uint64_t now = 1000;
+	const auto step = [&](int ms) {
+		for (int t = 0; t < ms; t += 100)
+		{
+			now += 100;
+			host.lobby->Update(now);
+			guest.lobby->Update(now);
+		}
+	};
+	step(400);
+	BOOST_TEST(guest.lobbyScreen->players.Get().size() == 2u);
+
+	// Host: Create Game. Its screen opens with the map's four slots.
+	host.lobbyScreen->host.Execute();
+	BOOST_TEST((host.model.requestedScreen.Get() == Screen::LanGameOptions));
+	BOOST_TEST((host.optionsScreen->mapName.Get() == u"Tournament Continent (4)"));
+	BOOST_TEST(host.optionsScreen->player[1].Get() == static_cast<int>(setup::SlotState::Open));
+	BOOST_TEST(host.optionsScreen->player[4].Get() == static_cast<int>(setup::SlotState::Closed));
+	BOOST_TEST(host.optionsScreen->playerEnabled[1].Get());  // the host picks the other slots' players
+	BOOST_TEST(!host.optionsScreen->playerEnabled[0].Get()); // not its own
+	step(400);
+	BOOST_TEST_REQUIRE(guest.lobbyScreen->games.Get().size() == 1u);
+	BOOST_TEST((guest.lobbyScreen->games.Get().front() == u"Host"));
+
+	// Guest: Join Game with the game selected.
+	guest.lobbyScreen->selectedGame.Set(0);
+	BOOST_TEST(guest.lobbyScreen->details.Get().shown);
+	BOOST_TEST((guest.lobbyScreen->details.Get().host == u"Host"));
+	guest.lobbyScreen->join.Execute();
+	step(600);
+	BOOST_TEST((guest.model.requestedScreen.Get() == Screen::LanGameOptions));
+	BOOST_TEST((guest.optionsScreen->playerText[0].Get() == u"Host"));
+	BOOST_TEST((guest.optionsScreen->playerText[1].Get() == u"Guest"));
+	BOOST_TEST(guest.optionsScreen->slotEnabled[1].Get());  // its own boxes
+	BOOST_TEST(!guest.optionsScreen->slotEnabled[0].Get()); // not the host's
+	BOOST_TEST(!guest.optionsScreen->playerEnabled[2].Get());
+	BOOST_TEST(!guest.optionsScreen->hostOptionsEnabled.Get());
+	BOOST_TEST(host.optionsScreen->acceptShown[1].Get());
+	BOOST_TEST(!host.optionsScreen->accepted[1].Get());
+
+	// The guest picks Blue: it asks, the host decides, both show it.
+	int blue = -1;
+	for (std::size_t row = 0; row < guest.optionsScreen->colorItems[1].Get().size(); ++row)
+		if (guest.optionsScreen->colorItems[1].Get()[row] == u"Blue")
+			blue = static_cast<int>(row);
+	guest.optionsScreen->color[1].Set(blue);
+	step(400);
+	BOOST_TEST(host.lobby->CurrentGame()->setup.slots[1].color == 2);
+	BOOST_TEST((guest.optionsScreen->colorItems[1].Get()[guest.optionsScreen->color[1].Get()] == u"Blue"));
+
+	// Chat, coloured by the speaker's slot.
+	guest.optionsScreen->chatEntry.Set(u"ready?");
+	guest.optionsScreen->send.Execute();
+	step(200);
+	BOOST_TEST_REQUIRE(!host.optionsScreen->chat.Get().empty());
+	BOOST_TEST((host.optionsScreen->chat.Get().back().text == u"[Guest] ready?"));
+	BOOST_TEST(host.optionsScreen->chat.Get().back().rgba == catalog.colors[2].rgba);
+
+	// The host presses Start before the guest accepts: the guest is asked to.
+	host.optionsScreen->start.Execute();
+	step(400);
+	BOOST_TEST(!guest.optionsScreen->chat.Get().empty());
+	// The guest accepts; its boxes lock; the host's Start counts down and both start.
+	guest.optionsScreen->start.Execute();
+	step(400);
+	BOOST_TEST(host.optionsScreen->accepted[1].Get());
+	BOOST_TEST(!guest.optionsScreen->slotEnabled[1].Get());
+	host.optionsScreen->start.Execute();
+	step(7000);
+	// Both start the same game (the host's seed): the host in slot 0, hosting; the guest in slot 1, at the host's address.
+	BOOST_TEST_REQUIRE(host.started.has_value());
+	BOOST_TEST_REQUIRE(guest.started.has_value());
+	BOOST_TEST(host.started->seed == guest.started->seed);
+	BOOST_TEST(host.started->slot == 0);
+	BOOST_TEST(host.started->hosting);
+	BOOST_TEST(guest.started->slot == 1);
+	BOOST_TEST(!guest.started->hosting);
+	BOOST_TEST(guest.started->host == host.lobby->LocalIp());
+	BOOST_TEST(!host.messages.open.Get());
+	// Back from the game, the game screen gives way to the lobby (LanGameOptionsMenuInit: popImmediate).
+	guest.model.Push(Screen::ScoreScreen);
+	guest.model.Pop();
+	BOOST_TEST((guest.model.requestedScreen.Get() == Screen::NetworkLobby));
+}
+
+// Legacy parity (ComboBoxPlayer on the host: another state for a human sends it away).
+BOOST_AUTO_TEST_CASE(legacy_parity_the_host_sends_a_player_away)
+{
+	const SetupCatalog catalog = Catalog();
+	Network network;
+	Machine host(network, 0xC0A80102, catalog, "Host");
+	Machine guest(network, 0xC0A80103, catalog, "Guest");
+	std::uint64_t now = 1000;
+	const auto step = [&](int ms) {
+		for (int t = 0; t < ms; t += 100)
+		{
+			now += 100;
+			host.lobby->Update(now);
+			guest.lobby->Update(now);
+		}
+	};
+	host.lobbyScreen->host.Execute();
+	step(400);
+	guest.lobbyScreen->selectedGame.Set(0);
+	guest.lobbyScreen->join.Execute();
+	step(600);
+	BOOST_TEST_REQUIRE((guest.model.requestedScreen.Get() == Screen::LanGameOptions));
+	host.optionsScreen->player[1].Set(static_cast<int>(setup::SlotState::Closed));
+	step(400);
+	BOOST_TEST((guest.model.requestedScreen.Get() == Screen::NetworkLobby)); // back in the lobby
+	BOOST_TEST(host.optionsScreen->player[1].Get() == static_cast<int>(setup::SlotState::Closed));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

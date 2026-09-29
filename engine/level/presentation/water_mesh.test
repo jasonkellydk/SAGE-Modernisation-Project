@@ -1,0 +1,143 @@
+#include <boost/test/unit_test.hpp>
+
+#include <array>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <set>
+#include <vector>
+
+import engine.level.presentation.water_mesh;
+
+using namespace engine::level;
+using namespace engine::level::presentation;
+namespace math = Engine::Math;
+
+namespace
+{
+using Point = std::array<float, 2>;
+
+double TwiceArea(const Point &a, const Point &b, const Point &c)
+{
+	return (static_cast<double>(b[0]) - a[0]) * (static_cast<double>(c[1]) - a[1]) -
+		(static_cast<double>(b[1]) - a[1]) * (static_cast<double>(c[0]) - a[0]);
+}
+
+double PolygonArea(const std::vector<Point> &points)
+{
+	double twice = 0.0;
+	for (std::size_t index = 0; index < points.size(); ++index)
+	{
+		const Point &a = points[index];
+		const Point &b = points[(index + 1) % points.size()];
+		twice += static_cast<double>(a[0]) * b[1] - static_cast<double>(b[0]) * a[1];
+	}
+	return std::fabs(twice) / 2.0;
+}
+
+// Every triangle counter-clockwise, and together they cover the polygon's area.
+void CheckTriangulation(const std::vector<Point> &points, const std::vector<std::uint32_t> &indices, std::size_t triangles)
+{
+	BOOST_TEST_REQUIRE(indices.size() == triangles * 3);
+	double covered = 0.0;
+	for (std::size_t index = 0; index < indices.size(); index += 3)
+	{
+		for (std::size_t corner = 0; corner < 3; ++corner)
+			BOOST_TEST_REQUIRE(indices[index + corner] < points.size());
+		const double area = TwiceArea(points[indices[index]], points[indices[index + 1]], points[indices[index + 2]]);
+		BOOST_TEST(area > 0.0);
+		covered += area / 2.0;
+	}
+	BOOST_TEST(std::fabs(covered - PolygonArea(points)) < 1e-3);
+}
+
+Region WaterRegion(std::uint32_t id, const std::vector<std::array<int, 3>> &points)
+{
+	Region region;
+	region.id = id;
+	region.water = true;
+	for (const auto &point : points)
+		region.points.push_back(
+			math::FixedVector3{math::Fixed::FromInt(point[0]), math::Fixed::FromInt(point[1]), math::Fixed::FromInt(point[2])});
+	return region;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(water_mesh)
+
+BOOST_AUTO_TEST_CASE(convex_quad_in_either_winding)
+{
+	const std::vector<Point> counterClockwise{{0, 0}, {10, 0}, {10, 10}, {0, 10}};
+	CheckTriangulation(counterClockwise, TriangulatePolygon(counterClockwise), 2);
+	const std::vector<Point> clockwise{{0, 0}, {0, 10}, {10, 10}, {10, 0}};
+	CheckTriangulation(clockwise, TriangulatePolygon(clockwise), 2);
+}
+
+BOOST_AUTO_TEST_CASE(concave_polygons_stay_inside_their_outline)
+{
+	// An L shape and a U shape: reflex corners must not produce ears.
+	const std::vector<Point> shapeL{{0, 0}, {20, 0}, {20, 10}, {10, 10}, {10, 20}, {0, 20}};
+	CheckTriangulation(shapeL, TriangulatePolygon(shapeL), 4);
+	const std::vector<Point> shapeU{{0, 0}, {30, 0}, {30, 30}, {20, 30}, {20, 10}, {10, 10}, {10, 30}, {0, 30}};
+	CheckTriangulation(shapeU, TriangulatePolygon(shapeU), 6);
+}
+
+BOOST_AUTO_TEST_CASE(duplicate_and_collinear_points_are_skipped)
+{
+	// Repeated first point at the end, a duplicate, and a midpoint on an edge.
+	const std::vector<Point> points{{0, 0}, {5, 0}, {10, 0}, {10, 0}, {10, 10}, {0, 10}, {0, 0}};
+	const auto indices = TriangulatePolygon(points);
+	// At most one triangle per remaining corner, none of them degenerate.
+	BOOST_TEST(indices.size() % 3 == 0u);
+	BOOST_TEST(indices.size() <= 9u);
+	double covered = 0.0;
+	for (std::size_t index = 0; index < indices.size(); index += 3)
+	{
+		const double twice = TwiceArea(points[indices[index]], points[indices[index + 1]], points[indices[index + 2]]);
+		BOOST_TEST(twice > 0.0);
+		covered += twice / 2.0;
+	}
+	BOOST_TEST(std::fabs(covered - 100.0) < 1e-3);
+}
+
+BOOST_AUTO_TEST_CASE(degenerate_outlines_yield_nothing)
+{
+	BOOST_TEST(TriangulatePolygon(std::vector<Point>{{0, 0}, {1, 1}}).empty());
+	BOOST_TEST(TriangulatePolygon(std::vector<Point>{{0, 0}, {1, 1}, {2, 2}}).empty());
+}
+
+BOOST_AUTO_TEST_CASE(level_water_regions_become_surfaces_with_world_uvs)
+{
+	Level level;
+	level.regions.push_back(WaterRegion(7, {{0, 0, 12}, {300, 0, 12}, {300, 150, 12}, {0, 150, 12}}));
+	Region trigger = WaterRegion(8, {{0, 0, 0}, {1, 0, 0}, {1, 1, 0}});
+	trigger.water = false;
+	level.regions.push_back(trigger);
+	Region river = WaterRegion(9, {{0, 0, 5}, {10, 0, 5}, {10, 10, 5}, {0, 10, 5}});
+	river.water = false;
+	river.river = true;
+	level.regions.push_back(river);
+
+	const auto surfaces = BuildWaterSurfaces(level);
+	BOOST_TEST_REQUIRE(surfaces.size() == 2u);
+	const WaterSurfaceMesh &sea = surfaces[0];
+	BOOST_TEST(sea.regionId == 7u);
+	BOOST_TEST(!sea.river);
+	BOOST_TEST(sea.height == 12.0f);
+	BOOST_TEST(sea.vertices.size() == 4u);
+	BOOST_TEST(sea.indices.size() == 6u);
+	BOOST_TEST(sea.vertices[2].position[0] == 300.0f);
+	BOOST_TEST(sea.vertices[2].position[2] == 12.0f);
+	BOOST_TEST(std::fabs(sea.vertices[2].uv[0] - 2.0f) < 1e-6f);
+	BOOST_TEST(std::fabs(sea.vertices[2].uv[1] - 1.0f) < 1e-6f);
+	BOOST_TEST(surfaces[1].river);
+
+	WaterMeshOptions options;
+	options.includeRivers = false;
+	options.uvScale = 1.0f;
+	const auto standing = BuildWaterSurfaces(level, options);
+	BOOST_TEST_REQUIRE(standing.size() == 1u);
+	BOOST_TEST(standing[0].vertices[2].uv[0] == 300.0f);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

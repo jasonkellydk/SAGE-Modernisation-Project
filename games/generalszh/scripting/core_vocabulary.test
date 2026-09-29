@@ -1,0 +1,498 @@
+#define BOOST_TEST_MODULE GeneralsZhScripting
+#include <boost/test/included/unit_test.hpp>
+
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <map>
+#include <string>
+#include <vector>
+
+import games.generalszh.scripting.core_vocabulary;
+import games.generalszh.scripting.camera_vocabulary;
+import games.generalszh.scripting.presentation_vocabulary;
+import games.generalszh.content.install.install_mount;
+import engine.level.adapters.generals_map.map_reader;
+
+using namespace engine::scripting;
+namespace level = engine::level;
+
+namespace
+{
+level::ScriptCall Call(std::string name, std::string text = {}, std::int64_t a = 0, std::int64_t b = 0)
+{
+	level::ScriptCall call;
+	call.name = std::move(name);
+	level::ScriptParameter first;
+	first.text = std::move(text);
+	first.integer = a;
+	level::ScriptParameter second;
+	second.integer = b;
+	second.number = Engine::Math::Fixed::FromInt(b);
+	level::ScriptParameter third;
+	third.integer = b;
+	call.parameters = {first, second, third};
+	return call;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(zero_hour_core_vocabulary)
+
+BOOST_AUTO_TEST_CASE(maps_zero_hour_parameter_layouts_onto_the_runtime)
+{
+	level::Scenario scenario;
+	auto &participant = scenario.participants.emplace_back();
+	level::Script setup;
+	setup.name = "setup";
+	setup.oneShot = true;
+	setup.conditions = {{Call("CONDITION_TRUE")}};
+	setup.actions = {Call("SET_COUNTER", "kills", 0, 5), Call("SET_FLAG", "ready", 0, 1), Call("SET_MILLISECOND_TIMER", "t", 0, 2)};
+	participant.scripts.scripts.push_back(setup);
+	level::Script check;
+	check.name = "check";
+	check.oneShot = true;
+	// COUNTER(kills >= 5) AND FLAG(ready == 1) AND TIMER_EXPIRED(t)
+	level::ScriptCall counter = Call("COUNTER", "kills");
+	counter.parameters[1].integer = 3;
+	counter.parameters[2].integer = 5;
+	level::ScriptCall flag = Call("FLAG", "ready");
+	flag.parameters[1].integer = 1;
+	check.conditions = {{counter, flag, Call("TIMER_EXPIRED", "t")}};
+	check.actions = {Call("SET_FLAG", "fired", 0, 1)};
+	participant.scripts.scripts.push_back(check);
+
+	Vocabulary vocabulary;
+	generalszh::scripting::AddCoreVocabulary(vocabulary);
+	ScriptRuntime runtime(scenario, vocabulary);
+	std::uint64_t firedAt = 0;
+	for (std::uint64_t tick = 1; tick <= 100 && firedAt == 0; ++tick)
+	{
+		runtime.Tick(tick);
+		if (runtime.Flag("fired"))
+			firedAt = tick;
+	}
+	// 2 seconds = 60 ticks after tick 1, counted down from tick 2 on.
+	BOOST_TEST(firedAt == 61u);
+	BOOST_TEST(runtime.Counter("kills") == 5);
+	BOOST_TEST(runtime.UnknownConditions().empty());
+	BOOST_TEST(runtime.UnknownActions().empty());
+}
+
+BOOST_AUTO_TEST_CASE(camera_actions_queue_commands_at_named_waypoints)
+{
+	level::Level map;
+	for (std::uint32_t id = 1; id <= 3; ++id)
+	{
+		level::Marker marker;
+		marker.id = id;
+		marker.name = "Cam" + std::to_string(id);
+		marker.position = {Engine::Math::Fixed::FromInt(id * 100), Engine::Math::Fixed::FromInt(50), {}};
+		marker.links = id < 3 ? std::vector<std::uint32_t>{id + 1} : std::vector<std::uint32_t>{1};
+		map.markers.push_back(marker);
+	}
+	auto &participant = map.scenario.participants.emplace_back();
+	level::Script start;
+	start.name = "start";
+	start.oneShot = true;
+	start.conditions = {{Call("CONDITION_TRUE")}};
+	level::ScriptCall move = Call("MOVE_CAMERA_TO", "Cam2");
+	move.parameters[1].number = Engine::Math::Fixed::FromInt(3);
+	level::ScriptParameter ease;
+	ease.number = Engine::Math::Fixed::FromRatio(1, 2);
+	move.parameters.push_back(ease);
+	move.parameters.push_back(ease);
+	start.actions = {move, Call("CAMERA_MOD_LOOK_TOWARD", "Cam3"), Call("MOVE_CAMERA_ALONG_WAYPOINT_PATH", "Cam1"), Call("MOVE_CAMERA_TO", "Nowhere")};
+	participant.scripts.scripts.push_back(start);
+	level::Script done;
+	done.name = "done";
+	done.oneShot = true;
+	done.conditions = {{Call("CAMERA_MOVEMENT_FINISHED")}};
+	done.actions = {Call("SET_FLAG", "finished", 0, 1)};
+	participant.scripts.scripts.push_back(done);
+
+	std::vector<generalszh::scripting::CameraScriptCommand> commands;
+	bool finished = false;
+	Vocabulary vocabulary;
+	generalszh::scripting::AddCoreVocabulary(vocabulary);
+	generalszh::scripting::AddCameraVocabulary(vocabulary, map, {&commands, [&finished] { return finished; }});
+	ScriptRuntime runtime(map.scenario, vocabulary);
+	runtime.Tick(1);
+	using Kind = generalszh::scripting::CameraScriptCommand::Kind;
+	BOOST_TEST_REQUIRE(commands.size() == 3u); // the unknown waypoint queues nothing
+	BOOST_TEST((commands[0].kind == Kind::MoveTo));
+	BOOST_TEST(commands[0].points.front().x.Raw() == Engine::Math::Fixed::FromInt(200).Raw());
+	BOOST_TEST(commands[0].milliseconds == 3000);
+	BOOST_TEST(commands[0].easeInMilliseconds == 500);
+	BOOST_TEST(commands[0].easeOutMilliseconds == 500);
+	BOOST_TEST((commands[1].kind == Kind::LookToward));
+	BOOST_TEST((commands[2].kind == Kind::MoveAlongPath));
+	BOOST_TEST(commands[2].points.size() == 3u); // first links until the loop closes
+	BOOST_TEST(!runtime.Flag("finished"));
+	finished = true;
+	runtime.Tick(2);
+	BOOST_TEST(runtime.Flag("finished"));
+}
+
+// ScriptActions' camera actions (doSetupCamera, doZoomCamera, doPitchCamera, doRotateCamera, doResetCamera,
+// cameraModFinalZoom/Pitch, doCameraFollowNamed, doCameraTetherNamed, doCameraSetDefault, doRotateCameraTowardObject,
+// doRotateCameraTowardWaypoint, doScreenShake): each queues its command with the original's parameters (seconds as
+// milliseconds for the timed ones; the final modifiers' ease values as they are); a missing waypoint queues nothing.
+BOOST_AUTO_TEST_CASE(camera_setup_zoom_pitch_follow_and_shake_actions_queue_their_commands)
+{
+	level::Level map;
+	for (std::uint32_t id = 1; id <= 2; ++id)
+	{
+		level::Marker marker;
+		marker.id = id;
+		marker.name = "Cam" + std::to_string(id);
+		marker.position = {Engine::Math::Fixed::FromInt(id * 100), Engine::Math::Fixed::FromInt(50), {}};
+		map.markers.push_back(marker);
+	}
+	using Engine::Math::Fixed;
+	const auto numbers = [](std::string name, std::string text, std::vector<Fixed> values) {
+		level::ScriptCall call;
+		call.name = std::move(name);
+		level::ScriptParameter first;
+		first.text = std::move(text);
+		call.parameters.push_back(first);
+		for (const Fixed value : values)
+		{
+			level::ScriptParameter parameter;
+			parameter.number = value;
+			parameter.integer = value.Round();
+			call.parameters.push_back(parameter);
+		}
+		return call;
+	};
+	auto &participant = map.scenario.participants.emplace_back();
+	level::Script start;
+	start.name = "start";
+	start.oneShot = true;
+	start.conditions = {{Call("CONDITION_TRUE")}};
+	level::ScriptCall setup = numbers("SETUP_CAMERA", "Cam1", {Fixed::FromRatio(3, 4), Fixed::FromRatio(5, 4)});
+	level::ScriptParameter lookAt;
+	lookAt.text = "Cam2";
+	setup.parameters.push_back(lookAt);
+	level::ScriptCall zoom = numbers("ZOOM_CAMERA", {}, {Fixed::FromRatio(1, 2), Fixed::FromInt(2), Fixed::FromRatio(1, 4), Fixed::FromRatio(1, 4)});
+	zoom.parameters.erase(zoom.parameters.begin()); // (zoom, seconds, ease in, ease out)
+	level::ScriptCall finalPitch = numbers("CAMERA_MOD_SET_FINAL_PITCH", {}, {Fixed::FromRatio(3, 2), Fixed::FromRatio(1, 2), Fixed::FromRatio(1, 4)});
+	finalPitch.parameters.erase(finalPitch.parameters.begin());
+	level::ScriptCall follow = Call("CAMERA_FOLLOW_NAMED", "Hero", 0, 1);
+	level::ScriptCall tether = numbers("CAMERA_TETHER_NAMED", "Hero", {Fixed::FromInt(1), Fixed::FromInt(20)});
+	level::ScriptCall lookAtWaypoint = numbers("CAMERA_LOOK_TOWARD_WAYPOINT", "Cam2", {Fixed::FromInt(4), Fixed::FromInt(1), Fixed::FromInt(1), Fixed::FromInt(1)});
+	level::ScriptCall shake = Call("SCREEN_SHAKE", {}, 3);
+	start.actions = {setup, zoom, finalPitch, follow, tether, lookAtWaypoint, shake, Call("CAMERA_STOP_FOLLOW"), Call("RESET_CAMERA", "Nowhere"),
+		Call("CAMERA_MOVE_HOME")};
+	participant.scripts.scripts.push_back(start);
+
+	std::vector<generalszh::scripting::CameraScriptCommand> commands;
+	Vocabulary vocabulary;
+	generalszh::scripting::AddCoreVocabulary(vocabulary);
+	generalszh::scripting::AddCameraVocabulary(vocabulary, map, {&commands, {}});
+	ScriptRuntime runtime(map.scenario, vocabulary);
+	runtime.Tick(1);
+	BOOST_TEST(runtime.UnknownActions().empty());
+	using Kind = generalszh::scripting::CameraScriptCommand::Kind;
+	BOOST_TEST_REQUIRE(commands.size() == 8u);
+	BOOST_TEST((commands[0].kind == Kind::Setup));
+	BOOST_TEST_REQUIRE(commands[0].points.size() == 2u);
+	BOOST_TEST(commands[0].points[0].x.Raw() == Fixed::FromInt(100).Raw());
+	BOOST_TEST(commands[0].points[1].x.Raw() == Fixed::FromInt(200).Raw());
+	BOOST_TEST(commands[0].values[0].Raw() == Fixed::FromRatio(3, 4).Raw()); // zoom
+	BOOST_TEST(commands[0].values[1].Raw() == Fixed::FromRatio(5, 4).Raw()); // pitch
+	BOOST_TEST((commands[1].kind == Kind::Zoom));
+	BOOST_TEST(commands[1].values[0].Raw() == Fixed::FromRatio(1, 2).Raw());
+	BOOST_TEST(commands[1].milliseconds == 2000);
+	BOOST_TEST(commands[1].easeInMilliseconds == 250);
+	BOOST_TEST(commands[1].easeOutMilliseconds == 250);
+	BOOST_TEST((commands[2].kind == Kind::FinalPitch));
+	BOOST_TEST(commands[2].values[1].Raw() == Fixed::FromRatio(1, 2).Raw()); // ease in, as it is
+	BOOST_TEST((commands[3].kind == Kind::Follow));
+	BOOST_TEST(commands[3].unit == "Hero");
+	BOOST_TEST(commands[3].flag);
+	BOOST_TEST((commands[4].kind == Kind::Tether));
+	BOOST_TEST(commands[4].flag);
+	BOOST_TEST(commands[4].values[0].Raw() == Fixed::FromInt(20).Raw()); // play
+	BOOST_TEST((commands[5].kind == Kind::LookTowardWaypoint));
+	BOOST_TEST(commands[5].milliseconds == 4000);
+	BOOST_TEST(commands[5].flag); // reverse
+	BOOST_TEST((commands[6].kind == Kind::Shake));
+	BOOST_TEST(commands[6].count == 3);
+	BOOST_TEST((commands[7].kind == Kind::StopFollow));
+}
+
+// ScriptEngine::doSetTreeSway: SET_TREE_SWAY(direction, intensity, lean, breeze period in frames, randomness) hands the
+// presentation a new breeze.
+BOOST_AUTO_TEST_CASE(set_tree_sway_hands_the_presentation_a_breeze)
+{
+	level::Level map;
+	auto &participant = map.scenario.participants.emplace_back();
+	level::Script start;
+	start.name = "start";
+	start.oneShot = true;
+	start.conditions = {{Call("CONDITION_TRUE")}};
+	level::ScriptCall sway;
+	sway.name = "SET_TREE_SWAY";
+	for (int index = 0; index < 5; ++index)
+	{
+		level::ScriptParameter parameter;
+		parameter.number = Engine::Math::Fixed::FromRatio(index + 1, 10);
+		parameter.integer = 90;
+		sway.parameters.push_back(parameter);
+	}
+	start.actions = {sway};
+	participant.scripts.scripts.push_back(start);
+	std::vector<generalszh::scripting::ClientScriptCommand> commands;
+	Vocabulary vocabulary;
+	generalszh::scripting::AddCoreVocabulary(vocabulary);
+	generalszh::scripting::AddPresentationVocabulary(vocabulary, commands);
+	ScriptRuntime runtime(map.scenario, vocabulary);
+	runtime.Tick(1);
+	BOOST_TEST_REQUIRE(commands.size() == 1u);
+	BOOST_TEST((commands[0].kind == generalszh::scripting::ClientScriptCommand::Kind::TreeSway));
+	BOOST_TEST((commands[0].numbers[0] == Engine::Math::Fixed::FromRatio(1, 10)));
+	BOOST_TEST((commands[0].numbers[2] == Engine::Math::Fixed::FromRatio(3, 10)));
+	BOOST_TEST((commands[0].numbers[3] == Engine::Math::Fixed::FromInt(90))); // frames, an integer
+	BOOST_TEST((commands[0].numbers[4] == Engine::Math::Fixed::FromRatio(5, 10)));
+}
+
+// ScriptActions' sound actions: SOUND_ENABLE_TYPE and AUDIO_RESTORE_VOLUME_TYPE take the event's override away,
+// SOUND_ENABLE_ALL and AUDIO_RESTORE_VOLUME_ALL_TYPE every one; SOUND_REMOVE_TYPE, SOUND_REMOVE_ALL_DISABLED; the effects
+// played: the local player's, at a waypoint (none without it), from a named unit; SHOW_MILITARY_CAPTION with its time.
+BOOST_AUTO_TEST_CASE(sound_and_caption_actions_queue_their_client_commands)
+{
+	level::Level map;
+	level::Marker marker;
+	marker.id = 1;
+	marker.name = "Here";
+	marker.position = {Engine::Math::Fixed::FromInt(300), Engine::Math::Fixed::FromInt(40), {}};
+	map.markers.push_back(marker);
+	auto &participant = map.scenario.participants.emplace_back();
+	level::Script start;
+	start.name = "start";
+	start.oneShot = true;
+	start.conditions = {{Call("CONDITION_TRUE")}};
+	level::ScriptCall at = Call("PLAY_SOUND_EFFECT_AT", "Boom");
+	at.parameters[1].text = "Here";
+	level::ScriptCall nowhere = Call("PLAY_SOUND_EFFECT_AT", "Boom");
+	nowhere.parameters[1].text = "Nowhere";
+	level::ScriptCall named = Call("SOUND_PLAY_NAMED", "Horn");
+	named.parameters[1].text = "Truck";
+	level::ScriptCall caption = Call("SHOW_MILITARY_CAPTION", "SCRIPT:Place");
+	caption.parameters[1].integer = 5000;
+	level::ScriptCall countdown = Call("DISPLAY_COUNTDOWN_TIMER", "t");
+	countdown.parameters[1].text = "SCRIPT:Time";
+	start.actions = {Call("SOUND_ENABLE_TYPE", "A"), Call("AUDIO_RESTORE_VOLUME_TYPE", "B"), Call("SOUND_ENABLE_ALL"), Call("AUDIO_RESTORE_VOLUME_ALL_TYPE"),
+		Call("SOUND_REMOVE_TYPE", "C"), Call("SOUND_REMOVE_ALL_DISABLED"), Call("PLAY_SOUND_EFFECT", "Beep"), at, nowhere, named, caption, countdown,
+		Call("HIDE_COUNTER", "t"), Call("DISABLE_COUNTDOWN_TIMER_DISPLAY")};
+	participant.scripts.scripts.push_back(start);
+	std::vector<generalszh::scripting::ClientScriptCommand> commands;
+	Vocabulary vocabulary;
+	generalszh::scripting::AddCoreVocabulary(vocabulary);
+	generalszh::scripting::AddPresentationVocabulary(vocabulary, commands, &map);
+	ScriptRuntime runtime(map.scenario, vocabulary);
+	runtime.Tick(1);
+	BOOST_TEST(runtime.UnknownActions().empty());
+	using Kind = generalszh::scripting::ClientScriptCommand::Kind;
+	BOOST_TEST_REQUIRE(commands.size() == 13u);
+	BOOST_TEST((commands[0].kind == Kind::SoundEnable && commands[0].text == "A"));
+	BOOST_TEST((commands[1].kind == Kind::SoundEnable && commands[1].text == "B"));
+	BOOST_TEST((commands[2].kind == Kind::SoundEnable && commands[2].text.empty()));
+	BOOST_TEST((commands[3].kind == Kind::SoundEnable && commands[3].text.empty()));
+	BOOST_TEST((commands[4].kind == Kind::SoundStop && commands[4].text == "C"));
+	BOOST_TEST((commands[5].kind == Kind::SoundStopMuted));
+	BOOST_TEST((commands[6].kind == Kind::SoundEffect && commands[6].text == "Beep"));
+	BOOST_TEST((commands[7].kind == Kind::SoundEffectAt && commands[7].position.x == Engine::Math::Fixed::FromInt(300)));
+	BOOST_TEST((commands[8].kind == Kind::SoundFromNamed && commands[8].subject == "Truck"));
+	BOOST_TEST((commands[9].kind == Kind::MilitaryCaption && commands[9].text == "SCRIPT:Place" && commands[9].percent == 5000));
+	BOOST_TEST((commands[10].kind == Kind::NamedTimer && commands[10].subject == "t" && commands[10].text == "SCRIPT:Time" && commands[10].flag));
+	BOOST_TEST((commands[11].kind == Kind::NamedTimerHide && commands[11].subject == "t"));
+	BOOST_TEST((commands[12].kind == Kind::NamedTimersShown && !commands[12].flag));
+}
+
+// doDisableInput / doEnableInput, doLetterBoxMode, ScriptEngine::setFade (min, max, rising, holding, falling frames),
+// doBlackWhiteMode, and the radar events: at a position, at a named unit or a team (the locator's answer; none: nothing).
+BOOST_AUTO_TEST_CASE(input_letterbox_fade_and_radar_actions_queue_their_client_commands)
+{
+	level::Level map;
+	auto &participant = map.scenario.participants.emplace_back();
+	level::Script start;
+	start.name = "start";
+	start.oneShot = true;
+	start.conditions = {{Call("CONDITION_TRUE")}};
+	level::ScriptCall fade;
+	fade.name = "CAMERA_FADE_SUBTRACT";
+	for (const int value : {0, 1, 4, 2, 3})
+	{
+		level::ScriptParameter parameter;
+		parameter.number = Engine::Math::Fixed::FromInt(value);
+		parameter.integer = value;
+		fade.parameters.push_back(parameter);
+	}
+	level::ScriptCall radar = Call("RADAR_CREATE_EVENT", {}, 0, 3);
+	radar.parameters[0].position = {Engine::Math::Fixed::FromInt(70), Engine::Math::Fixed::FromInt(80), {}};
+	start.actions = {Call("DISABLE_INPUT"), Call("CAMERA_LETTERBOX_BEGIN"), fade, Call("CAMERA_BW_MODE_BEGIN", {}, 45), radar,
+		Call("OBJECT_CREATE_RADAR_EVENT", "Hero", 0, 4), Call("TEAM_CREATE_RADAR_EVENT", "Nobody", 0, 4), Call("CAMERA_LETTERBOX_END"),
+		Call("ENABLE_INPUT"), Call("SET_FPS_LIMIT", {}, 15)};
+	participant.scripts.scripts.push_back(start);
+	std::vector<generalszh::scripting::ClientScriptCommand> commands;
+	Vocabulary vocabulary;
+	generalszh::scripting::AddCoreVocabulary(vocabulary);
+	generalszh::scripting::AddPresentationVocabulary(vocabulary, commands, &map,
+		[](bool team, const std::string &name) -> std::optional<Engine::Math::FixedVector3> {
+			if (!team && name == "Hero")
+				return Engine::Math::FixedVector3{Engine::Math::Fixed::FromInt(5), Engine::Math::Fixed::FromInt(6), {}};
+			return std::nullopt;
+		});
+	ScriptRuntime runtime(map.scenario, vocabulary);
+	runtime.Tick(1);
+	BOOST_TEST(runtime.UnknownActions().empty());
+	using Kind = generalszh::scripting::ClientScriptCommand::Kind;
+	BOOST_TEST_REQUIRE(commands.size() == 9u);
+	BOOST_TEST((commands[0].kind == Kind::InputEnabled && !commands[0].flag));
+	BOOST_TEST((commands[1].kind == Kind::Letterbox && commands[1].flag));
+	BOOST_TEST((commands[2].kind == Kind::Fade && commands[2].percent == 2));
+	BOOST_TEST((commands[2].numbers[1] == Engine::Math::Fixed::FromInt(1) && commands[2].numbers[2] == Engine::Math::Fixed::FromInt(4)));
+	BOOST_TEST((commands[2].numbers[3] == Engine::Math::Fixed::FromInt(2) && commands[2].numbers[4] == Engine::Math::Fixed::FromInt(3)));
+	BOOST_TEST((commands[3].kind == Kind::BlackWhite && commands[3].flag && commands[3].percent == 45));
+	BOOST_TEST((commands[4].kind == Kind::RadarEvent && commands[4].percent == 3 && commands[4].position.x == Engine::Math::Fixed::FromInt(70)));
+	BOOST_TEST((commands[5].kind == Kind::RadarEvent && commands[5].percent == 4 && commands[5].position.x == Engine::Math::Fixed::FromInt(5)));
+	BOOST_TEST((commands[6].kind == Kind::Letterbox && !commands[6].flag)); // the unknown team: no event
+	BOOST_TEST((commands[7].kind == Kind::InputEnabled && commands[7].flag));
+	BOOST_TEST((commands[8].kind == Kind::LogicRate && commands[8].percent == 15));
+}
+
+// ScriptActions::doDisableSpecialPowerDisplay / doEnableSpecialPowerDisplay: setSuperweaponDisplayEnabledByScript(false /
+// true), for the screen that draws the countdowns.
+BOOST_AUTO_TEST_CASE(legacy_parity_special_power_display_is_turned_off_and_on)
+{
+	level::Level map;
+	auto &participant = map.scenario.participants.emplace_back();
+	level::Script start;
+	start.name = "start";
+	start.oneShot = true;
+	start.conditions = {{Call("CONDITION_TRUE")}};
+	start.actions = {Call("DISABLE_SPECIAL_POWER_DISPLAY"), Call("ENABLE_SPECIAL_POWER_DISPLAY")};
+	participant.scripts.scripts.push_back(start);
+	std::vector<generalszh::scripting::ClientScriptCommand> commands;
+	Vocabulary vocabulary;
+	generalszh::scripting::AddCoreVocabulary(vocabulary);
+	generalszh::scripting::AddPresentationVocabulary(vocabulary, commands);
+	ScriptRuntime runtime(map.scenario, vocabulary);
+	runtime.Tick(1);
+	BOOST_TEST_REQUIRE(commands.size() == 2u);
+	BOOST_TEST((commands[0].kind == generalszh::scripting::ClientScriptCommand::Kind::SpecialPowerDisplay));
+	BOOST_TEST(!commands[0].flag);
+	BOOST_TEST(commands[1].flag);
+}
+
+// ScriptActions::doRadarForceEnable / doRadarRevertNormal / doRadarDisable / doRadarEnable: Radar::forceOn and
+// Radar::hide for the local player, as the screen's commands.
+BOOST_AUTO_TEST_CASE(legacy_parity_radar_is_forced_and_hidden)
+{
+	level::Level map;
+	auto &participant = map.scenario.participants.emplace_back();
+	level::Script start;
+	start.name = "start";
+	start.oneShot = true;
+	start.conditions = {{Call("CONDITION_TRUE")}};
+	start.actions = {Call("RADAR_FORCE_ENABLE"), Call("RADAR_REVERT_TO_NORMAL"), Call("RADAR_DISABLE"), Call("RADAR_ENABLE")};
+	participant.scripts.scripts.push_back(start);
+	std::vector<generalszh::scripting::ClientScriptCommand> commands;
+	Vocabulary vocabulary;
+	generalszh::scripting::AddCoreVocabulary(vocabulary);
+	generalszh::scripting::AddPresentationVocabulary(vocabulary, commands);
+	ScriptRuntime runtime(map.scenario, vocabulary);
+	runtime.Tick(1);
+	using Kind = generalszh::scripting::ClientScriptCommand::Kind;
+	BOOST_TEST_REQUIRE(commands.size() == 4u);
+	BOOST_TEST((commands[0].kind == Kind::RadarForceEnable));
+	BOOST_TEST((commands[1].kind == Kind::RadarRevertToNormal));
+	BOOST_TEST((commands[2].kind == Kind::RadarHidden));
+	BOOST_TEST(commands[2].flag);
+	BOOST_TEST(!commands[3].flag);
+}
+
+// ScriptActions::doMoviePlayFullScreen / doMoviePlayRadar: each asks for its movie (the latter flagged: InGameUI's movie,
+// which plays in the same full-screen slot).
+BOOST_AUTO_TEST_CASE(legacy_parity_movie_actions_ask_for_their_movie)
+{
+	level::Level map;
+	auto &participant = map.scenario.participants.emplace_back();
+	level::Script start;
+	start.name = "start";
+	start.oneShot = true;
+	start.conditions = {{Call("CONDITION_TRUE")}};
+	start.actions = {Call("MOVIE_PLAY_FULLSCREEN", "MD_USA01"), Call("MOVIE_PLAY_RADAR", "MD_USA02")};
+	participant.scripts.scripts.push_back(start);
+	std::vector<generalszh::scripting::ClientScriptCommand> commands;
+	Vocabulary vocabulary;
+	generalszh::scripting::AddCoreVocabulary(vocabulary);
+	generalszh::scripting::AddPresentationVocabulary(vocabulary, commands);
+	ScriptRuntime runtime(map.scenario, vocabulary);
+	runtime.Tick(1);
+	using Kind = generalszh::scripting::ClientScriptCommand::Kind;
+	BOOST_TEST_REQUIRE(commands.size() == 2u);
+	BOOST_TEST((commands[0].kind == Kind::Movie));
+	BOOST_TEST(commands[0].text == "MD_USA01");
+	BOOST_TEST(!commands[0].flag);
+	BOOST_TEST((commands[1].kind == Kind::Movie));
+	BOOST_TEST(commands[1].text == "MD_USA02");
+	BOOST_TEST(commands[1].flag);
+}
+
+// ScriptActions::doQuickVictory: the client is told to end the game won at once (no window; the quick end timer). The
+// debug actions before it do nothing, as in a retail game.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_quick_victory_asks_the_client_to_end_the_game)
+{
+	level::Level map;
+	auto &participant = map.scenario.participants.emplace_back();
+	level::Script start;
+	start.name = "start";
+	start.oneShot = true;
+	start.conditions = {{Call("CONDITION_TRUE")}};
+	start.actions = {Call("DEBUG_STRING", "note"), Call("DEBUG_MESSAGE_BOX", "pause"), Call("DEBUG_CRASH_BOX", "crash"), Call("QUICKVICTORY")};
+	participant.scripts.scripts.push_back(start);
+	std::vector<generalszh::scripting::ClientScriptCommand> commands;
+	Vocabulary vocabulary;
+	generalszh::scripting::AddCoreVocabulary(vocabulary);
+	generalszh::scripting::AddPresentationVocabulary(vocabulary, commands);
+	ScriptRuntime runtime(map.scenario, vocabulary);
+	runtime.Tick(1);
+	BOOST_TEST_REQUIRE(commands.size() == 1u);
+	BOOST_TEST((commands[0].kind == generalszh::scripting::ClientScriptCommand::Kind::QuickVictory));
+	BOOST_TEST(runtime.UnknownActions().empty()); // the debug actions do nothing (no debugger DLL)
+}
+
+BOOST_AUTO_TEST_CASE(shell_map_scripts_run_and_the_remaining_vocabulary_is_listed)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	generalszh::content::MountInstall(files, install);
+	const auto shell = level::generals_map::Read(*files.Read("Maps/ShellMapMD/ShellMapMD.map"));
+	BOOST_TEST_REQUIRE(shell.has_value());
+	Vocabulary vocabulary;
+	generalszh::scripting::AddCoreVocabulary(vocabulary);
+	ScriptRuntime runtime(shell->level.scenario, vocabulary);
+	for (std::uint64_t tick = 0; tick < 30 * 60; ++tick)
+		runtime.Tick(tick);
+	BOOST_TEST_MESSAGE("ShellMapMD: " << runtime.ScriptCount() << " scripts ran for 60 s; still unported: "
+		<< runtime.UnknownConditions().size() << " conditions, " << runtime.UnknownActions().size() << " actions");
+	std::string conditions, actions;
+	for (const auto &name : runtime.UnknownConditions())
+		conditions += " " + name;
+	for (const auto &name : runtime.UnknownActions())
+		actions += " " + name;
+	BOOST_TEST_MESSAGE("  conditions:" << conditions);
+	BOOST_TEST_MESSAGE("  actions:" << actions);
+	for (const auto &warning : runtime.Warnings())
+		BOOST_TEST_MESSAGE("  warning: " << warning);
+	BOOST_TEST(runtime.ScriptCount() > 50u);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -3,13 +3,8 @@ module;
 #define BOOST_TEST_MODULE RenderObjectNativeTests
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-#include <cstddef>
-#include <string>
-#include <string_view>
-#include <vector>
-
 export module Graphics.Scene.RenderObject.Tests;
+import std;
 
 import Graphics.Scene.RenderObjectBounds;
 import Graphics.Scene.RenderObjectDrawing;

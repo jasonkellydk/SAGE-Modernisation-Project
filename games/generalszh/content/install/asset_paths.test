@@ -1,0 +1,21 @@
+#include <boost/test/unit_test.hpp>
+
+#include <string>
+#include <vector>
+
+import games.generalszh.content.install.asset_paths;
+
+using generalszh::content::AssetCandidates;
+using generalszh::content::AssetFolder;
+
+BOOST_AUTO_TEST_SUITE(asset_paths)
+
+BOOST_AUTO_TEST_CASE(localized_art_is_looked_up_before_shared_art)
+{
+	const std::vector<std::string> textures{"Data/English/Art/Textures/SCShellUserInterface512_001.tga", "Art/Textures/SCShellUserInterface512_001.tga"};
+	BOOST_TEST(AssetCandidates(AssetFolder::Textures, "SCShellUserInterface512_001.tga") == textures, boost::test_tools::per_element());
+	const std::vector<std::string> models{"Data/German/Art/W3D/UIRGrd_SKN.w3d", "Art/W3D/UIRGrd_SKN.w3d"};
+	BOOST_TEST(AssetCandidates(AssetFolder::Models, "UIRGrd_SKN.w3d", "German") == models, boost::test_tools::per_element());
+}
+
+BOOST_AUTO_TEST_SUITE_END()

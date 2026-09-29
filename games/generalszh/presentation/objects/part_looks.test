@@ -1,0 +1,70 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <span>
+#include <string>
+#include <vector>
+
+import games.generalszh.presentation.objects.algorithms.look_setup;
+
+using namespace generalszh::presentation;
+
+BOOST_AUTO_TEST_SUITE(part_looks)
+
+// SubObjectsUpgrade / W3DModelDraw::showSubObject: a bomb truck (its own looks 1..3, a rider's look 4) that took on its
+// bio bomb set (0) and then the set needing both (2) is drawn with a copy of its own looks carrying both sets in that
+// order (Bombload02 shown, the others hidden, then Bombload04 shown and 02 hidden); the rider's look is left as it is;
+// a second truck with the same run shares the copy; one with only the first set gets its own.
+BOOST_AUTO_TEST_CASE(legacy_parity_upgraded_parts_draw_through_a_copy_of_the_looks)
+{
+	namespace gp = engine::gameplay;
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<gp::DefinitionRef>();
+	world.RegisterComponent<gp::PartOverrides>();
+	world.FinalizeComponents();
+	LookCatalog catalog;
+	catalog.byDefinition.resize(1);
+	catalog.known = {1};
+	catalog.looks = {{9, 0}, {0, 0}, {0, 1}, {0, 2}, {0, 0, 0, 1}};
+	catalog.lookModels = {"OTHER", "TRUCK_A", "TRUCK_B", "TRUCK_C", "RIDER"};
+	DefinitionLooks &truck = catalog.byDefinition[0];
+	truck.ownLookFirst = 1;
+	truck.ownLookCount = 3;
+	truck.partSets = {{{"Bombload02", true}, {"Bombload01", false}, {"Bombload03", false}, {"Bombload04", false}},
+		{{"Bombload03", true}, {"Bombload01", false}, {"Bombload02", false}, {"Bombload04", false}},
+		{{"Bombload04", true}, {"Bombload01", false}, {"Bombload02", false}, {"Bombload03", false}}};
+	const auto make = [&](std::initializer_list<std::uint8_t> sets) {
+		const ecs::Entity entity = world.Create();
+		world.Add<gp::DefinitionRef>(entity);
+		world.Add<gp::PartOverrides>(entity);
+		for (const std::uint8_t set : sets)
+			world.Get<gp::PartOverrides>(entity)->Apply(set);
+		return entity;
+	};
+	make({0, 2});
+	make({0, 2});
+	make({0});
+	KnowPartLooks(catalog, world);
+	BOOST_TEST_REQUIRE(truck.partVariants.size() == 2u);
+	BOOST_TEST(catalog.looks.size() == 5u + 3u + 3u);
+	const std::vector<std::uint8_t> both{0, 2};
+	const std::uint32_t copy = truck.WithParts(2, both);
+	BOOST_TEST(copy >= 5u);
+	BOOST_TEST(catalog.looks[copy].state == 1u);
+	BOOST_TEST(catalog.lookModels[copy] == "TRUCK_B");
+	const auto &parts = catalog.partOverrides[catalog.looks[copy].parts];
+	BOOST_TEST_REQUIRE(parts.size() == 8u);
+	BOOST_TEST(parts[0].first == "Bombload02");
+	BOOST_TEST(parts[0].second);
+	BOOST_TEST(parts[4].first == "Bombload04");
+	BOOST_TEST(parts[4].second);
+	BOOST_TEST(parts[6].first == "Bombload02");
+	BOOST_TEST(!parts[6].second);
+	BOOST_TEST(truck.WithParts(4, both) == 4u);                              // the rider's look
+	BOOST_TEST(truck.WithParts(2, std::vector<std::uint8_t>{}) == 2u);       // none taken on
+	BOOST_TEST(truck.WithParts(2, std::vector<std::uint8_t>{0}) != copy);    // the first set alone: its own copy
+	KnowPartLooks(catalog, world); // nothing new
+	BOOST_TEST(catalog.looks.size() == 11u);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

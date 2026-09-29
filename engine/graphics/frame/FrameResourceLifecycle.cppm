@@ -1,7 +1,5 @@
-module;
-#include <functional>
-#include <utility>
 export module Graphics.Frame.ResourceLifecycle;
+import std;
 
 namespace Graphics
 {

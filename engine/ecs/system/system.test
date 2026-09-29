@@ -23,25 +23,13 @@ struct Velocity
 struct AlphaSystem
 {
 	using Query = ecs::Query<ecs::Read<Position>>;
-
-	void Execute(Query::Chunk chunk, ecs::SystemContext &)
-	{
-		visited += chunk.Count();
-	}
-
-	std::size_t visited{0};
+	void Execute(Query::Chunk, ecs::SystemContext &) {}
 };
 
 struct BetaSystem
 {
 	using Query = ecs::Query<ecs::Read<Velocity>>;
-
-	void Execute(Query::Chunk chunk, ecs::SystemContext &)
-	{
-		visited += chunk.Count();
-	}
-
-	std::size_t visited{0};
+	void Execute(Query::Chunk, ecs::SystemContext &) {}
 };
 
 struct ReadPositionSystem
@@ -326,7 +314,7 @@ BOOST_AUTO_TEST_CASE(context_carries_explicit_immutable_time_input)
 	ecs::SystemContext context(world, commands, input, 4, ecs::SystemPhase::Simulation, 7, 7);
 	BOOST_TEST(context.Tick() == 91u);
 	BOOST_TEST(context.Time().Step().TicksPerSecond() == 30u);
-	BOOST_TEST(context.Time().Delta().count() == 1.0 / 30.0);
+	BOOST_TEST(context.Time().SecondsPerTick().Raw() == Engine::Math::Fixed::FromRatio(1, 30).Raw());
 	BOOST_TEST(context.JobOrder() == 7u);
 	BOOST_CHECK(&context.Commands() == &commands);
 }

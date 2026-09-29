@@ -1,0 +1,51 @@
+#define BOOST_TEST_MODULE EngineSerialization
+#include <boost/test/included/unit_test.hpp>
+
+#include <array>
+#include <cstddef>
+#include <initializer_list>
+#include <span>
+#include <vector>
+
+import engine.core.serialization.byte_stream;
+
+using namespace engine::core::serialization;
+
+namespace
+{
+std::vector<std::byte> Bytes(std::initializer_list<int> values)
+{
+	std::vector<std::byte> bytes;
+	for (const int value : values)
+		bytes.push_back(static_cast<std::byte>(value));
+	return bytes;
+}
+}
+
+BOOST_AUTO_TEST_CASE(byte_streams_round_trip_and_fail_safely)
+{
+	ByteWriter writer;
+	writer.U8(7);
+	writer.U32(0xDEADBEEFu);
+	writer.I64(-42);
+	writer.Text("Command_Paradrop");
+	writer.Blob(Bytes({1, 2, 3}));
+	writer.Raw(Bytes({9, 8}));
+	const auto bytes = writer.Take();
+	ByteReader reader(bytes);
+	BOOST_TEST(*reader.U8() == 7u);
+	BOOST_TEST(*reader.U32() == 0xDEADBEEFu);
+	BOOST_TEST(*reader.I64() == -42);
+	BOOST_TEST(*reader.Text() == "Command_Paradrop");
+	BOOST_TEST((*reader.Blob() == Bytes({1, 2, 3})));
+	std::array<std::byte, 2> raw{};
+	BOOST_TEST(reader.Raw(raw));
+	BOOST_TEST((std::vector(raw.begin(), raw.end()) == Bytes({9, 8})));
+	BOOST_TEST(reader.AtEnd());
+	ByteReader truncated(std::span(bytes).first(3));
+	(void)truncated.U8();
+	BOOST_TEST(!truncated.U32().has_value());
+	BOOST_TEST(truncated.Failed());
+	std::array<std::byte, 8> tooMuch{};
+	BOOST_TEST(!ByteReader(std::span(bytes).first(3)).Raw(tooMuch));
+}

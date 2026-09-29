@@ -1,14 +1,8 @@
 module;
 #define BOOST_TEST_MODULE W3DDazzleTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <cstdio>
-#include <map>
-#include <string>
-#include <vector>
 export module Assets.Adapters.W3D.Dazzle.Tests;
+import std;
 import Assets.Dazzles;
 import Assets.Adapters.W3D.Dazzle;
 namespace {

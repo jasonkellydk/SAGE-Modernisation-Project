@@ -1,12 +1,8 @@
 module;
 #define BOOST_TEST_MODULE BloomTests
 #include <boost/test/included/unit_test.hpp>
-#include <algorithm>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <vector>
 export module Graphics.Passes.Bloom.Tests;
+import std;
 import Graphics.Passes.Bloom;
 import Graphics.RHI;
 import Graphics.FrameTargets;

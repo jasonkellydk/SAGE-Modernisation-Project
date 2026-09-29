@@ -1,9 +1,5 @@
-module;
-#include <array>
-#include <span>
-#include <vector>
-#include <cstdint>
 export module Graphics.Scene.Lines.Drawing;
+import std;
 export import Graphics.Scene.Surfaces.Renderer;
 import Graphics.Scene.Props.Geometry;
 

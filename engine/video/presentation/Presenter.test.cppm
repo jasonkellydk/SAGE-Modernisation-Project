@@ -4,10 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-#include <cstddef>
-
 export module Video.Presentation.Tests;
+import std;
 
 import Video.Presentation;
 

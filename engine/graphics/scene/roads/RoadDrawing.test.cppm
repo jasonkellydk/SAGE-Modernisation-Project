@@ -1,13 +1,8 @@
 module;
 #define BOOST_TEST_MODULE RoadDrawingTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <span>
-#include <vector>
 export module Graphics.Scene.Roads.Drawing.Tests;
+import std;
 import Graphics.Tests.Device;
 import Graphics.RHI;
 import Graphics.Scene.Surfaces.Geometry;

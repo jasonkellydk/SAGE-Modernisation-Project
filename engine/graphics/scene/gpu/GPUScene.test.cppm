@@ -4,10 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-#include <type_traits>
-
 export module Graphics.Scene.GPUScene.Tests;
+import std;
 
 import Graphics.Scene.GPUScene;
 

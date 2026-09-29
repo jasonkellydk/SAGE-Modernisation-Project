@@ -1,9 +1,5 @@
-module;
-#include <cstdarg>
-#include <string>
-#include <string_view>
-
 export module engine.debug;
+import std;
 
 export namespace engine::debug
 {

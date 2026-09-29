@@ -1,14 +1,9 @@
 module;
 #define BOOST_TEST_MODULE RibbonTextureCoordinatesTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstdint>
-#include <limits>
-#include <cstddef>
-#include <span>
-#include <vector>
 
 export module Graphics.Scene.Beams.RibbonTextureCoordinates.Tests;
+import std;
 import Graphics.Scene.Beams.RibbonTextureCoordinates;
 import Graphics.Scene.Beams.RibbonEdges;
 import Graphics.Scene.Beams.RibbonGeometry;

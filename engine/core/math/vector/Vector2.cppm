@@ -1,9 +1,5 @@
-module;
-
-#include <cmath>
-#include <algorithm>
-
 export module Engine.Core.Math.Vector2;
+import std;
 
 export namespace Engine::Math
 {

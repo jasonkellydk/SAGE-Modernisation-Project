@@ -1,11 +1,5 @@
-module;
-#include <cstddef>
-#include <cstdint>
-#include <cstring>
-#include <span>
-#include <utility>
-#include <vector>
 export module Graphics.Scene.Props.MeshSet;
+import std;
 import engine.profiling;
 export import Graphics.Scene.Props.Renderer;
 

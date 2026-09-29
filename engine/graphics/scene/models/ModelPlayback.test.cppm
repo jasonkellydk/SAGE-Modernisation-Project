@@ -1,12 +1,8 @@
 module;
 #define BOOST_TEST_MODULE ModelPlaybackTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <string>
-#include <vector>
 export module Graphics.Scene.Models.Playback.Tests;
+import std;
 import Graphics.Scene.Models.Playback;
 import Graphics.Scene.Models.Hierarchy;
 import Graphics.Scene.AffineTransform;

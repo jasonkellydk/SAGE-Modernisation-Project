@@ -1,0 +1,1474 @@
+#define BOOST_TEST_MODULE EngineGameplayDeath
+#include <boost/test/included/unit_test.hpp>
+
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
+import engine.gameplay.common.health.components.subdual;
+import engine.gameplay.common.spatial.components.body_extent;
+import engine.gameplay.common.spatial.resources.spatial_index;
+import engine.gameplay.rts.death.systems.slow_death_system;
+import engine.gameplay.rts.death.systems.height_die_system;
+import engine.gameplay.rts.death.systems.blast_wave_system;
+import engine.gameplay.rts.death.systems.mount_system;
+import engine.gameplay.common.spatial.systems.spatial_index_system;
+import engine.core.serialization.byte_stream;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+using namespace engine::gameplay;
+using Engine::Math::Fixed;
+
+namespace
+{
+constexpr std::uint32_t Normal = 0;
+constexpr std::uint32_t Exploded = 3;
+
+// A truck that dies slowly (sinks, smokes at the midpoint, blows up at the
+// end) unless exploded, which removes it at once with a blast.
+DeathDefinition TruckDeath()
+{
+	DeathDefinition definition;
+	definition.destroyedAtOnce.push_back({1u << Exploded, AllVeterancyLevels});
+	definition.atDeath.push_back({{1u << Exploded, AllVeterancyLevels}, DeathEffectKind::Effect, {900}});
+	SlowDeathDefinition slow;
+	slow.filter = {~(1u << Exploded), AllVeterancyLevels};
+	slow.sinkDelay = 2;
+	slow.sinkRate = Fixed::FromInt(1);
+	slow.destructionDelay = 10;
+	slow.effects.Of(DeathPhase::Initial, DeathEffectKind::Effect) = {100};
+	slow.effects.Of(DeathPhase::Midpoint, DeathEffectKind::Effect) = {200};
+	slow.effects.Of(DeathPhase::Final, DeathEffectKind::Effect) = {300};
+	slow.effects.Of(DeathPhase::Final, DeathEffectKind::Objects) = {301};
+	definition.slow.push_back(std::move(slow));
+	return definition;
+}
+
+// A jet that crashes when shot down: spins, falls at gravity, plays its
+// secondary effect 15 ticks in, its hit-ground one on landing and blows up
+// 6 ticks later; on the ground it just blows up.
+DeathDefinition JetDeath()
+{
+	DeathDefinition definition;
+	SlowDeathDefinition slow;
+	slow.destructionDelay = 3000000;
+	slow.effects.Of(DeathPhase::Initial, DeathEffectKind::Effect) = {500};
+	slow.effects.Of(DeathPhase::Secondary, DeathEffectKind::Objects) = {550};
+	slow.effects.Of(DeathPhase::HitGround, DeathEffectKind::Effect) = {600};
+	slow.effects.Of(DeathPhase::FinalBlowUp, DeathEffectKind::Objects) = {700};
+	slow.effects.Of(DeathPhase::OnGround, DeathEffectKind::Effect) = {800};
+	slow.crash.kind = CrashKind::Jet;
+	slow.crash.rollRate = 40000000;
+	slow.crash.rollRateDelta = Fixed::FromRatio(99, 100);
+	slow.crash.pitchRate = 10000000;
+	slow.crash.fallFactor = Fixed::One();
+	slow.crash.secondaryDelay = 15;
+	slow.crash.finalDelay = 6;
+	definition.slow.push_back(std::move(slow));
+	return definition;
+}
+
+// A helicopter that spirals down when shot down: blades off after 20 ticks,
+// blowing up (leaving its rubble) a tick after it hits the ground.
+DeathDefinition HelicopterDeath()
+{
+	DeathDefinition definition;
+	SlowDeathDefinition slow;
+	slow.destructionDelay = 3000000;
+	slow.effects.Of(DeathPhase::Blade, DeathEffectKind::Objects) = {450};
+	slow.effects.Of(DeathPhase::HitGround, DeathEffectKind::Effect) = {460};
+	slow.effects.Of(DeathPhase::FinalBlowUp, DeathEffectKind::Effect) = {470};
+	slow.effects.Of(DeathPhase::FinalBlowUp, DeathEffectKind::Spawn) = {480};
+	slow.crash.kind = CrashKind::Helicopter;
+	slow.crash.fallFactor = Fixed::FromRatio(8, 100);
+	slow.crash.spiralSpeed = Fixed::FromInt(3);
+	slow.crash.spiralDamping = Fixed::FromRatio(999, 1000);
+	slow.crash.spiralTurnRate = static_cast<std::int32_t>(Engine::Math::TurnFromDegrees(3).units);
+	slow.crash.minSelfSpin = static_cast<std::int32_t>(Engine::Math::TurnFromDegrees(1).units);
+	slow.crash.maxSelfSpin = static_cast<std::int32_t>(Engine::Math::TurnFromDegrees(4).units);
+	slow.crash.spinStep = static_cast<std::int32_t>(Engine::Math::TurnFromDegrees(1).units);
+	slow.crash.spinDelay = 5;
+	slow.crash.bladeDelayMin = slow.crash.bladeDelayMax = 20;
+	slow.crash.finalDelay = 1;
+	definition.slow.push_back(std::move(slow));
+	return definition;
+}
+
+// The Zero Hour NeutronMissile's NeutronMissileSlowDeathBehavior (GeneralsMD/Run/Data/INI/Object/WeaponObjects.ini):
+// DestructionDelay 3501 ms, ScorchMarkSize 320, its FXList, and its nine blasts, their millisecond delays as ticks
+// (the first frame more than delay * 30 / 1000 after it died: 580 ms is 17.4 frames, off on the 18th).
+DeathDefinition NeutronMissileDeath()
+{
+	DeathDefinition definition;
+	SlowDeathDefinition slow;
+	slow.destructionDelay = 105;
+	auto &wave = slow.wave;
+	wave.effect = 990;
+	wave.scorchSize = Fixed::FromInt(320);
+	wave.damageType = 0;
+	wave.deathType = Exploded;
+	const auto blast = [](std::uint64_t after, std::uint64_t scorch, int inner, int outer, int most, int least, Fixed topple) {
+		return BlastDefinition{after, scorch, Fixed::FromInt(inner), Fixed::FromInt(outer), Fixed::FromInt(most), Fixed::FromInt(least), topple};
+	};
+	wave.blasts = {blast(18, 4, 60, 60, 0, 0, Fixed::FromRatio(50, 100)), blast(20, 6, 90, 90, 0, 0, Fixed::FromRatio(45, 100)),
+		blast(22, 8, 120, 120, 0, 0, Fixed::FromRatio(42, 100)), blast(26, 11, 150, 150, 0, 0, Fixed::FromRatio(40, 100)),
+		blast(31, 13, 180, 180, 0, 0, Fixed::FromRatio(38, 100)), blast(36, 16, 60, 210, 3500, 300, Fixed::FromRatio(35, 100)),
+		blast(30000, 19, 0, 210, 0, 0, {}), blast(30000, 22, 0, 210, 0, 0, {}), blast(30000, 25, 0, 210, 0, 0, {})};
+	definition.slow.push_back(std::move(slow));
+	return definition;
+}
+
+// The death pipeline over a small world: damage, deaths, slow deaths and
+// removal, run by the scheduler on a job system (with `blasts`: blast waves too, over a spatial index).
+struct Pipeline
+{
+	explicit Pipeline(std::size_t workers, std::uint64_t seed = 7, bool blasts = false)
+	{
+		RegisterComponents(world);
+		roster.AddPlayer({"America"});
+		team = roster.AddTeam({"Convoy", 0, false, false, {}});
+		field.width = field.height = 2;
+		field.cellSize = Fixed::FromInt(100);
+		field.heights.assign(4, Fixed{});
+		world.EmplaceResource<GroundHeight>(field);
+		world.EmplaceResource<DeckSurfaces>();
+		world.EmplaceResource<NavigationGrid>();
+		world.EmplaceResource<RandomSeed>(RandomSeed{seed});
+		truckDeath = catalog.Add(TruckDeath());
+		jetDeath = catalog.Add(JetDeath());
+		helicopterDeath = catalog.Add(HelicopterDeath());
+		world.EmplaceResource<PhysicsSettings>();
+		world.EmplaceResource<PlayerUpgrades>();
+		registry.Register(health);
+		registry.Register(transfer);
+		registry.Register(death);
+		registry.Register(slowDeath);
+		registry.Register(removal);
+		registry.Register(mounts);
+		registry.OrderBefore<MountSystem, DeathSystem>();
+		if (blasts)
+		{
+			neutronDeath = catalog.Add(NeutronMissileDeath());
+			world.EmplaceResource<SpatialIndex>(Engine::Math::FixedVector2{Fixed::FromInt(1000), Fixed::FromInt(1000)}, Fixed::FromInt(100));
+			world.EmplaceResource<SpatialGather>();
+			world.EmplaceResource<BlastWaves>();
+			registry.Register(index);
+			registry.Register(blastWaves);
+			registry.Register(blastDamage);
+			registry.Register(scorch);
+			registry.OrderBefore<BlastDamageSystem, HealthSystem>();
+		}
+		registry.Finalize(world.Components());
+		scheduler = std::make_unique<ecs::Scheduler>(world, registry, engine::jobs::JobSystemConfig{workers});
+		scheduler->Finalize(engine::time::FixedStep{30});
+	}
+
+	static void RegisterComponents(ecs::World &target)
+	{
+		target.RegisterComponent<Transform>();
+		target.RegisterComponent<DefinitionRef>();
+		target.RegisterComponent<TeamMember>();
+		target.RegisterComponent<Health>();
+		target.RegisterComponent<HealthFloor>();
+		target.RegisterComponent<Subdual>();
+		target.RegisterComponent<Mortality>();
+		target.RegisterComponent<Experience>();
+		target.RegisterComponent<Dying>();
+		target.RegisterComponent<Targetable>();
+		target.RegisterComponent<Armament>();
+		target.RegisterComponent<AttackTarget>();
+		target.RegisterComponent<Aggression>();
+		target.RegisterComponent<Transport>();
+		target.RegisterComponent<Passenger>();
+		target.RegisterComponent<Boarding>();
+		target.RegisterComponent<ExitIntent>();
+		target.RegisterComponent<CargoSize>();
+		target.RegisterComponent<OffMap>();
+		target.RegisterComponent<MoveOrder>();
+		target.RegisterComponent<Descent>();
+		target.RegisterComponent<PhysicsBody>();
+		target.RegisterComponent<Crash>();
+		target.RegisterComponent<BoundingVolume>();
+		target.RegisterComponent<Attitude>();
+		target.RegisterComponent<Locomotion>();
+		target.RegisterComponent<Upgradable>();
+		target.RegisterComponent<Owner>();
+		target.RegisterComponent<StatusFlags>();
+		target.RegisterComponent<DeathCredit>();
+		target.RegisterComponent<Producer>();
+		target.RegisterComponent<UnderConstruction>();
+		target.RegisterComponent<ObjectShroud>();
+		target.RegisterComponent<BlastWave>();
+		target.RegisterComponent<Scorched>();
+		target.RegisterComponent<Mount>();
+		target.RegisterComponent<Mounted>();
+		target.FinalizeComponents();
+	}
+
+	ecs::Entity Make(std::uint32_t definition, const std::string &name, Fixed z = Fixed::FromInt(10))
+	{
+		const ecs::Entity entity = world.Create();
+		world.Add<Transform>(entity);
+		world.Add<DefinitionRef>(entity);
+		world.Add<TeamMember>(entity);
+		world.Add<Health>(entity);
+		world.Add<Mortality>(entity);
+		world.Add<Targetable>(entity);
+		world.Add<AttackTarget>(entity);
+		world.Get<Transform>(entity)->position.z = z;
+		*world.Get<DefinitionRef>(entity) = {definition};
+		*world.Get<TeamMember>(entity) = {team};
+		*world.Get<Health>(entity) = {Fixed::FromInt(100), Fixed::FromInt(100), 0};
+		*world.Get<Mortality>(entity) = {truckDeath};
+		roster.Join(team, entity);
+		names.Assign(name, entity);
+		return entity;
+	}
+
+	void Hit(ecs::Entity target, Fixed amount, std::uint32_t deathType) { incoming.Add({target, {}, amount, 0, deathType}); }
+
+	// One tick; collects what dying entities played.
+	void Step()
+	{
+		incoming.Seal();
+		scheduler->Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}});
+		incoming.Clear();
+		played.insert(played.end(), events.events.begin(), events.events.end());
+		dying.ForEach([&](const DeathEvent &event) { played.push_back(event); });
+	}
+
+	std::size_t Played(std::uint32_t id) const
+	{
+		std::size_t count = 0;
+		for (const DeathEvent &event : played)
+			count += event.id == id ? 1u : 0u;
+		return count;
+	}
+
+	// The world owns the shared data; the pipeline keeps handles to it.
+	ecs::World world{ecs::WorldConfig{4}};
+	TeamRoster &roster{world.EmplaceResource<TeamRoster>()};
+	std::uint32_t team{0};
+	NameRegistry &names{world.EmplaceResource<NameRegistry>()};
+	CargoManifest &manifest{world.EmplaceResource<CargoManifest>()};
+	Casualties &casualties{world.EmplaceResource<Casualties>()};
+	engine::level::Heightfield field;
+	IncomingDamage &incoming{world.EmplaceResource<IncomingDamage>()};
+	ArmorCatalog &armors{world.EmplaceResource<ArmorCatalog>()};
+	Deaths &deaths{world.EmplaceResource<Deaths>()};
+	Hits &hits{world.EmplaceResource<Hits>()};
+	SecondLives &secondLives{world.EmplaceResource<SecondLives>()};
+	KillRequests &kills{world.EmplaceResource<KillRequests>()};
+	Evacuations &evacuations{world.EmplaceResource<Evacuations>()};
+	Expirations &expirations{world.EmplaceResource<Expirations>()};
+	BoardRequests &boards{world.EmplaceResource<BoardRequests>()};
+	ExitRequests &exits{world.EmplaceResource<ExitRequests>()};
+	DropExits &dropExits{world.EmplaceResource<DropExits>()};
+	RiderExits &riderExits{world.EmplaceResource<RiderExits>()};
+	IntentExits &intentExits{world.EmplaceResource<IntentExits>()};
+	DropSettings &drop{world.EmplaceResource<DropSettings>()};
+	DeliveriesDone &deliveries{world.EmplaceResource<DeliveriesDone>()};
+	DeathCatalog &catalog{world.EmplaceResource<DeathCatalog>()};
+	HulkLifetime &hulks{world.EmplaceResource<HulkLifetime>()};
+	std::uint32_t truckDeath{0};
+	std::uint32_t jetDeath{0};
+	std::uint32_t helicopterDeath{0};
+	std::uint32_t neutronDeath{0};
+	DeathEvents &events{world.EmplaceResource<DeathEvents>()};
+	DyingEvents &dying{world.EmplaceResource<DyingEvents>()};
+	Removals &removals{world.EmplaceResource<Removals>()};
+	Deletions &deletions{world.EmplaceResource<Deletions>()};
+	HealthSystem health;
+	CargoTransferSystem transfer;
+	DeathSystem death;
+	SlowDeathSystem slowDeath;
+	RemovalSystem removal;
+	MountSystem mounts;
+	SpatialIndexSystem index;
+	BlastWaveSystem blastWaves;
+	BlastDamageSystem blastDamage;
+	ScorchSystem scorch;
+	ecs::SystemRegistry registry;
+	std::unique_ptr<ecs::Scheduler> scheduler;
+	std::uint64_t tick{0};
+	std::vector<DeathEvent> played;
+};
+}
+
+BOOST_AUTO_TEST_SUITE(death)
+
+BOOST_AUTO_TEST_CASE(slow_death_weights_follow_probability_and_the_filter)
+{
+	DeathDefinition definition;
+	SlowDeathDefinition common;
+	common.probability = 3;
+	SlowDeathDefinition rare;
+	rare.probability = 1;
+	SlowDeathDefinition burnedOnly;
+	burnedOnly.filter = {1u << 5, AllVeterancyLevels};
+	burnedOnly.probability = 1000;
+	definition.slow = {common, rare, burnedOnly};
+
+	std::size_t picks[3]{};
+	for (std::uint64_t index = 0; index < 4000; ++index)
+	{
+		auto random = Engine::Math::Stream(11, {index});
+		const auto chosen = ChooseSlowDeath(definition, Normal, 0, Fixed{}, random);
+		BOOST_TEST_REQUIRE(chosen.has_value());
+		++picks[*chosen];
+	}
+	BOOST_TEST(picks[2] == 0u); // its filter does not apply
+	BOOST_TEST(picks[0] > 2700u); // about 3 in 4
+	BOOST_TEST(picks[0] < 3300u);
+
+	// The same stream chooses the same way.
+	auto first = Engine::Math::Stream(5, {1, 2});
+	auto second = Engine::Math::Stream(5, {1, 2});
+	BOOST_TEST(*ChooseSlowDeath(definition, 5, 0, Fixed{}, first) == *ChooseSlowDeath(definition, 5, 0, Fixed{}, second));
+}
+
+BOOST_AUTO_TEST_CASE(overkill_adds_its_share_times_the_bonus_as_the_original)
+{
+	DeathDefinition definition;
+	SlowDeathDefinition quiet;
+	quiet.probability = 1;
+	SlowDeathDefinition violent;
+	violent.probability = 1;
+	violent.overkillBonus = Fixed::FromInt(1000); // "100000%"
+	definition.slow = {quiet, violent};
+	std::size_t violentPicks = 0;
+	for (std::uint64_t index = 0; index < 1000; ++index)
+	{
+		auto random = Engine::Math::Stream(3, {index});
+		// 200% overkill: 1 + 2 * 1000 = 2001 against 1.
+		violentPicks += *ChooseSlowDeath(definition, Normal, 0, Fixed::FromInt(2), random) == 1u ? 1u : 0u;
+	}
+	BOOST_TEST(violentPicks > 990u);
+}
+
+// DieModule.cpp, DieMuxData::isDieApplicable: after the death type and veterancy level, every ExemptStatus bit must
+// be clear and every RequiredStatus bit set. A combat bike (GLAVehicle.ini) has a slow death exempt from all its
+// rider statuses and one per rider requiring that rider's status, each throwing its rider off (its INITIAL OCL), and
+// a death weapon (FireWeaponWhenDeadBehavior, SuicideBikeBomb) requiring the terrorist rider's status.
+BOOST_AUTO_TEST_CASE(legacy_parity_die_modules_filter_by_required_and_exempt_status)
+{
+	constexpr std::uint64_t Rider1 = std::uint64_t{1} << 30, Rider2 = std::uint64_t{1} << 31, Rider5 = std::uint64_t{1} << 34;
+	DeathFilter exempt{AllDeathTypes, AllVeterancyLevels, Rider1 | Rider2 | Rider5, 0};
+	BOOST_TEST(exempt.Applies(Normal, 0, 0));
+	BOOST_TEST(!exempt.Applies(Normal, 0, Rider2));
+	DeathFilter required{AllDeathTypes, AllVeterancyLevels, 0, Rider2};
+	BOOST_TEST(!required.Applies(Normal, 0, 0));
+	BOOST_TEST(required.Applies(Normal, 0, Rider2));
+	BOOST_TEST(required.Applies(Normal, 0, Rider2 | Rider1)); // testForAll: other bits do not matter
+	DeathFilter both{AllDeathTypes, AllVeterancyLevels, Rider1, Rider2};
+	BOOST_TEST(!both.Applies(Normal, 0, Rider2 | Rider1));
+
+	DeathDefinition bike;
+	for (const auto &[filter, effect] : {std::pair{DeathFilter{AllDeathTypes, AllVeterancyLevels, Rider1 | Rider2 | Rider5, 0}, 10u},
+			 std::pair{DeathFilter{AllDeathTypes, AllVeterancyLevels, 0, Rider1}, 11u}, std::pair{DeathFilter{AllDeathTypes, AllVeterancyLevels, 0, Rider2}, 12u},
+			 std::pair{DeathFilter{AllDeathTypes, AllVeterancyLevels, 0, Rider5}, 15u}})
+	{
+		SlowDeathDefinition slow;
+		slow.filter = filter;
+		slow.effects.Of(DeathPhase::Initial, DeathEffectKind::Objects) = {effect};
+		bike.slow.push_back(std::move(slow));
+	}
+	bike.atDeath.push_back({{AllDeathTypes, AllVeterancyLevels, 0, Rider5}, DeathEffectKind::Weapon, {20}});
+
+	// Among the four equally likely slow deaths, only its rider's applies (and none requiring another rider's).
+	for (std::uint64_t index = 0; index < 64; ++index)
+	{
+		auto random = Engine::Math::Stream(9, {index});
+		BOOST_TEST(*ChooseSlowDeath(bike, Normal, 0, Fixed{}, random, Rider2) == 2u);
+		auto riderless = Engine::Math::Stream(9, {index});
+		BOOST_TEST(*ChooseSlowDeath(bike, Normal, 0, Fixed{}, riderless, 0) == 0u);
+	}
+
+	// Through the death system: the Rebel's bike throws its Rebel and does not blow up as the terrorist's would.
+	Pipeline pipeline(2);
+	const std::uint32_t bikeDeath = pipeline.catalog.Add(bike);
+	const ecs::Entity rebelBike = pipeline.Make(1, "RebelBike");
+	*pipeline.world.Get<Mortality>(rebelBike) = {bikeDeath};
+	pipeline.world.Add<StatusFlags>(rebelBike);
+	pipeline.world.Get<StatusFlags>(rebelBike)->bits = Rider2;
+	const ecs::Entity terroristBike = pipeline.Make(2, "TerroristBike");
+	*pipeline.world.Get<Mortality>(terroristBike) = {bikeDeath};
+	pipeline.world.Add<StatusFlags>(terroristBike);
+	pipeline.world.Get<StatusFlags>(terroristBike)->bits = Rider5;
+	pipeline.Hit(rebelBike, Fixed::FromInt(500), Normal);
+	pipeline.Hit(terroristBike, Fixed::FromInt(500), Normal);
+	pipeline.Step();
+	BOOST_TEST(pipeline.Played(12) == 1u);
+	BOOST_TEST(pipeline.Played(15) == 1u);
+	BOOST_TEST(pipeline.Played(10) + pipeline.Played(11) == 0u);
+	BOOST_TEST(pipeline.Played(20) == 1u); // the terrorist's bomb only
+}
+
+// OpenContain::onDie: a truck taking all of its riders' health with it (DamagePercentToUnits 100%) kills its rider,
+// which dies its own death (a casualty killed by the truck, no longer riding).
+// NeutronMissileSlowDeathBehavior::update, doBlast and doScorchBlast (GeneralsMD/Code/GameEngine/Source/GameLogic/
+// Object/Update/NeutronMissileSlowDeathUpdate.cpp), with the NeutronMissile's blasts: dying (its SinkDelay none wakes
+// its update on the frame it dies), it plays its FXList on the ground under it at once; each scorch wave burns what
+// is within its outer radius on the first frame more than its delay after (blast 1's 100 ms: the 4th tick, reaching
+// 60; blast 4's 340 ms: the 11th, reaching 150), for good; blast 6 (1180 ms: the 36th tick) hurts what is within 210
+// with EXPLOSION as EXPLODED from the missile: 3500 within 60, falling off beyond (1 - (d - 60) / 150.01 of it: 150
+// away takes 1400.13), never under 300; nothing beyond 210. Its first hurting blast leaves a scorch mark 320 across
+// where it is. The fall-off's share carries fixed point's 1/65536: times 3500, within 0.06 of the original's floats.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_neutron_missile_blasts_scorches_and_burns_on_its_frames)
+{
+	Pipeline pipeline(2, 7, true);
+	const auto place = [&](const std::string &name, int x, int health) {
+		const ecs::Entity entity = pipeline.Make(9, name, Fixed{});
+		pipeline.world.Get<Transform>(entity)->position.x = Fixed::FromInt(x);
+		pipeline.world.Get<Transform>(entity)->position.y = Fixed::FromInt(300);
+		*pipeline.world.Get<Health>(entity) = {Fixed::FromInt(health), Fixed::FromInt(health), 0};
+		pipeline.world.Add<Owner>(entity);
+		return entity;
+	};
+	const ecs::Entity missile = pipeline.Make(8, "Missile", Fixed{});
+	pipeline.world.Get<Transform>(missile)->position = {Fixed::FromInt(300), Fixed::FromInt(300), Fixed{}};
+	pipeline.world.Get<Mortality>(missile)->death = pipeline.neutronDeath;
+	const ecs::Entity inner = place("Inner", 350, 5000);   // 50 away
+	const ecs::Entity middle = place("Middle", 450, 5000); // 150 away
+	const ecs::Entity edge = place("Edge", 505, 5000);     // 205 away
+	const ecs::Entity beyond = place("Beyond", 515, 5000); // 215 away
+
+	pipeline.Hit(missile, Fixed::FromInt(500), Normal);
+	pipeline.Step();
+	const std::uint64_t died = pipeline.tick;
+	BOOST_TEST_REQUIRE(pipeline.world.Get<Dying>(missile) != nullptr);
+	BOOST_TEST_REQUIRE(pipeline.Played(990) == 1u);
+	for (const DeathEvent &event : pipeline.played)
+		if (event.id == 990)
+		{
+			BOOST_TEST(!event.orient);
+			BOOST_TEST((event.position.z == Fixed{}));
+		}
+	std::uint64_t innerBurned = 0, middleBurned = 0, hurtAt = 0;
+	std::size_t marks = 0;
+	Fixed markSize;
+	while (pipeline.tick < died + 40)
+	{
+		pipeline.Step();
+		if (innerBurned == 0 && pipeline.world.Get<Scorched>(inner) != nullptr)
+			innerBurned = pipeline.tick - died;
+		if (middleBurned == 0 && pipeline.world.Get<Scorched>(middle) != nullptr)
+			middleBurned = pipeline.tick - died;
+		if (hurtAt == 0 && pipeline.world.Get<Health>(inner)->current < Fixed::FromInt(5000))
+			hurtAt = pipeline.tick - died;
+		for (const BlastScorchMark &mark : pipeline.world.Resource<BlastWaves>().marks)
+		{
+			++marks;
+			markSize = mark.size;
+		}
+	}
+	BOOST_TEST(innerBurned == 4u);
+	BOOST_TEST(middleBurned == 11u);
+	BOOST_TEST(pipeline.world.Get<Scorched>(beyond) == nullptr);
+	BOOST_TEST(hurtAt == 36u);
+	BOOST_TEST(marks == 1u);
+	BOOST_TEST((markSize == Fixed::FromInt(320)));
+	const auto taken = [&](ecs::Entity entity) { return static_cast<double>((Fixed::FromInt(5000) - pipeline.world.Get<Health>(entity)->current).Raw()) / 65536.0; };
+	BOOST_TEST(taken(inner) == 3500.0, boost::test_tools::tolerance(1e-6));
+	BOOST_TEST(std::abs(taken(middle) - 3500.0 * (1.0 - 90.0 / 150.01)) < 0.06);
+	BOOST_TEST(taken(edge) == 300.0, boost::test_tools::tolerance(1e-6));
+	BOOST_TEST(taken(beyond) == 0.0);
+	BOOST_TEST(pipeline.world.IsAlive(missile)); // until its destruction delay
+}
+
+namespace
+{
+// Three neutron missiles among 48 bystanders on a grid, all killed on the first tick.
+std::vector<ecs::Entity> Minefield(Pipeline &pipeline)
+{
+	std::vector<ecs::Entity> all;
+	for (int index = 0; index < 51; ++index)
+	{
+		const ecs::Entity entity = pipeline.Make(9, "Thing" + std::to_string(index), Fixed{});
+		auto &position = pipeline.world.Get<Transform>(entity)->position;
+		position.x = Fixed::FromInt(100 + (index % 8) * 45);
+		position.y = Fixed::FromInt(100 + (index / 8) * 45);
+		*pipeline.world.Get<Health>(entity) = {Fixed::FromInt(2000 + index * 37), Fixed::FromInt(5000), 0};
+		pipeline.world.Add<Owner>(entity);
+		if (index % 17 == 5)
+			pipeline.world.Get<Mortality>(entity)->death = pipeline.neutronDeath;
+		all.push_back(entity);
+	}
+	for (const ecs::Entity entity : all)
+		if (pipeline.world.Get<Mortality>(entity)->death == pipeline.neutronDeath)
+			pipeline.Hit(entity, Fixed::FromInt(99999), Normal);
+	return all;
+}
+}
+
+// Blast waves hurt, burn and scorch the same on one worker as on four.
+BOOST_AUTO_TEST_CASE(blast_waves_are_the_same_on_any_number_of_workers)
+{
+	const auto run = [](std::size_t workers) {
+		Pipeline pipeline(workers, 7, true);
+		Minefield(pipeline);
+		std::vector<ecs::StateHashValue> hashes;
+		std::size_t marks = 0;
+		for (int step = 0; step < 50; ++step)
+		{
+			pipeline.Step();
+			hashes.push_back(pipeline.world.StateHash());
+			marks += pipeline.world.Resource<BlastWaves>().marks.size();
+		}
+		return std::pair{hashes, marks};
+	};
+	const auto one = run(1);
+	const auto four = run(4);
+	BOOST_TEST((one.first == four.first));
+	BOOST_TEST(one.second == 3u);
+	BOOST_TEST(one.second == four.second);
+}
+
+// A checkpoint between the scorch waves and the damaging blast resumes the same blasts (which have gone off, which
+// are still to come, whether the mark is down) and the same burned looks.
+BOOST_AUTO_TEST_CASE(a_checkpoint_mid_blast_wave_resumes_the_same_blasts)
+{
+	Pipeline saved(2, 7, true);
+	const auto things = Minefield(saved);
+	for (int step = 0; step < 20; ++step)
+		saved.Step();
+	engine::core::serialization::ByteWriter writer;
+	saved.world.SaveCheckpoint(writer);
+	const auto bytes = writer.Take();
+
+	Pipeline loaded(3, 7, true);
+	engine::core::serialization::ByteReader reader(bytes);
+	BOOST_TEST_REQUIRE(loaded.world.LoadCheckpoint(reader));
+	loaded.tick = saved.tick;
+	BOOST_TEST(loaded.world.StateHash() == saved.world.StateHash());
+	std::size_t burned = 0;
+	for (const ecs::Entity thing : things)
+		burned += loaded.world.IsAlive(thing) && loaded.world.Get<Scorched>(thing) != nullptr ? 1u : 0u;
+	BOOST_TEST(burned > 0u);
+	for (int step = 0; step < 30; ++step)
+	{
+		saved.Step();
+		loaded.Step();
+		BOOST_TEST_REQUIRE(loaded.world.StateHash() == saved.world.StateHash());
+	}
+	for (const ecs::Entity thing : things)
+		if (saved.world.IsAlive(thing) && saved.world.Get<Health>(thing) != nullptr)
+			BOOST_TEST((loaded.world.Get<Health>(thing)->current == saved.world.Get<Health>(thing)->current));
+}
+
+namespace
+{
+// A tank carrying a gattling cannon on top (the original's portable structure).
+std::pair<ecs::Entity, ecs::Entity> MountedPair(Pipeline &pipeline, const std::string &name, int x)
+{
+	const ecs::Entity tank = pipeline.Make(1, name + "Tank");
+	const ecs::Entity cannon = pipeline.Make(2, name + "Cannon");
+	pipeline.world.Get<Transform>(tank)->position.x = Fixed::FromInt(x);
+	pipeline.world.Add<Mount>(tank);
+	pipeline.world.Get<Mount>(tank)->rider = cannon;
+	pipeline.world.Add<Mounted>(cannon);
+	pipeline.world.Get<Mounted>(cannon)->carrier = tank;
+	return {tank, cannon};
+}
+}
+
+// HelixContain::update and onDie / onDelete, OverlordContain::onDie (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/
+// Contain/HelixContain.cpp, OverlordContain.cpp): a mounted cannon rides where its carrier is, facing its way; killed,
+// the carrier takes it with it that very tick (kill()); removed, the carrier takes it along (destroyObject).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_mounted_cannon_rides_on_and_dies_with_its_carrier)
+{
+	Pipeline pipeline(2);
+	const auto [tank, cannon] = MountedPair(pipeline, "A", 40);
+	pipeline.world.Get<Transform>(tank)->facing = Engine::Math::TurnFromDegrees(30);
+	pipeline.Step();
+	pipeline.Step();
+	BOOST_TEST((pipeline.world.Get<Transform>(cannon)->position == pipeline.world.Get<Transform>(tank)->position));
+	BOOST_TEST((pipeline.world.Get<Transform>(cannon)->facing == pipeline.world.Get<Transform>(tank)->facing));
+	pipeline.Hit(tank, Fixed::FromInt(500), Normal);
+	pipeline.Step();
+	BOOST_TEST_REQUIRE(pipeline.world.Get<Dying>(tank) != nullptr);
+	BOOST_TEST((!pipeline.world.IsAlive(cannon) || pipeline.world.Get<Dying>(cannon) != nullptr));
+	BOOST_TEST(pipeline.world.Get<Dying>(tank)->since == pipeline.tick);
+
+	const auto [other, carried] = MountedPair(pipeline, "B", 80);
+	pipeline.Step();
+	pipeline.world.Destroy(other);
+	pipeline.Step();
+	pipeline.Step();
+	BOOST_TEST(!pipeline.world.IsAlive(carried));
+}
+
+// The same on one worker as on four, and after a checkpoint.
+BOOST_AUTO_TEST_CASE(mounts_are_the_same_on_any_number_of_workers_and_after_a_checkpoint)
+{
+	const auto run = [](std::size_t workers) {
+		Pipeline pipeline(workers);
+		std::vector<ecs::Entity> tanks;
+		for (int index = 0; index < 24; ++index)
+			tanks.push_back(MountedPair(pipeline, std::to_string(index), index * 7).first);
+		std::vector<ecs::StateHashValue> hashes;
+		for (int step = 0; step < 40; ++step)
+		{
+			if (step % 5 == 0)
+				pipeline.Hit(tanks[static_cast<std::size_t>(step / 5)], Fixed::FromInt(500), Normal);
+			for (std::size_t index = 0; index < tanks.size(); ++index)
+				if (auto *at = pipeline.world.Get<Transform>(tanks[index]))
+					at->position.y += Fixed::FromInt(static_cast<std::int32_t>(index % 3));
+			pipeline.Step();
+			hashes.push_back(pipeline.world.StateHash());
+		}
+		return hashes;
+	};
+	BOOST_TEST((run(1) == run(4)));
+
+	Pipeline saved(2);
+	const auto [tank, cannon] = MountedPair(saved, "S", 10);
+	saved.Step();
+	engine::core::serialization::ByteWriter writer;
+	saved.world.SaveCheckpoint(writer);
+	const auto bytes = writer.Take();
+	Pipeline loaded(3);
+	engine::core::serialization::ByteReader reader(bytes);
+	BOOST_TEST_REQUIRE(loaded.world.LoadCheckpoint(reader));
+	loaded.tick = saved.tick;
+	BOOST_TEST(loaded.world.StateHash() == saved.world.StateHash());
+	BOOST_TEST((loaded.world.Get<Mount>(tank)->rider == cannon));
+	saved.Hit(tank, Fixed::FromInt(500), Normal);
+	loaded.Hit(tank, Fixed::FromInt(500), Normal);
+	for (int step = 0; step < 12; ++step)
+	{
+		saved.Step();
+		loaded.Step();
+		BOOST_TEST_REQUIRE(loaded.world.StateHash() == saved.world.StateHash());
+	}
+}
+
+BOOST_AUTO_TEST_CASE(a_killed_truck_dies_slowly_and_its_rider_dies_with_it)
+{
+	Pipeline pipeline(2);
+	const ecs::Entity truck = pipeline.Make(1, "Truck");
+	pipeline.world.Add<Transport>(truck);
+	pipeline.world.Get<Transport>(truck)->definition.riderDamage = Fixed::One();
+	pipeline.world.Add<Armament>(truck);
+	const ecs::Entity rider = pipeline.Make(2, "Rider");
+	pipeline.world.Get<Mortality>(rider)->death = pipeline.catalog.Add(DeathDefinition{}); // a death of its own, with no effects
+	pipeline.world.Add<Passenger>(rider);
+	pipeline.world.Add<OffMap>(rider);
+	pipeline.manifest.Board(truck, rider);
+	const ecs::Entity bystander = pipeline.Make(3, "Bystander");
+
+	pipeline.Hit(truck, Fixed::FromInt(500), Normal);
+	pipeline.Step();
+	const std::uint64_t diedAt = pipeline.tick;
+
+	// Dead to the game at once: the books settle and the rider is killed with it.
+	BOOST_TEST((!pipeline.world.IsAlive(rider) || pipeline.world.Get<Dying>(rider) != nullptr));
+	if (pipeline.world.IsAlive(rider))
+		BOOST_TEST(pipeline.world.Get<OffMap>(rider) == nullptr);
+	BOOST_TEST(pipeline.roster.TeamAt(pipeline.team).members.size() == 1u);
+	BOOST_TEST((pipeline.names.Find("Truck") == ecs::Entity{}));
+	BOOST_TEST_REQUIRE(pipeline.casualties.list.size() == 2u);
+	BOOST_TEST((pipeline.casualties.list[0].departure == Departure::Killed));
+	BOOST_TEST((pipeline.casualties.list[1].departure == Departure::Killed));
+	BOOST_TEST((pipeline.casualties.list[1].killer == truck));
+	// ... but the body stays, out of the fight, and plays its initial effect.
+	BOOST_TEST_REQUIRE(pipeline.world.IsAlive(truck));
+	BOOST_TEST_REQUIRE(pipeline.world.Get<Dying>(truck) != nullptr);
+	BOOST_TEST(pipeline.world.Get<Targetable>(truck) == nullptr);
+	BOOST_TEST(pipeline.world.Get<Armament>(truck) == nullptr);
+	BOOST_TEST(pipeline.world.Get<AttackTarget>(truck) == nullptr);
+	BOOST_TEST(pipeline.world.Get<AttackTarget>(bystander) != nullptr);
+	BOOST_TEST(pipeline.Played(100) == 1u);
+	const Dying state = *pipeline.world.Get<Dying>(truck);
+	BOOST_TEST(state.sinkTick == diedAt + 2);
+	BOOST_TEST(state.destructionTick == diedAt + 10);
+	BOOST_TEST(state.midpointTick >= diedAt + 3);
+	BOOST_TEST(state.midpointTick <= diedAt + 6);
+
+	// Hitting the body again does nothing more.
+	pipeline.Hit(truck, Fixed::FromInt(500), Normal);
+	while (pipeline.tick < diedAt + 9)
+	{
+		pipeline.Step();
+		BOOST_TEST_REQUIRE(pipeline.world.IsAlive(truck));
+	}
+	// Sinking from its sink tick, one unit per tick.
+	BOOST_TEST((pipeline.world.Get<Transform>(truck)->position.z < Fixed::FromInt(10)));
+	BOOST_TEST(pipeline.Played(200) == 1u);
+	BOOST_TEST(pipeline.Played(300) == 0u);
+	BOOST_TEST(pipeline.casualties.list.size() == 2u);
+
+	pipeline.Step(); // the destruction tick
+	BOOST_TEST(!pipeline.world.IsAlive(truck));
+	BOOST_TEST(pipeline.Played(300) == 1u);
+	BOOST_TEST(pipeline.Played(301) == 1u);
+	BOOST_TEST(pipeline.Played(200) == 1u);
+	BOOST_TEST(pipeline.casualties.list.size() == 2u); // counted once, when it died
+	BOOST_TEST(pipeline.world.IsAlive(bystander));
+}
+
+// Team::killTeam: evacuateTeam empties a defeated player's containers before they are killed, so a rider gets out
+// unhurt even from a truck whose death would kill it (DamagePercentToUnits 100%).
+// Legacy parity (SlowDeathBehavior::beginSlowDeath with GameLogic::getHulkMaxLifetimeOverride): while a script
+// overrides hulk lifetimes, a hulk dying slowly sinks the tick after, reaches its midpoint 16 ticks after and is gone
+// 31 ticks after, whatever its own delays; what is no hulk keeps its own (the truck: 2 and 10).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_hulk_sinks_at_once_while_scripts_override_hulks)
+{
+	Pipeline pipeline(2);
+	pipeline.hulks.overrideTicks = 90;
+	DeathDefinition hulkDeath = pipeline.catalog.At(pipeline.truckDeath);
+	hulkDeath.hulk = true;
+	const std::uint32_t hulk = pipeline.catalog.Add(hulkDeath);
+	const ecs::Entity wreck = pipeline.Make(1, "Wreck");
+	pipeline.world.Get<Mortality>(wreck)->death = hulk;
+	const ecs::Entity truck = pipeline.Make(2, "Truck");
+	pipeline.Hit(wreck, Fixed::FromInt(500), Normal);
+	pipeline.Hit(truck, Fixed::FromInt(500), Normal);
+	pipeline.Step();
+	const std::uint64_t diedAt = pipeline.tick;
+	BOOST_TEST_REQUIRE(pipeline.world.Get<Dying>(wreck) != nullptr);
+	const Dying wrecked = *pipeline.world.Get<Dying>(wreck);
+	BOOST_TEST(wrecked.sinkTick == diedAt + 1);
+	BOOST_TEST(wrecked.midpointTick == diedAt + 16);
+	BOOST_TEST(wrecked.destructionTick == diedAt + 31);
+	BOOST_TEST_REQUIRE(pipeline.world.Get<Dying>(truck) != nullptr);
+	BOOST_TEST(pipeline.world.Get<Dying>(truck)->sinkTick == diedAt + 2);
+	BOOST_TEST(pipeline.world.Get<Dying>(truck)->destructionTick == diedAt + 10);
+}
+
+BOOST_AUTO_TEST_CASE(legacy_parity_an_evacuated_truck_lets_its_rider_out_unhurt)
+{
+	Pipeline pipeline(2);
+	const ecs::Entity truck = pipeline.Make(1, "Truck");
+	pipeline.world.Add<Transport>(truck);
+	pipeline.world.Get<Transport>(truck)->definition.riderDamage = Fixed::One();
+	const ecs::Entity rider = pipeline.Make(2, "Rider");
+	pipeline.world.Add<Passenger>(rider);
+	pipeline.world.Add<OffMap>(rider);
+	pipeline.manifest.Board(truck, rider);
+	pipeline.evacuations.containers.push_back(truck);
+	pipeline.kills.entities.push_back(truck);
+	const Fixed health = pipeline.world.Get<Health>(rider)->current;
+	pipeline.Step();
+	BOOST_TEST_REQUIRE(pipeline.world.IsAlive(rider));
+	BOOST_TEST(pipeline.world.Get<Dying>(rider) == nullptr);
+	BOOST_TEST(pipeline.world.Get<Passenger>(rider) == nullptr);
+	BOOST_TEST(pipeline.world.Get<OffMap>(rider) == nullptr);
+	BOOST_TEST((pipeline.world.Get<Health>(rider)->current == health));
+	BOOST_TEST_REQUIRE(pipeline.casualties.list.size() == 1u);
+	BOOST_TEST((pipeline.casualties.list[0].entity == truck));
+}
+
+BOOST_AUTO_TEST_CASE(an_exploded_truck_is_removed_at_once_with_its_blast)
+{
+	Pipeline pipeline(2);
+	const ecs::Entity truck = pipeline.Make(1, "Truck");
+	pipeline.Hit(truck, Fixed::FromInt(500), Exploded);
+	pipeline.Step();
+	BOOST_TEST(!pipeline.world.IsAlive(truck));
+	BOOST_TEST(pipeline.Played(900) == 1u);
+	BOOST_TEST(pipeline.Played(100) == 0u);
+	BOOST_TEST_REQUIRE(pipeline.events.removed.size() == 1u);
+	BOOST_TEST((pipeline.events.removed[0] == truck));
+}
+
+BOOST_AUTO_TEST_CASE(a_body_nothing_removes_lingers_dead)
+{
+	Pipeline pipeline(2);
+	// Like a building with KeepObjectDie: effects at death, no removal.
+	DeathDefinition rubble;
+	rubble.atDeath.push_back({{}, DeathEffectKind::Objects, {40, 41}});
+	const std::uint32_t kept = pipeline.catalog.Add(std::move(rubble));
+	const ecs::Entity building = pipeline.Make(1, "Building");
+	pipeline.world.Get<Mortality>(building)->death = kept;
+	pipeline.Hit(building, Fixed::FromInt(500), Normal);
+	for (int step = 0; step < 100; ++step)
+		pipeline.Step();
+	BOOST_TEST_REQUIRE(pipeline.world.IsAlive(building));
+	BOOST_TEST_REQUIRE(pipeline.world.Get<Dying>(building) != nullptr);
+	BOOST_TEST((pipeline.world.Get<Dying>(building)->slow == Dying::Lingering));
+	BOOST_TEST((pipeline.world.Get<Transform>(building)->position.z == Fixed::FromInt(10)));
+	BOOST_TEST(pipeline.Played(40) + pipeline.Played(41) == 1u);
+	BOOST_TEST(pipeline.world.Get<Targetable>(building) == nullptr);
+	BOOST_TEST(pipeline.casualties.list.size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(killed_outright_by_request_dies_the_same_way)
+{
+	Pipeline pipeline(1);
+	const ecs::Entity truck = pipeline.Make(1, "Truck");
+	pipeline.kills.entities.push_back(truck);
+	pipeline.Step();
+	BOOST_TEST(pipeline.kills.entities.empty());
+	BOOST_TEST_REQUIRE(pipeline.world.IsAlive(truck));
+	BOOST_TEST(pipeline.world.Get<Dying>(truck) != nullptr);
+	BOOST_TEST(pipeline.casualties.list.size() == 1u);
+}
+
+// HighlanderBody::attemptDamage: each hit is cut to leave one point (min(amount, health - 1)), unless it is
+// UNRESISTABLE, which kills (as kill() does). ImmortalBody::internalChangeHealth: no loss takes the last point, not
+// even unresistable damage or being killed outright.
+BOOST_AUTO_TEST_CASE(legacy_parity_highlander_and_immortal_bodies_keep_their_last_point)
+{
+	Pipeline pipeline(1);
+	constexpr std::uint32_t Unresistable = 7;
+	const ecs::Entity tree = pipeline.Make(1, "Tree");
+	pipeline.world.Add<HealthFloor>(tree);
+	pipeline.world.Get<HealthFloor>(tree)->exempt = Unresistable;
+	const ecs::Entity planter = pipeline.Make(1, "Planter");
+	pipeline.world.Add<HealthFloor>(planter);
+	pipeline.Hit(tree, Fixed::FromInt(60), Normal);
+	pipeline.Hit(tree, Fixed::FromInt(60), Normal);
+	pipeline.Hit(planter, Fixed::FromInt(500), Normal);
+	pipeline.Step();
+	BOOST_TEST((pipeline.world.Get<Health>(tree)->current == Fixed::One()));
+	BOOST_TEST((pipeline.world.Get<Health>(planter)->current == Fixed::One()));
+	BOOST_TEST(pipeline.world.Get<Dying>(tree) == nullptr);
+	pipeline.incoming.Add({planter, {}, Fixed::FromInt(500), Unresistable, Normal});
+	pipeline.kills.entities.push_back(planter);
+	pipeline.Step();
+	BOOST_TEST((pipeline.world.Get<Health>(planter)->current == Fixed::One()));
+	BOOST_TEST(pipeline.world.Get<Dying>(planter) == nullptr);
+	pipeline.incoming.Add({tree, {}, Fixed::FromInt(5), Unresistable, Normal});
+	pipeline.Step();
+	BOOST_TEST(pipeline.world.Get<Dying>(tree) != nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(a_life_running_out_kills_and_a_sinking_body_stops_being_pushed)
+{
+	Pipeline pipeline(2);
+	const ecs::Entity truck = pipeline.Make(1, "Truck");
+	pipeline.world.Add<PhysicsBody>(truck);
+	pipeline.expirations.Reset(1);
+	pipeline.expirations.SlotAt(0).push_back({truck, 0});
+	pipeline.Step();
+	pipeline.expirations.Reset(0);
+	BOOST_TEST_REQUIRE(pipeline.world.IsAlive(truck));
+	BOOST_TEST(pipeline.world.Get<Dying>(truck) != nullptr);
+	BOOST_TEST(pipeline.world.Get<PhysicsBody>(truck) == nullptr); // its slow death sinks
+	BOOST_TEST_REQUIRE(pipeline.casualties.list.size() == 1u);
+	BOOST_TEST((pipeline.casualties.list[0].departure == Departure::Killed));
+}
+
+BOOST_AUTO_TEST_CASE(a_jet_shot_down_flies_on_falling_and_spinning_then_crashes_and_blows_up)
+{
+	Pipeline pipeline(2);
+	const ecs::Entity jet = pipeline.Make(1, "Jet", Fixed::FromInt(150));
+	pipeline.world.Get<Mortality>(jet)->death = pipeline.jetDeath;
+	pipeline.world.Add<Locomotion>(jet);
+	pipeline.world.Get<Locomotion>(jet)->speed = Fixed::FromInt(2);
+	pipeline.world.Get<Transform>(jet)->position.x = Fixed::FromInt(10);
+	pipeline.Hit(jet, Fixed::FromInt(500), Normal);
+	pipeline.Step();
+	const std::uint64_t diedAt = pipeline.tick;
+	BOOST_TEST(pipeline.Played(500) == 1u);
+	BOOST_TEST_REQUIRE(pipeline.world.Get<Crash>(jet) != nullptr);
+	BOOST_TEST_REQUIRE(pipeline.world.Get<Attitude>(jet) != nullptr);
+	Fixed lastZ = pipeline.world.Get<Transform>(jet)->position.z, lastX = pipeline.world.Get<Transform>(jet)->position.x;
+	bool spun = false;
+	// Down it comes (150 at -64/900 per tick squared: about 65 ticks), flying on along its facing.
+	while (pipeline.Played(600) == 0 && pipeline.tick < diedAt + 200)
+	{
+		pipeline.Step();
+		const Transform &at = *pipeline.world.Get<Transform>(jet);
+		BOOST_TEST_REQUIRE((at.position.z <= lastZ));
+		BOOST_TEST_REQUIRE((at.position.x > lastX));
+		lastZ = at.position.z;
+		lastX = at.position.x;
+		spun = spun || pipeline.world.Get<Attitude>(jet)->roll.units != 0;
+	}
+	const std::uint64_t landed = pipeline.tick;
+	BOOST_TEST(landed > diedAt + 50);
+	BOOST_TEST(landed < diedAt + 80);
+	BOOST_TEST(spun);
+	BOOST_TEST(pipeline.Played(550) == 1u); // the secondary, in the air
+	BOOST_TEST((pipeline.world.Get<Transform>(jet)->position.z == Fixed{}));
+	// It slides on a little, then blows up and is gone.
+	while (pipeline.tick < landed + 6)
+	{
+		BOOST_TEST_REQUIRE(pipeline.Played(700) == 0u);
+		pipeline.Step();
+	}
+	BOOST_TEST(pipeline.Played(700) == 1u);
+	pipeline.Step();
+	BOOST_TEST(!pipeline.world.IsAlive(jet));
+	BOOST_TEST(pipeline.Played(800) == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(a_helicopter_shot_down_spirals_down_spinning_loses_its_blades_and_leaves_rubble)
+{
+	Pipeline pipeline(2);
+	const ecs::Entity copter = pipeline.Make(1, "Copter", Fixed::FromInt(60));
+	pipeline.world.Get<Mortality>(copter)->death = pipeline.helicopterDeath;
+	pipeline.world.Get<Transform>(copter)->position.x = pipeline.world.Get<Transform>(copter)->position.y = Fixed::FromInt(100);
+	pipeline.Hit(copter, Fixed::FromInt(500), Normal);
+	pipeline.Step();
+	const std::uint64_t diedAt = pipeline.tick;
+	const Engine::Math::TurnAngle startFacing = pipeline.world.Get<Transform>(copter)->facing;
+	Fixed farthest{};
+	while (pipeline.Played(460) == 0 && pipeline.tick < diedAt + 400)
+	{
+		pipeline.Step();
+		const auto &at = pipeline.world.Get<Transform>(copter)->position;
+		farthest = (std::max)(farthest, Engine::Math::Distance(at.XY(), {Fixed::FromInt(100), Fixed::FromInt(100)}));
+		if (pipeline.tick == diedAt + 20)
+			BOOST_TEST(pipeline.Played(450) == 1u); // the blades fly off
+	}
+	BOOST_TEST_REQUIRE(pipeline.Played(460) == 1u); // down
+	BOOST_TEST(pipeline.tick > diedAt + 100);       // slowly: 8% of gravity
+	// It went round a spiral (3 a tick turning 3 degrees: a circle about 115 across), spinning.
+	const auto &at = pipeline.world.Get<Transform>(copter)->position;
+	BOOST_TEST((farthest > Fixed::FromInt(60)));
+	BOOST_TEST((Engine::Math::Distance(at.XY(), {Fixed::FromInt(100), Fixed::FromInt(100)}) < farthest));
+	BOOST_TEST(pipeline.world.Get<Transform>(copter)->facing.units != startFacing.units);
+	pipeline.Step();
+	pipeline.Step();
+	BOOST_TEST(pipeline.Played(470) == 1u);
+	BOOST_TEST(pipeline.Played(480) == 1u); // its rubble
+	pipeline.Step();
+	BOOST_TEST(!pipeline.world.IsAlive(copter));
+}
+
+// HelicopterSlowDeathBehavior::update's blades (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Behavior/
+// HelicopterSlowDeathUpdate.cpp): they come off at the blade bone's rest position turned into the world with the copter
+// (getPristineBonePositions, transformBoneToWorld), on the tick they are due; its other effects stay at its position.
+BOOST_AUTO_TEST_CASE(legacy_parity_helicopter_blades_come_off_at_their_bone)
+{
+	Pipeline pipeline(2);
+	DeathDefinition definition = HelicopterDeath();
+	definition.slow.front().crash.bladeOffset = {Fixed::FromInt(10), {}, Fixed::FromInt(12)};
+	const std::uint32_t death = pipeline.catalog.Add(std::move(definition));
+	const ecs::Entity copter = pipeline.Make(1, "Copter", Fixed::FromInt(60));
+	pipeline.world.Get<Mortality>(copter)->death = death;
+	pipeline.world.Get<Transform>(copter)->position = {Fixed::FromInt(100), Fixed::FromInt(100), Fixed::FromInt(60)};
+	pipeline.Hit(copter, Fixed::FromInt(500), Normal);
+	pipeline.Step();
+	while (pipeline.Played(450) == 0 && pipeline.tick < 200)
+		pipeline.Step();
+	BOOST_TEST_REQUIRE(pipeline.Played(450) == 1u);
+	const Transform &at = *pipeline.world.Get<Transform>(copter);
+	const Fixed c = Engine::Math::Cos(at.facing), s = Engine::Math::Sin(at.facing);
+	for (const DeathEvent &event : pipeline.played)
+		if (event.id == 450)
+		{
+			BOOST_TEST(event.position.x.Raw() == (at.position.x + Fixed::FromInt(10) * c).Raw());
+			BOOST_TEST(event.position.y.Raw() == (at.position.y + Fixed::FromInt(10) * s).Raw());
+			BOOST_TEST(event.position.z.Raw() == (at.position.z + Fixed::FromInt(12)).Raw());
+		}
+}
+
+// HelicopterSlowDeathBehavior::update (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Behavior/
+// HelicopterSlowDeathUpdate.cpp): as its blades come off, a copter better than regular bails its pilot out
+// (EjectPilotDie::ejectPilot: OCLEjectPilot with the unit's VoiceEject and SoundEject, the pilot taking its veterancy);
+// a regular one does not.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_veteran_copter_ejects_its_pilot_as_the_blades_come_off)
+{
+	const auto run = [](std::uint32_t level) {
+		Pipeline pipeline(2);
+		DeathDefinition definition = HelicopterDeath();
+		definition.slow.front().crash.ejectPilot = 490;
+		definition.slow.front().crash.ejectSounds = {491, 492};
+		const std::uint32_t death = pipeline.catalog.Add(std::move(definition));
+		const ecs::Entity copter = pipeline.Make(1, "Copter", Fixed::FromInt(60));
+		pipeline.world.Get<Mortality>(copter)->death = death;
+		pipeline.world.Add<Experience>(copter);
+		pipeline.world.Get<Experience>(copter)->level = level;
+		pipeline.Hit(copter, Fixed::FromInt(500), Normal);
+		pipeline.Step();
+		while (pipeline.Played(450) == 0 && pipeline.tick < 200)
+			pipeline.Step();
+		BOOST_TEST_REQUIRE(pipeline.Played(450) == 1u);
+		std::uint32_t inherited = 0;
+		for (const DeathEvent &event : pipeline.played)
+			if (event.id == 490)
+				inherited = event.veterancy;
+		return std::array<std::size_t, 4>{pipeline.Played(490), pipeline.Played(491), pipeline.Played(492), inherited};
+	};
+	const auto veteran = run(1);
+	BOOST_TEST(veteran[0] == 1u);
+	BOOST_TEST(veteran[1] == 1u);
+	BOOST_TEST(veteran[2] == 1u);
+	BOOST_TEST(veteran[3] == 1u);
+	const auto regular = run(0);
+	BOOST_TEST(regular[0] == 0u);
+	BOOST_TEST(regular[1] == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(a_jet_killed_on_the_ground_just_blows_up)
+{
+	Pipeline pipeline(2);
+	const ecs::Entity jet = pipeline.Make(1, "Jet", Fixed{});
+	pipeline.world.Get<Mortality>(jet)->death = pipeline.jetDeath;
+	pipeline.Hit(jet, Fixed::FromInt(500), Normal);
+	pipeline.Step();
+	BOOST_TEST(!pipeline.world.IsAlive(jet));
+	BOOST_TEST(pipeline.Played(800) == 1u);
+	BOOST_TEST(pipeline.Played(500) == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(deaths_play_out_the_same_on_any_number_of_workers)
+{
+	const auto run = [](std::size_t workers) {
+		Pipeline pipeline(workers);
+		std::vector<ecs::Entity> trucks;
+		for (std::uint32_t index = 0; index < 64; ++index)
+		{
+			trucks.push_back(pipeline.Make(1, "Truck" + std::to_string(index), Fixed::FromInt(static_cast<std::int32_t>(index) * 3)));
+			if (index % 3 == 1)
+				pipeline.world.Get<Mortality>(trucks.back())->death = pipeline.helicopterDeath;
+			if (index % 3 == 0)
+			{
+				pipeline.world.Get<Mortality>(trucks.back())->death = pipeline.jetDeath;
+				pipeline.world.Add<Locomotion>(trucks.back());
+				pipeline.world.Get<Locomotion>(trucks.back())->speed = Fixed::FromInt(static_cast<std::int32_t>(index % 4));
+			}
+		}
+		for (std::size_t index = 0; index < trucks.size(); ++index)
+			pipeline.Hit(trucks[index], Fixed::FromInt(100 + static_cast<std::int32_t>(index) * 10), index % 5 == 0 ? Exploded : Normal);
+		std::vector<ecs::StateHashValue> hashes;
+		for (int step = 0; step < 120; ++step)
+		{
+			pipeline.Step();
+			hashes.push_back(pipeline.world.StateHash());
+		}
+		std::vector<std::uint32_t> ids;
+		for (const DeathEvent &event : pipeline.played)
+			ids.push_back(event.id * 100000u + event.entity.index);
+		return std::pair{hashes, ids};
+	};
+	const auto one = run(1);
+	const auto four = run(4);
+	BOOST_TEST((one.first == four.first));
+	BOOST_TEST((one.second == four.second));
+}
+
+BOOST_AUTO_TEST_CASE(a_checkpoint_while_dying_resumes_the_same_death)
+{
+	Pipeline saved(2);
+	const ecs::Entity truck = saved.Make(1, "Truck");
+	saved.Hit(truck, Fixed::FromInt(500), Normal);
+	saved.Step();
+	saved.Step();
+	engine::core::serialization::ByteWriter writer;
+	saved.world.SaveCheckpoint(writer);
+	const auto bytes = writer.Take();
+
+	Pipeline loaded(3);
+	engine::core::serialization::ByteReader reader(bytes);
+	BOOST_TEST_REQUIRE(loaded.world.LoadCheckpoint(reader));
+	loaded.tick = saved.tick;
+	BOOST_TEST(loaded.world.StateHash() == saved.world.StateHash());
+	BOOST_TEST_REQUIRE(loaded.world.Get<Dying>(truck) != nullptr);
+	BOOST_TEST(loaded.world.Get<Dying>(truck)->midpointTick == saved.world.Get<Dying>(truck)->midpointTick);
+	for (int step = 0; step < 9; ++step)
+	{
+		saved.Step();
+		loaded.Step();
+		BOOST_TEST(loaded.world.StateHash() == saved.world.StateHash());
+	}
+	BOOST_TEST(!saved.world.IsAlive(truck));
+	BOOST_TEST(!loaded.world.IsAlive(truck));
+}
+
+BOOST_AUTO_TEST_CASE(a_checkpoint_mid_crash_resumes_the_same_crash)
+{
+	Pipeline saved(2);
+	const ecs::Entity jet = saved.Make(1, "Jet", Fixed::FromInt(120));
+	saved.world.Get<Mortality>(jet)->death = saved.jetDeath;
+	saved.world.Add<Locomotion>(jet);
+	saved.world.Get<Locomotion>(jet)->speed = Fixed::FromInt(3);
+	saved.Hit(jet, Fixed::FromInt(500), Normal);
+	for (int step = 0; step < 20; ++step)
+		saved.Step();
+	engine::core::serialization::ByteWriter writer;
+	saved.world.SaveCheckpoint(writer);
+	const auto bytes = writer.Take();
+	Pipeline loaded(3);
+	engine::core::serialization::ByteReader reader(bytes);
+	BOOST_TEST_REQUIRE(loaded.world.LoadCheckpoint(reader));
+	loaded.tick = saved.tick;
+	for (int step = 0; step < 80; ++step)
+	{
+		saved.Step();
+		loaded.Step();
+		BOOST_TEST_REQUIRE(loaded.world.StateHash() == saved.world.StateHash());
+	}
+	BOOST_TEST(!saved.world.IsAlive(jet));
+	BOOST_TEST(!loaded.world.IsAlive(jet));
+}
+
+
+// SlowDeathBehavior::beginSlowDeath with FlingForce (calcRandomForce): a body with physics is lifted a unit off
+// the ground and pushed by a force of FlingForce..+Variance raised by FlingPitch..+Variance, facing where it flies,
+// on its own physics now (the locomotor lets go), sliding more on the ground (extra friction -3 per second);
+// update(): while it has not come down, its sink, midpoint and destruction frames wait a frame each tick; once
+// down they run; when it sinks it is held (its physics no longer move it).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_flung_body_flies_its_timers_wait_until_it_lands)
+{
+	Pipeline pipeline(1);
+	DeathDefinition definition;
+	SlowDeathDefinition slow;
+	slow.sinkDelay = 20;
+	slow.sinkRate = Fixed::FromRatio(1, 10);
+	slow.destructionDelay = 60;
+	slow.fling = {Fixed::FromInt(8), Fixed::FromInt(4), Engine::Math::TurnFromDegrees(40), Engine::Math::TurnFromDegrees(20)};
+	definition.slow.push_back(slow);
+	const std::uint32_t flingDeath = pipeline.catalog.Add(std::move(definition));
+	const ecs::Entity soldier = pipeline.Make(4, "Soldier", Fixed{});
+	*pipeline.world.Get<Mortality>(soldier) = {flingDeath};
+	pipeline.world.Add<PhysicsBody>(soldier);
+	PhysicsBody &body = *pipeline.world.Get<PhysicsBody>(soldier);
+	body.mass = Fixed::FromInt(2);
+	body.Set(physics_flag::Locomotive, true);
+	pipeline.Hit(soldier, Fixed::FromInt(500), Normal);
+	pipeline.Step();
+	const std::uint64_t diedAt = pipeline.tick;
+	const PhysicsBody &flung = *pipeline.world.Get<PhysicsBody>(soldier);
+	BOOST_TEST(!flung.Has(physics_flag::Locomotive));
+	BOOST_TEST(flung.Has(physics_flag::AllowToFall));
+	BOOST_TEST(flung.Has(physics_flag::AllowBouncing));
+	BOOST_TEST(flung.extraFriction.Raw() == (Fixed{} - Fixed::FromRatio(1, 10)).Raw());
+	// a = F / m: the force's size and rise within their ranges.
+	const auto force = flung.acceleration * Fixed::FromInt(2);
+	const Fixed size = Engine::Math::Length(force);
+	const Fixed epsilon = Fixed::FromRatio(1, 100);
+	BOOST_TEST((size >= Fixed::FromInt(8) - epsilon));
+	BOOST_TEST((size <= Fixed::FromInt(12) + epsilon));
+	BOOST_TEST((force.z >= size * Engine::Math::Sin(Engine::Math::TurnFromDegrees(40)) - epsilon));
+	BOOST_TEST((force.z <= size * Engine::Math::Sin(Engine::Math::TurnFromDegrees(60)) + epsilon));
+	const Transform &thrown = *pipeline.world.Get<Transform>(soldier);
+	BOOST_TEST(thrown.position.z.Raw() == Fixed::One().Raw());
+	const std::int32_t off = Engine::Math::DeltaTo(thrown.facing, Engine::Math::Heading(force.XY()));
+	BOOST_TEST(std::abs(off) <= static_cast<std::int32_t>(Engine::Math::TurnFromDegrees(1).units));
+	const Dying first = *pipeline.world.Get<Dying>(soldier);
+	BOOST_TEST(first.flung == 1u);
+	BOOST_TEST(first.sinkTick == diedAt + 20);
+	BOOST_TEST(first.destructionTick == diedAt + 60);
+	// Five ticks in the air (nothing moves it here): the timers wait five.
+	for (int step = 0; step < 5; ++step)
+		pipeline.Step();
+	BOOST_TEST(pipeline.world.Get<Dying>(soldier)->sinkTick == diedAt + 25);
+	BOOST_TEST(pipeline.world.Get<Dying>(soldier)->destructionTick == diedAt + 65);
+	BOOST_TEST(pipeline.world.Get<Dying>(soldier)->landed == 0u);
+	// Down: the tick it is found down still waits, then no more.
+	pipeline.world.Get<Transform>(soldier)->position.z = Fixed{};
+	pipeline.Step();
+	BOOST_TEST(pipeline.world.Get<Dying>(soldier)->landed == 1u);
+	BOOST_TEST(pipeline.world.Get<Dying>(soldier)->sinkTick == diedAt + 26);
+	pipeline.Step();
+	BOOST_TEST(pipeline.world.Get<Dying>(soldier)->sinkTick == diedAt + 26);
+	while (pipeline.tick < diedAt + 26)
+		pipeline.Step();
+	BOOST_TEST(pipeline.world.Get<Dying>(soldier)->held == 1u);
+	pipeline.Step();
+	BOOST_TEST(pipeline.world.Get<PhysicsBody>(soldier) == nullptr);
+}
+
+// SlowDeathBehavior::update, FLUNG_INTO_AIR and not bounced: a flung body whose last collidee (the physics'
+// m_lastCollidee) is SHRUBBERY is caught in the tree: held (its physics let go), sinking fifty times its sink rate a
+// tick (0.1: 5 a tick), its timers still waiting; from 12 up it is at 7, then 2, and the tick it is no longer above the
+// ground it is gone (destroyObject: no final phase). Something else it ran into (not a snag) does nothing. (Fixed point: 0.1
+// is 6553/65536, so fifty of it falls short of 5 by 20 raw a tick: within 64 raw.)
+BOOST_AUTO_TEST_CASE(legacy_parity_a_flung_body_is_caught_in_a_tree)
+{
+	Pipeline pipeline(1);
+	DeathDefinition definition;
+	SlowDeathDefinition slow;
+	slow.sinkDelay = 20;
+	slow.sinkRate = Fixed::FromRatio(1, 10);
+	slow.destructionDelay = 60;
+	slow.fling = {Fixed::FromInt(8), Fixed::FromInt(4), Engine::Math::TurnFromDegrees(40), Engine::Math::TurnFromDegrees(20)};
+	definition.slow.push_back(slow);
+	const std::uint32_t flingDeath = pipeline.catalog.Add(std::move(definition));
+	const ecs::Entity soldier = pipeline.Make(4, "Soldier", Fixed{});
+	*pipeline.world.Get<Mortality>(soldier) = {flingDeath};
+	pipeline.world.Add<PhysicsBody>(soldier);
+	pipeline.world.Get<PhysicsBody>(soldier)->mass = Fixed::FromInt(2);
+	pipeline.Hit(soldier, Fixed::FromInt(500), Normal);
+	pipeline.Step();
+	const ecs::Entity rock = pipeline.world.Create();
+	pipeline.world.Add<BoundingVolume>(rock);
+	pipeline.world.Get<BoundingVolume>(rock)->immobile = 1;
+	const ecs::Entity tree = pipeline.world.Create();
+	pipeline.world.Add<BoundingVolume>(tree);
+	pipeline.world.Get<BoundingVolume>(tree)->immobile = 1;
+	pipeline.world.Get<BoundingVolume>(tree)->snag = 1;
+	pipeline.world.Get<Transform>(soldier)->position.z = Fixed::FromInt(12);
+	pipeline.world.Get<Dying>(soldier)->lastCollidee = rock;
+	pipeline.Step();
+	BOOST_TEST(pipeline.world.Get<Dying>(soldier)->snagged == 0u);
+	BOOST_TEST((pipeline.world.Get<Transform>(soldier)->position.z == Fixed::FromInt(12)));
+	pipeline.world.Get<Dying>(soldier)->lastCollidee = tree;
+	const std::uint64_t destruction = pipeline.world.Get<Dying>(soldier)->destructionTick;
+	pipeline.Step();
+	BOOST_TEST(pipeline.world.Get<Dying>(soldier)->snagged == 1u);
+	BOOST_TEST(pipeline.world.Get<Dying>(soldier)->held == 1u);
+	BOOST_TEST(std::abs(pipeline.world.Get<Transform>(soldier)->position.z.Raw() - Fixed::FromInt(7).Raw()) <= 64);
+	BOOST_TEST(pipeline.world.Get<Dying>(soldier)->destructionTick == destruction + 1);
+	pipeline.Step();
+	BOOST_TEST(pipeline.world.Get<PhysicsBody>(soldier) == nullptr);
+	BOOST_TEST(std::abs(pipeline.world.Get<Transform>(soldier)->position.z.Raw() - Fixed::FromInt(2).Raw()) <= 64);
+	pipeline.Step();
+	pipeline.Step();
+	BOOST_TEST(!pipeline.world.IsAlive(soldier));
+}
+
+
+// CrushDie::onDie (crushLocationCheck): crushed to death by crush damage, a car (major radius 20, facing east) is
+// crushed at the end nearest its crusher: from the east its front, from the west its back, on top of it all of
+// it; that crush's sound plays its percent of the time. Other damage does not crush it.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_crushed_car_is_crushed_at_the_end_nearest_its_crusher)
+{
+	Pipeline pipeline(1);
+	pipeline.catalog.crushDamageType = 7;
+	DeathDefinition definition;
+	CrushDieDefinition crush;
+	crush.sound = {900, 901, 902};
+	crush.percent = {100, 100, 100};
+	definition.crushed.push_back(crush);
+	definition.majorRadius = Fixed::FromInt(20);
+	const std::uint32_t carDeath = pipeline.catalog.Add(std::move(definition));
+	const auto crushedBy = [&](int x, int y, std::uint32_t damageType) {
+		const ecs::Entity car = pipeline.Make(5, "", Fixed{});
+		*pipeline.world.Get<Mortality>(car) = {carDeath};
+		pipeline.world.Get<Transform>(car)->position = {Fixed::FromInt(500), Fixed::FromInt(500), {}};
+		const ecs::Entity tank = pipeline.Make(6, "", Fixed{});
+		pipeline.world.Get<Transform>(tank)->position = {Fixed::FromInt(500 + x), Fixed::FromInt(500 + y), {}};
+		pipeline.incoming.Add({car, tank, Fixed::FromInt(500), damageType, Normal});
+		pipeline.played.clear();
+		pipeline.Step();
+		const Dying *dying = pipeline.world.Get<Dying>(car);
+		std::uint32_t sound = 0;
+		for (const DeathEvent &event : pipeline.played)
+			if (event.kind == DeathEffectKind::Sound)
+				sound = event.id;
+		return std::pair{dying != nullptr ? dying->crushed : 0xFFu, sound};
+	};
+	BOOST_TEST((crushedBy(15, 0, 7) == std::pair{std::uint8_t{1}, 902u}));
+	BOOST_TEST((crushedBy(-15, 2, 7) == std::pair{std::uint8_t{2}, 901u}));
+	BOOST_TEST((crushedBy(1, 3, 7) == std::pair{std::uint8_t{3}, 900u}));
+	BOOST_TEST((crushedBy(15, 0, 2) == std::pair{std::uint8_t{0}, 0u}));
+}
+
+// StructureCollapseUpdate::update: waiting until its collapse frame, it then plays a burst and falls, the fall speeding
+// up by gravity (-64/s^2: 64/900 a frame^2; damping 0) each frame, so after n frames of falling it is g*n(n-1)/2 down:
+// 75 units (its geometry's height) first reached on the 47th frame of falling (47*46/2 * 64/900 = 76.9; 46*45/2: 73.6),
+// 46 frames after it started. Every burst delay a Delay phase (the big-burst roll failing) or a Burst one; then Final,
+// and it is drawn where it is again.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_structure_collapses_frame_by_frame)
+{
+	CollapseDefinition how;
+	how.height = Fixed::FromInt(75);
+	how.minBurstDelay = 8;
+	how.maxBurstDelay = 24;
+	how.bigBurstFrequency = 4;
+	how.maxShudder = Fixed::FromRatio(6, 10);
+	Collapse collapse{10, 0, {}, {}, 0, CollapseState::Waiting, {}};
+	DrawOffset offset{{}, how.maxShudder};
+	const Fixed gravity = Fixed::FromRatio(-64, 900);
+	std::vector<std::pair<std::uint64_t, CollapsePhase>> played;
+	std::uint64_t tick = 0;
+	const auto high = [](std::int64_t, std::int64_t most) { return most; }; // the big-burst roll fails
+	for (; tick < 100 && collapse.state != CollapseState::Done; ++tick)
+	{
+		SlowDeathSystem::StepCollapse(collapse, &offset, how, gravity, tick, high, [&](CollapsePhase phase) { played.emplace_back(tick, phase); });
+		if (tick == 11)
+			BOOST_TEST(offset.z.Raw() == gravity.Raw()); // a frame of falling: g down
+	}
+	BOOST_TEST_REQUIRE(played.size() == 3u);
+	BOOST_TEST((played[0] == std::pair{std::uint64_t{10}, CollapsePhase::Burst}));
+	BOOST_TEST((played[1] == std::pair{std::uint64_t{34}, CollapsePhase::Delay}));
+	BOOST_TEST((played[2] == std::pair{std::uint64_t{56}, CollapsePhase::Final}));
+	BOOST_TEST(offset.z.Raw() == 0);
+	BOOST_TEST(offset.shudder.Raw() == 0);
+	// The big-burst roll coming up 1: bursts all the way down.
+	Collapse again{0, 0, {}, {}, 0, CollapseState::Waiting, {}};
+	std::vector<CollapsePhase> phases;
+	const auto low = [](std::int64_t least, std::int64_t) { return least; };
+	for (std::uint64_t at = 0; at < 100 && again.state != CollapseState::Done; ++at)
+		SlowDeathSystem::StepCollapse(again, nullptr, how, gravity, at, low, [&](CollapsePhase phase) { phases.push_back(phase); });
+	// Burst at 0, then every 8 frames (8 .. 40), Final at 46.
+	BOOST_TEST(std::count(phases.begin(), phases.end(), CollapsePhase::Burst) == 6);
+	BOOST_TEST(std::count(phases.begin(), phases.end(), CollapsePhase::Delay) == 0);
+	BOOST_TEST((phases.back() == CollapsePhase::Final));
+}
+
+// OpenContain::onDie: a truck that does its riders no harm (no DamagePercentToUnits) lets them out alive where it was
+// (removeAllContained): no longer riding, not a casualty, as hurt as they were.
+BOOST_AUTO_TEST_CASE(a_killed_truck_lets_an_unharmed_rider_out)
+{
+	Pipeline pipeline(2);
+	const ecs::Entity truck = pipeline.Make(1, "Truck");
+	pipeline.world.Add<Transport>(truck);
+	const ecs::Entity rider = pipeline.Make(2, "Rider");
+	pipeline.world.Add<Passenger>(rider);
+	pipeline.world.Add<OffMap>(rider);
+	pipeline.manifest.Board(truck, rider);
+	pipeline.Hit(truck, Fixed::FromInt(500), Normal);
+	pipeline.Step();
+	BOOST_TEST_REQUIRE(pipeline.world.IsAlive(rider));
+	BOOST_TEST(pipeline.world.Get<Dying>(rider) == nullptr);
+	BOOST_TEST(pipeline.world.Get<OffMap>(rider) == nullptr);
+	BOOST_TEST(pipeline.world.Get<Passenger>(rider) == nullptr);
+	BOOST_TEST(pipeline.world.Get<Health>(rider)->current.Raw() == Fixed::FromInt(100).Raw());
+	BOOST_TEST(pipeline.casualties.list.size() == 1u);
+	BOOST_TEST(pipeline.manifest.Aboard(truck).empty());
+}
+
+// legacy_parity: HeightDieUpdate::update (a carpet bomb: TargetHeight 1). The first look (tick 1) starts InitialDelay
+// (2 ticks): nothing before tick 3. Carried, it only notes its height. Let go at 30 above flat ground it falls 10 a tick:
+// tick 4 at 20, tick 5 at 10, tick 6 at 0.5 (below 1): killed that tick, left where it is (above the ground). An
+// OnlyWhenMovingDown one that stops falling below the height lives on; SnapToGroundOnDeath puts it on the ground.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_bomb_dies_at_its_height_above_the_ground)
+{
+	ecs::World world{ecs::WorldConfig{1}};
+	world.RegisterComponent<HeightDie>();
+	world.RegisterComponent<Transform>();
+	world.RegisterComponent<OffMap>();
+	world.RegisterComponent<BodyExtent>();
+	world.FinalizeComponents();
+	engine::level::Heightfield flat;
+	flat.width = flat.height = 4;
+	flat.cellSize = Fixed::FromInt(10);
+	flat.heights.assign(16, Fixed{});
+	world.EmplaceResource<GroundHeight>(flat);
+	world.EmplaceResource<DeckSurfaces>();
+	world.EmplaceResource<KillRequests>();
+	world.EmplaceResource<ParticleClears>();
+	world.EmplaceResource<SpatialIndex>();
+	const auto make = [&](Fixed z, HeightDie die) {
+		const ecs::Entity entity = world.Create();
+		world.Add<HeightDie>(entity);
+		world.Add<Transform>(entity);
+		*world.Get<HeightDie>(entity) = die;
+		world.Get<Transform>(entity)->position.z = z;
+		return entity;
+	};
+	HeightDie bombRule;
+	bombRule.targetHeight = Fixed::One();
+	bombRule.initialDelay = 2;
+	const ecs::Entity bomb = make(Fixed::FromInt(30), bombRule);
+	world.Add<OffMap>(bomb);
+	HeightDie hoverRule;
+	hoverRule.targetHeight = Fixed::FromInt(5);
+	hoverRule.onlyWhenMovingDown = 1;
+	hoverRule.snapToGround = 1;
+	const ecs::Entity hover = make(Fixed::FromInt(3), hoverRule);
+	HeightDieSystem heights;
+	ecs::SystemRegistry registry;
+	registry.Register(heights);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	auto &kills = world.Resource<KillRequests>().entities;
+	const auto tick = [&](std::uint64_t at) { scheduler.Execute(engine::time::SimulationTime{at, engine::time::FixedStep{30}}); };
+	tick(1);
+	BOOST_TEST(world.Get<HeightDie>(bomb)->earliestDeath == 3u);
+	BOOST_TEST(kills.empty()); // the hover one is below 5 but not falling (3 is above its last height, -1 at first)
+	world.Remove<OffMap>(bomb);
+	world.Get<Transform>(bomb)->position.z = Fixed::FromInt(20);
+	tick(2);
+	BOOST_TEST(kills.empty()); // still in its delay
+	for (const auto &[at, z] : {std::pair{3, 20}, std::pair{4, 20}, std::pair{5, 10}})
+	{
+		world.Get<Transform>(bomb)->position.z = Fixed::FromInt(z);
+		tick(static_cast<std::uint64_t>(at));
+		BOOST_TEST(kills.empty());
+	}
+	world.Get<Transform>(bomb)->position.z = Fixed::FromRatio(1, 2);
+	world.Get<Transform>(hover)->position.z = Fixed::FromInt(2); // falling, below 5
+	tick(6);
+	BOOST_TEST_REQUIRE(kills.size() == 2u);
+	BOOST_TEST((world.Get<Transform>(bomb)->position.z == Fixed::FromRatio(1, 2)));
+	BOOST_TEST((world.Get<Transform>(hover)->position.z == Fixed{}));
+	tick(7);
+	BOOST_TEST(kills.size() == 2u); // once only
+}
+
+// HelicopterSlowDeathBehavior::beginSlowDeath / update (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Update/
+// HelicopterSlowDeathUpdate.cpp) with its NORMAL locomotor working on while dead (Locomotor::locoUpdate_maintainCurrentPosition,
+// maintainCurrentPositionHover, handleBehaviorZ, calcLiftToUseAtPt; setMaxLift, setMaxBraking) and PhysicsBehavior::update:
+// a Comanche (Mass 50, ComancheLocomotor: LiftDamaged 80, Braking 240, AccelerationDamaged 60, PreferredHeight 100,
+// Apply2DFrictionWhenAirborne; SpiralOrbitForwardSpeed 350, TurnRate 140, Damping 0.9999, MaxBraking 190, spin 100-300
+// every 100 ms by 10, FallHowFast 12%) shot down at rest 100 over flat ground. Each frame its locomotor brakes and lifts,
+// its physics moves it, then it spins and is pushed along the spiral. The numbers are a float simulation of that code
+// (scratch heli_sim.py): 99.991 high after the first frame, (0.233, 0, 99.974) after the second, (27.26, -19.93, 65.06)
+// after the 90th; within a unit of the ground on the 152nd, at (5.91, -24.74). The spiral is sensitive to rounding: the
+// same code in doubles lands at (0.53, -19.17). Fixed point follows within 0.05 over the first frames, 0.6 at the 60th
+// and 2 at the 90th, and lands within 8 of the floats' point (the floats' own float/double spread is 7); height and the
+// landing frame exactly.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_comanche_spirals_down_on_its_locomotor)
+{
+	const Fixed perSecond = Fixed::FromInt(30), perSecondSquared = Fixed::FromInt(900);
+	CrashDefinition how;
+	how.kind = CrashKind::Helicopter;
+	how.fallFactor = Fixed::FromRatio(12, 100);
+	how.spiralSpeed = Fixed::FromInt(350) / perSecond;
+	how.spiralDamping = Fixed::FromRatio(9999, 10000);
+	how.spiralTurnRate = static_cast<std::int32_t>(Engine::Math::TurnFromDegrees(Fixed::FromInt(140) / perSecond).units);
+	how.minSelfSpin = static_cast<std::int32_t>(Engine::Math::TurnFromDegrees(Fixed::FromInt(100) / perSecond).units);
+	how.maxSelfSpin = static_cast<std::int32_t>(Engine::Math::TurnFromDegrees(Fixed::FromInt(300) / perSecond).units);
+	how.spinStep = static_cast<std::int32_t>(Engine::Math::TurnFromDegrees(Fixed::FromInt(10) / perSecond).units);
+	how.spinDelay = 3;
+	how.maxBraking = Fixed::FromInt(190) / perSecondSquared;
+	how.hovering = true;
+	how.hover.acceleration = how.hover.accelerationDamaged = Fixed::FromInt(60) / perSecondSquared;
+	how.hover.lift = Fixed::FromInt(120) / perSecondSquared;
+	how.hover.liftDamaged = Fixed::FromInt(80) / perSecondSquared;
+	how.hover.braking = Fixed::FromInt(240) / perSecondSquared;
+	how.hover.preferredHeight = Fixed::FromInt(100);
+	how.hover.airborneFriction = true;
+	engine::level::Heightfield flat;
+	flat.width = flat.height = 101;
+	flat.cellSize = Fixed::FromInt(10);
+	flat.heights.assign(101 * 101, Fixed{});
+	const GroundHeight ground(flat);
+	const PhysicsSettings settings;
+	PhysicsBody body;
+	body.mass = Fixed::FromInt(50);
+	Crash crash;
+	crash.forwardSpeed = how.spiralSpeed;
+	crash.selfSpin = how.minSelfSpin;
+	crash.spinTick = 0;
+	Transform transform;
+	transform.position = {Fixed::FromInt(500), Fixed::FromInt(500), Fixed::FromInt(100)};
+	Attitude attitude;
+	std::vector<DeathPhase> phases;
+	const auto play = [&](DeathPhase phase, std::optional<Engine::Math::FixedVector3> = std::nullopt) { phases.push_back(phase); };
+	// Within `within` thousandths of (x, y, z) thousandths off the start.
+	const auto closeTo = [&](std::int64_t x, std::int64_t y, std::int64_t z, std::int64_t within) {
+		const auto &p = transform.position;
+		const auto off = [&](Fixed value, Fixed start, std::int64_t expected) {
+			return Engine::Math::Abs(value - start - Fixed::FromRatio(expected, 1000)) <= Fixed::FromRatio(within, 1000);
+		};
+		return off(p.x, Fixed::FromInt(500), x) && off(p.y, Fixed::FromInt(500), y) && off(p.z, Fixed{}, z);
+	};
+
+	std::uint64_t landed = 0;
+	for (std::uint64_t step = 1; step < 400 && landed == 0; ++step)
+	{
+		SlowDeathSystem::StepCrash(crash, how, transform, &attitude, ground, 1000 + step, play, [] {}, false, &body, &settings);
+		if (step == 1)
+			BOOST_TEST(closeTo(0, 0, 99991, 50));
+		if (step == 2)
+			BOOST_TEST(closeTo(233, 0, 99974, 50));
+		if (step == 60)
+			BOOST_TEST(closeTo(-11569, 10216, 84384, 600));
+		if (step == 90)
+			BOOST_TEST(closeTo(27260, -19932, 65056, 2000));
+		if (crash.groundTick != 0)
+			landed = step;
+	}
+	BOOST_TEST(landed == 152u);
+	BOOST_TEST(closeTo(5914, -24738, 774, 8000));
+	BOOST_TEST_REQUIRE(phases.size() == 1u);
+	BOOST_TEST((phases[0] == DeathPhase::HitGround));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

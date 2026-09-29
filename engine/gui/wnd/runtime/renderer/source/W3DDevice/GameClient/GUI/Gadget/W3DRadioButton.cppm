@@ -12,9 +12,8 @@ module;
 #include "W3DDevice/GameClient/W3DGadget.h"
 #include "W3DDevice/GameClient/W3DDisplayString.h"
 
-#include <cstdint>
-
 export module Engine.UI.WND.Runtime.Renderer.Gadget.RadioButton;
+import std;
 import Engine.UI.WND;
 
 namespace

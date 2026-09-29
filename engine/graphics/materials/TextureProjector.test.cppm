@@ -1,12 +1,11 @@
 module;
 #define BOOST_TEST_MODULE TextureProjectorTests
 #include <boost/test/included/unit_test.hpp>
-#include <cmath>
-#include <cstddef>
 
 #include "../tests/LegacyMathReference.h"
 
 export module Graphics.Materials.TextureProjector.Tests;
+import std;
 import Graphics.Materials.TextureProjector;
 import Graphics.Scene.Views.View;
 

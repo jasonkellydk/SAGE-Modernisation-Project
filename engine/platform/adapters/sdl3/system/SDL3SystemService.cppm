@@ -1,8 +1,7 @@
 module;
 #include <SDL3/SDL.h>
-#include <optional>
-#include <string>
 export module engine.platform.adapters.sdl3.system;
+import std;
 import engine.platform;
 
 export namespace engine::platform::sdl3

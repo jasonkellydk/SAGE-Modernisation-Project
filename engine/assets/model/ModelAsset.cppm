@@ -1,15 +1,5 @@
-module;
-
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <memory>
-#include <span>
-#include <string>
-#include <utility>
-#include <vector>
-
 export module Assets.Models;
+import std;
 
 import Assets.Handles;
 import Assets.Identity;

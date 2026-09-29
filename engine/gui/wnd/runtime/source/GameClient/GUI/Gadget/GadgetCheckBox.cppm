@@ -55,6 +55,7 @@ module;
 #include "GameClient/Keyboard.h"
 
 export module Engine.UI.WND.Runtime.Gadget.CheckBox;
+import std;
 
 #include "GameClient/Gadget.h"
 

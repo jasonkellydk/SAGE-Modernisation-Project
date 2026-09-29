@@ -1,4 +1,5 @@
 export module engine.navigation.reference.request_queue;
+import std;
 
 export namespace navigation::reference {
 

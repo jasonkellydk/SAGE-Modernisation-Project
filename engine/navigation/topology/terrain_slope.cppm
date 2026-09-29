@@ -1,8 +1,5 @@
-module;
-#include <algorithm>
-#include <array>
-
 export module engine.navigation.topology.terrain_slope;
+import std;
 
 export namespace navigation {
 inline bool terrainCellIsCliff(const std::array<float, 4>& heights) {

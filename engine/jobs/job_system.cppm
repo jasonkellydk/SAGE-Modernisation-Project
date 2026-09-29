@@ -1,24 +1,12 @@
 module;
 
-#include <atomic>
-#include <algorithm>
-#include <cassert>
-#include <chrono>
-#include <cstddef>
-#include <cstdint>
-#include <exception>
-#include <memory>
-#include <span>
-#include <stdexcept>
-#include <thread>
-#include <utility>
-#include <vector>
-
 #if defined(_M_X64) || defined(_M_IX86) || defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
 #endif
 
 export module engine.jobs.job_system;
+import std;
+import engine.core.contracts;
 
 export namespace engine::jobs
 {
@@ -66,6 +54,24 @@ public:
 
 	[[nodiscard]] std::size_t WorkerCount() const noexcept { return m_workerCount; }
 
+	// A burst (several batches back to back, such as one simulation tick's waves): while one is open, idle workers keep
+	// spinning between batches instead of going to sleep, so each batch starts on hot threads. Which thread runs a
+	// job never changes a result; only the hand-off latency. Bursts nest.
+	void BeginBurst() noexcept { m_bursts.fetch_add(1, std::memory_order_acq_rel); }
+	void EndBurst() noexcept { m_bursts.fetch_sub(1, std::memory_order_acq_rel); }
+
+	class Burst
+	{
+	public:
+		explicit Burst(JobSystem &jobs) noexcept : m_jobs(&jobs) { m_jobs->BeginBurst(); }
+		~Burst() noexcept { m_jobs->EndBurst(); }
+		Burst(const Burst &) = delete;
+		Burst &operator=(const Burst &) = delete;
+
+	private:
+		JobSystem *m_jobs;
+	};
+
 private:
  struct WorkDeque;
 
@@ -76,7 +82,19 @@ private:
  alignas(64) std::atomic<std::size_t> m_activeWorkers{0};
  alignas(64) std::atomic<std::size_t> m_activeWorkerLimit{0};
  std::size_t m_workerCount{0};
+	// The published batch: its generation in the high bits and how many
+	// workers take part in the low 16 bits, in ONE word, so a worker never
+	// pairs one batch's generation with another batch's worker count (that
+	// mismatch let a late worker take part twice and the batch never end).
 	alignas(64) std::atomic<std::uint64_t> m_generation{0};
+	// Blocking hand-off once spinning gives up: workers sleep on m_wake for a
+	// new generation, the caller on m_done for the batch's last worker. Both
+	// are notified under their mutex, so a wake-up cannot slip between a
+	// sleeper's check and its wait.
+	std::mutex m_wakeMutex;
+	std::condition_variable m_wake;
+	std::mutex m_doneMutex;
+	std::condition_variable m_done;
 	std::exception_ptr m_failure{};
 	alignas(64) std::atomic<bool> m_stopping{false};
 	alignas(64) std::atomic<bool> m_failureReady{false};
@@ -85,6 +103,7 @@ private:
 	alignas(64) std::atomic<std::uint32_t> m_lifecycle{0};
 
  alignas(64) std::atomic<bool> m_batchFailed{false};
+	alignas(64) std::atomic<std::uint32_t> m_bursts{0};
 };
 
 } // namespace engine::jobs
@@ -98,10 +117,11 @@ namespace
 inline void spinPause(std::size_t &iterations) noexcept
 {
  const auto iteration=iterations++;
- // Spin briefly for hand-off latency, then back off so an idle game does not
- // burn a logical processor per worker. This scheduler has no direct OS APIs.
+ // Spin briefly for hand-off latency, then yield. Long waits block on the
+ // atomics instead (see SpinLimit): sleeping would round up to the OS timer
+ // tick (~15.6 ms on Windows) on every batch hand-off.
  if (iteration>=1024) {
-  std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  std::this_thread::yield();
   return;
  }
 #if defined(_M_X64) || defined(_M_IX86) || defined(__x86_64__) || defined(__i386__)
@@ -112,6 +132,9 @@ inline void spinPause(std::size_t &iterations) noexcept
 	if ((iteration & 0x3fu) == 0)
 		std::this_thread::yield();
 }
+
+// Spins before a waiter blocks on an atomic (futex / WaitOnAddress).
+constexpr std::size_t SpinLimit = 1024;
 
 } // namespace
 
@@ -221,7 +244,11 @@ void JobSystem::Shutdown() noexcept
  // than blocking on a mutex/condition variable.  spinPause periodically
  // yields so an idle scheduler does not pin every logical processor.
  m_stopping.store(true, std::memory_order_release);
-	m_generation.fetch_add(1, std::memory_order_acq_rel);
+	{
+		const std::lock_guard lock(m_wakeMutex);
+		m_generation.store(((m_generation.load(std::memory_order_relaxed) >> 16) + 1) << 16, std::memory_order_release);
+	}
+	m_wake.notify_all();
 	for (std::thread &worker : m_workers)
 	{
 		if (worker.joinable())
@@ -291,7 +318,12 @@ void JobSystem::Submit(const std::span<Job> jobs)
 	m_activeWorkerLimit.store(activeWorkers, std::memory_order_relaxed);
 	m_activeWorkers.store(activeWorkers, std::memory_order_relaxed);
 	m_lifecycle.store(1, std::memory_order_release);
-	m_generation.fetch_add(1, std::memory_order_release);
+	{
+		const std::lock_guard lock(m_wakeMutex);
+		const std::uint64_t participants = (std::min<std::size_t>)(activeWorkers, 0xFFFFu);
+		m_generation.store((((m_generation.load(std::memory_order_relaxed) >> 16) + 1) << 16) | participants, std::memory_order_release);
+	}
+	m_wake.notify_all();
 }
 
 bool JobSystem::TryComplete()
@@ -313,9 +345,48 @@ bool JobSystem::TryComplete()
 
 void JobSystem::Wait()
 {
+	// With more than one worker, the caller takes jobs of its own batch while it waits (stealing, as a
+	// worker would): a one- or two-job batch runs at once instead of waiting for a worker to wake. (A
+	// one-worker system stays strictly serial.) Then spin for a fast hand-off, then block until the last
+	// worker finishes.
 	std::size_t spins = 0;
+	while (m_workerCount > 1 && !m_batchFailed.load(std::memory_order_acquire))
+	{
+		Job job{};
+		bool claimed = false;
+		for (const auto &deque : m_deques)
+			if (deque->stealTop(job))
+			{
+				claimed = true;
+				break;
+			}
+		if (!claimed)
+			break;
+		try
+		{
+			job.function(job.context);
+		}
+		catch (...)
+		{
+			if (!m_batchFailed.exchange(true, std::memory_order_acq_rel))
+			{
+				m_failure = std::current_exception();
+				m_failureReady.store(true, std::memory_order_release);
+			}
+			break;
+		}
+	}
 	while (!TryComplete())
+	{
+		if (spins >= SpinLimit)
+		{
+			std::unique_lock lock(m_doneMutex);
+			m_done.wait_for(lock, std::chrono::milliseconds(1),
+				[&] { return m_activeWorkers.load(std::memory_order_acquire) == 0; });
+			continue;
+		}
 		spinPause(spins);
+	}
 }
 
 void JobSystem::WorkerLoop(const std::size_t workerIndex)
@@ -327,13 +398,22 @@ void JobSystem::WorkerLoop(const std::size_t workerIndex)
 		std::uint64_t generation = m_generation.load(std::memory_order_acquire);
 		while (!m_stopping.load(std::memory_order_acquire) && generation == observedGeneration)
 		{
-			spinPause(spins);
+			// Idle workers block instead of spinning once the hand-off window passes (not during a burst).
+			if (spins >= SpinLimit && m_bursts.load(std::memory_order_acquire) == 0)
+			{
+				std::unique_lock lock(m_wakeMutex);
+				m_wake.wait_for(lock, std::chrono::milliseconds(1), [&] {
+					return m_stopping.load(std::memory_order_acquire) || m_generation.load(std::memory_order_acquire) != observedGeneration;
+				});
+			}
+			else
+				spinPause(spins);
 			generation = m_generation.load(std::memory_order_acquire);
 		}
 		if (m_stopping.load(std::memory_order_acquire))
 			return;
 		observedGeneration = generation;
-  const auto activeLimit=m_activeWorkerLimit.load(std::memory_order_acquire);
+  const auto activeLimit=static_cast<std::size_t>(generation & 0xFFFFu);
   if (workerIndex>=activeLimit) continue;
   while (!m_batchFailed.load(std::memory_order_acquire))
   {
@@ -371,8 +451,14 @@ void JobSystem::WorkerLoop(const std::size_t workerIndex)
   }
 
 		const std::size_t previous = m_activeWorkers.fetch_sub(1, std::memory_order_acq_rel);
-		assert(previous > 0);
-		(void)previous;
+		engine::core::Assert(previous > 0);
+		if (previous == 1)
+		{
+			{
+				const std::lock_guard lock(m_doneMutex);
+			}
+			m_done.notify_all();
+		}
 	}
 }
 

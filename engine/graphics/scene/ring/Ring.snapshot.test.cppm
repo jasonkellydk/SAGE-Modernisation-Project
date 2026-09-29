@@ -4,11 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-
 export module Graphics.Scene.Ring.Snapshot.Tests;
+import std;
 
 import Graphics.Tests.Device;
 import Graphics.RHI;

@@ -1,0 +1,665 @@
+#define BOOST_TEST_MODULE GeneralsZhPresentationSound
+#include <boost/test/included/unit_test.hpp>
+
+#include <algorithm>
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+import engine.gameplay.common.appearance.components.indicator_color;
+import games.generalszh.presentation.audio.algorithms.audio_schedule;
+import games.generalszh.presentation.objects.algorithms.presentation_schedule;
+import engine.ecs.core.world;
+import engine.gameplay.common.health.components.health;
+import engine.gameplay.common.spatial.components.transform;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+import engine.gameplay.rts.parachute.components.parachute;
+import engine.gameplay.rts.parachute.definitions.parachute_definition;
+import engine.gameplay.common.weapons.resources.weapon_catalog;
+
+using namespace generalszh::presentation;
+using namespace engine::audio;
+
+namespace
+{
+class Tones final : public SoundLibrary
+{
+public:
+	std::shared_ptr<const PcmBuffer> Sound(std::string_view name) override
+	{
+		played.emplace_back(name);
+		auto buffer = std::make_shared<PcmBuffer>();
+		buffer->sampleRate = 1000;
+		buffer->samples.assign(20, 0.1f); // 10 frames
+		return buffer;
+	}
+	std::shared_ptr<StreamFeed> Stream(std::string_view) override { return nullptr; }
+	std::vector<std::string> played;
+};
+
+SoundEventDefinition Sound(std::string name, std::string file, Bus bus, std::uint32_t control = 0)
+{
+	SoundEventDefinition sound;
+	sound.name = std::move(name);
+	sound.sounds = {std::move(file)};
+	sound.bus = bus;
+	sound.control = control;
+	return sound;
+}
+
+// Sound's systems over a small world: one definition (a helicopter with
+// ambient, move and crash loops, a burning loop), shown through the frame's
+// presented objects, mixed into a test mixer.
+struct Stage
+{
+	Stage()
+	{
+		content.events.Define("Rotor") = Sound("Rotor", "rotor", Bus::Effects, sound_control::Loop);
+		content.events.Define("Waves") = Sound("Waves", "waves", Bus::Effects, sound_control::Loop);
+		content.events.Define("Takeoff") = Sound("Takeoff", "takeoff", Bus::Effects);
+		content.events.Define("Fire") = Sound("Fire", "fire", Bus::Effects, sound_control::Loop);
+		content.events.Define("Whine") = Sound("Whine", "whine", Bus::Effects, sound_control::Loop);
+		content.events.Define("Theme") = Sound("Theme", "theme", Bus::Music);
+		content.events.Define("Line") = Sound("Line", "line", Bus::Speech);
+		content.events.Define("Servo") = Sound("Servo", "servo", Bus::Effects, sound_control::Loop);
+		content.events.Define("Smoke") = Sound("Smoke", "smoke", Bus::Effects, sound_control::Loop);
+		content.events.Define("Creak") = Sound("Creak", "creak", Bus::Effects);
+		content.events.Define("Crack") = Sound("Crack", "crack", Bus::Effects);
+		content.events.Define("Limp") = Sound("Limp", "limp", Bus::Effects, sound_control::Loop);
+		content.events.Define("Cloak") = Sound("Cloak", "cloak", Bus::Effects);
+		content.events.Define("Burner") = Sound("Burner", "burner", Bus::Effects);
+		content.events.Define("LowFuel") = Sound("LowFuel", "lowfuel", Bus::Effects);
+		content.events.Define("Uncloak") = Sound("Uncloak", "uncloak", Bus::Effects);
+		world.RegisterComponent<engine::gameplay::DefinitionRef>();
+		world.RegisterComponent<engine::gameplay::Owner>();
+		world.RegisterComponent<engine::gameplay::Jet>();
+		RegisterSoundComponents(world);
+		world.RegisterComponent<MotionEmission>();
+		world.FinalizeComponents();
+		world.EmplaceResource<PresentationFrame>();
+		LookCatalog &catalog = world.EmplaceResource<LookCatalog>();
+		world.EmplaceResource<LookClips>();
+		DefinitionLooks copter;
+		copter.ambientSound = "Waves";
+		copter.moveStart = "Takeoff";
+		copter.moveLoop = "Rotor";
+		copter.burningSound = "Fire";
+		copter.crashSound = "Whine";
+		copter.turretLoop = "Servo";
+		copter.ambientReallyDamaged = "Smoke";
+		copter.onDamaged = "Creak";
+		copter.onReallyDamaged = "Crack";
+		catalog.byDefinition = {copter};
+		catalog.known = {1};
+		catalog.bits.aflame = 1;
+		catalog.bits.dying = 2;
+		catalog.bits.specialDamaged = 3;
+		catalog.bits.damaged = 4;
+		catalog.bits.reallyDamaged = 5;
+		catalog.bits.rubble = 6;
+		world.EmplaceResource<PresentedObjects>();
+		world.EmplaceResource<MotionLooks>();
+		world.EmplaceResource<engine::gameplay::Relationships>(8u);
+		world.EmplaceResource<AudioState>();
+		world.EmplaceResource<AudioHandle>(AudioHandle{&content, &player, &mixer});
+		world.EmplaceResource<AudioCommands>();
+		world.EmplaceResource<SoundRequests>();
+		world.EmplaceResource<ListenerPose>();
+		systems.Register(loops);
+		systems.Register(mix);
+		systems.OrderBefore<SoundLoopSystem, AudioMixSystem>();
+		systems.Finalize(world.Components());
+		scheduler = std::make_unique<ecs::Scheduler>(world, systems, engine::jobs::JobSystemConfig{2});
+		scheduler->Finalize(engine::time::FixedStep{30});
+		entity = world.Create();
+		world.Add<engine::gameplay::DefinitionRef>(entity);
+	}
+
+	// One frame: `shown` (moving, with those condition bits) or not on screen.
+	void Frame(bool shown, bool moving = false, std::uint64_t bits = 0, bool turning = false)
+	{
+		std::vector<float> block(20);
+		mixer.Mix(block);
+		PresentedObjects &presented = world.Resource<PresentedObjects>();
+		presented.Reset(1);
+		if (shown)
+		{
+			PresentedObject object{entity, 1, 0, 0, 0, {10, 0, 0}, 0.0f, 1.0f, {}, moving, turning};
+			object.appearance.flags[0] = bits;
+			presented.SlotAt(0).push_back(object);
+		}
+		auto &frame = world.Resource<PresentationFrame>();
+		++frame.frame;
+		scheduler->Execute(engine::time::SimulationTime{frame.frame, engine::time::FixedStep{30}});
+	}
+
+	std::size_t Count(std::string_view file) const
+	{
+		return static_cast<std::size_t>(std::count(library.played.begin(), library.played.end(), file));
+	}
+
+	std::size_t Loops() const
+	{
+		const SoundLoops *loops = world.Side<SoundLoops>().Get(entity);
+		return loops == nullptr ? 0u : (loops->ambient != 0) + (loops->move != 0) + (loops->burning != 0) + (loops->crashing != 0);
+	}
+
+	AudioContent content;
+	Mixer mixer{1000};
+	Tones library;
+	SoundPlayer player{mixer, library};
+	ecs::World world{ecs::WorldConfig{4}};
+	SoundLoopSystem loops;
+	AudioMixSystem mix;
+	ecs::SystemRegistry systems;
+	std::unique_ptr<ecs::Scheduler> scheduler;
+	ecs::Entity entity;
+};
+}
+
+BOOST_AUTO_TEST_SUITE(audio_systems)
+
+BOOST_AUTO_TEST_CASE(objects_carry_their_loops_as_side_tables_and_lose_them_when_gone)
+{
+	Stage stage;
+	stage.Frame(true); // first seen: its side table is added
+	stage.Frame(true);
+	BOOST_TEST(stage.Loops() == 1u); // parked: only its ambient
+	BOOST_TEST(stage.Count("rotor") == 0u);
+	for (int frame = 0; frame < 5; ++frame)
+		stage.Frame(true, true);
+	BOOST_TEST(stage.Count("takeoff") == 1u); // once, as it starts moving
+	// AIInternalMoveToState::startMoveSound: a start sound instead of the move loop, not both.
+	BOOST_TEST(stage.Count("rotor") == 0u);
+	BOOST_TEST(stage.Loops() == 1u);
+	stage.Frame(true, false);
+	BOOST_TEST(stage.Loops() == 1u);
+	stage.Frame(false); // gone from the screen
+	BOOST_TEST(stage.Loops() == 0u);
+	for (int frame = 0; frame < 5; ++frame)
+		stage.Frame(false);
+	BOOST_TEST(stage.player.PlayingCount() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(burning_crackles_while_aflame_and_a_crash_whines_until_it_is_down)
+{
+	Stage stage;
+	stage.Frame(true);
+	for (int frame = 0; frame < 5; ++frame)
+		stage.Frame(true, false, 1u << 1); // aflame
+	BOOST_TEST(stage.Count("fire") == 1u);
+	BOOST_TEST(stage.Loops() == 2u); // ambient and fire
+	stage.Frame(true, false, 1u << 2); // gone out; dying and falling
+	BOOST_TEST(stage.Count("whine") == 1u);
+	BOOST_TEST(stage.Loops() == 2u); // ambient and the crash
+	stage.Frame(true, false, (1u << 2) | (1u << 3)); // down
+	BOOST_TEST(stage.Loops() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(music_repeats_speech_queues_and_disabled_sounds_stay_silent)
+{
+	Stage stage;
+	auto &commands = stage.world.Resource<AudioCommands>().pending;
+	commands.push_back({AudioCommand::Kind::MusicTrack, "Theme"});
+	for (int frame = 0; frame < 6; ++frame)
+		stage.Frame(false);
+	BOOST_TEST(stage.Count("theme") >= 2u); // a 10-frame track over the frames that follow its command: it came back
+	BOOST_TEST(stage.world.Resource<AudioState>().musicName == "Theme");
+
+	commands.push_back({AudioCommand::Kind::SpeechPlay, "Line"});
+	commands.push_back({AudioCommand::Kind::SpeechPlay, "Line"});
+	stage.Frame(false);
+	BOOST_TEST(stage.Count("line") == 1u); // the second waits its turn
+	for (int frame = 0; frame < 4; ++frame)
+		stage.Frame(false);
+	BOOST_TEST(stage.Count("line") == 2u);
+
+	commands.push_back({AudioCommand::Kind::SoundDisable, "Takeoff"});
+	auto &sounds = stage.world.Resource<SoundRequests>().pending;
+	sounds.push_back({"Takeoff", {0, 0, 0}});
+	sounds.push_back({"Unknown", {0, 0, 0}});
+	stage.Frame(false);
+	BOOST_TEST(stage.Count("takeoff") == 0u);
+	BOOST_TEST(sounds.empty()); // requests are drained
+}
+
+BOOST_AUTO_TEST_CASE(a_scripts_volume_override_applies_to_what_plays_and_what_plays_next)
+{
+	Stage stage;
+	stage.Frame(true);
+	stage.Frame(true); // its ambient waves start
+	auto &commands = stage.world.Resource<AudioCommands>().pending;
+	commands.push_back({AudioCommand::Kind::VolumeOverride, "Waves", false, 0.25f});
+	stage.Frame(true);
+	const auto &state = stage.world.Resource<AudioState>();
+	BOOST_TEST_REQUIRE(state.volumeOverrides.size() == 1u);
+	BOOST_TEST(VolumeOverride(state, "Waves").value_or(0.0f) == 0.25f);
+	BOOST_TEST(!VolumeOverride(state, "Rotor").has_value());
+	commands.push_back({AudioCommand::Kind::VolumeOverride, "Waves", false, -1.0f}); // its own again
+	stage.Frame(true);
+	BOOST_TEST(state.volumeOverrides.empty());
+}
+
+// Legacy parity (AudioManager::setAudioEventEnabled = setAudioEventVolumeOverride(0 / -1), removeAudioEvent,
+// ScriptActions::doSoundOverrideVolume(-100)): a disabled sound is an override of nothing (culled when asked to play); a
+// restore or an enable takes it away (it plays again); none named takes every override away; a remove stops what plays.
+BOOST_AUTO_TEST_CASE(legacy_parity_disabling_a_sound_is_an_override_that_enabling_or_restoring_takes_away)
+{
+	Stage stage;
+	auto &commands = stage.world.Resource<AudioCommands>().pending;
+	auto &sounds = stage.world.Resource<SoundRequests>().pending;
+	const auto &state = stage.world.Resource<AudioState>();
+	commands.push_back({AudioCommand::Kind::SoundDisable, "Takeoff"});
+	commands.push_back({AudioCommand::Kind::VolumeOverride, "Waves", false, 0.5f});
+	stage.Frame(false);
+	BOOST_TEST(VolumeOverride(state, "Takeoff").value_or(1.0f) == 0.0f);
+	sounds.push_back({"Takeoff", {0, 0, 0}});
+	stage.Frame(false);
+	BOOST_TEST(stage.Count("takeoff") == 0u);
+	commands.push_back({AudioCommand::Kind::SoundEnable, "Takeoff"}); // AUDIO_RESTORE_VOLUME_TYPE / SOUND_ENABLE_TYPE
+	sounds.push_back({"Takeoff", {0, 0, 0}});
+	stage.Frame(false);
+	BOOST_TEST(!VolumeOverride(state, "Takeoff").has_value());
+	BOOST_TEST(stage.Count("takeoff") == 1u);
+	BOOST_TEST(VolumeOverride(state, "Waves").has_value());
+	commands.push_back({AudioCommand::Kind::SoundEnable}); // SOUND_ENABLE_ALL / AUDIO_RESTORE_VOLUME_ALL_TYPE
+	stage.Frame(false);
+	BOOST_TEST(state.volumeOverrides.empty());
+	// A script's own sound heard without a position.
+	SoundRequest unplaced{"Takeoff"};
+	unplaced.positioned = false;
+	sounds.push_back(unplaced);
+	stage.Frame(false);
+	BOOST_TEST(stage.Count("takeoff") == 2u);
+}
+
+// Legacy parity (Drawable::enableAmbientSoundFromScript, Drawable::update's ambient restart): a script turning its
+// sound off stops its ambient and keeps it off while shown; on again, it plays again.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_script_turns_an_objects_ambient_off_and_on)
+{
+	Stage stage;
+	stage.Frame(true);
+	stage.Frame(true);
+	BOOST_TEST(stage.Count("waves") == 1u);
+	SoundLoops *loops = stage.world.Side<SoundLoops>().Get(stage.entity);
+	BOOST_TEST_REQUIRE(loops != nullptr);
+	stage.player.Stop(loops->ambient);
+	loops->ambient = 0;
+	loops->scriptOff = 1;
+	for (int frame = 0; frame < 3; ++frame)
+		stage.Frame(true);
+	BOOST_TEST(stage.Count("waves") == 1u);
+	BOOST_TEST(stage.world.Side<SoundLoops>().Get(stage.entity)->ambient == 0u);
+	loops = stage.world.Side<SoundLoops>().Get(stage.entity);
+	loops->scriptOff = 0;
+	loops->scriptStart = 1;
+	stage.Frame(true);
+	BOOST_TEST(stage.Count("waves") == 2u);
+}
+
+// Legacy parity (GeneralsMD TurretAI.cpp, TurretAI::updateTurretAI): the
+// TurretMoveLoop sound starts while the turret turns or pitches and stops as
+// soon as a frame goes by without it.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_turret_sounds_while_it_turns)
+{
+	Stage stage;
+	stage.Frame(true);
+	stage.Frame(true); // seen: its loops are kept from now on
+	BOOST_TEST(stage.Count("servo") == 0u);
+	stage.Frame(true, false, 0, true);
+	BOOST_TEST(stage.Count("servo") == 1u);
+	BOOST_TEST(stage.world.Side<SoundLoops>().Get(stage.entity)->turret != 0u);
+	stage.Frame(true, false, 0, true); // still turning: the same loop keeps playing
+	BOOST_TEST(stage.Count("servo") == 1u);
+	stage.Frame(true);
+	BOOST_TEST(stage.world.Side<SoundLoops>().Get(stage.entity)->turret == 0u);
+}
+
+
+// Drawable::startAmbientSound by damage state (getAmbientSoundByDamage) and ActiveBody::attemptDamage's one-shots:
+// damaged, it plays SoundOnDamaged once and restarts its ambient (none of its own for damaged: the pristine one);
+// really damaged, SoundOnReallyDamaged once and its SoundAmbientReallyDamaged; rubble, its rubble ambient (none).
+BOOST_AUTO_TEST_CASE(legacy_parity_damage_states_change_the_ambient_and_sound_once)
+{
+	Stage stage;
+	stage.Frame(true);
+	stage.Frame(true);
+	BOOST_TEST(stage.Count("waves") == 1u);
+	stage.Frame(true, false, 1u << 4);
+	stage.Frame(true, false, 1u << 4);
+	BOOST_TEST(stage.Count("creak") == 1u);
+	BOOST_TEST(stage.Count("waves") == 2u);
+	stage.Frame(true, false, 1u << 5);
+	stage.Frame(true, false, 1u << 5);
+	BOOST_TEST(stage.Count("crack") == 1u);
+	BOOST_TEST(stage.Count("smoke") == 1u);
+	stage.Frame(true, false, 1u << 6);
+	BOOST_TEST(stage.world.Side<SoundLoops>().Get(stage.entity)->ambient == 0u);
+	BOOST_TEST(stage.Count("creak") == 1u);
+}
+
+// FiringTracker::shotFired / update (m_audioHandle): an ECM Tank's beam (FireSoundLoopTime) keeps one fire sound looping
+// while it fires, not a new one a shot (the original's FrequencyJammerWeaponLoop); once the tracker's loop time is up the
+// loop stops; a shot finding it stopped starts it afresh; going FAST the tank says its VoiceRapidFire, once.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_looping_fire_sound_loops_once_while_firing)
+{
+	AudioContent content;
+	content.events.Define("Jam") = Sound("Jam", "jam", Bus::Effects, sound_control::Loop);
+	content.events.Define("Rapid") = Sound("Rapid", "rapid", Bus::Effects);
+	Mixer mixer{1000};
+	Tones library;
+	SoundPlayer player{mixer, library};
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<engine::gameplay::DefinitionRef>();
+	world.RegisterComponent<engine::gameplay::Transform>();
+	world.RegisterComponent<engine::gameplay::Armament>();
+	world.RegisterComponent<engine::gameplay::FiringTracker>();
+	RegisterSoundComponents(world);
+	world.FinalizeComponents();
+	LookCatalog &catalog = world.EmplaceResource<LookCatalog>();
+	DefinitionLooks tank;
+	tank.rapidFireVoice = "Rapid";
+	catalog.byDefinition = {tank};
+	catalog.known = {1};
+	world.EmplaceResource<AudioState>();
+	world.EmplaceResource<AudioHandle>(AudioHandle{&content, &player, &mixer});
+	world.EmplaceResource<WeaponFireLoops>().byWeapon = {"Jam"};
+	FireLoopSystem system;
+	ecs::SystemRegistry registry;
+	registry.Register(system);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{2});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	const ecs::Entity ecm = world.Create();
+	world.Add<engine::gameplay::DefinitionRef>(ecm);
+	world.Add<engine::gameplay::Transform>(ecm);
+	world.Add<engine::gameplay::Armament>(ecm);
+	world.Add<engine::gameplay::FiringTracker>(ecm);
+	std::uint64_t frame = 0;
+	const auto step = [&] {
+		std::vector<float> block(20);
+		mixer.Mix(block);
+		scheduler.Execute(engine::time::SimulationTime{++frame, engine::time::FixedStep{30}});
+	};
+	const auto count = [&](std::string_view file) { return std::count(library.played.begin(), library.played.end(), file); };
+	auto &tracker = *world.Get<engine::gameplay::FiringTracker>(ecm);
+	auto &armament = *world.Get<engine::gameplay::Armament>(ecm);
+	step();
+	BOOST_TEST(world.Side<FireSoundLoop>().Get(ecm) == nullptr); // nothing fired: nothing kept
+	for (std::uint64_t shot = 1; shot <= 10; ++shot)
+	{
+		armament.firedTick = shot * 3;
+		tracker.loopWeapon = 0;
+		tracker.loopUntil = shot * 3 + 4;
+		step();
+		step();
+	}
+	BOOST_TEST(count("jam") == 1); // one loop for ten shots
+	const std::uint64_t handle = world.Side<FireSoundLoop>().Get(ecm)->handle;
+	BOOST_TEST(handle != 0u);
+	BOOST_TEST(player.Playing(handle));
+	tracker.loopUntil = 0;
+	step();
+	BOOST_TEST(!player.Playing(handle));
+	BOOST_TEST(world.Side<FireSoundLoop>().Get(ecm)->handle == 0u);
+	armament.firedTick = 100;
+	tracker.loopUntil = 104;
+	step();
+	BOOST_TEST(count("jam") == 2); // a shot with it stopped starts it afresh
+	tracker.level = 1;
+	step();
+	tracker.level = 2;
+	step();
+	step();
+	BOOST_TEST(count("rapid") == 1);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// GeneralsMD/Code/GameEngine/Source/GameLogic/AI/AIStates.cpp, AIInternalMoveToState::startMoveSound: with no start
+// sound the move loop plays while it moves; worse than damaged (really damaged) it sets off with its damaged sounds
+// (here only a damaged loop), chosen as it starts moving and kept for that move.
+BOOST_AUTO_TEST_CASE(legacy_parity_move_sounds_start_or_loop_and_go_damaged)
+{
+	Stage stage;
+	LookCatalog &catalog = stage.world.Resource<LookCatalog>();
+	catalog.byDefinition[0].moveStart.clear();
+	catalog.byDefinition[0].moveLoopDamaged = "Limp";
+	stage.Frame(true);
+	for (int frame = 0; frame < 3; ++frame)
+		stage.Frame(true, true);
+	BOOST_TEST(stage.Count("rotor") == 1u);
+	BOOST_TEST(stage.Count("limp") == 0u);
+	stage.Frame(true, false);
+	const std::uint64_t reallyDamaged = 1ull << 5;
+	for (int frame = 0; frame < 3; ++frame)
+		stage.Frame(true, true, reallyDamaged);
+	BOOST_TEST(stage.Count("limp") == 1u);
+	BOOST_TEST(stage.Count("rotor") == 1u);
+	// Damaged only (not worse): its ordinary loop.
+	stage.Frame(true, false, 1ull << 4);
+	for (int frame = 0; frame < 3; ++frame)
+		stage.Frame(true, true, 1ull << 4);
+	BOOST_TEST(stage.Count("rotor") == 2u);
+	BOOST_TEST(stage.Count("limp") == 1u);
+}
+
+// GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Update/StealthUpdate.cpp, StealthUpdate::update: stealthing plays
+// SoundStealthOn, dropping out of stealth plays SoundStealthOn too, being first detected plays SoundStealthOff, and
+// losing detection plays SoundStealthOn only for the local player's own unit (here nobody's: silent). Nothing plays for
+// the state it is first heard in.
+BOOST_AUTO_TEST_CASE(legacy_parity_stealth_sounds)
+{
+	Stage stage;
+	LookCatalog &catalog = stage.world.Resource<LookCatalog>();
+	catalog.byDefinition[0].stealthOn = "Cloak";
+	catalog.byDefinition[0].stealthOff = "Uncloak";
+	catalog.bits.stealthed = 7;
+	catalog.bits.detected = 8;
+	const std::uint64_t stealthed = 1ull << 7, detected = 1ull << 8;
+	stage.Frame(true, false, stealthed);
+	stage.Frame(true, false, stealthed); // first heard stealthed: nothing
+	BOOST_TEST(stage.Count("cloak") == 0u);
+	stage.Frame(true, false, stealthed | detected);
+	BOOST_TEST(stage.Count("uncloak") == 1u);
+	stage.Frame(true, false, stealthed); // no longer detected, not the viewer's unit
+	BOOST_TEST(stage.Count("cloak") == 0u);
+	stage.Frame(true, false, 0); // drops out of stealth
+	BOOST_TEST(stage.Count("cloak") == 1u);
+	stage.Frame(true, false, stealthed); // stealths again
+	BOOST_TEST(stage.Count("cloak") == 2u);
+	BOOST_TEST(stage.Count("uncloak") == 1u);
+}
+
+// GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Update/AIUpdate/JetAIUpdate.cpp, friend_enableAfterburners: as
+// the afterburners light (JETAFTERBURNER) its Afterburner sound (RaptorAfterburner: not a loop) starts once, unless
+// still playing; as they go out it stops; lit again, it plays again.
+BOOST_AUTO_TEST_CASE(legacy_parity_afterburners_sound_as_they_light)
+{
+	Stage stage;
+	LookCatalog &catalog = stage.world.Resource<LookCatalog>();
+	catalog.byDefinition[0].afterburnerSound = "Burner";
+	catalog.bits.afterburner = 9;
+	const std::uint64_t lit = 1ull << 9;
+	stage.Frame(true);
+	stage.Frame(true);
+	BOOST_TEST(stage.Count("burner") == 0u);
+	for (int frame = 0; frame < 20; ++frame)
+		stage.Frame(true, false, lit);
+	BOOST_TEST(stage.Count("burner") == 1u); // once, not repeated while lit
+	stage.Frame(true, false, 0);
+	stage.Frame(true, false, lit);
+	BOOST_TEST(stage.Count("burner") == 2u);
+}
+
+// Core/GameEngine/Source/Common/Audio/GameAudio.cpp, AudioManager::update, with AudioSettings.ini's values
+// (microphone 50 up, at most 33.3% of the way to the camera; zoom 130 to 425, 20%): straight down from 100 the
+// microphone is a third of the way up and the camera 66.7 from it: full volume; from 350 the microphone is 50 up and
+// the camera 300 away: 1 - (300 - 130) / 295 * 20%; from 600, 550 away: 80%.
+BOOST_AUTO_TEST_CASE(legacy_parity_world_sounds_follow_the_zoom)
+{
+	AudioSettings settings;
+	settings.microphoneHeightAboveTerrain = 50.0f;
+	settings.microphoneMaxBetweenGroundAndCamera = 0.333f;
+	settings.zoomMinDistance = 130.0f;
+	settings.zoomMaxDistance = 425.0f;
+	settings.zoomVolumeAmount = 0.2f;
+	const auto zoom = [&](float height) {
+		ListenerPose pose;
+		pose.ground = {0.0f, 0.0f, 0.0f};
+		pose.eye = {0.0f, 0.0f, height};
+		pose.placed = true;
+		return ZoomVolume(settings, pose, MicrophoneFor(settings, pose).position);
+	};
+	BOOST_TEST(zoom(100.0f) == 1.0f);
+	BOOST_TEST(std::fabs(zoom(350.0f) - (1.0f - 170.0f / 295.0f * 0.2f)) < 1e-5f);
+	BOOST_TEST(std::fabs(zoom(600.0f) - 0.8f) < 1e-6f);
+}
+
+// The host composes presentation's tick and frame schedules with sound's: every conflict between them is ordered.
+BOOST_AUTO_TEST_CASE(the_hosts_presentation_and_sound_schedules_compose_without_conflicts)
+{
+	// The simulation's world, as the session registers it, with presentation's side tables.
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<engine::gameplay::Transform>();
+	world.RegisterComponent<engine::gameplay::DefinitionRef>();
+	world.RegisterComponent<engine::gameplay::Owner>();
+	world.RegisterComponent<engine::gameplay::Jet>();
+	world.RegisterComponent<engine::gameplay::Appearance>();
+	world.RegisterComponent<engine::gameplay::Attitude>();
+	world.RegisterComponent<engine::gameplay::ModelOverride>();
+	world.RegisterComponent<engine::gameplay::DebrisLook>();
+	world.RegisterComponent<engine::gameplay::Parachute>();
+	world.RegisterComponent<engine::gameplay::Dying>();
+	world.RegisterComponent<engine::gameplay::ParachuteRider>();
+	world.RegisterComponent<engine::gameplay::OffMap>();
+	world.RegisterComponent<engine::gameplay::Health>();
+	world.RegisterComponent<engine::gameplay::Mounted>();
+	world.RegisterComponent<engine::gameplay::EmpPulse>();
+	world.RegisterComponent<engine::gameplay::IndicatorColor>();
+	world.RegisterComponent<engine::gameplay::Disabled>();
+	world.RegisterComponent<generalszh::gameplay::SpecialAbilities>();
+	world.RegisterComponent<engine::gameplay::UndetectedDefector>();
+	world.RegisterComponent<engine::gameplay::MissileFlight>();
+	world.RegisterComponent<engine::gameplay::Targetable>();
+	world.RegisterComponent<engine::gameplay::Experience>();
+	world.RegisterComponent<generalszh::gameplay::ParticleCannon>();
+	world.RegisterComponent<engine::gameplay::Sale>();
+	world.RegisterComponent<engine::gameplay::UnderConstruction>();
+	world.RegisterComponent<engine::gameplay::Subdual>();
+	world.RegisterComponent<engine::gameplay::FiringTracker>();
+	world.RegisterComponent<engine::gameplay::Armament>();
+	RegisterPresentationComponents(world);
+	RegisterSoundComponents(world);
+	world.FinalizeComponents();
+	ecs::SystemRegistry tick, frame;
+	MotionSampleSystem motion;
+	PoseSampleSystem pose;
+	DetectorPingSystem pings;
+	TreadRollSystem treads;
+	WheelRollSystem wheels;
+	MotionEmitterSystem emitters;
+	ObjectPresentationSystem objects;
+	EffectAttachmentSystem attachments;
+	DamageEffectSystem damage;
+	FireFxPlacementSystem fire;
+	FxPlaybackSystem fx;
+	ExhaustSampleSystem exhaustSample;
+	HitFxSystem hitFx;
+	MissileIgnitionSystem ignitions;
+	HarvestPresentationSystem harvest;
+	CratePresentationSystem crates;
+	CashPresentationSystem cash;
+	PromotionPresentationSystem promotions;
+	ChassisSystem chassis;
+	ExhaustSystem exhausts;
+	LaserSystem lasers;
+	DynamicLightSystem lights;
+	TrackLayingSystem trackLaying;
+	TrackFadeSystem trackFade;
+	TreeBreezeSystem treeBreeze;
+	TreeBendSystem treeBend;
+	DebrisAnimationSystem debris;
+	TreeContactSystem treeContacts;
+	DisabledSoundSystem disabledSounds;
+	EmpSparkSystem empSparks;
+	AutoDepositPresentationSystem autoDepositTexts;
+	AbilityFeedbackSystem abilityFeedback;
+	UplinkStatusSystem uplinkStatus;
+	AttachedParticleClearSystem particleClears;
+	RegisterPresentationTick(tick, motion, pose, pings, exhaustSample, hitFx, ignitions, harvest, crates, promotions, chassis, trackLaying, treeContacts, cash,
+		disabledSounds, empSparks, autoDepositTexts, abilityFeedback, uplinkStatus, particleClears);
+	MountedDrawSystem mountedDraw;
+	TintStatusSystem tintStatus;
+	ObjectIconSystem objectIcons;
+	UplinkEffectSystem uplinkEffects;
+	RiderTintSystem riderTint;
+	RegisterPresentationFrame(frame, treads, wheels, emitters, objects, attachments, damage, fire, fx, exhausts, lasers, lights, trackFade, treeBreeze, treeBend, debris, mountedDraw, tintStatus, objectIcons, uplinkEffects, riderTint);
+	SoundLoopSystem loops;
+	AudioMixSystem mix;
+	UplinkSoundSystem uplinkSounds;
+	FireLoopSystem fireLoops;
+	RegisterSoundFrame(frame, loops, mix, uplinkSounds, fireLoops);
+	tick.Finalize(world.Components());
+	frame.Finalize(world.Components());
+	// Building the schedules checks every conflict is ordered.
+	ecs::Scheduler ticks(world, tick, engine::jobs::JobSystemConfig{2});
+	ecs::Scheduler frames(world, frame, engine::jobs::JobSystemConfig{2});
+	BOOST_CHECK_NO_THROW(ticks.Finalize(engine::time::FixedStep{30}));
+	BOOST_CHECK_NO_THROW(frames.Finalize(engine::time::FixedStep{30}));
+}
+
+// Core/GameEngine/Source/Common/Audio/GameAudio.cpp, AudioManager::shouldPlayLocally: EVERYONE (or no audience at all)
+// and music play; a PLAYER sound only for its own player (so the shell map's eyes, UncloakedGLA, never hear another
+// player's pilot eject or promotion); ALLIES for its allies but not itself; ENEMIES for its enemies; a sound bound to a
+// player that names none does not play, unless it is a player UI sound.
+BOOST_AUTO_TEST_CASE(legacy_parity_sounds_play_for_their_audience)
+{
+	namespace type = engine::audio::sound_type;
+	engine::gameplay::Relationships relationships(4);
+	relationships.Set(1, 2, engine::gameplay::Relationship::Allies);
+	relationships.Set(1, 3, engine::gameplay::Relationship::Enemies);
+	const auto sound = [](std::uint32_t flags, Bus bus = Bus::Effects) {
+		SoundEventDefinition definition;
+		definition.type = flags;
+		definition.bus = bus;
+		return definition;
+	};
+	constexpr std::uint32_t nobody = 0xFFFFFFFFu;
+	BOOST_TEST(Audible(sound(type::World | type::Everyone), nobody, nobody, &relationships));
+	BOOST_TEST(Audible(sound(type::Interface), nobody, 2, &relationships));
+	BOOST_TEST(Audible(sound(type::World | type::Player, Bus::Music), nobody, nobody, &relationships));
+	const auto voice = sound(type::World | type::Shrouded | type::Player);
+	BOOST_TEST(Audible(voice, 1, 1, &relationships));
+	BOOST_TEST(!Audible(voice, 1, 2, &relationships));
+	BOOST_TEST(!Audible(voice, 1, nobody, &relationships));
+	BOOST_TEST(!Audible(voice, nobody, 1, &relationships));
+	BOOST_TEST(Audible(sound(type::Interface | type::Player), nobody, 1, &relationships));
+	const auto allies = sound(type::World | type::Allies);
+	BOOST_TEST(Audible(allies, 1, 2, &relationships));
+	BOOST_TEST(!Audible(allies, 1, 1, &relationships));
+	BOOST_TEST(!Audible(allies, 1, 3, &relationships));
+	const auto enemies = sound(type::World | type::Enemies);
+	BOOST_TEST(Audible(enemies, 1, 3, &relationships));
+	BOOST_TEST(!Audible(enemies, 1, 2, &relationships));
+}
+
+// JetOrHeliCirclingDeadAirfieldState::onEnter (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Update/AIUpdate/
+// JetAIUpdate.cpp): as a jet starts circling its dead airfield it says its VoiceLowFuel, once.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_jet_circling_a_dead_airfield_calls_low_fuel)
+{
+	Stage stage;
+	stage.world.Resource<LookCatalog>().byDefinition[0].lowFuelVoice = "LowFuel";
+	stage.world.Add<engine::gameplay::Jet>(stage.entity);
+	stage.Frame(true);
+	stage.Frame(true);
+	BOOST_TEST(stage.Count("lowfuel") == 0u);
+	stage.world.Get<engine::gameplay::Jet>(stage.entity)->state = engine::gameplay::JetState::CirclingDeadAirfield;
+	for (int frame = 0; frame < 5; ++frame)
+		stage.Frame(true);
+	BOOST_TEST(stage.Count("lowfuel") == 1u);
+}

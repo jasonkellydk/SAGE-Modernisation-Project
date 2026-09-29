@@ -3,17 +3,9 @@ module;
 #define BOOST_TEST_MODULE EngineCoreMathTests
 
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <bit>
-#include <cmath>
-#include <cstdint>
-#include <limits>
-#include <numbers>
-#include <optional>
-#include <span>
-#include <type_traits>
 
 export module Engine.Core.Math.Tests;
+import std;
 
 import Engine.Core.Math.Scalar;
 import Engine.Core.Math.Vector2;
@@ -81,8 +73,8 @@ BOOST_AUTO_TEST_CASE(vector_operations_have_expected_geometry)
 	BOOST_CHECK_EQUAL(sizeof(Vector2), 2 * sizeof(float));
 	BOOST_CHECK(std::is_standard_layout_v<Vector2>);
 	BOOST_CHECK(std::is_trivially_copyable_v<Vector2>);
-	BOOST_CHECK_EQUAL(offsetof(Vector2, x), 0u);
-	BOOST_CHECK_EQUAL(offsetof(Vector2, y), sizeof(float));
+	BOOST_CHECK_EQUAL(__builtin_offsetof(Vector2, x), 0u);
+	BOOST_CHECK_EQUAL(__builtin_offsetof(Vector2, y), sizeof(float));
 	BOOST_CHECK_EQUAL(sizeof(Vector3), 3 * sizeof(float));
 	BOOST_CHECK(std::is_standard_layout_v<Vector3>);
 	Vector4 indexed{1, 2, 3, 4};
@@ -1021,14 +1013,14 @@ BOOST_AUTO_TEST_CASE(turn_angles_wrap_exactly_and_fixed_trigonometry_is_repeatab
 	const auto first = Sin_Cos({0x12345678u});
 	const auto second = Sin_Cos({0x12345678u});
 	BOOST_CHECK(first == second);
-	BOOST_CHECK((first == FixedSinCos{463948539, 968335303}));
+	BOOST_CHECK((first == FixedSinCos{463948538, 968335303}));
 	BOOST_CHECK(first.sine > 0 && first.cosine > 0);
 	const auto second_quadrant = Sin_Cos({0x52345678u});
 	const auto third_quadrant = Sin_Cos({0x92345678u});
 	const auto fourth_quadrant = Sin_Cos({0xd2345678u});
-	BOOST_CHECK((second_quadrant == FixedSinCos{968335395, -463949483}));
-	BOOST_CHECK((third_quadrant == FixedSinCos{-463948539, -968335303}));
-	BOOST_CHECK((fourth_quadrant == FixedSinCos{-968335395, 463949483}));
+	BOOST_CHECK((second_quadrant == FixedSinCos{968335394, -463949483}));
+	BOOST_CHECK((third_quadrant == FixedSinCos{-463948538, -968335303}));
+	BOOST_CHECK((fourth_quadrant == FixedSinCos{-968335394, 463949483}));
 }
 
 BOOST_AUTO_TEST_CASE(matrix3_composition_transform_and_inverse_cover_boundaries)

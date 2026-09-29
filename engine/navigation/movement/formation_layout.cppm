@@ -1,13 +1,5 @@
-module;
-#include <algorithm>
-#include <cmath>
-#include <cstdint>
-#include <limits>
-#include <span>
-#include <utility>
-#include <vector>
-
 export module engine.navigation.movement.formation_layout;
+import std;
 
 export namespace navigation {
 struct FormationUnit {

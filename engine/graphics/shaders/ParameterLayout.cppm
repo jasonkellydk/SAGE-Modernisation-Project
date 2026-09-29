@@ -1,14 +1,5 @@
-module;
-
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <cstring>
-#include <limits>
-#include <span>
-#include <type_traits>
-
 export module Graphics.Shaders.ParameterLayout;
+import std;
 
 export import Graphics.Resources.Handles.ResourceHandle;
 

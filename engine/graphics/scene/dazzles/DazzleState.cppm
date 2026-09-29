@@ -1,10 +1,6 @@
-module;
-#include <algorithm>
-#include <array>
-#include <cassert>
-#include <cmath>
-#include <cstdint>
 export module Graphics.Scene.Dazzles.State;
+import std;
+import engine.core.contracts;
 import Assets.Dazzles;
 
 namespace Graphics {
@@ -48,7 +44,7 @@ export DazzleIntensity Calculate_Dazzle_Intensity(const Assets::DazzleDefinition
     const std::array<float, 3>& camera_direction, const std::array<float, 3>& dazzle_direction,
     const std::array<float, 3>& toward_camera, float squared_distance)
 {
-    assert(definition.area > 0);
+    engine::core::Assert(definition.area > 0);
     DazzleIntensity result;
     const float dot = -DazzleStateDetail::Dot(toward_camera, camera_direction);
     result.intensity = dot;
@@ -98,7 +94,7 @@ bool Prepare_Dazzle(DazzleState& state, const Assets::DazzleDefinition& definiti
     }
     auto projected = DazzleStateDetail::Transform(view.view, {position[0], position[1], position[2], 1});
     projected = DazzleStateDetail::Transform(view.projection, projected);
-    assert(projected[3] != 0);
+    engine::core::Assert(projected[3] != 0);
     state.screen_position = {projected[0]/projected[3], projected[1]/projected[3], projected[2]/projected[3]};
     const std::array camera_direction{-view.view[8], -view.view[9], -view.view[10]};
     std::array toward_camera{view.camera_position[0]-position[0], view.camera_position[1]-position[1], view.camera_position[2]-position[2]};

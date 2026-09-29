@@ -1,11 +1,8 @@
 module;
 #define BOOST_TEST_MODULE AttachmentBindingsTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <memory>
-#include <vector>
 export module Graphics.Frame.AttachmentBindings.Tests;
+import std;
 import Graphics.Frame.AttachmentBindings;
 import Graphics.Tests.Device;
 import Graphics.Scene.Props.Renderer;

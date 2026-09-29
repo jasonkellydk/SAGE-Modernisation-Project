@@ -4,11 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-#include <cstddef>
-#include <filesystem>
-
 export module Graphics.Scene.WorldQuads.Snapshot.Tests;
+import std;
 
 import Graphics.Tests.Device;
 import Graphics.Scene.WorldQuads;

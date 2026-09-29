@@ -1,7 +1,7 @@
 module;
 #include <SDL3/SDL.h>
-#include <cstring>
 export module engine.platform.adapters.sdl3.events;
+import std;
 import engine.platform;
 
 export namespace engine::platform::sdl3
@@ -30,7 +30,14 @@ public:
 				out.type = event.type == SDL_EVENT_KEY_DOWN ? EventType::key_down : EventType::key_up;
 				out.window = event.key.windowID;
 				out.key = event.key.scancode == SDL_SCANCODE_RETURN ? KeyCode::enter :
-					event.key.scancode == SDL_SCANCODE_KP_ENTER ? KeyCode::keypad_enter : KeyCode::unknown;
+					event.key.scancode == SDL_SCANCODE_KP_ENTER ? KeyCode::keypad_enter :
+					event.key.scancode == SDL_SCANCODE_BACKSPACE ? KeyCode::backspace :
+					event.key.scancode == SDL_SCANCODE_ESCAPE ? KeyCode::escape :
+					event.key.scancode == SDL_SCANCODE_TAB ? KeyCode::tab :
+					event.key.scancode == SDL_SCANCODE_UP ? KeyCode::up :
+					event.key.scancode == SDL_SCANCODE_DOWN ? KeyCode::down :
+					event.key.scancode == SDL_SCANCODE_LEFT ? KeyCode::left :
+					event.key.scancode == SDL_SCANCODE_RIGHT ? KeyCode::right : KeyCode::unknown;
 				out.modifiers = ((event.key.mod & SDL_KMOD_ALT) ? modifier_alt : 0u) |
 					((event.key.mod & SDL_KMOD_CTRL) ? modifier_control : 0u) |
 					((event.key.mod & SDL_KMOD_SHIFT) ? modifier_shift : 0u) |

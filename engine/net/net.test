@@ -1,0 +1,405 @@
+#define BOOST_TEST_MODULE EngineNet
+#include <boost/test/included/unit_test.hpp>
+
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <initializer_list>
+#include <map>
+#include <memory>
+#include <set>
+#include <span>
+#include <vector>
+
+import engine.net.lockstep.lockstep_server;
+import engine.net.lockstep.lockstep_client;
+import engine.net.lockstep.lockstep_peer;
+
+using namespace engine::net;
+using namespace std::chrono_literals;
+
+namespace
+{
+std::vector<std::byte> Bytes(std::initializer_list<int> values)
+{
+	std::vector<std::byte> bytes;
+	for (const int value : values)
+		bytes.push_back(static_cast<std::byte>(value));
+	return bytes;
+}
+
+// A server and `players` clients over loopback, pumped by hand.
+struct Table
+{
+	LockstepServer server;
+	std::vector<std::unique_ptr<LockstepClient>> clients;
+
+	explicit Table(std::uint32_t players, std::uint32_t delay = 2) : server({players, 99, delay, 30, false})
+	{
+		for (std::uint32_t index = 0; index < players; ++index)
+		{
+			auto [client, host] = MakeLoopback();
+			server.Accept(std::move(host));
+			clients.push_back(std::make_unique<LockstepClient>(std::move(client)));
+		}
+		Pump();
+	}
+
+	void Pump()
+	{
+		for (int round = 0; round < 3; ++round)
+		{
+			server.Update(0us);
+			for (auto &client : clients)
+				client->Update();
+		}
+	}
+};
+
+// A tiny deterministic simulation: every tick mixes the tick's commands into
+// one number. `history` keeps each tick's hash for comparing peers.
+class Counter final : public LockstepSimulation
+{
+public:
+	void Step(std::span<const CommandEnvelope> commands) override
+	{
+		++m_tick;
+		m_value = m_value * 6364136223846793005ull + m_tick;
+		for (const CommandEnvelope &command : commands)
+			for (const std::byte b : command.payload)
+				m_value ^= (static_cast<std::uint64_t>(b) + 1) * (command.player + 7) * 0x9E3779B97F4A7C15ull;
+		history[m_tick] = StateHash();
+	}
+	std::uint64_t CurrentTick() const override { return m_tick; }
+	std::uint64_t StateHash() const override { return m_value ^ (m_tick * 0xBF58476D1CE4E5B9ull); }
+	std::vector<std::byte> SaveCheckpoint() const override
+	{
+		ByteWriter writer;
+		writer.U64(m_tick);
+		writer.U64(m_value);
+		return writer.Take();
+	}
+	bool LoadCheckpoint(std::span<const std::byte> state) override
+	{
+		ByteReader reader(state);
+		const auto tick = reader.U64();
+		const auto value = reader.U64();
+		if (!tick || !value || !reader.AtEnd())
+			return false;
+		m_tick = *tick;
+		m_value = *value;
+		return true;
+	}
+
+	// A bug or bit flip: this peer's state silently differs from now on.
+	void Corrupt() { m_value ^= 0xDEAD; }
+
+	std::map<std::uint64_t, std::uint64_t> history;
+
+private:
+	std::uint64_t m_tick{0};
+	std::uint64_t m_value{1};
+};
+
+struct Peer
+{
+	std::unique_ptr<LockstepClient> client;
+	std::unique_ptr<LockstepPeer> driver;
+	Counter simulation;
+	bool running{true};
+};
+
+// A relay and peers on a fake clock, one 33 ms frame per Frame().
+struct Match
+{
+	LockstepServer server;
+	std::vector<std::unique_ptr<Peer>> peers;
+	std::chrono::microseconds now{0};
+
+	explicit Match(std::uint32_t players, ServerOptions options = {}) : server([&] {
+		options.players = players;
+		options.seed = 5;
+		options.hashInterval = 10;
+		return options;
+	}())
+	{
+		for (std::uint32_t index = 0; index < players; ++index)
+			Join({});
+	}
+
+	Peer &Join(Hello hello)
+	{
+		auto [client, host] = MakeLoopback();
+		server.Accept(std::move(host));
+		auto peer = std::make_unique<Peer>();
+		peer->client = std::make_unique<LockstepClient>(std::move(client), hello);
+		peer->driver = std::make_unique<LockstepPeer>(*peer->client);
+		peers.push_back(std::move(peer));
+		return *peers.back();
+	}
+
+	void Frame()
+	{
+		now += 33ms;
+		server.Update(now);
+		for (auto &peer : peers)
+			if (peer->running)
+				peer->driver->Advance(peer->simulation, 16);
+		server.Update(now);
+	}
+
+	// Runs frames with players issuing commands now and then.
+	void Play(int frames)
+	{
+		for (int frame = 0; frame < frames; ++frame)
+		{
+			for (std::size_t index = 0; index < peers.size(); ++index)
+				if (peers[index]->running && peers[index]->client->IsPlayer() && (frame + static_cast<int>(index)) % 7 == 0)
+					peers[index]->client->Submit(1, Bytes({frame & 0xFF, static_cast<int>(index)}));
+			Frame();
+		}
+	}
+
+	// Every tick both have run hashes equal.
+	static bool Agree(const Peer &a, const Peer &b, std::uint64_t from = 1)
+	{
+		std::size_t compared = 0;
+		for (const auto &[tick, hash] : a.simulation.history)
+			if (tick >= from)
+				if (const auto other = b.simulation.history.find(tick); other != b.simulation.history.end())
+				{
+					if (other->second != hash)
+						return false;
+					++compared;
+				}
+		return compared > 0;
+	}
+};
+}
+
+BOOST_AUTO_TEST_SUITE(net)
+
+BOOST_AUTO_TEST_CASE(single_player_runs_through_a_local_relay)
+{
+	Table table(1);
+	LockstepClient &player = *table.clients[0];
+	BOOST_TEST_REQUIRE(player.Joined());
+	BOOST_TEST(player.Seat()->seat == 0u);
+	BOOST_TEST(player.Seat()->seed == 99u);
+	// The first `delay` ticks are open at once; a command issued before tick 1 lands on tick 1 + delay.
+	player.Submit(0x1234, Bytes({5}));
+	for (std::uint64_t tick = 1; tick <= 4; ++tick)
+	{
+		player.CloseInputFor(tick);
+		table.Pump();
+		const auto bundle = player.Take(tick);
+		BOOST_TEST_REQUIRE(bundle.has_value(), "tick " << tick << " was released");
+		if (tick == 3)
+		{
+			BOOST_TEST_REQUIRE(bundle->commands.size() == 1u);
+			BOOST_TEST(bundle->commands[0].type == 0x1234u);
+			BOOST_TEST(bundle->commands[0].player == 0u);
+		}
+		else
+			BOOST_TEST(bundle->commands.empty());
+	}
+}
+
+BOOST_AUTO_TEST_CASE(a_tick_waits_for_every_player_and_all_see_the_same_bundle)
+{
+	Table table(2, 1);
+	LockstepClient &host = *table.clients[0];
+	LockstepClient &guest = *table.clients[1];
+	host.Submit(1, Bytes({10}));
+	guest.Submit(2, Bytes({20}));
+	host.Submit(3, Bytes({30}));
+	// Tick 1 was closed empty by both at join; tick 2 needs both frames.
+	BOOST_TEST(host.Take(1).has_value());
+	BOOST_TEST(guest.Take(1).has_value());
+	host.CloseInputFor(1);
+	table.Pump();
+	BOOST_TEST(!host.Take(2).has_value()); // the guest has not closed tick 2 yet
+	guest.CloseInputFor(1);
+	table.Pump();
+	const auto seen = host.Take(2);
+	const auto other = guest.Take(2);
+	BOOST_TEST_REQUIRE((seen.has_value() && other.has_value()));
+	BOOST_TEST((seen->commands == other->commands));
+	BOOST_TEST_REQUIRE(seen->commands.size() == 3u);
+	// Canonical order: by player, then submission order.
+	BOOST_TEST(seen->commands[0].type == 1u);
+	BOOST_TEST(seen->commands[1].type == 3u);
+	BOOST_TEST(seen->commands[2].type == 2u);
+	BOOST_TEST(seen->commands[2].player == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(the_majority_decides_and_ties_go_to_the_authority)
+{
+	HashVote vote;
+	const std::set<std::uint32_t> three{0, 1, 2};
+	BOOST_TEST(!vote.Report(10, 0, 7, three).has_value());
+	BOOST_TEST(!vote.Report(10, 2, 9, three).has_value());
+	const auto verdict = vote.Report(10, 1, 9, three);
+	BOOST_TEST_REQUIRE(verdict.has_value());
+	BOOST_TEST(verdict->agreed == 9u);
+	BOOST_TEST((verdict->diverged == std::vector<std::uint32_t>{0}));
+	BOOST_TEST(*vote.Agreed(10) == 9u);
+	// Late reports for a decided tick are ignored.
+	BOOST_TEST(!vote.Report(10, 0, 9, three).has_value());
+
+	const std::set<std::uint32_t> two{0, 1};
+	vote.Report(20, 1, 4, two);
+	const auto tie = vote.Report(20, 0, 3, two);
+	BOOST_TEST_REQUIRE(tie.has_value());
+	BOOST_TEST(tie->agreed == 3u);
+	BOOST_TEST((tie->diverged == std::vector<std::uint32_t>{1}));
+}
+
+BOOST_AUTO_TEST_CASE(input_delay_rises_at_once_and_falls_slowly)
+{
+	InputDelayPolicy policy({1, 12, 33'333us, 5, 8}, 2);
+	for (int sample = 0; sample < 8; ++sample)
+		policy.Sample(0, 20ms);
+	BOOST_TEST(policy.Delay() == 2u);
+	// One laggy player: the delay covers its round trip immediately.
+	for (int sample = 0; sample < 8; ++sample)
+		policy.Sample(1, 200ms);
+	BOOST_TEST(policy.Delay() == 8u);
+	BOOST_TEST(policy.Sample(1, 10'000ms) == 12u); // capped
+	// Recovered: it comes down a step at a time, not at once.
+	policy.Forget(1);
+	std::uint32_t previous = policy.Delay();
+	for (int sample = 0; sample < 200; ++sample)
+	{
+		const std::uint32_t now = policy.Sample(0, 20ms);
+		BOOST_TEST(now + 1 >= previous);
+		previous = now;
+	}
+	BOOST_TEST(policy.Delay() == 2u);
+}
+
+BOOST_AUTO_TEST_CASE(a_diverged_player_is_found_and_repaired_from_a_healthy_one)
+{
+	Match match(3);
+	match.Play(40);
+	BOOST_TEST_REQUIRE(match.peers[1]->simulation.CurrentTick() > 20u);
+	match.peers[1]->simulation.Corrupt();
+	const std::uint64_t corruptedAt = match.peers[1]->simulation.CurrentTick();
+	match.Play(80);
+
+	BOOST_TEST(match.server.Stats().desyncs >= 1u);
+	BOOST_TEST(match.server.Stats().repairs >= 1u);
+	BOOST_TEST(match.peers[1]->driver->Stats().restored >= 1u);
+	BOOST_TEST(match.peers[0]->driver->Stats().checkpointsServed >= 1u);
+	// Repaired: from the repair on, every tick agrees with the others again.
+	const std::uint64_t end = match.peers[0]->simulation.CurrentTick();
+	BOOST_TEST(end > corruptedAt + 30);
+	BOOST_TEST(match.peers[1]->simulation.CurrentTick() + 16 >= end);
+	BOOST_TEST(Match::Agree(*match.peers[0], *match.peers[2]));
+	BOOST_TEST(Match::Agree(*match.peers[0], *match.peers[1], end - 20));
+	BOOST_TEST(match.peers[0]->simulation.history.at(end - 5) == match.peers[1]->simulation.history.at(end - 5));
+}
+
+BOOST_AUTO_TEST_CASE(a_late_observer_starts_from_a_checkpoint_and_follows_along)
+{
+	Match match(2);
+	match.Play(60);
+	Peer &observer = match.Join({Role::Observer});
+	match.Play(40);
+	BOOST_TEST_REQUIRE(observer.client->Joined());
+	BOOST_TEST(!observer.client->IsPlayer());
+	BOOST_TEST(observer.driver->Stats().restored == 1u);
+	BOOST_TEST(match.server.Stats().observersJoined == 1u);
+	// It never ran the early ticks, yet agrees on everything since joining.
+	BOOST_TEST(observer.simulation.history.begin()->first > 30u);
+	BOOST_TEST(Match::Agree(*match.peers[0], observer));
+	BOOST_TEST(observer.simulation.CurrentTick() + 16 >= match.peers[0]->simulation.CurrentTick());
+}
+
+BOOST_AUTO_TEST_CASE(the_match_goes_on_without_a_dropped_player_who_can_rejoin)
+{
+	Match match(3);
+	match.Play(40);
+	// Player 2 loses its connection: the relay drops it and the others play on.
+	match.peers[2]->driver.reset();
+	match.peers[2]->client.reset(); // (its end closes when the client is gone)
+	match.peers[2]->running = false;
+	match.Play(1); // the relay notices
+	const std::uint64_t before = match.server.ReleasedTick();
+	match.Play(40);
+	BOOST_TEST(match.server.Stats().drops == 1u);
+	BOOST_TEST(match.server.ReleasedTick() > before + 30);
+	BOOST_TEST(match.server.ConnectedPlayers() == 2u);
+
+	// It comes back into its seat, is caught up from a checkpoint, and plays again.
+	Peer &back = match.Join({Role::Player, 2});
+	match.Play(60);
+	BOOST_TEST(match.server.Stats().rejoins == 1u);
+	BOOST_TEST(back.driver->Stats().restored == 1u);
+	BOOST_TEST(back.client->IsPlayer());
+	BOOST_TEST(Match::Agree(*match.peers[0], back));
+	BOOST_TEST(back.simulation.CurrentTick() + 16 >= match.peers[0]->simulation.CurrentTick());
+	BOOST_TEST(match.server.ConnectedPlayers() == 3u);
+	// Its commands count again: bundles after its return carry player 2's input.
+	bool heard = false;
+	match.server.Log().ForEachAfter(match.server.ReleasedTick() - 30, [&](std::uint64_t, const std::vector<std::byte> &bundle) {
+		for (const CommandEnvelope &command : DecodeFrame(bundle)->commands)
+			heard = heard || command.player == 2u;
+	});
+	BOOST_TEST(heard);
+}
+
+BOOST_AUTO_TEST_CASE(only_open_seats_are_given_and_taken_seats_are_not_rejoined)
+{
+	Match match(1);
+	match.Play(5);
+	Peer &extra = match.Join({});
+	Peer &thief = match.Join({Role::Player, 0});
+	match.Play(3);
+	BOOST_TEST(!extra.client->Joined());
+	BOOST_TEST(!thief.client->Joined());
+	BOOST_TEST(!extra.client->Connected());
+	BOOST_TEST(match.server.ConnectedPlayers() == 1u);
+}
+
+// Players claiming their seats before the start (a LAN game: each takes its slot's seat, in whatever order they
+// connect): each gets the seat it asked for; the game waits until every seat is taken; a seat already taken is not given
+// twice.
+BOOST_AUTO_TEST_CASE(players_claim_their_seats_before_the_start)
+{
+	LockstepServer server({2, 99, 1, 30, false});
+	auto [second, secondHost] = MakeLoopback();
+	auto [first, firstHost] = MakeLoopback();
+	auto [thief, thiefHost] = MakeLoopback();
+	server.Accept(std::move(secondHost));
+	LockstepClient late(std::move(second), Hello{Role::Player, 1});
+	const auto pump = [&](std::vector<LockstepClient *> clients) {
+		for (int round = 0; round < 3; ++round)
+		{
+			server.Update(0us);
+			for (LockstepClient *client : clients)
+				client->Update();
+		}
+	};
+	pump({&late});
+	BOOST_TEST(!server.EverySeatTaken());
+	late.CloseInputFor(1);
+	pump({&late});
+	BOOST_TEST(!late.Take(1).has_value()); // nothing released before every seat is taken
+	server.Accept(std::move(firstHost));
+	LockstepClient early(std::move(first), Hello{Role::Player, 0});
+	server.Accept(std::move(thiefHost));
+	LockstepClient again(std::move(thief), Hello{Role::Player, 1});
+	pump({&late, &early, &again});
+	BOOST_TEST(server.EverySeatTaken());
+	BOOST_TEST_REQUIRE(late.Seat().has_value());
+	BOOST_TEST_REQUIRE(early.Seat().has_value());
+	BOOST_TEST(late.Seat()->seat == 1u);
+	BOOST_TEST(early.Seat()->seat == 0u);
+	BOOST_TEST(!again.Seat().has_value()); // seat 1 was taken
+	early.CloseInputFor(1);
+	pump({&late, &early});
+	BOOST_TEST(early.Take(1).has_value());
+}
+
+BOOST_AUTO_TEST_SUITE_END()

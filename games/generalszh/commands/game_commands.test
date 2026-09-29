@@ -1,0 +1,322 @@
+#define BOOST_TEST_MODULE GeneralsZhCommands
+#include <boost/test/included/unit_test.hpp>
+
+#include <string>
+#include <variant>
+
+import games.generalszh.commands.game_commands;
+
+using namespace generalszh::commands;
+using Engine::Math::Fixed;
+
+BOOST_AUTO_TEST_SUITE(game_commands)
+
+BOOST_AUTO_TEST_CASE(commands_round_trip_through_their_wire_form)
+{
+	ecs::Entity tank;
+	tank.index = 7;
+	tank.generation = 2;
+	ecs::Entity victim;
+	victim.index = 9;
+	victim.generation = 1;
+	const MoveTo move{{tank, victim}, {Fixed::FromInt(100), Fixed::FromRatio(1, 3)}};
+	const auto moved = Decode(Encode(move));
+	BOOST_TEST_REQUIRE(moved.has_value());
+	const auto &back = std::get<MoveTo>(*moved);
+	BOOST_TEST(back.units.size() == 2u);
+	BOOST_TEST((back.units[0] == tank));
+	BOOST_TEST(back.destination.y.Raw() == Fixed::FromRatio(1, 3).Raw());
+
+	const auto power = Decode(Encode(UseSpecialPower{tank, "SuperweaponParadropAmerica", {Fixed::FromInt(5), Fixed::FromInt(6)}}));
+	BOOST_TEST_REQUIRE(power.has_value());
+	BOOST_TEST(std::get<UseSpecialPower>(*power).power == "SuperweaponParadropAmerica");
+	BOOST_TEST(std::get<UseSpecialPower>(*power).atLocation);
+	const auto untargeted = Decode(Encode(UseSpecialPower{tank, "SuperweaponCrateDrop", {}, false})); // MSG_DO_SPECIAL_POWER
+	BOOST_TEST_REQUIRE(untargeted.has_value());
+	BOOST_TEST(!std::get<UseSpecialPower>(*untargeted).atLocation);
+	// A button's command options ride along (a Strategy Center's OPTION_TWO: hold the line).
+	const auto plan = Decode(Encode(UseSpecialPower{tank, "SpecialAbilityChangeBattlePlans", {}, false, 1u << 16}));
+	BOOST_TEST_REQUIRE(plan.has_value());
+	BOOST_TEST(std::get<UseSpecialPower>(*plan).options == (1u << 16));
+	const auto guarding = Decode(Encode(GuardPosition{{tank}, {Fixed::FromInt(7), Fixed::FromInt(8)}, 1}));
+	BOOST_TEST_REQUIRE(guarding.has_value());
+	BOOST_TEST(std::get<GuardPosition>(*guarding).mode == 1u);
+	BOOST_TEST((std::get<GuardPosition>(*guarding).position.y == Fixed::FromInt(8)));
+	const auto attackMoving = Decode(Encode(AttackMoveTo{{tank}, {Fixed::FromInt(3), Fixed::FromInt(4)}}));
+	BOOST_TEST_REQUIRE(attackMoving.has_value());
+	BOOST_TEST((std::get<AttackMoveTo>(*attackMoving).position.x == Fixed::FromInt(3)));
+	const auto evacuating = Decode(Encode(Evacuate{{tank, victim}}));
+	BOOST_TEST_REQUIRE(evacuating.has_value());
+	BOOST_TEST(std::get<Evacuate>(*evacuating).units.size() == 2u);
+	const auto guardingObject = Decode(Encode(GuardObject{{tank}, victim, 2}));
+	BOOST_TEST_REQUIRE(guardingObject.has_value());
+	BOOST_TEST((std::get<GuardObject>(*guardingObject).target == victim));
+	BOOST_TEST(std::get<GuardObject>(*guardingObject).mode == 2u);
+
+	const auto bought = Decode(Encode(PurchaseScience{"SCIENCE_Paradrop1"}));
+	BOOST_TEST_REQUIRE(bought.has_value());
+	BOOST_TEST(std::get<PurchaseScience>(*bought).science == "SCIENCE_Paradrop1");
+
+	const auto hack = Decode(Encode(UseSpecialPowerAtObject{tank, "SuperweaponCashHack", victim}));
+	BOOST_TEST_REQUIRE(hack.has_value());
+	BOOST_TEST(std::get<UseSpecialPowerAtObject>(*hack).power == "SuperweaponCashHack");
+	BOOST_TEST((std::get<UseSpecialPowerAtObject>(*hack).target == victim));
+	BOOST_TEST((std::get<UseSpecialPowerAtObject>(*hack).source == tank));
+
+	const auto attack = Decode(Encode(Attack{{tank}, victim}));
+	BOOST_TEST_REQUIRE(attack.has_value());
+	BOOST_TEST((std::get<Attack>(*attack).target == victim));
+}
+
+BOOST_AUTO_TEST_CASE(unknown_or_malformed_commands_are_dropped)
+{
+	engine::net::CommandEnvelope bogus{0xABCDEFu, 0, {}};
+	BOOST_TEST(!Decode(bogus).has_value());
+	auto truncated = Encode(Stop{{ecs::Entity{}}});
+	truncated.payload.pop_back();
+	BOOST_TEST(!Decode(truncated).has_value());
+	auto padded = Encode(Stop{{}});
+	padded.payload.push_back(std::byte{0});
+	BOOST_TEST(!Decode(padded).has_value());
+}
+
+// A shell interaction (signalUIInteract) travels the bus like any order.
+BOOST_AUTO_TEST_CASE(a_shell_interaction_round_trips)
+{
+	const auto back = Decode(Encode(SignalUi{"ShellMainMenuSkirmishHighlighted"}));
+	BOOST_TEST_REQUIRE(back.has_value());
+	BOOST_TEST_REQUIRE(std::holds_alternative<SignalUi>(*back));
+	BOOST_TEST(std::get<SignalUi>(*back).hook == "ShellMainMenuSkirmishHighlighted");
+	BOOST_TEST(!Decode(Encode(SignalUi{std::string(65, 'x')})).has_value()); // no longer than a hook name
+}
+
+// Research orders (the original's GUI_COMMAND_PLAYER_UPGRADE / OBJECT_UPGRADE and CANCEL_UPGRADE) travel the bus too.
+BOOST_AUTO_TEST_CASE(research_orders_round_trip)
+{
+	ecs::Entity lab;
+	lab.index = 12;
+	lab.generation = 3;
+	const auto queued = Decode(Encode(ResearchUpgrade{lab, "Upgrade_AmericaChemicalSuits"}));
+	BOOST_TEST_REQUIRE(queued.has_value());
+	BOOST_TEST_REQUIRE(std::holds_alternative<ResearchUpgrade>(*queued));
+	BOOST_TEST(std::get<ResearchUpgrade>(*queued).building.index == 12u);
+	BOOST_TEST(std::get<ResearchUpgrade>(*queued).upgrade == "Upgrade_AmericaChemicalSuits");
+	const auto cancelled = Decode(Encode(CancelResearch{lab, "Upgrade_AmericaChemicalSuits"}));
+	BOOST_TEST_REQUIRE(cancelled.has_value());
+	BOOST_TEST(std::holds_alternative<CancelResearch>(*cancelled));
+	BOOST_TEST(!Decode(Encode(ResearchUpgrade{lab, std::string(129, 'x')})).has_value());
+}
+
+// Selling (the original's GUI_COMMAND_SELL) travels the bus: the building named, nothing else in it.
+BOOST_AUTO_TEST_CASE(sell_orders_round_trip)
+{
+	ecs::Entity building;
+	building.index = 40;
+	building.generation = 2;
+	const auto sell = Decode(Encode(Sell{building}));
+	BOOST_TEST_REQUIRE(sell.has_value());
+	BOOST_TEST_REQUIRE(std::holds_alternative<Sell>(*sell));
+	BOOST_TEST((std::get<Sell>(*sell).building == building));
+	auto padded = Encode(Sell{building});
+	padded.payload.push_back(std::byte{0});
+	BOOST_TEST(!Decode(padded).has_value());
+}
+
+// Overcharging (MSG_TOGGLE_OVERCHARGE) travels the bus: the units to switch, nothing else in it.
+BOOST_AUTO_TEST_CASE(toggle_overcharge_orders_round_trip)
+{
+	ecs::Entity reactor;
+	reactor.index = 12;
+	reactor.generation = 3;
+	const auto toggle = Decode(Encode(ToggleOvercharge{{reactor}}));
+	BOOST_TEST_REQUIRE(toggle.has_value());
+	BOOST_TEST_REQUIRE(std::holds_alternative<ToggleOvercharge>(*toggle));
+	BOOST_TEST_REQUIRE(std::get<ToggleOvercharge>(*toggle).units.size() == 1u);
+	BOOST_TEST((std::get<ToggleOvercharge>(*toggle).units[0] == reactor));
+	auto padded = Encode(ToggleOvercharge{{reactor}});
+	padded.payload.push_back(std::byte{0});
+	BOOST_TEST(!Decode(padded).has_value());
+	BOOST_TEST((Encode(ToggleOvercharge{}).type != Encode(Stop{}).type));
+}
+
+// Switching weapons (MSG_SWITCH_WEAPONS) travels the bus: the units and the slot (PRIMARY to TERTIARY), nothing else.
+BOOST_AUTO_TEST_CASE(switch_weapon_orders_round_trip)
+{
+	ecs::Entity trap;
+	trap.index = 9;
+	trap.generation = 1;
+	const auto order = Decode(Encode(SwitchWeapon{{trap}, 2}));
+	BOOST_TEST_REQUIRE(order.has_value());
+	BOOST_TEST_REQUIRE(std::holds_alternative<SwitchWeapon>(*order));
+	BOOST_TEST(std::get<SwitchWeapon>(*order).slot == 2u);
+	BOOST_TEST((std::get<SwitchWeapon>(*order).units.front() == trap));
+	BOOST_TEST(!Decode(Encode(SwitchWeapon{{trap}, 3})).has_value());
+	auto padded = Encode(SwitchWeapon{{trap}, 1});
+	padded.payload.push_back(std::byte{0});
+	BOOST_TEST(!Decode(padded).has_value());
+}
+
+// The kill-all-enemies cheat (MSG_META_DEMO_KILL_ALL_ENEMIES) travels the bus empty: its sender is all it needs.
+BOOST_AUTO_TEST_CASE(kill_all_enemies_round_trips_empty)
+{
+	const auto encoded = Encode(KillAllEnemies{});
+	BOOST_TEST(encoded.payload.empty());
+	const auto decoded = Decode(encoded);
+	BOOST_TEST_REQUIRE(decoded.has_value());
+	BOOST_TEST(std::holds_alternative<KillAllEnemies>(*decoded));
+	auto padded = encoded;
+	padded.payload.push_back(std::byte{0});
+	BOOST_TEST(!Decode(padded).has_value());
+}
+
+// Surrender (MSG_SELF_DESTRUCT) travels the bus with its one flag: whether its assets go to an ally.
+BOOST_AUTO_TEST_CASE(self_destruct_round_trips_its_flag)
+{
+	for (const bool transfer : {true, false})
+	{
+		const auto decoded = Decode(Encode(SelfDestruct{transfer}));
+		BOOST_TEST_REQUIRE(decoded.has_value());
+		BOOST_TEST_REQUIRE(std::holds_alternative<SelfDestruct>(*decoded));
+		BOOST_TEST(std::get<SelfDestruct>(*decoded).transferToAlly == transfer);
+	}
+	auto truncated = Encode(SelfDestruct{});
+	truncated.payload.clear();
+	BOOST_TEST(!Decode(truncated).has_value());
+}
+
+// Force-fire on the ground (MSG_DO_FORCE_ATTACK_GROUND) travels the bus: the units and the spot.
+BOOST_AUTO_TEST_CASE(attack_position_round_trips)
+{
+	ecs::Entity unit;
+	unit.index = 12;
+	unit.generation = 3;
+	const Engine::Math::FixedVector2 spot{Engine::Math::Fixed::FromRatio(801, 2), Engine::Math::Fixed::FromInt(-33)};
+	const auto decoded = Decode(Encode(AttackPosition{{unit}, spot}));
+	BOOST_TEST_REQUIRE(decoded.has_value());
+	BOOST_TEST_REQUIRE(std::holds_alternative<AttackPosition>(*decoded));
+	const auto &order = std::get<AttackPosition>(*decoded);
+	BOOST_TEST_REQUIRE(order.units.size() == 1u);
+	BOOST_TEST(order.units.front().index == 12u);
+	BOOST_TEST((order.position == spot));
+	auto truncated = Encode(AttackPosition{{unit}, spot});
+	truncated.payload.resize(truncated.payload.size() - 1);
+	BOOST_TEST(!Decode(truncated).has_value());
+}
+
+// Getting repaired (MSG_GET_REPAIRED) travels the bus: the units and the repair pad.
+BOOST_AUTO_TEST_CASE(get_repaired_round_trips)
+{
+	ecs::Entity unit, pad;
+	unit.index = 7;
+	unit.generation = 2;
+	pad.index = 40;
+	pad.generation = 1;
+	const auto decoded = Decode(Encode(GetRepaired{{unit}, pad}));
+	BOOST_TEST_REQUIRE(decoded.has_value());
+	BOOST_TEST_REQUIRE(std::holds_alternative<GetRepaired>(*decoded));
+	const auto &order = std::get<GetRepaired>(*decoded);
+	BOOST_TEST_REQUIRE(order.units.size() == 1u);
+	BOOST_TEST((order.units.front() == unit));
+	BOOST_TEST((order.depot == pad));
+}
+
+// The Retaliation option (MSG_ENABLE_RETALIATION_MODE) travels the bus: on or off.
+BOOST_AUTO_TEST_CASE(enable_retaliation_round_trips)
+{
+	for (const bool enabled : {true, false})
+	{
+		const auto decoded = Decode(Encode(EnableRetaliation{enabled}));
+		BOOST_TEST_REQUIRE(decoded.has_value());
+		BOOST_TEST_REQUIRE(std::holds_alternative<EnableRetaliation>(*decoded));
+		BOOST_TEST(std::get<EnableRetaliation>(*decoded).enabled == enabled);
+	}
+}
+
+// Going into something (MSG_ENTER) travels the bus: the units and what they go into.
+BOOST_AUTO_TEST_CASE(enter_round_trips)
+{
+	ecs::Entity unit;
+	ecs::Entity target;
+	unit.index = 7;
+	unit.generation = 3;
+	target.index = 21;
+	target.generation = 2;
+	const auto decoded = Decode(Encode(Enter{{unit}, target}));
+	BOOST_TEST_REQUIRE(decoded.has_value());
+	BOOST_TEST_REQUIRE(std::holds_alternative<Enter>(*decoded));
+	const auto &order = std::get<Enter>(*decoded);
+	BOOST_TEST_REQUIRE(order.units.size() == 1u);
+	BOOST_TEST((order.units.front() == unit));
+	BOOST_TEST((order.target == target));
+}
+
+// Driving a power's effect (MSG_DO_SPECIAL_POWER_OVERRIDE_DESTINATION) travels the bus: the units and the spot.
+BOOST_AUTO_TEST_CASE(special_power_destination_round_trips)
+{
+	ecs::Entity uplink;
+	uplink.index = 3;
+	uplink.generation = 1;
+	const Engine::Math::FixedVector2 spot{Engine::Math::Fixed::FromRatio(401, 2), Engine::Math::Fixed::FromInt(77)};
+	const auto decoded = Decode(Encode(SpecialPowerDestination{{uplink}, spot}));
+	BOOST_TEST_REQUIRE(decoded.has_value());
+	BOOST_TEST_REQUIRE(std::holds_alternative<SpecialPowerDestination>(*decoded));
+	const auto &order = std::get<SpecialPowerDestination>(*decoded);
+	BOOST_TEST((order.units.front() == uplink));
+	BOOST_TEST((order.position == spot));
+}
+
+// Building (the original's DOZER_CONSTRUCT) travels the bus: builder, structure, spot and facing.
+BOOST_AUTO_TEST_CASE(build_orders_round_trip)
+{
+	ecs::Entity dozer;
+	dozer.index = 9;
+	dozer.generation = 4;
+	const BuildStructure order{dozer, "AmericaPowerPlant", {Fixed::FromInt(120), Fixed::FromRatio(7, 2)}, 0x40000000u};
+	const auto decoded = Decode(Encode(order));
+	BOOST_TEST_REQUIRE(decoded.has_value());
+	BOOST_TEST_REQUIRE(std::holds_alternative<BuildStructure>(*decoded));
+	const auto &got = std::get<BuildStructure>(*decoded);
+	BOOST_TEST((got.builder == dozer));
+	BOOST_TEST(got.structure == "AmericaPowerPlant");
+	BOOST_TEST(got.position.x.Raw() == order.position.x.Raw());
+	BOOST_TEST(got.position.y.Raw() == order.position.y.Raw());
+	BOOST_TEST(got.facing == order.facing);
+	BOOST_TEST(!Decode(Encode(BuildStructure{dozer, std::string(129, 'x'), {}, 0})).has_value());
+}
+
+
+// Sending a builder to a structure (the original's DOZER_REPAIR / RESUME_CONSTRUCTION) travels the bus.
+BOOST_AUTO_TEST_CASE(work_orders_round_trip)
+{
+	ecs::Entity dozer, structure;
+	dozer.index = 3;
+	dozer.generation = 1;
+	structure.index = 77;
+	structure.generation = 2;
+	const auto decoded = Decode(Encode(WorkOn{dozer, structure}));
+	BOOST_TEST_REQUIRE(decoded.has_value());
+	BOOST_TEST_REQUIRE(std::holds_alternative<WorkOn>(*decoded));
+	BOOST_TEST((std::get<WorkOn>(*decoded).builder == dozer));
+	BOOST_TEST((std::get<WorkOn>(*decoded).structure == structure));
+}
+
+
+// The control bar's unit orders (GUI_COMMAND_UNIT_BUILD, CANCEL_UNIT_BUILD) travel the bus: a unit by name, a cancel
+// by the factory's production id.
+BOOST_AUTO_TEST_CASE(unit_production_orders_round_trip)
+{
+	ecs::Entity factory;
+	factory.index = 12;
+	factory.generation = 3;
+	const auto queued = Decode(Encode(QueueUnit{factory, "GLAInfantryWorker"}));
+	BOOST_TEST_REQUIRE(queued.has_value());
+	BOOST_TEST_REQUIRE(std::holds_alternative<QueueUnit>(*queued));
+	BOOST_TEST((std::get<QueueUnit>(*queued).factory == factory));
+	BOOST_TEST(std::get<QueueUnit>(*queued).unit == "GLAInfantryWorker");
+	const auto cancelled = Decode(Encode(CancelUnit{factory, 7}));
+	BOOST_TEST_REQUIRE(cancelled.has_value());
+	BOOST_TEST(std::get<CancelUnit>(*cancelled).productionId == 7u);
+	BOOST_TEST(!Decode(Encode(QueueUnit{factory, std::string(129, 'x')})).has_value());
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -1,0 +1,120 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdlib>
+#include <filesystem>
+#include <string>
+
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.content_loader;
+import games.generalszh.content.water.water_settings;
+import games.generalszh.content.install.install_mount;
+
+using namespace generalszh::content;
+using namespace engine::config;
+
+namespace
+{
+struct Bound
+{
+	Document document;
+	Diagnostics diagnostics;
+	WaterSettings settings;
+};
+
+void Bind(Bound &bound, std::string text)
+{
+	Diagnostics grammarDiagnostics;
+	const auto grammar = ZeroHourIniGrammar(grammarDiagnostics);
+	ini::Read(bound.document, bound.document.AddSource("water.ini", std::move(text)), grammar, bound.diagnostics);
+	BindContext context{bound.diagnostics, engine::time::FixedStep{30}};
+	BindWaterSettings(bound.document, bound.settings, context);
+}
+}
+
+BOOST_AUTO_TEST_SUITE(water_settings)
+
+BOOST_AUTO_TEST_CASE(colors_read_rgb_with_optional_alpha)
+{
+	const auto opaque = ParseWaterColor("R:200 G:100 B:50");
+	BOOST_TEST_REQUIRE(opaque.has_value());
+	BOOST_TEST(opaque->r == 200);
+	BOOST_TEST(opaque->g == 100);
+	BOOST_TEST(opaque->b == 50);
+	BOOST_TEST(opaque->a == 255);
+	const auto translucent = ParseWaterColor("R:150 G:150 B:150 A:128");
+	BOOST_TEST_REQUIRE(translucent.has_value());
+	BOOST_TEST(translucent->a == 128);
+	BOOST_TEST(!ParseWaterColor("R:300 G:0 B:0").has_value());
+	BOOST_TEST(!ParseWaterColor("R:1 G:2").has_value());
+}
+
+BOOST_AUTO_TEST_CASE(water_sets_bind_per_time_of_day_and_transparency_once)
+{
+	Bound bound;
+	Bind(bound, "WaterSet EVENING\n"
+				"  SkyTexture = TSCloudSun.tga\n"
+				"  WaterTexture = TSWater.tga\n"
+				"  Vertex00Color = R:150 G:150 B:150\n"
+				"  DiffuseColor   = R:225 G:225 B:225 A:255\n"
+				"  TransparentDiffuseColor = R:150 G:150 B:150 A:96\n"
+				"  UScrollPerMS = 0.002\n"
+				"  VScrollPerMS = 0.5\n"
+				"  SkyTexelsPerUnit = 0.8\n"
+				"  WaterRepeatCount = 32\n"
+				"End\n"
+				"WaterTransparency\n"
+				"  TransparentWaterMinOpacity = 0.5\n"
+				"  StandingWaterTexture = TWWater02.tga\n"
+				"  AdditiveBlending = yes\n"
+				"End\n");
+	BOOST_TEST(bound.diagnostics.ErrorCount() == 0u);
+	const WaterSetDefinition &evening = bound.settings.sets[static_cast<std::size_t>(WaterTimeOfDay::Evening)];
+	BOOST_TEST(evening.skyTexture == "TSCloudSun.tga");
+	BOOST_TEST(evening.waterTexture == "TSWater.tga");
+	BOOST_TEST(evening.vertex00.r == 150);
+	BOOST_TEST(evening.vertex00.a == 255);
+	BOOST_TEST(evening.transparentDiffuse.a == 96);
+	BOOST_TEST(evening.vScrollPerMs.Raw() == Engine::Math::Fixed::Half().Raw());
+	BOOST_TEST(evening.waterRepeatCount == 32);
+	BOOST_TEST(bound.settings.sets[0].waterTexture.empty());
+	BOOST_TEST(&bound.settings.For(2) == &evening);
+	BOOST_TEST(bound.settings.transparency.minWaterOpacity.Raw() == Engine::Math::Fixed::Half().Raw());
+	BOOST_TEST(bound.settings.transparency.transparentWaterDepth.Raw() == Engine::Math::Fixed::FromInt(3).Raw());
+	BOOST_TEST(bound.settings.transparency.standingWaterTexture == "TWWater02.tga");
+	BOOST_TEST(bound.settings.transparency.additiveBlending);
+}
+
+BOOST_AUTO_TEST_CASE(unknown_time_of_day_is_an_error)
+{
+	Bound bound;
+	Bind(bound, "WaterSet DUSK\n  WaterTexture = TSWater.tga\nEnd\n");
+	BOOST_TEST(bound.diagnostics.ErrorCount() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(shipped_water_ini_binds)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const Document &document = loader.Load({"Data/INI/Default/Water", "Data/INI/Water"});
+	Diagnostics &diagnostics = loader.DiagnosticsFor(document);
+	BindContext context{diagnostics, engine::time::FixedStep{30}};
+	WaterSettings settings;
+	BindWaterSettings(document, settings, context);
+	BOOST_TEST(diagnostics.ErrorCount() == 0u);
+	for (const auto &set : settings.sets)
+	{
+		BOOST_TEST(!set.waterTexture.empty());
+		BOOST_TEST(!set.skyTexture.empty());
+		BOOST_TEST(set.transparentDiffuse.a > 0);
+	}
+}
+
+BOOST_AUTO_TEST_SUITE_END()

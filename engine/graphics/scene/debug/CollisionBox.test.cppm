@@ -2,14 +2,9 @@ module;
 
 #define BOOST_TEST_MODULE CollisionBoxDrawingTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <limits>
 
 export module Graphics.Scene.Debug.CollisionBox.Tests;
+import std;
 
 import Graphics.RHI;
 import Graphics.Tests.Device;

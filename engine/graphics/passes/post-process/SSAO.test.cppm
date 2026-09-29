@@ -1,15 +1,8 @@
 module;
 #define BOOST_TEST_MODULE SSAOTests
 #include <boost/test/included/unit_test.hpp>
-#include <algorithm>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <limits>
-#include <span>
-#include <vector>
 export module Graphics.Passes.SSAO.Tests;
+import std;
 import Graphics.Passes.SSAO;
 import Graphics.RHI;
 import Graphics.FrameTargets;

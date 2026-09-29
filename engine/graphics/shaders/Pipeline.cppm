@@ -1,11 +1,5 @@
-module;
-
-#include <cstddef>
-#include <cstdint>
-#include <span>
-#include <vector>
-
 export module Graphics.Shaders.Pipeline;
+import std;
 
 export import Graphics.Resources.Handles.ResourceHandle;
 export import Graphics.RHI;

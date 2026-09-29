@@ -4,13 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <span>
-#include <type_traits>
-
 export module Graphics.Shaders.Pipeline.Tests;
+import std;
 
 import Graphics.Shaders.Pipeline;
 

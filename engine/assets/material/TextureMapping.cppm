@@ -1,7 +1,5 @@
-module;
-#include <cstdint>
-#include <variant>
 export module Assets.Materials.TextureMapping;
+import std;
 import Assets.Math;
 
 namespace Assets {

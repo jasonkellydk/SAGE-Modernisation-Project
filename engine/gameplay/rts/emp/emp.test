@@ -1,0 +1,201 @@
+#define BOOST_TEST_MODULE EngineGameplayEmp
+#include <boost/test/included/unit_test.hpp>
+
+#include <algorithm>
+#include <cstdint>
+#include <memory>
+#include <vector>
+
+import engine.gameplay.rts.emp.systems.emp_pulse_system;
+import engine.gameplay.common.spatial.systems.spatial_index_system;
+import engine.core.serialization.byte_stream;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+using namespace engine::gameplay;
+using Engine::Math::Fixed;
+
+namespace
+{
+// The original's EMPPulseEffectSpheroid (EMPUpdate: DisabledDuration 30000 ms, Lifetime 3000 ms, StartFadeTime 300 ms,
+// EffectRadius 200) of player 0 at (500, 500), made on tick 0; player 1 its enemy.
+struct Blast
+{
+	explicit Blast(std::size_t workers)
+	{
+		world.RegisterComponent<Transform>();
+		world.RegisterComponent<Targetable>();
+		world.RegisterComponent<Owner>();
+		world.RegisterComponent<ObjectShroud>();
+		world.RegisterComponent<OffMap>();
+		world.RegisterComponent<AttackTarget>();
+		world.RegisterComponent<EmpTraits>();
+		world.RegisterComponent<EmpPulse>();
+		world.FinalizeComponents();
+		terrain.width = terrain.height = 2;
+		terrain.cellSize = Fixed::FromInt(1000);
+		terrain.heights.assign(4, Fixed{});
+		world.EmplaceResource<GroundHeight>(terrain);
+		world.EmplaceResource<SpatialIndex>(Engine::Math::FixedVector2{Fixed::FromInt(1000), Fixed::FromInt(1000)}, Fixed::FromInt(100));
+		world.EmplaceResource<SpatialGather>();
+		Relationships &relationships = world.EmplaceResource<Relationships>(2u);
+		relationships.Set(0, 1, Relationship::Enemies);
+		relationships.Set(1, 0, Relationship::Enemies);
+		world.EmplaceResource<DisableRequests>();
+		world.EmplaceResource<KillRequests>();
+		world.EmplaceResource<EmpStrikes>();
+		pulse = Body(0, 500, 0, 0);
+		world.Add<EmpPulse>(pulse);
+		*world.Get<EmpPulse>(pulse) = EmpPulse{9, 90, 900, Fixed::FromInt(200)};
+		registry.Register(index);
+		registry.Register(emp);
+		registry.Finalize(world.Components());
+		scheduler = std::make_unique<ecs::Scheduler>(world, registry, engine::jobs::JobSystemConfig{workers});
+		scheduler->Finalize(engine::time::FixedStep{30});
+	}
+
+	ecs::Entity Body(std::uint32_t player, int x, std::uint32_t classes, int z, std::uint32_t traits = 0)
+	{
+		const ecs::Entity entity = world.Create();
+		world.Add<Transform>(entity);
+		world.Add<Targetable>(entity);
+		world.Add<Owner>(entity);
+		world.Get<Transform>(entity)->position = {Fixed::FromInt(x), Fixed::FromInt(500), Fixed::FromInt(z)};
+		*world.Get<Targetable>(entity) = {Fixed::FromInt(10), classes};
+		world.Get<Owner>(entity)->player = player;
+		if (traits != 0)
+		{
+			world.Add<EmpTraits>(entity);
+			world.Get<EmpTraits>(entity)->flags = traits;
+		}
+		return entity;
+	}
+
+	void Step()
+	{
+		world.Resource<DisableRequests>().list.clear();
+		world.Resource<KillRequests>().entities.clear();
+		scheduler->Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}});
+	}
+
+	bool Disabled(ecs::Entity entity)
+	{
+		const auto &list = world.Resource<DisableRequests>().list;
+		return std::any_of(list.begin(), list.end(), [&](const DisableRequest &request) { return request.entity == entity && request.until == tick + 900; });
+	}
+	bool Killed(ecs::Entity entity)
+	{
+		const auto &list = world.Resource<KillRequests>().entities;
+		return std::find(list.begin(), list.end(), entity) != list.end();
+	}
+
+	engine::level::Heightfield terrain;
+	ecs::World world{ecs::WorldConfig{4}};
+	ecs::Entity pulse;
+	SpatialIndexSystem index;
+	EmpPulseSystem emp;
+	ecs::SystemRegistry registry;
+	std::unique_ptr<ecs::Scheduler> scheduler;
+	std::uint64_t tick{0};
+};
+}
+
+BOOST_AUTO_TEST_SUITE(emp)
+
+// EMPUpdate::update and doDisableAttack (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Update/EMPUpdate.cpp): on its
+// fade frame (tick 9) it disables for 30 seconds (900 ticks) the vehicles in reach, an ally's too, and faction
+// structures, not infantry, not a civilian structure, not beyond its radius; it kills an aircraft in the air unless EMP
+// hardened; it dies on tick 90.
+BOOST_AUTO_TEST_CASE(legacy_parity_an_emp_pulse_disables_what_it_reaches)
+{
+	Blast blast(2);
+	const ecs::Entity tank = blast.Body(1, 600, target_class::Vehicle | target_class::Ground, 0);
+	const ecs::Entity own = blast.Body(0, 450, target_class::Vehicle | target_class::Ground, 0);
+	const ecs::Entity factory = blast.Body(1, 400, target_class::Structure | target_class::Ground, 0, emp_trait::FactionStructure);
+	const ecs::Entity shack = blast.Body(1, 420, target_class::Structure | target_class::Ground, 0);
+	const ecs::Entity soldier = blast.Body(1, 520, target_class::Infantry | target_class::Ground, 0);
+	const ecs::Entity distant = blast.Body(1, 750, target_class::Vehicle | target_class::Ground, 0);
+	const ecs::Entity jet = blast.Body(1, 500, target_class::Vehicle | target_class::Aircraft | target_class::AirborneVehicle, 100);
+	const ecs::Entity hardened = blast.Body(1, 510, target_class::Vehicle | target_class::Aircraft | target_class::AirborneVehicle, 100, emp_trait::Hardened);
+	while (blast.tick < 8)
+	{
+		blast.Step();
+		BOOST_TEST_REQUIRE(blast.world.Resource<DisableRequests>().list.empty());
+	}
+	blast.Step(); // tick 9
+	BOOST_TEST(blast.Disabled(tank));
+	BOOST_TEST(blast.Disabled(own));
+	BOOST_TEST(blast.Disabled(factory));
+	BOOST_TEST(!blast.Disabled(shack));
+	BOOST_TEST(!blast.Disabled(soldier));
+	BOOST_TEST(!blast.Disabled(distant));
+	BOOST_TEST(blast.Killed(jet));
+	BOOST_TEST(!blast.Killed(hardened));
+	BOOST_TEST(!blast.Disabled(hardened));
+	// Its sparks: the three its sphere disabled, in the order it reached them.
+	const auto &strikes = blast.world.Resource<EmpStrikes>().list;
+	BOOST_TEST(strikes.size() == 3u);
+	for (const EmpStrike &strike : strikes)
+	{
+		BOOST_TEST((strike.victim == tank || strike.victim == own || strike.victim == factory));
+		BOOST_TEST((strike.pulse == blast.pulse));
+		BOOST_TEST(strike.duration == 900u);
+	}
+	BOOST_TEST_REQUIRE(blast.world.Resource<EmpStrikes>().blackened.size() == 1u);
+	BOOST_TEST((blast.world.Resource<EmpStrikes>().blackened[0] == jet));
+	blast.Step();
+	BOOST_TEST(blast.world.Resource<EmpStrikes>().list.empty());
+	BOOST_TEST(blast.world.Resource<DisableRequests>().list.empty()); // once
+	while (blast.tick < 89)
+	{
+		blast.Step();
+		BOOST_TEST_REQUIRE(!blast.Killed(blast.pulse));
+	}
+	blast.Step(); // tick 90
+	BOOST_TEST(blast.Killed(blast.pulse));
+}
+
+// Its producer aiming at something airborne: only airborne things are reached (the tank below is spared).
+BOOST_AUTO_TEST_CASE(legacy_parity_an_emp_pulse_aimed_at_an_aircraft_reaches_only_the_airborne)
+{
+	Blast blast(1);
+	const ecs::Entity tank = blast.Body(1, 560, target_class::Vehicle | target_class::Ground, 0);
+	const ecs::Entity chopper = blast.Body(1, 520, target_class::Vehicle | target_class::AirborneVehicle, 80);
+	const ecs::Entity patriot = blast.Body(0, 300, target_class::Structure | target_class::Ground, 0, emp_trait::FactionStructure);
+	blast.world.Add<AttackTarget>(patriot);
+	blast.world.Get<AttackTarget>(patriot)->target = chopper;
+	blast.world.Get<EmpPulse>(blast.pulse)->producer = patriot;
+	while (blast.tick < 9)
+		blast.Step();
+	BOOST_TEST(blast.Disabled(chopper));
+	BOOST_TEST(!blast.Disabled(tank));
+}
+
+// The same on one worker as on four, and after a checkpoint.
+BOOST_AUTO_TEST_CASE(emp_pulses_are_the_same_on_any_number_of_workers_and_after_a_checkpoint)
+{
+	const auto run = [](std::size_t workers) {
+		Blast blast(workers);
+		for (int index = 0; index < 30; ++index)
+			blast.Body(static_cast<std::uint32_t>(index % 2), 300 + index * 13, target_class::Vehicle | target_class::Ground, 0);
+		std::vector<std::size_t> requests;
+		for (int step = 0; step < 12; ++step)
+		{
+			blast.Step();
+			requests.push_back(blast.world.Resource<DisableRequests>().list.size());
+		}
+		return std::pair{requests, blast.world.StateHash()};
+	};
+	BOOST_TEST((run(1) == run(4)));
+
+	Blast saved(2);
+	saved.Step();
+	engine::core::serialization::ByteWriter writer;
+	saved.world.SaveCheckpoint(writer);
+	const auto bytes = writer.Take();
+	BOOST_TEST(!bytes.empty());
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -1,16 +1,5 @@
-module;
-
-#include <cstddef>
-#include <cstdint>
-#include <cmath>
-#include <limits>
-#include <span>
-#include <string>
-#include <string_view>
-#include <utility>
-#include <vector>
-
 export module Assets.Adapters.W3D.Ring;
+import std;
 
 import Assets.Adapters.W3D.Chunks;
 import Assets.Math;

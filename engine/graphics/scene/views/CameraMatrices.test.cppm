@@ -1,11 +1,8 @@
 module;
 #define BOOST_TEST_MODULE CameraMatricesTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
 export module Graphics.Scene.Views.CameraMatrices.Tests;
+import std;
 import Graphics.Scene.Views.CameraMatrices;
 import Graphics.Scene.Props.Renderer;
 import Graphics.Scene.Props.MaterialPassQueue;

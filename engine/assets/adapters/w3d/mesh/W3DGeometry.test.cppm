@@ -1,13 +1,8 @@
 module;
 #define BOOST_TEST_MODULE W3DGeometryTests
 #include <boost/test/included/unit_test.hpp>
-#include <bit>
-#include <cstdlib>
-#include <filesystem>
-#include <fstream>
-#include <limits>
-#include <vector>
 export module Assets.Adapters.W3D.Geometry.Tests;
+import std;
 import Assets.Adapters.W3D.Geometry;
 import Assets.Adapters.W3D.Chunks;
 import Assets.Math;

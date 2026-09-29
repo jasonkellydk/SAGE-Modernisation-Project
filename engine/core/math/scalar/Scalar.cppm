@@ -1,9 +1,5 @@
-module;
-
-#include <cmath>
-#include <numbers>
-
 export module Engine.Core.Math.Scalar;
+import std;
 
 export namespace Engine::Math
 {

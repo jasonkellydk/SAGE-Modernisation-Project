@@ -1,12 +1,5 @@
-module;
-
-#include <cmath>
-#include <cstddef>
-#include <limits>
-#include <optional>
-#include <span>
-
 export module Engine.Core.Math.Sphere3;
+import std;
 
 export import Engine.Core.Math.Vector3;
 

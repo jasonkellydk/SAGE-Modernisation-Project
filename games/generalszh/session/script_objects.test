@@ -1,0 +1,1179 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+import games.generalszh.session.session;
+import games.generalszh.session.setup.skirmish_level;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import games.generalszh.content.combat.combat_catalog;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.rts.sciences.resources.player_ranks;
+import engine.gameplay.rts.sciences.definitions.rank_rules;
+import engine.gameplay.common.identity.components.owner;
+import engine.gameplay.common.health.components.health;
+import engine.gameplay.common.health.components.pending_damage;
+import engine.gameplay.common.health.systems.health_system;
+import engine.gameplay.common.status.components.disabled;
+import engine.gameplay.common.status.components.script_status;
+import engine.gameplay.common.weapons.components.weapon_bonus_conditions;
+import games.generalszh.content.combat.weapon_bonus_content;
+import games.generalszh.gameplay.world.algorithms.difficulty_bonuses;
+import games.generalszh.gameplay.combat.algorithms.unmanned_vehicles;
+import games.generalszh.gameplay.orders.algorithms.wander_orders;
+import games.generalszh.gameplay.ai.components.repulsion;
+import games.generalszh.gameplay.scripts.algorithms.team_sequences;
+import engine.gameplay.common.appearance.components.indicator_color;
+import engine.gameplay.common.identity.resources.name_registry;
+import engine.gameplay.common.identity.components.object_id;
+import engine.gameplay.rts.movement.components.locomotion;
+import engine.gameplay.rts.movement.components.wander_anchor;
+import engine.gameplay.common.appearance.components.appearance;
+import games.generalszh.content.objects.model_conditions;
+import engine.gameplay.rts.death.components.dying;
+import engine.gameplay.common.identity.components.team_member;
+import engine.gameplay.rts.movement.components.move_order;
+import games.generalszh.gameplay.orders.algorithms.command_button_readiness;
+import games.generalszh.gameplay.upgrades.algorithms.grant_upgrade;
+import games.generalszh.gameplay.scripts.algorithms.object_status_queries;
+import games.generalszh.gameplay.ai.algorithms.ai_players;
+import games.generalszh.gameplay.orders.algorithms.unit_orders;
+import engine.gameplay.rts.containment.components.transport;
+import games.generalszh.gameplay.scripts.algorithms.unit_script_orders;
+import games.generalszh.gameplay.lifecycle.algorithms.retire_now;
+import engine.gameplay.rts.stealth.components.stealth;
+import engine.gameplay.rts.containment.resources.cargo_manifest;
+import games.generalszh.gameplay.world.resources.deselections;
+import games.generalszh.gameplay.score.algorithms.scoring;
+import engine.gameplay.rts.economy.resources.player_money;
+import games.generalszh.gameplay.world.resources.solo_play;
+import engine.gameplay.common.identity.resources.relationships;
+import engine.gameplay.rts.construction.components.under_construction;
+import engine.gameplay.rts.veterancy.components.experience;
+import games.generalszh.gameplay.veterancy.algorithms.veterancy_placement;
+import games.generalszh.gameplay.teams.algorithms.team_actions;
+import games.generalszh.gameplay.lifecycle.algorithms.retire_now;
+import engine.gameplay.common.spatial.components.transform;
+import engine.gameplay.rts.combat.components.aggression;
+import engine.gameplay.rts.harvesting.components.resource_store;
+import games.generalszh.gameplay.scripts.algorithms.object_edits;
+import engine.ecs.query.query;
+import engine.gameplay.rts.powers.components.special_power_timers;
+import games.generalszh.gameplay.powers.algorithms.special_power_state;
+import games.generalszh.content.powers.special_powers;
+import games.generalszh.gameplay.ai.algorithms.attack_squads;
+import engine.gameplay.rts.harvesting.components.harvester;
+import games.generalszh.gameplay.orders.algorithms.unit_orders;
+import engine.gameplay.common.weapons.components.armament;
+import engine.gameplay.common.weapons.components.armament;
+
+// The scripts' object actions and questions (ScriptActions / ScriptConditions) on a shipped skirmish map.
+using namespace generalszh;
+namespace gp = engine::gameplay;
+using Engine::Math::Fixed;
+
+namespace
+{
+struct Install
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	bool loaded{false};
+
+	Install()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		loaded = true;
+	}
+};
+
+Install &Data()
+{
+	static Install install;
+	return install;
+}
+
+// America (player0, start 0) against China (player1, start 2), both human seats with nobody at them.
+struct Match
+{
+	std::optional<engine::level::generals_map::ReadResult> read;
+	session::setup::SkirmishLevel skirmish;
+	Engine::Math::FixedVector2 start;
+
+	std::uint32_t Team(const session::Session &game, std::size_t player) const { return *game.Teams().FindTeam(skirmish.players[player].team); }
+	Engine::Math::FixedVector2 At(int dx, int dy) const { return {start.x + Fixed::FromInt(dx), start.y + Fixed::FromInt(dy)}; }
+
+	session::SessionOptions Options(std::size_t workers) const
+	{
+		session::SessionOptions options{11, workers, {}, {"player0", "player1"}};
+		for (const auto &player : skirmish.players)
+			options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+		return options;
+	}
+};
+
+std::optional<Match> Prepare(Install &shell)
+{
+	const auto bytes = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	if (!bytes)
+		return std::nullopt;
+	Match match;
+	auto read = engine::level::generals_map::Read(*bytes);
+	if (!read)
+		return std::nullopt;
+	match.read = std::move(*read);
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 7;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::Player, u"Other");
+	setup.slots[1].playerTemplate = templateOf("FactionChina");
+	setup.slots[1].startPos = 2;
+	match.skirmish = session::setup::PrepareSkirmishLevel(match.read->level, setup, shell.game.playerTemplates, 4);
+	for (const auto &marker : match.read->level.markers)
+		if (marker.name == "Player_1_Start")
+			match.start = marker.position.XY();
+	return match;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(script_objects)
+
+// ScriptActions::createUnitOnTeamAt (CREATE_NAMED_ / CREATE_UNNAMED_ON_TEAM_AT_WAYPOINT): the object is made on the team,
+// at the waypoint; a name held by a living unit refuses a second, a dead one's name is taken over; no such waypoint:
+// the map's origin; no such type or team: nothing.
+BOOST_AUTO_TEST_CASE(legacy_parity_scripts_create_units_on_teams_at_waypoints)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	auto &world = game.World();
+	const auto &waypoints = game.Game().waypoints;
+	BOOST_TEST_REQUIRE(waypoints.Size() > 0u);
+	const std::string waypoint = waypoints.Name(0);
+	const std::string team = match->skirmish.players[0].team;
+	const ecs::Entity made = generalszh::gameplay::CreateOnTeamAt(game.Game(), {}, "AmericaInfantryRanger", team, waypoint);
+	BOOST_TEST_REQUIRE(world.IsAlive(made));
+	BOOST_TEST(world.Get<gp::TeamMember>(made)->team == match->Team(game, 0));
+	BOOST_TEST((world.Get<gp::Transform>(made)->position.XY() == waypoints.Position(0).XY()));
+	const ecs::Entity named = generalszh::gameplay::CreateOnTeamAt(game.Game(), "Scout", "AmericaInfantryRanger", team, waypoint);
+	BOOST_TEST_REQUIRE(world.IsAlive(named));
+	BOOST_TEST((game.Game().names.Find("Scout") == named));
+	BOOST_TEST((generalszh::gameplay::CreateOnTeamAt(game.Game(), "Scout", "AmericaInfantryRanger", team, waypoint) == ecs::Entity{}));
+	generalszh::gameplay::KillNow(game.Game(), named);
+	game.Tick();
+	const ecs::Entity again = generalszh::gameplay::CreateOnTeamAt(game.Game(), "Scout", "AmericaInfantryRanger", team, "NoSuchWaypoint");
+	BOOST_TEST_REQUIRE(world.IsAlive(again));
+	BOOST_TEST((game.Game().names.Find("Scout") == again));
+	BOOST_TEST((world.Get<gp::Transform>(again)->position.XY() == Engine::Math::FixedVector2{}));
+	BOOST_TEST((generalszh::gameplay::CreateOnTeamAt(game.Game(), {}, "NoSuchThing", team, waypoint) == ecs::Entity{}));
+	BOOST_TEST((generalszh::gameplay::CreateOnTeamAt(game.Game(), {}, "AmericaInfantryRanger", "NoSuchTeam", waypoint) == ecs::Entity{}));
+}
+
+// ScriptEngine::didUnitExist: a named unit's name stays known once the unit is gone (NAMED_DESTROYED, NAMED_TOTALLY_DEAD
+// read it); its object stays there while it dies (NAMED_DYING); a checkpoint keeps what is known.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_dead_units_name_stays_known)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	auto &world = game.World();
+	const ecs::Entity hero = generalszh::gameplay::CreateOnTeamAt(game.Game(), "Hero", "AmericaInfantryRanger", match->skirmish.players[0].team, {});
+	BOOST_TEST_REQUIRE(world.IsAlive(hero));
+	BOOST_TEST(game.Game().names.Known("Hero"));
+	BOOST_TEST(!game.Game().names.Known("Nobody"));
+	generalszh::gameplay::KillNow(game.Game(), hero);
+	int ticks = 0;
+	bool sawDying = false;
+	while (world.IsAlive(game.Game().names.Find("Hero")) && ticks < 600)
+	{
+		game.Tick();
+		++ticks;
+		if (world.IsAlive(hero) && generalszh::gameplay::EffectivelyDead(game.Game(), hero))
+			sawDying = true;
+	}
+	BOOST_TEST(sawDying);
+	BOOST_TEST(!world.IsAlive(game.Game().names.Find("Hero")));
+	BOOST_TEST(game.Game().names.Known("Hero"));
+	const auto restored = session::Session::Restore(match->skirmish.level, shell.game, match->Options(1), game.Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST(restored->Game().names.Known("Hero"));
+	BOOST_TEST(restored->StateHash() == game.StateHash());
+}
+
+// ActiveBody::attemptDamage's last damage info: a China Red Guard's shots on an America Ranger leave its player and
+// type on the Ranger's body (kept once the Red Guard is gone), and America notes it was attacked by China
+// (Player::setAttackedBy); China was not attacked by America.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_hit_records_its_attacker)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	auto &world = game.World();
+	const ecs::Entity ranger = game.Place("AmericaInfantryRanger", match->At(0, -350), {}, match->Team(game, 0));
+	const ecs::Entity redguard = game.Place("ChinaInfantryRedguard", match->At(60, -350), {}, match->Team(game, 1));
+	*world.Get<gp::AttackTarget>(redguard) = gp::AttackTarget{ranger, true};
+	*world.Get<gp::AttackTarget>(ranger) = {};
+	world.Get<gp::Aggression>(ranger)->autoAcquire = false;
+	const std::uint32_t america = world.Get<gp::Owner>(ranger)->player, china = world.Get<gp::Owner>(redguard)->player;
+	int ticks = 0;
+	while (world.Get<gp::Health>(ranger)->lastDamageTick == 0 && ticks < 300)
+	{
+		game.Tick();
+		++ticks;
+	}
+	const auto *health = world.Get<gp::Health>(ranger);
+	BOOST_TEST_REQUIRE(health->lastDamageTick != 0u);
+	BOOST_TEST((health->lastAttacker == redguard));
+	BOOST_TEST(health->lastAttackerPlayer == china);
+	BOOST_TEST(game.Game().templates.DefinitionAt(health->lastAttackerDefinition).name == "ChinaInfantryRedguard");
+	BOOST_TEST((game.Teams().PlayerAt(america).attackedBy >> china & 1u) == 1u);
+	BOOST_TEST((game.Teams().PlayerAt(china).attackedBy >> america & 1u) == 0u);
+	generalszh::gameplay::RetireNow(game.Game(), {redguard});
+	game.Tick();
+	BOOST_TEST(game.Game().templates.DefinitionAt(world.Get<gp::Health>(ranger)->lastAttackerDefinition).name == "ChinaInfantryRedguard");
+}
+
+// ScriptActions::doCreateObject: at the position (its height too) facing the angle (radians); named, a living namesake
+// refuses it. doNamedHunt: the unit hunts. doTeamAttackNamed: each of the team's AI group attacks the unit.
+BOOST_AUTO_TEST_CASE(legacy_parity_scripts_create_objects_hunt_and_attack)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	auto &world = game.World();
+	const std::string team = match->skirmish.players[0].team;
+	const Engine::Math::FixedVector2 at = match->At(0, -350);
+	const ecs::Entity tank = generalszh::gameplay::CreateObjectAt(game.Game(), "Boss", "AmericaTankCrusader", team, {at.x, at.y, Fixed::FromInt(3)},
+		Fixed::FromRatio(157, 100));
+	BOOST_TEST_REQUIRE(world.IsAlive(tank));
+	BOOST_TEST((world.Get<gp::Transform>(tank)->position.XY() == at));
+	BOOST_TEST((world.Get<gp::Transform>(tank)->position.z == Fixed::FromInt(3)));
+	BOOST_TEST((world.Get<gp::Transform>(tank)->facing.units == Engine::Math::TurnFromRadians(Fixed::FromRatio(157, 100)).units));
+	BOOST_TEST((generalszh::gameplay::CreateObjectAt(game.Game(), "Boss", "AmericaTankCrusader", team, {}, {}) == ecs::Entity{}));
+	generalszh::gameplay::UnitHunt(game.Game(), tank);
+	BOOST_TEST((world.Get<gp::Aggression>(tank)->stance == gp::Stance::Hunt));
+}
+
+// SupplyWarehouseDockUpdate::setCashValue: with Zero Hour's ValuePerSupplyBox 75, a warehouse on the map set to $1250
+// holds 17 boxes (ceil(16.67)), to $1200 16, to nothing none.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_script_sets_a_warehouses_cash)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	auto &world = game.World();
+	ecs::Entity warehouse;
+	ecs::Query<ecs::Read<gp::ResourceStore>> query(world);
+	query.ForEachChunk([&](auto chunk) {
+		if (warehouse == ecs::Entity{} && !chunk.Entities().empty())
+			warehouse = chunk.Entities()[0];
+	});
+	BOOST_TEST_REQUIRE((warehouse != ecs::Entity{}));
+	BOOST_TEST_REQUIRE(shell.game.gameData.valuePerSupplyBox == 75);
+	generalszh::gameplay::SetWarehouseCash(game.Game(), warehouse, 1250);
+	BOOST_TEST(world.Get<gp::ResourceStore>(warehouse)->boxes == 17u);
+	generalszh::gameplay::SetWarehouseCash(game.Game(), warehouse, 1200);
+	BOOST_TEST(world.Get<gp::ResourceStore>(warehouse)->boxes == 16u);
+	generalszh::gameplay::SetWarehouseCash(game.Game(), warehouse, 0);
+	BOOST_TEST(world.Get<gp::ResourceStore>(warehouse)->boxes == 0u);
+}
+
+// SpecialPowerModule::setReadyFrame / getReadyFrame / pauseCountdown as the scripts use them: a Scud Storm set to 60
+// seconds is ready 1800 frames from now; 30 more make it 2700; stopped, its countdown pauses (and its ready frame slides
+// while paused); started again, it runs on.
+BOOST_AUTO_TEST_CASE(legacy_parity_scripts_edit_a_special_power_countdown)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	auto &world = game.World();
+	const ecs::Entity scud = game.Place("GLAScudStorm", match->At(0, -400), {}, match->Team(game, 0));
+	game.Tick();
+	const auto power = shell.game.powers.Template("SuperweaponScudStorm");
+	BOOST_TEST_REQUIRE(power.has_value());
+	auto *timers = world.Get<gp::SpecialPowerTimers>(scud);
+	BOOST_TEST_REQUIRE(timers != nullptr);
+	BOOST_TEST_REQUIRE(timers->Find(*power) != nullptr);
+	using Edit = generalszh::gameplay::CountdownEdit;
+	const std::uint64_t now = game.CurrentTick();
+	generalszh::gameplay::EditPowerCountdown(game.Game(), scud, "SuperweaponScudStorm", Edit::Set, 60);
+	BOOST_TEST(timers->Find(*power)->availableOn == now + 1800);
+	generalszh::gameplay::EditPowerCountdown(game.Game(), scud, "SuperweaponScudStorm", Edit::Add, 30);
+	BOOST_TEST(timers->Find(*power)->availableOn == now + 2700);
+	generalszh::gameplay::EditPowerCountdown(game.Game(), scud, "SuperweaponScudStorm", Edit::Stop, 0);
+	BOOST_TEST(timers->Find(*power)->pausedCount == 1u);
+	generalszh::gameplay::EditPowerCountdown(game.Game(), scud, "SuperweaponScudStorm", Edit::Start, 0);
+	BOOST_TEST(timers->Find(*power)->pausedCount == 0u);
+	generalszh::gameplay::EditPowerCountdown(game.Game(), scud, "NoSuchPower", Edit::Set, 1);
+}
+
+// ScriptConditions::evaluateSkirmishCommandButtonIsReady over CommandButton::isReady, on two Rangers and
+// Command_AmericaRangerCaptureBuilding (SpecialAbilityRangerCaptureBuilding, StartsPaused; Upgrade_InfantryCaptureBuilding):
+// before the upgrade their paused power is not charged, but the upgrade would still set off their
+// UnpauseSpecialPowerUpgrade and they lack it (Object::hasUpgrade: their own upgrades only), so both are ready. Once
+// the player has it, that module has gone and only the power counts: unpaused (pauseCountdown: the ready frame slides
+// by the time paused), its 15 s ReloadTime is still to run, so neither is ready until 450 frames on; then one paused
+// (0.99999 ready): all is false but partial true; both paused, neither. No such team or button: false.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_teams_command_button_readiness)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	namespace domain = generalszh::gameplay;
+	const std::uint32_t team = match->Team(game, 0);
+	const std::string name = "#" + std::to_string(team);
+	const ecs::Entity a = game.Place("AmericaInfantryRanger", match->At(0, -300), {}, team);
+	const ecs::Entity b = game.Place("AmericaInfantryRanger", match->At(30, -300), {}, team);
+	game.Tick();
+	const std::string button = "Command_AmericaRangerCaptureBuilding";
+	BOOST_TEST(domain::TeamCommandButtonReady(game.Game(), name, button, true));
+	BOOST_TEST(domain::TeamCommandButtonReady(game.Game(), name, button, false));
+	BOOST_TEST_REQUIRE(domain::GrantPlayerUpgrade(game.Game(), game.World().Get<gp::Owner>(a)->player, "Upgrade_InfantryCaptureBuilding"));
+	game.Tick();
+	BOOST_TEST(!domain::TeamCommandButtonReady(game.Game(), name, button, false));
+	int frames = 0;
+	while (frames < 600 && !domain::TeamCommandButtonReady(game.Game(), name, button, true))
+	{
+		game.Tick();
+		++frames;
+	}
+	BOOST_TEST(frames == 450);
+	using Edit = domain::CountdownEdit;
+	domain::EditPowerCountdown(game.Game(), a, "SpecialAbilityRangerCaptureBuilding", Edit::Stop, 0);
+	BOOST_TEST(!domain::TeamCommandButtonReady(game.Game(), name, button, true));
+	BOOST_TEST(domain::TeamCommandButtonReady(game.Game(), name, button, false));
+	domain::EditPowerCountdown(game.Game(), b, "SpecialAbilityRangerCaptureBuilding", Edit::Stop, 0);
+	BOOST_TEST(!domain::TeamCommandButtonReady(game.Game(), name, button, false));
+	BOOST_TEST(!domain::TeamCommandButtonReady(game.Game(), "NoSuchTeam", button, true));
+	BOOST_TEST(!domain::TeamCommandButtonReady(game.Game(), name, "NoSuchButton", true));
+}
+
+// evaluateUnitHasEmptied on a Humvee a Ranger boards then leaves, asked every frame: the first ask only looks; it holds
+// on the one frame whose look before saw the Ranger aboard and whose own sees nobody (and for every ask that frame),
+// never before or after. Player::countBuildings: a barracks placed is one more. Team::m_state is saved (Team::xfer).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_transport_empties_and_team_state_is_kept)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	namespace domain = generalszh::gameplay;
+	auto &world = game.World();
+	const std::uint32_t team = match->Team(game, 0);
+	const std::uint32_t player = game.Game().roster.TeamAt(team).owner;
+	const ecs::Entity humvee = game.Place("AmericaVehicleHumvee", match->At(0, -300), {}, team);
+	const ecs::Entity ranger = game.Place("AmericaInfantryRanger", match->At(30, -300), {}, team);
+	game.Tick();
+	BOOST_TEST(!domain::UnitEmptied(game.Game(), humvee));
+	domain::OrderBoard(game.Game(), ranger, humvee);
+	for (int tick = 0; tick < 200 && world.Get<gp::Passenger>(ranger) == nullptr; ++tick)
+	{
+		game.Tick();
+		BOOST_TEST(!domain::UnitEmptied(game.Game(), humvee));
+	}
+	BOOST_TEST_REQUIRE(world.Get<gp::Passenger>(ranger) != nullptr);
+	domain::OrderUnload(game.Game(), humvee);
+	int emptied = 0;
+	bool aboardBefore = false;
+	for (int tick = 0; tick < 200; ++tick)
+	{
+		const bool aboard = world.Get<gp::Passenger>(ranger) != nullptr;
+		game.Tick();
+		if (domain::UnitEmptied(game.Game(), humvee))
+		{
+			BOOST_TEST(domain::UnitEmptied(game.Game(), humvee)); // again the same frame
+			++emptied;
+			aboardBefore = aboard;
+			BOOST_TEST(world.Get<gp::Passenger>(ranger) == nullptr);
+		}
+	}
+	BOOST_TEST(emptied == 1);
+	BOOST_TEST(aboardBefore);
+	const std::int64_t buildings = domain::CountBuildings(game.Game(), player, false);
+	game.Place("AmericaBarracks", match->At(-300, -300), {}, team);
+	BOOST_TEST(domain::CountBuildings(game.Game(), player, false) == buildings + 1);
+	game.Game().roster.TeamAt(team).state = "Attack";
+	const auto restored = session::Session::Restore(match->skirmish.level, shell.game, match->Options(1), game.Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST(restored->Game().roster.TeamAt(team).state == "Attack");
+	BOOST_TEST(restored->StateHash() == game.StateHash());
+}
+
+// AIFaceState with a goal object (doNamedFaceNamed): the Humvee turns toward wherever the Ranger is each frame, and once
+// the Ranger is gone it has nothing to face (STATE_FAILURE: it idles).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_unit_faces_a_moving_object)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	namespace domain = generalszh::gameplay;
+	auto &world = game.World();
+	const std::uint32_t team = match->Team(game, 0);
+	const ecs::Entity humvee = game.Place("AmericaVehicleHumvee", match->At(0, -300), {}, team);
+	const ecs::Entity ranger = game.Place("AmericaInfantryRanger", match->At(100, -300), {}, team);
+	game.Tick();
+	domain::NamedFace(game.Game(), humvee, {}, ranger);
+	BOOST_TEST((world.Get<gp::MoveOrder>(humvee)->mode == gp::MoveMode::FaceObject));
+	domain::OrderMove(game.Game(), ranger, match->At(100, 0));
+	for (int tick = 0; tick < 20; ++tick)
+	{
+		game.Tick();
+		const auto *order = world.Get<gp::MoveOrder>(humvee);
+		if (order->mode != gp::MoveMode::FaceObject)
+			break;
+		BOOST_TEST((order->destination == world.Get<gp::Transform>(ranger)->position.XY()));
+	}
+	domain::FaceToward(game.Game(), humvee, {}, ranger);
+	domain::RetireNow(game.Game(), {ranger});
+	game.Tick();
+	BOOST_TEST((world.Get<gp::MoveOrder>(humvee)->mode == gp::MoveMode::Idle));
+}
+
+// Object::setStatus(OBJECT_STATUS_REPULSOR) from a script (doNamedSetRepulsor): on an object that can be repulsed its
+// ObjectRepulsorHelper clears it two seconds (60 frames) after it went on, and setting it again while on changes nothing;
+// on one that cannot, it stays. doNamedEnableStealth: a Pathfinder kept from stealth stays out of it until allowed again,
+// then stealths after its delay. Player::setUnitsShouldHunt: every member hunts but its dozers.
+BOOST_AUTO_TEST_CASE(legacy_parity_script_repulsors_stealth_and_hunting)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	namespace domain = generalszh::gameplay;
+	auto &world = game.World();
+	const std::uint32_t team = match->Team(game, 0);
+	const ecs::Entity civilian = game.Place("MogadishuMaleCivilian01", match->At(0, -300), {}, team);
+	const ecs::Entity humvee = game.Place("AmericaVehicleHumvee", match->At(60, -300), {}, team);
+	const ecs::Entity pathfinder = game.Place("AmericaInfantryPathfinder", match->At(-200, -300), {}, team);
+	game.Tick();
+	BOOST_TEST_REQUIRE(world.Has<domain::Repulsable>(civilian));
+	const std::uint64_t on = game.CurrentTick();
+	domain::SetRepulsor(game.Game(), civilian, true);
+	domain::SetRepulsor(game.Game(), humvee, true);
+	BOOST_TEST(world.Get<domain::RepulsorMark>(civilian)->until == on + 60);
+	BOOST_TEST(world.Get<domain::RepulsorMark>(humvee)->until == ~std::uint64_t{0});
+	for (int tick = 0; tick < 30; ++tick)
+		game.Tick();
+	domain::SetRepulsor(game.Game(), civilian, true);
+	BOOST_TEST(world.Get<domain::RepulsorMark>(civilian)->until == on + 60);
+	domain::SetRepulsor(game.Game(), humvee, false);
+	BOOST_TEST(world.Get<domain::RepulsorMark>(humvee)->until == 0u);
+
+	const auto *stealth = world.Get<gp::Stealth>(pathfinder);
+	BOOST_TEST_REQUIRE(stealth != nullptr);
+	for (int tick = 0; tick < 200 && !world.Get<gp::Stealth>(pathfinder)->Has(gp::stealth_flag::Stealthed); ++tick)
+		game.Tick();
+	BOOST_TEST_REQUIRE(world.Get<gp::Stealth>(pathfinder)->Has(gp::stealth_flag::Stealthed));
+	domain::SetStealthEnabled(game.Game(), pathfinder, false);
+	for (int tick = 0; tick < 100; ++tick)
+	{
+		game.Tick();
+		BOOST_TEST(!world.Get<gp::Stealth>(pathfinder)->Has(gp::stealth_flag::Stealthed));
+	}
+	domain::SetStealthEnabled(game.Game(), pathfinder, true);
+	const std::uint64_t delay = world.Get<gp::Stealth>(pathfinder)->delay;
+	std::uint64_t frames = 0;
+	while (frames < 300 && !world.Get<gp::Stealth>(pathfinder)->Has(gp::stealth_flag::Stealthed))
+	{
+		game.Tick();
+		++frames;
+	}
+	BOOST_TEST(frames == std::max<std::uint64_t>(delay, 1)); // the first look it is allowed at or after its delay (0: the next frame)
+
+	const std::uint32_t player = game.Game().roster.TeamAt(team).owner;
+	domain::PlayerHunt(game.Game(), player);
+	BOOST_TEST(game.Game().roster.PlayerAt(player).unitsShouldHunt);
+	BOOST_TEST((world.Get<gp::Aggression>(humvee)->stance == gp::Stance::Hunt));
+	for (const ecs::Entity member : game.Game().roster.TeamAt(team).members)
+		if (const auto *ref = world.Get<gp::DefinitionRef>(member); ref != nullptr && game.Game().templates.DefinitionAt(ref->index).Is("DOZER"))
+			if (const auto *aggression = world.Get<gp::Aggression>(member))
+				BOOST_TEST((aggression->stance != gp::Stance::Hunt));
+}
+
+// Script exits: doExitSpecificBuilding on a building with no AI (removeAllContained): everyone inside out on the next
+// frame at once; doUnitExitBuilding (aiExit): only that unit, the next frame its exit is free; doTeamExitAllBuildings out
+// of a Humvee: one out each time its exit is free (TransportContain::isExitBusy: ExitDelay). doNamedSetUnmanned: the
+// vehicle DISABLED_UNMANNED, out of every selection, on the neutral team.
+BOOST_AUTO_TEST_CASE(legacy_parity_script_exits_and_unmanned_status)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	namespace domain = generalszh::gameplay;
+	auto &world = game.World();
+	const auto &manifest = world.Resource<gp::CargoManifest>();
+	const std::uint32_t team = match->Team(game, 0);
+	const ecs::Entity building = game.Place("AsianApartment01", match->At(300, 300), {}, 0);
+	std::vector<ecs::Entity> rangers;
+	for (int index = 0; index < 3; ++index)
+	{
+		const ecs::Entity ranger = game.Place("AmericaInfantryRanger", match->At(260 + index * 10, 230), {}, team);
+		domain::OrderBoard(game.Game(), ranger, building);
+		rangers.push_back(ranger);
+	}
+	const auto garrison = [&] {
+		for (int tick = 0; tick < 900 && manifest.Count(building) < 3u; ++tick)
+			game.Tick();
+		BOOST_TEST_REQUIRE(manifest.Count(building) == 3u);
+	};
+	garrison();
+	domain::ExitSpecificBuilding(game.Game(), building);
+	game.Tick();
+	BOOST_TEST(manifest.Count(building) == 0u);
+	for (const ecs::Entity ranger : rangers)
+	{
+		BOOST_TEST(world.Get<gp::Passenger>(ranger) == nullptr);
+		BOOST_TEST(world.Get<gp::ExitIntent>(ranger) == nullptr);
+		domain::OrderBoard(game.Game(), ranger, building);
+	}
+	garrison();
+	domain::NamedExitBuilding(game.Game(), rangers[1]);
+	game.Tick();
+	BOOST_TEST(manifest.Count(building) == 2u);
+	BOOST_TEST(world.Get<gp::Passenger>(rangers[1]) == nullptr);
+
+	const ecs::Entity humvee = game.Place("AmericaVehicleHumvee", match->At(0, -300), {}, team);
+	const ecs::Entity squad[2]{game.Place("AmericaInfantryRanger", match->At(20, -300), {}, team), game.Place("AmericaInfantryRanger", match->At(30, -300), {}, team)};
+	for (const ecs::Entity rider : squad)
+		domain::OrderBoard(game.Game(), rider, humvee);
+	for (int tick = 0; tick < 300 && manifest.Count(humvee) < 2u; ++tick)
+		game.Tick();
+	BOOST_TEST_REQUIRE(manifest.Count(humvee) == 2u);
+	for (const ecs::Entity rider : squad)
+		domain::NamedExitBuilding(game.Game(), rider);
+	std::vector<std::uint64_t> out;
+	for (int tick = 0; tick < 100 && out.size() < 2u; ++tick)
+	{
+		const std::size_t before = manifest.Count(humvee);
+		game.Tick();
+		if (manifest.Count(humvee) < before)
+			out.push_back(game.CurrentTick());
+	}
+	BOOST_TEST_REQUIRE(out.size() == 2u);
+	BOOST_TEST(out[1] - out[0] == std::max<std::uint64_t>(world.Get<gp::Transport>(humvee)->definition.exitDelay, 1));
+
+	domain::SetUnmanned(game.Game(), humvee);
+	BOOST_TEST((world.Get<gp::Disabled>(humvee)->mask & gp::disabled_type::Unmanned) != 0u);
+	BOOST_TEST(std::ranges::count(world.Resource<domain::Deselections>().list, humvee) == 1);
+	BOOST_TEST(game.Game().roster.TeamAt(world.Get<gp::TeamMember>(humvee)->team).name == "team");
+}
+
+// ScoreKeeper as a skirmish starts and a Ranger kills a Red Guard: each seat's command centre (a SCORE STRUCTURE,
+// onStructureConstructionComplete: built, its 2000 spent) and dozer (a SCORE VEHICLE, onUnitCreated: built) count;
+// objects placed otherwise do not. The kill (scoreTheKill) is China's loss and America's destruction of a China unit;
+// the score is 100 a unit or building built or destroyed plus the money earned (calculateScore). With scoring off
+// (DISABLE_SCORING) the next kill counts for nobody.
+BOOST_AUTO_TEST_CASE(legacy_parity_score_keepers_count_what_is_built_and_killed)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	namespace domain = generalszh::gameplay;
+	auto &world = game.World();
+	const std::uint32_t america = game.Game().roster.TeamAt(match->Team(game, 0)).owner;
+	const std::uint32_t china = game.Game().roster.TeamAt(match->Team(game, 1)).owner;
+	auto &keepers = world.Resource<domain::ScoreKeepers>();
+	BOOST_TEST(keepers.Of(america).buildingsBuilt == 1);
+	BOOST_TEST(keepers.Of(america).unitsBuilt == 1);
+	BOOST_TEST(keepers.Of(america).moneySpent == 2000);
+	BOOST_TEST(keepers.Of(china).buildingsBuilt == 1);
+	const ecs::Entity ranger = game.Place("AmericaInfantryRanger", match->At(0, -300), {}, match->Team(game, 0));
+	const ecs::Entity redguard = game.Place("ChinaInfantryRedguard", match->At(20, -300), {}, match->Team(game, 1));
+	game.Tick();
+	BOOST_TEST(keepers.Of(america).unitsBuilt == 1);
+	world.Add<gp::PendingDamage>(redguard);
+	*world.Get<gp::PendingDamage>(redguard) = {ranger, Fixed::FromInt(100000), *content::DamageTypeIndex("UNRESISTABLE"), 0};
+	for (int tick = 0; tick < 3; ++tick)
+		game.Tick();
+	BOOST_TEST(keepers.Of(china).unitsLost == 1);
+	BOOST_TEST(keepers.Of(america).unitsDestroyed[china] == 1);
+	BOOST_TEST(keepers.Of(america).unitsLost == 0);
+	const std::int64_t earned = world.Resource<gp::PlayerMoney>().Earned(america);
+	BOOST_TEST(domain::Score(game.Game(), america) == 100 + 100 + 100 + earned);
+	keepers.enabled = false;
+	const ecs::Entity second = game.Place("ChinaInfantryRedguard", match->At(40, -300), {}, match->Team(game, 1));
+	game.Tick();
+	world.Add<gp::PendingDamage>(second);
+	*world.Get<gp::PendingDamage>(second) = {ranger, Fixed::FromInt(100000), *content::DamageTypeIndex("UNRESISTABLE"), 0};
+	for (int tick = 0; tick < 3; ++tick)
+		game.Tick();
+	BOOST_TEST(keepers.Of(china).unitsLost == 1);
+	BOOST_TEST(keepers.Of(america).unitsDestroyed[china] == 1);
+}
+
+// AIAttackSquadState (NAMED_ATTACK_TEAM): a Crusader of a human seat (normal: the nearest squad member) sent against
+// China's team (three Red Guards with its start) goes for the nearest, then, each one killed, the nearest left; the
+// squad is the team as the order was given (one who joins later is not in it); with nobody left the state succeeds and
+// it idles.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_unit_attacks_a_team_one_after_another)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	auto &world = game.World();
+	const std::uint32_t china = match->Team(game, 1);
+	const ecs::Entity tank = game.Place("AmericaTankCrusader", match->At(0, -350), {}, match->Team(game, 0));
+	game.Game().names.Assign("Tank", tank);
+	std::vector<ecs::Entity> guards{game.Place("ChinaInfantryRedguard", match->At(300, -350), {}, china),
+		game.Place("ChinaInfantryRedguard", match->At(100, -350), {}, china), game.Place("ChinaInfantryRedguard", match->At(200, -350), {}, china)};
+	for (const ecs::Entity guard : guards)
+		world.Get<gp::Aggression>(guard)->autoAcquire = false;
+	generalszh::gameplay::NamedAttackTeam(game.Game(), tank, "#" + std::to_string(china));
+	const ecs::Entity late = game.Place("ChinaInfantryRedguard", match->At(50, -350), {}, china);
+	world.Get<gp::Aggression>(late)->autoAcquire = false;
+	BOOST_TEST_REQUIRE(world.Get<generalszh::gameplay::AttackSquad>(tank) != nullptr);
+	game.Tick();
+	BOOST_TEST((world.Get<gp::AttackTarget>(tank)->target == guards[1]));
+	for (const ecs::Entity expected : {guards[1], guards[2], guards[0]})
+	{
+		BOOST_TEST((world.Get<gp::AttackTarget>(tank)->target == expected));
+		generalszh::gameplay::RetireNow(game.Game(), {expected});
+		game.Tick();
+	}
+	// The rest of the team as it was (China's start: its dozer and Command Center), never the late one.
+	for (int round = 0; round < 10 && world.Get<generalszh::gameplay::AttackSquad>(tank) != nullptr; ++round)
+	{
+		const ecs::Entity target = world.Get<gp::AttackTarget>(tank)->target;
+		BOOST_TEST_REQUIRE((target != ecs::Entity{} && target != late));
+		generalszh::gameplay::RetireNow(game.Game(), {target});
+		game.Tick();
+	}
+	BOOST_TEST(world.Get<generalszh::gameplay::AttackSquad>(tank) == nullptr);
+	BOOST_TEST((world.Get<gp::AttackTarget>(tank)->target == ecs::Entity{}));
+	BOOST_TEST(world.IsAlive(late));
+}
+
+// Player::setUnitsShouldIdleOrResume: to idle, a moving Crusader is told to move where it stands (it stops there); its
+// structures are left be. To resume, an idle supply truck wants to harvest again (setForceWantingState).
+BOOST_AUTO_TEST_CASE(legacy_parity_scripts_idle_and_resume_a_players_units)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	auto &world = game.World();
+	const std::uint32_t team = match->Team(game, 0);
+	const std::uint32_t america = game.Teams().TeamAt(team).owner;
+	const ecs::Entity tank = game.Place("AmericaTankCrusader", match->At(0, -350), {}, team);
+	generalszh::gameplay::OrderMove(game.Game(), tank, match->At(600, -350));
+	for (int tick = 0; tick < 20; ++tick)
+		game.Tick();
+	generalszh::gameplay::SetUnitsIdleOrResume(game.Game(), america, true);
+	const auto stoppedAt = world.Get<gp::Transform>(tank)->position.XY();
+	BOOST_TEST((world.Get<gp::MoveOrder>(tank)->destination == stoppedAt));
+	const ecs::Entity truck = game.Place("ChinaVehicleSupplyTruck", match->At(-200, -350), {}, team);
+	BOOST_TEST_REQUIRE(world.Get<gp::Harvester>(truck) != nullptr);
+	world.Get<gp::Harvester>(truck)->forceWanting = false;
+	*world.Get<gp::MoveOrder>(truck) = {};
+	generalszh::gameplay::SetUnitsIdleOrResume(game.Game(), america, false);
+	BOOST_TEST(world.Get<gp::Harvester>(truck)->forceWanting);
+}
+
+// ScriptActions::changeObjectPanelFlagForSingleObject (UNIT_ / TEAM_AFFECT_OBJECT_PANEL_FLAGS): "Enabled" off sets
+// DISABLED_SCRIPT_DISABLED and on clears it, "Powered" the same with DISABLED_SCRIPT_UNDERPOWERED; "Indestructible" makes
+// the body take no damage and ignore kill() (ActiveBody::attemptDamage); "AI Recruitable" off keeps it out of its AI's
+// teams; "Unsellable", "Selectable", "Player Targetable" are kept; an unknown flag changes nothing. A checkpoint keeps it all.
+BOOST_AUTO_TEST_CASE(legacy_parity_scripts_set_object_panel_flags)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	auto &world = game.World();
+	const ecs::Entity ranger = generalszh::gameplay::CreateOnTeamAt(game.Game(), "Ranger", "AmericaInfantryRanger", match->skirmish.players[0].team, {});
+	BOOST_TEST_REQUIRE(world.IsAlive(ranger));
+	using generalszh::gameplay::SetObjectPanelFlag;
+	SetObjectPanelFlag(game.Game(), ranger, "Enabled", false);
+	SetObjectPanelFlag(game.Game(), ranger, "Powered", false);
+	BOOST_TEST(world.Get<gp::Disabled>(ranger)->mask == (gp::disabled_type::ScriptDisabled | gp::disabled_type::ScriptUnderpowered));
+	SetObjectPanelFlag(game.Game(), ranger, "Enabled", true);
+	BOOST_TEST(world.Get<gp::Disabled>(ranger)->mask == gp::disabled_type::ScriptUnderpowered);
+	SetObjectPanelFlag(game.Game(), ranger, "Powered", true);
+	BOOST_TEST(world.Get<gp::Disabled>(ranger)->mask == 0u);
+	SetObjectPanelFlag(game.Game(), ranger, "Unsellable", true);
+	SetObjectPanelFlag(game.Game(), ranger, "Selectable", false);
+	SetObjectPanelFlag(game.Game(), ranger, "AI Recruitable", false);
+	SetObjectPanelFlag(game.Game(), ranger, "Player Targetable", true);
+	SetObjectPanelFlag(game.Game(), ranger, "No Such Flag", true);
+	const auto *status = world.Get<gp::ScriptStatus>(ranger);
+	BOOST_TEST_REQUIRE(status != nullptr);
+	BOOST_TEST(status->Has(gp::script_status::Unsellable));
+	BOOST_TEST(status->Has(gp::script_status::SelectableSet));
+	BOOST_TEST(!status->Has(gp::script_status::SelectableValue));
+	BOOST_TEST(status->Has(gp::script_status::NotRecruitable));
+	BOOST_TEST(status->Has(gp::script_status::Targetable));
+
+	SetObjectPanelFlag(game.Game(), ranger, "Indestructible", true);
+	const Fixed full = world.Get<gp::Health>(ranger)->current;
+	generalszh::gameplay::DamageNow(game.Game(), ranger, Fixed::FromInt(50));
+	game.Tick();
+	BOOST_TEST((world.Get<gp::Health>(ranger)->current == full));
+	generalszh::gameplay::KillNow(game.Game(), ranger);
+	game.Tick();
+	game.Tick();
+	BOOST_TEST(world.IsAlive(ranger));
+	BOOST_TEST(!generalszh::gameplay::EffectivelyDead(game.Game(), ranger));
+
+	const auto restored = session::Session::Restore(match->skirmish.level, shell.game, match->Options(1), game.Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	const ecs::Entity again = restored->Game().names.Find("Ranger");
+	BOOST_TEST(restored->World().Get<gp::Health>(again)->indestructible);
+	BOOST_TEST(restored->World().Get<gp::ScriptStatus>(again)->bits == status->bits);
+
+	SetObjectPanelFlag(game.Game(), ranger, "Indestructible", false);
+	generalszh::gameplay::DamageNow(game.Game(), ranger, Fixed::FromInt(50));
+	game.Tick();
+	BOOST_TEST((world.Get<gp::Health>(ranger)->current == full - Fixed::FromInt(50)));
+}
+
+// Player::friend_applyDifficultyBonusesForObject (Object::initObject, ScriptActions::doEnableOrDisableObjectDifficultyBonuses):
+// in a single-player game at easy, a human player's object is made with HumanSoloPlayerHealthBonus_Easy (150%) of its
+// health, PRESERVE_RATIO, and SOLO_HUMAN_EASY; OBJECT_ALLOW_BONUSES off takes both back from every object and objects
+// made after get none; a checkpoint keeps it. A skirmish (not single-player) changes nothing.
+BOOST_AUTO_TEST_CASE(legacy_parity_single_player_difficulty_bonuses)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	BOOST_TEST((shell.game.gameData.soloHealthBonus[0][0] == Fixed::FromRatio(150, 100)));
+	BOOST_TEST((shell.game.gameData.soloHealthBonus[0][2] == Fixed::FromRatio(80, 100)));
+	BOOST_TEST((shell.game.gameData.soloHealthBonus[1][0] == Fixed::One()));
+	const std::string team = match->skirmish.players[0].team;
+	namespace bonus = generalszh::content::weapon_bonus;
+
+	session::Session skirmish(match->skirmish.level, shell.game, match->Options(1));
+	skirmish.Tick();
+	const ecs::Entity plain = generalszh::gameplay::CreateOnTeamAt(skirmish.Game(), {}, "AmericaInfantryRanger", team, {});
+	BOOST_TEST_REQUIRE(skirmish.World().IsAlive(plain));
+	const Fixed base = skirmish.World().Get<gp::Health>(plain)->maximum;
+	BOOST_TEST((skirmish.World().Get<gp::Health>(plain)->current == base));
+	BOOST_TEST((skirmish.World().Get<gp::WeaponBonusConditions>(plain)->flags & bonus::SoloHumanEasy) == 0u);
+
+	auto options = match->Options(1);
+	options.singlePlayer = true;
+	options.difficulty = 0;
+	session::Session game(match->skirmish.level, shell.game, std::move(options));
+	game.Tick();
+	auto &world = game.World();
+	const ecs::Entity ranger = generalszh::gameplay::CreateOnTeamAt(game.Game(), {}, "AmericaInfantryRanger", team, {});
+	BOOST_TEST_REQUIRE(world.IsAlive(ranger));
+	BOOST_TEST((world.Get<gp::Health>(ranger)->maximum == base * Fixed::FromRatio(150, 100)));
+	BOOST_TEST((world.Get<gp::Health>(ranger)->current == world.Get<gp::Health>(ranger)->maximum));
+	BOOST_TEST((world.Get<gp::WeaponBonusConditions>(ranger)->flags & bonus::SoloHumanEasy) != 0u);
+
+	const auto restored = session::Session::Restore(match->skirmish.level, shell.game, match->Options(1), game.Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	const ecs::Entity later = generalszh::gameplay::CreateOnTeamAt(restored->Game(), {}, "AmericaInfantryRanger", team, {});
+	BOOST_TEST((restored->World().Get<gp::Health>(later)->maximum == base * Fixed::FromRatio(150, 100)));
+
+	generalszh::gameplay::AllowDifficultyBonuses(game.Game(), false);
+	BOOST_TEST((world.Get<gp::Health>(ranger)->maximum == base));
+	BOOST_TEST((world.Get<gp::Health>(ranger)->current == base));
+	BOOST_TEST((world.Get<gp::WeaponBonusConditions>(ranger)->flags & bonus::SoloHumanEasy) == 0u);
+	const ecs::Entity after = generalszh::gameplay::CreateOnTeamAt(game.Game(), {}, "AmericaInfantryRanger", team, {});
+	BOOST_TEST((world.Get<gp::Health>(after)->maximum == base));
+	generalszh::gameplay::AllowDifficultyBonuses(game.Game(), true);
+	BOOST_TEST((world.Get<gp::Health>(after)->maximum == base * Fixed::FromRatio(150, 100)));
+}
+
+// ScriptActions::deleteAllUnmanned (DELETE_ALL_UNMANNED): every DISABLED_UNMANNED object is destroyed; manned ones stay.
+BOOST_AUTO_TEST_CASE(legacy_parity_scripts_delete_all_unmanned)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	auto &world = game.World();
+	const std::string team = match->skirmish.players[0].team;
+	const ecs::Entity empty = generalszh::gameplay::CreateOnTeamAt(game.Game(), {}, "AmericaVehicleHumvee", team, {});
+	const ecs::Entity manned = generalszh::gameplay::CreateOnTeamAt(game.Game(), {}, "AmericaVehicleHumvee", team, {});
+	BOOST_TEST_REQUIRE(world.IsAlive(empty));
+	if (!world.Has<gp::Disabled>(empty))
+		world.Add<gp::Disabled>(empty);
+	world.Get<gp::Disabled>(empty)->mask |= gp::disabled_type::Unmanned;
+	generalszh::gameplay::DeleteAllUnmanned(game.Game());
+	game.Tick();
+	BOOST_TEST(!world.IsAlive(empty));
+	BOOST_TEST(world.IsAlive(manned));
+}
+
+// ScriptActions::doTeamWanderInPlace / doTeamPanic, AIUpdateInterface::chooseLocomotorSet: a civilian goes on its
+// SET_WANDER locomotor (WanderHumanLocomotor: 10 a second) and wanders about where it stood, each goal a whole number of
+// cells off it, up to 3 (WanderAboutPointRadius 30), for good; panicking (SET_PANIC) it has the PANICKING look until
+// another order; a named move puts it back on its normal set (doNamedMoveToWaypoint). A unit with no such set keeps its own.
+BOOST_AUTO_TEST_CASE(legacy_parity_civilians_wander_in_place_and_panic)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	auto &world = game.World();
+	const std::string team = match->skirmish.players[0].team;
+	const ecs::Entity civilian = generalszh::gameplay::CreateOnTeamAt(game.Game(), "Walker", "MogadishuMaleCivilian01", team, {});
+	const ecs::Entity ranger = generalszh::gameplay::CreateOnTeamAt(game.Game(), "Ranger", "AmericaInfantryRanger", team, {});
+	BOOST_TEST_REQUIRE(world.IsAlive(civilian));
+	const Fixed normalSpeed = world.Get<gp::Locomotion>(civilian)->locomotor.maxSpeed;
+	namespace sets = generalszh::gameplay::locomotor_set;
+	BOOST_TEST(!generalszh::gameplay::ChooseLocomotorSet(game.Game(), ranger, sets::Wander));
+	BOOST_TEST(world.Get<gp::Locomotion>(ranger)->set == sets::Normal);
+
+	generalszh::gameplay::TeamWanderInPlace(game.Game(), team);
+	const auto *motion = world.Get<gp::Locomotion>(civilian);
+	BOOST_TEST(motion->set == sets::Wander);
+	BOOST_TEST((motion->locomotor.maxSpeed == Fixed::FromRatio(10, 30)));
+	BOOST_TEST((motion->locomotor.wanderAboutPointRadius == Fixed::FromInt(30)));
+	const auto origin = world.Get<gp::WanderAnchor>(civilian)->origin;
+	BOOST_TEST((origin == world.Get<gp::Transform>(civilian)->position.XY()));
+	std::size_t goals = 0;
+	auto last = world.Get<gp::MoveOrder>(civilian)->destination;
+	for (int tick = 0; tick < 30 * 60; ++tick)
+	{
+		const auto &order = *world.Get<gp::MoveOrder>(civilian);
+		BOOST_TEST_REQUIRE((order.mode == gp::MoveMode::WanderInPlace));
+		const auto off = order.destination - origin;
+		BOOST_TEST_REQUIRE((off.x.Raw() % Fixed::FromInt(10).Raw() == 0 && off.y.Raw() % Fixed::FromInt(10).Raw() == 0));
+		BOOST_TEST_REQUIRE((off.x >= Fixed::FromInt(-30) && off.x <= Fixed::FromInt(30) && off.y >= Fixed::FromInt(-30) && off.y <= Fixed::FromInt(30)));
+		if (order.destination != last)
+			++goals;
+		last = order.destination;
+		game.Tick();
+	}
+	BOOST_TEST(goals >= 2u);
+
+	BOOST_TEST(generalszh::gameplay::ChooseLocomotorSet(game.Game(), civilian, sets::Panic));
+	generalszh::gameplay::OrderWander(game.Game(), civilian, 0, true);
+	game.Tick();
+	constexpr std::uint32_t panicking = generalszh::content::ModelConditionBit("PANICKING");
+	BOOST_TEST(world.Get<gp::Appearance>(civilian)->Test(panicking));
+	const auto restored = session::Session::Restore(match->skirmish.level, shell.game, match->Options(1), game.Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST(restored->World().Get<gp::Locomotion>(restored->Game().names.Find("Walker"))->set == sets::Panic);
+	generalszh::gameplay::NormalLocomotors(game.Game(), civilian);
+	generalszh::gameplay::OrderStop(game.Game(), civilian);
+	game.Tick();
+	BOOST_TEST(!world.Get<gp::Appearance>(civilian)->Test(panicking));
+	BOOST_TEST(world.Get<gp::Locomotion>(civilian)->set == sets::Normal);
+	BOOST_TEST((world.Get<gp::Locomotion>(civilian)->locomotor.maxSpeed == normalSpeed));
+}
+
+// AIIdleState's repulsor look, AIMoveAwayFromRepulsorsState, AI::findClosestRepulsor, ActiveBody::attemptDamage
+// (AIData EnableRepulsors = Yes, RepulsedDistance 150): an idle civilian (CAN_BE_REPULSED, VisionRange 150, looking
+// every 10 + (id & 7) frames when wandering) with an enemy tank within its vision runs from it at once on its panic
+// locomotors, PANICKING, to 150 + 150 + a cell from the tank; its run over, it wanders in place on its wander locomotors.
+// A hurt civilian is a repulsor for two seconds.
+BOOST_AUTO_TEST_CASE(legacy_parity_civilians_run_from_enemies)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	BOOST_TEST(shell.game.aiData.enableRepulsors);
+	BOOST_TEST((shell.game.aiData.repulsedDistance == Fixed::FromInt(150)));
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	auto &world = game.World();
+	const ecs::Entity civilian = generalszh::gameplay::CreateOnTeamAt(game.Game(), "Walker", "MogadishuMaleCivilian01", match->skirmish.players[0].team, {});
+	const ecs::Entity tank = generalszh::gameplay::CreateOnTeamAt(game.Game(), "Tank", "ChinaTankBattleMaster", match->skirmish.players[1].team, {});
+	BOOST_TEST_REQUIRE(world.IsAlive(civilian));
+	BOOST_TEST_REQUIRE(world.IsAlive(tank));
+	world.Get<gp::Transform>(civilian)->position = {match->At(0, -300).x, match->At(0, -300).y, {}};
+	world.Get<gp::Transform>(tank)->position = {match->At(60, -300).x, match->At(60, -300).y, {}};
+	const auto *runner = world.Get<generalszh::gameplay::Repulsable>(civilian);
+	BOOST_TEST_REQUIRE(runner != nullptr);
+	BOOST_TEST((runner->vision == Fixed::FromInt(150)));
+	BOOST_TEST(runner->waitFrames == 10u + (world.Get<gp::ObjectId>(civilian)->value & 7u));
+	BOOST_TEST(world.Get<generalszh::gameplay::Repulsable>(tank) == nullptr);
+	int ticks = 0;
+	while (world.Get<generalszh::gameplay::Repulsable>(civilian)->fleeing == 0 && ticks < 10)
+	{
+		game.Tick();
+		++ticks;
+	}
+	BOOST_TEST(ticks <= 2);
+	BOOST_TEST_REQUIRE(world.Get<generalszh::gameplay::Repulsable>(civilian)->fleeing == 1u);
+	namespace sets = generalszh::gameplay::locomotor_set;
+	BOOST_TEST(world.Get<gp::Locomotion>(civilian)->set == sets::Panic);
+	const auto &order = *world.Get<gp::MoveOrder>(civilian);
+	BOOST_TEST((order.mode == gp::MoveMode::Point));
+	const Fixed reach = Engine::Math::Distance(order.destination, world.Get<gp::Transform>(tank)->position.XY());
+	BOOST_TEST((reach > Fixed::FromInt(310) - Fixed::FromRatio(1, 100) && reach < Fixed::FromInt(310) + Fixed::FromRatio(1, 100)));
+	game.Tick();
+	constexpr std::uint32_t panicking = generalszh::content::ModelConditionBit("PANICKING");
+	BOOST_TEST(world.Get<gp::Appearance>(civilian)->Test(panicking));
+	const auto restored = session::Session::Restore(match->skirmish.level, shell.game, match->Options(1), game.Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST(restored->World().Get<generalszh::gameplay::Repulsable>(restored->Game().names.Find("Walker"))->fleeing == 1u);
+	generalszh::gameplay::KillNow(game.Game(), tank);
+	for (int tick = 0; tick < 30 * 90 && world.Get<gp::MoveOrder>(civilian)->mode != gp::MoveMode::WanderInPlace; ++tick)
+		game.Tick();
+	BOOST_TEST((world.Get<gp::MoveOrder>(civilian)->mode == gp::MoveMode::WanderInPlace));
+	BOOST_TEST(world.Get<gp::Locomotion>(civilian)->set == sets::Wander);
+	BOOST_TEST(world.Get<generalszh::gameplay::Repulsable>(civilian)->fleeing == 0u);
+	game.Tick();
+	BOOST_TEST(!world.Get<gp::Appearance>(civilian)->Test(panicking));
+
+	generalszh::gameplay::DamageNow(game.Game(), civilian, Fixed::FromInt(1));
+	game.Tick();
+	const auto *mark = world.Get<generalszh::gameplay::RepulsorMark>(civilian);
+	BOOST_TEST_REQUIRE(mark != nullptr);
+	BOOST_TEST(mark->until == game.Game().tick + 60u); // set in the tick just run: cleared two seconds on
+}
+
+// A unit running a sequential script (evaluateAndProgressAllSequentialScripts over the object, getUnitNamed's
+// <This Object>): its reference names it; idle while its AI is, busy while it moves, busy while it dies (its AI's dead
+// state is not idle), gone once destroyed.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_units_sequence_waits_on_it)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	auto &world = game.World();
+	const ecs::Entity ranger = generalszh::gameplay::CreateOnTeamAt(game.Game(), "Scout", "AmericaInfantryRanger", match->skirmish.players[0].team, {});
+	BOOST_TEST_REQUIRE(world.IsAlive(ranger));
+	namespace domain = generalszh::gameplay;
+	const std::uint64_t subject = domain::UnitSubject(ranger);
+	BOOST_TEST(domain::IsUnitSubject(subject));
+	BOOST_TEST((domain::SubjectUnit(subject) == ranger));
+	BOOST_TEST((game.Game().names.Find(gp::NameRegistry::Reference(ranger)) == ranger));
+	game.Tick();
+	BOOST_TEST((domain::UnitSequenceState(game.Game(), subject) == domain::TeamActivity::Idle));
+	domain::OrderMove(game.Game(), ranger, match->At(200, 200));
+	BOOST_TEST((domain::UnitSequenceState(game.Game(), subject) == domain::TeamActivity::Busy));
+	domain::KillNow(game.Game(), ranger);
+	game.Tick();
+	BOOST_TEST((domain::UnitSequenceState(game.Game(), subject) != domain::TeamActivity::Idle));
+	for (int tick = 0; tick < 600 && world.IsAlive(ranger); ++tick)
+		game.Tick();
+	BOOST_TEST((domain::UnitSequenceState(game.Game(), subject) == domain::TeamActivity::Gone));
+}
+
+// ScriptActions::doNamedCustomColor / Object::getIndicatorColor: a script's colour stands in for its player's (0: its
+// player's again); a checkpoint keeps it.
+BOOST_AUTO_TEST_CASE(legacy_parity_scripts_give_units_a_custom_colour)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	const ecs::Entity ranger = generalszh::gameplay::CreateOnTeamAt(game.Game(), "Painted", "AmericaInfantryRanger", match->skirmish.players[0].team, {});
+	BOOST_TEST_REQUIRE(game.World().IsAlive(ranger));
+	generalszh::gameplay::SetIndicatorColor(game.Game(), ranger, 0xFFFF8000u);
+	BOOST_TEST(game.World().Get<gp::IndicatorColor>(ranger)->argb == 0xFFFF8000u);
+	const auto restored = session::Session::Restore(match->skirmish.level, shell.game, match->Options(1), game.Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST(restored->World().Get<gp::IndicatorColor>(restored->Game().names.Find("Painted"))->argb == 0xFFFF8000u);
+}
+
+int ChallengeTemplate(const Install &shell, std::string_view name)
+{
+	for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+		if (shell.game.playerTemplates.templates[index].name == name)
+			return static_cast<int>(index);
+	return -1;
+}
+
+// GameLogic::startNewGame with TheChallengeGameInfo on GC_ChemGeneral (CHALLENGE_0's first mission) as the Air Force
+// general: the map's own players stay (the chemical general "SkirmishGLA" puts up its initially built base, AIPlayer::
+// newMap, so it has a build facility from the first frame), the human joins as player0 on the map's one start spot with
+// its faction's starting base, and takes the placeholder "ThePlayer"'s enemies as its own, both ways. Scripts' "ThePlayer"
+// and "<Local Player>" name it.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_generals_challenge_mission_starts)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto bytes = shell.files.Read("Maps/GC_ChemGeneral/GC_ChemGeneral.map");
+	BOOST_TEST_REQUIRE(bytes.has_value());
+	auto read = engine::level::generals_map::Read(*bytes);
+	BOOST_TEST_REQUIRE(read.has_value());
+	int spots = 0;
+	for (const auto &marker : read->level.markers)
+		spots += marker.name.starts_with("Player_") && marker.name.ends_with("_Start") ? 1 : 0;
+	const int airForce = ChallengeTemplate(shell, "FactionAmericaAirForceGeneral");
+	BOOST_TEST_REQUIRE(airForce >= 0);
+	auto prepared = session::setup::PrepareChallengeLevel(read->level, airForce, shell.game.playerTemplates, spots, 0, 10000);
+	BOOST_TEST_REQUIRE(prepared.players.size() == 1u);
+	const auto &human = prepared.players.front();
+	session::SessionOptions options{0, 1, {}, {human.name}};
+	options.starts.push_back({human.name, human.team, human.playerTemplate, human.startPosition});
+	options.singlePlayer = true;
+	options.difficulty = 0;
+	options.challenge = true;
+	session::Session game(prepared.level, shell.game, options);
+	game.Tick();
+	const auto &roster = game.Game().roster;
+	const auto local = roster.FindPlayer("player0");
+	const auto enemy = roster.FindPlayer("SkirmishGLA");
+	const auto placeholder = roster.FindPlayer("ThePlayer");
+	BOOST_TEST_REQUIRE(local.has_value());
+	BOOST_TEST_REQUIRE(enemy.has_value());
+	BOOST_TEST_REQUIRE(placeholder.has_value());
+	BOOST_TEST(generalszh::gameplay::HasAnyBuildFacility(game.Game(), *enemy));
+	BOOST_TEST(generalszh::gameplay::HasAnyBuildFacility(game.Game(), *local));
+	const auto &relationships = game.World().Resource<gp::Relationships>();
+	BOOST_TEST(relationships.Enemies(*placeholder, *enemy));
+	BOOST_TEST(relationships.Enemies(*local, *enemy));
+	BOOST_TEST(relationships.Enemies(*enemy, *local));
+	const auto &solo = game.World().Resource<generalszh::gameplay::SoloPlay>();
+	BOOST_TEST(solo.challenge);
+	BOOST_TEST(solo.localPlayer == *local);
+}
+
+// GameLogic::startNewGame (m_rankPointsToAddAtGameStart, the campaign's CampaignManager::getRankPoints): a new
+// single-player game gives each human player the rank points carried in (Player::addSkillPoints: promoted to the rank
+// they reach); computer players get none, a skirmish none, and a saved game's own state stands (not added again).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_campaign_mission_starts_with_the_rank_points_carried_in)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	const std::int32_t carried = 1000;
+	auto options = match->Options(1);
+	options.singlePlayer = true;
+	options.rankPointsAtStart = carried;
+	session::Session game(match->skirmish.level, shell.game, std::move(options));
+	const auto &ranks = game.World().Resource<gp::PlayerRanks>();
+	const auto &rules = game.World().Resource<gp::RankRules>();
+	std::int32_t expectedLevel = 1;
+	for (std::int32_t level = 2; level <= rules.LevelCount(); ++level)
+		if (carried >= rules.Rank(level)->skillPointsNeeded)
+			expectedLevel = level;
+	BOOST_TEST_REQUIRE(expectedLevel > 1);
+	bool anyHuman = false, anyComputer = false;
+	for (std::uint32_t player = 0; player < game.Teams().PlayerCount(); ++player)
+	{
+		const gp::PlayerRank *rank = ranks.Find(player);
+		if (rank == nullptr || game.Teams().PlayerAt(player).name.empty())
+			continue;
+		if (game.Teams().PlayerAt(player).human)
+		{
+			anyHuman = true;
+			BOOST_TEST(rank->skillPoints == carried);
+			BOOST_TEST(rank->level == expectedLevel);
+		}
+		else
+		{
+			anyComputer = true;
+			BOOST_TEST(rank->skillPoints == 0);
+		}
+	}
+	BOOST_TEST(anyHuman);
+	BOOST_TEST(anyComputer);
+	const std::uint32_t human = *game.Teams().FindPlayer(match->skirmish.players[0].name);
+	game.Tick();
+	auto again = match->Options(1);
+	again.singlePlayer = true;
+	again.rankPointsAtStart = carried;
+	const auto restored = session::Session::Restore(match->skirmish.level, shell.game, std::move(again), game.Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST(restored->World().Resource<gp::PlayerRanks>().Find(human)->skillPoints == carried);
+
+	auto skirmishOptions = match->Options(1);
+	skirmishOptions.rankPointsAtStart = carried;
+	session::Session skirmish(match->skirmish.level, shell.game, std::move(skirmishOptions));
+	BOOST_TEST(skirmish.World().Resource<gp::PlayerRanks>().Find(human)->skillPoints == 0);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

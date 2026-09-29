@@ -1,13 +1,5 @@
-module;
-#include <array>
-#include <algorithm>
-#include <cmath>
-#include <cstdint>
-#include <filesystem>
-#include <span>
-#include <utility>
-
 export module Graphics.Passes.Bloom;
+import std;
 import Graphics.RHI;
 import Graphics.FrameTargets;
 import Graphics.Resources.Textures.Snapshot;

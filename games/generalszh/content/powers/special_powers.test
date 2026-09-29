@@ -1,0 +1,96 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdlib>
+#include <filesystem>
+#include <string>
+
+import games.generalszh.content.powers.special_powers;
+import games.generalszh.content.objects.object_catalog;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.content_loader;
+import games.generalszh.content.install.install_mount;
+
+using namespace generalszh::content;
+using namespace engine::config;
+
+BOOST_AUTO_TEST_SUITE(special_powers)
+
+BOOST_AUTO_TEST_CASE(buttons_powers_and_payload_runs_bind)
+{
+	Diagnostics diagnostics;
+	Diagnostics grammarDiagnostics;
+	const auto grammar = ZeroHourIniGrammar(grammarDiagnostics);
+	Document buttons;
+	ini::Read(buttons, buttons.AddSource("CommandButton.ini", "CommandButton Command_Paradrop\n  Command = SPECIAL_POWER\n  SpecialPower = SuperweaponParadrop\nEnd\n"),
+		grammar, diagnostics);
+	Document lists;
+	ini::Read(lists, lists.AddSource("ObjectCreationList.ini",
+		"ObjectCreationList SUPERWEAPON_Paradrop\n"
+		"  DeliverPayload\n"
+		"    Transport = AmericaJetCargoPlane\n"
+		"    StartAtPreferredHeight = Yes\n"
+		"    Payload = AmericaInfantryRanger 5\n"
+		"    PutInContainer = AmericaParachute\n"
+		"    DeliveryDistance = 50\n"
+		"    DropDelay = 200\n"
+		"  End\n"
+		"End\n"), grammar, diagnostics);
+	BOOST_TEST(diagnostics.ErrorCount() == 0u);
+	const auto content = BindSpecialPowers(buttons, lists, engine::time::FixedStep{30});
+	BOOST_TEST(content.buttonPowers.at("Command_Paradrop") == "SuperweaponParadrop");
+	const auto &runs = content.deliveries.at("SUPERWEAPON_Paradrop");
+	BOOST_TEST_REQUIRE(runs.size() == 1u);
+	BOOST_TEST(runs[0].transport == "AmericaJetCargoPlane");
+	BOOST_TEST_REQUIRE(runs[0].payload.size() == 1u);
+	BOOST_TEST(runs[0].payload[0].object == "AmericaInfantryRanger");
+	BOOST_TEST(runs[0].payload[0].count == 5u);
+	BOOST_TEST(runs[0].putInContainer == "AmericaParachute");
+	BOOST_TEST(runs[0].dropDelay == 6u); // 200 ms at 30 Hz
+	BOOST_TEST(runs[0].startAtPreferredHeight);
+}
+
+BOOST_AUTO_TEST_CASE(the_shell_map_paradrop_resolves_on_the_command_center)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+		return;
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const Document &objectSet = loader.Load({"Data/INI/Default/Object", "Data/INI/Object"});
+	BindContext context{loader.DiagnosticsFor(objectSet), engine::time::FixedStep{30}};
+	const Document *documents[] = {&objectSet};
+	const auto objects = BuildObjectCatalog(documents, context);
+	const auto content = BindSpecialPowers(loader.Load({"Data/INI/CommandButton"}), loader.Load({"Data/INI/ObjectCreationList"}),
+		engine::time::FixedStep{30});
+	const auto power = content.buttonPowers.find("Command_Paradrop");
+	BOOST_TEST_REQUIRE((power != content.buttonPowers.end()));
+	const ObjectDefinition *center = objects.Find("AmericaCommandCenter");
+	BOOST_TEST_REQUIRE(center != nullptr);
+	const auto ocl = FindOclPower(*center, power->second);
+	BOOST_TEST_REQUIRE(ocl.has_value(), "the command center runs a creation list for " << power->second);
+	const auto runs = content.deliveries.find(ocl->creationList);
+	BOOST_TEST_REQUIRE((runs != content.deliveries.end() && !runs->second.empty()));
+	const DeliveryNugget &run = runs->second.front();
+	BOOST_TEST(objects.Contains(run.transport));
+	BOOST_TEST_REQUIRE(!run.payload.empty());
+	BOOST_TEST(run.payload.front().object == "AmericaInfantryRanger");
+
+	// SpecialPower.ini: SuperweaponParadropAmerica recharges 240000 ms (7200 ticks), needs SCIENCE_Paradrop1 and shares
+	// one timer per player; the command center has a module for it.
+	const auto templates = BindSpecialPowerTemplates(loader.Load({"Data/INI/Default/SpecialPower", "Data/INI/SpecialPower"}), engine::time::FixedStep{30});
+	const auto paradrop = std::find_if(templates.begin(), templates.end(), [](const SpecialPowerTemplate &t) { return t.name == "SuperweaponParadropAmerica"; });
+	BOOST_TEST_REQUIRE((paradrop != templates.end()));
+	BOOST_TEST(paradrop->reloadTicks == 7200u);
+	BOOST_TEST(paradrop->requiredScience == "SCIENCE_Paradrop1");
+	BOOST_TEST(paradrop->sharedSynced);
+	BOOST_TEST(!paradrop->publicTimer);
+	const auto modules = PowerModulesOf(*center);
+	BOOST_TEST(std::any_of(modules.begin(), modules.end(), [](const PowerModule &m) { return m.power == "SuperweaponParadropAmerica"; }));
+	BOOST_TEST(!HasSpecialPowerCreate(*center)); // superweapons have it (their timer starts as they are built)
+	BOOST_TEST_REQUIRE(objects.Find("AmericaParticleCannonUplink") != nullptr);
+	BOOST_TEST(HasSpecialPowerCreate(*objects.Find("AmericaParticleCannonUplink")));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

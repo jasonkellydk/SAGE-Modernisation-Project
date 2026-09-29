@@ -4,20 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <bit>
-#include <cstddef>
-#include <cstdint>
-#include <cstdlib>
-#include <filesystem>
-#include <fstream>
-#include <iterator>
-#include <limits>
-#include <span>
-#include <string>
-#include <string_view>
-#include <vector>
-
 export module Assets.Tests.W3DEmitter;
+import std;
 
 import Assets.Adapters.W3D.Particles;
 import Assets.Adapters.W3D.Chunks;

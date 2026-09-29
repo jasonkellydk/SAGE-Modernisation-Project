@@ -1,12 +1,5 @@
-module;
-#include <array>
-#include <cmath>
-#include <cstdint>
-#include <limits>
-#include <string>
-#include <unordered_set>
-#include <vector>
 export module Assets.ModelRig;
+import std;
 import Assets.Math;
 
 namespace Assets {

@@ -1,0 +1,131 @@
+#define BOOST_TEST_MODULE EngineGameplayPoison
+#include <boost/test/included/unit_test.hpp>
+
+#include <cstdint>
+#include <memory>
+#include <vector>
+
+import engine.gameplay.common.health.components.subdual;
+import engine.gameplay.common.poison.systems.poison_system;
+import engine.gameplay.common.identity.components.definition_ref;
+import engine.gameplay.common.identity.components.owner;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+using namespace engine::gameplay;
+using Engine::Math::Fixed;
+
+namespace
+{
+constexpr std::uint32_t PoisonType = 3;
+constexpr std::uint32_t Unresistable = 7;
+
+struct Ward
+{
+	Ward()
+	{
+		world.RegisterComponent<Health>();
+		world.RegisterComponent<Targetable>();
+		world.RegisterComponent<HealthFloor>();
+		world.RegisterComponent<Subdual>();
+		world.RegisterComponent<Poison>();
+		world.RegisterComponent<Owner>();
+		world.RegisterComponent<DefinitionRef>();
+		world.FinalizeComponents();
+		registry.Register(poison);
+		registry.Register(health);
+		registry.Finalize(world.Components());
+		scheduler = std::make_unique<ecs::Scheduler>(world, registry, engine::jobs::JobSystemConfig{1});
+		scheduler->Finalize(engine::time::FixedStep{30});
+	}
+
+	ecs::Entity Patient()
+	{
+		const ecs::Entity entity = world.Create();
+		world.Add<Health>(entity);
+		*world.Get<Health>(entity) = {Fixed::FromInt(100), Fixed::FromInt(100), 0};
+		world.Add<Poison>(entity);
+		Poison &state = *world.Get<Poison>(entity);
+		state.interval = 3;
+		state.duration = 9;
+		state.catchType = PoisonType;
+		state.dealType = Unresistable;
+		state.fxType = PoisonType;
+		state.seenHealth = Fixed::FromInt(100);
+		return entity;
+	}
+
+	void Step(std::vector<DamageRecord> damage = {})
+	{
+		++tick;
+		incoming.Clear();
+		for (const DamageRecord &record : damage)
+			incoming.Add(record);
+		incoming.Seal();
+		scheduler->Execute(engine::time::SimulationTime{tick, engine::time::FixedStep{30}});
+	}
+
+	int HitPoints(ecs::Entity entity) { return static_cast<int>(world.Get<Health>(entity)->current.Floor()); }
+
+	ecs::World world{ecs::WorldConfig{2}};
+	IncomingDamage &incoming{world.EmplaceResource<IncomingDamage>()};
+	ArmorCatalog &armors{world.EmplaceResource<ArmorCatalog>()};
+	Deaths &deaths{world.EmplaceResource<Deaths>()};
+	Hits &hits{world.EmplaceResource<Hits>()};
+	SecondLives &secondLives{world.EmplaceResource<SecondLives>()};
+	PoisonSystem poison;
+	HealthSystem health;
+	ecs::SystemRegistry registry;
+	std::unique_ptr<ecs::Scheduler> scheduler;
+	std::uint64_t tick{0};
+};
+}
+
+BOOST_AUTO_TEST_SUITE(poison)
+
+// PoisonedBehavior, frame by frame (PoisonDamageInterval 3 frames, PoisonDuration 9): poisoned by 10 on frame 1, the
+// victim takes 10 again (UNRESISTABLE, showing POISON's effects, from the same source) on frames 4, 7 and 10, and no
+// more; each hurt shows as a hit of its own. Poison again renews it; healing ends it at once.
+BOOST_AUTO_TEST_CASE(legacy_parity_poison_hurts_every_interval_until_it_ends_or_is_healed)
+{
+	Ward ward;
+	const ecs::Entity patient = ward.Patient();
+	const ecs::Entity attacker = ward.world.Create();
+	ward.Step({{patient, attacker, Fixed::FromInt(10), PoisonType, 0}});
+	BOOST_TEST(ward.HitPoints(patient) == 90);
+	std::vector<std::uint64_t> hurts;
+	for (int step = 0; step < 15; ++step)
+	{
+		const int before = ward.HitPoints(patient);
+		ward.Step();
+		if (ward.HitPoints(patient) < before)
+		{
+			hurts.push_back(ward.tick);
+			BOOST_TEST(before - ward.HitPoints(patient) == 10);
+			std::vector<Hit> shown;
+			ward.hits.AppendTo(shown);
+			BOOST_TEST_REQUIRE(shown.size() == 1u);
+			BOOST_TEST(shown[0].damageType == Unresistable);
+			BOOST_TEST(shown[0].fxType == PoisonType);
+			BOOST_TEST((shown[0].source == attacker));
+		}
+	}
+	BOOST_TEST((hurts == std::vector<std::uint64_t>{4, 7, 10}));
+	BOOST_TEST(!ward.world.Get<Poison>(patient)->Active());
+
+	// Poisoned again, then healed before the first hurt: nothing more.
+	ward.Step({{patient, attacker, Fixed::FromInt(5), PoisonType, 0}});
+	BOOST_TEST(ward.world.Get<Poison>(patient)->amount.Floor() == 0); // taken only as the next tick reads the hit
+	ward.Step();
+	BOOST_TEST(ward.world.Get<Poison>(patient)->Active());
+	ward.world.Get<Health>(patient)->current += Fixed::FromInt(20);
+	const int healed = ward.HitPoints(patient);
+	for (int step = 0; step < 10; ++step)
+		ward.Step();
+	BOOST_TEST(ward.HitPoints(patient) == healed);
+	BOOST_TEST(!ward.world.Get<Poison>(patient)->Active());
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -1,0 +1,270 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <optional>
+#include <string>
+
+import games.generalszh.presentation.objects.systems.uplink_systems;
+import games.generalszh.presentation.objects.algorithms.look_setup;
+import games.generalszh.presentation.objects.algorithms.presentation_schedule;
+import games.generalszh.session.session;
+import games.generalszh.gameplay.powers.algorithms.special_power_launch;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.rts.powers.components.special_power_timers;
+import engine.gameplay.common.identity.components.owner;
+import engine.gameplay.common.spatial.components.transform;
+import Engine.Core.Math.FixedPresentation;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+using namespace generalszh;
+using namespace generalszh::presentation;
+namespace gp = engine::gameplay;
+using Engine::Math::Fixed;
+using Engine::Math::FixedVector2;
+
+namespace
+{
+struct ShellContent
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	std::optional<engine::level::generals_map::ReadResult> map;
+
+	bool Load()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return false;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		auto read = engine::level::generals_map::Read(*files.Read("Maps/ShellMapMD/ShellMapMD.map"));
+		if (!read)
+			return false;
+		map.emplace(std::move(*read));
+		return true;
+	}
+};
+
+ShellContent &Content()
+{
+	static ShellContent content;
+	static const bool loaded = content.Load();
+	(void)loaded;
+	return content;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(uplink_effects)
+
+// ParticleUplinkCannonUpdate::setLogicalStatus / setClientStatus / createOrbitToTargetLaser / update's shroud check,
+// driven by the real AmericaParticleCannonUplink (5 outer nodes FX01..FX05; light, medium and intense node flares;
+// medium (4 beams) and intense (5 beams) connector lasers; no connector flares; only a light laser base flare; the
+// orbital laser 12 beams, 0.6 to 26 wide; WidthGrowTime 2000 = 60 frames), its power ready on tick R and fired on S:
+//   R - 351 charging: the powering up loop starts, 5 light flares; R - 201 preparing: the unpack loop, 5 medium
+//   flares; R - 60 almost ready: 5 medium flares and 5 medium connector lasers (20 beams); R ready: those and the
+//   light base flare (6 systems), the powering up loop stopped;
+//   hidden from its viewer (not clear) every effect goes; seen again, remade as a reveal;
+//   S firing: the firing loop starts, the unpack loop stops; 5 intense flares, 5 intense connector lasers (25 beams)
+//   and the ground-to-orbit laser (12 beams) widening from its status's frame: drawn after that frame, 1/60 wide;
+//   S + 75 the orbital beam is born with the annihilation loop, drawn 1/60 wide 3500 over the spot;
+//   S + 300 after the beam: medium effects, the ground laser narrowing (1 - 1/60 drawn after its frame);
+//   S + 360 packing: nothing but the orbital beam; S + 435 the beam gone, idle then packing that frame: every loop
+//   stopped.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_particle_cannon_uplink_shows_and_sounds_its_statuses)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	session::SessionOptions options{42, 0, {}};
+	options.presentationComponents = [](ecs::World &world) { RegisterPresentationComponents(world); };
+	session::Session game(shell.map->level, shell.game, options);
+	game.Tick();
+	const auto america = *game.Teams().FindTeam("teamPlyrAmerica");
+	const auto [low, high] = game.Game().ground.Extent();
+	(void)high;
+	auto &world = game.World();
+	game.Place("AmericaPowerPlant", low + FixedVector2{Fixed::FromInt(150), Fixed::FromInt(450)}, {}, america);
+	game.Place("AmericaPowerPlant", low + FixedVector2{Fixed::FromInt(250), Fixed::FromInt(450)}, {}, america);
+	const ecs::Entity uplink = game.Place("AmericaParticleCannonUplink", low + FixedVector2{Fixed::FromInt(250), Fixed::FromInt(250)}, {}, america);
+	const auto power = *shell.game.powers.Template("SuperweaponParticleUplinkCannon");
+
+	PresentationFrame &frame = world.EmplaceResource<PresentationFrame>();
+	frame.viewer = world.Get<gp::Owner>(uplink)->player;
+	frame.seconds = 1.0f / 30.0f;
+	LookCatalog &catalog = world.EmplaceResource<LookCatalog>();
+	KnowLooks(catalog, game);
+	const std::uint32_t definition = world.Get<gp::DefinitionRef>(uplink)->index;
+	const DefinitionLooks *looks = catalog.Of(definition);
+	BOOST_TEST_REQUIRE(looks != nullptr);
+	BOOST_TEST_REQUIRE(looks->uplink.has_value());
+	const content::UplinkLook &look = *looks->uplink;
+	BOOST_TEST(look.outerBones == 5u);
+	BOOST_TEST(look.widthGrowTicks == 60u);
+	BOOST_TEST_REQUIRE(look.beam.has_value());
+	BOOST_TEST(look.beam->beams == 12u);
+	BOOST_TEST_REQUIRE(look.connectorLasers[1].has_value());
+	BOOST_TEST_REQUIRE(look.connectorLasers[2].has_value());
+	EffectsContent effects;
+	for (const auto &names : {look.outerFlares, look.connectorFlares, look.baseFlares})
+		for (const std::string &name : names)
+			if (!name.empty())
+				effects.particles.Define(name);
+	engine::effects::ParticleWorld particles([&](std::string_view name) { return effects.particles.Find(name); });
+	world.EmplaceResource<ParticleWorldHandle>(ParticleWorldHandle{&particles, &effects});
+	world.EmplaceResource<BonePoses>(BonePoses{[](std::string_view, std::string_view bone) {
+		BoneLookup lookup{true, true};
+		lookup.position = {static_cast<float>(bone.size()) * 3.0f, 0.0f, 40.0f};
+		return lookup;
+	}});
+	world.EmplaceResource<TerrainHeightHandle>();
+	LaserFrame &lasers = world.EmplaceResource<LaserFrame>();
+	PresentedObjects &presented = world.EmplaceResource<PresentedObjects>();
+
+	UplinkStatusSystem status;
+	ecs::SystemRegistry tickSystems;
+	tickSystems.Register(status);
+	tickSystems.Finalize(world.Components());
+	ecs::Scheduler ticks(world, tickSystems, engine::jobs::JobSystemConfig{2});
+	ticks.Finalize(engine::time::FixedStep{30});
+	UplinkEffectSystem draw;
+	ecs::SystemRegistry frameSystems;
+	frameSystems.Register(draw);
+	frameSystems.Finalize(world.Components());
+	ecs::Scheduler frames(world, frameSystems, engine::jobs::JobSystemConfig{2});
+	frames.Finalize(engine::time::FixedStep{30});
+	std::uint64_t presentationTick = 0;
+	const auto step = [&] {
+		game.Tick();
+		ticks.Execute(engine::time::SimulationTime{++presentationTick, engine::time::FixedStep{30}});
+		presented.Reset(1);
+		PresentedObject object;
+		object.entity = uplink;
+		object.definition = definition;
+		object.look = looks->stateLooks.empty() ? 0u : looks->stateLooks[0];
+		const auto &at = world.Get<gp::Transform>(uplink)->position;
+		object.position = {Engine::Math::ToFloat(at.x), Engine::Math::ToFloat(at.y), Engine::Math::ToFloat(at.z)};
+		presented.SlotAt(0).push_back(object);
+		frame.tick = game.CurrentTick();
+		++frame.frame;
+		lasers.beams.clear();
+		frames.Execute(engine::time::SimulationTime{presentationTick, engine::time::FixedStep{30}});
+	};
+	const auto fx = [&] { return world.Side<UplinkEffects>().Get(uplink); };
+	using enum content::UplinkSound;
+	const auto wants = [&](content::UplinkSound sound) { return fx() != nullptr && fx()->want[static_cast<std::size_t>(sound)] != 0; };
+	const auto startsOf = [&](content::UplinkSound sound) { return fx() == nullptr ? 0u : fx()->started[static_cast<std::size_t>(sound)]; };
+	// The widest of the beams rising 3000 or more (the ground-to-orbit laser) or falling that far (the orbital beam).
+	const auto widest = [&](bool rising) {
+		float width = 0.0f;
+		for (const LaserBeamDraw &beam : lasers.beams)
+			if ((rising ? beam.end[2] - beam.start[2] : beam.start[2] - beam.end[2]) > 3000.0f)
+				width = std::max(width, beam.width);
+		return width;
+	};
+
+	game.Tick();
+	const std::uint64_t ready = game.CurrentTick() + 400;
+	world.Get<gp::SpecialPowerTimers>(uplink)->Find(power)->availableOn = ready;
+	while (game.CurrentTick() < ready - 352)
+		step();
+	BOOST_TEST((fx() == nullptr || fx()->systems.empty()));
+	step(); // R - 351
+	BOOST_TEST_REQUIRE(fx() != nullptr);
+	BOOST_TEST(fx()->client == static_cast<std::uint8_t>(gameplay::CannonStatus::Charging));
+	BOOST_TEST(wants(PoweringUp));
+	BOOST_TEST(startsOf(PoweringUp) == 1u);
+	BOOST_TEST(fx()->systems.size() == 5u);
+	BOOST_TEST(lasers.beams.empty());
+	while (game.CurrentTick() < ready - 201)
+		step();
+	BOOST_TEST(fx()->client == static_cast<std::uint8_t>(gameplay::CannonStatus::Preparing));
+	BOOST_TEST(wants(UnpackToIdle));
+	BOOST_TEST(wants(PoweringUp));
+	BOOST_TEST(fx()->systems.size() == 5u);
+	while (game.CurrentTick() < ready - 60)
+		step();
+	BOOST_TEST(fx()->client == static_cast<std::uint8_t>(gameplay::CannonStatus::AlmostReady));
+	BOOST_TEST(fx()->systems.size() == 5u);
+	BOOST_TEST(lasers.beams.size() == 20u);
+	while (game.CurrentTick() < ready)
+		step();
+	BOOST_TEST(fx()->client == static_cast<std::uint8_t>(gameplay::CannonStatus::ReadyToFire));
+	BOOST_TEST(fx()->systems.size() == 6u);
+	BOOST_TEST(lasers.beams.size() == 20u);
+	BOOST_TEST(!wants(PoweringUp));
+	BOOST_TEST(wants(UnpackToIdle));
+
+	// Out of its viewer's clear sight, and back.
+	// (No simulation tick between: none of its changes are new.)
+	world.Resource<gameplay::ParticleCannonEvents>().changes.clear();
+	const std::uint64_t clearBits = world.Get<gp::ObjectShroud>(uplink)->clear;
+	const std::uint32_t serial = fx()->clientSerial;
+	world.Get<gp::ObjectShroud>(uplink)->clear = 0;
+	ticks.Execute(engine::time::SimulationTime{++presentationTick, engine::time::FixedStep{30}});
+	lasers.beams.clear();
+	frames.Execute(engine::time::SimulationTime{presentationTick, engine::time::FixedStep{30}});
+	BOOST_TEST(fx()->hidden == 1u);
+	BOOST_TEST(fx()->systems.empty());
+	BOOST_TEST(lasers.beams.empty());
+	world.Get<gp::ObjectShroud>(uplink)->clear = clearBits;
+	ticks.Execute(engine::time::SimulationTime{++presentationTick, engine::time::FixedStep{30}});
+	lasers.beams.clear();
+	frames.Execute(engine::time::SimulationTime{presentationTick, engine::time::FixedStep{30}});
+	BOOST_TEST(fx()->clientSerial == serial + 1);
+	BOOST_TEST(fx()->reveal == 1u);
+	BOOST_TEST(fx()->systems.size() == 6u);
+	BOOST_TEST(lasers.beams.size() == 20u);
+
+	const FixedVector2 spot = low + FixedVector2{Fixed::FromInt(600), Fixed::FromInt(300)};
+	const std::uint64_t start = game.CurrentTick(); // S
+	gameplay::FireSpecialPower(game.Game(), uplink, "SuperweaponParticleUplinkCannon", spot, false);
+	step();
+	BOOST_TEST(fx()->client == static_cast<std::uint8_t>(gameplay::CannonStatus::Firing));
+	BOOST_TEST(wants(FiringToPack));
+	BOOST_TEST(!wants(UnpackToIdle));
+	BOOST_TEST(fx()->systems.size() == 5u);
+	BOOST_TEST(lasers.beams.size() == 25u + 12u);
+	BOOST_TEST(widest(true) == 26.0f / 60.0f, boost::test_tools::tolerance(1e-4f));
+	while (world.Get<gameplay::ParticleCannon>(uplink)->beam != gameplay::BeamStatus::Born)
+		step();
+	const std::uint64_t born = game.CurrentTick();
+	BOOST_TEST(wants(GroundAnnihilation));
+	BOOST_TEST(startsOf(GroundAnnihilation) == 1u);
+	BOOST_TEST(lasers.beams.size() == 25u + 12u + 12u);
+	BOOST_TEST(widest(false) == 26.0f / 60.0f, boost::test_tools::tolerance(1e-4f));
+	while (fx()->client != static_cast<std::uint8_t>(gameplay::CannonStatus::PostFire))
+		step();
+	const std::uint64_t postFire = game.CurrentTick();
+	BOOST_TEST(fx()->systems.size() == 5u);
+	BOOST_TEST(widest(true) == 26.0f * (1.0f - 1.0f / 60.0f), boost::test_tools::tolerance(1e-4f));
+	while (fx()->client != static_cast<std::uint8_t>(gameplay::CannonStatus::Packing))
+		step();
+	const std::uint64_t packing = game.CurrentTick();
+	BOOST_TEST(fx()->systems.empty());
+	BOOST_TEST(lasers.beams.size() == 12u); // the orbital beam alone
+	while (fx()->beam != 0)
+		step();
+	const std::uint64_t gone = game.CurrentTick();
+	BOOST_TEST(born == start + 75);
+	BOOST_TEST(postFire == start + 300);
+	BOOST_TEST(packing == start + 360);
+	BOOST_TEST(gone == start + 435);
+	BOOST_TEST(fx()->client == static_cast<std::uint8_t>(gameplay::CannonStatus::Packing));
+	BOOST_TEST(!wants(PoweringUp));
+	BOOST_TEST(!wants(UnpackToIdle));
+	BOOST_TEST(!wants(FiringToPack));
+	BOOST_TEST(!wants(GroundAnnihilation));
+	BOOST_TEST(lasers.beams.empty());
+}
+
+BOOST_AUTO_TEST_SUITE_END()

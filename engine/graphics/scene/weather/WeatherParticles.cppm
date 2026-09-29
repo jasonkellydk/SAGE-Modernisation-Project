@@ -1,15 +1,5 @@
-module;
-
-#include <algorithm>
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-#include <span>
-#include <vector>
-
 export module Graphics.Scene.WeatherParticles;
+import std;
 
 export import Graphics.Scene.Particles;
 export import Graphics.Scene.Particles.Renderer;

@@ -1,7 +1,5 @@
-module;
-#include <cstdint>
-
 export module engine.navigation.movement.relationship_query;
+import std;
 
 export namespace navigation {
 // Owned by one synchronous movement query. Never reuse after world updates:

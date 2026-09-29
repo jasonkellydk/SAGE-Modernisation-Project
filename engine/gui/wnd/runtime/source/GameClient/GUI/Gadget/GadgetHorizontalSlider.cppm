@@ -54,6 +54,7 @@ module;
 #include "GameClient/GameWindowManager.h"
 
 export module Engine.UI.WND.Runtime.Gadget.HorizontalSlider;
+import std;
 import Engine.UI.WND.Layout;
 
 #include "GameClient/Gadget.h"

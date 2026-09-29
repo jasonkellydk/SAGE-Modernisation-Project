@@ -1,14 +1,8 @@
 module;
 #define BOOST_TEST_MODULE PropSurfaceTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <span>
-#include <vector>
-#include <limits>
 export module Graphics.Scene.Props.Surface.Tests;
+import std;
 import Graphics.Scene.Props.Surface;
 import Graphics.Scene.Props.Submission;
 import Graphics.Scene.Shadows.DirectionalRenderer;

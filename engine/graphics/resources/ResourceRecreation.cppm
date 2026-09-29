@@ -1,8 +1,5 @@
-module;
-#include <cstdint>
-#include <functional>
-#include <utility>
 export module Graphics.Resources.Recreation;
+import std;
 
 namespace Graphics
 {

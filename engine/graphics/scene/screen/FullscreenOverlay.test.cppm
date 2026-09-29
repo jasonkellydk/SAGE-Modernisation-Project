@@ -4,12 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-#include <cstdint>
-#include <span>
-#include <type_traits>
-
 export module Graphics.Scene.Screen.FullscreenOverlay.Tests;
+import std;
 
 import Graphics.Scene.Screen.FullscreenOverlay;
 

@@ -1,6 +1,10 @@
 add_library(engine_time STATIC)
 target_sources(engine_time PUBLIC FILE_SET cxx_modules TYPE CXX_MODULES FILES
 	simulation_time.cppm simulation_clock.cppm)
+if(NOT TARGET engine_core_math_fixed)
+	add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../core/math" "${CMAKE_CURRENT_BINARY_DIR}/../engine_core_math")
+endif()
+target_link_libraries(engine_time PUBLIC engine_core_math_fixed)
 target_compile_features(engine_time PUBLIC cxx_std_23)
 set_property(TARGET engine_time PROPERTY CXX_SCAN_FOR_MODULES ON)
 if(TARGET core_config)

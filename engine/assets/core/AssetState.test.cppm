@@ -5,6 +5,7 @@ module;
 #include <boost/test/included/unit_test.hpp>
 
 export module Assets.Tests.AssetState;
+import std;
 
 import Assets.States;
 

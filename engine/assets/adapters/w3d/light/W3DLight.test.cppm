@@ -4,16 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <bit>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-#include <span>
-#include <string>
-#include <vector>
-
 export module Assets.Tests.Adapters.W3D.Light;
+import std;
 
 import Assets.Adapters.W3D.Light;
 

@@ -1,7 +1,7 @@
 module;
 #include <SDL3/SDL.h>
-#include <cstdint>
 export module engine.platform.adapters.sdl3.threading.event;
+import std;
 import engine.platform.threading.event;
 
 export namespace engine::platform::sdl3

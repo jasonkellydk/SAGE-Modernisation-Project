@@ -1,15 +1,8 @@
 module;
 #define BOOST_TEST_MODULE AnimationChannelTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <bit>
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-#include <string>
-#include <span>
-#include <vector>
 export module Graphics.Scene.Models.AnimationChannels.Tests;
+import std;
 import Graphics.Scene.Models.AnimationChannels;
 import Graphics.Scene.Models.AssetPose;
 import Graphics.Scene.Props.Renderer;

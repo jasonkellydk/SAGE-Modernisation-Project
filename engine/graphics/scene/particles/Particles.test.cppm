@@ -4,11 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <type_traits>
-#include <array>
-#include <span>
-
 export module Graphics.Scene.Particles.Tests;
+import std;
 
 import Graphics.Scene.Particles;
 

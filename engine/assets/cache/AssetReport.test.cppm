@@ -3,9 +3,9 @@ module;
 #define BOOST_TEST_MODULE GeneralsAssetsAssetReportTests
 
 #include <boost/test/included/unit_test.hpp>
-#include <string>
 
 export module Assets.Tests.AssetReport;
+import std;
 
 import Assets.Cache.AssetReport;
 

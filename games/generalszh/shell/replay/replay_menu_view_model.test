@@ -1,0 +1,117 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstddef>
+#include <cstdint>
+#include <map>
+#include <optional>
+#include <string>
+#include <vector>
+
+import games.generalszh.shell.replay.replay_menu_view_model;
+
+using namespace generalszh::shell;
+
+namespace
+{
+// A replay's header as the original writes it (the layout of a shipped 1.04 replay).
+std::vector<std::byte> Replay(std::uint16_t hour, std::uint16_t minute, const std::string &map, int localPlayer)
+{
+	std::vector<std::byte> bytes;
+	const auto u8 = [&](std::uint32_t value) { bytes.push_back(static_cast<std::byte>(value & 0xFF)); };
+	const auto u16 = [&](std::uint32_t value) { u8(value), u8(value >> 8); };
+	const auto u32 = [&](std::uint32_t value) { u16(value), u16(value >> 16); };
+	const auto wide = [&](const std::u16string &text) {
+		for (const char16_t c : text)
+			u16(c);
+		u16(0);
+	};
+	const auto narrow = [&](const std::string &text) {
+		for (const char c : text)
+			u8(static_cast<unsigned char>(c));
+		u8(0);
+	};
+	for (const char c : std::string("GENREP"))
+		u8(static_cast<unsigned char>(c));
+	u32(1745713883), u32(1745715733), u32(55427);
+	u8(0), u8(0);
+	for (int slot = 0; slot < 8; ++slot)
+		u8(0);
+	wide(u"Last Replay");
+	for (const std::uint16_t field : {std::uint16_t{2025}, std::uint16_t{4}, std::uint16_t{0}, std::uint16_t{27}, hour, minute, std::uint16_t{23},
+			 std::uint16_t{102}})
+		u16(field);
+	wide(u"Version 1.04");
+	wide(u"Oct 17 2005 17:31:25");
+	u32(65540), u32(0x12345678), u32(0x9ABCDEF0);
+	narrow("US=1;M=07maps/" + map + ";MC=4AF0F44A;SD=1;");
+	narrow(std::to_string(localPlayer));
+	return bytes;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(replay_menu_view_model)
+
+// Legacy parity (RecorderClass::readReplayHeader, GameState date and time buffers).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_replay_header_reads_as_the_original_writes_it)
+{
+	const auto bytes = Replay(3, 31, "floodedplains", 0);
+	const auto header = ReadReplayHeader(bytes);
+	BOOST_TEST_REQUIRE(header.has_value());
+	BOOST_TEST(header->frameCount == 55427u);
+	BOOST_TEST((header->version == u"Version 1.04"));
+	BOOST_TEST(header->date.year == 2025);
+	BOOST_TEST(header->date.minute == 31);
+	BOOST_TEST(header->localPlayer == 0);
+	BOOST_TEST(header->Map() == "floodedplains");
+	std::vector<std::byte> broken = bytes;
+	broken[0] = std::byte{'X'};
+	BOOST_TEST(!ReadReplayHeader(broken).has_value()); // not GENREP
+}
+
+// Legacy parity (PopulateReplayFileListbox, createReplayName, deleteReplay / copyReplay).
+BOOST_AUTO_TEST_CASE(legacy_parity_the_menu_lists_by_file_name_and_asks_before_deleting)
+{
+	std::map<std::string, std::vector<std::byte>> folder{{"zulu.rep", Replay(10, 5, "tournamentdesert", 1)}, {"00000000.rep", Replay(3, 31, "floodedplains", 0)},
+		{"notes.txt", {}}, {"broken.rep", {std::byte{1}}}};
+	ReplayFiles files;
+	files.list = [&] {
+		std::vector<std::string> names;
+		for (const auto &[name, bytes] : folder)
+			names.push_back(name);
+		return names;
+	};
+	files.read = [&](const std::string &name) { return std::optional(folder.at(name)); };
+	files.remove = [&](const std::string &name) { return folder.erase(name) == 1; };
+	ShellModel model;
+	model.Push(Screen::ReplayMenu);
+	MessageBoxViewModel messages;
+	ReplayMenuViewModel menu(model, messages, files, ReplayTexts{});
+	menu.Populate();
+	const auto &rows = menu.items.Get();
+	BOOST_TEST_REQUIRE(rows.size() == 2u); // the unreadable replay and the other file left out
+	BOOST_TEST((rows[0] == u"Last Replay\t03:31 2025/04/27\tVersion 1.04\tfloodedplains"));
+	BOOST_TEST((rows[1] == u"zulu\t10:05 2025/04/27\tVersion 1.04\ttournamentdesert"));
+	BOOST_TEST(menu.selected.Get() == 0);
+	// Delete asks first; No keeps it, Yes deletes it and lists again.
+	menu.selected.Set(1);
+	menu.deleteReplay.Execute();
+	BOOST_TEST(messages.open.Get());
+	BOOST_TEST(messages.showYes.Get());
+	messages.no.Execute();
+	BOOST_TEST(folder.contains("zulu.rep"));
+	menu.deleteReplay.Execute();
+	messages.yes.Execute();
+	BOOST_TEST(!folder.contains("zulu.rep"));
+	BOOST_TEST(menu.items.Get().size() == 1u);
+	// Nothing selected: it says so.
+	menu.selected.Set(-1);
+	menu.copyReplay.Execute();
+	BOOST_TEST(messages.open.Get());
+	BOOST_TEST(messages.showOk.Get());
+	BOOST_TEST((messages.title.Get() == ReplayTexts{}.noFileSelected));
+	messages.ok.Execute();
+	menu.back.Execute();
+	BOOST_TEST((model.requestedScreen.Get() == Screen::MainMenu));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

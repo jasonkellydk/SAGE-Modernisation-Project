@@ -1,10 +1,6 @@
-module;
-#include <cassert>
-#include <cstddef>
-#include <limits>
-#include <span>
-#include <vector>
 export module Graphics.Scene.Models.DetailLevels;
+import std;
+import engine.core.contracts;
 
 namespace Graphics {
 
@@ -33,7 +29,7 @@ public:
         target.benefit_factor = count != 0 ? 1 - .5f / (count * count) : 0;
     }
     int Calculate(float area, std::span<float> values, std::span<float> costs) const {
-        assert(costs.size() >= m_levels.size() && values.size() > m_levels.size());
+        engine::core::Assert(costs.size() >= m_levels.size() && values.size() > m_levels.size());
         for (std::size_t level = 0; level < m_levels.size(); ++level)
             costs[level] = m_levels[level].non_pixel_cost + m_levels[level].pixel_cost_per_area * area;
         std::size_t level = 0;

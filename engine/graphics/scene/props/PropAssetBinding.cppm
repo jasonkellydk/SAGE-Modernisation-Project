@@ -1,12 +1,5 @@
-module;
-#include <array>
-#include <cstddef>
-#include <span>
-#include <string>
-#include <string_view>
-#include <utility>
-#include <vector>
 export module Graphics.Scene.Props.AssetBinding;
+import std;
 export import Graphics.Scene.Props.Submission;
 export import Graphics.Scene.Models.AssetPose;
 import Graphics.Scene.Props.AssetGeometry;
@@ -30,8 +23,10 @@ public:
         if(m_device) for(const auto& texture:m_textures) m_device->Destroy_Texture(texture.second);
         m_parts.clear(); m_textures.clear(); m_device=nullptr; m_renderer=nullptr; m_rest_pose={};
     }
+    // `base_override`: a texture drawn on every part in place of its own base map (the original's tree buffer draws each
+    // tree type with its TextureName); none: as authored.
     bool Load(Device& device,PropRenderer& renderer,Assets::AssetCache& assets,
-        Assets::ModelAssetHandle model_handle,std::string& error) {
+        Assets::ModelAssetHandle model_handle,std::string& error,Assets::TextureAssetHandle base_override={}) {
         const auto* model=assets.Try_Get_Model(model_handle);
         if(!model) { error="model asset is not ready"; return false; }
         std::vector<PropAssetPart> geometry;
@@ -62,8 +57,9 @@ public:
                 }
             }
             part.style.depth_write=material->Depth_Write();
-            part.textured=material->Texturing() && material->Primary_Texture().Is_Valid();
-            if(!next.Upload(assets,material->Primary_Texture(),part.textures[0])) { error="could not upload base map"; return false; }
+            const auto base=base_override.Is_Valid() ? base_override : material->Primary_Texture();
+            part.textured=material->Texturing() && base.Is_Valid();
+            if(!next.Upload(assets,base,part.textures[0])) { error="could not upload base map"; return false; }
             if(material->Secondary_Texture().Is_Valid()) { error="secondary stage requires an explicit stage binding"; return false; }
             std::uint32_t maps=0;
             for(std::size_t role=0;role<PropSurfaceTextureCount;++role) {
@@ -94,6 +90,8 @@ public:
     std::size_t Part_Count() const noexcept { return m_parts.size(); }
     std::size_t Texture_Count() const noexcept { return m_textures.size(); }
     std::string_view Part_Name(std::size_t part) const noexcept { return part<m_parts.size() ? m_parts[part].name : std::string_view{}; }
+    // The bone a part hangs on (Invalid_Bone_Index when it has none).
+    std::uint32_t Part_Bone(std::size_t part) const noexcept { return part<m_parts.size() ? m_parts[part].bone : Invalid_Bone_Index; }
     bool Draw_Part(CommandList& commands,std::size_t index,PropParameters parameters,
         const ModelAssetPose* pose=nullptr,std::uint32_t lod=0) const {
         if(!m_renderer || index>=m_parts.size()) return false;
@@ -106,6 +104,50 @@ public:
         MeshVersion mesh{m_renderer,part.mesh,false};
         if(!Mesh_For_Pose(part,pose,mesh)) return false;
         return m_renderer->Draw(commands,mesh.handle,part.style,parameters,part.textures);
+    }
+    // A part seen through at `opacity` (the original's opacity override, MeshClass alpha override): as Draw_Part, but
+    // an opaque part blends source alpha over what is behind it and drops texels under 96 x opacity (alpha test).
+    bool Draw_Part_Translucent(CommandList& commands,std::size_t index,PropParameters parameters,float opacity,
+        const ModelAssetPose* pose=nullptr,std::uint32_t lod=0) const {
+        if(!m_renderer || index>=m_parts.size()) return false;
+        const auto& part=m_parts[index];
+        if(part.lod!=lod) return true;
+        bool visible=true;
+        if(!Prepare_Pose(part,pose,parameters,visible)) return false;
+        if(!visible) return true;
+        Prepare(part,parameters);
+        PropStyle style=part.style;
+        if(style.destination_blend==RHIBlendFactor::Zero){
+            style.source_blend=RHIBlendFactor::SourceAlpha;
+            style.destination_blend=RHIBlendFactor::InverseSourceAlpha;
+        }
+        parameters.alpha_cutoff=std::max(parameters.alpha_cutoff,static_cast<float>(static_cast<unsigned>(96*opacity))/255.0f);
+        MeshVersion mesh{m_renderer,part.mesh,false};
+        if(!Mesh_For_Pose(part,pose,mesh)) return false;
+        return m_renderer->Draw(commands,mesh.handle,style,parameters,part.textures);
+    }
+    // A material pass over a part (the original's Push_Material_Pass): its geometry again, untextured with the
+    // parameters' replacement material, blended and depth-tested as `pass` says.
+    bool Draw_Part_Pass(CommandList& commands,std::size_t index,PropParameters parameters,const PropStyle& pass,
+        const ModelAssetPose* pose=nullptr,std::uint32_t lod=0) const {
+        if(!m_renderer || index>=m_parts.size()) return false;
+        const auto& part=m_parts[index];
+        if(part.lod!=lod) return true;
+        bool visible=true;
+        if(!Prepare_Pose(part,pose,parameters,visible)) return false;
+        if(!visible) return true;
+        Prepare(part,parameters);
+        parameters.textured=0;
+        parameters.surface.shading_model=0;
+        parameters.alpha_cutoff=0;
+        PropStyle style=part.style;
+        style.source_blend=pass.source_blend;
+        style.destination_blend=pass.destination_blend;
+        style.depth_write=pass.depth_write;
+        style.depth_comparison=pass.depth_comparison;
+        MeshVersion mesh{m_renderer,part.mesh,false};
+        if(!Mesh_For_Pose(part,pose,mesh)) return false;
+        return m_renderer->Draw(commands,mesh.handle,style,parameters,part.textures);
     }
     bool Submit_Part(PropSubmission& submission,std::size_t index,PropParameters parameters,
         PropDrawPhase phase,const std::array<float,4>& camera_depth={},

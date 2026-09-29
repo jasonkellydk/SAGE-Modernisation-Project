@@ -1,12 +1,7 @@
 module;
 #define NOMINMAX
-#include <algorithm>
-#include <array>
-#include <cstddef>
-#include <functional>
-#include <utility>
-#include <vector>
 export module Graphics.Resources.Textures.Load;
+import std;
 import engine.profiling;
 export import Graphics.Resources.Loading.Queue;
 export import Graphics.Resources.Textures.Resource;

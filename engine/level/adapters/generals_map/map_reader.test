@@ -1,0 +1,306 @@
+#define BOOST_TEST_MODULE EngineLevel
+#include <boost/test/included/unit_test.hpp>
+
+#include <bit>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <map>
+#include <span>
+#include <cstdlib>
+#include <string>
+#include <vector>
+
+import engine.level.adapters.generals_map.map_reader;
+
+using namespace engine::level;
+using namespace Engine::Math::Literals;
+namespace math = Engine::Math;
+
+namespace
+{
+// Minimal writer for the chunk container, mirroring the original format.
+class MapWriter
+{
+public:
+	std::uint32_t Id(const std::string &name)
+	{
+		const auto found = m_ids.find(name);
+		if (found != m_ids.end())
+			return found->second;
+		const auto id = static_cast<std::uint32_t>(m_ids.size() + 1);
+		m_ids[name] = id;
+		m_order.push_back(name);
+		return id;
+	}
+
+	void U8(std::uint8_t v) { m_body.push_back(static_cast<std::byte>(v)); }
+	void U16(std::uint16_t v) { U8(static_cast<std::uint8_t>(v)); U8(static_cast<std::uint8_t>(v >> 8)); }
+	void U32(std::uint32_t v) { U16(static_cast<std::uint16_t>(v)); U16(static_cast<std::uint16_t>(v >> 16)); }
+	void F32(float v) { U32(std::bit_cast<std::uint32_t>(v)); }
+	void Str(const std::string &s) { U16(static_cast<std::uint16_t>(s.size())); for (char c : s) U8(static_cast<std::uint8_t>(c)); }
+	void DictInt(const std::string &key, std::int32_t v) { U32(Id(key) << 8 | 1); U32(static_cast<std::uint32_t>(v)); }
+	void DictStr(const std::string &key, const std::string &v) { U32(Id(key) << 8 | 3); Str(v); }
+	void DictReal(const std::string &key, float v) { U32(Id(key) << 8 | 2); F32(v); }
+	void DictBool(const std::string &key, bool v) { U32(Id(key) << 8 | 0); U8(v ? 1 : 0); }
+
+	void Chunk(const std::string &name, std::uint16_t version, const std::function<void()> &content)
+	{
+		U32(Id(name));
+		U16(version);
+		const std::size_t sizeAt = m_body.size();
+		U32(0);
+		const std::size_t start = m_body.size();
+		content();
+		const auto size = static_cast<std::uint32_t>(m_body.size() - start);
+		for (int index = 0; index < 4; ++index)
+			m_body[sizeAt + static_cast<std::size_t>(index)] = static_cast<std::byte>(size >> (8 * index));
+	}
+
+	std::vector<std::byte> Finish() const
+	{
+		std::vector<std::byte> out;
+		for (char c : std::string("CkMp"))
+			out.push_back(static_cast<std::byte>(c));
+		const auto u32 = [&](std::uint32_t v) { for (int i = 0; i < 4; ++i) out.push_back(static_cast<std::byte>(v >> (8 * i))); };
+		u32(static_cast<std::uint32_t>(m_order.size()));
+		for (const std::string &name : m_order)
+		{
+			out.push_back(static_cast<std::byte>(name.size()));
+			for (char c : name)
+				out.push_back(static_cast<std::byte>(c));
+			u32(m_ids.at(name));
+		}
+		out.insert(out.end(), m_body.begin(), m_body.end());
+		return out;
+	}
+
+private:
+	std::map<std::string, std::uint32_t> m_ids;
+	std::vector<std::string> m_order;
+	std::vector<std::byte> m_body;
+};
+
+std::vector<std::byte> SampleMap()
+{
+	MapWriter w;
+	w.Chunk("HeightMapData", 4, [&] {
+		w.U32(3); w.U32(2); w.U32(0);
+		w.U32(1); w.U32(3); w.U32(2);
+		w.U32(6);
+		for (std::uint8_t h : {0, 16, 32, 48, 64, 255})
+			w.U8(h);
+	});
+	w.Chunk("WorldInfo", 1, [&] { w.U16(2); w.DictInt("weather", 1); w.DictStr("mapName", "Test"); });
+	w.Chunk("ObjectsList", 3, [&] {
+		w.Chunk("Object", 3, [&] {
+			w.F32(15.5f); w.F32(20.0f); w.F32(3.0f); w.F32(1.5707964f); w.U32(0x2);
+			w.Str("AmericaTankCrusader");
+			w.U16(2); w.DictStr("originalOwner", "teamPlyrAmerica"); w.DictReal("objectInitialHealth", 75.0f);
+		});
+		w.Chunk("Object", 3, [&] {
+			w.F32(100.0f); w.F32(200.0f); w.F32(0.0f); w.F32(0.0f); w.U32(0);
+			w.Str("*Waypoints/Waypoint");
+			w.U16(2); w.DictInt("waypointID", 7); w.DictStr("waypointName", "Start");
+		});
+		w.Chunk("Object", 3, [&] {
+			w.F32(110.0f); w.F32(210.0f); w.F32(0.0f); w.F32(0.0f); w.U32(0);
+			w.Str("*Waypoints/Waypoint");
+			w.U16(1); w.DictInt("waypointID", 8);
+		});
+		w.Chunk("Object", 3, [&] {
+			w.F32(0.0f); w.F32(0.0f); w.F32(99999.0f); w.F32(0.0f); w.U32(0);
+			w.Str("TooHigh"); w.U16(1); w.DictBool("x", true);
+		});
+	});
+	w.Chunk("WaypointsList", 1, [&] { w.U32(2); w.U32(7); w.U32(8); w.U32(8); w.U32(99); });
+	w.Chunk("PolygonTriggers", 4, [&] {
+		w.U32(1);
+		w.Str("InnerArea"); w.Str("Default"); w.U32(3); w.U8(1); w.U8(0); w.U32(0);
+		w.U32(3); for (int v : {0, 0, 0, 100, 0, 0, 100, 50, 5}) w.U32(static_cast<std::uint32_t>(v));
+	});
+	w.Chunk("GlobalLighting", 3, [&] {
+		w.U32(2);
+		for (int set = 0; set < 4; ++set)
+			for (int light = 0; light < 6; ++light)
+				for (float v : {0.25f, 0.5f, 0.75f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f, -1.0f})
+					w.F32(v);
+		w.U32(0x7F000000u);
+	});
+	w.Chunk("BlendTileData", 8, [&] {
+		w.U32(6);
+		for (std::uint16_t v : {1, 2, 3, 4, 5, 6}) w.U16(v);   // tiles
+		for (std::uint16_t v : {0, 1, 0, 0, 0, 0}) w.U16(v);   // blends
+		for (std::uint16_t v : {0, 0, 0, 0, 0, 0}) w.U16(v);   // extra blends
+		for (std::uint16_t v : {0, 0, 1, 0, 0, 0}) w.U16(v);   // cliffs
+		w.U8(0b100); w.U8(0);                                  // cliff flags, 1 byte per row
+		w.U32(64); w.U32(2); w.U32(2); w.U32(1);               // tiles, blends, cliffs, materials
+		w.U32(0); w.U32(16); w.U32(4); w.U32(0); w.Str("GrassLight");
+		w.U32(8); w.U32(1); w.U32(0); w.U32(8); w.U32(2); w.Str("EdgeCliff");
+		w.U32(5); w.U8(1); w.U8(0); w.U8(0); w.U8(0); w.U8(2); w.U8(1); w.U32(0); w.U32(0x7ADA0000u);
+		w.U32(9); for (float uv : {0.0f, 0.0f, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.5f}) w.F32(uv); w.U8(1); w.U8(0);
+	});
+	w.Chunk("MapPreview", 1, [&] { w.U32(0xDEADBEEF); });
+	return w.Finish();
+}
+}
+
+BOOST_AUTO_TEST_SUITE(generals_map_reader)
+
+BOOST_AUTO_TEST_CASE(decodes_the_generic_level)
+{
+	const auto result = generals_map::Read(SampleMap());
+	BOOST_TEST_REQUIRE(result.has_value(), (result ? "" : result.error()));
+	const Level &level = result->level;
+
+	BOOST_TEST(level.terrain.width == 3u);
+	BOOST_TEST(level.terrain.height == 2u);
+	BOOST_TEST(level.terrain.cellSize.Raw() == (10_fx).Raw());
+	BOOST_TEST(level.terrain.At(1, 0).Raw() == (10_fx).Raw());
+	BOOST_TEST(level.terrain.At(2, 1).Raw() == (159.375_fx).Raw());
+	BOOST_TEST(level.terrain.playableExtents.size() == 1u);
+
+	BOOST_TEST(*level.properties.Get<std::int64_t>("weather") == 1);
+	BOOST_TEST(*level.properties.Get<std::string>("mapName") == "Test");
+
+	BOOST_TEST_REQUIRE(level.placements.size() == 1u);
+	const Placement &tank = level.placements[0];
+	BOOST_TEST(tank.type == "AmericaTankCrusader");
+	BOOST_TEST((tank.position == math::FixedVector3{15.5_fx, 20_fx, 3_fx}));
+	// 1.5707964f is pi/2 only to float precision (~30 turn units).
+	BOOST_TEST(std::abs(static_cast<std::int64_t>(tank.orientation.units) - 0x40000000ll) < 64);
+	BOOST_TEST(tank.flags == 2u);
+	BOOST_TEST(tank.properties.Get<math::Fixed>("objectInitialHealth")->Raw() == (75_fx).Raw());
+
+	BOOST_TEST_REQUIRE(level.markers.size() == 2u);
+	BOOST_TEST(level.markers[0].name == "Start");
+	BOOST_TEST((level.markers[0].links == std::vector<std::uint32_t>{8}));
+	BOOST_TEST(level.markers[1].links.empty());
+
+	BOOST_TEST_REQUIRE(level.regions.size() == 1u);
+	BOOST_TEST(level.regions[0].name == "InnerArea");
+	BOOST_TEST(level.regions[0].layer == "Default");
+	BOOST_TEST(level.regions[0].water);
+	BOOST_TEST(level.regions[0].points.size() == 3u);
+
+	BOOST_TEST(level.lighting.current == 1u);
+	BOOST_TEST(level.lighting.sets.size() == 4u);
+	BOOST_TEST(level.lighting.sets[3].terrain[2].ambient[1].Raw() == (0.5_fx).Raw());
+	BOOST_TEST(level.lighting.shadowColor == 0x7F000000u);
+
+	const TerrainSurface &surface = level.surface;
+	BOOST_TEST((surface.tiles == std::vector<std::uint16_t>{1, 2, 3, 4, 5, 6}));
+	BOOST_TEST(surface.blends[1] == 1u);
+	BOOST_TEST(surface.cliffs[2] == 1u);
+	BOOST_TEST(surface.cliffFlagBytesPerRow == 1u);
+	BOOST_TEST(surface.cliffFlags[0] == 0b100u);
+	BOOST_TEST_REQUIRE(surface.materials.size() == 1u);
+	BOOST_TEST(surface.materials[0].name == "GrassLight");
+	BOOST_TEST(surface.materials[0].widthInTiles == 4u);
+	BOOST_TEST(surface.edgeMaterials.at(0).name == "EdgeCliff");
+	BOOST_TEST_REQUIRE(surface.blendTable.size() == 2u);
+	BOOST_TEST(surface.blendTable[1].tile == 5u);
+	BOOST_TEST(surface.blendTable[1].horizontal);
+	BOOST_TEST(surface.blendTable[1].inverted == 2u);
+	BOOST_TEST(surface.blendTable[1].longDiagonal);
+	BOOST_TEST(surface.cliffTable.at(1).uv[7].Raw() == (0.5_fx).Raw());
+	BOOST_TEST(surface.cliffTable[1].flip);
+
+	BOOST_TEST_REQUIRE(level.FindSection("MapPreview") != nullptr);
+	BOOST_TEST(level.FindSection("MapPreview")->data.size() == 4u);
+
+	BOOST_TEST(result->warnings.size() == 2u); // dropped object, dangling link
+}
+
+BOOST_AUTO_TEST_CASE(decodes_sides_teams_plans_and_scripts)
+{
+	MapWriter w;
+	w.Chunk("HeightMapData", 4, [&] { w.U32(1); w.U32(1); w.U32(0); w.U32(1); w.U32(1); w.U32(1); w.U32(1); w.U8(0); });
+	w.Chunk("SidesList", 3, [&] {
+		w.U32(2);
+		w.U16(1); w.DictStr("playerName", "");
+		w.U32(0);
+		w.U16(1); w.DictStr("playerName", "PlyrAmerica");
+		w.U32(1);
+		w.Str("Barracks1"); w.Str("AmericaBarracks"); w.F32(10.0f); w.F32(20.0f); w.F32(5.0f); w.F32(0.0f);
+		w.U8(1); w.U32(2); w.Str("OnBuilt"); w.U32(80); w.U8(1); w.U8(1); w.U8(0);
+		w.U32(1);
+		w.U16(1); w.DictStr("teamName", "teamPlyrAmerica");
+		w.Chunk("PlayerScriptsList", 1, [&] {
+			w.Chunk("ScriptList", 1, [&] {});
+			w.Chunk("ScriptList", 1, [&] {
+				w.Chunk("ScriptGroup", 2, [&] {
+					w.Str("Intro"); w.U8(1); w.U8(0);
+					w.Chunk("Script", 2, [&] {
+						w.Str("StartCamera"); w.Str("c"); w.Str("cc"); w.Str("ac");
+						w.U8(1); w.U8(0); w.U8(1); w.U8(1); w.U8(0); w.U8(0); w.U32(3);
+						w.Chunk("OrCondition", 1, [&] {
+							w.Chunk("Condition", 4, [&] { w.U32(3); w.U32(w.Id("TRUE") << 8); w.U32(0); });
+						});
+						w.Chunk("ScriptAction", 2, [&] {
+							w.U32(13); w.U32(w.Id("MOVE_CAMERA_TO") << 8); w.U32(2);
+							w.U32(16); w.F32(1.0f); w.F32(2.0f); w.F32(3.0f);
+							w.U32(1); w.U32(0); w.F32(2.5f); w.Str("");
+						});
+						w.Chunk("ScriptActionFalse", 2, [&] { w.U32(5); w.U32(w.Id("NO_OP") << 8); w.U32(0); });
+					});
+				});
+				w.Chunk("Script", 1, [&] {
+					w.Str("Loose"); w.Str(""); w.Str(""); w.Str("");
+					w.U8(0); w.U8(1); w.U8(1); w.U8(1); w.U8(1); w.U8(1);
+				});
+			});
+		});
+	});
+	const auto result = generals_map::Read(w.Finish());
+	BOOST_TEST_REQUIRE(result.has_value(), (result ? "" : result.error()));
+	const Scenario &scenario = result->level.scenario;
+	BOOST_TEST_REQUIRE(scenario.participants.size() == 2u);
+	BOOST_TEST(*scenario.participants[1].properties.Get<std::string>("playerName") == "PlyrAmerica");
+	BOOST_TEST_REQUIRE(scenario.participants[1].plan.size() == 1u);
+	const PlannedPlacement &barracks = scenario.participants[1].plan[0];
+	BOOST_TEST(barracks.type == "AmericaBarracks");
+	BOOST_TEST(barracks.position.z.Raw() == 0);
+	BOOST_TEST(barracks.initiallyPlaced);
+	BOOST_TEST(barracks.rebuilds == 2);
+	BOOST_TEST(barracks.health == 80);
+	BOOST_TEST(!barracks.sellable);
+	BOOST_TEST(!barracks.repairable);
+	BOOST_TEST(scenario.groups.size() == 1u);
+
+	const ScriptList &scripts = scenario.participants[1].scripts;
+	BOOST_TEST_REQUIRE(scripts.groups.size() == 1u);
+	BOOST_TEST(scripts.groups[0].name == "Intro");
+	BOOST_TEST_REQUIRE(scripts.groups[0].scripts.size() == 1u);
+	const Script &camera = scripts.groups[0].scripts[0];
+	BOOST_TEST(camera.name == "StartCamera");
+	BOOST_TEST(!camera.oneShot);
+	BOOST_TEST(!camera.difficulty[2]);
+	BOOST_TEST(camera.evaluationDelaySeconds == 3u);
+	BOOST_TEST_REQUIRE(camera.conditions.size() == 1u);
+	BOOST_TEST(camera.conditions[0][0].name == "TRUE");
+	BOOST_TEST_REQUIRE(camera.actions.size() == 1u);
+	BOOST_TEST(camera.actions[0].name == "MOVE_CAMERA_TO");
+	BOOST_TEST((camera.actions[0].parameters[0].position == math::FixedVector3{1_fx, 2_fx, 3_fx}));
+	BOOST_TEST(camera.actions[0].parameters[1].number.Raw() == (2.5_fx).Raw());
+	BOOST_TEST(camera.falseActions.size() == 1u);
+	BOOST_TEST_REQUIRE(scripts.scripts.size() == 1u);
+	BOOST_TEST(scripts.scripts[0].evaluationDelaySeconds == 0u);
+	BOOST_TEST(result->level.FindSection("SidesList") == nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(corrupt_files_are_rejected_with_context)
+{
+	auto bytes = SampleMap();
+	BOOST_TEST(!generals_map::Read(std::span(bytes).first(bytes.size() - 3)).has_value());
+	bytes[0] = std::byte{'X'};
+	BOOST_TEST(!generals_map::Read(bytes).has_value());
+
+	MapWriter w;
+	w.Chunk("HeightMapData", 4, [&] { w.U32(2); w.U32(2); w.U32(0); w.U32(0); w.U32(5); });
+	const auto error = generals_map::Read(w.Finish());
+	BOOST_TEST_REQUIRE(!error.has_value());
+	BOOST_TEST(error.error().starts_with("HeightMapData:"));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

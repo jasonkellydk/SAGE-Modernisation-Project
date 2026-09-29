@@ -4,11 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-#include <cstdint>
-#include <span>
-
 export module Graphics.Passes.Shadow.Tests;
+import std;
 
 import Graphics.Passes.Shadow;
 

@@ -1,0 +1,279 @@
+#define BOOST_TEST_MODULE GeneralsZhContent
+#include <boost/test/included/unit_test.hpp>
+
+#include <array>
+#include <cstdlib>
+#include <filesystem>
+#include <set>
+#include <string>
+
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.content_loader;
+import games.generalszh.content.objects.object_catalog;
+import games.generalszh.content.objects.model_draw;
+import games.generalszh.content.containment.transport_content;
+import games.generalszh.content.locomotors.locomotor_catalog;
+import games.generalszh.content.install.install_mount;
+import engine.level.adapters.generals_map.map_reader;
+
+using namespace generalszh::content;
+using namespace engine::config;
+using namespace Engine::Math::Literals;
+
+namespace
+{
+struct Built
+{
+	Document document;
+	Diagnostics diagnostics;
+	DefinitionTable<ObjectDefinition> objects;
+};
+
+void Build(Built &built, std::string text)
+{
+	Diagnostics grammarDiagnostics;
+	const auto grammar = ZeroHourIniGrammar(grammarDiagnostics);
+	ini::Read(built.document, built.document.AddSource("objects.ini", std::move(text)), grammar, built.diagnostics);
+	BindContext context{built.diagnostics, engine::time::FixedStep{30}};
+	built.objects = BuildObjectCatalog(built.document, context);
+}
+}
+
+BOOST_AUTO_TEST_SUITE(object_catalog)
+
+BOOST_AUTO_TEST_CASE(defaults_reskins_and_module_edits_follow_the_original_rules)
+{
+	Built built;
+	Build(built,
+		"Object DefaultThingTemplate\n"
+		"  VisionRange = 100\n"
+		"  InheritableModule\n"
+		"    Behavior = AutoHealBehavior ModuleTag_DefaultHeal\n"
+		"    End\n"
+		"  End\n"
+		"  Behavior = SquishCollide ModuleTag_DefaultSquish\n"
+		"  End\n"
+		"End\n"
+		"Object AmericaTankCrusader\n"
+		"  Side = America\n"
+		"  KindOf = SELECTABLE CAN_ATTACK VEHICLE\n"
+		"  Geometry = BOX\n"
+		"  GeometryMajorRadius = 12.5\n"
+		"  Draw = W3DTankDraw ModuleTag_01\n"
+		"    DefaultConditionState\n"
+		"      Model = AVCrusader\n"
+		"    End\n"
+		"  End\n"
+		"  Behavior = AIUpdateInterface ModuleTag_02\n"
+		"  End\n"
+		"  Body = ActiveBody ModuleTag_03\n"
+		"    MaxHealth = 480\n"
+		"  End\n"
+		"  RemoveModule = ModuleTag_03\n"
+		"End\n"
+		"ObjectReskin AmericaTankCrusaderGold AmericaTankCrusader\n"
+		"  DisplayName = OBJECT:GoldCrusader\n"
+		"  Draw = W3DTankDraw ModuleTag_Gold\n"
+		"  End\n"
+		"  Side = China\n"
+		"End\n");
+	const ObjectDefinition *crusader = built.objects.Find("AmericaTankCrusader");
+	BOOST_TEST_REQUIRE(crusader != nullptr);
+	BOOST_TEST(crusader->visionRange.Raw() == (100_fx).Raw());
+	BOOST_TEST(crusader->Is("VEHICLE"));
+	BOOST_TEST(!crusader->Is("STRUCTURE"));
+	BOOST_TEST((crusader->geometry.shape == GeometryShape::Box));
+	BOOST_TEST(crusader->geometry.majorRadius.Raw() == (12.5_fx).Raw());
+	// The inheritable default survives, the plain default behavior is replaced,
+	// the body is removed again.
+	BOOST_TEST_REQUIRE(crusader->modules.size() == 3u);
+	BOOST_TEST(crusader->modules[0].tag == "ModuleTag_DefaultHeal");
+	BOOST_TEST(crusader->modules[0].copied);
+	BOOST_TEST(crusader->modules[1].type == "W3DTankDraw");
+	BOOST_TEST(crusader->modules[1].block->Find("DefaultConditionState")->Find("Model")->Value() == "AVCrusader");
+	BOOST_TEST(crusader->modules[2].type == "AIUpdateInterface");
+
+	const ObjectDefinition *gold = built.objects.Find("AmericaTankCrusaderGold");
+	BOOST_TEST_REQUIRE(gold != nullptr);
+	BOOST_TEST(gold->reskinnedFrom == "AmericaTankCrusader");
+	BOOST_TEST(gold->side == "America"); // Side is not a reskin field
+	BOOST_TEST(gold->displayName == "OBJECT:GoldCrusader");
+	BOOST_TEST(gold->FindModule(ModuleSlot::Draw)->tag == "ModuleTag_Gold");
+	BOOST_TEST(gold->FindModule(ModuleSlot::Behavior) != nullptr);
+	BOOST_TEST(built.diagnostics.Format(built.document).find("unknown key 'Side' in 'ObjectReskin'") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(reskins_need_a_known_source)
+{
+	Built built;
+	Build(built, "ObjectReskin Copy Missing\nEnd\n");
+	BOOST_TEST(built.objects.Size() == 0u);
+	BOOST_TEST(built.diagnostics.HasErrors());
+}
+
+BOOST_AUTO_TEST_CASE(shipped_objects_build_and_cover_the_shell_map)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const Document &document = loader.Load({"Data/INI/Default/Object", "Data/INI/Object"});
+	const Document &crates = loader.Load({"Data/INI/Default/Crate", "Data/INI/Crate"});
+	Diagnostics &diagnostics = loader.DiagnosticsFor(document);
+	BindContext context{diagnostics, engine::time::FixedStep{30}};
+	const Document *documents[] = {&document, &crates};
+	const auto objects = BuildObjectCatalog(documents, context);
+	BOOST_TEST_MESSAGE("objects: " << objects.Size() << ", diagnostics: " << diagnostics.Entries().size()
+		<< " (" << diagnostics.ErrorCount() << " errors)");
+	BOOST_TEST(objects.Size() > 1500u);
+	// Veterancy fields (ThingTemplate ExperienceValue / ExperienceRequired / IsTrainable).
+	if (const ObjectDefinition *ranger = objects.Find("AmericaInfantryRanger"))
+	{
+		BOOST_TEST((ranger->experienceValue == std::array<std::int32_t, 4>{20, 20, 40, 60}));
+		BOOST_TEST((ranger->experienceRequired == std::array<std::int32_t, 4>{0, 40, 60, 120}));
+		BOOST_TEST(ranger->trainable);
+	}
+	else
+		BOOST_TEST(false, "no AmericaInfantryRanger");
+	for (const auto &entry : diagnostics.Entries())
+		if (entry.severity == Severity::Error)
+			BOOST_TEST_MESSAGE("  error: " << document.Describe(entry.location) << ": " << entry.message);
+	BOOST_TEST(diagnostics.ErrorCount() == 0u);
+
+	const auto shell = engine::level::generals_map::Read(*files.Read("Maps/ShellMapMD/ShellMapMD.map"));
+	BOOST_TEST_REQUIRE(shell.has_value());
+	std::set<std::string> missing;
+	// Road points (flags 0x2/0x4) name Road definitions and scorch marks are
+	// decals; neither is an object.
+	for (const auto &placement : shell->level.placements)
+		if ((placement.flags & 0x6u) == 0 && !placement.properties.Contains("scorchType") && !objects.Contains(placement.type))
+			missing.insert(placement.type);
+	for (const std::string &type : missing)
+		BOOST_TEST_MESSAGE("  missing object type " << type);
+	BOOST_TEST(missing.empty());
+
+	// Every mobile unit the shell map places or reinforces with has a locomotor.
+	const Document &locomotorSet = loader.Load({"Data/INI/Locomotor"});
+	Diagnostics &locomotorDiagnostics = loader.DiagnosticsFor(locomotorSet);
+	BindContext locomotorContext{locomotorDiagnostics, engine::time::FixedStep{30}};
+	const auto locomotors = BuildLocomotorCatalog(locomotorSet, locomotorContext);
+	BOOST_TEST_MESSAGE("locomotors: " << locomotors.Size() << " (" << locomotorDiagnostics.ErrorCount() << " errors)");
+	BOOST_TEST(locomotors.Size() > 100u);
+	BOOST_TEST(locomotorDiagnostics.ErrorCount() == 0u);
+	for (const char *type : {"AmericaVehicleComanche", "AmphibiousTransport", "ChinaJetMIG", "GLAInfantryRebel", "CarAmbulance",
+			 "GLAVehicleTechnical", "AmericaVehicleChinook"})
+	{
+		const ObjectDefinition *object = objects.Find(type);
+		BOOST_TEST_REQUIRE(object != nullptr);
+		if (!object->buildVariations.empty())
+			object = objects.Find(object->buildVariations.front());
+		BOOST_TEST_REQUIRE(object != nullptr);
+		const auto *locomotor = ObjectLocomotor(*object, locomotors);
+		BOOST_TEST(locomotor != nullptr, type << " has a SET_NORMAL locomotor");
+		if (locomotor != nullptr)
+			BOOST_TEST_MESSAGE("  " << type << ": speed " << locomotor->maxSpeed.Raw() / 65536.0 << "/tick, height "
+				<< locomotor->preferredHeight.Raw() / 65536.0 << ", appearance " << static_cast<int>(locomotor->appearance));
+	}
+	const auto *mig = ObjectLocomotor(*objects.Find("ChinaJetMIG"), locomotors);
+	BOOST_TEST((mig != nullptr && mig->appearance == engine::gameplay::LocomotorAppearance::Wings));
+
+	// OpenContain's PassengersAllowedToFire (TransportContain::isPassengerAllowedToFire: infantry only):
+	// the Humvee's riders fire out of it, the Chinook's do not.
+	const engine::time::FixedStep step{30};
+	const auto humvee = ReadObjectTransport(*objects.Find("AmericaVehicleHumvee"), step);
+	BOOST_TEST_REQUIRE(humvee.has_value());
+	BOOST_TEST(humvee->passengersFire);
+	BOOST_TEST(humvee->infantryOnly);
+	const auto chinook = ReadObjectTransport(*objects.Find("AmericaVehicleChinook"), step);
+	BOOST_TEST_REQUIRE(chinook.has_value());
+	BOOST_TEST(!chinook->passengersFire);
+}
+
+BOOST_AUTO_TEST_CASE(resting_models_come_from_the_default_condition_state_or_model_name)
+{
+	Built built;
+	Build(built,
+		"Object Tank\n"
+		"  Draw = W3DTankDraw ModuleTag_01\n"
+		"    ConditionState = REALLYDAMAGED\n"
+		"      Model = TankDamaged\n"
+		"    End\n"
+		"    DefaultConditionState\n"
+		"      Model = TankHealthy\n"
+		"    End\n"
+		"  End\n"
+		"End\n"
+		"Object Tree\n"
+		"  Draw = W3DTreeDraw ModuleTag_01\n"
+		"    ModelName = PTPalm01\n"
+		"  End\n"
+		"End\n"
+		"Object Hidden\n"
+		"  Draw = W3DModelDraw ModuleTag_01\n"
+		"    DefaultConditionState\n"
+		"      Model = NONE\n"
+		"    End\n"
+		"  End\n"
+		"End\n"
+		"Object Ambient\n"
+		"  Draw = W3DDefaultDraw ModuleTag_01\n"
+		"  End\n"
+		"End\n");
+	BOOST_TEST(DefaultModel(*built.objects.Find("Tank")).model == "TankHealthy");
+	BOOST_TEST(DefaultModel(*built.objects.Find("Tree")).model == "PTPalm01");
+	BOOST_TEST(DefaultModel(*built.objects.Find("Tree")).drawType == "W3DTreeDraw");
+	BOOST_TEST(DefaultModel(*built.objects.Find("Hidden")).model.empty());
+	// W3DDefaultDraw (the ambient sound objects' draw) renders nothing in retail: its model exists only under LOAD_TEST_ASSETS.
+	BOOST_TEST(DefaultModel(*built.objects.Find("Ambient")).model.empty());
+}
+
+BOOST_AUTO_TEST_CASE(resting_models_carry_the_default_condition_state_animation)
+{
+	Built built;
+	Build(built,
+		"Object Chopper\n"
+		"  Draw = W3DModelDraw ModuleTag_01\n"
+		"    DefaultConditionState\n"
+		"      Model = AVChinook\n"
+		"      Animation = AVChinook.AVChinook\n"
+		"      AnimationMode = LOOP\n"
+		"    End\n"
+		"  End\n"
+		"End\n"
+		"Object Soldier\n"
+		"  Draw = W3DModelDraw ModuleTag_01\n"
+		"    DefaultConditionState\n"
+		"      Model = UITRST_SKN\n"
+		"      IdleAnimation = UITRST_SKL.UITRST_IDLA\n"
+		"      IdleAnimation = UITRST_SKL.UITRST_IDLB\n"
+		"    End\n"
+		"  End\n"
+		"End\n"
+		"Object Still\n"
+		"  Draw = W3DModelDraw ModuleTag_01\n"
+		"    DefaultConditionState\n"
+		"      Model = CBBarrel\n"
+		"    End\n"
+		"  End\n"
+		"End\n");
+	const RestingModel chopper = DefaultModel(*built.objects.Find("Chopper"));
+	BOOST_TEST(chopper.model == "AVChinook");
+	BOOST_TEST(chopper.animation == "AVChinook.AVChinook");
+	BOOST_TEST((chopper.animationMode == ModelAnimationMode::Loop));
+	BOOST_TEST(!chopper.idleAnimation);
+	const RestingModel soldier = DefaultModel(*built.objects.Find("Soldier"));
+	BOOST_TEST(soldier.animation == "UITRST_SKL.UITRST_IDLA");
+	BOOST_TEST((soldier.animationMode == ModelAnimationMode::Once));
+	BOOST_TEST(soldier.idleAnimation);
+	const RestingModel still = DefaultModel(*built.objects.Find("Still"));
+	BOOST_TEST(still.model == "CBBarrel");
+	BOOST_TEST(still.animation.empty());
+}
+
+BOOST_AUTO_TEST_SUITE_END()

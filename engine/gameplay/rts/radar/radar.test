@@ -1,0 +1,82 @@
+#define BOOST_TEST_MODULE EngineGameplayRadar
+#include <boost/test/included/unit_test.hpp>
+
+#include <cstdint>
+
+import engine.gameplay.rts.radar.systems.radar_coverage_system;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+using namespace engine::gameplay;
+
+BOOST_AUTO_TEST_SUITE(radar)
+
+// Player::addRadar / removeRadar / disableRadar / hasRadar with RadarUpgrade and Object::setDisabled: a command
+// centre's radar gives its player radar; short of power (a consumer of 8 against nothing) it is gone, unless a
+// DisableProof one (the GLA radar van) is there; any disabling of the only provider takes it away; another player's is
+// its own.
+BOOST_AUTO_TEST_CASE(legacy_parity_radar_needs_power_or_a_disable_proof_provider)
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<RadarProvider>();
+	world.RegisterComponent<Owner>();
+	world.RegisterComponent<Disabled>();
+	world.RegisterComponent<EnergySource>();
+	world.RegisterComponent<Powered>();
+	world.FinalizeComponents();
+	world.EmplaceResource<EnergyShares>();
+	world.EmplaceResource<PlayerEnergy>();
+	const PlayerRadar &radar = world.EmplaceResource<PlayerRadar>();
+	std::uint64_t tick = 0;
+	const auto run = [&] {
+		EnergySystem energy;
+		RadarCoverageSystem coverage;
+		ecs::SystemRegistry registry;
+		registry.Register(energy);
+		registry.Register(coverage);
+		registry.Finalize(world.Components());
+		ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+		scheduler.Finalize(engine::time::FixedStep{30});
+		scheduler.Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}});
+	};
+	const auto make = [&](std::uint32_t player, bool proof, std::int32_t energy) {
+		const ecs::Entity entity = world.Create();
+		world.Add<RadarProvider>(entity);
+		world.Get<RadarProvider>(entity)->disableProof = proof ? 1 : 0;
+		world.Add<Owner>(entity);
+		world.Get<Owner>(entity)->player = player;
+		world.Add<EnergySource>(entity);
+		world.Get<EnergySource>(entity)->amount = energy;
+		return entity;
+	};
+	run();
+	BOOST_TEST(!radar.Has(0));
+	const ecs::Entity center = make(0, false, 0);
+	run();
+	BOOST_TEST(radar.Has(0));
+	BOOST_TEST(!radar.Has(1));
+	const ecs::Entity drain = world.Create();
+	world.Add<Owner>(drain);
+	world.Add<EnergySource>(drain);
+	world.Get<EnergySource>(drain)->amount = -8;
+	run();
+	BOOST_TEST(!radar.Has(0)); // browned out
+	const ecs::Entity van = make(0, true, 0);
+	run();
+	BOOST_TEST(radar.Has(0)); // the van keeps it
+	world.Add<Disabled>(van);
+	world.Get<Disabled>(van)->mask = 1;
+	run();
+	BOOST_TEST(!radar.Has(0)); // disabled, even disable-proof
+	world.Destroy(drain);
+	run();
+	BOOST_TEST(radar.Has(0)); // power back: the command centre's again
+	world.Add<Disabled>(center);
+	world.Get<Disabled>(center)->mask = 1;
+	run();
+	BOOST_TEST(!radar.Has(0));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

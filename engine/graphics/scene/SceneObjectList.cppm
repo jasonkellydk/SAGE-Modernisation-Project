@@ -1,8 +1,5 @@
-module;
-#include <cstddef>
-#include <limits>
-#include <vector>
 export module Graphics.Scene.ObjectList;
+import std;
 
 namespace Graphics
 {

@@ -3,10 +3,8 @@ module;
 #define BOOST_TEST_MODULE W3DRequestPolicyTests
 #include <boost/test/included/unit_test.hpp>
 
-#include <optional>
-#include <string>
-
 export module Assets.Adapters.W3D.RequestPolicy.Tests;
+import std;
 
 import Assets.Adapters.W3D.RequestPolicy;
 

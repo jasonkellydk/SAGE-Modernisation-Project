@@ -1,0 +1,64 @@
+#include <boost/test/unit_test.hpp>
+
+#include <zlib.h>
+
+#include <cstddef>
+#include <cstdint>
+#include <string>
+#include <vector>
+
+import engine.compression.framing.compressed_block;
+
+using namespace engine::compression;
+
+namespace
+{
+std::vector<std::byte> Wrap(const char *tag, std::uint32_t size, const std::vector<std::byte> &payload)
+{
+	std::vector<std::byte> out;
+	for (int index = 0; index < 4; ++index)
+		out.push_back(static_cast<std::byte>(tag[index]));
+	for (int shift = 0; shift < 32; shift += 8)
+		out.push_back(static_cast<std::byte>(size >> shift));
+	out.insert(out.end(), payload.begin(), payload.end());
+	return out;
+}
+
+std::vector<std::byte> Bytes(const std::string &text)
+{
+	return {reinterpret_cast<const std::byte *>(text.data()), reinterpret_cast<const std::byte *>(text.data()) + text.size()};
+}
+}
+
+BOOST_AUTO_TEST_SUITE(compressed_block)
+
+BOOST_AUTO_TEST_CASE(detects_and_unwraps_every_supported_codec)
+{
+	const std::string text(5000, 'g');
+	std::vector<std::byte> deflated(compressBound(static_cast<uLong>(text.size())));
+	uLongf length = static_cast<uLongf>(deflated.size());
+	BOOST_TEST_REQUIRE(compress2(reinterpret_cast<Bytef *>(deflated.data()), &length,
+		reinterpret_cast<const Bytef *>(text.data()), static_cast<uLong>(text.size()), 5) == Z_OK);
+	deflated.resize(length);
+	const auto zlibBlock = Wrap("ZL5\0", static_cast<std::uint32_t>(text.size()), deflated);
+	BOOST_TEST((DetectBlockCodec(zlibBlock) == BlockCodec::Zlib));
+	const auto inflated = UnwrapBlock(zlibBlock);
+	BOOST_TEST_REQUIRE(inflated.has_value());
+	BOOST_TEST(inflated->size() == text.size());
+
+	const std::vector<std::byte> refpack{std::byte{0x10}, std::byte{0xFB}, std::byte{0}, std::byte{0}, std::byte{4},
+		std::byte{0xE0}, std::byte{'a'}, std::byte{'b'}, std::byte{'c'}, std::byte{'d'}, std::byte{0xFC}};
+	const auto refBlock = Wrap("EAR\0", 4, refpack);
+	BOOST_TEST((DetectBlockCodec(refBlock) == BlockCodec::RefPack));
+	BOOST_TEST(UnwrapBlock(refBlock)->size() == 4u);
+	BOOST_TEST(!UnwrapBlock(Wrap("EAR\0", 5, refpack)).has_value());
+
+	BOOST_TEST(!UnwrapBlock(Wrap("NOX\0", 4, refpack)).has_value());
+	BOOST_TEST(!UnwrapBlock(Wrap("ZL5\0", 4, refpack)).has_value());
+
+	const auto plain = Bytes("CkMp plain data");
+	BOOST_TEST((DetectBlockCodec(plain) == BlockCodec::None));
+	BOOST_TEST((*UnwrapBlock(plain) == plain));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -4,15 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <algorithm>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-#include <span>
-#include <vector>
-
 export module Graphics.Scene.Beams.RibbonPipeline.Tests;
+import std;
 
 import Graphics.Scene.Beams.RibbonPipeline;
 import Graphics.Scene.Beams.RibbonSubdivision;

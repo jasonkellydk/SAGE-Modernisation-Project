@@ -1,17 +1,8 @@
 module;
 #define BOOST_TEST_MODULE TGAImageTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <cstdlib>
-#include <filesystem>
-#include <fstream>
-#include <map>
-#include <span>
-#include <tuple>
-#include <vector>
 export module Assets.Adapters.TGA.Image.Tests;
+import std;
 import Assets.Adapters.TGA.Image;
 import Assets.Images.Preparation;
 using namespace Assets;

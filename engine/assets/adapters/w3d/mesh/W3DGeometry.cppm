@@ -1,14 +1,5 @@
-module;
-#include <array>
-#include <bit>
-#include <string>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <utility>
-#include <vector>
-#include <limits>
 export module Assets.Adapters.W3D.Geometry;
+import std;
 import Assets.Adapters.W3D.Chunks;
 import Assets.Math;
 import Assets.MeshBoundsTree;

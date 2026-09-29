@@ -1,10 +1,5 @@
-module;
-
-#include <cstddef>
-#include <cstdint>
-#include <span>
-
 export module Graphics.Scene.ParticleVisibility;
+import std;
 
 import engine.profiling;
 export import Graphics.Scene.Particles;

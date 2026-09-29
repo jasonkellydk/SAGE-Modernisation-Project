@@ -1,13 +1,8 @@
 module;
 #define BOOST_TEST_MODULE MaterialPassDrawingTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <memory>
-#include <span>
 export module Graphics.Scene.Props.MaterialPassDrawing.Tests;
+import std;
 import Graphics.Materials.ProceduralPass;
 import Graphics.Materials.MeshMaterial;
 import Graphics.Materials.State;
@@ -288,4 +283,47 @@ BOOST_AUTO_TEST_CASE(description_callback_drives_texture_and_transform_after_ren
     device.Destroy_Texture(source_b_handle);
     device.Destroy_Texture(target);
     device.Destroy_Texture(depth);
+}
+
+// A material pass's own material (W3DScene's heat vision): lit with the replacement diffuse and emissive, no ambient
+// and no vertex colour, the emissive scaled by the override's emissive scale. Added over the green quad where it lies
+// (depth equal) it lifts red by 0.5 and green by 0.2; drawn alone it is that orange.
+BOOST_AUTO_TEST_CASE(replacement_material_pass_adds_its_emissive_over_the_drawing)
+{
+    GraphicsTestDevice device({true}); BOOST_REQUIRE(device.Is_Valid());
+    PropRenderer renderer;
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    const auto target=device.Create_Texture({8,8,1,RHITextureFormat::RGBA8_UNorm,static_cast<std::uint32_t>(RHITextureUsage::RenderTarget)});
+    const auto depth=device.Create_Texture({8,8,1,RHITextureFormat::D32_Float,static_cast<std::uint32_t>(RHITextureUsage::DepthStencil)});
+    auto& commands=device.Immediate_Command_List();
+    std::array<PropVertex,4> vertices{};
+    vertices[0].position={-1,-1,0.5f}; vertices[1].position={1,-1,0.5f};
+    vertices[2].position={1,1,0.5f}; vertices[3].position={-1,1,0.5f};
+    for (auto& vertex : vertices) vertex.color={0,1,0,1};
+    const std::array<std::uint32_t,6> indices{0,1,2,0,2,3};
+    const auto mesh=renderer.Create_Mesh(vertices,indices);
+    PropParameters parameters;
+    parameters.view_projection={1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1}; parameters.textured=0;
+    PropParameters heat=parameters;
+    heat.material_diffuse_replacement={0.02f,0.01f,0,1};
+    heat.material_emissive_replacement={0.5f,0.2f,0,1};
+    heat.vertex_material_override={1,1,0,0};
+    PropStyle pass; pass.source_blend=RHIBlendFactor::One; pass.destination_blend=RHIBlendFactor::One; pass.depth_write=false;
+    const auto centre=[&](std::array<int,3> expected) {
+        std::vector<std::byte> pixels(8*8*4);
+        BOOST_REQUIRE(device.Readback_Texture(target,pixels,8*4));
+        for (unsigned c=0;c<3;++c) BOOST_CHECK_SMALL(std::to_integer<int>(pixels[(4*8+4)*4+c])-expected[c],2);
+    };
+    BOOST_REQUIRE(commands.Set_Render_Targets(target,depth));
+    BOOST_REQUIRE(commands.Set_Viewport({0,0,8,8}));
+    BOOST_REQUIRE(commands.Clear({0,0,0,1},1));
+    BOOST_REQUIRE(renderer.Draw(commands,mesh,PropStyle{},parameters,{}));
+    pass.depth_comparison=RHIComparison::Equal;
+    BOOST_REQUIRE(renderer.Draw(commands,mesh,pass,heat,{}));
+    centre({128,255,0});
+    BOOST_REQUIRE(commands.Clear({0,0,0,1},1));
+    pass.depth_comparison=RHIComparison::LessEqual;
+    BOOST_REQUIRE(renderer.Draw(commands,mesh,pass,heat,{}));
+    centre({128,51,0});
+    renderer.Destroy_Mesh(mesh); renderer.Shutdown(); device.Destroy_Texture(target); device.Destroy_Texture(depth);
 }

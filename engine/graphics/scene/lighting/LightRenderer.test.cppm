@@ -4,13 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <span>
-#include <vector>
-
 export module Graphics.Scene.Lighting.Renderer.Tests;
+import std;
 
 import Graphics.Scene.Lighting.Renderer;
 

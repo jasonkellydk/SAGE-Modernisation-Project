@@ -1,15 +1,5 @@
-module;
-
-#include <cstddef>
-#include <cstdint>
-#include <algorithm>
-#include <limits>
-#include <span>
-#include <type_traits>
-#include <utility>
-#include <vector>
-
 export module Graphics.Scene.Models.Skeleton;
+import std;
 
 export import Graphics.Resources.Handles.ResourceHandle;
 export import Graphics.Resources.Pools.ResourcePool;

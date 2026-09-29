@@ -12,9 +12,6 @@ module;
 #include "Precompiled/PreRTS.h"
 #define ENGINE_UI_WND_RUNTIME_MODULE 1
 
-#include <algorithm>
-#include <cstdint>
-
 #include "GameClient/GameWindowGlobal.h"
 #include "GameClient/GameWindowManager.h"
 #include "GameClient/GadgetListBox.h"
@@ -22,6 +19,7 @@ module;
 #include "W3DDevice/GameClient/W3DDisplayString.h"
 
 export module Engine.UI.WND.Runtime.Renderer.Gadget.ListBox;
+import std;
 import Engine.UI.WND;
 
 namespace

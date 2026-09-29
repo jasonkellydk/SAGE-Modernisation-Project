@@ -1,4 +1,5 @@
 export module Graphics.Resources.Textures.Quality;
+import std;
 
 namespace Graphics
 {

@@ -1,8 +1,5 @@
-module;
-#include <functional>
-#include <string>
-#include <vector>
 export module engine.platform.dialogs;
+import std;
 import engine.platform.core.types;
 
 export namespace engine::platform

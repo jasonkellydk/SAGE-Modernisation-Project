@@ -1,15 +1,5 @@
-module;
-#include <algorithm>
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <fstream>
-#include <limits>
-#include <span>
-#include <vector>
 export module Video.Capture.AVIWriter;
+import std;
 export import Video.Frame;
 namespace Engine::Video
 {
@@ -42,14 +32,14 @@ public:
         FourCC("LIST"); U32(192); FourCC("hdrl");
         FourCC("avih"); U32(56);
         U32(std::max(1u,static_cast<std::uint32_t>(1000000.0/frame_rate)));
-        U32(static_cast<std::uint32_t>(std::min(double(bytes)*frame_rate,double(UINT32_MAX))));
+        U32(static_cast<std::uint32_t>(std::min(double(bytes)*frame_rate,double(std::numeric_limits<std::uint32_t>::max()))));
         U32(0); U32(0x10); U32(0); U32(0); U32(1); U32(static_cast<std::uint32_t>(bytes));
         U32(width); U32(height); U32(0); U32(0); U32(0); U32(0);
         FourCC("LIST"); U32(116); FourCC("strl");
         FourCC("strh"); U32(56); FourCC("vids"); U32(0);
         U32(0); U16(0); U16(0); U32(0);
         U32(1000); U32(std::max(1u,static_cast<std::uint32_t>(frame_rate*1000.0f+0.5f)));
-        U32(0); U32(0); U32(static_cast<std::uint32_t>(bytes)); U32(UINT32_MAX); U32(0);
+        U32(0); U32(0); U32(static_cast<std::uint32_t>(bytes)); U32(std::numeric_limits<std::uint32_t>::max()); U32(0);
         U16(0); U16(0); U16(static_cast<std::uint16_t>(width)); U16(static_cast<std::uint16_t>(height));
         FourCC("strf"); U32(40); U32(40); U32(width); U32(height);
         U16(1); U16(24); U32(0); U32(static_cast<std::uint32_t>(bytes));
@@ -70,7 +60,7 @@ public:
                 && frame.format!=PixelFormat::BGRA8 && frame.format!=PixelFormat::BGRX8)) return false;
         // AVI's 32-bit RIFF/index fields must describe the entire finalized file.
         const auto final_size=m_position+8+m_frame.size()+8+(m_offsets.size()+1)*16;
-        if (final_size-8>UINT32_MAX) return false;
+        if (final_size-8>std::numeric_limits<std::uint32_t>::max()) return false;
         const unsigned channels=Bytes_Per_Pixel(frame.format);
         const bool bgr=frame.format==PixelFormat::BGRA8 || frame.format==PixelFormat::BGRX8;
         std::fill(m_frame.begin(),m_frame.end(),std::byte{});

@@ -1,0 +1,199 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <stdexcept>
+#include <string_view>
+
+import engine.ecs.core.world;
+import engine.ecs.system.system;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+namespace state_hash_test
+{
+struct Position
+{
+	std::int64_t x{0};
+	std::int64_t y{0};
+};
+
+struct Cache
+{
+	std::int64_t value{0};
+};
+
+struct Padded
+{
+	std::uint8_t flag{0};
+	std::int64_t value{0};
+};
+
+struct Custom
+{
+	std::uint8_t flag{0};
+	std::int64_t value{0};
+};
+
+struct DriftSystem
+{
+	using Query = ecs::Query<ecs::Write<Position>>;
+	void Execute(Query::Chunk chunk, ecs::SystemContext &context) const
+	{
+		auto positions = chunk.Get<Position>();
+		for (std::size_t row = 0; row < positions.size(); ++row)
+		{
+			positions[row].x += static_cast<std::int64_t>(context.Tick()) * 3 + static_cast<std::int64_t>(row);
+			positions[row].y -= positions[row].x / 7;
+		}
+	}
+};
+}
+
+namespace ecs
+{
+template<>
+struct ComponentTraits<state_hash_test::Position>
+{
+	static constexpr std::string_view StableName = "tests.state_hash.position";
+	static constexpr std::uint32_t Version = 1;
+	static constexpr PersistencePolicy Persistence = PersistencePolicy::Serializable;
+};
+
+template<>
+struct ComponentTraits<state_hash_test::Cache>
+{
+	static constexpr std::string_view StableName = "tests.state_hash.cache";
+	static constexpr std::uint32_t Version = 1;
+	static constexpr PersistencePolicy Persistence = PersistencePolicy::Transient;
+};
+
+template<>
+struct ComponentTraits<state_hash_test::Padded>
+{
+	static constexpr std::string_view StableName = "tests.state_hash.padded";
+	static constexpr std::uint32_t Version = 1;
+	static constexpr PersistencePolicy Persistence = PersistencePolicy::Serializable;
+};
+
+template<>
+struct ComponentTraits<state_hash_test::Custom>
+{
+	static constexpr std::string_view StableName = "tests.state_hash.custom";
+	static constexpr std::uint32_t Version = 1;
+	static constexpr PersistencePolicy Persistence = PersistencePolicy::Serializable;
+	static void HashState(const state_hash_test::Custom &value, StateHasher &hasher) noexcept
+	{
+		hasher.AppendU64(value.flag);
+		hasher.AppendU64(static_cast<std::uint64_t>(value.value));
+	}
+};
+
+template<>
+struct SystemTraits<state_hash_test::DriftSystem>
+{
+	static constexpr std::string_view StableName = "tests.state_hash.drift";
+	static constexpr SystemPhase Phase = SystemPhase::Simulation;
+	using Before = SystemTypeList<>;
+	using After = SystemTypeList<>;
+};
+}
+
+namespace
+{
+using namespace state_hash_test;
+
+void Register(ecs::World &world)
+{
+	world.RegisterComponent<Position>();
+	world.RegisterComponent<Cache>();
+	world.RegisterComponent<Padded>();
+	world.RegisterComponent<Custom>();
+	world.FinalizeComponents();
+}
+
+ecs::StateHashValue BuildAndHash(std::int64_t lastX)
+{
+	ecs::World world;
+	Register(world);
+	for (std::int64_t index = 0; index < 300; ++index)
+	{
+		const auto entity = world.Create<Position, Cache>();
+		world.Get<Position>(entity)->x = index == 299 ? lastX : index;
+		world.Get<Cache>(entity)->value = index * 13;
+	}
+	return world.StateHash();
+}
+
+ecs::StateHashValue RunWithWorkers(std::uint32_t workers)
+{
+	ecs::World world{ecs::WorldConfig{16}};
+	Register(world);
+	for (std::int64_t index = 0; index < 1000; ++index)
+		world.Get<Position>(world.Create<Position>())->x = index;
+	DriftSystem drift;
+	ecs::SystemRegistry systems;
+	systems.Register(drift);
+	systems.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, systems, engine::jobs::JobSystemConfig{workers});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	for (std::uint64_t tick = 1; tick <= 20; ++tick)
+		scheduler.Execute(engine::time::SimulationTime{tick, engine::time::FixedStep{30}});
+	return world.StateHash();
+}
+}
+
+BOOST_AUTO_TEST_SUITE(ecs_state_hash)
+
+BOOST_AUTO_TEST_CASE(equal_worlds_hash_equal_and_serializable_changes_are_detected)
+{
+	BOOST_TEST(BuildAndHash(299) == BuildAndHash(299));
+	BOOST_TEST(BuildAndHash(299) != BuildAndHash(300));
+}
+
+BOOST_AUTO_TEST_CASE(transient_components_are_not_part_of_state)
+{
+	ecs::World world;
+	Register(world);
+	const auto entity = world.Create<Position, Cache>();
+	const auto before = world.StateHash();
+	world.Get<Cache>(entity)->value = 99;
+	BOOST_TEST(world.StateHash() == before);
+	world.Get<Position>(entity)->y = 1;
+	BOOST_TEST(world.StateHash() != before);
+}
+
+BOOST_AUTO_TEST_CASE(allocator_state_is_part_of_state)
+{
+	ecs::World first;
+	Register(first);
+	ecs::World second;
+	Register(second);
+	const auto a = first.Create<Position>();
+	first.Create<Position>();
+	second.Create<Position>();
+	const auto b = second.Create<Position>();
+	// Same live content, different free lists: future IDs would diverge.
+	first.Destroy(a);
+	second.Destroy(b);
+	BOOST_TEST(first.StateHash() != second.StateHash());
+}
+
+BOOST_AUTO_TEST_CASE(padded_serializable_components_are_rejected_unless_custom_hashed)
+{
+	ecs::World world;
+	Register(world);
+	world.Create<Custom>();
+	BOOST_CHECK_NO_THROW(world.StateHash());
+	world.Create<Padded>();
+	BOOST_CHECK_THROW(world.StateHash(), std::logic_error);
+}
+
+BOOST_AUTO_TEST_CASE(parallel_execution_hash_is_independent_of_worker_count)
+{
+	const auto one = RunWithWorkers(1);
+	BOOST_TEST(one == RunWithWorkers(2));
+	BOOST_TEST(one == RunWithWorkers(4));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

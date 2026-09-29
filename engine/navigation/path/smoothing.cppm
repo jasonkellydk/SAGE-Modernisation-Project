@@ -1,11 +1,5 @@
-module;
-#include <cmath>
-#include <cstdint>
-#include <span>
-#include <stdexcept>
-#include <vector>
-
 export module engine.navigation.path.smoothing;
+import std;
 
 export namespace navigation {
 struct SmoothingView {

@@ -14,6 +14,7 @@ module;
 #include "W3DDevice/GameClient/W3DDisplayString.h"
 
 export module Engine.UI.WND.Runtime.Renderer.Gadget.ComboBox;
+import std;
 import Engine.UI.WND;
 
 namespace

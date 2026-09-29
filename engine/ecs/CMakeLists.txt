@@ -5,19 +5,24 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 endif()
 
 set(ENGINE_ECS_MODULES
+	core/state_hash.cppm
 	core/component_registry.cppm
 	core/entity.cppm
+	core/entity_codec.cppm
+	core/resource_store.cppm
 	core/world.cppm
 	commands/command_buffer.cppm
 	query/access.cppm
 	query/query.cppm
 	query/query_cache.cppm
 	system/system.cppm
+	system/chunk_outputs.cppm
 	scheduler/scheduler.cppm
 	storage/archetype.cppm
 	storage/chunk.cppm
 	storage/chunk_layout.cppm
 	storage/signature.cppm
+	storage/side_table.cppm
 	ecs.cppm
 )
 
@@ -25,9 +30,15 @@ set(ENGINE_ECS_TESTS
 	core/component_registry.test
 	core/entity.test
 	core/world.test
+	core/world_checkpoint.test
+	core/resource_store.test
+	core/state_hash.test
 	commands/command_buffer.test
 	system/system.test
+	system/chunk_outputs.test
 	scheduler/scheduler.test
+	scheduler/access_declarations.test
+	scheduler/system_groups.test
 	query/access.test
 	query/query.test
 	query/query_cache.test
@@ -35,6 +46,7 @@ set(ENGINE_ECS_TESTS
 	storage/chunk.test
 	storage/chunk_layout.test
 	storage/signature.test
+	storage/side_table.test
 	ecs.test
 )
 
@@ -56,6 +68,15 @@ target_sources(engine_ecs PUBLIC
 	TYPE CXX_MODULES
 	FILES ${ENGINE_ECS_MODULES}
 )
+
+# Module implementation units (kept out of the interfaces importers parse).
+target_sources(engine_ecs PRIVATE core/world_checkpoint.cpp)
+set_source_files_properties(core/world_checkpoint.cpp PROPERTIES LANGUAGE CXX)
+
+if(NOT TARGET engine_core_serialization)
+	add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../core/serialization" "${CMAKE_CURRENT_BINARY_DIR}/../engine_core_serialization")
+endif()
+target_link_libraries(engine_ecs PUBLIC engine_core_serialization)
 
 target_include_directories(engine_ecs PUBLIC
 	"${CMAKE_CURRENT_SOURCE_DIR}/../.."

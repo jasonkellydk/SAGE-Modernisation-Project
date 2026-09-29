@@ -1,0 +1,131 @@
+#define BOOST_TEST_MODULE EngineGameplayLoadout
+#include <boost/test/included/unit_test.hpp>
+
+#include <cstdint>
+#include <memory>
+
+import engine.gameplay.common.status.components.status_flags;
+import engine.gameplay.rts.loadout.systems.loadout_system;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+using namespace engine::gameplay;
+using Engine::Math::Fixed;
+
+namespace
+{
+constexpr std::uint32_t CrateOne = 1u << 4, CrateTwo = 1u << 5, Veteran = 1u << 0;
+
+struct Base
+{
+	explicit Base(std::size_t workers = 1)
+	{
+		world.RegisterComponent<Loadout>();
+		world.RegisterComponent<DefinitionRef>();
+		world.RegisterComponent<Experience>();
+		world.RegisterComponent<Armament>();
+		world.RegisterComponent<StatusFlags>();
+		world.RegisterComponent<WeaponSlots>();
+		world.RegisterComponent<Health>();
+		world.FinalizeComponents();
+		WeaponCatalog &weapons = world.EmplaceResource<WeaponCatalog>();
+		for (const std::uint32_t clip : {3u, 5u, 7u, 9u})
+		{
+			WeaponDefinition weapon;
+			weapon.clipSize = clip;
+			weapons.Add(weapon);
+		}
+		LoadoutCatalog &catalog = world.EmplaceResource<LoadoutCatalog>();
+		// A technical: its gun, then the better guns of its crate upgrades; a veteran's gun; plating from a crate.
+		DefinitionLoadout technical;
+		technical.weaponSets = {{0, {0, WeaponCatalog::None, WeaponCatalog::None}}, {CrateOne, {1, WeaponCatalog::None, WeaponCatalog::None}},
+			{CrateTwo, {2, WeaponCatalog::None, WeaponCatalog::None}}, {Veteran, {3, WeaponCatalog::None, WeaponCatalog::None}}};
+		technical.armorSets = {{0, 10}, {CrateOne, 11}, {CrateTwo, 12}};
+		catalog.byDefinition = {technical};
+		catalog.levelWeaponFlags = {0, Veteran, 1u << 1, 1u << 2};
+		registry.Register(system);
+		registry.Finalize(world.Components());
+		scheduler = std::make_unique<ecs::Scheduler>(world, registry, engine::jobs::JobSystemConfig{workers});
+		scheduler->Finalize(engine::time::FixedStep{30});
+	}
+
+	ecs::Entity Technical()
+	{
+		const ecs::Entity entity = world.Create();
+		world.Add<Loadout>(entity);
+		world.Add<DefinitionRef>(entity);
+		world.Add<Experience>(entity);
+		world.Add<Armament>(entity);
+		world.Add<Health>(entity);
+		world.Get<Armament>(entity)->weapon = 0;
+		world.Get<Armament>(entity)->clip = 1; // part spent
+		world.Get<Health>(entity)->armor = 10;
+		return entity;
+	}
+
+	void Step() { scheduler->Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}}); }
+
+	ecs::World world{ecs::WorldConfig{4}};
+	LoadoutSystem system;
+	ecs::SystemRegistry registry;
+	std::unique_ptr<ecs::Scheduler> scheduler;
+	std::uint64_t tick{0};
+};
+}
+
+BOOST_AUTO_TEST_SUITE(loadout)
+
+// SparseMatchFinder::findBestInfoSlow: the most flags matched, then the fewest set flags missing; ties to the first.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_best_set_matches_most_and_misses_least)
+{
+	const std::vector<ArmorSetEntry> sets{{0, 0}, {CrateOne, 1}, {CrateOne | CrateTwo, 2}, {CrateTwo, 3}};
+	BOOST_TEST(BestSet(sets, 0) == 0u);
+	BOOST_TEST(BestSet(sets, CrateOne) == 1u);          // matches one, misses none
+	BOOST_TEST(BestSet(sets, CrateTwo) == 3u);
+	BOOST_TEST(BestSet(sets, CrateOne | CrateTwo) == 2u);
+	BOOST_TEST(BestSet(sets, Veteran) == 0u);           // no set for it: the plain one
+}
+
+// WeaponSet::updateWeaponSet only when another set is picked (fresh weapons, full clips); the first pick keeps
+// what it was made with; a veteran picks its VETERAN set (onVeterancyLevelChanged); armor follows its flags.
+BOOST_AUTO_TEST_CASE(legacy_parity_flags_pick_sets_and_equip_them_fresh)
+{
+	Base base;
+	const ecs::Entity technical = base.Technical();
+	base.Step();
+	BOOST_TEST(base.world.Get<Loadout>(technical)->weaponSet == 0u);
+	BOOST_TEST(base.world.Get<Armament>(technical)->clip == 1u); // not re-equipped at its first pick
+	base.Step();
+	BOOST_TEST(base.world.Get<Armament>(technical)->clip == 1u);
+	// A crate: the CRATEUPGRADE_ONE weapons, fresh, and its plating.
+	base.world.Get<Loadout>(technical)->weaponFlags |= CrateOne;
+	base.world.Get<Loadout>(technical)->armorFlags |= CrateOne;
+	base.Step();
+	BOOST_TEST(base.world.Get<Armament>(technical)->weapon == 1u);
+	BOOST_TEST(base.world.Get<Armament>(technical)->clip == 5u);
+	BOOST_TEST(base.world.Get<Health>(technical)->armor == 11u);
+	base.world.Get<Armament>(technical)->clip = 2;
+	base.Step();
+	BOOST_TEST(base.world.Get<Armament>(technical)->clip == 2u); // the same set: nothing happens
+	// The second crate replaces the first.
+	auto &loadout = *base.world.Get<Loadout>(technical);
+	loadout.weaponFlags = (loadout.weaponFlags & ~CrateOne) | CrateTwo;
+	loadout.armorFlags = (loadout.armorFlags & ~CrateOne) | CrateTwo;
+	base.Step();
+	BOOST_TEST(base.world.Get<Armament>(technical)->weapon == 2u);
+	BOOST_TEST(base.world.Get<Health>(technical)->armor == 12u);
+	// Promoted: VETERAN and CRATEUPGRADE_TWO each match one; the first such set in order (CRATEUPGRADE_TWO) stays.
+	base.world.Get<Experience>(technical)->level = 1;
+	base.Step();
+	BOOST_TEST((base.world.Get<Loadout>(technical)->weaponFlags & Veteran) != 0u);
+	BOOST_TEST(base.world.Get<Armament>(technical)->weapon == 2u);
+	// Without its crate upgrade, the veteran's gun.
+	base.world.Get<Loadout>(technical)->weaponFlags &= ~CrateTwo;
+	base.Step();
+	BOOST_TEST(base.world.Get<Armament>(technical)->weapon == 3u);
+	BOOST_TEST(base.world.Get<Armament>(technical)->clip == 9u);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

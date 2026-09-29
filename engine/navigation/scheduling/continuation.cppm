@@ -1,11 +1,5 @@
-module;
-#include <coroutine>
-#include <exception>
-#include <optional>
-#include <stdexcept>
-#include <utility>
-
 export module engine.navigation.scheduling.continuation;
+import std;
 
 export extern "C++" {
 namespace navigation {

@@ -1,16 +1,6 @@
-module;
-
-#include <algorithm>
-#include <array>
-#include <bit>
-#include <cassert>
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-#include <stdexcept>
-#include <vector>
-
 export module engine.navigation.search_workspace;
+import std;
+import engine.core.contracts;
 
 // C++ linkage permits forward declarations in the remaining game-facing header.
 export extern "C++" {
@@ -90,7 +80,7 @@ public:
     SearchIndex top() const { return empty() ? NoSearchIndex : ids_.front(); }
     SearchIndex at(std::size_t i) const { return ids_[i]; }
     SearchIndex next(SearchIndex id) const {
-        assert(contains(id));
+        engine::core::Assert(contains(id));
         const auto i = positions_[id] + 1;
         return i < ids_.size() ? ids_[i] : NoSearchIndex;
     }
@@ -100,7 +90,7 @@ public:
     // Explicit secondary priorities let A* prefer lower remaining distance
     // on equal-cost plateaus without changing the primary path cost.
     void pushRanked(SearchIndex id, std::uint32_t cost, std::uint32_t rank) {
-        assert(!contains(id));
+        engine::core::Assert(!contains(id));
         reserveIndices(std::size_t(id)+1);
         const auto key=(std::uint64_t(cost)<<32)|rank;
         const auto position=static_cast<SearchIndex>(ids_.size());
@@ -109,7 +99,7 @@ public:
         siftUp(position,id,key);
     }
     void updateRanked(SearchIndex id, std::uint32_t cost, std::uint32_t rank) {
-        assert(contains(id));
+        engine::core::Assert(contains(id));
         const auto position=positions_[id];
         const auto oldKey=keys_[position];
         const auto key=(std::uint64_t(cost)<<32)|rank;
@@ -117,7 +107,7 @@ public:
         else if (key>oldKey) siftDown(position,id,key);
     }
     void erase(SearchIndex id) {
-        assert(contains(id));
+        engine::core::Assert(contains(id));
         const auto position = positions_[id];
         const auto lastId = ids_.back();
         const auto lastKey = keys_.back();
@@ -131,7 +121,7 @@ public:
             siftDown(position, lastId, lastKey);
     }
     void update(SearchIndex id, std::uint32_t cost, bool renewInsertionOrder = false) {
-        assert(contains(id));
+        engine::core::Assert(contains(id));
         const auto position = positions_[id];
         const auto oldKey = keys_[position];
         const auto key = renewInsertionOrder ? nextKey(cost) :
@@ -146,7 +136,7 @@ public:
     }
     // Cleanup does not need sorted order. Drain in O(N), not N heap removals.
     SearchIndex dropBack() {
-        assert(!empty());
+        engine::core::Assert(!empty());
         const auto id = ids_.back();
         positions_[id] = NoSearchIndex;
         ids_.pop_back();
@@ -236,20 +226,20 @@ public:
     }
     SearchIndex at(std::size_t index) const { return active_[index]; }
     SearchIndex next(SearchIndex id) const {
-        assert(contains(id));
+        engine::core::Assert(contains(id));
         const auto position = (links_[id].position + 1) % active_.size();
         const auto nextId = active_[position];
         return nextId == top() ? NoSearchIndex : nextId;
     }
     void push(SearchIndex id, std::uint32_t cost) {
-        assert(!contains(id));
+        engine::core::Assert(!contains(id));
         reserveIndices(std::size_t(id) + 1);
         links_[id].position = static_cast<SearchIndex>(active_.size());
         active_.push_back(id);
         attach(id, cost);
     }
     void erase(SearchIndex id) {
-        assert(contains(id));
+        engine::core::Assert(contains(id));
         detach(id);
         const auto position = links_[id].position;
         const auto last = active_.back();
@@ -259,7 +249,7 @@ public:
         links_[id].position = NoSearchIndex;
     }
     void reinsert(SearchIndex id, std::uint32_t cost) {
-        assert(contains(id));
+        engine::core::Assert(contains(id));
         detach(id);
         attach(id, cost);
     }
@@ -269,7 +259,7 @@ public:
         return id;
     }
     SearchIndex dropBack() {
-        assert(!empty());
+        engine::core::Assert(!empty());
         const auto id = active_.back();
         erase(id);
         return id;
@@ -335,14 +325,14 @@ public:
         return id;
     }
     void release(SearchIndex id) {
-        assert(allocated(id) && !isOpen(id) && !isClosed(id));
+        engine::core::Assert(allocated(id) && !isOpen(id) && !isClosed(id));
         allocated_[id] = 0;
         owner[id] = nullptr;
         generation[id] = 0;
         free_.push_back(id);
     }
     void beginSearch() {
-        assert(open.empty() && closed_.empty());
+        engine::core::Assert(open.empty() && closed_.empty());
         open.clear();
         if (++epoch_ == 0) {
             std::fill(generation.begin(), generation.end(), 0);
@@ -350,7 +340,7 @@ public:
         }
     }
     void touch(SearchIndex id) {
-        assert(allocated(id));
+        engine::core::Assert(allocated(id));
         if (generation[id] == epoch_) return;
         generation[id] = epoch_;
         state[id] = Unseen;
@@ -374,7 +364,7 @@ public:
             open.reinsert(id, f[id]);
             return;
         }
-        assert(state[id] == Unseen);
+        engine::core::Assert(state[id] == Unseen);
         open.push(id, f[id]);
         state[id] = Open;
     }
@@ -389,13 +379,13 @@ public:
     }
     void close(SearchIndex id) {
         touch(id);
-        assert(state[id] == Unseen);
+        engine::core::Assert(state[id] == Unseen);
         closedPosition_[id] = static_cast<SearchIndex>(closed_.size());
         closed_.push_back(id);
         state[id] = Closed;
     }
     void eraseClosed(SearchIndex id) {
-        assert(isClosed(id));
+        engine::core::Assert(isClosed(id));
         const auto position = closedPosition_[id];
         const auto last = closed_.back();
         closed_[position] = last;
@@ -406,7 +396,7 @@ public:
     }
     SearchIndex closedHead() const { return closed_.empty() ? NoSearchIndex : closed_.back(); }
     SearchIndex nextClosed(SearchIndex id) const {
-        assert(isClosed(id));
+        engine::core::Assert(isClosed(id));
         const auto position = closedPosition_[id];
         return position == 0 ? NoSearchIndex : closed_[position - 1];
     }

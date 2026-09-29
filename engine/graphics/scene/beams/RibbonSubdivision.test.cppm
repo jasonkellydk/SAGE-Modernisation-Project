@@ -1,9 +1,8 @@
 module;
 #define BOOST_TEST_MODULE RibbonSubdivisionTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <limits>
 export module Graphics.Scene.Beams.RibbonSubdivision.Tests;
+import std;
 import Graphics.Scene.Beams.RibbonSubdivision;
 using namespace Graphics;
 

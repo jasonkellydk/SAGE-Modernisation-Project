@@ -1,17 +1,11 @@
 module;
 #define BOOST_TEST_MODULE FrameImageWriterTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <filesystem>
-#include <fstream>
-#include <iterator>
-#include <span>
-#include <vector>
 #define STB_IMAGE_STATIC
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 export module Video.Capture.ImageWriter.Tests;
+import std;
 import Video.Capture.ImageWriter;
 using namespace Engine::Video;
 

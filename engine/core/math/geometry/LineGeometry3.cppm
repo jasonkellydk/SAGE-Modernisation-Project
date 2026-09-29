@@ -1,9 +1,5 @@
-module;
-
-#include <cmath>
-#include <optional>
-
 export module Engine.Core.Math.LineGeometry3;
+import std;
 
 export import Engine.Core.Math.Vector3;
 

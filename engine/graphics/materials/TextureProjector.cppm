@@ -1,9 +1,5 @@
-module;
-#include <cmath>
-#include <cstddef>
-#include <utility>
-
 export module Graphics.Materials.TextureProjector;
+import std;
 import Graphics.Scene.Views.View;
 
 namespace Graphics

@@ -1,0 +1,243 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <span>
+#include <stdexcept>
+#include <string_view>
+#include <vector>
+
+import engine.ecs.core.world;
+
+namespace world_checkpoint_test
+{
+struct Position
+{
+	std::int64_t x{0};
+	std::int64_t y{0};
+};
+
+// Has padding, so it saves itself field by field.
+struct Order
+{
+	std::uint8_t mode{0};
+	std::int64_t target{0};
+};
+
+// Has padding and hashes itself, but would be saved as its bytes (whatever its padding held).
+struct Padded
+{
+	std::uint8_t mode{0};
+	std::int64_t target{0};
+};
+
+// A per-tick cache: not part of the state, back default-constructed.
+struct Cache
+{
+	int value{7};
+};
+}
+
+namespace ecs
+{
+template<>
+struct ComponentTraits<world_checkpoint_test::Position>
+{
+	static constexpr std::string_view StableName = "tests.world_checkpoint.position";
+	static constexpr std::uint32_t Version = 1;
+	static constexpr PersistencePolicy Persistence = PersistencePolicy::Serializable;
+};
+
+template<>
+struct ComponentTraits<world_checkpoint_test::Order>
+{
+	static constexpr std::string_view StableName = "tests.world_checkpoint.order";
+	static constexpr std::uint32_t Version = 1;
+	static constexpr PersistencePolicy Persistence = PersistencePolicy::Serializable;
+	static void HashState(const world_checkpoint_test::Order &value, StateHasher &hasher) noexcept
+	{
+		hasher.AppendU64(value.mode);
+		hasher.AppendU64(static_cast<std::uint64_t>(value.target));
+	}
+	static void Save(const world_checkpoint_test::Order &value, engine::core::serialization::ByteWriter &writer)
+	{
+		writer.U8(value.mode);
+		writer.I64(value.target);
+	}
+	static bool Load(world_checkpoint_test::Order &value, engine::core::serialization::ByteReader &reader)
+	{
+		const auto mode = reader.U8();
+		const auto target = reader.I64();
+		if (!mode || !target)
+			return false;
+		value = {*mode, *target};
+		return true;
+	}
+};
+
+template<>
+struct ComponentTraits<world_checkpoint_test::Padded>
+{
+	static constexpr std::string_view StableName = "tests.world_checkpoint.padded";
+	static constexpr std::uint32_t Version = 1;
+	static constexpr PersistencePolicy Persistence = PersistencePolicy::Serializable;
+	static void HashState(const world_checkpoint_test::Padded &value, StateHasher &hasher) noexcept
+	{
+		hasher.AppendU64(value.mode);
+		hasher.AppendU64(static_cast<std::uint64_t>(value.target));
+	}
+};
+
+template<>
+struct ComponentTraits<world_checkpoint_test::Cache>
+{
+	static constexpr std::string_view StableName = "tests.world_checkpoint.cache";
+	static constexpr std::uint32_t Version = 1;
+	static constexpr PersistencePolicy Persistence = PersistencePolicy::Transient;
+};
+}
+
+using namespace world_checkpoint_test;
+
+namespace
+{
+void Register(ecs::World &world)
+{
+	world.RegisterComponent<Position>();
+	world.RegisterComponent<Order>();
+	world.RegisterComponent<Cache>();
+	world.FinalizeComponents();
+}
+
+// Churn that spreads entities over archetypes and part-filled chunks, and
+// leaves holes in the allocator.
+std::vector<ecs::Entity> Populate(ecs::World &world)
+{
+	std::vector<ecs::Entity> entities;
+	for (int index = 0; index < 23; ++index)
+	{
+		const ecs::Entity entity = world.Create<Position>();
+		*world.Get<Position>(entity) = {index, -index};
+		if (index % 3 == 0)
+		{
+			world.Add<Order>(entity);
+			*world.Get<Order>(entity) = {static_cast<std::uint8_t>(index), index * 100};
+		}
+		if (index % 4 == 0)
+		{
+			world.Add<Cache>(entity);
+			world.Get<Cache>(entity)->value = 99;
+		}
+		entities.push_back(entity);
+	}
+	for (int index = 1; index < 23; index += 5)
+		world.Destroy(entities[static_cast<std::size_t>(index)]);
+	world.Remove<Order>(entities[6]);
+	return entities;
+}
+
+// The same operations on any world: its future must not depend on whether it was loaded.
+void Continue(ecs::World &world, const std::vector<ecs::Entity> &entities)
+{
+	for (int index = 0; index < 9; ++index)
+	{
+		const ecs::Entity entity = world.Create<Position, Order>();
+		*world.Get<Position>(entity) = {1000 + index, 0};
+	}
+	world.Destroy(entities[0]);
+	world.Add<Order>(entities[2]);
+	world.Remove<Position>(entities[3]);
+}
+
+std::vector<std::int64_t> Positions(ecs::World &world)
+{
+	std::vector<std::int64_t> out;
+	for (ecs::Archetype *archetype : world.GetArchetypes())
+	{
+		const std::size_t column = archetype->ColumnIndex(world.Components().TryGet(typeid(Position)));
+		if (column == static_cast<std::size_t>(-1))
+			continue;
+		for (const auto &chunk : archetype->Chunks())
+			for (std::size_t row = 0; row < chunk->Size(); ++row)
+				out.push_back(static_cast<const Position *>(chunk->ComponentData(column))[row].x);
+	}
+	return out;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(world_checkpoint)
+
+BOOST_AUTO_TEST_CASE(a_loaded_world_matches_and_evolves_like_the_saved_one)
+{
+	ecs::World saved(ecs::WorldConfig{4});
+	Register(saved);
+	const std::vector<ecs::Entity> entities = Populate(saved);
+	engine::core::serialization::ByteWriter writer;
+	saved.SaveCheckpoint(writer);
+	const std::vector<std::byte> bytes = writer.Take();
+
+	ecs::World loaded(ecs::WorldConfig{4});
+	Register(loaded);
+	engine::core::serialization::ByteReader reader(bytes);
+	BOOST_TEST(loaded.LoadCheckpoint(reader));
+	BOOST_TEST(reader.AtEnd());
+	BOOST_TEST(loaded.StateHash() == saved.StateHash());
+	BOOST_TEST(loaded.EntityCount() == saved.EntityCount());
+	BOOST_TEST((Positions(loaded) == Positions(saved)));
+	BOOST_TEST(loaded.Get<Order>(entities[9])->target == 900);
+	BOOST_TEST(!loaded.IsAlive(entities[1]));
+	// Transient state is not carried.
+	BOOST_TEST(loaded.Get<Cache>(entities[4])->value == 7);
+
+	Continue(saved, entities);
+	Continue(loaded, entities);
+	BOOST_TEST(loaded.StateHash() == saved.StateHash());
+	BOOST_TEST((Positions(loaded) == Positions(saved)));
+}
+
+BOOST_AUTO_TEST_CASE(malformed_or_foreign_checkpoints_are_refused)
+{
+	ecs::World saved(ecs::WorldConfig{4});
+	Register(saved);
+	Populate(saved);
+	engine::core::serialization::ByteWriter writer;
+	saved.SaveCheckpoint(writer);
+	const std::vector<std::byte> bytes = writer.Take();
+
+	for (const std::size_t length : {std::size_t{0}, std::size_t{11}, bytes.size() / 2, bytes.size() - 1})
+	{
+		ecs::World loaded(ecs::WorldConfig{4});
+		Register(loaded);
+		engine::core::serialization::ByteReader reader(std::span(bytes).first(length));
+		BOOST_TEST(!loaded.LoadCheckpoint(reader));
+		BOOST_TEST(loaded.EntityCount() == 0u);
+	}
+
+	// Different chunk capacity: a different layout, refused.
+	ecs::World other(ecs::WorldConfig{8});
+	Register(other);
+	engine::core::serialization::ByteReader reader(bytes);
+	BOOST_TEST(!other.LoadCheckpoint(reader));
+
+	// Different components: a different schema, refused.
+	ecs::World fewer(ecs::WorldConfig{4});
+	fewer.RegisterComponent<Position>();
+	fewer.FinalizeComponents();
+	engine::core::serialization::ByteReader again(bytes);
+	BOOST_TEST(!fewer.LoadCheckpoint(again));
+}
+
+// A component saved as its bytes must have none that are padding: those hold whatever memory was there, so two
+// identical worlds would save different checkpoints (a LAN game's machines compare them). Such a world is refused.
+BOOST_AUTO_TEST_CASE(a_component_saved_with_its_padding_is_refused)
+{
+	ecs::World world(ecs::WorldConfig{4});
+	world.RegisterComponent<Padded>();
+	world.FinalizeComponents();
+	engine::core::serialization::ByteWriter empty;
+	world.SaveCheckpoint(empty); // none of them yet: nothing to save
+	world.Create<Padded>();
+	engine::core::serialization::ByteWriter writer;
+	BOOST_CHECK_THROW(world.SaveCheckpoint(writer), std::logic_error);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

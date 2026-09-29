@@ -1,12 +1,8 @@
 module;
 #define BOOST_TEST_MODULE RibbonEdgesTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cmath>
-#include <limits>
-#include <span>
-#include <vector>
 export module Graphics.Scene.Beams.RibbonEdges.Tests;
+import std;
 import Graphics.Scene.Beams.RibbonEdges;
 import Graphics.Scene.Beams.RibbonSubdivision;
 using namespace Graphics;

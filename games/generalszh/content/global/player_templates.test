@@ -1,0 +1,155 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdlib>
+#include <filesystem>
+
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.content_loader;
+import games.generalszh.content.global.player_templates;
+import games.generalszh.content.global.challenge_generals;
+import games.generalszh.content.global.campaigns;
+import games.generalszh.content.global.videos;
+import games.generalszh.content.install.install_mount;
+
+using namespace generalszh::content;
+using namespace engine::config;
+
+BOOST_AUTO_TEST_SUITE(player_templates)
+
+BOOST_AUTO_TEST_CASE(a_side_takes_its_own_colour_else_its_factions_else_white)
+{
+	FactionColors factions;
+	factions.byFaction = {{"FactionAmerica", Rgb{0, 0, 255}}, {"FactionChina", Rgb{255, 0, 0}}};
+	BOOST_TEST(SideColor(0xFF123456, factions, "FactionAmerica") == 0x123456u);
+	BOOST_TEST(SideColor(std::nullopt, factions, "FactionChina") == 0xFF0000u);
+	BOOST_TEST(SideColor(std::nullopt, factions, "") == 0xFFFFFFu);
+}
+
+BOOST_AUTO_TEST_CASE(the_shipped_factions_prefer_their_colours)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const Document &document = loader.Load({"Data/INI/Default/PlayerTemplate", "Data/INI/PlayerTemplate"});
+	BindContext context{loader.DiagnosticsFor(document), engine::time::FixedStep{30}};
+	const FactionColors colors = BindFactionColors(document, context);
+	BOOST_TEST(SideColor(std::nullopt, colors, "FactionAmerica") == 0x0000FFu);
+	BOOST_TEST(SideColor(std::nullopt, colors, "FactionChina") == 0xFF0000u);
+	BOOST_TEST(SideColor(std::nullopt, colors, "FactionGLAToxinGeneral") == 0x00FF00u);
+}
+
+// CampaignManager (Campaign.ini): names lowercased; TRAINING's one mission; CHALLENGE_0 plays its seven maps in order
+// (getNextMission: NextMission, lowercased) and ends after the last (no NextMission); USA's first mission's briefing.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_shipped_campaigns)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const Document &document = loader.Load({"Data/INI/Campaign"});
+	BindContext context{loader.DiagnosticsFor(document), engine::time::FixedStep{30}};
+	const CampaignCatalog catalog = BindCampaigns(document, context);
+	const Campaign *training = catalog.Find("TRAINING");
+	BOOST_TEST_REQUIRE(training != nullptr);
+	BOOST_TEST(training->name == "training");
+	const Mission *first = training->NextMission(nullptr);
+	BOOST_TEST_REQUIRE(first != nullptr);
+	BOOST_TEST(first->map == "Maps\\Training01\\Training01.map");
+	BOOST_TEST(first->voiceLength == 17);
+	BOOST_TEST(first->unitNames[1] == "OBJECT:Humvee");
+	BOOST_TEST(training->NextMission(first) == nullptr);
+	const Campaign *challenge = catalog.Find("challenge_0");
+	BOOST_TEST_REQUIRE(challenge != nullptr);
+	BOOST_TEST(challenge->challenge);
+	BOOST_TEST(challenge->playerFaction == "FactionAmericaAirForceGeneral");
+	std::vector<std::string> maps;
+	for (const Mission *mission = challenge->NextMission(nullptr); mission != nullptr && maps.size() < 20; mission = challenge->NextMission(mission))
+		maps.push_back(mission->map);
+	BOOST_TEST(maps.size() == 7u);
+	BOOST_TEST(maps.front() == "Maps\\GC_ChemGeneral\\GC_ChemGeneral.map");
+	BOOST_TEST(maps.back() == "Maps\\GC_ChinaBoss\\GC_ChinaBoss.map");
+	BOOST_TEST(challenge->MissionNumber(challenge->FindMission("mission03")) == 2);
+	BOOST_TEST(challenge->FindMission("Mission03") == nullptr); // getMission compares as given
+	BOOST_TEST(catalog.Find("usa") != nullptr);
+}
+
+// ChallengeGenerals (ChallengeMode.ini): nine generals start open, the boss and two empty spots locked;
+// each shows its faction's medallions.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_shipped_challenge_generals)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const Document &templates = loader.Load({"Data/INI/Default/PlayerTemplate", "Data/INI/PlayerTemplate"});
+	const Document &challenge = loader.Load({"Data/INI/ChallengeMode"});
+	BindContext context{loader.DiagnosticsFor(challenge), engine::time::FixedStep{30}};
+	const ChallengeGenerals generals = BindChallengeGenerals(challenge, &templates, context);
+	int open = 0;
+	for (const GeneralPersona &general : generals)
+		open += general.startsEnabled ? 1 : 0;
+	BOOST_TEST(open == 9);
+	BOOST_TEST(generals[0].playerTemplate == "FactionAmericaAirForceGeneral");
+	BOOST_TEST(generals[0].campaign == "CHALLENGE_0");
+	BOOST_TEST(generals[0].bioName == "GUI:BioNameEntry_Pos0");
+	BOOST_TEST(generals[0].bioPortraitSmall == "PAAirGen_S");
+	BOOST_TEST(generals[0].previewSound == "Taunts_GCAnnouncer07");
+	BOOST_TEST(!generals[0].medallionNormal.empty());
+	BOOST_TEST(generals[0].medallionNormal != generals[0].medallionSelected);
+	BOOST_TEST(generals[9].playerTemplate == "FactionBossGeneral");
+	BOOST_TEST(!generals[9].startsEnabled);
+	BOOST_TEST(!generals[11].startsEnabled);
+}
+
+// VideoPlayer::init (Video.ini) and Movie_File_Name / Open_Movie_File: each movie by its internal name; the USA
+// campaign's first mission's intro movie names a Video block whose file (with ".bik") is in the English Movies folder
+// of the install; a name no block has is looked for as it is.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_shipped_movies_are_found)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const VideoCatalog videos = BindVideos(loader.Load({"Data/INI/Default/Video", "Data/INI/Video"}));
+	BOOST_TEST_REQUIRE(!videos.files.empty());
+	const Document &campaignSet = loader.Load({"Data/INI/Campaign"});
+	BindContext context{loader.DiagnosticsFor(campaignSet), engine::time::FixedStep{30}};
+	const CampaignCatalog campaigns = BindCampaigns(campaignSet, context);
+	const Campaign *usa = campaigns.Find("usa");
+	BOOST_TEST_REQUIRE(usa != nullptr);
+	const Mission *first = usa->NextMission(nullptr);
+	BOOST_TEST_REQUIRE(first != nullptr);
+	BOOST_TEST_REQUIRE(!first->introMovie.empty());
+	BOOST_TEST(videos.files.contains(first->introMovie));
+	const auto paths = videos.Paths(first->introMovie, "English");
+	BOOST_TEST(std::filesystem::exists(std::filesystem::path(install) / paths[0]));
+	BOOST_TEST(videos.FileName("NoSuchMovie") == "NoSuchMovie.bik");
+	BOOST_TEST(videos.FileName("Already.BIK") == "Already.BIK");
+}
+
+BOOST_AUTO_TEST_SUITE_END()

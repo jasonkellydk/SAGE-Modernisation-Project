@@ -1,13 +1,5 @@
-module;
-#include <algorithm>
-#include <array>
-#include <cassert>
-#include <cmath>
-#include <cstdint>
-#include <span>
-#include <vector>
-
 export module Graphics.Scene.Props.TransparentGeometry;
+import std;
 export import Graphics.Scene.Props.Renderer;
 
 namespace Graphics {

@@ -1,14 +1,5 @@
-module;
-#include <algorithm>
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <span>
-#include <string>
-#include <string_view>
-#include <vector>
-#include <utility>
 export module Graphics.Scene.Models.AssetPose;
+import std;
 export import Graphics.Scene.Models.AnimationBlend;
 import Assets.ModelRig;
 import Graphics.Scene.Models.AnimationChannels;
@@ -85,6 +76,41 @@ public:
             }
         }
         return m_pose.Evaluate(m_skeleton,m_pose.Local_Transforms());
+    }
+    // A bone by name (case-insensitive), or the bone count when there is none.
+    std::size_t Bone_Index(std::string_view name) const {
+        const auto lower=[](char c){ return c>='A'&&c<='Z' ? static_cast<char>(c-'A'+'a') : c; };
+        for(std::size_t bone=0;bone<m_rig.bones.size();++bone) {
+            const std::string& candidate=m_rig.bones[bone].name;
+            if(candidate.size()==name.size() && std::equal(candidate.begin(),candidate.end(),name.begin(),[&](char x,char y){ return lower(x)==lower(y); }))
+                return bone;
+        }
+        return m_rig.bones.size();
+    }
+    // This pose as `base` (same skeleton; null: at rest) with some bones
+    // turned further in their own frames (a wheel rolling, a cab steering):
+    // each control's transform applies after the bone's own.
+    bool Evaluate_Controlled(const ModelAssetPose* base,std::span<const std::pair<std::size_t,RenderTransform>> controls) {
+        if(!m_skeleton.Is_Valid()) return false;
+        auto locals=m_pose.Local_Transforms();
+        if(base!=nullptr && base->Bone_Count()==Bone_Count()) {
+            const auto from=base->m_pose.Local_Transforms();
+            std::copy(from.begin(),from.end(),locals.begin());
+            m_visible=base->m_visible;
+        } else {
+            const auto bones=m_skeleton.Bones();
+            for(std::size_t i=0;i<bones.size();++i) locals[i]=bones[i].rest_transform;
+            std::fill(m_visible.begin(),m_visible.end(),1);
+        }
+        for(const auto& [bone,control]:controls) {
+            if(bone>=locals.size()) continue;
+            const RenderTransform own=locals[bone];
+            for(unsigned r=0;r<4;++r) for(unsigned c=0;c<4;++c) {
+                float value=0;for(unsigned k=0;k<4;++k)value+=own.matrix[r*4+k]*control.matrix[k*4+c];
+                locals[bone].matrix[r*4+c]=value;
+            }
+        }
+        return m_pose.Evaluate(m_skeleton,locals);
     }
     bool Bone_Transform(std::size_t bone,RenderTransform& output) const {
         if(bone>=m_pose.World_Transforms().size()) return false;

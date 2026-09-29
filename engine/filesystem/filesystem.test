@@ -1,0 +1,200 @@
+#define BOOST_TEST_MODULE EngineFilesystem
+#include <boost/test/included/unit_test.hpp>
+
+#include <cstddef>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <memory>
+#include <random>
+#include <span>
+#include <string>
+#include <thread>
+#include <utility>
+#include <vector>
+
+import engine.filesystem.core.virtual_file_system;
+import engine.filesystem.adapters.directory.directory_source;
+import engine.filesystem.adapters.big.big_archive_source;
+
+namespace fs = std::filesystem;
+using namespace engine::filesystem;
+
+namespace
+{
+// Writes a real BIGF archive: header, index, then data.
+std::vector<std::byte> MakeBig(const std::vector<std::pair<std::string, std::string>> &files)
+{
+	std::size_t indexEnd = big::HeaderSize;
+	for (const auto &[path, data] : files)
+		indexEnd += 8 + path.size() + 1;
+	std::vector<std::byte> out;
+	const auto u32be = [&](std::uint32_t v) {
+		for (int shift = 24; shift >= 0; shift -= 8)
+			out.push_back(static_cast<std::byte>(v >> shift));
+	};
+	const auto u32le = [&](std::uint32_t v) {
+		for (int shift = 0; shift <= 24; shift += 8)
+			out.push_back(static_cast<std::byte>(v >> shift));
+	};
+	std::size_t total = indexEnd;
+	for (const auto &file : files)
+		total += file.second.size();
+	for (const char c : std::string("BIGF"))
+		out.push_back(static_cast<std::byte>(c));
+	u32le(static_cast<std::uint32_t>(total));
+	u32be(static_cast<std::uint32_t>(files.size()));
+	u32be(static_cast<std::uint32_t>(indexEnd));
+	std::size_t offset = indexEnd;
+	for (const auto &[path, data] : files)
+	{
+		u32be(static_cast<std::uint32_t>(offset));
+		u32be(static_cast<std::uint32_t>(data.size()));
+		for (const char c : path)
+			out.push_back(static_cast<std::byte>(c));
+		out.push_back(std::byte{0});
+		offset += data.size();
+	}
+	for (const auto &file : files)
+		for (const char c : file.second)
+			out.push_back(static_cast<std::byte>(c));
+	return out;
+}
+
+struct TempDir
+{
+	fs::path path;
+	TempDir()
+	{
+		std::random_device random;
+		path = fs::temp_directory_path() / ("engine_filesystem_" + std::to_string(random()));
+		fs::create_directories(path);
+	}
+	~TempDir() { std::error_code ignored; fs::remove_all(path, ignored); }
+
+	void Write(const fs::path &relative, const std::vector<std::byte> &bytes) const
+	{
+		fs::create_directories((path / relative).parent_path());
+		std::ofstream(path / relative, std::ios::binary).write(reinterpret_cast<const char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+	}
+	void Write(const fs::path &relative, const std::string &text) const
+	{
+		Write(relative, std::vector<std::byte>(reinterpret_cast<const std::byte *>(text.data()), reinterpret_cast<const std::byte *>(text.data()) + text.size()));
+	}
+};
+
+std::string Text(const std::optional<std::vector<std::byte>> &bytes)
+{
+	return bytes ? std::string(reinterpret_cast<const char *>(bytes->data()), bytes->size()) : std::string("<missing>");
+}
+}
+
+BOOST_AUTO_TEST_SUITE(filesystem)
+
+BOOST_AUTO_TEST_CASE(paths_are_normalized_case_and_slash_insensitively)
+{
+	BOOST_TEST(NormalizePath("Data\\INI\\Weapon.ini") == "data/ini/weapon.ini");
+	BOOST_TEST(NormalizePath("./Art//Textures/X.DDS") == "art/textures/x.dds");
+	BOOST_TEST(NormalizePath("/maps/a.map") == "maps/a.map");
+	BOOST_TEST(Extension("data/ini/weapon.ini") == ".ini");
+	BOOST_TEST(Extension("data.dir/readme").empty());
+}
+
+BOOST_AUTO_TEST_CASE(big_index_parses_and_rejects_corruption)
+{
+	const auto archive = MakeBig({{"Data\\INI\\Weapon.ini", "Weapon"}, {"Art/X.dds", "DDS"}});
+	const auto entries = big::ParseIndex(archive, archive.size());
+	BOOST_TEST_REQUIRE(entries.has_value());
+	BOOST_TEST_REQUIRE(entries->size() == 2u);
+	BOOST_TEST((*entries)[0].path == "data/ini/weapon.ini");
+	BOOST_TEST((*entries)[0].size == 6u);
+	BOOST_TEST((*entries)[1].path == "art/x.dds");
+
+	auto badMagic = archive;
+	badMagic[3] = std::byte{'4'};
+	BOOST_TEST(!big::ParseIndex(badMagic, badMagic.size()).has_value());
+	BOOST_TEST(!big::ParseIndex(std::span(archive).first(20), archive.size()).has_value());
+	BOOST_TEST(!big::ParseIndex(archive, archive.size() - 1).has_value()); // last file truncated
+	auto unterminated = MakeBig({{"a", "x"}});
+	unterminated[big::HeaderSize + 8 + 1] = std::byte{'b'};
+	BOOST_TEST(!big::ParseIndex(unterminated, unterminated.size()).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(big_archive_reads_files_and_first_duplicate_wins)
+{
+	TempDir temp;
+	temp.Write("Test.big", MakeBig({{"Data/One.txt", "first"}, {"DATA\\ONE.TXT", "second"}, {"Two.txt", ""}}));
+	auto archive = BigArchiveSource::Open(temp.path / "Test.big");
+	BOOST_TEST_REQUIRE(archive.has_value(), (archive ? "" : archive.error()));
+	BOOST_TEST((*archive)->Paths().size() == 2u);
+	BOOST_TEST(Text((*archive)->Read("data/one.txt")) == "first");
+	BOOST_TEST(Text((*archive)->Read("two.txt")).empty());
+	BOOST_TEST(!(*archive)->Read("missing.txt").has_value());
+
+	temp.Write("Broken.big", std::string("BIGF\1\0\0\0"));
+	BOOST_TEST(!BigArchiveSource::Open(temp.path / "Broken.big").has_value());
+	BOOST_TEST(!BigArchiveSource::Open(temp.path / "Missing.big").has_value());
+}
+
+BOOST_AUTO_TEST_CASE(loose_files_override_archives_and_earlier_archives_win)
+{
+	TempDir temp;
+	temp.Write("Loose/Data/INI/Weapon.ini", std::string("loose"));
+	temp.Write("A.big", MakeBig({{"Data\\INI\\Weapon.ini", "archive-a"}, {"Data\\INI\\Armor.ini", "armor-a"}}));
+	temp.Write("B.big", MakeBig({{"Data\\INI\\Armor.ini", "armor-b"}, {"Maps\\Shell.map", "map"}}));
+
+	VirtualFileSystem files;
+	files.Mount(std::make_unique<DirectorySource>(temp.path / "Loose"));
+	files.Mount(std::move(*BigArchiveSource::Open(temp.path / "A.big")));
+	files.Mount(std::move(*BigArchiveSource::Open(temp.path / "B.big")));
+
+	BOOST_TEST(*files.ReadText("DATA/ini/WEAPON.INI") == "loose");
+	BOOST_TEST(*files.ReadText("Data\\INI\\Armor.ini") == "armor-a");
+	BOOST_TEST(*files.ReadText("maps/shell.map") == "map");
+	BOOST_TEST(files.Origin("data/ini/armor.ini")->ends_with("A.big"));
+	BOOST_TEST(!files.Exists("data/ini/missing.ini"));
+	BOOST_TEST(files.FileCount() == 3u);
+
+	const std::vector<std::string> ini = files.List("Data\\INI", ".INI");
+	BOOST_TEST((ini == std::vector<std::string>{"data/ini/armor.ini", "data/ini/weapon.ini"}));
+	BOOST_TEST(files.List("maps").size() == 1u);
+	BOOST_TEST(files.List().size() == 3u);
+}
+
+BOOST_AUTO_TEST_CASE(directory_source_can_mount_under_a_prefix)
+{
+	TempDir temp;
+	temp.Write("Shaders/a.fx", std::string("fx"));
+	VirtualFileSystem files;
+	files.Mount(std::make_unique<DirectorySource>(temp.path, "Mods\\Hd"));
+	BOOST_TEST(*files.ReadText("mods/hd/shaders/a.fx") == "fx");
+}
+
+BOOST_AUTO_TEST_CASE(archive_reads_are_thread_safe)
+{
+	TempDir temp;
+	std::vector<std::pair<std::string, std::string>> content;
+	for (int index = 0; index < 64; ++index)
+		content.emplace_back("f" + std::to_string(index), std::string(1000 + index, static_cast<char>('a' + index % 26)));
+	temp.Write("Many.big", MakeBig(content));
+	VirtualFileSystem files;
+	files.Mount(std::move(*BigArchiveSource::Open(temp.path / "Many.big")));
+
+	std::vector<std::thread> threads;
+	std::vector<int> failures(8, 0);
+	for (int thread = 0; thread < 8; ++thread)
+		threads.emplace_back([&, thread] {
+			for (int round = 0; round < 200; ++round)
+			{
+				const int index = (round * 7 + thread) % 64;
+				if (*files.ReadText("f" + std::to_string(index)) != content[static_cast<std::size_t>(index)].second)
+					++failures[static_cast<std::size_t>(thread)];
+			}
+		});
+	for (std::thread &thread : threads)
+		thread.join();
+	for (const int count : failures)
+		BOOST_TEST(count == 0);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

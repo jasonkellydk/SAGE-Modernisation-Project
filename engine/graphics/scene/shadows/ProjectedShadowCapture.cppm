@@ -1,8 +1,5 @@
-module;
-#include <cstdint>
-#include <utility>
-
 export module Graphics.Scene.Shadows.ProjectedCapture;
+import std;
 import Graphics.Frame.AttachmentBindings;
 import Graphics.RHI;
 import Graphics.Resources.Textures.Resource;

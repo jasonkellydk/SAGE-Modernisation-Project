@@ -239,6 +239,28 @@ BOOST_AUTO_TEST_CASE(deferred_create_can_receive_components_before_commit)
 	BOOST_TEST(world.Get<command_buffer_test::Health>(entity)->value == 7);
 }
 
+BOOST_AUTO_TEST_CASE(set_replaces_a_present_component_in_place_and_adds_a_missing_one)
+{
+	ecs::World world;
+	RegisterCommandComponents(world);
+	const ecs::Entity entity = world.Create<command_buffer_test::Position>();
+	world.Get<command_buffer_test::Position>(entity)->value = 1;
+	const std::size_t archetypes = world.ArchetypeCount();
+
+	ecs::CommandBuffer commands;
+	commands.Set<command_buffer_test::Position>(entity, command_buffer_test::Position{5});
+	world.Commit(commands);
+	BOOST_TEST(world.Get<command_buffer_test::Position>(entity)->value == 5);
+	BOOST_TEST(world.ArchetypeCount() == archetypes); // in place: the entity did not move
+
+	ecs::CommandBuffer more;
+	more.Set<command_buffer_test::Health>(entity, command_buffer_test::Health{9});
+	more.Set<command_buffer_test::Position>(entity, command_buffer_test::Position{6});
+	world.Commit(more);
+	BOOST_TEST(world.Get<command_buffer_test::Health>(entity)->value == 9);
+	BOOST_TEST(world.Get<command_buffer_test::Position>(entity)->value == 6);
+}
+
 BOOST_AUTO_TEST_CASE(structural_commands_require_the_exact_registered_cpp_type)
 {
 	ecs::World world;

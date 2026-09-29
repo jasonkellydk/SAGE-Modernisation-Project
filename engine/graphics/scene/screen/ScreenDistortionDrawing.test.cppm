@@ -1,10 +1,8 @@
 module;
 #define BOOST_TEST_MODULE ScreenDistortionDrawingTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <filesystem>
 export module Graphics.Scene.Screen.DistortionDrawing.Tests;
+import std;
 import Graphics.Scene.Screen.Distortion;
 import Graphics.Tests.Device;
 using namespace Graphics;

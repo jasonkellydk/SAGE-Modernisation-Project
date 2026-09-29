@@ -1,6 +1,5 @@
-module;
-#include <cmath>
 export module Graphics.Scene.Props.LightingParameters;
+import std;
 import Graphics.Scene.Lighting.Local;
 import Graphics.Scene.Props.Renderer;
 

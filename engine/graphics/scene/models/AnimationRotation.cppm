@@ -1,8 +1,5 @@
-module;
-#include <array>
-#include <cmath>
-#include <cstdint>
 export module Graphics.Scene.Models.AnimationRotation;
+import std;
 
 namespace Graphics {
 namespace RotationDetail {

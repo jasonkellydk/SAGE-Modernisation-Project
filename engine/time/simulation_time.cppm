@@ -1,13 +1,12 @@
-module;
-#include <chrono>
-#include <cstdint>
-#include <limits>
-#include <stdexcept>
-
 export module engine.time.simulation_time;
+import std;
+
+export import Engine.Core.Math.Fixed;
 
 export namespace engine::time
 {
+namespace math = Engine::Math;
+
 // Authoring/setup duration. Runtime deadlines remain integer ticks in SoA
 // components; no repeated floating-point countdown subtraction is required.
 using Duration = std::chrono::nanoseconds;
@@ -22,9 +21,17 @@ public:
 	}
 
 	constexpr std::uint32_t TicksPerSecond() const noexcept { return m_rate; }
-	constexpr std::chrono::duration<double> Delta() const noexcept
+	// Length of one tick in seconds (1/rate, rounded to fixed point).
+	constexpr math::Fixed SecondsPerTick() const noexcept
 	{
-		return std::chrono::duration<double>{1.0 / static_cast<double>(m_rate)};
+		return math::Fixed::FromRatio(1, m_rate);
+	}
+
+	// Converts a per-second rate (speed, turn rate, regen) to per-tick with a
+	// single rounding, which is more exact than multiplying by SecondsPerTick().
+	constexpr math::Fixed PerTick(math::Fixed perSecond) const noexcept
+	{
+		return perSecond / math::Fixed::FromInt(m_rate);
 	}
 
 	// Round up: a positive duration never expires early. Decompose before
@@ -59,7 +66,8 @@ public:
 	constexpr SimulationTime(std::uint64_t tick, FixedStep step) noexcept : m_tick(tick), m_step(step) {}
 	constexpr std::uint64_t Tick() const noexcept { return m_tick; }
 	constexpr FixedStep Step() const noexcept { return m_step; }
-	constexpr std::chrono::duration<double> Delta() const noexcept { return m_step.Delta(); }
+	constexpr math::Fixed SecondsPerTick() const noexcept { return m_step.SecondsPerTick(); }
+	constexpr math::Fixed PerTick(math::Fixed perSecond) const noexcept { return m_step.PerTick(perSecond); }
 
 private:
 	std::uint64_t m_tick;

@@ -4,13 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <memory>
-#include <string>
-
 export module Engine.UI.WND.ButtonSnapshot.Tests;
+import std;
 
 import Engine.UI.WND;
 import Engine.UI.WND.Document;

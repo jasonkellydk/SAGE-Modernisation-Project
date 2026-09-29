@@ -1,0 +1,180 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <string_view>
+#include <vector>
+
+import engine.ecs.scheduler.scheduler;
+
+namespace group_test
+{
+struct Frame
+{
+	int value{0};
+};
+
+// Umbrella groups: Simulation-ish work, then Rendering (with sub-groups).
+struct Update;
+struct Rendering;
+struct Models;
+struct Particles;
+
+// Test probe: where the writers record their run order. Read-only access to
+// the holder adds no scheduling conflict; the writers are already ordered by
+// the groups (they all write Frame).
+struct GroupLog
+{
+	std::vector<int> *log{nullptr};
+};
+}
+
+namespace ecs
+{
+template<>
+struct ResourceTraits<group_test::GroupLog>
+{
+	static constexpr std::string_view StableName = "tests.groups.log";
+};
+}
+
+namespace group_test
+{
+template<int Id>
+struct Writer
+{
+	using Query = ecs::Query<ecs::Write<Frame>>;
+	using Resources = ecs::Resources<ecs::Read<GroupLog>>;
+	void Execute(Query::Chunk, ecs::SystemContext &context) const
+	{
+		if (std::vector<int> *log = context.Read<GroupLog>().log; log != nullptr)
+			log->push_back(Id);
+	}
+};
+
+using UpdateA = Writer<1>;
+using ModelDraw = Writer<2>;
+using ParticleDraw = Writer<3>;
+}
+
+namespace ecs
+{
+template<>
+struct ComponentTraits<group_test::Frame>
+{
+	static constexpr std::string_view StableName = "tests.groups.frame";
+	static constexpr std::uint32_t Version = 1;
+	static constexpr PersistencePolicy Persistence = PersistencePolicy::Transient;
+};
+template<>
+struct SystemGroupTraits<group_test::Update>
+{
+	static constexpr std::string_view StableName = "tests.groups.update";
+	using Before = SystemTypeList<group_test::Rendering>;
+};
+template<>
+struct SystemGroupTraits<group_test::Rendering>
+{
+	static constexpr std::string_view StableName = "tests.groups.rendering";
+};
+template<>
+struct SystemGroupTraits<group_test::Models>
+{
+	static constexpr std::string_view StableName = "tests.groups.rendering.models";
+	using Parent = group_test::Rendering;
+	using Before = SystemTypeList<group_test::Particles>;
+};
+template<>
+struct SystemGroupTraits<group_test::Particles>
+{
+	static constexpr std::string_view StableName = "tests.groups.rendering.particles";
+	using Parent = group_test::Rendering;
+};
+template<>
+struct SystemTraits<group_test::UpdateA>
+{
+	static constexpr std::string_view StableName = "tests.groups.update_a";
+	static constexpr SystemPhase Phase = SystemPhase::Simulation;
+	using Before = SystemTypeList<>;
+	using After = SystemTypeList<>;
+	using Group = group_test::Update;
+};
+template<>
+struct SystemTraits<group_test::ModelDraw>
+{
+	static constexpr std::string_view StableName = "tests.groups.model_draw";
+	static constexpr SystemPhase Phase = SystemPhase::Simulation;
+	using Before = SystemTypeList<>;
+	using After = SystemTypeList<>;
+	using Group = group_test::Models;
+};
+template<>
+struct SystemTraits<group_test::ParticleDraw>
+{
+	static constexpr std::string_view StableName = "tests.groups.particle_draw";
+	static constexpr SystemPhase Phase = SystemPhase::Simulation;
+	using Before = SystemTypeList<>;
+	using After = SystemTypeList<>;
+	using Group = group_test::Particles;
+};
+}
+
+namespace group_test
+{
+// The rendering umbrella as one registrable unit.
+struct RenderingSystems
+{
+	ModelDraw models;
+	ParticleDraw particles;
+	void Register(ecs::SystemRegistry &registry)
+	{
+		registry.Register(models);
+		registry.Register(particles);
+	}
+};
+}
+
+BOOST_AUTO_TEST_SUITE(system_groups)
+
+BOOST_AUTO_TEST_CASE(groups_order_their_members_and_nest)
+{
+	ecs::World world;
+	world.RegisterComponent<group_test::Frame>();
+	world.FinalizeComponents();
+	world.Create<group_test::Frame>();
+	std::vector<int> log;
+	world.EmplaceResource<group_test::GroupLog>(group_test::GroupLog{&log});
+	group_test::UpdateA update;
+	group_test::RenderingSystems rendering;
+	ecs::SystemRegistry systems;
+	// Registered in the "wrong" order, and all writing the same component:
+	// without the groups this would be an ambiguous conflict.
+	systems.RegisterGroup(rendering);
+	systems.Register(update);
+	systems.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, systems);
+	scheduler.Finalize(engine::time::FixedStep{30});
+	scheduler.Execute({1, engine::time::FixedStep{30}});
+	BOOST_TEST((log == std::vector<int>{1, 2, 3})); // update, then models, then particles
+	BOOST_TEST(systems.GroupName(ecs::detail::GroupKeyOf<group_test::Rendering>()) == "tests.groups.rendering");
+}
+
+BOOST_AUTO_TEST_CASE(a_group_left_out_breaks_nothing)
+{
+	ecs::World world;
+	world.RegisterComponent<group_test::Frame>();
+	world.FinalizeComponents();
+	world.Create<group_test::Frame>();
+	std::vector<int> log;
+	world.EmplaceResource<group_test::GroupLog>(group_test::GroupLog{&log});
+	group_test::UpdateA update;
+	ecs::SystemRegistry systems;
+	// No rendering at all: Update still orders "before Rendering" without complaint.
+	systems.Register(update);
+	systems.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, systems);
+	scheduler.Finalize(engine::time::FixedStep{30});
+	scheduler.Execute({1, engine::time::FixedStep{30}});
+	BOOST_TEST((log == std::vector<int>{1}));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

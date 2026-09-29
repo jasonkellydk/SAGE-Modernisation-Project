@@ -1,23 +1,9 @@
-module;
-
-#include <algorithm>
-#include <concepts>
-#include <cstddef>
-#include <cstdint>
-#include <deque>
-#include <limits>
-#include <memory>
-#include <stdexcept>
-#include <string>
-#include <string_view>
-#include <type_traits>
-#include <typeindex>
-#include <typeinfo>
-#include <unordered_map>
-#include <utility>
-#include <vector>
-
 export module engine.ecs.core.component_registry;
+import std;
+
+export import engine.ecs.core.state_hash;
+export import engine.core.serialization.byte_stream;
+export import engine.ecs.storage.side_table;
 
 export namespace ecs
 {
@@ -33,6 +19,17 @@ export namespace ecs
     {
         Transient,
         Serializable
+    };
+
+    // Where a component's values live. Table: in the archetype chunks (the
+    // default; simulation state). SideTable: in a per-type sparse set outside
+    // the archetypes (presentation state): never moves entities, never part
+    // of signatures, the schema hash, the state hash or checkpoints. Opt in
+    // with `static constexpr ComponentStorage Storage = ComponentStorage::SideTable;`.
+    enum class ComponentStorage : std::uint8_t
+    {
+        Table,
+        SideTable
     };
 
     // Every component must provide an explicit specialization. StableName is
@@ -60,6 +57,9 @@ export namespace ecs
         std::string_view stableName{};
         std::uint32_t version{};
         PersistencePolicy persistence{ PersistencePolicy::Transient };
+        ComponentStorage storage{ ComponentStorage::Table };
+        // Side-table components: makes the (empty) table for a world.
+        std::unique_ptr<SideTableBase> (*createSideTable)(){};
         std::size_t size{};
         std::size_t alignment{};
 
@@ -67,6 +67,19 @@ export namespace ecs
         void (*constructDefault)(void*){};
         void (*constructMove)(void*, void*) noexcept{};
         void (*destroy)(void*) noexcept{};
+        // Hashes `count` contiguous values for World::StateHash. Null for
+        // Transient components, and for Serializable components that are
+        // neither padding-free nor provide ComponentTraits<T>::HashState.
+        void (*hashState)(const void*, std::size_t, StateHasher&) noexcept{};
+        // Write / read `count` contiguous values for world checkpoints (read
+        // overwrites default-constructed values). Null for Transient components,
+        // and for Serializable ones neither trivially copyable nor providing
+        // ComponentTraits<T>::Save / Load.
+        void (*saveState)(const void*, std::size_t, engine::core::serialization::ByteWriter&){};
+        bool (*loadState)(void*, std::size_t, engine::core::serialization::ByteReader&){};
+        // Saved as its bytes though it has padding or floats: a checkpoint would hold whatever memory was in its
+        // padding (two identical worlds saving different checkpoints), so World::SaveCheckpoint refuses it.
+        bool savesPadding{false};
     };
 
     class ComponentRegistry
@@ -108,6 +121,50 @@ export namespace ecs
         static void Destroy(void* object) noexcept
         {
             std::destroy_at(static_cast<T*>(object));
+        }
+
+        template<typename T>
+        static void HashCustom(const void* values, std::size_t count, StateHasher& hasher) noexcept
+        {
+            const T* typed = static_cast<const T*>(values);
+            for (std::size_t index = 0; index < count; ++index)
+                ComponentTraits<T>::HashState(typed[index], hasher);
+        }
+
+        template<typename T>
+        static void HashBytes(const void* values, std::size_t count, StateHasher& hasher) noexcept
+        {
+            hasher.AppendBytes(std::as_bytes(std::span{static_cast<const T*>(values), count}));
+        }
+
+        template<typename T>
+        static void SaveCustom(const void* values, std::size_t count, engine::core::serialization::ByteWriter& writer)
+        {
+            const T* typed = static_cast<const T*>(values);
+            for (std::size_t index = 0; index < count; ++index)
+                ComponentTraits<T>::Save(typed[index], writer);
+        }
+
+        template<typename T>
+        static bool LoadCustom(void* values, std::size_t count, engine::core::serialization::ByteReader& reader)
+        {
+            T* typed = static_cast<T*>(values);
+            for (std::size_t index = 0; index < count; ++index)
+                if (!ComponentTraits<T>::Load(typed[index], reader))
+                    return false;
+            return true;
+        }
+
+        template<typename T>
+        static void SaveBytes(const void* values, std::size_t count, engine::core::serialization::ByteWriter& writer)
+        {
+            writer.Raw(std::as_bytes(std::span{static_cast<const T*>(values), count}));
+        }
+
+        template<typename T>
+        static bool LoadBytes(void* values, std::size_t count, engine::core::serialization::ByteReader& reader)
+        {
+            return reader.Raw(std::as_writable_bytes(std::span{static_cast<T*>(values), count}));
         }
 
         static ComponentSchemaHash ComputeSchemaHash(const std::vector<ComponentInfo*>& ordered) noexcept;
@@ -206,6 +263,16 @@ export namespace ecs
         info.stableName = stableName;
         info.version = static_cast<std::uint32_t>(ComponentTraits<T>::Version);
         info.persistence = ComponentTraits<T>::Persistence;
+        if constexpr (requires { { ComponentTraits<T>::Storage } -> std::convertible_to<ComponentStorage>; })
+        {
+            if constexpr (ComponentTraits<T>::Storage == ComponentStorage::SideTable)
+            {
+                static_assert(ComponentTraits<T>::Persistence == PersistencePolicy::Transient,
+                    "Side-table components are presentation state: they must be Transient");
+                info.storage = ComponentStorage::SideTable;
+                info.createSideTable = [] { return std::unique_ptr<SideTableBase>(std::make_unique<SideTable<T>>()); };
+            }
+        }
         info.size = sizeof(T);
         info.alignment = alignof(T);
         info.constructMove = &ConstructMove<T>;
@@ -213,6 +280,30 @@ export namespace ecs
         if constexpr (std::is_default_constructible_v<T>)
         {
             info.constructDefault = &ConstructDefault<T>;
+        }
+        if (info.persistence == PersistencePolicy::Serializable)
+        {
+            // Byte hashing is only platform-independent without padding or
+            // floating point, which has_unique_object_representations rules out.
+            if constexpr (requires(const T& value, StateHasher& hasher) { ComponentTraits<T>::HashState(value, hasher); })
+                info.hashState = &HashCustom<T>;
+            else if constexpr (std::is_trivially_copyable_v<T> && std::has_unique_object_representations_v<T>)
+                info.hashState = &HashBytes<T>;
+            if constexpr (requires(const T& value, T& target, engine::core::serialization::ByteWriter& writer,
+                              engine::core::serialization::ByteReader& reader) {
+                              ComponentTraits<T>::Save(value, writer);
+                              { ComponentTraits<T>::Load(target, reader) } -> std::convertible_to<bool>;
+                          })
+            {
+                info.saveState = &SaveCustom<T>;
+                info.loadState = &LoadCustom<T>;
+            }
+            else if constexpr (std::is_trivially_copyable_v<T>)
+            {
+                info.saveState = &SaveBytes<T>;
+                info.loadState = &LoadBytes<T>;
+                info.savesPadding = !std::has_unique_object_representations_v<T>;
+            }
         }
 
         m_infos.push_back(info);
@@ -310,8 +401,15 @@ namespace ecs
             ordered.push_back(&info);
         }
 
+        // Table components take the first ids, so the simulation's ids, archetype
+        // signatures and schema are the same whatever side-table (presentation)
+        // components a peer registers.
         std::sort(ordered.begin(), ordered.end(), [](const ComponentInfo* left, const ComponentInfo* right)
         {
+            if (left->storage != right->storage)
+            {
+                return left->storage < right->storage;
+            }
             if (left->stableKey != right->stableKey)
             {
                 return left->stableKey < right->stableKey;
@@ -342,7 +440,15 @@ namespace ecs
         }
 
         m_idToInfo = ordered;
-        m_schemaHash = ComputeSchemaHash(ordered);
+        std::vector<ComponentInfo*> tables;
+        for (ComponentInfo* info : ordered)
+        {
+            if (info->storage == ComponentStorage::Table)
+            {
+                tables.push_back(info);
+            }
+        }
+        m_schemaHash = ComputeSchemaHash(tables);
 
         for (ComponentId id = 0; id < ordered.size(); ++id)
         {

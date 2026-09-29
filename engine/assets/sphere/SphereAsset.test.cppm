@@ -4,11 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-#include <cmath>
-#include <limits>
-
 export module Assets.Tests.Spheres;
+import std;
 
 import Assets.Math;
 import Assets.Spheres;

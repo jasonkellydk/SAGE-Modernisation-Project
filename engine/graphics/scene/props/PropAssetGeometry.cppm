@@ -1,10 +1,5 @@
-module;
-#include <array>
-#include <cstdint>
-#include <string>
-#include <vector>
-#include <utility>
 export module Graphics.Scene.Props.AssetGeometry;
+import std;
 export import Graphics.Scene.Props.Geometry;
 export import Graphics.Scene.Props.Skinning;
 import Assets.Models;

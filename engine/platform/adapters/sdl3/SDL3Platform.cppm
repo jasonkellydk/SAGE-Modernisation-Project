@@ -1,6 +1,7 @@
 module;
 #include <SDL3/SDL.h>
 export module engine.platform.adapters.sdl3;
+import std;
 import engine.platform;
 import engine.platform.adapters.sdl3.runtime;
 import engine.platform.adapters.sdl3.application;

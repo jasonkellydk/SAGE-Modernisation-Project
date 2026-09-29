@@ -1,0 +1,182 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+
+import games.generalszh.presentation.objects.algorithms.object_icon_layout;
+import games.generalszh.presentation.objects.systems.object_icon_systems;
+import games.generalszh.content.combat.weapon_bonus_content;
+import games.generalszh.content.combat.loadout_content;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+using namespace generalszh::presentation;
+namespace gp = engine::gameplay;
+
+BOOST_AUTO_TEST_SUITE(object_icons)
+
+// Drawable.cpp computeHealthRegion, drawDisabled, drawEnthusiastic, drawBombed (car bomb) and drawVeterancy, worked by
+// hand for a 60-wide health box whose position projects to (400, 300): at zoom 1 the region runs 373..433 by 298..301
+// (lo = centre - 0.45 width, - 1.5; hi = lo + width, + 3); a 16x16 disabled image sits at (373, 282); a 32x32
+// enthusiastic image over a vehicle is 24x24 at (376, 307); a 40x20 car bomb image is 30x15 at (388, 304); a veterancy
+// image goes at (440, 301); a 20x20 healing image at (408, 278). At zoom 2 the region is half as wide: 386..416.
+BOOST_AUTO_TEST_CASE(legacy_parity_icons_sit_where_draw_icon_ui_puts_them)
+{
+	const IconRegion region = HealthRegion(400, 300, 60.0f, 1.0f);
+	BOOST_TEST(region.loX == 373);
+	BOOST_TEST(region.loY == 298);
+	BOOST_TEST(region.hiX == 433);
+	BOOST_TEST(region.hiY == 301);
+	const IconRect disabled = PlaceIcon(ObjectIcon::Disabled, region, 16, 16);
+	BOOST_TEST(disabled.x == 373);
+	BOOST_TEST(disabled.y == 282);
+	BOOST_TEST(disabled.width == 16);
+	const IconRect cheer = PlaceIcon(ObjectIcon::Enthusiastic, region, 32, 32, EnthusiasticScale(false, true));
+	BOOST_TEST(cheer.width == 24);
+	BOOST_TEST(cheer.height == 24);
+	BOOST_TEST(cheer.x == 376);
+	BOOST_TEST(cheer.y == 307);
+	const IconRect bomb = PlaceIcon(ObjectIcon::CarBomb, region, 40, 20);
+	BOOST_TEST(bomb.width == 30);
+	BOOST_TEST(bomb.height == 15);
+	BOOST_TEST(bomb.x == 388);
+	BOOST_TEST(bomb.y == 304);
+	const IconRect heal = PlaceIcon(ObjectIcon::VehicleHeal, region, 20, 20);
+	BOOST_TEST(heal.x == 408);
+	BOOST_TEST(heal.y == 278);
+	const IconRect veteran = PlaceVeterancy(400, 300, 60.0f, 1.0f, 12, 10);
+	BOOST_TEST(veteran.x == 440);
+	BOOST_TEST(veteran.y == 301);
+	BOOST_TEST(veteran.width == 12);
+	BOOST_TEST(VeterancyImage(0).empty());
+	BOOST_TEST(VeterancyImage(3) == "SCVeter3");
+	const IconRegion zoomed = HealthRegion(400, 300, 60.0f, 2.0f);
+	BOOST_TEST(zoomed.loX == 386);
+	BOOST_TEST(zoomed.hiX == 416);
+	BOOST_TEST(EnthusiasticScale(true, false) == 1.0f);
+	BOOST_TEST(EnthusiasticScale(false, false) == 0.5f);
+}
+
+// Drawable::drawDisabled / drawEnthusiastic / drawBombed deciding each frame: an EMP'd tank's disabled icon is made on
+// the first frame and keeps its start; ENTHUSIASTIC then SUBLIMINAL draws the subliminal icon while the enthusiastic
+// one's animation is kept (killed only once neither holds); a car bomb shows only to its own player; with icon UI off
+// nothing is made or freed; dead, it draws nothing but keeps its icons.
+BOOST_AUTO_TEST_CASE(legacy_parity_object_icons_are_made_and_freed_as_draw_icon_ui_does)
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<gp::DefinitionRef>();
+	world.RegisterComponent<gp::Owner>();
+	world.RegisterComponent<gp::Health>();
+	world.RegisterComponent<gp::Disabled>();
+	world.RegisterComponent<gp::WeaponBonusConditions>();
+	world.RegisterComponent<gp::Loadout>();
+	world.RegisterComponent<gp::Dying>();
+	world.RegisterComponent<gp::Sale>();
+	world.RegisterComponent<ObjectIcons>();
+	world.FinalizeComponents();
+	PresentationFrame &frame = world.EmplaceResource<PresentationFrame>();
+	frame.viewer = 0;
+	frame.clock = 1.0;
+	world.EmplaceResource<LookCatalog>();
+	const auto make = [&](std::uint32_t player) {
+		const ecs::Entity entity = world.Create();
+		world.Add<gp::DefinitionRef>(entity);
+		world.Add<gp::Owner>(entity);
+		world.Get<gp::Owner>(entity)->player = player;
+		world.Add<gp::Health>(entity);
+		*world.Get<gp::Health>(entity) = {Engine::Math::Fixed::FromInt(100), Engine::Math::Fixed::FromInt(100)};
+		world.Add<gp::Disabled>(entity);
+		world.Add<gp::WeaponBonusConditions>(entity);
+		world.Add<gp::Loadout>(entity);
+		return entity;
+	};
+	const ecs::Entity tank = make(0), theirs = make(1);
+	ObjectIconSystem system;
+	ecs::SystemRegistry registry;
+	registry.Register(system);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{2});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	std::uint64_t count = 0;
+	const auto run = [&] { scheduler.Execute(engine::time::SimulationTime{++count, engine::time::FixedStep{30}}); };
+	const auto icons = [&](ecs::Entity entity) { return world.Side<ObjectIcons>().Get(entity); };
+
+	run();
+	BOOST_TEST(icons(tank) == nullptr);
+	world.Get<gp::Disabled>(tank)->mask = gp::disabled_type::Emp;
+	run();
+	BOOST_TEST_REQUIRE(icons(tank) != nullptr);
+	BOOST_TEST(icons(tank)->Drawn(ObjectIcon::Disabled));
+	BOOST_TEST(icons(tank)->since[0] == 1.0);
+	frame.clock = 2.0;
+	run();
+	BOOST_TEST(icons(tank)->since[0] == 1.0);
+
+	auto &bonus = world.Get<gp::WeaponBonusConditions>(tank)->flags;
+	bonus = generalszh::content::weapon_bonus::Enthusiastic;
+	run();
+	BOOST_TEST(icons(tank)->Drawn(ObjectIcon::Enthusiastic));
+	bonus |= generalszh::content::weapon_bonus::Subliminal;
+	frame.clock = 3.0;
+	run();
+	BOOST_TEST(icons(tank)->Drawn(ObjectIcon::Subliminal));
+	BOOST_TEST(!icons(tank)->Drawn(ObjectIcon::Enthusiastic));
+	BOOST_TEST(icons(tank)->Made(ObjectIcon::Enthusiastic));
+	BOOST_TEST(icons(tank)->since[2] == 3.0);
+	bonus = 0;
+	run();
+	BOOST_TEST(!icons(tank)->Made(ObjectIcon::Enthusiastic));
+	BOOST_TEST(!icons(tank)->Made(ObjectIcon::Subliminal));
+
+	const std::uint32_t carBomb = generalszh::content::SetFlag(generalszh::content::WeaponSetFlagNames, "CARBOMB");
+	world.Get<gp::Loadout>(tank)->weaponFlags = carBomb;
+	world.Get<gp::Loadout>(theirs)->weaponFlags = carBomb;
+	run();
+	BOOST_TEST(icons(tank)->Drawn(ObjectIcon::CarBomb));
+	BOOST_TEST(icons(theirs) == nullptr);
+
+	// Icon UI off: nothing made or freed.
+	frame.drawIconUi = false;
+	world.Get<gp::Disabled>(tank)->mask = 0;
+	run();
+	BOOST_TEST(icons(tank)->Made(ObjectIcon::Disabled));
+	frame.drawIconUi = true;
+	run();
+	BOOST_TEST(!icons(tank)->Made(ObjectIcon::Disabled));
+
+	// drawHealing: hurt and healed on tick 100, the icon shows through tick 190 and goes on 191; never within the game's
+	// first 90 ticks; a sold thing keeps what it had.
+	const ecs::Entity medic = make(0);
+	auto &body = *world.Get<gp::Health>(medic);
+	body.current = Engine::Math::Fixed::FromInt(50);
+	body.lastHealingTick = 100;
+	frame.tick = 190;
+	run();
+	BOOST_TEST_REQUIRE(icons(medic) != nullptr);
+	BOOST_TEST(icons(medic)->Drawn(ObjectIcon::DefaultHeal));
+	frame.tick = 191;
+	run();
+	BOOST_TEST(!icons(medic)->Made(ObjectIcon::DefaultHeal));
+	body.lastHealingTick = 80;
+	frame.tick = 90;
+	run();
+	BOOST_TEST(!icons(medic)->Made(ObjectIcon::DefaultHeal));
+	body.lastHealingTick = 150;
+	frame.tick = 160;
+	run();
+	BOOST_TEST(icons(medic)->Drawn(ObjectIcon::DefaultHeal));
+	world.Add<gp::Sale>(medic);
+	frame.tick = 400;
+	run();
+	BOOST_TEST(icons(medic)->Made(ObjectIcon::DefaultHeal));
+	BOOST_TEST(!icons(medic)->Drawn(ObjectIcon::DefaultHeal));
+
+	// Dead: drawn nothing, kept.
+	world.Get<gp::Health>(tank)->current = {};
+	run();
+	BOOST_TEST(icons(tank)->drawn == 0u);
+	BOOST_TEST(icons(tank)->Made(ObjectIcon::CarBomb));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -4,10 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <clocale>
-#include <string>
-
 export module Assets.Tests.AssetIdentity;
+import std;
 
 import Assets.Identity;
 

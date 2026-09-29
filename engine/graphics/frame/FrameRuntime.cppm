@@ -3,15 +3,8 @@ module;
 #define NOMINMAX
 #include <windows.h>
 
-#include <cstdint>
-#include <cstdlib>
-#include <filesystem>
-#include <memory>
-#include <optional>
-#include <string_view>
-#include <utility>
-
 export module Graphics.Frame.Runtime;
+import std;
 
 export import Graphics.FrameOwner;
 import Graphics.FrameTargets;

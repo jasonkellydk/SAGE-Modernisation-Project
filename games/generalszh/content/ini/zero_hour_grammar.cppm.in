@@ -1,0 +1,22 @@
+// Generated at configure time from content/ini/grammar.json. Do not edit.
+module;
+#include <string>
+#include <string_view>
+
+export module games.generalszh.content.ini.zero_hour_grammar;
+
+export import engine.config.adapters.ini.ini_reader;
+import engine.config.adapters.json.json_reader;
+
+export namespace generalszh::content
+{
+// The Zero Hour INI block structure (see grammar.json for provenance).
+inline constexpr std::string_view ZeroHourGrammarJson = R"GRAMMARJSON(@GRAMMAR_JSON@)GRAMMARJSON";
+
+inline engine::config::ini::Grammar ZeroHourIniGrammar(engine::config::Diagnostics &diagnostics)
+{
+	engine::config::Document document;
+	engine::config::json::Read(document, document.AddSource("grammar.json", std::string(ZeroHourGrammarJson)), diagnostics);
+	return engine::config::ini::GrammarFromDocument(document, diagnostics);
+}
+}

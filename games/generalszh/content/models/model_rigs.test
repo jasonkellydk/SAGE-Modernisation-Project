@@ -1,0 +1,44 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdlib>
+#include <filesystem>
+
+import games.generalszh.content.models.model_rigs;
+import games.generalszh.content.install.install_mount;
+import engine.filesystem.core.virtual_file_system;
+
+using namespace generalszh::content;
+using Engine::Math::Fixed;
+
+BOOST_AUTO_TEST_SUITE(model_rigs)
+
+BOOST_AUTO_TEST_CASE(the_airfield_has_its_runways_and_parking_places_in_fixed_point)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	ModelRigs rigs(files);
+	const auto start = rigs.Bone("NBAirfield", "RunwayStart1");
+	const auto end = rigs.Bone("NBAirfield", "RunwayEnd1");
+	const auto parking = rigs.Bone("nbairfield", "runway1parking1"); // names are case blind
+	const auto otherStart = rigs.Bone("NBAirfield", "RunwayStart2");
+	BOOST_TEST_REQUIRE(start.has_value());
+	BOOST_TEST_REQUIRE(end.has_value());
+	BOOST_TEST_REQUIRE(parking.has_value());
+	BOOST_TEST_REQUIRE(otherStart.has_value());
+	BOOST_TEST_MESSAGE("runway 1: (" << start->position.x.Floor() << ", " << start->position.y.Floor() << ") to (" << end->position.x.Floor() << ", "
+		<< end->position.y.Floor() << "); parking 1: (" << parking->position.x.Floor() << ", " << parking->position.y.Floor() << ")");
+	// A runway is long; the two runways lie side by side.
+	const Fixed length = Engine::Math::Distance(start->position.XY(), end->position.XY());
+	BOOST_TEST((length > Fixed::FromInt(50))); // about 76 on the airfield
+	BOOST_TEST((Engine::Math::Distance(start->position.XY(), otherStart->position.XY()) > Fixed::FromInt(10)));
+	BOOST_TEST(!rigs.Bone("NBAirfield", "NoSuchBone").has_value());
+	BOOST_TEST(!rigs.Bone("NoSuchModel", "RunwayStart1").has_value());
+}
+
+BOOST_AUTO_TEST_SUITE_END()

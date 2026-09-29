@@ -1,13 +1,5 @@
-module;
-
-#include <algorithm>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <span>
-#include <vector>
-
 export module Graphics.Scene.Particles.EmitterKinematics;
+import std;
 
 import Assets.Math;
 

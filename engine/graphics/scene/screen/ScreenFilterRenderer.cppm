@@ -1,11 +1,5 @@
-module;
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <span>
-#include <vector>
 export module Graphics.Scene.Screen.Filters;
+import std;
 export import Graphics.RHI;
 import Graphics.Shaders.Library;
 namespace Graphics

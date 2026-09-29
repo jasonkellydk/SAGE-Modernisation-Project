@@ -1,22 +1,5 @@
-module;
-
-#include <algorithm>
-#include <array>
-#include <algorithm>
-#include <cstddef>
-#include <cstdint>
-#include <cstdlib>
-#include <filesystem>
-#include <fstream>
-#include <limits>
-#include <span>
-#include <string>
-#include <string_view>
-#include <system_error>
-#include <utility>
-#include <vector>
-
 export module Graphics.Testing.VisualRegression;
+import std;
 
 export import Graphics.RHI;
 

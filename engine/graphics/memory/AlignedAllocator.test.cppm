@@ -4,9 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <cstdint>
-
 export module Graphics.Memory.AlignedAllocator.Tests;
+import std;
 
 import Graphics.Memory.AlignedAllocator;
 

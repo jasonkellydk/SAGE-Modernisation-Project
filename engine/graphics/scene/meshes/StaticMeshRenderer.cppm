@@ -1,16 +1,5 @@
-module;
-
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <limits>
-#include <memory>
-#include <span>
-#include <vector>
-
 export module Graphics.Scene.StaticMeshes;
+import std;
 
 export import Graphics.Passes.Opaque;
 export import Graphics.Passes.Transparent;
@@ -49,7 +38,7 @@ export struct SkinnedMeshVertex final
 };
 
 static_assert(sizeof(SkinnedMeshVertex) == 60);
-static_assert(offsetof(SkinnedMeshVertex, skinning) == 36);
+static_assert(__builtin_offsetof(SkinnedMeshVertex, skinning) == 36);
 
 export struct StaticMeshSource final
 {

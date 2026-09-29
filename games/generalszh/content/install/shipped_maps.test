@@ -1,0 +1,92 @@
+#define BOOST_TEST_MODULE GeneralsZhShippedMaps
+#include <boost/test/included/unit_test.hpp>
+
+#include <chrono>
+#include <cstdlib>
+#include <filesystem>
+#include <map>
+#include <string>
+
+import games.generalszh.content.install.install_mount;
+import engine.level.adapters.generals_map.map_reader;
+
+namespace fs = std::filesystem;
+using namespace engine::level;
+
+namespace
+{
+const char *InstallDir() { return std::getenv("GENERALSZH_INSTALL_DIR"); }
+}
+
+BOOST_AUTO_TEST_SUITE(shipped_maps)
+
+BOOST_AUTO_TEST_CASE(shell_map_and_every_shipped_map_decode)
+{
+	if (InstallDir() == nullptr || !fs::exists(InstallDir()))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	generalszh::content::MountInstall(files, InstallDir());
+
+	const auto start = std::chrono::steady_clock::now();
+	const auto shell = generals_map::Read(*files.Read("Maps\\ShellMapMD\\ShellMapMD.map"));
+	BOOST_TEST_REQUIRE(shell.has_value(), (shell ? "" : shell.error()));
+	const Level &level = shell->level;
+	BOOST_TEST_MESSAGE("ShellMapMD: " << level.terrain.width << "x" << level.terrain.height << " samples, border "
+		<< level.terrain.border << ", " << level.placements.size() << " placements, " << level.markers.size()
+		<< " markers, " << level.regions.size() << " regions, " << level.sections.size() << " raw sections, "
+		<< shell->warnings.size() << " warnings, "
+		<< std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count() << " ms");
+	for (const Section &section : level.sections)
+		BOOST_TEST_MESSAGE("  section " << section.name << " v" << section.version << " (" << section.data.size() << " bytes)");
+	BOOST_TEST(level.terrain.width > 100u);
+	BOOST_TEST(level.placements.size() + level.markers.size() > 700u);
+	BOOST_TEST(!level.markers.empty());
+	BOOST_TEST(level.lighting.sets.size() == 4u);
+	std::size_t scripts = 0;
+	std::size_t calls = 0;
+	const auto count = [&](const Script &script) {
+		++scripts;
+		calls += script.actions.size() + script.falseActions.size();
+		for (const auto &clause : script.conditions)
+			calls += clause.size();
+	};
+	for (const Participant &participant : level.scenario.participants)
+	{
+		for (const Script &script : participant.scripts.scripts)
+			count(script);
+		for (const ScriptGroup &group : participant.scripts.groups)
+			for (const Script &script : group.scripts)
+				count(script);
+	}
+	BOOST_TEST_MESSAGE("ShellMapMD scenario: " << level.scenario.participants.size() << " participants, "
+		<< level.scenario.groups.size() << " groups, " << scripts << " scripts, " << calls << " conditions/actions");
+	BOOST_TEST(level.FindSection("SidesList") == nullptr);
+	BOOST_TEST(scripts > 20u);
+	BOOST_TEST(calls > 300u);
+	BOOST_TEST(level.FindSection("BlendTileData") == nullptr);
+	BOOST_TEST(level.surface.tiles.size() == level.terrain.heights.size());
+	BOOST_TEST(!level.surface.materials.empty());
+	BOOST_TEST_MESSAGE("ShellMapMD surface: " << level.surface.materials.size() << " materials, "
+		<< level.surface.blendTable.size() << " blends, " << level.surface.cliffTable.size() << " cliff mappings");
+
+	std::size_t decoded = 0;
+	std::map<std::string, std::string> failures;
+	for (const std::string &path : files.List("maps", ".map"))
+	{
+		const auto result = generals_map::Read(*files.Read(path));
+		if (result)
+			++decoded;
+		else
+			failures[path] = result.error();
+	}
+	BOOST_TEST_MESSAGE("decoded " << decoded << " shipped maps");
+	for (const auto &[path, error] : failures)
+		BOOST_TEST_MESSAGE("  FAILED " << path << ": " << error);
+	BOOST_TEST(decoded > 50u);
+	BOOST_TEST(failures.empty());
+}
+
+BOOST_AUTO_TEST_SUITE_END()

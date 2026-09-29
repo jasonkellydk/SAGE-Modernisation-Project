@@ -3,11 +3,8 @@ module;
 #define BOOST_TEST_MODULE MeshMaterialBindingsTests
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-#include <cstdint>
-#include <memory>
-
 export module Graphics.Scene.Models.MeshMaterialBindings.Tests;
+import std;
 
 import Assets.Math;
 import Graphics.Materials.MeshMaterial;

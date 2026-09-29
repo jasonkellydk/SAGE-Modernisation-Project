@@ -1,10 +1,5 @@
-module;
-#include <algorithm>
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-#include <vector>
 export module Graphics.Resources.Textures.Upload;
+import std;
 import Graphics.RHI;
 import Graphics.Resources.Textures.Resource;
 

@@ -4,10 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-#include <cmath>
-
 export module Graphics.Scene.Models.AnimationBlend.Tests;
+import std;
 
 import Graphics.Scene.Models.AnimationBlend;
 

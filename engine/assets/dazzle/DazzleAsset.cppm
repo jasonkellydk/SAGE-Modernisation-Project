@@ -1,8 +1,5 @@
-module;
-#include <array>
-#include <string>
-#include <vector>
 export module Assets.Dazzles;
+import std;
 
 namespace Assets {
 export struct LensFlareSprite final {

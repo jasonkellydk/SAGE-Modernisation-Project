@@ -1,0 +1,220 @@
+#define BOOST_TEST_MODULE EngineGameplaySpatial
+#include <boost/test/included/unit_test.hpp>
+
+#include <cmath>
+#include <cstdint>
+#include <vector>
+
+import engine.gameplay.common.spatial.resources.ground_height;
+import engine.gameplay.common.spatial.algorithms.find_position;
+import engine.gameplay.common.spatial.algorithms.footprint;
+import engine.gameplay.common.spatial.algorithms.geometry_collision;
+
+using Engine::Math::Fixed;
+namespace level = engine::level;
+
+BOOST_AUTO_TEST_SUITE(ground_height)
+
+BOOST_AUTO_TEST_CASE(interpolates_the_triangle_under_the_point)
+{
+	// 3x3 samples, one sample of border, 10 units per cell:
+	//   row 0: 0 0 0
+	//   row 1: 0 10 20
+	//   row 2: 0 20 40
+	level::Heightfield field;
+	field.width = 3;
+	field.height = 3;
+	field.border = 1;
+	field.cellSize = Fixed::FromInt(10);
+	for (const int h : {0, 0, 0, 0, 10, 20, 0, 20, 40})
+		field.heights.push_back(Fixed::FromInt(h));
+	const engine::gameplay::GroundHeight ground(field);
+	// World (0, 0) is sample (1, 1).
+	BOOST_TEST(ground.At({}).Raw() == Fixed::FromInt(10).Raw());
+	// Centre of the cell: on the diagonal, the average of its ends.
+	BOOST_TEST(ground.At({Fixed::FromInt(5), Fixed::FromInt(5)}).Raw() == Fixed::FromInt(25).Raw());
+	// Lower triangle (fy < fx) uses p1 (20).
+	BOOST_TEST(ground.At({Fixed::FromInt(10), Fixed::FromInt(0)}).Raw() == Fixed::FromInt(20).Raw());
+	// Upper triangle uses p3 (20).
+	BOOST_TEST(ground.At({Fixed::FromInt(0), Fixed::FromInt(10)}).Raw() == Fixed::FromInt(20).Raw());
+	// Off the field clamps to the edge.
+	BOOST_TEST(ground.At({Fixed::FromInt(-100), Fixed::FromInt(-100)}).Raw() == Fixed{}.Raw());
+}
+
+// BaseHeightMapRenderObjClass::isClearLineOfSight (DO_BRESENHAM): the walk checks each cell from the start's up to (not
+// including) the end's, by its highest corner against the sight line plus 0.5; it stops (clear) once the line is above
+// the highest terrain and still rising.
+BOOST_AUTO_TEST_CASE(legacy_parity_terrain_line_of_sight)
+{
+	// 10 x 3 samples, no border, 10 units a cell, all flat but a ridge of 30 along sample column `ridge`.
+	const auto field = [](std::uint32_t ridge) {
+		level::Heightfield made;
+		made.width = 10;
+		made.height = 3;
+		made.cellSize = Fixed::FromInt(10);
+		for (std::uint32_t y = 0; y < 3; ++y)
+			for (std::uint32_t x = 0; x < 10; ++x)
+				made.heights.push_back(Fixed::FromInt(x == ridge ? 30 : 0));
+		return made;
+	};
+	const auto at = [](int x, int z) { return Engine::Math::FixedVector3{Fixed::FromInt(x), Fixed::FromInt(5), Fixed::FromInt(z)}; };
+	const level::Heightfield middle = field(5);
+	const engine::gameplay::GroundHeight ground(middle);
+	BOOST_TEST(!ground.ClearLineOfSight(at(5, 5), at(85, 5)));
+	BOOST_TEST(!ground.ClearLineOfSight(at(85, 5), at(5, 5)));
+	BOOST_TEST(ground.ClearLineOfSight(at(5, 40), at(85, 40)));
+	// Rising from 29 to 30 over 8 cells, the line is at 29.5 in the ridge's first cell (the 5th): 30 is not more than
+	// 29.5 + 0.5. From 28 to 29 it is at 28.5 there: blocked.
+	BOOST_TEST(ground.ClearLineOfSight(at(5, 29), at(85, 30)));
+	BOOST_TEST(!ground.ClearLineOfSight(at(5, 28), at(85, 29)));
+	// Above the highest terrain and rising: done.
+	BOOST_TEST(ground.ClearLineOfSight(at(5, 30), at(85, 100)));
+	// Within one cell: nothing to walk.
+	BOOST_TEST(ground.ClearLineOfSight(at(41, 0), at(49, 0)));
+	// The end's own cell is not walked.
+	const level::Heightfield last = field(9);
+	const engine::gameplay::GroundHeight edge(last);
+	BOOST_TEST(edge.ClearLineOfSight(at(5, 5), at(85, 5)));
+	BOOST_TEST(!edge.ClearLineOfSight(at(85, 5), at(5, 5)));
+}
+
+BOOST_AUTO_TEST_CASE(water_areas_raise_the_surface)
+{
+	level::Heightfield field;
+	field.width = 2;
+	field.height = 2;
+	field.cellSize = Fixed::FromInt(100);
+	field.heights.assign(4, Fixed::FromInt(-5));
+	engine::gameplay::GroundHeight ground(field);
+	ground.AddWater({{Fixed::FromInt(0), Fixed::FromInt(0)}, {Fixed::FromInt(50), Fixed::FromInt(0)}, {Fixed::FromInt(0), Fixed::FromInt(50)}},
+		Fixed::FromInt(7));
+	BOOST_TEST(ground.Surface({Fixed::FromInt(10), Fixed::FromInt(10)}).Raw() == Fixed::FromInt(7).Raw());
+	BOOST_TEST(ground.Surface({Fixed::FromInt(40), Fixed::FromInt(40)}).Raw() == Fixed::FromInt(-5).Raw());
+	BOOST_TEST(ground.At({Fixed::FromInt(10), Fixed::FromInt(10)}).Raw() == Fixed::FromInt(-5).Raw());
+}
+
+// PartitionManager::findPositionAround's search order: the inner ring (minRadius) only at the start angle;
+// then rings 5 further out, each from the start angle, then alternately either side by
+// (5 / (dist + 1)) * (2 PI / 6), ceil(PI / spacing) samples a side; the first legal point wins.
+BOOST_AUTO_TEST_CASE(legacy_parity_find_position_walks_rings_from_the_start_angle)
+{
+	using Engine::Math::Fixed;
+	using Engine::Math::FixedVector2;
+	std::vector<FixedVector2> tried;
+	const auto none = engine::gameplay::FindPositionAround({}, Fixed::FromInt(10), Fixed::FromInt(15), Engine::Math::TurnAngle{}, [&](FixedVector2 point) {
+		tried.push_back(point);
+		return false;
+	});
+	BOOST_TEST(!none.has_value());
+	// Ring 10: one point; ring 15: spacing 5/16 of a sixth of a turn (~6.9 degrees), ceil(0.5 / (5/96)) = 10 samples,
+	// the first once and the other nine on both sides: 19 points. Ring 20 is past the maximum.
+	BOOST_TEST_REQUIRE(tried.size() == 20u);
+	BOOST_TEST(std::abs(static_cast<double>(tried[0].x.Raw()) / 65536.0 - 10.0) < 0.01);
+	BOOST_TEST(std::abs(static_cast<double>(tried[1].x.Raw()) / 65536.0 - 15.0) < 0.01);
+	// The next two mirror each other across the start angle.
+	BOOST_TEST(std::abs(static_cast<double>((tried[2].y + tried[3].y).Raw()) / 65536.0) < 0.01);
+	BOOST_TEST((tried[2].y > Fixed{}));
+	// The first legal point is taken.
+	std::size_t calls = 0;
+	const auto third = engine::gameplay::FindPositionAround({}, Fixed::FromInt(10), Fixed::FromInt(15), Engine::Math::TurnAngle{},
+		[&](FixedVector2) { return ++calls == 3; });
+	BOOST_TEST_REQUIRE(third.has_value());
+	BOOST_TEST((*third == tried[2]));
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+BOOST_AUTO_TEST_SUITE(footprints)
+
+using engine::gameplay::Footprint;
+using engine::gameplay::FootprintShape;
+using Engine::Math::FixedVector2;
+using Engine::Math::TurnAngle;
+
+// geomCollidesWithGeom in 2D: boxes overlap unless an axis of either separates them (so a box turned a quarter swaps
+// its extents); a circle overlaps a box when the box's nearest point to it is within its radius; touching is apart.
+BOOST_AUTO_TEST_CASE(footprints_overlap_as_boxes_and_circles)
+{
+	const Footprint wide{FootprintShape::Box, Fixed::FromInt(40), Fixed::FromInt(10)};
+	const Footprint ball{FootprintShape::Circle, Fixed::FromInt(10), Fixed::FromInt(10)};
+	const FixedVector2 origin{};
+	const TurnAngle flat{0u}, quarter{0x40000000u};
+	BOOST_TEST(engine::gameplay::FootprintsOverlap(wide, origin, flat, wide, {Fixed::FromInt(79), {}}, flat));
+	BOOST_TEST(!engine::gameplay::FootprintsOverlap(wide, origin, flat, wide, {Fixed::FromInt(81), {}}, flat));
+	BOOST_TEST(!engine::gameplay::FootprintsOverlap(wide, origin, flat, wide, {{}, Fixed::FromInt(25)}, flat));
+	// Turned a quarter, the second reaches 40 up and down: 25 up it overlaps.
+	BOOST_TEST(engine::gameplay::FootprintsOverlap(wide, origin, flat, wide, {{}, Fixed::FromInt(25)}, quarter));
+	BOOST_TEST(engine::gameplay::FootprintsOverlap(wide, origin, flat, ball, {Fixed::FromInt(45), {}}, flat));
+	BOOST_TEST(engine::gameplay::FootprintsOverlap(wide, origin, flat, ball, {Fixed::FromInt(45), Fixed::FromInt(15)}, flat));  // corner 7.07 away
+	BOOST_TEST(!engine::gameplay::FootprintsOverlap(wide, origin, flat, ball, {Fixed::FromInt(48), Fixed::FromInt(18)}, flat)); // corner 11.3 away
+	BOOST_TEST(!engine::gameplay::FootprintsOverlap(ball, origin, flat, ball, {Fixed::FromInt(20), {}}, flat));                // touching
+	BOOST_TEST(engine::gameplay::FootprintsOverlap(ball, origin, flat, ball, {Fixed::FromInt(19), {}}, flat));
+}
+
+// BuildAssistant::iterateFootprint: a 40 by 20 box (half extents) every 10 is 9 by 5 points, its last on its edges; at 30,
+// -40, -10, 20 and the edge 40 along, -20, 10 and the edge 20 across; a circle keeps only the points within it.
+BOOST_AUTO_TEST_CASE(footprints_are_sampled_on_the_originals_grid)
+{
+	const Footprint box{FootprintShape::Box, Fixed::FromInt(40), Fixed::FromInt(20)};
+	std::vector<FixedVector2> points;
+	engine::gameplay::ForEachFootprintSample(box, {Fixed::FromInt(100), Fixed::FromInt(100)}, TurnAngle{0u}, Fixed::FromInt(10),
+		[&](FixedVector2 point) { points.push_back(point); });
+	BOOST_TEST(points.size() == 45u);
+	BOOST_TEST(points.front().x.Raw() == Fixed::FromInt(60).Raw());
+	BOOST_TEST(points.back().y.Raw() == Fixed::FromInt(120).Raw());
+	points.clear();
+	engine::gameplay::ForEachFootprintSample(box, {}, TurnAngle{0u}, Fixed::FromInt(30), [&](FixedVector2 point) { points.push_back(point); });
+	BOOST_TEST(points.size() == 12u); // 4 along by 3 across
+	BOOST_TEST(points[3].x.Raw() == Fixed::FromInt(40).Raw());
+	const Footprint round{FootprintShape::Circle, Fixed::FromInt(20), Fixed::FromInt(20)};
+	points.clear();
+	engine::gameplay::ForEachFootprintSample(round, {}, TurnAngle{0u}, Fixed::FromInt(10), [&](FixedVector2 point) { points.push_back(point); });
+	BOOST_TEST(points.size() == 13u); // of the 25, the 12 beyond 20 are left out
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+BOOST_AUTO_TEST_SUITE(geometry_collision)
+
+namespace
+{
+using engine::gameplay::BodyShape;
+using engine::gameplay::CollisionBody;
+using Engine::Math::FixedVector3;
+
+CollisionBody Body(BodyShape shape, int x, int y, int z, int major, int minor, int height, std::uint32_t angle = 0)
+{
+	return {FixedVector3{Fixed::FromInt(x), Fixed::FromInt(y), Fixed::FromInt(z)}, Engine::Math::TurnAngle{angle}, shape, Fixed::FromInt(major),
+		Fixed::FromInt(minor), Fixed::FromInt(height)};
+}
+}
+
+// legacy_parity: PartitionManager.cpp PartitionFilterWouldCollide::allow and its collideTest_* procs: cylinders touch
+// when their circles do (radii 5 + 5 reach 10, not 11) and their heights overlap; a cylinder against a box is tested as
+// a square of its radius, so it touches a box it would miss as a circle (the box's corner within the square); boxes
+// touch when a corner of one lies within the other (turned a quarter, a 10 by 2 box laid across another off its middle:
+// no corner inside either, no touch) or their centres are closer than the smallest radius; a sphere below a box's
+// bottom is cut to the circle it makes there.
+BOOST_AUTO_TEST_CASE(legacy_parity_bodies_touch_as_the_original_tests_them)
+{
+	using engine::gameplay::WouldCollide;
+	BOOST_TEST(WouldCollide(Body(BodyShape::Cylinder, 0, 0, 0, 5, 0, 10), Body(BodyShape::Cylinder, 10, 0, 0, 5, 0, 10)));
+	BOOST_TEST(!WouldCollide(Body(BodyShape::Cylinder, 0, 0, 0, 5, 0, 10), Body(BodyShape::Cylinder, 11, 0, 0, 5, 0, 10)));
+	BOOST_TEST(!WouldCollide(Body(BodyShape::Cylinder, 0, 0, 0, 5, 0, 10), Body(BodyShape::Cylinder, 5, 0, 11, 5, 0, 10)));
+	// A radius-5 cylinder at (14, 14) misses a 10 by 10 box's corner (10, 10) as a circle (5.66 away) but the corner lies
+	// within its square.
+	BOOST_TEST(WouldCollide(Body(BodyShape::Cylinder, 14, 14, 0, 5, 0, 10), Body(BodyShape::Box, 0, 0, 0, 10, 10, 10)));
+	BOOST_TEST(!WouldCollide(Body(BodyShape::Cylinder, 16, 16, 0, 5, 0, 10), Body(BodyShape::Box, 0, 0, 0, 10, 10, 10)));
+	// A cross: no corner of either inside the other.
+	BOOST_TEST(!WouldCollide(Body(BodyShape::Box, 0, 0, 0, 10, 2, 10), Body(BodyShape::Box, 5, 0, 0, 10, 2, 10, 0x40000000u)));
+	// Centres closer than the smallest radius touch outright.
+	BOOST_TEST(WouldCollide(Body(BodyShape::Box, 0, 0, 0, 10, 2, 10), Body(BodyShape::Box, 1, 0, 0, 10, 2, 10, 0x40000000u)));
+	BOOST_TEST(WouldCollide(Body(BodyShape::Box, 0, 0, 0, 10, 2, 10), Body(BodyShape::Box, 12, 0, 0, 3, 3, 10)));
+	// A sphere of 5 whose centre is 3 below a box's bottom cuts a circle of 4 there.
+	BOOST_TEST(WouldCollide(Body(BodyShape::Sphere, 13, 0, -3, 5, 0, 0), Body(BodyShape::Box, 0, 0, 0, 10, 10, 10)));
+	BOOST_TEST(!WouldCollide(Body(BodyShape::Sphere, 15, 0, -3, 5, 0, 0), Body(BodyShape::Box, 0, 0, 0, 10, 10, 10)));
+	// One above the top is out of the z range altogether (the first test).
+	BOOST_TEST(!WouldCollide(Body(BodyShape::Sphere, 0, 0, 13, 5, 0, 0), Body(BodyShape::Box, 0, 0, 0, 10, 10, 10)));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

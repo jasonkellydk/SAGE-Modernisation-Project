@@ -1,0 +1,101 @@
+#define BOOST_TEST_MODULE GeneralsZhHud
+#include <boost/test/included/unit_test.hpp>
+
+#include <string>
+#include <variant>
+#include <vector>
+
+import games.generalszh.hud.control_bar_view_model;
+
+using namespace generalszh;
+using namespace generalszh::hud;
+
+namespace
+{
+content::CommandButtonContent Button(content::ButtonCommand command, std::string object, std::string image)
+{
+	content::CommandButtonContent button;
+	button.command = command;
+	button.object = std::move(object);
+	button.upgrade = button.object;
+	button.buttonImage = std::move(image);
+	return button;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(control_bar_view_model)
+
+// ControlBar::populateCommand / updateContextCommand / populateBuildQueue: the selected object's command set shows on
+// the command buttons as available (enabled), restricted (shown, disabled) or hidden; the money readout follows the
+// player's; the queue shows while something is queued, the front one's clock with it. processCommandUI: a UNIT_BUILD
+// click queues its unit at the selected factory, a PLAYER_UPGRADE researches it, a queue button cancels its entry,
+// DOZER_CONSTRUCT asks for a place, and a restricted button orders nothing.
+BOOST_AUTO_TEST_CASE(the_bar_shows_the_selection_and_orders_what_is_clicked)
+{
+	std::vector<commands::GameCommand> sent;
+	ControlBarViewModel bar([&](commands::GameCommand command) { sent.push_back(std::move(command)); },
+		[](std::int64_t money) {
+			const std::string digits = std::to_string(money);
+			return u"$" + std::u16string(digits.begin(), digits.end());
+		});
+	const auto worker = Button(content::ButtonCommand::UnitBuild, "GLAInfantryWorker", "SUWorker");
+	const auto tank = Button(content::ButtonCommand::UnitBuild, "GLATankScorpion", "SUScorpion");
+	const auto research = Button(content::ButtonCommand::PlayerUpgrade, "Upgrade_GLAWorkerShoes", "SUShoes");
+	const auto place = Button(content::ButtonCommand::DozerConstruct, "GLABarracks", "SUBarracks");
+	ecs::Entity factory;
+	factory.index = 4;
+	factory.generation = 1;
+	ControlBarState state;
+	state.hasPlayer = true;
+	state.money = 1500;
+	state.powerProduced = 10;
+	state.powerConsumed = 6;
+	state.selected = factory;
+	state.slots[0] = {&worker, gameplay::ButtonState::Available, "SUWorker"};
+	state.slots[1] = {&tank, gameplay::ButtonState::Restricted, "SUScorpion"};
+	state.slots[2] = {&research, gameplay::ButtonState::Available, "SUShoes"};
+	state.slots[3] = {&place, gameplay::ButtonState::Available, "SUBarracks"};
+	state.slots[4] = {&worker, gameplay::ButtonState::Hidden, "SUWorker"};
+	QueueSlot queued;
+	queued.image = "SUWorker";
+	queued.productionId = 3;
+	queued.progress = 250;
+	state.queue.push_back(queued);
+	bar.Apply(state);
+
+	BOOST_TEST(bar.shown.Get());
+	BOOST_TEST((bar.money.Get() == u"$1500"));
+	BOOST_TEST(bar.powerProduced.Get() == 10);
+	BOOST_TEST(bar.powerConsumed.Get() == 6);
+	BOOST_TEST(bar.commandShown[0].Get());
+	BOOST_TEST(bar.commandEnabled[0].Get());
+	BOOST_TEST(bar.commandImage[0].Get() == "SUWorker");
+	BOOST_TEST(bar.commandShown[1].Get());
+	BOOST_TEST(!bar.commandEnabled[1].Get());
+	BOOST_TEST(!bar.commandShown[4].Get());
+	BOOST_TEST(!bar.commandShown[13].Get());
+	BOOST_TEST(bar.queueShown.Get());
+	BOOST_TEST(bar.queueSlotShown[0].Get());
+	BOOST_TEST(!bar.queueSlotShown[1].Get());
+	BOOST_TEST(bar.buildProgress.Get() == 250u);
+
+	BOOST_TEST(bar.commandClicked[0].Execute());
+	BOOST_TEST(!bar.commandClicked[1].Execute()); // restricted: nothing
+	BOOST_TEST(bar.commandClicked[2].Execute());
+	BOOST_TEST(bar.commandClicked[3].Execute());
+	BOOST_TEST(bar.queueClicked[0].Execute());
+	BOOST_TEST_REQUIRE(sent.size() == 3u);
+	BOOST_TEST((std::get<commands::QueueUnit>(sent[0]).factory == factory));
+	BOOST_TEST(std::get<commands::QueueUnit>(sent[0]).unit == "GLAInfantryWorker");
+	BOOST_TEST(std::get<commands::ResearchUpgrade>(sent[1]).upgrade == "Upgrade_GLAWorkerShoes");
+	BOOST_TEST(std::get<commands::CancelUnit>(sent[2]).productionId == 3u);
+	BOOST_TEST(bar.placing.Get() == "GLABarracks");
+
+	// No player (an observer): nothing shows.
+	bar.Apply(ControlBarState{});
+	BOOST_TEST(!bar.shown.Get());
+	BOOST_TEST(!bar.commandShown[0].Get());
+	BOOST_TEST(!bar.queueShown.Get());
+}
+
+BOOST_AUTO_TEST_SUITE_END()

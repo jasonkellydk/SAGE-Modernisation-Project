@@ -1,19 +1,5 @@
-module;
-
-#include <array>
-#include <algorithm>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <limits>
-#include <memory>
-#include <span>
-#include <type_traits>
-#include <utility>
-#include <vector>
-
 export module Graphics.Scene.Beams;
+import std;
 
 import engine.profiling;
 export import Graphics.Resources.Bindless.BindlessResourceTable;
@@ -1006,9 +992,10 @@ std::array<float, 4> Transform(const std::array<float, 16> &matrix, Vec3 point) 
 
 void Write_Vertex(BeamVertex &vertex, const std::array<float, 4> &position, const std::array<float, 4> &color, float u, float v, std::uint32_t resource_index) noexcept
 {
-	vertex.position[0] = position[0];
-	vertex.position[1] = position[1];
-	vertex.position[2] = position[2];
+	// The shader takes the position as it is (w = 1): hand it the clip position divided through.
+	vertex.position[0] = position[0] / position[3];
+	vertex.position[1] = position[1] / position[3];
+	vertex.position[2] = position[2] / position[3];
 	vertex.color[0] = color[0];
 	vertex.color[1] = color[1];
 	vertex.color[2] = color[2];
@@ -1066,7 +1053,8 @@ export std::size_t Build_Beam_Vertices(
 		const std::array<float, 4> start_right_clip = Transform(view.view_projection, start_right);
 		const std::array<float, 4> end_clip = Transform(view.view_projection, end_left);
 		const std::array<float, 4> end_right_clip = Transform(view.view_projection, end_right);
-		if (start_clip[3] == 0.0f || start_right_clip[3] == 0.0f || end_clip[3] == 0.0f || end_right_clip[3] == 0.0f)
+		// Behind the eye (w not positive) a divided-through corner would flip: such beams are skipped.
+		if (!(start_clip[3] > 0.0f) || !(start_right_clip[3] > 0.0f) || !(end_clip[3] > 0.0f) || !(end_right_clip[3] > 0.0f))
 			continue;
 
 		const std::array<float, 4> color = {

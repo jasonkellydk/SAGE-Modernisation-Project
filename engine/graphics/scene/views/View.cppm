@@ -1,10 +1,5 @@
-module;
-
-#include <array>
-#include <cmath>
-#include <cstddef>
-
 export module Graphics.Scene.Views.View;
+import std;
 
 namespace Graphics
 {

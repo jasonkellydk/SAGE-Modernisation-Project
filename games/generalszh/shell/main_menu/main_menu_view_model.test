@@ -1,0 +1,73 @@
+#define BOOST_TEST_MODULE GeneralsZhShell
+#include <boost/test/included/unit_test.hpp>
+
+import games.generalszh.shell.main_menu.main_menu_view_model;
+
+using namespace generalszh::shell;
+
+BOOST_AUTO_TEST_SUITE(main_menu_view_model)
+
+BOOST_AUTO_TEST_CASE(rests_on_the_main_panel)
+{
+	ShellModel model;
+	MainMenuViewModel menu(model);
+	BOOST_TEST((menu.panel.Get() == MainMenuPanel::Main));
+	BOOST_TEST((menu.highlightedSide.Get() == Side::None));
+}
+
+// MainMenu.cpp: ButtonChallenge opens the training difficulty panel (launchChallengeMenu); a difficulty
+// then pushes the challenge menu with it (setupGameStart), and Back forgets the challenge.
+BOOST_AUTO_TEST_CASE(legacy_parity_challenge_asks_the_difficulty_first)
+{
+	ShellModel model;
+	MainMenuViewModel menu(model);
+	menu.singlePlayer.Execute();
+	menu.challenge.Execute();
+	BOOST_TEST((menu.panel.Get() == MainMenuPanel::Difficulty));
+	BOOST_TEST((menu.highlightedSide.Get() == Side::None));
+	BOOST_TEST((model.requestedScreen.Get() == Screen::MainMenu));
+	menu.hard.Execute();
+	BOOST_TEST((model.requestedScreen.Get() == Screen::ChallengeMenu));
+	BOOST_TEST((model.campaignDifficulty.Get() == Difficulty::Hard));
+	model.Pop();
+	menu.back.Execute();
+	menu.chooseAmerica.Execute();
+	menu.easy.Execute();
+	BOOST_TEST((model.requestedScreen.Get() == Screen::Campaign));
+}
+
+BOOST_AUTO_TEST_CASE(campaign_flow_selects_side_then_difficulty)
+{
+	ShellModel model;
+	MainMenuViewModel menu(model);
+	menu.singlePlayer.Execute();
+	BOOST_TEST((menu.panel.Get() == MainMenuPanel::SinglePlayer));
+	menu.chooseGla.Execute();
+	BOOST_TEST((menu.panel.Get() == MainMenuPanel::Difficulty));
+	BOOST_TEST((menu.highlightedSide.Get() == Side::Gla));
+	BOOST_TEST((model.campaignSide.Get() == Side::Gla));
+	menu.back.Execute();
+	BOOST_TEST((menu.panel.Get() == MainMenuPanel::SinglePlayer));
+	BOOST_TEST((menu.highlightedSide.Get() == Side::None));
+	menu.chooseAmerica.Execute();
+	menu.hard.Execute();
+	BOOST_TEST((model.campaignDifficulty.Get() == Difficulty::Hard));
+	BOOST_TEST((model.requestedScreen.Get() == Screen::Campaign));
+}
+
+BOOST_AUTO_TEST_CASE(back_returns_to_main_and_buttons_request_screens)
+{
+	ShellModel model;
+	MainMenuViewModel menu(model);
+	menu.multiplayer.Execute();
+	menu.back.Execute();
+	BOOST_TEST((menu.panel.Get() == MainMenuPanel::Main));
+	menu.back.Execute();
+	BOOST_TEST((menu.panel.Get() == MainMenuPanel::Main));
+	menu.options.Execute();
+	BOOST_TEST(model.optionsOpen.Get());
+	menu.exit.Execute();
+	BOOST_TEST(model.quitRequested.Get());
+}
+
+BOOST_AUTO_TEST_SUITE_END()

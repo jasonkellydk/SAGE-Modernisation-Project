@@ -1,13 +1,6 @@
-module;
-
-#include <cassert>
-#include <cstddef>
-#include <cstdint>
-#include <memory>
-#include <utility>
-#include <vector>
-
 export module Graphics.Scene.Models.MaterialSlots;
+import std;
+import engine.core.contracts;
 import Graphics.Scene.Models.SourceRevision;
 
 namespace Graphics {
@@ -103,7 +96,7 @@ public:
 
     void Set(std::size_t index, const Owner& owner)
     {
-        assert(m_storage && index < m_storage->values.size());
+        engine::core::Assert(m_storage && index < m_storage->values.size());
         if (!m_storage || index >= m_storage->values.size()) {
             return;
         }

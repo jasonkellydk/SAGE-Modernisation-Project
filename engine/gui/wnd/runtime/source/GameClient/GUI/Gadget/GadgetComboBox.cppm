@@ -60,6 +60,7 @@ module;
 #include "GameClient/GameWindowGlobal.h"
 
 export module Engine.UI.WND.Runtime.Gadget.ComboBox;
+import std;
 
 import engine.debug;
 import Engine.UI.WND.Layout;

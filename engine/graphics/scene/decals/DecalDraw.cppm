@@ -1,11 +1,5 @@
-module;
-
-#include <algorithm>
-#include <cstddef>
-#include <cstdint>
-#include <span>
-
 export module Graphics.Scene.DecalDraw;
+import std;
 
 export import Graphics.Scene.DecalVisibility;
 export import Graphics.Scene.DrawGeneration;

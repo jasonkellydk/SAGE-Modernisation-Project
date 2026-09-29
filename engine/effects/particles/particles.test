@@ -1,0 +1,182 @@
+#define BOOST_TEST_MODULE EngineEffectsParticles
+#include <boost/test/included/unit_test.hpp>
+
+#include <cmath>
+#include <map>
+#include <string>
+#include <string_view>
+
+import engine.effects.particles.simulation.particle_world;
+import engine.jobs.job_system;
+
+using namespace engine::effects;
+
+namespace
+{
+ParticleSystemDefinition Puff()
+{
+	ParticleSystemDefinition d;
+	d.name = "Puff";
+	d.shader = ParticleShader::Alpha;
+	d.lifetime = {10, 10};
+	d.systemLifetime = 3;
+	d.burstCount = {4, 4};
+	d.burstDelay = {0, 0};
+	d.size = {2, 2};
+	d.sizeRate = {1, 1};
+	d.velocityType = EmissionVelocity::Ortho;
+	d.velocityOrtho[2] = {1, 1};
+	d.alpha[0] = {{1, 1}, 0};
+	d.alpha[1] = {{0, 0}, 10};
+	d.color[0] = {{1, 0, 0}, 0};
+	d.color[1] = {{0, 0, 1}, 10};
+	return d;
+}
+
+struct Library
+{
+	std::map<std::string, ParticleSystemDefinition, std::less<>> systems;
+	const ParticleSystemDefinition *Find(std::string_view name) const
+	{
+		const auto found = systems.find(name);
+		return found == systems.end() ? nullptr : &found->second;
+	}
+};
+}
+
+BOOST_AUTO_TEST_CASE(a_system_bursts_for_its_lifetime_and_particles_age_by_their_keyframes)
+{
+	Library library;
+	const ParticleSystemDefinition puff = Puff();
+	ParticleWorld world([&](std::string_view name) { return library.Find(name); });
+	const auto id = world.Create(puff, EmitterTransform::At(100, 50, 0));
+	world.Step();
+	BOOST_TEST(world.ParticleCount() == 4u);
+	world.Step();
+	world.Step();
+	BOOST_TEST(world.ParticleCount() == 12u); // three frames of bursts, then no more
+	world.Step();
+	BOOST_TEST(world.ParticleCount() == 12u);
+	// The first burst, 4 frames on: risen 4 units, grown 4, a fading red turning blue.
+	BOOST_TEST(std::fabs(world.Z()[0] - 4.0f) < 1e-4f);
+	BOOST_TEST(std::fabs(world.Size()[0] - 6.0f) < 1e-4f);
+	BOOST_TEST(std::fabs(world.Alpha()[0] - 0.6f) < 1e-4f);
+	BOOST_TEST(world.Red()[0] < 1.0f);
+	BOOST_TEST(world.Blue()[0] > 0.0f);
+	BOOST_TEST(world.X()[0] == 100.0f);
+	for (int frame = 0; frame < 20; ++frame)
+		world.Step();
+	BOOST_TEST(world.ParticleCount() == 0u);
+	BOOST_TEST(!world.Alive(id)); // done emitting and nothing left: gone
+}
+
+BOOST_AUTO_TEST_CASE(slaves_follow_their_master_and_attached_systems_ride_particles)
+{
+	Library library;
+	library.systems["Spark"] = Puff();
+	library.systems["Spark"].systemLifetime = 0;
+	library.systems["Spark"].burstCount = {1, 1};
+	library.systems["Trail"] = Puff();
+	library.systems["Trail"].systemLifetime = 0;
+	library.systems["Trail"].burstCount = {1, 1};
+	ParticleSystemDefinition master = Puff();
+	master.systemLifetime = 1;
+	master.burstCount = {2, 2};
+	master.slaveSystem = "Spark";
+	master.attachedSystem = "Trail";
+	ParticleWorld world([&](std::string_view name) { return library.Find(name); });
+	world.Create(master, EmitterTransform::At(0, 0, 0));
+	world.Step();
+	// 2 master particles, 2 slave particles beside them, and a trail system on
+	// each master particle, which starts emitting at once.
+	BOOST_TEST(world.ParticleCount() == 6u);
+	BOOST_TEST(world.SystemCount() == 4u);
+	world.Step();
+	BOOST_TEST(world.ParticleCount() == 8u); // the trails go on as they ride their particles
+	for (int frame = 0; frame < 40; ++frame)
+		world.Step();
+	BOOST_TEST(world.ParticleCount() == 0u);
+	BOOST_TEST(world.SystemCount() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(parallel_steps_match_serial_ones)
+{
+	ParticleSystemDefinition fountain = Puff();
+	fountain.systemLifetime = 0;
+	fountain.burstCount = {300, 300};
+	fountain.lifetime = {40, 60};
+	fountain.velocityType = EmissionVelocity::Spherical;
+	fountain.velocitySpherical = {1, 3};
+	fountain.gravity = -0.1f;
+	fountain.velocityDamping = {0.95f, 0.99f};
+	fountain.alpha[1] = {{1, 1}, 0}; // stays visible for its whole life
+	ParticleWorldSettings settings;
+	settings.chunk = 256;
+	ParticleWorld serial([](std::string_view) { return nullptr; }, {}, settings);
+	ParticleWorld parallel([](std::string_view) { return nullptr; }, {}, settings);
+	engine::jobs::JobSystem jobs(engine::jobs::JobSystemConfig{4});
+	serial.Create(fountain, EmitterTransform::At(0, 0, 0));
+	parallel.Create(fountain, EmitterTransform::At(0, 0, 0));
+	for (int frame = 0; frame < 30; ++frame)
+	{
+		serial.Step();
+		parallel.Step(&jobs);
+	}
+	BOOST_TEST_REQUIRE(serial.ParticleCount() == parallel.ParticleCount());
+	BOOST_TEST(serial.ParticleCount() > 5000u);
+	for (std::size_t i = 0; i < serial.ParticleCount(); ++i)
+		BOOST_TEST_REQUIRE(serial.Z()[i] == parallel.Z()[i]);
+}
+
+// ParticleSystem::setBurstCountMultiplier / setVelocityMultiplier / setSizeMultiplier
+// (Core/GameEngine/Source/GameClient/System/ParticleSys.cpp: update's `count *= m_countCoeff` on the burst's whole
+// count, computeParticleVelocity's per-axis scale before the system's transform, generateParticleInfo's size and
+// size rate times m_sizeCoeff), at particle scale 1.
+BOOST_AUTO_TEST_CASE(multipliers_scale_bursts_velocity_and_size_as_the_original)
+{
+	Library library;
+	const ParticleSystemDefinition puff = Puff();
+	ParticleWorld world([&](std::string_view name) { return library.Find(name); });
+	const auto id = world.Create(puff, EmitterTransform::At(0, 0, 0));
+	world.SetBurstCountMultiplier(id, 0.6f); // 4 * 0.6 = 2.4: 2
+	world.SetVelocityMultiplier(id, {1.0f, 1.0f, 0.5f});
+	world.SetSizeMultiplier(id, 1.5f);
+	world.Step();
+	BOOST_TEST(world.ParticleCount() == 2u);
+	BOOST_TEST(std::fabs(world.MotionZ()[0] - 0.5f) < 1e-6f);
+	world.Step();
+	// Started at 2 * 1.5 = 3, growing 1 * 1.5 a frame (moved and grown in the frame it came out too).
+	BOOST_TEST(std::fabs(world.Size()[0] - 6.0f) < 1e-5f);
+	BOOST_TEST(std::fabs(world.Z()[0] - 1.0f) < 1e-5f);
+	world.SetBurstCountMultiplier(id, 0.2f); // 0.8: none
+	world.Step();
+	BOOST_TEST(world.ParticleCount() == 4u);
+}
+
+// ParticleSystem::start / stop / trigger as a draw module uses them: paused it emits nothing but stays (held) while
+// its owner may switch it back on; resumed it emits again; triggered its next burst comes at once.
+BOOST_AUTO_TEST_CASE(held_systems_pause_resume_and_trigger)
+{
+	Library library;
+	ParticleSystemDefinition puff = Puff();
+	puff.systemLifetime = 0; // forever
+	puff.burstDelay = {5, 5};
+	ParticleWorld world([&](std::string_view name) { return library.Find(name); });
+	const auto id = world.Create(puff, EmitterTransform::At(0, 0, 0));
+	world.Hold(id);
+	world.Step();
+	BOOST_TEST(world.ParticleCount() == 4u);
+	world.Pause(id);
+	for (int frame = 0; frame < 30; ++frame)
+		world.Step();
+	BOOST_TEST(world.ParticleCount() == 0u);
+	BOOST_TEST(world.Alive(id)); // held
+	world.Resume(id);
+	world.Trigger(id);
+	world.Step();
+	BOOST_TEST(world.ParticleCount() == 4u);
+	world.Stop(id);
+	for (int frame = 0; frame < 30; ++frame)
+		world.Step();
+	BOOST_TEST(!world.Alive(id));
+}

@@ -1,11 +1,8 @@
 module;
 #define BOOST_TEST_MODULE ModelTextureDrawingTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <filesystem>
-#include <vector>
 export module Graphics.Scene.Models.TextureDrawing.Tests;
+import std;
 import Assets.Cache;
 import Assets.Identity;
 import Assets.Models;

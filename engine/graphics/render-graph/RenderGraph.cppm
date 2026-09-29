@@ -1,13 +1,5 @@
-module;
-
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-#include <span>
-#include <utility>
-#include <vector>
-
 export module Graphics.RenderGraph;
+import std;
 
 import Graphics.Resources.Handles.ResourceHandle;
 import Graphics.Resources.Pools.ResourcePool;

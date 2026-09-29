@@ -1,9 +1,5 @@
-module;
-
-#include <cstddef>
-#include <cstdint>
-
 export module Assets.Handles;
+import std;
 
 namespace Assets
 {

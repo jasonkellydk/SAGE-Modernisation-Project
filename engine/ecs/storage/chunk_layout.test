@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <stdexcept>
 #include <string_view>
 #include <vector>
 
@@ -46,7 +47,7 @@ struct ComponentTraits<chunk_layout_test::LayoutAligned>
 
 BOOST_AUTO_TEST_SUITE(ecs_chunk_layout)
 
-BOOST_AUTO_TEST_CASE(respects_target_capacity_and_alignment)
+BOOST_AUTO_TEST_CASE(capacity_is_fixed_and_columns_are_aligned)
 {
 	ecs::ComponentRegistry registry;
 	registry.Register<chunk_layout_test::LayoutSmall>();
@@ -58,15 +59,28 @@ BOOST_AUTO_TEST_CASE(respects_target_capacity_and_alignment)
 		&registry.Get(smallId),
 		&registry.Get(alignedId)};
 
-	const ecs::ChunkLayout layout = ecs::ChunkLayout::Build(components, 1024);
+	const ecs::ChunkLayout layout = ecs::ChunkLayout::Build(components, 64);
 
-	BOOST_TEST(layout.Capacity() >= 1);
-	const bool withinTarget = layout.TotalBytes() <= 1024 || layout.Capacity() == 1;
-	BOOST_TEST(withinTarget);
+	BOOST_TEST(layout.Capacity() == 64u);
 	BOOST_TEST(layout.Alignment() >= alignof(chunk_layout_test::LayoutAligned));
 	BOOST_TEST(layout.EntityOffset() % alignof(ecs::Entity) == 0);
 	for (const ecs::ChunkLayout::Column &column : layout.Columns())
 		BOOST_TEST(column.offset % column.alignment == 0);
+	BOOST_CHECK_THROW(ecs::ChunkLayout::Build(components, 0), std::invalid_argument);
+}
+
+BOOST_AUTO_TEST_CASE(capacity_does_not_depend_on_component_sizes)
+{
+	// Row placement decides iteration order; it must be the same on every
+	// platform even where component sizes differ.
+	ecs::ComponentRegistry registry;
+	registry.Register<chunk_layout_test::LayoutSmall>();
+	registry.Register<chunk_layout_test::LayoutAligned>();
+	registry.Finalize();
+	const std::vector<const ecs::ComponentInfo *> small{&registry.Get(registry.TryGet<chunk_layout_test::LayoutSmall>())};
+	const std::vector<const ecs::ComponentInfo *> large{&registry.Get(registry.TryGet<chunk_layout_test::LayoutAligned>())};
+	BOOST_TEST(ecs::ChunkLayout::Build(small).Capacity() == ecs::ChunkLayout::DefaultCapacity);
+	BOOST_TEST(ecs::ChunkLayout::Build(large).Capacity() == ecs::ChunkLayout::DefaultCapacity);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

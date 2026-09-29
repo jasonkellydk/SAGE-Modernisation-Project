@@ -57,6 +57,7 @@ module;
 #include "GameClient/InGameUI.h"
 
 export module Engine.UI.WND.Runtime.Gadget.PushButton;
+import std;
 
 import engine.debug;
 #include "GameClient/Gadget.h"

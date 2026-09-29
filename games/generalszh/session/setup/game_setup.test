@@ -1,0 +1,130 @@
+#define BOOST_TEST_MODULE GeneralsZhGameSetup
+#include <boost/test/included/unit_test.hpp>
+
+#include <string>
+
+import games.generalszh.session.setup.game_setup;
+import games.generalszh.session.setup.match_plan;
+
+using namespace generalszh::session::setup;
+
+BOOST_AUTO_TEST_SUITE(game_setup)
+
+// Legacy parity (GameInfoToAsciiString / ParseAsciiStringToGameInfo): a real Skirmish.ini's
+// SlotList reads back as the original wrote it, and writes out byte for byte the same.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_real_slot_list_round_trips)
+{
+	const std::string written = "US=1;M=03maps/tournament continent;MC=7D024EDA;MS=639753;SD=226989;C=100;SR=0;SC=50000;O=N;"
+								"S=HJason,0,0,TT,1,13,2,0,1:CH,-1,-1,-1,0:CH,-1,-1,-1,1:CH,-1,3,-1,1:X:X:X:X:;";
+	const auto setup = ParseOptionsString(written);
+	BOOST_TEST_REQUIRE(setup.has_value());
+	BOOST_TEST(setup->map == "maps\\tournament continent\\tournament continent.map");
+	BOOST_TEST(setup->mapCrc == 0x7D024EDAu);
+	BOOST_TEST(setup->mapSize == 639753u);
+	BOOST_TEST(setup->mapContentsMask == 3);
+	BOOST_TEST(setup->seed == 226989);
+	BOOST_TEST(setup->startingCash == 50000u);
+	BOOST_TEST(setup->Players() == 4);
+	const GameSlot &me = setup->slots[0];
+	BOOST_TEST(me.Human());
+	BOOST_TEST((me.name == u"Jason"));
+	BOOST_TEST(me.color == 1);           // ColorRed
+	BOOST_TEST(me.playerTemplate == 13); // FactionGLAStealthGeneral
+	BOOST_TEST(me.startPos == 2);
+	BOOST_TEST(me.team == 0);
+	BOOST_TEST((setup->slots[1].state == SlotState::HardAI));
+	BOOST_TEST(setup->slots[3].playerTemplate == 3); // FactionChina
+	BOOST_TEST(setup->slots[3].team == 1);
+	BOOST_TEST((setup->slots[4].state == SlotState::Closed));
+	BOOST_TEST(ToOptionsString(*setup) == written);
+}
+
+// ParseAsciiStringToGameInfo refuses what the original refuses.
+BOOST_AUTO_TEST_CASE(legacy_parity_broken_or_out_of_range_options_are_refused)
+{
+	const std::string head = "US=1;M=03maps/x;MC=1;MS=1;SD=1;C=100;";
+	BOOST_TEST(ParseOptionsString(head + "S=X:X:X:X:X:X:X:X:;").has_value());
+	BOOST_TEST(!ParseOptionsString("US=1;M=03maps/x;MC=1;SD=1;C=100;S=X:X:X:X:X:X:X:X:;").has_value()); // no MS
+	BOOST_TEST(!ParseOptionsString(head + "S=CH,8,-1,-1,0:X:X:X:X:X:X:X:;").has_value());                // colour 8 of 8
+	BOOST_TEST(!ParseOptionsString(head + "S=CH,-1,-1,-1,4:X:X:X:X:X:X:X:;").has_value());               // team 4 of 4
+	BOOST_TEST(!ParseOptionsString(head + "S=CZ,-1,-1,-1,0:X:X:X:X:X:X:X:;").has_value());               // no such AI
+	BOOST_TEST(!ParseOptionsString("US=1;M=03../x;MC=1;MS=1;SD=1;C=100;S=X:X:X:X:X:X:X:X:;").has_value()); // outside the map folders
+	BOOST_TEST(!ParseOptionsString(head + "Q=1;S=X:X:X:X:X:X:X:X:;").has_value());                       // an unknown key
+}
+
+// GameSlot::setState and GameInfo::adjustSlotsForMap.
+BOOST_AUTO_TEST_CASE(legacy_parity_slot_states_and_map_player_counts)
+{
+	GameSlot slot;
+	slot.SetState(SlotState::EasyAI);
+	slot.color = 3, slot.playerTemplate = 4, slot.team = 1;
+	slot.SetState(SlotState::HardAI); // an AI changing level keeps its choices
+	BOOST_TEST(slot.color == 3);
+	slot.SetState(SlotState::Open); // leaving: back to random
+	BOOST_TEST(slot.color == Random);
+	BOOST_TEST(slot.accepted);
+	slot.SetState(SlotState::Player, u"Me");
+	BOOST_TEST(!slot.accepted);
+
+	GameSetup setup;
+	GameSlot me, ai;
+	me.SetState(SlotState::Player, u"Me");
+	ai.SetState(SlotState::MediumAI);
+	setup.SetSlot(0, me);
+	setup.SetSlot(5, ai);
+	setup.AdjustSlotsForMap(4); // two taken: two more open, the rest close; no one is removed
+	int open = 0;
+	for (const GameSlot &each : setup.slots)
+		open += each.state == SlotState::Open ? 1 : 0;
+	BOOST_TEST(open == 2);
+	BOOST_TEST((setup.slots[1].state == SlotState::Open));
+	BOOST_TEST((setup.slots[2].state == SlotState::Open));
+	BOOST_TEST((setup.slots[3].state == SlotState::Closed));
+	BOOST_TEST((setup.slots[5].state == SlotState::MediumAI));
+	BOOST_TEST(setup.slots[0].accepted); // the host always is
+}
+
+// A match plan (a saved game's way back to its level) reads back as written: a skirmish's whole setup (names in full,
+// every slot's choices), and a challenge's campaign, mission, difficulty and general; a damaged one reads as none.
+BOOST_AUTO_TEST_CASE(a_match_plan_round_trips)
+{
+	using namespace generalszh::session::setup;
+	MatchPlan plan;
+	plan.setup.map = "Maps\\Tournament Desert\\Tournament Desert.map";
+	plan.setup.seed = -12345;
+	plan.setup.startingCash = 50000;
+	plan.setup.slots[0].SetState(SlotState::Player, u"A rather long player name that the options string would cut");
+	plan.setup.slots[0].playerTemplate = 3;
+	plan.setup.slots[0].startPos = 1;
+	plan.setup.slots[1].SetState(SlotState::HardAI);
+	plan.setup.slots[1].team = 2;
+	plan.kind = MatchKind::Challenge;
+	plan.campaign = "challenge_0";
+	plan.mission = "mission03";
+	plan.difficulty = 2;
+	plan.playerTemplate = "FactionAmericaAirForceGeneral";
+	plan.rankPoints = 1234;
+	engine::core::serialization::ByteWriter writer;
+	WriteMatchPlan(writer, plan);
+	const std::vector<std::byte> bytes = writer.Take();
+	engine::core::serialization::ByteReader reader(bytes);
+	const auto read = ReadMatchPlan(reader);
+	BOOST_TEST_REQUIRE(read.has_value());
+	BOOST_TEST((read->kind == MatchKind::Challenge));
+	BOOST_TEST(read->setup.map == plan.setup.map);
+	BOOST_TEST(read->setup.seed == -12345);
+	BOOST_TEST(read->setup.startingCash == 50000u);
+	BOOST_TEST((read->setup.slots[0].name == plan.setup.slots[0].name));
+	BOOST_TEST((read->setup.slots[1].state == SlotState::HardAI));
+	BOOST_TEST(read->setup.slots[1].team == 2);
+	BOOST_TEST(read->setup.slots[0].startPos == 1);
+	BOOST_TEST(read->mission == "mission03");
+	BOOST_TEST(read->difficulty == 2);
+	BOOST_TEST(read->playerTemplate == "FactionAmericaAirForceGeneral");
+	BOOST_TEST(read->rankPoints == 1234);
+	const std::vector<std::byte> cut(bytes.begin(), bytes.begin() + 10);
+	engine::core::serialization::ByteReader damaged(cut);
+	BOOST_TEST(!ReadMatchPlan(damaged).has_value());
+}
+
+BOOST_AUTO_TEST_SUITE_END()

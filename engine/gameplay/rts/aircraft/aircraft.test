@@ -1,0 +1,325 @@
+#define BOOST_TEST_MODULE EngineGameplayAircraft
+#include <boost/test/included/unit_test.hpp>
+
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <vector>
+
+import engine.gameplay.common.status.components.status_flags;
+import engine.gameplay.rts.aircraft.systems.jet_system;
+import engine.core.serialization.byte_stream;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+using namespace engine::gameplay;
+using Engine::Math::Fixed;
+
+namespace
+{
+LocomotorDefinition Wings()
+{
+	LocomotorDefinition wings;
+	wings.maxSpeed = Fixed::FromInt(6);
+	wings.minSpeed = Fixed::FromInt(3);
+	wings.acceleration = Fixed::FromRatio(1, 4);
+	wings.braking = Fixed::FromRatio(1, 2);
+	wings.turnRate = Engine::Math::TurnFromDegrees(6);
+	wings.preferredHeight = Fixed::FromInt(100);
+	wings.preferredHeightDamping = Fixed::FromRatio(1, 20);
+	wings.height = HeightBehavior::SurfaceRelative;
+	wings.appearance = LocomotorAppearance::Wings;
+	return wings;
+}
+
+LocomotorDefinition Wheels()
+{
+	LocomotorDefinition wheels;
+	wheels.maxSpeed = Fixed::FromInt(2);
+	wheels.acceleration = Fixed::FromRatio(1, 4);
+	wheels.braking = Fixed::FromRatio(1, 2);
+	wheels.turnRate = Engine::Math::TurnFromDegrees(10);
+	return wheels;
+}
+
+struct Base
+{
+	explicit Base(std::size_t workers)
+	{
+		Register(world);
+		terrain.width = terrain.height = 2;
+		terrain.cellSize = Fixed::FromInt(4000);
+		terrain.heights.assign(4, Fixed{});
+		world.EmplaceResource<GroundHeight>(terrain);
+		world.EmplaceResource<DeckSurfaces>();
+		world.EmplaceResource<WaypointGraph>();
+		world.EmplaceResource<RandomSeed>();
+		world.EmplaceResource<SpatialIndex>(Engine::Math::FixedVector2{Fixed::FromInt(4000), Fixed::FromInt(4000)}, Fixed::FromInt(100));
+		world.EmplaceResource<Relationships>(2u);
+		world.EmplaceResource<TeamRoster>();
+		world.EmplaceResource<WeaponCatalog>();
+		world.EmplaceResource<JetDamage>();
+		registry.Register(targeting);
+		registry.Register(jets);
+		registry.Register(movement);
+		registry.Finalize(world.Components());
+		scheduler = std::make_unique<ecs::Scheduler>(world, registry, engine::jobs::JobSystemConfig{workers});
+		scheduler->Finalize(engine::time::FixedStep{30});
+	}
+
+	static void Register(ecs::World &target)
+	{
+		target.RegisterComponent<Transform>();
+		target.RegisterComponent<Airfield>();
+		target.RegisterComponent<Jet>();
+		target.RegisterComponent<Locomotion>();
+		target.RegisterComponent<MoveOrder>();
+		target.RegisterComponent<PathCompleted>();
+		target.RegisterComponent<Armament>();
+		target.RegisterComponent<StatusFlags>();
+		target.RegisterComponent<AttackTarget>();
+		target.RegisterComponent<Aggression>();
+		target.RegisterComponent<DefinitionRef>();
+		target.RegisterComponent<Owner>();
+		target.RegisterComponent<Descent>();
+		target.RegisterComponent<OffMap>();
+		target.RegisterComponent<Appearance>();
+		target.RegisterComponent<DrawOffset>();
+		target.RegisterComponent<Health>();
+		target.FinalizeComponents();
+	}
+
+	// Runway 0 from (1000, 1000) east to (1100, 1000); its space parks at (980, 1040).
+	ecs::Entity Field()
+	{
+		const ecs::Entity entity = world.Create();
+		world.Add<Transform>(entity);
+		world.Add<Airfield>(entity);
+		Airfield &field = *world.Get<Airfield>(entity);
+		field.spaceCount = 1;
+		field.runwayCount = 1;
+		field.spaces[0] = {{Fixed::FromInt(980), Fixed::FromInt(1060), {}}, {Fixed::FromInt(980), Fixed::FromInt(1040), {}},
+			{Fixed::FromInt(990), Fixed::FromInt(1010), {}}, {}, {}, 0, 0};
+		field.runways[0] = {{Fixed::FromInt(1000), Fixed::FromInt(1000), {}}, {Fixed::FromInt(1100), Fixed::FromInt(1000), {}}};
+		return entity;
+	}
+
+	ecs::Entity Mig(ecs::Entity field)
+	{
+		const ecs::Entity entity = world.Create();
+		world.Add<Transform>(entity);
+		world.Add<Jet>(entity);
+		world.Add<Locomotion>(entity);
+		world.Add<MoveOrder>(entity);
+		world.Add<Armament>(entity);
+		world.Add<AttackTarget>(entity);
+		world.Add<Aggression>(entity);
+		world.Add<Owner>(entity);
+		world.Get<Transform>(entity)->position = {Fixed::FromInt(980), Fixed::FromInt(1040), {}};
+		Jet jet;
+		jet.flight = Wings();
+		jet.taxi = Wheels();
+		jet.airfield = field;
+		jet.reloadTicks = 60;
+		jet.lift = Fixed::FromRatio(1, 2);
+		*world.Get<Jet>(entity) = jet;
+		*world.Get<Locomotion>(entity) = MakeLocomotion(Wheels());
+		world.Get<Armament>(entity)->weapon = WeaponCatalog::None;
+		return entity;
+	}
+
+	void Step() { scheduler->Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}}); }
+
+	// Steps until the jet is in `state` (or gives up); the tick it got there.
+	std::uint64_t Until(ecs::Entity jet, JetState state, int most = 3000)
+	{
+		for (int step = 0; step < most && world.Get<Jet>(jet)->state != state; ++step)
+			Step();
+		return world.Get<Jet>(jet)->state == state ? tick : 0;
+	}
+
+	engine::level::Heightfield terrain;
+	ecs::World world{ecs::WorldConfig{4}};
+	TargetingSystem targeting;
+	JetSystem jets;
+	MovementSystem movement;
+	ecs::SystemRegistry registry;
+	std::unique_ptr<ecs::Scheduler> scheduler;
+	std::uint64_t tick{0};
+};
+}
+
+BOOST_AUTO_TEST_SUITE(aircraft)
+
+BOOST_AUTO_TEST_CASE(a_jet_waits_parked_until_it_has_something_to_do)
+{
+	Base base(2);
+	const ecs::Entity mig = base.Mig(base.Field());
+	for (int step = 0; step < 100; ++step)
+		base.Step();
+	BOOST_TEST((base.world.Get<Jet>(mig)->state == JetState::Parked));
+	BOOST_TEST((base.world.Get<Transform>(mig)->position.x == Fixed::FromInt(980)));
+}
+
+BOOST_AUTO_TEST_CASE(a_hunting_jet_taxies_out_takes_off_down_the_runway_and_comes_back_to_reload)
+{
+	Base base(2);
+	const ecs::Entity mig = base.Mig(base.Field());
+	base.world.Get<Aggression>(mig)->stance = Stance::Hunt;
+	BOOST_TEST(base.Until(mig, JetState::TaxiToStart) != 0u);
+	BOOST_TEST((base.world.Get<Transform>(mig)->position.z == Fixed{})); // on the ground
+	BOOST_TEST(base.Until(mig, JetState::TakeoffRoll) != 0u);
+	const auto facing = static_cast<std::int32_t>(base.world.Get<Transform>(mig)->facing.units);
+	BOOST_TEST((facing < 0 ? -static_cast<std::int64_t>(facing) : facing) < static_cast<std::int64_t>(Engine::Math::TurnFromDegrees(2).units)); // lined up east
+	BOOST_TEST(base.Until(mig, JetState::Flying) != 0u);
+	// Off the runway's end, climbing.
+	for (int step = 0; step < 60; ++step)
+		base.Step();
+	const auto &flying = base.world.Get<Transform>(mig)->position;
+	BOOST_TEST((flying.z > Fixed::FromInt(20)));
+	// Out of ammo: back to base, down onto the runway, to its space, reloaded.
+	base.world.Get<Armament>(mig)->readyTick = OutOfAmmo;
+	base.world.Get<Aggression>(mig)->stance = Stance::Idle;
+	BOOST_TEST(base.Until(mig, JetState::Landing) != 0u);
+	BOOST_TEST(base.Until(mig, JetState::TaxiToParking) != 0u);
+	const std::uint64_t parked = base.Until(mig, JetState::Reloading);
+	BOOST_TEST_REQUIRE(parked != 0u);
+	BOOST_TEST((Engine::Math::Distance(base.world.Get<Transform>(mig)->position.XY(), {Fixed::FromInt(980), Fixed::FromInt(1040)}) < Fixed::FromInt(8)));
+	BOOST_TEST((base.world.Get<Transform>(mig)->position.z == Fixed{}));
+	BOOST_TEST(base.Until(mig, JetState::Parked) == parked + 60);
+	BOOST_TEST(base.world.Get<Armament>(mig)->readyTick != OutOfAmmo);
+}
+
+// JetPauseBeforeTakeoffState (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Update/AIUpdate/JetAIUpdate.cpp, the
+// retail update) and friend_enableAfterburners: lined up on tick P, it lights its afterburners (JETAFTERBURNER) on its
+// first update, P + 1, when nobody else is taxiing to take off; TakeoffPause (500 ms: 15 ticks) later, P + 16, it rolls;
+// the afterburners burn down the runway and go out once it flies (JetTakeoffOrLandingState::onExit).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_jet_pauses_with_afterburners_before_takeoff)
+{
+	Base base(2);
+	const ecs::Entity mig = base.Mig(base.Field());
+	base.world.Add<Appearance>(mig);
+	base.world.Get<Jet>(mig)->takeoffPauseTicks = 15;
+	base.world.Get<Jet>(mig)->afterburnerBit = 3;
+	base.world.Get<Aggression>(mig)->stance = Stance::Hunt;
+	const std::uint64_t lined = base.Until(mig, JetState::PauseBeforeTakeoff);
+	BOOST_TEST_REQUIRE(lined != 0u);
+	BOOST_TEST(!base.world.Get<Appearance>(mig)->Test(3));
+	base.Step();
+	BOOST_TEST(base.world.Get<Appearance>(mig)->Test(3));
+	BOOST_TEST(base.Until(mig, JetState::TakeoffRoll) == lined + 16);
+	BOOST_TEST(base.world.Get<Appearance>(mig)->Test(3));
+	BOOST_TEST(base.Until(mig, JetState::Flying) != 0u);
+	BOOST_TEST(!base.world.Get<Appearance>(mig)->Test(3));
+}
+
+// JetAIUpdate::update's MinHeight (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Update/AIUpdate/JetAIUpdate.cpp):
+// parked on the ground (not above the terrain) and through its airfield cycle it is drawn raised to MinHeight (5)
+// above the terrain; flying well above it, not at all.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_jet_is_drawn_up_on_its_gear)
+{
+	Base base(2);
+	const ecs::Entity mig = base.Mig(base.Field());
+	base.world.Add<DrawOffset>(mig);
+	base.world.Get<Jet>(mig)->minHeight = Fixed::FromInt(5);
+	base.Step();
+	BOOST_TEST((base.world.Get<DrawOffset>(mig)->z == Fixed::FromInt(5)));
+	base.world.Get<Aggression>(mig)->stance = Stance::Hunt;
+	BOOST_TEST(base.Until(mig, JetState::Flying) != 0u);
+	for (int step = 0; step < 90; ++step)
+		base.Step();
+	BOOST_TEST((base.world.Get<Transform>(mig)->position.z > Fixed::FromInt(20)));
+	BOOST_TEST((base.world.Get<DrawOffset>(mig)->z == Fixed{}));
+}
+
+// JetOrHeliReturningToDeadAirfieldState / JetOrHeliCirclingDeadAirfieldState (GeneralsMD/Code/GameEngine/Source/
+// GameLogic/Object/Update/AIUpdate/JetAIUpdate.cpp): out of ammo with its airfield destroyed (and none to take it in)
+// it flies back to where the airfield stood and circles there, losing OutOfAmmoDamagePerSecond (10%) of its maximum
+// health a second, a thirtieth each tick, unresistable.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_jet_circles_its_dead_airfield_hurting)
+{
+	Base base(2);
+	const ecs::Entity field = base.Field();
+	const ecs::Entity mig = base.Mig(field);
+	base.world.Add<Health>(mig);
+	base.world.Get<Health>(mig)->maximum = base.world.Get<Health>(mig)->current = Fixed::FromInt(300);
+	base.world.Get<Jet>(mig)->outOfAmmoDamage = Fixed::FromRatio(1, 10) / Fixed::FromInt(30);
+	base.world.Get<Jet>(mig)->outOfAmmoDamageType = 7;
+	base.world.Get<Aggression>(mig)->stance = Stance::Hunt;
+	BOOST_TEST_REQUIRE(base.Until(mig, JetState::Flying) != 0u);
+	const Engine::Math::FixedVector2 home = base.world.Get<Transform>(field)->position.XY();
+	base.world.Get<Armament>(mig)->readyTick = OutOfAmmo;
+	base.world.Get<Aggression>(mig)->stance = Stance::Idle;
+	base.world.Destroy(field);
+	base.Step();
+	BOOST_TEST((base.world.Get<Jet>(mig)->state == JetState::ReturnToDeadAirfield));
+	BOOST_TEST_REQUIRE(base.Until(mig, JetState::CirclingDeadAirfield) != 0u);
+	BOOST_TEST((Engine::Math::Distance(base.world.Get<Transform>(mig)->position.XY(), home) < Fixed::FromInt(101)));
+	base.Step();
+	const auto &hurt = base.world.Resource<JetDamage>().records;
+	BOOST_TEST_REQUIRE(hurt.size() == 1u);
+	BOOST_TEST((hurt.front().target == mig));
+	BOOST_TEST(hurt.front().amount.Raw() == (Fixed::FromInt(300) * (Fixed::FromRatio(1, 10) / Fixed::FromInt(30))).Raw());
+	BOOST_TEST(hurt.front().damageType == 7u);
+}
+
+BOOST_AUTO_TEST_CASE(jets_take_the_runway_one_at_a_time)
+{
+	Base base(3);
+	const ecs::Entity field = base.Field();
+	const ecs::Entity first = base.Mig(field);
+	const ecs::Entity second = base.Mig(field);
+	base.world.Get<Transform>(second)->position.x = Fixed::FromInt(970);
+	base.world.Get<Aggression>(first)->stance = Stance::Hunt;
+	base.world.Get<Aggression>(second)->stance = Stance::Hunt;
+	bool together = false;
+	for (int step = 0; step < 2000; ++step)
+	{
+		base.Step();
+		const auto on = [&](ecs::Entity jet) {
+			const JetState state = base.world.Get<Jet>(jet)->state;
+			return state == JetState::TaxiToStart || state == JetState::TakeoffRoll;
+		};
+		together = together || (on(first) && on(second));
+	}
+	BOOST_TEST(!together);
+	BOOST_TEST((base.world.Get<Jet>(first)->state == JetState::Flying));
+	BOOST_TEST((base.world.Get<Jet>(second)->state == JetState::Flying));
+}
+
+BOOST_AUTO_TEST_CASE(jets_fly_the_same_on_any_number_of_workers_and_after_a_checkpoint)
+{
+	const auto squadron = [](Base &base) {
+		for (int index = 0; index < 6; ++index)
+		{
+			const ecs::Entity field = base.Field();
+			base.world.Get<Aggression>(base.Mig(field))->stance = Stance::Hunt;
+		}
+	};
+	Base one(1), four(4);
+	squadron(one);
+	squadron(four);
+	for (int step = 0; step < 200; ++step)
+	{
+		one.Step();
+		four.Step();
+	}
+	BOOST_TEST(one.world.StateHash() == four.world.StateHash());
+	engine::core::serialization::ByteWriter writer;
+	one.world.SaveCheckpoint(writer);
+	const auto bytes = writer.Take();
+	Base loaded(3);
+	engine::core::serialization::ByteReader reader(bytes);
+	BOOST_TEST_REQUIRE(loaded.world.LoadCheckpoint(reader));
+	loaded.tick = one.tick;
+	for (int step = 0; step < 300; ++step)
+	{
+		one.Step();
+		loaded.Step();
+	}
+	BOOST_TEST(loaded.world.StateHash() == one.world.StateHash());
+}
+
+BOOST_AUTO_TEST_SUITE_END()

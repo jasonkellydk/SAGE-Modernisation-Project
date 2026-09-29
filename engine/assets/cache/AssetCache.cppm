@@ -1,21 +1,5 @@
-module;
-
-#include <algorithm>
-#include <atomic>
-#include <cstddef>
-#include <exception>
-#include <future>
-#include <limits>
-#include <memory>
-#include <mutex>
-#include <span>
-#include <string>
-#include <string_view>
-#include <unordered_map>
-#include <utility>
-#include <vector>
-
 export module Assets.Cache;
+import std;
 
 import Assets.Cache.ModelLoadTask;
 import Assets.Cache.MaterialLoadTask;
@@ -82,6 +66,12 @@ public:
 	std::size_t Material_Count() const noexcept;
 	std::size_t Texture_Count() const noexcept;
 	std::size_t Font_Count() const noexcept;
+
+	// A rig-only asset (AssetType::Skeleton: a separately stored hierarchy;
+	// AssetType::Animation: a file of clips) read through the source and the
+	// model adapters. Blocks the caller; any thread. Successful reads are kept,
+	// so each source is read once. Null with `error` set on failure.
+	std::shared_ptr<const ModelRigDesc> Load_Rig(AssetType type, std::string_view name, std::string &error) const;
 
 private:
 	MaterialAssetHandle Request_Material(AssetIdentity identity, MaterialAssetDesc description);
@@ -180,6 +170,10 @@ private:
 		std::string_view dependency_name,
 		std::string_view dependency_error);
 	void Wait_All() const;
+	// Skinned models name a skeleton stored in another source. Resolves its
+	// bones into the model's rig; a rig that cannot be resolved is left as
+	// imported so its consumers report it.
+	void Resolve_Model_Skeleton(ModelRigDesc &rig) const;
 
 	AssetSource m_source;
 	mutable std::mutex m_request_mutex;
@@ -188,6 +182,8 @@ private:
 	std::shared_ptr<const MaterialSnapshot> m_material_snapshot;
 	std::shared_ptr<const TextureSnapshot> m_texture_snapshot;
 	std::shared_ptr<const FontSnapshot> m_font_snapshot;
+	mutable std::mutex m_rig_mutex;
+	mutable std::unordered_map<std::string, std::shared_ptr<const ModelRigDesc>> m_rigs;
 };
 
 AssetCache::AssetCache(AssetSource source)
@@ -253,6 +249,7 @@ ModelAssetHandle AssetCache::Request_Model(std::string_view name)
 				}
 
 				std::unique_ptr<ModelAssetDesc> description = std::move(loaded.description);
+				Resolve_Model_Skeleton(description->rig);
 				std::vector<std::string> material_names;
 				std::vector<MaterialAssetHandle> material_handles;
 				material_names.reserve(description->materials.size());
@@ -920,6 +917,76 @@ std::string AssetCache::Dependency_Error(
 	result += ": ";
 	result += dependency_error;
 	return result;
+}
+
+std::shared_ptr<const ModelRigDesc> AssetCache::Load_Rig(AssetType type, std::string_view name, std::string &error) const
+{
+	const AssetIdentity identity{type, Canonicalize_Asset_Name(name)};
+	if (identity.canonical_name.empty() || (type != AssetType::Skeleton && type != AssetType::Animation)) {
+		error = "rig request needs a skeleton or animation name";
+		return {};
+	}
+	const std::string key = std::string(type == AssetType::Skeleton ? "skeleton/" : "animation/") + identity.canonical_name;
+	{
+		std::lock_guard lock(m_rig_mutex);
+		const auto found = m_rigs.find(key);
+		if (found != m_rigs.end()) {
+			error.clear();
+			return found->second;
+		}
+	}
+	AssetSource source;
+	std::vector<std::shared_ptr<const IModelAdapter>> adapters;
+	{
+		std::lock_guard lock(m_request_mutex);
+		source = m_source;
+		adapters = m_model_adapters;
+	}
+	if (!source) {
+		error = "no asset source is configured";
+		return {};
+	}
+	try {
+		const std::vector<std::byte> bytes = source(identity);
+		if (bytes.empty()) {
+			error = "rig source not found: " + identity.canonical_name;
+			return {};
+		}
+		error = "no model adapter imports the rig " + identity.canonical_name;
+		for (const std::shared_ptr<const IModelAdapter> &adapter : adapters) {
+			ModelRigDesc rig;
+			std::string adapter_error;
+			if (!adapter || !adapter->Import_Rig(identity, bytes, rig, adapter_error)) {
+				if (adapter && !adapter_error.empty())
+					error = identity.canonical_name + ": " + adapter_error;
+				continue;
+			}
+			auto shared = std::make_shared<const ModelRigDesc>(std::move(rig));
+			std::lock_guard lock(m_rig_mutex);
+			error.clear();
+			return m_rigs.try_emplace(key, std::move(shared)).first->second;
+		}
+	} catch (const std::exception &exception) {
+		error = exception.what();
+	} catch (...) {
+		error = "unknown exception while loading rig";
+	}
+	return {};
+}
+
+void AssetCache::Resolve_Model_Skeleton(ModelRigDesc &rig) const
+{
+	if (!rig.bones.empty() || rig.skeleton_name.empty())
+		return;
+	std::string error;
+	const auto skeleton = Load_Rig(AssetType::Skeleton, rig.skeleton_name, error);
+	if (!skeleton || skeleton->bones.empty()
+		|| Canonicalize_Asset_Name(skeleton->skeleton_name) != Canonicalize_Asset_Name(rig.skeleton_name))
+		return;
+	ModelRigDesc resolved = rig;
+	resolved.bones = skeleton->bones;
+	if (Validate_Model_Rig(resolved, error))
+		rig = std::move(resolved);
 }
 
 void AssetCache::Wait_All() const

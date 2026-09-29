@@ -1,0 +1,230 @@
+#include <boost/test/unit_test.hpp>
+
+#include <array>
+#include <cstdint>
+#include <string>
+#include <vector>
+
+import engine.config.adapters.ini.ini_reader;
+import engine.config.binding.schema;
+
+using namespace engine::config;
+using namespace Engine::Math::Literals;
+namespace math = Engine::Math;
+
+namespace
+{
+enum class DamageType { Explosion, Laser, Poison };
+constexpr std::array<EnumName<DamageType>, 3> DamageTypes{{
+	{"EXPLOSION", DamageType::Explosion}, {"LASER", DamageType::Laser}, {"POISON", DamageType::Poison}}};
+
+constexpr std::array<std::string_view, 4> KindOfNames{"INFANTRY", "VEHICLE", "AIRCRAFT", "STRUCTURE"};
+
+struct TurretDefinition
+{
+	math::TurnAngle turnRatePerTick;
+	bool allowsPitch{false};
+};
+
+struct WeaponDefinition
+{
+	math::Fixed damage;
+	math::Fixed rangePerTick;
+	math::Fixed accuracy;
+	std::uint64_t reloadTicks{0};
+	std::int32_t clipSize{0};
+	std::string projectile;
+	std::string label;
+	DamageType damageType{DamageType::Explosion};
+	math::FixedVector3 offset;
+	Rgb color;
+	math::TurnAngle arc;
+	std::vector<TurretDefinition> turrets;
+	std::array<std::uint64_t, 1> kinds{};
+};
+
+Schema<WeaponDefinition> WeaponSchema()
+{
+	return Schema<WeaponDefinition>{}
+		.Fixed("PrimaryDamage", &WeaponDefinition::damage)
+		.PerSecond("Speed", &WeaponDefinition::rangePerTick)
+		.Percent("Accuracy", &WeaponDefinition::accuracy)
+		.Duration("DelayBetweenShots", &WeaponDefinition::reloadTicks)
+		.Integer("ClipSize", &WeaponDefinition::clipSize)
+		.String("ProjectileObject", &WeaponDefinition::projectile)
+		.Text("Label", &WeaponDefinition::label)
+		.Enum<DamageType>("DamageType", &WeaponDefinition::damageType, DamageTypes)
+		.FixedVector3("Offset", &WeaponDefinition::offset)
+		.Color("Color", &WeaponDefinition::color)
+		.Degrees("Arc", &WeaponDefinition::arc)
+		.Ignore("EditorNote")
+		.On("KindOf", [](const Node &node, WeaponDefinition &out, BindContext &context) {
+			if (const auto flags = ReadFlags<1>(node, context, KindOfNames, out.kinds))
+				out.kinds = *flags;
+		})
+		.Blocks("Turret", &WeaponDefinition::turrets, Schema<TurretDefinition>{}
+			.DegreesPerSecond("TurnRate", &TurretDefinition::turnRatePerTick)
+			.Boolean("AllowsPitch", &TurretDefinition::allowsPitch));
+}
+
+struct Loaded
+{
+	Document document;
+	Diagnostics diagnostics;
+};
+
+Loaded Load(std::string text, bool turretIsBlock = true)
+{
+	Loaded loaded;
+	ini::Grammar grammar;
+	if (turretIsBlock)
+		grammar.nested["Weapon"] = {"Turret"};
+	ini::Read(loaded.document, loaded.document.AddSource("weapons.ini", std::move(text)), grammar, loaded.diagnostics);
+	return loaded;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(schema_binding)
+
+BOOST_AUTO_TEST_CASE(binds_every_value_kind_exactly)
+{
+	auto loaded = Load(
+		"Weapon Cannon\n"
+		"  PrimaryDamage = 40.5\n"
+		"  Speed = 45\n"
+		"  Accuracy = 75%\n"
+		"  DelayBetweenShots = 1000\n"
+		"  ClipSize = -3\n"
+		"  ProjectileObject = ShellA extra\n"
+		"  Label = \"Big Gun\"\n"
+		"  DamageType = laser\n"
+		"  Offset = X:1.5 Z:-2\n"
+		"  Color = R:255 G:128 B:0\n"
+		"  Arc = 90\n"
+		"  KindOf = VEHICLE STRUCTURE\n"
+		"  EditorNote = ignored\n"
+		"  Turret\n"
+		"    TurnRate = 60\n"
+		"    AllowsPitch = Yes\n"
+		"  End\n"
+		"  Turret\n"
+		"    TurnRate = 90\n"
+		"  End\n"
+		"End\n");
+	BindContext context{loaded.diagnostics, engine::time::FixedStep{30}};
+	DefinitionTable<WeaponDefinition> weapons;
+	BindBlocks(loaded.document, "Weapon", WeaponSchema(), weapons, context);
+	BOOST_TEST(loaded.diagnostics.Entries().empty(), loaded.diagnostics.Format(loaded.document));
+	const WeaponDefinition *weapon = weapons.Find("Cannon");
+	BOOST_TEST_REQUIRE(weapon != nullptr);
+	BOOST_TEST(weapon->damage.Raw() == (40.5_fx).Raw());
+	BOOST_TEST(weapon->rangePerTick.Raw() == (1.5_fx).Raw());
+	BOOST_TEST(weapon->accuracy.Raw() == (0.75_fx).Raw());
+	BOOST_TEST(weapon->reloadTicks == 30u);
+	BOOST_TEST(weapon->clipSize == -3);
+	BOOST_TEST(weapon->projectile == "ShellA");
+	BOOST_TEST(weapon->label == "Big Gun");
+	BOOST_TEST((weapon->damageType == DamageType::Laser));
+	BOOST_TEST((weapon->offset == math::FixedVector3{1.5_fx, 0_fx, -2_fx}));
+	BOOST_TEST((weapon->color == Rgb{255, 128, 0}));
+	BOOST_TEST(weapon->arc.units == math::TurnFromDegrees(90).units);
+	BOOST_TEST(weapon->kinds[0] == 0b1010u);
+	BOOST_TEST_REQUIRE(weapon->turrets.size() == 2u);
+	BOOST_TEST(weapon->turrets[0].turnRatePerTick.units == math::TurnFromDegrees(2).units);
+	BOOST_TEST(weapon->turrets[0].allowsPitch);
+	BOOST_TEST(!weapon->turrets[1].allowsPitch);
+}
+
+BOOST_AUTO_TEST_CASE(durations_round_up_to_whole_ticks)
+{
+	auto loaded = Load("Weapon A\n  DelayBetweenShots = 1\nEnd\nWeapon B\n  DelayBetweenShots = 66.6\nEnd\nWeapon C\n  DelayBetweenShots = 0\nEnd\n");
+	BindContext context{loaded.diagnostics, engine::time::FixedStep{30}};
+	DefinitionTable<WeaponDefinition> weapons;
+	BindBlocks(loaded.document, "Weapon", WeaponSchema(), weapons, context);
+	BOOST_TEST(weapons.Find("A")->reloadTicks == 1u);
+	BOOST_TEST(weapons.Find("B")->reloadTicks == 2u);
+	BOOST_TEST(weapons.Find("C")->reloadTicks == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(bad_values_and_unknown_keys_are_diagnosed_with_locations)
+{
+	auto loaded = Load(
+		"Weapon Broken\n"
+		"  PrimaryDamage = lots\n"
+		"  DamageType = FIRE\n"
+		"  KindOf = SUBMARINE\n"
+		"  Mystery = 1\n"
+		"  ClipSize\n"
+		"  Turret = Yes\n"
+		"End\n", false);
+	BindContext context{loaded.diagnostics, engine::time::FixedStep{30}};
+	DefinitionTable<WeaponDefinition> weapons;
+	BindBlocks(loaded.document, "Weapon", WeaponSchema(), weapons, context);
+	BOOST_TEST(loaded.diagnostics.ErrorCount() == 5u);
+	BOOST_TEST(loaded.diagnostics.Entries().size() == 6u);
+	const std::string report = loaded.diagnostics.Format(loaded.document);
+	BOOST_TEST(report.find("weapons.ini:2: error: 'PrimaryDamage': 'lots' is not a number") != std::string::npos);
+	BOOST_TEST(report.find("weapons.ini:5: warning: unknown key 'Mystery'") != std::string::npos);
+	BOOST_TEST(report.find("weapons.ini:7: error: 'Turret' must be a block") != std::string::npos);
+
+	Diagnostics strict;
+	BindContext strictContext{strict, engine::time::FixedStep{30}, true};
+	DefinitionTable<WeaponDefinition> again;
+	BindBlocks(loaded.document, "Weapon", WeaponSchema(), again, strictContext);
+	BOOST_TEST(strict.ErrorCount() == 6u);
+}
+
+BOOST_AUTO_TEST_CASE(numbers_with_trailing_garbage_read_their_prefix_like_the_original)
+{
+	auto loaded = Load("Weapon W\n  PrimaryDamage = 18.5.0\n  Speed = 40v.0\nEnd\nWeapon X\n  PrimaryDamage = v40\nEnd\n");
+	BindContext context{loaded.diagnostics, engine::time::FixedStep{30}};
+	DefinitionTable<WeaponDefinition> weapons;
+	BindBlocks(loaded.document, "Weapon", WeaponSchema(), weapons, context);
+	BOOST_TEST(weapons.Find("W")->damage.Raw() == (18.5_fx).Raw());
+	BOOST_TEST(weapons.Find("W")->rangePerTick.Raw() == (40_fx / 30_fx).Raw());
+	BOOST_TEST(loaded.diagnostics.ErrorCount() == 1u);
+	BOOST_TEST(loaded.diagnostics.Entries().size() == 3u);
+}
+
+BOOST_AUTO_TEST_CASE(redefinition_policies)
+{
+	const std::string text =
+		"Weapon Gun\n  PrimaryDamage = 10\n  ClipSize = 4\nEnd\n"
+		"Weapon Gun\n  PrimaryDamage = 20\nEnd\n";
+	{
+		auto loaded = Load(text);
+		BindContext context{loaded.diagnostics, engine::time::FixedStep{30}};
+		DefinitionTable<WeaponDefinition> weapons;
+		BindBlocks(loaded.document, "Weapon", WeaponSchema(), weapons, context);
+		BOOST_TEST(loaded.diagnostics.ErrorCount() == 1u);
+		BOOST_TEST(weapons.Find("Gun")->damage.Raw() == (10_fx).Raw());
+	}
+	{
+		auto loaded = Load(text);
+		BindContext context{loaded.diagnostics, engine::time::FixedStep{30}};
+		DefinitionTable<WeaponDefinition> weapons;
+		BindBlocks(loaded.document, "Weapon", WeaponSchema(), weapons, context, Redefinition::Replace);
+		BOOST_TEST(weapons.Find("Gun")->damage.Raw() == (20_fx).Raw());
+		BOOST_TEST(weapons.Find("Gun")->clipSize == 0);
+	}
+	{
+		auto loaded = Load(text);
+		BindContext context{loaded.diagnostics, engine::time::FixedStep{30}};
+		DefinitionTable<WeaponDefinition> weapons;
+		BindBlocks(loaded.document, "Weapon", WeaponSchema(), weapons, context, Redefinition::Merge);
+		BOOST_TEST(weapons.Find("Gun")->damage.Raw() == (20_fx).Raw());
+		BOOST_TEST(weapons.Find("Gun")->clipSize == 4);
+	}
+}
+
+BOOST_AUTO_TEST_CASE(flags_support_relative_edits)
+{
+	auto loaded = Load("Weapon W\n  KindOf = +AIRCRAFT -VEHICLE\nEnd\n");
+	BindContext context{loaded.diagnostics, engine::time::FixedStep{30}};
+	const Node &node = *loaded.document.Roots()[0].Find("KindOf");
+	const auto flags = ReadFlags<1>(node, context, KindOfNames, std::array<std::uint64_t, 1>{0b0011});
+	BOOST_TEST_REQUIRE(flags.has_value());
+	BOOST_TEST((*flags)[0] == 0b0101u);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -1,10 +1,5 @@
-module;
-#include <algorithm>
-#include <array>
-#include <cmath>
-#include <cstdint>
-#include <vector>
 export module Graphics.Scene.Scorches.Geometry;
+import std;
 export import Graphics.Scene.Surfaces.Geometry;
 
 namespace Graphics

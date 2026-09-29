@@ -1,17 +1,6 @@
-module;
-
-#include <algorithm>
-#include <cassert>
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-#include <map>
-#include <memory>
-#include <stdexcept>
-#include <utility>
-#include <vector>
-
 export module engine.ecs.storage.archetype;
+import std;
+import engine.core.contracts;
 
 export import engine.ecs.core.component_registry;
 export import engine.ecs.storage.chunk;
@@ -35,7 +24,7 @@ public:
 
 	Archetype(Signature signature,
 		std::vector<const ComponentInfo *> components,
-		std::size_t chunkTargetBytes);
+		std::size_t chunkCapacity);
 
 	const Signature &GetSignature() const noexcept { return m_signature; }
 	const ChunkLayout &Layout() const noexcept { return m_layout; }
@@ -69,7 +58,7 @@ class ArchetypeRegistry
 public:
 	Archetype &GetOrCreate(const Signature &signature,
 		const ComponentRegistry &components,
-		std::size_t chunkTargetBytes,
+		std::size_t chunkCapacity,
 		bool *created = nullptr);
 
 	std::vector<Archetype *> GetArchetypes();
@@ -89,10 +78,10 @@ namespace ecs
 
 Archetype::Archetype(Signature signature,
 	std::vector<const ComponentInfo *> components,
-	std::size_t chunkTargetBytes) :
+	std::size_t chunkCapacity) :
 	m_signature(std::move(signature)),
 	m_components(std::move(components)),
-	m_layout(ChunkLayout::Build(m_components, chunkTargetBytes))
+	m_layout(ChunkLayout::Build(m_components, chunkCapacity))
 {
 }
 
@@ -131,33 +120,33 @@ Archetype::Slot Archetype::ReserveEntity()
 		}
 	}
 
-	assert(target != nullptr && !target->IsFull());
+	engine::core::Assert(target != nullptr && !target->IsFull());
 	return Slot{target, target->ReserveRow()};
 }
 
 void Archetype::PublishEntity(const Slot slot, const Entity entity) noexcept
 {
-	assert(slot.chunk != nullptr);
+	engine::core::Assert(slot.chunk != nullptr);
 	slot.chunk->PublishRow(entity, slot.row);
 	++m_entityCount;
 	if (slot.chunk->IsFull())
 	{
-		assert(!m_availableChunks.empty() && m_availableChunks.back() == slot.chunk);
+		engine::core::Assert(!m_availableChunks.empty() && m_availableChunks.back() == slot.chunk);
 		m_availableChunks.pop_back();
 	}
 }
 
 void Archetype::CancelEntity(const Slot slot) noexcept
 {
-	assert(slot.chunk != nullptr);
+	engine::core::Assert(slot.chunk != nullptr);
 	slot.chunk->CancelRow(slot.row);
 }
 
 void Archetype::PrepareForRemoval(Chunk *chunk)
 {
-	assert(chunk != nullptr);
-	assert(!chunk->IsFull() || std::find(m_availableChunks.begin(), m_availableChunks.end(), chunk) == m_availableChunks.end());
-	assert(std::find_if(m_chunks.begin(), m_chunks.end(), [chunk](const std::unique_ptr<Chunk> &candidate) {
+	engine::core::Assert(chunk != nullptr);
+	engine::core::Assert(!chunk->IsFull() || std::find(m_availableChunks.begin(), m_availableChunks.end(), chunk) == m_availableChunks.end());
+	engine::core::Assert(std::find_if(m_chunks.begin(), m_chunks.end(), [chunk](const std::unique_ptr<Chunk> &candidate) {
 		return candidate.get() == chunk;
 	}) != m_chunks.end());
 
@@ -202,16 +191,16 @@ Archetype::Slot Archetype::AddEntity(const Entity entity)
 
 Entity Archetype::RemoveEntity(Chunk *chunk, std::size_t row)
 {
-	assert(chunk != nullptr);
-	assert(!chunk->IsFull() || std::find(m_availableChunks.begin(), m_availableChunks.end(), chunk) == m_availableChunks.end());
-	assert(std::find_if(m_chunks.begin(), m_chunks.end(), [chunk](const std::unique_ptr<Chunk> &candidate) {
+	engine::core::Assert(chunk != nullptr);
+	engine::core::Assert(!chunk->IsFull() || std::find(m_availableChunks.begin(), m_availableChunks.end(), chunk) == m_availableChunks.end());
+	engine::core::Assert(std::find_if(m_chunks.begin(), m_chunks.end(), [chunk](const std::unique_ptr<Chunk> &candidate) {
 		return candidate.get() == chunk;
 	}) != m_chunks.end());
 
 	const bool wasFull = chunk->IsFull();
 	PrepareForRemoval(chunk);
 	const Entity moved = chunk->RemoveSwap(row);
-	assert(m_entityCount > 0);
+	engine::core::Assert(m_entityCount > 0);
 	--m_entityCount;
 	if (wasFull)
 		m_availableChunks.push_back(chunk);
@@ -220,7 +209,7 @@ Entity Archetype::RemoveEntity(Chunk *chunk, std::size_t row)
 
 Archetype &ArchetypeRegistry::GetOrCreate(const Signature &signature,
 	const ComponentRegistry &components,
-	std::size_t chunkTargetBytes,
+	std::size_t chunkCapacity,
 	bool *created)
 {
 	if (!components.IsFrozen())
@@ -242,7 +231,7 @@ Archetype &ArchetypeRegistry::GetOrCreate(const Signature &signature,
 	for (ComponentId component : canonicalSignature)
 		infos.push_back(&components.Get(component));
 
-	auto archetype = std::make_unique<Archetype>(std::move(canonicalSignature), std::move(infos), chunkTargetBytes);
+	auto archetype = std::make_unique<Archetype>(std::move(canonicalSignature), std::move(infos), chunkCapacity);
 	Archetype *result = archetype.get();
 	m_archetypes.emplace(result->GetSignature(), std::move(archetype));
 	++m_revision;

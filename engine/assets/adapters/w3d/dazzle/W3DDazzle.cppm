@@ -1,11 +1,5 @@
-module;
-#include <algorithm>
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <string>
-#include <utility>
 export module Assets.Adapters.W3D.Dazzle;
+import std;
 import Assets.Dazzles;
 import Assets.Adapters.W3D.Chunks;
 

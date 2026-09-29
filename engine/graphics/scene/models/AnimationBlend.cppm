@@ -1,13 +1,5 @@
-module;
-
-#include <algorithm>
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <span>
-#include <type_traits>
-
 export module Graphics.Scene.Models.AnimationBlend;
+import std;
 
 export import Graphics.Scene.Models.Animation;
 

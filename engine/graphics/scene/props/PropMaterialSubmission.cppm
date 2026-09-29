@@ -1,12 +1,5 @@
-module;
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <optional>
-#include <span>
-#include <vector>
-#include <utility>
 export module Graphics.Scene.Props.MaterialSubmission;
+import std;
 import engine.profiling;
 import Graphics.RHI;
 import Graphics.Materials.State;

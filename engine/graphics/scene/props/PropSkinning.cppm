@@ -1,11 +1,5 @@
-module;
-#include <array>
-#include <cmath>
-#include <cstdint>
-#include <span>
-#include <vector>
-#include <utility>
 export module Graphics.Scene.Props.Skinning;
+import std;
 export import Graphics.Scene.Props.Geometry;
 import Graphics.Scene.RenderScene;
 

@@ -1,0 +1,101 @@
+#define BOOST_TEST_MODULE GeneralsZhIniGrammar
+#include <boost/test/included/unit_test.hpp>
+
+#include <algorithm>
+#include <chrono>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <vector>
+
+import engine.config.adapters.ini.ini_reader;
+import engine.config.adapters.json.json_reader;
+
+namespace fs = std::filesystem;
+using namespace engine::config;
+
+namespace
+{
+std::string ReadFile(const fs::path &path)
+{
+	std::ifstream stream(path, std::ios::binary);
+	std::ostringstream text;
+	text << stream.rdbuf();
+	return text.str();
+}
+
+ini::Grammar LoadGrammar(Diagnostics &diagnostics)
+{
+	Document document;
+	const fs::path path = fs::path(GENERALSZH_SOURCE_DIR) / "content/ini/grammar.json";
+	json::Read(document, document.AddSource(path.string(), ReadFile(path)), diagnostics);
+	return ini::GrammarFromDocument(document, diagnostics);
+}
+
+// Shipped game data is not in the repository.
+fs::path DataRoot()
+{
+	if (const char *configured = std::getenv("GENERALSZH_DATA_DIR"))
+		return configured;
+	return fs::path(GENERALSZH_REPO_ROOT) / "GeneralsMD/Run";
+}
+}
+
+BOOST_AUTO_TEST_SUITE(zero_hour_ini_grammar)
+
+BOOST_AUTO_TEST_CASE(grammar_file_loads_cleanly)
+{
+	Diagnostics diagnostics;
+	const ini::Grammar grammar = LoadGrammar(diagnostics);
+	BOOST_TEST(!diagnostics.HasErrors());
+	BOOST_TEST(grammar.topLevelBlocks.size() >= 61u);
+	BOOST_TEST(grammar.OpensNestedBlock("Object", "Draw"));
+	BOOST_TEST(grammar.OpensNestedBlock("Draw", "ConditionState"));
+	BOOST_TEST(!grammar.OpensNestedBlock("Draw", "AliasConditionState"));
+}
+
+BOOST_AUTO_TEST_CASE(every_shipped_ini_file_parses_without_diagnostics)
+{
+	const fs::path root = DataRoot() / "Data/INI";
+	if (!fs::exists(root))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: no game data at " << root.string() << " (set GENERALSZH_DATA_DIR)");
+		return;
+	}
+	Diagnostics grammarDiagnostics;
+	const ini::Grammar grammar = LoadGrammar(grammarDiagnostics);
+
+	std::vector<fs::path> files;
+	for (const auto &entry : fs::recursive_directory_iterator(DataRoot()))
+	{
+		std::string extension = entry.path().extension().string();
+		std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+		if (entry.is_regular_file() && extension == ".ini")
+			files.push_back(entry.path());
+	}
+	std::sort(files.begin(), files.end());
+
+	Document document;
+	Diagnostics diagnostics;
+	std::size_t bytes = 0;
+	const auto start = std::chrono::steady_clock::now();
+	for (const fs::path &file : files)
+	{
+		std::string text = ReadFile(file);
+		bytes += text.size();
+		ini::Read(document, document.AddSource(fs::relative(file, DataRoot()).string(), std::move(text)), grammar, diagnostics);
+	}
+	const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);
+	BOOST_TEST_MESSAGE("parsed " << files.size() << " files, " << bytes / 1024 << " KiB, "
+		<< document.Roots().size() << " top-level entries in " << elapsed.count() << " ms");
+	BOOST_TEST(files.size() >= 150u);
+	BOOST_TEST(!diagnostics.HasErrors(), diagnostics.Format(document));
+
+	const auto objects = std::count_if(document.Roots().begin(), document.Roots().end(),
+		[](const Node &node) { return node.key == "Object"; });
+	BOOST_TEST(objects > 1000);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

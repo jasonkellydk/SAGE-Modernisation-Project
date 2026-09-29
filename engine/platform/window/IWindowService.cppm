@@ -1,6 +1,5 @@
-module;
-#include <memory>
 export module engine.platform.window.service;
+import std;
 import engine.platform.core.types;
 export import engine.platform.window.interface;
 

@@ -1,9 +1,5 @@
-module;
-#include <cstddef>
-#include <cstdint>
-#include <memory>
-#include <span>
 export module engine.platform.threading;
+import std;
 export import engine.platform.threading.thread;
 export import engine.platform.threading.mutex;
 export import engine.platform.threading.semaphore;

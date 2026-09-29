@@ -1,11 +1,5 @@
-module;
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <utility>
-#include <vector>
 export module Assets.Adapters.W3D.PassBindings;
+import std;
 import Assets.Adapters.W3D.Chunks;
 import Assets.Math;
 namespace Assets::W3D

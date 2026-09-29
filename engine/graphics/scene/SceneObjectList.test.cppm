@@ -1,12 +1,8 @@
 module;
 #define BOOST_TEST_MODULE SceneObjectListTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <memory>
-#include <vector>
 export module Graphics.Scene.ObjectList.Tests;
+import std;
 import Graphics.Scene.ObjectList;
 import Graphics.Tests.Device;
 import Graphics.Scene.Props.Renderer;

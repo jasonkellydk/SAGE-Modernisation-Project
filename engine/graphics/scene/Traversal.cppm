@@ -1,10 +1,5 @@
-module;
-
-#include <array>
-#include <cstddef>
-#include <cstdint>
-
 export module Graphics.Scene.Traversal;
+import std;
 
 export import Graphics.Scene.DrawContext;
 export import Graphics.Scene.Lighting.Local;

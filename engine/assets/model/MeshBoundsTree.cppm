@@ -1,14 +1,5 @@
-module;
-#include <algorithm>
-#include <array>
-#include <cmath>
-#include <cstdint>
-#include <limits>
-#include <numeric>
-#include <span>
-#include <utility>
-#include <vector>
 export module Assets.MeshBoundsTree;
+import std;
 import Assets.Math;
 
 namespace Assets {

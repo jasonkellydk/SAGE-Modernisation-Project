@@ -1,11 +1,5 @@
-module;
-
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-#include <span>
-
 export module Video.Frame;
+import std;
 
 namespace Engine::Video
 {

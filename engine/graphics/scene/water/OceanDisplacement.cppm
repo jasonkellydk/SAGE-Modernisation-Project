@@ -1,15 +1,5 @@
-module;
-#include <array>
-#include <bit>
-#include <cmath>
-#include <cstdint>
-#include <cstring>
-#include <filesystem>
-#include <limits>
-#include <span>
-#include <vector>
-
 export module Graphics.Scene.Water.Displacement;
+import std;
 import Graphics.RHI;
 import Graphics.Frame.AttachmentBindings;
 import Graphics.Shaders.Library;

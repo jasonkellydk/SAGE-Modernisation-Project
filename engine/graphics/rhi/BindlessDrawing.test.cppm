@@ -8,14 +8,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <algorithm>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <span>
-#include <vector>
-
 export module Graphics.RHI.BindlessDrawing.Tests;
+import std;
 
 import Graphics.RHI;
 import Graphics.Tests.Device;
@@ -52,7 +46,7 @@ struct BeamVertex final
 };
 
 static_assert(sizeof(BeamVertex) == 40);
-static_assert(offsetof(BeamVertex, color) == 12);
+static_assert(__builtin_offsetof(BeamVertex, color) == 12);
 
 RHITextureHandle Create_Solid_Texture(Device &device, std::array<std::byte, 4> pixel)
 {
@@ -505,7 +499,7 @@ BOOST_AUTO_TEST_CASE(bindless_draw_retains_updates_across_descriptor_page_stress
 	BOOST_REQUIRE(commands.Set_Vertex_Buffer(0, preserve_buffer, sizeof(BeamVertex), 0));
 	for (std::uint32_t vertex = 0; vertex < 3; ++vertex)
 		BOOST_REQUIRE(device.Update_Buffer(preserve_buffer,
-			vertex * sizeof(BeamVertex) + offsetof(BeamVertex, color),
+			vertex * sizeof(BeamVertex) + __builtin_offsetof(BeamVertex, color),
 			std::as_bytes(std::span<const float>(preserve_color))));
 	BOOST_REQUIRE(device.Update_Buffer(discard_buffer, 0,
 		std::as_bytes(std::span<const BeamVertex>(discard_vertices))));

@@ -1,12 +1,8 @@
 module;
 #define BOOST_TEST_MODULE ScorchDrawingTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <span>
 export module Graphics.Scene.Scorches.Drawing.Tests;
+import std;
 import Graphics.Scene.Scorches.Geometry;
 import Graphics.Scene.Surfaces.Renderer;
 import Graphics.Tests.Device;

@@ -1,11 +1,8 @@
 module;
 #define BOOST_TEST_MODULE FrameResourceLifecycleTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <memory>
-#include <utility>
 export module Graphics.Frame.ResourceLifecycle.Tests;
+import std;
 import Graphics.Frame.ResourceLifecycle;
 import Graphics.Resources.Textures.Resource;
 import Graphics.Tests.Device;

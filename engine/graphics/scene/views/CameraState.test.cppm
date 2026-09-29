@@ -4,13 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <type_traits>
-
 export module Graphics.Scene.Views.CameraState.Tests;
+import std;
 
 import Graphics.Scene.Views.CameraState;
 import Graphics.Scene.Props.Renderer;

@@ -1,12 +1,8 @@
 module;
 #define BOOST_TEST_MODULE TextureSamplingTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cmath>
-#include <cstdint>
-#include <span>
-#include <vector>
 export module Graphics.Resources.Textures.Sampling.Tests;
+import std;
 import Graphics.Resources.Textures.Sampling;
 import Graphics.Tests.Device;
 import Graphics.Scene.Props.Renderer;

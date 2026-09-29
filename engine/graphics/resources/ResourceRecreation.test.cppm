@@ -1,12 +1,8 @@
 module;
 #define BOOST_TEST_MODULE ResourceRecreationTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <memory>
-#include <stdexcept>
-#include <vector>
 export module Graphics.Resources.Recreation.Tests;
+import std;
 import Graphics.Resources.Recreation;
 import Graphics.Resources.Textures.Resource;
 import Graphics.Tests.Device;

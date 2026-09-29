@@ -1,16 +1,5 @@
-module;
-
-#include <algorithm>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-#include <string>
-#include <span>
-#include <string_view>
-#include <vector>
-
 export module Engine.UI.WND;
+import std;
 
 export import Assets.Runtime;
 export import Assets.Handles;
@@ -146,7 +135,22 @@ export enum class WindowFlag : std::uint32_t
 	SeeThrough = 1u << 1,
 	Border = 1u << 2,
 	BorderBeforeChildren = 1u << 3,
-	ClipChildren = 1u << 4
+	ClipChildren = 1u << 4,
+	// Input routing (STATUS): an ENABLED window takes input; a NOINPUT one lets it pass through.
+	Enabled = 1u << 5,
+	NoInput = 1u << 6,
+	// A push button that also answers the right button (STATUS RIGHT_CLICK: GBM_SELECTED_RIGHT).
+	RightClick = 1u << 7,
+	// Hidden by a window transition while it plays (winHide from a transition style), apart from
+	// what the screen itself shows or hides.
+	TransitionHidden = 1u << 8,
+	// A push button that stays down once chosen (STATUS CHECK_LIKE): checked, it draws its selected images.
+	CheckLike = 1u << 9,
+	// A command button (STATUS USE_OVERLAY_STATES): always its enabled image, grey when disabled unless ALWAYS_COLOR
+	// (then dimmed) or NOT_READY (then as it is), hover and press shown by overlays.
+	UseOverlayStates = 1u << 10,
+	AlwaysColor = 1u << 11,
+	NotReady = 1u << 12
 };
 
 export constexpr std::uint32_t operator|(WindowFlag left, WindowFlag right) noexcept
@@ -507,7 +511,22 @@ public:
 		m_commands.reserve(capacity);
 	}
 
-	void Clear() noexcept { m_commands.clear(); }
+	void Clear() noexcept
+	{
+		m_commands.clear();
+		m_kept_text.clear();
+	}
+	// A copy of `text` the list keeps until cleared, for text built while drawing (a list
+	// row's column) that Add_Text would otherwise point at after it is gone.
+	const std::uint16_t *Keep_Text(std::u16string_view text) noexcept
+	{
+		try {
+			return reinterpret_cast<const std::uint16_t *>(m_kept_text.emplace_back(text).c_str());
+		}
+		catch (...) {
+			return nullptr;
+		}
+	}
 	std::span<const DrawCommand> Commands() const noexcept { return m_commands; }
 	std::size_t Size() const noexcept { return m_commands.size(); }
 	std::size_t Capacity() const noexcept { return m_capacity; }
@@ -666,6 +685,7 @@ private:
 
 	std::size_t m_capacity = 0;
 	std::vector<DrawCommand> m_commands;
+	std::deque<std::u16string> m_kept_text; // Keep_Text
 };
 
 export struct PushButtonVisual final
@@ -2137,6 +2157,12 @@ public:
 		return true;
 	}
 
+	// Draws a draw list built outside any layout (text a screen lays out itself).
+	bool Render_Draw_List(const DrawList &draw_list, Graphics::Renderer2D &renderer) noexcept
+	{
+		return Emit_Draw_Data(draw_list, renderer);
+	}
+
 	private:
 	static bool Emit_Draw_Data(
 		const DrawList &draw_list,
@@ -2208,7 +2234,7 @@ public:
 		if (node == nullptr)
 			return false;
 
-		const bool hidden = Has_Flag(node->flags, WindowFlag::Hidden);
+		const bool hidden = Has_Flag(node->flags, WindowFlag::Hidden) || Has_Flag(node->flags, WindowFlag::TransitionHidden);
 		const bool see_through = Has_Flag(node->flags, WindowFlag::SeeThrough);
 		if (hidden)
 			return true;

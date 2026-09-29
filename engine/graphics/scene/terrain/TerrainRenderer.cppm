@@ -1,15 +1,5 @@
-module;
-
-#include <algorithm>
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <span>
-#include <vector>
-
 export module Graphics.Scene.Terrain.Renderer;
+import std;
 
 import engine.profiling;
 export import Graphics.Scene.Terrain.Geometry;

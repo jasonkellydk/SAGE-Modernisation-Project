@@ -2,15 +2,8 @@ module;
 #define NOMINMAX
 #define BOOST_TEST_MODULE TextureResidencyTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <atomic>
-#include <chrono>
-#include <cstddef>
-#include <cstdint>
-#include <memory>
-#include <thread>
-#include <vector>
 export module Graphics.Resources.Textures.Residency.Tests;
+import std;
 import Assets.Images.PixelEncoding;
 import Graphics.Resources.Loading.Queue;
 import Graphics.Resources.Recreation;

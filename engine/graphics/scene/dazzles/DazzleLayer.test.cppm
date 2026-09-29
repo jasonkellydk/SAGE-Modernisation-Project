@@ -1,9 +1,8 @@
 module;
 #define BOOST_TEST_MODULE DazzleLayerTests
 #include <boost/test/included/unit_test.hpp>
-#include <memory>
-#include <vector>
 export module Graphics.Scene.Dazzles.Layer.Tests;
+import std;
 import Graphics.Scene.Dazzles.Layer;
 namespace {
 struct Source {

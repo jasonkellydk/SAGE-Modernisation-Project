@@ -1,12 +1,5 @@
-module;
-
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-#include <span>
-
 export module Graphics.Scene.Lighting;
+import std;
 
 export import Graphics.Resources.Handles.ResourceHandle;
 export import Graphics.Scene.Views.View;

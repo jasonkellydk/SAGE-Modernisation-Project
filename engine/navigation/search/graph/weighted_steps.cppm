@@ -1,8 +1,5 @@
-module;
-#include <algorithm>
-#include <cstdint>
-
 export module engine.navigation.search.graph.weighted_steps;
+import std;
 import engine.navigation.movement.occupancy_policy;
 import engine.navigation.costs;
 

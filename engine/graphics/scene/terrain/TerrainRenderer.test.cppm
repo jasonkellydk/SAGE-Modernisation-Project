@@ -1,13 +1,8 @@
 module;
 #define BOOST_TEST_MODULE TerrainRendererTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <span>
-#include <vector>
 export module Graphics.Scene.Terrain.Renderer.Tests;
+import std;
 import Graphics.Tests.Device;
 import Graphics.Scene.Terrain.Renderer;
 import Graphics.Resources.Textures.Sampling;

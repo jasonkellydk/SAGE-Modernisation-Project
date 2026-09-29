@@ -1,0 +1,68 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdlib>
+#include <filesystem>
+#include <optional>
+#include <string_view>
+
+import games.generalszh.shell.options.options_view;
+import games.generalszh.content.install.install_mount;
+import engine.filesystem.core.virtual_file_system;
+import Engine.UI.WND.Document;
+import Engine.UI.WND.Input;
+
+using namespace generalszh::shell;
+using namespace Engine::UI::WND;
+
+BOOST_AUTO_TEST_SUITE(options_view)
+
+// The shipped OptionsMenu.wnd bound to the options: every control the view
+// names is there, the menu shows only while open, and dragging its music
+// slider and clicking Accept keep the new volume.
+BOOST_AUTO_TEST_CASE(the_shipped_options_menu_drives_the_options)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+		return;
+	engine::filesystem::VirtualFileSystem files;
+	generalszh::content::MountInstall(files, install);
+	const auto text = files.ReadText("Window/Menus/OptionsMenu.wnd");
+	BOOST_TEST_REQUIRE(text.has_value());
+	WNDDocument document;
+	BOOST_TEST_REQUIRE(document.Parse(*text));
+	ShellModel model;
+	UserOptions options;
+	options.musicVolume = 13;
+	OptionsViewModel menu(model, options, OptionDefaults{});
+	WNDBindings bindings(document);
+	BindOptionsView(bindings, menu, model);
+	BOOST_TEST(bindings.MissingWindows().empty());
+	WNDWindow &parent = *document.Find_Window("OptionsMenu.wnd:OptionsMenuParent");
+	BOOST_TEST(Has_Flag(parent.flags, WindowFlag::Hidden));
+	model.optionsOpen.Set(true);
+	BOOST_TEST(!Has_Flag(parent.flags, WindowFlag::Hidden));
+	WNDWindow &music = *document.Find_Window("OptionsMenu.wnd:SliderMusicVolume");
+	BOOST_TEST(music.position == 13);
+
+	// Grab the thumb and drag it to the far end: 100.
+	WNDPointer pointer;
+	const float y = (music.screen_region.top + music.screen_region.bottom) / 2.0f;
+	const float thumb = music.screen_region.left + 13 * (music.screen_region.right - music.screen_region.left - 13) / 100.0f + 6.5f;
+	pointer.Press(document, thumb, y);
+	const auto moved = pointer.Move(document, static_cast<float>(music.screen_region.right) + 50.0f, y);
+	BOOST_TEST_REQUIRE(moved.has_value());
+	bindings.Apply(*moved);
+	pointer.Release(document, static_cast<float>(music.screen_region.right) + 50.0f, y);
+	BOOST_TEST(menu.musicVolume.Get() == 100);
+	const WNDWindow &accept = *document.Find_Window("OptionsMenu.wnd:ButtonAccept");
+	const float ax = (accept.screen_region.left + accept.screen_region.right) / 2.0f, ay = (accept.screen_region.top + accept.screen_region.bottom) / 2.0f;
+	pointer.Press(document, ax, ay);
+	const auto clicked = pointer.Release(document, ax, ay);
+	BOOST_TEST_REQUIRE(clicked.has_value());
+	BOOST_TEST(bindings.Apply(*clicked));
+	BOOST_TEST(options.musicVolume == 100);
+	BOOST_TEST(!model.optionsOpen.Get());
+	BOOST_TEST(Has_Flag(parent.flags, WindowFlag::Hidden));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

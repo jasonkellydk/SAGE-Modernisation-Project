@@ -1,6 +1,5 @@
-module;
-#include <array>
 export module Graphics.Scene.Props.MaterialDrawState;
+import std;
 import Graphics.Materials.State;
 import Graphics.Materials.Fog;
 import Graphics.Scene.DrawParameters;

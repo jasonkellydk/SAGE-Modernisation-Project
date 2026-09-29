@@ -4,14 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-#include <cstddef>
-#include <filesystem>
-#include <span>
-#include <string_view>
-#include <vector>
-
 export module Graphics.Scene.Particles.Renderer.Tests;
+import std;
 
 import Graphics.Scene.Particles.Renderer;
 import Graphics.Testing.VisualRegression;

@@ -1,22 +1,5 @@
 module;
 
-#include <filesystem>
-#include <cmath>
-#include <chrono>
-#include <vector>
-#include <array>
-#include <cstdint>
-#include <bit>
-#include <sstream>
-#include <fstream>
-#include <iomanip>
-#include <thread>
-#include <stdexcept>
-#include <string>
-#include <algorithm>
-#include <optional>
-#include <limits>
-#include <cstdio>
 #include "PreRTS.h"
 #include "Common/CommandLine.h"
 #include "Common/CriticalSection.h"
@@ -53,6 +36,7 @@ module;
 #include "GameClient/TerrainVisual.h"
 
 export module engine.navigation.simulation_fixture;
+import std;
 import engine.debug;
 import engine.navigation.pathfinder;
 import engine.navigation.dynamic_request_queue;

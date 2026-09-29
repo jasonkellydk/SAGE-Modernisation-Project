@@ -1,13 +1,5 @@
-module;
-
-#include <array>
-#include <cctype>
-#include <cstddef>
-#include <map>
-#include <string>
-#include <string_view>
-
 export module Assets.Cache.AssetReport;
+import std;
 
 namespace Assets
 {

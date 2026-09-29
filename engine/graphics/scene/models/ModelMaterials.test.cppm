@@ -2,14 +2,9 @@ module;
 
 #define BOOST_TEST_MODULE ModelMaterialsTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <memory>
-#include <span>
 
 export module Graphics.Scene.Models.Materials.Tests;
+import std;
 
 import Assets.Math;
 import Assets.Materials.TextureMapping;

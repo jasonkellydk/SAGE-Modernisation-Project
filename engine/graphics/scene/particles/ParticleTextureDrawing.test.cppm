@@ -1,14 +1,9 @@
 module;
 
-#include <span>
 #define BOOST_TEST_MODULE ParticleTextureDrawingTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <vector>
 export module Graphics.Scene.Particles.TextureDrawing.Tests;
+import std;
 import Assets.Cache.TextureLoadTask;
 import Assets.Adapters.DDS;
 import Assets.Math;

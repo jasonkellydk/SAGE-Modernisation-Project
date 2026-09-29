@@ -1,0 +1,892 @@
+#include <boost/test/unit_test.hpp>
+
+#include <set>
+
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
+
+import engine.gameplay.rts.containment.components.transport;
+import engine.gameplay.rts.containment.components.heal_pad;
+import engine.gameplay.rts.combat.components.assisted_targeting;
+import engine.gameplay.rts.combat.resources.assists;
+import engine.gameplay.common.weapons.components.weapon_slots;
+import engine.gameplay.rts.combat.resources.shots;
+import engine.gameplay.rts.veterancy.resources.promotions;
+import engine.gameplay.common.spatial.components.transform;
+import engine.gameplay.common.identity.components.definition_ref;
+import engine.gameplay.rts.parachute.components.parachute;
+import engine.gameplay.common.status.components.disabled;
+import games.generalszh.gameplay.scripts.algorithms.object_edits;
+import games.generalszh.session.session;
+import games.generalszh.gameplay.scripts.resources.script_records;
+import engine.gameplay.rts.upgrades.resources.player_upgrades;
+import engine.gameplay.rts.upgrades.components.upgradable;
+import engine.gameplay.rts.production.components.production_queue;
+import engine.gameplay.rts.economy.resources.player_money;
+import engine.gameplay.rts.lifecycle.resources.kill_requests;
+import engine.gameplay.rts.slaves.components.slaved;
+import engine.gameplay.rts.veterancy.components.experience;
+import engine.gameplay.common.weapons.components.weapon_bonus_conditions;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.common.identity.components.producer;
+import games.generalszh.gameplay.upgrades.algorithms.grant_upgrade;
+import games.generalszh.gameplay.production.algorithms.build_cost;
+import games.generalszh.gameplay.orders.algorithms.repair_orders;
+import games.generalszh.gameplay.production.algorithms.unit_queue;
+import engine.gameplay.rts.production.components.production_exit_gate;
+import engine.gameplay.rts.slaves.components.spawner;
+import games.generalszh.gameplay.lifecycle.algorithms.retire_now;
+import games.generalszh.gameplay.orders.algorithms.unit_orders;
+import engine.gameplay.rts.death.components.dying;
+import engine.gameplay.rts.navigation.definitions.pathfind_cell;
+import engine.gameplay.rts.navigation.resources.navigation_grid;
+import games.generalszh.gameplay.ai.components.mob_member;
+import engine.gameplay.rts.production.systems.production_system;
+import engine.gameplay.rts.docking.components.repair_dock;
+import engine.gameplay.rts.docking.components.docking;
+import engine.gameplay.common.health.components.health;
+
+// Upgrades and research on the live shell map, apart from session.test (one
+// module set per translation unit keeps within the compiler's source-location limit).
+using namespace generalszh;
+
+namespace
+{
+struct ShellContent
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	std::optional<engine::level::generals_map::ReadResult> map;
+
+	bool Load()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return false;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		auto read = engine::level::generals_map::Read(*files.Read("Maps/ShellMapMD/ShellMapMD.map"));
+		if (!read)
+			return false;
+		map.emplace(std::move(*read));
+		return true;
+	}
+};
+
+ShellContent &Content()
+{
+	static ShellContent content;
+	static const bool loaded = content.Load();
+	(void)loaded;
+	return content;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(shell_map_research)
+
+// Player::addUpgrade(COMPLETE) -> onUpgradeCompleted -> updateUpgradeModules on the paradropped rangers: their
+// ArmorUpgrade (Upgrade_AmericaChemicalSuits) takes their PLAYER_UPGRADE armor set (ChemSuitHumanArmor) and their
+// WeaponSetUpgrade (Upgrade_AmericaRangerFlashBangGrenade) their PLAYER_UPGRADE weapons (RangerAdvancedCombatRifle),
+// each once; an upgrade they have no trigger for changes nothing. (The original carries them out within the
+// frame the upgrade completes; here the next tick's upgrade pass does.)
+BOOST_AUTO_TEST_CASE(legacy_parity_player_upgrades_change_the_paradropped_rangers)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	session::Session game(shell.map->level, shell.game, {42, 0, {}});
+	for (int tick = 0; tick < 30 * 125; ++tick)
+		game.Tick();
+	std::vector<ecs::Entity> rangers;
+	game.Visible().ForEach([&](const engine::gameplay::VisibleObject &object) {
+		if (const auto *ref = game.World().Get<engine::gameplay::DefinitionRef>(object.entity);
+			ref != nullptr && game.DefinitionName(ref->index) == "AmericaInfantryRanger" && game.World().Has<engine::gameplay::Upgradable>(object.entity) &&
+			!game.World().Has<engine::gameplay::Dying>(object.entity) && !engine::gameplay::IsDead(*game.World().Get<engine::gameplay::Health>(object.entity)))
+			// a living one (the battle's dead, and one killed this tick, are not what is asked)
+			rangers.push_back(object.entity);
+	});
+	BOOST_TEST_REQUIRE(!rangers.empty());
+	// The healthiest (the battle goes on through the upgrade's ticks; a ranger shot dead meanwhile has no weapons left).
+	const ecs::Entity ranger = *std::ranges::max_element(rangers, {}, [&](ecs::Entity entity) { return game.World().Get<engine::gameplay::Health>(entity)->current; });
+	const std::uint32_t player = game.World().Get<engine::gameplay::Owner>(ranger)->player;
+	const std::uint32_t armorBefore = game.World().Get<engine::gameplay::Health>(ranger)->armor;
+	const std::uint32_t weaponBefore = game.World().Get<engine::gameplay::Armament>(ranger)->weapon;
+	auto &upgrades = game.World().Resource<engine::gameplay::PlayerUpgrades>();
+	// Nothing of theirs is triggered by the Humvee's TOW missile.
+	upgrades.Grant(player, *shell.game.upgrades.Find("Upgrade_AmericaTOWMissile"));
+	game.Tick();
+	BOOST_TEST(game.World().Get<engine::gameplay::Health>(ranger)->armor == armorBefore);
+	BOOST_TEST(game.World().Get<engine::gameplay::Upgradable>(ranger)->executed == 0u);
+	upgrades.Grant(player, *shell.game.upgrades.Find("Upgrade_AmericaChemicalSuits"));
+	upgrades.Grant(player, *shell.game.upgrades.Find("Upgrade_AmericaRangerFlashBangGrenade"));
+	game.Tick();
+	const std::uint32_t armorAfter = game.World().Get<engine::gameplay::Health>(ranger)->armor;
+	BOOST_TEST(armorAfter != armorBefore);
+	// Its PLAYER_UPGRADE set: the advanced rifle first, and the flash-bang in another slot (which it may be using now).
+	const auto *set = game.World().Get<engine::gameplay::WeaponSlots>(ranger);
+	BOOST_TEST_REQUIRE(set != nullptr);
+	BOOST_TEST((game.WeaponContentOf(set->slots[0].weapon) == shell.game.weapons.Find("RangerAdvancedCombatRifle")));
+	(void)weaponBefore;
+	for (const auto &entry : generalszh::content::ReadObjectUpgrades(*shell.game.objects.Find("AmericaInfantryRanger"), shell.game.upgrades))
+		if (entry.effect.kind == generalszh::content::UpgradeEffectKind::WeaponSet)
+			for (std::size_t slot = 0; slot < 3; ++slot)
+			{
+				BOOST_TEST_MESSAGE("upgraded slot " << slot << ": " << entry.effect.weapons[slot]);
+				if (entry.effect.weapons[slot].empty())
+					BOOST_TEST(set->slots[slot].weapon == engine::gameplay::WeaponCatalog::None);
+				else
+					BOOST_TEST((game.WeaponContentOf(set->slots[slot].weapon) == shell.game.weapons.Find(entry.effect.weapons[slot])));
+			}
+	// Every other ranger of the player (still alive) too; once only.
+	for (const ecs::Entity other : rangers)
+		if (game.World().IsAlive(other) && game.World().Get<engine::gameplay::Owner>(other)->player == player)
+			BOOST_TEST(game.World().Get<engine::gameplay::Health>(other)->armor == armorAfter);
+	const std::uint32_t executed = game.World().Get<engine::gameplay::Upgradable>(ranger)->executed;
+	game.Tick();
+	BOOST_TEST(game.World().Get<engine::gameplay::Upgradable>(ranger)->executed == executed);
+	// A checkpoint holds the player's upgrades and the rangers' triggers.
+	const auto checkpoint = game.Checkpoint();
+	const auto restored = session::Session::Restore(shell.map->level, shell.game, {42, 0, {}}, checkpoint);
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST(restored->StateHash() == game.StateHash());
+}
+
+// ProductionUpdate::queueUpgrade / cancelUpgrade / PRODUCTION_UPGRADE through the command bus: a player
+// researches an upgrade its object's command set offers (on the shell map, America's Humvee drones: OBJECT
+// upgrades), paying BuildCost when queued; it cannot queue it twice or on another's object; cancelling refunds
+// it; queued again, it completes after BuildTime seconds of frames (whatever the power) and the object has it
+// (Object::giveUpgrade), researchable there no more.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_player_researches_an_upgrade_through_the_command_bus)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	session::Session game(shell.map->level, shell.game, {11, 1, {}, {"PlyrAmerica", "PlyrGLA"}});
+	game.Tick();
+	const std::uint32_t america = game.World().Get<engine::gameplay::Owner>(game.Named("Tom1"))->player;
+	// An American object with a queue and an upgrade to research.
+	ecs::Entity lab;
+	std::string upgradeName;
+	game.Visible().ForEach([&](const engine::gameplay::VisibleObject &object) {
+		if (lab != ecs::Entity{})
+			return;
+		const auto *owner = game.World().Get<engine::gameplay::Owner>(object.entity);
+		const auto *ref = game.World().Get<engine::gameplay::DefinitionRef>(object.entity);
+		if (owner == nullptr || ref == nullptr || owner->player != america || !game.World().Has<engine::gameplay::ProductionQueue>(object.entity))
+			return;
+		const auto list = shell.game.researchLists.find(shell.game.objects.Find(game.DefinitionName(ref->index))->commandSet);
+		if (list == shell.game.researchLists.end())
+			return;
+		for (const std::string &name : list->second)
+			if (const auto bit = shell.game.upgrades.Find(name); bit && shell.game.upgrades.upgrades[*bit].buildTicks > 0)
+			{
+				lab = object.entity;
+				upgradeName = name;
+				return;
+			}
+	});
+	BOOST_TEST_REQUIRE((lab != ecs::Entity{}));
+	const std::uint32_t bit = *shell.game.upgrades.Find(upgradeName);
+	const auto &upgrade = shell.game.upgrades.upgrades[bit];
+	BOOST_TEST_MESSAGE("researching " << upgradeName << " at " << game.DefinitionName(game.World().Get<engine::gameplay::DefinitionRef>(lab)->index)
+		<< ": " << upgrade.cost << " credits, " << upgrade.buildTicks << " ticks");
+	auto &money = game.World().Resource<engine::gameplay::PlayerMoney>();
+	money.Deposit(america, upgrade.cost * 2);
+	const std::int64_t before = money.Balance(america);
+	const auto &players = game.World().Resource<engine::gameplay::PlayerUpgrades>();
+	const auto send = [&](const commands::GameCommand &command, std::uint32_t seat) {
+		auto envelope = commands::Encode(command);
+		envelope.player = seat;
+		game.Tick(std::span(&envelope, 1));
+	};
+	// Not the GLA's to order.
+	send(commands::ResearchUpgrade{lab, upgradeName}, 1);
+	BOOST_TEST(game.World().Get<engine::gameplay::ProductionQueue>(lab)->count == 0u);
+	send(commands::ResearchUpgrade{lab, upgradeName}, 0);
+	BOOST_TEST(money.Balance(america) == before - upgrade.cost);
+	BOOST_TEST(players.InProduction(america, bit) == upgrade.player);
+	send(commands::ResearchUpgrade{lab, upgradeName}, 0); // once only
+	BOOST_TEST(game.World().Get<engine::gameplay::ProductionQueue>(lab)->count == 1u);
+	send(commands::CancelResearch{lab, upgradeName}, 0);
+	BOOST_TEST(money.Balance(america) == before);
+	BOOST_TEST(!players.InProduction(america, bit));
+	BOOST_TEST(game.World().Get<engine::gameplay::ProductionQueue>(lab)->count == 0u);
+
+	// The object its ObjectCreationUpgrade makes (the upgrade's creation list), counted on America's teams
+	// (the roster knows a spawn at once).
+	std::string droneType;
+	const auto *labObject = shell.game.objects.Find(game.DefinitionName(game.World().Get<engine::gameplay::DefinitionRef>(lab)->index));
+	for (const auto &entry : content::ReadObjectUpgrades(*labObject, shell.game.upgrades))
+		if (entry.effect.kind == content::UpgradeEffectKind::ObjectCreation && entry.trigger.activation.Has(bit))
+			if (const auto list = shell.game.creation.find(entry.effect.creation); list != shell.game.creation.end() && !list->second.nuggets.empty())
+				droneType = list->second.nuggets.front().names.front();
+	BOOST_TEST_REQUIRE(!droneType.empty());
+	const auto drones = [&] { return static_cast<std::size_t>(game.PlayerObjectCount("PlyrAmerica", droneType)); };
+	const std::size_t dronesBefore = drones();
+	send(commands::ResearchUpgrade{lab, upgradeName}, 0);
+	std::uint64_t ticks = 0;
+	const auto has = [&] {
+		const auto *own = game.World().Get<engine::gameplay::Upgradable>(lab);
+		return upgrade.player ? players.Completed(america).Has(bit) : own != nullptr && own->completed.Has(bit);
+	};
+	while (!has() && ticks < upgrade.buildTicks + 10)
+	{
+		game.Tick();
+		++ticks;
+	}
+	// GameLogic::update runs the tick's commands before the objects: the order's own frame is the first of
+	// its BuildTime frames (framesUnderConstruction 1), so it is done BuildTime - 1 ticks after it.
+	BOOST_TEST(ticks == upgrade.buildTicks - 1);
+	// ScriptEngine's completed upgrades (isUpgradeComplete with a source: PLAYER_BUILT_UPGRADE_FROM_NAMED): the upgrade is
+	// the lab's, not another object's; once taken, it is gone.
+	auto &records = game.World().Resource<gameplay::ScriptRecords>();
+	BOOST_TEST(!records.TakeUpgrade(america, upgradeName, game.Named("Tom1")));
+	BOOST_TEST(records.TakeUpgrade(america, upgradeName, lab));
+	BOOST_TEST(!records.TakeUpgrade(america, upgradeName, lab));
+	BOOST_TEST(!players.InProduction(america, bit));
+	// Its ObjectCreationUpgrade (UpgradeObject: the drone's creation list) runs in the very frame the research
+	// completes (giveUpgrade -> updateUpgradeModules -> upgradeImplementation).
+	BOOST_TEST_MESSAGE("american drones: " << dronesBefore << " -> " << drones());
+	BOOST_TEST(drones() == dronesBefore + 1);
+	// It serves the Humvee that made it (ObjectCreationList enslaves it: SlavedUpdate::onEnslave); the
+	// snapshot shows it from the next tick.
+	game.Tick();
+	std::size_t serving = 0;
+	game.Visible().ForEach([&](const engine::gameplay::VisibleObject &object) {
+		if (const auto *slave = game.World().Get<engine::gameplay::Slaved>(object.entity); slave != nullptr && slave->master == lab)
+			++serving;
+	});
+	BOOST_TEST(serving == 1u);
+	send(commands::ResearchUpgrade{lab, upgradeName}, 0); // it has it now
+	BOOST_TEST(game.World().Get<engine::gameplay::ProductionQueue>(lab)->count == 0u);
+	// ProductionUpdate::onDie -> cancelAndRefundAllProduction: another of its researches, then it dies.
+	std::string another;
+	for (const std::string &name : shell.game.researchLists.at(shell.game.objects.Find(game.DefinitionName(game.World().Get<engine::gameplay::DefinitionRef>(lab)->index))->commandSet))
+		if (name != upgradeName && another.empty())
+			another = name;
+	BOOST_TEST_REQUIRE(!another.empty());
+	// The shell map places it objectIndestructible (Object::updateObjValuesFromMapProperties -> setIndestructible): kill()
+	// does nothing to it. Made destructible as a script would (UNIT_AFFECT_OBJECT_PANEL_FLAGS), it dies.
+	BOOST_TEST(game.World().Get<engine::gameplay::Health>(lab)->indestructible);
+	generalszh::gameplay::SetObjectPanelFlag(game.Game(), lab, "Indestructible", false);
+	const std::int64_t beforeSecond = money.Balance(america);
+	send(commands::ResearchUpgrade{lab, another}, 0);
+	BOOST_TEST(game.World().Get<engine::gameplay::ProductionQueue>(lab)->count == 1u);
+	BOOST_TEST(money.Balance(america) < beforeSecond);
+	game.World().Resource<engine::gameplay::KillRequests>().entities.push_back(lab);
+	game.Tick();
+	BOOST_TEST(money.Balance(america) == beforeSecond);
+	if (game.World().IsAlive(lab))
+		BOOST_TEST(game.World().Get<engine::gameplay::ProductionQueue>(lab)->count == 0u);
+	const auto restored = session::Session::Restore(shell.map->level, shell.game, {11, 1, {}, {"PlyrAmerica", "PlyrGLA"}}, game.Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST(restored->StateHash() == game.StateHash());
+}
+
+// WeaponBonusUpgrade::upgradeImplementation: Object::setWeaponBonusCondition(PLAYER_UPGRADE) (AP bullets on the
+// GLA's rebels, quad cannons and technicals); ExperienceScalarUpgrade: the ranger's scalar plus AddXPScalar (1.0)
+// with Advanced Training.
+BOOST_AUTO_TEST_CASE(legacy_parity_bonus_and_experience_upgrades_change_their_objects)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	session::Session game(shell.map->level, shell.game, {42, 0, {}});
+	for (int tick = 0; tick < 30 * 125; ++tick)
+		game.Tick();
+	ecs::Entity gunner, ranger;
+	game.Visible().ForEach([&](const engine::gameplay::VisibleObject &object) {
+		const auto *ref = game.World().Get<engine::gameplay::DefinitionRef>(object.entity);
+		if (ref == nullptr || !game.World().Has<engine::gameplay::Upgradable>(object.entity))
+			return;
+		const std::string_view name = game.DefinitionName(ref->index);
+		if (gunner == ecs::Entity{} && (name == "GLAInfantryRebel" || name == "GLAVehicleQuadCannon" || name == "GLAVehicleTechnicalChassisOne"))
+			gunner = object.entity;
+		if (ranger == ecs::Entity{} && name == "AmericaInfantryRanger")
+			ranger = object.entity;
+	});
+	BOOST_TEST_REQUIRE((gunner != ecs::Entity{}));
+	BOOST_TEST_REQUIRE((ranger != ecs::Entity{}));
+	auto &upgrades = game.World().Resource<engine::gameplay::PlayerUpgrades>();
+	BOOST_TEST((game.World().Get<engine::gameplay::WeaponBonusConditions>(gunner)->flags & generalszh::content::weapon_bonus::PlayerUpgrade) == 0u);
+	BOOST_TEST(game.World().Get<engine::gameplay::Experience>(ranger)->scalar.Raw() == Engine::Math::Fixed::One().Raw());
+	upgrades.Grant(game.World().Get<engine::gameplay::Owner>(gunner)->player, *shell.game.upgrades.Find("Upgrade_GLAAPBullets"));
+	upgrades.Grant(game.World().Get<engine::gameplay::Owner>(ranger)->player, *shell.game.upgrades.Find("Upgrade_AmericaAdvancedTraining"));
+	game.Tick();
+	const auto &conditions = *game.World().Get<engine::gameplay::WeaponBonusConditions>(gunner);
+	BOOST_TEST((conditions.flags & generalszh::content::weapon_bonus::PlayerUpgrade) != 0u);
+	BOOST_TEST(conditions.changedTick == game.CurrentTick());
+	BOOST_TEST(game.World().Get<engine::gameplay::Experience>(ranger)->scalar.Raw() == Engine::Math::Fixed::FromInt(2).Raw());
+}
+
+// The shell map's paradrop (SUPERWEAPON_Paradrop: PutInContainer AmericaParachute, ParachuteDirectly): each Ranger rides
+// the plane in its own parachute (DeliverPayloadNugget::create), which drops, opens once it has fallen its
+// ParachuteOpenDist, glides ultra-accurately for the target (setOverrideDestination) and, on the ground, lets its Ranger
+// go (no longer held).
+BOOST_AUTO_TEST_CASE(legacy_parity_the_shell_map_paradrop_comes_down_under_parachutes)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	session::Session game(shell.map->level, shell.game, {42, 0, {}});
+	namespace gp = engine::gameplay;
+	using Engine::Math::Fixed;
+	auto &world = game.World();
+	std::set<std::uint64_t> seen, opened, landed;
+	const auto key = [](ecs::Entity entity) { return (static_cast<std::uint64_t>(entity.index) << 32) | entity.generation; };
+	for (int tick = 0; tick < 30 * 125; ++tick)
+	{
+		game.Tick();
+		ecs::Query<ecs::Read<gp::Parachute>> chutes(world);
+		chutes.ForEachChunk([&](auto chunk) {
+			const auto states = chunk.template Get<gp::Parachute>();
+			const auto entities = chunk.Entities();
+			for (std::size_t row = 0; row < states.size(); ++row)
+			{
+				const gp::Parachute &chute = states[row];
+				if (world.IsAlive(chute.rider) && game.DefinitionName(world.Get<gp::DefinitionRef>(chute.rider)->index) == "AmericaInfantryRanger")
+				{
+					seen.insert(key(entities[row]));
+					BOOST_TEST(chute.Has(gp::parachute_flag::Override));
+				}
+				if (chute.Has(gp::parachute_flag::Opened) && seen.contains(key(entities[row])) && opened.empty())
+					BOOST_TEST_MESSAGE("first parachute opened on tick " << game.CurrentTick());
+				if (chute.Has(gp::parachute_flag::Opened) && seen.contains(key(entities[row])))
+					opened.insert(key(entities[row]));
+				if (seen.contains(key(entities[row])) && !world.IsAlive(chute.rider) && chute.Has(gp::parachute_flag::Opened))
+					landed.insert(key(entities[row]));
+			}
+		});
+	}
+	BOOST_TEST_REQUIRE(!seen.empty());
+	BOOST_TEST(opened.size() == seen.size());
+	// Rangers let go of their chutes are free (not held) and on the map.
+	game.Visible().ForEach([&](const gp::VisibleObject &object) {
+		if (const auto *ref = world.Get<gp::DefinitionRef>(object.entity); ref != nullptr && game.DefinitionName(ref->index) == "AmericaInfantryRanger" &&
+			world.Get<gp::ParachuteRider>(object.entity) == nullptr)
+			if (const auto *disabled = world.Get<gp::Disabled>(object.entity))
+				BOOST_TEST((disabled->mask & gp::disabled_type::Held) == 0u);
+	});
+}
+
+// PilotFindVehicleUpdate and VeterancyCrateCollide on the shell map (PlyrAmerica is a computer player): a veteran
+// Humvee's pilot ejects (EjectPilotDie), and once idle looks every ScanRate (1000 ms) within ScanRange (300) for its
+// player's healthy vehicle (at least MinHealth 0.5), goes for the nearest (aiEnter) and, running into it, gives it his
+// own level (AddsOwnerVeterancy: veteran, one level; gainExpForLevel unscaled, with the promotion's feedback) and is gone
+// (destroyObject). A pilot of a human player would not (an AI-only behaviour).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_computer_players_pilot_climbs_into_its_vehicle)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	session::Session game(shell.map->level, shell.game, {42, 0, {}});
+	namespace gp = engine::gameplay;
+	using Engine::Math::Fixed;
+	auto &world = game.World();
+	game.Tick();
+	const std::uint32_t team = *game.Teams().FindTeam("teamPlyrAmerica");
+	// Somewhere open and quiet near the map's middle.
+	const auto &terrain = shell.map->level.terrain;
+	const Fixed middle = terrain.cellSize * Fixed::FromInt(static_cast<std::int64_t>(terrain.width) / 2);
+	const Engine::Math::FixedVector2 at{middle, middle};
+	const ecs::Entity humvee = game.Place("AmericaVehicleHumvee", at, {}, team);
+	const ecs::Entity tank = game.Place("AmericaTankCrusader", {at.x + Fixed::FromInt(80), at.y}, {}, team);
+	BOOST_TEST_REQUIRE(world.IsAlive(humvee));
+	BOOST_TEST_REQUIRE(world.IsAlive(tank));
+	world.Get<gp::Experience>(humvee)->level = 1;
+	BOOST_TEST(world.Get<gp::Experience>(tank)->level == 0u);
+	game.Tick();
+	world.Resource<gp::KillRequests>().entities.push_back(humvee);
+	game.Tick();
+	ecs::Entity pilot{};
+	for (int tick = 0; tick < 5 && !world.IsAlive(pilot); ++tick, game.Tick())
+	game.Visible().ForEach([&](const gp::VisibleObject &object) {
+		if (const auto *ref = world.Get<gp::DefinitionRef>(object.entity); ref != nullptr && game.DefinitionName(ref->index) == "AmericaInfantryPilot" &&
+			Engine::Math::DistanceSquared(object.transform.position.XY(), at) < Fixed::FromInt(100 * 100))
+			pilot = object.entity;
+	});
+	BOOST_TEST_REQUIRE(world.IsAlive(pilot));
+	std::optional<std::uint64_t> joined;
+	bool promoted = false;
+	for (int tick = 0; tick < 600 && !joined; ++tick)
+	{
+		game.Tick();
+		for (const gp::Promotion &promotion : world.Resource<gp::Promotions>().list)
+			promoted = promoted || (promotion.entity == tank && promotion.from == 0u && promotion.to == 1u);
+		if (world.Get<gp::Experience>(tank)->level == 1u)
+			joined = game.CurrentTick();
+	}
+	BOOST_TEST_REQUIRE(joined.has_value());
+	BOOST_TEST(promoted);
+	game.Tick();
+	BOOST_TEST(!world.IsAlive(pilot));
+}
+
+// AssistedTargetingUpdate and Weapon::processRequestAssistance on the shell map's two Patriot batteries (79 apart):
+// one firing its PatriotMissileWeapon (RequestAssistRange 200) at a GLA technical asks the other (the same kind, its
+// player's, within 200, free: its weapon in hand ready), which locks its SECONDARY (AssistingWeaponSlot, the
+// PatriotMissileAssistWeapon) for the attack and attacks the technical for AssistingClipSize (4) shots; spent, its
+// lock goes back.
+BOOST_AUTO_TEST_CASE(legacy_parity_patriots_assist_each_other)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	session::Session game(shell.map->level, shell.game, {42, 0, {}});
+	namespace gp = engine::gameplay;
+	using Engine::Math::Fixed;
+	auto &world = game.World();
+	game.Tick();
+	std::vector<ecs::Entity> patriots;
+	game.Visible().ForEach([&](const gp::VisibleObject &object) {
+		if (const auto *ref = world.Get<gp::DefinitionRef>(object.entity); ref != nullptr && game.DefinitionName(ref->index) == "AmericaPatriotBattery")
+			patriots.push_back(object.entity);
+	});
+	BOOST_TEST_REQUIRE(patriots.size() == 2u);
+	BOOST_TEST_REQUIRE(world.Get<gp::AssistedTargeting>(patriots[0]) != nullptr);
+	BOOST_TEST(world.Get<gp::AssistedTargeting>(patriots[0])->slot == 1u);
+	BOOST_TEST(world.Get<gp::AssistedTargeting>(patriots[0])->clip == 4u);
+	const auto &at = world.Get<gp::Transform>(patriots[0])->position;
+	const ecs::Entity technical = game.Place("GLAVehicleTechnical", {at.x + Fixed::FromInt(120), at.y}, {}, *game.Teams().FindTeam("teamPlyrGLA"));
+	BOOST_TEST_REQUIRE(world.IsAlive(technical));
+	std::optional<std::uint64_t> asked;
+	ecs::Entity helper{};
+	std::uint32_t helperShots = 0;
+	bool released = false;
+	for (int tick = 0; tick < 900 && !released; ++tick)
+	{
+		game.Tick();
+		if (!asked)
+			for (const gp::Assist &assist : world.Resource<gp::Assists>().list)
+				if (assist.victim == technical)
+				{
+					asked = game.CurrentTick();
+					helper = assist.assister;
+					BOOST_TEST((assist.requester == (helper == patriots[0] ? patriots[1] : patriots[0])));
+				}
+		if (!asked)
+			continue;
+		game.Fired().ForEach([&](const gp::Shot &shot) {
+			if (shot.source == helper && shot.target == technical && shot.slot == 1u)
+				++helperShots;
+		});
+		const gp::Assisting *assisting = world.Get<gp::Assisting>(helper);
+		if (game.CurrentTick() == *asked + 1)
+		{
+			BOOST_TEST_REQUIRE(assisting != nullptr);
+			BOOST_TEST((assisting->victim == technical));
+			BOOST_TEST(world.Get<gp::WeaponSlots>(helper)->locked == 1u);
+			BOOST_TEST((world.Get<gp::AttackTarget>(helper)->target == technical));
+		}
+		if (assisting == nullptr && game.CurrentTick() > *asked + 1)
+		{
+			released = true;
+			BOOST_TEST(world.Get<gp::WeaponSlots>(helper)->locked == gp::WeaponSlots::Unlocked);
+		}
+		if (!world.IsAlive(technical))
+			break;
+	}
+	BOOST_TEST_REQUIRE(asked.has_value());
+	BOOST_TEST_MESSAGE("helper fired " << helperShots << " assisting shots");
+	if (released && world.IsAlive(technical))
+		BOOST_TEST(helperShots >= 4u);
+}
+
+// AutoFindHealingUpdate with HealContain (AmericaInfantry.ini AmericaInfantryRanger: ScanRate 1000, ScanRange 300,
+// NeverHeal 0.85; America.ini AmericaBarracks: HealContain TimeForFullHeal 2000, KindOf HEAL_PAD). A computer player's
+// Ranger at half health, idle within 300 of its barracks, goes in on its first look (m_nextScanFrames starts at 0);
+// inside it heals by a sixtieth of its maximum a frame (doHeal; attemptHealing: up to its maximum) and comes out whole exactly 60 frames after it got in
+// (getFrame() - getContainedByFrame() >= framesForFullHeal). One at 90% health (above NeverHeal) stays put.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_hurt_computer_ranger_heals_in_its_barracks)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	session::Session game(shell.map->level, shell.game, {42, 0, {}});
+	namespace gp = engine::gameplay;
+	using Engine::Math::Fixed;
+	auto &world = game.World();
+	game.Tick();
+	const std::uint32_t team = *game.Teams().FindTeam("teamPlyrAmerica");
+	const auto &terrain = shell.map->level.terrain;
+	const Fixed middle = terrain.cellSize * Fixed::FromInt(static_cast<std::int64_t>(terrain.width) / 2);
+	const Engine::Math::FixedVector2 at{middle, middle};
+	const ecs::Entity barracks = game.Place("AmericaBarracks", at, {}, team);
+	BOOST_TEST_REQUIRE(world.IsAlive(barracks));
+	BOOST_TEST_REQUIRE(world.Get<gp::HealPad>(barracks) != nullptr);
+	BOOST_TEST(world.Get<gp::HealPad>(barracks)->fullHealTicks == 60u);
+	const ecs::Entity hurt = game.Place("AmericaInfantryRanger", {at.x + Fixed::FromInt(120), at.y}, {}, team);
+	const ecs::Entity scratched = game.Place("AmericaInfantryRanger", {at.x, at.y + Fixed::FromInt(120)}, {}, team);
+	BOOST_TEST_REQUIRE(world.IsAlive(hurt));
+	gp::Health &health = *world.Get<gp::Health>(hurt);
+	health.current = health.maximum / Fixed::FromInt(2);
+	world.Get<gp::Health>(scratched)->current = world.Get<gp::Health>(scratched)->maximum * Fixed::FromRatio(9, 10);
+	const Fixed slice = health.maximum / Fixed::FromInt(60);
+	std::optional<std::uint64_t> in, out;
+	bool healedEachFrame = true;
+	Fixed last;
+	for (int tick = 0; tick < 3000 && !out; ++tick)
+	{
+		game.Tick();
+		const gp::Passenger *seat = world.Get<gp::Passenger>(hurt);
+		const Fixed now = world.Get<gp::Health>(hurt)->current;
+		if (seat != nullptr && !in)
+		{
+			in = seat->since;
+			BOOST_TEST_MESSAGE("in at tick " << *in << " of " << game.CurrentTick());
+		}
+		else if (seat != nullptr)
+			healedEachFrame = healedEachFrame && (now - last).Raw() == std::min(slice, health.maximum - last).Raw();
+		if (in && seat == nullptr)
+			out = game.CurrentTick();
+		last = now;
+	}
+	BOOST_TEST_REQUIRE(in.has_value());
+	BOOST_TEST_REQUIRE(out.has_value());
+	BOOST_TEST_MESSAGE("out after " << (*out - *in) << " ticks");
+	BOOST_TEST(*out - *in == 60u);
+	BOOST_TEST(healedEachFrame);
+	BOOST_TEST(world.Get<gp::Health>(hurt)->current.Raw() == world.Get<gp::Health>(hurt)->maximum.Raw());
+	BOOST_TEST(world.Get<gp::Passenger>(scratched) == nullptr);
+	BOOST_TEST(!world.Has<gp::Boarding>(scratched));
+}
+
+// UpgradeDie::onDie (UpgradeToRemove Upgrade_AmericaBattleDrone) with GenericObjectCreationNugget's setProducer: a
+// Humvee given the Battle Drone makes its drone (ObjectCreationUpgrade OCL_AmericanBattleDrone), whose producer it is;
+// the drone killed, the Humvee gives the upgrade up (Object::removeUpgrade) and its trigger is reset
+// (UpgradeMux::resetUpgrade), so the upgrade given again makes a second drone.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_lost_drone_frees_its_humvees_upgrade)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	namespace gp = engine::gameplay;
+	session::Session game(shell.map->level, shell.game, {42, 0, {}});
+	game.Tick();
+	const auto america = *game.Teams().FindTeam("teamPlyrAmerica");
+	const auto [low, high] = game.Game().ground.Extent();
+	(void)high;
+	const ecs::Entity humvee = game.Place("AmericaVehicleHumvee", low + Engine::Math::FixedVector2{Engine::Math::Fixed::FromInt(150), Engine::Math::Fixed::FromInt(150)}, {}, america);
+	const std::uint32_t upgrade = *shell.game.upgrades.Find("Upgrade_AmericaBattleDrone");
+	const auto drones = [&] {
+		std::vector<ecs::Entity> found;
+		ecs::Query<ecs::Read<gp::Producer>, ecs::Read<gp::DefinitionRef>> query(game.World());
+		query.ForEachChunk([&](auto chunk) {
+			const auto producers = chunk.template Get<gp::Producer>();
+			const auto definitions = chunk.template Get<gp::DefinitionRef>();
+			const auto entities = chunk.Entities();
+			for (std::size_t row = 0; row < producers.size(); ++row)
+				if (producers[row].entity == humvee && game.DefinitionName(definitions[row].index) == "AmericaVehicleBattleDrone")
+					found.push_back(entities[row]);
+		});
+		return found;
+	};
+	BOOST_TEST_REQUIRE(gameplay::GiveObjectUpgrade(game.Game(), humvee, "Upgrade_AmericaBattleDrone"));
+	for (int tick = 0; tick < 3; ++tick)
+		game.Tick();
+	auto made = drones();
+	BOOST_TEST_REQUIRE(made.size() == 1u);
+	BOOST_TEST(game.World().Get<gp::Upgradable>(humvee)->completed.Has(upgrade));
+	game.World().Resource<gp::KillRequests>().entities.push_back(made.front());
+	game.Tick();
+	BOOST_TEST(!game.World().Get<gp::Upgradable>(humvee)->completed.Has(upgrade));
+	BOOST_TEST(game.World().Get<gp::Upgradable>(humvee)->executed == 0u);
+	BOOST_TEST(gameplay::GiveObjectUpgrade(game.Game(), humvee, "Upgrade_AmericaBattleDrone"));
+	for (int tick = 0; tick < 3; ++tick)
+		game.Tick();
+	made = drones();
+	BOOST_TEST(made.size() == 1u);
+	BOOST_TEST(game.World().Get<gp::Upgradable>(humvee)->completed.Has(upgrade));
+}
+
+// CostModifierUpgrade (TechOilRefinery: GrantUpgradeCreate Upgrade_CostReduction, EffectKindOf VEHICLE, Percentage
+// -10%) with Player::addKindOfProductionCostChange / removeKindOfProductionCostChange (reference counted) and
+// ThingTemplate::calcCostToBuild: its player's Humvee (BuildCost 700) costs 630, a Ranger (not a vehicle) its full 225;
+// a second refinery adds no more (the same change counted twice); one killed (TechBuildingBehavior::onDie: to the
+// neutral team, onCapture moving its change) leaves the discount, both killed end it, and the neutral player has it.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_tech_oil_refinery_cuts_its_players_vehicle_costs)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	namespace gp = engine::gameplay;
+	session::Session game(shell.map->level, shell.game, {42, 0, {}});
+	game.Tick();
+	const auto america = *game.Teams().FindTeam("teamPlyrAmerica");
+	const std::uint32_t player = game.Teams().TeamAt(america).owner;
+	const auto [low, high] = game.Game().ground.Extent();
+	(void)high;
+	const auto at = [&](int x, int y) { return low + Engine::Math::FixedVector2{Engine::Math::Fixed::FromInt(x), Engine::Math::Fixed::FromInt(y)}; };
+	const content::ObjectDefinition &humvee = *shell.game.objects.Find("AmericaVehicleHumvee");
+	const content::ObjectDefinition &ranger = *shell.game.objects.Find("AmericaInfantryRanger");
+	BOOST_TEST(gameplay::CostToBuild(game.Game(), player, humvee) == 700);
+	const ecs::Entity first = game.Place("TechOilRefinery", at(200, 200), {}, america);
+	game.Tick();
+	BOOST_TEST(gameplay::CostToBuild(game.Game(), player, humvee) == 630);
+	BOOST_TEST(gameplay::CostToBuild(game.Game(), player, ranger) == 225);
+	const ecs::Entity second = game.Place("TechOilRefinery", at(400, 200), {}, america);
+	game.Tick();
+	BOOST_TEST(gameplay::CostToBuild(game.Game(), player, humvee) == 630);
+	game.World().Resource<gp::KillRequests>().entities.push_back(first);
+	for (int tick = 0; tick < 3; ++tick)
+		game.Tick();
+	BOOST_TEST(gameplay::CostToBuild(game.Game(), player, humvee) == 630);
+	const std::uint32_t neutral = game.World().Get<gp::Owner>(first)->player;
+	BOOST_TEST(neutral != player);
+	BOOST_TEST(gameplay::CostToBuild(game.Game(), neutral, humvee) == 630);
+	game.World().Resource<gp::KillRequests>().entities.push_back(second);
+	for (int tick = 0; tick < 3; ++tick)
+		game.Tick();
+	BOOST_TEST(gameplay::CostToBuild(game.Game(), player, humvee) == 700);
+}
+
+// ReplaceObjectUpgrade::upgradeImplementation (a GLA fake structure's Upgrade_BecomeReal...): the fake is deleted
+// (destroyObject: no death, no remains) and its ReplaceObject made in its place on its team, facing as it did, taken
+// as just built (onBuildComplete; onStructureConstructionComplete: its player's score counts it built).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_fake_structure_becomes_real)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	namespace gp = engine::gameplay;
+	std::string fake, real, upgrade;
+	for (const auto &[name, object] : shell.game.objects)
+	{
+		for (const auto &entry : content::ReadObjectUpgrades(object, shell.game.upgrades))
+			if (entry.effect.kind == content::UpgradeEffectKind::ReplaceObject)
+				for (std::uint32_t bit = 0; bit < gp::UpgradeMask::Capacity; ++bit)
+					if (entry.trigger.activation.Has(bit))
+					{
+						fake = name;
+						real = entry.effect.replacement;
+						upgrade = shell.game.upgrades.upgrades[bit].name;
+					}
+		if (!fake.empty())
+			break;
+	}
+	BOOST_TEST_REQUIRE(!fake.empty());
+	BOOST_TEST_MESSAGE(fake << " -> " << real << " by " << upgrade);
+	session::Session game(shell.map->level, shell.game, {42, 0, {}});
+	game.Tick();
+	const auto gla = *game.Teams().FindTeam("teamPlyrGLA");
+	const auto [low, high] = game.Game().ground.Extent();
+	(void)high;
+	const auto spot = low + Engine::Math::FixedVector2{Engine::Math::Fixed::FromInt(250), Engine::Math::Fixed::FromInt(250)};
+	const ecs::Entity before = game.Place(fake, spot, Engine::Math::TurnFromDegrees(90), gla);
+	BOOST_TEST_REQUIRE(game.World().IsAlive(before));
+	const auto facing = game.World().Get<gp::Transform>(before)->facing;
+	BOOST_TEST_REQUIRE(gameplay::GiveObjectUpgrade(game.Game(), before, upgrade));
+	game.Tick();
+	game.Tick();
+	BOOST_TEST(!game.World().IsAlive(before));
+	std::vector<ecs::Entity> made;
+	game.Visible().ForEach([&](const gp::VisibleObject &object) {
+		if (const auto *ref = game.World().Get<gp::DefinitionRef>(object.entity); ref != nullptr && game.DefinitionName(ref->index) == real)
+			if (Engine::Math::Distance(game.World().Get<gp::Transform>(object.entity)->position.XY(), spot) < Engine::Math::Fixed::FromInt(1))
+				made.push_back(object.entity);
+	});
+	BOOST_TEST_REQUIRE(made.size() == 1u);
+	BOOST_TEST(game.World().Get<gp::TeamMember>(made.front())->team == gla);
+	BOOST_TEST((game.World().Get<gp::Transform>(made.front())->facing == facing));
+}
+
+// RepairDockUpdate::action (TimeForFullHeal 5000: 150 frames) through AIUpdateInterface::privateGetRepaired
+// (ActionManager::canGetRepairedAt, then aiDock): a Crusader at half health sent to its player's War Factory (a
+// REPAIR_PAD) docks, then heals each tick by what it lacked as its repair began over 150 (m_healthToAddPerFrame) until
+// whole, when its business ends and it leaves the dock. Infantry, and a vehicle already whole, may not be sent.
+// (Fixed point: each step within 1/1000 of the original's float rate.)
+BOOST_AUTO_TEST_CASE(legacy_parity_a_damaged_tank_is_repaired_at_its_war_factory)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	namespace gp = engine::gameplay;
+	using Engine::Math::Fixed;
+	session::Session game(shell.map->level, shell.game, {42, 0, {}});
+	game.Tick();
+	const auto america = *game.Teams().FindTeam("teamPlyrAmerica");
+	const auto [low, high] = game.Game().ground.Extent();
+	(void)high;
+	const auto at = [&](int x, int y) { return low + Engine::Math::FixedVector2{Fixed::FromInt(x), Fixed::FromInt(y)}; };
+	const ecs::Entity factory = game.Place("AmericaWarFactory", at(300, 300), {}, america);
+	const ecs::Entity tank = game.Place("AmericaTankCrusader", at(300, 500), {}, america);
+	const ecs::Entity ranger = game.Place("AmericaInfantryRanger", at(350, 500), {}, america);
+	game.Tick();
+	BOOST_TEST_REQUIRE(game.World().Has<gp::RepairDock>(factory));
+	BOOST_TEST(!gameplay::CanGetRepairedAt(game.Game(), tank, factory, true)); // whole
+	auto &health = *game.World().Get<gp::Health>(tank);
+	const Fixed maximum = health.maximum;
+	health.current = maximum / Fixed::FromInt(2);
+	BOOST_TEST(gameplay::CanGetRepairedAt(game.Game(), tank, factory, true));
+	BOOST_TEST(!gameplay::CanGetRepairedAt(game.Game(), ranger, factory, true)); // not a vehicle
+	game.World().Get<gp::Health>(ranger)->current = game.World().Get<gp::Health>(ranger)->maximum / Fixed::FromInt(2);
+	BOOST_TEST(!gameplay::CanGetRepairedAt(game.Game(), ranger, factory, true));
+	gameplay::OrderGetRepaired(game.Game(), tank, factory, true);
+	BOOST_TEST_REQUIRE(gp::IsDocking(*game.World().Get<gp::Docking>(tank)));
+	const Fixed rate = (maximum - maximum / Fixed::FromInt(2)) / Fixed::FromInt(150);
+	Fixed last = game.World().Get<gp::Health>(tank)->current;
+	int healing = 0, whole = 0, left = 0;
+	for (int tick = 1; tick < 30 * 60 && left == 0; ++tick)
+	{
+		game.Tick();
+		const Fixed now = game.World().Get<gp::Health>(tank)->current;
+		if (now > last)
+		{
+			++healing;
+			// attemptHealing stamps the tick (m_lastHealingTimestamp).
+			BOOST_TEST_REQUIRE(game.World().Get<gp::Health>(tank)->lastHealingTick == game.CurrentTick());
+			if (now < maximum)
+				BOOST_TEST((Engine::Math::Abs(now - last - rate) <= Fixed::FromRatio(1, 1000)));
+		}
+		if (now == maximum && whole == 0)
+			whole = tick;
+		last = now;
+		if (whole != 0 && !gp::IsDocking(*game.World().Get<gp::Docking>(tank)))
+			left = tick;
+	}
+	BOOST_TEST(whole != 0);
+	BOOST_TEST(left != 0);
+	// 150 steps of the rate make it whole (the last one capped at its maximum).
+	BOOST_TEST(healing >= 150);
+	BOOST_TEST(healing <= 151);
+	BOOST_TEST(!game.World().Get<gp::RepairDock>(factory)->lastRepair.IsValid());
+}
+
+// QueueProductionExitUpdate (ChinaBarracks: ExitDelay 300, 9 frames) with ProductionUpdate's exit loop: a Red Guard
+// entry (QuantityModifier 2) done, the first comes out that tick; the exit is then busy (isFreeToExit: m_currentDelay),
+// the second waiting in the entry, and it comes out 9 ticks after the first.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_barracks_lets_its_red_guards_out_one_at_a_time)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	namespace gp = engine::gameplay;
+	session::Session game(shell.map->level, shell.game, {42, 0, {}});
+	game.Tick();
+	const auto china = *game.Teams().FindTeam("teamPlyrChina");
+	const std::uint32_t player = game.Teams().TeamAt(china).owner;
+	const auto [low, high] = game.Game().ground.Extent();
+	(void)high;
+	const ecs::Entity barracks = game.Place("ChinaBarracks", low + Engine::Math::FixedVector2{Engine::Math::Fixed::FromInt(300), Engine::Math::Fixed::FromInt(300)}, {}, china);
+	BOOST_TEST_REQUIRE(game.World().Has<gp::ProductionExitGate>(barracks));
+	BOOST_TEST(game.World().Get<gp::ProductionExitGate>(barracks)->delayTicks == 9u);
+	game.World().Resource<gp::PlayerMoney>().Deposit(player, 10000);
+	// A map's computer player builds no units until its scripts allow it (AIPlayer's constructor: setCanBuildUnits(false);
+	// PLAYER_ENABLE_UNIT_CONSTRUCTION), as they would here.
+	game.Game().roster.PlayerAt(player).unitConstructionEnabled = true;
+	BOOST_TEST_REQUIRE((gameplay::QueueUnit(game.Game(), player, barracks, "ChinaInfantryRedguard") == gameplay::QueueResult::Queued));
+	std::vector<std::uint64_t> out;
+	for (int tick = 0; tick < 30 * 60 && out.size() < 2; ++tick)
+	{
+		game.Tick();
+		game.World().Resource<gp::ProductionDone>().ForEach([&](const gp::Produced &done) {
+			if (done.factory == barracks)
+				for (std::uint32_t unit = 0; unit < done.quantity; ++unit)
+					out.push_back(game.CurrentTick());
+		});
+	}
+	BOOST_TEST_REQUIRE(out.size() == 2u);
+	BOOST_TEST(out[1] - out[0] == 9u);
+}
+
+// SpawnBehavior::createSpawn through QueueProductionExitUpdate (GLAInfantryAngryMobNexus: InitialBurst 5, ExitDelay 5000
+// = 150 ticks): reserveDoorForExit lets the first five members out at once (the burst), then one each time the exit is
+// free again, 150 ticks after the last (at the spawner's half-second updates).
+BOOST_AUTO_TEST_CASE(legacy_parity_an_angry_mob_bursts_out_then_grows_one_by_one)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	namespace gp = engine::gameplay;
+	session::Session game(shell.map->level, shell.game, {42, 0, {}});
+	game.Tick();
+	const auto gla = *game.Teams().FindTeam("teamPlyrGLA");
+	const auto [low, high] = game.Game().ground.Extent();
+	(void)high;
+	const ecs::Entity nexus = game.Place("GLAInfantryAngryMobNexus", low + Engine::Math::FixedVector2{Engine::Math::Fixed::FromInt(300), Engine::Math::Fixed::FromInt(300)}, {}, gla);
+	BOOST_TEST_REQUIRE(game.World().Has<gp::ProductionExitGate>(nexus));
+	BOOST_TEST(game.World().Get<gp::ProductionExitGate>(nexus)->delayTicks == 150u);
+	std::vector<std::pair<std::uint64_t, std::uint32_t>> growth;
+	std::uint32_t last = 0;
+	for (int tick = 0; tick < 400; ++tick)
+	{
+		game.Tick();
+		const std::uint32_t count = game.World().Get<gp::Spawner>(nexus)->spawnedCount;
+		if (count != last)
+			growth.emplace_back(game.CurrentTick(), count);
+		last = count;
+	}
+	BOOST_TEST_REQUIRE(growth.size() >= 3u);
+	BOOST_TEST(growth[0].second == 5u);
+	BOOST_TEST(growth[1].second == 6u);
+	BOOST_TEST(growth[1].first == growth[0].first + 150);
+	BOOST_TEST(growth[2].second == 7u);
+	BOOST_TEST(growth[2].first == growth[1].first + 150);
+}
+
+// MobMemberSlavedUpdate: spawned members know their nexus (onEnslave); the nexus sent off, they catch up (further than
+// MustCatchUpRadius 40: to its goal); the nexus gone (destroyed), each member dies the next tick (its slaver not found:
+// kill).
+BOOST_AUTO_TEST_CASE(legacy_parity_an_angry_mob_follows_its_nexus_and_dies_with_it)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	namespace gp = engine::gameplay;
+	using Engine::Math::Fixed;
+	using Engine::Math::FixedVector2;
+	session::Session game(shell.map->level, shell.game, {42, 0, {}});
+	game.Tick();
+	auto &world = game.World();
+	const auto gla = *game.Teams().FindTeam("teamPlyrGLA");
+	// Open ground: the first 30-cell square of clear pathfinding cells.
+	const auto &grid = world.Resource<gp::NavigationGrid>();
+	std::optional<FixedVector2> open;
+	for (std::int32_t y = 0; y + 30 < grid.Height() && !open; y += 3)
+		for (std::int32_t x = 0; x + 30 < grid.Width() && !open; x += 3)
+		{
+			bool clear = true;
+			for (std::int32_t cy = y; cy < y + 30 && clear; ++cy)
+				for (std::int32_t cx = x; cx < x + 30 && clear; ++cx)
+					clear = grid.Type(cx, cy) == gp::PathfindCellType::Clear;
+			if (clear)
+				open = FixedVector2{Fixed::FromInt((x + 5) * gp::PathfindCellSize), Fixed::FromInt((y + 5) * gp::PathfindCellSize)};
+		}
+	BOOST_TEST_REQUIRE(open.has_value());
+	const ecs::Entity nexus = game.Place("GLAInfantryAngryMobNexus", *open, {}, gla);
+	for (int tick = 0; tick < 30; ++tick)
+		game.Tick();
+	const gp::Spawner &spawner = *world.Get<gp::Spawner>(nexus);
+	BOOST_TEST_REQUIRE(spawner.spawnedCount == 5u);
+	std::vector<ecs::Entity> mob(spawner.spawned.begin(), spawner.spawned.begin() + spawner.spawnedCount);
+	for (const ecs::Entity member : mob)
+		BOOST_TEST((world.Get<gameplay::MobMember>(member)->nexus == nexus));
+	gameplay::OrderMove(game.Game(), nexus, *open + FixedVector2{Fixed::FromInt(200), Fixed::FromInt(200)}, true);
+	for (int tick = 0; tick < 450; ++tick)
+		game.Tick();
+	const auto nexusAt = world.Get<gp::Transform>(nexus)->position.XY();
+	BOOST_TEST((Engine::Math::Distance(nexusAt, *open) > Fixed::FromInt(150)));
+	for (const ecs::Entity member : mob)
+		if (world.IsAlive(member))
+			BOOST_TEST((Engine::Math::Distance(world.Get<gp::Transform>(member)->position.XY(), nexusAt) < Fixed::FromInt(120)));
+	// The nexus (an ImmortalBody: it goes when its mob is lost) destroyed.
+	gameplay::RetireNow(game.Game(), {nexus});
+	for (int tick = 0; tick < 4; ++tick)
+		game.Tick();
+	for (const ecs::Entity member : mob)
+		BOOST_TEST((!world.IsAlive(member) || world.Has<gp::Dying>(member)));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

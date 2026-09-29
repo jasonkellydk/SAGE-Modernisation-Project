@@ -1,9 +1,5 @@
-module;
-
-#include <algorithm>
-#include <vector>
-
 export module engine.ecs.storage.signature;
+import std;
 
 export import engine.ecs.core.component_registry;
 

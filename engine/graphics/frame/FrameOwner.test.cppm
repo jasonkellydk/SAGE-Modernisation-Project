@@ -4,10 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-#include <span>
-
 export module Graphics.FrameOwner.Tests;
+import std;
 
 import Graphics.FrameOwner;
 import Graphics.RenderGraph.Frame;

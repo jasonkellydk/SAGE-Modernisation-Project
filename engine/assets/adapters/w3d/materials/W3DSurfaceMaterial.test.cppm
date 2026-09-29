@@ -1,15 +1,9 @@
 module;
 #define BOOST_TEST_MODULE W3DSurfaceMaterialTests
 #include <boost/test/included/unit_test.hpp>
-#include <cstddef>
-#include <cstdlib>
-#include <filesystem>
-#include <fstream>
-#include <limits>
-#include <string>
-#include <vector>
 
 export module Assets.Tests.W3DSurfaceMaterial;
+import std;
 import Assets.Adapters.W3D.ShaderMaterials;
 import Assets.Adapters.W3D.SurfaceMaterial;
 import Assets.Materials;

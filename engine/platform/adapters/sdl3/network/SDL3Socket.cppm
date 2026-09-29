@@ -1,15 +1,8 @@
 module;
 #include <SDL3/SDL.h>
 #include <SDL3_net/SDL_net.h>
-#include <algorithm>
-#include <climits>
-#include <cstddef>
-#include <cstdint>
-#include <memory>
-#include <optional>
-#include <span>
-#include <string>
 export module engine.platform.adapters.sdl3.network.socket;
+import std;
 import engine.platform.network.socket;
 import engine.platform.network;
 
@@ -91,7 +84,7 @@ public:
 		if ((static_cast<unsigned>(interest) & static_cast<unsigned>(SocketReadiness::writable)) != 0 && m_stream && NET_GetConnectionStatus(m_stream) == NET_SUCCESS)
 			return {SocketReadiness::writable, false};
 		void* sockets[] = {socket};
-		const int result = NET_WaitUntilInputAvailable(sockets, 1, timeout > INT_MAX ? INT_MAX : static_cast<int>(timeout));
+		const int result = NET_WaitUntilInputAvailable(sockets, 1, timeout > std::numeric_limits<int>::max() ? std::numeric_limits<int>::max() : static_cast<int>(timeout));
 		if (result < 0) return {SocketReadiness::error, false};
 		if (result == 0) return {SocketReadiness::none, true};
 		return {SocketReadiness::readable, false};
@@ -137,7 +130,7 @@ public:
 	}
 private:
 	explicit SDL3Socket(NET_StreamSocket* stream) noexcept : m_kind(SocketKind::stream), m_stream(stream) {}
-	static int checked_size(std::size_t size) noexcept { return static_cast<int>(std::min<std::size_t>(size, INT_MAX)); }
+	static int checked_size(std::size_t size) noexcept { return static_cast<int>(std::min<std::size_t>(size, std::numeric_limits<int>::max())); }
 	static NET_Address* resolve(const std::string& host)
 	{
 		NET_Address* address = NET_ResolveHostname(host.c_str());

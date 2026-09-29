@@ -4,12 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <cstddef>
-#include <filesystem>
-#include <memory>
-#include <string>
-
 export module Engine.UI.WND.Document.Tests;
+import std;
 
 import Assets.Cache;
 import Engine.UI.WND;

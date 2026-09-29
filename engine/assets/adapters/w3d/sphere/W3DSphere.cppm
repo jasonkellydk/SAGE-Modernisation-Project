@@ -1,16 +1,5 @@
-module;
-
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <array>
-#include <span>
-#include <string>
-#include <string_view>
-#include <utility>
-#include <vector>
-
 export module Assets.Adapters.W3D.Sphere;
+import std;
 
 import Assets.Adapters.W3D.Chunks;
 import Assets.Math;

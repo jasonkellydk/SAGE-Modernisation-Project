@@ -4,10 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <utility>
-#include <vector>
-
 export module Graphics.Scene.Models.ModelAssetBinding.Tests;
+import std;
 
 import Assets.Identity;
 import Assets.Models;

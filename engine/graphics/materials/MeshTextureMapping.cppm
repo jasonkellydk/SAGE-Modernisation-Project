@@ -1,8 +1,5 @@
-module;
-#include <array>
-#include <cstdint>
-#include <optional>
 export module Graphics.Materials.MeshTextureMapping;
+import std;
 import Assets.Math;
 import Graphics.Materials.MeshMaterial;
 import Graphics.Materials.TextureMapping;

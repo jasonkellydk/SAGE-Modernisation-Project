@@ -1,18 +1,5 @@
-module;
-
-#include <algorithm>
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-#include <memory>
-#include <optional>
-#include <span>
-#include <stdexcept>
-#include <string>
-#include <utility>
-#include <vector>
-
 export module engine.ecs.scheduler.scheduler;
+import std;
 
 export import engine.jobs.job_system;
 export import engine.ecs.system.system;
@@ -78,6 +65,33 @@ public:
 
 	void Execute(engine::time::SimulationTime time);
 
+	// Where a tick's time goes (off by default: no timing cost). Per system: its chunks' and batch run's summed
+	// CPU nanoseconds and how often it ran; `waveNanos`: wall time of the waves (scheduling and commits included).
+	struct SystemTiming
+	{
+		std::string_view name;
+		std::uint64_t cpuNanos{0};
+		std::uint64_t runs{0};
+	};
+	void EnableProfiling(bool enabled);
+	std::vector<SystemTiming> Profile() const;
+	std::uint64_t WaveNanos() const noexcept { return m_waveNanos; }
+	// Waves a tick runs (each a barrier and a commit), and whether a system runs as a batch (on the caller, alone).
+	std::size_t WaveCount() const noexcept
+	{
+		std::size_t count = 0;
+		for (const auto &phase : m_plan.Phases())
+			count += phase.waves.size();
+		return count;
+	}
+	bool IsBatch(std::string_view name) const
+	{
+		for (SystemId system = 0; system < m_systems->Count(); ++system)
+			if (m_systems->Get(system).stableName == name)
+				return m_systems->Get(system).batch;
+		return false;
+	}
+
 private:
 	struct QueryBinding
 	{
@@ -102,6 +116,7 @@ private:
 		void *query{nullptr};
 		std::size_t chunkIndex{0};
 		SystemContext *context{nullptr};
+		std::atomic<std::uint64_t> *cpuNanos{nullptr}; // profiling: where its time adds up
 	};
 
 	static void ExecuteChunkJob(void *context);
@@ -117,6 +132,18 @@ private:
 	DependencyGraph m_graph;
 	ExecutionPlan m_plan;
 	std::vector<QueryBinding> m_queries;
+	// A wave's working set, kept between waves and ticks so running a wave allocates nothing once warm.
+	std::vector<PreparedSystem> m_prepared;
+	std::vector<CommandBuffer> m_waveCommands;
+	std::vector<SystemContext> m_waveContexts;
+	std::vector<ChunkExecution> m_waveExecutions;
+	std::vector<engine::jobs::Job> m_waveJobs;
+	std::vector<CommandBuffer *> m_waveCommandPointers;
+	// Profiling (EnableProfiling): per system id.
+	bool m_profiling{false};
+	std::unique_ptr<std::atomic<std::uint64_t>[]> m_cpuNanos;
+	std::vector<std::uint64_t> m_runs;
+	std::uint64_t m_waveNanos{0};
 	bool m_finalized{false};
 	std::optional<engine::time::FixedStep> m_step;
 	bool m_failed{false};
@@ -271,6 +298,18 @@ DependencyGraph Scheduler::BuildGraph(const SystemRegistry &systems)
 		for (const SystemDependency &dependency : info->After())
 			graph.AddEdge(ResolveDependency(systems, *info, dependency), info->id);
 	}
+	// Group ordering: every member (nested members included) of the earlier
+	// group before every member of the later one, within a phase.
+	for (const auto &[earlier, later] : systems.m_groupOrdering)
+		for (const SystemInfo *left : ordered)
+		{
+			if (std::find(left->groups.begin(), left->groups.end(), earlier) == left->groups.end())
+				continue;
+			for (const SystemInfo *right : ordered)
+				if (right != left && right->phase == left->phase &&
+					std::find(right->groups.begin(), right->groups.end(), later) != right->groups.end())
+					graph.AddEdge(left->id, right->id);
+		}
 	for (const auto &[before, after] : systems.m_ordering)
 	{
 		const SystemId source = systems.TryGet(*before.type);
@@ -462,14 +501,23 @@ void Scheduler::Finalize(const engine::time::FixedStep step)
 void Scheduler::ExecuteChunkJob(void *rawContext)
 {
 	ChunkExecution &job = *static_cast<ChunkExecution *>(rawContext);
+	if (job.cpuNanos == nullptr)
+	{
+		job.execute(job.instance, job.query, job.chunkIndex, *job.context);
+		return;
+	}
+	const auto start = std::chrono::steady_clock::now();
 	job.execute(job.instance, job.query, job.chunkIndex, *job.context);
+	job.cpuNanos->fetch_add(static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count()),
+		std::memory_order_relaxed);
 }
 
 void Scheduler::ExecuteWave(const ExecutionPlan::PhasePlan &phase,
 	const std::vector<SystemId> &wave,
 	const engine::time::SimulationTime time)
 {
-	std::vector<PreparedSystem> prepared;
+	std::vector<PreparedSystem> &prepared = m_prepared;
+	prepared.clear();
 	prepared.reserve(wave.size());
 
 	std::size_t totalChunks = 0;
@@ -500,11 +548,17 @@ void Scheduler::ExecuteWave(const ExecutionPlan::PhasePlan &phase,
 	if (lifecycleContexts > (std::numeric_limits<std::size_t>::max)() - totalChunks)
 		throw std::length_error("ECS lifecycle context capacity overflow");
 
-	std::vector<CommandBuffer> commands;
-	std::vector<SystemContext> contexts;
-	std::vector<ChunkExecution> executions;
-	std::vector<engine::jobs::Job> jobs;
-	std::vector<CommandBuffer *> commandPointers;
+	// Addresses into these must hold for the whole wave: cleared, then reserved to the wave's size before any element.
+	std::vector<CommandBuffer> &commands = m_waveCommands;
+	std::vector<SystemContext> &contexts = m_waveContexts;
+	std::vector<ChunkExecution> &executions = m_waveExecutions;
+	std::vector<engine::jobs::Job> &jobs = m_waveJobs;
+	std::vector<CommandBuffer *> &commandPointers = m_waveCommandPointers;
+	commandPointers.clear();
+	jobs.clear();
+	executions.clear();
+	contexts.clear();
+	commands.clear();
 	commands.reserve(totalChunks + lifecycleContexts);
 	contexts.reserve(totalChunks + lifecycleContexts);
 	executions.reserve(totalChunks);
@@ -518,7 +572,7 @@ void Scheduler::ExecuteWave(const ExecutionPlan::PhasePlan &phase,
 		{
 			system.beforeContext = contexts.size();
 			commands.emplace_back(CommandBufferOrder{static_cast<std::uint32_t>(SystemPhaseIndex(phase.phase)),system.info->id,0,0});
-			contexts.emplace_back(*m_world,commands.back(),time,system.info->id,phase.phase,0,0);
+			contexts.emplace_back(*m_world,commands.back(),time,system.info->id,phase.phase,0,0,system.info);
 		}
 		for (std::size_t chunkIndex = 0; chunkIndex < system.chunkCount; ++chunkIndex)
 		{
@@ -534,13 +588,15 @@ void Scheduler::ExecuteWave(const ExecutionPlan::PhasePlan &phase,
 				system.info->id,
 				phase.phase,
 				logicalOrder + (lifecycle ? 1u : 0u),
-				logicalOrder);
+				logicalOrder,
+				system.info);
 			executions.push_back(ChunkExecution{
 				system.info->executeChunk,
 				system.info->instance,
 				system.query,
 				chunkIndex,
-				&contexts.back()});
+				&contexts.back(),
+				m_profiling ? &m_cpuNanos[system.info->id] : nullptr});
 			jobs.push_back(engine::jobs::Job{&ExecuteChunkJob, &executions.back()});
 		}
 		if (lifecycle)
@@ -548,7 +604,7 @@ void Scheduler::ExecuteWave(const ExecutionPlan::PhasePlan &phase,
 			system.afterContext = contexts.size();
 			const auto order = static_cast<std::uint32_t>(system.chunkCount + 1);
 			commands.emplace_back(CommandBufferOrder{static_cast<std::uint32_t>(SystemPhaseIndex(phase.phase)),system.info->id,order,order});
-			contexts.emplace_back(*m_world,commands.back(),time,system.info->id,phase.phase,order,order);
+			contexts.emplace_back(*m_world,commands.back(),time,system.info->id,phase.phase,order,order,system.info);
 		}
 	}
 
@@ -561,21 +617,22 @@ void Scheduler::ExecuteWave(const ExecutionPlan::PhasePlan &phase,
 		for (const PreparedSystem &system : prepared)
 			if (system.info->beforeChunks)
 				system.info->beforeChunks(system.info->instance,system.query,contexts[system.beforeContext]);
+		// A batch system is one job beside the chunk jobs of the others (the wave's systems never conflict, and every
+		// command stays deferred until the whole wave has succeeded, then commits in logical order: which thread ran
+		// what never shows). One that borrows the pool (BorrowsJobs) runs alone on the caller, outstanding work joined.
 		std::size_t firstJob = 0, nextJob = 0;
 		for (const PreparedSystem &system : prepared)
 		{
-			if (system.info->batch)
+			if (system.info->borrowsJobs)
 			{
-				// Join outstanding compatible chunk work, then allow a typed
-				// batch node to borrow the pool on the caller. All commands stay
-				// deferred until the ENTIRE original wave has succeeded.
 				if (nextJob != firstJob)
 					m_jobSystem->Execute(std::span<engine::jobs::Job>(jobs).subspan(firstJob, nextJob - firstJob));
 				ExecuteChunkJob(&executions[nextJob]);
 				++nextJob;
 				firstJob = nextJob;
 			}
-			else nextJob += system.chunkCount;
+			else
+				nextJob += system.chunkCount;
 		}
 		if (nextJob != firstJob)
 			m_jobSystem->Execute(std::span<engine::jobs::Job>(jobs).subspan(firstJob, nextJob - firstJob));
@@ -616,6 +673,8 @@ void Scheduler::Execute(const engine::time::SimulationTime time)
 		throw std::invalid_argument("ECS execution time does not match the finalized simulation step");
 
 	m_executing = true;
+	// The tick's waves follow each other closely: its workers stay hot for all of them.
+	const engine::jobs::JobSystem::Burst burst(*m_jobSystem);
 	try
 	{
 		for (const ExecutionPlan::PhasePlan &phase : m_plan.Phases())
@@ -625,7 +684,16 @@ void Scheduler::Execute(const engine::time::SimulationTime time)
 				// Every wave has its own job-local command buffers. This is the
 				// structural visibility boundary: later waves see this commit,
 				// while jobs in this wave cannot see one another's commands.
+				if (!m_profiling)
+				{
+					ExecuteWave(phase, wave, time);
+					continue;
+				}
+				const auto start = std::chrono::steady_clock::now();
 				ExecuteWave(phase, wave, time);
+				m_waveNanos += static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count());
+				for (const SystemId system : wave)
+					++m_runs[system];
 			}
 		}
 		m_executing = false;
@@ -636,6 +704,25 @@ void Scheduler::Execute(const engine::time::SimulationTime time)
 		m_failed = true;
 		throw;
 	}
+}
+
+void Scheduler::EnableProfiling(bool enabled)
+{
+	m_profiling = enabled;
+	const std::size_t count = m_systems->Count();
+	m_cpuNanos = std::make_unique<std::atomic<std::uint64_t>[]>(count);
+	m_runs.assign(count, 0);
+	m_waveNanos = 0;
+}
+
+std::vector<Scheduler::SystemTiming> Scheduler::Profile() const
+{
+	std::vector<SystemTiming> out;
+	if (!m_cpuNanos)
+		return out;
+	for (std::size_t system = 0; system < m_runs.size(); ++system)
+		out.push_back({m_systems->Get(static_cast<SystemId>(system)).stableName, m_cpuNanos[system].load(std::memory_order_relaxed), m_runs[system]});
+	return out;
 }
 
 } // extern "C++"

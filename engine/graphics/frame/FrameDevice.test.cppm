@@ -2,14 +2,9 @@ module;
 #define BOOST_TEST_MODULE FrameDeviceTests
 #define NOMINMAX
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <future>
-#include <memory>
-#include <vector>
 #include <windows.h>
 export module Graphics.Frame.Device.Tests;
+import std;
 import Graphics.Frame.Runtime;
 import Graphics.FrameTargets;
 import Graphics.Frame.AttachmentBindings;

@@ -1,14 +1,8 @@
 module;
 #define BOOST_TEST_MODULE LightRaysTests
 #include <boost/test/included/unit_test.hpp>
-#include <algorithm>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <span>
-#include <vector>
 export module Graphics.Passes.LightRays.Tests;
+import std;
 import Graphics.Passes.LightRays;
 import Graphics.RHI;
 import Graphics.FrameTargets;

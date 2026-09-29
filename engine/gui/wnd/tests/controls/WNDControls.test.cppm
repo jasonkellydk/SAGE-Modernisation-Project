@@ -4,13 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-#include <filesystem>
-#include <memory>
-#include <string>
-#include <string_view>
-
 export module Engine.UI.WND.Controls.Tests;
+import std;
 
 import Engine.UI.WND;
 import Engine.UI.WND.Controls;
@@ -130,4 +125,106 @@ BOOST_AUTO_TEST_CASE(real_wnd_fixture_renders_every_control_kind)
 		for (const DrawCommand &command : draw_list.Commands())
 			BOOST_CHECK(command.rectangle.right >= command.rectangle.left);
 	}
+}
+
+// W3DGadgetPushButtonImageDraw with USE_OVERLAY_STATES (ControlBar::init sets it on the command buttons): the enabled
+// image whatever the state; disabled it draws grey, or dimmed to 144 with ALWAYS_COLOR, or as it is when NOT_READY.
+// Without the status a disabled button draws its disabled data (here a plain colour).
+BOOST_AUTO_TEST_CASE(overlay_state_buttons_draw_their_art_grey_while_disabled)
+{
+	std::array<WNDDrawState, 3> states{};
+	states[0].cells[0].image.texture = Assets::TextureAssetHandle{7, 1};
+	states[1].cells[0].color = {0.5f, 0.5f, 0.5f, 1.0f};
+	const auto draw = [&](bool overlay, bool enabled, bool always_color, bool not_ready) {
+		ControlVisual visual;
+		visual.kind = ControlKind::PushButton;
+		visual.rectangle = {0.0f, 0.0f, 60.0f, 48.0f};
+		visual.states = states.data();
+		visual.state = &states[enabled ? 0 : 1];
+		visual.overlay_states = overlay;
+		visual.enabled = enabled;
+		visual.always_color = always_color;
+		visual.not_ready = not_ready;
+		DrawList list;
+		BOOST_REQUIRE(Render_Control(list, visual));
+		BOOST_REQUIRE(list.Size() >= 1u);
+		return list.Commands()[0];
+	};
+	const DrawCommand shown = draw(true, true, false, false);
+	BOOST_TEST((shown.kind == DrawCommandKind::Image));
+	BOOST_TEST(shown.image.texture.Get_Index() == 7u);
+	BOOST_TEST(!shown.grayscale);
+	const DrawCommand grey = draw(true, false, false, false);
+	BOOST_TEST((grey.kind == DrawCommandKind::Image));
+	BOOST_TEST(grey.image.texture.Get_Index() == 7u);
+	BOOST_TEST(grey.grayscale);
+	const DrawCommand dimmed = draw(true, false, true, false);
+	BOOST_TEST(!dimmed.grayscale);
+	BOOST_TEST(std::abs(dimmed.color.red - 144.0f / 255.0f) < 1e-6f);
+	const DrawCommand notReady = draw(true, false, false, true);
+	BOOST_TEST(!notReady.grayscale);
+	BOOST_TEST(notReady.color.red == 1.0f);
+	const DrawCommand plain = draw(false, false, false, false);
+	BOOST_TEST((plain.kind != DrawCommandKind::Image));
+}
+
+// W3DGadgetPushButtonImageDraw: an enabled USE_OVERLAY_STATES button pointed at draws Cameo_hilited over its art,
+// pressed it draws Cameo_push; disabled, neither.
+BOOST_AUTO_TEST_CASE(overlay_state_buttons_show_hilite_and_push_overlays)
+{
+	std::array<WNDDrawState, 3> states{};
+	states[0].cells[0].image.texture = Assets::TextureAssetHandle{7, 1};
+	ImageRef hilite, push;
+	hilite.texture = Assets::TextureAssetHandle{8, 1};
+	push.texture = Assets::TextureAssetHandle{9, 1};
+	const auto draw = [&](bool enabled, bool highlighted, bool pressed) {
+		ControlVisual visual;
+		visual.kind = ControlKind::PushButton;
+		visual.rectangle = {0.0f, 0.0f, 60.0f, 48.0f};
+		visual.states = states.data();
+		visual.state = &states[enabled ? 0 : 1];
+		visual.overlay_states = true;
+		visual.enabled = enabled;
+		visual.highlighted = highlighted;
+		visual.checked = pressed;
+		visual.highlighted_overlay = &hilite;
+		visual.pushed_overlay = &push;
+		DrawList list;
+		BOOST_REQUIRE(Render_Control(list, visual));
+		std::vector<std::uint32_t> images;
+		for (const DrawCommand &command : list.Commands())
+			if (command.kind == DrawCommandKind::Image)
+				images.push_back(command.image.texture.Get_Index());
+		return images;
+	};
+	BOOST_TEST((draw(true, false, false) == std::vector<std::uint32_t>{7}));
+	BOOST_TEST((draw(true, true, false) == std::vector<std::uint32_t>{7, 8}));
+	BOOST_TEST((draw(true, true, true) == std::vector<std::uint32_t>{7, 9}));
+	BOOST_TEST((draw(false, true, false) == std::vector<std::uint32_t>{7}));
+}
+
+// GadgetButtonDrawInverseClock (the production queue's front button): the clock draws over the button's art, this far
+// round, in its colour, as the part still to go.
+BOOST_AUTO_TEST_CASE(push_buttons_draw_their_clock_over_their_art)
+{
+	std::array<WNDDrawState, 3> states{};
+	states[0].cells[0].image.texture = Assets::TextureAssetHandle{7, 1};
+	ControlVisual visual;
+	visual.kind = ControlKind::PushButton;
+	visual.rectangle = {0.0f, 0.0f, 60.0f, 48.0f};
+	visual.states = states.data();
+	visual.state = &states[0];
+	visual.clock = true;
+	visual.clock_percent = 25;
+	visual.clock_remaining = true;
+	visual.clock_color = {0.0f, 0.0f, 0.0f, 160.0f / 255.0f};
+	DrawList list;
+	BOOST_REQUIRE(Render_Control(list, visual));
+	BOOST_REQUIRE(list.Size() == 2u);
+	BOOST_TEST((list.Commands()[0].kind == DrawCommandKind::Image));
+	const DrawCommand &clock = list.Commands()[1];
+	BOOST_TEST((clock.kind == DrawCommandKind::Clock));
+	BOOST_TEST(clock.percent == 25);
+	BOOST_TEST(clock.remaining);
+	BOOST_TEST(std::abs(clock.color.alpha - 160.0f / 255.0f) < 1e-6f);
 }

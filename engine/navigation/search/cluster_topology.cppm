@@ -1,15 +1,5 @@
-module;
-#include <algorithm>
-#include <array>
-#include <cstdint>
-#include <cstdlib>
-#include <limits>
-#include <memory>
-#include <stdexcept>
-#include <span>
-#include <vector>
-
 export module engine.navigation.search.cluster_topology;
+import std;
 import engine.navigation.search.route_search;
 
 export namespace navigation {
@@ -23,7 +13,7 @@ struct HpaClusterGraph {
     std::vector<std::uint8_t> crossings,occupied;
     std::uint64_t revision=0;
     unsigned node(int x,int y) const {
-        if (x<0 || y<0 || x>=width || y>=height) return UINT32_MAX;
+        if (x<0 || y<0 || x>=width || y>=height) return std::numeric_limits<std::uint32_t>::max();
         return unsigned((y/clusterSize)*columns+x/clusterSize);
     }
     template<class Emit> void neighbors(unsigned node,Emit emit) const {
@@ -50,7 +40,7 @@ class HpaClusterTopology {
 public:
     void configure(int width,int height,int clusterSize=16) {
         if (width<=0 || height<=0 || clusterSize<=0 ||
-            std::uint64_t(width)*height>=UINT32_MAX)
+            std::uint64_t(width)*height>=std::numeric_limits<std::uint32_t>::max())
             throw std::invalid_argument("Invalid HPA cluster dimensions");
         if (graph_ && graph_->width==width && graph_->height==height && graph_->clusterSize==clusterSize) return;
         graph_=std::make_shared<HpaClusterGraph>();
@@ -124,7 +114,7 @@ public:
 class HpaClusterSearch {
     std::shared_ptr<const HpaClusterGraph> graph_;
     RouteSearchWorkspace search_;
-    unsigned goal_=UINT32_MAX;
+    unsigned goal_=std::numeric_limits<std::uint32_t>::max();
     unsigned heuristic(unsigned node) const {
         const auto dx=unsigned(std::abs(int(node)%graph_->columns-int(goal_)%graph_->columns));
         const auto dy=unsigned(std::abs(int(node)/graph_->columns-int(goal_)/graph_->columns));

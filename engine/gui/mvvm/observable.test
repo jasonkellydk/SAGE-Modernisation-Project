@@ -1,0 +1,54 @@
+#define BOOST_TEST_MODULE EngineGuiMvvm
+#include <boost/test/included/unit_test.hpp>
+
+#include <string>
+#include <vector>
+
+import engine.gui.mvvm.observable;
+
+using namespace engine::gui::mvvm;
+
+BOOST_AUTO_TEST_SUITE(mvvm)
+
+BOOST_AUTO_TEST_CASE(observable_notifies_on_subscribe_and_on_change_only)
+{
+	Observable<int> value{1};
+	std::vector<int> seen;
+	const auto id = value.Subscribe([&](const int &current) { seen.push_back(current); });
+	value.Set(1);
+	value.Set(2);
+	value.Set(2);
+	value.Set(3);
+	value.Unsubscribe(id);
+	value.Set(4);
+	BOOST_TEST((seen == std::vector<int>{1, 2, 3}));
+	BOOST_TEST(value.Get() == 4);
+}
+
+BOOST_AUTO_TEST_CASE(listeners_may_unsubscribe_while_notified)
+{
+	Observable<std::string> text{"a"};
+	SubscriptionId self = 0;
+	int calls = 0;
+	self = text.Subscribe([&](const std::string &) {
+		if (++calls == 2)
+			text.Unsubscribe(self);
+	});
+	text.Set("b");
+	text.Set("c");
+	BOOST_TEST(calls == 2);
+}
+
+BOOST_AUTO_TEST_CASE(commands_respect_their_enabled_state)
+{
+	int runs = 0;
+	Command command([&] { ++runs; });
+	BOOST_TEST(command.Execute());
+	command.enabled.Set(false);
+	BOOST_TEST(!command.Execute());
+	BOOST_TEST(runs == 1);
+	Command empty;
+	BOOST_TEST(!empty.Execute());
+}
+
+BOOST_AUTO_TEST_SUITE_END()

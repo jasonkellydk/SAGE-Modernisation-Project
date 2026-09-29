@@ -1,13 +1,5 @@
-module;
-
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <string>
-#include <utility>
-
 export module Assets.Materials;
+import std;
 
 import Assets.Handles;
 import Assets.Identity;
@@ -59,6 +51,21 @@ export enum class MaterialTextureChannel : std::uint8_t
 	Red, Green, Blue, Alpha, RGB
 };
 
+// How an instance's player colour shows on a legacy material (flags; the
+// colour itself is instance state, never baked into the material):
+// - VertexMaterial: its ambient and diffuse are the player colour;
+// - TextureAlpha: where the base map's alpha is below opaque the player
+//   colour shows through that much, and the result is opaque;
+// - TexturePalette: the base map's top row holds a palette of shades the
+//   geometry samples, each drawn as the player colour at that shade.
+export enum class MaterialHouseColor : std::uint8_t
+{
+	None = 0,
+	VertexMaterial = 1,
+	TextureAlpha = 2,
+	TexturePalette = 4,
+};
+
 export struct MaterialSurfaceParameters final
 {
 	MaterialShadingModel shading_model = MaterialShadingModel::Legacy;
@@ -74,6 +81,7 @@ export struct MaterialSurfaceParameters final
 	MaterialTextureChannel team_color_channel = MaterialTextureChannel::Red;
 	float team_color_multiplier = 1.0f;
 	bool uv_offset_from_vertex_alpha = false;
+	std::uint8_t house_color = 0; // MaterialHouseColor flags
 };
 
 export bool Validate_Material_Surface(const MaterialSurfaceParameters &surface) noexcept
@@ -81,6 +89,8 @@ export bool Validate_Material_Surface(const MaterialSurfaceParameters &surface) 
 	if (surface.shading_model != MaterialShadingModel::Legacy &&
 		surface.shading_model != MaterialShadingModel::SpecularGlossiness &&
 		surface.shading_model != MaterialShadingModel::MetallicRoughness)
+		return false;
+	if ((surface.house_color & ~7u) != 0)
 		return false;
 	if (surface.specular_channel > MaterialTextureChannel::RGB ||
 		surface.team_color_channel >= MaterialTextureChannel::RGB)

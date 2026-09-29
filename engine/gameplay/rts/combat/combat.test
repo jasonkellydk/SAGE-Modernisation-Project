@@ -1,0 +1,1689 @@
+#define BOOST_TEST_MODULE EngineGameplayCombat
+#include <boost/test/included/unit_test.hpp>
+
+#include <bit>
+#include <cstdint>
+#include <cmath>
+#include <cstdlib>
+#include <functional>
+#include <optional>
+#include <tuple>
+#include <vector>
+
+import engine.gameplay.common.health.components.subdual;
+import engine.gameplay.common.status.components.status_flags;
+import engine.gameplay.rts.combat.systems.impact_system;
+import engine.gameplay.common.identity.components.definition_ref;
+import engine.gameplay.common.identity.components.owner;
+import engine.gameplay.rts.combat.systems.auto_fire_system;
+import engine.gameplay.rts.combat.systems.turret_system;
+import engine.gameplay.rts.combat.systems.projectile_flight_system;
+import engine.gameplay.rts.combat.systems.projectile_launch_system;
+import engine.gameplay.rts.combat.components.countermeasures;
+import engine.gameplay.rts.combat.systems.countermeasures_system;
+import engine.gameplay.rts.combat.algorithms.countermeasure_decoys;
+import engine.gameplay.common.random.resources.random_seed;
+import engine.gameplay.common.spatial.components.attitude;
+import engine.gameplay.rts.combat.systems.missile_flight_system;
+import engine.gameplay.rts.combat.systems.point_defense_system;
+import engine.gameplay.rts.combat.systems.weapon_bonus_retime_system;
+import engine.gameplay.rts.combat.systems.damage_reaction_system;
+import engine.gameplay.common.spatial.systems.spatial_index_system;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+using namespace engine::gameplay;
+using Engine::Math::Fixed;
+
+// The game's weapon bonus conditions as a test gives them (any bits do).
+namespace weapon_bonus_condition
+{
+inline constexpr std::uint32_t Horde = 1u << 1;
+inline constexpr std::uint32_t Nationalism = 1u << 4;
+inline constexpr std::uint32_t PlayerUpgrade = 1u << 5;
+inline constexpr std::uint32_t DroneSpotting = 1u << 6;
+inline constexpr std::uint32_t Veteran = 1u << 9;
+inline constexpr std::uint32_t Elite = 1u << 10;
+inline constexpr std::uint32_t Hero = 1u << 11;
+inline constexpr std::uint32_t Fanaticism = 1u << 23;
+}
+
+namespace
+{
+// Two players at war, a field of riflemen and tanks.
+struct Battle
+{
+	engine::level::Heightfield field;
+	// The world owns the shared data; the fixture keeps handles to it.
+	ecs::World world{ecs::WorldConfig{8}};
+	SpatialIndex &spatial{world.EmplaceResource<SpatialIndex>(Engine::Math::FixedVector2{Fixed::FromInt(1000), Fixed::FromInt(1000)}, Fixed::FromInt(50))};
+	SpatialGather &gather{world.EmplaceResource<SpatialGather>()};
+	Relationships &relationships{world.EmplaceResource<Relationships>(2u)};
+	TeamRoster &roster{world.EmplaceResource<TeamRoster>()};
+	WeaponCatalog &weapons{world.EmplaceResource<WeaponCatalog>()};
+	ArmorCatalog &armors{world.EmplaceResource<ArmorCatalog>()};
+	FiredShots &fired{world.EmplaceResource<FiredShots>()};
+	TemporaryWeaponFires &temporaryFires{world.EmplaceResource<TemporaryWeaponFires>()};
+	ShotQueue &queue{world.EmplaceResource<ShotQueue>()};
+	IncomingDamage &incoming{world.EmplaceResource<IncomingDamage>()};
+	ShockWaves &shockWaves{world.EmplaceResource<ShockWaves>()};
+	GarrisonHits &garrisonHits{world.EmplaceResource<GarrisonHits>()};
+	GarrisonClears &garrisonClears{world.EmplaceResource<GarrisonClears>()};
+	Deaths &deaths{world.EmplaceResource<Deaths>()};
+	MoodRanges &moods{world.EmplaceResource<MoodRanges>()};
+	Hits &hits{world.EmplaceResource<Hits>()};
+	SecondLives &secondLives{world.EmplaceResource<SecondLives>()};
+	WaypointGraph &waypoints{world.EmplaceResource<WaypointGraph>()};
+	std::uint32_t rifle{0};
+	std::uint32_t cannon{0};
+	std::uint32_t napalm{0};
+	std::uint32_t tankArmor{0};
+
+	Battle()
+	{
+		field.width = 2;
+		field.height = 2;
+		field.cellSize = Fixed::FromInt(1000);
+		field.heights.assign(4, Fixed{});
+		world.EmplaceResource<GroundHeight>(field);
+		world.EmplaceResource<LaunchLayouts>();
+		world.EmplaceResource<Detonations>();
+		world.EmplaceResource<MissileDetonations>();
+		world.EmplaceResource<PointDefenseShots>();
+		world.EmplaceResource<PhysicsSettings>();
+		world.EmplaceResource<RandomSeed>(RandomSeed{99});
+		relationships.Set(0, 1, Relationship::Enemies);
+		relationships.Set(1, 0, Relationship::Enemies);
+		WeaponDefinition gun;
+		gun.primaryDamage = Fixed::FromInt(10);
+		gun.attackRange = Fixed::FromInt(100);
+		gun.delayMin = gun.delayMax = 10;
+		gun.damageType = 1;
+		rifle = weapons.Add(gun);
+		WeaponDefinition shell;
+		shell.primaryDamage = Fixed::FromInt(50);
+		shell.primaryRadius = Fixed::FromInt(10);
+		shell.secondaryDamage = Fixed::FromInt(20);
+		shell.secondaryRadius = Fixed::FromInt(40);
+		shell.attackRange = Fixed::FromInt(150);
+		shell.speed = Fixed::FromInt(10);
+		shell.delayMin = 30;
+		shell.delayMax = 40;
+		shell.damageType = 2;
+		shell.affects = weapon_affects::Enemies;
+		cannon = weapons.Add(shell);
+		WeaponDefinition burning;
+		burning.primaryDamage = Fixed::FromInt(5);
+		burning.primaryRadius = Fixed::FromInt(20);
+		burning.delayMin = burning.delayMax = 10;
+		burning.damageType = 3;
+		napalm = weapons.Add(burning);
+		world.EmplaceResource<AutoShots>();
+		ArmorDefinition plate;
+		plate.coefficient[1] = Fixed::FromRatio(1, 10); // rifles barely scratch it
+		tankArmor = armors.Add(plate);
+		world.RegisterComponent<Transform>();
+		world.RegisterComponent<Targetable>();
+		world.RegisterComponent<Owner>();
+		world.RegisterComponent<Health>();
+		world.RegisterComponent<HealthFloor>();
+		world.RegisterComponent<Subdual>();
+		world.RegisterComponent<Armament>();
+		world.RegisterComponent<StatusFlags>();
+		world.RegisterComponent<AttackTarget>();
+		world.RegisterComponent<Aggression>();
+		world.RegisterComponent<Locomotion>();
+		world.RegisterComponent<MoveOrder>();
+		world.RegisterComponent<PathCompleted>();
+		world.RegisterComponent<Descent>();
+		world.RegisterComponent<OffMap>();
+		world.RegisterComponent<AutoFire>();
+		world.RegisterComponent<Turret>();
+		world.RegisterComponent<BodyExtent>();
+		world.RegisterComponent<AltTurret>();
+		world.RegisterComponent<WeaponSlots>();
+		world.RegisterComponent<PointDefense>();
+		world.RegisterComponent<DefinitionRef>();
+		world.RegisterComponent<Attitude>();
+		world.RegisterComponent<ProjectileFlight>();
+		world.RegisterComponent<MissileFlight>();
+		world.RegisterComponent<Countermeasures>();
+		world.EmplaceResource<MissileReports>();
+		world.EmplaceResource<FlareLaunches>();
+		world.RegisterComponent<WeaponBonusConditions>();
+		world.RegisterComponent<ObjectShroud>();
+		world.RegisterComponent<AiActivity>();
+		world.RegisterComponent<TeamMember>();
+		world.FinalizeComponents();
+	}
+
+	ecs::Entity Add(std::uint32_t player, int x, int y, std::uint32_t weapon, int hitPoints, std::uint32_t armor = 0)
+	{
+		const ecs::Entity entity = world.Create();
+		world.Add<Transform>(entity);
+		world.Add<Targetable>(entity);
+		world.Add<Owner>(entity);
+		world.Add<Health>(entity);
+		world.Add<Armament>(entity);
+		world.Add<AttackTarget>(entity);
+		world.Add<Aggression>(entity);
+		world.Get<Transform>(entity)->position = {Fixed::FromInt(x), Fixed::FromInt(y), {}};
+		*world.Get<Targetable>(entity) = {Fixed::FromInt(5), target_class::Infantry};
+		*world.Get<Owner>(entity) = {player};
+		*world.Get<Health>(entity) = {Fixed::FromInt(hitPoints), Fixed::FromInt(hitPoints), armor};
+		*world.Get<Armament>(entity) = {.weapon = weapon, .clip = 0, .turnRate = Engine::Math::TurnFromDegrees(30), .turret = false};
+		Aggression aggression;
+		aggression.autoAcquire = true;
+		aggression.scanRange = Fixed::FromInt(200);
+		aggression.vision = Fixed::FromInt(200); // the idle look's range (MoodRanges' modifiers 1)
+		aggression.scanInterval = 15;
+		aggression.nextScan = entity.index % 15;
+		*world.Get<Aggression>(entity) = aggression;
+		return entity;
+	}
+
+	// Runs `ticks` ticks; the dead are destroyed after each, as the session does.
+	std::vector<Death> Run(std::size_t workers, int ticks, const std::function<void(int)> &afterTick = {})
+	{
+		SpatialIndexSystem index;
+		TargetingSystem targeting;
+		MovementSystem movement;
+		WeaponSystem firing;
+		ImpactSystem impacts;
+		HealthSystem health;
+		AutoFireSystem autoFire;
+		TurretSystem turrets;
+		AltTurretSystem altTurrets;
+		ProjectileLaunchSystem launches;
+		ProjectileFlightSystem flights;
+		MissileFlightSystem missiles;
+		PointDefenseSystem lasers;
+		WeaponBonusRetimeSystem retime;
+		CountermeasuresSystem decoys;
+		ecs::SystemRegistry registry;
+		registry.Register(retime);
+		registry.Register(decoys);
+		registry.Register(missiles);
+		registry.Register(lasers);
+		registry.Register(turrets);
+		registry.Register(altTurrets);
+		registry.OrderBefore<AltTurretSystem, WeaponSystem>();
+		registry.Register(launches);
+		registry.Register(flights);
+		registry.OrderBefore<WeaponSystem, ProjectileFlightSystem>();
+		registry.OrderBefore<SpatialIndexSystem, ProjectileFlightSystem>();
+		registry.OrderBefore<ProjectileFlightSystem, ImpactSystem>();
+		registry.OrderBefore<TurretSystem, WeaponSystem>();
+		registry.Register(autoFire);
+		registry.Register(index);
+		registry.Register(targeting);
+		registry.Register(movement);
+		registry.Register(firing);
+		registry.Register(impacts);
+		registry.Register(health);
+		registry.OrderBefore<CountermeasuresSystem, HealthSystem>();
+		registry.Finalize(world.Components());
+		ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{workers});
+		scheduler.Finalize(engine::time::FixedStep{30});
+		std::vector<Death> all;
+		for (int tick = 1; tick <= ticks; ++tick)
+		{
+			scheduler.Execute(engine::time::SimulationTime{static_cast<std::uint64_t>(tick), engine::time::FixedStep{30}});
+			deaths.ForEach([&](const Death &death) {
+				all.push_back(death);
+				world.Destroy(death.entity);
+			});
+			if (afterTick)
+				afterTick(tick);
+		}
+		return all;
+	}
+};
+}
+
+BOOST_AUTO_TEST_SUITE(combat)
+
+// WeaponSet::isAbleToAttack (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/WeaponSet.cpp): something with
+// OBJECT_STATUS_NO_ATTACK_FROM_AI (a mine: MinefieldBehavior's constructor) is never taken by a scan for something to
+// attack (CMD_FROM_AI); the same enemy without it is.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_scan_never_picks_what_ai_may_not_attack)
+{
+	Relationships relationships(2u);
+	relationships.Set(0, 1, Relationship::Enemies);
+	relationships.Set(1, 0, Relationship::Enemies);
+	WeaponDefinition weapon;
+	weapon.anti = 0xFFFFFFFFu;
+	Aggression aggression;
+	SpatialEntry mine;
+	mine.entity.index = 5;
+	mine.player = 1;
+	mine.classes = target_class::Ground | target_class::Mine;
+	ecs::Entity self;
+	self.index = 1;
+	BOOST_TEST(TargetingSystem::Acceptable(relationships, mine, self, Relationships::NoTeam, 0, weapon, aggression));
+	mine.classes |= target_class::NoAttackFromAi;
+	BOOST_TEST(!TargetingSystem::Acceptable(relationships, mine, self, Relationships::NoTeam, 0, weapon, aggression));
+}
+
+BOOST_AUTO_TEST_CASE(idle_units_acquire_enemies_and_shoot_them_dead)
+{
+	Battle battle;
+	const ecs::Entity shooter = battle.Add(0, 100, 100, battle.rifle, 100);
+	const ecs::Entity victim = battle.Add(1, 180, 100, WeaponCatalog::None, 30);
+	const auto deaths = battle.Run(1, 60);
+	BOOST_TEST_REQUIRE(deaths.size() == 1u);
+	BOOST_TEST((deaths[0].entity == victim));
+	BOOST_TEST((deaths[0].killer == shooter));
+	BOOST_TEST(!battle.world.IsAlive(victim));
+	// The shooter turned to face its victim (east).
+	BOOST_TEST(battle.world.Get<Transform>(shooter)->facing.units < Engine::Math::TurnFromDegrees(2).units);
+}
+
+// AIUpdateInterface::getNextMoodTarget: nothing while the unit uses an ability (OBJECT_STATUS_IS_USING_ABILITY); a busy AI
+// (AI_BUSY, packing or unpacking) runs no idle state to look. Once neither, it picks its victim at its next scan.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_unit_busy_with_an_ability_picks_no_targets)
+{
+	for (const bool usingAbility : {true, false})
+	{
+		Battle battle;
+		const ecs::Entity shooter = battle.Add(0, 100, 100, battle.rifle, 100);
+		battle.Add(1, 180, 100, WeaponCatalog::None, 30);
+		battle.world.Add<AiActivity>(shooter);
+		if (usingAbility)
+			battle.world.Get<AiActivity>(shooter)->usingAbility = 1;
+		else
+			battle.world.Get<AiActivity>(shooter)->busy = 1;
+		BOOST_TEST(battle.Run(1, 60).empty());
+		BOOST_TEST(!battle.world.Get<AttackTarget>(shooter)->target.IsValid());
+		*battle.world.Get<AiActivity>(shooter) = {};
+		// (Each run counts its ticks from the start again: the scans it put off come round later.)
+		BOOST_TEST(battle.Run(1, 200).size() == 1u);
+	}
+}
+
+// AIUpdateInterface::getNextMoodTarget (AI::UNFOGGED for a human player's unit when the AI asks) with
+// PartitionFilterFreeOfFog: a human player's idle rifleman leaves an enemy in range alone while it is not wholly clear
+// to its player (partly clear, fogged), and shoots once it is; a computer player's does not care.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_human_players_units_only_pick_targets_clear_to_it)
+{
+	Battle battle;
+	Player human;
+	human.human = true;
+	battle.roster.AddPlayer(human);
+	battle.roster.AddPlayer(Player{});
+	const ecs::Entity shooter = battle.Add(0, 100, 100, battle.rifle, 100);
+	const ecs::Entity victim = battle.Add(1, 180, 100, WeaponCatalog::None, 30);
+	battle.world.Add<ObjectShroud>(victim);
+	*battle.world.Get<ObjectShroud>(victim) = {0b10, 0b01, 0}; // partly clear to the human
+	const auto deaths = battle.Run(1, 120, [&](int tick) {
+		if (tick != 60)
+			return;
+		BOOST_TEST(battle.world.IsAlive(victim));
+		BOOST_TEST((battle.world.Get<AttackTarget>(shooter)->target == ecs::Entity{}));
+		*battle.world.Get<ObjectShroud>(victim) = {0b11, 0, 0};
+	});
+	BOOST_TEST_REQUIRE(deaths.size() == 1u);
+	BOOST_TEST((deaths[0].killer == shooter));
+
+	// The computer's rifleman shoots at what it cannot see clearly.
+	Battle other;
+	other.roster.AddPlayer(Player{});
+	other.roster.AddPlayer(Player{});
+	other.Add(0, 100, 100, other.rifle, 100);
+	const ecs::Entity target = other.Add(1, 180, 100, WeaponCatalog::None, 30);
+	other.world.Add<ObjectShroud>(target);
+	*other.world.Get<ObjectShroud>(target) = {0, 0, 0b01};
+	BOOST_TEST(other.Run(1, 60).size() == 1u);
+}
+
+// AIUpdateInterface::getNextMoodTarget with AI::getAdjustedVisionRangeForObject (AIData.ini: GuardOuterModifierAI 1.333,
+// GuardOuterModifierHuman 2.2, AlertRangeModifier 1.1, AggressiveRangeModifier 1.5): an idle computer unit of vision
+// 100 looks 133.3 out when normal, 146.63 alert, 199.95 aggressive (the gap between the bounding circles, both radii 5:
+// centres 143.3, 156.63, 209.95 apart), nowhere asleep; a passive one only at its last attacker; a human player's unit
+// looks 220 out but takes only what its rifle reaches (100 less the 2.5 undersize: centres 107.5 apart).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_units_mood_sets_how_far_it_looks)
+{
+	const auto picks = [](bool human, std::int8_t mood, int distance, bool attacked = false) {
+		Battle battle;
+		battle.moods = MoodRanges{Fixed::FromRatio(22, 10), Fixed::FromRatio(1333, 1000), Fixed::FromRatio(11, 10), Fixed::FromRatio(15, 10), 7};
+		Player first;
+		first.human = human;
+		battle.roster.AddPlayer(first);
+		battle.roster.AddPlayer(Player{});
+		const ecs::Entity shooter = battle.Add(0, 100, 100, battle.rifle, 100);
+		battle.world.Get<Aggression>(shooter)->vision = Fixed::FromInt(100);
+		battle.world.Get<Aggression>(shooter)->attitude = mood;
+		const ecs::Entity victim = battle.Add(1, 100 + distance, 100, WeaponCatalog::None, 1000);
+		battle.world.Add<ObjectShroud>(victim);
+		*battle.world.Get<ObjectShroud>(victim) = {0b11, 0, 0}; // clear to both (a human's unit takes only what it sees clearly)
+		if (attacked)
+		{
+			battle.world.Get<Health>(shooter)->lastAttacker = victim;
+			battle.world.Get<Health>(shooter)->lastDamageType = 1;
+		}
+		battle.Run(1, 16);
+		return battle.world.Get<AttackTarget>(shooter)->target == victim;
+	};
+	BOOST_TEST(picks(false, attitude::Normal, 143));
+	BOOST_TEST(!picks(false, attitude::Normal, 144));
+	BOOST_TEST(picks(false, attitude::Alert, 156));
+	BOOST_TEST(!picks(false, attitude::Alert, 157));
+	BOOST_TEST(picks(false, attitude::Aggressive, 209));
+	BOOST_TEST(!picks(false, attitude::Aggressive, 211));
+	BOOST_TEST(!picks(false, attitude::Sleep, 50));
+	BOOST_TEST(!picks(false, attitude::Passive, 50));
+	BOOST_TEST(picks(false, attitude::Passive, 50, true));
+	BOOST_TEST(picks(true, attitude::Normal, 107));
+	BOOST_TEST(!picks(true, attitude::Normal, 108));
+	BOOST_TEST(!picks(true, attitude::Sleep, 150)); // a human's unit has no mood: still only what it reaches
+}
+
+// getNextMoodTarget's team victim: an idle unit (of normal mood or more) of a team that attacks together goes for the
+// team's common target at once, however far (before its own look and its timer); a passive one does not, nor one of a
+// team that does not attack together; a hidden target is nobody's.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_team_goes_for_its_common_target)
+{
+	const auto picks = [](std::int8_t mood, bool together, bool hidden) {
+		Battle battle;
+		battle.roster.AddPlayer(Player{});
+		battle.roster.AddPlayer(Player{});
+		Team team;
+		team.name = "squad";
+		team.attackCommonTarget = together;
+		const std::uint32_t index = battle.roster.AddTeam(team);
+		const ecs::Entity shooter = battle.Add(0, 100, 100, battle.rifle, 100);
+		battle.world.Get<Aggression>(shooter)->vision = Fixed::FromInt(100);
+		battle.world.Get<Aggression>(shooter)->attitude = mood;
+		battle.world.Get<Aggression>(shooter)->nextScan = 1000; // its own look is far off
+		battle.world.Add<TeamMember>(shooter);
+		*battle.world.Get<TeamMember>(shooter) = {index};
+		const ecs::Entity victim = battle.Add(1, 800, 100, WeaponCatalog::None, 1000);
+		if (hidden)
+			battle.world.Get<Targetable>(victim)->classes |= target_class::Hidden;
+		battle.roster.TeamAt(index).commonTarget = victim;
+		battle.Run(1, 2);
+		return battle.world.Get<AttackTarget>(shooter)->target == victim;
+	};
+	BOOST_TEST(picks(attitude::Normal, true, false));
+	BOOST_TEST(picks(attitude::Aggressive, true, false));
+	BOOST_TEST(!picks(attitude::Passive, true, false));
+	BOOST_TEST(!picks(attitude::Normal, false, false));
+	BOOST_TEST(!picks(attitude::Normal, true, true));
+}
+
+// Team::getRelationship / Player::getRelationship: a team's override for the other team wins, then its override for
+// the other's player, then the other side's player's override for this team... in the order the original asks (the
+// asking team's view: team to team, team to player, its player to that team, the players); removing one falls back; a
+// checkpoint keeps them. An idle rifleman whose team is told the enemy team is allied leaves it be; told the other way
+// round, a neutral one is shot.
+BOOST_AUTO_TEST_CASE(legacy_parity_team_relationship_overrides)
+{
+	Relationships relationships(2);
+	relationships.Set(0, 1, Relationship::Enemies);
+	BOOST_TEST((relationships.Between(4, 0, 7, 1) == Relationship::Enemies));
+	relationships.SetPlayerToTeam(0, 7, Relationship::Neutral);
+	BOOST_TEST((relationships.Between(4, 0, 7, 1) == Relationship::Neutral));
+	relationships.SetTeamToPlayer(4, 1, Relationship::Allies);
+	BOOST_TEST((relationships.Between(4, 0, 7, 1) == Relationship::Allies));
+	relationships.SetTeamToTeam(4, 7, Relationship::Enemies);
+	BOOST_TEST((relationships.Between(4, 0, 7, 1) == Relationship::Enemies));
+	BOOST_TEST((relationships.Between(5, 0, 7, 1) == Relationship::Neutral)); // another team of player 0: its player's override
+	BOOST_TEST((relationships.Between(4, 0, 8, 1) == Relationship::Allies));  // another team of player 1: the team-to-player one
+	engine::core::serialization::ByteWriter writer;
+	relationships.Save(writer);
+	Relationships loaded;
+	engine::core::serialization::ByteReader reader(writer.Bytes());
+	BOOST_TEST_REQUIRE(loaded.Load(reader));
+	BOOST_TEST((loaded.Between(4, 0, 7, 1) == Relationship::Enemies));
+	relationships.SetTeamToTeam(4, 7, std::nullopt);
+	BOOST_TEST((relationships.Between(4, 0, 7, 1) == Relationship::Allies));
+	relationships.ClearTeam(4);
+	BOOST_TEST((relationships.Between(4, 0, 7, 1) == Relationship::Neutral));
+
+	const auto shoots = [](Relationship players, std::optional<Relationship> teamOverride) {
+		Battle battle;
+		battle.roster.AddPlayer(Player{});
+		battle.roster.AddPlayer(Player{});
+		battle.relationships.Set(0, 1, players);
+		battle.relationships.Set(1, 0, players);
+		Team mine;
+		mine.name = "mine";
+		const std::uint32_t own = battle.roster.AddTeam(mine);
+		Team theirs;
+		theirs.name = "theirs";
+		theirs.owner = 1;
+		const std::uint32_t other = battle.roster.AddTeam(theirs);
+		if (teamOverride)
+			battle.relationships.SetTeamToTeam(own, other, *teamOverride);
+		const ecs::Entity shooter = battle.Add(0, 100, 100, battle.rifle, 100);
+		battle.world.Get<Aggression>(shooter)->vision = Fixed::FromInt(200);
+		battle.world.Add<TeamMember>(shooter);
+		*battle.world.Get<TeamMember>(shooter) = {own};
+		const ecs::Entity victim = battle.Add(1, 150, 100, WeaponCatalog::None, 1000);
+		battle.world.Add<TeamMember>(victim);
+		*battle.world.Get<TeamMember>(victim) = {other};
+		battle.Run(1, 20);
+		return battle.world.Get<AttackTarget>(shooter)->target == victim;
+	};
+	BOOST_TEST(shoots(Relationship::Enemies, std::nullopt));
+	BOOST_TEST(!shoots(Relationship::Enemies, Relationship::Allies));
+	BOOST_TEST(!shoots(Relationship::Neutral, std::nullopt));
+	BOOST_TEST(shoots(Relationship::Neutral, Relationship::Enemies));
+}
+
+BOOST_AUTO_TEST_CASE(armor_scales_damage_and_splash_spares_friends)
+{
+	Battle battle;
+	battle.Add(0, 100, 100, battle.cannon, 100);
+	const ecs::Entity tank = battle.Add(1, 200, 100, WeaponCatalog::None, 1000, battle.tankArmor);
+	const ecs::Entity nearTank = battle.Add(1, 225, 100, WeaponCatalog::None, 1000);
+	const ecs::Entity friendNear = battle.Add(0, 210, 110, WeaponCatalog::None, 1000);
+	battle.Run(1, 60);
+	// One or two shells in 2 s: primary 50 on the tank (cannon damage type ignores the rifle armor),
+	// secondary 20 on the neighbour, nothing on the shooter's own side.
+	const Fixed tankLoss = Fixed::FromInt(1000) - battle.world.Get<Health>(tank)->current;
+	const Fixed nearLoss = Fixed::FromInt(1000) - battle.world.Get<Health>(nearTank)->current;
+	BOOST_TEST((tankLoss >= Fixed::FromInt(50)));
+	BOOST_TEST((nearLoss > Fixed{} && nearLoss < tankLoss));
+	BOOST_TEST(battle.world.Get<Health>(friendNear)->current.Raw() == Fixed::FromInt(1000).Raw());
+}
+
+BOOST_AUTO_TEST_CASE(a_fire_field_burns_what_stands_in_it_on_its_weapon_delay)
+{
+	Battle battle;
+	const ecs::Entity field = battle.world.Create();
+	battle.world.Add<Transform>(field);
+	battle.world.Add<Owner>(field);
+	battle.world.Add<AutoFire>(field);
+	battle.world.Get<Transform>(field)->position = {Fixed::FromInt(500), Fixed::FromInt(500), {}};
+	*battle.world.Get<Owner>(field) = {0};
+	*battle.world.Get<AutoFire>(field) = {battle.napalm, 0, 5, 0};
+	const ecs::Entity inside = battle.Add(1, 505, 500, WeaponCatalog::None, 1000);
+	const ecs::Entity outside = battle.Add(1, 560, 500, WeaponCatalog::None, 1000);
+	battle.world.Get<Aggression>(inside)->autoAcquire = false;
+	battle.world.Get<Aggression>(outside)->autoAcquire = false;
+	battle.Run(1, 64);
+	// Ticks 5, 15, ... 55: six bursts of 5.
+	BOOST_TEST(battle.world.Get<Health>(inside)->current.Floor() == 1000 - 30);
+	BOOST_TEST(battle.world.Get<Health>(outside)->current.Floor() == 1000);
+}
+
+BOOST_AUTO_TEST_CASE(a_battle_is_identical_on_any_number_of_workers)
+{
+	const auto fight = [](std::size_t workers) {
+		Battle battle;
+		for (int index = 0; index < 60; ++index)
+		{
+			battle.Add(0, 100 + (index % 10) * 12, 100 + (index / 10) * 12, index % 3 == 0 ? battle.cannon : battle.rifle, 60);
+			battle.Add(1, 300 + (index % 10) * 12, 100 + (index / 10) * 12, index % 4 == 0 ? battle.cannon : battle.rifle, 60);
+		}
+		for (int index = 0; index < 5; ++index)
+		{
+			const ecs::Entity field = battle.world.Create();
+			battle.world.Add<Transform>(field);
+			battle.world.Add<Owner>(field);
+			battle.world.Add<AutoFire>(field);
+			battle.world.Get<Transform>(field)->position = {Fixed::FromInt(300 + index * 20), Fixed::FromInt(130), {}};
+			*battle.world.Get<Owner>(field) = {0};
+			*battle.world.Get<AutoFire>(field) = {battle.napalm, 0, static_cast<std::uint64_t>(index), 0};
+		}
+		const auto deaths = battle.Run(workers, 300);
+		return std::make_pair(battle.world.StateHash(), deaths.size());
+	};
+	const auto serial = fight(1);
+	const auto parallel = fight(8);
+	BOOST_TEST_MESSAGE("deaths: " << serial.second);
+	BOOST_TEST(serial.second > 10u);
+	BOOST_TEST(serial.first == parallel.first);
+	BOOST_TEST(serial.second == parallel.second);
+}
+
+// Legacy parity (GeneralsMD TurretAI.cpp): friend_turnTowardsAngle moves the
+// turret by its rate each frame, snapping on once the rest is under one step;
+// TurretAIAimTurretState succeeds on the frame it is within 0.035 rad and
+// AIAttackFireWeaponState fires on the next; TurretAIHoldTurretState holds
+// from the first frame without a target until that frame + RecenterTime, and
+// TurretAIRecenterTurretState turns back at half rate from the frame after.
+// Within 64 turn units (~5e-6 degrees): fixed-point steps of a non-dyadic
+// rate land a few units off where the original's floats land.
+static bool Near(Engine::Math::TurnAngle a, Engine::Math::TurnAngle b) { return std::abs(Engine::Math::DeltaTo(a, b)) <= 64; }
+
+// Object::isAbleToAttack with TransportContain::isPassengerAllowedToFire (PassengersAllowedToFire: the Humvee's
+// rangers): a passenger its transport lets fire acquires and fires on the same frames as one standing in the
+// open where the transport is (an enclosed launcher's calcProjectileLaunchPosition is its own position, which
+// redeployOccupants keeps at the transport's), never walks off after its victim; one not let fire never does.
+// Its shots never run into the transport (shouldProjectileCollideWith: never the launcher's container).
+// Weapon::isWithinAttackRange with RATIONALIZE_ATTACK_RANGE and ATTACK_RANGE_CALC_TYPE = FROM_BOUNDINGSPHERE_2D:
+// in range while the distance between the two bounding circles is within AttackRange - 2.5 (a quarter pathfind
+// cell). A 100 rifle between two 5-radius units reaches 207.5 centre to centre, not a hair further.
+BOOST_AUTO_TEST_CASE(legacy_parity_attack_range_is_undersized_between_bounding_circles)
+{
+	const auto hits = [](Fixed x) {
+		Battle battle;
+		const ecs::Entity shooter = battle.Add(0, 100, 100, battle.rifle, 100);
+		const ecs::Entity victim = battle.Add(1, 0, 100, WeaponCatalog::None, 1000);
+		battle.world.Get<Transform>(victim)->position.x = x;
+		battle.world.Get<Aggression>(victim)->autoAcquire = false;
+		*battle.world.Get<AttackTarget>(shooter) = {victim, true};
+		battle.Run(1, 5);
+		return (Fixed::FromInt(1000) - battle.world.Get<Health>(victim)->current).Floor();
+	};
+	BOOST_TEST(hits(Fixed::FromRatio(415, 2)) == 10);
+	BOOST_TEST(hits(Fixed::FromRatio(415, 2) + Fixed::FromRatio(1, 100)) == 0);
+}
+
+// WeaponBonus::appendBonuses and WeaponTemplate::getDelayBetweenShots: each condition's row adds its
+// (multiplier - 1); the delay divides by the rate-of-fire bonus, rounded down. GameData's HORDE 150% and
+// NATIONALISM 125% make 175%: the rifle's 10-tick delay becomes 5 (tick 1, 6, 11, 16). VETERAN DAMAGE 110% with
+// the weapon's own PLAYER_UPGRADE DAMAGE 125% make 135%: 13.5 a shot.
+BOOST_AUTO_TEST_CASE(legacy_parity_weapon_bonuses_add_and_the_rate_of_fire_divides_the_delay)
+{
+	namespace wbc = weapon_bonus_condition;
+	const auto damage = [](std::uint32_t conditions) {
+		Battle battle;
+		const auto row = [](WeaponBonusSet &set, std::uint32_t bit, WeaponBonusField field, Fixed value) {
+			set.byCondition[static_cast<std::size_t>(std::countr_zero(bit))].Set(field, value);
+		};
+		row(battle.weapons.globalBonus, wbc::Horde, WeaponBonusField::RateOfFire, Fixed::FromRatio(3, 2));
+		row(battle.weapons.globalBonus, wbc::Nationalism, WeaponBonusField::RateOfFire, Fixed::FromRatio(5, 4));
+		row(battle.weapons.globalBonus, wbc::Veteran, WeaponBonusField::Damage, Fixed::FromRatio(11, 10));
+		WeaponBonusSet own;
+		row(own, wbc::PlayerUpgrade, WeaponBonusField::Damage, Fixed::FromRatio(5, 4));
+		battle.weapons.extraBonuses.push_back(own);
+		WeaponDefinition upgraded = battle.weapons.At(battle.rifle);
+		upgraded.extraBonus = 0;
+		const std::uint32_t gun = battle.weapons.Add(upgraded);
+		const ecs::Entity shooter = battle.Add(0, 100, 100, gun, 100);
+		battle.world.Add<WeaponBonusConditions>(shooter);
+		battle.world.Get<WeaponBonusConditions>(shooter)->flags = conditions;
+		const ecs::Entity victim = battle.Add(1, 150, 100, WeaponCatalog::None, 1000);
+		battle.world.Get<Aggression>(victim)->autoAcquire = false;
+		*battle.world.Get<AttackTarget>(shooter) = {victim, true};
+		battle.Run(1, 20);
+		return Fixed::FromInt(1000) - battle.world.Get<Health>(victim)->current;
+	};
+	BOOST_TEST(damage(0).Raw() == Fixed::FromInt(20).Raw()); // ticks 1 and 11
+	BOOST_TEST(damage(wbc::Horde | wbc::Nationalism).Raw() == Fixed::FromInt(40).Raw()); // ticks 1, 6, 11 and 16
+	// 1.1 is not exact in fixed point (nor in the original's floats): within 1/4096 of 27.
+	BOOST_TEST(std::llabs(damage(wbc::Veteran | wbc::PlayerUpgrade).Raw() - Fixed::FromInt(27).Raw()) <= 16); // 2 x 13.5
+}
+
+// Weapon::onWeaponBonusChange: when the firer's bonus conditions change, a weapon waiting between shots starts its
+// wait over from that frame with the new bonus. The rifle fires on tick 1 (next at 11); HORDE (150%) arriving on
+// tick 4 makes it 4 + floor(10 / 1.5) = 10. A ready weapon is left alone.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_bonus_change_restarts_the_wait_between_shots)
+{
+	Battle battle;
+	battle.weapons.globalBonus.byCondition[1].Set(WeaponBonusField::RateOfFire, Fixed::FromRatio(3, 2)); // HORDE
+	const ecs::Entity shooter = battle.Add(0, 100, 100, battle.rifle, 100);
+	battle.world.Add<WeaponBonusConditions>(shooter);
+	const ecs::Entity victim = battle.Add(1, 150, 100, WeaponCatalog::None, 1000);
+	battle.world.Get<Aggression>(victim)->autoAcquire = false;
+	*battle.world.Get<AttackTarget>(shooter) = {victim, true};
+	std::vector<std::uint64_t> ready;
+	battle.Run(1, 4, [&](int tick) {
+		if (tick == 3)
+			*battle.world.Get<WeaponBonusConditions>(shooter) = {.flags = weapon_bonus_condition::Horde, .changedTick = 4};
+		ready.push_back(battle.world.Get<Armament>(shooter)->readyTick);
+	});
+	BOOST_TEST(ready[0] == 11u);
+	BOOST_TEST(ready[2] == 11u);
+	BOOST_TEST(ready[3] == 10u);
+}
+
+BOOST_AUTO_TEST_CASE(legacy_parity_passengers_fire_from_inside_a_transport_that_lets_them)
+{
+	const auto run = [](bool carried, bool armed) {
+		Battle battle;
+		const ecs::Entity humvee = battle.Add(0, 100, 100, WeaponCatalog::None, 1000);
+		const ecs::Entity ranger = battle.Add(0, 100, 100, battle.rifle, 100);
+		battle.Add(1, 180, 100, WeaponCatalog::None, 1000);
+		if (carried)
+		{
+			battle.world.Add<OffMap>(ranger);
+			*battle.world.Get<OffMap>(ranger) = {1, armed, {}, humvee};
+		}
+		std::vector<Shot> shots;
+		battle.Run(1, 60, [&](int) { battle.fired.ForEach([&](const Shot &shot) { shots.push_back(shot); }); });
+		return std::make_tuple(shots, *battle.world.Get<Transform>(ranger), humvee);
+	};
+	const auto [open, openAt, openHumvee] = run(false, false);
+	const auto [inside, insideAt, insideHumvee] = run(true, true);
+	const auto [held, heldAt, heldHumvee] = run(true, false);
+	BOOST_TEST_REQUIRE(!open.empty());
+	BOOST_TEST_REQUIRE(inside.size() == open.size());
+	for (std::size_t index = 0; index < open.size(); ++index)
+	{
+		BOOST_TEST(inside[index].fireTick == open[index].fireTick);
+		BOOST_TEST((inside[index].origin == open[index].origin));
+		BOOST_TEST((inside[index].shelter == insideHumvee));
+		BOOST_TEST((open[index].shelter == ecs::Entity{}));
+	}
+	BOOST_TEST((insideAt.position == openAt.position));
+	BOOST_TEST(held.empty());
+
+	// Its shots pass through the transport it rides in, though they run into its other structures.
+	WeaponDefinition weapon;
+	weapon.collides = weapon_collides::Allies;
+	Relationships relationships(2u);
+	relationships.Set(0, 0, Relationship::Allies);
+	Shot shot;
+	shot.source = ecs::Entity{7, 1};
+	shot.sourcePlayer = 0;
+	shot.shelter = ecs::Entity{3, 1};
+	SpatialEntry transport;
+	transport.entity = shot.shelter;
+	transport.player = 0;
+	SpatialEntry other = transport;
+	other.entity = ecs::Entity{4, 1};
+	BOOST_TEST(!CollidesWith(weapon, shot, ecs::Entity{9, 1}, transport, relationships));
+	BOOST_TEST(CollidesWith(weapon, shot, ecs::Entity{9, 1}, other, relationships));
+}
+
+BOOST_AUTO_TEST_CASE(legacy_parity_a_turret_aligns_and_fires_on_the_original_frames)
+{
+	// TurretTurnRate 180 degrees a second: 6 degrees a frame; the target a quarter turn left.
+	const auto run = [](int ticks) {
+		Battle battle;
+		const ecs::Entity tank = battle.Add(0, 100, 100, battle.rifle, 100);
+		const ecs::Entity target = battle.Add(1, 100, 180, WeaponCatalog::None, 1000);
+		battle.world.Get<Armament>(tank)->turret = true;
+		*battle.world.Get<AttackTarget>(tank) = {target, true};
+		battle.world.Add<Turret>(tank);
+		battle.world.Get<Turret>(tank)->definition.turnRate = Engine::Math::TurnFromDegrees(6);
+		battle.Run(1, ticks);
+		return std::make_pair(*battle.world.Get<Turret>(tank), *battle.world.Get<Armament>(tank));
+	};
+	// 14 frames in: 84 degrees, still turning, not firing.
+	const auto [turning, turningArms] = run(14);
+	BOOST_TEST(Near(turning.angle, Engine::Math::TurnFromDegrees(84)));
+	BOOST_TEST(!turning.aligned);
+	BOOST_TEST(turning.rotating);
+	// Frame 15: 6 degrees left is not under one step, so it steps onto 90 exactly and aims true; no shot yet.
+	const auto [aimed, aimedArms] = run(15);
+	BOOST_TEST(Near(aimed.angle, Engine::Math::TurnAngle::Quarter_Turn()));
+	BOOST_TEST(aimed.aligned);
+	BOOST_TEST(aimedArms.firedTick == 0u);
+	BOOST_TEST((aimed.state == TurretState::Aim));
+	// Frame 16: the FIRE state fires.
+	const auto [fired, firedArms] = run(16);
+	BOOST_TEST(firedArms.firedTick == 16u);
+	BOOST_TEST(Near(fired.angle, Engine::Math::TurnAngle::Quarter_Turn()));
+}
+
+// TurretAI::updateTurretAI and TurretAIAimTurretState::update (TurretFireAngleSweep PRIMARY 10, TurretSweepSpeedModifier
+// PRIMARY 0.5, TurretTurnRate 6 degrees a frame): aligned on frame 1 (each frame it reaches its aim it flips the side it
+// sweeps to next, m_positiveSweep), it fires on frame 2; for the two frames after a shot (ENABLE_SWEEP_FRAME_COUNT 3,
+// set after the state machine) it swings toward the target + 10 degrees at half its rate (93, 96 degrees) while still
+// "aligned" within the sweep, then turns back onto the target at full rate (90 on frame 5), flipping the side on each
+// frame it is on it (5 to 12, eight flips), so after the next shot (frame 12, the rifle's 10-frame delay) it sweeps the
+// same way again (93, 96).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_sweeping_turret_swings_past_its_target_after_each_shot)
+{
+	const auto run = [](int ticks) {
+		Battle battle;
+		const ecs::Entity tank = battle.Add(0, 100, 100, battle.rifle, 100);
+		const ecs::Entity target = battle.Add(1, 100, 180, WeaponCatalog::None, 1000);
+		battle.world.Get<Armament>(tank)->turret = true;
+		*battle.world.Get<AttackTarget>(tank) = {target, true};
+		battle.world.Add<Turret>(tank);
+		Turret &turret = *battle.world.Get<Turret>(tank);
+		turret.definition.turnRate = Engine::Math::TurnFromDegrees(6);
+		turret.definition.sweep[0] = Engine::Math::TurnFromDegrees(10);
+		turret.definition.sweepSpeed[0] = Fixed::FromRatio(1, 2);
+		turret.angle = Engine::Math::TurnAngle::Quarter_Turn();
+		battle.Run(1, ticks);
+		return std::make_pair(*battle.world.Get<Turret>(tank), *battle.world.Get<Armament>(tank));
+	};
+	const auto [aligned, alignedArms] = run(1);
+	BOOST_TEST(aligned.aligned);
+	BOOST_TEST(alignedArms.firedTick == 0u);
+	BOOST_TEST(run(2).second.firedTick == 2u);
+	BOOST_TEST(Near(run(2).first.angle, Engine::Math::TurnFromDegrees(90)));
+	const auto [swung, swungArms] = run(3);
+	BOOST_TEST(Near(swung.angle, Engine::Math::TurnFromDegrees(93)));
+	BOOST_TEST(swung.aligned); // within the sweep of the target
+	BOOST_TEST(Near(run(4).first.angle, Engine::Math::TurnFromDegrees(96)));
+	BOOST_TEST(Near(run(5).first.angle, Engine::Math::TurnFromDegrees(90)));
+	BOOST_TEST(Near(run(11).first.angle, Engine::Math::TurnFromDegrees(90)));
+	BOOST_TEST(run(12).second.firedTick == 12u);
+	BOOST_TEST(Near(run(13).first.angle, Engine::Math::TurnFromDegrees(93)));
+	BOOST_TEST(Near(run(14).first.angle, Engine::Math::TurnFromDegrees(96)));
+	BOOST_TEST(Near(run(15).first.angle, Engine::Math::TurnFromDegrees(90)));
+}
+
+// TurretAIAimTurretState::update (AllowsPitch, GroundUnitPitch 40, TurretPitchRate 10 degrees a frame): at a ground unit
+// 50 away with the rifle's range (Weapon::getAttackRange: 100 less the 2.5 undersize, 97.5) it pitches to the level line
+// plus 40 * 50 / 97.5 = 20.51 degrees: 10 on frame 1, 20 on frame 2, on it (friend_turnTowardsPitch: within a step it
+// snaps) and aligned on frame 3; at something in the air, to the line alone (level here: aligned at once). The ratio's
+// fixed-point rounding (1/65536 of 40 degrees) needs 0.001 degrees of tolerance. The line runs from half the firer's
+// height (getVectorTo FROM_CENTER_3D, v.z -= maxHeight / 2): 20 high, it is -atan(10 / 50) = -11.31 degrees and the
+// distance 50.99, so 9.61 degrees, within a step: on it on frame 1 (0.01 degrees for the fixed-point arctangent).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_turret_aims_higher_at_ground_units_by_their_distance)
+{
+	const auto run = [](int ticks, std::uint32_t classes, int height = 0) {
+		Battle battle;
+		const ecs::Entity gun = battle.Add(0, 100, 100, battle.rifle, 100);
+		if (height != 0)
+		{
+			battle.world.Add<BodyExtent>(gun);
+			battle.world.Get<BodyExtent>(gun)->maxHeight = Fixed::FromInt(height);
+		}
+		const ecs::Entity target = battle.Add(1, 150, 100, WeaponCatalog::None, 1000);
+		battle.world.Get<Targetable>(target)->classes = classes;
+		battle.world.Get<Armament>(gun)->turret = true;
+		*battle.world.Get<AttackTarget>(gun) = {target, true};
+		battle.world.Add<Turret>(gun);
+		Turret &turret = *battle.world.Get<Turret>(gun);
+		turret.definition.allowsPitch = true;
+		turret.definition.pitchRate = Engine::Math::TurnFromDegrees(10);
+		turret.definition.groundUnitPitch = Engine::Math::TurnFromDegrees(40);
+		battle.Run(1, ticks);
+		return *battle.world.Get<Turret>(gun);
+	};
+	BOOST_TEST(Near(run(1, target_class::Vehicle).pitch, Engine::Math::TurnFromDegrees(10)));
+	const Turret climbing = run(2, target_class::Vehicle);
+	BOOST_TEST(Near(climbing.pitch, Engine::Math::TurnFromDegrees(20)));
+	BOOST_TEST(!climbing.aligned);
+	const Turret pitched = run(3, target_class::Vehicle);
+	BOOST_TEST(std::abs(Engine::Math::DeltaTo(pitched.pitch, Engine::Math::TurnFromDegrees(Fixed::FromRatio(4000, 195)))) <=
+		Engine::Math::TurnFromDegrees(Fixed::FromRatio(1, 1000)).units);
+	BOOST_TEST(pitched.aligned);
+	const Turret tall = run(1, target_class::Vehicle, 20);
+	BOOST_TEST(std::abs(Engine::Math::DeltaTo(tall.pitch, Engine::Math::TurnFromDegrees(Fixed::FromRatio(9609, 1000)))) <=
+		Engine::Math::TurnFromDegrees(Fixed::FromRatio(1, 100)).units);
+	BOOST_TEST(tall.aligned);
+	const Turret atAir = run(1, target_class::AirborneVehicle | target_class::Aircraft);
+	BOOST_TEST(atAir.pitch.units == 0u);
+	BOOST_TEST(atAir.aligned);
+}
+
+BOOST_AUTO_TEST_CASE(legacy_parity_a_turret_without_a_target_holds_then_recenters_at_half_rate)
+{
+	// Last aimed at frame 1 with RecenterTime 20 frames: HOLD from frame 2 until 22, RECENTER from 23
+	// at 5 degrees a frame (half its 10), so 90 degrees takes 18 frames: at rest on frame 40.
+	const auto run = [](int ticks) {
+		Battle battle;
+		const ecs::Entity tank = battle.Add(0, 100, 100, WeaponCatalog::None, 100);
+		battle.world.Add<Turret>(tank);
+		Turret &turret = *battle.world.Get<Turret>(tank);
+		turret.definition.turnRate = Engine::Math::TurnFromDegrees(10);
+		turret.definition.recenterTicks = 20;
+		turret.angle = Engine::Math::TurnFromDegrees(90);
+		turret.state = TurretState::Hold; // lost its target on frame 2
+		turret.until = 2 + 20;
+		battle.Run(1, ticks);
+		return battle.world.Get<Turret>(tank)->angle;
+	};
+	BOOST_TEST(run(22).units == Engine::Math::TurnFromDegrees(90).units);
+	BOOST_TEST(Near(run(23), Engine::Math::TurnFromDegrees(85)));
+	BOOST_TEST(Near(run(39), Engine::Math::TurnFromDegrees(5)));
+	BOOST_TEST(Near(run(40), Engine::Math::TurnAngle{}));
+}
+
+BOOST_AUTO_TEST_CASE(legacy_parity_an_idle_turret_scans_holds_and_recenters)
+{
+	// TurretAIIdleState -> IdleScan -> Hold -> Recenter -> Idle with a 10-frame scan interval,
+	// 30-degree scans, a 10-degree rate (5 when scanning or recentering) and RecenterTime 20.
+	const auto run = [](int ticks) {
+		Battle battle;
+		const ecs::Entity tank = battle.Add(0, 100, 100, WeaponCatalog::None, 100);
+		battle.world.Add<Turret>(tank);
+		Turret &turret = *battle.world.Get<Turret>(tank);
+		turret.definition.turnRate = Engine::Math::TurnFromDegrees(10);
+		turret.definition.recenterTicks = 20;
+		turret.definition.minScanUnits = turret.definition.maxScanUnits = Engine::Math::TurnFromDegrees(30).units;
+		turret.definition.minScanTicks = turret.definition.maxScanTicks = 10;
+		battle.Run(1, ticks);
+		return *battle.world.Get<Turret>(tank);
+	};
+	const auto away = [](const Turret &turret) { return Engine::Math::TurnAngle{static_cast<std::uint32_t>(std::abs(static_cast<std::int32_t>(turret.angle.units)))}; };
+	// Frame 1 enters IDLE (next scan on 11); frame 11 picks the scan; 12-17 turn 5 a frame.
+	BOOST_TEST((run(10).state == TurretState::Idle));
+	const Turret picked = run(11);
+	BOOST_TEST((picked.state == TurretState::IdleScan));
+	BOOST_TEST(picked.angle.units == 0u);
+	BOOST_TEST(Near(away(run(12)), Engine::Math::TurnFromDegrees(5)));
+	BOOST_TEST(Near(away(run(17)), Engine::Math::TurnFromDegrees(30)));
+	// Frame 18 lands on it and HOLDs until 38, when it RECENTERs; back at rest (and idle) on frame 45.
+	BOOST_TEST((run(18).state == TurretState::Hold));
+	const Turret recentering = run(38);
+	BOOST_TEST((recentering.state == TurretState::Recenter));
+	BOOST_TEST(Near(away(recentering), Engine::Math::TurnFromDegrees(30)));
+	BOOST_TEST(Near(away(run(39)), Engine::Math::TurnFromDegrees(25)));
+	const Turret rested = run(45);
+	BOOST_TEST((rested.state == TurretState::Idle));
+	BOOST_TEST(rested.angle.units == 0u);
+	BOOST_TEST(rested.until == 55u);
+}
+
+BOOST_AUTO_TEST_CASE(turrets_aim_identically_on_any_number_of_workers)
+{
+	const auto fight = [](std::size_t workers) {
+		Battle battle;
+		for (int index = 0; index < 40; ++index)
+		{
+			const ecs::Entity a = battle.Add(0, 100 + (index % 8) * 12, 100 + (index / 8) * 12, battle.rifle, 60);
+			const ecs::Entity b = battle.Add(1, 180 + (index % 8) * 12, 100 + (index / 8) * 12, battle.rifle, 60);
+			for (const ecs::Entity tank : {a, b})
+			{
+				battle.world.Get<Armament>(tank)->turret = true;
+				battle.world.Add<Turret>(tank);
+				battle.world.Get<Turret>(tank)->definition.turnRate = Engine::Math::TurnFromDegrees(3 + index % 5);
+			}
+		}
+		const auto deaths = battle.Run(workers, 200);
+		return std::make_pair(battle.world.StateHash(), deaths.size());
+	};
+	const auto serial = fight(1);
+	const auto parallel = fight(8);
+	BOOST_TEST(serial.second > 0u);
+	BOOST_TEST(serial.first == parallel.first);
+	BOOST_TEST(serial.second == parallel.second);
+}
+
+// Legacy parity (GeneralsMD Weapon.cpp, Weapon::privateFireWeapon): each shot
+// fires m_curBarrel (wrapped at the barrel count first), then moves to the next
+// after ShotsPerBarrel (always 1 in Zero Hour) shots.
+BOOST_AUTO_TEST_CASE(legacy_parity_shots_take_the_barrels_in_turn)
+{
+	// A rifle every 10 ticks at a target straight ahead: shots on ticks 1, 11, 21.
+	const auto run = [](int ticks, std::uint8_t barrels) {
+		Battle battle;
+		const ecs::Entity gun = battle.Add(0, 100, 100, battle.rifle, 100);
+		const ecs::Entity target = battle.Add(1, 180, 100, WeaponCatalog::None, 1000);
+		battle.world.Get<Armament>(gun)->barrels = barrels;
+		*battle.world.Get<AttackTarget>(gun) = {target, true};
+		battle.Run(1, ticks);
+		return *battle.world.Get<Armament>(gun);
+	};
+	BOOST_TEST(run(1, 2).firedTick == 1u);
+	BOOST_TEST(run(1, 2).firedBarrel == 0u);
+	BOOST_TEST(run(11, 2).firedBarrel == 1u);
+	BOOST_TEST(run(21, 2).firedBarrel == 0u);
+	BOOST_TEST(run(21, 3).firedBarrel == 2u);
+	BOOST_TEST(run(21, 1).firedBarrel == 0u);
+}
+
+namespace
+{
+double Real(Fixed value) { return static_cast<double>(value.Raw()) / 65536.0; }
+bool Near(Fixed value, double expected, double tolerance = 0.01) { return std::abs(Real(value) - expected) <= tolerance; }
+
+// GenericTankShell's DumbProjectileBehavior (FirstHeight 10, SecondHeight 10, indents 50% and 90%).
+ProjectileArc TankShellArc()
+{
+	ProjectileArc arc;
+	arc.firstHeight = arc.secondHeight = Fixed::FromInt(10);
+	arc.firstIndent = Fixed::FromRatio(1, 2);
+	arc.secondIndent = Fixed::FromRatio(9, 10);
+	arc.orientToPath = true;
+	return arc;
+}
+}
+
+// DumbProjectileBehavior::calcFlightPath with BezierSegment::getApproximateLength and getSegmentPoints:
+// from (0, 0, 10) to (120, 0, 0) over flat ground the inner points sit 10 over the higher end (20),
+// the curve is about 125.08 long, so at CrusaderTankGun's 400 a second (13.33 a frame) it takes 10
+// points: (0, 0, 10), (19.52, 0, 12.95), ..., point 5 (84.77, 0, 15.69), ..., (120, 0, 0).
+// Numbers from the original's float code; fixed point lands within 0.01.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_lobbed_shell_follows_the_original_arc)
+{
+	using Engine::Math::FixedVector3;
+	ProjectileArc arc = TankShellArc();
+	arc.firstHeight = arc.secondHeight = Fixed::FromInt(10);
+	arc.firstIndent = Fixed::FromRatio(1, 2);
+	const ArcPoints points = ArcControlPoints({{}, {}, Fixed::FromInt(10)}, {Fixed::FromInt(120), {}, {}}, arc, Fixed{});
+	BOOST_TEST(Near(points[1].x, 60.0));
+	BOOST_TEST(Near(points[1].z, 20.0));
+	BOOST_TEST(Near(points[2].x, 108.0));
+	BOOST_TEST(Near(points[2].z, 20.0));
+	BOOST_TEST(Near(ArcLength(points), 125.083, 0.05));
+	const Fixed speed = Fixed::FromInt(400) / Fixed::FromInt(30);
+	const std::uint32_t segments = ArcSegments(points, speed);
+	BOOST_TEST(segments == 10u);
+	BOOST_TEST(Near(ArcPoint(points, segments, 0).z, 10.0));
+	BOOST_TEST(Near(ArcPoint(points, segments, 1).x, 19.5226));
+	BOOST_TEST(Near(ArcPoint(points, segments, 1).z, 12.9492));
+	BOOST_TEST(Near(ArcPoint(points, segments, 5).x, 84.7737));
+	BOOST_TEST(Near(ArcPoint(points, segments, 5).z, 15.6927));
+	BOOST_TEST(Near(ArcPoint(points, segments, 9).x, 120.0));
+	// A hill in between lifts the inner points over it (estimateTerrainExtremesAlongLine).
+	BOOST_TEST(Near(ArcControlPoints({}, {Fixed::FromInt(120), {}, {}}, arc, Fixed::FromInt(35))[1].z, 45.0));
+}
+
+// DumbProjectileBehavior::update: a point a tick from the tick after launch, facing along the path
+// (its first point as its second), detonating where it is the tick it has none left.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_projectile_walks_a_point_a_tick_then_is_gone)
+{
+	Battle battle;
+	ecs::World &world = battle.world;
+	const ArcPoints points = ArcControlPoints({{}, {}, Fixed::FromInt(10)}, {Fixed::FromInt(120), {}, {}}, TankShellArc(), Fixed{});
+	const ecs::Entity shell = world.Create();
+	world.Add<Transform>(shell);
+	world.Add<Attitude>(shell);
+	world.Add<ProjectileFlight>(shell);
+	Shot carried;
+	carried.weapon = battle.cannon;
+	carried.target = ecs::Entity{};
+	*world.Get<ProjectileFlight>(shell) = {points, 10, 0, TankShellArc(), carried};
+	std::size_t landed = 0;
+	battle.Run(1, 11, [&](int tick) {
+		battle.world.Resource<Detonations>().ForEach([&](const Shot &shot) {
+			++landed;
+			BOOST_TEST(tick == 11); // out of points on the 11th tick
+			BOOST_TEST(shot.weapon == battle.cannon);
+			BOOST_TEST(Near(shot.aim.x, 120.0)); // where it went off
+		});
+		if (tick > 10)
+			return;
+		BOOST_REQUIRE(world.IsAlive(shell));
+		const auto expected = ArcPoint(points, 10, static_cast<std::uint32_t>(tick - 1));
+		BOOST_TEST(world.Get<Transform>(shell)->position.x.Raw() == expected.x.Raw());
+		BOOST_TEST(world.Get<Transform>(shell)->position.z.Raw() == expected.z.Raw());
+		if (tick == 10)
+		{
+			// Facing along +x; coming down at the end: nose down (a positive pitch).
+			BOOST_TEST(world.Get<Transform>(shell)->facing.units == 0u);
+			BOOST_TEST(static_cast<std::int32_t>(world.Get<Attitude>(shell)->pitch.units) > 0);
+		}
+	});
+	BOOST_TEST(!world.IsAlive(shell));
+	BOOST_TEST(landed == 1u);
+}
+
+// DumbProjectileBehavior::update: once the frame reaches its launch frame plus MaxLifespan it detonate()s where
+// it is, before walking on; fired on tick 1 with a 4-tick lifespan, it walks its points 0..3 on ticks 1..4
+// and goes off on tick 5 at point 3, however many points it had left.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_projectile_goes_off_when_its_lifespan_runs_out)
+{
+	Battle battle;
+	ecs::World &world = battle.world;
+	ProjectileArc arc = TankShellArc();
+	arc.maxLifespan = 4;
+	const ArcPoints points = ArcControlPoints({{}, {}, Fixed::FromInt(10)}, {Fixed::FromInt(120), {}, {}}, arc, Fixed{});
+	const ecs::Entity shell = world.Create();
+	world.Add<Transform>(shell);
+	world.Add<Attitude>(shell);
+	world.Add<ProjectileFlight>(shell);
+	Shot carried;
+	carried.weapon = battle.cannon;
+	carried.fireTick = 1;
+	*world.Get<ProjectileFlight>(shell) = {points, 10, 0, arc, carried};
+	int wentOff = 0;
+	Engine::Math::FixedVector3 at;
+	battle.Run(1, 6, [&](int tick) {
+		battle.world.Resource<Detonations>().ForEach([&](const Shot &shot) {
+			wentOff = tick;
+			at = shot.aim;
+		});
+	});
+	BOOST_TEST(wentOff == 5);
+	const auto expected = ArcPoint(points, 10, 3);
+	BOOST_TEST(at.x.Raw() == expected.x.Raw());
+	BOOST_TEST(at.z.Raw() == expected.z.Raw());
+	BOOST_TEST(!world.IsAlive(shell));
+}
+
+// DumbProjectileBehavior::projectileFireAtObjectOrPosition with TumbleRandomly: its physics gets pitch, yaw and
+// roll rates each in [-1/PI, 1/PI] radians a frame and it spins by them every frame, never facing along its path.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_tumbling_projectile_spins_at_its_random_rates)
+{
+	constexpr std::int64_t limit = 217585585; // 1/PI radians in turn units
+	{
+		Battle battle;
+		WeaponDefinition lobbed = battle.weapons.At(battle.cannon);
+		lobbed.projectile = lobbed.lobbed = true;
+		lobbed.arc = TankShellArc();
+		lobbed.arc.tumble = true;
+		lobbed.speed = Fixed::FromInt(400) / Fixed::FromInt(30);
+		lobbed.attackRange = Fixed::FromInt(150);
+		const std::uint32_t gunWeapon = battle.weapons.Add(lobbed);
+		const ecs::Entity gun = battle.Add(0, 100, 100, gunWeapon, 100);
+		const ecs::Entity target = battle.Add(1, 220, 100, WeaponCatalog::None, 1000);
+		*battle.world.Get<AttackTarget>(gun) = {target, true};
+		std::optional<ProjectileFlight> seen;
+		battle.Run(1, 2, [&](int) {
+			// The launched shell: the entity after the target.
+			for (std::uint32_t generation = 0; generation < 4; ++generation)
+				if (const ecs::Entity entity{target.index + 1, generation}; battle.world.IsAlive(entity))
+					if (const auto *flight = battle.world.Get<ProjectileFlight>(entity))
+						seen = *flight;
+		});
+		BOOST_TEST_REQUIRE(seen.has_value());
+		bool spins = false;
+		for (const auto rate : seen->tumble)
+		{
+			const auto signedRate = static_cast<std::int64_t>(static_cast<std::int32_t>(rate.units));
+			BOOST_TEST(signedRate >= -limit);
+			BOOST_TEST(signedRate <= limit);
+			spins = spins || signedRate != 0;
+		}
+		BOOST_TEST(spins);
+	}
+	// It turns by its rates each frame.
+	Battle battle;
+	ecs::World &world = battle.world;
+	ProjectileArc arc = TankShellArc();
+	arc.tumble = true;
+	arc.orientToPath = false;
+	const ArcPoints points = ArcControlPoints({{}, {}, Fixed::FromInt(10)}, {Fixed::FromInt(120), {}, {}}, arc, Fixed{});
+	const ecs::Entity shell = world.Create();
+	world.Add<Transform>(shell);
+	world.Add<Attitude>(shell);
+	world.Add<ProjectileFlight>(shell);
+	Shot carried;
+	carried.weapon = battle.cannon;
+	ProjectileFlight flight{points, 10, 0, arc, carried};
+	flight.tumble = {Engine::Math::TurnFromDegrees(10), Engine::Math::TurnFromDegrees(20), Engine::Math::TurnAngle{} - Engine::Math::TurnFromDegrees(30)};
+	*world.Get<ProjectileFlight>(shell) = flight;
+	battle.Run(1, 3);
+	BOOST_TEST(Near(world.Get<Transform>(shell)->facing, Engine::Math::TurnFromDegrees(30)));
+	BOOST_TEST(Near(world.Get<Attitude>(shell)->pitch, Engine::Math::TurnFromDegrees(60)));
+	BOOST_TEST(Near(world.Get<Attitude>(shell)->roll, Engine::Math::TurnAngle{} - Engine::Math::TurnFromDegrees(90)));
+}
+
+// Weapon::calcProjectileLaunchPosition: the barrel's launch bone, pitched about the pitch pivot, turned
+// about the turret pivot, onto the launcher; without a layout, the launcher's own position.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_projectile_leaves_its_launch_bone)
+{
+	using Engine::Math::FixedVector3;
+	LaunchLayout layout;
+	layout.barrels[0] = {{Fixed::FromInt(10), {}, Fixed::FromInt(5)}, {Fixed::FromInt(10), Fixed::FromInt(2), Fixed::FromInt(5)}};
+	layout.turretPivot = layout.pitchPivot = {{}, {}, Fixed::FromInt(5)};
+	Transform launcher{{Fixed::FromInt(100), Fixed::FromInt(50), {}}, {}};
+	// The second barrel, the turret a quarter round: (10, 2) -> (-2, 10).
+	FixedVector3 at = LaunchPosition(&layout, 1, true, Engine::Math::TurnFromDegrees(90), {}, launcher);
+	BOOST_TEST(Near(at.x, 98.0));
+	BOOST_TEST(Near(at.y, 60.0));
+	BOOST_TEST(Near(at.z, 5.0));
+	// Pitched up 30 degrees: the muzzle 10 in front rises 5.
+	at = LaunchPosition(&layout, 0, true, {}, Engine::Math::TurnFromDegrees(30), launcher);
+	BOOST_TEST(Near(at.x, 108.660));
+	BOOST_TEST(Near(at.z, 10.0));
+	// A barrel past the last: the first's; no turret: not turned; the launcher's own facing turns it.
+	launcher.facing = Engine::Math::TurnFromDegrees(90);
+	at = LaunchPosition(&layout, 5, false, Engine::Math::TurnFromDegrees(90), {}, launcher);
+	BOOST_TEST(Near(at.x, 100.0));
+	BOOST_TEST(Near(at.y, 60.0));
+	at = LaunchPosition(nullptr, 0, true, {}, {}, launcher);
+	BOOST_TEST(Near(at.y, 50.0));
+}
+
+// A lobbed shot lands as its projectile runs out of points (Weapon::fireProjectileDetonationWeapon: radius
+// damage where it went off): fired on tick 1 over 120 flat units at 400 a second, its arc (about 121.7 long)
+// has 10 points, walked on ticks 2 to 11 (it would land on 12, the tick after its last point, but it touches its victim first).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_lobbed_shot_lands_when_its_arc_ends)
+{
+	const auto hurt = [](int ticks) {
+		Battle battle;
+		WeaponDefinition lobbed = battle.weapons.At(battle.cannon);
+		lobbed.projectile = lobbed.lobbed = true;
+		lobbed.arc = TankShellArc();
+		lobbed.speed = Fixed::FromInt(400) / Fixed::FromInt(30);
+		lobbed.attackRange = Fixed::FromInt(150);
+		const std::uint32_t gunWeapon = battle.weapons.Add(lobbed);
+		const ecs::Entity gun = battle.Add(0, 100, 100, gunWeapon, 100);
+		const ecs::Entity target = battle.Add(1, 220, 100, WeaponCatalog::None, 1000);
+		*battle.world.Get<AttackTarget>(gun) = {target, true};
+		battle.Run(1, ticks);
+		return battle.world.Get<Health>(target)->current < Fixed::FromInt(1000);
+	};
+	// It runs into its victim first (shouldProjectileCollideWith: radius 5 and its own 1 across): on tick 10 its
+	// ninth point is 5.3 short of it, so it goes off then rather than the tick after running out of points.
+	BOOST_TEST(!hurt(9));
+	BOOST_TEST(hurt(10));
+}
+
+// DumbProjectileBehavior::update with FlightPathAdjustDistPerSecond (GenericTankShell: 100, 3.33 a tick):
+// the arc's end moves toward where the victim now stands by at most that a tick, the path recalculated
+// over the same points; once there, it stays.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_shell_follows_its_victim_at_its_adjust_rate)
+{
+	Battle battle;
+	ecs::World &world = battle.world;
+	const ecs::Entity victim = battle.Add(1, 130, 0, WeaponCatalog::None, 1000);
+	ProjectileArc arc = TankShellArc();
+	arc.followPerTick = Fixed::FromInt(100) / Fixed::FromInt(30);
+	const ArcPoints points = ArcControlPoints({{}, {}, Fixed::FromInt(10)}, {Fixed::FromInt(120), {}, {}}, arc, Fixed{});
+	const ecs::Entity shell = world.Create();
+	world.Add<Transform>(shell);
+	world.Add<Attitude>(shell);
+	world.Add<ProjectileFlight>(shell);
+	Shot carried;
+	carried.weapon = battle.cannon;
+	carried.target = victim;
+	*world.Get<ProjectileFlight>(shell) = {points, 10, 0, arc, carried};
+	std::vector<double> ends;
+	battle.Run(1, 5, [&](int) {
+		if (world.IsAlive(shell))
+			ends.push_back(Real(world.Get<ProjectileFlight>(shell)->points[3].x));
+	});
+	BOOST_REQUIRE(ends.size() == 5u);
+	BOOST_TEST(std::abs(ends[0] - 123.333) < 0.01);
+	BOOST_TEST(std::abs(ends[1] - 126.667) < 0.01);
+	BOOST_TEST(std::abs(ends[2] - 130.0) < 0.01);
+	BOOST_TEST(std::abs(ends[4] - 130.0) < 0.01);
+	// The inner points follow the line to the new end.
+	BOOST_TEST(Near(world.Get<ProjectileFlight>(shell)->points[1].x, 65.0));
+}
+
+// MissileAIUpdate::update with its THRUST locomotor (Locomotor::moveTowardsPositionThrust) and physics
+// (PhysicsBehavior::update), for the Tunnel Defender's missile (TunnelDefenderMissileLocomotor: 225 a second,
+// 675 a second squared, 100 degrees a second, 25 degree thrust angle; InitialVelocity 150,
+// DistanceToTravelBeforeTurning 20, FuelLifetime 1250 ms = 38 frames, lock at 75; radius 2) fired level
+// from 10 up at a victim 200 away: it ignites at once, flies straight 20 then steers, starts its KILL run
+// on tick 21 and touches the victim (radius 5) on tick 30 at x 195.81. Numbers from a float replica of
+// the original's code; fixed point lands within 0.05.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_missile_ignites_steers_locks_and_hits_on_the_original_ticks)
+{
+	Battle battle;
+	ecs::World &world = battle.world;
+	const ecs::Entity victim = battle.Add(1, 200, 0, WeaponCatalog::None, 1000);
+	WeaponDefinition rocket = battle.weapons.At(battle.cannon);
+	rocket.projectile = rocket.guided = true;
+	MissileFlightDefinition &d = rocket.missile;
+	const Fixed perSecond = Fixed::FromInt(30);
+	d.followsTarget = true;
+	d.fuelTicks = 38;
+	d.initialSpeed = Fixed::FromInt(150) / perSecond;
+	d.noTurnDistance = Fixed::FromInt(20);
+	d.maxSpeed = Fixed::FromInt(225) / perSecond;
+	d.minSpeed = Fixed::FromInt(120) / perSecond;
+	d.acceleration = Fixed::FromInt(675) / Fixed::FromInt(900);
+	d.turnRate = Engine::Math::TurnFromDegrees(Fixed::FromInt(100) / perSecond);
+	d.maxThrustAngle = Engine::Math::TurnFromDegrees(25);
+	d.radius = Fixed::FromInt(2);
+	const std::uint32_t weapon = battle.weapons.Add(rocket);
+	Shot shot;
+	shot.target = victim;
+	shot.weapon = weapon;
+	shot.origin = {{}, {}, Fixed::FromInt(10)};
+	shot.aim = {Fixed::FromInt(200), {}, {}};
+	const ecs::Entity missile = world.Create();
+	world.Add<Transform>(missile);
+	world.Add<Attitude>(missile);
+	world.Add<MissileFlight>(missile);
+	*world.Get<Transform>(missile) = {shot.origin, {}};
+	*world.Get<MissileFlight>(missile) = LaunchMissile(shot, battle.weapons.At(weapon));
+	struct Expected
+	{
+		int tick;
+		double x, z;
+	};
+	static constexpr Expected Path[] = {{1, 5.250, 9.929}, {2, 10.725, 9.794}, {5, 28.286, 9.065}, {10, 60.339, 7.370}, {20, 130.188, 3.682},
+		{25, 166.446, 1.769}, {29, 195.806, 0.221}};
+	int killTick = 0, detonationTick = 0;
+	double detonationX = 0.0;
+	battle.Run(1, 32, [&](int tick) {
+		world.Resource<MissileDetonations>().ForEach([&](const Shot &landed) {
+			detonationTick = tick;
+			detonationX = Real(landed.aim.x);
+		});
+		if (!world.IsAlive(missile))
+			return;
+		const MissileFlight &flight = *world.Get<MissileFlight>(missile);
+		if (killTick == 0 && flight.state == MissileState::Kill)
+			killTick = tick;
+		for (const Expected &at : Path)
+			if (at.tick == tick)
+			{
+				BOOST_TEST(Near(world.Get<Transform>(missile)->position.x, at.x, 0.05), "tick " << tick << " x");
+				BOOST_TEST(Near(world.Get<Transform>(missile)->position.z, at.z, 0.05), "tick " << tick << " z");
+			}
+	});
+	BOOST_TEST(killTick == 21);
+	BOOST_TEST(detonationTick == 30);
+	BOOST_TEST(std::abs(detonationX - 195.806) < 0.05);
+	BOOST_TEST(!world.IsAlive(missile));
+	// It went off by the victim: the radius damage reached it.
+	BOOST_TEST((world.Get<Health>(victim)->current < Fixed::FromInt(1000)));
+}
+
+// AIUpdateInterface with an AltTurret (TurretAI per turret): linked (TurretsLinked, the battleship's), the
+// second turret aims at what the first does at its own rate from its own rest; not linked, nothing aims it.
+// First turret 6 degrees a frame from 0, second 3 a frame from 180 (NaturalTurretAngle 180), the target a
+// quarter turn left: the first is there on frame 15, the second on frame 30 (turning the short way).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_linked_alt_turret_aims_with_the_first)
+{
+	const auto run = [](int ticks, bool linked) {
+		Battle battle;
+		const ecs::Entity ship = battle.Add(0, 100, 100, battle.rifle, 100);
+		const ecs::Entity target = battle.Add(1, 100, 180, WeaponCatalog::None, 1000);
+		battle.world.Get<Armament>(ship)->turret = true;
+		*battle.world.Get<AttackTarget>(ship) = {target, true};
+		battle.world.Add<Turret>(ship);
+		battle.world.Get<Turret>(ship)->definition.turnRate = Engine::Math::TurnFromDegrees(6);
+		battle.world.Add<AltTurret>(ship);
+		AltTurret &alt = *battle.world.Get<AltTurret>(ship);
+		alt.linked = linked;
+		alt.turret.definition.turnRate = Engine::Math::TurnFromDegrees(3);
+		alt.turret.definition.naturalAngle = Engine::Math::TurnFromDegrees(180);
+		alt.turret.angle = alt.turret.definition.naturalAngle;
+		battle.Run(1, ticks);
+		return std::make_pair(battle.world.Get<Turret>(ship)->angle, battle.world.Get<AltTurret>(ship)->turret);
+	};
+	const auto [first15, second15] = run(15, true);
+	BOOST_TEST(Near(first15, Engine::Math::TurnAngle::Quarter_Turn()));
+	BOOST_TEST(Near(second15.angle, Engine::Math::TurnFromDegrees(135)));
+	BOOST_TEST(!second15.aligned);
+	const auto [first30, second30] = run(30, true);
+	BOOST_TEST(Near(second30.angle, Engine::Math::TurnAngle::Quarter_Turn()));
+	BOOST_TEST(second30.aligned);
+	BOOST_TEST((second30.state == TurretState::Aim));
+	const auto [first15b, unlinked] = run(15, false);
+	BOOST_TEST(Near(unlinked.angle, Engine::Math::TurnFromDegrees(180)));
+	BOOST_TEST((unlinked.state != TurretState::Aim));
+}
+
+// WeaponSet::chooseBestWeaponForTarget (PREFER_MOST_DAMAGE), every tick: a slot must be able to target the
+// victim (a Patriot's ground missile cannot hit aircraft; its SECONDARY air missile can); of those, a ready
+// one beats a more damaging one that is reloading; ties go to PRIMARY.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_weapon_set_fires_the_slot_that_fits)
+{
+	struct Result
+	{
+		std::uint8_t slot;
+		std::uint64_t fired;
+	};
+	const auto run = [](bool airborne, std::uint64_t primaryReady, int ticks) {
+		Battle battle;
+		WeaponDefinition ground = battle.weapons.At(battle.rifle);
+		ground.primaryDamage = Fixed::FromInt(30);
+		ground.anti = weapon_anti::Ground;
+		WeaponDefinition air = battle.weapons.At(battle.rifle);
+		air.primaryDamage = Fixed::FromInt(20);
+		air.anti = weapon_anti::Ground | weapon_anti::AirborneVehicle;
+		const std::uint32_t groundWeapon = battle.weapons.Add(ground), airWeapon = battle.weapons.Add(air);
+		const ecs::Entity battery = battle.Add(0, 100, 100, groundWeapon, 100);
+		const ecs::Entity victim = battle.Add(1, 150, 100, WeaponCatalog::None, 1000);
+		if (airborne)
+			battle.world.Get<Targetable>(victim)->classes = target_class::AirborneVehicle;
+		*battle.world.Get<AttackTarget>(battery) = {victim, true};
+		battle.world.Add<WeaponSlots>(battery);
+		WeaponSlots &set = *battle.world.Get<WeaponSlots>(battery);
+		set.slots[0].weapon = groundWeapon;
+		set.slots[0].readyTick = primaryReady;
+		set.slots[1].weapon = airWeapon;
+		battle.world.Get<Armament>(battery)->readyTick = primaryReady;
+		battle.Run(1, ticks);
+		return Result{battle.world.Get<WeaponSlots>(battery)->current, battle.world.Get<Armament>(battery)->firedTick};
+	};
+	// A ground victim: the more damaging PRIMARY.
+	BOOST_TEST(run(false, 0, 1).slot == 0u);
+	BOOST_TEST(run(false, 0, 1).fired == 1u);
+	// An aircraft: only SECONDARY can target it.
+	BOOST_TEST(run(true, 0, 1).slot == 1u);
+	BOOST_TEST(run(true, 0, 1).fired == 1u);
+	// PRIMARY reloading until tick 50: SECONDARY (ready) fires now.
+	BOOST_TEST(run(false, 50, 1).slot == 1u);
+	BOOST_TEST(run(false, 50, 1).fired == 1u);
+}
+
+// PointDefenseLaserUpdate::update / fireWhenReady / scanClosestTarget (the Paladin's: ScanRate 500 ms = 15
+// frames, ScanRange 120, PaladinPointDefenseLaser: range 65, 1000 ms between shots = 30 frames): a missile
+// within range is shot on the tick it is first scanned (and, killed, looked for again); one scanned outside
+// range is tracked and shot the tick it comes within range.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_point_defense_laser_shoots_incoming_missiles)
+{
+	const auto run = [](int startX, int moveTo, int moveTick, int ticks) {
+		Battle battle;
+		WeaponDefinition laser = battle.weapons.At(battle.rifle);
+		laser.primaryDamage = Fixed::FromInt(100);
+		laser.attackRange = Fixed::FromInt(65);
+		laser.delayMin = laser.delayMax = 30;
+		laser.anti = weapon_anti::SmallMissile | weapon_anti::Ground;
+		const std::uint32_t laserWeapon = battle.weapons.Add(laser);
+		const ecs::Entity paladin = battle.Add(0, 100, 100, WeaponCatalog::None, 100);
+		battle.world.Add<PointDefense>(paladin);
+		*battle.world.Get<PointDefense>(paladin) = {{laserWeapon, target_class::SmallMissile, target_class::Infantry, 15, Fixed::FromInt(120)}};
+		const ecs::Entity missile = battle.Add(1, startX, 100, WeaponCatalog::None, 100);
+		battle.world.Get<Targetable>(missile)->classes = target_class::SmallMissile;
+		battle.world.Get<Aggression>(missile)->autoAcquire = false;
+		std::vector<int> shotTicks;
+		battle.Run(1, ticks, [&](int tick) {
+			battle.world.Resource<PointDefenseShots>().ForEach([&](const Shot &) { shotTicks.push_back(tick); });
+			if (tick == moveTick && battle.world.IsAlive(missile))
+				battle.world.Get<Transform>(missile)->position.x = Fixed::FromInt(moveTo);
+		});
+		return std::make_pair(shotTicks, battle.world.IsAlive(missile));
+	};
+	// 50 away: shot on tick 1, killed.
+	const auto [inRange, survivedInRange] = run(150, 150, 0, 10);
+	BOOST_TEST(inRange == (std::vector<int>{1}), boost::test_tools::per_element());
+	BOOST_TEST(!survivedInRange);
+	// 100 away (scanned, out of range): not shot; brought to 60 on tick 5, it is shot on tick 6.
+	const auto [tracked, survivedTracked] = run(200, 160, 5, 10);
+	BOOST_TEST(tracked == (std::vector<int>{6}), boost::test_tools::per_element());
+	BOOST_TEST(!survivedTracked);
+	// Never within range: never shot.
+	const auto [never, survivedNever] = run(200, 200, 0, 40);
+	BOOST_TEST(never.empty());
+	BOOST_TEST(survivedNever);
+}
+
+// WeaponTemplate::shouldProjectileCollideWith: a shell flying its arc over things (ProjectileCollidesWith
+// STRUCTURES, the default) goes off on an enemy structure in its way, flies on over an allied unit, and never
+// hits its launcher; with ENEMIES it goes off on an enemy unit in its way too.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_projectile_runs_into_what_its_weapon_collides_with)
+{
+	const auto run = [](std::uint32_t collides, std::uint32_t blockerPlayer, std::uint32_t blockerClasses) {
+		Battle battle;
+		const ecs::Entity target = battle.Add(1, 400, 100, WeaponCatalog::None, 1000);
+		const ecs::Entity blocker = battle.Add(blockerPlayer, 250, 100, WeaponCatalog::None, 1000);
+		battle.world.Get<Targetable>(blocker)->classes = blockerClasses;
+		battle.world.Get<Targetable>(blocker)->radius = Fixed::FromInt(20);
+		WeaponDefinition shell = battle.weapons.At(battle.cannon);
+		shell.projectile = shell.lobbed = true;
+		shell.collides = collides;
+		shell.arc = TankShellArc();
+		shell.arc.firstHeight = shell.arc.secondHeight = Fixed::FromInt(5); // flat: through the blocker's footprint
+		const std::uint32_t weapon = battle.weapons.Add(shell);
+		const ArcPoints points = ArcControlPoints({Fixed::FromInt(100), Fixed::FromInt(100), Fixed::FromInt(5)}, {Fixed::FromInt(400), Fixed::FromInt(100), {}},
+			shell.arc, Fixed{});
+		const ecs::Entity projectile = battle.world.Create();
+		battle.world.Add<Transform>(projectile);
+		battle.world.Add<Attitude>(projectile);
+		battle.world.Add<ProjectileFlight>(projectile);
+		Shot carried;
+		carried.weapon = weapon;
+		carried.target = target;
+		*battle.world.Get<ProjectileFlight>(projectile) = {points, 30, 0, shell.arc, carried};
+		double wentOff = 0.0;
+		battle.Run(1, 40, [&](int) {
+			battle.world.Resource<Detonations>().ForEach([&](const Shot &landed) { wentOff = Real(landed.aim.x); });
+		});
+		return wentOff;
+	};
+	using namespace target_class;
+	// An enemy structure 150 along (radius 20): it goes off as it reaches it (within its own radius 1 and the structure's 20).
+	const double onStructure = run(weapon_collides::Structures, 1, Structure);
+	BOOST_TEST((onStructure > 225.0 && onStructure < 252.0));
+	// An allied unit there: it flies on to its target (going off as it touches it).
+	BOOST_TEST(run(weapon_collides::Structures, 0, Vehicle) > 390.0); // on its victim (at 400, radius 5), which it always hits
+	// An enemy unit there: only a weapon that collides with enemies goes off on it.
+	BOOST_TEST(run(weapon_collides::Structures, 1, Vehicle) > 390.0);
+	const double onEnemy = run(weapon_collides::Structures | weapon_collides::Enemies, 1, Vehicle);
+	BOOST_TEST((onEnemy > 225.0 && onEnemy < 252.0));
+}
+
+// FireWeaponWhenDamagedBehavior::onDamage / update (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Behavior/
+// FireWeaponWhenDamagedBehavior.cpp): a hit of a type it reacts to, at least DamageAmount, fires the reaction weapon of
+// its damage state then (health above 70% pristine, above 35% damaged, else really damaged) at its own position, if
+// that weapon is ready (its DelayBetweenShots, 10 ticks here, since it last fired); a smaller hit, or one of a type it
+// ignores, fires nothing; the continuous weapon of its state fires every time it is ready, hit or not; inactive
+// (neither StartsActive nor upgraded), nothing fires.
+BOOST_AUTO_TEST_CASE(legacy_parity_weapons_fired_when_damaged)
+{
+	ecs::World world{ecs::WorldConfig{2}};
+	world.RegisterComponent<DamageReaction>();
+	world.RegisterComponent<Transform>();
+	world.RegisterComponent<Health>();
+	world.RegisterComponent<Owner>();
+	world.RegisterComponent<WeaponBonusConditions>();
+	world.RegisterComponent<OffMap>();
+	world.RegisterComponent<DefinitionRef>();
+	world.FinalizeComponents();
+	Hits &hits = world.EmplaceResource<Hits>();
+	world.EmplaceResource<SecondLives>();
+	world.EmplaceResource<RandomSeed>(RandomSeed{7});
+	WeaponCatalog &weapons = world.EmplaceResource<WeaponCatalog>();
+	ShotQueue &queue = world.EmplaceResource<ShotQueue>();
+	WeaponDefinition blast;
+	blast.primaryDamage = Fixed::FromInt(100);
+	blast.delayMin = blast.delayMax = 10;
+	std::array<std::uint32_t, 4> reactions{};
+	for (auto &id : reactions)
+		id = weapons.Add(blast);
+	const std::uint32_t leak = weapons.Add(blast);
+	const ecs::Entity target = world.Create();
+	world.Add<DamageReaction>(target);
+	world.Add<Transform>(target);
+	world.Add<Health>(target);
+	*world.Get<Health>(target) = {Fixed::FromInt(100), Fixed::FromInt(100), 0};
+	DamageReaction reaction;
+	for (std::size_t state = 0; state < 4; ++state)
+		reaction.reaction[state].weapon = reactions[state];
+	reaction.continuous[1].weapon = leak; // only while damaged
+	reaction.damageTypes = ~(std::uint64_t{1} << 5); // all but type 5
+	reaction.threshold = Fixed::FromInt(2);
+	reaction.damaged = Fixed::FromRatio(7, 10);
+	reaction.reallyDamaged = Fixed::FromRatio(35, 100);
+	reaction.active = 1;
+	*world.Get<DamageReaction>(target) = reaction;
+	std::uint64_t tick = 0;
+	std::vector<Shot> fired;
+	const auto run = [&](std::vector<std::pair<std::uint32_t, Fixed>> taken) {
+		hits.Reset(1);
+		for (const auto &[type, amount] : taken)
+			hits.SlotAt(0).push_back({target, {}, type, 0, amount, 0, type});
+		DamageReactionSystem system;
+		ecs::SystemRegistry registry;
+		registry.Register(system);
+		registry.Finalize(world.Components());
+		ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+		scheduler.Finalize(engine::time::FixedStep{30});
+		scheduler.Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}});
+		fired = queue.TakeDue(~std::uint64_t{0});
+	};
+	const auto count = [&](std::uint32_t weapon) { return std::count_if(fired.begin(), fired.end(), [&](const Shot &shot) { return shot.weapon == weapon; }); };
+	run({{1, Fixed::One()}}); // below the threshold
+	BOOST_TEST(fired.empty());
+	run({{5, Fixed::FromInt(10)}}); // an ignored type
+	BOOST_TEST(fired.empty());
+	run({{1, Fixed::FromInt(10)}, {1, Fixed::FromInt(10)}}); // pristine: once (not ready for the second)
+	BOOST_TEST(count(reactions[0]) == 1);
+	BOOST_TEST(fired.size() == 1u);
+	BOOST_TEST((fired[0].source == target));
+	run({{1, Fixed::FromInt(10)}}); // still reloading
+	BOOST_TEST(fired.empty());
+	world.Get<Health>(target)->current = Fixed::FromInt(50); // damaged
+	run({{1, Fixed::FromInt(10)}});
+	BOOST_TEST(count(reactions[1]) == 1);
+	BOOST_TEST(count(leak) == 1); // and its continuous weapon
+	run({});
+	BOOST_TEST(fired.empty()); // the continuous weapon waits its delay
+	for (int wait = 0; wait < 8; ++wait)
+	{
+		run({});
+		BOOST_TEST(fired.empty());
+	}
+	run({});
+	BOOST_TEST(count(leak) == 1); // ready again 10 ticks after it fired
+	world.Get<Health>(target)->current = Fixed::FromInt(20);
+	run({{1, Fixed::FromInt(10)}});
+	BOOST_TEST(count(reactions[2]) == 1);
+	world.Get<DamageReaction>(target)->active = 0;
+	for (int wait = 0; wait < 20; ++wait)
+		run({{1, Fixed::FromInt(10)}});
+	BOOST_TEST(fired.empty());
+}
+
+// ActiveBody::attemptDamage's last damage info (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Body/ActiveBody.cpp):
+// a hit more than a tick after the last is recorded (who, what type, when); within that, a hit from a live vehicle,
+// infantry or structure replaces one whose source is alive, one from something else (a fire field) does not, and any
+// live source replaces a gone one.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_last_damage_prefers_a_real_attacker)
+{
+	ecs::World world{ecs::WorldConfig{2}};
+	world.RegisterComponent<Health>();
+	world.RegisterComponent<HealthFloor>();
+	world.RegisterComponent<Subdual>();
+	world.RegisterComponent<Targetable>();
+	world.RegisterComponent<DefinitionRef>();
+	world.RegisterComponent<Owner>();
+	world.FinalizeComponents();
+	IncomingDamage &incoming = world.EmplaceResource<IncomingDamage>();
+	world.EmplaceResource<ShockWaves>();
+	world.EmplaceResource<GarrisonHits>();
+	world.EmplaceResource<GarrisonClears>();
+	world.EmplaceResource<ArmorCatalog>().Add(ArmorDefinition{});
+	world.EmplaceResource<Deaths>();
+	world.EmplaceResource<Hits>();
+	world.EmplaceResource<SecondLives>();
+	const auto make = [&](std::uint32_t classes) {
+		const ecs::Entity entity = world.Create();
+		world.Add<Targetable>(entity);
+		*world.Get<Targetable>(entity) = {Fixed::FromInt(5), classes};
+		return entity;
+	};
+	const ecs::Entity victim = world.Create();
+	world.Add<Health>(victim);
+	*world.Get<Health>(victim) = {Fixed::FromInt(1000), Fixed::FromInt(1000), 0};
+	const ecs::Entity tank = make(target_class::Vehicle);
+	const ecs::Entity field = make(0); // a fire field: neither vehicle, infantry nor structure
+	std::uint64_t tick = 0;
+	const auto hit = [&](std::vector<std::pair<ecs::Entity, std::uint32_t>> blows) {
+		incoming.Clear();
+		for (const auto &[source, type] : blows)
+			incoming.Add({victim, source, Fixed::One(), type, 0});
+		incoming.Seal();
+		HealthSystem system;
+		ecs::SystemRegistry registry;
+		registry.Register(system);
+		registry.Finalize(world.Components());
+		ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+		scheduler.Finalize(engine::time::FixedStep{30});
+		scheduler.Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}});
+	};
+	const auto &health = *world.Get<Health>(victim);
+	hit({{field, 3}});
+	BOOST_TEST((health.lastAttacker == field));
+	BOOST_TEST(health.lastDamageType == 3u);
+	hit({{tank, 1}}); // the next tick: a vehicle's replaces it
+	BOOST_TEST((health.lastAttacker == tank));
+	BOOST_TEST(health.lastDamageType == 1u);
+	hit({{field, 3}}); // the next tick: a fire field's does not
+	BOOST_TEST((health.lastAttacker == tank));
+	BOOST_TEST(health.lastDamageType == 1u);
+	world.Destroy(tank);
+	hit({{field, 3}}); // its source gone: any live one does
+	BOOST_TEST((health.lastAttacker == field));
+	BOOST_TEST(health.lastDamageType == 3u);
+	hit({});
+	hit({});
+	hit({{ecs::Entity{}, 7}}); // over a tick later: fresh, whoever it is
+	BOOST_TEST(health.lastDamageType == 7u);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+BOOST_AUTO_TEST_SUITE(countermeasures)
+
+// CountermeasuresBehavior (reportMissileForCountermeasures, update, launchVolley) with Weapon::fireWeaponTemplate's
+// report: a small missile fired on tick T at an airborne jet with its flares on (EvasionRate 100%) is to turn for a flare
+// MissileDecoyDelay (8) later; the jet's reaction volley goes ReactionLaunchLatency (5) after T, of VolleySize (2)
+// flares either side of its heading at its speed times VolleyVelocityFactor; then one every DelayBetweenVolleys (10),
+// until its 3 volleys are spent (no ReloadTime: never reloaded).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_jet_answers_a_missile_with_volleys_of_flares)
+{
+	Battle battle;
+	battle.relationships.Set(0, 1, Relationship::Enemies);
+	battle.relationships.Set(1, 0, Relationship::Enemies);
+	WeaponDefinition missile;
+	missile.primaryDamage = Fixed::FromInt(1);
+	missile.attackRange = Fixed::FromInt(400);
+	missile.projectile = true;
+	missile.guided = true;
+	missile.smallMissile = true;
+	missile.speed = Fixed::FromInt(10);
+	missile.delayMin = missile.delayMax = 3000; // one shot only here
+	missile.anti = weapon_anti::Ground | weapon_anti::AirborneVehicle;
+	const std::uint32_t launcher = battle.weapons.Add(missile);
+	const ecs::Entity shooter = battle.Add(0, 200, 200, launcher, 100);
+	const ecs::Entity jet = battle.Add(1, 400, 200, battle.rifle, 100);
+	battle.world.Get<Targetable>(jet)->classes = target_class::AirborneVehicle;
+	battle.world.Get<Transform>(jet)->position.z = Fixed::FromInt(100);
+	battle.world.Get<Armament>(jet)->weapon = WeaponCatalog::None;
+	battle.world.Add<Locomotion>(jet);
+	battle.world.Get<Locomotion>(jet)->speed = Fixed::FromInt(5);
+	Countermeasures made;
+	made.volleySize = 2;
+	made.volleys = 3;
+	made.available = 6;
+	made.reactionTicks = 5;
+	made.volleyTicks = 10;
+	made.decoyTicks = 8;
+	made.evasionRate = Fixed::One();
+	made.velocityFactor = Fixed::One();
+	made.arc = Engine::Math::TurnFromDegrees(30);
+	made.flareDefinition = 7;
+	made.upgraded = 1;
+	battle.world.Add<Countermeasures>(jet);
+	*battle.world.Get<Countermeasures>(jet) = made;
+	*battle.world.Get<AttackTarget>(shooter) = AttackTarget{.target = jet, .ordered = true};
+	std::uint64_t fired = 0, decoy = 0;
+	std::vector<std::pair<int, std::size_t>> volleys;
+	std::vector<FlareLaunch> flares;
+	battle.Run(1, 60, [&](int tick) {
+		if (fired == 0 && battle.world.Get<Armament>(shooter)->firedTick == static_cast<std::uint64_t>(tick))
+		{
+			fired = static_cast<std::uint64_t>(tick);
+			const Countermeasures &state = *battle.world.Get<Countermeasures>(jet);
+			BOOST_TEST(state.incoming == 1u);
+			BOOST_TEST(state.diverted == 1u);
+			BOOST_TEST(state.reactionTick == fired + 5);
+			for (std::uint32_t index = 0; index < 16; ++index)
+				for (std::uint32_t generation = 0; generation < 4; ++generation)
+				{
+					ecs::Entity candidate;
+					candidate.index = index;
+					candidate.generation = generation;
+					if (battle.world.IsAlive(candidate))
+						if (const MissileFlight *flight = battle.world.Get<MissileFlight>(candidate))
+							decoy = flight->decoyTick;
+				}
+		}
+		std::size_t count = 0;
+		battle.world.Resource<FlareLaunches>().ForEach([&](const FlareLaunch &launched) {
+			++count;
+			flares.push_back(launched);
+		});
+		if (count > 0)
+			volleys.emplace_back(tick, count);
+	});
+	BOOST_TEST_REQUIRE(fired != 0u);
+	BOOST_TEST(decoy == fired + 8);
+	BOOST_TEST_REQUIRE(volleys.size() == 3u);
+	BOOST_TEST(static_cast<std::uint64_t>(volleys[0].first) == fired + 5);
+	BOOST_TEST(static_cast<std::uint64_t>(volleys[1].first) == fired + 15);
+	BOOST_TEST(static_cast<std::uint64_t>(volleys[2].first) == fired + 25);
+	for (const auto &[tick, count] : volleys)
+		BOOST_TEST(count == 2u);
+	BOOST_TEST(battle.world.Get<Countermeasures>(jet)->available == 0u);
+	// The volley's two flares go 30 degrees either side of its heading, at its speed.
+	BOOST_TEST_REQUIRE(flares.size() == 6u);
+	BOOST_TEST((Engine::Math::Abs(Engine::Math::Length(flares[0].velocity.XY()) - Fixed::FromInt(5)) <= Fixed::FromRatio(1, 100)));
+	BOOST_TEST(((flares[0].velocity.y < Fixed{}) != (flares[1].velocity.y < Fixed{})));
+	BOOST_TEST(flares[0].definition == 7u);
+}
+
+// calculateCountermeasureToDivertTo: of the newest volley's flares still there (a volley's size of them, from the
+// newest), the one nearest the victim.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_decoyed_missile_takes_the_newest_volleys_nearest_flare)
+{
+	Countermeasures decoys;
+	decoys.volleySize = 2;
+	std::vector<Transform> places(4);
+	for (std::uint32_t index = 0; index < 4; ++index)
+	{
+		ecs::Entity flare;
+		flare.index = index + 1;
+		flare.generation = 1;
+		decoys.flares[index] = flare;
+	}
+	decoys.flareCount = 4;
+	places[0].position = {Fixed::FromInt(1), Fixed{}, Fixed{}};   // the oldest volley, nearest of all: not considered
+	places[1].position = {Fixed::FromInt(2), Fixed{}, Fixed{}};
+	places[2].position = {Fixed::FromInt(30), Fixed{}, Fixed{}};  // the newest volley
+	places[3].position = {Fixed::FromInt(50), Fixed{}, Fixed{}};
+	const auto where = [&](ecs::Entity flare) -> const Transform * { return &places[flare.index - 1]; };
+	BOOST_TEST(DivertTarget(decoys, {}, where).index == 3u);
+	// One of the newest gone: the next older one fills the volley's count.
+	const auto gone = [&](ecs::Entity flare) -> const Transform * { return flare.index == 3 ? nullptr : &places[flare.index - 1]; };
+	BOOST_TEST(DivertTarget(decoys, {}, gone).index == 2u);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

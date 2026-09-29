@@ -1,13 +1,5 @@
-module;
-
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-#include <span>
-#include <utility>
-#include <vector>
-
 export module Graphics.Scene.Lighting.Renderer;
+import std;
 
 import engine.profiling;
 export import Graphics.RHI;

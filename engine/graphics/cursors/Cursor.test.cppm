@@ -3,15 +3,11 @@ module;
 #define NOMINMAX
 #include <boost/test/included/unit_test.hpp>
 #include <SDL3/SDL.h>
-#include <algorithm>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <vector>
 #ifdef _WIN32
 #include <windows.h>
 #endif
 export module Graphics.Cursors.Cursor.Tests;
+import std;
 import Graphics.Cursors.Cursor;
 using namespace Graphics;
 

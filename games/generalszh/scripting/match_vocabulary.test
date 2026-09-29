@@ -1,0 +1,251 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <map>
+#include <string>
+#include <vector>
+
+import games.generalszh.scripting.core_vocabulary;
+import games.generalszh.scripting.presentation_vocabulary;
+import games.generalszh.scripting.match_vocabulary;
+import games.generalszh.content.install.install_mount;
+import engine.level.adapters.generals_map.map_reader;
+
+using namespace engine::scripting;
+namespace level = engine::level;
+
+namespace
+{
+// The local player's match as the scripts see it; the test turns it.
+struct Standing final : generalszh::scripting::LocalMatchHost
+{
+	std::string side{"GLAStealthGeneral"};
+	bool victory{false}, alliedDefeat{false}, localDefeat{false};
+	std::string musicDone;
+
+	bool AlliedVictory() const override { return victory; }
+	bool AlliedDefeat() const override { return alliedDefeat; }
+	bool LocalDefeat() const override { return localDefeat; }
+	std::string SideOf(const std::string &player) const override { return player == "<Local Player>" ? side : std::string{}; }
+	bool MusicCompleted(const std::string &track, std::int64_t) const override { return track == musicDone; }
+	std::map<std::string, std::int64_t> counts; // the local player's objects, by type or list
+	std::map<std::string, std::int64_t> recorded;
+	std::int64_t CountObjects(const std::string &player, const std::string &types, bool) const override
+	{
+		const auto found = counts.find(types);
+		return player == "<Local Player>" && found != counts.end() ? found->second : 0;
+	}
+	std::int64_t RecordedCount(const std::string &player, const std::string &types) const override
+	{
+		const auto found = recorded.find(player + "/" + types);
+		return found == recorded.end() ? 0 : found->second;
+	}
+	void RecordCount(const std::string &player, const std::string &types, std::int64_t count) override { recorded[player + "/" + types] = count; }
+};
+
+struct Heard
+{
+	std::uint64_t tick;
+	generalszh::scripting::ClientScriptCommand command;
+};
+
+// Runs the shipped MultiplayerScripts.scb (its first list, as GameLogic adds it) for `ticks`, turning the standing
+// with `turn` before each tick; what the scripts ask of the client, by tick.
+template<typename Turn>
+std::vector<Heard> Play(Standing &standing, std::uint64_t ticks, Turn &&turn)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+		return {};
+	engine::filesystem::VirtualFileSystem files;
+	generalszh::content::MountInstall(files, install);
+	const auto bytes = files.Read("Data/Scripts/MultiplayerScripts.scb");
+	BOOST_REQUIRE(bytes.has_value());
+	const auto file = level::generals_map::ReadScriptFile(*bytes);
+	BOOST_REQUIRE(file.has_value());
+	BOOST_REQUIRE(!file->lists.empty());
+	level::Scenario scenario;
+	scenario.participants.emplace_back().scripts = file->lists.front();
+	Vocabulary vocabulary;
+	std::vector<generalszh::scripting::ClientScriptCommand> commands;
+	generalszh::scripting::AddCoreVocabulary(vocabulary);
+	generalszh::scripting::AddPresentationVocabulary(vocabulary, commands);
+	generalszh::scripting::AddMatchVocabulary(vocabulary, &standing);
+	ScriptRuntime runtime(scenario, vocabulary, ScriptHooks{}, ScriptRuntimeOptions{30, 1});
+	std::vector<Heard> heard;
+	for (std::uint64_t tick = 1; tick <= ticks; ++tick)
+	{
+		turn(tick);
+		commands.clear();
+		runtime.Tick(tick);
+		for (const auto &command : commands)
+			heard.push_back({tick, command});
+	}
+	return heard;
+}
+
+std::vector<std::string> Describe(const std::vector<Heard> &heard);
+
+std::string Describe(const Heard &heard)
+{
+	using Kind = generalszh::scripting::ClientScriptCommand::Kind;
+	const char *kind = heard.command.kind == Kind::MusicTrack ? "music" : heard.command.kind == Kind::SpeechPlay ? "speech"
+		: heard.command.kind == Kind::Victory ? "VICTORY" : heard.command.kind == Kind::Defeat ? "DEFEAT"
+		: heard.command.kind == Kind::LocalDefeat ? "LOCALDEFEAT" : "other";
+	std::string text = std::to_string(heard.tick) + " " + kind;
+	if (!heard.command.text.empty())
+		text += " " + heard.command.text;
+	return text;
+}
+
+std::vector<std::string> Describe(const std::vector<Heard> &heard)
+{
+	std::vector<std::string> out;
+	for (const Heard &each : heard)
+		out.push_back(Describe(each));
+	return out;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(match_vocabulary)
+
+// MultiplayerScripts.scb on real data for a GLA player: nothing while the match goes on; the tick the alliance wins,
+// End_GLA plays and the timers start; the victory voice (4 s), the cheer (5 s) and VICTORY (6 s) follow on their
+// timers (SET_MILLISECOND_TIMER seconds at 30 frames a second).
+BOOST_AUTO_TEST_CASE(legacy_parity_the_multiplayer_scripts_declare_a_victory)
+{
+	Standing standing;
+	const auto heard = Play(standing, 400, [&](std::uint64_t tick) { standing.victory = tick >= 10; });
+	if (heard.empty())
+		return;
+	BOOST_TEST((Describe(heard) == std::vector<std::string>{"10 music End_GLA", "130 speech EvaGLA_Victory", "160 speech UI_AllCheerSound", "190 VICTORY"}));
+}
+
+// ... and a defeat of the whole alliance: End_GLA_Failure, EvaGLA_Defeat, DEFEAT.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_multiplayer_scripts_declare_a_defeat)
+{
+	Standing standing;
+	const auto heard = Play(standing, 400, [&](std::uint64_t tick) {
+		standing.alliedDefeat = tick >= 10;
+		standing.localDefeat = tick >= 10;
+	});
+	if (heard.empty())
+		return;
+	BOOST_TEST((Describe(heard) == std::vector<std::string>{"10 music End_GLA_Failure", "160 speech EvaGLA_Defeat", "190 DEFEAT"}));
+}
+
+// ... and the local player's own defeat while allies fight on: End_GLA_Failure, LOCALDEFEAT, then silence once the
+// track has played through. (Only the USA script sets the personal defeat voice's timer, so a GLA player hears
+// none: the shipped data's.)
+BOOST_AUTO_TEST_CASE(legacy_parity_the_multiplayer_scripts_declare_a_personal_defeat)
+{
+	Standing standing;
+	const auto heard = Play(standing, 400, [&](std::uint64_t tick) {
+		standing.localDefeat = tick >= 10;
+		if (tick >= 300)
+			standing.musicDone = "End_GLA_Failure";
+	});
+	if (heard.empty())
+		return;
+	BOOST_TEST((Describe(heard) == std::vector<std::string>{"10 music End_GLA_Failure", "190 LOCALDEFEAT", "300 music Game_Silent"}));
+}
+
+// The music scripts' army questions: PLAYER_HAS_OBJECT_COMPARISON counts the local player's objects of a type (here at
+// least one superweapon); PLAYER_LOST_OBJECT_TYPE holds once the living count falls below the count last seen, and
+// not again until it falls further.
+BOOST_AUTO_TEST_CASE(legacy_parity_local_scripts_ask_about_the_local_players_army)
+{
+	const auto call = [](std::string name, std::vector<std::string> texts, std::vector<std::int64_t> integers = {}) {
+		level::ScriptCall made;
+		made.name = std::move(name);
+		for (std::size_t index = 0; index < texts.size(); ++index)
+		{
+			level::ScriptParameter parameter;
+			parameter.text = texts[index];
+			parameter.integer = index < integers.size() ? integers[index] : 0;
+			made.parameters.push_back(parameter);
+		}
+		return made;
+	};
+	level::Scenario scenario;
+	auto &list = scenario.participants.emplace_back().scripts;
+	level::Script built;
+	built.name = "built";
+	built.oneShot = true;
+	built.conditions = {{call("PLAYER_HAS_OBJECT_COMPARISON", {"<Local Player>", "", "", "Super Weapons"}, {0, 3, 1})}};
+	built.actions = {call("MUSIC_SET_TRACK", {"End_GLA", "", ""})};
+	level::Script lost;
+	lost.name = "lost";
+	lost.conditions = {{call("PLAYER_LOST_OBJECT_TYPE", {"<Local Player>", "GLAArmsDealer"})}};
+	lost.actions = {call("MUSIC_SET_TRACK", {"End_GLA_Failure", "", ""})};
+	list.scripts = {built, lost};
+	Standing standing;
+	standing.counts["GLAArmsDealer"] = 2;
+	Vocabulary vocabulary;
+	std::vector<generalszh::scripting::ClientScriptCommand> commands;
+	generalszh::scripting::AddCoreVocabulary(vocabulary);
+	generalszh::scripting::AddPresentationVocabulary(vocabulary, commands);
+	generalszh::scripting::AddMatchVocabulary(vocabulary, &standing);
+	ScriptRuntime runtime(scenario, vocabulary, ScriptHooks{}, ScriptRuntimeOptions{30, 1});
+	std::vector<std::string> heard;
+	for (std::uint64_t tick = 1; tick <= 6; ++tick)
+	{
+		if (tick == 2)
+			standing.counts["Super Weapons"] = 1;
+		if (tick == 4)
+			standing.counts["GLAArmsDealer"] = 1;
+		commands.clear();
+		runtime.Tick(tick);
+		for (const auto &command : commands)
+			heard.push_back(std::to_string(tick) + " " + command.text);
+	}
+	const std::vector<std::string> expected{"2 End_GLA", "4 End_GLA_Failure"};
+	BOOST_TEST(heard == expected, boost::test_tools::per_element());
+	BOOST_TEST(runtime.UnknownConditions().empty());
+}
+
+// Player::initFromDict: a skirmish human takes the civilian side's scripts of SkirmishScripts.scb, its music (run on
+// this machine: GameClient's local scripts). For a GLA Stealth General: the faction counter is set at once, the music
+// timer runs 10 s, then Game_GLA_01 plays.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_skirmish_music_starts_for_the_local_players_side)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+		return;
+	engine::filesystem::VirtualFileSystem files;
+	generalszh::content::MountInstall(files, install);
+	const auto bytes = files.Read("Data/Scripts/SkirmishScripts.scb");
+	BOOST_REQUIRE(bytes.has_value());
+	const auto file = level::generals_map::ReadScriptFile(*bytes);
+	BOOST_REQUIRE(file.has_value());
+	const level::ScriptList *civilian = nullptr;
+	for (std::size_t index = 0; index < file->players.size() && index < file->lists.size(); ++index)
+		if (file->players[index] == "SkirmishCivilian" || file->players[index] == "PlyrCivilian")
+			civilian = &file->lists[index];
+	BOOST_REQUIRE(civilian != nullptr);
+	level::Scenario scenario;
+	scenario.participants.emplace_back().scripts = *civilian;
+	Standing standing;
+	Vocabulary vocabulary;
+	std::vector<generalszh::scripting::ClientScriptCommand> commands;
+	generalszh::scripting::AddCoreVocabulary(vocabulary);
+	generalszh::scripting::AddPresentationVocabulary(vocabulary, commands);
+	generalszh::scripting::AddMatchVocabulary(vocabulary, &standing);
+	ScriptRuntime runtime(scenario, vocabulary, ScriptHooks{}, ScriptRuntimeOptions{30, 1});
+	std::vector<std::string> heard;
+	for (std::uint64_t tick = 1; tick <= 400; ++tick)
+	{
+		commands.clear();
+		runtime.Tick(tick);
+		for (const auto &command : commands)
+			heard.push_back(std::to_string(tick) + " " + command.text);
+	}
+	BOOST_TEST_REQUIRE(!heard.empty());
+	BOOST_TEST(heard.front() == "301 Game_GLA_01");
+	BOOST_TEST(runtime.UnknownConditions().empty());
+	BOOST_TEST(runtime.UnknownActions().empty());
+}
+
+BOOST_AUTO_TEST_SUITE_END()

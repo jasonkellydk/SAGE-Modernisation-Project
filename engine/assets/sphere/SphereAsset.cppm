@@ -1,13 +1,5 @@
-module;
-
-#include <array>
-#include <cmath>
-#include <cstdint>
-#include <string>
-#include <utility>
-#include <vector>
-
 export module Assets.Spheres;
+import std;
 
 import Assets.Math;
 

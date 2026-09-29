@@ -1,0 +1,361 @@
+#define BOOST_TEST_MODULE EngineGameplayParachute
+#include <boost/test/included/unit_test.hpp>
+
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <vector>
+
+import engine.gameplay.rts.parachute.systems.parachute_systems;
+import engine.gameplay.common.physics.systems.physics_system;
+import engine.core.serialization.byte_stream;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+using namespace engine::gameplay;
+using Engine::Math::Fixed;
+
+namespace
+{
+// AmericaParachute (ParachuteContain: PitchRateMax / RollRateMax 60, LowAltitudeDamping 0.2, ParachuteOpenDist 25) on
+// ParachuteLocomotor and FreeFallLocomotor (Locomotor.ini), per frame at 30 frames a second.
+ParachuteDefinition AmericaParachute()
+{
+	ParachuteDefinition chute;
+	chute.openDistance = Fixed::FromInt(25);
+	chute.lowAltitudeDamping = Fixed::FromRatio(2, 10);
+	chute.swayBone = {Fixed{}, Fixed{}, Fixed::FromInt(20)};
+	chute.attachBone = {Fixed{}, Fixed{}, Fixed::FromInt(8)};
+	chute.drownDamageType = 11;
+	chute.drownDeathType = 12;
+	chute.fallDamageType = 13;
+	chute.fallDeathType = 14;
+	HoverLocomotor &open = chute.open;
+	open.maxSpeed = Fixed::FromRatio(60, 30);
+	open.acceleration = Fixed::FromRatio(60, 900);
+	open.braking = Fixed::FromRatio(100, 900);
+	open.lift = Fixed::FromRatio(100, 900);
+	open.speedLimitZ = Fixed::FromRatio(15, 30);
+	open.extraFriction = Fixed::FromRatio(30, 30);
+	open.preferredHeight = Fixed::FromInt(-1);
+	open.closeEnough = Fixed::FromInt(50);
+	open.closeEnough3D = true;
+	open.airborneFriction = true;
+	open.turnRate = Engine::Math::TurnFromDegrees(4);
+	open.pitchStiffness = open.rollStiffness = Fixed::FromRatio(2, 100);
+	open.pitchDamping = open.rollDamping = Fixed::FromRatio(1, 100);
+	HoverLocomotor &fall = chute.freeFall;
+	fall.speedLimitZ = Fixed::FromInt(33333);
+	fall.preferredHeight = Fixed::FromInt(-1);
+	fall.pitchStiffness = fall.rollStiffness = fall.pitchDamping = fall.rollDamping = Fixed{};
+	return chute;
+}
+
+engine::level::Heightfield Flat()
+{
+	engine::level::Heightfield field;
+	field.width = field.height = 16;
+	field.cellSize = Fixed::FromInt(100);
+	field.heights.assign(256, Fixed{});
+	return field;
+}
+
+struct Scene
+{
+	explicit Scene(std::size_t workers)
+	{
+		world.RegisterComponent<Transform>();
+		world.RegisterComponent<PhysicsBody>();
+		world.RegisterComponent<Attitude>();
+		world.RegisterComponent<OffMap>();
+		world.RegisterComponent<Lifetime>();
+		world.RegisterComponent<Health>();
+		world.RegisterComponent<Disabled>();
+		world.RegisterComponent<BounceSound>();
+		world.RegisterComponent<Dying>();
+		world.RegisterComponent<Parachute>();
+		world.RegisterComponent<ParachuteRider>();
+		world.RegisterComponent<Carried>();
+		world.RegisterComponent<PendingDamage>();
+		world.FinalizeComponents();
+		world.EmplaceResource<GroundHeight>(field);
+		world.EmplaceResource<DeckSurfaces>();
+		world.EmplaceResource<PhysicsSettings>();
+		world.EmplaceResource<FallDamage>();
+		world.EmplaceResource<Landings>();
+		world.EmplaceResource<KillRequests>();
+		world.EmplaceResource<Casualties>();
+		world.EmplaceResource<ParachuteOpenings>();
+		world.EmplaceResource<NavigationGrid>(150, 150);
+		world.EmplaceResource<ParachuteCatalog>().Add(AmericaParachute());
+		registry.Register(steering);
+		registry.Register(physics);
+		registry.Register(landing);
+		registry.Register(losses);
+		registry.Register(freeFalls);
+		registry.OrderBefore<ParachuteSystem, PhysicsSystem>();
+		registry.OrderBefore<PhysicsSystem, ParachuteLandingSystem>();
+		registry.OrderBefore<ParachuteLandingSystem, FreeFallSystem>();
+		registry.Finalize(world.Components());
+		scheduler = std::make_unique<ecs::Scheduler>(world, registry, engine::jobs::JobSystemConfig{workers});
+		scheduler->Finalize(engine::time::FixedStep{30});
+	}
+
+	// A chute at (x, y, z) facing east with a held rider (harness 6 up), landing where it opens or at `spot`.
+	std::pair<ecs::Entity, ecs::Entity> Drop(Fixed x, Fixed y, Fixed z, std::optional<Engine::Math::FixedVector3> spot = std::nullopt)
+	{
+		const ecs::Entity chute = world.Create();
+		world.Add<Transform>(chute);
+		world.Add<PhysicsBody>(chute);
+		world.Add<Parachute>(chute);
+		const ecs::Entity rider = world.Create();
+		world.Add<Transform>(rider);
+		world.Add<Disabled>(rider);
+		world.Add<ParachuteRider>(rider);
+		world.Add<Carried>(rider);
+		world.Add<Health>(rider);
+		world.Add<PhysicsBody>(rider);
+		*world.Get<Health>(rider) = Health{Fixed::FromInt(120), Fixed::FromInt(120)};
+		*world.Get<Transform>(chute) = {{x, y, z}, {}};
+		PhysicsBody body;
+		body.mass = Fixed::FromInt(5);
+		*world.Get<PhysicsBody>(chute) = body;
+		Parachute state;
+		state.rider = rider;
+		state.riderBone = state.riderOpenBone = {Fixed{}, Fixed{}, Fixed::FromInt(6)};
+		if (spot)
+		{
+			state.landing = *spot;
+			state.Set(parachute_flag::Override, true);
+		}
+		*world.Get<Parachute>(chute) = state;
+		*world.Get<Transform>(rider) = {{x, y, z}, {}};
+		*world.Get<Disabled>(rider) = {disabled_type::Held};
+		*world.Get<ParachuteRider>(rider) = {chute};
+		*world.Get<Carried>(rider) = {chute};
+		return {chute, rider};
+	}
+
+	void Step()
+	{
+		world.Resource<KillRequests>().entities.clear();
+		world.Resource<Casualties>().list.clear();
+		for (const ecs::Entity killed : dying)
+			world.Resource<Casualties>().list.push_back({killed, 0, *world.Get<Transform>(killed), killer, Departure::Killed});
+		dying.clear();
+		scheduler->Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}});
+	}
+
+	bool Killed(ecs::Entity entity) const
+	{
+		for (const ecs::Entity killed : world.Resource<KillRequests>().entities)
+			if (killed == entity)
+				return true;
+		return false;
+	}
+
+	engine::level::Heightfield field{Flat()};
+	ecs::World world{ecs::WorldConfig{4}};
+	ParachuteSystem steering;
+	PhysicsSystem physics;
+	ParachuteLandingSystem landing;
+	ParachuteLossSystem losses;
+	FreeFallSystem freeFalls;
+	std::vector<ecs::Entity> dying; // killed on the next step, by `killer`
+	ecs::Entity killer;
+	ecs::SystemRegistry registry;
+	std::unique_ptr<ecs::Scheduler> scheduler;
+	std::uint64_t tick{0};
+};
+
+double Real(Fixed value) { return static_cast<double>(value.Raw()) / 65536.0; }
+}
+
+BOOST_AUTO_TEST_SUITE(parachute)
+
+// ParachuteContain::update and FreeFallLocomotor: dropped 300 up over flat ground, the chute falls on gravity alone (the
+// free-fall locomotor has no lift), learns where it started after its first frame (300 - 64/900) and opens on the frame
+// it has dropped 25 from there: frame 27 (27 frames of gravity: 64/900 * 27 * 28 / 2 = 26.88; 26 frames: 24.96).
+// Opening, its rider (held, hanging at its harness) hears it and hangs open. Open (ParachuteLocomotor, CloseEnoughDist
+// 50 in 3D, AllowAirborneMotiveForce, Apply2DFrictionWhenAirborne, Extra2DFriction 30/s), it glides for where it
+// opened, overshooting and coming back around it (the locomotor pushes along its facing and turns 120 deg/s), sinking
+// at its SpeedLimitZ of about 15/s, until within 50 in 3D, then holds and settles onto the ground: the original's
+// numbers land it on frame 514 (a model of Locomotor / PhysicsBehavior / ParachuteContain in their order: AI, physics,
+// contain). On the ground its rider lets go (no longer held) and the chute is killed. Tolerance: fixed point against the
+// original's floats moves the landing by a frame (its circling path and 3D arrival): 515 here.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_parachute_opens_after_its_drop_and_glides_down)
+{
+	Scene scene(2);
+	const auto [chute, rider] = scene.Drop(Fixed::FromInt(500), Fixed::FromInt(500), Fixed::FromInt(300));
+	std::optional<std::uint64_t> opened, landed;
+	for (int frame = 0; frame < 700 && !landed; ++frame)
+	{
+		scene.Step();
+		const Parachute &state = *scene.world.Get<Parachute>(chute);
+		if (!opened && state.Has(parachute_flag::Opened))
+		{
+			opened = scene.tick;
+			BOOST_TEST_REQUIRE(scene.world.Resource<ParachuteOpenings>().opened.size() == 1u);
+			BOOST_TEST((scene.world.Resource<ParachuteOpenings>().opened.front().rider == rider));
+		}
+		// The rider hangs at its harness (the chute's harness 8 up less its own 6 up).
+		if (!landed && scene.world.Get<ParachuteRider>(rider) != nullptr)
+		{
+			const auto &at = scene.world.Get<Transform>(chute)->position;
+			const auto &hanging = scene.world.Get<Transform>(rider)->position;
+			BOOST_TEST(hanging.z.Raw() == (at.z + Fixed::FromInt(2)).Raw());
+		}
+		if (scene.Killed(chute))
+			landed = scene.tick;
+	}
+	BOOST_TEST_REQUIRE(opened.has_value());
+	BOOST_TEST(*opened == 27u);
+	BOOST_TEST_REQUIRE(landed.has_value());
+	BOOST_TEST(std::llabs(static_cast<long long>(*landed) - 514) <= 1);
+	BOOST_TEST(scene.world.Get<ParachuteRider>(rider) == nullptr);
+	BOOST_TEST((scene.world.Get<Disabled>(rider)->mask & disabled_type::Held) == 0u);
+	// Let go where it hangs (ParachuteContain::onRemoving: positionRider), 2 up, to fall on its own physics.
+	BOOST_TEST(scene.world.Get<Transform>(rider)->position.z.Raw() == Fixed::FromInt(2).Raw());
+	BOOST_TEST_MESSAGE("landed on frame " << *landed);
+}
+
+// ParachuteContain::setOverrideDestination (a paradrop's ParachuteDirectly): opened, the chute flies ultra-accurately
+// for its set spot 60 to the east (extra friction 0.5, CloseEnoughDist 10 in 2D), holds over it and settles down
+// there: the original's numbers land it on frame 614 at the spot.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_paradropped_chute_lands_on_its_spot)
+{
+	Scene scene(2);
+	const auto [chute, rider] = scene.Drop(Fixed::FromInt(500), Fixed::FromInt(500), Fixed::FromInt(300),
+		Engine::Math::FixedVector3{Fixed::FromInt(560), Fixed::FromInt(500), Fixed{}});
+	std::optional<std::uint64_t> landed;
+	for (int frame = 0; frame < 800 && !landed; ++frame)
+	{
+		scene.Step();
+		if (scene.Killed(chute))
+			landed = scene.tick;
+	}
+	BOOST_TEST_REQUIRE(landed.has_value());
+	BOOST_TEST_MESSAGE("landed on frame " << *landed);
+	BOOST_TEST(*landed == 614u);
+	const auto &at = scene.world.Get<Transform>(rider)->position;
+	BOOST_TEST(std::abs(Real(at.x) - 560.0) <= 10.0);
+	BOOST_TEST(std::abs(Real(at.y) - 500.0) <= 10.0);
+}
+
+// A chute that loses its rider goes early (ParachuteContain::update: getContainCount() == 0 -> kill).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_chute_without_its_rider_is_killed)
+{
+	Scene scene(1);
+	const auto [chute, rider] = scene.Drop(Fixed::FromInt(500), Fixed::FromInt(500), Fixed::FromInt(300));
+	scene.Step();
+	BOOST_TEST(!scene.Killed(chute));
+	scene.world.Destroy(rider);
+	scene.Step();
+	BOOST_TEST(scene.Killed(chute));
+}
+
+// ParachuteContain::onDie: a chute killed 200 up lets its rider go where it hangs (onRemoving: no longer held, allowed to
+// fall, no longer placed by it) in free fall (setIsInFreeFall: DISABLED_FREEFALL at once), and the rider takes the
+// chute's FreeFallDamagePercent (50%) of its 120 maximum from the chute's killer (DAMAGE_FALLING, DEATH_SPLATTED),
+// queued for the next damage pass. It falls on its own physics and, down, is no longer in free fall.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_chute_killed_aloft_drops_its_rider_hurt)
+{
+	Scene scene(1);
+	const auto [chute, rider] = scene.Drop(Fixed::FromInt(500), Fixed::FromInt(500), Fixed::FromInt(200));
+	scene.Step();
+	scene.killer = scene.world.Create();
+	scene.dying.push_back(chute);
+	scene.Step();
+	BOOST_TEST(scene.world.Get<ParachuteRider>(rider) == nullptr);
+	BOOST_TEST(scene.world.Get<Carried>(rider) == nullptr);
+	BOOST_TEST(scene.world.Get<Disabled>(rider)->mask == disabled_type::Freefall);
+	const PhysicsBody &body = *scene.world.Get<PhysicsBody>(rider);
+	BOOST_TEST(body.Has(physics_flag::InFreeFall));
+	BOOST_TEST(body.Has(physics_flag::AllowToFall));
+	const PendingDamage *loss = scene.world.Get<PendingDamage>(rider);
+	BOOST_TEST_REQUIRE(loss != nullptr);
+	BOOST_TEST(loss->amount.Raw() == Fixed::FromInt(60).Raw());
+	BOOST_TEST((loss->source == scene.killer));
+	BOOST_TEST(loss->damageType == 13u);
+	BOOST_TEST(loss->deathType == 14u);
+	std::optional<std::uint64_t> down;
+	for (int frame = 0; frame < 200 && !down; ++frame)
+	{
+		scene.Step();
+		if (!scene.world.Get<PhysicsBody>(rider)->Has(physics_flag::InFreeFall))
+			down = scene.tick;
+	}
+	BOOST_TEST_REQUIRE(down.has_value());
+	BOOST_TEST_MESSAGE("down on frame " << *down);
+	// Let go on frame 2 hanging 202 up (its harness 2 above the chute), it falls from rest at Gravity -64/s^2 and is down
+	// 75 frames later (n(n+1)/2 * 64/900 >= 202: n = 75).
+	BOOST_TEST(*down == 77u);
+	BOOST_TEST(scene.world.Get<Disabled>(rider)->mask == 0u);
+	BOOST_TEST(scene.world.Get<Transform>(rider)->position.z.Raw() == 0);
+}
+
+// ParachuteContain::onRemoving: a chute killed just above water (its update kills it within its slop of the surface)
+// lets its rider go at or below the surface plus KillWhenLandingInWaterSlop, and it drowns: HUGE_DAMAGE_AMOUNT of
+// DAMAGE_WATER with DEATH_FLOODED, from no one.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_rider_let_go_in_water_drowns)
+{
+	Scene scene(1);
+	scene.world.Resource<GroundHeight>().AddWater({{Fixed{}, Fixed{}}, {Fixed::FromInt(1600), Fixed{}}, {Fixed::FromInt(1600), Fixed::FromInt(1600)},
+		{Fixed{}, Fixed::FromInt(1600)}}, Fixed::FromInt(5));
+	const auto [chute, rider] = scene.Drop(Fixed::FromInt(500), Fixed::FromInt(500), Fixed::FromInt(12));
+	scene.Step();
+	scene.dying.push_back(chute);
+	scene.Step();
+	BOOST_TEST(scene.world.Get<ParachuteRider>(rider) == nullptr);
+	const PendingDamage *drowned = scene.world.Get<PendingDamage>(rider);
+	BOOST_TEST_REQUIRE(drowned != nullptr);
+	BOOST_TEST(drowned->amount.Raw() == HugeDamage().Raw());
+	BOOST_TEST(drowned->damageType == 11u);
+	BOOST_TEST(drowned->deathType == 12u);
+	BOOST_TEST(!drowned->source.IsValid());
+}
+
+BOOST_AUTO_TEST_CASE(parachutes_fall_the_same_on_any_number_of_workers)
+{
+	Scene one(1), four(4);
+	for (int index = 0; index < 40; ++index)
+	{
+		const Fixed x = Fixed::FromInt(200 + (index % 8) * 100), y = Fixed::FromInt(200 + (index / 8) * 100), z = Fixed::FromInt(150 + index * 7);
+		one.Drop(x, y, z);
+		four.Drop(x, y, z);
+	}
+	for (int frame = 0; frame < 200; ++frame)
+	{
+		one.Step();
+		four.Step();
+		BOOST_TEST_REQUIRE(one.world.StateHash() == four.world.StateHash());
+	}
+}
+
+BOOST_AUTO_TEST_CASE(a_checkpoint_mid_descent_continues_the_same_descent)
+{
+	Scene saved(2);
+	saved.Drop(Fixed::FromInt(500), Fixed::FromInt(500), Fixed::FromInt(300));
+	saved.Drop(Fixed::FromInt(700), Fixed::FromInt(500), Fixed::FromInt(250), Engine::Math::FixedVector3{Fixed::FromInt(650), Fixed::FromInt(520), Fixed{}});
+	for (int frame = 0; frame < 60; ++frame)
+		saved.Step();
+	engine::core::serialization::ByteWriter writer;
+	saved.world.SaveCheckpoint(writer);
+	const auto bytes = writer.Take();
+	Scene loaded(3);
+	engine::core::serialization::ByteReader reader(bytes);
+	BOOST_TEST_REQUIRE(loaded.world.LoadCheckpoint(reader));
+	loaded.tick = saved.tick;
+	for (int frame = 0; frame < 120; ++frame)
+	{
+		saved.Step();
+		loaded.Step();
+		BOOST_TEST_REQUIRE(loaded.world.StateHash() == saved.world.StateHash());
+	}
+}
+
+BOOST_AUTO_TEST_SUITE_END()

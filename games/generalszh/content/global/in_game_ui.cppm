@@ -1,0 +1,182 @@
+export module games.generalszh.content.global.in_game_ui;
+import std;
+
+export import engine.config.binding.schema;
+
+// InGameUI.ini's messages at the top of the screen (the original's InGameUI fields and their defaults): the colours
+// the lines alternate, where the first line is, its font (Language.ini's MessageFont overrides it), and how long a
+// message stays before it fades; and the superweapon countdowns (SuperweaponCountdown*): where they start (a share of
+// the screen, names right-aligned to it), how long their ready flash lasts, its colour, and their normal and ready
+// fonts; and the military caption's (MilitaryCaption*: colour, position on an 800x600 screen, title and line fonts).
+export namespace generalszh::content
+{
+struct InGameUiContent
+{
+	std::array<std::uint8_t, 4> messageColor1{255, 255, 255, 255};
+	std::array<std::uint8_t, 4> messageColor2{180, 180, 180, 255};
+	std::array<int, 2> messagePosition{10, 10};
+	std::string messageFont{"Arial"};
+	int messagePointSize{10};
+	bool messageBold{false};
+	std::int64_t messageDelayMs{5000};
+	std::array<Engine::Math::Fixed, 2> superweaponPosition{Engine::Math::Fixed::FromRatio(7, 10), Engine::Math::Fixed::FromRatio(7, 10)};
+	// SuperweaponCountdownFlashDuration (INI::parseDurationReal: milliseconds to frames, a Real); 0: no flash.
+	Engine::Math::Fixed superweaponFlashFrames{Engine::Math::Fixed::One()};
+	std::array<std::uint8_t, 4> superweaponFlashColor{255, 255, 255, 255};
+	std::string superweaponNormalFont{"Arial"};
+	int superweaponNormalPointSize{10};
+	bool superweaponNormalBold{false};
+	std::string superweaponReadyFont{"Arial"};
+	int superweaponReadyPointSize{10};
+	bool superweaponReadyBold{false};
+	std::array<std::uint8_t, 4> militaryCaptionColor{200, 200, 30, 255};
+	std::array<int, 2> militaryCaptionPosition{10, 380};
+	std::string militaryCaptionTitleFont{"Courier"};
+	int militaryCaptionTitlePointSize{12};
+	bool militaryCaptionTitleBold{true};
+	// The named timers (NamedTimerCountdown*): where they start (a share of the screen; from the middle right, their
+	// right edges there), the ready ones' flash (NamedTimerCountdownFlashDuration, milliseconds as frames) and its
+	// colour, their colour, and their normal and ready fonts.
+	std::array<Engine::Math::Fixed, 2> namedTimerPosition{Engine::Math::Fixed::FromRatio(7, 10), Engine::Math::Fixed::FromRatio(7, 10)};
+	Engine::Math::Fixed namedTimerFlashFrames{Engine::Math::Fixed::One()};
+	std::array<std::uint8_t, 4> namedTimerFlashColor{0, 255, 255, 255};
+	std::array<std::uint8_t, 4> namedTimerNormalColor{255, 255, 0, 255};
+	std::string namedTimerNormalFont{"Arial"};
+	int namedTimerNormalPointSize{10};
+	bool namedTimerNormalBold{false};
+	std::string namedTimerReadyFont{"Arial"};
+	int namedTimerReadyPointSize{10};
+	bool namedTimerReadyBold{false};
+	std::string militaryCaptionFont{"Courier"};
+	int militaryCaptionPointSize{12};
+	bool militaryCaptionBold{false};
+};
+
+inline InGameUiContent BindInGameUi(const engine::config::Document &document)
+{
+	InGameUiContent ui;
+	// INI::parseColorInt ("R:255 G:255 B:255 [A:255]", alpha 255 unless given) and parseICoord2D ("X:10 Y:10").
+	const auto channels = [](const engine::config::Node &field, std::array<int, 4> out) {
+		for (const std::string_view value : field.values)
+			for (const auto &[prefix, index] : {std::pair{"R:", 0}, std::pair{"G:", 1}, std::pair{"B:", 2}, std::pair{"A:", 3}, std::pair{"X:", 0}, std::pair{"Y:", 1}})
+				if (value.starts_with(prefix))
+					std::from_chars(value.data() + 2, value.data() + value.size(), out[static_cast<std::size_t>(index)]);
+		return out;
+	};
+	const auto color = [&](const engine::config::Node &field, std::array<std::uint8_t, 4> &out) {
+		const auto read = channels(field, {out[0], out[1], out[2], 255});
+		for (std::size_t index = 0; index < 4; ++index)
+			out[index] = static_cast<std::uint8_t>(std::clamp(read[index], 0, 255));
+	};
+	for (const engine::config::Node &root : document.Roots())
+	{
+		if (root.key != "InGameUI")
+			continue;
+		for (const engine::config::Node &field : root.children)
+		{
+			const std::string_view key = field.key;
+			if (key == "MessageColor1")
+				color(field, ui.messageColor1);
+			else if (key == "MessageColor2")
+				color(field, ui.messageColor2);
+			else if (key == "MessagePosition")
+			{
+				const auto read = channels(field, {ui.messagePosition[0], ui.messagePosition[1], 0, 0});
+				ui.messagePosition = {read[0], read[1]};
+			}
+			else if (key == "MessageFont" && !field.values.empty())
+				ui.messageFont = std::string(field.Value());
+			else if (key == "MessagePointSize" && !field.values.empty())
+				std::from_chars(field.Value().data(), field.Value().data() + field.Value().size(), ui.messagePointSize);
+			else if (key == "MessageBold" && !field.values.empty())
+				ui.messageBold = engine::config::values::ParseBool(field.Value()).value_or(ui.messageBold);
+			else if (key == "SuperweaponCountdownPosition")
+			{
+				// INI::parseCoord2D: X:0.90 Y:0.01.
+				for (const std::string_view value : field.values)
+					for (const auto &[prefix, index] : {std::pair{"X:", 0}, std::pair{"Y:", 1}})
+						if (value.starts_with(prefix))
+							ui.superweaponPosition[static_cast<std::size_t>(index)] =
+								engine::config::values::ParseFixed(value.substr(2)).value_or(ui.superweaponPosition[static_cast<std::size_t>(index)]);
+			}
+			else if (key == "SuperweaponCountdownFlashDuration" && !field.values.empty())
+				ui.superweaponFlashFrames = engine::config::values::ParseFixed(field.Value()).value_or(Engine::Math::Fixed{}) * Engine::Math::Fixed::FromInt(30) /
+					Engine::Math::Fixed::FromInt(1000);
+			else if (key == "SuperweaponCountdownFlashColor")
+				color(field, ui.superweaponFlashColor);
+			else if (key == "SuperweaponCountdownNormalFont" && !field.values.empty())
+				ui.superweaponNormalFont = std::string(field.Value());
+			else if (key == "SuperweaponCountdownNormalPointSize" && !field.values.empty())
+				std::from_chars(field.Value().data(), field.Value().data() + field.Value().size(), ui.superweaponNormalPointSize);
+			else if (key == "SuperweaponCountdownNormalBold" && !field.values.empty())
+				ui.superweaponNormalBold = engine::config::values::ParseBool(field.Value()).value_or(ui.superweaponNormalBold);
+			else if (key == "SuperweaponCountdownReadyFont" && !field.values.empty())
+				ui.superweaponReadyFont = std::string(field.Value());
+			else if (key == "SuperweaponCountdownReadyPointSize" && !field.values.empty())
+				std::from_chars(field.Value().data(), field.Value().data() + field.Value().size(), ui.superweaponReadyPointSize);
+			else if (key == "SuperweaponCountdownReadyBold" && !field.values.empty())
+				ui.superweaponReadyBold = engine::config::values::ParseBool(field.Value()).value_or(ui.superweaponReadyBold);
+			else if (key == "NamedTimerCountdownPosition")
+			{
+				for (const std::string_view value : field.values)
+					for (const auto &[prefix, index] : {std::pair{"X:", 0}, std::pair{"Y:", 1}})
+						if (value.starts_with(prefix))
+							ui.namedTimerPosition[static_cast<std::size_t>(index)] =
+								engine::config::values::ParseFixed(value.substr(2)).value_or(ui.namedTimerPosition[static_cast<std::size_t>(index)]);
+			}
+			else if (key == "NamedTimerCountdownFlashDuration" && !field.values.empty())
+				ui.namedTimerFlashFrames = engine::config::values::ParseFixed(field.Value()).value_or(Engine::Math::Fixed{}) * Engine::Math::Fixed::FromInt(30) /
+					Engine::Math::Fixed::FromInt(1000);
+			else if (key == "NamedTimerCountdownFlashColor")
+				color(field, ui.namedTimerFlashColor);
+			else if (key == "NamedTimerCountdownNormalColor")
+				color(field, ui.namedTimerNormalColor);
+			else if (key == "NamedTimerCountdownNormalFont" && !field.values.empty())
+				ui.namedTimerNormalFont = std::string(field.Value());
+			else if (key == "NamedTimerCountdownNormalPointSize" && !field.values.empty())
+				std::from_chars(field.Value().data(), field.Value().data() + field.Value().size(), ui.namedTimerNormalPointSize);
+			else if (key == "NamedTimerCountdownNormalBold" && !field.values.empty())
+				ui.namedTimerNormalBold = engine::config::values::ParseBool(field.Value()).value_or(ui.namedTimerNormalBold);
+			else if (key == "NamedTimerCountdownReadyFont" && !field.values.empty())
+				ui.namedTimerReadyFont = std::string(field.Value());
+			else if (key == "NamedTimerCountdownReadyPointSize" && !field.values.empty())
+				std::from_chars(field.Value().data(), field.Value().data() + field.Value().size(), ui.namedTimerReadyPointSize);
+			else if (key == "NamedTimerCountdownReadyBold" && !field.values.empty())
+				ui.namedTimerReadyBold = engine::config::values::ParseBool(field.Value()).value_or(ui.namedTimerReadyBold);
+			else if (key == "MilitaryCaptionColor")
+				color(field, ui.militaryCaptionColor);
+			else if (key == "MilitaryCaptionPosition")
+			{
+				const auto read = channels(field, {ui.militaryCaptionPosition[0], ui.militaryCaptionPosition[1], 0, 0});
+				ui.militaryCaptionPosition = {read[0], read[1]};
+			}
+			else if (key == "MilitaryCaptionTitleFont" && !field.values.empty())
+			{
+				// INI::parseAsciiString: the rest of the line ("Courier New").
+				std::string name;
+				for (const std::string_view token : field.values)
+					name += (name.empty() ? "" : " ") + std::string(token);
+				ui.militaryCaptionTitleFont = name;
+			}
+			else if (key == "MilitaryCaptionFont" && !field.values.empty())
+			{
+				std::string name;
+				for (const std::string_view token : field.values)
+					name += (name.empty() ? "" : " ") + std::string(token);
+				ui.militaryCaptionFont = name;
+			}
+			else if (key == "MilitaryCaptionTitlePointSize" && !field.values.empty())
+				std::from_chars(field.Value().data(), field.Value().data() + field.Value().size(), ui.militaryCaptionTitlePointSize);
+			else if (key == "MilitaryCaptionPointSize" && !field.values.empty())
+				std::from_chars(field.Value().data(), field.Value().data() + field.Value().size(), ui.militaryCaptionPointSize);
+			else if (key == "MilitaryCaptionTitleBold" && !field.values.empty())
+				ui.militaryCaptionTitleBold = engine::config::values::ParseBool(field.Value()).value_or(ui.militaryCaptionTitleBold);
+			else if (key == "MilitaryCaptionBold" && !field.values.empty())
+				ui.militaryCaptionBold = engine::config::values::ParseBool(field.Value()).value_or(ui.militaryCaptionBold);
+			else if (key == "MessageDelayMS" && !field.values.empty())
+				std::from_chars(field.Value().data(), field.Value().data() + field.Value().size(), ui.messageDelayMs);
+		}
+	}
+	return ui;
+}
+}

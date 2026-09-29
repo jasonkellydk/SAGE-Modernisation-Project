@@ -1,13 +1,5 @@
-module;
-#include <algorithm>
-#include <cstddef>
-#include <cstdint>
-#include <memory>
-#include <span>
-#include <utility>
-#include <variant>
-#include <vector>
 export module Graphics.Scene.Models.W3DMaterialLoading;
+import std;
 import Assets.Math;
 import Assets.Identity;
 import Assets.Adapters.W3D.Materials;

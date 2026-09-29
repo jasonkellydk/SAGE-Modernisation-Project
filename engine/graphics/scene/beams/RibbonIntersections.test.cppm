@@ -1,10 +1,8 @@
 module;
 #define BOOST_TEST_MODULE RibbonIntersectionsTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cmath>
-#include <vector>
 export module Graphics.Scene.Beams.RibbonIntersections.Tests;
+import std;
 import Graphics.Scene.Beams.RibbonSubdivision;
 import Graphics.Scene.Beams.RibbonEdges;
 import Graphics.Scene.Beams.RibbonIntersections;

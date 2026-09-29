@@ -1,12 +1,8 @@
 module;
 #include <SDL3/SDL.h>
 #include <SDL3_net/SDL_net.h>
-#include <filesystem>
-#include <algorithm>
-#include <array>
-#include <climits>
-#include <string>
 export module engine.platform.adapters.sdl3.application;
+import std;
 import engine.platform.application;
 
 export namespace engine::platform::sdl3
@@ -47,7 +43,7 @@ public:
 	{
 		if (!m_instanceSocket) return false;
 		void* sockets[] = { m_instanceSocket };
-		const int waitMilliseconds = timeout == 0xFFFFFFFFu ? -1 : (timeout > INT_MAX ? INT_MAX : static_cast<int>(timeout));
+		const int waitMilliseconds = timeout == 0xFFFFFFFFu ? -1 : (timeout > std::numeric_limits<int>::max() ? std::numeric_limits<int>::max() : static_cast<int>(timeout));
 		const int result = NET_WaitUntilInputAvailable(sockets, 1, waitMilliseconds);
 		if (result <= 0) return false;
 		NET_Datagram* datagram{};

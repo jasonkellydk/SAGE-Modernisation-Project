@@ -2,14 +2,8 @@ module;
 #define BOOST_TEST_MODULE ModelAssemblyDrawingTests
 #include <boost/test/included/unit_test.hpp>
 #include "../../../assets/adapters/w3d/model/W3DAssembly.test-data.h"
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <string>
-#include <vector>
-#include <memory>
-#include <span>
 export module Graphics.Scene.Models.AssemblyDrawing.Tests;
+import std;
 import Assets.Adapters.W3D.Assembly;
 import Assets.Adapters.W3D.Collection;
 import Assets.Adapters.W3D.LevelSet;

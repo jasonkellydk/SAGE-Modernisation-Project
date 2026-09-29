@@ -1,0 +1,299 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
+
+import games.generalszh.session.session;
+import games.generalszh.session.setup.skirmish_level;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import games.generalszh.commands.game_commands;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.rts.economy.resources.player_money;
+import engine.gameplay.rts.economy.resources.player_bounties;
+import engine.gameplay.common.identity.components.definition_ref;
+import engine.gameplay.common.status.components.disabled;
+import engine.gameplay.common.identity.components.team_member;
+import engine.gameplay.common.health.components.health;
+import engine.gameplay.rts.powers.components.special_power_timers;
+import engine.gameplay.rts.powers.resources.shared_power_timers;
+import engine.gameplay.rts.powers.algorithms.special_power_timing;
+import engine.gameplay.rts.sciences.resources.player_sciences;
+import games.generalszh.gameplay.sciences.algorithms.general_ranks;
+import games.generalszh.gameplay.powers.algorithms.special_power_launch;
+import games.generalszh.gameplay.powers.resources.cash_notices;
+import games.generalszh.gameplay.scripts.resources.script_records;
+
+// The economic special powers (CashHackSpecialPower, CashBountyPower) on a shipped skirmish map.
+using namespace generalszh;
+namespace gp = engine::gameplay;
+
+namespace
+{
+struct Install
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	bool loaded{false};
+
+	Install()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		loaded = true;
+	}
+};
+
+Install &Data()
+{
+	static Install install;
+	return install;
+}
+
+// A two-player Tournament Continent skirmish: player0 (seat 0, `first`) at start 0, player1 (America) at start 2.
+struct Match
+{
+	std::optional<engine::level::generals_map::ReadResult> read;
+	std::optional<session::setup::SkirmishLevel> skirmish;
+	std::optional<session::Session> game;
+
+	explicit Match(Install &shell, std::string_view first)
+	{
+		const auto map = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+		read = *engine::level::generals_map::Read(*map);
+		const auto templateOf = [&](std::string_view name) {
+			for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+				if (shell.game.playerTemplates.templates[index].name == name)
+					return static_cast<int>(index);
+			return -1;
+		};
+		session::setup::GameSetup setup;
+		setup.seed = 3;
+		setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+		setup.slots[0].playerTemplate = templateOf(first);
+		setup.slots[0].startPos = 0;
+		setup.slots[1].SetState(session::setup::SlotState::Player, u"Other");
+		setup.slots[1].playerTemplate = templateOf("FactionAmerica");
+		setup.slots[1].startPos = 2;
+		skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4);
+		session::SessionOptions options{3, 1, {}, {"player0", "player1"}};
+		for (const auto &player : skirmish->players)
+			options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+		game.emplace(skirmish->level, shell.game, options);
+		game->Tick();
+	}
+
+	ecs::Entity Find(std::uint32_t player, std::string_view type)
+	{
+		for (std::uint32_t team = 0; team < game->Teams().TeamCount(); ++team)
+			if (game->Teams().TeamAt(team).owner == player)
+				for (const auto member : game->Teams().TeamAt(team).members)
+					if (game->DefinitionName(game->World().Get<gp::DefinitionRef>(member)->index) == type)
+						return member;
+		return {};
+	}
+
+	std::uint32_t TeamOf(ecs::Entity entity) { return game->World().Get<gp::TeamMember>(entity)->team; }
+
+	void SetMoney(std::uint32_t player, std::int64_t amount)
+	{
+		auto &money = game->World().Resource<gp::PlayerMoney>();
+		money.Withdraw(player, money.Balance(player));
+		money.Deposit(player, amount);
+	}
+
+	void Order(const commands::GameCommand &command)
+	{
+		std::vector<engine::net::CommandEnvelope> orders{commands::Encode(command)};
+		orders.front().player = 0;
+		game->Tick(std::span(orders));
+	}
+};
+}
+
+BOOST_AUTO_TEST_SUITE(cash_powers)
+
+// CashHackSpecialPower::doSpecialPowerAtObject / findAmountToSteal, SpecialPowerModule::doSpecialPowerAtObject,
+// AIGroup::groupDoSpecialPowerAtObject and ActionManager::canDoSpecialPowerAtObject (SPECIAL_CASH_HACK),
+// ScriptActions::doNamedFireSpecialPowerAtNamed. China's command centre hacks America's supply centre: a player's
+// order needs SCIENCE_CashHack1, the power ready and an enemy CASH_GENERATOR (not the command centre); it takes
+// MoneyAmount 1000 on the tick it is ordered (green over the hacker 20 up, red over the target 30 up) and recharges for
+// ReloadTime 240 s (7200 ticks). A script's needs neither science nor readiness; the first UpgradeMoneyAmount whose
+// science is known wins (CashHack3's 4000 is listed before CashHack2's 2000), never more than the target's player has.
+// Paused, it steals all the same but neither triggers nor recharges; the hacker disabled, nothing.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_cash_hack_steals_from_an_enemy_supply_center)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	Match match(shell, "FactionChina");
+	auto &game = *match.game;
+	auto &world = game.World();
+	const std::uint32_t china = *game.Teams().FindPlayer("player0");
+	const std::uint32_t america = *game.Teams().FindPlayer("player1");
+	const ecs::Entity center = match.Find(china, "ChinaCommandCenter");
+	const ecs::Entity theirs = match.Find(america, "AmericaCommandCenter");
+	BOOST_TEST_REQUIRE(world.IsAlive(center));
+	BOOST_TEST_REQUIRE(world.IsAlive(theirs));
+	const auto at = game.TransformOf(theirs)->position.XY();
+	const ecs::Entity supply = game.Place("AmericaSupplyCenter", {at.x + Engine::Math::Fixed::FromInt(150), at.y}, {},
+		match.TeamOf(theirs));
+	BOOST_TEST_REQUIRE(world.IsAlive(supply));
+	// China's human player may only hack what it sees (isObjectShroudedForAction): a scout of its own looks on.
+	const ecs::Entity scout = game.Place("ChinaInfantryRedguard", {at.x + Engine::Math::Fixed::FromInt(150), at.y - Engine::Math::Fixed::FromInt(60)}, {},
+		match.TeamOf(center));
+	BOOST_TEST_REQUIRE(world.IsAlive(scout));
+	game.Tick();
+	game.Tick();
+	const auto &money = world.Resource<gp::PlayerMoney>();
+	auto &records = world.Resource<generalszh::gameplay::ScriptRecords>();
+	match.SetMoney(china, 0);
+	match.SetMoney(america, 10000);
+	const commands::UseSpecialPowerAtObject hack{center, "SuperweaponCashHack", supply};
+
+	// What the control bar's wait for a target asks (SessionView::CanTargetWithPower): as the order would find it.
+	BOOST_TEST(!game.CanTargetWithPower(center, "SuperweaponCashHack", supply));
+	match.Order(hack); // no SCIENCE_CashHack1
+	BOOST_TEST(money.Balance(china) == 0);
+	const auto science = [&](std::string_view name) { return *shell.game.Science(name); };
+	BOOST_TEST_REQUIRE(generalszh::gameplay::GrantScience(game.Game(), china, science("SCIENCE_CashHack1")));
+	BOOST_TEST(!game.CanTargetWithPower(center, "SuperweaponCashHack", theirs));
+	BOOST_TEST(game.CanTargetWithPower(center, "SuperweaponCashHack", supply));
+	match.Order(commands::UseSpecialPowerAtObject{center, "SuperweaponCashHack", theirs}); // not a cash generator
+	BOOST_TEST(money.Balance(china) == 0);
+
+	match.Order(hack);
+	const std::uint64_t fired = game.CurrentTick();
+	BOOST_TEST(money.Balance(china) == 1000);
+	BOOST_TEST(money.Balance(america) == 9000);
+	BOOST_TEST(records.TakeTriggeredPower(china, "SuperweaponCashHack", center));
+	const auto &notices = world.Resource<generalszh::gameplay::CashNotices>().list;
+	BOOST_TEST_REQUIRE(notices.size() == 2u);
+	BOOST_TEST((notices[0].kind == generalszh::gameplay::CashNotice::Kind::Stolen));
+	BOOST_TEST(notices[0].amount == 1000);
+	BOOST_TEST((notices[0].position.z == game.TransformOf(center)->position.z + Engine::Math::Fixed::FromInt(20)));
+	BOOST_TEST((notices[1].kind == generalszh::gameplay::CashNotice::Kind::Lost));
+	BOOST_TEST((notices[1].position.z == game.TransformOf(supply)->position.z + Engine::Math::Fixed::FromInt(30)));
+	const auto power = *shell.game.powers.Template("SuperweaponCashHack");
+	// Looked up afresh each time: a tick may move the command centre's components.
+	const auto timerOf = [&]() -> gp::SpecialPowerTimer & { return *world.Get<gp::SpecialPowerTimers>(center)->Find(power); };
+	auto &shared = world.Resource<gp::SharedPowerTimers>();
+	BOOST_TEST(!gp::IsReady(timerOf(), {world.Resource<gp::SpecialPowerRules>(), shared, china, fired + 7199}));
+	BOOST_TEST(gp::IsReady(timerOf(), {world.Resource<gp::SpecialPowerRules>(), shared, china, fired + 7200}));
+
+	BOOST_TEST(!game.CanTargetWithPower(center, "SuperweaponCashHack", supply));
+	match.Order(hack); // recharging
+	BOOST_TEST(money.Balance(china) == 1000);
+
+	// A script's: no readiness asked. CashHack2 known: 2000; CashHack3 too: 4000, at most what America has.
+	BOOST_TEST_REQUIRE(generalszh::gameplay::GrantScience(game.Game(), china, science("SCIENCE_CashHack2")));
+	generalszh::gameplay::FireSpecialPowerAtObject(game.Game(), center, "SuperweaponCashHack", supply, true);
+	BOOST_TEST(money.Balance(china) == 3000);
+	BOOST_TEST_REQUIRE(generalszh::gameplay::GrantScience(game.Game(), china, science("SCIENCE_CashHack3")));
+	match.SetMoney(america, 2500);
+	generalszh::gameplay::FireSpecialPowerAtObject(game.Game(), center, "SuperweaponCashHack", supply, true);
+	BOOST_TEST(money.Balance(china) == 5500);
+	BOOST_TEST(money.Balance(america) == 0);
+	BOOST_TEST(records.TakeTriggeredPower(china, "SuperweaponCashHack", center));
+	generalszh::gameplay::FireSpecialPowerAtObject(game.Game(), center, "SuperweaponCashHack", supply, true);
+	BOOST_TEST(money.Balance(china) == 5500);
+	BOOST_TEST(records.TakeTriggeredPower(china, "SuperweaponCashHack", center)); // triggered, nothing to take
+
+	// Paused: the steal happens, the trigger and the recharge do not.
+	game.Tick();
+	while (records.TakeTriggeredPower(china, "SuperweaponCashHack"))
+		;
+	match.SetMoney(america, 500);
+	const std::uint64_t readyBefore = gp::ReadyFrame(timerOf(), false, {world.Resource<gp::SpecialPowerRules>(), shared, china, game.CurrentTick()});
+	timerOf().pausedCount = 1;
+	generalszh::gameplay::FireSpecialPowerAtObject(game.Game(), center, "SuperweaponCashHack", supply, true);
+	BOOST_TEST(money.Balance(china) == 6000);
+	BOOST_TEST(!records.TakeTriggeredPower(china, "SuperweaponCashHack", center));
+	BOOST_TEST(gp::ReadyFrame(timerOf(), false, {world.Resource<gp::SpecialPowerRules>(), shared, china, game.CurrentTick()}) == readyBefore);
+	timerOf().pausedCount = 0;
+
+	// Disabled: nothing.
+	match.SetMoney(america, 500);
+	if (!world.Has<gp::Disabled>(center))
+		world.Add<gp::Disabled>(center);
+	world.Get<gp::Disabled>(center)->mask = gp::disabled_type::Default;
+	generalszh::gameplay::FireSpecialPowerAtObject(game.Game(), center, "SuperweaponCashHack", supply, true);
+	BOOST_TEST(money.Balance(china) == 6000);
+	BOOST_TEST(money.Balance(america) == 500);
+}
+
+// CashBountyPower::onSpecialPowerCreation (Player::addScience) / onObjectCreated, Player::doBountyForKill (from
+// Object::scoreTheKill): learning SCIENCE_CashBounty1 sets GLA's bounty to 5%, CashBounty2 to 10%; a command centre made
+// while CashBounty3 is known (onObjectCreated asks the science) raises it to 20%. Its Scorpion killing America's dozer
+// (BuildCost 1000) pays ceil(1000 x 20%) = 200 the tick the dozer dies, floating yellow 10 over the killer.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_cash_bounty_pays_for_each_kill)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	Match match(shell, "FactionGLA");
+	auto &game = *match.game;
+	auto &world = game.World();
+	const std::uint32_t gla = *game.Teams().FindPlayer("player0");
+	const std::uint32_t america = *game.Teams().FindPlayer("player1");
+	const auto &bounties = world.Resource<gp::PlayerBounties>();
+	BOOST_TEST(bounties.Of(gla) == 0);
+	const auto science = [&](std::string_view name) { return *shell.game.Science(name); };
+	BOOST_TEST_REQUIRE(generalszh::gameplay::GrantScience(game.Game(), gla, science("SCIENCE_CashBounty1")));
+	BOOST_TEST(bounties.Of(gla) == 500);
+	BOOST_TEST_REQUIRE(generalszh::gameplay::GrantScience(game.Game(), gla, science("SCIENCE_CashBounty2")));
+	BOOST_TEST(bounties.Of(gla) == 1000);
+	// Known without being learnt (no addScience): only a command centre made now hears of it.
+	world.Resource<gp::PlayerSciences>().Grant(gla, science("SCIENCE_CashBounty3"));
+	BOOST_TEST(bounties.Of(gla) == 1000);
+	const ecs::Entity center = match.Find(gla, "GLACommandCenter");
+	BOOST_TEST_REQUIRE(world.IsAlive(center));
+	const std::uint32_t glaTeam = match.TeamOf(center);
+	const auto home = game.TransformOf(center)->position.XY();
+	game.Place("GLACommandCenter", {home.x, home.y + Engine::Math::Fixed::FromInt(300)}, {}, glaTeam);
+	BOOST_TEST(bounties.Of(gla) == 2000);
+
+	const ecs::Entity theirs = match.Find(america, "AmericaCommandCenter");
+	BOOST_TEST_REQUIRE(world.IsAlive(theirs));
+	const auto at = game.TransformOf(theirs)->position.XY();
+	const std::uint32_t americaTeam = match.TeamOf(theirs);
+	const ecs::Entity dozer = game.Place("AmericaVehicleDozer", {at.x + Engine::Math::Fixed::FromInt(200), at.y}, {}, americaTeam);
+	const ecs::Entity scorpion = game.Place("GLATankScorpion", {at.x + Engine::Math::Fixed::FromInt(260), at.y}, {}, glaTeam);
+	BOOST_TEST_REQUIRE(world.IsAlive(dozer));
+	BOOST_TEST_REQUIRE(world.IsAlive(scorpion));
+	match.SetMoney(gla, 0);
+	match.Order(commands::Attack{{scorpion}, dozer});
+	const auto &money = world.Resource<gp::PlayerMoney>();
+	// Paid the tick it dies (its health gone), not before.
+	const auto dead = [&] { return !world.IsAlive(dozer) || world.Get<gp::Health>(dozer)->current <= Engine::Math::Fixed{}; };
+	for (int tick = 0; tick < 30 * 60 && money.Balance(gla) == 0; ++tick)
+	{
+		BOOST_TEST(!dead());
+		game.Tick();
+	}
+	BOOST_TEST_REQUIRE(dead());
+	BOOST_TEST_MESSAGE("the dozer died at tick " << game.CurrentTick());
+	BOOST_TEST(money.Balance(gla) == 200);
+	const auto &notices = world.Resource<generalszh::gameplay::CashNotices>().list;
+	BOOST_TEST_REQUIRE(notices.size() == 1u);
+	BOOST_TEST((notices[0].kind == generalszh::gameplay::CashNotice::Kind::Bounty));
+	BOOST_TEST(notices[0].amount == 200);
+	BOOST_TEST((notices[0].position.z == game.TransformOf(scorpion)->position.z + Engine::Math::Fixed::FromInt(10)));
+	game.Tick();
+	BOOST_TEST(money.Balance(gla) == 200); // once
+}
+
+BOOST_AUTO_TEST_SUITE_END()

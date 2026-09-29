@@ -1,0 +1,170 @@
+#define BOOST_TEST_MODULE EngineGameplayHorde
+#include <boost/test/included/unit_test.hpp>
+
+#include <cstdint>
+#include <vector>
+
+import engine.gameplay.rts.horde.systems.horde_system;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+using namespace engine::gameplay;
+using Engine::Math::Fixed;
+
+// The game's weapon bonus conditions as a test gives them (any bits do).
+namespace weapon_bonus_condition
+{
+inline constexpr std::uint32_t Horde = 1u << 1;
+inline constexpr std::uint32_t Nationalism = 1u << 4;
+inline constexpr std::uint32_t PlayerUpgrade = 1u << 5;
+inline constexpr std::uint32_t DroneSpotting = 1u << 6;
+inline constexpr std::uint32_t Veteran = 1u << 9;
+inline constexpr std::uint32_t Elite = 1u << 10;
+inline constexpr std::uint32_t Hero = 1u << 11;
+inline constexpr std::uint32_t Fanaticism = 1u << 23;
+}
+
+namespace
+{
+// Red Guards (ChinaInfantryRedguard's HordeUpdate: UpdateRate 1000, Radius 30, RubOffRadius 60, KindOf INFANTRY,
+// AlliesOnly, Count 5; a 7 x 12 cylinder: bounding sphere 7, centre 6 up) of player 0, and an enemy player 1.
+struct Square
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	std::uint64_t tick{0};
+	static constexpr std::uint64_t Infantry = 1;
+
+	Square()
+	{
+		world.RegisterComponent<Horde>();
+		world.RegisterComponent<Transform>();
+		world.RegisterComponent<DefinitionRef>();
+		world.RegisterComponent<Owner>();
+		world.RegisterComponent<WeaponBonusConditions>();
+		world.RegisterComponent<OffMap>();
+		world.FinalizeComponents();
+		world.EmplaceResource<HordeRoster>();
+		Relationships &relationships = world.EmplaceResource<Relationships>(2u);
+		relationships.Set(0, 1, Relationship::Enemies);
+		relationships.Set(1, 0, Relationship::Enemies);
+		PlayerUpgrades &upgrades = world.EmplaceResource<PlayerUpgrades>();
+		upgrades.Resize(2);
+		HordeCatalog &catalog = world.EmplaceResource<HordeCatalog>();
+		HordeDefinition guard;
+		guard.hordes = true;
+		guard.updateTicks = 30;
+		guard.requiredKinds = {Infantry, 0};
+		guard.kinds = {Infantry, 0};
+		guard.count = 5;
+		guard.radius = Fixed::FromInt(30);
+		guard.rubOffRadius = Fixed::FromInt(60);
+		guard.infantry = true;
+		guard.sphereRadius = Fixed::FromInt(7);
+		guard.centerHeight = Fixed::FromInt(6);
+		catalog.byDefinition = {guard};
+		catalog.hordeBonus = weapon_bonus_condition::Horde;
+		catalog.upgrade = 7;
+		catalog.upgradeBonus = weapon_bonus_condition::Nationalism;
+		catalog.followerUpgrade = 8;
+		catalog.followerBonus = weapon_bonus_condition::Fanaticism;
+	}
+
+	ecs::Entity Guard(int x, std::uint32_t player = 0)
+	{
+		const ecs::Entity entity = world.Create();
+		world.Add<Horde>(entity);
+		world.Add<Transform>(entity);
+		world.Add<DefinitionRef>(entity);
+		world.Add<Owner>(entity);
+		world.Add<WeaponBonusConditions>(entity);
+		world.Get<Horde>(entity)->nextTick = 1;
+		world.Get<Transform>(entity)->position = {Fixed::FromInt(x), {}, {}};
+		*world.Get<Owner>(entity) = {player};
+		return entity;
+	}
+
+	void Run(int ticks)
+	{
+		HordeSystem horde;
+		ecs::SystemRegistry registry;
+		registry.Register(horde);
+		registry.Finalize(world.Components());
+		ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+		scheduler.Finalize(engine::time::FixedStep{30});
+		for (int step = 0; step < ticks; ++step)
+			scheduler.Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}});
+	}
+
+	std::uint32_t Flags(ecs::Entity entity) { return world.Get<WeaponBonusConditions>(entity)->flags; }
+};
+}
+
+BOOST_AUTO_TEST_SUITE(horde)
+
+// HordeUpdate::update: Count - 1 fellows within Radius of the bounding spheres (7 + 7 + 30: 44 centre to centre)
+// make a true member; one short but within RubOffRadius of a true member is in the horde too; enemies do not
+// count. evaluateNationalismBonusClassic: HORDE in the horde. Infantry looks every UpdateRate (30 ticks).
+BOOST_AUTO_TEST_CASE(legacy_parity_five_red_guards_make_a_horde_that_rubs_off)
+{
+	Square square;
+	std::vector<ecs::Entity> guards;
+	for (int x : {0, 10, 20, 30, 44})
+		guards.push_back(square.Guard(x));
+	const ecs::Entity straggler = square.Guard(84); // 40 from the last one: in range, one fellow
+	const ecs::Entity loner = square.Guard(200);
+	square.Guard(50, 1); // an enemy among them
+	square.Run(1);
+	for (const ecs::Entity guard : guards)
+	{
+		BOOST_TEST(square.world.Get<Horde>(guard)->trueMember);
+		BOOST_TEST(square.Flags(guard) == weapon_bonus_condition::Horde);
+	}
+	// The fellow it would rub off on was not a true member before this tick.
+	BOOST_TEST(!square.world.Get<Horde>(straggler)->inHorde);
+	BOOST_TEST(square.world.Get<Horde>(straggler)->nextTick == 31u);
+	square.Run(29);
+	BOOST_TEST(!square.world.Get<Horde>(straggler)->inHorde);
+	square.Run(1); // tick 31
+	BOOST_TEST(square.world.Get<Horde>(straggler)->inHorde);
+	BOOST_TEST(!square.world.Get<Horde>(straggler)->trueMember);
+	BOOST_TEST(square.Flags(straggler) == weapon_bonus_condition::Horde);
+	BOOST_TEST(square.Flags(loner) == 0u);
+	// One steps away: the others are one short, but the last still counts the straggler (4 fellows) and stays a
+	// true member; the rest rub off on it.
+	square.world.Get<Transform>(guards[0])->position.x = Fixed::FromInt(-100);
+	square.Run(30); // tick 61
+	BOOST_TEST(!square.world.Get<Horde>(guards[1])->trueMember);
+	BOOST_TEST(square.world.Get<Horde>(guards[1])->inHorde);
+	BOOST_TEST(square.world.Get<Horde>(guards[4])->trueMember);
+	// The straggler leaves too: no true member by tick 91; a tick-61 true member still rubs off then, not after.
+	square.world.Get<Transform>(straggler)->position.x = Fixed::FromInt(300);
+	square.Run(30); // tick 91
+	BOOST_TEST(!square.world.Get<Horde>(guards[4])->trueMember);
+	BOOST_TEST(!square.world.Get<Horde>(guards[4])->inHorde);
+	BOOST_TEST(square.world.Get<Horde>(guards[1])->inHorde);
+	square.Run(30); // tick 121
+	BOOST_TEST(!square.world.Get<Horde>(guards[1])->inHorde);
+	BOOST_TEST(square.Flags(guards[1]) == 0u);
+}
+
+// evaluateNationalismBonusClassic: with Upgrade_Nationalism NATIONALISM (and FANATICISM with Upgrade_Fanaticism);
+// without it NATIONALISM goes but FANATICISM stays (the classic rule, retail's HORDEACTION_HORDE).
+BOOST_AUTO_TEST_CASE(legacy_parity_nationalism_and_the_classic_fanaticism_rule)
+{
+	namespace wbc = weapon_bonus_condition;
+	Square square;
+	const ecs::Entity guard = square.Guard(0);
+	PlayerUpgrades &upgrades = square.world.Resource<PlayerUpgrades>();
+	upgrades.Grant(0, 7);
+	upgrades.Grant(0, 8);
+	square.Run(1);
+	BOOST_TEST(square.Flags(guard) == (wbc::Nationalism | wbc::Fanaticism));
+	upgrades = PlayerUpgrades{};
+	upgrades.Resize(2);
+	square.Run(30);
+	BOOST_TEST(square.Flags(guard) == wbc::Fanaticism);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

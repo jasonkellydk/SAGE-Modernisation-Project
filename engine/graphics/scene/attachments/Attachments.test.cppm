@@ -4,13 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-#include <cstdint>
-#include <filesystem>
-#include <span>
-#include <type_traits>
-
 export module Graphics.Scene.Attachments.Tests;
+import std;
 
 import Graphics.Scene.Attachments;
 

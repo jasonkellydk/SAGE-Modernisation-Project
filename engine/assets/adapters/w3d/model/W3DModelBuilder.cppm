@@ -1,15 +1,5 @@
-module;
-
-#include <algorithm>
-#include <cstddef>
-#include <cstdint>
-#include <cmath>
-#include <string>
-#include <string_view>
-#include <utility>
-#include <vector>
-
 export module Assets.Adapters.W3D.Model;
+import std;
 
 import Assets.Adapters.W3D.Chunks;
 import Assets.Adapters.W3D.Materials;
@@ -25,6 +15,40 @@ namespace Assets::W3D
 
 namespace ModelBuilderDetail
 {
+inline bool Prefix_No_Case(std::string_view text, std::string_view prefix)
+{
+	if (text.size() < prefix.size())
+		return false;
+	for (std::size_t i = 0; i < prefix.size(); ++i)
+		if (std::tolower(static_cast<unsigned char>(text[i])) != std::tolower(static_cast<unsigned char>(prefix[i])))
+			return false;
+	return true;
+}
+
+// The W3D house-colour conventions: meshes named HOUSECOLOR... (after any
+// "container." prefix) take the player colour as their material colour;
+// base maps named ZHCA... blend it in by their alpha, ZHCD... hold a palette
+// of its shades in their top row.
+inline std::uint8_t House_Color(std::string_view mesh_name, std::string_view texture_name)
+{
+	std::uint8_t flags = 0;
+	if (const auto dot = mesh_name.find('.'); dot != std::string_view::npos && dot + 1 < mesh_name.size())
+		mesh_name.remove_prefix(dot + 1);
+	if (Prefix_No_Case(mesh_name, "HOUSECOLOR"))
+		flags |= static_cast<std::uint8_t>(MaterialHouseColor::VertexMaterial);
+	if (const auto slash = texture_name.find_last_of("/\\"); slash != std::string_view::npos)
+		texture_name.remove_prefix(slash + 1);
+	if (Prefix_No_Case(texture_name, "ZHC") && texture_name.size() > 3)
+	{
+		const char kind = static_cast<char>(std::toupper(static_cast<unsigned char>(texture_name[3])));
+		if (kind == 'A')
+			flags |= static_cast<std::uint8_t>(MaterialHouseColor::TextureAlpha);
+		else if (kind == 'D')
+			flags |= static_cast<std::uint8_t>(MaterialHouseColor::TexturePalette);
+	}
+	return flags;
+}
+
 
 Vector3f Subtract(Vector3f a, Vector3f b) { return {a.x - b.x, a.y - b.y, a.z - b.z}; }
 Vector3f Scale(Vector3f v, float scale) { return {v.x * scale, v.y * scale, v.z * scale}; }
@@ -197,8 +221,10 @@ export void W3DAppend_Mesh(ModelAssetDesc &description, W3DParsedMesh &mesh)
 	const auto legacy_index_count = static_cast<std::uint32_t>(description.indices.size() - index_base);
 	const auto submesh_base = description.submeshes.size();
 	if (mesh.materials.passes.empty()) {
-		for (auto &source : mesh.materials.vertex_materials)
+		for (auto &source : mesh.materials.vertex_materials) {
+			source.material.surface.house_color = ModelBuilderDetail::House_Color(mesh.header.name, source.material.primary_texture);
 			description.materials.push_back(std::move(source.material));
+		}
 	} else {
 		for (std::size_t pass_index = 0; pass_index < mesh.materials.passes.size(); ++pass_index) {
 			const W3DMaterialPass &pass = mesh.materials.passes[pass_index];
@@ -213,6 +239,7 @@ export void W3DAppend_Mesh(ModelAssetDesc &description, W3DParsedMesh &mesh)
 				material.primary_texture = mesh.materials.textures[pass.texture_index].name;
 			if (pass.shader_index < mesh.materials.shaders.size())
 				ModelBuilderDetail::Apply_Shader_Settings(material, mesh.materials.shaders[pass.shader_index]);
+			material.surface.house_color = ModelBuilderDetail::House_Color(mesh.header.name, material.primary_texture);
 			description.submeshes.push_back({index_base, legacy_index_count,
 				static_cast<std::uint32_t>(description.materials.size()), mesh.header.name, !mesh.bone_indices.empty() || !mesh.skin_indices.empty()});
 			description.materials.push_back(std::move(material));

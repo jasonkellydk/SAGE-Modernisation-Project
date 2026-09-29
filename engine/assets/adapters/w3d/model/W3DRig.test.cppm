@@ -1,16 +1,8 @@
 module;
 #define BOOST_TEST_MODULE W3DRigTests
 #include <boost/test/included/unit_test.hpp>
-#include <bit>
-#include <cstddef>
-#include <cstdint>
-#include <cstdlib>
-#include <filesystem>
-#include <fstream>
-#include <string>
-#include <span>
-#include <vector>
 export module Assets.Adapters.W3D.Rig.Tests;
+import std;
 import Assets.Adapters.W3D.Rig;
 import Assets.Adapters.W3D.Chunks;
 import Assets.ModelRig;

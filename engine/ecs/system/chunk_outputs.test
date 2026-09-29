@@ -1,0 +1,207 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <string_view>
+#include <vector>
+
+import engine.ecs.core.world;
+import engine.ecs.system.system;
+import engine.ecs.system.chunk_outputs;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+namespace chunk_outputs_test
+{
+struct Health
+{
+	std::int64_t value{0};
+};
+
+struct DamageEvent
+{
+	ecs::Entity entity{};
+	std::int64_t amount{0};
+	bool operator==(const DamageEvent &) const = default;
+};
+
+using DamageEvents = ecs::ChunkOutputs<DamageEvent>;
+
+// The producer's reduced total (written once per tick, after its chunks).
+struct DamageTotal
+{
+	std::int64_t total{0};
+};
+
+// The consumer's accumulated log across ticks.
+struct DamageLog
+{
+	std::vector<DamageEvent> log;
+};
+}
+
+namespace ecs
+{
+template<>
+struct ResourceTraits<chunk_outputs_test::DamageEvents>
+{
+	static constexpr std::string_view StableName = "tests.chunk_outputs.damage_events";
+};
+template<>
+struct ResourceTraits<chunk_outputs_test::DamageTotal>
+{
+	static constexpr std::string_view StableName = "tests.chunk_outputs.damage_total";
+};
+template<>
+struct ResourceTraits<chunk_outputs_test::DamageLog>
+{
+	static constexpr std::string_view StableName = "tests.chunk_outputs.damage_log";
+};
+}
+
+namespace chunk_outputs_test
+{
+// Producer: emits an event per damaged entity and reduces a total.
+struct DamageSystem
+{
+	using Query = ecs::Query<ecs::Write<Health>>;
+	using Resources = ecs::Resources<ecs::Write<DamageEvents>, ecs::Write<DamageTotal>>;
+
+	void BeforeChunks(Query &query, ecs::SystemContext &context) const
+	{
+		context.Write<DamageEvents>().Reset(query.PreparedChunkCount());
+	}
+	void Execute(Query::Chunk chunk, ecs::SystemContext &context) const
+	{
+		auto health = chunk.Get<Health>();
+		const auto entities = chunk.Entities();
+		auto &out = context.Write<DamageEvents>().Slot(context);
+		for (std::size_t row = 0; row < health.size(); ++row)
+		{
+			const std::int64_t amount = (health[row].value % 5) + 1;
+			health[row].value -= amount;
+			out.push_back({entities[row], amount});
+		}
+	}
+	void AfterChunks(Query &, ecs::SystemContext &context) const
+	{
+		std::int64_t &total = context.Write<DamageTotal>().total;
+		total = 0;
+		context.Read<DamageEvents>().ForEach([&](const DamageEvent &event) { total += event.amount; });
+	}
+};
+
+// Consumer: runs after the producer because it reads the same resource.
+struct DamageLogSystem
+{
+	using Query = ecs::Query<ecs::Read<Health>>;
+	using Resources = ecs::Resources<ecs::Read<DamageEvents>, ecs::Write<DamageLog>>;
+	static constexpr bool Batch = true;
+	void Execute(ecs::SystemContext &context) const
+	{
+		context.Read<DamageEvents>().AppendTo(context.Write<DamageLog>().log);
+	}
+};
+}
+
+namespace ecs
+{
+template<>
+struct ComponentTraits<chunk_outputs_test::Health>
+{
+	static constexpr std::string_view StableName = "tests.chunk_outputs.health";
+	static constexpr std::uint32_t Version = 1;
+	static constexpr PersistencePolicy Persistence = PersistencePolicy::Serializable;
+};
+
+template<>
+struct SystemTraits<chunk_outputs_test::DamageSystem>
+{
+	static constexpr std::string_view StableName = "tests.chunk_outputs.damage";
+	static constexpr SystemPhase Phase = SystemPhase::Simulation;
+	using Before = SystemTypeList<chunk_outputs_test::DamageLogSystem>;
+	using After = SystemTypeList<>;
+};
+
+template<>
+struct SystemTraits<chunk_outputs_test::DamageLogSystem>
+{
+	static constexpr std::string_view StableName = "tests.chunk_outputs.damage_log";
+	static constexpr SystemPhase Phase = SystemPhase::Simulation;
+	static constexpr bool Batch = true;
+	using Before = SystemTypeList<>;
+	using After = SystemTypeList<>;
+};
+}
+
+namespace
+{
+using namespace chunk_outputs_test;
+
+struct Result
+{
+	std::vector<DamageEvent> log;
+	std::int64_t lastTotal{0};
+	ecs::StateHashValue hash{0};
+};
+
+Result Run(std::uint32_t workers)
+{
+	ecs::World world{ecs::WorldConfig{32}};
+	world.RegisterComponent<Health>();
+	world.FinalizeComponents();
+	for (std::int64_t index = 0; index < 500; ++index)
+		world.Get<Health>(world.Create<Health>())->value = 1000 + index * 7;
+
+	world.EmplaceResource<DamageEvents>();
+	world.EmplaceResource<DamageTotal>();
+	world.EmplaceResource<DamageLog>();
+	DamageSystem damage;
+	DamageLogSystem logger;
+	ecs::SystemRegistry systems;
+	systems.Register(damage);
+	systems.Register(logger);
+	systems.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, systems, engine::jobs::JobSystemConfig{workers});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	for (std::uint64_t tick = 1; tick <= 5; ++tick)
+		scheduler.Execute(engine::time::SimulationTime{tick, engine::time::FixedStep{30}});
+	return {world.Resource<DamageLog>().log, world.Resource<DamageTotal>().total, world.StateHash()};
+}
+}
+
+BOOST_AUTO_TEST_SUITE(ecs_chunk_outputs)
+
+BOOST_AUTO_TEST_CASE(events_and_reductions_are_identical_for_any_worker_count)
+{
+	const Result one = Run(1);
+	BOOST_TEST(one.log.size() == 2500u);
+	BOOST_TEST(one.lastTotal > 0);
+	for (const std::uint32_t workers : {2u, 4u, 8u})
+	{
+		const Result other = Run(workers);
+		BOOST_CHECK(other.log == one.log);
+		BOOST_TEST(other.lastTotal == one.lastTotal);
+		BOOST_TEST(other.hash == one.hash);
+	}
+}
+
+BOOST_AUTO_TEST_CASE(slots_outside_the_prepared_range_are_rejected)
+{
+	ecs::World world;
+	world.RegisterComponent<Health>();
+	world.FinalizeComponents();
+	ecs::CommandBuffer commands;
+	const ecs::SystemContext context(world, commands,
+		engine::time::SimulationTime{1, engine::time::FixedStep{30}}, 0, ecs::SystemPhase::Simulation, 0, 3);
+	DamageEvents events;
+	events.Reset(2);
+	BOOST_CHECK_THROW(events.Slot(context), std::out_of_range);
+	events.Reset(4);
+	events.Slot(context).push_back({});
+	BOOST_TEST(events.Size() == 1u);
+	events.Reset(4);
+	BOOST_TEST(events.Size() == 0u);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

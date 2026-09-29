@@ -1,10 +1,5 @@
-module;
-
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-
 export module Graphics.Resources.Handles.ResourceHandle;
+import std;
 
 namespace Graphics
 {

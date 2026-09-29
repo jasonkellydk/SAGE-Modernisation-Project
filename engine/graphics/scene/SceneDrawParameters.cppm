@@ -1,6 +1,5 @@
-module;
-#include <cstdint>
 export module Graphics.Scene.DrawParameters;
+import std;
 export import Graphics.Materials.Fog;
 export import Graphics.RHI;
 

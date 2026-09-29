@@ -1,8 +1,5 @@
-module;
-
-#include <cstdint>
-
 export module Engine.Core.Math.TurnAngle;
+import std;
 
 export namespace Engine::Math
 {
@@ -60,21 +57,19 @@ inline constexpr FixedSinCos Sin_Cos(TurnAngle angle) noexcept
 		? static_cast<std::uint32_t>(quarter) - within_quadrant
 		: within_quadrant;
 	const std::int64_t x = (static_cast<std::int64_t>(phase) * tau_q30) / (std::int64_t{1} << 32);
+	// Horner form of the same series: every intermediate product stays below
+	// ~2.9e18, whereas expanding the powers (x^4 * x^4, ...) overflowed int64
+	// near a quarter turn and returned garbage.
 	const std::int64_t x2 = multiply_q30(x, x);
-	const std::int64_t x3 = multiply_q30(x2, x);
-	const std::int64_t x4 = multiply_q30(x2, x2);
-	const std::int64_t x5 = multiply_q30(x4, x);
-	const std::int64_t x6 = multiply_q30(x4, x2);
-	const std::int64_t x7 = multiply_q30(x6, x);
-	const std::int64_t x8 = multiply_q30(x4, x4);
-	const std::int64_t x9 = multiply_q30(x8, x);
-
-	const std::int64_t sine = x - multiply_q30(x3, 178956970)
-		+ multiply_q30(x5, 8947849) - multiply_q30(x7, 213044)
-		+ multiply_q30(x9, 2957);
-	const std::int64_t cosine = one - multiply_q30(x2, 536870912)
-		+ multiply_q30(x4, 44739242) - multiply_q30(x6, 1491308)
-		+ multiply_q30(x8, 26631);
+	std::int64_t term = 213044 - multiply_q30(x2, 2957);
+	term = 8947849 - multiply_q30(x2, term);
+	term = 178956970 - multiply_q30(x2, term);
+	term = one - multiply_q30(x2, term);
+	const std::int64_t sine = multiply_q30(x, term);
+	term = 1491308 - multiply_q30(x2, 26631);
+	term = 44739242 - multiply_q30(x2, term);
+	term = 536870912 - multiply_q30(x2, term);
+	const std::int64_t cosine = one - multiply_q30(x2, term);
 
 	const std::int64_t signed_sine = quadrant >= 2 ? -sine : sine;
 	const std::int64_t signed_cosine = (quadrant == 1 || quadrant == 2) ? -cosine : cosine;

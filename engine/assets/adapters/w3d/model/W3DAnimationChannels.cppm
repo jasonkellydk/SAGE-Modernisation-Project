@@ -1,11 +1,5 @@
-module;
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <string>
-#include <utility>
 export module Assets.Adapters.W3D.AnimationChannels;
+import std;
 import Assets.Adapters.W3D.Chunks;
 import Assets.ModelRig;
 

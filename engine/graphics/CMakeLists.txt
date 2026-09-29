@@ -14,6 +14,7 @@ target_sources(generals_graphics
             diagnostics/RenderDiagnostics.cppm
             cursors/CursorLoad.cppm
             cursors/Cursor.cppm
+            cursors/AniCursor.cppm
             presentation/DisplayModes.cppm
             resources/handles/ResourceHandle.cppm
             memory/AlignedAllocator.cppm
@@ -689,8 +690,10 @@ if(RTS_BUILD_GRAPHICS_TESTS)
     target_link_libraries(generals_graphics_cursor_test PRIVATE SDL3::SDL3)
     add_graphics_test(generals_graphics_cursor_load_test cursors/CursorLoad.test.cppm)
     target_link_libraries(generals_graphics_cursor_load_test PRIVATE SDL3::SDL3)
+    add_graphics_test(generals_graphics_ani_cursor_test cursors/AniCursor.test.cppm)
+    target_link_libraries(generals_graphics_ani_cursor_test PRIVATE SDL3::SDL3)
     if(WIN32)
-        foreach(cursor_test generals_graphics_cursor_test generals_graphics_cursor_load_test generals_graphics_display_modes_test)
+        foreach(cursor_test generals_graphics_cursor_test generals_graphics_cursor_load_test generals_graphics_ani_cursor_test generals_graphics_display_modes_test)
             add_custom_command(TARGET ${cursor_test} POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
                     $<TARGET_FILE:SDL3::SDL3> $<TARGET_FILE_DIR:${cursor_test}>)

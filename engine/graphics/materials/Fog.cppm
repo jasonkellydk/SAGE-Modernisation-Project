@@ -1,6 +1,5 @@
-module;
-#include <array>
 export module Graphics.Materials.Fog;
+import std;
 
 namespace Graphics
 {

@@ -1,9 +1,8 @@
 module;
 #define BOOST_TEST_MODULE ModelAssemblyTests
 #include <boost/test/included/unit_test.hpp>
-#include <limits>
-#include <string>
 export module Assets.ModelAssembly.Tests;
+import std;
 import Assets.ModelAssembly;
 using namespace Assets;
 BOOST_AUTO_TEST_CASE(assembly_keeps_level_attachments_and_application_metadata_separate) {

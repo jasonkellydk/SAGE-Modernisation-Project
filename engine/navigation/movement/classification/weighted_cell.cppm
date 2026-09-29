@@ -1,8 +1,5 @@
-module;
-#include <cstdint>
-#include <limits>
-
 export module engine.navigation.movement.classification.weighted_cell;
+import std;
 import engine.navigation.movement.terrain_policy;
 import engine.navigation.movement.occupancy_policy;
 

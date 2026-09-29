@@ -1,12 +1,5 @@
-module;
-
-#include <array>
-#include <cstdint>
-#include <string>
-#include <utility>
-#include <vector>
-
 export module Assets.Rings;
+import std;
 
 import Assets.Math;
 

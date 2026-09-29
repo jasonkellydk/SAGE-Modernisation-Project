@@ -2,9 +2,8 @@ module;
 #define BOOST_TEST_MODULE DisplayModesTests
 #include <boost/test/included/unit_test.hpp>
 #include <SDL3/SDL.h>
-#include <algorithm>
-#include <memory>
 export module Graphics.Presentation.DisplayModes.Tests;
+import std;
 import Graphics.Presentation.DisplayModes;
 
 BOOST_AUTO_TEST_CASE(enumeration_retains_window_pixels_and_video_lifetime)

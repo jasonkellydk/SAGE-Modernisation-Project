@@ -1,4 +1,5 @@
 export module Graphics.Diagnostics.Render;
+import std;
 
 namespace Graphics
 {

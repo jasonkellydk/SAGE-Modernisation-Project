@@ -1,6 +1,5 @@
-module;
-#include <cstdint>
 export module engine.platform.events;
+import std;
 import engine.platform.core.types;
 
 export namespace engine::platform
@@ -12,7 +11,7 @@ enum class EventType : std::uint8_t
 	mouse_wheel, focus_gained, focus_lost
 };
 
-enum class KeyCode : std::uint8_t { unknown, enter, keypad_enter };
+enum class KeyCode : std::uint8_t { unknown, enter, keypad_enter, backspace, escape, tab, up, down, left, right };
 enum EventModifier : std::uint32_t { modifier_alt = 1u << 0, modifier_control = 1u << 1, modifier_shift = 1u << 2, modifier_command = 1u << 3 };
 
 struct PlatformEvent

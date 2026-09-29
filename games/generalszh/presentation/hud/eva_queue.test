@@ -1,0 +1,92 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <optional>
+#include <string>
+
+import games.generalszh.presentation.hud.algorithms.eva_queue;
+
+using namespace generalszh;
+using namespace generalszh::presentation;
+
+namespace
+{
+std::uint32_t Message(std::string_view name) { return *content::EvaMessageOf(name); }
+
+// Eva.ini's LowPower (Priority 2, 2 minutes between checks, 5 s to expire), UnitLost (Priority 5, 30 s, 5 s) and
+// BuildingLost (Priority 8, 30 s, 5 s), with America's lines; BuildingLost has two to pick from.
+EvaState Eva()
+{
+	EvaState eva;
+	eva.side = "America";
+	eva.catalog.checks.push_back({Message("LOWPOWER"), 2, 3600, 150, {{"America", {"EvaUSA_LowPower"}}, {"GLA", {"EvaGLA_LowPower"}}}});
+	eva.catalog.checks.push_back({Message("UNITLOST"), 5, 900, 150, {{"America", {"EvaUSA_UnitLost"}}}});
+	eva.catalog.checks.push_back({Message("BUILDINGLOST"), 8, 900, 150, {{"America", {"EvaUSA_BuildingLost1", "EvaUSA_BuildingLost2"}}}});
+	return eva;
+}
+
+std::size_t Last(std::size_t count) { return count - 1; }
+}
+
+BOOST_AUTO_TEST_SUITE(eva_queue)
+
+// Eva::update / processPlayingMessages: low power (checked every update while the watcher lacks power) speaks on frame 2
+// (nothing before); heard, its check holds it off until its next check is a frame away (2 + 3600 - 1 = 3601), and on
+// 3602 it speaks again.
+BOOST_AUTO_TEST_CASE(legacy_parity_low_power_repeats_every_two_minutes)
+{
+	EvaState eva = Eva();
+	BOOST_TEST(!UpdateEva(eva, 1, true, true, false, Last).has_value());
+	const auto first = UpdateEva(eva, 2, true, true, false, Last);
+	BOOST_TEST_REQUIRE(first.has_value());
+	BOOST_TEST(*first == "EvaUSA_LowPower");
+	for (std::uint64_t frame = 3; frame <= 3601; ++frame)
+		BOOST_TEST_REQUIRE(!UpdateEva(eva, frame, true, true, false, Last).has_value());
+	BOOST_TEST(eva.checks.empty()); // dropped on 3601
+	BOOST_TEST(UpdateEva(eva, 3602, true, true, false, Last).has_value());
+}
+
+// setShouldPlay before frame 2 waits for it; of two asked together the higher priority (the building, 8) speaks first,
+// one of its lines picked; the unit (5) waits while the voice is busy and, unheard after ExpirationTimeMS (150 frames
+// from its asking), is dropped. A side with no lines says nothing, yet counts as heard.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_highest_priority_speaks_and_the_rest_expire)
+{
+	EvaState eva = Eva();
+	AskEva(eva, Message("UNITLOST"));
+	AskEva(eva, Message("BUILDINGLOST"));
+	BOOST_TEST(!UpdateEva(eva, 1, true, false, false, Last).has_value());
+	const auto spoken = UpdateEva(eva, 2, true, false, false, Last);
+	BOOST_TEST_REQUIRE(spoken.has_value());
+	BOOST_TEST(*spoken == "EvaUSA_BuildingLost2");
+	for (std::uint64_t frame = 3; frame < 152; ++frame)
+		BOOST_TEST(!UpdateEva(eva, frame, true, false, true, Last).has_value()); // speaking
+	BOOST_TEST(eva.checks.size() == 2u);
+	BOOST_TEST(!UpdateEva(eva, 152, true, false, false, Last).has_value()); // 2 + 150: the unit's expired
+	BOOST_TEST(eva.checks.size() == 1u);
+
+	EvaState other = Eva();
+	other.side = "China";
+	AskEva(other, Message("UNITLOST"));
+	const auto silent = UpdateEva(other, 5, true, false, false, Last);
+	BOOST_TEST_REQUIRE(silent.has_value());
+	BOOST_TEST(silent->empty());
+	BOOST_TEST(other.checks.front().played);
+}
+
+// Eva::setEvaEnabled(false): what was asked is forgotten and nothing is checked (low power neither) until it is on
+// again; with nobody watching nothing is asked either.
+BOOST_AUTO_TEST_CASE(legacy_parity_eva_off_forgets_what_was_asked)
+{
+	EvaState eva = Eva();
+	AskEva(eva, Message("UNITLOST"));
+	SetEvaEnabled(eva, false);
+	BOOST_TEST(!UpdateEva(eva, 10, true, true, false, Last).has_value());
+	SetEvaEnabled(eva, true);
+	const auto spoken = UpdateEva(eva, 11, true, false, false, Last);
+	BOOST_TEST(!spoken.has_value()); // the unit was forgotten
+	AskEva(eva, Message("UNITLOST"));
+	BOOST_TEST(!UpdateEva(eva, 12, false, true, false, Last).has_value());
+	BOOST_TEST(eva.checks.empty());
+}
+
+BOOST_AUTO_TEST_SUITE_END()

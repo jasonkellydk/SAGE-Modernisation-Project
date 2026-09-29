@@ -1,11 +1,8 @@
 module;
 #define BOOST_TEST_MODULE SpriteGeometryTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstdint>
-#include <limits>
-#include <vector>
 export module Graphics.Scene.Particles.SpriteGeometry.Tests;
+import std;
 import Graphics.Scene.Particles.SpriteGeometry;
 using namespace Graphics;
 constexpr std::array<float, 16> identity{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};

@@ -1,11 +1,5 @@
-module;
-
-#include <algorithm>
-#include <cstddef>
-#include <cstdint>
-#include <span>
-
 export module Graphics.Scene.DrawGeneration;
+import std;
 
 import engine.profiling;
 export import Graphics.Scene.GPUScene;

@@ -1,15 +1,5 @@
-module;
-#include <algorithm>
-#include <array>
-#include <cassert>
-#include <cstddef>
-#include <cstdint>
-#include <cstring>
-#include <cmath>
-#include <limits>
-#include <span>
-#include <vector>
 export module Graphics.Scene.Props.SkinBounds;
+import std;
 import Graphics.Scene.Props.Geometry;
 import Graphics.Scene.Props.SkinPalettes;
 

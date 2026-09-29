@@ -1,13 +1,5 @@
-module;
-
-#include <algorithm>
-#include <cstddef>
-#include <limits>
-#include <stdexcept>
-#include <utility>
-#include <vector>
-
 export module engine.ecs.storage.chunk_layout;
+import std;
 
 export import engine.ecs.core.component_registry;
 
@@ -19,7 +11,10 @@ export namespace ecs
 class ChunkLayout
 {
 public:
-	static constexpr std::size_t DefaultTargetBytes = 16 * 1024;
+	// Entities per chunk. Deliberately independent of component sizes: sizes
+	// can differ between compilers/platforms, and the row an entity lands in
+	// decides iteration order, which must be identical everywhere (lockstep).
+	static constexpr std::size_t DefaultCapacity = 128;
 
 	struct Column
 	{
@@ -30,7 +25,7 @@ public:
 	};
 
 	static ChunkLayout Build(const std::vector<const ComponentInfo *> &components,
-		std::size_t targetBytes = DefaultTargetBytes);
+		std::size_t capacity = DefaultCapacity);
 
 	std::size_t Capacity() const noexcept { return m_capacity; }
 	std::size_t TotalBytes() const noexcept { return m_totalBytes; }
@@ -129,35 +124,17 @@ ChunkLayout::ChunkLayout(std::vector<Column> columns,
 {
 }
 
-ChunkLayout ChunkLayout::Build(const std::vector<const ComponentInfo *> &components, std::size_t targetBytes)
+ChunkLayout ChunkLayout::Build(const std::vector<const ComponentInfo *> &components, std::size_t capacity)
 {
-	if (targetBytes == 0)
-		targetBytes = DefaultTargetBytes;
-
-	std::size_t bytesPerEntity = sizeof(Entity);
+	if (capacity == 0)
+		throw std::invalid_argument("ECS chunk capacity must be positive");
 	for (const ComponentInfo *info : components)
 	{
 		if (info == nullptr)
 			throw std::invalid_argument("ECS chunk layout received a null component");
-		if (info->size > std::numeric_limits<std::size_t>::max() - bytesPerEntity)
-			throw std::length_error("ECS chunk layout size overflow");
-		bytesPerEntity += info->size;
 	}
-
-	std::size_t capacity = std::max<std::size_t>(1, targetBytes / std::max<std::size_t>(1, bytesPerEntity));
-	for (;;)
-	{
-		Candidate candidate = MakeCandidate(components, capacity);
-		if (candidate.totalBytes <= targetBytes || capacity == 1)
-		{
-			return ChunkLayout(std::move(candidate.columns),
-				capacity,
-				candidate.totalBytes,
-				candidate.alignment,
-				0);
-		}
-		--capacity;
-	}
+	Candidate candidate = MakeCandidate(components, capacity);
+	return ChunkLayout(std::move(candidate.columns), capacity, candidate.totalBytes, candidate.alignment, 0);
 }
 
 const ChunkLayout::Column *ChunkLayout::Find(ComponentId component) const noexcept

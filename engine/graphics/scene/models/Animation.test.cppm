@@ -4,9 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-
 export module Graphics.Scene.Models.Animation.Tests;
+import std;
 
 import Graphics.Scene.Models.Animation;
 

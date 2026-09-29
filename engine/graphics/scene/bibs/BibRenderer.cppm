@@ -1,9 +1,5 @@
-module;
-#include <array>
-#include <cstdint>
-#include <span>
-#include <vector>
 export module Graphics.Scene.Bibs.Renderer;
+import std;
 export import Graphics.Scene.Surfaces.Renderer;
 namespace Graphics {
 export struct BibQuad final {

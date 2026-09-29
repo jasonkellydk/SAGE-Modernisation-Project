@@ -1,6 +1,5 @@
-module;
-
 export module Graphics.Scene.RenderObjectDrawing;
+import std;
 
 namespace Graphics
 {

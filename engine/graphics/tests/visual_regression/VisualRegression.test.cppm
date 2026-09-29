@@ -4,16 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <memory>
-#include <span>
-#include <string>
-#include <vector>
-
 export module Graphics.Testing.VisualRegression.Tests;
+import std;
 
 import Graphics.Passes.Opaque;
 import Graphics.Passes.Shadow;

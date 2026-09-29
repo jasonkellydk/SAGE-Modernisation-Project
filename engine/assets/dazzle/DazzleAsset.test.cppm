@@ -1,9 +1,8 @@
 module;
 #define BOOST_TEST_MODULE DazzleAssetTests
 #include <boost/test/included/unit_test.hpp>
-#include <string>
-#include <utility>
 export module Assets.Dazzles.Tests;
+import std;
 import Assets.Dazzles;
 
 BOOST_AUTO_TEST_CASE(definitions_own_names_and_sprite_arrays_across_source_release_and_copy) {

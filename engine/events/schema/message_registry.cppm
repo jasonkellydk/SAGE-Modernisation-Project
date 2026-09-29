@@ -1,16 +1,5 @@
-module;
-#include <algorithm>
-#include <concepts>
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-#include <stdexcept>
-#include <string>
-#include <string_view>
-#include <typeinfo>
-#include <type_traits>
-#include <vector>
 export module engine.events.schema.message_registry;
+import std;
 
 export namespace engine::events
 {

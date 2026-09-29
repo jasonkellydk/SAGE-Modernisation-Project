@@ -62,6 +62,8 @@ module;
 #include "GameClient/Keyboard.h"
 
 export module Engine.UI.WND.Runtime.Gadget.ListBox;
+import std;
+import engine.core.contracts;
 
 import engine.debug;
 #include "GameClient/Gadget.h"
@@ -2566,7 +2568,7 @@ void GadgetListBoxSetListLength( GameWindow *listbox, Int newLength )
 	{
 
 		engine::debug::log_info( "Unable to allocate listbox data pointer" );
-		assert( 0 );
+		engine::core::Assert( 0 );
 		return;
 
 	}

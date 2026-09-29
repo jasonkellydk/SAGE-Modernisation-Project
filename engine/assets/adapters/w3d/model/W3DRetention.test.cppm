@@ -1,11 +1,8 @@
 module;
 #define BOOST_TEST_MODULE W3DRetentionTests
 #include <boost/test/included/unit_test.hpp>
-#include <optional>
-#include <string>
-#include <string_view>
-#include <unordered_set>
 export module Assets.Adapters.W3D.Retention.Tests;
+import std;
 import Assets.Adapters.W3D.Retention;
 using namespace Assets::W3D;
 

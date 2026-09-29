@@ -1,8 +1,5 @@
-module;
-#include <memory>
-#include <string>
-#include <vector>
 export module engine.platform.process;
+import std;
 export import engine.platform.process.interface;
 export namespace engine::platform
 {

@@ -1,0 +1,250 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdlib>
+#include <filesystem>
+#include <string>
+
+import games.generalszh.content.combat.poison_content;
+import games.generalszh.content.combat.combat_catalog;
+import games.generalszh.content.combat.damage_fx_content;
+import games.generalszh.content.combat.loadout_content;
+import games.generalszh.content.objects.object_catalog;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.content_loader;
+import games.generalszh.content.install.install_mount;
+
+using namespace generalszh::content;
+using namespace engine::config;
+using Engine::Math::Fixed;
+
+namespace
+{
+Document Parse(std::string text, Diagnostics &diagnostics)
+{
+	Diagnostics grammarDiagnostics;
+	const auto grammar = ZeroHourIniGrammar(grammarDiagnostics);
+	Document document;
+	ini::Read(document, document.AddSource("combat.ini", std::move(text)), grammar, diagnostics);
+	return document;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(combat_catalog)
+
+BOOST_AUTO_TEST_CASE(armor_and_weapons_bind_onto_the_engine_definitions)
+{
+	Diagnostics diagnostics;
+	const Document document = Parse(
+		"Armor TankArmor\n"
+		"  Armor = DEFAULT 100%\n"
+		"  Armor = SMALL_ARMS 25%\n"
+		"  Armor = UNRESISTABLE 0%\n"
+		"End\n"
+		"Weapon CrusaderTankGun\n"
+		"  PrimaryDamage = 60.0\n"
+		"  PrimaryDamageRadius = 5.0\n"
+		"  AttackRange = 150.0\n"
+		"  DamageType = ARMOR_PIERCING\n"
+		"  WeaponSpeed = 300\n"
+		"  DelayBetweenShots = Min:1000 Max:2000\n"
+		"  ClipSize = 3\n"
+		"  ClipReloadTime = 500\n"
+		"  AntiAirborneVehicle = Yes\n"
+		"  RadiusDamageAffects = ENEMIES NEUTRALS\n"
+		"  ProjectileObject = CrusaderShell\n"
+		"  FireFX = WeaponFX_CrusaderGun\n"
+		"End\n",
+		diagnostics);
+	BindContext context{diagnostics, engine::time::FixedStep{30}};
+	const auto armors = BuildArmorCatalog(document, context);
+	const auto weapons = BuildWeaponCatalog(document, context);
+	BOOST_TEST(diagnostics.ErrorCount() == 0u);
+	const auto *armor = armors.Find("TankArmor");
+	BOOST_TEST_REQUIRE(armor != nullptr);
+	const std::uint32_t smallArms = *DamageTypeIndex("SMALL_ARMS");
+	BOOST_TEST(engine::gameplay::AdjustDamage(*armor, smallArms, Fixed::FromInt(100)).Raw() == Fixed::FromInt(25).Raw());
+	BOOST_TEST(engine::gameplay::AdjustDamage(*armor, *DamageTypeIndex("FLAME"), Fixed::FromInt(100)).Raw() == Fixed::FromInt(100).Raw());
+	// Unresistable ignores the armor, whatever it says.
+	BOOST_TEST(engine::gameplay::AdjustDamage(*armor, *DamageTypeIndex("UNRESISTABLE"), Fixed::FromInt(100)).Raw() == Fixed::FromInt(100).Raw());
+
+	const auto *gun = weapons.Find("CrusaderTankGun");
+	BOOST_TEST_REQUIRE(gun != nullptr);
+	const auto &weapon = gun->simulation;
+	BOOST_TEST(weapon.primaryDamage.Raw() == Fixed::FromInt(60).Raw());
+	BOOST_TEST(weapon.attackRange.Raw() == Fixed::FromInt(150).Raw());
+	BOOST_TEST(weapon.speed.Raw() == Fixed::FromInt(10).Raw()); // 300/s at 30 Hz
+	BOOST_TEST(weapon.damageType == *DamageTypeIndex("ARMOR_PIERCING"));
+	BOOST_TEST(weapon.delayMin == 30u);
+	BOOST_TEST(weapon.delayMax == 60u);
+	BOOST_TEST(weapon.clipSize == 3u);
+	BOOST_TEST(weapon.clipReload == 15u);
+	BOOST_TEST((weapon.anti & engine::gameplay::weapon_anti::AirborneVehicle) != 0u);
+	BOOST_TEST((weapon.anti & engine::gameplay::weapon_anti::Ground) != 0u); // the default stays
+	BOOST_TEST(weapon.affects == (engine::gameplay::weapon_affects::Enemies | engine::gameplay::weapon_affects::Neutrals));
+	BOOST_TEST(weapon.projectile);
+	BOOST_TEST(gun->fireFX == "WeaponFX_CrusaderGun");
+}
+
+BOOST_AUTO_TEST_CASE(shipped_combat_content_binds_and_shell_map_units_are_armed)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const Document &weaponSet = loader.Load({"Data/INI/Weapon"});
+	const Document &armorSet = loader.Load({"Data/INI/Armor"});
+	const Document &objectSet = loader.Load({"Data/INI/Default/Object", "Data/INI/Object"});
+	BindContext weaponContext{loader.DiagnosticsFor(weaponSet), engine::time::FixedStep{30}};
+	const auto weapons = BuildWeaponCatalog(weaponSet, weaponContext);
+	BindContext armorContext{loader.DiagnosticsFor(armorSet), engine::time::FixedStep{30}};
+	const auto armors = BuildArmorCatalog(armorSet, armorContext);
+	BindContext objectContext{loader.DiagnosticsFor(objectSet), engine::time::FixedStep{30}};
+	const Document *documents[] = {&objectSet};
+	const auto objects = BuildObjectCatalog(documents, objectContext);
+	BOOST_TEST_MESSAGE("weapons: " << weapons.Size() << " (" << weaponContext.diagnostics.Entries().size() << " diagnostics), armors: " << armors.Size());
+	BOOST_TEST(weapons.Size() > 300u);
+	BOOST_TEST(armors.Size() > 30u);
+	BOOST_TEST(weaponContext.diagnostics.ErrorCount() == 0u);
+	BOOST_TEST(armorContext.diagnostics.ErrorCount() == 0u);
+	for (const char *type : {"AmericaVehicleComanche", "AmericaTankPaladin", "GLAInfantryRebel", "AmericaVehicleBattleShip", "AmericaPatriotBattery"})
+	{
+		const ObjectDefinition *object = objects.Find(type);
+		BOOST_TEST_REQUIRE(object != nullptr);
+		const ObjectCombat combat = ReadObjectCombat(*object, engine::time::FixedStep{30});
+		BOOST_TEST_MESSAGE("  " << type << ": health " << (combat.maxHealth ? combat.maxHealth->Raw() / 65536.0 : -1) << ", armor "
+			<< combat.armor << ", weapon " << combat.primaryWeapon << ", auto-acquire " << combat.autoAcquire << ", turret "
+			<< combat.turret << ", scan " << combat.scanInterval);
+		BOOST_TEST(combat.maxHealth.has_value());
+		BOOST_TEST(!combat.primaryWeapon.empty());
+		BOOST_TEST(weapons.Contains(combat.primaryWeapon));
+		BOOST_TEST((combat.armor.empty() || armors.Contains(combat.armor)));
+	}
+	// The Crusader's turret (TurretTurnRate = 180 degrees a second) turns 6 degrees a tick and rests forward.
+	const ObjectCombat crusader = ReadObjectCombat(*objects.Find("AmericaTankCrusader"), engine::time::FixedStep{30});
+	BOOST_TEST(crusader.turret);
+	BOOST_TEST(crusader.turretDefinition.turnRate.units == Engine::Math::TurnFromDegrees(6).units);
+	BOOST_TEST(crusader.turretDefinition.naturalAngle.units == 0u);
+	BOOST_TEST(crusader.turretDefinition.recenterTicks == 60u);
+	// The Patriot scans all around every 250 ms (MaxIdleScanAngle 360, Min/MaxIdleScanInterval 250).
+	const ObjectCombat patriot = ReadObjectCombat(*objects.Find("AmericaPatriotBattery"), engine::time::FixedStep{30});
+	// TurretAIData: the Patriot aims 40 degrees higher at ground units at full range (GroundUnitPitch); the Dragon tank's
+	// flame sweeps 10 degrees at half its turn rate (PRIMARY) and its fire wall 60 at twice it (SECONDARY).
+	BOOST_TEST(patriot.turretDefinition.groundUnitPitch.units == Engine::Math::TurnFromDegrees(40).units);
+	const ObjectCombat dragon = ReadObjectCombat(*objects.Find("ChinaTankDragon"), engine::time::FixedStep{30});
+	BOOST_TEST(dragon.turretDefinition.sweep[0].units == Engine::Math::TurnFromDegrees(10).units);
+	BOOST_TEST(dragon.turretDefinition.sweep[1].units == Engine::Math::TurnFromDegrees(60).units);
+	BOOST_TEST(dragon.turretDefinition.sweep[2].units == 0u);
+	BOOST_TEST((dragon.turretDefinition.sweepSpeed[0] == Engine::Math::Fixed::FromRatio(1, 2)));
+	BOOST_TEST((dragon.turretDefinition.sweepSpeed[1] == Engine::Math::Fixed::FromInt(2)));
+	BOOST_TEST((crusader.turretDefinition.sweepSpeed[0] == Engine::Math::Fixed::One()));
+	BOOST_TEST(patriot.turretDefinition.maxScanUnits == (std::int64_t{1} << 32)); // all round, not none
+	BOOST_TEST(patriot.turretDefinition.minScanUnits == 0);
+	BOOST_TEST(patriot.turretDefinition.minScanTicks == 8u);
+	BOOST_TEST(patriot.turretDefinition.maxScanTicks == 8u);
+	BOOST_TEST(patriot.turretDefinition.allowsPitch);
+	// The combat bike carries its initial Rebel: seen riding (RIDER2) and armed with his gun.
+	const ObjectCombat bike = ReadObjectCombat(*objects.Find("GLAVehicleCombatBike"), engine::time::FixedStep{30});
+	BOOST_TEST(bike.riderCondition == "RIDER2");
+	BOOST_TEST(bike.riderStatus == "STATUS_RIDER2"); // RiderChangeContain::onContaining sets it on the bike
+	BOOST_TEST(bike.primaryWeapon == "GLARebelBikerMachineGun");
+	// The shell map's trees keep their last point but for UNRESISTABLE damage (HighlanderBody); its planters
+	// never die (ImmortalBody); a tank's body is an ordinary one.
+	BOOST_TEST((ReadObjectCombat(*objects.Find("GenericTree"), engine::time::FixedStep{30}).bodyFloor == ObjectCombat::BodyFloor::Highlander));
+	BOOST_TEST((ReadObjectCombat(*objects.Find("PlanterSquare"), engine::time::FixedStep{30}).bodyFloor == ObjectCombat::BodyFloor::Immortal));
+	BOOST_TEST((crusader.bodyFloor == ObjectCombat::BodyFloor::None));
+	// PoisonedBehavior on a Ranger: PoisonDamageInterval 100 ms (3 frames), PoisonDuration 3000 ms (90), POISON caught,
+	// UNRESISTABLE dealt showing POISON's effects; a tank has none.
+	const auto poison = ReadObjectPoison(*objects.Find("AmericaInfantryRanger"), engine::time::FixedStep{30});
+	BOOST_TEST_REQUIRE(poison.has_value());
+	BOOST_TEST(poison->interval == 3u);
+	BOOST_TEST(poison->duration == 90u);
+	BOOST_TEST(poison->catchType == *DamageTypeIndex("POISON"));
+	BOOST_TEST(poison->dealType == *DamageTypeIndex("UNRESISTABLE"));
+	BOOST_TEST(poison->fxType == poison->catchType);
+	BOOST_TEST(!ReadObjectPoison(*objects.Find("AmericaTankCrusader"), engine::time::FixedStep{30}).has_value());
+}
+
+// DamageFX.ini (DamageFX::getDamageFXList, parseAmount / parseMajorFXList / parseTime): TankDamageFX shows
+// FX_DamageTankStruck for any damage type by default (major from 2), small arms their own list, a heroic attacker
+// the heroic lists, flame nothing, and never anything for no damage; the same type waits ThrottleTime 100 ms
+// (3 frames). A Crusader's ArmorSet names it.
+BOOST_AUTO_TEST_CASE(legacy_parity_damage_fx_by_type_amount_and_veterancy)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const auto tables = BindDamageFx(loader.Load({"Data/INI/DamageFX"}), engine::time::FixedStep{30});
+	const auto tank = tables.find("TankDamageFX");
+	BOOST_TEST_REQUIRE((tank != tables.end()));
+	const DamageFxTable &fx = tank->second;
+	using Engine::Math::Fixed;
+	const std::uint32_t explosion = *DamageTypeIndex("EXPLOSION"), smallArms = *DamageTypeIndex("SMALL_ARMS"), flame = *DamageTypeIndex("FLAME");
+	const auto name = [&](std::uint32_t type, std::uint32_t level, Fixed amount) {
+		const std::string *list = fx.FxFor(type, level, amount);
+		return list != nullptr ? *list : std::string{};
+	};
+	BOOST_TEST(name(explosion, 0, Fixed::FromInt(50)) == "FX_DamageTankStruck");
+	BOOST_TEST(name(explosion, 0, Fixed::One()) == "FX_DamageTankStruck");
+	BOOST_TEST(name(explosion, 3, Fixed::FromInt(50)) == "FX_HeroicDamageTankStruck");
+	BOOST_TEST(name(explosion, 2, Fixed::FromInt(50)) == "FX_DamageTankStruck");
+	BOOST_TEST(name(smallArms, 0, Fixed::FromInt(5)) == "FX_DamageTankStruckSmallArms");
+	BOOST_TEST(name(flame, 0, Fixed::FromInt(50)).empty());
+	BOOST_TEST(name(explosion, 0, Fixed{}).empty());
+	BOOST_TEST(fx.At(explosion, 0)->majorAmount.Raw() == Fixed::FromInt(2).Raw());
+	BOOST_TEST(fx.At(explosion, 0)->throttleTicks == 3u);
+	const Document &objectSet = loader.Load({"Data/INI/Default/Object", "Data/INI/Object"});
+	BindContext objectContext{loader.DiagnosticsFor(objectSet), engine::time::FixedStep{30}};
+	const Document *documents[] = {&objectSet};
+	const auto objects = BuildObjectCatalog(documents, objectContext);
+	const auto *crusader = objects.Find("AmericaTankCrusader");
+	BOOST_TEST_REQUIRE(crusader != nullptr);
+	const auto sets = ReadArmorSetDamageFx(*crusader);
+	BOOST_TEST_REQUIRE(!sets.empty());
+	BOOST_TEST(sets.front().unconditioned);
+	BOOST_TEST(sets.front().damageFx == "TankDamageFX");
+}
+
+
+// WeaponTemplateSet by WeaponSetFlags: a technical carries a machine gun, a cannon with CRATEUPGRADE_ONE and an RPG
+// with CRATEUPGRADE_TWO (its salvage upgrades); its truck armor has no conditions.
+BOOST_AUTO_TEST_CASE(legacy_parity_weapon_sets_by_their_conditions)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const Document &objectSet = loader.Load({"Data/INI/Default/Object", "Data/INI/Object"});
+	BindContext objectContext{loader.DiagnosticsFor(objectSet), engine::time::FixedStep{30}};
+	const Document *documents[] = {&objectSet};
+	const auto objects = BuildObjectCatalog(documents, objectContext);
+	const ObjectLoadout technical = ReadObjectLoadout(*objects.Find("GLAVehicleTechnicalChassisOne"));
+	BOOST_TEST_REQUIRE(technical.weaponSets.size() == 3u);
+	BOOST_TEST(technical.weaponSets[0].conditions == 0u);
+	BOOST_TEST(technical.weaponSets[0].weapons[0] == "TechnicalMachineGunWeapon");
+	BOOST_TEST(technical.weaponSets[1].conditions == SetFlag(WeaponSetFlagNames, "CRATEUPGRADE_ONE"));
+	BOOST_TEST(technical.weaponSets[1].weapons[0] == "TechnicalCannonWeapon");
+	BOOST_TEST(technical.weaponSets[2].weapons[0] == "TechnicalRPGWeapon");
+	BOOST_TEST_REQUIRE(technical.armorSets.size() == 1u);
+	BOOST_TEST(technical.armorSets[0].armor == "TruckArmor");
+}
+
+BOOST_AUTO_TEST_SUITE_END()

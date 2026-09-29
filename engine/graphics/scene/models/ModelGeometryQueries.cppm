@@ -1,8 +1,5 @@
-module;
-#include <cstddef>
-#include <cstdint>
-#include <optional>
 export module Graphics.Scene.Models.GeometryQueries;
+import std;
 namespace Graphics {
 // Polygon order and result publication differ between unpartitioned ray and
 // volume queries. Callers supply primitive intersection math and result access.

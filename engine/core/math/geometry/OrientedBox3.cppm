@@ -1,12 +1,5 @@
-module;
-
-#include <array>
-#include <algorithm>
-#include <cmath>
-#include <limits>
-#include <optional>
-
 export module Engine.Core.Math.OrientedBox3;
+import std;
 
 export import Engine.Core.Math.AxisAlignedBox3;
 

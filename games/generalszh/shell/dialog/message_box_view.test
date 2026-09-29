@@ -1,0 +1,47 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdlib>
+#include <filesystem>
+#include <string>
+
+import games.generalszh.shell.dialog.message_box_view;
+import games.generalszh.content.install.install_mount;
+import engine.filesystem.core.virtual_file_system;
+import Engine.UI.WND.Document;
+
+using namespace generalszh::shell;
+using namespace Engine::UI::WND;
+
+BOOST_AUTO_TEST_SUITE(message_box_view)
+
+// The shipped MessageBox.wnd bound to a message box: hidden until shown, then
+// its panel, title, message and only the buttons asked for; a button closes it.
+BOOST_AUTO_TEST_CASE(the_shipped_message_box_shows_what_it_is_asked)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+		return;
+	engine::filesystem::VirtualFileSystem files;
+	generalszh::content::MountInstall(files, install);
+	const auto text = files.ReadText("Window/Menus/MessageBox.wnd");
+	BOOST_TEST_REQUIRE(text.has_value());
+	WNDDocument document;
+	BOOST_TEST_REQUIRE(document.Parse(*text));
+	MessageBoxViewModel messages;
+	WNDBindings bindings(document);
+	BindMessageBoxView(bindings, messages);
+	BOOST_TEST(bindings.MissingWindows().empty());
+	const WNDWindow &parent = *document.Find_Window("MessageBox.wnd:MessageBoxParent");
+	BOOST_TEST(Has_Flag(parent.flags, WindowFlag::Hidden));
+	bool deleted = false;
+	messages.Show(MessageBoxYesNo(u"Delete File", u"Sure?", [&] { deleted = true; }));
+	BOOST_TEST(!Has_Flag(parent.flags, WindowFlag::Hidden));
+	BOOST_TEST(!Has_Flag(document.Find_Window("MessageBox.wnd:ButtonYes")->flags, WindowFlag::Hidden));
+	BOOST_TEST(!Has_Flag(document.Find_Window("MessageBox.wnd:ButtonNo")->flags, WindowFlag::Hidden));
+	BOOST_TEST(Has_Flag(document.Find_Window("MessageBox.wnd:ButtonOk")->flags, WindowFlag::Hidden));
+	messages.yes.Execute();
+	BOOST_TEST(deleted);
+	BOOST_TEST(Has_Flag(parent.flags, WindowFlag::Hidden));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -1,4 +1,5 @@
 export module Graphics.Frame.SubmissionStatistics;
+import std;
 
 import Graphics.RHI;
 

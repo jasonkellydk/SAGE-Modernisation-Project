@@ -4,15 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <limits>
-#include <span>
-#include <vector>
-
 export module Graphics.Scene.Lines.Tracer.Tests;
+import std;
 
 import Graphics.Tests.Device;
 import Graphics.RHI;

@@ -1,19 +1,11 @@
 module;
-#include <algorithm>
-#include <array>
-#include <bit>
-#include <cassert>
-#include <cmath>
-#include <cstdint>
-#include <cstring>
-#include <limits>
-#include <span>
-#include <vector>
 #if defined(_M_X64) || defined(__SSE2__)
 #include <emmintrin.h>
 #endif
 
 export module Graphics.Scene.Props.Geometry;
+import std;
+import engine.core.contracts;
 
 import engine.profiling;
 namespace Graphics
@@ -103,8 +95,8 @@ public:
     template<typename ExtractVertex>
     void Append_Validated(std::uint32_t source_index, const ExtractVertex& extract)
     {
-        assert(source_index < m_remap.size());
-        assert(m_indices.size() < (std::numeric_limits<std::uint32_t>::max)()/sizeof(std::uint32_t));
+        engine::core::Assert(source_index < m_remap.size());
+        engine::core::Assert(m_indices.size() < (std::numeric_limits<std::uint32_t>::max)()/sizeof(std::uint32_t));
         auto& index = m_remap[source_index];
         if (index == InvalidIndex) {
             const auto next = static_cast<std::uint32_t>(m_vertices.size());

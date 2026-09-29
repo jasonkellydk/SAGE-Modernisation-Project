@@ -1,12 +1,5 @@
-module;
-
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <span>
-
 export module Graphics.Scene.Ring.Renderer;
+import std;
 
 import Assets.Rings;
 import Graphics.RHI;

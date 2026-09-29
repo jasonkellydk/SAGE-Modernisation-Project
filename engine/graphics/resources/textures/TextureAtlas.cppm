@@ -1,9 +1,5 @@
-module;
-#include <cstddef>
-#include <cstdint>
-#include <cstring>
-#include <span>
 export module Graphics.Resources.Textures.Atlas;
+import std;
 import Graphics.Resources.Textures.Resource;
 import Graphics.Resources.Textures.Upload;
 export import Assets.Images.PixelEncoding;

@@ -1,0 +1,147 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <optional>
+#include <string>
+
+import games.generalszh.gameplay.appearance.systems.steering_look_system;
+import games.generalszh.content.objects.model_conditions;
+import Engine.Core.Math.FixedPresentation;
+import games.generalszh.content.locomotors.animation_steering;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+// Simulation-side looks of Zero Hour objects (conditions their update modules set).
+using namespace generalszh;
+
+BOOST_AUTO_TEST_SUITE(object_looks)
+
+// AnimationSteeringUpdate::update, tick by tick with MinTransitionTime 300 ms (9 ticks): a full-rate right turn
+// on tick 1 shows CENTER_TO_RIGHT; turning no more, it recenters (RIGHT_TO_CENTER) on tick 10, not before; still
+// straight, it clears the turn look on tick 19 (and may turn again at once): a left turn on tick 20 shows
+// CENTER_TO_LEFT; a right turn while leaning left recenters (LEFT_TO_CENTER) once 9 ticks are up.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_bike_leans_into_its_turns_and_back)
+{
+	ecs::World world{ecs::WorldConfig{2}};
+	world.RegisterComponent<gameplay::SteeringLook>();
+	world.RegisterComponent<engine::gameplay::Appearance>();
+	world.RegisterComponent<engine::gameplay::Locomotion>();
+	world.FinalizeComponents();
+	const ecs::Entity bike = world.Create();
+	world.Add<gameplay::SteeringLook>(bike);
+	world.Add<engine::gameplay::Appearance>(bike);
+	world.Add<engine::gameplay::Locomotion>(bike);
+	world.Get<gameplay::SteeringLook>(bike)->transitionTicks = 9;
+	gameplay::SteeringLookSystem system;
+	ecs::SystemRegistry registry;
+	registry.Register(system);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	const auto tick = [&](std::uint64_t at, std::int8_t turning) {
+		world.Get<engine::gameplay::Locomotion>(bike)->turning = turning;
+		scheduler.Execute(engine::time::SimulationTime{at, engine::time::FixedStep{30}});
+	};
+	const auto shows = [&](const char *condition) { return world.Get<engine::gameplay::Appearance>(bike)->Test(content::ModelConditionBit(condition)); };
+	tick(1, -1);
+	BOOST_TEST(shows("CENTER_TO_RIGHT"));
+	for (std::uint64_t at = 2; at < 10; ++at)
+		tick(at, 0);
+	BOOST_TEST(shows("CENTER_TO_RIGHT"));
+	tick(10, 0);
+	BOOST_TEST(!shows("CENTER_TO_RIGHT"));
+	BOOST_TEST(shows("RIGHT_TO_CENTER"));
+	for (std::uint64_t at = 11; at < 19; ++at)
+		tick(at, 0);
+	BOOST_TEST(shows("RIGHT_TO_CENTER"));
+	tick(19, 0);
+	BOOST_TEST(!shows("RIGHT_TO_CENTER"));
+	BOOST_TEST((world.Get<gameplay::SteeringLook>(bike)->pose == gameplay::SteeringPose::Straight));
+	tick(20, 1);
+	BOOST_TEST(shows("CENTER_TO_LEFT"));
+	tick(25, -1);
+	BOOST_TEST(shows("CENTER_TO_LEFT"));
+	tick(29, -1);
+	BOOST_TEST(shows("LEFT_TO_CENTER"));
+	BOOST_TEST(!shows("CENTER_TO_LEFT"));
+	// Recentering needs no turn at all to finish.
+	tick(38, -1);
+	BOOST_TEST(shows("LEFT_TO_CENTER"));
+	tick(39, 0);
+	BOOST_TEST(!shows("LEFT_TO_CENTER"));
+}
+
+// The shell map's combat bikes show their turns, changing look at most every 300 ms: 9 ticks.
+BOOST_AUTO_TEST_CASE(shipped_combat_bikes_show_their_turns)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+		return;
+	engine::filesystem::VirtualFileSystem files;
+	content::MountInstall(files, install);
+	engine::config::Diagnostics diagnostics;
+	content::ContentLoader loader(files, content::ZeroHourIniGrammar(diagnostics));
+	const content::GameContent game = content::LoadGameContent(loader, engine::time::FixedStep{30});
+	const auto bike = content::ReadAnimationSteering(*game.objects.Find("GLAVehicleCombatBike"), engine::time::FixedStep{30});
+	BOOST_TEST_REQUIRE(bike.has_value());
+	BOOST_TEST(*bike == 9u);
+	BOOST_TEST(!content::ReadAnimationSteering(*game.objects.Find("AmericaVehicleHumvee"), engine::time::FixedStep{30}).has_value());
+}
+
+// Animation2D.ini and GameData's LevelGainAnimation fields (Anim2DTemplate, createVeterancyLevelFX): the promotion
+// chevrons are LevelGainedAnimation, 21 images looping, each shown one logic frame (AnimationDelay 30 ms rounds up
+// to 1), for 4 s rising 15 a second; the money crate's MoneyPickUp has 31 images. MiscAudio names UnitPromoted.
+BOOST_AUTO_TEST_CASE(legacy_parity_world_animations_are_read_as_the_original)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+		return;
+	engine::filesystem::VirtualFileSystem files;
+	content::MountInstall(files, install);
+	engine::config::Diagnostics diagnostics;
+	content::ContentLoader loader(files, content::ZeroHourIniGrammar(diagnostics));
+	const content::GameContent game = content::LoadGameContent(loader, engine::time::FixedStep{30});
+	BOOST_TEST(game.gameData.levelGainAnimation == "LevelGainedAnimation");
+	BOOST_TEST((game.gameData.levelGainSeconds == Engine::Math::Fixed::FromInt(4)));
+	BOOST_TEST((game.gameData.levelGainRise == Engine::Math::Fixed::FromInt(15)));
+	const auto chevrons = game.animations2d.find("LevelGainedAnimation");
+	BOOST_TEST_REQUIRE((chevrons != game.animations2d.end()));
+	BOOST_TEST(chevrons->second.images.size() == 21u);
+	BOOST_TEST(chevrons->second.images.front() == "SCPChev000");
+	BOOST_TEST((chevrons->second.mode == content::Anim2DMode::Loop));
+	BOOST_TEST(chevrons->second.framesPerImage == 1u);
+	BOOST_TEST(chevrons->second.ImageAt(20) == 20u);
+	BOOST_TEST(chevrons->second.ImageAt(21) == 0u); // looped
+	BOOST_TEST(game.animations2d.at("MoneyPickUp").images.size() == 31u);
+	BOOST_TEST(game.miscAudio.at("UnitPromoted") == "UnitPromoted");
+	// GarrisonContain::loadGarrisonPoints: an apartment's garrisoned models have their FIREPOINT bones.
+	const auto points = game.garrisonPoints.find("AsianApartment01");
+	BOOST_TEST_REQUIRE((points != game.garrisonPoints.end()));
+	// Pristine (CBNApart01_G) and damaged (CBNApart01_DG) each have 33; really damaged it shows no garrisoned model
+	// (CBNApart01_E: no fire points, and it lets everyone out anyway).
+	BOOST_TEST(points->second[0].size() == 33u);
+	BOOST_TEST(points->second[1].size() == 33u);
+	BOOST_TEST(points->second[2].empty());
+	// computeTrackSpacing: a tank's tracks as wide as its TREADFX bones apart plus 4; GameLOD's High preset keeps 100 edges,
+	// 25 opaque, fading over 60 s; GameData lets 100 vehicles leave tracks.
+	const auto tank = game.trackWidths.find("AmericaTankCrusader");
+	BOOST_TEST_REQUIRE((tank != game.trackWidths.end()));
+	BOOST_TEST_MESSAGE("Crusader track width " << Engine::Math::ToFloat(tank->second));
+	BOOST_TEST(tank->second.Raw() > Engine::Math::Fixed::FromInt(4).Raw());
+	const auto high = std::find_if(game.staticLods.begin(), game.staticLods.end(), [](const auto &lod) { return lod.name == "High"; });
+	BOOST_TEST_REQUIRE((high != game.staticLods.end()));
+	BOOST_TEST(high->maxTankTrackEdges == 100u);
+	BOOST_TEST(high->maxTankTrackOpaqueEdges == 25u);
+	BOOST_TEST(high->maxTankTrackFadeDelay == 60000u);
+	BOOST_TEST(game.gameData.maxTerrainTracks == 100u);
+	BOOST_TEST(game.gameData.makeTrackMarks);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

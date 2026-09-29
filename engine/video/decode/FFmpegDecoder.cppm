@@ -1,16 +1,5 @@
-module;
-
-#include <algorithm>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <cstdio>
-#include <limits>
-#include <string>
-#include <string_view>
-#include <vector>
-
 export module Video.FFmpeg.Decoder;
+import std;
 
 export import Video.Decoder;
 

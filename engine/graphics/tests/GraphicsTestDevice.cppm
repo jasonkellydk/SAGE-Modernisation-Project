@@ -1,16 +1,5 @@
-module;
-
-#include <cstdlib>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <memory>
-#include <span>
-#include <string>
-#include <string_view>
-#include <utility>
-
 export module Graphics.Tests.Device;
+import std;
 
 export import Graphics.RHI;
 import Graphics.Backends.DX11;

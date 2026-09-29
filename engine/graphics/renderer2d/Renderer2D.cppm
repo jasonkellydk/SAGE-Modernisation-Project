@@ -1,20 +1,5 @@
-module;
-
-
-#include <array>
-#include <algorithm>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <fstream>
-#include <initializer_list>
-#include <limits>
-#include <span>
-#include <utility>
-#include <vector>
-
 export module Graphics.Renderer2D;
+import std;
 
 import engine.profiling;
 export import Graphics.RenderGraph.Execution;

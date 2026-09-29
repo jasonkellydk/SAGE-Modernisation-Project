@@ -1,0 +1,400 @@
+#define BOOST_TEST_MODULE EngineGameplaySlaves
+#include <boost/test/included/unit_test.hpp>
+
+#include <cstdint>
+#include <vector>
+
+import engine.gameplay.rts.slaves.systems.slaved_system;
+import engine.gameplay.rts.slaves.systems.spawner_system;
+import engine.gameplay.rts.slaves.systems.hive_damage_system;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+using namespace engine::gameplay;
+using Engine::Math::Fixed;
+
+// The game's weapon bonus conditions as a test gives them (any bits do).
+namespace weapon_bonus_condition
+{
+inline constexpr std::uint32_t Horde = 1u << 1;
+inline constexpr std::uint32_t Nationalism = 1u << 4;
+inline constexpr std::uint32_t PlayerUpgrade = 1u << 5;
+inline constexpr std::uint32_t DroneSpotting = 1u << 6;
+inline constexpr std::uint32_t Veteran = 1u << 9;
+inline constexpr std::uint32_t Elite = 1u << 10;
+inline constexpr std::uint32_t Hero = 1u << 11;
+inline constexpr std::uint32_t Fanaticism = 1u << 23;
+}
+using Engine::Math::FixedVector2;
+
+namespace
+{
+struct Hive
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	ecs::Entity master;
+	ecs::Entity drone;
+	std::uint64_t tick{0};
+
+	Hive(SlavedDefinition definition)
+	{
+		world.EmplaceResource<RandomSeed>(RandomSeed{5});
+		world.RegisterComponent<Transform>();
+		world.RegisterComponent<Health>();
+		world.RegisterComponent<AttackTarget>();
+		world.RegisterComponent<MoveOrder>();
+		world.RegisterComponent<Slaved>();
+		world.RegisterComponent<Disabled>();
+		world.RegisterComponent<Locomotion>();
+		world.RegisterComponent<PhysicsBody>();
+		world.RegisterComponent<WeaponBonusConditions>();
+		world.FinalizeComponents();
+		master = Unit(100, 100);
+		world.Add<Health>(master);
+		*world.Get<Health>(master) = {Fixed::FromInt(100), Fixed::FromInt(100)};
+		world.Add<AttackTarget>(master);
+		world.Add<WeaponBonusConditions>(master);
+		drone = Unit(100, 100);
+		world.Add<Slaved>(drone);
+		Slaved &slave = *world.Get<Slaved>(drone);
+		slave.definition = definition;
+		Enslave(slave, master, Fixed{}, 5, 0, drone);
+	}
+
+	ecs::Entity Unit(int x, int y)
+	{
+		const ecs::Entity entity = world.Create();
+		world.Add<Transform>(entity);
+		world.Add<MoveOrder>(entity);
+		world.Get<Transform>(entity)->position = {Fixed::FromInt(x), Fixed::FromInt(y), {}};
+		return entity;
+	}
+
+	void Run(int ticks)
+	{
+		SlavedSystem slaved;
+		ecs::SystemRegistry registry;
+		registry.Register(slaved);
+		registry.Finalize(world.Components());
+		ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+		scheduler.Finalize(engine::time::FixedStep{30});
+		for (int step = 0; step < ticks; ++step)
+			scheduler.Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}});
+	}
+
+	FixedVector2 Goal() const { return world.Get<MoveOrder>(drone)->destination; }
+};
+
+bool Near(Fixed a, double b) { return std::abs(static_cast<double>(a.Raw()) / 65536.0 - b) < 0.05; }
+}
+
+BOOST_AUTO_TEST_SUITE(slaves)
+
+// SlavedUpdate::startSlavedEffects: its guard point is GuardMaxRange from its master in a random direction;
+// update(): it looks at once, then every SLAVED_UPDATE_RATE (7) frames; idle and more than 15 from its guard
+// point it heads there (no GuardWanderRange: the same point).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_drone_guards_its_master_every_quarter_second)
+{
+	SlavedDefinition definition;
+	definition.guardMaxRange = Fixed::FromInt(30);
+	Hive hive(definition);
+	const Slaved &slave = *hive.world.Get<Slaved>(hive.drone);
+	BOOST_TEST(Near(Engine::Math::Length(slave.guardOffset), 30.0));
+	hive.Run(1);
+	BOOST_TEST((hive.world.Get<MoveOrder>(hive.drone)->mode == MoveMode::Point));
+	const FixedVector2 pinned = FixedVector2{Fixed::FromInt(100), Fixed::FromInt(100)} + slave.guardOffset;
+	BOOST_TEST((hive.Goal() == pinned));
+	// Its master moves; it only looks again on the 8th tick.
+	hive.world.Get<Transform>(hive.master)->position.x = Fixed::FromInt(200);
+	*hive.world.Get<MoveOrder>(hive.drone) = {};
+	hive.Run(6);
+	BOOST_TEST((hive.world.Get<MoveOrder>(hive.drone)->mode == MoveMode::Idle));
+	hive.Run(1);
+	BOOST_TEST((hive.world.Get<MoveOrder>(hive.drone)->mode == MoveMode::Point));
+	BOOST_TEST(Near(hive.Goal().x, 200.0 + static_cast<double>(slave.guardOffset.x.Raw()) / 65536.0));
+}
+
+// doAttackLogic: the master's victim, or the point AttackRange from the master toward it when the drone is
+// farther than that from it; doScoutLogic: the master's destination alike, while the master is more than half
+// its GuardMaxRange from it. A master that dies leaves the drone DISABLED_UNMANNED and idle (SlavedUpdate
+// setDisabled + aiIdle), flying on at its speed under physics; disabled, it never looks again.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_drone_spots_scouts_and_falls_with_its_master)
+{
+	SlavedDefinition definition;
+	definition.guardMaxRange = Fixed::FromInt(30);
+	definition.attackRange = Fixed::FromInt(50);
+	definition.scoutRange = Fixed::FromInt(40);
+	Hive hive(definition);
+	const ecs::Entity victim = hive.Unit(300, 100);
+	*hive.world.Get<AttackTarget>(hive.master) = {victim, true};
+	hive.Run(1);
+	BOOST_TEST(Near(hive.Goal().x, 150.0));
+	BOOST_TEST(Near(hive.Goal().y, 100.0));
+	hive.world.Get<Transform>(victim)->position.x = Fixed::FromInt(130);
+	hive.Run(7);
+	BOOST_TEST(Near(hive.Goal().x, 130.0)); // within reach: the victim itself
+	// FROM_BOUNDINGSPHERE_2D: 55 from the drone's centre is 45 from its bounding circle (radius 10): within reach.
+	hive.world.Get<Slaved>(hive.drone)->radius = Fixed::FromInt(10);
+	hive.world.Get<Transform>(victim)->position.x = Fixed::FromInt(155);
+	hive.Run(7);
+	BOOST_TEST(Near(hive.Goal().x, 155.0));
+	hive.world.Get<Slaved>(hive.drone)->radius = Fixed{};
+
+	*hive.world.Get<AttackTarget>(hive.master) = {};
+	*hive.world.Get<MoveOrder>(hive.master) = MoveToPoint({Fixed::FromInt(100), Fixed::FromInt(20)});
+	hive.Run(7);
+	BOOST_TEST(Near(hive.Goal().x, 100.0));
+	BOOST_TEST(Near(hive.Goal().y, 60.0)); // 40 toward the master's goal
+
+	hive.world.Add<Locomotion>(hive.drone);
+	hive.world.Get<Locomotion>(hive.drone)->speed = Fixed::FromInt(2);
+	hive.world.Add<PhysicsBody>(hive.drone);
+	hive.world.Get<Health>(hive.master)->current = {};
+	hive.Run(7);
+	BOOST_TEST_REQUIRE(hive.world.Has<Disabled>(hive.drone));
+	BOOST_TEST((hive.world.Get<Disabled>(hive.drone)->mask & disabled_type::Unmanned) != 0u);
+	BOOST_TEST((hive.world.Get<MoveOrder>(hive.drone)->mode == MoveMode::Idle));
+	BOOST_TEST((hive.world.Get<Slaved>(hive.drone)->master == ecs::Entity{}));
+	BOOST_TEST(Near(hive.world.Get<PhysicsBody>(hive.drone)->velocity.x, 2.0)); // facing east at its speed
+	BOOST_TEST(hive.world.IsAlive(hive.drone)); // not killed: it crashes
+}
+
+// SlavedUpdate::update: every look clears the master's DRONE_SPOTTING; doAttackLogic sets it again when the drone
+// (before it moves) is within DistToTargetToGrantRangeBonus of the victim, from its bounding circle. Clearing and
+// setting are each a change (Object::setWeaponBonusCondition / clearWeaponBonusCondition), so a spotting drone
+// re-times its master's weapons on every look.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_drone_near_the_victim_grants_its_master_drone_spotting)
+{
+	SlavedDefinition definition;
+	definition.guardMaxRange = Fixed::FromInt(30);
+	definition.attackRange = Fixed::FromInt(200);
+	definition.spottingRange = Fixed::FromInt(20);
+	definition.spottingBonus = weapon_bonus_condition::DroneSpotting;
+	Hive hive(definition);
+	const ecs::Entity victim = hive.Unit(300, 100);
+	*hive.world.Get<AttackTarget>(hive.master) = {victim, true};
+	const auto conditions = [&] { return *hive.world.Get<WeaponBonusConditions>(hive.master); };
+	hive.Run(1);
+	BOOST_TEST(conditions().flags == 0u); // 200 away
+	BOOST_TEST(conditions().changedTick == 0u);
+	hive.world.Get<Transform>(hive.drone)->position.x = Fixed::FromInt(281); // 19 away
+	hive.Run(7);
+	BOOST_TEST(conditions().flags == weapon_bonus_condition::DroneSpotting);
+	BOOST_TEST(conditions().changedTick == 8u);
+	hive.Run(7);
+	BOOST_TEST(conditions().flags == weapon_bonus_condition::DroneSpotting);
+	BOOST_TEST(conditions().changedTick == 15u); // cleared and set again: re-timed
+	hive.world.Get<Transform>(hive.drone)->position.x = Fixed::FromInt(280); // 20 away: not within
+	hive.Run(7);
+	BOOST_TEST(conditions().flags == 0u);
+	BOOST_TEST(conditions().changedTick == 22u);
+	hive.Run(7);
+	BOOST_TEST(conditions().changedTick == 22u); // clear to clear: no change
+}
+
+// SpawnBehavior::update / onSpawnDeath / onDie, tick by tick (SPAWN_UPDATE_RATE 15; slot n due after frame n; SpawnReplaceDelay
+// 30): a spawner of two updates on tick 1 and makes its first spawn (1 > 0), its second on tick 16; a spawn lost on tick 20
+// is due after tick 50 and made on the first update past it (tick 61); one making a single batch makes its two and no
+// more; a dying spawner whose spawns require it kills them.
+BOOST_AUTO_TEST_CASE(legacy_parity_spawners_make_and_replace_their_spawns)
+{
+	ecs::World world{ecs::WorldConfig{2}};
+	world.RegisterComponent<Spawner>();
+	world.RegisterComponent<Dying>();
+	world.RegisterComponent<Health>();
+	world.RegisterComponent<Owner>();
+	world.RegisterComponent<Sale>();
+	world.RegisterComponent<ConstructionProgress>();
+	world.FinalizeComponents();
+	auto &requests = world.EmplaceResource<SpawnRequests>();
+	auto &kills = world.EmplaceResource<KillRequests>();
+	world.EmplaceResource<TeamRoster>();
+	SpawnerSystem system;
+	ecs::SystemRegistry registry;
+	registry.Register(system);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	const auto make = [&](bool oneShot, bool require) {
+		const ecs::Entity entity = world.Create();
+		world.Add<Spawner>(entity);
+		Spawner &spawner = *world.Get<Spawner>(entity);
+		spawner.templates = {7, 8, Spawner::NoTemplate, Spawner::NoTemplate};
+		spawner.templateCount = 2;
+		spawner.due[0] = 0;
+		spawner.due[1] = 1;
+		spawner.dueCount = 2;
+		spawner.replaceDelay = 30;
+		spawner.oneShotLeft = oneShot ? 2 : -1;
+		spawner.requireSpawner = require;
+		return entity;
+	};
+	const ecs::Entity keeper = make(false, true);
+	const ecs::Entity batch = make(true, false);
+	std::vector<std::pair<std::uint64_t, SpawnRequest>> made;
+	const auto tick = [&](std::uint64_t at) {
+		scheduler.Execute(engine::time::SimulationTime{at, engine::time::FixedStep{30}});
+		// The game makes them between ticks and counts them as their spawner's.
+		for (const SpawnRequest &request : requests.list)
+		{
+			const ecs::Entity spawn = world.Create();
+			Spawner &spawner = *world.Get<Spawner>(request.spawner);
+			spawner.spawned[spawner.spawnedCount++] = spawn;
+			made.push_back({at, request});
+		}
+	};
+	for (std::uint64_t at = 1; at <= 16; ++at)
+		tick(at);
+	BOOST_TEST_REQUIRE(made.size() == 4u);
+	BOOST_TEST(made[0].first == 1u);
+	BOOST_TEST(made[0].second.definition == 7u);
+	BOOST_TEST(made[2].first == 16u);
+	BOOST_TEST(made[2].second.definition == 8u); // in turn
+	BOOST_TEST(!world.Get<Spawner>(batch)->active);
+	// Lose one of each on tick 20: only the keeper replaces it, after the delay.
+	for (const ecs::Entity spawner : {keeper, batch})
+		world.Destroy(world.Get<Spawner>(spawner)->spawned[0]);
+	std::uint64_t replaced = 0;
+	for (std::uint64_t at = 20; at <= 80; ++at)
+	{
+		const std::size_t before = made.size();
+		tick(at);
+		if (made.size() > before && replaced == 0)
+			replaced = at;
+	}
+	BOOST_TEST(replaced == 61u);
+	BOOST_TEST(made.size() == 5u);
+	BOOST_TEST((made.back().second.spawner == keeper));
+	// The keeper dies: its spawns go with it.
+	world.Add<Dying>(keeper);
+	tick(81);
+	BOOST_TEST(kills.entities.size() == 2u);
+}
+
+// SpawnBehavior::shouldTryToSpawn: a spawner makes nothing while being sold (OBJECT_STATUS_SOLD), while under construction
+// (OBJECT_STATUS_UNDER_CONSTRUCTION: not yet 100% built), or while the neutral player's (isNeutralControlled: the player
+// without a name); its slots wait and fill once it may.
+BOOST_AUTO_TEST_CASE(legacy_parity_spawners_wait_while_sold_unbuilt_or_neutral)
+{
+	ecs::World world{ecs::WorldConfig{2}};
+	world.RegisterComponent<Spawner>();
+	world.RegisterComponent<Dying>();
+	world.RegisterComponent<Health>();
+	world.RegisterComponent<Owner>();
+	world.RegisterComponent<Sale>();
+	world.RegisterComponent<ConstructionProgress>();
+	world.FinalizeComponents();
+	auto &requests = world.EmplaceResource<SpawnRequests>();
+	world.EmplaceResource<KillRequests>();
+	TeamRoster &roster = world.EmplaceResource<TeamRoster>();
+	const std::uint32_t neutral = roster.AddPlayer(Player{});
+	const std::uint32_t china = roster.AddPlayer(Player{"PlyrChina"});
+	SpawnerSystem system;
+	ecs::SystemRegistry registry;
+	registry.Register(system);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	const auto make = [&](std::uint32_t player) {
+		const ecs::Entity entity = world.Create();
+		world.Add<Spawner>(entity);
+		Spawner &spawner = *world.Get<Spawner>(entity);
+		spawner.templates = {7, Spawner::NoTemplate, Spawner::NoTemplate, Spawner::NoTemplate};
+		spawner.templateCount = 1;
+		spawner.due[0] = 0;
+		spawner.dueCount = 1;
+		world.Add<Owner>(entity);
+		world.Get<Owner>(entity)->player = player;
+		return entity;
+	};
+	const ecs::Entity sold = make(china);
+	world.Add<Sale>(sold);
+	const ecs::Entity unbuilt = make(china);
+	world.Add<ConstructionProgress>(unbuilt);
+	world.Get<ConstructionProgress>(unbuilt)->percent = Engine::Math::Fixed::FromInt(40);
+	const ecs::Entity civilian = make(neutral);
+	const ecs::Entity ready = make(china);
+	std::vector<ecs::Entity> asked;
+	for (std::uint64_t at = 1; at <= 16; ++at)
+	{
+		scheduler.Execute(engine::time::SimulationTime{at, engine::time::FixedStep{30}});
+		for (const SpawnRequest &request : requests.list)
+			asked.push_back(request.spawner);
+	}
+	BOOST_TEST_REQUIRE(asked.size() == 1u);
+	BOOST_TEST((asked.front() == ready));
+	// Built: its spawn comes at the next update.
+	world.Get<ConstructionProgress>(unbuilt)->percent = Engine::Math::Fixed::FromInt(100);
+	asked.clear();
+	for (std::uint64_t at = 17; at <= 31; ++at)
+	{
+		scheduler.Execute(engine::time::SimulationTime{at, engine::time::FixedStep{30}});
+		for (const SpawnRequest &request : requests.list)
+			asked.push_back(request.spawner);
+	}
+	BOOST_TEST_REQUIRE(asked.size() == 1u);
+	BOOST_TEST((asked.front() == unbuilt));
+	BOOST_TEST(world.Get<Spawner>(sold)->dueCount == 1u);
+	BOOST_TEST(world.Get<Spawner>(civilian)->dueCount == 1u);
+}
+
+// HiveStructureBody::attemptDamage (a Stinger Site: propagates SMALL_ARMS and SNIPER, swallows SNIPER) with
+// SpawnBehavior::getClosestSlave: a rifle hit on the site goes to its spawn nearest the shooter; a hit from a shooter
+// gone stays with the site; a type it does not pass on (EXPLOSION) stays; with no spawns a SNIPER hit is swallowed and
+// a SMALL_ARMS hit is the site's.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_hive_passes_hits_to_its_nearest_spawn)
+{
+	constexpr std::uint32_t Explosion = 0, SmallArms = 3, Sniper = 9;
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<Transform>();
+	world.RegisterComponent<Spawner>();
+	world.RegisterComponent<HiveBody>();
+	world.FinalizeComponents();
+	auto &incoming = world.EmplaceResource<IncomingDamage>();
+	const auto at = [&](int x, int y) {
+		const ecs::Entity entity = world.Create();
+		world.Add<Transform>(entity);
+		world.Get<Transform>(entity)->position = {Fixed::FromInt(x), Fixed::FromInt(y), Fixed{}};
+		return entity;
+	};
+	const ecs::Entity site = at(0, 0);
+	const ecs::Entity west = at(-40, 0);
+	const ecs::Entity east = at(40, 0);
+	const ecs::Entity shooter = at(200, 10);
+	const ecs::Entity gone = at(-200, 0);
+	world.Add<HiveBody>(site);
+	*world.Get<HiveBody>(site) = {(std::uint64_t{1} << SmallArms) | (std::uint64_t{1} << Sniper), std::uint64_t{1} << Sniper};
+	world.Add<Spawner>(site);
+	Spawner &spawner = *world.Get<Spawner>(site);
+	spawner.spawned[0] = west;
+	spawner.spawned[1] = east;
+	spawner.spawnedCount = 2;
+	world.Destroy(gone);
+	HiveDamageSystem system;
+	ecs::SystemRegistry registry;
+	registry.Register(system);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	std::uint64_t tick = 0;
+	const auto run = [&](std::vector<DamageRecord> records) {
+		incoming.Clear();
+		for (const DamageRecord &record : records)
+			incoming.Add(record);
+		incoming.Seal();
+		scheduler.Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}});
+	};
+	run({{site, shooter, Fixed::FromInt(10), SmallArms}, {site, gone, Fixed::FromInt(10), SmallArms}, {site, shooter, Fixed::FromInt(10), Explosion}});
+	BOOST_TEST(incoming.For(east).size() == 1u);
+	BOOST_TEST(incoming.For(west).size() == 0u);
+	BOOST_TEST(incoming.For(site).size() == 2u);
+	spawner.spawnedCount = 0;
+	run({{site, shooter, Fixed::FromInt(10), Sniper}, {site, shooter, Fixed::FromInt(10), SmallArms}});
+	BOOST_TEST_REQUIRE(incoming.For(site).size() == 1u);
+	BOOST_TEST(incoming.For(site)[0].damageType == SmallArms);
+}
+
+
+BOOST_AUTO_TEST_SUITE_END()

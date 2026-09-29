@@ -1,11 +1,8 @@
 module;
 #define BOOST_TEST_MODULE W3DPassBindingsTests
 #include <boost/test/included/unit_test.hpp>
-#include <bit>
-#include <cstddef>
-#include <cstdint>
-#include <vector>
 export module Assets.Adapters.W3D.PassBindings.Tests;
+import std;
 import Assets.Adapters.W3D.PassBindings;
 namespace
 {

@@ -1,14 +1,9 @@
 module;
 #define BOOST_TEST_MODULE RibbonGeometryTests
 #include <boost/test/included/unit_test.hpp>
-#include <algorithm>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-#include <vector>
 
 export module Graphics.Scene.Beams.RibbonGeometry.Tests;
+import std;
 import Graphics.Scene.Beams.RibbonGeometry;
 import Graphics.Scene.Beams.RibbonIntersections;
 import Graphics.Scene.Beams.RibbonSubdivision;
